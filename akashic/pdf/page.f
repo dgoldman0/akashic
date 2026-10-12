@@ -11,6 +11,7 @@
 \   PDF-PAGE-OPEN       ( i file page -- status )  page I, from 0
 \   PDF-PAGE-CLOSE      ( page -- )                give back the page
 \   PDF-PAGE-END        ( page -- )                and what the record keeps
+\   PDF-PAGE-FILE       ( page -- file )           the file it is in
 \   PDF-PAGE-NUM        ( page -- num )            its object's number
 \   PDF-PAGE-DICT       ( page -- va vu )          its dictionary
 \   PDF-PAGE-RESOURCES  ( page -- va vu type )     its resources
@@ -103,6 +104,7 @@ VARIABLE _PDPG-OFF      \ where the kid after the page starts in the kids
 : _PDPG-MSRC  ( -- msrc )  _PDPG-F @ PDF-FILE-MSRC ;
 : _PDPG-HAS+  ( bit -- )  _PDPG-P@ _PDPG.HAS DUP @ ROT OR SWAP ! ;
 
+: PDF-PAGE-FILE  ( page -- file )  _PDPG.FILE @ ;
 : PDF-PAGE-NUM  ( page -- num )  _PDPG.NUM @ ;
 : PDF-PAGE-DICT  ( page -- va vu )  _PDPG.OBJ @ PDF-OBJ-VALUE DROP ;
 : PDF-PAGE-RESOURCES  ( page -- va vu type )

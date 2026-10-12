@@ -20,6 +20,7 @@ and `pdf/file.f`.
 | `PDF-PAGE-OPEN` | `( i file page -- status )` | Page `i`, from 0. |
 | `PDF-PAGE-CLOSE` | `( page -- )` | Give back the page. |
 | `PDF-PAGE-END` | `( page -- )` | Give back the page and what the record keeps between pages; the record is zeroed. |
+| `PDF-PAGE-FILE` | `( page -- file )` | The file the page is in. |
 | `PDF-PAGE-NUM` | `( page -- num )` | The page object's number, which links and the outline name. |
 | `PDF-PAGE-DICT` | `( page -- va vu )` | The page's dictionary. |
 | `PDF-PAGE-RESOURCES` | `( page -- va vu type )` | Its resources, a dictionary, or `0 0 PDF-T-END`. |

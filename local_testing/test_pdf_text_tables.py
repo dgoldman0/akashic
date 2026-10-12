@@ -69,15 +69,17 @@ def test_encodings(tables, sources):
     assert standard[0x27] == 0x2019 and standard[0xAE] == 0xFB01 and standard[0x80] == 0
     assert tables.u16s("PDF-ENC-MACROMAN", 256)[0x8E] == 0xE9
     assert tables.u16s("PDF-ENC-PDFDOC", 256)[0xA0] == 0x20AC
-    assert tables.u16s("PDF-ENC-SYMBOL", 256)[0x61] == 0x3B1
+    symbol = tables.u16s("PDF-ENC-SYMBOL", 256)
+    assert symbol[0x61] == 0x3B1 and symbol[0x57] == 0x3A9 and symbol[0x44] == 0x394
+    assert symbol[0x6D] == 0x3BC
 
 
 def test_glyph_names(tables, sources):
     agl, _ = sources
     names = gen.names(agl)
-    assert tables.word("_PDT-NAME-N") == len(names)
-    pool = tables.word("_PDT-NAMES")
-    index = tables.word("_PDT-NAME-AT")
+    assert tables.word("PDF-GLYPH-COUNT") == len(names)
+    pool = tables.word("PDF-GLYPH-NAMES")
+    index = tables.word("PDF-GLYPH-INDEX")
     raw = tables.runtime.memory.read_bytes(index, 8 * len(names))
     seen = []
     for i, (name, point) in enumerate(names):
@@ -98,8 +100,8 @@ def test_widths(tables, sources):
              for point in encodings[key]} | {agl[name] for name in gen.LIGATURES if name in agl}
     for name, font in gen.BASE_FONTS:
         pairs = gen.widths(agl, known, font)
-        assert tables.word(f"_PDT-W-{name}-N") == len(pairs)
-        flat = tables.u16s(f"_PDT-W-{name}", 2 * len(pairs))
+        assert tables.word(f"PDF-WIDTHS-{name}-N") == len(pairs)
+        flat = tables.u16s(f"PDF-WIDTHS-{name}", 2 * len(pairs))
         assert list(zip(flat[0::2], flat[1::2])) == pairs, name
     helvetica = dict(gen.widths(agl, known, "NimbusSans-Regular"))
     assert helvetica[0x20] == 278 and helvetica[ord("W")] == 944

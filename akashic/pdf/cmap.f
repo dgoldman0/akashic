@@ -7,6 +7,9 @@
 \  Public API:
 \   PDF-CMAP-SIZE    ( -- bytes )                    a map's record
 \   PDF-CMAP-PARSE   ( a u msrc cmap -- status )     read a decoded CMap
+\   PDF-CMAP-INIT    ( msrc cmap -- )                an empty map
+\   PDF-CMAP-ADD     ( first last value cmap -- ok? )  one entry, by hand
+\   PDF-CMAP-SEAL    ( cmap -- )                     ready to look up
 \   PDF-CMAP-FREE    ( cmap -- )
 \   PDF-CMAP-LOOKUP  ( code cmap -- a n delta true | false )
 \   PDF-CMAP-BYTES   ( a u cmap -- n )               the next code's bytes
@@ -33,7 +36,13 @@
 \  for a map with no ranges, the longest code its entries have.  It is
 \  never more than U, nor less than 1.
 \
-\  Entries read out of order are sorted once the map is read, in place.
+\  A map built by hand, as a font's widths are, starts with PDF-CMAP-INIT,
+\  takes entries of one value each with PDF-CMAP-ADD, and is sealed with
+\  PDF-CMAP-SEAL before it is looked up; a lookup's DELTA is then the
+\  code's place in its entry.
+\
+\  Entries that came out of order are sorted once the map is sealed, in
+\  place.
 \  Memory comes from the caller's memory source, sized by doubling.  An
 \  entry takes 20 bytes, and a destination of more than one character
 \  four bytes a character more.  PDF-CMAP-PARSE takes an empty record,
@@ -125,14 +134,10 @@ CREATE _PDCM-NEW _PDCM-ENTRY ALLOT
 : _PDCM-NEW!  ( first last value n -- )
     _PDCM-NEW 8 + L!  _PDCM-NEW 12 + L!  _PDCM-NEW 4 + L!  _PDCM-NEW L! ;
 
-VARIABLE _PDCM-UNSORTED
-
 \ Add the entry at _PDCM-NEW, with the order it was read in in its last
-\ field until the map is read, and note when it comes before the entry
-\ read last.
+\ field until the map is sealed.
 : _PDCM-APPEND  ( -- ok? )
-    _PDCM-ENTRIES DUP _PDCM-NEW 16 + L!
-    ?DUP IF 1- _PDCM-ENTRY@ L@ _PDCM-NEW L@ > IF -1 _PDCM-UNSORTED ! THEN THEN
+    _PDCM-ENTRIES _PDCM-NEW 16 + L!
     _PDCM-NEW _PDCM-ENTRY _PDCM-M @ _PDCM.E _PDCM-ADD ;
 
 \ Sorting the entries by first code, then by the order they were read in:
@@ -169,6 +174,24 @@ CREATE _PDCM-TMP _PDCM-ENTRY ALLOT
         I _PDCM-ENTRY@ DUP 4 + L@ ROT MAX TUCK SWAP 16 + L!
     LOOP DROP ;
 
+: _PDCM-SORTED?  ( -- flag )
+    _PDCM-ENTRIES 2 < IF -1 EXIT THEN
+    _PDCM-ENTRIES 1 DO
+        I 1- _PDCM-ENTRY@ L@ I _PDCM-ENTRY@ L@ > IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ PDF-CMAP-INIT ( msrc cmap -- )   An empty map drawing on MSRC.
+: PDF-CMAP-INIT  ( msrc cmap -- )  DUP PDF-CMAP-SIZE 0 FILL _PDCM.MSRC ! ;
+
+\ PDF-CMAP-ADD ( first last value cmap -- ok? )   An entry of one value.
+: PDF-CMAP-ADD  ( first last value cmap -- ok? )
+    _PDCM-M !  1 _PDCM-NEW!  _PDCM-APPEND ;
+
+\ PDF-CMAP-SEAL ( cmap -- )   Sort the entries when they came out of
+\ order, and note how far each reaches.
+: PDF-CMAP-SEAL  ( cmap -- )
+    _PDCM-M !  _PDCM-SORTED? 0= IF _PDCM-SORT THEN _PDCM-REACH ;
+
 : _PDCM-WIDE!  ( bytes -- )  _PDCM-M @ _PDCM.WIDE @ MAX _PDCM-M @ _PDCM.WIDE ! ;
 
 VARIABLE _PDCM-LO   VARIABLE _PDCM-HI   VARIABLE _PDCM-I
@@ -180,9 +203,9 @@ VARIABLE _PDCM-LO   VARIABLE _PDCM-HI   VARIABLE _PDCM-I
 \ bfchar or cidchar pairs: a code and its destination, to the end.
 : _PDCM-PAIRS  ( a u -- a' u' status )
     BEGIN
-        PDF-VALUE DUP _PDCM-END? IF DROP 2DROP PDF-S-OK EXIT THEN
+        PDF-OPERAND DUP _PDCM-END? IF DROP 2DROP PDF-S-OK EXIT THEN
         _PDCM-CODE >R _PDCM-WIDE! _PDCM-LO ! R>
-        >R PDF-VALUE DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
+        >R PDF-OPERAND DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
         R> OVER _PDCM-DEST? AND IF
             _PDCM-DEST 0= IF 2DROP PDF-S-MEMORY EXIT THEN
             >R >R _PDCM-LO @ DUP R> R> _PDCM-NEW!
@@ -194,7 +217,7 @@ VARIABLE _PDCM-LO   VARIABLE _PDCM-HI   VARIABLE _PDCM-I
 : _PDCM-ARRAY  ( aa au -- ok? )
     PDF-TOKEN DROP 2DROP  0 _PDCM-I !
     BEGIN _PDCM-I @ _PDCM-HI @ _PDCM-LO @ - > 0= WHILE
-        PDF-VALUE DUP _PDCM-DEST? 0= IF DROP 2DROP 2DROP -1 EXIT THEN
+        PDF-OPERAND DUP _PDCM-DEST? 0= IF DROP 2DROP 2DROP -1 EXIT THEN
         _PDCM-DEST 0= IF 2DROP 2DROP 0 EXIT THEN
         >R >R _PDCM-LO @ _PDCM-I @ + DUP R> R> _PDCM-NEW!
         _PDCM-APPEND 0= IF 2DROP 0 EXIT THEN
@@ -205,12 +228,12 @@ VARIABLE _PDCM-LO   VARIABLE _PDCM-HI   VARIABLE _PDCM-I
 \ for bfrange perhaps an array of strings; to the end.
 : _PDCM-TRIPLES  ( a u -- a' u' status )
     BEGIN
-        PDF-VALUE DUP _PDCM-END? IF DROP 2DROP PDF-S-OK EXIT THEN
+        PDF-OPERAND DUP _PDCM-END? IF DROP 2DROP PDF-S-OK EXIT THEN
         _PDCM-CODE >R _PDCM-WIDE! _PDCM-LO ! R>
-        >R PDF-VALUE DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
+        >R PDF-OPERAND DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
         _PDCM-CODE NIP R> AND >R _PDCM-HI ! R>                  ( a u ok? )
         _PDCM-HI @ _PDCM-LO @ < 0= AND
-        >R PDF-VALUE DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
+        >R PDF-OPERAND DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
         R> 0= IF DROP 2DROP ELSE
         DUP PDF-T-ARRAY = IF
             DROP _PDCM-ARRAY 0= IF PDF-S-MEMORY EXIT THEN
@@ -226,9 +249,9 @@ CREATE _PDCM-RNEW _PDCM-RANGE ALLOT
 \ Codespace ranges: pairs of codes of the same length, to the end.
 : _PDCM-SPACE  ( a u -- a' u' status )
     BEGIN
-        PDF-VALUE DUP _PDCM-END? IF DROP 2DROP PDF-S-OK EXIT THEN
+        PDF-OPERAND DUP _PDCM-END? IF DROP 2DROP PDF-S-OK EXIT THEN
         _PDCM-CODE >R _PDCM-RNEW 8 + L! _PDCM-RNEW L! R>
-        >R PDF-VALUE DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
+        >R PDF-OPERAND DUP _PDCM-END? IF R> 2DROP 2DROP PDF-S-OK EXIT THEN
         _PDCM-CODE >R _PDCM-RNEW 8 + L@ = R> AND R> AND IF
             _PDCM-RNEW 4 + L!
             _PDCM-RNEW _PDCM-RANGE _PDCM-M @ _PDCM.S _PDCM-ADD 0= IF
@@ -255,10 +278,8 @@ CREATE _PDCM-RNEW _PDCM-RANGE ALLOT
 
 \ PDF-CMAP-PARSE ( a u msrc cmap -- status )   Read the decoded CMap at A.
 : PDF-CMAP-PARSE  ( a u msrc cmap -- status )
-    DUP PDF-CMAP-SIZE 0 FILL  DUP _PDCM-M !  _PDCM.MSRC !
-    0 _PDCM-UNSORTED !
-    _PDCM-READ
-    _PDCM-UNSORTED @ IF _PDCM-SORT THEN _PDCM-REACH ;
+    DUP >R PDF-CMAP-INIT  R@ _PDCM-M !
+    _PDCM-READ  R> PDF-CMAP-SEAL ;
 
 VARIABLE _PDCM-K   VARIABLE _PDCM-FOUND   VARIABLE _PDCM-EV
 

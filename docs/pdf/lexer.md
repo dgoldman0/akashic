@@ -16,6 +16,7 @@ REQUIRE pdf/lexer.f
 |---|---|---|
 | `PDF-TOKEN` | `( a u -- a' u' ta tu type )` | The next token, and the input after it. |
 | `PDF-VALUE` | `( a u -- a' u' va vu type )` | The next whole value: an array, dictionary or reference as one span. |
+| `PDF-OPERAND` | `( a u -- a' u' va vu type )` | The same where no reference can be, as in a content stream or a CMap: integers stay integers without looking ahead for an `R`. |
 | `PDF-INT` | `( va vu -- n )` | An integer's value, or a real's whole part. |
 | `PDF-FIXED` | `( va vu -- f )` | A number times 65,536, to five fraction digits. |
 | `PDF-REF@` | `( va vu -- num gen )` | A reference's object and generation numbers. |
@@ -45,6 +46,15 @@ White space and comments between tokens are skipped. A literal string's
 escapes, octal codes and line ends, and a hex string's white space and odd
 last digit, follow section 7.3.4. An integer followed by another and `R` is a
 reference; any other run of integers stays integers.
+
+## Cost
+
+`PDF-VALUE` and `PDF-OPERAND` pass over a whole array or dictionary byte by
+byte, following only its strings, comments and nesting, without making
+tokens of what lies between; the caller reads inside it only when it needs
+to. `PDF-OPERAND` also spares `PDF-VALUE`'s look at the two tokens after
+an integer, which can only find a reference in an object. A hex string's
+digits are read through a table.
 
 The words keep their state on the stack, so a caller may read one value
 while it reads another. The few scratch variables they use hold nothing

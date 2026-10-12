@@ -1371,7 +1371,7 @@ empty password, and those are read too.
    decode through Flate, with the PNG and TIFF predictors, ASCIIHex,
    ASCII85, LZW and RunLength filters. The page tree gives each page's
    resources and content streams.
-4. **Text** (`pdf/font.f`, `pdf/text.f`). Each font maps its codes to
+4. **Text** (`pdf/font.f`, `pdf/content.f`). Each font maps its codes to
    Unicode: a ToUnicode map first, then a simple font's encoding (Standard,
    WinAnsi, MacRoman or PDFDoc, with Differences, through glyph names), and
    a composite font's Identity encoding with its ToUnicode map. A code with
@@ -1432,6 +1432,25 @@ page's start marked, its JPEG shown rich and its Flate picture in CELL and
 rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them.
+
+**Status (2026-10-12).** Steps 3 and 4 are done; steps 1 and 2 wait for
+review of the decisions above, and AES for its decision.
+
+- The file layer reads cross-reference tables and streams, object streams
+  and incremental updates, repairs a damaged file by scanning, decodes
+  every filter listed, and walks the page tree with what each page
+  inherits; the next page of a parent opens by reading only itself.
+- Fonts map codes through ToUnicode maps, the four Latin encodings with
+  Differences, an embedded Type 1 program's own encoding, the standard
+  fonts' metrics, and composite fonts with Identity, embedded, UCS-2 and
+  UTF-16 CMaps. The content interpreter gives runs of text through form
+  XObjects and marked content. Pages that xelatex, pdflatex, LibreOffice and
+  Ghostscript write read as pdftotext reads them.
+- A page of a TeX document, about 2,800 characters, costs about 5.4
+  million steps once its fonts are read: some 1.5 million to inflate its
+  content, about 0.5 million to lex it, the rest to show its glyphs. The
+  inflater's cost there, about 520 steps a compressed byte, is the largest
+  single part, and step 11 measures it with the rest.
 
 **Not in this part.** Forms, annotations other than links, signatures and
 attachments. JBIG2, CCITT and JPEG 2000 pictures, which show their facts.

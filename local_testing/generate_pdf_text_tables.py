@@ -9,7 +9,8 @@ Sources, all on the host:
   WinAnsiEncoding as cp1252 with the annex's notes, and PDFDocEncoding as
   Table D.2 gives it;
 - the Symbol and ZapfDingbats fonts' own encodings, from URW's metrics for
-  StandardSymbolsPS and D050000L, through their glyph lists;
+  StandardSymbolsPS and D050000L, through their glyph lists, Symbol's
+  Greek letters taken as Greek;
 - the Adobe Glyph List for New Fonts, the ligatures and the names the
   encodings use, from /usr/share/aglfn;
 - the widths of the Helvetica and Times fonts from URW's metrics for Nimbus
@@ -49,6 +50,11 @@ BASE_FONTS = (
 )
 
 LIGATURES = ("ff", "fi", "fl", "ffi", "ffl", "dotlessj", "st", "longs")
+
+# The Symbol font is Greek: its Delta, Omega and mu are the Greek letters,
+# as Adobe's mapping of the Symbol encoding has them, though AGLFN maps
+# those names to INCREMENT, OHM SIGN and MICRO SIGN.
+SYMBOL_GREEK = {"Delta": 0x0394, "Omega": 0x03A9, "mu": 0x03BC}
 
 # PDF 32000-1 Table D.2: PDFDocEncoding where it differs from Latin-1.
 PDFDOC = {
@@ -121,7 +127,7 @@ def encodings(agl: dict[str, int], zapf: dict[str, int]) -> dict[str, list[int]]
     symbol = [0] * 256
     for code, _, name in afm("StandardSymbolsPS"):
         if 0 <= code < 256:
-            symbol[code] = agl.get(name, 0)
+            symbol[code] = SYMBOL_GREEK.get(name, agl.get(name, 0))
     dingbats = [0] * 256
     for code, _, name in afm("D050000L"):
         if 0 <= code < 256:
@@ -137,13 +143,13 @@ def names(agl: dict[str, int]) -> list[tuple[str, int]]:
     wanted = dict(aglfn())
     for name in LIGATURES:
         if name in agl:
-            wanted[name] = agl[name]
+            wanted.setdefault(name, agl[name])
     for name in StandardEncoding:
         if name in agl:
-            wanted[name] = agl[name]
+            wanted.setdefault(name, agl[name])
     for _, _, name in afm("StandardSymbolsPS"):
         if name in agl:
-            wanted[name] = agl[name]
+            wanted.setdefault(name, agl[name])
     for code in range(0x80, 0x100):
         for codec in ("mac_roman", "cp1252"):
             try:
@@ -198,11 +204,13 @@ def generate() -> str:
         "\\",
         "\\  PDF-ENC-xxx       256 code points, two bytes each, little-endian,",
         "\\                    0 for a code with none.",
-        "\\  _PDT-NAMES        the glyph names, sorted by their bytes, each a",
+        "\\  PDF-GLYPH-NAMES   the glyph names, sorted by their bytes, each a",
         "\\                    length byte then the name.",
         "\\  Byte tables are packed eight bytes to a cell, little-endian.",
-        "\\  _PDT-NAME-AT      cells: offset in _PDT-NAMES << 32 | code point.",
-        "\\  _PDT-W-xxx        two-byte pairs, sorted: code point, width.",
+        "\\  PDF-GLYPH-INDEX   cells: offset in PDF-GLYPH-NAMES << 32 | code point;",
+        "\\                    PDF-GLYPH-COUNT of them.",
+        "\\  PDF-WIDTHS-xxx    two-byte pairs, sorted: code point, width;",
+        "\\                    PDF-WIDTHS-xxx-N of them.",
         "\\ =================================================================",
         "",
         "PROVIDED akashic-pdf-text-tables",
@@ -218,22 +226,22 @@ def generate() -> str:
         index.append((len(pool), point))
         raw = name.encode("ascii")
         pool += [len(raw)] + list(raw)
-    out.append("CREATE _PDT-NAMES")
+    out.append("CREATE PDF-GLYPH-NAMES")
     out += bytes_lines(pool)
-    out.append("CREATE _PDT-NAME-AT")
+    out.append("CREATE PDF-GLYPH-INDEX")
     for start in range(0, len(index), 4):
         out.append("  " + " ".join(f"{offset << 32 | point} ," for offset, point in index[start:start + 4]))
-    out.append(f"{len(index)} CONSTANT _PDT-NAME-N")
+    out.append(f"{len(index)} CONSTANT PDF-GLYPH-COUNT")
     known = {point for key in ("STANDARD", "WINANSI", "MACROMAN", "PDFDOC")
              for point in tables[key]} | {agl[name] for name in LIGATURES if name in agl}
     for name, font in BASE_FONTS:
         pairs16 = widths(agl, known, font)
-        out.append(f"CREATE _PDT-W-{name}")
+        out.append(f"CREATE PDF-WIDTHS-{name}")
         flat = []
         for point, width in pairs16:
             flat += [point, width]
         out += bytes_lines(u16(flat))
-        out.append(f"{len(pairs16)} CONSTANT _PDT-W-{name}-N")
+        out.append(f"{len(pairs16)} CONSTANT PDF-WIDTHS-{name}-N")
     out.append("")
     return "\n".join(out)
 

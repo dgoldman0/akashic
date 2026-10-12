@@ -2,9 +2,9 @@
 
 A PDF CMap read from its decoded bytes: the ToUnicode map that says which
 characters a font's codes stand for (PDF 32000-1, section 9.10.3), or an
-embedded encoding that says which CID each code selects (9.7.5). The text
-layer uses one to turn shown strings into characters, and the other to find
-a CID's width.
+embedded encoding that says which CID each code selects (9.7.5). The font
+layer uses one to turn shown strings into characters and the other to find
+a code's CID, and builds a map by hand for a composite font's widths.
 
 ```forth
 REQUIRE pdf/cmap.f
@@ -19,6 +19,9 @@ REQUIRE pdf/cmap.f
 |---|---|---|
 | `PDF-CMAP-SIZE` | `( -- bytes )` | A map's record, 88 bytes, eight-byte aligned. |
 | `PDF-CMAP-PARSE` | `( a u msrc cmap -- status )` | Read the decoded CMap at `a` into an empty record. |
+| `PDF-CMAP-INIT` | `( msrc cmap -- )` | An empty map, to be built by hand. |
+| `PDF-CMAP-ADD` | `( first last value cmap -- ok? )` | An entry of one value for the codes `first` to `last`. |
+| `PDF-CMAP-SEAL` | `( cmap -- )` | Make a map built by hand ready to look up. |
 | `PDF-CMAP-FREE` | `( cmap -- )` | Give back everything the map holds; the record is empty again. |
 | `PDF-CMAP-LOOKUP` | `( code cmap -- a n delta true \| false )` | A code's values, or false. |
 | `PDF-CMAP-BYTES` | `( a u cmap -- n )` | How many bytes the next code of a string takes. |
@@ -43,6 +46,14 @@ destination that is no string or CID, such as a glyph name, is passed over,
 as are other sections, the header's dictionaries and procedures, and
 `usecmap`.
 
+## A map built by hand
+
+The same sorted ranges serve any map from codes to one value each. A map
+starts with `PDF-CMAP-INIT`, takes entries with `PDF-CMAP-ADD` in any order,
+and is sealed with `PDF-CMAP-SEAL` before it is looked up. A lookup's
+`delta` is then the code's place in its entry, which a value that does not
+count up, such as a width, ignores.
+
 ## Looking up
 
 `PDF-CMAP-LOOKUP` gives the code's values, characters or a CID, as `n`
@@ -61,13 +72,14 @@ have. The answer is never more than the bytes left, nor less than one.
 
 ## Cost
 
-Reading takes one pass over the CMap. Entries that come in order, as
-producers write them, are appended; when any come out of order the entries
-are heap-sorted once, in place, by first code and then by the order they
-were read. A lookup is a binary search, then a step back over any entries
-that overlap the one it found. An entry takes 20 bytes, and a destination of
-more than one character four bytes a character more; buffers grow by
-doubling from the caller's memory source.
+Reading takes one pass over the CMap, its values read with `PDF-OPERAND`,
+since a CMap holds no references. Entries are appended as they come; when
+the map is sealed and any came out of order, they are heap-sorted once, in
+place, by first code and then by the order they were read. A lookup is a
+binary search, then a step back over any entries that overlap the one it
+found. An entry takes 20 bytes, and a destination of more than one
+character four bytes a character more; buffers grow by doubling from the
+caller's memory source.
 
 One call runs at a time: the words keep the map they work on, and a few
 scratch values, in variables.

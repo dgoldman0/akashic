@@ -7,6 +7,7 @@
 \  Public API:
 \   PDF-TOKEN    ( a u -- a' u' ta tu type )  the next token
 \   PDF-VALUE    ( a u -- a' u' va vu type )  the next whole value
+\   PDF-OPERAND  ( a u -- a' u' va vu type )  the same, with no references
 \   PDF-INT      ( va vu -- n )               an integer's value
 \   PDF-FIXED    ( va vu -- f )               a number, times 65536
 \   PDF-REF@     ( va vu -- num gen )         a reference's numbers
@@ -61,12 +62,16 @@ _PDL-CLASS 256 0 FILL
 : _PDL-ADV  ( a u n -- a+n u-n )  TUCK - >R + R> ;
 : _PDL-DIGIT?  ( c -- flag )  48 58 WITHIN ;
 
+\ Each byte's value as a hex digit, or 255.
+CREATE _PDL-HEXV 256 ALLOT
+: _PDL-HEXV-FILL  ( -- )
+    _PDL-HEXV 256 255 FILL
+    10 0 DO I  I 48 + _PDL-HEXV + C! LOOP
+    6 0 DO I 10 +  I 65 + _PDL-HEXV + C!  I 10 +  I 97 + _PDL-HEXV + C! LOOP ;
+_PDL-HEXV-FILL
+
 \ A hex digit's value, or -1.
-: _PDL-HEXVAL  ( c -- n | -1 )
-    DUP 48 58 WITHIN IF 48 - EXIT THEN
-    DUP 65 71 WITHIN IF 55 - EXIT THEN
-    DUP 97 103 WITHIN IF 87 - EXIT THEN
-    DROP -1 ;
+: _PDL-HEXVAL  ( c -- n | -1 )  _PDL-HEXV + C@ DUP 255 = IF DROP -1 THEN ;
 
 \ Skip white space and comments.
 : _PDL-SPACE  ( a u -- a' u' )
@@ -157,18 +162,40 @@ _PDL-CLASS 256 0 FILL
     OVER >R _PDL-ONE
     R> 3 PICK OVER - ROT ;
 
+VARIABLE _PDL-DEPTH
+
+: _PDL-CLOSE?  ( -- done? )  -1 _PDL-DEPTH +!  _PDL-DEPTH @ 0= ;
+
 \ The rest of an array or dictionary after its opening token: to just
-\ after the token that closes it, or false at the end of the input.
+\ after the token that closes it, or false at the end of the input or at
+\ bytes that are no token.  Its bytes are passed over without making
+\ tokens of them: only strings, comments and the nesting are followed.
 : _PDL-NESTED  ( a u -- a' u' ok? )
-    1 >R
-    BEGIN
-        PDF-TOKEN NIP NIP
-        DUP PDF-T-END = OVER PDF-T-BAD = OR IF DROP R> DROP 0 EXIT THEN
-        DUP PDF-T-OPEN-ARRAY = OVER PDF-T-OPEN-DICT = OR IF R> 1+ >R THEN
-        DUP PDF-T-CLOSE-ARRAY = SWAP PDF-T-CLOSE-DICT = OR IF
-            R> 1- DUP 0= IF DROP -1 EXIT THEN >R
-        THEN
-    AGAIN ;
+    1 _PDL-DEPTH !
+    BEGIN DUP WHILE
+        OVER C@ DUP _PDL-CLASS@ 2 <> IF DROP 1 _PDL-ADV ELSE
+        DUP 40 = IF DROP 1 _PDL-ADV _PDL-LITERAL 0= IF 0 EXIT THEN ELSE
+        DUP 37 = IF
+            DROP
+            BEGIN DUP IF OVER C@ DUP 10 <> SWAP 13 <> AND ELSE 0 THEN WHILE
+                1 _PDL-ADV
+            REPEAT
+        ELSE
+        DUP 91 = IF DROP 1 _PDL-DEPTH +!  1 _PDL-ADV ELSE
+        DUP 93 = IF DROP 1 _PDL-ADV _PDL-CLOSE? IF -1 EXIT THEN ELSE
+        DUP 60 = IF
+            DROP DUP 1 > IF OVER 1+ C@ 60 = ELSE 0 THEN IF
+                1 _PDL-DEPTH +!  2 _PDL-ADV
+            ELSE 1 _PDL-ADV _PDL-HEX 0= IF 0 EXIT THEN THEN
+        ELSE
+        DUP 62 = IF
+            DROP DUP 1 > IF OVER 1+ C@ 62 = ELSE 0 THEN 0= IF 0 EXIT THEN
+            2 _PDL-ADV _PDL-CLOSE? IF -1 EXIT THEN
+        ELSE
+            41 = IF 0 EXIT THEN
+            1 _PDL-ADV
+        THEN THEN THEN THEN THEN THEN THEN
+    REPEAT 0 ;
 
 VARIABLE _PDL-TA  VARIABLE _PDL-TU
 
@@ -185,19 +212,27 @@ VARIABLE _PDL-TA  VARIABLE _PDL-TU
     THEN
     2DROP _PDL-TA @ _PDL-TU @ PDF-T-INT ;
 
+\ An array or dictionary whose opening token was read, read whole.
+: _PDL-WHOLE  ( a u ta tu type -- a' u' va vu type )
+    >R DROP >R
+    _PDL-NESTED
+    R> SWAP R> SWAP
+    IF PDF-T-OPEN-ARRAY = IF PDF-T-ARRAY ELSE PDF-T-DICT THEN
+    ELSE DROP PDF-T-BAD THEN
+    >R 2 PICK OVER - R> ;
+
+\ PDF-OPERAND ( a u -- a' u' va vu type )
+\   The next whole value where no reference can be, as in a content
+\   stream or a CMap: an array or dictionary as one span, and integers
+\   left integers, which spares the look ahead for an "R".
+: PDF-OPERAND  ( a u -- a' u' va vu type )
+    PDF-TOKEN
+    DUP PDF-T-OPEN-ARRAY = OVER PDF-T-OPEN-DICT = OR IF _PDL-WHOLE THEN ;
+
 \ PDF-VALUE ( a u -- a' u' va vu type )
 \   The next whole value: an array, dictionary or reference as one span.
 : PDF-VALUE  ( a u -- a' u' va vu type )
-    PDF-TOKEN
-    DUP PDF-T-OPEN-ARRAY = OVER PDF-T-OPEN-DICT = OR IF
-        >R DROP >R
-        _PDL-NESTED
-        R> SWAP R> SWAP
-        IF PDF-T-OPEN-ARRAY = IF PDF-T-ARRAY ELSE PDF-T-DICT THEN
-        ELSE DROP PDF-T-BAD THEN
-        >R 2 PICK OVER - R> EXIT
-    THEN
-    DUP PDF-T-INT = IF _PDL-REF? THEN ;
+    PDF-OPERAND DUP PDF-T-INT = IF _PDL-REF? THEN ;
 
 \ PDF-INT ( va vu -- n )   An integer's value; a real's whole part.
 : PDF-INT  ( va vu -- n )
@@ -324,15 +359,19 @@ VARIABLE _PDS-D  VARIABLE _PDS-CAP  VARIABLE _PDS-N
         THEN
     REPEAT 2DROP ;
 
+VARIABLE _PDS-HI    \ a digit waiting for the one after it, or -1
+
 \ A hex string's digits between its angle brackets.
 : _PDS-HEX  ( a u -- )
-    -1 >R
-    BEGIN DUP WHILE
-        OVER C@ _PDL-HEXVAL DUP 0< IF DROP ELSE
-            R> DUP 0< IF DROP >R ELSE 4 LSHIFT OR _PDS-PUT -1 >R THEN
-        THEN 1 _PDL-ADV
-    REPEAT 2DROP
-    R> DUP 0< IF DROP ELSE 4 LSHIFT _PDS-PUT THEN ;
+    -1 _PDS-HI !
+    OVER + SWAP ?DO
+        I C@ _PDL-HEXV + C@ DUP 16 < IF
+            _PDS-HI @ DUP 0< IF DROP _PDS-HI ! ELSE
+                4 LSHIFT OR _PDS-PUT  -1 _PDS-HI !
+            THEN
+        ELSE DROP THEN
+    LOOP
+    _PDS-HI @ DUP 0< IF DROP ELSE 4 LSHIFT _PDS-PUT THEN ;
 
 \ PDF-STRING ( va vu type dst cap -- u )
 \   A string's bytes, at most CAP of them written at DST.  U is the

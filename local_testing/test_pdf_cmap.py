@@ -39,6 +39,10 @@ CREATE CT-MSRCS MSRC-SIZE 7 + ALLOT  : CT-MSRC  CT-MSRCS 7 + -8 AND ;
 : CT-BYTES  ( u -- n )  CT-IN SWAP CT-MAP PDF-CMAP-BYTES ;
 : CT-HELD  ( -- held )  CT-MSRC MSRC-HELD@ ;
 : CT-DONE  ( -- held )  CT-MAP PDF-CMAP-FREE CT-MSRC MSRC-HELD@ ;
+: CT-INIT  ( -- )
+    ['] CT-ALLOC ['] CT-FREE 0 0 CT-MSRC MSRC-INIT  CT-MSRC CT-MAP PDF-CMAP-INIT ;
+: CT-ADD  ( first last value -- ok? )  CT-MAP PDF-CMAP-ADD ;
+: CT-SEAL  ( -- )  CT-MAP PDF-CMAP-SEAL ;
 """
 
 # The ToUnicode map xelatex 2024 wrote for a DejaVu Serif subset showing
@@ -141,6 +145,16 @@ class Maps:
         if values:
             values[-1] += delta
         return values
+
+    def raw(self, code: int) -> tuple[list[int], int] | None:
+        """The code's values as stored, and its delta, or None."""
+
+        result = self.call("CT-LOOKUP", code)
+        if result == (0,):
+            return None
+        a, n, delta, _ = result
+        raw = self.runtime.memory.read_bytes(a, 4 * n) if n else b""
+        return [int.from_bytes(raw[i:i + 4], "little") for i in range(0, len(raw), 4)], delta
 
     def text(self, code: int) -> str | None:
         values = self.lookup(code)
@@ -307,4 +321,17 @@ def test_budget_is_refused_and_memory_given_back(maps):
     maps.done()
     assert maps.parse(text) == OK
     assert maps.text(0xFF) == "ÿ"
+    maps.done()
+
+
+def test_a_map_built_by_hand(maps):
+    maps.call("CT-INIT")
+    for first, last, value in ((100, 199, 7), (0, 9, 3), (10, 10, 500), (50, 59, 0xFFFFFF9C)):
+        assert maps.call("CT-ADD", first, last, value) == (TRUE,)
+    maps.call("CT-SEAL")
+    assert maps.raw(150) == ([7], 50)
+    assert maps.raw(0) == ([3], 0) and maps.raw(9) == ([3], 9)
+    assert maps.raw(10) == ([500], 0)
+    assert maps.raw(55) == ([0xFFFFFF9C], 5)
+    assert maps.raw(11) is None and maps.raw(200) is None and maps.raw(60) is None
     maps.done()
