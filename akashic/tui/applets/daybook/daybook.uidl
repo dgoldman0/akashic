@@ -25,6 +25,7 @@
 <menu label=Automations>
 <item text=Show_Automations do=automations key=F4/>
 <item text=New_Reminder do=reminder-new/>
+<item text=New_Agent_Run do=agent-run-new key=Ctrl+G/>
 <separator/>
 <item text=Mark_Reviewed do=automation-review/>
 <item text=Run_Now do=automation-run/>
@@ -56,4 +57,5 @@
 <action do=today key=Home/>
 <action do=quit key=Ctrl+Q/>
 <action do=automations key=F4/>
+<action do=agent-run-new key=Ctrl+G/>
 </uidl>

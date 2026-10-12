@@ -1757,3 +1757,27 @@ globals at 10,096, and the mutable-state digest with them.
 | mutable-state (unchanged) | `7f849d28601021a76e89910f462ff1cc691ebd96a41efef52b6f5152b062ffc4` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook Agent run create pages reviewed ratchet update
+
+Daybook gains its pages for making an Agent run: a list of each choice
+its model offers, and an editor for its prompt. The editor copies, cuts
+and pastes through the shared clipboard, so `tui/applets/daybook/daybook.f`
+requires `utils/clipboard.f`, as Pad does. The graph keeps 653 modules and
+gains that one resolved `REQUIRE` occurrence and unique edge, 2,327 of
+each. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue
+appears.
+
+Applet globals rise from 3,551 to 3,553: the deferred words through which
+Daybook's automations body draws a create page and gives it keys, set once
+at load to words defined after the prompts they use, as Daybook's delete
+prompt already is. The pages' state is cells of Daybook's component state.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph | `b9901f04b463aa28df588ac387820510f777632dbb4a24fd39716ed788b8f254` |
+| mutable-state | `f53366f1ca991a53d6b8513475c17b0e0b58c159f59ab7490c980f9b38a4386a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

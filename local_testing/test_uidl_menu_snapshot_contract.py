@@ -226,7 +226,7 @@ def test_current_text_is_copied_and_repacked_under_checked_bounds() -> None:
     )
 
     assert _semantic_tag_count("akashic/tui/applets/pad/pad.uidl") == 49
-    assert _semantic_tag_count("akashic/tui/applets/daybook/daybook.uidl") == 36
+    assert _semantic_tag_count("akashic/tui/applets/daybook/daybook.uidl") == 37
     pad = (ROOT / "akashic/tui/applets/pad/pad.uidl").read_text(
         encoding="utf-8"
     )

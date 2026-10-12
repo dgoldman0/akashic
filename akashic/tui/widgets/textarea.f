@@ -1365,6 +1365,23 @@ VARIABLE _TXTA-PT-CODE
     SWAP _TXTA-O-BUF-A + @ OVER R@ CMOVE
     R> ;
 
+\ TXTA-LENGTH ( widget -- u )
+\   The bytes of text the textarea holds.
+: TXTA-LENGTH  ( widget -- u )
+    DUP _TXTA-O-GB + @ ?DUP IF NIP GB-LEN EXIT THEN
+    _TXTA-O-BUF-LEN + @ ;
+
+\ TXTA-BUFFER! ( buf cap widget -- flag )
+\   Move a flat-mode textarea to the CAP bytes at BUF, which already hold
+\   its text, so its caller can give it room as it grows.  The caret,
+\   selection and scroll stay.  False, changing nothing, in GB mode or
+\   when CAP is less than the text.
+: TXTA-BUFFER!  ( buf cap widget -- flag )
+    DUP _TXTA-O-GB + @ IF DROP 2DROP 0 EXIT THEN
+    2DUP _TXTA-O-BUF-LEN + @ < IF DROP 2DROP 0 EXIT THEN
+    TUCK _TXTA-O-BUF-CAP + !
+    _TXTA-O-BUF-A + ! -1 ;
+
 \ TXTA-ON-CHANGE ( xt widget -- )
 : TXTA-ON-CHANGE  ( xt widget -- )
     _TXTA-O-ON-CHANGE + ! ;

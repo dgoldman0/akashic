@@ -296,8 +296,8 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/daybook/daybook.uidl",
         "menus": ["File", "Entry", "Go", "Automations", "Help"],
-        "actions": ["about", "automation-archive", "automation-archived", "automation-ask", "automation-cancel", "automation-delete", "automation-pause", "automation-review", "automation-run", "automation-zone", "automations", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-new", "reveal-source", "save", "today", "toggle"],
-        "shortcuts": {"automations": "F4", "delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
+        "actions": ["about", "agent-run-new", "automation-archive", "automation-archived", "automation-ask", "automation-cancel", "automation-delete", "automation-pause", "automation-review", "automation-run", "automation-zone", "automations", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-new", "reveal-source", "save", "today", "toggle"],
+        "shortcuts": {"agent-run-new": "Ctrl+G", "automations": "F4", "delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
         "element_ids": ["daybook-body", "mbar", "sbar", "sbar-date", "sbar-state"]
       },
       "direct_input_contracts": [
@@ -310,8 +310,8 @@
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-AV-HANDLE",
-          "sha256": "be495e4d3669fe7719e36df8516e7e010ea37792b43987b4027bdcf583a3f41d",
-          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected automation after typing DELETE", "p -> pause or resume the selected automation", "a -> archive or restore the selected automation", "h -> show or hide archived automations", "r -> run the selected Agent run now", "y -> ask Desk to approve the selected Agent run", "x -> cancel the selected Agent run in progress", "Space -> mark the selected firing or run reviewed", "Other special keys -> move in the automations list", "Mouse over the list -> the automations list"]
+          "sha256": "f851e65c0449744dfd9dc748191432c1d3775a39be84572081310d58b27e5026",
+          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected automation after typing DELETE", "p -> pause or resume the selected automation", "a -> archive or restore the selected automation", "h -> show or hide archived automations", "r -> run the selected Agent run now", "y -> ask Desk to approve the selected Agent run", "x -> cancel the selected Agent run in progress", "A new Agent run's page shown -> keys go to that page", "Space -> mark the selected firing or run reviewed", "Other special keys -> move in the automations list", "Mouse over the list -> the automations list"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},
@@ -349,6 +349,13 @@
           "facets": ["actions", "persistence", "failures", "journeys"],
           "preserve": ["Reminders fire inside Desk once, on time, in their time zone, whether or not Daybook is open", "A clock set back fires nothing twice; a jump ahead, a restart or setting the clock gives one missed item per reminder", "The reminder file blocks rather than reads as empty when corrupt, future, unreadable or uncertain, and survives a fault at every replacement step", "The reminders view reviews, pauses, archives and deletes, and creates reminders through its prompts with an idempotent create key"],
           "evidence": ["profile:desktop-daybook-reminders", "pytest:local_testing/test_daybook_automation_store.py::test_a_fault_at_each_replacement_step", "pytest:local_testing/test_daybook_automation_owner.py::test_firing_catching_up_and_review", "pytest:local_testing/test_daybook_automation_service.py::test_a_reminder_fires_once_and_never_again_after_a_jump_back", "pytest:local_testing/test_daybook_automation_service.py::test_a_jump_forward_and_a_restart_each_give_one_missed_item", "pytest:local_testing/test_daybook_automation_view.py::test_actions_and_their_refusals", "pytest:local_testing/test_daybook_automation_view.py::test_a_create_submitted_twice_makes_one_reminder"]
+        },
+        {
+          "id": "daybook.agent-runs",
+          "coverage": "covered",
+          "facets": ["actions", "failures", "journeys"],
+          "preserve": ["An Agent run is made in Daybook's automations view from the models the Agent offers, with each effort, tier and verbosity its model offers, its limits, and a prompt of any length that is exactly what it may disclose", "Desk is asked to approve the Agent run exactly as made, and Daybook keeps it approved with exactly those operands", "Agent runs show waiting, running and how they ended, and run now, ask for approval and cancel through Daybook's automation service"],
+          "evidence": ["profile:desktop-daybook-agent", "pytest:local_testing/test_daybook_automation_view_create.py::test_an_agent_run_is_created_and_asks_for_approval", "pytest:local_testing/test_daybook_automation_view_create.py::test_a_long_prompt_is_kept_whole", "pytest:local_testing/test_daybook_automation_view_runs.py::test_a_run_waits_runs_and_ends_for_review", "pytest:local_testing/test_daybook_automation_view_runs.py::test_run_now_and_cancel"]
         }
       ],
       "prerequisites": [

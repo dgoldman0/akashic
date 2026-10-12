@@ -239,6 +239,46 @@ def _textarea_program() -> list[str]:
     return lines
 
 
+def _textarea_buffer_program() -> list[str]:
+    """A full flat textarea refuses an insert; moved to a larger buffer
+    that holds its text, it keeps its caret and takes the insert.  A move
+    to less room than the text, or in gap mode, is refused."""
+
+    return [
+        "VARIABLE _TF-FAILS",
+        "VARIABLE _TF-CHECKS",
+        "VARIABLE _TF-RGN",
+        "VARIABLE _TF-W",
+        "VARIABLE _TF-ARENA",
+        "CREATE _TF-SMALL 8 ALLOT",
+        "CREATE _TF-LARGE 32 ALLOT",
+        "CREATE _TF-EV 24 ALLOT",
+        ': _TF-ASSERT  1 _TF-CHECKS +! 0= IF 1 _TF-FAILS +! ." FAIL# " _TF-CHECKS @ . CR THEN ;',
+        ": _TF-KEY  ( char -- consumed? )",
+        "  KEY-T-CHAR _TF-EV ! _TF-EV 8 + ! 0 _TF-EV 16 + ! _TF-EV _TF-W @ WDG-HANDLE ;",
+        "0 _TF-FAILS ! 0 _TF-CHECKS !",
+        "20 6 SCR-NEW SCR-USE",
+        "1 2 3 8 RGN-NEW _TF-RGN !",
+        "_TF-RGN @ _TF-SMALL 8 TXTA-NEW _TF-W !",
+        "_TF-W @ WDG-FOCUS-SET",
+        'S" abcdefgh" _TF-W @ TXTA-SET-TEXT',
+        "_TF-W @ TXTA-LENGTH 8 = _TF-ASSERT",
+        "CHAR i _TF-KEY DROP _TF-W @ TXTA-LENGTH 8 = _TF-ASSERT",
+        "_TF-LARGE 7 _TF-W @ TXTA-BUFFER! 0= _TF-ASSERT",
+        "_TF-SMALL _TF-LARGE 8 MOVE",
+        "_TF-LARGE 32 _TF-W @ TXTA-BUFFER! _TF-ASSERT",
+        "_TF-W @ TXTA-CURSOR-COL 8 = _TF-ASSERT",
+        "CHAR i _TF-KEY _TF-ASSERT",
+        "_TF-W @ TXTA-LENGTH 9 = _TF-ASSERT",
+        "_TF-LARGE 8 + C@ CHAR i = _TF-ASSERT",
+        "65536 A-XMEM ARENA-NEW DROP _TF-ARENA !",
+        "32 _TF-ARENA @ GB-NEW _TF-W @ TXTA-BIND-GB",
+        'S" gap" _TF-W @ TXTA-SET-TEXT _TF-W @ TXTA-LENGTH 3 = _TF-ASSERT',
+        "_TF-LARGE 32 _TF-W @ TXTA-BUFFER! 0= _TF-ASSERT",
+        '_TF-FAILS @ 0= IF ." TEXTAREA BUFFER PASS " ELSE ." TEXTAREA BUFFER FAIL " THEN _TF-CHECKS @ . _TF-FAILS @ . CR',
+    ]
+
+
 def _textarea_pointer_program() -> list[str]:
     """Drive the canonical textarea with pointer cells and text positions."""
 
@@ -695,6 +735,13 @@ def test_gap_buffer_textarea_scroll_and_newline_caret():
     summary = re.search(r"TEXTAREA TEST PASS\s+(\d+)\s+0", output)
     assert summary, output[-4000:]
     assert int(summary.group(1)) == 15
+
+
+def test_flat_textarea_moves_to_a_larger_buffer():
+    output = _run_forth(_textarea_buffer_program())
+    summary = re.search(r"TEXTAREA BUFFER PASS\s+(\d+)\s+0", output)
+    assert summary, output[-4000:]
+    assert int(summary.group(1)) == 10
 
 
 def test_textarea_captures_canonical_text_area_from_flat_and_gap_state():

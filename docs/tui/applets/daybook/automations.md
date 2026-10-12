@@ -12,9 +12,8 @@ restarts, and say so when they were missed.
 
 Desk opens its [broker](../desk/schedule-broker.md) and gives the
 service its client, so a due Agent run reaches the Agent while Daybook and
-the Agent are closed. Daybook's automations view shows Agent runs, and runs,
-approves and cancels them. The view also makes them, step by step; the
-Daybook pages that take those steps are next.
+the Agent are closed. Daybook's automations view makes Agent runs, shows
+them, and runs, approves and cancels them (see [Daybook](daybook.md)).
 
 ## Layers
 
@@ -281,6 +280,24 @@ detection and its threshold, activation, starting over when the clock is
 unset, refreshing the due time, the unset-clock guard, the due test,
 waiting for the next look, paging, stopping on a failed accept, the Agent
 run's standing, resetting what a look counts, and each kind of notice.
+
+The `desktop-daybook-agent` smoke profile runs Desk with Daybook and the
+Agent, whose development device-flow source gives the scripted provider a
+ready catalog of two models, and makes an Agent run through Daybook's
+ordinary keys:
+- Ctrl+G, then the time and title, a daily repeat and the default zone;
+- the second model, its second effort, its tier and the third verbosity,
+  each page listing the catalog's choices;
+- ten minutes and 16,384 bytes of reply;
+- a two-line prompt longer than the editor's first room, with Escape asking
+  before it would discard and a key taking that back;
+- Ctrl+S, after which Desk's approval screen names the schedule, the
+  model, effort, tier, verbosity and limits, and discloses exactly the
+  prompt's bytes, and allows it only once read to the end;
+- A, after which Daybook says it is approved, Daybook's file holds the run
+  approved with exactly those operands, and Desk's run permissions name it.
+
+Desk then sleeps under 10% of the clock with the run scheduled.
 
 The `desktop-daybook-reminders` smoke profile runs the whole path in Desk
 on the emulator, through ordinary keys, and checks the live reminder file at

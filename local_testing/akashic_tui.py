@@ -14260,6 +14260,35 @@ PROFILES["desktop-daybook-reminders"] = replace(
 )
 
 
+# Desk with Daybook and the Agent, whose device-flow fixture gives the
+# scripted provider a ready catalog of two models.  Daybook's pages make an
+# Agent run from it, and Desk's approval screen allows it.
+_DAYBOOK_AGENT_DEVFLOW = "tui/applets/agent/providers/devtools/device-flow.f"
+_DAYBOOK_AGENT_SOURCE_BOOT = (
+    f"REQUIRE {_DAYBOOK_AGENT_DEVFLOW}\n"
+    ": _boot-agent-source  ( -- )\n"
+    '    DEVFLOW-SOURCE-NEW 0<> ABORT" device-flow source allocation failed"\n'
+    "    ARSET-STATE-READY OVER DFSRC.SETTINGS ARSET.STATE !\n"
+    "    0 OVER _DFS-MODEL-SELECT DROP\n"
+    "    DESK-AGENT-SOURCE! ;"
+)
+_DAYBOOK_AGENT_APPLETS = (desk_applet("daybook"), desk_applet("agent"))
+PROFILES["desktop-daybook-agent"] = replace(
+    PROFILES["desktop"],
+    roots=(*desktop_roots(_DAYBOOK_AGENT_APPLETS), _DAYBOOK_AGENT_DEVFLOW),
+    resources=desktop_resources(_DAYBOOK_AGENT_APPLETS),
+    autoexec=desktop_autoexec(_DAYBOOK_AGENT_APPLETS).replace(
+        _DESK_AGENT_SOURCE_BOOT, _DAYBOOK_AGENT_SOURCE_BOOT, 1
+    ),
+    ready_markers=desktop_ready_markers(_DAYBOOK_AGENT_APPLETS),
+    stable_markers=desktop_stable_markers(_DAYBOOK_AGENT_APPLETS),
+    sample_date_clock=True,
+    # The Agent is still starting when the ready screen appears, so a
+    # sample then says little; the journey holds Desk to the ceiling at
+    # its end, once an approved Agent run is scheduled.
+)
+
+
 DAYBOOK_AUTOMATION_FORMAT = 2
 
 
@@ -14348,6 +14377,33 @@ def daybook_automations(data: bytes) -> dict[str, object]:
         "actions": actions,
         "occurrences": occurrences,
     }
+
+
+AGENT_OPERAND_CONTEXT = 1  # SACT-F-CONTEXT
+QLOC_SIZE = 320
+
+
+def agent_operands(data: bytes) -> dict[str, object]:
+    """An Agent run's operands as interop/scheduled-action.f lays them
+    out: its limits, verbosity, effects and flags, then each string
+    field, a cell holding its length and its bytes padded to a cell."""
+
+    def cell(offset: int) -> int:
+        return int.from_bytes(data[offset:offset + 8], "little", signed=True)
+
+    fields: dict[str, object] = {
+        "schema": cell(0), "flags": cell(8), "effects": cell(16),
+        "time_ms": cell(24), "disclosure": cell(32), "output": cell(40),
+        "verbosity": cell(48),
+    }
+    at = 56
+    for name in ("provider", "model", "effort", "tier", "prompt"):
+        if name == "prompt" and fields["flags"] & AGENT_OPERAND_CONTEXT:
+            at += QLOC_SIZE
+        length = cell(at)
+        fields[name] = data[at + 8:at + 8 + length].decode("utf-8")
+        at += 8 + ((length + 7) & ~7)
+    return fields
 
 
 # Desk publishes its panes and taskbar as rich objects through the shell
@@ -28694,10 +28750,13 @@ def smoke(
                 + (f" (missing {', '.join(unready)})" if unready else "")
             )
 
-        def measure_idle_load(virtual_ms: int = 1000) -> None:
+        def measure_idle_load(
+            virtual_ms: int = 1000, ceiling: float | None = None
+        ) -> None:
             """Note how busy the guest stays while its ready screen sits
             idle, as instructions per virtual second against the system
-            clock.  A guest that sleeps when idle runs a small fraction."""
+            clock.  A guest that sleeps when idle runs a small fraction.
+            CEILING, or else the profile's, is the most it may run."""
 
             nonlocal total_steps
             rtc = session.system.rtc
@@ -28728,7 +28787,8 @@ def smoke(
                 f"({per_second / rtc.CLOCK_HZ:.1%} of the clock) over "
                 f"{elapsed_ms:,} virtual ms"
             )
-            ceiling = profile.idle_load_ceiling
+            if ceiling is None:
+                ceiling = profile.idle_load_ceiling
             if ceiling is not None and per_second > ceiling * rtc.CLOCK_HZ:
                 journey_errors.append(
                     f"the guest stayed busy while idle: {per_second / rtc.CLOCK_HZ:.1%} "
@@ -30132,6 +30192,192 @@ def smoke(
                 "Esc did not close the run permissions",
             )
 
+        def run_daybook_agent_create_journey() -> None:
+            """Daybook's pages make an Agent run through ordinary keys: its
+            time and title, how it repeats, its zone, the model and each
+            choice it offers, its limits, and a two-line prompt longer
+            than the editor's first buffer.  Escape once arms the
+            prompt's discard and typing disarms it.  Desk's approval screen
+            shows the run exactly, A allows it once it is read to the end,
+            and Daybook's file keeps it approved with exactly those
+            operands."""
+
+            rtc = session.system.rtc
+            title = "Morning brief"
+            due_s = (rtc.epoch_ms // 60_000 + 30) * 60
+            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
+            first = "Summarize what changed in the project overnight,"
+            second = "then list the three most urgent follow-ups, briefly."
+            prompt = f"{first}\n{second}"
+            session.send_key("alt+1")
+            if not wait_screen("[1:Daybook*]", "Desk did not focus Daybook"):
+                return
+            session.send_key("ctrl+g")
+            if not wait_screen(
+                "Agent run (HH:MM", "Ctrl+G did not ask for a new Agent run"
+            ):
+                return
+            session.send_text(f"{hhmm} {title}")
+            session.send_key("enter")
+            if not wait_screen(
+                "Repeat (once", "Daybook did not ask how the Agent run repeats"
+            ):
+                return
+            session.send_text("daily")
+            session.send_key("enter")
+            if not wait_screen(
+                "Zone (Enter for UTC0)", "Daybook did not ask for the zone"
+            ):
+                return
+            session.send_key("enter")
+            for heading, choice, moves, failure in (
+                ("the model it uses", "Deliberate", 1,
+                 "Daybook did not offer the Agent's models"),
+                ("the model's effort", "High", 1,
+                 "Daybook did not offer the model's efforts"),
+                ("the model's tier", "Fast", 1,
+                 "Daybook did not offer the model's tier and its default"),
+                ("how much the model says", "Medium", 2,
+                 "Daybook did not offer the model's verbosities"),
+            ):
+                if not wait_screen(heading, failure) or not wait_screen(
+                    choice, f"{failure}: no {choice}"
+                ):
+                    return
+                for _ in range(moves):
+                    session.send_key("down")
+                session.send_key("enter")
+            if not wait_screen(
+                "Minutes it may run:", "Daybook did not ask for the time limit"
+            ):
+                return
+            session.send_text("10")
+            session.send_key("enter")
+            if not wait_screen(
+                "Bytes of its reply it keeps:",
+                "Daybook did not ask how much of the reply to keep",
+            ):
+                return
+            session.send_text("16384")
+            session.send_key("enter")
+            if not wait_screen(
+                "New Agent run: its prompt", "Daybook did not open the prompt"
+            ):
+                return
+            # Each key redraws the page, so a typed line takes a while.
+            session.send_text(first)
+            if not wait_screen(
+                "overnight,", "the prompt did not show its first line",
+                step_budget=2_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen(
+                "Esc again discards",
+                "Escape with a prompt typed did not ask again first",
+            ):
+                return
+            session.send_key("enter")
+            session.send_text(second)
+            if not wait_screen(
+                "Ctrl+S create", "typing did not take back the discard"
+            ) or not wait_screen(
+                "briefly.", "the prompt did not show what was typed",
+                step_budget=2_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            session.send_key("ctrl+s")
+            if not wait_screen(
+                "Approve a scheduled Agent run",
+                "Desk did not ask to approve the new Agent run",
+                step_budget=500_000_000,
+                wall_timeout=15.0,
+            ):
+                return
+            for shown, failure in (
+                (title, "the approval did not name the schedule"),
+                ("gpt-slow", "the approval did not name the model"),
+                ("high effort", "the approval did not name the effort"),
+                ("priority tier", "the approval did not name the tier"),
+                ("medium verbosity", "the approval did not name the verbosity"),
+                ("10 min to run", "the approval did not show the time limit"),
+                (f"{len(prompt.encode())} bytes to disclose",
+                 "the approval did not disclose exactly the prompt"),
+                ("16384 bytes of reply", "the approval did not show the reply"),
+                ("Read it to the end", "Allow was not locked before reading"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            session.send_key("end")
+            if not wait_screen(
+                "A allows it to run", "reading to the end did not unlock Allow"
+            ):
+                return
+            session.send_text("a")
+            if not wait_screen_gone(
+                "Approve a scheduled Agent run",
+                "A did not allow the new Agent run",
+            ):
+                return
+            # Daybook's service polls for the answer once a second, and both
+            # the permission and the approval are written to disk first.
+            if not wait_screen(
+                "Approved", "Daybook did not say it was approved",
+                step_budget=1_500_000_000,
+                wall_timeout=45.0,
+            ):
+                return
+            session.send_key("alt+p")
+            if not wait_screen(
+                "Scheduled run permissions", "Alt+P did not open the run permissions"
+            ) or not wait_screen(
+                title, "the run permissions did not name the new Agent run"
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Scheduled run permissions", "Esc did not close the run permissions"
+            ):
+                return
+            stored = read_daybook_reminders() or {}
+            schedules = [
+                schedule for schedule in stored.get("schedules", ())
+                if schedule["title"] == title
+            ]
+            actions = [
+                action for action in stored.get("actions", ())
+                if schedules and action["rid"] == schedules[0]["rid"]
+            ]
+            if len(schedules) != 1 or schedules[0]["action"] != 2 or len(actions) != 1:
+                journey_errors.append(
+                    f"Daybook did not keep one Agent run schedule: {stored}"
+                )
+                return
+            operands = agent_operands(actions[0]["operands"])
+            expected = {
+                "provider": "org.akashic.agent.testing.device-flow",
+                "model": "gpt-slow", "effort": "high", "tier": "priority",
+                "verbosity": 2, "time_ms": 600_000, "output": 16384,
+                "disclosure": len(prompt.encode()), "effects": 0, "flags": 0,
+                "prompt": prompt,
+            }
+            if {key: operands[key] for key in expected} != expected:
+                journey_errors.append(
+                    f"the Agent run's operands are not what was chosen: {operands}"
+                )
+            if not actions[0]["authorized"] or actions[0]["permission_revision"] != 1:
+                journey_errors.append(
+                    f"the Agent run was not kept approved: {actions[0]}"
+                )
+            host_notes.append(
+                f"agent run: created and approved at generation {stored['generation']}"
+            )
+            # Desk then sleeps with the Agent run scheduled: its broker, the
+            # Agent's dispatcher and Daybook's service add nothing while idle.
+            measure_idle_load(2000, ceiling=0.10)
+
         def run_daybook_reminders_journey() -> None:
             """The reminder made at boot fires once inside Desk, on time,
             with a notice, and stays as one review item."""
@@ -31488,6 +31734,9 @@ def smoke(
         if initial_ready and profile_name == "desktop-daybook-reminders":
             run_daybook_reminders_journey()
             run_schedule_permissions_step()
+
+        if initial_ready and profile_name == "desktop-daybook-agent":
+            run_daybook_agent_create_journey()
 
         if initial_ready and profile_name == "desktop-streams":
             run_streams_persistence_journey()
