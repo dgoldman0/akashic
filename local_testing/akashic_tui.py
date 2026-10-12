@@ -35809,6 +35809,11 @@ REQUIRE local_testing/library-projection.f
     linked=True,
     include_large_sample=False,
     total_sectors=8192,
+    # The fixture builds its corpus in a 64 MiB arena of general XMEM.  KDOS
+    # gives the userland dictionary half of external memory unless a
+    # profile sets a general-XMEM reserve, so 128 MiB leaves the general
+    # allocator too little for it; 256 MiB leaves about 65 MB to spare.
+    default_ext_mem_mib=256,
     initial_files=(
         (
             "local_testing/library-projection.f",
