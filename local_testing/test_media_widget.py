@@ -1079,3 +1079,82 @@ def test_a_pdf_that_needs_a_password_says_so(tmp_path) -> None:
 
 def _size(n: int) -> str:
     return f"{n} bytes" if n < 1024 else f"{n // 1024}K"
+
+
+# --------------------------------------------------------------------------
+# A document's contents
+# --------------------------------------------------------------------------
+
+HEADED = b"".join([
+    b"# First\n\n", b"Text under the first heading.\n\n" * 3,
+    b"## Second\n\n", b"Text under the second heading.\n\n" * 3,
+    b"### Third\n\n", b"#### Too deep for the contents\n\n", b"Text.\n\n" * 6,
+])
+
+KEYS = [
+    ": MW-CHAR  ( c -- )  MW-EV 24 0 FILL  KEY-T-CHAR MW-EV !  MW-EV 8 + !"
+    "  MW-EV MW-W @ WDG-HANDLE .\" K=\" . ;",
+    ": MW-SPECIAL  ( code -- )  MW-EV 24 0 FILL  KEY-T-SPECIAL MW-EV !  MW-EV 8 + !"
+    "  MW-EV MW-W @ WDG-HANDLE .\" K=\" . ;",
+    ": MW-TOP  ( -- )  .\" TOP=\" MW-W @ MEDIA-DOCUMENT@ DOCV-TOP@ SWAP . . CR ;",
+]
+
+
+def test_a_documents_contents_show_instead_of_it_and_go_to_an_entry() -> None:
+    """The key c shows a document's contents, its headings of levels 1 to
+    3 indented by level, in a list instead of the document; Enter goes to
+    the chosen heading and shows the document; Escape shows it again where
+    it was; a file with no contents keeps showing itself."""
+
+    output = _run(_media_lines() + KEYS + [
+        f'{len(HEADED)} S" /notes.md" MW-PUT',
+        _open("/notes.md"), "MW-W @ WDG-FOCUS-SET MW-W @ MW-DRAW", "MW-TOP",
+        "99 MW-CHAR", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR',
+        "MW-W @ MW-DRAW", '." @@LIST" CR', "6 36 MW-DUMP", '." @@END" CR',
+        "KEY-DOWN MW-SPECIAL KEY-ENTER MW-SPECIAL", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR',
+        "MW-W @ MW-DRAW", "MW-TOP",
+        "99 MW-CHAR KEY-ESC MW-SPECIAL", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR', "MW-TOP",
+        "MW-W @ MEDIA-CLEAR", '." CLEARED=" MW-MSRC MSRC-HELD@ .',
+        # A document with no headings has no contents to show.
+        'S" Plain." MW-FILE SWAP MOVE  6 S" /plain.md" MW-PUT', _open("/plain.md"),
+        '." @@PLAIN" CR 99 MW-CHAR', '." VIEW=" MW-W @ MEDIA-VIEW@ . CR',
+        "MW-W @ MEDIA-FREE",
+    ], HEADED)
+    views = re.findall(r"VIEW=(\d+)", output)
+    assert views == ["5", str(VIEW_DOCUMENT), str(VIEW_DOCUMENT), str(VIEW_DOCUMENT)], \
+        output[-2000:]
+    assert "K=0 " in output.split("@@PLAIN")[1]
+    listed = _labels(output.split("@@LIST")[1].split("@@END")[0], 6, 36)
+    assert listed == ["First", "Second", "Third"], listed
+    cells = _cells(output.split("@@LIST")[1].split("@@END")[0])
+    assert "".join(chr(cells[(1, c)][0]) for c in range(8)) == "  Second"
+    assert "".join(chr(cells[(2, c)][0]) for c in range(9)) == "    Third"
+    tops = re.findall(r"TOP=(\d+) (\d+)", output)
+    second = HEADED.split(b"\n\n").index(b"## Second")
+    assert tops[0] == ("0", "0") and tops[1] == (str(second), "0") and tops[2] == tops[1]
+    assert re.findall(r"K=(-?\d+)", output.split("@@PLAIN")[0]) == ["-1"] * 5
+    assert "CLEARED=0 " in output
+
+
+def test_a_pdfs_contents_go_to_a_page_not_read_yet() -> None:
+    """A PDF without an outline has its pages as contents; choosing one
+    reads that page alone and shows it from its top."""
+
+    pdf = _pdf()
+    output = _run(_media_lines() + KEYS + [
+        f'{len(pdf)} S" /paper.pdf" MW-PUT',
+        "PDF-DOC-READER MEDIA-K-PDF MW-W @ MEDIA-READER!",
+        _open("/paper.pdf"), "MW-W @ WDG-FOCUS-SET",
+        "MW-W @ MW-DRAW MW-W @ MW-MEDIA-SERVICE DROP MW-W @ MW-DRAW",
+        "99 MW-CHAR MW-W @ MW-DRAW", '." @@LIST" CR', "6 36 MW-DUMP", '." @@END" CR',
+        "KEY-DOWN MW-SPECIAL KEY-DOWN MW-SPECIAL KEY-ENTER MW-SPECIAL",
+        "MW-W @ MW-DRAW",
+        ": MW-AT  MW-W @ MEDIA-DOCUMENT@ DUP DOCV-TOP@ DROP SWAP DOCV-DOCUMENT@"
+        "  2DUP DOC-PART-OF DUP .\" PART=\" . SWAP DOC-PART-FIRST - .\" PLACE=\" . CR ;",
+        "MW-AT",
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], pdf, max_steps=2_000_000_000, roots=PDF_ROOTS)
+    listed = _labels(output.split("@@LIST")[1].split("@@END")[0], 6, 36)
+    assert listed == ["Page 1", "Page 2", "Page 3", "Page 4"], listed
+    assert "PART=2 PLACE=0 " in output, output[-1500:]
+    assert "FREED=0 " in output

@@ -26,6 +26,12 @@
 \  from the widget's memory source; when that memory refuses the text or
 \  the document, the widget says so instead of cutting it.
 \
+\  A document shown has its contents (DOC-CONTENTS): the key c shows
+\  them instead of the document, as a list widget whose rows are the
+\  entries' titles, indented two cells a level; Enter goes where the
+\  chosen entry goes in the document and shows it again, and Escape or c
+\  shows the document again where it was.
+\
 \  A document that needs a password to be read shows its facts and says it
 \  is protected.  A document's figures and links name files from the
 \  document's folder (utils/fs/link-path.f).  A figure's picture is opened
@@ -54,20 +60,25 @@
 \   +160  doc        the open document (DOC-SIZE bytes from msrc), or 0
 \   +168  follow-xt  ( path-a path-u status ctx -- ), or 0
 \   +176  follow-ctx
-\   +184  readers    a document reader for each kind (MEDIA-KINDS cells), or 0
+\   +184  contents   the contents' list widget, made on first use, or 0
+\   +192  row-a      a contents row's text, indented, from msrc
+\   +200  row-cap
+\   +208  readers    a document reader for each kind (MEDIA-KINDS cells), or 0
 \         source     MEDSRC-VFS-SIZE bytes: the open file, after the readers
 \
 \  Prefix: MEDIA- (public), _MEDIA- and _MDW- (internal)
 \  Provider: akashic-tui-media
-\  Dependencies: widget.f, draw.f, picture.f, textarea.f, document.f,
+\  Dependencies: widget.f, draw.f, picture.f, textarea.f, list.f, document.f,
 \                media/*, markup/markdown.f, utils/fs/link-path.f
 
 PROVIDED akashic-tui-media
 
 REQUIRE ../widget.f
 REQUIRE ../draw.f
+REQUIRE ../keys.f
 REQUIRE picture.f
 REQUIRE textarea.f
+REQUIRE list.f
 REQUIRE document.f
 REQUIRE ../../media/source.f
 REQUIRE ../../media/vfs-source.f
@@ -96,7 +107,10 @@ REQUIRE ../../utils/string.f
 160 CONSTANT _MEDIA-O-DOC
 168 CONSTANT _MEDIA-O-FOLLOW
 176 CONSTANT _MEDIA-O-FOLLOW-CTX
-184 CONSTANT _MEDIA-O-READERS
+184 CONSTANT _MEDIA-O-CONTENTS
+192 CONSTANT _MEDIA-O-ROW-A
+200 CONSTANT _MEDIA-O-ROW-CAP
+208 CONSTANT _MEDIA-O-READERS
 _MEDIA-O-READERS MEDIA-KINDS CELLS + CONSTANT _MEDIA-O-SOURCE
 _MEDIA-O-SOURCE MEDSRC-VFS-SIZE + CONSTANT _MEDIA-DESC-SIZE
 
@@ -105,6 +119,7 @@ _MEDIA-O-SOURCE MEDSRC-VFS-SIZE + CONSTANT _MEDIA-DESC-SIZE
 2 CONSTANT MEDIA-V-TEXT
 3 CONSTANT MEDIA-V-FACTS
 4 CONSTANT MEDIA-V-DOCUMENT
+5 CONSTANT MEDIA-V-CONTENTS
 
 0 CONSTANT MEDIA-N-NONE
 1 CONSTANT MEDIA-N-NO-VIEW    \ this kind has no view yet
@@ -186,10 +201,18 @@ _MEDIA-HEAP-MEM 7 + -8 AND CONSTANT MEDIA-HEAP
     THEN
     0 SWAP _MEDIA-O-DOC + ! ;
 
+\ Give back a contents row's buffer.
+: _MEDIA-DROP-ROW  ( w -- )
+    DUP _MEDIA-O-ROW-A _MEDIA@ ?DUP IF
+        OVER _MEDIA-O-ROW-CAP _MEDIA@ 2 PICK _MEDIA-MSRC MSRC-FREE
+    THEN
+    0 OVER _MEDIA-O-ROW-A + !  0 SWAP _MEDIA-O-ROW-CAP + ! ;
+
 \ Stop showing anything and close the file.
 : _MEDIA-RELEASE  ( w -- )
     DUP _MEDIA-O-PICTURE _MEDIA@ ?DUP IF >R 0 0 0 R> PICT-SOURCE! THEN
-    DUP _MEDIA-O-VIEW _MEDIA@ MEDIA-V-DOCUMENT = IF
+    DUP _MEDIA-DROP-ROW
+    DUP _MEDIA-O-VIEW _MEDIA@ DUP MEDIA-V-DOCUMENT = SWAP MEDIA-V-CONTENTS = OR IF
         0 OVER _MEDIA-O-DOCV _MEDIA@ DOCV-DOCUMENT!
         DUP _MEDIA-O-DOC _MEDIA@ DOC-CLOSE
         DUP _MEDIA-DROP-DOC
@@ -349,16 +372,78 @@ VARIABLE _MO-N
 : MEDIA-TEXT@     ( widget -- text|0 )    _MEDIA-O-TEXT _MEDIA@ ;
 : MEDIA-DOCUMENT@ ( widget -- docv|0 )    _MEDIA-O-DOCV _MEDIA@ ;
 
+: MEDIA-CONTENTS@ ( widget -- list|0 )    _MEDIA-O-CONTENTS _MEDIA@ ;
+
 \ MEDIA-VIEW-WIDGET@ ( widget -- view-widget|0 )
 \   The canonical widget the current view draws: the picture, the text
-\   area or the document view.  Zero for the facts view and for nothing.
+\   area, the document view, or the list of the document's contents.
+\   Zero for the facts view and for nothing.
 : MEDIA-VIEW-WIDGET@  ( widget -- view-widget|0 )
     DUP MEDIA-VIEW@ CASE
         MEDIA-V-PICTURE  OF MEDIA-PICTURE@ ENDOF
         MEDIA-V-TEXT     OF MEDIA-TEXT@ ENDOF
         MEDIA-V-DOCUMENT OF MEDIA-DOCUMENT@ ENDOF
+        MEDIA-V-CONTENTS OF MEDIA-CONTENTS@ ENDOF
         >R DROP 0 R>
     ENDCASE ;
+
+\ --- Contents --------------------------------------------------------------
+
+VARIABLE _MCT-W    \ the media widget whose contents a list shows
+VARIABLE _MCT-IN   \ a row's indent
+
+: _MCT-KEY  ( index list -- key )  DROP 1+ ;
+
+\ A row: the entry's title, two cells in for each level; the title alone
+\ when the row's buffer has no room for its indent.
+: _MCT-FIELD  ( index column list -- addr len )
+    NIP LST-CONTEXT@ _MCT-W !
+    _MCT-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY             ( level a u )
+    ROT 2* _MCT-IN !
+    DUP _MCT-IN @ + _MCT-W @ _MEDIA-O-ROW-CAP _MEDIA@ > IF EXIT THEN
+    _MCT-W @ _MEDIA-O-ROW-A _MEDIA@ _MCT-IN @ 32 FILL
+    TUCK _MCT-W @ _MEDIA-O-ROW-A _MEDIA@ _MCT-IN @ + SWAP MOVE
+    _MCT-W @ _MEDIA-O-ROW-A _MEDIA@ SWAP _MCT-IN @ + ;
+
+\ The list's open word: go where the entry goes, and show the document.
+: _MCT-OPEN  ( index list -- )
+    LST-CONTEXT@ _MCT-W !
+    _MCT-W @ _MEDIA-O-DOCV _MEDIA@ DOCV-GO-ENTRY
+    MEDIA-V-DOCUMENT _MCT-W @ _MEDIA-O-VIEW + !  _MCT-W @ WDG-DIRTY ;
+
+VARIABLE _MSC-W
+
+\ Show the document's contents instead of it, in a row buffer sized to
+\ the longest row; false when it has none.
+: _MEDIA-SHOW-CONTENTS  ( w -- shown? )
+    _MSC-W !
+    _MSC-W @ _MEDIA-O-DOC _MEDIA@ DOC-CONTENTS DROP     ( n )
+    DUP 0= IF EXIT THEN
+    0 OVER 0 ?DO
+        I _MSC-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY NIP SWAP 2* + MAX
+    LOOP                                                ( n longest )
+    DUP _MSC-W @ _MEDIA-O-ROW-CAP _MEDIA@ > IF
+        _MSC-W @ _MEDIA-DROP-ROW
+        DUP _MSC-W @ _MEDIA-MSRC MSRC-ALLOC ?DUP IF
+            _MSC-W @ _MEDIA-O-ROW-A + !  DUP _MSC-W @ _MEDIA-O-ROW-CAP + !
+        THEN
+    THEN DROP
+    _MSC-W @ _MEDIA-O-CONTENTS _MEDIA@ 0= IF
+        _MSC-W @ WDG-REGION ['] _MCT-KEY ['] _MCT-FIELD LST-NEW
+        DUP _MSC-W @ _MEDIA-O-CONTENTS + !
+        LST-UNTRUSTED OVER LST-MODE!
+        ['] _MCT-OPEN OVER LST-ON-OPEN
+        _MSC-W @ SWAP LST-CONTEXT!
+    THEN
+    _MSC-W @ _MEDIA-O-CONTENTS _MEDIA@ LST-ROWS!
+    MEDIA-V-CONTENTS _MSC-W @ _MEDIA-O-VIEW + !
+    _MSC-W @ WDG-DIRTY -1 ;
+
+\ The key c, without Ctrl or Alt, and Escape.
+: _MEDIA-C?  ( event -- flag )
+    DUP @ KEY-T-CHAR = OVER 8 + @ 99 = AND
+    SWAP 16 + @ KEY-MOD-CTRL KEY-MOD-ALT OR AND 0= AND ;
+: _MEDIA-ESC?  ( event -- flag )  DUP @ KEY-T-SPECIAL = SWAP 8 + @ KEY-ESC = AND ;
 
 DEFER _MEDIA-DRAW-D
 DEFER _MEDIA-HANDLE-D
@@ -443,6 +528,7 @@ DEFER _MEDIA-HANDLE-D
     DUP _MEDIA-RELEASE
     DUP _MEDIA-O-PICTURE _MEDIA@ ?DUP IF PICT-FREE THEN
     DUP _MEDIA-O-DOCV _MEDIA@ ?DUP IF DOCV-FREE THEN
+    DUP _MEDIA-O-CONTENTS _MEDIA@ ?DUP IF LST-FREE THEN
     FREE ;
 
 \ MEDIA-PENDING? ( widget -- flag )
@@ -523,7 +609,17 @@ VARIABLE _MDW-LINE-U
     32 0 0 _MDW-ROWS @ _MDW-COLS @ DRW-FILL-RECT
     _MDW-W @ MEDIA-VIEW@ MEDIA-V-FACTS = IF _MDW-FACTS THEN ;
 
+\ A document's key c shows its contents; in them, c or Escape shows the
+\ document again.  Other keys go to the view shown.
 : _MEDIA-DO-HANDLE  ( event widget -- consumed? )
+    DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT = IF
+        OVER _MEDIA-C? IF NIP _MEDIA-SHOW-CONTENTS EXIT THEN
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-CONTENTS = IF
+        OVER DUP _MEDIA-C? SWAP _MEDIA-ESC? OR IF
+            NIP MEDIA-V-DOCUMENT OVER _MEDIA-O-VIEW + ! WDG-DIRTY -1 EXIT
+        THEN
+    THEN
     DUP MEDIA-VIEW-WIDGET@ ?DUP 0= IF 2DROP 0 EXIT THEN
     TUCK SWAP _MEDIA-FOCUS-TO WDG-HANDLE ;
 

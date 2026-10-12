@@ -1075,6 +1075,17 @@ VARIABLE _DVH-BLOCK
     DUP 0 _DV-DOC DOC-PARTS WITHIN 0= IF DROP EXIT THEN
     _DV-GO-PART ;
 
+\ DOCV-GO-ENTRY ( i widget -- )
+\   Go where entry I of the document's contents (DOC-CONTENTS) goes: its
+\   block at the view's top, or where its target goes, as a link does.
+: DOCV-GO-ENTRY  ( i widget -- )
+    _DV-W ! _DV-DOC 0= IF DROP EXIT THEN
+    _DV-DOC DOC-ENTRY-GOES                               ( key target-a target-u )
+    ROT ?DUP IF
+        NIP NIP _DV-DOC DOC-KEY>INDEX DUP 0< IF DROP EXIT THEN _DV-GO EXIT
+    THEN
+    _DV-FOLLOW ;
+
 \ DOCV-FOLLOW ( target-a target-u widget -- )
 \   Follow a link's target as a press on it does.
 : DOCV-FOLLOW  ( target-a target-u widget -- )
@@ -1351,6 +1362,7 @@ GUARD _docv-guard
 ' DOCV-SCROLL    CONSTANT _docv-scroll-xt
 ' DOCV-GO        CONSTANT _docv-go-xt
 ' DOCV-GO-PART   CONSTANT _docv-go-part-xt
+' DOCV-GO-ENTRY  CONSTANT _docv-go-entry-xt
 ' DOCV-FOLLOW    CONSTANT _docv-follow-xt
 ' DOCV-SERVICE   CONSTANT _docv-service-xt
 ' DOCV-FREE      CONSTANT _docv-free-xt
@@ -1362,6 +1374,7 @@ GUARD _docv-guard
 : DOCV-SCROLL    _docv-scroll-xt   _docv-guard WITH-GUARD ;
 : DOCV-GO        _docv-go-xt       _docv-guard WITH-GUARD ;
 : DOCV-GO-PART   _docv-go-part-xt  _docv-guard WITH-GUARD ;
+: DOCV-GO-ENTRY  _docv-go-entry-xt _docv-guard WITH-GUARD ;
 : DOCV-FOLLOW    _docv-follow-xt   _docv-guard WITH-GUARD ;
 : DOCV-SERVICE   _docv-service-xt  _docv-guard WITH-GUARD ;
 : DOCV-FREE      _docv-free-xt     _docv-guard WITH-GUARD ;

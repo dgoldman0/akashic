@@ -2617,5 +2617,6 @@ CREATE _MD-READER RDR-SIZE ALLOT
 0                 _MD-READER RDR.PART-XT !
 0                 _MD-READER RDR.PICTURE-XT !
 0                 _MD-READER RDR.ANCHOR-XT !
+0                 _MD-READER RDR.CONTENTS-XT !
 
 : MD-READER  ( -- reader )  _MD-READER ;

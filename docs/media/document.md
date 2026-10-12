@@ -72,6 +72,23 @@ so it looks at none in most places. With `LAST?` it gives the last such part
 `DOC-COUNT`, for the parts after the last block. A view stops at such a gap
 and reads the part when it needs it (`tui/widgets/document.f`).
 
+## Contents
+
+A document's contents are entries, each a title at a level from 0 at the
+top, going somewhere in the document: to a block, by its key, or where a
+link's target goes, as a link would. `DOC-CONTENTS ( doc -- entries status )`
+makes them when first asked for and keeps them; `DOC-ENTRY ( i doc --
+level title-a title-u )` and `DOC-ENTRY-GOES ( i doc -- key target-a
+target-u )` give an entry, where a key of 0 means the target says where.
+
+A reader gives a document's contents with `RDR.CONTENTS-XT`, adding each
+entry with `DOC-ADD-ENTRY ( level title-a title-u key target-a target-u doc
+-- ok? )`, as a PDF gives its outline. Otherwise the contents are the
+document's headings of levels 1 to 3, each going to its heading; deeper
+headings are left out, as contents usually leave them. A document in parts
+has no headings to give before its parts are read, so only its reader gives
+its contents.
+
 ## Pictures a document holds
 
 A figure names its picture. Most documents name a file, which the owner of a
@@ -138,7 +155,7 @@ target-a target-u )` and `DCT-LINK-AT ( offset content -- target-a target-u
 
 ## Readers
 
-A reader is a record of six execution tokens, `RDR-SIZE` bytes:
+A reader is a record of seven execution tokens, `RDR-SIZE` bytes:
 
 | Field | Stack | Job |
 |---|---|---|
@@ -147,6 +164,7 @@ A reader is a record of six execution tokens, `RDR-SIZE` bytes:
 | `RDR.CLOSE-XT` | `( doc -- )` | Give back what the reader keeps, in `DOC-STATE@`. |
 | `RDR.PART-XT` | `( part doc -- status )` | Add one part's blocks and their containers; 0 for a reader that adds no parts. |
 | `RDR.ANCHOR-XT` | `( name-a name-u doc -- part \| -1 )` | The part a link within a document in parts names after its `#`; 0 for a reader without parts. |
+| `RDR.CONTENTS-XT` | `( doc -- status )` | Add the document's contents with `DOC-ADD-ENTRY`; 0 for its headings. |
 | `RDR.PICTURE-XT` | `( name-a name-u maker doc -- ok? )` | Fill a maker ([media/picture.f](picture.md)) for a picture the document holds itself, which a figure names; 0 for a reader whose figures name files. |
 
 A reader may keep one cell of its own with `DOC-STATE!`, two cells in each

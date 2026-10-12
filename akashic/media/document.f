@@ -54,7 +54,11 @@
 \    DOC-PICTURES?   ( doc -- flag )
 \    DOC-PICTURE     ( name-a name-u maker doc -- ok? )
 \    DOC-ANCHOR-PART ( name-a name-u doc -- part | -1 )
-\  A reader adds with DOC-ADD-BLOCK DOC-ADD-CONTAINER DOC-ADD-PART and
+\    DOC-CONTENTS    ( doc -- entries status )
+\    DOC-ENTRY       ( i doc -- level title-a title-u )
+\    DOC-ENTRY-GOES  ( i doc -- key target-a target-u )
+\  A reader adds with DOC-ADD-BLOCK DOC-ADD-CONTAINER DOC-ADD-PART
+\  DOC-ADD-ENTRY and
 \  fills a block's content with DOC-CB-TEXT DOC-CB-LINK DOC-CB-KIND
 \  DOC-CB-FIGURE; it finds a part with DOC-PART-LOC@.
 \  A block's fields are BLK-KEY@ BLK-KIND@ BLK-LEVEL@ BLK-ROWS-BEFORE@ BLK-INSIDE@;
@@ -131,7 +135,13 @@ PROVIDED akashic-media-document
 : _DOC.PART-COUNT  ( d -- a )  248 + ;
 : _DOC.LAST-KEY    ( d -- a )  256 + ;
 : _DOC.READING     ( d -- a )  264 + ;   \ the part being read, or -1
-272 CONSTANT DOC-SIZE
+: _DOC.ENTRIES-A   ( d -- a )  272 + ;   \ the contents' entries
+: _DOC.ENTRIES-CAP ( d -- a )  280 + ;
+: _DOC.ENTRIES-N   ( d -- a )  288 + ;   \ how many, or -1 before they are made
+: _DOC.ESTR-A      ( d -- a )  296 + ;   \ their titles' and targets' bytes
+: _DOC.ESTR-CAP    ( d -- a )  304 + ;
+: _DOC.ESTR-U      ( d -- a )  312 + ;
+320 CONSTANT DOC-SIZE
 
 \ A block: its kind and heading level, the blank rows before it and how
 \ many of its outermost containers those rows lie inside, its containers,
@@ -231,14 +241,27 @@ VARIABLE _DLA-OFF
 \ ok? ), which fills a maker (media/picture.f) for a figure's picture the
 \ document holds itself, or 0 for a reader whose figures name files; and
 \ its anchors ( name-a name-u doc -- part | -1 ), the part a link within a
-\ document in parts names, or 0.
+\ document in parts names, or 0; and its contents ( doc -- status ), which
+\ adds the document's entries with DOC-ADD-ENTRY, or 0 for the headings.
 : RDR.STRUCTURE-XT ( r -- a )        ;
 : RDR.CONTENT-XT   ( r -- a )    8 + ;
 : RDR.CLOSE-XT     ( r -- a )   16 + ;
 : RDR.PART-XT      ( r -- a )   24 + ;
 : RDR.PICTURE-XT   ( r -- a )   32 + ;
 : RDR.ANCHOR-XT    ( r -- a )   40 + ;
-48 CONSTANT RDR-SIZE
+: RDR.CONTENTS-XT  ( r -- a )   48 + ;
+56 CONSTANT RDR-SIZE
+
+\ A contents entry: its level, from 0 at the top; its title's and its
+\ target's offsets and lengths among the entries' bytes; and the key of
+\ the block it goes to, or 0 when it goes where its target does.
+: _ENT.LEVEL   ( e -- a )        ;
+: _ENT.TITLE   ( e -- a )    8 + ;
+: _ENT.TITLE-U ( e -- a )   16 + ;
+: _ENT.TARGET  ( e -- a )   24 + ;
+: _ENT.TARGET-U ( e -- a )  32 + ;
+: _ENT.KEY     ( e -- a )   40 + ;
+48 CONSTANT _ENT-SIZE
 
 \ A part: two cells the reader keeps to find it, where its blocks lie
 \ (or will, when it is read), how many there are, and whether it is read.
@@ -494,6 +517,8 @@ VARIABLE _DCE-BYTES
     _DOC-D @ _DOC.CB-LINKS-A @ _DOC-D @ _DOC.CB-LINKS-CAP @ _DOC-FREE
     _DOC-D @ _DOC.CB-STR-A @ _DOC-D @ _DOC.CB-STR-CAP @ _DOC-FREE
     _DOC-D @ _DOC.PARTS-A @ _DOC-D @ _DOC.PARTS-CAP @ _DOC-FREE
+    _DOC-D @ _DOC.ENTRIES-A @ _DOC-D @ _DOC.ENTRIES-CAP @ _DOC-FREE
+    _DOC-D @ _DOC.ESTR-A @ _DOC-D @ _DOC.ESTR-CAP @ _DOC-FREE
     _DOC-D @ DOC-SIZE 0 FILL ;
 
 : _DOC-CLOSE  ( doc -- )
@@ -507,6 +532,7 @@ VARIABLE _DCE-BYTES
     OVER MEDSRC-VALID? 0= IF 2DROP DOC-S-INVALID EXIT THEN
     _DOC-D @ _DOC.READER ! _DOC-D @ _DOC.SOURCE !
     _DOC-MAGIC _DOC-D @ _DOC.MAGIC !  -1 _DOC-D @ _DOC.READING !
+    -1 _DOC-D @ _DOC.ENTRIES-N !
     _DOC-D @ DUP _DOC.READER @ RDR.STRUCTURE-XT @ EXECUTE
     ?DUP IF _DOC-FREE-ALL EXIT THEN
     _DOC-D @ _DOC.COUNT @ ?DUP IF
@@ -788,6 +814,90 @@ VARIABLE _DAN-N
     _DAN-FREE _DAN-FOUND @ ;
 
 \ ---------------------------------------------------------------------
+\  Contents
+\ ---------------------------------------------------------------------
+\
+\  A document's contents are entries, each a title at a level, that go
+\  somewhere in it: to a block, by its key, or where a link's target
+\  goes.  Its reader gives them (RDR.CONTENTS-XT), as a PDF gives its
+\  outline; otherwise they are its headings of levels 1 to 3, the
+\  levels contents show, each going to its heading.  A document in parts
+\  has no headings to give before its parts are read, so only its reader
+\  gives its contents.  They are made when first asked for, and kept.
+
+VARIABLE _DCE-N
+
+\ DOC-ADD-ENTRY ( level title-a title-u key target-a target-u doc -- ok? )
+\   Add an entry: going to the block with KEY, or, for 0, where TARGET
+\   goes, which may be empty for an entry that only heads others.
+: DOC-ADD-ENTRY  ( level title-a title-u key target-a target-u doc -- ok? )
+    _DOC-D !
+    _DOC-D @ _DOC.ESTR-U @ OVER + 4 PICK +
+    _DOC-D @ _DOC.ESTR-A _DOC-D @ _DOC.ESTR-CAP _DOC-GROW
+    _DOC-D @ _DOC.ENTRIES-N @ 0 MAX 1+ _ENT-SIZE *
+    _DOC-D @ _DOC.ENTRIES-A _DOC-D @ _DOC.ENTRIES-CAP _DOC-GROW AND 0= IF
+        2DROP 2DROP 2DROP 0 EXIT
+    THEN
+    _DOC-D @ _DOC.ENTRIES-N @ 0 MAX DUP _DCE-N !
+    _ENT-SIZE * _DOC-D @ _DOC.ENTRIES-A @ + >R
+    DUP R@ _ENT.TARGET-U !  _DOC-D @ _DOC.ESTR-U @ R@ _ENT.TARGET !
+    _DOC-D @ _DOC.ESTR-A @ _DOC-D @ _DOC.ESTR-U @ + SWAP DUP _DOC-D @ _DOC.ESTR-U +! MOVE
+    R@ _ENT.KEY !
+    DUP R@ _ENT.TITLE-U !  _DOC-D @ _DOC.ESTR-U @ R@ _ENT.TITLE !
+    _DOC-D @ _DOC.ESTR-A @ _DOC-D @ _DOC.ESTR-U @ + SWAP DUP _DOC-D @ _DOC.ESTR-U +! MOVE
+    R> _ENT.LEVEL !
+    _DCE-N @ 1+ _DOC-D @ _DOC.ENTRIES-N !  -1 ;
+
+VARIABLE _DCH-I
+VARIABLE _DCH-NEW
+VARIABLE _DCH-C
+
+\ The document's headings of levels 1 to 3 as its contents.
+: _DOC-HEADINGS  ( -- status )
+    0 _DOC-D @ _DOC.ENTRIES-N !
+    _DOC-D @ _DOC.COUNT @ 0 ?DO
+        I _DCH-I !
+        I _DOC-D @ DOC-BLOCK DUP BLK-KIND@ DOC-B-HEADING = SWAP BLK-LEVEL@ 4 < AND IF
+            I _DOC-CACHE-SLOT @ 0= _DCH-NEW !
+            I _DOC-D @ _DOC-CONTENT ?DUP IF NIP UNLOOP EXIT THEN _DCH-C !
+            _DCH-C @ DCT-LEVEL@ 1- 0 MAX _DCH-C @ DCT-TEXT
+            _DCH-I @ _DOC-D @ DOC-BLOCK BLK-KEY@ 0 0 _DOC-D @ DOC-ADD-ENTRY
+            _DCH-NEW @ IF _DCH-I @ _DOC-FREE-CONTENT THEN
+            0= IF DOC-S-MEMORY UNLOOP EXIT THEN
+        THEN
+    LOOP DOC-S-OK ;
+
+\ DOC-CONTENTS ( doc -- entries status )
+\   The document's contents, made when first asked for.  When they
+\   cannot all be made, the entries made so far, and why.
+: _DOC-CONTENTS  ( doc -- entries status )
+    DUP _DOC.MAGIC @ _DOC-MAGIC <> IF DROP 0 DOC-S-INVALID EXIT THEN
+    _DOC-D !
+    _DOC-D @ _DOC.ENTRIES-N @ 0< 0= IF _DOC-D @ _DOC.ENTRIES-N @ DOC-S-OK EXIT THEN
+    0 _DOC-D @ _DOC.ENTRIES-N !
+    _DOC-D @ _DOC.READER @ RDR.CONTENTS-XT @ ?DUP IF
+        _DOC-D @ DUP >R SWAP EXECUTE R> _DOC-D !
+    ELSE
+        _DOC-D @ _DOC.PART-COUNT @ IF DOC-S-OK ELSE _DOC-HEADINGS THEN
+    THEN
+    _DOC-D @ _DOC.ENTRIES-N @ SWAP ;
+
+: _DOC-ENTRY@  ( i doc -- e )  _DOC.ENTRIES-A @ SWAP _ENT-SIZE * + ;
+
+\ DOC-ENTRY ( i doc -- level title-a title-u )   Entry I of the contents.
+: DOC-ENTRY  ( i doc -- level title-a title-u )
+    2DUP _DOC.ENTRIES-N @ 0 MAX U< 0= IF 2DROP 0 0 0 EXIT THEN
+    TUCK _DOC-ENTRY@ DUP _ENT.LEVEL @ SWAP
+    DUP _ENT.TITLE @ 3 PICK _DOC.ESTR-A @ + SWAP _ENT.TITLE-U @ 3 ROLL DROP ;
+
+\ DOC-ENTRY-GOES ( i doc -- key target-a target-u )
+\   Where entry I goes: the key of a block, or 0 and a link's target.
+: DOC-ENTRY-GOES  ( i doc -- key target-a target-u )
+    2DUP _DOC.ENTRIES-N @ 0 MAX U< 0= IF 2DROP 0 0 0 EXIT THEN
+    TUCK _DOC-ENTRY@ DUP _ENT.KEY @ SWAP
+    DUP _ENT.TARGET @ 3 PICK _DOC.ESTR-A @ + SWAP _ENT.TARGET-U @ 3 ROLL DROP ;
+
+\ ---------------------------------------------------------------------
 \  What a reader of the kept contents touches
 \ ---------------------------------------------------------------------
 
@@ -822,6 +932,10 @@ VARIABLE _DSD-D
         0= IF 2DROP 0 EXIT THEN
     _DSD-D @ _DOC.PARTS-A @ _DSD-D @ _DOC.PARTS-CAP @ _DSD-CLEAR?
         0= IF 2DROP 0 EXIT THEN
+    _DSD-D @ _DOC.ENTRIES-A @ _DSD-D @ _DOC.ENTRIES-CAP @ _DSD-CLEAR?
+        0= IF 2DROP 0 EXIT THEN
+    _DSD-D @ _DOC.ESTR-A @ _DSD-D @ _DOC.ESTR-CAP @ _DSD-CLEAR?
+        0= IF 2DROP 0 EXIT THEN
     _DSD-D @ _DOC.CACHE-A @ _DSD-D @ _DOC.CACHE-CAP @ _DSD-CLEAR?
         0= IF 2DROP 0 EXIT THEN
     _DSD-D @ _DOC.COUNT @ MIN SWAP 0 MAX ?DO
@@ -840,6 +954,7 @@ VARIABLE _DSD-D
 : DOC-CONTENT  ( index doc -- content status )  _DOC-CONTENT ;
 : DOC-KEEP     ( first end doc -- )  _DOC-KEEP ;
 : DOC-ANCHOR   ( name-a name-u doc -- index | -1 )  _DOC-ANCHOR ;
+: DOC-CONTENTS  ( doc -- entries status )  _DOC-CONTENTS ;
 : DOC-READ-PART  ( part doc -- status )  _DOC-READ-PART ;
 
 \ ── guard ────────────────────────────────────────────────
@@ -853,6 +968,7 @@ GUARD _doc-guard
 ' DOC-KEEP     CONSTANT _doc-keep-xt
 ' DOC-ANCHOR   CONSTANT _doc-anchor-xt
 ' DOC-READ-PART CONSTANT _doc-read-part-xt
+' DOC-CONTENTS CONSTANT _doc-contents-xt
 
 : DOC-OPEN     _doc-open-xt _doc-guard WITH-GUARD ;
 : DOC-CLOSE    _doc-close-xt _doc-guard WITH-GUARD ;
@@ -860,4 +976,5 @@ GUARD _doc-guard
 : DOC-KEEP     _doc-keep-xt _doc-guard WITH-GUARD ;
 : DOC-ANCHOR   _doc-anchor-xt _doc-guard WITH-GUARD ;
 : DOC-READ-PART _doc-read-part-xt _doc-guard WITH-GUARD ;
+: DOC-CONTENTS _doc-contents-xt _doc-guard WITH-GUARD ;
 [THEN] [THEN]

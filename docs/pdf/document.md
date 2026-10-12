@@ -72,6 +72,16 @@ On a page of a TeX document with seven links, reading them and placing
 them costs about 440,000 steps, most of it reading the links' annotations,
 over the 1.26 million laying the page out takes.
 
+## Contents
+
+The document's contents (`DOC-CONTENTS`) are the file's outline
+(`pdf/navigate.f`): each item at its level, from 0, with its title, going
+where it goes as a link would: a destination resolved only when it is
+chosen, or an address. An item that goes nowhere only heads the items
+under it. A file without an outline has its pages as contents, each "Page"
+and its number, going to that page (`#p` and its index). Making the
+contents reads the outline and no page.
+
 ## Pictures
 
 The document holds its pictures (`DOC-PICTURES?`). `DOC-PICTURE` opens the

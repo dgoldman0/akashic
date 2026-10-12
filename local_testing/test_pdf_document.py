@@ -60,6 +60,9 @@ CREATE PD-DOCS DOC-SIZE 7 + ALLOT  : PD-DOC  PD-DOCS 7 + -8 AND ;
 : PD-LINKS  ( i -- n )  PD-DOC DOC-CONTENT DROP DCT-LINK-COUNT ;
 : PD-LINK  ( i j -- start end ta tu )  SWAP PD-DOC DOC-CONTENT DROP DCT-LINK@ ;
 : PD-ANCHOR  ( a u -- part )  PD-DOC DOC-ANCHOR-PART ;
+: PD-CONTENTS  ( -- n status )  PD-DOC DOC-CONTENTS ;
+: PD-ENTRY  ( i -- level ta tu key ga gu )
+    DUP >R PD-DOC DOC-ENTRY R> PD-DOC DOC-ENTRY-GOES ;
 """
 
 
@@ -380,4 +383,46 @@ def test_hyperref_links_go_to_their_pages(reader, tmp_path):
     assert found[b"1 Introduction"] == 0 and found["2 Détails".encode()] == 1
     assert found[b"3 End"] == 2 and found[b"2"] == 1
     assert found[b"the paper"] == b"https://example.com/paper"
+    assert reader.close() == 0
+
+
+# --------------------------------------------------------------------------
+# Contents
+# --------------------------------------------------------------------------
+
+def _contents(reader: Reader) -> list[tuple[int, str, object]]:
+    """The document's contents: each entry's level, title, and the part
+    its target names, or its address."""
+
+    memory = reader.runtime.memory
+    count, status = reader.call("PD-CONTENTS")
+    assert status == OK
+    out = []
+    for i in range(count):
+        level, ta, tu, key, ga, gu = reader.call("PD-ENTRY", i)
+        target = memory.read_bytes(ga, gu)
+        assert key == 0
+        goes = _anchor(reader, target) if target.startswith(b"#") else target
+        out.append((level, memory.read_bytes(ta, tu).decode(), goes))
+    return out
+
+
+def test_a_pdf_without_an_outline_has_its_pages_as_contents(reader):
+    assert reader.open(pages_pdf()) == OK
+    assert _contents(reader) == [(0, f"Page {n + 1}", n) for n in range(4)]
+    assert reader.call("PD-COUNT") == (0,)        # no page was read to make them
+    assert reader.close() == 0
+
+
+@pytest.mark.skipif(shutil.which("xelatex") is None, reason="xelatex is not installed")
+def test_a_pdf_outline_is_its_contents(reader, tmp_path):
+    from test_pdf_navigate import HYPERREF
+    (tmp_path / "doc.tex").write_text(HYPERREF, encoding="utf-8")
+    for _ in range(2):
+        subprocess.run(["xelatex", "-interaction=batchmode", "doc.tex"], cwd=tmp_path,
+                       capture_output=True, check=True)
+    assert reader.open((tmp_path / "doc.pdf").read_bytes()) == OK
+    assert _contents(reader) == [(0, "Introduction", 0), (1, "Background", 0),
+                                 (0, "Détails", 1), (1, "More", 1), (0, "End", 2)]
+    assert reader.call("PD-COUNT") == (0,)
     assert reader.close() == 0

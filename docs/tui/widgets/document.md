@@ -191,6 +191,7 @@ part could not be read)"; its rows are counted again at the next pass.
 | `DOCV-SCROLL` | `( rows widget -- )` | Scroll by signed rows. |
 | `DOCV-GO` | `( index widget -- )` | Put block `index` at the view's top, as near as the document allows. |
 | `DOCV-GO-PART` | `( part widget -- )` | Read part `part` if need be and put its first block at the view's top; nothing changes when it cannot be read. |
+| `DOCV-GO-ENTRY` | `( i widget -- )` | Go where entry `i` of the document's contents goes: its block at the view's top, or where its target goes, as a link does. |
 | `DOCV-FOLLOW` | `( target-a target-u widget -- )` | Follow a link's target as a press on it does. |
 | `DOCV-TOP@` | `( widget -- block rows )` | The block the view's top row lies in, and its rows above the view. |
 | `DOCV-SHOWN` | `( widget -- first end )` | The blocks the last draw showed. |

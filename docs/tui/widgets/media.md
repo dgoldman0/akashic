@@ -67,6 +67,17 @@ with no reader shows as its kind otherwise shows: a PDF without its reader
 shows its facts. A document whose reader says it needs a password
 (`DOC-S-LOCKED`) shows its facts with `MEDIA-N-LOCKED`.
 
+A document's contents ([media/document.f](../../media/document.md)) show
+in place of the document: the key `c` shows them as a canonical
+[list](list.md), each entry's title indented two cells a level, and the
+first selected. Enter goes where the chosen entry goes in the document, as
+`DOCV-GO-ENTRY` does, and shows the document; `c` or Escape shows the
+document again where it was. A document with no contents ignores `c`. The
+contents take the same region as the document, so a narrow preview loses
+nothing to them, and the view in use is `MEDIA-V-CONTENTS`. A rich
+terminal sees the contents as the list's CELL cells for now; the media
+element's capture publishes its text and document views.
+
 A Markdown document's figures and links name files by paths from the
 document's folder, resolved as [link-path.f](../../utils/fs/link-path.md)
 resolves them. A figure's picture is opened from the same file system, and
@@ -100,10 +111,10 @@ only once the picture has been drawn.
 | `MEDIA-SIZE@` | `( widget -- bytes )` | The file's size. |
 | `MEDIA-PATH@` | `( widget -- a u )` | The path the file was opened by. |
 | `MEDIA-NAME@` | `( widget -- a u )` | The file's name, the part of its path after the last slash. |
-| `MEDIA-VIEW@` | `( widget -- view )` | `MEDIA-V-NONE`, `-PICTURE`, `-TEXT`, `-FACTS` or `-DOCUMENT`. |
+| `MEDIA-VIEW@` | `( widget -- view )` | `MEDIA-V-NONE`, `-PICTURE`, `-TEXT`, `-FACTS`, `-DOCUMENT` or `-CONTENTS`. |
 | `MEDIA-NOTE@` | `( widget -- note )` | Why the facts show: `MEDIA-N-*`. |
 | `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget, text area or document view the current view draws. |
-| `MEDIA-PICTURE@`, `MEDIA-TEXT@`, `MEDIA-DOCUMENT@` | `( widget -- widget \| 0 )` | The picture widget and the document view, each made on first use, and the current text area. |
+| `MEDIA-PICTURE@`, `MEDIA-TEXT@`, `MEDIA-DOCUMENT@`, `MEDIA-CONTENTS@` | `( widget -- widget \| 0 )` | The picture widget, the document view and the contents' list, each made on first use, and the current text area. |
 
 ## In UIDL
 

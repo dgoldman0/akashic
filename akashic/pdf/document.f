@@ -34,6 +34,10 @@
 \  turns the object into a file a step at a time (pdf/image.f), for a
 \  picture that makes one.
 \
+\  Its contents are its outline, each item at its level, going where it
+\  goes as a link would; a file without an outline has its pages, each
+\  "Page" and its number, going to it ("#p" and its index).
+\
 \  A blank row lies before each block but the first page's start, and
 \  none between two list items; a blank row between two quoted blocks
 \  lies inside the quote.  The pages the file says it has are at most
@@ -421,15 +425,83 @@ VARIABLE _PDK-N
 \  Following a link within the file
 \ =====================================================================
 
-\ The part, the page, a link's target names: its destination's type and
-\ value's bytes, after the "#"; or -1 for none.
+VARIABLE _PDN-N
+
+\ A page's index after "p".
+: _PDD-PAGE-NUM  ( a u -- i | -1 )
+    0 _PDN-N !
+    BEGIN DUP WHILE
+        OVER C@ DUP 48 58 WITHIN 0= IF DROP 2DROP -1 EXIT THEN
+        48 - _PDN-N @ 10 * + _PDN-N !  1 /STRING
+    REPEAT 2DROP _PDN-N @ ;
+
+\ The part, the page, a link's target names: "p" and the page's index, or
+\ its destination's type and value's bytes, after the "#"; or -1 for none.
 : _PDD-ANCHOR  ( name-a name-u doc -- part | -1 )
     _PDD-USE
     DUP 2 < IF 2DROP -1 EXIT THEN
+    OVER C@ 112 = IF
+        1 /STRING _PDD-PAGE-NUM DUP 0 _PDD-PAGES WITHIN 0= IF DROP -1 THEN EXIT
+    THEN
     OVER C@ 48 - >R 1 /STRING R>                          ( va vu type )
     _PDD-FILE PDF-DEST NIP IF DROP -1 EXIT THEN           ( num )
     _PDD-FILE PDF-PAGE-INDEX IF DROP -1 EXIT THEN         ( i )
     DUP 0 _PDD-PAGES WITHIN 0= IF DROP -1 THEN ;
+
+\ =====================================================================
+\  Contents
+\ =====================================================================
+
+CREATE _PDD-OUTLINE-S PDF-OUTLINE-SIZE 7 + ALLOT
+: _PDD-OUTLINE  ( -- outline )  _PDD-OUTLINE-S 7 + -8 AND ;
+_PDD-OUTLINE PDF-OUTLINE-SIZE 0 FILL
+
+CREATE _PDD-ETEXT 32 ALLOT
+CREATE _PDD-ETARGET 32 ALLOT
+VARIABLE _PDD-EU
+VARIABLE _PDD-TG   VARIABLE _PDD-TGU   VARIABLE _PDD-TGOWN
+
+\ An outline item's target: "#", its destination's type and its value's
+\ bytes, in a buffer of its own from the document's memory; or its
+\ address; or none.  False when memory refuses the buffer.
+: _PDD-ITEM-TARGET  ( item -- ok? )
+    0 _PDD-TG !  0 _PDD-TGU !  0 _PDD-TGOWN !
+    DUP _PDD-OUTLINE PDF-ITEM-URI ?DUP IF _PDD-TGU ! _PDD-TG ! DROP -1 EXIT THEN DROP
+    _PDD-OUTLINE PDF-ITEM-DEST                           ( va vu type )
+    OVER 0= IF DROP 2DROP -1 EXIT THEN
+    OVER 2 + DUP _PDD-ALLOC ?DUP 0= IF DROP DROP 2DROP 0 EXIT THEN
+    DUP _PDD-TG !  OVER _PDD-TGU !  NIP  -1 _PDD-TGOWN !  ( va vu type buf )
+    35 OVER C!  SWAP 48 + OVER 1+ C!  2 + SWAP MOVE -1 ;
+
+\ The outline as the contents; false when memory refuses.
+: _PDD-ITEMS  ( -- ok? )
+    _PDD-OUTLINE PDF-OUTLINE-COUNT 0 ?DO
+        I _PDD-OUTLINE PDF-OUTLINE-ITEM
+        DUP _PDD-ITEM-TARGET 0= IF DROP 0 UNLOOP EXIT THEN
+        DUP PDF-ITEM-LEVEL SWAP _PDD-OUTLINE PDF-ITEM-TITLE 0 _PDD-TG @ _PDD-TGU @
+        _PDD-D @ DOC-ADD-ENTRY
+        _PDD-TGOWN @ IF _PDD-TG @ _PDD-TGU @ _PDD-FREE THEN
+        0= IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ The pages as the contents: "Page" and each one's number, going to it.
+: _PDD-PAGE-ENTRIES  ( -- ok? )
+    35 _PDD-ETARGET C!  112 _PDD-ETARGET 1+ C!
+    _PDD-PAGES 0 ?DO
+        S" Page " _PDD-ETEXT SWAP MOVE
+        I 1+ NUM>STR DUP 5 + _PDD-EU ! _PDD-ETEXT 5 + SWAP MOVE
+        I NUM>STR DUP 2 + _PDD-TGU ! _PDD-ETARGET 2 + SWAP MOVE
+        0 _PDD-ETEXT _PDD-EU @ 0 _PDD-ETARGET _PDD-TGU @
+        _PDD-D @ DOC-ADD-ENTRY 0= IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+: _PDD-CONTENTS  ( doc -- status )
+    _PDD-USE
+    _PDD-FILE _PDD-OUTLINE PDF-OUTLINE-READ
+    DUP PDF-S-MEMORY = IF DROP _PDD-OUTLINE PDF-OUTLINE-FREE DOC-S-MEMORY EXIT THEN
+    0= _PDD-OUTLINE PDF-OUTLINE-COUNT 0<> AND IF _PDD-ITEMS ELSE _PDD-PAGE-ENTRIES THEN
+    _PDD-OUTLINE PDF-OUTLINE-FREE
+    IF DOC-S-OK ELSE DOC-S-MEMORY THEN ;
 
 CREATE _PDD-READER RDR-SIZE ALLOT
 ' _PDD-STRUCTURE _PDD-READER RDR.STRUCTURE-XT !
@@ -438,5 +510,6 @@ CREATE _PDD-READER RDR-SIZE ALLOT
 ' _PDD-PART      _PDD-READER RDR.PART-XT !
 ' _PDD-PICTURE   _PDD-READER RDR.PICTURE-XT !
 ' _PDD-ANCHOR    _PDD-READER RDR.ANCHOR-XT !
+' _PDD-CONTENTS  _PDD-READER RDR.CONTENTS-XT !
 
 : PDF-DOC-READER  ( -- reader )  _PDD-READER ;
