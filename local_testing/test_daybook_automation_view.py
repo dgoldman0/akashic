@@ -268,7 +268,7 @@ def _when(machine, text: str) -> list[int]:
 
 
 def test_when_and_title(clocked):
-    run_text(clocked, ["V-FRESH DROP VW DBAV-BEGIN . CR"])
+    run_text(clocked, ["V-FRESH DROP DBAS-ACTION-REMINDER VW DBAV-BEGIN . CR"])
     assert _when(clocked, "09:30 Water") == [OK, -1, 570]
     assert run_text(clocked, ["VW _DBAV.DRAFT DBAO-D.TITLE DBAS-FIELD$ TYPE CR"]) == [
         "Water"]
@@ -283,7 +283,7 @@ def test_when_and_title(clocked):
 
 
 def test_repeat_words(clocked):
-    run_text(clocked, ["V-FRESH DROP VW DBAV-BEGIN DROP"])
+    run_text(clocked, ["V-FRESH DROP DBAS-ACTION-REMINDER VW DBAV-BEGIN DROP"])
     rule = "VW _DBAV.DRAFT DBAO-D.RULE"
     cases = {"": (ONCE, 0), "once": (ONCE, 0), "Daily": (DAILY, 0),
              "WEEKDAYS": (WEEKLY, 62), "weekly": (WEEKLY, 0),
@@ -302,8 +302,9 @@ def test_repeat_words(clocked):
 
 def _create(machine, when: str, repeat: str, zone: str) -> list[str]:
     return run_text(machine, [
-        f'VW DBAV-BEGIN DROP S" {when}" VW DBAV-WHEN! . '
-        f'S" {repeat}" VW DBAV-REPEAT! . S" {zone}" VW DBAV-CREATE . '
+        f'DBAS-ACTION-REMINDER VW DBAV-BEGIN DROP S" {when}" VW DBAV-WHEN! . '
+        f'S" {repeat}" VW DBAV-REPEAT! . '
+        f'S" {zone}" VW DBAV-ZONE! ?DUP 0= IF VW DBAV-CREATE THEN . '
         "VW _DBAV.RID SOW DBAO-FIND ?DUP IF DBAS-S.NEXT-UTC @ . "
         "ELSE 0 . THEN CR",
     ])
@@ -337,12 +338,30 @@ def test_create_places_the_next_such_time(clocked):
         f"0 0 0 {utc(2026, 10, 10, 13)}"]
 
 
+def test_the_zone_step(clocked):
+    """An empty answer is the default zone; one that is not a POSIX TZ
+    string, or longer than one may be, is refused."""
+
+    assert run_text(clocked, [
+        'V-FRESH DROP DBAS-ACTION-REMINDER VW DBAV-BEGIN . S" " VW DBAV-ZONE! . '
+        "VW _DBAV.DRAFT DBAO-D.ZONE DBAS-FIELD$ TYPE CR",
+    ]) == ["0 0 UTC0"]
+    assert run_text(clocked, ['S" Mars" VW DBAV-ZONE! . CR']) == [str(ZONE)]
+    # A longer answer is refused before it is kept, so it overruns nothing.
+    long = "EST5EDT,M3.2.0,M11.1.0" + " " * 107
+    assert run_text(clocked, [f'S" {long}" VW DBAV-ZONE! . '
+                              "VW _DBAV.DRAFT DBAO-D.ACTION @ . CR"]) == [
+        f"{ZONE} 1"]
+
+
 def test_a_create_submitted_twice_makes_one_reminder(clocked):
     lines = run_text(clocked, [
-        'V-FRESH DROP VW DBAV-BEGIN . S" 13:00 Once only" VW DBAV-WHEN! . '
-        'S" daily" VW DBAV-REPEAT! . S" " VW DBAV-CREATE . '
-        'S" " VW DBAV-CREATE . SOW DBAO-STORE DBAS-SCHEDULE-COUNT@ . '
-        "VW DBAV-BEGIN . VW _DBAV.KEY 32 TBUF 32 MOVE VW DBAV-BEGIN . "
+        'V-FRESH DROP DBAS-ACTION-REMINDER VW DBAV-BEGIN . '
+        'S" 13:00 Once only" VW DBAV-WHEN! . S" daily" VW DBAV-REPEAT! . '
+        'S" " VW DBAV-ZONE! . VW DBAV-CREATE . VW DBAV-CREATE . '
+        "SOW DBAO-STORE DBAS-SCHEDULE-COUNT@ . "
+        "DBAS-ACTION-REMINDER VW DBAV-BEGIN . VW _DBAV.KEY 32 TBUF 32 MOVE "
+        "DBAS-ACTION-REMINDER VW DBAV-BEGIN . "
         "VW _DBAV.KEY 32 TBUF 32 COMPARE 0<> . CR",
     ])
-    assert lines == ["0 0 0 0 0 1 0 0 -1"]
+    assert lines == ["0 0 0 0 0 0 1 0 0 -1"]

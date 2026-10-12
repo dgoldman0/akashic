@@ -24,11 +24,17 @@
 \  Agent run's row also runs it now, asks Desk's user to approve it, or
 \  cancels its run in flight, all through the service.
 \
-\  A create takes three steps, as a prompt asks for them: when and the
-\  title ("HH:MM title" for the next such time, or "YYYY-MM-DD HH:MM
-\  title"), how it repeats, and its zone, where an empty answer means the
-\  default zone.  DBAV-BEGIN draws a fresh create key for each create, so
-\  a create submitted twice makes one reminder.
+\  A create takes steps, as prompts ask for them: when and the title
+\  ("HH:MM title" for the next such time, or "YYYY-MM-DD HH:MM title"),
+\  how it repeats, and its zone, where an empty answer means the default
+\  zone.  An Agent run then names the model it must use, from the list
+\  Desk's broker gives, with its effort, tier and verbosity where the
+\  model offers them; how many minutes it may run; how many bytes of
+\  reply it keeps; and its prompt, which is also exactly what it may
+\  disclose.  A start given as only a time is placed when the create
+\  completes.  DBAV-BEGIN draws a fresh create key for each create, so a
+\  create submitted twice makes one schedule.  The view then asks Desk's
+\  user to approve the Agent run it made.
 \
 \  The view is caller-owned and caller-serialized.  It borrows the
 \  service, which is 0 when Daybook runs outside Desk.  Row words take an
@@ -54,10 +60,20 @@
 \    DBAV-ASK DBAV-CANCEL  ( index view -- status )
 \    DBAV-ASK-NOTE    ( view -- address length )
 \    DBAV-SERVICE?    ( view -- flag )
-\    DBAV-BEGIN       ( view -- status )
+\    DBAV-BEGIN       ( action view -- status )
 \    DBAV-WHEN!       ( address length view -- status )
 \    DBAV-REPEAT!     ( address length view -- status )
-\    DBAV-CREATE      ( zone-a zone-u view -- status )
+\    DBAV-ZONE!       ( address length view -- status )
+\    DBAV-MODELS-FETCH  ( view -- status )
+\    DBAV-CHOICES     ( kind view -- n )
+\    DBAV-CHOICE$     ( index kind view -- address length )
+\    DBAV-CHOOSE      ( index kind view -- status )
+\    DBAV-NEXT-KIND   ( kind view -- kind|0 )
+\    DBAV-MINUTES!    ( address length view -- status )
+\    DBAV-REPLY!      ( address length view -- status )
+\    DBAV-PROMPT!     ( address length view -- status )
+\    DBAV-CREATE      ( view -- status )
+\    DBAV-ASK-CREATED ( view -- status )
 \    DBAV-DEFAULT-ZONE$  ( view -- address length )
 \    DBAV-DEFAULT-ZONE!  ( address length view -- status )
 \    DBAV-MESSAGE     ( status -- address length )
@@ -66,6 +82,7 @@
 PROVIDED akashic-dbk-auto-view
 
 REQUIRE automation-service.f
+REQUIRE ../../../interop/scheduled-dispatch.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../math/entropy.f
 
@@ -88,6 +105,15 @@ REQUIRE ../../../math/entropy.f
 42 CONSTANT DBAV-S-NOMEM
 43 CONSTANT DBAV-S-WHEN          \ not "HH:MM title" or "YYYY-MM-DD HH:MM title"
 44 CONSTANT DBAV-S-REPEAT        \ not a repeat the view knows
+45 CONSTANT DBAV-S-MODELS        \ the Agent offers no models now
+46 CONSTANT DBAV-S-NUMBER        \ not a whole number above zero
+47 CONSTANT DBAV-S-PROMPT        \ an empty prompt, or one that is not text
+
+\ The kinds of choice an Agent run's model makes.
+1 CONSTANT DBAV-MODEL-KIND
+2 CONSTANT DBAV-EFFORT-KIND
+3 CONSTANT DBAV-TIER-KIND
+4 CONSTANT DBAV-VERBOSITY-KIND
 
 0x5745495641424442 CONSTANT _DBAV-MAGIC  \ "BDBAVIEW"
 
@@ -111,7 +137,20 @@ _DBAV-DAY 8 + CONSTANT _DBAV-MINUTE
 _DBAV-MINUTE 8 + CONSTANT _DBAV-KEY
 _DBAV-KEY RID-SIZE + CONSTANT _DBAV-RID
 _DBAV-RID RID-SIZE + CONSTANT _DBAV-DRAFT
-_DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
+\ An Agent run's create: the model list Desk's broker gave and what was
+\ chosen from it, the limits, the operands its prompt completed, and the
+\ operands' draft.  The effort, tier and verbosity mean something only
+\ while a model is chosen, and choosing one clears them.
+_DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT _DBAV-MODELS  \ the list, or 0
+_DBAV-MODELS 8 + CONSTANT _DBAV-MODEL        \ the chosen model, or 0
+_DBAV-MODEL 8 + CONSTANT _DBAV-EFFORT        \ its chosen effort, or 0
+_DBAV-EFFORT 8 + CONSTANT _DBAV-TIER         \ its chosen tier, or 0 for none
+_DBAV-TIER 8 + CONSTANT _DBAV-VERBOSITY
+_DBAV-VERBOSITY 8 + CONSTANT _DBAV-TIME      \ the milliseconds it may run
+_DBAV-TIME 8 + CONSTANT _DBAV-OUTPUT         \ the bytes of reply it keeps
+_DBAV-OUTPUT 8 + CONSTANT _DBAV-OPS          \ the operands, or 0
+_DBAV-OPS 8 + CONSTANT _DBAV-SACT
+_DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
 
 : _DBAV.SERVICE  ( view -- a ) _DBAV-SERVICE + ;
 : _DBAV.ROWS     ( view -- a ) _DBAV-ROWS + ;
@@ -130,6 +169,15 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
 : _DBAV.KEY      ( view -- key ) _DBAV-KEY + ;
 : _DBAV.RID      ( view -- rid ) _DBAV-RID + ;
 : _DBAV.DRAFT    ( view -- draft ) _DBAV-DRAFT + ;
+: _DBAV.MODELS   ( view -- a ) _DBAV-MODELS + ;
+: _DBAV.MODEL    ( view -- a ) _DBAV-MODEL + ;
+: _DBAV.EFFORT   ( view -- a ) _DBAV-EFFORT + ;
+: _DBAV.TIER     ( view -- a ) _DBAV-TIER + ;
+: _DBAV.VERBOSITY  ( view -- a ) _DBAV-VERBOSITY + ;
+: _DBAV.TIME     ( view -- a ) _DBAV-TIME + ;
+: _DBAV.OUTPUT   ( view -- a ) _DBAV-OUTPUT + ;
+: _DBAV.OPS      ( view -- a ) _DBAV-OPS + ;
+: _DBAV.SACT     ( view -- draft ) _DBAV-SACT + ;
 
 \ Starts a view over SERVICE, which may be 0.
 : DBAV-INIT  ( service view -- )
@@ -137,7 +185,15 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     _DBAV-MAGIC OVER _DBAV-MAGIC-OFF + !
     _DBAV.SERVICE ! ;
 
+\ Gives back an Agent run's model list and operands, and forgets what
+\ was chosen from the list.
+: _DBAV-AGENT-FREE  ( view -- )
+    DUP _DBAV.MODELS @ ?DUP IF FREE THEN
+    DUP _DBAV.OPS @ ?DUP IF FREE THEN
+    0 OVER _DBAV.MODELS ! 0 OVER _DBAV.MODEL ! 0 SWAP _DBAV.OPS ! ;
+
 : DBAV-FREE  ( view -- )
+    DUP _DBAV-AGENT-FREE
     DUP _DBAV.ROWS @ ?DUP IF FREE THEN
     DUP _DBAV.TEXT @ ?DUP IF FREE THEN
     0 OVER _DBAV.ROWS ! 0 OVER _DBAV.COUNT ! 0 OVER _DBAV.ROOM !
@@ -598,12 +654,16 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
 \ Whether there are reminders to work: Daybook runs inside Desk.
 : DBAV-SERVICE?  ( view -- flag ) _DBAV.SERVICE @ 0<> ;
 
-\ Starts a create: an empty reminder draft and a fresh create key.
-: DBAV-BEGIN  ( view -- status )
-    DUP _DBAV.SERVICE @ 0= IF DROP DBAO-S-STATE EXIT THEN
+\ Starts a create of ACTION, a reminder or an Agent run: an empty draft
+\ and a fresh create key.
+: DBAV-BEGIN  ( action view -- status )
+    DUP _DBAV.SERVICE @ 0= IF 2DROP DBAO-S-STATE EXIT THEN
+    DUP _DBAV-AGENT-FREE
     DUP _DBAV.DRAFT DBAO-DRAFT-SIZE 0 FILL
-    DBAS-ACTION-REMINDER OVER _DBAV.DRAFT DBAO-D.ACTION !
+    TUCK _DBAV.DRAFT DBAO-D.ACTION !
+    0 OVER _DBAV.TIME ! 0 OVER _DBAV.OUTPUT !
     -1 OVER _DBAV.DAY ! 0 OVER _DBAV.MINUTE !
+    DUP _DBAV.RID RID-SIZE 0 FILL
     _DBAV.KEY RID-SIZE ENTROPY-FILL ENTROPY-S-OK <> IF
         DBAO-S-ENTROPY EXIT
     THEN
@@ -659,14 +719,9 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     R> _DBAV.DRAFT DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
     DBAO-S-OK ;
 
-\ Whether an answer is WORD, whatever its case; WORD is lowercase.
+\ Whether an answer is WORD, whatever its case.
 : _DBAV-IS?  ( address length word-a word-u -- address length flag )
-    2 PICK OVER <> IF 2DROP 0 EXIT THEN
-    0 ?DO                                      ( address length word-a )
-        2 PICK I + C@ DUP [CHAR] A [CHAR] Z 1+ WITHIN IF 32 OR THEN
-        OVER I + C@ <> IF DROP 0 UNLOOP EXIT THEN
-    LOOP
-    DROP -1 ;
+    2OVER 2SWAP STR-STRI= ;
 
 \ The second step: once (or nothing), daily, weekdays (Monday to
 \ Friday), weekly, monthly or yearly, every one from the start.
@@ -696,17 +751,184 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     DUP _DBAV.SERVICE @ 0= IF DROP 2DROP DBAO-S-STATE EXIT THEN
     _DBAV-OWNER DBAO-DEFAULT-ZONE! ;
 
-\ The last step: the zone, or the default for an empty answer, which
-\ places a start given as only a time at its next occurrence there.
-\ Then the reminder is created under the create's key.
-: DBAV-CREATE  ( zone-a zone-u view -- status )
+\ The third step: the zone, or the default for an empty answer.
+: DBAV-ZONE!  ( address length view -- status )
     >R
     DUP 0= IF 2DROP R@ DBAV-DEFAULT-ZONE$ THEN
     DUP TZ-STRING-MAX > IF 2DROP R> DROP DBAO-S-ZONE EXIT THEN
     R@ _DBAV.DRAFT DBAO-D.ZONE TZ-STRING-MAX DBAS-FIELD!
-    R@ _DBAV.DRAFT DBAO-D.ZONE DBAS-FIELD$ R@ _DBAV.ZONE TZ-PARSE IF
-        R> DROP DBAO-S-ZONE EXIT
+    R@ _DBAV.DRAFT DBAO-D.ZONE DBAS-FIELD$ R> _DBAV.ZONE TZ-PARSE
+    IF DBAO-S-ZONE ELSE DBAO-S-OK THEN ;
+
+\ ---------------------------------------------------------------------
+\  An Agent run's model, limits and prompt
+\ ---------------------------------------------------------------------
+
+\ Fetches the models an Agent run may name, as Desk's broker lists them:
+\ asked first with no room, then with the room the list needs.  A list
+\ that is not whole, or names no model, is none, as is a broker that
+\ asks for no more room than it had.
+: DBAV-MODELS-FETCH  ( view -- status )
+    >R R@ _DBAV-AGENT-FREE
+    R@ _DBAV.SERVICE @ 0= IF R> DROP DBAO-S-STATE EXIT THEN
+    0                                          ( capacity )
+    BEGIN
+        R@ _DBAV.MODELS @ OVER R@ _DBAV.SERVICE @ DBSVC-MODELS
+        DUP SDSP-S-SMALL =                     ( capacity bytes status small? )
+    WHILE
+        DROP TUCK < 0= IF DROP R> _DBAV-AGENT-FREE DBAV-S-MODELS EXIT THEN
+        R@ _DBAV.MODELS @ ?DUP IF FREE THEN 0 R@ _DBAV.MODELS !
+        DUP ALLOCATE IF 2DROP R> DROP DBAV-S-NOMEM EXIT THEN
+        R@ _DBAV.MODELS !
+    REPEAT
+    IF 2DROP R> _DBAV-AGENT-FREE DBAV-S-MODELS EXIT THEN
+    TUCK < IF DROP R> _DBAV-AGENT-FREE DBAV-S-MODELS EXIT THEN
+    R@ _DBAV.MODELS @ SWAP SDSP-LIST-OK? 0= IF R> _DBAV-AGENT-FREE DBAV-S-MODELS EXIT THEN
+    R@ _DBAV.MODELS @ SDSP-LIST-COUNT 0= IF R> _DBAV-AGENT-FREE DBAV-S-MODELS EXIT THEN
+    R> DROP DBAO-S-OK ;
+
+\ Model I of the list.
+: _DBAV-NTH-MODEL  ( i view -- model )
+    _DBAV.MODELS @ SDSP-LIST-FIRST SWAP 0 ?DO SDSP-MODEL-NEXT LOOP ;
+
+\ The I'th of a model's efforts or tiers, from the first, CHOICE.
+: _DBAV-NTH-CHOICE  ( i choice -- choice' ) SWAP 0 ?DO SDSP-CHOICE-NEXT LOOP ;
+
+\ How many choices of KIND there are now: the models; the chosen model's
+\ efforts; its tiers and none; or its verbosities, when it takes one.
+: DBAV-CHOICES  ( kind view -- n )
+    OVER DBAV-MODEL-KIND = IF
+        NIP _DBAV.MODELS @ ?DUP IF SDSP-LIST-COUNT ELSE 0 THEN EXIT
     THEN
+    _DBAV.MODEL @ ?DUP 0= IF DROP 0 EXIT THEN  ( kind model )
+    SWAP CASE
+        DBAV-EFFORT-KIND OF SDSP-MODEL-EFFORTS DROP ENDOF
+        DBAV-TIER-KIND OF SDSP-MODEL-TIERS DROP DUP IF 1+ THEN ENDOF
+        DBAV-VERBOSITY-KIND OF
+            SDSP-MODEL-FLAGS SDSP-M-VERBOSITY AND IF SACT-VERBOSITY-MAX 1+ ELSE 0 THEN
+        ENDOF
+        NIP 0 SWAP
+    ENDCASE ;
+
+\ A label, or the id when it has none.
+: _DBAV-NAMED  ( label-a label-u id-a id-u -- address length )
+    2 PICK IF 2DROP ELSE 2SWAP 2DROP THEN ;
+
+\ The verbosities in the Agent's order.
+: _DBAV-VERBOSITY$  ( n -- address length )
+    CASE
+        0 OF S" Default" ENDOF
+        1 OF S" Low" ENDOF
+        2 OF S" Medium" ENDOF
+        >R S" High" R>
+    ENDCASE ;
+
+\ The name of choice INDEX of KIND, below their count: a model's,
+\ effort's or tier's label, or its id when it has none; the first tier
+\ is none, the default; and a verbosity's name.
+: DBAV-CHOICE$  ( index kind view -- address length )
+    OVER DBAV-MODEL-KIND = IF
+        NIP _DBAV-NTH-MODEL DUP SDSP-MODEL-LABEL$ ROT SDSP-MODEL-ID$ _DBAV-NAMED EXIT
+    THEN
+    OVER DBAV-VERBOSITY-KIND = IF 2DROP _DBAV-VERBOSITY$ EXIT THEN
+    OVER DBAV-TIER-KIND = IF
+        2 PICK 0= IF 2DROP DROP S" Default" EXIT THEN
+        ROT 1- ROT ROT
+    THEN                                       ( index kind view )
+    _DBAV.MODEL @ SWAP DBAV-EFFORT-KIND = IF SDSP-MODEL-EFFORTS ELSE SDSP-MODEL-TIERS THEN
+    NIP _DBAV-NTH-CHOICE
+    DUP SDSP-CHOICE-LABEL$ ROT SDSP-CHOICE-ID$ _DBAV-NAMED ;
+
+\ Chooses INDEX of KIND.  A model starts with no effort, tier or
+\ verbosity chosen.
+: DBAV-CHOOSE  ( index kind view -- status )
+    >R 2DUP R@ DBAV-CHOICES 0 SWAP WITHIN 0= IF 2DROP R> DROP DBAV-S-NONE EXIT THEN
+    CASE
+        DBAV-MODEL-KIND OF
+            R@ _DBAV-NTH-MODEL R@ _DBAV.MODEL !
+            0 R@ _DBAV.EFFORT ! 0 R@ _DBAV.TIER ! 0 R@ _DBAV.VERBOSITY !
+        ENDOF
+        DBAV-EFFORT-KIND OF
+            R@ _DBAV.MODEL @ SDSP-MODEL-EFFORTS NIP _DBAV-NTH-CHOICE R@ _DBAV.EFFORT !
+        ENDOF
+        DBAV-TIER-KIND OF
+            ?DUP IF 1- R@ _DBAV.MODEL @ SDSP-MODEL-TIERS NIP _DBAV-NTH-CHOICE ELSE 0 THEN
+            R@ _DBAV.TIER !
+        ENDOF
+        DBAV-VERBOSITY-KIND OF R@ _DBAV.VERBOSITY ! ENDOF
+        NIP
+    ENDCASE
+    R> DROP DBAO-S-OK ;
+
+\ The kind of choice after KIND that the chosen model offers, or 0 when
+\ none is left: after the model come its effort, tier and verbosity,
+\ each only when it offers some.
+: DBAV-NEXT-KIND  ( kind view -- kind|0 )
+    SWAP BEGIN
+        1+ DUP DBAV-VERBOSITY-KIND > IF 2DROP 0 EXIT THEN
+        DUP 2 PICK DBAV-CHOICES
+    UNTIL
+    NIP ;
+
+\ A whole number above zero and no more than LIMIT, in decimal digits
+\ that spaces may surround.  Nineteen digits hold every number a cell
+\ does; those beyond it read as negative, and are refused, as are no
+\ digits and anything else, which read as 0.
+: _DBAV-NUMBER  ( address length limit -- n ok? )
+    >R STR-TRIM
+    DUP 19 > IF 2DROP R> DROP 0 0 EXIT THEN
+    _DBAV-DIGITS AND
+    DUP 1 R> 1+ WITHIN ;
+
+\ The most minutes whose milliseconds a cell holds.
+-1 1 RSHIFT 60000 / CONSTANT _DBAV-MINUTES-MAX
+
+\ How long the run may take: whole minutes.
+: DBAV-MINUTES!  ( address length view -- status )
+    >R _DBAV-MINUTES-MAX _DBAV-NUMBER 0= IF DROP R> DROP DBAV-S-NUMBER EXIT THEN
+    60000 * R> _DBAV.TIME ! DBAO-S-OK ;
+
+\ How much of its reply the run keeps: bytes.
+: DBAV-REPLY!  ( address length view -- status )
+    >R -1 1 RSHIFT _DBAV-NUMBER 0= IF DROP R> DROP DBAV-S-NUMBER EXIT THEN
+    R> _DBAV.OUTPUT ! DBAO-S-OK ;
+
+\ The operands' draft from the limits and what was chosen.
+: _DBAV-SACT!  ( view -- )
+    DUP _DBAV.SACT >R R@ SACT-DRAFT-INIT
+    DUP _DBAV.TIME @ R@ SACT-D.TIME !
+    DUP _DBAV.OUTPUT @ R@ SACT-D.OUTPUT !
+    DUP _DBAV.MODELS @ ?DUP IF SDSP-LIST-PROVIDER$ R@ SACT-D.PROVIDER SACT-D! THEN
+    DUP _DBAV.MODEL @ ?DUP 0= IF DROP R> DROP EXIT THEN
+    SDSP-MODEL-ID$ R@ SACT-D.MODEL SACT-D!
+    DUP _DBAV.VERBOSITY @ R@ SACT-D.VERBOSITY !
+    DUP _DBAV.EFFORT @ ?DUP IF SDSP-CHOICE-ID$ R@ SACT-D.EFFORT SACT-D! THEN
+    _DBAV.TIER @ ?DUP IF SDSP-CHOICE-ID$ R@ SACT-D.TIER SACT-D! THEN
+    R> DROP ;
+
+\ The last step of an Agent run: its prompt, which completes its
+\ operands.  What the run may disclose is exactly the prompt.
+: DBAV-PROMPT!  ( address length view -- status )
+    >R
+    DUP 0= IF 2DROP R> DROP DBAV-S-PROMPT EXIT THEN
+    R@ _DBAV-SACT!
+    DUP R@ _DBAV.SACT SACT-D.DISCLOSURE !
+    R@ _DBAV.SACT SACT-D.PROMPT SACT-D!
+    R@ _DBAV.OPS @ ?DUP IF FREE THEN 0 R@ _DBAV.OPS !
+    R@ _DBAV.SACT SACT-AGENT-SIZE
+    DUP ALLOCATE IF 2DROP R> DROP DBAV-S-NOMEM EXIT THEN   ( u operands )
+    R@ _DBAV.SACT OVER 3 PICK SACT-AGENT-ENCODE            ( u operands bytes status )
+    ?DUP IF
+        NIP SWAP FREE NIP R> DROP
+        SACT-S-PROMPT = IF DBAV-S-PROMPT ELSE DBAO-S-INVALID THEN EXIT
+    THEN
+    ROT DROP OVER R@ _DBAV.OPS !
+    R> _DBAV.DRAFT DBAO-D.OPERANDS SACT-D! DBAO-S-OK ;
+
+\ Creates the schedule the steps drafted, under the create's key.  A
+\ start given as only a time is the next such time in its zone.
+: DBAV-CREATE  ( view -- status )
+    >R
     DBSVC-NOW DUP 0< IF DROP R> DROP DBAO-S-CLOCK EXIT THEN
     R@ _DBAV.DAY @ 0< IF
         1000 / R@ _DBAV.ZONE TZ-UTC>LOCAL IF DROP R> DROP DBAO-S-ZONE EXIT THEN
@@ -717,6 +939,14 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     THEN
     R@ _DBAV.DRAFT DBAO-D.RULE DBREC.START !
     R@ _DBAV.KEY R@ _DBAV.DRAFT DBSVC-NOW R@ _DBAV.RID R> _DBAV-OWNER DBAO-CREATE ;
+
+\ Asks Desk's user to approve the Agent run just created, at the
+\ revision it has.
+: DBAV-ASK-CREATED  ( view -- status )
+    DUP _DBAV.RID OVER _DBAV-OWNER DBAO-FIND
+    DUP 0= IF 2DROP DBAV-S-NONE EXIT THEN
+    DUP _DBAV-AGENT? 0= IF 2DROP DBAV-S-NONE EXIT THEN
+    DBAS-S.REVISION @ OVER _DBAV.RID SWAP ROT _DBAV.SERVICE @ DBSVC-ASK ;
 
 \ What an action's status means to the user.
 : DBAV-MESSAGE  ( status -- address length )
@@ -742,5 +972,9 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
         DBSVC-S-UNAVAILABLE OF S" Desk's scheduler is unavailable" ENDOF
         DBSVC-S-PENDING OF S" An approval is already being asked for" ENDOF
         DBAV-S-NONE OF S" Nothing to do for that row" ENDOF
+        DBAV-S-NOMEM OF S" Not enough memory" ENDOF
+        DBAV-S-MODELS OF S" The Agent offers no models now" ENDOF
+        DBAV-S-NUMBER OF S" Use a whole number above zero" ENDOF
+        DBAV-S-PROMPT OF S" A prompt is text, and not empty" ENDOF
         S" The automation could not be changed" ROT
     ENDCASE ;

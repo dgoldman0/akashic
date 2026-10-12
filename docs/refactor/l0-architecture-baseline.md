@@ -1736,3 +1736,24 @@ globals at 10,096. The mutable-state digest moves with the path.
 | mutable-state | `7f849d28601021a76e89910f462ff1cc691ebd96a41efef52b6f5152b062ffc4` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook Agent run create view reviewed ratchet update
+
+Daybook's automations view, `tui/applets/daybook/automation-view.f`, now
+makes Agent runs from the model list Desk's broker gives. It reads that
+list itself with the dispatch contract's readers, so it requires
+`interop/scheduled-dispatch.f` directly, which it reached before only
+through the automation owner. The graph keeps 653 modules and gains that
+one resolved `REQUIRE` occurrence and unique edge, 2,326 of each. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,551 and independent
+globals at 10,096, and the mutable-state digest with them.
+
+| Digest | Value |
+| --- | --- |
+| graph | `f13bc06ca1bc144cd6e1b5b1298cb4e587095dc6b2351c4ce08647a5e90827e1` |
+| mutable-state (unchanged) | `7f849d28601021a76e89910f462ff1cc691ebd96a41efef52b6f5152b062ffc4` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

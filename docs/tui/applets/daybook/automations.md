@@ -13,7 +13,8 @@ restarts, and say so when they were missed.
 Desk opens its [broker](../desk/schedule-broker.md) and gives the
 service its client, so a due Agent run reaches the Agent while Daybook and
 the Agent are closed. Daybook's automations view shows Agent runs, and runs,
-approves and cancels them. Making one in Daybook is the next step.
+approves and cancels them. The view also makes them, step by step; the
+Daybook pages that take those steps are next.
 
 ## Layers
 
@@ -203,6 +204,31 @@ broker behind the client and follows due runs through its answers:
 
 Disabling any one of 37 guarded dispatch behaviors makes a check fail.
 
+## Making an Agent run
+
+An Agent run takes the reminder's steps, when and its title, how it
+repeats and its zone, then these, in the view (`automation-view.f`):
+
+1. `DBAV-MODELS-FETCH` asks Desk's broker for the models an Agent run may
+   name, first with no room and then with the room the list needs. A list
+   that is not whole, names no model, or comes with a refusal is none, and
+   the create cannot go on.
+2. The model, by its label or its id, then each choice it offers in turn
+   (`DBAV-NEXT-KIND`): its effort, its tier, where the first choice is
+   none, the model's default, and its verbosity, where the first is the
+   model's default. A model that offers none of them asks nothing more.
+3. How many minutes it may run, and how many bytes of its reply it keeps:
+   whole numbers above zero, as large as a cell holds.
+4. Its prompt, which may be any length and hold tabs and new lines. What
+   the run may disclose is exactly its prompt. With it the operands are
+   whole, and checked as the catalog checks them.
+
+`DBAV-CREATE` then makes the schedule under the create's key, placing a
+start given as only a time at its next such time, and
+`DBAV-ASK-CREATED` asks Desk's user to approve it at the revision it has.
+The approval, not the view, checks that the model's provider takes a
+prompt that large.
+
 `local_testing/test_daybook_automation_view.py` and
 `test_daybook_automation_view_runs.py` check the automations view, the
 second over the same fake broker:
@@ -219,6 +245,30 @@ Disabling any one of 35 guarded view behaviors makes a check fail, except
 one: the approval note's guard for a view with no service. Without it the
 note reads the service's fields from address zero, which the simulator's
 memory holds as zero, so the note is the same.
+
+`local_testing/test_daybook_automation_view_create.py` makes Agent runs
+in the view over the fake broker, which answers with a real model list:
+- the list fetched with the room it needs, even when the room it first
+  asks for falls short; refused when the broker cannot answer, has no
+  client, answers with a list that is not whole or names no model, asks
+  for no more room than it had, claims bytes beyond the room, or refuses
+  after writing it; and without memory for it;
+- the choices in turn, and choices beyond those offered refused;
+- the limits, as large as a cell holds and no larger;
+- the operands the prompt completes, a run created at its next time, and
+  the approval asked for at its revision with those exact operands;
+- a 100,000-byte prompt kept whole;
+- prompts refused when empty or not text, without memory, or without a
+  model or limits;
+- the memory a create took, given back.
+
+Disabling any one of 86 guarded behaviors of the create makes a check
+fail, except four that no check can show. The fetch refuses a broker that
+claims more bytes than the room it had before reading them, and without
+that guard the list check refuses the same lists. A choice asked about
+before any model is chosen, and an approval asked for no schedule, read
+from address zero, which the simulator holds as zero. A number that is not
+digits reads as zero, so it is refused with or without the digit check.
 
 The service checks also cover:
 - that an idle tick writes nothing and costs the same with 1 or 49
