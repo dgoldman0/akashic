@@ -80,6 +80,11 @@ low, the middle of its lowest line. The block shown first is:
    whose low is the highest at or below the top, so a picture centred
    above its caption is found though it does not reach the left.
 
+Following a link asks for its destination twice: for its page, and once
+the page is read, for its place. The file does not change while it is
+open, so the reader keeps the destination it found last with its target,
+and the second asking costs nothing.
+
 A destination without a left, or with no block across it at or below the
 top, looks at every block. One without a top, such as `/Fit`, or whose
 block is the page's first, shows the page's start, and one below every

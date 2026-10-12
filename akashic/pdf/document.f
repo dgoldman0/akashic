@@ -78,8 +78,8 @@ REQUIRE ../text/text-style.f
 REQUIRE ../utils/string.f
 
 \ The reader's state, one allocation from the document's memory: the
-\ file, its fonts, a page and what reading one takes, and a slot for each
-\ page once it is read.
+\ file, its fonts, a page and what reading one takes, the destination
+\ found last with its name, and a slot for each page once it is read.
 0                                   CONSTANT _PDD-O-FILE
 _PDD-O-FILE    PDF-FILE-SIZE +      CONSTANT _PDD-O-FONTS
 _PDD-O-FONTS   PDF-FONTS-SIZE +     CONSTANT _PDD-O-PAGE
@@ -89,7 +89,9 @@ _PDD-O-STRUCT  PDF-STRUCT-SIZE +    CONSTANT _PDD-O-LINKS
 _PDD-O-LINKS   PDF-LINKS-SIZE +     CONSTANT _PDD-O-LAYOUT
 _PDD-O-LAYOUT  PDF-LAYOUT-SIZE +    CONSTANT _PDD-O-LABELS
 _PDD-O-LABELS  PDF-LABELS-SIZE +    CONSTANT _PDD-O-LBUF
-_PDD-O-LBUF    PDF-BUF-SIZE +       CONSTANT _PDD-O-SLOTS
+_PDD-O-LBUF    PDF-BUF-SIZE +       CONSTANT _PDD-O-AKEY
+_PDD-O-AKEY    PDF-BUF-SIZE +       CONSTANT _PDD-O-AGOT
+_PDD-O-AGOT    24 +                 CONSTANT _PDD-O-SLOTS
 _PDD-O-SLOTS   8 +                  CONSTANT _PDD-O-PAGES
 _PDD-O-PAGES   8 +                  CONSTANT _PDD-SIZE
 
@@ -122,6 +124,8 @@ VARIABLE _PDD-S       \ its state
 : _PDD-LINKS    ( -- links )    _PDD-S @ _PDD-O-LINKS + ;
 : _PDD-LABELS   ( -- labels )   _PDD-S @ _PDD-O-LABELS + ;
 : _PDD-LBUF     ( -- buf )      _PDD-S @ _PDD-O-LBUF + ;
+: _PDD-AKEY     ( -- buf )      _PDD-S @ _PDD-O-AKEY + ;
+: _PDD-AGOT     ( -- a )        _PDD-S @ _PDD-O-AGOT + ;
 
 \ Page I's label in the label buffer; false when memory refuses.
 : _PDD-LABEL!  ( i -- ok? )
@@ -187,6 +191,7 @@ VARIABLE _PDD-S       \ its state
     THEN
     _PDD-SCRATCH-FREE  _PDD-PAGE PDF-PAGE-END  _PDD-FONTS PDF-FONTS-FREE
     _PDD-LABELS PDF-LABELS-FREE  _PDD-LBUF _PDD-D @ DOC-MSRC@ PDF-BUF-FREE
+    _PDD-AKEY _PDD-D @ DOC-MSRC@ PDF-BUF-FREE
     _PDD-FILE PDF-CLOSE
     _PDD-S @ _PDD-SIZE _PDD-FREE  0 _PDD-D @ DOC-STATE! ;
 
@@ -534,6 +539,30 @@ VARIABLE _PDW-BEST   VARIABLE _PDW-LOW
     _PDD-CHOOSE DUP 0< IF DROP _PDW-SL @ _SLOT.NB @ 1- THEN
     DUP 0> IF R> + 1+ ELSE DROP R> THEN ;
 
+\ Whether NAME is the target whose destination was found last.
+: _PDD-KEPT?  ( name-a name-u -- flag )
+    _PDD-AKEY PDF-BUF.U @ 0= IF 2DROP 0 EXIT THEN
+    _PDD-AKEY DUP PDF-BUF.A @ SWAP PDF-BUF.U @ STR-STR= ;
+
+\ The page index, left and top a target's destination names: its type
+\ and its value's bytes after the "#".  Following a link asks twice, for
+\ its page and then, once the page is read, for its place, and the file
+\ does not change while it is open, so the destination found last is
+\ kept with its target, when memory allows, and not looked up again.
+: _PDD-RESOLVE  ( name-a name-u -- x y i ok? )
+    2DUP _PDD-KEPT? IF
+        2DROP _PDD-AGOT @ _PDD-AGOT 8 + @ _PDD-AGOT 16 + @ -1 EXIT
+    THEN
+    2DUP 2>R
+    OVER C@ 48 - >R 1 /STRING R>                          ( va vu type )
+    _PDD-FILE PDF-DEST IF DROP 2DROP 2R> 2DROP 0 0 0 0 EXIT THEN    ( num x y )
+    ROT _PDD-FILE PDF-PAGE-INDEX IF DROP 2DROP 2R> 2DROP 0 0 0 0 EXIT THEN
+    0 _PDD-AKEY PDF-BUF.U !                                ( x y i )
+    2R> _PDD-AKEY _PDD-D @ DOC-MSRC@ PDF-BUF-APPEND IF
+        DUP _PDD-AGOT 16 + !  OVER _PDD-AGOT 8 + !  2 PICK _PDD-AGOT !
+    ELSE 0 _PDD-AKEY PDF-BUF.U ! THEN
+    -1 ;
+
 \ Where a link's target goes, after the "#": "p" and a page's index, to
 \ the page's start; or its destination's type and its value's bytes, to
 \ the page it names and, once that page is read, the block the
@@ -545,9 +574,7 @@ VARIABLE _PDW-BEST   VARIABLE _PDW-LOW
         1 /STRING _PDD-PAGE-NUM DUP 0 _PDD-PAGES WITHIN 0= IF DROP -1 -1 EXIT THEN
         -1 -1 ROT DUP >R _PDD-PLACE R> SWAP EXIT
     THEN
-    OVER C@ 48 - >R 1 /STRING R>                          ( va vu type )
-    _PDD-FILE PDF-DEST IF DROP 2DROP -1 -1 EXIT THEN      ( num x y )
-    ROT _PDD-FILE PDF-PAGE-INDEX IF DROP 2DROP -1 -1 EXIT THEN   ( x y i )
+    _PDD-RESOLVE 0= IF 2DROP DROP -1 -1 EXIT THEN         ( x y i )
     DUP 0 _PDD-PAGES WITHIN 0= IF DROP 2DROP -1 -1 EXIT THEN
     DUP >R _PDD-PLACE R> SWAP ;
 

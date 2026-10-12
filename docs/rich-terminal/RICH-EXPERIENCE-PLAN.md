@@ -1447,8 +1447,34 @@ them, a link to a far page reading that page alone.
 and 7, step 9's preview and step 10's samples: File Explorer previews a
 PDF as a document, read a page at a time, with its pictures, links,
 contents and page labels, and a link or a contents entry shows the place
-its destination names. File Explorer's PDF stages in the physical journey,
-the measurements and AES remain.
+its destination names. Step 11 is measured. File Explorer's PDF stages
+in the physical journey and AES remain.
+
+- Step 11's counts (`local_testing/measure_pdf.py`), for a 100-page PDF of
+  249 KB that xelatex writes with hyperref, shown at File Explorer's
+  full-screen size of 195 by 78 cells. Opening it takes 3.3 million steps
+  and holds 50 KB, with no page read. Its first page takes 14.3 million to
+  read, its fonts with it, and 3.9 million to draw; later pages take 8 to
+  21 million each to read, most 10 to 17 million, and each page read keeps
+  about 8.7 KB. A draw takes 3.8 to 8.8 million at this size and 0.8 to 2.3
+  million at 64 by 36. A scroll of a screen takes 17,500 steps and reads
+  the pages it brings within a screen, three here. Following the contents'
+  link to the last section, the hundredth page, takes 27.1 million: about
+  10 million to find its destination, 14 million to read the page alone,
+  and the rest to place it; the view then reads four pages around it as it
+  settles. Making the contents of 50 entries takes 5.7 million, and going
+  to the middle entry, a page not read, 37.8 million. Closing gives back
+  every byte.
+- Finding a destination is most of a link's cost beyond its page: 5.7
+  million steps to find a name in the name tree and 3.8 to 5.4 million for
+  the page's index. Most of that is decoding object streams again. This
+  file keeps its small objects in four object streams of 10 to 21 KB
+  decoded, and the file layer holds one decoded stream at a time, so a
+  walk whose objects lie in two streams inflates each again whenever it
+  crosses between them, about 1.5 million steps a time. Following a link
+  asks for its destination twice, for its page and then for its place;
+  the reader now keeps the one found last, which took a link to the
+  eighth page from 40.6 million steps to 29.5 million.
 
 - A document's contents reach a rich terminal as their list: the media
   element's capture publishes the list's item view while it shows them,
