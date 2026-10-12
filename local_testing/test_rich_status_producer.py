@@ -26,6 +26,7 @@ class StatusHarness(GrowthHarness):
             "tui/rich-terminal/uidl-claim-ledger.f",
             "tui/rich-terminal/uidl-semantic-content-stx1.f",
             "tui/rich-terminal/uidl-semantic-items-itm1.f",
+            "tui/rich-terminal/uidl-semantic-documents-doc1.f",
             "tui/uidl-menu-snapshot.f", "tui/semantic-collections.f",
             "tui/uidl-status-field-snapshot.f", "tui/status-field-model.f",
             "tui/uidl-picture-snapshot.f",
