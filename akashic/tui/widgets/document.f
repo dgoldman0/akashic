@@ -32,6 +32,16 @@
 \  width, so a scroll lays out only the blocks it passes, and each draw
 \  keeps the contents of the blocks it shows, giving back the others.
 \
+\  A document in parts (a PDF's pages) shows the parts read.  The view
+\  stops where a part not read lies, as at the document's ends, and each
+\  draw notes the part it needs next: one not read within a screen below
+\  the view, or else within a screen above it.  DOCV-SERVICE reads that
+\  part, one a call, and the blocks it adds move the view's top on with
+\  the block it lies in, so what the view shows stays put.  After a read
+\  fails, the view asks for none until what it shows changes.  DOCV-GO-PART reads a
+\  far part alone and shows it; Home and End read the first and last.
+\  While a view shows a document, parts are read through it.
+\
 \  The document is the owner's, opened and closed by it.  The owner says
 \  where a figure's picture comes from: a resolve word ( name-a name-u ctx
 \  -- source | 0 ) gives a media source for a picture's name, which the
@@ -60,6 +70,9 @@
 \   +160  figs-n
 \   +168  revision     counts every change in what the view shows
 \   +176  draws        counts draws, to find figures no longer shown
+\   +184  need         the part the last draw needs read, or -1
+\   +192  counted      the blocks the counts are for
+\   +200  failed       the revision at which a read failed, or -1
 \
 \  The view publishes the blocks its last draw showed as a renderer-neutral
 \  DOCUMENT entry (semantic-collections.f) on the rows CELL drew them:
@@ -109,12 +122,15 @@ VARIABLE _DOCV-OWNED-LIMIT
 160 CONSTANT _DOCV-O-FIGS-N
 168 CONSTANT _DOCV-O-REVISION
 176 CONSTANT _DOCV-O-DRAWS
-184 CONSTANT _DOCV-DESC-SIZE
+184 CONSTANT _DOCV-O-NEED
+192 CONSTANT _DOCV-O-COUNTED
+200 CONSTANT _DOCV-O-FAILED
+208 CONSTANT _DOCV-DESC-SIZE
 
-\ A figure: its block, its picture's size (0 0 when it has none), and,
-\ while it is shown, its source, its picture widget, the region that
-\ widget draws in, a copy of the picture's name, and the draw that last
-\ showed it.
+\ A figure: its block and the block's key, its picture's size (0 0 when
+\ it has none), and, while it is shown, its source, its picture widget,
+\ the region that widget draws in, a copy of the picture's name, and the
+\ draw that last showed it.
  0 CONSTANT _FIG.BLOCK
  8 CONSTANT _FIG.PW
 16 CONSTANT _FIG.PH
@@ -124,7 +140,8 @@ VARIABLE _DOCV-OWNED-LIMIT
 48 CONSTANT _FIG.NAME-A
 56 CONSTANT _FIG.NAME-U
 64 CONSTANT _FIG.SEEN
-72 CONSTANT _FIG-SIZE
+72 CONSTANT _FIG.KEY
+80 CONSTANT _FIG-SIZE
 
 3 CONSTANT _DOCV-WHEEL-ROWS
 
@@ -242,6 +259,7 @@ VARIABLE _DVF-F
     _DOCV-O-FIGS-N _DV@ 3 PICK - _FIG-SIZE * MOVE
     _DV-FIG DUP _FIG-SIZE 0 FILL
     TUCK _FIG.BLOCK + !
+    DUP _FIG.BLOCK + @ _DV-DOC DOC-BLOCK BLK-KEY@ OVER _FIG.KEY + !
     _DOCV-O-FIGS-N _DV@ 1+ _DOCV-O-FIGS-N _DV! ;
 
 \ _DV-FIG-OF ( content index -- fig|0 )
@@ -313,14 +331,18 @@ VARIABLE _DVF-F
 
 \ Counts for the document's blocks at the region's width and height,
 \ forgotten when either changes; false when there are no blocks to show
-\ or memory refuses the counts.
+\ or memory refuses the counts.  Blocks the view did not read itself
+\ make it forget its counts and figures alike.
 : _DV-COUNTS?  ( -- ok? )
     _DV-BLOCKS 0= IF 0 EXIT THEN
+    _DOCV-O-COUNTS-A _DV@ IF _DOCV-O-COUNTED _DV@ _DV-BLOCKS <> IF
+        _DV-FIGS-FREE 0 _DOCV-O-COLS _DV!
+    THEN THEN
     _DV-RGN RGN-W _DV-H
     OVER _DOCV-O-COLS _DV@ = OVER _DOCV-O-HEIGHT _DV@ = AND
     _DOCV-O-COUNTS-A _DV@ 0<> AND IF 2DROP -1 EXIT THEN
     _DOCV-O-HEIGHT _DV! _DOCV-O-COLS _DV!
-    _DV-BLOCKS CELLS
+    _DV-BLOCKS DUP _DOCV-O-COUNTED _DV! CELLS
     DUP _DOCV-O-COUNTS-CAP _DV@ > IF
         _DOCV-O-COUNTS-A _DV@ _DOCV-O-COUNTS-CAP _DV@ _DV-FREE
         0 _DOCV-O-COUNTS-A _DV! 0 _DOCV-O-COUNTS-CAP _DV!
@@ -375,16 +397,28 @@ VARIABLE _DVC-OK
 : _DV-TOP      ( -- index )  _DOCV-O-TOP _DV@ ;
 : _DV-TOP-ROW  ( -- rows )   _DOCV-O-TOP-ROW _DV@ ;
 
+\ A part not read lies just before block INDEX, so the view goes no
+\ further that way until it is read.
+: _DV-WALL?  ( index -- flag )  0 _DV-DOC DOC-GAP 0< 0= ;
+
+\ Block INDEX is there and follows the block before it.
+: _DV-ON?  ( index -- flag )
+    DUP _DV-BLOCKS < 0= IF DROP 0 EXIT THEN _DV-WALL? 0= ;
+
+\ The view reaches block INDEX going down from its top block.
+: _DV-REACHES?  ( index -- flag )
+    DUP _DV-TOP = IF _DV-BLOCKS < EXIT THEN _DV-ON? ;
+
 VARIABLE _DVS-N
 
-\ Move the view's top down N rows, no further than the document's last.
+\ Move the view's top down N rows, no further than the last row it reaches.
 : _DV-DOWN  ( n -- )
     _DVS-N !
     BEGIN _DVS-N @ 0> WHILE
         _DV-TOP _DV-ROWS _DV-TOP-ROW -                  ( left )
         DUP _DVS-N @ > IF
             DROP _DV-TOP-ROW _DVS-N @ + _DOCV-O-TOP-ROW _DV! 0 _DVS-N !
-        ELSE _DV-TOP 1+ _DV-BLOCKS < IF
+        ELSE _DV-TOP 1+ _DV-ON? IF
             NEGATE _DVS-N +!
             _DV-TOP 1+ _DOCV-O-TOP _DV! 0 _DOCV-O-TOP-ROW _DV!
         ELSE
@@ -392,13 +426,13 @@ VARIABLE _DVS-N
         THEN THEN
     REPEAT ;
 
-\ Move the view's top up N rows, no further than the document's first.
+\ Move the view's top up N rows, no further than the first row it reaches.
 : _DV-UP  ( n -- )
     _DVS-N !
     BEGIN _DVS-N @ 0> WHILE
         _DV-TOP-ROW _DVS-N @ < 0= IF
             _DV-TOP-ROW _DVS-N @ - _DOCV-O-TOP-ROW _DV! 0 _DVS-N !
-        ELSE _DV-TOP 0= IF
+        ELSE _DV-TOP 0= _DV-TOP _DV-WALL? OR IF
             0 _DOCV-O-TOP-ROW _DV! 0 _DVS-N !
         ELSE
             _DV-TOP-ROW 1+ NEGATE _DVS-N +!
@@ -410,17 +444,17 @@ VARIABLE _DVS-N
 VARIABLE _DVB-SUM
 VARIABLE _DVB-I
 
-\ The rows from the view's top to the document's end, counted no further
+\ The rows from the view's top to the last it reaches, counted no further
 \ than LIMIT.
 : _DV-ROWS-BELOW  ( limit -- rows )
     _DV-TOP-ROW + 0 _DVB-SUM ! _DV-TOP _DVB-I !
-    BEGIN _DVB-I @ _DV-BLOCKS < _DVB-SUM @ 2 PICK < AND WHILE
+    BEGIN _DVB-I @ _DV-REACHES? _DVB-SUM @ 2 PICK < AND WHILE
         _DVB-I @ _DV-ROWS _DVB-SUM +! 1 _DVB-I +!
     REPEAT DROP
     _DVB-SUM @ _DV-TOP-ROW - ;
 
-\ Keep the view on the document: its last row no higher than the view's
-\ bottom, unless the whole document is shorter than the view.
+\ Keep the view on the document: the last row it reaches no higher than
+\ the view's bottom, unless all it reaches is shorter than the view.
 : _DV-CLAMP  ( -- )
     _DV-TOP _DV-BLOCKS 1- MIN 0 MAX _DOCV-O-TOP _DV!
     _DV-TOP-ROW _DV-TOP _DV-ROWS 1- MIN 0 MAX _DOCV-O-TOP-ROW _DV!
@@ -439,11 +473,95 @@ VARIABLE _DVB-I
     0 MAX _DV-BLOCKS 1- MIN _DOCV-O-TOP _DV! 0 _DOCV-O-TOP-ROW _DV!
     _DV-CLAMP _DV-CHANGED ;
 
-: _DV-END  ( -- )
+: _DV-LAST  ( -- )
     _DV-COUNTS? 0= IF EXIT THEN
     _DV-BLOCKS 1- _DOCV-O-TOP _DV!
     _DV-TOP _DV-ROWS 1- _DOCV-O-TOP-ROW _DV!
     _DV-CLAMP _DV-CHANGED ;
+
+\ =====================================================================
+\  5a. Parts
+\ =====================================================================
+
+VARIABLE _DVI-AT
+VARIABLE _DVI-N
+
+\ Room in the counts for the N blocks read at index AT, not yet counted,
+\ with the counts after them moved on; or no counts, when memory refuses.
+: _DV-COUNTS-INSERT  ( -- )
+    _DOCV-O-COUNTS-A _DV@ 0= IF EXIT THEN
+    _DV-BLOCKS CELLS DUP _DOCV-O-COUNTS-CAP _DV@ > IF
+        _DOCV-O-COUNTS-CAP _DV@ 2* MAX
+        DUP _DV-ALLOC ?DUP 0= IF DROP _DV-COUNTS-FREE EXIT THEN   ( bytes new )
+        _DOCV-O-COUNTS-A _DV@ OVER _DV-BLOCKS _DVI-N @ - CELLS MOVE
+        _DOCV-O-COUNTS-A _DV@ _DOCV-O-COUNTS-CAP _DV@ _DV-FREE
+        _DOCV-O-COUNTS-A _DV! _DOCV-O-COUNTS-CAP _DV!
+    ELSE DROP THEN
+    _DVI-AT @ _DV-COUNT DUP _DVI-N @ CELLS +
+        _DV-BLOCKS _DVI-N @ - _DVI-AT @ - CELLS MOVE
+    _DVI-AT @ _DV-COUNT _DVI-N @ CELLS -1 FILL
+    _DV-BLOCKS _DOCV-O-COUNTED _DV! ;
+
+\ N blocks were read at index AT: the counts, the figures, and the view's
+\ top and end move on with the blocks they belong to.  When the document
+\ had none, the view shows the new blocks from their top.
+: _DV-INSERTED  ( at n -- )
+    _DVI-N ! _DVI-AT !
+    _DVI-N @ IF
+        _DV-COUNTS-INSERT
+        _DOCV-O-FIGS-N _DV@ 0 ?DO
+            I _DV-FIG _FIG.BLOCK + DUP @ _DVI-AT @ < IF DROP ELSE _DVI-N @ SWAP +! THEN
+        LOOP
+        _DV-BLOCKS _DVI-N @ > IF
+            _DV-TOP _DVI-AT @ < 0= IF _DV-TOP _DVI-N @ + _DOCV-O-TOP _DV! THEN
+            _DOCV-O-END _DV@ _DVI-AT @ > IF
+                _DOCV-O-END _DV@ _DVI-N @ + _DOCV-O-END _DV!
+            THEN
+        THEN
+    THEN
+    _DV-CHANGED ;
+
+\ Read part PART when it is not read; true when it was read now.  A read
+\ that fails holds the view's needs back until its revision changes.
+: _DV-READ-PART  ( part -- read? )
+    DUP _DV-DOC DOC-PART-READ? IF DROP 0 EXIT THEN
+    _DV-W @ >R
+    DUP _DV-DOC DOC-READ-PART
+    R> _DV-W !
+    IF DROP _DOCV-O-REVISION _DV@ _DOCV-O-FAILED _DV! 0 EXIT THEN
+    DUP _DV-DOC DOC-PART-FIRST SWAP _DV-DOC DOC-PART-COUNT _DV-INSERTED -1 ;
+
+\ Show part PART's first block at the view's top, read first if need be;
+\ nothing changes when it cannot be read.
+: _DV-GO-PART  ( part -- )
+    DUP _DV-READ-PART DROP
+    DUP _DV-DOC DOC-PART-READ? 0= IF DROP EXIT THEN
+    _DV-DOC DOC-PART-FIRST _DV-GO ;
+
+: _DV-HOME  ( -- )
+    _DV-DOC DOC-PARTS IF 0 _DV-GO-PART ELSE 0 _DV-GO THEN ;
+
+: _DV-END  ( -- )
+    _DV-DOC DOC-PARTS ?DUP IF 1- _DV-READ-PART DROP THEN _DV-LAST ;
+
+\ The part not read within a screen below the view's bottom, going on
+\ from block INDEX, whose first row is view row ROW; or -1.
+: _DV-NEED-BELOW  ( row index -- part | -1 )
+    BEGIN DUP _DV-REACHES? 2 PICK _DV-H 2* < AND WHILE
+        DUP _DV-ROWS ROT + SWAP 1+
+    REPEAT
+    SWAP _DV-H 2* < IF 0 _DV-DOC DOC-GAP EXIT THEN
+    DROP -1 ;
+
+\ The part not read within a screen above the view's top, or -1.
+: _DV-NEED-ABOVE  ( -- part | -1 )
+    _DV-TOP-ROW _DV-TOP                                  ( rows index )
+    BEGIN
+        OVER _DV-H < 0= IF 2DROP -1 EXIT THEN
+        DUP -1 _DV-DOC DOC-GAP DUP 0< 0= IF NIP NIP EXIT THEN DROP
+        DUP 0= IF 2DROP -1 EXIT THEN
+        1- DUP _DV-ROWS ROT + SWAP
+    AGAIN ;
 
 \ =====================================================================
 \  6. Drawing
@@ -674,17 +792,34 @@ VARIABLE _DVP-ROWS
     _DV-W !
     DRW-STYLE-RESTORE
     32 0 0 _DV-H _DV-RGN RGN-W DRW-FILL-RECT
-    _DV-COUNTS? 0= IF 0 _DOCV-O-END _DV! EXIT THEN
+    -1 _DOCV-O-NEED _DV!
+    _DV-COUNTS? 0= IF
+        0 _DOCV-O-END _DV!
+        \ A document in parts with none read needs its first.
+        _DV-DOC IF _DV-BLOCKS 0= IF
+            _DOCV-O-FAILED _DV@ _DOCV-O-REVISION _DV@ <> IF
+                0 0 _DV-DOC DOC-GAP _DOCV-O-NEED _DV!
+            THEN
+        THEN THEN
+        EXIT
+    THEN
     _DOCV-O-DRAWS _DV@ 1+ DUP _DOCV-O-DRAWS _DV! _DVD-SEEN !
     _DV-TOP >R _DV-TOP-ROW >R
     _DV-CLAMP
     _DV-TOP-ROW R> <> _DV-TOP R> <> OR IF _DV-REVISE THEN
     _DV-TOP-ROW NEGATE _DV-TOP                          ( row index )
-    BEGIN DUP _DV-BLOCKS < 2 PICK _DV-H < AND WHILE
+    BEGIN DUP _DV-REACHES? 2 PICK _DV-H < AND WHILE
         2DUP SWAP _DVD-BLOCK
         DUP _DV-ROWS ROT + SWAP 1+
     REPEAT
-    NIP _DOCV-O-END _DV!
+    DUP _DOCV-O-END _DV!
+    _DV-DOC DOC-PARTS IF
+        _DOCV-O-FAILED _DV@ _DOCV-O-REVISION _DV@ = IF
+            2DROP
+        ELSE
+            _DV-NEED-BELOW DUP 0< IF DROP _DV-NEED-ABOVE THEN _DOCV-O-NEED _DV!
+        THEN
+    ELSE 2DROP THEN
     _DVD-HIDE-UNSEEN
     \ Keep the contents shown; give back the rest.
     _DV-TOP _DOCV-O-END _DV@ _DV-DOC DOC-KEEP
@@ -742,7 +877,7 @@ VARIABLE _DVH-BLOCK
     _DVH-ROW @ _DVD-VISIBLE? 0= IF EXIT THEN
     _DV-COUNTS? 0= IF EXIT THEN
     _DV-TOP-ROW NEGATE _DV-TOP                          ( row index )
-    BEGIN DUP _DV-BLOCKS < WHILE
+    BEGIN DUP _DV-REACHES? WHILE
         2DUP _DV-ROWS + _DVH-ROW @ > IF _DVH-IN-BLOCK EXIT THEN
         DUP _DV-ROWS ROT + SWAP 1+
     REPEAT 2DROP ;
@@ -770,6 +905,12 @@ VARIABLE _DVH-BLOCK
     0= IF 2DROP -1 EXIT THEN
     SWAP - ;
 
+\ Follow the link at scalar OFFSET of the text of the block with KEY; a
+\ key the document does not hold, or a position on no link, is dropped.
+: _DV-FOLLOW-KEYED  ( offset key -- )
+    _DV-DOC DOC-KEY>INDEX DUP 0< IF 2DROP EXIT THEN
+    DUP >R _DV-SCALAR>BYTE R> _DV-FOLLOW-AT ;
+
 : _DV-POINTER  ( event -- consumed? )
     DUP 8 + @ KEY-MOUSE-BUTTON
     CASE
@@ -782,10 +923,9 @@ VARIABLE _DVH-BLOCK
         KEY-MOUSE-SCROLL-UP OF DROP _DOCV-WHEEL-ROWS NEGATE _DV-SCROLL -1 ENDOF
         KEY-MOUSE-SCROLL-DN OF DROP _DOCV-WHEEL-ROWS _DV-SCROLL -1 ENDOF
         \ A link the rich renderer laid out: its block's key and the
-        \ scalar it starts at.  A position on no link is dropped.
+        \ scalar it starts at.
         KEY-MOUSE-TEXT-FOLLOW OF
-            DROP KEY-MOUSE-TEXT-OFFSET @ KEY-MOUSE-TEXT-KEY @ 1-
-            DUP >R _DV-SCALAR>BYTE R> _DV-FOLLOW-AT -1
+            DROP KEY-MOUSE-TEXT-OFFSET @ KEY-MOUSE-TEXT-KEY @ _DV-FOLLOW-KEYED -1
         ENDOF
         >R DROP 0 R>
     ENDCASE ;
@@ -801,7 +941,7 @@ VARIABLE _DVH-BLOCK
             KEY-DOWN OF 1 _DV-SCROLL -1 ENDOF
             KEY-PGUP OF _DV-PAGE NEGATE _DV-SCROLL -1 ENDOF
             KEY-PGDN OF _DV-PAGE _DV-SCROLL -1 ENDOF
-            KEY-HOME OF 0 _DV-GO -1 ENDOF
+            KEY-HOME OF _DV-HOME -1 ENDOF
             KEY-END  OF _DV-END -1 ENDOF
             0 SWAP
         ENDCASE
@@ -819,6 +959,7 @@ VARIABLE _DVH-BLOCK
     _DOCV-DESC-SIZE ALLOCATE 0<> ABORT" DOCV-NEW: alloc"
     DUP _DOCV-DESC-SIZE 0 FILL
     >R
+    -1 R@ _DOCV-O-NEED + !  -1 R@ _DOCV-O-FAILED + !
     R@ _DOCV-O-MSRC + !
     R@ WDG-T-DOCUMENT ROT ['] _DV-DRAW ['] _DV-HANDLE WDG-INIT
     R> ;
@@ -843,6 +984,7 @@ VARIABLE _DVH-BLOCK
     _DV-FIGS-FREE _DV-COUNTS-FREE
     _DOCV-O-DOC _DV!
     0 _DOCV-O-TOP _DV! 0 _DOCV-O-TOP-ROW _DV! 0 _DOCV-O-END _DV!
+    -1 _DOCV-O-NEED _DV!  -1 _DOCV-O-FAILED _DV!
     _DV-CHANGED ;
 
 : DOCV-DOCUMENT@  ( widget -- doc|0 )  _DOCV-O-DOC + @ ;
@@ -871,14 +1013,24 @@ VARIABLE _DVH-BLOCK
 \ DOCV-GO ( index widget -- )   Show block INDEX at the view's top.
 : DOCV-GO  ( index widget -- )  _DV-W ! _DV-GO ;
 
+\ DOCV-GO-PART ( part widget -- )
+\   Show part PART of a document in parts at the view's top, reading it
+\   first when it is not read; nothing changes when it cannot be read.
+: DOCV-GO-PART  ( part widget -- )
+    _DV-W ! _DV-DOC 0= IF DROP EXIT THEN
+    DUP 0 _DV-DOC DOC-PARTS WITHIN 0= IF DROP EXIT THEN
+    _DV-GO-PART ;
+
 \ DOCV-FOLLOW ( target-a target-u widget -- )
 \   Follow a link's target as a press on it does.
 : DOCV-FOLLOW  ( target-a target-u widget -- )
     _DV-W ! _DV-DOC 0= IF 2DROP EXIT THEN _DV-FOLLOW ;
 
-\ DOCV-PENDING? ( widget -- flag )   A figure's picture is still pending.
+\ DOCV-PENDING? ( widget -- flag )
+\   The view needs a part read, or a figure's picture is still pending.
 : DOCV-PENDING?  ( widget -- flag )
     _DV-W !
+    _DOCV-O-NEED _DV@ 0< 0= IF -1 EXIT THEN
     _DOCV-O-FIGS-N _DV@ 0 ?DO
         I _DV-FIG _FIG.PICT + @ ?DUP IF
             PICT-PENDING? IF -1 UNLOOP EXIT THEN
@@ -886,10 +1038,14 @@ VARIABLE _DVH-BLOCK
     LOOP 0 ;
 
 \ DOCV-SERVICE ( widget -- changed? )
-\   Decode some more of the first figure whose picture is pending.  True
-\   when what the view shows changed.
+\   Read the part the view needs, or else decode some more of the first
+\   figure whose picture is pending.  True when what the view shows
+\   changed.
 : DOCV-SERVICE  ( widget -- changed? )
     _DV-W !
+    _DOCV-O-NEED _DV@ DUP 0< 0= IF
+        -1 _DOCV-O-NEED _DV!  _DV-READ-PART EXIT
+    THEN DROP
     _DOCV-O-FIGS-N _DV@ 0 ?DO
         I _DV-FIG _FIG.PICT + @ ?DUP IF
             DUP PICT-PENDING? IF
@@ -913,7 +1069,7 @@ VARIABLE _DVH-BLOCK
 \ =====================================================================
 \
 \  The view publishes the blocks its last draw showed: each block's key is
-\  its index plus one, its kind its content's, a figure's picture rows
+\  the document's (BLK-KEY@), its kind its content's, a figure's picture rows
 \  those the view gave it, its containers, and its text as CELL shows it
 \  (UTF8-SAFE-COPY), its direction controls inert stand-ins (BIDI-INERT)
 \  and its meanings style runs.  The capture reads only what the view and
@@ -942,20 +1098,19 @@ VARIABLE _DVH-BLOCK
 : DOCV-FIGURE-COUNT  ( widget -- n )  _DOCV-O-FIGS-N + @ ;
 
 \ DOCV-FIGURE@ ( i widget -- key picture|0 )
-\   Figure record I, in block order: its block's key, the block's index
-\   plus one, and the picture widget showing it while it has a row in
-\   view, or 0.  Out of range, 0 0.
+\   Figure record I, in block order: its block's key, and the picture
+\   widget showing it while it has a row in view, or 0.  Out of range,
+\   0 0.
 : DOCV-FIGURE@  ( i widget -- key picture|0 )
     2DUP DOCV-FIGURE-COUNT U< 0= IF 2DROP 0 0 EXIT THEN
     _DOCV-O-FIGS-A + @ SWAP _FIG-SIZE * +
-    DUP _FIG.BLOCK + @ 1+ SWAP _FIG.PICT + @ ;
+    DUP _FIG.KEY + @ SWAP _FIG.PICT + @ ;
 
 \ DOCV-FIGURE-PICTURE ( key widget -- picture|0 )
 \   The picture widget showing the figure of the block with KEY, or 0.
 : DOCV-FIGURE-PICTURE  ( key widget -- picture|0 )
-    SWAP 1- SWAP
     DUP DOCV-FIGURE-COUNT 0 ?DO
-        I OVER DOCV-FIGURE@ SWAP 1- 3 PICK = IF NIP NIP UNLOOP EXIT THEN
+        I OVER DOCV-FIGURE@ SWAP 3 PICK = IF NIP NIP UNLOOP EXIT THEN
         DROP
     LOOP 2DROP 0 ;
 
@@ -1059,7 +1214,7 @@ VARIABLE _DVK-DST-T
 : _DVK-BLOCK!  ( index -- ok? )
     DUP _DVK-I ! _DV-DOC DOC-BLOCK _DVK-BLOCK !
     _DVK-BLOCK @ BLK-KIND@ DOC-B-RULE = IF
-        _DVK-I @ 1+ DOC-B-RULE 0
+        _DVK-BLOCK @ BLK-KEY@ DOC-B-RULE 0
         _DVK-BLOCK @ BLK-ROWS-BEFORE@ _DVK-BLOCK @ BLK-INSIDE@ 0
         _DVK-B @ USCOL-DOC-BLOCK-BEGIN DROP
         _DVK-CONTAINERS
@@ -1067,7 +1222,7 @@ VARIABLE _DVK-DST-T
     THEN
     _DVK-I @ _DV-DOC DOC-KEPT DUP _DVK-C ! 0= IF 0 EXIT THEN
     _DVK-C @ DCT-KIND@ _DVK-KIND !
-    _DVK-I @ 1+ _DVK-KIND @
+    _DVK-BLOCK @ BLK-KEY@ _DVK-KIND @
     _DVK-KIND @ DOC-B-HEADING = IF _DVK-C @ DCT-LEVEL@ ELSE 0 THEN
     _DVK-BLOCK @ BLK-ROWS-BEFORE@ _DVK-BLOCK @ BLK-INSIDE@
     _DVK-KIND @ DOC-B-FIGURE = IF
@@ -1127,6 +1282,7 @@ GUARD _docv-guard
 ' DOCV-ROWS      CONSTANT _docv-rows-xt
 ' DOCV-SCROLL    CONSTANT _docv-scroll-xt
 ' DOCV-GO        CONSTANT _docv-go-xt
+' DOCV-GO-PART   CONSTANT _docv-go-part-xt
 ' DOCV-FOLLOW    CONSTANT _docv-follow-xt
 ' DOCV-SERVICE   CONSTANT _docv-service-xt
 ' DOCV-FREE      CONSTANT _docv-free-xt
@@ -1137,6 +1293,7 @@ GUARD _docv-guard
 : DOCV-ROWS      _docv-rows-xt     _docv-guard WITH-GUARD ;
 : DOCV-SCROLL    _docv-scroll-xt   _docv-guard WITH-GUARD ;
 : DOCV-GO        _docv-go-xt       _docv-guard WITH-GUARD ;
+: DOCV-GO-PART   _docv-go-part-xt  _docv-guard WITH-GUARD ;
 : DOCV-FOLLOW    _docv-follow-xt   _docv-guard WITH-GUARD ;
 : DOCV-SERVICE   _docv-service-xt  _docv-guard WITH-GUARD ;
 : DOCV-FREE      _docv-free-xt     _docv-guard WITH-GUARD ;

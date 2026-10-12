@@ -12,6 +12,17 @@
 \  text and meanings when a view reaches it, and keeps them until DOC-KEEP
 \  gives back the contents outside the view.
 \
+\  A reader may give a document in parts instead, a PDF a part for each
+\  page: its structure pass adds parts, and no blocks, with DOC-ADD-PART,
+\  and its part pass adds a part's blocks when DOC-READ-PART asks, in any
+\  order.  A part's blocks go where the part lies, after the blocks of
+\  the parts before it that are read; a part not read has none, and
+\  takes no room.  Block indices count the blocks read, so reading a part
+\  moves the blocks after it on; a block's key (BLK-KEY@), given when it
+\  is added, never changes, and DOC-KEY>INDEX finds it again.  Each block
+\  knows its part, so DOC-GAP finds a part not read between two blocks
+\  without a search.
+\
 \  Memory comes from the caller's memory source, each block sized to what
 \  it holds.  When the source refuses, the call says DOC-S-MEMORY.  The
 \  document borrows its media source; whoever made the source releases it
@@ -32,7 +43,18 @@
 \    DOC-CONTENT     ( index doc -- content status )
 \    DOC-KEEP        ( first end doc -- )
 \    DOC-ANCHOR      ( name-a name-u doc -- index | -1 )
-\  A block's fields are BLK-KIND@ BLK-LEVEL@ BLK-ROWS-BEFORE@ BLK-INSIDE@;
+\    DOC-KEY>INDEX   ( key doc -- index | -1 )
+\    DOC-PARTS       ( doc -- n )
+\    DOC-READ-PART   ( part doc -- status )
+\    DOC-PART-READ?  ( part doc -- flag )
+\    DOC-PART-FIRST  ( part doc -- index )   where its blocks lie, or will
+\    DOC-PART-COUNT  ( part doc -- blocks )
+\    DOC-PART-OF     ( index doc -- part | -1 )
+\    DOC-GAP         ( index last? doc -- part | -1 )
+\  A reader adds with DOC-ADD-BLOCK DOC-ADD-CONTAINER DOC-ADD-PART and
+\  fills a block's content with DOC-CB-TEXT DOC-CB-LINK DOC-CB-KIND
+\  DOC-CB-FIGURE; it finds a part with DOC-PART-LOC@.
+\  A block's fields are BLK-KEY@ BLK-KIND@ BLK-LEVEL@ BLK-ROWS-BEFORE@ BLK-INSIDE@;
 \  a container's CNT-KIND@ CNT-WIDTH@ CNT-NUMBER@ CNT-START?; a content's
 \  DCT-KIND@ DCT-LEVEL@ DCT-TEXT DCT-MAP DCT-FIGURE DCT-LINK-COUNT
 \  DCT-LINK@ DCT-LINK-AT.
@@ -100,11 +122,17 @@ PROVIDED akashic-media-document
 : _DOC.CB-FIG-OFF  ( d -- a )  208 + ;
 : _DOC.CB-FIG-U    ( d -- a )  216 + ;
 : _DOC.CB-OK       ( d -- a )  224 + ;
-232 CONSTANT DOC-SIZE
+: _DOC.PARTS-A     ( d -- a )  232 + ;
+: _DOC.PARTS-CAP   ( d -- a )  240 + ;
+: _DOC.PART-COUNT  ( d -- a )  248 + ;
+: _DOC.LAST-KEY    ( d -- a )  256 + ;
+: _DOC.READING     ( d -- a )  264 + ;   \ the part being read, or -1
+272 CONSTANT DOC-SIZE
 
 \ A block: its kind and heading level, the blank rows before it and how
 \ many of its outermost containers those rows lie inside, its containers,
-\ and two cells the reader keeps to find its text.
+\ two cells the reader keeps to find its text, its key, and its part, or
+\ -1 in a document without parts.
 : _BLK.KIND        ( b -- a )        ;
 : _BLK.LEVEL       ( b -- a )    8 + ;
 : _BLK.ROWS-BEFORE ( b -- a )   16 + ;
@@ -113,8 +141,11 @@ PROVIDED akashic-media-document
 : _BLK.CONT-COUNT  ( b -- a )   40 + ;
 : _BLK.LOC-A       ( b -- a )   48 + ;
 : _BLK.LOC-B       ( b -- a )   56 + ;
-64 CONSTANT _BLK-SIZE
+: _BLK.KEY         ( b -- a )   64 + ;
+: _BLK.PART        ( b -- a )   72 + ;
+80 CONSTANT _BLK-SIZE
 
+: BLK-KEY@         ( block -- key )    _BLK.KEY @ ;
 : BLK-KIND@        ( block -- kind )   _BLK.KIND @ ;
 : BLK-LEVEL@       ( block -- level )  _BLK.LEVEL @ ;
 : BLK-ROWS-BEFORE@ ( block -- rows )   _BLK.ROWS-BEFORE @ ;
@@ -187,13 +218,26 @@ VARIABLE _DLA-OFF
     DROP 0 0 ;
 
 \ A reader: its structure pass ( doc -- status ), which adds every block
-\ with DOC-ADD-BLOCK and DOC-ADD-CONTAINER; its content pass ( index doc --
-\ status ), which fills the builder with DOC-CB-TEXT, DOC-CB-LINK,
-\ DOC-CB-KIND and DOC-CB-FIGURE; and what it gives back ( doc -- ).
+\ with DOC-ADD-BLOCK and DOC-ADD-CONTAINER, or adds parts with
+\ DOC-ADD-PART; its content pass ( index doc -- status ), which fills the
+\ builder with DOC-CB-TEXT, DOC-CB-LINK, DOC-CB-KIND and DOC-CB-FIGURE;
+\ what it gives back ( doc -- ); and its part pass ( part doc -- status ),
+\ which adds a part's blocks as the structure pass adds blocks, or 0 for a
+\ reader that adds no parts.
 : RDR.STRUCTURE-XT ( r -- a )        ;
 : RDR.CONTENT-XT   ( r -- a )    8 + ;
 : RDR.CLOSE-XT     ( r -- a )   16 + ;
-24 CONSTANT RDR-SIZE
+: RDR.PART-XT      ( r -- a )   24 + ;
+32 CONSTANT RDR-SIZE
+
+\ A part: two cells the reader keeps to find it, where its blocks lie
+\ (or will, when it is read), how many there are, and whether it is read.
+: _PRT.LOC-A  ( p -- a )        ;
+: _PRT.LOC-B  ( p -- a )    8 + ;
+: _PRT.FIRST  ( p -- a )   16 + ;
+: _PRT.COUNT  ( p -- a )   24 + ;
+: _PRT.READ   ( p -- a )   32 + ;
+40 CONSTANT _PRT-SIZE
 
 \ ---------------------------------------------------------------------
 \  Memory
@@ -230,10 +274,15 @@ VARIABLE _DGW-NEW
 \ ---------------------------------------------------------------------
 
 \ DOC-ADD-BLOCK ( kind level loc-a loc-b doc -- block | 0 )
-\   Add the next block.  Its rows before and containers start empty.  The
-\   address stays valid only until the next block is added.
+\   Add the next block, with a key of its own.  Its rows before and
+\   containers start empty.  The address stays valid only until the next
+\   block is added.  A document in parts takes blocks only from its part
+\   pass.
 : DOC-ADD-BLOCK  ( kind level loc-a loc-b doc -- block | 0 )
     _DOC-D !
+    _DOC-D @ _DOC.PART-COUNT @ 0<> _DOC-D @ _DOC.READING @ 0< AND IF
+        2DROP 2DROP 0 EXIT
+    THEN
     _DOC-D @ _DOC.COUNT @ 1+ _BLK-SIZE *
     _DOC-D @ _DOC.BLOCKS-A _DOC-D @ _DOC.BLOCKS-CAP _DOC-GROW 0= IF
         2DROP 2DROP 0 EXIT
@@ -243,8 +292,27 @@ VARIABLE _DGW-NEW
     R@ _BLK.LOC-B ! R@ _BLK.LOC-A ! R@ _BLK.LEVEL ! R@ _BLK.KIND !
     0 R@ _BLK.ROWS-BEFORE ! 0 R@ _BLK.INSIDE !
     _DOC-D @ _DOC.CONT-COUNT @ R@ _BLK.CONT-FIRST ! 0 R@ _BLK.CONT-COUNT !
+    1 _DOC-D @ _DOC.LAST-KEY +!  _DOC-D @ _DOC.LAST-KEY @ R@ _BLK.KEY !
+    _DOC-D @ _DOC.READING @ R@ _BLK.PART !
     1 _DOC-D @ _DOC.COUNT +!
     R> ;
+
+: _DOC-PART  ( part -- p )  _PRT-SIZE * _DOC-D @ _DOC.PARTS-A @ + ;
+
+\ DOC-ADD-PART ( loc-a loc-b doc -- ok? )
+\   Add a part after the parts so far, not yet read.  LOC-A and LOC-B are
+\   the reader's, to find it.  False when memory refuses, or when the
+\   document has blocks or a part is being read: a structure pass adds
+\   parts or blocks, not both.
+: DOC-ADD-PART  ( loc-a loc-b doc -- ok? )
+    _DOC-D !
+    _DOC-D @ _DOC.COUNT @ _DOC-D @ _DOC.READING @ 0< 0= OR IF 2DROP 0 EXIT THEN
+    _DOC-D @ _DOC.PART-COUNT @ 1+ _PRT-SIZE *
+    _DOC-D @ _DOC.PARTS-A _DOC-D @ _DOC.PARTS-CAP _DOC-GROW 0= IF 2DROP 0 EXIT THEN
+    _DOC-D @ _DOC.PART-COUNT @ _DOC-PART >R
+    R@ _PRT.LOC-B ! R@ _PRT.LOC-A !
+    _DOC-D @ _DOC.COUNT @ R@ _PRT.FIRST !  0 R@ _PRT.COUNT !  0 R> _PRT.READ !
+    1 _DOC-D @ _DOC.PART-COUNT +!  -1 ;
 
 \ DOC-ADD-CONTAINER ( kind width number start? doc -- ok? )
 \   Add a container, outermost first, to the block added last: false when
@@ -276,6 +344,10 @@ VARIABLE _DGW-NEW
 : DOC-CONTAINERS  ( block doc -- first count )
     _DOC.CONTS-A @ OVER _BLK.CONT-FIRST @ CNT-SIZE * +
     SWAP _BLK.CONT-COUNT @ ;
+
+\ A part's cells, for its reader; PART is below DOC-PARTS.
+: DOC-PART-LOC@  ( part doc -- loc-a loc-b )
+    _DOC.PARTS-A @ SWAP _PRT-SIZE * + DUP _PRT.LOC-A @ SWAP _PRT.LOC-B @ ;
 
 : DOC-STATE@   ( doc -- state )   _DOC.STATE @ ;
 : DOC-STATE!   ( state doc -- )   _DOC.STATE ! ;
@@ -411,6 +483,7 @@ VARIABLE _DCE-BYTES
     _DOC-D @ _DOC.CB-MAP-A @ _DOC-D @ _DOC.CB-MAP-CAP @ _DOC-FREE
     _DOC-D @ _DOC.CB-LINKS-A @ _DOC-D @ _DOC.CB-LINKS-CAP @ _DOC-FREE
     _DOC-D @ _DOC.CB-STR-A @ _DOC-D @ _DOC.CB-STR-CAP @ _DOC-FREE
+    _DOC-D @ _DOC.PARTS-A @ _DOC-D @ _DOC.PARTS-CAP @ _DOC-FREE
     _DOC-D @ DOC-SIZE 0 FILL ;
 
 : _DOC-CLOSE  ( doc -- )
@@ -423,7 +496,7 @@ VARIABLE _DCE-BYTES
     _DOC-D @ _DOC.MSRC !
     OVER MEDSRC-VALID? 0= IF 2DROP DOC-S-INVALID EXIT THEN
     _DOC-D @ _DOC.READER ! _DOC-D @ _DOC.SOURCE !
-    _DOC-MAGIC _DOC-D @ _DOC.MAGIC !
+    _DOC-MAGIC _DOC-D @ _DOC.MAGIC !  -1 _DOC-D @ _DOC.READING !
     _DOC-D @ DUP _DOC.READER @ RDR.STRUCTURE-XT @ EXECUTE
     ?DUP IF _DOC-FREE-ALL EXIT THEN
     _DOC-D @ _DOC.COUNT @ ?DUP IF
@@ -459,6 +532,110 @@ VARIABLE _DCE-BYTES
         I 2 PICK < I 2 PICK < 0= OR IF I _DOC-FREE-CONTENT THEN
     LOOP
     2DROP ;
+
+\ ---------------------------------------------------------------------
+\  Parts
+\ ---------------------------------------------------------------------
+
+VARIABLE _DRP-PART   \ the part being read
+VARIABLE _DRP-OLD    \ the blocks before it was read
+VARIABLE _DRP-OLDC   \ the containers before it was read
+VARIABLE _DRP-N      \ the blocks it added
+VARIABLE _DRP-AT     \ where they go
+VARIABLE _DRP-TMP
+
+\ Give back what a part that failed to read added.
+: _DOC-UNDO  ( status -- status )
+    _DRP-OLD @ _DOC-D @ _DOC.COUNT !  _DRP-OLDC @ _DOC-D @ _DOC.CONT-COUNT ! ;
+
+\ Move the N blocks added last, at the end, to index AT, and the blocks
+\ from AT on after them; their content slots likewise, the new ones empty.
+\ False when memory refuses the move's room.
+: _DOC-ROTATE  ( -- ok? )
+    _DRP-N @ _BLK-SIZE * DUP _DOC-ALLOC DUP _DRP-TMP ! 0= IF DROP 0 EXIT THEN
+    _DOC-D @ _DOC.BLOCKS-A @ _DRP-OLD @ _BLK-SIZE * +  _DRP-TMP @  2 PICK MOVE
+    _DOC-D @ _DOC.BLOCKS-A @ _DRP-AT @ _BLK-SIZE * +  DUP 2 PICK +
+        _DRP-OLD @ _DRP-AT @ - _BLK-SIZE * MOVE
+    _DRP-TMP @ _DOC-D @ _DOC.BLOCKS-A @ _DRP-AT @ _BLK-SIZE * +  2 PICK MOVE
+    _DRP-TMP @ SWAP _DOC-FREE
+    _DOC-D @ _DOC.CACHE-A @ _DRP-AT @ CELLS +  DUP _DRP-N @ CELLS +
+        _DRP-OLD @ _DRP-AT @ - CELLS MOVE
+    _DOC-D @ _DOC.CACHE-A @ _DRP-AT @ CELLS +  _DRP-N @ CELLS 0 FILL
+    -1 ;
+
+\ DOC-READ-PART ( part doc -- status )
+\   Read part PART's blocks, which go where the part lies; the blocks
+\   after it, and where the parts after it lie, move on by as many.  A part
+\   read already is left as it is.  When the reader fails, or memory
+\   refuses, the part stays unread and the document as it was.  The part
+\   pass only adds the part's blocks and their containers.
+: _DOC-READ-PART  ( part doc -- status )
+    DUP _DOC.MAGIC @ _DOC-MAGIC <> IF 2DROP DOC-S-INVALID EXIT THEN
+    _DOC-D !
+    DUP _DOC-D @ _DOC.PART-COUNT @ U< 0= IF DROP DOC-S-INVALID EXIT THEN
+    DUP _DOC-PART _PRT.READ @ IF DROP DOC-S-OK EXIT THEN
+    _DOC-D @ _DOC.READER @ RDR.PART-XT @ 0= IF DROP DOC-S-INVALID EXIT THEN
+    _DRP-PART !
+    _DOC-D @ _DOC.COUNT @ _DRP-OLD !  _DOC-D @ _DOC.CONT-COUNT @ _DRP-OLDC !
+    _DRP-PART @ _DOC-D @ _DOC.READING !
+    _DRP-PART @ _DOC-D @ DUP >R DUP _DOC.READER @ RDR.PART-XT @ EXECUTE
+    R> _DOC-D !  -1 _DOC-D @ _DOC.READING !
+    ?DUP IF _DOC-UNDO EXIT THEN
+    _DOC-D @ _DOC.COUNT @ _DRP-OLD @ - _DRP-N !
+    _DRP-PART @ _DOC-PART _PRT.FIRST @ _DRP-AT !
+    _DRP-N @ IF
+        _DOC-D @ _DOC.COUNT @ CELLS _DOC-D @ _DOC.CACHE-A _DOC-D @ _DOC.CACHE-CAP _DOC-GROW
+        0= IF DOC-S-MEMORY _DOC-UNDO EXIT THEN
+        _DOC-ROTATE 0= IF DOC-S-MEMORY _DOC-UNDO EXIT THEN
+    THEN
+    _DRP-PART @ _DOC-PART  _DRP-N @ OVER _PRT.COUNT !  -1 SWAP _PRT.READ !
+    _DOC-D @ _DOC.PART-COUNT @ _DRP-PART @ 1+ ?DO
+        _DRP-N @ I _DOC-PART _PRT.FIRST +!
+    LOOP
+    DOC-S-OK ;
+
+: DOC-PARTS  ( doc -- n )  _DOC.PART-COUNT @ ;
+
+\ A part's record, PART below DOC-PARTS.
+: _DOC-PART-IN  ( part doc -- p )  _DOC.PARTS-A @ SWAP _PRT-SIZE * + ;
+
+: DOC-PART-READ?  ( part doc -- flag )  _DOC-PART-IN _PRT.READ @ 0<> ;
+: DOC-PART-FIRST  ( part doc -- index )  _DOC-PART-IN _PRT.FIRST @ ;
+: DOC-PART-COUNT  ( part doc -- blocks )  _DOC-PART-IN _PRT.COUNT @ ;
+
+\ DOC-PART-OF ( index doc -- part | -1 )
+\   The part block INDEX lies in, or -1 for none or no such block.
+: DOC-PART-OF  ( index doc -- part | -1 )
+    DOC-BLOCK ?DUP IF _BLK.PART @ ELSE -1 THEN ;
+
+\ DOC-GAP ( index last? doc -- part | -1 )
+\   A part not read whose blocks would lie just before block INDEX, or
+\   after the last block for INDEX = DOC-COUNT: of the parts between those
+\   of blocks INDEX - 1 and INDEX, the first not read, or, when LAST?, the
+\   last.  Only parts read and empty lie between them besides, so this
+\   looks at none in most places.
+: DOC-GAP  ( index last? doc -- part | -1 )
+    DUP DOC-PARTS 0= IF DROP 2DROP -1 EXIT THEN
+    >R SWAP 0 MAX R@ DOC-COUNT MIN                       ( last? index )
+    DUP 1- R@ DOC-PART-OF                                ( last? index q )
+    SWAP DUP R@ DOC-COUNT < IF R@ DOC-PART-OF ELSE DROP R@ DOC-PARTS THEN
+    ROT IF                                               ( q p )
+        BEGIN 1- 2DUP < WHILE
+            DUP R@ DOC-PART-READ? 0= IF NIP R> DROP EXIT THEN
+        REPEAT
+    ELSE
+        SWAP
+        BEGIN 1+ 2DUP > WHILE
+            DUP R@ DOC-PART-READ? 0= IF NIP R> DROP EXIT THEN
+        REPEAT
+    THEN
+    2DROP R> DROP -1 ;
+
+\ DOC-KEY>INDEX ( key doc -- index | -1 )   The block with KEY, if read.
+: DOC-KEY>INDEX  ( key doc -- index | -1 )
+    DUP _DOC.BLOCKS-A @ _BLK.KEY SWAP _DOC.COUNT @ 0 ?DO       ( key a )
+        2DUP @ = IF 2DROP I UNLOOP EXIT THEN _BLK-SIZE +
+    LOOP 2DROP -1 ;
 
 \ ---------------------------------------------------------------------
 \  Anchors
@@ -606,6 +783,8 @@ VARIABLE _DSD-D
         0= IF 2DROP 0 EXIT THEN
     _DSD-D @ _DOC.CONTS-A @ _DSD-D @ _DOC.CONTS-CAP @ _DSD-CLEAR?
         0= IF 2DROP 0 EXIT THEN
+    _DSD-D @ _DOC.PARTS-A @ _DSD-D @ _DOC.PARTS-CAP @ _DSD-CLEAR?
+        0= IF 2DROP 0 EXIT THEN
     _DSD-D @ _DOC.CACHE-A @ _DSD-D @ _DOC.CACHE-CAP @ _DSD-CLEAR?
         0= IF 2DROP 0 EXIT THEN
     _DSD-D @ _DOC.COUNT @ MIN SWAP 0 MAX ?DO
@@ -624,6 +803,7 @@ VARIABLE _DSD-D
 : DOC-CONTENT  ( index doc -- content status )  _DOC-CONTENT ;
 : DOC-KEEP     ( first end doc -- )  _DOC-KEEP ;
 : DOC-ANCHOR   ( name-a name-u doc -- index | -1 )  _DOC-ANCHOR ;
+: DOC-READ-PART  ( part doc -- status )  _DOC-READ-PART ;
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -635,10 +815,12 @@ GUARD _doc-guard
 ' DOC-CONTENT  CONSTANT _doc-content-xt
 ' DOC-KEEP     CONSTANT _doc-keep-xt
 ' DOC-ANCHOR   CONSTANT _doc-anchor-xt
+' DOC-READ-PART CONSTANT _doc-read-part-xt
 
 : DOC-OPEN     _doc-open-xt _doc-guard WITH-GUARD ;
 : DOC-CLOSE    _doc-close-xt _doc-guard WITH-GUARD ;
 : DOC-CONTENT  _doc-content-xt _doc-guard WITH-GUARD ;
 : DOC-KEEP     _doc-keep-xt _doc-guard WITH-GUARD ;
 : DOC-ANCHOR   _doc-anchor-xt _doc-guard WITH-GUARD ;
+: DOC-READ-PART _doc-read-part-xt _doc-guard WITH-GUARD ;
 [THEN] [THEN]

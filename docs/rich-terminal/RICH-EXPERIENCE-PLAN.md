@@ -1364,11 +1364,11 @@ empty password, and those are read too.
 2. **A growing document** (`media/document.f`). A reader's structure pass
    may give a document in parts, each read when asked: a PDF has a part
    for each page, known when it opens. The document view asks for a part
-   when its view or a scroll comes within a screen of it, so a part that is
-   not read takes no room until then. Anchors, links and the outline name
-   a block by its part, so they can name blocks not read yet, and
-   following one reads that part alone; End reads the last part. Markdown's
-   structure is one part, read at once.
+   when it comes within a screen of it, so a part that is not read takes
+   no room until then. Links and the outline name a part, so they can name
+   pages not read yet, and following one reads that part alone; Home and
+   End read the first and last parts. Markdown gives its blocks at once,
+   without parts.
 3. **The file** (`pdf/`). A lexer and object parser over a media source,
    reading objects only when asked: cross-reference tables and streams,
    object streams, and incremental updates, newest first. A file whose
@@ -1440,11 +1440,19 @@ rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them, a link to a far page reading that page alone.
 
-**Status (2026-10-12).** Steps 1, 3, 4 and 5 are done, step 8 for RC4,
-and the file's side of steps 6 and 7: pictures as files, links and the
-outline. The decisions above were reviewed: steps 2 and 9 come next, and
-AES follows MegaPad's engine gaining CBC.
+**Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, and the
+file's side of steps 6 and 7: pictures as files, links and the outline.
+The decisions above were reviewed: step 9 comes next, and AES follows
+MegaPad's engine gaining CBC.
 
+- A document may come in parts. A reader adds its parts when the document
+  opens and a part's blocks when asked, in any order, each where its part
+  lies, and every block keeps the key it was given, so DOC1 keys stay the
+  same as pages are read around them. The document view reads the parts
+  within a screen of what it shows, one each service call, stops at a part
+  not read as at the document's end, and keeps what it shows in place when
+  a part above it is read. `DOCV-GO-PART` reads a far part alone. A part
+  that fails to read is tried again only after the view changes.
 - A page's start is the DOC1 block `PAGE`. MegaPad's codec refuses one in
   a container, and its reference renderer shows the label muted with a
   rule's line through the cells each of its lines leaves, one cell clear

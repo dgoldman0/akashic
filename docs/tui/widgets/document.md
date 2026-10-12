@@ -70,14 +70,41 @@ last rows. The view never scrolls above the document's first row, nor so
 far that its last row rises above the view's bottom. `DOCV-TOP@` tells
 which block the view's top row lies in, and how many of its rows lie above.
 
+### Documents in parts
+
+A document in parts, such as a PDF's pages, starts with no blocks, and the
+view reads its parts as it nears them (`DOC-READ-PART`), so a long document
+opens without reading every page.
+
+The view stops where a part not read lies (`DOC-GAP`), as it stops at the
+document's ends: it scrolls no further that way, and the rows past it stay
+blank. Each draw notes the part the view needs next: one not read within a
+screen below the view's bottom, or else within a screen above its top, or
+the first part when none is read. `DOCV-PENDING?` is true while it needs
+one, and `DOCV-SERVICE` reads it, one part a call, before it decodes any
+picture. The owner's service pass that already calls `DOCV-SERVICE` for
+pictures reads the parts too.
+
+Reading a part moves the blocks after it on. The view's counts, its figure
+records and its top move on with the blocks they belong to, so what it shows
+stays put when a part above it is read. A read that fails holds the view's
+needs back until what it shows changes, so a part that cannot be read is
+tried again after the reader scrolls, not on every draw.
+
+`DOCV-GO-PART` reads a far part alone, as a link or a contents entry asks,
+and shows it from its top; the parts around it are read as the view nears
+them. Home reads the first part and End the last. While a view shows a
+document, parts are read through it; blocks it did not read itself make it
+count again and forget its figure records.
+
 ### Links
 
 A press on a link follows it. A link to one of the document's own headings,
 `#name`, scrolls the view to that heading (`DOC-ANCHOR`). Any other target
 goes to the owner's follow word. A rich renderer that lays the text out
-itself names a link with `KEY-MOUSE-TEXT-FOLLOW`: the block's key, its
-index plus one, and the scalar offset in its text. A position on no link is
-dropped.
+itself names a link with `KEY-MOUSE-TEXT-FOLLOW`: the block's key and the
+scalar offset in its text. A key the document does not hold, or a position
+on no link, is dropped.
 
 ### Figures
 
@@ -97,7 +124,7 @@ resolved shows its name.
 
 `DOCV-SERVICE` decodes some more of the first figure whose picture is still
 decoding, `PICT-STEP-PIXELS` source pixels a call, as the UIDL host's
-service pass does for picture widgets.
+service pass does for picture widgets, once no part is needed.
 
 The view keeps a record of each figure it has met, in block order whichever
 it meets first. A rich side shows each figure with a row in view as a
@@ -114,7 +141,8 @@ showed, published as a renderer-neutral DOCUMENT entry
 them (`DOCV-DOCUMENT-CAPTURE`). The entry carries:
 
 - the top block's rows above the view;
-- for each block shown: its key (its index plus one), its kind and level, its
+- for each block shown: its key (`BLK-KEY@`, which stays the same while the
+  document is open, whatever parts are read around it), its kind and level, its
   blank rows before it and how many of them lie inside its containers, its
   containers, and for a figure the picture rows the view gave it;
 - its text as CELL shows it (`UTF8-SAFE-COPY`, with line feeds), with each
@@ -149,13 +177,14 @@ part could not be read)"; its rows are counted again at the next pass.
 | `DOCV-DOCUMENT@` | `( widget -- doc \| 0 )` | The document shown. |
 | `DOCV-SCROLL` | `( rows widget -- )` | Scroll by signed rows. |
 | `DOCV-GO` | `( index widget -- )` | Put block `index` at the view's top, as near as the document allows. |
+| `DOCV-GO-PART` | `( part widget -- )` | Read part `part` if need be and put its first block at the view's top; nothing changes when it cannot be read. |
 | `DOCV-FOLLOW` | `( target-a target-u widget -- )` | Follow a link's target as a press on it does. |
 | `DOCV-TOP@` | `( widget -- block rows )` | The block the view's top row lies in, and its rows above the view. |
 | `DOCV-SHOWN` | `( widget -- first end )` | The blocks the last draw showed. |
 | `DOCV-ROWS` | `( index widget -- rows )` | The rows block `index` takes at the view's width, its blank rows included. |
 | `DOCV-REVISION@` | `( widget -- n )` | Counts every change in what the view shows. |
-| `DOCV-PENDING?` | `( widget -- flag )` | A figure's picture is still decoding. |
-| `DOCV-SERVICE` | `( widget -- changed? )` | Decode some more of a figure's picture; true when what the view shows changed. |
+| `DOCV-PENDING?` | `( widget -- flag )` | The view needs a part read, or a figure's picture is still decoding. |
+| `DOCV-SERVICE` | `( widget -- changed? )` | Read the part the view needs, or else decode some more of a figure's picture; true when what the view shows changed. |
 | `DOCV-FIGURE-COUNT` | `( widget -- n )` | The figure records the view keeps. |
 | `DOCV-FIGURE@` | `( i widget -- key picture \| 0 )` | Figure record `i`, in block order: its block's key and the picture widget showing it while it has a row in view; `0 0` out of range. |
 | `DOCV-FIGURE-PICTURE` | `( key widget -- picture \| 0 )` | The picture widget showing the figure of the block with `key`. |
