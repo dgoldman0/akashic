@@ -27,6 +27,9 @@
 <item text=New_Reminder do=reminder-new/>
 <separator/>
 <item text=Mark_Reviewed do=automation-review/>
+<item text=Run_Now do=automation-run/>
+<item text=Ask_for_Approval do=automation-ask/>
+<item text=Cancel_Run do=automation-cancel/>
 <item text=Pause_or_Resume do=automation-pause/>
 <item text=Archive_or_Restore do=automation-archive/>
 <item text=Delete_Automation do=automation-delete/>

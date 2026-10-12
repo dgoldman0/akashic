@@ -296,7 +296,7 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/daybook/daybook.uidl",
         "menus": ["File", "Entry", "Go", "Automations", "Help"],
-        "actions": ["about", "automation-archive", "automation-archived", "automation-delete", "automation-pause", "automation-review", "automation-zone", "automations", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-new", "reveal-source", "save", "today", "toggle"],
+        "actions": ["about", "automation-archive", "automation-archived", "automation-ask", "automation-cancel", "automation-delete", "automation-pause", "automation-review", "automation-run", "automation-zone", "automations", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-new", "reveal-source", "save", "today", "toggle"],
         "shortcuts": {"automations": "F4", "delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
         "element_ids": ["daybook-body", "mbar", "sbar", "sbar-date", "sbar-state"]
       },
@@ -310,8 +310,8 @@
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-AV-HANDLE",
-          "sha256": "aff57019f249dd4e3ab38e028a83f61dea7797e94de9e0ea356bfb8a1738a022",
-          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected reminder after typing DELETE", "p -> pause or resume the selected reminder", "a -> archive or restore the selected reminder", "h -> show or hide archived reminders", "Space -> mark the selected firing reviewed", "Other special keys -> move in the reminders list", "Mouse over the list -> the reminders list"]
+          "sha256": "be495e4d3669fe7719e36df8516e7e010ea37792b43987b4027bdcf583a3f41d",
+          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected automation after typing DELETE", "p -> pause or resume the selected automation", "a -> archive or restore the selected automation", "h -> show or hide archived automations", "r -> run the selected Agent run now", "y -> ask Desk to approve the selected Agent run", "x -> cancel the selected Agent run in progress", "Space -> mark the selected firing or run reviewed", "Other special keys -> move in the automations list", "Mouse over the list -> the automations list"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},

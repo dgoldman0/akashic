@@ -186,7 +186,7 @@ def test_actions_and_their_refusals(clocked):
         "0 VW DBAV-PAUSE . 99 VW DBAV-PAUSE . -1 VW DBAV-REVIEW . "
         'S" Alpha" V-FIND VW DBAV-REVIEW . CR',
         # Review the firing; the section goes.
-        'S" Delta" DBAV-FIRING V-FIND-KIND VW DBAV-REVIEW . VW DBAV-REBUILD . '
+        'S" Delta" DBAV-ITEM V-FIND-KIND VW DBAV-REVIEW . VW DBAV-REBUILD . '
         "0 VW DBAV-TITLE TYPE CR",
         # Rows older than the store do nothing.
         'S" Bravo" V-FIND DUP VW DBAV-PAUSE . VW DBAV-PAUSE . '
@@ -199,8 +199,8 @@ def test_actions_and_their_refusals(clocked):
         'S" Charlie" V-FIND VW DBAV-DELETE . VW DBAV-REBUILD DROP '
         'S" Charlie" V-FIND . CR',
         "V-ROWS",
-        'S" Bravo" V-FIND VW DBAV-REMINDER? . 0 VW DBAV-REMINDER? . '
-        "-1 VW DBAV-REMINDER? . CR",
+        'S" Bravo" V-FIND VW DBAV-SCHEDULE? . 0 VW DBAV-SCHEDULE? . '
+        "-1 VW DBAV-SCHEDULE? . CR",
     ])
     assert lines[0] == f"{NONE} {NONE} {NONE} {NONE}"
     assert lines[1] == "0 0 ACTIVE"
@@ -222,8 +222,8 @@ def test_missed_firings_read_as_missed(clocked):
     lines = run_text(clocked, [
         f"{ms(2026, 10, 14, 11)} DBAS-JUMP V-ACCEPT . . "
         "VW DBAV-REBUILD . CR",
-        'S" Bravo" DBAV-FIRING V-FIND-KIND VW DBAV-DETAIL TYPE CR',
-        'S" Alpha" DBAV-FIRING V-FIND-KIND VW DBAV-DETAIL TYPE CR',
+        'S" Bravo" DBAV-ITEM V-FIND-KIND VW DBAV-DETAIL TYPE CR',
+        'S" Alpha" DBAV-ITEM V-FIND-KIND VW DBAV-DETAIL TYPE CR',
     ])
     assert lines == [
         "0 5 0",
@@ -294,8 +294,10 @@ def test_repeat_words(clocked):
             f"{rule} DBREC.WEEKDAYS @ . {rule} DBREC.INTERVAL @ . CR",
         ])
         assert lines == [f"0 {freq} {weekdays} 1"], word
-    assert run_text(clocked, ['S" fortnightly" VW DBAV-REPEAT! . CR']) == [
-        str(REPEAT)]
+    # A word must be the whole answer, neither longer nor shorter.
+    for word in ("fortnightly", "dailyx", "daily ", "dail", "once more"):
+        assert run_text(clocked, [f'S" {word}" VW DBAV-REPEAT! . CR']) == [
+            str(REPEAT)], word
 
 
 def _create(machine, when: str, repeat: str, zone: str) -> list[str]:

@@ -73,22 +73,32 @@ not prompt the child twice.
 ## Automations
 
 Inside Desk, F4 switches the body between the calendar and the automations
-Desk runs for Daybook (see [automations](automations.md)). The automations
-view is a canonical list in sections, as the agenda is:
+Desk runs for Daybook (see [automations](automations.md)): schedules, each
+a reminder or an Agent run, and the items they made. The automations view
+is a canonical list in sections, as the agenda is:
 
 | Section | Holds |
 |---|---|
-| NEEDS REVIEW | Firings awaiting review, newest first: `fired` or `missed`, with when |
-| ACTIVE | Enabled reminders, soonest first, with the next firing in each one's zone |
-| PAUSED | Paused reminders |
+| NEEDS REVIEW | Reminder firings and Agent runs awaiting review, newest first: `fired`, `missed`, or how a run ended and why, with when it was due |
+| IN PROGRESS | Agent runs handed to Desk and not yet over: `waiting` or `running`, with when it was due |
+| ACTIVE | Enabled schedules, soonest first, with the next time each fires in its zone |
+| PAUSED | Paused schedules |
 | COMPLETED | Series with nothing left to fire |
-| ARCHIVED | Archived reminders, shown on request |
+| ARCHIVED | Archived schedules, shown on request |
 
-Enter or Space marks the selected firing reviewed. P pauses or resumes the
-selected reminder, A archives it or brings it back, and H shows or hides
-archived reminders. Delete asks to type `DELETE` first, because a deleted
-reminder is gone for good. Escape returns to the calendar. The Automations
-menu offers the same actions.
+An Agent run's schedule says so, and says when it is not approved, for
+example `Agent run, not approved, next 2026-10-12 09:00`. A run that
+completed needs no review; one that ended any other way shows its outcome
+and reason in full, such as `stopped for review: asked to use a tool`.
+
+Enter or Space marks the selected firing or run reviewed. P pauses or
+resumes the selected schedule, A archives it or brings it back, and H shows
+or hides archived schedules. Delete asks to type `DELETE` first, because a
+deleted schedule is gone for good; an Agent run's items stay as short
+records. For an Agent run, R runs it now, through Desk; Y asks Desk's user
+to approve it, and the status line then says where that stands, as Desk
+answers; and X cancels its run in progress. Escape returns to the
+calendar. The Automations menu offers the same actions.
 
 Ctrl+N in the automations view makes a new reminder in three prompts:
 
@@ -240,11 +250,14 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 | Ctrl+Q | Quit standalone Daybook |
 | F4 | Switch between the calendar and the automations (in Desk) |
 | Ctrl+N | Make a new reminder (automations) |
-| Enter / Space | Mark the selected firing reviewed (automations) |
-| P | Pause or resume the selected reminder (automations) |
-| A | Archive the selected reminder, or bring it back (automations) |
-| H | Show or hide archived reminders (automations) |
-| Delete | Delete the selected reminder after typing `DELETE` (automations) |
+| Enter / Space | Mark the selected firing or run reviewed (automations) |
+| P | Pause or resume the selected schedule (automations) |
+| A | Archive the selected schedule, or bring it back (automations) |
+| H | Show or hide archived schedules (automations) |
+| R | Run the selected Agent run now (automations) |
+| Y | Ask Desk to approve the selected Agent run (automations) |
+| X | Cancel the selected Agent run in progress (automations) |
+| Delete | Delete the selected schedule after typing `DELETE` (automations) |
 | Escape | Return to the calendar (automations) |
 
 ## Public Words

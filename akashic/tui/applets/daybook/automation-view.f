@@ -1,20 +1,28 @@
 \ =====================================================================
 \  automation-view.f - Daybook's view of its automations
 \ =====================================================================
-\  The view lists the reminders in the service Desk lends, in sections:
+\  The view lists the automations in the service Desk lends: schedules,
+\  each a reminder or an Agent run, and the items they made.  In sections:
 \
-\    NEEDS REVIEW  firings awaiting review, newest first
-\    ACTIVE        enabled reminders, soonest first
-\    PAUSED        paused reminders, oldest first
+\    NEEDS REVIEW  reminder firings and Agent runs awaiting review,
+\                  newest first
+\    IN PROGRESS   Agent runs handed to Desk and not yet over, newest
+\                  first
+\    ACTIVE        enabled schedules, soonest first
+\    PAUSED        paused schedules, oldest first
 \    COMPLETED     series with nothing left to fire, oldest first
-\    ARCHIVED      archived reminders, when the view shows them
+\    ARCHIVED      archived schedules, when the view shows them
 \
-\  Each row has a title and a detail: when a reminder fires next, in its
-\  own zone, or how a firing went.  A row names its record by position.
+\  Each row has a title and a detail: when a schedule fires next, in its
+\  own zone, and for an Agent run whether it is approved; how a firing or
+\  a run went; or that a run waits or runs.  The detail grows to what it
+\  says.  A row names its record by position.
 \  Every action therefore first checks that the store has not changed
 \  since the rows were built.  If it has, the action does nothing and asks
 \  for a rebuild, so it never lands on a record the user did not see.
-\  Actions name the revision or the last firing the row showed.
+\  Actions name the revision or the last firing the row showed.  An
+\  Agent run's row also runs it now, asks Desk's user to approve it, or
+\  cancels its run in flight, all through the service.
 \
 \  A create takes three steps, as a prompt asks for them: when and the
 \  title ("HH:MM title" for the next such time, or "YYYY-MM-DD HH:MM
@@ -33,15 +41,18 @@
 \    DBAV-REBUILD     ( view -- status )
 \    DBAV-COUNT@      ( view -- n )
 \    DBAV-ROW         ( index view -- kind position )
-\    DBAV-REMINDER?   ( index view -- flag )
+\    DBAV-SCHEDULE?   ( index view -- flag )
+\    DBAV-AGENT?      ( index view -- flag )
+\    DBAV-IN-FLIGHT?  ( index view -- flag )
 \    DBAV-KEY         ( index view -- key )
 \    DBAV-TITLE       ( index view -- address length )
 \    DBAV-DETAIL      ( index view -- address length )
 \    DBAV-NOTE        ( view -- address length )
 \    DBAV-ARCHIVED@   ( view -- flag )
 \    DBAV-ARCHIVED!   ( flag view -- )
-\    DBAV-REVIEW DBAV-PAUSE DBAV-ARCHIVE DBAV-DELETE
-\                     ( index view -- status )
+\    DBAV-REVIEW DBAV-PAUSE DBAV-ARCHIVE DBAV-DELETE DBAV-RUN-NOW
+\    DBAV-ASK DBAV-CANCEL  ( index view -- status )
+\    DBAV-ASK-NOTE    ( view -- address length )
 \    DBAV-SERVICE?    ( view -- flag )
 \    DBAV-BEGIN       ( view -- status )
 \    DBAV-WHEN!       ( address length view -- status )
@@ -60,15 +71,16 @@ REQUIRE ../../../math/entropy.f
 
 \ Row kinds.
 0 CONSTANT DBAV-HEADING          \ position: the section
-1 CONSTANT DBAV-REMINDER         \ position: the schedule's index
-2 CONSTANT DBAV-FIRING           \ position: the occurrence's index
+1 CONSTANT DBAV-SCHEDULE         \ position: the schedule's index
+2 CONSTANT DBAV-ITEM             \ position: the occurrence's index
 
 \ Sections.
 1 CONSTANT DBAV-REVIEW-SECTION
-2 CONSTANT DBAV-ACTIVE-SECTION
-3 CONSTANT DBAV-PAUSED-SECTION
-4 CONSTANT DBAV-COMPLETED-SECTION
-5 CONSTANT DBAV-ARCHIVED-SECTION
+2 CONSTANT DBAV-PROGRESS-SECTION
+3 CONSTANT DBAV-ACTIVE-SECTION
+4 CONSTANT DBAV-PAUSED-SECTION
+5 CONSTANT DBAV-COMPLETED-SECTION
+6 CONSTANT DBAV-ARCHIVED-SECTION
 
 \ View statuses beyond the owner's.
 40 CONSTANT DBAV-S-CHANGED       \ the store changed since the rows were built
@@ -76,9 +88,6 @@ REQUIRE ../../../math/entropy.f
 42 CONSTANT DBAV-S-NOMEM
 43 CONSTANT DBAV-S-WHEN          \ not "HH:MM title" or "YYYY-MM-DD HH:MM title"
 44 CONSTANT DBAV-S-REPEAT        \ not a repeat the view knows
-
-\ The longest detail: "missed 1000000000, last 9999-12-31 23:59".
-48 CONSTANT _DBAV-DETAIL-MAX
 
 0x5745495641424442 CONSTANT _DBAV-MAGIC  \ "BDBAVIEW"
 
@@ -92,8 +101,9 @@ REQUIRE ../../../math/entropy.f
 56 CONSTANT _DBAV-ARCHIVED      \ the view shows archived reminders
 64 CONSTANT _DBAV-HELD          \ scratch: a row held while sorting
 80 CONSTANT _DBAV-LEN           \ the detail's length
-88 CONSTANT _DBAV-TEXT
-_DBAV-TEXT _DBAV-DETAIL-MAX + 7 + -8 AND CONSTANT _DBAV-ZONE
+88 CONSTANT _DBAV-TEXT          \ the detail's buffer, or 0
+96 CONSTANT _DBAV-CAP           \ its bytes
+104 CONSTANT _DBAV-ZONE
 \ A create in progress: the day (local seconds, or -1 for the next such
 \ time), the minute, the create key, the new RID, and the draft.
 _DBAV-ZONE TZ-SIZE + 7 + -8 AND CONSTANT _DBAV-DAY
@@ -113,6 +123,7 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
 : _DBAV.HELD     ( view -- a ) _DBAV-HELD + ;
 : _DBAV.LEN      ( view -- a ) _DBAV-LEN + ;
 : _DBAV.TEXT     ( view -- a ) _DBAV-TEXT + ;
+: _DBAV.CAP      ( view -- a ) _DBAV-CAP + ;
 : _DBAV.ZONE     ( view -- zone ) _DBAV-ZONE + ;
 : _DBAV.DAY      ( view -- a ) _DBAV-DAY + ;
 : _DBAV.MINUTE   ( view -- a ) _DBAV-MINUTE + ;
@@ -128,7 +139,9 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
 
 : DBAV-FREE  ( view -- )
     DUP _DBAV.ROWS @ ?DUP IF FREE THEN
-    0 OVER _DBAV.ROWS ! 0 OVER _DBAV.COUNT ! 0 SWAP _DBAV.ROOM ! ;
+    DUP _DBAV.TEXT @ ?DUP IF FREE THEN
+    0 OVER _DBAV.ROWS ! 0 OVER _DBAV.COUNT ! 0 OVER _DBAV.ROOM !
+    0 OVER _DBAV.TEXT ! 0 OVER _DBAV.CAP ! 0 SWAP _DBAV.LEN ! ;
 
 : _DBAV-OWNER  ( view -- owner ) _DBAV.SERVICE @ DBSVC-OWNER ;
 : _DBAV-STORE  ( view -- store ) _DBAV-OWNER DBAO-STORE ;
@@ -233,7 +246,7 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     BEGIN DUP 2 PICK _DBAV-STORE DBAS-SCHEDULE-COUNT@ < WHILE
         DUP 2 PICK _DBAV-STORE DBAS-SCHEDULE 2 PICK _DBAV-SECTION-OF
         3 PICK = IF
-            DBAV-REMINDER OVER 3 PICK _DBAV-ADD ?DUP IF
+            DBAV-SCHEDULE OVER 3 PICK _DBAV-ADD ?DUP IF
                 NIP NIP NIP R> DROP EXIT
             THEN
         THEN
@@ -243,25 +256,27 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     DUP DBAV-COUNT@ R@ = IF -1 OVER _DBAV.COUNT +! THEN
     R> ROT ROT _DBAV-SORT DBAO-S-OK ;
 
-\ Adds the firings awaiting review, newest first.
-: _DBAV-FIRINGS  ( view -- status )
-    DUP DBAV-COUNT@ 1+ >R
-    DBAV-HEADING DBAV-REVIEW-SECTION 2 PICK _DBAV-ADD ?DUP IF
-        NIP R> DROP EXIT
-    THEN
-    DUP _DBAV-STORE DBAS-OCCURRENCE-COUNT@     ( view i )
+\ Adds a section of items: its heading, then the items in STATE, newest
+\ first.  A section with none shows no heading.  The store keeps a
+\ deleted schedule's short records neither due nor in flight, so no
+\ section shows them.
+: _DBAV-ITEMS  ( state section view -- status )
+    DUP DBAV-COUNT@ 1+ >R                      ( state section view ; R: first )
+    DBAV-HEADING ROT 2 PICK _DBAV-ADD ?DUP IF NIP NIP R> DROP EXIT THEN
+    DUP _DBAV-STORE DBAS-OCCURRENCE-COUNT@     ( state view i )
     BEGIN DUP WHILE
         1-
-        DUP 2 PICK _DBAV-STORE DBAS-OCCURRENCE DBAS-O.STATE @ DBAS-DUE = IF
-            DBAV-FIRING OVER 3 PICK _DBAV-ADD ?DUP IF NIP NIP R> DROP EXIT THEN
+        DUP 2 PICK _DBAV-STORE DBAS-OCCURRENCE DBAS-O.STATE @ 3 PICK = IF
+            DBAV-ITEM OVER 3 PICK _DBAV-ADD ?DUP IF NIP NIP NIP R> DROP EXIT THEN
         THEN
     REPEAT
-    DROP
+    DROP NIP
     DUP DBAV-COUNT@ R> = IF -1 SWAP _DBAV.COUNT +! ELSE DROP THEN
     DBAO-S-OK ;
 
 : _DBAV-BUILD  ( view -- status )
-    DUP _DBAV-FIRINGS ?DUP IF NIP EXIT THEN
+    DBAS-DUE DBAV-REVIEW-SECTION 2 PICK _DBAV-ITEMS ?DUP IF NIP EXIT THEN
+    DBAS-IN-FLIGHT DBAV-PROGRESS-SECTION 2 PICK _DBAV-ITEMS ?DUP IF NIP EXIT THEN
     DBAV-ACTIVE-SECTION OVER _DBAV-SECTION ?DUP IF NIP EXIT THEN
     DBAV-PAUSED-SECTION OVER _DBAV-SECTION ?DUP IF NIP EXIT THEN
     DBAV-COMPLETED-SECTION OVER _DBAV-SECTION ?DUP IF NIP EXIT THEN
@@ -282,11 +297,11 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     THEN
     DROP DBAO-S-OK ;
 
-\ A row's key: headings by section, reminders by serial, firings by id.
+\ A row's key: headings by section, schedules by serial, items by id.
 : DBAV-KEY  ( index view -- key )
     TUCK DBAV-ROW                              ( view kind position )
     OVER DBAV-HEADING = IF NIP NIP EXIT THEN
-    SWAP DBAV-FIRING = IF
+    SWAP DBAV-ITEM = IF
         SWAP _DBAV-STORE DBAS-OCCURRENCE DBAS-O.ID @ 2 * 17 +
     ELSE
         SWAP _DBAV-STORE DBAS-SCHEDULE DBAS-S.SERIAL @ 2 * 16 +
@@ -299,37 +314,52 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
 : _DBAV-HEADING$  ( section -- address length )
     CASE
         DBAV-REVIEW-SECTION OF S" NEEDS REVIEW" ENDOF
+        DBAV-PROGRESS-SECTION OF S" IN PROGRESS" ENDOF
         DBAV-ACTIVE-SECTION OF S" ACTIVE" ENDOF
         DBAV-PAUSED-SECTION OF S" PAUSED" ENDOF
         DBAV-COMPLETED-SECTION OF S" COMPLETED" ENDOF
         S" ARCHIVED" ROT
     ENDCASE ;
 
-\ The reminder a firing belongs to.
-: _DBAV-FIRING-SCHEDULE  ( position view -- schedule|0 )
+\ The schedule an item belongs to.
+: _DBAV-ITEM-SCHEDULE  ( position view -- schedule|0 )
     TUCK _DBAV-STORE DBAS-OCCURRENCE DBAS-O.RID SWAP _DBAV-OWNER DBAO-FIND ;
 
-\ The title of row INDEX: a section's name, or its reminder's title.
+\ The title of row INDEX: a section's name, or its schedule's title.
 : DBAV-TITLE  ( index view -- address length )
     TUCK DBAV-ROW                              ( view kind position )
     OVER DBAV-HEADING = IF NIP NIP _DBAV-HEADING$ EXIT THEN
-    SWAP DBAV-FIRING = IF
-        SWAP _DBAV-FIRING-SCHEDULE
+    SWAP DBAV-ITEM = IF
+        SWAP _DBAV-ITEM-SCHEDULE
     ELSE
         SWAP _DBAV-STORE DBAS-SCHEDULE
     THEN
     ?DUP 0= IF 0 0 EXIT THEN
     DBAS-S.TITLE DBAS-FIELD$ ;
 
-\ Appends text to the detail, as much as fits.
+\ Room for U more bytes of the detail, which grows to hold them; whether
+\ there was memory for it.
+: _DBAV-ROOM-TEXT  ( u view -- flag )
+    >R R@ _DBAV.LEN @ + DUP R@ _DBAV.CAP @ > 0= IF DROP R> DROP -1 EXIT THEN
+    R@ _DBAV.CAP @ 2 * MAX                     ( cap' )
+    DUP ALLOCATE IF 2DROP R> DROP 0 EXIT THEN  ( cap' new )
+    R@ _DBAV.TEXT @ ?DUP IF
+        OVER R@ _DBAV.LEN @ MOVE R@ _DBAV.TEXT @ FREE
+    THEN
+    R@ _DBAV.TEXT ! R> _DBAV.CAP ! -1 ;
+
+\ The end of the detail so far.
+: _DBAV-END  ( view -- address ) DUP _DBAV.TEXT @ SWAP _DBAV.LEN @ + ;
+
+\ Appends text to the detail; without memory for it, the detail stops.
 : _DBAV-ADD$  ( address length view -- )
-    >R _DBAV-DETAIL-MAX R@ _DBAV.LEN @ - MIN 0 MAX
-    TUCK R@ _DBAV.TEXT R@ _DBAV.LEN @ + SWAP MOVE
+    >R DUP R@ _DBAV-ROOM-TEXT 0= IF 2DROP R> DROP EXIT THEN
+    TUCK R@ _DBAV-END SWAP MOVE
     R> _DBAV.LEN +! ;
 
 : _DBAV-CHAR  ( char view -- )
-    DUP _DBAV.LEN @ _DBAV-DETAIL-MAX < 0= IF 2DROP EXIT THEN
-    TUCK DUP _DBAV.TEXT SWAP _DBAV.LEN @ + C!
+    1 OVER _DBAV-ROOM-TEXT 0= IF 2DROP EXIT THEN
+    TUCK _DBAV-END C!
     1 SWAP _DBAV.LEN +! ;
 
 : _DBAV-2D  ( n view -- )
@@ -341,8 +371,8 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     >R
     DBAS-S.ZONE DBAS-FIELD$ R@ _DBAV.ZONE TZ-PARSE IF DROP R> DROP EXIT THEN
     R@ _DBAV.ZONE TZ-UTC>LOCAL IF DROP R> DROP EXIT THEN
-    DUP R@ _DBAV.TEXT R@ _DBAV.LEN @ +
-        _DBAV-DETAIL-MAX R@ _DBAV.LEN @ - DT-DATE-S
+    10 R@ _DBAV-ROOM-TEXT 0= IF DROP R> DROP EXIT THEN
+    DUP R@ _DBAV-END 10 DT-DATE-S
     IF 2DROP R> DROP EXIT THEN
     R@ _DBAV.LEN +!
     BL R@ _DBAV-CHAR
@@ -350,8 +380,22 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     [CHAR] : R@ _DBAV-CHAR
     60 MOD R> _DBAV-2D ;
 
-: _DBAV-REMINDER$  ( position view -- )
+\ Whether SCHEDULE runs the Agent.
+: _DBAV-AGENT?  ( schedule -- flag ) DBAS-S.ACTION @ DBAS-ACTION-AGENT = ;
+
+\ Whether the Agent run SCHEDULE has been approved.
+: _DBAV-APPROVED?  ( schedule view -- flag )
+    SWAP DBAS-S.RID SWAP _DBAV-OWNER DBAO-ACTION
+    ?DUP IF DBAS-A.AUTHORIZED @ 0<> ELSE 0 THEN ;
+
+\ A schedule's detail: an Agent run says so, and whether it is approved;
+\ then when it fires next, or that it is paused, done or archived.
+: _DBAV-SCHEDULE$  ( position view -- )
     TUCK _DBAV-STORE DBAS-SCHEDULE             ( view schedule )
+    DUP _DBAV-AGENT? IF
+        S" Agent run, " 3 PICK _DBAV-ADD$
+        DUP 2 PICK _DBAV-APPROVED? 0= IF S" not approved, " 3 PICK _DBAV-ADD$ THEN
+    THEN
     DUP DBAS-S.ARCHIVED @ IF DROP S" archived" ROT _DBAV-ADD$ EXIT THEN
     DUP DBAS-S.STATE @ CASE
         DBAS-ENABLED OF
@@ -363,32 +407,57 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     ENDCASE
     2DROP ;
 
-: _DBAV-FIRING$  ( position view -- )
+\ "missed ", or for more than one "missed N, last ".
+: _DBAV-MISSED$  ( item view -- )
+    >R S" missed" R@ _DBAV-ADD$
+    DBAS-O.COUNT @ DUP 1 > IF
+        BL R@ _DBAV-CHAR NUM>STR R@ _DBAV-ADD$ S" , last" R@ _DBAV-ADD$
+    ELSE
+        DROP
+    THEN
+    BL R> _DBAV-CHAR ;
+
+\ How an Agent run stands: waiting, running, or how it ended, and why.
+: _DBAV-RUN$  ( item view -- )
+    >R DUP DBAS-O.STATE @ DBAS-IN-FLIGHT = IF
+        DBAS-O.PHASE @ DBAS-RUNNING = IF S" running" ELSE S" waiting" THEN
+        R@ _DBAV-ADD$
+    ELSE
+        DUP DBAS-O.OUTCOME @ SACT-OUTCOME$ R@ _DBAV-ADD$
+        DBAS-O.REASON @ SACT-REASON$ DUP IF
+            S" : " R@ _DBAV-ADD$ R@ _DBAV-ADD$
+        ELSE
+            2DROP
+        THEN
+    THEN
+    S" , " R> _DBAV-ADD$ ;
+
+\ An item's detail: how a reminder fired or how an Agent run stands, and
+\ when it was due.
+: _DBAV-ITEM$  ( position view -- )
     TUCK _DBAV-STORE DBAS-OCCURRENCE           ( view item )
     DUP DBAS-O.KIND @ DBAS-MISSED = IF
-        S" missed" 3 PICK _DBAV-ADD$
-        DUP DBAS-O.COUNT @ 1 > IF
-            BL 2 PICK _DBAV-CHAR
-            DUP DBAS-O.COUNT @ NUM>STR 3 PICK _DBAV-ADD$
-            S" , last" 3 PICK _DBAV-ADD$
-        THEN
+        DUP 2 PICK _DBAV-MISSED$
     ELSE
-        S" fired" 3 PICK _DBAV-ADD$
+        DUP DBAS-O.ACTION @ DBAS-ACTION-AGENT = IF
+            DUP 2 PICK _DBAV-RUN$
+        ELSE
+            S" fired " 3 PICK _DBAV-ADD$
+        THEN
     THEN
-    BL 2 PICK _DBAV-CHAR
     DUP DBAS-O.LAST-UTC @                      ( view item utc )
     OVER DBAS-O.RID 3 PICK _DBAV-OWNER DBAO-FIND
     ?DUP IF 3 PICK _DBAV-WHEN ELSE DROP THEN
     2DROP ;
 
-\ The detail of row INDEX: when a reminder fires next, or how a firing
-\ went.  The text stays put until the next call.
+\ The detail of row INDEX: when a schedule fires next, or how a firing
+\ or a run went.  The text stays put until the next call.
 : DBAV-DETAIL  ( index view -- address length )
     0 OVER _DBAV.LEN !
     TUCK DBAV-ROW                              ( view kind position )
     OVER DBAV-HEADING = IF 2DROP DROP 0 0 EXIT THEN
-    SWAP DBAV-FIRING = IF OVER _DBAV-FIRING$ ELSE OVER _DBAV-REMINDER$ THEN
-    DUP _DBAV.TEXT SWAP _DBAV.LEN @ ;
+    SWAP DBAV-ITEM = IF OVER _DBAV-ITEM$ ELSE OVER _DBAV-SCHEDULE$ THEN
+    DUP _DBAV.TEXT @ SWAP _DBAV.LEN @ ;
 
 \ Why the view shows no reminders, or that they wait, or nothing.
 : DBAV-NOTE  ( view -- address length )
@@ -419,31 +488,49 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
 : _DBAV-INDEX?  ( index view -- flag )
     DBAV-COUNT@ 0 SWAP WITHIN ;
 
-\ Whether row INDEX shows a reminder.
-: DBAV-REMINDER?  ( index view -- flag )
+\ Whether row INDEX shows a schedule.
+: DBAV-SCHEDULE?  ( index view -- flag )
     2DUP _DBAV-INDEX? 0= IF 2DROP 0 EXIT THEN
-    DBAV-ROW DROP DBAV-REMINDER = ;
+    DBAV-ROW DROP DBAV-SCHEDULE = ;
 
-\ The reminder row INDEX shows, while the rows are current.
-: _DBAV-REMINDER  ( index view -- schedule status )
+\ Whether row INDEX shows a schedule that runs the Agent.
+: DBAV-AGENT?  ( index view -- flag )
+    2DUP DBAV-SCHEDULE? 0= IF 2DROP 0 EXIT THEN
+    TUCK DBAV-ROW NIP SWAP _DBAV-STORE DBAS-SCHEDULE _DBAV-AGENT? ;
+
+\ The schedule row INDEX shows, while the rows are current.
+: _DBAV-SCHEDULE  ( index view -- schedule status )
     DUP DBAV-STALE? IF 2DROP 0 DBAV-S-CHANGED EXIT THEN
     2DUP _DBAV-INDEX? 0= IF 2DROP 0 DBAV-S-NONE EXIT THEN
-    TUCK DBAV-ROW SWAP DBAV-REMINDER <> IF 2DROP 0 DBAV-S-NONE EXIT THEN
+    TUCK DBAV-ROW SWAP DBAV-SCHEDULE <> IF 2DROP 0 DBAV-S-NONE EXIT THEN
     SWAP _DBAV-STORE DBAS-SCHEDULE DBAO-S-OK ;
 
-\ Marks the firing row INDEX shows reviewed.
+\ The item row INDEX shows, while the rows are current.
+: _DBAV-ITEM  ( index view -- item status )
+    DUP DBAV-STALE? IF 2DROP 0 DBAV-S-CHANGED EXIT THEN
+    2DUP _DBAV-INDEX? 0= IF 2DROP 0 DBAV-S-NONE EXIT THEN
+    TUCK DBAV-ROW SWAP DBAV-ITEM <> IF 2DROP 0 DBAV-S-NONE EXIT THEN
+    SWAP _DBAV-STORE DBAS-OCCURRENCE DBAO-S-OK ;
+
+\ Whether row INDEX shows an Agent run in flight.
+: DBAV-IN-FLIGHT?  ( index view -- flag )
+    2DUP _DBAV-INDEX? 0= IF 2DROP 0 EXIT THEN
+    TUCK DBAV-ROW SWAP DBAV-ITEM <> IF 2DROP 0 EXIT THEN
+    SWAP _DBAV-STORE DBAS-OCCURRENCE DBAS-O.STATE @ DBAS-IN-FLIGHT = ;
+
+\ Marks the item row INDEX shows reviewed.
 : DBAV-REVIEW  ( index view -- status )
     DUP DBAV-STALE? IF 2DROP DBAV-S-CHANGED EXIT THEN
     2DUP _DBAV-INDEX? 0= IF 2DROP DBAV-S-NONE EXIT THEN
-    TUCK DBAV-ROW SWAP DBAV-FIRING <> IF 2DROP DBAV-S-NONE EXIT THEN
+    TUCK DBAV-ROW SWAP DBAV-ITEM <> IF 2DROP DBAV-S-NONE EXIT THEN
     OVER _DBAV-STORE DBAS-OCCURRENCE           ( view item )
     DUP DBAS-O.ID @ SWAP DBAS-O.LAST @ DBSVC-NOW 3 PICK _DBAV-OWNER
         DBAO-REVIEW
     NIP ;
 
-\ Pauses an enabled reminder or resumes a paused one.
+\ Pauses an enabled schedule or resumes a paused one.
 : DBAV-PAUSE  ( index view -- status )
-    TUCK _DBAV-REMINDER ?DUP IF NIP NIP EXIT THEN   ( view schedule )
+    TUCK _DBAV-SCHEDULE ?DUP IF NIP NIP EXIT THEN   ( view schedule )
     DUP DBAS-S.STATE @ CASE
         DBAS-ENABLED OF
             DUP DUP DBAS-S.REVISION @ DBSVC-NOW 4 PICK _DBAV-OWNER DBAO-PAUSE
@@ -455,18 +542,54 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     ENDCASE
     NIP NIP ;
 
-\ Archives a reminder, or brings an archived one back.
+\ Archives a schedule, or brings an archived one back.
 : DBAV-ARCHIVE  ( index view -- status )
-    TUCK _DBAV-REMINDER ?DUP IF NIP NIP EXIT THEN
+    TUCK _DBAV-SCHEDULE ?DUP IF NIP NIP EXIT THEN
     DUP DUP DBAS-S.REVISION @ DBSVC-NOW 4 PICK _DBAV-OWNER
     3 PICK DBAS-S.ARCHIVED @ IF DBAO-UNARCHIVE ELSE DBAO-ARCHIVE THEN
     NIP NIP ;
 
-\ Deletes a reminder.
+\ Deletes a schedule.  An Agent run's items become short records.
 : DBAV-DELETE  ( index view -- status )
-    TUCK _DBAV-REMINDER ?DUP IF NIP NIP EXIT THEN
+    TUCK _DBAV-SCHEDULE ?DUP IF NIP NIP EXIT THEN
     DUP DUP DBAS-S.REVISION @ DBSVC-NOW 4 PICK _DBAV-OWNER DBAO-DELETE
     NIP NIP ;
+
+\ The Agent run row INDEX shows, while the rows are current.
+: _DBAV-AGENT  ( index view -- schedule status )
+    _DBAV-SCHEDULE ?DUP IF EXIT THEN
+    DUP _DBAV-AGENT? 0= IF DROP 0 DBAV-S-NONE EXIT THEN
+    DBAO-S-OK ;
+
+\ Runs the Agent run row INDEX shows now, by hand, through Desk.
+: DBAV-RUN-NOW  ( index view -- status )
+    TUCK _DBAV-AGENT ?DUP IF NIP NIP EXIT THEN      ( view schedule )
+    DUP DBAS-S.RID SWAP DBAS-S.REVISION @ ROT _DBAV.SERVICE @ DBSVC-RUN-NOW NIP ;
+
+\ Asks Desk's user to approve the Agent run row INDEX shows, at the
+\ revision it shows.
+: DBAV-ASK  ( index view -- status )
+    TUCK _DBAV-AGENT ?DUP IF NIP NIP EXIT THEN
+    DUP DBAS-S.RID SWAP DBAS-S.REVISION @ ROT _DBAV.SERVICE @ DBSVC-ASK ;
+
+\ Cancels the Agent run in flight row INDEX shows.
+: DBAV-CANCEL  ( index view -- status )
+    TUCK _DBAV-ITEM ?DUP IF NIP NIP EXIT THEN       ( view item )
+    DUP DBAS-O.STATE @ DBAS-IN-FLIGHT <> IF 2DROP DBAV-S-NONE EXIT THEN
+    DBAS-O.ID @ SWAP _DBAV.SERVICE @ DBSVC-CANCEL ;
+
+\ Where the approval asked for last stands, for the status line, or 0 0
+\ when none was asked for.
+: DBAV-ASK-NOTE  ( view -- address length )
+    _DBAV.SERVICE @ ?DUP 0= IF 0 0 EXIT THEN
+    DBSVC-ASK-STATE@ CASE
+        DBSVC-ASK-PENDING OF S" Waiting for approval in Desk" ENDOF
+        DBSVC-ASK-ALLOWED OF S" Approved" ENDOF
+        DBSVC-ASK-REFUSED OF S" Not approved: refused in Desk" ENDOF
+        DBSVC-ASK-GONE OF S" Not approved: the request was withdrawn" ENDOF
+        DBSVC-ASK-FAILED OF S" Approved, but it changed meanwhile; ask again" ENDOF
+        >R 0 0 R>
+    ENDCASE ;
 
 \ =====================================================================
 \  Creating
@@ -536,23 +659,19 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
     R> _DBAV.DRAFT DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
     DBAO-S-OK ;
 
-\ An answer lowercased into the detail scratch, which it may fill.
-: _DBAV-LOWER  ( address length view -- address' length' )
-    _DBAV.TEXT SWAP _DBAV-DETAIL-MAX MIN 0 MAX     ( address text n )
-    DUP >R 0 ?DO
-        OVER I + C@ DUP [CHAR] A [CHAR] Z 1+ WITHIN IF 32 OR THEN
-        OVER I + C!
-    LOOP
-    NIP R> ;
-
+\ Whether an answer is WORD, whatever its case; WORD is lowercase.
 : _DBAV-IS?  ( address length word-a word-u -- address length flag )
-    2OVER COMPARE 0= ;
+    2 PICK OVER <> IF 2DROP 0 EXIT THEN
+    0 ?DO                                      ( address length word-a )
+        2 PICK I + C@ DUP [CHAR] A [CHAR] Z 1+ WITHIN IF 32 OR THEN
+        OVER I + C@ <> IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
 
 \ The second step: once (or nothing), daily, weekdays (Monday to
 \ Friday), weekly, monthly or yearly, every one from the start.
 : DBAV-REPEAT!  ( address length view -- status )
-    DUP >R _DBAV-LOWER
-    R> _DBAV.DRAFT DBAO-D.RULE >R              ( address length ; R: rule )
+    _DBAV.DRAFT DBAO-D.RULE >R                 ( address length ; R: rule )
     1 R@ DBREC.INTERVAL ! DBREC-END-NEVER R@ DBREC.END !
     0 R@ DBREC.WEEKDAYS ! 0 R@ DBREC.MONTH-MODE !
     0 R@ DBREC.MONTH-DAY ! 0 R@ DBREC.MONTH-WEEKDAY !
@@ -616,6 +735,12 @@ _DBAV-DRAFT DBAO-DRAFT-SIZE + 7 + -8 AND CONSTANT DBAV-SIZE
         DBAO-S-DELETED OF S" That automation was deleted" ENDOF
         DBAO-S-BLOCKED OF S" Automations are unavailable" ENDOF
         DBAO-S-IO OF S" Could not save automations" ENDOF
+        DBAO-S-BUSY OF S" A run of it is already in progress" ENDOF
+        DBAO-S-REVIEW OF S" Review its last run first" ENDOF
+        DBAO-S-APPROVAL OF S" It is not approved yet; Y asks Desk" ENDOF
+        DBAO-S-NOT-FOUND OF S" That run is over" ENDOF
+        DBSVC-S-UNAVAILABLE OF S" Desk's scheduler is unavailable" ENDOF
+        DBSVC-S-PENDING OF S" An approval is already being asked for" ENDOF
         DBAV-S-NONE OF S" Nothing to do for that row" ENDOF
         S" The automation could not be changed" ROT
     ENDCASE ;

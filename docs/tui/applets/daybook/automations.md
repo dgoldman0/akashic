@@ -10,12 +10,10 @@ zone, once or repeating, and does one action from the
 Schedules fire inside Desk whether or not Daybook is open, survive
 restarts, and say so when they were missed.
 
-The Agent run is being built in steps. Today the store, the owner and the
-service carry it whole, and the service hands runs to a broker through the
-dispatch client. Desk's [broker](../desk/schedule-broker.md) exists, but
-Desk does not open it or give its client to the service yet. Until it does,
-a due Agent run ends at once for review, blocked as the Agent being
-unavailable.
+Desk opens its [broker](../desk/schedule-broker.md) and gives the
+service its client, so a due Agent run reaches the Agent while Daybook and
+the Agent are closed. Daybook's automations view shows Agent runs, and runs,
+approves and cancels them. Making one in Daybook is the next step.
 
 ## Layers
 
@@ -33,8 +31,9 @@ is trusted only while `EPOCH-VALID?` says it is set, and intervals use
 uptime (`MS@`), so setting the clock never breaks a timer.
 
 Desk opens the service, ticks it and shows its notices (see
-[Desk](../desk/desk.md)). Daybook shows the reminders, and makes and changes
-them, in its automations view (see [Daybook](daybook.md)). The service and
+[Desk](../desk/desk.md)). Daybook's automations view shows the schedules and
+their items, makes and changes reminders, and runs, approves and cancels
+Agent runs (see [Daybook](daybook.md)). The service and
 the owner never import Desk or Agent code: an Agent run reaches Desk only
 through the portable [dispatch contract](../../../interop/scheduled-actions.md).
 
@@ -204,7 +203,24 @@ broker behind the client and follows due runs through its answers:
 
 Disabling any one of 37 guarded dispatch behaviors makes a check fail.
 
-They also check:
+`local_testing/test_daybook_automation_view.py` and
+`test_daybook_automation_view_runs.py` check the automations view, the
+second over the same fake broker:
+- its sections, and each row's detail, for reminders and for Agent runs
+  approved or not, waiting, running, and ended for review;
+- Run Now, asking for approval and where it stands, and cancelling, with
+  their refusals and messages;
+- rows from before the store changed, which take no action;
+- a deleted schedule's short records, which no section shows;
+- details that grow to what they say, give their memory back, and stop at
+  what fitted when memory runs out.
+
+Disabling any one of 35 guarded view behaviors makes a check fail, except
+one: the approval note's guard for a view with no service. Without it the
+note reads the service's fields from address zero, which the simulator's
+memory holds as zero, so the note is the same.
+
+The service checks also cover:
 - that an idle tick writes nothing and costs the same with 1 or 49
   reminders;
 - that 49 reminders due in one look all fire, across several pages;

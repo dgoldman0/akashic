@@ -169,8 +169,8 @@ _DB-CURRENT-STATE 16 CMP-FIELD: _DB-DATE-BUF
 _DB-CURRENT-STATE 96 CMP-FIELD: _DB-STATUS-BUF
 _DB-CURRENT-STATE CMP-CELL: _DB-STATUS-U
 
-\ The body shows the calendar or, inside Desk, the reminders.  The view
-\ borrows the reminder service Desk lends.
+\ The body shows the calendar or, inside Desk, the automations.  The view
+\ borrows the automation service Desk lends.
 _DB-CURRENT-STATE CMP-CELL: _DB-AUTOMATIONS-SHOWN
 _DB-CURRENT-STATE DBAV-SIZE CMP-FIELD: _DB-AV
 _DB-CURRENT-STATE CMP-CELL: _DB-AV-LIST
@@ -180,6 +180,8 @@ _DB-CURRENT-STATE LST-COLUMN-SIZE 2 * CMP-FIELD: _DB-AV-COLUMNS
 _DB-CURRENT-STATE CMP-CELL: _DB-AV-KEYSEL
 \ The row a delete prompt names.
 _DB-CURRENT-STATE CMP-CELL: _DB-AV-DOOMED
+\ The approval note the status line shows, to see it change.
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-ASK-SHOWN
 \ The zone prompt's label, which names the default zone and stays put
 \ while the prompt shows.
 _DB-CURRENT-STATE 32 TZ-STRING-MAX + CMP-FIELD: _DB-RN-LABEL
@@ -732,13 +734,15 @@ VARIABLE _DB-ST-N
     _DB-ST-A @ _DB-STATUS-BUF _DB-STATUS-U @ + _DB-ST-N @ CMOVE
     _DB-ST-N @ _DB-STATUS-U +! ;
 
-\ The status bar while the reminders show: their note, or how to work
-\ them.
+\ The status bar while the automations show: their note, where an
+\ approval asked for stands, or how to work them.
 : _DB-AV-STATUS  ( -- )
+    _DB-AV DBAV-ASK-NOTE DROP _DB-AV-ASK-SHOWN !
     _DB-E-SBAR-DATE @ ?DUP IF S" text" S" Automations" UTUI-SET-ATTR THEN
     _DB-E-SBAR-STATE @ ?DUP IF
-        S" text" _DB-AV DBAV-NOTE DUP 0= IF
-            2DROP S" P pause  A archive  H archived  Del delete  Esc calendar"
+        S" text" _DB-AV DBAV-NOTE DUP 0= IF 2DROP _DB-AV DBAV-ASK-NOTE THEN
+        DUP 0= IF
+            2DROP S" R run  Y approve  X cancel  P pause  A archive  Esc calendar"
         THEN UTUI-SET-ATTR
     THEN ;
 
@@ -1191,6 +1195,12 @@ CREATE _DB-TIME-BUF 5 ALLOT
     _DB-AV-LIST @ ?DUP IF LST-SELECTED ELSE -1 THEN ;
 
 : _DB-AV-REVIEW  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-REVIEW _DB-AV-DONE ;
+: _DB-AV-RUN-NOW  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-RUN-NOW _DB-AV-DONE ;
+: _DB-AV-CANCEL  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-CANCEL _DB-AV-DONE ;
+\ Asks Desk's user to approve the selected Agent run; the status line
+\ then says where that stands.
+: _DB-AV-ASK  ( -- )
+    _DB-AV-SELECTION _DB-AV DBAV-ASK _DB-AV-DONE _DB-UPDATE-STATUS ;
 : _DB-AV-PAUSE  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-PAUSE _DB-AV-DONE ;
 : _DB-AV-ARCHIVE  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-ARCHIVE _DB-AV-DONE ;
 
@@ -1204,7 +1214,7 @@ CREATE _DB-TIME-BUF 5 ALLOT
 \ Opening a firing marks it reviewed; opening a reminder does nothing.
 : _DB-AV-OPENED  ( index widget -- )
     LST-CONTEXT@ _DB-ACTIVATE
-    DUP _DB-AV DBAV-ROW DROP DBAV-FIRING <> IF DROP EXIT THEN
+    DUP _DB-AV DBAV-ROW DROP DBAV-ITEM <> IF DROP EXIT THEN
     _DB-AV DBAV-REVIEW _DB-AV-DONE ;
 
 DEFER _DB-AV-ASK-DELETE-D
@@ -1225,9 +1235,10 @@ DEFER _DB-AV-ASK-DELETE-D
     DUP RGN-ROW ROT SWAP - SWAP RGN-H U<
     R> AND ;
 
-\ Keys in the reminders: the list moves and opens; P pauses or resumes, A
-\ archives or brings back, H shows or hides archived ones, Delete asks to
-\ delete, and Escape goes back to the calendar.
+\ Keys in the automations: the list moves and opens; P pauses or resumes,
+\ A archives or brings back, H shows or hides archived ones, Delete asks
+\ to delete, R runs an Agent run now, Y asks Desk to approve it, X
+\ cancels its run in progress, and Escape goes back to the calendar.
 : _DB-AV-HANDLE  ( event -- consumed? )
     _DB-AV-LIST @ 0= IF DROP 0 EXIT THEN
     DUP @ KEY-T-MOUSE = IF
@@ -1245,6 +1256,9 @@ DEFER _DB-AV-ASK-DELETE-D
                 [CHAR] p OF _DB-AV-PAUSE -1 EXIT ENDOF
                 [CHAR] a OF _DB-AV-ARCHIVE -1 EXIT ENDOF
                 [CHAR] h OF _DB-AV-TOGGLE-ARCHIVED -1 EXIT ENDOF
+                [CHAR] r OF _DB-AV-RUN-NOW -1 EXIT ENDOF
+                [CHAR] y OF _DB-AV-ASK -1 EXIT ENDOF
+                [CHAR] x OF _DB-AV-CANCEL -1 EXIT ENDOF
                 BL OF _DB-AV-REVIEW -1 EXIT ENDOF
             ENDCASE
             0 EXIT
@@ -1419,7 +1433,7 @@ VARIABLE _DB-SHOW-LU
 \ while the prompt shows; if the reminders change meanwhile, the delete
 \ does nothing and says so.
 : _DB-AV-ASK-DELETE  ( -- )
-    _DB-AV-SELECTION DUP _DB-AV DBAV-REMINDER? 0= IF
+    _DB-AV-SELECTION DUP _DB-AV DBAV-SCHEDULE? 0= IF
         DROP S" Select an automation to delete" 2000 ASHELL-TOAST EXIT
     THEN
     _DB-AV-DOOMED !
@@ -1688,6 +1702,9 @@ VARIABLE _DB-SUB-MINUTE
 : _DB-AV-MENU  ( xt -- )
     _DB-AUTOMATIONS-SHOWN @ IF EXECUTE ELSE DROP _DB-SHOW-AUTOMATIONS THEN ;
 : _DB-DO-AV-REVIEW  ( elem -- ) DROP ['] _DB-AV-REVIEW _DB-AV-MENU ;
+: _DB-DO-AV-RUN  ( elem -- ) DROP ['] _DB-AV-RUN-NOW _DB-AV-MENU ;
+: _DB-DO-AV-ASK  ( elem -- ) DROP ['] _DB-AV-ASK _DB-AV-MENU ;
+: _DB-DO-AV-CANCEL  ( elem -- ) DROP ['] _DB-AV-CANCEL _DB-AV-MENU ;
 : _DB-DO-AV-PAUSE  ( elem -- ) DROP ['] _DB-AV-PAUSE _DB-AV-MENU ;
 : _DB-DO-AV-ARCHIVE  ( elem -- ) DROP ['] _DB-AV-ARCHIVE _DB-AV-MENU ;
 : _DB-DO-AV-DELETE  ( elem -- ) DROP ['] _DB-AV-ASK-DELETE _DB-AV-MENU ;
@@ -1831,6 +1848,9 @@ VARIABLE _DB-SOURCE-VALUE
     S" reveal-source" ['] _DB-DO-REVEAL-SOURCE UTUI-DO!
     S" automations" ['] _DB-DO-AUTOMATIONS UTUI-DO!
     S" automation-review" ['] _DB-DO-AV-REVIEW UTUI-DO!
+    S" automation-run" ['] _DB-DO-AV-RUN UTUI-DO!
+    S" automation-ask" ['] _DB-DO-AV-ASK UTUI-DO!
+    S" automation-cancel" ['] _DB-DO-AV-CANCEL UTUI-DO!
     S" automation-pause" ['] _DB-DO-AV-PAUSE UTUI-DO!
     S" automation-archive" ['] _DB-DO-AV-ARCHIVE UTUI-DO!
     S" automation-delete" ['] _DB-DO-AV-DELETE UTUI-DO!
@@ -1861,9 +1881,11 @@ VARIABLE _DB-SOURCE-VALUE
 : DAYBOOK-TICK-CB  ( instance -- )
     _DB-ACTIVATE
     _DB-REFRESH-TODAY IF -1 _DB-VIEW-DIRTY ! THEN
-    \ Reminders fire in Desk's tick; show what changed.
+    \ Automations fire, and approvals are answered, in Desk's tick; show
+    \ what changed.
     _DB-AUTOMATIONS-SHOWN @ IF
         _DB-AV DBAV-STALE? IF _DB-AV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS THEN
+        _DB-AV DBAV-ASK-NOTE DROP _DB-AV-ASK-SHOWN @ <> IF _DB-UPDATE-STATUS THEN
     THEN
     _DB-VIEW-DIRTY @ IF
         0 _DB-VIEW-DIRTY !
