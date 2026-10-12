@@ -10,7 +10,7 @@ REQUIRE pdf/document.f
 
 `PROVIDED akashic-pdf-document`. It depends on `pdf/filter.f`,
 `pdf/file.f`, `pdf/page.f`, `pdf/font.f`, `pdf/content.f`, `pdf/struct.f`,
-`pdf/navigate.f`, `pdf/layout.f`, `pdf/image.f`, `media/document.f`,
+`pdf/navigate.f`, `pdf/labels.f`, `pdf/layout.f`, `pdf/image.f`, `media/document.f`,
 `media/picture.f`, `text/text-style.f` and `utils/string.f`.
 
 ## Public API
@@ -32,7 +32,8 @@ A view reads a page when it nears it. Reading a page reads its content
 (`pdf/content.f`), its structure when it is tagged (`pdf/struct.f`), and lays
 it out (`pdf/layout.f`). The page then gives:
 
-- its start, a `DOC-B-PAGE` block whose text is the page's number from 1;
+- its start, a `DOC-B-PAGE` block whose text is the page's label
+  ([pdf/labels.f](labels.md)), such as `iv`, or its number from 1;
 - each block the layout gives, in reading order: a paragraph, heading or
   code block, in its list item or quote when it has one, or a figure.
 
@@ -79,7 +80,8 @@ The document's contents (`DOC-CONTENTS`) are the file's outline
 where it goes as a link would: a destination resolved only when it is
 chosen, or an address. An item that goes nowhere only heads the items
 under it. A file without an outline has its pages as contents, each "Page"
-and its number, going to that page (`#p` and its index). Making the
+and its label, going to that page (`#p` and its index). The labels are read
+once, when the document opens. Making the
 contents reads the outline and no page.
 
 ## Pictures

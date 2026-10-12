@@ -426,3 +426,54 @@ def test_a_pdf_outline_is_its_contents(reader, tmp_path):
                                  (0, "Détails", 1), (1, "More", 1), (0, "End", 2)]
     assert reader.call("PD-COUNT") == (0,)
     assert reader.close() == 0
+
+
+# --------------------------------------------------------------------------
+# Page labels
+# --------------------------------------------------------------------------
+
+def _labelled(labels: bytes, extra: dict[int, bytes] | None = None) -> bytes:
+    """The four pages of pages_pdf, with a catalog that gives page labels."""
+
+    import re as _re
+    pdf = pages_pdf()
+    objects = {}
+    for match in _re.finditer(rb"(\d+) 0 obj\n(.*?)\nendobj\n", pdf, _re.S):
+        objects[int(match.group(1))] = match.group(2)
+    objects[1] = b"<< /Type /Catalog /Pages 2 0 R /PageLabels " + labels + b" >>"
+    objects.update(extra or {})
+    return write_pdf(objects)
+
+
+def _page_labels(reader: Reader, pdf: bytes) -> tuple[list[bytes], list[str]]:
+    """The labels each page's start shows, and the page list's titles."""
+
+    assert reader.open(pdf) == OK
+    contents = [title for _, title, _ in _contents(reader)]
+    for part in range(reader.call("PD-PARTS")[0]):
+        assert reader.read(part) == OK
+    starts = [b["text"] for b in reader.blocks() if b["kind"] == PAGE]
+    assert reader.close() == 0
+    return starts, contents
+
+
+@pytest.mark.parametrize(("labels", "extra", "expected"), (
+    (b"<< /Nums [0 << /S /r >> 2 << /S /D >> 3 << /P (A-) /S /D /St 3 >> ] >>", None,
+     ["i", "ii", "1", "A-3"]),
+    (b"<< /Nums [0 << /S /R /St 1994 >> 1 << /S /a /St 27 >> 2 << /P (Cover) >> "
+     b"3 << /S /A /St 53 >> ] >>", None, ["MCMXCIV", "aa", "Cover", "AAA"]),
+    (b"40 0 R", {40: b"<< /Kids [41 0 R 42 0 R] >>",
+                 41: b"<< /Limits [0 1] /Nums [0 << /S /A >>] >>",
+                 42: b"<< /Limits [2 3] /Nums [2 << /S /r /St 4 >>] >>"},
+     ["A", "B", "iv", "v"]),
+    (b"<< /Nums [1 << /S /D /St 10 >>] >>", None, ["1", "10", "11", "12"]),
+))
+def test_pages_show_the_labels_the_file_gives(reader, labels, extra, expected):
+    """A page's start, and its entry in a file's page list, show the label
+    the file's /PageLabels give it: decimal, roman or letters, from the
+    range's start, after its prefix, through a tree with kids too; a page
+    before every range shows its number."""
+
+    starts, contents = _page_labels(reader, _labelled(labels, extra))
+    assert starts == [label.encode() for label in expected]
+    assert contents == [f"Page {label}" for label in expected]

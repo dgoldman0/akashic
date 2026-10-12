@@ -3,7 +3,8 @@
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: PDF-DOC- (public), _PDD- (private)
 \  Depends on: pdf/filter.f, pdf/file.f, pdf/page.f, pdf/font.f,
-\              pdf/content.f, pdf/struct.f, pdf/navigate.f, pdf/layout.f,
+\              pdf/content.f, pdf/struct.f, pdf/navigate.f, pdf/labels.f,
+\              pdf/layout.f,
 \              pdf/image.f,
 \              media/document.f, media/picture.f, text/text-style.f,
 \              utils/string.f
@@ -17,7 +18,9 @@
 \  page's content is read (pdf/content.f), with its structure when it is
 \  tagged (pdf/struct.f), and laid out (pdf/layout.f).  The page gives a
 \  page's start, labelled with its number from 1, then its blocks:
-\  paragraphs, headings, code, list items, quotes and figures.  A page
+\  paragraphs, headings, code, list items, quotes and figures.  A page's
+\  label is the one the file gives it (pdf/labels.f), such as iv, or its
+\  number from 1.  A page
 \  that cannot be opened gives its start and a paragraph saying so; one
 \  whose content is damaged gives the blocks of what could be read.
 \
@@ -36,7 +39,7 @@
 \
 \  Its contents are its outline, each item at its level, going where it
 \  goes as a link would; a file without an outline has its pages, each
-\  "Page" and its number, going to it ("#p" and its index).
+\  "Page" and its label, going to it ("#p" and its index).
 \
 \  A blank row lies before each block but the first page's start, and
 \  none between two list items; a blank row between two quoted blocks
@@ -58,6 +61,7 @@ REQUIRE font.f
 REQUIRE content.f
 REQUIRE struct.f
 REQUIRE navigate.f
+REQUIRE labels.f
 REQUIRE layout.f
 REQUIRE image.f
 REQUIRE ../media/document.f
@@ -75,7 +79,9 @@ _PDD-O-PAGE    PDF-PAGE-SIZE +      CONSTANT _PDD-O-CONTENT
 _PDD-O-CONTENT PDF-CONTENT-SIZE +   CONSTANT _PDD-O-STRUCT
 _PDD-O-STRUCT  PDF-STRUCT-SIZE +    CONSTANT _PDD-O-LINKS
 _PDD-O-LINKS   PDF-LINKS-SIZE +     CONSTANT _PDD-O-LAYOUT
-_PDD-O-LAYOUT  PDF-LAYOUT-SIZE +    CONSTANT _PDD-O-SLOTS
+_PDD-O-LAYOUT  PDF-LAYOUT-SIZE +    CONSTANT _PDD-O-LABELS
+_PDD-O-LABELS  PDF-LABELS-SIZE +    CONSTANT _PDD-O-LBUF
+_PDD-O-LBUF    PDF-BUF-SIZE +       CONSTANT _PDD-O-SLOTS
 _PDD-O-SLOTS   8 +                  CONSTANT _PDD-O-PAGES
 _PDD-O-PAGES   8 +                  CONSTANT _PDD-SIZE
 
@@ -102,6 +108,13 @@ VARIABLE _PDD-S       \ its state
 : _PDD-STRUCT   ( -- struct )   _PDD-S @ _PDD-O-STRUCT + ;
 : _PDD-LAYOUT   ( -- layout )   _PDD-S @ _PDD-O-LAYOUT + ;
 : _PDD-LINKS    ( -- links )    _PDD-S @ _PDD-O-LINKS + ;
+: _PDD-LABELS   ( -- labels )   _PDD-S @ _PDD-O-LABELS + ;
+: _PDD-LBUF     ( -- buf )      _PDD-S @ _PDD-O-LBUF + ;
+
+\ Page I's label in the label buffer; false when memory refuses.
+: _PDD-LABEL!  ( i -- ok? )
+    0 _PDD-LBUF PDF-BUF.U !  _PDD-LABELS _PDD-LBUF PDF-LABEL ;
+: _PDD-LABEL  ( -- a u )  _PDD-LBUF DUP PDF-BUF.A @ SWAP PDF-BUF.U @ ;
 : _PDD-PAGES    ( -- n )        _PDD-S @ _PDD-O-PAGES + @ ;
 : _PDD-SLOT@    ( i -- slot )   _PDD-SLOT * _PDD-S @ _PDD-O-SLOTS + @ + ;
 
@@ -141,6 +154,7 @@ VARIABLE _PDD-S       \ its state
     ?DUP IF _PDD-STATUS EXIT THEN
     _PDD-FILE PDF-FILE-LOCKED? IF DOC-S-LOCKED EXIT THEN
     _PDD-FILE PDF-PAGE-COUNT ?DUP IF NIP _PDD-STATUS EXIT THEN
+    _PDD-FILE _PDD-LABELS PDF-LABELS-READ PDF-S-MEMORY = IF DROP DOC-S-MEMORY EXIT THEN
     0 MAX _PDD-FILE PDF-OBJECT-COUNT MIN                 ( pages )
     DUP 0= IF DROP DOC-S-OK EXIT THEN
     DUP _PDD-SLOT * DUP _PDD-ALLOC DUP 0= IF 2DROP DROP DOC-S-MEMORY EXIT THEN
@@ -158,6 +172,7 @@ VARIABLE _PDD-S       \ its state
         _PDD-S @ _PDD-O-SLOTS + @ _PDD-PAGES _PDD-SLOT * _PDD-FREE
     THEN
     _PDD-SCRATCH-FREE  _PDD-PAGE PDF-PAGE-END  _PDD-FONTS PDF-FONTS-FREE
+    _PDD-LABELS PDF-LABELS-FREE  _PDD-LBUF _PDD-D @ DOC-MSRC@ PDF-BUF-FREE
     _PDD-FILE PDF-CLOSE
     _PDD-S @ _PDD-SIZE _PDD-FREE  0 _PDD-D @ DOC-STATE! ;
 
@@ -173,8 +188,6 @@ VARIABLE _PDD-LINKED  \ its links were read
 VARIABLE _PDD-PREV    \ the container kind of the block added last
 VARIABLE _PDD-PC      \ the next place to mark
 
-CREATE _PDD-LABEL 24 ALLOT
-VARIABLE _PDD-LABEL-U
 
 : _PDD-NOTE  ( -- a u )  S" (this page could not be read)" ;
 : _PDD-BUF  ( -- a )  _PDD-SL @ _SLOT.BUF @ ;
@@ -198,7 +211,7 @@ VARIABLE _PDD-LABEL-U
 
 \ The page's text bytes: its label, then its blocks' text or the note.
 : _PDD-TEXT-BYTES  ( -- t )
-    _PDD-LABEL-U @
+    _PDD-LABEL NIP
     _PDD-LAID @ 0= IF _PDD-NOTE NIP + EXIT THEN
     _PDD-LAYOUT PDF-LAYOUT-BLOCKS 0 ?DO
         I _PDD-LAYOUT PDF-LAYOUT-BLOCK _PDD-LAYOUT PDF-BLOCK-TEXT NIP +
@@ -304,7 +317,7 @@ VARIABLE _PDA-B
 
 \ The page's blocks: its start, then what it was laid out as, or a note.
 : _PDD-BLOCKS  ( -- ok? )
-    DOC-B-PAGE 0 _PDD-LABEL _PDD-LABEL-U @ 0 _PDD-PUT _PDD-LABEL-U @
+    DOC-B-PAGE 0 _PDD-LABEL 0 _PDD-PUT _PDD-LABEL NIP
     _PDD-I @ 0<> 1 AND 0 _PDD-BLOCK 0= IF 0 EXIT THEN
     0 _PDD-PREV !  0 _PDD-PC !
     _PDD-LAID @ 0= IF
@@ -317,7 +330,7 @@ VARIABLE _PDA-B
 : _PDD-PART  ( part doc -- status )
     _PDD-USE _PDD-I !
     _PDD-I @ _PDD-SLOT@ DUP _PDD-SL ! _PDD-SLOT-FREE
-    _PDD-I @ 1+ NUM>STR DUP _PDD-LABEL-U ! _PDD-LABEL SWAP MOVE
+    _PDD-I @ _PDD-LABEL! 0= IF DOC-S-MEMORY EXIT THEN
     _PDD-LAY-OUT DUP PDF-S-MEMORY = IF DROP _PDD-SCRATCH-FREE DOC-S-MEMORY EXIT THEN
     0= _PDD-LAID !
     _PDD-TEXT-BYTES _PDD-SL @ _SLOT.T !
@@ -456,9 +469,7 @@ CREATE _PDD-OUTLINE-S PDF-OUTLINE-SIZE 7 + ALLOT
 : _PDD-OUTLINE  ( -- outline )  _PDD-OUTLINE-S 7 + -8 AND ;
 _PDD-OUTLINE PDF-OUTLINE-SIZE 0 FILL
 
-CREATE _PDD-ETEXT 32 ALLOT
 CREATE _PDD-ETARGET 32 ALLOT
-VARIABLE _PDD-EU
 VARIABLE _PDD-TG   VARIABLE _PDD-TGU   VARIABLE _PDD-TGOWN
 
 \ An outline item's target: "#", its destination's type and its value's
@@ -484,14 +495,15 @@ VARIABLE _PDD-TG   VARIABLE _PDD-TGU   VARIABLE _PDD-TGOWN
         0= IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
-\ The pages as the contents: "Page" and each one's number, going to it.
+\ The pages as the contents: "Page" and each one's label, going to it.
 : _PDD-PAGE-ENTRIES  ( -- ok? )
     35 _PDD-ETARGET C!  112 _PDD-ETARGET 1+ C!
     _PDD-PAGES 0 ?DO
-        S" Page " _PDD-ETEXT SWAP MOVE
-        I 1+ NUM>STR DUP 5 + _PDD-EU ! _PDD-ETEXT 5 + SWAP MOVE
+        0 _PDD-LBUF PDF-BUF.U !
+        S" Page " _PDD-LBUF _PDD-D @ DOC-MSRC@ PDF-BUF-APPEND 0= IF 0 UNLOOP EXIT THEN
+        I _PDD-LABELS _PDD-LBUF PDF-LABEL 0= IF 0 UNLOOP EXIT THEN
         I NUM>STR DUP 2 + _PDD-TGU ! _PDD-ETARGET 2 + SWAP MOVE
-        0 _PDD-ETEXT _PDD-EU @ 0 _PDD-ETARGET _PDD-TGU @
+        0 _PDD-LABEL 0 _PDD-ETARGET _PDD-TGU @
         _PDD-D @ DOC-ADD-ENTRY 0= IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 

@@ -1446,9 +1446,13 @@ them, a link to a far page reading that page alone.
 **Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, the
 file's side of steps 6 and 7 (pictures as files, links and the outline),
 and step 9's preview: File Explorer previews a PDF as a document, read a
-page at a time, with its pictures, links and contents. Its page labels,
-the place on a page a destination names, the contents in a rich capture,
-then the samples, measurements and AES remain.
+page at a time, with its pictures, links, contents and page labels. The
+place on a page a destination names, the contents in a rich capture, then
+the samples, measurements and AES remain.
+
+- A page's start shows the label the file gives it (`pdf/labels.f`), such
+  as iv or A-3, read once from every pair of the `/PageLabels` number tree
+  (`PDF-NUMS-EACH`), so a PDF's page list labels every page too.
 
 - A document's contents are a general element (`DOC-CONTENTS`): its
   reader's, as a PDF's outline, or else its headings of levels 1 to 3. A

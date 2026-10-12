@@ -18,6 +18,7 @@ REQUIRE pdf/tree.f
 |---|---|---|
 | `PDF-NUMS@` | `( key va vu type file -- obj va' vu' type' status )` | `key`'s value in the number tree whose root is the value `va vu`. |
 | `PDF-NAMES@` | `( ka ku va vu type file -- obj va' vu' type' status )` | The value of the key whose bytes are `ka ku` in the name tree whose root is `va vu`. |
+| `PDF-NUMS-EACH` | `( xt va vu type file -- status )` | Every pair of the number tree whose root is `va vu`: `xt ( key va vu type -- go? )` for each, until it gives false. |
 
 The result has `PDF-RESOLVE`'s shape: the object holding the value, to give
 back with `PDF-OBJ-FREE`, or 0 when the root holds it inline; the value, or
@@ -39,6 +40,14 @@ compared byte by byte.
 A node or kid that cannot be read holds no keys. The walk goes down
 through no more nodes than the file has objects, so a tree that loops
 ends.
+
+## Every pair
+
+`PDF-NUMS-EACH` visits a number tree whole, as a document's page labels
+need: a node's pairs in the order it holds them, then each of its kids,
+through no more nodes than the file has objects. A pair whose key is no
+integer ends its node's pairs. The value it gives the visitor is a span of
+a record given back once the visitor returns.
 
 ## Cost
 

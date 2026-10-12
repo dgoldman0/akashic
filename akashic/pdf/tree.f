@@ -7,6 +7,7 @@
 \  Public API:
 \   PDF-NUMS@   ( key va vu type file -- obj va' vu' type' status )
 \   PDF-NAMES@  ( ka ku va vu type file -- obj va' vu' type' status )
+\   PDF-NUMS-EACH ( xt va vu type file -- status )
 \
 \  A number tree (PDF 32000-1 section 7.9.7) maps integers to values, a
 \  name tree (7.9.6) strings to values: a structure's parent tree and a
@@ -16,7 +17,8 @@
 \  whose /Limits hold the least and greatest keys below them.  A name
 \  tree's keys are strings, compared by their bytes; KA KU is the key's
 \  bytes.  A node's pairs are searched whole, so keys out of order are
-\  still found.
+\  still found.  PDF-NUMS-EACH visits every pair of a number tree instead,
+\  a node's pairs before its kids', as a document's page labels need.
 \
 \  The result is the object holding the value, to give back with
 \  PDF-OBJ-FREE, or 0 when the root holds it inline; and the value, or
@@ -153,3 +155,56 @@ VARIABLE _PDTR-ST   VARIABLE _PDTR-SN
     _PDTR-SB PDF-BUF-SIZE 0 FILL
     R> R> R> _PDTR-WALK
     _PDTR-SB _PDTR-F @ PDF-FILE-MSRC PDF-BUF-FREE ;
+
+\ =====================================================================
+\  Every pair of a number tree
+\ =====================================================================
+
+VARIABLE _PDTR-XT
+VARIABLE _PDTR-GO      \ false once the visitor stops
+VARIABLE _PDTR-K
+
+\ The pairs of the array whose span after its "[" is A U, which OBJ
+\ holds, while the visitor goes on; OBJ is given back.
+: _PDTR-EACH-PAIRS  ( obj a u -- )
+    BEGIN
+        _PDTR-GO @ 0= IF 2DROP _PDTR-FREE EXIT THEN
+        PDF-VALUE DUP PDF-T-INT <> IF DROP 2DROP 2DROP _PDTR-FREE EXIT THEN
+        DROP PDF-INT _PDTR-K !
+        PDF-VALUE DUP PDF-T-CLOSE-ARRAY = OVER PDF-T-END = OR OVER PDF-T-BAD = OR IF
+            DROP 2DROP 2DROP _PDTR-FREE EXIT
+        THEN
+        >R >R >R _PDTR-K @ R> R> R> _PDTR-XT @ EXECUTE _PDTR-GO !
+    AGAIN ;
+
+\ The pairs of the node whose dictionary is DA DU, then its kids', in
+\ order, through no more nodes than the file has objects.
+: _PDTR-EACH  ( da du -- )
+    2DUP S" Nums" 2SWAP PDF-DICT@ PDF-T-ARRAY _PDTR-RESOLVE IF
+        PDF-TOKEN DROP 2DROP _PDTR-EACH-PAIRS
+    ELSE 2DROP DROP THEN
+    S" Kids" 2SWAP PDF-DICT@ PDF-T-ARRAY _PDTR-RESOLVE 0= IF 2DROP DROP EXIT THEN
+    PDF-TOKEN DROP 2DROP
+    BEGIN
+        _PDTR-GO @ 0= IF 2DROP _PDTR-FREE EXIT THEN
+        PDF-VALUE DUP PDF-T-REF <> IF DROP 2DROP 2DROP _PDTR-FREE EXIT THEN
+        DROP PDF-REF@ DROP
+        1 _PDTR-VISITS +!  _PDTR-VISITS @ _PDTR-F @ PDF-OBJECT-COUNT > IF
+            DROP 2DROP _PDTR-FREE EXIT
+        THEN
+        _PDTR-F @ PDF-GET ?DUP IF _PDTR-FAILED _PDTR-FREE ELSE
+            DUP PDF-OBJ-VALUE PDF-T-DICT = IF RECURSE ELSE 2DROP THEN
+            _PDTR-FREE
+        THEN
+    AGAIN ;
+
+\ PDF-NUMS-EACH ( xt va vu type file -- status )
+\   Every pair of the number tree whose root is the value VA VU: XT ( key
+\   va vu type -- go? ) for each, a node's pairs before its kids', until
+\   it gives false.  A pair whose key is no integer ends its node's pairs.
+\   The value is a span of a record given back once XT returns.
+: PDF-NUMS-EACH  ( xt va vu type file -- status )
+    _PDTR-F !  >R >R >R _PDTR-XT !  R> R> R>
+    0 _PDTR-VISITS !  PDF-S-OK _PDTR-STATUS !  -1 _PDTR-GO !
+    PDF-T-DICT _PDTR-RESOLVE 0= IF 2DROP DROP _PDTR-STATUS @ EXIT THEN
+    ROT >R _PDTR-EACH R> _PDTR-FREE _PDTR-STATUS @ ;
