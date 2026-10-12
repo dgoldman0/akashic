@@ -1028,12 +1028,15 @@ def test_authored_and_mounted_tabs_share_generic_tabset_capture():
 
 
 def _media_collection_program() -> list[str]:
-    """A <media> element is captured as the text area it shows, and only then."""
+    """A <media> element is captured as the text area or document it shows,
+    and only then."""
 
     import qoi_codec
 
     picture = qoi_codec.encode([[(8 * x, 12 * y, 7, 255) for x in range(30)] for y in range(20)])
     picture_bytes = " ".join(f"{byte} C," for byte in picture)
+    markdown = b"# Notes\n\nSome *text* here.\n\n- one\n- two\n"
+    markdown_bytes = " ".join(f"{byte} C," for byte in markdown)
     return [
         "VARIABLE _UM-FAILS", "VARIABLE _UM-CHECKS", "VARIABLE _UM-DEPTH",
         "VARIABLE _UM-RGN", "VARIABLE _UM-V",
@@ -1041,6 +1044,9 @@ def _media_collection_program() -> list[str]:
         "VARIABLE _UM-COUNT", "VARIABLE _UM-USED", "VARIABLE _UM-STATUS",
         f"CREATE _UM-QOI {picture_bytes}",
         f"{len(picture)} CONSTANT _UM-QOI-U",
+        f"CREATE _UM-MD {markdown_bytes}",
+        f"{len(markdown)} CONSTANT _UM-MD-U",
+        "VARIABLE _UM-BLOCK",
         # Compiled strings persist; an interpreted S" is overwritten by the next.
         ': _UM-NOTES S" hello media" ;',
         "CREATE _UM-BIN 0 C, 1 C, 2 C, 3 C,",
@@ -1079,6 +1085,7 @@ def _media_collection_program() -> list[str]:
         '_UM-NOTES S" /notes.txt" _UM-PUT',
         '_UM-BIN 4 S" /data.bin" _UM-PUT',
         '_UM-QOI _UM-QOI-U S" /logo.qoi" _UM-PUT',
+        '_UM-MD _UM-MD-U S" /notes.md" _UM-PUT',
         # An authored visual rep shows its file from the current VFS.
         "_UM-V @ VFS-USE",
         'S" <uidl><region arrange=flex><media id=m/><textarea id=t/>'
@@ -1109,6 +1116,34 @@ def _media_collection_program() -> list[str]:
         "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
         "_UM-WM @ MEDIA-VIEW@ MEDIA-V-TEXT = _UM-ASSERT",
         "_UM-WM @ WDG-TYPE WDG-T-MEDIA = _UM-ASSERT",
+        # A document: the media element's document view is a DOCUMENT
+        # collection with the blocks it shows.
+        'S" /notes.md" _UM-OPEN 0= _UM-ASSERT',
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-DOCUMENT = _UM-ASSERT",
+        "UTUI-PAINT _UM-STACK",
+        "_UM-NATIVE 2048 _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT",
+        "_UM-COUNT @ 2 = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-EM @ _UM-INDEX = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-ENTRY-FAMILY@ USCOL-F-DOCUMENT = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-DOC-BLOCK-COUNT@ 4 = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-DOC-FIRST-BLOCK _UM-BLOCK !",
+        "_UM-BLOCK @ USCOL-BLOCK-KEY@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-BLOCK-KIND@ DOC-B-HEADING = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-BLOCK-LEVEL@ 1 = _UM-ASSERT",
+        '_UM-BLOCK @ USCOL-BLOCK-TEXT@ S" Notes" STR-STR= _UM-ASSERT',
+        "_UM-D1 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
+        # Banks over the document view, its document, or a block's content
+        # that the capture reads are refused.
+        "_UM-WM @ MEDIA-DOCUMENT@ _DOCV-DESC-SIZE _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DOC-SIZE _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "0 _UM-WM @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DOC-KEPT DUP 0<> _UM-ASSERT",
+        "DUP _DCT.BYTES @ _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-DOCUMENT = _UM-ASSERT",
+        "_UM-STACK",
         # Facts are ordinary CELL paint: only the textarea is captured.
         'S" /data.bin" _UM-OPEN 0= _UM-ASSERT',
         "_UM-WM @ MEDIA-VIEW@ MEDIA-V-FACTS = _UM-ASSERT",
@@ -1138,11 +1173,11 @@ def _media_collection_program() -> list[str]:
     ]
 
 
-def test_a_media_element_is_captured_as_the_text_area_it_shows():
+def test_a_media_element_is_captured_as_the_view_it_shows():
     output = _run_forth(_media_collection_program())
     summary = re.search(r"MEDIA COLLECTION PASS\s+(\d+)\s+0", output)
     assert summary, output[-10000:]
-    assert int(summary.group(1)) >= 30
+    assert int(summary.group(1)) >= 55
 
 
 def _ruha_constructor_program() -> list[str]:

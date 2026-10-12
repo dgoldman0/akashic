@@ -83,6 +83,7 @@ REQUIRE widgets/input.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
 REQUIRE widgets/media.f
+REQUIRE widgets/document.f
 REQUIRE widgets/text-grid.f
 REQUIRE widgets/tabs.f
 REQUIRE widgets/data-graphics.f
@@ -6688,8 +6689,8 @@ VARIABLE _UTUI-CS-ROOT-W
 : _UTUI-CS-UIDL-TEXTAREA  ( -- disjoint status )
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
 
-\ A media element is checked as the view it shows; only its text view is a
-\ collection, read through the media descriptor.
+\ A media element is checked as the view it shows; its text view and its
+\ document view are collections, read through the media descriptor.
 : _UTUI-CS-UIDL-MEDIA  ( -- disjoint status )
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
         DROP -1 USCOL-S-OK EXIT
@@ -6697,6 +6698,10 @@ VARIABLE _UTUI-CS-ROOT-W
     DUP _UTUI-MEDIA-GENUINE? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
     DUP _MEDIA-DESC-SIZE _UTUI-CS-RANGE-DISJOINT? 0= IF
         DROP 0 USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT = IF
+        MEDIA-DOCUMENT@ >R _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ R>
+            DOCV-DOCUMENT-STORAGE-DISJOINT? USCOL-S-OK EXIT
     THEN
     DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP -1 USCOL-S-OK EXIT THEN
     MEDIA-TEXT@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
@@ -6865,8 +6870,9 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     0 _UTUI-VC-T-LABEL-A ! 0 _UTUI-VC-T-LABEL-U !
     0 _UTUI-VC-T-SHORTCUT-A ! 0 _UTUI-VC-T-SHORTCUT-U ! ;
 
-\ A media element is a text area while it shows text; _UTUI-VC-PREPARE
-\ finds its view and leaves any other view ordinary CELL paint.
+\ A media element is a text area while it shows text and a document while
+\ it shows one; _UTUI-VC-PREPARE finds its view and leaves any other view
+\ ordinary CELL paint.
 : _UTUI-VC-DIRECT-FAMILY@  ( elem -- family|0 )
     DUP UIDL-TYPE UIDL-T-TEXTAREA = IF
         DROP USCOL-F-TEXT-AREA EXIT
@@ -6876,13 +6882,20 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     THEN
     UIDL-TYPE UIDL-T-TABS = IF USCOL-F-TABSET ELSE 0 THEN ;
 
-\ Replace the media widget in _UTUI-VC-W by the text area it shows,
-\ keeping the media widget for the storage check.
+\ Replace the media widget in _UTUI-VC-W by the text area or document view
+\ it shows, keeping the media widget for the storage check.
 : _UTUI-VC-MEDIA-VIEW  ( -- status )
     _UTUI-VC-W @ DUP _UTUI-MEDIA-GENUINE? 0= IF
         DROP USCOL-S-INVALID EXIT
     THEN
     DUP _UTUI-VC-MEDIA !
+    DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT = IF
+        MEDIA-DOCUMENT@ DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
+        DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+        _UTUI-VC-W !
+        USCOL-F-DOCUMENT _UTUI-VC-FAMILY !
+        USCOL-S-OK EXIT
+    THEN
     DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP USCOL-S-UNSUPPORTED EXIT THEN
     MEDIA-TEXT@ DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
     DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
@@ -6924,6 +6937,17 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
         DROP USCOL-S-INVALID EXIT
     THEN
     _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-VC-SC @ _UTUI-SYNC-PROXY
+    _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
+    USCOL-S-OK ;
+
+\ A media element's document view draws in the element's proxy region, as
+\ its text area does.
+: _UTUI-VC-PREPARE-DOCUMENT  ( -- status )
+    _UTUI-VC-W @ DOCV-GENUINE? 0= IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-W @ _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
         USCOL-S-INVALID EXIT
     THEN
     _UTUI-VC-SC @ _UTUI-SYNC-PROXY
@@ -6985,6 +7009,9 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
         _UTUI-VC-PREPARE-TABS EXIT
     THEN
+    _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
+        _UTUI-VC-PREPARE-DOCUMENT EXIT
+    THEN
     USCOL-S-INVALID ;
 
 : _UTUI-VISITED-COLLECTION-GEOMETRY
@@ -7009,6 +7036,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     2DUP TAB-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP LST-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TREE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP DOCV-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF 2DROP 0 EXIT THEN
     UTUI-COLLECTION-STORAGE-DISJOINT?
     DUP USCOL-S-OK <> IF 2DROP 0 EXIT THEN
@@ -7093,6 +7121,10 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
         _UTUI-VC-TABSET-CAPTURE EXIT
     THEN
+    _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
+        _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
+        _UTUI-VC-BUILDER @ _UTUI-VC-W @ DOCV-DOCUMENT-CAPTURE EXIT
+    THEN
     0 USCOL-S-INVALID ;
 
 : _UTUI-VC-CAPTURE-BODY  ( -- bytes status )
@@ -7156,6 +7188,18 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
         THEN
         _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @ 8
             MSPAN-OVERLAP? 0= USCOL-S-OK EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
+        _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @
+            DOCV-DOCUMENT-STORAGE-DISJOINT?
+        \ A media element's document view is reached through its descriptor.
+        DUP IF
+            DROP _UTUI-VC-SPAN-U @ 0= IF -1 ELSE
+                _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @
+                _UTUI-VC-MEDIA @ _MEDIA-DESC-SIZE MSPAN-OVERLAP? 0=
+            THEN
+        THEN
+        USCOL-S-OK EXIT
     THEN
     0 USCOL-S-INVALID ;
 

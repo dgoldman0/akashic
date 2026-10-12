@@ -1221,7 +1221,9 @@ the callback's exact UIDL-owned canonical `<textarea>` or authored `<tabs>`.
 its ordinary inline active-index state and contributes one `TABSET` from its
 immediate `<tab>` children. A `<media>` element is the view it shows: while
 it shows text its materialized `TXTA` contributes `TEXT_AREA` exactly as a
-`<textarea>` does, and a picture or the facts view stays ordinary CELL paint.
+`<textarea>` does, while it shows a document its document view contributes
+`DOCUMENT` (`DOCV-DOCUMENT-CAPTURE`), and a picture or the facts view stays
+ordinary CELL paint.
 There is no authored `<text-grid>` materialization path. The visitor
 refreshes the fixed proxy region and focus, then measures or
 copies without returning an owned pointer, starting another observation,
@@ -1237,7 +1239,9 @@ and at most the first two positive rows—the exact label plus underline header,
 not the active content panel. A malformed root stays entirely residual.
 
 The separate all-widget storage query scans direct canonical textareas, a
-media element's descriptor and the text area it shows, and tab state plus
+media element's descriptor and the text area or document view it shows
+(with the document's records and the contents of the blocks in view), and
+tab state plus
 genuine caller-mounted collection widgets regardless of visibility,
 so upper caller banks cannot overwrite hidden live widget or borrowed model
 storage. `uidl-collection-snapshot.f` uses the public visitor seam for direct

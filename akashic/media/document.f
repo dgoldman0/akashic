@@ -38,6 +38,7 @@
 \ =====================================================================
 
 REQUIRE ../utils/memory-source.f
+REQUIRE ../utils/memory-span.f
 REQUIRE ../utils/string.f
 REQUIRE source.f
 
@@ -565,6 +566,48 @@ VARIABLE _DAN-N
         THEN
     LOOP
     _DAN-FREE _DAN-FOUND @ ;
+
+\ ---------------------------------------------------------------------
+\  What a reader of the kept contents touches
+\ ---------------------------------------------------------------------
+
+\ DOC-KEPT ( index doc -- content | 0 )
+\   The content of block INDEX the document keeps, or 0; never reads.
+: DOC-KEPT  ( index doc -- content | 0 )
+    DUP _DOC.MAGIC @ _DOC-MAGIC <> IF 2DROP 0 EXIT THEN
+    2DUP _DOC.COUNT @ U< 0= IF 2DROP 0 EXIT THEN
+    _DOC.CACHE-A @ SWAP CELLS + @ ;
+
+VARIABLE _DSD-A
+VARIABLE _DSD-U
+VARIABLE _DSD-D
+
+: _DSD-CLEAR?  ( a u -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    _DSD-A @ _DSD-U @ 2SWAP MSPAN-OVERLAP? 0= ;
+
+\ DOC-STORAGE-DISJOINT? ( a u first end doc -- flag )
+\   Whether span A U lies clear of all a reader of the document's
+\   structure and of the contents of blocks FIRST to END touches: its
+\   record, its blocks, their containers, the slots of its contents, and
+\   those contents.
+: DOC-STORAGE-DISJOINT?  ( a u first end doc -- flag )
+    _DSD-D ! 2SWAP _DSD-U ! _DSD-A !
+    _DSD-U @ 0= IF 2DROP -1 EXIT THEN
+    _DSD-D @ DOC-SIZE _DSD-CLEAR? 0= IF 2DROP 0 EXIT THEN
+    _DSD-D @ _DOC.MAGIC @ _DOC-MAGIC <> IF 2DROP -1 EXIT THEN
+    _DSD-D @ _DOC.BLOCKS-A @ _DSD-D @ _DOC.BLOCKS-CAP @ _DSD-CLEAR?
+        0= IF 2DROP 0 EXIT THEN
+    _DSD-D @ _DOC.CONTS-A @ _DSD-D @ _DOC.CONTS-CAP @ _DSD-CLEAR?
+        0= IF 2DROP 0 EXIT THEN
+    _DSD-D @ _DOC.CACHE-A @ _DSD-D @ _DOC.CACHE-CAP @ _DSD-CLEAR?
+        0= IF 2DROP 0 EXIT THEN
+    _DSD-D @ _DOC.COUNT @ MIN SWAP 0 MAX ?DO
+        I _DSD-D @ DOC-KEPT ?DUP IF
+            DUP _DCT.BYTES @ _DSD-CLEAR? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP
+    -1 ;
 
 \ ---------------------------------------------------------------------
 \  Public words

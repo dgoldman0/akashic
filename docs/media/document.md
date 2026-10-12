@@ -66,6 +66,8 @@ releases it after `DOC-CLOSE`, which gives back every byte.
 | `DOC-CONTAINERS` | `( block doc -- first count )` | Its containers, outermost first, `CNT-SIZE` bytes apart. |
 | `DOC-CONTENT` | `( index doc -- content status )` | A block's text, read once and kept. |
 | `DOC-KEEP` | `( first end doc -- )` | Give back the contents outside blocks FIRST to END. |
+| `DOC-KEPT` | `( index doc -- content \| 0 )` | The content of a block the document keeps, or 0; it never reads the source. |
+| `DOC-STORAGE-DISJOINT?` | `( a u first end doc -- flag )` | Whether a span lies clear of the document's record, blocks, containers and content slots, and of the kept contents of blocks FIRST to END. |
 | `DOC-ANCHOR` | `( name-a name-u doc -- index \| -1 )` | The heading a name points to. |
 
 A block's fields are `BLK-KIND@`, `BLK-LEVEL@`, `BLK-ROWS-BEFORE@` and

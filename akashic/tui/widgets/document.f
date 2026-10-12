@@ -60,9 +60,14 @@
 \   +168  revision     counts every change in what the view shows
 \   +176  draws        counts draws, to find figures no longer shown
 \
+\  The view publishes the blocks its last draw showed as a renderer-neutral
+\  DOCUMENT entry (semantic-collections.f) on the rows CELL drew them:
+\  DOCV-DOCUMENT-CAPTURE.
+\
 \  Prefix: DOCV- (public), _DOCV- and _DV- (internal)
 \  Provider: akashic-tui-document
-\  Dependencies: widget.f, draw.f, picture.f, media/document.f, text-lines.f
+\  Dependencies: widget.f, draw.f, picture.f, media/document.f, text-lines.f,
+\                bidi.f, semantic-collections.f
 
 PROVIDED akashic-tui-document
 
@@ -75,8 +80,15 @@ REQUIRE picture.f
 REQUIRE ../../media/document.f
 REQUIRE ../../media/picture.f
 REQUIRE ../../text/text-lines.f
+REQUIRE ../../text/bidi.f
 REQUIRE ../../utils/memory-source.f
+REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/string.f
+REQUIRE ../semantic-collections.f
+
+CREATE _DOCV-OWNED-START
+VARIABLE _DOCV-OWNED-LIMIT
+0 _DOCV-OWNED-LIMIT !
 
  40 CONSTANT _DOCV-O-DOC
  48 CONSTANT _DOCV-O-MSRC
@@ -870,7 +882,186 @@ VARIABLE _DVH-BLOCK
     _DV-W @ FREE ;
 
 \ =====================================================================
-\  9. Guard
+\  9. Storage authority and the document's capture
+\ =====================================================================
+\
+\  The view publishes the blocks its last draw showed: each block's key is
+\  its index plus one, its kind its content's, a figure's picture rows
+\  those the view gave it, its containers, and its text as CELL shows it
+\  (UTF8-SAFE-COPY), its direction controls inert stand-ins (BIDI-INERT)
+\  and its meanings style runs.  The capture reads only what the view and
+\  the document keep for those blocks, never the source; a block whose
+\  content or figure is not kept, or counts made at another size, leave
+\  the view UNAVAILABLE, and CELL shows it.
+
+\ DOCV-GENUINE? ( widget -- flag )   A live document view, by its header.
+: DOCV-GENUINE?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _DOCV-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-DOCUMENT <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _DV-DRAW <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-HANDLE-XT + @ ['] _DV-HANDLE <> IF DROP 0 EXIT THEN
+    WDG-REGION DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    RGN-SIZE MSPAN-NONWRAPPING? ;
+
+\ DOCV-STORAGE-DISJOINT? ( address bytes -- flag )
+\   Pure and deliberately unguarded: a caller span against the module's
+\   mutable scratch.
+: DOCV-STORAGE-DISJOINT?  ( address bytes -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _DOCV-OWNED-LIMIT @ DUP _DOCV-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _DOCV-OWNED-START - >R
+    _DOCV-OWNED-START R> MSPAN-OVERLAP? 0= ;
+
+VARIABLE _DVSD-A
+VARIABLE _DVSD-U
+VARIABLE _DVSD-W
+
+: _DVSD-CLEAR?  ( a u -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    _DVSD-A @ _DVSD-U @ 2SWAP MSPAN-OVERLAP? 0= ;
+
+\ DOCV-DOCUMENT-STORAGE-DISJOINT? ( address bytes widget -- flag )
+\   A caller span against the module and all the capture of one live view
+\   reads: its descriptor, region, counts and figures, and the document's
+\   records and the contents of the blocks the view shows.
+: DOCV-DOCUMENT-STORAGE-DISJOINT?  ( address bytes widget -- flag )
+    >R
+    2DUP DOCV-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    _DVSD-U ! _DVSD-A ! R> _DVSD-W !
+    _DVSD-W @ DOCV-GENUINE? 0= IF 0 EXIT THEN
+    _DVSD-U @ 0= IF -1 EXIT THEN
+    _DVSD-W @ _DOCV-DESC-SIZE _DVSD-CLEAR? 0= IF 0 EXIT THEN
+    _DVSD-W @ WDG-REGION RGN-SIZE _DVSD-CLEAR? 0= IF 0 EXIT THEN
+    _DVSD-W @ _DOCV-O-COUNTS-A + @ _DVSD-W @ _DOCV-O-COUNTS-CAP + @
+        _DVSD-CLEAR? 0= IF 0 EXIT THEN
+    _DVSD-W @ _DOCV-O-FIGS-A + @ _DVSD-W @ _DOCV-O-FIGS-CAP + @
+        _DVSD-CLEAR? 0= IF 0 EXIT THEN
+    _DVSD-W @ _DOCV-O-DOC + @ ?DUP 0= IF -1 EXIT THEN
+    >R _DVSD-A @ _DVSD-U @ _DVSD-W @ DOCV-SHOWN R> DOC-STORAGE-DISJOINT? ;
+
+VARIABLE _DVK-ROOT
+VARIABLE _DVK-DST
+VARIABLE _DVK-CAP
+VARIABLE _DVK-B           \ the builder
+VARIABLE _DVK-I
+VARIABLE _DVK-BLOCK
+VARIABLE _DVK-C           \ the block's content
+VARIABLE _DVK-KIND
+VARIABLE _DVK-TEXT-A
+VARIABLE _DVK-TEXT-U
+VARIABLE _DVK-SAFE-U
+VARIABLE _DVK-DST-T
+
+: _DVK-PREFLIGHT?  ( root destination capacity builder widget -- flag )
+    DUP DOCV-GENUINE? 0= IF 0 EXIT THEN
+    4 PICK 0= IF 0 EXIT THEN
+    3 PICK 3 PICK 2 PICK DOCV-DOCUMENT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    1 PICK USCOL-BUILDER-SIZE 2 PICK
+        DOCV-DOCUMENT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    1 PICK USCOL-BUILDER-SIZE USCOL-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    3 PICK 3 PICK USCOL-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    -1 ;
+
+: _DVK-STATE  ( -- state )
+    0
+    _DV-W @ WDG-VISIBLE? IF USCOL-STATE-VISIBLE OR THEN
+    _DV-W @ WDG-DISABLED? 0= IF USCOL-STATE-ENABLED OR THEN
+    _DV-W @ WDG-FOCUSED?
+    _DV-W @ WDG-VISIBLE? AND
+    _DV-W @ WDG-DISABLED? 0= AND IF USCOL-STATE-SELECTED OR THEN ;
+
+: _DVK-CONTAINERS  ( -- )
+    _DVK-BLOCK @ _DV-DOC DOC-CONTAINERS 0 ?DO
+        DUP I CNT-SIZE * +
+        DUP CNT-KIND@ OVER CNT-WIDTH@ 2 PICK CNT-NUMBER@ 3 PICK CNT-START?
+        _DVK-B @ USCOL-DOC-CONTAINER 2DROP
+    LOOP DROP ;
+
+: _DVK-RUN  ( start length meaning -- ok? )
+    _DVK-B @ USCOL-DOC-TEXT-RUN DROP -1 ;
+
+\ The block's text as CELL shows it, and its meanings as style runs.
+: _DVK-TEXT  ( -- )
+    _DVK-C @ DCT-TEXT _DVK-TEXT-U ! _DVK-TEXT-A !
+    _DVK-TEXT-U @ 0= IF EXIT THEN
+    _DVK-TEXT-A @ _DVK-TEXT-U @ UTF8-KEEP-LF UTF8-SAFE-BYTES DUP _DVK-SAFE-U !
+    _DVK-B @ USCOL-DOC-TEXT-BEGIN DROP
+    ?DUP IF
+        DUP _DVK-DST-T !
+        >R _DVK-TEXT-A @ _DVK-TEXT-U @ UTF8-KEEP-LF R> UTF8-SAFE-COPY
+        _DVK-DST-T @ _DVK-SAFE-U @ BIDI-INERT
+    THEN
+    _DVK-TEXT-A @ _DVK-TEXT-U @ _DVK-C @ DCT-MAP ['] _DVK-RUN TSTY-RUNS DROP ;
+
+\ Block INDEX, from what the view and the document keep; false when they
+\ do not keep it.
+: _DVK-BLOCK!  ( index -- ok? )
+    DUP _DVK-I ! _DV-DOC DOC-BLOCK _DVK-BLOCK !
+    _DVK-BLOCK @ BLK-KIND@ DOC-B-RULE = IF
+        _DVK-I @ 1+ DOC-B-RULE 0
+        _DVK-BLOCK @ BLK-ROWS-BEFORE@ _DVK-BLOCK @ BLK-INSIDE@ 0
+        _DVK-B @ USCOL-DOC-BLOCK-BEGIN DROP
+        _DVK-CONTAINERS
+        _DVK-B @ USCOL-DOC-BLOCK-END DROP -1 EXIT
+    THEN
+    _DVK-I @ _DV-DOC DOC-KEPT DUP _DVK-C ! 0= IF 0 EXIT THEN
+    _DVK-C @ DCT-KIND@ _DVK-KIND !
+    _DVK-I @ 1+ _DVK-KIND @
+    _DVK-KIND @ DOC-B-HEADING = IF _DVK-C @ DCT-LEVEL@ ELSE 0 THEN
+    _DVK-BLOCK @ BLK-ROWS-BEFORE@ _DVK-BLOCK @ BLK-INSIDE@
+    _DVK-KIND @ DOC-B-FIGURE = IF
+        _DVK-I @ _DV-FIND-FIG ?DUP 0= IF 2DROP 2DROP DROP 0 EXIT THEN
+        _DVK-BLOCK @ _DV-TEXT-WIDTH _DV-PICTURE-ROWS
+    ELSE 0 THEN
+    _DVK-B @ USCOL-DOC-BLOCK-BEGIN DROP
+    _DVK-CONTAINERS
+    _DVK-TEXT
+    _DVK-B @ USCOL-DOC-BLOCK-END DROP -1 ;
+
+\ DOCV-DOCUMENT-CAPTURE
+\   ( root-key destination capacity builder widget -- bytes status )
+\   Build the view's document with the caller's builder: copy mode with a
+\   destination, exact measure mode with (0, 0).
+: DOCV-DOCUMENT-CAPTURE
+    ( root-key destination capacity builder widget -- bytes status )
+    _DVK-PREFLIGHT? 0= IF 2DROP 2DROP DROP 0 USCOL-S-INVALID EXIT THEN
+    _DV-W ! _DVK-B ! _DVK-CAP ! _DVK-DST ! _DVK-ROOT !
+    _DVK-DST @ _DVK-CAP @ _DVK-B @ USCOL-BUILDER-INIT
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _DV-DOC 0= IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    _DV-H 0> 0= _DV-RGN RGN-W 0> 0= OR IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    \ The last draw's counts and blocks, at this size.
+    _DOCV-O-COUNTS-A _DV@ 0= IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    _DOCV-O-COLS _DV@ _DV-RGN RGN-W <> IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    _DOCV-O-HEIGHT _DV@ _DV-H <> IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    _DOCV-O-END _DV@ _DV-TOP > 0= IF 0 USCOL-S-UNAVAILABLE EXIT THEN
+    _DVK-ROOT @ 0 0 _DV-H _DV-RGN RGN-W _DVK-STATE _DVK-B @ USCOL-DOC-BEGIN
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    0 _DV-TOP-ROW _DVK-B @ USCOL-DOC-SHAPE
+    DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
+    _DOCV-O-END _DV@ _DV-TOP ?DO
+        I _DVK-BLOCK! 0= IF 0 USCOL-S-UNAVAILABLE UNLOOP EXIT THEN
+    LOOP
+    _DVK-B @ USCOL-DOC-END DROP
+    _DVK-B @ USCOL-BUILDER-FINISH ;
+
+\ DOCV-DOCUMENT-MEASURE ( root-key builder widget -- bytes status )
+: DOCV-DOCUMENT-MEASURE  ( root-key builder widget -- bytes status )
+    >R >R 0 0 R> R> DOCV-DOCUMENT-CAPTURE ;
+
+CREATE _DOCV-OWNED-END
+_DOCV-OWNED-END _DOCV-OWNED-LIMIT !
+
+\ =====================================================================
+\  10. Guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]

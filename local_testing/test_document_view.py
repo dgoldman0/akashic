@@ -23,6 +23,7 @@ from test_widget_pointer import _run_forth  # noqa: F401  (puts MegaPad on the p
 from simulator.platform import create_one_core_address_space
 from simulator.runtime import MegaForthRuntime
 
+from rich_terminal.semantic_content import StyleRun, TextStyle
 from rich_terminal.semantic_documents import (
     BlockContainer,
     BlockKind,
@@ -31,6 +32,7 @@ from rich_terminal.semantic_documents import (
     DocumentContent,
     DocumentFlag,
     block_row_count,
+    decode_document_content,
     placed_blocks,
 )
 
@@ -146,7 +148,8 @@ def _runtime(document: bytes = b"", picture: bytes = b""):
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")
     runtime.evaluate(b"ENTER-USERLAND", source_name="document-view-userland")
     source = []
-    for module in dependency_order(AK, ("tui/widgets/document.f", "markup/markdown.f")):
+    for module in dependency_order(AK, ("tui/widgets/document.f", "markup/markdown.f",
+                                        "tui/rich-terminal/uidl-semantic-documents-doc1.f")):
         source.extend(_load_forth_lines(AK / module))
     runtime.evaluate(("\n".join(source) + "\n").encode(),
                      source_name="document-view-closure", step_budget=800_000_000)
@@ -673,3 +676,89 @@ def test_a_view_without_a_document_shows_nothing_and_takes_no_keys() -> None:
     output = _run(lines)
     assert set(_cells(output).values()) == {(32, FG, BG, 0)}
     assert "H=0 " in output
+
+
+# --------------------------------------------------------------------------
+# The document a view publishes
+# --------------------------------------------------------------------------
+
+CAPTURE_SETUP = [
+    "CREATE DV-B-S USCOL-BUILDER-SIZE 7 + ALLOT  : DV-B DV-B-S 7 + -8 AND ;",
+    "CREATE DV-O-S 16384 7 + ALLOT  : DV-O DV-O-S 7 + -8 AND ;",
+    "CREATE DV-K-S 4096 7 + ALLOT  : DV-K DV-K-S 7 + -8 AND ;",
+    "CREATE DV-M-S USCOL-SUMMARY-SIZE 7 + ALLOT  : DV-M DV-M-S 7 + -8 AND ;",
+    "CREATE DV-X 16384 ALLOT  VARIABLE DV-U",
+    ": DV-BYTES  ( a u -- )  .\" @@BYTES \" DV-HEX CR ;",
+    ": DV-CAPTURE  ( -- )",
+    '    7 DV-B DV-W @ DOCV-DOCUMENT-MEASURE ." MEASURE=" . . CR',
+    '    7 DV-O 16384 DV-B DV-W @ DOCV-DOCUMENT-CAPTURE ." CAPTURE=" . DUP DV-U ! ." BYTES=" . CR',
+    '    DV-O DV-U @ DV-K 4096 DV-M USCOL-ENTRY-VALIDATE ." VALID=" . CR',
+    '    DV-O DV-U @ DV-M 9 DV-X 16384 USDOC-PACK ." PACK=" DUP . CR',
+    "    DROP DV-X SWAP DV-BYTES ;",
+]
+
+
+def _runs(text: bytes, meanings: bytes) -> tuple[StyleRun, ...]:
+    """The style runs a meaning a byte gives: each scalar takes its first
+    byte's meaning, and neighbours that share one form a run."""
+
+    runs, start, current, scalar = [], 0, 0, 0
+    for index, byte in enumerate(text):
+        if byte & 0xC0 == 0x80:
+            continue
+        meaning = meanings[index] if 0 < meanings[index] < 11 else 0
+        if meaning != current:
+            if current:
+                runs.append(StyleRun(start, scalar - start, TextStyle(current)))
+            current, start = meaning, scalar
+        scalar += 1
+    if current:
+        runs.append(StyleRun(start, scalar - start, TextStyle(current)))
+    return tuple(runs)
+
+
+def _publication(shown: list[Shown], cols: int, rows: int, top: int, pictures=None):
+    """The DOC1 content a view showing SHOWN publishes at its top offset:
+    the blocks it shows, keyed by index plus one, with their style runs."""
+
+    content = _document(shown, cols, rows, pictures or {}, 0)
+    placed = placed_blocks(content, cols)
+    first = next(i for i, item in enumerate(placed) if item.top + item.rows > top)
+    blocks = []
+    for item, block in zip(placed[first:], shown[first:]):
+        if item.top - top >= rows:
+            break
+        doc = item.block
+        blocks.append(DocumentBlock(
+            doc.block_key, doc.kind, doc.text, _runs(block.text, block.meanings),
+            doc.level, doc.rows_before, doc.rows_before_inside, doc.picture_rows,
+            doc.containers))
+    return DocumentContent(9, DocumentFlag(0), tuple(blocks), top - placed[first].top)
+
+
+def test_the_view_publishes_the_blocks_it_shows_as_doc1() -> None:
+    """At the top and scrolled into a block, the view's DOCUMENT entry is the
+    blocks it drew, from the one its top row lies in to the last that starts
+    above its bottom, with the rows above the view; it validates, measure
+    mode counts what capture copies, and its DOC1 is the model's."""
+
+    rows, cols = 14, 36
+    lines = [_view(rows, cols), *CAPTURE_SETUP, f"DV-FILE {len(SAMPLE)} DV-OPEN",
+             "DV-BLOCKS-DUMP"]
+    for scroll in (0, 5, 1000):
+        lines += [f"{scroll} DV-W @ DOCV-SCROLL", "DV-DRAW", "DV-TOP", '." @@PART" CR',
+                  "DV-CAPTURE"]
+    lines.append("DV-CLOSE")
+    output = _run(lines, SAMPLE)
+    shown = _shown(output)
+    parts = output.split("@@PART")[1:]
+    tops = [tuple(map(int, t)) for t in re.findall(r"TOP=(\d+) (\d+)", output)]
+    for part, top in zip(parts, tops):
+        measured_status, measured = map(int, re.search(r"MEASURE=(-?\d+) (-?\d+)", part).groups())
+        assert "CAPTURE=0 " in part and "VALID=0 " in part and "PACK=0 " in part, part
+        payload = bytes.fromhex(re.search(r"@@BYTES ([0-9a-f]*)", part).group(1))
+        offset = _offset(shown, cols, rows, *top)
+        assert decode_document_content(payload) == _publication(shown, cols, rows, offset)
+        assert measured_status == 0
+        assert measured == int(re.search(r"BYTES=(-?\d+)", part).group(1))
+    assert "HELD=0 " in output

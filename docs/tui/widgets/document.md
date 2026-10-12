@@ -4,7 +4,8 @@
 **Provider:** `akashic-tui-document`  
 **Dependencies:** `widget.f`, `draw.f`, [picture.f](picture.md),
 [media/document.f](../../media/document.md), `text/text-lines.f`,
-`memory-source.f`
+`text/bidi.f`, `memory-source.f`, `memory-span.f`,
+[semantic-collections.f](../semantic-collections.md)
 
 ## Overview
 
@@ -97,6 +98,27 @@ resolved shows its name.
 decoding, `PICT-STEP-PIXELS` source pixels a call, as the UIDL host's
 service pass does for picture widgets.
 
+### Publication
+
+A rich terminal draws the document itself, from the blocks the last draw
+showed, published as a renderer-neutral DOCUMENT entry
+([semantic-collections.f](../semantic-collections.md)) on the rows CELL drew
+them (`DOCV-DOCUMENT-CAPTURE`). The entry carries:
+
+- the top block's rows above the view;
+- for each block shown: its key (its index plus one), its kind and level, its
+  blank rows before it and how many of them lie inside its containers, its
+  containers, and for a figure the picture rows the view gave it;
+- its text as CELL shows it (`UTF8-SAFE-COPY`, with line feeds), with each
+  explicit embedding, override and isolate made an inert stand-in
+  (`BIDI-INERT`), and its meanings as style runs.
+
+The terminal breaks the text into rows itself, by the same rules, so the
+rows match CELL's. The capture reads only what the view and the document
+keep for those blocks, never the source. When a block's content or figure
+is not kept, or the counts were made at another size, the view is
+`USCOL-S-UNAVAILABLE`, and CELL shows it.
+
 ### Memory
 
 Row counts, figure records and copies of figures' names come from the
@@ -127,5 +149,10 @@ part could not be read)"; its rows are counted again at the next pass.
 | `DOCV-PENDING?` | `( widget -- flag )` | A figure's picture is still decoding. |
 | `DOCV-SERVICE` | `( widget -- changed? )` | Decode some more of a figure's picture; true when what the view shows changed. |
 | `DOCV-FREE` | `( widget -- )` | Give back everything the view holds. |
+| `DOCV-GENUINE?` | `( widget -- flag )` | A live document view, by its header. |
+| `DOCV-DOCUMENT-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Build the view's DOCUMENT entry with the caller's builder; `dst cap` of `0 0` measures. |
+| `DOCV-DOCUMENT-MEASURE` | `( root-key builder widget -- bytes status )` | The entry's exact size. |
+| `DOCV-STORAGE-DISJOINT?` | `( address bytes -- flag )` | A caller span misses the module's own storage. |
+| `DOCV-DOCUMENT-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | A caller span also misses all the capture reads: the view's descriptor, region, counts and figures, and the document's records and the contents of the blocks shown. |
 
 The widget's type is `WDG-T-DOCUMENT`.
