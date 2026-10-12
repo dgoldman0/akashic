@@ -40,6 +40,10 @@
 \  PDF-GET reads one object, from the file or from an object stream, into
 \  a record of its own that the caller gives back with PDF-OBJ-FREE.  The
 \  object's value is a span of that record, valid until it is given back.
+\  The file holds each object stream it decodes, with an index of where
+\  its objects lie, until it is closed, so objects that lie in several
+\  streams, read in turn, decode each stream once; when memory refuses a
+\  stream, it gives back the others and decodes it again.
 \  A stream object's data is read only by PDF-STREAM, which decodes it
 \  through its filters.  PDF-RESOLVE follows a reference: it gives back an
 \  object to free, or 0 for a value that was no reference.
@@ -80,13 +84,12 @@ REQUIRE ../media/source.f
 \   +0   source              +8   memory source       +16  file size
 \   +24  entries             +32  object numbers      +40  entries' bytes
 \   +48  trailer bytes       +56  their room          +64  trailer length
-\   +72  object stream held, or -1                    +80  its /N
-\   +88  its /First          +96  its decoded bytes (a buffer, 24)
-\   +120 work bytes (a buffer, 24)                    +144 repaired?
-\   +152 open?              +160 its encryption (PDF-CRYPT-SIZE, 48)
-\   +208 the /Encrypt dictionary's object, or 0       +216 a value with its
-\   strings decrypted (a buffer, 24)    +240 a string's bytes (a buffer, 24)
-\   +264 encrypted?         +272 the object stream's index (a buffer, 24)
+\   +72  the object streams held decoded, the one used last first, or 0
+\   +80  work bytes (a buffer, 24)                    +104 repaired?
+\   +112 open?              +120 its encryption (PDF-CRYPT-SIZE, 48)
+\   +168 the /Encrypt dictionary's object, or 0       +176 a value with its
+\   strings decrypted (a buffer, 24)    +200 a string's bytes (a buffer, 24)
+\   +224 encrypted?
 
 : _PDFF.SRC       ( f -- a )        ;
 : _PDFF.MSRC      ( f -- a )    8 + ;
@@ -97,20 +100,16 @@ REQUIRE ../media/source.f
 : _PDFF.TRAILER   ( f -- a )   48 + ;
 : _PDFF.TCAP      ( f -- a )   56 + ;
 : _PDFF.TLEN      ( f -- a )   64 + ;
-: _PDFF.OSNUM     ( f -- a )   72 + ;
-: _PDFF.OSN       ( f -- a )   80 + ;
-: _PDFF.OSFIRST   ( f -- a )   88 + ;
-: _PDFF.OSBUF     ( f -- a )   96 + ;
-: _PDFF.WORK      ( f -- a )  120 + ;
-: _PDFF.REPAIRED  ( f -- a )  144 + ;
-: _PDFF.OPEN      ( f -- a )  152 + ;
-: _PDFF.CRYPT     ( f -- c )  160 + ;
-: _PDFF.ENCNUM    ( f -- a )  208 + ;
-: _PDFF.CBUF      ( f -- a )  216 + ;
-: _PDFF.SBUF      ( f -- a )  240 + ;
-: _PDFF.ENCRYPTED ( f -- a )  264 + ;
-: _PDFF.OSIDX     ( f -- a )  272 + ;
-296 CONSTANT PDF-FILE-SIZE
+: _PDFF.HELD      ( f -- a )   72 + ;
+: _PDFF.WORK      ( f -- a )   80 + ;
+: _PDFF.REPAIRED  ( f -- a )  104 + ;
+: _PDFF.OPEN      ( f -- a )  112 + ;
+: _PDFF.CRYPT     ( f -- c )  120 + ;
+: _PDFF.ENCNUM    ( f -- a )  168 + ;
+: _PDFF.CBUF      ( f -- a )  176 + ;
+: _PDFF.SBUF      ( f -- a )  200 + ;
+: _PDFF.ENCRYPTED ( f -- a )  224 + ;
+232 CONSTANT PDF-FILE-SIZE
 
 \ An entry: its type (0 free, 1 in the file, 2 in an object stream,
 \ 255 none yet), its generation or index, and its offset or stream.
@@ -516,46 +515,106 @@ VARIABLE _PDFS-CODING     \ that coding
 : _PDFF-INT@  ( key-a key-u da du -- n | -1 )
     PDF-DICT@ PDF-T-INT = IF PDF-INT ELSE 2DROP -1 THEN ;
 
-VARIABLE _PDFF-OSF  VARIABLE _PDFF-OSO
+\ An object stream held decoded: the next held, its object number (-1
+\ while it is being decoded), its /N and /First, its decoded bytes, and
+\ its table of numbers and offsets, read once into an index, a pair of
+\ cells for each object.  The file holds each object stream it decodes,
+\ for as long as it is open, so objects that lie in several streams, read
+\ in turn, decode each stream once.  A stream held is never moved; the
+\ one used last is first.
+: _PDFH.NEXT   ( h -- a )        ;
+: _PDFH.NUM    ( h -- a )    8 + ;
+: _PDFH.N      ( h -- a )   16 + ;
+: _PDFH.FIRST  ( h -- a )   24 + ;
+: _PDFH.BYTES  ( h -- buf ) 32 + ;
+: _PDFH.INDEX  ( h -- buf ) 56 + ;
+80 CONSTANT _PDFF-HELD
+
 CREATE _PDFF-PAIR 16 ALLOT
+VARIABLE _PDFF-IH   VARIABLE _PDFF-IM   VARIABLE _PDFF-HP
+\ True while an object stream is being decoded: the stream's own entries,
+\ such as its /Length, lie in none (PDF 32000-1 7.5.7).
+VARIABLE _PDFF-DECODING   0 _PDFF-DECODING !
 
-\ Forget the object stream held, and its index.
+\ Give back held stream H.
+: _PDFF-HELD-FREE  ( h file -- )
+    _PDFF.MSRC @ >R
+    DUP _PDFH.BYTES R@ PDF-BUF-FREE  DUP _PDFH.INDEX R@ PDF-BUF-FREE
+    _PDFF-HELD R> MSRC-FREE ;
+
+\ Give back every object stream held.
 : _PDFF-UNHOLD  ( file -- )
-    DUP _PDFF.OSBUF OVER _PDFF.MSRC @ PDF-BUF-FREE
-    DUP _PDFF.OSIDX OVER _PDFF.MSRC @ PDF-BUF-FREE  -1 SWAP _PDFF.OSNUM ! ;
+    DUP _PDFF.HELD @ 0 2 PICK _PDFF.HELD !          ( file h )
+    BEGIN DUP WHILE
+        DUP _PDFH.NEXT @ SWAP 2 PICK _PDFF-HELD-FREE
+    REPEAT 2DROP ;
 
-\ The held object stream's table of numbers and offsets, read once into
-\ its index, a pair of cells for each object: false when memory is
-\ refused.  The table ends at a pair that is not two integers.
-: _PDFF-INDEX  ( -- ok? )
-    _PDFF-OSF @ _PDFF.OSBUF PDF-BUF.A @
-    _PDFF-OSF @ _PDFF.OSFIRST @ _PDFF-OSF @ _PDFF.OSBUF PDF-BUF.U @ MIN
-    _PDFF-OSF @ _PDFF.OSN @ 0 MAX 0 ?DO
+\ Held stream STM, made the first held; or 0.
+: _PDFF-HELD@  ( stm file -- h | 0 )
+    DUP _PDFF.HELD _PDFF-HP !  SWAP                  ( file stm )
+    BEGIN _PDFF-HP @ @ DUP WHILE                     ( file stm h )
+        DUP _PDFH.NUM @ 2 PICK = IF
+            NIP DUP _PDFH.NEXT @ _PDFF-HP @ !            ( file h )
+            OVER _PDFF.HELD @ OVER _PDFH.NEXT !
+            DUP ROT _PDFF.HELD ! EXIT
+        THEN
+        _PDFH.NEXT _PDFF-HP !
+    REPEAT NIP NIP ;
+
+\ A new held stream, the first held, being decoded; or 0.
+: _PDFF-NEW-HELD  ( file -- h | 0 )
+    _PDFF-HELD OVER _PDFF.MSRC @ MSRC-ALLOC ?DUP 0= IF DROP 0 EXIT THEN
+    DUP _PDFF-HELD 0 FILL  -1 OVER _PDFH.NUM !
+    OVER _PDFF.HELD @ OVER _PDFH.NEXT !
+    DUP ROT _PDFF.HELD ! ;
+
+\ Held stream H's table of numbers and offsets, read into its index.
+\ The table ends at a pair that is not two integers.
+: _PDFF-INDEX  ( h file -- status )
+    _PDFF.MSRC @ _PDFF-IM !  _PDFF-IH !
+    _PDFF-IH @ _PDFH.BYTES PDF-BUF.A @
+    _PDFF-IH @ _PDFH.FIRST @ _PDFF-IH @ _PDFH.BYTES PDF-BUF.U @ MIN
+    _PDFF-IH @ _PDFH.N @ 0 MAX 0 ?DO
         PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN PDF-INT _PDFF-PAIR !
         PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN PDF-INT _PDFF-PAIR 8 + !
-        _PDFF-PAIR 16 _PDFF-OSF @ _PDFF.OSIDX _PDFF-OSF @ _PDFF.MSRC @ PDF-BUF-APPEND
-        0= IF 2DROP 0 UNLOOP EXIT THEN
-    LOOP 2DROP -1 ;
+        _PDFF-PAIR 16 _PDFF-IH @ _PDFH.INDEX _PDFF-IM @ PDF-BUF-APPEND
+        0= IF 2DROP UNLOOP PDF-S-MEMORY EXIT THEN
+    LOOP 2DROP PDF-S-OK ;
 
-\ Hold the object stream STM's decoded bytes, with its /N and /First,
-\ and index its table.
-: _PDFF-OBJSTM  ( stm file -- status )
-    2DUP _PDFF.OSNUM @ = IF 2DROP PDF-S-OK EXIT THEN
-    DUP _PDFF-UNHOLD
-    2DUP _PDFF-GET-XT @ EXECUTE ?DUP IF NIP NIP NIP EXIT THEN     ( stm file obj )
-    _PDFF-OSO ! _PDFF-OSF !
-    _PDFF-OSO @ _PDFF-OSF @ _PDFF.OSBUF _PDFF-OSF @ PDF-STREAM
-    ?DUP IF NIP _PDFF-OSO @ _PDFF-OSF @ PDF-OBJ-FREE EXIT THEN    ( stm )
-    S" N" _PDFF-OSO @ PDF-OBJ-VALUE DROP _PDFF-INT@ _PDFF-OSF @ _PDFF.OSN !
-    S" First" _PDFF-OSO @ PDF-OBJ-VALUE DROP _PDFF-INT@ _PDFF-OSF @ _PDFF.OSFIRST !
-    _PDFF-OSO @ _PDFF-OSF @ PDF-OBJ-FREE
-    _PDFF-INDEX 0= IF DROP PDF-S-MEMORY EXIT THEN
-    _PDFF-OSF @ _PDFF.OSNUM !  PDF-S-OK ;
+\ Decode object stream STM into held stream H: its bytes, its /N and
+\ /First, and its index.
+: _PDFF-DECODE  ( stm h file -- status )
+    >R SWAP R@ _PDFF-GET-XT @ EXECUTE                ( h obj status )
+    ?DUP IF NIP NIP R> DROP EXIT THEN
+    2DUP SWAP _PDFH.BYTES R@ PDF-STREAM               ( h obj status )
+    ?DUP IF SWAP R> PDF-OBJ-FREE NIP EXIT THEN
+    S" N" 2 PICK PDF-OBJ-VALUE DROP _PDFF-INT@ 2 PICK _PDFH.N !
+    S" First" 2 PICK PDF-OBJ-VALUE DROP _PDFF-INT@ 2 PICK _PDFH.FIRST !
+    R@ PDF-OBJ-FREE  R> _PDFF-INDEX ;
 
-\ Where object NUM starts in the object stream held, after its /First:
-\ the index's pair INDEX when it is NUM's, else the pair that is; or -1.
-: _PDFF-WHERE  ( num index file -- offset | -1 )
-    _PDFF.OSIDX >R
+\ Hold object stream STM decoded, as a new held stream; given back when
+\ it cannot be.
+: _PDFF-HOLD  ( stm file -- h status )
+    DUP _PDFF-NEW-HELD ?DUP 0= IF 2DROP 0 PDF-S-MEMORY EXIT THEN   ( stm file h )
+    >R -1 _PDFF-DECODING !
+    2DUP R@ SWAP _PDFF-DECODE                         ( stm file status )
+    0 _PDFF-DECODING !
+    ?DUP 0= IF DROP R@ _PDFH.NUM ! R> PDF-S-OK EXIT THEN
+    SWAP R@ _PDFH.NEXT @ OVER _PDFF.HELD !  R> SWAP _PDFF-HELD-FREE
+    NIP 0 SWAP ;
+
+\ Object stream STM, held decoded: decoded now when it is not held, and
+\ when memory refuses it, decoded again once the others are given back.
+: _PDFF-OBJSTM  ( stm file -- h status )
+    _PDFF-DECODING @ IF 2DROP 0 PDF-S-DAMAGED EXIT THEN
+    2DUP _PDFF-HELD@ ?DUP IF NIP NIP PDF-S-OK EXIT THEN
+    2DUP _PDFF-HOLD DUP PDF-S-MEMORY <> IF 2SWAP 2DROP EXIT THEN 2DROP
+    DUP _PDFF-UNHOLD _PDFF-HOLD ;
+
+\ Where object NUM starts in held stream H, after its /First: the index's
+\ pair INDEX when it is NUM's, else the pair that is; or -1.
+: _PDFF-WHERE  ( num index h -- offset | -1 )
+    _PDFH.INDEX >R
     DUP 0< 0= OVER R@ PDF-BUF.U @ 16 / < AND IF
         16 * R@ PDF-BUF.A @ +  2DUP @ = IF NIP 8 + @ R> DROP EXIT THEN
     THEN DROP
@@ -565,17 +624,17 @@ CREATE _PDFF-PAIR 16 ALLOT
         16 +
     REPEAT 2DROP DROP -1 ;
 
-VARIABLE _PDFF-SNUM  VARIABLE _PDFF-SOFF
+VARIABLE _PDFF-SNUM  VARIABLE _PDFF-SOFF  VARIABLE _PDFF-SH
 
 \ The object NUM in the object stream STM, at INDEX in its table.
 : _PDFF-IN-STREAM  ( num stm index file -- obj status )
-    >R SWAP R@ _PDFF-OBJSTM ?DUP IF NIP NIP 0 SWAP R> DROP EXIT THEN    ( num index )
-    OVER SWAP R@ _PDFF-WHERE
+    >R SWAP R@ _PDFF-OBJSTM ?DUP IF NIP NIP NIP 0 SWAP R> DROP EXIT THEN   ( num index h )
+    _PDFF-SH !  OVER SWAP _PDFF-SH @ _PDFF-WHERE
     DUP 0< IF 2DROP R> DROP 0 PDF-S-DAMAGED EXIT THEN
     _PDFF-SOFF ! _PDFF-SNUM !
-    R@ _PDFF.OSFIRST @ _PDFF-SOFF @ +
-    DUP R@ _PDFF.OSBUF PDF-BUF.U @ < 0= IF DROP R> DROP 0 PDF-S-DAMAGED EXIT THEN
-    R@ _PDFF.OSBUF PDF-BUF.A @ OVER +  SWAP R@ _PDFF.OSBUF PDF-BUF.U @ SWAP -
+    _PDFF-SH @ _PDFH.FIRST @ _PDFF-SOFF @ +
+    DUP _PDFF-SH @ _PDFH.BYTES PDF-BUF.U @ < 0= IF DROP R> DROP 0 PDF-S-DAMAGED EXIT THEN
+    _PDFF-SH @ _PDFH.BYTES PDF-BUF.A @ OVER +  SWAP _PDFF-SH @ _PDFH.BYTES PDF-BUF.U @ SWAP -
     PDF-VALUE >R 2>R 2DROP 2R> R>
     DUP PDF-T-BAD = IF DROP 2DROP R> DROP 0 PDF-S-DAMAGED EXIT THEN
     _PDFF-SNUM @ 0 R> _PDFF-NEW-OBJ DUP IF PDF-S-OK ELSE PDF-S-MEMORY THEN ;
@@ -682,7 +741,7 @@ VARIABLE _PDFR-V    VARIABLE _PDFR-M    VARIABLE _PDFR-T
     ROT PDF-OBJ-VALUE DROP S" Type" 2SWAP PDF-DICT@
     PDF-T-NAME = IF 2SWAP PDF-NAME= ELSE 2DROP 2DROP 0 THEN ;
 
-VARIABLE _PDFR-NUM
+VARIABLE _PDFR-NUM   VARIABLE _PDFR-H
 
 \ Add the objects of each object stream found, unless the file holds
 \ them itself.
@@ -693,14 +752,15 @@ VARIABLE _PDFR-NUM
             _PDFR-NUM @ _PDFF-F @ _PDFF-GET 0= IF
                 DUP S" ObjStm" _PDFR-TYPE? SWAP _PDFF-F @ PDF-OBJ-FREE
                 IF _PDFR-NUM @ _PDFF-F @ _PDFF-OBJSTM 0= IF
-                    _PDFF-F @ _PDFF.OSIDX PDF-BUF.U @ 16 / 0 ?DO
-                        _PDFF-F @ _PDFF.OSIDX PDF-BUF.A @ I 16 * + @ _PDFR-T !
+                    _PDFR-H !
+                    _PDFR-H @ _PDFH.INDEX PDF-BUF.U @ 16 / 0 ?DO
+                        _PDFR-H @ _PDFH.INDEX PDF-BUF.A @ I 16 * + @ _PDFR-T !
                         _PDFR-T @ _PDFF-F @ _PDFF-ROOM 0= IF UNLOOP PDF-S-MEMORY EXIT THEN
                         _PDFR-T @ _PDFF-F @ _PDFF-ENTRY@ C@ 1 <> IF
                             _PDFR-T @ 2 _PDFR-NUM @ I _PDFF-F @ _PDFF-FORCE DROP
                         THEN
                     LOOP
-                THEN THEN
+                ELSE DROP THEN THEN
             ELSE DROP THEN
         THEN
         1 _PDFR-NUM +!
@@ -958,8 +1018,7 @@ VARIABLE _PDFF-BROKEN \ true once a section could not be read
 : PDF-OPEN  ( source msrc file -- status )
     DUP PDF-FILE-SIZE 0 FILL  DUP _PDFF-F !
     TUCK _PDFF.MSRC !  TUCK _PDFF.SRC !
-    DUP _PDFF.SRC @ MEDSRC-SIZE@ OVER _PDFF.SIZE !
-    -1 SWAP _PDFF.OSNUM !
+    _PDFF.SRC @ MEDSRC-SIZE@ _PDFF-F @ _PDFF.SIZE !
     _PDFF-F @ _PDFF.SIZE @ 16 / 1+ _PDFF-LEFT !  0 _PDFF-BROKEN !
     _PDFF-F @ _PDFF-STARTXREF  DUP 0< _PDFF-BROKEN !
     BEGIN DUP 0< 0= WHILE

@@ -14,7 +14,7 @@ REQUIRE pdf/file.f
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `PDF-FILE-SIZE` | `( -- 296 )` | A file's record, eight-byte aligned. |
+| `PDF-FILE-SIZE` | `( -- 232 )` | A file's record, eight-byte aligned. |
 | `PDF-OPEN` | `( source msrc file -- status )` | Read the cross-reference sections and trailer. |
 | `PDF-CLOSE` | `( file -- )` | Give back everything; call it whatever `PDF-OPEN` said. |
 | `PDF-TRAILER@` | `( key-a key-u file -- va vu type )` | A trailer entry, such as `Root`. |
@@ -59,11 +59,16 @@ the same, once, when an object of an open file is not where its entry says.
 ## Objects
 
 `PDF-GET` reads an object from its offset or from the object stream that
-holds it. The object stream last used stays decoded, so its other objects
-cost no second decode, and its table of object numbers and offsets is read
-once into an index, so an object is found at the place its
-cross-reference entry gives, its number checked, or else by searching the
-index: about 6,000 steps an object wherever it lies in the stream. An object's record holds a copy of its value: its
+holds it. The file holds each object stream it decodes for as long as it
+is open, so objects that lie in several streams, read in turn, as a name
+tree's nodes and a page tree's are, decode each stream once; each holds
+its table of object numbers and offsets, read once into an index, so an
+object is found at the place its cross-reference entry gives, its number
+checked, or else by searching the index: about 6,000 steps an object
+wherever it lies in the stream. When memory refuses a stream, the file
+gives back the others and decodes it again. While an object stream is
+being decoded no object is read from another, as its own entries lie in
+none (PDF 32000-1 7.5.7); a file that asks for one is damaged. An object's record holds a copy of its value: its
 spans stay valid until `PDF-OBJ-FREE`, whatever else is read.
 
 A stream's data is read only by `PDF-STREAM`, or in pieces through a

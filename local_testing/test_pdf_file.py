@@ -43,6 +43,11 @@ CREATE PF-BUFS PDF-BUF-SIZE 7 + ALLOT  : PF-BUF  PF-BUFS 7 + -8 AND ;
     PF-BYTES SWAP PF-SRC MEDSRC-MEMORY
     ['] PF-ALLOC ['] PF-FREE 0 0 PF-MSRC MSRC-INIT
     PF-SRC PF-MSRC PF-FILE PDF-OPEN ;
+: PF-OPEN-BUDGET  ( u budget -- status )
+    >R PF-BYTES SWAP PF-SRC MEDSRC-MEMORY
+    ['] PF-ALLOC ['] PF-FREE 0 R> PF-MSRC MSRC-INIT
+    PF-SRC PF-MSRC PF-FILE PDF-OPEN ;
+: PF-HELD  ( -- held )  PF-MSRC MSRC-HELD@ ;
 : PF-CLOSE  ( -- held )  PF-FILE PDF-CLOSE  PF-MSRC MSRC-HELD@ ;
 : PF-DECODE  ( obj -- status a u )
     PF-BUF PF-FILE PDF-STREAM PF-BUF PDF-BUF.A @ PF-BUF PDF-BUF.U @ ;
@@ -78,7 +83,7 @@ class File:
         assert stack.depth() == 0, stack.snapshot()
         for value in args:
             stack.push(value)
-        self.runtime.execute(name, step_budget=4_000_000_000)
+        self.steps = self.runtime.execute(name, step_budget=4_000_000_000).semantic_steps
         result = tuple(stack.snapshot())
         while stack.depth():
             stack.pop()
@@ -288,6 +293,81 @@ def test_an_object_stream_s_objects_cross_the_held_stream(pdf_file, tmp_path):
     assert b"/ObjStm" in pdf
     found = read_back(pdf_file, pdf)
     assert sum(b"/Name /Object" in text for text in found.values()) == 50
+    assert pdf_file.close() == 0
+
+
+def streamed_objects() -> dict[int, bytes]:
+    """Objects enough for qpdf to put in several object streams, each long
+    enough that a stream takes room decoded."""
+
+    objects = simple_objects()
+    for num in range(10, 310):
+        objects[num] = b"<< /Index %d /Text (%s) >>" % (num, b"x" * 400)
+    objects[1] = b"<< /Type /Catalog /Pages 2 0 R /Extra [" + b" ".join(
+        b"%d 0 R" % num for num in range(10, 310)) + b"] >>"
+    return objects
+
+
+@needs_qpdf
+def test_object_streams_stay_decoded_until_memory_is_short(pdf_file, tmp_path):
+    """Objects read in turn from two object streams decode each stream
+    once; with room for only one, reading from the other gives the first
+    back, and every object still reads."""
+
+    pdf = qpdf(write_pdf(streamed_objects()), "--object-streams=generate", tmp=tmp_path)
+    (tmp_path / "streams.pdf").write_bytes(pdf)
+    xref = subprocess.run(["qpdf", "--show-xref", str(tmp_path / "streams.pdf")],
+                          capture_output=True, text=True, check=True).stdout
+    streams: dict[int, list[int]] = {}
+    for num, stream in re.findall(r"^(\d+)/0: compressed; stream = (\d+)", xref, re.M):
+        streams.setdefault(int(stream), []).append(int(num))
+    assert len(streams) >= 2
+    first, second = (members[len(members) // 2] for members in list(streams.values())[:2])
+
+    fetched = []
+
+    def read(num: int) -> bytes:
+        obj, status = pdf_file.get(num)
+        assert status == OK, (num, status)
+        fetched.append(pdf_file.steps)
+        value, _ = pdf_file.value(obj)
+        pdf_file.call("PDF-OBJ-FREE", obj, pdf_file.file)
+        assert b"/Index" in value, value
+        return value
+
+    assert pdf_file.open(pdf) == OK
+    a = read(first)
+    (one,) = pdf_file.call("PF-HELD")
+    b = read(second)
+    (two,) = pdf_file.call("PF-HELD")
+    assert two > one
+    # Each stream decoded once: read again, each object costs a lookup.
+    assert read(first) == a and read(second) == b
+    assert pdf_file.call("PF-HELD") == (two,)
+    assert max(fetched[2:]) * 4 < min(fetched[:2]), fetched
+    assert pdf_file.close() == 0
+
+    def least(num: int) -> int:
+        """The least budget that opens the file and reads object NUM."""
+
+        low, high = 0, two
+        while high - low > 64:
+            budget = (low + high) // 2
+            ok = pdf_file.call("PF-OPEN-BUDGET", len(pdf), budget) == (OK,)
+            if ok:
+                obj, status = pdf_file.get(num)
+                ok = status == OK
+                if ok:
+                    pdf_file.call("PDF-OBJ-FREE", obj, pdf_file.file)
+            assert pdf_file.close() == 0
+            low, high = (low, budget) if ok else (budget, high)
+        return high
+
+    # Room to decode either stream, but not to hold both.
+    budget = max(least(first), least(second))
+    assert budget < two
+    assert pdf_file.call("PF-OPEN-BUDGET", len(pdf), budget) == (OK,)
+    assert read(first) == a and read(second) == b and read(first) == a
     assert pdf_file.close() == 0
 
 
