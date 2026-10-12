@@ -701,10 +701,14 @@ class FexpAloneJourney(_AppletJourney):
     draws none of it.  Activating the Details tab brings the table back
     and the picture goes.  The Preview tab shows it again; large.txt's
     preview is text, with no picture; and guide.md's is a DOCUMENT from its
-    first heading.  SCROLL moves it down until its last block shows, a
-    FOLLOW on that block's link to the first heading puts the heading back
-    at the top, and a FOLLOW on its link to notes.md selects that file and
-    previews it as a document too.  sunset.qoi, selected once more, shows
+    first heading, with its figure, the same picture, in view and shown
+    rich as an IMAGE in the picture rows the document leaves it.  SCROLL
+    moves it down until its last block shows, on the way showing the figure
+    partly scrolled out: the IMAGE keeps the figure's whole rectangle and
+    paints only the part the document shows.  A FOLLOW on the last block's
+    link to the first heading puts the heading back at the top, and a
+    FOLLOW on its link to notes.md selects that file and previews it as a
+    document too.  sunset.qoi, selected once more, shows
     rich again.  An OPEN on a directory's row lists that
     directory.  An EXPAND on the
     tree's root shows its entries, a SELECT on one of its directories lists
@@ -770,6 +774,9 @@ class FexpAloneJourney(_AppletJourney):
         # The document's top, as (block key, rows above), before the last
         # scroll step.
         self._scrolled_from: tuple[int, int] | None = None
+        # Whether a scroll step has shown the document's figure partly
+        # scrolled out.
+        self._figure_clipped = False
         # The upload check's step: pending, sent, answered, shown, or None
         # when there is none or it is over.
         self._probe = "pending" if paced_link else None
@@ -981,10 +988,33 @@ class FexpAloneJourney(_AppletJourney):
         ]
         return documents[0] if len(documents) == 1 else None
 
+    @staticmethod
+    def _figure(projection: RichScreenProjection, document):
+        """The document's figure with a row in view, as (block key, the
+        rectangle its picture rows fill, the part shown), or None; and the
+        IMAGE painting that part, or None while CELL shows it."""
+
+        figures = [figure for figure in document.figures if figure[2] is not None]
+        if not figures:
+            return None, None
+        if len(figures) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_DOCUMENT} shows {len(figures)} figures"
+            )
+        figure = figures[0]
+        images = [
+            claim
+            for claim in projection.semantic_image_claims
+            if claim.figure == (document.identity, figure[0])
+        ]
+        return figure, images[0] if len(images) == 1 else None
+
     def _document(self, offer, generation, projection, sender) -> JourneyProgress:
-        """guide.md's preview: a DOCUMENT from its first heading, which the
-        wheel scrolls to its end, whose link to that heading scrolls back,
-        and whose link to notes.md selects and previews that file."""
+        """guide.md's preview: a DOCUMENT from its first heading, with its
+        figure shown rich, which the wheel scrolls to its end, showing the
+        figure partly scrolled out on the way, whose link to that heading
+        scrolls back, and whose link to notes.md selects and previews that
+        file."""
 
         bounds = _desk_content_bounds(projection)
         _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
@@ -1015,6 +1045,20 @@ class FexpAloneJourney(_AppletJourney):
             if not at_top:
                 return self._wait(f"{FEXP_DOCUMENT} shown from its first heading")
             _require_cell_text_in(offer, FEXP_DOCUMENT_HEADING, bounds, _WHERE)
+            figure, image = self._figure(projection, document)
+            if figure is None or figure[1] != figure[2]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_DOCUMENT}'s figure is not wholly in view at its top"
+                )
+            if image is None:
+                return self._wait(f"{FEXP_DOCUMENT}'s figure shown rich")
+            # CELL beneath shows what the picture is and draws none of it.
+            shown = figure[2]
+            _require_picture_facts_in(
+                offer, FEXPLORER_PICTURE_FACTS,
+                (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+            )
+            self._figure_clipped = False
             self._scrolled_from = (top.block_key, 0)
             return self._step("fexp-document-shown", "document_scroll",
                               document.value(FEXP_DOCUMENT_DETENTS),
@@ -1023,15 +1067,28 @@ class FexpAloneJourney(_AppletJourney):
             now = None if top is None else (top.block_key, document.content.viewport_row)
             if now is None or now == self._scrolled_from:
                 return self._wait(f"{FEXP_DOCUMENT} scrolled")
+            figure, image = self._figure(projection, document)
+            if figure is not None and image is None:
+                return self._wait(f"{FEXP_DOCUMENT}'s figure shown rich after the scroll")
+            milestone = None
+            if figure is not None and figure[1] != figure[2] and not self._figure_clipped:
+                # The projection holds the IMAGE to the figure's whole
+                # rectangle and to the part the document shows.
+                self._figure_clipped = True
+                milestone = "fexp-document-figure-clipped"
             end = document.block_with(FEXP_DOCUMENT_END)
             link = None if end is None else document.link(end, FEXP_DOCUMENT_TOP_LINK)
             if link is None:
                 self._scrolled_from = now
-                return self._step("fexp-document-scrolled", "document_scroll",
+                return self._step(milestone or "fexp-document-scrolled", "document_scroll",
                                   document.value(FEXP_DOCUMENT_DETENTS),
                                   self.DOCUMENT_SCROLLED, offer, generation, sender)
+            if not self._figure_clipped:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_DOCUMENT}'s figure never showed partly scrolled out"
+                )
             self._scrolled_from = None
-            return self._step("fexp-document-end-shown", "document_follow",
+            return self._step(milestone or "fexp-document-end-shown", "document_follow",
                               document.value(link.item_key, link.scalar_offset),
                               self.DOCUMENT_TOP, offer, generation, sender)
         if not at_top:

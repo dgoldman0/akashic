@@ -26189,8 +26189,14 @@ Akashic is a library of Forth modules for **MegaPad**. This guide is a
 lists, quotes, code and pictures, with the text wrapped to the preview.
 
 - [Notes](notes.md), another document
-- [Pictures](#pictures), further down
+- [Pictures](#pictures), just below
 - [The end](#the-end)
+
+## Pictures
+
+![An evening sky over two hills](sunset.qoi)
+
+The picture above is sunset.qoi, from the same folder.
 
 ## Lists
 
@@ -26217,11 +26223,11 @@ lists, quotes, code and pictures, with the text wrapped to the preview.
 
 ---
 
-## Pictures
+## Reading
 
-![An evening sky over two hills](sunset.qoi)
-
-The picture above is sunset.qoi, from the same folder.
+- The wheel scrolls a document three rows a turn.
+- A link to a heading, such as [Lists](#lists), scrolls to it.
+- A link to a file selects that file and shows it here.
 
 ## The end
 

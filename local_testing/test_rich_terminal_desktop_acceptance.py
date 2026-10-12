@@ -31,6 +31,7 @@ from rich_terminal.retained_model import ResourceFormat
 from rich_terminal.retained_scene import (
     ControlKind,
     ControlState,
+    ImageClip,
     ImageFit,
     ObjectBounds,
     RGBA,
@@ -62,6 +63,7 @@ from rich_terminal.semantic_items import (
 )
 from rich_terminal.retained_view import (
     DisplayScope,
+    DocumentDraw,
     GlyphRunDraw,
     ImageDraw,
     ImageResourceManifest,
@@ -2921,6 +2923,97 @@ def test_an_image_without_a_backdrop_or_under_a_glyph_is_refused() -> None:
     image = replace(bare, backdrop=True)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="residual glyphs overlap semantic"):
         reconstruct_retained_screen(_image_offer(image, glyph_over=(3, 2)))
+
+
+def _figure_offer(*draws, gaps: set[tuple[int, int]]) -> TerminalDisplayOffer:
+    """A 12 by 8 screen whose one region carries DRAWS over glyphs outside
+    GAPS, with the menu bar on row 0: objects, then controls, in paint
+    order."""
+
+    cols, rows = 12, 8
+    offer = _offer("\n".join((" " * cols,) * rows))
+    region = offer.retained.regions[0]
+    images = tuple(draw for draw in draws if isinstance(draw, ImageDraw))
+    controls = tuple(draw for draw in draws if not isinstance(draw, ImageDraw))
+    resources = tuple(sorted({
+        ImageResourceManifest(region.owner_id, region.owner_generation, image.resource_id,
+                              ResourceFormat(1), 4, 2, 32)
+        for image in images}, key=lambda manifest: manifest.key))
+    return replace(offer, retained=replace(
+        offer.retained, resources=resources,
+        regions=(replace(region, draws=(
+            *_glyph_draws_outside(cols, rows, gaps), *images, region.draws[-1], *controls,
+        )),),
+    ))
+
+
+def _cells(left: int, top: int, right: int, bottom: int) -> set[tuple[int, int]]:
+    return acceptance_runner._rectangle_cells(
+        acceptance_runner._LogicalRectangle(left, top, right, bottom))
+
+
+# A DOCUMENT over rows 1 to 6 whose figure has a blank row before it, three
+# picture rows and its caption.
+FIGURE_DOCUMENT_CELLS = _cells(0, 1, 12, 7)
+
+
+def _figure_document(viewport_row: int = 0) -> DocumentDraw:
+    figure = DocumentBlock(2, BlockKind.FIGURE, "fig", rows_before=1, picture_rows=3)
+    blocks = (figure,) if viewport_row else (
+        DocumentBlock(1, BlockKind.HEADING, "Doc", level=1), figure)
+    return DocumentDraw(91_000, ControlState.VISIBLE | ControlState.ENABLED, 0, 0,
+                        ObjectBounds(0, 1, 12, 6),
+                        DocumentContent(1, DocumentFlag(0), blocks, viewport_row))
+
+
+def test_a_figure_paints_the_picture_rows_its_document_leaves_it() -> None:
+    """A figure's IMAGE fills the picture rows its DOCUMENT leaves unpainted
+    and lies inside the document's claim, so the two do not overlap; its
+    claim names the document and the figure's block."""
+
+    image = ImageDraw(90_000, 0, ObjectBounds(0, 3, 12, 3), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True)
+    projection = reconstruct_retained_screen(
+        _figure_offer(image, _figure_document(), gaps=FIGURE_DOCUMENT_CELLS))
+    claim, = projection.semantic_image_claims
+    assert claim.figure == (ControlIdentity(1, 1, 91_000), 2)
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (0, 3, 12, 6)
+    assert claim.whole is None and not claim.clipped
+    document, = projection.semantic_document_claims
+    whole = acceptance_runner._LogicalRectangle(0, 3, 12, 6)
+    assert document.figures == ((2, whole, whole),)
+
+
+def test_a_figure_scrolled_partly_out_paints_only_the_part_its_document_shows() -> None:
+    """Three rows down, the figure's first two picture rows lie above the
+    document: its IMAGE keeps the whole rectangle, off the document's top,
+    and paints only the row the document shows.  Painting more is refused."""
+
+    document = _figure_document(viewport_row=3)
+    image = ImageDraw(90_000, 0, ObjectBounds(0, -1, 12, 3), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True, clip=ImageClip(0, 2, 12, 1))
+    projection = reconstruct_retained_screen(
+        _figure_offer(image, document, gaps=FIGURE_DOCUMENT_CELLS))
+    claim, = projection.semantic_image_claims
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (0, 1, 12, 2)
+    assert claim.whole == (0, -1, 12, 2) and claim.clipped
+    assert claim.figure == (ControlIdentity(1, 1, 91_000), 2)
+    over = replace(image, clip=ImageClip(0, 1, 12, 2))
+    with pytest.raises(PhysicalDesktopAcceptanceError,
+                       match="does not paint the part of figure 2 its document shows"):
+        reconstruct_retained_screen(_figure_offer(over, document, gaps=FIGURE_DOCUMENT_CELLS))
+
+
+def test_an_element_picture_partly_hidden_claims_only_the_part_painted() -> None:
+    """A picture whose top row is hidden keeps its whole rectangle, which
+    reaches under the menu bar, and claims only the rows it paints."""
+
+    image = ImageDraw(90_000, 0, ObjectBounds(2, 0, 6, 3), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True, clip=ImageClip(0, 1, 6, 2))
+    projection = reconstruct_retained_screen(_figure_offer(image, gaps=_cells(2, 1, 8, 3)))
+    claim, = projection.semantic_image_claims
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (2, 1, 8, 3)
+    assert claim.whole == (2, 0, 8, 3) and claim.figure is None
 
 
 def test_foreground_instrument_withholds_the_whole_status_field_claim() -> None:

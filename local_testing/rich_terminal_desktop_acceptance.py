@@ -42,6 +42,7 @@ from rich_terminal.retained_scene import ControlKind, ControlState, ImageFit, St
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
 from rich_terminal.semantic_documents import (
+    BlockKind,
     DocumentBlock,
     DocumentContent,
     PlacedBlock,
@@ -1831,6 +1832,16 @@ class _SemanticDocumentClaim:
         return placed_blocks(self.content, self.right - self.left)
 
     @property
+    def figures(self) -> tuple[tuple[int, _LogicalRectangle, _LogicalRectangle | None], ...]:
+        """Each carried figure: its block's key, the rectangle its picture
+        rows fill, which may reach past the root, and the part the root
+        shows, or None."""
+
+        return _document_figures(
+            _LogicalRectangle(self.left, self.top, self.right, self.bottom), self.content
+        )
+
+    @property
     def top_block(self) -> DocumentBlock | None:
         """The block the root's top row lies in."""
 
@@ -1994,8 +2005,12 @@ class _SemanticStatusFieldClaim:
 
 @dataclass(frozen=True)
 class _SemanticImageClaim:
-    """A committed IMAGE wholly on screen: the resource it shows, fitted
-    over the renderer's backdrop in its cell rectangle.
+    """A committed IMAGE whose painted part is wholly on screen: the
+    resource it shows, fitted over the renderer's backdrop in its cell
+    rectangle.  LEFT to BOTTOM is the part painted, its clip; WHOLE is the
+    rectangle the picture is fitted in, which may reach off the screen, and
+    is None when all of it is painted.  A figure in a document names the
+    DOCUMENT and the block whose picture rows it fills.
 
     The resource's pixels stay with the terminal; the claim proves which
     picture the frame names, not how the renderer scaled it.
@@ -2011,6 +2026,14 @@ class _SemanticImageClaim:
     resource_id: int
     fit: ImageFit
     opacity: int
+    whole: tuple[int, int, int, int] | None = None
+    figure: tuple[ControlIdentity, int] | None = None
+
+    @property
+    def clipped(self) -> bool:
+        """Whether the renderer paints only part of the picture."""
+
+        return self.whole is not None
 
 
 @dataclass(frozen=True)
@@ -4161,6 +4184,43 @@ def _rectangle_intersection(
     return _LogicalRectangle(left, top, right, bottom)
 
 
+def _document_figures(
+    document: _LogicalRectangle,
+    content: DocumentContent,
+) -> tuple[tuple[int, _LogicalRectangle, _LogicalRectangle | None], ...]:
+    """Each figure a DOCUMENT root at DOCUMENT carries: its block's key, the
+    picture rows the root leaves unpainted for it, from the block's indent
+    across its text area, which may reach past the root, and the part of
+    them inside the root, or None."""
+
+    cols = document.right - document.left
+    figures = []
+    for placed in placed_blocks(content, cols):
+        block = placed.block
+        if block.kind is not BlockKind.FIGURE:
+            continue
+        indent = block.indent
+        whole = _LogicalRectangle(
+            document.left + indent,
+            document.top + placed.content_top,
+            document.left + min(cols, indent + max(cols - indent, 1)),
+            document.top + placed.text_top,
+        )
+        figures.append((block.block_key, whole, _rectangle_intersection(whole, document)))
+    return tuple(figures)
+
+
+def _image_clip_rectangle(whole: _LogicalRectangle, clip) -> _LogicalRectangle:
+    """The part of an IMAGE whose rectangle is WHOLE the renderer paints."""
+
+    return _LogicalRectangle(
+        whole.left + clip.x,
+        whole.top + clip.y,
+        whole.left + clip.x + clip.cols,
+        whole.top + clip.y + clip.rows,
+    )
+
+
 def _rectangle_cells(
     rectangle: _LogicalRectangle,
 ) -> set[tuple[int, int]]:
@@ -4599,6 +4659,25 @@ def reconstruct_retained_screen(
     semantic_image_claims: list[_SemanticImageClaim] = []
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
+    # A figure in a document is an IMAGE filling the picture rows its
+    # DOCUMENT leaves unpainted, in the same region, so the picture shows
+    # there.  Its cells lie in the document's claim.
+    document_figures: dict[
+        _LogicalRectangle,
+        tuple[int, ControlIdentity, int, _LogicalRectangle | None],
+    ] = {}
+    for region in plane.regions:
+        for draw in region.draws:
+            if not isinstance(draw, DocumentDraw):
+                continue
+            logical, visible = _visible_draw_rectangle(region, draw, cell.cols, cell.rows)
+            if visible is None:
+                continue
+            identity = ControlIdentity(region.owner_id, region.owner_generation,
+                                       draw.control_id)
+            for key, whole, inside in _document_figures(logical, draw.content):
+                shown = None if inside is None else _rectangle_intersection(inside, visible)
+                document_figures[whole] = (region.region_id, identity, key, shown)
 
     def claim_semantic_rectangle(
         left: int,
@@ -4628,6 +4707,12 @@ def reconstruct_retained_screen(
             cell.cols,
             cell.rows,
         )
+        whole = logical
+        if isinstance(draw, ImageDraw) and draw.clip is not None:
+            # A clipped IMAGE keeps its whole rectangle, which may reach off
+            # the screen; the renderer paints only the clip.
+            logical = _image_clip_rectangle(whole, draw.clip)
+            visible = None if visible is None else _rectangle_intersection(logical, visible)
         if visible is None:
             if isinstance(draw, instrument_draw_types):
                 continue
@@ -4749,13 +4834,22 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, ImageDraw):
-            # The renderer paints its backdrop under the whole rectangle and
-            # fits the picture inside it, so nothing beneath shows through.
+            # The renderer paints its backdrop under the part it paints and
+            # fits the picture inside the whole rectangle, so nothing beneath
+            # shows through.
             if not draw.backdrop:
                 raise PhysicalDesktopAcceptanceError(
                     f"retained image {draw.object_id} has no backdrop for "
                     "complete rich coverage"
                 )
+            figure = document_figures.get(whole)
+            if figure is not None:
+                figure_region, _document, key, shown = figure
+                if figure_region != region.region_id or shown != visible:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"retained image {draw.object_id} does not paint the part of "
+                        f"figure {key} its document shows"
+                    )
             if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_image_claims.append(
                     _SemanticImageClaim(
@@ -4769,9 +4863,13 @@ def reconstruct_retained_screen(
                         resource_id=draw.resource_id,
                         fit=draw.fit,
                         opacity=draw.opacity,
+                        whole=(None if whole == logical else
+                               (whole.left, whole.top, whole.right, whole.bottom)),
+                        figure=None if figure is None else (figure[1], figure[2]),
                     )
                 )
-            claim_semantic_rectangle(left, top, right, bottom)
+            if figure is None:
+                claim_semantic_rectangle(left, top, right, bottom)
             opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
@@ -9607,8 +9705,9 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
 
         A SELECT on the document's row in the detail table loads its preview,
         and activating the Preview tab shows it: the rich frame carries it as
-        one DOCUMENT from its first heading, which CELL beneath draws too.
-        The Details tab then brings the table back for the picture.
+        one DOCUMENT from its first heading, which CELL beneath draws too,
+        and its figure in view as an IMAGE once the terminal holds it.  The
+        Details tab then brings the table back for the picture.
         """
 
         _require_soundlab_desktop_semantics(projection)
@@ -9690,6 +9789,14 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._require_cell_text(
             offer, projection, FEXPLORER_DOCUMENT_HEADING, FEXPLORER_DESKTOP_TILE
         )
+        # Each figure with a row in view shows rich, in the picture rows the
+        # document leaves it.
+        for key, _whole, shown in document.figures:
+            if shown is not None and not any(
+                claim.figure == (document.identity, key)
+                for claim in projection.semantic_image_claims
+            ):
+                return JourneyProgress()
         milestone = self._milestone("fexplorer-document-shown-rich")
         details, _selected = _tab_in(projection, bounds, "Details", "File Explorer")
         self._send("activate_tab", _tab_value(details),
