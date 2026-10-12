@@ -35,6 +35,7 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
         "2 CONSTANT USCOL-F-TEXT-GRID",
         "3 CONSTANT USCOL-F-TABSET",
         "4 CONSTANT USCOL-F-ITEM-VIEW",
+        "5 CONSTANT USCOL-F-DOCUMENT",
         "168 CONSTANT USCOL-TEXT-FIXED-SIZE",
         "72 CONSTANT USCOL-ITEM-HEADER-SIZE",
         "24 CONSTANT USCOL-RUN-SIZE",
@@ -44,6 +45,9 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
         "24 CONSTANT USCOL-COLUMN-HEADER-SIZE",
         "56 CONSTANT USCOL-VI-HEADER-SIZE",
         "16 CONSTANT USCOL-FIELD-HEADER-SIZE",
+        " 96 CONSTANT USCOL-DOC-FIXED-SIZE",
+        "72 CONSTANT USCOL-BLOCK-HEADER-SIZE",
+        "32 CONSTANT USCOL-CONTAINER-SIZE",
         "64 CONSTANT USCOL-SUMMARY-SIZE",
         "88 CONSTANT USCOL-BUILDER-SIZE",
     ):
@@ -57,6 +61,9 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
     native_view = struct.pack("<17Q", *range(17))
     native_column = struct.pack("<3Q", *range(3))
     native_view_item = struct.pack("<7Q", *range(7))
+    native_document = struct.pack("<12Q", *range(12))
+    native_block = struct.pack("<9Q", *range(9))
+    native_container = struct.pack("<4Q", *range(4))
     assert len(native_text) == 168
     assert len(native_item) == 72
     assert len(native_run) == 24
@@ -65,6 +72,9 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
     assert len(native_view) == 136
     assert len(native_column) == 24
     assert len(native_view_item) == 56
+    assert len(native_document) == 96
+    assert len(native_block) == 72
+    assert len(native_container) == 32
     assert struct.unpack_from("<Q", native_text, 160)[0] == 20
     assert struct.unpack_from("<Q", native_item, 64)[0] == 8
     assert struct.unpack_from("<Q", native_tab, 32)[0] == 4
@@ -72,9 +82,12 @@ def test_native_layouts_are_aligned_pointer_free_and_u32_interoperable() -> None
     assert struct.unpack_from("<Q", native_view, 128)[0] == 16
     assert struct.unpack_from("<Q", native_column, 8)[0] == 1
     assert struct.unpack_from("<Q", native_view_item, 48)[0] == 6
+    assert struct.unpack_from("<Q", native_document, 88)[0] == 11
+    assert struct.unpack_from("<Q", native_block, 64)[0] == 8
+    assert struct.unpack_from("<Q", native_container, 24)[0] == 3
 
-    # Text items, tabs, and view items each stop at the u32 count.
-    assert source.count("_USCOL-B.COUNT@ 0xFFFFFFFF = IF") == 3
+    # Text items, tabs, view items, and blocks each stop at the u32 count.
+    assert source.count("_USCOL-B.COUNT@ 0xFFFFFFFF = IF") == 4
     assert "USCOL-MAX" not in source
     assert "ITEM-MAX" not in source
     assert "TAB-MAX" not in source
@@ -173,11 +186,12 @@ def test_work_sizing_is_count_only_and_bounded_to_key_uniqueness() -> None:
     keys = _word(source, "_USCOL-WORK-FOR-KEYS")
 
     assert "8 _USCOL-MUL?" in keys
-    assert public.count("_USCOL-WORK-FOR-KEYS") == 2
+    assert public.count("_USCOL-WORK-FOR-KEYS") == 3
     assert "USCOL-ITEM-NEXT" not in public
     assert "USCOL-TAB-NEXT" not in public
     assert "USCOL-TEXT-ITEM-COUNT@" in public
     assert "USCOL-TABSET-COUNT@" in public
+    assert "USCOL-DOC-BLOCK-COUNT@" in public
     assert "_USCOL-GENERAL-OVERLAP-FREE?" not in source
     assert "_USCOL-END-SORT" not in source
     assert "_USCOL-RANGE-SUM" not in source

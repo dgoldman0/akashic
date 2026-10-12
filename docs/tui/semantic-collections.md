@@ -2,8 +2,8 @@
 
 `akashic/tui/semantic-collections.f` defines the native family
 payloads for a canonical reusable widget that exposes a `TEXT_AREA`,
-`TEXT_GRID`, `TABSET` with nested `TAB` values, or `ITEM_VIEW` (a list, tree,
-table, sections, or cards). It does not register a provider
+`TEXT_GRID`, `TABSET` with nested `TAB` values, `ITEM_VIEW` (a list, tree,
+table, sections, or cards), or `DOCUMENT`. It does not register a provider
 or advertise a terminal capability, choose a renderer, or contain APT-1 bytes.
 Production applets must not import this module or construct these payloads.
 
@@ -78,6 +78,26 @@ role, field-count)` and then its fields. A field has the 16-byte header
 `(text-bytes, run-count)`, its text padded to eight, and its style runs, the
 same three-cell runs a text item carries.
 
+`DOCUMENT` carries the document value of SEMANTIC-CONTENT-1 (DOC1): the
+blocks a root shows, in the document's order. At `+72` it stores `(flags,
+viewport-row, block-count)`; flag bits 0 and 1 hold the prose's paragraph
+direction, and the viewport row is how many rows of the first block lie
+above the root. Its first block begins at `+96`. A block has the 72-byte
+header `(key, kind, level, rows-before, inside, picture-rows,
+container-count, text-bytes, run-count)`, then its containers outermost
+first, each the 32-byte `(kind, flags, width, number)`, then its text padded
+to eight and its style runs. Kinds, container kinds and the container flag
+`USCOL-DOC-ITEM-START` have the DOC1 values. The validation proves what DOC1
+asks: nonzero unique keys; a level from one to six on a heading and on
+nothing else; picture rows on a figure and on nothing else; rows before
+inside at most as many containers as the block has; containers of a width
+from one to 65535, of which only a list item starts and only a numbered item
+has a number; no text and no runs on a rule; and text with no control but a
+line feed, with style runs as a text item carries them. A document without
+blocks has viewport row zero. The viewport row's bound and which blocks the
+root shows depend on the root's width and the blocks' lines, so the
+terminal checks them, and a document view derives them from the same lines.
+
 The item total counts every item in the view's order, carried or not. The
 view carries every ordinal in its viewport and the selected item, in
 increasing ordinal order, so a long list costs only what it shows. Keys are
@@ -151,6 +171,15 @@ copied to the returned destination, `USCOL-ITEMS-FIELD-RUN` for each style
 run, and `USCOL-ITEMS-FIELD-END`. A source therefore walks only the items it
 carries, never the whole order.
 
+A document is `USCOL-DOC-BEGIN`, `USCOL-DOC-SHAPE ( flags viewport-row
+builder -- status )`, its blocks, and `USCOL-DOC-END`. A block is
+`USCOL-DOC-BLOCK-BEGIN ( key kind level rows-before inside picture-rows
+builder -- status )`, one `USCOL-DOC-CONTAINER ( kind width number start?
+builder -- status )` per container, outermost first, and, when it has text,
+`USCOL-DOC-TEXT-BEGIN ( text-u builder -- text-dst|0 status )`, its text
+copied to the returned destination, and `USCOL-DOC-TEXT-RUN` for each style
+run; `USCOL-DOC-BLOCK-END` completes it.
+
 `USCOL-STORAGE-DISJOINT? ( address bytes -- flag )` checks a caller span
 against the module's builder, validation, and summary authority before an upper
 collector writes it. Zero-length spans use the canonical `(0, 0)` form;
@@ -161,7 +190,8 @@ negative, wrapping, or module-overlapping spans fail closed.
 `USCOL-VALIDATION-WORK-BYTES ( entry available -- bytes status )` derives
 conservative scratch from the fixed item or tab count without prewalking
 variable members. Counts below two need no scratch. Text and tab families need
-exactly `8*n` bytes for the independent member-key uniqueness sort. An item
+exactly `8*n` bytes for the independent member-key uniqueness sort, and so
+does a document, for its block keys. An item
 view needs `16*n` bytes: a key and an item address per carried item, sorted
 once for uniqueness and then searched for each carried parent.
 
@@ -192,7 +222,9 @@ The 64-byte output summary is cleared before ordinary validation failures and
 is populated only after the complete entry succeeds. It correlates the exact
 frozen native slice by family, root key, entry byte length, child/item count,
 total UTF-8 bytes, total style runs, and total fields. For an item view the
-child count is the column count, and the UTF-8 total counts labels and fields.
+child count is the column count, and the UTF-8 total counts labels and fields;
+for a document the item count is the block count and the field count the
+container count.
 It is not a certificate that can be detached from that slice.
 
 ## Frozen STX1 translation
@@ -244,6 +276,19 @@ padding and walks the columns, items, fields, and runs once. The ITM1 tag is
 written last, after every count agrees, and the packer repeats none of the
 validation's proofs.
 
+## Frozen DOC1 translation
+
+`akashic/tui/rich-terminal/uidl-semantic-documents-doc1.f` translates one
+frozen, deep-validated document in the same way. `USDOC-PACK ( entry
+entry-bytes summary source-revision destination capacity -- bytes status )`
+correlates the summary with the entry in constant time, refuses another
+family as `UNSUPPORTED`, and returns `CAPACITY` without touching a
+destination that is too small. Canonical DOC1 length is exactly
+`32 + 32*block-count + 8*container-count + total-utf8 + 12*total-runs`, which
+the validator checks as `u32` and `USCOL-SUMMARY-DOC1-BYTES` derives from the
+summary. The packer omits native padding, walks the blocks, containers,
+text, and runs once, and writes the DOC1 tag last.
+
 For a tabset, the current generic lowerer emits one bounded root plus its
 ordered tab children using their copied label, shortcut, and state. That upper
 adapter and its capability/admission policy remain outside this lower
@@ -264,16 +309,16 @@ implementation evidence only, not a substitute for that journey.
 - Layout/accessor constants use the `USCOL-*` prefix.
 - `USCOL-TEXT-ITEM-BYTES`, `USCOL-TAB-BYTES`, `USCOL-COLUMN-BYTES`, and
   `USCOL-FIELD-BYTES` return checked aligned native member sizes.
-- `USCOL-BUILDER-INIT`, the `USCOL-TEXT-*`, `USCOL-TAB*`, and `USCOL-ITEMS-*`
-  words, and `USCOL-BUILDER-FINISH` implement caller-owned measure/copy
-  construction.
+- `USCOL-BUILDER-INIT`, the `USCOL-TEXT-*`, `USCOL-TAB*`, `USCOL-ITEMS-*`
+  and `USCOL-DOC-*` words, and `USCOL-BUILDER-FINISH` implement caller-owned
+  measure/copy construction.
 - `USCOL-VALIDATION-WORK-BYTES` and `USCOL-ENTRY-VALIDATE` size and perform the
   one deep proof.
 - `USCOL-STORAGE-DISJOINT?` protects the module-owned construction and
   validation authority from caller-bank aliases.
-- `USCOL-SUMMARY-*` accessors, `USCOL-SUMMARY-STX1-BYTES`, and
-  `USCOL-SUMMARY-ITM1-BYTES` expose only the correlated post-validation facts
-  the aggregate planner needs.
-- `USSTX-PACK` and `USITM-PACK` in the rich-terminal translators consume those
-  frozen facts and emit one exact canonical STX1 or ITM1 value without
-  becoming a second validator.
+- `USCOL-SUMMARY-*` accessors, `USCOL-SUMMARY-STX1-BYTES`,
+  `USCOL-SUMMARY-ITM1-BYTES`, and `USCOL-SUMMARY-DOC1-BYTES` expose only the
+  correlated post-validation facts the aggregate planner needs.
+- `USSTX-PACK`, `USITM-PACK`, and `USDOC-PACK` in the rich-terminal
+  translators consume those frozen facts and emit one exact canonical STX1,
+  ITM1, or DOC1 value without becoming a second validator.
