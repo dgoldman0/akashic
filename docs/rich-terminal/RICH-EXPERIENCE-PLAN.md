@@ -1315,29 +1315,128 @@ that loads it.
 
 ## 14. PDFs
 
+**Today.** File Explorer calls a PDF a binary file and shows its name and
+size. Nothing in Akashic reads one. Part 12's document model reads a
+document's whole structure when it opens, which suits a Markdown file but
+not a PDF of hundreds of pages. Part 13 gave the inflater and PNG's five
+filters, which a PDF's Flate filter and its predictors use. The rich
+terminal already takes JPEG files. Akashic's AES is AES-GCM on MegaPad's
+engine, which has no other mode, and Akashic has no MD5 or RC4.
+
 **Decided on 2026-10-11.** A PDF is read as a document through part 12's
 view: its text reflowed with its meanings, and its pictures in place. The
 terminal does not become a page renderer. PDFs open in File Explorer's
 preview first; a reader applet comes later. Many PDFs are encrypted with an
 empty password, and those are read too.
 
-**Plan,** roughly:
+**Decided on 2026-10-12,** for review:
 
-- *The file.* Cross-reference tables and streams, object streams,
-  incremental updates, and the Flate filter from part 13 with its
-  predictors. Pages are read only as the view reaches them, through part
-  12's model.
-- *Text.* Font encodings and ToUnicode maps give each character. Reading
-  order and structure come from the document's tags when it has them, and
-  otherwise from the text's positions, sizes and weights. Each page's start
-  is marked in the flow.
-- *Pictures.* A JPEG picture inside the file goes to the terminal as a file,
-  through a new source for a span of another source. The guest decodes a
-  Flate picture.
-- *Links and the outline.* Links to other pages and to the web, and the
-  PDF's outline, shown as a list of its headings.
-- *Encryption.* The standard security handler with an empty user password,
-  with RC4 and AES, which needs MD5 and RC4 beside the AES Akashic has.
+- *A document grows as it is read.* A reader may stop its structure pass
+  with more to come, and the document asks it for more blocks when a view
+  comes near the last block it has. Markdown still reads its structure at
+  once. A PDF adds a page's blocks when the view reaches the page, so
+  opening a long PDF costs its first pages, not all of them.
+- *A page's start is a block.* DOC1 gains a block kind, `PAGE`, whose text
+  is the page's label. The renderer marks it as a break, and a link or the
+  outline can name a page through it.
+- *The outline is a general element.* A document's contents are its
+  headings, or the PDF's own outline when it has one. File Explorer's
+  preview shows them as a list beside or instead of the document, and
+  choosing one scrolls the document to it. A Markdown document gets the
+  same list.
+- *AES needs a decision.* PDF encryption uses AES in CBC mode, which needs
+  AES's inverse cipher. MegaPad's engine has only GCM, which uses the
+  forward cipher. Either Akashic gains a software AES decryption, or the
+  engine gains CBC decryption. Until that is decided, AES-encrypted files
+  show their facts and say they are protected; RC4-encrypted files are
+  read.
+
+**Plan.**
+
+1. **Contract,** in MegaPad's SEMANTIC-CONTENT-1 and both copies of
+   APT-1-RETAINED-1: the DOC1 block kind `PAGE` (6). Its text is the page's
+   label, laid out as a paragraph's; the renderer marks the break in the
+   cells the label leaves. It sits in no container. No new feature bit:
+   `RET_CONTROL_DOCUMENTS` covers it.
+2. **A growing document** (`media/document.f`). A reader's structure pass
+   may answer that more follows. `DOC-MORE` asks the reader for the next
+   blocks, and the document view asks for more when its view or a scroll
+   comes within a screen of the last block it has. End reads to the end.
+   Anchors, links and the outline name blocks that may not be read yet,
+   by page, so following one reads as far as it.
+3. **The file** (`pdf/`). A lexer and object parser over a media source,
+   reading objects only when asked: cross-reference tables and streams,
+   object streams, and incremental updates, newest first. A file whose
+   cross-reference is damaged is read by scanning for its objects. Streams
+   decode through Flate, with the PNG and TIFF predictors, ASCIIHex,
+   ASCII85, LZW and RunLength filters. The page tree gives each page's
+   resources and content streams.
+4. **Text** (`pdf/font.f`, `pdf/text.f`). Each font maps its codes to
+   Unicode: a ToUnicode map first, then a simple font's encoding (Standard,
+   WinAnsi, MacRoman or PDFDoc, with Differences, through glyph names), and
+   a composite font's Identity encoding with its ToUnicode map. A code with
+   no character becomes U+FFFD. The content stream's text operators give
+   each run of text with its position, size and font, through form
+   XObjects and marked content.
+5. **Reading order and structure** (`pdf/layout.f`). A tagged PDF gives
+   its blocks from its structure tree: headings, paragraphs, lists, quotes,
+   code and figures, with artifacts such as page numbers left out. Without
+   tags, a page's runs become lines by position, lines become paragraphs by
+   their spacing and indent, and a paragraph whose text is larger or bolder
+   than the page's body text becomes a heading. A word split by a hyphen at
+   a line's end is joined.
+6. **Pictures.** An image drawn on a page becomes a figure where it falls.
+   A JPEG goes to the terminal as a file through a new source for a span of
+   another source (`media/source.f`), and CELL shows its facts. The guest
+   decodes a Flate picture, gray, RGB or indexed, eight bits a sample, for
+   CELL, and the terminal takes it as a QOI file the guest writes. Other
+   pictures show their facts.
+7. **Links and the outline.** A link to a page or a place in the file
+   scrolls to it. A link to the web is refused with a message, as part 12
+   does. The outline, or the headings when there is none, is the
+   document's contents.
+8. **Encryption** (`math/md5.f`, `math/rc4.f`, `pdf/crypt.f`). The
+   standard security handler with the empty user password: revisions 2 to
+   4 with RC4 of 40 to 128 bits, and, once AES is decided, AESV2 and
+   AESV3. A file that needs a password shows its facts and says so.
+9. **File Explorer.** `MEDIA-KIND` calls a file that starts `%PDF-` a PDF,
+   and the preview shows it as a document with its contents.
+10. **Samples.** The Desktop disk gains PDFs written at image build by a
+    deterministic Python writer, as sunset.qoi is: several pages with
+    headings, paragraphs, a list, a JPEG photograph and a Flate picture,
+    links to a page and to the web, and an outline; a tagged and an
+    untagged copy; and an RC4-encrypted copy with the empty password.
+11. **Measure.** Guest steps to open a 100-page PDF, show its first page,
+    scroll into an unread page, and follow a link, and the memory a
+    document holds.
+
+**Checks,** in order:
+
+- MD5 and RC4 against Python's `hashlib` and a reference RC4.
+- The lexer and objects on hand-made files; cross-reference tables and
+  streams, object streams and incremental updates as qpdf writes them; a
+  damaged cross-reference read by scanning.
+- Each filter against Python, and the predictors against PNG's filters.
+- Text: each standard encoding, Differences, ToUnicode maps and Identity
+  fonts against what pdftotext reads from the same files.
+- Layout: the tagged and untagged samples give the expected blocks.
+- Encryption: qpdf's RC4 revisions read with the empty password; a file
+  with a user password refused.
+- The document view reads pages as it scrolls, and only those.
+- File Explorer's check through the physical viewer, previewing a PDF in
+  CELL and rich, then the Desktop journey.
+
+**Done when** File Explorer previews the sample PDF as a document in CELL
+and rich: its text reflowed with its headings, paragraphs and lists, each
+page's start marked, its JPEG shown rich and its Flate picture in CELL and
+rich, its links followed, its contents listed, and its RC4-encrypted copy
+read with the empty password; and pages are read only as the view reaches
+them.
+
+**Not in this part.** Forms, annotations other than links, signatures and
+attachments. JBIG2, CCITT and JPEG 2000 pictures, which show their facts.
+Type 3 glyph shapes and vertical writing. Text in a scanned page, which is
+only its picture. A reader applet.
 
 ## Not in this plan
 
