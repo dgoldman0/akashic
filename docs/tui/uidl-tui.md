@@ -1224,8 +1224,10 @@ its ordinary inline active-index state and contributes one `TABSET` from its
 immediate `<tab>` children. A `<media>` element is the view it shows: while
 it shows text its materialized `TXTA` contributes `TEXT_AREA` exactly as a
 `<textarea>` does, while it shows a document its document view contributes
-`DOCUMENT` (`DOCV-DOCUMENT-CAPTURE`), and a picture or the facts view stays
-ordinary CELL paint. Pictures, an element's own or the figures of the
+`DOCUMENT` (`DOCV-DOCUMENT-CAPTURE`), while it shows the document's
+contents their list contributes the `ITEM_VIEW` it gives
+(`LST-ITEM-VIEW-CAPTURE`), and a picture or the facts view stays ordinary
+CELL paint. Pictures, an element's own or the figures of the
 document it shows, reach the rich side through the
 [picture snapshot](uidl-picture-snapshot.md) instead.
 There is no authored `<text-grid>` materialization path. The visitor
@@ -1243,8 +1245,10 @@ and at most the first two positive rows—the exact label plus underline header,
 not the active content panel. A malformed root stays entirely residual.
 
 The separate all-widget storage query scans direct canonical textareas, a
-media element's descriptor and the text area or document view it shows
-(with the document's records and the contents of the blocks in view), and
+media element's descriptor and the text area, document view or contents'
+list it shows (with the document's records and the contents of the blocks
+in view, or its contents and the row buffer the list's rows are made in),
+and
 tab state plus
 genuine caller-mounted collection widgets regardless of visibility,
 so upper caller banks cannot overwrite hidden live widget or borrowed model

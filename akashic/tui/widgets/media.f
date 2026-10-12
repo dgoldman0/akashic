@@ -30,7 +30,9 @@
 \  them instead of the document, as a list widget whose rows are the
 \  entries' titles, indented two cells a level; Enter goes where the
 \  chosen entry goes in the document and shows it again, and Escape or c
-\  shows the document again where it was.
+\  shows the document again where it was.  A rich terminal sees the list
+\  as it sees any list; MEDIA-CONTENTS-STORAGE-DISJOINT? tells a capture
+\  whether a span lies clear of all that showing it touches.
 \
 \  A document that needs a password to be read shows its facts and says it
 \  is protected.  A document's figures and links name files from the
@@ -87,6 +89,7 @@ REQUIRE ../../media/document.f
 REQUIRE ../../markup/markdown.f
 REQUIRE ../../utils/fs/link-path.f
 REQUIRE ../../utils/memory-source.f
+REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/string.f
 
  40 CONSTANT _MEDIA-O-MSRC
@@ -438,6 +441,26 @@ VARIABLE _MSC-W
     _MSC-W @ _MEDIA-O-CONTENTS _MEDIA@ LST-ROWS!
     MEDIA-V-CONTENTS _MSC-W @ _MEDIA-O-VIEW + !
     _MSC-W @ WDG-DIRTY -1 ;
+
+VARIABLE _MSD-A   VARIABLE _MSD-U   VARIABLE _MSD-W
+
+\ MEDIA-CONTENTS-STORAGE-DISJOINT? ( address bytes widget -- flag )
+\   Whether a span lies clear of all that showing the contents touches:
+\   the media descriptor, its row buffer, the document's record and
+\   contents, and the list's descriptor, region and columns.
+: MEDIA-CONTENTS-STORAGE-DISJOINT?  ( address bytes widget -- flag )
+    _MSD-W ! _MSD-U ! _MSD-A !
+    _MSD-U @ 0= IF -1 EXIT THEN
+    _MSD-A @ _MSD-U @ _MSD-W @ _MEDIA-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _MSD-W @ _MEDIA-O-ROW-A _MEDIA@ ?DUP IF
+        _MSD-A @ _MSD-U @ ROT _MSD-W @ _MEDIA-O-ROW-CAP _MEDIA@ MSPAN-OVERLAP?
+        IF 0 EXIT THEN
+    THEN
+    _MSD-W @ _MEDIA-O-DOC _MEDIA@ ?DUP IF
+        >R _MSD-A @ _MSD-U @ 0 0 R> DOC-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    THEN
+    _MSD-W @ MEDIA-CONTENTS@ ?DUP 0= IF -1 EXIT THEN
+    >R _MSD-A @ _MSD-U @ R> LST-ITEM-VIEW-STORAGE-DISJOINT? ;
 
 \ The key c, without Ctrl or Alt, and Escape.
 : _MEDIA-C?  ( event -- flag )

@@ -1447,8 +1447,15 @@ them, a link to a far page reading that page alone.
 and 7, step 9's preview and step 10's samples: File Explorer previews a
 PDF as a document, read a page at a time, with its pictures, links,
 contents and page labels, and a link or a contents entry shows the place
-its destination names. The contents in a rich capture, File Explorer's
-PDF stages in the physical journey, the measurements and AES remain.
+its destination names. File Explorer's PDF stages in the physical journey,
+the measurements and AES remain.
+
+- A document's contents reach a rich terminal as their list: the media
+  element's capture publishes the list's item view while it shows them,
+  as it publishes the text area or the document view it shows, each row
+  as CELL shows it. `MEDIA-CONTENTS-STORAGE-DISJOINT?` keeps a capture's
+  banks clear of the row buffer the rows are made in and of the
+  document's contents.
 
 - A link or a contents entry shows the place on its page that its
   destination names, not the page's start. Each page read keeps where its

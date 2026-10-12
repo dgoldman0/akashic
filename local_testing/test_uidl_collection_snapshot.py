@@ -1144,6 +1144,30 @@ def _media_collection_program() -> list[str]:
         "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
         "_UM-WM @ MEDIA-VIEW@ MEDIA-V-DOCUMENT = _UM-ASSERT",
         "_UM-STACK",
+        # Contents: the document's contents' list is an ITEM_VIEW of its
+        # entries; banks over the list, the row buffer its rows are made
+        # in, or the document's contents are refused.
+        "_UM-WM @ _MEDIA-SHOW-CONTENTS _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-CONTENTS = _UM-ASSERT",
+        "_UM-EM @ UIDL-DIRTY! UTUI-PAINT _UM-STACK",
+        "_UM-NATIVE 2048 _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT",
+        "_UM-COUNT @ 2 = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-EM @ _UM-INDEX = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-ENTRY-FAMILY@ USCOL-F-ITEM-VIEW = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-IV-ITEM-COUNT@ 1 = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-IV-FIRST-ITEM USCOL-VI-FIRST-FIELD USCOL-FIELD-TEXT@",
+        '  S" Notes" STR-STR= _UM-ASSERT',
+        "_UM-D1 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
+        "_UM-WM @ MEDIA-CONTENTS@ _LST-DESC-SIZE _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ _MEDIA-O-ROW-A + @ _UM-WM @ _MEDIA-O-ROW-CAP + @ _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DUP _DOC.ENTRIES-A @",
+        "  SWAP _DOC.ENTRIES-CAP @ _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-CONTENTS = _UM-ASSERT",
+        "_UM-STACK",
         # Facts are ordinary CELL paint: only the textarea is captured.
         'S" /data.bin" _UM-OPEN 0= _UM-ASSERT',
         "_UM-WM @ MEDIA-VIEW@ MEDIA-V-FACTS = _UM-ASSERT",
@@ -1177,7 +1201,7 @@ def test_a_media_element_is_captured_as_the_view_it_shows():
     output = _run_forth(_media_collection_program())
     summary = re.search(r"MEDIA COLLECTION PASS\s+(\d+)\s+0", output)
     assert summary, output[-10000:]
-    assert int(summary.group(1)) >= 55
+    assert int(summary.group(1)) >= 70
 
 
 def _ruha_constructor_program() -> list[str]:

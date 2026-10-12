@@ -6690,8 +6690,9 @@ VARIABLE _UTUI-CS-ROOT-W
 : _UTUI-CS-UIDL-TEXTAREA  ( -- disjoint status )
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
 
-\ A media element is checked as the view it shows; its text view and its
-\ document view are collections, read through the media descriptor.
+\ A media element is checked as the view it shows; its text view, its
+\ document view and its contents' list are collections, read through the
+\ media descriptor.
 : _UTUI-CS-UIDL-MEDIA  ( -- disjoint status )
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
         DROP -1 USCOL-S-OK EXIT
@@ -6703,6 +6704,10 @@ VARIABLE _UTUI-CS-ROOT-W
     DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT = IF
         MEDIA-DOCUMENT@ >R _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ R>
             DOCV-DOCUMENT-STORAGE-DISJOINT? USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-CONTENTS = IF
+        >R _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ R>
+            MEDIA-CONTENTS-STORAGE-DISJOINT? USCOL-S-OK EXIT
     THEN
     DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP -1 USCOL-S-OK EXIT THEN
     MEDIA-TEXT@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
@@ -6871,9 +6876,10 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     0 _UTUI-VC-T-LABEL-A ! 0 _UTUI-VC-T-LABEL-U !
     0 _UTUI-VC-T-SHORTCUT-A ! 0 _UTUI-VC-T-SHORTCUT-U ! ;
 
-\ A media element is a text area while it shows text and a document while
-\ it shows one; _UTUI-VC-PREPARE finds its view and leaves any other view
-\ ordinary CELL paint.
+\ A media element is a text area while it shows text, a document while it
+\ shows one, and an item view while it shows a document's contents;
+\ _UTUI-VC-PREPARE finds its view and leaves any other view ordinary CELL
+\ paint.
 : _UTUI-VC-DIRECT-FAMILY@  ( elem -- family|0 )
     DUP UIDL-TYPE UIDL-T-TEXTAREA = IF
         DROP USCOL-F-TEXT-AREA EXIT
@@ -6883,8 +6889,9 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     THEN
     UIDL-TYPE UIDL-T-TABS = IF USCOL-F-TABSET ELSE 0 THEN ;
 
-\ Replace the media widget in _UTUI-VC-W by the text area or document view
-\ it shows, keeping the media widget for the storage check.
+\ Replace the media widget in _UTUI-VC-W by the text area, document view
+\ or contents' list it shows, keeping the media widget for the storage
+\ check.
 : _UTUI-VC-MEDIA-VIEW  ( -- status )
     _UTUI-VC-W @ DUP _UTUI-MEDIA-GENUINE? 0= IF
         DROP USCOL-S-INVALID EXIT
@@ -6895,6 +6902,13 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
         DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
         _UTUI-VC-W !
         USCOL-F-DOCUMENT _UTUI-VC-FAMILY !
+        USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-CONTENTS = IF
+        MEDIA-CONTENTS@ DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
+        DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+        _UTUI-VC-W !
+        USCOL-F-ITEM-VIEW _UTUI-VC-FAMILY !
         USCOL-S-OK EXIT
     THEN
     DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP USCOL-S-UNSUPPORTED EXIT THEN
@@ -6948,6 +6962,17 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
 \ its text area does.
 : _UTUI-VC-PREPARE-DOCUMENT  ( -- status )
     _UTUI-VC-W @ DOCV-GENUINE? 0= IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-W @ _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-VC-SC @ _UTUI-SYNC-PROXY
+    _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
+    USCOL-S-OK ;
+
+\ A media element's contents' list draws in the element's proxy region, as
+\ its document view does.
+: _UTUI-VC-PREPARE-LIST  ( -- status )
+    _UTUI-VC-W @ _LST-GENUINE? 0= IF USCOL-S-INVALID EXIT THEN
     _UTUI-VC-W @ _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
         USCOL-S-INVALID EXIT
     THEN
@@ -7012,6 +7037,9 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     THEN
     _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
         _UTUI-VC-PREPARE-DOCUMENT EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _UTUI-VC-PREPARE-LIST EXIT
     THEN
     USCOL-S-INVALID ;
 
@@ -7114,6 +7142,15 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
     _UTUI-VC-BUILDER @ USCOL-BUILDER-FINISH ;
 
+\ The builder and the destination lie clear of all that showing a media
+\ element's contents touches, the row buffer the list's rows are made in
+\ among it, which the list's own check does not know.
+: _UTUI-VC-CONTENTS-CLEAR?  ( -- flag )
+    _UTUI-VC-BUILDER @ USCOL-BUILDER-SIZE _UTUI-VC-MEDIA @
+        MEDIA-CONTENTS-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _UTUI-VC-DST @ _UTUI-VC-CAP @ 0 MAX _UTUI-VC-MEDIA @
+        MEDIA-CONTENTS-STORAGE-DISJOINT? ;
+
 : _UTUI-VC-CAPTURE-CURRENT  ( -- bytes status )
     _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
         _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
@@ -7125,6 +7162,11 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
         _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
         _UTUI-VC-BUILDER @ _UTUI-VC-W @ DOCV-DOCUMENT-CAPTURE EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _UTUI-VC-CONTENTS-CLEAR? 0= IF 0 USCOL-S-INVALID EXIT THEN
+        _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
+        _UTUI-VC-BUILDER @ _UTUI-VC-W @ LST-ITEM-VIEW-CAPTURE EXIT
     THEN
     0 USCOL-S-INVALID ;
 
@@ -7201,6 +7243,10 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
             THEN
         THEN
         USCOL-S-OK EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-MEDIA @
+            MEDIA-CONTENTS-STORAGE-DISJOINT? USCOL-S-OK EXIT
     THEN
     0 USCOL-S-INVALID ;
 

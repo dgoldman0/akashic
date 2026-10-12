@@ -75,8 +75,11 @@ first selected. Enter goes where the chosen entry goes in the document, as
 document again where it was. A document with no contents ignores `c`. The
 contents take the same region as the document, so a narrow preview loses
 nothing to them, and the view in use is `MEDIA-V-CONTENTS`. A rich
-terminal sees the contents as the list's CELL cells for now; the media
-element's capture publishes its text and document views.
+terminal sees the contents as it sees any list: the media element's
+capture publishes its text area, its document view, or its contents' list
+as the item view the list gives, each row's text as CELL shows it.
+`MEDIA-CONTENTS-STORAGE-DISJOINT?` tells the capture whether a span lies
+clear of all that showing the contents touches.
 
 A Markdown document's figures and links name files by paths from the
 document's folder, resolved as [link-path.f](../../utils/fs/link-path.md)
@@ -113,7 +116,8 @@ only once the picture has been drawn.
 | `MEDIA-NAME@` | `( widget -- a u )` | The file's name, the part of its path after the last slash. |
 | `MEDIA-VIEW@` | `( widget -- view )` | `MEDIA-V-NONE`, `-PICTURE`, `-TEXT`, `-FACTS`, `-DOCUMENT` or `-CONTENTS`. |
 | `MEDIA-NOTE@` | `( widget -- note )` | Why the facts show: `MEDIA-N-*`. |
-| `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget, text area or document view the current view draws. |
+| `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget, text area, document view or contents' list the current view draws. |
+| `MEDIA-CONTENTS-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | Whether a span lies clear of the media descriptor, its row buffer, the document's record and contents, and the contents' list's descriptor, region and columns. |
 | `MEDIA-PICTURE@`, `MEDIA-TEXT@`, `MEDIA-DOCUMENT@`, `MEDIA-CONTENTS@` | `( widget -- widget \| 0 )` | The picture widget, the document view and the contents' list, each made on first use, and the current text area. |
 
 ## In UIDL
