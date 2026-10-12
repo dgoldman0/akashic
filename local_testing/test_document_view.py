@@ -1386,3 +1386,24 @@ def test_a_press_on_a_pdf_link_goes_to_its_page_or_the_owner(tmp_path) -> None:
     assert "FOLLOW=https://example.com/paper" in steps[1]
     assert "FOLLOW=" not in steps[2] and re.search(r"AT=1 0 0 ", steps[2]), steps[2][-800:]
     assert "HELD=0 " in output
+
+
+def test_a_view_with_work_is_counted_until_it_is_done() -> None:
+    """A view that needs a part read, or a picture's file made, counts as
+    having work (DOCV-WORK?), so a host's service pass runs for it; once
+    it needs nothing, and once it is freed, it no longer counts."""
+
+    pdf, _rows = _figured_pdf()
+    lines = [
+        _view(30, 40), f"DV-FILE {len(pdf)} PDF-DOC-READER DV-OPEN-WITH",
+        '." W0=" DOCV-WORK? . CR',
+        'DV-DRAW ." W1=" DOCV-WORK? . CR',                 # needs its first part
+        'DV-W @ DOCV-SERVICE DROP ." W2=" DOCV-WORK? . CR',   # read; draw not yet run
+        'DV-DRAW ." W3=" DOCV-WORK? . CR',                 # pictures' files being made
+        'DV-SETTLE ." W4=" DOCV-WORK? . CR',
+        "DV-CLOSE", '." W5=" DOCV-WORK? . CR',
+    ]
+    output = _run(lines, pdf, roots=("pdf/document.f",))
+    works = re.findall(r"W(\d)=(-?\d+)", output)
+    assert works == [("0", "0"), ("1", "-1"), ("2", "0"), ("3", "-1"), ("4", "0"),
+                     ("5", "0")], output[-1500:]

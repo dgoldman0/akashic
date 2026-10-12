@@ -2947,15 +2947,16 @@ VARIABLE _UTUI-SKIP-CHILDREN
 
 \ UTUI-SERVICE ( -- worked? )
 \   Work that no input announces.  Each <media> element whose picture is
-\   still decoding advances one bounded slice, and one whose view changed
-\   is marked for repaint.  True when any slice ran, so the caller's loop
+\   still decoding, or whose document needs a part read or a picture's
+\   file made, advances one bounded slice, and one whose view changed is
+\   marked for repaint.  True when any slice ran, so the caller's loop
 \   does not sleep while work remains.  Hosts call it each pass with the
-\   document's context active; it returns at once when no picture anywhere
-\   is decoding.
+\   document's context active; it returns at once when no picture
+\   anywhere is decoding and no document view has work.
 VARIABLE _USV-WORKED
 
 : UTUI-SERVICE  ( -- worked? )
-    PICT-WORK? 0= IF 0 EXIT THEN
+    PICT-WORK? DOCV-WORK? OR 0= IF 0 EXIT THEN
     _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
     0 _USV-WORKED !
     UIDL-ELEM-COUNT 0 ?DO

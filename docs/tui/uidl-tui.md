@@ -480,10 +480,12 @@ Full repaint cycle:
 ### UTUI-SERVICE — `( -- worked? )`
 
 Work that no input announces. Each `<media>` element whose picture is still
-decoding advances one bounded slice (`MEDIA-SERVICE`), and an element whose
-view changed is marked dirty, which requests a repaint. Returns true when
-any slice ran, so the caller's loop takes another pass instead of sleeping,
-and returns false at once when no picture anywhere is decoding. The app
+decoding, or whose document needs a part read or a picture's file made,
+advances one bounded slice (`MEDIA-SERVICE`), and an element whose view
+changed is marked dirty, which requests a repaint. Returns true when any
+slice ran, so the caller's loop takes another pass instead of sleeping, and
+returns false at once when no picture anywhere is decoding (`PICT-WORK?`)
+and no document view has work (`DOCV-WORK?`). The app
 shell calls it each pass for its document, and `AHOST-SERVICE` for each
 applet's, with that document's context active.
 

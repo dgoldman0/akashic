@@ -413,7 +413,8 @@ app's do.
 
 Before the app's service, a shell with a UIDL document calls `UTUI-SERVICE`,
 which decodes one bounded slice of each picture a `<media>` element is
-showing. A slice counts as work, so the loop keeps taking passes until the
+showing, or reads the next part or makes more of a picture's file for a
+document one shows. A slice counts as work, so the loop keeps taking passes until the
 pictures are ready, and no app needs a service of its own for them.
 
 ### Deferred Action Queue

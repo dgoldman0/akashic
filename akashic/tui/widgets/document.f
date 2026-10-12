@@ -33,6 +33,11 @@
 \  width, so a scroll lays out only the blocks it passes, and each draw
 \  keeps the contents of the blocks it shows, giving back the others.
 \
+\  A view with work no input announces, a part to read or a picture's
+\  file to make, is counted (DOCV-WORK?), as a picture widget still
+\  decoding is (PICT-WORK?), so a host's service pass runs while either
+\  has work.
+\
 \  A document in parts (a PDF's pages) shows the parts read.  The view
 \  stops where a part not read lies, as at the document's ends, and each
 \  draw notes the part it needs next: one not read within a screen below
@@ -78,6 +83,7 @@
 \   +184  need         the part the last draw needs read, or -1
 \   +192  counted      the blocks the counts are for
 \   +200  failed       the revision at which a read failed, or -1
+\   +208  working      the view is counted among those with work
 \
 \  The view publishes the blocks its last draw showed as a renderer-neutral
 \  DOCUMENT entry (semantic-collections.f) on the rows CELL drew them:
@@ -132,7 +138,13 @@ VARIABLE _DOCV-OWNED-LIMIT
 184 CONSTANT _DOCV-O-NEED
 192 CONSTANT _DOCV-O-COUNTED
 200 CONSTANT _DOCV-O-FAILED
-208 CONSTANT _DOCV-DESC-SIZE
+208 CONSTANT _DOCV-O-WORKING
+216 CONSTANT _DOCV-DESC-SIZE
+
+\ Views with work no input announces, in any document: a part to read or a
+\ picture's file to make.  A host's service pass looks at its views only
+\ while some view, or some picture (PICT-WORK?), has work.
+VARIABLE _DOCV-WORK-COUNT   0 _DOCV-WORK-COUNT !
 
 \ A figure: its block and the block's key, its picture's size (0 0 when
 \ it has none), and, while it is shown, its source, its picture widget,
@@ -172,6 +184,11 @@ VARIABLE _DV-W            \ the view being worked on
 : _DV-H  ( -- rows )  _DV-RGN RGN-H ;
 : _DV-REVISE  ( -- )  _DOCV-O-REVISION _DV@ 1+ _DOCV-O-REVISION _DV! ;
 : _DV-CHANGED  ( -- )  _DV-REVISE _DV-W @ WDG-DIRTY ;
+
+\ Count the view among those with work, or not.
+: _DV-WORK!  ( flag -- )
+    0<> DUP _DOCV-O-WORKING _DV@ = IF DROP EXIT THEN
+    DUP IF 1 ELSE -1 THEN _DOCV-WORK-COUNT +!  _DOCV-O-WORKING _DV! ;
 
 \ =====================================================================
 \  1. Memory and the owner
@@ -345,6 +362,20 @@ VARIABLE _DVF-F
     PIC-ST-READY <> IF _DV-FIG-UNMAKE EXIT THEN
     MEDSRC-SPAN-SIZE _DV-ALLOC ?DUP 0= IF _DV-FIG-UNMAKE EXIT THEN   ( fig source )
     DUP 2 PICK _FIG.MAKER + @ PIC-MAKER-SOURCE  SWAP _DV-FIG-WIDGET ;
+
+\ A figure whose picture's file is still being made.
+: _DV-MAKING?  ( fig -- flag )
+    DUP _FIG.MAKER + @ 0<> SWAP _FIG.PICT + @ 0= AND ;
+
+\ The view has work while it needs a part or a picture's file is made.
+: _DV-SYNC-WORK  ( -- )
+    _DOCV-O-NEED _DV@ 0< 0= IF -1 _DV-WORK! EXIT THEN
+    _DOCV-O-FIGS-N _DV@ 0 ?DO
+        I _DV-FIG _DV-MAKING? IF -1 _DV-WORK! UNLOOP EXIT THEN
+    LOOP 0 _DV-WORK! ;
+
+\ DOCV-WORK? ( -- flag )   Some document view has work to do.
+: DOCV-WORK?  ( -- flag )  _DOCV-WORK-COUNT @ 0<> ;
 
 \ _DV-FIG-SHOW ( name-a name-u fig -- )
 \   Give a figure a picture widget showing its picture, in a region inside
@@ -848,7 +879,7 @@ VARIABLE _DVP-ROWS
                 0 0 _DV-DOC DOC-GAP _DOCV-O-NEED _DV!
             THEN
         THEN THEN
-        EXIT
+        _DV-SYNC-WORK EXIT
     THEN
     _DOCV-O-DRAWS _DV@ 1+ DUP _DOCV-O-DRAWS _DV! _DVD-SEEN !
     _DV-TOP >R _DV-TOP-ROW >R
@@ -867,7 +898,7 @@ VARIABLE _DVP-ROWS
             _DV-NEED-BELOW DUP 0< IF DROP _DV-NEED-ABOVE THEN _DOCV-O-NEED _DV!
         THEN
     ELSE 2DROP THEN
-    _DVD-HIDE-UNSEEN
+    _DVD-HIDE-UNSEEN  _DV-SYNC-WORK
     \ Keep the contents shown; give back the rest.
     _DV-TOP _DOCV-O-END _DV@ _DV-DOC DOC-KEEP
     DRW-STYLE-RESTORE ;
@@ -1024,7 +1055,7 @@ VARIABLE _DVH-BLOCK
 \   name, and only links to the document's own headings are followed.
 : DOCV-OWNER!  ( resolve-xt release-xt follow-xt ctx widget -- )
     _DV-W !
-    _DV-FIGS-FREE
+    _DV-FIGS-FREE _DV-SYNC-WORK
     _DOCV-O-CTX _DV! _DOCV-O-FOLLOW _DV! _DOCV-O-RELEASE _DV!
     _DOCV-O-RESOLVE _DV!
     0 _DOCV-O-COLS _DV!  _DV-CHANGED ;
@@ -1039,7 +1070,7 @@ VARIABLE _DVH-BLOCK
     _DOCV-O-DOC _DV!
     0 _DOCV-O-TOP _DV! 0 _DOCV-O-TOP-ROW _DV! 0 _DOCV-O-END _DV!
     -1 _DOCV-O-NEED _DV!  -1 _DOCV-O-FAILED _DV!
-    _DV-CHANGED ;
+    _DV-SYNC-WORK _DV-CHANGED ;
 
 : DOCV-DOCUMENT@  ( widget -- doc|0 )  _DOCV-O-DOC + @ ;
 : DOCV-REVISION@  ( widget -- n )  _DOCV-O-REVISION + @ ;
@@ -1091,10 +1122,6 @@ VARIABLE _DVH-BLOCK
 : DOCV-FOLLOW  ( target-a target-u widget -- )
     _DV-W ! _DV-DOC 0= IF 2DROP EXIT THEN _DV-FOLLOW ;
 
-\ A figure whose picture's file is still being made.
-: _DV-MAKING?  ( fig -- flag )
-    DUP _FIG.MAKER + @ 0<> SWAP _FIG.PICT + @ 0= AND ;
-
 \ DOCV-PENDING? ( widget -- flag )
 \   The view needs a part read, a figure's picture's file is being made,
 \   or a figure's picture is still pending.
@@ -1108,12 +1135,7 @@ VARIABLE _DVH-BLOCK
         THEN
     LOOP 0 ;
 
-\ DOCV-SERVICE ( widget -- changed? )
-\   Read the part the view needs, or else make some more of the first
-\   figure's picture's file, or else decode some more of the first figure
-\   whose picture is pending.  True when what the view shows changed.
-: DOCV-SERVICE  ( widget -- changed? )
-    _DV-W !
+: _DV-SERVICE  ( -- changed? )
     _DOCV-O-NEED _DV@ DUP 0< 0= IF
         -1 _DOCV-O-NEED _DV!  _DV-READ-PART EXIT
     THEN DROP
@@ -1136,11 +1158,17 @@ VARIABLE _DVH-BLOCK
         THEN
     LOOP 0 ;
 
+\ DOCV-SERVICE ( widget -- changed? )
+\   Read the part the view needs, or else make some more of the first
+\   figure's picture's file, or else decode some more of the first figure
+\   whose picture is pending.  True when what the view shows changed.
+: DOCV-SERVICE  ( widget -- changed? )  _DV-W ! _DV-SERVICE _DV-SYNC-WORK ;
+
 \ DOCV-FREE ( widget -- )
 \   Give back everything the view holds; the document stays the owner's.
 : DOCV-FREE  ( widget -- )
     _DV-W !
-    _DV-FIGS-FREE _DV-COUNTS-FREE
+    _DV-FIGS-FREE _DV-COUNTS-FREE  0 _DV-WORK!
     _DV-W @ FREE ;
 
 \ =====================================================================

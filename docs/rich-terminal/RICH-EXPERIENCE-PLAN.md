@@ -1453,6 +1453,19 @@ the samples, measurements and AES remain.
 - A page's start shows the label the file gives it (`pdf/labels.f`), such
   as iv or A-3, read once from every pair of the `/PageLabels` number tree
   (`PDF-NUMS-EACH`), so a PDF's page list labels every page too.
+- Step 10's samples are on every image with File Explorer: `sample.pdf`,
+  `tagged.pdf` and `encrypted.pdf`, written at image build by
+  `local_testing/sample_pdf.py` with a baseline JPEG encoder in integer
+  arithmetic (`jpeg_baseline.py`), so each is the same file on every host.
+  Akashic reads all three as the same three-page document: its blocks, two
+  lists, two pictures, code, links to a page and to the web, and its
+  outline. The `fexplorer` smoke walks the plain copy through its link,
+  its contents and its pictures' page, and opens the other two.
+- A document's work, a part to read or a picture's file to make, now runs
+  inside applications: hosts ran their service pass only while a picture
+  widget was decoding, so a PDF's first page was never read there. Each
+  view with such work is counted (`DOCV-WORK?`) beside the pictures
+  (`PICT-WORK?`), in the app shell and in Desk's applet host.
 
 - A document's contents are a general element (`DOC-CONTENTS`): its
   reader's, as a PDF's outline, or else its headings of levels 1 to 3. A

@@ -1095,13 +1095,13 @@ VARIABLE _AHTI-HOST
 \   Give each live applet's UIDL document its pending media work, one
 \   bounded slice a pass, and mark a slot whose document changed for
 \   repaint.  True when any slice ran.  Returns at once when no picture
-\   anywhere is decoding.
+\   anywhere is decoding and no document view has work.
 VARIABLE _AHSV-HOST
 VARIABLE _AHSV-WORKED
 VARIABLE _AHSV-PAINT
 
 : AHOST-SERVICE  ( host -- worked? )
-    PICT-WORK? 0= IF DROP 0 EXIT THEN
+    PICT-WORK? DOCV-WORK? OR 0= IF DROP 0 EXIT THEN
     _AHSV-HOST !  0 _AHSV-WORKED !
     _UTUI-NEEDS-PAINT @ _AHSV-PAINT !
     _AHSV-HOST @ AHOST.HEAD @

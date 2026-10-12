@@ -313,6 +313,7 @@ from rich_terminal import text_rules  # noqa: E402
 import agent_transcript  # noqa: E402
 import mixed_text  # noqa: E402
 import qoi_codec  # noqa: E402
+import sample_pdf  # noqa: E402
 import styled_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     IMAGE_FORMATS,
@@ -26287,14 +26288,16 @@ FEXPLORER_MODULE = "tui/applets/fexplorer/fexplorer.f"
 
 def _sample_files(modules) -> dict[str, bytes]:
     """The sample files an image carries: the text samples, and the sample
-    picture and document on images with File Explorer, the viewer that shows
-    them.  Keeping them off the others keeps their MP64FS directories small."""
+    picture, document and PDFs (sample_pdf.py) on images with File Explorer,
+    the viewer that shows them.  Keeping them off the others keeps their
+    MP64FS directories small."""
 
     if FEXPLORER_MODULE in modules:
         return {
             **SAMPLE_FILES,
             SAMPLE_PICTURE_NAME: SAMPLE_PICTURE,
             SAMPLE_DOCUMENT_NAME: SAMPLE_DOCUMENT,
+            **sample_pdf.SAMPLES,
         }
     return SAMPLE_FILES
 
@@ -30844,6 +30847,64 @@ def smoke(
                 return
             wait_screen(heading, "a press on the link to the first heading did not scroll back")
 
+        def run_fexplorer_pdf_journey() -> None:
+            """Preview the sample PDF: its first page shows from its title; a
+            press on its link to the last page reads and shows that page; c
+            lists its outline, and Enter on Pictures shows the second page;
+            the encrypted and tagged copies show the same title."""
+
+            def kept(shown: bool) -> bool:
+                """The screen a failed step left, kept beside the captures."""
+                if not shown:
+                    screen.write_text(OUTPUT_ROOT / f"smoke-{profile_name}-pdf.txt")
+                return shown
+
+            def go_to(name: str, marker: str, failure: str) -> bool:
+                session.send_key("ctrl+g")
+                if not wait_screen(
+                    "Go to:", "File Explorer's Go to Path prompt did not open"
+                ):
+                    return False
+                session.send_text(name)
+                session.send_key("enter")
+                return kept(wait_screen(
+                    marker, failure, step_budget=1_600_000_000, wall_timeout=40.0
+                ))
+
+            title = "A sample PDF"
+            if not go_to("sample.pdf", title, "File Explorer did not preview sample.pdf"):
+                return
+            hits = screen.find("the last page")
+            if not hits:
+                journey_errors.append("sample.pdf showed no link to its last page")
+                return
+            row, col = hits[0]
+            send_sgr_mouse(row, col)
+            send_sgr_mouse(row, col, release=True)
+            if not wait_screen(
+                "Some code, in a fixed-pitch font:",
+                "a press on sample.pdf's link did not show its last page",
+                step_budget=1_600_000_000, wall_timeout=40.0,
+            ):
+                return
+            session.send_text("c")
+            if not wait_screen("Pictures", "c did not list sample.pdf's outline"):
+                return
+            for _ in range(2):
+                session.send_key("down")
+                if not settle_input("the outline did not take a key"):
+                    return
+            session.send_key("enter")
+            if not wait_screen(
+                "A photograph, kept as the JPEG file it was",
+                "choosing Pictures in the outline did not show the second page",
+                step_budget=1_600_000_000, wall_timeout=40.0,
+            ):
+                return
+            for name in ("encrypted.pdf", "tagged.pdf"):
+                if not go_to(name, title, f"File Explorer did not preview {name}"):
+                    return
+
         def run_pad_styled_text_journey() -> None:
             """Open notes.md: Pad highlights its Markdown in CELL, each
             meaning in its palette's look.  Ctrl and a click on its link
@@ -32132,6 +32193,7 @@ def smoke(
                             / "assets/fonts/DejaVuSansMono.ttf",
                         )
                 run_fexplorer_document_journey()
+                run_fexplorer_pdf_journey()
 
             if profile_name in (
                 "desktop",

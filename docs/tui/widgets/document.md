@@ -80,7 +80,9 @@ The view stops where a part not read lies (`DOC-GAP`), as it stops at the
 document's ends: it scrolls no further that way, and the rows past it stay
 blank. Each draw notes the part the view needs next: one not read within a
 screen below the view's bottom, or else within a screen above its top, or
-the first part when none is read. `DOCV-PENDING?` is true while it needs
+the first part when none is read. Each view with such work is counted
+(`DOCV-WORK?`), as a picture widget still decoding is (`PICT-WORK?`), so a
+host's service pass runs for it. `DOCV-PENDING?` is true while it needs
 one, and `DOCV-SERVICE` reads it, one part a call, before it decodes any
 picture. The owner's service pass that already calls `DOCV-SERVICE` for
 pictures reads the parts too.
@@ -197,6 +199,7 @@ part could not be read)"; its rows are counted again at the next pass.
 | `DOCV-SHOWN` | `( widget -- first end )` | The blocks the last draw showed. |
 | `DOCV-ROWS` | `( index widget -- rows )` | The rows block `index` takes at the view's width, its blank rows included. |
 | `DOCV-REVISION@` | `( widget -- n )` | Counts every change in what the view shows. |
+| `DOCV-WORK?` | `( -- flag )` | Some document view, in any document, needs a part read or a picture's file made; hosts run their service pass while it, or `PICT-WORK?`, is true. |
 | `DOCV-PENDING?` | `( widget -- flag )` | The view needs a part read, a figure's picture's file is being made, or a figure's picture is still decoding. |
 | `DOCV-SERVICE` | `( widget -- changed? )` | Read the part the view needs, or else make some more of a figure's picture's file, or else decode some more of a figure's picture; true when what the view shows changed. |
 | `DOCV-FIGURE-COUNT` | `( widget -- n )` | The figure records the view keeps. |
