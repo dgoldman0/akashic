@@ -282,10 +282,26 @@ VARIABLE _PNE-BIT   \ bits used of the sample byte
 : _PN-KEY@  ( i -- v )  CELLS _PN.KEY + _PN@ ;
 : _PN-NEXT  ( -- byte )  _PN.DEPTH _PN@ DUP _PN-SAMPLE SWAP _PN-WIDEN ;
 
+\ An eight-bit RGB row with no transparent colour: each pixel's three
+\ bytes, then opaque.
+: _PN-EMIT-RGB8  ( -- )
+    _PNE-S @ _PNE-D @
+    _PN.W _PN@ 0 ?DO
+        2DUP 3 MOVE  255 OVER 3 + C!  SWAP 3 + SWAP 4 +
+    LOOP 2DROP ;
+
 \ Widen the unfiltered row to R, G, B, A in the caller's row.  False for a
-\ palette index past the palette.
+\ palette index past the palette.  An eight-bit RGBA row is that already.
 : _PN-EMIT  ( -- ok? )
     _PN.CUR _PN@ 1+ _PNE-S !  _PN-ROW-A @ _PNE-D !  0 _PNE-BIT !
+    _PN.DEPTH _PN@ 8 = IF
+        _PN.COLOUR _PN@ 6 = IF
+            _PNE-S @ _PNE-D @ _PN.W _PN@ 4 * MOVE -1 EXIT
+        THEN
+        _PN.COLOUR _PN@ 2 = _PN.HAVE-KEY _PN@ 0= AND IF
+            _PN-EMIT-RGB8 -1 EXIT
+        THEN
+    THEN
     _PN.W _PN@ 0 ?DO
         _PN.COLOUR _PN@ CASE
             0 OF

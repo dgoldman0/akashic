@@ -65,6 +65,26 @@ A wrong CRC, an unknown critical chunk, a palette index past the palette,
 too little image data or too much, chunks out of order, and a filter PNG
 does not define are each damage. Colour profiles and gamma are ignored.
 
+## Cost
+
+Guest steps to decode the Desktop's sample picture, 160 by 100 pixels, to
+RGBA rows, as `local_testing/measure_decompression.py` counts them:
+
+| File | Bytes | Steps a pixel |
+|---|---:|---:|
+| QOI, for comparison | 4,601 | 120 |
+| PNG, every row filter None | 2,327 | 146 |
+| PNG, every row Up | 1,058 | 220 |
+| PNG, every row Sub | 1,710 | 242 |
+| PNG, every row Average | 1,917 | 372 |
+| PNG, every row Paeth | 1,378 | 689 |
+| PNG as Pillow writes it | 1,500 | 613 |
+
+An eight-bit RGBA row is already in the caller's layout and goes out with
+one move, and an eight-bit RGB row without a transparent colour in a short
+loop; other kinds widen a sample at a time. Undoing the filters is then
+most of the cost, Paeth most of all.
+
 ## The filters alone
 
 `PNG-UNFILTER` undoes a filter on `n` bytes at `row` in place, with the

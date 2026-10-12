@@ -93,13 +93,19 @@ Guest steps per byte of output, decoding 200,000 bytes in one feed:
 
 | Stream | Steps a byte |
 |---|---:|
-| English-like text, raw, zlib level 6 | 60 |
-| The same, gzip | 64 |
-| The same, zlib (Adler-32 13 of them) | 73 |
-| The same, zlib level 1 | 125 |
+| English-like text, raw, stored blocks (level 0) | 0.1 |
+| The same, fixed codes (level 6, `Z_FIXED`) | 62 |
+| The same, dynamic codes, level 1 | 112 |
+| The same, dynamic codes, level 6 | 60 |
+| The same, dynamic codes, level 9 | 53 |
+| The same, level 6, gzip | 64 |
+| The same, level 6, zlib (Adler-32 13 of them) | 73 |
 | Random bytes, stored, raw | 0.1 |
 | Random bytes, stored, zlib | 13 |
 | One byte repeated, raw | 3.4 |
+
+`local_testing/measure_decompression.py` counts these, each output checked
+against Python's zlib.
 
 A literal costs most; a long reference and a stored run cost little. With
 no window the costs are the same, since the window's copy to the output is
