@@ -827,7 +827,7 @@ Four defects stay open. A file the terminal refuses as damaged is sent
 again on each newer draw. A picture whose cells another root claims can
 show its label in CELL while nothing rich shows it. The file pull reads the
 whole file into staging at once. Claims stay through a soft reset until the
-producer rebuilds.
+producer rebuilds. Part 11 fixed the first and the third.
 
 ## 10. Screen changes that cost what they change
 
@@ -1013,6 +1013,24 @@ and a frame that needs more room during an upload records a terminal refusal.
 A picture inside a larger file, such as a PDF's, which the PDF part brings
 with a source for a span of another source. Smaller copies of large picture
 files for small previews.
+
+**Status.** Done on 2026-10-11. The runs are recorded in
+`local_testing/evidence/uploads-read-as-they-send-20261011.md`. The engine
+asks for each chunk of an upload in turn, and the lane reads it from the
+picture's source into one block the size of the terminal's chunk: the
+photo's 8.1 MB file went in nine chunks from one 917,576-byte block, and its
+Preview showed the photograph after 88.5 million guest steps, against part
+10's 88.4 million. A picture the terminal refuses is remembered by its
+widget. In the new damaged-picture check (`--applet damaged`), damaged.png
+went to the terminal once, CELL said "The picture is damaged", and the
+Preview shown again sent nothing more; the producer tests show the other
+pictures staying rich. File Explorer's check and the full Desktop journey
+passed as regression.
+
+The damaged-picture check's first run found a defect, since fixed: the
+engine step that took the terminal's refusal left the engine's own status at
+REJECTED, and the frame prepared right after took it as INVALID. A job's
+outcome is now the job's alone.
 
 ## Not in this plan
 
