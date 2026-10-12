@@ -30204,7 +30204,7 @@ def smoke(
 
             rtc = session.system.rtc
             title = "Morning brief"
-            due_s = (rtc.epoch_ms // 60_000 + 30) * 60
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
             hhmm = time.strftime("%H:%M", time.gmtime(due_s))
             first = "Summarize what changed in the project overnight,"
             second = "then list the three most urgent follow-ups, briefly."
@@ -30403,6 +30403,60 @@ def smoke(
             host_notes.append(
                 f"agent run: created and approved at generation {stored['generation']}"
             )
+            run_daybook_agent_fire_journey(title, schedules[0]["rid"])
+
+        def run_daybook_agent_fire_journey(title: str, rid: str) -> None:
+            """The approved Agent run fires once, on time, while Daybook
+            and the Agent sit idle, runs on the model it names, and
+            completes; Daybook keeps one item for it and the Agent's
+            scheduled runs list it with its model."""
+
+            if not wait_screen(
+                f"Agent run: {title}", "the Agent run did not fire with its notice",
+                step_budget=6_000_000_000,
+                wall_timeout=300.0,
+            ):
+                return
+            if not wait_screen(
+                f"Agent run done: {title}", "the Agent run did not complete",
+                step_budget=3_000_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            done = read_daybook_reminders() or {}
+            items = [
+                item for item in done.get("occurrences", ()) if item["rid"] == rid
+            ]
+            if len(items) != 1:
+                journey_errors.append(f"the Agent run did not fire once: {items}")
+                return
+            item = items[0]
+            if (item["kind"], item["phase"], item["state"], item["outcome"],
+                    item["reason"]) != (1, 3, 3, 1, 0) or not int(item["run"], 16):
+                journey_errors.append(
+                    f"the Agent run did not complete on time with its run: {item}"
+                )
+            if not item["summary"]:
+                journey_errors.append("the completed Agent run kept no summary")
+            # The Agent lists the run, full frame, with the model it ran on.
+            session.send_key("alt+2")
+            session.send_key("alt+f")
+            session.send_key("f5")
+            for shown, failure in (
+                (title, "the Agent's scheduled runs did not list the run"),
+                ("completed", "the Agent's scheduled runs did not say it completed"),
+                ("gpt-slow", "the Agent's scheduled runs did not name its model"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            session.send_key("f5")
+            session.send_key("alt+f")
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook again"
+            ):
+                return
+            host_notes.append(f"agent run: completed at generation {done['generation']}")
             # Desk then sleeps with the Agent run scheduled: its broker, the
             # Agent's dispatcher and Daybook's service add nothing while idle.
             measure_idle_load(2000, ceiling=0.10)

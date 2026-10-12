@@ -339,6 +339,12 @@ ordinary keys:
   prompt's bytes, and allows it only once read to the end;
 - A, after which Daybook says it is approved, Daybook's file holds the run
   approved with exactly those operands, and Desk's run permissions name it.
+- its details, full frame, naming the model and limits in the words Desk's
+  approval used, and showing the prompt;
+- three minutes later, with Daybook and the Agent idle, the run firing on
+  time and completing, Desk's notices for both, one completed item in
+  Daybook's file with the run's identity and summary, and the run in the
+  Agent's scheduled runs (F5) on gpt-slow.
 
 Desk then sleeps under 10% of the clock with the run scheduled.
 
