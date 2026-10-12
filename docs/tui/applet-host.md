@@ -112,6 +112,13 @@ claimed before arbitrary application code and is never repeated;
 `UTUI-DETACH`, the sole public final detach for both projection and document,
 must succeed before unlink, notification, or any owned-resource release.
 
+`AHOST-TICK` ticks each live child that is dirty, or that asks to be ticked
+while clean (`APP-F-TICK-WHEN-CLEAN`). A child whose instance a caller
+touched (`CINST-TOUCH`) since it was last painted is dirty. A child that
+touches its own instance while it ticks, to have a change of its own drawn,
+is marked dirty at once and asks the shell to paint, so the paint that
+follows the tick in the same pass draws it.
+
 Ordinary layouts keep child regions disjoint. A concrete owner may overlap
 them for presentation, as Desk does in full-frame mode. In that case pointer
 hit-testing tries the focused visible child first, matching key routing and

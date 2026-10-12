@@ -1082,8 +1082,14 @@ VARIABLE _AHTI-HOST
             R@ AHS.DESC @ APP.FLAGS @ APP-F-TICK-WHEN-CLEAN AND OR IF
                 R@ AHS.HAS-UIDL @ IF R@ AHS-CTX-SWITCH THEN
                 R@ AHS-ACTIVATE
+                R@ AHS.INST @ CINST.REVISION @              ( revision )
                 R@ AHS.DESC @ APP.TICK-XT @ ?DUP IF
                     R@ AHS.INST @ SWAP EXECUTE
+                THEN
+                \ A child its own tick touched is drawn in this pass, whose
+                \ paint follows the tick.
+                R@ AHS.INST @ CINST.REVISION @ <> IF
+                    -1 R@ AHS.DIRTY ! ASHELL-DIRTY!
                 THEN
             THEN
             R> DROP

@@ -183,7 +183,9 @@ CREATE _ah-app APP-DESC ALLOT
     DUP 778 = IF DROP ASHELL-QUIT 0 EXIT THEN
     777 = _ah-assert -1 ;
 
+VARIABLE _ah-tick-touch
 : _ah-tick  ( instance -- )
+    DUP _ah-tick-touch @ = IF DUP CINST-TOUCH THEN
     DUP _ah-inst-a @ = IF
         DROP 1 _ah-ticks-a +!
     ELSE
@@ -694,6 +696,39 @@ VARIABLE _ah-ew
     _ah-memory-clean
     _ah-stack
     ." AH-M10-OVERLAY-ID" CR
+
+    \ A child that touches itself as it ticks is drawn in that pass, and
+    \ only then: a minimized child left unpainted does not ask again.
+    _ah-memory-snapshot
+    0 _ah-inst-a ! 0 _ah-inst-b !
+    _ah-try-launch _ah-launch-ior @ 0= _ah-assert
+    _ah-launch-id @ DUP _ah-id-a ! _ah-host AHOST-FIND-ID _ah-slot-a !
+    _ah-try-launch _ah-launch-ior @ 0= _ah-assert
+    _ah-launch-id @ DUP _ah-id-b ! _ah-host AHOST-FIND-ID _ah-slot-b !
+    APP-F-TICK-WHEN-CLEAN _ah-app APP.FLAGS !
+    -1 0 _ah-host AHOST-PAINT
+    _ah-slot-a @ AHS.DIRTY @ 0= _ah-assert
+    _ah-slot-b @ AHS.DIRTY @ 0= _ah-assert
+    0 _ASHELL-DIRTY !
+    _ah-inst-a @ _ah-tick-touch ! _ah-host AHOST-TICK
+    _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
+    _ah-slot-b @ AHS.DIRTY @ 0= _ah-assert
+    _ASHELL-DIRTY @ _ah-assert
+    0 _ASHELL-DIRTY ! 0 _ah-tick-touch ! _ah-host AHOST-TICK
+    _ASHELL-DIRTY @ 0= _ah-assert
+    _ah-id-b @ _ah-host AHOST-MINIMIZE-ID
+    0 _ASHELL-DIRTY !
+    _ah-inst-b @ _ah-tick-touch ! _ah-host AHOST-TICK
+    _ASHELL-DIRTY @ _ah-assert
+    0 _ASHELL-DIRTY ! 0 _ah-tick-touch ! _ah-host AHOST-TICK
+    _ah-slot-b @ AHS.DIRTY @ -1 = _ah-assert
+    _ASHELL-DIRTY @ 0= _ah-assert
+    0 _ah-app APP.FLAGS !
+    _ah-host AHOST-DRAIN 0= _ah-assert
+    _ah-host AHOST-SLOT-COUNT 0= _ah-assert
+    _ah-memory-clean
+    _ah-stack
+    ." AH-M11-TICK-TOUCH" CR
 
     ASHELL-QUIT RGN-ROOT 0 SCR-USE
     _ah-screen @ SCR-FREE _ah-reg @ CREG-FREE
