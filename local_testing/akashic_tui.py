@@ -26177,6 +26177,57 @@ def _sample_picture() -> bytes:
 SAMPLE_PICTURE_NAME = "sunset.qoi"
 SAMPLE_PICTURE = _sample_picture()
 
+# A Markdown document with every kind of block, links to its own headings
+# and to other files, and the sample picture as a figure, long enough to
+# scroll in File Explorer's preview.
+SAMPLE_DOCUMENT_NAME = "guide.md"
+SAMPLE_DOCUMENT = """# A guide to Akashic
+
+Akashic is a library of Forth modules for **MegaPad**. This guide is a
+*Markdown* document, which File Explorer shows as a document: headings,
+lists, quotes, code and pictures, with the text wrapped to the preview.
+
+- [Notes](notes.md), another document
+- [Pictures](#pictures), further down
+- [The end](#the-end)
+
+## Lists
+
+1. Select a file in File Explorer.
+2. Its preview shows it the way its kind is shown.
+3. A link to a file selects that file and previews it.
+
+- A bullet
+  - inside another
+    - and one more
+
+## Quotes
+
+> A quote with **strong** words and `code` in it.
+>
+> - and a list inside the quote
+
+## Code
+
+```
+: SQUARE  ( n -- n*n )  DUP * ;
+9 SQUARE .
+```
+
+---
+
+## Pictures
+
+![An evening sky over two hills](sunset.qoi)
+
+The picture above is sunset.qoi, from the same folder.
+
+## The end
+
+Back to [the top](#a-guide-to-akashic), or see the [example](example.f) in
+Forth.
+""".encode()
+
 SAMPLE_FILES = {
     "welcome.txt": b"Welcome to Akashic.\nThis file is editable in Pad.\n",
     "example.f": b": SQUARE DUP * ;\n9 SQUARE .\n",
@@ -26191,11 +26242,15 @@ FEXPLORER_MODULE = "tui/applets/fexplorer/fexplorer.f"
 
 def _sample_files(modules) -> dict[str, bytes]:
     """The sample files an image carries: the text samples, and the sample
-    picture on images with File Explorer, the viewer that shows it.  Keeping
-    the picture off the others keeps their MP64FS directories small."""
+    picture and document on images with File Explorer, the viewer that shows
+    them.  Keeping them off the others keeps their MP64FS directories small."""
 
     if FEXPLORER_MODULE in modules:
-        return {**SAMPLE_FILES, SAMPLE_PICTURE_NAME: SAMPLE_PICTURE}
+        return {
+            **SAMPLE_FILES,
+            SAMPLE_PICTURE_NAME: SAMPLE_PICTURE,
+            SAMPLE_DOCUMENT_NAME: SAMPLE_DOCUMENT,
+        }
     return SAMPLE_FILES
 
 def _row_shows(
@@ -30669,6 +30724,80 @@ def smoke(
                     "Pad did not save the mixed-script line's exact UTF-8"
                 )
 
+        def run_fexplorer_document_journey() -> None:
+            """Preview the sample document: a press on its link to notes.md
+            selects and previews that file, whose link to example.f does the
+            same; the wheel scrolls the document, and its link to its first
+            heading scrolls back."""
+
+            def go_to(name: str, marker: str, failure: str) -> bool:
+                session.send_key("ctrl+g")
+                if not wait_screen(
+                    "Go to:", "File Explorer's Go to Path prompt did not open"
+                ):
+                    return False
+                session.send_text(name)
+                session.send_key("enter")
+                return wait_screen(
+                    marker, failure, step_budget=800_000_000, wall_timeout=20.0
+                )
+
+            def press(text: str, failure: str) -> bool:
+                hits = screen.find(text)
+                if not hits:
+                    journey_errors.append(failure)
+                    return False
+                row, col = hits[0]
+                send_sgr_mouse(row, col)
+                send_sgr_mouse(row, col, release=True)
+                return True
+
+            heading = "A guide to Akashic"
+            if not go_to(
+                SAMPLE_DOCUMENT_NAME, heading,
+                "File Explorer did not preview the sample document",
+            ):
+                return
+            if not press("Notes, another", "the sample document showed no link to notes.md"):
+                return
+            if not wait_screen(
+                "Read the example and try it.",
+                "a press on the sample document's link did not preview notes.md",
+                step_budget=800_000_000, wall_timeout=20.0,
+            ):
+                return
+            if not press("example and try", "notes.md showed no link to example.f"):
+                return
+            if not wait_screen(
+                styled_text.EXAMPLE_LINE,
+                "a press on notes.md's link did not preview example.f",
+                step_budget=800_000_000, wall_timeout=20.0,
+            ):
+                return
+            if not go_to(
+                SAMPLE_DOCUMENT_NAME, heading,
+                "File Explorer did not preview the sample document again",
+            ):
+                return
+            # The wheel turns over the heading's cell, inside the preview.
+            row, col = screen.find(heading)[0]
+            for _ in range(12):
+                send_sgr_mouse(row, col, button=65)
+                if not settle_input("File Explorer did not take a wheel turn"):
+                    return
+                if screen.find("Back to the top"):
+                    break
+            if not wait_screen(
+                "Back to the top",
+                "the wheel did not scroll the sample document to its end",
+            ):
+                return
+            if not wait_screen_gone(heading, "the scrolled document still showed its heading"):
+                return
+            if not press("the top,", "the sample document showed no link to its heading"):
+                return
+            wait_screen(heading, "a press on the link to the first heading did not scroll back")
+
         def run_pad_styled_text_journey() -> None:
             """Open notes.md: Pad highlights its Markdown in CELL, each
             meaning in its palette's look.  Ctrl and a click on its link
@@ -31956,6 +32085,7 @@ def smoke(
                             font_path=AKASHIC_ROOT
                             / "assets/fonts/DejaVuSansMono.ttf",
                         )
+                run_fexplorer_document_journey()
 
             if profile_name in (
                 "desktop",

@@ -3,8 +3,11 @@
 **Prefix:** `MEDIA-` (public), `_MEDIA-` (internal)  
 **Provider:** `akashic-tui-media`  
 **Dependencies:** `widget.f`, `draw.f`, [picture.f](picture.md),
-[textarea.f](textarea.md), [media/](../../media/source.md) source,
-VFS source and kinds, `memory-source.f`, `string.f`
+[textarea.f](textarea.md), [document.f](document.md),
+[media/](../../media/source.md) source, VFS source, kinds and documents,
+[markup/markdown.f](../../markup/markdown.md),
+[utils/fs/link-path.f](../../utils/fs/link-path.md), `memory-source.f`,
+`string.f`
 
 ## Overview
 
@@ -15,6 +18,7 @@ view:
 | Kind | View |
 |---|---|
 | QOI, PNG or JPEG picture | A [picture widget](picture.md) |
+| Markdown document | A [document view](document.md) |
 | Text, HTML | A [text area](textarea.md) holding the whole file |
 | Anything else | The file's facts |
 
@@ -41,18 +45,32 @@ A file that could not be opened shows only its name and the note.
 
 The widget owns the file it shows: `MEDIA-OPEN-VFS` opens it, and the next
 open, `MEDIA-CLEAR` or `MEDIA-FREE` closes it. A picture keeps its file open
-while it shows, since the copy it decodes reads from it; a text file is read
-whole and closed at once.
+while it shows, since the copy it decodes reads from it, and so does a
+document, whose view reads a block's text only when it reaches the block; a
+text file is read whole and closed at once.
 
-Views and the file's name take memory from the widget's memory source,
-each block sized to what it holds: the text area's buffer is the file's
-size, so a file is never cut. When that memory refuses the text the widget
-shows the facts with `MEDIA-N-MEMORY` instead. `MEDIA-HEAP` is a memory
+Views, the document and the file's path take memory from the widget's
+memory source, each block sized to what it holds: the text area's buffer is
+the file's size, so a file is never cut. When that memory refuses the text
+or the document the widget shows the facts with `MEDIA-N-MEMORY` instead.
+
+### Documents
+
+A Markdown document's figures and links name files by paths from the
+document's folder, resolved as [link-path.f](../../utils/fs/link-path.md)
+resolves them. A figure's picture is opened from the same file system, and
+one that cannot be opened shows its name. A link to one of the document's
+own headings scrolls the view. Any other link goes to the owner's follow
+word, set with `MEDIA-FOLLOW!`, as the path it names with `LPATH-S-OK`, or
+with no path and the `LPATH-` status that says why it names none: a scheme
+such as `https:`, no path at all, or one too long. File Explorer selects
+the file a link names, in its folder, and previews it. `MEDIA-HEAP` is a memory
 source on the machine heap with no budget of its own; UIDL gives it to each
 `<media>` element.
 
-Picture decoding runs from `MEDIA-SERVICE`, which the UIDL host calls each
-pass (`UTUI-SERVICE`), and only once the picture has been drawn.
+Picture decoding, for a picture or a document's figures, runs from
+`MEDIA-SERVICE`, which the UIDL host calls each pass (`UTUI-SERVICE`), and
+only once the picture has been drawn.
 
 ## API
 
@@ -62,16 +80,18 @@ pass (`UTUI-SERVICE`), and only once the picture has been drawn.
 | `MEDIA-OPEN-VFS` | `( path-a path-u vfs widget -- ior )` | Show the file at `path` in `vfs`. A nonzero ior says it could not be opened or read, and the widget says so. |
 | `MEDIA-ALT!` | `( alt-a alt-u widget -- )` | A text alternative for pictures in place of the file's name, or `0 0` for the name. The caller keeps the text alive while it is set. |
 | `MEDIA-CLEAR` | `( widget -- )` | Show nothing and close the file. |
-| `MEDIA-SERVICE` | `( widget -- changed? )` | Decode one slice of a picture being shown. True when what the widget shows changed; the widget is then dirty. |
-| `MEDIA-PENDING?` | `( widget -- flag )` | A picture shown is still decoding. |
+| `MEDIA-FOLLOW!` | `( follow-xt ctx widget -- )` | Where a document's links to files go: `( path-a path-u status ctx -- )`. The path stays valid only while the word runs. Zero follows no such link. |
+| `MEDIA-SERVICE` | `( widget -- changed? )` | Decode one slice of a picture being shown, or of a document's figure. True when what the widget shows changed; the widget is then dirty. |
+| `MEDIA-PENDING?` | `( widget -- flag )` | A picture shown, or a document's figure, is still decoding. |
 | `MEDIA-FREE` | `( widget -- )` | Close the file and give back everything, the widget included. |
 | `MEDIA-KIND@` | `( widget -- kind )` | `MEDIA-K-*`, or -1 when no file is known. |
 | `MEDIA-SIZE@` | `( widget -- bytes )` | The file's size. |
+| `MEDIA-PATH@` | `( widget -- a u )` | The path the file was opened by. |
 | `MEDIA-NAME@` | `( widget -- a u )` | The file's name, the part of its path after the last slash. |
-| `MEDIA-VIEW@` | `( widget -- view )` | `MEDIA-V-NONE`, `-PICTURE`, `-TEXT` or `-FACTS`. |
+| `MEDIA-VIEW@` | `( widget -- view )` | `MEDIA-V-NONE`, `-PICTURE`, `-TEXT`, `-FACTS` or `-DOCUMENT`. |
 | `MEDIA-NOTE@` | `( widget -- note )` | Why the facts show: `MEDIA-N-*`. |
-| `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget or text area the current view draws. |
-| `MEDIA-PICTURE@`, `MEDIA-TEXT@` | `( widget -- widget \| 0 )` | The picture widget, made on first use, and the current text area. |
+| `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget, text area or document view the current view draws. |
+| `MEDIA-PICTURE@`, `MEDIA-TEXT@`, `MEDIA-DOCUMENT@` | `( widget -- widget \| 0 )` | The picture widget and the document view, each made on first use, and the current text area. |
 
 ## In UIDL
 

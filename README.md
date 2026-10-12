@@ -349,6 +349,8 @@ has not yet been qualified.
 
 **Table** (`table.f`) is a generic fixed-stride slot allocator used internally by the router, DOM, and other modules that need indexed collections without heap allocation.
 
+**Link paths** (`fs/link-path.f`) give the path a document's link names, taken from the folder of the file that holds it, as Pad and the media widget's documents follow links; a link with a scheme such as `https:` names no file.
+
 ---
 
 ## Usage

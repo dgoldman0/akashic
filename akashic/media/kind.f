@@ -4,7 +4,9 @@
 \
 \  Looks at a file's first bytes, then its name.  A signature decides every
 \  kind that has one, so a misnamed picture is still a picture; the name
-\  only tells an HTML page from other text.  Text is valid UTF-8 with no
+\  only tells an HTML page or a Markdown document from other text.  A page
+\  is text that begins like one or is named .html or .htm, and a Markdown
+\  document text named .md or .markdown.  Text is valid UTF-8 with no
 \  NUL; anything else without a known signature is binary.  A viewer uses
 \  the kind to choose how to show a file, and to say what a file is even
 \  when it cannot show it yet.
@@ -34,6 +36,7 @@ PROVIDED akashic-media-kind
 6 CONSTANT MEDIA-K-GIF
 7 CONSTANT MEDIA-K-BMP
 8 CONSTANT MEDIA-K-WAV
+9 CONSTANT MEDIA-K-MARKDOWN
 
 \ Enough for every signature and a fair look at text.
 512 CONSTANT MEDIA-SNIFF-BYTES
@@ -113,6 +116,9 @@ CREATE _MK-DOCTYPE 60 C, 33 C, 100 C, 111 C, 99 C, 116 C, 121 C, 112 C,
 CREATE _MK-HTML-TAG 60 C, 104 C, 116 C, 109 C, 108 C,            \ <html
 CREATE _MK-HTML-EXT 46 C, 104 C, 116 C, 109 C, 108 C,            \ .html
 CREATE _MK-HTM-EXT 46 C, 104 C, 116 C, 109 C,                    \ .htm
+CREATE _MK-MD-EXT 46 C, 109 C, 100 C,                             \ .md
+CREATE _MK-MARKDOWN-EXT 46 C, 109 C, 97 C, 114 C, 107 C, 100 C,
+    111 C, 119 C, 110 C,                                         \ .markdown
 
 \ The text after a byte order mark and leading white space starts like a page.
 : _MK-HTML-START?  ( -- flag )
@@ -143,7 +149,9 @@ CREATE _MK-HTM-EXT 46 C, 104 C, 116 C, 109 C,                    \ .htm
     _MK-TEXT? 0= IF 2DROP MEDIA-K-BINARY EXIT THEN
     _MK-HTML-START? IF 2DROP MEDIA-K-HTML EXIT THEN
     2DUP _MK-HTML-EXT 5 _MK-ENDS? IF 2DROP MEDIA-K-HTML EXIT THEN
-    _MK-HTM-EXT 4 _MK-ENDS? IF MEDIA-K-HTML EXIT THEN
+    2DUP _MK-HTM-EXT 4 _MK-ENDS? IF 2DROP MEDIA-K-HTML EXIT THEN
+    2DUP _MK-MD-EXT 3 _MK-ENDS? IF 2DROP MEDIA-K-MARKDOWN EXIT THEN
+    _MK-MARKDOWN-EXT 9 _MK-ENDS? IF MEDIA-K-MARKDOWN EXIT THEN
     MEDIA-K-TEXT ;
 
 \ MEDIA-KIND-NAME ( kind -- a u )   What to call a kind in a viewer.
@@ -151,6 +159,7 @@ CREATE _MK-HTM-EXT 46 C, 104 C, 116 C, 109 C,                    \ .htm
     CASE
         MEDIA-K-TEXT OF S" text" ENDOF
         MEDIA-K-HTML OF S" HTML page" ENDOF
+        MEDIA-K-MARKDOWN OF S" Markdown document" ENDOF
         MEDIA-K-QOI  OF S" QOI picture" ENDOF
         MEDIA-K-PNG  OF S" PNG picture" ENDOF
         MEDIA-K-JPEG OF S" JPEG picture" ENDOF

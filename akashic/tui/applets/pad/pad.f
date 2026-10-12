@@ -59,6 +59,7 @@ REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../../utils/fs/vfs.f
 REQUIRE ../../../utils/fs/vfs-replace.f
+REQUIRE ../../../utils/fs/link-path.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/clipboard.f
 REQUIRE ../../../utils/toml.f
@@ -250,7 +251,6 @@ _PAD-CURRENT-STATE 512 CMP-FIELD: _PAD-PATH-BUF
 
 \ ---- The path a followed link names ----
 _PAD-CURRENT-STATE VREPL-PATH-MAX 1+ CMP-FIELD: _PAD-LINK-BUF
-_PAD-CURRENT-STATE CMP-CELL: _PAD-LINK-U
 
 \ =====================================================================
 \  S4b -- Theme
@@ -1460,72 +1460,32 @@ VARIABLE _POP-ORIG
 \  S11b -- Following links
 \ =====================================================================
 \
-\  Ctrl and a click on a Markdown link opens the file it names.  A target
-\  without a leading / is taken from the folder of the file that holds
-\  the link, . and .. steps are resolved, and a #section or ?query is
-\  left out.  A target with a scheme, such as https:, is not a file, and
+\  Ctrl and a click on a Markdown link opens the file it names, as
+\  utils/fs/link-path.f resolves it from the folder of the file that holds
+\  the link.  A target with a scheme, such as https:, is not a file, and
 \  Pad opens nothing for it.
 
-VARIABLE _PLS-A
-VARIABLE _PLS-U
-
-\ _PAD-LINK-SEGMENT ( seg-a seg-u -- ok? )
-\   Add one step to the link path: nothing for an empty step or ".", back
-\   one folder for "..", and otherwise "/" and the step.  False when the
-\   path would grow too long.
-: _PAD-LINK-SEGMENT  ( seg-a seg-u -- ok? )
-    DUP 0= IF 2DROP -1 EXIT THEN
-    2DUP S" ." STR-STR= IF 2DROP -1 EXIT THEN
-    2DUP S" .." STR-STR= IF
-        2DROP
-        BEGIN _PAD-LINK-U @ 0> WHILE
-            -1 _PAD-LINK-U +!
-            _PAD-LINK-BUF _PAD-LINK-U @ + C@ [CHAR] / = IF -1 EXIT THEN
-        REPEAT
-        -1 EXIT
-    THEN
-    _PAD-LINK-U @ OVER + 1+ VREPL-PATH-MAX > IF 2DROP 0 EXIT THEN
-    [CHAR] / _PAD-LINK-BUF _PAD-LINK-U @ + C!  1 _PAD-LINK-U +!
-    TUCK _PAD-LINK-BUF _PAD-LINK-U @ + SWAP CMOVE
-    _PAD-LINK-U +! -1 ;
-
-\ _PAD-LINK-PATH ( a u -- ok? )   Add each /-separated step of a path.
-: _PAD-LINK-PATH  ( a u -- ok? )
-    _PLS-U ! _PLS-A !
-    BEGIN _PLS-U @ 0> WHILE
-        _PLS-A @ _PLS-U @ [CHAR] / STR-INDEX
-        DUP 0< IF DROP _PLS-U @ THEN              ( step-u )
-        _PLS-A @ OVER _PAD-LINK-SEGMENT 0= IF DROP 0 EXIT THEN
-        1+ _PLS-U @ MIN
-        DUP _PLS-A +!  NEGATE _PLS-U +!
-    REPEAT
-    -1 ;
-
-\ _PAD-CUT ( a u c -- a u' )   Leave out C and everything after it.
-: _PAD-CUT  ( a u c -- a u' )
-    >R 2DUP R> STR-INDEX DUP 0< IF DROP ELSE NIP THEN ;
-
 \ _PAD-FOLLOW ( line-a line-u pos widget -- )
-\   The editor's follow word.  The target is copied into the link path
-\   before anything that could reuse the textarea's copy of the line.
+\   The editor's follow word.  The target becomes a path in the link
+\   buffer before anything that could reuse the textarea's copy of the
+\   line.
 : _PAD-FOLLOW  ( line-a line-u pos widget -- )
     DROP SYN-MD-LINK-AT 0= IF 2DROP EXIT THEN
-    [CHAR] # _PAD-CUT  [CHAR] ? _PAD-CUT
-    DUP 0= IF 2DROP EXIT THEN
-    2DUP [CHAR] : STR-INDEX 0< 0= IF
-        2DROP S" Pad opens only links to files" 2200 ASHELL-TOAST EXIT
-    THEN
-    0 _PAD-LINK-U !
-    OVER C@ [CHAR] / <> _PAD-ACTIVE @ 0>= AND IF
+    _PAD-ACTIVE @ 0< IF 0 0 ELSE
         _PAD-ACTIVE @ _PAD-BUF-ENTRY DUP _PBE-FNAME-A + @
-        SWAP _PBE-FNAME-L + @                    ( t-a t-u name-a name-u )
-        2DUP [CHAR] / STR-RINDEX DUP 0< IF 2DROP 0 ELSE NIP THEN
-        _PAD-LINK-PATH DROP
+        SWAP _PBE-FNAME-L + @
     THEN
-    _PAD-LINK-PATH 0= _PAD-LINK-U @ 0= OR IF
-        -3 _PAD-REPORT-OPEN-RESULT EXIT
-    THEN
-    _PAD-LINK-BUF _PAD-LINK-U @ _PAD-OPEN-PATH _PAD-REPORT-OPEN-RESULT ;
+    _PAD-LINK-BUF VREPL-PATH-MAX LPATH-RESOLVE
+    CASE
+        LPATH-S-OK OF
+            _PAD-LINK-BUF SWAP _PAD-OPEN-PATH _PAD-REPORT-OPEN-RESULT
+        ENDOF
+        LPATH-S-EMPTY OF DROP ENDOF
+        LPATH-S-SCHEME OF
+            DROP S" Pad opens only links to files" 2200 ASHELL-TOAST
+        ENDOF
+        >R DROP -3 _PAD-REPORT-OPEN-RESULT R>
+    ENDCASE ;
 
 : _PAD-REPORT-SAVE-ERROR  ( ior -- )
     DUP _PAD-E-STALE = IF

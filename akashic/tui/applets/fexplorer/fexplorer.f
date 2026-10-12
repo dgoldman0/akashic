@@ -21,8 +21,9 @@
 \   - Detail table (LST-* widget mounted on <region id="detail">):
 \     Name, Size, and Type columns; opening a row enters a directory or
 \     opens a file with its application
-\   - Preview panel (UIDL <media id="preview">): a picture, a text file
-\     whole, or the facts of any other file
+\   - Preview panel (UIDL <media id="preview">): a picture, a Markdown
+\     document, a text file whole, or the facts of any other file; a link
+\     in a document selects the file it names and previews it
 \   - Menu bar via <menubar>/<menu>/<item> + do= actions
 \   - Status bar via <status>/<label> elements
 \   - Clipboard (copy / cut / paste via VFS)
@@ -44,6 +45,7 @@ PROVIDED akashic-tui-fexplorer
 REQUIRE ../../widgets/explorer.f
 REQUIRE ../../widgets/list.f
 REQUIRE ../../widgets/media.f
+REQUIRE ../../../utils/fs/link-path.f
 REQUIRE ../../widgets/input.f
 REQUIRE ../../widgets/dialog.f
 REQUIRE ../../widgets/prompt.f
@@ -574,14 +576,19 @@ VARIABLE _FST-U
 \  §8 — Preview: show the selected file
 \ =====================================================================
 
+\ What a link in a previewed document does, once revealing a path is
+\ defined (_FEXP-DO-LINK).
+DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
+
 \ _FEXP-LOAD-PREVIEW ( -- )
 \   Give the selected file to the preview's media widget, which shows it
 \   the way its kind is shown.  A picture decodes only once the Preview tab
-\   draws it.
+\   draws it, and a document's links go to _FEXP-ON-LINK.
 : _FEXP-LOAD-PREVIEW  ( -- )
     _FEXP-SEL-LEN @ 0= IF EXIT THEN
     _FEXP-E-PREVIEW @ ?DUP 0= IF EXIT THEN
     DUP UTUI-WIDGET@ ?DUP IF
+        ['] _FEXP-ON-LINK 0 2 PICK MEDIA-FOLLOW!
         >R _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-VFS @ R> MEDIA-OPEN-VFS DROP
     THEN
     UIDL-DIRTY!
@@ -1571,6 +1578,21 @@ VARIABLE _FRV-TYPE
     _FRV-TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN
     _FEXP-UPDATE-STATUS ASHELL-DIRTY!
     0 ;
+
+\ A link in a previewed document selects the file it names, in its
+\ folder, and previews it.  A link that names no file says why.
+: _FEXP-DO-LINK  ( path-a path-u status ctx -- )
+    DROP CASE
+        LPATH-S-OK OF
+            _FEXP-REVEAL-PATH IF S" Path not found" 2000 ASHELL-TOAST THEN
+        ENDOF
+        LPATH-S-SCHEME OF
+            2DROP S" File Explorer opens only links to files" 2200 ASHELL-TOAST
+        ENDOF
+        LPATH-S-ROOM OF 2DROP S" The path is too long" 2000 ASHELL-TOAST ENDOF
+        >R 2DROP R>
+    ENDCASE ;
+' _FEXP-DO-LINK IS _FEXP-ON-LINK
 
 VARIABLE _FRH-A
 VARIABLE _FRH-U

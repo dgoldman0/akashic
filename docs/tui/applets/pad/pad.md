@@ -76,8 +76,10 @@ it, see [`local_testing/README.md`](../../../../local_testing/README.md).
   `string-fg`, `number-fg`, `heading-fg`, `emphasis-fg`, `strong-fg`,
   `code-fg`, `link-fg`, and `error-fg`.
 - Ctrl and a click on a Markdown link opens the file it names, taken from
-  the folder of the file that holds the link; a plain click still places the
-  caret. A link with a scheme, such as `https:`, is not followed.
+  the folder of the file that holds the link as
+  [link-path.f](../../../utils/fs/link-path.md) resolves it; a plain click
+  still places the caret. A link with a scheme, such as `https:`, is not
+  followed.
 - Dirty-buffer confirmation for close tab, close all, and quit.
 - TOML-configurable colors and responsive terminal layout.
 

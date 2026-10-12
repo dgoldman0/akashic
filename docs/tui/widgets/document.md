@@ -124,6 +124,7 @@ part could not be read)"; its rows are counted again at the next pass.
 | `DOCV-SHOWN` | `( widget -- first end )` | The blocks the last draw showed. |
 | `DOCV-ROWS` | `( index widget -- rows )` | The rows block `index` takes at the view's width, its blank rows included. |
 | `DOCV-REVISION@` | `( widget -- n )` | Counts every change in what the view shows. |
+| `DOCV-PENDING?` | `( widget -- flag )` | A figure's picture is still decoding. |
 | `DOCV-SERVICE` | `( widget -- changed? )` | Decode some more of a figure's picture; true when what the view shows changed. |
 | `DOCV-FREE` | `( widget -- )` | Give back everything the view holds. |
 

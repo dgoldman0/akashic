@@ -61,7 +61,8 @@ VARIABLE MW-V
             DUP CELL-CP@ . DUP CELL-FG@ . DUP CELL-BG@ . CELL-ATTRS@ . CR
         LOOP
     LOOP DROP ;
-: MW-STYLE  ( -- )  FG-INDEX BG-INDEX 0 DRW-STYLE! ;
+\ The style the widgets draw over, saved as the UIDL paint path saves it.
+: MW-STYLE  ( -- )  FG-INDEX BG-INDEX 0 DRW-STYLE! DRW-STYLE-SAVE ;
 : MW-DRAW  ( widget -- )  MW-STYLE WDG-DRAW ;
 \ Service a widget until nothing is pending; leave the slices taken.
 : MW-PICT-SERVICE  ( widget -- slices )
@@ -685,8 +686,8 @@ def test_text_is_shown_whole_in_a_buffer_sized_to_it() -> None:
     ], text)
     assert "IOR=0 " in output
     assert f"VIEW={VIEW_TEXT} KIND={TEXT} NOTE={NOTE_NONE} " in output
-    # The whole file, past the 4096 bytes the old preview kept, and the name.
-    assert "HELD=5008 " in output and "LEN=5000 " in output, output[-2000:]
+    # The whole file, past the 4096 bytes the old preview kept, and its path.
+    assert "HELD=5014 " in output and "LEN=5000 " in output, output[-2000:]
     assert f"FIRST={text[0]} " in output and f"LAST={text[-1]} " in output
     assert "NAME=long.txt" in output and "CLEARED=0 " in output
 
@@ -719,7 +720,7 @@ def test_text_the_memory_refuses_shows_why_instead_of_cutting_it() -> None:
         "MW-W @ MW-DRAW", "6 36 MW-DUMP",
         "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
     ], b"x" * 3000)
-    assert f"VIEW={VIEW_FACTS} KIND={TEXT} NOTE={NOTE_MEMORY} HELD=8 " in output
+    assert f"VIEW={VIEW_FACTS} KIND={TEXT} NOTE={NOTE_MEMORY} HELD=9 " in output
     assert _labels(output, 6, 36) == [
         "long.txt", "text, 2K", "Not enough memory to show this file"]
     assert "FREED=0 " in output
@@ -872,3 +873,112 @@ def test_a_qoi_picture_the_rich_side_could_not_send_shows_its_cell_copy() -> Non
     assert "CHANGED=-1 " in output and "SLICES=1 " in output, output[-2000:]
     assert _cells(output) == _expected_cells(rows, 30, 3)
     assert "HELD=0 " in output
+
+
+# --------------------------------------------------------------------------
+# Markdown documents
+# --------------------------------------------------------------------------
+
+VIEW_DOCUMENT, MARKDOWN = 4, 9
+PATH_OK, PATH_EMPTY, PATH_SCHEME = 0, 1, 2
+
+DOCUMENT = (
+    b"# Notes\n\nSee [the other file](other.md) and [up](../up.md).\n\n"
+    b"![A sunset](pics/sunset.qoi)\n\nThe end.\n"
+)
+
+
+def _document_lines(markdown: bytes, picture: bytes = b"") -> list[str]:
+    """The picture as /docs/pics/sunset.qoi and the Markdown as
+    /docs/readme.md, both from MW-FILE, the picture first."""
+
+    lines = ['S" docs" MW-V @ VFS-MKDIR THROW', 'S" /docs" MW-V @ VFS-CD THROW',
+             'S" pics" MW-V @ VFS-MKDIR THROW', 'S" /" MW-V @ VFS-CD THROW']
+    if picture:
+        lines.append(f'{len(picture)} S" /docs/pics/sunset.qoi" MW-PUT')
+        lines.append(f"MW-FILE {len(picture)} + MW-FILE {len(markdown)} MOVE")
+    lines.append(f'{len(markdown)} S" /docs/readme.md" MW-PUT')
+    return lines
+
+
+def test_a_markdown_file_shows_as_a_document_with_its_figures() -> None:
+    """A Markdown file is a document, whose figure's picture comes from the
+    document's folder and decodes from the service; clearing the widget
+    gives everything back."""
+
+    rows = _gradient(40, 24)
+    picture = qoi_codec.encode(rows)
+    output = _run(_media_lines() + _document_lines(DOCUMENT, picture) + [
+        _open("/docs/readme.md"), _state(),
+        '." VIEWW=" MW-W @ MEDIA-VIEW-WIDGET@ MW-W @ MEDIA-DOCUMENT@ = .',
+        "MW-W @ MW-DRAW",
+        '." PENDING=" MW-W @ MEDIA-PENDING? .',
+        'MW-W @ MW-MEDIA-SERVICE ." SLICES=" .',
+        "MW-W @ MW-DRAW", "6 36 MW-DUMP",
+        "MW-W @ MEDIA-CLEAR", '." CLEARED=" MW-MSRC MSRC-HELD@ .',
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], picture + DOCUMENT)
+    assert f"VIEW={VIEW_DOCUMENT} KIND={MARKDOWN} NOTE={NOTE_NONE} " in output
+    assert "VIEWW=-1 " in output and "PENDING=-1 " in output, output[-2000:]
+    assert int(re.search(r"SLICES=(\d+)", output).group(1)) >= 1
+    cells = _cells(output)
+    assert _row_text(cells, 0, 36) == "Notes"
+    assert _row_text(cells, 2, 36) == "See the other file and up."
+    # The figure's picture takes the view's height at most, and its first
+    # two rows show below the paragraph.
+    picture_cells = _expected_cells(rows, 36, 6)
+    assert any(cell[0] == HALF_BLOCK for cell in picture_cells.values())
+    for (row, col), cell in picture_cells.items():
+        if row < 2:
+            assert cells[(4 + row, col)] == cell, (row, col)
+    assert "CLEARED=0 " in output and "FREED=0 " in output
+
+
+FOLLOW_LINES = [
+    ": MW-FOLLOWED  ( path-a path-u status ctx -- )",
+    '    DROP ." FOLLOW=" . ." [" TYPE ." ]" CR ;',
+]
+
+
+def test_a_link_in_a_document_goes_to_the_owner_as_the_path_it_names() -> None:
+    """A press on a link gives the owner the path it names, from the
+    document's folder; a target with a scheme, or with no path, says why it
+    names none; and a link to a heading stays with the view."""
+
+    document = b"[go](other.md)\n\n# Notes\n"
+    output = _run(_media_lines() + _document_lines(document) + FOLLOW_LINES + [
+        _open("/docs/readme.md"),
+        "' MW-FOLLOWED 0 MW-W @ MEDIA-FOLLOW!",
+        "MW-W @ MW-DRAW",
+        "MW-EV 24 0 FILL  KEY-T-MOUSE MW-EV !  KEY-MOUSE-LEFT MW-EV 8 + !",
+        "TOP-ROW 16 LSHIFT LEFT-COL OR MW-EV 16 + !",
+        'MW-EV MW-W @ WDG-HANDLE ." KEY=" . CR',
+        'S" ../up.md" MW-W @ MEDIA-DOCUMENT@ DOCV-FOLLOW',
+        'S" https://example.com/" MW-W @ MEDIA-DOCUMENT@ DOCV-FOLLOW',
+        'S" sub/file.txt#part" MW-W @ MEDIA-DOCUMENT@ DOCV-FOLLOW',
+        'S" ?only" MW-W @ MEDIA-DOCUMENT@ DOCV-FOLLOW',
+        'S" #notes" MW-W @ MEDIA-DOCUMENT@ DOCV-FOLLOW',
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], document)
+    followed = re.findall(r"FOLLOW=(\d+) \[([^\]]*)\]", output)
+    assert "KEY=-1 " in output
+    assert followed == [
+        (str(PATH_OK), "/docs/other.md"), (str(PATH_OK), "/up.md"),
+        (str(PATH_SCHEME), ""), (str(PATH_OK), "/docs/sub/file.txt"),
+        (str(PATH_EMPTY), ""),
+    ], output[-2000:]
+    assert "FREED=0 " in output
+
+
+def test_a_document_the_memory_refuses_shows_why() -> None:
+    output = _run(_media_lines(budget=1000) + _document_lines(DOCUMENT) + [
+        _open("/docs/readme.md"), _state(),
+        "MW-W @ MW-DRAW", "6 36 MW-DUMP",
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], DOCUMENT)
+    assert f"VIEW={VIEW_FACTS} KIND={MARKDOWN} NOTE={NOTE_MEMORY} " in output
+    assert f"HELD={len('/docs/readme.md')} " in output
+    assert _labels(output, 6, 36) == [
+        "readme.md", f"Markdown document, {len(DOCUMENT)} bytes",
+        "Not enough memory to show this file"]
+    assert "FREED=0 " in output

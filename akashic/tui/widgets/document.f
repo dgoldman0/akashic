@@ -18,11 +18,11 @@
 \  dark background, a rule as a line, and a figure's caption muted.  It
 \  draws over the owner's style (DRW-STYLE-RESTORE), each meaning in the
 \  style palette's look with its block's attributes kept, as a list's
-\  fields are drawn.  A figure's picture is a picture widget
-\  drawn into its rows: a CELL copy for QOI, and the picture's facts
-\  otherwise; a figure partly scrolled out shows the part in view.  The
-\  text comes from outside the application, so it is laid out as
-\  DRW-TEXT-UNTRUSTED lays text out.
+\  fields are drawn.  A figure's picture is a picture widget drawn into
+\  its rows: a CELL copy for QOI, and the picture's facts otherwise; a
+\  figure partly scrolled out shows the part in view.  The text comes from
+\  outside the application, so it is laid out as DRW-TEXT-UNTRUSTED lays
+\  text out.
 \
 \  The arrow keys, Page Up and Down, Home, End and the wheel scroll the
 \  view by rows.  A press on a link follows it: a link to one of the
@@ -301,6 +301,11 @@ VARIABLE _DVF-F
     THEN
     _DOCV-O-COUNTS-A _DV@ SWAP -1 FILL
     _DV-REVISE -1 ;
+
+\ Give the counts back; the next count makes them again.
+: _DV-COUNTS-FREE  ( -- )
+    _DOCV-O-COUNTS-A _DV@ _DOCV-O-COUNTS-CAP _DV@ _DV-FREE
+    0 _DOCV-O-COUNTS-A _DV! 0 _DOCV-O-COUNTS-CAP _DV! 0 _DOCV-O-COLS _DV! ;
 
 VARIABLE _DVC-I
 VARIABLE _DVC-T
@@ -791,13 +796,13 @@ VARIABLE _DVH-BLOCK
     0 _DOCV-O-COLS _DV!  _DV-CHANGED ;
 
 \ DOCV-DOCUMENT! ( doc widget -- )
-\   Show an open document from its top, or nothing for 0.  The owner
-\   keeps the document open while the view shows it.
+\   Show an open document from its top, or nothing for 0, giving back
+\   all the view held for the one before.  The owner keeps the document
+\   open while the view shows it.
 : DOCV-DOCUMENT!  ( doc widget -- )
     _DV-W !
-    _DV-FIGS-FREE
+    _DV-FIGS-FREE _DV-COUNTS-FREE
     _DOCV-O-DOC _DV!
-    0 _DOCV-O-COLS _DV!
     0 _DOCV-O-TOP _DV! 0 _DOCV-O-TOP-ROW _DV! 0 _DOCV-O-END _DV!
     _DV-CHANGED ;
 
@@ -832,6 +837,15 @@ VARIABLE _DVH-BLOCK
 : DOCV-FOLLOW  ( target-a target-u widget -- )
     _DV-W ! _DV-DOC 0= IF 2DROP EXIT THEN _DV-FOLLOW ;
 
+\ DOCV-PENDING? ( widget -- flag )   A figure's picture is still pending.
+: DOCV-PENDING?  ( widget -- flag )
+    _DV-W !
+    _DOCV-O-FIGS-N _DV@ 0 ?DO
+        I _DV-FIG _FIG.PICT + @ ?DUP IF
+            PICT-PENDING? IF -1 UNLOOP EXIT THEN
+        THEN
+    LOOP 0 ;
+
 \ DOCV-SERVICE ( widget -- changed? )
 \   Decode some more of the first figure whose picture is pending.  True
 \   when what the view shows changed.
@@ -852,8 +866,7 @@ VARIABLE _DVH-BLOCK
 \   Give back everything the view holds; the document stays the owner's.
 : DOCV-FREE  ( widget -- )
     _DV-W !
-    _DV-FIGS-FREE
-    _DOCV-O-COUNTS-A _DV@ _DOCV-O-COUNTS-CAP _DV@ _DV-FREE
+    _DV-FIGS-FREE _DV-COUNTS-FREE
     _DV-W @ FREE ;
 
 \ =====================================================================

@@ -25,7 +25,7 @@ OUT_BYTES = 4 << 20
 
 EMPTY, PENDING, READY, FAILED = 0, 1, 2, 3
 R_NONE, R_UNSUPPORTED, R_DAMAGED, R_READ, R_MEMORY, R_INVALID = range(6)
-BINARY, TEXT, HTML, QOI, PNG, JPEG, GIF, BMP, WAV = range(9)
+BINARY, TEXT, HTML, QOI, PNG, JPEG, GIF, BMP, WAV, MARKDOWN = range(10)
 
 SNAPSHOT = ForthSnapshot(
     ("media/kind.f", "media/picture.f", "media/vfs-source.f"),
@@ -136,6 +136,11 @@ QOI_FILE = qoi_codec.encode([[(1, 2, 3, 255)] * 3] * 2)
         (b"<p>a fragment</p>", b"PAGE.HTM", HTML),
         (b"<p>a fragment</p>", b"page.html", HTML),
         (b"<p>a fragment</p>", b"notes.txt", TEXT),
+        (b"# Notes\n", b"README.md", MARKDOWN),
+        (b"# Notes\n", b"notes.Markdown", MARKDOWN),
+        (b"# Notes\n", b"notes.mdx", TEXT),
+        (b"<html><body>hi", b"page.md", HTML),    # a page's opening beats the name
+        (QOI_FILE, b"picture.md", QOI),
     ),
 )
 def test_kind_from_signature_then_text_then_name(data, name, expected) -> None:
@@ -144,11 +149,13 @@ def test_kind_from_signature_then_text_then_name(data, name, expected) -> None:
 
 def test_kind_names_say_what_a_file_is() -> None:
     lines = [
-        f'{kind} MEDIA-KIND-NAME ." [" TYPE ." ]"' for kind in (QOI, TEXT, BINARY, WAV)
+        f'{kind} MEDIA-KIND-NAME ." [" TYPE ." ]"'
+        for kind in (QOI, TEXT, BINARY, WAV, MARKDOWN)
     ]
     output, _ = _run(lines)
     assert "[QOI picture]" in output and "[text]" in output
     assert "[binary data]" in output and "[WAV sound]" in output
+    assert "[Markdown document]" in output
 
 
 # --------------------------------------------------------------------------

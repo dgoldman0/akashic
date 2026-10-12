@@ -30,6 +30,7 @@ in a viewer, such as "QOI picture".
    character does. An empty file is text.
 3. **HTML.** Text that starts, after a byte order mark and white space, with
    `<!doctype html` or `<html` in any case, or text whose name ends in
-   `.html` or `.htm` in any case, is `MEDIA-K-HTML`. Otherwise it is
-   `MEDIA-K-TEXT`.
-4. Anything else is `MEDIA-K-BINARY`.
+   `.html` or `.htm` in any case, is `MEDIA-K-HTML`.
+4. **Markdown.** Other text whose name ends in `.md` or `.markdown` in any
+   case is `MEDIA-K-MARKDOWN`. Otherwise it is `MEDIA-K-TEXT`.
+5. Anything else is `MEDIA-K-BINARY`.
