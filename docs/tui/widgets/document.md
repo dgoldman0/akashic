@@ -49,6 +49,7 @@ CELL draws each block as MegaPad's reference renderer does:
 | Heading | the palette's heading look; levels 1 and 2 underlined |
 | Code | a dark background across its text area |
 | Rule | a line (U+2500) across its text area |
+| Page | its label muted, and a rule's line across the cells each of its lines leaves, one cell clear of the label: after it, or before it right to left |
 | Figure | its picture in its picture rows, and its caption muted and italic |
 
 It draws over the owner's style (`DRW-STYLE-RESTORE`). Each meaning of the

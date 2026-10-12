@@ -222,6 +222,7 @@ VARIABLE _USCOL-OWNED-LIMIT
 3 CONSTANT USCOL-DOC-CODE
 4 CONSTANT USCOL-DOC-RULE
 5 CONSTANT USCOL-DOC-FIGURE
+6 CONSTANT USCOL-DOC-PAGE      \ a page's start, its text the page's label
 
 1 CONSTANT USCOL-DOC-QUOTE
 2 CONSTANT USCOL-DOC-BULLET
@@ -2654,20 +2655,22 @@ VARIABLE _USCOL-VD-STEP
 \ _USCOL-VD-BLOCK? ( -- flag )
 \   The block at the cursor: a key, a kind, a level only a heading has,
 \   picture rows only a figure has, rows before within the containers it
-\   has, and text (line feeds allowed) with its style runs, none for a
-\   rule.  Counts its containers, text and runs into the totals.
+\   has, no container on a page's start, and text (line feeds allowed)
+\   with its style runs, none for a rule.  Counts its containers, text and
+\   runs into the totals.
 : _USCOL-VD-BLOCK?  ( -- flag )
     _USCOL-VD-REMAINING @ USCOL-BLOCK-HEADER-SIZE U< IF 0 EXIT THEN
     _USCOL-VD-CURSOR @ DUP _USCOL-VD-BLOCK ! >R
     R@ USCOL-BLOCK-KEY@ 0= IF R> DROP 0 EXIT THEN
     R@ USCOL-BLOCK-KIND@ DUP _USCOL-VD-KIND !
-        USCOL-DOC-PARAGRAPH USCOL-DOC-FIGURE 1+ WITHIN 0= IF R> DROP 0 EXIT THEN
+        USCOL-DOC-PARAGRAPH USCOL-DOC-PAGE 1+ WITHIN 0= IF R> DROP 0 EXIT THEN
     R@ USCOL-BLOCK-LEVEL@
         _USCOL-VD-KIND @ USCOL-DOC-HEADING = IF 1 7 WITHIN ELSE 0= THEN
         0= IF R> DROP 0 EXIT THEN
     R@ USCOL-BLOCK-ROWS-BEFORE@ 0x10000 U< 0= IF R> DROP 0 EXIT THEN
     R@ USCOL-BLOCK-CONTAINER-COUNT@ DUP _USCOL-VD-CONTAINERS !
         0x10000 U< 0= IF R> DROP 0 EXIT THEN
+    _USCOL-VD-KIND @ USCOL-DOC-PAGE = _USCOL-VD-CONTAINERS @ 0<> AND IF R> DROP 0 EXIT THEN
     R@ USCOL-BLOCK-INSIDE@ _USCOL-VD-CONTAINERS @ U> IF R> DROP 0 EXIT THEN
     R@ USCOL-BLOCK-PICTURE-ROWS@
         _USCOL-VD-KIND @ USCOL-DOC-FIGURE = IF _USCOL-POSITIVE-U32? ELSE 0= THEN

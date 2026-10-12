@@ -1357,11 +1357,10 @@ empty password, and those are read too.
 
 **Plan.**
 
-1. **Contract,** in MegaPad's SEMANTIC-CONTENT-1 and both copies of
-   APT-1-RETAINED-1: the DOC1 block kind `PAGE` (6). Its text is the page's
-   label, laid out as a paragraph's; the renderer marks the break in the
-   cells the label leaves. It sits in no container. No new feature bit:
-   `RET_CONTROL_DOCUMENTS` covers it.
+1. **Contract,** in MegaPad's SEMANTIC-CONTENT-1: the DOC1 block kind
+   `PAGE` (6). Its text is the page's label, laid out as a paragraph's; the
+   renderer marks the break in the cells the label leaves. It sits in no
+   container. No new feature bit: `RET_CONTROL_DOCUMENTS` covers it.
 2. **A growing document** (`media/document.f`). A reader's structure pass
    may give a document in parts, each read when asked: a PDF has a part
    for each page, known when it opens. The document view asks for a part
@@ -1441,10 +1440,16 @@ rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them, a link to a far page reading that page alone.
 
-**Status (2026-10-12).** Steps 3, 4 and 5 are done, step 8 for RC4, and
-the file's side of steps 6 and 7: pictures as files, links and the
-outline. The decisions above were reviewed: steps 1, 2 and 9 come next,
-and AES follows MegaPad's engine gaining CBC.
+**Status (2026-10-12).** Steps 1, 3, 4 and 5 are done, step 8 for RC4,
+and the file's side of steps 6 and 7: pictures as files, links and the
+outline. The decisions above were reviewed: steps 2 and 9 come next, and
+AES follows MegaPad's engine gaining CBC.
+
+- A page's start is the DOC1 block `PAGE`. MegaPad's codec refuses one in
+  a container, and its reference renderer shows the label muted with a
+  rule's line through the cells each of its lines leaves, one cell clear
+  of it. Akashic's document model, DOC1 validator and document view do
+  the same in CELL, and the view publishes the block as it is.
 
 - The file layer reads cross-reference tables and streams, object streams
   and incremental updates, repairs a damaged file by scanning, decodes

@@ -49,7 +49,7 @@ PALETTE = {5: (215, BOLD), 6: (223, ITALIC), 7: (231, BOLD), 8: (114, 0),
            4: (141, 0), 10: (203, UNDERLINE)}
 BAR, LINE = 0x2502, 0x2500
 BULLETS = (0x2022, 0x25E6, 0x25AA)
-PARAGRAPH, HEADING, CODE, RULE, FIGURE = 1, 2, 3, 4, 5
+PARAGRAPH, HEADING, CODE, RULE, FIGURE, PAGE = 1, 2, 3, 4, 5, 6
 
 SETUP = r"""
 VARIABLE DV-RGN  VARIABLE DV-W  VARIABLE DV-DEPTH  VARIABLE DV-H
@@ -104,6 +104,46 @@ VARIABLE DV-RELEASED  0 DV-RELEASED !
     DV-DOC DV-W @ DOCV-DOCUMENT! ;
 : DV-CLOSE  ( -- )
     DV-W @ DOCV-FREE DV-DOC DOC-CLOSE ." HELD=" DV-MSRC MSRC-HELD@ . CR ;
+\ A reader of lines, for documents with pages: a line that starts with @
+\ is a page's start, the rest its label; any other line is a paragraph;
+\ a blank row lies between blocks.
+CREATE PG-READER RDR-SIZE ALLOT
+CREATE PG-C 1 ALLOT
+CREATE PG-TEXT 256 ALLOT
+VARIABLE PG-D  VARIABLE PG-START
+: PG-SRC  ( -- source )  PG-D @ DOC-SOURCE@ ;
+: PG-BYTE  ( offset -- c )  PG-C 1 ROT PG-SRC MEDSRC-READ? DROP PG-C C@ ;
+: PG-ADD  ( start end -- ok? )
+    OVER - DUP 0= IF 2DROP -1 EXIT THEN
+    OVER PG-BYTE 64 = IF 1 /STRING DOC-B-PAGE ELSE DOC-B-PARAGRAPH THEN
+    -ROT 0 -ROT PG-D @ DOC-ADD-BLOCK
+    DUP 0= IF EXIT THEN
+    PG-D @ DOC-COUNT 1 > IF 1 SWAP BLK-ROWS-BEFORE! ELSE DROP THEN -1 ;
+: PG-STRUCTURE  ( doc -- status )
+    PG-D !  0 PG-START !
+    PG-SRC MEDSRC-SIZE@ 0 ?DO
+        I PG-BYTE 10 = IF
+            PG-START @ I PG-ADD 0= IF DOC-S-MEMORY UNLOOP EXIT THEN
+            I 1+ PG-START !
+        THEN
+    LOOP
+    PG-START @ PG-SRC MEDSRC-SIZE@ PG-ADD 0= IF DOC-S-MEMORY EXIT THEN
+    DOC-S-OK ;
+: PG-CONTENT  ( index doc -- status )
+    PG-D !  PG-D @ DOC-BLOCK BLK-LOC@
+    255 MIN DUP >R  PG-TEXT SWAP ROT PG-SRC MEDSRC-READ? IF R> DROP DOC-S-READ EXIT THEN
+    PG-TEXT R> TSTY-PLAIN PG-D @ DOC-CB-TEXT 0= IF DOC-S-MEMORY EXIT THEN
+    DOC-S-OK ;
+: PG-CLOSE  ( doc -- )  DROP ;
+' PG-STRUCTURE PG-READER RDR.STRUCTURE-XT !
+' PG-CONTENT PG-READER RDR.CONTENT-XT !
+' PG-CLOSE PG-READER RDR.CLOSE-XT !
+: DV-OPEN-PAGES  ( a u -- )
+    DV-SRC MEDSRC-MEMORY
+    DV-SRC PG-READER DV-MSRC DV-DOC DOC-OPEN ." OPEN=" . CR
+    DV-RGN @ DV-MSRC DOCV-NEW DV-W !
+    ['] DV-RESOLVE ['] DV-RELEASE ['] DV-FOLLOW 0 DV-W @ DOCV-OWNER!
+    DV-DOC DV-W @ DOCV-DOCUMENT! ;
 \ Every cell of the view.
 : DV-CELLS  ( -- )
     ." @@CELLS" CR
@@ -381,6 +421,8 @@ def _model(shown: list[Shown], cols: int, height: int, top: int, pictures=None):
         base = (FG, 0)
         if doc.kind is BlockKind.HEADING:
             base = (215, BOLD | (UNDERLINE if doc.level <= 2 else 0))
+        elif doc.kind is BlockKind.PAGE:
+            base = (MUTED, 0)
         elif doc.kind is BlockKind.FIGURE:
             base = (MUTED, ITALIC)
             if block.figure not in (pictures or {}):
@@ -404,6 +446,15 @@ def _model(shown: list[Shown], cols: int, height: int, top: int, pictures=None):
                 if meaning in PALETTE:
                     fg, attrs = PALETTE[meaning][0], PALETTE[meaning][1] | base[1]
                 put(row, col, (ord(character.text[0]), fg, background, attrs))
+            if doc.kind is BlockKind.PAGE:
+                # A page's break: a rule's line across the cells its line
+                # leaves, one clear of the label, before it right to left.
+                taken = line.width + (1 if line.width else 0)
+                free = last - indent - taken
+                if free > 0:
+                    first = indent if line.rtl else indent + taken
+                    for col in range(first, first + free):
+                        put(row, col, (LINE, RULE_FG, BG, 0))
     return grid
 
 
@@ -793,3 +844,55 @@ def test_the_view_publishes_the_blocks_it_shows_as_doc1() -> None:
         assert measured_status == 0
         assert measured == int(re.search(r"BYTES=(-?\d+)", part).group(1))
     assert "HELD=0 " in output
+
+
+PAGES = (
+    "@iv\n"
+    "A paragraph of prose that is long enough to wrap onto more lines.\n"
+    "@\n"
+    "@Appendix the second, a label long enough to wrap\n"
+    "@\u05e2\u05de\u05d5\u05d3\n"
+    "Last.\n"
+).encode()
+
+
+def test_pages_show_their_labels_and_their_breaks() -> None:
+    """A page's start takes a paragraph's rows, as MegaPad counts them, and
+    draws as the reference renderer does: its label muted, a rule's line
+    across the cells each of its lines leaves, a whole row for an empty
+    label, and the line before a right-to-left label; the view publishes
+    it as a PAGE block."""
+
+    rows, cols = 12, 24
+    lines = [
+        _view(rows, cols), *CAPTURE_SETUP, f"DV-FILE {len(PAGES)} DV-OPEN-PAGES",
+        "DV-BLOCKS-DUMP",
+        ': DV-ALL-ROWS  ." ROWS " DV-DOC DOC-COUNT 0 ?DO I DV-W @ DOCV-ROWS . LOOP CR ;',
+        "DV-ALL-ROWS",
+    ]
+    for scroll in (0, 5):
+        lines += [f"{scroll} DV-W @ DOCV-SCROLL", "DV-DRAW", "DV-TOP", "DV-CELLS",
+                  '." @@PART" CR', "DV-CAPTURE"]
+    lines.append("DV-CLOSE")
+    output = _run(lines, PAGES)
+    assert "OPEN=0 " in output and "HELD=0 " in output
+    shown = _shown(output)
+    assert [block.kind for block in shown] == [PAGE, PARAGRAPH, PAGE, PAGE, PAGE, PARAGRAPH]
+    assert [block.text for block in shown][:3] == [b"iv", PAGES[4:69], b""]
+    content = _document(shown, cols, rows, {})
+    expected = [block_row_count(content, block, cols) for block in content.blocks]
+    assert [int(v) for v in re.search(r"ROWS ([-\d ]+)", output).group(1).split()] == expected
+    tops = [tuple(map(int, t)) for t in re.findall(r"TOP=(\d+) (\d+)", output)]
+    seen = set()
+    for part, top in enumerate(tops):
+        offset = _offset(shown, cols, rows, *top)
+        cells = _cells(output, part)
+        assert cells == _model(shown, cols, rows, offset), part
+        seen |= set(cells.values())
+        payload = bytes.fromhex(re.search(r"@@BYTES ([0-9a-f]*)",
+                                          output.split("@@PART")[part + 1]).group(1))
+        published = decode_document_content(payload)
+        assert published == _publication(shown, cols, rows, offset)
+        assert BlockKind.PAGE in {block.kind for block in published.blocks}
+    assert (LINE, RULE_FG, BG, 0) in seen and (ord("i"), MUTED, BG, 0) in seen
+    assert (0x05E2, MUTED, BG, 0) in seen

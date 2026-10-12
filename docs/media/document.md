@@ -5,8 +5,8 @@ REQUIRE media/document.f
 ```
 
 A document is text read from top to bottom, with its structure: a sequence
-of blocks (paragraphs, headings, code, rules and figures), each inside the
-quotes and list items around it. A reader finds the blocks in a media
+of blocks (paragraphs, headings, code, rules, figures and the starts of
+pages), each inside the quotes and list items around it. A reader finds the blocks in a media
 source; `markup/markdown.f` is the first. Any application can show a
 document, and any reader can make one.
 
@@ -20,6 +20,11 @@ Block and container kinds take the values of MegaPad's DOC1 body
 | `DOC-B-CODE` | 3 | | `DOC-C-NUMBERED` | 3 |
 | `DOC-B-RULE` | 4 | | | |
 | `DOC-B-FIGURE` | 5 | | | |
+| `DOC-B-PAGE` | 6 | | | |
+
+A page's start, `DOC-B-PAGE`, marks where a page of a paged document such as
+a PDF begins. Its text is the page's label, such as `iv` or `12`, laid out as
+a paragraph's, and it sits in no container: `DOC-ADD-CONTAINER` refuses one.
 
 ## Two passes
 

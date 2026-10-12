@@ -15,7 +15,8 @@
 \  on every row of a quote, a list item's bullet (another at each deeper
 \  list) or its number on the first row of the block that starts it,
 \  headings in the heading look with levels 1 and 2 underlined, code on a
-\  dark background, a rule as a line, and a figure's caption muted.  It
+\  dark background, a rule as a line, a page's label muted with a rule's
+\  line across the cells it leaves, and a figure's caption muted.  It
 \  draws over the owner's style (DRW-STYLE-RESTORE), each meaning in the
 \  style palette's look with its block's attributes kept, as a list's
 \  fields are drawn.  A figure's picture is a picture widget drawn into
@@ -536,7 +537,8 @@ VARIABLE _DVL-PAD         \ cells before a right-to-left line
     THEN
     _DVD-KIND @ DOC-B-FIGURE = IF
         _DOCV-MUTED _DVL-BASE-FG ! CELL-A-ITALIC _DVL-BASE-A @ OR _DVL-BASE-A !
-    THEN ;
+    THEN
+    _DVD-KIND @ DOC-B-PAGE = IF _DOCV-MUTED _DVL-BASE-FG ! THEN ;
 
 : _DVL-PAINT  ( -- )
     _DVL-BASE-FG @ DRW-FG! _DVL-BASE-A @ DRW-ATTR!
@@ -547,6 +549,15 @@ VARIABLE _DVL-PAD         \ cells before a right-to-left line
     THEN
     _DV-TLN TLINES-BYTES _DVL-ROW @ _DVD-X @ ['] _DVL-LOOK
     DRW-TEXT-STYLED-UNTRUSTED ;
+
+\ A page's break: a rule's line across the cells the label's line leaves,
+\ one cell clear of the label: after it, or before it right to left.
+: _DVL-BREAK  ( -- )
+    _DV-TLN TLINES-WIDTH DUP IF 1+ THEN                  ( taken )
+    _DVD-T @ OVER - DUP 0> 0= IF 2DROP EXIT THEN         ( taken len )
+    SWAP _DV-TLN TLINES-RTL? IF DROP 0 THEN _DVD-X @ +   ( len col )
+    DRW-STYLE-RESTORE _DOCV-RULE DRW-FG!
+    _DOCV-LINE _DVL-ROW @ 2SWAP SWAP DRW-HLINE ;
 
 \ Draw the line the cursor has read on view row ROW, cut at the text area;
 \ a line of a right-to-left paragraph ends at the area's right edge.
@@ -564,6 +575,7 @@ VARIABLE _DVL-PAD         \ cells before a right-to-left line
         _DV-TLN TLINES-BYTES DROP _DVD-C @ DCT-TEXT DROP - _DVL-AT ! 0
     THEN _DVL-PAD !
     ['] _DVL-PAINT _DVL-ROW @ _DVD-X @ 1 _DVD-T @ DRW-WITH-CLIP
+    _DVD-KIND @ DOC-B-PAGE = IF _DVL-BREAK THEN
     DRW-STYLE-RESTORE ;
 
 VARIABLE _DVL-K

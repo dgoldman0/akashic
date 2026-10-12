@@ -92,7 +92,8 @@ asks: nonzero unique keys; a level from one to six on a heading and on
 nothing else; picture rows on a figure and on nothing else; rows before
 inside at most as many containers as the block has; containers of a width
 from one to 65535, of which only a list item starts and only a numbered item
-has a number; no text and no runs on a rule; and text with no control but a
+has a number; no container on a page's start; no text and no runs on a rule;
+and text with no control but a
 line feed, with style runs as a text item carries them. A document without
 blocks has viewport row zero. The viewport row's bound and which blocks the
 root shows depend on the root's width and the blocks' lines, so the

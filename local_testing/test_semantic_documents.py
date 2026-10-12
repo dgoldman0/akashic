@@ -213,6 +213,7 @@ def _every_kind() -> DocumentContent:
                           runs=(StyleRun(2, 6, TextStyle.EMPHASIS),)),
             DocumentBlock(9, BlockKind.FIGURE, "", picture_rows=1),
             DocumentBlock(10, BlockKind.PARAGRAPH, "", containers=(bullet,)),
+            DocumentBlock(11, BlockKind.PAGE, "iv", rows_before=1),
         ),
         viewport_row=2,
     )
@@ -243,7 +244,7 @@ def test_a_document_builds_validates_and_packs_to_the_same_doc1_value() -> None:
         numbers[program.statuses:]
     )
     assert status == 0
-    assert (blocks, containers, runs) == (8, 5, 3)
+    assert (blocks, containers, runs) == (9, 5, 3)
     assert utf8 == content.utf8_bytes
     assert (doc1_status, doc1_bytes, pack) == (0, content.wire_bytes, 0)
     (payload,) = groups
@@ -276,7 +277,7 @@ def _status(blocks, *, flags=0, viewport_row=0) -> int:
     return numbers[program.statuses]
 
 
-P, H, C, R, F = 1, 2, 3, 4, 5
+P, H, C, R, F, PG = 1, 2, 3, 4, 5, 6
 QUOTE, BULLET, NUMBERED = 1, 2, 3
 
 
@@ -288,7 +289,9 @@ def test_the_deep_validation_refuses_every_structural_rule() -> None:
         "no key": [(0, P, 0, 0, 0, 0, [], b"x", [])],
         "a key twice": [(1, P, 0, 0, 0, 0, [], b"x", []), (1, P, 0, 0, 0, 0, [], b"y", [])],
         "no kind": [(1, 0, 0, 0, 0, 0, [], b"x", [])],
-        "an unknown kind": [(1, 6, 0, 0, 0, 0, [], b"x", [])],
+        "an unknown kind": [(1, 7, 0, 0, 0, 0, [], b"x", [])],
+        "a page's start in a quote": [(1, PG, 0, 0, 0, 0, [(QUOTE, 2, 0, False)], b"4", [])],
+        "a level on a page's start": [(1, PG, 1, 0, 0, 0, [], b"4", [])],
         "a heading without a level": [(1, H, 0, 0, 0, 0, [], b"x", [])],
         "a heading too deep": [(1, H, 7, 0, 0, 0, [], b"x", [])],
         "a level on a paragraph": [(1, P, 1, 0, 0, 0, [], b"x", [])],
@@ -319,3 +322,4 @@ def test_the_deep_validation_refuses_every_structural_rule() -> None:
     assert _status(ok, flags=4) == 4, "a reserved flag"
     assert _status([], viewport_row=1) == 4, "a viewport row with no blocks"
     assert _status([(1, C, 0, 0, 0, 0, [], b"a\nb", [])]) == 0, "line feeds"
+    assert _status([(1, PG, 0, 1, 0, 0, [], b"iv", []), (2, PG, 0, 0, 0, 0, [], b"", [])]) == 0

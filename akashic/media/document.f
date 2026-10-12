@@ -3,8 +3,9 @@
 \ =====================================================================
 \
 \  A document is text read from top to bottom, with its structure: a
-\  sequence of blocks (paragraphs, headings, code, rules and figures), each
-\  inside the quotes and list items around it.  A reader finds the blocks
+\  sequence of blocks (paragraphs, headings, code, rules, figures and the
+\  starts of pages), each inside the quotes and list items around it; a
+\  page's start sits in none, its text the page's label.  A reader finds the blocks
 \  in a media source.  DOC-OPEN runs the reader's structure pass, which
 \  keeps each block's kind, its containers, the blank rows before it, and
 \  where its text lies, but not the text.  DOC-CONTENT reads one block's
@@ -55,6 +56,7 @@ PROVIDED akashic-media-document
 3 CONSTANT DOC-B-CODE
 4 CONSTANT DOC-B-RULE
 5 CONSTANT DOC-B-FIGURE
+6 CONSTANT DOC-B-PAGE
 
 \ Container kinds.
 1 CONSTANT DOC-C-QUOTE
@@ -245,10 +247,14 @@ VARIABLE _DGW-NEW
     R> ;
 
 \ DOC-ADD-CONTAINER ( kind width number start? doc -- ok? )
-\   Add a container, outermost first, to the block added last.
+\   Add a container, outermost first, to the block added last: false when
+\   memory is refused, or when that block is a page's start, which sits in
+\   no container.
 : DOC-ADD-CONTAINER  ( kind width number start? doc -- ok? )
     _DOC-D !
     _DOC-D @ _DOC.COUNT @ 0= IF 2DROP 2DROP 0 EXIT THEN
+    _DOC-D @ _DOC.BLOCKS-A @ _DOC-D @ _DOC.COUNT @ 1- _BLK-SIZE * +
+    BLK-KIND@ DOC-B-PAGE = IF 2DROP 2DROP 0 EXIT THEN
     _DOC-D @ _DOC.CONT-COUNT @ 1+ CNT-SIZE *
     _DOC-D @ _DOC.CONTS-A _DOC-D @ _DOC.CONTS-CAP _DOC-GROW 0= IF
         2DROP 2DROP 0 EXIT
