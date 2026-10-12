@@ -32,6 +32,13 @@ the window it needs and is refused when the caller's is smaller. A bare or
 gzip stream may refer back 32 KB, so it is refused only at a reference
 farther back than the window.
 
+A caller that keeps the whole output in one run, such as a response body in
+its buffer, gives no window: a window of 0 bytes. The output is then the
+window, and a reference reads back from it. Each feed's room must begin
+right after the bytes the stream has given so far; before it gives one, any
+room begins it. A feed whose room begins anywhere else finds the stream
+damaged, for its window.
+
 ## Statuses
 
 | Status | Meaning |
@@ -50,7 +57,7 @@ the stream's last byte, and anything after it is the caller's.
 | Reason | Meaning |
 |---|---|
 | `INFL-R-HEADER` | A zlib or gzip header that is not one, or a wrong gzip header CRC. |
-| `INFL-R-WINDOW` | The window is not a power of two from 256 to 32 KB, or is too small for the stream. |
+| `INFL-R-WINDOW` | The window is not a power of two from 256 to 32 KB, or is too small for the stream, or, with no window, a feed's room does not follow the output. |
 | `INFL-R-DICTIONARY` | A zlib stream that needs a preset dictionary. |
 | `INFL-R-BLOCK` | A block of the reserved type. |
 | `INFL-R-STORED` | A stored block whose length check fails. |
@@ -93,7 +100,9 @@ Guest steps per byte of output, decoding 200,000 bytes in one feed:
 | Random bytes, stored, zlib | 13 |
 | One byte repeated, raw | 3.4 |
 
-A literal costs most; a long reference and a stored run cost little.
+A literal costs most; a long reference and a stored run cost little. With
+no window the costs are the same, since the window's copy to the output is
+one accelerated move a run: what no window saves is the window's memory.
 
 ## Example
 
@@ -103,4 +112,12 @@ CREATE INF  INFL-SIZE ALLOT
 WIN 32768 INFL-W-ZLIB INF INFL-INIT
 \ Each time input arrives at IN-A, IN-U bytes:
 IN-A IN-U OUT-A OUT-U INF INFL-FEED   ( in-used out-used status )
+```
+
+With no window, into one buffer `BUF` of `CAP` bytes, `N` of them given so
+far:
+
+```forth
+0 0 INFL-W-GZIP INF INFL-INIT
+IN-A IN-U BUF N + CAP N - INF INFL-FEED   ( in-used out-used status )
 ```

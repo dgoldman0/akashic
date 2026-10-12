@@ -323,3 +323,46 @@ def test_a_reference_32768_bytes_back(inflater):
         assert (status, reason, output) == (DONE, 0, expected)
     _, status, reason, _ = inflater.inflate(stream, RAW, window=16_384)
     assert (status, reason) == (BAD, inflater.reasons["WINDOW"])
+
+
+def test_with_no_window_the_output_is_the_window(inflater):
+    data = _text(40_000, seed=21) + random.Random(21).randbytes(3_000) + b"\x00" * 5_000
+    for level in (0, 1, 6, 9):
+        for wrapper, stream in ((ZLIB, _zlib(data, level)), (RAW, _zlib(data, level, wbits=-15)),
+                                (GZIP, _zlib(data, level, wbits=31))):
+            output, status, reason, used = inflater.inflate(stream, wrapper, window=0)
+            assert (status, reason, used) == (DONE, 0, len(stream)), (level, wrapper)
+            assert output == data
+
+
+@pytest.mark.parametrize("in_chunk, out_chunk", ((1, None), (None, 1), (7, 3)))
+def test_with_no_window_fed_in_pieces(inflater, in_chunk, out_chunk):
+    data = _text(6_000, seed=3) + b"\x00" * 700 + random.Random(3).randbytes(500)
+    for wrapper, stream in ((ZLIB, _zlib(data, 9)), (GZIP, _zlib(data, 1, wbits=31)),
+                            (RAW, _zlib(data, 0, wbits=-15))):
+        output, status, reason, used = inflater.inflate(
+            stream, wrapper, window=0, in_chunk=in_chunk, out_chunk=out_chunk)
+        assert (status, reason, used, output) == (DONE, 0, len(stream), data)
+
+
+def test_with_no_window_a_reference_reaches_back_into_the_output(inflater):
+    stream, expected = _far_reference(32_768)
+    for out_chunk in (None, 2):
+        output, status, reason, _ = inflater.inflate(stream, RAW, window=0, out_chunk=out_chunk)
+        assert (status, reason, output) == (DONE, 0, expected)
+
+
+def test_with_no_window_each_feed_s_room_follows_the_output(inflater):
+    stream = _zlib(_text(5_000, seed=5))
+    inflater.runtime.memory.write_bytes(inflater.input, stream)
+    # Before the stream gives a byte, any room begins it.
+    inflater.call("INFL-INIT", 0, 0, ZLIB, inflater.record)
+    assert inflater.call("INFL-FEED", inflater.input, 2, inflater.output + 64, 100,
+                         inflater.record) == (2, 0, MORE)
+    used, given, status = inflater.call("INFL-FEED", inflater.input + 2, len(stream) - 2,
+                                        inflater.output, 1_000, inflater.record)
+    assert (given, status) == (1_000, FULL)
+    # Room that leaves a gap after the output is refused.
+    assert inflater.call("INFL-FEED", inflater.input + 2 + used, len(stream) - 2 - used,
+                         inflater.output + 1_001, 1_000, inflater.record) == (0, 0, BAD)
+    assert inflater.call("INFL-REASON@", inflater.record) == (inflater.reasons["WINDOW"],)

@@ -29,6 +29,12 @@
 \  buffer, so MORE means every input byte is used.  After DONE the input
 \  the stream did not need is not counted as used.
 \
+\  A caller that keeps the whole output in one run gives no window, a
+\  size of 0.  The output is then the window: each feed's room begins
+\  right after the bytes the stream has given, and before it gives one,
+\  any room begins it.  A feed whose room begins anywhere else finds the
+\  stream bad, for its window.
+\
 \  Huffman codes decode through lookup tables built in the record for
 \  each block: a code of up to nine bits for a literal or length, and of
 \  up to eight for a distance, is one lookup, and a longer one is read a
@@ -123,6 +129,10 @@ REQUIRE ../math/crc.f
 : _IF.DCOUNT   ( r -- a ) 2928 + ;
 : _IF.DSYMS    ( r -- a ) 2960 + ;
 3024 CONSTANT INFL-SIZE
+
+\ The window size less one when the output is the window: larger than
+\ any stream, so the window never wraps or fills.
+1 62 LSHIFT 1- CONSTANT _IF-NO-WINDOW
 
 9 CONSTANT _IF-LIT-ROOT
 8 CONSTANT _IF-DIST-ROOT
@@ -237,10 +247,12 @@ VARIABLE _IF-OUT0      \ where this feed's output began
     INFL-W-GZIP = IF _IF-SUM @ -ROT CRC32-UPDATE _IF-SUM ! EXIT THEN
     2DROP ;
 
-\ Copy U bytes of the window from position P to the output.
+\ Copy U bytes of the window from position P to the output.  When the
+\ output is the window they are there already.
 : _IF-OUT  ( p u -- )
     DUP 0= IF 2DROP EXIT THEN
-    SWAP _IF-WIN @ + _IF-OP @ ROT DUP >R MOVE
+    SWAP _IF-WIN @ + _IF-OP @ ROT DUP >R
+    2 PICK 2 PICK <> IF MOVE ELSE DROP 2DROP THEN
     _IF-OP @ R@ _IF-SUM+  R> _IF-OP +! ;
 
 \ Give the output every byte the window holds for it.
@@ -707,8 +719,9 @@ VARIABLE _IFL-OFF  VARIABLE _IFL-LEN
 
 \ INFL-INIT ( window-a window-u wrapper infl -- )
 \   Start a stream of WRAPPER, with the window of WINDOW-U bytes at
-\   WINDOW-A, a power of two from 256 to 32768.  Any other window, or an
-\   unknown wrapper, leaves the decoder damaged.
+\   WINDOW-A, a power of two from 256 to 32768, or with no window when
+\   WINDOW-U is 0.  Any other window, or an unknown wrapper, leaves the
+\   decoder damaged.
 : INFL-INIT  ( window-a window-u wrapper infl -- )
     DUP INFL-SIZE 0 FILL  >R
     DUP R@ _IF.WRAPPER !
@@ -718,6 +731,7 @@ VARIABLE _IFL-OFF  VARIABLE _IFL-LEN
     INFL-W-GZIP U> IF
         INFL-R-HEADER R@ _IF.REASON !  INFL-S-BAD R@ _IF.STATUS !
     THEN
+    DUP 0= IF 2DROP _IF-NO-WINDOW R> _IF.MASK ! EXIT THEN
     DUP 256 < OVER 32768 > OR OVER DUP 1- AND OR IF
         INFL-R-WINDOW R@ _IF.REASON !  INFL-S-BAD R@ _IF.STATUS !
     THEN
@@ -739,6 +753,13 @@ VARIABLE _IFL-OFF  VARIABLE _IFL-LEN
     _IF-R @ >R  _IF-BB @ R@ _IF.BB !  _IF-BC @ R@ _IF.BC !
     _IF-TOTAL @ R@ _IF.TOTAL !  _IF-SUM @ R> _IF.SUM ! ;
 
+\ With no window, whether this feed's room begins right after the bytes
+\ the stream has given.  Until it gives one, any room begins it.
+: _IF-FOLLOWS?  ( -- flag )
+    _IF-MASK @ _IF-NO-WINDOW <> IF -1 EXIT THEN
+    _IF-TOTAL @ 0= IF _IF-OP @ DUP _IF-WIN ! _IF-R @ _IF.WIN ! -1 EXIT THEN
+    _IF-WIN @ _IF-TOTAL @ + _IF-OP @ = ;
+
 \ INFL-FEED ( in-a in-u out-a out-u infl -- in-used out-used status )
 \   Decode from IN-U bytes at IN-A into OUT-U bytes of room at OUT-A.
 : INFL-FEED  ( in-a in-u out-a out-u infl -- in-used out-used status )
@@ -746,7 +767,11 @@ VARIABLE _IFL-OFF  VARIABLE _IFL-LEN
     _IF-R @ _IF.STATUS @ ?DUP IF >R 2DROP 2DROP 0 0 R> EXIT THEN
     _IF-OR ! DUP _IF-OP ! _IF-OUT0 !  _IF-IL ! DUP _IF-IP ! _IF-IN0 !
     _IF-LOAD
-    BEGIN _IF-STEP DUP -1 = WHILE DROP REPEAT        ( status )
+    _IF-FOLLOWS? IF
+        BEGIN _IF-STEP DUP -1 = WHILE DROP REPEAT    ( status )
+    ELSE
+        INFL-R-WINDOW _IF-BAD
+    THEN
     _IF-FLUSH
     DUP INFL-S-FULL = OVER INFL-S-DONE = OR IF _IF-GIVE-BACK THEN
     DUP INFL-S-DONE = OVER INFL-S-BAD = OR IF DUP _IF-R @ _IF.STATUS ! THEN
