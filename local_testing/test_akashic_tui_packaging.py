@@ -843,7 +843,7 @@ def test_library_applet_profiles_package_the_library_owned_applet() -> None:
         assert profile.include_large_sample is False
     assert interactive.total_sectors == 8192
     assert contracts.total_sectors == 8192
-    assert functional.total_sectors == 8192
+    assert functional.total_sectors == 16384
 
     assert "LIBRARY-APPLET-RUN" in interactive.autoexec
     assert contracts.ready_markers == ("LIBRARY APPLET CONTRACTS PASS",)
@@ -1157,7 +1157,7 @@ def test_library_applet_functional_image_links_controller_and_keeps_uidl(
         "library-applet-functional-contracts",
         tmp_path / "akashic-library-applet-functional-contracts.img",
     )
-    assert image.stat().st_size == 8192 * 512
+    assert image.stat().st_size == 16384 * 512
 
     filesystem = MP64FS(bytearray(image.read_bytes()))
     library_parent = filesystem.resolve_path("/tui/applets/library")
