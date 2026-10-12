@@ -78,11 +78,13 @@ VARIABLE A-TIME  VARIABLE A-DISC  VARIABLE AM
 \ Gives the caller's run back, as Desk's broker does when a start fails.
 : AM-FREE  ( -- ) AM @ ?DUP IF AMRUN-FREE THEN 0 AM ! ;
 
-\ The provider, its catalog ready with gpt-fast selected, and a runtime
-\ connected to it.
+\ The provider, signed in, its catalog ready with gpt-fast selected, and
+\ a runtime connected to it.
 VARIABLE SRC  VARIABLE PRV  VARIABLE RT
 : ST  ( -- settings ) SRC @ DFSRC.SETTINGS ;
+: SIGNED  ( state -- ) SRC @ DFSRC.AUTH AAUTH.STATE ! ;
 DEVFLOW-SOURCE-NEW THROW SRC !  SRC @ APSOURCE-PROVIDER-NEW THROW PRV !
+AAUTH-STATE-READY SIGNED
 ARSET-STATE-READY ST ARSET.STATE !  0 SRC @ _DFS-MODEL-SELECT DROP
 PRV @ ARUNTIME-NEW THROW RT !
 : PUMP  ( -- ) 16 RT @ ARUNTIME-PUMP DROP ;
@@ -315,6 +317,12 @@ REFUSALS = {
     "a provider offline":
         ("APROV-S-OFFLINE PRV @ APROV.STATE !", "GO", "APROV-S-READY PRV @ APROV.STATE !",
          R_AGENT_UNAVAILABLE),
+    "a provider signed out":
+        ("AAUTH-STATE-SIGNED-OUT SIGNED", "GO", "AAUTH-STATE-READY SIGNED",
+         R_AGENT_UNAVAILABLE),
+    "a provider signing in":
+        ("AAUTH-STATE-PENDING SIGNED", "GO", "AAUTH-STATE-READY SIGNED",
+         R_AGENT_UNAVAILABLE),
     "a prompt too large for the provider":
         ("' TINY-ROOM PRV @ APROV.INPUT-XT !", "GO", "0 PRV @ APROV.INPUT-XT !",
          R_TOO_LARGE),
@@ -347,6 +355,19 @@ def test_refusals_record_nothing(forth):
     for (name, (_, _, _, reason)), row in zip(REFUSALS.items(), rows):
         assert ints(row) == [S_ENDED, BLOCKED, reason, 6, 1, 4, 0, -1, 0, -1, -1], name
     assert rows[-1] == ["blocked:", "model", "unavailable"]
+
+
+def test_only_a_provider_that_needs_a_sign_in_waits_for_one(forth):
+    """A provider that takes no sign-in runs whatever its sign-in says."""
+
+    rows = run(forth, [
+        "FRESH AAUTH-STATE-SIGNED-OUT SIGNED "
+        "PRV @ APROV.FEATURES @ APROV-F-AUTH INVERT AND PRV @ APROV.FEATURES ! "
+        "1 1 R-OCC KEEP1 GO . 8 STEPS KEY1 STAND . ANS. "
+        "PRV @ APROV.FEATURES @ APROV-F-AUTH OR PRV @ APROV.FEATURES ! "
+        "AAUTH-STATE-READY SIGNED CR",
+    ])
+    assert ints(rows[0]) == [S_STARTED, S_ENDED, COMPLETED, R_NONE]
 
 
 def test_a_run_stops_for_review(forth):

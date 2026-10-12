@@ -35,7 +35,7 @@ A run is refused, and nothing is recorded, when:
 |---|---|
 | The Agent's provider is not the one the request names | model unavailable |
 | The provider has no catalog, or its catalog does not offer exactly the model, effort, tier and verbosity named | model unavailable |
-| The catalog is still loading, or the provider is not connected | Agent unavailable |
+| The catalog is still loading, or the provider is not connected, or it needs a sign-in it does not have | Agent unavailable |
 | The prompt does not fit the provider's room for a turn's input (`APROV-INPUT-FITS?`) | too large for the model |
 | The authority is no longer active, or cannot disclose the prompt | invalid request |
 | The run store cannot record the run | Agent unavailable |
@@ -141,8 +141,9 @@ first four checks above, or 0 when it could. The authority is not looked
 at, since an approval has none yet. A request that names an occurrence is
 invalid, and without a dispatcher the Agent is unavailable. A model the
 catalog does not offer, and a prompt too large for it, stay so until the
-catalog changes; an Agent that is not connected, or whose catalog is still
-loading, may become available. Desk shows the reason as it asks its user.
+catalog changes; an Agent that is not connected or not signed in, or
+whose catalog is still loading, may become available. Desk shows the
+reason as it asks its user.
 
 `ADISP-MODELS` writes the models the Agent can run as a
 [model list](../../../interop/scheduled-actions.md#model-lists): its
@@ -180,7 +181,9 @@ checks:
   and unable to cancel it, its transcript, the names in its answers, and
   when it ran;
 - known keys, and a conflicting request that starts nothing;
-- 12 refusals that record nothing and leave the authority the caller's;
+- 14 refusals that record nothing and leave the authority the caller's,
+  among them a provider signed out and one signing in, while a provider
+  that takes no sign-in runs whatever its sign-in says;
 - stopping for review on a tool call and on an approval request, and the
   next run's end being its own;
 - the waiting order, and chat waiting behind scheduled runs;
@@ -196,7 +199,7 @@ checks:
 - no chat history and no tools for a scheduled turn;
 - the runtime's own words, used directly.
 
-Disabling any one of 94 guarded behaviors of the dispatcher, or of 40 in
+Disabling any one of 96 guarded behaviors of the dispatcher, or of 40 in
 the runtime's part, makes a check fail, except five:
 - the summary's check that it fits its buffer, which the catalog's texts
   never fill;

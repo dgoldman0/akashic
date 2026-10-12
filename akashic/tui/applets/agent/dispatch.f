@@ -13,7 +13,8 @@
 \  line; chat waits behind it, and cannot cancel it.  Before anything is
 \  recorded, a run is refused when the Agent's provider is not the one
 \  it names, the catalog does not offer its model exactly, the provider
-\  is not ready, or its prompt does not fit the provider's input.  A run
+\  is not ready or needs a sign-in it does not have, or its prompt does
+\  not fit the provider's input.  A run
 \  that started ends completed; stopped for review when its model asks
 \  for a tool or an approval; out of time; out of room for its reply,
 \  which keeps no more than its limit; cancelled; or failed.  Its
@@ -499,10 +500,15 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
     DUP AMRUN.MANDATE MAND.DISCLOSURE-BUDGET @ SWAP AMRUN.DISCLOSURE-USED @ -
     > 0= ;
 
+\ Whether PROVIDER needs a sign-in it does not have.
+: _ADISP-SIGNED-OUT?  ( provider -- flag )
+    DUP APROV.FEATURES @ APROV-F-AUTH AND 0= IF DROP 0 EXIT THEN
+    APROV-AUTH AAUTH-READY? 0= ;
+
 \ Why the Agent cannot run the request being started on the model it
 \ names, or 0 when it can: its provider is another, the catalog does not
-\ offer exactly its model, the provider is not ready, or its prompt does
-\ not fit the provider's input.
+\ offer exactly its model, the provider is not ready or not signed in,
+\ or its prompt does not fit the provider's input.
 : _ADISP-RUNNABLE  ( dispatch -- reason|0 )
     >R R@ _ADISP-RT ARUNTIME.PROVIDER @              ( provider )
     R@ _ADISP-OPERANDS SACT-PROVIDER$
@@ -514,7 +520,7 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
     R@ _ADISP-DESIGNATE SWAP ARSET-DESIGNATION NIP   ( provider status )
     DUP ARSET-S-PENDING = IF 2DROP R> DROP SACT-R-AGENT-UNAVAILABLE EXIT THEN
     IF DROP R> DROP SACT-R-MODEL-UNAVAILABLE EXIT THEN
-    DUP APROV.STATE @ APROV-S-READY <> IF
+    DUP APROV.STATE @ APROV-S-READY <> OVER _ADISP-SIGNED-OUT? OR IF
         DROP R> DROP SACT-R-AGENT-UNAVAILABLE EXIT
     THEN
     R> _ADISP-OPERANDS SACT-PROMPT$ ROT APROV-INPUT-FITS?
@@ -637,7 +643,8 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
 \ is looked at.  Desk asks before its user approves REQUEST, which names
 \ no occurrence and has no authority yet.  A model the catalog does not
 \ offer or a prompt too large for it stays so; an Agent that is not
-\ connected, or whose catalog is still loading, may not.
+\ connected or not signed in, or whose catalog is still loading, may
+\ not.
 : ADISP-VET  ( request dispatch -- reason|0 )
     DUP ADISP-VALID? 0= IF 2DROP SACT-R-AGENT-UNAVAILABLE EXIT THEN
     OVER 0 SDSP-REQUEST-OK? IF 2DROP SACT-R-INVALID EXIT THEN
