@@ -560,7 +560,11 @@ def test_a_file_that_is_not_its_declared_picture_fails_and_charges_nothing(
     file = qoi_codec.encode(_picture(4, 3))
     assert harness.upload(3, *declared, file, format="RTAPT-PICTURE-QOI")[0] == 0
     statuses = harness.settle()
-    assert statuses[-1] == harness.constant("RTAPT-S-REJECTED")
+    # The step that took the refusal reconciled it, so it and the engine's
+    # status stay OK: an update prepared next is not refused for the job.
+    assert all(status == 0 for status in statuses), statuses
+    assert harness.call("RTAPT-UPDATE-STATE@", harness.engine)[0] == (
+        harness.constant("RTAPT-UPDATE-IDLE"), 0)
     # The terminal refused the bytes themselves, which the outcome says.
     assert harness.job() == (harness.constant("RTAPT-JOB-FAILED"),
                              harness.constant("RTAPT-JOB-UPLOAD"), 3,
@@ -751,7 +755,10 @@ def test_a_shown_picture_is_dropped_only_after_a_publication_stops_showing_it(ha
 
     assert harness.drop(1, 48) == 0
     statuses = harness.settle()
-    assert statuses[-1] == harness.constant("RTAPT-S-REJECTED")
+    # The refusal is the job's outcome, not the engine's status.
+    assert all(status == 0 for status in statuses), statuses
+    assert harness.call("RTAPT-UPDATE-STATE@", harness.engine)[0] == (
+        harness.constant("RTAPT-UPDATE-IDLE"), 0)
     assert harness.job()[0::3] == (harness.constant("RTAPT-JOB-FAILED"),
                                    harness.constant("RTAPT-S-BUSY"))
     assert 1 in harness.terminal_resources()

@@ -12422,14 +12422,16 @@ VARIABLE _RTAPT-JS-O
     _RTAPT-JS-E @ _RTAPT-E.SESSION @ PT-RESOURCE-ABORT ;
 
 \ The job's frame was refused before the terminal saw it.  A BEGIN, DROP or
-\ pixel question opened nothing, so the job fails; a refused chunk, COMMIT
-\ or abort would strand an open upload, which only a broken engine allows.
+\ pixel question opened nothing, so the job fails with the refusal as its
+\ outcome, which is its caller's to read, and the step itself is OK; a
+\ refused chunk, COMMIT or abort would strand an open upload, which only a
+\ broken engine allows.
 : _RTAPT-JOB-REFUSED  ( status -- status )
     _RTAPT-JS-E @ _RTAPT-E.JOB-PHASE @
     DUP _RTAPT-JP-BEGIN = OVER _RTAPT-JP-DROP = OR
     SWAP _RTAPT-JP-PIXELS = OR IF
-        DUP _RTAPT-JS-E @ _RTAPT-E.JOB-RESULT !
-        RTAPT-JOB-FAILED _RTAPT-JS-E @ _RTAPT-E.JOB-STATE ! EXIT
+        _RTAPT-JS-E @ _RTAPT-E.JOB-RESULT !
+        RTAPT-JOB-FAILED _RTAPT-JS-E @ _RTAPT-E.JOB-STATE ! RTAPT-S-OK EXIT
     THEN
     DROP RTAPT-S-INVALID _RTAPT-JS-E @ _RTAPT-QUARANTINE-ALL ;
 
@@ -12507,10 +12509,13 @@ VARIABLE _RTAPT-JS-O
     _RTAPT-ST-PT @ PT-RET-ABORTED = IF
         RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
     THEN
+    \ The terminal refused the frame: the job fails with the refusal as its
+    \ outcome.  The step reconciled the answer, so it is OK; a job's outcome
+    \ never stands as the engine's status, which its updates are judged by.
     _RTAPT-ST-PT @ PT-RET-OK <> IF
         _RTAPT-ST-PT @ _RTAPT-JOB-WIRE>RESULT RTAPT-JOB-FAILED
             _RTAPT-JOB-FINISH
-        RTAPT-S-REJECTED EXIT
+        RTAPT-S-OK EXIT
     THEN
     \ Once begun, the upload waits for its caller's chunks, and once every
     \ byte is taken it commits.
