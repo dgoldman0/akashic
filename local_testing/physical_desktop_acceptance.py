@@ -45,7 +45,8 @@ APPLET_KIND = "physical-desk-single-applet-check"
 # A single applet's journey is short.  Its own timeout ends a stalled run
 # well inside the outer watchdog, so the runner still writes its diagnostics.
 APPLET_TIMEOUT_SECONDS = 300
-APPLETS = ("pad", "fexp", "daybook", "streams", "agent", "small-terminal", "photo")
+APPLETS = ("pad", "fexp", "daybook", "streams", "agent", "small-terminal", "photo",
+           "damaged")
 
 
 def write_json(path: Path, value) -> None:
@@ -236,8 +237,8 @@ def main() -> int:
     parser.add_argument("--output-parent", type=Path)
     parser.add_argument("--applet", choices=APPLETS,
                         help="run Desk with only this applet, the small-terminal "
-                             "check of Desk with Pad, or the photo check of Desk "
-                             "with File Explorer, as a development check")
+                             "check of Desk with Pad, or the photo or damaged-picture "
+                             "check of Desk with File Explorer, as a development check")
     parser.add_argument("--backend", choices=("simulator", "hybrid"), default="simulator",
                         help="semantic backend: the simulator, or MegaPad's hybrid mode")
     parser.add_argument("--terminal-link-pace", metavar="BYTES_PER_SECOND:FRAME_US",

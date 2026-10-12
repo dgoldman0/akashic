@@ -14061,7 +14061,7 @@ DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
 # Development checks beyond one applet: Desk with Pad on a terminal with
 # little room for retained text, and Desk with File Explorer showing a real
 # photograph (below).
-DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo")
+DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damaged")
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
@@ -14127,6 +14127,31 @@ PROFILES["desktop-apt1-photo"] = replace(
     PROFILES["desktop-apt1-fexp"],
     initial_files=PROFILES["desktop-apt1-fexp"].initial_files
     + ((SAMPLE_PHOTO_NAME, SAMPLE_PHOTO),),
+)
+
+
+def damaged_png(width: int, height: int) -> bytes:
+    """A PNG whose signature and header name a WIDTH by HEIGHT picture and
+    whose image data is no deflate stream: the guest reads what the file
+    says it is, and a decoder refuses it."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", b"not a deflate stream") + chunk(b"IEND", b""))
+
+
+# Desk with File Explorer and a picture file the terminal cannot decode,
+# which its Preview sends once and CELL then says is damaged.
+SAMPLE_DAMAGED_NAME = "damaged.png"
+SAMPLE_DAMAGED_SIZE = (64, 48)
+PROFILES["desktop-apt1-damaged"] = replace(
+    PROFILES["desktop-apt1-fexp"],
+    initial_files=PROFILES["desktop-apt1-fexp"].initial_files
+    + ((SAMPLE_DAMAGED_NAME, damaged_png(*SAMPLE_DAMAGED_SIZE)),),
 )
 
 

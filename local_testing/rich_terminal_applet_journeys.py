@@ -66,6 +66,10 @@ FEXP_FILE = "large.txt"
 FEXP_PHOTO = "spice-market.qoi"
 FEXP_PHOTO_SIZE = (2160, 1620)
 FEXP_PHOTO_FACTS = "QOI, 2160 \u00d7 1620"
+# A picture file the terminal cannot decode (akashic_tui.py's damaged
+# check), and what CELL says of it once the terminal has refused it.
+FEXP_DAMAGED = "damaged.png"
+FEXP_DAMAGED_REASON = "The picture is damaged"
 # Every line of large.txt starts so; its preview opens at the end of the
 # text, where loading leaves the caret.
 FEXP_TEXT_LINE = "Large fixture line"
@@ -1222,6 +1226,130 @@ class PhotoJourney(_AppletJourney):
                           self.PREVIEWED, offer, generation, sender)
 
 
+class DamagedPictureJourney(_AppletJourney):
+    """Desk with File Explorer holding a picture file the terminal cannot
+    decode: a PNG whose header names a 64 by 48 picture and whose data is
+    none.  Its Preview sends the file once, the terminal refuses it, and CELL
+    says the picture is damaged.  The Details tab and the Preview again draw
+    the same picture, which is not sent again, and every input is answered.
+    The terminal's frame counts at each step are kept as journey evidence.
+    """
+
+    focus_marker = FEXP_ALONE_FOCUS_MARKER
+    READY, SELECTED, PREVIEWED, DETAILS, PREVIEWED_AGAIN = range(5)
+
+    def __init__(self, ready_markers: tuple[str, ...]):
+        super().__init__(ready_markers)
+        self._frames: dict[str, int] | None = None
+        # The terminal's upload frames before the Preview first showed.
+        self._before: dict[str, int] | None = None
+        self.evidence = {"damaged": {}}
+
+    @property
+    def final_stage(self) -> int:
+        return self.PREVIEWED_AGAIN
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, FEXP_DAMAGED_REASON)
+
+    def observe_status(self, status) -> None:
+        rich = status.get("rich_terminal") if isinstance(status, dict) else None
+        counts = rich.get("frames_by_type") if isinstance(rich, dict) else None
+        if isinstance(counts, dict):
+            self._frames = {
+                name: int(counts.get(f"0x{int(kind):04X}", 0))
+                for name, kind in _UPLOAD_FRAMES.items()
+            }
+
+    def _sent_once(self) -> dict[str, int] | None:
+        """The upload frames the terminal took since the Preview first
+        showed, once it has answered the damaged file's one upload: begun,
+        sent and committed once, never aborted.  None while that answer is
+        still to come."""
+
+        uploads = {name: self._frames[name] - self._before[name]
+                   for name in ("resource_begin", "resource_chunk", "resource_commit",
+                                "resource_abort")}
+        if uploads["resource_commit"] == 0 and uploads["resource_abort"] == 0:
+            return None
+        if (uploads["resource_begin"], uploads["resource_commit"],
+                uploads["resource_abort"]) != (1, 1, 0) or not uploads["resource_chunk"]:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_DAMAGED} was sent as {uploads!r}, not as one upload"
+            )
+        return uploads
+
+    def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+        if not selected:
+            return self._wait("the Preview tab selected")
+        if _image_claims_in(projection, bounds):
+            raise PhysicalDesktopAcceptanceError(f"{FEXP_DAMAGED} shows rich")
+        left, top, right, bottom = bounds
+        if not any(
+            top <= row < bottom and left <= column < right
+            for row, column in offer.cell.find(FEXP_DAMAGED_REASON)
+        ):
+            return self._wait(f"CELL saying {FEXP_DAMAGED} is damaged")
+        if self._frames is None:
+            return self._wait("the terminal's frame counts")
+        uploads = self._sent_once()
+        if uploads is None:
+            return self._wait(f"the terminal's answer to {FEXP_DAMAGED}'s upload")
+        if self.stage == self.PREVIEWED_AGAIN:
+            self.evidence["damaged"]["previewed-again"] = uploads
+            return self._done("damaged-not-sent-again", offer)
+        self.evidence["damaged"]["previewed"] = uploads
+        details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+        return self._step("damaged-refused", "activate_tab", _tab_value(details),
+                          self.DETAILS, offer, generation, sender)
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        if self.stage in (self.PREVIEWED, self.PREVIEWED_AGAIN):
+            return self._preview(offer, generation, projection, sender)
+        bounds = _desk_content_bounds(projection)
+        if self.stage == self.DETAILS:
+            _tab, selected = _tab_in(projection, bounds, "Details", _WHERE)
+            if not selected:
+                return self._wait("the Details tab selected")
+            preview, _selected = _tab_in(projection, bounds, "Preview", _WHERE)
+            return self._step("damaged-details-shown", "activate_tab", _tab_value(preview),
+                              self.PREVIEWED_AGAIN, offer, generation, sender)
+        table, _tree = FexpAloneJourney._views(projection)
+        if table is None:
+            return self._wait("File Explorer's detail table and folder tree")
+        row = table.named(FEXP_DAMAGED)
+        if self.stage == self.READY:
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's root lists no {FEXP_DAMAGED}"
+                )
+            if not FexpAloneJourney._shown(table, row):
+                return self._step("damaged-table-scrolled", "item_scroll", table.value(1),
+                                  self.READY, offer, generation, sender)
+            return self._step("damaged-table-shown", "item_select",
+                              table.value(row.item_key), self.SELECTED, offer,
+                              generation, sender)
+        selected = table.selected
+        if selected is None or selected.fields[0].text != FEXP_DAMAGED:
+            return self._wait(f"{FEXP_DAMAGED}'s row selected")
+        if not _status_shows(projection, "/" + FEXP_DAMAGED, bounds):
+            return self._wait(f"{FEXP_DAMAGED}'s path in the status bar")
+        if self._frames is None:
+            return self._wait("the terminal's frame counts")
+        tab, selected_tab = _tab_in(projection, bounds, "Preview", _WHERE)
+        if selected_tab:
+            raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
+        self._before = dict(self._frames)
+        self.evidence["damaged"]["before"] = dict(self._frames)
+        return self._step("damaged-selected", "activate_tab", _tab_value(tab),
+                          self.PREVIEWED, offer, generation, sender)
+
+
 class StreamsAloneJourney(_AppletJourney):
     """Desk with Streams and a fixed feed: select a reply and open its
     context, through item events on Streams' cards.
@@ -1725,6 +1853,7 @@ def applet_journey(
         "agent": AgentAloneJourney,
         "small-terminal": SmallTerminalJourney,
         "photo": PhotoJourney,
+        "damaged": DamagedPictureJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")

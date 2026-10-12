@@ -63,6 +63,7 @@ from rich_terminal_applet_journeys import (
     FexpAloneJourney,
     PadAloneJourney,
     PhotoJourney,
+    DamagedPictureJourney,
     SmallTerminalJourney,
     StreamsAloneJourney,
     applet_journey,
@@ -781,7 +782,8 @@ def test_every_single_applet_profile_has_a_journey() -> None:
         journey = applet_journey(name, profile.ready_markers)
         assert journey.ready_markers == profile.ready_markers
         # Desk and the one applet, nothing else but the Agent's demo provider.
-        applet = {"small-terminal": "pad", "photo": "fexp"}.get(name, name)
+        applet = {"small-terminal": "pad", "photo": "fexp",
+                  "damaged": "fexp"}.get(name, name)
         provider = (akashic_tui._DESK_AGENT_PROVIDER,) if name == "agent" else ()
         assert profile.roots == (
             "tui/desk-apt1.f", akashic_tui.desk_applet(applet).module, *provider
@@ -1070,3 +1072,23 @@ def test_the_photo_check_needs_the_photo_itself() -> None:
             journey._require_photo_itself(_photo_frame(width, height), _PHOTO_SHOWN)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="does not carry"):
         journey._require_photo_itself(_photo_frame(2160, 1620, resource=8), _PHOTO_SHOWN)
+
+
+def test_the_damaged_check_needs_one_upload_the_terminal_answered() -> None:
+    """The damaged file goes to the terminal once: one upload begun, sent and
+    committed, which the terminal refused, and none after it."""
+
+    journey = DamagedPictureJourney(FEXP_READY)
+    journey.observe_status(_upload_status(begin=2, chunk=5, commit=2, present=30))
+    journey._before = dict(journey._frames)
+    journey.observe_status(_upload_status(begin=3, chunk=6, commit=2, present=31))
+    assert journey._sent_once() is None
+    journey.observe_status(_upload_status(begin=3, chunk=6, commit=3, present=32))
+    assert journey._sent_once() == dict(resource_begin=1, resource_chunk=1,
+                                        resource_commit=1, resource_abort=0)
+    # Sent again, stopped, or answered with nothing sent: not one upload.
+    for counts in (dict(begin=4, chunk=7, commit=4), dict(begin=3, chunk=6, abort=1, commit=2),
+                   dict(begin=2, chunk=5, commit=3)):
+        journey.observe_status(_upload_status(present=33, **counts))
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="not as one upload"):
+            journey._sent_once()
