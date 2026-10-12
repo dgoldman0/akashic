@@ -39,6 +39,7 @@ SNAPSHOT = ForthSnapshot(
         "VARIABLE MT-PIC     PIC-SIZE ALLOCATE DROP MT-PIC !",
         "VARIABLE MT-MEMSRC  MEDSRC-SIZE ALLOCATE DROP MT-MEMSRC !",
         "VARIABLE MT-VFSSRC  MEDSRC-VFS-SIZE ALLOCATE DROP MT-VFSSRC !",
+        "VARIABLE MT-SPAN    MEDSRC-SPAN-SIZE ALLOCATE DROP MT-SPAN !",
         "VARIABLE MT-MSRC    MSRC-SIZE ALLOCATE DROP MT-MSRC !",
         ": MT-ALLOC  ( bytes ctx -- addr|0 )  DROP ALLOCATE IF DROP 0 THEN ;",
         ": MT-FREE  ( addr bytes ctx -- )  2DROP FREE ;",
@@ -409,3 +410,21 @@ def test_a_source_refuses_spans_past_its_end() -> None:
     output, read = _run(lines, b"0123456789", out_bytes=4)
     assert "IN=0 " in output and "PAST=-2 " in output and "WRAP=-2 " in output
     assert read == b"6789"
+
+
+def test_a_span_reads_part_of_another_source() -> None:
+    lines = [
+        "MT-FILE 10 MT-MEMSRC @ MEDSRC-MEMORY",
+        "3 5 MT-MEMSRC @ MT-SPAN @ MEDSRC-SPAN",
+        '." BYTES=" MT-SPAN @ MEDSRC-SIZE@ .',
+        'MT-OUT 3 1 MT-SPAN @ MEDSRC-READ? ." IN=" .',
+        'MT-OUT 3 3 MT-SPAN @ MEDSRC-READ? ." PAST=" .',
+        "8 5 MT-MEMSRC @ MT-SPAN @ MEDSRC-SPAN",
+        'MT-OUT 3 0 MT-SPAN @ MEDSRC-READ? ." BEYOND=" .',
+        "MT-SPAN @ MEDSRC-RELEASE",
+        '." LIVE=" MT-SPAN @ MEDSRC-VALID? . ." BASE=" MT-MEMSRC @ MEDSRC-VALID? 0<> .',
+    ]
+    output, read = _run(lines, b"0123456789", out_bytes=3)
+    assert "BYTES=5 " in output and "IN=0 " in output and "PAST=-2 " in output
+    assert "BEYOND=-2 " in output and "LIVE=0 " in output and "BASE=-1 " in output
+    assert read == b"456"

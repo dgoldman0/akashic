@@ -23,6 +23,8 @@
 \    MEDSRC-READ?    ( buf len offset source -- ior )
 \    MEDSRC-RELEASE  ( source -- )
 \    MEDSRC-MEMORY   ( a u source -- )   bytes already in memory
+\    MEDSRC-SPAN-SIZE ( -- bytes )
+\    MEDSRC-SPAN     ( offset u base source -- )   a span of another source
 \ =====================================================================
 
 PROVIDED akashic-media-source
@@ -86,3 +88,25 @@ PROVIDED akashic-media-source
 : MEDSRC-MEMORY  ( a u source -- )
     >R SWAP >R ['] _MEDSRC-COPY 0 R> R> MEDSRC-INIT ;
 
+
+\ =====================================================================
+\  A span of another source
+\ =====================================================================
+\
+\  A span source reads the U bytes of BASE from OFFSET, as a file of its
+\  own: a picture inside a PDF, say.  Its creator keeps BASE alive until it
+\  releases the span, which gives nothing back.  The record is
+\  MEDSRC-SPAN-SIZE bytes: the source's own, then the offset and the base.
+
+MEDSRC-SIZE 16 + CONSTANT MEDSRC-SPAN-SIZE
+: _MEDSRC.SPAN-OFF   ( s -- a )  MEDSRC-SIZE + ;
+: _MEDSRC.SPAN-BASE  ( s -- a )  MEDSRC-SIZE 8 + + ;
+
+: _MEDSRC-SPAN-READ  ( buf len offset span -- ior )
+    >R  R@ _MEDSRC.SPAN-OFF @ +  R> _MEDSRC.SPAN-BASE @ MEDSRC-READ? ;
+
+\ MEDSRC-SPAN ( offset u base source -- )
+\   SOURCE reads the U bytes of BASE from OFFSET.
+: MEDSRC-SPAN  ( offset u base source -- )
+    >R  R@ _MEDSRC.SPAN-BASE !  SWAP R@ _MEDSRC.SPAN-OFF !
+    ['] _MEDSRC-SPAN-READ 0 R@ R> MEDSRC-INIT ;

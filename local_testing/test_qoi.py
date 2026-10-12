@@ -29,6 +29,8 @@ SNAPSHOT = ForthSnapshot(
         f"{OUT_BYTES} XBUF QT-OUT",
         "65536 XBUF QT-ROW",
         "CREATE QT-DEC QOI-DEC-SIZE ALLOT",
+        "CREATE QT-ENCS QOI-ENC-SIZE 7 + ALLOT  : QT-ENC  QT-ENCS 7 + -8 AND ;",
+        "CREATE QT-ENC2S QOI-ENC-SIZE 7 + ALLOT  : QT-ENC2  QT-ENC2S 7 + -8 AND ;",
         "VARIABLE QT-P  VARIABLE QT-LEFT  VARIABLE QT-OUT-P  VARIABLE QT-CHUNK",
         "VARIABLE QT-W",
         # Decode the FILE-U bytes at QT-FILE, CHUNK bytes per feed at most,
@@ -230,3 +232,32 @@ def test_encoder_refuses_a_buffer_too_small_for_the_worst_case() -> None:
     output, _ = _run(lines, bytes((4, 3, 2, 1)))
     assert "0 LEN" in output
     assert f"{worst} WORST" in output
+
+
+@pytest.mark.parametrize("name", sorted(PICTURES))
+def test_encoding_a_row_at_a_time_gives_the_same_stream(name: str) -> None:
+    rows = PICTURES[name]
+    width, height = len(rows[0]), len(rows)
+    surface = bytes(
+        channel for row in rows for (r, g, b, a) in row for channel in (a, b, g, r)
+    )
+    expected = qoi_codec.encode(rows)
+    # Each row's bytes must fit the room QOI-ENC-ROOM promises.
+    # A second picture takes turns with this one, row by row, so each
+    # encoder must keep its own state.
+    lines = [
+        f": QT-ROWS  {width} {height} 4 QT-OUT QOI-ENC-HEADER QT-ENC QOI-ENC-START",
+        "  QT-ENC2 QOI-ENC-START",
+        f"  {height} 0 DO",
+        f"    QT-FILE I {width * 4} * + {width} 2 PICK QT-ENC QOI-ENC-PIXELS",
+        f"    2DUP SWAP - {width} QOI-ENC-ROOM > IF .\" OVER \" THEN NIP",
+        f"    QT-FILE {height - 1} I - {width * 4} * + {width} QT-OUT {OUT_BYTES // 2} + QT-ENC2 QOI-ENC-PIXELS DROP",
+        "  LOOP QT-ENC QOI-ENC-END QT-OUT - . .\" LEN\" ;",
+        "QT-ROWS",
+    ]
+    output, encoded = _run(lines, surface, out_bytes=len(expected))
+    assert f"{len(expected)} LEN" in output and "OVER" not in output
+    assert encoded == expected
+    header = _run([f"7 9 3 QT-OUT QOI-ENC-HEADER QT-OUT - ."], out_bytes=14)
+    assert "14 " in header[0]
+    assert header[1] == b"qoif" + struct.pack(">II", 7, 9) + bytes((3, 0))

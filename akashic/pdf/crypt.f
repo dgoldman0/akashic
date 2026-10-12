@@ -12,6 +12,7 @@
 \   PDF-CRYPT-STRINGS? ( crypt -- flag )   strings to decrypt
 \   PDF-CRYPT-LOCKED?  ( crypt -- flag )
 \   PDF-CRYPT-DATA     ( a u num gen crypt -- )   decrypt, in place
+\   PDF-CRYPT-START    ( num gen crypt rc4 -- )   an object's key stream
 \
 \  PDF-CRYPT-SETUP reads an /Encrypt dictionary EA EU with the first
 \  string of the trailer's /ID, IDA IDU, and opens the file with the empty
@@ -24,7 +25,9 @@
 \  the standard one, is locked: PDF-CRYPT-SETUP says PDF-S-LOCKED.
 \
 \  PDF-CRYPT-DATA decrypts a string's or a stream's bytes, in place, with
-\  object NUM GEN's key (algorithm 1).  The caller leaves alone what is
+\  object NUM GEN's key (algorithm 1).  PDF-CRYPT-START starts that key's
+\  stream in an RC4 record of the caller's (math/rc4.f), for data
+\  decrypted in pieces with RC4-XOR.  The caller leaves alone what is
 \  not encrypted: the /Encrypt dictionary, cross-reference streams, and
 \  the objects inside object streams, whose stream was decrypted whole.
 \  One call runs at a time.
@@ -161,14 +164,18 @@ VARIABLE _PDCR-R      \ its revision
     _PDCR-USER? 0= IF PDF-S-LOCKED EXIT THEN
     0 _PDCR-C @ _PDCR.LOCKED !  PDF-S-OK ;
 
-\ PDF-CRYPT-DATA ( a u num gen crypt -- )
-\   Decrypt U bytes at A, in place, with object NUM GEN's key.
-: PDF-CRYPT-DATA  ( a u num gen crypt -- )
-    _PDCR-C !
+\ PDF-CRYPT-START ( num gen crypt rc4 -- )
+\   Start the key stream of object NUM GEN's key in RC4.
+: PDF-CRYPT-START  ( num gen crypt rc4 -- )
+    >R _PDCR-C !
     _PDCR-C @ DUP _PDCR.KEY _PDCR-K ROT _PDCR.N @ MOVE
     _PDCR-K _PDCR-C @ _PDCR.N @ + >R
     SWAP DUP R@ C!  DUP 8 RSHIFT R@ 1+ C!  16 RSHIFT R@ 2 + C!
     DUP R@ 3 + C!  8 RSHIFT R> 4 + C!
     _PDCR-K _PDCR-C @ _PDCR.N @ 5 + _PDCR-DIGEST MD5
-    _PDCR-DIGEST _PDCR-C @ _PDCR.N @ 5 + 16 MIN _PDCR-RC4 RC4-INIT
-    _PDCR-RC4 RC4-XOR ;
+    _PDCR-DIGEST _PDCR-C @ _PDCR.N @ 5 + 16 MIN R> RC4-INIT ;
+
+\ PDF-CRYPT-DATA ( a u num gen crypt -- )
+\   Decrypt U bytes at A, in place, with object NUM GEN's key.
+: PDF-CRYPT-DATA  ( a u num gen crypt -- )
+    _PDCR-RC4 PDF-CRYPT-START  _PDCR-RC4 RC4-XOR ;

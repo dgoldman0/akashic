@@ -1434,8 +1434,9 @@ read with the empty password; and pages are read only as the view reaches
 them.
 
 **Status (2026-10-12).** Steps 3, 4 and 5 are done, step 8 for RC4, and
-step 7's reading of the file; steps 1 and 2 wait for review of the
-decisions above, and AES for its decision.
+the file's side of steps 6 and 7: pictures as files, links and the
+outline; steps 1 and 2 wait for review of the decisions above, and AES for
+its decision.
 
 - The file layer reads cross-reference tables and streams, object streams
   and incremental updates, repairs a damaged file by scanning, decodes
@@ -1465,6 +1466,15 @@ decisions above, and AES for its decision.
   shares), and down to the page's index (`PDF-PAGE-INDEX`). The outline
   and links of documents xelatex with hyperref and LibreOffice write read
   as MuPDF reads them. Scrolling to a followed link waits for step 9.
+- A picture becomes a file the picture views show (`pdf/image.f`). A JPEG
+  stays a JPEG, a span of the PDF's own source when stored as it is, else
+  copied out a piece at a time, decrypted. Samples become a QOI file the
+  guest writes: gray, RGB, CMYK made RGB, or indexed, of 1 to 16 bits,
+  with `/Decode` and soft masks; inflated, unpredicted and encoded a row
+  at a time (`render/qoi-rows.f`, a QOI encoder by rows), in steps, so
+  neither samples nor pixels are held whole. Pictures xelatex and
+  LibreOffice place read as their sources are. Placing them on the page as
+  figures comes next, in the content and the layout.
 - A page of a TeX document, about 2,800 characters, costs about 5.4
   million steps once its fonts are read: some 1.5 million to inflate its
   content, about 0.5 million to lex it, the rest to show its glyphs. The
@@ -1475,6 +1485,9 @@ decisions above, and AES for its decision.
   for the object at index 52. Most of the cost of a page's links, the
   outline and a followed link is that. Step 11 measures it too, and the
   table can be read once when the stream is decoded.
+- A picture of samples costs about 950 steps a pixel to make into QOI,
+  some 610 of them the QOI encoder's, plus about 440 steps a compressed
+  byte to inflate. Step 11 measures these with the rest.
 
 **Not in this part.** Forms, annotations other than links, signatures and
 attachments. JBIG2, CCITT and JPEG 2000 pictures, which show their facts.

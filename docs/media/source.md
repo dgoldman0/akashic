@@ -31,6 +31,12 @@ keeps unchanged and alive until it releases the source. It suits bytes a
 download or another program already holds. It holds nothing, so releasing it
 only ends it.
 
+`MEDSRC-SPAN ( offset u base source -- )` reads the `u` bytes of the source
+`base` from `offset`, as a file of its own: a picture inside a PDF, say. Its
+record is `MEDSRC-SPAN-SIZE` bytes. The creator keeps `base` alive until it
+releases the span, which gives nothing back. A span past the base's end is
+refused by the base when it is read.
+
 `MEDSRC-VFS-OPEN ( path-a path-u vfs source -- ior )` opens a file read-only
 as a source in a record of `MEDSRC-VFS-SIZE` bytes. The file stays open until
 the source is released. If the file system changes under the open file, reads

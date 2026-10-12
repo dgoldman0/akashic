@@ -11,6 +11,8 @@
 \   PDF-BUF-GROW   ( need buf msrc -- ok? )   room for NEED bytes
 \   PDF-BUF-APPEND ( a u buf msrc -- ok? )    add bytes at the end
 \   PDF-DECODE     ( in-a in-u dict-a dict-u buf msrc -- status )
+\   PDF-DECODE-IMAGE ( in-a in-u dict-a dict-u buf msrc -- coding status )
+\   PDF-PICTURE-FILTERS ( dict-a dict-u -- coding lone? )
 \
 \  PDF-DECODE reads the stream dictionary's /Filter and /DecodeParms,
 \  each a direct value, and decodes the IN-U bytes at IN-A through each
@@ -23,6 +25,16 @@
 \  LZWDecode (with its predictors), and RunLengthDecode, by their full or
 \  abbreviated names.  A picture's DCT, JPX, JBIG2 or CCITT data, and any
 \  other filter, is PDF-S-UNSUPPORTED.
+\
+\  PDF-DECODE-IMAGE decodes a picture's stream as far as its own coding:
+\  the filters before a DCTDecode, JPXDecode, JBIG2Decode or
+\  CCITTFaxDecode, whose data it leaves in BUF, saying which with
+\  PDF-IMG-DCT (a JPEG file), PDF-IMG-JPX (a JPEG 2000 file),
+\  PDF-IMG-JBIG2 or PDF-IMG-CCITT; or every filter, leaving the
+\  picture's samples, with PDF-IMG-SAMPLES.  PDF-PICTURE-FILTERS says,
+\  without decoding, which coding a picture's stream has and whether
+\  nothing else is in front of it: no filter but the coding's own, or
+\  for samples at most a FlateDecode.
 \
 \  Statuses: PDF-S-OK; PDF-S-MEMORY when the source refuses, with nothing
 \  kept; PDF-S-DAMAGED when the data is damaged, with the bytes decoded
@@ -41,6 +53,13 @@ REQUIRE ../utils/memory-source.f
 2 CONSTANT PDF-S-DAMAGED
 3 CONSTANT PDF-S-UNSUPPORTED
 4 CONSTANT PDF-S-READ
+
+\ A picture's own coding, under its other filters.
+0 CONSTANT PDF-IMG-SAMPLES
+1 CONSTANT PDF-IMG-DCT
+2 CONSTANT PDF-IMG-JPX
+3 CONSTANT PDF-IMG-JBIG2
+4 CONSTANT PDF-IMG-CCITT
 
 \ =====================================================================
 \  Buffers
@@ -370,6 +389,14 @@ VARIABLE _PDF-SRC  VARIABLE _PDF-DST  VARIABLE _PDF-PREVROW  VARIABLE _PDF-ZERO
 4 CONSTANT _PDF-F-LZW
 5 CONSTANT _PDF-F-RL
 6 CONSTANT _PDF-F-OTHER
+7 CONSTANT _PDF-F-DCT
+8 CONSTANT _PDF-F-JPX
+9 CONSTANT _PDF-F-JBIG2
+10 CONSTANT _PDF-F-CCITT
+
+\ A filter's picture coding, or PDF-IMG-SAMPLES for one that is none.
+: _PDF-CODING-OF  ( kind -- coding )
+    DUP _PDF-F-DCT _PDF-F-CCITT 1+ WITHIN IF _PDF-F-DCT - PDF-IMG-DCT + ELSE DROP 0 THEN ;
 
 : _PDF-NAMED?  ( na nu full-a full-u short-a short-u -- flag )
     2>R 2OVER 2SWAP PDF-NAME= -ROT 2R> PDF-NAME= OR ;
@@ -379,7 +406,11 @@ VARIABLE _PDF-SRC  VARIABLE _PDF-DST  VARIABLE _PDF-PREVROW  VARIABLE _PDF-ZERO
     2DUP S" ASCIIHexDecode" S" AHx" _PDF-NAMED? IF 2DROP _PDF-F-AHX EXIT THEN
     2DUP S" ASCII85Decode" S" A85" _PDF-NAMED? IF 2DROP _PDF-F-A85 EXIT THEN
     2DUP S" LZWDecode" S" LZW" _PDF-NAMED? IF 2DROP _PDF-F-LZW EXIT THEN
-    S" RunLengthDecode" S" RL" _PDF-NAMED? IF _PDF-F-RL EXIT THEN
+    2DUP S" RunLengthDecode" S" RL" _PDF-NAMED? IF 2DROP _PDF-F-RL EXIT THEN
+    2DUP S" DCTDecode" S" DCT" _PDF-NAMED? IF 2DROP _PDF-F-DCT EXIT THEN
+    2DUP S" JPXDecode" PDF-NAME= IF 2DROP _PDF-F-JPX EXIT THEN
+    2DUP S" JBIG2Decode" PDF-NAME= IF 2DROP _PDF-F-JBIG2 EXIT THEN
+    S" CCITTFaxDecode" S" CCF" _PDF-NAMED? IF _PDF-F-CCITT EXIT THEN
     _PDF-F-OTHER ;
 
 \ The Ith filter of the /Filter value: one name or an array of names.
@@ -402,6 +433,8 @@ VARIABLE _PDF-SRC  VARIABLE _PDF-DST  VARIABLE _PDF-PREVROW  VARIABLE _PDF-ZERO
 VARIABLE _PDF-DIA   VARIABLE _PDF-DIU     \ the dictionary
 VARIABLE _PDF-IA    VARIABLE _PDF-IU      \ this filter's input
 VARIABLE _PDF-STAGE                       \ the filter's index
+VARIABLE _PDF-PICTURE?                    \ a picture's coding ends it
+VARIABLE _PDF-CODING                      \ the coding that ended it
 CREATE _PDF-PREV PDF-BUF-SIZE ALLOT       \ the filter before's output
 
 \ A dictionary entry by its full name, or in an inline picture by its
@@ -444,6 +477,9 @@ CREATE _PDF-PREV PDF-BUF-SIZE ALLOT       \ the filter before's output
     _PDF-PREV PDF-BUF-SIZE 0 FILL  0 _PDF-STAGE !
     BEGIN
         _PDF-STAGE-FILTER
+        _PDF-PICTURE? @ IF
+            DUP _PDF-CODING-OF ?DUP IF _PDF-CODING ! DROP -1 THEN
+        THEN
         DUP -1 = _PDF-STAGE @ 0= AND IF DROP _PDF-F-NONE THEN
         DUP -1 = IF
             DROP _PDF-PREV _PDF-OB @ PDF-BUF-SIZE MOVE PDF-S-OK EXIT
@@ -466,3 +502,21 @@ CREATE _PDF-PREV PDF-BUF-SIZE ALLOT       \ the filter before's output
         _PDF-PREV PDF-BUF.A @ _PDF-IA !  _PDF-PREV PDF-BUF.U @ _PDF-IU !
         1 _PDF-STAGE +!
     AGAIN ;
+
+\ PDF-DECODE-IMAGE ( in-a in-u dict-a dict-u buf msrc -- coding status )
+\   A picture's stream decoded as far as its own coding.
+: PDF-DECODE-IMAGE  ( in-a in-u dict-a dict-u buf msrc -- coding status )
+    -1 _PDF-PICTURE? !  PDF-IMG-SAMPLES _PDF-CODING !
+    PDF-DECODE  0 _PDF-PICTURE? !  _PDF-CODING @ SWAP ;
+
+\ PDF-PICTURE-FILTERS ( dict-a dict-u -- coding lone? )
+\   A picture stream's coding, and whether no other filter is before it.
+: PDF-PICTURE-FILTERS  ( dict-a dict-u -- coding lone? )
+    _PDF-DIU ! _PDF-DIA !  0 _PDF-STAGE !
+    -1 BEGIN _PDF-STAGE-FILTER DUP -1 <> WHILE NIP 1 _PDF-STAGE +! REPEAT DROP
+    DUP _PDF-CODING-OF SWAP                          ( coding last )
+    _PDF-STAGE @ 1 = IF
+        OVER IF DROP -1 EXIT THEN
+        DUP _PDF-F-FLATE = SWAP _PDF-F-NONE = OR EXIT
+    THEN
+    DROP 0 ;

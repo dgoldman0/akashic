@@ -24,6 +24,7 @@ REQUIRE pdf/crypt.f
 | `PDF-CRYPT-STRINGS?` | `( crypt -- flag )` | Whether strings are. |
 | `PDF-CRYPT-LOCKED?` | `( crypt -- flag )` | Whether the file could not be opened. |
 | `PDF-CRYPT-DATA` | `( a u num gen crypt -- )` | Decrypt `u` bytes at `a` in place with object `num gen`'s key. |
+| `PDF-CRYPT-START` | `( num gen crypt rc4 -- )` | Start object `num gen`'s key stream in an RC4 record (`math/rc4.f`), for data decrypted in pieces with `RC4-XOR`. |
 
 ## What it opens
 
@@ -47,7 +48,9 @@ inverse cipher and a CBC mode in MegaPad's engine.
 `PDF-CRYPT-DATA` derives the object's key by algorithm 1: MD5 of the file
 key, the object's number in three bytes and its generation in two, of which
 the first `n + 5` bytes, at most 16, key RC4. RC4 decrypts as it encrypts,
-in place.
+in place. `PDF-CRYPT-START` derives the same key and starts its RC4 stream
+in the caller's record instead, so `pdf/file.f` can decrypt a stream a
+piece at a time as it reads it.
 
 ## In the file layer
 

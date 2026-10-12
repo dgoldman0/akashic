@@ -25,9 +25,15 @@ REQUIRE pdf/file.f
 | `PDF-OBJ-NUM` | `( obj -- num gen )` | Its object and generation numbers. |
 | `PDF-OBJ-STREAM?` | `( obj -- flag )` | Whether it is a stream. |
 | `PDF-STREAM` | `( obj buf file -- status )` | A stream's data, decoded through its filters into `buf` (`pdf/filter.f`). |
+| `PDF-STREAM-IMAGE` | `( obj buf file -- coding status )` | A picture's stream decoded as far as its own coding (`PDF-DECODE-IMAGE`). |
+| `PDF-RAW-SIZE` | `( -- bytes )` | A record that reads a stream's stored bytes in pieces, eight-byte aligned. |
+| `PDF-RAW-START` | `( obj file raw -- status )` | Start reading stream `obj`'s stored bytes; `obj` may be given back after. |
+| `PDF-RAW-READ` | `( a u raw -- n status )` | The next of them, at most `u`, decrypted, into `a`; `n` is 0 at the end. |
+| `PDF-RAW-SPAN` | `( raw -- offset u stored? )` | Where the bytes left lie in the file's media source, and whether they are as stored, not encrypted. |
 | `PDF-RESOLVE` | `( va vu type file -- obj va' vu' type' status )` | A value with its reference followed; `obj` is the object to give back, or 0. |
 | `PDF-REPAIRED?` | `( file -- flag )` | Whether the file was read by scanning. |
 | `PDF-FILE-MSRC` | `( file -- msrc )` | The memory source the file draws on, for the modules that read it. |
+| `PDF-FILE-SOURCE` | `( file -- source )` | The media source it reads, which a span source may share. |
 | `PDF-FILE-LOCKED?` | `( file -- flag )` | Whether the file is encrypted and could not be opened with the empty password. |
 
 The statuses are `pdf/filter.f`'s, and `PDF-S-MISSING` for an object that
@@ -57,10 +63,19 @@ holds it. The object stream last used stays decoded, so its other objects
 cost no second decode. An object's record holds a copy of its value: its
 spans stay valid until `PDF-OBJ-FREE`, whatever else is read.
 
-A stream's data is read only by `PDF-STREAM`. Its length is the
-dictionary's `/Length`, followed when it is a reference, when `endstream`
-follows that many bytes, after one line end; otherwise the data runs to the
-next `endstream`, less the line end before it.
+A stream's data is read only by `PDF-STREAM`, or in pieces through a
+`PDF-RAW-SIZE` record. Its length is the dictionary's `/Length`, followed
+when it is a reference, when `endstream` follows that many bytes, after one
+line end; otherwise the data runs to the next `endstream`, less the line
+end before it.
+
+`PDF-RAW-START` and `PDF-RAW-READ` read a stream's bytes as the file stores
+them, before its filters, as many at a time as the caller asks, so a large
+picture is never held whole. An encrypted stream's bytes are decrypted as
+they come, its RC4 key stream kept in the record. `PDF-RAW-SPAN` says
+whether the bytes left are as stored, so a reader can take them from the
+file's own media source instead: `pdf/image.f` makes a JPEG's file a span of
+the PDF.
 
 Every buffer comes from the caller's memory source. The file borrows its
 media source and keeps one read's bytes at a time in a work buffer. One

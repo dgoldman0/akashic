@@ -8,12 +8,15 @@ needs the whole file or the whole picture in memory.
 
 ```forth
 REQUIRE qoi.f          \ the header and the decoder
-REQUIRE qoi-encode.f   \ the encoder, which also loads qoi.f
+REQUIRE qoi-rows.f     \ the encoder, a row at a time, which also loads qoi.f
+REQUIRE qoi-encode.f   \ a whole surface encoded, which loads qoi-rows.f
 ```
 
 `qoi.f` provides `akashic-qoi` and depends on nothing, so a viewer that only
-decodes never loads the surface renderer.  `qoi-encode.f` provides
-`akashic-qoi-encode` and requires `qoi.f` and `surface.f`.
+decodes loads no encoder.  `qoi-rows.f` provides `akashic-qoi-rows` and
+requires `qoi.f`, so a decoder of another format that writes QOI a row at a
+time never loads the surface renderer.  `qoi-encode.f` provides
+`akashic-qoi-encode` and requires `qoi-rows.f` and `surface.f`.
 
 ---
 
@@ -36,11 +39,11 @@ decodes never loads the surface renderer.  `qoi-encode.f` provides
 |---|---|
 | **Encode + decode** | Surfaces encode losslessly; any QOI file decodes. |
 | **Single-pass** | Both encoder and decoder iterate pixels once, left-to-right, top-to-bottom. |
-| **No allocation** | The encoder writes into a caller buffer and keeps its index in a fixed module table.  The decoder keeps all of its state, index included, in a caller-owned record of `QOI-DEC-SIZE` bytes. |
+| **No allocation** | The encoder writes into a caller buffer and keeps its state, index included, in a caller-owned record of `QOI-ENC-SIZE` bytes.  The decoder keeps all of its state, index included, in a caller-owned record of `QOI-DEC-SIZE` bytes. |
 | **Resumable decode** | `QOI-DEC-FEED` takes whatever bytes the caller has.  An operation split between two chunks waits in the record. |
 | **Rows in wire order** | Decoded rows are R, G, B, A bytes, the order of the rich terminal's RGBA8 resources and of `QOI-HEADER` callers that scale, hash or send rows.  Three-channel files decode with alpha 255. |
 | **Clean failure** | A short file never reports done, a wrong end marker reports bad, and a bad header is refused before decoding starts. |
-| **4-channel encode** | The encoder writes RGBA (channels=4, colorspace=sRGB). |
+| **Channels** | `QOI-ENCODE` writes RGBA (channels=4, colorspace=sRGB); a caller encoding by rows names 3 or 4 in its header. |
 | **Prefix convention** | Public: `QOI-`.  Internal: `_QOI-` (encoder), `_QD-` (decoder). |
 
 ---
@@ -49,8 +52,10 @@ decodes never loads the surface renderer.  `qoi-encode.f` provides
 
 ```
 qoi.f              (no dependencies)
+qoi-rows.f
+ └── qoi.f
 qoi-encode.f
- ├── qoi.f
+ ├── qoi-rows.f
  └── surface.f
       └── color.f → fp16.f, fp16-ext.f, exp.f
 ```
@@ -87,7 +92,31 @@ Encodes the surface `surf` as QOI into `buf`.
   less than `QOI-FILE-SIZE` for the surface dimensions.
 
 Pixels are read left-to-right, top-to-bottom from the surface
-buffer.
+buffer.  It is qoi-rows.f's encoder below, run over the whole surface.
+
+### A picture a row at a time
+
+```forth
+QOI-ENC-SIZE    ( -- bytes )                   \ qoi-rows.f
+QOI-ENC-HEADER  ( w h channels dst -- dst' )
+QOI-ENC-START   ( enc -- )
+QOI-ENC-PIXELS  ( src n dst enc -- dst' )
+QOI-ENC-ROOM    ( n -- bytes )
+QOI-ENC-END     ( dst enc -- dst' )
+```
+
+A caller that makes its pixels a row at a time, such as a decoder of
+another format, encodes them as it goes instead of holding a whole
+surface.  `QOI-ENC-HEADER` writes the 14-byte header for a `w × h`
+picture of 3 or 4 channels, sRGB.  The encoder's state is a record the
+caller owns, `QOI-ENC-SIZE` bytes, cell-aligned: the previous pixel, the
+run and the index.  `QOI-ENC-START` starts it: the pixel before the
+first opaque black, no run, the index empty.  `QOI-ENC-PIXELS` encodes
+`n` pixels at `src`, each 32 bits with red in the high byte and alpha in
+the low, as a surface holds them, writing at most `QOI-ENC-ROOM` bytes:
+a run may wait for the next call.  `QOI-ENC-END` writes the run that
+waits and the end marker, at most nine bytes.  Pictures may take turns,
+each with its own record; one call runs at a time.
 
 ### `QOI-HEADER`
 
@@ -232,7 +261,6 @@ alpha changes.
 | `_QOI-HASH-GET` | `( idx -- rgba )` | Retrieve pixel from hash table |
 | `_QOI-HASH-CLEAR` | `( -- )` | Zero all 64 hash entries |
 | `_QOI-SBYTE` | `( n -- signed )` | Mask to 8 bits, sign-extend |
-| `_QOI-WRITE-HDR` | `( -- )` | Write 14-byte QOI header |
 | `_QOI-WRITE-END` | `( -- )` | Write 8-byte end marker |
 | `_QOI-FLUSH-RUN` | `( -- )` | Emit pending run chunk |
 | `_QOI-ENCODE-PIXEL` | `( -- )` | Encode one pixel from source |
@@ -260,6 +288,12 @@ module variables and stores them back when it returns.
 ```
 QOI-FILE-SIZE   ( w h -- max )          Worst-case output size
 QOI-ENCODE      ( surf buf max -- n|0 ) Encode surface → QOI
+QOI-ENC-SIZE    ( -- bytes )            An encoder's record
+QOI-ENC-HEADER  ( w h ch dst -- dst' )  Header of a picture encoded by rows
+QOI-ENC-START   ( enc -- )              Start a picture's state
+QOI-ENC-PIXELS  ( src n dst enc -- dst' )  N more pixels
+QOI-ENC-ROOM    ( n -- bytes )          The most N pixels write
+QOI-ENC-END     ( dst enc -- dst' )     Last run and end marker
 QOI-HEADER      ( a u -- w h ch cs -1 | 0 )  Read and check the header
 QOI-DEC-SIZE    ( -- bytes )            Decoder record size
 QOI-DEC-INIT    ( w h dec -- )          Start after the header

@@ -16,9 +16,16 @@
 \   PDF-OBJ-NUM       ( obj -- num gen )
 \   PDF-OBJ-STREAM?   ( obj -- flag )
 \   PDF-STREAM        ( obj buf file -- status )
+\   PDF-STREAM-IMAGE  ( obj buf file -- coding status )   as far as a
+\                                                         picture's coding
+\   PDF-RAW-SIZE      ( -- bytes )                 a stream read in pieces
+\   PDF-RAW-START     ( obj file raw -- status )
+\   PDF-RAW-READ      ( a u raw -- n status )
+\   PDF-RAW-SPAN      ( raw -- offset u stored? )
 \   PDF-RESOLVE       ( va vu type file -- obj va' vu' type' status )
 \   PDF-REPAIRED?     ( file -- flag )
 \   PDF-FILE-MSRC     ( file -- msrc )             its memory source
+\   PDF-FILE-SOURCE   ( file -- source )           its media source
 \   PDF-FILE-LOCKED?  ( file -- flag )             a password is needed
 \
 \  PDF-OPEN reads the cross-reference sections from the last, following
@@ -36,6 +43,14 @@
 \  A stream object's data is read only by PDF-STREAM, which decodes it
 \  through its filters.  PDF-RESOLVE follows a reference: it gives back an
 \  object to free, or 0 for a value that was no reference.
+\
+\  PDF-STREAM-IMAGE decodes a picture's stream as far as its own coding
+\  (pdf/filter.f's PDF-DECODE-IMAGE).  A PDF-RAW-SIZE record reads a
+\  stream's bytes as the file stores them, before its filters, a piece at
+\  a time: PDF-RAW-START begins, and PDF-RAW-READ gives the next bytes,
+\  decrypted, none at the end.  PDF-RAW-SPAN says where the bytes left lie
+\  in the file's media source, and whether they are as stored, not
+\  encrypted, so a reader may take them from the source itself.
 \
 \  An encrypted file is opened with the empty user password through
 \  pdf/crypt.f.  Its objects' strings are decrypted as they are read, so
@@ -402,24 +417,31 @@ VARIABLE _PDFS-RAW  VARIABLE _PDFS-N
 
 : _PDFS-FREE  ( -- )  _PDFS-RAW @ _PDFS-N @ _PDFS-F @ _PDFF.MSRC @ MSRC-FREE ;
 
-\ The stream's raw bytes decrypted, unless it is not encrypted: a cross-
-\ reference stream, or the /Encrypt dictionary's.  A locked file's
-\ encrypted streams cannot be read.
-: _PDFS-DECRYPT  ( -- status )
-    _PDFS-F @ _PDFF.ENCRYPTED @ 0= IF PDF-S-OK EXIT THEN
-    _PDFS-O @ PDF-OBJ-NUM DROP _PDFS-F @ _PDFF.ENCNUM @ = IF PDF-S-OK EXIT THEN
-    S" Type" _PDFS-O @ PDF-OBJ-VALUE DROP PDF-DICT@ PDF-T-NAME = IF
-        S" XRef" PDF-NAME= IF PDF-S-OK EXIT THEN
+\ Whether stream OBJ's stored bytes are encrypted: not in a file that is
+\ not, nor for a cross-reference stream or the /Encrypt dictionary's.  A
+\ locked file's encrypted streams cannot be read: PDF-S-LOCKED.
+: _PDFS-CIPHER?  ( obj file -- flag status )
+    DUP _PDFF.ENCRYPTED @ 0= IF 2DROP 0 PDF-S-OK EXIT THEN
+    OVER PDF-OBJ-NUM DROP OVER _PDFF.ENCNUM @ = IF 2DROP 0 PDF-S-OK EXIT THEN
+    S" Type" 3 PICK PDF-OBJ-VALUE DROP PDF-DICT@ PDF-T-NAME = IF
+        S" XRef" PDF-NAME= IF 2DROP 0 PDF-S-OK EXIT THEN
     ELSE 2DROP THEN
-    _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-LOCKED? IF PDF-S-LOCKED EXIT THEN
-    _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-STREAMS? 0= IF PDF-S-OK EXIT THEN
+    NIP _PDFF.CRYPT DUP PDF-CRYPT-LOCKED? IF DROP 0 PDF-S-LOCKED EXIT THEN
+    PDF-CRYPT-STREAMS? PDF-S-OK ;
+
+\ The stream's raw bytes decrypted, when they are encrypted.
+: _PDFS-DECRYPT  ( -- status )
+    _PDFS-O @ _PDFS-F @ _PDFS-CIPHER? ?DUP IF NIP EXIT THEN
+    0= IF PDF-S-OK EXIT THEN
     _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ PDF-OBJ-NUM
     _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-DATA  PDF-S-OK ;
 
-\ PDF-STREAM ( obj buf file -- status )
-\   A stream object's data, decoded through its filters into BUF.
-: PDF-STREAM  ( obj buf file -- status )
-    _PDFS-F ! _PDFS-B ! _PDFS-O !
+VARIABLE _PDFS-PICTURE?   \ decoded as far as a picture's coding
+VARIABLE _PDFS-CODING     \ that coding
+
+\ A stream object's data, decoded into BUF.
+: _PDFS-READ  ( obj buf file -- status )
+    _PDFS-F ! _PDFS-B ! _PDFS-O !  PDF-IMG-SAMPLES _PDFS-CODING !
     _PDFS-O @ PDF-OBJ-STREAM? 0= IF PDF-S-DAMAGED EXIT THEN
     _PDFS-O @ _PDFO.SLEN @ 1 MAX DUP _PDFS-N !
     _PDFS-F @ _PDFF.MSRC @ MSRC-ALLOC DUP _PDFS-RAW ! 0= IF PDF-S-MEMORY EXIT THEN
@@ -427,8 +449,63 @@ VARIABLE _PDFS-RAW  VARIABLE _PDFS-N
     _PDFS-F @ _PDFF.SRC @ MEDSRC-READ? IF _PDFS-FREE PDF-S-READ EXIT THEN
     _PDFS-DECRYPT ?DUP IF _PDFS-FREE EXIT THEN
     _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ PDF-OBJ-VALUE DROP
-    _PDFS-B @ _PDFS-F @ _PDFF.MSRC @ PDF-DECODE
+    _PDFS-B @ _PDFS-F @ _PDFF.MSRC @
+    _PDFS-PICTURE? @ IF PDF-DECODE-IMAGE SWAP _PDFS-CODING ! ELSE PDF-DECODE THEN
     _PDFS-FREE ;
+
+\ PDF-STREAM ( obj buf file -- status )
+\   A stream object's data, decoded through its filters into BUF.
+: PDF-STREAM  ( obj buf file -- status )  0 _PDFS-PICTURE? ! _PDFS-READ ;
+
+\ PDF-STREAM-IMAGE ( obj buf file -- coding status )
+\   A picture's stream decoded into BUF as far as its own coding.
+: PDF-STREAM-IMAGE  ( obj buf file -- coding status )
+    -1 _PDFS-PICTURE? ! _PDFS-READ  0 _PDFS-PICTURE? !  _PDFS-CODING @ SWAP ;
+
+\ =====================================================================
+\  A stream's stored bytes, read in pieces
+\ =====================================================================
+
+\ The record: the file, where the bytes left start in its source and how
+\ many there are, whether they are decrypted, and the key stream.
+: _PDRW.FILE  ( r -- a )        ;
+: _PDRW.POS   ( r -- a )    8 + ;
+: _PDRW.LEFT  ( r -- a )   16 + ;
+: _PDRW.RC4?  ( r -- a )   24 + ;
+: _PDRW.RC4   ( r -- a )   32 + ;
+32 RC4-SIZE + CONSTANT PDF-RAW-SIZE
+
+\ PDF-RAW-START ( obj file raw -- status )
+\   Read stream OBJ's stored bytes, decrypted, in pieces.  OBJ may be given
+\   back once it starts.
+: PDF-RAW-START  ( obj file raw -- status )
+    DUP 32 0 FILL  >R
+    DUP R@ _PDRW.FILE !
+    OVER PDF-OBJ-STREAM? 0= IF 2DROP R> DROP PDF-S-DAMAGED EXIT THEN
+    OVER _PDFO.SOFF @ R@ _PDRW.POS !  OVER _PDFO.SLEN @ R@ _PDRW.LEFT !
+    2DUP _PDFS-CIPHER? ?DUP IF NIP NIP NIP R> DROP EXIT THEN
+    IF
+        -1 R@ _PDRW.RC4? !
+        SWAP PDF-OBJ-NUM ROT _PDFF.CRYPT R> _PDRW.RC4 PDF-CRYPT-START
+    ELSE 2DROP R> DROP THEN
+    PDF-S-OK ;
+
+\ PDF-RAW-READ ( a u raw -- n status )
+\   The next of the stream's bytes, at most U, into A; N is 0 at the end.
+: PDF-RAW-READ  ( a u raw -- n status )
+    >R  R@ _PDRW.LEFT @ MIN
+    DUP 0= IF NIP R> DROP PDF-S-OK EXIT THEN
+    2DUP R@ _PDRW.POS @ R@ _PDRW.FILE @ _PDFF.SRC @ MEDSRC-READ? IF
+        2DROP R> DROP 0 PDF-S-READ EXIT
+    THEN
+    R@ _PDRW.RC4? @ IF 2DUP R@ _PDRW.RC4 RC4-XOR THEN
+    NIP DUP R@ _PDRW.POS +!  DUP NEGATE R> _PDRW.LEFT +!  PDF-S-OK ;
+
+\ PDF-RAW-SPAN ( raw -- offset u stored? )
+\   Where the bytes left lie in the file's media source, and whether they
+\   are as it stores them.
+: PDF-RAW-SPAN  ( raw -- offset u stored? )
+    DUP _PDRW.POS @ OVER _PDRW.LEFT @ ROT _PDRW.RC4? @ 0= ;
 
 \ =====================================================================
 \  Objects in object streams
@@ -671,6 +748,9 @@ CREATE _PDFR-ROOT 64 ALLOT
 
 \ PDF-FILE-MSRC ( file -- msrc )   The memory source the file draws on.
 : PDF-FILE-MSRC  ( file -- msrc )  _PDFF.MSRC @ ;
+
+\ PDF-FILE-SOURCE ( file -- source )   The media source it reads.
+: PDF-FILE-SOURCE  ( file -- source )  _PDFF.SRC @ ;
 
 \ PDF-FILE-LOCKED? ( file -- flag )   Whether the file needs a password.
 : PDF-FILE-LOCKED?  ( file -- flag )
