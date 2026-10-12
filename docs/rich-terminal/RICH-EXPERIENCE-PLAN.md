@@ -1473,8 +1473,10 @@ its decision.
   with `/Decode` and soft masks; inflated, unpredicted and encoded a row
   at a time (`render/qoi-rows.f`, a QOI encoder by rows), in steps, so
   neither samples nor pixels are held whole. Pictures xelatex and
-  LibreOffice place read as their sources are. Placing them on the page as
-  figures comes next, in the content and the layout.
+  LibreOffice place read as their sources are. Each picture the content
+  draws is a figure block where it falls among the text, artifacts and
+  pictures smaller than the body text left out. Showing a figure in the
+  document view waits for step 9.
 - A page of a TeX document, about 2,800 characters, costs about 5.4
   million steps once its fonts are read: some 1.5 million to inflate its
   content, about 0.5 million to lex it, the rest to show its glyphs. The

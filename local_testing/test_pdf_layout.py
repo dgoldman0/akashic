@@ -26,7 +26,7 @@ from simulator.platform import create_one_core_address_space
 from simulator.runtime import MegaForthRuntime
 
 OK = 0
-PARAGRAPH, HEADING, CODE = 1, 2, 3
+PARAGRAPH, HEADING, CODE, FIGURE = 1, 2, 3, 5
 BULLET, NUMBERED = 2, 3
 PLAIN, EMPHASIS, STRONG, TCODE = 0, 6, 7, 8
 
@@ -63,6 +63,7 @@ CREATE LY-STRS PDF-STRUCT-SIZE 7 + ALLOT  : LY-STR  LY-STRS 7 + -8 AND ;
     LY-OUT PDF-LAYOUT-BLOCK >R
     R@ PDF-BLOCK-KIND  R@ PDF-BLOCK-ITEM  R@ PDF-BLOCK-TOP
     R@ LY-OUT PDF-BLOCK-TEXT  R> LY-OUT PDF-BLOCK-MEANINGS ;
+: LY-FIGURE  ( i -- num w h )  LY-OUT PDF-LAYOUT-BLOCK PDF-BLOCK-FIGURE ;
 """
 
 
@@ -116,9 +117,13 @@ class Layout:
             kind, level, item, number, width, top, a, u, m = self.call("LY-BLOCK", i)
             text = self.runtime.memory.read_bytes(a, u)
             meanings = self.runtime.memory.read_bytes(m, u)
-            out.append({"kind": kind, "level": level, "item": item, "number": number,
-                        "width": width, "top": top / 65536, "text": text.decode("utf-8"),
-                        "meanings": meanings, "raw": text})
+            block = {"kind": kind, "level": level, "item": item, "number": number,
+                     "width": width, "top": top / 65536, "text": text.decode("utf-8"),
+                     "meanings": meanings, "raw": text}
+            if kind == FIGURE:
+                num, w, h = self.call("LY-FIGURE", i)
+                block["figure"] = (num, round(w / 65536, 3), round(h / 65536, 3))
+            out.append(block)
         return out
 
 
@@ -363,4 +368,79 @@ def test_a_tagged_document_libreoffice_wrote(layout, tmp_path):
         (PARAGRAPH, 0, QUOTE, 0, "A quoted passage."),
         (PARAGRAPH, 0, 0, 0, "Last paragraph."),
     ]
+    layout.close()
+
+
+def picture(width: int = 2, height: int = 2) -> bytes:
+    return stream_object(bytes(width * height), b"/Type /XObject /Subtype /Image /Width %d /Height %d "
+                         b"/ColorSpace /DeviceGray /BitsPerComponent 8" % (width, height))
+
+
+def test_pictures_are_figures_where_they_fall(layout):
+    stream = b"".join([
+        line("F2", 20, 72, 720, "A Title Here"),
+        line("F1", 10, 72, 690, "A paragraph before the picture, long enough to reach the right"),
+        line("F1", 10, 72, 678, "margin, and it goes on to a second line."),
+        b"q 200 0 0 120 72 540 cm /Im1 Do Q\n",
+        b"q 6 0 0 6 60 520 cm /Im1 Do Q\n",
+        b"/Artifact BMC q 612 0 0 792 0 0 cm /Im1 Do Q EMC\n",
+        line("F1", 10, 72, 520, "A paragraph after it, which also runs to the margin of the page"),
+        line("F1", 10, 72, 508, "and then the picture below breaks it, here."),
+        b"q 0 80 -150 0 400 300 cm /Im2 Do Q\n",
+        line("F1", 10, 72, 496, "Its last line follows the picture."),
+    ])
+    resources = b"<< /Font << /F1 10 0 R /F2 11 0 R >> /XObject << /Im1 30 0 R /Im2 31 0 R >> >>"
+    pdf = page_pdf(stream, resources=resources, extra={
+        11: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+        30: picture(), 31: picture(3, 2)})
+    layout.open(pdf)
+    assert layout.read() == OK
+    blocks = layout.blocks()
+    assert [b["kind"] for b in blocks] == [HEADING, PARAGRAPH, FIGURE, PARAGRAPH, FIGURE, PARAGRAPH]
+    assert blocks[2]["figure"] == (30, 200, 120) and blocks[2]["top"] == 660 and blocks[2]["text"] == ""
+    assert blocks[4]["figure"] == (31, 150, 80) and blocks[4]["top"] == 380
+    assert blocks[3]["text"].endswith("breaks it, here.")
+    assert blocks[5]["text"] == "Its last line follows the picture."
+    layout.close()
+
+
+@pytest.mark.skipif(shutil.which("xelatex") is None, reason="xelatex is not installed")
+def test_a_picture_xelatex_places(layout, tmp_path):
+    from PIL import Image
+    Image.new("RGB", (60, 40), (200, 30, 30)).save(tmp_path / "red.png")
+    (tmp_path / "doc.tex").write_text(
+        "\\documentclass{article}\\usepackage{graphicx}\\begin{document}\n"
+        "A paragraph before the picture.\n\n"
+        "\\includegraphics[width=4cm]{red.png}\n\n"
+        "A paragraph after the picture.\n\\end{document}\n")
+    subprocess.run(["xelatex", "-interaction=batchmode", "doc.tex"], cwd=tmp_path,
+                   check=True, capture_output=True)
+    layout.open((tmp_path / "doc.pdf").read_bytes())
+    assert layout.read() == OK
+    blocks = layout.blocks()
+    assert [(b["kind"], b["text"]) for b in blocks] == [
+        (PARAGRAPH, "A paragraph before the picture."), (FIGURE, ""),
+        (PARAGRAPH, "A paragraph after the picture.")]
+    width = blocks[1]["figure"][1]
+    assert abs(width - 4 * 72 / 2.54) < 0.5 and abs(blocks[1]["figure"][2] - width * 40 / 60) < 0.5
+    layout.close()
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice is not installed")
+def test_a_picture_libreoffice_places(layout, tmp_path):
+    from PIL import Image
+    Image.new("RGB", (60, 40), (30, 30, 200)).save(tmp_path / "blue.png")
+    (tmp_path / "doc.html").write_text(
+        '<html><body><p>A paragraph before the picture.</p>'
+        '<p><img src="blue.png" width="120" height="80"></p>'
+        '<p>A paragraph after the picture.</p></body></html>', encoding="utf-8")
+    subprocess.run(["soffice", f"-env:UserInstallation=file://{tmp_path}/profile", "--headless",
+                    "--convert-to", "pdf", "--outdir", str(tmp_path), str(tmp_path / "doc.html")],
+                   check=True, capture_output=True, timeout=120)
+    layout.open((tmp_path / "doc.pdf").read_bytes())
+    assert layout.read() == OK
+    blocks = layout.blocks()
+    assert [(b["kind"], b["text"]) for b in blocks] == [
+        (PARAGRAPH, "A paragraph before the picture."), (FIGURE, ""),
+        (PARAGRAPH, "A paragraph after the picture.")]
     layout.close()

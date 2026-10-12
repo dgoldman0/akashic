@@ -63,6 +63,10 @@ CREATE CN-SETS PDF-FONTS-SIZE 7 + ALLOT  : CN-SET  CN-SETS 7 + -8 AND ;
     CN-CONT PDF-CONTENT-RUN >R
     R@ CN-CONT PDF-RUN-TEXT  R@ PDF-RUN-START  R@ PDF-RUN-END
     R@ PDF-RUN-SIZE  R@ PDF-RUN-STYLE  R> PDF-RUN-MCID ;
+: CN-FIGS  ( -- n )  CN-CONT PDF-CONTENT-FIGURES ;
+: CN-FIG  ( i -- num x0 y0 x1 y1 at mcid style )
+    CN-CONT PDF-CONTENT-FIGURE >R
+    R@ PDF-FIG-NUM  R@ PDF-FIG-BOX  R@ PDF-FIG-AT  R@ PDF-FIG-MCID  R> PDF-FIG-STYLE ;
 """
 
 
@@ -128,6 +132,14 @@ class Content:
 
     def texts(self) -> list[str]:
         return [run["text"] for run in self.runs()]
+
+    def figures(self) -> list[tuple]:
+        out = []
+        for i in range(self.call("CN-FIGS")[0]):
+            num, x0, y0, x1, y1, at, mcid, style = self.call("CN-FIG", i)
+            out.append((num, tuple(round(signed(v) / ONE, 3) for v in (x0, y0, x1, y1)), at,
+                        signed(mcid), style))
+        return out
 
 
 @pytest.fixture(scope="module")
@@ -345,3 +357,33 @@ def test_a_document_ghostscript_wrote(content, tmp_path, options):
     subprocess.run(["ps2pdf", *options, str(tmp_path / "doc.ps"), str(tmp_path / "doc.pdf")],
                    check=True, capture_output=True)
     compare_with_pdftotext(content, tmp_path / "doc.pdf")
+
+
+def picture(width: int = 2, height: int = 2) -> bytes:
+    return stream_object(bytes(width * height), b"/Type /XObject /Subtype /Image /Width %d /Height %d "
+                         b"/ColorSpace /DeviceGray /BitsPerComponent 8" % (width, height))
+
+
+def test_pictures_drawn_are_figures(content):
+    stream = (b"BT /F1 10 Tf 100 700 Td (A) Tj ET\n"
+              b"q 200 0 0 100 72 500 cm /Im1 Do Q\n"
+              b"BT /F1 10 Tf 100 400 Td (B) Tj ET\n"
+              b"/Artifact BMC q 10 0 0 10 0 0 cm /Im1 Do Q EMC\n"
+              b"/Figure << /MCID 7 >> BDC q 1 0 0 1 300 300 cm /Fm1 Do Q EMC\n"
+              b"BI /W 1 /H 1 /BPC 8 /CS /G ID \x00 EI\n"
+              b"BT /F1 10 Tf 100 100 Td (C) Tj ET /Fm9 Do")
+    resources = (b"<< /Font << /F1 10 0 R >> /XObject << /Im1 30 0 R /Fm1 20 0 R /Fm9 21 0 R >> >>")
+    extra = {
+        20: form(b"q 0 50 -40 0 0 0 cm /Im2 Do Q", b"/Resources << /XObject << /Im2 31 0 R >> >>"),
+        21: form(b"BT /F1 10 Tf 0 0 Td (D) Tj ET", b"/Resources << /Font << /F1 10 0 R >> >>"),
+        30: picture(), 31: picture(4, 2),
+    }
+    content.open(page_pdf(stream, resources=resources, extra=extra))
+    assert content.read() == OK
+    assert content.texts() == ["A", "B", "C", "D"]
+    assert content.figures() == [
+        (30, (72.0, 500.0, 272.0, 600.0), 1, -1, 0),
+        (30, (0.0, 0.0, 10.0, 10.0), 2, -1, ARTIFACT),
+        (31, (260.0, 300.0, 300.0, 350.0), 2, 7, 0),
+    ]
+    content.close()

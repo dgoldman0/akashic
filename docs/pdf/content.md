@@ -15,9 +15,9 @@ REQUIRE pdf/content.f
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `PDF-CONTENT-SIZE` | `( -- 64 )` | A page content's record, zeroed before first use. |
+| `PDF-CONTENT-SIZE` | `( -- 88 )` | A page content's record, zeroed before first use. |
 | `PDF-CONTENT-READ` | `( page fonts content -- status )` | Read an open page's runs, its fonts from the set `fonts`. |
-| `PDF-CONTENT-FREE` | `( content -- )` | Give back the runs and their text. |
+| `PDF-CONTENT-FREE` | `( content -- )` | Give back the runs, their text and the figures. |
 | `PDF-CONTENT-RUNS` | `( content -- n )` | How many runs were read. |
 | `PDF-CONTENT-RUN` | `( i content -- run )` | Run `i`, in the order the content shows them. |
 | `PDF-RUN-TEXT` | `( run content -- a u )` | Its characters, UTF-8. |
@@ -26,6 +26,13 @@ REQUIRE pdf/content.f
 | `PDF-RUN-SIZE` | `( run -- size )` | The text size as the matrices scale it. |
 | `PDF-RUN-STYLE` | `( run -- flags )` | Its font's style, with `PDF-RUN-INVISIBLE` and `PDF-RUN-ARTIFACT`. |
 | `PDF-RUN-MCID` | `( run -- mcid )` | The innermost marked content's MCID, or -1. |
+| `PDF-CONTENT-FIGURES` | `( content -- n )` | How many pictures were drawn. |
+| `PDF-CONTENT-FIGURE` | `( i content -- fig )` | Figure `i`, in the order the content draws them. |
+| `PDF-FIG-NUM` | `( fig -- num )` | Its picture XObject's object number, for `pdf/image.f`. |
+| `PDF-FIG-BOX` | `( fig -- x0 y0 x1 y1 )` | The box the matrix draws the picture in, its corners ordered. |
+| `PDF-FIG-AT` | `( fig -- n )` | How many runs were read before it. |
+| `PDF-FIG-MCID` | `( fig -- mcid )` | The innermost marked content's MCID, or -1. |
+| `PDF-FIG-STYLE` | `( fig -- flags )` | `PDF-RUN-ARTIFACT` inside `/Artifact`, else 0. |
 
 Points and sizes are in the page's default space, in 16.16 fixed point; the
 page's box and rotation are the layout's to apply. `PDF-CONTENT-READ` gives
@@ -48,6 +55,9 @@ The interpreter follows PDF 32000-1 sections 8 and 9.4:
 - form XObjects (`Do`): read inside the page's content under their
   `/Matrix`, with their own resources or else their drawer's, their state
   saved around them. A form being drawn is not drawn again inside itself.
+- picture XObjects (`Do`): each a figure, where the matrix draws the unit
+  square, after the runs read before it. A run still open is closed first,
+  so the figure's place among the text is exact.
 - inline images (`BI` ... `ID` ... `EI`) are passed over, their data to an
   `EI` between white space.
 

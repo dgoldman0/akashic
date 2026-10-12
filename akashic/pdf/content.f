@@ -18,13 +18,21 @@
 \   PDF-RUN-SIZE      ( run -- size )
 \   PDF-RUN-STYLE     ( run -- flags )
 \   PDF-RUN-MCID      ( run -- mcid | -1 )
+\   PDF-CONTENT-FIGURES ( content -- n )         the pictures drawn
+\   PDF-CONTENT-FIGURE  ( i content -- fig )
+\   PDF-FIG-NUM       ( fig -- num )             its picture's object
+\   PDF-FIG-BOX       ( fig -- x0 y0 x1 y1 )     where it is drawn
+\   PDF-FIG-AT        ( fig -- n )               the runs read before it
+\   PDF-FIG-MCID      ( fig -- mcid | -1 )
+\   PDF-FIG-STYLE     ( fig -- flags )
 \
 \  PDF-CONTENT-READ interprets the page's content streams (PDF 32000-1
 \  sections 8 and 9.4): the graphics state's matrix, its saves and
 \  restores, the text state, text objects, text positioning and showing,
 \  and marked content; a form XObject's content is read inside the
-\  page's, under its matrix and with its resources; inline images are
-\  passed over, and so are the operators that only draw.
+\  page's, under its matrix and with its resources; a picture XObject
+\  is a figure; inline images are passed over, and so are the operators
+\  that only draw.
 \
 \  A run is text shown with one font at one size whose glyphs follow one
 \  another: a show that starts within a tenth of the size of where the
@@ -37,6 +45,12 @@
 \  with PDF-RUN-INVISIBLE for text drawn in rendering mode 3, as scanned
 \  pages carry recognized text, and PDF-RUN-ARTIFACT inside /Artifact
 \  marked content.  Its MCID is the innermost marked content's, or -1.
+\
+\  A figure is a picture XObject drawn, in the order the content draws
+\  it: its object, the box the matrix draws the unit square in, its
+\  corners ordered, the runs read before it, so a figure's place among
+\  the text is known, and its MCID and style as a run's.  A run open when
+\  a picture is drawn is closed first.
 \
 \  Fonts come from FONTS, a set of fonts (pdf/font.f) the caller keeps,
 \  so the pages of a document read each font once.  A form that is being
@@ -57,12 +71,14 @@ REQUIRE font.f
 256 CONSTANT PDF-RUN-INVISIBLE
 512 CONSTANT PDF-RUN-ARTIFACT
 
-\ The record: the file, its memory source, the runs and their text.
+\ The record: the file, its memory source, the runs and their text, and
+\ the figures.
 : _PDC.FILE   ( c -- a )        ;
 : _PDC.MSRC   ( c -- a )    8 + ;
 : _PDC.RUNS   ( c -- buf )  16 + ;
 : _PDC.TEXT   ( c -- buf )  40 + ;
-64 CONSTANT PDF-CONTENT-SIZE
+: _PDC.FIGS   ( c -- buf )  64 + ;
+88 CONSTANT PDF-CONTENT-SIZE
 
 \ A run: start x y, end x y, size, style, its text's offset and length,
 \ its MCID.
@@ -77,6 +93,19 @@ REQUIRE font.f
 : PDF-RUN-STYLE  ( run -- flags )  40 + @ ;
 : PDF-RUN-MCID   ( run -- mcid )  64 + @ ;
 
+\ A figure: its picture's object, its box, the runs before it, its MCID
+\ and style.
+64 CONSTANT _PDC-FIG
+
+: PDF-CONTENT-FIGURES  ( content -- n )  _PDC.FIGS PDF-BUF.U @ _PDC-FIG / ;
+: PDF-CONTENT-FIGURE   ( i content -- fig )  _PDC.FIGS PDF-BUF.A @ SWAP _PDC-FIG * + ;
+: PDF-FIG-NUM    ( fig -- num )  @ ;
+: PDF-FIG-BOX    ( fig -- x0 y0 x1 y1 )
+    8 + DUP @ OVER 8 + @ 2 PICK 16 + @ 3 PICK 24 + @ >R >R >R >R DROP R> R> R> R> ;
+: PDF-FIG-AT     ( fig -- n )  40 + @ ;
+: PDF-FIG-MCID   ( fig -- mcid )  48 + @ ;
+: PDF-FIG-STYLE  ( fig -- flags )  56 + @ ;
+
 VARIABLE _PDC-C   \ the content's record
 VARIABLE _PDC-F   \ its file
 
@@ -85,6 +114,7 @@ VARIABLE _PDC-F   \ its file
 : _PDC-FREE     ( obj -- )  _PDC-F @ PDF-OBJ-FREE ;
 : _PDC-RESOLVE  ( va vu type -- obj va' vu' type' status )  _PDC-F @ PDF-RESOLVE ;
 : _PDC-ADV      ( a u n -- a+n u-n )  TUCK - >R + R> ;
+: _PDC-OK       ( flag -- status )  IF PDF-S-OK ELSE PDF-S-MEMORY THEN ;
 
 \ =====================================================================
 \  Matrices, in 16.16
@@ -466,7 +496,31 @@ VARIABLE _PDC-PRA   VARIABLE _PDC-PRU   VARIABLE _PDC-PRT
     DUP _PDC.FBUF PDF-BUF.U @ SWAP _PDC.FU !
     PDF-S-OK ;
 
-\ Do: a form is read; anything else is passed over.
+CREATE _PDC-FIGNEW _PDC-FIG ALLOT
+VARIABLE _PDC-BX0   VARIABLE _PDC-BY0   VARIABLE _PDC-BX1   VARIABLE _PDC-BY1
+
+\ A corner of the unit square through the matrix, into the box.
+: _PDC-CORNER  ( x y -- )
+    _PDC-CTM _PDC-POINT
+    DUP _PDC-BY0 @ MIN _PDC-BY0 !  _PDC-BY1 @ MAX _PDC-BY1 !
+    DUP _PDC-BX0 @ MIN _PDC-BX0 !  _PDC-BX1 @ MAX _PDC-BX1 ! ;
+
+\ The picture XObject _PDC-XN drawn: a figure where the matrix draws the
+\ unit square, after the runs read so far.
+: _PDC-FIGURE  ( -- ok? )
+    _PDC-CLOSE 0= IF 0 EXIT THEN
+    1 62 LSHIFT DUP _PDC-BX0 ! _PDC-BY0 !  1 62 LSHIFT NEGATE DUP _PDC-BX1 ! _PDC-BY1 !
+    0 0 _PDC-CORNER  _PDC-ONE 0 _PDC-CORNER  0 _PDC-ONE _PDC-CORNER  _PDC-ONE _PDC-ONE _PDC-CORNER
+    _PDC-XN @ _PDC-FIGNEW !
+    _PDC-BX0 @ _PDC-FIGNEW 8 + !  _PDC-BY0 @ _PDC-FIGNEW 16 + !
+    _PDC-BX1 @ _PDC-FIGNEW 24 + !  _PDC-BY1 @ _PDC-FIGNEW 32 + !
+    _PDC-C @ PDF-CONTENT-RUNS _PDC-FIGNEW 40 + !
+    _PDC-MCID @ _PDC-FIGNEW 48 + !
+    _PDC-ART @ IF PDF-RUN-ARTIFACT ELSE 0 THEN _PDC-FIGNEW 56 + !
+    _PDC-FIGNEW _PDC-FIG _PDC-C @ _PDC.FIGS _PDC-MSRC PDF-BUF-APPEND ;
+
+\ Do: a form is read, a picture is a figure; anything else is passed
+\ over.
 : _PDC-DO  ( -- status )
     _PDC-XOBJECT DUP 0= IF EXIT THEN
     DUP _PDC-DRAWING? IF DROP PDF-S-OK EXIT THEN
@@ -474,11 +528,12 @@ VARIABLE _PDC-PRA   VARIABLE _PDC-PRU   VARIABLE _PDC-PRT
         NIP DUP PDF-S-MEMORY = IF EXIT THEN DROP PDF-S-OK EXIT
     THEN
     DUP PDF-OBJ-STREAM? 0= IF _PDC-FREE PDF-S-OK EXIT THEN
-    DUP PDF-OBJ-VALUE DROP S" Subtype" 2SWAP PDF-DICT@ PDF-T-NAME = IF
-        S" Form" PDF-NAME=
-    ELSE 2DROP 0 THEN
-    0= IF _PDC-FREE PDF-S-OK EXIT THEN
-    _PDC-FORM ;
+    DUP PDF-OBJ-VALUE DROP S" Subtype" 2SWAP PDF-DICT@ PDF-T-NAME <> IF
+        2DROP _PDC-FREE PDF-S-OK EXIT
+    THEN
+    2DUP S" Form" PDF-NAME= IF 2DROP _PDC-FORM EXIT THEN
+    S" Image" PDF-NAME= IF _PDC-FIGURE ELSE -1 THEN
+    SWAP _PDC-FREE _PDC-OK ;
 
 : _PDC-WHITE?  ( c -- flag )
     DUP 32 = OVER 10 = OR OVER 13 = OR OVER 9 = OR OVER 12 = OR SWAP 0= OR ;
@@ -513,8 +568,6 @@ VARIABLE _PDC-PRA   VARIABLE _PDC-PRU   VARIABLE _PDC-PRT
 : _PDC-PACK  ( ta tu -- k )
     DUP 3 > IF 2DROP 0 EXIT THEN
     0 SWAP 0 ?DO OVER I + C@ I 8 * LSHIFT OR LOOP NIP ;
-
-: _PDC-OK  ( flag -- status )  IF PDF-S-OK ELSE PDF-S-MEMORY THEN ;
 
 : _PDC-OPERATOR  ( ta tu -- status )
     _PDC-PACK CASE
@@ -582,10 +635,12 @@ VARIABLE _PDC-PRA   VARIABLE _PDC-PRU   VARIABLE _PDC-PRT
     _PDC-FRAMES _PDC-MSRC PDF-BUF-FREE  _PDC-MARKS _PDC-MSRC PDF-BUF-FREE
     _PDC-SB _PDC-MSRC PDF-BUF-FREE ;
 
-\ PDF-CONTENT-FREE ( content -- )   Give back the runs and their text.
+\ PDF-CONTENT-FREE ( content -- )   Give back the runs, their text and
+\ the figures.
 : PDF-CONTENT-FREE  ( content -- )
     DUP _PDC.MSRC @ ?DUP IF
-        >R DUP _PDC.RUNS R@ PDF-BUF-FREE  DUP _PDC.TEXT R> PDF-BUF-FREE
+        >R DUP _PDC.RUNS R@ PDF-BUF-FREE  DUP _PDC.TEXT R@ PDF-BUF-FREE
+        DUP _PDC.FIGS R> PDF-BUF-FREE
     THEN
     PDF-CONTENT-SIZE 0 FILL ;
 

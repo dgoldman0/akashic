@@ -17,6 +17,7 @@
 \   PDF-BLOCK-TOP       ( block -- y )
 \   PDF-BLOCK-TEXT      ( block layout -- a u )
 \   PDF-BLOCK-MEANINGS  ( block layout -- a )
+\   PDF-BLOCK-FIGURE    ( block -- num w h )
 \
 \  PDF-LAYOUT-READ lays out the runs PDF-CONTENT-READ read from PAGE as
 \  blocks of a document, in the order the content shows them, which is
@@ -30,6 +31,13 @@
 \  keep its size and its kind of font, follow at its line spacing, and
 \  neither indent its first line nor follow a short last line.  A word
 \  split by a hyphen at a line's end is joined.
+\
+\  A picture the content draws (pdf/content.f) is a figure, a block of
+\  its own, DOC-B-FIGURE, where it falls among the text: before the first
+\  line of runs read after it.  Pictures drawn as artifacts, or smaller
+\  than the body text's size either way, are left out.  PDF-BLOCK-FIGURE
+\  gives a figure's picture object and the size it is drawn at; its text
+\  is empty.
 \
 \  A paragraph of up to three lines whose text is larger than the page's
 \  body text, or a single bold line of it, is a heading: level 1 at 1.6
@@ -67,8 +75,8 @@ REQUIRE ../media/document.f
 80 CONSTANT PDF-LAYOUT-SIZE
 
 \ A block: kind, level, item kind, number and width, top, text offset
-\ and length.
-64 CONSTANT _PDLY-BLOCK
+\ and length; a figure's picture object, width and height.
+88 CONSTANT _PDLY-BLOCK
 
 : PDF-LAYOUT-BLOCKS  ( layout -- n )  _PDLY.BLOCKS PDF-BUF.U @ _PDLY-BLOCK / ;
 : PDF-LAYOUT-BLOCK   ( i layout -- block )  _PDLY.BLOCKS PDF-BUF.A @ SWAP _PDLY-BLOCK * + ;
@@ -77,6 +85,7 @@ REQUIRE ../media/document.f
 : PDF-BLOCK-TOP      ( block -- y )  40 + @ ;
 : PDF-BLOCK-TEXT     ( block layout -- a u )  _PDLY.TEXT PDF-BUF.A @ OVER 48 + @ + SWAP 56 + @ ;
 : PDF-BLOCK-MEANINGS ( block layout -- a )  _PDLY.MEAN PDF-BUF.A @ SWAP 48 + @ + ;
+: PDF-BLOCK-FIGURE   ( block -- num w h )  DUP 64 + @ OVER 72 + @ ROT 80 + @ ;
 
 VARIABLE _PDLY-L     \ the layout
 VARIABLE _PDLY-ST    \ the page's structure, or 0
@@ -116,7 +125,8 @@ CREATE _PDLY-BUFS-S 4 24 * 7 + ALLOT
 : _PDLY.GL  ( ln -- a )  72 + ;
 : _PDLY.GI  ( ln -- a )  80 + ;
 : _PDLY.LB  ( ln -- a )  88 + ;    \ the number of a label before it, plus one, or 0
-96 CONSTANT _PDLY-LINE
+: _PDLY.R   ( ln -- a )  96 + ;    \ the index of its first run
+104 CONSTANT _PDLY-LINE
 
 1 CONSTANT _PDLY-F-BOLD   2 CONSTANT _PDLY-F-FIXED   4 CONSTANT _PDLY-F-ROTATED
 
@@ -130,6 +140,7 @@ VARIABLE _PDLY-OPEN?
 
 \ A run's facts.
 VARIABLE _PDLY-RX0  VARIABLE _PDLY-RY0  VARIABLE _PDLY-RX1  VARIABLE _PDLY-RY1
+VARIABLE _PDLY-RI   \ the run's index
 VARIABLE _PDLY-RSZ  VARIABLE _PDLY-RST
 
 : _PDLY-RUN@  ( run -- )
@@ -227,13 +238,14 @@ VARIABLE _PDLY-LBL?   VARIABLE _PDLY-LBL-NUM
         _PDLY-RG @ _PDLY-NEW _PDLY.G !  _PDLY-RGK @ _PDLY-NEW _PDLY.GK !
         _PDLY-RGL @ _PDLY-NEW _PDLY.GL !  _PDLY-RGI @ _PDLY-NEW _PDLY.GI !
         _PDLY-LBL? @ IF _PDLY-LBL-NUM @ 1+ ELSE 0 THEN _PDLY-NEW _PDLY.LB !  0 _PDLY-LBL? !
+        _PDLY-RI @ _PDLY-NEW _PDLY.R !
     THEN
     _PDLY-C @ PDF-RUN-TEXT _PDLY-RST @ _PDLY-MEANING _PDLY-TEXT+ ;
 
 : _PDLY-MAKE-LINES  ( -- ok? )
     0 _PDLY-OPEN? !
     _PDLY-C @ PDF-CONTENT-RUNS 0 ?DO
-        I _PDLY-C @ PDF-CONTENT-RUN
+        I _PDLY-RI !  I _PDLY-C @ PDF-CONTENT-RUN
         DUP PDF-RUN-STYLE PDF-RUN-ARTIFACT AND IF DROP ELSE
             _PDLY-RUN+ 0= IF 0 UNLOOP EXIT THEN
         THEN
@@ -558,15 +570,44 @@ CREATE _PDLY-NL 10 C,
     1 _PDLY-LAST 45 = IF 0 EXIT THEN
     _PDLY-PREV @ _PDLY.X1 @ _PDLY-RIGHT @ _PDLY-BSZ @ 4 * - < ;
 
+\ A picture drawn, a figure of its own unless it is an artifact or
+\ smaller than the body text either way.
+: _PDLY-FIGURE  ( fig -- ok? )
+    DUP PDF-FIG-STYLE PDF-RUN-ARTIFACT AND IF DROP -1 EXIT THEN
+    DUP PDF-FIG-BOX ROT - >R SWAP - R>                              ( fig w h )
+    2DUP MIN _PDLY-BODY @ < IF DROP 2DROP -1 EXIT THEN
+    _PDLY-FINISH 0= IF DROP 2DROP 0 EXIT THEN
+    _PDLY-BNEW _PDLY-BLOCK 0 FILL  DOC-B-FIGURE _PDLY-BNEW !
+    _PDLY-BNEW 80 + !  _PDLY-BNEW 72 + !
+    DUP PDF-FIG-NUM _PDLY-BNEW 64 + !
+    PDF-FIG-BOX NIP NIP NIP _PDLY-BNEW 40 + !
+    _PDLY-BTEXT-U _PDLY-BNEW 48 + !
+    _PDLY-BNEW _PDLY-BLOCK _PDLY-L @ _PDLY.BLOCKS _PDLY-APPEND ;
+
+VARIABLE _PDLY-FI   \ the next figure
+
+\ The figures drawn before run AT.
+: _PDLY-FIGURES  ( at -- ok? )
+    BEGIN
+        _PDLY-FI @ _PDLY-C @ PDF-CONTENT-FIGURES < IF
+            DUP _PDLY-FI @ _PDLY-C @ PDF-CONTENT-FIGURE PDF-FIG-AT < 0=
+        ELSE 0 THEN
+    WHILE
+        _PDLY-FI @ _PDLY-C @ PDF-CONTENT-FIGURE _PDLY-FIGURE 0= IF DROP 0 EXIT THEN
+        1 _PDLY-FI +!
+    REPEAT DROP -1 ;
+
 : _PDLY-MAKE-BLOCKS  ( -- ok? )
-    0 _PDLY-BOPEN? !
+    0 _PDLY-BOPEN? !  0 _PDLY-FI !
     _PDLY-NLINES 0 ?DO
         I _PDLY-LINE@ DUP _PDLY-FOLIO? IF DROP ELSE
+            DUP _PDLY.R @ _PDLY-FIGURES 0= IF DROP 0 UNLOOP EXIT THEN
             DUP _PDLY-BREAK? IF _PDLY-START ELSE _PDLY-JOIN THEN
             0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP
-    _PDLY-FINISH ;
+    _PDLY-FINISH 0= IF 0 EXIT THEN
+    1 62 LSHIFT _PDLY-FIGURES ;
 
 \ =====================================================================
 \  Laying out a page

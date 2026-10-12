@@ -21,11 +21,12 @@ REQUIRE pdf/layout.f
 | `PDF-LAYOUT-FREE` | `( layout -- )` | Give back its blocks and their text. |
 | `PDF-LAYOUT-BLOCKS` | `( layout -- n )` | How many blocks the page has. |
 | `PDF-LAYOUT-BLOCK` | `( i layout -- block )` | Block `i`, in reading order. |
-| `PDF-BLOCK-KIND` | `( block -- kind level )` | `DOC-B-PARAGRAPH`, `DOC-B-HEADING` with its level, or `DOC-B-CODE`. |
+| `PDF-BLOCK-KIND` | `( block -- kind level )` | `DOC-B-PARAGRAPH`, `DOC-B-HEADING` with its level, `DOC-B-CODE` or `DOC-B-FIGURE`. |
 | `PDF-BLOCK-ITEM` | `( block -- kind number width )` | Its container: a list item's `DOC-C-BULLET` or `DOC-C-NUMBERED` with its number, or a quote's `DOC-C-QUOTE`, and the cells its marker takes; else `0 0 0`. |
 | `PDF-BLOCK-TOP` | `( block -- y )` | The top of its first line, in the page's default space, 16.16. |
 | `PDF-BLOCK-TEXT` | `( block layout -- a u )` | Its text, UTF-8. |
 | `PDF-BLOCK-MEANINGS` | `( block layout -- a )` | A meaning (`TSTY-*`) for each byte of its text. |
+| `PDF-BLOCK-FIGURE` | `( block -- num w h )` | A figure's picture object (`pdf/image.f`) and the width and height it is drawn at, 16.16. |
 
 `PDF-LAYOUT-READ` gives `PDF-S-OK` or `PDF-S-MEMORY`.
 
@@ -92,6 +93,15 @@ lies right of the block's first line.
 
 A line of digits alone that is the page's topmost or lowest line is its
 number, and is left out.
+
+## Figures
+
+A picture the content draws (`pdf/content.f`) is a figure, a block of its
+own, where it falls among the text: before the first line of the runs read
+after it, any block being built ending there. Its top is the top of the box
+it is drawn in, and its text is empty. Pictures drawn as artifacts, such
+as a page's background, and pictures smaller than the body text's size
+either way, such as bullets and rules drawn as pictures, are left out.
 
 ## Meanings
 
