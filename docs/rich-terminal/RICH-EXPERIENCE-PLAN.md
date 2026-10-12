@@ -45,6 +45,9 @@ These were decided on 2026-09-26:
 | 9 | Pictures the terminal decodes | File Explorer | Medium to large |
 | 10 | Screen changes that cost what they change | Desk and every applet | Medium to large |
 | 11 | Uploads that read as they send | File Explorer | Medium |
+| 12 | Documents | File Explorer | Large |
+| 13 | Decompression | File Explorer | Medium |
+| 14 | PDFs | File Explorer | Large |
 
 Work goes in this order. Part 6 depends on nothing before it, so it may move
 earlier if that is useful. Part 7 depends on nothing in parts 5 and 6 either.
@@ -1031,6 +1034,205 @@ The damaged-picture check's first run found a defect, since fixed: the
 engine step that took the terminal's refusal left the engine's own status at
 REJECTED, and the frame prepared right after took it as INVALID. A job's
 outcome is now the job's alone.
+
+## 12. Documents
+
+**Today.** File Explorer's preview shows a Markdown file as its source, in
+the media widget's text view: a plain text area with one line of the file
+on each row, no styling and no wrapping, which can even be edited in place,
+though nothing saves it. Nothing in Akashic reads a document's structure.
+Pad colours Markdown source line by line (`text/syntax.f`), and
+`markup/readable-text.f` flattens HTML to plain text.
+
+The rich terminal has nothing for a document either. Text areas show one
+line per row and never wrap; only cards wrap text. No family carries
+headings, paragraphs that reflow to the width, lists, quotes, code blocks or
+pictures among the text. Only text areas follow links. A `<media>` element
+shows one picture, and shows it rich only while its whole rectangle is on
+the surface.
+
+**Decided on 2026-10-11.**
+
+- PDFs come in three parts: documents (this part), decompression (13) and
+  the PDF reader (14). Each problem a PDF raises is solved by an element any
+  application can use:
+
+  | A PDF needs | The general element | Part |
+  |---|---|---|
+  | its text reflowed, with its structure | the document view | 12 |
+  | pictures among its text | figures: several pictures in one element, shown in part when scrolled | 12 |
+  | many pages | documents read and sent only as far as the view reaches | 12 |
+  | links within it | links to a document's own headings | 12 |
+  | compressed streams | an inflater, which also gives CELL its PNG pictures | 13 |
+  | pictures inside the file | a source for a span of another source | 14 |
+  | an outline | a document's outline as a list of its headings | 14 |
+  | encryption | MD5 and RC4 beside the AES Akashic has | 14 |
+
+- A document is one general element: blocks (headings, paragraphs, list
+  items, quotes, code, rules and figures) with part 3's inline meanings and
+  links. Any source can make one and any application can show one. Markdown
+  is the first source.
+- Headings stay on the cell grid. Weight, colour and spacing set them apart,
+  not larger text, as part 3 decided for text areas.
+- The terminal breaks a document's lines and draws them in its own fonts and
+  looks. Both sides break lines by APT-1-TEXT's rule, so they agree on every
+  row, as they do for cards, and the client stays in charge of scrolling.
+- The client sends only the blocks the view shows, so a long document costs
+  the terminal only what is on screen. The client's model keeps a document's
+  structure, and reads a block's text from the file only when the view
+  reaches it.
+
+**Plan.**
+
+1. **Contract,** in MegaPad's SEMANTIC-CONTENT-1, both copies of
+   APT-1-RETAINED-1, and APT-1-TEXT for code lines:
+   - *The kind.* A new CONTROL kind, `DOCUMENT`, with its own body, `DOC1`,
+     behind feature bit 16, `RET_CONTROL_DOCUMENTS`, which needs bit 9.
+   - *Blocks.* DOC1 carries the blocks the viewport shows, in order. Each has
+     a stable key, its kind (a paragraph, a heading and its level, a code
+     block, a rule or a figure), the lists and quotes it sits in, and its
+     text with style runs. A viewport row says how many rows of the first
+     block are scrolled out, as in cards.
+   - *Exact rows.* A block's indent comes from the lists and quotes around
+     it. Its text breaks by Section 12 at the width left; code breaks only
+     where a line reaches that width, by a new rule in Section 12; and the
+     blank rows between blocks are given. The renderer chooses the look
+     within those cells: list marks, quote bars, rules, a heading's look and
+     a code block's background.
+   - *Figures.* A figure block takes the rows the client gives its picture,
+     then its caption's lines. The renderer leaves the picture's rows
+     unpainted, so they show the picture's `IMAGE` when the terminal holds
+     the picture, and the CELL view beneath otherwise. An `IMAGE` may lie
+     partly outside the document's rectangle and is clipped to it, so a
+     figure scrolled partly out of view shows the part in view.
+   - *Input.* `SCROLL` works on documents, and `FOLLOW` names a position on
+     a link in a document as in a text area. Documents are read-only, so a
+     plain press on a link follows it.
+2. **Document model** (`media/document.f`). A document is a sequence of
+   blocks, each with a stable key, which a reader finds in a media source.
+   The reader finds the document's structure in one pass over the source,
+   keeping each block's kind, its lists and quotes, and where its text lies.
+   A block's text and inline meanings are read from the source only when a
+   view reaches the block, and kept while the block stays near the view.
+   Headings have anchors, so a link can name one. Memory comes from the
+   caller's memory source, sized to what it holds; when it is refused, the
+   view says so. Library is the design check: its documents arrive in
+   chunks, so a media source must be able to stand for them.
+3. **Markdown** (`markup/markdown.f`), the first reader. It follows
+   CommonMark for headings, paragraphs, block quotes, lists, code, thematic
+   breaks, emphasis, strong emphasis, code spans, links, link reference
+   definitions, pictures, autolinks, line breaks, backslash escapes and
+   entities. Raw HTML shows as its text. A GitHub table shows as its lines,
+   unbroken, as code does.
+4. **Document view** (`tui/widgets/document.f`), the canonical widget. CELL
+   draws each block with the style palette's looks, with list marks, quote
+   bars, rules and code backgrounds, and each figure through a picture
+   widget: a CELL copy for QOI, and the picture's facts otherwise. The keys
+   and the wheel scroll it, and a press on a link follows it. It keeps each
+   block's line count at its width, so a scroll lays out only the blocks
+   that come into view. It publishes a neutral `DOCUMENT` entry with the
+   viewport's blocks, and its figures' pictures to the picture snapshot.
+5. **Media widget.** A Markdown file shows as a document: `MEDIA-KIND` calls
+   text whose name ends in `.md` or `.markdown` `MEDIA-K-MARKDOWN`. An
+   authored `<media>` whose `src` is a Markdown file shows the same way, so
+   any application can show a document.
+6. **Links.** The document view follows a link to one of its own headings
+   itself. A relative path is resolved from the document's folder by the
+   rule Pad uses today, which moves below the applets so that both share it.
+   A target with a scheme, such as `https:`, is refused with a message. The
+   application decides what a file link does: File Explorer selects the file
+   it names, in its folder, and previews it.
+7. **Rich path.** UIDL-TUI observes document views, and the collection
+   snapshot captures their `DOCUMENT` entries, which the producer lowers to
+   a `DOCUMENT` control with claims, refusal and CELL fallback, as item
+   views have. For figures, the picture snapshot describes several pictures
+   in one element, one for each figure in view, keyed by its block, and the
+   producer shows a picture whose rectangle lies partly outside the
+   document's, clipped to it.
+8. **MegaPad.** The codec, the scene and terminal checks, the guest module's
+   CONTROL writer, the reference renderer and its hit map, the viewer's
+   routing, and the shared-viewer transport.
+9. **Sample.** The Desktop disk gains a sample Markdown document with every
+   block kind, a link to one of its headings, a link to another file, and
+   sunset.qoi as a figure, long enough to scroll.
+10. **Measure.** Guest steps for opening the sample, drawing it, a scroll
+    step and following a link, in CELL and rich, and the bytes a scroll step
+    sends.
+
+**Checks,** in order:
+
+- Markdown: blocks and inline meanings against markdown-it-py, a CommonMark
+  reader, on CommonMark's own examples for what the reader takes and on
+  random documents; short and odd input; a balanced stack; memory taken only
+  from the caller.
+- Lines: Akashic's and MegaPad's rows for the same documents agree row for
+  row, on fixed and random documents.
+- Document view: CELL byte oracles for each block kind, lists in quotes,
+  right-to-left paragraphs, figures, scrolling and each kind of link; then
+  File Explorer's own tests and standalone smoke.
+- Contract: codec vectors and refusals, the terminal's checks, off-screen
+  compositor checks of the reference renderer, and `SCROLL` and `FOLLOW`
+  from its hit map.
+- Producer: capture and lowering, refusal leaving CELL, unchanged CELL
+  output, and figures several to an element and clipped.
+- Desk with File Explorer through the physical viewer: preview the sample
+  rich, scroll it with the wheel, see the figure rich and then partly
+  scrolled out, and follow the heading link and the file link. Then the full
+  Desktop journey once, with a new milestone: it previews the sample
+  document rich.
+
+**Done when** File Explorer previews a Markdown file as a document in CELL
+and rich, with wrapped paragraphs, headings, lists, quotes, code and a
+picture in the flow; the wheel scrolls it; following a link goes to its
+heading or selects its file; and the terminal holds only the blocks in view.
+
+**Not in this part.** HTML as a document, where `readable-text.f` could
+become a second reader. Tables as tables. Moving between links with the
+keyboard, since Tab moves focus between widgets. An outline, which part 14
+brings, search, and selecting text. PNG and JPEG figures in CELL, which show
+their facts until the guest can decode them, PNG after part 13. Larger
+headings. Pad keeps showing Markdown as its source, since Pad edits it.
+
+## 13. Decompression
+
+**Today.** Akashic has no inflater. Most of a PDF's text lies in Flate
+(zlib) streams. A PNG's pixels are zlib too, so CELL cannot show PNG
+pictures. The web clients ask servers for bodies with no compression
+(`Accept-Encoding: identity`).
+
+**Plan,** roughly: an inflater, resumable like the QOI decoder. It reads
+input as the caller gives it, writes into the caller's output, takes its
+32 KB window from the caller, and allocates nothing. It reads raw deflate,
+zlib and gzip streams and checks their Adler-32 and CRC-32 sums. It is
+checked against Python's zlib on fixed and random data, and on short and
+corrupt streams. Its first users are PNG decoding for CELL and the PDF
+reader; the web clients can then accept gzip.
+
+## 14. PDFs
+
+**Decided on 2026-10-11.** A PDF is read as a document through part 12's
+view: its text reflowed with its meanings, and its pictures in place. The
+terminal does not become a page renderer. PDFs open in File Explorer's
+preview first; a reader applet comes later. Many PDFs are encrypted with an
+empty password, and those are read too.
+
+**Plan,** roughly:
+
+- *The file.* Cross-reference tables and streams, object streams,
+  incremental updates, and the Flate filter from part 13 with its
+  predictors. Pages are read only as the view reaches them, through part
+  12's model.
+- *Text.* Font encodings and ToUnicode maps give each character. Reading
+  order and structure come from the document's tags when it has them, and
+  otherwise from the text's positions, sizes and weights. Each page's start
+  is marked in the flow.
+- *Pictures.* A JPEG picture inside the file goes to the terminal as a file,
+  through a new source for a span of another source. The guest decodes a
+  Flate picture.
+- *Links and the outline.* Links to other pages and to the web, and the
+  PDF's outline, shown as a list of its headings.
+- *Encryption.* The standard security handler with an empty user password,
+  with RC4 and AES, which needs MD5 and RC4 beside the AES Akashic has.
 
 ## Not in this plan
 
