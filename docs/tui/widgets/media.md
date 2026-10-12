@@ -18,7 +18,7 @@ view:
 | Kind | View |
 |---|---|
 | QOI, PNG or JPEG picture | A [picture widget](picture.md) |
-| Markdown document | A [document view](document.md) |
+| A kind the widget has a document reader for: Markdown, and PDF once an owner adds its reader | A [document view](document.md) |
 | Text, HTML | A [text area](textarea.md) holding the whole file |
 | Anything else | The file's facts |
 
@@ -38,6 +38,7 @@ The facts view says the file's name, its kind and size (for example
 | `MEDIA-N-NO-VIEW` | No preview for this kind of file yet |
 | `MEDIA-N-MEMORY` | Not enough memory to show this file |
 | `MEDIA-N-READ` | The file could not be read |
+| `MEDIA-N-LOCKED` | The file is protected by a password |
 
 A file that could not be opened shows only its name and the note.
 
@@ -55,6 +56,16 @@ the file's size, so a file is never cut. When that memory refuses the text
 or the document the widget shows the facts with `MEDIA-N-MEMORY` instead.
 
 ### Documents
+
+The widget keeps a document reader for each kind
+([media/document.f](../../media/document.md)). It starts with Markdown's
+(`markup/markdown.f`), and an owner adds others with `MEDIA-READER!`. File
+Explorer adds [pdf/document.f](../../pdf/document.md)'s for PDFs before it
+opens a preview, so the PDF reader is loaded only by applications that show
+PDFs, not by every application with a `<media>` element. A file of a kind
+with no reader shows as its kind otherwise shows: a PDF without its reader
+shows its facts. A document whose reader says it needs a password
+(`DOC-S-LOCKED`) shows its facts with `MEDIA-N-LOCKED`.
 
 A Markdown document's figures and links name files by paths from the
 document's folder, resolved as [link-path.f](../../utils/fs/link-path.md)
@@ -80,6 +91,7 @@ only once the picture has been drawn.
 | `MEDIA-OPEN-VFS` | `( path-a path-u vfs widget -- ior )` | Show the file at `path` in `vfs`. A nonzero ior says it could not be opened or read, and the widget says so. |
 | `MEDIA-ALT!` | `( alt-a alt-u widget -- )` | A text alternative for pictures in place of the file's name, or `0 0` for the name. The caller keeps the text alive while it is set. |
 | `MEDIA-CLEAR` | `( widget -- )` | Show nothing and close the file. |
+| `MEDIA-READER!` | `( reader kind widget -- )` | Show files of `kind` as documents `reader` reads, or for 0 as the kind otherwise shows; from the next open. |
 | `MEDIA-FOLLOW!` | `( follow-xt ctx widget -- )` | Where a document's links to files go: `( path-a path-u status ctx -- )`. The path stays valid only while the word runs. Zero follows no such link. |
 | `MEDIA-SERVICE` | `( widget -- changed? )` | Decode one slice of a picture being shown, or of a document's figure. True when what the widget shows changed; the widget is then dirty. |
 | `MEDIA-PENDING?` | `( widget -- flag )` | A picture shown, or a document's figure, is still decoding. |

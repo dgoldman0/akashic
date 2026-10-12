@@ -9,7 +9,8 @@ first bytes, then its name. A caller passes at most `MEDIA-SNIFF-BYTES`
 (512) first bytes, or the whole file when it is shorter. A viewer uses the
 kind to choose how to show a file, and to say what a file is even when it
 cannot show it yet. `MEDIA-KIND-NAME ( kind -- a u )` is what to call a kind
-in a viewer, such as "QOI picture".
+in a viewer, such as "QOI picture" or "PDF document". The kinds are numbered
+from 0 to `MEDIA-KINDS` less one, so a viewer can keep a table of them.
 
 ## Rules, in order
 
@@ -21,6 +22,7 @@ in a viewer, such as "QOI picture".
    | `MEDIA-K-QOI` | `qoif` |
    | `MEDIA-K-PNG` | `89 50 4E 47 0D 0A 1A 0A` |
    | `MEDIA-K-JPEG` | `FF D8 FF` |
+   | `MEDIA-K-PDF` | `%PDF-` |
    | `MEDIA-K-GIF` | `GIF87a` or `GIF89a` |
    | `MEDIA-K-WAV` | `RIFF`, four bytes, `WAVE` |
    | `MEDIA-K-BMP` | `BM` with a known header size (12, 40, 52, 56, 108 or 124) at offset 14 |

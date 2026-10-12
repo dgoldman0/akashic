@@ -71,6 +71,7 @@ PROVIDED akashic-media-document
 1 CONSTANT DOC-S-MEMORY      \ the memory source refused
 2 CONSTANT DOC-S-READ        \ the media source could not be read
 3 CONSTANT DOC-S-INVALID     \ no such block, or no open document
+4 CONSTANT DOC-S-LOCKED      \ the source cannot be read without a password
 
 \ Block kinds.
 1 CONSTANT DOC-B-PARAGRAPH

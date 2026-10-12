@@ -12,6 +12,7 @@ holds, and for giving all of it back.  Every run checks a balanced stack.
 from __future__ import annotations
 
 import io
+import shutil
 import re
 import struct
 
@@ -76,7 +77,7 @@ CREATE MW-EV-MEM 31 ALLOT
 """
 
 
-def _runtime(setup_data: bytes = b""):
+def _runtime(setup_data: bytes = b"", roots: tuple[str, ...] = ("tui/widgets/media.f",)):
     runtime = MegaForthRuntime(
         memory=create_one_core_address_space(external_size=128 << 20, hbw_size=1 << 20),
         execution_backend="native",
@@ -84,10 +85,10 @@ def _runtime(setup_data: bytes = b""):
     runtime.evaluate(KDOS_PATH.read_bytes(), source_name="kdos.f")
     runtime.evaluate(b"ENTER-USERLAND", source_name="media-widget-userland")
     source = []
-    for module in dependency_order(AK, ("tui/widgets/media.f",)):
+    for module in dependency_order(AK, roots):
         source.extend(_load_forth_lines(AK / module))
     runtime.evaluate(("\n".join(source) + "\n").encode(),
-                     source_name="media-widget-closure", step_budget=400_000_000)
+                     source_name="media-widget-closure", step_budget=800_000_000)
     constants = (
         f"{TOP} CONSTANT TOP-ROW  {LEFT} CONSTANT LEFT-COL  "
         f"{FG} CONSTANT FG-INDEX  {BG} CONSTANT BG-INDEX"
@@ -100,9 +101,10 @@ def _runtime(setup_data: bytes = b""):
     return runtime
 
 
-def _run(lines: list[str], data: bytes = b"", max_steps: int = 400_000_000) -> str:
+def _run(lines: list[str], data: bytes = b"", max_steps: int = 400_000_000,
+         roots: tuple[str, ...] = ("tui/widgets/media.f",)) -> str:
     assert len(data) <= FILE_BYTES
-    runtime = _runtime(data)
+    runtime = _runtime(data, roots)
     program = ["DEPTH MW-DEPTH !", *lines,
                'DEPTH MW-DEPTH @ - ." @D:" . CR']
     try:
@@ -1007,3 +1009,73 @@ def test_a_document_the_memory_refuses_shows_why() -> None:
         "readme.md", f"Markdown document, {len(DOCUMENT)} bytes",
         "Not enough memory to show this file"]
     assert "FREED=0 " in output
+
+
+# --------------------------------------------------------------------------
+# PDF documents
+# --------------------------------------------------------------------------
+
+PDF_ROOTS = ("tui/widgets/media.f", "pdf/document.f")
+PDF, NOTE_LOCKED = 10, 4
+
+
+def _pdf() -> bytes:
+    from test_pdf_document import pages_pdf
+    return pages_pdf()
+
+
+def test_a_pdf_shows_its_facts_until_its_reader_is_added_then_its_pages() -> None:
+    """A PDF is a PDF document by its first bytes.  Without a reader for
+    it, the widget shows its facts; with pdf/document.f's, it shows the
+    document, its first page read from the service; clearing the widget
+    gives everything back."""
+
+    pdf = _pdf()
+    output = _run(_media_lines() + [
+        f'{len(pdf)} S" /paper.pdf" MW-PUT',
+        _open("/paper.pdf"), _state(), "MW-W @ MW-DRAW", "6 36 MW-DUMP",
+        '." @@READER" CR',
+        "PDF-DOC-READER MEDIA-K-PDF MW-W @ MEDIA-READER!",
+        _open("/paper.pdf"), _state(),
+        "MW-W @ MW-DRAW",
+        '." PENDING=" MW-W @ MEDIA-PENDING? .',
+        'MW-W @ MW-MEDIA-SERVICE ." SLICES=" .',
+        "MW-W @ MW-DRAW", "6 36 MW-DUMP",
+        '." PARTS=" MW-W @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DOC-PARTS .',
+        "MW-W @ MEDIA-CLEAR", '." CLEARED=" MW-MSRC MSRC-HELD@ .',
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], pdf, max_steps=2_000_000_000, roots=PDF_ROOTS)
+    facts, shown = output.split("@@READER")
+    assert f"VIEW={VIEW_FACTS} KIND={PDF} NOTE={NOTE_NO_VIEW} " in facts
+    assert _labels(facts, 6, 36) == [
+        "paper.pdf", f"PDF document, {len(pdf) // 1024}K",
+        "No preview for this kind of file yet"]
+    assert f"VIEW={VIEW_DOCUMENT} KIND={PDF} NOTE={NOTE_NONE} " in shown
+    assert "PENDING=-1 " in shown and "PARTS=4 " in shown, shown[-2000:]
+    cells = _cells(shown)
+    assert _row_text(cells, 0, 36) == "1 " + "\u2500" * 34
+    assert _row_text(cells, 2, 36) == "A Title Here"
+    assert "CLEARED=0 " in shown and "FREED=0 " in shown
+
+
+def test_a_pdf_that_needs_a_password_says_so(tmp_path) -> None:
+    if shutil.which("qpdf") is None:
+        pytest.skip("qpdf is not installed")
+    from test_pdf_crypt import encrypt
+    pdf = encrypt(tmp_path, "128", "--use-aes=n", user="secret")
+    output = _run(_media_lines() + [
+        f'{len(pdf)} S" /locked.pdf" MW-PUT',
+        "PDF-DOC-READER MEDIA-K-PDF MW-W @ MEDIA-READER!",
+        _open("/locked.pdf"), _state(), "MW-W @ MW-DRAW", "6 36 MW-DUMP",
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], pdf, roots=PDF_ROOTS)
+    assert "IOR=0 " in output
+    assert f"VIEW={VIEW_FACTS} KIND={PDF} NOTE={NOTE_LOCKED} " in output
+    assert _labels(output, 6, 36) == [
+        "locked.pdf", f"PDF document, {_size(len(pdf))}",
+        "The file is protected by a password"]
+    assert "FREED=0 " in output
+
+
+def _size(n: int) -> str:
+    return f"{n} bytes" if n < 1024 else f"{n // 1024}K"

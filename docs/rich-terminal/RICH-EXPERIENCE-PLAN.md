@@ -1440,10 +1440,22 @@ rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them, a link to a far page reading that page alone.
 
-**Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, and the
-file's side of steps 6 and 7: pictures as files, links and the outline.
-The decisions above were reviewed: step 9 comes next, and AES follows
-MegaPad's engine gaining CBC.
+**Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, the
+file's side of steps 6 and 7 (pictures as files, links and the outline),
+and the first part of step 9: File Explorer previews a PDF as a document,
+read a page at a time. Its figures' pictures, its links and its contents
+come next, then AES once MegaPad's engine has CBC.
+
+- A PDF is a document read a page at a time (`pdf/document.f`): a part for
+  each page, each page its start, labelled with its number, then the blocks
+  its layout gives, with their list items, quotes and blank rows. A page
+  that cannot be opened says so, and a file that needs a password opens
+  locked. `MEDIA-KIND` calls a file that starts `%PDF-` a PDF. The media
+  widget keeps a document reader for each kind, Markdown's from the start;
+  File Explorer adds the PDF reader to its preview, so only applications
+  that show PDFs load the PDF modules. A locked PDF shows its facts and says
+  it is protected. The Desktop image's source grows by about 226 KB to
+  3.89 MB, with 27 MB of the disk still free.
 
 - A document may come in parts. A reader adds its parts when the document
   opens and a part's blocks when asked, in any order, each where its part

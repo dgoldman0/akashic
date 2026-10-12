@@ -4,14 +4,17 @@
 \
 \  Given a file, the media widget finds what kind of thing it is and shows
 \  it through the matching view: a picture widget for QOI, PNG and JPEG
-\  pictures, a document view for a Markdown document, a text area for
-\  other text, and the file's facts (name, kind and size) for anything
-\  else.  The picture widget decodes QOI and PNG for CELL and shows a
-\  JPEG's format and size there; a rich terminal that decodes the file
-\  shows the picture itself.  Each view is a canonical widget drawn the
-\  ordinary way (WDG-DRAW-IN), so a rich terminal sees the same views it
-\  sees anywhere else and CELL shows each one completely.  Focus and keys
-\  go to the view shown.
+\  pictures, a document view for a kind it has a document reader for, a
+\  text area for other text, and the file's facts (name, kind and size)
+\  for anything else.  It reads Markdown documents from the start; an
+\  owner adds a reader for another kind with MEDIA-READER!, as File
+\  Explorer adds pdf/document.f's for PDFs, so an application that shows
+\  no such files does not load their reader.  The picture widget decodes
+\  QOI and PNG for CELL and shows a JPEG's format and size there; a rich
+\  terminal that decodes the file shows the picture itself.  Each view is
+\  a canonical widget drawn the ordinary way (WDG-DRAW-IN), so a rich
+\  terminal sees the same views it sees anywhere else and CELL shows each
+\  one completely.  Focus and keys go to the view shown.
 \
 \  The widget owns the file it shows.  MEDIA-OPEN-VFS opens it, and the
 \  next open, MEDIA-CLEAR or MEDIA-FREE closes it; a text file is read whole
@@ -23,12 +26,13 @@
 \  from the widget's memory source; when that memory refuses the text or
 \  the document, the widget says so instead of cutting it.
 \
-\  A document's figures and links name files from the document's folder
-\  (utils/fs/link-path.f).  A figure's picture is opened from the same
-\  file system.  A link to one of the document's own headings scrolls the
-\  view; any other link goes to the owner's follow word, set with
-\  MEDIA-FOLLOW!, as the path it names, or the LPATH- status saying why
-\  it names none.
+\  A document that needs a password to be read shows its facts and says it
+\  is protected.  A document's figures and links name files from the
+\  document's folder (utils/fs/link-path.f).  A figure's picture is opened
+\  from the same file system.  A link to one of the document's own
+\  headings scrolls the view; any other link goes to the owner's follow
+\  word, set with MEDIA-FOLLOW!, as the path it names, or the LPATH-
+\  status saying why it names none.
 \
 \  Media Descriptor:
 \    +0..+32 widget header (type=WDG-T-MEDIA)
@@ -50,7 +54,8 @@
 \   +160  doc        the open document (DOC-SIZE bytes from msrc), or 0
 \   +168  follow-xt  ( path-a path-u status ctx -- ), or 0
 \   +176  follow-ctx
-\   +184  source     MEDSRC-VFS-SIZE bytes: the open file
+\   +184  readers    a document reader for each kind (MEDIA-KINDS cells), or 0
+\         source     MEDSRC-VFS-SIZE bytes: the open file, after the readers
 \
 \  Prefix: MEDIA- (public), _MEDIA- and _MDW- (internal)
 \  Provider: akashic-tui-media
@@ -91,7 +96,8 @@ REQUIRE ../../utils/string.f
 160 CONSTANT _MEDIA-O-DOC
 168 CONSTANT _MEDIA-O-FOLLOW
 176 CONSTANT _MEDIA-O-FOLLOW-CTX
-184 CONSTANT _MEDIA-O-SOURCE
+184 CONSTANT _MEDIA-O-READERS
+_MEDIA-O-READERS MEDIA-KINDS CELLS + CONSTANT _MEDIA-O-SOURCE
 _MEDIA-O-SOURCE MEDSRC-VFS-SIZE + CONSTANT _MEDIA-DESC-SIZE
 
 0 CONSTANT MEDIA-V-NONE
@@ -104,10 +110,12 @@ _MEDIA-O-SOURCE MEDSRC-VFS-SIZE + CONSTANT _MEDIA-DESC-SIZE
 1 CONSTANT MEDIA-N-NO-VIEW    \ this kind has no view yet
 2 CONSTANT MEDIA-N-MEMORY     \ not enough memory to show it
 3 CONSTANT MEDIA-N-READ       \ the file could not be opened or read
+4 CONSTANT MEDIA-N-LOCKED     \ the document needs a password to be read
 
 : _MEDIA@  ( w offset -- x )  + @ ;
 : _MEDIA-SOURCE  ( w -- source )  _MEDIA-O-SOURCE + ;
 : _MEDIA-MSRC  ( w -- msrc )  _MEDIA-O-MSRC _MEDIA@ ;
+: _MEDIA-READER  ( kind w -- reader|0 )  _MEDIA-O-READERS + SWAP CELLS + @ ;
 
 \ =====================================================================
 \  1. Memory for widgets made from UIDL
@@ -290,7 +298,9 @@ VARIABLE _MFR-SRC
 
 VARIABLE _MDD-W
 
-\ Show the open file as a Markdown document.  It stays open while shown.
+\ Show the open file as a document, read by the reader for its kind.  It
+\ stays open while shown.  A document that needs a password, or one that
+\ memory refuses, shows its facts and says so; that is no read error.
 : _MEDIA-DOCUMENT  ( w -- ior )
     _MDD-W !
     DOC-SIZE _MDD-W @ _MEDIA-MSRC MSRC-ALLOC ?DUP 0= IF
@@ -298,16 +308,17 @@ VARIABLE _MDD-W
         MEDIA-N-MEMORY _MDD-W @ _MEDIA-FACTS 0 EXIT
     THEN
     _MDD-W @ _MEDIA-O-DOC + !
-    _MDD-W @ _MEDIA-SOURCE MD-READER _MDD-W @ _MEDIA-MSRC
+    _MDD-W @ _MEDIA-SOURCE
+    _MDD-W @ _MEDIA-O-KIND _MEDIA@ _MDD-W @ _MEDIA-READER _MDD-W @ _MEDIA-MSRC
     _MDD-W @ _MEDIA-O-DOC _MEDIA@ DOC-OPEN
     ?DUP IF
         _MDD-W @ _MEDIA-DROP-DOC
         _MDD-W @ _MEDIA-SOURCE MEDSRC-RELEASE
-        DOC-S-MEMORY = IF
-            MEDIA-N-MEMORY _MDD-W @ _MEDIA-FACTS 0
-        ELSE
-            MEDIA-N-READ _MDD-W @ _MEDIA-FACTS -1
-        THEN EXIT
+        CASE
+            DOC-S-MEMORY OF MEDIA-N-MEMORY _MDD-W @ _MEDIA-FACTS 0 ENDOF
+            DOC-S-LOCKED OF MEDIA-N-LOCKED _MDD-W @ _MEDIA-FACTS 0 ENDOF
+            MEDIA-N-READ _MDD-W @ _MEDIA-FACTS -1 SWAP
+        ENDCASE EXIT
     THEN
     _MDD-W @ _MEDIA-O-DOCV _MEDIA@ 0= IF
         _MDD-W @ WDG-REGION _MDD-W @ _MEDIA-MSRC DOCV-NEW
@@ -362,7 +373,16 @@ DEFER _MEDIA-HANDLE-D
     R@ _MEDIA-O-MSRC + !
     R@ WDG-T-MEDIA ROT ['] _MEDIA-DRAW ['] _MEDIA-HANDLE WDG-INIT
     -1 R@ _MEDIA-O-KIND + !
+    MD-READER MEDIA-K-MARKDOWN CELLS R@ _MEDIA-O-READERS + + !
     R> ;
+
+\ MEDIA-READER! ( reader kind widget -- )
+\   Show files of KIND as documents READER reads (media/document.f), or
+\   for 0, as the kind is otherwise shown.  It takes effect at the next
+\   open.
+: MEDIA-READER!  ( reader kind widget -- )
+    OVER 0 MEDIA-KINDS WITHIN 0= IF DROP 2DROP EXIT THEN
+    _MEDIA-O-READERS + SWAP CELLS + ! ;
 
 \ MEDIA-CLEAR ( widget -- )   Show nothing and close the file.
 : MEDIA-CLEAR  ( widget -- )
@@ -388,11 +408,11 @@ DEFER _MEDIA-HANDLE-D
     THEN
     _MEDIA-SNIFF _MO-N @ _MO-W @ MEDIA-NAME@
     MEDIA-KIND DUP _MO-W @ _MEDIA-O-KIND + !
+    DUP _MO-W @ _MEDIA-READER IF DROP _MO-W @ _MEDIA-DOCUMENT EXIT THEN
     CASE
         MEDIA-K-QOI      OF _MO-W @ _MEDIA-PICTURE 0 ENDOF
         MEDIA-K-PNG      OF _MO-W @ _MEDIA-PICTURE 0 ENDOF
         MEDIA-K-JPEG     OF _MO-W @ _MEDIA-PICTURE 0 ENDOF
-        MEDIA-K-MARKDOWN OF _MO-W @ _MEDIA-DOCUMENT ENDOF
         MEDIA-K-TEXT     OF _MO-W @ _MEDIA-TEXT ENDOF
         MEDIA-K-HTML     OF _MO-W @ _MEDIA-TEXT ENDOF
         _MO-W @ _MEDIA-SOURCE MEDSRC-RELEASE
@@ -462,6 +482,7 @@ VARIABLE _MDW-LINE-U
         MEDIA-N-NO-VIEW OF S" No preview for this kind of file yet" ENDOF
         MEDIA-N-MEMORY  OF S" Not enough memory to show this file" ENDOF
         MEDIA-N-READ    OF S" The file could not be read" ENDOF
+        MEDIA-N-LOCKED  OF S" The file is protected by a password" ENDOF
         >R 0 0 R>
     ENDCASE ;
 
@@ -522,6 +543,7 @@ GUARD _media-guard
 ' MEDIA-OPEN-VFS CONSTANT _media-open-vfs-xt
 ' MEDIA-ALT!     CONSTANT _media-alt-xt
 ' MEDIA-FOLLOW!  CONSTANT _media-follow-xt
+' MEDIA-READER!  CONSTANT _media-reader-xt
 ' MEDIA-FREE     CONSTANT _media-free-xt
 ' MEDIA-SERVICE  CONSTANT _media-service-xt
 
@@ -530,6 +552,7 @@ GUARD _media-guard
 : MEDIA-OPEN-VFS _media-open-vfs-xt _media-guard WITH-GUARD ;
 : MEDIA-ALT!     _media-alt-xt      _media-guard WITH-GUARD ;
 : MEDIA-FOLLOW!  _media-follow-xt   _media-guard WITH-GUARD ;
+: MEDIA-READER!  _media-reader-xt   _media-guard WITH-GUARD ;
 : MEDIA-FREE     _media-free-xt     _media-guard WITH-GUARD ;
 : MEDIA-SERVICE  _media-service-xt  _media-guard WITH-GUARD ;
 [THEN] [THEN]

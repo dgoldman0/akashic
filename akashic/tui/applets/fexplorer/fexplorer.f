@@ -6,7 +6,7 @@
 \              akashic-tui-textarea, akashic-tui-input,
 \              akashic-tui-dialog, akashic-tui-app-shell,
 \              akashic-tui-app-desc, akashic-tui-uidl-tui,
-\              akashic-vfs
+\              akashic-vfs, akashic-pdf-document
 \
 \  Dual-pane file manager.  UI is declared as UIDL XML and loaded
 \  by app-shell.f automatically.  The applet provides only:
@@ -21,9 +21,9 @@
 \   - Detail table (LST-* widget mounted on <region id="detail">):
 \     Name, Size, and Type columns; opening a row enters a directory or
 \     opens a file with its application
-\   - Preview panel (UIDL <media id="preview">): a picture, a Markdown
-\     document, a text file whole, or the facts of any other file; a link
-\     in a document selects the file it names and previews it
+\   - Preview panel (UIDL <media id="preview">): a picture, a Markdown or
+\     PDF document, a text file whole, or the facts of any other file; a
+\     link in a document selects the file it names and previews it
 \   - Menu bar via <menubar>/<menu>/<item> + do= actions
 \   - Status bar via <status>/<label> elements
 \   - Clipboard (copy / cut / paste via VFS)
@@ -45,6 +45,7 @@ PROVIDED akashic-tui-fexplorer
 REQUIRE ../../widgets/explorer.f
 REQUIRE ../../widgets/list.f
 REQUIRE ../../widgets/media.f
+REQUIRE ../../../pdf/document.f
 REQUIRE ../../../utils/fs/link-path.f
 REQUIRE ../../widgets/input.f
 REQUIRE ../../widgets/dialog.f
@@ -582,12 +583,14 @@ DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
 
 \ _FEXP-LOAD-PREVIEW ( -- )
 \   Give the selected file to the preview's media widget, which shows it
-\   the way its kind is shown.  A picture decodes only once the Preview tab
-\   draws it, and a document's links go to _FEXP-ON-LINK.
+\   the way its kind is shown, a PDF as a document.  A picture decodes only
+\   once the Preview tab draws it, and a document's links go to
+\   _FEXP-ON-LINK.
 : _FEXP-LOAD-PREVIEW  ( -- )
     _FEXP-SEL-LEN @ 0= IF EXIT THEN
     _FEXP-E-PREVIEW @ ?DUP 0= IF EXIT THEN
     DUP UTUI-WIDGET@ ?DUP IF
+        PDF-DOC-READER MEDIA-K-PDF 2 PICK MEDIA-READER!
         ['] _FEXP-ON-LINK 0 2 PICK MEDIA-FOLLOW!
         >R _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-VFS @ R> MEDIA-OPEN-VFS DROP
     THEN

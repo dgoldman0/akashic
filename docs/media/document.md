@@ -86,7 +86,8 @@ Every buffer comes from the caller's memory source
 (`utils/memory-source.f`), each sized to what it holds and grown by doubling
 as a reader fills it. When the source refuses, the call says `DOC-S-MEMORY`
 and gives back what it took. A source that cannot be read gives
-`DOC-S-READ`. The document borrows its media source; whoever made the source
+`DOC-S-READ`, and one that needs a password to be read, as an encrypted PDF
+may, `DOC-S-LOCKED`. The document borrows its media source; whoever made the source
 releases it after `DOC-CLOSE`, which gives back every byte.
 
 ## API

@@ -3,7 +3,8 @@
 \ =====================================================================
 \
 \  Looks at a file's first bytes, then its name.  A signature decides every
-\  kind that has one, so a misnamed picture is still a picture; the name
+\  kind that has one, so a misnamed picture is still a picture, and a file
+\  that starts %PDF- is a PDF document; the name
 \  only tells an HTML page or a Markdown document from other text.  A page
 \  is text that begins like one or is named .html or .htm, and a Markdown
 \  document text named .md or .markdown.  Text is valid UTF-8 with no
@@ -19,6 +20,7 @@
 \
 \  Public API:
 \    MEDIA-SNIFF-BYTES  ( -- bytes )
+\    MEDIA-KINDS        ( -- n )    how many kinds there are, from 0
 \    MEDIA-KIND         ( prefix-a prefix-u name-a name-u -- kind )
 \    MEDIA-KIND-NAME    ( kind -- a u )
 \ =====================================================================
@@ -37,6 +39,8 @@ PROVIDED akashic-media-kind
 7 CONSTANT MEDIA-K-BMP
 8 CONSTANT MEDIA-K-WAV
 9 CONSTANT MEDIA-K-MARKDOWN
+10 CONSTANT MEDIA-K-PDF
+11 CONSTANT MEDIA-KINDS
 
 \ Enough for every signature and a fair look at text.
 512 CONSTANT MEDIA-SNIFF-BYTES
@@ -58,6 +62,7 @@ CREATE _MK-GIF87 71 C, 73 C, 70 C, 56 C, 55 C, 97 C,            \ GIF87a
 CREATE _MK-GIF89 71 C, 73 C, 70 C, 56 C, 57 C, 97 C,            \ GIF89a
 CREATE _MK-BM    66 C, 77 C,                                     \ BM
 CREATE _MK-RIFF  82 C, 73 C, 70 C, 70 C,                         \ RIFF
+CREATE _MK-PDF   37 C, 80 C, 68 C, 70 C, 45 C,                   \ %PDF-
 CREATE _MK-WAVE  87 C, 65 C, 86 C, 69 C,                         \ WAVE
 
 \ A little-endian u32 at any address.
@@ -77,6 +82,7 @@ CREATE _MK-WAVE  87 C, 65 C, 86 C, 69 C,                         \ WAVE
     _MK-QOI 4 0 _MK-AT? IF MEDIA-K-QOI EXIT THEN
     _MK-PNG 8 0 _MK-AT? IF MEDIA-K-PNG EXIT THEN
     _MK-JPEG 3 0 _MK-AT? IF MEDIA-K-JPEG EXIT THEN
+    _MK-PDF 5 0 _MK-AT? IF MEDIA-K-PDF EXIT THEN
     _MK-GIF87 6 0 _MK-AT? _MK-GIF89 6 0 _MK-AT? OR IF MEDIA-K-GIF EXIT THEN
     _MK-RIFF 4 0 _MK-AT? _MK-WAVE 4 8 _MK-AT? AND IF MEDIA-K-WAV EXIT THEN
     _MK-BMP? IF MEDIA-K-BMP EXIT THEN
@@ -160,6 +166,7 @@ CREATE _MK-MARKDOWN-EXT 46 C, 109 C, 97 C, 114 C, 107 C, 100 C,
         MEDIA-K-TEXT OF S" text" ENDOF
         MEDIA-K-HTML OF S" HTML page" ENDOF
         MEDIA-K-MARKDOWN OF S" Markdown document" ENDOF
+        MEDIA-K-PDF  OF S" PDF document" ENDOF
         MEDIA-K-QOI  OF S" QOI picture" ENDOF
         MEDIA-K-PNG  OF S" PNG picture" ENDOF
         MEDIA-K-JPEG OF S" JPEG picture" ENDOF
