@@ -70,6 +70,7 @@ REQUIRE region.f
 27 CONSTANT WDG-T-FIELD
 28 CONSTANT WDG-T-PICTURE
 29 CONSTANT WDG-T-MEDIA
+30 CONSTANT WDG-T-DOCUMENT
 
 \ =====================================================================
 \ 3. Flag constants

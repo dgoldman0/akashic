@@ -166,7 +166,9 @@ The media layer is what a viewer stands on, below any widget. A **media source**
 
 A **picture copy** (`picture.f`) is one picture no larger than a size its caller asks for, as RGBA8 rows with the SHA3-256 digest of those bytes. It decodes in bounded steps, scales down by alpha-weighted averaging as it decodes, never enlarges, and takes exactly the memory that copy needs from the caller's memory source. Each user asks for the size it shows: a text-mode view a couple of pixels a cell, a rich terminal what its pixel answer said. Only QOI decodes so far.
 
-On top of it, the TUI's **media widget** (`tui/widgets/media.f`) shows a file the way its kind is shown — a **picture widget** (`tui/widgets/picture.f`) drawing the picture in half-block cells, a text area holding the whole file, or the file's facts — and UIDL makes one from each `<media>` element, decoding pictures from the host's per-pass service.
+A **document** (`document.f`) is text read top to bottom with its structure: headings, paragraphs, code, rules and figures, inside quotes and list items, with what each character means and where its links go. A reader finds the structure in one pass over a source, and a block's text is read again only when a view reaches it; `markup/markdown.f` is the first reader.
+
+On top of it, the TUI's **media widget** (`tui/widgets/media.f`) shows a file the way its kind is shown — a **picture widget** (`tui/widgets/picture.f`) drawing the picture in half-block cells, a text area holding the whole file, or the file's facts — and UIDL makes one from each `<media>` element, decoding pictures from the host's per-pass service. The **document view** (`tui/widgets/document.f`) shows a document on the rows a rich terminal gives it too, scrolls by rows, follows links, and draws each figure with a picture widget.
 
 ### font/ — TrueType Parsing, Rasterization, and Caching
 
@@ -197,6 +199,8 @@ The DOM supports the usual tree operations (create, append, insert, remove, clon
 A two-layer parser. `core.f` provides the shared low-level machinery: tag scanning, attribute name/value extraction, entity decoding (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#NNN;`, `&#xHHH;`), and the cursor-based (`addr len`) parse loop.
 
 `xml.f` adds XML-specific rules (self-closing tags, namespaces). `html.f` adds HTML5 specifics — void elements (`<br>`, `<img>`, `<hr>`, `<meta>`, `<input>`, etc.) that don't require closing tags, and the HTML5 named entity set. Both produce DOM trees via the `dom/` module.
+
+`markdown.f` reads Markdown into a document (`media/document.f`), as the CommonMark reference parser reads it, with GitHub tables shown as their lines. `html-entities.f` holds the WHATWG list of named character references that Markdown and HTML share.
 
 `readable-text.f` is a separate bounded projection path for untrusted UTF-8
 plain text and a strict inert HTML subset. It allocates no DOM, executes no
