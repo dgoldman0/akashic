@@ -1230,13 +1230,66 @@ grid-contracts profile needs 132 MP64FS entries, beyond MegaPad's 128.
 pictures. The web clients ask servers for bodies with no compression
 (`Accept-Encoding: identity`).
 
-**Plan,** roughly: an inflater, resumable like the QOI decoder. It reads
-input as the caller gives it, writes into the caller's output, takes its
-32 KB window from the caller, and allocates nothing. It reads raw deflate,
-zlib and gzip streams and checks their Adler-32 and CRC-32 sums. It is
-checked against Python's zlib on fixed and random data, and on short and
-corrupt streams. Its first users are PNG decoding for CELL and the PDF
-reader; the web clients can then accept gzip.
+**Plan.**
+
+1. **Adler-32** (`math/adler32.f`), beside the CRCs: `ADLER32-UPDATE
+   ( adler a u -- adler' )` continues a sum from its last value, starting
+   at 1, so a stream is summed a piece at a time. CRC-32 is already there
+   as `CRC32-UPDATE`, on the CRC accelerator.
+2. **Inflater** (`utils/inflate.f`), resumable like the QOI decoder. The
+   caller owns its record and its window, a power of two up to 32 KB, and
+   it allocates nothing. `INFL-INIT` names the wrapper: raw deflate, zlib or
+   gzip. `INFL-FEED ( in-a in-u out-a out-u infl -- in-used out-used
+   status )` takes whatever input the caller has and fills whatever output
+   room it gives, and says whether it wants more input, has filled the
+   output, has ended with its sum checked, or found the stream damaged, and
+   why. It decodes Huffman codes through lookup tables it builds in its
+   record for each block, so a symbol costs a lookup rather than a bit at a
+   time. A zlib stream that needs a larger window than the caller gave, or
+   a preset dictionary, is refused. Input after the stream's end is left
+   for the caller.
+3. **PNG** (`render/png.f`), resumable like QOI, with the same statuses,
+   so a picture's loop feeds either. It checks each chunk's CRC, takes
+   PLTE and tRNS, inflates IDAT across chunks, undoes each row's filter,
+   and hands back R, G, B, A rows for every colour type and bit depth,
+   sixteen-bit samples by their high byte. The rows' filters are a word of
+   their own, since PDF's Flate predictor is the same five filters. The
+   caller gives the window and the two rows a filter needs.
+4. **Pictures.** `PIC-START` decodes PNG for CELL as it decodes QOI, so
+   File Explorer's preview shows PNG pictures in CELL. The rich side is
+   unchanged: the terminal decodes PNG itself.
+5. **Web clients.** The HTTP resource client, XRPC and the public author
+   feed ask for gzip as well as identity, and inflate a gzip body as it
+   arrives. The inflated bytes count against the same body limit as before,
+   so a small compressed body cannot grow past the caller's bound.
+6. **Measure.** Guest steps per output byte for stored, fixed and dynamic
+   blocks, and for decoding the sample picture as PNG against QOI.
+
+**Checks,** in order:
+
+- Adler-32 against Python's `zlib.adler32` on fixed and random data, fed
+  in pieces.
+- The inflater against Python's zlib: every level and strategy, each
+  wrapper, empty, tiny, random and highly repetitive data, the longest
+  match and farthest distance, stored blocks of 65,535 bytes, fed a byte at
+  a time and in random pieces into output of every size down to one byte.
+  Damaged streams of each kind are refused with their reason, a cut stream
+  never ends, and a wrong sum is refused.
+- PNG against Pillow: each colour type and bit depth, each filter, a
+  palette with transparency, odd widths, fed in pieces; a damaged CRC, a
+  cut IDAT, a missing IEND and an interlaced file each refused.
+- Pictures and File Explorer's own tests, then File Explorer's check and
+  the damaged-picture check through the physical viewer as regression.
+- The web clients' tests with gzip bodies, including one that inflates
+  past the body limit.
+
+**Done when** File Explorer's preview shows a PNG picture in CELL, the
+inflater agrees with zlib on every check, and the web clients take gzip
+bodies.
+
+**Not in this part.** Compressing. Interlaced PNG in CELL, which shows the
+picture's facts. Gzip files of several members. Colour profiles and gamma,
+which CELL ignores.
 
 ## 14. PDFs
 
