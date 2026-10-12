@@ -352,25 +352,21 @@ def test_a_png_goes_as_its_file_only_to_a_terminal_that_decodes_it() -> None:
         "1 PIC-F-PNG 1- LSHIFT _UP-FORMATS!",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
         '_UP-D 0 _UP-PIXELS _UP-D UPICSN-COPY-BYTES@ UPICSN-PULL ." PULL=" . CR',
-        # The guest decodes no PNG, so with no terminal to decode it the
-        # copy it is asked for fails.
+        # A terminal that decodes no PNG gets a copy the guest decodes.
         "0 _UP-FORMATS!",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SERVICE",
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
-        '." REASON=" _UP-D UPICSN-REASON@ . CR',
     ])
     shown = _shows(output)
-    file, refused = shown[0], shown[1]
-    assert (file["ST"], file["FMT"]) == (_constant(runtime, "UPICSN-C-READY"),
-                                         _constant(runtime, "PIC-F-PNG"))
+    file, copy = shown[0], shown[1]
+    ready = _constant(runtime, "UPICSN-C-READY")
+    assert (file["ST"], file["FMT"]) == (ready, _constant(runtime, "PIC-F-PNG"))
     assert (file["CW"], file["CH"], file["CU"]) == (50, 30, len(png))
     assert re.search(r"PULL=(\d+)", output).group(1) == str(_constant(runtime, "UPICSN-S-OK"))
     runtime.execute("_UP-PIXELS")
     assert runtime.memory.read_bytes(runtime.main_context.data.pop(), len(png)) == png
-    assert refused["ST"] == _constant(runtime, "UPICSN-C-FAILED")
-    assert refused["FMT"] == _constant(runtime, "PIC-F-RGBA8")
-    assert re.search(r"REASON=(\d+)", output).group(1) == str(
-        _constant(runtime, "PIC-R-UNSUPPORTED"))
+    assert (copy["ST"], copy["FMT"]) == (ready, _constant(runtime, "PIC-F-RGBA8"))
+    assert copy["CU"] == copy["CW"] * copy["CH"] * 4 and copy["CW"] <= 50
 
 
 def test_a_capture_claims_the_pictures_the_rich_side_takes() -> None:

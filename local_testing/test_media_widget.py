@@ -20,7 +20,7 @@ from PIL import Image
 
 import qoi_codec
 from forth_dependencies import dependency_order
-from test_media import _gradient, _noise, _scaled
+from test_media import _gradient, _interlaced, _noise, _png, _scaled
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
 from simulator.platform import create_one_core_address_space
 from simulator.runtime import MegaForthRuntime
@@ -261,8 +261,9 @@ def _free_lines() -> list[str]:
         ([[(255, 0, 0, 128), (0, 255, 0, 0)] * 3] * 4, 2, 6),  # blended, and holes
     ),
 )
-def test_a_picture_draws_the_model_in_blocks(rows, cell_rows, cols) -> None:
-    data = qoi_codec.encode(rows)
+@pytest.mark.parametrize("encode", (qoi_codec.encode, _png), ids=("qoi", "png"))
+def test_a_picture_draws_the_model_in_blocks(rows, cell_rows, cols, encode) -> None:
+    data = encode(rows)
     output = _run(_picture_lines(len(data), cell_rows, cols) + _free_lines(), data)
     assert "PENDING=-1 WORK=-1 " in output and "AFTER=0 0 " in output, output[-2000:]
     assert _cells(output) == _expected_cells(rows, cols, cell_rows)
@@ -296,7 +297,8 @@ def test_a_picture_says_it_is_loading_until_it_is_ready() -> None:
 @pytest.mark.parametrize(
     ("data", "message"),
     (
-        (b"\x89PNG\r\n\x1a\n" + bytes(40), "This picture's format can't be shown yet"),
+        (b"\x89PNG\r\n\x1a\n" + bytes(40), "The picture is damaged"),
+        (b"GIF89a" + bytes(40), "This picture's format can't be shown yet"),
         (b"qoif" + struct.pack(">II", 0, 4) + bytes((4, 0)) + bytes(8),
          "The picture is damaged"),
         (qoi_codec.encode(_gradient(12, 8))[:-3], "The picture is damaged"),
@@ -331,10 +333,10 @@ def _pillow(fmt: str, size=(37, 21)) -> bytes:
     return out.getvalue()
 
 
-@pytest.mark.parametrize(("fmt", "number"), (("PNG", 3), ("JPEG", 4)))
+@pytest.mark.parametrize(("fmt", "number"), (("JPEG", 4),))
 def test_a_picture_file_the_guest_cannot_decode_shows_its_format_and_size(
         fmt, number) -> None:
-    """CELL decodes only QOI.  A PNG or JPEG shows what it is, and decodes
+    """CELL decodes QOI and PNG.  A JPEG shows what it is, and decodes
     nothing, while a rich terminal that decodes it may take the file."""
 
     data = _pillow(fmt)
@@ -778,8 +780,8 @@ def test_a_picture_file_decodes_from_the_service_and_gives_everything_back() -> 
     assert "CLEARED=0 " in output and "FREED=0 " in output
 
 
-@pytest.mark.parametrize(("fmt", "kind"), (("PNG", PNG), ("JPEG", JPEG)))
-def test_a_png_or_jpeg_file_is_shown_as_a_picture(fmt, kind) -> None:
+@pytest.mark.parametrize(("fmt", "kind"), (("JPEG", JPEG),))
+def test_a_jpeg_file_is_shown_as_a_picture(fmt, kind) -> None:
     data = _pillow(fmt, (120, 80))
     output = _run(_media_lines() + [
         f'{len(data)} S" /photo.{fmt.lower()}" MW-PUT',
@@ -793,6 +795,29 @@ def test_a_png_or_jpeg_file_is_shown_as_a_picture(fmt, kind) -> None:
     assert "VIEWW=-1 " in output and "PENDING=0 " in output
     assert _labels(output, 6, 36) == [f"photo.{fmt.lower()}", f"{fmt}, 120 × 80"]
     assert "FREED=0 " in output
+
+
+def test_a_png_file_decodes_from_the_service_as_a_qoi_file_does() -> None:
+    rows = _gradient(50, 40)
+    data = _png(rows)
+    output = _run(_media_lines() + [
+        f'{len(data)} S" /photo.png" MW-PUT',
+        _open("/photo.png"), _state(),
+        "MW-W @ MW-DRAW",
+        'MW-W @ MW-MEDIA-SERVICE ." SLICES=" .',
+        "MW-W @ MW-DRAW", "6 36 MW-DUMP",
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], data)
+    assert f"VIEW={VIEW_PICTURE} KIND={PNG} NOTE={NOTE_NONE} " in output, output[-2000:]
+    assert _cells(output) == _expected_cells(rows, 36, 6)
+    assert "FREED=0 " in output
+
+
+def test_an_interlaced_png_shows_what_it_is() -> None:
+    data = _interlaced(_png(_gradient(30, 20)))
+    output = _run(_picture_lines(len(data), 3, 44, alt="photo") + _free_lines(), data)
+    assert _labels(output, 3, 44) == ["photo", "PNG, 30 × 20"], output[-2000:]
+    assert "HELD=0 " in output
 
 
 def test_focus_and_keys_go_to_the_text_view() -> None:
@@ -819,10 +844,10 @@ def test_focus_and_keys_go_to_the_text_view() -> None:
 def test_a_picture_the_rich_side_could_not_send_says_why(reason, message) -> None:
     """When the rich side cannot send a picture because of the picture
     itself, the widget remembers why until it is given another source.  The
-    rich side takes it no more, and CELL, which decodes no PNG, says why in
+    rich side takes it no more, and CELL, which decodes no JPEG, says why in
     place of what the picture is.  Another source may be sent again."""
 
-    data = _pillow("PNG")
+    data = _pillow("JPEG")
     output = _run(_picture_lines(len(data), 3, 44, alt="photo", service=False) + [
         "-1 MW-W @ PICT-CLAIM! MW-W @ MW-DRAW",
         '." TAKEN=" MW-W @ PICT-CLAIMED? . MW-W @ PICT-RICH-FAILED@ .',
@@ -851,7 +876,7 @@ def test_a_picture_the_rich_side_could_not_send_says_why(reason, message) -> Non
     assert "CHANGED=-1 " in failed
     assert _labels(failed, 3, 44) == ["photo", message]
     assert f"KEPT={code} " in again and "AGAIN=0 " in again
-    assert _labels(again, 3, 44) == ["again", "PNG, 37 × 21"]
+    assert _labels(again, 3, 44) == ["again", "JPEG, 37 × 21"]
     assert "HELD=0 " in again
 
 

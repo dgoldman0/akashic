@@ -27,7 +27,7 @@ Each view is a canonical widget the media widget draws through
 the same canonical widgets it sees anywhere else: in UIDL a `<media>`
 element showing text is captured as a `TEXT_AREA`, exactly as a
 `<textarea>` is. Focus and keys go to the view shown. HTML shows as its
-text for now. CELL decodes QOI pictures and shows a PNG's or JPEG's format
+text for now. CELL decodes QOI and PNG pictures and shows a JPEG's format
 and size; a rich terminal that decodes the file shows the picture.
 
 The facts view says the file's name, its kind and size (for example

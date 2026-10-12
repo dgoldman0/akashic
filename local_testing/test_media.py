@@ -11,11 +11,14 @@ it took.  Every run checks the data stack is balanced.
 
 from __future__ import annotations
 
+import io
 import random
 import re
 import struct
+import zlib
 
 import pytest
+from PIL import Image
 
 import qoi_codec
 from forth_snapshot import ForthSnapshot, program_output
@@ -210,8 +213,18 @@ def _scaled(rows, mw: int, mh: int) -> tuple[int, int, bytes]:
     return ow, oh, bytes(out)
 
 
-def _picture(rows, mw: int, mh: int, *, budget: int = 1 << 30, memory: int = 0):
-    data = qoi_codec.encode(rows)
+def _png(rows) -> bytes:
+    """ROWS as an RGBA PNG, as Pillow writes one."""
+
+    image = Image.frombytes("RGBA", (len(rows[0]), len(rows)), qoi_codec.rgba_bytes(rows))
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
+
+
+def _picture(rows, mw: int, mh: int, *, budget: int = 1 << 30, memory: int = 0,
+             encode=qoi_codec.encode):
+    data = encode(rows)
     width, height, expected = _scaled(rows, mw, mh)
     lines = [
         f"{memory} MT-MSRC-INIT",
@@ -288,7 +301,7 @@ def _start_only(data: bytes, mw: int = 10, mh: int = 10, memory: int = 0) -> str
 @pytest.mark.parametrize(
     ("data", "bound", "reason"),
     (
-        (b"\x89PNG\r\n\x1a\n" + bytes(40), (10, 10), R_UNSUPPORTED),
+        (b"\x89PNG\r\n\x1a\n" + bytes(40), (10, 10), R_DAMAGED),
         (b"plain text", (10, 10), R_UNSUPPORTED),
         (b"qoif" + struct.pack(">II", 0, 4) + bytes((4, 0)) + bytes(8), (10, 10), R_DAMAGED),
         (b"qoif" + bytes(3), (10, 10), R_DAMAGED),
@@ -299,6 +312,48 @@ def test_a_copy_that_cannot_start_says_why_and_holds_nothing(data, bound, reason
     output = _start_only(data, *bound)
     assert "START=3 " in output and "STATE=3 " in output, output
     assert f"R={reason} " in output and "HELD=0 " in output
+
+
+@pytest.mark.parametrize(
+    ("rows", "bound"),
+    (
+        (_gradient(17, 9), (100, 100)),
+        (_gradient(40, 30), (10, 10)),
+        (_noise(23, 19, 5), (23, 4)),
+    ),
+)
+def test_a_png_copy_matches_the_model(rows, bound) -> None:
+    """A PNG makes the same copy as the same picture in QOI, and its
+    decoder goes back with the other work buffers."""
+
+    output, pixels, width, height, expected = _picture(rows, *bound, encode=_png)
+    assert "START=1 " in output and "STATE=2 " in output, output
+    assert f"HELD={width * height * 4} " in output and "FREED=0 " in output
+    assert pixels == expected
+
+
+def _interlaced(png: bytes) -> bytes:
+    ihdr = bytearray(png[16:29])
+    ihdr[12] = 1
+    chunk = b"IHDR" + bytes(ihdr)
+    return png[:12] + chunk + struct.pack(">I", zlib.crc32(chunk)) + png[33:]
+
+
+def test_png_files_a_copy_cannot_read_say_why() -> None:
+    png = _png(_gradient(12, 8))
+    output = _start_only(_interlaced(png))
+    assert "START=3 " in output and f"R={R_UNSUPPORTED} " in output, output
+    idat = png.index(b"IDAT")
+    damaged = bytearray(png)
+    damaged[idat + 5] ^= 0x10
+    for broken in (bytes(damaged), png[: len(png) // 2], png[:-12]):
+        output = _start_only(broken)
+        assert "START=1 " in output and "STATE=3 " in output, output
+        assert f"R={R_DAMAGED} " in output and "HELD=0 " in output
+    # Room for the input chunk and the rows, not for the decoder.
+    output = _start_only(png, 12, 8, memory=4096 + 12 * 4 + 12 * 8 * 4 + 64)
+    assert "START=3 " in output and f"R={R_MEMORY} " in output, output
+    assert "HELD=0 " in output
 
 
 def test_short_files_and_wrong_end_markers_are_damaged() -> None:

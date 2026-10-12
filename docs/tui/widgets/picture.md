@@ -29,9 +29,10 @@ rich copy no larger than the pixels the widget's area covers there
 the widget's: it goes when the rich side asks for another size, when the
 widget shows another picture, and when the widget is freed.
 
-CELL decodes only QOI. A PNG or JPEG shows its format and size in CELL,
-under its text alternative, for example `PNG, 1920 × 1080`, and decodes
-nothing.
+CELL decodes QOI and PNG, the files a picture copy decodes (`PIC-DECODES?`).
+A JPEG, or a file the copy cannot read such as an interlaced PNG, shows its
+format and size in CELL, under its text alternative, for example
+`JPEG, 1920 × 1080`, and decodes nothing.
 
 ### While the rich side shows the picture
 

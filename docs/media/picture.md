@@ -36,9 +36,9 @@ height a later segment gives is unsupported.
 |---|---|
 | **Never at full size** | The copy keeps the picture's shape, is never larger than the picture, and is scaled down by averaging while it decodes. Only one source row and one row of sums are held besides the copy. |
 | **Bounded steps** | `PIC-STEP` decodes about a budget of source pixels, at least one row, and returns, so its caller stays responsive. |
-| **Caller memory** | Every buffer comes from the caller's memory source (`utils/memory-source.f`), sized exactly: one input chunk, one source row, one row of sums when scaling, and the copy. The chunk, row and sums go back once the copy is ready; `PIC-FREE` gives back the rest. A refusal fails the copy cleanly. |
+| **Caller memory** | Every buffer comes from the caller's memory source (`utils/memory-source.f`), sized exactly: one input chunk, one source row, one row of sums when scaling, for a PNG its [decoder](../render/png.md), and the copy. The chunk, row, sums and decoder go back once the copy is ready; `PIC-FREE` gives back the rest. A refusal fails the copy cleanly. |
 | **Alpha-weighted** | Each colour is averaged weighted by its alpha, so transparent pixels do not darken their neighbours; a fully transparent area stays transparent black. |
-| **Formats** | QOI only so far. Any other file fails as unsupported. |
+| **Formats** | QOI and PNG decode. A JPEG, an interlaced PNG and any other file fail as unsupported. |
 
 ## Size
 
@@ -60,6 +60,7 @@ or 0 when `Σa` is 0.
 |---|---|---|
 | `PIC-SIZE` | `( -- bytes )` | The record, which its caller owns, eight-byte aligned. |
 | `PIC-FILE` | `( source -- format width height reason )` | Which picture the file holds: `PIC-F-QOI`, `-PNG` or `-JPEG`, its size and `PIC-R-NONE`; or `0 0 0` and why not: `-UNSUPPORTED`, `-DAMAGED`, `-MEMORY` (a side of 2^31 or more), `-READ` or `-INVALID`. |
+| `PIC-DECODES?` | `( format -- flag )` | Whether a copy decodes files of `format`: QOI and PNG. |
 | `PIC-START` | `( max-w max-h source msrc pic -- state )` | Read the header from `source` and take the memory. `PENDING`, or `FAILED`. |
 | `PIC-STEP` | `( budget pic -- state )` | Decode some more. `PENDING`, `READY`, or `FAILED`; a copy that is not pending returns its state and does nothing. |
 | `PIC-FREE` | `( pic -- )` | Give back everything; the record is empty. |

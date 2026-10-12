@@ -6,7 +6,7 @@
 \  it through the matching view: a picture widget for QOI, PNG and JPEG
 \  pictures, a document view for a Markdown document, a text area for
 \  other text, and the file's facts (name, kind and size) for anything
-\  else.  The picture widget decodes QOI for CELL and shows a PNG's or
+\  else.  The picture widget decodes QOI and PNG for CELL and shows a
 \  JPEG's format and size there; a rich terminal that decodes the file
 \  shows the picture itself.  Each view is a canonical widget drawn the
 \  ordinary way (WDG-DRAW-IN), so a rich terminal sees the same views it

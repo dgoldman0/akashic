@@ -14,8 +14,9 @@
 \  The widget reads the file's format and the picture's size when it is
 \  given a source (PIC-FILE), so a rich terminal that decodes that format
 \  can take the file as it is (PICT-FILE@, PICT-FILE-READ), with no copy
-\  made.  CELL decodes only QOI; another picture file shows its format and
-\  size in a label.
+\  made.  CELL decodes the files a picture copy decodes, QOI and PNG; any
+\  other picture file, or one of those the copy cannot read, such as an
+\  interlaced PNG, shows its format and size in a label.
 \
 \  The rich side says whether it shows the picture, or is taking it to
 \  show it (PICT-CLAIM!).  While it does, CELL shows the picture's name and
@@ -28,7 +29,7 @@
 \  itself, the terminal refusing its bytes as damaged or its file failing
 \  to read, it says why (PICT-RICH-FAILED!).  It then takes the picture no
 \  more until the widget is given another source, and CELL shows it: from
-\  its CELL copy for QOI, and otherwise with the reason.
+\  its CELL copy for a file CELL decodes, and otherwise with the reason.
 \
 \  The rich side also says which file formats it takes (PICT-RICH-FORMATS!).
 \  A picture of one of them shows what it is from its first draw, before
@@ -526,9 +527,9 @@ VARIABLE _PD-FACTS-U
     ELSE 0 THEN AND IF
         -1 _PD-W @ _PICT-SHOWN!  _PD-FACTS EXIT
     THEN
-    \ The guest decodes only QOI; another picture file shows what it is,
-    \ or why the rich side could not show it.
-    _PD-W @ _PICT-O-FILE-FORMAT _PICT@ DUP 0<> SWAP PIC-F-QOI <> AND IF
+    \ A picture file CELL does not decode shows what it is, or why the
+    \ rich side could not show it.
+    _PD-W @ _PICT-O-FILE-FORMAT _PICT@ DUP 0<> SWAP PIC-DECODES? 0= AND IF
         _PD-W @ _PICT-O-FAILED _PICT@ ?DUP IF _PD-REASON EXIT THEN
         _PD-FACTS EXIT
     THEN
@@ -542,7 +543,13 @@ VARIABLE _PD-FACTS-U
     _PD-W @ _PICT-O-CELL _PICT@ DUP _PD-PIC !
     PIC-STATE@ CASE
         PIC-ST-READY   OF _PD-READY ENDOF
-        PIC-ST-FAILED  OF _PD-PIC @ PIC-REASON@ _PD-REASON ENDOF
+        PIC-ST-FAILED  OF
+            \ A file the copy cannot read, such as an interlaced PNG,
+            \ shows what it is.
+            _PD-PIC @ PIC-REASON@ DUP PIC-R-UNSUPPORTED =
+            _PD-W @ _PICT-O-FILE-FORMAT _PICT@ 0<> AND IF DROP _PD-FACTS
+            ELSE _PD-REASON THEN
+        ENDOF
         >R S" Loading the picture" _PD-LABEL R>
     ENDCASE ;
 

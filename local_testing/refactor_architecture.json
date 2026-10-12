@@ -1,13 +1,13 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "png-20261012",
-    "commit": "4169a0a97bd5ebb37de740689f60f448046e934e",
-    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, the sandbox job service lending jobs to worker cores, the media layer below the widgets (sources, file kinds, pictures and documents), the Markdown reader with the HTML entity list, the picture, media and document widgets, the shared rule for the path a document's link names, the native document family with its DOC1 packer, the document view's capture with the producer's document lowering, the document view's figures described to the rich side as clipped pictures, Adler-32 beside the CRCs, the resumable inflater, and the resumable PNG decoder",
+    "name": "png-pictures-20261012",
+    "commit": "74f3806288e0c546967bf485bfe458c4c478f211",
+    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, the sandbox job service lending jobs to worker cores, the media layer below the widgets (sources, file kinds, pictures and documents), the Markdown reader with the HTML entity list, the picture, media and document widgets, the shared rule for the path a document's link names, the native document family with its DOC1 packer, the document view's capture with the producer's document lowering, the document view's figures described to the rich side as clipped pictures, Adler-32 beside the CRCs, the resumable inflater, the resumable PNG decoder, and PNG picture copies",
     "expected": {
       "module_count": 652,
-      "resolved_require_occurrence_count": 2326,
-      "unique_resolved_edge_count": 2326,
+      "resolved_require_occurrence_count": 2327,
+      "unique_resolved_edge_count": 2327,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -15,7 +15,7 @@
       "provided_issue_count": 0,
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
-      "graph_sha256": "85fa294e487ed383d0fcd21f25d7719ace3fb5c7a3096156cae8147c75cbeefa",
+      "graph_sha256": "2e0eec4def2848572e0cecc87b973ca525fe7b485b87057af47092db845167d2",
       "state_sha256": "b7bda538d9a183b9a63c7d90e7e4bc5ee5608d4f3a198b44cf80fa56e89c0aeb",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",

@@ -17,14 +17,17 @@
 \  back once the copy is ready; PIC-FREE gives back the rest.
 \
 \  Averaging weights each colour by its alpha, so transparent pixels do
-\  not darken their neighbours.  Only QOI files decode so far; any other
-\  file fails as unsupported.  PIC-FILE reads a QOI, PNG or JPEG file's
-\  format and size without decoding it.
+\  not darken their neighbours.  QOI and PNG files decode, a PNG with a
+\  decoder its copy takes from the memory source while it decodes; a
+\  JPEG, an interlaced PNG and any other file fail as unsupported.
+\  PIC-FILE reads a QOI, PNG or JPEG file's format and size without
+\  decoding it, and PIC-DECODES? says which formats a copy decodes.
 \
 \  Prefix: PIC- (public), _PIC- (private)
 \
 \  Public API:
 \    PIC-SIZE           ( -- bytes )
+\    PIC-DECODES?       ( format -- flag )
 \    PIC-FIT            ( sw sh mw mh -- ow oh )
 \    PIC-FILE           ( source -- format width height reason )
 \    PIC-START          ( max-w max-h source msrc pic -- state )
@@ -40,6 +43,7 @@
 \ =====================================================================
 
 REQUIRE ../render/qoi.f
+REQUIRE ../render/png.f
 REQUIRE ../utils/memory-source.f
 REQUIRE source.f
 
@@ -91,9 +95,14 @@ PROVIDED akashic-media-picture
 120 CONSTANT _PIC.OUT         \ the copy
 128 CONSTANT _PIC.Y           \ source rows done
 136 CONSTANT _PIC.OY          \ output row the sums hold, or -1
-144 CONSTANT _PIC.HEADER      \ the file's first bytes, 16 bytes
-160 CONSTANT _PIC.DEC
+144 CONSTANT _PIC.HEADER      \ the file's first bytes, 40 bytes
+184 CONSTANT _PIC.FORMAT      \ PIC-F-QOI or PIC-F-PNG
+192 CONSTANT _PIC.PNG         \ a PNG decoder while one decodes, or 0
+200 CONSTANT _PIC.DEC         \ the QOI decoder
 _PIC.DEC QOI-DEC-SIZE + CONSTANT PIC-SIZE
+
+\ PIC-DECODES? ( format -- flag )   A copy decodes files of FORMAT.
+: PIC-DECODES?  ( format -- flag )  DUP PIC-F-QOI = SWAP PIC-F-PNG = OR ;
 
 VARIABLE _PIC-P      \ the copy being worked on
 
@@ -112,6 +121,7 @@ VARIABLE _PIC-P      \ the copy being worked on
     ELSE 2DROP THEN ;
 
 : _PIC-GIVE-WORK  ( -- )
+    _PIC.SW _PIC@ PNG-DEC-SIZE _PIC.PNG _PIC-GIVE
     _PIC-IN-BYTES _PIC.IN _PIC-GIVE
     _PIC.SW _PIC@ 4 * _PIC.ROW _PIC-GIVE
     _PIC.OW _PIC@ _PIC-SUM-BYTES * _PIC.SUMS _PIC-GIVE ;
@@ -280,16 +290,26 @@ VARIABLE _PS-MH
     DUP C@ 113 = OVER 1+ C@ 111 = AND OVER 2 + C@ 105 = AND
     SWAP 3 + C@ 102 = AND ;                       \ "qoif"
 
-\ Read and check the header; on success the picture's size is set.
+\ Read and check the header; on success the picture's format and size
+\ are set.
 : _PIC-HEADER?  ( -- reason )
-    _PIC-SOURCE MEDSRC-SIZE@ QOI-HDR-SIZE MIN
+    _PIC-SOURCE MEDSRC-SIZE@ PNG-HDR-SIZE MIN
     _PIC-P @ _PIC.HEADER + OVER 0 _PIC-SOURCE MEDSRC-READ? IF
         DROP PIC-R-READ EXIT
+    THEN                                                    ( u )
+    _PIC-P @ _PIC.HEADER + OVER QOI-HDR-SIZE MIN QOI-HEADER IF
+        2DROP _PIC.SH _PIC! _PIC.SW _PIC!  DROP  PIC-F-QOI
+    ELSE
+        _PIC-P @ _PIC.HEADER + SWAP PNG-HEADER              ( w h status )
+        DUP PNG-H-NOT = IF
+            DROP 2DROP
+            _PIC-QOI-MAGIC? IF PIC-R-DAMAGED ELSE PIC-R-UNSUPPORTED THEN EXIT
+        THEN
+        DUP PNG-H-DAMAGED = IF DROP 2DROP PIC-R-DAMAGED EXIT THEN
+        PNG-H-UNSUPPORTED = IF 2DROP PIC-R-UNSUPPORTED EXIT THEN
+        _PIC.SH _PIC! _PIC.SW _PIC!  PIC-F-PNG
     THEN
-    _PIC-P @ _PIC.HEADER + SWAP QOI-HEADER 0= IF
-        _PIC-QOI-MAGIC? IF PIC-R-DAMAGED ELSE PIC-R-UNSUPPORTED THEN EXIT
-    THEN
-    2DROP _PIC.SH _PIC! _PIC.SW _PIC!
+    _PIC.FORMAT _PIC!
     \ A side of 2^31 pixels or more needs more memory than any machine has.
     _PIC.SW _PIC@ 0x7FFFFFFF U> _PIC.SH _PIC@ 0x7FFFFFFF U> OR IF
         PIC-R-MEMORY EXIT
@@ -325,8 +345,17 @@ VARIABLE _PS-MH
     _PIC.OW _PIC@ _PIC.OH _PIC@ * 4 * _PIC.OUT _PIC-HOLD 0= IF
         PIC-R-MEMORY _PIC-FAIL EXIT
     THEN
-    _PIC.SW _PIC@ _PIC.SH _PIC@ _PIC-P @ _PIC.DEC + QOI-DEC-INIT
-    QOI-HDR-SIZE _PIC.OFFSET _PIC!
+    _PIC.FORMAT _PIC@ PIC-F-PNG = IF
+        \ The PNG decoder reads the file from its first byte.
+        _PIC.SW _PIC@ PNG-DEC-SIZE _PIC.PNG _PIC-HOLD 0= IF
+            PIC-R-MEMORY _PIC-FAIL EXIT
+        THEN
+        _PIC.SW _PIC@ _PIC.PNG _PIC@ PNG-DEC-INIT
+        0 _PIC.OFFSET _PIC!
+    ELSE
+        _PIC.SW _PIC@ _PIC.SH _PIC@ _PIC-P @ _PIC.DEC + QOI-DEC-INIT
+        QOI-HDR-SIZE _PIC.OFFSET _PIC!
+    THEN
     -1 _PIC.OY _PIC!
     PIC-ST-PENDING DUP _PIC.STATE _PIC! ;
 
@@ -435,7 +464,13 @@ VARIABLE _PST-BUDGET
         _PIC-REFILL ?DUP IF _PIC-FAIL EXIT THEN
         _PIC.IN _PIC@ _PIC.IN-P _PIC@ +
         _PIC.IN-U _PIC@ _PIC.IN-P _PIC@ -
-        _PIC.ROW _PIC@ _PIC-P @ _PIC.DEC + QOI-DEC-FEED      ( used status )
+        _PIC.ROW _PIC@
+        \ The two decoders share their statuses.
+        _PIC.FORMAT _PIC@ PIC-F-PNG = IF
+            _PIC.PNG _PIC@ PNG-DEC-FEED
+        ELSE
+            _PIC-P @ _PIC.DEC + QOI-DEC-FEED
+        THEN                                                  ( used status )
         SWAP _PIC.IN-P _PIC@ + _PIC.IN-P _PIC!
         CASE
             QOI-S-ROW OF
