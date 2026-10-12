@@ -366,3 +366,29 @@ def test_with_no_window_each_feed_s_room_follows_the_output(inflater):
     assert inflater.call("INFL-FEED", inflater.input + 2 + used, len(stream) - 2 - used,
                          inflater.output + 1_001, 1_000, inflater.record) == (0, 0, BAD)
     assert inflater.call("INFL-REASON@", inflater.record) == (inflater.reasons["WINDOW"],)
+
+
+def test_with_no_window_the_output_may_move(inflater):
+    data = _text(20_000, seed=12)
+    stream = _zlib(data, 6)
+    inflater.runtime.memory.write_bytes(inflater.input, stream)
+    inflater.call("INFL-INIT", 0, 0, ZLIB, inflater.record)
+    base, used_total, given_total = inflater.output, 0, 0
+    room = 1_000
+    while True:
+        used, given, status = inflater.call(
+            "INFL-FEED", inflater.input + used_total, len(stream) - used_total,
+            base + given_total, room, inflater.record)
+        used_total += used
+        given_total += given
+        if status == DONE:
+            break
+        assert status == FULL
+        # Grow: move everything given so far 64 KB further on.
+        moved = base + 65_536
+        inflater.runtime.memory.write_bytes(
+            moved, inflater.runtime.memory.read_bytes(base, given_total))
+        base = moved
+        inflater.call("INFL-MOVED", base, inflater.record)
+        room *= 2
+    assert inflater.runtime.memory.read_bytes(base, given_total) == data

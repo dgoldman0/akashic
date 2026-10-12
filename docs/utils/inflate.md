@@ -22,6 +22,7 @@ REQUIRE inflate.f
 | `INFL-REASON@` | `( infl -- reason )` | Why a stream is damaged, or 0. |
 | `INFL-TOTAL@` | `( infl -- bytes )` | Bytes the stream has given so far. |
 | `INFL-DONE?` | `( infl -- flag )` | Whether the stream has ended with its sum matching. |
+| `INFL-MOVED` | `( base infl -- )` | With no window, the caller has moved the whole output to `base`. |
 
 The wrapper is `INFL-W-RAW`, `INFL-W-ZLIB` or `INFL-W-GZIP`. A zlib
 stream's Adler-32 is checked; a gzip member's header fields are skipped, its
@@ -38,7 +39,8 @@ its buffer, gives no window: a window of 0 bytes. The output is then the
 window, and a reference reads back from it. Each feed's room must begin
 right after the bytes the stream has given so far; before it gives one, any
 room begins it. A feed whose room begins anywhere else finds the stream
-damaged, for its window.
+damaged, for its window. A caller that grows its buffer by moving the whole
+output elsewhere says where it now begins with `INFL-MOVED`.
 
 ## Statuses
 

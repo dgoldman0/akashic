@@ -11,6 +11,7 @@
 \   INFL-REASON@  ( infl -- reason )   why a stream is damaged, or 0
 \   INFL-TOTAL@   ( infl -- bytes )    bytes the stream has given so far
 \   INFL-DONE?    ( infl -- flag )     whether the stream has ended whole
+\   INFL-MOVED    ( base infl -- )     with no window, the output has moved
 \
 \  Wrappers: INFL-W-RAW (bare deflate), INFL-W-ZLIB (RFC 1950, its
 \  Adler-32 checked), INFL-W-GZIP (RFC 1952, one member, its CRC-32 and
@@ -34,7 +35,8 @@
 \  size of 0.  The output is then the window: each feed's room begins
 \  right after the bytes the stream has given, and before it gives one,
 \  any room begins it.  A feed whose room begins anywhere else finds the
-\  stream bad, for its window.
+\  stream bad, for its window.  A caller that moves the whole output,
+\  to grow its buffer, says where it now begins with INFL-MOVED.
 \
 \  Huffman codes decode through lookup tables built in the record for
 \  each block: a code of up to nine bits for a literal or length, and of
@@ -747,6 +749,12 @@ VARIABLE _IFL-OFF  VARIABLE _IFL-LEN
 \ INFL-DONE? ( infl -- flag )   Whether the stream has ended, its sum
 \   matching.
 : INFL-DONE?  ( infl -- flag )  _IF.STATUS @ INFL-S-DONE = ;
+
+\ INFL-MOVED ( base infl -- )
+\   With no window: the caller has moved the whole output, which now
+\   begins at BASE.  A decoder with a window ignores it.
+: INFL-MOVED  ( base infl -- )
+    DUP _IF.MASK @ _IF-NO-WINDOW = IF _IF.WIN ! ELSE 2DROP THEN ;
 
 : _IF-LOAD  ( -- )
     0 _IF-PULLED !  0 _IF-PEND !
