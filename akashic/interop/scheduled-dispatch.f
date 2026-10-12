@@ -218,6 +218,7 @@ CREATE _SDSP-DIGEST 32 ALLOT
 \    asked   ( ask-id response context -- status )
 \    check   ( request context -- standing status )
 \    models  ( buffer capacity context -- bytes status )
+\    describe ( locator facts context -- status )
 
 0x3154504F43505344 CONSTANT _SDSP-MAGIC   \ "DSPCOPT1"
 
@@ -231,7 +232,8 @@ CREATE _SDSP-DIGEST 32 ALLOT
  56 CONSTANT _SDSP-C-ASKED
  64 CONSTANT _SDSP-C-CHECK
  72 CONSTANT _SDSP-C-MODELS
- 80 CONSTANT SDSP-CLIENT-SIZE
+ 80 CONSTANT _SDSP-C-DESCRIBE
+ 88 CONSTANT SDSP-CLIENT-SIZE
 
 : SDSP-C.SUBMIT-XT  ( client -- a ) _SDSP-C-SUBMIT + ;
 : SDSP-C.STATUS-XT  ( client -- a ) _SDSP-C-STATUS + ;
@@ -240,6 +242,7 @@ CREATE _SDSP-DIGEST 32 ALLOT
 : SDSP-C.ASKED-XT   ( client -- a ) _SDSP-C-ASKED + ;
 : SDSP-C.CHECK-XT   ( client -- a ) _SDSP-C-CHECK + ;
 : SDSP-C.MODELS-XT  ( client -- a ) _SDSP-C-MODELS + ;
+: SDSP-C.DESCRIBE-XT  ( client -- a ) _SDSP-C-DESCRIBE + ;
 
 \ A client for CONTEXT with no words yet.
 : SDSP-CLIENT-INIT  ( context client -- )
@@ -287,6 +290,46 @@ CREATE _SDSP-DIGEST 32 ALLOT
 : SDSP-MODELS  ( buffer capacity client -- bytes status )
     _SDSP-C-MODELS _SDSP-WORD ?DUP IF EXECUTE EXIT THEN
     2DROP 0 SDSP-S-UNAVAILABLE ;
+
+\ ---------------------------------------------------------------------
+\  What a document's owner says of it
+\ ---------------------------------------------------------------------
+\  DESCRIBE asks the owner of the document a locator names what it is
+\  now: its title, into the caller's buffer, its current revision, and
+\  its size.  A title longer than the buffer answers SMALL with its
+\  length, and UNAVAILABLE says the owner could not be asked or does not
+\  have the document.
+
+ 0 CONSTANT _SDSP-F-TITLE-A
+ 8 CONSTANT _SDSP-F-TITLE-CAP
+16 CONSTANT _SDSP-F-TITLE-U
+24 CONSTANT _SDSP-F-REVISION
+32 CONSTANT _SDSP-F-SIZE
+40 CONSTANT SDSP-FACTS-SIZE
+
+: SDSP-F.TITLE-U   ( facts -- a ) _SDSP-F-TITLE-U + ;
+: SDSP-F.REVISION  ( facts -- a ) _SDSP-F-REVISION + ;
+: SDSP-F.SIZE      ( facts -- a ) _SDSP-F-SIZE + ;
+
+\ Facts with a title buffer of CAP bytes at ADDRESS, and nothing known.
+: SDSP-FACTS-INIT  ( address cap facts -- )
+    DUP SDSP-FACTS-SIZE 0 FILL
+    TUCK _SDSP-F-TITLE-CAP + ! _SDSP-F-TITLE-A + ! ;
+
+\ The title, as far as the buffer holds it.
+: SDSP-FACTS-TITLE$  ( facts -- address length )
+    DUP _SDSP-F-TITLE-A + @ SWAP
+    DUP SDSP-F.TITLE-U @ SWAP _SDSP-F-TITLE-CAP + @ MIN ;
+
+\ Keeps the U bytes of title at ADDRESS: SMALL when they do not fit.
+: SDSP-FACTS-TITLE!  ( address u facts -- status )
+    2DUP SDSP-F.TITLE-U !
+    2DUP _SDSP-F-TITLE-CAP + @ > IF DROP 2DROP SDSP-S-SMALL EXIT THEN
+    _SDSP-F-TITLE-A + @ SWAP MOVE SDSP-S-OK ;
+
+: SDSP-DESCRIBE  ( locator facts client -- status )
+    _SDSP-C-DESCRIBE _SDSP-WORD ?DUP IF EXECUTE EXIT THEN
+    2DROP SDSP-S-UNAVAILABLE ;
 
 \ =====================================================================
 \  Model lists

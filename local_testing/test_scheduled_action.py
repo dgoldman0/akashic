@@ -82,6 +82,14 @@ VARIABLE TSTRU
     S" high" TD SACT-D.EFFORT SACT-D!
     0 0 TD SACT-D.TIER SACT-D!
     S" Summarize the news." TD SACT-D.PROMPT SACT-D! ;
+\ An exact locator of revision 3 of a Library document, and a draft that
+\ observes it.
+CREATE TLOC QLOC-SIZE ALLOT  CREATE TLOC-REF RREF-SIZE ALLOT
+TLOC-REF RREF-INIT  TLOC-REF RREF.ID 32 7 FILL
+CREATE TLOC-DIG 32 ALLOT  TLOC-DIG 32 9 FILL
+S" org.akashic.library" TLOC-REF 3 TLOC-DIG QLOC-DK-PROJECTION-CONTENT
+    S" org.akashic.library.text" TLOC QLOC-EXACT! DROP
+: T-DOC  ( -- ) T-DRAFT TLOC TD SACT-D.CONTEXT ! CAP-E-OBSERVE TD SACT-D.EFFECTS ! ;
 : T-ENC  ( -- status ) TD TO 8192 SACT-AGENT-ENCODE SWAP TOU ! ;
 : T-OK  ( -- status ) SACT-AGENT-RUN SACT-SCHEMA TO TOU @ SACT-OPERANDS-OK? ;
 \ The request in TQ for the encoded operands: store bytes 1, schedule
@@ -225,6 +233,29 @@ def test_a_reminder_takes_no_operands(forth):
 ])
 def test_malformed_operands_are_refused(forth, edit, status):
     lines = run(forth, [f"T-DRAFT T-ENC . {edit} T-OK . CR"])
+    assert lines == [[S_OK, status]]
+
+
+def test_a_run_may_observe_one_exact_document(forth):
+    lines = run(forth, [
+        "T-DOC T-ENC . TOU @ . TO SACT-O.FLAGS @ . TO SACT-O.EFFECTS @ . "
+        "TO SACT-O.CONTEXT QLOC-SIZE TLOC QLOC-SIZE COMPARE . "
+        "TO SACT-PROMPT$ S\" Summarize the news.\" COMPARE . T-OK . CR",
+    ])
+    assert lines == [[S_OK, len(operands()) + 320, 1, 1, 0, 0, S_OK]]
+
+
+@pytest.mark.parametrize("edit,status", [
+    ("0 TO SACT-O.EFFECTS !", S_CONTEXT),
+    ("CAP-E-OBSERVE CAP-E-MUTATE OR TO SACT-O.EFFECTS !", S_CONTEXT),
+    ("0 TO SACT-O.FLAGS !", S_CONTEXT),
+    ("0 TO SACT-O.CONTEXT QLOC.MAGIC !", S_CONTEXT),
+    ("QLOC-M-IDENTITY TO SACT-O.CONTEXT QLOC.MODE !", S_CONTEXT),
+    ("TOU @ 8 - TOU !", S_SHAPE),
+    ("TO SACT-O.CONTEXT TO - TOU !", S_CONTEXT),
+])
+def test_a_document_must_be_one_exact_locator(forth, edit, status):
+    lines = run(forth, [f"T-DOC T-ENC . {edit} T-OK . CR"])
     assert lines == [[S_OK, status]]
 
 

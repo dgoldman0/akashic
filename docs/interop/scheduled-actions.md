@@ -34,17 +34,17 @@ order, so one request has exactly one encoding:
 | Field | Rule |
 |---|---|
 | schema | 1 |
-| flags | `SACT-F-CONTEXT` only; refused until runs take context |
-| effects | 0 (observation only arrives with context) |
+| flags | `SACT-F-CONTEXT` when the run reads a document, else 0 |
+| effects | `CAP-E-OBSERVE` with a document, which the run only observes; else 0 |
 | time ms | positive |
-| disclosure bytes | positive, and at least the prompt's length, since the prompt is disclosed |
+| disclosure bytes | positive, and at least the prompt's length, since the prompt is disclosed; Daybook sets it to the prompt and the document |
 | output bytes | positive: how much of the reply is kept |
 | verbosity | 0 to 3, the Agent's `ARVERB-` values |
 | provider id | nonempty text without control characters |
 | model id | nonempty text without control characters |
 | effort id | text without control characters; empty when the model has none |
 | tier id | the same |
-| context locator | 320 bytes, present only with `SACT-F-CONTEXT` |
+| context locator | 320 bytes, present only with `SACT-F-CONTEXT`: one exact version of a document ([qualified locator](qualified-locator.md), exact-domain mode) |
 | prompt | nonempty UTF-8; tabs and line feeds are the only control characters |
 
 A schedule therefore names its model exactly; the run never falls back to
@@ -171,6 +171,17 @@ the client is missing, damaged, or lacks that word. Desk's
 | `SDSP-ASKED` | `( ask-id response client -- status )` | pending, allowed, refused, gone |
 | `SDSP-CHECK` | `( request client -- standing status )` | standing: approved, none, withdrawn, changed, another Practice, unavailable |
 | `SDSP-MODELS` | `( buffer capacity client -- bytes status )` | a model list, or small |
+| `SDSP-DESCRIBE` | `( locator facts client -- status )` | ok, small, invalid, unavailable |
+
+`SDSP-DESCRIBE` asks the owner of the document a locator names what it is
+now. It fills a facts record (`SDSP-FACTS-SIZE`, set up by
+`SDSP-FACTS-INIT ( address cap facts -- )` with a title buffer) with the
+title, the current revision (`SDSP-F.REVISION`) and the size
+(`SDSP-F.SIZE`). `SDSP-FACTS-TITLE$` reads the title back. A title longer
+than the buffer answers small, with its length in `SDSP-F.TITLE-U`; the
+resource contract bounds titles by `RCON-TITLE-MAX`, so a buffer that size
+always holds one. The broker answers it by attaching the document through
+its owner, describing it as Desk itself, and letting it go at once.
 
 ### Model lists
 

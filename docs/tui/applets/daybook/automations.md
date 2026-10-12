@@ -222,8 +222,24 @@ repeats and its zone, then these, in the view (`automation-view.f`):
 3. How many minutes it may run, and how many bytes of its reply it keeps:
    whole numbers above zero, as large as a cell holds.
 4. Its prompt, which may be any length and hold tabs and new lines. What
-   the run may disclose is exactly its prompt. With it the operands are
-   whole, and checked as the catalog checks them.
+   the run may disclose is exactly its prompt, and its document when it
+   reads one. With it the operands are whole, and checked as the catalog
+   checks them.
+
+A run may read one exact version of a document. Library's Schedule Agent
+Run command (Ctrl+G) sends the selected document's version to Daybook as
+the intent `agent-run.schedule`, which Daybook takes through its
+capability `daybook.agent-run.new` (input: a
+[qualified locator](../../../interop/qualified-locator.md) value) and
+begins a new Agent run with it, as Ctrl+G in Daybook does. Before the
+steps, `DBAV-DOCUMENT! ( locator view -- status )` names the document:
+the locator must name one exact version, and Desk's broker, asked through
+the service (`DBSVC-DESCRIBE`), must say what it is now. Otherwise the
+create does not begin, and `DBAV-S-DOCUMENT` says the document's owner
+cannot say what it is. The prompt page's heading names the document by
+its title (`DBAV-DOCUMENT$`). The operands then carry the locator, observe
+it as their only effect, and may disclose the prompt and the document's
+size as its owner said it.
 
 `DBAV-CREATE` then makes the schedule under the create's key, placing a
 start given as only a time at its next such time, and
@@ -239,7 +255,9 @@ when it runs, as `DBSVC-WHEN$` says it; when it runs next, or that it is
 paused, done or archived; and for an Agent run whether Daybook holds it
 approved, the model it names with its choices and its limits in the
 catalog's words (`SACT-SAY-MODEL`, `SACT-SAY-LIMITS`, which Desk's approval
-uses too), its provider, and its prompt exactly as stored. After them come
+uses too), its provider, the version of the document it reads, if any, and
+how much of it it may disclose (such as `Revision 3, up to 21 bytes`), and
+its prompt exactly as stored. After them come
 its items, newest first: when each was due, how many a missed item covers,
 how an Agent run stands or ended, whether it awaits review, and on a line
 of its own its run's summary.

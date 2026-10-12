@@ -68,7 +68,9 @@ _AR-RUN-CONV 8 + CONSTANT _AR-RUN-DESIGNATION
 _AR-RUN-DESIGNATION 8 + CONSTANT _AR-RUN-PRIOR
 _AR-RUN-PRIOR 8 + CONSTANT _AR-STOP-CAUSE
 _AR-STOP-CAUSE 8 + CONSTANT _AR-HOLD
-_AR-HOLD 8 + CONSTANT AGENT-RUNTIME-SIZE
+_AR-HOLD 8 + CONSTANT _AR-RUN-REFERENCE-A
+_AR-RUN-REFERENCE-A 8 + CONSTANT _AR-RUN-REFERENCE-U
+_AR-RUN-REFERENCE-U 8 + CONSTANT AGENT-RUNTIME-SIZE
 
 : ARUNTIME.PROVIDER       ( runtime -- a ) _AR-PROVIDER + ;
 : ARUNTIME.EVENTS         ( runtime -- a ) _AR-EVENTS + ;
@@ -98,6 +100,9 @@ _AR-HOLD 8 + CONSTANT AGENT-RUNTIME-SIZE
 : ARUNTIME.RUN-PRIOR      ( runtime -- a ) _AR-RUN-PRIOR + ;
 : ARUNTIME.STOP-CAUSE     ( runtime -- a ) _AR-STOP-CAUSE + ;
 : ARUNTIME.HOLD           ( runtime -- a ) _AR-HOLD + ;
+\ The reference a run in its own conversation starts with, while it starts.
+: ARUNTIME.RUN-REFERENCE-A ( runtime -- a ) _AR-RUN-REFERENCE-A + ;
+: ARUNTIME.RUN-REFERENCE-U ( runtime -- a ) _AR-RUN-REFERENCE-U + ;
 : ARUNTIME.ACCESS-PROFILE ( runtime -- profile ) _AR-ACCESS-PROFILE + ;
 : ARUNTIME.ACCESS-CANDIDATE ( runtime -- profile ) _AR-ACCESS-CANDIDATE + ;
 : ARUNTIME.ACCESS-POLICY-XT ( runtime -- a ) _AR-ACCESS-POLICY-XT + ;
@@ -620,6 +625,8 @@ CREATE _ARHB-ASSISTS _ARHB-MAX-PAIRS CELLS ALLOT
     _ARBT-R @ ARUNTIME.RUN-CONV @ IF 0 ELSE _ARBT-R @ ARUNTIME.TOOL-GATEWAY @ THEN
         _ARS-TURN @ ATURN.TOOL-GATEWAY !
     _ARBT-R @ ARUNTIME.RUN-DESIGNATION @ _ARS-TURN @ ATURN.DESIGNATION !
+    _ARBT-R @ ARUNTIME.RUN-REFERENCE-A @ _ARS-TURN @ ATURN.REFERENCE-A !
+    _ARBT-R @ ARUNTIME.RUN-REFERENCE-U @ _ARS-TURN @ ATURN.REFERENCE-U !
     _ARBT-RUN @ _ARS-TURN @ ATURN.RUN-ID !
     _ARBT-A @ _ARS-TURN @ ATURN.PROMPT-A !
     _ARBT-U @ _ARS-TURN @ ATURN.PROMPT-U !
@@ -1511,30 +1518,39 @@ VARIABLE _ARC-STORE
 VARIABLE _ARRS-DES
 VARIABLE _ARRS-CONV
 VARIABLE _ARRS-AMRUN
+VARIABLE _ARRS-REF-A
+VARIABLE _ARRS-REF-U
 
 \ Starts run RUN-ID in CONVERSATION, a conversation of its own, on the
-\ prompt at ADDRESS and LENGTH, under AMRUN, on the model DESIGNATION
-\ names (0 for the selection).  The prompt counts against AMRUN's
-\ disclosure.  AMRUN stays the caller's unless the run starts; then the
-\ runtime owns it.  The conversation stays the caller's: ARUNTIME-RUN-TAKE
-\ hands it back when ARUNTIME-RUN-ENDED? says the run is over.  A run that
-\ could not start leaves the conversation saying so, and the runtime as
-\ it was.
-: ARUNTIME-RUN-START  ( address length run-id designation conversation amrun runtime -- ior )
-    _ARS-R ! _ARRS-AMRUN ! _ARRS-CONV ! _ARRS-DES ! _ARS-RUN ! _ARS-U ! _ARS-A !
+\ prompt at ADDRESS and LENGTH with REFERENCE (turn-request.f, 0 0 for
+\ none), under AMRUN, on the model DESIGNATION names (0 for the
+\ selection).  The prompt and the reference count against AMRUN's
+\ disclosure, and the provider has taken both once the start returns.
+\ AMRUN stays the caller's unless the run starts; then the runtime owns
+\ it.  The conversation stays the caller's: ARUNTIME-RUN-TAKE hands it
+\ back when ARUNTIME-RUN-ENDED? says the run is over.  A run that could
+\ not start leaves the conversation saying so, and the runtime as it was.
+: ARUNTIME-RUN-START
+  ( address length reference-a reference-u run-id designation conversation amrun runtime -- ior )
+    _ARS-R ! _ARRS-AMRUN ! _ARRS-CONV ! _ARRS-DES ! _ARS-RUN !
+    _ARRS-REF-U ! _ARRS-REF-A ! _ARS-U ! _ARS-A !
     _ARS-U @ 0= _ARS-RUN @ 0= OR _ARRS-CONV @ 0= OR IF 1 EXIT THEN
+    _ARRS-REF-U @ IF _ARRS-REF-A @ 0= IF 1 EXIT THEN THEN
     _ARRS-AMRUN @ AMRUN-ACTIVE? 0= IF 1 EXIT THEN
     _ARS-R @ ARUNTIME-IDLE? 0= IF 2 EXIT THEN
-    _ARS-U @ _ARRS-AMRUN @ AMRUN-DISCLOSE-BYTES ?DUP IF EXIT THEN
+    _ARS-U @ _ARRS-REF-U @ + _ARRS-AMRUN @ AMRUN-DISCLOSE-BYTES ?DUP IF EXIT THEN
     _ARS-R @ ARUNTIME.STATUS @ _ARS-R @ ARUNTIME.RUN-PRIOR !
     _ARRS-CONV @ _ARS-R @ ARUNTIME.RUN-CONV !
     _ARRS-DES @ _ARS-R @ ARUNTIME.RUN-DESIGNATION !
+    _ARRS-REF-A @ _ARS-R @ ARUNTIME.RUN-REFERENCE-A !
+    _ARRS-REF-U @ _ARS-R @ ARUNTIME.RUN-REFERENCE-U !
     _ARRS-AMRUN @ _ARS-R @ ARUNTIME.MANDATE-RUN !
     ARUNTIME-F-LENT _ARS-R @ ARUNTIME.FLAGS !
     0 _ARS-R @ ARUNTIME.ASSISTANT-MSG !
     0 _ARS-R @ ARUNTIME.APPROVAL-MSG !
     _ARUNTIME-START-RUN
     0 _ARS-R @ ARUNTIME.RUN-DESIGNATION !
+    0 _ARS-R @ ARUNTIME.RUN-REFERENCE-A ! 0 _ARS-R @ ARUNTIME.RUN-REFERENCE-U !
     DUP IF
         \ Ending the start gave the authority back; the conversation goes
         \ back too.

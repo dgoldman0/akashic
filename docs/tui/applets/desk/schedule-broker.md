@@ -23,6 +23,7 @@ SBRK-VALID?        ( broker -- flag )
 SBRK-STORE         ( broker -- store )
 SBRK-CLIENT        ( broker -- client )
 SBRK-HANDLER!      ( handler broker -- )
+SBRK-OWNERS!       ( xt context broker -- )
 SBRK-TICK          ( broker -- )
 SBRK-ASKING        ( broker -- id request | 0 0 )
 SBRK-ANSWER        ( id allowed? now broker -- status )
@@ -52,15 +53,16 @@ handler.
 
 | Word | Effect |
 |---|---|
-| start | `( request run response context -- status )` |
+| start | `( request run source response context -- status )` |
 | status | `( key response context -- status )` |
 | cancel | `( key reason context -- status )` |
 | models | `( buffer capacity context -- bytes status )` |
 | idle? | `( context -- flag )` |
 | vet | `( request context -- reason\|0 )` |
 
-Start gets a request and `run`, the authority the broker compiled for it.
-It answers as status would after the attempt:
+Start gets a request, `run`, the authority the broker compiled for it, and
+`source`: a resource client for the document the run names, lent for that
+start alone, or 0. It answers as status would after the attempt:
 
 | Answer | Meaning |
 |---|---|
@@ -105,6 +107,7 @@ words its words. Each has the stack the broker gives its handler's word:
 | asked | Gives an approval's answer. |
 | check | Says how a request that names no occurrence stands. |
 | models | Asks the handler. |
+| describe | Attaches the document a locator names through its owner, describes it as Desk itself, and lets it go at once. Desk's approval and Daybook's new runs show what it says. |
 
 ### How a request stands
 
@@ -128,27 +131,52 @@ Anything else is invalid. The broker then:
    | another Practice | another Practice |
    | unavailable | Agent unavailable |
 
-2. Compiles the run's authority from that permission alone, never from a
+2. Attaches the document the request names, if any, for the run's start
+   (below). One that cannot be attached ends the run.
+3. Compiles the run's authority from that permission alone, never from a
    chat preset:
    - a new active child of the Practice's root Context, with no
      filesystem, bindings or facets;
-   - a capability facet with no entries;
+   - a capability facet with no entries but, for a run with a document,
+     two: describing and taking a snapshot of that one document,
+     automatically, for what the permission lets it disclose;
    - a read-only Mandate for the Agent, with the permission's effects
-     (none today) and its time and disclosure limits, and no tool,
-     memory or token budget.
+     (none, or observing its document) and its time and disclosure
+     limits, and no tool, memory or token budget.
 
    The Mandate's and the facet's IDs are SHA3-256 of the Practice, the
    activation's epoch, the dispatch key, the child Context's ID and
    generation, and a tag (`desk.schedule.mandate` or
    `desk.schedule.facet`). An authority that cannot be made fails as an
    internal error, or is blocked as out of room when memory ran out.
-3. Offers the run to the handler.
+4. Offers the run to the handler, then releases the document.
 
 An answer other than the five above blocks the run as the Agent being
 unavailable. When the broker blocks or ends a run itself, the response
 names the request's permission and revision and Desk's Practice, and holds
 no run and no summary. That way Daybook clears its approval only when the
 refusal is about the permission it holds.
+
+### A run's document
+
+A run holds its document only while it starts. The broker attaches the
+document with the Practice's root Context through the word Desk sets with
+`SBRK-OWNERS!` ( locator binding result context -- status ), an
+[`RACQ-ATTACH`](../../../interop/resource-acquisition.md) status. Desk's word
+finds the document's owner in its
+[owner directory](../../../interop/resource-owners.md), starting the owning
+applet minimized when it is not running. The broker makes a
+[resource client](../../../interop/resource-client.md) for the attachment
+on the root Context and lends it to start. Once start answers, whatever
+it answered, the broker releases the document. An owner that will not
+release it yet is asked again at the start of each `SBRK-TICK`; one whose
+owner has gone has nothing left to release.
+
+| Attaching | The run ends |
+|---|---|
+| The approved version is gone, or the document changed under the same revision | stopped for review: the document changed |
+| No room | blocked: out of room |
+| No owners set, no such document, or anything else | blocked: document unavailable |
 
 ### Waiting runs
 

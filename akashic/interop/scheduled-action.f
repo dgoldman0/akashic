@@ -15,6 +15,8 @@
 \  encoding and one digest.  They hold the run's limits, the model it
 \  must use, an optional exact context locator, and the prompt.  They
 \  never hold a live grant, an LBIND, a component pointer or an XT.
+\  A run has no effects, or, when it names one exact version of a
+\  document as its context, only observes it (CAP-E-OBSERVE).
 \
 \  The module also owns the closed vocabulary of outcomes and reasons
 \  that Daybook, Desk and the Agent report with, and which pairs are
@@ -25,6 +27,7 @@
 PROVIDED akashic-sched-action
 
 REQUIRE qualified-locator.f
+REQUIRE capability.f
 REQUIRE ../math/sha3.f
 REQUIRE ../text/utf8.f
 REQUIRE ../utils/string.f
@@ -40,7 +43,8 @@ REQUIRE ../utils/string.f
 4 CONSTANT SACT-S-BUDGET     \ a limit is not positive, or below the prompt
 5 CONSTANT SACT-S-MODEL      \ a missing or malformed model designation
 6 CONSTANT SACT-S-PROMPT     \ an empty prompt, or one that is not text
-7 CONSTANT SACT-S-CONTEXT    \ context the catalog does not take yet
+7 CONSTANT SACT-S-CONTEXT    \ a context that is not one exact locator, or
+                             \ effects other than observing it
 8 CONSTANT SACT-S-SMALL      \ the destination is too small
 
 1 CONSTANT SACT-REMINDER
@@ -167,8 +171,14 @@ REQUIRE ../utils/string.f
     OVER SACT-O.DISCLOSURE @ 0> AND
     SWAP SACT-O.OUTPUT @ 0> AND ;
 
-\ The status of an Agent run's U bytes of operands.  A context locator is
-\ refused until the catalog takes one.
+\ Whether the context locator OPERANDS carry lies wholly before END and
+\ names one exact version.
+: _SACT-CONTEXT-OK?  ( end operands -- flag )
+    SACT-O.CONTEXT DUP QLOC-SIZE + ROT > IF DROP 0 EXIT THEN
+    DUP QLOC-VALID? 0= IF DROP 0 EXIT THEN
+    QLOC.MODE @ QLOC-M-EXACT-DOMAIN = ;
+
+\ The status of an Agent run's U bytes of operands.
 : _SACT-AGENT-OK?  ( operands u -- status )
     DUP SACT-AGENT-HEAD < IF 2DROP SACT-S-SHAPE EXIT THEN
     OVER + SWAP                              ( end operands )
@@ -176,8 +186,10 @@ REQUIRE ../utils/string.f
     DUP SACT-O.FLAGS @ SACT-F-CONTEXT INVERT AND IF
         2DROP SACT-S-SHAPE EXIT
     THEN
-    DUP SACT-O.FLAGS @ IF 2DROP SACT-S-CONTEXT EXIT THEN
-    DUP SACT-O.EFFECTS @ IF 2DROP SACT-S-CONTEXT EXIT THEN
+    \ A run with a document only observes it; one without has no effects.
+    DUP SACT-O.EFFECTS @ OVER SACT-O.FLAGS @ IF CAP-E-OBSERVE ELSE 0 THEN <> IF
+        2DROP SACT-S-CONTEXT EXIT
+    THEN
     DUP _SACT-BUDGET-OK? 0= IF 2DROP SACT-S-BUDGET EXIT THEN
     DUP SACT-O.VERBOSITY @ 0 SACT-VERBOSITY-MAX 1+ WITHIN 0= IF
         2DROP SACT-S-MODEL EXIT
@@ -190,6 +202,9 @@ REQUIRE ../utils/string.f
     DUP SACT-O.EFFORT 0 0 _SACT-TEXT-FIELD? 0= IF 2DROP SACT-S-MODEL EXIT THEN
     DUP SACT-O.TIER 2 PICK _SACT-STR-FITS? 0= IF 2DROP SACT-S-SHAPE EXIT THEN
     DUP SACT-O.TIER 0 0 _SACT-TEXT-FIELD? 0= IF 2DROP SACT-S-MODEL EXIT THEN
+    DUP SACT-O.FLAGS @ IF
+        2DUP _SACT-CONTEXT-OK? 0= IF 2DROP SACT-S-CONTEXT EXIT THEN
+    THEN
     DUP SACT-O.PROMPT 2 PICK _SACT-STR-FITS? 0= IF 2DROP SACT-S-SHAPE EXIT THEN
     DUP SACT-O.PROMPT _SACT-PROMPT-CONTROLS -1 _SACT-TEXT-FIELD? 0= IF
         2DROP SACT-S-PROMPT EXIT

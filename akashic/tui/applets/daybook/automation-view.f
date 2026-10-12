@@ -30,8 +30,11 @@
 \  zone.  An Agent run then names the model it must use, from the list
 \  Desk's broker gives, with its effort, tier and verbosity where the
 \  model offers them; how many minutes it may run; how many bytes of
-\  reply it keeps; and its prompt, which is also exactly what it may
-\  disclose.  A start given as only a time is placed when the create
+\  reply it keeps; and its prompt.  A run may also read one exact
+\  version of a document, named before its steps (DBAV-DOCUMENT!) as its
+\  owner, asked through Desk, says it is.  What a run may disclose is
+\  exactly its prompt and that document.  A start given as only a time is
+\  placed when the create
 \  completes.  DBAV-BEGIN draws a fresh create key for each create, so a
 \  create submitted twice makes one schedule.  The view then asks Desk's
 \  user to approve the Agent run it made.
@@ -76,6 +79,9 @@
 \    DBAV-NEXT-KIND   ( kind view -- kind|0 )
 \    DBAV-MINUTES!    ( address length view -- status )
 \    DBAV-REPLY!      ( address length view -- status )
+\    DBAV-DOCUMENT!   ( locator view -- status )
+\    DBAV-DOCUMENT?   ( view -- flag )
+\    DBAV-DOCUMENT$   ( view -- address length )
 \    DBAV-PROMPT!     ( address length view -- status )
 \    DBAV-CREATE      ( view -- status )
 \    DBAV-ASK-CREATED ( view -- status )
@@ -98,6 +104,7 @@ PROVIDED akashic-dbk-auto-view
 
 REQUIRE automation-service.f
 REQUIRE ../../../interop/scheduled-dispatch.f
+REQUIRE ../../../interop/resource-contract.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../math/entropy.f
 
@@ -123,6 +130,7 @@ REQUIRE ../../../math/entropy.f
 45 CONSTANT DBAV-S-MODELS        \ the Agent offers no models now
 46 CONSTANT DBAV-S-NUMBER        \ not a whole number above zero
 47 CONSTANT DBAV-S-PROMPT        \ an empty prompt, or one that is not text
+48 CONSTANT DBAV-S-DOCUMENT      \ not one exact version, or its owner cannot say
 
 \ The kinds of choice an Agent run's model makes.
 1 CONSTANT DBAV-MODEL-KIND
@@ -173,7 +181,12 @@ _DBAV-OPENED RID-SIZE + CONSTANT _DBAV-OPENED-BUILT
 _DBAV-OPENED-BUILT 8 + CONSTANT _DBAV-HISTORY        \ the ids, or 0
 _DBAV-HISTORY 8 + CONSTANT _DBAV-HISTORY-N
 _DBAV-HISTORY-N 8 + CONSTANT _DBAV-HISTORY-CAP
-_DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
+\ The document an Agent run being created reads, when it names one: its
+\ exact locator, and what its owner said of it, with the title it said.
+_DBAV-HISTORY-CAP 8 + CONSTANT _DBAV-DOC                 \ QLOC-SIZE bytes
+_DBAV-DOC QLOC-SIZE + CONSTANT _DBAV-DOC-FACTS
+_DBAV-DOC-FACTS SDSP-FACTS-SIZE + CONSTANT _DBAV-DOC-TITLE
+_DBAV-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT DBAV-SIZE
 
 : _DBAV.SERVICE  ( view -- a ) _DBAV-SERVICE + ;
 : _DBAV.ROWS     ( view -- a ) _DBAV-ROWS + ;
@@ -206,6 +219,9 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 : _DBAV.HISTORY  ( view -- a ) _DBAV-HISTORY + ;
 : _DBAV.HISTORY-N    ( view -- a ) _DBAV-HISTORY-N + ;
 : _DBAV.HISTORY-CAP  ( view -- a ) _DBAV-HISTORY-CAP + ;
+: _DBAV.DOC      ( view -- locator ) _DBAV-DOC + ;
+: _DBAV.DOC-FACTS  ( view -- facts ) _DBAV-DOC-FACTS + ;
+: _DBAV.DOC-TITLE  ( view -- a ) _DBAV-DOC-TITLE + ;
 
 \ Starts a view over SERVICE, which may be 0.
 : DBAV-INIT  ( service view -- )
@@ -693,9 +709,9 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 \ =====================================================================
 \  A schedule opened from its row shows its facts, each a label and a
 \  text: its title, when it runs and next runs, and for an Agent run
-\  whether it is approved, the model it names, its provider, its limits
-\  and its prompt, exactly as stored; then each of its items, newest
-\  first.  The facts follow the store: once it changes, DBAV-REREAD reads
+\  whether it is approved, the model it names, its provider, its limits,
+\  the version of the document it reads, if any, and its prompt, exactly
+\  as stored; then each of its items, newest first.  The facts follow the store: once it changes, DBAV-REREAD reads
 \  them again, and says when the schedule is gone.  An action on the
 \  opened schedule refuses while its facts are older than the store.
 
@@ -706,8 +722,22 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 \ The ids read at a time.
 16 CONSTANT _DBAV-PAGE
 
-: _DBAV-OWN-FACTS  ( schedule -- n )
-    _DBAV-AGENT? IF _DBAV-AGENT-FACTS ELSE _DBAV-REMINDER-FACTS THEN ;
+\ An Agent run's operands, as stored.
+: _DBAV-OPERANDS  ( schedule view -- operands )
+    SWAP DBAS-S.RID SWAP _DBAV-OWNER DBAO-ACTION DBAS-A.OPERANDS BSLOT$ DROP ;
+
+\ How many facts SCHEDULE has before its items: an Agent run that reads a
+\ document has that one more.
+: _DBAV-OWN-FACTS  ( schedule view -- n )
+    OVER _DBAV-AGENT? 0= IF 2DROP _DBAV-REMINDER-FACTS EXIT THEN
+    _DBAV-OPERANDS SACT-O.CONTEXT IF _DBAV-AGENT-FACTS 1+ ELSE _DBAV-AGENT-FACTS THEN ;
+
+\ Fact ROW of SCHEDULE as an Agent run's fact id: 7 the document, 8 the
+\ prompt, which is fact 7 of a run that reads none.
+: _DBAV-FACT-ID  ( row schedule view -- id )
+    OVER _DBAV-AGENT? 0= IF 2DROP EXIT THEN
+    2 PICK 7 < IF 2DROP EXIT THEN
+    _DBAV-OPERANDS SACT-O.CONTEXT 0= IF 1+ THEN ;
 
 \ Whether a schedule is opened.
 : DBAV-OPENED?  ( view -- flag ) _DBAV.OPENED RID-ZERO? 0= ;
@@ -762,11 +792,11 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 \ How many facts the opened schedule has, its own and its items'.
 : DBAV-FACTS@  ( view -- n )
     DUP _DBAV-OPENED-SCHEDULE ?DUP 0= IF DROP 0 EXIT THEN
-    _DBAV-OWN-FACTS SWAP _DBAV.HISTORY-N @ + ;
+    OVER _DBAV-OWN-FACTS SWAP _DBAV.HISTORY-N @ + ;
 
 \ The item fact ROW shows, while it lives, or 0.
 : _DBAV-FACT-ITEM  ( row schedule view -- item|0 )
-    >R _DBAV-OWN-FACTS -
+    >R R@ _DBAV-OWN-FACTS -
     DUP 0< OVER R@ _DBAV.HISTORY-N @ < 0= OR IF DROP R> DROP 0 EXIT THEN
     CELLS R@ _DBAV.HISTORY @ + @ R@ _DBAV-STORE DBAS-FIND-OCCURRENCE
     0= IF DROP R> DROP 0 EXIT THEN
@@ -775,8 +805,8 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 \ The label of fact ROW: what the fact is, or what kind of item it is.
 : DBAV-FACT-LABEL  ( row view -- address length )
     DUP _DBAV-OPENED-SCHEDULE ?DUP 0= IF 2DROP 0 0 EXIT THEN    ( row view schedule )
-    2 PICK OVER _DBAV-OWN-FACTS < IF
-        2DROP CASE
+    2 PICK OVER 3 PICK _DBAV-OWN-FACTS < IF
+        SWAP _DBAV-FACT-ID CASE
             0 OF S" Schedule" ENDOF
             1 OF S" When" ENDOF
             2 OF S" Next" ENDOF
@@ -784,6 +814,7 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
             4 OF S" Model" ENDOF
             5 OF S" Provider" ENDOF
             6 OF S" Limits" ENDOF
+            7 OF S" Document" ENDOF
             >R S" Prompt" R>
         ENDCASE EXIT
     THEN
@@ -794,9 +825,14 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 
 : _DBAV-TEXT$  ( view -- address length ) DUP _DBAV.TEXT @ SWAP _DBAV.LEN @ ;
 
-\ An Agent run's operands, as stored.
-: _DBAV-OPERANDS  ( schedule view -- operands )
-    SWAP DBAS-S.RID SWAP _DBAV-OWNER DBAO-ACTION DBAS-A.OPERANDS BSLOT$ DROP ;
+\ The document an Agent run reads: the revision, and how much of it the
+\ run may disclose, its limit beyond the prompt.
+: _DBAV-DOCUMENT$  ( operands view -- address length )
+    >R S" Revision " R@ _DBAV-ADD$
+    DUP SACT-O.CONTEXT QLOC.DOMAIN-REVISION @ NUM>STR R@ _DBAV-ADD$
+    S" , up to " R@ _DBAV-ADD$
+    DUP SACT-O.DISCLOSURE @ SWAP SACT-PROMPT$ NIP - NUM>STR R@ _DBAV-ADD$
+    S"  bytes" R@ _DBAV-ADD$ R> _DBAV-TEXT$ ;
 
 \ What became of ITEM: when it was due, how many it covers when it
 \ missed several, how an Agent run stands or ended, whether it awaits
@@ -822,11 +858,11 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 : DBAV-FACT-TEXT  ( row view -- address length )
     0 OVER _DBAV.LEN !
     DUP _DBAV-OPENED-SCHEDULE ?DUP 0= IF 2DROP 0 0 EXIT THEN    ( row view schedule )
-    2 PICK OVER _DBAV-OWN-FACTS < 0= IF
+    2 PICK OVER 3 PICK _DBAV-OWN-FACTS < 0= IF
         SWAP DUP >R _DBAV-FACT-ITEM ?DUP 0= IF R> DROP 0 0 EXIT THEN
         R@ _DBAV-OPENED-SCHEDULE R@ _DBAV-HISTORY$ R> _DBAV-TEXT$ EXIT
     THEN
-    ROT CASE                                   ( view schedule )
+    ROT 2 PICK 2 PICK SWAP _DBAV-FACT-ID CASE      ( view schedule )
         0 OF NIP DBAS-S.TITLE DBAS-FIELD$ ENDOF
         1 OF SWAP _DBAV.SERVICE @ DBSVC-WHEN$ ENDOF
         2 OF OVER SWAP _DBAV-NEXT$ _DBAV-TEXT$ ENDOF
@@ -839,6 +875,7 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
             OVER _DBAV-OPERANDS DUP SACT-O.TIME @ OVER SACT-O.DISCLOSURE @
             ROT SACT-O.OUTPUT @ ['] _DBAV-ADD$ 4 PICK SACT-SAY-LIMITS _DBAV-TEXT$
         ENDOF
+        7 OF OVER _DBAV-OPERANDS SWAP _DBAV-DOCUMENT$ ENDOF
         >R OVER _DBAV-OPERANDS SACT-PROMPT$ ROT DROP R>
     ENDCASE ;
 
@@ -891,6 +928,7 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
     TUCK _DBAV.DRAFT DBAO-D.ACTION !
     0 OVER _DBAV.TIME ! 0 OVER _DBAV.OUTPUT !
     -1 OVER _DBAV.DAY ! 0 OVER _DBAV.MINUTE !
+    DUP _DBAV.DOC QLOC-SIZE 0 FILL
     DUP _DBAV.RID RID-SIZE 0 FILL
     _DBAV.KEY RID-SIZE ENTROPY-FILL ENTROPY-S-OK <> IF
         DBAO-S-ENTROPY EXIT
@@ -1134,13 +1172,38 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
     _DBAV.TIER @ ?DUP IF SDSP-CHOICE-ID$ R@ SACT-D.TIER SACT-D! THEN
     R> DROP ;
 
+\ Whether the Agent run being created reads a document.
+: DBAV-DOCUMENT?  ( view -- flag ) _DBAV.DOC QLOC-VALID? ;
+
+\ The title of the document the Agent run being created reads.
+: DBAV-DOCUMENT$  ( view -- address length ) _DBAV.DOC-FACTS SDSP-FACTS-TITLE$ ;
+
+\ Names the document the Agent run being created reads: one exact version
+\ (interop/qualified-locator.f), as its owner, asked through Desk, says
+\ it now is.  Its size is what the run may disclose beyond its prompt.
+: DBAV-DOCUMENT!  ( locator view -- status )
+    >R
+    DUP QLOC-VALID? 0= IF DROP R> DROP DBAV-S-DOCUMENT EXIT THEN
+    DUP QLOC.MODE @ QLOC-M-EXACT-DOMAIN <> IF DROP R> DROP DBAV-S-DOCUMENT EXIT THEN
+    R@ _DBAV.DOC-TITLE RCON-TITLE-MAX R@ _DBAV.DOC-FACTS SDSP-FACTS-INIT
+    DUP R@ _DBAV.DOC-FACTS R@ _DBAV.SERVICE @ DBSVC-DESCRIBE IF
+        DROP R> DROP DBAV-S-DOCUMENT EXIT
+    THEN
+    R> _DBAV.DOC QLOC-COPY DROP DBAO-S-OK ;
+
 \ The last step of an Agent run: its prompt, which completes its
-\ operands.  What the run may disclose is exactly the prompt.
+\ operands.  What the run may disclose is exactly the prompt and the
+\ document, when it reads one, which it only observes.
 : DBAV-PROMPT!  ( address length view -- status )
     >R
     DUP 0= IF 2DROP R> DROP DBAV-S-PROMPT EXIT THEN
     R@ _DBAV-SACT!
     DUP R@ _DBAV.SACT SACT-D.DISCLOSURE !
+    R@ DBAV-DOCUMENT? IF
+        R@ _DBAV.DOC R@ _DBAV.SACT SACT-D.CONTEXT !
+        CAP-E-OBSERVE R@ _DBAV.SACT SACT-D.EFFECTS !
+        R@ _DBAV.DOC-FACTS SDSP-F.SIZE @ R@ _DBAV.SACT SACT-D.DISCLOSURE +!
+    THEN
     R@ _DBAV.SACT SACT-D.PROMPT SACT-D!
     R@ _DBAV.OPS @ ?DUP IF FREE THEN 0 R@ _DBAV.OPS !
     R@ _DBAV.SACT SACT-AGENT-SIZE
@@ -1204,5 +1267,6 @@ _DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
         DBAV-S-MODELS OF S" The Agent offers no models now" ENDOF
         DBAV-S-NUMBER OF S" Use a whole number above zero" ENDOF
         DBAV-S-PROMPT OF S" A prompt is text, and not empty" ENDOF
+        DBAV-S-DOCUMENT OF S" The document's owner cannot say what it is now" ENDOF
         S" The automation could not be changed" ROT
     ENDCASE ;

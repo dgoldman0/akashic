@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from doc_owner_fixture import DOC_BUS, DOC_DOCUMENT
 from native_forth import NativeForth
 from test_schedule_broker import PRELUDE as BROKER_PRELUDE
 
@@ -43,7 +44,7 @@ VARIABLE VET-ANS
     _SCHS-K-APPROVE SS _SCHS.KIND !
     B SBRK-ASKING DROP SS _SCHS.ASK-ID ! 0 SS _SCHS.READ !
     SS _SCHS-ASKING? IF SS _SCHS.REQUEST @ B SBRK-VET SS _SCHS.REASON ! THEN
-    SS _SCHS-APPROVE-STATUS ;
+    SS _SCHS-DESCRIBE SS _SCHS-APPROVE-STATUS ;
 : ASK  ( s -- ) R-ASK RQ BC SDSP-ASK 2DROP ;
 : ROW.  ( index -- )
     DUP SS _SCHS-APPROVE-ROW _SCHS-HEADER$ TYPE ." |"
@@ -120,6 +121,19 @@ VARIABLE CONFIRMS
 : TIME+  ( ms t -- ) ['] _SCHT+ SWAP _SACT-SAY-TIME ;
 : TIME.  ( ms -- ) ['] TIME+ TEXT. ;
 : WHEN.  ( ms -- ) ['] _SCHT-WHEN+ TEXT. ;
+\ Desk's root Context, active, with a request bus and the owner of one
+\ document, which the broker reaches through Desk's owners.
+HD-INIT ROOT @ CTX.FLAGS DUP @ CTX-F-ACTIVE OR SWAP !
+""" + DOC_BUS + DOC_DOCUMENT + r"""
+: OWNERS  ( locator binding result context -- status )
+    DROP >R >R DOC-ROOT ROOT @ RRG R> R> RACQ-ATTACH ;
+: NOTES$  ( -- a u ) S" The quarterly report." ;
+: REVISED$  ( -- a u ) S" The quarterly report, revised." ;
+\ Operands that name the version of the document DOC! set.
+: D-OPS  ( -- )
+    A-OPS DOC-LOC AD SACT-D.CONTEXT ! CAP-E-OBSERVE AD SACT-D.EFFECTS !
+    AD OPS 1024 SACT-AGENT-ENCODE DROP OPS-U ! ;
+: D-FRESH  ( -- ) S-FRESH ['] OWNERS 0 B SBRK-OWNERS! NOTES$ 3 DOC! D-OPS ;
 """
 
 SUITE = NativeForth(("tui/applets/desk/schedule-surface.f",),
@@ -358,3 +372,30 @@ def test_the_shutdown_question(forth):
     assert rows[2] == "Shut down"
     assert rows[3].split() == ["0", "4", "-1", "0", "0"]
     assert rows[4].split() == ["-1", "1", "0", "0", "1"]
+
+
+def test_an_approval_shows_the_document(forth):
+    rows = run(forth, [
+        "D-FRESH 1 ASK AS-APPROVAL SS _SCHS-ROW-N . DOC-HELD @ . CR",
+        "ROWS.",
+        # Too large for the model, the note says the document counts.
+        f"D-FRESH {R_TOO_LARGE} VET-ANS ! 1 ASK AS-APPROVAL 0 ROW.",
+        # Changed since; and an owner that cannot say.
+        "D-FRESH REVISED$ 4 DOC! 1 ASK AS-APPROVAL 5 ROW.",
+        "D-FRESH RACQ-S-NOT-FOUND DOC-REFUSE ! 1 ASK AS-APPROVAL 5 ROW. 0 DOC-REFUSE !",
+    ])
+    assert rows[0].split() == ["7", "0"]
+    assert rows[1:8] == [
+        "Schedule|Read the news",
+        "When|daily at 09:00",
+        "Model|gpt-test",
+        "Provider|org.akashic.agent.testing.scripted",
+        "Limits|5 min to run, 4096 bytes to disclose, 16384 bytes of reply",
+        "Document|Field notes, revision 3, 21 bytes",
+        "Prompt|Summarize the news.",
+    ]
+    assert rows[8] == ("Note|The prompt and its document are too large for this "
+                       "model, so this cannot be allowed.")
+    assert rows[9] == ("Document|Field notes, revision 3, 30 bytes; it has changed "
+                       "since, so a run would stop for review")
+    assert rows[10] == "Document|A document at revision 3; its owner cannot say more now"

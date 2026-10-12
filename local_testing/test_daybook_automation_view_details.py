@@ -269,3 +269,19 @@ def test_a_missed_item_covering_one(machine):
     _tick(machine, 3_600_000)
     run(machine, ['V-NEW S" Water the plants" OPEN . CR'])
     assert lines(machine, "FACTS")[3:] == ["Missed | 2026-10-10 13:00, needs review"]
+
+
+def test_an_agent_run_that_reads_a_document_in_detail(machine):
+    assert run(machine, ["C-FRESH DOC-ON CR"]) == [[OK, OK]]
+    assert run(machine, [
+        "C-BEGIN DLOC VW DBAV-DOCUMENT! . "
+        'S" 09:00 Morning brief" VW DBAV-WHEN! . S" daily" VW DBAV-REPEAT! . '
+        f'S" " VW DBAV-ZONE! . 1 {MODEL} VW DBAV-CHOOSE . '
+        'S" 10" VW DBAV-MINUTES! . S" 16384" VW DBAV-REPLY! . '
+        "BRIEF VW DBAV-PROMPT! . VW DBAV-CREATE . VW DBAV-REBUILD . CR"]) == [[OK] * 12]
+    assert run(machine, ['S" Morning brief" OPEN . VW DBAV-FACTS@ . CR']) == [[OK, 9]]
+    facts = lines(machine, "FACTS")
+    assert facts[6].startswith("Limits | ")
+    assert facts[7] == "Document | Revision 3, up to 21 bytes"
+    assert facts[8] == "Prompt | Summarize the news."
+    assert facts[9] == "Keep it short."

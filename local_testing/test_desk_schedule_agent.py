@@ -8,8 +8,10 @@ Approvals are asked and answered through the broker's dispatch client,
 as Daybook's service asks them, and runs are handed over the same way:
 a run approved, started and followed to its end; the model list the
 Agent gives; why the Agent could not run a schedule asked to be
-approved; a run that waits behind chat and goes next; and runs revoked
-or cut short as the broker closes.
+approved; a run that waits behind chat and goes next; runs revoked or
+cut short as the broker closes; and a run that names a document, which
+the broker attaches through the stand-in owner of doc_owner_fixture.py
+for the run's start alone, as Desk attaches one through its owners.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import struct
 
 import pytest
 
+from doc_owner_fixture import DOC_BUS, DOC_DOCUMENT
 from native_forth import NativeForth
 from test_agent_dispatch import PRELUDE as DISPATCH_PRELUDE
 from test_agent_dispatch import REFUSALS, REPLY
@@ -30,6 +33,8 @@ from test_agent_dispatch import REFUSALS, REPLY
 COMPLETED, FAILED, CANCELLED = 1, 2, 3
 R_NONE, R_REVOKED, R_AGENT_UNAVAILABLE, R_MODEL_UNAVAILABLE = 0, 2, 5, 6
 R_TOO_LARGE, R_INVALID, R_SHUTDOWN = 7, 9, 15
+R_CONTEXT_UNAVAILABLE, R_CONTEXT_STALE = 11, 18
+STOPPED, BLOCKED = 5, 6
 ACCEPTED, ENDED = 1, 2
 
 PRELUDE = DISPATCH_PRELUDE + r"""
@@ -92,6 +97,29 @@ VARIABLE ASK-ID  CREATE PERM 32 ALLOT  VARIABLE PREV
 CREATE LOW-SAVE 512 ALLOT
 : LOW-KEEP  ( -- ) 0 LOW-SAVE 512 MOVE ;
 : LOW-SAME?  ( -- flag ) 0 512 LOW-SAVE 512 COMPARE 0= ;
+\ The Practice's root Context, active, with a request bus and the owner
+\ of one document.
+ROOT @ CTX.FLAGS DUP @ CTX-F-ACTIVE OR SWAP !
+""" + DOC_BUS + DOC_DOCUMENT + r"""
+\ Desk's owners, as the broker sees them: the stand-in's root attaches
+\ every locator.
+: OWNERS  ( locator binding result context -- status )
+    DROP >R >R DOC-ROOT ROOT @ RRG R> R> RACQ-ATTACH ;
+: D-FRESH  ( -- ) BK-FRESH ['] OWNERS 0 B SBRK-OWNERS! 0 DOC-REFUSE ! 0 DOC-STUCK ! ;
+\ Operands that name the version of the document DOC! set, and may
+\ disclose the prompt and it.
+: DOC-OPS!  ( prompt-a prompt-u -- )
+    2DUP OPS! DOC-LOC AD SACT-D.CONTEXT ! CAP-E-OBSERVE AD SACT-D.EFFECTS !
+    NIP DOC-U @ + AD SACT-D.DISCLOSURE ! OPS-AGAIN ;
+: NOTES$  ( -- a u ) S" The quarterly report." ;
+: OTHER$  ( -- a u ) S" The quarterly report, revised." ;
+\ The text of message I of RUN's transcript.
+: SAID  ( i run -- ) DECODE DROP DUP >R ACONV-NTH AMSG-TEXT TYPE R> ACONV-FREE ;
+\ A provider with ROOM bytes for a turn's input, whose text takes twice
+\ its bytes there: a reference not yet read counts at its bytes alone.
+VARIABLE ROOM
+: ESCAPING  ( prompt-a prompt-u reference-a reference-u context -- used capacity )
+    DROP SWAP IF 2* THEN + NIP ROOM @ ;
 """
 
 SUITE = NativeForth(("tui/applets/desk/schedule-agent.f",
@@ -287,3 +315,96 @@ def test_the_handler_is_the_dispatchers(forth):
         "H SBRK-H.VET-XT @ ' ADISP-VET = . H _SBRK-HANDLER? . H _SBH-CONTEXT + @ DS = . CR",
     ])
     assert ints(rows[0]) == [-1] * 8
+
+
+def test_a_run_reads_its_document_while_it_starts(forth):
+    import hashlib
+    notes = b"The quarterly report."
+    digest = hashlib.sha3_256(notes).hexdigest()
+    rows = run(forth, [
+        # The run reads revision 3 as itself while it starts; the owner has
+        # the document back once START answers.
+        "D-FRESH NOTES$ 3 DOC! NEWS$ DOC-OPS! 1 APPROVE "
+        "0 DOC-DESCRIBES ! 0 DOC-SNAPSHOTS ! 1 1 HAND . KEEP1 DOC-HELD @ . "
+        "PRV @ SCRIPTED-LAST-REFERENCE DROP . DOC-DESCRIBES @ . DOC-SNAPSHOTS @ . "
+        "DOC-PRINCIPAL @ CPRINC-AGENT = . CR",
+        "8 TICKS KEY1 STAND . ANS. CR",
+        # The transcript says which version was read, never its text; the
+        # model was given the text as a reference.
+        "0 R0 SAID CR",
+        "2 R0 SAID CR",
+    ])
+    assert ints(rows[0]) == [S_STARTED, 0, len(notes), 1, 1, -1]
+    assert ints(rows[1]) == [S_ENDED, COMPLETED, R_NONE]
+    assert rows[2] == f"Read the document: Field notes (revision 3, {len(notes)} bytes)"
+    assert f"With a reference of {len(notes)} bytes, SHA3 {digest[:8]}." in rows[3]
+    assert "quarterly" not in rows[2] + rows[3]
+
+
+def test_a_changed_document_stops_the_run_for_review(forth):
+    rows = run(forth, [
+        # Approved at revision 3, the document is at revision 4 when the run
+        # is due: it is described, not read, and the run stops for review.
+        "D-FRESH NOTES$ 3 DOC! NEWS$ DOC-OPS! 1 APPROVE OTHER$ 4 DOC! "
+        "0 DOC-SNAPSHOTS ! 1 1 HAND . ANS. DOC-SNAPSHOTS @ . DOC-HELD @ . RUNS . "
+        "R0 ADST-R.PHASE @ . CR",
+        # The owner kept no version that old: the broker stops it as it
+        # attaches.
+        "D-FRESH NOTES$ 3 DOC! NEWS$ DOC-OPS! 1 APPROVE RACQ-S-GONE DOC-REFUSE ! "
+        "1 1 HAND . ANS. DOC-HELD @ . RUNS . 0 DOC-REFUSE ! CR",
+    ])
+    assert ints(rows[0]) == [S_ENDED, STOPPED, R_CONTEXT_STALE, 0, 0, 1, ENDED]
+    assert ints(rows[1]) == [S_ENDED, STOPPED, R_CONTEXT_STALE, 0, 0]
+
+
+def test_a_document_that_cannot_be_attached_blocks_the_run(forth):
+    rows = run(forth, [
+        # Its owner does not have it; and Desk has set no owners.
+        "D-FRESH NOTES$ 3 DOC! NEWS$ DOC-OPS! 1 APPROVE RACQ-S-NOT-FOUND DOC-REFUSE ! "
+        "1 1 HAND . ANS. RUNS . 0 DOC-REFUSE ! CR",
+        "BK-FRESH NOTES$ 3 DOC! NEWS$ DOC-OPS! 1 APPROVE 1 1 HAND . ANS. RUNS . DOC-HELD @ . CR",
+    ])
+    assert ints(rows[0]) == [S_ENDED, BLOCKED, R_CONTEXT_UNAVAILABLE, 0]
+    assert ints(rows[1]) == [S_ENDED, BLOCKED, R_CONTEXT_UNAVAILABLE, 0, 0]
+
+
+def test_a_document_its_owner_will_not_release_yet(forth):
+    rows = run(forth, [
+        # The owner refuses the release once: the broker asks again on its
+        # next tick, and the run goes on meanwhile.
+        "D-FRESH NOTES$ 3 DOC! NEWS$ DOC-OPS! 1 APPROVE 1 DOC-STUCK ! "
+        "1 1 HAND . KEEP1 DOC-HELD @ . B SBRK-TICK DOC-HELD @ . "
+        "8 TICKS KEY1 STAND . ANS. CR",
+    ])
+    assert ints(rows[0]) == [S_STARTED, 1, 0, S_ENDED, COMPLETED, R_NONE]
+
+
+def test_a_document_too_large_for_the_model_once_read(forth):
+    rows = run(forth, [
+        # By its size, the prompt and the document fit; read, they do not.
+        # The run is recorded, read, and blocked before the provider starts.
+        "D-FRESH NOTES$ 3 DOC! NEWS$ DOC-OPS! NEWS$ NIP NOTES$ NIP + ROOM ! "
+        "' ESCAPING PRV @ APROV.INPUT-XT ! 1 APPROVE 1 1 HAND . ANS. RUNS . "
+        "R0 ADST-R.OUTCOME @ . R0 ADST-R.REASON @ . DOC-HELD @ . "
+        "0 PRV @ APROV.INPUT-XT ! CR",
+    ])
+    assert ints(rows[0]) == [S_ENDED, BLOCKED, R_TOO_LARGE, 1, BLOCKED, R_TOO_LARGE, 0]
+
+
+def test_what_a_documents_owner_says_of_it(forth):
+    rows = run(forth, [
+        # Desk asks for itself, and the owner has the document back at once.
+        "D-FRESH NOTES$ 3 DOC! CREATE TT 64 ALLOT CREATE FF SDSP-FACTS-SIZE ALLOT "
+        "TT 64 FF SDSP-FACTS-INIT DOC-LOC FF BC SDSP-DESCRIBE . FF SDSP-F.REVISION @ . "
+        "FF SDSP-F.SIZE @ . DOC-HELD @ . DOC-PRINCIPAL @ CPRINC-SYSTEM = . "
+        "FF SDSP-FACTS-TITLE$ TYPE CR",
+        # A title longer than the buffer says how long it is; an owner
+        # without the document, and no owners at all, cannot say.
+        "TT 4 FF SDSP-FACTS-INIT DOC-LOC FF BC SDSP-DESCRIBE . FF SDSP-F.TITLE-U @ . "
+        "RACQ-S-NOT-FOUND DOC-REFUSE ! DOC-LOC FF BC SDSP-DESCRIBE . 0 DOC-REFUSE ! "
+        "BK-FRESH DOC-LOC FF BC SDSP-DESCRIBE . DOC-HELD @ . "
+        "TT 64 FF SDSP-FACTS-INIT 0 FF BC SDSP-DESCRIBE . CR",
+    ])
+    assert rows[0] == f"{S_OK} 3 21 0 -1 Field notes"
+    assert ints(rows[1]) == [S_SMALL, len("Field notes"), S_UNAVAILABLE, S_UNAVAILABLE, 0,
+                             S_INVALID]

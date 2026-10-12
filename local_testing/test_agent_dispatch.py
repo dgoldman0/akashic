@@ -165,7 +165,7 @@ CREATE RS-RAW 300 ALLOT  RS-RAW 7 + -8 AND CONSTANT RS
 : WHOSE.  ( -- )
     RS SDSP-P.PERMISSION C@ . RS SDSP-P.PERMISSION-REVISION @ . RS SDSP-P.PRACTICE C@ . ;
 \ Starts RQ under AM, or under a fresh authority; the status.
-: GO-AM  ( -- status ) RS0 RQ AM @ RS DS ADISP-START ;
+: GO-AM  ( -- status ) RS0 RQ AM @ 0 RS DS ADISP-START ;
 : GO  ( -- status ) AUTHORITY GO-AM ;
 \ Starts RQ keeping a reference to its authority, so whether the runtime
 \ closed it can be seen; GONE drops that reference.
@@ -174,7 +174,7 @@ CREATE RS-RAW 300 ALLOT  RS-RAW 7 + -8 AND CONSTANT RS
 VARIABLE CV2
 \ Starts RQ answering into a response whose RID is not zero.
 : GO-DIRTY  ( -- status )
-    AUTHORITY RS0 RS SDSP-P.RUN 32 9 FILL RQ AM @ RS DS ADISP-START ;
+    AUTHORITY RS0 RS SDSP-P.RUN 32 9 FILL RQ AM @ 0 RS DS ADISP-START ;
 \ A tool gateway's worth of zeroes: a gateway with nothing to do.
 CREATE FAKE-G-RAW AGENT-TOOL-GATEWAY-SIZE 7 + ALLOT
 FAKE-G-RAW 7 + -8 AND CONSTANT FAKE-G
@@ -200,7 +200,8 @@ FAKE-G AGENT-TOOL-GATEWAY-SIZE 0 FILL
 \ The model, effort, tier and verbosity the provider's last turn ran on.
 : LAST.  ( -- ) PRV @ SCRIPTED-LAST-RUN >R ROT WHICH . SWAP ID. ID. R> . ;
 \ A provider whose room for a turn's input is ten bytes.
-: TINY-ROOM  ( prompt-a prompt-u context -- used capacity ) DROP NIP 10 ;
+: TINY-ROOM  ( prompt-a prompt-u reference-a reference-u context -- used capacity )
+    DROP NIP ROT DROP + 10 ;
 \ RUN's transcript decoded, and its status.
 : DECODE  ( run -- conversation status )
     ADST-TRANSCRIPT$ ATHREAD-DECODE NIP ;
@@ -214,9 +215,11 @@ FAKE-G AGENT-TOOL-GATEWAY-SIZE 0 FILL
     DS _ADISP.WAITING 32 RTAB-FREE
     DS ADISP-SIZE 0 FILL ;
 
-\ A fresh dispatcher over no file, the runtime idle and holding nothing.
+\ A fresh dispatcher over no file, the runtime idle and holding nothing,
+\ with no event left over from a test before.
 : FRESH  ( -- )
     DS ADISP-VALID? IF DS ADISP-FINI THEN
+    4 PUMPS
     ARUN-S-IDLE RT @ ARUNTIME.STATUS !
     DS ADISP-SIZE 0 FILL T-OPS-RESET
     DS ADISP-STORE ADST-SIZE 0 FILL TV @ D-PATH DS ADISP-STORE ADST-INIT DROP D-WIPE
@@ -521,7 +524,7 @@ def test_answers_and_their_refusals(forth):
         "RS SDSP-P.SUMMARY-U @ 0> . CR",
         # A request that is no hand-over, and a dispatcher that is none.
         "1 2 R-OCC 0 RQ SDSP-R.KIND ! GO . RUNS . AM-LIVE? . AM-FREE "
-        "RQ 0 RS 8 ADISP-START . KEY1 RS 8 ADISP-STATUS . KEY1 0 8 ADISP-CANCEL . "
+        "RQ 0 0 RS 8 ADISP-START . KEY1 RS 8 ADISP-STATUS . KEY1 0 8 ADISP-CANCEL . "
         "8 ADISP-IDLE? . 8 ADISP-BUSY? . CR",
     ])
     assert ints(rows[0]) == [S_UNKNOWN]
@@ -598,19 +601,19 @@ def test_a_scheduled_run_reads_no_history_and_gets_no_tools(forth):
 def test_the_runtime_starts_only_what_it_can_run(forth):
     rows = run(forth, [
         "FRESH AUTHORITY ACONV-NEW DROP CV2 ! "
-        "0 0 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
-        "NEWS$ 0 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
-        "NEWS$ 5 0 0 AM @ RT @ ARUNTIME-RUN-START . "
-        "NEWS$ 5 0 CV2 @ 0 RT @ ARUNTIME-RUN-START . "
+        "0 0 0 0 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
+        "NEWS$ 0 0 0 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
+        "NEWS$ 0 0 5 0 0 AM @ RT @ ARUNTIME-RUN-START . "
+        "NEWS$ 0 0 5 0 CV2 @ 0 RT @ ARUNTIME-RUN-START . "
         "STATUS@ . RT @ ARUNTIME.RUN-CONV @ . AM-LIVE? . CR",
-        "-1 AM @ AMRUN.DEADLINE-MS ! NEWS$ 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
+        "-1 AM @ AMRUN.DEADLINE-MS ! NEWS$ 0 0 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
         "AM-FREE AUTHORITY 5 AM @ AMRUN.MANDATE MAND.DISCLOSURE-BUDGET ! "
-        "NEWS$ 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . AM-FREE AUTHORITY "
-        "LINGER$ RT @ ARUNTIME-SEND DROP 2 STEPS NEWS$ 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
+        "NEWS$ 0 0 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . AM-FREE AUTHORITY "
+        "LINGER$ RT @ ARUNTIME-SEND DROP 2 STEPS NEWS$ 0 0 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
         "RT @ ARUNTIME-CANCEL DROP 2 STEPS AM-LIVE? . AM-FREE CV2 @ ACONV.COUNT @ . "
         "CV2 @ ACONV-FREE RT @ ARUNTIME.RUN-CONV @ . CR",
         "ARUN-S-IDLE RT @ ARUNTIME.STATUS ! RT @ ARUNTIME-RUN-ENDED? . RT @ ARUNTIME-RUN-TAKE . . . CR",
-        "AUTHORITY ACONV-NEW DROP CV2 ! NEWS$ 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . 0 AM ! "
+        "AUTHORITY ACONV-NEW DROP CV2 ! NEWS$ 0 0 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . 0 AM ! "
         "RT @ ARUNTIME.HOLD @ . NEWS$ RT @ ARUNTIME-SEND . RT @ ARUNTIME-IDLE? . "
         "RT @ ARUNTIME-RUN-ENDED? . RT @ ARUNTIME-RUN-TAKE . . . "
         "RT @ ARUNTIME.RUN-CONV @ CV2 @ = . CR",
@@ -618,7 +621,7 @@ def test_the_runtime_starts_only_what_it_can_run(forth):
         "RT @ ARUNTIME-IDLE? . RT @ ARUNTIME-RUN-TAKE . . CV2 @ = . RT @ ARUNTIME-IDLE? . "
         "RT @ ARUNTIME-RUN-TAKE . . . CV2 @ ACONV-FREE PUMP CR",
         "ARUN-S-IDLE RT @ ARUNTIME.STATUS ! AUTHORITY ACONV-NEW DROP CV2 ! "
-        "NEWS$ 6 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . 0 AM ! RT @ ARUNTIME-QUIESCE . "
+        "NEWS$ 0 0 6 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . 0 AM ! RT @ ARUNTIME-QUIESCE . "
         "RT @ ARUNTIME-RUN-ENDED? . RT @ ARUNTIME-RUN-TAKE 2DROP ACONV-FREE PUMP CR",
         "LINGER$ RT @ ARUNTIME-SEND . 2 STEPS ARUN-S-CANCELLED RT @ ARUNTIME-RUN-STOP . "
         "RT @ ARUNTIME-CANCEL . 2 STEPS CR",
@@ -636,6 +639,30 @@ def test_the_runtime_starts_only_what_it_can_run(forth):
     # Quiescing ends such a run; RUN-STOP stops no chat run.
     assert ints(rows[5]) == [0, 0, -1]
     assert ints(rows[6]) == [0, 1, 0]
+
+
+def test_a_run_starts_with_its_reference(forth):
+    news, doc = len("Summarize the news."), len("A document to read.")
+    rows = run(forth, [
+        # The prompt and the reference together fill the disclosure: the
+        # provider takes the reference with the turn, and the runtime keeps
+        # none of it once the start returns.
+        ': DOC$  ( -- a u ) S" A document to read." ; '
+        "FRESH AUTHORITY ACONV-NEW DROP CV2 ! "
+        "NEWS$ NIP DOC$ NIP + AM @ AMRUN.MANDATE MAND.DISCLOSURE-BUDGET ! "
+        "NEWS$ DOC$ 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . "
+        "AM @ AMRUN.DISCLOSURE-USED @ . 0 AM ! "
+        "PRV @ SCRIPTED-LAST-REFERENCE DROP . RT @ ARUNTIME.RUN-REFERENCE-U @ . "
+        "8 STEPS RT @ ARUNTIME-RUN-ENDED? . RT @ ARUNTIME-RUN-TAKE 2DROP ACONV-FREE PUMP CR",
+        # A byte less of room, or a reference with no text, starts nothing.
+        "AUTHORITY ACONV-NEW DROP CV2 ! "
+        "NEWS$ NIP DOC$ NIP + 1- AM @ AMRUN.MANDATE MAND.DISCLOSURE-BUDGET ! "
+        "NEWS$ DOC$ 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . AM-FREE AUTHORITY "
+        "NEWS$ 0 5 5 0 CV2 @ AM @ RT @ ARUNTIME-RUN-START . AM-FREE "
+        "CV2 @ ACONV-FREE STATUS@ . CR",
+    ])
+    assert ints(rows[0]) == [0, news + doc, doc, 0, -1]
+    assert ints(rows[1]) == [4, 1, IDLE]
 
 
 def test_a_store_that_cannot_be_used(forth):

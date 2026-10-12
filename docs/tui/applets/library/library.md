@@ -84,6 +84,7 @@ removes those service operations.
 | Ctrl+N | Create a managed document |
 | Ctrl+Shift+R | Retry the exact pending create request |
 | F2 | Rename the selected record's title |
+| Ctrl+G | Schedule an Agent run that reads the selected document's exact version |
 | Ctrl+H | Inspect retained content history for the selected managed document |
 | Backspace | Return from History or Collections |
 | Page Up / Page Down | Move to the previous or next bounded page |
@@ -92,6 +93,29 @@ removes those service operations.
 
 Active/Archived/All, Collections, Archive/Unarchive, and About are also
 available from the menu bar.
+
+## Scheduled Agent runs
+
+Inside Desk, Library publishes its documents' owner,
+`org.akashic.library`, in Desk's
+[resource owner directory](../../../interop/resource-owners.md) each time
+its service opens, whether or not its store exists yet, so a store its
+first document makes is reachable at once. The owner is a projection root
+over that service, reached through Desk's root Context, registries and
+request bus, whose attach word is `LIBRARY-PROJECTION-ATTACH`. Library
+withdraws the owner, and closes the root, before its service closes; a
+root that still holds a document is kept rather than freed under it.
+Outside Desk, or when Desk does not lend those services, it publishes
+nothing.
+
+Ctrl+G (Document, Schedule Agent Run) sends the selected document's exact
+version, the one its preview read, to Daybook through Desk as the intent
+`agent-run.schedule`. Its locator names the owner, the document, its domain
+revision and content digest, and the projection
+`org.akashic.library.utf8-content.v1`. Daybook then begins a scheduled
+Agent run that reads that version. When the run starts, Desk's broker
+attaches the document through Library, starting Library minimized if it is
+closed, and lets it go once the run has read it.
 
 ## Deferred UI and integration
 

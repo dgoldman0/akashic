@@ -248,8 +248,8 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
 
 \ A permission: the RID its serial gives, below the serial counter; a
 \ Practice; a schedule of a store; an automatic action at its schema;
-\ both digests; positive limits and no effects, which the catalog does
-\ not take yet; and zero reserved bytes.
+\ both digests; positive limits; no effects, or observing only, as a run
+\ with a document has; and zero reserved bytes.
 : _SPERM-PERMISSION-OK?  ( permission store -- flag )
     OVER SPERM-P.SERIAL @ DUP 1 < SWAP
     2 PICK _SPERM.PAYLOAD @ SPERM-H.SERIAL @ < 0= OR IF 2DROP 0 EXIT THEN
@@ -268,7 +268,7 @@ _SPERM-WORK CREC-WORK-SIZE + 7 + -8 AND CONSTANT SPERM-SIZE
     DUP SPERM-P.ACTION @ OVER SPERM-P.SCHEMA @ SACT-CLASS SACT-AUTOMATIC <> IF
         DROP 0 EXIT
     THEN
-    DUP SPERM-P.EFFECTS @ IF DROP 0 EXIT THEN
+    DUP SPERM-P.EFFECTS @ DUP 0<> SWAP CAP-E-OBSERVE <> AND IF DROP 0 EXIT THEN
     DUP SPERM-P.TIME @ 0>
     OVER SPERM-P.DISCLOSURE @ 0> AND
     SWAP SPERM-P.OUTPUT @ 0> AND ;

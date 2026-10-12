@@ -23,8 +23,8 @@
 \  when Desk last stopped.  Nothing is retried.
 \
 \  Through the same client the service asks for an approval and records
-\  the answer, starts a run by hand, cancels one, and fetches the models a
-\  schedule may name.
+\  the answer, starts a run by hand, cancels one, fetches the models a
+\  schedule may name, and asks what a document a run may read is.
 \
 \  Public API:
 \    DBSVC-SIZE        ( -- bytes )
@@ -44,6 +44,7 @@
 \    DBSVC-ASK-STATE@  ( service -- state )
 \    DBSVC-ASK-RID     ( service -- rid )
 \    DBSVC-MODELS      ( buffer capacity service -- bytes status )
+\    DBSVC-DESCRIBE    ( locator facts service -- status )
 \    DBSVC-LABEL       ( rid service -- address length )
 \    DBSVC-WHEN$       ( schedule service -- address length )
 \ =====================================================================
@@ -625,6 +626,11 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
 \ bytes needed.
 : DBSVC-MODELS  ( buffer capacity service -- bytes status )
     _DBSVC.CLIENT @ SDSP-MODELS ;
+
+\ What the owner of the document LOCATOR names says of it now, into
+\ FACTS, as the broker asks it (SDSP-DESCRIBE).
+: DBSVC-DESCRIBE  ( locator facts service -- status )
+    _DBSVC.CLIENT @ SDSP-DESCRIBE ;
 
 \ The title of schedule RID, for Desk to name a permission granted for
 \ it, or 0 0 when Daybook has no such schedule.  It stays put until the

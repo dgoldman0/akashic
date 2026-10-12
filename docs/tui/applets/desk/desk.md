@@ -372,6 +372,7 @@ endpoint:
 | `org.akashic.interop.request-bus` | Desk request bus |
 | `org.akashic.resource.daybook` | Owner-lent Daybook `ROFFER` (exact RID + owning pool) |
 | `org.akashic.daybook.automations` | Daybook's automation service (`DBSVC`), lent to Daybook alone |
+| `org.akashic.runtime.resource-owners` | Desk's [resource owner directory](../../../interop/resource-owners.md), lent to Library alone |
 | `org.akashic.net.external-io` | Machine-owned cooperative external-I/O service |
 
 The endpoint does not expose the owner instance or a pool independently. A
@@ -451,6 +452,19 @@ store either piece cannot use still opens, and says why. In recovery there
 is no Practice, so the broker does not open, Daybook's service gets no
 client, and scheduled runs are unavailable.
 
+A run may read one exact version of a document. Desk keeps a
+[resource owner directory](../../../interop/resource-owners.md) in which
+the applet that runs a document's owner publishes it while it runs: Library
+publishes `org.akashic.library`, and Desk's policy lets only
+`org.akashic.library.applet` publish it. The broker attaches a run's
+document through Desk's owners (`SBRK-OWNERS!`): Desk finds the document's
+owner in the directory, and when its applet is not running, Desk starts it
+minimized from the catalog (`AHOST-TRY-LAUNCH-MINIMIZED`): it runs and
+ticks, but takes no tile and no focus, and it is not the slot Alt+R
+restores. Its INIT publishes the owner before the launch returns, so
+nothing waits on a timer. Alt+ the slot's number, or a press on its label,
+restores it.
+
 Each Desk tick pumps the dispatcher right after the Agent runtime, so it
 takes the end of the run the runtime advanced, then ticks the broker,
 which starts the next waiting run once the Agent is idle, and then
@@ -476,7 +490,11 @@ dispatch returns.
   answer, unless another overlay is open or the user is typing to the
   Agent; a sandbox access prompt goes first. It shows the schedule's
   title, when it runs, the model with its effort, tier and verbosity, the
-  provider, the limits, and the prompt in full, each as a card. When the
+  provider, the limits, the document it reads, if any, and the prompt in
+  full, each as a card. The document shows as its owner describes it when
+  the screen opens: its title, the revision the run reads and its size,
+  and whether it has changed since, so that a run would stop for review;
+  one whose owner cannot say is named by its revision alone. When the
   Agent could not run the schedule, a note says why, first. A allows it,
   and R or Esc refuses. Allow is locked until the view has shown the
   request's last line, and is not offered when the catalog does not offer
@@ -513,7 +531,8 @@ instance whose descriptor is that component's trusted built-in descriptor,
 the one `_DESK-TRUSTED-COMP` finds, never to a descriptor that only claims
 the id:
 - `org.akashic.agent.*` goes to `org.akashic.agent`;
-- `org.akashic.daybook.automations` goes to `org.akashic.daybook`.
+- `org.akashic.daybook.automations` goes to `org.akashic.daybook`;
+- `org.akashic.runtime.resource-owners` goes to `org.akashic.library.applet`.
 
 A lookup that names no instance gets only what any child may. The shared
 runtime services, such as the root Context, stay open to every child;

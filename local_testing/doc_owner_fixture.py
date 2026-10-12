@@ -1,0 +1,126 @@
+"""A stand-in owner of one text document, for native tests.
+
+DOC_OWNER is Forth for a native suite's prelude: DOC_PRACTICE, DOC_BUS and
+DOC_DOCUMENT.  DOC_PRACTICE makes Desk's Practice (HD) and its active root
+Context (ROOT, epoch 777); a suite with its own may use the other two
+alone.  DOC_BUS makes a component registry (REG), a resource registry
+(RRG), and the root Context's request bus (BUS) whose authority table (TAB)
+seals grants.  In DOC_DOCUMENT, the owner "org.akashic.test.docs" holds
+one document, text with a revision: its instance (DOC-INST) answers
+resource.describe and resource.snapshot on the bus as the resource
+contract says, and its acquisition root (DOC-ROOT) attaches a locator of
+that document to the instance.
+
+    DOC!     ( a u revision -- )  the document is now the U bytes at A,
+                                  borrowed, at REVISION
+    DOC-LOC  ( -- locator )       the exact locator of the version DOC! set
+    DOC-HELD ( -- a )             attachments the root holds
+    DOC-DESCRIBES DOC-SNAPSHOTS ( -- a )  requests the instance answered
+    DOC-PRINCIPAL DOC-MANDATE ( -- a )    who asked last, under which
+                                          Mandate
+    DOC-UNDERSTATE ( -- a )       bytes the description wrongly leaves
+                                  out of the document's size
+    DOC-REFUSE ( -- a )           an RACQ- status the root answers an
+                                  attach with instead, when not zero
+    DOC-STUCK ( -- a )            releases the root refuses before it
+                                  takes one
+"""
+
+DOC_PRACTICE = r"""
+CREATE HD-RAW PHEAD-SIZE 7 + ALLOT  HD-RAW 7 + -8 AND CONSTANT HD
+HD PHEAD-INIT HD PHEAD.ID 32 4 FILL HD PHEAD.CURRENT-ROOT 32 9 FILL
+VARIABLE ROOT  777 CTX-NEW THROW ROOT !  HD ROOT @ CTX.PRACTICE !
+ROOT @ CTX.FLAGS DUP @ CTX-F-ACTIVE OR SWAP !
+"""
+
+DOC_BUS = r"""
+CREG-NEW THROW CONSTANT REG
+REG ROOT @ RREG-NEW THROW CONSTANT RRG
+CREATE DOC-POLICY CPOLICY-SIZE ALLOT  DOC-POLICY CPOLICY-INIT
+REG DOC-POLICY CBUS-NEW THROW CONSTANT BUS
+CREATE DOC-SECRET 32 ALLOT  DOC-SECRET 32 7 FILL
+777 DOC-SECRET AHT-NEW THROW CONSTANT TAB  TAB BUS CBUS-AUTHORITY!
+BUS ROOT @ CTX.QUEUE !
+"""
+
+DOC_DOCUMENT = r"""
+: DOC-OWNER$  ( -- a u ) S" org.akashic.test.docs" ;
+: DOC-PROJECTION$  ( -- a u ) S" org.akashic.test.docs.text" ;
+VARIABLE DOC-A  VARIABLE DOC-U  VARIABLE DOC-REV
+VARIABLE DOC-HELD  VARIABLE DOC-DESCRIBES  VARIABLE DOC-SNAPSHOTS
+VARIABLE DOC-PRINCIPAL  CREATE DOC-MANDATE 32 ALLOT
+VARIABLE DOC-UNDERSTATE   \ bytes the description leaves out of the size
+\ Who made a request the instance answered, and under which Mandate.
+: DOC-ASKER!  ( request -- )
+    DUP CBR.PRINCIPAL @ DOC-PRINCIPAL ! CBR.MANDATE-ID DOC-MANDATE RID-COPY ;
+CREATE DOC-DIGEST 32 ALLOT
+CREATE DOC-REF RREF-SIZE ALLOT  DOC-REF RREF-INIT  DOC-REF RREF.ID 32 7 FILL
+CREATE DOC-LOC QLOC-SIZE ALLOT
+: DOC!  ( a u revision -- )
+    DOC-REV ! DOC-U ! DOC-A !
+    DOC-A @ DOC-U @ DOC-DIGEST SHA3-256-HASH
+    DOC-OWNER$ DOC-REF DOC-REV @ DOC-DIGEST QLOC-DK-PROJECTION-CONTENT
+    DOC-PROJECTION$ DOC-LOC QLOC-EXACT! THROW ;
+
+CREATE DOC-WS RCON-RESULT-WORKSPACE-SIZE ALLOT  DOC-WS RCON-RESULT-WORKSPACE-INIT THROW
+CREATE DOC-DV RCON-DESCRIBE-VIEW-SIZE ALLOT
+CREATE DOC-SV RCON-SNAPSHOT-VIEW-SIZE ALLOT
+CREATE DOC-SO RCON-SNAPSHOT-OPERANDS-SIZE ALLOT
+: DOC-STATUS  ( rcon-status -- cbus-status ) RCON-S-OK = IF CBUS-S-OK ELSE CBUS-S-FAILED THEN ;
+: DOC-DESCRIBE  ( request instance -- status )
+    DROP >R 1 DOC-DESCRIBES +! R@ DOC-ASKER!
+    DOC-DV RCON-DESCRIBE-VIEW-INIT
+    DOC-REF DOC-DV RCONDV.RESOURCE !
+    DOC-REV @ DOC-DV RCONDV.DOMAIN-REVISION !
+    S" document" DOC-DV RCONDV.KIND-U ! DOC-DV RCONDV.KIND-A !
+    S" Field notes" DOC-DV RCONDV.TITLE-U ! DOC-DV RCONDV.TITLE-A !
+    S" text/plain" DOC-DV RCONDV.MEDIA-U ! DOC-DV RCONDV.MEDIA-A !
+    DOC-U @ DOC-UNDERSTATE @ - DOC-DV RCONDV.SIZE !
+    DOC-OWNER$ DOC-DV RCONDV.OWNER-U ! DOC-DV RCONDV.OWNER-A !
+    DOC-DV R> CBR.RESULT DOC-WS RCON-DESCRIBE-RESULT! DOC-STATUS ;
+\ Only the version the document now is can be read.
+: DOC-SNAPSHOT  ( request instance -- status )
+    DROP >R 1 DOC-SNAPSHOTS +! R@ DOC-ASKER!
+    R@ CBR.ARGS DOC-OWNER$ DOC-REF DOC-SO RCON-SNAPSHOT-ARGS@ RCON-S-OK <> IF
+        R> DROP CBUS-S-INVALID EXIT
+    THEN
+    DOC-SO RCONSO.LOCATOR DOC-LOC QLOC= 0= IF R> DROP CBUS-S-STALE-REVISION EXIT THEN
+    DOC-SV RCON-SNAPSHOT-VIEW-SIZE 0 FILL
+    DOC-LOC DOC-SV RCONSV.LOCATOR !
+    S" text/plain" DOC-SV RCONSV.MEDIA-U ! DOC-SV RCONSV.MEDIA-A !
+    DOC-A @ DOC-SV RCONSV.CONTENT-A ! DOC-U @ DOC-SV RCONSV.CONTENT-U !
+    DOC-DIGEST DOC-SV RCONSV.CONTENT-DIGEST !
+    DOC-SV R> CBR.RESULT DOC-WS RCON-SNAPSHOT-RESULT! DOC-STATUS ;
+
+CREATE DOC-CAPS CAP-DESC 2 * ALLOT
+CREATE DOC-CC RCON-CAP-CONFIG-SIZE ALLOT
+CREATE DOC-CW RCON-CAP-WORKSPACE-SIZE ALLOT  DOC-CW RCON-CAP-WORKSPACE-INIT THROW
+' DOC-DESCRIBE CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR DOC-CC RCON-CAP-CONFIG-INIT THROW
+DOC-CC DOC-CAPS DOC-CW RCON-DESCRIBE-CAP! THROW
+' DOC-SNAPSHOT CAP-F-IDEMPOTENT CAP-F-NEEDS-TARGET OR DOC-CC RCON-CAP-CONFIG-INIT THROW
+DOC-CC DOC-CAPS CAP-DESC + DOC-CW RCON-SNAPSHOT-CAP! THROW
+CREATE DOC-DESC COMP-DESC ALLOT  DOC-DESC COMP-DESC-INIT
+S" org.akashic.test.docs.document" DOC-DESC COMP.ID-U ! DOC-DESC COMP.ID-A !
+S" 1.0.0" DOC-DESC COMP.VERSION-U ! DOC-DESC COMP.VERSION-A !
+DOC-CAPS DOC-DESC COMP.CAPS-A !  2 DOC-DESC COMP.CAPS-N !
+DOC-DESC CINST-NEW THROW CONSTANT DOC-INST
+DOC-INST REG CREG-INST+ THROW
+DOC-REF RREF.ID DOC-INST ROOT @ RRG RREG-PUBLISH THROW
+
+CREATE DOC-ROOT RACQ-ROOT-SIZE ALLOT
+VARIABLE DA-L  VARIABLE DA-O  VARIABLE DA-R  VARIABLE DOC-REFUSE  VARIABLE DOC-STUCK
+: DOC-ACQUIRE  ( locator result root -- status )
+    DA-R ! DA-O ! DA-L !
+    DOC-REFUSE @ ?DUP IF EXIT THEN
+    DA-L @ QLOC.REF RREF.ID DOC-REF RREF.ID RID= 0= IF RACQ-S-NOT-FOUND EXIT THEN
+    1 1 DA-R @ DA-O @ RACQ.RESULT-TOKEN RACQ-TOKEN-ACTIVATE! ?DUP IF EXIT THEN
+    DOC-REF DA-O @ RACQ-RESULT-REF! ?DUP IF EXIT THEN
+    1 DOC-HELD +! RACQ-S-OK ;
+: DOC-QUIET  ( token root -- status ) 2DROP RACQ-S-OK ;
+: DOC-RELEASE  ( token root -- status )
+    2DROP DOC-STUCK @ IF -1 DOC-STUCK +! RACQ-S-RELEASE-FAILED EXIT THEN
+    -1 DOC-HELD +! RACQ-S-OK ;
+DOC-OWNER$ ROOT @ ' DOC-ACQUIRE ' DOC-QUIET ' DOC-RELEASE DOC-ROOT RACQ-ROOT-INIT THROW
+"""
+
+DOC_OWNER = DOC_PRACTICE + DOC_BUS + DOC_DOCUMENT

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -14294,6 +14295,35 @@ PROFILES["desktop-daybook-agent"] = replace(
 # carried through a power loss and a shutdown on machines booted from the
 # disk.
 PROFILES["desktop-daybook-agent-recovery"] = PROFILES["desktop-daybook-agent"]
+# The same Desk with Library: a scheduled Agent run reads one exact version
+# of a Library document.  Library sends that version to Daybook's new run,
+# and Desk attaches the document through Library while the run starts,
+# starting Library minimized when it is closed.
+_LIBRARY_DESK_APPLET = DeskApplet(
+    "library",
+    "tui/applets/library/library.f",
+    ("tui/applets/library/library.uidl",),
+    "LIBRARY-APPLET-ENTRY",
+    ready=("Browse",),
+    stable=("Browse",),
+)
+_DAYBOOK_AGENT_DOCUMENT_APPLETS = (*_DAYBOOK_AGENT_APPLETS, _LIBRARY_DESK_APPLET)
+PROFILES["desktop-daybook-agent-document"] = replace(
+    PROFILES["desktop-daybook-agent"],
+    roots=(
+        *desktop_roots(_DAYBOOK_AGENT_DOCUMENT_APPLETS), _DAYBOOK_AGENT_DEVFLOW
+    ),
+    resources=desktop_resources(_DAYBOOK_AGENT_DOCUMENT_APPLETS),
+    autoexec=desktop_autoexec(_DAYBOOK_AGENT_DOCUMENT_APPLETS).replace(
+        _DESK_AGENT_SOURCE_BOOT, _DAYBOOK_AGENT_SOURCE_BOOT, 1
+    ),
+    ready_markers=desktop_ready_markers(_DAYBOOK_AGENT_DOCUMENT_APPLETS),
+    stable_markers=desktop_stable_markers(_DAYBOOK_AGENT_DOCUMENT_APPLETS),
+    # Library makes its store for the first document and renames it later,
+    # each over a billion steps: about nine billion steps in all, which a
+    # slow host takes most of 900 s for.  The step limit is the Desktop's.
+    smoke_timeout=900.0,
+)
 
 
 DAYBOOK_AUTOMATION_FORMAT = 2
@@ -30213,7 +30243,6 @@ def smoke(
             it must offer, how many rows down it is, and the failure when
             it does not), and its limits."""
 
-            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
             session.send_key("alt+1")
             if not wait_screen("[1:Daybook*]", "Desk did not focus Daybook"):
                 return False
@@ -30222,6 +30251,25 @@ def smoke(
                 "Agent run (HH:MM", "Ctrl+G did not ask for a new Agent run"
             ):
                 return False
+            return continue_daybook_agent_run(
+                title, due_s, repeat, choices, minutes, reply,
+                "New Agent run: its prompt",
+            )
+
+        def continue_daybook_agent_run(
+            title: str,
+            due_s: int,
+            repeat: str,
+            choices: tuple[tuple[str, str, int, str], ...],
+            minutes: str,
+            reply: str,
+            heading: str,
+        ) -> bool:
+            """Takes a new Agent run's steps from the first, which asks
+            when it runs, up to its prompt page, whose HEADING it waits
+            for."""
+
+            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
             session.send_text(f"{hhmm} {title}")
             session.send_key("enter")
             if not wait_screen(
@@ -30235,8 +30283,8 @@ def smoke(
             ):
                 return False
             session.send_key("enter")
-            for heading, choice, moves, failure in choices:
-                if not wait_screen(heading, failure) or not wait_screen(
+            for asks, choice, moves, failure in choices:
+                if not wait_screen(asks, failure) or not wait_screen(
                     choice, f"{failure}: no {choice}"
                 ):
                     return False
@@ -30256,22 +30304,33 @@ def smoke(
                 return False
             session.send_text(reply)
             session.send_key("enter")
-            return wait_screen(
-                "New Agent run: its prompt", "Daybook did not open the prompt"
-            )
+            return wait_screen(heading, "Daybook did not open the prompt")
 
-        def approve_daybook_agent_run(shown: tuple[tuple[str, str], ...]) -> bool:
+        def approve_daybook_agent_run(
+            shown: tuple[tuple[str, str], ...],
+            *,
+            step_budget: int = 500_000_000,
+            wall_timeout: float = 15.0,
+            note: str | None = None,
+        ) -> bool:
             """Desk asks to approve an Agent run Daybook made.  The approval
             shows each text SHOWN lists, unlocks Allow only once read to the
-            end, and A allows the run, which Daybook then says."""
+            end, and A allows the run, which Daybook then says.  The
+            approval comes within STEP_BUDGET and WALL_TIMEOUT.  With NOTE,
+            a host note says how many steps and how much of the guest's
+            clock each took."""
 
+            asked = total_steps
+            asked_ms = session.system.rtc.uptime_ms
             if not wait_screen(
                 "Approve a scheduled Agent run",
                 "Desk did not ask to approve the new Agent run",
-                step_budget=500_000_000,
-                wall_timeout=15.0,
+                step_budget=step_budget,
+                wall_timeout=wall_timeout,
             ):
                 return False
+            shown_at = total_steps
+            shown_ms = session.system.rtc.uptime_ms
             for text, failure in (
                 *shown, ("Read it to the end", "Allow was not locked before reading")
             ):
@@ -30282,6 +30341,8 @@ def smoke(
                 "A allows it to run", "reading to the end did not unlock Allow"
             ):
                 return False
+            allowed = total_steps
+            allowed_ms = session.system.rtc.uptime_ms
             session.send_text("a")
             if not wait_screen_gone(
                 "Approve a scheduled Agent run",
@@ -30290,11 +30351,21 @@ def smoke(
                 return False
             # Daybook's service polls for the answer once a second, and both
             # the permission and the approval are written to disk first.
-            return wait_screen(
+            if not wait_screen(
                 "Approved", "Daybook did not say it was approved",
                 step_budget=1_500_000_000,
                 wall_timeout=45.0,
-            )
+            ):
+                return False
+            if note:
+                host_notes.append(
+                    f"{note}: the approval showed {shown_at - asked:,} steps "
+                    f"and {shown_ms - asked_ms:,} virtual ms after Ctrl+S; "
+                    f"Daybook said it was approved {total_steps - allowed:,} "
+                    f"steps and {session.system.rtc.uptime_ms - allowed_ms:,} "
+                    "virtual ms after A"
+                )
+            return True
 
         def show_daybook_calendar() -> bool:
             """Daybook's calendar, leaving its automations if they show."""
@@ -31121,6 +31192,286 @@ def smoke(
                 machine.send_key("escape")
             host_notes.append(
                 "agent run: after a shutdown, deleting kept a short record of each run"
+            )
+
+        def run_daybook_agent_document_journey() -> None:
+            """A scheduled Agent run reads one exact Library document.
+            Library makes the document through its own steps and sends that
+            exact version to Daybook with Ctrl+G, whose new run then reads
+            it.  Desk's approval names the document with its title,
+            revision and size, and the run may disclose its prompt and that
+            document.  Closed before the run is due, Library is started
+            minimized when the run starts.  The run reads the document as
+            itself, the model is given its exact text as a reference, and
+            the transcript says which version was read, never its text."""
+
+            rtc = session.system.rtc
+            doc_title = "Field notes"
+            doc_text = "Quarterly figures rose by four percent."
+            title = "Notes digest"
+            prompt = "Summarize the notes."
+            size = len(doc_text.encode())
+            session.send_key("alt+3")
+            if not wait_screen("[3:Library*]", "Desk did not focus Library"):
+                return
+            session.send_key("ctrl+n")
+            if not wait_screen(
+                "New document title:", "Ctrl+N did not ask for the title"
+            ):
+                return
+            session.send_text(doc_title)
+            session.send_key("enter")
+            if not wait_screen("Initial text", "Library did not ask for the text"):
+                return
+            session.send_text(doc_text)
+            session.send_key("enter")
+            # Library's first document makes its store: 1.7 billion steps.
+            # Its tile is too narrow for the preview pane, but it reads the
+            # selected version's preview as it lists it, and that is the
+            # version Ctrl+G sends.
+            if not wait_screen(
+                f"M   {doc_title}", "Library did not list the new document",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ) or not wait_screen(
+                "|  1 rows", "Library did not count the new document"
+            ):
+                return
+            # Its exact version goes to Daybook, which begins a new run.
+            asked = total_steps
+            asked_ms = rtc.uptime_ms
+            session.send_key("ctrl+g")
+            if not wait_screen(
+                "[1:Daybook*]", "Ctrl+G did not bring Daybook forward"
+            ) or not wait_screen(
+                "Agent run (HH:MM", "Daybook did not begin a run reading it",
+                # Daybook asks Desk to describe the document through its
+                # owner before the steps begin.
+                step_budget=1_000_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            host_notes.append(
+                f"agent run: Daybook began it {total_steps - asked:,} steps "
+                f"and {rtc.uptime_ms - asked_ms:,} virtual ms after Ctrl+G, "
+                "with the document described through Library"
+            )
+            # The run is due well after the steps that make and approve it
+            # and close Library; the clock then moves to just before it.
+            due_s = (rtc.epoch_ms // 60_000 + 15) * 60
+            if not continue_daybook_agent_run(
+                title, due_s, "daily", SWIFT_CHOICES, "10", "4096",
+                f"New Agent run reading {doc_title}: its prompt",
+            ):
+                return
+            session.send_text(prompt)
+            if not wait_screen(prompt, "the prompt did not show what was typed"):
+                return
+            session.send_key("ctrl+s")
+            # Desk asks Library for the document's title, revision and size
+            # before it shows the approval.
+            if not approve_daybook_agent_run((
+                (title, "the approval did not name the schedule"),
+                (f"{doc_title}, revision 1, {size} bytes",
+                 "the approval did not name the document's version"),
+                (f"{len(prompt) + size} bytes to disclose",
+                 "the approval did not disclose the prompt and the document"),
+            ), step_budget=1_000_000_000, wall_timeout=120.0, note="agent run"):
+                return
+            stored = read_daybook_reminders() or {}
+            schedules = [
+                schedule for schedule in stored.get("schedules", ())
+                if schedule["title"] == title
+            ]
+            actions = [
+                action for action in stored.get("actions", ())
+                if schedules and action["rid"] == schedules[0]["rid"]
+            ]
+            if len(actions) != 1:
+                journey_errors.append(f"Daybook did not keep the run: {stored}")
+                return
+            operands = agent_operands(actions[0]["operands"])
+            if (operands["effects"], operands["flags"], operands["disclosure"],
+                    operands["prompt"]) != (1, 1, len(prompt) + size, prompt):
+                journey_errors.append(
+                    f"the run's operands do not read the document: {operands}"
+                )
+                return
+            # Library closes before the run is due, closing its store.
+            session.send_key("alt+3")
+            if not wait_screen("[3:Library*]", "Desk did not focus Library"):
+                return
+            closing = total_steps
+            closing_ms = rtc.uptime_ms
+            session.send_key("alt+w")
+            if not wait_screen_gone(
+                "[3:Library", "Alt+W did not close Library",
+                step_budget=1_000_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            host_notes.append(
+                f"agent run: Library closed {total_steps - closing:,} steps "
+                f"and {rtc.uptime_ms - closing_ms:,} virtual ms after Alt+W"
+            )
+            rtc.seed_epoch_ms(due_s * 1000 - 15_000)
+            # The run starts Library minimized to read the document.
+            if not wait_screen(
+                f"Agent run: {title}", "the run did not fire",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ) or not wait_screen(
+                f"Agent run done: {title}",
+                "the run reading the document did not complete",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ):
+                return
+            done = newest_item(title)
+            if not done or (
+                done["phase"], done["outcome"], done["reason"]
+            ) != (3, 1, 0):
+                journey_errors.append(f"the run did not complete: {done}")
+                return
+            # Desk started Library to read the document, minimized: in the
+            # taskbar, with no tile and no focus.  The run's notice may
+            # cover the taskbar for a while.
+            if not wait_screen(
+                "Library~]", "Desk did not start Library minimized"
+            ):
+                return
+            started = re.findall(
+                r"\[(\d+):Library([*~]?)\]", session.snapshot().text()
+            )
+            if len(started) != 1 or started[0][1] != "~":
+                journey_errors.append(
+                    f"Library is not running minimized after the run: {started}"
+                )
+                return
+            library_id = started[0][0]
+            digest = hashlib.sha3_256(doc_text.encode()).hexdigest()[:8]
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("alt+f")
+            session.send_key("f5")
+            if not wait_screen(title, "the Agent's runs did not list the run"):
+                return
+            session.send_key("enter")
+            # The transcript wraps to the terminal's width.
+            for shown, failure in (
+                (f"Read the document: {doc_title} (revision 1, {size} bytes)",
+                 "the transcript did not say which version was read"),
+                (f"With a reference of {size} bytes, SHA3 {digest}",
+                 "the model was not given the document's exact text"),
+            ):
+                if not wait_screen_normalized(shown, failure):
+                    return
+            if doc_text in " ".join(session.snapshot().text().split()):
+                journey_errors.append("the transcript shows the document's text")
+                return
+            # Back at the chat and out of full frame, Library comes back
+            # when the user asks for it by its number.
+            session.send_key("f5")
+            if not wait_screen(
+                "Start a conversation", "F5 did not return the Agent to its chat"
+            ):
+                return
+            session.send_key("alt+f")
+            session.send_key(f"alt+{library_id}")
+            if not wait_screen(
+                f"[{library_id}:Library*]",
+                f"Alt+{library_id} did not bring Library back",
+            ) or not wait_screen(
+                f"M   {doc_title}", "Library did not list the document again"
+            ):
+                return
+            host_notes.append("agent run: read its document once, as itself")
+            run_daybook_agent_changed_document_journey(title, doc_title)
+
+        def run_daybook_agent_changed_document_journey(
+            title: str, doc_title: str
+        ) -> None:
+            """Renamed in Library, the document is at a new revision, so the
+            daily run approved for the old one, run by hand, stops for
+            review before it reads anything.  Daybook, the schedule's
+            details and the Agent's runs say the document changed."""
+
+            renamed = f"{doc_title} (revised)"
+            session.send_key("f2")
+            if not wait_screen("Replace title:", "F2 did not ask for the new title"):
+                return
+            session.send_text(" (revised)")
+            renaming = total_steps
+            renaming_ms = session.system.rtc.uptime_ms
+            session.send_key("enter")
+            if not wait_screen(
+                f"M   {renamed}", "Library did not list the renamed document",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ):
+                return
+            host_notes.append(
+                f"agent run: Library renamed the document "
+                f"{total_steps - renaming:,} steps and "
+                f"{session.system.rtc.uptime_ms - renaming_ms:,} virtual ms "
+                "after Enter"
+            )
+            session.send_key("alt+1")
+            if not wait_screen("[1:Daybook*]", "Desk did not focus Daybook"):
+                return
+            # The schedule is the last row.  Run by hand, the run ends as
+            # Daybook hands it over, and its list shows it at once.
+            session.send_key("end")
+            session.send_text("r")
+            if not wait_screen(
+                "stopped for review: the document",
+                "the run of the changed document did not stop for review",
+                step_budget=1_500_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            stopped = newest_item(title)
+            if not stopped or (
+                stopped["phase"], stopped["outcome"], stopped["reason"]
+            ) != (3, 5, 18):
+                journey_errors.append(
+                    f"the run did not stop because the document changed: {stopped}"
+                )
+                return
+            # The schedule's details list its runs, newest first.
+            session.send_key("end")
+            session.send_key("enter")
+            if not wait_screen(
+                "Automation details", "Enter did not open the schedule's details"
+            ) or not wait_screen_normalized(
+                "stopped for review: the document changed",
+                "the run's details did not say the document changed",
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Automation details", "Escape did not leave the details"
+            ):
+                return
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("alt+f")
+            session.send_key("f5")
+            if not wait_screen_normalized(
+                "stopped for review: the document changed",
+                "the Agent's runs did not say the document changed",
+            ):
+                return
+            session.send_key("f5")
+            session.send_key("alt+f")
+            if not wait_screen(
+                "Start a conversation", "Alt+F did not bring Desk's tiles back"
+            ):
+                return
+            host_notes.append(
+                "agent run: stopped for review once its document changed"
             )
 
         def run_daybook_reminders_journey() -> None:
@@ -32506,6 +32857,9 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-daybook-agent-recovery":
             run_daybook_agent_recovery_journey()
+
+        if initial_ready and profile_name == "desktop-daybook-agent-document":
+            run_daybook_agent_document_journey()
 
         if initial_ready and profile_name == "desktop-streams":
             run_streams_persistence_journey()
@@ -34861,15 +35215,18 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 : _dst-service  ( id-a id-u -- service | 0 )
     _dst-desk @ CINST-SERVICE ;
 
-\ The trusted Agent and Daybook, as Desk's built-in constructor list names
-\ them, and an impostor that claims the Agent's id.
+\ The trusted Agent, Daybook and Library, as Desk's built-in constructor
+\ list names them, and an impostor that claims the Agent's id.
 CREATE _dst-agent-comp COMP-DESC ALLOT
 CREATE _dst-daybook-comp COMP-DESC ALLOT
+CREATE _dst-library-comp COMP-DESC ALLOT
 CREATE _dst-impostor-comp COMP-DESC ALLOT
 CREATE _dst-agent-app APP-DESC ALLOT
 CREATE _dst-daybook-app APP-DESC ALLOT
+CREATE _dst-library-app APP-DESC ALLOT
 VARIABLE _dst-agent
 VARIABLE _dst-daybook
+VARIABLE _dst-library
 VARIABLE _dst-impostor
 
 : _dst-comp  ( id-a id-u desc -- )
@@ -34883,14 +35240,19 @@ VARIABLE _dst-impostor
 : _dst-trusted  ( -- )
     S" org.akashic.agent" _dst-agent-comp _dst-comp
     S" org.akashic.daybook" _dst-daybook-comp _dst-comp
+    S" org.akashic.library.applet" _dst-library-comp _dst-comp
     S" org.akashic.agent" _dst-impostor-comp _dst-comp
     _dst-agent-app APP-DESC-INIT _dst-agent-comp _dst-agent-app APP.COMP-DESC !
     _dst-daybook-app APP-DESC-INIT
         _dst-daybook-comp _dst-daybook-app APP.COMP-DESC !
+    _dst-library-app APP-DESC-INIT
+        _dst-library-comp _dst-library-app APP.COMP-DESC !
     _dst-agent-app 0 _DESK-QUEUE-BUILTIN-RAW
     _dst-daybook-app 0 _DESK-QUEUE-BUILTIN-RAW
+    _dst-library-app 0 _DESK-QUEUE-BUILTIN-RAW
     _dst-agent-comp _dst-inst _dst-agent !
     _dst-daybook-comp _dst-inst _dst-daybook !
+    _dst-library-comp _dst-inst _dst-library !
     _dst-impostor-comp _dst-inst _dst-impostor ! ;
 
 : _dst-agent-service  ( id-a id-u -- service | 0 )
@@ -34900,7 +35262,7 @@ VARIABLE _dst-impostor
     _DESK-ANY ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 13 = _dst-assert
+    _DESK-SERVICE-COUNT @ 14 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
     \ The sandbox is a capability now, not a service.
     S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0= _dst-assert
@@ -34918,6 +35280,7 @@ VARIABLE _dst-impostor
         _DESK-SERVICE-FIND 0= _dst-assert
     S" org.akashic.resource.daybook" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.daybook.automations" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.runtime.resource-owners" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.interop.endpoint" _DESK-SERVICE-FIND 0<> _dst-assert ;
 
 : _dst-current-services  ( -- )
@@ -34992,9 +35355,9 @@ VARIABLE _dst-impostor
     S" org.akashic.resource.daybook" _dst-service
         0= _dst-assert ;
 
-\ The Agent's services go to the trusted Agent alone, and Daybook's
-\ automations to the trusted Daybook alone; the shared runtime services
-\ go to any component.
+\ The Agent's services go to the trusted Agent alone, Daybook's
+\ automations to the trusted Daybook alone, and the resource owners to the
+\ trusted Library alone; the shared runtime services go to any component.
 : _dst-lending  ( -- )
     S" org.akashic.agent.runtime" _dst-desk @ CINST-SERVICE 0= _dst-assert
     S" org.akashic.agent.runtime" _dst-daybook @ CINST-SERVICE 0= _dst-assert
@@ -35023,6 +35386,14 @@ VARIABLE _dst-impostor
     S" org.akashic.agent.dispatch" _dst-desk @ CINST-SERVICE 0= _dst-assert
     _DESK-AGENT-DISPATCH ADISP-FINI
     S" org.akashic.agent.dispatch" _dst-agent @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-library @ CINST-SERVICE
+        _DESK-OWNERS = _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-daybook @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-impostor @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-desk @ CINST-SERVICE
+        0= _dst-assert
     S" org.akashic.runtime.registry" _dst-impostor @ CINST-SERVICE
         _dst-registry = _dst-assert
     S" org.akashic.net.external-io" _dst-daybook @ CINST-SERVICE
@@ -35031,6 +35402,32 @@ VARIABLE _dst-impostor
     S" org.akashic.agent.runtime" 0 _DESK-ENDPOINT IEND-SERVICE 0= _dst-assert
     S" org.akashic.runtime.registry" 0 _DESK-ENDPOINT IEND-SERVICE
         _dst-registry = _dst-assert ;
+
+\ Only the trusted Library publishes Library's documents' owner: not a
+\ component that only claims Library's id, nor Library an owner Desk does
+\ not know.
+CREATE _dst-library-claim-comp COMP-DESC ALLOT
+CREATE _dst-owner-root 8 ALLOT
+VARIABLE _dst-owner-reg
+: _dst-owner-policy  ( -- )
+    S" org.akashic.library.applet" _dst-library-claim-comp _dst-comp
+    CREG-NEW 0= _dst-assert _dst-owner-reg !
+    _dst-owner-reg @ _DESK-OWNERS ROWN-INIT
+    ['] _DESK-OWNER-ALLOWED? _dst-desk @ _DESK-OWNERS ROWN-POLICY!
+    _dst-library @ _dst-owner-reg @ CREG-INST+ 0= _dst-assert
+    _dst-library-claim-comp _dst-inst
+    DUP _dst-owner-reg @ CREG-INST+ 0= _dst-assert
+    S" org.akashic.library" _dst-owner-root ['] DROP 4 PICK
+        _DESK-OWNERS ROWN-PUBLISH ROWN-S-REFUSED = _dst-assert
+    S" org.akashic.library" _dst-owner-root ['] DROP _dst-library @
+        _DESK-OWNERS ROWN-PUBLISH ROWN-S-OK = _dst-assert
+    S" org.akashic.notes" _dst-owner-root ['] DROP _dst-library @
+        _DESK-OWNERS ROWN-PUBLISH ROWN-S-REFUSED = _dst-assert
+    _DESK-OWNERS ROWN-COUNT@ 1 = _dst-assert
+    DUP _dst-owner-reg @ CREG-INST- DROP CINST-FREE
+    _dst-library @ _dst-owner-reg @ CREG-INST- DROP
+    _DESK-OWNERS ROWN-FREE
+    _dst-owner-reg @ CREG-FREE ;
 
 : _dst-uniqueness  ( -- )
     _DESK-SERVICE-TABLE-INIT
@@ -35074,7 +35471,7 @@ VARIABLE _dst-impostor
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 13 = _dst-assert
+    _DESK-SERVICE-COUNT @ 14 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
@@ -35156,6 +35553,7 @@ VARIABLE _dst-impostor
     _DESK-XIO-FINI XIO-S-OK = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _dst-agent @ CINST-FREE _dst-daybook @ CINST-FREE _dst-impostor @ CINST-FREE
+    _dst-library @ CINST-FREE
     _dst-desk @ CINST-FREE
     0 _DESK-CURRENT-STATE ! ;
 
@@ -35168,6 +35566,7 @@ VARIABLE _dst-impostor
     _dst-current-services _dst-stack
     _dst-availability _dst-stack
     _dst-lending _dst-stack
+    _dst-owner-policy _dst-stack
     _dst-uniqueness _dst-stack
     _dst-full _dst-stack
     _dst-teardown-wipe _dst-stack

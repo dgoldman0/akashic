@@ -1034,9 +1034,9 @@ VARIABLE _OAIRPF-U
     THEN
     OAIR-S-OK ;
 
-\ A turn with PROMPT and no history takes its input of a session's room
-\ for one.
-: _OAIR-INPUT  ( prompt-a prompt-u context -- used capacity )
+\ A turn with PROMPT, REFERENCE and no history takes its input of a
+\ session's room for one.
+: _OAIR-INPUT  ( prompt-a prompt-u reference-a reference-u context -- used capacity )
     DROP OAI-TURN-INPUT-U OAIR-INPUT-CAPACITY ;
 
 : OPENAI-PROVIDER-CONFIG  ( provider -- config | 0 )

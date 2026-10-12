@@ -98,15 +98,30 @@ which is zero in the simulator, so the answer comes out the same.
 
 ### Input room
 
-`APROV-INPUT ( prompt-a prompt-u provider -- used capacity )` tells how much
-of the provider's room for one turn's input a turn with that prompt and no
-history takes, and how large that room is. The capacity is -1 when only
-memory bounds it, or when the provider does not say.
-`APROV-INPUT-FITS? ( prompt-a prompt-u provider -- flag )` says whether the
-prompt fits. A provider fills `APROV.INPUT-XT`
-`( prompt-a prompt-u context -- used capacity )`. A scheduled run's prompt is
-checked against this room when it is approved and again before it starts.
-A prompt that does not fit is refused, never cut.
+`APROV-INPUT ( prompt-a prompt-u reference-a reference-u provider -- used
+capacity )` tells how much of the provider's room for one turn's input a
+turn with that prompt and reference and no history takes, and how large that
+room is. `0 0` is no reference. A reference at address 0 is that many bytes
+of text not yet read, counted at the least such text takes. The capacity is
+-1 when only memory bounds it, or when the provider does not say.
+`APROV-INPUT-FITS? ( prompt-a prompt-u reference-a reference-u provider --
+flag )` says whether it fits. A provider fills `APROV.INPUT-XT`
+`( prompt-a prompt-u reference-a reference-u context -- used capacity )`.
+A scheduled run's prompt, with as much of its document as it may disclose,
+is checked against this room when it is approved and again before it
+starts, and once its document is read, the prompt and the text are checked
+exactly. A turn that does not fit is refused, never cut.
+
+### References
+
+A turn may carry one reference (`ATURN-REFERENCE`): a document's text,
+which the model reads as data. A provider sends it apart from the prompt
+and never as instructions. The OpenAI encoder sends it as a user item of
+its own ahead of the prompt: a note that the next text is a reference
+document to read as data, then the text, each an input text.
+`OAI-TURN-INPUT-U` counts it exactly. The scripted provider does not echo a
+reference: its reply says how many bytes it had and the first eight hex
+digits of its SHA3-256, and `SCRIPTED-LAST-REFERENCE` tells the same.
 
 The native OpenAI transport uses a 196,608-byte request-body allowance and a
 200,704-byte HTTP wire buffer so its independent 32 KiB prompt, 64 KiB history,

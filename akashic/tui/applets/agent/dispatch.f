@@ -13,9 +13,21 @@
 \  line; chat waits behind it, and cannot cancel it.  Before anything is
 \  recorded, a run is refused when the Agent's provider is not the one
 \  it names, the catalog does not offer its model exactly, the provider
-\  is not ready or needs a sign-in it does not have, or its prompt does
-\  not fit the provider's input.  A run
-\  that started ends completed; stopped for review when its model asks
+\  is not ready or needs a sign-in it does not have, or its prompt, with
+\  as much of a document as it may disclose, does not fit the provider's
+\  input.
+\
+\  A run may name one exact version of a document as its context.  The
+\  broker lends START a resource client for it (context-read.f); once the
+\  run is recorded, the Agent reads that version as the run and hands its
+\  text to the model as reference data.  A run whose document changed
+\  stops for review; one whose document is not there is blocked, as is
+\  one whose prompt and document do not fit the provider's input; one
+\  whose document is larger than it may disclose runs out; and one whose
+\  read fails fails.  The transcript notes which version was read, never
+\  its text, and the Agent keeps no copy once the provider has it.
+\
+\  A run that started ends completed; stopped for review when its model asks
 \  for a tool or an approval; out of time; out of room for its reply,
 \  which keeps no more than its limit; cancelled; or failed.  Its
 \  transcript, the messages of its conversation, goes to the run store.
@@ -34,7 +46,7 @@
 \    ADISP-FINI    ( dispatch -- )
 \    ADISP-VALID?  ( dispatch -- flag )
 \    ADISP-STORE   ( dispatch -- store )
-\    ADISP-START   ( request amrun response dispatch -- status )
+\    ADISP-START   ( request amrun source response dispatch -- status )
 \    ADISP-VET     ( request dispatch -- reason|0 )
 \    ADISP-MODELS  ( buffer capacity dispatch -- bytes status )
 \    ADISP-STATUS  ( key response dispatch -- status )
@@ -48,6 +60,7 @@ PROVIDED akashic-agent-dispatch
 
 REQUIRE runtime.f
 REQUIRE run-settings.f
+REQUIRE context-read.f
 REQUIRE storage/dispatch-store.f
 REQUIRE storage/thread-codec.f
 REQUIRE ../../../utils/datetime.f
@@ -94,7 +107,9 @@ REQUIRE ../../../utils/string.f
 224 CONSTANT _ADISP-DESIGNATION
 _ADISP-DESIGNATION AGENT-RUN-DESIGNATION-SIZE + CONSTANT _ADISP-SUMMARY
 _ADISP-SUMMARY _ADISP-SUMMARY-CAP + 7 + -8 AND CONSTANT _ADISP-STORE
-_ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
+_ADISP-STORE ADST-SIZE + CONSTANT _ADISP-SOURCE   \ the START's resource client, or 0
+_ADISP-SOURCE 8 + CONSTANT _ADISP-READER          \ the document read while starting
+_ADISP-READER ACREAD-SIZE + CONSTANT ADISP-SIZE
 
 : _ADISP.MAGIC        ( dispatch -- a ) _ADISP-MAGIC-OFF + ;
 : _ADISP.SELF         ( dispatch -- a ) _ADISP-SELF + ;
@@ -119,6 +134,8 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
 : _ADISP.DESIGNATION  ( dispatch -- designation ) _ADISP-DESIGNATION + ;
 : _ADISP.SUMMARY      ( dispatch -- a ) _ADISP-SUMMARY + ;
 : ADISP-STORE         ( dispatch -- store ) _ADISP-STORE + ;
+: _ADISP.SOURCE       ( dispatch -- a ) _ADISP-SOURCE + ;
+: _ADISP.READER       ( dispatch -- reader ) _ADISP-READER + ;
 
 : ADISP-VALID?  ( dispatch -- flag )
     DUP 0= IF EXIT THEN
@@ -505,10 +522,17 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
     DUP APROV.FEATURES @ APROV-F-AUTH AND 0= IF DROP 0 EXIT THEN
     APROV-AUTH AAUTH-READY? 0= ;
 
+\ The most a run's document may take: what its operands let it disclose
+\ beyond its prompt.  0 when it names no document.
+: _ADISP-DOCUMENT-ROOM  ( operands -- bytes )
+    DUP SACT-O.CONTEXT 0= IF DROP 0 EXIT THEN
+    DUP SACT-O.DISCLOSURE @ SWAP SACT-PROMPT$ NIP - 0 MAX ;
+
 \ Why the Agent cannot run the request being started on the model it
 \ names, or 0 when it can: its provider is another, the catalog does not
 \ offer exactly its model, the provider is not ready or not signed in,
-\ or its prompt does not fit the provider's input.
+\ or its prompt, with as much of its document as it may disclose, does
+\ not fit the provider's input.
 : _ADISP-RUNNABLE  ( dispatch -- reason|0 )
     >R R@ _ADISP-RT ARUNTIME.PROVIDER @              ( provider )
     R@ _ADISP-OPERANDS SACT-PROVIDER$
@@ -523,7 +547,8 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
     DUP APROV.STATE @ APROV-S-READY <> OVER _ADISP-SIGNED-OUT? OR IF
         DROP R> DROP SACT-R-AGENT-UNAVAILABLE EXIT
     THEN
-    R> _ADISP-OPERANDS SACT-PROMPT$ ROT APROV-INPUT-FITS?
+    R> _ADISP-OPERANDS DUP SACT-PROMPT$ ROT _ADISP-DOCUMENT-ROOM 0 SWAP
+    4 ROLL APROV-INPUT-FITS?
     IF 0 ELSE SACT-R-TOO-LARGE THEN ;
 
 \ Why the Agent cannot run the request being started, or 0 when it can:
@@ -552,8 +577,52 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
     THEN
     R@ _ADISP.OUTCOME @ R@ _ADISP.REASON @ R> _ADISP-TELL ;
 
-\ Starts the request being started: records it, then starts it in a
-\ conversation of its own.
+\ How a run ends that could not read its document, as an ACREAD- STATUS.
+: _ADISP-READ-END  ( status -- outcome reason )
+    CASE
+        ACREAD-S-STALE OF SACT-O-STOPPED SACT-R-CONTEXT-STALE ENDOF
+        ACREAD-S-UNAVAILABLE OF SACT-O-BLOCKED SACT-R-CONTEXT-UNAVAILABLE ENDOF
+        ACREAD-S-DISCLOSURE OF SACT-O-EXPIRED SACT-R-DISCLOSURE ENDOF
+        ACREAD-S-NOMEM OF SACT-O-BLOCKED SACT-R-CAPACITY ENDOF
+        >R SACT-O-FAILED SACT-R-CONTEXT-READ R>
+    ENDCASE ;
+
+\ Notes in the run's CONVERSATION which version of which document it
+\ read: its title, revision and size, never its text.
+: _ADISP-NOTE-READ  ( conversation dispatch -- ior )
+    >R AROLE-SYSTEM AMSG-S-COMPLETE R@ _ADISP.RUN-ID @ S" Read the document: "
+    5 ROLL ACONV-APPEND ?DUP IF NIP R> DROP EXIT THEN    ( message )
+    R@ _ADISP.READER ACREAD-TITLE 2 PICK AMSG-APPEND ?DUP IF NIP R> DROP EXIT THEN
+    S"  (revision " 2 PICK AMSG-APPEND ?DUP IF NIP R> DROP EXIT THEN
+    R@ _ADISP.READER ACREAD-REVISION NUM>STR 2 PICK AMSG-APPEND
+        ?DUP IF NIP R> DROP EXIT THEN
+    S" , " 2 PICK AMSG-APPEND ?DUP IF NIP R> DROP EXIT THEN
+    R> _ADISP.READER ACREAD-TEXT NIP NUM>STR 2 PICK AMSG-APPEND
+        ?DUP IF NIP EXIT THEN
+    S"  bytes)" ROT AMSG-APPEND ;
+
+\ Reads the document the request being started names, if any, as its run,
+\ into the dispatcher's reader, and notes it in the run's CONVERSATION.
+\ The prompt and the text must fit the provider's input.  0, or how the
+\ run ends when it cannot.
+: _ADISP-READ-CONTEXT  ( conversation dispatch -- 0 | outcome reason )
+    >R R@ _ADISP.READER ACREAD-INIT
+    R@ _ADISP-OPERANDS SACT-O.CONTEXT ?DUP 0= IF DROP R> DROP 0 EXIT THEN
+    R@ _ADISP.SOURCE @ R@ _ADISP.AMRUN @
+    R@ _ADISP.AMRUN @ AMRUN.MANDATE MAND.DISCLOSURE-BUDGET @
+    R@ _ADISP.AMRUN @ AMRUN.DISCLOSURE-USED @ -
+    R@ _ADISP-OPERANDS SACT-PROMPT$ NIP - 0 MAX
+    R@ _ADISP.READER ACREAD-READ                      ( conversation status )
+    ?DUP IF NIP _ADISP-READ-END R> DROP EXIT THEN
+    R@ _ADISP-OPERANDS SACT-PROMPT$ R@ _ADISP.READER ACREAD-TEXT
+    R@ _ADISP-RT ARUNTIME.PROVIDER @ APROV-INPUT-FITS? 0= IF
+        DROP SACT-O-BLOCKED SACT-R-TOO-LARGE R> DROP EXIT
+    THEN
+    R> _ADISP-NOTE-READ IF SACT-O-BLOCKED SACT-R-CAPACITY EXIT THEN
+    0 ;
+
+\ Starts the request being started: records it, reads its document, then
+\ starts it in a conversation of its own.
 : _ADISP-LAUNCH  ( dispatch -- status )
     >R
     R@ _ADISP.REQUEST @ _ADISP-NOW R@ ADISP-STORE ADST-ACCEPT IF
@@ -568,10 +637,15 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
         DROP 0 SACT-O-BLOCKED SACT-R-CAPACITY R> _ADISP-UNSTARTED EXIT
     THEN                                             ( conversation )
     R@ _ADISP.RUN-ID @ OVER ACONV.ID !
-    R@ _ADISP-OPERANDS SACT-PROMPT$ R@ _ADISP.RUN-ID @ R@ _ADISP-DESIGNATE
-    4 PICK R@ _ADISP.AMRUN @ R@ _ADISP-RT ARUNTIME-RUN-START IF
-        SACT-O-FAILED SACT-R-PROVIDER-START R> _ADISP-UNSTARTED EXIT
+    DUP R@ _ADISP-READ-CONTEXT ?DUP IF
+        R@ _ADISP.READER ACREAD-FREE R> _ADISP-UNSTARTED EXIT
     THEN
+    R@ _ADISP-OPERANDS SACT-PROMPT$ R@ _ADISP.READER ACREAD-TEXT
+    R@ _ADISP.RUN-ID @ R@ _ADISP-DESIGNATE
+    6 PICK R@ _ADISP.AMRUN @ R@ _ADISP-RT ARUNTIME-RUN-START
+    \ The provider has taken the text, or the run did not start.
+    R@ _ADISP.READER ACREAD-FREE
+    IF SACT-O-FAILED SACT-R-PROVIDER-START R> _ADISP-UNSTARTED EXIT THEN
     R@ _ADISP.CONV !
     _ADISP-P-RUNNING R@ _ADISP.PHASE !
     R@ _ADISP-HOLD
@@ -583,10 +657,12 @@ _ADISP-STORE ADST-SIZE + CONSTANT ADISP-SIZE
 \ STARTED, and the Agent owns AMRUN; WAITING, and the run keeps its place
 \ in line; RUNNING or ENDED for a run the Agent knows by its key; or ENDED
 \ for a run refused, blocked, or one that could not start.  AMRUN stays
-\ the caller's unless the answer is STARTED.
-: ADISP-START  ( request amrun response dispatch -- status )
-    DUP ADISP-VALID? 0= IF 2DROP 2DROP SDSP-S-UNAVAILABLE EXIT THEN
-    >R R@ _ADISP.RESPONSE ! R@ _ADISP.AMRUN ! R@ _ADISP.REQUEST !
+\ the caller's unless the answer is STARTED.  SOURCE is a resource client
+\ for the document the run names (interop/resource-client.f), lent for
+\ this START alone, or 0.
+: ADISP-START  ( request amrun source response dispatch -- status )
+    DUP ADISP-VALID? 0= IF 2DROP 2DROP DROP SDSP-S-UNAVAILABLE EXIT THEN
+    >R R@ _ADISP.RESPONSE ! R@ _ADISP.SOURCE ! R@ _ADISP.AMRUN ! R@ _ADISP.REQUEST !
     R@ _ADISP.REQUEST @ -1 SDSP-REQUEST-OK? IF R> DROP SDSP-S-INVALID EXIT THEN
     R@ _ADISP-KNOWN IF R> DROP EXIT THEN
     R@ _ADISP-MUST-WAIT? IF

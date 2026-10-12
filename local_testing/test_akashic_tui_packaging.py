@@ -891,6 +891,9 @@ def test_library_applet_profiles_package_the_library_owned_applet() -> None:
         "tui/applets/library/capabilities.f",
         "tui/applets/library/controller.f",
         "tui/applets/library/view.f",
+        # Inside Desk the applet publishes its documents' owner over this
+        # projection of its service.
+        "tui/applets/library/projection-adapter.f",
         root,
     }
     assert expected_library_modules | {
@@ -1030,11 +1033,22 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         for name, source in sources.items()
     }
 
-    assert direct_requires["library.f"] == {"view.f", "capabilities.f"}
+    assert direct_requires["library.f"] == {
+        "view.f",
+        "capabilities.f",
+        "projection-adapter.f",
+        "../../../interop/endpoint.f",
+        "../../../interop/qualified-locator.f",
+    }
     assert direct_requires["view.f"] == {"controller.f"}
-    assert {"service.f", "capability-work.f"} <= direct_requires[
-        "controller.f"
-    ]
+    # The controller publishes the documents' owner with its service's
+    # lifetime, so it holds the projection root and the owner directory.
+    assert {
+        "service.f",
+        "capability-work.f",
+        "projection-adapter.f",
+        "../../../interop/resource-owners.f",
+    } <= direct_requires["controller.f"]
     assert not (
         {"query.f", "repository.f", "capabilities.f"}
         & direct_requires["controller.f"]

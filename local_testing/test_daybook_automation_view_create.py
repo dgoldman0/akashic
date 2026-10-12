@@ -7,7 +7,9 @@ fetching the list with the room it needs, and refusing one that is not
 whole or names no model; the model's choices in turn, its effort, tier
 and verbosity only where it offers them; the limits; a prompt that
 completes the operands and is exactly what the run may disclose; the
-create; and the approval it then asks Desk's user for.
+create; and the approval it then asks Desk's user for.  A run may read
+one exact document version, which Desk's broker describes: what the run
+may disclose is then its prompt and that document, which it observes.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from test_daybook_automation_view_runs import PRELUDE as RUNS_PRELUDE
 
 
 OK, INVALID, STATE = 0, 1, 5
-NOMEM, MODELS, NUMBER, PROMPT, NONE = 42, 45, 46, 47, 41
+NOMEM, MODELS, NUMBER, PROMPT, NONE, DOCUMENT = 42, 45, 46, 47, 41, 48
 MODEL, EFFORT, TIER, VERBOSITY = 1, 2, 3, 4
 SMALL, UNAVAILABLE = 12, 2
 MINUTES_MAX = (2**63 - 1) // 60000
@@ -87,6 +89,24 @@ VARIABLE LONG-A
 : NEW-OPS  ( -- operands u ) VW _DBAV.RID SOW DBAO-ACTION DBAS-A.OPERANDS BSLOT$ ;
 \ Its limits, verbosity, effects and flags, then a line each for its
 \ provider, model, effort, tier and prompt.
+\ Desk's broker describing documents: "Field notes", at revision 3 and
+\ DOC-BYTES bytes, unless DOC-STATUS says otherwise.
+VARIABLE DOC-STATUS  VARIABLE DOC-BYTES  VARIABLE DOC-ASKS
+: FC-DESCRIBE  ( locator facts context -- status )
+    DROP NIP 1 DOC-ASKS +!
+    DOC-STATUS @ ?DUP IF NIP EXIT THEN
+    3 OVER SDSP-F.REVISION ! DOC-BYTES @ OVER SDSP-F.SIZE !
+    S" Field notes" ROT SDSP-FACTS-TITLE! ;
+: DOC-ON  ( -- )
+    0 DOC-STATUS ! 21 DOC-BYTES ! 0 DOC-ASKS ! ['] FC-DESCRIBE FC SDSP-C.DESCRIBE-XT ! ;
+\ An exact locator of revision 3 of a Library document, and an identity
+\ one, which names no version.
+CREATE DLOC QLOC-SIZE ALLOT  CREATE DLOC-REF RREF-SIZE ALLOT
+DLOC-REF RREF-INIT  DLOC-REF RREF.ID 32 7 FILL
+CREATE DLOC-DIG 32 ALLOT  DLOC-DIG 32 9 FILL
+S" org.akashic.library" DLOC-REF 3 DLOC-DIG QLOC-DK-PROJECTION-CONTENT
+    S" org.akashic.library.utf8-content.v1" DLOC QLOC-EXACT! DROP
+CREATE ILOC QLOC-SIZE ALLOT  S" org.akashic.library" DLOC-REF ILOC QLOC-IDENTITY! DROP
 : OPS.  ( -- )
     NEW-OPS DROP DUP SACT-O.TIME @ . DUP SACT-O.DISCLOSURE @ .
     DUP SACT-O.OUTPUT @ . DUP SACT-O.VERBOSITY @ . DUP SACT-O.EFFECTS @ .
@@ -313,3 +333,37 @@ def test_messages():
     machine = SUITE.shared()
     for status, message in expected.items():
         assert text(machine, f"{status} DBAV-MESSAGE TYPE") == message
+
+
+def test_an_agent_run_that_reads_a_document(machine):
+    _fresh(machine)
+    # Named before the steps, the document is described through Desk.
+    assert run(machine, ["DOC-ON C-BEGIN DLOC VW DBAV-DOCUMENT! . VW DBAV-DOCUMENT? . "
+                         "DOC-ASKS @ . CR"]) == [[OK, OK, OK, -1, 1]]
+    assert text(machine, "VW DBAV-DOCUMENT$ TYPE") == "Field notes"
+    assert run(machine, [
+        'S" 09:00 Morning brief" VW DBAV-WHEN! . S" daily" VW DBAV-REPEAT! . '
+        f'S" " VW DBAV-ZONE! . 0 {MODEL} VW DBAV-CHOOSE . 1 {EFFORT} VW DBAV-CHOOSE . '
+        f'1 {TIER} VW DBAV-CHOOSE . 2 {VERBOSITY} VW DBAV-CHOOSE . '
+        'S" 10" VW DBAV-MINUTES! . S" 16384" VW DBAV-REPLY! . '
+        "BRIEF VW DBAV-PROMPT! . VW DBAV-CREATE . CR"]) == [[OK] * 11]
+    # It may disclose its prompt and the document, which it only observes.
+    prompt = len("Summarize the news.") + 1 + len("Keep it short.")
+    assert lines(machine, "OPS.")[0] == f"600000 {prompt + 21} 16384 2 1 1"
+    assert run(machine, ["NEW-OPS DROP SACT-O.CONTEXT QLOC-SIZE DLOC QLOC-SIZE COMPARE . "
+                         "NEW-OPS DROP SACT-PROMPT$ BRIEF COMPARE . CR"]) == [[0, 0]]
+    # A fresh create names none.
+    assert run(machine, ["C-BEGIN VW DBAV-DOCUMENT? . CR"]) == [[OK, OK, 0]]
+
+
+def test_a_document_that_cannot_be_named(machine):
+    _fresh(machine)
+    assert run(machine, [
+        # A locator naming no version, one that is not a locator, and a
+        # document Desk's broker cannot describe.
+        "DOC-ON C-BEGIN ILOC VW DBAV-DOCUMENT! . DOC-ASKS @ . "
+        "CREATE JUNK QLOC-SIZE ALLOT JUNK QLOC-SIZE 0 FILL JUNK VW DBAV-DOCUMENT! . "
+        f"{UNAVAILABLE} DOC-STATUS ! DLOC VW DBAV-DOCUMENT! . DOC-ASKS @ . "
+        "VW DBAV-DOCUMENT? . CR"]) == [[OK, OK, DOCUMENT, 0, DOCUMENT, DOCUMENT, 1, 0]]
+    assert text(machine, f"{DOCUMENT} DBAV-MESSAGE TYPE") == (
+        "The document's owner cannot say what it is now")

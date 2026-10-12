@@ -36,7 +36,7 @@ A run is refused, and nothing is recorded, when:
 | The Agent's provider is not the one the request names | model unavailable |
 | The provider has no catalog, or its catalog does not offer exactly the model, effort, tier and verbosity named | model unavailable |
 | The catalog is still loading, or the provider is not connected, or it needs a sign-in it does not have | Agent unavailable |
-| The prompt does not fit the provider's room for a turn's input (`APROV-INPUT-FITS?`) | too large for the model |
+| The prompt, with as much of its document as the run may disclose, does not fit the provider's room for a turn's input (`APROV-INPUT-FITS?`) | too large for the model |
 | The authority is no longer active, or cannot disclose the prompt | invalid request |
 | The run store cannot record the run | Agent unavailable |
 
@@ -47,6 +47,68 @@ A run that passes is recorded, accepted, and then started. If it cannot
 start, it ends failed (its provider did not start), or blocked when there
 was no memory for its conversation. Its record keeps whatever its
 conversation says.
+
+## A run's document
+
+A run may name one exact version of a document as its context. The
+broker attaches the document through its owner for the run's start alone
+and lends `ADISP-START` a [resource client](../../../interop/resource-client.md)
+for it. Once the run is recorded, the Agent reads that version as the run
+([context-read.f](#reading-a-document)), and hands its text to the turn as
+a reference: the model reads it as data, never as instructions. The
+provider has taken the text once the start returns, and the Agent keeps no
+copy. The transcript notes which version was read, as a system line such as
+`Read the document: Field notes (revision 3, 21 bytes)`, never its text.
+
+| What happened | Outcome and reason |
+|---|---|
+| No document could be read: no client, or its owner is gone | blocked: document unavailable |
+| The document is no longer the version named | stopped for review: the document changed |
+| It is larger than the run may still disclose | ran out: over the disclosure limit |
+| The prompt and the text do not fit the provider's input | blocked: too large for the model |
+| The read failed, or the content is not UTF-8 text | failed: document unreadable |
+
+Each of these ends the run recorded but never started.
+
+### Reading a document
+
+`akashic/tui/applets/agent/context-read.f` (`ACREAD-`) reads it, each
+request under a one-use grant from the run
+([run-grant.f](#one-use-grants)):
+
+1. It describes the document, and stops when its current revision is not
+   the one the locator names, or its size is larger than the room the
+   run may still disclose.
+2. It takes a snapshot of that exact version; the resource client checks
+   the content against the locator's digest.
+3. The content must be UTF-8 text no larger than the room.
+
+The reader holds the text until `ACREAD-FREE`, which wipes it. The
+requests go as the Agent principal, with the run's Mandate and an
+invocation id of their own. Their arguments are not sealed, since a
+snapshot's carry a digest as bytes, which the typed seal cannot encode;
+the reader prepares, grants and sends each request at once, and nothing
+else holds it.
+
+| Word | Effect |
+|---|---|
+| `ACREAD-SIZE` | `( -- bytes )` |
+| `ACREAD-INIT` | `( reader -- )` |
+| `ACREAD-READ` | `( locator source run room reader -- status )` |
+| `ACREAD-TEXT` `ACREAD-TITLE` | `( reader -- a u )` |
+| `ACREAD-REVISION` | `( reader -- revision )` |
+| `ACREAD-FREE` | `( reader -- )` |
+
+### One-use grants
+
+`akashic/tui/applets/agent/run-grant.f` (`AGRANT-ISSUE ( grant-flags
+facet-flags request run bus -- status )`) issues a request a one-use grant
+from the run that makes it. The run's Mandate must be active and its facet
+must allow the request's operation on its target with the flags asked for;
+a grant on the Mandate's say alone is only for observing, and a reviewed
+commit must fall in the Mandate's commit window. A grant lasts a minute,
+and never past the run's deadline. The tool gateway issues its grants
+through the same word.
 
 ## How a run ends
 
@@ -79,7 +141,7 @@ ADISP-INIT    ( runtime vfs dispatch -- status )
 ADISP-FINI    ( dispatch -- )
 ADISP-VALID?  ( dispatch -- flag )
 ADISP-STORE   ( dispatch -- store )
-ADISP-START   ( request amrun response dispatch -- status )
+ADISP-START   ( request amrun source response dispatch -- status )
 ADISP-VET     ( request dispatch -- reason|0 )
 ADISP-MODELS  ( buffer capacity dispatch -- bytes status )
 ADISP-STATUS  ( key response dispatch -- status )
@@ -98,7 +160,8 @@ used can say why.
 
 `ADISP-START`, `ADISP-STATUS` and `ADISP-CANCEL` answer with the dispatch
 contract's `SDSP-S-` statuses, as Desk's broker expects of its handler.
-- `ADISP-START` answers:
+- `ADISP-START` takes SOURCE, a resource client for the document the run
+  names, lent for that start alone, or 0. It answers:
   - `STARTED`: the Agent owns the authority.
   - `WAITING`: the run keeps its place in line.
   - `RUNNING` or `ENDED`: a run the Agent knows by its dispatch key. A
@@ -161,7 +224,7 @@ The runtime (`runtime.f`) gives a run a conversation of its own:
 | Word | Stack | Description |
 |---|---|---|
 | `ARUNTIME-IDLE?` | `( runtime -- flag )` | Whether a run could start now |
-| `ARUNTIME-RUN-START` | `( address length run-id designation conversation amrun runtime -- ior )` | Starts a run in its own conversation, under authority lent until it starts |
+| `ARUNTIME-RUN-START` | `( address length reference-a reference-u run-id designation conversation amrun runtime -- ior )` | Starts a run in its own conversation, with a reference (0 0 for none), under authority lent until it starts; the prompt and the reference count against its disclosure |
 | `ARUNTIME-RUN-ENDED?` | `( runtime -- flag )` | Whether that run is over, its end not yet taken |
 | `ARUNTIME-RUN-TAKE` | `( runtime -- conversation status cause )` | Hands back its conversation, the status it ended in, and why it stopped for review |
 | `ARUNTIME-RUN-STOP` | `( status runtime -- ior )` | Stops it, ending it cancelled or expired |

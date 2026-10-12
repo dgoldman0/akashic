@@ -35,7 +35,7 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/library/library.uidl",
         "menus": ["File", "Browse", "Document", "Page", "Help"],
-        "actions": ["about", "archive", "back", "clear-search", "collections", "history", "new-managed", "next-page", "previous-page", "quit", "reload", "rename-title", "retry-create", "search", "show-active", "show-all", "show-archived", "unarchive"],
+        "actions": ["about", "archive", "back", "clear-search", "collections", "history", "new-managed", "next-page", "previous-page", "quit", "reload", "rename-title", "retry-create", "schedule-agent-run", "search", "show-active", "show-all", "show-archived", "unarchive"],
         "shortcuts": {
           "back": "Backspace",
           "clear-search": "Ctrl+Shift+F",
@@ -47,6 +47,7 @@
           "reload": "Ctrl+R",
           "rename-title": "F2",
           "retry-create": "Ctrl+Shift+R",
+          "schedule-agent-run": "Ctrl+G",
           "search": "Ctrl+F"
         },
         "element_ids": ["library-body", "mbar", "sbar", "sbar-page", "sbar-state", "sbar-view"]
@@ -314,7 +315,7 @@
           "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected automation after typing DELETE", "p -> pause or resume the selected automation", "a -> archive or restore the selected automation", "h -> show or hide archived automations", "r -> run the selected Agent run now", "y -> ask Desk to approve the selected Agent run", "x -> cancel the selected Agent run in progress", "A page shown, a new Agent run's or a schedule's details -> keys go to that page", "Space -> mark the selected firing or run reviewed", "Other special keys -> move in the automations list", "Mouse over the list -> the automations list"]
         }
       ],
-      "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},
+      "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.agent-run.new", "daybook.source", "daybook.task.capture"]},
       "source_contracts": [
         {"path": "akashic/tui/applets/daybook/daybook.f", "required_literals": ["org.akashic.daybook", "org.akashic.resource.daybook", "DAYBOOK-INIT-CB", "DAYBOOK-REQUEST-CLOSE-CB", "DAYBOOK-SHUTDOWN-CB", "DAYBOOK-ENTRY", "DAYBOOK-RUN", "daybook.task.capture", "daybook.source", "daybook.agenda.markdown"]},
         {"path": "akashic/tui/applets/daybook/shared-document.f", "required_literals": ["resource.describe", "resource.snapshot", "resource.replace"]}
@@ -578,7 +579,7 @@
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.theme"], "ids": []},
-      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.agent.dispatch", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.daybook.automations", "org.akashic.interop.endpoint"]},
+      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.agent.dispatch", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.daybook.automations", "org.akashic.runtime.resource-owners", "org.akashic.interop.endpoint"]},
       "source_contracts": [
         {"path": "akashic/tui/applets/desk/desk.f", "required_literals": ["org.akashic.desk", "DESK-RUN", "DESK-TRY-LAUNCH", "DESK-REQUEST-CLOSE-ID", "DESK-FOCUS-ID", "DESK-MINIMIZE-ID", "DESK-RESTORE", "DESK-FULLFRAME!", "DESK-TOGGLE-VH", "DESK-SANDBOX-CONFIGURE", "SBOX-CAPABILITY-COMPONENT", "org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]}
       ],

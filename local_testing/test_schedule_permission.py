@@ -311,7 +311,8 @@ COMMIT_REFUSALS = {
     "reserved permission bytes": "1 P0 SPERM-PERMISSION-SIZE + 1- C!",
     "a reminder": "SACT-REMINDER P0 SPERM-P.ACTION !",
     "another schema": "2 P0 SPERM-P.SCHEMA !",
-    "effects": "1 P0 SPERM-P.EFFECTS !",
+    "effects other than observing": "CAP-E-NAVIGATE P0 SPERM-P.EFFECTS !",
+    "observing and more": "CAP-E-OBSERVE CAP-E-MUTATE OR P0 SPERM-P.EFFECTS !",
     "no time": "0 P0 SPERM-P.TIME !",
     "no disclosure": "0 P0 SPERM-P.DISCLOSURE !",
     "no output": "0 P0 SPERM-P.OUTPUT !",
@@ -335,6 +336,7 @@ COMMIT_ACCEPTS = {
     "one schedule in two Practices":
         "P0 SPERM-P.PRACTICE 32 5 FILL P0 SPERM-P.SCHEDULE P1 SPERM-P.SCHEDULE 32 MOVE",
     "a longer time": "600000 P0 SPERM-P.TIME !",
+    "observing a document": "CAP-E-OBSERVE P0 SPERM-P.EFFECTS !",
     "one schedule id in two stores":
         "P0 SPERM-P.STORE 32 9 FILL P0 SPERM-P.SCHEDULE P1 SPERM-P.SCHEDULE 32 MOVE",
 }

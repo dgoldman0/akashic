@@ -9,8 +9,9 @@
 \                     approve through Desk's schedule broker
 \                     (schedule-broker.f): why the Agent could not run
 \                     it, when it could not, then its title, when it
-\                     runs, the model, provider and limits it names, and
-\                     its prompt in full;
+\                     runs, the model, provider and limits it names, the
+\                     document it reads, as its owner describes it when
+\                     the approval opens, and its prompt in full;
 \    the permissions  lists the permissions the user granted, each named
 \                     by its schedule's title, and revokes them;
 \    the shutdown     asks whether to shut Desk down while a scheduled
@@ -169,7 +170,10 @@ _SCHT-STAMP DT-RFC3339-UTC-S-LENGTH + 7 + -8 AND CONSTANT _SCHT-SIZE
 168 CONSTANT _SCHS-RID       \ 32 bytes: a permission's RID, as it is revoked
 200 CONSTANT _SCHS-TEXT      \ a row's text
 _SCHS-TEXT _SCHT-SIZE + CONSTANT _SCHS-STATUS     \ the status line
-_SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
+_SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-FACTS    \ what the document's owner said
+_SCHS-FACTS SDSP-FACTS-SIZE + CONSTANT _SCHS-DOC  \ and the status it said it with
+_SCHS-DOC 8 + CONSTANT _SCHS-DOC-TITLE
+_SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
 
 \ The broker, and Desk's style for each element.
 : _SCHS.KIND       ( s -- a ) _SCHS-KIND + ;
@@ -204,6 +208,11 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
 : _SCHS.RID        ( s -- rid ) _SCHS-RID + ;
 : _SCHS.TEXT       ( s -- t ) _SCHS-TEXT + ;
 : _SCHS.STATUS     ( s -- t ) _SCHS-STATUS + ;
+\ What the owner of the document the approval's request names said of
+\ it as the approval opened, with the title it said, and the status.
+: _SCHS.FACTS      ( s -- facts ) _SCHS-FACTS + ;
+: _SCHS.DOC        ( s -- a ) _SCHS-DOC + ;
+: _SCHS.DOC-TITLE  ( s -- a ) _SCHS-DOC-TITLE + ;
 
 : _SCHS-APPROVE?  ( s -- flag ) _SCHS.KIND @ _SCHS-K-APPROVE = ;
 : _SCHS-SHUTDOWN?  ( s -- flag ) _SCHS.KIND @ _SCHS-K-SHUTDOWN = ;
@@ -234,8 +243,9 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
 \  The approval
 \ =====================================================================
 \  Its rows: a note, when the Agent could not run the schedule, then the
-\  schedule's title, when it runs, the model, the provider, the limits
-\  and the prompt.
+\  schedule's title, when it runs, the model, the provider, the limits,
+\  the document, when it names one, and the prompt.  Their ids are -1
+\  for the note, then 0 to 6.
 
 \ Whether the Agent could not run the schedule.
 : _SCHS-NOTE?  ( s -- flag ) _SCHS.REASON @ 0<> ;
@@ -245,8 +255,15 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
 : _SCHS-ALLOWABLE?  ( s -- flag )
     _SCHS.REASON @ DUP 0= SWAP SACT-R-AGENT-UNAVAILABLE = OR ;
 
-\ Row INDEX as the approval's own: -1 for the note, then 0 to 5.
-: _SCHS-APPROVE-ROW  ( index s -- row ) _SCHS-NOTE? IF 1- THEN ;
+\ The document the request names, or 0.
+: _SCHS-LOCATOR  ( s -- locator|0 ) _SCHS.REQUEST @ SDSP-OPERANDS$ DROP SACT-O.CONTEXT ;
+
+\ Row INDEX as the approval's own id: past the note, if any, and with no
+\ document row when the request names none.
+: _SCHS-APPROVE-ROW  ( index s -- row )
+    TUCK _SCHS-NOTE? IF 1- THEN
+    DUP 5 < IF NIP EXIT THEN
+    SWAP _SCHS-LOCATOR IF EXIT THEN 1+ ;
 
 : _SCHS-HEADER$  ( row -- address length )
     CASE
@@ -256,22 +273,27 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
          2 OF S" Model" ENDOF
          3 OF S" Provider" ENDOF
          4 OF S" Limits" ENDOF
+         5 OF S" Document" ENDOF
         >R S" Prompt" R>
     ENDCASE ;
 
 \ What the note says.
-: _SCHS-NOTE$  ( reason -- address length )
-    CASE
+: _SCHS-NOTE$  ( reason s -- address length )
+    SWAP CASE
         SACT-R-MODEL-UNAVAILABLE OF
-            S" The Agent does not offer this model, so this cannot be allowed."
+            DROP S" The Agent does not offer this model, so this cannot be allowed."
         ENDOF
         SACT-R-TOO-LARGE OF
-            S" The prompt is too large for this model, so this cannot be allowed."
+            _SCHS-LOCATOR IF
+                S" The prompt and its document are too large for this model, so this cannot be allowed."
+            ELSE
+                S" The prompt is too large for this model, so this cannot be allowed."
+            THEN
         ENDOF
         SACT-R-AGENT-UNAVAILABLE OF
-            S" The Agent is not connected now. A run due while it is not ends blocked."
+            DROP S" The Agent is not connected now. A run due while it is not ends blocked."
         ENDOF
-        >R S" The Agent cannot run this request, so it cannot be allowed." R>
+        NIP >R S" The Agent cannot run this request, so it cannot be allowed." R>
     ENDCASE ;
 
 \ The model the request names, with its effort, tier and verbosity, in
@@ -284,18 +306,48 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
     DUP SACT-O.TIME @ OVER SACT-O.DISCLOSURE @ ROT SACT-O.OUTPUT @
     R> _SCHT-LIMITS+ ;
 
+\ Asks the owner of the document the request names what it is now, for
+\ the approval to show.  Titles are bounded by the resource contract, so
+\ the approval holds any in full.
+: _SCHS-DESCRIBE  ( s -- )
+    >R R@ _SCHS.DOC-TITLE RCON-TITLE-MAX R@ _SCHS.FACTS SDSP-FACTS-INIT
+    SDSP-S-UNAVAILABLE R@ _SCHS.DOC !
+    R@ _SCHS.REQUEST @ 0= IF R> DROP EXIT THEN
+    R@ _SCHS-LOCATOR ?DUP 0= IF R> DROP EXIT THEN
+    R@ _SCHS.FACTS R@ _SCHS.BROKER @ _SBRK-DESCRIBE R> _SCHS.DOC ! ;
+
+\ The document: its title, the revision the run reads and its size, as
+\ its owner said when the approval opened.  One whose owner could not
+\ say is named by that revision alone; one that has changed since, so
+\ that a run would stop for review, says so.
+: _SCHS-DOCUMENT+  ( s t -- )
+    >R DUP _SCHS-LOCATOR QLOC.DOMAIN-REVISION @            ( s revision )
+    OVER _SCHS.DOC @ IF
+        S" A document at revision " R@ _SCHT+ NUM>STR R@ _SCHT+
+        DROP S" ; its owner cannot say more now" R> _SCHT+ EXIT
+    THEN
+    OVER _SCHS.FACTS SDSP-FACTS-TITLE$ R@ _SCHT+
+    S" , revision " R@ _SCHT+ DUP NUM>STR R@ _SCHT+
+    S" , " R@ _SCHT+ OVER _SCHS.FACTS SDSP-F.SIZE @ NUM>STR R@ _SCHT+
+    S"  bytes" R@ _SCHT+
+    SWAP _SCHS.FACTS SDSP-F.REVISION @ <> IF
+        S" ; it has changed since, so a run would stop for review" R@ _SCHT+
+    THEN
+    R> DROP ;
+
 \ The text of the approval's ROW.  A request the approval forgot has no
 \ rows, so no row's text is asked for.
 : _SCHS-BODY$  ( row s -- address length )
     >R
     CASE
-        -1 OF R@ _SCHS.REASON @ _SCHS-NOTE$ ENDOF
+        -1 OF R@ _SCHS.REASON @ R@ _SCHS-NOTE$ ENDOF
          0 OF R@ _SCHS.REQUEST @ SDSP-TITLE$ ENDOF
          1 OF R@ _SCHS.REQUEST @ SDSP-TRIGGER$ ENDOF
          2 OF R@ _SCHS.REQUEST @ ['] _SCHS-MODEL+ R@ _SCHS.TEXT _SCHT-COMPOSE ENDOF
          3 OF R@ _SCHS.REQUEST @ SDSP-OPERANDS$ DROP SACT-PROVIDER$ ENDOF
          4 OF R@ _SCHS.REQUEST @ ['] _SCHS-LIMITS+ R@ _SCHS.TEXT _SCHT-COMPOSE ENDOF
-         5 OF R@ _SCHS.REQUEST @ SDSP-OPERANDS$ DROP SACT-PROMPT$ ENDOF
+         5 OF R@ ['] _SCHS-DOCUMENT+ R@ _SCHS.TEXT _SCHT-COMPOSE ENDOF
+         6 OF R@ _SCHS.REQUEST @ SDSP-OPERANDS$ DROP SACT-PROMPT$ ENDOF
         >R 0 0 R>
     ENDCASE
     R> DROP ;
@@ -464,7 +516,7 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
     DUP _SCHS-SHUTDOWN? IF DROP 2 EXIT THEN
     DUP _SCHS-APPROVE? IF
         DUP _SCHS.REQUEST @ 0= IF DROP 0 EXIT THEN
-        _SCHS-NOTE? IF 7 ELSE 6 THEN EXIT
+        6 OVER _SCHS-NOTE? IF 1+ THEN SWAP _SCHS-LOCATOR IF 1+ THEN EXIT
     THEN
     _SCHS-PERMS-N ;
 
@@ -669,6 +721,7 @@ _SCHS-SETUP
     R@ _SCHS-ASKING? IF
         R@ _SCHS.REQUEST @ R@ _SCHS.BROKER @ SBRK-VET R@ _SCHS.REASON !
     THEN
+    R@ _SCHS-DESCRIBE
     -1 R@ _SCHS.REFRESH !
     R> _SCHS-APPROVE-STATUS ;
 

@@ -84,6 +84,7 @@ REQUIRE agent-access-policy.f
 REQUIRE schedule-agent.f
 REQUIRE agent-cap-catalog.f
 REQUIRE ../../../interop/sandbox-capability.f
+REQUIRE ../../../interop/resource-owners.f
 REQUIRE sandbox-surface.f
 REQUIRE schedule-surface.f
 
@@ -351,6 +352,9 @@ _DESK-CURRENT-STATE DBSVC-SIZE CMP-FIELD: _DESK-REMINDERS
 _DESK-CURRENT-STATE ADISP-SIZE CMP-FIELD: _DESK-AGENT-DISPATCH
 _DESK-CURRENT-STATE SBRK-HANDLER-SIZE CMP-FIELD: _DESK-SCHEDULE-HANDLER
 _DESK-CURRENT-STATE SBRK-SIZE CMP-FIELD: _DESK-BROKER
+\ The resource owners the running applets publish, which a scheduled
+\ run's document is read through.
+_DESK-CURRENT-STATE ROWN-SIZE CMP-FIELD: _DESK-OWNERS
 _DESK-CURRENT-STATE _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
     CMP-FIELD: _DESK-SERVICES
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SERVICE-COUNT
@@ -1200,6 +1204,54 @@ VARIABLE _DSSA-ENTRY
 : _DESK-SERVICE-ENDPOINT@  ( -- service )
     _DESK-ENDPOINT ;
 
+: _DESK-SERVICE-OWNERS@  ( -- service ) _DESK-OWNERS ;
+
+: _DESK-LIBRARY$  ( -- a u ) S" org.akashic.library.applet" ;
+
+\ Which built-in component runs each resource owner a locator can name:
+\ the only one that may publish it.  0 0 for an owner Desk does not know.
+: _DESK-OWNER-COMPONENT$  ( owner-a owner-u -- component-a component-u )
+    2DUP S" org.akashic.library" STR-STR= IF 2DROP _DESK-LIBRARY$ EXIT THEN
+    2DROP 0 0 ;
+
+\ The owner directory's policy: INSTANCE may publish OWNER when it is an
+\ instance of the trusted built-in that runs that owner.
+: _DESK-OWNER-ALLOWED?  ( owner-a owner-u instance desk-instance -- flag )
+    _DESK-USE-STATE >R _DESK-OWNER-COMPONENT$
+    DUP 0= IF 2DROP R> DROP 0 EXIT THEN
+    _DESK-TRUSTED-COMP DUP 0= IF R> 2DROP 0 EXIT THEN
+    R> CINST-DESC = ;
+
+\ Launches DESC minimized: it runs, but takes no tile and no focus.
+: _DESK-TRY-LAUNCH-MINIMIZED  ( desc -- id ior )
+    _DTL-DESC !
+    ['] _DTL-PREFLIGHT CATCH ?DUP IF -1 SWAP EXIT THEN
+    _DTL-DESC @ _DESK-HOST AHOST-TRY-LAUNCH-MINIMIZED
+    DUP 0= IF
+        _DTL-DESC @ 2 PICK _DESK-CATALOG-MARK-DESC
+    THEN ;
+
+\ The published owner named OWNER.  When its applet is not running, Desk
+\ starts it minimized from the catalog, and its INIT publishes it.  0 when
+\ Desk does not know the owner, or its applet runs without publishing it,
+\ cannot start, or does not publish it.
+: _DESK-OWNER  ( owner-a owner-u -- entry|0 )
+    2DUP _DESK-OWNERS ROWN-FIND ?DUP IF NIP NIP EXIT THEN
+    2DUP _DESK-OWNER-COMPONENT$ DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    _DESK-CATALOG @ ?DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    ACAT-FIND-ID ?DUP 0= IF 2DROP 0 EXIT THEN        ( owner-a owner-u entry )
+    DUP ACE.SLOT @ ?DUP IF _DESK-FIND-ID IF DROP 2DROP 0 EXIT THEN THEN
+    _DESK-CATALOG @ ACAT-RESOLVE IF DROP 2DROP 0 EXIT THEN
+    _DESK-TRY-LAUNCH-MINIMIZED NIP IF 2DROP 0 EXIT THEN
+    _DESK-OWNERS ROWN-FIND ;
+
+\ Attaches LOCATOR through its owner, which Desk starts first when it is
+\ not running, over Desk's own context and resource registry.
+: _DESK-OWNER-ATTACH  ( locator binding result desk-instance -- status )
+    _DESK-USE-STATE
+    2 PICK QLOC-OWNER$ _DESK-OWNER DROP
+    >R >R DESK-CONTEXT _DESK-RREG @ R> R> _DESK-OWNERS ROWN-ATTACH ;
+
 : _DESK-AGENT$    ( -- a u ) S" org.akashic.agent" ;
 : _DESK-DAYBOOK$  ( -- a u ) S" org.akashic.daybook" ;
 
@@ -1239,6 +1291,9 @@ VARIABLE _DSSA-ENTRY
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.daybook.automations" _DESK-DAYBOOK$
         ['] _DESK-SERVICE-REMINDERS@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.runtime.resource-owners" _DESK-LIBRARY$
+        ['] _DESK-SERVICE-OWNERS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.interop.endpoint" _DESK-ANY ['] _DESK-SERVICE-ENDPOINT@
         _DESK-SERVICE+ ;
@@ -1724,6 +1779,10 @@ VARIABLE _DMC-CANDIDATE
         ARUNTIME-ACCESS-PRESET!
     ABORT" desk: unavailable or invalid agent access preset"
     _DESK-SCHEDULES-INIT
+    _DESK-REGISTRY @ _DESK-OWNERS ROWN-INIT
+    ['] _DESK-OWNER-ALLOWED? _DINI-INST @ _DESK-OWNERS ROWN-POLICY!
+    \ A scheduled run's document is attached through its owner.
+    ['] _DESK-OWNER-ATTACH _DINI-INST @ _DESK-BROKER SBRK-OWNERS!
 
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK <>
     ABORT" desk: service table setup failed"
@@ -1801,6 +1860,7 @@ VARIABLE _DIFI-XIO-STATUS
     _DESK-DAYBOOK-ACTIVATION-CLEANUP
     _DESK-SCHEDULES-FINI
     _DESK-REMINDERS DBSVC-CLOSE
+    _DESK-OWNERS ROWN-FREE
     _DESK-RREG @ ?DUP IF RREG-FREE THEN
     _DESK-AGENT-RUNTIME @ ?DUP IF
         DUP ARUNTIME-ACCESS-PROFILE ?DUP IF

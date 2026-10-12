@@ -16,6 +16,15 @@
 \  Mandate with the permission's time and disclosure limits and no tool
 \  budget.  The handler owns that authority only once the run started.
 \
+\  A run that names a document holds it only while it starts.  The
+\  broker attaches the document through its owner with the root Context,
+\  by the word Desk sets (SBRK-OWNERS!), lets the run's facet describe
+\  and take a snapshot of that one document, and lends the handler's
+\  START a resource client for it.  Once START answers, the broker
+\  releases the document; one its owner will not release yet is asked
+\  again each tick.  A document whose approved version is gone stops the
+\  run for review, and one that cannot be attached blocks it.
+\
 \  The handler runs one thing at a time.  A run it cannot start yet waits
 \  in the broker, in the order runs were handed over, and the handler
 \  keeps its place in line so nothing else goes first.  Each tick starts
@@ -43,6 +52,7 @@
 \    SBRK-STORE         ( broker -- store )
 \    SBRK-CLIENT        ( broker -- client )
 \    SBRK-HANDLER!      ( handler broker -- )
+\    SBRK-OWNERS!       ( xt context broker -- )
 \    SBRK-TICK          ( broker -- )
 \    SBRK-ASKING        ( broker -- id request | 0 0 )
 \    SBRK-ANSWER        ( id allowed? now broker -- status )
@@ -60,6 +70,7 @@ PROVIDED akashic-desk-sched-broker
 
 REQUIRE ../../../runtime/schedule-permission.f
 REQUIRE ../../../interop/policy.f
+REQUIRE ../../../interop/resource-client.f
 REQUIRE ../agent/service.f
 
 \ =====================================================================
@@ -67,7 +78,7 @@ REQUIRE ../agent/service.f
 \ =====================================================================
 \  Desk fills a handler record and sets it on the broker.  Its words:
 \
-\    start   ( request run response context -- status )
+\    start   ( request run source response context -- status )
 \    status  ( key response context -- status )
 \    cancel  ( key reason context -- status )
 \    models  ( buffer capacity context -- bytes status )
@@ -75,7 +86,9 @@ REQUIRE ../agent/service.f
 \    vet     ( request context -- reason|0 )
 \
 \  START starts the run REQUEST asks for, under RUN, the authority the
-\  broker compiled for it, and answers as STATUS would after it:
+\  broker compiled for it, with SOURCE, a resource client for the
+\  document the run names (0 for none) lent for this START alone, and
+\  answers as STATUS would after it:
 \  - STARTED: the run started, RESPONSE names it, and the handler owns
 \    RUN;
 \  - WAITING: it cannot start a run now, and keeps this one's place in
@@ -147,7 +160,11 @@ _SBRK-CLIENT SDSP-CLIENT-SIZE + CONSTANT _SBRK-RESPONSE   \ with no summary
 _SBRK-RESPONSE 0 SDSP-RESPONSE-SIZE + CONSTANT _SBRK-MANDATE
 _SBRK-MANDATE MAND-SIZE + CONSTANT _SBRK-FACET
 _SBRK-FACET CFACET-SIZE + 7 + -8 AND CONSTANT _SBRK-STORE
-_SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
+_SBRK-STORE SPERM-SIZE + CONSTANT _SBRK-OWNERS-XT
+_SBRK-OWNERS-XT 8 + CONSTANT _SBRK-OWNERS-CX
+_SBRK-OWNERS-CX 8 + CONSTANT _SBRK-RELEASING   \ documents to release again
+_SBRK-RELEASING 8 + CONSTANT _SBRK-DOC         \ the document of the run starting
+_SBRK-DOC 8 + CONSTANT SBRK-SIZE
 
 : _SBRK.MAGIC     ( broker -- a ) _SBRK-MAGIC-OFF + ;
 : _SBRK.SELF      ( broker -- a ) _SBRK-SELF + ;
@@ -165,6 +182,10 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
 : _SBRK.MANDATE   ( broker -- mandate ) _SBRK-MANDATE + ;
 : _SBRK.FACET     ( broker -- facet ) _SBRK-FACET + ;
 : SBRK-STORE      ( broker -- store ) _SBRK-STORE + ;
+: _SBRK.OWNERS-XT ( broker -- a ) _SBRK-OWNERS-XT + ;
+: _SBRK.OWNERS-CX ( broker -- a ) _SBRK-OWNERS-CX + ;
+: _SBRK.RELEASING ( broker -- a ) _SBRK-RELEASING + ;
+: _SBRK.DOC       ( broker -- a ) _SBRK-DOC + ;
 
 : SBRK-VALID?  ( broker -- flag )
     DUP 0= IF EXIT THEN
@@ -188,9 +209,9 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
     TUCK + @ DUP 0= IF NIP EXIT THEN
     SWAP _SBH-CONTEXT + @ SWAP ;
 
-: _SBRK-H-START  ( request run response broker -- status )
+: _SBRK-H-START  ( request run source response broker -- status )
     _SBH-START _SBRK-H-WORD ?DUP IF EXECUTE EXIT THEN
-    2DROP DROP SDSP-S-UNAVAILABLE ;
+    2DROP 2DROP SDSP-S-UNAVAILABLE ;
 
 : _SBRK-H-STATUS  ( key response broker -- status )
     _SBH-STATUS _SBRK-H-WORD ?DUP IF EXECUTE EXIT THEN
@@ -369,6 +390,130 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
     ENDCASE ;
 
 \ ---------------------------------------------------------------------
+\  A run's document
+\ ---------------------------------------------------------------------
+
+\ A document attached for a run's start: the next one to release again,
+\ the acquisition, its binding, and the resource client lent to START.
+ 0 CONSTANT _SBD-NEXT
+ 8 CONSTANT _SBD-RESULT
+_SBD-RESULT RACQ-RESULT-SIZE + CONSTANT _SBD-BIND
+_SBD-BIND LBIND-SIZE + CONSTANT _SBD-CLIENT
+_SBD-CLIENT RCLI-SIZE + CONSTANT _SBD-SIZE
+
+: _SBD.RESULT  ( doc -- result ) _SBD-RESULT + ;
+: _SBD.BIND    ( doc -- binding ) _SBD-BIND + ;
+: _SBD.CLIENT  ( doc -- client ) _SBD-CLIENT + ;
+
+\ The word that attaches a locator through the owner it names, with its
+\ context:  ( locator binding result context -- status ), an RACQ- one.
+: SBRK-OWNERS!  ( xt context broker -- )
+    TUCK _SBRK.OWNERS-CX ! _SBRK.OWNERS-XT ! ;
+
+\ Releases DOC and frees it, or keeps it to release again.  A document
+\ whose owner is gone has nothing left to release.
+: _SBRK-RELEASE  ( doc broker -- )
+    OVER _SBD.RESULT RACQ.RESULT-TOKEN DUP RACQ-TOKEN-ACTIVE? IF
+        RACQ.TOKEN-ROOT @ RACQ-ROOT-VALID? IF
+            OVER DUP _SBD.BIND SWAP _SBD.RESULT RACQ-DETACH RACQ-S-OK <> IF
+                _SBRK.RELEASING _SBRK-APPEND EXIT
+            THEN
+        THEN
+    ELSE
+        DROP
+    THEN
+    DROP DUP _SBD-SIZE 0 FILL FREE ;
+
+\ Releases the document of the run that was starting, if any.
+: _SBRK-DETACH  ( broker -- )
+    DUP _SBRK.DOC @ ?DUP IF OVER _SBRK-RELEASE THEN
+    0 SWAP _SBRK.DOC ! ;
+
+\ Asks again to release the documents whose owners would not.
+: _SBRK-RELEASE-AGAIN  ( broker -- )
+    DUP _SBRK.RELEASING @ 0 2 PICK _SBRK.RELEASING !      ( broker doc )
+    BEGIN ?DUP WHILE
+        DUP @ >R OVER _SBRK-RELEASE R>
+    REPEAT
+    DROP ;
+
+\ Attaches the document LOCATOR names through its owner, with a resource
+\ client for it on the root Context.  The attachment, or 0 and an RACQ-
+\ status: UNAVAILABLE when Desk set no owners or the client cannot be
+\ made, CAPACITY when there is no room for it.
+: _SBRK-ATTACH-DOC  ( locator broker -- doc|0 status )
+    >R
+    R@ _SBRK.OWNERS-XT @ 0= IF DROP R> DROP 0 RACQ-S-UNAVAILABLE EXIT THEN
+    _SBD-SIZE ALLOCATE IF 2DROP R> DROP 0 RACQ-S-CAPACITY EXIT THEN
+    DUP _SBD-SIZE 0 FILL                             ( locator doc )
+    TUCK _SBD.BIND 2 PICK _SBD.RESULT
+    R@ _SBRK.OWNERS-CX @ R@ _SBRK.OWNERS-XT @ EXECUTE     ( doc status )
+    ?DUP IF SWAP R@ _SBRK-RELEASE R> DROP 0 SWAP EXIT THEN
+    DUP _SBD.RESULT OVER _SBD.BIND R@ _SBRK.ROOT @ DUP CTX.QUEUE @
+    4 PICK _SBD.CLIENT RCLI-INIT IF
+        R@ _SBRK-RELEASE R> DROP 0 RACQ-S-UNAVAILABLE EXIT
+    THEN
+    R> DROP RACQ-S-OK ;
+
+\ How a run ends whose document could not be attached, for an RACQ-
+\ STATUS: its approved version is gone, there is no room, or the
+\ document is not there.
+: _SBRK-ATTACH-END  ( status -- outcome reason )
+    DUP RACQ-S-CAPACITY = IF DROP SACT-O-BLOCKED SACT-R-CAPACITY EXIT THEN
+    DUP RACQ-S-REVISION-MISMATCH = OVER RACQ-S-DIGEST-MISMATCH = OR
+    OVER RACQ-S-GONE = OR SWAP RACQ-S-PRUNED = OR IF
+        SACT-O-STOPPED SACT-R-CONTEXT-STALE
+    ELSE
+        SACT-O-BLOCKED SACT-R-CONTEXT-UNAVAILABLE
+    THEN ;
+
+\ Attaches the document REQUEST names, if any, for its run's start, as
+\ the broker's DOC.  0, or how the run ends when it cannot be attached.
+: _SBRK-ATTACH  ( request broker -- 0 | outcome reason )
+    >R 0 R@ _SBRK.DOC !
+    SDSP-OPERANDS$ DROP SACT-O.CONTEXT ?DUP 0= IF R> DROP 0 EXIT THEN
+    R@ _SBRK-ATTACH-DOC ?DUP IF NIP _SBRK-ATTACH-END R> DROP EXIT THEN
+    R> _SBRK.DOC ! 0 ;
+
+VARIABLE _SBDS-F  VARIABLE _SBDS-Q  VARIABLE _SBDS-DOC  VARIABLE _SBDS-S
+
+\ The text or integer FIELD of the description.
+: _SBRK-FACT  ( key-a key-u -- value ) _SBDS-Q @ CBR.RESULT CV-MAP-FIND ;
+
+\ What the owner of the document LOCATOR names says of it now, into
+\ FACTS (interop/scheduled-dispatch.f).  Desk asks for itself, and lets
+\ the document go at once.
+: _SBRK-DESCRIBE  ( locator facts broker -- status )
+    >R _SBDS-F !
+    DUP QLOC-VALID? 0= IF DROP R> DROP SDSP-S-INVALID EXIT THEN
+    R@ _SBRK-ATTACH-DOC IF DROP R> DROP SDSP-S-UNAVAILABLE EXIT THEN
+    _SBDS-DOC !
+    CBR-NEW IF DROP _SBDS-DOC @ R@ _SBRK-RELEASE R> DROP SDSP-S-UNAVAILABLE EXIT THEN
+    _SBDS-Q !
+    CPRINC-SYSTEM _SBDS-Q @ _SBDS-DOC @ _SBD.CLIENT RCLI-DESCRIBE IF
+        SDSP-S-UNAVAILABLE
+    ELSE
+        S" domain_revision" _SBRK-FACT CV-DATA@ _SBDS-F @ SDSP-F.REVISION !
+        S" size" _SBRK-FACT CV-DATA@ _SBDS-F @ SDSP-F.SIZE !
+        S" title" _SBRK-FACT DUP CV-DATA@ SWAP CV-LEN@ _SBDS-F @ SDSP-FACTS-TITLE!
+    THEN
+    _SBDS-S !
+    _SBDS-Q @ CBR-FREE _SBDS-DOC @ R> _SBRK-RELEASE
+    _SBDS-S @ ;
+
+\ The resource client lent to the START of the run starting, or 0.
+: _SBRK-SOURCE  ( broker -- client|0 )
+    _SBRK.DOC @ DUP IF _SBD.CLIENT THEN ;
+
+\ Lets the run's facet invoke operation OP of the document the broker
+\ attached, automatically, for what the permission lets it disclose.
+: _SBRK-DOCUMENT-ENTRY  ( op-a op-u broker -- status )
+    >R R@ _SBRK.DOC @ _SBD.BIND DUP LBIND.TARGET-ID @ SWAP LBIND.TARGET-GEN @
+    CAP-E-OBSERVE CFENTRY-F-INVOKE CFENTRY-F-AUTO-OBSERVE OR
+    R@ _SBRK.P @ SPERM-P.DISCLOSURE @
+    6 ROLL 6 ROLL R> _SBRK.FACET CFACET-ADD ;
+
+\ ---------------------------------------------------------------------
 \  A run's authority
 \ ---------------------------------------------------------------------
 
@@ -386,9 +531,10 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
     R> SHA3-256-END ;
 
 \ Compiles the authority for REQUEST's run from PERMISSION alone: a
-\ child of the Practice's root Context, a facet with no entries, and a
-\ read-only Mandate with the permission's effects, time and disclosure
-\ limits and no tool budget.  The run owns the child Context.
+\ child of the Practice's root Context, a facet with no entries but the
+\ document the broker attached for it, and a read-only Mandate with the
+\ permission's effects, time and disclosure limits and no tool budget.
+\ The run owns the child Context.
 : _SBRK-COMPILE  ( request permission broker -- run status )
     >R R@ _SBRK.P ! R@ _SBRK.Q !
     R@ _SBRK.ROOT @ CTX-CHILD-NEW ?DUP IF
@@ -406,6 +552,12 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
     R@ _SBRK.CHILD @ CTX.ID @ OVER CFACET.CONTEXT-ID !
     R@ _SBRK.CHILD @ CTX.GENERATION @ OVER CFACET.CONTEXT-GEN !
     1 SWAP CFACET.REVISION !
+    R@ _SBRK.DOC @ IF
+        S" resource.describe" R@ _SBRK-DOCUMENT-ENTRY
+        S" resource.snapshot" R@ _SBRK-DOCUMENT-ENTRY OR IF
+            R@ _SBRK.CHILD @ CTX-FREE R> DROP 0 AMRUN-S-INVALID EXIT
+        THEN
+    THEN
 
     R@ _SBRK.MANDATE DUP MAND-INIT
     S" desk.schedule.mandate" R@ _SBRK.Q @ SDSP-R.KEY R@ _SBRK.CHILD @ R@
@@ -440,8 +592,10 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
         _SBRK-REFUSAL SACT-O-BLOCKED SWAP R> _SBRK-REFUSE EXIT
     THEN
     DROP
+    OVER R@ _SBRK-ATTACH ?DUP IF R> _SBRK-REFUSE EXIT THEN
     OVER DUP SDSP-R.PERMISSION R@ SBRK-STORE SPERM-FIND R@ _SBRK-COMPILE
     ?DUP IF                                         ( request response 0 status )
+        R@ _SBRK-DETACH
         NIP AMRUN-S-NOMEM = IF
             SACT-O-BLOCKED SACT-R-CAPACITY
         ELSE
@@ -449,7 +603,9 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
         THEN
         R> _SBRK-REFUSE EXIT
     THEN                                            ( request response run )
-    2 PICK OVER 3 PICK R@ _SBRK-H-START
+    2 PICK OVER R@ _SBRK-SOURCE 4 PICK R@ _SBRK-H-START
+    \ The run read its document while it started, or never will.
+    R@ _SBRK-DETACH
     DUP SDSP-S-STARTED = IF NIP NIP NIP R> DROP EXIT THEN
     SWAP AMRUN-FREE                                 ( request response status )
     DUP SDSP-S-WAITING = OVER SDSP-S-RUNNING = OR
@@ -471,9 +627,11 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
     R> DROP 0 ;
 
 \ Starts the waiting runs, first to last, while the handler is idle.
-\ Each is checked again as it starts.
+\ Each is checked again as it starts.  First, the documents whose owners
+\ would not release them are asked again.
 : SBRK-TICK  ( broker -- )
     DUP SBRK-VALID? 0= IF DROP EXIT THEN
+    DUP _SBRK-RELEASE-AGAIN
     DUP _SBRK.RUNS @
     BEGIN DUP WHILE                                  ( broker run )
         DUP _SBR.STATE @ _SBRK-QUEUED = IF
@@ -669,6 +827,7 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
     ['] _SBRK-ASKED R@ SBRK-CLIENT SDSP-C.ASKED-XT !
     ['] _SBRK-CHECK R@ SBRK-CLIENT SDSP-C.CHECK-XT !
     ['] _SBRK-H-MODELS R@ SBRK-CLIENT SDSP-C.MODELS-XT !
+    ['] _SBRK-DESCRIBE R@ SBRK-CLIENT SDSP-C.DESCRIBE-XT !
     R@ DUP _SBRK.SELF ! _SBRK-MAGIC R@ _SBRK.MAGIC !
     R> SBRK-STORE SPERM-OPEN ;
 
@@ -713,5 +872,10 @@ _SBRK-STORE SPERM-SIZE + CONSTANT SBRK-SIZE
     DROP
     BEGIN DUP _SBRK.RUNS @ ?DUP WHILE OVER _SBRK-DROP REPEAT
     BEGIN DUP _SBRK.ASKS @ ?DUP WHILE OVER _SBRK-FORGET REPEAT
+    \ A document its owner will still not release goes with Desk.
+    DUP _SBRK-RELEASE-AGAIN
+    BEGIN DUP _SBRK.RELEASING @ ?DUP WHILE
+        DUP @ 2 PICK _SBRK.RELEASING ! DUP _SBD-SIZE 0 FILL FREE
+    REPEAT
     DUP SBRK-STORE SPERM-CLOSE DROP
     SBRK-SIZE 0 FILL ;
