@@ -1433,8 +1433,9 @@ rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them.
 
-**Status (2026-10-12).** Steps 3 and 4 are done; steps 1 and 2 wait for
-review of the decisions above, and AES for its decision.
+**Status (2026-10-12).** Steps 3 and 4 are done, and step 5 for pages
+without tags; steps 1 and 2 wait for review of the decisions above, and AES
+for its decision.
 
 - The file layer reads cross-reference tables and streams, object streams
   and incremental updates, repairs a damaged file by scanning, decodes
@@ -1446,6 +1447,12 @@ review of the decisions above, and AES for its decision.
   UTF-16 CMaps. The content interpreter gives runs of text through form
   XObjects and marked content. Pages that xelatex, pdflatex, LibreOffice and
   Ghostscript write read as pdftotext reads them.
+- The layout gives a page's paragraphs, headings by size or a bold line,
+  bullet and numbered items, and code with its indents, from the order its
+  content shows its text; a hyphenated word is joined, and the page's
+  number and any artifacts are left out. LibreOffice's and xelatex's
+  documents lay out as their sources read. A tagged page still lays out
+  this way; reading its structure tree is next.
 - A page of a TeX document, about 2,800 characters, costs about 5.4
   million steps once its fonts are read: some 1.5 million to inflate its
   content, about 0.5 million to lex it, the rest to show its glyphs. The
