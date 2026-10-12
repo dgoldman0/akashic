@@ -954,6 +954,40 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
     assert all(0 <= index < cell_count for index in fields.values())
 
 
+def test_publisher_diagnostic_schema_matches_the_forth_layout() -> None:
+    """The publisher record is the screen backend's publisher record
+    followed by the rich adapter's fields, each where its accessor says."""
+
+    root = Path(acceptance_runner.__file__).resolve().parents[1] / "akashic/tui"
+    backend = (root / "screen-backend-apt1.f").read_text(encoding="utf-8")
+    adapter = (root / "rich-terminal/screen-adapter-apt1.f").read_text(encoding="utf-8")
+    pointer, count, fields = acceptance_runner._GUEST_FAILURE_RECORDS["publisher"]
+    assert pointer == "_A1D-FAILURE-PUBLISHER-A"
+    base = int(re.search(r"(?m)^(\d+) CONSTANT APTSCB-PUBLISHER-SIZE$", backend)[1])
+    base_fields = {
+        name: int(value)
+        for value, name in re.findall(r"(?m)^\s*(\d+) CONSTANT _APTSCBP-O-(\S+)$", backend)
+    }
+    rich_fields = {
+        name: base + int(value or 0)
+        for value, name in re.findall(
+            r"(?m)^APTSCB-PUBLISHER-SIZE(?: (\d+) \+)? CONSTANT _RTAPTSCB-O-(\S+)$",
+            adapter,
+        )
+    }
+    size = re.search(r"(?m)^APTSCB-PUBLISHER-SIZE (\d+) \+ CONSTANT RTAPTSCB-SIZE$",
+                     adapter)
+    assert count == (base + int(size[1])) // 8
+    for name, index in fields.items():
+        if name in ("session", "context", "base_magic"):
+            expected = base_fields[{"base_magic": "MAGIC"}.get(name, name.upper())]
+        else:
+            accessor = {"rich_magic": "MAGIC", "producer_bytes": "PRODUCER-U"}.get(
+                name, name.upper().replace("_", "-"))
+            expected = rich_fields[accessor]
+        assert index * 8 == expected, name
+
+
 def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> None:
     source = (akashic_tui.MEGAPAD_ROOT / "rich-terminal.f").read_text(encoding="utf-8")
     pointer, count, fields = acceptance_runner._GUEST_FAILURE_RECORDS["pt_session"]
@@ -8188,7 +8222,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "_APTSCB-STATUS": (0x1008, 0),
     }
     record_cells = {
-        0x2000: list(range(27)),
+        0x2000: list(range(28)),
         0x3000: list(range(606)),
         0x6000: list(range(62)),
         0x8000: list(range(133)),
@@ -8238,30 +8272,30 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert peek_calls == [
         (0x8000, 133),
-        (0x2000, 27),
+        (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
         (0x4000, 94),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
-        "adapter": 18,
-        "base_magic": 10,
+        "adapter": 19,
+        "base_magic": 11,
         "context": 1,
-        "engine": 11,
-        "fault_status": 24,
-        "more_work": 22,
-        "neutral_empty": 26,
-        "output_needed": 23,
-        "phase": 25,
-        "producer_budget": 15,
-        "producer_bytes": 14,
-        "producer_context": 13,
-        "rich_magic": 12,
+        "engine": 12,
+        "fault_status": 25,
+        "more_work": 23,
+        "neutral_empty": 27,
+        "output_needed": 24,
+        "phase": 26,
+        "producer_budget": 16,
+        "producer_bytes": 15,
+        "producer_context": 14,
+        "rich_magic": 13,
         "session": 0,
-        "surface_cols": 19,
-        "surface_generation": 21,
-        "surface_rows": 20,
+        "surface_cols": 20,
+        "surface_generation": 22,
+        "surface_rows": 21,
     }
     producer = payload["records"]["hybrid_producer"]["fields"]
     assert producer["phase"] == 15
@@ -8401,7 +8435,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         },
     }
     record_cells = {
-        0x2000: list(range(27)),
+        0x2000: list(range(28)),
         0x3000: list(range(606)),
         0x6000: list(range(62)),
     }
@@ -8462,7 +8496,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         for method, params in calls
         if method == "peek"
     ] == [
-        (0x2000, 27),
+        (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
         (0x4000, 94),
@@ -8473,7 +8507,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert payload["machine"]["forth"]["word"]["name"] == (
         "_RTHP-BUILD-CANDIDATE"
     )
-    assert payload["records"]["publisher"]["fields"]["phase"] == 25
+    assert payload["records"]["publisher"]["fields"]["phase"] == 26
     producer = payload["records"]["hybrid_producer"]["fields"]
     assert producer["phase"] == 15
     assert producer["candidate_attempt"] == 20
