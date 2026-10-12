@@ -492,8 +492,9 @@ dispatch returns.
   (`DBSVC-LABEL`), with when it was granted and its limits. R revokes the
   selected one, which cancels any run in flight under it, and the status
   line says how it went. Esc closes it.
-- **Shut down Desk?** When Desk is asked to close while a scheduled run
-  is in flight or waiting (`SBRK-ACTIVE?`), it defers the close and asks:
+- **Shut down Desk?** When Desk is asked to close, as Alt+Q asks it,
+  while a scheduled run is in flight or waiting (`SBRK-ACTIVE?`), it
+  defers the close and asks:
   "A scheduled Agent run is in progress or waiting. Shut down anyway? It
   will be cancelled." in place of any overlay open. Keep running is the
   first row, so Enter alone keeps Desk running, as Esc does. Shut down
@@ -610,6 +611,7 @@ All shortcuts require **Alt** modifier:
 | Alt+H | Open the selectable catalog launcher |
 | Alt+S | Open the sandbox module inspector |
 | Alt+P | Open the scheduled run permissions |
+| Alt+Q | Shut Desk down, asking first while a scheduled run is in flight or waiting |
 
 Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on
 the selected row, or an OPEN item event focuses or launches; Esc closes it.

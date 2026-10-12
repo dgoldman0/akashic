@@ -100,6 +100,7 @@ def test_the_schedule_screens_share_desks_screen_slot() -> None:
     assert re.search(
         r"112\s+_DESK-ALT\?\s+IF\s+DROP\s+_DESK-SHOW-SCHEDULE-PERMISSIONS", shortcut
     )
+    assert re.search(r"113\s+_DESK-ALT\?\s+IF\s+DROP\s+ASHELL-QUIT", shortcut)
     permissions = _definition(source, "_DESK-SHOW-SCHEDULE-PERMISSIONS")
     assert "['] DBSVC-LABEL _DESK-REMINDERS" in permissions
 

@@ -2703,6 +2703,9 @@ _DESK-LAUNCHER-DESC-SETUP
         DROP _DESK-SHOW-SBOX-MODULES -1 EXIT THEN
     DUP 112 _DESK-ALT? IF
         DROP _DESK-SHOW-SCHEDULE-PERMISSIONS -1 EXIT THEN
+    \ Alt+Q shuts Desk down, which asks first while a scheduled run is in
+    \ flight or waiting.
+    DUP 113 _DESK-ALT? IF DROP ASHELL-QUIT -1 EXIT THEN
     DUP 97 _DESK-ALT? IF
         DROP _DESK-SHOW-AGENT-PROMPT -1 EXIT THEN
     DROP 0 ;
