@@ -42,8 +42,8 @@ The canonical form allows no alternatives. A document is refused unless:
   most `max`, because a bound at the extreme is no bound;
 - `max-len` is not negative;
 - a map has 1 through 256 fields, its keys are valid UTF-8 of at most
-  65,536 bytes and strictly increase by unsigned bytes, and each required
-  byte is 0 or 1;
+  `CSB-KEY-MAX` (65,536) bytes, the form's own bound for names, and
+  strictly increase by unsigned bytes, and each required byte is 0 or 1;
 - the depth is below 16 and there are at most 65,536 nodes, the bounds
   `CS-SCHEMA-VALIDATE` uses.
 

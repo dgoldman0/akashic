@@ -197,6 +197,9 @@ and 64 leases. Managed projections describe, snapshot, and replace; captures
 are read-only. Identity acquisition means active current state. Qualified exact
 archived revisions remain readable, while tombstoned and pruned revisions keep
 their distinct terminal results. Tokens are activation-local and never durable.
+A snapshot reads the whole content into a buffer of exactly its size, freed
+when the snapshot's handler returns, up to the resource contract's 16 MiB
+content bound.
 
 ## Failure, inspection, and maintenance
 

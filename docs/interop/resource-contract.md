@@ -36,8 +36,9 @@ projection-content, new state and content digests must be equal. Replace is
 optional; absence means read-only portable interoperation.
 
 All maps reject missing or additional fields. Text and snapshot/replace
-content are bounded by `RCON-CONTENT-MAX`; describe size is bounded only by
-`RCON-SIZE-MAX`. Digests are exactly 32 bytes where required, RREF revision is
+content are bounded by `RCON-CONTENT-MAX`, which is the value system's
+`CV-MAX-STRING-LEN` (16 MiB), since content travels as one byte string;
+describe size is bounded only by `RCON-SIZE-MAX`. Digests are exactly 32 bytes where required, RREF revision is
 zero, and projection-content results are verified rather than trusted by shape
 alone.
 The builders never grant authority; they only construct typed operands.

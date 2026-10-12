@@ -6,9 +6,11 @@ type, element stride, bounded count, data pointer, and index before deriving a
 child address. Returned children are borrowed from the owning container.
 
 Owned strings, byte strings, and resource identifiers share the
-`CV-MAX-STRING-LEN` payload bound. Their setters validate the complete request
-before allocating, freeing, or copying, so a rejected length leaves the
-destination value unchanged.
+`CV-MAX-STRING-LEN` payload bound, 16 MiB, a document's size rather than a
+message's. A value allocates only its own length, so the bound reserves
+nothing. Their setters validate the complete request before allocating,
+freeing, or copying, so a rejected length leaves the destination value
+unchanged.
 
 `CV-FREE` walks valid ownership graphs iteratively and has no fixed semantic
 depth or node cutoff. A small inline work area handles ordinary values; deeper

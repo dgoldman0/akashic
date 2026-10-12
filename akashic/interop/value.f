@@ -25,7 +25,10 @@ REQUIRE ../concurrency/guard.f
 3 CONSTANT CV-E-RANGE
 
 4096 CONSTANT CV-MAX-CONTAINER-LEN
-65536 CONSTANT CV-MAX-STRING-LEN
+\ The longest string, byte string or resource identifier a value holds:
+\ 16 MiB, a document's size rather than a message's.  A value allocates
+\ only its own length, so the bound reserves nothing.
+16777216 CONSTANT CV-MAX-STRING-LEN
 0x8000000000000000 CONSTANT CV-CELL-MIN
 0x7FFFFFFFFFFFFFFF CONSTANT CV-CELL-MAX
 

@@ -1805,3 +1805,29 @@ only a new Agent run's.
 | mutable-state | `63d8f240398481094d7e590daae107de0646916712bfee093ecbe9dd926206a7` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Document-size limit reviewed ratchet update
+
+The value system's limit on one string or byte value
+(`CV-MAX-STRING-LEN`) and the resource contract's content limit
+(`RCON-CONTENT-MAX`, now defined as the former) rise from 64 KiB to
+16 MiB, so a document travels whole. A value allocates only its own
+length, so the bound reserves nothing. Library's projection snapshot
+drops its fixed 64 KiB buffer and reads into one of exactly the
+document's size, freed when the snapshot's handler returns. The sandbox
+capability and the binary schema form keep their documented 64 KiB
+bounds under their own names (`SBOX-CAPABILITY-TEXT-MAX`, `CSB-KEY-MAX`).
+
+The graph is unchanged: 653 modules, 2,328 resolved `REQUIRE`
+occurrences and unique edges, and the 78 reviewed unresolved imports. No
+cycle, layer violation, placement debt, identity or addressability issue
+appears. Applet globals rise from 3,553 to 3,554: Library's fixed buffer
+goes, and the buffer's address and size become two variables.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `993a6ff7bdd6e94bfbc05536fbed0639c9692bbb7073523b3bedf79a056f6b6a` |
+| mutable-state | `1fbc435687ec866df62f3517428b280f3b2bbfb695159e641fa71c3a4ad8ba5e` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

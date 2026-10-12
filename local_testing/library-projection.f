@@ -1043,7 +1043,7 @@ VARIABLE _lpo-exact-locator
     _lpo-root LIBRARY-PROJECTION-ROOT-LIVE@ 0= _lpo-assert
     _lpo-stack ;
 
-: _lpo-large-bounded-snapshot  ( -- )
+: _lpo-large-snapshot  ( -- )
     10 _lpo-read-identity
         LIBRARY-SERVICE-S-OK = _lpo-assert
     _lpo-entry LIBE.CONTENT-U @
@@ -1064,15 +1064,16 @@ VARIABLE _lpo-exact-locator
     S" size" _lpo-request @ CBR.RESULT CV-MAP-FIND
         CV-DATA@ _LPO-LARGE-CONTENT-U = _lpo-assert
 
-    \ Projection interop is intentionally bounded to 64 KiB.  Describe
-    \ reports the complete durable size, while snapshot refuses atomically
-    \ instead of returning a misleading prefix.
+    \ A snapshot reads the whole document, larger than 64 KiB, into a
+    \ buffer of exactly its size; the result's digest check proves every
+    \ byte is the document's.
     _lpo-loc-a CPRINC-USER _lpo-request @ _lpo-client
-        RCLI-SNAPSHOT-CALL CBUS-S-FAILED = _lpo-assert
+        RCLI-SNAPSHOT-CALL CBUS-S-OK = _lpo-assert
     _lpo-loc-a _lpo-request @ CBR.RESULT
-        RCON-SNAPSHOT-RESULT? 0= _lpo-assert
+        RCON-SNAPSHOT-RESULT? _lpo-assert
     S" content" _lpo-request @ CBR.RESULT CV-MAP-FIND
-        0= _lpo-assert
+        DUP 0<> _lpo-assert
+        CV-LEN@ _LPO-LARGE-CONTENT-U = _lpo-assert
 
     10 _lpo-read-identity
         LIBRARY-SERVICE-S-OK = _lpo-assert
@@ -1381,7 +1382,7 @@ VARIABLE _lpo-exact-locator
     _lpo-capacity-contract
     _lpo-lease-capacity-contract
     _lpo-create-large
-    _lpo-large-bounded-snapshot
+    _lpo-large-snapshot
     _lpo-root-fini-contract
     _lpo-cold-reopen-contract
     _lpo-teardown
