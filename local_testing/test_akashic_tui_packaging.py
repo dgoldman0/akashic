@@ -762,6 +762,7 @@ def test_library_projection_owner_profile_packages_renderer_free_contract() -> N
     assert profile.ready_markers == ("LIBRARY PROJECTION OWNER PASS",)
     assert profile.stable_markers == profile.ready_markers
     assert profile.total_sectors == 8192
+    assert profile.default_ext_mem_mib == 256
     assert profile.include_large_sample is False
     assert profile.linked is True
     assert {
