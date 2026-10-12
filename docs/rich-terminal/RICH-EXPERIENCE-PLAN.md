@@ -1193,6 +1193,36 @@ brings, search, and selecting text. PNG and JPEG figures in CELL, which show
 their facts until the guest can decode them, PNG after part 13. Larger
 headings. Pad keeps showing Markdown as its source, since Pad edits it.
 
+**Status.** Done on 2026-10-12. The runs are recorded in
+`local_testing/evidence/documents-journey-20261012.md`. File Explorer
+previews the sample guide as one DOCUMENT, in CELL and rich, with wrapped
+paragraphs, headings, lists, quotes, code and sunset.qoi as a figure in the
+flow. The terminal shows the figure as an IMAGE in the picture rows the
+document leaves it, and only the part in view when it is scrolled partly
+out. The wheel scrolls the guide, its link to its first heading scrolls
+back, and its link to notes.md selects that file and previews it. DOC1
+carries only the blocks in view. Desk with only File Explorer passed, then
+the full Desktop journey, which previews the guide with its figure rich.
+
+Step 10's counts: opening the guide takes 0.24 million guest steps.
+Drawing it at File Explorer's full-screen size, 195 by 78 cells, takes 6.4
+million while the rich side shows the figure, and 46 million for CELL alone,
+which draws the figure in half blocks. A scroll step's draw takes 6.2 to 6.5
+million rich and 15 to 17 million in CELL. The rich side's capture and DOC1
+take 0.35 to 0.85 million a frame. A scroll step with the figure in view
+sends 57 to 60 KB.
+
+The first physical run stopped at the frame with the figure partly scrolled
+out: MegaPad's shared-viewer transport decoded object offsets as unsigned.
+It now carries them signed, as the scene does.
+
+Three things stay open. A figure that moves makes every scroll step a full
+replacement, and the step's later wheel turns restart it, so a step sends
+about 38 KB of retained frames where a DELTA sent 2 KB or less. The
+semantic-collection byte oracle needs about 131.5 million steps since the
+DOC1 packer joined its closure, beyond its 130 million limit. The unlinked
+grid-contracts profile needs 132 MP64FS entries, beyond MegaPad's 128.
+
 ## 13. Decompression
 
 **Today.** Akashic has no inflater. Most of a PDF's text lies in Flate
