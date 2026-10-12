@@ -29,5 +29,6 @@ and a lookup searches the names in halves. Loading the file costs about 5.9
 million guest steps. Every word only reads the text and the index, so
 lookups are reentrant and need no guard.
 
-The partial tables in `markup/core.f`, `markup/html.f` and
+The Markdown reader (`markup/markdown.f`) decodes entities with it. The
+partial tables in `markup/core.f`, `markup/html.f` and
 `markup/readable-text.f` predate it.

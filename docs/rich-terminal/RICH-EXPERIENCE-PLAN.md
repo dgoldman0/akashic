@@ -1161,10 +1161,10 @@ the surface.
 
 **Checks,** in order:
 
-- Markdown: blocks and inline meanings against markdown-it-py, a CommonMark
-  reader, on CommonMark's own examples for what the reader takes and on
-  random documents; short and odd input; a balanced stack; memory taken only
-  from the caller.
+- Markdown: blocks and inline meanings against the CommonMark reference
+  parser, commonmark.js 0.30, on handwritten and random documents recorded
+  as fixtures, and GitHub tables against markdown-it-py; short and odd
+  input; a balanced stack; memory taken only from the caller.
 - Lines: Akashic's and MegaPad's rows for the same documents agree row for
   row, on fixed and random documents.
 - Document view: CELL byte oracles for each block kind, lists in quotes,
