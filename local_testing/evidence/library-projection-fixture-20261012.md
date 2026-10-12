@@ -1,12 +1,17 @@
-# Library projection fixture: external memory and run time (2026-10-12)
+# Library fixtures: external memory, disk and run time (2026-10-12)
 
-## What failed
+Two Library profiles failed on main. Each needed a larger machine resource,
+not a change to the fixture or the product.
+
+## The projection owner fixture
+
+### What failed
 
 On main at `f815466e`, `library-projection-owner-contracts` failed before its
 first assertion. `VFS-NEW` could not get the 64 MiB arena that holds the
 fixture's corpus.
 
-## Why
+### Why
 
 Commit `4b1838b2` ("Budget complete Desk histories within an explicit
 external-memory partition") added a userland partition to KDOS boot. Unless a
@@ -18,12 +23,12 @@ asked for its arena.
 A run with a 32 MiB arena got further, but failed four assertions in
 `_lpo-seed-lifecycle`: the corpus does not fit a 32 MiB disk.
 
-## Fix
+### Fix
 
 The profile now defaults to 256 MiB of external memory. The fixture and its
 assertions are unchanged. The packaging test pins the new default.
 
-## Measured runs
+### Measured runs
 
 Two runs, one at a time, with nothing else heavy alongside. The first had
 progress prints added to the fixture and asked for 256 MiB on the command
@@ -44,3 +49,40 @@ This host ran about 18 to 20 million steps per second, against July's 76
 million. That slowdown is a host matter, not investigated here. The
 documented timeout is raised to 3,600 s to cover this host; the slower run
 used 89% of it. The step ceiling is unchanged.
+
+## The applet lifecycle fixture
+
+### What failed
+
+`library-applet-functional-contracts` failed on main with 57 of 322
+assertions, from its first compaction on. Compaction bound and began, and its
+fourth step answered `LIBRARY-SERVICE-S-IO`. That left the compaction open, so
+every later operation answered busy. More external memory changed nothing: a
+run with 256 MiB failed the same way at the same step.
+
+### Why
+
+The disk was full: 2 sectors free. The 4 MiB image holds the linked code, the
+Library store's page bank (`pages-0`, 3,248 sectors, about 1.7 MB) and, during
+compaction, a second bank as large (`pages-1`). The linked code has grown since
+July, from 82 modules in 12 chunks to 114 in 19, about 2.3 MB, and the three no
+longer fit.
+
+### Fix
+
+The profile's disk is now 8 MiB (`total_sectors=16384`), and the packaging
+test pins it. The fixture and its assertions are unchanged.
+
+### Measured run
+
+| | |
+|---|---|
+| Result | PASS: 696 assertions, 0 failures |
+| Guest steps | 49,492,418,858, within the 55 billion ceiling |
+| Host wall | 2,780 s |
+| Peak host memory | 236 MB |
+| Free sectors at boot | 11,534 of 16,384 |
+
+On 2026-07-24 the fixture's 694 assertions took 44.2 billion steps and 675 s.
+The documented timeout is raised to 3,600 s for this host, as for the
+projection fixture; the run used 77% of it. The step ceiling is unchanged.
