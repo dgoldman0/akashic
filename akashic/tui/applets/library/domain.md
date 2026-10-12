@@ -245,7 +245,7 @@ python3 local_testing/akashic_tui.py smoke \
   --max-steps 70000000000 --timeout 3600
 python3 local_testing/akashic_tui.py smoke \
   --profile library-applet-functional-contracts \
-  --max-steps 55000000000 --timeout 1200
+  --max-steps 55000000000 --timeout 3600
 ```
 
 Neither qualification path requires ext4 support.

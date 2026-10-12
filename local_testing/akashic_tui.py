@@ -35847,7 +35847,10 @@ REQUIRE local_testing/library-app-func.f
     ),
     linked=True,
     include_large_sample=False,
-    total_sectors=8192,
+    # The disk holds the linked code, about 2.3 MB, and the Library store,
+    # whose compaction writes a second page bank as large as the first,
+    # about 1.7 MB each.  4 MiB no longer holds all three.
+    total_sectors=16384,
     initial_files=(
         (
             "local_testing/library-app-func.f",
