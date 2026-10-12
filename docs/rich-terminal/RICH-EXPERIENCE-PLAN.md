@@ -1291,6 +1291,28 @@ bodies.
 picture's facts. Gzip files of several members. Colour profiles and gamma,
 which CELL ignores.
 
+**Status.** Done on 2026-10-12. The record is
+`local_testing/evidence/decompression-20261012.md`. Adler-32, the inflater
+and the PNG decoder agree with zlib and Pillow on every check. Pictures decode
+a PNG copy for CELL as they decode QOI, so File Explorer's preview shows a PNG
+picture in CELL; the media widget's tests show it, and the physical File
+Explorer and damaged-picture checks passed on the final tree. The HTTP
+resource client, XRPC and the public author feed ask for gzip. The buffered
+exchange inflates a gzip body into the response buffer, which serves as the
+inflater's window, so a client carries only the inflater's 3 KB record. The
+body as sent and as inflated each count against the caller's limit.
+
+Step 6's counts: the inflater gives a byte of text for 60 guest steps with
+dynamic codes, 62 with fixed codes, and 0.1 from a stored block. The sample
+picture decodes in 120 steps a pixel from QOI, and from PNG in 146 to 689
+depending on its filters; Pillow's PNG takes 613. The first count showed
+eight-bit RGBA rows converted a sample at a time; they now go out with one
+move.
+
+The staged XRPC drivers cannot run as checked in, because they never load
+MegaPad's networking.f. Their new gzip stage passed through a scratch wrapper
+that loads it.
+
 ## 14. PDFs
 
 **Decided on 2026-10-11.** A PDF is read as a document through part 12's
