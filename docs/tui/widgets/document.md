@@ -78,7 +78,10 @@ opens without reading every page.
 
 The view stops where a part not read lies (`DOC-GAP`), as it stops at the
 document's ends: it scrolls no further that way, and the rows past it stay
-blank. Each draw notes the part the view needs next: one not read within a
+blank. After a jump, though, until the view scrolls, a part not read
+below does not pull the view up to fill it, as the document's end does, so
+a place a link or a contents entry goes to near the end of a page stays at
+the view's top while the next page is read. Each draw notes the part the view needs next: one not read within a
 screen below the view's bottom, or else within a screen above its top, or
 the first part when none is read. Each view with such work is counted
 (`DOCV-WORK?`), as a picture widget still decoding is (`PICT-WORK?`), so a
@@ -104,8 +107,9 @@ count again and forget its figure records.
 A press on a link follows it. A link to one of the document's own headings,
 `#name`, scrolls the view to that heading (`DOC-ANCHOR`). In a document in
 parts, the document's reader says which part such a link names
-(`DOC-ANCHOR-PART`), and the view reads it if need be and shows it from its
-top, as `DOCV-GO-PART` does. Any other target
+(`DOC-ANCHOR-PART`), and the view reads it if need be, then puts the block
+the reader places the link at (`DOC-ANCHOR`) at its top: a PDF's link to a
+section shows that section's heading, not its page's start. Any other target
 goes to the owner's follow word. A rich renderer that lays the text out
 itself names a link with `KEY-MOUSE-TEXT-FOLLOW`: the block's key and the
 scalar offset in its text. A key the document does not hold, or a position

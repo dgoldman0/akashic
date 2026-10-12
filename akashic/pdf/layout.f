@@ -16,6 +16,9 @@
 \   PDF-BLOCK-KIND      ( block -- kind level )
 \   PDF-BLOCK-ITEM      ( block -- kind number width )
 \   PDF-BLOCK-TOP       ( block -- y )
+\   PDF-BLOCK-LOW       ( block -- y )
+\   PDF-BLOCK-ACROSS    ( block -- x0 x1 )
+\   PDF-BLOCK-SIZE      ( block -- size )
 \   PDF-BLOCK-TEXT      ( block layout -- a u )
 \   PDF-BLOCK-MEANINGS  ( block layout -- a )
 \   PDF-BLOCK-FIGURE    ( block -- num w h )
@@ -63,7 +66,13 @@
 \  Kinds and item kinds are the document's (media/document.f), and a
 \  block's text has a meaning a byte (text/text-style.f): strong for bold
 \  text, emphasis for italic, code for fixed-pitch text within prose.
-\  Points are in the page's default space, 16.16.
+\
+\  Each block keeps where it lies on the page, which a destination's
+\  place is found by: its top (its first line's baseline plus its size);
+\  its low, the middle of its lowest line, a third of its size above its
+\  baseline; how far across its lines reach; and its first line's size.
+\  A figure's top and reach are its picture's box, its low the box's
+\  middle, and its size 0.  Points are in the page's default space, 16.16.
 \
 \  Memory comes from the content's memory source.  One call runs at a
 \  time.
@@ -94,8 +103,9 @@ REQUIRE ../media/document.f
 32 CONSTANT _PDLY-PLACE
 
 \ A block: kind, level, item kind, number and width, top, text offset
-\ and length; a figure's picture object, width and height.
-88 CONSTANT _PDLY-BLOCK
+\ and length; a figure's picture object, width and height; low, left,
+\ right and size.
+120 CONSTANT _PDLY-BLOCK
 
 : PDF-LAYOUT-BLOCKS  ( layout -- n )  _PDLY.BLOCKS PDF-BUF.U @ _PDLY-BLOCK / ;
 : PDF-LAYOUT-BLOCK   ( i layout -- block )  _PDLY.BLOCKS PDF-BUF.A @ SWAP _PDLY-BLOCK * + ;
@@ -105,6 +115,9 @@ REQUIRE ../media/document.f
 : PDF-BLOCK-TEXT     ( block layout -- a u )  _PDLY.TEXT PDF-BUF.A @ OVER 48 + @ + SWAP 56 + @ ;
 : PDF-BLOCK-MEANINGS ( block layout -- a )  _PDLY.MEAN PDF-BUF.A @ SWAP 48 + @ + ;
 : PDF-BLOCK-FIGURE   ( block -- num w h )  DUP 64 + @ OVER 72 + @ ROT 80 + @ ;
+: PDF-BLOCK-LOW      ( block -- y )  88 + @ ;
+: PDF-BLOCK-ACROSS   ( block -- x0 x1 )  DUP 96 + @ SWAP 104 + @ ;
+: PDF-BLOCK-SIZE     ( block -- size )  112 + @ ;
 : PDF-LAYOUT-LINKS   ( layout -- n )  _PDLY.LINKS PDF-BUF.U @ _PDLY-PLACE / ;
 : PDF-LAYOUT-LINK    ( i layout -- block offset length link )
     _PDLY.LINKS PDF-BUF.A @ SWAP _PDLY-PLACE * +
@@ -512,6 +525,14 @@ VARIABLE _PDLY-BG   VARIABLE _PDLY-BGK   VARIABLE _PDLY-BGL   \ its structure bl
 
 : _PDLY-BTEXT-U  ( -- u )  _PDLY-L @ _PDLY.TEXT PDF-BUF.U @ ;
 
+\ Where line LN lies, onto the block being built: its middle, a third of
+\ its size above its baseline, the lowest the block's low may be, and
+\ its start and end, how far across the block reaches.
+: _PDLY-REACH  ( ln -- )
+    DUP _PDLY.Y @ OVER _PDLY.SZ @ 3 / + _PDLY-BNEW 88 + @ MIN _PDLY-BNEW 88 + !
+    DUP _PDLY.X0 @ _PDLY-BNEW 96 + @ MIN _PDLY-BNEW 96 + !
+    _PDLY.X1 @ _PDLY-BNEW 104 + @ MAX _PDLY-BNEW 104 + ! ;
+
 \ Text onto the block, every byte with MEANING.
 : _PDLY-BTEXT+  ( a u meaning -- ok? )
     >R DUP R> _PDLY-L @ _PDLY.MEAN _PDLY-FILL+ >R
@@ -690,6 +711,8 @@ VARIABLE _PDLY-NUM   VARIABLE _PDLY-MA   VARIABLE _PDLY-MU   VARIABLE _PDLY-MI
     _PDLY-BNEW _PDLY-BLOCK 0 FILL
     DUP _PDLY.Y @ OVER _PDLY.SZ @ + _PDLY-BNEW 40 + !
     _PDLY-BTEXT-U _PDLY-BNEW 48 + !
+    1 62 LSHIFT DUP _PDLY-BNEW 88 + !  DUP _PDLY-BNEW 96 + !  NEGATE _PDLY-BNEW 104 + !
+    DUP _PDLY-REACH  DUP _PDLY.SZ @ _PDLY-BNEW 112 + !
     DUP _PDLY.GI @ ?DUP IF OVER _PDLY.LB @ 1- 0 MAX _PDLY-ITEM! THEN
     DUP _PDLY-LTEXT@ _PDLY-MARKER
     ?DUP IF
@@ -726,7 +749,7 @@ CREATE _PDLY-NL 10 C,
 \ Join line LN to the block: a line of code by a line end and its
 \ indent; a word split by a hyphen into one; else with a space between.
 : _PDLY-JOIN  ( ln -- ok? )
-    1 _PDLY-BLINES +!  DUP _PDLY-PREV !
+    1 _PDLY-BLINES +!  DUP _PDLY-PREV !  DUP _PDLY-REACH
     DUP _PDLY.G @ ?DUP IF _PDLY-BG ! THEN
     _PDLY-BFL @ OVER _PDLY.FL @ AND _PDLY-BFL !
     _PDLY-BFL @ _PDLY-F-FIXED AND IF
@@ -790,7 +813,8 @@ CREATE _PDLY-NL 10 C,
     _PDLY-BNEW _PDLY-BLOCK 0 FILL  DOC-B-FIGURE _PDLY-BNEW !
     _PDLY-BNEW 80 + !  _PDLY-BNEW 72 + !
     DUP PDF-FIG-NUM _PDLY-BNEW 64 + !
-    PDF-FIG-BOX NIP NIP NIP _PDLY-BNEW 40 + !
+    PDF-FIG-BOX DUP _PDLY-BNEW 40 + !  ROT + 2/ _PDLY-BNEW 88 + !
+    _PDLY-BNEW 104 + !  _PDLY-BNEW 96 + !
     _PDLY-BTEXT-U _PDLY-BNEW 48 + !
     _PDLY-BNEW _PDLY-BLOCK _PDLY-L @ _PDLY.BLOCKS _PDLY-APPEND ;
 

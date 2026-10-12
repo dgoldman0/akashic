@@ -64,10 +64,28 @@ its links (`DOC-CB-LINK`):
 
 `DOC-ANCHOR-PART` (the reader's anchor word) resolves such a target only
 when it is followed: `PDF-DEST` finds the page object, and `PDF-PAGE-INDEX`
-its index, which is the part a view reads and shows from its top. A
-destination that names no page of the document resolves to none. A
-destination's place on its page is not used yet; the page shows from its
-top.
+its index, which is the part a view reads. A destination that names no
+page of the document resolves to none.
+
+Once the page is read, `DOC-ANCHOR` gives the block the destination shows
+first, from its left and top and where the page's blocks lie
+(`pdf/layout.f`). Each page read keeps, for each of its blocks, how far
+across it reaches, widened by its first line's size each side, and its
+low, the middle of its lowest line. The block shown first is:
+
+1. of the blocks that reach across the destination's left, the one whose
+   low is the highest at or below the destination's top, the first of
+   equals;
+2. then, of the blocks within that block's reach, its column, the one
+   whose low is the highest at or below the top, so a picture centred
+   above its caption is found though it does not reach the left.
+
+A destination without a left, or with no block across it at or below the
+top, looks at every block. One without a top, such as `/Fit`, or whose
+block is the page's first, shows the page's start, and one below every
+block shows the page's last. A link to a section shows its heading, and
+on a page of two columns a link to the second column's top shows that
+column's first block, not the first column's block at the same height.
 
 On a page of a TeX document with seven links, reading them and placing
 them costs about 440,000 steps, most of it reading the links' annotations,

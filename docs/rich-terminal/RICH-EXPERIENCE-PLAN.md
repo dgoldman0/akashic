@@ -1443,12 +1443,28 @@ rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them, a link to a far page reading that page alone.
 
-**Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, the
-file's side of steps 6 and 7 (pictures as files, links and the outline),
-and step 9's preview: File Explorer previews a PDF as a document, read a
-page at a time, with its pictures, links, contents and page labels. The
-place on a page a destination names, the contents in a rich capture, then
-the samples, measurements and AES remain.
+**Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, steps 6
+and 7, step 9's preview and step 10's samples: File Explorer previews a
+PDF as a document, read a page at a time, with its pictures, links,
+contents and page labels, and a link or a contents entry shows the place
+its destination names. The contents in a rich capture, File Explorer's
+PDF stages in the physical journey, the measurements and AES remain.
+
+- A link or a contents entry shows the place on its page that its
+  destination names, not the page's start. Each page read keeps where its
+  blocks lie (`PDF-BLOCK-LOW`, `PDF-BLOCK-ACROSS`), and `PDF-DEST` gives a
+  destination's left as well as its top. Of the blocks across the left,
+  then of those in that block's column, the one whose last line's middle
+  is the highest at or below the top is shown first, so on a page of two
+  columns a link to the second column's heading does not show the first
+  column's beside it, and a picture centred above its caption is found.
+  The view keeps a place a jump put at its top while the page below is
+  read, until it scrolls; scrolling still stops at a page not read as at
+  the document's end.
+- The layout judges a line short against the furthest end of any body
+  line on the page, so on a page of two columns each line of the first
+  column ends its paragraph. Their text and order are right, and links and
+  places find them; joining them waits for a layout of columns.
 
 - A page's start shows the label the file gives it (`pdf/labels.f`), such
   as iv or A-3, read once from every pair of the `/PageLabels` number tree
@@ -1479,8 +1495,7 @@ the samples, measurements and AES remain.
   whole words, and keeps the places through lines and blocks. A link to the
   web goes to the view's owner, which File Explorer refuses with a message;
   a link within the file keeps its destination, and following it reads the
-  page it names, alone if need be, and shows it from its top. The place on
-  the page a destination names is not used yet.
+  page it names, alone if need be, and shows the place it names there.
 
 - A PDF's figures show their pictures. A document that holds its pictures
   gives each figure a maker (`media/picture.f`), which makes the picture's

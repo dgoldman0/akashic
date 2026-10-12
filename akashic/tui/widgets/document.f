@@ -28,8 +28,9 @@
 \  The arrow keys, Page Up and Down, Home, End and the wheel scroll the
 \  view by rows.  A press on a link follows it: a link within the
 \  document (#name) scrolls to one of its headings, or in a document in
-\  parts to the part its reader says the link names (DOC-ANCHOR-PART),
-\  read first if need be; any other goes to the owner's follow word.  The view keeps each block's row count at its
+\  parts to the place its reader says the link names: the part
+\  (DOC-ANCHOR-PART), read first if need be, and the block in it
+\  (DOC-ANCHOR); any other goes to the owner's follow word.  The view keeps each block's row count at its
 \  width, so a scroll lays out only the blocks it passes, and each draw
 \  keeps the contents of the blocks it shows, giving back the others.
 \
@@ -139,7 +140,8 @@ VARIABLE _DOCV-OWNED-LIMIT
 192 CONSTANT _DOCV-O-COUNTED
 200 CONSTANT _DOCV-O-FAILED
 208 CONSTANT _DOCV-O-WORKING
-216 CONSTANT _DOCV-DESC-SIZE
+216 CONSTANT _DOCV-O-PLACED   \ a jump put the top where it is
+224 CONSTANT _DOCV-DESC-SIZE
 
 \ Views with work no input announces, in any document: a part to read or a
 \ picture's file to make.  A host's service pass looks at its views only
@@ -532,14 +534,22 @@ VARIABLE _DVB-I
     _DVB-SUM @ _DV-TOP-ROW - ;
 
 \ Keep the view on the document: the last row it reaches no higher than
-\ the view's bottom, unless all it reaches is shorter than the view.
+\ the view's bottom, unless all it reaches is shorter than the view.  A
+\ part not read stops the view as the document's end does, but once a
+\ jump has put the top where it is, until the view scrolls, a part not
+\ read below is more to come: a link to a place near the end of a page
+\ shows it at the top while the next page is read.
 : _DV-CLAMP  ( -- )
     _DV-TOP _DV-BLOCKS 1- MIN 0 MAX _DOCV-O-TOP _DV!
     _DV-TOP-ROW _DV-TOP _DV-ROWS 1- MIN 0 MAX _DOCV-O-TOP-ROW _DV!
-    _DV-H _DV-ROWS-BELOW DUP _DV-H < IF _DV-H SWAP - _DV-UP ELSE DROP THEN ;
+    _DV-H _DV-ROWS-BELOW DUP _DV-H < IF
+        _DOCV-O-PLACED _DV@ IF _DVB-I @ _DV-WALL? IF DROP EXIT THEN THEN
+        _DV-H SWAP - _DV-UP
+    ELSE DROP THEN ;
 
 : _DV-SCROLL  ( rows -- )
     _DV-COUNTS? 0= IF DROP EXIT THEN
+    0 _DOCV-O-PLACED _DV!
     _DV-TOP >R _DV-TOP-ROW >R
     DUP 0< IF NEGATE _DV-UP ELSE _DV-DOWN THEN
     _DV-CLAMP
@@ -549,10 +559,12 @@ VARIABLE _DVB-I
 : _DV-GO  ( index -- )
     _DV-COUNTS? 0= IF DROP EXIT THEN
     0 MAX _DV-BLOCKS 1- MIN _DOCV-O-TOP _DV! 0 _DOCV-O-TOP-ROW _DV!
+    -1 _DOCV-O-PLACED _DV!
     _DV-CLAMP _DV-CHANGED ;
 
 : _DV-LAST  ( -- )
     _DV-COUNTS? 0= IF EXIT THEN
+    0 _DOCV-O-PLACED _DV!
     _DV-BLOCKS 1- _DOCV-O-TOP _DV!
     _DV-TOP _DV-ROWS 1- _DOCV-O-TOP-ROW _DV!
     _DV-CLAMP _DV-CHANGED ;
@@ -960,18 +972,19 @@ VARIABLE _DVH-BLOCK
         DUP _DV-ROWS ROT + SWAP 1+
     REPEAT 2DROP ;
 
-\ Follow a link: within the document, to the part its reader says a
-\ document in parts names, read if need be, or to one of its headings;
-\ else to the owner.
+\ Follow a link: within the document, to the block its reader places it
+\ at in a document in parts, its part read first if need be, or to one of
+\ its headings; else to the owner.
 : _DV-FOLLOW  ( target-a target-u -- )
     DUP 0= IF 2DROP EXIT THEN
     OVER C@ 35 = IF
         1 /STRING
         _DV-DOC DOC-PARTS IF
-            _DV-W @ >R _DV-DOC DOC-ANCHOR-PART R> _DV-W !
-            DUP 0< IF DROP EXIT THEN _DV-GO-PART EXIT
+            2DUP _DV-W @ >R _DV-DOC DOC-ANCHOR-PART R> _DV-W !
+            DUP 0< IF DROP 2DROP EXIT THEN _DV-READ-PART DROP
         THEN
-        _DV-DOC DOC-ANCHOR DUP 0< IF DROP EXIT THEN _DV-GO EXIT
+        _DV-W @ >R _DV-DOC DOC-ANCHOR R> _DV-W !
+        DUP 0< IF DROP EXIT THEN _DV-GO EXIT
     THEN
     _DOCV-O-FOLLOW _DV@ ?DUP 0= IF 2DROP EXIT THEN _DV-OWNER ;
 
@@ -1069,6 +1082,7 @@ VARIABLE _DVH-BLOCK
     _DV-FIGS-FREE _DV-COUNTS-FREE
     _DOCV-O-DOC _DV!
     0 _DOCV-O-TOP _DV! 0 _DOCV-O-TOP-ROW _DV! 0 _DOCV-O-END _DV!
+    0 _DOCV-O-PLACED _DV!
     -1 _DOCV-O-NEED _DV!  -1 _DOCV-O-FAILED _DV!
     _DV-SYNC-WORK _DV-CHANGED ;
 

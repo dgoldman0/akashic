@@ -31,7 +31,15 @@
 \  gives its links.  A link to the web has its address as its target; a
 \  link within the file has "#" and its destination's value, a byte for
 \  its type and then its bytes, which DOC-ANCHOR-PART resolves to the page
-\  it names only when it is followed.  A figure's name is "picture"
+\  it names only when it is followed.  Once that page is read, DOC-ANCHOR
+\  gives the block the destination shows first, by where the page's
+\  blocks lie (pdf/layout.f), which each page read keeps: of the blocks
+\  that reach across the destination's left, the one whose low, its last
+\  line's middle, is the highest at or below its top; then, of the blocks
+\  within that one's reach across, as a picture centred in its column
+\  is, the same.  A destination without a left looks at every block,
+\  and one without a top, or whose block is the page's first, shows the
+\  page's start.  A figure's name is "picture"
 \  and its picture object's number.  The document holds its pictures
 \  (DOC-PICTURES?): DOC-PICTURE gives a maker (media/picture.f) that
 \  turns the object into a file a step at a time (pdf/image.f), for a
@@ -86,15 +94,19 @@ _PDD-O-SLOTS   8 +                  CONSTANT _PDD-O-PAGES
 _PDD-O-PAGES   8 +                  CONSTANT _PDD-SIZE
 
 \ A page's slot: one allocation and its bytes, which hold the page's text,
-\ its meanings, its links' places (a block of the layout, where in its
-\ text, how long, and the link), each link's target (where and how long),
-\ and the targets' bytes; the text's length, and how many places and links.
+\ its meanings, each layout block's span (how far across a destination's
+\ left finds it, its reach widened by its size each side, and its low),
+\ its links' places (a block of the layout, where in its text, how long,
+\ and the link), each link's target (where and how long), and the
+\ targets' bytes; the text's length, and how many places, links and spans.
 : _SLOT.BUF     ( slot -- a )        ;
 : _SLOT.BYTES   ( slot -- a )    8 + ;
 : _SLOT.T       ( slot -- a )   16 + ;
 : _SLOT.NP      ( slot -- a )   24 + ;
 : _SLOT.NL      ( slot -- a )   32 + ;
-40 CONSTANT _PDD-SLOT
+: _SLOT.NB      ( slot -- a )   40 + ;
+48 CONSTANT _PDD-SLOT
+24 CONSTANT _PDD-SPAN
 32 CONSTANT _PDD-PLACE
 16 CONSTANT _PDD-TARGET
 
@@ -125,8 +137,10 @@ VARIABLE _PDD-S       \ its state
 \ Work on document DOC, whose state the reader keeps.
 : _PDD-USE  ( doc -- )  DUP _PDD-D ! DOC-STATE@ _PDD-S ! ;
 
-\ Where a page's places, link targets and their bytes start in its buffer.
-: _PDD-PLACES@   ( slot -- a )  DUP _SLOT.BUF @ SWAP _SLOT.T @ 2* 7 + -8 AND + ;
+\ Where a page's spans, places, link targets and their bytes start in its
+\ buffer.
+: _PDD-SPANS@    ( slot -- a )  DUP _SLOT.BUF @ SWAP _SLOT.T @ 2* 7 + -8 AND + ;
+: _PDD-PLACES@   ( slot -- a )  DUP _PDD-SPANS@ SWAP _SLOT.NB @ _PDD-SPAN * + ;
 : _PDD-TARGETS@  ( slot -- a )  DUP _PDD-PLACES@ SWAP _SLOT.NP @ _PDD-PLACE * + ;
 
 : _PDD-SLOT-FREE  ( slot -- )
@@ -217,10 +231,12 @@ VARIABLE _PDD-PC      \ the next place to mark
         I _PDD-LAYOUT PDF-LAYOUT-BLOCK _PDD-LAYOUT PDF-BLOCK-TEXT NIP +
     LOOP ;
 
-\ The page's links, and the places the layout put them, when laid out.
+\ The page's links, the places the layout put them, and its blocks'
+\ spans, when laid out.
 : _PDD-NL  ( -- n )
     _PDD-LAID @ _PDD-LINKED @ AND IF _PDD-LINKS PDF-LINKS-COUNT ELSE 0 THEN ;
 : _PDD-NP  ( -- n )  _PDD-NL IF _PDD-LAYOUT PDF-LAYOUT-LINKS ELSE 0 THEN ;
+: _PDD-NB  ( -- n )  _PDD-LAID @ IF _PDD-LAYOUT PDF-LAYOUT-BLOCKS ELSE 0 THEN ;
 
 \ Link K's target: its address, or "#", its destination's type, and its
 \ value's bytes.
@@ -228,9 +244,11 @@ VARIABLE _PDD-PC      \ the next place to mark
     _PDD-LINKS PDF-LINK DUP _PDD-LINKS PDF-LINK-URI NIP ?DUP IF NIP EXIT THEN
     _PDD-LINKS PDF-LINK-DEST DROP NIP 2 + ;
 
-\ The bytes the page's slot needs: text and meanings, places, targets.
+\ The bytes the page's slot needs: text and meanings, spans, places,
+\ targets.
 : _PDD-SLOT-BYTES  ( -- u )
-    _PDD-T 2* 7 + -8 AND  _PDD-SL @ _SLOT.NP @ _PDD-PLACE * +
+    _PDD-T 2* 7 + -8 AND  _PDD-SL @ _SLOT.NB @ _PDD-SPAN * +
+    _PDD-SL @ _SLOT.NP @ _PDD-PLACE * +
     _PDD-SL @ _SLOT.NL @ DUP _PDD-TARGET * ROT +
     SWAP 0 ?DO I _PDD-TARGET-BYTES + LOOP ;
 
@@ -255,6 +273,19 @@ VARIABLE _PDF-PL
             35 _PDD-BUF _PDF-AT @ + C!  48 + _PDD-BUF _PDF-AT @ + 1+ C!
             _PDD-BUF _PDF-AT @ + 2 + SWAP DUP 2 + _PDF-AT +! MOVE
         THEN
+    LOOP ;
+
+VARIABLE _PDS-P
+
+\ Copy each layout block's span to the slot: its reach across, widened by
+\ its size each side, and its low.
+: _PDD-FILL-SPANS  ( -- )
+    _PDD-SL @ _SLOT.NB @ 0 ?DO
+        _PDD-SL @ _PDD-SPANS@ I _PDD-SPAN * + _PDS-P !
+        I _PDD-LAYOUT PDF-LAYOUT-BLOCK
+        DUP PDF-BLOCK-LOW _PDS-P @ 16 + !
+        DUP PDF-BLOCK-SIZE SWAP PDF-BLOCK-ACROSS              ( size x0 x1 )
+        2 PICK + _PDS-P @ 8 + !  SWAP - _PDS-P @ !
     LOOP ;
 
 VARIABLE _PDP-U
@@ -335,10 +366,11 @@ VARIABLE _PDA-B
     0= _PDD-LAID !
     _PDD-TEXT-BYTES _PDD-SL @ _SLOT.T !
     _PDD-NP _PDD-SL @ _SLOT.NP !  _PDD-NL _PDD-SL @ _SLOT.NL !
+    _PDD-NB _PDD-SL @ _SLOT.NB !
     _PDD-SLOT-BYTES DUP _PDD-SL @ _SLOT.BYTES !
     _PDD-ALLOC DUP _PDD-SL @ _SLOT.BUF !
     0= IF _PDD-SL @ _PDD-SLOT 0 FILL _PDD-SCRATCH-FREE DOC-S-MEMORY EXIT THEN
-    _PDD-FILL-LINKS
+    _PDD-FILL-SPANS  _PDD-FILL-LINKS
     0 _PDD-AT !
     _PDD-BLOCKS
     _PDD-SCRATCH-FREE
@@ -448,18 +480,76 @@ VARIABLE _PDN-N
         48 - _PDN-N @ 10 * + _PDN-N !  1 /STRING
     REPEAT 2DROP _PDN-N @ ;
 
-\ The part, the page, a link's target names: "p" and the page's index, or
-\ its destination's type and value's bytes, after the "#"; or -1 for none.
-: _PDD-ANCHOR  ( name-a name-u doc -- part | -1 )
+VARIABLE _PDW-X   VARIABLE _PDW-Y     \ the destination's left and top
+VARIABLE _PDW-SL                      \ its page's slot
+VARIABLE _PDW-HOW                     \ which spans are looked at
+VARIABLE _PDW-L   VARIABLE _PDW-R     \ a column's reach
+VARIABLE _PDW-BEST   VARIABLE _PDW-LOW
+
+: _PDD-SPAN@  ( j -- span )  _PDD-SPAN * _PDW-SL @ _PDD-SPANS@ + ;
+
+\ Whether a span is looked at: any (0), one that reaches across the
+\ destination's left (1), or one within the column's reach (2).
+: _PDD-LOOKED?  ( span -- flag )
+    _PDW-HOW @ 0= IF DROP -1 EXIT THEN
+    _PDW-HOW @ 1 = IF DUP @ _PDW-X @ > 0= SWAP 8 + @ _PDW-X @ < 0= AND EXIT THEN
+    DUP @ _PDW-L @ < 0= SWAP 8 + @ _PDW-R @ > 0= AND ;
+
+\ Of the blocks looked at, the one whose low is the highest at or below
+\ the destination's top, the first of equals; or -1.
+: _PDD-HIGHEST  ( -- j | -1 )
+    -1 _PDW-BEST !
+    _PDW-SL @ _SLOT.NB @ 0 ?DO
+        I _PDD-SPAN@ DUP _PDD-LOOKED? IF
+            16 + @ DUP _PDW-Y @ > IF DROP ELSE
+                _PDW-BEST @ 0< OVER _PDW-LOW @ > OR
+                IF _PDW-LOW ! I _PDW-BEST ! ELSE DROP THEN
+            THEN
+        ELSE DROP THEN
+    LOOP _PDW-BEST @ ;
+
+\ The layout block the destination shows first: of those that reach
+\ across its left, the highest at or below its top; then, of those within
+\ that one's reach, its column, the highest.  Without a left, or with no
+\ block across it at or below the top, every block is looked at.  -1
+\ when no block lies at or below the top.
+: _PDD-CHOOSE  ( -- j | -1 )
+    _PDW-X @ -1 <> IF
+        1 _PDW-HOW !  _PDD-HIGHEST DUP 0< 0= IF
+            _PDD-SPAN@ DUP @ _PDW-L !  8 + @ _PDW-R !
+            2 _PDW-HOW !  _PDD-HIGHEST EXIT
+        THEN DROP
+    THEN
+    0 _PDW-HOW !  _PDD-HIGHEST ;
+
+\ The block of page I a destination at left X and top Y, each -1 when it
+\ gives none, shows first, as the document's index: the page's start for
+\ no top, or when its block is the page's first; the page's last block
+\ when none lies at or below the top.  -1 when the page is not read.
+: _PDD-PLACE  ( x y i -- index | -1 )
+    DUP _PDD-D @ DOC-PART-READ? 0= IF DROP 2DROP -1 EXIT THEN
+    DUP _PDD-SLOT@ _PDW-SL !  _PDD-D @ DOC-PART-FIRST >R
+    _PDW-Y !  _PDW-X !
+    _PDW-Y @ -1 = IF R> EXIT THEN
+    _PDD-CHOOSE DUP 0< IF DROP _PDW-SL @ _SLOT.NB @ 1- THEN
+    DUP 0> IF R> + 1+ ELSE DROP R> THEN ;
+
+\ Where a link's target goes, after the "#": "p" and a page's index, to
+\ the page's start; or its destination's type and its value's bytes, to
+\ the page it names and, once that page is read, the block the
+\ destination shows first.  -1 for a part, or a block, that is not.
+: _PDD-ANCHOR  ( name-a name-u doc -- part index )
     _PDD-USE
-    DUP 2 < IF 2DROP -1 EXIT THEN
+    DUP 2 < IF 2DROP -1 -1 EXIT THEN
     OVER C@ 112 = IF
-        1 /STRING _PDD-PAGE-NUM DUP 0 _PDD-PAGES WITHIN 0= IF DROP -1 THEN EXIT
+        1 /STRING _PDD-PAGE-NUM DUP 0 _PDD-PAGES WITHIN 0= IF DROP -1 -1 EXIT THEN
+        -1 -1 ROT DUP >R _PDD-PLACE R> SWAP EXIT
     THEN
     OVER C@ 48 - >R 1 /STRING R>                          ( va vu type )
-    _PDD-FILE PDF-DEST NIP IF DROP -1 EXIT THEN           ( num )
-    _PDD-FILE PDF-PAGE-INDEX IF DROP -1 EXIT THEN         ( i )
-    DUP 0 _PDD-PAGES WITHIN 0= IF DROP -1 THEN ;
+    _PDD-FILE PDF-DEST IF DROP 2DROP -1 -1 EXIT THEN      ( num x y )
+    ROT _PDD-FILE PDF-PAGE-INDEX IF DROP 2DROP -1 -1 EXIT THEN   ( x y i )
+    DUP 0 _PDD-PAGES WITHIN 0= IF DROP 2DROP -1 -1 EXIT THEN
+    DUP >R _PDD-PLACE R> SWAP ;
 
 \ =====================================================================
 \  Contents

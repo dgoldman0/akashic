@@ -59,7 +59,7 @@ VARIABLE NV-LIMIT   VARIABLE NV-CAT
     NV-LINKS PDF-LINKS-FREE  NV-OUT PDF-OUTLINE-FREE  NV-PAGE PDF-PAGE-END
     NV-TB NV-MSRC PDF-BUF-FREE  NV-FILE PDF-CLOSE  NV-MSRC MSRC-HELD@ ;
 : NV-INDEX  ( num -- i status )  NV-FILE PDF-PAGE-INDEX ;
-: NV-DEST  ( va vu type -- num top status )  NV-FILE PDF-DEST ;
+: NV-DEST  ( va vu type -- num left top status )  NV-FILE PDF-DEST ;
 : NV-LINKS-READ  ( i -- status )
     NV-LINKS PDF-LINKS-FREE
     NV-FILE NV-PAGE PDF-PAGE-OPEN ?DUP IF EXIT THEN
@@ -135,14 +135,16 @@ class Navigate:
     def refuse_above(self, bytes_: int) -> None:
         self.runtime.memory.write_bytes(self.limit, bytes_.to_bytes(8, "little"))
 
-    def follow(self, va: int, vu: int, kind: int) -> tuple[int, float, int, int]:
-        """A kept destination followed: page object, top, page index, status."""
-        num, top, status = self.call("NV-DEST", va, vu, kind)
+    def follow(self, va: int, vu: int, kind: int) -> tuple[int, float, float, int, int]:
+        """A kept destination followed: page object, left, top, page index,
+        status; -1 for a left or top it does not give."""
+        num, left, top, status = self.call("NV-DEST", va, vu, kind)
         if status != OK:
-            return num, -1, -1, status
+            return num, -1, -1, -1, status
         index, status = self.call("NV-INDEX", num)
-        top = signed(top)
-        return num, top / ONE if top >= 0 else -1, signed(index), status
+        left, top = signed(left), signed(top)
+        return (num, left / ONE if left != -1 else -1, top / ONE if top != -1 else -1,
+                signed(index), status)
 
     def links(self, index: int) -> list[tuple]:
         assert self.call("NV-LINKS-READ", index) == (OK,)
@@ -165,7 +167,7 @@ class Navigate:
             if kind == T_END:
                 out.append((level, title, None, self.read(a, u)))
             else:
-                out.append((level, title, self.follow(va, vu, kind)[:3], b""))
+                out.append((level, title, self.follow(va, vu, kind)[:4], b""))
         return out
 
     def text(self, data: bytes) -> str:
@@ -192,7 +194,7 @@ def objects() -> dict[int, bytes]:
         5: b"<< /Type /Page /Parent 4 0 R >>",
         7: b"<< /Type /Page /Parent 4 0 R >>",
         8: b"<< /Type /Page /Parent 4 0 R >>",
-        10: b"<< /Type /Annot /Subtype /Link /Rect [72 700 200 712] /Dest [5 0 R /XYZ 0 600 0] >>",
+        10: b"<< /Type /Annot /Subtype /Link /Rect [72 700 200 712] /Dest [5 0 R /XYZ 72.5 600 0] >>",
         11: b"<< /Type /Annot /Subtype /Link /Rect [72 680 200 692] "
             b"/A << /S /URI /URI 40 0 R >> >>",
         12: b"<< /Type /Annot /Subtype /Link /Rect [72 660 200 672] /A << /S /GoTo /D (chapter2) >> >>",
@@ -239,15 +241,15 @@ def test_page_indexes(nav):
 def test_links_keep_their_destinations_and_follow_them(nav):
     nav.open(write_pdf(objects()))
     assert nav.links(0) == [
-        ((72, 700, 200, 712), b"[5 0 R /XYZ 0 600 0]", (5, 600, 1, OK), b""),
+        ((72, 700, 200, 712), b"[5 0 R /XYZ 72.5 600 0]", (5, 72.5, 600, 1, OK), b""),
         ((72, 680, 200, 692), None, None, b"https://example.com/a"),
-        ((72, 660, 200, 672), b"(chapter2)", (7, -1, 2, OK), b""),
-        ((72, 640, 200, 652), b"/intro", (3, 500, 0, OK), b""),
-        ((50, 90, 200, 100), b"[7 0 R /FitR 0 0 100 650]", (7, 650, 2, OK), b""),
-        ((1, 2, 3, 4), b"/my#20place", (5, 100, 1, OK), b""),
-        ((1, 2, 3, 4), b"<696E74726F>", (3, 500, 0, OK), b""),
-        ((1, 2, 3, 4), b"/chapter1", (5, -1, 1, OK), b""),
-        ((1, 2, 3, 4), b"(b)", (5, 300, 1, OK), b""),
+        ((72, 660, 200, 672), b"(chapter2)", (7, -1, -1, 2, OK), b""),
+        ((72, 640, 200, 652), b"/intro", (3, -1, 500, 0, OK), b""),
+        ((50, 90, 200, 100), b"[7 0 R /FitR 0 0 100 650]", (7, 0, 650, 2, OK), b""),
+        ((1, 2, 3, 4), b"/my#20place", (5, 0, 100, 1, OK), b""),
+        ((1, 2, 3, 4), b"<696E74726F>", (3, -1, 500, 0, OK), b""),
+        ((1, 2, 3, 4), b"/chapter1", (5, -1, -1, 1, OK), b""),
+        ((1, 2, 3, 4), b"(b)", (5, -1, 300, 1, OK), b""),
     ]
     assert nav.links(1) == []
     nav.close()
@@ -258,7 +260,7 @@ def test_a_destination_that_names_nothing(nav):
     for value, kind in ((b"/nowhere", T_NAME), (b"(nowhere)", T_STRING), (b"[/XYZ 0 0 0]", T_ARRAY),
                         (b"[99 0 R /Fit]", T_ARRAY)):
         nav.runtime.memory.write_bytes(nav.bytes + FILE_BYTES - 64, value)
-        num, top, status = nav.call("NV-DEST", nav.bytes + FILE_BYTES - 64, len(value), kind)
+        num, left, top, status = nav.call("NV-DEST", nav.bytes + FILE_BYTES - 64, len(value), kind)
         if value.startswith(b"[99"):
             # An object the file does not have is still a page object to the
             # destination; the page tree is what says it is none.
@@ -266,16 +268,16 @@ def test_a_destination_that_names_nothing(nav):
             index, status = nav.call("NV-INDEX", num)
             assert (signed(index), status) == (-1, MISSING)
         else:
-            assert (num, signed(top), status) == (0, -1, MISSING), value
+            assert (num, signed(left), signed(top), status) == (0, -1, -1, MISSING), value
     nav.close()
 
 
 def test_the_outline(nav):
     nav.open(write_pdf(objects()))
     assert nav.outline() == [
-        (0, "Introduction", (3, -1, 0), b""),
-        (1, "Détails", (5, 300, 1), b""),
-        (0, "Chapter 2", (7, -1, 2), b""),
+        (0, "Introduction", (3, -1, -1, 0), b""),
+        (1, "Détails", (5, -1, 300, 1), b""),
+        (0, "Chapter 2", (7, -1, -1, 2), b""),
         (1, "Web", None, b"https://example.com/c"),
         (1, "Notes •", None, b""),
     ]
@@ -299,7 +301,7 @@ def test_a_file_without_an_outline(nav):
     assert nav.outline() == []
     # Without /Dests or /Names, a named link is kept but goes nowhere.
     links = nav.links(0)
-    assert links[3][1:3] == (b"/intro", (0, -1, -1, MISSING))
+    assert links[3][1:3] == (b"/intro", (0, -1, -1, -1, MISSING))
     nav.close()
 
 
@@ -313,10 +315,11 @@ def test_memory_refused(nav):
     assert nav.call("NV-LINKS-ONLY") == (MEMORY,)
     obj = b"[5 0 R /Fit]"
     nav.runtime.memory.write_bytes(nav.bytes + FILE_BYTES - 64, obj)
-    assert nav.call("NV-DEST", nav.bytes + FILE_BYTES - 64, len(obj), T_ARRAY) == (5, (1 << 64) - 1, OK)
+    assert nav.call("NV-DEST", nav.bytes + FILE_BYTES - 64, len(obj), T_ARRAY) == (
+        5, (1 << 64) - 1, (1 << 64) - 1, OK)
     for value, kind in ((b"/intro", T_NAME), (b"(chapter2)", T_STRING)):
         nav.runtime.memory.write_bytes(nav.bytes + FILE_BYTES - 64, value)
-        num, _, status = nav.call("NV-DEST", nav.bytes + FILE_BYTES - 64, len(value), kind)
+        num, _, _, status = nav.call("NV-DEST", nav.bytes + FILE_BYTES - 64, len(value), kind)
         assert (num, status) == (0, MEMORY), value
     nav.refuse_above(1 << 40)
     nav.call("NV-PAGE-CLOSE")
@@ -422,11 +425,11 @@ def test_a_document_libreoffice_wrote(nav, tmp_path):
 def read_document(nav, path, pages: int) -> tuple[list, list]:
     """A document's outline, each item's page index, and its links, page by page."""
     nav.open(path.read_bytes())
-    outline = [(level, title, target[2]) for level, title, target, _ in nav.outline()]
+    outline = [(level, title, target[3]) for level, title, target, _ in nav.outline()]
     links = []
     for page in range(pages):
         for rect, _, target, uri in nav.links(page):
-            links.append((page, rect, uri.decode() if uri else target[2]))
+            links.append((page, rect, uri.decode() if uri else target[3]))
     nav.close()
     return outline, links
 

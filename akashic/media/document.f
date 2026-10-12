@@ -240,9 +240,11 @@ VARIABLE _DLA-OFF
 \ reader that adds no parts; its pictures ( name-a name-u maker doc --
 \ ok? ), which fills a maker (media/picture.f) for a figure's picture the
 \ document holds itself, or 0 for a reader whose figures name files; and
-\ its anchors ( name-a name-u doc -- part | -1 ), the part a link within a
-\ document in parts names, or 0; and its contents ( doc -- status ), which
-\ adds the document's entries with DOC-ADD-ENTRY, or 0 for the headings.
+\ its anchors ( name-a name-u doc -- part index ), where a link within a
+\ document in parts goes: the part, perhaps not read yet, and, once that
+\ part is read, the block in it the link shows first, each -1 for none;
+\ or 0; and its contents ( doc -- status ), which adds the document's
+\ entries with DOC-ADD-ENTRY, or 0 for the headings.
 : RDR.STRUCTURE-XT ( r -- a )        ;
 : RDR.CONTENT-XT   ( r -- a )    8 + ;
 : RDR.CLOSE-XT     ( r -- a )   16 + ;
@@ -688,11 +690,12 @@ VARIABLE _DRP-TMP
 \ DOC-ANCHOR-PART ( name-a name-u doc -- part | -1 )
 \   The part a link within a document in parts names after its "#", as
 \   its reader resolves it, perhaps a part not read yet; -1 for none.
-\   Its reader may read the source to find it.
+\   Its reader may read the source to find it.  Once the part is read,
+\   DOC-ANCHOR gives the block in it.
 : DOC-ANCHOR-PART  ( name-a name-u doc -- part | -1 )
     DUP _DOC.MAGIC @ _DOC-MAGIC <> IF DROP 2DROP -1 EXIT THEN
     DUP _DOC.READER @ RDR.ANCHOR-XT @ ?DUP 0= IF DROP 2DROP -1 EXIT THEN
-    EXECUTE ;
+    EXECUTE DROP ;
 
 \ DOC-KEY>INDEX ( key doc -- index | -1 )   The block with KEY, if read.
 : DOC-KEY>INDEX  ( key doc -- index | -1 )
@@ -707,7 +710,8 @@ VARIABLE _DRP-TMP
 \  A heading's anchor is its text in lower case, with spaces made hyphens
 \  and other ASCII punctuation but hyphens and underscores left out; a
 \  heading whose anchor an earlier one has takes "-1", "-2" and so on, as
-\  GitHub names them.
+\  GitHub names them.  A reader that resolves its own links within the
+\  document (RDR.ANCHOR-XT) places them instead, in the parts it has read.
 
 VARIABLE _DAN-NAME-A
 VARIABLE _DAN-NAME-U
@@ -796,6 +800,7 @@ VARIABLE _DAN-N
 
 : _DOC-ANCHOR  ( name-a name-u doc -- index | -1 )
     DUP _DOC.MAGIC @ _DOC-MAGIC <> IF DROP 2DROP -1 EXIT THEN
+    DUP _DOC.READER @ RDR.ANCHOR-XT @ ?DUP IF EXECUTE NIP EXIT THEN
     _DOC-D ! _DAN-NAME-U ! _DAN-NAME-A !
     0 _DAN-SEEN-A ! 0 _DAN-SEEN-CAP ! 0 _DAN-SEEN-U !
     0 _DAN-SLUG-A ! 0 _DAN-SLUG-CAP ! -1 _DAN-FOUND !

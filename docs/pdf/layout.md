@@ -17,7 +17,7 @@ it gives.
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `PDF-LAYOUT-SIZE` | `( -- 80 )` | A layout's record, zeroed before first use. |
+| `PDF-LAYOUT-SIZE` | `( -- 104 )` | A layout's record, zeroed before first use. |
 | `PDF-LAYOUT-READ` | `( page content struct links layout -- status )` | Lay out the runs `content` read from `page`, which may be closed, by the page's structure `struct` (`pdf/struct.f`), or 0, placing the page's `links` (`pdf/navigate.f`), or 0, over their text. |
 | `PDF-LAYOUT-FREE` | `( layout -- )` | Give back its blocks and their text. |
 | `PDF-LAYOUT-BLOCKS` | `( layout -- n )` | How many blocks the page has. |
@@ -25,6 +25,9 @@ it gives.
 | `PDF-BLOCK-KIND` | `( block -- kind level )` | `DOC-B-PARAGRAPH`, `DOC-B-HEADING` with its level, `DOC-B-CODE` or `DOC-B-FIGURE`. |
 | `PDF-BLOCK-ITEM` | `( block -- kind number width )` | Its container: a list item's `DOC-C-BULLET` or `DOC-C-NUMBERED` with its number, or a quote's `DOC-C-QUOTE`, and the cells its marker takes; else `0 0 0`. |
 | `PDF-BLOCK-TOP` | `( block -- y )` | The top of its first line, in the page's default space, 16.16. |
+| `PDF-BLOCK-LOW` | `( block -- y )` | Its low: the middle of its lowest line, a third of that line's size above its baseline; a figure's box's middle. |
+| `PDF-BLOCK-ACROSS` | `( block -- x0 x1 )` | How far across its lines reach, the leftmost start to the furthest end; a figure's box. |
+| `PDF-BLOCK-SIZE` | `( block -- size )` | Its first line's size; 0 for a figure. |
 | `PDF-BLOCK-TEXT` | `( block layout -- a u )` | Its text, UTF-8. |
 | `PDF-BLOCK-MEANINGS` | `( block layout -- a )` | A meaning (`TSTY-*`) for each byte of its text. |
 | `PDF-BLOCK-FIGURE` | `( block -- num w h )` | A figure's picture object (`pdf/image.f`) and the width and height it is drawn at, 16.16. |
@@ -105,6 +108,15 @@ after it, any block being built ending there. Its top is the top of the box
 it is drawn in, and its text is empty. Pictures drawn as artifacts, such
 as a page's background, and pictures smaller than the body text's size
 either way, such as bullets and rules drawn as pictures, are left out.
+
+## Where a block lies
+
+Each block keeps where it lies on the page, which is how a destination's
+place on its page finds a block (`pdf/document.f`): its top, its low, how
+far across it reaches, and its first line's size. A block's low is the
+middle of its lowest line, so a view whose top lies above it shows most of
+that line. A figure's top, low and reach are its box's top, middle and
+sides.
 
 ## Links
 

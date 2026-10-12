@@ -18,7 +18,7 @@ REQUIRE pdf/navigate.f
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `PDF-DEST` | `( va vu type file -- num top status )` | Where a destination goes: the page object's number and the top it shows. |
+| `PDF-DEST` | `( va vu type file -- num left top status )` | Where a destination goes: the page object's number, and the left and top it shows. |
 | `PDF-LINKS-SIZE` | `( -- 56 )` | A page's links' record, zeroed before first use. |
 | `PDF-LINKS-READ` | `( page links -- status )` | Read an open page's links. |
 | `PDF-LINKS-FREE` | `( links -- )` | Give back what it read; the record is zeroed. |
@@ -57,8 +57,10 @@ Writers mix names and strings up, so a name not in `/Dests` is looked for in
 the name tree too, and a string not in the tree in `/Dests`. A name's
 `#xx` codes are read before it is looked up.
 
-`PDF-DEST` gives the page object's number and the top the destination shows
-in default space, 16.16, or -1 when it names none. `PDF-PAGE-INDEX` in
+`PDF-DEST` gives the page object's number, and the left and the top the
+destination shows in default space, 16.16: the left for `/XYZ` and `/FitR`,
+the top for `/XYZ`, `/FitH`, `/FitBH` and `/FitR`, each -1 when it gives
+none, as `null` does. `PDF-PAGE-INDEX` in
 `pdf/page.f` turns the page object into the page's index, and says when
 the object is no page of the document.
 

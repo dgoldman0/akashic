@@ -4,8 +4,8 @@
 Each copy is the same file every time it is written.  Akashic's PDF reader
 reads the plain, the tagged and the encrypted copy as the same document:
 three pages of headings, paragraphs, two lists, two pictures and code; its
-links to a page and to the web; its outline as its contents; and each
-picture made into a file a view shows.
+links to a page and to the web; its outline as its contents, each entry
+going to its heading; and each picture made into a file a view shows.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pytest
 
 import sample_pdf
 from test_pdf_document import (CODE, FIGURE, HEADING, OK, PAGE, PARAGRAPH, Reader,
-                               _anchor, _contents, _links)
+                               _anchor, _contents, _links, _place)
 
 BULLET, NUMBERED = 2, 3
 
@@ -75,12 +75,24 @@ def test_each_copy_reads_as_the_same_document(reader, name) -> None:
     assert got == EXPECTED, name
     items = [b["containers"][0][:3] for b in blocks if b["containers"]]
     assert items == [(BULLET, 2, 0)] * 3 + [(NUMBERED, 3, n) for n in (1, 2, 3)], name
-    found = {}
+    found, places = {}, {}
     for index in range(len(blocks)):
         for text, target in _links(reader, index):
             found[text] = _anchor(reader, target) if target.startswith(b"#") else target
+            if target.startswith(b"#"):
+                places[text] = _place(reader, target)
     assert found == {b"the last page": 2, b"akashic.example": b"https://akashic.example/",
                      b"the first page": 0}, name
+    # A link to a page's top shows its start.
+    assert places == {b"the last page": 18, b"the first page": 0}, name
     assert contents == [(0, "A sample PDF", 0), (1, "Lists", 0), (0, "Pictures", 1),
                         (0, "The end", 2)], name
+    # Each entry shows its heading: "Lists" in the first page's middle, the
+    # others a page's first block, so the page's start.
+    memory = reader.runtime.memory
+    entries = []
+    for i in range(len(contents)):
+        *_, ga, gu = reader.call("PD-ENTRY", i)
+        entries.append(_place(reader, memory.read_bytes(ga, gu)))
+    assert entries == [0, 4, 11, 18], name
     assert reader.close() == 0

@@ -1388,6 +1388,26 @@ def test_a_press_on_a_pdf_link_goes_to_its_page_or_the_owner(tmp_path) -> None:
     assert "HELD=0 " in output
 
 
+def test_a_contents_entry_shows_its_place_at_the_top() -> None:
+    """Going to a PDF's contents entry reads its page alone and puts the
+    block its destination names at the view's top: the Lists heading, in
+    the first page's middle.  The page below, not read yet, does not pull
+    the view up to fill it, and reading that page leaves the view put."""
+
+    import sample_pdf
+    pdf = sample_pdf.SAMPLES["sample.pdf"]
+    lines = [_view(24, 40), f"DV-FILE {len(pdf)} PDF-DOC-READER DV-OPEN-WITH",
+             "DV-DOC DOC-CONTENTS NIP .\" CONTENTS=\" . CR",
+             "1 DV-W @ DOCV-GO-ENTRY DV-DRAW DV-READ. DV-AT",
+             "DV-SETTLE DV-READ. DV-AT", "DV-CLOSE"]
+    output = _run(lines, pdf, roots=("pdf/document.f",))
+    assert "CONTENTS=0 " in output and "HELD=0 " in output, output[-2000:]
+    reads = [{int(v) for v in m.split()} for m in re.findall(r"READ=([\d ]*)N=", output)]
+    ats = re.findall(r"AT=(-?\d+) (\d+) (\d+) ", output)
+    assert reads[0] == {0} and ats[0] == ("0", "4", "0"), output[-2000:]
+    assert 1 in reads[1] and ats[1] == ("0", "4", "0"), output[-2000:]
+
+
 def test_a_view_with_work_is_counted_until_it_is_done() -> None:
     """A view that needs a part read, or a picture's file made, counts as
     having work (DOCV-WORK?), so a host's service pass runs for it; once

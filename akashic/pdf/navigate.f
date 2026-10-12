@@ -8,7 +8,7 @@
 \              pdf/tree.f, pdf/textstr.f
 \
 \  Public API:
-\   PDF-DEST           ( va vu type file -- num top status )
+\   PDF-DEST           ( va vu type file -- num left top status )
 \   PDF-LINKS-SIZE     ( -- bytes )                    a page's links
 \   PDF-LINKS-READ     ( page links -- status )
 \   PDF-LINKS-FREE     ( links -- )
@@ -31,9 +31,10 @@
 \  names a page by its object; a name the catalog's /Dests maps to one,
 \  or a string its /Names /Dests tree maps, each tried in the other's
 \  place too, as writers mix them; through references, and a
-\  dictionary's /D.  PDF-DEST reads it: the page object's number and the
-\  top the destination shows in default space, 16.16, for /XYZ, /FitH,
-\  /FitBH and /FitR, else -1.  Its status is PDF-S-MISSING when the
+\  dictionary's /D.  PDF-DEST reads it: the page object's number, and
+\  the left and the top the destination shows in default space, 16.16:
+\  the left for /XYZ and /FitR, the top for /XYZ, /FitH, /FitBH and
+\  /FitR, each -1 when it gives none.  Its status is PDF-S-MISSING when the
 \  destination names no page, PDF-S-MEMORY when memory is refused.
 \  PDF-PAGE-INDEX (pdf/page.f) turns the page object into an index.
 \
@@ -108,34 +109,40 @@ CREATE _PDNV-SB-S PDF-BUF-SIZE 7 + ALLOT
 \  Destinations
 \ =====================================================================
 
+\ Element I of an array as a number, 16.16, or -1 when there is no such
+\ element, or it is no number, as null is not; or -1 for I.
+: _PDNV-NUMBER  ( aa au i -- f | -1 )
+    DUP 0< IF DROP 2DROP -1 EXIT THEN
+    -ROT PDF-ARRAY@ DUP PDF-T-INT = SWAP PDF-T-REAL = OR IF PDF-FIXED ELSE 2DROP -1 THEN ;
+
 \ An explicit destination: [page /XYZ left top zoom], /FitH or /FitBH
 \ with a top, /FitR left bottom right top, or another fit; its page
-\ object and top, or -1.  NUM is 0 when it names no page by its object.
-: _PDNV-ARRAY  ( aa au -- num top )
-    2DUP 0 -ROT PDF-ARRAY@ PDF-T-REF = IF PDF-REF@ DROP ELSE 2DROP 2DROP 0 -1 EXIT THEN
+\ object, left and top, each -1 when it gives none.  NUM is 0 when it
+\ names no page by its object.
+: _PDNV-ARRAY  ( aa au -- num left top )
+    2DUP 0 -ROT PDF-ARRAY@ PDF-T-REF = IF PDF-REF@ DROP ELSE 2DROP 2DROP 0 -1 -1 EXIT THEN
     >R
     2DUP 1 -ROT PDF-ARRAY@ PDF-T-NAME = IF
-        2DUP S" XYZ" PDF-NAME= IF 2DROP 3 ELSE
-        2DUP S" FitH" PDF-NAME= >R 2DUP S" FitBH" PDF-NAME= R> OR IF 2DROP 2 ELSE
-        S" FitR" PDF-NAME= IF 5 ELSE -1 THEN THEN THEN
-    ELSE 2DROP -1 THEN
-    DUP 0< IF DROP 2DROP R> -1 EXIT THEN
-    -ROT PDF-ARRAY@ DUP PDF-T-INT = SWAP PDF-T-REAL = OR IF PDF-FIXED ELSE 2DROP -1 THEN
-    R> SWAP ;
+        2DUP S" XYZ" PDF-NAME= IF 2DROP 2 3 ELSE
+        2DUP S" FitH" PDF-NAME= >R 2DUP S" FitBH" PDF-NAME= R> OR IF 2DROP -1 2 ELSE
+        S" FitR" PDF-NAME= IF 2 5 ELSE -1 -1 THEN THEN THEN
+    ELSE 2DROP -1 -1 THEN                                 ( aa au li ti )
+    >R >R 2DUP R> _PDNV-NUMBER -ROT R> _PDNV-NUMBER
+    R> -ROT ;
 
 \ An explicit destination, or a dictionary's /D, in OBJ, given back.
-: _PDNV-EXPLICIT  ( obj va vu type -- num top )
+: _PDNV-EXPLICIT  ( obj va vu type -- num left top )
     DUP PDF-T-DICT = IF
         DROP S" D" 2SWAP PDF-DICT@ PDF-T-ARRAY _PDNV-RESOLVE
-        IF _PDNV-ARRAY ROT _PDNV-FREE ELSE 2DROP DROP 0 -1 THEN
+        IF _PDNV-ARRAY 3 ROLL _PDNV-FREE ELSE 2DROP DROP 0 -1 -1 THEN
     ELSE
-        PDF-T-ARRAY = IF _PDNV-ARRAY ELSE 2DROP 0 -1 THEN
+        PDF-T-ARRAY = IF _PDNV-ARRAY ELSE 2DROP 0 -1 -1 THEN
     THEN
-    ROT _PDNV-FREE ;
+    3 ROLL _PDNV-FREE ;
 
 \ A value naming an explicit destination, through a reference.
-: _PDNV-VALUE  ( va vu type -- num top )
-    _PDNV-F @ PDF-RESOLVE ?DUP IF _PDNV-FAILED DROP 2DROP _PDNV-FREE 0 -1 EXIT THEN
+: _PDNV-VALUE  ( va vu type -- num left top )
+    _PDNV-F @ PDF-RESOLVE ?DUP IF _PDNV-FAILED DROP 2DROP _PDNV-FREE 0 -1 -1 EXIT THEN
     _PDNV-EXPLICIT ;
 
 VARIABLE _PDNV-CO   VARIABLE _PDNV-CA   VARIABLE _PDNV-CU   \ the catalog
@@ -147,28 +154,28 @@ VARIABLE _PDNV-NAME?   \ whether the key was a name
     IF _PDNV-CU ! _PDNV-CA ! _PDNV-CO ! -1 ELSE 2DROP DROP 0 THEN ;
 
 \ The destination the catalog's /Dests gives the key KA KU.
-: _PDNV-IN-DESTS  ( ka ku -- num top )
+: _PDNV-IN-DESTS  ( ka ku -- num left top )
     S" Dests" _PDNV-CA @ _PDNV-CU @ PDF-DICT@ PDF-T-DICT _PDNV-RESOLVE
-    0= IF 2DROP DROP 2DROP 0 -1 EXIT THEN
+    0= IF 2DROP DROP 2DROP 0 -1 -1 EXIT THEN
     ROT >R PDF-DICT@ _PDNV-VALUE R> _PDNV-FREE ;
 
 \ The destination the catalog's /Names /Dests tree gives the key KA KU.
-: _PDNV-IN-NAMES  ( ka ku -- num top )
+: _PDNV-IN-NAMES  ( ka ku -- num left top )
     S" Names" _PDNV-CA @ _PDNV-CU @ PDF-DICT@ PDF-T-DICT _PDNV-RESOLVE
-    0= IF 2DROP DROP 2DROP 0 -1 EXIT THEN
+    0= IF 2DROP DROP 2DROP 0 -1 -1 EXIT THEN
     ROT >R  S" Dests" 2SWAP PDF-DICT@ _PDNV-F @ PDF-NAMES@
-    _PDNV-FAILED  _PDNV-VALUE ROT _PDNV-FREE  R> _PDNV-FREE ;
+    _PDNV-FAILED  _PDNV-VALUE 3 ROLL _PDNV-FREE  R> _PDNV-FREE ;
 
-: _PDNV-LOOKUP  ( ka ku dests? -- num top )
+: _PDNV-LOOKUP  ( ka ku dests? -- num left top )
     IF _PDNV-IN-DESTS ELSE _PDNV-IN-NAMES THEN ;
 
 \ The destination named by the key in _PDNV-SB: a name through /Dests
 \ first, a string through the /Names tree first, then the other.
-: _PDNV-NAMED  ( -- num top )
-    _PDNV-CATALOG 0= IF 0 -1 EXIT THEN
+: _PDNV-NAMED  ( -- num left top )
+    _PDNV-CATALOG 0= IF 0 -1 -1 EXIT THEN
     _PDNV-SB PDF-BUF.A @ _PDNV-SB PDF-BUF.U @
     2DUP _PDNV-NAME? @ _PDNV-LOOKUP
-    OVER IF 2SWAP 2DROP ELSE 2DROP _PDNV-NAME? @ 0= _PDNV-LOOKUP THEN
+    2 PICK IF >R >R >R 2DROP R> R> R> ELSE DROP 2DROP _PDNV-NAME? @ 0= _PDNV-LOOKUP THEN
     _PDNV-CO @ _PDNV-FREE ;
 
 \ A name's or a string's bytes into _PDNV-SB, the key of a named
@@ -183,11 +190,11 @@ VARIABLE _PDNV-NAME?   \ whether the key was a name
     THEN
     _PDNV-SB _PDNV-BYTES+ ;
 
-\ A destination's page and top, through a reference.
-: _PDNV-DEST  ( va vu type -- num top )
-    _PDNV-F @ PDF-RESOLVE ?DUP IF _PDNV-FAILED DROP 2DROP _PDNV-FREE 0 -1 EXIT THEN
+\ A destination's page, left and top, through a reference.
+: _PDNV-DEST  ( va vu type -- num left top )
+    _PDNV-F @ PDF-RESOLVE ?DUP IF _PDNV-FAILED DROP 2DROP _PDNV-FREE 0 -1 -1 EXIT THEN
     DUP PDF-T-NAME = OVER PDF-T-STRING = OR OVER PDF-T-HEX = OR IF
-        _PDNV-KEY SWAP _PDNV-FREE IF _PDNV-NAMED ELSE 0 -1 THEN EXIT
+        _PDNV-KEY SWAP _PDNV-FREE IF _PDNV-NAMED ELSE 0 -1 -1 THEN EXIT
     THEN
     _PDNV-EXPLICIT ;
 
@@ -196,12 +203,12 @@ VARIABLE _PDNV-NAME?   \ whether the key was a name
     DUP _PDNV-F !  PDF-S-OK _PDNV-STATUS !  _PDNV-SB PDF-BUF-SIZE 0 FILL
     PDF-FILE-LOCKED? 0= ;
 
-\ PDF-DEST ( va vu type file -- num top status )
-\   A destination's page object and top.
-: PDF-DEST  ( va vu type file -- num top status )
-    _PDNV-START 0= IF DROP 2DROP 0 -1 PDF-S-LOCKED EXIT THEN
+\ PDF-DEST ( va vu type file -- num left top status )
+\   A destination's page object, left and top.
+: PDF-DEST  ( va vu type file -- num left top status )
+    _PDNV-START 0= IF DROP 2DROP 0 -1 -1 PDF-S-LOCKED EXIT THEN
     _PDNV-DEST  _PDNV-SB _PDNV-MSRC PDF-BUF-FREE
-    OVER IF PDF-S-OK ELSE _PDNV-STATUS @ ?DUP 0= IF PDF-S-MISSING THEN THEN ;
+    2 PICK IF PDF-S-OK ELSE _PDNV-STATUS @ ?DUP 0= IF PDF-S-MISSING THEN THEN ;
 
 \ =====================================================================
 \  Targets: where a link or an outline item goes

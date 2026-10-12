@@ -105,7 +105,9 @@ document is closed.
 such as `#notes` names. In a document in parts the place a link names may
 lie in a part not read yet, so its reader resolves it instead:
 `DOC-ANCHOR-PART ( name-a name-u doc -- part | -1 )` gives the part, which
-a view then reads and shows (`DOCV-GO-PART`). A heading's anchor is its text in lower case, with
+a view then reads, and `DOC-ANCHOR` then gives the block in it the link
+shows first, as the reader places it: a PDF's destination names a place
+on its page. A heading's anchor is its text in lower case, with
 spaces made hyphens and other ASCII punctuation but hyphens and underscores
 left out; a heading whose anchor an earlier one has takes `-1`, `-2` and so
 on, as GitHub names them. The suffix is written without leading zeros.
@@ -134,7 +136,7 @@ releases it after `DOC-CLOSE`, which gives back every byte.
 | `DOC-KEEP` | `( first end doc -- )` | Give back the contents outside blocks FIRST to END. |
 | `DOC-KEPT` | `( index doc -- content \| 0 )` | The content of a block the document keeps, or 0; it never reads the source. |
 | `DOC-STORAGE-DISJOINT?` | `( a u first end doc -- flag )` | Whether a span lies clear of the document's record, blocks, containers and content slots, and of the kept contents of blocks FIRST to END. |
-| `DOC-ANCHOR` | `( name-a name-u doc -- index \| -1 )` | The heading a name points to. |
+| `DOC-ANCHOR` | `( name-a name-u doc -- index \| -1 )` | The heading a name points to; in a document in parts, the block its reader places it at, once its part is read. |
 | `DOC-KEY>INDEX` | `( key doc -- index \| -1 )` | The block with a key, if read. |
 | `DOC-PARTS` | `( doc -- n )` | How many parts; 0 for a document without parts. |
 | `DOC-READ-PART` | `( part doc -- status )` | Read a part's blocks into place. |
@@ -163,7 +165,7 @@ A reader is a record of seven execution tokens, `RDR-SIZE` bytes:
 | `RDR.CONTENT-XT` | `( index doc -- status )` | Fill the builder with `DOC-CB-TEXT`, `DOC-CB-LINK`, `DOC-CB-KIND` and `DOC-CB-FIGURE`. |
 | `RDR.CLOSE-XT` | `( doc -- )` | Give back what the reader keeps, in `DOC-STATE@`. |
 | `RDR.PART-XT` | `( part doc -- status )` | Add one part's blocks and their containers; 0 for a reader that adds no parts. |
-| `RDR.ANCHOR-XT` | `( name-a name-u doc -- part \| -1 )` | The part a link within a document in parts names after its `#`; 0 for a reader without parts. |
+| `RDR.ANCHOR-XT` | `( name-a name-u doc -- part index )` | Where a link within a document in parts goes after its `#`: the part, perhaps not read yet, and, once it is read, the block the link shows first, each -1 for none; 0 for a reader without parts. |
 | `RDR.CONTENTS-XT` | `( doc -- status )` | Add the document's contents with `DOC-ADD-ENTRY`; 0 for its headings. |
 | `RDR.PICTURE-XT` | `( name-a name-u maker doc -- ok? )` | Fill a maker ([media/picture.f](picture.md)) for a picture the document holds itself, which a figure names; 0 for a reader whose figures name files. |
 

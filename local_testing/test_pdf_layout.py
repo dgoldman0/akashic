@@ -64,6 +64,9 @@ CREATE LY-STRS PDF-STRUCT-SIZE 7 + ALLOT  : LY-STR  LY-STRS 7 + -8 AND ;
     R@ PDF-BLOCK-KIND  R@ PDF-BLOCK-ITEM  R@ PDF-BLOCK-TOP
     R@ LY-OUT PDF-BLOCK-TEXT  R> LY-OUT PDF-BLOCK-MEANINGS ;
 : LY-FIGURE  ( i -- num w h )  LY-OUT PDF-LAYOUT-BLOCK PDF-BLOCK-FIGURE ;
+: LY-PLACE  ( i -- top low x0 x1 size )
+    LY-OUT PDF-LAYOUT-BLOCK DUP PDF-BLOCK-TOP OVER PDF-BLOCK-LOW 2 PICK PDF-BLOCK-ACROSS
+    4 ROLL PDF-BLOCK-SIZE ;
 CREATE LY-LNKS PDF-LINKS-SIZE 7 + ALLOT  : LY-LNK  LY-LNKS 7 + -8 AND ;
 LY-LNK PDF-LINKS-SIZE 0 FILL
 \\ Lay page I out with its links.
@@ -389,7 +392,7 @@ def picture(width: int = 2, height: int = 2) -> bytes:
                          b"/ColorSpace /DeviceGray /BitsPerComponent 8" % (width, height))
 
 
-def test_pictures_are_figures_where_they_fall(layout):
+def pictured_pdf() -> bytes:
     stream = b"".join([
         line("F2", 20, 72, 720, "A Title Here"),
         line("F1", 10, 72, 690, "A paragraph before the picture, long enough to reach the right"),
@@ -403,10 +406,13 @@ def test_pictures_are_figures_where_they_fall(layout):
         line("F1", 10, 72, 496, "Its last line follows the picture."),
     ])
     resources = b"<< /Font << /F1 10 0 R /F2 11 0 R >> /XObject << /Im1 30 0 R /Im2 31 0 R >> >>"
-    pdf = page_pdf(stream, resources=resources, extra={
+    return page_pdf(stream, resources=resources, extra={
         11: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
         30: picture(), 31: picture(3, 2)})
-    layout.open(pdf)
+
+
+def test_pictures_are_figures_where_they_fall(layout):
+    layout.open(pictured_pdf())
     assert layout.read() == OK
     blocks = layout.blocks()
     assert [b["kind"] for b in blocks] == [HEADING, PARAGRAPH, FIGURE, PARAGRAPH, FIGURE, PARAGRAPH]
@@ -414,6 +420,34 @@ def test_pictures_are_figures_where_they_fall(layout):
     assert blocks[4]["figure"] == (31, 150, 80) and blocks[4]["top"] == 380
     assert blocks[3]["text"].endswith("breaks it, here.")
     assert blocks[5]["text"] == "Its last line follows the picture."
+    layout.close()
+
+
+def test_blocks_keep_where_they_lie(layout):
+    """Each block keeps its top, its low (its lowest line's middle, a third
+    of its size above its baseline), how far across its lines reach, and
+    its first line's size; a figure its box, its middle and no size."""
+
+    from sample_pdf import HELVETICA, HELVETICA_BOLD
+
+    def width(text: str, table: tuple[int, ...], size: int) -> float:
+        return sum(table[ord(c) - 32] for c in text) * size / 1000
+
+    layout.open(pictured_pdf())
+    assert layout.read() == OK
+    places = [tuple(round(v / 65536, 3) for v in layout.call("LY-PLACE", i))
+              for i in range(layout.call("LY-BLOCKS")[0])]
+    body = width("A paragraph before the picture, long enough to reach the right", HELVETICA, 10)
+    after = width("A paragraph after it, which also runs to the margin of the page", HELVETICA, 10)
+    assert places == [
+        (740, round(720 + 20 / 3, 3), 72, round(72 + width("A Title Here", HELVETICA_BOLD, 20), 3), 20),
+        (700, round(678 + 10 / 3, 3), 72, round(72 + body, 3), 10),
+        (660, 600, 72, 272, 0),
+        (530, round(508 + 10 / 3, 3), 72, round(72 + after, 3), 10),
+        (380, 340, 250, 400, 0),
+        (506, round(496 + 10 / 3, 3), 72,
+         round(72 + width("Its last line follows the picture.", HELVETICA, 10), 3), 10),
+    ]
     layout.close()
 
 

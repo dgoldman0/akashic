@@ -19,10 +19,11 @@ import zlib
 import pytest
 
 from forth_dependencies import dependency_order
-from test_pdf_content import FILE_BYTES, HELVETICA
+from test_pdf_content import FILE_BYTES, HELVETICA, page_pdf
 from test_pdf_crypt import encrypt
 from test_pdf_file import stream_object, write_pdf
 from test_pdf_layout import COURIER, OBLIQUE, PAGE as EVERY_BLOCK, TEX, Layout, line, picture
+from test_pdf_navigate import T_ARRAY
 from test_uidl_collection_snapshot import AK, KDOS_PATH, _load_forth_lines
 from simulator.platform import create_one_core_address_space
 from simulator.runtime import MegaForthRuntime
@@ -60,6 +61,7 @@ CREATE PD-DOCS DOC-SIZE 7 + ALLOT  : PD-DOC  PD-DOCS 7 + -8 AND ;
 : PD-LINKS  ( i -- n )  PD-DOC DOC-CONTENT DROP DCT-LINK-COUNT ;
 : PD-LINK  ( i j -- start end ta tu )  SWAP PD-DOC DOC-CONTENT DROP DCT-LINK@ ;
 : PD-ANCHOR  ( a u -- part )  PD-DOC DOC-ANCHOR-PART ;
+: PD-PLACE  ( a u -- index )  PD-DOC DOC-ANCHOR ;
 : PD-CONTENTS  ( -- n status )  PD-DOC DOC-CONTENTS ;
 : PD-ENTRY  ( i -- level ta tu key ga gu )
     DUP >R PD-DOC DOC-ENTRY R> PD-DOC DOC-ENTRY-GOES ;
@@ -339,6 +341,76 @@ def _anchor(reader: Reader, target: bytes) -> int:
     reader.runtime.memory.write_bytes(address, target[1:])
     value = reader.call("PD-ANCHOR", address, len(target) - 1)[0]
     return value - (1 << 64) if value >= 1 << 63 else value
+
+
+def _place(reader: Reader, target: bytes) -> int:
+    """The block a link's target shows first, once its page is read, or -1."""
+
+    assert target.startswith(b"#")
+    address = reader.bytes + FILE_BYTES - 4096
+    reader.runtime.memory.write_bytes(address, target[1:])
+    value = reader.call("PD-PLACE", address, len(target) - 1)[0]
+    return value - (1 << 64) if value >= 1 << 63 else value
+
+
+def _dest(array: bytes) -> bytes:
+    """A link's target for an explicit destination."""
+    return b"#" + bytes([48 + T_ARRAY]) + array
+
+
+# A page of two columns, each line its own block: a title; the first
+# column's heading, a line, a picture centred in the column above its
+# caption, and a line; the second column's heading, a line, a heading, and
+# a paragraph of three lines.
+COLUMNS = b"".join([
+    line("F2", 20, 72, 740, "Two Columns"),
+    line("F2", 15, 72, 704, "First"),
+    line("F1", 10, 72, 680, "The first column has lines as wide as it is."),
+    b"q 100 0 0 60 130 580 cm /Im1 Do Q\n",
+    line("F1", 10, 140, 562, "Figure 1. A box."),
+    line("F1", 10, 72, 530, "Alpha two, below the picture and its caption."),
+    line("F2", 15, 324, 704, "Second"),
+    line("F1", 10, 324, 680, "The second column holds its own paragraphs too."),
+    line("F2", 15, 324, 644, "Third"),
+    *(line("F1", 10, 324, y, "A line of the second column that ends here.") for y in (620, 608, 596)),
+])
+
+
+def columns_pdf() -> bytes:
+    resources = b"<< /Font << /F1 10 0 R /F2 11 0 R >> /XObject << /Im1 30 0 R >> >>"
+    return page_pdf(COLUMNS, resources=resources, extra={
+        11: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+        30: picture(4, 4)})
+
+
+def test_a_destination_shows_the_block_at_its_place(reader):
+    """Once its page is read, a link goes to the block its destination
+    shows first: of the blocks across its left, then of those in that
+    one's column, the one whose low is the highest at or below its top,
+    so a link to the second column's heading does not show the first
+    column's beside it, and a picture centred above its caption is found.
+    No top, or the page's first block, shows the page's start, and a top
+    below every block the page's last."""
+
+    assert reader.open(columns_pdf()) == OK
+    second = _dest(b"[3 0 R /XYZ 324 719 null]")
+    assert _anchor(reader, second) == 0 and _place(reader, second) == -1    # not read yet
+    assert reader.read(0) == OK
+    assert [b["kind"] for b in reader.blocks()] == [
+        PAGE, HEADING, HEADING, PARAGRAPH, FIGURE, PARAGRAPH, PARAGRAPH, HEADING, PARAGRAPH,
+        HEADING, PARAGRAPH]
+    for array, index in ((b"[3 0 R /XYZ 324 719 null]", 7),     # the second column's heading
+                         (b"[3 0 R /XYZ 72 719 null]", 2),      # the first column's
+                         (b"[3 0 R /XYZ 72 645 null]", 4),      # the picture in its column
+                         (b"[3 0 R /XYZ 72 575 null]", 5),      # its caption
+                         (b"[3 0 R /XYZ 324 612 null]", 10),    # inside a paragraph
+                         (b"[3 0 R /FitH 719]", 2),             # no left: the first of equals
+                         (b"[3 0 R /Fit]", 0),                  # no top: the page's start
+                         (b"[3 0 R /XYZ 0 792 0]", 0),          # above every block
+                         (b"[3 0 R /FitH 100]", 10)):           # below every block
+        assert _place(reader, _dest(array)) == index, array
+    assert _place(reader, b"#p0") == 0 and _place(reader, b"#p1") == -1
+    assert reader.close() == 0
 
 
 def test_a_page_gives_its_links_over_the_text_they_cover(reader):
