@@ -43,6 +43,12 @@ from rich_terminal.semantic_content import (
     SemanticTextRole,
     SemanticTextState,
 )
+from rich_terminal.semantic_documents import (
+    BlockKind,
+    DocumentBlock,
+    DocumentContent,
+    DocumentFlag,
+)
 from rich_terminal.semantic_items import (
     ItemColumn,
     ItemColumnKind,
@@ -5885,9 +5891,11 @@ def _pointer_fixture_state(
 FEXPLORER_TABLE_ID = 22_000
 FEXPLORER_TABLE_ROWS = 30
 FEXPLORER_TABLE_TOTAL = 40
-# large.txt sorts eleventh in File Explorer's root, so its key is 11, and
-# the sample picture sits below the first rows the table shows.
+# large.txt sorts eleventh in File Explorer's root, so its key is 11, the
+# sample document is among the first rows the table shows, and the sample
+# picture sits below them.
 FEXPLORER_LARGE_ORDINAL = 10
+FEXPLORER_DOCUMENT_ORDINAL = 20
 FEXPLORER_PICTURE_ORDINAL = 35
 
 
@@ -5905,6 +5913,8 @@ def _fexplorer_table(
             return "large.txt"
         if ordinal == picture:
             return acceptance_runner.FEXPLORER_PICTURE
+        if ordinal == FEXPLORER_DOCUMENT_ORDINAL:
+            return acceptance_runner.FEXPLORER_DOCUMENT
         return f"source-{ordinal:02}.src"
 
     ordinals = set(range(first, first + FEXPLORER_TABLE_ROWS))
@@ -6543,10 +6553,10 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         sender,
     )
     # Adding the task hands on to File Explorer, which previews the sample
-    # picture next.
+    # document and then the sample picture.
     assert progress == acceptance_runner.JourneyProgress("daybook-mixed-task-added")
     assert actions[-1] == ("send_key", "alt+2", 400)
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE
     assert journey._mixed_daybook_text == inserted
 
 
@@ -6603,6 +6613,114 @@ def _picture_facts(offer_id: int, *, blocks: bool = False) -> TerminalDisplayOff
     if blocks:
         placements.append((top + 3, left + 4, acceptance_runner.PICTURE_HALF_BLOCK * 8))
     return _cell_offer(offer_id, tuple(placements))
+
+
+def _document_frame(*, viewport_row: int = 0, **changes) -> RichScreenProjection:
+    """File Explorer's Preview tab carrying the sample document as one
+    DOCUMENT over PICTURE_RECT, VIEWPORT_ROW rows into its first heading."""
+
+    frame = _picture_frame(preview=True, **changes)
+    left, top, right, bottom = PICTURE_RECT
+    content = DocumentContent(
+        1,
+        DocumentFlag(0),
+        (
+            DocumentBlock(1, BlockKind.HEADING, acceptance_runner.FEXPLORER_DOCUMENT_HEADING,
+                          level=1),
+            DocumentBlock(2, BlockKind.PARAGRAPH, "Akashic is a library of Forth modules.",
+                          rows_before=1),
+        ),
+        viewport_row,
+    )
+    return replace(
+        frame,
+        semantic_document_claims=(
+            acceptance_runner._SemanticDocumentClaim(
+                ControlIdentity(1, 1, 41_000), left, top, right, bottom, content,
+            ),
+        ),
+    )
+
+
+def _document_cell(offer_id: int) -> TerminalDisplayOffer:
+    """CELL drawing the sample document's first heading in PICTURE_RECT."""
+
+    left, top, _right, _bottom = PICTURE_RECT
+    return _cell_offer(
+        offer_id, ((top, left, acceptance_runner.FEXPLORER_DOCUMENT_HEADING),)
+    )
+
+
+def test_the_sample_document_is_the_one_previewed() -> None:
+    assert akashic_tui.SAMPLE_DOCUMENT_NAME == acceptance_runner.FEXPLORER_DOCUMENT
+    assert akashic_tui.SAMPLE_DOCUMENT.decode().startswith(
+        "# " + acceptance_runner.FEXPLORER_DOCUMENT_HEADING + "\n"
+    )
+
+
+def test_document_journey_previews_the_sample_rich_then_goes_back_to_details() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE
+    journey.frame_barrier = 450
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    key = FEXPLORER_DOCUMENT_ORDINAL + 1
+    path = "/" + acceptance_runner.FEXPLORER_DOCUMENT
+    steps = (
+        # Still on Daybook: wait for Alt+2 to reach File Explorer.
+        (_mixed_daybook_frame(agenda=mixed_text.DAYBOOK_ENTRY), None, None, None),
+        (_picture_frame(table=(10, 11)), None, "fexplorer-focused-for-document",
+         ("item_select", _table_value(key))),
+        # Selected, but the status bar does not name it yet.
+        (_picture_frame(table=(10, key)), None, None, None),
+        (_picture_frame(table=(10, key), status=path), None, "fexplorer-document-selected",
+         ("activate_tab", f"1,1,{FEXPLORER_TABS_ID + 2}")),
+        # Preview shows CELL until the document is carried rich.
+        (_picture_frame(status=path, preview=True), None, None, None),
+        (_document_frame(status=path), _document_cell(1), "fexplorer-document-shown-rich",
+         ("activate_tab", f"1,1,{FEXPLORER_TABS_ID + 1}")),
+    )
+    for index, (frame, cell_offer, milestone, action) in enumerate(steps):
+        offer_id = 451 + index
+        offer = (
+            _offer("X", offer_id=offer_id, pad_menu=True)
+            if cell_offer is None
+            else replace(cell_offer, offer_id=offer_id)
+        )
+        sent_before = len(actions)
+        progress = journey.after_present(offer, 9, frame, sender)
+        assert progress == acceptance_runner.JourneyProgress(milestone), index
+        assert actions[sent_before:] == (
+            [] if action is None else [(*action, offer_id)]
+        ), index
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
+
+
+@pytest.mark.parametrize(
+    ("frame", "cell", "message"),
+    (
+        # A preview scrolled away from its first heading.
+        (lambda: _document_frame(viewport_row=1), True, "first heading"),
+        # The rich document with CELL beneath not drawing it.
+        (lambda: _document_frame(), False, "CELL does not show"),
+    ),
+)
+def test_document_journey_refuses_what_is_not_the_sample(frame, cell, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE
+    journey.frame_barrier = 450
+
+    def sender(method, value, offer, generation):
+        return "progress"
+
+    offer = _document_cell(451) if cell else _offer("X", offer_id=451, pad_menu=True)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(offer, 9, frame(), sender)
 
 
 def test_the_sample_picture_facts_are_its_own() -> None:

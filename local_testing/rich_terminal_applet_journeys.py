@@ -15,6 +15,7 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.retained_wire import RetainedMessageType
+from rich_terminal.semantic_documents import BlockKind
 from rich_terminal.semantic_items import (
     ItemColumnKind,
     ItemField,
@@ -73,6 +74,20 @@ FEXP_DAMAGED_REASON = "The picture is damaged"
 # Every line of large.txt starts so; its preview opens at the end of the
 # text, where loading leaves the caret.
 FEXP_TEXT_LINE = "Large fixture line"
+# The canonical image's sample Markdown document (akashic_tui.py), which
+# File Explorer previews as a document: its first block, the text of its
+# last, holding a link back to the first heading, and its link to notes.md,
+# whose paragraph shows once File Explorer previews that file.
+FEXP_DOCUMENT = "guide.md"
+FEXP_DOCUMENT_HEADING = "A guide to Akashic"
+FEXP_DOCUMENT_END = "Back to the top"
+FEXP_DOCUMENT_TOP_LINK = "the top"
+FEXP_DOCUMENT_FILE_LINK = "Notes"
+FEXP_LINKED_NAME = "notes.md"
+FEXP_LINKED_TEXT = "Read the example and try it."
+# Wheel detents a scroll step sends; the document view scrolls three rows
+# a detent.
+FEXP_DOCUMENT_DETENTS = 3
 FEXP_TABLE_COLUMNS = (
     (ItemColumnKind.TEXT, "Name"),
     (ItemColumnKind.NUMBER, "Size"),
@@ -685,8 +700,12 @@ class FexpAloneJourney(_AppletJourney):
     terminal holds it, while CELL beneath shows what the picture is and
     draws none of it.  Activating the Details tab brings the table back
     and the picture goes.  The Preview tab shows it again; large.txt's
-    preview is text, with no picture; and sunset.qoi, selected once more,
-    shows rich again.  An OPEN on a directory's row lists that
+    preview is text, with no picture; and guide.md's is a DOCUMENT from its
+    first heading.  SCROLL moves it down until its last block shows, a
+    FOLLOW on that block's link to the first heading puts the heading back
+    at the top, and a FOLLOW on its link to notes.md selects that file and
+    previews it as a document too.  sunset.qoi, selected once more, shows
+    rich again.  An OPEN on a directory's row lists that
     directory.  An EXPAND on the
     tree's root shows its entries, a SELECT on one of its directories lists
     that directory, and a COLLAPSE on the root hides them, which moves the
@@ -719,6 +738,12 @@ class FexpAloneJourney(_AppletJourney):
         TEXT_SELECTED,
         TEXT_PREVIEWED,
         TEXT_DETAILS,
+        DOCUMENT_SELECTED,
+        DOCUMENT_PREVIEWED,
+        DOCUMENT_SCROLLED,
+        DOCUMENT_TOP,
+        LINKED_DOCUMENT,
+        DOCUMENT_DETAILS,
         PICTURE_RESELECTED,
         PICTURE_PREVIEWED_LAST,
         DETAILS_SHOWN,
@@ -728,7 +753,9 @@ class FexpAloneJourney(_AppletJourney):
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(19)
+    ) = range(25)
+    _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
+                        LINKED_DOCUMENT)
     # Each Preview tab stage: what it shows, and the Details stage after it.
     _PREVIEWS = {
         PICTURE_PREVIEWED: (True, PICTURE_DETAILS),
@@ -740,6 +767,9 @@ class FexpAloneJourney(_AppletJourney):
     def __init__(self, ready_markers: tuple[str, ...], *, paced_link: bool = False):
         super().__init__(ready_markers)
         self._directory: str | None = None
+        # The document's top, as (block key, rows above), before the last
+        # scroll step.
+        self._scrolled_from: tuple[int, int] | None = None
         # The upload check's step: pending, sent, answered, shown, or None
         # when there is none or it is over.
         self._probe = "pending" if paced_link else None
@@ -940,6 +970,82 @@ class FexpAloneJourney(_AppletJourney):
         return self._step(milestone, "activate_tab", _tab_value(details),
                           details_stage, offer, generation, sender)
 
+    @staticmethod
+    def _document_claim(projection: RichScreenProjection, bounds):
+        left, top, right, bottom = bounds
+        documents = [
+            claim
+            for claim in projection.semantic_document_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+        ]
+        return documents[0] if len(documents) == 1 else None
+
+    def _document(self, offer, generation, projection, sender) -> JourneyProgress:
+        """guide.md's preview: a DOCUMENT from its first heading, which the
+        wheel scrolls to its end, whose link to that heading scrolls back,
+        and whose link to notes.md selects and previews that file."""
+
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+        if not selected:
+            return self._wait("the Preview tab selected")
+        document = self._document_claim(projection, bounds)
+        if self.stage == self.LINKED_DOCUMENT:
+            if (
+                document is None
+                or document.block_with(FEXP_LINKED_TEXT) is None
+                or not _status_shows(projection, "/" + FEXP_LINKED_NAME, bounds)
+            ):
+                return self._wait(f"{FEXP_LINKED_NAME} selected and previewed as a document")
+            details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+            return self._step("fexp-document-file-link-followed", "activate_tab",
+                              _tab_value(details), self.DOCUMENT_DETAILS, offer,
+                              generation, sender)
+        if document is None:
+            return self._wait(f"{FEXP_DOCUMENT} previewed as a document")
+        top = document.top_block
+        at_top = (
+            top is not None
+            and top.kind is BlockKind.HEADING
+            and top.text == FEXP_DOCUMENT_HEADING
+            and document.content.viewport_row == 0
+        )
+        if self.stage == self.DOCUMENT_PREVIEWED:
+            if not at_top:
+                return self._wait(f"{FEXP_DOCUMENT} shown from its first heading")
+            _require_cell_text_in(offer, FEXP_DOCUMENT_HEADING, bounds, _WHERE)
+            self._scrolled_from = (top.block_key, 0)
+            return self._step("fexp-document-shown", "document_scroll",
+                              document.value(FEXP_DOCUMENT_DETENTS),
+                              self.DOCUMENT_SCROLLED, offer, generation, sender)
+        if self.stage == self.DOCUMENT_SCROLLED:
+            now = None if top is None else (top.block_key, document.content.viewport_row)
+            if now is None or now == self._scrolled_from:
+                return self._wait(f"{FEXP_DOCUMENT} scrolled")
+            end = document.block_with(FEXP_DOCUMENT_END)
+            link = None if end is None else document.link(end, FEXP_DOCUMENT_TOP_LINK)
+            if link is None:
+                self._scrolled_from = now
+                return self._step("fexp-document-scrolled", "document_scroll",
+                                  document.value(FEXP_DOCUMENT_DETENTS),
+                                  self.DOCUMENT_SCROLLED, offer, generation, sender)
+            self._scrolled_from = None
+            return self._step("fexp-document-end-shown", "document_follow",
+                              document.value(link.item_key, link.scalar_offset),
+                              self.DOCUMENT_TOP, offer, generation, sender)
+        if not at_top:
+            return self._wait(f"{FEXP_DOCUMENT}'s first heading back at the top")
+        item = document.block_with(f"{FEXP_DOCUMENT_FILE_LINK}, another document")
+        link = None if item is None else document.link(item, FEXP_DOCUMENT_FILE_LINK)
+        if link is None:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_DOCUMENT} shows no link to {FEXP_LINKED_NAME}"
+            )
+        return self._step("fexp-document-heading-link-followed", "document_follow",
+                          document.value(link.item_key, link.scalar_offset),
+                          self.LINKED_DOCUMENT, offer, generation, sender)
+
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
@@ -963,6 +1069,8 @@ class FexpAloneJourney(_AppletJourney):
             return self._wait("the launcher closed")
         if self.stage in self._PREVIEWS:
             return self._preview(offer, generation, projection, sender)
+        if self.stage in self._DOCUMENT_STAGES:
+            return self._document(offer, generation, projection, sender)
         table, tree = self._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")
@@ -1016,8 +1124,9 @@ class FexpAloneJourney(_AppletJourney):
                               table.value(row.item_key), self.PICTURE_SELECTED,
                               offer, generation, sender)
         if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
-                          self.PICTURE_RESELECTED):
-            name = FEXP_FILE if self.stage == self.TEXT_SELECTED else FEXPLORER_PICTURE
+                          self.DOCUMENT_SELECTED, self.PICTURE_RESELECTED):
+            name = {self.TEXT_SELECTED: FEXP_FILE,
+                    self.DOCUMENT_SELECTED: FEXP_DOCUMENT}.get(self.stage, FEXPLORER_PICTURE)
             selected = table.selected
             if selected is None or selected.fields[0].text != name:
                 return self._wait(f"{name}'s row selected")
@@ -1028,28 +1137,40 @@ class FexpAloneJourney(_AppletJourney):
                 raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
             preview = {self.PICTURE_SELECTED: self.PICTURE_PREVIEWED,
                        self.TEXT_SELECTED: self.TEXT_PREVIEWED,
+                       self.DOCUMENT_SELECTED: self.DOCUMENT_PREVIEWED,
                        self.PICTURE_RESELECTED: self.PICTURE_PREVIEWED_LAST}[self.stage]
             return self._step(f"fexp-selected-{self.stage}", "activate_tab",
                               _tab_value(tab), preview, offer, generation, sender)
         if self.stage in (self.PICTURE_DETAILS, self.PICTURE_DETAILS_AGAIN,
-                          self.TEXT_DETAILS, self.DETAILS_SHOWN):
+                          self.TEXT_DETAILS, self.DOCUMENT_DETAILS, self.DETAILS_SHOWN):
             if _image_claims_in(projection, bounds):
                 return self._wait("the picture gone with the Preview tab")
+            if self._document_claim(projection, bounds) is not None:
+                return self._wait("the document gone with the Preview tab")
             if self.stage == self.PICTURE_DETAILS:
                 # The same picture, shown again.
                 tab, _selected = _tab_in(projection, bounds, "Preview", _WHERE)
                 return self._step("fexp-details-shown", "activate_tab",
                                   _tab_value(tab), self.PICTURE_PREVIEWED_AGAIN,
                                   offer, generation, sender)
-            if self.stage in (self.PICTURE_DETAILS_AGAIN, self.TEXT_DETAILS):
-                name = FEXP_FILE if self.stage == self.PICTURE_DETAILS_AGAIN else FEXPLORER_PICTURE
+            # The file each Details stage selects next, and the stage after.
+            follows = {
+                self.PICTURE_DETAILS_AGAIN: (FEXP_FILE, self.TEXT_SELECTED),
+                self.TEXT_DETAILS: (FEXP_DOCUMENT, self.DOCUMENT_SELECTED),
+                self.DOCUMENT_DETAILS: (FEXPLORER_PICTURE, self.PICTURE_RESELECTED),
+            }
+            if self.stage in follows:
+                name, target = follows[self.stage]
                 row = table.named(name)
-                if row is None or not self._shown(table, row):
+                if row is None:
                     raise PhysicalDesktopAcceptanceError(
-                        f"File Explorer's root does not show {name}"
+                        f"File Explorer's root does not list {name}"
                     )
-                target = (self.TEXT_SELECTED if self.stage == self.PICTURE_DETAILS_AGAIN
-                          else self.PICTURE_RESELECTED)
+                if not self._shown(table, row):
+                    toward = -1 if row.ordinal < table.content.viewport_first else 1
+                    return self._step("fexp-table-scrolled", "item_scroll",
+                                      table.value(toward), self.stage, offer,
+                                      generation, sender)
                 return self._step(f"fexp-details-{self.stage}", "item_select",
                                   table.value(row.item_key), target, offer,
                                   generation, sender)

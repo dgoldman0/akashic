@@ -903,12 +903,14 @@ session destruction is required before owner storage can be reused.
 
 `RTE-LIMITS@` copies one coherent current-epoch neutral capability snapshot.
 The selected Desktop policy currently advertises exactly
-`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS | RET_GRID_CELLS | RET_STATUS_FIELDS | RET_FIELDS |
-RET_SERIES | RET_PANES | RET_TASKBARS` (section 0.5); vector, image and
-cadence families remain unadvertised. Complete `AREA | GRID | TABSET | TAB` control support, complete
-`ITEM_VIEW` support for every ITM1 role and item event, and complete
-`READOUT | METER | STATUS` instrument support must be present. Their composition
+`RET_CORE | RET_RGBA_IMAGE | RET_INSTRUMENT | RET_SERIES | RET_CONTROLS |
+RET_CONTROL_COLLECTIONS | RET_CONTROL_ITEMS | RET_STATUS_FIELDS |
+RET_FIELDS | RET_GRID_CELLS | RET_CONTROL_DOCUMENTS`, with `RET_PANES |
+RET_TASKBARS` from the shell's quotas (section 0.5); vector and cadence
+families remain unadvertised. Complete `AREA | GRID | TABSET | TAB` control
+support, complete `ITEM_VIEW` support for every ITM1 role and item event,
+complete `DOCUMENT` support for DOC1 and its SCROLL and FOLLOW events, and
+complete `READOUT | METER | STATUS` instrument support must be present. Their composition
 with the ordinary Desktop passed the selected local physical boundary at
 `4b6a475`/`29bdfd6`; implementation alone remains insufficient evidence for a
 new family or consumer.

@@ -26,6 +26,7 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
+    DocumentHitTarget,
     FieldHitTarget,
     PixelRect,
     ControlIdentity,
@@ -40,6 +41,13 @@ from rich_terminal.pygame_view import (
 from rich_terminal.retained_scene import ControlKind, ControlState, ImageFit, StatusSeverity
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
+from rich_terminal.semantic_documents import (
+    DocumentBlock,
+    DocumentContent,
+    PlacedBlock,
+    placed_blocks,
+    shown_link,
+)
 from rich_terminal.semantic_items import (
     ItemState,
     ItemViewContent,
@@ -48,6 +56,7 @@ from rich_terminal.semantic_items import (
 )
 from rich_terminal.retained_view import (
     DisplayScope,
+    DocumentDraw,
     GlyphRunDraw,
     FieldDraw,
     ImageDraw,
@@ -144,6 +153,10 @@ PAD_OPEN_PROMPT_MARKER = "Open:"
 # picture widget writes it, and decodes nothing.
 FEXPLORER_PICTURE = "sunset.qoi"
 FEXPLORER_PICTURE_FACTS = "QOI, 160 \u00d7 100"
+# The sample Markdown document beside it, which File Explorer previews as a
+# document, and the text of its first block.
+FEXPLORER_DOCUMENT = "guide.md"
+FEXPLORER_DOCUMENT_HEADING = "A guide to Akashic"
 PICTURE_HALF_BLOCK = "\u2580"
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
@@ -238,20 +251,26 @@ DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 44
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 45
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 46
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 47
-# File Explorer: Alt+2 focuses it (48), a SELECT on the sample picture's
-# row selects it (49), and activating the Preview tab shows the picture rich
-# over its CELL half blocks (50).  The picture stays shown to the end.
-DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 48
-DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 49
-DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 50
-# Pad: Alt+1 focuses it (51), Ctrl+O opens its prompt (52), the notes path is
-# typed (53) and entered (54), and notes.md's style runs are checked before a
-# FOLLOW on its link opens example.f with its own runs (55).
-DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 51
-DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 52
-DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 53
-DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 54
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 55
+# File Explorer: Alt+2 focuses it (48), a SELECT on the sample document's
+# row selects it (49), and activating the Preview tab shows it as a rich
+# DOCUMENT from its first heading (50); the Details tab brings the table
+# back.  A SELECT on the sample picture's row selects it (51-52), and the
+# Preview tab shows the picture rich over its CELL half blocks (53).  The
+# picture stays shown to the end.
+DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 48
+DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 49
+DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 50
+DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 51
+DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 52
+DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 53
+# Pad: Alt+1 focuses it (54), Ctrl+O opens its prompt (55), the notes path is
+# typed (56) and entered (57), and notes.md's style runs are checked before a
+# FOLLOW on its link opens example.f with its own runs (58).
+DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 54
+DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 55
+DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 56
+DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 57
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 58
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -1789,6 +1808,71 @@ class _SemanticItemViewClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticDocumentClaim:
+    """One real retained DOCUMENT root in logical-screen coordinates, with
+    the blocks it carried."""
+
+    identity: ControlIdentity
+    left: int
+    top: int
+    right: int
+    bottom: int
+    content: DocumentContent
+    state: ControlState = ControlState.VISIBLE | ControlState.ENABLED
+
+    @property
+    def control_id(self) -> int:
+        return self.identity.control_id
+
+    @property
+    def placed(self) -> tuple[PlacedBlock, ...]:
+        """The carried blocks where the root shows them."""
+
+        return placed_blocks(self.content, self.right - self.left)
+
+    @property
+    def top_block(self) -> DocumentBlock | None:
+        """The block the root's top row lies in."""
+
+        for placed in self.placed:
+            if placed.top + placed.rows > 0:
+                return placed.block
+        return None
+
+    def block_with(self, text: str) -> DocumentBlock | None:
+        """The carried block whose text contains TEXT, if exactly one."""
+
+        found = [block for block in self.content.blocks if text in block.text]
+        return found[0] if len(found) == 1 else None
+
+    def link(self, block: DocumentBlock, text: str) -> TextPosition | None:
+        """The start of BLOCK's link whose text is TEXT, when the root shows
+        it (SEMANTIC-CONTENT-1's shown link)."""
+
+        offset = block.text.find(text)
+        if offset < 0 or not shown_link(
+            self.content, self.right - self.left, self.bottom - self.top,
+            block.block_key, offset,
+        ):
+            return None
+        return TextPosition(block.block_key, offset)
+
+    def value(self, *fields: int) -> str:
+        """A journey input value naming this root, then FIELDS."""
+
+        identity = self.identity
+        return ",".join(
+            str(value)
+            for value in (
+                identity.owner_id,
+                identity.owner_generation,
+                identity.control_id,
+                *fields,
+            )
+        )
+
+
+@dataclass(frozen=True)
 class _CollectionState:
     """Authored collection state without retained-wire ControlIdentity."""
 
@@ -2028,6 +2112,7 @@ class RichScreenProjection:
     semantic_pane_claims: tuple[_SemanticPaneClaim, ...] = ()
     semantic_taskbar_claims: tuple[_SemanticTaskBarClaim, ...] = ()
     semantic_image_claims: tuple[_SemanticImageClaim, ...] = ()
+    semantic_document_claims: tuple[_SemanticDocumentClaim, ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
         if self.cells:
@@ -4385,6 +4470,7 @@ def reconstruct_retained_screen(
         TextGridDraw,
         TabSetDraw,
         ItemViewDraw,
+        DocumentDraw,
         StatusFieldDraw,
         FieldDraw,
         ImageDraw,
@@ -4505,6 +4591,7 @@ def reconstruct_retained_screen(
     menu_bar_count = 0
     semantic_collection_claims: list[_SemanticCollectionClaim] = []
     semantic_item_view_claims: list[_SemanticItemViewClaim] = []
+    semantic_document_claims: list[_SemanticDocumentClaim] = []
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     instrument_claims: list[_InstrumentClaim] = []
     semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
@@ -4777,6 +4864,27 @@ def reconstruct_retained_screen(
             opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
+        if isinstance(draw, DocumentDraw):
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_document_claims.append(
+                    _SemanticDocumentClaim(
+                        identity=ControlIdentity(
+                            region.owner_id,
+                            region.owner_generation,
+                            draw.control_id,
+                        ),
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        content=draw.content,
+                        state=draw.state,
+                    )
+                )
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
         if isinstance(draw, TabSetDraw):
             if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_tabset_claims.append(
@@ -4924,6 +5032,7 @@ def reconstruct_retained_screen(
         semantic_collection_claims=tuple(semantic_collection_claims),
         semantic_tabset_claims=tuple(semantic_tabset_claims),
         semantic_item_view_claims=tuple(semantic_item_view_claims),
+        semantic_document_claims=tuple(semantic_document_claims),
         region_count=len(plane.regions),
         instrument_region_count=sum(any(isinstance(draw, instrument_draw_types)
                                         for draw in region.draws) for region in plane.regions),
@@ -6071,6 +6180,8 @@ _POINTER_INPUT_METHODS = frozenset(
         "item_collapse",
         "item_check",
         "item_scroll",
+        "document_scroll",
+        "document_follow",
         "field_adjust",
         "field_activate",
     )
@@ -6353,6 +6464,122 @@ def _request_field_input(
     )
 
 
+def _request_document_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    params: dict[str, object],
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send SCROLL, or FOLLOW on a link, to a DOCUMENT where the physical
+    viewer would: the wheel over any visible point of the root, or a press
+    on the link character its paint pass drew for that position."""
+
+    if method == "document_scroll":
+        owner_id, owner_generation, control_id, detents = _canonical_integers(
+            value, 4, method
+        )
+        if not detents:
+            raise PhysicalDesktopAcceptanceError("document scroll input carries no detent")
+        position = None
+    else:
+        owner_id, owner_generation, control_id, block_key, offset = (
+            _canonical_integers(value, 5, method)
+        )
+        position = TextPosition(block_key, offset)
+    identity = ControlIdentity(owner_id, owner_generation, control_id)
+    token = _exact_hit_map_token(offer, display_state, display_ack, "document input")
+    targets = [
+        target
+        for target in display_state.hit_entries
+        if isinstance(target, DocumentHitTarget) and target.identity == identity
+    ]
+    if len(targets) != 1:
+        held = sorted({
+            type(entry).__name__
+            for entry in display_state.hit_entries
+            if getattr(entry, "identity", None) == identity
+            or (getattr(entry, "owner_id", None), getattr(entry, "owner_generation", None),
+                getattr(entry, "control_id", None))
+            == (identity.owner_id, identity.owner_generation, identity.control_id)
+        })
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged hit map has no enabled DOCUMENT target for the "
+            f"requested root (it holds {', '.join(held) or 'nothing'} for it)"
+        )
+    target = targets[0]
+    rect = target.rect
+    step_x = max(1, cell_width // 2)
+    step_y = max(1, cell_height // 2)
+    point = next(
+        (
+            (x, y)
+            for y in range(rect.top + step_y // 2, rect.bottom, step_y)
+            for x in range(rect.left + step_x // 2, rect.right, step_x)
+            if (position is None or target.link_at(x, y) == position)
+            and display_state.resolve_pointer(
+                x,
+                y,
+                display_token=token,
+                cell_width=cell_width,
+                cell_height=cell_height,
+            )
+            == target
+        ),
+        None,
+    )
+    if point is None:
+        raise PhysicalDesktopAcceptanceError(
+            f"DOCUMENT {'link ' + repr(position) if position else 'root'} is not "
+            "painted at any visible point"
+        )
+    request = dict(
+        params,
+        owner_id=owner_id,
+        owner_generation=owner_generation,
+        control_id=control_id,
+        modifiers=0,
+    )
+    evidence = {
+        "kind": ControlKind.DOCUMENT.name,
+        "owner_id": owner_id,
+        "owner_generation": owner_generation,
+        "control_id": control_id,
+        "content_revision": target.content_revision,
+        "pixel": list(point),
+    }
+    if position is None:
+        kind = ControlEventKind.SCROLL
+        request.update(event_kind=int(kind), wheel_x=0, wheel_y=detents)
+        evidence["wheel_y"] = detents
+    else:
+        # A press on a link follows it: a document is read-only.
+        kind = ControlEventKind.FOLLOW
+        request.update(
+            event_kind=int(kind),
+            content_revision=target.content_revision,
+            item_key=position.item_key,
+            scalar_offset=position.scalar_offset,
+        )
+        evidence["position"] = [position.item_key, position.scalar_offset]
+    evidence["event_kind"] = kind.name
+    if _display_bound_status(client, "send_text_event", request) != "progress":
+        return "backpressured", None
+    return "progress", AcceptedInputEvidence(
+        "send_text_event",
+        f"{method} {value}",
+        offer.offer_id,
+        params["generation"],
+        display_scope_to_wire(offer.scope),
+        evidence,
+    )
+
+
 def _request_item_input(
     client: SessionClient,
     method: str,
@@ -6463,7 +6690,8 @@ def _request_pointer_input(
     the release was backpressured and ``drag_owed`` when the move was too,
     and the journey must deliver it before any other input.  Text roots take
     PLACE, EXTEND, or SCROLL at a point whose position comes from the
-    viewer's own layout; SCROLL also reaches TEXT_GRID roots.
+    viewer's own layout; SCROLL also reaches TEXT_GRID roots.  Documents take
+    SCROLL, and FOLLOW on a link character the viewer painted.
     """
 
     if (
@@ -6477,6 +6705,11 @@ def _request_pointer_input(
         )
     if method in ("field_adjust", "field_activate"):
         return _request_field_input(
+            client, method, value, offer, params, display_state=display_state,
+            display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
+        )
+    if method in ("document_scroll", "document_follow"):
+        return _request_document_input(
             client, method, value, offer, params, display_state=display_state,
             display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
         )
@@ -8483,6 +8716,12 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if (
             DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE
             < self.stage
+            <= DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE
+        ):
+            return self._document_stage(offer, generation, projection, sender)
+        if (
+            DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE
+            < self.stage
             <= DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE
         ):
             return self._picture_stage(offer, generation, projection, sender)
@@ -9350,11 +9589,111 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._send(
             "send_key",
             "alt+2",
-            DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE,
+            DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE,
             offer,
             generation,
             sender,
         )
+        return JourneyProgress(milestone)
+
+    def _document_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Preview the sample Markdown document in File Explorer.
+
+        A SELECT on the document's row in the detail table loads its preview,
+        and activating the Preview tab shows it: the rich frame carries it as
+        one DOCUMENT from its first heading, which CELL beneath draws too.
+        The Details tab then brings the table back for the picture.
+        """
+
+        _require_soundlab_desktop_semantics(projection)
+        focused = _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
+        bounds = _desktop_tile_bounds(projection, FEXPLORER_DESKTOP_TILE)
+        if self.stage == DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE:
+            table = _fexplorer_table_claim(projection)
+            if not focused or table is None:
+                return JourneyProgress()
+            row = table.named(FEXPLORER_DOCUMENT)
+            content = table.content
+            if row is None or not _item_shown(table, row):
+                if (
+                    row is None
+                    and content.viewport_first + content.viewport_count
+                    >= content.item_total
+                ):
+                    raise PhysicalDesktopAcceptanceError(
+                        f"File Explorer's root lists no {FEXPLORER_DOCUMENT}"
+                    )
+                toward = (
+                    -1 if row is not None and row.ordinal < content.viewport_first
+                    else 1
+                )
+                milestone = self._milestone("fexplorer-scrolled-to-document")
+                self._send("item_scroll", table.value(toward),
+                           DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE, offer, generation, sender)
+                return JourneyProgress(milestone)
+            milestone = self._milestone("fexplorer-focused-for-document")
+            self._send("item_select", table.value(row.item_key),
+                       DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if not focused:
+            raise PhysicalDesktopAcceptanceError(
+                "File Explorer lost focus while previewing its document"
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE:
+            table = _fexplorer_table_claim(projection)
+            selected = None if table is None else table.selected
+            if (
+                selected is None
+                or selected.fields[0].text != FEXPLORER_DOCUMENT
+                or not _fexplorer_selected_path_is(projection, "/" + FEXPLORER_DOCUMENT)
+            ):
+                return JourneyProgress()
+            tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+            if shown:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's Preview tab was selected before it was activated"
+                )
+            milestone = self._milestone("fexplorer-document-selected")
+            self._send("activate_tab", _tab_value(tab),
+                       DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        _tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+        left, top, right, bottom = bounds
+        documents = [
+            claim
+            for claim in projection.semantic_document_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+        ]
+        if not shown or not documents:
+            return JourneyProgress()
+        if len(documents) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer shows {len(documents)} documents for {FEXPLORER_DOCUMENT}"
+            )
+        document, = documents
+        first = document.top_block
+        if (
+            first is None
+            or first.text != FEXPLORER_DOCUMENT_HEADING
+            or document.content.viewport_row
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXPLORER_DOCUMENT}'s preview does not open at its first heading"
+            )
+        self._require_cell_text(
+            offer, projection, FEXPLORER_DOCUMENT_HEADING, FEXPLORER_DESKTOP_TILE
+        )
+        milestone = self._milestone("fexplorer-document-shown-rich")
+        details, _selected = _tab_in(projection, bounds, "Details", "File Explorer")
+        self._send("activate_tab", _tab_value(details),
+                   DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE, offer, generation, sender)
         return JourneyProgress(milestone)
 
     def _picture_stage(
