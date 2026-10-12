@@ -121,7 +121,7 @@ The linked projection and executable-lens profiles are:
 ```bash
 python3 local_testing/akashic_tui.py smoke \
   --profile library-projection-owner-contracts \
-  --max-steps 70000000000 --timeout 1200
+  --max-steps 70000000000 --timeout 3600
 python3 local_testing/akashic_tui.py smoke \
   --profile library-applet-functional-contracts \
   --max-steps 55000000000 --timeout 1200
@@ -655,7 +655,7 @@ The Library projection and applet gates remain linked production closures:
 ```bash
 python3 local_testing/akashic_tui.py smoke \
   --profile library-projection-owner-contracts \
-  --max-steps 70000000000 --timeout 1200
+  --max-steps 70000000000 --timeout 3600
 python3 local_testing/akashic_tui.py smoke \
   --profile library-applet-functional-contracts \
   --max-steps 55000000000 --timeout 1200
