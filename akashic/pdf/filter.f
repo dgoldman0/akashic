@@ -65,12 +65,14 @@ REQUIRE ../utils/memory-source.f
 \ Grow BUF to hold at least NEED bytes, keeping its contents.
 : _PDF-BUF-GROW  ( need buf msrc -- ok? )
     >R OVER OVER PDF-BUF.CAP @ > 0= IF 2DROP R> DROP -1 EXIT THEN
-    DUP PDF-BUF.CAP @ BEGIN DUP 3 PICK < WHILE 2* REPEAT
+    DUP PDF-BUF.CAP @ 8 MAX BEGIN DUP 3 PICK < WHILE 2* REPEAT
     ROT DROP DUP R@ MSRC-ALLOC                                 ( buf cap' new )
     DUP 0= IF 2DROP DROP R> DROP 0 EXIT THEN
-    2 PICK PDF-BUF.A @ OVER 4 PICK PDF-BUF.U @ MOVE
-    2 PICK PDF-BUF.A @ 3 PICK PDF-BUF.CAP @ R> MSRC-FREE
-    ROT TUCK PDF-BUF.A ! PDF-BUF.CAP ! -1 ;
+    2 PICK PDF-BUF.A @ ?DUP IF
+        OVER 4 PICK PDF-BUF.U @ MOVE
+        2 PICK PDF-BUF.A @ 3 PICK PDF-BUF.CAP @ R@ MSRC-FREE
+    THEN
+    R> DROP ROT TUCK PDF-BUF.A ! PDF-BUF.CAP ! -1 ;
 
 \ =====================================================================
 \  One byte at a time, for the small filters
