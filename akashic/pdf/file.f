@@ -86,7 +86,7 @@ REQUIRE ../media/source.f
 \   +152 open?              +160 its encryption (PDF-CRYPT-SIZE, 48)
 \   +208 the /Encrypt dictionary's object, or 0       +216 a value with its
 \   strings decrypted (a buffer, 24)    +240 a string's bytes (a buffer, 24)
-\   +264 encrypted?
+\   +264 encrypted?         +272 the object stream's index (a buffer, 24)
 
 : _PDFF.SRC       ( f -- a )        ;
 : _PDFF.MSRC      ( f -- a )    8 + ;
@@ -109,7 +109,8 @@ REQUIRE ../media/source.f
 : _PDFF.CBUF      ( f -- a )  216 + ;
 : _PDFF.SBUF      ( f -- a )  240 + ;
 : _PDFF.ENCRYPTED ( f -- a )  264 + ;
-272 CONSTANT PDF-FILE-SIZE
+: _PDFF.OSIDX     ( f -- a )  272 + ;
+296 CONSTANT PDF-FILE-SIZE
 
 \ An entry: its type (0 free, 1 in the file, 2 in an object stream,
 \ 255 none yet), its generation or index, and its offset or stream.
@@ -516,11 +517,31 @@ VARIABLE _PDFS-CODING     \ that coding
     PDF-DICT@ PDF-T-INT = IF PDF-INT ELSE 2DROP -1 THEN ;
 
 VARIABLE _PDFF-OSF  VARIABLE _PDFF-OSO
+CREATE _PDFF-PAIR 16 ALLOT
 
-\ Hold the object stream STM's decoded bytes, with its /N and /First.
+\ Forget the object stream held, and its index.
+: _PDFF-UNHOLD  ( file -- )
+    DUP _PDFF.OSBUF OVER _PDFF.MSRC @ PDF-BUF-FREE
+    DUP _PDFF.OSIDX OVER _PDFF.MSRC @ PDF-BUF-FREE  -1 SWAP _PDFF.OSNUM ! ;
+
+\ The held object stream's table of numbers and offsets, read once into
+\ its index, a pair of cells for each object: false when memory is
+\ refused.  The table ends at a pair that is not two integers.
+: _PDFF-INDEX  ( -- ok? )
+    _PDFF-OSF @ _PDFF.OSBUF PDF-BUF.A @
+    _PDFF-OSF @ _PDFF.OSFIRST @ _PDFF-OSF @ _PDFF.OSBUF PDF-BUF.U @ MIN
+    _PDFF-OSF @ _PDFF.OSN @ 0 MAX 0 ?DO
+        PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN PDF-INT _PDFF-PAIR !
+        PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN PDF-INT _PDFF-PAIR 8 + !
+        _PDFF-PAIR 16 _PDFF-OSF @ _PDFF.OSIDX _PDFF-OSF @ _PDFF.MSRC @ PDF-BUF-APPEND
+        0= IF 2DROP 0 UNLOOP EXIT THEN
+    LOOP 2DROP -1 ;
+
+\ Hold the object stream STM's decoded bytes, with its /N and /First,
+\ and index its table.
 : _PDFF-OBJSTM  ( stm file -- status )
     2DUP _PDFF.OSNUM @ = IF 2DROP PDF-S-OK EXIT THEN
-    DUP _PDFF.OSBUF OVER _PDFF.MSRC @ PDF-BUF-FREE  -1 OVER _PDFF.OSNUM !
+    DUP _PDFF-UNHOLD
     2DUP _PDFF-GET-XT @ EXECUTE ?DUP IF NIP NIP NIP EXIT THEN     ( stm file obj )
     _PDFF-OSO ! _PDFF-OSF !
     _PDFF-OSO @ _PDFF-OSF @ _PDFF.OSBUF _PDFF-OSF @ PDF-STREAM
@@ -528,21 +549,30 @@ VARIABLE _PDFF-OSF  VARIABLE _PDFF-OSO
     S" N" _PDFF-OSO @ PDF-OBJ-VALUE DROP _PDFF-INT@ _PDFF-OSF @ _PDFF.OSN !
     S" First" _PDFF-OSO @ PDF-OBJ-VALUE DROP _PDFF-INT@ _PDFF-OSF @ _PDFF.OSFIRST !
     _PDFF-OSO @ _PDFF-OSF @ PDF-OBJ-FREE
+    _PDFF-INDEX 0= IF DROP PDF-S-MEMORY EXIT THEN
     _PDFF-OSF @ _PDFF.OSNUM !  PDF-S-OK ;
 
-VARIABLE _PDFF-SNUM  VARIABLE _PDFF-SOFF  VARIABLE _PDFF-T1
+\ Where object NUM starts in the object stream held, after its /First:
+\ the index's pair INDEX when it is NUM's, else the pair that is; or -1.
+: _PDFF-WHERE  ( num index file -- offset | -1 )
+    _PDFF.OSIDX >R
+    DUP 0< 0= OVER R@ PDF-BUF.U @ 16 / < AND IF
+        16 * R@ PDF-BUF.A @ +  2DUP @ = IF NIP 8 + @ R> DROP EXIT THEN
+    THEN DROP
+    R@ PDF-BUF.A @ DUP R> PDF-BUF.U @ + SWAP                 ( num end a )
+    BEGIN 2DUP > WHILE
+        DUP @ 3 PICK = IF NIP NIP 8 + @ EXIT THEN
+        16 +
+    REPEAT 2DROP DROP -1 ;
 
-\ The object NUM in the object stream STM.
+VARIABLE _PDFF-SNUM  VARIABLE _PDFF-SOFF
+
+\ The object NUM in the object stream STM, at INDEX in its table.
 : _PDFF-IN-STREAM  ( num stm index file -- obj status )
-    >R DROP R@ _PDFF-OBJSTM ?DUP IF NIP 0 SWAP R> DROP EXIT THEN
-    _PDFF-SNUM !  -1 _PDFF-SOFF !
-    R@ _PDFF.OSBUF PDF-BUF.A @  R@ _PDFF.OSFIRST @ R@ _PDFF.OSBUF PDF-BUF.U @ MIN
-    R@ _PDFF.OSN @ 0 MAX 0 ?DO
-        PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN PDF-INT _PDFF-T1 !
-        PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN PDF-INT
-        _PDFF-T1 @ _PDFF-SNUM @ = IF _PDFF-SOFF ! LEAVE THEN DROP
-    LOOP 2DROP
-    _PDFF-SOFF @ 0< IF R> DROP 0 PDF-S-DAMAGED EXIT THEN
+    >R SWAP R@ _PDFF-OBJSTM ?DUP IF NIP NIP 0 SWAP R> DROP EXIT THEN    ( num index )
+    OVER SWAP R@ _PDFF-WHERE
+    DUP 0< IF 2DROP R> DROP 0 PDF-S-DAMAGED EXIT THEN
+    _PDFF-SOFF ! _PDFF-SNUM !
     R@ _PDFF.OSFIRST @ _PDFF-SOFF @ +
     DUP R@ _PDFF.OSBUF PDF-BUF.U @ < 0= IF DROP R> DROP 0 PDF-S-DAMAGED EXIT THEN
     R@ _PDFF.OSBUF PDF-BUF.A @ OVER +  SWAP R@ _PDFF.OSBUF PDF-BUF.U @ SWAP -
@@ -663,18 +693,13 @@ VARIABLE _PDFR-NUM
             _PDFR-NUM @ _PDFF-F @ _PDFF-GET 0= IF
                 DUP S" ObjStm" _PDFR-TYPE? SWAP _PDFF-F @ PDF-OBJ-FREE
                 IF _PDFR-NUM @ _PDFF-F @ _PDFF-OBJSTM 0= IF
-                    _PDFF-F @ _PDFF.OSBUF PDF-BUF.A @
-                    _PDFF-F @ _PDFF.OSFIRST @ _PDFF-F @ _PDFF.OSBUF PDF-BUF.U @ MIN
-                    _PDFF-F @ _PDFF.OSN @ 0 MAX 0 ?DO
-                        PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN PDF-INT _PDFR-T !
-                        PDF-TOKEN PDF-T-INT <> IF 2DROP LEAVE THEN 2DROP
-                        _PDFR-T @ _PDFF-F @ _PDFF-ROOM 0= IF
-                            2DROP UNLOOP PDF-S-MEMORY EXIT
-                        THEN
+                    _PDFF-F @ _PDFF.OSIDX PDF-BUF.U @ 16 / 0 ?DO
+                        _PDFF-F @ _PDFF.OSIDX PDF-BUF.A @ I 16 * + @ _PDFR-T !
+                        _PDFR-T @ _PDFF-F @ _PDFF-ROOM 0= IF UNLOOP PDF-S-MEMORY EXIT THEN
                         _PDFR-T @ _PDFF-F @ _PDFF-ENTRY@ C@ 1 <> IF
                             _PDFR-T @ 2 _PDFR-NUM @ I _PDFF-F @ _PDFF-FORCE DROP
                         THEN
-                    LOOP 2DROP
+                    LOOP
                 THEN THEN
             ELSE DROP THEN
         THEN
@@ -711,8 +736,7 @@ CREATE _PDFR-ROOT 64 ALLOT
         _PDFF-F @ _PDFF.EBYTES @ _PDFF-F @ _PDFF.MSRC @ MSRC-FREE
     THEN
     0 _PDFF-F @ _PDFF.ENTRIES !  0 _PDFF-F @ _PDFF.COUNT !  0 _PDFF-F @ _PDFF.EBYTES !
-    _PDFF-F @ _PDFF.OSBUF _PDFF-F @ _PDFF.MSRC @ PDF-BUF-FREE
-    -1 _PDFF-F @ _PDFF.OSNUM !
+    _PDFF-F @ _PDFF-UNHOLD
     _PDFR-SCAN ?DUP IF EXIT THEN
     _PDFR-TRAILER @ 0< 0= IF
         _PDFR-TRAILER @ _PDFF-POS !
@@ -957,7 +981,7 @@ VARIABLE _PDFF-BROKEN \ true once a section could not be read
     >R
     R@ _PDFF.ENTRIES @ ?DUP IF R@ _PDFF.EBYTES @ R@ _PDFF.MSRC @ MSRC-FREE THEN
     R@ _PDFF.TRAILER @ ?DUP IF R@ _PDFF.TCAP @ R@ _PDFF.MSRC @ MSRC-FREE THEN
-    R@ _PDFF.OSBUF R@ _PDFF.MSRC @ PDF-BUF-FREE
+    R@ _PDFF-UNHOLD
     R@ _PDFF.WORK R@ _PDFF.MSRC @ PDF-BUF-FREE
     R@ _PDFF.CBUF R@ _PDFF.MSRC @ PDF-BUF-FREE
     R@ _PDFF.SBUF R@ _PDFF.MSRC @ PDF-BUF-FREE

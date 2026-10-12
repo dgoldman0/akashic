@@ -1482,11 +1482,11 @@ its decision.
   content, about 0.5 million to lex it, the rest to show its glyphs. The
   inflater's cost there, about 520 steps a compressed byte, is the largest
   single part, and step 11 measures it with the rest.
-- Fetching an object from an object stream reads the stream's table of
-  offsets again up to the object, about 1,100 steps an entry: 62,000 steps
-  for the object at index 52. Most of the cost of a page's links, the
-  outline and a followed link is that. Step 11 measures it too, and the
-  table can be read once when the stream is decoded.
+- An object stream's table of offsets is read once into an index when
+  the stream is decoded, instead of again up to the object on each fetch:
+  the object at index 52 of a stream costs 8,000 steps instead of 62,000.
+  A page's index and a named destination cost about a third of what they
+  did, the outline half.
 - A picture of samples costs about 950 steps a pixel to make into QOI,
   some 610 of them the QOI encoder's, plus about 440 steps a compressed
   byte to inflate. Step 11 measures these with the rest.

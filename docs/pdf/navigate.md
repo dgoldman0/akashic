@@ -98,10 +98,9 @@ read with `PDF-S-MEMORY`.
 
 In a three-page xelatex document with hyperref, whose objects all lie in
 one object stream of 53, reading the outline of five items takes about
-445,000 steps once the object stream is decoded, and the first page's
-seven links about 387,000. Following a named destination takes about
-240,000, and its page index 160,000 to 260,000. Most of that is fetching
-objects: the file layer reads its object stream's table of offsets again on
-each fetch, up to 62,000 steps for the object at index 52.
+218,000 steps once the object stream is decoded, and the first page's
+seven links about 329,000, most of it reading each annotation's
+dictionary. Following a named destination takes 84,000 to 118,000, and
+its page index 39,000 to 71,000.
 
 Memory comes from the file's memory source. One call runs at a time.
