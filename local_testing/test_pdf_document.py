@@ -57,6 +57,9 @@ CREATE PD-DOCS DOC-SIZE 7 + ALLOT  : PD-DOC  PD-DOCS 7 + -8 AND ;
     PD-DOC DOC-CONTENT ?DUP IF NIP 0 0 0 0 0 0 0 EXIT THEN
     >R 0 R@ DCT-KIND@ R@ DCT-LEVEL@ R@ DCT-TEXT R@ DCT-MAP R> DCT-FIGURE ;
 : PD-CLOSE  ( -- held )  PD-DOC DOC-CLOSE PD-MSRC MSRC-HELD@ ;
+: PD-LINKS  ( i -- n )  PD-DOC DOC-CONTENT DROP DCT-LINK-COUNT ;
+: PD-LINK  ( i j -- start end ta tu )  SWAP PD-DOC DOC-CONTENT DROP DCT-LINK@ ;
+: PD-ANCHOR  ( a u -- part )  PD-DOC DOC-ANCHOR-PART ;
 """
 
 
@@ -303,4 +306,78 @@ def test_a_tagged_document_libreoffice_wrote(reader, layout, tmp_path):
     assert [(b["rows"], b["inside"]) for b in quoted] == [(1, 0), (1, 1)]
     items = [b for b in blocks if b["containers"] and b["containers"][0][0] == BULLET]
     assert [b["rows"] for b in items] == [1, 0]
+    assert reader.close() == 0
+
+
+# --------------------------------------------------------------------------
+# Links
+# --------------------------------------------------------------------------
+
+LINK = 9
+
+
+def _links(reader: Reader, index: int) -> list[tuple[bytes, bytes]]:
+    """Block INDEX's links: the text each covers, and its target."""
+
+    memory = reader.runtime.memory
+    text = reader.blocks()[index]["text"]
+    out = []
+    for j in range(reader.call("PD-LINKS", index)[0]):
+        start, end, a, u = reader.call("PD-LINK", index, j)
+        out.append((text[start:end], memory.read_bytes(a, u)))
+    return out
+
+
+def _anchor(reader: Reader, target: bytes) -> int:
+    """The part a link's target names within the document, or -1."""
+
+    assert target.startswith(b"#")
+    address = reader.bytes + FILE_BYTES - 4096       # past the file, in its buffer
+    reader.runtime.memory.write_bytes(address, target[1:])
+    value = reader.call("PD-ANCHOR", address, len(target) - 1)[0]
+    return value - (1 << 64) if value >= 1 << 63 else value
+
+
+def test_a_page_gives_its_links_over_the_text_they_cover(reader):
+    """A block's content has the links the layout placed over its text,
+    in the link's look: a link to the web with its address, one within the
+    file with "#" and its destination, which resolves to its page."""
+
+    from test_pdf_layout import linked_pdf
+    assert reader.open(linked_pdf()) == OK and reader.read(0) == OK
+    blocks = reader.blocks()
+    assert [b["kind"] for b in blocks] == [PAGE, PARAGRAPH, CODE, PARAGRAPH]
+    first = _links(reader, 1)
+    assert [text for text, _ in first] == [b"section on links", b"web site."]
+    assert first[1][1] == b"https://example.com/"
+    assert first[0][1].startswith(b"#") and _anchor(reader, first[0][1]) == 0
+    code = _links(reader, 2)
+    assert code[0][0] == b"section" and _anchor(reader, code[0][1]) == -1   # no such name
+    assert [(text, target) for text, target in _links(reader, 3)] == [
+        (b"goes over", b"https://example.org/"), (b"two lines", b"https://example.org/")]
+    text, meanings = blocks[1]["text"], blocks[1]["meanings"]
+    at = text.index(b"section on links")
+    assert set(meanings[at:at + 16]) == {LINK} and meanings[at - 1] != LINK
+    assert reader.close() == 0
+
+
+@pytest.mark.skipif(shutil.which("xelatex") is None, reason="xelatex is not installed")
+def test_hyperref_links_go_to_their_pages(reader, tmp_path):
+    """The contents, a reference and an address hyperref writes are links
+    whose targets name their pages, or the address."""
+
+    from test_pdf_navigate import HYPERREF
+    (tmp_path / "doc.tex").write_text(HYPERREF, encoding="utf-8")
+    for _ in range(2):
+        subprocess.run(["xelatex", "-interaction=batchmode", "doc.tex"], cwd=tmp_path,
+                       capture_output=True, check=True)
+    assert reader.open((tmp_path / "doc.pdf").read_bytes()) == OK and reader.read(0) == OK
+    blocks = reader.blocks()
+    found = {}
+    for index, block in enumerate(blocks):
+        for text, target in _links(reader, index):
+            found[text] = _anchor(reader, target) if target.startswith(b"#") else target
+    assert found[b"1 Introduction"] == 0 and found["2 Détails".encode()] == 1
+    assert found[b"3 End"] == 2 and found[b"2"] == 1
+    assert found[b"the paper"] == b"https://example.com/paper"
     assert reader.close() == 0

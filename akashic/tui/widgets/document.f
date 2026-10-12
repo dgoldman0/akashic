@@ -26,9 +26,10 @@
 \  text out.
 \
 \  The arrow keys, Page Up and Down, Home, End and the wheel scroll the
-\  view by rows.  A press on a link follows it: a link to one of the
-\  document's own headings (#name) scrolls there, and any other goes to
-\  the owner's follow word.  The view keeps each block's row count at its
+\  view by rows.  A press on a link follows it: a link within the
+\  document (#name) scrolls to one of its headings, or in a document in
+\  parts to the part its reader says the link names (DOC-ANCHOR-PART),
+\  read first if need be; any other goes to the owner's follow word.  The view keeps each block's row count at its
 \  width, so a scroll lays out only the blocks it passes, and each draw
 \  keeps the contents of the blocks it shows, giving back the others.
 \
@@ -928,11 +929,18 @@ VARIABLE _DVH-BLOCK
         DUP _DV-ROWS ROT + SWAP 1+
     REPEAT 2DROP ;
 
-\ Follow a link: to one of the document's headings, or to the owner.
+\ Follow a link: within the document, to the part its reader says a
+\ document in parts names, read if need be, or to one of its headings;
+\ else to the owner.
 : _DV-FOLLOW  ( target-a target-u -- )
     DUP 0= IF 2DROP EXIT THEN
     OVER C@ 35 = IF
-        1 /STRING _DV-DOC DOC-ANCHOR DUP 0< IF DROP EXIT THEN _DV-GO EXIT
+        1 /STRING
+        _DV-DOC DOC-PARTS IF
+            _DV-W @ >R _DV-DOC DOC-ANCHOR-PART R> _DV-W !
+            DUP 0< IF DROP EXIT THEN _DV-GO-PART EXIT
+        THEN
+        _DV-DOC DOC-ANCHOR DUP 0< IF DROP EXIT THEN _DV-GO EXIT
     THEN
     _DOCV-O-FOLLOW _DV@ ?DUP 0= IF 2DROP EXIT THEN _DV-OWNER ;
 

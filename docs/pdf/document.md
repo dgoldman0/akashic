@@ -10,8 +10,8 @@ REQUIRE pdf/document.f
 
 `PROVIDED akashic-pdf-document`. It depends on `pdf/filter.f`,
 `pdf/file.f`, `pdf/page.f`, `pdf/font.f`, `pdf/content.f`, `pdf/struct.f`,
-`pdf/layout.f`, `pdf/image.f`, `media/document.f`, `media/picture.f`,
-`text/text-style.f` and `utils/string.f`.
+`pdf/navigate.f`, `pdf/layout.f`, `pdf/image.f`, `media/document.f`,
+`media/picture.f`, `text/text-style.f` and `utils/string.f`.
 
 ## Public API
 
@@ -47,6 +47,30 @@ number and marker width the layout found.
 
 A figure has no caption. Its name is `picture` and its picture object's
 number, such as `picture 30`.
+
+## Links
+
+Reading a page reads its links too (`pdf/navigate.f`), and the layout
+places each over the text it covers. The page keeps the places and each
+link's target with its text, and its text takes the link's meaning
+(`TSTY-LINK`) there, so a view shows it as a link. A block's content gives
+its links (`DOC-CB-LINK`):
+
+- a link to the web has its address as its target, which a view gives to
+  its owner;
+- a link within the file has `#`, a byte for its destination's type (`0`
+  plus the `PDF-T-` type) and the destination's value as the file holds it.
+
+`DOC-ANCHOR-PART` (the reader's anchor word) resolves such a target only
+when it is followed: `PDF-DEST` finds the page object, and `PDF-PAGE-INDEX`
+its index, which is the part a view reads and shows from its top. A
+destination that names no page of the document resolves to none. A
+destination's place on its page is not used yet; the page shows from its
+top.
+
+On a page of a TeX document with seven links, reading them and placing
+them costs about 440,000 steps, most of it reading the links' annotations,
+over the 1.26 million laying the page out takes.
 
 ## Pictures
 

@@ -13,6 +13,10 @@ what the view does with them.  Every run checks a balanced stack.
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+
+import pytest
 
 import generate_markdown_reference as reference
 import qoi_codec
@@ -146,6 +150,7 @@ VARIABLE PG-D  VARIABLE PG-START  VARIABLE PG-GAP
 ' PG-CLOSE PG-READER RDR.CLOSE-XT !
 0 PG-READER RDR.PART-XT !
 0 PG-READER RDR.PICTURE-XT !
+0 PG-READER RDR.ANCHOR-XT !
 : DV-OPEN-WITH  ( a u reader -- )
     >R DV-SRC MEDSRC-MEMORY
     DV-SRC R> DV-MSRC DV-DOC DOC-OPEN ." OPEN=" . CR
@@ -191,6 +196,7 @@ VARIABLE PT-AT  VARIABLE PT-END  VARIABLE PT-N  VARIABLE PT-READS  VARIABLE PT-F
 ' PG-CLOSE PT-READER RDR.CLOSE-XT !
 ' PT-PART PT-READER RDR.PART-XT !
 0 PT-READER RDR.PICTURE-XT !
+0 PT-READER RDR.ANCHOR-XT !
 : DV-OPEN-PARTS  ( a u -- )  PT-READER DV-OPEN-WITH ;
 \ Draw, and serve the view until it needs nothing more.
 : DV-SETTLE  ( -- )
@@ -1340,3 +1346,41 @@ def test_a_pdf_figure_shows_the_picture_its_file_is_made_into() -> None:
     picture_top = 4          # the page's start, a blank row, a line, a blank row
     for (row, col), cell in alone.items():
         assert cells[(picture_top + row, col)] == cell, (row, col)
+
+
+@pytest.mark.skipif(shutil.which("xelatex") is None, reason="xelatex is not installed")
+def test_a_press_on_a_pdf_link_goes_to_its_page_or_the_owner(tmp_path) -> None:
+    """A press on a reference in a PDF reads the page it names, if need
+    be, and shows it from its top; a press on an address gives it to the
+    owner's follow word."""
+
+    filler = "\n\n".join(["This paragraph is here to fill the page with words, so that "
+                           "each page is longer than the view is high."] * 6)
+    tex = (r"\documentclass{article}\usepackage{hyperref}\begin{document}"
+           r"\section{Introduction}\label{sec:intro}"
+           r"See section~\ref{sec:details} and \href{https://example.com/paper}{the paper}."
+           "\n\n" + filler + r"\newpage\section{Details}\label{sec:details}" + filler
+           + r"\newpage\section{End}" + filler + r"\end{document}")
+    (tmp_path / "doc.tex").write_text(tex, encoding="utf-8")
+    for _ in range(2):
+        subprocess.run(["xelatex", "-interaction=batchmode", "doc.tex"], cwd=tmp_path,
+                       capture_output=True, check=True)
+    pdf = (tmp_path / "doc.pdf").read_bytes()
+    rows, cols = 24, 60
+    first = [_view(rows, cols), f"DV-FILE {len(pdf)} PDF-DOC-READER DV-OPEN-WITH",
+             "DV-SETTLE DV-CELLS", "DV-CLOSE"]
+    cells = _cells(_run(first, pdf, roots=("pdf/document.f",)))
+    texts = ["".join(chr(cells[(r, c)][0]) for c in range(cols)) for r in range(rows)]
+    row = next(r for r, text in enumerate(texts) if text.startswith("See section 2"))
+    reference = (row, texts[row].index("2"))
+    address = (row, texts[row].index("the paper"))
+    assert cells[reference][1] == cells[address][1] == 75      # the link's look
+    lines = [_view(rows, cols), f"DV-FILE {len(pdf)} PDF-DOC-READER DV-OPEN-WITH",
+             "DV-SETTLE", '." ~1" CR', f"KEY-MOUSE-LEFT {address[0]} {address[1]} DV-MOUSE",
+             '." ~2" CR', f"KEY-MOUSE-LEFT {reference[0]} {reference[1]} DV-MOUSE",
+             "DV-DRAW DV-AT", "DV-CLOSE"]
+    output = _run(lines, pdf, roots=("pdf/document.f",))
+    steps = output.split("~")
+    assert "FOLLOW=https://example.com/paper" in steps[1]
+    assert "FOLLOW=" not in steps[2] and re.search(r"AT=1 0 0 ", steps[2]), steps[2][-800:]
+    assert "HELD=0 " in output

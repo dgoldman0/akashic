@@ -57,13 +57,26 @@ CREATE LY-STRS PDF-STRUCT-SIZE 7 + ALLOT  : LY-STR  LY-STRS 7 + -8 AND ;
     LY-FILE LY-PAGE PDF-PAGE-OPEN ?DUP IF EXIT THEN
     LY-PAGE LY-SET LY-CONT PDF-CONTENT-READ ?DUP IF LY-PAGE PDF-PAGE-CLOSE EXIT THEN
     LY-PAGE LY-STR PDF-STRUCT-READ ?DUP IF LY-PAGE PDF-PAGE-CLOSE EXIT THEN
-    LY-PAGE LY-CONT LY-STR LY-OUT PDF-LAYOUT-READ  LY-PAGE PDF-PAGE-CLOSE ;
+    LY-PAGE LY-CONT LY-STR 0 LY-OUT PDF-LAYOUT-READ  LY-PAGE PDF-PAGE-CLOSE ;
 : LY-BLOCKS  ( -- n )  LY-OUT PDF-LAYOUT-BLOCKS ;
 : LY-BLOCK  ( i -- kind level item number width top a u m )
     LY-OUT PDF-LAYOUT-BLOCK >R
     R@ PDF-BLOCK-KIND  R@ PDF-BLOCK-ITEM  R@ PDF-BLOCK-TOP
     R@ LY-OUT PDF-BLOCK-TEXT  R> LY-OUT PDF-BLOCK-MEANINGS ;
 : LY-FIGURE  ( i -- num w h )  LY-OUT PDF-LAYOUT-BLOCK PDF-BLOCK-FIGURE ;
+CREATE LY-LNKS PDF-LINKS-SIZE 7 + ALLOT  : LY-LNK  LY-LNKS 7 + -8 AND ;
+LY-LNK PDF-LINKS-SIZE 0 FILL
+\\ Lay page I out with its links.
+: LY-READ-LINKED  ( i -- status )
+    LY-OUT PDF-LAYOUT-FREE  LY-CONT PDF-CONTENT-FREE  LY-STR PDF-STRUCT-FREE  LY-LNK PDF-LINKS-FREE
+    LY-FILE LY-PAGE PDF-PAGE-OPEN ?DUP IF EXIT THEN
+    LY-PAGE LY-SET LY-CONT PDF-CONTENT-READ ?DUP IF LY-PAGE PDF-PAGE-CLOSE EXIT THEN
+    LY-PAGE LY-STR PDF-STRUCT-READ ?DUP IF LY-PAGE PDF-PAGE-CLOSE EXIT THEN
+    LY-PAGE LY-LNK PDF-LINKS-READ ?DUP IF LY-PAGE PDF-PAGE-CLOSE EXIT THEN
+    LY-PAGE LY-CONT LY-STR LY-LNK LY-OUT PDF-LAYOUT-READ  LY-PAGE PDF-PAGE-CLOSE ;
+: LY-LINKS  ( -- n )  LY-OUT PDF-LAYOUT-LINKS ;
+: LY-LINK  ( i -- block offset length link )  LY-OUT PDF-LAYOUT-LINK ;
+: LY-UNLINK  ( -- )  LY-LNK PDF-LINKS-FREE ;
 """
 
 
@@ -444,3 +457,83 @@ def test_a_picture_libreoffice_places(layout, tmp_path):
         (PARAGRAPH, "A paragraph before the picture."), (FIGURE, ""),
         (PARAGRAPH, "A paragraph after the picture.")]
     layout.close()
+
+
+# --------------------------------------------------------------------------
+# Links
+# --------------------------------------------------------------------------
+
+def link(rect: tuple[float, float, float, float], target: bytes) -> bytes:
+    return (b"<< /Type /Annot /Subtype /Link /Rect [%g %g %g %g] " % rect) + target + b" >>"
+
+
+def words(font: str, size: float, x: float, y: float, step: float, *parts: str) -> bytes:
+    """Each word a run of its own, STEP apart, as TeX sets them."""
+    return b"".join(line(font, size, x + i * step, y, part) for i, part in enumerate(parts))
+
+
+LINKED = b"".join([
+    words("F1", 8, 72, 700, 40, "See", "the", "section", "on", "links", "and", "the", "web", "site."),
+    line("F4", 10, 72, 660, "See the section on links."),
+    words("F1", 8, 72, 620, 40, "This", "sentence", "has", "a", "link", "that", "goes", "over",
+          "all"),
+    words("F1", 8, 72, 610, 40, "two", "lines", "here,", "and", "then", "stops", "on", "a", "short"),
+    words("F1", 8, 72, 600, 40, "line."),
+])
+
+
+def linked_pdf() -> bytes:
+    resources = b"<< /Font << /F1 10 0 R /F4 13 0 R >> >>"
+    return page_pdf(LINKED, resources=resources, extra={
+        13: COURIER,
+        3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources " + resources
+           + b" /Contents 4 0 R /Annots [20 0 R 21 0 R 22 0 R 23 0 R 24 0 R] >>",
+        20: link((150, 696, 270, 708), b"/Dest [3 0 R /XYZ 0 792 0]"),
+        21: link((350, 696, 420, 708), b"/A << /S /URI /URI (https://example.com/) >>"),
+        # Inside "section" of the Courier line, short of its ends.
+        22: link((122, 657, 157, 668), b"/Dest (named)"),
+        23: link((310, 616, 388, 628), b"/A << /S /URI /URI (https://example.org/) >>"),
+        24: link((70, 606, 150, 618), b"/A << /S /URI /URI (https://example.org/) >>"),
+    })
+
+
+def test_links_cover_the_text_their_rectangles_meet(layout):
+    """A link covers the words whose runs its rectangle meets, across the
+    spaces between them, or the words its share of a run's span takes in
+    proportion; each block's text says where, in the block's own bytes."""
+
+    layout.open(linked_pdf())
+    assert layout.call("LY-READ-LINKED", 0) == (OK,)
+    blocks = layout.blocks()
+    places = [layout.call("LY-LINK", i) for i in range(layout.call("LY-LINKS")[0])]
+    layout.call("LY-UNLINK")
+    layout.close()
+    covered = [(block, blocks[block]["raw"][offset:offset + length], link)
+               for block, offset, length, link in places]
+    assert covered == [
+        (0, b"section on links", 0), (0, b"web site.", 1),
+        (1, b"section", 2),
+        (2, b"goes over", 3), (2, b"two lines", 4),
+    ], (covered, [b["text"] for b in blocks])
+    assert [b["kind"] for b in blocks] == [PARAGRAPH, CODE, PARAGRAPH]
+
+
+@pytest.mark.skipif(shutil.which("xelatex") is None, reason="xelatex is not installed")
+def test_links_hyperref_writes_cover_their_words(layout, tmp_path):
+    """The references, citations and addresses hyperref links cover the
+    words a reader sees as links."""
+
+    from test_pdf_navigate import HYPERREF
+    (tmp_path / "doc.tex").write_text(HYPERREF, encoding="utf-8")
+    for _ in range(2):
+        subprocess.run(["xelatex", "-interaction=batchmode", "doc.tex"], cwd=tmp_path,
+                       capture_output=True, check=True)
+    layout.open((tmp_path / "doc.pdf").read_bytes())
+    assert layout.call("LY-READ-LINKED", 0) == (OK,)
+    blocks = layout.blocks()
+    places = [layout.call("LY-LINK", i) for i in range(layout.call("LY-LINKS")[0])]
+    layout.call("LY-UNLINK")
+    layout.close()
+    covered = [blocks[block]["raw"][offset:offset + length] for block, offset, length, _ in places]
+    assert b"the paper" in covered and b"2" in covered, covered
+    assert any(text.startswith(b"1") and b"Introduction" in text for text in covered), covered

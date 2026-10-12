@@ -100,7 +100,10 @@ count again and forget its figure records.
 ### Links
 
 A press on a link follows it. A link to one of the document's own headings,
-`#name`, scrolls the view to that heading (`DOC-ANCHOR`). Any other target
+`#name`, scrolls the view to that heading (`DOC-ANCHOR`). In a document in
+parts, the document's reader says which part such a link names
+(`DOC-ANCHOR-PART`), and the view reads it if need be and shows it from its
+top, as `DOCV-GO-PART` does. Any other target
 goes to the owner's follow word. A rich renderer that lays the text out
 itself names a link with `KEY-MOUSE-TEXT-FOLLOW`: the block's key and the
 scalar offset in its text. A key the document does not hold, or a position

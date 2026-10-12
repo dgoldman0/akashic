@@ -53,6 +53,7 @@
 \    DOC-GAP         ( index last? doc -- part | -1 )
 \    DOC-PICTURES?   ( doc -- flag )
 \    DOC-PICTURE     ( name-a name-u maker doc -- ok? )
+\    DOC-ANCHOR-PART ( name-a name-u doc -- part | -1 )
 \  A reader adds with DOC-ADD-BLOCK DOC-ADD-CONTAINER DOC-ADD-PART and
 \  fills a block's content with DOC-CB-TEXT DOC-CB-LINK DOC-CB-KIND
 \  DOC-CB-FIGURE; it finds a part with DOC-PART-LOC@.
@@ -226,15 +227,18 @@ VARIABLE _DLA-OFF
 \ builder with DOC-CB-TEXT, DOC-CB-LINK, DOC-CB-KIND and DOC-CB-FIGURE;
 \ what it gives back ( doc -- ); its part pass ( part doc -- status ),
 \ which adds a part's blocks as the structure pass adds blocks, or 0 for a
-\ reader that adds no parts; and its pictures ( name-a name-u maker doc --
+\ reader that adds no parts; its pictures ( name-a name-u maker doc --
 \ ok? ), which fills a maker (media/picture.f) for a figure's picture the
-\ document holds itself, or 0 for a reader whose figures name files.
+\ document holds itself, or 0 for a reader whose figures name files; and
+\ its anchors ( name-a name-u doc -- part | -1 ), the part a link within a
+\ document in parts names, or 0.
 : RDR.STRUCTURE-XT ( r -- a )        ;
 : RDR.CONTENT-XT   ( r -- a )    8 + ;
 : RDR.CLOSE-XT     ( r -- a )   16 + ;
 : RDR.PART-XT      ( r -- a )   24 + ;
 : RDR.PICTURE-XT   ( r -- a )   32 + ;
-40 CONSTANT RDR-SIZE
+: RDR.ANCHOR-XT    ( r -- a )   40 + ;
+48 CONSTANT RDR-SIZE
 
 \ A part: two cells the reader keeps to find it, where its blocks lie
 \ (or will, when it is read), how many there are, and whether it is read.
@@ -653,6 +657,15 @@ VARIABLE _DRP-TMP
 \   the document is closed.
 : DOC-PICTURE  ( name-a name-u maker doc -- ok? )
     DUP _DOC.READER @ RDR.PICTURE-XT @ ?DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    EXECUTE ;
+
+\ DOC-ANCHOR-PART ( name-a name-u doc -- part | -1 )
+\   The part a link within a document in parts names after its "#", as
+\   its reader resolves it, perhaps a part not read yet; -1 for none.
+\   Its reader may read the source to find it.
+: DOC-ANCHOR-PART  ( name-a name-u doc -- part | -1 )
+    DUP _DOC.MAGIC @ _DOC-MAGIC <> IF DROP 2DROP -1 EXIT THEN
+    DUP _DOC.READER @ RDR.ANCHOR-XT @ ?DUP 0= IF DROP 2DROP -1 EXIT THEN
     EXECUTE ;
 
 \ DOC-KEY>INDEX ( key doc -- index | -1 )   The block with KEY, if read.

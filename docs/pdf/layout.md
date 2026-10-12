@@ -9,15 +9,16 @@ REQUIRE pdf/layout.f
 ```
 
 `PROVIDED akashic-pdf-layout`. It depends on `pdf/filter.f`, `pdf/page.f`,
-`pdf/content.f`, `pdf/font.f`, `pdf/struct.f`, `text/text-style.f` and
-`media/document.f`, whose block and container kinds it gives.
+`pdf/content.f`, `pdf/font.f`, `pdf/struct.f`, `pdf/navigate.f`,
+`text/text-style.f` and `media/document.f`, whose block and container kinds
+it gives.
 
 ## Public API
 
 | Word | Stack | Purpose |
 |---|---|---|
 | `PDF-LAYOUT-SIZE` | `( -- 80 )` | A layout's record, zeroed before first use. |
-| `PDF-LAYOUT-READ` | `( page content struct layout -- status )` | Lay out the runs `content` read from `page`, which may be closed, by the page's structure `struct` (`pdf/struct.f`), or 0. |
+| `PDF-LAYOUT-READ` | `( page content struct links layout -- status )` | Lay out the runs `content` read from `page`, which may be closed, by the page's structure `struct` (`pdf/struct.f`), or 0, placing the page's `links` (`pdf/navigate.f`), or 0, over their text. |
 | `PDF-LAYOUT-FREE` | `( layout -- )` | Give back its blocks and their text. |
 | `PDF-LAYOUT-BLOCKS` | `( layout -- n )` | How many blocks the page has. |
 | `PDF-LAYOUT-BLOCK` | `( i layout -- block )` | Block `i`, in reading order. |
@@ -27,6 +28,8 @@ REQUIRE pdf/layout.f
 | `PDF-BLOCK-TEXT` | `( block layout -- a u )` | Its text, UTF-8. |
 | `PDF-BLOCK-MEANINGS` | `( block layout -- a )` | A meaning (`TSTY-*`) for each byte of its text. |
 | `PDF-BLOCK-FIGURE` | `( block -- num w h )` | A figure's picture object (`pdf/image.f`) and the width and height it is drawn at, 16.16. |
+| `PDF-LAYOUT-LINKS` | `( layout -- n )` | How many places the links have in the blocks' text. |
+| `PDF-LAYOUT-LINK` | `( i layout -- block offset length link )` | Place `i`: the block, where in its text and how many bytes, and the link's index in the links given. |
 
 `PDF-LAYOUT-READ` gives `PDF-S-OK` or `PDF-S-MEMORY`.
 
@@ -102,6 +105,26 @@ after it, any block being built ending there. Its top is the top of the box
 it is drawn in, and its text is empty. Pictures drawn as artifacts, such
 as a page's background, and pictures smaller than the body text's size
 either way, such as bullets and rules drawn as pictures, are left out.
+
+## Links
+
+A link's rectangle (`pdf/navigate.f`) covers the text of the runs it meets:
+a run whose height a third of its size above its baseline lies in the
+rectangle, and whose span across meets it. The run's bytes the rectangle's
+part of its span takes are found in proportion, then moved to the nearest
+places where a word starts and ends: at a space, at either end of the run,
+or inside punctuation that opens or closes a word, so a link's ends land
+on whole words without a full stop after them. A link whose words are runs
+of their own, as TeX sets them, covers the spaces between its words too.
+
+The places keep their link through the lines and blocks the text goes
+into: past a list item's marker, across a line end, and over a word joined
+back from a hyphen. A link that goes on to the next line is placed in each
+line it covers. `PDF-LAYOUT-LINK` gives each place's block and where in the
+block's own text it lies. The lines' links are matched once the lines are
+made: for each line, the links whose rectangles meet its height, then for
+each of its runs, those links, so a page costs its lines times its links
+and the runs that meet one.
 
 ## Meanings
 

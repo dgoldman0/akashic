@@ -1443,8 +1443,16 @@ them, a link to a far page reading that page alone.
 **Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, the
 file's side of steps 6 and 7 (pictures as files, links and the outline),
 and the first parts of step 9: File Explorer previews a PDF as a
-document, read a page at a time, with its pictures. Its links and its
-contents come next, then AES once MegaPad's engine has CBC.
+document, read a page at a time, with its pictures and links. Its contents
+come next, then AES once MegaPad's engine has CBC.
+
+- A PDF's links are followed. The layout places each link of a page over
+  the words its rectangle covers, in proportion within a run and snapped to
+  whole words, and keeps the places through lines and blocks. A link to the
+  web goes to the view's owner, which File Explorer refuses with a message;
+  a link within the file keeps its destination, and following it reads the
+  page it names, alone if need be, and shows it from its top. The place on
+  the page a destination names is not used yet.
 
 - A PDF's figures show their pictures. A document that holds its pictures
   gives each figure a maker (`media/picture.f`), which makes the picture's
