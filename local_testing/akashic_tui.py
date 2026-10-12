@@ -14261,13 +14261,15 @@ PROFILES["desktop-daybook-reminders"] = replace(
 
 
 # Desk with Daybook and the Agent, whose device-flow fixture gives the
-# scripted provider a ready catalog of two models.  Daybook's pages make an
-# Agent run from it, and Desk's approval screen allows it.
+# scripted provider a signed-in account and a ready catalog of two models.
+# Daybook's pages make Agent runs from it, and Desk's approval screen
+# allows them.
 _DAYBOOK_AGENT_DEVFLOW = "tui/applets/agent/providers/devtools/device-flow.f"
 _DAYBOOK_AGENT_SOURCE_BOOT = (
     f"REQUIRE {_DAYBOOK_AGENT_DEVFLOW}\n"
     ": _boot-agent-source  ( -- )\n"
     '    DEVFLOW-SOURCE-NEW 0<> ABORT" device-flow source allocation failed"\n'
+    "    DUP _DFA-METADATA DROP AAUTH-STATE-READY OVER DFSRC.AUTH AAUTH.STATE !\n"
     "    ARSET-STATE-READY OVER DFSRC.SETTINGS ARSET.STATE !\n"
     "    0 OVER _DFS-MODEL-SELECT DROP\n"
     "    DESK-AGENT-SOURCE! ;"
@@ -30192,6 +30194,136 @@ def smoke(
                 "Esc did not close the run permissions",
             )
 
+        def begin_daybook_agent_run(
+            title: str,
+            due_s: int,
+            repeat: str,
+            choices: tuple[tuple[str, str, int, str], ...],
+            minutes: str,
+            reply: str,
+        ) -> bool:
+            """Starts an Agent run in Daybook through ordinary keys, up to
+            its prompt page: its time and title, how it repeats, the
+            default zone, each model choice (the page's heading, the label
+            it must offer, how many rows down it is, and the failure when
+            it does not), and its limits."""
+
+            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
+            session.send_key("alt+1")
+            if not wait_screen("[1:Daybook*]", "Desk did not focus Daybook"):
+                return False
+            session.send_key("ctrl+g")
+            if not wait_screen(
+                "Agent run (HH:MM", "Ctrl+G did not ask for a new Agent run"
+            ):
+                return False
+            session.send_text(f"{hhmm} {title}")
+            session.send_key("enter")
+            if not wait_screen(
+                "Repeat (once", "Daybook did not ask how the Agent run repeats"
+            ):
+                return False
+            session.send_text(repeat)
+            session.send_key("enter")
+            if not wait_screen(
+                "Zone (Enter for UTC0)", "Daybook did not ask for the zone"
+            ):
+                return False
+            session.send_key("enter")
+            for heading, choice, moves, failure in choices:
+                if not wait_screen(heading, failure) or not wait_screen(
+                    choice, f"{failure}: no {choice}"
+                ):
+                    return False
+                for _ in range(moves):
+                    session.send_key("down")
+                session.send_key("enter")
+            if not wait_screen(
+                "Minutes it may run:", "Daybook did not ask for the time limit"
+            ):
+                return False
+            session.send_text(minutes)
+            session.send_key("enter")
+            if not wait_screen(
+                "Bytes of its reply it keeps:",
+                "Daybook did not ask how much of the reply to keep",
+            ):
+                return False
+            session.send_text(reply)
+            session.send_key("enter")
+            return wait_screen(
+                "New Agent run: its prompt", "Daybook did not open the prompt"
+            )
+
+        def approve_daybook_agent_run(shown: tuple[tuple[str, str], ...]) -> bool:
+            """Desk asks to approve an Agent run Daybook made.  The approval
+            shows each text SHOWN lists, unlocks Allow only once read to the
+            end, and A allows the run, which Daybook then says."""
+
+            if not wait_screen(
+                "Approve a scheduled Agent run",
+                "Desk did not ask to approve the new Agent run",
+                step_budget=500_000_000,
+                wall_timeout=15.0,
+            ):
+                return False
+            for text, failure in (
+                *shown, ("Read it to the end", "Allow was not locked before reading")
+            ):
+                if not wait_screen(text, failure):
+                    return False
+            session.send_key("end")
+            if not wait_screen(
+                "A allows it to run", "reading to the end did not unlock Allow"
+            ):
+                return False
+            session.send_text("a")
+            if not wait_screen_gone(
+                "Approve a scheduled Agent run",
+                "A did not allow the new Agent run",
+            ):
+                return False
+            # Daybook's service polls for the answer once a second, and both
+            # the permission and the approval are written to disk first.
+            return wait_screen(
+                "Approved", "Daybook did not say it was approved",
+                step_budget=1_500_000_000,
+                wall_timeout=45.0,
+            )
+
+        def show_daybook_calendar() -> bool:
+            """Daybook's calendar, leaving its automations if they show."""
+
+            if " entries  |  " not in session.snapshot().text():
+                session.send_key("escape")
+            return wait_screen(
+                " entries  |  ", "Escape did not return to Daybook's calendar"
+            )
+
+        def show_daybook_automations() -> bool:
+            """Daybook's automations, opening them if the calendar shows."""
+
+            if " entries  |  " in session.snapshot().text():
+                session.send_key("f4")
+            return wait_screen_gone(
+                " entries  |  ", "F4 did not show Daybook's automations"
+            )
+
+        # Swift, the catalog's first model, at its default effort and
+        # verbosity: Enter on each page.  It offers no tier.
+        SWIFT_CHOICES = (
+            ("the model it uses", "Swift", 0,
+             "Daybook did not offer the Agent's models"),
+            ("the model's effort", "Low", 0,
+             "Daybook did not offer the model's efforts"),
+            ("how much the model says", "Default", 0,
+             "Daybook did not offer the model's verbosities"),
+        )
+
+        def newest_item(title: str) -> dict[str, object] | None:
+            items = items_for(title)
+            return max(items, key=lambda item: item["id"]) if items else None
+
         def run_daybook_agent_create_journey() -> None:
             """Daybook's pages make an Agent run through ordinary keys: its
             time and title, how it repeats, its zone, the model and each
@@ -30205,63 +30337,22 @@ def smoke(
             rtc = session.system.rtc
             title = "Morning brief"
             due_s = (rtc.epoch_ms // 60_000 + 3) * 60
-            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
             first = "Summarize what changed in the project overnight,"
             second = "then list the three most urgent follow-ups, briefly."
             prompt = f"{first}\n{second}"
-            session.send_key("alt+1")
-            if not wait_screen("[1:Daybook*]", "Desk did not focus Daybook"):
-                return
-            session.send_key("ctrl+g")
-            if not wait_screen(
-                "Agent run (HH:MM", "Ctrl+G did not ask for a new Agent run"
-            ):
-                return
-            session.send_text(f"{hhmm} {title}")
-            session.send_key("enter")
-            if not wait_screen(
-                "Repeat (once", "Daybook did not ask how the Agent run repeats"
-            ):
-                return
-            session.send_text("daily")
-            session.send_key("enter")
-            if not wait_screen(
-                "Zone (Enter for UTC0)", "Daybook did not ask for the zone"
-            ):
-                return
-            session.send_key("enter")
-            for heading, choice, moves, failure in (
-                ("the model it uses", "Deliberate", 1,
-                 "Daybook did not offer the Agent's models"),
-                ("the model's effort", "High", 1,
-                 "Daybook did not offer the model's efforts"),
-                ("the model's tier", "Fast", 1,
-                 "Daybook did not offer the model's tier and its default"),
-                ("how much the model says", "Medium", 2,
-                 "Daybook did not offer the model's verbosities"),
-            ):
-                if not wait_screen(heading, failure) or not wait_screen(
-                    choice, f"{failure}: no {choice}"
-                ):
-                    return
-                for _ in range(moves):
-                    session.send_key("down")
-                session.send_key("enter")
-            if not wait_screen(
-                "Minutes it may run:", "Daybook did not ask for the time limit"
-            ):
-                return
-            session.send_text("10")
-            session.send_key("enter")
-            if not wait_screen(
-                "Bytes of its reply it keeps:",
-                "Daybook did not ask how much of the reply to keep",
-            ):
-                return
-            session.send_text("16384")
-            session.send_key("enter")
-            if not wait_screen(
-                "New Agent run: its prompt", "Daybook did not open the prompt"
+            if not begin_daybook_agent_run(
+                title, due_s, "daily",
+                (
+                    ("the model it uses", "Deliberate", 1,
+                     "Daybook did not offer the Agent's models"),
+                    ("the model's effort", "High", 1,
+                     "Daybook did not offer the model's efforts"),
+                    ("the model's tier", "Fast", 1,
+                     "Daybook did not offer the model's tier and its default"),
+                    ("how much the model says", "Medium", 2,
+                     "Daybook did not offer the model's verbosities"),
+                ),
+                "10", "16384",
             ):
                 return
             # Each key redraws the page, so a typed line takes a while.
@@ -30289,14 +30380,7 @@ def smoke(
             ):
                 return
             session.send_key("ctrl+s")
-            if not wait_screen(
-                "Approve a scheduled Agent run",
-                "Desk did not ask to approve the new Agent run",
-                step_budget=500_000_000,
-                wall_timeout=15.0,
-            ):
-                return
-            for shown, failure in (
+            if not approve_daybook_agent_run((
                 (title, "the approval did not name the schedule"),
                 ("gpt-slow", "the approval did not name the model"),
                 ("high effort", "the approval did not name the effort"),
@@ -30306,28 +30390,7 @@ def smoke(
                 (f"{len(prompt.encode())} bytes to disclose",
                  "the approval did not disclose exactly the prompt"),
                 ("16384 bytes of reply", "the approval did not show the reply"),
-                ("Read it to the end", "Allow was not locked before reading"),
-            ):
-                if not wait_screen(shown, failure):
-                    return
-            session.send_key("end")
-            if not wait_screen(
-                "A allows it to run", "reading to the end did not unlock Allow"
-            ):
-                return
-            session.send_text("a")
-            if not wait_screen_gone(
-                "Approve a scheduled Agent run",
-                "A did not allow the new Agent run",
-            ):
-                return
-            # Daybook's service polls for the answer once a second, and both
-            # the permission and the approval are written to disk first.
-            if not wait_screen(
-                "Approved", "Daybook did not say it was approved",
-                step_budget=1_500_000_000,
-                wall_timeout=45.0,
-            ):
+            )):
                 return
             session.send_key("alt+p")
             if not wait_screen(
@@ -30363,7 +30426,7 @@ def smoke(
             session.send_key("escape")
             if not wait_screen_gone(
                 "Automation details", "Escape did not leave the details"
-            ):
+            ) or not show_daybook_calendar():
                 return
             session.send_key("alt+f")
             if not wait_screen(
@@ -30457,8 +30520,276 @@ def smoke(
             ):
                 return
             host_notes.append(f"agent run: completed at generation {done['generation']}")
-            # Desk then sleeps with the Agent run scheduled: its broker, the
-            # Agent's dispatcher and Daybook's service add nothing while idle.
+            run_daybook_agent_wait_journey(title, item["run"])
+
+        def run_daybook_agent_wait_journey(title: str, first_run: str) -> None:
+            """A chat run holds the schedule's next run: due on time, it is
+            handed over and waits, chat cannot send ahead of it, and once
+            the chat run is cancelled it runs next and completes as a run
+            of its own."""
+
+            rtc = session.system.rtc
+            schedule = reminder_state(title)
+            if not schedule or not wait_screen_gone(
+                f"Agent run done: {title}", "the run's notice never cleared",
+                step_budget=1_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("ctrl+l")
+            if not wait_screen("Ask:", "Ctrl+L did not open the Agent's composer"):
+                return
+            # The scripted provider keeps a "linger" run open until cancelled.
+            session.send_text("linger awhile")
+            session.send_key("enter")
+            if not wait_screen(
+                "[Agent: working]", "the chat run did not start",
+                step_budget=500_000_000,
+                wall_timeout=15.0,
+            ):
+                return
+            # Fifteen seconds before the next run: the jump makes nothing
+            # due, and the run then comes due on time.
+            rtc.seed_epoch_ms(schedule["next_utc"] * 1000 - 15_000)
+            if not wait_screen(
+                f"Agent run: {title}",
+                "the next run did not come due while the chat ran",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            waiting = newest_item(title)
+            if not waiting or (
+                waiting["kind"], waiting["phase"], waiting["state"]
+            ) != (1, 1, 0):
+                journey_errors.append(
+                    f"the run due while the chat ran did not wait: {waiting}"
+                )
+                return
+            session.send_key("ctrl+l")
+            if not wait_screen(
+                "Ask:", "Ctrl+L did not open the Agent's composer again"
+            ):
+                return
+            session.send_text("hello")
+            session.send_key("enter")
+            if not wait_screen(
+                "A scheduled run goes first",
+                "chat did not refuse to send ahead of the waiting run",
+            ):
+                return
+            # Escape cancels the chat run, and the waiting run goes next.
+            session.send_key("escape")
+            if not wait_screen(
+                f"Agent run done: {title}",
+                "the waiting run did not run once the chat was cancelled",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            ran = next(
+                (item for item in items_for(title) if item["id"] == waiting["id"]),
+                None,
+            )
+            if not ran or (
+                ran["kind"], ran["phase"], ran["state"], ran["outcome"],
+                ran["reason"],
+            ) != (1, 3, 3, 1, 0) or ran["run"] == first_run or not int(ran["run"], 16):
+                journey_errors.append(
+                    f"the waiting run did not complete as a run of its own: {ran}"
+                )
+                return
+            host_notes.append("agent run: waited behind the chat, then completed")
+            run_daybook_agent_clock_journey(title)
+
+        def run_daybook_agent_clock_journey(title: str) -> None:
+            """Setting the clock back over a run starts nothing again.  A
+            paused run starts nothing when its time passes, and resuming it
+            skips what fell in between.  A jump ahead over two runs starts
+            neither and leaves one missed item for review."""
+
+            rtc = session.system.rtc
+            before = read_daybook_reminders()
+            rtc.seed_epoch_ms(rtc.epoch_ms - 2 * 60_000)
+            if not advance_virtual(
+                150_000, "the guest did not run on after the clock went back"
+            ):
+                return
+            after = read_daybook_reminders()
+            if (
+                before is None or after is None
+                or after["generation"] != before["generation"]
+            ):
+                journey_errors.append(
+                    "setting the clock back over a run started it again"
+                )
+                return
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook"
+            ) or not show_daybook_automations() or not wait_screen(
+                "ACTIVE", "Daybook's automations did not list the Agent run"
+            ):
+                return
+            session.send_key("home")
+            session.send_text("p")
+            if not wait_screen("PAUSED", "P did not pause the Agent run"):
+                return
+            paused = read_daybook_reminders()
+            schedule = reminder_state(title)
+            if paused is None or not schedule or schedule["state"] != 2:
+                journey_errors.append(
+                    f"the Agent run was not saved as paused: {schedule}"
+                )
+                return
+            rtc.seed_epoch_ms(rtc.epoch_ms + 2 * 86_400_000)
+            if not advance_virtual(
+                5_000, "the guest did not run on after the clock jumped"
+            ):
+                return
+            later = read_daybook_reminders()
+            if later is None or later["generation"] != paused["generation"]:
+                journey_errors.append("a paused Agent run fired when its time passed")
+                return
+            session.send_key("home")
+            session.send_text("p")
+            if not wait_screen_gone("PAUSED", "P did not resume the Agent run"):
+                return
+            resumed = reminder_state(title)
+            now_s = rtc.epoch_ms // 1000
+            if (
+                not resumed or resumed["state"] != 1
+                or not now_s < resumed["next_utc"] <= now_s + 86_400
+                or len(items_for(title)) != 2
+            ):
+                journey_errors.append(
+                    "resuming did not skip to the next run: "
+                    f"{resumed} {items_for(title)}"
+                )
+                return
+            rtc.seed_epoch_ms(rtc.epoch_ms + 2 * 86_400_000)
+            if not wait_screen(
+                f"Needs review: {title}",
+                "the jump ahead did not leave the runs it passed for review",
+                step_budget=1_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            missed = newest_item(title)
+            if len(items_for(title)) != 3 or not missed or (
+                missed["kind"], missed["count"], missed["basis"], missed["phase"],
+                missed["state"], missed["outcome"], missed["reason"],
+            ) != (2, 2, 3, 3, 1, 8, 12) or int(missed["run"], 16):
+                journey_errors.append(
+                    "the jump ahead did not leave one missed item that never "
+                    f"started: {items_for(title)}"
+                )
+                return
+            if not show_daybook_calendar():
+                return
+            host_notes.append(
+                "agent run: nothing started on the clock set back, while "
+                "paused, or across a jump, which left one missed item"
+            )
+            run_daybook_agent_review_journey()
+
+        def run_daybook_agent_review_journey() -> None:
+            """An Agent run whose model asks to use a tool stops for review.
+            Daybook keeps it for review, with why, beside the missed runs,
+            and the Agent's scheduled runs say why it stopped."""
+
+            rtc = session.system.rtc
+            title = "Task sweep"
+            prompt = "Capture a task."
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
+            if not begin_daybook_agent_run(
+                title, due_s, "once", SWIFT_CHOICES, "5", "4096"
+            ):
+                return
+            session.send_text(prompt)
+            if not wait_screen(
+                prompt, "the prompt did not show what was typed",
+                step_budget=1_000_000_000,
+                wall_timeout=30.0,
+            ):
+                return
+            session.send_key("ctrl+s")
+            if not approve_daybook_agent_run((
+                (title, "the approval did not name the task run"),
+                ("gpt-fast, low effort", "the approval did not name its model"),
+            )):
+                return
+            rtc.seed_epoch_ms(due_s * 1000 - 15_000)
+            if not wait_screen(
+                f"Needs review: {title}",
+                "the task run did not stop for review",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            items = items_for(title)
+            if len(items) != 1 or (
+                items[0]["kind"], items[0]["phase"], items[0]["state"],
+                items[0]["outcome"], items[0]["reason"],
+            ) != (1, 3, 1, 5, 16) or not int(items[0]["run"], 16):
+                journey_errors.append(
+                    f"the task run did not stop for review on a tool: {items}"
+                )
+                return
+            # Full frame, Daybook's automations hold both for review, and
+            # the task run's details and the Agent's scheduled runs say why
+            # it stopped.
+            session.send_key("alt+f")
+            if not show_daybook_automations():
+                return
+            for shown, failure in (
+                ("NEEDS REVIEW", "Daybook's automations did not hold runs for review"),
+                ("stopped for review",
+                 "Daybook's automations did not show the task run stopped"),
+                ("missed 2, last", "Daybook's automations did not show the missed runs"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            # Its schedule, done, is the last row.
+            session.send_key("end")
+            session.send_key("enter")
+            if not wait_screen(
+                "Automation details", "Enter did not open the task run's details"
+            ) or not wait_screen(
+                "stopped for review: asked to use a tool",
+                "the task run's details did not say why it stopped",
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Automation details", "Escape did not leave the details"
+            ) or not show_daybook_calendar():
+                return
+            session.send_key("alt+f")
+            session.send_key("alt+2")
+            session.send_key("alt+f")
+            session.send_key("f5")
+            for shown, failure in (
+                (title, "the Agent's scheduled runs did not list the task run"),
+                ("stopped for review: asked to use a tool  gpt-fast",
+                 "the Agent's scheduled runs did not say why the task run stopped"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            session.send_key("f5")
+            session.send_key("alt+f")
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook again"
+            ):
+                return
+            host_notes.append("agent run: a tool request stopped the task run for review")
+            # Desk then sleeps with the Agent runs scheduled and held for
+            # review: its broker, the Agent's dispatcher and Daybook's
+            # service add nothing while idle.
             measure_idle_load(2000, ceiling=0.10)
 
         def run_daybook_reminders_journey() -> None:

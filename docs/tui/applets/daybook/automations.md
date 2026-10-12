@@ -326,8 +326,8 @@ run's standing, resetting what a look counts, and each kind of notice.
 
 The `desktop-daybook-agent` smoke profile runs Desk with Daybook and the
 Agent, whose development device-flow source gives the scripted provider a
-ready catalog of two models, and makes an Agent run through Daybook's
-ordinary keys:
+signed-in account and a ready catalog of two models, and makes an Agent
+run through Daybook's ordinary keys:
 - Ctrl+G, then the time and title, a daily repeat and the default zone;
 - the second model, its second effort, its tier and the third verbosity,
   each page listing the catalog's choices;
@@ -338,7 +338,7 @@ ordinary keys:
   model, effort, tier, verbosity and limits, and discloses exactly the
   prompt's bytes, and allows it only once read to the end;
 - A, after which Daybook says it is approved, Daybook's file holds the run
-  approved with exactly those operands, and Desk's run permissions name it.
+  approved with exactly those operands, and Desk's run permissions name it;
 - its details, full frame, naming the model and limits in the words Desk's
   approval used, and showing the prompt;
 - three minutes later, with Daybook and the Agent idle, the run firing on
@@ -346,7 +346,22 @@ ordinary keys:
   Daybook's file with the run's identity and summary, and the run in the
   Agent's scheduled runs (F5) on gpt-slow.
 
-Desk then sleeps under 10% of the clock with the run scheduled.
+It then holds the run to its rules:
+- a chat run that lingers holds the run's next occurrence, due on time:
+  Daybook hands it over and it waits, chat refuses to send ahead of it,
+  and once Escape cancels the chat it runs next and completes as a run of
+  its own;
+- setting the clock back over that run starts nothing again;
+- paused, the run starts nothing when its time passes, and resuming it
+  skips what fell in between;
+- a jump two days ahead starts neither run it passes and leaves one missed
+  item, covering both, for review;
+- a second run, made on the first model with a prompt that asks for a
+  task, fires on time and stops for review because its model asked to use
+  a tool, as Daybook's automations, its details and the Agent's scheduled
+  runs say.
+
+Desk then sleeps under 10% of the clock.
 
 The `desktop-daybook-reminders` smoke profile runs the whole path in Desk
 on the emulator, through ordinary keys, and checks the live reminder file at
