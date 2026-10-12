@@ -59,6 +59,15 @@ and the call answers `SACT-S-SMALL` with the size needed.
 `SACT-PROVIDER$`, `SACT-MODEL$`, `SACT-EFFORT$`, `SACT-TIER$`,
 `SACT-PROMPT$` and `SACT-O.CONTEXT` read the parts back.
 
+`SACT-SAY-MODEL ( operands append context -- )` says the model the
+operands name with its effort, tier and verbosity, such as `gpt-slow, high
+effort, priority tier, medium verbosity`. `SACT-SAY-LIMITS ( time
+disclosure output append context -- )` says the limits, such as `10 min to
+run, 101 bytes to disclose, 16384 bytes of reply`; a time is in whole
+minutes, whole seconds, or milliseconds. Each passes its words to APPEND
+( address length context -- ), which may grow a buffer or only count, so
+Desk's approval and Daybook's details say them in the same words.
+
 `SACT-DIGEST ( action schema operands u dest -- )` is SHA3-256 of the
 domain `akashic.sched.operands.v1`, the action, schema and length as u64,
 and the bytes. A [schedule permission](../runtime/schedule-permission.md)
@@ -179,9 +188,11 @@ leaving its bytes. Desk writes lists with `SDSP-PUT` and `SACT-STR!`.
 
 ## Qualification
 
-`local_testing/test_scheduled_action.py` (53 tests, native executor)
+`local_testing/test_scheduled_action.py` (54 tests, native executor)
 checks:
 - the catalog;
+- the words a run's model and limits are said in, each part reaching the
+  appender with its context;
 - the canonical bytes against a Python encoder, including a prompt with
   tabs, line feeds and multibyte text;
 - every refusal of malformed operands and drafts;
@@ -192,4 +203,6 @@ checks:
 - clients without words, or with a damaged header;
 - model lists, including truncated ones and ones with trailing bytes.
 
-Disabling any one of 27 guarded behaviors makes a test fail.
+Disabling any one of 27 guarded behaviors makes a test fail, as does
+disabling any one of 14 in the words a run's model and limits are said in,
+which Desk's approval tests check too.

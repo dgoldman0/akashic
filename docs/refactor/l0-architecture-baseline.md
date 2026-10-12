@@ -1781,3 +1781,27 @@ Independent globals stay at 10,096.
 | mutable-state | `f53366f1ca991a53d6b8513475c17b0e0b58c159f59ab7490c980f9b38a4386a` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook automation details reviewed ratchet update
+
+Daybook's automations view opens a schedule in detail, and says an Agent
+run's model and limits in the words Desk's approval shows. Those words
+move from Desk's schedule surface into the action catalog,
+`interop/scheduled-action.f`, as `SACT-SAY-MODEL` and `SACT-SAY-LIMITS`,
+so both say them the same way. The catalog writes numbers with
+`NUM>STR`, so it requires `utils/string.f`. The graph keeps 653 modules
+and gains that one resolved `REQUIRE` occurrence and unique edge, 2,328 of
+each. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,553 and independent
+globals at 10,096. The mutable-state digest moves because Daybook's two
+deferred page words are renamed for all of the automations' pages, not
+only a new Agent run's.
+
+| Digest | Value |
+| --- | --- |
+| graph | `993a6ff7bdd6e94bfbc05536fbed0639c9692bbb7073523b3bedf79a056f6b6a` |
+| mutable-state | `63d8f240398481094d7e590daae107de0646916712bfee093ecbe9dd926206a7` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

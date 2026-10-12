@@ -45,6 +45,7 @@
 \    DBSVC-ASK-RID     ( service -- rid )
 \    DBSVC-MODELS      ( buffer capacity service -- bytes status )
 \    DBSVC-LABEL       ( rid service -- address length )
+\    DBSVC-WHEN$       ( schedule service -- address length )
 \ =====================================================================
 
 PROVIDED akashic-dbk-auto-svc
@@ -288,9 +289,9 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
 : _DBSVC-GROW  ( response service -- )
     SWAP SDSP-P.SUMMARY-U @ OVER _DBSVC.SUMMARY @ MAX SWAP _DBSVC.SUMMARY ! ;
 
-\ When SCHEDULE runs, in words, with its zone.  The text stays put until
-\ the next call.
-: _DBSVC-TRIGGER$  ( schedule service -- address length )
+\ When SCHEDULE runs, in words, with its zone, as Desk's approval shows
+\ it.  The text stays put until the next call.
+: DBSVC-WHEN$  ( schedule service -- address length )
     DUP _DBSVC.TRIGGER _DBSVC-TRIGGER-MAX 2 PICK _DBSVC.WRITER CBW-INIT DROP
     _DBSVC.WRITER                                      ( schedule writer )
     OVER DBAS-S.RULE OVER DBREC-DESCRIBE
@@ -306,7 +307,7 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
     >R R@ _DBSVC.I ! DUP R@ _DBSVC.S !
     DBAS-S.RID R@ DBSVC-OWNER DBAO-ACTION R@ _DBSVC.A !
     R@ _DBSVC.S @ DBAS-S.TITLE @
-    R@ _DBSVC.S @ R@ _DBSVC-TRIGGER$ NIP
+    R@ _DBSVC.S @ R@ DBSVC-WHEN$ NIP
     R@ _DBSVC.A @ DBAS-A.OPERANDS 8 + @
     SDSP-REQUEST-SIZE DUP R@ _DBSVC-REQ-ROOM           ( bytes request|0 )
     ?DUP 0= IF DROP R> DROP 0 EXIT THEN

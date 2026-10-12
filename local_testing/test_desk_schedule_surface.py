@@ -116,7 +116,9 @@ VARIABLE CONFIRMS
 : PRIO$  ( -- a u ) S" priority" ;
 \ A text built by XT from X.
 : TEXT.  ( x xt -- ) SS _SCHS.TEXT _SCHT-COMPOSE TYPE CR ;
-: TIME.  ( ms -- ) ['] _SCHT-TIME+ TEXT. ;
+\ A time limit in the catalog's words, as a part of a text.
+: TIME+  ( ms t -- ) ['] _SCHT+ SWAP _SACT-SAY-TIME ;
+: TIME.  ( ms -- ) ['] TIME+ TEXT. ;
 : WHEN.  ( ms -- ) ['] _SCHT-WHEN+ TEXT. ;
 """
 
@@ -322,15 +324,15 @@ def test_text_rooms_and_memory(forth):
     rows = run(forth, [
         # Each text grows the room to exactly its length; a shorter one
         # takes the room a longer one left.
-        "S-STATE 300000 ' _SCHT-TIME+ TCOMPOSE NIP TCAP = . "
+        "S-STATE 300000 ' TIME+ TCOMPOSE NIP TCAP = . "
         "T-NOW ' _SCHT-WHEN+ TCOMPOSE NIP TCAP = . "
-        "TBUF@ 300000 ' _SCHT-TIME+ TCOMPOSE 2DROP TBUF@ = . TCAP . CR",
+        "TBUF@ 300000 ' TIME+ TCOMPOSE 2DROP TBUF@ = . TCAP . CR",
         # Every byte the texts take is given back.
-        "S-STATE AVAILABLE 300000 ' _SCHT-TIME+ TCOMPOSE 2DROP "
+        "S-STATE AVAILABLE 300000 ' TIME+ TCOMPOSE 2DROP "
         "T-NOW ' _SCHT-WHEN+ TCOMPOSE 2DROP S\" a status line\" SS _SCHS-SAY "
         "S-STATE AVAILABLE = . CR",
         # Without memory: no text, and an empty status line.
-        "S-STATE STARVE 300000 ' _SCHT-TIME+ TCOMPOSE . . "
+        "S-STATE STARVE 300000 ' TIME+ TCOMPOSE . . "
         "S\" a status line\" SS _SCHS-SAY SS _SCHS.STATUS _SCHT$ NIP . FEED CR",
     ])
     assert rows[0].split() == ["-1", "-1", "-1", "20"]

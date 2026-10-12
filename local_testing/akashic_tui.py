@@ -30341,6 +30341,35 @@ def smoke(
                 "Scheduled run permissions", "Esc did not close the run permissions"
             ):
                 return
+            # Its details, full frame so no line wraps, say what it names in
+            # Desk's words, and its prompt.
+            session.send_key("alt+f")
+            session.send_key("enter")
+            if not wait_screen(
+                "Automation details", "Enter did not open the Agent run's details"
+            ):
+                return
+            for shown, failure in (
+                ("gpt-slow, high effort, priority tier, medium verbosity",
+                 "the details did not name the model as Desk's approval did"),
+                (f"10 min to run, {len(prompt.encode())} bytes to disclose, "
+                 "16384 bytes of reply",
+                 "the details did not show the limits as Desk's approval did"),
+                (first, "the details did not show the prompt's first line"),
+                (second, "the details did not show the prompt's second line"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Automation details", "Escape did not leave the details"
+            ):
+                return
+            session.send_key("alt+f")
+            if not wait_screen(
+                "Start a conversation", "Alt+F did not bring Desk's tiles back"
+            ):
+                return
             stored = read_daybook_reminders() or {}
             schedules = [
                 schedule for schedule in stored.get("schedules", ())

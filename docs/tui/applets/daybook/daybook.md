@@ -91,7 +91,16 @@ example `Agent run, not approved, next 2026-10-12 09:00`. A run that
 completed needs no review; one that ended any other way shows its outcome
 and reason in full, such as `stopped for review: asked to use a tool`.
 
-Enter or Space marks the selected firing or run reviewed. P pauses or
+Enter on a schedule opens its details: a card for each fact, its title,
+when it runs and runs next, and for an Agent run whether it is approved,
+the model it names with its choices, its provider, its limits and its
+prompt, exactly as Desk's approval says them; then a card for each of its
+firings or runs, newest first, with how a run ended and its summary. R, Y
+and X act on the Agent run there as they do on its row, the details follow
+Desk as it fires and answers, and Escape returns to the list. A menu
+action on the details closes them and acts on the schedule.
+
+Enter or Space on a firing or a run marks it reviewed. P pauses or
 resumes the selected schedule, A archives it or brings it back, and H shows
 or hides archived schedules. Delete asks to type `DELETE` first, because a
 deleted schedule is gone for good; an Agent run's items stay as short
@@ -275,7 +284,8 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 | Ctrl+N | Make a new reminder (automations) |
 | Ctrl+G | Make a new Agent run (in Desk) |
 | Ctrl+S | Create the new Agent run (its prompt) |
-| Enter / Space | Mark the selected firing or run reviewed (automations) |
+| Enter | Open the selected schedule's details, or mark the selected firing or run reviewed (automations) |
+| Space | Mark the selected firing or run reviewed (automations) |
 | P | Pause or resume the selected schedule (automations) |
 | A | Archive the selected schedule, or bring it back (automations) |
 | H | Show or hide archived schedules (automations) |

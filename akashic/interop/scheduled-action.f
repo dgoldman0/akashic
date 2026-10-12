@@ -18,7 +18,8 @@
 \
 \  The module also owns the closed vocabulary of outcomes and reasons
 \  that Daybook, Desk and the Agent report with, and which pairs are
-\  valid.
+\  valid, and the words Desk's approval and Daybook's details say an
+\  Agent run's model and limits in.
 \ =====================================================================
 
 PROVIDED akashic-sched-action
@@ -26,6 +27,7 @@ PROVIDED akashic-sched-action
 REQUIRE qualified-locator.f
 REQUIRE ../math/sha3.f
 REQUIRE ../text/utf8.f
+REQUIRE ../utils/string.f
 
 \ =====================================================================
 \  The catalog
@@ -298,6 +300,60 @@ CREATE _SACT-CELLS 24 ALLOT
     _SACT-CELLS 24 SHA3-256-ADD
     SHA3-256-ADD 2DROP
     R> SHA3-256-END ;
+
+\ ---------------------------------------------------------------------
+\  Saying what an Agent run names
+\ ---------------------------------------------------------------------
+\  Desk's approval and Daybook's details say an Agent run's model and
+\  limits in the same words, each through its own APPEND ( address
+\  length context -- ), which may grow a buffer or only count.
+
+: _SACT-SAY  ( address length append context -- ) SWAP EXECUTE ;
+: _SACT-SAY-NUM  ( n append context -- ) ROT NUM>STR 2SWAP _SACT-SAY ;
+
+\ ", ID WHAT" when ID is not empty.
+: _SACT-SAY-OPTION  ( id-a id-u what-a what-u append context -- )
+    2>R
+    2 PICK 0= IF 2DROP 2DROP 2R> 2DROP EXIT THEN
+    S" , " 2R@ _SACT-SAY
+    2SWAP 2R@ _SACT-SAY
+    2R> _SACT-SAY ;
+
+\ A verbosity the run chooses, or nothing for the model's default.
+: _SACT-VERBOSITY$  ( verbosity -- address length )
+    CASE
+        1 OF S" low" ENDOF
+        2 OF S" medium" ENDOF
+        3 OF S" high" ENDOF
+        >R 0 0 R>
+    ENDCASE ;
+
+\ The model the operands name, with its effort, tier and verbosity:
+\ "gpt-slow, high effort, priority tier, medium verbosity".
+: SACT-SAY-MODEL  ( operands append context -- )
+    2>R
+    DUP SACT-MODEL$ 2R@ _SACT-SAY
+    DUP SACT-EFFORT$ S"  effort" 2R@ _SACT-SAY-OPTION
+    DUP SACT-TIER$ S"  tier" 2R@ _SACT-SAY-OPTION
+    SACT-O.VERBOSITY @ _SACT-VERBOSITY$ S"  verbosity" 2R> _SACT-SAY-OPTION ;
+
+\ A time limit: whole minutes, whole seconds, or milliseconds.
+: _SACT-SAY-TIME  ( ms append context -- )
+    2>R
+    DUP 0> OVER 60000 MOD 0= AND IF
+        60000 / 2R@ _SACT-SAY-NUM S"  min" 2R> _SACT-SAY EXIT
+    THEN
+    DUP 0> OVER 1000 MOD 0= AND IF
+        1000 / 2R@ _SACT-SAY-NUM S"  s" 2R> _SACT-SAY EXIT
+    THEN
+    2R@ _SACT-SAY-NUM S"  ms" 2R> _SACT-SAY ;
+
+\ "TIME to run, N bytes to disclose, M bytes of reply".
+: SACT-SAY-LIMITS  ( time disclosure output append context -- )
+    2>R
+    ROT 2R@ _SACT-SAY-TIME S"  to run, " 2R@ _SACT-SAY
+    SWAP 2R@ _SACT-SAY-NUM S"  bytes to disclose, " 2R@ _SACT-SAY
+    2R@ _SACT-SAY-NUM S"  bytes of reply" 2R> _SACT-SAY ;
 
 \ =====================================================================
 \  Outcomes and reasons

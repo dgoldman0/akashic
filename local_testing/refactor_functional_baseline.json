@@ -310,8 +310,8 @@
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-AV-HANDLE",
-          "sha256": "f851e65c0449744dfd9dc748191432c1d3775a39be84572081310d58b27e5026",
-          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected automation after typing DELETE", "p -> pause or resume the selected automation", "a -> archive or restore the selected automation", "h -> show or hide archived automations", "r -> run the selected Agent run now", "y -> ask Desk to approve the selected Agent run", "x -> cancel the selected Agent run in progress", "A new Agent run's page shown -> keys go to that page", "Space -> mark the selected firing or run reviewed", "Other special keys -> move in the automations list", "Mouse over the list -> the automations list"]
+          "sha256": "8447e5ae18817dbb7300033e2ac502ac192bbdd8413af86cd90b4a7df07f3ef1",
+          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected automation after typing DELETE", "p -> pause or resume the selected automation", "a -> archive or restore the selected automation", "h -> show or hide archived automations", "r -> run the selected Agent run now", "y -> ask Desk to approve the selected Agent run", "x -> cancel the selected Agent run in progress", "A page shown, a new Agent run's or a schedule's details -> keys go to that page", "Space -> mark the selected firing or run reviewed", "Other special keys -> move in the automations list", "Mouse over the list -> the automations list"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},

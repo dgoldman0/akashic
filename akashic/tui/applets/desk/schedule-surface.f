@@ -94,8 +94,6 @@ _SCHT-STAMP DT-RFC3339-UTC-S-LENGTH + 7 + -8 AND CONSTANT _SCHT-SIZE
     THEN
     R> _SCHT.LEN +! ;
 
-: _SCHT-NUM+  ( n t -- ) >R NUM>STR R> _SCHT+ ;
-
 \ Room for U bytes; whether there was memory for it.
 : _SCHT-ROOM  ( u t -- flag )
     2DUP _SCHT.CAP @ > 0= IF 2DROP -1 EXIT THEN
@@ -114,22 +112,8 @@ _SCHT-STAMP DT-RFC3339-UTC-S-LENGTH + 7 + -8 AND CONSTANT _SCHT-SIZE
     R@ SWAP EXECUTE
     R> _SCHT$ ;
 
-\ A time limit: whole minutes, whole seconds, or milliseconds.
-: _SCHT-TIME+  ( ms t -- )
-    >R
-    DUP 0> OVER 60000 MOD 0= AND IF
-        60000 / R@ _SCHT-NUM+ S"  min" R> _SCHT+ EXIT
-    THEN
-    DUP 0> OVER 1000 MOD 0= AND IF
-        1000 / R@ _SCHT-NUM+ S"  s" R> _SCHT+ EXIT
-    THEN
-    R@ _SCHT-NUM+ S"  ms" R> _SCHT+ ;
-
-\ "TIME to run, N bytes to disclose, M bytes of reply".
-: _SCHT-LIMITS+  ( time disclosure output t -- )
-    >R ROT R@ _SCHT-TIME+ S"  to run, " R@ _SCHT+
-    SWAP R@ _SCHT-NUM+ S"  bytes to disclose, " R@ _SCHT+
-    R@ _SCHT-NUM+ S"  bytes of reply" R> _SCHT+ ;
+\ An Agent run's limits, in the catalog's words.
+: _SCHT-LIMITS+  ( time disclosure output t -- ) ['] _SCHT+ SWAP SACT-SAY-LIMITS ;
 
 \ An instant in milliseconds, "YYYY-MM-DD HH:MM UTC", or that it is not
 \ known.  The RFC 3339 form is reshaped: its T becomes a space, and its
@@ -145,11 +129,6 @@ _SCHT-STAMP DT-RFC3339-UTC-S-LENGTH + 7 + -8 AND CONSTANT _SCHT-SIZE
         DROP
     THEN
     S" at a time not known" R> _SCHT+ ;
-
-\ ", ID WHAT" after a model, when ID is not empty.
-: _SCHT-OPTION+  ( id-a id-u what-a what-u t -- )
-    >R 2 PICK 0= IF 2DROP 2DROP R> DROP EXIT THEN
-    2SWAP S" , " R@ _SCHT+ R@ _SCHT+ R> _SCHT+ ;
 
 \ =====================================================================
 \  State
@@ -295,19 +274,10 @@ _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-SIZE
         >R S" The Agent cannot run this request, so it cannot be allowed." R>
     ENDCASE ;
 
-\ The model the request names, with its effort, tier and verbosity.
+\ The model the request names, with its effort, tier and verbosity, in
+\ the catalog's words.
 : _SCHS-MODEL+  ( request t -- )
-    >R SDSP-OPERANDS$ DROP
-    DUP SACT-MODEL$ R@ _SCHT+
-    DUP SACT-EFFORT$ S"  effort" R@ _SCHT-OPTION+
-    DUP SACT-TIER$ S"  tier" R@ _SCHT-OPTION+
-    SACT-O.VERBOSITY @ CASE
-        ARVERB-LOW OF S" low" ENDOF
-        ARVERB-MEDIUM OF S" medium" ENDOF
-        ARVERB-HIGH OF S" high" ENDOF
-        >R 0 0 R>
-    ENDCASE
-    S"  verbosity" R> _SCHT-OPTION+ ;
+    >R SDSP-OPERANDS$ DROP ['] _SCHT+ R> SACT-SAY-MODEL ;
 
 : _SCHS-LIMITS+  ( request t -- )
     >R SDSP-OPERANDS$ DROP

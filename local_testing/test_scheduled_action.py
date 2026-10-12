@@ -102,6 +102,11 @@ VARIABLE TSTRU
     SACT-AGENT-RUN SACT-SCHEMA TO TOU @ TQ SDSP-R.OPERANDS-DIGEST SACT-DIGEST
     TQ SDSP-R.STORE TQ SDSP-R.SCHEDULE 5 TQ SDSP-R.KEY SDSP-KEY ;
 : T-QOK  ( -- status ) TQ -1 SDSP-REQUEST-OK? ;
+\ Appenders for the words that say what a run names: one types the
+\ words, the other adds their lengths to the cell its context names.
+: T-SAY  ( a u context -- ) DROP TYPE ;
+: T-COUNT  ( a u context -- ) +! DROP ;
+VARIABLE T-SAID
 \ Fake broker words: each prints what it was given, then answers.
 : F-SUBMIT  ( request response ctx -- status ) . . . CR D_STARTED ;
 : F-STATUS  ( key response ctx -- status ) . . . CR SDSP-S-RUNNING ;
@@ -429,3 +434,35 @@ def test_a_model_list_is_read_inside_its_bytes(forth):
     assert lines[4][0] == 0 and bytes(lines[4][1:]) == b"Model B"
     assert lines[5][0] == 1 and bytes(lines[5][1:]) == b"flex"
     assert lines[6:] == [[0, 0], [0], [0], [-1]]
+
+
+def said(forth, line: str) -> str:
+    output = forth.run([line + " CR"], 50_000_000).decode("latin-1")
+    assert "??" not in output, output
+    return output.strip()
+
+
+def test_saying_what_a_run_names(forth):
+    # A model with every option, then one with none: no effort, no tier and
+    # the model's default verbosity.
+    assert said(forth, 'T-DRAFT S" flex" TD SACT-D.TIER SACT-D! 3 TD SACT-D.VERBOSITY ! '
+                       "T-ENC DROP TO ' T-SAY 0 SACT-SAY-MODEL") == (
+        "gpt-test, high effort, flex tier, high verbosity")
+    assert said(forth, "T-DRAFT 0 0 TD SACT-D.EFFORT SACT-D! 0 TD SACT-D.VERBOSITY ! "
+                       "T-ENC DROP TO ' T-SAY 0 SACT-SAY-MODEL") == "gpt-test"
+    assert said(forth, "T-DRAFT 1 TD SACT-D.VERBOSITY ! "
+                       "T-ENC DROP TO ' T-SAY 0 SACT-SAY-MODEL") == (
+        "gpt-test, high effort, low verbosity")
+    assert said(forth, "T-DRAFT T-ENC DROP TO ' T-SAY 0 SACT-SAY-MODEL") == (
+        "gpt-test, high effort, medium verbosity")
+    # Time in whole minutes, whole seconds, or milliseconds.
+    for ms, words in ((300_000, "5 min"), (90_000, "90 s"), (1500, "1500 ms"),
+                      (0, "0 ms")):
+        assert said(forth, f"{ms} 4096 16384 ' T-SAY 0 SACT-SAY-LIMITS") == (
+            f"{words} to run, 4096 bytes to disclose, 16384 bytes of reply")
+    # Each part reaches the appender with its context.
+    assert said(forth, "0 T-SAID ! T-DRAFT T-ENC DROP TO ' T-COUNT T-SAID SACT-SAY-MODEL "
+                       "T-SAID @ .") == str(len("gpt-test, high effort, medium verbosity"))
+    assert said(forth, "0 T-SAID ! 300000 4096 16384 ' T-COUNT T-SAID SACT-SAY-LIMITS "
+                       "T-SAID @ .") == str(len(
+                           "5 min to run, 4096 bytes to disclose, 16384 bytes of reply"))

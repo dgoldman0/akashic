@@ -150,7 +150,15 @@ _DBAV-VERBOSITY 8 + CONSTANT _DBAV-TIME      \ the milliseconds it may run
 _DBAV-TIME 8 + CONSTANT _DBAV-OUTPUT         \ the bytes of reply it keeps
 _DBAV-OUTPUT 8 + CONSTANT _DBAV-OPS          \ the operands, or 0
 _DBAV-OPS 8 + CONSTANT _DBAV-SACT
-_DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
+_DBAV-SACT SACT-DRAFT-SIZE + CONSTANT _DBAV-OPENED   \ RID-SIZE bytes
+\ The schedule opened in detail: its RID, zero when none; the store
+\ generation its facts were read at, plus one; and its items' ids, newest
+\ first, in a buffer that grows to them.
+_DBAV-OPENED RID-SIZE + CONSTANT _DBAV-OPENED-BUILT
+_DBAV-OPENED-BUILT 8 + CONSTANT _DBAV-HISTORY        \ the ids, or 0
+_DBAV-HISTORY 8 + CONSTANT _DBAV-HISTORY-N
+_DBAV-HISTORY-N 8 + CONSTANT _DBAV-HISTORY-CAP
+_DBAV-HISTORY-CAP 8 + CONSTANT DBAV-SIZE
 
 : _DBAV.SERVICE  ( view -- a ) _DBAV-SERVICE + ;
 : _DBAV.ROWS     ( view -- a ) _DBAV-ROWS + ;
@@ -178,6 +186,11 @@ _DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
 : _DBAV.OUTPUT   ( view -- a ) _DBAV-OUTPUT + ;
 : _DBAV.OPS      ( view -- a ) _DBAV-OPS + ;
 : _DBAV.SACT     ( view -- draft ) _DBAV-SACT + ;
+: _DBAV.OPENED   ( view -- rid ) _DBAV-OPENED + ;
+: _DBAV.OPENED-BUILT  ( view -- a ) _DBAV-OPENED-BUILT + ;
+: _DBAV.HISTORY  ( view -- a ) _DBAV-HISTORY + ;
+: _DBAV.HISTORY-N    ( view -- a ) _DBAV-HISTORY-N + ;
+: _DBAV.HISTORY-CAP  ( view -- a ) _DBAV-HISTORY-CAP + ;
 
 \ Starts a view over SERVICE, which may be 0.
 : DBAV-INIT  ( service view -- )
@@ -194,6 +207,9 @@ _DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
 
 : DBAV-FREE  ( view -- )
     DUP _DBAV-AGENT-FREE
+    DUP _DBAV.HISTORY @ ?DUP IF FREE THEN
+    0 OVER _DBAV.HISTORY ! 0 OVER _DBAV.HISTORY-N ! 0 OVER _DBAV.HISTORY-CAP !
+    DUP _DBAV.OPENED RID-SIZE 0 FILL
     DUP _DBAV.ROWS @ ?DUP IF FREE THEN
     DUP _DBAV.TEXT @ ?DUP IF FREE THEN
     0 OVER _DBAV.ROWS ! 0 OVER _DBAV.COUNT ! 0 OVER _DBAV.ROOM !
@@ -444,6 +460,16 @@ _DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
     SWAP DBAS-S.RID SWAP _DBAV-OWNER DBAO-ACTION
     ?DUP IF DBAS-A.AUTHORIZED @ 0<> ELSE 0 THEN ;
 
+\ When SCHEDULE fires next, or that it is paused, done or archived.
+: _DBAV-NEXT$  ( view schedule -- )
+    DUP DBAS-S.ARCHIVED @ IF DROP S" archived" ROT _DBAV-ADD$ EXIT THEN
+    DUP DBAS-S.STATE @ CASE
+        DBAS-ENABLED OF DUP DBAS-S.NEXT-UTC @ OVER 3 PICK _DBAV-WHEN ENDOF
+        DBAS-PAUSED OF S" paused" 3 PICK _DBAV-ADD$ ENDOF
+        DBAS-COMPLETED OF S" done" 3 PICK _DBAV-ADD$ ENDOF
+    ENDCASE
+    2DROP ;
+
 \ A schedule's detail: an Agent run says so, and whether it is approved;
 \ then when it fires next, or that it is paused, done or archived.
 : _DBAV-SCHEDULE$  ( position view -- )
@@ -452,16 +478,10 @@ _DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
         S" Agent run, " 3 PICK _DBAV-ADD$
         DUP 2 PICK _DBAV-APPROVED? 0= IF S" not approved, " 3 PICK _DBAV-ADD$ THEN
     THEN
-    DUP DBAS-S.ARCHIVED @ IF DROP S" archived" ROT _DBAV-ADD$ EXIT THEN
-    DUP DBAS-S.STATE @ CASE
-        DBAS-ENABLED OF
-            S" next " 3 PICK _DBAV-ADD$
-            DUP DBAS-S.NEXT-UTC @ OVER 3 PICK _DBAV-WHEN
-        ENDOF
-        DBAS-PAUSED OF S" paused" 3 PICK _DBAV-ADD$ ENDOF
-        DBAS-COMPLETED OF S" done" 3 PICK _DBAV-ADD$ ENDOF
-    ENDCASE
-    2DROP ;
+    DUP DBAS-S.STATE @ DBAS-ENABLED = OVER DBAS-S.ARCHIVED @ 0= AND IF
+        S" next " 3 PICK _DBAV-ADD$
+    THEN
+    _DBAV-NEXT$ ;
 
 \ "missed ", or for more than one "missed N, last ".
 : _DBAV-MISSED$  ( item view -- )
@@ -474,19 +494,19 @@ _DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
     BL R> _DBAV-CHAR ;
 
 \ How an Agent run stands: waiting, running, or how it ended, and why.
-: _DBAV-RUN$  ( item view -- )
+: _DBAV-RUN-STATE$  ( item view -- )
     >R DUP DBAS-O.STATE @ DBAS-IN-FLIGHT = IF
         DBAS-O.PHASE @ DBAS-RUNNING = IF S" running" ELSE S" waiting" THEN
-        R@ _DBAV-ADD$
-    ELSE
-        DUP DBAS-O.OUTCOME @ SACT-OUTCOME$ R@ _DBAV-ADD$
-        DBAS-O.REASON @ SACT-REASON$ DUP IF
-            S" : " R@ _DBAV-ADD$ R@ _DBAV-ADD$
-        ELSE
-            2DROP
-        THEN
+        R> _DBAV-ADD$ EXIT
     THEN
-    S" , " R> _DBAV-ADD$ ;
+    DUP DBAS-O.OUTCOME @ SACT-OUTCOME$ R@ _DBAV-ADD$
+    DBAS-O.REASON @ SACT-REASON$ DUP IF
+        S" : " R@ _DBAV-ADD$ R> _DBAV-ADD$
+    ELSE
+        2DROP R> DROP
+    THEN ;
+
+: _DBAV-RUN$  ( item view -- ) TUCK _DBAV-RUN-STATE$ S" , " ROT _DBAV-ADD$ ;
 
 \ An item's detail: how a reminder fired or how an Agent run stands, and
 \ when it was due.
@@ -617,16 +637,22 @@ _DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
     DUP _DBAV-AGENT? 0= IF DROP 0 DBAV-S-NONE EXIT THEN
     DBAO-S-OK ;
 
+\ Runs an Agent run now, by hand, through Desk, at the revision shown.
+: _DBAV-RUN-NOW-OF  ( view schedule -- status )
+    DUP DBAS-S.RID SWAP DBAS-S.REVISION @ ROT _DBAV.SERVICE @ DBSVC-RUN-NOW NIP ;
+
+\ Asks Desk's user to approve an Agent run at the revision shown.
+: _DBAV-ASK-OF  ( view schedule -- status )
+    DUP DBAS-S.RID SWAP DBAS-S.REVISION @ ROT _DBAV.SERVICE @ DBSVC-ASK ;
+
 \ Runs the Agent run row INDEX shows now, by hand, through Desk.
 : DBAV-RUN-NOW  ( index view -- status )
-    TUCK _DBAV-AGENT ?DUP IF NIP NIP EXIT THEN      ( view schedule )
-    DUP DBAS-S.RID SWAP DBAS-S.REVISION @ ROT _DBAV.SERVICE @ DBSVC-RUN-NOW NIP ;
+    TUCK _DBAV-AGENT ?DUP IF NIP NIP EXIT THEN _DBAV-RUN-NOW-OF ;
 
 \ Asks Desk's user to approve the Agent run row INDEX shows, at the
 \ revision it shows.
 : DBAV-ASK  ( index view -- status )
-    TUCK _DBAV-AGENT ?DUP IF NIP NIP EXIT THEN
-    DUP DBAS-S.RID SWAP DBAS-S.REVISION @ ROT _DBAV.SERVICE @ DBSVC-ASK ;
+    TUCK _DBAV-AGENT ?DUP IF NIP NIP EXIT THEN _DBAV-ASK-OF ;
 
 \ Cancels the Agent run in flight row INDEX shows.
 : DBAV-CANCEL  ( index view -- status )
@@ -646,6 +672,193 @@ _DBAV-SACT SACT-DRAFT-SIZE + CONSTANT DBAV-SIZE
         DBSVC-ASK-FAILED OF S" Approved, but it changed meanwhile; ask again" ENDOF
         >R 0 0 R>
     ENDCASE ;
+
+\ =====================================================================
+\  Details
+\ =====================================================================
+\  A schedule opened from its row shows its facts, each a label and a
+\  text: its title, when it runs and next runs, and for an Agent run
+\  whether it is approved, the model it names, its provider, its limits
+\  and its prompt, exactly as stored; then each of its items, newest
+\  first.  The facts follow the store: once it changes, DBAV-REREAD reads
+\  them again, and says when the schedule is gone.  An action on the
+\  opened schedule refuses while its facts are older than the store.
+
+\ The facts a schedule has before its items.
+3 CONSTANT _DBAV-REMINDER-FACTS     \ title, when, next
+8 CONSTANT _DBAV-AGENT-FACTS        \ and approval, model, provider, limits, prompt
+
+\ The ids read at a time.
+16 CONSTANT _DBAV-PAGE
+
+: _DBAV-OWN-FACTS  ( schedule -- n )
+    _DBAV-AGENT? IF _DBAV-AGENT-FACTS ELSE _DBAV-REMINDER-FACTS THEN ;
+
+\ Whether a schedule is opened.
+: DBAV-OPENED?  ( view -- flag ) _DBAV.OPENED RID-ZERO? 0= ;
+
+\ The schedule opened, while it lives; 0 otherwise.
+: _DBAV-OPENED-SCHEDULE  ( view -- schedule|0 )
+    DUP DBAV-OPENED? 0= IF DROP 0 EXIT THEN
+    DUP _DBAV.OPENED SWAP _DBAV-OWNER DBAO-FIND
+    DUP IF DUP DBAS-S.STATE @ DBAS-TOMBSTONE = IF DROP 0 THEN THEN ;
+
+\ Whether the facts are older than the store.
+: DBAV-OPENED-STALE?  ( view -- flag )
+    DUP _DBAV-GENERATION SWAP _DBAV.OPENED-BUILT @ <> ;
+
+\ Room in the history for U ids; whether there was memory for it.
+: _DBAV-HISTORY-ROOM  ( u view -- flag )
+    >R DUP R@ _DBAV.HISTORY-CAP @ > 0= IF DROP R> DROP -1 EXIT THEN
+    R@ _DBAV.HISTORY-CAP @ 2 * MAX
+    DUP CELLS ALLOCATE IF 2DROP R> DROP 0 EXIT THEN      ( capacity buffer )
+    R@ _DBAV.HISTORY @ ?DUP IF
+        OVER R@ _DBAV.HISTORY-N @ CELLS MOVE R@ _DBAV.HISTORY @ FREE
+    THEN
+    R@ _DBAV.HISTORY ! R> _DBAV.HISTORY-CAP ! -1 ;
+
+\ Reads the opened schedule's items again, newest first, a page of ids
+\ at a time; DELETED when the schedule is gone.
+: DBAV-REREAD  ( view -- status )
+    >R R@ _DBAV-OPENED-SCHEDULE 0= IF R> DROP DBAO-S-DELETED EXIT THEN
+    0 R@ _DBAV.HISTORY-N !
+    BEGIN
+        R@ _DBAV.HISTORY-N @ _DBAV-PAGE + R@ _DBAV-HISTORY-ROOM 0= IF
+            R> DROP DBAV-S-NOMEM EXIT
+        THEN
+        R@ _DBAV.OPENED R@ _DBAV.HISTORY-N @
+        R@ _DBAV.HISTORY @ OVER CELLS + _DBAV-PAGE R@ _DBAV-OWNER DBAO-HISTORY
+        ?DUP IF NIP NIP R> DROP EXIT THEN          ( n cursor )
+        R@ _DBAV.HISTORY-N ! _DBAV-PAGE <
+    UNTIL
+    R@ _DBAV-GENERATION R> _DBAV.OPENED-BUILT ! DBAO-S-OK ;
+
+\ Opens the schedule row INDEX shows; a schedule whose items cannot be
+\ read stays closed.
+: DBAV-OPEN  ( index view -- status )
+    TUCK _DBAV-SCHEDULE ?DUP IF NIP NIP EXIT THEN    ( view schedule )
+    DBAS-S.RID OVER _DBAV.OPENED RID-SIZE MOVE
+    DUP DBAV-REREAD ?DUP IF SWAP _DBAV.OPENED RID-SIZE 0 FILL EXIT THEN
+    DROP DBAO-S-OK ;
+
+\ Closes the schedule opened.
+: DBAV-SHUT  ( view -- ) _DBAV.OPENED RID-SIZE 0 FILL ;
+
+\ How many facts the opened schedule has, its own and its items'.
+: DBAV-FACTS@  ( view -- n )
+    DUP _DBAV-OPENED-SCHEDULE ?DUP 0= IF DROP 0 EXIT THEN
+    _DBAV-OWN-FACTS SWAP _DBAV.HISTORY-N @ + ;
+
+\ The item fact ROW shows, while it lives, or 0.
+: _DBAV-FACT-ITEM  ( row schedule view -- item|0 )
+    >R _DBAV-OWN-FACTS -
+    DUP 0< OVER R@ _DBAV.HISTORY-N @ < 0= OR IF DROP R> DROP 0 EXIT THEN
+    CELLS R@ _DBAV.HISTORY @ + @ R@ _DBAV-STORE DBAS-FIND-OCCURRENCE
+    0= IF DROP R> DROP 0 EXIT THEN
+    R> _DBAV-STORE DBAS-OCCURRENCE ;
+
+\ The label of fact ROW: what the fact is, or what kind of item it is.
+: DBAV-FACT-LABEL  ( row view -- address length )
+    DUP _DBAV-OPENED-SCHEDULE ?DUP 0= IF 2DROP 0 0 EXIT THEN    ( row view schedule )
+    2 PICK OVER _DBAV-OWN-FACTS < IF
+        2DROP CASE
+            0 OF S" Schedule" ENDOF
+            1 OF S" When" ENDOF
+            2 OF S" Next" ENDOF
+            3 OF S" Approval" ENDOF
+            4 OF S" Model" ENDOF
+            5 OF S" Provider" ENDOF
+            6 OF S" Limits" ENDOF
+            >R S" Prompt" R>
+        ENDCASE EXIT
+    THEN
+    SWAP _DBAV-FACT-ITEM ?DUP 0= IF 0 0 EXIT THEN
+    DUP DBAS-O.KIND @ DBAS-MISSED = IF DROP S" Missed" EXIT THEN
+    DUP DBAS-O.KIND @ DBAS-MANUAL = IF DROP S" Run now" EXIT THEN
+    DBAS-O.ACTION @ DBAS-ACTION-AGENT = IF S" Run" ELSE S" Fired" THEN ;
+
+: _DBAV-TEXT$  ( view -- address length ) DUP _DBAV.TEXT @ SWAP _DBAV.LEN @ ;
+
+\ An Agent run's operands, as stored.
+: _DBAV-OPERANDS  ( schedule view -- operands )
+    SWAP DBAS-S.RID SWAP _DBAV-OWNER DBAO-ACTION DBAS-A.OPERANDS BSLOT$ DROP ;
+
+\ What became of ITEM: when it was due, how many it covers when it
+\ missed several, how an Agent run stands or ended, whether it awaits
+\ review, and on a line of its own its run's summary.
+: _DBAV-HISTORY$  ( item schedule view -- )
+    >R OVER DBAS-O.LAST-UTC @ SWAP R@ _DBAV-WHEN    ( item )
+    DUP DBAS-O.KIND @ DBAS-MISSED = OVER DBAS-O.COUNT @ 1 > AND IF
+        S" , " R@ _DBAV-ADD$ DUP DBAS-O.COUNT @ NUM>STR R@ _DBAV-ADD$
+        S"  times" R@ _DBAV-ADD$
+    THEN
+    DUP DBAS-O.ACTION @ DBAS-ACTION-AGENT = IF
+        S" , " R@ _DBAV-ADD$ DUP R@ _DBAV-RUN-STATE$
+    THEN
+    DUP DBAS-O.STATE @ DBAS-DUE = IF S" , needs review" R@ _DBAV-ADD$ THEN
+    DBAS-O.SUMMARY BSLOT$ DUP IF
+        10 R@ _DBAV-CHAR R> _DBAV-ADD$
+    ELSE
+        2DROP R> DROP
+    THEN ;
+
+\ The text of fact ROW, which stays put until the next call: what the
+\ schedule names, exactly as stored, or what became of one of its items.
+: DBAV-FACT-TEXT  ( row view -- address length )
+    0 OVER _DBAV.LEN !
+    DUP _DBAV-OPENED-SCHEDULE ?DUP 0= IF 2DROP 0 0 EXIT THEN    ( row view schedule )
+    2 PICK OVER _DBAV-OWN-FACTS < 0= IF
+        SWAP DUP >R _DBAV-FACT-ITEM ?DUP 0= IF R> DROP 0 0 EXIT THEN
+        R@ _DBAV-OPENED-SCHEDULE R@ _DBAV-HISTORY$ R> _DBAV-TEXT$ EXIT
+    THEN
+    ROT CASE                                   ( view schedule )
+        0 OF NIP DBAS-S.TITLE DBAS-FIELD$ ENDOF
+        1 OF SWAP _DBAV.SERVICE @ DBSVC-WHEN$ ENDOF
+        2 OF OVER SWAP _DBAV-NEXT$ _DBAV-TEXT$ ENDOF
+        3 OF SWAP _DBAV-APPROVED? IF S" Approved" ELSE S" Not approved" THEN ENDOF
+        4 OF
+            OVER _DBAV-OPERANDS ['] _DBAV-ADD$ 2 PICK SACT-SAY-MODEL _DBAV-TEXT$
+        ENDOF
+        5 OF OVER _DBAV-OPERANDS SACT-PROVIDER$ ROT DROP ENDOF
+        6 OF
+            OVER _DBAV-OPERANDS DUP SACT-O.TIME @ OVER SACT-O.DISCLOSURE @
+            ROT SACT-O.OUTPUT @ ['] _DBAV-ADD$ 4 PICK SACT-SAY-LIMITS _DBAV-TEXT$
+        ENDOF
+        >R OVER _DBAV-OPERANDS SACT-PROMPT$ ROT DROP R>
+    ENDCASE ;
+
+\ The opened schedule, while its facts are current.  They were read
+\ while it lived, and any change since, deleting it too, would make them
+\ old, so it still lives.
+: _DBAV-OPENED-NOW  ( view -- schedule status )
+    DUP DBAV-OPENED? 0= IF DROP 0 DBAV-S-NONE EXIT THEN
+    DUP DBAV-OPENED-STALE? IF DROP 0 DBAV-S-CHANGED EXIT THEN
+    _DBAV-OPENED-SCHEDULE DBAO-S-OK ;
+
+\ The opened Agent run, while its facts are current.
+: _DBAV-OPENED-AGENT  ( view -- schedule status )
+    _DBAV-OPENED-NOW ?DUP IF EXIT THEN
+    DUP _DBAV-AGENT? 0= IF DROP 0 DBAV-S-NONE EXIT THEN
+    DBAO-S-OK ;
+
+\ Runs the opened Agent run now, by hand, through Desk.
+: DBAV-OPENED-RUN-NOW  ( view -- status )
+    DUP _DBAV-OPENED-AGENT ?DUP IF NIP NIP EXIT THEN _DBAV-RUN-NOW-OF ;
+
+\ Asks Desk's user to approve the opened Agent run.
+: DBAV-OPENED-ASK  ( view -- status )
+    DUP _DBAV-OPENED-AGENT ?DUP IF NIP NIP EXIT THEN _DBAV-ASK-OF ;
+
+\ Cancels the opened Agent run's run in flight: its newest item, since
+\ one schedule has at most one run in flight and runs no other meanwhile.
+\ Its facts are current, so the item is in the store.
+: DBAV-OPENED-CANCEL  ( view -- status )
+    DUP _DBAV-OPENED-AGENT ?DUP IF NIP NIP EXIT THEN DROP
+    DUP _DBAV.HISTORY-N @ 0= IF DROP DBAV-S-NONE EXIT THEN
+    DUP _DBAV.HISTORY @ @ OVER _DBAV-STORE DBAS-FIND-OCCURRENCE DROP
+    OVER _DBAV-STORE DBAS-OCCURRENCE
+    DUP DBAS-O.STATE @ DBAS-IN-FLIGHT <> IF 2DROP DBAV-S-NONE EXIT THEN
+    DBAS-O.ID @ SWAP _DBAV.SERVICE @ DBSVC-CANCEL ;
 
 \ =====================================================================
 \  Creating

@@ -87,6 +87,7 @@ DBSVC-ASK-STATE@  ( service -- state )
 DBSVC-ASK-RID     ( service -- rid )
 DBSVC-MODELS      ( buffer capacity service -- bytes status )
 DBSVC-LABEL       ( rid service -- address length )
+DBSVC-WHEN$       ( schedule service -- address length )
 ```
 
 - `DBSVC-TICK` reads uptime and compares it with the next look. That is
@@ -155,6 +156,8 @@ what they need.
 - **Names.** `DBSVC-LABEL` gives a schedule's title by its RID, for Desk
   to name the permission granted for it, or 0 0 when Daybook has no such
   schedule. The text stays put until the store is next used.
+  `DBSVC-WHEN$` says when a schedule runs, with its zone, in the words
+  Desk's approval shows; the text stays put until the next call.
 
 Nothing is retried on its own.
 
@@ -228,6 +231,27 @@ start given as only a time at its next such time, and
 The approval, not the view, checks that the model's provider takes a
 prompt that large.
 
+## Details
+
+`DBAV-OPEN` opens the schedule a row shows in detail. Its facts, each a
+label (`DBAV-FACT-LABEL`) and a text (`DBAV-FACT-TEXT`), are its title;
+when it runs, as `DBSVC-WHEN$` says it; when it runs next, or that it is
+paused, done or archived; and for an Agent run whether Daybook holds it
+approved, the model it names with its choices and its limits in the
+catalog's words (`SACT-SAY-MODEL`, `SACT-SAY-LIMITS`, which Desk's approval
+uses too), its provider, and its prompt exactly as stored. After them come
+its items, newest first: when each was due, how many a missed item covers,
+how an Agent run stands or ended, whether it awaits review, and on a line
+of its own its run's summary.
+
+The facts follow the store. Once it changes, `DBAV-OPENED-STALE?` says so,
+and `DBAV-REREAD` reads the items again, a page of ids at a time into a
+buffer that grows to them, or says the schedule was deleted.
+`DBAV-OPENED-RUN-NOW`, `DBAV-OPENED-ASK` and `DBAV-OPENED-CANCEL` act on
+the opened Agent run, and refuse while its facts are older than the store;
+the run cancel finds is its newest item, since a schedule has at most one
+run in flight and runs no other meanwhile.
+
 `local_testing/test_daybook_automation_view.py` and
 `test_daybook_automation_view_runs.py` check the automations view, the
 second over the same fake broker:
@@ -260,6 +284,25 @@ in the view over the fake broker, which answers with a real model list:
 - prompts refused when empty or not text, without memory, or without a
   model or limits;
 - the memory a create took, given back.
+
+`local_testing/test_daybook_automation_view_details.py` opens schedules
+in detail over the same fake broker:
+- an Agent run's facts, word for word, and a reminder's;
+- items newest first: fired, missed once and several times, runs by hand
+  and on schedule, how they ended, whether they await review, and their
+  summaries;
+- a history longer than a page of ids, an id the store no longer has,
+  and nothing past the last fact;
+- facts that grow old when the store changes, and a schedule deleted,
+  with and without its runs' short records;
+- actions on the opened schedule: refused while its facts are old, for a
+  reminder, when nothing is opened, for a run already over, and for
+  another schedule's run whose id the room still holds;
+- without memory a schedule stays closed, and details give back their
+  memory.
+
+Disabling any one of 43 guarded behaviors of the details makes a check
+fail.
 
 Disabling any one of 86 guarded behaviors of the create makes a check
 fail, except four that no check can show. The fetch refuses a broker that
