@@ -36,6 +36,11 @@
 \  create submitted twice makes one schedule.  The view then asks Desk's
 \  user to approve the Agent run it made.
 \
+\  DBAV-OPEN opens one schedule's details: its facts, each a label and a
+\  text, then each item it made, newest first.  The opened schedule
+\  follows the store; DBAV-REREAD brings its facts current, and the
+\  opened-run actions refuse while they are old.
+\
 \  The view is caller-owned and caller-serialized.  It borrows the
 \  service, which is 0 when Daybook runs outside Desk.  Row words take an
 \  index below DBAV-COUNT@; actions check theirs.
@@ -74,6 +79,16 @@
 \    DBAV-PROMPT!     ( address length view -- status )
 \    DBAV-CREATE      ( view -- status )
 \    DBAV-ASK-CREATED ( view -- status )
+\    DBAV-OPEN        ( index view -- status )
+\    DBAV-SHUT        ( view -- )
+\    DBAV-OPENED?     ( view -- flag )
+\    DBAV-OPENED-STALE?  ( view -- flag )
+\    DBAV-REREAD      ( view -- status )
+\    DBAV-FACTS@      ( view -- n )
+\    DBAV-FACT-LABEL  ( row view -- address length )
+\    DBAV-FACT-TEXT   ( row view -- address length )
+\    DBAV-OPENED-RUN-NOW DBAV-OPENED-ASK DBAV-OPENED-CANCEL
+\                     ( view -- status )
 \    DBAV-DEFAULT-ZONE$  ( view -- address length )
 \    DBAV-DEFAULT-ZONE!  ( address length view -- status )
 \    DBAV-MESSAGE     ( status -- address length )
