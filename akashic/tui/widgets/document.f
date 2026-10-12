@@ -42,10 +42,14 @@
 \  far part alone and shows it; Home and End read the first and last.
 \  While a view shows a document, parts are read through it.
 \
-\  The document is the owner's, opened and closed by it.  The owner says
-\  where a figure's picture comes from: a resolve word ( name-a name-u ctx
-\  -- source | 0 ) gives a media source for a picture's name, which the
-\  view gives back with a release word ( source ctx -- ).  A followed
+\  The document is the owner's, opened and closed by it.  A document that
+\  holds its figures' pictures itself, as a PDF does (DOC-PICTURES?), gives
+\  each one's maker (media/picture.f): the view reads the picture's size
+\  from it, and makes its file from DOCV-SERVICE while the figure is
+\  shown, showing the figure's name until it is made.  Otherwise the owner
+\  says where a figure's picture comes from: a resolve word ( name-a
+\  name-u ctx -- source | 0 ) gives a media source for a picture's name,
+\  which the view gives back with a release word ( source ctx -- ).  A followed
 \  link's target goes to the owner's follow word ( target-a target-u ctx
 \  -- ); it lies in the document, so the owner copies it before closing
 \  the document.  Memory comes from the owner's memory source.
@@ -80,8 +84,9 @@
 \
 \  Prefix: DOCV- (public), _DOCV- and _DV- (internal)
 \  Provider: akashic-tui-document
-\  Dependencies: widget.f, draw.f, picture.f, media/document.f, text-lines.f,
-\                bidi.f, semantic-collections.f
+\  Dependencies: widget.f, draw.f, picture.f, media/document.f,
+\                media/picture.f, media/source.f, text-lines.f, bidi.f,
+\                semantic-collections.f
 
 PROVIDED akashic-tui-document
 
@@ -93,6 +98,7 @@ REQUIRE ../style-palette.f
 REQUIRE picture.f
 REQUIRE ../../media/document.f
 REQUIRE ../../media/picture.f
+REQUIRE ../../media/source.f
 REQUIRE ../../text/text-lines.f
 REQUIRE ../../text/bidi.f
 REQUIRE ../../utils/memory-source.f
@@ -129,8 +135,9 @@ VARIABLE _DOCV-OWNED-LIMIT
 
 \ A figure: its block and the block's key, its picture's size (0 0 when
 \ it has none), and, while it is shown, its source, its picture widget,
-\ the region that widget draws in, a copy of the picture's name, and the
-\ draw that last showed it.
+\ the region that widget draws in, a copy of the picture's name, the draw
+\ that last showed it, and the maker of a picture the document holds,
+\ whose source the view keeps in a record of its own.
  0 CONSTANT _FIG.BLOCK
  8 CONSTANT _FIG.PW
 16 CONSTANT _FIG.PH
@@ -141,7 +148,8 @@ VARIABLE _DOCV-OWNED-LIMIT
 56 CONSTANT _FIG.NAME-U
 64 CONSTANT _FIG.SEEN
 72 CONSTANT _FIG.KEY
-80 CONSTANT _FIG-SIZE
+80 CONSTANT _FIG.MAKER
+88 CONSTANT _FIG-SIZE
 
 3 CONSTANT _DOCV-WHEEL-ROWS
 
@@ -262,21 +270,29 @@ VARIABLE _DVF-F
     DUP _FIG.BLOCK + @ _DV-DOC DOC-BLOCK BLK-KEY@ OVER _FIG.KEY + !
     _DOCV-O-FIGS-N _DV@ 1+ _DOCV-O-FIGS-N _DV! ;
 
+\ The size of a picture the document holds, from its maker, or 0 0.
+: _DV-MADE-SIZE  ( name-a name-u -- w h )
+    PIC-MAKER-SIZE _DV-ALLOC ?DUP 0= IF 2DROP 0 0 EXIT THEN >R
+    R@ _DV-DOC DOC-PICTURE IF R@ PIC-MAKER-SIZE@ R@ PIC-MAKER-FREE ELSE 0 0 THEN
+    R> PIC-MAKER-SIZE _DV-FREE ;
+
 \ _DV-FIG-OF ( content index -- fig|0 )
 \   The figure of block INDEX, whose content is CONTENT, known from now on
-\   with its picture's size, read from the picture's file once; 0 when
-\   memory refuses its record.
+\   with its picture's size, read once from the picture's maker or file;
+\   0 when memory refuses its record.
 : _DV-FIG-OF  ( content index -- fig|0 )
     DUP _DV-FIND-FIG ?DUP IF NIP NIP EXIT THEN
     _DV-FIG-ROOM? 0= IF 2DROP 0 EXIT THEN
     _DV-FIG-INSERT _DVF-F !
-    DCT-FIGURE DUP IF
-        _DV-RESOLVE ?DUP IF
-            DUP PIC-FILE IF DROP 2DROP 0 0 ELSE ROT DROP THEN
-            _DVF-F @ _FIG.PH + ! _DVF-F @ _FIG.PW + !
-            _DV-RELEASE
-        THEN
-    ELSE 2DROP THEN
+    DCT-FIGURE DUP 0= IF 2DROP _DVF-F @ EXIT THEN
+    _DV-DOC DOC-PICTURES? IF
+        _DV-MADE-SIZE _DVF-F @ _FIG.PH + ! _DVF-F @ _FIG.PW + !  _DVF-F @ EXIT
+    THEN
+    _DV-RESOLVE ?DUP IF
+        DUP PIC-FILE IF DROP 2DROP 0 0 ELSE ROT DROP THEN
+        _DVF-F @ _FIG.PH + ! _DVF-F @ _FIG.PW + !
+        _DV-RELEASE
+    THEN
     _DVF-F @ ;
 
 \ The rows a figure's picture takes in a text area WIDTH cells wide: the
@@ -289,24 +305,51 @@ VARIABLE _DVF-F
     ROT _FIG.PH + @ * OVER 2* 1- + SWAP 2* /
     1 MAX _DOCV-O-HEIGHT _DV@ ?DUP IF MIN THEN ;
 
-\ Give back a figure's picture widget, region, name and source.
+\ Give back a figure's maker, and the source the view made from it.
+: _DV-FIG-UNMAKE  ( fig -- )
+    DUP _FIG.SOURCE + @ ?DUP IF DUP MEDSRC-RELEASE MEDSRC-SPAN-SIZE _DV-FREE THEN
+    0 OVER _FIG.SOURCE + !
+    DUP _FIG.MAKER + @ ?DUP IF DUP PIC-MAKER-FREE PIC-MAKER-SIZE _DV-FREE THEN
+    0 SWAP _FIG.MAKER + ! ;
+
+\ Give back a figure's picture widget, region, name, source and maker.
 : _DV-FIG-HIDE  ( fig -- )
     DUP _FIG.PICT + @ ?DUP IF PICT-FREE THEN
     DUP _FIG.RGN + @ ?DUP IF RGN-FREE THEN
-    DUP _FIG.SOURCE + @ _DV-RELEASE
+    0 OVER _FIG.PICT + !  0 OVER _FIG.RGN + !
+    DUP _FIG.MAKER + @ IF DUP _DV-FIG-UNMAKE ELSE DUP _FIG.SOURCE + @ _DV-RELEASE THEN
     DUP _FIG.NAME-A + @ OVER _FIG.NAME-U + @ _DV-FREE
-    0 OVER _FIG.PICT + !  0 OVER _FIG.RGN + !  0 OVER _FIG.SOURCE + !
-    0 OVER _FIG.NAME-A + !  0 SWAP _FIG.NAME-U + ! ;
+    0 OVER _FIG.SOURCE + !  0 OVER _FIG.NAME-A + !  0 SWAP _FIG.NAME-U + ! ;
 
 : _DV-FIGS-FREE  ( -- )
     _DOCV-O-FIGS-N _DV@ 0 ?DO I _DV-FIG _DV-FIG-HIDE LOOP
     _DOCV-O-FIGS-A _DV@ _DOCV-O-FIGS-CAP _DV@ _DV-FREE
     0 _DOCV-O-FIGS-A _DV! 0 _DOCV-O-FIGS-CAP _DV! 0 _DOCV-O-FIGS-N _DV! ;
 
+\ Give the figure a picture widget showing SOURCE, in a region inside the
+\ view's.
+: _DV-FIG-WIDGET  ( source fig -- )
+    _DVF-F !  _DVF-F @ _FIG.SOURCE + !
+    _DV-RGN 0 0 1 1 RGN-SUB _DVF-F @ _FIG.RGN + !
+    _DVF-F @ _FIG.RGN + @ _DOCV-O-MSRC _DV@ PICT-NEW _DVF-F @ _FIG.PICT + !
+    _DVF-F @ _FIG.SOURCE + @
+    _DVF-F @ _FIG.NAME-A + @ _DVF-F @ _FIG.NAME-U + @
+    _DVF-F @ _FIG.PICT + @ PICT-SOURCE! ;
+
+\ A figure's maker after a step: once ready, its file's source, in a
+\ record of the view's, shown by a picture widget; once failed, or when
+\ memory refuses the record, nothing more, so the figure shows its name.
+: _DV-FIG-STEPPED  ( state fig -- )
+    SWAP DUP PIC-ST-PENDING = IF 2DROP EXIT THEN
+    PIC-ST-READY <> IF _DV-FIG-UNMAKE EXIT THEN
+    MEDSRC-SPAN-SIZE _DV-ALLOC ?DUP 0= IF _DV-FIG-UNMAKE EXIT THEN   ( fig source )
+    DUP 2 PICK _FIG.MAKER + @ PIC-MAKER-SOURCE  SWAP _DV-FIG-WIDGET ;
+
 \ _DV-FIG-SHOW ( name-a name-u fig -- )
 \   Give a figure a picture widget showing its picture, in a region inside
-\   the view's, when its source and memory allow.  It is tried once while
-\   the figure stays shown; a figure without one shows its name.
+\   the view's, when its source and memory allow; a picture the document
+\   holds gets one once its maker has made its file.  It is tried once
+\   while the figure stays shown; a figure without one shows its name.
 : _DV-FIG-SHOW  ( name-a name-u fig -- )
     _DVF-F !
     _DVF-F @ _FIG.NAME-A + @ IF 2DROP EXIT THEN
@@ -314,14 +357,17 @@ VARIABLE _DVF-F
     DUP _DV-ALLOC ?DUP 0= IF 2DROP EXIT THEN            ( a u copy )
     DUP _DVF-F @ _FIG.NAME-A + !  OVER _DVF-F @ _FIG.NAME-U + !
     SWAP MOVE
-    _DVF-F @ _FIG.NAME-A + @ _DVF-F @ _FIG.NAME-U + @ _DV-RESOLVE
-    ?DUP 0= IF EXIT THEN
-    _DVF-F @ _FIG.SOURCE + !
-    _DV-RGN 0 0 1 1 RGN-SUB _DVF-F @ _FIG.RGN + !
-    _DVF-F @ _FIG.RGN + @ _DOCV-O-MSRC _DV@ PICT-NEW _DVF-F @ _FIG.PICT + !
-    _DVF-F @ _FIG.SOURCE + @
     _DVF-F @ _FIG.NAME-A + @ _DVF-F @ _FIG.NAME-U + @
-    _DVF-F @ _FIG.PICT + @ PICT-SOURCE! ;
+    _DV-DOC DOC-PICTURES? IF
+        PIC-MAKER-SIZE _DV-ALLOC ?DUP 0= IF 2DROP EXIT THEN
+        DUP >R _DV-DOC DOC-PICTURE IF
+            R> _DVF-F @ _FIG.MAKER + !
+        ELSE
+            R> PIC-MAKER-SIZE _DV-FREE
+        THEN EXIT
+    THEN
+    _DV-RESOLVE ?DUP 0= IF EXIT THEN
+    _DVF-F @ _DV-FIG-WIDGET ;
 
 \ =====================================================================
 \  4. Rows
@@ -1026,26 +1072,40 @@ VARIABLE _DVH-BLOCK
 : DOCV-FOLLOW  ( target-a target-u widget -- )
     _DV-W ! _DV-DOC 0= IF 2DROP EXIT THEN _DV-FOLLOW ;
 
+\ A figure whose picture's file is still being made.
+: _DV-MAKING?  ( fig -- flag )
+    DUP _FIG.MAKER + @ 0<> SWAP _FIG.PICT + @ 0= AND ;
+
 \ DOCV-PENDING? ( widget -- flag )
-\   The view needs a part read, or a figure's picture is still pending.
+\   The view needs a part read, a figure's picture's file is being made,
+\   or a figure's picture is still pending.
 : DOCV-PENDING?  ( widget -- flag )
     _DV-W !
     _DOCV-O-NEED _DV@ 0< 0= IF -1 EXIT THEN
     _DOCV-O-FIGS-N _DV@ 0 ?DO
-        I _DV-FIG _FIG.PICT + @ ?DUP IF
+        I _DV-FIG DUP _DV-MAKING? IF DROP -1 UNLOOP EXIT THEN
+        _FIG.PICT + @ ?DUP IF
             PICT-PENDING? IF -1 UNLOOP EXIT THEN
         THEN
     LOOP 0 ;
 
 \ DOCV-SERVICE ( widget -- changed? )
-\   Read the part the view needs, or else decode some more of the first
-\   figure whose picture is pending.  True when what the view shows
-\   changed.
+\   Read the part the view needs, or else make some more of the first
+\   figure's picture's file, or else decode some more of the first figure
+\   whose picture is pending.  True when what the view shows changed.
 : DOCV-SERVICE  ( widget -- changed? )
     _DV-W !
     _DOCV-O-NEED _DV@ DUP 0< 0= IF
         -1 _DOCV-O-NEED _DV!  _DV-READ-PART EXIT
     THEN DROP
+    _DOCV-O-FIGS-N _DV@ 0 ?DO
+        I _DV-FIG DUP _DV-MAKING? IF
+            PICT-STEP-PIXELS OVER _FIG.MAKER + @ PIC-MAKER-STEP
+            DUP PIC-ST-PENDING <> SWAP ROT _DV-FIG-STEPPED
+            DUP IF _DV-W @ WDG-DIRTY THEN
+            UNLOOP EXIT
+        THEN DROP
+    LOOP
     _DOCV-O-FIGS-N _DV@ 0 ?DO
         I _DV-FIG _FIG.PICT + @ ?DUP IF
             DUP PICT-PENDING? IF

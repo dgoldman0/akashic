@@ -10,8 +10,8 @@ REQUIRE pdf/document.f
 
 `PROVIDED akashic-pdf-document`. It depends on `pdf/filter.f`,
 `pdf/file.f`, `pdf/page.f`, `pdf/font.f`, `pdf/content.f`, `pdf/struct.f`,
-`pdf/layout.f`, `media/document.f`, `text/text-style.f` and
-`utils/string.f`.
+`pdf/layout.f`, `pdf/image.f`, `media/document.f`, `media/picture.f`,
+`text/text-style.f` and `utils/string.f`.
 
 ## Public API
 
@@ -46,7 +46,18 @@ blocks lies inside the quote. A list item's block starts its item, with the
 number and marker width the layout found.
 
 A figure has no caption. Its name is `picture` and its picture object's
-number, such as `picture 30`, which [pdf/image.f](image.md) opens.
+number, such as `picture 30`.
+
+## Pictures
+
+The document holds its pictures (`DOC-PICTURES?`). `DOC-PICTURE` opens the
+picture object a figure's name gives with [pdf/image.f](image.md) and fills
+a maker ([media/picture.f](../media/picture.md)) with its size, which makes
+its file a step at a time: a JPEG as it is, or samples as a QOI file. A
+picture that makes no file, such as JPEG 2000 data, or an object that is no
+picture, gives no maker, and the view shows the figure's name. Each maker
+holds its own picture record from the document's memory, given back with
+`PIC-MAKER-FREE`.
 
 ## Text kept
 

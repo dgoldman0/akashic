@@ -3,8 +3,9 @@
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: PDF-DOC- (public), _PDD- (private)
 \  Depends on: pdf/filter.f, pdf/file.f, pdf/page.f, pdf/font.f,
-\              pdf/content.f, pdf/struct.f, pdf/layout.f,
-\              media/document.f, text/text-style.f, utils/string.f
+\              pdf/content.f, pdf/struct.f, pdf/layout.f, pdf/image.f,
+\              media/document.f, media/picture.f, text/text-style.f,
+\              utils/string.f
 \
 \  Public API:
 \   PDF-DOC-READER   ( -- reader )     the reader, for DOC-OPEN
@@ -21,7 +22,10 @@
 \
 \  Each page read keeps its text and meanings, so a block's content is
 \  copied from them, never laid out again.  A figure's name is "picture"
-\  and its picture object's number (pdf/image.f).
+\  and its picture object's number.  The document holds its pictures
+\  (DOC-PICTURES?): DOC-PICTURE gives a maker (media/picture.f) that
+\  turns the object into a file a step at a time (pdf/image.f), for a
+\  picture that makes one.
 \
 \  A blank row lies before each block but the first page's start, and
 \  none between two list items; a blank row between two quoted blocks
@@ -43,7 +47,9 @@ REQUIRE font.f
 REQUIRE content.f
 REQUIRE struct.f
 REQUIRE layout.f
+REQUIRE image.f
 REQUIRE ../media/document.f
+REQUIRE ../media/picture.f
 REQUIRE ../text/text-style.f
 REQUIRE ../utils/string.f
 
@@ -272,10 +278,45 @@ CREATE _PDD-NAME 32 ALLOT
     THEN
     IF DOC-S-OK ELSE DOC-S-MEMORY THEN ;
 
+\ =====================================================================
+\  A figure's picture
+\ =====================================================================
+
+VARIABLE _PDK-N
+
+\ The picture object a figure's name gives: "picture" and its number.
+: _PDD-PICTURE-NUM  ( name-a name-u -- num ok? )
+    DUP 9 < IF 2DROP 0 0 EXIT THEN
+    OVER 8 S" picture " STR-STR= 0= IF 2DROP 0 0 EXIT THEN
+    8 /STRING 0 _PDK-N !
+    BEGIN DUP WHILE
+        OVER C@ DUP 48 58 WITHIN 0= IF DROP 2DROP 0 0 EXIT THEN
+        48 - _PDK-N @ 10 * + _PDK-N !  1 /STRING
+    REPEAT 2DROP _PDK-N @ -1 ;
+
+\ A picture's job: the memory source it came from, then its record.
+: _PDD-PIC-STEP    ( budget job -- state )  8 + PDF-IMAGE-STEP ;
+: _PDD-PIC-SOURCE  ( source job -- )  8 + SWAP PDF-IMAGE-SOURCE ;
+: _PDD-PIC-FREE    ( job -- )
+    DUP 8 + PDF-IMAGE-FREE  DUP @ SWAP PDF-IMAGE-SIZE 8 + ROT MSRC-FREE ;
+
+\ Fill MAKER for the picture a figure names, when it makes a file.
+: _PDD-PICTURE  ( name-a name-u maker doc -- ok? )
+    _PDD-USE >R
+    _PDD-PICTURE-NUM 0= IF DROP R> DROP 0 EXIT THEN
+    PDF-IMAGE-SIZE 8 + _PDD-ALLOC ?DUP 0= IF DROP R> DROP 0 EXIT THEN
+    _PDD-D @ DOC-MSRC@ OVER !                            ( num job )
+    TUCK 8 + _PDD-FILE SWAP PDF-IMAGE-OPEN               ( job status )
+    PDF-S-OK <> OVER 8 + PDF-IMAGE-FORMAT 0= OR IF _PDD-PIC-FREE R> DROP 0 EXIT THEN
+    DUP 8 + PDF-IMAGE-WIDTH OVER 8 + PDF-IMAGE-HEIGHT
+    ['] _PDD-PIC-STEP ['] _PDD-PIC-SOURCE ['] _PDD-PIC-FREE 5 ROLL
+    R> PIC-MAKER-INIT -1 ;
+
 CREATE _PDD-READER RDR-SIZE ALLOT
 ' _PDD-STRUCTURE _PDD-READER RDR.STRUCTURE-XT !
 ' _PDD-CONTENT   _PDD-READER RDR.CONTENT-XT !
 ' _PDD-CLOSE     _PDD-READER RDR.CLOSE-XT !
 ' _PDD-PART      _PDD-READER RDR.PART-XT !
+' _PDD-PICTURE   _PDD-READER RDR.PICTURE-XT !
 
 : PDF-DOC-READER  ( -- reader )  _PDD-READER ;

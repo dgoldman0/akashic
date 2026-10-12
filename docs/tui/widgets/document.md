@@ -108,7 +108,16 @@ on no link, is dropped.
 
 ### Figures
 
-The owner says where a figure's picture comes from:
+A document that holds its figures' pictures itself, as a PDF does
+(`DOC-PICTURES?`), gives each one's maker ([media/picture.f](../../media/picture.md)).
+The view reads the picture's size from the maker when it first counts the
+figure's rows. While the figure is shown, `DOCV-SERVICE` makes its file,
+`PICT-STEP-PIXELS` a call, after any part it needs and before any picture
+decoding; the figure shows its name until its file is made, and then a
+picture widget shows the file. A picture whose file cannot be made shows the
+figure's name.
+
+Otherwise the owner says where a figure's picture comes from:
 
 - a resolve word `( name-a name-u ctx -- source | 0 )` gives a
   [media source](../../media/source.md) for a picture's name;
@@ -124,7 +133,8 @@ resolved shows its name.
 
 `DOCV-SERVICE` decodes some more of the first figure whose picture is still
 decoding, `PICT-STEP-PIXELS` source pixels a call, as the UIDL host's
-service pass does for picture widgets, once no part is needed.
+service pass does for picture widgets, once no part is needed and no
+picture's file is being made.
 
 The view keeps a record of each figure it has met, in block order whichever
 it meets first. A rich side shows each figure with a row in view as a
@@ -183,8 +193,8 @@ part could not be read)"; its rows are counted again at the next pass.
 | `DOCV-SHOWN` | `( widget -- first end )` | The blocks the last draw showed. |
 | `DOCV-ROWS` | `( index widget -- rows )` | The rows block `index` takes at the view's width, its blank rows included. |
 | `DOCV-REVISION@` | `( widget -- n )` | Counts every change in what the view shows. |
-| `DOCV-PENDING?` | `( widget -- flag )` | The view needs a part read, or a figure's picture is still decoding. |
-| `DOCV-SERVICE` | `( widget -- changed? )` | Read the part the view needs, or else decode some more of a figure's picture; true when what the view shows changed. |
+| `DOCV-PENDING?` | `( widget -- flag )` | The view needs a part read, a figure's picture's file is being made, or a figure's picture is still decoding. |
+| `DOCV-SERVICE` | `( widget -- changed? )` | Read the part the view needs, or else make some more of a figure's picture's file, or else decode some more of a figure's picture; true when what the view shows changed. |
 | `DOCV-FIGURE-COUNT` | `( widget -- n )` | The figure records the view keeps. |
 | `DOCV-FIGURE@` | `( i widget -- key picture \| 0 )` | Figure record `i`, in block order: its block's key and the picture widget showing it while it has a row in view; `0 0` out of range. |
 | `DOCV-FIGURE-PICTURE` | `( key widget -- picture \| 0 )` | The picture widget showing the figure of the block with `key`. |

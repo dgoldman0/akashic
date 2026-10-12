@@ -72,6 +72,16 @@ so it looks at none in most places. With `LAST?` it gives the last such part
 `DOC-COUNT`, for the parts after the last block. A view stops at such a gap
 and reads the part when it needs it (`tui/widgets/document.f`).
 
+## Pictures a document holds
+
+A figure names its picture. Most documents name a file, which the owner of a
+view opens. A document that holds its pictures itself, as a PDF does, says
+so with `DOC-PICTURES? ( doc -- flag )`, and `DOC-PICTURE ( name-a name-u
+maker doc -- ok? )` fills a maker that makes the named picture's file a step
+at a time, false when the document holds no such picture or memory is
+refused. The maker's user gives it back with `PIC-MAKER-FREE` before the
+document is closed.
+
 ## Anchors
 
 `DOC-ANCHOR ( name-a name-u doc -- index | -1 )` finds the heading a link
@@ -125,7 +135,7 @@ target-a target-u )` and `DCT-LINK-AT ( offset content -- target-a target-u
 
 ## Readers
 
-A reader is a record of four execution tokens, `RDR-SIZE` bytes:
+A reader is a record of five execution tokens, `RDR-SIZE` bytes:
 
 | Field | Stack | Job |
 |---|---|---|
@@ -133,6 +143,7 @@ A reader is a record of four execution tokens, `RDR-SIZE` bytes:
 | `RDR.CONTENT-XT` | `( index doc -- status )` | Fill the builder with `DOC-CB-TEXT`, `DOC-CB-LINK`, `DOC-CB-KIND` and `DOC-CB-FIGURE`. |
 | `RDR.CLOSE-XT` | `( doc -- )` | Give back what the reader keeps, in `DOC-STATE@`. |
 | `RDR.PART-XT` | `( part doc -- status )` | Add one part's blocks and their containers; 0 for a reader that adds no parts. |
+| `RDR.PICTURE-XT` | `( name-a name-u maker doc -- ok? )` | Fill a maker ([media/picture.f](picture.md)) for a picture the document holds itself, which a figure names; 0 for a reader whose figures name files. |
 
 A reader may keep one cell of its own with `DOC-STATE!`, two cells in each
 block's record, `BLK-LOC@`, to find the block's text again, and two in each

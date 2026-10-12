@@ -145,6 +145,7 @@ VARIABLE PG-D  VARIABLE PG-START  VARIABLE PG-GAP
 ' PG-CONTENT PG-READER RDR.CONTENT-XT !
 ' PG-CLOSE PG-READER RDR.CLOSE-XT !
 0 PG-READER RDR.PART-XT !
+0 PG-READER RDR.PICTURE-XT !
 : DV-OPEN-WITH  ( a u reader -- )
     >R DV-SRC MEDSRC-MEMORY
     DV-SRC R> DV-MSRC DV-DOC DOC-OPEN ." OPEN=" . CR
@@ -189,6 +190,7 @@ VARIABLE PT-AT  VARIABLE PT-END  VARIABLE PT-N  VARIABLE PT-READS  VARIABLE PT-F
 ' PG-CONTENT PT-READER RDR.CONTENT-XT !
 ' PG-CLOSE PT-READER RDR.CLOSE-XT !
 ' PT-PART PT-READER RDR.PART-XT !
+0 PT-READER RDR.PICTURE-XT !
 : DV-OPEN-PARTS  ( a u -- )  PT-READER DV-OPEN-WITH ;
 \ Draw, and serve the view until it needs nothing more.
 : DV-SETTLE  ( -- )
@@ -237,7 +239,7 @@ CREATE DV-EV-MEM 31 ALLOT
 """
 
 
-def _runtime(document: bytes = b"", picture: bytes = b""):
+def _runtime(document: bytes = b"", picture: bytes = b"", roots: tuple[str, ...] = ()):
     runtime = MegaForthRuntime(
         memory=create_one_core_address_space(external_size=128 << 20, hbw_size=1 << 20),
         execution_backend="native",
@@ -246,7 +248,8 @@ def _runtime(document: bytes = b"", picture: bytes = b""):
     runtime.evaluate(b"ENTER-USERLAND", source_name="document-view-userland")
     source = []
     for module in dependency_order(AK, ("tui/widgets/document.f", "markup/markdown.f",
-                                        "tui/rich-terminal/uidl-semantic-documents-doc1.f")):
+                                        "tui/rich-terminal/uidl-semantic-documents-doc1.f",
+                                        *roots)):
         source.extend(_load_forth_lines(AK / module))
     runtime.evaluate(("\n".join(source) + "\n").encode(),
                      source_name="document-view-closure", step_budget=800_000_000)
@@ -267,8 +270,8 @@ def _runtime(document: bytes = b"", picture: bytes = b""):
 
 
 def _run(lines: list[str], document: bytes = b"", picture: bytes = b"",
-         max_steps: int = 2_000_000_000) -> str:
-    runtime = _runtime(document, picture)
+         max_steps: int = 2_000_000_000, roots: tuple[str, ...] = ()) -> str:
+    runtime = _runtime(document, picture, roots)
     program = ["DEPTH DV-DEPTH !", "0 DV-MSRC-INIT", "80 30 SCR-NEW SCR-USE", *lines,
                'DEPTH DV-DEPTH @ - ." @D:" . CR']
     try:
@@ -1254,3 +1257,86 @@ def test_a_figure_keeps_its_record_when_a_part_is_read_before_it() -> None:
     assert re.search(r"AT=1 0 0 ", output)
     assert "BYKEY=-1 " in output
     assert "CAPTURE=0 " in output and "VALID=0 " in output
+
+
+# --------------------------------------------------------------------------
+# Pictures a document holds
+# --------------------------------------------------------------------------
+
+def _figured_pdf() -> tuple[bytes, list]:
+    """A page with a Flate picture of samples and a stored JPEG, and the
+    samples' pixels."""
+
+    import zlib
+    from test_pdf_content import HELVETICA
+    from test_pdf_file import stream_object, write_pdf
+    from test_pdf_image import jpeg, picture
+    from test_pdf_layout import line
+    rows = [[(r, g, b, 255) for r, g, b, _ in row] for row in _gradient(40, 24)]
+    samples = bytes(c for row in rows for pixel in row for c in pixel[:3])
+    stream = b"".join([
+        line("F1", 10, 72, 720, "Before the pictures."),
+        b"q 200 0 0 120 72 560 cm /Im1 Do Q\n",
+        line("F1", 10, 72, 540, "Between them."),
+        b"q 120 0 0 90 72 430 cm /Im2 Do Q\n",
+        line("F1", 10, 72, 410, "After them."),
+    ])
+    pdf = write_pdf({
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+           b"/Resources << /Font << /F1 10 0 R >> /XObject << /Im1 30 0 R /Im2 31 0 R >> >> >>",
+        4: stream_object(zlib.compress(stream), b"/Filter /FlateDecode"),
+        10: HELVETICA,
+        30: picture(zlib.compress(samples), b"/Width 40 /Height 24 /ColorSpace /DeviceRGB "
+                    b"/BitsPerComponent 8 /Filter /FlateDecode"),
+        31: picture(jpeg(40, 30), b"/Width 40 /Height 30 /ColorSpace /DeviceRGB "
+                    b"/BitsPerComponent 8 /Filter /DCTDecode"),
+    })
+    return pdf, rows
+
+
+def test_a_pdf_figure_shows_the_picture_its_file_is_made_into() -> None:
+    """A PDF holds its figures' pictures: the view takes each one's size
+    from its maker, makes its file from the service while it is shown,
+    and then shows it as any figure's picture: the samples as a QOI file
+    in the same cells a picture widget shows for that QOI, and the JPEG as
+    a JPEG file of its size.  Everything comes back."""
+
+    pdf, rows = _figured_pdf()
+    expected = qoi_codec.encode(rows)
+    height, cols = 30, 40
+    picture_rows = _picture_rows((40, 24), cols, height)
+    lines = [
+        _view(height, cols), f"DV-FILE {len(pdf)} PDF-DOC-READER DV-OPEN-WITH",
+        ": DV-FIG.  ( i -- )  DV-W @ DOCV-FIGURE@ SWAP .\" K=\" . ?DUP IF PICT-FILE@ "
+        "ROT .\" F=\" . SWAP . . ELSE .\" NONE \" THEN ;",
+        "DV-DRAW DV-W @ DOCV-SERVICE DROP DV-DRAW",
+        '." MAKING=" DV-W @ DOCV-PENDING? . 0 DV-FIG. CR',
+        'DV-SETTLE ." MADE=" DV-W @ DOCV-FIGURE-COUNT . 0 DV-FIG. 1 DV-FIG. CR',
+        "DV-CELLS",
+        "VARIABLE DV-P  VARIABLE DV-PR  VARIABLE DV-PS",
+        f"TOP-ROW LEFT-COL {picture_rows} {cols} RGN-NEW DV-PR !",
+        "DV-PR @ DV-MSRC PICT-NEW DV-P !",
+        "MEDSRC-SIZE ALLOCATE DROP DV-PS !  DV-PIC DV-PIC-U @ DV-PS @ MEDSRC-MEMORY",
+        "DV-PS @ S\" alone\" DV-P @ PICT-SOURCE!",
+        "DV-STYLE DV-P @ WDG-DRAW DV-P @ DV-PICT-SERVICE DV-STYLE DV-P @ WDG-DRAW",
+        f"{picture_rows} {cols} 0 DV-CELLS-BELOW",
+        "DV-P @ PICT-FREE DV-PR @ RGN-FREE DV-PS @ FREE",
+        "DV-CLOSE",
+    ]
+    output = _run(lines, pdf, expected, roots=("pdf/document.f",))
+    assert "OPEN=0 " in output and "HELD=0 " in output, output[-3000:]
+    # Before the service, the first figure's file is still being made.
+    assert re.search(r"MAKING=-1 K=3 NONE", output), output[:300]
+    # Made: the samples as a QOI file of their size, the JPEG as itself.
+    assert "MADE=2 K=3 F=2 40 24 K=5 F=4 40 30 " in output, output[:300]
+    alone_section = output.split("@@ALONE")[1].split("@@")[0]
+    alone = {(int(r), int(c)): (int(cp), int(fg), int(bg), int(attrs))
+             for r, c, cp, fg, bg, attrs in re.findall(
+                 r"C (\d+) (\d+) (\d+) (\d+) (\d+) (\d+)", alone_section)}
+    assert any(cell[0] == 0x2580 for cell in alone.values())
+    cells = _cells(output)
+    picture_top = 4          # the page's start, a blank row, a line, a blank row
+    for (row, col), cell in alone.items():
+        assert cells[(picture_top + row, col)] == cell, (row, col)

@@ -51,6 +51,8 @@
 \    DOC-PART-COUNT  ( part doc -- blocks )
 \    DOC-PART-OF     ( index doc -- part | -1 )
 \    DOC-GAP         ( index last? doc -- part | -1 )
+\    DOC-PICTURES?   ( doc -- flag )
+\    DOC-PICTURE     ( name-a name-u maker doc -- ok? )
 \  A reader adds with DOC-ADD-BLOCK DOC-ADD-CONTAINER DOC-ADD-PART and
 \  fills a block's content with DOC-CB-TEXT DOC-CB-LINK DOC-CB-KIND
 \  DOC-CB-FIGURE; it finds a part with DOC-PART-LOC@.
@@ -222,14 +224,17 @@ VARIABLE _DLA-OFF
 \ with DOC-ADD-BLOCK and DOC-ADD-CONTAINER, or adds parts with
 \ DOC-ADD-PART; its content pass ( index doc -- status ), which fills the
 \ builder with DOC-CB-TEXT, DOC-CB-LINK, DOC-CB-KIND and DOC-CB-FIGURE;
-\ what it gives back ( doc -- ); and its part pass ( part doc -- status ),
+\ what it gives back ( doc -- ); its part pass ( part doc -- status ),
 \ which adds a part's blocks as the structure pass adds blocks, or 0 for a
-\ reader that adds no parts.
+\ reader that adds no parts; and its pictures ( name-a name-u maker doc --
+\ ok? ), which fills a maker (media/picture.f) for a figure's picture the
+\ document holds itself, or 0 for a reader whose figures name files.
 : RDR.STRUCTURE-XT ( r -- a )        ;
 : RDR.CONTENT-XT   ( r -- a )    8 + ;
 : RDR.CLOSE-XT     ( r -- a )   16 + ;
 : RDR.PART-XT      ( r -- a )   24 + ;
-32 CONSTANT RDR-SIZE
+: RDR.PICTURE-XT   ( r -- a )   32 + ;
+40 CONSTANT RDR-SIZE
 
 \ A part: two cells the reader keeps to find it, where its blocks lie
 \ (or will, when it is read), how many there are, and whether it is read.
@@ -631,6 +636,24 @@ VARIABLE _DRP-TMP
         REPEAT
     THEN
     2DROP R> DROP -1 ;
+
+\ ---------------------------------------------------------------------
+\  Pictures a document holds
+\ ---------------------------------------------------------------------
+
+\ DOC-PICTURES? ( doc -- flag )
+\   Whether the document holds its figures' pictures itself, as a PDF
+\   does, rather than naming files.
+: DOC-PICTURES?  ( doc -- flag )  _DOC.READER @ RDR.PICTURE-XT @ 0<> ;
+
+\ DOC-PICTURE ( name-a name-u maker doc -- ok? )
+\   Fill MAKER (media/picture.f) for the picture a figure names, which the
+\   document holds; false when it holds none of that name, or memory is
+\   refused.  The maker's user gives it back with PIC-MAKER-FREE, before
+\   the document is closed.
+: DOC-PICTURE  ( name-a name-u maker doc -- ok? )
+    DUP _DOC.READER @ RDR.PICTURE-XT @ ?DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    EXECUTE ;
 
 \ DOC-KEY>INDEX ( key doc -- index | -1 )   The block with KEY, if read.
 : DOC-KEY>INDEX  ( key doc -- index | -1 )

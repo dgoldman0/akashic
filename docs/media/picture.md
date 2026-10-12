@@ -70,6 +70,34 @@ or 0 when `Σa` is 0.
 | `PIC-SOURCE-WIDTH@`, `PIC-SOURCE-HEIGHT@` | `( pic -- n )` | The picture's size, once started. |
 | `PIC-PIXELS` | `( pic -- a u )` | The copy's RGBA8 rows when ready, else `0 0`. |
 
+## Pictures made in steps
+
+A maker makes a picture's file a step at a time, as
+[pdf/image.f](../pdf/image.md) turns a PDF's samples into a QOI file, so a
+view can show a picture whose file does not exist yet without waiting for
+it. The picture's size is known before its file is made, so a view lays it
+out at once. A maker is a record its user owns, `PIC-MAKER-SIZE` bytes,
+which whoever knows the picture fills with `PIC-MAKER-INIT` and three words
+of its own:
+
+| Word | Stack | Job |
+|---|---|---|
+| step | `( budget ctx -- state )` | Make about `budget` more of the file: `PIC-ST-PENDING`, `-READY` or `-FAILED`. |
+| source | `( source ctx -- )` | Make `source`, a `MEDSRC-SPAN-SIZE` record, the ready file's media source. |
+| free | `( ctx -- )` | Give back all `ctx` holds. |
+
+| Word | Stack | Meaning |
+|---|---|---|
+| `PIC-MAKER-SIZE` | `( -- bytes )` | The record. |
+| `PIC-MAKER-INIT` | `( w h step-xt source-xt free-xt ctx maker -- )` | Fill it, pending. |
+| `PIC-MAKER-SIZE@` | `( maker -- w h )` | The picture's size. |
+| `PIC-MAKER-STEP` | `( budget maker -- state )` | Make some more; a maker that is ready or failed returns its state and does nothing. |
+| `PIC-MAKER-SOURCE` | `( source maker -- )` | The ready file's source, valid until the maker is freed. |
+| `PIC-MAKER-FREE` | `( maker -- )` | Give back what it holds; the record is empty. |
+
+The [document view](../tui/widgets/document.md) makes the pictures a
+document holds this way.
+
 ## Example
 
 ```forth

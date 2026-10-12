@@ -1442,9 +1442,16 @@ them, a link to a far page reading that page alone.
 
 **Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, the
 file's side of steps 6 and 7 (pictures as files, links and the outline),
-and the first part of step 9: File Explorer previews a PDF as a document,
-read a page at a time. Its figures' pictures, its links and its contents
-come next, then AES once MegaPad's engine has CBC.
+and the first parts of step 9: File Explorer previews a PDF as a
+document, read a page at a time, with its pictures. Its links and its
+contents come next, then AES once MegaPad's engine has CBC.
+
+- A PDF's figures show their pictures. A document that holds its pictures
+  gives each figure a maker (`media/picture.f`), which makes the picture's
+  file a step at a time; the document view sizes the figure from it and
+  makes the file from its service while the figure is shown. A PDF's
+  samples become a QOI file that CELL shows cell for cell as it shows that
+  QOI anywhere, and a JPEG stays a JPEG.
 
 - A PDF is a document read a page at a time (`pdf/document.f`): a part for
   each page, each page its start, labelled with its number, then the blocks

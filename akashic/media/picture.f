@@ -40,6 +40,12 @@
 \    PIC-SOURCE-WIDTH@  ( pic -- w )     the picture
 \    PIC-SOURCE-HEIGHT@ ( pic -- h )
 \    PIC-PIXELS         ( pic -- a u )   when ready, else 0 0
+\    PIC-MAKER-SIZE     ( -- bytes )
+\    PIC-MAKER-INIT     ( w h step-xt source-xt free-xt ctx maker -- )
+\    PIC-MAKER-SIZE@    ( maker -- w h )
+\    PIC-MAKER-STEP     ( budget maker -- state )
+\    PIC-MAKER-SOURCE   ( source maker -- )
+\    PIC-MAKER-FREE     ( maker -- )
 \ =====================================================================
 
 REQUIRE ../render/qoi.f
@@ -513,6 +519,54 @@ VARIABLE _PST-BUDGET
     _PIC-GIVE-WORK
     _PIC.OW _PIC@ _PIC.OH _PIC@ * 4 * _PIC.OUT _PIC-GIVE
     0 _PIC.MAGIC _PIC!  PIC-ST-EMPTY _PIC.STATE _PIC! ;
+
+\ =====================================================================
+\  Pictures made in steps
+\ =====================================================================
+\
+\  A maker makes a picture's file a step at a time, as pdf/image.f turns a
+\  PDF's samples into a QOI file, so a view can show a picture whose file
+\  does not exist yet without waiting for it.  The picture's size is known
+\  before its file is made.  A maker is a record its user owns,
+\  PIC-MAKER-SIZE bytes, which whoever knows the picture fills with
+\  PIC-MAKER-INIT and three words of its own:
+\    STEP-XT    ( budget ctx -- state )  make about BUDGET more of the
+\                                       file: PIC-ST-PENDING, -READY or
+\                                       -FAILED
+\    SOURCE-XT  ( source ctx -- )        make SOURCE, a MEDSRC-SPAN-SIZE
+\                                       record, the ready file's source
+\    FREE-XT    ( ctx -- )               give back all CTX holds
+\  The source stays valid until PIC-MAKER-FREE.
+
+ 0 CONSTANT _PMK.W
+ 8 CONSTANT _PMK.H
+16 CONSTANT _PMK.STEP
+24 CONSTANT _PMK.SOURCE
+32 CONSTANT _PMK.FREE
+40 CONSTANT _PMK.CTX
+48 CONSTANT _PMK.STATE
+56 CONSTANT PIC-MAKER-SIZE
+
+: PIC-MAKER-INIT  ( w h step-xt source-xt free-xt ctx maker -- )
+    >R R@ _PMK.CTX + !  R@ _PMK.FREE + !  R@ _PMK.SOURCE + !  R@ _PMK.STEP + !
+    R@ _PMK.H + !  R@ _PMK.W + !  PIC-ST-PENDING R> _PMK.STATE + ! ;
+
+: PIC-MAKER-SIZE@  ( maker -- w h )  DUP _PMK.W + @ SWAP _PMK.H + @ ;
+
+\ PIC-MAKER-STEP ( budget maker -- state )
+\   Make about BUDGET more of the file, once it is neither ready nor failed.
+: PIC-MAKER-STEP  ( budget maker -- state )
+    DUP _PMK.STATE + @ PIC-ST-PENDING <> IF NIP _PMK.STATE + @ EXIT THEN
+    >R R@ _PMK.CTX + @ R@ _PMK.STEP + @ EXECUTE DUP R> _PMK.STATE + ! ;
+
+\ PIC-MAKER-SOURCE ( source maker -- )   The ready file's media source.
+: PIC-MAKER-SOURCE  ( source maker -- )
+    DUP _PMK.CTX + @ SWAP _PMK.SOURCE + @ EXECUTE ;
+
+\ PIC-MAKER-FREE ( maker -- )   Give back what the maker holds.
+: PIC-MAKER-FREE  ( maker -- )
+    DUP _PMK.FREE + @ ?DUP IF OVER _PMK.CTX + @ SWAP EXECUTE THEN
+    PIC-MAKER-SIZE 0 FILL ;
 
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
