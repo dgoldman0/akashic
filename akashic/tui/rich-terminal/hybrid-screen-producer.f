@@ -396,9 +396,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ A table entry of the pictures the terminal holds: its resource ID, zero
 \ when free, the copy's size in pixels and the bytes the owner holds for
 \ it, its decoded size, whether it is still uploading, the format it was
-\ sent in, and the picture it is a copy of: its document, element and
-\ revision.  A copy is that picture at that size and format, so nothing
-\ else is compared.
+\ sent in, and the picture it is a copy of: its document, element,
+\ revision and root key, which tells an element's figures apart.  A copy
+\ is that picture at that size and format, so nothing else is compared.
 : _RTHP-RS.ID        ( entry -- a )      ;
 : _RTHP-RS.WIDTH     ( entry -- a )  8 + ;
 : _RTHP-RS.HEIGHT    ( entry -- a ) 16 + ;
@@ -408,7 +408,8 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-RS.DOCUMENT  ( entry -- a ) 48 + ;
 : _RTHP-RS.INDEX     ( entry -- a ) 56 + ;
 : _RTHP-RS.REVISION  ( entry -- a ) 64 + ;
-72 CONSTANT _RTHP-RESOURCE-SIZE
+: _RTHP-RS.KEY       ( entry -- a ) 72 + ;
+80 CONSTANT _RTHP-RESOURCE-SIZE
 1 CONSTANT _RTHP-RS-UPLOADING
 2 CONSTANT _RTHP-RS-HELD
 \ An upload the lane stopped because its picture no longer shows.
@@ -510,6 +511,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 
 : _RTHP-U32+?  ( a b -- sum flag )
     OVER + DUP ROT U< 0= OVER 0xFFFFFFFF U> 0= AND ;
+
+\ Whether N fits a signed 32-bit field, as a retained origin does.
+: _RTHP-I32?  ( n -- flag )  -2147483648 2147483648 WITHIN ;
 
 : _RTHP-U32*?  ( a b -- product flag )
     UM* DUP IF 2DROP 0 0 EXIT THEN DROP
@@ -6333,6 +6337,8 @@ VARIABLE _RTHP-RF-ENTRY
         _RTHP-RF-DESC @ UPICSN-DOCUMENT@ <> IF 0 EXIT THEN
     _RTHP-RF-ENTRY @ _RTHP-RS.INDEX @
         _RTHP-RF-DESC @ UPICSN-SOURCE-INDEX@ <> IF 0 EXIT THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.KEY @
+        _RTHP-RF-DESC @ UPICSN-ROOT-KEY@ <> IF 0 EXIT THEN
     _RTHP-RF-ENTRY @ _RTHP-RS.REVISION @
         _RTHP-RF-DESC @ UPICSN-REVISION@ = ;
 
@@ -6349,7 +6355,8 @@ VARIABLE _RTHP-RF-ENTRY
 VARIABLE _RTHP-RB-BEST
 
 \ The newest copy the terminal holds of the picture DESCRIPTOR describes,
-\ at any size: the same document, element and revision; 0 when none.
+\ at any size: the same document, element, root key and revision; 0 when
+\ none.
 : _RTHP-RESOURCE-BEFORE  ( descriptor producer -- entry|0 )
     _RTHP-RF-P ! _RTHP-RF-DESC ! 0 _RTHP-RB-BEST !
     _RTHP-RF-DESC @ UPICSN-REVISION@ 0= IF 0 EXIT THEN
@@ -6361,6 +6368,8 @@ VARIABLE _RTHP-RB-BEST
             _RTHP-RF-DESC @ UPICSN-DOCUMENT@ = AND
         _RTHP-RF-ENTRY @ _RTHP-RS.INDEX @
             _RTHP-RF-DESC @ UPICSN-SOURCE-INDEX@ = AND
+        _RTHP-RF-ENTRY @ _RTHP-RS.KEY @
+            _RTHP-RF-DESC @ UPICSN-ROOT-KEY@ = AND
         _RTHP-RF-ENTRY @ _RTHP-RS.REVISION @
             _RTHP-RF-DESC @ UPICSN-REVISION@ = AND IF
             _RTHP-RB-BEST @ 0= IF -1 ELSE
@@ -6397,32 +6406,70 @@ VARIABLE _RTHP-SI-COL-END
         _RTHP-SI-DESC @ UPICSN-DOCUMENT@ = IF -1 UNLOOP EXIT THEN
     LOOP 0 ;
 
-\ The picture's cells lie on the surface at a paint order a claim takes,
-\ and no other root claims any of them.
+\ The claim at index I, and whether it meets the part shown.
+: _RTHP-SI-CLAIM-MEETS?  ( i -- flag )
+    _RTHP-SS-P @ _RTHP.CLAIMS-A @ SWAP RUCL-CLAIM-SIZE * + _RTHP-SS-CLAIM !
+    _RTHP-SI-ROW @ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW1@ <
+    _RTHP-SI-ROW-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW0@ > AND
+    _RTHP-SI-COL @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ < AND
+    _RTHP-SI-COL-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ > AND ;
+
+\ Whether the claim just met is the picture's own document's root and
+\ holds all of the part shown.
+: _RTHP-SI-OWN-CLAIM?  ( -- flag )
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-ATTACHMENT@ _RTHP-SI-DESC @ UPICSN-DOCUMENT@ =
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-SOURCE-INDEX@
+        _RTHP-SI-DESC @ UPICSN-SOURCE-INDEX@ = AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SI-ROW @ > 0= AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SI-COL @ > 0= AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SI-ROW-END @ < 0= AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ _RTHP-SI-COL-END @ < 0= AND ;
+
+\ The part of the picture shown lies on the surface at a paint order a
+\ claim takes, inside the picture's whole rectangle, which may reach off
+\ the surface.  An element's own picture claims that part, which no other
+\ root claims.  A figure leaves its part to the claim of its document's
+\ root, which must hold all of it.
 : _RTHP-SI-GEOMETRY?  ( -- flag )
-    _RTHP-SI-DESC @ UPICSN-ROW@ DUP _RTHP-SI-ROW ! 0< IF 0 EXIT THEN
-    _RTHP-SI-DESC @ UPICSN-COLUMN@ DUP _RTHP-SI-COL ! 0< IF 0 EXIT THEN
-    _RTHP-SI-DESC @ UPICSN-HEIGHT@ DUP 0> 0= IF DROP 0 EXIT THEN
-        _RTHP-SI-ROW @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
-        DUP _RTHP-SI-ROW-END ! _RTHP-SS-P @ _RTHP.ROWS @ U> IF 0 EXIT THEN
-    _RTHP-SI-DESC @ UPICSN-WIDTH@ DUP 0> 0= IF DROP 0 EXIT THEN
-        _RTHP-SI-COL @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
-        DUP _RTHP-SI-COL-END ! _RTHP-SS-P @ _RTHP.COLS @ U> IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-HEIGHT@ DUP 0> 0= SWAP _RTHP-I32? 0= OR IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-WIDTH@ DUP 0> 0= SWAP _RTHP-I32? 0= OR IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-ROW@ _RTHP-I32? 0= IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-COLUMN@ _RTHP-I32? 0= IF 0 EXIT THEN
+    \ The part shown: some of the whole rectangle.
+    _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ 0< IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ 0< IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ 0> 0= IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ 0> 0= IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ +
+        _RTHP-SI-DESC @ UPICSN-HEIGHT@ > IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ +
+        _RTHP-SI-DESC @ UPICSN-WIDTH@ > IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-ROW@ _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ +
+        DUP _RTHP-SI-ROW ! 0< IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-COLUMN@ _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ +
+        DUP _RTHP-SI-COL ! 0< IF 0 EXIT THEN
+    _RTHP-SI-ROW @ _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ +
+        DUP _RTHP-SI-ROW-END ! _RTHP-SS-P @ _RTHP.ROWS @ > IF 0 EXIT THEN
+    _RTHP-SI-COL @ _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ +
+        DUP _RTHP-SI-COL-END ! _RTHP-SS-P @ _RTHP.COLS @ > IF 0 EXIT THEN
     _RTHP-SI-DESC @ UPICSN-Z@ DUP 0< SWAP 255 > OR IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-FIGURE? IF
+        _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+            I _RTHP-SI-CLAIM-MEETS? IF _RTHP-SI-OWN-CLAIM? UNLOOP EXIT THEN
+        LOOP 0 EXIT
+    THEN
     _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
-        _RTHP-SS-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-SS-CLAIM !
-        _RTHP-SI-ROW @ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW1@ <
-        _RTHP-SI-ROW-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW0@ > AND
-        _RTHP-SI-COL @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ < AND
-        _RTHP-SI-COL-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ > AND
-            IF 0 UNLOOP EXIT THEN
+        I _RTHP-SI-CLAIM-MEETS? IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
 : _RTHP-SI-WRITE  ( -- rte-status )
     _RTHP-SS-P @ _RTHP.STATIC-COUNT @ DUP _RTHP-SS-INDEX !
         _RTHP-SS-P @ _RTHP.MAX-STATICS @ U< 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE _RTHP-U32+?
-        0= IF DROP RTE-S-INVALID EXIT THEN
+    \ A figure adds no claim; its document's root holds its cells.
+    _RTHP-SS-P @ _RTHP.CLAIMS-USED @
+    _RTHP-SI-DESC @ UPICSN-FIGURE? 0= IF
+        RUCL-CLAIM-SIZE _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
+    THEN
     DUP _RTHP-SS-NEXT ! _RTHP-SS-P @ _RTHP.CLAIMS-U @ U> IF
         RTE-S-INVALID EXIT
     THEN
@@ -6438,25 +6485,37 @@ VARIABLE _RTHP-SI-COL-END
     -1 _RTHP-SS-ITEM @ _RTE-STATIC.VISIBLE !
     _RTHP-SI-DESC @ UPICSN-Z@ _RTHP-SS-ITEM @ _RTE-STATIC.Z !
     _RTHP-SS-P @ _RTHP.REGION @ _RTHP-SS-ITEM @ _RTE-STATIC.REGION !
-    _RTHP-SI-ROW @ _RTHP-SS-ITEM @ _RTE-STATIC.ROW !
-    _RTHP-SI-COL @ _RTHP-SS-ITEM @ _RTE-STATIC.COL !
+    _RTHP-SI-DESC @ UPICSN-ROW@ _RTHP-SS-ITEM @ _RTE-STATIC.ROW !
+    _RTHP-SI-DESC @ UPICSN-COLUMN@ _RTHP-SS-ITEM @ _RTE-STATIC.COL !
     _RTHP-SI-DESC @ UPICSN-HEIGHT@ _RTHP-SS-ITEM @ _RTE-STATIC.HEIGHT !
     _RTHP-SI-DESC @ UPICSN-WIDTH@ _RTHP-SS-ITEM @ _RTE-STATIC.WIDTH !
+    \ A picture shown whole has no clip.
+    _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ _RTHP-SI-DESC @ UPICSN-HEIGHT@ <>
+    _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ _RTHP-SI-DESC @ UPICSN-WIDTH@ <> OR IF
+        _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-X !
+        _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-Y !
+        _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-COLS !
+        _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-ROWS !
+    THEN
     _RTHP-SS-P @ _RTHP.ROWS @ _RTHP-SS-ITEM @ _RTE-STATIC.ROOT-HEIGHT !
     _RTHP-SS-P @ _RTHP.COLS @ _RTHP-SS-ITEM @ _RTE-STATIC.ROOT-WIDTH !
     RTE-IMAGE-FIT-CONTAIN _RTHP-SS-ITEM @ _RTE-STATIC.FIT !
     255 _RTHP-SS-ITEM @ _RTE-STATIC.OPACITY !
     -1 _RTHP-SS-ITEM @ _RTE-STATIC.BACKDROP !
     _RTHP-SI-ENTRY @ _RTHP-RS.ID @ _RTHP-SS-ITEM @ _RTE-STATIC.RESOURCE !
-    \ A picture's correlation and claim name its document, its element and
-    \ the generation and root key every direct UIDL root has.
+    \ A picture's correlation and claim name its document, its element,
+    \ the generation every direct UIDL root has, and its root key: one for
+    \ an element's own picture, a figure's block key.
     _RTHP-SS-P @ _RTHP.STATIC-CORR-A @
         _RTHP-SS-INDEX @ _RTHP-STATIC-CORR-SIZE * + _RTHP-SS-CORR !
     _RTHP-SI-DESC @ UPICSN-DOCUMENT@ _RTHP-SS-CORR @ !
     _RTHP-SI-DESC @ UPICSN-SOURCE-INDEX@ _RTHP-SS-CORR @ 8 + !
     0 _RTHP-SS-CORR @ 16 + !
-    1 _RTHP-SS-CORR @ 24 + !
+    _RTHP-SI-DESC @ UPICSN-ROOT-KEY@ _RTHP-SS-CORR @ 24 + !
     0 _RTHP-SS-CORR @ 32 + !
+    _RTHP-SI-DESC @ UPICSN-FIGURE? IF
+        1 _RTHP-SS-P @ _RTHP.STATIC-COUNT +! RTE-S-OK EXIT
+    THEN
     _RTHP-SI-DESC @ UPICSN-DOCUMENT@
     _RTHP-SS-P @ _RTHP.SOURCE-GEN @
     UPICSN-SOURCE-UIDL
@@ -8635,6 +8694,7 @@ VARIABLE _RTHP-L-CHUNK
 \ again, which describes the picture as failed.
 : _RTHP-L-REFUSED  ( -- )
     _RTHP-L-ENTRY @ _RTHP-RS.DOCUMENT @ _RTHP-L-ENTRY @ _RTHP-RS.INDEX @
+    _RTHP-L-ENTRY @ _RTHP-RS.KEY @
     _RTHP-L-ENTRY @ _RTHP-RS.REVISION @ PIC-R-DAMAGED
     _RTHP-L-P @ _RTHP.ADAPTER @ RUHA-PICTURE-FAIL DROP
     1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +! ;
@@ -8969,6 +9029,7 @@ VARIABLE _RTHP-L-CHUNK
     _RTHP-L-DESC @ UPICSN-FORMAT@ _RTHP-L-ENTRY @ _RTHP-RS.FORMAT !
     _RTHP-L-DESC @ UPICSN-DOCUMENT@ _RTHP-L-ENTRY @ _RTHP-RS.DOCUMENT !
     _RTHP-L-DESC @ UPICSN-SOURCE-INDEX@ _RTHP-L-ENTRY @ _RTHP-RS.INDEX !
+    _RTHP-L-DESC @ UPICSN-ROOT-KEY@ _RTHP-L-ENTRY @ _RTHP-RS.KEY !
     _RTHP-L-DESC @ UPICSN-REVISION@ _RTHP-L-ENTRY @ _RTHP-RS.REVISION !
     _RTHP-L-P @ _RTHP.OWNER @ _RTHP-L-P @ _RTHP.OWNER-GEN @
     _RTHP-L-ENTRY @ _RTHP-RS.ID @
@@ -9403,6 +9464,12 @@ VARIABLE _RTHP-SX-LAST
 VARIABLE _RTHP-SX-CLAIM
 VARIABLE _RTHP-SX-U
 VARIABLE _RTHP-SX-IMAGES
+VARIABLE _RTHP-SX-NEXT
+VARIABLE _RTHP-SX-CORR
+VARIABLE _RTHP-SX-ROW
+VARIABLE _RTHP-SX-COL
+VARIABLE _RTHP-SX-ROW-END
+VARIABLE _RTHP-SX-COL-END
 
 : _RTHP-SX-SPAN? ( address bytes -- flag )
     DUP 0= IF DROP 0= EXIT THEN
@@ -9414,17 +9481,60 @@ VARIABLE _RTHP-SX-IMAGES
     DUP _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @ U> IF DROP 0 EXIT THEN
     _RTHP-SX-TEXT ! -1 ;
 
+\ The part of the valid static ITEM shown: its clip, or all of it.  Its
+\ origin fits 32 signed bits and its clip lies inside it.
+: _RTHP-SX-SHOWN  ( -- )
+    _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ _RTHP-SX-ROW !
+    _RTHP-SX-ITEM @ _RTE-STATIC.COL @ _RTHP-SX-COL !
+    _RTHP-SX-ITEM @ _RTE-STATIC-UNCLIPPED? IF
+        _RTHP-SX-ITEM @ _RTE-STATIC.HEIGHT @ _RTHP-SX-ROW @ + _RTHP-SX-ROW-END !
+        _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ _RTHP-SX-COL @ + _RTHP-SX-COL-END !
+        EXIT
+    THEN
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-Y @ _RTHP-SX-ROW +!
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-X @ _RTHP-SX-COL +!
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-ROWS @ _RTHP-SX-ROW @ + _RTHP-SX-ROW-END !
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-COLS @ _RTHP-SX-COL @ + _RTHP-SX-COL-END ! ;
+
+\ Whether static I is a figure: a picture whose shown part a claim made
+\ before the statics, by its own root, holds.  It takes no claim of its
+\ own.
+: _RTHP-SX-IN-ROOT?  ( i -- flag )
+    _RTHP-SX-ITEM @ _RTE-STATIC.KIND @ RTE-STATIC-IMAGE <> IF DROP 0 EXIT THEN
+    _RTHP-STATIC-CORR-SIZE * _RTHP-SX-P @ _RTHP.STATIC-CORR-A @ + _RTHP-SX-CORR !
+    _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ RUCL-CLAIM-SIZE / 0 ?DO
+        _RTHP-SX-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-SX-CLAIM !
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ATTACHMENT@ _RTHP-SX-CORR @ @ =
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-SOURCE-INDEX@ _RTHP-SX-CORR @ 8 + @ = AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SX-ROW @ > 0= AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SX-COL @ > 0= AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SX-ROW-END @ < 0= AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL1@ _RTHP-SX-COL-END @ < 0= AND
+            IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ Any other static takes the next claim after the base, which is exactly
+\ the part of it shown.
+: _RTHP-SX-OWN-CLAIM?  ( -- flag )
+    _RTHP-SX-NEXT @ RUCL-CLAIM-SIZE _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+        _RTHP-SX-P @ _RTHP.CLAIMS-USED @ U> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.CLAIMS-A @ _RTHP-SX-NEXT @ + _RTHP-SX-CLAIM !
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SX-ROW @ =
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SX-COL @ = AND
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SX-ROW-END @ = AND
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-COL1@ _RTHP-SX-COL-END @ = AND
+        0= IF 0 EXIT THEN
+    RUCL-CLAIM-SIZE _RTHP-SX-NEXT +! -1 ;
+
 : _RTHP-STATICS-FIXED? ( producer -- flag )
     _RTHP-SX-P !
     _RTHP-SX-P @ _RTHP.STATIC-COUNT @
         _RTHP-SX-P @ _RTHP.MAX-STATICS @ U> IF 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @
         _RTHP-SX-P @ _RTHP.STATIC-TEXT-U @ U> IF 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RUCL-CLAIM-SIZE _RTHP-U32*?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ _RTHP-U32+?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ DUP _RTHP-SX-NEXT !
+        DUP RUCL-CLAIM-SIZE MOD IF DROP 0 EXIT THEN
+        _RTHP-SX-P @ _RTHP.CLAIMS-USED @ U> IF 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.STATICS-A @
     _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE *
     _RTHP-SX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
@@ -9460,24 +9570,14 @@ VARIABLE _RTHP-SX-IMAGES
         _RTHP-SX-ITEM @ _RTE-STATIC.KIND @ RTE-STATIC-IMAGE = IF
             1 _RTHP-SX-IMAGES +!
         THEN
-        _RTHP-SX-ITEM @ _RTE-STATIC.ROW @
-        _RTHP-SX-ITEM @ _RTE-STATIC.HEIGHT @ _RTHP-U32+?
-            0= IF DROP 0 UNLOOP EXIT THEN
-        _RTHP-SX-P @ _RTHP.ROWS @ U> IF 0 UNLOOP EXIT THEN
-        _RTHP-SX-ITEM @ _RTE-STATIC.COL @
-        _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ _RTHP-U32+?
-            0= IF DROP 0 UNLOOP EXIT THEN
-        _RTHP-SX-P @ _RTHP.COLS @ U> IF 0 UNLOOP EXIT THEN
-        _RTHP-SX-P @ _RTHP.CLAIMS-A @
-        _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ +
-            I RUCL-CLAIM-SIZE * + _RTHP-SX-CLAIM !
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ <>
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SX-ITEM @ _RTE-STATIC.COL @ <> OR
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW1@
-            _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ _RTHP-SX-ITEM @ _RTE-STATIC.HEIGHT @ + <> OR
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL1@
-            _RTHP-SX-ITEM @ _RTE-STATIC.COL @ _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ + <> OR
-            IF 0 UNLOOP EXIT THEN
+        \ The part shown lies on the surface; the rest may reach off it.
+        _RTHP-SX-SHOWN
+        _RTHP-SX-ROW @ 0< _RTHP-SX-COL @ 0< OR IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ROW-END @ _RTHP-SX-P @ _RTHP.ROWS @ > IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-COL-END @ _RTHP-SX-P @ _RTHP.COLS @ > IF 0 UNLOOP EXIT THEN
+        I _RTHP-SX-IN-ROOT? 0= IF
+            _RTHP-SX-OWN-CLAIM? 0= IF 0 UNLOOP EXIT THEN
+        THEN
         _RTHP-SX-ITEM @ _RTE-STATIC.LABEL-U @
         _RTHP-SX-ITEM @ _RTE-STATIC.VALUE-U @ + DUP
             _RTHP-SX-MAX @ MAX _RTHP-SX-MAX !
@@ -9485,6 +9585,7 @@ VARIABLE _RTHP-SX-IMAGES
         _RTHP-SX-ALIGNED @ _RTHP-U32+? 0= IF DROP 0 UNLOOP EXIT THEN
         _RTHP-SX-ALIGNED !
     LOOP
+    _RTHP-SX-NEXT @ _RTHP-SX-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
     _RTHP-SX-TEXT @ _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @ <>
     _RTHP-SX-LAST @ _RTHP-SX-P @ _RTHP.STATIC-LAST @ <> OR IF 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COUNT @
@@ -10283,6 +10384,11 @@ VARIABLE _RTHP-SR-NORMALIZED
             IF 0 UNLOOP EXIT THEN
         _RTHP-SR-OLD @ 56 + _RTHP-SR-NEW @ 56 + 0 _RTE-STATIC.SEVERITY 56 -
             _RTHP-IR-EQUAL? 0= IF 0 UNLOOP EXIT THEN
+        \ A picture shown through another clip has moved, as one moved has.
+        _RTHP-SR-OLD @ _RTE-STATIC.CLIP-X _RTHP-SR-NEW @ _RTE-STATIC.CLIP-X
+            RTE-STATIC-SIZE 0 _RTE-STATIC.CLIP-X - _RTHP-IR-EQUAL? 0= IF
+            0 UNLOOP EXIT
+        THEN
         _RTHP-SR-OLD @ _RTE-STATIC.ID @ 0=
         _RTHP-SR-NEW @ _RTE-STATIC.ID @ 0= OR IF 0 UNLOOP EXIT THEN
         _RTHP-SR-OLD @ _RTE-STATIC.REGION @ _RTHP-SR-A @ _RTHP-TB.REGION @ <>

@@ -4,7 +4,9 @@
 \
 \  One coherent UIDL-TUI observation describes the pictures this document's
 \  <media> elements show, one pointer-free descriptor a picture, in
-\  increasing source index.  A picture whose file the terminal decodes is
+\  increasing source index and root key: an element's own picture, with
+\  root key one, or each figure with a row in view in the document it
+\  shows, with its block's key.  A picture whose file the terminal decodes is
 \  described as that file, at the picture's own size, ready at once: no
 \  copy is made and no pixel size is needed.  Any other picture is asked
 \  for a rich copy of the pixels its rectangle covers on the terminal, from
@@ -26,14 +28,16 @@
 \  from its first draw.  UPICSN-RELEASE-ALL lets every claim go at once,
 \  when the rich side shows no picture or can take none.
 \
-\  Only pictures whose clip is their whole rectangle are described: a
-\  picture partly hidden stays CELL.  Capture holds nothing between calls,
-\  so the caller captures afresh whenever the pixel size or the document
-\  may have changed.
+\  A picture is described by its whole rectangle and the part of it shown,
+\  its clip, so one partly hidden, such as a figure partly scrolled out of
+\  its document, shows only that part, at its whole size.  A figure lies in
+\  its document's rectangle, which the document's root claims.  Capture
+\  holds nothing between calls, so the caller captures afresh whenever the
+\  pixel size or the document may have changed.
 \
 \  UPICSN-CAPTURE ( descriptors-a descriptors-u ask -- count status )
 \  UPICSN-PULL ( descriptor offset dest-a dest-u -- status )
-\  UPICSN-FAIL ( source-index revision reason -- status )
+\  UPICSN-FAIL ( source-index root-key revision reason -- status )
 \  UPICSN-RELEASE-ALL ( -- )
 \
 \  Prefix: UPICSN- (public), _UPICSN- (private).
@@ -67,8 +71,9 @@ REQUIRE ../utils/memory-span.f
 \   +0   source kind
 \   +8   UIDL pool source index
 \   +16  source generation (always zero)
-\   +24  relation root key (always one)
-\   +32  row on the screen
+\   +24  relation root key: one for an element's own picture, a figure's
+\        block key
+\   +32  row on the screen of the whole rectangle, which may lie above it
 \   +40  column
 \   +48  height in cells
 \   +56  width in cells
@@ -85,6 +90,11 @@ REQUIRE ../utils/memory-span.f
 \   +136 the caller's document key: capture writes 0, and a caller that
 \        describes several documents into one bank records which is which
 \   +144 the picture's revision, shared by every copy of it
+\   +152 the clip's row, in cells from the rectangle's top: the part shown
+\   +160 its column, from the rectangle's left
+\   +168 its height, at least one
+\   +176 its width, at least one
+\   +184 nonzero for a figure, which its document's root claims
 
 : _UPICSN-D.SOURCE      ( descriptor -- address )       ;
 : _UPICSN-D.INDEX       ( descriptor -- address )   8 + ;
@@ -105,8 +115,13 @@ REQUIRE ../utils/memory-span.f
 : _UPICSN-D.FORMAT      ( descriptor -- address ) 128 + ;
 : _UPICSN-D.DOCUMENT    ( descriptor -- address ) 136 + ;
 : _UPICSN-D.REVISION    ( descriptor -- address ) 144 + ;
+: _UPICSN-D.CLIP-ROW    ( descriptor -- address ) 152 + ;
+: _UPICSN-D.CLIP-COL    ( descriptor -- address ) 160 + ;
+: _UPICSN-D.CLIP-H      ( descriptor -- address ) 168 + ;
+: _UPICSN-D.CLIP-W      ( descriptor -- address ) 176 + ;
+: _UPICSN-D.FIGURE      ( descriptor -- address ) 184 + ;
 
-152 CONSTANT UPICSN-DESCRIPTOR-SIZE
+192 CONSTANT UPICSN-DESCRIPTOR-SIZE
 
 : UPICSN-DESCRIPTOR-BYTES  ( -- bytes )  UPICSN-DESCRIPTOR-SIZE ;
 : UPICSN-SOURCE-INDEX@  ( descriptor -- index )  _UPICSN-D.INDEX @ ;
@@ -126,6 +141,12 @@ REQUIRE ../utils/memory-span.f
 : UPICSN-DOCUMENT@  ( descriptor -- key )  _UPICSN-D.DOCUMENT @ ;
 : UPICSN-DOCUMENT!  ( key descriptor -- )  _UPICSN-D.DOCUMENT ! ;
 : UPICSN-REVISION@  ( descriptor -- revision )  _UPICSN-D.REVISION @ ;
+: UPICSN-ROOT-KEY@  ( descriptor -- key )  _UPICSN-D.ROOT-KEY @ ;
+: UPICSN-CLIP-ROW@     ( descriptor -- rows )  _UPICSN-D.CLIP-ROW @ ;
+: UPICSN-CLIP-COLUMN@  ( descriptor -- cols )  _UPICSN-D.CLIP-COL @ ;
+: UPICSN-CLIP-HEIGHT@  ( descriptor -- rows )  _UPICSN-D.CLIP-H @ ;
+: UPICSN-CLIP-WIDTH@   ( descriptor -- cols )  _UPICSN-D.CLIP-W @ ;
+: UPICSN-FIGURE?  ( descriptor -- flag )  _UPICSN-D.FIGURE @ 0<> ;
 
 \ =====================================================================
 \  The pixels a rectangle covers
@@ -216,15 +237,21 @@ VARIABLE _UPICSN-STATUS
 CREATE _UPICSN-ASK-S UPICSN-ASK-SIZE 7 + ALLOT
 : _UPICSN-ASK  ( -- ask )  _UPICSN-ASK-S 7 + -8 AND ;
 VARIABLE _UPICSN-PRIOR
+VARIABLE _UPICSN-PRIOR-KEY
 VARIABLE _UPICSN-HAVE-PRIOR
 
 VARIABLE _UPICSN-V-INDEX
+VARIABLE _UPICSN-V-KEY
 VARIABLE _UPICSN-V-RESOLVED-A
 VARIABLE _UPICSN-V-D
 VARIABLE _UPICSN-V-ROW
 VARIABLE _UPICSN-V-COL
 VARIABLE _UPICSN-V-H
 VARIABLE _UPICSN-V-W
+VARIABLE _UPICSN-V-CLIP-ROW
+VARIABLE _UPICSN-V-CLIP-COL
+VARIABLE _UPICSN-V-CLIP-H
+VARIABLE _UPICSN-V-CLIP-W
 VARIABLE _UPICSN-V-PIC
 
 : _UPICSN-UMIN  ( a b -- min )  2DUP U< IF DROP ELSE NIP THEN ;
@@ -232,16 +259,21 @@ VARIABLE _UPICSN-V-PIC
 : _UPICSN-SET  ( status -- )
     _UPICSN-STATUS @ UPICSN-S-OK = IF _UPICSN-STATUS ! ELSE DROP THEN ;
 
-\ The picture's whole rectangle, when nothing clips it.
+\ The picture's whole rectangle and the part of it shown, which must be
+\ some of it.
 : _UPICSN-V-GEOMETRY?  ( -- flag )
     _UTUI-PICTURE-GEOMETRY 0= IF 2DROP 2DROP 2DROP 2DROP 0 EXIT THEN
     ( origin-row origin-col extent-h extent-w clip-row clip-col clip-h clip-w )
-    >R >R >R >R
+    _UPICSN-V-CLIP-W ! _UPICSN-V-CLIP-H !
+    _UPICSN-V-CLIP-COL ! _UPICSN-V-CLIP-ROW !
     _UPICSN-V-W ! _UPICSN-V-H ! _UPICSN-V-COL ! _UPICSN-V-ROW !
-    R> _UPICSN-V-ROW @ = R> _UPICSN-V-COL @ = AND
-    R> _UPICSN-V-H @ = AND R> _UPICSN-V-W @ = AND
-    _UPICSN-V-H @ 0> AND _UPICSN-V-W @ 0> AND
-    _UPICSN-V-ROW @ 0< 0= AND _UPICSN-V-COL @ 0< 0= AND ;
+    _UPICSN-V-H @ 0> _UPICSN-V-W @ 0> AND
+    _UPICSN-V-CLIP-H @ 0> AND _UPICSN-V-CLIP-W @ 0> AND 0= IF 0 EXIT THEN
+    _UPICSN-V-ROW @ NEGATE _UPICSN-V-CLIP-ROW +!
+    _UPICSN-V-COL @ NEGATE _UPICSN-V-CLIP-COL +!
+    _UPICSN-V-CLIP-ROW @ 0< _UPICSN-V-CLIP-COL @ 0< OR IF 0 EXIT THEN
+    _UPICSN-V-CLIP-ROW @ _UPICSN-V-CLIP-H @ + _UPICSN-V-H @ > IF 0 EXIT THEN
+    _UPICSN-V-CLIP-COL @ _UPICSN-V-CLIP-W @ + _UPICSN-V-W @ > 0= ;
 
 VARIABLE _UPICSN-F-FORMAT
 VARIABLE _UPICSN-F-W
@@ -313,23 +345,28 @@ VARIABLE _UPICSN-F-U
     DUP UPICSN-C-READY = SWAP UPICSN-C-PENDING = OR AND
     _UTUI-PICTURE-CLAIM! ;
 
+\ Pictures come in increasing source index, and within one element in
+\ increasing root key.
+: _UPICSN-V-AFTER-PRIOR?  ( -- flag )
+    _UPICSN-HAVE-PRIOR @ 0= IF -1 EXIT THEN
+    _UPICSN-PRIOR @ _UPICSN-V-INDEX @ U< IF -1 EXIT THEN
+    _UPICSN-PRIOR @ _UPICSN-V-INDEX @ =
+    _UPICSN-PRIOR-KEY @ _UPICSN-V-KEY @ U< AND ;
+
 : _UPICSN-VISITOR
     ( source-index source-generation root-key resolved-a resolved-u -- )
-    DROP _UPICSN-V-RESOLVED-A ! 2DROP _UPICSN-V-INDEX !
+    DROP _UPICSN-V-RESOLVED-A ! _UPICSN-V-KEY ! DROP _UPICSN-V-INDEX !
     0 _UPICSN-V-PIC !
     _UPICSN-STATUS @ DUP UPICSN-S-OK <> SWAP UPICSN-S-CAPACITY <> AND IF
         EXIT
     THEN
-    _UPICSN-HAVE-PRIOR @ IF
-        _UPICSN-PRIOR @ _UPICSN-V-INDEX @ U< 0= IF
-            UPICSN-S-INVALID _UPICSN-STATUS ! EXIT
-        THEN
-    THEN
-    _UPICSN-V-INDEX @ _UPICSN-PRIOR ! -1 _UPICSN-HAVE-PRIOR !
+    _UPICSN-V-AFTER-PRIOR? 0= IF UPICSN-S-INVALID _UPICSN-STATUS ! EXIT THEN
+    _UPICSN-V-INDEX @ _UPICSN-PRIOR ! _UPICSN-V-KEY @ _UPICSN-PRIOR-KEY !
+    -1 _UPICSN-HAVE-PRIOR !
     _UPICSN-STATUS @ UPICSN-S-CAPACITY = IF
         _UPICSN-V-GEOMETRY? IF 1 _UPICSN-COUNT +! THEN EXIT
     THEN
-    \ A picture partly hidden stays CELL.
+    \ A picture with nothing of it shown stays CELL.
     _UPICSN-V-GEOMETRY? 0= IF 0 _UTUI-PICTURE-CLAIM! EXIT THEN
     \ A full bank keeps counting, so CAPACITY says how many it would take.
     _UPICSN-COUNT @ _UPICSN-CAP @ U< 0= IF
@@ -339,11 +376,16 @@ VARIABLE _UPICSN-F-U
         DUP _UPICSN-V-D ! UPICSN-DESCRIPTOR-SIZE 0 FILL
     UPICSN-SOURCE-UIDL _UPICSN-V-D @ _UPICSN-D.SOURCE !
     _UPICSN-V-INDEX @ _UPICSN-V-D @ _UPICSN-D.INDEX !
-    1 _UPICSN-V-D @ _UPICSN-D.ROOT-KEY !
+    _UPICSN-V-KEY @ _UPICSN-V-D @ _UPICSN-D.ROOT-KEY !
     _UPICSN-V-ROW @ _UPICSN-V-D @ _UPICSN-D.ROW !
     _UPICSN-V-COL @ _UPICSN-V-D @ _UPICSN-D.COLUMN !
     _UPICSN-V-H @ _UPICSN-V-D @ _UPICSN-D.HEIGHT !
     _UPICSN-V-W @ _UPICSN-V-D @ _UPICSN-D.WIDTH !
+    _UPICSN-V-CLIP-ROW @ _UPICSN-V-D @ _UPICSN-D.CLIP-ROW !
+    _UPICSN-V-CLIP-COL @ _UPICSN-V-D @ _UPICSN-D.CLIP-COL !
+    _UPICSN-V-CLIP-H @ _UPICSN-V-D @ _UPICSN-D.CLIP-H !
+    _UPICSN-V-CLIP-W @ _UPICSN-V-D @ _UPICSN-D.CLIP-W !
+    _UTUI-PICTURE-FIGURE? _UPICSN-V-D @ _UPICSN-D.FIGURE !
     _UPICSN-V-RESOLVED-A @ 64 + @ _UPICSN-V-D @ _UPICSN-D.Z !
     _UTUI-PICTURE-REVISION@ _UPICSN-V-D @ _UPICSN-D.REVISION !
     _UPICSN-V-FAILED? 0= IF
@@ -382,9 +424,11 @@ VARIABLE _UPICSN-F-U
     0 _UPICSN-DESCRIPTORS-A ! 0 _UPICSN-DESCRIPTORS-U ! 0 _UPICSN-CAP !
     0 _UPICSN-COUNT ! 0 _UPICSN-STATUS !
     _UPICSN-ASK UPICSN-ASK-SIZE 0 FILL
-    0 _UPICSN-PRIOR ! 0 _UPICSN-HAVE-PRIOR !
-    0 _UPICSN-V-INDEX ! 0 _UPICSN-V-RESOLVED-A ! 0 _UPICSN-V-D !
+    0 _UPICSN-PRIOR ! 0 _UPICSN-PRIOR-KEY ! 0 _UPICSN-HAVE-PRIOR !
+    0 _UPICSN-V-INDEX ! 0 _UPICSN-V-KEY ! 0 _UPICSN-V-RESOLVED-A ! 0 _UPICSN-V-D !
     0 _UPICSN-V-ROW ! 0 _UPICSN-V-COL ! 0 _UPICSN-V-H ! 0 _UPICSN-V-W !
+    0 _UPICSN-V-CLIP-ROW ! 0 _UPICSN-V-CLIP-COL !
+    0 _UPICSN-V-CLIP-H ! 0 _UPICSN-V-CLIP-W !
     0 _UPICSN-V-PIC !
     0 _UPICSN-F-FORMAT ! 0 _UPICSN-F-W ! 0 _UPICSN-F-H ! 0 _UPICSN-F-U ! ;
 
@@ -422,9 +466,9 @@ CREATE _UPICSN-OWNED-END
 
 \ The pull writes only outside the document's own storage.
 : _UPICSN-PULL-OBSERVED
-  ( index revision format width height length offset dest-a dest-u -- status )
+  ( index key revision format width height length offset dest-a dest-u -- status )
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF
-        2DROP 2DROP 2DROP 2DROP DROP UPICSN-S-INVALID EXIT
+        2DROP 2DROP 2DROP 2DROP 2DROP UPICSN-S-INVALID EXIT
     THEN
     _UTUI-PICTURE-PULL IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
 
@@ -447,22 +491,24 @@ CREATE _UPICSN-OWNED-END
     2DUP _UPICSN-OWNED-START _UPICSN-OWNED-END _UPICSN-OWNED-START -
         MSPAN-OVERLAP? IF 2DROP 2DROP UPICSN-S-INVALID EXIT THEN
     >R >R >R >R
-    R@ UPICSN-SOURCE-INDEX@ R@ UPICSN-REVISION@ R@ UPICSN-FORMAT@
+    R@ UPICSN-SOURCE-INDEX@ R@ UPICSN-ROOT-KEY@ R@ UPICSN-REVISION@
+    R@ UPICSN-FORMAT@
     R@ UPICSN-COPY-WIDTH@ R@ UPICSN-COPY-HEIGHT@ R> UPICSN-COPY-BYTES@
     R> R> R>
     ['] _UPICSN-PULL-OBSERVED UTUI-RESOLVED-OBSERVE ;
 
-: _UPICSN-FAIL-OBSERVED  ( index revision reason -- status )
+: _UPICSN-FAIL-OBSERVED  ( index key revision reason -- status )
     _UTUI-PICTURE-FAILED! IF UPICSN-S-OK ELSE UPICSN-S-STALE THEN ;
 
-\ UPICSN-FAIL ( source-index revision reason -- status )
-\   The rich side could not send picture REVISION at SOURCE-INDEX because
-\   of the picture itself, for REASON, a PIC-R- reason: the terminal refused
-\   its bytes as damaged, or they could not be read.  Its widget remembers
-\   why until it is given another source, so captures describe it as
-\   FAILED, the rich side neither takes nor sends it, and CELL shows it.
-\   STALE once the element shows another picture or none.
-: UPICSN-FAIL  ( source-index revision reason -- status )
+\ UPICSN-FAIL ( source-index root-key revision reason -- status )
+\   The rich side could not send picture REVISION at SOURCE-INDEX with
+\   ROOT-KEY because of the picture itself, for REASON, a PIC-R- reason:
+\   the terminal refused its bytes as damaged, or they could not be read.
+\   Its widget remembers why until it is given another source, so
+\   captures describe it as FAILED, the rich side neither takes nor sends
+\   it, and CELL shows it.  STALE once that element, or that figure,
+\   shows another picture or none.
+: UPICSN-FAIL  ( source-index root-key revision reason -- status )
     ['] _UPICSN-FAIL-OBSERVED UTUI-RESOLVED-OBSERVE ;
 
 \ UPICSN-RELEASE-ALL ( -- )

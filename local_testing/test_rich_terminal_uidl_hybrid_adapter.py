@@ -1717,8 +1717,10 @@ def test_pictures_are_described_per_document_in_the_completed_draw():
     fail = _word(source, "RUHA-PICTURE-FAIL")
     _ordered(fail, "RUHA-VALID?", "ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !",
              "['] _RUHA-PF-BODY CATCH", "_RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH")
+    # The picture is named by its element and root key, so an element's
+    # figures are told apart.
     body = _word(source, "_RUHA-PF-BODY")
-    _ordered(body, "_RUHA-R.TOKEN @", "5 PICK =", "_RUHA-P-DOCUMENT-CTX",
-             "2DROP 2DROP RUHA-S-STALE", "UPICSN-FAIL",
+    _ordered(body, "_RUHA-R.TOKEN @", "6 PICK =", "_RUHA-P-DOCUMENT-CTX",
+             "2DROP 2DROP DROP RUHA-S-STALE", "UPICSN-FAIL",
              "UPICSN-S-STALE = IF RUHA-S-STALE")
-    assert body.rstrip().endswith("2DROP 2DROP RUHA-S-STALE ;")
+    assert body.rstrip().endswith("2DROP 2DROP DROP RUHA-S-STALE ;")

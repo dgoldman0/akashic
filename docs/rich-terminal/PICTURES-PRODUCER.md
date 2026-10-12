@@ -1,8 +1,9 @@
 # Pictures in the screen producer
 
 `hybrid-screen-producer.f` shows the pictures ordinary `<media>` elements
-draw as `IMAGE` statics, at the resolution the terminal shows them, while the
-same widgets keep drawing them in CELL. Applications do nothing for this:
+draw, their own or the figures of a document they show, as `IMAGE` statics,
+at the resolution the terminal shows them, while the same widgets keep
+drawing them in CELL. Applications do nothing for this:
 [UPICSN](../tui/uidl-picture-snapshot.md) describes each picture as its
 file, when the terminal decodes the file's format, or as a rich copy the
 [picture widget](../tui/widgets/picture.md) makes when asked, and the
@@ -13,19 +14,20 @@ takes a picture, its CELL view shows only what the picture is.
 
 `RTHP-STORAGE-BYTES` and `RTHP-INIT` take `max-pictures` immediately after
 `max-field-native`. Zero selects no picture bank. Each picture the arena can
-take adds a 152-byte UPICSN descriptor, one 208-byte static record and its
-40-byte correlation, one claim with its residual-planner events, and one
-projection rectangle in each target bank. A static is a status field or a
+take adds a 192-byte UPICSN descriptor, one 208-byte static record and its
+40-byte correlation, one claim with its residual-planner events, which a
+figure leaves unused, and one projection rectangle in each target bank. A static is a status field or a
 picture, so `MAX-STATICS` is `max-status-native / 72` plus `max-pictures`.
 `RTHP-FIRST-CAPACITIES` starts at zero pictures; with a memory source the
 arena grows to the pictures a draw shows, half again as other content does.
 
 The pictures the terminal holds are kept apart from the arena, in a table
-from the memory source with one 72-byte entry for each resource the owner
+from the memory source with one 80-byte entry for each resource the owner
 holds room for. An entry names its resource, its size, the bytes the owner
 holds for it decoded, the format it was sent in, and the picture it is a
-copy of: the document, the element and the picture's revision, which every
-copy of one picture shares. An upload reads its bytes a chunk at a time into
+copy of: the document, the element, the root key, which tells an element's
+figures apart, and the picture's revision, which every copy of one picture
+shares. An upload reads its bytes a chunk at a time into
 one block from the same source, the size of its largest chunk, which goes
 back when the upload ends; the lane never holds a whole picture.
 
@@ -60,22 +62,34 @@ where it needs one.
 
 A described picture becomes an `IMAGE` static, after the status fields, when
 the terminal holds a resource for it, its document is one the frame carries,
-its whole rectangle lies on the surface, its paint order fits a claim, and
-no other root claims any of its cells. The resource is the picture's own
-copy once the terminal holds one with the copy's size and format. While a
-new copy is still on its way, decoding or not yet sent, the newest copy of
-the same picture the terminal holds shows instead, so a replacement keeps
-the picture on screen as [AKASHIC-RICH-TERMINAL.md](AKASHIC-RICH-TERMINAL.md)
-section 5.4 asks. Another picture's copy never shows: a different file
-opened in the same element stays CELL until its own copy arrives.
+the part of it shown lies on the surface, and its paint order fits a claim.
+The static is the picture's whole rectangle, which may reach off the
+surface, with the part shown as its clip when that is not all of it, so a
+picture partly scrolled out shows that part at its whole size. An element's
+own picture claims the part shown, which no other root may claim. A figure
+takes no claim: the part shown must lie inside the claim of its own
+document's root, the DOCUMENT control drawn over it. That control leaves
+the figure's rows unpainted, and at one paint order the terminal paints
+objects before controls, so the picture shows through.
+
+The resource is the picture's own copy once the terminal holds one with the
+copy's size and format. While a new copy is still on its way, decoding or
+not yet sent, the newest copy of the same picture the terminal holds shows
+instead, so a replacement keeps the picture on screen as
+[AKASHIC-RICH-TERMINAL.md](AKASHIC-RICH-TERMINAL.md) section 5.4 asks.
+Another picture's copy never shows: a different file opened in the same
+element stays CELL until its own copy arrives.
 
 The static fits the resource inside the picture's cells (`CONTAIN`), opaque,
 over a backdrop the renderer paints so the CELL view beneath, the picture or
-what it is, never shows through. Its correlation and claim name the document, the element's source
-index, generation zero and root key one. Every other picture stays CELL. The
-fixed audit counts pictures apart from status fields: the neutral copy holds
-a status field's record and text, and the provider counts what a picture
-takes.
+what it is, never shows through. Its correlation names the document, the
+element's source index, generation zero and its root key, one for an
+element's own picture and a figure's block key; an element's own picture's
+claim names the document and the element. Every other picture stays CELL. The fixed audit
+counts pictures apart from status fields: the neutral copy holds a status
+field's record and text, and the provider counts what a picture takes. It
+finds each figure inside its document's claim, and every other static
+holding the next claim, exactly the part of it shown.
 
 ## The lane
 
@@ -168,4 +182,5 @@ A DELTA keeps the statics lane when every picture keeps its place; one that
 shows a new resource, or a changed opacity or backdrop, is replaced in place
 with `STATIC-REPLACE`, which swaps a replaced picture's reference in one
 transaction. A picture that appears, goes, or moves changes the lane's shape
-and takes a complete replacement, as status fields do.
+and takes a complete replacement, as status fields do. A picture shown
+through another clip has moved too.

@@ -226,6 +226,23 @@ CREATE _DV-TLN TLINES-SIZE ALLOT  _DV-TLN TLINES-INIT
 
 VARIABLE _DVF-F
 
+\ The slot a figure of block INDEX takes among the records, which stay in
+\ block order.
+: _DV-FIG-AT  ( index -- at )
+    _DOCV-O-FIGS-N _DV@ 0 ?DO
+        I _DV-FIG _FIG.BLOCK + @ OVER > IF DROP I UNLOOP EXIT THEN
+    LOOP DROP _DOCV-O-FIGS-N _DV@ ;
+
+\ A new, empty record for block INDEX at its place in block order, once
+\ there is room for it.
+: _DV-FIG-INSERT  ( index -- fig )
+    DUP _DV-FIG-AT
+    DUP _DV-FIG DUP _FIG-SIZE +
+    _DOCV-O-FIGS-N _DV@ 3 PICK - _FIG-SIZE * MOVE
+    _DV-FIG DUP _FIG-SIZE 0 FILL
+    TUCK _FIG.BLOCK + !
+    _DOCV-O-FIGS-N _DV@ 1+ _DOCV-O-FIGS-N _DV! ;
+
 \ _DV-FIG-OF ( content index -- fig|0 )
 \   The figure of block INDEX, whose content is CONTENT, known from now on
 \   with its picture's size, read from the picture's file once; 0 when
@@ -233,9 +250,7 @@ VARIABLE _DVF-F
 : _DV-FIG-OF  ( content index -- fig|0 )
     DUP _DV-FIND-FIG ?DUP IF NIP NIP EXIT THEN
     _DV-FIG-ROOM? 0= IF 2DROP 0 EXIT THEN
-    _DOCV-O-FIGS-N _DV@ _DV-FIG DUP _DVF-F ! _FIG-SIZE 0 FILL
-    _DVF-F @ _FIG.BLOCK + !
-    _DOCV-O-FIGS-N _DV@ 1+ _DOCV-O-FIGS-N _DV!
+    _DV-FIG-INSERT _DVF-F !
     DCT-FIGURE DUP IF
         _DV-RESOLVE ?DUP IF
             DUP PIC-FILE IF DROP 2DROP 0 0 ELSE ROT DROP THEN
@@ -905,6 +920,32 @@ VARIABLE _DVH-BLOCK
     WDG-REGION DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
     RGN-SIZE MSPAN-NONWRAPPING? ;
+
+\ The figures a rich side shows as pictures of its own.  The view keeps a
+\ record of each figure it has met, in block order.  A figure has a picture
+\ widget while it has a row in view, drawn over the figure's whole
+\ rectangle, which the view's region cuts.
+
+\ DOCV-FIGURE-COUNT ( widget -- n )   The figure records the view keeps.
+: DOCV-FIGURE-COUNT  ( widget -- n )  _DOCV-O-FIGS-N + @ ;
+
+\ DOCV-FIGURE@ ( i widget -- key picture|0 )
+\   Figure record I, in block order: its block's key, the block's index
+\   plus one, and the picture widget showing it while it has a row in
+\   view, or 0.  Out of range, 0 0.
+: DOCV-FIGURE@  ( i widget -- key picture|0 )
+    2DUP DOCV-FIGURE-COUNT U< 0= IF 2DROP 0 0 EXIT THEN
+    _DOCV-O-FIGS-A + @ SWAP _FIG-SIZE * +
+    DUP _FIG.BLOCK + @ 1+ SWAP _FIG.PICT + @ ;
+
+\ DOCV-FIGURE-PICTURE ( key widget -- picture|0 )
+\   The picture widget showing the figure of the block with KEY, or 0.
+: DOCV-FIGURE-PICTURE  ( key widget -- picture|0 )
+    SWAP 1- SWAP
+    DUP DOCV-FIGURE-COUNT 0 ?DO
+        I OVER DOCV-FIGURE@ SWAP 1- 3 PICK = IF NIP NIP UNLOOP EXIT THEN
+        DROP
+    LOOP 2DROP 0 ;
 
 \ DOCV-STORAGE-DISJOINT? ( address bytes -- flag )
 \   Pure and deliberately unguarded: a caller span against the module's

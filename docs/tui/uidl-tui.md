@@ -1223,7 +1223,9 @@ immediate `<tab>` children. A `<media>` element is the view it shows: while
 it shows text its materialized `TXTA` contributes `TEXT_AREA` exactly as a
 `<textarea>` does, while it shows a document its document view contributes
 `DOCUMENT` (`DOCV-DOCUMENT-CAPTURE`), and a picture or the facts view stays
-ordinary CELL paint.
+ordinary CELL paint. Pictures, an element's own or the figures of the
+document it shows, reach the rich side through the
+[picture snapshot](uidl-picture-snapshot.md) instead.
 There is no authored `<text-grid>` materialization path. The visitor
 refreshes the fixed proxy region and focus, then measures or
 copies without returning an owned pointer, starting another observation,

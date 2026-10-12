@@ -4,7 +4,9 @@
 **Prefix:** `UPICSN-` (public), `_UPICSN-` (private)
 
 `UPICSN` describes the pictures a document's `<media>` elements show, one
-pointer-free descriptor a picture, for the rich side. A picture whose file
+pointer-free descriptor a picture, for the rich side: an element's own
+picture, or each figure with a row in view in the
+[document](widgets/document.md) an element shows. A picture whose file
 the terminal decodes is described as that file, ready at once at the
 picture's own size: no copy is made and no pixel size is needed. Any other
 picture is asked, through its [picture widget](widgets/picture.md), for a
@@ -29,15 +31,15 @@ before.
 |---|---|---|
 | `UPICSN-CAPTURE` | `( descriptors-a descriptors-u ask -- count status )` | Describe every picture shown, asking each for its rich copy |
 | `UPICSN-PULL` | `( descriptor offset dest-a dest-u -- status )` | Copy a span of a described file, or of a ready copy's pixels, into `dest` |
-| `UPICSN-FAIL` | `( source-index revision reason -- status )` | Have a picture the rich side could not send remember why |
+| `UPICSN-FAIL` | `( source-index root-key revision reason -- status )` | Have a picture the rich side could not send remember why |
 | `UPICSN-BOUND` | `( cols rows ask -- max-w max-h )` | The most pixels a rectangle covers |
-| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 152 |
+| `UPICSN-DESCRIPTOR-BYTES` | `( -- bytes )` | Return 192 |
 | `UPICSN-ASK-SIZE` | `( -- bytes )` | Return 72 |
 | `UPICSN-RELEASE-ALL` | `( -- )` | Let go of every picture a capture claimed, in every document |
 
 The status domain is `UPICSN-S-OK=0`, `UPICSN-S-CAPACITY=1`,
 `UPICSN-S-UNAVAILABLE=2`, `UPICSN-S-INVALID=3` and `UPICSN-S-STALE=4`.
-Descriptor banks are eight-byte aligned multiples of 152 bytes. A bank too
+Descriptor banks are eight-byte aligned multiples of 192 bytes. A bank too
 small for every picture gives `CAPACITY`, writes nothing, and counts how many
 descriptors it would take.
 
@@ -77,9 +79,9 @@ Each field is one native cell; descriptors hold no pointer.
 | 0 | Source kind, `UPICSN-SOURCE-UIDL=1` | |
 | 8 | UIDL pool source index | `UPICSN-SOURCE-INDEX@` |
 | 16 | Source generation, always zero | |
-| 24 | Root key, always one | |
-| 32 | Screen row | `UPICSN-ROW@` |
-| 40 | Screen column | `UPICSN-COLUMN@` |
+| 24 | Root key: one for an element's own picture, a figure's block key | `UPICSN-ROOT-KEY@` |
+| 32 | Screen row of the whole rectangle, which may lie off the screen | `UPICSN-ROW@` |
+| 40 | Screen column of the whole rectangle | `UPICSN-COLUMN@` |
 | 48 | Height in cells | `UPICSN-HEIGHT@` |
 | 56 | Width in cells | `UPICSN-WIDTH@` |
 | 64 | Resolved UIDL paint z | `UPICSN-Z@` |
@@ -93,6 +95,11 @@ Each field is one native cell; descriptors hold no pointer.
 | 128 | The format: `PIC-F-RGBA8` for a copy the widget makes, also while it is not ready, or the file's | `UPICSN-FORMAT@` |
 | 136 | The caller's document key, zero after capture | `UPICSN-DOCUMENT@`, `UPICSN-DOCUMENT!` |
 | 144 | The picture's revision, shared by every copy of it | `UPICSN-REVISION@` |
+| 152 | The clip's row, in cells from the rectangle's top | `UPICSN-CLIP-ROW@` |
+| 160 | The clip's column, from the rectangle's left | `UPICSN-CLIP-COLUMN@` |
+| 168 | The clip's height, at least one | `UPICSN-CLIP-HEIGHT@` |
+| 176 | The clip's width, at least one | `UPICSN-CLIP-WIDTH@` |
+| 184 | Nonzero for a figure in a document | `UPICSN-FIGURE?` |
 
 The copy's state is one of:
 
@@ -104,23 +111,31 @@ The copy's state is one of:
 | `UPICSN-C-FAILED` | The copy failed, or the rich side could not send the picture, for the reason given |
 | `UPICSN-C-REFUSED` | The widget's memory refused the copy's record |
 
-Descriptors are in increasing source index, with generation zero and root
-key one, the identity other families give direct UIDL roots. A picture is
-described only when its clip is its whole rectangle; one partly hidden stays
-CELL.
+Descriptors are in increasing source index and, within one element,
+increasing root key, with generation zero. An element's own picture has root
+key one, the identity other families give direct UIDL roots. A figure has
+its block's key, the block's index plus one, and is described while it has a
+row in view, in block order. A descriptor gives the picture's whole
+rectangle, which may reach off the screen, and the part of it shown, its
+clip: a figure partly scrolled out of its document shows only that part, at
+its whole size, and its copy is asked for at its whole rectangle, so
+scrolling asks for nothing new. A picture with nothing of it shown is not
+described. A figure lies in its document's rectangle, which the document's
+root claims on the rich side.
 
 ## Claims
 
 When the ask's `CLAIM` is nonzero, a capture claims each picture it
 describes as a file, or as a copy ready or being made: the picture widget's
 CELL view then shows the picture's name, format and size beneath it and
-decodes nothing. Every other picture visited, including one partly hidden,
-is not claimed, and CELL shows it. A bank too small only counts, and leaves
-claims as they were. Every capture also tells picture widgets which file
-formats the rich side takes, `FORMATS` while `CLAIM` is nonzero and none
-otherwise, so a new picture of one of them shows what it is from its first
-draw rather than start a CELL copy. `UPICSN-RELEASE-ALL` lets every claim go
-at once, when the rich side shows no picture or can take none.
+decodes nothing. Every other picture visited, including one with nothing
+of it shown, is not claimed, and CELL shows it. A bank too small only
+counts, and leaves claims as they were. Every capture also tells picture
+widgets which file formats the rich side takes, `FORMATS` while `CLAIM` is
+nonzero and none otherwise, so a new picture of one of them shows what it
+is from its first draw rather than start a CELL copy. `UPICSN-RELEASE-ALL`
+lets every claim go at once, when the rich side shows no picture or can
+take none.
 
 ## Pulling a picture
 
@@ -133,7 +148,10 @@ with nothing written, once it does not, or when the file could not be read. A
 copy is the picture decoded at that size, so nothing else could match. A
 picture widget takes a new revision with every source it is given, so a
 picture opened again is a new picture, while its copies at any size share one
-revision. The caller pulls in the same document context it described in.
+revision. The descriptor's source index and root key name the picture, an
+element's own or a figure in the document it shows: a figure scrolled out
+of view has no picture widget, so a pull of it is `STALE`. The caller pulls
+in the same document context it described in.
 
 A file that cannot be read is the picture's own failure: the pull has its
 widget remember `PIC-R-READ`, as `UPICSN-FAIL` would.
@@ -141,10 +159,12 @@ widget remember `PIC-R-READ`, as `UPICSN-FAIL` would.
 ## A picture the rich side could not send
 
 `UPICSN-FAIL` says the rich side could not send picture `revision` at the
-source index because of the picture itself, for a `PIC-R-` reason, such as
+source index and root key because of the picture itself, for a `PIC-R-`
+reason, such as
 `PIC-R-DAMAGED` when the terminal refused its bytes. The picture's widget
 remembers the reason until it is given another source, and its claim goes.
 Every capture until then describes the picture as `UPICSN-C-FAILED` with that
 reason, asks for no copy and claims nothing, so the rich side never sends it
-again and CELL shows it. It answers `STALE`, remembering nothing, once the
-element shows another picture or none, and runs in the document's context.
+again and CELL shows it. It answers `STALE`, remembering nothing, once that
+element or figure shows another picture or none, and runs in the document's
+context.

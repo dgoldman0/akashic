@@ -7347,11 +7347,13 @@ _UTUI-SFI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-SFI-RESOLVED
 \ =====================================================================
 \  Direct picture observation
 \ =====================================================================
-\ This iterator visits <media> elements whose UIDL-owned media widget shows
-\ a picture, in source-index order.  A picture's identity is its source
-\ index with generation zero and root key one.  The words after it act on
-\ the visited element's picture widget only, and a copy record they return
-\ is borrowed for the visit: the widget may give it back once it ends.
+\ This iterator visits the pictures <media> elements' UIDL-owned media
+\ widgets show, in source-index order: an element's own picture, with root
+\ key one, or the figures with a row in view in the document it shows, in
+\ block order, each with its block's key.  A picture's identity is its
+\ source index, generation zero and root key.  The words after it act on
+\ the visited picture widget only, and a copy record they return is
+\ borrowed for the visit: the widget may give it back once it ends.
 
 VARIABLE _UTUI-PCI-ACTIVE
 VARIABLE _UTUI-PCI-VISITOR
@@ -7359,6 +7361,10 @@ VARIABLE _UTUI-PCI-TOTAL
 VARIABLE _UTUI-PCI-INDEX
 VARIABLE _UTUI-PCI-ELEM
 VARIABLE _UTUI-PCI-VISIBLE
+VARIABLE _UTUI-PCI-PICT       \ the visited picture widget
+VARIABLE _UTUI-PCI-KEY        \ its root key
+VARIABLE _UTUI-PCI-FIGURE     \ a figure in its element's document
+VARIABLE _UTUI-PCI-DOCV
 CREATE _UTUI-PCI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT
 _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
 0 _UTUI-PCI-ACTIVE !
@@ -7366,7 +7372,8 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
 : _UTUI-PCI-CLEAR  ( -- )
     0 _UTUI-PCI-ACTIVE ! 0 _UTUI-PCI-VISITOR !
     0 _UTUI-PCI-TOTAL ! 0 _UTUI-PCI-INDEX ! 0 _UTUI-PCI-ELEM !
-    0 _UTUI-PCI-VISIBLE !
+    0 _UTUI-PCI-VISIBLE ! 0 _UTUI-PCI-PICT ! 0 _UTUI-PCI-KEY !
+    0 _UTUI-PCI-FIGURE ! 0 _UTUI-PCI-DOCV !
     _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE 0 FILL
     _UTUI-RS-CLEAR _UTUI-MC-SCRATCH-CLEAR ;
 
@@ -7380,69 +7387,113 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     DUP MEDIA-VIEW@ MEDIA-V-PICTURE <> IF DROP 0 EXIT THEN
     MEDIA-PICTURE@ ;
 
+\ The document view a <media> element's own media widget shows, or 0.
+: _UTUI-ELEM-DOCUMENT  ( elem -- docv|0 )
+    DUP UIDL-TYPE UIDL-T-MEDIA <> IF DROP 0 EXIT THEN
+    _UTUI-SIDECAR DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL <> IF
+        DROP 0 EXIT
+    THEN
+    _UTUI-SC-WPTR@ DUP _UTUI-MEDIA-GENUINE? 0= IF DROP 0 EXIT THEN
+    DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT <> IF DROP 0 EXIT THEN
+    MEDIA-DOCUMENT@ ;
+
+\ The picture widget at ELEM with root KEY: the element's own picture for
+\ key one, or the figure of that block in the document it shows; or 0.
+: _UTUI-ELEM-KEYED-PICTURE  ( elem key -- picture|0 )
+    OVER _UTUI-ELEM-PICTURE ?DUP IF
+        SWAP 1 = IF NIP ELSE 2DROP 0 THEN EXIT
+    THEN
+    SWAP _UTUI-ELEM-DOCUMENT ?DUP IF DOCV-FIGURE-PICTURE EXIT THEN
+    DROP 0 ;
+
 : _UTUI-PCI-CURRENT?  ( -- flag )
     _UTUI-PCI-ACTIVE @ 0= IF 0 EXIT THEN
     _UTUI-PCI-ELEM @ UIDL-ELEM-INDEX? 0= IF DROP 0 EXIT THEN
     _UTUI-PCI-INDEX @ <> IF 0 EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE 0<> ;
+    _UTUI-PCI-PICT @ DUP 0= IF EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-PCI-KEY @ _UTUI-ELEM-KEYED-PICTURE = ;
 
-\ The visited picture's complete cell rectangle and its clip.
+\ The visited picture's complete cell rectangle and its clip: the element's
+\ for its own picture, and a figure's own region, which lies in the
+\ element's, for a figure.
 : _UTUI-PICTURE-GEOMETRY
     ( -- origin-row origin-col extent-h extent-w clip-row clip-col clip-h clip-w ok? )
     _UTUI-PCI-CURRENT? 0= IF 0 0 0 0 0 0 0 0 0 EXIT THEN
     _UTUI-PCI-ELEM @ _UTUI-SIDECAR _UTUI-SYNC-PROXY
-    _UTUI-PROXY-RGN
+    _UTUI-PCI-FIGURE @ IF _UTUI-PCI-PICT @ WDG-REGION ELSE _UTUI-PROXY-RGN THEN
     _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE
         _UTUI-CANONICAL-REGION-GEOMETRY
     USCOL-S-OK = ;
 
+\ Whether the visited picture is a figure in its element's document, which
+\ that document's root already claims.
+: _UTUI-PICTURE-FIGURE?  ( -- flag )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-FIGURE @ 0<> ;
+
 \ Ask the visited picture for a rich copy of at most MAX-W by MAX-H pixels.
 : _UTUI-PICTURE-ASK  ( max-w max-h -- ok? )
     _UTUI-PCI-CURRENT? 0= IF 2DROP 0 EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-RICH-ASK ;
+    _UTUI-PCI-PICT @ PICT-RICH-ASK ;
 
 \ The visited picture's rich copy record, or 0, borrowed for the visit.
 : _UTUI-PICTURE-COPY@  ( -- pic|0 )
     _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-RICH@ ;
+    _UTUI-PCI-PICT @ PICT-RICH@ ;
 
 \ The visited picture's revision: which picture it is, at any size.
 : _UTUI-PICTURE-REVISION@  ( -- revision )
     _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-REVISION@ ;
+    _UTUI-PCI-PICT @ PICT-REVISION@ ;
 
 \ Say whether the rich side shows the visited picture, or is taking it to
 \ show it, so its CELL view need decode nothing.
 : _UTUI-PICTURE-CLAIM!  ( flag -- )
     _UTUI-PCI-CURRENT? 0= IF DROP EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-CLAIM! ;
+    _UTUI-PCI-PICT @ PICT-CLAIM! ;
 
 \ Why the rich side could not send the visited picture, or 0.
 : _UTUI-PICTURE-FAILED@  ( -- reason )
     _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE PICT-RICH-FAILED@ ;
+    _UTUI-PCI-PICT @ PICT-RICH-FAILED@ ;
 
 \ The visited picture's file: its PIC-F- format, size and length, or
 \ 0 0 0 0 for none PIC-FILE knows.
 : _UTUI-PICTURE-FILE@  ( -- format width height bytes )
     _UTUI-PCI-CURRENT? 0= IF 0 0 0 0 EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE >R
+    _UTUI-PCI-PICT @ >R
     R@ PICT-FILE@ R> PICT-FILE-BYTES@ ;
 
-: _UTUI-PCI-VISIT  ( -- )
-    _UTUI-PCI-INDEX @ 0 1
-    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE _UTUI-PCI-VISITOR @ EXECUTE ;
+: _UTUI-PCI-VISIT  ( picture key figure? -- )
+    _UTUI-PCI-FIGURE ! _UTUI-PCI-KEY ! _UTUI-PCI-PICT !
+    _UTUI-PCI-INDEX @ 0 _UTUI-PCI-KEY @
+    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE _UTUI-PCI-VISITOR @ EXECUTE
+    0 _UTUI-PCI-PICT ! 0 _UTUI-PCI-KEY ! 0 _UTUI-PCI-FIGURE ! ;
+
+\ The element's own picture, or each figure with a row in view in the
+\ document it shows, in block order.
+: _UTUI-PCI-VISIT-ALL  ( -- )
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE ?DUP IF 1 0 _UTUI-PCI-VISIT EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-DOCUMENT ?DUP 0= IF EXIT THEN
+    _UTUI-PCI-DOCV !
+    _UTUI-PCI-DOCV @ DOCV-FIGURE-COUNT 0 ?DO
+        I _UTUI-PCI-DOCV @ DOCV-FIGURE@ ?DUP IF
+            SWAP -1 _UTUI-PCI-VISIT
+        ELSE DROP THEN
+    LOOP
+    0 _UTUI-PCI-DOCV ! ;
 
 : _UTUI-PCI-SOURCE  ( -- status )
     _UTUI-PCI-ELEM @ UE.TYPE @ 0= IF _UTUI-MC-S-OK EXIT THEN
-    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE 0= IF _UTUI-MC-S-OK EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE 0<>
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-DOCUMENT 0<> OR 0= IF _UTUI-MC-S-OK EXIT THEN
     _UTUI-PCI-ELEM @ _UTUI-RS-RESOLVE
     DUP UTUI-RESOLVED-S-INVALID = IF DROP _UTUI-MC-S-INVALID EXIT THEN
     UTUI-RESOLVED-S-OK = IF
         _UTUI-RS-VISIBLE @ _UTUI-PCI-VISIBLE !
         _UTUI-PCI-RESOLVED _UTUI-RS-DST ! _UTUI-RS-WRITE
         0 _UTUI-RS-DST !
-        _UTUI-PCI-VISIBLE @ IF _UTUI-PCI-VISIT THEN
+        _UTUI-PCI-VISIBLE @ IF _UTUI-PCI-VISIT-ALL THEN
     THEN
     _UTUI-RS-CLEAR _UTUI-MC-S-OK ;
 
@@ -7478,6 +7529,7 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     _UTUI-PCI-CLEAR ;
 
 VARIABLE _UTUI-PP-INDEX
+VARIABLE _UTUI-PP-KEY
 VARIABLE _UTUI-PP-REVISION
 VARIABLE _UTUI-PP-FORMAT
 VARIABLE _UTUI-PP-W
@@ -7505,7 +7557,7 @@ VARIABLE _UTUI-PP-U
     _UTUI-PP-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
     _UTUI-PP-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
         DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
-    _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
+    _UTUI-PP-KEY @ _UTUI-ELEM-KEYED-PICTURE DUP 0= IF EXIT THEN
     DUP PICT-REVISION@ _UTUI-PP-REVISION @ <> IF DROP 0 EXIT THEN
     _UTUI-PP-FORMAT @ PIC-F-RGBA8 <> IF _UTUI-PP-FILE EXIT THEN
     PICT-RICH@ DUP 0= IF EXIT THEN
@@ -7519,27 +7571,28 @@ VARIABLE _UTUI-PP-U
     ['] _UTUI-PP-BODY UIDL-SEMANTIC-OBSERVE ;
 
 \ _UTUI-PICTURE-PULL
-\   ( source-index revision format width height length offset dest-a dest-u
-\     -- ok? )
-\   Copy DEST-U bytes from OFFSET of the picture at SOURCE-INDEX into DEST,
-\   while it is still picture REVISION: for PIC-F-RGBA8 its ready rich copy
-\   of WIDTH by HEIGHT pixels and LENGTH bytes, and for a file format the
-\   file itself, as it is, when its picture is WIDTH by HEIGHT and the file
-\   LENGTH bytes.  The caller keeps the span within LENGTH.  A copy is the
-\   picture decoded at that size, so nothing else could be it.  False when
-\   the picture is no longer that copy or file, or the file could not be
-\   read.
+\   ( source-index root-key revision format width height length offset
+\     dest-a dest-u -- ok? )
+\   Copy DEST-U bytes from OFFSET of the picture at SOURCE-INDEX with
+\   ROOT-KEY into DEST, while it is still picture REVISION: for
+\   PIC-F-RGBA8 its ready rich copy of WIDTH by HEIGHT pixels and LENGTH
+\   bytes, and for a file format the file itself, as it is, when its
+\   picture is WIDTH by HEIGHT and the file LENGTH bytes.  The caller
+\   keeps the span within LENGTH.  A copy is the picture decoded at that
+\   size, so nothing else could be it.  False when the picture is no
+\   longer that copy or file, or the file could not be read.
 : _UTUI-PICTURE-PULL
-  ( source-index revision format width height length offset dest-a dest-u -- ok? )
+  ( source-index root-key revision format width height length offset dest-a dest-u -- ok? )
     _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-OFFSET ! _UTUI-PP-LENGTH !
     _UTUI-PP-H ! _UTUI-PP-W ! _UTUI-PP-FORMAT ! _UTUI-PP-REVISION !
-    _UTUI-PP-INDEX !
+    _UTUI-PP-KEY ! _UTUI-PP-INDEX !
     ['] _UTUI-PP-OBSERVED CATCH ?DUP IF DROP 0 THEN
-    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-FORMAT !
+    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-KEY ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-FORMAT !
     0 _UTUI-PP-W ! 0 _UTUI-PP-H ! 0 _UTUI-PP-LENGTH ! 0 _UTUI-PP-OFFSET !
     0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
 
 VARIABLE _UTUI-PF-INDEX
+VARIABLE _UTUI-PF-KEY
 VARIABLE _UTUI-PF-REVISION
 VARIABLE _UTUI-PF-REASON
 
@@ -7548,22 +7601,23 @@ VARIABLE _UTUI-PF-REASON
     _UTUI-PF-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
     _UTUI-PF-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
         DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
-    _UTUI-ELEM-PICTURE DUP 0= IF EXIT THEN
+    _UTUI-PF-KEY @ _UTUI-ELEM-KEYED-PICTURE DUP 0= IF EXIT THEN
     DUP PICT-REVISION@ _UTUI-PF-REVISION @ <> IF DROP 0 EXIT THEN
     _UTUI-PF-REASON @ SWAP PICT-RICH-FAILED! -1 ;
 
 : _UTUI-PF-OBSERVED  ( -- flag )
     ['] _UTUI-PF-BODY UIDL-SEMANTIC-OBSERVE ;
 
-\ _UTUI-PICTURE-FAILED! ( source-index revision reason -- flag )
-\   The rich side could not send picture REVISION at SOURCE-INDEX because
-\   of the picture itself, for REASON: its widget remembers why until it is
-\   given another source.  False once the element shows another picture or
-\   none.
-: _UTUI-PICTURE-FAILED!  ( source-index revision reason -- flag )
-    _UTUI-PF-REASON ! _UTUI-PF-REVISION ! _UTUI-PF-INDEX !
+\ _UTUI-PICTURE-FAILED! ( source-index root-key revision reason -- flag )
+\   The rich side could not send picture REVISION at SOURCE-INDEX with
+\   ROOT-KEY because of the picture itself, for REASON: its widget
+\   remembers why until it is given another source.  False once that
+\   place shows another picture or none.
+: _UTUI-PICTURE-FAILED!  ( source-index root-key revision reason -- flag )
+    _UTUI-PF-REASON ! _UTUI-PF-REVISION ! _UTUI-PF-KEY ! _UTUI-PF-INDEX !
     ['] _UTUI-PF-OBSERVED CATCH ?DUP IF DROP 0 THEN
-    0 _UTUI-PF-INDEX ! 0 _UTUI-PF-REVISION ! 0 _UTUI-PF-REASON ! ;
+    0 _UTUI-PF-INDEX ! 0 _UTUI-PF-KEY ! 0 _UTUI-PF-REVISION !
+    0 _UTUI-PF-REASON ! ;
 
 \ Independent canonical FIELD observation.  The iterator retains the closed
 \ relation privately; only its pointer-free source tuple reaches UFLSN.

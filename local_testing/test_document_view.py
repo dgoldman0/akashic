@@ -635,6 +635,37 @@ def test_a_figure_shows_its_picture_and_the_part_in_view() -> None:
     assert end[0] == end[1]
 
 
+def test_the_view_keeps_its_figures_in_block_order() -> None:
+    """The view keeps a record of each figure it meets, in block order
+    whichever it meets first, keyed by its block's index plus one, with
+    the picture widget showing it while it has a row in view."""
+
+    paragraphs = b"".join(b"Paragraph %d.\n\n" % n for n in range(12))
+    document = (b"![one](sunset.qoi)\n\n" + paragraphs
+                + b"![two](sunset.qoi)\n\n" + paragraphs)
+    lines = [
+        _view(10, 30), f"DV-FILE {len(document)} DV-OPEN",
+        ": DV-FIG. ( i -- ) DV-W @ DOCV-FIGURE@ SWAP .\" K=\" . .\" P=\" 0<> . ;",
+        ": DV-FIGS. ( -- ) .\" N=\" DV-W @ DOCV-FIGURE-COUNT . 0 DV-FIG. 1 DV-FIG. CR ;",
+        # The second figure first, then the first.
+        "13 DV-W @ DOCV-GO DV-DRAW DV-FIGS.",
+        "0 DV-W @ DOCV-GO DV-DRAW DV-FIGS.",
+        '." PAST=" 2 DV-FIG. CR',
+        # By key: the first figure's picture; none for the second, out of
+        # view, a paragraph, or no block.
+        '." BYKEY=" 0 DV-W @ DOCV-FIGURE@ NIP 1 DV-W @ DOCV-FIGURE-PICTURE = .',
+        "14 DV-W @ DOCV-FIGURE-PICTURE . 2 DV-W @ DOCV-FIGURE-PICTURE .",
+        "0 DV-W @ DOCV-FIGURE-PICTURE . CR",
+        "DV-CLOSE",
+    ]
+    output = _run(lines, document, PICTURE)
+    first, second = re.findall(r"N=(\d+) K=(\d+) P=(-?\d+) K=(\d+) P=(-?\d+)", output)
+    assert first == ("1", "14", "-1", "0", "0"), output[-2000:]
+    assert second == ("2", "1", "-1", "14", "0")
+    assert "PAST=K=0 P=0 " in output
+    assert "BYKEY=-1 0 0 0 " in output
+
+
 def test_a_figure_without_its_picture_shows_its_name() -> None:
     rows, cols = 6, 24
     document = b"![gone](missing.qoi)\n\nAfter.\n"

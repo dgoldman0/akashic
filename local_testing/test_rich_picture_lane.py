@@ -27,24 +27,29 @@ COPY_BYTES = 16 * 12 * 4
 RAW = 1          # PIC-F-RGBA8, and RTE-PICTURE-RGBA8
 
 
-def descriptor(*, index=5, row=4, col=2, height=3, width=8, z=4, state=2,
-               copy=(16, 12), format=RAW, nbytes=None, document=11, revision=3):
+def descriptor(*, index=5, key=1, row=4, col=2, height=3, width=8, z=4, state=2,
+               copy=(16, 12), format=RAW, nbytes=None, document=11, revision=3,
+               clip=None, figure=False):
     """A UPICSN descriptor, as a build's capture leaves it: a copy's bytes
-    are its pixels', a file's its length."""
+    are its pixels', a file's its length.  CLIP is the part shown, as row,
+    column, height and width from the rectangle's corner; all of it unless
+    given."""
     w, h = copy
     nbytes = w * h * 4 if nbytes is None else nbytes
-    return struct.pack("<19Q", 1, index, 0, 1, row, col, height, width, z, state, 0,
-                       w, h, nbytes, w, h, format, document, revision)
+    clip = (0, 0, height, width) if clip is None else clip
+    return struct.pack("<24Q", 1, index, 0, key, row & MASK64, col & MASK64, height, width,
+                       z, state, 0, w, h, nbytes, w, h, format, document, revision,
+                       *(value & MASK64 for value in clip), MASK64 if figure else 0)
 
 
 def entry(*, ident=5, copy=(16, 12), state=2, format=RAW, document=11, index=5,
-          revision=3):
+          revision=3, key=1):
     """A resource table entry: ID, size, the decoded bytes the owner holds,
-    state, the format it was sent in, and the document, element and revision
-    of the picture it is a copy of."""
+    state, the format it was sent in, and the document, element, revision
+    and root key of the picture it is a copy of."""
     w, h = copy
-    return struct.pack("<9Q", ident, w, h, w * h * 4, state, format,
-                       document, index, revision)
+    return struct.pack("<10Q", ident, w, h, w * h * 4, state, format,
+                       document, index, revision, key)
 
 
 # ---------------------------------------------------------------------
@@ -226,6 +231,119 @@ def test_a_new_resource_for_a_picture_is_a_replacement_and_a_move_a_new_frame(im
     assert not h.call("_RTHP-STATICS-REUSABLE?", bank, other, 0)
 
 
+def _document_claim(h, *, rows=(0, 7), cols=(0, 32), index=5):
+    """The claim the document's root on element INDEX made with the
+    controls, before the statics are built: rows and columns, each end
+    exclusive."""
+    claim = struct.pack("<10Q", 11, 9, 1, index, 0, 4, rows[0], cols[0], rows[1], cols[1])
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"), claim)
+    h.field(h.producer, "_RTHP.CLAIMS-USED", len(claim))
+
+
+@pytest.mark.parametrize("case", ("whole", "above", "foot"))
+def test_a_figure_shows_the_part_its_document_shows_inside_the_document_claim(images, case):
+    """A figure is an IMAGE of its whole rectangle, clipped to the part its
+    document shows, which the document's root already claims: it adds no
+    claim of its own."""
+    h = images
+    h.setup(pictures=2, row=7)
+    _document_claim(h)
+    place, clip = {
+        # Rows 4..6, all of it shown: no clip.
+        "whole": (dict(row=4, height=3), (0, 0, 0, 0)),
+        # Rows -2..1: its top two rows are above the surface.
+        "above": (dict(row=-2, height=4, clip=(2, 0, 2, 8)), (0, 2, 8, 2)),
+        # Rows 5..8: the document's foot, at row 7, cuts its last two.
+        "foot": (dict(row=5, height=4, clip=(0, 0, 2, 8)), (0, 0, 8, 2)),
+    }[case]
+    h.pictures([descriptor(key=3, figure=True, **place)], [entry(key=3)])
+    assert h.build() == (0,)
+    assert h.get("STATIC-COUNT") == 2
+    # The document's claim and the status field's.
+    assert h.get("CLAIMS-USED") == 2 * h.constant("RUCL-CLAIM-SIZE")
+    item = h.get("STATICS-A") + STATIC
+    fields = struct.unpack("<26Q", h.runtime.memory.read_bytes(item, STATIC))
+    assert fields[8:12] == (place["row"] & MASK64, 2, place["height"], 8)
+    # Resource 5, then the clip's column, row, columns and rows.
+    assert fields[21:] == (5, *clip)
+    corr = h.runtime.memory.read_bytes(h.get("STATIC-CORR-A") + 40, 40)
+    assert struct.unpack("<5Q", corr) == (11, 5, 0, 3, 0)
+    h.admit_images()
+    assert h.call("_RTHP-STATICS-FIXED?", h.producer)
+    h.guards()
+
+
+@pytest.mark.parametrize("case", ("no-document", "other-element", "past-the-foot", "status"))
+def test_a_figure_its_document_claim_does_not_hold_stays_cell(images, case):
+    h = images
+    h.setup(pictures=2, row=7)
+    place = dict(row=4, height=3)
+    if case == "other-element":
+        _document_claim(h, index=6)
+    elif case == "past-the-foot":
+        # Rows 4..6 shown whole cross the document's foot at row 5.
+        _document_claim(h, rows=(0, 5))
+    elif case == "status":
+        # Rows 5..7 shown whole reach the status field's row 7.
+        _document_claim(h)
+        place = dict(row=5, height=3)
+    h.pictures([descriptor(key=3, figure=True, **place)], [entry(key=3)])
+    assert h.build() == (0,)
+    assert h.get("STATIC-COUNT") == 1
+    h.guards()
+
+
+def test_an_element_picture_partly_hidden_claims_only_the_part_shown(images):
+    h = images
+    h.setup(pictures=2)
+    # Rows -1..2, its top row hidden: rows 0..2 show.
+    h.pictures([descriptor(row=-1, height=4, clip=(1, 0, 3, 8))], [entry()])
+    assert h.build() == (0,)
+    assert h.get("STATIC-COUNT") == 2
+    item = h.get("STATICS-A") + STATIC
+    fields = struct.unpack("<26Q", h.runtime.memory.read_bytes(item, STATIC))
+    assert fields[8:12] == (MASK64, 2, 4, 8)
+    assert fields[21:] == (5, 0, 1, 8, 3)
+    size = h.constant("RUCL-CLAIM-SIZE")
+    claim = h.runtime.memory.read_bytes(h.get("CLAIMS-A") + size, size)
+    assert struct.unpack("<4Q", claim[48:80]) == (0, 2, 3, 10)
+    h.admit_images()
+    assert h.call("_RTHP-STATICS-FIXED?", h.producer)
+    h.guards()
+
+
+@pytest.mark.parametrize("mutation", (None, "document", "clip"))
+def test_the_fixed_audit_finds_a_figure_inside_its_document_claim(images, mutation):
+    h = images
+    h.setup(pictures=2, row=7)
+    _document_claim(h)
+    h.pictures([descriptor(key=3, figure=True, row=-2, height=4, clip=(2, 0, 2, 8))],
+               [entry(key=3)])
+    assert h.build() == (0,)
+    h.admit_images()
+    if mutation == "document":
+        # The document's claim no longer holds the figure's rows.
+        h.runtime.memory.write64(h.get("CLAIMS-A") + 48, 1)
+    elif mutation == "clip":
+        # Shown from row -1, off the surface.
+        h.runtime.memory.write64(h.get("STATICS-A") + STATIC + 184, 1)
+    assert bool(h.call("_RTHP-STATICS-FIXED?", h.producer)) is (mutation is None)
+
+
+def test_a_picture_shown_through_another_clip_is_a_new_frame(images):
+    h = images
+    h.setup(pictures=2)
+    h.pictures([descriptor(row=-1, height=4, clip=(1, 0, 3, 8))], [entry()])
+    assert h.build() == (0,)
+    bank = h.pack()
+    other = h.get("TARGET1-A")
+    h.runtime.memory.write_bytes(other, h.runtime.memory.read_bytes(bank, h.bank_size))
+    assert h.call("_RTHP-STATICS-REUSABLE?", bank, other, 0)
+    items, = h.results("_RTHP-PACK-STATICS-A", other)
+    h.runtime.memory.write64(items + STATIC + 200, 2)
+    assert not h.call("_RTHP-STATICS-REUSABLE?", bank, other, 0)
+
+
 # ---------------------------------------------------------------------
 #  The lane
 # ---------------------------------------------------------------------
@@ -279,7 +397,7 @@ _SEAMS = {
     ),
     "RUHA-PICTURE-FAIL": (
         ": RUHA-PICTURE-FAIL DROP LP-FAIL-REASON ! LP-FAIL-REVISION ! "
-        "LP-FAIL-INDEX ! LP-FAIL-DOCUMENT ! 1 LP-FAILS +! RUHA-S-OK ;"
+        "LP-FAIL-KEY ! LP-FAIL-INDEX ! LP-FAIL-DOCUMENT ! 1 LP-FAILS +! RUHA-S-OK ;"
     ),
     "RUHA-PICTURES@": (
         ": RUHA-PICTURES@ DROP LP-CAP-DRAW ! LP-CAP-ASK ! LP-CAP-U ! LP-CAP-A ! "
@@ -304,7 +422,8 @@ _VARIABLES = (
     "LP-PULLS", "LP-PULL-D", "LP-PULL-OFFSET", "LP-PULL-A", "LP-PULL-U", "LP-PULL-STATUS",
     "LP-WANT-OFFSET", "LP-WANT-MOST", "LP-WANT-STATUS",
     "LP-FEEDS", "LP-FEED-A", "LP-FEED-U", "LP-FEED-STATUS",
-    "LP-FAILS", "LP-FAIL-DOCUMENT", "LP-FAIL-INDEX", "LP-FAIL-REVISION", "LP-FAIL-REASON",
+    "LP-FAILS", "LP-FAIL-DOCUMENT", "LP-FAIL-INDEX", "LP-FAIL-KEY", "LP-FAIL-REVISION",
+    "LP-FAIL-REASON",
     "LP-CANCELS", "LP-CANCEL-STATUS", "LP-OWNER-STATE", "LP-MAX-W", "LP-MAX-H", "LP-MAX-BYTES",
     "LP-FORMATS", "LP-RELEASES",
     "LP-CAPTURES", "LP-CAP-A", "LP-CAP-U", "LP-CAP-ASK", "LP-CAP-DRAW", "LP-CAP-COUNT",
@@ -1093,11 +1212,13 @@ def test_frames_are_prepared_during_an_upload_but_wait_for_short_jobs(backend, p
         assert h.variable("LP-BUILDS") == builds + (not waits), (kind, state)
 
 
-def test_a_picture_whose_bytes_the_terminal_refuses_is_sent_once(lane):
+@pytest.mark.parametrize("key", (1, 3))
+def test_a_picture_whose_bytes_the_terminal_refuses_is_sent_once(lane, key):
     """The terminal refused a picture's bytes as no picture of their size.
-    Its widget remembers it, so the frame built again describes it as
-    failed and no build sends it again.  The lane notes no failure, so the
-    other pictures stay rich."""
+    Its widget, named by its element and root key, an element's own
+    picture's or a figure's, remembers it, so the frame built again
+    describes it as failed and no build sends it again.  The lane notes no
+    failure, so the other pictures stay rich."""
     h = lane
     ok = h.constant("SCB-S-OK")
     h.surface_known()
@@ -1105,15 +1226,16 @@ def test_a_picture_whose_bytes_the_terminal_refuses_is_sent_once(lane):
     shown = h.showing(9)
     h.put("TARGET-ACTIVE", shown)
     other = descriptor(index=7, revision=8)
-    h.pictures([descriptor(format=2, nbytes=700), other])
+    h.pictures([descriptor(format=2, nbytes=700, key=key), other])
     assert h.step() == (ok, MASK64, 0)
     h.wants(0, 700)
     assert h.step() == (ok, MASK64, 0)
     h.job("FAILED", "UPLOAD", "SOURCE")
     assert h.step() == (ok, 0, MASK64)
     assert (h.variable("LP-FAILS"), h.variable("LP-FAIL-DOCUMENT"),
-            h.variable("LP-FAIL-INDEX"), h.variable("LP-FAIL-REVISION"),
-            h.variable("LP-FAIL-REASON")) == (1, 11, 5, 3, h.constant("PIC-R-DAMAGED"))
+            h.variable("LP-FAIL-INDEX"), h.variable("LP-FAIL-KEY"),
+            h.variable("LP-FAIL-REVISION"), h.variable("LP-FAIL-REASON")) == (
+        1, 11, 5, key, 3, h.constant("PIC-R-DAMAGED"))
     assert h.entries()[0] == bytes(h.entry_size)
     assert (h.get("LANE-FAILED"), h.variable("LP-RELEASES"), h.get("FALLBACKS"),
             h.get("PICTURE-EPOCH"), h.get("CHUNK-A")) == (0, 0, 0, 1, 0)
@@ -1123,7 +1245,7 @@ def test_a_picture_whose_bytes_the_terminal_refuses_is_sent_once(lane):
     # Built again, the refused picture is described as failed and the other
     # picture goes.
     h.put("_RTHP-TB.PICTURE-EPOCH", 1, shown)
-    h.pictures([descriptor(format=2, nbytes=700, state=3), other])
+    h.pictures([descriptor(format=2, nbytes=700, state=3, key=key), other])
     assert h.step() == (ok, MASK64, 0)
     assert (h.variable("LP-UPLOADS"), h.variable("LP-UP-ID"), h.variable("LP-UP-U")) == (
         2, 2, COPY_BYTES)

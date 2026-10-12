@@ -86,16 +86,20 @@ SETUP = [
     "  _UP-STATUS ! _UP-COUNT ! ;",
     ": _UP-BOUND. ( cols rows -- ) _UP-ASK UPICSN-BOUND",
     '  ." BOUND=" SWAP . ." ," . CR ;',
+    ": _UP-SHOW-AT ( descriptor -- )",
+    '  >R ." IDX=" R@ UPICSN-SOURCE-INDEX@ . ." KEY=" R@ UPICSN-ROOT-KEY@ .',
+    '  ." ROW=" R@ UPICSN-ROW@ . ." COL=" R@ UPICSN-COLUMN@ .',
+    '  ." H=" R@ UPICSN-HEIGHT@ . ." W=" R@ UPICSN-WIDTH@ .',
+    '  ." CLR=" R@ UPICSN-CLIP-ROW@ . ." CLC=" R@ UPICSN-CLIP-COLUMN@ .',
+    '  ." CLH=" R@ UPICSN-CLIP-HEIGHT@ . ." CLW=" R@ UPICSN-CLIP-WIDTH@ .',
+    '  ." FIG=" R@ UPICSN-FIGURE? . ." REV=" R@ UPICSN-REVISION@ .',
+    '  ." ST=" R@ UPICSN-STATE@ .',
+    '  ." CW=" R@ UPICSN-COPY-WIDTH@ . ." CH=" R@ UPICSN-COPY-HEIGHT@ .',
+    '  ." CU=" R@ UPICSN-COPY-BYTES@ . ." FMT=" R@ UPICSN-FORMAT@ .',
+    '  ." AW=" R@ UPICSN-ASK-WIDTH@ . ." AH=" R> UPICSN-ASK-HEIGHT@ . ;',
     ": _UP-SHOW ( -- )",
     '  ." N=" _UP-COUNT @ . ." S=" _UP-STATUS @ .',
-    "  _UP-COUNT @ IF",
-    '    ." IDX=" _UP-D UPICSN-SOURCE-INDEX@ . ." ROW=" _UP-D UPICSN-ROW@ .',
-    '    ." COL=" _UP-D UPICSN-COLUMN@ . ." H=" _UP-D UPICSN-HEIGHT@ .',
-    '    ." W=" _UP-D UPICSN-WIDTH@ . ." ST=" _UP-D UPICSN-STATE@ .',
-    '    ." CW=" _UP-D UPICSN-COPY-WIDTH@ . ." CH=" _UP-D UPICSN-COPY-HEIGHT@ .',
-    '    ." CU=" _UP-D UPICSN-COPY-BYTES@ . ." FMT=" _UP-D UPICSN-FORMAT@ .',
-    '    ." AW=" _UP-D UPICSN-ASK-WIDTH@ . ." AH=" _UP-D UPICSN-ASK-HEIGHT@ .',
-    "  THEN CR ;",
+    "  _UP-COUNT @ IF _UP-D _UP-SHOW-AT THEN CR ;",
     "DEPTH _UP-DEPTH !",
     "80 24 SCR-NEW SCR-USE",
     "0 0 24 80 RGN-NEW _UP-RGN !",
@@ -164,6 +168,9 @@ def test_a_picture_is_described_asked_for_and_pulled() -> None:
     assert (first["N"], first["S"], first["IDX"], first["ST"]) == (1, ok, index, none)
     rows, cols = first["H"], first["W"]
     assert rows > 0 and cols > 0
+    # The element's own picture, root key one, shown whole.
+    assert (first["KEY"], first["FIG"]) == (1, 0)
+    assert (first["CLR"], first["CLC"], first["CLH"], first["CLW"]) == (0, 0, rows, cols)
     assert (first["AW"], first["AH"]) == (0, 0)
 
     # The bound is the rectangle's share of the surface's pixels.
@@ -417,8 +424,10 @@ def test_a_picture_the_rich_side_could_not_send_is_described_as_failed() -> None
         "UPICSN-DESCRIPTOR-SIZE 80 24 0 0 0 _UP-CAPTURE _UP-SHOW",
         "_UP-D UPICSN-REVISION@ _UP-REV !",
         # Another revision is another picture: nothing is remembered.
-        '." OTHER=" _UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ 1+ PIC-R-DAMAGED UPICSN-FAIL .',
-        '." FAIL=" _UP-D UPICSN-SOURCE-INDEX@ _UP-REV @ PIC-R-DAMAGED UPICSN-FAIL .',
+        ": _UP-FAIL ( revision -- status )",
+        "  >R _UP-D UPICSN-SOURCE-INDEX@ _UP-D UPICSN-ROOT-KEY@ R> PIC-R-DAMAGED UPICSN-FAIL ;",
+        '." OTHER=" _UP-REV @ 1+ _UP-FAIL .',
+        '." FAIL=" _UP-REV @ _UP-FAIL .',
         '." CLAIMED=" _UP-CLAIMED. CR',
         "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-SHOW",
         '." REASON=" _UP-D UPICSN-REASON@ . ." AFTER=" _UP-CLAIMED. CR',
@@ -467,3 +476,118 @@ def test_a_file_that_cannot_be_read_is_remembered_as_failed() -> None:
     assert f"PAST={_constant(runtime, 'UPICSN-S-STALE')} " in output
     assert shown[1]["ST"] == _constant(runtime, "UPICSN-C-FAILED")
     assert f"REASON={_constant(runtime, 'PIC-R-READ')} " in output
+
+
+# Two figures, then a paragraph, so the view scrolls past the first.
+MARKDOWN = b"# Doc\n\n![one](logo.qoi)\n\n![two](logo.qoi)\n\nThe end.\n"
+EACH = [
+    ": _UP-EACH ( -- )",
+    '  ." N=" _UP-COUNT @ . ." S=" _UP-STATUS @ . CR',
+    "  _UP-COUNT @ 0 ?DO",
+    '    ." D=" I . I UPICSN-DESCRIPTOR-SIZE * _UP-D + _UP-SHOW-AT CR',
+    "  LOOP ;",
+    ": _UP-NTH ( i -- descriptor ) UPICSN-DESCRIPTOR-SIZE * _UP-D + ;",
+    ": _UP-FORMATS!  _UP-ASK UPICSN-ASK.FORMATS ! ;",
+    f"CREATE _UP-MD {' '.join(f'{b} C,' for b in MARKDOWN)}",
+    f'_UP-MD {len(MARKDOWN)} S" /guide.md" _UP-PUT',
+    'S" /guide.md" _UP-OPEN UTUI-PAINT _UP-SERVICE UTUI-PAINT',
+]
+
+
+def _captures(output: str) -> list[tuple[dict[str, int], list[dict[str, int]]]]:
+    captures = []
+    for line in output.splitlines():
+        fields = dict((k, int(v)) for k, v in re.findall(r"([A-Z]+)=(-?\d+)", line))
+        if line.startswith("N="):
+            captures.append((fields, []))
+        elif line.startswith("D="):
+            captures[-1][1].append(fields)
+    return captures
+
+
+def test_a_document_describes_each_figure_in_view_clipped_to_it() -> None:
+    """A <media> element showing a Markdown document describes each figure
+    with a row in view, in block order, keyed by its block: its whole
+    rectangle, the part the view shows as its clip, and that it is a
+    figure.  Its copy is asked for at its whole rectangle, so scrolling
+    asks for nothing new."""
+
+    output, runtime = _run(EACH + [
+        "2 UPICSN-DESCRIPTOR-SIZE * 80 24 640 384 0 _UP-CAPTURE _UP-EACH",
+        "5 _UP-WM @ MEDIA-DOCUMENT@ DOCV-SCROLL _UP-EM @ UIDL-DIRTY! UTUI-PAINT",
+        "2 UPICSN-DESCRIPTOR-SIZE * 80 24 640 384 0 _UP-CAPTURE _UP-EACH",
+        # A bank with room for one says it would take two.
+        "UPICSN-DESCRIPTOR-SIZE 80 24 640 384 0 _UP-CAPTURE _UP-EACH",
+    ])
+    index = int(re.search(r"INDEX=(\d+)", output).group(1))
+    ok, capacity = _constant(runtime, "UPICSN-S-OK"), _constant(runtime, "UPICSN-S-CAPACITY")
+    # The 60 by 40 picture, never drawn wider than itself, takes 60 * 40 /
+    # (2 * 60) rows of the 80-cell view.  The heading and a blank row come
+    # first; the first figure's caption and a blank row come before the
+    # second, at row 24, just below the view.
+    rows = 40 * 60 // (2 * 60)
+    first, second = 2, 2 + rows + 2
+    before, scrolled, counted = _captures(output)
+    assert (before[0]["N"], before[0]["S"]) == (1, ok), output[-3000:]
+    figure = before[1][0]
+    assert (figure["IDX"], figure["KEY"], figure["FIG"]) == (index, 2, -1)
+    assert (figure["ROW"], figure["COL"], figure["H"], figure["W"]) == (first, 0, rows, 80)
+    assert (figure["CLR"], figure["CLC"], figure["CLH"], figure["CLW"]) == (0, 0, rows, 80)
+    assert (figure["AW"], figure["AH"]) == (80 * 8, rows * 16)
+
+    assert (scrolled[0]["N"], scrolled[0]["S"]) == (2, ok)
+    top, bottom = scrolled[1]
+    # Five rows down, the first figure's top three rows are above the view.
+    assert (top["KEY"], top["ROW"], top["H"]) == (2, first - 5, rows)
+    assert (top["CLR"], top["CLC"], top["CLH"], top["CLW"]) == (3, 0, rows - 3, 80)
+    # The second figure's top five rows show at the view's foot.
+    assert (bottom["KEY"], bottom["ROW"], bottom["H"]) == (3, second - 5, rows)
+    assert (bottom["CLR"], bottom["CLH"]) == (0, 24 - (second - 5))
+    assert bottom["FIG"] == -1 and bottom["IDX"] == index
+    for shown in (top, bottom):
+        assert (shown["AW"], shown["AH"]) == (80 * 8, rows * 16)
+    assert (counted[0]["N"], counted[0]["S"]) == (2, capacity)
+
+
+def test_a_figure_is_pulled_and_failed_by_its_element_and_key() -> None:
+    """Pull and fail name a figure by its element and its block's key: a
+    key that names another figure, or a block that is not one, is stale,
+    and so is a figure once it scrolls out of view."""
+
+    output, runtime = _run(EACH + [
+        "CREATE _UP-OLD-MEM UPICSN-DESCRIPTOR-SIZE 7 + ALLOT",
+        ": _UP-OLD  _UP-OLD-MEM 7 + -8 AND ;",
+        ": _UP-FAIL ( key -- status )",
+        "  >R 1 _UP-NTH UPICSN-SOURCE-INDEX@ R> 1 _UP-NTH UPICSN-REVISION@",
+        "  PIC-R-DAMAGED UPICSN-FAIL ;",
+        "1 PIC-F-QOI 1- LSHIFT _UP-FORMATS!",
+        "5 _UP-WM @ MEDIA-DOCUMENT@ DOCV-SCROLL _UP-EM @ UIDL-DIRTY! UTUI-PAINT",
+        "2 UPICSN-DESCRIPTOR-SIZE * 80 24 0 0 0 _UP-CAPTURE _UP-EACH",
+        "0 _UP-NTH _UP-OLD UPICSN-DESCRIPTOR-SIZE MOVE",
+        # The second figure's file, by its own descriptor.
+        '." PULL=" 1 _UP-NTH 0 _UP-PIXELS 1 _UP-NTH UPICSN-COPY-BYTES@ UPICSN-PULL . CR',
+        # Its revision under the first figure's key, or the heading's.
+        '." OTHER=" 2 _UP-FAIL . ." HEADING=" 1 _UP-FAIL . ." FAIL=" 3 _UP-FAIL . CR',
+        "2 UPICSN-DESCRIPTOR-SIZE * 80 24 0 0 0 _UP-CAPTURE _UP-EACH",
+        '." REASON=" 1 _UP-NTH UPICSN-REASON@ . CR',
+        # Seventeen rows further, the first figure has no row in view.
+        "17 _UP-WM @ MEDIA-DOCUMENT@ DOCV-SCROLL _UP-EM @ UIDL-DIRTY! UTUI-PAINT",
+        "2 UPICSN-DESCRIPTOR-SIZE * 80 24 0 0 0 _UP-CAPTURE _UP-EACH",
+        '." GONE=" _UP-OLD 0 _UP-PIXELS _UP-OLD UPICSN-COPY-BYTES@ UPICSN-PULL . CR',
+    ])
+    ok, stale = _constant(runtime, "UPICSN-S-OK"), _constant(runtime, "UPICSN-S-STALE")
+    ready, failed = (_constant(runtime, f"UPICSN-C-{name}") for name in ("READY", "FAILED"))
+    fields = dict((k, int(v)) for k, v in re.findall(r"([A-Z]+)=(-?\d+)", output))
+    shown, after, further = _captures(output)
+    assert [d["KEY"] for d in shown[1]] == [2, 3], output[-3000:]
+    assert all(d["ST"] == ready and d["CU"] == len(QOI) for d in shown[1])
+    # Each figure is a picture of its own.
+    assert shown[1][0]["REV"] != shown[1][1]["REV"]
+    assert fields["PULL"] == ok
+    runtime.execute("_UP-PIXELS")
+    assert runtime.memory.read_bytes(runtime.main_context.data.pop(), len(QOI)) == QOI
+    assert (fields["OTHER"], fields["HEADING"], fields["FAIL"]) == (stale, stale, ok)
+    assert [(d["KEY"], d["ST"]) for d in after[1]] == [(2, ready), (3, failed)]
+    assert fields["REASON"] == _constant(runtime, "PIC-R-DAMAGED")
+    assert [(d["KEY"], d["ST"]) for d in further[1]] == [(3, failed)]
+    assert fields["GONE"] == stale

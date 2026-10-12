@@ -1,9 +1,9 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "documents-capture-20261012",
-    "commit": "b3b36335a9a4877254ee7494a1207e20127a1d41",
-    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, the sandbox job service lending jobs to worker cores, the media layer below the widgets (sources, file kinds, pictures and documents), the Markdown reader with the HTML entity list, the picture, media and document widgets, the shared rule for the path a document's link names, the native document family with its DOC1 packer, and the document view's capture with the producer's document lowering",
+    "name": "document-figures-20261012",
+    "commit": "1c6cc098a2c65c19a2e4bef493b26cb2529cc62b",
+    "measurement": "The reviewed rich Desk producer tree with the sandbox job service, deferred request completion, the bridge between interoperability values and the sandbox value codec, the library that builds verified sandbox plans from source, the shared sandbox capability that Desk hosts, the sandbox identity digests, the canonical sandbox profile descriptor, the canonical sandbox artifact format, canonical schema bytes with the JSON schema reader, canonical sandbox module declarations, closed sandbox schemas, the live table of installed sandbox modules, the durable sandbox module store, the shared sandbox capability's module operations and intents, Desk's screens for the shared sandbox, the sandbox job service lending jobs to worker cores, the media layer below the widgets (sources, file kinds, pictures and documents), the Markdown reader with the HTML entity list, the picture, media and document widgets, the shared rule for the path a document's link names, the native document family with its DOC1 packer, the document view's capture with the producer's document lowering, and the document view's figures described to the rich side as clipped pictures",
     "expected": {
       "module_count": 649,
       "resolved_require_occurrence_count": 2320,
@@ -16,7 +16,7 @@
       "addressability_issue_count": 0,
       "marker_issue_count": 0,
       "graph_sha256": "e29a5e747688b66362ce10bffab879793816e871ddf3d4e1594c766276cdab45",
-      "state_sha256": "cc38e3d7abb3fbca30767e3ff726db0660c6929031a8f92a6b65f77107a9ce14",
+      "state_sha256": "5c7bf04e14b0bccd955564322cf8e1fd97884d97e60e962e6c0a9e515a97721b",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],

@@ -98,6 +98,13 @@ resolved shows its name.
 decoding, `PICT-STEP-PIXELS` source pixels a call, as the UIDL host's
 service pass does for picture widgets.
 
+The view keeps a record of each figure it has met, in block order whichever
+it meets first. A rich side shows each figure with a row in view as a
+picture of its own ([UIDL picture snapshot](../uidl-picture-snapshot.md)):
+`DOCV-FIGURE@` gives a record's block key and its picture widget while it
+has one, and `DOCV-FIGURE-PICTURE` finds the widget by key. Neither changes
+the view.
+
 ### Publication
 
 A rich terminal draws the document itself, from the blocks the last draw
@@ -148,6 +155,9 @@ part could not be read)"; its rows are counted again at the next pass.
 | `DOCV-REVISION@` | `( widget -- n )` | Counts every change in what the view shows. |
 | `DOCV-PENDING?` | `( widget -- flag )` | A figure's picture is still decoding. |
 | `DOCV-SERVICE` | `( widget -- changed? )` | Decode some more of a figure's picture; true when what the view shows changed. |
+| `DOCV-FIGURE-COUNT` | `( widget -- n )` | The figure records the view keeps. |
+| `DOCV-FIGURE@` | `( i widget -- key picture \| 0 )` | Figure record `i`, in block order: its block's key and the picture widget showing it while it has a row in view; `0 0` out of range. |
+| `DOCV-FIGURE-PICTURE` | `( key widget -- picture \| 0 )` | The picture widget showing the figure of the block with `key`. |
 | `DOCV-FREE` | `( widget -- )` | Give back everything the view holds. |
 | `DOCV-GENUINE?` | `( widget -- flag )` | A live document view, by its header. |
 | `DOCV-DOCUMENT-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Build the view's DOCUMENT entry with the caller's builder; `dst cap` of `0 0` measures. |
