@@ -19,6 +19,10 @@
 \  trust, DNS, Desk, Streams, credentials, and payload decoding outside this
 \  module.
 \
+\  Every request asks for gzip.  HBUF inflates a gzip body into the response
+\  buffer as it arrives, and each hop's body counts against the budget as
+\  sent or as inflated, whichever is larger.
+\
 \  Public HRES calls are single-threaded and non-reentrant because resources
 \  share module scratch.  In particular, bind, release, and media callbacks
 \  must not enter any HRES operation, even for another resource.  A bind
@@ -118,6 +122,7 @@ REQUIRE ../utils/memory-span.f
 23 CONSTANT HRES-D-MEDIA-REJECTED
 24 CONSTANT HRES-D-PORT-NOT-DETACHED
 25 CONSTANT HRES-D-REDIRECT-POLICY
+26 CONSTANT HRES-D-CONTENT-DAMAGED
 
 -4901 CONSTANT HRES-XERR-INVALID
 -4902 CONSTANT HRES-XERR-STATE
@@ -669,6 +674,7 @@ VARIABLE _HRPUB-R
     DUP HRES.REQUEST HREQ-CLEAR
     DUP HRES.EXCHANGE HBUF.PARSER HSTR-RESET
     DUP HRES.EXCHANGE HBUF.RECV HBUF-RECV-CAPACITY 0 FILL
+    DUP HRES.EXCHANGE HBUF.INFL INFL-SIZE 0 FILL
     DUP HRES.EXCHANGE
         DUP 0 SWAP HBUF.REQUEST !
         DUP 0 SWAP HBUF.BODY-A !
@@ -784,7 +790,7 @@ VARIABLE _HRREQ-STATUS
         _HRREQ-R @ HRES.REQUEST HREQ-HOST ?DUP IF EXIT THEN
     _HRREQ-R @ HRES.SPEC HRES-SPEC-ACCEPT$
         _HRREQ-R @ HRES.REQUEST HREQ-ACCEPT ?DUP IF EXIT THEN
-    S" Accept-Encoding" S" identity"
+    S" Accept-Encoding" S" gzip"
         _HRREQ-R @ HRES.REQUEST HREQ-HEADER ?DUP IF EXIT THEN
     S" Akashic-HTTP-Resource/0.1"
         _HRREQ-R @ HRES.REQUEST HREQ-USER-AGENT ?DUP IF EXIT THEN
@@ -1039,6 +1045,7 @@ VARIABLE _HRPREP-STATUS
         _HRPREP-R @ HRES.EXCHANGE HBUF-INIT HBUF-S-OK <> IF
         HRES-D-REQUEST _HRPREP-R @ _HRES-FAULT EXIT
     THEN
+    -1 _HRPREP-R @ HRES.EXCHANGE HBUF-GZIP!
     _HRPREP-REMAIN @ _HRPREP-R @ HRES.EXCHANGE HBUF.PARSER
         HSTR-BODY-LIMIT!
     _HRPREP-R @ _HRES-BUILD-REQUEST DUP _HRPREP-STATUS !
@@ -1109,6 +1116,7 @@ VARIABLE _HRENC-R
 
 : _HRES-CONTENT-ENCODING?  ( resource -- flag )
     DUP _HRENC-R ! DROP
+    _HRENC-R @ HRES.EXCHANGE HBUF-CODING@ HBUF-C-GZIP = IF -1 EXIT THEN
     S" content-encoding" _HRENC-R @ _HRES-HEADER-COUNT DUP 0= IF
         DROP -1 EXIT
     THEN
@@ -1375,7 +1383,11 @@ CREATE _HRES-AUTH-CANDIDATE HTARGET-SIZE ALLOT
 VARIABLE _HRADM-R
 VARIABLE _HRADM-DETAIL
 VARIABLE _HRADM-CODE
-VARIABLE _HRADM-BODY
+
+\ The budget a hop's body takes: as sent or as inflated, the larger.
+: _HRES-HOP-BODY  ( resource -- bytes )
+    HRES.EXCHANGE DUP HBUF.BODY-U @
+    SWAP HBUF.PARSER HSTR.BODY-TOTAL @ MAX ;
 
 : _HRES-ADMIT-RESPONSE  ( resource -- status )
     DUP _HRADM-R ! DROP
@@ -1383,7 +1395,7 @@ VARIABLE _HRADM-BODY
     _HRADM-R @ HRES.HTTP-STATUS !
     _HRADM-CODE @
         _HRADM-R @ HRES.HOP-STATUS _HRADM-R @ HRES.CURRENT @ 8 * + !
-    _HRADM-R @ HRES.EXCHANGE HBUF.BODY-U @ DUP _HRADM-BODY !
+    _HRADM-R @ _HRES-HOP-BODY
     _HRADM-R @ HRES.BODY-CONSUMED @ +
     DUP _HRADM-R @ HRES.BODY-CAP @ > IF
         DROP HRES-O-BODY-OVERFLOW HRES-D-BODY-BUDGET
@@ -1423,6 +1435,29 @@ VARIABLE _HRX-STATUS
     HRES-STATE-RESULT OVER HRES.STATE !
     HRES-S-OK DUP ROT HRES.LAST-STATUS ! ;
 
+\ The outcome of a body the exchange refused.
+: _HRES-REFUSED-BODY  ( body-status -- outcome detail )
+    HBUF-B-CAPACITY = IF HRES-O-BODY-OVERFLOW HRES-D-BODY-BUDGET EXIT THEN
+    HRES-O-CONTENT-ENCODING HRES-D-CONTENT-DAMAGED ;
+
+\ The outcome of an exchange that failed with the parser's STATUS.
+: _HRES-FAILED-PARSE  ( parser-status -- outcome detail )
+    DUP HSTR-S-BODY-OVERFLOW = IF
+        DROP HRES-O-BODY-OVERFLOW HSTR-S-BODY-OVERFLOW EXIT
+    THEN
+    DUP HSTR-S-HEADER-OVERFLOW = IF
+        DROP HRES-O-HEADER HSTR-S-HEADER-OVERFLOW EXIT
+    THEN
+    DUP HSTR-S-OK <> OVER HSTR-S-CANCELLED <> AND IF
+        HRES-O-PROTOCOL SWAP EXIT
+    THEN
+    DROP
+    _HRX-R @ HRES.EXCHANGE-STATUS @ HBUF-S-CANCELLED = IF
+        HRES-O-CANCELLED HBUF-S-CANCELLED
+    ELSE
+        HRES-O-TRANSPORT _HRX-R @ HRES.EXCHANGE-STATUS @
+    THEN ;
+
 : _HRES-FAILED-EXCHANGE  ( resource -- status )
     DUP _HRX-R ! DROP
     _HRX-R @ HRES.EXCHANGE-STATUS @
@@ -1434,23 +1469,10 @@ VARIABLE _HRX-STATUS
     _HRX-R @ HRES.HOP-STATUS _HRX-R @ HRES.CURRENT @ 8 * + !
     _HRX-R @ HRES.EXCHANGE HBUF.PARSER HSTR.STATUS @ DUP
         _HRX-R @ HRES.PARSER-STATUS !
-    DUP HSTR-S-BODY-OVERFLOW = IF
-        DROP HRES-O-BODY-OVERFLOW HSTR-S-BODY-OVERFLOW
+    _HRX-R @ HRES.EXCHANGE HBUF-BODY-STATUS@ ?DUP IF
+        NIP _HRES-REFUSED-BODY
     ELSE
-        DUP HSTR-S-HEADER-OVERFLOW = IF
-            DROP HRES-O-HEADER HSTR-S-HEADER-OVERFLOW
-        ELSE
-            DUP HSTR-S-OK <> OVER HSTR-S-CANCELLED <> AND IF
-                HRES-O-PROTOCOL SWAP
-            ELSE
-                DROP
-                _HRX-R @ HRES.EXCHANGE-STATUS @ HBUF-S-CANCELLED = IF
-                    HRES-O-CANCELLED HBUF-S-CANCELLED
-                ELSE
-                    HRES-O-TRANSPORT _HRX-R @ HRES.EXCHANGE-STATUS @
-                THEN
-            THEN
-        THEN
+        _HRES-FAILED-PARSE
     THEN
     _HRX-R @ _HRES-PRIMARY!
     _HRX-R @ _HRES-RELEASE-DETACHED DUP HRES-S-OK <> IF EXIT THEN DROP

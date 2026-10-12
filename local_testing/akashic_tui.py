@@ -23012,10 +23012,30 @@ VARIABLE _paf-deconfig-request-u
     S"  HTTP/1.1" _paf-expected, _paf-expected-crlf,
     S" Host: public.api.bsky.app" _paf-expected, _paf-expected-crlf,
     S" Accept: application/json" _paf-expected, _paf-expected-crlf,
-    S" Accept-Encoding: identity" _paf-expected, _paf-expected-crlf,
+    S" Accept-Encoding: gzip" _paf-expected, _paf-expected-crlf,
     S" User-Agent: Akashic-Streams/0.3" _paf-expected, _paf-expected-crlf,
     S" Connection: close" _paf-expected, _paf-expected-crlf,
     _paf-expected-crlf, ;
+
+\ gzip of "{}"
+CREATE _paf-gz-braces
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 171 C, 174 C,
+    5 C, 0 C, 67 C, 191 C, 166 C, 163 C, 2 C, 0 C, 0 C, 0 C,
+HERE _paf-gz-braces - CONSTANT _paf-gz-braces-u
+\ gzip of 262145 zero bytes, one past the body capacity: a head, 254
+\ zero bytes and a tail.
+CREATE _paf-gz-zeros
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 237 C, 193 C,
+    49 C, 1 C, 0 C, 0 C, 0 C, 194 C, 160 C, 245 C, 79 C, 237 C, 111 C, 6 C,
+    160 C,
+HERE 254 0 FILL 254 ALLOT
+    206 C, 0 C, 131 C, 160 C, 128 C, 7 C, 1 C, 0 C, 4 C, 0 C,
+HERE _paf-gz-zeros - CONSTANT _paf-gz-zeros-u
+
+: _paf-body  ( -- a u )
+    _paf-response-mode @ 11 = IF _paf-gz-braces _paf-gz-braces-u EXIT THEN
+    _paf-response-mode @ 12 = IF _paf-gz-zeros _paf-gz-zeros-u EXIT THEN
+    S" {}" ;
 
 : _paf-build-response  ( -- )
     _paf-response 2048 0 FILL 0 _paf-response-u !
@@ -23046,6 +23066,9 @@ VARIABLE _paf-deconfig-request-u
         S" Content-Encoding: identity" _paf-response, _paf-response-crlf,
     THEN
     _paf-response-mode @ 6 = IF
+        S" Content-Encoding: br" _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 10 >= IF
         S" Content-Encoding: gzip" _paf-response, _paf-response-crlf,
     THEN
     _paf-response-mode @ 7 = IF
@@ -23053,13 +23076,14 @@ VARIABLE _paf-deconfig-request-u
         S" Content-Encoding: identity" _paf-response, _paf-response-crlf,
     THEN
     _paf-response-mode @ 9 = IF
-        S" Content-Length: 262145"
+        S" Content-Length: 262145" _paf-response,
     ELSE
-        S" Content-Length: 2"
-    THEN _paf-response, _paf-response-crlf,
+        S" Content-Length: " _paf-response,
+        _paf-body NIP NUM>STR _paf-response,
+    THEN _paf-response-crlf,
     S" Connection: close" _paf-response, _paf-response-crlf,
     _paf-response-crlf,
-    _paf-response-mode @ 9 <> IF S" {}" _paf-response, THEN ;
+    _paf-response-mode @ 9 <> IF _paf-body _paf-response, THEN ;
 
 : _paf-fake-open-start  ( context -- io-status )
     DROP 1 _paf-open-starts +! NIO-S-PENDING ;
@@ -23385,6 +23409,15 @@ VARIABLE _paf-deconfig-request-u
     _paf-wipe-calls @ 1 = _paf-assert _paf-provider PAF.BODY-A @ 0= _paf-assert
     _paf-stack ;
 
+: _paf-test-gzip-success  ( -- )
+    11 _paf-prepare _paf-submit _paf-pump
+    _paf-operation XIOO.STATE @ XIO-STATE-SUCCEEDED = _paf-assert
+    _paf-provider PAF-BODY@ S" {}" STR-STR= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF-CODING@ HBUF-C-GZIP = _paf-assert
+    _paf-operation-reset
+    _paf-wipe-calls @ 1 = _paf-assert _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-stack ;
+
 : _paf-test-cancel  ( -- )
     0 _paf-prepare _paf-submit _paf-service XIO-TICK
     _paf-stack
@@ -23437,6 +23470,10 @@ VARIABLE _paf-deconfig-request-u
     8 PAF-ERR-TRANSPORT HBUF-S-PROTOCOL PAF-XERR-TRANSPORT 1 0 _paf-reject
     9 PAF-ERR-CAPACITY PAF-CODE-BODY-OVERFLOW PAF-XERR-CAPACITY
         1 0 _paf-reject
+    10 PAF-ERR-CONTENT-ENCODING PAF-CODE-CONTENT-ENCODING-DAMAGED
+        PAF-XERR-CONTENT-ENCODING 1 0 _paf-reject
+    12 PAF-ERR-CAPACITY PAF-CODE-BODY-OVERFLOW PAF-XERR-CAPACITY
+        1 0 _paf-reject
     _paf-stack ;
 
 : _paf-test-cleanup-failure  ( -- )
@@ -23475,6 +23512,7 @@ VARIABLE _paf-deconfig-request-u
     _paf-test-invalid-context
     _paf-test-success
     _paf-test-identity-success
+    _paf-test-gzip-success
     _paf-test-cancel
     _paf-test-rejections
     _paf-test-cleanup-failure

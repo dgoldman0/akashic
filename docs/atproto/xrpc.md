@@ -87,13 +87,21 @@ Accept: application/json
 Authorization: DPoP <access token>
 DPoP: <fresh proof>
 atproto-proxy: <service DID#fragment>    # only when supplied
-Accept-Encoding: identity
+Accept-Encoding: gzip
 User-Agent: akashic-atproto/1
 Connection: close
 ```
 
 POST additionally carries `Content-Type: application/json`, its exact
 `Content-Length`, and the copied caller body. GET is sealed without a body.
+
+The exchange inflates a gzip response body into its response arena as it
+arrives (see [http-buffered](../net/http-buffered.md)). The body as sent and
+as inflated each count against the arena, so a body past it fails with
+`AT-XRPC-EXCHANGE-S-CAPACITY`, as an uncompressed one does. A gzip body that
+is damaged, cut short or followed by more bytes fails with
+`AT-XRPC-EXCHANGE-S-ENCODING`, as does any coding other than gzip and
+`identity`.
 
 The proof HTU excludes the query as required by DPoP even though the HTTP
 request target retains it. Non-default HTTPS ports are retained in both the

@@ -10,6 +10,7 @@
 \   INFL-FEED     ( in-a in-u out-a out-u infl -- in-used out-used status )
 \   INFL-REASON@  ( infl -- reason )   why a stream is damaged, or 0
 \   INFL-TOTAL@   ( infl -- bytes )    bytes the stream has given so far
+\   INFL-DONE?    ( infl -- flag )     whether the stream has ended whole
 \
 \  Wrappers: INFL-W-RAW (bare deflate), INFL-W-ZLIB (RFC 1950, its
 \  Adler-32 checked), INFL-W-GZIP (RFC 1952, one member, its CRC-32 and
@@ -742,6 +743,10 @@ VARIABLE _IFL-OFF  VARIABLE _IFL-LEN
 
 \ INFL-TOTAL@ ( infl -- bytes )   Bytes the stream has given so far.
 : INFL-TOTAL@  ( infl -- bytes )  _IF.TOTAL @ ;
+
+\ INFL-DONE? ( infl -- flag )   Whether the stream has ended, its sum
+\   matching.
+: INFL-DONE?  ( infl -- flag )  _IF.STATUS @ INFL-S-DONE = ;
 
 : _IF-LOAD  ( -- )
     0 _IF-PULLED !  0 _IF-PEND !

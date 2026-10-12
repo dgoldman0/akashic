@@ -172,7 +172,7 @@ VARIABLE _hrc-hop-status
     _hrc-host-a @ _hrc-host-u @ _hrc-expected, _hrc-expected-crlf,
     S" Accept: application/feed+json, application/atom+xml, application/rss+xml"
         _hrc-expected, _hrc-expected-crlf,
-    S" Accept-Encoding: identity" _hrc-expected, _hrc-expected-crlf,
+    S" Accept-Encoding: gzip" _hrc-expected, _hrc-expected-crlf,
     S" User-Agent: Akashic-HTTP-Resource/0.1"
         _hrc-expected, _hrc-expected-crlf,
     S" Connection: close" _hrc-expected, _hrc-expected-crlf,
@@ -440,7 +440,7 @@ VARIABLE _hrc-policy-media
             S" Content-Type: application/feed+json" _hrc-response-line,
         THEN
         _hrc-mode @ 2 = IF
-            S" Content-Encoding: gzip" _hrc-response-line,
+            S" Content-Encoding: br" _hrc-response-line,
         THEN
     THEN
     _hrc-mode @ 3 = _hrc-mode @ 5 >= OR IF 0 ELSE 2 THEN
@@ -459,6 +459,53 @@ VARIABLE _hrc-policy-media
     S" Connection: close" _hrc-response-line,
     _hrc-response-crlf,
     S" 123456789" _hrc-response, ;
+
+\ gzip of "hello"
+CREATE _hrc-gz-hello
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 203 C, 72 C,
+    205 C, 201 C, 201 C, 7 C, 0 C, 134 C, 166 C, 16 C, 54 C, 5 C, 0 C, 0 C,
+    0 C,
+HERE _hrc-gz-hello - CONSTANT _hrc-gz-hello-u
+\ gzip of 200 zero bytes
+CREATE _hrc-gz-zeros
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 99 C, 96 C, 24 C,
+    30 C, 0 C, 0 C, 118 C, 168 C, 113 C, 201 C, 200 C, 0 C, 0 C, 0 C,
+HERE _hrc-gz-zeros - CONSTANT _hrc-gz-zeros-u
+\ gzip of "0123456789" in a stored block
+CREATE _hrc-gz-stored
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 4 C, 3 C, 1 C, 10 C, 0 C,
+    245 C, 255 C, 48 C, 49 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C, 56 C,
+    57 C, 198 C, 199 C, 132 C, 166 C, 10 C, 0 C, 0 C, 0 C,
+HERE _hrc-gz-stored - CONSTANT _hrc-gz-stored-u
+CREATE _hrc-gz-damaged 32 ALLOT
+
+VARIABLE _hrc-gz-a
+VARIABLE _hrc-gz-u
+
+\ The final response of _hrc-build-ok with a gzip body.
+: _hrc-build-gzip-ok  ( hop body-a body-u -- )
+    _hrc-gz-u ! _hrc-gz-a ! _hrc-response-select
+    S" HTTP/1.1 200 OK" _hrc-response-line,
+    S" Content-Type: application/feed+json; charset=utf-8"
+        _hrc-response-line,
+    S" ETag: v1" _hrc-response-line,
+    S" Last-Modified: Wed, 16 Jul 2026 12:00:00 GMT"
+        _hrc-response-line,
+    S" Content-Encoding: gzip" _hrc-response-line,
+    _hrc-gz-u @ _hrc-content-length,
+    S" Connection: close" _hrc-response-line,
+    _hrc-response-crlf,
+    _hrc-gz-a @ _hrc-gz-u @ _hrc-response, ;
+
+: _hrc-build-gzip-redirect  ( body-a body-u -- )
+    _hrc-gz-u ! _hrc-gz-a ! 0 _hrc-response-select
+    S" HTTP/1.1 302 Found" _hrc-response-line,
+    S" Location: /next" _hrc-response-line,
+    S" Content-Encoding: gzip" _hrc-response-line,
+    _hrc-gz-u @ _hrc-content-length,
+    S" Connection: close" _hrc-response-line,
+    _hrc-response-crlf,
+    _hrc-gz-a @ _hrc-gz-u @ _hrc-response, ;
 
 : _hrc-setup  ( uri-a uri-u redirect-max body-cap -- )
     _hrc-body-cap ! _hrc-redirect-max !
@@ -724,6 +771,63 @@ VARIABLE _hrc-policy-media
     _hrc-close-starts @ 0= _hrc-assert _hrc-releases @ 1 = _hrc-assert
     _hrc-lease-errors @ 0= _hrc-assert
     _hrc-media-calls @ 0= _hrc-assert
+    _hrc-clean-result _hrc-stack ;
+
+: _hrc-gzip-refused  ( outcome detail -- )
+    _hrc-case-detail ! _hrc-case-outcome !
+    S" https://feeds.example.test/feed" 3 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ _hrc-case-outcome @ = _hrc-assert
+    _hrc-resource HRES-DETAIL@ _hrc-case-detail @ = _hrc-assert
+    _hrc-resource HRES-PARSER-STATUS@ HSTR-S-CALLBACK = _hrc-assert
+    _hrc-resource HRES-RESULT-VALID? 0= _hrc-assert
+    _hrc-resource HRES.BODY-U @ 0= _hrc-assert
+    _hrc-body 128 _hrc-zero? _hrc-assert
+    _hrc-cancels @ 1 = _hrc-assert _hrc-releases @ 1 = _hrc-assert
+    _hrc-lease-errors @ 0= _hrc-assert
+    _hrc-media-calls @ 0= _hrc-assert
+    _hrc-clean-result ;
+
+: _hrc-test-gzip  ( -- )
+    _hrc-fixture-reset 0 _hrc-gz-hello _hrc-gz-hello-u _hrc-build-gzip-ok
+    S" https://feeds.example.test/feed" 3 128 _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-result-basics
+    _hrc-resource HRES.EXCHANGE HBUF-CODING@ HBUF-C-GZIP = _hrc-assert
+    _hrc-cancels @ 0= _hrc-assert _hrc-releases @ 1 = _hrc-assert
+    _hrc-lease-errors @ 0= _hrc-assert
+    _hrc-clean-result
+
+    \ A member whose CRC is wrong is refused for its coding.
+    _hrc-gz-hello _hrc-gz-damaged _hrc-gz-hello-u CMOVE
+    _hrc-gz-damaged _hrc-gz-hello-u + 8 - DUP C@ 1 XOR SWAP C!
+    _hrc-fixture-reset 0 _hrc-gz-damaged _hrc-gz-hello-u _hrc-build-gzip-ok
+    HRES-O-CONTENT-ENCODING HRES-D-CONTENT-DAMAGED _hrc-gzip-refused
+
+    \ Two hundred zeros sent in 24 bytes pass a 128-byte budget.
+    _hrc-fixture-reset 0 _hrc-gz-zeros _hrc-gz-zeros-u _hrc-build-gzip-ok
+    HRES-O-BODY-OVERFLOW HRES-D-BODY-BUDGET _hrc-gzip-refused
+
+    \ A redirect's body takes the budget as sent, 33 bytes, though it
+    \ inflates to ten, so a 33-byte budget leaves none for the next hop.
+    _hrc-fixture-reset
+    _hrc-gz-stored _hrc-gz-stored-u _hrc-build-gzip-redirect 1 _hrc-build-ok
+    S" https://feeds.example.test/feed" 3 _hrc-gz-stored-u _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-resource HRES-OUTCOME@ HRES-O-BODY-OVERFLOW = _hrc-assert
+    _hrc-resource HRES-DETAIL@ HRES-D-BODY-BUDGET = _hrc-assert
+    _hrc-resource HRES-REDIRECT-COUNT@ 1 = _hrc-assert
+    _hrc-binds @ 1 = _hrc-assert
+    _hrc-clean-result
+
+    \ Five bytes more carry the final body.
+    _hrc-fixture-reset
+    _hrc-gz-stored _hrc-gz-stored-u _hrc-build-gzip-redirect 1 _hrc-build-ok
+    S" https://feeds.example.test/feed" 3 _hrc-gz-stored-u 5 + _hrc-setup
+    _hrc-run-resource HRES-S-OK = _hrc-assert
+    _hrc-result-basics
+    _hrc-resource HRES-REDIRECT-COUNT@ 1 = _hrc-assert
+    _hrc-binds @ 2 = _hrc-assert
     _hrc-clean-result _hrc-stack ;
 
 : _hrc-test-close-failure-fallback  ( -- )
@@ -1014,7 +1118,7 @@ VARIABLE _hrc-policy-media
     HRES-HOST-VALUE-STORAGE 264 = _hrc-assert
     _HRES-LOCATION _HRES-HOST-VALUE -
         HRES-HOST-VALUE-STORAGE = _hrc-assert
-    HTTP-RESOURCE-SIZE 45888 = _hrc-assert
+    HTTP-RESOURCE-SIZE 48928 = _hrc-assert
     _hrc-spec HRES-SPEC-INIT
     199 299 _hrc-spec HRES-SPEC-SUCCESS-RANGE!
         HRES-S-INVALID = _hrc-assert
@@ -1458,6 +1562,8 @@ VARIABLE _hrc-policy-media
     _hrc-test-admission
     S" overflow" _hrc-mark
     _hrc-test-overflow
+    S" gzip" _hrc-mark
+    _hrc-test-gzip
     S" close-failure-fallback" _hrc-mark
     _hrc-test-close-failure-fallback
     S" cancel" _hrc-mark

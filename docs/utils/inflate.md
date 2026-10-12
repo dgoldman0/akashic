@@ -21,6 +21,7 @@ REQUIRE inflate.f
 | `INFL-FEED` | `( in-a in-u out-a out-u infl -- in-used out-used status )` | Decode from the input into the output room. |
 | `INFL-REASON@` | `( infl -- reason )` | Why a stream is damaged, or 0. |
 | `INFL-TOTAL@` | `( infl -- bytes )` | Bytes the stream has given so far. |
+| `INFL-DONE?` | `( infl -- flag )` | Whether the stream has ended with its sum matching. |
 
 The wrapper is `INFL-W-RAW`, `INFL-W-ZLIB` or `INFL-W-GZIP`. A zlib
 stream's Adler-32 is checked; a gzip member's header fields are skipped, its
