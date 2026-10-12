@@ -215,3 +215,27 @@ def test_a_string_longer_than_its_room_says_its_length(lexer):
     lexer.runtime.memory.write_bytes(lexer.out, b"\xee" * 8)
     assert lexer.call("PDF-STRING", va, vu, kind, lexer.out, 4) == (10,)
     assert lexer.runtime.memory.read_bytes(lexer.out, 8) == b"0123\xee\xee\xee\xee"
+
+
+@pytest.mark.parametrize("text, decoded", (
+    (b"/Type", b"Type"),
+    (b"/A#20B", b"A B"),
+    (b"/#41#62", b"Ab"),
+    (b"/my#2Fplace#", b"my/place#"),
+    (b"/", b""),
+))
+def test_name_bytes(lexer, text, decoded):
+    va, vu, kind = lexer.value(text)
+    assert kind == NAME
+    (length,) = lexer.call("PDF-NAME", va, vu, lexer.out, 4096)
+    assert length == len(decoded)
+    assert lexer.runtime.memory.read_bytes(lexer.out, length) == decoded
+    lexer.load(text)
+    assert lexer.call("PDF-NAME=", lexer.input, len(text), lexer.out, length) != (0,)
+
+
+def test_a_name_longer_than_its_room_says_its_length(lexer):
+    va, vu, _ = lexer.value(b"/Long#20name")
+    lexer.runtime.memory.write_bytes(lexer.out, b"\xee" * 8)
+    assert lexer.call("PDF-NAME", va, vu, lexer.out, 5) == (9,)
+    assert lexer.runtime.memory.read_bytes(lexer.out, 8) == b"Long \xee\xee\xee"

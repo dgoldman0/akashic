@@ -25,6 +25,7 @@ REQUIRE pdf/lexer.f
 | `PDF-ARRAY-N` | `( aa au -- n )` | How many values an array holds. |
 | `PDF-ARRAY@` | `( i aa au -- va vu type )` | An array's value at index `i`, from 0, or `0 0 PDF-T-END`. |
 | `PDF-STRING` | `( va vu type dst cap -- u )` | A string's bytes, at most `cap` written; `u` is its whole length. |
+| `PDF-NAME` | `( va vu dst cap -- u )` | A name's bytes, its `#xx` codes read and without its slash, at most `cap` written; `u` is its whole length. |
 
 A name given to `PDF-NAME=` or `PDF-DICT@` has no slash.
 

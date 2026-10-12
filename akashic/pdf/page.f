@@ -7,6 +7,7 @@
 \
 \  Public API:
 \   PDF-PAGE-COUNT      ( file -- n status )       the pages the tree holds
+\   PDF-PAGE-INDEX      ( num file -- i status )   page object NUM's index
 \   PDF-PAGE-SIZE       ( -- bytes )               a page's record
 \   PDF-PAGE-OPEN       ( i file page -- status )  page I, from 0
 \   PDF-PAGE-CLOSE      ( page -- )                give back the page
@@ -24,7 +25,11 @@
 \  kids, and gives the page the resources, media box, crop box and
 \  rotation it inherits (PDF 32000-1 section 7.7.3.4).  The walk reads no
 \  more nodes than the file has objects, so a tree that loops ends.  A
-\  kid that cannot be read holds no pages.
+\  kid that cannot be read holds no pages.  PDF-PAGE-INDEX goes the other
+\  way, for a destination that names a page by its object: up from the
+\  page through each /Parent to the root, counting the pages of the kids
+\  before it.  It gives PDF-S-MISSING for an object the tree does not
+\  hold.
 \
 \  A record starts zeroed.  Between pages it keeps the last page's parent
 \  node and what that node passes down, so the next page, when it is the
@@ -273,14 +278,18 @@ CREATE _PDPG-LETTER  0 , 0 , 612 16 LSHIFT , 792 16 LSHIFT ,
 : _PDPG-VISIT?  ( -- ok? )
     1 _PDPG-VISITS +!  _PDPG-VISITS @ _PDPG-F @ PDF-OBJECT-COUNT > 0= ;
 
+\ The tree's root node's number, from the catalog's /Pages.
+: _PDPG-PAGES  ( -- num status )
+    S" Root" _PDPG-F @ PDF-TRAILER@ _PDPG-F @ PDF-RESOLVE
+    ?DUP IF >R 2DROP DROP _PDPG-FREE 0 R> EXIT THEN
+    PDF-T-DICT <> IF 2DROP _PDPG-FREE 0 PDF-S-DAMAGED EXIT THEN
+    S" Pages" 2SWAP PDF-DICT@ PDF-T-REF <> IF 2DROP _PDPG-FREE 0 PDF-S-DAMAGED EXIT THEN
+    PDF-REF@ DROP SWAP _PDPG-FREE PDF-S-OK ;
+
 \ The tree's root node, read into _PDPG-NO and _PDPG-V.
 : _PDPG-ROOT  ( -- status )
     0 _PDPG-NO !
-    S" Root" _PDPG-F @ PDF-TRAILER@ _PDPG-F @ PDF-RESOLVE
-    ?DUP IF >R 2DROP DROP _PDPG-FREE R> EXIT THEN
-    PDF-T-DICT <> IF 2DROP _PDPG-FREE PDF-S-DAMAGED EXIT THEN
-    S" Pages" 2SWAP PDF-DICT@ PDF-T-REF <> IF 2DROP _PDPG-FREE PDF-S-DAMAGED EXIT THEN
-    PDF-REF@ DROP SWAP _PDPG-FREE
+    _PDPG-PAGES ?DUP IF NIP EXIT THEN
     _PDPG-VISIT? 0= IF DROP PDF-S-DAMAGED EXIT THEN
     DUP _PDPG-NODE !  _PDPG-GET ?DUP IF NIP EXIT THEN
     DUP PDF-OBJ-VALUE PDF-T-DICT <> IF 2DROP _PDPG-FREE PDF-S-DAMAGED EXIT THEN
@@ -375,6 +384,54 @@ CREATE _PDPG-LETTER  0 , 0 , 612 16 LSHIFT , 792 16 LSHIFT ,
     _PDPG-ROOT ?DUP IF 0 SWAP EXIT THEN
     _PDPG-NODE? IF _PDPG-COUNT ELSE 1 THEN
     _PDPG-NO @ _PDPG-FREE PDF-S-OK ;
+
+VARIABLE _PDPG-IX   VARIABLE _PDPG-CHILD   VARIABLE _PDPG-TOP
+
+\ An object that could not be read given back: the index's status.
+: _PDPG-LOST  ( obj status -- -1 status' )
+    SWAP _PDPG-FREE  DUP PDF-S-MEMORY <> IF DROP PDF-S-MISSING THEN  -1 SWAP ;
+
+\ Add to _PDPG-IX the pages of the node's kids before _PDPG-CHILD:
+\ PDF-S-MISSING when it is none of them.
+: _PDPG-BEFORE  ( -- status )
+    _PDPG-KA @ _PDPG-KU @ PDF-TOKEN DROP 2DROP
+    BEGIN
+        PDF-VALUE DUP PDF-T-REF = IF
+            DROP PDF-REF@ DROP DUP _PDPG-CHILD @ = IF DROP 2DROP PDF-S-OK EXIT THEN
+            _PDPG-GET ?DUP IF
+                SWAP _PDPG-FREE PDF-S-MEMORY = IF 2DROP PDF-S-MEMORY EXIT THEN
+            ELSE
+                DUP PDF-OBJ-VALUE PDF-T-DICT = IF
+                    _PDPG-READ _PDPG-NODE? IF _PDPG-COUNT ELSE 1 THEN _PDPG-IX +!
+                ELSE 2DROP THEN
+                _PDPG-FREE
+            THEN
+        ELSE
+            DUP PDF-T-CLOSE-ARRAY = OVER PDF-T-END = OR SWAP PDF-T-BAD = OR IF
+                2DROP 2DROP PDF-S-MISSING EXIT
+            THEN 2DROP
+        THEN
+    AGAIN ;
+
+\ PDF-PAGE-INDEX ( num file -- i status )
+\   The index, from 0, of the page whose object is NUM.
+: PDF-PAGE-INDEX  ( num file -- i status )
+    _PDPG-F !  0 _PDPG-IX !  0 _PDPG-VISITS !
+    _PDPG-PAGES ?DUP IF NIP NIP -1 SWAP EXIT THEN  _PDPG-TOP !
+    BEGIN
+        DUP _PDPG-TOP @ = IF DROP _PDPG-IX @ PDF-S-OK EXIT THEN
+        _PDPG-VISIT? 0= IF DROP -1 PDF-S-MISSING EXIT THEN
+        DUP _PDPG-CHILD !  _PDPG-GET ?DUP IF _PDPG-LOST EXIT THEN
+        DUP PDF-OBJ-VALUE PDF-T-DICT <> IF 2DROP _PDPG-FREE -1 PDF-S-MISSING EXIT THEN
+        S" Parent" 2SWAP PDF-DICT@ PDF-T-REF <> IF 2DROP _PDPG-FREE -1 PDF-S-MISSING EXIT THEN
+        PDF-REF@ DROP SWAP _PDPG-FREE
+        DUP _PDPG-GET ?DUP IF ROT DROP _PDPG-LOST EXIT THEN
+        DUP PDF-OBJ-VALUE PDF-T-DICT <> IF 2DROP _PDPG-FREE DROP -1 PDF-S-MISSING EXIT THEN
+        _PDPG-READ _PDPG-NO !
+        _PDPG-KIDS ?DUP IF _PDPG-NO @ SWAP _PDPG-LOST ROT DROP EXIT THEN
+        _PDPG-BEFORE  _PDPG-KIDS-O @ _PDPG-FREE  _PDPG-NO @ _PDPG-FREE
+        ?DUP IF NIP -1 SWAP EXIT THEN
+    AGAIN ;
 
 \ PDF-PAGE-CLOSE ( page -- )   Give back the page's objects.
 : PDF-PAGE-CLOSE  ( page -- )

@@ -16,6 +16,7 @@
 \   PDF-ARRAY-N  ( aa au -- n )               an array's values
 \   PDF-ARRAY@   ( i aa au -- va vu type )    an array's Ith value
 \   PDF-STRING   ( va vu type dst cap -- u )  a string's bytes
+\   PDF-NAME     ( va vu dst cap -- u )       a name's bytes
 \
 \  The lexer never copies or keeps the bytes it reads: a token or value
 \  is a span of the caller's input, and the caller keeps that input
@@ -384,3 +385,18 @@ VARIABLE _PDS-HI    \ a digit waiting for the one after it, or -1
     DUP PDF-T-HEX = IF DROP _PDS-HEX _PDS-N @ EXIT THEN
     PDF-T-STRING = IF _PDS-LITERAL _PDS-N @ EXIT THEN
     2DROP 0 ;
+
+\ PDF-NAME ( va vu dst cap -- u )
+\   A name's bytes, its #xx codes read and without its slash, at most CAP
+\   of them written at DST.  U is the name's whole length, which may pass
+\   CAP.  A code that is no hex digit reads as PDF-NAME= reads it.
+: PDF-NAME  ( va vu dst cap -- u )
+    _PDS-CAP ! _PDS-D ! 0 _PDS-N !
+    DUP 0= IF 2DROP 0 EXIT THEN
+    1 _PDL-ADV
+    BEGIN DUP WHILE
+        OVER C@ 35 = OVER 3 < 0= AND IF
+            OVER 1+ C@ _PDL-HEXVAL 4 LSHIFT  2 PICK 2 + C@ _PDL-HEXVAL OR
+            255 AND _PDS-PUT 3 _PDL-ADV
+        ELSE OVER C@ _PDS-PUT 1 _PDL-ADV THEN
+    REPEAT 2DROP _PDS-N @ ;

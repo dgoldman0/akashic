@@ -3,7 +3,7 @@
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: PDF-STRUCT- (public), _PDST- (private)
 \  Depends on: pdf/lexer.f, pdf/filter.f, pdf/file.f, pdf/page.f,
-\              media/document.f
+\              pdf/tree.f, media/document.f
 \
 \  Public API:
 \   PDF-STRUCT-SIZE   ( -- bytes )                  a page structure's record
@@ -32,7 +32,8 @@
 \  the tree's /RoleMap, which may map a name onward, never more times
 \  than it has names.  Elements are read once a page, and a walk from an
 \  element takes no more steps than the file has objects.  A structure
-\  that cannot be read gives no blocks rather than failing the page.
+\  that cannot be read gives no blocks rather than failing the page;
+\  memory refused fails it with PDF-S-MEMORY.
 \
 \  Memory comes from the page's file's memory source.  One call runs at
 \  a time.
@@ -44,6 +45,7 @@ REQUIRE lexer.f
 REQUIRE filter.f
 REQUIRE file.f
 REQUIRE page.f
+REQUIRE tree.f
 REQUIRE ../media/document.f
 
 \ The record: its memory source, and its entries, one an MCID: the
@@ -79,7 +81,6 @@ VARIABLE _PDST-KEY    \ the page's key in the parent tree
 : _PDST-GET   ( num -- obj status )  _PDST-F @ PDF-GET ;
 : _PDST-FREE  ( obj -- )  _PDST-F @ PDF-OBJ-FREE ;
 : _PDST-RESOLVE  ( va vu type -- obj va' vu' type' status )  _PDST-F @ PDF-RESOLVE ;
-: _PDST-ADV   ( a u n -- a+n u-n )  TUCK - >R + R> ;
 
 \ One more step of a walk: false once it has taken as many as the file
 \ has objects.
@@ -92,23 +93,9 @@ VARIABLE _PDST-KEY    \ the page's key in the parent tree
 
 \ A name's bytes with its #xx codes read, without its slash; a name is at
 \ most 127 bytes (PDF 32000-1 Annex C).
-CREATE _PDST-NB 128 ALLOT
-VARIABLE _PDST-NN
+CREATE _PDST-NB 127 ALLOT
 
-: _PDST-HEX  ( c -- n )  DUP 58 < IF 48 - ELSE 32 OR 87 - THEN 15 AND ;
-
-: _PDST-NB+  ( c -- )
-    _PDST-NN @ 127 < IF _PDST-NB _PDST-NN @ + C! ELSE DROP THEN  1 _PDST-NN +! ;
-
-: _PDST-NAME  ( va vu -- a u )
-    1 _PDST-ADV  0 _PDST-NN !
-    BEGIN DUP WHILE
-        OVER C@ 35 = OVER 2 > AND IF
-            OVER 1+ C@ _PDST-HEX 4 LSHIFT  2 PICK 2 + C@ _PDST-HEX OR _PDST-NB+
-            3 _PDST-ADV
-        ELSE OVER C@ _PDST-NB+ 1 _PDST-ADV THEN
-    REPEAT 2DROP
-    _PDST-NB _PDST-NN @ 127 MIN ;
+: _PDST-NAME  ( va vu -- a u )  _PDST-NB 127 PDF-NAME 127 MIN _PDST-NB SWAP ;
 
 \ A name through the role map: the standard name it stands for, or itself.
 : _PDST-ROLE  ( a u -- a' u' )
@@ -275,48 +262,6 @@ CREATE _PDST-OUT _PDST-ENTRY ALLOT
 \  The parent tree
 \ =====================================================================
 
-\ The value of the page's key in a number tree node's /Nums, if there.
-: _PDST-IN-NUMS  ( da du -- va vu type found? )
-    S" Nums" 2SWAP PDF-DICT@ PDF-T-ARRAY <> IF 2DROP 0 0 0 0 EXIT THEN
-    PDF-TOKEN DROP 2DROP
-    BEGIN
-        PDF-VALUE PDF-T-INT <> IF 2DROP 2DROP 0 0 0 0 EXIT THEN
-        PDF-INT _PDST-KEY @ = IF PDF-VALUE >R 2SWAP 2DROP R> -1 EXIT THEN
-        PDF-VALUE DROP 2DROP
-    AGAIN ;
-
-\ Whether node NUM's /Limits hold the key.
-: _PDST-LIMITS?  ( num -- flag )
-    _PDST-GET IF _PDST-FREE 0 EXIT THEN
-    DUP PDF-OBJ-VALUE DROP S" Limits" 2SWAP PDF-DICT@ PDF-T-ARRAY = IF
-        2DUP 0 -ROT PDF-ARRAY@ DROP PDF-INT _PDST-KEY @ > 0=
-        >R 1 -ROT PDF-ARRAY@ DROP PDF-INT _PDST-KEY @ < 0= R> AND
-    ELSE 2DROP 0 THEN
-    SWAP _PDST-FREE ;
-
-\ The kid of a node whose limits hold the key: its number, or 0.
-: _PDST-KID  ( da du -- num | 0 )
-    S" Kids" 2SWAP PDF-DICT@ PDF-T-ARRAY <> IF 2DROP 0 EXIT THEN
-    PDF-TOKEN DROP 2DROP
-    BEGIN
-        PDF-VALUE DUP PDF-T-REF <> IF DROP 2DROP 2DROP 0 EXIT THEN
-        DROP PDF-REF@ DROP DUP _PDST-LIMITS? IF NIP NIP EXIT THEN DROP
-    AGAIN ;
-
-\ The page's key in the number tree whose root node is OBJ's span DA DU:
-\ the object holding its value, to give back, and the value; or 0 0 0
-\ PDF-T-END.
-: _PDST-NUMS  ( obj da du -- obj va vu type )
-    BEGIN
-        2DUP _PDST-IN-NUMS IF >R >R >R 2DROP R> R> R> EXIT THEN
-        DROP 2DROP
-        _PDST-KID SWAP _PDST-FREE
-        DUP 0= IF DROP 0 0 0 PDF-T-END EXIT THEN
-        _PDST-VISIT? 0= IF DROP 0 0 0 PDF-T-END EXIT THEN
-        _PDST-GET IF _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
-        DUP PDF-OBJ-VALUE PDF-T-DICT <> IF 2DROP _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
-    AGAIN ;
-
 \ The structure tree's role map, kept and its names counted.
 : _PDST-ROLEMAP  ( ra ru -- )
     S" RoleMap" 2SWAP PDF-DICT@ _PDST-RESOLVE IF DROP 2DROP _PDST-FREE EXIT THEN
@@ -326,21 +271,22 @@ CREATE _PDST-OUT _PDST-ENTRY ALLOT
     BEGIN PDF-VALUE PDF-T-NAME = WHILE 2DROP PDF-VALUE DROP 2DROP 1 _PDST-RN +! REPEAT
     2DROP 2DROP ;
 
+: _PDST-NONE  ( -- obj va vu type status )  0 0 0 PDF-T-END PDF-S-OK ;
+
 \ The structure tree's root kept, its role map read, and the page's key's
 \ value in its parent tree: the object holding the value, to give back,
-\ and the value; or 0 0 0 PDF-T-END.
-: _PDST-TREE  ( -- obj va vu type )
-    S" Root" _PDST-F @ PDF-TRAILER@ _PDST-RESOLVE IF DROP 2DROP _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
-    PDF-T-DICT <> IF 2DROP _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
+\ and the value, or 0 0 0 PDF-T-END; and PDF-S-MEMORY when memory is
+\ refused.
+: _PDST-TREE  ( -- obj va vu type status )
+    S" Root" _PDST-F @ PDF-TRAILER@ _PDST-RESOLVE IF DROP 2DROP _PDST-FREE _PDST-NONE EXIT THEN
+    PDF-T-DICT <> IF 2DROP _PDST-FREE _PDST-NONE EXIT THEN
     S" StructTreeRoot" 2SWAP PDF-DICT@ _PDST-RESOLVE
     >R >R >R >R >R _PDST-FREE R> R> R> R> R>
-    IF DROP 2DROP _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
-    PDF-T-DICT <> IF 2DROP _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
+    IF DROP 2DROP _PDST-FREE _PDST-NONE EXIT THEN
+    PDF-T-DICT <> IF 2DROP _PDST-FREE _PDST-NONE EXIT THEN
     ROT _PDST-RO !
     2DUP _PDST-ROLEMAP
-    S" ParentTree" 2SWAP PDF-DICT@ _PDST-RESOLVE IF DROP 2DROP _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
-    PDF-T-DICT <> IF 2DROP _PDST-FREE 0 0 0 PDF-T-END EXIT THEN
-    0 _PDST-VISITS !  _PDST-NUMS ;
+    S" ParentTree" 2SWAP PDF-DICT@ >R >R >R _PDST-KEY @ R> R> R> _PDST-F @ PDF-NUMS@ ;
 
 \ Each element of the page's array, an entry; false when memory is refused.
 : _PDST-ENTRIES  ( aa au -- ok? )
@@ -363,10 +309,11 @@ CREATE _PDST-OUT _PDST-ENTRY ALLOT
     _PDST-KEPT PDF-BUF-SIZE 0 FILL
     S" StructParents" ROT PDF-PAGE-DICT PDF-DICT@ PDF-T-INT <> IF 2DROP PDF-S-OK EXIT THEN
     PDF-INT _PDST-KEY !
-    _PDST-TREE _PDST-RESOLVE
+    _PDST-TREE >R _PDST-RESOLVE
     0= OVER PDF-T-ARRAY = AND IF
         DROP _PDST-ENTRIES IF PDF-S-OK ELSE PDF-S-MEMORY THEN
     ELSE 2DROP DROP PDF-S-OK THEN
+    R> ?DUP IF NIP THEN
     >R _PDST-FREE _PDST-FREE R>
     _PDST-RO @ _PDST-FREE  _PDST-RMO @ _PDST-FREE
     _PDST-KEPT _PDST-MSRC PDF-BUF-FREE ;

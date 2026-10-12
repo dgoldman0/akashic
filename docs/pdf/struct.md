@@ -9,8 +9,8 @@ REQUIRE pdf/struct.f
 ```
 
 `PROVIDED akashic-pdf-struct`. It depends on `pdf/lexer.f`, `pdf/filter.f`,
-`pdf/file.f`, `pdf/page.f` and `media/document.f`, whose block and container
-kinds it gives.
+`pdf/file.f`, `pdf/page.f`, `pdf/tree.f` and `media/document.f`, whose block
+and container kinds it gives.
 
 ## Public API
 
@@ -28,8 +28,8 @@ read, has no blocks, and the layout lays it out as an untagged page.
 ## What a block is
 
 The page's `/StructParents` is its key in the structure tree's
-`/ParentTree`, a number tree read through its `/Kids` and their `/Limits`;
-its value lists each MCID's element. From an element, the walk goes up past
+`/ParentTree`, a number tree `pdf/tree.f` reads; its value lists each
+MCID's element. From an element, the walk goes up past
 inline elements (Span, Quote, Note, Reference, BibEntry, Link, Annot, Em,
 Strong, Sub, Ruby and Warichu and their parts) to the block they sit in.
 `PDF-STRUCT-BLOCK` then gives:

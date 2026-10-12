@@ -1433,9 +1433,9 @@ rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them.
 
-**Status (2026-10-12).** Steps 3, 4 and 5 are done, and step 8 for RC4;
-steps 1 and 2 wait for review of the decisions above, and AES for its
-decision.
+**Status (2026-10-12).** Steps 3, 4 and 5 are done, step 8 for RC4, and
+step 7's reading of the file; steps 1 and 2 wait for review of the
+decisions above, and AES for its decision.
 
 - The file layer reads cross-reference tables and streams, object streams
   and incremental updates, repairs a damaged file by scanning, decodes
@@ -1458,11 +1458,23 @@ decision.
 - Files encrypted by the standard security handler with the empty user
   password open: RC4 of revisions 2 to 4, with crypt filters, as qpdf writes
   them. A file with a user password, or AES, opens locked and says so.
+- A page's links and the outline are read with their titles as UTF-8
+  (`pdf/navigate.f`). A link keeps its destination as it is and looks it
+  up only when followed: an explicit page, a name through `/Dests`, a
+  string through the name tree (`pdf/tree.f`, which the parent tree now
+  shares), and down to the page's index (`PDF-PAGE-INDEX`). The outline
+  and links of documents xelatex with hyperref and LibreOffice write read
+  as MuPDF reads them. Scrolling to a followed link waits for step 9.
 - A page of a TeX document, about 2,800 characters, costs about 5.4
   million steps once its fonts are read: some 1.5 million to inflate its
   content, about 0.5 million to lex it, the rest to show its glyphs. The
   inflater's cost there, about 520 steps a compressed byte, is the largest
   single part, and step 11 measures it with the rest.
+- Fetching an object from an object stream reads the stream's table of
+  offsets again up to the object, about 1,100 steps an entry: 62,000 steps
+  for the object at index 52. Most of the cost of a page's links, the
+  outline and a followed link is that. Step 11 measures it too, and the
+  table can be read once when the stream is decoded.
 
 **Not in this part.** Forms, annotations other than links, signatures and
 attachments. JBIG2, CCITT and JPEG 2000 pictures, which show their facts.

@@ -3,7 +3,7 @@
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: PDF-FONT- (public), _PDFT- (private)
 \  Depends on: pdf/lexer.f, pdf/filter.f, pdf/file.f, pdf/cmap.f,
-\              pdf/text-tables.f
+\              pdf/text-tables.f, pdf/textstr.f
 \
 \  Public API:
 \   PDF-FONT-SIZE   ( -- bytes )                          a font's record
@@ -74,6 +74,7 @@ REQUIRE filter.f
 REQUIRE file.f
 REQUIRE cmap.f
 REQUIRE text-tables.f
+REQUIRE textstr.f
 
 1  CONSTANT PDF-FONT-BOLD
 2  CONSTANT PDF-FONT-ITALIC
@@ -681,25 +682,7 @@ VARIABLE _PDFT-PF   VARIABLE _PDFT-PL   VARIABLE _PDFT-PW   VARIABLE _PDFT-PENDI
     0 OVER 0 DO 8 LSHIFT 3 PICK I + C@ OR LOOP         ( a u n code )
     >R >R  R@ - SWAP R@ + SWAP  R> R> SWAP ;
 
-CREATE _PDFT-U8 4 ALLOT
 VARIABLE _PDFT-OUT
-
-\ A character as UTF-8 in _PDFT-U8.
-: _PDFT-UTF8  ( cp -- a u )
-    DUP 0x80 < IF _PDFT-U8 C! _PDFT-U8 1 EXIT THEN
-    DUP 0x800 < IF
-        DUP 6 RSHIFT 0xC0 OR _PDFT-U8 C!
-        0x3F AND 0x80 OR _PDFT-U8 1+ C!  _PDFT-U8 2 EXIT
-    THEN
-    DUP 0x10000 < IF
-        DUP 12 RSHIFT 0xE0 OR _PDFT-U8 C!
-        DUP 6 RSHIFT 0x3F AND 0x80 OR _PDFT-U8 1+ C!
-        0x3F AND 0x80 OR _PDFT-U8 2 + C!  _PDFT-U8 3 EXIT
-    THEN
-    DUP 18 RSHIFT 0xF0 OR _PDFT-U8 C!
-    DUP 12 RSHIFT 0x3F AND 0x80 OR _PDFT-U8 1+ C!
-    DUP 6 RSHIFT 0x3F AND 0x80 OR _PDFT-U8 2 + C!
-    0x3F AND 0x80 OR _PDFT-U8 3 + C!  _PDFT-U8 4 ;
 
 : _PDFT-PUT  ( a u -- ok? )  _PDFT-OUT @ _PDFT-MSRC PDF-BUF-APPEND ;
 
@@ -720,7 +703,7 @@ VARIABLE _PDFT-OUT
         DUP 9 = OVER 10 = OR SWAP 13 = OR IF 32 ELSE -1 EXIT THEN
     THEN
     _PDFT-VALID ?DUP 0= IF 0xFFFD THEN
-    _PDFT-UTF8 _PDFT-PUT ;
+    _PDFT-OUT @ _PDFT-MSRC PDF-CHAR+ ;
 
 VARIABLE _PDFT-DELTA
 

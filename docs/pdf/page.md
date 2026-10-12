@@ -16,6 +16,7 @@ and `pdf/file.f`.
 | Word | Stack | Purpose |
 |---|---|---|
 | `PDF-PAGE-COUNT` | `( file -- n status )` | The pages the root node's `/Count` says the tree holds. |
+| `PDF-PAGE-INDEX` | `( num file -- i status )` | The index, from 0, of the page whose object is `num`. |
 | `PDF-PAGE-SIZE` | `( -- 256 )` | A page's record, eight-byte aligned, zeroed before first use. |
 | `PDF-PAGE-OPEN` | `( i file page -- status )` | Page `i`, from 0. |
 | `PDF-PAGE-CLOSE` | `( page -- )` | Give back the page. |
@@ -30,7 +31,8 @@ and `pdf/file.f`.
 
 Statuses are `pdf/filter.f`'s and `pdf/file.f`'s: `PDF-S-OK`,
 `PDF-S-MEMORY`, `PDF-S-DAMAGED` for a tree that cannot be walked, and
-`PDF-S-MISSING` for a page the tree does not hold.
+`PDF-S-MISSING` for a page the tree does not hold, or an object that is no
+page of it.
 
 ## Finding a page
 
@@ -43,6 +45,20 @@ a tree that loops ends with `PDF-S-DAMAGED`.
 
 Each dictionary is read once, its keys noted in one pass, so a node with
 a long `/Kids` array is lexed once.
+
+## A page's index
+
+Links and the outline name a page by its object (`pdf/navigate.f`).
+`PDF-PAGE-INDEX` goes up from that object through each `/Parent`, adding
+the pages of the kids before it in each node's `/Kids`: one for a page,
+a node's `/Count` for a node, as `PDF-PAGE-OPEN` counts them, so the index
+opens the same page. The way up must end at the catalog's `/Pages`, and
+each node must list the object it came from among its kids; otherwise the
+object is no page of the tree and the status is `PDF-S-MISSING`. A kid
+that cannot be read holds no pages; memory refused gives `PDF-S-MEMORY`.
+The walk reads no more nodes than the file has objects.
+
+A reader looks an index up when a link is followed, not when it is shown.
 
 ## What a page inherits
 

@@ -9,7 +9,8 @@ REQUIRE pdf/font.f
 ```
 
 `PROVIDED akashic-pdf-font`. It depends on `pdf/lexer.f`, `pdf/filter.f`,
-`pdf/file.f`, `pdf/cmap.f` and the generated `pdf/text-tables.f`.
+`pdf/file.f`, `pdf/cmap.f`, the generated `pdf/text-tables.f`, and
+`pdf/textstr.f`, whose `PDF-CHAR+` writes each character as UTF-8.
 
 ## Public API
 
