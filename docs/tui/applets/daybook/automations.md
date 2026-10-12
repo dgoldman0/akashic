@@ -363,6 +363,25 @@ It then holds the run to its rules:
 
 Desk then sleeps under 10% of the clock.
 
+The `desktop-daybook-agent-recovery` smoke profile makes an Agent run
+whose prompt keeps the scripted provider's run open, and checks that the
+permission file holds none of its words:
+- while it runs, chat refuses to send, and Alt+Q asks before shutting
+  down, where Keep running keeps it;
+- revoking its permission cancels it;
+- a second machine boots the disk as it was mid-run, as a power loss would
+  leave it: Daybook and the Agent show that run as indeterminate,
+  interrupted, and boot starts nothing; run by hand there, the run makes
+  Alt+Q ask again, and Shut down cancels it as Desk closes;
+- a third machine boots the disk Desk left as it shut down: Daybook and
+  the Agent show the run cancelled because Desk shut down, and Daybook's
+  file holds those two runs and no other; deleting the schedule waits
+  until the interrupted run is reviewed ("Review its last run first"), and
+  then leaves a tombstone and a short record of each run, with its run and
+  how it ended but no summary, while the Agent keeps both runs; the
+  permission, kept, is then for "A schedule Daybook no longer has", and R
+  revokes it.
+
 The `desktop-daybook-reminders` smoke profile runs the whole path in Desk
 on the emulator, through ordinary keys, and checks the live reminder file at
 each step:

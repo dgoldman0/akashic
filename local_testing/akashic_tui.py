@@ -10,6 +10,7 @@ MP64FS image.  No private emulator copy is required.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -14289,6 +14290,10 @@ PROFILES["desktop-daybook-agent"] = replace(
     # sample then says little; the journey holds Desk to the ceiling at
     # its end, once an approved Agent run is scheduled.
 )
+# The same Desk, for an Agent run that lingers: revoked mid-run, then
+# carried through a power loss and a shutdown on machines booted from the
+# disk.
+PROFILES["desktop-daybook-agent-recovery"] = PROFILES["desktop-daybook-agent"]
 
 
 DAYBOOK_AUTOMATION_FORMAT = 2
@@ -30792,6 +30797,332 @@ def smoke(
             # service add nothing while idle.
             measure_idle_load(2000, ceiling=0.10)
 
+        def run_daybook_agent_recovery_journey() -> None:
+            """An Agent run that lingers runs under its permission: chat
+            cannot send meanwhile, and Desk asks before shutting down,
+            where Keep running keeps it.  The disk as it is then, mid-run,
+            is what a power loss would leave.  Revoking the permission
+            cancels the run.  The permission holds none of the run's
+            words."""
+
+            rtc = session.system.rtc
+            title = "Long watch"
+            prompt = "Keep watch and linger."
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
+            if not begin_daybook_agent_run(
+                title, due_s, "daily", SWIFT_CHOICES, "600", "4096"
+            ):
+                return
+            session.send_text(prompt)
+            if not wait_screen(
+                prompt, "the prompt did not show what was typed",
+                step_budget=1_000_000_000,
+                wall_timeout=30.0,
+            ):
+                return
+            session.send_key("ctrl+s")
+            if not approve_daybook_agent_run((
+                (title, "the approval did not name the lingering run"),
+                ("600 min to run", "the approval did not show its time limit"),
+            )):
+                return
+            permissions = MP64FS(bytearray(
+                session.system.storage._image_data
+            )).read_file("schedule-perms.bin")
+            words = [
+                word for word in (title, prompt, "gpt-fast")
+                if word.encode() in permissions
+            ]
+            if words:
+                journey_errors.append(
+                    f"the permission file holds the run's words: {words}"
+                )
+            rtc.seed_epoch_ms(due_s * 1000 - 15_000)
+            if not wait_screen(
+                f"Agent run: {title}", "the lingering run did not fire",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ) or not show_daybook_automations() or not wait_screen(
+                "running", "Daybook did not show the run running",
+                step_budget=500_000_000,
+                wall_timeout=15.0,
+            ):
+                return
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("ctrl+l")
+            if not wait_screen("Ask:", "Ctrl+L did not open the Agent's composer"):
+                return
+            session.send_text("hello")
+            session.send_key("enter")
+            if not wait_screen(
+                "A scheduled run goes first",
+                "chat did not refuse to send while a scheduled run ran",
+            ):
+                return
+            session.send_key("alt+q")
+            if not wait_screen(
+                "Shut down Desk?",
+                "Alt+Q did not ask first while a run was in flight",
+            ) or not wait_screen(
+                "Keep running", "the question did not offer to keep running"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "Shut down Desk?", "Keep running did not close the question"
+            ):
+                return
+            running = newest_item(title)
+            if not running or (
+                running["kind"], running["phase"], running["state"]
+            ) != (1, 2, 0):
+                journey_errors.append(
+                    f"the run was not in flight after Keep running: {running}"
+                )
+                return
+            # The disk now, mid-run, is what a power loss would leave.
+            power_loss = bytes(session.system.storage._image_data)
+            session.send_key("alt+p")
+            if not wait_screen(
+                "Scheduled run permissions",
+                "Alt+P did not open the run permissions",
+            ) or not wait_screen(title, "the run permissions did not name the run"):
+                return
+            session.send_text("r")
+            if not wait_screen(
+                "Revoked; any run under it is cancelled",
+                "R did not revoke the run's permission",
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Scheduled run permissions",
+                "Esc did not close the run permissions",
+            ) or not wait_screen(
+                f"Needs review: {title}", "revoking did not end the run",
+                step_budget=1_000_000_000,
+                wall_timeout=45.0,
+            ):
+                return
+            revoked = newest_item(title)
+            if not revoked or (
+                revoked["id"], revoked["phase"], revoked["state"],
+                revoked["outcome"], revoked["reason"],
+            ) != (running["id"], 3, 1, 3, 2):
+                journey_errors.append(f"revoking did not cancel the run: {revoked}")
+                return
+            host_notes.append("agent run: revoking its permission cancelled it mid-run")
+            run_daybook_agent_power_loss_journey(title, power_loss)
+
+        def run_daybook_agent_power_loss_journey(
+            title: str, power_loss: bytes
+        ) -> None:
+            """A second machine boots the disk a power loss left mid-run.
+            Daybook and the Agent show that run's end as unknown, and boot
+            starts nothing.  Run by hand there, the run makes Desk ask
+            before shutting down, and Shut down cancels it as Desk
+            closes."""
+
+            clock = session.system.rtc.epoch_ms + 60_000
+            with relaunched_desk(power_loss, "power-loss", clock) as (
+                machine, shows, _gone
+            ):
+                if not shows("Entry", "Desk did not come up after the power loss"):
+                    return
+                machine.send_key("alt+1")
+                if not shows(
+                    "[1:Daybook*]", "Desk did not focus Daybook after the power loss"
+                ):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f4")
+                if not shows(
+                    "indeterminate: interrupted",
+                    "Daybook did not show the interrupted run's end as unknown",
+                ):
+                    return
+                # The schedule is the last row, below the run for review.
+                machine.send_key("end")
+                machine.send_text("r")
+                if not shows("running", "R did not run it by hand"):
+                    return
+                # A bare Escape followed at once by an Alt key would read as
+                # Alt+Escape, so each waits for the calendar first.
+                machine.send_key("escape")
+                if not shows(" entries  |  ", "Escape did not return to the calendar"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("alt+2")
+                if not shows("[2:Agent*]", "Desk did not focus the Agent"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f5")
+                if not shows(
+                    "indeterminate: interrupted  gpt-fast",
+                    "the Agent's runs did not show the interrupted run",
+                ):
+                    return
+                machine.send_key("f5")
+                machine.send_key("alt+f")
+                machine.send_key("alt+q")
+                if not shows(
+                    "Shut down Desk?", "Alt+Q did not ask first while the run ran"
+                ):
+                    return
+                machine.send_key("down")
+                machine.send_key("enter")
+                if not shows("[akashic] desktop exited", "Shut down did not close Desk"):
+                    return
+                shut = bytes(machine.system.storage._image_data)
+                clock = machine.system.rtc.epoch_ms + 60_000
+            host_notes.append(
+                "agent run: a power loss mid-run left its end unknown; "
+                "Shut down cancelled the next"
+            )
+            run_daybook_agent_shutdown_journey(title, shut, clock)
+
+        def run_daybook_agent_shutdown_journey(
+            title: str, shut: bytes, clock: int
+        ) -> None:
+            """A third machine boots the disk Desk left as it shut down.
+            Daybook and the Agent show the run Shut down cancelled, and boot
+            starts nothing.  Deleting the schedule keeps a short record of
+            each run and leaves the Agent's runs; its permission, kept, is
+            then for a schedule Daybook no longer has, and R revokes it."""
+
+            def stored_items(machine) -> tuple[dict | None, list]:
+                stored = daybook_automations(MP64FS(bytearray(
+                    machine.system.storage._image_data
+                )).read_file("daybook-automations.bin"))
+                schedule = next((
+                    item for item in stored["schedules"]
+                    if item["rid"] == rid
+                ), None)
+                return schedule, sorted((
+                    item for item in stored["occurrences"] if item["rid"] == rid
+                ), key=lambda item: item["id"])
+
+            saved = daybook_automations(
+                MP64FS(bytearray(shut)).read_file("daybook-automations.bin")
+            )
+            rid = next((
+                item["rid"] for item in saved["schedules"]
+                if item["title"] == title
+            ), None)
+            with relaunched_desk(shut, "shutdown", clock) as (machine, shows, gone):
+                if not shows("Entry", "Desk did not come up after shutting down"):
+                    return
+                machine.send_key("alt+1")
+                if not shows(
+                    "[1:Daybook*]", "Desk did not focus Daybook after shutting down"
+                ):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f4")
+                for shown, failure in (
+                    ("cancelled: Desk shut down",
+                     "Daybook did not show the run Shut down cancelled"),
+                    ("indeterminate: interrupted",
+                     "Daybook lost the run the power loss interrupted"),
+                ):
+                    if not shows(shown, failure):
+                        return
+                _, items = stored_items(machine)
+                if [
+                    (item["kind"], item["phase"], item["state"],
+                     item["outcome"], item["reason"])
+                    for item in items
+                ] != [(1, 3, 1, 7, 26), (3, 3, 1, 3, 15)]:
+                    journey_errors.append(
+                        "Daybook did not keep the interrupted run and the run "
+                        f"Shut down cancelled, and only those: {items}"
+                    )
+                    return
+                # A run that ended indeterminate keeps its schedule until
+                # it is reviewed.  It is the second row, and Enter reviews
+                # it; the schedule is the last.
+                for check in ("refused", "deleted"):
+                    machine.send_key("end")
+                    machine.send_key("delete")
+                    if not shows(
+                        "Type DELETE to delete this automation:",
+                        "Delete did not ask first",
+                    ):
+                        return
+                    machine.send_text("DELETE")
+                    machine.send_key("enter")
+                    if check == "deleted":
+                        break
+                    if not shows(
+                        "Review its last run first",
+                        "deleting did not wait for the interrupted run's review",
+                    ):
+                        return
+                    machine.send_key("home")
+                    machine.send_key("down")
+                    machine.send_key("enter")
+                    if not gone(
+                        "indeterminate: interrupted",
+                        "Enter did not review the interrupted run",
+                    ):
+                        return
+                if not shows(
+                    "No automations",
+                    "deleting did not take the schedule and its runs from view",
+                ):
+                    return
+                schedule, records = stored_items(machine)
+                if not schedule or schedule["state"] != 4 or schedule["title"] or [
+                    (item["outcome"], item["reason"], item["flags"] & 1,
+                     item["summary"], bool(int(item["run"], 16)))
+                    for item in records
+                ] != [(7, 26, 1, "", True), (3, 15, 1, "", True)]:
+                    journey_errors.append(
+                        "deleting did not keep only a short record of each run: "
+                        f"{schedule} {records}"
+                    )
+                    return
+                machine.send_key("escape")
+                if not shows(" entries  |  ", "Escape did not return to the calendar"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("alt+2")
+                if not shows("[2:Agent*]", "Desk did not focus the Agent"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f5")
+                for shown, failure in (
+                    ("cancelled: Desk shut down  gpt-fast",
+                     "the Agent's runs did not keep the run Shut down cancelled"),
+                    ("indeterminate: interrupted  gpt-fast",
+                     "the Agent's runs did not keep the interrupted run"),
+                ):
+                    if not shows(shown, failure):
+                        return
+                machine.send_key("f5")
+                machine.send_key("alt+f")
+                machine.send_key("alt+p")
+                if not shows(
+                    "A schedule Daybook no longer has",
+                    "the run permissions did not say the schedule is gone",
+                ):
+                    return
+                machine.send_text("r")
+                if not shows(
+                    "Revoked; any run under it is cancelled",
+                    "R did not revoke the deleted schedule's permission",
+                ) or not gone(
+                    "A schedule Daybook no longer has",
+                    "the revoked permission stayed listed",
+                ):
+                    return
+                machine.send_key("escape")
+            host_notes.append(
+                "agent run: after a shutdown, deleting kept a short record of each run"
+            )
+
         def run_daybook_reminders_journey() -> None:
             """The reminder made at boot fires once inside Desk, on time,
             with a notice, and stays as one review item."""
@@ -31062,6 +31393,60 @@ def smoke(
                 )
             run_daybook_reminders_restart_journey(title)
 
+        @contextlib.contextmanager
+        def relaunched_desk(image: bytes, name: str, epoch_ms: int):
+            """A second machine booting IMAGE, a copy of a disk saved as
+            NAME beside the smoke's image, with its wall clock at EPOCH_MS.
+            Yields the machine, shows(marker, failure), which runs it until
+            its screen shows MARKER, and gone(marker, failure), which runs it
+            until MARKER leaves the screen.  Either records FAILURE when its
+            time runs out, and saves the screen beside the copy."""
+
+            path = image_path.with_name(
+                f"{image_path.stem}-{name}{image_path.suffix}"
+            )
+            path.write_bytes(image)
+            with MachineSession.from_bios(
+                MEGAPAD_ROOT / "bios.asm",
+                storage_image=path,
+                cols=cols,
+                rows=rows,
+                batch_steps=500_000,
+                ext_mem_size=ext_mem_mib << 20,
+                num_cores=full_cores,
+                num_clusters=clusters,
+                rtc_epoch_ms=epoch_ms,
+            ) as machine:
+                machine.boot()
+
+                def wait(marker: str, failure: str, present: bool) -> bool:
+                    local_deadline = min(deadline, time.monotonic() + 180.0)
+                    while time.monotonic() < local_deadline:
+                        if (marker in machine.snapshot().text()) == present:
+                            return True
+                        report = machine.run(
+                            max_steps=50_000_000,
+                            wall_timeout_s=1.0,
+                            until_text=marker if present else None,
+                            text_scope="screen",
+                            advance_idle=True,
+                        )
+                        if report.reason == "halted":
+                            break
+                    if (marker in machine.snapshot().text()) == present:
+                        return True
+                    journey_errors.append(failure)
+                    machine.snapshot().write_text(path.with_suffix(".txt"))
+                    return False
+
+                def shows(marker: str, failure: str) -> bool:
+                    return wait(marker, failure, True)
+
+                def gone(marker: str, failure: str) -> bool:
+                    return wait(marker, failure, False)
+
+                yield machine, shows, gone
+
         def run_daybook_reminders_restart_journey(title: str) -> None:
             """A second machine boots the disk as it now is and finds the
             reminder's next firing and its missed item; booting fires
@@ -31077,42 +31462,9 @@ def smoke(
             next_text = time.strftime(
                 "next %Y-%m-%d %H:%M", time.gmtime(schedule["next_utc"])
             )
-            relaunch_path = image_path.with_name(
-                image_path.stem + "-relaunch" + image_path.suffix
-            )
-            relaunch_path.write_bytes(image)
-            with MachineSession.from_bios(
-                MEGAPAD_ROOT / "bios.asm",
-                storage_image=relaunch_path,
-                cols=cols,
-                rows=rows,
-                batch_steps=500_000,
-                ext_mem_size=ext_mem_mib << 20,
-                num_cores=full_cores,
-                num_clusters=clusters,
-                rtc_epoch_ms=session.system.rtc.epoch_ms + 60_000,
-            ) as second:
-                second.boot()
-
-                def second_shows(marker: str, failure: str) -> bool:
-                    local_deadline = min(deadline, time.monotonic() + 180.0)
-                    while time.monotonic() < local_deadline:
-                        if marker in second.snapshot().text():
-                            return True
-                        report = second.run(
-                            max_steps=50_000_000,
-                            wall_timeout_s=1.0,
-                            until_text=marker,
-                            text_scope="screen",
-                            advance_idle=True,
-                        )
-                        if report.reason == "halted":
-                            break
-                    if marker in second.snapshot().text():
-                        return True
-                    journey_errors.append(failure)
-                    return False
-
+            with relaunched_desk(
+                image, "relaunch", session.system.rtc.epoch_ms + 60_000
+            ) as (second, second_shows, _second_gone):
                 if not second_shows("Entry", "the restarted Desk never came up"):
                     return
                 second.send_key("alt+1")
@@ -32151,6 +32503,9 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-daybook-agent":
             run_daybook_agent_create_journey()
+
+        if initial_ready and profile_name == "desktop-daybook-agent-recovery":
+            run_daybook_agent_recovery_journey()
 
         if initial_ready and profile_name == "desktop-streams":
             run_streams_persistence_journey()
