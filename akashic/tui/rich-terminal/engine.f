@@ -60,7 +60,8 @@ REQUIRE fdc1.f
 
 \ Neutral retained feature families.  These are Akashic capability bits, not
 \ provider-specific values.  CORE is required; SERIES depends on INSTRUMENT,
-\ CONTROL-COLLECTIONS on CONTROLS, and CONTROL-ITEMS on CONTROL-COLLECTIONS.
+\ CONTROL-COLLECTIONS on CONTROLS, and CONTROL-ITEMS and CONTROL-DOCUMENTS
+\ on CONTROL-COLLECTIONS.
 1  CONSTANT RTE-F-CORE
 2  CONSTANT RTE-F-VECTOR
 4  CONSTANT RTE-F-IMAGE
@@ -76,7 +77,8 @@ REQUIRE fdc1.f
 0x1000 CONSTANT RTE-F-FIELDS
 0x200 CONSTANT RTE-F-PANES
 0x800 CONSTANT RTE-F-TASKBARS
-0x3FFF CONSTANT _RTE-FEATURE-MASK
+0x4000 CONSTANT RTE-F-CONTROL-DOCUMENTS
+0x7FFF CONSTANT _RTE-FEATURE-MASK
 
 \ Neutral picture formats: raw RGBA8 pixels, or a QOI, PNG or JPEG file the
 \ terminal decodes.  A limits record's image formats hold format N as bit
@@ -497,10 +499,11 @@ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
 
 \ Renderer-neutral semantic CONTROL vocabulary.  These values describe
 \ meaning above any terminal protocol; a concrete bridge maps each admitted
-\ kind and state bit explicitly.  TEXT_AREA, TEXT_GRID, TABSET, TAB, and
-\ ITEM_VIEW extend the existing CONTROL family and are gated by
-\ RTE-F-CONTROL-COLLECTIONS, and ITEM_VIEW also by RTE-F-CONTROL-ITEMS; they
-\ are not a second operation family.
+\ kind and state bit explicitly.  TEXT_AREA, TEXT_GRID, TABSET, TAB,
+\ ITEM_VIEW, and DOCUMENT extend the existing CONTROL family and are gated by
+\ RTE-F-CONTROL-COLLECTIONS, ITEM_VIEW also by RTE-F-CONTROL-ITEMS, and
+\ DOCUMENT also by RTE-F-CONTROL-DOCUMENTS; they are not a second operation
+\ family.
 1 CONSTANT RTE-CONTROL-MENU-BAR
 2 CONSTANT RTE-CONTROL-MENU
 3 CONSTANT RTE-CONTROL-MENU-ITEM
@@ -514,6 +517,7 @@ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
 11 CONSTANT RTE-CONTROL-TASK
 12 CONSTANT RTE-CONTROL-LAUNCHER
 13 CONSTANT RTE-CONTROL-FIELD
+14 CONSTANT RTE-CONTROL-DOCUMENT
 
 \ Input intents a renderer may report against one retained control.  The
 \ values are the APT-1 CONTROL_EVENT kinds, so a transport passes them
@@ -556,9 +560,9 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ retains no pointer.  CONTENT is one canonical renderer-neutral binary value.
 \ CONTENT-ITEMS and CONTENT-UTF8 are its already-derived quota aggregates,
 \ CONTENT-RUNS its total style runs, and CONTENT-FIELDS an item view's total
-\ fields.  With an item view's column count from its ITM1 header, they fix
-\ CONTENT-U exactly.  They are not capacities or a parallel item
-\ representation.
+\ fields or a document's total containers.  With an item view's column count
+\ from its ITM1 header, they fix CONTENT-U exactly.  They are not capacities
+\ or a parallel item representation.
 : _RTE-CONTROL.OWNER       ( control -- a )        ;
 : _RTE-CONTROL.GENERATION  ( control -- a )    8 + ;
 : _RTE-CONTROL.ID          ( control -- a )   16 + ;
@@ -596,7 +600,7 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ plan's sole item-bank pass.  Callback stack: plan count variable-bytes,
 \ aligned-variable-bytes, max-item-variable-bytes, last-id,
 \ collection-controls, item-view-controls, semantic-items, utf8-bytes, field-controls,
-\ context -- status.
+\ document-controls, context -- status.
 \ It may inspect already-validated header scalars but must not traverse the
 \ plan's ITEMS-A/ITEMS-U bank.
 : _RTE-CP.OWNER        ( plan -- a )        ;
@@ -792,8 +796,9 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ How many of STATIC-COUNT are IMAGE statics.  STATIC-COPY, -TEXT, -ALIGNED
 \ and -MAX describe the status fields; a provider sizes images itself.
 : _RTE-HA.STATIC-IMAGES      ( summary -- a ) 456 + ;
+: _RTE-HA.DOCUMENT-CONTROLS  ( summary -- a ) 464 + ;
 
-464 CONSTANT RTE-HYBRID-ADMISSION-SIZE
+472 CONSTANT RTE-HYBRID-ADMISSION-SIZE
 
 : RTE-HYBRID-ADMISSION-BYTES  ( -- bytes )
     RTE-HYBRID-ADMISSION-SIZE ;
@@ -1619,6 +1624,7 @@ VARIABLE _RTE-LI-INSTRUMENT
 : _RTE-CONTROL-COLLECTION-KIND?  ( kind -- flag )
     DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-ITEM-VIEW = IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-DOCUMENT = IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-TABSET =
     SWAP RTE-CONTROL-TAB = OR ;
 
@@ -1634,6 +1640,7 @@ VARIABLE _RTE-LI-INSTRUMENT
     DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-ITEM-VIEW = IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-FIELD = IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-DOCUMENT = IF DROP -1 EXIT THEN
     RTE-CONTROL-TABSET = ;
 
 : _RTE-CONTROL-CONTENT-ZERO?  ( -- flag )
@@ -1742,9 +1749,44 @@ VARIABLE _RTE-ITM1-SUM
         _RTE-ITM1-BYTES? 0= IF 2DROP 0 EXIT THEN
     SWAP _RTE-CONTROL.CONTENT-U @ = ;
 
+\ Canonical DOC1 is a 32-byte header, 32 bytes per block, 8 per container,
+\ the blocks' UTF-8, and 12 bytes per style run (SEMANTIC-CONTENT-1), so a
+\ document's scalars alone fix its exact length.
+: _RTE-DOC1-BYTES?  ( blocks containers utf8 runs -- bytes flag )
+    32 _RTE-ITM1-SUM !
+    12 _RTE-ITM1-TERM? 0= IF 2DROP DROP 0 0 EXIT THEN
+    _RTE-ITM1-ADD? 0= IF 2DROP 0 0 EXIT THEN
+    8 _RTE-ITM1-TERM? 0= IF DROP 0 0 EXIT THEN
+    32 _RTE-ITM1-TERM? 0= IF 0 0 EXIT THEN
+    _RTE-ITM1-SUM @ -1 ;
+
+\ A document carries at least the 32-byte smallest DOC1 body, exactly the
+\ length its block, container, UTF-8 and run totals give.
+: _RTE-CONTROL-DOCUMENT-SHAPE?  ( -- flag )
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ 32 U< IF 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-FIELDS @
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-UTF8 @
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-RUNS @
+        _RTE-DOC1-BYTES? 0= IF DROP 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ = ;
+
+0x31434F44 CONSTANT _RTE-DOC1-TAG
+
+\ A document's content is one DOC1 value: its header names version 1 and
+\ the carried block count, and its reserved fields are zero.
+: _RTE-DOCUMENT-CONTENT?  ( control -- flag )
+    DUP _RTE-CONTROL.CONTENT-A @
+    DUP _RTE-LE32@ _RTE-DOC1-TAG <> IF 2DROP 0 EXIT THEN
+    DUP 4 + _RTE-LE16@ 1 <> IF 2DROP 0 EXIT THEN
+    DUP 6 + _RTE-LE16@ IF 2DROP 0 EXIT THEN
+    DUP 18 + _RTE-LE16@ IF 2DROP 0 EXIT THEN
+    DUP 28 + _RTE-LE32@ IF 2DROP 0 EXIT THEN
+    20 + _RTE-LE32@ SWAP _RTE-CONTROL.CONTENT-ITEMS @ = ;
+
 \ _RTE-CONTROL-CONTENT? ( control -- flag )
-\   The content span is canonical and, for an item view, its bytes agree
-\   with the scalars.  Callers prove the record's fields first.
+\   The content span is canonical and, for an item view or a document, its
+\   bytes agree with the scalars.  Callers prove the record's fields first.
 \ Exact FDC1 derives its own aggregates; caller declarations must agree.
 : _RTE-FIELD-CONTENT? ( control -- flag )
     >R
@@ -1760,6 +1802,9 @@ VARIABLE _RTE-ITM1-SUM
         _RTE-CONTROL-CONTENT-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF
         _RTE-ITEM-VIEW-CONTENT? EXIT
+    THEN
+    DUP _RTE-CONTROL.KIND @ RTE-CONTROL-DOCUMENT = IF
+        _RTE-DOCUMENT-CONTENT? EXIT
     THEN
     DUP _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF
         _RTE-FIELD-CONTENT? EXIT
@@ -1889,6 +1934,17 @@ VARIABLE _RTE-ITM1-SUM
             0 EXIT
         THEN
         _RTE-CONTROL-ITEM-VIEW-SHAPE? EXIT
+    THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-DOCUMENT = IF
+        _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.SHORTCUT-U @ OR IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.STATE @
+            _RTE-CONTROL-COLLECTION-STATE-MASK INVERT AND IF
+            0 EXIT
+        THEN
+        _RTE-CONTROL-DOCUMENT-SHAPE? EXIT
     THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TABSET = IF
         _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
@@ -2346,6 +2402,8 @@ VARIABLE _RTE-LV-FEATURES
     _RTE-LV-FEATURES @ RTE-F-CONTROLS AND 0= AND IF 0 EXIT THEN
     _RTE-LV-FEATURES @ RTE-F-CONTROL-ITEMS AND
     _RTE-LV-FEATURES @ RTE-F-CONTROL-COLLECTIONS AND 0= AND IF 0 EXIT THEN
+    _RTE-LV-FEATURES @ RTE-F-CONTROL-DOCUMENTS AND
+    _RTE-LV-FEATURES @ RTE-F-CONTROL-COLLECTIONS AND 0= AND IF 0 EXIT THEN
     _RTE-LV-FEATURES @ RTE-F-FIELDS AND
     _RTE-LV-FEATURES @ RTE-F-CONTROLS AND 0= AND IF 0 EXIT THEN
     _RTE-LV-FEATURES @ RTE-F-TASKBARS AND
@@ -2594,6 +2652,7 @@ VARIABLE _RTE-CPV-ROOTS
 VARIABLE _RTE-CPV-COLLECTIONS
 VARIABLE _RTE-CPV-ITEM-VIEWS
 VARIABLE _RTE-CPV-FIELDS
+VARIABLE _RTE-CPV-DOCUMENTS
 VARIABLE _RTE-CPV-CONTENT-ITEMS
 VARIABLE _RTE-CPV-UTF8-BYTES
 VARIABLE _RTE-CPV-ROOT-ID
@@ -2641,6 +2700,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-COLLECTIONS !
     0 _RTE-CPV-ITEM-VIEWS !
     0 _RTE-CPV-FIELDS !
+    0 _RTE-CPV-DOCUMENTS !
     0 _RTE-CPV-CONTENT-ITEMS !
     0 _RTE-CPV-UTF8-BYTES !
     0 _RTE-CPV-ROOT-ID !
@@ -3009,6 +3069,9 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF
         1 _RTE-CPV-FIELDS +!
     THEN
+    _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ RTE-CONTROL-DOCUMENT = IF
+        1 _RTE-CPV-DOCUMENTS +!
+    THEN
     _RTE-CPV-CONTENT-ITEMS @
     _RTE-CPV-ITEM @ _RTE-CONTROL.CONTENT-ITEMS @
         _RTE-UADD? 0= IF DROP 0 EXIT THEN
@@ -3038,6 +3101,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-COLLECTIONS !
     0 _RTE-CPV-ITEM-VIEWS !
     0 _RTE-CPV-FIELDS !
+    0 _RTE-CPV-DOCUMENTS !
     0 _RTE-CPV-CONTENT-ITEMS !
     0 _RTE-CPV-UTF8-BYTES !
     0 _RTE-CPV-ROOT-ID !
@@ -4141,6 +4205,8 @@ CREATE _RTE-HPV-OWNED-END
         _RTE-HPV-SUMMARY _RTE-HA.CONTROL-ITEM-VIEWS !
     _RTE-CPV-FIELDS @
         _RTE-HPV-SUMMARY _RTE-HA.FIELD-CONTROLS !
+    _RTE-CPV-DOCUMENTS @
+        _RTE-HPV-SUMMARY _RTE-HA.DOCUMENT-CONTROLS !
     _RTE-CPV-CONTENT-ITEMS @
         _RTE-HPV-SUMMARY _RTE-HA.CONTROL-ITEMS !
     _RTE-CPV-UTF8-BYTES @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-UTF8 !
@@ -4492,6 +4558,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-CPV-CONTENT-ITEMS @
     _RTE-CPV-UTF8-BYTES @
     _RTE-CPV-FIELDS @
+    _RTE-CPV-DOCUMENTS @
     _RTE-CPV-FACADE @ _RTE-F.CONTEXT @
     _RTE-CPV-FACADE @ _RTE-F.CONTROL-PREFLIGHT-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN

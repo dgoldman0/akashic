@@ -600,7 +600,8 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-FIELDS") == 0x1000
     assert _constant(source, "RTE-F-PANES") == 0x200
     assert _constant(source, "RTE-F-TASKBARS") == 0x800
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x3FFF
+    assert _constant(source, "RTE-F-CONTROL-DOCUMENTS") == 0x4000
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0x7FFF
     assert _constant(source, "RTE-LIMITS-SIZE") == 176
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
@@ -830,6 +831,17 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     limits = _word(source, "_RTAPT-CONTROL-LIMITS")
     assert "RTAPT-CONTROL-ITEM-VIEW =" in limits
     assert "RTAPT-F-CONTROL-ITEMS AND 0=" in limits
+    # A document is a content root that only RET_CONTROL_DOCUMENTS admits.
+    assert _constant(source, "RTAPT-CONTROL-DOCUMENT") == 14
+    assert _constant(source, "RTAPT-F-CONTROL-DOCUMENTS") == 0x4000
+    assert _constant(source, "_RTAPT-PT-F-CONTROL-DOCUMENTS") == 0x10000
+    assert "RTAPT-CONTROL-DOCUMENT" in feature_kind
+    assert "RTAPT-CONTROL-DOCUMENT" in content_root
+    assert "RTAPT-CONTROL-DOCUMENT =" in limits
+    assert "RTAPT-F-CONTROL-DOCUMENTS AND 0=" in limits
+    for gate in ("_RTAPT-CONTROL-PREFLIGHT-BODY", "_RTAPT-HYBRID-PREFLIGHT-BODY"):
+        if gate in source:
+            assert "RTAPT-F-CONTROL-DOCUMENTS AND 0=" in _word(source, gate)
     # Every provider control kind reaches the wire; a kind without a PT
     # mapping would abort each transaction that carries it.
     kinds = []
@@ -838,9 +850,9 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
         match = re.fullmatch(r"(\d+) CONSTANT RTAPT-CONTROL-([A-Z-]+)", line)
         if match is None:
             break
-        assert int(match.group(1)) == (13 if match.group(2) == "FIELD" else len(kinds) + 1)
+        assert int(match.group(1)) == len(kinds) + 1
         kinds.append(match.group(2))
-    assert kinds[-5:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD"]
+    assert kinds[-6:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD", "DOCUMENT"]
     wire_names = {"MENUBAR": "MENU-BAR", "ITEM": "MENU-ITEM",
                   "SEPARATOR": "MENU-SEPARATOR"}
     for kind in kinds:
