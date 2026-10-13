@@ -90,7 +90,7 @@ PROVIDED akashic-vfs-fixed-snapshot
 : WITH-GUARD  ( ... xt guard -- ... )
     DROP EXECUTE ;
 
-CREATE _aes-gcm-guard 0 , 0 , 0 , 0 ,
+CREATE _aes-guard 0 , 0 , 0 , 0 ,
 
 \ =====================================================================
 \  RID and deterministic entropy vocabulary

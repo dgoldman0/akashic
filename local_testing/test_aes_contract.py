@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused native qualification for caller-owned AES-128/256-GCM."""
+"""Focused native qualification for caller-owned AES-128/256 in GCM and CBC."""
 
 from __future__ import annotations
 
@@ -17,17 +17,20 @@ sys.path.insert(0, str(LOCAL_TESTING))
 import akashic_tui as harness  # noqa: E402
 
 
-PROFILE = "aes-gcm-contracts"
-IMAGE = Path("/tmp/akashic-aes-gcm-contracts.img")
-CONTRACT = LOCAL_TESTING / "aes-gcm-contract-test.f"
+PROFILE = "aes-contracts"
+IMAGE = Path("/tmp/akashic-aes-contracts.img")
+CONTRACT = LOCAL_TESTING / "aes-contract-test.f"
 SOURCE = LOCAL_TESTING.parent / "akashic" / "math" / "aes.f"
-NATIVE = LOCAL_TESTING.parent.parent / "megapad" / "accel" / "mp64_crypto.h"
+NATIVE = (
+    LOCAL_TESTING.parent.parent / "megapad" / "emulator" / "accel"
+    / "mp64_crypto.h"
+)
 NATIVE_FINGERPRINT_PREFIX = b"mp64-aes-gcm-native-sha256:"
 
-AUTOEXEC = r"""\ autoexec.f - caller-owned native AES-GCM contracts
+AUTOEXEC = r"""\ autoexec.f - caller-owned native AES-GCM and AES-CBC contracts
 ENTER-USERLAND
 REQUIRE math/aes.f
-REQUIRE local_testing/aes-gcm-contract-test.f
+REQUIRE local_testing/aes-contract-test.f
 _AGCT-RUN
 """
 
@@ -36,7 +39,7 @@ def _assert_source_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     native = NATIVE.read_text(encoding="utf-8")
 
-    assert "GUARD _aes-gcm-guard" in source
+    assert "GUARD _aes-guard" in source
     assert "[DEFINED] GUARDED" not in source
     assert not re.search(r"(?mi)^[ \t]*(?:VARIABLE|VALUE|DEFER)\b", source)
     assert not re.search(r"(?mi)^[ \t]*CREATE\b", source)
@@ -60,13 +63,18 @@ def _assert_source_contracts() -> None:
         "AES-GCM-DESCRIPTOR-VALID?",
         "AES-GCM-SEAL",
         "AES-GCM-OPEN",
-        "AES-GCM-S-AUTH",
+        "AES-S-AUTH",
+        "AES-CBC-DESCRIPTOR-SIZE",
+        "AES-CBC-WORKSPACE-SIZE",
+        "AES-CBC-DESCRIPTOR-VALID?",
+        "AES-CBC-ENCRYPT",
+        "AES-CBC-DECRYPT",
     ):
         assert word in source
     for requirement in (
-        "AES-GCM-LENGTH-MAX",
-        "AES-GCM-HARDWARE-POLL-LIMIT",
-        "_AGCM-POLL-FINAL",
+        "AES-LENGTH-MAX",
+        "AES-HARDWARE-POLL-LIMIT",
+        "_AES-POLL-FINAL",
         "_AGCM-BIND-SAFE",
         "_AGCM-RUN-SAFE",
         "_AGCM-BODY-SAFE",
@@ -78,6 +86,8 @@ def _assert_source_contracts() -> None:
         "_AGCM-CALL-SAFE",
         "_AGCM-OP-OPEN-AUTH",
         "_AGCM-OP-OPEN-PUBLISH",
+        "_ACBC-CALL-SAFE",
+        "_ACBC-PUBLISH-CHAIN-SAFE",
         "CATCH",
         "MSPAN-OVERLAP?",
     ):
@@ -95,15 +105,41 @@ def _assert_source_contracts() -> None:
         "_AGCM-BIND-SAFE",
         "_AGCM-RUN-SAFE",
         "_AGCM-BODY-SAFE",
-        "_AGCM-CLEAR-ENGINE-SAFE",
+        "_AES-CLEAR-ENGINE-SAFE",
         "_AGCM-WIPE-OUTPUT-SAFE",
         "_AGCM-PUBLISH-TAG-SAFE",
         "_AGCM-WIPE-WORKSPACE-SAFE",
         "_AGCM-WIPE-DESCRIPTOR-OUTPUT-SAFE",
         "_AGCM-PREPARE-OPEN-PUBLISH-SAFE",
         "_AGCM-CALL-SAFE",
+        "_ACBC-BIND-SAFE",
+        "_ACBC-RUN-SAFE",
+        "_ACBC-WIPE-OUTPUT-SAFE",
+        "_ACBC-PUBLISH-CHAIN-SAFE",
+        "_ACBC-WIPE-WORKSPACE-SAFE",
+        "_ACBC-WIPE-DESCRIPTOR-OUTPUT-SAFE",
+        "_ACBC-CALL-SAFE",
     ):
         assert "CATCH" in word_body(safe_word)
+
+    # Every call selects its own block mode, and the shared reset selects
+    # GCM, so a stale mode reaches no call.
+    assert "0 AES-MODE!" in word_body("_AGCM-START")
+    assert "1 AES-MODE!" in word_body("_ACBC-START")
+    assert "0 AES-MODE!" in word_body("_AES-CLEAR-ENGINE")
+    cbc_admitted = word_body("_ACBC-ADMITTED")
+    assert cbc_admitted.index("_ACBC-RUN-SAFE") < cbc_admitted.index(
+        "_ACBC-CLEAR-ENGINE-SAFE"
+    )
+    assert cbc_admitted.index("_ACBC-CLEAR-ENGINE-SAFE") < cbc_admitted.index(
+        "_ACBC-PUBLISH-CHAIN-SAFE"
+    )
+    assert cbc_admitted.index("_ACBC-PUBLISH-CHAIN-SAFE") < cbc_admitted.index(
+        "_ACBC-WIPE-OUTPUT-SAFE"
+    )
+    assert cbc_admitted.index("_ACBC-WIPE-OUTPUT-SAFE") < cbc_admitted.index(
+        "_ACBC-WIPE-WORKSPACE-SAFE"
+    )
 
     feed_data = word_body("_AGCM-FEED-DATA")
     assert feed_data.index("_AGCM-OP-OPEN-AUTH <> IF") < feed_data.index(
@@ -157,9 +193,19 @@ def _assert_source_contracts() -> None:
     assert "#error \"Megapad native AES-GCM requires" in native
     assert "struct u128" not in native
     assert "MP64_AES_MODEL_SOURCE_SHA256" in native
+    for cbc in (
+        "aes_decrypt_block",
+        "start_cbc",
+        "process_cbc_block",
+        "iv_written_mask == AES_CBC_IV_MASK",
+        "iv_written_mask == AES_GCM_IV_MASK",
+    ):
+        assert cbc in aes_start or cbc in native
     fixture = CONTRACT.read_text(encoding="utf-8")
     assert "_agct-test-native-configuration-masks" in fixture
+    assert "_agct-test-cbc-stale-modes" in fixture
     for primitive in (
+        "AES-MODE!",
         "AES-KEY!",
         "AES-IV!",
         "AES-AAD-LEN!",
@@ -179,7 +225,7 @@ def _assert_native_binary_fingerprint() -> None:
     if fingerprint not in artifact.read_bytes():
         raise RuntimeError(
             "stale _mp64_accel binary: rebuild the native accelerator before "
-            "running AES-GCM qualification; linked binary does not match "
+            "running AES qualification; linked binary does not match "
             f"{NATIVE.name} SHA-256 {source_digest.decode('ascii')} ({artifact})"
         )
 
@@ -195,19 +241,19 @@ def main() -> int:
         roots=("math/aes.f",),
         resources=(),
         autoexec=AUTOEXEC,
-        ready_markers=("AES-GCM PASS",),
-        stable_markers=("AES-GCM PASS",),
+        ready_markers=("AES PASS",),
+        stable_markers=("AES PASS",),
         failure_markers=(
-            "AES-GCM FAIL",
-            "AES-GCM ASSERT",
-            "AES-GCM STACK",
+            "AES FAIL",
+            "AES ASSERT",
+            "AES STACK",
             "DRIVER THROW",
             "dictionary full",
             "exception",
             "(not found)",
         ),
         initial_files=(
-            ("local_testing/aes-gcm-contract-test.f", CONTRACT.read_bytes()),
+            ("local_testing/aes-contract-test.f", CONTRACT.read_bytes()),
         ),
         linked=True,
         include_large_sample=False,
