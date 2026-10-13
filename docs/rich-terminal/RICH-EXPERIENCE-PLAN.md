@@ -1353,10 +1353,11 @@ empty password, and those are read too.
   AESV2 decrypts with AES-128, and AESV3 decrypts with AES-256 after
   deriving its key with AES-128 encryption and SHA-256, SHA-384 and
   SHA-512. MegaPad's AES engine, which has only GCM, gains CBC encryption
-  and decryption, so the chip carries AES's inverse cipher too: in the
-  chip, the emulator and Akashic's driver. Akashic gains SHA-384 beside
-  SHA-512. Until then, AES-encrypted files show their facts and say they
-  are protected; RC4-encrypted files are read.
+  and decryption, so the chip carries AES's inverse cipher too, and the
+  BIOS gains SHA-384 beside SHA-512. On 2026-10-12 this was narrowed:
+  CBC goes into the emulator and Akashic's driver now, and the RTL AES
+  block's rebuild is tracked as its own task, MegaPad's
+  `ROADMAP-v1.0.md` item 50.
 
 **Plan.**
 
@@ -1403,11 +1404,11 @@ empty password, and those are read too.
    scrolls to it. A link to the web is refused with a message, as part 12
    does. The outline, or the headings when there is none, is the
    document's contents.
-8. **Encryption** (`math/md5.f`, `math/rc4.f`, `pdf/crypt.f`). The
-   standard security handler with the empty user password: revisions 2 to
-   4 with RC4 of 40 to 128 bits, and AESV2 and AESV3 through MegaPad's AES
-   engine once it has CBC, with SHA-384 for AESV3's key. A file that needs
-   a password shows its facts and says so.
+8. **Encryption** (`math/md5.f`, `math/rc4.f`, `math/aes.f`,
+   `pdf/crypt.f`). The standard security handler with the empty user
+   password: revisions 2 to 4 with RC4 of 40 to 128 bits, and AESV2 and
+   AESV3 through MegaPad's AES engine in CBC, with SHA-384 for AESV3's
+   key. A file that needs a password shows its facts and says so.
 9. **File Explorer.** `MEDIA-KIND` calls a file that starts `%PDF-` a PDF,
    and the preview shows it as a document with its contents.
 10. **Samples.** The Desktop disk gains PDFs written at image build by a
@@ -1429,8 +1430,8 @@ empty password, and those are read too.
 - Text: each standard encoding, Differences, ToUnicode maps and Identity
   fonts against what pdftotext reads from the same files.
 - Layout: the tagged and untagged samples give the expected blocks.
-- Encryption: qpdf's RC4 revisions read with the empty password; a file
-  with a user password refused.
+- Encryption: qpdf's RC4 revisions, AES-128 and AES-256 read with the
+  empty password; a file with a user password refused.
 - The document view reads pages as it scrolls, and only those; a link to
   a far page reads that page alone.
 - File Explorer's check through the physical viewer, previewing a PDF in
@@ -1443,14 +1444,14 @@ rich, its links followed, its contents listed, and its RC4-encrypted copy
 read with the empty password; and pages are read only as the view reaches
 them, a link to a far page reading that page alone.
 
-**Status (2026-10-12).** Steps 1 to 5 are done, step 8 for RC4, steps 6
-and 7, step 9's preview and step 10's samples: File Explorer previews a
+**Status (2026-10-12).** Steps 1 to 10 are done: File Explorer previews a
 PDF as a document, read a page at a time, with its pictures, links,
 contents and page labels, and a link or a contents entry shows the place
 its destination names. Step 11 is measured. File Explorer's check
 through the physical viewer previews the sample PDF in CELL and rich, and
 the Desktop journey passes after it
-(`local_testing/evidence/pdf-journey-20261012.md`). AES remains.
+(`local_testing/evidence/pdf-journey-20261012.md`). AES-encrypted PDFs
+open too.
 
 - Step 11's counts (`local_testing/measure_pdf.py`), for a 100-page PDF of
   249 KB that xelatex writes with hyperref, shown at File Explorer's
@@ -1591,8 +1592,22 @@ the Desktop journey passes after it
   tree through the parent tree and role map, and still judges paragraphs
   by their lines, since producers map their own heading styles to P.
 - Files encrypted by the standard security handler with the empty user
-  password open: RC4 of revisions 2 to 4, with crypt filters, as qpdf writes
-  them. A file with a user password, or AES, opens locked and says so.
+  password open: RC4 of revisions 2 to 4, AES-128 through revision 4's
+  crypt filters, and AES-256 of revisions 5 and 6, as qpdf writes them. A
+  file with a user password opens locked and says so.
+- AES runs on MegaPad's engine, which now has CBC beside GCM in the
+  emulator and its native and hosted models, with BIOS words `AES-MODE!`
+  and `AES-CBC-IV!`; `math/aes.f` gains `AES-CBC-ENCRYPT` and
+  `AES-CBC-DECRYPT` under the one AES guard, and its statuses are the
+  module's (`AES-S-*`). The BIOS's SHA-512 stream gains SHA-384
+  (`SHA384-INIT`, `SHA384-FINAL`) and `math/sha512.f` gains
+  `SHA384-HASH`. Revision 6's algorithm 2.B borrows 4 KB from the file's
+  memory source while it runs. Opening one of qpdf's one-page files takes,
+  in hosted guest steps, 1.1 million for AES-128, 0.2 million for
+  revision 5's AES-256 and 6.8 million for revision 6's. A stream read in
+  pieces takes its IV at the start and holds back its last block, whose
+  padding comes off. The RTL AES block has no CBC yet: its rebuild is
+  MegaPad's roadmap item 50.
 - A page's links and the outline are read with their titles as UTF-8
   (`pdf/navigate.f`). A link keeps its destination as it is and looks it
   up only when followed: an explicit page, a name through `/Dests`, a

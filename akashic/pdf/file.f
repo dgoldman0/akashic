@@ -61,9 +61,8 @@
 \  a value holds each string as a hex string of its plain bytes, and its
 \  streams' data before their filters; the /Encrypt dictionary, cross-
 \  reference streams and the objects in object streams are left as they
-\  are.  A file that needs a password, or that AES encrypts, still opens,
-\  but PDF-FILE-LOCKED? says so and its encrypted streams are
-\  PDF-S-LOCKED.
+\  are.  A file that needs a password still opens, but PDF-FILE-LOCKED?
+\  says so and its encrypted streams are PDF-S-LOCKED.
 \
 \  Every buffer comes from the caller's memory source.  The file borrows
 \  its media source.  One call runs at a time.
@@ -86,10 +85,10 @@ REQUIRE ../media/source.f
 \   +48  trailer bytes       +56  their room          +64  trailer length
 \   +72  the object streams held decoded, the one used last first, or 0
 \   +80  work bytes (a buffer, 24)                    +104 repaired?
-\   +112 open?              +120 its encryption (PDF-CRYPT-SIZE, 48)
-\   +168 the /Encrypt dictionary's object, or 0       +176 a value with its
-\   strings decrypted (a buffer, 24)    +200 a string's bytes (a buffer, 24)
-\   +224 encrypted?
+\   +112 open?              +120 the /Encrypt dictionary's object, or 0
+\   +128 a value with its strings decrypted (a buffer, 24)
+\   +152 a string's bytes (a buffer, 24)              +176 encrypted?
+\   +184 its encryption (PDF-CRYPT-SIZE)
 
 : _PDFF.SRC       ( f -- a )        ;
 : _PDFF.MSRC      ( f -- a )    8 + ;
@@ -104,12 +103,12 @@ REQUIRE ../media/source.f
 : _PDFF.WORK      ( f -- a )   80 + ;
 : _PDFF.REPAIRED  ( f -- a )  104 + ;
 : _PDFF.OPEN      ( f -- a )  112 + ;
-: _PDFF.CRYPT     ( f -- c )  120 + ;
-: _PDFF.ENCNUM    ( f -- a )  168 + ;
-: _PDFF.CBUF      ( f -- a )  176 + ;
-: _PDFF.SBUF      ( f -- a )  200 + ;
-: _PDFF.ENCRYPTED ( f -- a )  224 + ;
-232 CONSTANT PDF-FILE-SIZE
+: _PDFF.ENCNUM    ( f -- a )  120 + ;
+: _PDFF.CBUF      ( f -- a )  128 + ;
+: _PDFF.SBUF      ( f -- a )  152 + ;
+: _PDFF.ENCRYPTED ( f -- a )  176 + ;
+: _PDFF.CRYPT     ( f -- c )  184 + ;
+184 PDF-CRYPT-SIZE + CONSTANT PDF-FILE-SIZE
 
 \ An entry: its type (0 free, 1 in the file, 2 in an object stream,
 \ 255 none yet), its generation or index, and its offset or stream.
@@ -322,6 +321,7 @@ VARIABLE _PDFF-GET-XT   \ PDF-GET, which an object's /Length may need
 \ =====================================================================
 
 VARIABLE _PDFF-CA   VARIABLE _PDFF-CE   VARIABLE _PDFF-SN
+VARIABLE _PDFF-SA   \ a string's plain bytes, _PDFF-SN of them
 VARIABLE _PDFF-TA   VARIABLE _PDFF-TU   VARIABLE _PDFF-TT
 CREATE _PDFF-HEXD  48 C, 49 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C,
                    56 C, 57 C, 65 C, 66 C, 67 C, 68 C, 69 C, 70 C,
@@ -329,7 +329,8 @@ CREATE _PDFF-HEXD  48 C, 49 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C,
 : _PDFF-CBUF+  ( a u -- ok? )  _PDFF-F @ _PDFF.CBUF _PDFF-F @ _PDFF.MSRC @ PDF-BUF-APPEND ;
 
 \ A string token's bytes, decrypted with the object's key, onto the
-\ value being written as a hex string.
+\ value being written as a hex string.  A string the AES engine refuses
+\ is written empty.
 : _PDFF-HEX+  ( ta tu type -- ok? )
     >R 2DUP R@ 0 0 PDF-STRING _PDFF-SN !
     _PDFF-SN @ _PDFF-F @ _PDFF.SBUF _PDFF-F @ _PDFF.MSRC @ PDF-BUF-GROW 0= IF
@@ -337,13 +338,14 @@ CREATE _PDFF-HEXD  48 C, 49 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C,
     THEN
     R> _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @ PDF-STRING DROP
     _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @ _PDFF-NUM @ _PDFF-GEN @
-    _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-DATA
+    _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-STRING
+    0= IF DROP 0 THEN _PDFF-SN ! _PDFF-SA !
     _PDFF-F @ _PDFF.CBUF DUP PDF-BUF.U @ _PDFF-SN @ 2* 2 + + SWAP
     _PDFF-F @ _PDFF.MSRC @ PDF-BUF-GROW 0= IF 0 EXIT THEN
     _PDFF-F @ _PDFF.CBUF DUP PDF-BUF.A @ SWAP PDF-BUF.U @ +
     60 OVER C! 1+
     _PDFF-SN @ 0 ?DO
-        _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ I + C@
+        _PDFF-SA @ I + C@
         DUP 4 RSHIFT _PDFF-HEXD + C@ 2 PICK C!
         15 AND _PDFF-HEXD + C@ OVER 1+ C!  2 +
     LOOP
@@ -429,12 +431,14 @@ VARIABLE _PDFS-RAW  VARIABLE _PDFS-N
     NIP _PDFF.CRYPT DUP PDF-CRYPT-LOCKED? IF DROP 0 PDF-S-LOCKED EXIT THEN
     PDF-CRYPT-STREAMS? PDF-S-OK ;
 
-\ The stream's raw bytes decrypted, when they are encrypted.
-: _PDFS-DECRYPT  ( -- status )
+\ The stream's raw bytes decrypted, when they are encrypted: the span of
+\ its data.  Data the AES engine refuses is damaged.
+: _PDFS-DECRYPT  ( -- a u status )
+    _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @
     _PDFS-O @ _PDFS-F @ _PDFS-CIPHER? ?DUP IF NIP EXIT THEN
     0= IF PDF-S-OK EXIT THEN
-    _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ PDF-OBJ-NUM
-    _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-DATA  PDF-S-OK ;
+    _PDFS-O @ PDF-OBJ-NUM _PDFS-F @ _PDFF.CRYPT PDF-CRYPT-STREAM
+    IF PDF-S-OK ELSE PDF-S-DAMAGED THEN ;
 
 VARIABLE _PDFS-PICTURE?   \ decoded as far as a picture's coding
 VARIABLE _PDFS-CODING     \ that coding
@@ -447,8 +451,8 @@ VARIABLE _PDFS-CODING     \ that coding
     _PDFS-F @ _PDFF.MSRC @ MSRC-ALLOC DUP _PDFS-RAW ! 0= IF PDF-S-MEMORY EXIT THEN
     _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ _PDFO.SOFF @
     _PDFS-F @ _PDFF.SRC @ MEDSRC-READ? IF _PDFS-FREE PDF-S-READ EXIT THEN
-    _PDFS-DECRYPT ?DUP IF _PDFS-FREE EXIT THEN
-    _PDFS-RAW @ _PDFS-O @ _PDFO.SLEN @ _PDFS-O @ PDF-OBJ-VALUE DROP
+    _PDFS-DECRYPT ?DUP IF >R 2DROP _PDFS-FREE R> EXIT THEN
+    _PDFS-O @ PDF-OBJ-VALUE DROP
     _PDFS-B @ _PDFS-F @ _PDFF.MSRC @
     _PDFS-PICTURE? @ IF PDF-DECODE-IMAGE SWAP _PDFS-CODING ! ELSE PDF-DECODE THEN
     _PDFS-FREE ;
@@ -467,45 +471,105 @@ VARIABLE _PDFS-CODING     \ that coding
 \ =====================================================================
 
 \ The record: the file, where the bytes left start in its source and how
-\ many there are, whether they are decrypted, and the key stream.
-: _PDRW.FILE  ( r -- a )        ;
-: _PDRW.POS   ( r -- a )    8 + ;
-: _PDRW.LEFT  ( r -- a )   16 + ;
-: _PDRW.RC4?  ( r -- a )   24 + ;
-: _PDRW.RC4   ( r -- a )   32 + ;
-32 RC4-SIZE + CONSTANT PDF-RAW-SIZE
+\ many there are, whether they are decrypted and the cipher's block, the
+\ plain bytes of a block decrypted and not yet given, where they start in
+\ it, that block, and the decryption.
+: _PDRW.FILE     ( r -- a )        ;
+: _PDRW.POS      ( r -- a )    8 + ;
+: _PDRW.LEFT     ( r -- a )   16 + ;
+: _PDRW.CIPHER?  ( r -- a )   24 + ;
+: _PDRW.BLOCK    ( r -- a )   32 + ;
+: _PDRW.HELD     ( r -- a )   40 + ;
+: _PDRW.HOLD     ( r -- a )   48 + ;
+: _PDRW.BUF      ( r -- a )   56 + ;
+: _PDRW.READER   ( r -- a )   72 + ;
+72 PDF-CRYPT-READER-SIZE + CONSTANT PDF-RAW-SIZE
+
+VARIABLE _PDRW-R   \ the record being read
+: _RW  ( -- raw )  _PDRW-R @ ;
+
+\ Read N bytes from where the bytes left start into A: whether the
+\ source failed.
+: _PDRW-FETCH  ( a n -- failed? )
+    _RW _PDRW.POS @ _RW _PDRW.FILE @ _PDFF.SRC @ MEDSRC-READ? ;
+
+: _PDRW-TAKEN  ( n -- )  DUP _RW _PDRW.POS +!  NEGATE _RW _PDRW.LEFT +! ;
+
+\ The held plain bytes, at most U of them, into A.
+: _PDRW-GIVE  ( a u -- n )
+    _RW _PDRW.HELD @ MIN
+    _RW _PDRW.BUF _RW _PDRW.HOLD @ + ROT 2 PICK MOVE
+    DUP _RW _PDRW.HOLD +!  DUP NEGATE _RW _PDRW.HELD +! ;
+
+\ An AES stream's first 16 bytes are its IV, taken at the start.  The
+\ bytes after it are read in whole blocks; part of a block at the end is
+\ no data.
+: _PDRW-IV  ( -- status )
+    _RW _PDRW.LEFT @ 16 < IF 0 _RW _PDRW.LEFT ! PDF-S-OK EXIT THEN
+    _RW _PDRW.BUF 16 _PDRW-FETCH IF PDF-S-READ EXIT THEN
+    16 _PDRW-TAKEN
+    _RW _PDRW.BUF 16 0 _RW _PDRW.READER PDF-CRYPT-READER-RUN 2DROP DROP
+    _RW _PDRW.LEFT @ -16 AND _RW _PDRW.LEFT !  PDF-S-OK ;
 
 \ PDF-RAW-START ( obj file raw -- status )
 \   Read stream OBJ's stored bytes, decrypted, in pieces.  OBJ may be given
 \   back once it starts.
 : PDF-RAW-START  ( obj file raw -- status )
-    DUP 32 0 FILL  >R
+    DUP 72 0 FILL  DUP _PDRW-R !  >R
     DUP R@ _PDRW.FILE !
     OVER PDF-OBJ-STREAM? 0= IF 2DROP R> DROP PDF-S-DAMAGED EXIT THEN
     OVER _PDFO.SOFF @ R@ _PDRW.POS !  OVER _PDFO.SLEN @ R@ _PDRW.LEFT !
     2DUP _PDFS-CIPHER? ?DUP IF NIP NIP NIP R> DROP EXIT THEN
-    IF
-        -1 R@ _PDRW.RC4? !
-        SWAP PDF-OBJ-NUM ROT _PDFF.CRYPT R> _PDRW.RC4 PDF-CRYPT-START
-    ELSE 2DROP R> DROP THEN
-    PDF-S-OK ;
+    0= IF 2DROP R> DROP PDF-S-OK EXIT THEN
+    -1 R@ _PDRW.CIPHER? !
+    SWAP PDF-OBJ-NUM ROT _PDFF.CRYPT R@ _PDRW.READER PDF-CRYPT-READER-START
+    R> _PDRW.BLOCK !
+    _RW _PDRW.BLOCK @ 16 = IF _PDRW-IV ELSE PDF-S-OK THEN ;
+
+\ The next block of an AES stream decrypted into the record's buffer and
+\ held, the stream's last block without its padding.
+: _PDRW-BLOCK  ( -- status )
+    _RW _PDRW.BUF 16 _PDRW-FETCH IF PDF-S-READ EXIT THEN
+    16 _PDRW-TAKEN
+    _RW _PDRW.BUF 16 _RW _PDRW.LEFT @ 0= _RW _PDRW.READER PDF-CRYPT-READER-RUN
+    0= IF 2DROP PDF-S-DAMAGED EXIT THEN
+    _RW _PDRW.HELD !  _RW _PDRW.BUF - _RW _PDRW.HOLD !  PDF-S-OK ;
+
+\ The next of an AES stream's bytes, at most U, into A: whole blocks
+\ straight into A, but for the last block, whose padding comes off, and a
+\ block when U is less than one; those are held and given a part at a
+\ time.
+: _PDRW-AES  ( a u -- n status )
+    DUP 16 < _RW _PDRW.LEFT @ 16 = OR IF
+        _PDRW-BLOCK ?DUP IF NIP NIP 0 SWAP EXIT THEN
+        _PDRW-GIVE PDF-S-OK EXIT
+    THEN
+    _RW _PDRW.LEFT @ 16 - MIN -16 AND
+    2DUP _PDRW-FETCH IF 2DROP 0 PDF-S-READ EXIT THEN
+    DUP _PDRW-TAKEN
+    0 _RW _PDRW.READER PDF-CRYPT-READER-RUN
+    0= IF 2DROP 0 PDF-S-DAMAGED EXIT THEN
+    NIP PDF-S-OK ;
 
 \ PDF-RAW-READ ( a u raw -- n status )
 \   The next of the stream's bytes, at most U, into A; N is 0 at the end.
 : PDF-RAW-READ  ( a u raw -- n status )
-    >R  R@ _PDRW.LEFT @ MIN
-    DUP 0= IF NIP R> DROP PDF-S-OK EXIT THEN
-    2DUP R@ _PDRW.POS @ R@ _PDRW.FILE @ _PDFF.SRC @ MEDSRC-READ? IF
-        2DROP R> DROP 0 PDF-S-READ EXIT
+    _PDRW-R !
+    _RW _PDRW.HELD @ IF _PDRW-GIVE PDF-S-OK EXIT THEN
+    _RW _PDRW.LEFT @ MIN
+    DUP 0= IF NIP PDF-S-OK EXIT THEN
+    _RW _PDRW.BLOCK @ 16 = IF _PDRW-AES EXIT THEN
+    2DUP _PDRW-FETCH IF 2DROP 0 PDF-S-READ EXIT THEN
+    _RW _PDRW.CIPHER? @ IF
+        2DUP 0 _RW _PDRW.READER PDF-CRYPT-READER-RUN 2DROP DROP
     THEN
-    R@ _PDRW.RC4? @ IF 2DUP R@ _PDRW.RC4 RC4-XOR THEN
-    NIP DUP R@ _PDRW.POS +!  DUP NEGATE R> _PDRW.LEFT +!  PDF-S-OK ;
+    NIP DUP _PDRW-TAKEN PDF-S-OK ;
 
 \ PDF-RAW-SPAN ( raw -- offset u stored? )
 \   Where the bytes left lie in the file's media source, and whether they
 \   are as it stores them.
 : PDF-RAW-SPAN  ( raw -- offset u stored? )
-    DUP _PDRW.POS @ OVER _PDRW.LEFT @ ROT _PDRW.RC4? @ 0= ;
+    DUP _PDRW.POS @ OVER _PDRW.LEFT @ ROT _PDRW.CIPHER? @ 0= ;
 
 \ =====================================================================
 \  Objects in object streams
@@ -1008,7 +1072,7 @@ VARIABLE _PDFF-BROKEN \ true once a section could not be read
     THEN
     R> _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @ PDF-STRING DROP
     _PDFF-F @ _PDFF.SBUF PDF-BUF.A @ _PDFF-SN @
-    _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-SETUP DROP
+    _PDFF-F @ _PDFF.MSRC @ _PDFF-F @ _PDFF.CRYPT PDF-CRYPT-SETUP DROP
     _PDFF-F @ PDF-OBJ-FREE  PDF-S-OK ;
 
 \ PDF-OPEN ( source msrc file -- status )

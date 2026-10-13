@@ -80,7 +80,12 @@ end before it.
 `PDF-RAW-START` and `PDF-RAW-READ` read a stream's bytes as the file stores
 them, before its filters, as many at a time as the caller asks, so a large
 picture is never held whole. An encrypted stream's bytes are decrypted as
-they come, its RC4 key stream kept in the record. `PDF-RAW-SPAN` says
+they come by a `pdf/crypt.f` reader kept in the record: RC4's key stream,
+or AES's key and chain. An AES stream's 16-byte IV is taken when it starts;
+then whole blocks are decrypted straight into the caller's bytes, but for
+the last block, whose padding comes off, and a block when the caller asks
+for less than one, which the record holds and gives a part at a time; part
+of a block at the end is no data. `PDF-RAW-SPAN` says
 whether the bytes left are as stored, so a reader can take them from the
 file's own media source instead: `pdf/image.f` makes a JPEG's file a span of
 the PDF.
@@ -97,6 +102,6 @@ file then has its strings decrypted, each rewritten in its value as a hex
 string of its plain bytes, and a stream's data is decrypted before its
 filters. The `/Encrypt` dictionary, cross-reference streams and the objects
 inside object streams are left as they are, since they are not encrypted
-apart. A file that needs a password, or that AES encrypts, still opens:
-`PDF-FILE-LOCKED?` says so, its unencrypted parts can be read, and its
-encrypted streams give `PDF-S-LOCKED`.
+apart. A file that needs a password still opens: `PDF-FILE-LOCKED?` says
+so, its unencrypted parts can be read, and its encrypted streams give
+`PDF-S-LOCKED`. RC4, AES-128 and AES-256 files open (`docs/pdf/crypt.md`).
