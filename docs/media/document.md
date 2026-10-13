@@ -89,6 +89,12 @@ headings are left out, as contents usually leave them. A document in parts
 has no headings to give before its parts are read, so only its reader gives
 its contents.
 
+An entry with entries below it shows them until it is closed. It starts
+open unless its reader says otherwise: `DOC-CLOSE-ENTRY ( doc -- )` makes
+the entry added last start closed, as a PDF's outline says of an item
+with a negative `/Count`, and `DOC-ENTRY-CLOSED? ( i doc -- flag )` tells
+a view. Headings start open.
+
 ## Pictures a document holds
 
 A figure names its picture. Most documents name a file, which the owner of a

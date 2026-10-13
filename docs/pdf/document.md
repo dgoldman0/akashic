@@ -102,7 +102,8 @@ The document's contents (`DOC-CONTENTS`) are the file's outline
 (`pdf/navigate.f`): each item at its level, from 0, with its title, going
 where it goes as a link would: a destination resolved only when it is
 chosen, or an address. An item that goes nowhere only heads the items
-under it. A file without an outline has its pages as contents, each "Page"
+under it. An item the outline says starts closed starts closed
+(`DOC-ENTRY-CLOSED?`). A file without an outline has its pages as contents, each "Page"
 and its label, going to that page (`#p` and its index). The labels are read
 once, when the document opens. Making the
 contents reads the outline and no page.

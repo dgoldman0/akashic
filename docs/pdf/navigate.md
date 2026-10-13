@@ -36,6 +36,7 @@ REQUIRE pdf/navigate.f
 | `PDF-ITEM-TITLE` | `( item outline -- a u )` | Its title, as UTF-8. |
 | `PDF-ITEM-DEST` | `( item outline -- va vu type )` | Its destination's value, or `0 0 PDF-T-END`. |
 | `PDF-ITEM-URI` | `( item outline -- a u )` | Its address's bytes, or `0 0`. |
+| `PDF-ITEM-CLOSED?` | `( item -- flag )` | Whether it starts closed, its children hidden. |
 
 Statuses are `pdf/filter.f`'s and `pdf/file.f`'s: `PDF-S-OK`,
 `PDF-S-MEMORY` when memory is refused, `PDF-S-LOCKED` for a locked file,
@@ -83,9 +84,10 @@ annotations that are not links, are left out.
 
 `PDF-OUTLINE-READ` reads the catalog's `/Outlines` in the order a reader
 shows it, each item's children after it, through `/First` and `/Next`. Each
-item has its level, its title as UTF-8 (`pdf/textstr.f`), and where it
-goes, as a link does, or nowhere: an item may only group the items below
-it. The walk keeps a bit for each of the file's objects and reads each item
+item has its level, its title as UTF-8 (`pdf/textstr.f`), where it goes,
+as a link does, or nowhere: an item may only group the items below it;
+and whether it starts closed, which a negative `/Count` says. A positive
+`/Count`, or none, leaves it open, as viewers read it. The walk keeps a bit for each of the file's objects and reads each item
 once, so an outline that loops ends.
 
 ## What it gives back

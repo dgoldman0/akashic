@@ -75,6 +75,7 @@ VARIABLE NV-LIMIT   VARIABLE NV-CAT
 : NV-ITEM  ( i -- level ta tu va vu type a u )
     NV-OUT PDF-OUTLINE-ITEM >R  R@ PDF-ITEM-LEVEL  R@ NV-OUT PDF-ITEM-TITLE
     R@ NV-OUT PDF-ITEM-DEST  R> NV-OUT PDF-ITEM-URI ;
+: NV-CLOSED  ( i -- flag )  NV-OUT PDF-OUTLINE-ITEM PDF-ITEM-CLOSED? ;
 : NV-NUMS  ( key -- obj va vu type status )
     S" Root" NV-FILE PDF-TRAILER@ NV-FILE PDF-RESOLVE DROP DROP ROT NV-CAT !
     S" PageLabels" 2SWAP PDF-DICT@ NV-FILE PDF-NUMS@ ;
@@ -170,6 +171,10 @@ class Navigate:
                 out.append((level, title, self.follow(va, vu, kind)[:4], b""))
         return out
 
+    def closed(self) -> list[bool]:
+        """Whether each item of the outline last read starts closed."""
+        return [self.call("NV-CLOSED", i) != (0,) for i in range(self.call("NV-ITEMS")[0])]
+
     def text(self, data: bytes) -> str:
         self.runtime.memory.write_bytes(self.bytes, data)
         assert self.call("NV-TEXT", self.bytes, len(data)) != (0,)
@@ -210,10 +215,12 @@ def objects() -> dict[int, bytes]:
             b"/Count 1 /Dest [3 0 R /Fit] >>",
         22: b"<< /Title <FEFF0044 00E9 0074 0061 0069 006C 0073> /Parent 21 0 R "
             b"/A << /S /GoTo /D [5 0 R /XYZ null 300 null] >> >>",
-        23: b"<< /Title (Chapter 2) /Parent 20 0 R /Prev 21 0 R /First 24 0 R /Dest (chapter2) >>",
+        23: b"<< /Title (Chapter 2) /Parent 20 0 R /Prev 21 0 R /First 24 0 R /Count 26 0 R "
+            b"/Dest (chapter2) >>",
         24: b"<< /Title <FFFE 5700 6500 6200> /Parent 23 0 R /Next 25 0 R "
             b"/A << /S /URI /URI (https://example.com/c) >> >>",
         25: b"<< /Title (Notes \\200) /Parent 23 0 R /Prev 24 0 R >>",
+        26: b"-2",
         30: b"<< /intro [3 0 R /FitH 500] /my#20place 41 0 R >>",
         31: b"<< /Kids 34 0 R >>",
         32: b"<< /Limits [(a) (b)] /Names 35 0 R >>",
@@ -281,6 +288,9 @@ def test_the_outline(nav):
         (1, "Web", None, b"https://example.com/c"),
         (1, "Notes •", None, b""),
     ]
+    # An item starts closed when its /Count, through a reference too, is
+    # negative; a positive /Count or none leaves it open.
+    assert nav.closed() == [False, False, True, False, False]
     nav.close()
 
 
@@ -398,9 +408,11 @@ def test_a_document_xelatex_and_hyperref_wrote(nav, tmp_path):
     for _ in range(2):
         subprocess.run(["xelatex", "-interaction=batchmode", "doc.tex"], cwd=tmp_path,
                        capture_output=True, check=True)
-    outline, links = read_document(nav, tmp_path / "doc.pdf", 3)
+    outline, links, closed = read_document(nav, tmp_path / "doc.pdf", 3)
     assert outline == [(0, "Introduction", 0), (1, "Background", 0), (0, "Détails", 1),
                        (1, "More", 1), (0, "End", 2)]
+    # hyperref writes the sections with subsections closed (/Count -1).
+    assert closed == [True, False, True, False, False]
     assert [(page, to) for page, _, to in links] == [
         (0, 0), (0, 0), (0, 1), (0, 1), (0, 2), (0, 1), (0, "https://example.com/paper"), (1, 0)]
     same_as_mupdf(tmp_path, outline, links)
@@ -416,22 +428,24 @@ def test_a_document_libreoffice_wrote(nav, tmp_path):
     subprocess.run(["soffice", f"-env:UserInstallation=file://{tmp_path}/profile", "--headless",
                     "--convert-to", "pdf", "--outdir", str(tmp_path), str(tmp_path / "doc.html")],
                    check=True, capture_output=True, timeout=120)
-    outline, links = read_document(nav, tmp_path / "doc.pdf", 2)
+    outline, links, _closed = read_document(nav, tmp_path / "doc.pdf", 2)
     assert ("A section", 0) in [(title, page) for _, title, page in outline]
     assert [(page, to) for page, _, to in links] == [(0, 1), (0, "https://example.org/x")]
     same_as_mupdf(tmp_path, outline, links)
 
 
-def read_document(nav, path, pages: int) -> tuple[list, list]:
-    """A document's outline, each item's page index, and its links, page by page."""
+def read_document(nav, path, pages: int) -> tuple[list, list, list]:
+    """A document's outline, each item's page index, its links, page by
+    page, and whether each item starts closed."""
     nav.open(path.read_bytes())
     outline = [(level, title, target[3]) for level, title, target, _ in nav.outline()]
+    closed = nav.closed()
     links = []
     for page in range(pages):
         for rect, _, target, uri in nav.links(page):
             links.append((page, rect, uri.decode() if uri else target[3]))
     nav.close()
-    return outline, links
+    return outline, links, closed
 
 
 def same_as_mupdf(tmp_path, outline: list, links: list) -> None:

@@ -57,8 +57,9 @@
 \    DOC-CONTENTS    ( doc -- entries status )
 \    DOC-ENTRY       ( i doc -- level title-a title-u )
 \    DOC-ENTRY-GOES  ( i doc -- key target-a target-u )
+\    DOC-ENTRY-CLOSED? ( i doc -- flag )
 \  A reader adds with DOC-ADD-BLOCK DOC-ADD-CONTAINER DOC-ADD-PART
-\  DOC-ADD-ENTRY and
+\  DOC-ADD-ENTRY DOC-CLOSE-ENTRY and
 \  fills a block's content with DOC-CB-TEXT DOC-CB-LINK DOC-CB-KIND
 \  DOC-CB-FIGURE; it finds a part with DOC-PART-LOC@.
 \  A block's fields are BLK-KEY@ BLK-KIND@ BLK-LEVEL@ BLK-ROWS-BEFORE@ BLK-INSIDE@;
@@ -255,15 +256,17 @@ VARIABLE _DLA-OFF
 56 CONSTANT RDR-SIZE
 
 \ A contents entry: its level, from 0 at the top; its title's and its
-\ target's offsets and lengths among the entries' bytes; and the key of
-\ the block it goes to, or 0 when it goes where its target does.
+\ target's offsets and lengths among the entries' bytes; the key of the
+\ block it goes to, or 0 when it goes where its target does; and whether
+\ it starts closed.
 : _ENT.LEVEL   ( e -- a )        ;
 : _ENT.TITLE   ( e -- a )    8 + ;
 : _ENT.TITLE-U ( e -- a )   16 + ;
 : _ENT.TARGET  ( e -- a )   24 + ;
 : _ENT.TARGET-U ( e -- a )  32 + ;
 : _ENT.KEY     ( e -- a )   40 + ;
-48 CONSTANT _ENT-SIZE
+: _ENT.CLOSED  ( e -- a )   48 + ;
+56 CONSTANT _ENT-SIZE
 
 \ A part: two cells the reader keeps to find it, where its blocks lie
 \ (or will, when it is read), how many there are, and whether it is read.
@@ -829,6 +832,9 @@ VARIABLE _DAN-N
 \  levels contents show, each going to its heading.  A document in parts
 \  has no headings to give before its parts are read, so only its reader
 \  gives its contents.  They are made when first asked for, and kept.
+\  An entry with entries below it shows them until it is closed; a
+\  reader closes one that the document says starts closed, as a PDF's
+\  outline may.
 
 VARIABLE _DCE-N
 
@@ -850,8 +856,14 @@ VARIABLE _DCE-N
     R@ _ENT.KEY !
     DUP R@ _ENT.TITLE-U !  _DOC-D @ _DOC.ESTR-U @ R@ _ENT.TITLE !
     _DOC-D @ _DOC.ESTR-A @ _DOC-D @ _DOC.ESTR-U @ + SWAP DUP _DOC-D @ _DOC.ESTR-U +! MOVE
-    R> _ENT.LEVEL !
+    0 R@ _ENT.CLOSED !  R> _ENT.LEVEL !
     _DCE-N @ 1+ _DOC-D @ _DOC.ENTRIES-N !  -1 ;
+
+\ DOC-CLOSE-ENTRY ( doc -- )
+\   The entry added last starts closed, the entries below it hidden.
+: DOC-CLOSE-ENTRY  ( doc -- )
+    DUP _DOC.ENTRIES-N @ DUP 0> 0= IF 2DROP EXIT THEN
+    1- _ENT-SIZE * SWAP _DOC.ENTRIES-A @ + _ENT.CLOSED -1 SWAP ! ;
 
 VARIABLE _DCH-I
 VARIABLE _DCH-NEW
@@ -901,6 +913,11 @@ VARIABLE _DCH-C
     2DUP _DOC.ENTRIES-N @ 0 MAX U< 0= IF 2DROP 0 0 0 EXIT THEN
     TUCK _DOC-ENTRY@ DUP _ENT.KEY @ SWAP
     DUP _ENT.TARGET @ 3 PICK _DOC.ESTR-A @ + SWAP _ENT.TARGET-U @ 3 ROLL DROP ;
+
+\ DOC-ENTRY-CLOSED? ( i doc -- flag )   Whether entry I starts closed.
+: DOC-ENTRY-CLOSED?  ( i doc -- flag )
+    2DUP _DOC.ENTRIES-N @ 0 MAX U< 0= IF 2DROP 0 EXIT THEN
+    _DOC-ENTRY@ _ENT.CLOSED @ ;
 
 \ ---------------------------------------------------------------------
 \  What a reader of the kept contents touches

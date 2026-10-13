@@ -65,6 +65,7 @@ CREATE PD-DOCS DOC-SIZE 7 + ALLOT  : PD-DOC  PD-DOCS 7 + -8 AND ;
 : PD-CONTENTS  ( -- n status )  PD-DOC DOC-CONTENTS ;
 : PD-ENTRY  ( i -- level ta tu key ga gu )
     DUP >R PD-DOC DOC-ENTRY R> PD-DOC DOC-ENTRY-GOES ;
+: PD-CLOSED  ( i -- flag )  PD-DOC DOC-ENTRY-CLOSED? ;
 """
 
 
@@ -479,9 +480,18 @@ def _contents(reader: Reader) -> list[tuple[int, str, object]]:
     return out
 
 
+def _closed(reader: Reader) -> list[bool]:
+    """Whether each entry of the contents starts closed."""
+
+    count, status = reader.call("PD-CONTENTS")
+    assert status == OK
+    return [reader.call("PD-CLOSED", i) != (0,) for i in range(count)]
+
+
 def test_a_pdf_without_an_outline_has_its_pages_as_contents(reader):
     assert reader.open(pages_pdf()) == OK
     assert _contents(reader) == [(0, f"Page {n + 1}", n) for n in range(4)]
+    assert _closed(reader) == [False] * 4
     assert reader.call("PD-COUNT") == (0,)        # no page was read to make them
     assert reader.close() == 0
 
@@ -496,6 +506,8 @@ def test_a_pdf_outline_is_its_contents(reader, tmp_path):
     assert reader.open((tmp_path / "doc.pdf").read_bytes()) == OK
     assert _contents(reader) == [(0, "Introduction", 0), (1, "Background", 0),
                                  (0, "Détails", 1), (1, "More", 1), (0, "End", 2)]
+    # The sections hyperref closes start closed.
+    assert _closed(reader) == [True, False, True, False, False]
     assert reader.call("PD-COUNT") == (0,)
     assert reader.close() == 0
 

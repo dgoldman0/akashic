@@ -16,7 +16,7 @@ import pytest
 
 import sample_pdf
 from test_pdf_document import (CODE, FIGURE, HEADING, OK, PAGE, PARAGRAPH, Reader,
-                               _anchor, _contents, _links, _place)
+                               _anchor, _closed, _contents, _links, _place)
 
 BULLET, NUMBERED = 2, 3
 
@@ -87,6 +87,8 @@ def test_each_copy_reads_as_the_same_document(reader, name) -> None:
     assert places == {b"the last page": 18, b"the first page": 0}, name
     assert contents == [(0, "A sample PDF", 0), (1, "Lists", 0), (0, "Pictures", 1),
                         (0, "The end", 2)], name
+    # The title's entry starts open, its /Count positive.
+    assert _closed(reader) == [False] * 4, name
     # Each entry shows its heading: "Lists" in the first page's middle, the
     # others a page's first block, so the page's start.
     memory = reader.runtime.memory

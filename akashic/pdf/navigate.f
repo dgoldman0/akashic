@@ -23,6 +23,7 @@
 \   PDF-OUTLINE-COUNT  ( outline -- n )
 \   PDF-OUTLINE-ITEM   ( i outline -- item )
 \   PDF-ITEM-LEVEL     ( item -- level )
+\   PDF-ITEM-CLOSED?   ( item -- flag )
 \   PDF-ITEM-TITLE     ( item outline -- a u )
 \   PDF-ITEM-DEST      ( item outline -- va vu type )
 \   PDF-ITEM-URI       ( item outline -- a u )
@@ -49,9 +50,10 @@
 \
 \  PDF-OUTLINE-READ reads the document's outline (12.3.3) in the order a
 \  reader shows it, each item's children after it: its level, from 0 at
-\  the top; its title, as UTF-8 (pdf/textstr.f); and where it goes, as a
-\  link does, or nowhere.  It reads each item once, keeping a bit for
-\  each of the file's objects, so an outline that loops ends.
+\  the top; its title, as UTF-8 (pdf/textstr.f); where it goes, as a
+\  link does, or nowhere; and whether it starts closed, its children
+\  hidden, as a negative /Count says.  It reads each item once, keeping
+\  a bit for each of the file's objects, so an outline that loops ends.
 \
 \  A destination's value, an address and a title are spans of the
 \  record, valid until it is read again or given back.  What cannot be
@@ -345,12 +347,12 @@ CREATE _PDNV-NEW _PDNV-LINK ALLOT
 
 \ The record: its memory source, its items, and their titles' and
 \ targets' bytes.  An item: its level, its title's offset and length,
-\ and its target.
+\ its target, and whether it starts closed.
 : _PDNV.OMSRC  ( o -- a )        ;
 : _PDNV.OI     ( o -- buf )  8 + ;
 : _PDNV.OT     ( o -- buf ) 32 + ;
 56 CONSTANT PDF-OUTLINE-SIZE
-56 CONSTANT _PDNV-ITEM
+64 CONSTANT _PDNV-ITEM
 
 : PDF-OUTLINE-COUNT  ( outline -- n )  _PDNV.OI PDF-BUF.U @ _PDNV-ITEM / ;
 : PDF-OUTLINE-ITEM   ( i outline -- item )  _PDNV.OI PDF-BUF.A @ SWAP _PDNV-ITEM * + ;
@@ -359,6 +361,7 @@ CREATE _PDNV-NEW _PDNV-LINK ALLOT
     _PDNV.OT PDF-BUF.A @ OVER 8 + @ + SWAP 16 + @ ;
 : PDF-ITEM-DEST      ( item outline -- va vu type )  >R 24 + R> _PDNV.OT _PDNV-DEST@ ;
 : PDF-ITEM-URI       ( item outline -- a u )  >R 24 + R> _PDNV.OT _PDNV-URI@ ;
+: PDF-ITEM-CLOSED?   ( item -- flag )  56 + @ ;
 
 : PDF-OUTLINE-FREE  ( outline -- )
     DUP _PDNV.OMSRC @ ?DUP IF
@@ -395,8 +398,15 @@ VARIABLE _PDNV-SEEN   VARIABLE _PDNV-SEENB    \ a bit for each object, its bytes
     S" Title" 2SWAP PDF-DICT@  0 _PDNV-SB PDF-BUF.U !  _PDNV-SB _PDNV-BYTES+ 0= IF 0 EXIT THEN
     _PDNV-SB PDF-BUF.A @ _PDNV-SB PDF-BUF.U @ _PDNV-OL @ _PDNV.OT _PDNV-MSRC PDF-TEXTSTR+ ;
 
-\ Read item NUM: its title, its target, then its next and its first kid
-\ to read, the kid first: false when memory is refused.
+\ Whether the item in the dictionary DA DU starts closed: its /Count,
+\ through a reference, is negative.
+: _PDNV-CLOSED?  ( da du -- flag )
+    S" Count" 2SWAP PDF-DICT@ PDF-T-INT _PDNV-RESOLVE
+    IF PDF-INT 0< SWAP _PDNV-FREE ELSE 2DROP DROP 0 THEN ;
+
+\ Read item NUM: its title, its target, whether it starts closed, then
+\ its next and its first kid to read, the kid first: false when memory
+\ is refused.
 : _PDNV-OITEM  ( num -- ok? )
     _PDNV-F @ PDF-GET ?DUP IF _PDNV-FAILED _PDNV-FREE _PDNV-STATUS @ 0= EXIT THEN
     DUP PDF-OBJ-VALUE PDF-T-DICT <> IF 2DROP _PDNV-FREE -1 EXIT THEN    ( obj da du )
@@ -405,6 +415,7 @@ VARIABLE _PDNV-SEEN   VARIABLE _PDNV-SEENB    \ a bit for each object, its bytes
     2DUP _PDNV-TITLE 0= IF 2DROP _PDNV-FREE 0 EXIT THEN
     _PDNV-OL @ _PDNV.OT PDF-BUF.U @ _PDNV-ITEMNEW 8 + @ - _PDNV-ITEMNEW 16 + !
     2DUP _PDNV-TARGET _PDNV-TARGET! 0= IF 2DROP _PDNV-FREE 0 EXIT THEN
+    2DUP _PDNV-CLOSED? _PDNV-ITEMNEW 56 + !
     2DUP S" Next" 2SWAP _PDNV-REF@ ?DUP IF
         _PDNV-LEVEL @ _PDNV-TODO+ 0= IF 2DROP _PDNV-FREE 0 EXIT THEN
     THEN

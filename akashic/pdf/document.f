@@ -46,8 +46,9 @@
 \  picture that makes one.
 \
 \  Its contents are its outline, each item at its level, going where it
-\  goes as a link would; a file without an outline has its pages, each
-\  "Page" and its label, going to it ("#p" and its index).
+\  goes as a link would, and closed when the outline says it starts
+\  closed; a file without an outline has its pages, each "Page" and its
+\  label, going to it ("#p" and its index).
 \
 \  A blank row lies before each block but the first page's start, and
 \  none between two list items; a blank row between two quoted blocks
@@ -610,6 +611,9 @@ VARIABLE _PDD-TG   VARIABLE _PDD-TGU   VARIABLE _PDD-TGOWN
         _PDD-D @ DOC-ADD-ENTRY
         _PDD-TGOWN @ IF _PDD-TG @ _PDD-TGU @ _PDD-FREE THEN
         0= IF 0 UNLOOP EXIT THEN
+        I _PDD-OUTLINE PDF-OUTLINE-ITEM PDF-ITEM-CLOSED? IF
+            _PDD-D @ DOC-CLOSE-ENTRY
+        THEN
     LOOP -1 ;
 
 \ The pages as the contents: "Page" and each one's label, going to it.
