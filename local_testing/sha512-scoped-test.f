@@ -42,6 +42,23 @@ CREATE _s512t-expected-empty
     0x63 C, 0xB9 C, 0x31 C, 0xBD C, 0x47 C, 0x41 C, 0x7A C, 0x81 C,
     0xA5 C, 0x38 C, 0x32 C, 0x7A C, 0xF9 C, 0x27 C, 0xDA C, 0x3E C,
 
+\ FIPS 180-2's SHA-384 of "abc" and of nothing.
+CREATE _s512t-expected-384-abc
+    0xCB C, 0x00 C, 0x75 C, 0x3F C, 0x45 C, 0xA3 C, 0x5E C, 0x8B C,
+    0xB5 C, 0xA0 C, 0x3D C, 0x69 C, 0x9A C, 0xC6 C, 0x50 C, 0x07 C,
+    0x27 C, 0x2C C, 0x32 C, 0xAB C, 0x0E C, 0xDE C, 0xD1 C, 0x63 C,
+    0x1A C, 0x8B C, 0x60 C, 0x5A C, 0x43 C, 0xFF C, 0x5B C, 0xED C,
+    0x80 C, 0x86 C, 0x07 C, 0x2B C, 0xA1 C, 0xE7 C, 0xCC C, 0x23 C,
+    0x58 C, 0xBA C, 0xEC C, 0xA1 C, 0x34 C, 0xC8 C, 0x25 C, 0xA7 C,
+
+CREATE _s512t-expected-384-empty
+    0x38 C, 0xB0 C, 0x60 C, 0xA7 C, 0x51 C, 0xAC C, 0x96 C, 0x38 C,
+    0x4C C, 0xD9 C, 0x32 C, 0x7E C, 0xB1 C, 0xB1 C, 0xE3 C, 0x6A C,
+    0x21 C, 0xFD C, 0xB7 C, 0x11 C, 0x14 C, 0xBE C, 0x07 C, 0x43 C,
+    0x4C C, 0x0C C, 0xC7 C, 0xBF C, 0x63 C, 0xF6 C, 0xE1 C, 0xDA C,
+    0x27 C, 0x4E C, 0xDE C, 0xBF C, 0xE7 C, 0x6F C, 0x65 C, 0xFB C,
+    0xD5 C, 0x1A C, 0xD2 C, 0xF1 C, 0x48 C, 0x98 C, 0xB9 C, 0x5B C,
+
 CREATE _s512t-digest SHA512-LEN ALLOT
 CREATE _s512t-copy   SHA512-LEN ALLOT
 
@@ -206,6 +223,43 @@ CREATE _s512t-copy   SHA512-LEN ALLOT
     _s512t-unowned? _s512t-assert
     _s512t-stack ;
 
+\ SHA-384 shares the SHA-512 context and guard, writes exactly its 48
+\ bytes, refuses as SHA512-HASH does, and leaves SHA-512 as it was.
+: _s512t-test-sha384  ( -- )
+    SHA384-LEN 48 = _s512t-assert
+    _s512t-digest SHA512-LEN 0xA5 FILL
+    _s512t-abc 3 _s512t-digest SHA384-HASH
+        SHA512-S-OK = _s512t-assert
+    _s512t-digest _s512t-expected-384-abc SHA384-LEN
+        _s512t-bytes= _s512t-assert
+    _s512t-digest SHA384-LEN + C@ 0xA5 =
+        _s512t-digest SHA512-LEN 1- + C@ 0xA5 = AND _s512t-assert
+    0 0 _s512t-digest SHA384-HASH
+        SHA512-S-OK = _s512t-assert
+    _s512t-digest _s512t-expected-384-empty SHA384-LEN
+        _s512t-bytes= _s512t-assert
+    _s512t-unowned? _s512t-assert
+
+    _s512t-digest SHA512-LEN 0xA5 FILL
+    _s512t-snapshot
+    0 1 _s512t-digest SHA384-HASH
+        SHA512-S-INVALID = _s512t-assert
+    _s512t-abc 3 _s512t-abc 1+ SHA384-HASH
+        SHA512-S-ALIAS = _s512t-assert
+    _s512t-abc 3 _sha512-guard SHA384-HASH
+        SHA512-S-ALIAS = _s512t-assert
+    EXT-MEM-BASE EXT-MEM-SIZE + 1 - 2
+        _s512t-digest SHA384-HASH
+        SHA512-S-RANGE = _s512t-assert
+    _s512t-unchanged? _s512t-assert
+    _s512t-unowned? _s512t-assert
+
+    _s512t-abc 3 _s512t-digest SHA512-HASH
+        SHA512-S-OK = _s512t-assert
+    _s512t-abc? _s512t-assert
+    _s512t-unowned? _s512t-assert
+    _s512t-stack ;
+
 : _S512T-RUN  ( -- )
     0 _s512t-fails !
     0 _s512t-checks !
@@ -217,6 +271,7 @@ CREATE _s512t-copy   SHA512-LEN ALLOT
     _s512t-test-compare
     _s512t-test-rejections
     _s512t-test-reserved-aliases
+    _s512t-test-sha384
     _s512t-stack
     _s512t-fails @ 0= IF
         ." SHA512 SCOPED PASS " _s512t-checks @ . CR
