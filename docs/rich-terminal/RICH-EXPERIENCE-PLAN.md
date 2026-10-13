@@ -1451,7 +1451,8 @@ its destination names. Step 11 is measured. File Explorer's check
 through the physical viewer previews the sample PDF in CELL and rich, and
 the Desktop journey passes after it
 (`local_testing/evidence/pdf-journey-20261012.md`). AES-encrypted PDFs
-open too.
+open too, and both journeys pass again with the AES reader
+(`local_testing/evidence/pdf-aes-regression-20261012.md`).
 
 - Step 11's counts (`local_testing/measure_pdf.py`), for a 100-page PDF of
   249 KB that xelatex writes with hyperref, shown at File Explorer's
