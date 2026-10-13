@@ -16,7 +16,10 @@ sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui as harness  # noqa: E402
 from forth_dependencies import dependency_order  # noqa: E402
-from test_oauth2_p256_key import P256_JWK_DOUBLES  # noqa: E402
+from test_oauth2_p256_key import (  # noqa: E402
+    P256_JWK_DOUBLES,
+    seam_after_modules,
+)
 
 
 PROFILE = "at-token-p256-vertical"
@@ -346,6 +349,12 @@ def _assert_static_contracts() -> None:
         "akashic-entropy",
         "akashic-guard",
     } <= raw_ids & seam_ids
+    # The staged seam declares none of the modules the raw closure loaded.
+    staged_seam_ids = set(
+        _provided_ids(seam_after_modules(seam, SOURCE_ROOT, RAW_MODULES))
+    )
+    assert not staged_seam_ids & raw_ids
+    assert "cv-test-deps" in staged_seam_ids
     assert OWNER_LOAD_STAGES[0][0] == "seam"
     assert all_stages.index(RAW_LOAD_STAGES[-1]) < all_stages.index(
         OWNER_LOAD_STAGES[0]
@@ -675,9 +684,11 @@ def _autoexec() -> str:
 
 
 def _initial_files() -> tuple[tuple[str, bytes], ...]:
-    seam_source = CV_DEPS.read_text(encoding="utf-8")
-    seam_source += "\n"
-    seam_source += P256_JWK_DOUBLES
+    seam_source = seam_after_modules(
+        CV_DEPS.read_text(encoding="utf-8") + "\n" + P256_JWK_DOUBLES,
+        SOURCE_ROOT,
+        RAW_MODULES,
+    )
     owner_files = (
         (
             OWNER_MODULES[0][1],
