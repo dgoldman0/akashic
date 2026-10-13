@@ -31,8 +31,12 @@ EXT_MEM_SIZE = 128 << 20
 NUM_CORES = 1
 LINKED = False
 COMPILE_CHECKPOINT_BYTES = 12 * 1024
-BUNDLE_BYTES = 32 * 1024
-CHECKPOINTS_PER_BUNDLE = 2
+# Each checkpoint is its own stage; a bundle only puts several in one file,
+# so the image's files stay inside MP64FS's 128 entries as the closure grows
+# (3.1 MB in 259 checkpoints made 130 two-checkpoint files).  A bundle stays
+# well under the 120 KB a linked chunk may be.
+BUNDLE_BYTES = 64 * 1024
+CHECKPOINTS_PER_BUNDLE = 4
 # The deterministic fake PDS completes this request in four cooperative XIO
 # polls.  Keep each phase below the unchanged emulator step ceiling without
 # turning the owner's broader poll guard into dozens of empty test stages.
@@ -241,29 +245,9 @@ def _bundle_source(item: auth_read.LoadItem) -> bytes:
 
 
 def _structural_tokens(text: str) -> tuple[str, ...]:
-    """Discard comment/string bodies before recognizing Forth structure."""
-    tokens = harness._forth_line_tokens(text)  # noqa: SLF001
-    structural: list[str] = []
-    in_parenthesis = False
-    in_string = False
-    for token in tokens:
-        if in_parenthesis:
-            if token.endswith(")"):
-                in_parenthesis = False
-            continue
-        if in_string:
-            if token.endswith('"'):
-                in_string = False
-            continue
-        upper = token.upper()
-        if token.startswith("(") or upper == ".(":
-            in_parenthesis = not token.endswith(")")
-            continue
-        if upper in {'S"', '."', 'C"', 'ABORT"'}:
-            in_string = True
-            continue
-        structural.append(token)
-    return tuple(structural)
+    """The line's executable words.  The harness tokenizer already drops
+    parser-word payloads: string bodies, comments and CHAR's character."""
+    return harness._forth_line_tokens(text)  # noqa: SLF001
 
 
 def _safe_top_level_boundary(
@@ -272,10 +256,15 @@ def _safe_top_level_boundary(
     ended_definition: bool,
     closed_conditional: bool,
 ) -> bool:
-    """Recognize declarations and complete evaluator control structures."""
+    """Recognize declarations and complete evaluator control structures.
+
+    A line of top-level data that ends with "," or "C," is complete too:
+    the next unit appends at HERE where it left off, so a large table, such
+    as text/unicode-tables.f's, splits between its lines.
+    """
     if ended_definition or closed_conditional:
         return True
-    if tokens and tokens[-1].upper() == "C,":
+    if tokens and tokens[-1].upper() in {",", "C,"}:
         return True
     upper = {token.upper() for token in tokens}
     return bool(
@@ -383,7 +372,7 @@ def _internal_marker(index: int, part: int) -> str:
 
 
 def _source_bundles() -> tuple[SourceBundle, ...]:
-    """Pair checkpoints so the image remains below the MP64FS entry limit."""
+    """Group checkpoints so the image remains below the MP64FS entry limit."""
     bundles: list[SourceBundle] = []
     for offset in range(0, len(SOURCE_FRAGMENTS), CHECKPOINTS_PER_BUNDLE):
         index = len(bundles) + 1
@@ -547,8 +536,9 @@ def _assert_static() -> None:
     assert MAX_PHASE_STEPS == 180_000_000
     assert LINKED is False
     assert COMPILE_CHECKPOINT_BYTES == 12 * 1024
-    assert BUNDLE_BYTES == 32 * 1024
-    assert CHECKPOINTS_PER_BUNDLE == 2
+    assert BUNDLE_BYTES == 64 * 1024
+    assert CHECKPOINTS_PER_BUNDLE == 4
+    assert BUNDLE_BYTES <= harness.LINK_CHUNK_BYTES
     assert POST_DRIVE_CHECKPOINTS == 2
     assert SOURCE_FRAGMENTS
     assert BUNDLE_FILES
