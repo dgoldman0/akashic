@@ -31,8 +31,12 @@ EXT_MEM_SIZE = 128 << 20
 NUM_CORES = 1
 LINKED = False
 COMPILE_CHECKPOINT_BYTES = 12 * 1024
-BUNDLE_BYTES = 32 * 1024
-CHECKPOINTS_PER_BUNDLE = 2
+# Each checkpoint is its own stage; a bundle only puts several in one file,
+# so the image's files stay inside MP64FS's 128 entries as the closure grows
+# (3.1 MB in 259 checkpoints made 130 two-checkpoint files).  A bundle stays
+# well under the 120 KB a linked chunk may be.
+BUNDLE_BYTES = 64 * 1024
+CHECKPOINTS_PER_BUNDLE = 4
 # The deterministic fake PDS completes this request in four cooperative XIO
 # polls.  Keep each phase below the unchanged emulator step ceiling without
 # turning the owner's broader poll guard into dozens of empty test stages.
@@ -192,6 +196,7 @@ def _module_items() -> tuple[auth_read.LoadItem, ...]:
 
 
 MODULE_ITEMS = _module_items()
+NEEDS_NETWORKING = auth_read.consumes_megapad_networking(MODULE_ITEMS)
 FIXTURE_ITEMS = (
     auth_read.LoadItem(
         name="profile-fixture",
@@ -241,29 +246,9 @@ def _bundle_source(item: auth_read.LoadItem) -> bytes:
 
 
 def _structural_tokens(text: str) -> tuple[str, ...]:
-    """Discard comment/string bodies before recognizing Forth structure."""
-    tokens = harness._forth_line_tokens(text)  # noqa: SLF001
-    structural: list[str] = []
-    in_parenthesis = False
-    in_string = False
-    for token in tokens:
-        if in_parenthesis:
-            if token.endswith(")"):
-                in_parenthesis = False
-            continue
-        if in_string:
-            if token.endswith('"'):
-                in_string = False
-            continue
-        upper = token.upper()
-        if token.startswith("(") or upper == ".(":
-            in_parenthesis = not token.endswith(")")
-            continue
-        if upper in {'S"', '."', 'C"', 'ABORT"'}:
-            in_string = True
-            continue
-        structural.append(token)
-    return tuple(structural)
+    """The line's executable words.  The harness tokenizer already drops
+    parser-word payloads: string bodies, comments and CHAR's character."""
+    return harness._forth_line_tokens(text)  # noqa: SLF001
 
 
 def _safe_top_level_boundary(
@@ -272,10 +257,15 @@ def _safe_top_level_boundary(
     ended_definition: bool,
     closed_conditional: bool,
 ) -> bool:
-    """Recognize declarations and complete evaluator control structures."""
+    """Recognize declarations and complete evaluator control structures.
+
+    A line of top-level data that ends with "," or "C," is complete too:
+    the next unit appends at HERE where it left off, so a large table, such
+    as text/unicode-tables.f's, splits between its lines.
+    """
     if ended_definition or closed_conditional:
         return True
-    if tokens and tokens[-1].upper() == "C,":
+    if tokens and tokens[-1].upper() in {",", "C,"}:
         return True
     upper = {token.upper() for token in tokens}
     return bool(
@@ -383,7 +373,7 @@ def _internal_marker(index: int, part: int) -> str:
 
 
 def _source_bundles() -> tuple[SourceBundle, ...]:
-    """Pair checkpoints so the image remains below the MP64FS entry limit."""
+    """Group checkpoints so the image remains below the MP64FS entry limit."""
     bundles: list[SourceBundle] = []
     for offset in range(0, len(SOURCE_FRAGMENTS), CHECKPOINTS_PER_BUNDLE):
         index = len(bundles) + 1
@@ -520,6 +510,7 @@ def _forth_code(source: str) -> str:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     provider = PROVIDER.read_text(encoding="utf-8")
     interface = INTERFACE.read_text(encoding="utf-8")
     streams = STREAMS.read_text(encoding="utf-8")
@@ -547,8 +538,9 @@ def _assert_static() -> None:
     assert MAX_PHASE_STEPS == 180_000_000
     assert LINKED is False
     assert COMPILE_CHECKPOINT_BYTES == 12 * 1024
-    assert BUNDLE_BYTES == 32 * 1024
-    assert CHECKPOINTS_PER_BUNDLE == 2
+    assert BUNDLE_BYTES == 64 * 1024
+    assert CHECKPOINTS_PER_BUNDLE == 4
+    assert BUNDLE_BYTES <= harness.LINK_CHUNK_BYTES
     assert POST_DRIVE_CHECKPOINTS == 2
     assert SOURCE_FRAGMENTS
     assert BUNDLE_FILES
@@ -696,6 +688,8 @@ def _autoexec() -> str:
         f'." {BOOT_MARKER}" CR TX-FLUSH\n',
         "KEY DROP\n",
     ]
+    if NEEDS_NETWORKING:
+        lines[2:2] = auth_read.networking_stage_lines()
     for index, (guest, _) in enumerate(BUNDLE_FILES, start=1):
         lines.extend(
             (
@@ -732,12 +726,18 @@ def _run_vertical(timeout: float) -> int:
         failure_markers=FAILURE_MARKERS,
         initial_files=_initial_files(),
         linked=LINKED,
+        megapad_networking=NEEDS_NETWORKING,
         include_large_sample=False,
         total_sectors=8192,
     )
     image_path = harness.build_image(PROFILE, IMAGE)
     profile = harness.PROFILES[PROFILE]
     stages = (
+        *(
+            ((auth_read.NETWORKING_STAGE, auth_read.NETWORKING_MARKER),)
+            if NEEDS_NETWORKING
+            else ()
+        ),
         ("boot", BOOT_MARKER),
         *(stage for bundle in BUNDLES for stage in bundle.stages),
         *((name, marker) for name, _, marker in RUNTIME_STAGES),
@@ -758,7 +758,7 @@ def _run_vertical(timeout: float) -> int:
                 machine.clear_output()
                 machine.send_text("x")
             report = machine.run(
-                max_steps=MAX_PHASE_STEPS,
+                max_steps=auth_read.stage_steps(stage_name, MAX_PHASE_STEPS),
                 wall_timeout_s=timeout,
                 until_text=marker,
                 text_scope="raw",

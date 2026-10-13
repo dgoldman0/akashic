@@ -75,6 +75,48 @@ class LoadItem:
     remove_requires: bool = True
 
 
+# A staged image's roots are empty, so the harness cannot see that a staged
+# module consumes KDOS networking.  Such a run declares it on its profile and
+# loads MegaPad's networking.f as its own stage right after ENTER-USERLAND,
+# since networking.f alone takes much of a stage's step ceiling.
+NETWORKING_STAGE = "megapad-networking"
+NETWORKING_MARKER = "AT STAGED NETWORKING READY"
+# That stage boots KDOS too: with MegaPad 888f3af3 it took 258.4 million
+# steps (2026-10-13), past the 180 million every other stage keeps, so it
+# has a ceiling of its own.
+NETWORKING_STAGE_STEPS = 300_000_000
+
+
+def stage_steps(stage_name: str, default: int) -> int:
+    """A stage's step ceiling: the networking stage's, or DEFAULT."""
+    if stage_name == NETWORKING_STAGE:
+        return NETWORKING_STAGE_STEPS
+    return default
+
+
+def consumes_megapad_networking(items: tuple[LoadItem, ...]) -> bool:
+    return any(
+        item.source is not None
+        and item.source.is_relative_to(SOURCE_ROOT)
+        and item.source.relative_to(SOURCE_ROOT).as_posix()
+        in harness.MEGAPAD_NETWORKING_CONSUMERS
+        for item in items
+    )
+
+
+def networking_stage_lines() -> tuple[str, ...]:
+    """The autoexec lines that load networking.f as its own stage."""
+    return (
+        "REQUIRE networking.f\n",
+        (
+            'DEPTH IF ." AT STAGED NETWORKING LOAD STACK FAIL" CR '
+            "TX-FLUSH THEN\n"
+        ),
+        f'." {NETWORKING_MARKER}" CR TX-FLUSH\n',
+        "KEY DROP\n",
+    )
+
+
 def _module_load_items() -> tuple[LoadItem, ...]:
     items: list[LoadItem] = []
     sequence = 0
@@ -114,6 +156,7 @@ def _module_load_items() -> tuple[LoadItem, ...]:
 
 
 MODULE_LOAD_ITEMS = _module_load_items()
+NEEDS_NETWORKING = consumes_megapad_networking(MODULE_LOAD_ITEMS)
 
 FIXTURE_LOAD_ITEMS = (
     LoadItem(
@@ -262,7 +305,61 @@ def _assert_physical_comments(path: Path, source: str) -> None:
             )
 
 
+# KDOS finds a word whatever its case, so a fixture name that matches an
+# earlier one in any case hides the earlier word from all code compiled
+# after it.  The feed fixture's stage word _ATFV-EXCHANGE once hid its
+# variable _atfv-exchange, and its release then ran the whole exchange.
+DEFINING_WORDS = frozenset(
+    {
+        ":",
+        "VARIABLE",
+        "2VARIABLE",
+        "CREATE",
+        "CONSTANT",
+        "2CONSTANT",
+        "VALUE",
+        "DEFER",
+        "XBUF",
+        "BUFFER:",
+    }
+)
+
+
+def defined_names(source: str) -> tuple[str, ...]:
+    """The names SOURCE defines at top level, in order."""
+    names: list[str] = []
+    compiling = False
+    for line in source.splitlines():
+        tokens = harness._forth_line_tokens(line)  # noqa: SLF001
+        for word, name in zip(tokens, (*tokens[1:], None)):
+            upper = word.upper()
+            if upper == ";":
+                compiling = False
+            elif not compiling and upper in DEFINING_WORDS and name:
+                names.append(name)
+                compiling = upper == ":"
+    return tuple(names)
+
+
+def assert_distinct_fixture_names(items: tuple[LoadItem, ...]) -> None:
+    """No two fixture definitions may share a name in any case."""
+    seen: dict[str, str] = {}
+    for item in items:
+        source = (
+            item.inline
+            if item.inline is not None
+            else item.source.read_text(encoding="utf-8")
+        )
+        for name in defined_names(source):
+            folded = name.casefold()
+            assert folded not in seen, (
+                f"{item.name} defines {name}, which hides {seen[folded]}"
+            )
+            seen[folded] = f"{name} from {item.name}"
+
+
 def _assert_static_contracts() -> None:
+    assert_distinct_fixture_names(FIXTURE_LOAD_ITEMS)
     fixture = CONTRACT.read_text(encoding="utf-8")
     xrpc = XRPC.read_text(encoding="utf-8")
     request = HTTP_REQUEST.read_text(encoding="utf-8")
@@ -496,6 +593,8 @@ def _autoexec() -> str:
         "\\ autoexec.f - durable authenticated AT XRPC read\n",
         "ENTER-USERLAND\n",
     ]
+    if NEEDS_NETWORKING:
+        lines.extend(networking_stage_lines())
     for item in (*MODULE_LOAD_ITEMS, *FIXTURE_LOAD_ITEMS):
         lines.extend(
             (
@@ -539,6 +638,7 @@ def _run_vertical(timeout: float) -> int:
         failure_markers=FAILURE_MARKERS,
         initial_files=_initial_files(),
         linked=False,
+        megapad_networking=NEEDS_NETWORKING,
         include_large_sample=False,
         total_sectors=8192,
     )
@@ -546,6 +646,18 @@ def _run_vertical(timeout: float) -> int:
     profile = harness.PROFILES[PROFILE]
     reports: list[tuple[str, object]] = []
     stages = (
+        *(
+            (
+                (
+                    NETWORKING_STAGE,
+                    "networking.f",
+                    NETWORKING_MARKER,
+                    NETWORKING_STAGE_STEPS,
+                ),
+            )
+            if NEEDS_NETWORKING
+            else ()
+        ),
         *(
             (item.name, item.guest, item.marker, MAX_PHASE_STEPS)
             for item in (*MODULE_LOAD_ITEMS, *FIXTURE_LOAD_ITEMS)

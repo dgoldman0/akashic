@@ -117,7 +117,14 @@ def _assert_static_contracts() -> None:
     )
     assert "TLS-SNI-LEN @ 64 >" not in megapad
     assert "TLS-SNI-HOST-STORAGE XBUF TLS-SNI-HOST" in megapad
-    assert "1280 CONSTANT TLS-CH-BUF-CAPACITY" in megapad
+    # The ClientHello buffer holds a full 253-byte SNI name within the 1280
+    # bytes this test was qualified with; MegaPad may grow it, as it did to
+    # 1536 for protocol-neutral ALPN (MegaPad 0df60afb).
+    capacity = re.search(
+        r"(?m)^(\d+) CONSTANT TLS-CH-BUF-CAPACITY$", megapad
+    )
+    assert capacity is not None
+    assert int(capacity.group(1)) >= 1280
     bound = (
         "DUP _TBCH-FIXED @ + 9 + "
         "TLS-CH-BUF-CAPACITY > IF"
@@ -391,11 +398,7 @@ def _run_lifecycle(timeout: float) -> int:
         lifecycle_failures = failures(machine)
         output.extend(("\n--- lifecycle ---\n", raw))
         ok = PASS_MARKER in raw and not lifecycle_failures
-        root = harness.OUTPUT_ROOT / f"smoke-{profile_name}"
-        root.with_suffix(".raw.txt").write_text(
-            "".join(output),
-            encoding="utf-8",
-        )
+        harness.write_raw_capture(profile_name, "".join(output))
         print(f"Staged network-hostname-capacity: {'PASS' if ok else 'FAIL'}")
         for stage_name, report in reports:
             print(

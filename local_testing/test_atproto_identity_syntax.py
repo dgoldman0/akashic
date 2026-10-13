@@ -412,11 +412,7 @@ def _run_lifecycle(timeout: float) -> int:
         lifecycle_failures = failures(machine)
         output.extend(("\n--- lifecycle ---\n", raw))
         ok = PASS_MARKER in raw and not lifecycle_failures
-        root = harness.OUTPUT_ROOT / f"smoke-{profile_name}"
-        root.with_suffix(".raw.txt").write_text(
-            "".join(output),
-            encoding="utf-8",
-        )
+        harness.write_raw_capture(profile_name, "".join(output))
         print(f"Staged atproto-identity-syntax: {'PASS' if ok else 'FAIL'}")
         for stage_name, report in reports:
             print(

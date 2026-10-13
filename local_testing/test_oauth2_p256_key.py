@@ -373,6 +373,41 @@ VARIABLE _O2PKD-DPOP-PUBLIC-UNCHANGED
 """
 
 
+_PROVIDED_LINE = re.compile(r"(?i)^[ \t]*PROVIDED[ \t]+(\S+)[ \t]*$")
+
+
+def seam_after_modules(
+    seam: str, source_root: Path, modules: tuple[str, ...]
+) -> str:
+    """SEAM without its later PROVIDED lines for MODULES' own names.
+
+    KDOS lets a file's first PROVIDED decide whether REQUIRE loads it; a
+    later PROVIDED of a module already loaded changes nothing.  A seam
+    loaded after the modules it stands beside drops those lines, so the
+    image declares each module once, as the harness requires.
+    """
+
+    loaded = {
+        match.group(1)
+        for module in modules
+        for match in re.finditer(
+            r"(?mi)^[ \t]*PROVIDED[ \t]+(\S+)",
+            (source_root / module).read_text(encoding="utf-8"),
+        )
+    }
+    kept: list[str] = []
+    first = True
+    for line in seam.splitlines(keepends=True):
+        match = _PROVIDED_LINE.match(line.rstrip("\r\n"))
+        if match is not None:
+            if first:
+                first = False
+            elif match.group(1) in loaded:
+                continue
+        kept.append(line)
+    return "".join(kept)
+
+
 def _word_body(source: str, name: str) -> str:
     match = re.search(
         rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"

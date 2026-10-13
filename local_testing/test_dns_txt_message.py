@@ -637,11 +637,7 @@ def _run_guest(timeout: float) -> int:
         lifecycle_failures = failures(machine)
         output.extend(("\n--- lifecycle ---\n", raw))
         ok = PASS_MARKER in raw and not lifecycle_failures
-        root = harness.OUTPUT_ROOT / f"smoke-{PROFILE}"
-        root.with_suffix(".raw.txt").write_text(
-            "".join(output),
-            encoding="utf-8",
-        )
+        harness.write_raw_capture(PROFILE, "".join(output))
         print(
             f"Staged dns-txt-message-contracts: "
             f"{'PASS' if ok else 'FAIL'}"

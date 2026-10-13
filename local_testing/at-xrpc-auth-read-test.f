@@ -685,8 +685,9 @@ VARIABLE _atxr-r-resolver-context
         _atxr-request-contains? _atxr-assert
     S" Content-Length: 2"
         _atxr-request-contains? _atxr-assert
+    \ The request ends with the two body bytes.
     _atxr-request HREQ.BUFFER @
-    _atxr-request HREQ.LENGTH @ 2 -
+    _atxr-request HREQ.LENGTH @ + 2 - 2
     S" {}" COMPARE 0= _atxr-assert
 
     \ Leave the original authenticated query sealed for the buffered-read

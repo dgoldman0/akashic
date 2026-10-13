@@ -113,6 +113,7 @@ def _module_items() -> tuple[auth_read.LoadItem, ...]:
 
 
 MODULE_ITEMS = _module_items()
+NEEDS_NETWORKING = auth_read.consumes_megapad_networking(MODULE_ITEMS)
 FIXTURE_ITEMS = (
     auth_read.LoadItem(
         name="profile-fixture",
@@ -290,6 +291,7 @@ def _forth_code(source: str) -> str:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     feed = FEED_CONNECTOR.read_text(encoding="utf-8")
     post = POST_CONNECTOR.read_text(encoding="utf-8")
     fixture = CONTRACT.read_text(encoding="utf-8")
@@ -422,6 +424,8 @@ def _autoexec() -> str:
         f'." {BOOT_MARKER}" CR TX-FLUSH\n',
         "KEY DROP\n",
     ]
+    if NEEDS_NETWORKING:
+        lines[2:2] = auth_read.networking_stage_lines()
     for index, (guest, _) in enumerate(BUNDLE_FILES, start=1):
         lines.extend(
             (
@@ -458,12 +462,18 @@ def _run_vertical(timeout: float) -> int:
         failure_markers=FAILURE_MARKERS,
         initial_files=_initial_files(),
         linked=LINKED,
+        megapad_networking=NEEDS_NETWORKING,
         include_large_sample=False,
         total_sectors=8192,
     )
     image_path = harness.build_image(PROFILE, IMAGE)
     profile = harness.PROFILES[PROFILE]
     stages = (
+        *(
+            ((auth_read.NETWORKING_STAGE, auth_read.NETWORKING_MARKER),)
+            if NEEDS_NETWORKING
+            else ()
+        ),
         ("boot", BOOT_MARKER),
         *(
             (f"bundle-{index:02d}", _bundle_marker(index))
@@ -487,7 +497,7 @@ def _run_vertical(timeout: float) -> int:
                 machine.clear_output()
                 machine.send_text("x")
             report = machine.run(
-                max_steps=MAX_PHASE_STEPS,
+                max_steps=auth_read.stage_steps(stage_name, MAX_PHASE_STEPS),
                 wall_timeout_s=timeout,
                 until_text=marker,
                 text_scope="raw",

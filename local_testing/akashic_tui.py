@@ -236,6 +236,19 @@ FORTH_SPLIT_STACK_EFFECT_RE = re.compile(
 CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
 
+def write_raw_capture(name: str, text: str) -> Path:
+    """Write a staged run's raw transcript beside the smoke captures.
+
+    The output folder is ignored by git, so a fresh checkout has none until
+    something makes it; snapshot captures make their own, and so does this.
+    """
+
+    path = (OUTPUT_ROOT / f"smoke-{name}").with_suffix(".raw.txt")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def _megapad_root() -> Path:
     configured = os.environ.get("MEGAPAD_ROOT")
     root = Path(configured).expanduser() if configured else DEFAULT_MEGAPAD_ROOT
@@ -440,6 +453,10 @@ class Profile:
     ready_markers: tuple[str, ...]
     stable_markers: tuple[str, ...]
     linked: bool = False
+    # A profile that stages its Akashic modules as initial files, not
+    # roots, declares here whether they consume KDOS networking; the image
+    # then carries MegaPad's networking.f, required after ENTER-USERLAND.
+    megapad_networking: bool = False
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
     initial_files: tuple[tuple[str, bytes], ...] = ()
@@ -27264,7 +27281,9 @@ def build_image(
         else dependency_closure(composition_roots)
     )
     akashic_modules = modules
-    requires_networking = _requires_megapad_networking(modules)
+    requires_networking = (
+        profile.megapad_networking or _requires_megapad_networking(modules)
+    )
     requires_rich_terminal = _requires_megapad_rich_terminal(modules)
     if requires_rich_terminal != (profile.rich_terminal is not None):
         raise RuntimeError(

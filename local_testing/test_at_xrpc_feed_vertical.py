@@ -126,6 +126,7 @@ def _module_items() -> tuple[auth_read.LoadItem, ...]:
 
 
 MODULE_ITEMS = _module_items()
+NEEDS_NETWORKING = auth_read.consumes_megapad_networking(MODULE_ITEMS)
 
 
 @dataclass(frozen=True)
@@ -329,6 +330,7 @@ def _requires(path: Path) -> list[str]:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     target = FEED_TARGET.read_text(encoding="utf-8")
     connector = FEED_CONNECTOR.read_text(encoding="utf-8")
     presenter = FEED_PRESENT.read_text(encoding="utf-8")
@@ -457,6 +459,8 @@ def _autoexec() -> str:
         "\\ autoexec.f - authenticated PDS feed to Streams vertical\n",
         "ENTER-USERLAND\n",
     ]
+    if NEEDS_NETWORKING:
+        lines[2:2] = auth_read.networking_stage_lines()
     for item in (*MODULE_BUNDLES, *FIXTURE_ITEMS):
         lines.extend(
             (
@@ -488,12 +492,18 @@ def _run_vertical(timeout: float) -> int:
         failure_markers=FAILURE_MARKERS,
         initial_files=_initial_files(),
         linked=False,
+        megapad_networking=NEEDS_NETWORKING,
         include_large_sample=False,
         total_sectors=8192,
     )
     image_path = harness.build_image(PROFILE, IMAGE)
     profile = harness.PROFILES[PROFILE]
     stages = (
+        *(
+            ((auth_read.NETWORKING_STAGE, auth_read.NETWORKING_MARKER),)
+            if NEEDS_NETWORKING
+            else ()
+        ),
         *(stage for bundle in MODULE_BUNDLES for stage in bundle.stages),
         *((item.name, item.marker) for item in FIXTURE_ITEMS),
         *((name, marker) for name, _, marker in RUNTIME_STAGES),
@@ -514,7 +524,7 @@ def _run_vertical(timeout: float) -> int:
                 machine.clear_output()
                 machine.send_text("x")
             report = machine.run(
-                max_steps=MAX_PHASE_STEPS,
+                max_steps=auth_read.stage_steps(stage_name, MAX_PHASE_STEPS),
                 wall_timeout_s=timeout,
                 until_text=marker,
                 text_scope="raw",
