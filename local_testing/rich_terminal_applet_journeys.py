@@ -85,6 +85,21 @@ FEXP_DOCUMENT_TOP_LINK = "the top"
 FEXP_DOCUMENT_FILE_LINK = "Notes"
 FEXP_LINKED_NAME = "notes.md"
 FEXP_LINKED_TEXT = "Read the example and try it."
+# The canonical image's sample PDF (sample_pdf.py), which File Explorer
+# previews as a document read a page at a time: its first page's title, its
+# link to its last page and that page's code, its outline as the contents'
+# list shows it (each title two cells in for each level), the entry that
+# shows its second page, the facts CELL shows beneath that page's JPEG
+# photograph while the rich side shows it, and the copy encrypted with the
+# empty password.
+FEXP_PDF = "sample.pdf"
+FEXP_PDF_ENCRYPTED = "encrypted.pdf"
+FEXP_PDF_TITLE = "A sample PDF"
+FEXP_PDF_LAST_LINK = "the last page"
+FEXP_PDF_CODE = "Some code, in a fixed-pitch font:"
+FEXP_PDF_OUTLINE = ("A sample PDF", "  Lists", "Pictures", "The end")
+FEXP_PDF_PICTURES = "Pictures"
+FEXP_PDF_PHOTO_FACTS = "JPEG, 160 \u00d7 100"
 # Wheel detents a scroll step sends; the document view scrolls three rows
 # a detent.
 FEXP_DOCUMENT_DETENTS = 3
@@ -708,8 +723,14 @@ class FexpAloneJourney(_AppletJourney):
     paints only the part the document shows.  A FOLLOW on the last block's
     link to the first heading puts the heading back at the top, and a
     FOLLOW on its link to notes.md selects that file and previews it as a
-    document too.  sunset.qoi, selected once more, shows
-    rich again.  An OPEN on a directory's row lists that
+    document too.  sample.pdf's preview is a DOCUMENT from its first
+    page's start; a FOLLOW on its link to the last page shows that page;
+    the key c shows its outline as a LIST in the document's place, and an
+    OPEN on its Pictures entry shows the second page from its start, its
+    JPEG photograph and its picture of samples each shown rich as an IMAGE,
+    with CELL beneath saying what the photograph is.  encrypted.pdf, read
+    with the empty password, shows the same title.  sunset.qoi, selected
+    once more, shows rich again.  An OPEN on a directory's row lists that
     directory.  An EXPAND on the
     tree's root shows its entries, a SELECT on one of its directories lists
     that directory, and a COLLAPSE on the root hides them, which moves the
@@ -748,6 +769,15 @@ class FexpAloneJourney(_AppletJourney):
         DOCUMENT_TOP,
         LINKED_DOCUMENT,
         DOCUMENT_DETAILS,
+        PDF_SELECTED,
+        PDF_PREVIEWED,
+        PDF_LAST_PAGE,
+        PDF_CONTENTS,
+        PDF_PICTURES,
+        PDF_DETAILS,
+        ENCRYPTED_SELECTED,
+        ENCRYPTED_PREVIEWED,
+        ENCRYPTED_DETAILS,
         PICTURE_RESELECTED,
         PICTURE_PREVIEWED_LAST,
         DETAILS_SHOWN,
@@ -757,9 +787,11 @@ class FexpAloneJourney(_AppletJourney):
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(25)
+    ) = range(34)
     _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
                         LINKED_DOCUMENT)
+    _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_PICTURES,
+                   ENCRYPTED_PREVIEWED)
     # Each Preview tab stage: what it shows, and the Details stage after it.
     _PREVIEWS = {
         PICTURE_PREVIEWED: (True, PICTURE_DETAILS),
@@ -1103,6 +1135,121 @@ class FexpAloneJourney(_AppletJourney):
                           document.value(link.item_key, link.scalar_offset),
                           self.LINKED_DOCUMENT, offer, generation, sender)
 
+    @staticmethod
+    def _page_shown(document, label: str) -> bool:
+        """Whether the root shows a row of the start of the page LABEL."""
+
+        height = document.bottom - document.top
+        return any(
+            placed.block.kind is BlockKind.PAGE
+            and placed.block.text == label
+            and placed.top < height
+            and placed.top + placed.rows > 0
+            for placed in document.placed
+        )
+
+    def _pdf(self, offer, generation, projection, sender) -> JourneyProgress:
+        """sample.pdf's preview: a DOCUMENT from its first page's start, whose
+        link to the last page shows that page; the key c shows its outline
+        as a LIST in the document's place, whose Pictures entry shows the
+        second page from its start with its two pictures shown rich; and
+        encrypted.pdf, read with the empty password, shows the same title."""
+
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+        if not selected:
+            return self._wait("the Preview tab selected")
+        document = self._document_claim(projection, bounds)
+        if self.stage == self.PDF_CONTENTS:
+            lists = self._content_views(projection, ItemViewRole.LIST)
+            outline = lists[0] if len(lists) == 1 else None
+            if outline is None or tuple(
+                item.fields[0].text for item in outline.content.items
+            ) != FEXP_PDF_OUTLINE:
+                return self._wait(f"{FEXP_PDF}'s outline listed")
+            if document is not None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF}'s outline did not take the document's place"
+                )
+            _require_cell_text_in(offer, FEXP_PDF_PICTURES, bounds, _WHERE)
+            entry = outline.named(FEXP_PDF_PICTURES)
+            return self._step("fexp-pdf-outline-listed", "item_open",
+                              outline.value(entry.item_key), self.PDF_PICTURES,
+                              offer, generation, sender)
+        name = FEXP_PDF_ENCRYPTED if self.stage == self.ENCRYPTED_PREVIEWED else FEXP_PDF
+        if document is None:
+            return self._wait(f"{name} previewed as a document")
+        top = document.top_block
+
+        def at_start(label: str) -> bool:
+            return (
+                top is not None
+                and top.kind is BlockKind.PAGE
+                and top.text == label
+                and document.content.viewport_row == 0
+            )
+
+        if self.stage in (self.PDF_PREVIEWED, self.ENCRYPTED_PREVIEWED):
+            title = document.block_with(FEXP_PDF_TITLE)
+            if not at_start("1") or title is None:
+                return self._wait(f"{name} shown from its first page's start")
+            if title.kind is not BlockKind.HEADING or title.level != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{name}'s title is not a heading of level 1"
+                )
+            _require_cell_text_in(offer, FEXP_PDF_TITLE, bounds, _WHERE)
+            if self.stage == self.ENCRYPTED_PREVIEWED:
+                details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+                return self._step("fexp-pdf-encrypted-shown", "activate_tab",
+                                  _tab_value(details), self.ENCRYPTED_DETAILS,
+                                  offer, generation, sender)
+            block = document.block_with(FEXP_PDF_LAST_LINK)
+            link = None if block is None else document.link(block, FEXP_PDF_LAST_LINK)
+            if link is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF} shows no link to its last page"
+                )
+            return self._step("fexp-pdf-shown", "document_follow",
+                              document.value(link.item_key, link.scalar_offset),
+                              self.PDF_LAST_PAGE, offer, generation, sender)
+        if self.stage == self.PDF_LAST_PAGE:
+            if (
+                at_start("1")
+                or document.block_with(FEXP_PDF_CODE) is None
+                or not self._page_shown(document, "3")
+            ):
+                return self._wait(f"{FEXP_PDF}'s last page shown")
+            _require_cell_text_in(offer, FEXP_PDF_CODE, bounds, _WHERE)
+            # The follow focused the preview, so the key reaches it.
+            return self._step("fexp-pdf-link-followed", "send_text", "c",
+                              self.PDF_CONTENTS, offer, generation, sender)
+        if not at_start("2"):
+            return self._wait(f"{FEXP_PDF}'s second page shown from its start")
+        figures = [figure for figure in document.figures if figure[2] is not None]
+        if len(figures) != 2:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PDF}'s second page shows {len(figures)} pictures from its start"
+            )
+        for key, _whole, _shown in figures:
+            if not any(
+                claim.figure == (document.identity, key)
+                for claim in projection.semantic_image_claims
+            ):
+                return self._wait(f"{FEXP_PDF}'s pictures shown rich")
+        # The photograph is the first, wholly in view.
+        _key, whole, shown = figures[0]
+        if whole != shown:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PDF}'s photograph is not wholly in view at its page's start"
+            )
+        _require_picture_facts_in(
+            offer, FEXP_PDF_PHOTO_FACTS,
+            (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+        )
+        details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+        return self._step("fexp-pdf-pictures-shown", "activate_tab", _tab_value(details),
+                          self.PDF_DETAILS, offer, generation, sender)
+
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
@@ -1128,6 +1275,8 @@ class FexpAloneJourney(_AppletJourney):
             return self._preview(offer, generation, projection, sender)
         if self.stage in self._DOCUMENT_STAGES:
             return self._document(offer, generation, projection, sender)
+        if self.stage in self._PDF_STAGES:
+            return self._pdf(offer, generation, projection, sender)
         table, tree = self._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")
@@ -1181,9 +1330,13 @@ class FexpAloneJourney(_AppletJourney):
                               table.value(row.item_key), self.PICTURE_SELECTED,
                               offer, generation, sender)
         if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
-                          self.DOCUMENT_SELECTED, self.PICTURE_RESELECTED):
+                          self.DOCUMENT_SELECTED, self.PDF_SELECTED,
+                          self.ENCRYPTED_SELECTED, self.PICTURE_RESELECTED):
             name = {self.TEXT_SELECTED: FEXP_FILE,
-                    self.DOCUMENT_SELECTED: FEXP_DOCUMENT}.get(self.stage, FEXPLORER_PICTURE)
+                    self.DOCUMENT_SELECTED: FEXP_DOCUMENT,
+                    self.PDF_SELECTED: FEXP_PDF,
+                    self.ENCRYPTED_SELECTED: FEXP_PDF_ENCRYPTED}.get(
+                        self.stage, FEXPLORER_PICTURE)
             selected = table.selected
             if selected is None or selected.fields[0].text != name:
                 return self._wait(f"{name}'s row selected")
@@ -1195,11 +1348,14 @@ class FexpAloneJourney(_AppletJourney):
             preview = {self.PICTURE_SELECTED: self.PICTURE_PREVIEWED,
                        self.TEXT_SELECTED: self.TEXT_PREVIEWED,
                        self.DOCUMENT_SELECTED: self.DOCUMENT_PREVIEWED,
+                       self.PDF_SELECTED: self.PDF_PREVIEWED,
+                       self.ENCRYPTED_SELECTED: self.ENCRYPTED_PREVIEWED,
                        self.PICTURE_RESELECTED: self.PICTURE_PREVIEWED_LAST}[self.stage]
             return self._step(f"fexp-selected-{self.stage}", "activate_tab",
                               _tab_value(tab), preview, offer, generation, sender)
         if self.stage in (self.PICTURE_DETAILS, self.PICTURE_DETAILS_AGAIN,
-                          self.TEXT_DETAILS, self.DOCUMENT_DETAILS, self.DETAILS_SHOWN):
+                          self.TEXT_DETAILS, self.DOCUMENT_DETAILS, self.PDF_DETAILS,
+                          self.ENCRYPTED_DETAILS, self.DETAILS_SHOWN):
             if _image_claims_in(projection, bounds):
                 return self._wait("the picture gone with the Preview tab")
             if self._document_claim(projection, bounds) is not None:
@@ -1214,7 +1370,9 @@ class FexpAloneJourney(_AppletJourney):
             follows = {
                 self.PICTURE_DETAILS_AGAIN: (FEXP_FILE, self.TEXT_SELECTED),
                 self.TEXT_DETAILS: (FEXP_DOCUMENT, self.DOCUMENT_SELECTED),
-                self.DOCUMENT_DETAILS: (FEXPLORER_PICTURE, self.PICTURE_RESELECTED),
+                self.DOCUMENT_DETAILS: (FEXP_PDF, self.PDF_SELECTED),
+                self.PDF_DETAILS: (FEXP_PDF_ENCRYPTED, self.ENCRYPTED_SELECTED),
+                self.ENCRYPTED_DETAILS: (FEXPLORER_PICTURE, self.PICTURE_RESELECTED),
             }
             if self.stage in follows:
                 name, target = follows[self.stage]
