@@ -22,10 +22,13 @@ from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 
 PROFILE_NAME = "semantic-collections-byte-oracle"
 ORACLE_PATH = "local_testing/uscol-byte-oracle.f"
-# Loading the modules and the oracle takes about 120.8 million steps (the
-# UTF-8 text-as-shown words added 1.85 million); the checks add 0.4 million.
-SMOKE_MAX_STEPS = 130_000_000
-SMOKE_TIMEOUT_SECONDS = 12.0
+# Loading the modules and the oracle and running the checks takes about
+# 131.6 million steps since the DOC1 document family and its PAGE block.
+# The same work took 12.2 s of wall time on 2026-10-12 and 22.7 s on
+# 2026-10-13, on the same machine at different clock speeds; the timeout
+# covers the whole step budget at the slower speed with room to spare.
+SMOKE_MAX_STEPS = 140_000_000
+SMOKE_TIMEOUT_SECONDS = 40.0
 
 
 _MODULE_TEXT = MODULE.read_text(encoding="utf-8")
