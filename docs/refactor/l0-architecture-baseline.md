@@ -1831,3 +1831,93 @@ Independent globals stay at 10,096.
 | mutable-state | `1fbc435687ec866df62f3517428b280f3b2bbfb695159e641fa71c3a4ad8ba5e` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Scheduled run document reviewed ratchet update
+
+A scheduled Agent run can read one exact Library document. These sections
+record that move and the next one: both reached the reviewed policy on
+`feature/daybook-scheduler` without a section, and the branch's landing on
+main records them. Three modules join the graph:
+
+- `interop/resource-owners.f`, the directory of resource owners Desk keeps
+  and applets publish their owners in, requires
+  `interop/qualified-locator.f`, `interop/resource-acquisition.f`,
+  `runtime/instance.f`, `runtime/registry.f` and `utils/record-table.f`.
+- `tui/applets/agent/run-grant.f`, the one-use grants for a run's requests,
+  moves out of the Agent's tool gateway so the context read shares them.
+  It requires `concurrency/guard.f`, `interop/request-bus.f` and the
+  Agent's `mandate-run.f`.
+- `tui/applets/agent/context-read.f`, which reads a run's document as
+  itself, requires `interop/resource-client.f`, `math/sha3.f`,
+  `text/utf8.f` and `run-grant.f`.
+
+Desk and Library's controller require `resource-owners.f`. Library also
+requires `interop/endpoint.f`, `interop/qualified-locator.f` and its
+projection adapter, and its controller requires
+`interop/service-endpoint.f` and the adapter. The Agent's dispatcher
+requires `context-read.f`, and its tool gateway requires `run-grant.f`.
+Desk's schedule broker requires `interop/resource-client.f`, Daybook's
+automations view `interop/resource-contract.f`, the scheduled-action
+catalog `interop/capability.f`, and the scripted provider `math/sha3.f`.
+
+The graph rises from 653 modules and 2,328 resolved `REQUIRE` occurrences
+and unique edges to 656 and 2,353. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Applet globals rise from 3,554 to 3,581:
+
+- The grant's nine cells and guard move with it, from the gateway's
+  `_ATGIG-*` to `run-grant.f`'s `_AGI-*` and `_agrant-guard`.
+- `_ACRR-L`, `_ACRR-S`, `_ACRR-RUN`, `_ACRR-ROOM`, `_ACRR-Q` and `_ACRR-R`
+  are the context read's scratch inside one call.
+- The scripted provider's `_SPR-C` and `_SPR-DIGIT` spell a reference's
+  digest prefix in its reply.
+- The runtime's run start keeps its reference argument in
+  `_ARRS-REF-A` and `_ARRS-REF-U`, as it keeps its others.
+- Daybook gains its one intent descriptor, `DAYBOOK-INTENTS`, the locator
+  of a run's document, `_DB-AR-LOCATOR`, and the prompt page's heading
+  that names it, `_DB-HEAD-BUF` and `_DB-HEAD-U`.
+- `_SBDS-F`, `_SBDS-Q`, `_SBDS-DOC` and `_SBDS-S` are the broker's scratch
+  while it describes a run's document.
+- Library's controller keeps what it publishes its documents' owner with,
+  `_LPO-ROOT`, `_LPO-OWNERS`, `_LPO-CONTEXT`, `_LPO-CREG`, `_LPO-RREG` and
+  `_LPO-BUS`.
+- Library builds the version it sends to Daybook in `_LSR-REF`,
+  `_LSR-LOCATOR` and `_LSR-REQ`.
+
+Desk-ecosystem globals rise from 6,190 to 6,191: the applet host's
+`_AHL-MINIMIZED` records a launch's mode. Independent globals rise from
+10,096 to 10,103: `_RWP-A`, `_RWP-U`, `_RWP-ROOT`, `_RWP-XT`, `_RWP-INST`,
+`_RWA-ROOT` and `_RWA-XT` are the owner directory's scratch inside one
+publish or attach.
+
+| Digest | Value |
+| --- | --- |
+| graph | `538d82db5696b4079dfd2419e5ff477458bc5822fefed5129b6d6ed0a25684fe` |
+| mutable-state | `5593a1cec626f261d547446d4f159d24fc21eb6311c46d30780346a543398723` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## OpenAI turn sizing reviewed ratchet update
+
+OpenAI turns size their input, request body and tool history to what they
+hold. The graph is unchanged: 656 modules, 2,353 resolved `REQUIRE`
+occurrences and unique edges, and the 78 reviewed unresolved imports. No
+cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+Applet globals fall from 3,581 to 3,577. `OAI-RESPONSES-START-JSON` goes,
+and with it its nine cells, including the static 32 KiB input buffer
+`_OAIST-INPUT`. The responses session gains `_OAIRG-CAP`, `_OAIRG-CELL`,
+`_OAIRG-NEED`, `_OAIRG-NEW` and `_OAIRG-USED`, its scratch while it grows a
+buffer to what a turn needs. Independent globals rise from 10,103 to
+10,104: the JSON builder's `_JB-SPILL` counts what an output needed beyond
+the room it had.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `538d82db5696b4079dfd2419e5ff477458bc5822fefed5129b6d6ed0a25684fe` |
+| mutable-state | `d4d184ef64f520cc63580da7fbb05f47bcc94a2b678d2a665612c19c62791928` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
