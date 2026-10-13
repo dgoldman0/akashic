@@ -453,6 +453,10 @@ class Profile:
     ready_markers: tuple[str, ...]
     stable_markers: tuple[str, ...]
     linked: bool = False
+    # A profile that stages its Akashic modules as initial files, not
+    # roots, declares here whether they consume KDOS networking; the image
+    # then carries MegaPad's networking.f, required after ENTER-USERLAND.
+    megapad_networking: bool = False
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
     initial_files: tuple[tuple[str, bytes], ...] = ()
@@ -27277,7 +27281,9 @@ def build_image(
         else dependency_closure(composition_roots)
     )
     akashic_modules = modules
-    requires_networking = _requires_megapad_networking(modules)
+    requires_networking = (
+        profile.megapad_networking or _requires_megapad_networking(modules)
+    )
     requires_rich_terminal = _requires_megapad_rich_terminal(modules)
     if requires_rich_terminal != (profile.rich_terminal is not None):
         raise RuntimeError(

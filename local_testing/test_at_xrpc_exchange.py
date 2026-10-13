@@ -109,6 +109,7 @@ def _module_items() -> tuple[auth_read.LoadItem, ...]:
 
 
 MODULE_ITEMS = _module_items()
+NEEDS_NETWORKING = auth_read.consumes_megapad_networking(MODULE_ITEMS)
 FIXTURE_ITEMS = (
     auth_read.LoadItem(
         name="profile-fixture",
@@ -267,6 +268,8 @@ def _initial_files() -> tuple[tuple[str, bytes], ...]:
 
 def _autoexec() -> str:
     lines = ["\\ autoexec.f - authenticated XRPC exchange\n", "ENTER-USERLAND\n"]
+    if NEEDS_NETWORKING:
+        lines.extend(auth_read.networking_stage_lines())
     for item in (*MODULE_ITEMS, *FIXTURE_ITEMS):
         lines.extend(
             (
@@ -298,12 +301,18 @@ def _run_vertical(timeout: float) -> int:
         failure_markers=FAILURE_MARKERS,
         initial_files=_initial_files(),
         linked=False,
+        megapad_networking=NEEDS_NETWORKING,
         include_large_sample=False,
         total_sectors=8192,
     )
     image_path = harness.build_image(PROFILE, IMAGE)
     profile = harness.PROFILES[PROFILE]
     stages = (
+        *(
+            ((auth_read.NETWORKING_STAGE, auth_read.NETWORKING_MARKER),)
+            if NEEDS_NETWORKING
+            else ()
+        ),
         *(
             (item.name, item.marker)
             for item in (*MODULE_ITEMS, *FIXTURE_ITEMS)
@@ -326,7 +335,7 @@ def _run_vertical(timeout: float) -> int:
                 machine.clear_output()
                 machine.send_text("x")
             report = machine.run(
-                max_steps=MAX_PHASE_STEPS,
+                max_steps=auth_read.stage_steps(stage_name, MAX_PHASE_STEPS),
                 wall_timeout_s=timeout,
                 until_text=marker,
                 text_scope="raw",
