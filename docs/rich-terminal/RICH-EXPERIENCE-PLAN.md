@@ -1457,7 +1457,11 @@ through the physical viewer previews the sample PDF in CELL and rich, and
 the Desktop journey passes after it
 (`local_testing/evidence/pdf-journey-20261012.md`). AES-encrypted PDFs
 open too, and both journeys pass again with the AES reader
-(`local_testing/evidence/pdf-aes-regression-20261012.md`).
+(`local_testing/evidence/pdf-aes-regression-20261012.md`). On 2026-10-13
+the contents became a tree, each entry open or closed as the document
+says; the `fexplorer` smoke and both journeys pass with it, File
+Explorer's closing the outline's title entry through the rich side
+(`local_testing/evidence/contents-tree-20261013.md`).
 
 - Step 11's counts (`local_testing/measure_pdf.py`), for a 100-page PDF of
   249 KB that xelatex writes with hyperref, shown at File Explorer's
