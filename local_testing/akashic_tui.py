@@ -236,6 +236,19 @@ FORTH_SPLIT_STACK_EFFECT_RE = re.compile(
 CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
 
+def write_raw_capture(name: str, text: str) -> Path:
+    """Write a staged run's raw transcript beside the smoke captures.
+
+    The output folder is ignored by git, so a fresh checkout has none until
+    something makes it; snapshot captures make their own, and so does this.
+    """
+
+    path = (OUTPUT_ROOT / f"smoke-{name}").with_suffix(".raw.txt")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def _megapad_root() -> Path:
     configured = os.environ.get("MEGAPAD_ROOT")
     root = Path(configured).expanduser() if configured else DEFAULT_MEGAPAD_ROOT

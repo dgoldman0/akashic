@@ -516,11 +516,7 @@ def _run_guest(timeout: float) -> int:
                 print(f"  recent guest output:\n{raw[-4000:]}")
                 return 1
 
-        root = harness.OUTPUT_ROOT / f"smoke-{PROFILE}"
-        root.with_suffix(".raw.txt").write_text(
-            "".join(output),
-            encoding="utf-8",
-        )
+        harness.write_raw_capture(PROFILE, "".join(output))
         print("Staged kdos-dns-contracts: PASS")
         for stage_name, report in reports:
             print(
