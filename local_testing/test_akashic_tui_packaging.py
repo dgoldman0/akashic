@@ -674,9 +674,12 @@ def test_sha3_contract_profile_uses_checked_megapad_surface() -> None:
 
 
 def test_every_app_shell_profile_composes_the_platform_provider() -> None:
+    # Every app profile is linked, since each applet's closure outgrows the
+    # MP64FS directory; test_unlinked_app_shell_profile_packages_and_loads_
+    # platform_provider covers the unlinked composition with the app shell
+    # alone.
     app_shell_profiles = 0
     linked_profiles = 0
-    unlinked_profiles = 0
     for profile in PROFILES.values():
         base_modules = (
             dependency_order(profile.roots)
@@ -687,7 +690,6 @@ def test_every_app_shell_profile_composes_the_platform_provider() -> None:
             continue
         app_shell_profiles += 1
         linked_profiles += int(profile.linked)
-        unlinked_profiles += int(not profile.linked)
         autoexec = _with_mp64fs_vfs_platform(profile.autoexec)
         assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
 
@@ -708,8 +710,7 @@ def test_every_app_shell_profile_composes_the_platform_provider() -> None:
             )
 
     assert app_shell_profiles > 0
-    assert linked_profiles > 0
-    assert unlinked_profiles > 0
+    assert linked_profiles == app_shell_profiles
 
 
 @pytest.mark.parametrize("profile_name", LIBRARY_RENDERER_FREE_PROFILES)
@@ -1204,10 +1205,20 @@ def test_library_applet_functional_image_links_controller_and_keeps_uidl(
 def test_unlinked_app_shell_profile_packages_and_loads_platform_provider(
     tmp_path: Path,
 ) -> None:
-    image = build_image(
-        "grid-contracts",
-        tmp_path / "akashic-grid-contracts.img",
+    # Every applet's closure has outgrown the MP64FS directory's 128
+    # entries, so each applet profile links its modules; the app shell
+    # alone still packages one file per module.
+    profile = replace(
+        PROFILES["grid-contracts"],
+        linked=False,
+        roots=(APP_SHELL_MODULE,),
+        autoexec=f"ENTER-USERLAND\nREQUIRE {APP_SHELL_MODULE}\n",
     )
+    with patch.dict(PROFILES, {"app-shell-unlinked": profile}):
+        image = build_image(
+            "app-shell-unlinked",
+            tmp_path / "akashic-app-shell-unlinked.img",
+        )
     filesystem = MP64FS(bytearray(image.read_bytes()))
     platform_parent = filesystem.resolve_path("/tui/platform")
     assert filesystem.read_file("mp64fs-vfs.f", parent=platform_parent) == (
@@ -1217,7 +1228,27 @@ def test_unlinked_app_shell_profile_packages_and_loads_platform_provider(
     assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
     assert autoexec.index("ENTER-USERLAND") < autoexec.index(
         MP64FS_VFS_PLATFORM_BOOT_LINE
-    ) < autoexec.index("REQUIRE tui/applets/grid/grid.f")
+    ) < autoexec.index(f"REQUIRE {APP_SHELL_MODULE}")
+
+
+@pytest.mark.parametrize("profile_name", ("grid-eval", "grid-contracts"))
+def test_grid_contract_profiles_link_their_modules(
+    tmp_path: Path,
+    profile_name: str,
+) -> None:
+    """Grid's closure needs more files than the directory's 128 entries,
+    so its contract profiles load linked chunks after userland."""
+
+    assert PROFILES[profile_name].linked
+    image = build_image(profile_name, tmp_path / f"akashic-{profile_name}.img")
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    assert MP64FS_VFS_PLATFORM_BOOT_LINE not in autoexec
+    assert "REQUIRE tui/applets/grid/grid.f" not in autoexec
+    assert autoexec.index("ENTER-USERLAND") < autoexec.index(
+        "REQUIRE .akashic/link-"
+    )
+    assert filesystem.info()["free_sectors"] > 0
 
 
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:

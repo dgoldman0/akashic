@@ -1216,12 +1216,14 @@ The first physical run stopped at the frame with the figure partly scrolled
 out: MegaPad's shared-viewer transport decoded object offsets as unsigned.
 It now carries them signed, as the scene does.
 
-Three things stay open. A figure that moves makes every scroll step a full
+One thing stays open. A figure that moves makes every scroll step a full
 replacement, and the step's later wheel turns restart it, so a step sends
 about 38 KB of retained frames where a DELTA sent 2 KB or less. The
-semantic-collection byte oracle needs about 131.5 million steps since the
-DOC1 packer joined its closure, beyond its 130 million limit. The unlinked
-grid-contracts profile needs 132 MP64FS entries, beyond MegaPad's 128.
+semantic-collection byte oracle, which needs about 131.6 million steps
+since the DOC1 packer joined its closure, now has a 140 million limit; and
+the grid-eval and grid-contracts profiles, whose closure needs 135 MP64FS
+entries against MegaPad's 128, now link their modules into chunk files, as
+the grid profile does, until EXT4 support lifts the limit.
 
 ## 13. Decompression
 

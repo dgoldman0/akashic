@@ -13084,6 +13084,10 @@ _dt-run
         stable_markers=("DAYBOOK CONTRACTS PASS",),
     ),
     "grid-eval": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/grid/grid.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - focused Grid dependency evaluator bounds
@@ -13220,6 +13224,10 @@ _gt-run
         failure_markers=("GRID EVAL FAIL",),
     ),
     "grid-contracts": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/grid/grid.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - strict Grid import/persistence contracts
