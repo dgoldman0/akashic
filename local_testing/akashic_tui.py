@@ -35941,7 +35941,10 @@ _smrc-run
     linked=True,
     link_chunk_bytes=192 * 1024,
     include_large_sample=False,
-    total_sectors=8192,
+    # The disk holds the linked code of all of Desk and Streams.  With the
+    # Daybook scheduler and the media layer both in Desk's closure, 4 MiB
+    # no longer holds it.
+    total_sectors=16384,
     initial_files=(
         (
             "local_testing/smrc-contracts.f",
