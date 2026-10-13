@@ -248,7 +248,7 @@ own borrowed widget:
 
 | Element | wptr contents | Size | Lifecycle |
 |---------|---------------|------|-----------|
-| `<tree>` | Full `TREE-NEW` widget struct | 160 bytes, plus its expanded-key set | `TREE-NEW` at load, `TREE-FREE` at detach |
+| `<tree>` | Full `TREE-NEW` widget struct | 168 bytes, plus its expanded-key set | `TREE-NEW` at load, `TREE-FREE` at detach |
 | `<tabs>` | 8-byte state block (1 cell: active index) | 8 bytes | `ALLOCATE` at load, `FREE` at detach |
 | `<input>` | `INP-NEW` widget struct + 256-byte buffer | varies | `INP-NEW` at load/add, free buffer+struct at detach/remove |
 | `<textarea>` | `TXTA-NEW` widget struct + 4096-byte buffer | varies | `TXTA-NEW` at load/add, free buffer+struct at detach/remove |
@@ -1225,8 +1225,8 @@ immediate `<tab>` children. A `<media>` element is the view it shows: while
 it shows text its materialized `TXTA` contributes `TEXT_AREA` exactly as a
 `<textarea>` does, while it shows a document its document view contributes
 `DOCUMENT` (`DOCV-DOCUMENT-CAPTURE`), while it shows the document's
-contents their list contributes the `ITEM_VIEW` it gives
-(`LST-ITEM-VIEW-CAPTURE`), and a picture or the facts view stays ordinary
+contents their tree contributes the `ITEM_VIEW` it gives, a `TREE`
+(`TREE-ITEM-VIEW-CAPTURE`), and a picture or the facts view stays ordinary
 CELL paint. Pictures, an element's own or the figures of the
 document it shows, reach the rich side through the
 [picture snapshot](uidl-picture-snapshot.md) instead.
@@ -1246,9 +1246,8 @@ not the active content panel. A malformed root stays entirely residual.
 
 The separate all-widget storage query scans direct canonical textareas, a
 media element's descriptor and the text area, document view or contents'
-list it shows (with the document's records and the contents of the blocks
-in view, or its contents and the row buffer the list's rows are made in),
-and
+tree it shows (with the document's records and the contents of the blocks
+in view, or its contents and the entries' next siblings), and
 tab state plus
 genuine caller-mounted collection widgets regardless of visibility,
 so upper caller banks cannot overwrite hidden live widget or borrowed model

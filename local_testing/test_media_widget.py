@@ -1097,23 +1097,52 @@ KEYS = [
     ": MW-SPECIAL  ( code -- )  MW-EV 24 0 FILL  KEY-T-SPECIAL MW-EV !  MW-EV 8 + !"
     "  MW-EV MW-W @ WDG-HANDLE .\" K=\" . ;",
     ": MW-TOP  ( -- )  .\" TOP=\" MW-W @ MEDIA-DOCUMENT@ DOCV-TOP@ SWAP . . CR ;",
+    # The part the view's top lies in, and its place in that part.
+    ": MW-AT  MW-W @ MEDIA-DOCUMENT@ DUP DOCV-TOP@ DROP SWAP DOCV-DOCUMENT@"
+    "  2DUP DOC-PART-OF DUP .\" PART=\" . SWAP DOC-PART-FIRST - .\" PLACE=\" . CR ;",
 ]
+OPEN, CLOSED = "\u25bc", "\u25b6"     # the tree's marks for a branch
+SELECTED_BG = 7                       # the tree's selected row
 
 
-def test_a_documents_contents_show_instead_of_it_and_go_to_an_entry() -> None:
+def _shown(output: str, mark: str) -> str:
+    """The cells dumped after MARK."""
+    return output.split(mark)[1].split("@@END")[0]
+
+
+def _rows(output: str, mark: str, count: int) -> list[str]:
+    """The first COUNT rows dumped after MARK, as drawn."""
+    cells = _cells(_shown(output, mark))
+    return ["".join(chr(cells[(r, c)][0]) for c in range(36)).rstrip()
+            for r in range(count)]
+
+
+def _selected(output: str, mark: str) -> list[int]:
+    """The rows dumped after MARK that are drawn selected."""
+    cells = _cells(_shown(output, mark))
+    return sorted({r for (r, c), cell in cells.items() if cell[2] == SELECTED_BG})
+
+
+def test_a_documents_contents_show_as_a_tree_and_go_to_an_entry() -> None:
     """The key c shows a document's contents, its headings of levels 1 to
-    3 indented by level, in a list instead of the document; Enter goes to
-    the chosen heading and shows the document; Escape shows it again where
-    it was; a file with no contents keeps showing itself."""
+    3, as a tree in place of the document: each heading under the one
+    above it that is less deep, every branch open and the first chosen.
+    Left closes the chosen branch, Enter goes to the chosen heading and
+    shows the document, c shows the contents again as they were left, and
+    Escape shows the document again where it was.  A file with no
+    contents keeps showing itself."""
 
     output = _run(_media_lines() + KEYS + [
         f'{len(HEADED)} S" /notes.md" MW-PUT',
         _open("/notes.md"), "MW-W @ WDG-FOCUS-SET MW-W @ MW-DRAW", "MW-TOP",
         "99 MW-CHAR", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR',
-        "MW-W @ MW-DRAW", '." @@LIST" CR', "6 36 MW-DUMP", '." @@END" CR',
-        "KEY-DOWN MW-SPECIAL KEY-ENTER MW-SPECIAL", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR',
+        "MW-W @ MW-DRAW", '." @@TREE" CR', "6 36 MW-DUMP", '." @@END" CR',
+        "KEY-DOWN MW-SPECIAL KEY-LEFT MW-SPECIAL",
+        "MW-W @ MW-DRAW", '." @@CLOSED" CR', "6 36 MW-DUMP", '." @@END" CR',
+        "KEY-ENTER MW-SPECIAL", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR',
         "MW-W @ MW-DRAW", "MW-TOP",
-        "99 MW-CHAR KEY-ESC MW-SPECIAL", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR', "MW-TOP",
+        "99 MW-CHAR MW-W @ MW-DRAW", '." @@AGAIN" CR', "6 36 MW-DUMP", '." @@END" CR',
+        "KEY-ESC MW-SPECIAL", '." VIEW=" MW-W @ MEDIA-VIEW@ . CR', "MW-TOP",
         "MW-W @ MEDIA-CLEAR", '." CLEARED=" MW-MSRC MSRC-HELD@ .',
         # A document with no headings has no contents to show.
         'S" Plain." MW-FILE SWAP MOVE  6 S" /plain.md" MW-PUT', _open("/plain.md"),
@@ -1124,16 +1153,34 @@ def test_a_documents_contents_show_instead_of_it_and_go_to_an_entry() -> None:
     assert views == ["5", str(VIEW_DOCUMENT), str(VIEW_DOCUMENT), str(VIEW_DOCUMENT)], \
         output[-2000:]
     assert "K=0 " in output.split("@@PLAIN")[1]
-    listed = _labels(output.split("@@LIST")[1].split("@@END")[0], 6, 36)
-    assert listed == ["First", "Second", "Third"], listed
-    cells = _cells(output.split("@@LIST")[1].split("@@END")[0])
-    assert "".join(chr(cells[(1, c)][0]) for c in range(8)) == "  Second"
-    assert "".join(chr(cells[(2, c)][0]) for c in range(9)) == "    Third"
+    assert _rows(output, "@@TREE", 4) == [
+        f"{OPEN} First", f"  {OPEN} Second", "      Third", ""]
+    assert _selected(output, "@@TREE") == [0]
+    assert _rows(output, "@@CLOSED", 3) == [f"{OPEN} First", f"  {CLOSED} Second", ""]
+    assert _selected(output, "@@CLOSED") == [1]
+    assert _rows(output, "@@AGAIN", 3) == _rows(output, "@@CLOSED", 3)
+    assert _selected(output, "@@AGAIN") == [1]
     tops = re.findall(r"TOP=(\d+) (\d+)", output)
     second = HEADED.split(b"\n\n").index(b"## Second")
     assert tops[0] == ("0", "0") and tops[1] == (str(second), "0") and tops[2] == tops[1]
-    assert re.findall(r"K=(-?\d+)", output.split("@@PLAIN")[0]) == ["-1"] * 5
+    assert re.findall(r"K=(-?\d+)", output.split("@@PLAIN")[0]) == ["-1"] * 6
     assert "CLEARED=0 " in output
+
+
+SKIPPED = b"# A\n\n### B\n\n## C\n\n# D\n\nText.\n"
+
+
+def test_an_entry_below_a_skipped_level_is_under_the_entry_above_it() -> None:
+    """A heading that skips a level is under the heading above it that is
+    less deep, beside the entries at the level it skipped."""
+
+    output = _run(_media_lines() + KEYS + [
+        f'{len(SKIPPED)} S" /skipped.md" MW-PUT', _open("/skipped.md"),
+        "MW-W @ WDG-FOCUS-SET 99 MW-CHAR MW-W @ MW-DRAW",
+        '." @@TREE" CR', "6 36 MW-DUMP", '." @@END" CR',
+        "MW-W @ MEDIA-FREE",
+    ], SKIPPED)
+    assert _rows(output, "@@TREE", 5) == [f"{OPEN} A", "    B", "    C", "  D", ""]
 
 
 def test_a_pdfs_contents_go_to_a_page_not_read_yet() -> None:
@@ -1148,13 +1195,68 @@ def test_a_pdfs_contents_go_to_a_page_not_read_yet() -> None:
         "MW-W @ MW-DRAW MW-W @ MW-MEDIA-SERVICE DROP MW-W @ MW-DRAW",
         "99 MW-CHAR MW-W @ MW-DRAW", '." @@LIST" CR', "6 36 MW-DUMP", '." @@END" CR',
         "KEY-DOWN MW-SPECIAL KEY-DOWN MW-SPECIAL KEY-ENTER MW-SPECIAL",
-        "MW-W @ MW-DRAW",
-        ": MW-AT  MW-W @ MEDIA-DOCUMENT@ DUP DOCV-TOP@ DROP SWAP DOCV-DOCUMENT@"
-        "  2DUP DOC-PART-OF DUP .\" PART=\" . SWAP DOC-PART-FIRST - .\" PLACE=\" . CR ;",
-        "MW-AT",
+        "MW-W @ MW-DRAW", "MW-AT",
         "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
     ], pdf, max_steps=2_000_000_000, roots=PDF_ROOTS)
     listed = _labels(output.split("@@LIST")[1].split("@@END")[0], 6, 36)
     assert listed == ["Page 1", "Page 2", "Page 3", "Page 4"], listed
     assert "PART=2 PLACE=0 " in output, output[-1500:]
+    assert "FREED=0 " in output
+
+
+def _outlined_pdf() -> bytes:
+    """Two pages of paragraphs, each page longer than the view, and an
+    outline: a part that starts closed, holding a chapter that starts
+    open with a section under it, then a second part."""
+
+    from test_pdf_content import HELVETICA
+    from test_pdf_file import stream_object, write_pdf
+    from test_pdf_layout import line
+
+    def page(name: str) -> bytes:
+        return b"".join(line("F1", 10, 72, 700 - 30 * n, f"{name}, paragraph {n}.")
+                        for n in range(8))
+
+    return write_pdf({
+        1: b"<< /Type /Catalog /Pages 2 0 R /Outlines 20 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 612 792] "
+           b"/Resources << /Font << /F1 10 0 R >> >> >>",
+        3: b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>",
+        4: stream_object(page("The first page")),
+        5: b"<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>",
+        6: stream_object(page("The second page")),
+        10: HELVETICA,
+        20: b"<< /Type /Outlines /First 21 0 R /Last 24 0 R /Count 2 >>",
+        21: b"<< /Title (Part one) /Parent 20 0 R /Next 24 0 R /First 22 0 R /Last 22 0 R "
+            b"/Count -2 /Dest [3 0 R /Fit] >>",
+        22: b"<< /Title (Chapter) /Parent 21 0 R /First 23 0 R /Last 23 0 R /Count 1 "
+            b"/Dest [3 0 R /Fit] >>",
+        23: b"<< /Title (Section) /Parent 22 0 R /Dest [5 0 R /Fit] >>",
+        24: b"<< /Title (Part two) /Parent 20 0 R /Prev 21 0 R /Dest [5 0 R /Fit] >>",
+    })
+
+
+def test_a_pdfs_outline_starts_open_or_closed_as_it_says() -> None:
+    """A PDF's outline shows as a tree whose branches start open or closed
+    as the outline says.  Right opens the closed part, which shows the
+    open chapter under it with its section; choosing the section reads
+    its page and shows it from its start."""
+
+    pdf = _outlined_pdf()
+    output = _run(_media_lines() + KEYS + [
+        f'{len(pdf)} S" /parts.pdf" MW-PUT',
+        "PDF-DOC-READER MEDIA-K-PDF MW-W @ MEDIA-READER!",
+        _open("/parts.pdf"), "MW-W @ WDG-FOCUS-SET",
+        "MW-W @ MW-DRAW MW-W @ MW-MEDIA-SERVICE DROP MW-W @ MW-DRAW",
+        "99 MW-CHAR MW-W @ MW-DRAW", '." @@START" CR', "6 36 MW-DUMP", '." @@END" CR',
+        "KEY-RIGHT MW-SPECIAL MW-W @ MW-DRAW", '." @@OPENED" CR', "6 36 MW-DUMP",
+        '." @@END" CR',
+        "KEY-DOWN MW-SPECIAL KEY-DOWN MW-SPECIAL KEY-ENTER MW-SPECIAL",
+        "MW-W @ MW-DRAW", "MW-AT",
+        "MW-W @ MEDIA-FREE", '." FREED=" MW-MSRC MSRC-HELD@ .',
+    ], pdf, max_steps=2_000_000_000, roots=PDF_ROOTS)
+    assert _rows(output, "@@START", 3) == [f"{CLOSED} Part one", "  Part two", ""]
+    assert _rows(output, "@@OPENED", 5) == [
+        f"{OPEN} Part one", f"  {OPEN} Chapter", "      Section", "  Part two", ""]
+    assert "PART=1 PLACE=0 " in output, output[-1500:]
     assert "FREED=0 " in output

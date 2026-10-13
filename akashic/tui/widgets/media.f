@@ -27,12 +27,17 @@
 \  the document, the widget says so instead of cutting it.
 \
 \  A document shown has its contents (DOC-CONTENTS): the key c shows
-\  them instead of the document, as a list widget whose rows are the
-\  entries' titles, indented two cells a level; Enter goes where the
+\  them instead of the document, as a tree widget whose nodes are the
+\  entries, each under the entry above it that is less deep, their
+\  titles untrusted text from the file.  An entry
+\  with entries below it starts open unless the document says it starts
+\  closed; Right opens it and Left closes it.  Enter goes where the
 \  chosen entry goes in the document and shows it again, and Escape or c
-\  shows the document again where it was.  A rich terminal sees the list
-\  as it sees any list; MEDIA-CONTENTS-STORAGE-DISJOINT? tells a capture
-\  whether a span lies clear of all that showing it touches.
+\  shows the document again where it was.  The tree keeps what was
+\  opened and chosen while the document stays open.  A rich terminal
+\  sees the tree as it sees any tree; MEDIA-CONTENTS-STORAGE-DISJOINT?
+\  tells a capture whether a span lies clear of all that showing it
+\  touches.
 \
 \  A document that needs a password to be read shows its facts and says it
 \  is protected.  A document's figures and links name files from the
@@ -62,15 +67,16 @@
 \   +160  doc        the open document (DOC-SIZE bytes from msrc), or 0
 \   +168  follow-xt  ( path-a path-u status ctx -- ), or 0
 \   +176  follow-ctx
-\   +184  contents   the contents' list widget, made on first use, or 0
-\   +192  row-a      a contents row's text, indented, from msrc
-\   +200  row-cap
+\   +184  contents   the contents' tree widget, made on first use, or 0
+\   +192  next-a     each entry's next sibling, one cell an entry, from
+\                    msrc, made when the contents first show, or 0
+\   +200  next-n     how many entries it holds
 \   +208  readers    a document reader for each kind (MEDIA-KINDS cells), or 0
 \         source     MEDSRC-VFS-SIZE bytes: the open file, after the readers
 \
 \  Prefix: MEDIA- (public), _MEDIA- and _MDW- (internal)
 \  Provider: akashic-tui-media
-\  Dependencies: widget.f, draw.f, picture.f, textarea.f, list.f, document.f,
+\  Dependencies: widget.f, draw.f, picture.f, textarea.f, tree.f, document.f,
 \                media/*, markup/markdown.f, utils/fs/link-path.f
 
 PROVIDED akashic-tui-media
@@ -80,7 +86,7 @@ REQUIRE ../draw.f
 REQUIRE ../keys.f
 REQUIRE picture.f
 REQUIRE textarea.f
-REQUIRE list.f
+REQUIRE tree.f
 REQUIRE document.f
 REQUIRE ../../media/source.f
 REQUIRE ../../media/vfs-source.f
@@ -111,8 +117,8 @@ REQUIRE ../../utils/string.f
 168 CONSTANT _MEDIA-O-FOLLOW
 176 CONSTANT _MEDIA-O-FOLLOW-CTX
 184 CONSTANT _MEDIA-O-CONTENTS
-192 CONSTANT _MEDIA-O-ROW-A
-200 CONSTANT _MEDIA-O-ROW-CAP
+192 CONSTANT _MEDIA-O-NEXT-A
+200 CONSTANT _MEDIA-O-NEXT-N
 208 CONSTANT _MEDIA-O-READERS
 _MEDIA-O-READERS MEDIA-KINDS CELLS + CONSTANT _MEDIA-O-SOURCE
 _MEDIA-O-SOURCE MEDSRC-VFS-SIZE + CONSTANT _MEDIA-DESC-SIZE
@@ -204,17 +210,17 @@ _MEDIA-HEAP-MEM 7 + -8 AND CONSTANT MEDIA-HEAP
     THEN
     0 SWAP _MEDIA-O-DOC + ! ;
 
-\ Give back a contents row's buffer.
-: _MEDIA-DROP-ROW  ( w -- )
-    DUP _MEDIA-O-ROW-A _MEDIA@ ?DUP IF
-        OVER _MEDIA-O-ROW-CAP _MEDIA@ 2 PICK _MEDIA-MSRC MSRC-FREE
+\ Give back the contents' next siblings.
+: _MEDIA-DROP-NEXT  ( w -- )
+    DUP _MEDIA-O-NEXT-A _MEDIA@ ?DUP IF
+        OVER _MEDIA-O-NEXT-N _MEDIA@ CELLS 2 PICK _MEDIA-MSRC MSRC-FREE
     THEN
-    0 OVER _MEDIA-O-ROW-A + !  0 SWAP _MEDIA-O-ROW-CAP + ! ;
+    0 OVER _MEDIA-O-NEXT-A + !  0 SWAP _MEDIA-O-NEXT-N + ! ;
 
 \ Stop showing anything and close the file.
 : _MEDIA-RELEASE  ( w -- )
     DUP _MEDIA-O-PICTURE _MEDIA@ ?DUP IF >R 0 0 0 R> PICT-SOURCE! THEN
-    DUP _MEDIA-DROP-ROW
+    DUP _MEDIA-DROP-NEXT
     DUP _MEDIA-O-VIEW _MEDIA@ DUP MEDIA-V-DOCUMENT = SWAP MEDIA-V-CONTENTS = OR IF
         0 OVER _MEDIA-O-DOCV _MEDIA@ DOCV-DOCUMENT!
         DUP _MEDIA-O-DOC _MEDIA@ DOC-CLOSE
@@ -375,11 +381,11 @@ VARIABLE _MO-N
 : MEDIA-TEXT@     ( widget -- text|0 )    _MEDIA-O-TEXT _MEDIA@ ;
 : MEDIA-DOCUMENT@ ( widget -- docv|0 )    _MEDIA-O-DOCV _MEDIA@ ;
 
-: MEDIA-CONTENTS@ ( widget -- list|0 )    _MEDIA-O-CONTENTS _MEDIA@ ;
+: MEDIA-CONTENTS@ ( widget -- tree|0 )    _MEDIA-O-CONTENTS _MEDIA@ ;
 
 \ MEDIA-VIEW-WIDGET@ ( widget -- view-widget|0 )
 \   The canonical widget the current view draws: the picture, the text
-\   area, the document view, or the list of the document's contents.
+\   area, the document view, or the tree of the document's contents.
 \   Zero for the facts view and for nothing.
 : MEDIA-VIEW-WIDGET@  ( widget -- view-widget|0 )
     DUP MEDIA-VIEW@ CASE
@@ -391,54 +397,112 @@ VARIABLE _MO-N
     ENDCASE ;
 
 \ --- Contents --------------------------------------------------------------
+\
+\  The contents' tree has a node for each entry, its index plus one, which
+\  is also its key.  An entry's children are the deeper entries after it,
+\  up to the next that is not deeper, each under the entry above it that
+\  is less deep, so a level skipped gives no node of its own.  Its first
+\  child is the entry after it, when that one is deeper.  Each entry's
+\  next sibling is kept, made in one pass when the contents first show
+\  and given back when the document closes.
 
-VARIABLE _MCT-W    \ the media widget whose contents a list shows
-VARIABLE _MCT-IN   \ a row's indent
+: _MCT-DOC  ( -- doc )  TREE-WALK-CONTEXT _MEDIA-O-DOC _MEDIA@ ;
+: _MCT-LEVEL  ( index -- level )  _MCT-DOC DOC-ENTRY 2DROP ;
 
-: _MCT-KEY  ( index list -- key )  DROP 1+ ;
+\ An entry's first child: the entry after it, when that one is deeper.
+: _MCT-CHILD  ( node -- child|0 )
+    DUP TREE-WALK-CONTEXT _MEDIA-O-NEXT-N _MEDIA@ < 0= IF DROP 0 EXIT THEN
+    DUP _MCT-LEVEL OVER 1- _MCT-LEVEL > IF 1+ ELSE DROP 0 THEN ;
 
-\ A row: the entry's title, two cells in for each level; the title alone
-\ when the row's buffer has no room for its indent.
-: _MCT-FIELD  ( index column list -- addr len )
-    NIP LST-CONTEXT@ _MCT-W !
-    _MCT-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY             ( level a u )
-    ROT 2* _MCT-IN !
-    DUP _MCT-IN @ + _MCT-W @ _MEDIA-O-ROW-CAP _MEDIA@ > IF EXIT THEN
-    _MCT-W @ _MEDIA-O-ROW-A _MEDIA@ _MCT-IN @ 32 FILL
-    TUCK _MCT-W @ _MEDIA-O-ROW-A _MEDIA@ _MCT-IN @ + SWAP MOVE
-    _MCT-W @ _MEDIA-O-ROW-A _MEDIA@ SWAP _MCT-IN @ + ;
+: _MCT-NEXT  ( node -- sibling|0 )
+    1- CELLS TREE-WALK-CONTEXT _MEDIA-O-NEXT-A _MEDIA@ + @ ;
+: _MCT-LABEL  ( node -- a u )  1- _MCT-DOC DOC-ENTRY ROT DROP ;
+: _MCT-LEAF?  ( node -- flag )  _MCT-CHILD 0= ;
+: _MCT-KEY  ( parent-key node -- key )  NIP ;
 
-\ The list's open word: go where the entry goes, and show the document.
-: _MCT-OPEN  ( index list -- )
-    LST-CONTEXT@ _MCT-W !
-    _MCT-W @ _MEDIA-O-DOCV _MEDIA@ DOCV-GO-ENTRY
+VARIABLE _MCT-W    \ the media widget whose contents the tree shows
+
+\ The tree's open word: go where the chosen entry goes, and show the
+\ document.
+: _MCT-OPEN  ( tree -- )
+    DUP TREE-CONTEXT@ _MCT-W !
+    TREE-SELECTED ?DUP 0= IF EXIT THEN
+    1- _MCT-W @ _MEDIA-O-DOCV _MEDIA@ DOCV-GO-ENTRY
     MEDIA-V-DOCUMENT _MCT-W @ _MEDIA-O-VIEW + !  _MCT-W @ WDG-DIRTY ;
+
+VARIABLE _MCN-W      \ the media widget
+VARIABLE _MCN-TOP    \ the deepest entry still open, or 0
+VARIABLE _MCN-LAST   \ the last entry the one being placed closed, or 0
+VARIABLE _MCN-LEVEL  \ the level of the entry being placed
+
+: _MCN-CELL  ( node -- a )  1- CELLS _MCN-W @ _MEDIA-O-NEXT-A _MEDIA@ + ;
+: _MCN-LEVEL@  ( node -- level )
+    1- _MCN-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY 2DROP ;
+
+\ Close the deepest open entry; it has no next sibling until a later
+\ entry says it has.
+: _MCN-CLOSE  ( -- )
+    _MCN-TOP @ DUP _MCN-LAST !  _MCN-CELL DUP @ _MCN-TOP !  0 SWAP ! ;
+
+\ Each entry's next sibling: the first entry after it that is no deeper,
+\ when that one is under the same entry.  The entries still open stand
+\ in a stack, each one's cell holding the one under it.  An entry closes
+\ every open entry at its level or deeper and is the next sibling of the
+\ last it closes, as the entry under that one is under it too; it then
+\ stands open on top.
+: _MEDIA-SIBLINGS  ( n w -- )
+    _MCN-W !  0 _MCN-TOP !
+    1+ 1 ?DO
+        I _MCN-LEVEL@ _MCN-LEVEL !  0 _MCN-LAST !
+        BEGIN
+            _MCN-TOP @ DUP IF _MCN-LEVEL@ _MCN-LEVEL @ < 0= THEN
+        WHILE _MCN-CLOSE REPEAT
+        _MCN-LAST @ ?DUP IF I SWAP _MCN-CELL ! THEN
+        _MCN-TOP @ I _MCN-CELL !  I _MCN-TOP !
+    LOOP
+    BEGIN _MCN-TOP @ WHILE _MCN-CLOSE REPEAT ;
+
+VARIABLE _MOE-W
+
+\ The tree from the top, its first entry chosen, and every entry with
+\ entries below it open unless it starts closed.
+: _MEDIA-OPEN-ENTRIES  ( w -- )
+    _MOE-W !
+    _MOE-W @ MEDIA-CONTENTS@ DUP TREE-COLLAPSE-ALL 1 TREE-SELECT
+    _MOE-W @ _MEDIA-O-NEXT-N _MEDIA@ 1- 0 MAX 0 ?DO
+        I 1+ _MOE-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY 2DROP
+        I _MOE-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY 2DROP >
+        I _MOE-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY-CLOSED? 0= AND IF
+            _MOE-W @ MEDIA-CONTENTS@ I 1+ TREE-EXPAND-KEY
+        THEN
+    LOOP ;
 
 VARIABLE _MSC-W
 
-\ Show the document's contents instead of it, in a row buffer sized to
-\ the longest row; false when it has none.
+\ Show the document's contents instead of it; false when it has none, or
+\ memory refuses the cell each entry's next sibling takes.  The first
+\ time for a document, the tree shows them from the top with their
+\ first entry chosen; after that, as they were left.
 : _MEDIA-SHOW-CONTENTS  ( w -- shown? )
     _MSC-W !
     _MSC-W @ _MEDIA-O-DOC _MEDIA@ DOC-CONTENTS DROP     ( n )
     DUP 0= IF EXIT THEN
-    0 OVER 0 ?DO
-        I _MSC-W @ _MEDIA-O-DOC _MEDIA@ DOC-ENTRY NIP SWAP 2* + MAX
-    LOOP                                                ( n longest )
-    DUP _MSC-W @ _MEDIA-O-ROW-CAP _MEDIA@ > IF
-        _MSC-W @ _MEDIA-DROP-ROW
-        DUP _MSC-W @ _MEDIA-MSRC MSRC-ALLOC ?DUP IF
-            _MSC-W @ _MEDIA-O-ROW-A + !  DUP _MSC-W @ _MEDIA-O-ROW-CAP + !
-        THEN
-    THEN DROP
     _MSC-W @ _MEDIA-O-CONTENTS _MEDIA@ 0= IF
-        _MSC-W @ WDG-REGION ['] _MCT-KEY ['] _MCT-FIELD LST-NEW
+        _MSC-W @ WDG-REGION 1 ['] _MCT-CHILD ['] _MCT-NEXT ['] _MCT-LABEL
+        ['] _MCT-LEAF? ['] _MCT-KEY TREE-NEW
         DUP _MSC-W @ _MEDIA-O-CONTENTS + !
-        LST-UNTRUSTED OVER LST-MODE!
-        ['] _MCT-OPEN OVER LST-ON-OPEN
-        _MSC-W @ SWAP LST-CONTEXT!
+        -1 OVER TREE-UNTRUSTED!
+        ['] _MCT-OPEN OVER TREE-ON-OPEN
+        _MSC-W @ SWAP TREE-CONTEXT!
     THEN
-    _MSC-W @ _MEDIA-O-CONTENTS _MEDIA@ LST-ROWS!
+    _MSC-W @ _MEDIA-O-NEXT-A _MEDIA@ IF
+        DROP
+    ELSE
+        DUP CELLS _MSC-W @ _MEDIA-MSRC MSRC-ALLOC ?DUP 0= IF DROP 0 EXIT THEN
+        _MSC-W @ _MEDIA-O-NEXT-A + !  DUP _MSC-W @ _MEDIA-O-NEXT-N + !
+        _MSC-W @ _MEDIA-SIBLINGS
+        _MSC-W @ _MEDIA-OPEN-ENTRIES
+    THEN
     MEDIA-V-CONTENTS _MSC-W @ _MEDIA-O-VIEW + !
     _MSC-W @ WDG-DIRTY -1 ;
 
@@ -446,21 +510,22 @@ VARIABLE _MSD-A   VARIABLE _MSD-U   VARIABLE _MSD-W
 
 \ MEDIA-CONTENTS-STORAGE-DISJOINT? ( address bytes widget -- flag )
 \   Whether a span lies clear of all that showing the contents touches:
-\   the media descriptor, its row buffer, the document's record and
-\   contents, and the list's descriptor, region and columns.
+\   the media descriptor, the entries' next siblings, the document's
+\   record and contents, and the tree's descriptor, region and open
+\   entries.
 : MEDIA-CONTENTS-STORAGE-DISJOINT?  ( address bytes widget -- flag )
     _MSD-W ! _MSD-U ! _MSD-A !
     _MSD-U @ 0= IF -1 EXIT THEN
     _MSD-A @ _MSD-U @ _MSD-W @ _MEDIA-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
-    _MSD-W @ _MEDIA-O-ROW-A _MEDIA@ ?DUP IF
-        _MSD-A @ _MSD-U @ ROT _MSD-W @ _MEDIA-O-ROW-CAP _MEDIA@ MSPAN-OVERLAP?
-        IF 0 EXIT THEN
+    _MSD-W @ _MEDIA-O-NEXT-A _MEDIA@ ?DUP IF
+        _MSD-A @ _MSD-U @ ROT _MSD-W @ _MEDIA-O-NEXT-N _MEDIA@ CELLS
+        MSPAN-OVERLAP? IF 0 EXIT THEN
     THEN
     _MSD-W @ _MEDIA-O-DOC _MEDIA@ ?DUP IF
         >R _MSD-A @ _MSD-U @ 0 0 R> DOC-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
     THEN
     _MSD-W @ MEDIA-CONTENTS@ ?DUP 0= IF -1 EXIT THEN
-    >R _MSD-A @ _MSD-U @ R> LST-ITEM-VIEW-STORAGE-DISJOINT? ;
+    >R _MSD-A @ _MSD-U @ R> TREE-ITEM-VIEW-STORAGE-DISJOINT? ;
 
 \ The key c, without Ctrl or Alt, and Escape.
 : _MEDIA-C?  ( event -- flag )
@@ -551,7 +616,7 @@ DEFER _MEDIA-HANDLE-D
     DUP _MEDIA-RELEASE
     DUP _MEDIA-O-PICTURE _MEDIA@ ?DUP IF PICT-FREE THEN
     DUP _MEDIA-O-DOCV _MEDIA@ ?DUP IF DOCV-FREE THEN
-    DUP _MEDIA-O-CONTENTS _MEDIA@ ?DUP IF LST-FREE THEN
+    DUP _MEDIA-O-CONTENTS _MEDIA@ ?DUP IF TREE-FREE THEN
     FREE ;
 
 \ MEDIA-PENDING? ( widget -- flag )

@@ -1035,7 +1035,7 @@ def _media_collection_program() -> list[str]:
 
     picture = qoi_codec.encode([[(8 * x, 12 * y, 7, 255) for x in range(30)] for y in range(20)])
     picture_bytes = " ".join(f"{byte} C," for byte in picture)
-    markdown = b"# Notes\n\nSome *text* here.\n\n- one\n- two\n"
+    markdown = b"# Notes\n\nSome *text* here.\n\n## List\n\n- one\n- two\n"
     markdown_bytes = " ".join(f"{byte} C," for byte in markdown)
     return [
         "VARIABLE _UM-FAILS", "VARIABLE _UM-CHECKS", "VARIABLE _UM-DEPTH",
@@ -1126,7 +1126,7 @@ def _media_collection_program() -> list[str]:
         "_UM-COUNT @ 2 = _UM-ASSERT",
         "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-EM @ _UM-INDEX = _UM-ASSERT",
         "_UM-D0 _UM-ENTRY USCOL-ENTRY-FAMILY@ USCOL-F-DOCUMENT = _UM-ASSERT",
-        "_UM-D0 _UM-ENTRY USCOL-DOC-BLOCK-COUNT@ 4 = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-DOC-BLOCK-COUNT@ 5 = _UM-ASSERT",
         "_UM-D0 _UM-ENTRY USCOL-DOC-FIRST-BLOCK _UM-BLOCK !",
         "_UM-BLOCK @ USCOL-BLOCK-KEY@ 1 = _UM-ASSERT",
         "_UM-BLOCK @ USCOL-BLOCK-KIND@ DOC-B-HEADING = _UM-ASSERT",
@@ -1144,9 +1144,10 @@ def _media_collection_program() -> list[str]:
         "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
         "_UM-WM @ MEDIA-VIEW@ MEDIA-V-DOCUMENT = _UM-ASSERT",
         "_UM-STACK",
-        # Contents: the document's contents' list is an ITEM_VIEW of its
-        # entries; banks over the list, the row buffer its rows are made
-        # in, or the document's contents are refused.
+        # Contents: the document's contents' tree is an ITEM_VIEW of its
+        # entries, a TREE whose second entry is under the first; banks
+        # over the tree, its open entries, the entries' next siblings, or
+        # the document's contents are refused.
         "_UM-WM @ _MEDIA-SHOW-CONTENTS _UM-ASSERT",
         "_UM-WM @ MEDIA-VIEW@ MEDIA-V-CONTENTS = _UM-ASSERT",
         "_UM-EM @ UIDL-DIRTY! UTUI-PAINT _UM-STACK",
@@ -1155,13 +1156,28 @@ def _media_collection_program() -> list[str]:
         "_UM-COUNT @ 2 = _UM-ASSERT",
         "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-EM @ _UM-INDEX = _UM-ASSERT",
         "_UM-D0 _UM-ENTRY USCOL-ENTRY-FAMILY@ USCOL-F-ITEM-VIEW = _UM-ASSERT",
-        "_UM-D0 _UM-ENTRY USCOL-IV-ITEM-COUNT@ 1 = _UM-ASSERT",
-        "_UM-D0 _UM-ENTRY USCOL-IV-FIRST-ITEM USCOL-VI-FIRST-FIELD USCOL-FIELD-TEXT@",
-        '  S" Notes" STR-STR= _UM-ASSERT',
+        "_UM-D0 _UM-ENTRY USCOL-IV-ROLE@ USCOL-IV-TREE = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-IV-ITEM-COUNT@ 2 = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-IV-FIRST-ITEM _UM-BLOCK !",
+        "_UM-BLOCK @ USCOL-VI-KEY@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-PARENT@ 0= _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-DEPTH@ 0= _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-STATE@",
+        "  USCOL-IV-SELECTED USCOL-IV-EXPANDABLE OR USCOL-IV-EXPANDED OR = _UM-ASSERT",
+        '_UM-BLOCK @ USCOL-VI-FIRST-FIELD USCOL-FIELD-TEXT@ S" Notes" STR-STR= _UM-ASSERT',
+        "_UM-BLOCK @ USCOL-VI-NEXT _UM-BLOCK !",
+        "_UM-BLOCK @ USCOL-VI-KEY@ 2 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-PARENT@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-DEPTH@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-STATE@ 0= _UM-ASSERT",
+        '_UM-BLOCK @ USCOL-VI-FIRST-FIELD USCOL-FIELD-TEXT@ S" List" STR-STR= _UM-ASSERT',
         "_UM-D1 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
-        "_UM-WM @ MEDIA-CONTENTS@ _LST-DESC-SIZE _UM-CAPTURE",
+        "_UM-WM @ MEDIA-CONTENTS@ _TREE-DESC-SZ _UM-CAPTURE",
         "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
-        "_UM-WM @ _MEDIA-O-ROW-A + @ _UM-WM @ _MEDIA-O-ROW-CAP + @ _UM-CAPTURE",
+        "_UM-WM @ MEDIA-CONTENTS@ DUP _TREE-O-XA + @ SWAP _TREE-O-XCAP + @ CELLS",
+        "  _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ _MEDIA-O-NEXT-A + @ _UM-WM @ _MEDIA-O-NEXT-N + @ CELLS _UM-CAPTURE",
         "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
         "_UM-WM @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DUP _DOC.ENTRIES-A @",
         "  SWAP _DOC.ENTRIES-CAP @ _UM-CAPTURE",
@@ -1201,7 +1217,7 @@ def test_a_media_element_is_captured_as_the_view_it_shows():
     output = _run_forth(_media_collection_program())
     summary = re.search(r"MEDIA COLLECTION PASS\s+(\d+)\s+0", output)
     assert summary, output[-10000:]
-    assert int(summary.group(1)) >= 70
+    assert int(summary.group(1)) >= 81
 
 
 def _ruha_constructor_program() -> list[str]:

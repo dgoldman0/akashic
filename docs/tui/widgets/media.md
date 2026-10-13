@@ -3,7 +3,7 @@
 **Prefix:** `MEDIA-` (public), `_MEDIA-` (internal)  
 **Provider:** `akashic-tui-media`  
 **Dependencies:** `widget.f`, `draw.f`, [picture.f](picture.md),
-[textarea.f](textarea.md), [document.f](document.md),
+[textarea.f](textarea.md), [tree.f](tree.md), [document.f](document.md),
 [media/](../../media/source.md) source, VFS source, kinds and documents,
 [markup/markdown.f](../../markup/markdown.md),
 [utils/fs/link-path.f](../../utils/fs/link-path.md), `memory-source.f`,
@@ -69,15 +69,24 @@ shows its facts. A document whose reader says it needs a password
 
 A document's contents ([media/document.f](../../media/document.md)) show
 in place of the document: the key `c` shows them as a canonical
-[list](list.md), each entry's title indented two cells a level, and the
-first selected. Enter goes where the chosen entry goes in the document, as
-`DOCV-GO-ENTRY` does, and shows the document; `c` or Escape shows the
-document again where it was. A document with no contents ignores `c`. The
-contents take the same region as the document, so a narrow preview loses
-nothing to them, and the view in use is `MEDIA-V-CONTENTS`. A rich
-terminal sees the contents as it sees any list: the media element's
-capture publishes its text area, its document view, or its contents' list
-as the item view the list gives, each row's text as CELL shows it.
+[tree](tree.md), each entry under the entry above it that is less deep,
+and the first selected. An entry with entries under it starts open unless
+the document says it starts closed (`DOC-ENTRY-CLOSED?`), as a PDF's
+outline may; Right opens it and Left closes it. Enter goes where the
+chosen entry goes in the document, as `DOCV-GO-ENTRY` does, and shows the
+document; `c` or Escape shows the document again where it was. Shown
+again, the contents are as they were left, while the document stays open.
+A document with no contents ignores `c`. The contents take the same
+region as the document, so a narrow preview loses nothing to them, and
+the view in use is `MEDIA-V-CONTENTS`.
+
+The tree's node for an entry is the entry's index plus one, which is also
+its key. Each entry's next sibling is kept, one cell an entry from the
+widget's memory, made in one pass when the contents first show and given
+back when the document closes; when memory refuses it, `c` is ignored. A
+rich terminal sees the contents as it sees any tree: the media element's
+capture publishes its text area, its document view, or its contents' tree
+as the item view the tree gives, each entry at its depth under its parent.
 `MEDIA-CONTENTS-STORAGE-DISJOINT?` tells the capture whether a span lies
 clear of all that showing the contents touches.
 
@@ -116,9 +125,9 @@ only once the picture has been drawn.
 | `MEDIA-NAME@` | `( widget -- a u )` | The file's name, the part of its path after the last slash. |
 | `MEDIA-VIEW@` | `( widget -- view )` | `MEDIA-V-NONE`, `-PICTURE`, `-TEXT`, `-FACTS`, `-DOCUMENT` or `-CONTENTS`. |
 | `MEDIA-NOTE@` | `( widget -- note )` | Why the facts show: `MEDIA-N-*`. |
-| `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget, text area, document view or contents' list the current view draws. |
-| `MEDIA-CONTENTS-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | Whether a span lies clear of the media descriptor, its row buffer, the document's record and contents, and the contents' list's descriptor, region and columns. |
-| `MEDIA-PICTURE@`, `MEDIA-TEXT@`, `MEDIA-DOCUMENT@`, `MEDIA-CONTENTS@` | `( widget -- widget \| 0 )` | The picture widget, the document view and the contents' list, each made on first use, and the current text area. |
+| `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget, text area, document view or contents' tree the current view draws. |
+| `MEDIA-CONTENTS-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | Whether a span lies clear of the media descriptor, the entries' next siblings, the document's record and contents, and the contents' tree's descriptor, region and open entries. |
+| `MEDIA-PICTURE@`, `MEDIA-TEXT@`, `MEDIA-DOCUMENT@`, `MEDIA-CONTENTS@` | `( widget -- widget \| 0 )` | The picture widget, the document view and the contents' tree, each made on first use, and the current text area. |
 
 ## In UIDL
 

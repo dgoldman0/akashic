@@ -1065,7 +1065,7 @@ the surface.
   | links within it | links to a document's own headings | 12 |
   | compressed streams | an inflater, which also gives CELL its PNG pictures | 13 |
   | pictures inside the file | a source for a span of another source | 14 |
-  | an outline | a document's outline as a list of its headings | 14 |
+  | an outline | a document's outline as a tree of its headings | 14 |
   | encryption | MD5 and RC4 beside the AES Akashic has | 14 |
 
 - A document is one general element: blocks (headings, paragraphs, list
@@ -1344,13 +1344,16 @@ empty password, and those are read too.
   outline can name a page through it.
 - *The outline is a general element.* A document's contents are its
   headings, or the PDF's own outline when it has one. File Explorer's
-  preview shows them as a list, and choosing one scrolls the document to
-  it. A Markdown document gets the same list. Step 9 settled the rest: the
-  list takes the document's place, so a narrow preview loses nothing to
+  preview shows them as a tree, and choosing one scrolls the document to
+  it. A Markdown document gets the same tree. Step 9 settled the rest: the
+  tree takes the document's place, so a narrow preview loses nothing to
   it; the key c shows it, Enter goes to the chosen entry and shows the
   document, and c or Escape shows the document again; it shows headings
-  of levels 1 to 3, and a PDF's outline whole. A PDF without an outline
-  lists its pages, since finding its headings would read every page.
+  of levels 1 to 3, and a PDF's outline whole. An entry with entries
+  under it starts open unless the document says it starts closed, as a
+  PDF's outline may; Right and Left open and close it. A PDF without an
+  outline lists its pages, since finding its headings would read every
+  page.
 - *AES is MegaPad's engine's.* PDF encryption uses AES in CBC mode:
   AESV2 decrypts with AES-128, and AESV3 decrypts with AES-256 after
   deriving its key with AES-128 encryption and SHA-256, SHA-384 and
@@ -1486,12 +1489,14 @@ open too, and both journeys pass again with the AES reader
   place, and the reader keeps the one found last, so it is looked up
   once.
 
-- A document's contents reach a rich terminal as their list: the media
-  element's capture publishes the list's item view while it shows them,
-  as it publishes the text area or the document view it shows, each row
-  as CELL shows it. `MEDIA-CONTENTS-STORAGE-DISJOINT?` keeps a capture's
-  banks clear of the row buffer the rows are made in and of the
-  document's contents.
+- A document's contents reach a rich terminal as their tree: the media
+  element's capture publishes the tree's item view while it shows them,
+  as it publishes the text area or the document view it shows, each
+  entry at its depth under its parent, open or closed. A rich terminal
+  opens and closes entries as it does any tree's. The tree keeps what was
+  opened and chosen while the document stays open.
+  `MEDIA-CONTENTS-STORAGE-DISJOINT?` keeps a capture's banks clear of the
+  entries' next siblings and of the document's contents.
 
 - A link or a contents entry shows the place on its page that its
   destination names, not the page's start. Each page read keeps where its
@@ -1532,10 +1537,12 @@ open too, and both journeys pass again with the AES reader
 
 - A document's contents are a general element (`DOC-CONTENTS`): its
   reader's, as a PDF's outline, or else its headings of levels 1 to 3. A
-  PDF without an outline lists its pages. The media widget shows them as a
-  list in the document's place with the key c; Enter goes to the chosen
-  entry, reading a PDF's page alone if need be. Making them reads the
-  outline and no page.
+  PDF without an outline lists its pages. An entry starts closed when its
+  reader says so (`DOC-CLOSE-ENTRY`), as a PDF outline item with a
+  negative `/Count` does. The media widget shows them as a tree in the
+  document's place with the key c; Enter goes to the chosen entry,
+  reading a PDF's page alone if need be. Making them reads the outline and
+  no page.
 
 - A PDF's links are followed. The layout places each link of a page over
   the words its rectangle covers, in proportion within a run and snapped to

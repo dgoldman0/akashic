@@ -88,16 +88,16 @@ FEXP_LINKED_TEXT = "Read the example and try it."
 # The canonical image's sample PDF (sample_pdf.py), which File Explorer
 # previews as a document read a page at a time: its first page's title, its
 # link to its last page and that page's code, its outline as the contents'
-# list shows it (each title two cells in for each level), the entry that
-# shows its second page, the facts CELL shows beneath that page's JPEG
-# photograph while the rich side shows it, and the copy encrypted with the
-# empty password.
+# tree shows it (each entry's depth and title, the title's entry open, as
+# the file says), the entry that shows its second page, the facts CELL
+# shows beneath that page's JPEG photograph while the rich side shows it,
+# and the copy encrypted with the empty password.
 FEXP_PDF = "sample.pdf"
 FEXP_PDF_ENCRYPTED = "encrypted.pdf"
 FEXP_PDF_TITLE = "A sample PDF"
 FEXP_PDF_LAST_LINK = "the last page"
 FEXP_PDF_CODE = "Some code, in a fixed-pitch font:"
-FEXP_PDF_OUTLINE = ("A sample PDF", "  Lists", "Pictures", "The end")
+FEXP_PDF_OUTLINE = ((0, "A sample PDF"), (1, "Lists"), (0, "Pictures"), (0, "The end"))
 FEXP_PDF_PICTURES = "Pictures"
 FEXP_PDF_PHOTO_FACTS = "JPEG, 160 \u00d7 100"
 # Wheel detents a scroll step sends; the document view scrolls three rows
@@ -773,6 +773,7 @@ class FexpAloneJourney(_AppletJourney):
         PDF_PREVIEWED,
         PDF_LAST_PAGE,
         PDF_CONTENTS,
+        PDF_OUTLINE_CLOSED,
         PDF_PICTURES,
         PDF_DETAILS,
         ENCRYPTED_SELECTED,
@@ -787,11 +788,11 @@ class FexpAloneJourney(_AppletJourney):
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(34)
+    ) = range(35)
     _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
                         LINKED_DOCUMENT)
-    _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_PICTURES,
-                   ENCRYPTED_PREVIEWED)
+    _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_OUTLINE_CLOSED,
+                   PDF_PICTURES, ENCRYPTED_PREVIEWED)
     # Each Preview tab stage: what it shows, and the Details stage after it.
     _PREVIEWS = {
         PICTURE_PREVIEWED: (True, PICTURE_DETAILS),
@@ -948,6 +949,29 @@ class FexpAloneJourney(_AppletJourney):
     @classmethod
     def _tree(cls, projection: RichScreenProjection):
         trees = cls._content_views(projection, ItemViewRole.TREE)
+        return trees[0] if len(trees) == 1 else None
+
+    @classmethod
+    def _outline(cls, projection: RichScreenProjection, bounds):
+        """The contents' tree shown in the document's place: the one TREE
+        within the columns of the tabset holding the Preview tab, apart
+        from the folder tree beside it; or None."""
+
+        left, top, right, bottom = bounds
+        tabsets = [
+            tabset
+            for tabset in projection.semantic_tabset_claims
+            if left <= tabset.left < tabset.right <= right
+            and top <= tabset.top < tabset.bottom <= bottom
+            and any(tab.label == "Preview" for tab in tabset.tabs)
+        ]
+        if len(tabsets) != 1:
+            return None
+        trees = [
+            view
+            for view in cls._content_views(projection, ItemViewRole.TREE)
+            if tabsets[0].left <= view.left < view.right <= tabsets[0].right
+        ]
         return trees[0] if len(trees) == 1 else None
 
     @classmethod
@@ -1151,29 +1175,54 @@ class FexpAloneJourney(_AppletJourney):
     def _pdf(self, offer, generation, projection, sender) -> JourneyProgress:
         """sample.pdf's preview: a DOCUMENT from its first page's start, whose
         link to the last page shows that page; the key c shows its outline
-        as a LIST in the document's place, whose Pictures entry shows the
-        second page from its start with its two pictures shown rich; and
-        encrypted.pdf, read with the empty password, shows the same title."""
+        as a TREE in the document's place, the title's entry open as the
+        file says, and a COLLAPSE closes it; its Pictures entry then shows
+        the second page from its start with its two pictures shown rich;
+        and encrypted.pdf, read with the empty password, shows the same
+        title."""
 
         bounds = _desk_content_bounds(projection)
         _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
         if not selected:
             return self._wait("the Preview tab selected")
         document = self._document_claim(projection, bounds)
-        if self.stage == self.PDF_CONTENTS:
-            lists = self._content_views(projection, ItemViewRole.LIST)
-            outline = lists[0] if len(lists) == 1 else None
-            if outline is None or tuple(
-                item.fields[0].text for item in outline.content.items
-            ) != FEXP_PDF_OUTLINE:
-                return self._wait(f"{FEXP_PDF}'s outline listed")
+        if self.stage in (self.PDF_CONTENTS, self.PDF_OUTLINE_CLOSED):
+            outline = self._outline(projection, bounds)
+            shown = () if outline is None else tuple(
+                (item.depth, item.fields[0].text) for item in outline.content.items
+            )
+            if self.stage == self.PDF_CONTENTS:
+                expected, waiting = FEXP_PDF_OUTLINE, "shown as a tree"
+            else:
+                expected = tuple(entry for entry in FEXP_PDF_OUTLINE if entry[0] == 0)
+                waiting = "shown with its title's entry closed"
+            if shown != expected:
+                return self._wait(f"{FEXP_PDF}'s outline {waiting}")
             if document is not None:
                 raise PhysicalDesktopAcceptanceError(
                     f"{FEXP_PDF}'s outline did not take the document's place"
                 )
             _require_cell_text_in(offer, FEXP_PDF_PICTURES, bounds, _WHERE)
+            title = outline.named(FEXP_PDF_TITLE)
+            if not title.state & ItemState.EXPANDABLE:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF}'s outline cannot open or close its title's entry"
+                )
+            if self.stage == self.PDF_CONTENTS:
+                lists = outline.content.items[1]
+                if not title.state & ItemState.EXPANDED or lists.parent_key != title.item_key:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"{FEXP_PDF}'s outline does not show its title's entry open"
+                    )
+                return self._step("fexp-pdf-outline-shown", "item_collapse",
+                                  outline.value(title.item_key), self.PDF_OUTLINE_CLOSED,
+                                  offer, generation, sender)
+            if title.state & ItemState.EXPANDED:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF}'s closed title entry still says it is open"
+                )
             entry = outline.named(FEXP_PDF_PICTURES)
-            return self._step("fexp-pdf-outline-listed", "item_open",
+            return self._step("fexp-pdf-outline-closed", "item_open",
                               outline.value(entry.item_key), self.PDF_PICTURES,
                               offer, generation, sender)
         name = FEXP_PDF_ENCRYPTED if self.stage == self.ENCRYPTED_PREVIEWED else FEXP_PDF

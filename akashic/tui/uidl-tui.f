@@ -6691,7 +6691,7 @@ VARIABLE _UTUI-CS-ROOT-W
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
 
 \ A media element is checked as the view it shows; its text view, its
-\ document view and its contents' list are collections, read through the
+\ document view and its contents' tree are collections, read through the
 \ media descriptor.
 : _UTUI-CS-UIDL-MEDIA  ( -- disjoint status )
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
@@ -6890,7 +6890,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     UIDL-TYPE UIDL-T-TABS = IF USCOL-F-TABSET ELSE 0 THEN ;
 
 \ Replace the media widget in _UTUI-VC-W by the text area, document view
-\ or contents' list it shows, keeping the media widget for the storage
+\ or contents' tree it shows, keeping the media widget for the storage
 \ check.
 : _UTUI-VC-MEDIA-VIEW  ( -- status )
     _UTUI-VC-W @ DUP _UTUI-MEDIA-GENUINE? 0= IF
@@ -6969,10 +6969,10 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
     USCOL-S-OK ;
 
-\ A media element's contents' list draws in the element's proxy region, as
+\ A media element's contents' tree draws in the element's proxy region, as
 \ its document view does.
-: _UTUI-VC-PREPARE-LIST  ( -- status )
-    _UTUI-VC-W @ _LST-GENUINE? 0= IF USCOL-S-INVALID EXIT THEN
+: _UTUI-VC-PREPARE-TREE  ( -- status )
+    _UTUI-VC-W @ _TREE-GENUINE? 0= IF USCOL-S-INVALID EXIT THEN
     _UTUI-VC-W @ _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
         USCOL-S-INVALID EXIT
     THEN
@@ -7039,7 +7039,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
         _UTUI-VC-PREPARE-DOCUMENT EXIT
     THEN
     _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
-        _UTUI-VC-PREPARE-LIST EXIT
+        _UTUI-VC-PREPARE-TREE EXIT
     THEN
     USCOL-S-INVALID ;
 
@@ -7143,8 +7143,8 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-BUILDER @ USCOL-BUILDER-FINISH ;
 
 \ The builder and the destination lie clear of all that showing a media
-\ element's contents touches, the row buffer the list's rows are made in
-\ among it, which the list's own check does not know.
+\ element's contents touches, the document's entries and the entries'
+\ next siblings among it, which the tree's own check does not know.
 : _UTUI-VC-CONTENTS-CLEAR?  ( -- flag )
     _UTUI-VC-BUILDER @ USCOL-BUILDER-SIZE _UTUI-VC-MEDIA @
         MEDIA-CONTENTS-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
@@ -7166,7 +7166,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
         _UTUI-VC-CONTENTS-CLEAR? 0= IF 0 USCOL-S-INVALID EXIT THEN
         _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
-        _UTUI-VC-BUILDER @ _UTUI-VC-W @ LST-ITEM-VIEW-CAPTURE EXIT
+        _UTUI-VC-BUILDER @ _UTUI-VC-W @ TREE-ITEM-VIEW-CAPTURE EXIT
     THEN
     0 USCOL-S-INVALID ;
 

@@ -739,6 +739,25 @@ def test_tree_expansion_follows_keys_when_rows_above_change() -> None:
     assert values == [4, 4, 1, 4]
 
 
+def test_tree_expands_a_hidden_node_by_its_key() -> None:
+    values = _numbers(
+        _tree(10)
+        + [
+            # With Root collapsed, ChildB is hidden; expanding its key
+            # shows nothing more until Root is expanded, and then ChildB
+            # shows Grandchild.  A zero key is no key.
+            "_TW @ _TN TREE-COLLAPSE _TW @ _TREE-VIS-COUNT",
+            "_TW @ _TN 64 + TREE-EXPAND-KEY _TW @ _TREE-VIS-COUNT",
+            "_TW @ 0 TREE-EXPAND-KEY _TW @ _TREE-O-XN + @",
+            "_TW @ _TN TREE-EXPAND _TW @ _TREE-VIS-COUNT",
+        ]
+        + _report(4)
+    )
+
+    # The report gives the last value first.
+    assert values == [4, 1, 1, 1]
+
+
 _TREE_ITEM = [
     ": _TITEM  ( key action -- consumed? )",
     "  KEY-MOUSE-ITEM-ACTION ! KEY-MOUSE-ITEM-KEY !",

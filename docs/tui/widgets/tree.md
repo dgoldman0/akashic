@@ -1,11 +1,11 @@
 # akashic/tui/widgets/tree.f — Tree View Widget
 
 **Layer:** 7  
-**Lines:** 849  
+**Lines:** 894  
 **Prefix:** `TREE-` (public), `_TREE-` (internal)  
 **Provider:** `akashic-tui-tree`  
 **Dependencies:** `widget.f`, `draw.f`, `region.f`, `keys.f`,
-`semantic-collections.f`, `memory-span.f`
+`semantic-collections.f`, `bidi.f`, `memory-span.f`
 
 ## Overview
 
@@ -34,7 +34,9 @@ so one set of callbacks can serve several trees.
 
 Expansion is the set of expanded keys, kept as a sorted array that grows
 as needed.  Because it is keyed, a branch stays open however the rows
-above it change, and there is no node limit.  The selection is the
+above it change, and there is no node limit.  `TREE-EXPAND-KEY` adds a
+key whether or not its node is shown, so an owner can set which branches
+start open, those below closed ones too.  The selection is the
 selected node's key; when that node is no longer shown, the selection
 falls back to the first row.
 
@@ -43,6 +45,13 @@ falls back to the first row.
 Each shown node takes one row.  A branch's mark (▶ collapsed, ▼
 expanded) is drawn at column depth × 2 of the tree's region, and the
 label two cells to its right.  The selected row is highlighted.
+
+Labels that come from outside the application, as a document's or the
+network's text does, are marked with `TREE-UNTRUSTED!`.  They are drawn
+as `DRW-TEXT-UNTRUSTED` draws, ignoring direction embeddings, overrides
+and isolates, and published with those controls as inert stand-ins
+(`BIDI-INERT`), as an untrusted list's text is.  Either way a control
+character shows and is published as U+FFFD.
 
 ## Input (via `WDG-HANDLE`)
 
@@ -64,7 +73,7 @@ arrive as `KEY-MOUSE-ITEM` with the key in `KEY-MOUSE-ITEM-KEY` and the
 action in `KEY-MOUSE-ITEM-ACTION`.  An item event whose key names no shown
 node is consumed and changes nothing.
 
-## Descriptor Layout (160 bytes)
+## Descriptor Layout (168 bytes)
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -84,6 +93,7 @@ node is consumed and changes nothing.
 | +136 | expanded-cap | Capacity of expanded-a, in keys |
 | +144 | instance | Nonzero allocation-lifetime instance token |
 | +152 | context | The caller's context cell |
+| +160 | untrusted | The labels come from outside the application |
 
 ## API Reference
 
@@ -96,11 +106,13 @@ node is consumed and changes nothing.
 
 ### Expand / Collapse
 
-All of these act on a node that is shown and do nothing otherwise.
+All of these but `TREE-EXPAND-KEY` act on a node that is shown and do
+nothing otherwise.
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `TREE-EXPAND` | `( widget node -- )` | Expand a branch (no-op on leaves) |
+| `TREE-EXPAND-KEY` | `( widget key -- )` | Expand the node with a key, shown or not; it shows its children whenever it is shown |
 | `TREE-COLLAPSE` | `( widget node -- )` | Collapse a branch |
 | `TREE-TOGGLE` | `( widget node -- )` | Toggle a branch |
 | `TREE-EXPANDED?` | `( widget node -- flag )` | Is the node expanded? |
@@ -119,6 +131,7 @@ All of these act on a node that is shown and do nothing otherwise.
 | `TREE-CONTEXT!` | `( context widget -- )` | Store the caller's context cell |
 | `TREE-CONTEXT@` | `( widget -- context )` | Read the caller's context cell |
 | `TREE-WALK-CONTEXT` | `( -- context )` | Inside a callback: the calling tree's context cell |
+| `TREE-UNTRUSTED!` | `( flag widget -- )` | Whether the labels come from outside the application |
 
 ### Scrolling and Refresh
 
