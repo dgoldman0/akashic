@@ -163,7 +163,7 @@ ASHELL-RUN
   │       1. KEY-POLL → resize / dispatch
   │       2. Hardware resize poll
   │       3. Drain deferred actions
-  │       4. APP.SERVICE-XT, if set
+  │       4. UTUI-SERVICE (with a UIDL document), then APP.SERVICE-XT, if set
   │       5. Timer tick check
   │       6. Paint if dirty
   │       7. IDLE-UNTIL next deadline, if the pass did nothing
@@ -407,7 +407,15 @@ after the posted actions and before the tick, so it must be cheap when
 nothing is due. A true result counts as work, so the loop takes another pass
 instead of sleeping. Desk uses it for sandbox jobs on worker cores: a worker
 that finishes wakes Desk's core with an IPI, and the next pass takes the job
-back and completes its run instead of waiting for the tick.
+back and completes its run instead of waiting for the tick. Desk also calls
+`AHOST-SERVICE` from it, so its applets' pictures decode as a standalone
+app's do.
+
+Before the app's service, a shell with a UIDL document calls `UTUI-SERVICE`,
+which decodes one bounded slice of each picture a `<media>` element is
+showing, or reads the next part or makes more of a picture's file for a
+document one shows. A slice counts as work, so the loop keeps taking passes until the
+pictures are ready, and no app needs a service of its own for them.
 
 ### Deferred Action Queue
 

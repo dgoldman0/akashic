@@ -369,8 +369,10 @@ def _assert_static_contracts() -> None:
     key_owner = KEY_OWNER.read_text(encoding="utf-8")
     session = SESSION.read_text(encoding="utf-8")
 
-    assert RAW_MODULES[-2:] == (
+    assert RAW_MODULES[-4:] == (
         "net/http-stream.f",
+        "math/adler32.f",
+        "utils/inflate.f",
         "net/http-buffered.f",
     )
     assert "atproto/xrpc.f" in RAW_MODULES

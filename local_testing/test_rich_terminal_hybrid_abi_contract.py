@@ -39,8 +39,8 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
     provider = PROVIDER.read_text(encoding="utf-8")
     assert _constant(engine, "RTE-HYBRID-PLAN-SIZE") == 168
     assert _constant(engine, "RTE-HYBRID-TEXT-REF-SIZE") == 16
-    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 456
-    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 456
+    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 472
+    assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 472
 
     wrapper = {
         "ATTEMPT": 0,

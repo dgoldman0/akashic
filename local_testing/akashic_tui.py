@@ -327,8 +327,11 @@ from rich_terminal import DriverStatus, TerminalState  # noqa: E402
 from rich_terminal import text_rules  # noqa: E402
 import agent_transcript  # noqa: E402
 import mixed_text  # noqa: E402
+import qoi_codec  # noqa: E402
+import sample_pdf  # noqa: E402
 import styled_text  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
+    IMAGE_FORMATS,
     RetainedFeature,
     RetainedPolicy,
 )
@@ -337,6 +340,7 @@ from shared.session import (  # noqa: E402
     RichTerminalSessionPolicy,
     TerminalSnapshot,
 )
+from shared.session_options import link_pace  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -13018,6 +13022,10 @@ PAD-RUN
         idle_load_ceiling=0.10,
     ),
     "fexplorer": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/fexplorer/fexplorer.f",),
         resources=(
             "tui/applets/fexplorer/fexplorer.uidl",
@@ -13409,6 +13417,10 @@ _dt-run
         stable_markers=("DAYBOOK CONTRACTS PASS",),
     ),
     "grid-eval": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/grid/grid.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - focused Grid dependency evaluator bounds
@@ -13545,6 +13557,10 @@ _gt-run
         failure_markers=("GRID EVAL FAIL",),
     ),
     "grid-contracts": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/grid/grid.f",),
         resources=(),
         autoexec=r"""\ autoexec.f - strict Grid import/persistence contracts
@@ -13915,6 +13931,10 @@ _gcx-run
         failure_markers=("GRID CONTRACTS FAIL",),
     ),
     "grid": Profile(
+        # One MP64FS file per module would exceed the filesystem's fixed
+        # 128-entry directory for this closure, so its modules are linked
+        # into chunk files exactly as the Desktop's are.
+        linked=True,
         roots=("tui/applets/grid/grid.f",),
         resources=("tui/applets/grid/grid.uidl",),
         autoexec=r"""\ autoexec.f - standalone Grid profile
@@ -14239,6 +14259,17 @@ DESKTOP_APT1_SHELL_WIRE_BYTES = (
 DESKTOP_APT1_SHELL_MAX_PAYLOAD_BYTES = 104 + DESKTOP_APT1_SHELL_TEXT_BYTES
 
 
+# Pictures.  The rich Desktop terminal holds raw RGBA8 pictures up to 4096
+# pixels a side, an image size practically every renderer takes, and as many
+# bytes as one picture that large; a producer asks its owner for only what
+# its pictures need.  Sixteen pictures leave room for several applets that
+# show one each.  A chunk is as long as one frame's payload lets it be.
+DESKTOP_APT1_MAX_IMAGE_SIDE = 4_096
+DESKTOP_APT1_MAX_RESOURCES = 16
+DESKTOP_APT1_TOTAL_RESOURCE_BYTES = DESKTOP_APT1_MAX_IMAGE_SIDE ** 2 * 4
+DESKTOP_APT1_MAX_RESOURCE_CHUNK_BYTES = DESKTOP_APT1_MAX_PAYLOAD_BYTES - 32
+
+
 # The rich Desktop terminal without the shell's panes and taskbar.
 DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
     guest_rx_bytes=8_192,
@@ -14272,26 +14303,29 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
             | RetainedFeature.CONTROL_ITEMS
+            | RetainedFeature.CONTROL_DOCUMENTS
             | RetainedFeature.GRID_CELLS
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
             | RetainedFeature.SERIES
+            | RetainedFeature.RGBA_IMAGE
         ),
         max_owner_records=1,
         max_live_owners=1,
         max_regions=DESKTOP_APT1_MAX_REGIONS,
-        max_resources=0,
+        max_resources=DESKTOP_APT1_MAX_RESOURCES,
         max_objects=DESKTOP_APT1_MAX_OBJECTS,
         max_series=DESKTOP_APT1_MAX_SERIES,
         max_operations_per_transaction=DESKTOP_APT1_MAX_OPERATIONS,
-        max_resource_chunk_bytes=0,
+        max_resource_chunk_bytes=DESKTOP_APT1_MAX_RESOURCE_CHUNK_BYTES,
         max_retained_transaction_bytes=(
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
         ),
-        total_resource_bytes=0,
-        image_format=0,
-        max_image_width=0,
-        max_image_height=0,
+        total_resource_bytes=DESKTOP_APT1_TOTAL_RESOURCE_BYTES,
+        # Raw pixels, and QOI, PNG and JPEG files the terminal decodes.
+        image_formats=IMAGE_FORMATS,
+        max_image_width=DESKTOP_APT1_MAX_IMAGE_SIDE,
+        max_image_height=DESKTOP_APT1_MAX_IMAGE_SIDE,
         max_path_points=0,
         max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
@@ -14624,9 +14658,10 @@ PROFILES["desktop-apt1"] = replace(
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
 DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
-# A development check beyond one applet: Desk with Pad on a terminal with
-# little room for retained text (below).
-DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal")
+# Development checks beyond one applet: Desk with Pad on a terminal with
+# little room for retained text, and Desk with File Explorer showing a real
+# photograph (below).
+DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damaged")
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
@@ -14690,6 +14725,44 @@ PROFILES["desktop-apt1-small-terminal"] = replace(
             total_utf8_bytes=DESKTOP_APT1_SMALL_TERMINAL_UTF8_BYTES,
         ),
     ),
+)
+
+# Desk with File Explorer and a real photograph, 2160 by 1620 pixels and 8 MB
+# as QOI, which only this image carries.  It is wider than File Explorer's
+# largest preview on the physical viewer, so it shows there at the area's own
+# resolution (assets/pictures/README.md).
+SAMPLE_PHOTO_NAME = "spice-market.qoi"
+SAMPLE_PHOTO_SIZE = (2160, 1620)
+SAMPLE_PHOTO = (AKASHIC_ROOT / "assets/pictures" / SAMPLE_PHOTO_NAME).read_bytes()
+PROFILES["desktop-apt1-photo"] = replace(
+    PROFILES["desktop-apt1-fexp"],
+    initial_files=PROFILES["desktop-apt1-fexp"].initial_files
+    + ((SAMPLE_PHOTO_NAME, SAMPLE_PHOTO),),
+)
+
+
+def damaged_png(width: int, height: int) -> bytes:
+    """A PNG whose signature and header name a WIDTH by HEIGHT picture and
+    whose image data is no deflate stream: the guest reads what the file
+    says it is, and a decoder refuses it."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", b"not a deflate stream") + chunk(b"IEND", b""))
+
+
+# Desk with File Explorer and a picture file the terminal cannot decode,
+# which its Preview sends once and CELL then says is damaged.
+SAMPLE_DAMAGED_NAME = "damaged.png"
+SAMPLE_DAMAGED_SIZE = (64, 48)
+PROFILES["desktop-apt1-damaged"] = replace(
+    PROFILES["desktop-apt1-fexp"],
+    initial_files=PROFILES["desktop-apt1-fexp"].initial_files
+    + ((SAMPLE_DAMAGED_NAME, damaged_png(*SAMPLE_DAMAGED_SIZE)),),
 )
 
 
@@ -23549,10 +23622,30 @@ VARIABLE _paf-deconfig-request-u
     S"  HTTP/1.1" _paf-expected, _paf-expected-crlf,
     S" Host: public.api.bsky.app" _paf-expected, _paf-expected-crlf,
     S" Accept: application/json" _paf-expected, _paf-expected-crlf,
-    S" Accept-Encoding: identity" _paf-expected, _paf-expected-crlf,
+    S" Accept-Encoding: gzip" _paf-expected, _paf-expected-crlf,
     S" User-Agent: Akashic-Streams/0.3" _paf-expected, _paf-expected-crlf,
     S" Connection: close" _paf-expected, _paf-expected-crlf,
     _paf-expected-crlf, ;
+
+\ gzip of "{}"
+CREATE _paf-gz-braces
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 171 C, 174 C,
+    5 C, 0 C, 67 C, 191 C, 166 C, 163 C, 2 C, 0 C, 0 C, 0 C,
+HERE _paf-gz-braces - CONSTANT _paf-gz-braces-u
+\ gzip of 262145 zero bytes, one past the body capacity: a head, 254
+\ zero bytes and a tail.
+CREATE _paf-gz-zeros
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 237 C, 193 C,
+    49 C, 1 C, 0 C, 0 C, 0 C, 194 C, 160 C, 245 C, 79 C, 237 C, 111 C, 6 C,
+    160 C,
+HERE 254 0 FILL 254 ALLOT
+    206 C, 0 C, 131 C, 160 C, 128 C, 7 C, 1 C, 0 C, 4 C, 0 C,
+HERE _paf-gz-zeros - CONSTANT _paf-gz-zeros-u
+
+: _paf-body  ( -- a u )
+    _paf-response-mode @ 11 = IF _paf-gz-braces _paf-gz-braces-u EXIT THEN
+    _paf-response-mode @ 12 = IF _paf-gz-zeros _paf-gz-zeros-u EXIT THEN
+    S" {}" ;
 
 : _paf-build-response  ( -- )
     _paf-response 2048 0 FILL 0 _paf-response-u !
@@ -23583,6 +23676,9 @@ VARIABLE _paf-deconfig-request-u
         S" Content-Encoding: identity" _paf-response, _paf-response-crlf,
     THEN
     _paf-response-mode @ 6 = IF
+        S" Content-Encoding: br" _paf-response, _paf-response-crlf,
+    THEN
+    _paf-response-mode @ 10 >= IF
         S" Content-Encoding: gzip" _paf-response, _paf-response-crlf,
     THEN
     _paf-response-mode @ 7 = IF
@@ -23590,13 +23686,14 @@ VARIABLE _paf-deconfig-request-u
         S" Content-Encoding: identity" _paf-response, _paf-response-crlf,
     THEN
     _paf-response-mode @ 9 = IF
-        S" Content-Length: 262145"
+        S" Content-Length: 262145" _paf-response,
     ELSE
-        S" Content-Length: 2"
-    THEN _paf-response, _paf-response-crlf,
+        S" Content-Length: " _paf-response,
+        _paf-body NIP NUM>STR _paf-response,
+    THEN _paf-response-crlf,
     S" Connection: close" _paf-response, _paf-response-crlf,
     _paf-response-crlf,
-    _paf-response-mode @ 9 <> IF S" {}" _paf-response, THEN ;
+    _paf-response-mode @ 9 <> IF _paf-body _paf-response, THEN ;
 
 : _paf-fake-open-start  ( context -- io-status )
     DROP 1 _paf-open-starts +! NIO-S-PENDING ;
@@ -23922,6 +24019,15 @@ VARIABLE _paf-deconfig-request-u
     _paf-wipe-calls @ 1 = _paf-assert _paf-provider PAF.BODY-A @ 0= _paf-assert
     _paf-stack ;
 
+: _paf-test-gzip-success  ( -- )
+    11 _paf-prepare _paf-submit _paf-pump
+    _paf-operation XIOO.STATE @ XIO-STATE-SUCCEEDED = _paf-assert
+    _paf-provider PAF-BODY@ S" {}" STR-STR= _paf-assert
+    _paf-provider PAF.EXCHANGE HBUF-CODING@ HBUF-C-GZIP = _paf-assert
+    _paf-operation-reset
+    _paf-wipe-calls @ 1 = _paf-assert _paf-provider PAF.BODY-A @ 0= _paf-assert
+    _paf-stack ;
+
 : _paf-test-cancel  ( -- )
     0 _paf-prepare _paf-submit _paf-service XIO-TICK
     _paf-stack
@@ -23974,6 +24080,10 @@ VARIABLE _paf-deconfig-request-u
     8 PAF-ERR-TRANSPORT HBUF-S-PROTOCOL PAF-XERR-TRANSPORT 1 0 _paf-reject
     9 PAF-ERR-CAPACITY PAF-CODE-BODY-OVERFLOW PAF-XERR-CAPACITY
         1 0 _paf-reject
+    10 PAF-ERR-CONTENT-ENCODING PAF-CODE-CONTENT-ENCODING-DAMAGED
+        PAF-XERR-CONTENT-ENCODING 1 0 _paf-reject
+    12 PAF-ERR-CAPACITY PAF-CODE-BODY-OVERFLOW PAF-XERR-CAPACITY
+        1 0 _paf-reject
     _paf-stack ;
 
 : _paf-test-cleanup-failure  ( -- )
@@ -24012,6 +24122,7 @@ VARIABLE _paf-deconfig-request-u
     _paf-test-invalid-context
     _paf-test-success
     _paf-test-identity-success
+    _paf-test-gzip-success
     _paf-test-cancel
     _paf-test-rejections
     _paf-test-cleanup-failure
@@ -26681,6 +26792,97 @@ GRID_SAMPLE = (
     "Subtotal,,,=SUM(D2:D3)\n"
 ).encode()
 
+def _sample_picture() -> bytes:
+    """An evening sky over two hills with a low sun, 160 by 100 pixels, as
+    QOI.  Integer arithmetic keeps its bytes the same on every host.  The
+    corners are rounded with transparent and half-transparent pixels, so a
+    viewer's background and blending show."""
+
+    width, height = 160, 100
+    rows = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            r = 30 + 200 * y // 70
+            g = 40 + 110 * y // 70
+            b = 120 - 50 * y // 70
+            dx, dy = x - 112, y - 60
+            if dx * dx + dy * dy < 16 * 16:
+                r, g, b = 255, 214, 96
+            hill = 66 + (abs(x % 64 - 32) * 3) // 8 - x // 20
+            if y >= hill:
+                r, g, b = 26, 70 + (y - hill) * 2, 44
+            r, g, b = (min(255, max(0, value)) for value in (r, g, b))
+            cx, cy = min(x, width - 1 - x), min(y, height - 1 - y)
+            alpha = 255
+            if cx < 8 and cy < 8:
+                distance = (8 - cx) ** 2 + (8 - cy) ** 2
+                alpha = 0 if distance > 80 else 128 if distance > 48 else 255
+            row.append((r, g, b, alpha))
+        rows.append(row)
+    return qoi_codec.encode(rows)
+
+
+SAMPLE_PICTURE_NAME = "sunset.qoi"
+SAMPLE_PICTURE = _sample_picture()
+
+# A Markdown document with every kind of block, links to its own headings
+# and to other files, and the sample picture as a figure, long enough to
+# scroll in File Explorer's preview.
+SAMPLE_DOCUMENT_NAME = "guide.md"
+SAMPLE_DOCUMENT = """# A guide to Akashic
+
+Akashic is a library of Forth modules for **MegaPad**. This guide is a
+*Markdown* document, which File Explorer shows as a document: headings,
+lists, quotes, code and pictures, with the text wrapped to the preview.
+
+- [Notes](notes.md), another document
+- [Pictures](#pictures), just below
+- [The end](#the-end)
+
+## Pictures
+
+![An evening sky over two hills](sunset.qoi)
+
+The picture above is sunset.qoi, from the same folder.
+
+## Lists
+
+1. Select a file in File Explorer.
+2. Its preview shows it the way its kind is shown.
+3. A link to a file selects that file and previews it.
+
+- A bullet
+  - inside another
+    - and one more
+
+## Quotes
+
+> A quote with **strong** words and `code` in it.
+>
+> - and a list inside the quote
+
+## Code
+
+```
+: SQUARE  ( n -- n*n )  DUP * ;
+9 SQUARE .
+```
+
+---
+
+## Reading
+
+- The wheel scrolls a document three rows a turn.
+- A link to a heading, such as [Lists](#lists), scrolls to it.
+- A link to a file selects that file and shows it here.
+
+## The end
+
+Back to [the top](#a-guide-to-akashic), or see the [example](example.f) in
+Forth.
+""".encode()
+
 SAMPLE_FILES = {
     "welcome.txt": b"Welcome to Akashic.\nThis file is editable in Pad.\n",
     "example.f": b": SQUARE DUP * ;\n9 SQUARE .\n",
@@ -26689,6 +26891,24 @@ SAMPLE_FILES = {
     styled_text.NOTES_NAME: styled_text.NOTES_MD,
     "grid.csv": GRID_SAMPLE,
 }
+
+FEXPLORER_MODULE = "tui/applets/fexplorer/fexplorer.f"
+
+
+def _sample_files(modules) -> dict[str, bytes]:
+    """The sample files an image carries: the text samples, and the sample
+    picture, document and PDFs (sample_pdf.py) on images with File Explorer,
+    the viewer that shows them.  Keeping them off the others keeps their
+    MP64FS directories small."""
+
+    if FEXPLORER_MODULE in modules:
+        return {
+            **SAMPLE_FILES,
+            SAMPLE_PICTURE_NAME: SAMPLE_PICTURE,
+            SAMPLE_DOCUMENT_NAME: SAMPLE_DOCUMENT,
+            **sample_pdf.SAMPLES,
+        }
+    return SAMPLE_FILES
 
 def _row_shows(
     screen: TerminalSnapshot, row: int, left: int, span: int, line: str
@@ -27623,6 +27843,7 @@ def _validate_image_paths(
     *,
     include_networking: bool = False,
     external_system_files: frozenset[str] = frozenset(),
+    sample_names: frozenset[str] = frozenset(SAMPLE_FILES),
 ):
     system_files = set(external_system_files)
     if include_networking:
@@ -27645,7 +27866,7 @@ def _validate_image_paths(
     entries = (
         len(all_paths)
         + len(directories)
-        + len(SAMPLE_FILES)
+        + len(sample_names)
         + 4
     )
     if entries > MAX_FILES:
@@ -27653,7 +27874,7 @@ def _validate_image_paths(
             f"Profile needs {entries} MP64FS entries; filesystem limit is "
             f"{MAX_FILES}."
         )
-    for path in all_paths | set(directories) | set(SAMPLE_FILES):
+    for path in all_paths | set(directories) | set(sample_names):
         name = PurePosixPath(path).name
         if len(name.encode("utf-8")) > MAX_NAME_LEN:
             raise RuntimeError(
@@ -27873,6 +28094,7 @@ def build_image(
         else dependency_closure(composition_roots)
     )
     akashic_modules = modules
+    samples = _sample_files(modules)
     requires_networking = (
         profile.megapad_networking or _requires_megapad_networking(modules)
     )
@@ -28006,7 +28228,7 @@ def build_image(
             + ", ".join(sorted(overlap))
         )
     if profile.cold_source_codec is not None:
-        reserved_root_paths = set(SAMPLE_FILES) | {
+        reserved_root_paths = set(samples) | {
             "autoexec.f",
             "kdos.f",
         }
@@ -28042,6 +28264,7 @@ def build_image(
             if requires_rich_terminal
             else frozenset()
         ),
+        sample_names=frozenset(samples),
     )
 
     target = (
@@ -28155,8 +28378,12 @@ def build_image(
     if profile.include_large_sample:
         fs.inject_file(".growth-hole-2", bytes(512), flags=FLAG_SYSTEM)
 
-    for name in sorted(SAMPLE_FILES.keys() - {"large.txt"}):
-        fs.inject_file(name, SAMPLE_FILES[name], ftype=FTYPE_TEXT)
+    for name in sorted(samples.keys() - {"large.txt"}):
+        fs.inject_file(
+            name,
+            samples[name],
+            ftype=FTYPE_DATA if name == SAMPLE_PICTURE_NAME else FTYPE_TEXT,
+        )
 
     if profile.include_large_sample:
         fs.delete_file(".growth-hole-1")
@@ -32805,6 +33032,139 @@ def smoke(
                     "Pad did not save the mixed-script line's exact UTF-8"
                 )
 
+        def run_fexplorer_document_journey() -> None:
+            """Preview the sample document: a press on its link to notes.md
+            selects and previews that file, whose link to example.f does the
+            same; the wheel scrolls the document, and its link to its first
+            heading scrolls back."""
+
+            def go_to(name: str, marker: str, failure: str) -> bool:
+                session.send_key("ctrl+g")
+                if not wait_screen(
+                    "Go to:", "File Explorer's Go to Path prompt did not open"
+                ):
+                    return False
+                session.send_text(name)
+                session.send_key("enter")
+                return wait_screen(
+                    marker, failure, step_budget=800_000_000, wall_timeout=20.0
+                )
+
+            def press(text: str, failure: str) -> bool:
+                hits = screen.find(text)
+                if not hits:
+                    journey_errors.append(failure)
+                    return False
+                row, col = hits[0]
+                send_sgr_mouse(row, col)
+                send_sgr_mouse(row, col, release=True)
+                return True
+
+            heading = "A guide to Akashic"
+            if not go_to(
+                SAMPLE_DOCUMENT_NAME, heading,
+                "File Explorer did not preview the sample document",
+            ):
+                return
+            if not press("Notes, another", "the sample document showed no link to notes.md"):
+                return
+            if not wait_screen(
+                "Read the example and try it.",
+                "a press on the sample document's link did not preview notes.md",
+                step_budget=800_000_000, wall_timeout=20.0,
+            ):
+                return
+            if not press("example and try", "notes.md showed no link to example.f"):
+                return
+            if not wait_screen(
+                styled_text.EXAMPLE_LINE,
+                "a press on notes.md's link did not preview example.f",
+                step_budget=800_000_000, wall_timeout=20.0,
+            ):
+                return
+            if not go_to(
+                SAMPLE_DOCUMENT_NAME, heading,
+                "File Explorer did not preview the sample document again",
+            ):
+                return
+            # The wheel turns over the heading's cell, inside the preview,
+            # three rows a turn, until the document's end shows.
+            row, col = screen.find(heading)[0]
+            for _ in range(40):
+                send_sgr_mouse(row, col, button=65)
+                if not settle_input("File Explorer did not take a wheel turn"):
+                    return
+                if screen.find("Back to the top"):
+                    break
+            if not wait_screen(
+                "Back to the top",
+                "the wheel did not scroll the sample document to its end",
+            ):
+                return
+            if not wait_screen_gone(heading, "the scrolled document still showed its heading"):
+                return
+            if not press("the top,", "the sample document showed no link to its heading"):
+                return
+            wait_screen(heading, "a press on the link to the first heading did not scroll back")
+
+        def run_fexplorer_pdf_journey() -> None:
+            """Preview the sample PDF: its first page shows from its title; a
+            press on its link to the last page reads and shows that page; c
+            lists its outline, and Enter on Pictures shows the second page;
+            the encrypted and tagged copies show the same title."""
+
+            def kept(shown: bool) -> bool:
+                """The screen a failed step left, kept beside the captures."""
+                if not shown:
+                    screen.write_text(OUTPUT_ROOT / f"smoke-{profile_name}-pdf.txt")
+                return shown
+
+            def go_to(name: str, marker: str, failure: str) -> bool:
+                session.send_key("ctrl+g")
+                if not wait_screen(
+                    "Go to:", "File Explorer's Go to Path prompt did not open"
+                ):
+                    return False
+                session.send_text(name)
+                session.send_key("enter")
+                return kept(wait_screen(
+                    marker, failure, step_budget=1_600_000_000, wall_timeout=40.0
+                ))
+
+            title = "A sample PDF"
+            if not go_to("sample.pdf", title, "File Explorer did not preview sample.pdf"):
+                return
+            hits = screen.find("the last page")
+            if not hits:
+                journey_errors.append("sample.pdf showed no link to its last page")
+                return
+            row, col = hits[0]
+            send_sgr_mouse(row, col)
+            send_sgr_mouse(row, col, release=True)
+            if not wait_screen(
+                "Some code, in a fixed-pitch font:",
+                "a press on sample.pdf's link did not show its last page",
+                step_budget=1_600_000_000, wall_timeout=40.0,
+            ):
+                return
+            session.send_text("c")
+            if not wait_screen("Pictures", "c did not list sample.pdf's outline"):
+                return
+            for _ in range(2):
+                session.send_key("down")
+                if not settle_input("the outline did not take a key"):
+                    return
+            session.send_key("enter")
+            if not wait_screen(
+                "A photograph, kept as the JPEG file it was",
+                "choosing Pictures in the outline did not show the second page",
+                step_budget=1_600_000_000, wall_timeout=40.0,
+            ):
+                return
+            for name in ("encrypted.pdf", "tagged.pdf"):
+                if not go_to(name, title, f"File Explorer did not preview {name}"):
+                    return
+
         def run_pad_styled_text_journey() -> None:
             """Open notes.md: Pad highlights its Markdown in CELL, each
             meaning in its palette's look.  Ctrl and a click on its link
@@ -34099,6 +34459,33 @@ def smoke(
                     wall_timeout=20.0,
                 )
 
+            if profile_name == "fexplorer":
+                # The sample picture shows in half-block cells once the
+                # Preview tab has drawn it and the shell has decoded it.
+                session.send_key("ctrl+g")
+                if wait_screen(
+                    "Go to:", "File Explorer's Go to Path prompt did not open"
+                ):
+                    session.send_text(SAMPLE_PICTURE_NAME)
+                    session.send_key("enter")
+                    if wait_screen(
+                        "\u2580\u2580\u2580\u2580",
+                        "File Explorer did not show the sample picture",
+                        step_budget=800_000_000,
+                        wall_timeout=20.0,
+                    ) and settle_input(
+                        "File Explorer did not finish drawing the sample picture"
+                    ):
+                        picture_root = OUTPUT_ROOT / f"smoke-{profile_name}-picture"
+                        screen.write_json(picture_root.with_suffix(".cells.json"))
+                        screen.write_png(
+                            picture_root.with_suffix(".png"),
+                            font_path=AKASHIC_ROOT
+                            / "assets/fonts/DejaVuSansMono.ttf",
+                        )
+                run_fexplorer_document_journey()
+                run_fexplorer_pdf_journey()
+
             if profile_name in (
                 "desktop",
                 "desktop-agent",
@@ -34412,6 +34799,18 @@ def _rich_terminal_server_arguments(profile: Profile) -> list[str]:
     return arguments
 
 
+def _terminal_link_pace_arguments(profile: Profile, terminal_link_pace) -> list[str]:
+    """A paced link to the hosted terminal, for testing; only a profile with
+    the rich terminal has one."""
+
+    if terminal_link_pace is None:
+        return []
+    if profile.rich_terminal is None:
+        raise SystemExit("--terminal-link-pace needs a profile with the rich terminal")
+    return ["--terminal-link-pace", f"{terminal_link_pace.bytes_per_second}:"
+            f"{terminal_link_pace.frame_interval_us}"]
+
+
 def _megapad_launcher(mode: str) -> list[str]:
     """The unified MegaPad launcher selecting MODE's server."""
     return [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", mode]
@@ -34431,8 +34830,12 @@ def _session_server_command(
     semantic_step_budget: int | None = None,
     full_cores: int | None = None,
     clusters: int | None = None,
+    terminal_link_pace=None,
+    profile_dir: Path | None = None,
 ) -> list[str]:
     profile, backend = _profile_backend(profile_name, backend)
+    if profile_dir is not None and backend != "simulator":
+        raise SystemExit("a screen profile needs the simulator backend")
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     try:
         full_cores, clusters = _profile_machine_shape(
@@ -34480,6 +34883,9 @@ def _session_server_command(
             str(rows),
         ]
         command.extend(_rich_terminal_server_arguments(profile))
+        command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
+        if profile_dir is not None:
+            command.extend(("--profile-dir", str(profile_dir)))
         if semantic_step_budget is not None:
             command.extend(
                 ("--semantic-step-budget", str(semantic_step_budget))
@@ -34515,6 +34921,7 @@ def _session_server_command(
         str(clusters),
     ]
     command.extend(_rich_terminal_server_arguments(profile))
+    command.extend(_terminal_link_pace_arguments(profile, terminal_link_pace))
     if nic_tap:
         command.extend(("--nic-tap", nic_tap))
     if audio:
@@ -34536,6 +34943,7 @@ def serve(
     semantic_step_budget: int | None = None,
     full_cores: int | None = None,
     clusters: int | None = None,
+    terminal_link_pace=None,
 ):
     ext_mem_mib = _profile_ext_mem_mib(profile_name, ext_mem_mib)
     command = _session_server_command(
@@ -34551,6 +34959,7 @@ def serve(
         semantic_step_budget=semantic_step_budget,
         full_cores=full_cores,
         clusters=clusters,
+        terminal_link_pace=terminal_link_pace,
     )
     os.execv(sys.executable, command)
 
@@ -34574,9 +34983,13 @@ def accept_physical_desktop(
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
     full_cores: int | None = None,
     clusters: int | None = None,
+    terminal_link_pace=None,
+    screen_profile: bool = False,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
-    for Desk with a single applet, that applet's journey."""
+    for Desk with a single applet, that applet's journey.  SCREEN_PROFILE
+    has the simulator record what each PRESENT carries and the guest words
+    each step runs under, in ARTIFACT_ROOT/screen-profile."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -34606,7 +35019,8 @@ def accept_physical_desktop(
         from rich_terminal_applet_journeys import applet_journey
 
         journey = applet_journey(
-            profile_name.removeprefix("desktop-apt1-"), ready_markers
+            profile_name.removeprefix("desktop-apt1-"), ready_markers,
+            paced_link=terminal_link_pace is not None,
         )
     command = _session_server_command(
         profile_name,
@@ -34618,6 +35032,8 @@ def accept_physical_desktop(
         backend=backend,
         full_cores=full_cores,
         clusters=clusters,
+        terminal_link_pace=terminal_link_pace,
+        profile_dir=artifact_root / "screen-profile" if screen_profile else None,
     )
     server = subprocess.Popen(command)
     try:
@@ -36555,6 +36971,17 @@ def _parser() -> argparse.ArgumentParser:
                 default=None,
                 help="micro-core clusters (profile default 0; emulator only)",
             )
+        if name in ("serve", "accept"):
+            command.add_argument(
+                "--terminal-link-pace",
+                type=link_pace,
+                metavar="BYTES_PER_SECOND:FRAME_US",
+                help=(
+                    "for testing, pace the link to the hosted rich terminal "
+                    "at BYTES_PER_SECOND; the terminal then asks for picture "
+                    "chunks the link carries in one FRAME_US frame time"
+                ),
+            )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--nic-tap",
@@ -36617,6 +37044,16 @@ def _parser() -> argparse.ArgumentParser:
                 help=(
                     "record bounded guest rich-pipeline phase evidence in "
                     "the non-normative performance trace"
+                ),
+            )
+            command.add_argument(
+                "--screen-profile",
+                action="store_true",
+                help=(
+                    "record what each PRESENT carries and the guest words "
+                    "each step runs under, in ARTIFACT_ROOT/screen-profile "
+                    "(simulator only; local_testing/screen_change_profile.py "
+                    "reads it)"
                 ),
             )
             command.add_argument(
@@ -36698,6 +37135,8 @@ def main() -> int:
             phase_profile_max_events=args.phase_profile_max_events,
             full_cores=args.cores,
             clusters=args.clusters,
+            terminal_link_pace=args.terminal_link_pace,
+            screen_profile=args.screen_profile,
         ) else 1
     serve(
         args.profile,
@@ -36712,6 +37151,7 @@ def main() -> int:
         semantic_step_budget=args.semantic_step_budget,
         full_cores=args.cores,
         clusters=args.clusters,
+        terminal_link_pace=args.terminal_link_pace,
     )
     return 0
 

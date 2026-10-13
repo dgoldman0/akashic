@@ -53,6 +53,7 @@ SHIFT_JOINING = 18     # 3 bits
 BIT_MIRROR = 21        # has a Bidi_Mirroring_Glyph
 BIT_BRACKET = 22       # has a Bidi_Paired_Bracket_Type other than None
 BIT_ARABIC_FORMS = 23  # has at least one Arabic presentation form
+BIT_PUNCTUATION = 24   # General_Category P*: Markdown's emphasis rules
 
 BIDI_LONG = {
     "Left_To_Right": "L", "Right_To_Left": "R", "Arabic_Letter": "AL",
@@ -173,7 +174,8 @@ def _with_defaults(path: Path, field: int = 1, names=None) -> list[str]:
 
 
 class Ucd:
-    """The properties APT-1-TEXT Section 2 names, one value per scalar."""
+    """The properties APT-1-TEXT Section 2 names, and whether a scalar is
+    punctuation, one value per scalar."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -285,6 +287,8 @@ class Ucd:
             value |= 1 << BIT_BRACKET
         if cp in self.arabic_forms:
             value |= 1 << BIT_ARABIC_FORMS
+        if category.startswith("P"):
+            value |= 1 << BIT_PUNCTUATION
         return value
 
 

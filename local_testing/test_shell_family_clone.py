@@ -7,6 +7,8 @@ CLONE = PRELUDE + r'''
 CREATE _FC-DS 32775 ALLOT CREATE _FC-SS 32775 ALLOT CREATE _FC-ES 32775 ALLOT
 : _FC-D _FC-DS 7 + -8 AND ; : _FC-S _FC-SS 7 + -8 AND ; : _FC-E _FC-ES 7 + -8 AND ;
 VARIABLE _FC-U VARIABLE _FC-N VARIABLE _FC-A0
+\ The copied graph's bytes: one static record and 2472 of the rest.
+: _FC-WHOLE 2472 RTE-STATIC-SIZE + ;
 : _FC-FAMILY ( index -- family ) 64 * _FC-D _RTE-FB.FAMILIES-A @ + ;
 : _FC-ITEM ( index -- item ) _FC-FAMILY RTE-FAMILY-ITEMS@ DROP ;
 : _FC-BYTES ( index -- a u ) _FC-FAMILY DUP _RTE-FE.BYTES-A @ SWAP _RTE-FE.BYTES-U @ ;
@@ -33,9 +35,9 @@ def run(program, minimum=1):
 
 def test_complete_graph_copy_rebases_all_families_and_survives_source_reuse():
     run(CLONE + r'''
-_RC-BATCH RSHFC-MEASURE 0= _RC-A DUP _FC-U ! 2648 = _RC-A
+_RC-BATCH RSHFC-MEASURE 0= _RC-A DUP _FC-U ! _FC-WHOLE = _RC-A
 _FC-D 32768 165 FILL
-_RC-BATCH _FC-D 2648 RSHFC-COPY 0= _RC-A _FC-U @ = _RC-A
+_RC-BATCH _FC-D _FC-WHOLE RSHFC-COPY 0= _RC-A _FC-U @ = _RC-A
 _FC-D RTE-FAMILY-BATCH-VALID? _RC-A _FC-ALL-OWNED
 _FC-D _FC-U @ + C@ 165 = _RC-A
 0 _FC-BYTES 1 = _RC-A C@ 67 = _RC-A
@@ -66,7 +68,7 @@ _RC-DONE
 def test_capacity_alias_and_malformed_graph_refuse_without_destination_writes():
     run(CLONE + r'''
 _FC-D 32768 165 FILL _FC-D _FC-S 32768 MOVE
-_RC-BATCH _FC-D 2647 RSHFC-COPY RSHFC-S-CAPACITY = _RC-A 0= _RC-A
+_RC-BATCH _FC-D _FC-WHOLE 1- RSHFC-COPY RSHFC-S-CAPACITY = _RC-A 0= _RC-A
 _FC-D 32768 _FC-S 32768 COMPARE 0= _RC-A
 _RC-BATCH _FC-D 1+ 32767 RSHFC-COPY RSHFC-S-INVALID = _RC-A 0= _RC-A
 _FC-D 32768 _FC-S 32768 COMPARE 0= _RC-A
@@ -84,7 +86,7 @@ _RC-BATCH RTE-FAMILY-BATCH-VALID? _RC-A
 _RSHFC-B @ _FC-A0 !
 _RSHFC-B RSHFC-MEASURE RSHFC-S-INVALID = _RC-A 0= _RC-A
 _RSHFC-B @ _FC-A0 @ = _RC-A
-_RC-BATCH RSHFC-MEASURE 0= _RC-A 2648 = _RC-A
+_RC-BATCH RSHFC-MEASURE 0= _RC-A _FC-WHOLE = _RC-A
 _FC-D 32768 _FC-S 32768 COMPARE 0= _RC-A
 _FC-CLEARED
 _RC-DONE
@@ -127,15 +129,15 @@ def test_proved_peers_match_public_words_and_keep_alias_checks():
     run(CLONE + r'''
 \ After the caller's own graph check, the proved peers give the same result.
 _RC-BATCH RTE-FAMILY-BATCH-VALID? _RC-A
-_RC-BATCH _RSHFC-MEASURE-PROVED 0= _RC-A 2648 = _RC-A
+_RC-BATCH _RSHFC-MEASURE-PROVED 0= _RC-A _FC-WHOLE = _RC-A
 _FC-D 32768 165 FILL _FC-E 32768 165 FILL
-_RC-BATCH _FC-D 2648 RSHFC-COPY 0= _RC-A 2648 = _RC-A
-_RC-BATCH _FC-E 2648 _RSHFC-COPY-PROVED 0= _RC-A 2648 = _RC-A
+_RC-BATCH _FC-D _FC-WHOLE RSHFC-COPY 0= _RC-A _FC-WHOLE = _RC-A
+_RC-BATCH _FC-E _FC-WHOLE _RSHFC-COPY-PROVED 0= _RC-A _FC-WHOLE = _RC-A
 _FC-E RTE-FAMILY-BATCH-VALID? _RC-A
 0 _FC-BYTES DROP _FC-D - _FC-E + C@ 67 = _RC-A
 \ Capacity and source/output aliases are still refused before any write.
 _FC-E _FC-S 32768 MOVE
-_RC-BATCH _FC-E 2647 _RSHFC-COPY-PROVED RSHFC-S-CAPACITY = _RC-A 0= _RC-A
+_RC-BATCH _FC-E _FC-WHOLE 1- _RSHFC-COPY-PROVED RSHFC-S-CAPACITY = _RC-A 0= _RC-A
 _RC-BATCH _RC-GT 8 _RSHFC-COPY-PROVED RSHFC-S-INVALID = _RC-A 0= _RC-A
 _FC-E 32768 _FC-S 32768 COMPARE 0= _RC-A
 \ A range is outside the batch only when it misses every span.

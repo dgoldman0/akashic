@@ -18,6 +18,7 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
+import akashic_tui  # noqa: E402
 from akashic_tui import (  # noqa: E402
     APP_SHELL_MODULE,
     COLD_SOURCE_CHUNK_TEMPLATE,
@@ -169,6 +170,7 @@ from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
 )
+from shared.session_options import link_pace  # noqa: E402
 
 
 LIBRARY_RENDERER_FREE_PROFILES = (
@@ -672,9 +674,12 @@ def test_sha3_contract_profile_uses_checked_megapad_surface() -> None:
 
 
 def test_every_app_shell_profile_composes_the_platform_provider() -> None:
+    # Every app profile is linked, since each applet's closure outgrows the
+    # MP64FS directory; test_unlinked_app_shell_profile_packages_and_loads_
+    # platform_provider covers the unlinked composition with the app shell
+    # alone.
     app_shell_profiles = 0
     linked_profiles = 0
-    unlinked_profiles = 0
     for profile in PROFILES.values():
         base_modules = (
             dependency_order(profile.roots)
@@ -685,7 +690,6 @@ def test_every_app_shell_profile_composes_the_platform_provider() -> None:
             continue
         app_shell_profiles += 1
         linked_profiles += int(profile.linked)
-        unlinked_profiles += int(not profile.linked)
         autoexec = _with_mp64fs_vfs_platform(profile.autoexec)
         assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
 
@@ -706,8 +710,7 @@ def test_every_app_shell_profile_composes_the_platform_provider() -> None:
             )
 
     assert app_shell_profiles > 0
-    assert linked_profiles > 0
-    assert unlinked_profiles > 0
+    assert linked_profiles == app_shell_profiles
 
 
 @pytest.mark.parametrize("profile_name", LIBRARY_RENDERER_FREE_PROFILES)
@@ -1217,10 +1220,20 @@ def test_library_applet_functional_image_links_controller_and_keeps_uidl(
 def test_unlinked_app_shell_profile_packages_and_loads_platform_provider(
     tmp_path: Path,
 ) -> None:
-    image = build_image(
-        "grid-contracts",
-        tmp_path / "akashic-grid-contracts.img",
+    # Every applet's closure has outgrown the MP64FS directory's 128
+    # entries, so each applet profile links its modules; the app shell
+    # alone still packages one file per module.
+    profile = replace(
+        PROFILES["grid-contracts"],
+        linked=False,
+        roots=(APP_SHELL_MODULE,),
+        autoexec=f"ENTER-USERLAND\nREQUIRE {APP_SHELL_MODULE}\n",
     )
+    with patch.dict(PROFILES, {"app-shell-unlinked": profile}):
+        image = build_image(
+            "app-shell-unlinked",
+            tmp_path / "akashic-app-shell-unlinked.img",
+        )
     filesystem = MP64FS(bytearray(image.read_bytes()))
     platform_parent = filesystem.resolve_path("/tui/platform")
     assert filesystem.read_file("mp64fs-vfs.f", parent=platform_parent) == (
@@ -1230,7 +1243,27 @@ def test_unlinked_app_shell_profile_packages_and_loads_platform_provider(
     assert autoexec.count(MP64FS_VFS_PLATFORM_BOOT_LINE) == 1
     assert autoexec.index("ENTER-USERLAND") < autoexec.index(
         MP64FS_VFS_PLATFORM_BOOT_LINE
-    ) < autoexec.index("REQUIRE tui/applets/grid/grid.f")
+    ) < autoexec.index(f"REQUIRE {APP_SHELL_MODULE}")
+
+
+@pytest.mark.parametrize("profile_name", ("grid-eval", "grid-contracts"))
+def test_grid_contract_profiles_link_their_modules(
+    tmp_path: Path,
+    profile_name: str,
+) -> None:
+    """Grid's closure needs more files than the directory's 128 entries,
+    so its contract profiles load linked chunks after userland."""
+
+    assert PROFILES[profile_name].linked
+    image = build_image(profile_name, tmp_path / f"akashic-{profile_name}.img")
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    assert MP64FS_VFS_PLATFORM_BOOT_LINE not in autoexec
+    assert "REQUIRE tui/applets/grid/grid.f" not in autoexec
+    assert autoexec.index("ENTER-USERLAND") < autoexec.index(
+        "REQUIRE .akashic/link-"
+    )
+    assert filesystem.info()["free_sectors"] > 0
 
 
 def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
@@ -1976,12 +2009,12 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/rich-terminal/uidl-instrument-planner.f",
         "tui/rich-terminal/uidl-semantic-content-stx1.f",
         "tui/rich-terminal/uidl-semantic-items-itm1.f",
+        "tui/rich-terminal/uidl-semantic-documents-doc1.f",
         "tui/uidl-collection-snapshot.f",
         "tui/uidl-data-graphics-snapshot.f",
         "tui/uidl-status-field-snapshot.f",
         "tui/uidl-menu-snapshot.f",
-        # Caller memory the engine and screen producer grow into.
-        "utils/memory-source.f",
+        "tui/uidl-picture-snapshot.f",
     }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
@@ -1995,6 +2028,9 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     assert rich_modules.isdisjoint(baseline_closure)
     assert rich_modules <= rich_closure
     assert rich_closure - baseline_closure == rich_modules
+    # Caller memory the engine and screen producer grow into is the same
+    # utility the CELL picture preview takes its copies from.
+    assert "utils/memory-source.f" in baseline_closure
     assert retired_prototypes.isdisjoint(rich_closure)
     rich_source = "\n".join(
         (SOURCE_ROOT / module).read_text(encoding="utf-8")
@@ -2190,6 +2226,7 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         semantic_step_budget=None,
         full_cores=None,
         clusters=None,
+        terminal_link_pace=None,
     )
     execv.assert_called_once_with(sys.executable, expected)
     assert PROFILES["desktop"].autoexec == baseline_autoexec
@@ -2282,6 +2319,7 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         semantic_step_budget=123_456,
         full_cores=None,
         clusters=None,
+        terminal_link_pace=None,
     )
     execv.assert_called_once_with(sys.executable, command)
 
@@ -2377,6 +2415,60 @@ def test_hybrid_server_command_is_the_simulator_command_in_hybrid_mode() -> None
     hybrid = _session_server_command("desktop-apt1", image, backend="hybrid", **arguments)
     assert hybrid[:4] == [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", "hybrid"]
     assert hybrid[4:] == simulator[4:]
+
+
+def test_only_the_simulator_server_writes_a_screen_profile(tmp_path) -> None:
+    arguments = dict(socket_path="/tmp/desktop.sock", cols=280, rows=84)
+    image = Path("desktop-apt1.img")
+    plain = _session_server_command("desktop-apt1", image, backend="simulator", **arguments)
+    profiled = _session_server_command("desktop-apt1", image, backend="simulator",
+                                       profile_dir=tmp_path / "screen-profile", **arguments)
+    assert profiled == plain + ["--profile-dir", str(tmp_path / "screen-profile")]
+    for backend in ("hybrid", "emulator"):
+        with pytest.raises(SystemExit, match="simulator backend"):
+            _session_server_command("desktop-apt1", image, backend=backend,
+                                    profile_dir=tmp_path, **arguments)
+    parsed = _parser().parse_args(["accept", "--profile", "desktop-apt1", "--screen-profile"])
+    assert parsed.screen_profile
+
+
+def test_only_the_photo_check_carries_the_photograph() -> None:
+    photo = akashic_tui.SAMPLE_PHOTO
+    assert photo[:4] == b"qoif"
+    assert (int.from_bytes(photo[4:8], "big"), int.from_bytes(photo[8:12], "big")) == (
+        akashic_tui.SAMPLE_PHOTO_SIZE)
+    def files(name):
+        return dict(PROFILES[name].initial_files)
+    assert files("desktop-apt1-photo")[akashic_tui.SAMPLE_PHOTO_NAME] == photo
+    for name in ("desktop-apt1", "desktop-apt1-fexp"):
+        assert akashic_tui.SAMPLE_PHOTO_NAME not in files(name)
+    assert replace(PROFILES["desktop-apt1-photo"],
+                   initial_files=PROFILES["desktop-apt1-fexp"].initial_files) == (
+        PROFILES["desktop-apt1-fexp"])
+
+
+def test_a_paced_terminal_link_reaches_only_a_rich_terminal_server() -> None:
+    pace = link_pace("100000:1000")
+    arguments = dict(socket_path="/tmp/desktop.sock", cols=280, rows=84)
+    image = Path("desktop-apt1.img")
+    for backend in ("simulator", "hybrid", "emulator"):
+        plain = _session_server_command("desktop-apt1", image, backend=backend, **arguments)
+        paced = _session_server_command("desktop-apt1", image, backend=backend,
+                                        terminal_link_pace=pace, **arguments)
+        assert paced == plain + ["--terminal-link-pace", "100000:1000"]
+    with pytest.raises(SystemExit, match="rich terminal"):
+        _session_server_command("desktop", image, backend="emulator",
+                                terminal_link_pace=pace, **arguments)
+    for command in ("serve", "accept"):
+        assert _parser().parse_args([command]).terminal_link_pace is None
+        assert _parser().parse_args(
+            [command, "--terminal-link-pace", "100000:1000"]
+        ).terminal_link_pace == pace
+        for bad in ("100000", "0:1000", "100000:x"):
+            with pytest.raises(SystemExit):
+                _parser().parse_args([command, "--terminal-link-pace", bad])
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["smoke", "--terminal-link-pace", "100000:1000"])
 
 
 def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
@@ -2840,26 +2932,30 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             | RetainedFeature.CONTROLS
             | RetainedFeature.CONTROL_COLLECTIONS
             | RetainedFeature.CONTROL_ITEMS
+            | RetainedFeature.CONTROL_DOCUMENTS
             | RetainedFeature.GRID_CELLS
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
             | RetainedFeature.SERIES
+            | RetainedFeature.RGBA_IMAGE
         ),
         "max_owner_records": 1,
         "max_live_owners": 1,
         "max_regions": DESKTOP_APT1_MAX_REGIONS,
-        "max_resources": 0,
+        # Pictures up to 4096 a side, as many bytes as one of them, and
+        # chunks as long as a frame's payload after the chunk prefix.
+        "max_resources": 16,
         "max_objects": DESKTOP_APT1_MAX_OBJECTS,
         "max_series": DESKTOP_APT1_MAX_SERIES,
         "max_operations_per_transaction": DESKTOP_APT1_MAX_OPERATIONS,
-        "max_resource_chunk_bytes": 0,
+        "max_resource_chunk_bytes": DESKTOP_APT1_MAX_PAYLOAD_BYTES - 32,
         "max_retained_transaction_bytes": (
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
         ),
-        "total_resource_bytes": 0,
-        "image_format": 0,
-        "max_image_width": 0,
-        "max_image_height": 0,
+        "total_resource_bytes": 4_096 * 4_096 * 4,
+        "image_formats": 0b1111,
+        "max_image_width": 4_096,
+        "max_image_height": 4_096,
         "max_path_points": 0,
         "max_glyph_run_bytes": DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         "max_samples_per_append": DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
@@ -3087,6 +3183,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "backend": "simulator",
                 "full_cores": None,
                 "clusters": None,
+                "terminal_link_pace": None,
+                "profile_dir": None,
             },
         )
     ]

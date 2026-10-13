@@ -1,5 +1,13 @@
 """Executable neutral shared-region geometry, bounded authority and pane proofs."""
+import re
+from pathlib import Path
+
 from test_data_graphics_series import run_series
+
+# The neutral static record's size, from the engine that defines it.
+STATIC = int(re.search(r"(?m)^(\d+) CONSTANT RTE-STATIC-SIZE$", (
+    Path(__file__).resolve().parents[1] / "akashic/tui/rich-terminal/engine.f"
+).read_text())[1])
 
 MODULES = ("tui/rich-terminal/region-catalog.f",)
 
@@ -7,7 +15,7 @@ MODULES = ("tui/rich-terminal/region-catalog.f",)
 def _storage():
     sizes = {"CAT": 56, "REG": 288, "BATCH": 72, "FAM": 384,
              "CP": 144, "GP": 144, "IP": 72, "SP": 144, "YP": 48, "PP": 144,
-             "CI": 200, "GI": 120, "II": 216, "SI": 176, "YI": 88, "PI": 368,
+             "CI": 200, "GI": 120, "II": 216, "SI": STATIC, "YI": 88, "PI": 368,
              "IR": 96, "CT": 8, "GT": 8, "IT": 8, "ST": 8, "YT": 16, "PT": 8,
              "REF": 16, "COPY": 4096}
     return "\n".join(f"CREATE _RC-{key}-S {size + 7} ALLOT : _RC-{key} _RC-{key}-S 7 + -8 AND ;"
@@ -79,8 +87,8 @@ VARIABLE _RC-N VARIABLE _RC-FAIL VARIABLE _RC-A0 VARIABLE _RC-A1
     _RC-II _RC-IP 48 + ! 216 _RC-IP 56 + !
     73 _RC-IT C! _RC-IT _RC-II _RTE-INSTRUMENT.UNIT-A ! 1 _RC-II _RTE-INSTRUMENT.UNIT-U !
     3 _RC-IP _RC-IT 1 2 _RC-FAMILY
-    103 20 1 80 _RC-SI 176 _RC-COMMON
-    _RC-SI 176 _RC-REG 192 + _RC-SP _RC-PLAN
+    103 20 1 80 _RC-SI RTE-STATIC-SIZE _RC-COMMON
+    _RC-SI RTE-STATIC-SIZE _RC-REG 192 + _RC-SP _RC-PLAN
     83 _RC-ST C! _RC-ST _RC-SI _RTE-STATIC.VALUE-A ! 1 _RC-SI _RTE-STATIC.VALUE-U !
     4 _RC-SP _RC-ST 1 3 _RC-FAMILY
     _RC-YI 88 0 FILL 7 _RC-YI ! 9 _RC-YI 8 + ! 1 _RC-YI 16 + !

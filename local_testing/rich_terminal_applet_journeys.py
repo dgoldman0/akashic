@@ -14,6 +14,8 @@ from __future__ import annotations
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_wire import RetainedMessageType
+from rich_terminal.semantic_documents import BlockKind
 from rich_terminal.semantic_items import (
     ItemColumnKind,
     ItemField,
@@ -30,6 +32,8 @@ import styled_text
 from rich_terminal_desktop_acceptance import (
     DAYBOOK_MENU_SIGNATURE,
     DAYBOOK_PROMPT_MARKER,
+    FEXPLORER_PICTURE,
+    FEXPLORER_PICTURE_FACTS,
     PAD_MENU_SIGNATURE,
     FrameBoundJourney,
     JourneyProgress,
@@ -39,9 +43,14 @@ from rich_terminal_desktop_acceptance import (
     _claim_item_text,
     _collection_claims_in,
     _desk_content_bounds,
+    _image_claims_in,
     _require_cell_text_in,
     _require_pad_readout,
+    _require_picture_facts_in,
     _residual_contains,
+    _status_field_claims_in,
+    _tab_in,
+    _tab_value,
     _taskbar_has_focus,
     _text_area_pointer_state,
     _text_cell_in,
@@ -49,8 +58,51 @@ from rich_terminal_desktop_acceptance import (
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
-# The canonical Desktop image's large sample sits in the root directory.
+# The canonical Desktop image's large sample sits in the root directory,
+# beside its sample picture.
 FEXP_FILE = "large.txt"
+# The photo check's picture, a real photograph wider than File Explorer's
+# preview at its largest on the physical viewer (assets/pictures/README.md),
+# and what its CELL view says it is while the rich side shows it.
+FEXP_PHOTO = "spice-market.qoi"
+FEXP_PHOTO_SIZE = (2160, 1620)
+FEXP_PHOTO_FACTS = "QOI, 2160 \u00d7 1620"
+# A picture file the terminal cannot decode (akashic_tui.py's damaged
+# check), and what CELL says of it once the terminal has refused it.
+FEXP_DAMAGED = "damaged.png"
+FEXP_DAMAGED_REASON = "The picture is damaged"
+# Every line of large.txt starts so; its preview opens at the end of the
+# text, where loading leaves the caret.
+FEXP_TEXT_LINE = "Large fixture line"
+# The canonical image's sample Markdown document (akashic_tui.py), which
+# File Explorer previews as a document: its first block, the text of its
+# last, holding a link back to the first heading, and its link to notes.md,
+# whose paragraph shows once File Explorer previews that file.
+FEXP_DOCUMENT = "guide.md"
+FEXP_DOCUMENT_HEADING = "A guide to Akashic"
+FEXP_DOCUMENT_END = "Back to the top"
+FEXP_DOCUMENT_TOP_LINK = "the top"
+FEXP_DOCUMENT_FILE_LINK = "Notes"
+FEXP_LINKED_NAME = "notes.md"
+FEXP_LINKED_TEXT = "Read the example and try it."
+# The canonical image's sample PDF (sample_pdf.py), which File Explorer
+# previews as a document read a page at a time: its first page's title, its
+# link to its last page and that page's code, its outline as the contents'
+# tree shows it (each entry's depth and title, the title's entry open, as
+# the file says), the entry that shows its second page, the facts CELL
+# shows beneath that page's JPEG photograph while the rich side shows it,
+# and the copy encrypted with the empty password.
+FEXP_PDF = "sample.pdf"
+FEXP_PDF_ENCRYPTED = "encrypted.pdf"
+FEXP_PDF_TITLE = "A sample PDF"
+FEXP_PDF_LAST_LINK = "the last page"
+FEXP_PDF_CODE = "Some code, in a fixed-pitch font:"
+FEXP_PDF_OUTLINE = ((0, "A sample PDF"), (1, "Lists"), (0, "Pictures"), (0, "The end"))
+FEXP_PDF_PICTURES = "Pictures"
+FEXP_PDF_PHOTO_FACTS = "JPEG, 160 \u00d7 100"
+# Wheel detents a scroll step sends; the document view scrolls three rows
+# a detent.
+FEXP_DOCUMENT_DETENTS = 3
 FEXP_TABLE_COLUMNS = (
     (ItemColumnKind.TEXT, "Name"),
     (ItemColumnKind.NUMBER, "Size"),
@@ -106,6 +158,25 @@ AGENT_WHEEL_ROWS = 3
 SMALL_TERMINAL_LARGE_PATH = "/large.txt"
 SMALL_TERMINAL_LARGE_LINE = "Large fixture line 001"
 _WHERE = "Desk's single tile"
+# The frames the terminal counts that show a picture's upload beside the
+# screen's own frames (APT-1-RETAINED-1 section 8).
+_UPLOAD_FRAMES = {
+    "resource_begin": RetainedMessageType.RESOURCE_BEGIN,
+    "resource_chunk": RetainedMessageType.RESOURCE_CHUNK,
+    "resource_commit": RetainedMessageType.RESOURCE_COMMIT,
+    "resource_abort": RetainedMessageType.RESOURCE_ABORT,
+    "present_commit": RetainedMessageType.PRESENT_COMMIT,
+}
+
+
+def _status_shows(projection: RichScreenProjection, marker: str, bounds) -> bool:
+    """MARKER in a status bar within BOUNDS: in residual glyphs, or in the
+    authored label or value of a status field the rich frame carries."""
+
+    return _residual_contains(projection, marker, bounds) or any(
+        marker in claim.label or marker in claim.value
+        for claim in _status_field_claims_in(projection, bounds)
+    )
 
 
 class _AppletJourney(FrameBoundJourney):
@@ -654,14 +725,35 @@ class DaybookAloneJourney(_AppletJourney):
 
 
 class FexpAloneJourney(_AppletJourney):
-    """Desk with File Explorer: select a file and open a directory in its
-    detail table, then expand, select, and collapse in its folder tree, all
-    through item events.
+    """Desk with File Explorer: select a file, then preview a picture, and
+    open a directory in its detail table, then expand, select, and collapse
+    in its folder tree, all through item and tab events.
 
     The detail table is a TABLE item view with Name, Size (a number column),
     and Type columns, and the sidebar a TREE whose root is "/".  A SELECT
-    on large.txt's row selects it and the status bar shows its path; an
-    OPEN on a directory's row lists that directory.  An EXPAND on the
+    on large.txt's row selects it and the status bar shows its path.  A
+    SELECT on sunset.qoi's row loads its preview, and activating the
+    Preview tab shows it: the rich frame shows it as an IMAGE once the
+    terminal holds it, while CELL beneath shows what the picture is and
+    draws none of it.  Activating the Details tab brings the table back
+    and the picture goes.  The Preview tab shows it again; large.txt's
+    preview is text, with no picture; and guide.md's is a DOCUMENT from its
+    first heading, with its figure, the same picture, in view and shown
+    rich as an IMAGE in the picture rows the document leaves it.  SCROLL
+    moves it down until its last block shows, on the way showing the figure
+    partly scrolled out: the IMAGE keeps the figure's whole rectangle and
+    paints only the part the document shows.  A FOLLOW on the last block's
+    link to the first heading puts the heading back at the top, and a
+    FOLLOW on its link to notes.md selects that file and previews it as a
+    document too.  sample.pdf's preview is a DOCUMENT from its first
+    page's start; a FOLLOW on its link to the last page shows that page;
+    the key c shows its outline as a LIST in the document's place, and an
+    OPEN on its Pictures entry shows the second page from its start, its
+    JPEG photograph and its picture of samples each shown rich as an IMAGE,
+    with CELL beneath saying what the photograph is.  encrypted.pdf, read
+    with the empty password, shows the same title.  sunset.qoi, selected
+    once more, shows rich again.  An OPEN on a directory's row lists that
+    directory.  An EXPAND on the
     tree's root shows its entries, a SELECT on one of its directories lists
     that directory, and a COLLAPSE on the root hides them, which moves the
     selection back to the root and lists it again.  CELL shows the rows
@@ -671,27 +763,182 @@ class FexpAloneJourney(_AppletJourney):
     a two-column item view; while it is open File Explorer's lists fall
     back beneath it.  An OPEN on its File Explorer row focuses the running
     applet and closes the launcher, and the lists come back.
+
+    On a paced link the first preview's upload takes long enough to check
+    that the screen keeps answering input while a picture uploads.  Once
+    the terminal has taken some of the picture's chunks, an EXPAND on the
+    tree's root must be answered by a frame the terminal commits while the
+    upload is still open, before the picture arrives; more chunks follow
+    it, and the picture then shows.  A COLLAPSE on the root puts the tree
+    back before the journey goes on.
     """
 
     focus_marker = FEXP_ALONE_FOCUS_MARKER
     (
         READY,
         FILE_SELECTED,
+        PICTURE_SELECTED,
+        PICTURE_PREVIEWED,
+        PICTURE_DETAILS,
+        PICTURE_PREVIEWED_AGAIN,
+        PICTURE_DETAILS_AGAIN,
+        TEXT_SELECTED,
+        TEXT_PREVIEWED,
+        TEXT_DETAILS,
+        DOCUMENT_SELECTED,
+        DOCUMENT_PREVIEWED,
+        DOCUMENT_SCROLLED,
+        DOCUMENT_TOP,
+        LINKED_DOCUMENT,
+        DOCUMENT_DETAILS,
+        PDF_SELECTED,
+        PDF_PREVIEWED,
+        PDF_LAST_PAGE,
+        PDF_CONTENTS,
+        PDF_OUTLINE_CLOSED,
+        PDF_PICTURES,
+        PDF_DETAILS,
+        ENCRYPTED_SELECTED,
+        ENCRYPTED_PREVIEWED,
+        ENCRYPTED_DETAILS,
+        PICTURE_RESELECTED,
+        PICTURE_PREVIEWED_LAST,
+        DETAILS_SHOWN,
         DIRECTORY_OPENED,
         TREE_EXPANDED,
         TREE_CHILD_SELECTED,
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(8)
+    ) = range(35)
+    _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
+                        LINKED_DOCUMENT)
+    _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_OUTLINE_CLOSED,
+                   PDF_PICTURES, ENCRYPTED_PREVIEWED)
+    # Each Preview tab stage: what it shows, and the Details stage after it.
+    _PREVIEWS = {
+        PICTURE_PREVIEWED: (True, PICTURE_DETAILS),
+        PICTURE_PREVIEWED_AGAIN: (True, PICTURE_DETAILS_AGAIN),
+        TEXT_PREVIEWED: (False, TEXT_DETAILS),
+        PICTURE_PREVIEWED_LAST: (True, DETAILS_SHOWN),
+    }
 
-    def __init__(self, ready_markers: tuple[str, ...]):
+    def __init__(self, ready_markers: tuple[str, ...], *, paced_link: bool = False):
         super().__init__(ready_markers)
         self._directory: str | None = None
+        # The document's top, as (block key, rows above), before the last
+        # scroll step.
+        self._scrolled_from: tuple[int, int] | None = None
+        # Whether a scroll step has shown the document's figure partly
+        # scrolled out.
+        self._figure_clipped = False
+        # The upload check's step: pending, sent, answered, shown, or None
+        # when there is none or it is over.
+        self._probe = "pending" if paced_link else None
+        self._frames: dict[str, int] | None = None
+        self.evidence = {"paced_upload": {}} if paced_link else None
 
     @property
     def final_stage(self) -> int:
         return self.LAUNCHER_CLOSED
+
+    @property
+    def acts_between_frames(self) -> bool:
+        # The screen may not change while the picture uploads, so the check
+        # sends its input on the status that shows the upload under way.
+        return self._probe == "pending" and self.stage == self.PICTURE_PREVIEWED
+
+    def observe_status(self, status) -> None:
+        rich = status.get("rich_terminal") if isinstance(status, dict) else None
+        counts = rich.get("frames_by_type") if isinstance(rich, dict) else None
+        if isinstance(counts, dict):
+            self._frames = {
+                name: int(counts.get(f"0x{int(kind):04X}", 0))
+                for name, kind in _UPLOAD_FRAMES.items()
+            }
+
+    def _uploading(self) -> bool:
+        """The terminal holds one upload open and has taken some chunks."""
+
+        frames = self._frames
+        return frames is not None and (
+            frames["resource_begin"]
+            == frames["resource_commit"] + frames["resource_abort"] + 1
+        ) and frames["resource_chunk"] > 0
+
+    def _record(self, step: str) -> dict[str, int]:
+        frames = dict(self._frames)
+        self.evidence["paced_upload"][step] = frames
+        return frames
+
+    def _probe_upload(self, offer, generation, projection, sender, pictures):
+        """The upload check, while the first preview's picture uploads; None
+        once it is over."""
+
+        tree = self._tree(projection)
+        if tree is None:
+            return self._wait("File Explorer's folder tree")
+        root = tree.content.items[0]
+        expanded = bool(root.state & ItemState.EXPANDED) and any(
+            item.parent_key == root.item_key for item in tree.content.items
+        )
+        if self._probe == "pending":
+            if pictures:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE} arrived before input could be sent during "
+                    "its upload; the paced link is too fast for this check"
+                )
+            if expanded:
+                raise PhysicalDesktopAcceptanceError("the tree's root began expanded")
+            if not self._uploading():
+                return self._wait(f"{FEXPLORER_PICTURE}'s upload under way")
+            self._record("sent")
+            self._probe = "sent"
+            return self._step("fexp-input-sent-during-upload", "item_expand",
+                              tree.value(root.item_key), self.stage, offer,
+                              generation, sender)
+        sent = self.evidence["paced_upload"]["sent"]
+        if self._probe == "sent":
+            if not expanded:
+                return self._wait("the tree's root expanded during the upload")
+            answered = self._record("answered")
+            if pictures or answered["resource_commit"] != sent["resource_commit"]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE} arrived before the frame answering "
+                    "input sent during its upload"
+                )
+            if answered["resource_abort"] != sent["resource_abort"]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE}'s upload stopped while it still showed"
+                )
+            if answered["present_commit"] <= sent["present_commit"]:
+                raise PhysicalDesktopAcceptanceError(
+                    "the terminal committed no frame while the picture uploaded"
+                )
+            self._probe = "answered"
+            self.frame_barrier = offer.offer_id
+            return JourneyProgress(self._milestone("fexp-input-answered-during-upload"))
+        if self._probe == "answered":
+            if not pictures:
+                return self._wait(f"{FEXPLORER_PICTURE} shown rich after its upload")
+            shown = self._record("shown")
+            answered = self.evidence["paced_upload"]["answered"]
+            if shown["resource_commit"] <= sent["resource_commit"]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXPLORER_PICTURE} shows with no committed upload"
+                )
+            if shown["resource_chunk"] <= answered["resource_chunk"]:
+                raise PhysicalDesktopAcceptanceError(
+                    "no chunk of the picture followed the frame answering input"
+                )
+            self._probe = "shown"
+            return self._step("fexp-picture-shown-after-input", "item_collapse",
+                              tree.value(root.item_key), self.stage, offer,
+                              generation, sender)
+        if expanded:
+            return self._wait("the tree's root collapsed again")
+        self._probe = None
+        return None
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
@@ -711,16 +958,48 @@ class FexpAloneJourney(_AppletJourney):
         return views[0] if len(views) == 1 else None
 
     @staticmethod
-    def _views(projection: RichScreenProjection):
+    def _content_views(projection: RichScreenProjection, role):
         left, top, right, bottom = _desk_content_bounds(projection)
-        views = [
+        return [
             claim
             for claim in projection.semantic_item_view_claims
             if left <= claim.left < claim.right <= right
             and top <= claim.top < claim.bottom <= bottom
+            and claim.content.role is role
         ]
-        tables = [view for view in views if view.content.role is ItemViewRole.TABLE]
-        trees = [view for view in views if view.content.role is ItemViewRole.TREE]
+
+    @classmethod
+    def _tree(cls, projection: RichScreenProjection):
+        trees = cls._content_views(projection, ItemViewRole.TREE)
+        return trees[0] if len(trees) == 1 else None
+
+    @classmethod
+    def _outline(cls, projection: RichScreenProjection, bounds):
+        """The contents' tree shown in the document's place: the one TREE
+        within the columns of the tabset holding the Preview tab, apart
+        from the folder tree beside it; or None."""
+
+        left, top, right, bottom = bounds
+        tabsets = [
+            tabset
+            for tabset in projection.semantic_tabset_claims
+            if left <= tabset.left < tabset.right <= right
+            and top <= tabset.top < tabset.bottom <= bottom
+            and any(tab.label == "Preview" for tab in tabset.tabs)
+        ]
+        if len(tabsets) != 1:
+            return None
+        trees = [
+            view
+            for view in cls._content_views(projection, ItemViewRole.TREE)
+            if tabsets[0].left <= view.left < view.right <= tabsets[0].right
+        ]
+        return trees[0] if len(trees) == 1 else None
+
+    @classmethod
+    def _views(cls, projection: RichScreenProjection):
+        tables = cls._content_views(projection, ItemViewRole.TABLE)
+        trees = cls._content_views(projection, ItemViewRole.TREE)
         if len(tables) != 1 or len(trees) != 1:
             return None, None
         return tables[0], trees[0]
@@ -733,6 +1012,314 @@ class FexpAloneJourney(_AppletJourney):
             <= item.ordinal
             < content.viewport_first + content.viewport_count
         )
+
+    def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
+        """The Preview tab shows the picture rich, over what CELL says it is,
+        or large.txt's text with no picture; then the Details tab brings the
+        table back."""
+
+        picture, details_stage = self._PREVIEWS[self.stage]
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+        if not selected:
+            return self._wait("the Preview tab selected")
+        pictures = _image_claims_in(projection, bounds)
+        if self._probe is not None and self.stage == self.PICTURE_PREVIEWED:
+            progress = self._probe_upload(offer, generation, projection, sender, pictures)
+            if progress is not None:
+                return progress
+        if picture:
+            if not pictures:
+                return self._wait(f"{FEXPLORER_PICTURE} shown rich")
+            if len(pictures) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer shows {len(pictures)} pictures for {FEXPLORER_PICTURE}"
+                )
+            shown, = pictures
+            _require_picture_facts_in(
+                offer, FEXPLORER_PICTURE_FACTS,
+                (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+            )
+            milestone = f"fexp-picture-shown-{self.stage}"
+        else:
+            if pictures:
+                return self._wait(f"{FEXPLORER_PICTURE} gone from the preview")
+            if not any(
+                FEXP_TEXT_LINE in line
+                for claim in _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
+                for line in claim.visible_text
+            ):
+                return self._wait(f"{FEXP_FILE}'s text in the preview")
+            milestone = "fexp-text-shown"
+        details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+        return self._step(milestone, "activate_tab", _tab_value(details),
+                          details_stage, offer, generation, sender)
+
+    @staticmethod
+    def _document_claim(projection: RichScreenProjection, bounds):
+        left, top, right, bottom = bounds
+        documents = [
+            claim
+            for claim in projection.semantic_document_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+        ]
+        return documents[0] if len(documents) == 1 else None
+
+    @staticmethod
+    def _figure(projection: RichScreenProjection, document):
+        """The document's figure with a row in view, as (block key, the
+        rectangle its picture rows fill, the part shown), or None; and the
+        IMAGE painting that part, or None while CELL shows it."""
+
+        figures = [figure for figure in document.figures if figure[2] is not None]
+        if not figures:
+            return None, None
+        if len(figures) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_DOCUMENT} shows {len(figures)} figures"
+            )
+        figure = figures[0]
+        images = [
+            claim
+            for claim in projection.semantic_image_claims
+            if claim.figure == (document.identity, figure[0])
+        ]
+        return figure, images[0] if len(images) == 1 else None
+
+    def _document(self, offer, generation, projection, sender) -> JourneyProgress:
+        """guide.md's preview: a DOCUMENT from its first heading, with its
+        figure shown rich, which the wheel scrolls to its end, showing the
+        figure partly scrolled out on the way, whose link to that heading
+        scrolls back, and whose link to notes.md selects and previews that
+        file."""
+
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+        if not selected:
+            return self._wait("the Preview tab selected")
+        document = self._document_claim(projection, bounds)
+        if self.stage == self.LINKED_DOCUMENT:
+            if (
+                document is None
+                or document.block_with(FEXP_LINKED_TEXT) is None
+                or not _status_shows(projection, "/" + FEXP_LINKED_NAME, bounds)
+            ):
+                return self._wait(f"{FEXP_LINKED_NAME} selected and previewed as a document")
+            details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+            return self._step("fexp-document-file-link-followed", "activate_tab",
+                              _tab_value(details), self.DOCUMENT_DETAILS, offer,
+                              generation, sender)
+        if document is None:
+            return self._wait(f"{FEXP_DOCUMENT} previewed as a document")
+        top = document.top_block
+        at_top = (
+            top is not None
+            and top.kind is BlockKind.HEADING
+            and top.text == FEXP_DOCUMENT_HEADING
+            and document.content.viewport_row == 0
+        )
+        if self.stage == self.DOCUMENT_PREVIEWED:
+            if not at_top:
+                return self._wait(f"{FEXP_DOCUMENT} shown from its first heading")
+            _require_cell_text_in(offer, FEXP_DOCUMENT_HEADING, bounds, _WHERE)
+            figure, image = self._figure(projection, document)
+            if figure is None or figure[1] != figure[2]:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_DOCUMENT}'s figure is not wholly in view at its top"
+                )
+            if image is None:
+                return self._wait(f"{FEXP_DOCUMENT}'s figure shown rich")
+            # CELL beneath shows what the picture is and draws none of it.
+            shown = figure[2]
+            _require_picture_facts_in(
+                offer, FEXPLORER_PICTURE_FACTS,
+                (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+            )
+            self._figure_clipped = False
+            self._scrolled_from = (top.block_key, 0)
+            return self._step("fexp-document-shown", "document_scroll",
+                              document.value(FEXP_DOCUMENT_DETENTS),
+                              self.DOCUMENT_SCROLLED, offer, generation, sender)
+        if self.stage == self.DOCUMENT_SCROLLED:
+            now = None if top is None else (top.block_key, document.content.viewport_row)
+            if now is None or now == self._scrolled_from:
+                return self._wait(f"{FEXP_DOCUMENT} scrolled")
+            figure, image = self._figure(projection, document)
+            if figure is not None and image is None:
+                return self._wait(f"{FEXP_DOCUMENT}'s figure shown rich after the scroll")
+            milestone = None
+            if figure is not None and figure[1] != figure[2] and not self._figure_clipped:
+                # The projection holds the IMAGE to the figure's whole
+                # rectangle and to the part the document shows.
+                self._figure_clipped = True
+                milestone = "fexp-document-figure-clipped"
+            end = document.block_with(FEXP_DOCUMENT_END)
+            link = None if end is None else document.link(end, FEXP_DOCUMENT_TOP_LINK)
+            if link is None:
+                self._scrolled_from = now
+                return self._step(milestone or "fexp-document-scrolled", "document_scroll",
+                                  document.value(FEXP_DOCUMENT_DETENTS),
+                                  self.DOCUMENT_SCROLLED, offer, generation, sender)
+            if not self._figure_clipped:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_DOCUMENT}'s figure never showed partly scrolled out"
+                )
+            self._scrolled_from = None
+            return self._step(milestone or "fexp-document-end-shown", "document_follow",
+                              document.value(link.item_key, link.scalar_offset),
+                              self.DOCUMENT_TOP, offer, generation, sender)
+        if not at_top:
+            return self._wait(f"{FEXP_DOCUMENT}'s first heading back at the top")
+        item = document.block_with(f"{FEXP_DOCUMENT_FILE_LINK}, another document")
+        link = None if item is None else document.link(item, FEXP_DOCUMENT_FILE_LINK)
+        if link is None:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_DOCUMENT} shows no link to {FEXP_LINKED_NAME}"
+            )
+        return self._step("fexp-document-heading-link-followed", "document_follow",
+                          document.value(link.item_key, link.scalar_offset),
+                          self.LINKED_DOCUMENT, offer, generation, sender)
+
+    @staticmethod
+    def _page_shown(document, label: str) -> bool:
+        """Whether the root shows a row of the start of the page LABEL."""
+
+        height = document.bottom - document.top
+        return any(
+            placed.block.kind is BlockKind.PAGE
+            and placed.block.text == label
+            and placed.top < height
+            and placed.top + placed.rows > 0
+            for placed in document.placed
+        )
+
+    def _pdf(self, offer, generation, projection, sender) -> JourneyProgress:
+        """sample.pdf's preview: a DOCUMENT from its first page's start, whose
+        link to the last page shows that page; the key c shows its outline
+        as a TREE in the document's place, the title's entry open as the
+        file says, and a COLLAPSE closes it; its Pictures entry then shows
+        the second page from its start with its two pictures shown rich;
+        and encrypted.pdf, read with the empty password, shows the same
+        title."""
+
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+        if not selected:
+            return self._wait("the Preview tab selected")
+        document = self._document_claim(projection, bounds)
+        if self.stage in (self.PDF_CONTENTS, self.PDF_OUTLINE_CLOSED):
+            outline = self._outline(projection, bounds)
+            shown = () if outline is None else tuple(
+                (item.depth, item.fields[0].text) for item in outline.content.items
+            )
+            if self.stage == self.PDF_CONTENTS:
+                expected, waiting = FEXP_PDF_OUTLINE, "shown as a tree"
+            else:
+                expected = tuple(entry for entry in FEXP_PDF_OUTLINE if entry[0] == 0)
+                waiting = "shown with its title's entry closed"
+            if shown != expected:
+                return self._wait(f"{FEXP_PDF}'s outline {waiting}")
+            if document is not None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF}'s outline did not take the document's place"
+                )
+            _require_cell_text_in(offer, FEXP_PDF_PICTURES, bounds, _WHERE)
+            title = outline.named(FEXP_PDF_TITLE)
+            if not title.state & ItemState.EXPANDABLE:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF}'s outline cannot open or close its title's entry"
+                )
+            if self.stage == self.PDF_CONTENTS:
+                lists = outline.content.items[1]
+                if not title.state & ItemState.EXPANDED or lists.parent_key != title.item_key:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"{FEXP_PDF}'s outline does not show its title's entry open"
+                    )
+                return self._step("fexp-pdf-outline-shown", "item_collapse",
+                                  outline.value(title.item_key), self.PDF_OUTLINE_CLOSED,
+                                  offer, generation, sender)
+            if title.state & ItemState.EXPANDED:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF}'s closed title entry still says it is open"
+                )
+            entry = outline.named(FEXP_PDF_PICTURES)
+            return self._step("fexp-pdf-outline-closed", "item_open",
+                              outline.value(entry.item_key), self.PDF_PICTURES,
+                              offer, generation, sender)
+        name = FEXP_PDF_ENCRYPTED if self.stage == self.ENCRYPTED_PREVIEWED else FEXP_PDF
+        if document is None:
+            return self._wait(f"{name} previewed as a document")
+        top = document.top_block
+
+        def at_start(label: str) -> bool:
+            return (
+                top is not None
+                and top.kind is BlockKind.PAGE
+                and top.text == label
+                and document.content.viewport_row == 0
+            )
+
+        if self.stage in (self.PDF_PREVIEWED, self.ENCRYPTED_PREVIEWED):
+            title = document.block_with(FEXP_PDF_TITLE)
+            if not at_start("1") or title is None:
+                return self._wait(f"{name} shown from its first page's start")
+            if title.kind is not BlockKind.HEADING or title.level != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{name}'s title is not a heading of level 1"
+                )
+            _require_cell_text_in(offer, FEXP_PDF_TITLE, bounds, _WHERE)
+            if self.stage == self.ENCRYPTED_PREVIEWED:
+                details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+                return self._step("fexp-pdf-encrypted-shown", "activate_tab",
+                                  _tab_value(details), self.ENCRYPTED_DETAILS,
+                                  offer, generation, sender)
+            block = document.block_with(FEXP_PDF_LAST_LINK)
+            link = None if block is None else document.link(block, FEXP_PDF_LAST_LINK)
+            if link is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"{FEXP_PDF} shows no link to its last page"
+                )
+            return self._step("fexp-pdf-shown", "document_follow",
+                              document.value(link.item_key, link.scalar_offset),
+                              self.PDF_LAST_PAGE, offer, generation, sender)
+        if self.stage == self.PDF_LAST_PAGE:
+            if (
+                at_start("1")
+                or document.block_with(FEXP_PDF_CODE) is None
+                or not self._page_shown(document, "3")
+            ):
+                return self._wait(f"{FEXP_PDF}'s last page shown")
+            _require_cell_text_in(offer, FEXP_PDF_CODE, bounds, _WHERE)
+            # The follow focused the preview, so the key reaches it.
+            return self._step("fexp-pdf-link-followed", "send_text", "c",
+                              self.PDF_CONTENTS, offer, generation, sender)
+        if not at_start("2"):
+            return self._wait(f"{FEXP_PDF}'s second page shown from its start")
+        figures = [figure for figure in document.figures if figure[2] is not None]
+        if len(figures) != 2:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PDF}'s second page shows {len(figures)} pictures from its start"
+            )
+        for key, _whole, _shown in figures:
+            if not any(
+                claim.figure == (document.identity, key)
+                for claim in projection.semantic_image_claims
+            ):
+                return self._wait(f"{FEXP_PDF}'s pictures shown rich")
+        # The photograph is the first, wholly in view.
+        _key, whole, shown = figures[0]
+        if whole != shown:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PDF}'s photograph is not wholly in view at its page's start"
+            )
+        _require_picture_facts_in(
+            offer, FEXP_PDF_PHOTO_FACTS,
+            (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+        )
+        details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+        return self._step("fexp-pdf-pictures-shown", "activate_tab", _tab_value(details),
+                          self.PDF_DETAILS, offer, generation, sender)
 
     def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
         if not self._admit(offer, generation, projection, sender):
@@ -755,6 +1342,12 @@ class FexpAloneJourney(_AppletJourney):
                               offer, generation, sender)
         if self.stage == self.LAUNCHER_CLOSED and launcher is not None:
             return self._wait("the launcher closed")
+        if self.stage in self._PREVIEWS:
+            return self._preview(offer, generation, projection, sender)
+        if self.stage in self._DOCUMENT_STAGES:
+            return self._document(offer, generation, projection, sender)
+        if self.stage in self._PDF_STAGES:
+            return self._pdf(offer, generation, projection, sender)
         table, tree = self._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")
@@ -790,8 +1383,83 @@ class FexpAloneJourney(_AppletJourney):
             selected = table.selected
             if selected is None or selected.fields[0].text != FEXP_FILE:
                 return self._wait(f"{FEXP_FILE}'s row selected")
-            if not _residual_contains(projection, "/" + FEXP_FILE, bounds):
+            if not _status_shows(projection, "/" + FEXP_FILE, bounds):
                 return self._wait("the selected file's path in the status bar")
+            if _image_claims_in(projection, bounds):
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer shows a picture for {FEXP_FILE}"
+                )
+            row = table.named(FEXPLORER_PICTURE)
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's root lists no {FEXPLORER_PICTURE}"
+                )
+            if not self._shown(table, row):
+                return self._step("fexp-table-scrolled", "item_scroll", table.value(1),
+                                  self.FILE_SELECTED, offer, generation, sender)
+            return self._step("fexp-file-selected", "item_select",
+                              table.value(row.item_key), self.PICTURE_SELECTED,
+                              offer, generation, sender)
+        if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
+                          self.DOCUMENT_SELECTED, self.PDF_SELECTED,
+                          self.ENCRYPTED_SELECTED, self.PICTURE_RESELECTED):
+            name = {self.TEXT_SELECTED: FEXP_FILE,
+                    self.DOCUMENT_SELECTED: FEXP_DOCUMENT,
+                    self.PDF_SELECTED: FEXP_PDF,
+                    self.ENCRYPTED_SELECTED: FEXP_PDF_ENCRYPTED}.get(
+                        self.stage, FEXPLORER_PICTURE)
+            selected = table.selected
+            if selected is None or selected.fields[0].text != name:
+                return self._wait(f"{name}'s row selected")
+            if not _status_shows(projection, "/" + name, bounds):
+                return self._wait(f"{name}'s path in the status bar")
+            tab, selected_tab = _tab_in(projection, bounds, "Preview", _WHERE)
+            if selected_tab:
+                raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
+            preview = {self.PICTURE_SELECTED: self.PICTURE_PREVIEWED,
+                       self.TEXT_SELECTED: self.TEXT_PREVIEWED,
+                       self.DOCUMENT_SELECTED: self.DOCUMENT_PREVIEWED,
+                       self.PDF_SELECTED: self.PDF_PREVIEWED,
+                       self.ENCRYPTED_SELECTED: self.ENCRYPTED_PREVIEWED,
+                       self.PICTURE_RESELECTED: self.PICTURE_PREVIEWED_LAST}[self.stage]
+            return self._step(f"fexp-selected-{self.stage}", "activate_tab",
+                              _tab_value(tab), preview, offer, generation, sender)
+        if self.stage in (self.PICTURE_DETAILS, self.PICTURE_DETAILS_AGAIN,
+                          self.TEXT_DETAILS, self.DOCUMENT_DETAILS, self.PDF_DETAILS,
+                          self.ENCRYPTED_DETAILS, self.DETAILS_SHOWN):
+            if _image_claims_in(projection, bounds):
+                return self._wait("the picture gone with the Preview tab")
+            if self._document_claim(projection, bounds) is not None:
+                return self._wait("the document gone with the Preview tab")
+            if self.stage == self.PICTURE_DETAILS:
+                # The same picture, shown again.
+                tab, _selected = _tab_in(projection, bounds, "Preview", _WHERE)
+                return self._step("fexp-details-shown", "activate_tab",
+                                  _tab_value(tab), self.PICTURE_PREVIEWED_AGAIN,
+                                  offer, generation, sender)
+            # The file each Details stage selects next, and the stage after.
+            follows = {
+                self.PICTURE_DETAILS_AGAIN: (FEXP_FILE, self.TEXT_SELECTED),
+                self.TEXT_DETAILS: (FEXP_DOCUMENT, self.DOCUMENT_SELECTED),
+                self.DOCUMENT_DETAILS: (FEXP_PDF, self.PDF_SELECTED),
+                self.PDF_DETAILS: (FEXP_PDF_ENCRYPTED, self.ENCRYPTED_SELECTED),
+                self.ENCRYPTED_DETAILS: (FEXPLORER_PICTURE, self.PICTURE_RESELECTED),
+            }
+            if self.stage in follows:
+                name, target = follows[self.stage]
+                row = table.named(name)
+                if row is None:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"File Explorer's root does not list {name}"
+                    )
+                if not self._shown(table, row):
+                    toward = -1 if row.ordinal < table.content.viewport_first else 1
+                    return self._step("fexp-table-scrolled", "item_scroll",
+                                      table.value(toward), self.stage, offer,
+                                      generation, sender)
+                return self._step(f"fexp-details-{self.stage}", "item_select",
+                                  table.value(row.item_key), target, offer,
+                                  generation, sender)
             directories = [
                 item
                 for item in table.content.shown_items()
@@ -802,11 +1470,11 @@ class FexpAloneJourney(_AppletJourney):
                     "File Explorer's root shows no directory to open"
                 )
             self._directory = directories[0].fields[0].text
-            return self._step("fexp-file-selected", "item_open",
+            return self._step("fexp-details-last", "item_open",
                               table.value(directories[0].item_key),
                               self.DIRECTORY_OPENED, offer, generation, sender)
         if self.stage == self.DIRECTORY_OPENED:
-            if table.named(FEXP_FILE) is not None or not _residual_contains(
+            if table.named(FEXP_FILE) is not None or not _status_shows(
                 projection, "/" + self._directory, bounds
             ):
                 return self._wait(f"the table listing /{self._directory}")
@@ -840,7 +1508,7 @@ class FexpAloneJourney(_AppletJourney):
             if (
                 selected is None
                 or selected.fields[0].text != self._directory
-                or not _residual_contains(projection, "/" + self._directory, bounds)
+                or not _status_shows(projection, "/" + self._directory, bounds)
             ):
                 return self._wait(f"/{self._directory} selected in the tree")
             return self._step("fexp-tree-directory-selected", "item_collapse",
@@ -857,6 +1525,236 @@ class FexpAloneJourney(_AppletJourney):
             return self._wait("the table listing the root again")
         return self._step("fexp-tree-collapsed", "send_key", "alt+h",
                           self.LAUNCHER_OPENED, offer, generation, sender)
+
+
+class PhotoJourney(_AppletJourney):
+    """Desk with File Explorer holding a real photograph: select it, show its
+    Preview, and see the terminal show the photograph itself.
+
+    The terminal decodes QOI, so the producer sends the photo's file as it
+    is and the terminal holds the whole 2160 by 1620 picture, which the
+    renderer fits into the preview.  The guest decodes nothing for it: CELL
+    beneath shows only what the picture is.  The picture's size and the
+    area's are kept as journey evidence.
+    """
+
+    focus_marker = FEXP_ALONE_FOCUS_MARKER
+    READY, SELECTED, PREVIEWED = range(3)
+
+    def __init__(self, ready_markers: tuple[str, ...]):
+        super().__init__(ready_markers)
+        self.evidence = {"photo": None}
+
+    @property
+    def final_stage(self) -> int:
+        return self.PREVIEWED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, FEXP_PHOTO)
+
+    def _require_photo_itself(self, offer, shown) -> None:
+        """The terminal holds the photo at its own size, decoded from the
+        file, not a copy the guest made for the area."""
+
+        if self.cell_pixels is None:
+            raise PhysicalDesktopAcceptanceError("the viewer's cell size is unknown")
+        cell_w, cell_h = self.cell_pixels
+        area = ((shown.right - shown.left) * cell_w, (shown.bottom - shown.top) * cell_h)
+        named = (shown.owner_id, shown.owner_generation, shown.resource_id)
+        manifests = [
+            resource for resource in offer.retained.resources
+            if (resource.owner_id, resource.owner_generation, resource.resource_id) == named
+        ]
+        if len(manifests) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PHOTO} names a resource the frame does not carry"
+            )
+        held = (manifests[0].width, manifests[0].height)
+        self.evidence["photo"] = {
+            "photo_pixels": list(FEXP_PHOTO_SIZE),
+            "area_cells": [shown.right - shown.left, shown.bottom - shown.top],
+            "cell_pixels": [cell_w, cell_h],
+            "area_pixels": list(area),
+            "held_pixels": list(held),
+            "held_bytes": manifests[0].byte_length,
+        }
+        if held != FEXP_PHOTO_SIZE:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_PHOTO} shows a {held[0]}x{held[1]} copy, not the photo itself"
+            )
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        if self.stage == self.PREVIEWED:
+            _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+            if not selected:
+                return self._wait("the Preview tab selected")
+            pictures = _image_claims_in(projection, bounds)
+            if not pictures:
+                return self._wait(f"{FEXP_PHOTO} shown rich")
+            if len(pictures) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer shows {len(pictures)} pictures for {FEXP_PHOTO}"
+                )
+            shown, = pictures
+            _require_picture_facts_in(
+                offer, FEXP_PHOTO_FACTS,
+                (shown.left, shown.top, shown.right, shown.bottom), _WHERE,
+            )
+            self._require_photo_itself(offer, shown)
+            return self._done("photo-shown-itself", offer)
+        table, _tree = FexpAloneJourney._views(projection)
+        if table is None:
+            return self._wait("File Explorer's detail table and folder tree")
+        row = table.named(FEXP_PHOTO)
+        if self.stage == self.READY:
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's root lists no {FEXP_PHOTO}"
+                )
+            if not FexpAloneJourney._shown(table, row):
+                return self._step("photo-table-scrolled", "item_scroll", table.value(1),
+                                  self.READY, offer, generation, sender)
+            return self._step("photo-table-shown", "item_select",
+                              table.value(row.item_key), self.SELECTED, offer,
+                              generation, sender)
+        selected = table.selected
+        if selected is None or selected.fields[0].text != FEXP_PHOTO:
+            return self._wait(f"{FEXP_PHOTO}'s row selected")
+        if not _status_shows(projection, "/" + FEXP_PHOTO, bounds):
+            return self._wait(f"{FEXP_PHOTO}'s path in the status bar")
+        tab, selected_tab = _tab_in(projection, bounds, "Preview", _WHERE)
+        if selected_tab:
+            raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
+        return self._step("photo-selected", "activate_tab", _tab_value(tab),
+                          self.PREVIEWED, offer, generation, sender)
+
+
+class DamagedPictureJourney(_AppletJourney):
+    """Desk with File Explorer holding a picture file the terminal cannot
+    decode: a PNG whose header names a 64 by 48 picture and whose data is
+    none.  Its Preview sends the file once, the terminal refuses it, and CELL
+    says the picture is damaged.  The Details tab and the Preview again draw
+    the same picture, which is not sent again, and every input is answered.
+    The terminal's frame counts at each step are kept as journey evidence.
+    """
+
+    focus_marker = FEXP_ALONE_FOCUS_MARKER
+    READY, SELECTED, PREVIEWED, DETAILS, PREVIEWED_AGAIN = range(5)
+
+    def __init__(self, ready_markers: tuple[str, ...]):
+        super().__init__(ready_markers)
+        self._frames: dict[str, int] | None = None
+        # The terminal's upload frames before the Preview first showed.
+        self._before: dict[str, int] | None = None
+        self.evidence = {"damaged": {}}
+
+    @property
+    def final_stage(self) -> int:
+        return self.PREVIEWED_AGAIN
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, FEXP_DAMAGED_REASON)
+
+    def observe_status(self, status) -> None:
+        rich = status.get("rich_terminal") if isinstance(status, dict) else None
+        counts = rich.get("frames_by_type") if isinstance(rich, dict) else None
+        if isinstance(counts, dict):
+            self._frames = {
+                name: int(counts.get(f"0x{int(kind):04X}", 0))
+                for name, kind in _UPLOAD_FRAMES.items()
+            }
+
+    def _sent_once(self) -> dict[str, int] | None:
+        """The upload frames the terminal took since the Preview first
+        showed, once it has answered the damaged file's one upload: begun,
+        sent and committed once, never aborted.  None while that answer is
+        still to come."""
+
+        uploads = {name: self._frames[name] - self._before[name]
+                   for name in ("resource_begin", "resource_chunk", "resource_commit",
+                                "resource_abort")}
+        if uploads["resource_commit"] == 0 and uploads["resource_abort"] == 0:
+            return None
+        if (uploads["resource_begin"], uploads["resource_commit"],
+                uploads["resource_abort"]) != (1, 1, 0) or not uploads["resource_chunk"]:
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXP_DAMAGED} was sent as {uploads!r}, not as one upload"
+            )
+        return uploads
+
+    def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
+        bounds = _desk_content_bounds(projection)
+        _tab, selected = _tab_in(projection, bounds, "Preview", _WHERE)
+        if not selected:
+            return self._wait("the Preview tab selected")
+        if _image_claims_in(projection, bounds):
+            raise PhysicalDesktopAcceptanceError(f"{FEXP_DAMAGED} shows rich")
+        left, top, right, bottom = bounds
+        if not any(
+            top <= row < bottom and left <= column < right
+            for row, column in offer.cell.find(FEXP_DAMAGED_REASON)
+        ):
+            return self._wait(f"CELL saying {FEXP_DAMAGED} is damaged")
+        if self._frames is None:
+            return self._wait("the terminal's frame counts")
+        uploads = self._sent_once()
+        if uploads is None:
+            return self._wait(f"the terminal's answer to {FEXP_DAMAGED}'s upload")
+        if self.stage == self.PREVIEWED_AGAIN:
+            self.evidence["damaged"]["previewed-again"] = uploads
+            return self._done("damaged-not-sent-again", offer)
+        self.evidence["damaged"]["previewed"] = uploads
+        details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
+        return self._step("damaged-refused", "activate_tab", _tab_value(details),
+                          self.DETAILS, offer, generation, sender)
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        if self.stage in (self.PREVIEWED, self.PREVIEWED_AGAIN):
+            return self._preview(offer, generation, projection, sender)
+        bounds = _desk_content_bounds(projection)
+        if self.stage == self.DETAILS:
+            _tab, selected = _tab_in(projection, bounds, "Details", _WHERE)
+            if not selected:
+                return self._wait("the Details tab selected")
+            preview, _selected = _tab_in(projection, bounds, "Preview", _WHERE)
+            return self._step("damaged-details-shown", "activate_tab", _tab_value(preview),
+                              self.PREVIEWED_AGAIN, offer, generation, sender)
+        table, _tree = FexpAloneJourney._views(projection)
+        if table is None:
+            return self._wait("File Explorer's detail table and folder tree")
+        row = table.named(FEXP_DAMAGED)
+        if self.stage == self.READY:
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's root lists no {FEXP_DAMAGED}"
+                )
+            if not FexpAloneJourney._shown(table, row):
+                return self._step("damaged-table-scrolled", "item_scroll", table.value(1),
+                                  self.READY, offer, generation, sender)
+            return self._step("damaged-table-shown", "item_select",
+                              table.value(row.item_key), self.SELECTED, offer,
+                              generation, sender)
+        selected = table.selected
+        if selected is None or selected.fields[0].text != FEXP_DAMAGED:
+            return self._wait(f"{FEXP_DAMAGED}'s row selected")
+        if not _status_shows(projection, "/" + FEXP_DAMAGED, bounds):
+            return self._wait(f"{FEXP_DAMAGED}'s path in the status bar")
+        if self._frames is None:
+            return self._wait("the terminal's frame counts")
+        tab, selected_tab = _tab_in(projection, bounds, "Preview", _WHERE)
+        if selected_tab:
+            raise PhysicalDesktopAcceptanceError("the Preview tab is already selected")
+        self._before = dict(self._frames)
+        self.evidence["damaged"]["before"] = dict(self._frames)
+        return self._step("damaged-selected", "activate_tab", _tab_value(tab),
+                          self.PREVIEWED, offer, generation, sender)
 
 
 class StreamsAloneJourney(_AppletJourney):
@@ -1347,9 +2245,12 @@ def _field_shows(projection, column, row, line: str, longest: str) -> bool:
     )
 
 
-def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourney:
+def applet_journey(
+    name: str, ready_markers: tuple[str, ...], *, paced_link: bool = False
+) -> FrameBoundJourney:
     """The journey for Desk holding only the applet NAME, or for the check
-    NAME of Desk holding one applet."""
+    NAME of Desk holding one applet.  On a PACED_LINK, File Explorer's also
+    checks that the screen answers input while a picture uploads."""
 
     journeys = {
         "pad": PadAloneJourney,
@@ -1358,7 +2259,11 @@ def applet_journey(name: str, ready_markers: tuple[str, ...]) -> FrameBoundJourn
         "streams": StreamsAloneJourney,
         "agent": AgentAloneJourney,
         "small-terminal": SmallTerminalJourney,
+        "photo": PhotoJourney,
+        "damaged": DamagedPictureJourney,
     }
     if name not in journeys:
         raise ValueError(f"no journey for Desk with only {name!r}")
+    if name == "fexp":
+        return FexpAloneJourney(ready_markers, paced_link=paced_link)
     return journeys[name](ready_markers)

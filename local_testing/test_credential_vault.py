@@ -623,7 +623,7 @@ def _assert_paths_and_private_state(source: str, doc: str) -> None:
         all_private,
         "_VFSNAP-DEPENDENCY-ALIASES?",
         "_S256-LOCAL-RESERVED-OVERLAP?",
-        "_aes-gcm-guard GUARD-SPIN-SIZE MSPAN-OVERLAP?",
+        "_aes-guard GUARD-SPIN-SIZE MSPAN-OVERLAP?",
         "_CV-PRIVATE-ALIASES?",
     )
     assert all_private.count("2DROP -1 EXIT") == 3

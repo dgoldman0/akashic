@@ -28,11 +28,13 @@ REQUIRE uidl-instrument-planner.f
 REQUIRE uidl-claim-ledger.f
 REQUIRE uidl-semantic-content-stx1.f
 REQUIRE uidl-semantic-items-itm1.f
+REQUIRE uidl-semantic-documents-doc1.f
 REQUIRE ../field-content.f
 REQUIRE residual-glyph-planner.f
 REQUIRE engine.f
 REQUIRE phase-profile.f
 REQUIRE ../screen.f
+REQUIRE ../uidl-picture-snapshot.f
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/memory-source.f
 
@@ -100,190 +102,250 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.GLYPH-COUNT    ( p -- a )  448 + ;
 : _RTHP.PHYSICAL-GEN   ( p -- a )  456 + ;
 : _RTHP.LIMITS         ( p -- a )  464 + ;
-: _RTHP.RUCP-Q         ( p -- a )  632 + ;
-: _RTHP.RUCL-Q         ( p -- a )  912 + ;
-: _RTHP.RGRP-Q         ( p -- a ) 1024 + ;
-: _RTHP.CONTROL-PLAN   ( p -- a ) 1304 + ;
-: _RTHP.GLYPH-PLAN     ( p -- a ) 1448 + ;
-: _RTHP.HYBRID         ( p -- a ) 1592 + ;
-: _RTHP.ADMISSION      ( p -- a ) 1760 + ;
-: _RTHP.RUN            ( p -- a ) 2216 + ;
-: _RTHP.TARGET0-A      ( p -- a ) 2368 + ;
-: _RTHP.TARGET1-A      ( p -- a ) 2376 + ;
-: _RTHP.TARGET-ACTIVE  ( p -- a ) 2384 + ;
-: _RTHP.TARGET-PENDING ( p -- a ) 2392 + ;
-: _RTHP.NEXT-REGION    ( p -- a ) 2400 + ;
-: _RTHP.NEXT-OBJECT    ( p -- a ) 2408 + ;
-: _RTHP.ACTIVE-DRAW    ( p -- a ) 2416 + ;
-: _RTHP.MAX-DOCUMENTS  ( p -- a ) 2424 + ;
-: _RTHP.SOURCE-DIR-A   ( p -- a ) 2432 + ;
-: _RTHP.SOURCE-DIR-U   ( p -- a ) 2440 + ;
-: _RTHP.SOURCE-DIR-USED ( p -- a ) 2448 + ;
-: _RTHP.DOCUMENT-COUNT ( p -- a ) 2456 + ;
+: _RTHP.RUCP-Q         ( p -- a )  640 + ;
+: _RTHP.RUCL-Q         ( p -- a )  920 + ;
+: _RTHP.RGRP-Q         ( p -- a ) 1032 + ;
+: _RTHP.CONTROL-PLAN   ( p -- a ) 1312 + ;
+: _RTHP.GLYPH-PLAN     ( p -- a ) 1456 + ;
+: _RTHP.HYBRID         ( p -- a ) 1600 + ;
+: _RTHP.ADMISSION      ( p -- a ) 1768 + ;
+: _RTHP.RUN            ( p -- a ) 2240 + ;
+: _RTHP.TARGET0-A      ( p -- a ) 2392 + ;
+: _RTHP.TARGET1-A      ( p -- a ) 2400 + ;
+: _RTHP.TARGET-ACTIVE  ( p -- a ) 2408 + ;
+: _RTHP.TARGET-PENDING ( p -- a ) 2416 + ;
+: _RTHP.NEXT-REGION    ( p -- a ) 2424 + ;
+: _RTHP.NEXT-OBJECT    ( p -- a ) 2432 + ;
+: _RTHP.ACTIVE-DRAW    ( p -- a ) 2440 + ;
+: _RTHP.MAX-DOCUMENTS  ( p -- a ) 2448 + ;
+: _RTHP.SOURCE-DIR-A   ( p -- a ) 2456 + ;
+: _RTHP.SOURCE-DIR-U   ( p -- a ) 2464 + ;
+: _RTHP.SOURCE-DIR-USED ( p -- a ) 2472 + ;
+: _RTHP.DOCUMENT-COUNT ( p -- a ) 2480 + ;
 \ After a candidate's glyphs are built, ROW-DAMAGE names the rows they
 \ rebuilt; every other row was copied from the acknowledged target.
-: _RTHP.ROW-DAMAGE-A   ( p -- a ) 2464 + ;
-: _RTHP.ROW-DAMAGE-U   ( p -- a ) 2472 + ;
-: _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2480 + ;
-: _RTHP.GLYPH-ID-MAP-U ( p -- a ) 2488 + ;
-: _RTHP.DELTA-PLAN-VALID ( p -- a ) 2496 + ;
-: _RTHP.DELTA-PLAN-ACTIVE ( p -- a ) 2504 + ;
-: _RTHP.DELTA-PLAN-PENDING ( p -- a ) 2512 + ;
-: _RTHP.DELTA-PLAN-ACTIVE-DRAW ( p -- a ) 2520 + ;
-: _RTHP.DELTA-PLAN-PENDING-DRAW ( p -- a ) 2528 + ;
-: _RTHP.DELTA-PLAN-CONTROLS ( p -- a ) 2536 + ;
-: _RTHP.DELTA-PLAN-GLYPHS ( p -- a ) 2544 + ;
-: _RTHP.DELTA-PLAN-ATTEMPT ( p -- a ) 2552 + ;
-: _RTHP.DELTA-PLAN-SOURCE-GEN ( p -- a ) 2560 + ;
-: _RTHP.DELTA-PLAN-PENDING-CONTENT ( p -- a ) 2568 + ;
-: _RTHP.DELTA-PLAN-ACTIVE-CONTENT ( p -- a ) 2576 + ;
-: _RTHP.SOURCE-CONTENT-EPOCH ( p -- a ) 2584 + ;
-: _RTHP.MAX-COLLECTION-NATIVE ( p -- a ) 2592 + ;
-: _RTHP.MAX-COLLECTIONS ( p -- a ) 2600 + ;
-: _RTHP.MAX-CONTROLS   ( p -- a ) 2608 + ;
-: _RTHP.SOURCE-MENU-TEXT-USED ( p -- a ) 2616 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-A ( p -- a ) 2624 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-U ( p -- a ) 2632 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-USED ( p -- a ) 2640 + ;
-: _RTHP.COLLECTION-NATIVE-A ( p -- a ) 2648 + ;
-: _RTHP.COLLECTION-NATIVE-U ( p -- a ) 2656 + ;
-: _RTHP.COLLECTION-NATIVE-USED ( p -- a ) 2664 + ;
-: _RTHP.SOURCE-COLLECTION-COUNT ( p -- a ) 2672 + ;
-: _RTHP.MENU-CONTROL-COUNT ( p -- a ) 2680 + ;
-: _RTHP.COLLECTION-COUNT ( p -- a ) 2688 + ;
-: _RTHP.COLLECTION-ITEMS ( p -- a ) 2696 + ;
-: _RTHP.COLLECTION-UTF8 ( p -- a ) 2704 + ;
-: _RTHP.MAX-COLLECTION-DESCRIPTORS ( p -- a ) 2712 + ;
-: _RTHP.RUIP-Q         ( p -- a ) 2720 + ; \ 368 bytes
-: _RTHP.INSTRUMENT-PLAN ( p -- a ) 3088 + ; \ 72 bytes
-: _RTHP.MAX-DGRAPH-NATIVE ( p -- a ) 3160 + ;
-: _RTHP.MAX-DGRAPH-DESCRIPTORS ( p -- a ) 3168 + ;
-: _RTHP.MAX-INSTRUMENT-REGIONS ( p -- a ) 3176 + ;
-: _RTHP.MAX-INSTRUMENTS ( p -- a ) 3184 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-A ( p -- a ) 3192 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-U ( p -- a ) 3200 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-USED ( p -- a ) 3208 + ;
-: _RTHP.DGRAPH-NATIVE-A ( p -- a ) 3216 + ;
-: _RTHP.DGRAPH-NATIVE-U ( p -- a ) 3224 + ;
-: _RTHP.DGRAPH-NATIVE-USED ( p -- a ) 3232 + ;
-: _RTHP.SOURCE-DGRAPH-COUNT ( p -- a ) 3240 + ;
-: _RTHP.INSTRUMENT-REGIONS-A ( p -- a ) 3248 + ;
-: _RTHP.INSTRUMENT-REGIONS-U ( p -- a ) 3256 + ;
-: _RTHP.INSTRUMENTS-A ( p -- a ) 3264 + ;
-: _RTHP.INSTRUMENTS-U ( p -- a ) 3272 + ;
-: _RTHP.INSTRUMENT-UNITS-A ( p -- a ) 3280 + ;
-: _RTHP.INSTRUMENT-UNITS-U ( p -- a ) 3288 + ;
-: _RTHP.INSTRUMENT-UNITS-USED ( p -- a ) 3296 + ;
-: _RTHP.INSTRUMENT-CORR-A ( p -- a ) 3304 + ;
-: _RTHP.INSTRUMENT-CORR-U ( p -- a ) 3312 + ;
-: _RTHP.INSTRUMENT-REGION-COUNT ( p -- a ) 3320 + ;
-: _RTHP.INSTRUMENT-COUNT ( p -- a ) 3328 + ;
-: _RTHP.INSTRUMENT-LAST-REGION ( p -- a ) 3336 + ;
-: _RTHP.INSTRUMENT-LAST ( p -- a ) 3344 + ;
-: _RTHP.INSTRUMENT-CLAIM-COUNT ( p -- a ) 3352 + ;
-: _RTHP.BASE-CLAIMS-USED ( p -- a ) 3360 + ;
-: _RTHP.MENU-CLAIMS     ( p -- a ) 3368 + ;
-: _RTHP.ACTIVE-FACTS   ( p -- a ) 3376 + ; \ 48 bytes
-: _RTHP.PENDING-FACTS  ( p -- a ) 3424 + ; \ 48 bytes
-: _RTHP.FACTS-INDEX0-A ( p -- a ) 3472 + ;
-: _RTHP.FACTS-INDEX1-A ( p -- a ) 3480 + ;
-: _RTHP.FACTS-INDEX-U  ( p -- a ) 3488 + ;
+: _RTHP.ROW-DAMAGE-A   ( p -- a ) 2488 + ;
+: _RTHP.ROW-DAMAGE-U   ( p -- a ) 2496 + ;
+: _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2504 + ;
+: _RTHP.GLYPH-ID-MAP-U ( p -- a ) 2512 + ;
+: _RTHP.DELTA-PLAN-VALID ( p -- a ) 2520 + ;
+: _RTHP.DELTA-PLAN-ACTIVE ( p -- a ) 2528 + ;
+: _RTHP.DELTA-PLAN-PENDING ( p -- a ) 2536 + ;
+: _RTHP.DELTA-PLAN-ACTIVE-DRAW ( p -- a ) 2544 + ;
+: _RTHP.DELTA-PLAN-PENDING-DRAW ( p -- a ) 2552 + ;
+: _RTHP.DELTA-PLAN-CONTROLS ( p -- a ) 2560 + ;
+: _RTHP.DELTA-PLAN-GLYPHS ( p -- a ) 2568 + ;
+: _RTHP.DELTA-PLAN-ATTEMPT ( p -- a ) 2576 + ;
+: _RTHP.DELTA-PLAN-SOURCE-GEN ( p -- a ) 2584 + ;
+: _RTHP.DELTA-PLAN-PENDING-CONTENT ( p -- a ) 2592 + ;
+: _RTHP.DELTA-PLAN-ACTIVE-CONTENT ( p -- a ) 2600 + ;
+: _RTHP.SOURCE-CONTENT-EPOCH ( p -- a ) 2608 + ;
+: _RTHP.MAX-COLLECTION-NATIVE ( p -- a ) 2616 + ;
+: _RTHP.MAX-COLLECTIONS ( p -- a ) 2624 + ;
+: _RTHP.MAX-CONTROLS   ( p -- a ) 2632 + ;
+: _RTHP.SOURCE-MENU-TEXT-USED ( p -- a ) 2640 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-A ( p -- a ) 2648 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-U ( p -- a ) 2656 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-USED ( p -- a ) 2664 + ;
+: _RTHP.COLLECTION-NATIVE-A ( p -- a ) 2672 + ;
+: _RTHP.COLLECTION-NATIVE-U ( p -- a ) 2680 + ;
+: _RTHP.COLLECTION-NATIVE-USED ( p -- a ) 2688 + ;
+: _RTHP.SOURCE-COLLECTION-COUNT ( p -- a ) 2696 + ;
+: _RTHP.MENU-CONTROL-COUNT ( p -- a ) 2704 + ;
+: _RTHP.COLLECTION-COUNT ( p -- a ) 2712 + ;
+: _RTHP.COLLECTION-ITEMS ( p -- a ) 2720 + ;
+: _RTHP.COLLECTION-UTF8 ( p -- a ) 2728 + ;
+: _RTHP.MAX-COLLECTION-DESCRIPTORS ( p -- a ) 2736 + ;
+: _RTHP.RUIP-Q         ( p -- a ) 2744 + ; \ 368 bytes
+: _RTHP.INSTRUMENT-PLAN ( p -- a ) 3112 + ; \ 72 bytes
+: _RTHP.MAX-DGRAPH-NATIVE ( p -- a ) 3184 + ;
+: _RTHP.MAX-DGRAPH-DESCRIPTORS ( p -- a ) 3192 + ;
+: _RTHP.MAX-INSTRUMENT-REGIONS ( p -- a ) 3200 + ;
+: _RTHP.MAX-INSTRUMENTS ( p -- a ) 3208 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-A ( p -- a ) 3216 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-U ( p -- a ) 3224 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-USED ( p -- a ) 3232 + ;
+: _RTHP.DGRAPH-NATIVE-A ( p -- a ) 3240 + ;
+: _RTHP.DGRAPH-NATIVE-U ( p -- a ) 3248 + ;
+: _RTHP.DGRAPH-NATIVE-USED ( p -- a ) 3256 + ;
+: _RTHP.SOURCE-DGRAPH-COUNT ( p -- a ) 3264 + ;
+: _RTHP.INSTRUMENT-REGIONS-A ( p -- a ) 3272 + ;
+: _RTHP.INSTRUMENT-REGIONS-U ( p -- a ) 3280 + ;
+: _RTHP.INSTRUMENTS-A ( p -- a ) 3288 + ;
+: _RTHP.INSTRUMENTS-U ( p -- a ) 3296 + ;
+: _RTHP.INSTRUMENT-UNITS-A ( p -- a ) 3304 + ;
+: _RTHP.INSTRUMENT-UNITS-U ( p -- a ) 3312 + ;
+: _RTHP.INSTRUMENT-UNITS-USED ( p -- a ) 3320 + ;
+: _RTHP.INSTRUMENT-CORR-A ( p -- a ) 3328 + ;
+: _RTHP.INSTRUMENT-CORR-U ( p -- a ) 3336 + ;
+: _RTHP.INSTRUMENT-REGION-COUNT ( p -- a ) 3344 + ;
+: _RTHP.INSTRUMENT-COUNT ( p -- a ) 3352 + ;
+: _RTHP.INSTRUMENT-LAST-REGION ( p -- a ) 3360 + ;
+: _RTHP.INSTRUMENT-LAST ( p -- a ) 3368 + ;
+: _RTHP.INSTRUMENT-CLAIM-COUNT ( p -- a ) 3376 + ;
+: _RTHP.BASE-CLAIMS-USED ( p -- a ) 3384 + ;
+: _RTHP.MENU-CLAIMS     ( p -- a ) 3392 + ;
+: _RTHP.ACTIVE-FACTS   ( p -- a ) 3400 + ; \ 48 bytes
+: _RTHP.PENDING-FACTS  ( p -- a ) 3448 + ; \ 48 bytes
+: _RTHP.FACTS-INDEX0-A ( p -- a ) 3496 + ;
+: _RTHP.FACTS-INDEX1-A ( p -- a ) 3504 + ;
+: _RTHP.FACTS-INDEX-U  ( p -- a ) 3512 + ;
 \ The completed draw last found unable to be shown rich; it is not built
 \ again, and a newer completed draw is tried.
-: _RTHP.REFUSED-DRAW   ( p -- a ) 3496 + ;
+: _RTHP.REFUSED-DRAW   ( p -- a ) 3520 + ;
 
-: _RTHP.MAX-STATUS-NATIVE        ( p -- a ) 3504 + ;
-: _RTHP.MAX-STATICS              ( p -- a ) 3512 + ;
-: _RTHP.STATUS-DESCRIPTORS-A     ( p -- a ) 3520 + ;
-: _RTHP.STATUS-DESCRIPTORS-U     ( p -- a ) 3528 + ;
-: _RTHP.STATUS-DESCRIPTORS-USED  ( p -- a ) 3536 + ;
-: _RTHP.STATUS-NATIVE-A          ( p -- a ) 3544 + ;
-: _RTHP.STATUS-NATIVE-U          ( p -- a ) 3552 + ;
-: _RTHP.STATUS-NATIVE-USED       ( p -- a ) 3560 + ;
-: _RTHP.STATICS-A                ( p -- a ) 3568 + ;
-: _RTHP.STATICS-U                ( p -- a ) 3576 + ;
-: _RTHP.STATIC-TEXT-A            ( p -- a ) 3584 + ;
-: _RTHP.STATIC-TEXT-U            ( p -- a ) 3592 + ;
-: _RTHP.STATIC-TEXT-USED         ( p -- a ) 3600 + ;
-: _RTHP.STATIC-CORR-A            ( p -- a ) 3608 + ;
-: _RTHP.STATIC-CORR-U            ( p -- a ) 3616 + ;
-: _RTHP.STATIC-COUNT             ( p -- a ) 3624 + ;
-: _RTHP.STATIC-LAST              ( p -- a ) 3632 + ;
-: _RTHP.STATIC-BASE-CLAIMS       ( p -- a ) 3640 + ;
-: _RTHP.STATIC-PLAN ( p -- a ) 3648 + ; \ 144 bytes
+: _RTHP.MAX-STATUS-NATIVE        ( p -- a ) 3528 + ;
+: _RTHP.MAX-STATICS              ( p -- a ) 3536 + ;
+: _RTHP.STATUS-DESCRIPTORS-A     ( p -- a ) 3544 + ;
+: _RTHP.STATUS-DESCRIPTORS-U     ( p -- a ) 3552 + ;
+: _RTHP.STATUS-DESCRIPTORS-USED  ( p -- a ) 3560 + ;
+: _RTHP.STATUS-NATIVE-A          ( p -- a ) 3568 + ;
+: _RTHP.STATUS-NATIVE-U          ( p -- a ) 3576 + ;
+: _RTHP.STATUS-NATIVE-USED       ( p -- a ) 3584 + ;
+: _RTHP.STATICS-A                ( p -- a ) 3592 + ;
+: _RTHP.STATICS-U                ( p -- a ) 3600 + ;
+: _RTHP.STATIC-TEXT-A            ( p -- a ) 3608 + ;
+: _RTHP.STATIC-TEXT-U            ( p -- a ) 3616 + ;
+: _RTHP.STATIC-TEXT-USED         ( p -- a ) 3624 + ;
+: _RTHP.STATIC-CORR-A            ( p -- a ) 3632 + ;
+: _RTHP.STATIC-CORR-U            ( p -- a ) 3640 + ;
+: _RTHP.STATIC-COUNT             ( p -- a ) 3648 + ;
+: _RTHP.STATIC-LAST              ( p -- a ) 3656 + ;
+: _RTHP.STATIC-BASE-CLAIMS       ( p -- a ) 3664 + ;
+: _RTHP.STATIC-PLAN ( p -- a ) 3672 + ; \ 144 bytes
 
-: _RTHP.MAX-FIELD-NATIVE         ( p -- a ) 3792 + ;
-: _RTHP.MAX-FIELDS               ( p -- a ) 3800 + ;
-: _RTHP.FIELD-DESCRIPTORS-A      ( p -- a ) 3808 + ;
-: _RTHP.FIELD-DESCRIPTORS-U      ( p -- a ) 3816 + ;
-: _RTHP.FIELD-DESCRIPTORS-USED   ( p -- a ) 3824 + ;
-: _RTHP.FIELD-NATIVE-A           ( p -- a ) 3832 + ;
-: _RTHP.FIELD-NATIVE-U           ( p -- a ) 3840 + ;
-: _RTHP.FIELD-NATIVE-USED        ( p -- a ) 3848 + ;
-: _RTHP.FIELD-COUNT              ( p -- a ) 3856 + ;
-: _RTHP.FIELD-ITEMS              ( p -- a ) 3864 + ;
-: _RTHP.FIELD-UTF8               ( p -- a ) 3872 + ;
-: _RTHP.FIELD-BASE-CONTROLS      ( p -- a ) 3880 + ;
-: _RTHP.FIELD-BASE-TEXT          ( p -- a ) 3888 + ;
-: _RTHP.FIELD-BASE-CLAIMS        ( p -- a ) 3896 + ;
-: _RTHP.FIELD-REFUSED            ( p -- a ) 3904 + ;
+: _RTHP.MAX-FIELD-NATIVE         ( p -- a ) 3816 + ;
+: _RTHP.MAX-FIELDS               ( p -- a ) 3824 + ;
+: _RTHP.FIELD-DESCRIPTORS-A      ( p -- a ) 3832 + ;
+: _RTHP.FIELD-DESCRIPTORS-U      ( p -- a ) 3840 + ;
+: _RTHP.FIELD-DESCRIPTORS-USED   ( p -- a ) 3848 + ;
+: _RTHP.FIELD-NATIVE-A           ( p -- a ) 3856 + ;
+: _RTHP.FIELD-NATIVE-U           ( p -- a ) 3864 + ;
+: _RTHP.FIELD-NATIVE-USED        ( p -- a ) 3872 + ;
+: _RTHP.FIELD-COUNT              ( p -- a ) 3880 + ;
+: _RTHP.FIELD-ITEMS              ( p -- a ) 3888 + ;
+: _RTHP.FIELD-UTF8               ( p -- a ) 3896 + ;
+: _RTHP.FIELD-BASE-CONTROLS      ( p -- a ) 3904 + ;
+: _RTHP.FIELD-BASE-TEXT          ( p -- a ) 3912 + ;
+: _RTHP.FIELD-BASE-CLAIMS        ( p -- a ) 3920 + ;
+: _RTHP.FIELD-REFUSED            ( p -- a ) 3928 + ;
 
 \ Independent SERIES namespace and immutable sample storage.
-: _RTHP.MAX-SERIES                ( p -- a ) 3912 + ;
-: _RTHP.SERIES-A                  ( p -- a ) 3920 + ;
-: _RTHP.SERIES-U                  ( p -- a ) 3928 + ;
-: _RTHP.SERIES-SAMPLES-A          ( p -- a ) 3936 + ;
-: _RTHP.SERIES-SAMPLES-U          ( p -- a ) 3944 + ;
-: _RTHP.SERIES-SAMPLES-USED       ( p -- a ) 3952 + ;
-: _RTHP.SERIES-CORR-A             ( p -- a ) 3960 + ;
-: _RTHP.SERIES-CORR-U             ( p -- a ) 3968 + ;
-: _RTHP.SERIES-COUNT              ( p -- a ) 3976 + ;
-: _RTHP.SERIES-LAST               ( p -- a ) 3984 + ;
-: _RTHP.SERIES-SLOTS              ( p -- a ) 3992 + ;
-: _RTHP.SERIES-CHUNKS             ( p -- a ) 4000 + ;
-: _RTHP.SERIES-HISTORY-MAX        ( p -- a ) 4008 + ;
-: _RTHP.SERIES-CHUNK-MAX          ( p -- a ) 4016 + ;
-: _RTHP.SERIES-CHUNK-BYTES-MAX    ( p -- a ) 4024 + ;
-: _RTHP.WAVEFORM-COUNT            ( p -- a ) 4032 + ;
-: _RTHP.FIRST-SERIES              ( p -- a ) 4040 + ;
-: _RTHP.NEXT-SERIES               ( p -- a ) 4048 + ;
-: _RTHP.OMITTED-GRAPHS-A          ( p -- a ) 4056 + ;
-: _RTHP.OMITTED-GRAPHS-U          ( p -- a ) 4064 + ;
-: _RTHP.OMITTED-GRAPHS-USED       ( p -- a ) 4072 + ;
-: _RTHP.SERIES-PLAN ( p -- a ) 4080 + ; \ 48 bytes
-: _RTHP.EXTENSION ( p -- a ) 4128 + ; \ optional caller-owned extension64
+: _RTHP.MAX-SERIES                ( p -- a ) 3936 + ;
+: _RTHP.SERIES-A                  ( p -- a ) 3944 + ;
+: _RTHP.SERIES-U                  ( p -- a ) 3952 + ;
+: _RTHP.SERIES-SAMPLES-A          ( p -- a ) 3960 + ;
+: _RTHP.SERIES-SAMPLES-U          ( p -- a ) 3968 + ;
+: _RTHP.SERIES-SAMPLES-USED       ( p -- a ) 3976 + ;
+: _RTHP.SERIES-CORR-A             ( p -- a ) 3984 + ;
+: _RTHP.SERIES-CORR-U             ( p -- a ) 3992 + ;
+: _RTHP.SERIES-COUNT              ( p -- a ) 4000 + ;
+: _RTHP.SERIES-LAST               ( p -- a ) 4008 + ;
+: _RTHP.SERIES-SLOTS              ( p -- a ) 4016 + ;
+: _RTHP.SERIES-CHUNKS             ( p -- a ) 4024 + ;
+: _RTHP.SERIES-HISTORY-MAX        ( p -- a ) 4032 + ;
+: _RTHP.SERIES-CHUNK-MAX          ( p -- a ) 4040 + ;
+: _RTHP.SERIES-CHUNK-BYTES-MAX    ( p -- a ) 4048 + ;
+: _RTHP.WAVEFORM-COUNT            ( p -- a ) 4056 + ;
+: _RTHP.FIRST-SERIES              ( p -- a ) 4064 + ;
+: _RTHP.NEXT-SERIES               ( p -- a ) 4072 + ;
+: _RTHP.OMITTED-GRAPHS-A          ( p -- a ) 4080 + ;
+: _RTHP.OMITTED-GRAPHS-U          ( p -- a ) 4088 + ;
+: _RTHP.OMITTED-GRAPHS-USED       ( p -- a ) 4096 + ;
+: _RTHP.SERIES-PLAN ( p -- a ) 4104 + ; \ 48 bytes
+: _RTHP.EXTENSION ( p -- a ) 4152 + ; \ optional caller-owned extension64
 \ True while an owner open this producer queued awaits the terminal's answer.
-: _RTHP.OPEN-QUEUED ( p -- a ) 4136 + ;
+: _RTHP.OPEN-QUEUED ( p -- a ) 4160 + ;
 \ Terminal space.  NEED is what the latest admitted or refused candidate
 \ needs, HELD what the owner holds, ASK what this producer asks the terminal
 \ for; each is one RTE-QUOTA-SIZE set.  ASK and NEED persist while a request
 \ for more space waits, and RESUME-PHASE is the phase to return to when the
 \ terminal answers.  A draw the terminal refused more space for is never
 \ asked for again.
-: _RTHP.RESUME-PHASE ( p -- a ) 4144 + ;
-: _RTHP.SPACE-REFUSED-DRAW ( p -- a ) 4152 + ;
-: _RTHP.NEED ( p -- a ) 4160 + ;
-: _RTHP.HELD ( p -- a ) 4216 + ;
-: _RTHP.ASK ( p -- a ) 4272 + ;
+: _RTHP.RESUME-PHASE ( p -- a ) 4168 + ;
+: _RTHP.SPACE-REFUSED-DRAW ( p -- a ) 4176 + ;
+: _RTHP.NEED ( p -- a ) 4184 + ;
+: _RTHP.HELD ( p -- a ) 4240 + ;
+: _RTHP.ASK ( p -- a ) 4296 + ;
 \ The fallback record read by RTHP-FALLBACK@: how many draws had a part
 \ stay CELL, the latest such draw, which parts, why, and the quotas it
 \ needed against those held (or bytes, when Desk's own memory refused).
-: _RTHP.FALLBACKS ( p -- a ) 4328 + ;
-: _RTHP.FALLBACK-DRAW ( p -- a ) 4336 + ;
-: _RTHP.FALLBACK-PARTS ( p -- a ) 4344 + ;
-: _RTHP.FALLBACK-REASON ( p -- a ) 4352 + ;
-: _RTHP.FALLBACK-ASKED ( p -- a ) 4360 + ;
-: _RTHP.FALLBACK-HELD ( p -- a ) 4416 + ;
-: _RTHP.FALLBACK-BYTES-ASKED ( p -- a ) 4472 + ;
-: _RTHP.FALLBACK-BYTES-HELD ( p -- a ) 4480 + ;
+: _RTHP.FALLBACKS ( p -- a ) 4352 + ;
+: _RTHP.FALLBACK-DRAW ( p -- a ) 4360 + ;
+: _RTHP.FALLBACK-PARTS ( p -- a ) 4368 + ;
+: _RTHP.FALLBACK-REASON ( p -- a ) 4376 + ;
+: _RTHP.FALLBACK-ASKED ( p -- a ) 4384 + ;
+: _RTHP.FALLBACK-HELD ( p -- a ) 4440 + ;
+: _RTHP.FALLBACK-BYTES-ASKED ( p -- a ) 4496 + ;
+: _RTHP.FALLBACK-BYTES-HELD ( p -- a ) 4504 + ;
 \ The memory source the arena grows into (0: the caller's fixed arena), and
 \ an earlier arena kept only while the frame on screen has its bank there.
-: _RTHP.MEMORY ( p -- a ) 4488 + ;
-: _RTHP.KEPT-ARENA-A ( p -- a ) 4496 + ;
-: _RTHP.KEPT-ARENA-U ( p -- a ) 4504 + ;
-: _RTHP.KEPT-BANK-A ( p -- a ) 4512 + ;
-: _RTHP.KEPT-BANK-U ( p -- a ) 4520 + ;
-4528 CONSTANT RTHP-SIZE
+: _RTHP.MEMORY ( p -- a ) 4512 + ;
+: _RTHP.KEPT-ARENA-A ( p -- a ) 4520 + ;
+: _RTHP.KEPT-ARENA-U ( p -- a ) 4528 + ;
+: _RTHP.KEPT-BANK-A ( p -- a ) 4536 + ;
+: _RTHP.KEPT-BANK-U ( p -- a ) 4544 + ;
+\ Pictures.  The arena's picture bank holds MAX-PICTURES descriptors, of
+\ which the latest capture described PICTURE-COUNT under PICTURE-ASK: the
+\ surface's pixels and the terminal's limits on one picture.
+: _RTHP.MAX-PICTURES ( p -- a ) 4552 + ;
+: _RTHP.PICTURES-A ( p -- a ) 4560 + ;
+: _RTHP.PICTURES-U ( p -- a ) 4568 + ;
+: _RTHP.PICTURE-COUNT ( p -- a ) 4576 + ;
+: _RTHP.PICTURE-ASK ( p -- a ) 4584 + ; \ UPICSN-ASK-SIZE bytes
+\ The pictures the terminal holds for the owner: a table from the memory
+\ source with an entry for each resource the owner holds room for, and the
+\ next resource ID, above every one the owner generation has used.
+: _RTHP.RESOURCES-A ( p -- a ) 4656 + ;
+: _RTHP.RESOURCES-U ( p -- a ) 4664 + ;
+: _RTHP.NEXT-RESOURCE ( p -- a ) 4672 + ;
+\ The one job the picture lane runs, as RTE-JOB-, the table entry it
+\ uploads or drops, and the block an upload reads each chunk into: from the
+\ memory source at its first chunk, the size of its largest, until it ends.
+: _RTHP.LANE-JOB ( p -- a ) 4680 + ;
+: _RTHP.LANE-ENTRY ( p -- a ) 4688 + ;
+: _RTHP.CHUNK-A ( p -- a ) 4696 + ;
+: _RTHP.CHUNK-U ( p -- a ) 4704 + ;
+\ Counts every change in what a frame can show of its pictures: a pixel
+\ size answered, or a picture newly held.  A frame built before is stale.
+: _RTHP.PICTURE-EPOCH ( p -- a ) 4712 + ;
+\ The draw in which the lane last failed; it starts nothing more in it.
+: _RTHP.LANE-HOLD-DRAW ( p -- a ) 4720 + ;
+\ Room for pictures.  LANE-REFUSED says why the terminal gave the lane no
+\ more room, as RTHP-WHY-, and is zero until it does.  The lane then asks
+\ for none until a build describes no picture, and each copy keeps within
+\ LANE-BUDGET bytes, the room the owner held and no picture used then;
+\ zero while no budget applies.  A picture that goes sets LANE-SHRINK
+\ until the room it held is given back.
+: _RTHP.LANE-REFUSED ( p -- a ) 4728 + ;
+: _RTHP.LANE-BUDGET ( p -- a ) 4736 + ;
+: _RTHP.LANE-SHRINK ( p -- a ) 4744 + ;
+\ The lane's own request for room while the terminal decides: 1 for more,
+\ 2 to give some back.
+: _RTHP.LANE-RESIZE ( p -- a ) 4752 + ;
+\ Nonzero once the lane failed to send a picture a build wanted, until it
+\ starts sending one or a build describes no picture.  The rich side then
+\ takes no picture, so CELL shows each one.
+: _RTHP.LANE-FAILED ( p -- a ) 4760 + ;
+\ The draw whose planes the visible runs of the glyph banks were planned
+\ from, with the candidate's claims; zero while they hold no such plan.
+\ An extension planning the same draw may take runs from them.
+: _RTHP.GLYPH-DRAW ( p -- a ) 4768 + ;
+\ The rest of what that plan was made from: a copy of the claims, the menu
+\ claims among them, the first object ID, the run text limit and the
+\ surface; and what it holds, its runs and text bytes.  A later build of
+\ the same draw from all of these would write the same runs.
+: _RTHP.GLYPH-CLAIMS-A ( p -- a ) 4776 + ;
+: _RTHP.GLYPH-CLAIMS-U ( p -- a ) 4784 + ;
+: _RTHP.GLYPH-CLAIMS-USED ( p -- a ) 4792 + ;
+: _RTHP.GLYPH-MENUS ( p -- a ) 4800 + ;
+: _RTHP.GLYPH-FIRST ( p -- a ) 4808 + ;
+: _RTHP.GLYPH-LIMIT ( p -- a ) 4816 + ;
+: _RTHP.GLYPH-COLS ( p -- a ) 4824 + ;
+: _RTHP.GLYPH-ROWS ( p -- a ) 4832 + ;
+: _RTHP.GLYPH-RUNS ( p -- a ) 4840 + ;
+: _RTHP.GLYPH-TEXT ( p -- a ) 4848 + ;
+4856 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -322,6 +384,7 @@ VARIABLE _RTHP-OWNED-LIMIT
 16 CONSTANT RTHP-PART-INSTRUMENTS
 32 CONSTANT RTHP-PART-COLLECTIONS
 64 CONSTANT RTHP-PART-GRAPHS
+128 CONSTANT RTHP-PART-PICTURES
 \ The terminal said no to more space.
 1 CONSTANT RTHP-WHY-REFUSED
 \ More than the terminal offers at all, or a kind it does not take.
@@ -329,6 +392,28 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ Desk's own memory had no room.
 3 CONSTANT RTHP-WHY-MEMORY
 4 CONSTANT RTHP-WHY-OTHER
+
+\ A table entry of the pictures the terminal holds: its resource ID, zero
+\ when free, the copy's size in pixels and the bytes the owner holds for
+\ it, its decoded size, whether it is still uploading, the format it was
+\ sent in, and the picture it is a copy of: its document, element,
+\ revision and root key, which tells an element's figures apart.  A copy
+\ is that picture at that size and format, so nothing else is compared.
+: _RTHP-RS.ID        ( entry -- a )      ;
+: _RTHP-RS.WIDTH     ( entry -- a )  8 + ;
+: _RTHP-RS.HEIGHT    ( entry -- a ) 16 + ;
+: _RTHP-RS.BYTES     ( entry -- a ) 24 + ;
+: _RTHP-RS.STATE     ( entry -- a ) 32 + ;
+: _RTHP-RS.FORMAT    ( entry -- a ) 40 + ;
+: _RTHP-RS.DOCUMENT  ( entry -- a ) 48 + ;
+: _RTHP-RS.INDEX     ( entry -- a ) 56 + ;
+: _RTHP-RS.REVISION  ( entry -- a ) 64 + ;
+: _RTHP-RS.KEY       ( entry -- a ) 72 + ;
+80 CONSTANT _RTHP-RESOURCE-SIZE
+1 CONSTANT _RTHP-RS-UPLOADING
+2 CONSTANT _RTHP-RS-HELD
+\ An upload the lane stopped because its picture no longer shows.
+3 CONSTANT _RTHP-RS-CANCELLED
 
 0 CONSTANT _RTHP-STAGE-NONE
 1 CONSTANT _RTHP-STAGE-FULL
@@ -381,8 +466,10 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-TB.SERIES-CHUNK-MAX        ( bank -- a ) 312 + ;
 : _RTHP-TB.SERIES-CHUNK-BYTES-MAX  ( bank -- a ) 320 + ;
 : _RTHP-TB.WAVEFORM-COUNT          ( bank -- a ) 328 + ;
+\ The producer's PICTURE-EPOCH when the bank's candidate was captured.
+: _RTHP-TB.PICTURE-EPOCH           ( bank -- a ) 336 + ;
 
-336 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
+344 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
 32 CONSTANT _RTHP-PROJECTION-RECT-SIZE
 
 : _RTHP-TE.ID          ( entry -- a )      ;
@@ -424,6 +511,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 
 : _RTHP-U32+?  ( a b -- sum flag )
     OVER + DUP ROT U< 0= OVER 0xFFFFFFFF U> 0= AND ;
+
+\ Whether N fits a signed 32-bit field, as a retained origin does.
+: _RTHP-I32?  ( n -- flag )  -2147483648 2147483648 WITHIN ;
 
 : _RTHP-U32*?  ( a b -- product flag )
     UM* DUP IF 2DROP 0 0 EXIT THEN DROP
@@ -467,10 +557,12 @@ VARIABLE _RTHP-OWNED-LIMIT
     DUP RTE-CONTROL-TEXT-AREA =
     SWAP RTE-CONTROL-TEXT-GRID = OR ;
 
-\ A root whose content is one semantic value: STX1 text or ITM1 items.
+\ A root whose content is one semantic value: STX1 text, ITM1 items, or a
+\ DOC1 document.
 : _RTHP-CONTENT-CONTROL-KIND?  ( rte-kind -- flag )
     DUP _RTHP-TEXT-COLLECTION-CONTROL-KIND?
-    SWAP RTE-CONTROL-ITEM-VIEW = OR ;
+    OVER RTE-CONTROL-ITEM-VIEW = OR
+    SWAP RTE-CONTROL-DOCUMENT = OR ;
 
 : _RTHP-COLLECTION-CONTROL-KIND?  ( rte-kind -- flag )
     DUP _RTHP-CONTENT-CONTROL-KIND? IF DROP -1 EXIT THEN
@@ -497,7 +589,9 @@ VARIABLE _RTHP-OWNED-LIMIT
         ENDOF
         RTE-INTENT-ADJUST OF RTE-CONTROL-FIELD = ENDOF
         RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF
-        RTE-INTENT-FOLLOW OF RTE-CONTROL-TEXT-AREA = ENDOF
+        RTE-INTENT-FOLLOW OF
+            DUP RTE-CONTROL-TEXT-AREA = SWAP RTE-CONTROL-DOCUMENT = OR
+        ENDOF
         RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF
         RTE-INTENT-SCROLL OF _RTHP-CONTENT-CONTROL-KIND? ENDOF
         RTE-INTENT-SELECT OF RTE-CONTROL-ITEM-VIEW = ENDOF
@@ -516,6 +610,8 @@ VARIABLE _RTHP-OWNED-LIMIT
 VARIABLE _RTHP-B-FIELD-NATIVE
 VARIABLE _RTHP-B-FIELDS
 VARIABLE _RTHP-B-STATUS-NATIVE
+VARIABLE _RTHP-B-STATUS-STATICS
+VARIABLE _RTHP-B-PICTURES
 VARIABLE _RTHP-B-STATICS
 VARIABLE _RTHP-B-RECORDS
 VARIABLE _RTHP-B-DOCUMENTS
@@ -672,7 +768,10 @@ VARIABLE _RTHP-TBC-P
         _RTHP-B-INSTRUMENT-REGIONS !
     _RTHP-B-STATUS-NATIVE @ _RTHP-U32? 0= IF 0 EXIT THEN
     _RTHP-B-STATUS-NATIVE @ 7 AND IF 0 EXIT THEN
-    _RTHP-B-STATUS-NATIVE @ USF-HEADER-SIZE / _RTHP-B-STATICS !
+    \ A static is a status field or a picture.
+    _RTHP-B-PICTURES @ _RTHP-U32? 0= IF 0 EXIT THEN
+    _RTHP-B-STATUS-NATIVE @ USF-HEADER-SIZE / DUP _RTHP-B-STATUS-STATICS !
+    _RTHP-B-PICTURES @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN _RTHP-B-STATICS !
     _RTHP-B-FIELD-NATIVE @ _RTHP-U32? 0= IF 0 EXIT THEN
     _RTHP-B-FIELD-NATIVE @ 7 AND IF 0 EXIT THEN
     _RTHP-B-FIELD-NATIVE @ UFLD-HEADER-SIZE / DUP _RTHP-B-FIELDS !
@@ -718,6 +817,8 @@ VARIABLE _RTHP-TBC-P
         0= IF 0 EXIT THEN
     _RTHP-B-CLAIMS @ RUCL-CLAIM-SIZE _RTHP-B-MUL-ADD
         0= IF 0 EXIT THEN
+    _RTHP-B-CLAIMS @ RUCL-CLAIM-SIZE _RTHP-B-MUL-ADD
+        0= IF 0 EXIT THEN
     _RTHP-B-INSTRUMENT-REGIONS @ RTE-INSTRUMENT-REGION-SIZE
         _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-INSTRUMENTS @ RTE-INSTRUMENT-SIZE
@@ -730,8 +831,11 @@ VARIABLE _RTHP-TBC-P
         0= IF DROP 0 EXIT THEN _RTHP-B-ADD 0= IF 0 EXIT THEN
     _RTHP-B-DGRAPH-DESCRIPTORS @ _RTHP-OMITTED-GRAPH-SIZE
         _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
-    _RTHP-B-STATICS @ USFSN-DESCRIPTOR-SIZE RTE-STATIC-SIZE +
-        _RTHP-STATIC-CORR-SIZE + _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-STATUS-STATICS @ USFSN-DESCRIPTOR-SIZE _RTHP-B-MUL-ADD
+        0= IF 0 EXIT THEN
+    _RTHP-B-PICTURES @ UPICSN-DESCRIPTOR-SIZE _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
+    _RTHP-B-STATICS @ RTE-STATIC-SIZE _RTHP-STATIC-CORR-SIZE +
+        _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-STATUS-NATIVE @ 2 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-FIELDS @ UFLSN-DESCRIPTOR-SIZE _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-FIELD-NATIVE @ _RTHP-B-ADD 0= IF 0 EXIT THEN
@@ -770,8 +874,9 @@ VARIABLE _RTHP-TBC-P
     _RTHP-B-TOTAL @ ;
 
 : RTHP-STORAGE-BYTES
-  ( max-documents max-records max-source-text max-collection-native max-data-graphics-native max-status-native max-field-native max-cols max-rows -- bytes|0 )
-    _RTHP-B-ROWS ! _RTHP-B-COLS ! _RTHP-B-FIELD-NATIVE ! _RTHP-B-STATUS-NATIVE !
+  ( max-documents max-records max-source-text max-collection-native max-data-graphics-native max-status-native max-field-native max-pictures max-cols max-rows -- bytes|0 )
+    _RTHP-B-ROWS ! _RTHP-B-COLS ! _RTHP-B-PICTURES !
+    _RTHP-B-FIELD-NATIVE ! _RTHP-B-STATUS-NATIVE !
     _RTHP-B-DGRAPH-NATIVE !
     _RTHP-B-COLLECTION-NATIVE !
     _RTHP-B-TEXT ! _RTHP-B-RECORDS !
@@ -788,6 +893,7 @@ VARIABLE _RTHP-TBC-P
     0 _RTHP-B-COLS ! 0 _RTHP-B-ROWS !
     0 _RTHP-B-CELLS ! 0 _RTHP-B-TOTAL ! 0 _RTHP-B-TARGET-BYTES !
     0 _RTHP-B-STATUS-NATIVE ! 0 _RTHP-B-STATICS !
+    0 _RTHP-B-STATUS-STATICS ! 0 _RTHP-B-PICTURES !
     0 _RTHP-B-FIELD-NATIVE ! 0 _RTHP-B-FIELDS ! ;
 
 \ =====================================================================
@@ -804,6 +910,7 @@ VARIABLE _RTHP-I-TEXT
 VARIABLE _RTHP-I-COLLECTION-NATIVE
 VARIABLE _RTHP-I-FIELD-NATIVE
 VARIABLE _RTHP-I-STATUS-NATIVE
+VARIABLE _RTHP-I-PICTURES
 VARIABLE _RTHP-I-DGRAPH-NATIVE
 VARIABLE _RTHP-I-COLS
 VARIABLE _RTHP-I-ROWS
@@ -876,6 +983,9 @@ VARIABLE _RTHP-L-BYTES
         RUCL-CLAIM-SIZE *
         DUP 2 PICK _RTHP.CLAIMS-U ! _RTHP-L-TAKE
         OVER _RTHP.CLAIMS-A !
+    DUP _RTHP.CLAIMS-U @
+        DUP 2 PICK _RTHP.GLYPH-CLAIMS-U ! _RTHP-L-TAKE
+        OVER _RTHP.GLYPH-CLAIMS-A !
     DUP _RTHP.MAX-INSTRUMENT-REGIONS @ RTE-INSTRUMENT-REGION-SIZE *
         DUP 2 PICK _RTHP.INSTRUMENT-REGIONS-U ! _RTHP-L-TAKE
         OVER _RTHP.INSTRUMENT-REGIONS-A !
@@ -897,9 +1007,13 @@ VARIABLE _RTHP-L-BYTES
         DUP 2 PICK _RTHP.SERIES-SAMPLES-U ! _RTHP-L-TAKE OVER _RTHP.SERIES-SAMPLES-A !
     DUP _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-OMITTED-GRAPH-SIZE *
         DUP 2 PICK _RTHP.OMITTED-GRAPHS-U ! _RTHP-L-TAKE OVER _RTHP.OMITTED-GRAPHS-A !
-    DUP _RTHP.MAX-STATICS @ USFSN-DESCRIPTOR-SIZE *
+    DUP _RTHP.MAX-STATICS @ OVER _RTHP.MAX-PICTURES @ -
+        USFSN-DESCRIPTOR-SIZE *
         DUP 2 PICK _RTHP.STATUS-DESCRIPTORS-U ! _RTHP-L-TAKE
         OVER _RTHP.STATUS-DESCRIPTORS-A !
+    DUP _RTHP.MAX-PICTURES @ UPICSN-DESCRIPTOR-SIZE *
+        DUP 2 PICK _RTHP.PICTURES-U ! _RTHP-L-TAKE
+        OVER _RTHP.PICTURES-A !
     DUP _RTHP.MAX-STATUS-NATIVE @
         DUP 2 PICK _RTHP.STATUS-NATIVE-U ! _RTHP-L-TAKE
         OVER _RTHP.STATUS-NATIVE-A !
@@ -1065,8 +1179,27 @@ VARIABLE _RTHP-V-P
     OVER _RTHP.MAX-INSTRUMENT-REGIONS @ <> IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-STATUS-NATIVE @ _RTHP-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-STATUS-NATIVE @ 7 AND IF DROP 0 EXIT THEN
+    DUP _RTHP.MAX-PICTURES @ _RTHP-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-STATUS-NATIVE @ USF-HEADER-SIZE /
+        OVER _RTHP.MAX-PICTURES @ +
         OVER _RTHP.MAX-STATICS @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.PICTURE-COUNT @ OVER _RTHP.MAX-PICTURES @ U> IF DROP 0 EXIT THEN
+    \ The picture lane: one job of a known kind, a chunk block only while an
+    \ upload runs, and a whole table or none.
+    DUP _RTHP.LANE-JOB @ RTE-JOB-PIXELS U> IF DROP 0 EXIT THEN
+    DUP _RTHP.CHUNK-A @ 0<>
+        OVER _RTHP.LANE-JOB @ RTE-JOB-UPLOAD <> AND IF DROP 0 EXIT THEN
+    DUP _RTHP.CHUNK-A @ 0= OVER _RTHP.CHUNK-U @ 0= <> IF DROP 0 EXIT THEN
+    DUP _RTHP.RESOURCES-U @ _RTHP-RESOURCE-SIZE MOD IF DROP 0 EXIT THEN
+    DUP _RTHP.RESOURCES-A @ 0= OVER _RTHP.RESOURCES-U @ 0= <> IF DROP 0 EXIT THEN
+    DUP _RTHP.NEXT-RESOURCE @ 0= IF DROP 0 EXIT THEN
+    \ A budget only follows a refusal, and the lane's own request for room
+    \ only while the terminal decides.
+    DUP _RTHP.LANE-REFUSED @ RTHP-WHY-OTHER U> IF DROP 0 EXIT THEN
+    DUP _RTHP.LANE-BUDGET @ 0<> OVER _RTHP.LANE-REFUSED @ 0= AND IF DROP 0 EXIT THEN
+    DUP _RTHP.LANE-RESIZE @ 2 U> IF DROP 0 EXIT THEN
+    DUP _RTHP.LANE-RESIZE @ 0<>
+        OVER _RTHP.PHASE @ _RTHP-PH-RESIZING <> AND IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-FIELD-NATIVE @ _RTHP-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-FIELD-NATIVE @ 7 AND IF DROP 0 EXIT THEN
     DUP _RTHP.MAX-FIELD-NATIVE @ UFLD-HEADER-SIZE /
@@ -1360,7 +1493,8 @@ VARIABLE _RTHP-AS-P
     DUP _RTE-CONTROL.GENERATION @
         _RTHP-CT-GENERATION @ <> IF DROP 0 EXIT THEN
     DUP _RTE-CONTROL.ID @ _RTHP-CT-ID @ <> IF DROP 0 EXIT THEN
-    _RTE-CONTROL.KIND @ DUP RTE-CONTROL-MENU-BAR < IF DROP 0 EXIT THEN
+    _RTE-CONTROL.KIND @ DUP RTE-CONTROL-DOCUMENT = IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-MENU-BAR < IF DROP 0 EXIT THEN
         RTE-CONTROL-ITEM-VIEW U> 0= ;
 
 : _RTHP-CT-CORRELATION-AT?  ( ordinal -- flag )
@@ -2555,6 +2689,7 @@ VARIABLE _RTHP-PR-ROWS
     _RTHP-TG-P @ _RTHP.FIELD-UTF8 @ _RTHP-TG-BANK @ _RTHP-TB.FIELD-UTF8 !
     _RTHP-TG-P @ _RTHP.STATIC-COUNT @ _RTHP-TG-BANK @ _RTHP-TB.STATIC-COUNT !
     _RTHP-TG-P @ _RTHP.STATIC-TEXT-USED @ _RTHP-TG-BANK @ _RTHP-TB.STATIC-TEXT-BYTES !
+    _RTHP-TG-P @ _RTHP.PICTURE-EPOCH @ _RTHP-TG-BANK @ _RTHP-TB.PICTURE-EPOCH !
     _RTHP-TG-P @ _RTHP.DOCUMENT-COUNT @
         _RTHP-TG-BANK @ _RTHP-TB.DOCUMENT-COUNT !
 
@@ -3157,8 +3292,9 @@ VARIABLE _RTHP-TL-INTENT
         DUP R@ _RTHP.MAX-INSTRUMENTS !
         R@ _RTHP.MAX-DGRAPH-DESCRIPTORS @ _RTHP-UMIN
         R@ _RTHP.MAX-INSTRUMENT-REGIONS !
+    _RTHP-I-PICTURES @ R@ _RTHP.MAX-PICTURES !
     _RTHP-I-STATUS-NATIVE @ DUP R@ _RTHP.MAX-STATUS-NATIVE !
-        USF-HEADER-SIZE / R@ _RTHP.MAX-STATICS !
+        USF-HEADER-SIZE / _RTHP-I-PICTURES @ + R@ _RTHP.MAX-STATICS !
     _RTHP-I-FIELD-NATIVE @ DUP R@ _RTHP.MAX-FIELD-NATIVE !
         UFLD-HEADER-SIZE / R@ _RTHP.MAX-FIELDS !
     _RTHP-I-RECORDS @ R@ _RTHP.MAX-COLLECTIONS @ +
@@ -3168,10 +3304,10 @@ VARIABLE _RTHP-TL-INTENT
 
 : RTHP-INIT
 \ adapter facade arena-a arena-u max-documents max-records max-source-text max-collection-native
-\ max-data-graphics-native max-status-native max-field-native max-cols max-rows owner owner-generation region
-\ first-object first-series producer -- scb-status
+\ max-data-graphics-native max-status-native max-field-native max-pictures max-cols max-rows owner
+\ owner-generation region first-object first-series producer -- scb-status
     _RTHP-I-P ! _RTHP-I-FIRST-SERIES ! _RTHP-I-FIRST ! _RTHP-I-REGION ! _RTHP-I-GEN !
-    _RTHP-I-OWNER ! _RTHP-I-ROWS ! _RTHP-I-COLS !
+    _RTHP-I-OWNER ! _RTHP-I-ROWS ! _RTHP-I-COLS ! _RTHP-I-PICTURES !
     _RTHP-I-FIELD-NATIVE ! _RTHP-I-STATUS-NATIVE ! _RTHP-I-DGRAPH-NATIVE !
     _RTHP-I-COLLECTION-NATIVE ! _RTHP-I-TEXT !
     _RTHP-I-RECORDS ! _RTHP-I-DOCUMENTS !
@@ -3190,7 +3326,7 @@ VARIABLE _RTHP-TL-INTENT
     _RTHP-I-DOCUMENTS @ _RTHP-I-RECORDS @ _RTHP-I-TEXT @
         _RTHP-I-COLLECTION-NATIVE @
         _RTHP-I-DGRAPH-NATIVE @ _RTHP-I-STATUS-NATIVE @ _RTHP-I-FIELD-NATIVE @
-        _RTHP-I-COLS @ _RTHP-I-ROWS @
+        _RTHP-I-PICTURES @ _RTHP-I-COLS @ _RTHP-I-ROWS @
         RTHP-STORAGE-BYTES DUP 0= IF DROP SCB-S-INVALID EXIT THEN
         _RTHP-I-REQUIRED !
     _RTHP-I-P @ 7 AND _RTHP-I-ARENA @ 7 AND OR IF
@@ -3244,6 +3380,7 @@ VARIABLE _RTHP-TL-INTENT
     0 _RTHP-I-P @ _RTHP.INSTRUMENT-UNITS-USED !
     0 _RTHP-I-P @ _RTHP.INSTRUMENT-CLAIM-COUNT !
     0 _RTHP-I-P @ _RTHP.ACTIVE-DRAW !
+    1 _RTHP-I-P @ _RTHP.NEXT-RESOURCE !
     _RTHP-PH-WAIT _RTHP-I-P @ _RTHP.PHASE !
     SCB-S-OK _RTHP-I-P @ _RTHP.FAULT !
     _RTHP-I-P @ _RTHP-LAYOUT
@@ -3256,14 +3393,14 @@ VARIABLE _RTHP-TL-INTENT
 
 \ RTHP-FIRST-CAPACITIES
 \   ( -- records text collection-native data-graphics-native status-native
-\        field-native cols rows )
+\        field-native pictures cols rows )
 \   The smallest capacities RTHP-INIT accepts.  A producer that grows from
 \   a memory source starts here and takes what its first draw needs.
 : RTHP-FIRST-CAPACITIES
-  ( -- records text collection-native data-graphics-native status-native field-native cols rows )
+  ( -- records text collection-native data-graphics-native status-native field-native pictures cols rows )
     1 8
     USCOL-TABSET-FIXED-SIZE 7 + -8 AND USCOL-ENTRY-HEADER-SIZE _RTHP-UMAX
-    UDG-HEADER-SIZE 7 + -8 AND 0 0 1 1 ;
+    UDG-HEADER-SIZE 7 + -8 AND 0 0 0 1 1 ;
 
 \ RTHP-MEMORY! ( memory producer -- scb-status )
 \   From now on the producer owns its arena, which the caller took from
@@ -3282,13 +3419,21 @@ VARIABLE _RTHP-TL-INTENT
 \ RTHP-FINI ( producer -- )
 \   Give back the arenas the producer owns and clear it.  Call it once the
 \   terminal holds nothing of this producer's and nothing will step it.
+\   Every picture claim goes, so CELL shows each picture.
 : RTHP-FINI  ( producer -- )
+    UPICSN-RELEASE-ALL
     DUP _RTHP.MAGIC @ _RTHP-MAGIC = OVER _RTHP.SELF @ 2 PICK = AND
     OVER _RTHP.MEMORY @ 0<> AND IF
         \ The newer arena was taken last, so it goes back first.
         DUP _RTHP.ARENA-A @ OVER _RTHP.ARENA-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
         DUP _RTHP.KEPT-ARENA-A @ ?DUP IF
             OVER _RTHP.KEPT-ARENA-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        THEN
+        DUP _RTHP.CHUNK-A @ ?DUP IF
+            OVER _RTHP.CHUNK-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        THEN
+        DUP _RTHP.RESOURCES-A @ ?DUP IF
+            OVER _RTHP.RESOURCES-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
         THEN
     THEN
     RTHP-SIZE 0 FILL ;
@@ -4582,6 +4727,9 @@ VARIABLE _RTHP-W-COPY-END
     DUP USCOL-F-ITEM-VIEW = IF
         DROP RTE-CONTROL-ITEM-VIEW EXIT
     THEN
+    DUP USCOL-F-DOCUMENT = IF
+        DROP RTE-CONTROL-DOCUMENT EXIT
+    THEN
     USCOL-F-TABSET = IF RTE-CONTROL-TABSET ELSE 0 THEN ;
 
 : _RTHP-USCOL-FAMILY-FIXED-SIZE  ( uscol-family -- bytes|0 )
@@ -4590,6 +4738,7 @@ VARIABLE _RTHP-W-COPY-END
         DROP USCOL-TEXT-FIXED-SIZE EXIT
     THEN
     DUP USCOL-F-ITEM-VIEW = IF DROP USCOL-IV-FIXED-SIZE EXIT THEN
+    DUP USCOL-F-DOCUMENT = IF DROP USCOL-DOC-FIXED-SIZE EXIT THEN
     USCOL-F-TABSET = IF USCOL-TABSET-FIXED-SIZE ELSE 0 THEN ;
 
 : _RTHP-W-USCOL-STATE>RTE  ( uscol-state -- rte-state )
@@ -4717,16 +4866,20 @@ VARIABLE _RTHP-W-COPY-END
         RUCP-CORRELATION-SIZE 0 FILL
     -1 ;
 
-\ An item view's content is ITM1; a text root's is STX1.
+\ An item view's content is ITM1, a document's DOC1, and a text root's
+\ STX1.
 : _RTHP-W-ITEM-VIEW?  ( -- flag )  _RTHP-W-KIND @ RTE-CONTROL-ITEM-VIEW = ;
+: _RTHP-W-DOCUMENT?   ( -- flag )  _RTHP-W-KIND @ RTE-CONTROL-DOCUMENT = ;
 
 : _RTHP-W-COLLECTION-CONTENT  ( -- rte-status )
     _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-SUMMARY
     _RTHP-W-ITEM-VIEW? IF
         USCOL-SUMMARY-ITM1-BYTES
+    ELSE _RTHP-W-DOCUMENT? IF
+        USCOL-SUMMARY-DOC1-BYTES
     ELSE
         USCOL-SUMMARY-STX1-BYTES
-    THEN
+    THEN THEN
     DUP USCOL-S-OK <> IF NIP _RTHP-W-USCOL>RTE EXIT THEN
     DROP DUP _RTHP-W-CONTENT-U ! DROP
     _RTHP-W-CONTENT-CURSOR @ _RTHP-W-CONTENT-U @ _RTHP-U32+?
@@ -4742,7 +4895,9 @@ VARIABLE _RTHP-W-COPY-END
     _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-SUMMARY
     _RTHP-W-P @ _RTHP.SOURCE-CONTENT-EPOCH @
     _RTHP-W-CONTENT-A @ _RTHP-W-CONTENT-CAP @
-    _RTHP-W-ITEM-VIEW? IF USITM-PACK ELSE USSTX-PACK THEN
+    _RTHP-W-ITEM-VIEW? IF USITM-PACK ELSE
+        _RTHP-W-DOCUMENT? IF USDOC-PACK ELSE USSTX-PACK THEN
+    THEN
     _RTHP-W-STATUS ! _RTHP-W-COUNT !
     _RTHP-W-STATUS @ USCOL-S-OK <> IF
         _RTHP-W-STATUS @ _RTHP-W-USCOL>RTE EXIT
@@ -4985,13 +5140,18 @@ VARIABLE _RTHP-W-COPY-END
     _RTHP-W-WRITE-TABSET ;
 
 \ An item view becomes a control only when the terminal negotiated item
-\ views; otherwise it stays on the residual path with the rest of its
-\ widget's cells, and text collections still lower.
+\ views, and a document only when it negotiated documents; otherwise each
+\ stays on the residual path with the rest of its widget's cells, and text
+\ collections still lower.
 : _RTHP-W-LOWERS-FAMILY?  ( uscol-family -- flag )
     DUP _RTHP-USCOL-FAMILY>CONTROL-KIND 0= IF DROP 0 EXIT THEN
-    USCOL-F-ITEM-VIEW <> IF -1 EXIT THEN
+    DUP USCOL-F-ITEM-VIEW = IF
+        DROP _RTHP-W-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
+            RTE-F-CONTROL-ITEMS AND 0<> EXIT
+    THEN
+    USCOL-F-DOCUMENT <> IF -1 EXIT THEN
     _RTHP-W-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
-        RTE-F-CONTROL-ITEMS AND 0<> ;
+        RTE-F-CONTROL-DOCUMENTS AND 0<> ;
 
 : _RTHP-W-LOWER-COLLECTIONS  ( -- rte-status )
     _RTHP-W-P @ _RTHP.SOURCE-MENU-TEXT-USED @ _RTHP-W-CONTENT-CURSOR !
@@ -6155,6 +6315,234 @@ VARIABLE _RTHP-SS-INDEX
     _RTHP-SS-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE *
         _RTHP-SS-P @ _RTHP.STATIC-PLAN _RTE-SP.ITEMS-U ! ;
 
+\ Pictures the terminal holds follow the status fields as IMAGE statics,
+\ each fitted inside its picture's cells over a backdrop the renderer
+\ paints, so the CELL picture beneath never shows through.  A picture the
+\ terminal does not hold yet, or whose cells another root claims, stays
+\ CELL.
+VARIABLE _RTHP-RF-P
+VARIABLE _RTHP-RF-DESC
+VARIABLE _RTHP-RF-ENTRY
+
+: _RTHP-RF-MATCH?  ( held-only? -- flag )
+    _RTHP-RF-ENTRY @ _RTHP-RS.ID @ 0= IF DROP 0 EXIT THEN
+    IF _RTHP-RF-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-HELD <> IF 0 EXIT THEN THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.WIDTH @
+        _RTHP-RF-DESC @ UPICSN-COPY-WIDTH@ <> IF 0 EXIT THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.HEIGHT @
+        _RTHP-RF-DESC @ UPICSN-COPY-HEIGHT@ <> IF 0 EXIT THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.FORMAT @
+        _RTHP-RF-DESC @ UPICSN-FORMAT@ <> IF 0 EXIT THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.DOCUMENT @
+        _RTHP-RF-DESC @ UPICSN-DOCUMENT@ <> IF 0 EXIT THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.INDEX @
+        _RTHP-RF-DESC @ UPICSN-SOURCE-INDEX@ <> IF 0 EXIT THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.KEY @
+        _RTHP-RF-DESC @ UPICSN-ROOT-KEY@ <> IF 0 EXIT THEN
+    _RTHP-RF-ENTRY @ _RTHP-RS.REVISION @
+        _RTHP-RF-DESC @ UPICSN-REVISION@ = ;
+
+\ The entry for the copy DESCRIPTOR describes, held by the terminal or,
+\ unless HELD-ONLY, still uploading; 0 when there is none.
+: _RTHP-RESOURCE-FOR  ( descriptor held-only? producer -- entry|0 )
+    _RTHP-RF-P ! SWAP _RTHP-RF-DESC !
+    _RTHP-RF-P @ _RTHP.RESOURCES-U @ _RTHP-RESOURCE-SIZE / 0 ?DO
+        _RTHP-RF-P @ _RTHP.RESOURCES-A @ I _RTHP-RESOURCE-SIZE * +
+            _RTHP-RF-ENTRY !
+        DUP _RTHP-RF-MATCH? IF DROP _RTHP-RF-ENTRY @ UNLOOP EXIT THEN
+    LOOP DROP 0 ;
+
+VARIABLE _RTHP-RB-BEST
+
+\ The newest copy the terminal holds of the picture DESCRIPTOR describes,
+\ at any size: the same document, element, root key and revision; 0 when
+\ none.
+: _RTHP-RESOURCE-BEFORE  ( descriptor producer -- entry|0 )
+    _RTHP-RF-P ! _RTHP-RF-DESC ! 0 _RTHP-RB-BEST !
+    _RTHP-RF-DESC @ UPICSN-REVISION@ 0= IF 0 EXIT THEN
+    _RTHP-RF-P @ _RTHP.RESOURCES-U @ _RTHP-RESOURCE-SIZE / 0 ?DO
+        _RTHP-RF-P @ _RTHP.RESOURCES-A @ I _RTHP-RESOURCE-SIZE * +
+            _RTHP-RF-ENTRY !
+        _RTHP-RF-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-HELD =
+        _RTHP-RF-ENTRY @ _RTHP-RS.DOCUMENT @
+            _RTHP-RF-DESC @ UPICSN-DOCUMENT@ = AND
+        _RTHP-RF-ENTRY @ _RTHP-RS.INDEX @
+            _RTHP-RF-DESC @ UPICSN-SOURCE-INDEX@ = AND
+        _RTHP-RF-ENTRY @ _RTHP-RS.KEY @
+            _RTHP-RF-DESC @ UPICSN-ROOT-KEY@ = AND
+        _RTHP-RF-ENTRY @ _RTHP-RS.REVISION @
+            _RTHP-RF-DESC @ UPICSN-REVISION@ = AND IF
+            _RTHP-RB-BEST @ 0= IF -1 ELSE
+                _RTHP-RF-ENTRY @ _RTHP-RS.ID @
+                    _RTHP-RB-BEST @ _RTHP-RS.ID @ U>
+            THEN
+            IF _RTHP-RF-ENTRY @ _RTHP-RB-BEST ! THEN
+        THEN
+    LOOP _RTHP-RB-BEST @ ;
+
+\ The resource a described picture shows: its own copy once the terminal
+\ holds it.  While that copy is still on its way, the newest copy of the
+\ same picture the terminal holds stays authoritative until the new one
+\ replaces it.  Otherwise none, and the picture stays CELL.
+: _RTHP-SHOWN-FOR  ( descriptor producer -- entry|0 )
+    OVER UPICSN-STATE@ UPICSN-C-READY = IF
+        2DUP -1 SWAP _RTHP-RESOURCE-FOR ?DUP IF NIP NIP EXIT THEN
+    ELSE
+        OVER UPICSN-STATE@ UPICSN-C-PENDING <> IF 2DROP 0 EXIT THEN
+    THEN
+    _RTHP-RESOURCE-BEFORE ;
+
+VARIABLE _RTHP-SI-DESC
+VARIABLE _RTHP-SI-ENTRY
+VARIABLE _RTHP-SI-ROW
+VARIABLE _RTHP-SI-COL
+VARIABLE _RTHP-SI-ROW-END
+VARIABLE _RTHP-SI-COL-END
+
+\ The picture's document is one the frame carries.
+: _RTHP-SI-DOCUMENT?  ( -- flag )
+    _RTHP-SS-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I _RTHP-SS-P @ _RTHP-DOCUMENT-AT RUHA-DOCUMENT-TOKEN@
+        _RTHP-SI-DESC @ UPICSN-DOCUMENT@ = IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ The claim at index I, and whether it meets the part shown.
+: _RTHP-SI-CLAIM-MEETS?  ( i -- flag )
+    _RTHP-SS-P @ _RTHP.CLAIMS-A @ SWAP RUCL-CLAIM-SIZE * + _RTHP-SS-CLAIM !
+    _RTHP-SI-ROW @ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW1@ <
+    _RTHP-SI-ROW-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW0@ > AND
+    _RTHP-SI-COL @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ < AND
+    _RTHP-SI-COL-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ > AND ;
+
+\ Whether the claim just met is the picture's own document's root and
+\ holds all of the part shown.
+: _RTHP-SI-OWN-CLAIM?  ( -- flag )
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-ATTACHMENT@ _RTHP-SI-DESC @ UPICSN-DOCUMENT@ =
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-SOURCE-INDEX@
+        _RTHP-SI-DESC @ UPICSN-SOURCE-INDEX@ = AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SI-ROW @ > 0= AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SI-COL @ > 0= AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SI-ROW-END @ < 0= AND
+    _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ _RTHP-SI-COL-END @ < 0= AND ;
+
+\ The part of the picture shown lies on the surface at a paint order a
+\ claim takes, inside the picture's whole rectangle, which may reach off
+\ the surface.  An element's own picture claims that part, which no other
+\ root claims.  A figure leaves its part to the claim of its document's
+\ root, which must hold all of it.
+: _RTHP-SI-GEOMETRY?  ( -- flag )
+    _RTHP-SI-DESC @ UPICSN-HEIGHT@ DUP 0> 0= SWAP _RTHP-I32? 0= OR IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-WIDTH@ DUP 0> 0= SWAP _RTHP-I32? 0= OR IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-ROW@ _RTHP-I32? 0= IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-COLUMN@ _RTHP-I32? 0= IF 0 EXIT THEN
+    \ The part shown: some of the whole rectangle.
+    _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ 0< IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ 0< IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ 0> 0= IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ 0> 0= IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ +
+        _RTHP-SI-DESC @ UPICSN-HEIGHT@ > IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ +
+        _RTHP-SI-DESC @ UPICSN-WIDTH@ > IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-ROW@ _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ +
+        DUP _RTHP-SI-ROW ! 0< IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-COLUMN@ _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ +
+        DUP _RTHP-SI-COL ! 0< IF 0 EXIT THEN
+    _RTHP-SI-ROW @ _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ +
+        DUP _RTHP-SI-ROW-END ! _RTHP-SS-P @ _RTHP.ROWS @ > IF 0 EXIT THEN
+    _RTHP-SI-COL @ _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ +
+        DUP _RTHP-SI-COL-END ! _RTHP-SS-P @ _RTHP.COLS @ > IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-Z@ DUP 0< SWAP 255 > OR IF 0 EXIT THEN
+    _RTHP-SI-DESC @ UPICSN-FIGURE? IF
+        _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+            I _RTHP-SI-CLAIM-MEETS? IF _RTHP-SI-OWN-CLAIM? UNLOOP EXIT THEN
+        LOOP 0 EXIT
+    THEN
+    _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+        I _RTHP-SI-CLAIM-MEETS? IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+: _RTHP-SI-WRITE  ( -- rte-status )
+    _RTHP-SS-P @ _RTHP.STATIC-COUNT @ DUP _RTHP-SS-INDEX !
+        _RTHP-SS-P @ _RTHP.MAX-STATICS @ U< 0= IF RTE-S-INVALID EXIT THEN
+    \ A figure adds no claim; its document's root holds its cells.
+    _RTHP-SS-P @ _RTHP.CLAIMS-USED @
+    _RTHP-SI-DESC @ UPICSN-FIGURE? 0= IF
+        RUCL-CLAIM-SIZE _RTHP-U32+? 0= IF DROP RTE-S-INVALID EXIT THEN
+    THEN
+    DUP _RTHP-SS-NEXT ! _RTHP-SS-P @ _RTHP.CLAIMS-U @ U> IF
+        RTE-S-INVALID EXIT
+    THEN
+    _RTHP-SS-P @ _RTHP-STATIC-GLYPH-FIRST? 0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-SS-P @ _RTHP.STATICS-A @
+        _RTHP-SS-INDEX @ RTE-STATIC-SIZE * + DUP _RTHP-SS-ITEM !
+        RTE-STATIC-SIZE 0 FILL
+    _RTHP-SS-P @ _RTHP.OWNER @ _RTHP-SS-ITEM @ _RTE-STATIC.OWNER !
+    _RTHP-SS-P @ _RTHP.OWNER-GEN @ _RTHP-SS-ITEM @ _RTE-STATIC.GENERATION !
+    _RTHP-W-GLYPH-FIRST @ DUP _RTHP-SS-P @ _RTHP.STATIC-LAST !
+        _RTHP-SS-ITEM @ _RTE-STATIC.ID !
+    RTE-STATIC-IMAGE _RTHP-SS-ITEM @ _RTE-STATIC.KIND !
+    -1 _RTHP-SS-ITEM @ _RTE-STATIC.VISIBLE !
+    _RTHP-SI-DESC @ UPICSN-Z@ _RTHP-SS-ITEM @ _RTE-STATIC.Z !
+    _RTHP-SS-P @ _RTHP.REGION @ _RTHP-SS-ITEM @ _RTE-STATIC.REGION !
+    _RTHP-SI-DESC @ UPICSN-ROW@ _RTHP-SS-ITEM @ _RTE-STATIC.ROW !
+    _RTHP-SI-DESC @ UPICSN-COLUMN@ _RTHP-SS-ITEM @ _RTE-STATIC.COL !
+    _RTHP-SI-DESC @ UPICSN-HEIGHT@ _RTHP-SS-ITEM @ _RTE-STATIC.HEIGHT !
+    _RTHP-SI-DESC @ UPICSN-WIDTH@ _RTHP-SS-ITEM @ _RTE-STATIC.WIDTH !
+    \ A picture shown whole has no clip.
+    _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ _RTHP-SI-DESC @ UPICSN-HEIGHT@ <>
+    _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ _RTHP-SI-DESC @ UPICSN-WIDTH@ <> OR IF
+        _RTHP-SI-DESC @ UPICSN-CLIP-COLUMN@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-X !
+        _RTHP-SI-DESC @ UPICSN-CLIP-ROW@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-Y !
+        _RTHP-SI-DESC @ UPICSN-CLIP-WIDTH@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-COLS !
+        _RTHP-SI-DESC @ UPICSN-CLIP-HEIGHT@ _RTHP-SS-ITEM @ _RTE-STATIC.CLIP-ROWS !
+    THEN
+    _RTHP-SS-P @ _RTHP.ROWS @ _RTHP-SS-ITEM @ _RTE-STATIC.ROOT-HEIGHT !
+    _RTHP-SS-P @ _RTHP.COLS @ _RTHP-SS-ITEM @ _RTE-STATIC.ROOT-WIDTH !
+    RTE-IMAGE-FIT-CONTAIN _RTHP-SS-ITEM @ _RTE-STATIC.FIT !
+    255 _RTHP-SS-ITEM @ _RTE-STATIC.OPACITY !
+    -1 _RTHP-SS-ITEM @ _RTE-STATIC.BACKDROP !
+    _RTHP-SI-ENTRY @ _RTHP-RS.ID @ _RTHP-SS-ITEM @ _RTE-STATIC.RESOURCE !
+    \ A picture's correlation and claim name its document, its element,
+    \ the generation every direct UIDL root has, and its root key: one for
+    \ an element's own picture, a figure's block key.
+    _RTHP-SS-P @ _RTHP.STATIC-CORR-A @
+        _RTHP-SS-INDEX @ _RTHP-STATIC-CORR-SIZE * + _RTHP-SS-CORR !
+    _RTHP-SI-DESC @ UPICSN-DOCUMENT@ _RTHP-SS-CORR @ !
+    _RTHP-SI-DESC @ UPICSN-SOURCE-INDEX@ _RTHP-SS-CORR @ 8 + !
+    0 _RTHP-SS-CORR @ 16 + !
+    _RTHP-SI-DESC @ UPICSN-ROOT-KEY@ _RTHP-SS-CORR @ 24 + !
+    0 _RTHP-SS-CORR @ 32 + !
+    _RTHP-SI-DESC @ UPICSN-FIGURE? IF
+        1 _RTHP-SS-P @ _RTHP.STATIC-COUNT +! RTE-S-OK EXIT
+    THEN
+    _RTHP-SI-DESC @ UPICSN-DOCUMENT@
+    _RTHP-SS-P @ _RTHP.SOURCE-GEN @
+    UPICSN-SOURCE-UIDL
+    _RTHP-SI-DESC @ UPICSN-SOURCE-INDEX@
+    0
+    _RTHP-SI-DESC @ UPICSN-Z@
+    _RTHP-SI-ROW @ _RTHP-SI-COL @ _RTHP-SI-ROW-END @ _RTHP-SI-COL-END @
+    _RTHP-SS-P @ _RTHP.CLAIMS-A @ _RTHP-SS-P @ _RTHP.CLAIMS-USED @ +
+        RUCL-ADMITTED-RECTANGLE! RUCL-S-OK <> IF RTE-S-INVALID EXIT THEN
+    _RTHP-SS-NEXT @ _RTHP-SS-P @ _RTHP.CLAIMS-USED !
+    1 _RTHP-SS-P @ _RTHP.STATIC-COUNT +! RTE-S-OK ;
+
+: _RTHP-BUILD-IMAGES  ( -- rte-status )
+    _RTHP-SS-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        _RTHP-SS-P @ _RTHP.PICTURES-A @ I UPICSN-DESCRIPTOR-SIZE * +
+            _RTHP-SI-DESC !
+        _RTHP-SI-DESC @ _RTHP-SS-P @ _RTHP-SHOWN-FOR
+            DUP _RTHP-SI-ENTRY ! IF
+            _RTHP-SI-DOCUMENT? IF
+                _RTHP-SI-GEOMETRY? IF
+                    _RTHP-SI-WRITE DUP RTE-S-OK <> IF UNLOOP EXIT THEN
+                    DROP
+                THEN
+            THEN
+        THEN
+    LOOP RTE-S-OK ;
+
 : _RTHP-BUILD-STATICS ( producer -- rte-status )
     0 _RTHP-SS-OVERLAP !
     DUP _RTHP-SS-P ! DUP _RTHP-STATIC-CLEAR
@@ -6190,6 +6578,7 @@ VARIABLE _RTHP-SS-INDEX
                 IF UNLOOP UNLOOP EXIT THEN DROP
         LOOP
     LOOP
+    _RTHP-BUILD-IMAGES DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTHP-SS-WRAP
     _RTHP-SS-P @ _RTHP-STATIC-GLYPH-FIRST? 0= IF RTE-S-INVALID EXIT THEN
     RTE-S-OK ;
@@ -6292,8 +6681,9 @@ VARIABLE _RTHP-GP-BYTES
 \
 \ A clean row is reusable only when the committed screen watermark names the
 \ physically acknowledged target, the screen's exact immutable flush plan
-\ marks its CELL bytes unchanged, and neither the current nor acknowledged
-\ residual projection contains an opaque claim gap on that row.  Menu
+\ marks its CELL bytes unchanged, and no opaque claim rectangle on that row
+\ came or went between the acknowledged and current projections: a
+\ rectangle both have covers the same cells in both.  Menu
 \ replacement rows come from both the current ledger and the ACKed bitmap;
 \ exact residue damage also prevents reuse when CELL bytes happen to match.  Every other
 \ row is rebuilt through the ordinary RGRP subregion API.  The resulting stream
@@ -6432,6 +6822,30 @@ VARIABLE _RTHP-RD-RECT
             _RTHP-PROJECTION-RECT-SIZE COMPARE IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
+VARIABLE _RTHP-RD-FIND
+
+\ Whether the rectangle at RECT is among the acknowledged non-menu ones.
+: _RTHP-RD-ACKED-RECT?  ( rect -- flag )
+    _RTHP-RD-FIND !
+    _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
+        _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
+        _RTHP-RD-RECTS @ I _RTHP-PROJECTION-RECT-SIZE * +
+            _RTHP-PROJECTION-RECT-SIZE
+        COMPARE 0= IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ Whether the rectangle at RECT is among the current non-menu claims'.
+: _RTHP-RD-CURRENT-RECT?  ( rect -- flag )
+    _RTHP-RD-FIND !
+    _RTHP-RD-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
+    _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ ?DO
+        _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
+        _RTHP-RD-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
+            _RUCL-C.ROW0 _RTHP-PROJECTION-RECT-SIZE
+        COMPARE 0= IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ The rows of each acknowledged rectangle the current projection lacks.
 : _RTHP-RD-MARK-OLD-PROJECTION?  ( -- flag )
     _RTHP-RD-PROJECTION-SAME @ IF -1 EXIT THEN
     _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
@@ -6439,9 +6853,11 @@ VARIABLE _RTHP-RD-RECT
         _RTHP-RD-COLS @ _RTHP-RD-ROWS @ _RTHP-PROJECTION-RECT? 0= IF
             0 UNLOOP EXIT
         THEN
-        _RTHP-RD-RECT @ 16 + @ _RTHP-RD-RECT @ @ ?DO
-            I _RTHP-RD-DAMAGE!
-        LOOP
+        _RTHP-RD-RECT @ _RTHP-RD-CURRENT-RECT? 0= IF
+            _RTHP-RD-RECT @ 16 + @ _RTHP-RD-RECT @ @ ?DO
+                I _RTHP-RD-DAMAGE!
+            LOOP
+        THEN
     LOOP -1 ;
 
 : _RTHP-RD-MARK-CURRENT-CLAIMS?  ( -- flag )
@@ -6471,9 +6887,14 @@ VARIABLE _RTHP-RD-RECT
             DUP _RTHP-RD-ROW1 ! 0< IF 0 UNLOOP EXIT THEN
         _RTHP-RD-ROW0 @ _RTHP-RD-ROW1 @ U< 0= IF 0 UNLOOP EXIT THEN
         _RTHP-RD-ROW1 @ _RTHP-RD-ROWS @ U> IF 0 UNLOOP EXIT THEN
-        _RTHP-RD-ROW1 @ _RTHP-RD-ROW0 @ ?DO
-            I _RTHP-RD-DAMAGE!
-        LOOP
+        \ Every menu's rows, and those of each other claim new to them.
+        I _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ U< IF -1 ELSE
+            _RTHP-RD-CLAIM @ _RUCL-C.ROW0 _RTHP-RD-ACKED-RECT? 0=
+        THEN IF
+            _RTHP-RD-ROW1 @ _RTHP-RD-ROW0 @ ?DO
+                I _RTHP-RD-DAMAGE!
+            LOOP
+        THEN
     LOOP
     -1 ;
 
@@ -6539,9 +6960,8 @@ VARIABLE _RTHP-RD-RECT
     RGRP-TEXT-REF-SIZE * _RTHP-RD-ACTIVE-REFS @ + ;
 
 \ Establish the exact acknowledged residual interval stream for one row.
-\ A gap can be reused when the exact acknowledged non-menu coverage is
-\ unchanged.  Changed coverage still dirties old gaps; old/current menu rows
-\ and exact CELL/residue damage have already been marked independently.
+\ Its gaps are reused with it: rectangles that came or went, old and current
+\ menu rows, and exact CELL/residue damage have already marked their rows.
 : _RTHP-RD-SCAN-ACTIVE-ROW?  ( -- flag )
     _RTHP-RD-ACTIVE-I @ _RTHP-RD-ROW-FIRST !
     0 _RTHP-RD-COVER ! -1 _RTHP-RD-MORE !
@@ -6565,10 +6985,6 @@ VARIABLE _RTHP-RD-RECT
                     DROP 0 EXIT
                 THEN
                 DUP _RTHP-RD-COVER @ U< IF DROP 0 EXIT THEN
-                DUP _RTHP-RD-COVER @ <>
-                _RTHP-RD-PROJECTION-SAME @ 0= AND IF _RTHP-RD-ROW @
-                    _RTHP-RD-DAMAGE!
-                THEN
                 _RTHP-RD-ITEM @ _RTE-LPI.WIDTH @ DUP 0> 0= IF
                     2DROP 0 EXIT
                 THEN
@@ -6580,10 +6996,6 @@ VARIABLE _RTHP-RD-RECT
         THEN
     REPEAT
     _RTHP-RD-ACTIVE-I @ _RTHP-RD-ROW-LIMIT !
-    _RTHP-RD-COVER @ _RTHP-RD-COLS @ <>
-    _RTHP-RD-PROJECTION-SAME @ 0= AND IF
-        _RTHP-RD-ROW @ _RTHP-RD-DAMAGE!
-    THEN
     -1 ;
 
 : _RTHP-RD-COPY-ACTIVE-ONE?  ( index -- flag )
@@ -6808,13 +7220,71 @@ VARIABLE _RTHP-RD-RECT
         SWAP DUP _RTHP.ROWS @ SWAP _RTHP.ROW-DAMAGE-U @ MIN -1 FILL
     ELSE DROP THEN ;
 
+\ The glyph banks already hold the plan a build would make when they hold
+\ a plan of the same draw made from the same claims, menu claims, first
+\ object ID, run text limit and surface: the planner reads nothing else.
+\ A frame that needed more space from the terminal is built again for the
+\ same draw once it has it, and keeps its runs.
+VARIABLE _RTHP-GK-P
+
+: _RTHP-GLYPHS-HELD?  ( producer -- flag )
+    _RTHP-GK-P !
+    _RTHP-GK-P @ _RTHP.GLYPH-DRAW @ DUP 0= IF DROP 0 EXIT THEN
+        _RTHP-W-DRAW @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-COLS @ _RTHP-GK-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-ROWS @ _RTHP-GK-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-LIMIT @
+        _RTHP-GK-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-MENUS @
+        _RTHP-GK-P @ _RTHP.MENU-CLAIMS @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-FIRST @ _RTHP-W-GLYPH-FIRST @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED @
+        _RTHP-GK-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
+    _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-A @ _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED @
+    _RTHP-GK-P @ _RTHP.CLAIMS-A @ _RTHP-GK-P @ _RTHP.CLAIMS-USED @
+        COMPARE 0= ;
+
+\ Record what the plan just built was made from.  Claims the copy cannot
+\ hold leave a count no build has, so no later build keeps this plan.
+: _RTHP-GLYPHS-KEEP  ( producer -- )
+    _RTHP-GK-P !
+    _RTHP-GK-P @ _RTHP.CLAIMS-USED @
+    DUP _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-U @ U> IF
+        DROP -1 _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED !
+    ELSE
+        DUP _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-USED !
+        _RTHP-GK-P @ _RTHP.CLAIMS-A @ _RTHP-GK-P @ _RTHP.GLYPH-CLAIMS-A @
+            ROT MOVE
+    THEN
+    _RTHP-GK-P @ _RTHP.MENU-CLAIMS @ _RTHP-GK-P @ _RTHP.GLYPH-MENUS !
+    _RTHP-W-GLYPH-FIRST @ _RTHP-GK-P @ _RTHP.GLYPH-FIRST !
+    _RTHP-GK-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@
+        _RTHP-GK-P @ _RTHP.GLYPH-LIMIT !
+    _RTHP-GK-P @ _RTHP.COLS @ _RTHP-GK-P @ _RTHP.GLYPH-COLS !
+    _RTHP-GK-P @ _RTHP.ROWS @ _RTHP-GK-P @ _RTHP.GLYPH-ROWS !
+    _RTHP-GK-P @ _RTHP.GLYPH-COUNT @ _RTHP-GK-P @ _RTHP.GLYPH-RUNS !
+    _RTHP-GK-P @ _RTHP.GLYPH-TEXT-USED @ _RTHP-GK-P @ _RTHP.GLYPH-TEXT !
+    _RTHP-W-DRAW @ _RTHP-GK-P @ _RTHP.GLYPH-DRAW ! ;
+
+\ Either way the visible runs are those of the planes of the draw being
+\ built, with the candidate's claims, which GLYPH-DRAW then records.  A
+\ plan the banks hold already is kept as a complete build leaves it.
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
         DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
     THEN
-    DUP _RTHP-BUILD-GLYPHS-DAMAGE? IF DROP -1 EXIT THEN
-    DUP _RTHP-ROWS-ALL-REBUILT
-    _RTHP-BUILD-GLYPHS-FULL? ;
+    DUP _RTHP-GLYPHS-HELD? IF
+        DUP _RTHP.GLYPH-RUNS @ OVER _RTHP.GLYPH-COUNT !
+        DUP _RTHP.GLYPH-TEXT @ OVER _RTHP.GLYPH-TEXT-USED !
+        DUP _RTHP-ROWS-ALL-REBUILT
+        DUP _RTHP.GLYPH-RUNS @ OVER _RTHP-WRAP-GLYPH-PLAN? IF DROP -1 EXIT THEN
+    THEN
+    0 OVER _RTHP.GLYPH-DRAW !
+    DUP _RTHP-BUILD-GLYPHS-DAMAGE? 0= IF
+        DUP _RTHP-ROWS-ALL-REBUILT
+        DUP _RTHP-BUILD-GLYPHS-FULL? 0= IF DROP 0 EXIT THEN
+    THEN
+    _RTHP-GLYPHS-KEEP -1 ;
 
 \ _RTHP-W-GLYPH-REFUSAL ( -- rte-status )
 \   Why the glyph plan that _RTHP-BUILD-GLYPHS? just refused was refused.
@@ -7258,7 +7728,10 @@ VARIABLE _RTHP-N-SERIES
 VARIABLE _RTHP-F-P
 VARIABLE _RTHP-F-STATUS
 
+\ A producer that faults shows no picture: every claim goes, and CELL
+\ shows each picture.
 : _RTHP-FAULT-RESULT  ( scb-status producer -- scb-status false false )
+    UPICSN-RELEASE-ALL
     _RTHP-F-P ! _RTHP-F-STATUS !
     _RTHP-F-STATUS @ _RTHP-F-P @ _RTHP.FAULT !
     _RTHP-PH-FAULT _RTHP-F-P @ _RTHP.PHASE !
@@ -7274,12 +7747,15 @@ VARIABLE _RTHP-F-STATUS
 : _RTHP-Q!  ( u index quotas -- )  SWAP 8 * + ! ;
 
 \ What the terminal offers at all for each quota, from the limits it
-\ negotiated.  This producer never asks for resources.
+\ negotiated.  Frames need no resources; the pictures the terminal holds
+\ do.
 : _RTHP-Q-LIMIT  ( index producer -- u )
     _RTHP.LIMITS SWAP CASE
         0 OF RTE-LIMITS-REGIONS@ ENDOF
+        1 OF RTE-LIMITS-RESOURCES@ ENDOF
         2 OF RTE-LIMITS-OBJECTS@ ENDOF
         3 OF RTE-LIMITS-SERIES@ ENDOF
+        4 OF RTE-LIMITS-RESOURCE-BYTES@ ENDOF
         5 OF RTE-LIMITS-UTF8-BYTES@ ENDOF
         6 OF RTE-LIMITS-SAMPLE-SLOTS@ ENDOF
         NIP 0 SWAP
@@ -7469,6 +7945,97 @@ VARIABLE _RTHP-W-HAD
 VARIABLE _RTHP-W-WHY
 
 \ ---------------------------------------------------------------------
+\  The pictures a draw shows
+\ ---------------------------------------------------------------------
+\
+\  With a memory source and a terminal that takes pictures, each build
+\  describes the pictures its draw shows into the arena's picture bank: a
+\  picture whose file the terminal decodes as that file, and any other by
+\  asking it for a copy of the pixels the terminal shows it at.  A bank too
+\  small says how many it takes; the arena grows to them and the build
+\  describes them again.
+
+VARIABLE _RTHP-W-PICTURES-NEED
+VARIABLE _RTHP-W-PICTURES-STATUS
+VARIABLE _RTHP-W-PICTURES-ARENA
+
+: _RTHP-LANE-ON?  ( producer -- flag )
+    DUP _RTHP.MEMORY @ 0= IF DROP 0 EXIT THEN
+    _RTHP.LIMITS RTE-LIMITS-FEATURES@ RTE-F-IMAGE AND 0<> ;
+
+\ The picture files the terminal decodes, as PIC-F- formats, one by one.
+: _RTHP-FILES>PICTURES  ( rte-formats -- pic-formats )
+    0 SWAP
+    DUP RTE-PICTURE-QOI 1- RSHIFT 1 AND IF
+        SWAP 1 PIC-F-QOI 1- LSHIFT OR SWAP
+    THEN
+    DUP RTE-PICTURE-PNG 1- RSHIFT 1 AND IF
+        SWAP 1 PIC-F-PNG 1- LSHIFT OR SWAP
+    THEN
+    DUP RTE-PICTURE-JPEG 1- RSHIFT 1 AND IF
+        SWAP 1 PIC-F-JPEG 1- LSHIFT OR SWAP
+    THEN
+    DROP ;
+
+\ The terminal's limits on one picture and the files it decodes, into the
+\ ask, within the room the owner holds once the terminal has refused more.
+\ The lane takes the pictures a build describes, so their CELL views decode
+\ nothing, until it fails to send one; CELL then shows them all.
+: _RTHP-PICTURE-LIMITS!  ( producer -- )
+    DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-FORMATS@ _RTHP-FILES>PICTURES
+        OVER _RTHP.PICTURE-ASK UPICSN-ASK.FORMATS !
+    DUP _RTHP.LANE-FAILED @ 0=
+        OVER _RTHP.PICTURE-ASK UPICSN-ASK.CLAIM !
+    DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-WIDTH@
+        OVER _RTHP.PICTURE-ASK UPICSN-ASK.MAX-W !
+    DUP _RTHP.LIMITS RTE-LIMITS-IMAGE-HEIGHT@
+        OVER _RTHP.PICTURE-ASK UPICSN-ASK.MAX-H !
+    DUP _RTHP.LIMITS RTE-LIMITS-RESOURCE-BYTES@
+    OVER _RTHP.LANE-BUDGET @ ?DUP IF
+        OVER IF _RTHP-UMIN ELSE NIP THEN
+    THEN
+    SWAP _RTHP.PICTURE-ASK UPICSN-ASK.BUDGET ! ;
+
+\ A terminal that takes no pictures, or a producer with no memory for
+\ them, leaves every picture CELL, and a draw that shows any says why.
+\ Counting them asks nothing of them: the ask is cleared, so the pixel
+\ size is asked afresh if the lane comes on again, and every claim goes.
+: _RTHP-W-PICTURES-OFF  ( -- )
+    UPICSN-RELEASE-ALL
+    _RTHP-W-P @ _RTHP.PICTURE-ASK UPICSN-ASK-SIZE 0 FILL
+    0 0 _RTHP-W-P @ _RTHP.PICTURE-ASK _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @
+        RUHA-PICTURES@ RUHA-S-CAPACITY <> IF DROP EXIT THEN
+    0= IF EXIT THEN
+    RTHP-PART-PICTURES
+    _RTHP-W-P @ _RTHP.MEMORY @ IF RTHP-WHY-LIMIT ELSE RTHP-WHY-MEMORY THEN
+    _RTHP-W-P @ _RTHP-FALLBACK-NOTE ;
+
+: _RTHP-W-PICTURES  ( -- )
+    0 _RTHP-W-PICTURES-NEED ! 0 _RTHP-W-P @ _RTHP.PICTURE-COUNT !
+    RUHA-S-OK _RTHP-W-PICTURES-STATUS !
+    _RTHP-W-P @ _RTHP-LANE-ON? 0= IF _RTHP-W-PICTURES-OFF EXIT THEN
+    _RTHP-W-P @ _RTHP-PICTURE-LIMITS!
+    _RTHP-W-P @ _RTHP.PICTURES-A @ _RTHP-W-P @ _RTHP.PICTURES-U @
+    _RTHP-W-P @ _RTHP.PICTURE-ASK _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @
+        RUHA-PICTURES@ DUP _RTHP-W-PICTURES-STATUS !
+    DUP RUHA-S-OK = IF
+        DROP DUP _RTHP-W-PICTURES-NEED ! _RTHP-W-P @ _RTHP.PICTURE-COUNT ! EXIT
+    THEN
+    RUHA-S-CAPACITY = IF _RTHP-W-PICTURES-NEED ! EXIT THEN
+    \ Pictures that cannot be described stay CELL.
+    DROP RTHP-PART-PICTURES RTHP-WHY-OTHER _RTHP-W-P @ _RTHP-FALLBACK-NOTE ;
+
+\ Once the arena has grown, or for a bank that was too small, describe
+\ the pictures again into the arena the candidate is built in.
+: _RTHP-W-PICTURES-AGAIN  ( -- )
+    _RTHP-W-P @ _RTHP.ARENA-A @ _RTHP-W-PICTURES-ARENA @ =
+    _RTHP-W-PICTURES-STATUS @ RUHA-S-CAPACITY <> AND IF EXIT THEN
+    _RTHP-W-PICTURES
+    _RTHP-W-PICTURES-STATUS @ RUHA-S-CAPACITY = IF
+        RTHP-PART-PICTURES RTHP-WHY-MEMORY _RTHP-W-P @ _RTHP-FALLBACK-NOTE
+    THEN ;
+
+\ ---------------------------------------------------------------------
 \  An arena that follows the content
 \ ---------------------------------------------------------------------
 \
@@ -7525,6 +8092,8 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
         _RTHP-W-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@
         UFLD-HEADER-SIZE _RTHP-G-NATIVE-NEED
         R@ _RTHP.MAX-FIELD-NATIVE @ _RTHP-G-NATIVE _RTHP-I-FIELD-NATIVE !
+    _RTHP-W-PICTURES-NEED @
+        R@ _RTHP.MAX-PICTURES @ _RTHP-G-CONTENT _RTHP-I-PICTURES !
     R@ _RTHP.COLS @ R@ _RTHP.MAX-COLS @ _RTHP-G-SURFACE _RTHP-I-COLS !
     R@ _RTHP.ROWS @ R> _RTHP.MAX-ROWS @ _RTHP-G-SURFACE _RTHP-I-ROWS ! ;
 
@@ -7564,7 +8133,7 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     _RTHP-I-DOCUMENTS @ _RTHP-I-RECORDS @ _RTHP-I-TEXT @
         _RTHP-I-COLLECTION-NATIVE @ _RTHP-I-DGRAPH-NATIVE @
         _RTHP-I-STATUS-NATIVE @ _RTHP-I-FIELD-NATIVE @
-        _RTHP-I-COLS @ _RTHP-I-ROWS @ RTHP-STORAGE-BYTES
+        _RTHP-I-PICTURES @ _RTHP-I-COLS @ _RTHP-I-ROWS @ RTHP-STORAGE-BYTES
     \ Sizes no arena can hold are left to the snapshot copy to refuse.
     DUP 0= IF DROP RTE-S-OK EXIT THEN
     DUP _RTHP-G-BYTES !
@@ -7592,6 +8161,7 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     \ bank's facts stay with it: only a DELTA reads them, and no DELTA
     \ starts from a kept bank.
     0 _RTHP-W-P @ _RTHP.SOURCE-DRAW !
+    0 _RTHP-W-P @ _RTHP.GLYPH-DRAW !
     RTE-S-OK ;
 
 \ The optional parts a candidate carries now.
@@ -7626,8 +8196,12 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
         DROP RTE-S-WOULD-BLOCK 0 EXIT
     THEN
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
-    \ A snapshot or surface the arena no longer fits grows it first.
+    \ A snapshot, surface or picture count the arena no longer fits grows
+    \ it first.
+    _RTHP-W-PICTURES
+    _RTHP-W-P @ _RTHP.ARENA-A @ _RTHP-W-PICTURES-ARENA !
     _RTHP-GROW-ARENA DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    _RTHP-W-PICTURES-AGAIN
     _RTPROF-PH-SNAPSHOT-IMPORT _RTPROF-MARK
     _RTHP-W-SNAP @ _RTHP-W-P @ _RTHP-COPY-SNAPSHOT?
     _RTPROF-PH-OTHER _RTPROF-MARK
@@ -7783,7 +8357,8 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     \ one and its reveal carries CELL; until the empty frame is sealed the
     \ CELL offer waits, so no newer CELL frame shows under the older rich one.
     DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR IF
-        DROP _RTHP-W-P @ _RTHP-REFUSE-DRAW
+        \ An empty frame shows no picture: CELL shows each one.
+        DROP _RTHP-W-P @ _RTHP-REFUSE-DRAW UPICSN-RELEASE-ALL
         _RTHP-PH-READY-BLANK _RTHP-W-P @ _RTHP.PHASE !
         SCB-S-WOULD-BLOCK 0 EXIT
     THEN
@@ -7870,7 +8445,8 @@ VARIABLE _RTHP-S-STATUS
 \ that asked, whose next PREPARE builds the frame again.  No to an ask with
 \ room to grow asks once more for exactly the need.  No to that marks the
 \ draw refused, so the rebuilt frame leaves what does not fit as CELL and
-\ the fallback record says why.
+\ the fallback record says why.  The picture lane keeps its own refusal,
+\ so a refused picture never keeps a frame from growing.
 : _RTHP-STEP-RESIZING  ( producer -- scb-status more? output-needed? )
     DUP _RTHP.OWNER @ OVER _RTHP.OWNER-GEN @
     2 PICK _RTHP.FACADE @ RTE-OWNER-STATE@
@@ -7891,8 +8467,13 @@ VARIABLE _RTHP-S-STATUS
             DUP _RTHP-ASK-EXACT
             DUP _RTHP-RESIZE RTE-S-OK = IF DROP SCB-S-OK -1 0 EXIT THEN
         THEN
-        SCR-DRAW-GENERATION@ OVER _RTHP.SPACE-REFUSED-DRAW !
+        DUP _RTHP.LANE-RESIZE @ IF
+            RTHP-WHY-REFUSED OVER _RTHP.LANE-REFUSED !
+        ELSE
+            SCR-DRAW-GENERATION@ OVER _RTHP.SPACE-REFUSED-DRAW !
+        THEN
     THEN
+    0 OVER _RTHP.LANE-RESIZE !
     DUP _RTHP.RESUME-PHASE @ SWAP _RTHP.PHASE !
     SCB-S-OK 0 -1 ;
 
@@ -7971,10 +8552,575 @@ VARIABLE _RTHP-Z-OUTPUT
     _RTHP-Z-ABORT-START-TARGET
     SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT ;
 
-\ A LIVE producer's step has nothing to do: it publishes nothing and
-\ changes nothing. It checks only that this is the producer and the surface
-\ is unchanged; every step or preparation that acts proves the whole
-\ producer with RTHP-VALID? first.
+\ The frame on screen shows its pictures as the terminal now could.
+: _RTHP-PICTURES-CURRENT?  ( producer -- flag )
+    DUP _RTHP.TARGET-ACTIVE @ DUP 0= IF 2DROP -1 EXIT THEN
+    _RTHP-TB.PICTURE-EPOCH @ SWAP _RTHP.PICTURE-EPOCH @ = ;
+
+\ =====================================================================
+\  Pictures the terminal holds
+\ =====================================================================
+\
+\  While a frame is live, STEP runs the picture lane's one job at a time.
+\  It asks how many pixels the surface has whenever the surface changes
+\  and a picture needs a copy made to fit it; a picture whose file the
+\  terminal decodes goes at its own size and needs no answer.  It gives
+\  back a picture no frame shows and the latest build no longer wants; and
+\  uploads a file or copy the latest build described as ready, first
+\  asking the terminal for exactly the room it needs when the owner holds
+\  too little.  A copy that replaces another of the same picture needs room
+\  for both, since the old one shows until the terminal holds the new one.
+\  A pixel answer for a draw with pictures, and each picture the terminal
+\  comes to hold, leave the frame on screen stale, so the draw is built
+\  again, and the lane waits for that frame before it does more.  No frame
+\  is prepared while the pixel question or a drop runs, each one short
+\  exchange, or while one of the job's frames awaits its answer.  Frames do
+\  go out during an upload, between its chunks.
+\
+\  An upload reads each chunk from the picture's source only when the
+\  terminal is ready for it, into one block the size of its largest chunk,
+\  so the lane never holds a whole picture.  An upload stops once the
+\  latest build no longer describes its picture, or when a chunk's read
+\  finds the picture no longer shows that file or copy, so the link carries
+\  no picture that will not be seen.
+\
+\  When the terminal refuses more room, the lane asks for none until a
+\  build describes no picture.  Copies are then made to fit the room the
+\  owner holds and no picture uses, since a smaller picture is still the
+\  whole picture; with no such room a picture stays as it is and the
+\  fallback record says why.  Room no picture uses goes back once no
+\  picture is on its way.  A draw in which a job failed starts nothing
+\  more; a newer draw tries again.
+
+VARIABLE _RTHP-L-P
+VARIABLE _RTHP-L-STATE
+VARIABLE _RTHP-L-KIND
+VARIABLE _RTHP-L-ITEM
+VARIABLE _RTHP-L-RESULT
+VARIABLE _RTHP-L-STATUS
+VARIABLE _RTHP-L-DESC
+VARIABLE _RTHP-L-ENTRY
+VARIABLE _RTHP-L-INDEX
+VARIABLE _RTHP-L-USED
+VARIABLE _RTHP-L-USED-BYTES
+\ The bytes the owner holds for the wanted copy, its decoded size, and the
+\ bytes its upload sends.
+VARIABLE _RTHP-L-BYTES
+VARIABLE _RTHP-L-SEND
+VARIABLE _RTHP-L-FREE
+\ The chunk an upload wants: where it starts, and how many bytes are read.
+VARIABLE _RTHP-L-OFFSET
+VARIABLE _RTHP-L-CHUNK
+
+: _RTHP-L-ENTRIES  ( -- n )
+    _RTHP-L-P @ _RTHP.RESOURCES-U @ _RTHP-RESOURCE-SIZE / ;
+: _RTHP-L-ENTRY-AT  ( index -- entry )
+    _RTHP-RESOURCE-SIZE * _RTHP-L-P @ _RTHP.RESOURCES-A @ + ;
+: _RTHP-L-DESCRIPTOR-AT  ( index -- descriptor )
+    UPICSN-DESCRIPTOR-SIZE * _RTHP-L-P @ _RTHP.PICTURES-A @ + ;
+
+: _RTHP-L-CHUNK-FREE  ( -- )
+    _RTHP-L-P @ _RTHP.CHUNK-A @ ?DUP IF
+        _RTHP-L-P @ _RTHP.CHUNK-U @ _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE
+    THEN
+    0 _RTHP-L-P @ _RTHP.CHUNK-A ! 0 _RTHP-L-P @ _RTHP.CHUNK-U ! ;
+
+\ A block from the memory source for the lane, kept apart from everything
+\ the producer touches; 0 when the source has no room.
+: _RTHP-L-ALLOC  ( bytes -- a|0 )
+    DUP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-ALLOC DUP 0= IF NIP EXIT THEN
+    2DUP SWAP _RTHP-L-P @ _RTHP-G-SEPARATE? IF NIP EXIT THEN
+    SWAP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE 0 ;
+
+\ Start nothing more in this draw; HOLD also notes why pictures stay CELL.
+: _RTHP-L-PAUSE  ( -- )
+    SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-HOLD-DRAW ! ;
+: _RTHP-L-HOLD  ( reason -- )
+    RTHP-PART-PICTURES SWAP _RTHP-L-P @ _RTHP-FALLBACK-NOTE _RTHP-L-PAUSE ;
+\ The lane could not send a picture a build wants, for REASON.  Every
+\ picture goes back to CELL, which shows it, until the lane sends one.
+: _RTHP-L-FAIL  ( reason -- )
+    _RTHP-L-HOLD -1 _RTHP-L-P @ _RTHP.LANE-FAILED ! UPICSN-RELEASE-ALL ;
+
+: _RTHP-L-HELD-BACK?  ( -- flag )
+    SCR-DRAW-GENERATION@ _RTHP-L-P @ _RTHP.LANE-HOLD-DRAW @ = ;
+
+: _RTHP-L-FAULT  ( scb-status -- scb-status more? output-needed? )
+    _RTHP-L-P @ _RTHP-FAULT-RESULT ;
+
+\ The resources the table's entries take and their bytes.
+: _RTHP-L-USE  ( -- )
+    0 _RTHP-L-USED ! 0 _RTHP-L-USED-BYTES !
+    _RTHP-L-ENTRIES 0 ?DO
+        I _RTHP-L-ENTRY-AT DUP _RTHP-RS.ID @ IF
+            1 _RTHP-L-USED +! _RTHP-RS.BYTES @ _RTHP-L-USED-BYTES +!
+        ELSE DROP THEN
+    LOOP ;
+
+\ Ask the terminal for the room ASK names, as the lane's REQUEST: 1 for
+\ more, 2 to give some back.  The phase that asked resumes once it answers.
+: _RTHP-L-RESIZE  ( request -- rte-status )
+    _RTHP-L-P @ _RTHP-RESIZE DUP RTE-S-OK = IF
+        SWAP _RTHP-L-P @ _RTHP.LANE-RESIZE !
+        _RTHP-L-P @ _RTHP.PHASE @ _RTHP-L-P @ _RTHP.RESUME-PHASE !
+        _RTHP-PH-RESIZING _RTHP-L-P @ _RTHP.PHASE ! EXIT
+    THEN
+    NIP ;
+
+\ ---------------------------------------------------------------------
+\  A finished job
+\ ---------------------------------------------------------------------
+
+\ The pixels the surface has.  An answer the terminal could not give
+\ leaves them unknown, and pictures CELL, until the surface changes.  A
+\ change matters only to a draw that shows pictures.
+: _RTHP-L-PIXELS-DONE  ( -- output? )
+    _RTHP-L-STATE @ RTE-JOB-DONE = _RTHP-L-RESULT @ RTE-S-OK = AND IF
+        _RTHP-L-P @ _RTHP.FACADE @ RTE-PIXELS@ RTE-S-OK <> IF
+            2DROP DROP 0 0
+        ELSE ROT DROP THEN
+    ELSE 0 0 THEN
+    _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.PIXEL-H @ OVER <>
+    _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.PIXEL-W @ 3 PICK <> OR >R
+    _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.PIXEL-H !
+    _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.PIXEL-W !
+    R> _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0<> AND
+    DUP IF 1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +! THEN ;
+
+\ The terminal refused the bytes of the upload's picture as no picture of
+\ its size.  The picture's widget remembers it, so no build sends that
+\ picture again until the widget is given another source, and CELL shows
+\ it.  The frame on screen is stale, so the lane waits for the frame built
+\ again, which describes the picture as failed.
+: _RTHP-L-REFUSED  ( -- )
+    _RTHP-L-ENTRY @ _RTHP-RS.DOCUMENT @ _RTHP-L-ENTRY @ _RTHP-RS.INDEX @
+    _RTHP-L-ENTRY @ _RTHP-RS.KEY @
+    _RTHP-L-ENTRY @ _RTHP-RS.REVISION @ PIC-R-DAMAGED
+    _RTHP-L-P @ _RTHP.ADAPTER @ RUHA-PICTURE-FAIL DROP
+    1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +! ;
+
+\ A copy the terminal now holds leaves the frame on screen stale.  One the
+\ lane stopped is forgotten.  One whose bytes the terminal refused stays
+\ CELL, and the other pictures stay rich.  One the terminal had no room
+\ for, or that failed otherwise, waits for a newer draw while CELL shows
+\ the pictures.
+: _RTHP-L-UPLOAD-DONE  ( -- output? )
+    _RTHP-L-P @ _RTHP.LANE-ENTRY @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
+    _RTHP-L-STATE @ RTE-JOB-DONE = _RTHP-L-RESULT @ RTE-S-OK = AND IF
+        _RTHP-RS-HELD _RTHP-L-ENTRY @ _RTHP-RS.STATE !
+        1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +! -1 EXIT
+    THEN
+    _RTHP-L-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-CANCELLED = IF
+        _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL 0 EXIT
+    THEN
+    _RTHP-L-RESULT @ RTE-S-SOURCE = IF
+        _RTHP-L-REFUSED _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL -1 EXIT
+    THEN
+    _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL
+    _RTHP-L-RESULT @ RTE-S-CAPACITY = IF RTHP-WHY-REFUSED ELSE RTHP-WHY-OTHER THEN
+        _RTHP-L-FAIL 0 ;
+
+\ A picture the terminal would not give back may still be shown; it stays
+\ held, and nothing more starts in this draw.  Room a picture no longer
+\ takes may go back to the terminal too.
+: _RTHP-L-DROP-DONE  ( -- )
+    _RTHP-L-P @ _RTHP.LANE-ENTRY @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
+    _RTHP-L-STATE @ RTE-JOB-DONE = _RTHP-L-RESULT @ RTE-S-OK = AND IF
+        _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL
+        -1 _RTHP-L-P @ _RTHP.LANE-SHRINK ! EXIT
+    THEN
+    RTHP-WHY-OTHER _RTHP-L-HOLD ;
+
+\ The latest build's description of the picture the upload sends: the
+\ ready descriptor whose copy the upload's entry is, or 0 once no build
+\ describes that picture at that size and in that format.
+: _RTHP-L-SENDING  ( -- descriptor|0 )
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        I _RTHP-L-DESCRIPTOR-AT DUP UPICSN-STATE@ UPICSN-C-READY = IF
+            DUP 0 _RTHP-L-P @ _RTHP-RESOURCE-FOR _RTHP-L-ENTRY @ = IF
+                UNLOOP EXIT
+            THEN
+        THEN DROP
+    LOOP 0 ;
+
+\ Stop the upload, so the link carries no picture that will not be seen.
+\ Once its last frame awaits the terminal it can only finish, and its
+\ picture then goes back like any other no frame wants.
+: _RTHP-L-STOP  ( -- scb-status more? output-needed? )
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-CANCEL
+    DUP RTE-S-OK = IF
+        DROP _RTHP-RS-CANCELLED _RTHP-L-ENTRY @ _RTHP-RS.STATE !
+        SCB-S-OK -1 0 EXIT
+    THEN
+    RTE-S-SESSION-LOST = IF SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
+    SCB-S-OK -1 0 ;
+
+\ The upload wants its next chunk, of the picture DESCRIPTOR describes:
+\ read it into the lane's block from the picture's source and hand it
+\ over.  The block comes from the memory source at the first chunk, the
+\ size of the largest, and goes back when the upload ends.  A read that
+\ finds the picture no longer showing that file or copy stops the upload,
+\ and the lane starts nothing more in this draw: the draw that changed the
+\ picture describes it again.  A block the memory source refuses, or a
+\ read that fails otherwise, stops it too, and CELL then shows every
+\ picture.
+: _RTHP-L-FEED  ( descriptor -- scb-status more? output-needed? )
+    _RTHP-L-DESC !
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-WANTS@ RTE-S-OK <> IF
+        2DROP SCB-S-INVALID _RTHP-L-FAULT EXIT
+    THEN
+    _RTHP-L-CHUNK ! _RTHP-L-OFFSET !
+    _RTHP-L-P @ _RTHP.CHUNK-A @ 0= IF
+        _RTHP-L-CHUNK @ _RTHP-L-ALLOC ?DUP 0= IF
+            RTHP-WHY-MEMORY _RTHP-L-FAIL _RTHP-L-STOP EXIT
+        THEN
+        _RTHP-L-P @ _RTHP.CHUNK-A !
+        _RTHP-L-CHUNK @ _RTHP-L-P @ _RTHP.CHUNK-U !
+    THEN
+    _RTHP-L-CHUNK @ _RTHP-L-P @ _RTHP.CHUNK-U @ _RTHP-UMIN _RTHP-L-CHUNK !
+    _RTHP-L-DESC @ _RTHP-L-OFFSET @
+    _RTHP-L-P @ _RTHP.CHUNK-A @ _RTHP-L-CHUNK @
+    _RTHP-L-P @ _RTHP.ADAPTER @ RUHA-PICTURE-PULL
+    DUP RUHA-S-OK <> IF
+        RUHA-S-STALE = IF _RTHP-L-PAUSE ELSE RTHP-WHY-OTHER _RTHP-L-FAIL THEN
+        _RTHP-L-STOP EXIT
+    THEN DROP
+    _RTHP-L-P @ _RTHP.CHUNK-A @ _RTHP-L-CHUNK @
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-FEED RTE-S-OK <> IF
+        SCB-S-INVALID _RTHP-L-FAULT EXIT
+    THEN
+    SCB-S-OK -1 0 ;
+
+: _RTHP-L-POLL  ( -- scb-status more? output-needed? )
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-JOB@ _RTHP-L-STATUS ! _RTHP-L-RESULT !
+        _RTHP-L-ITEM ! _RTHP-L-KIND ! _RTHP-L-STATE !
+    _RTHP-L-STATUS @ RTE-S-SESSION-LOST = IF SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
+    _RTHP-L-STATUS @ RTE-S-OK <> IF SCB-S-INVALID _RTHP-L-FAULT EXIT THEN
+    \ An upload still to send stops once the latest build no longer
+    \ describes its picture, and is fed each chunk it wants.
+    _RTHP-L-STATE @ DUP RTE-JOB-QUEUED = SWAP RTE-JOB-WANTS = OR
+    _RTHP-L-KIND @ RTE-JOB-UPLOAD = AND
+    _RTHP-L-P @ _RTHP.LANE-JOB @ RTE-JOB-UPLOAD = AND IF
+        _RTHP-L-P @ _RTHP.LANE-ENTRY @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
+        _RTHP-L-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-UPLOADING = IF
+            _RTHP-L-SENDING DUP 0= IF DROP _RTHP-L-STOP EXIT THEN
+            _RTHP-L-STATE @ RTE-JOB-WANTS = IF _RTHP-L-FEED EXIT THEN
+            DROP
+        THEN
+    THEN
+    _RTHP-L-STATE @ DUP RTE-JOB-QUEUED = OVER RTE-JOB-AWAITING = OR
+    SWAP RTE-JOB-WANTS = OR IF
+        SCB-S-OK -1 0 EXIT
+    THEN
+    _RTHP-L-STATE @ DUP RTE-JOB-DONE <> SWAP RTE-JOB-FAILED <> AND
+    _RTHP-L-KIND @ _RTHP-L-P @ _RTHP.LANE-JOB @ <> OR IF
+        SCB-S-INVALID _RTHP-L-FAULT EXIT
+    THEN
+    0
+    _RTHP-L-KIND @ RTE-JOB-PIXELS = IF DROP _RTHP-L-PIXELS-DONE THEN
+    _RTHP-L-KIND @ RTE-JOB-UPLOAD = IF DROP _RTHP-L-UPLOAD-DONE THEN
+    _RTHP-L-KIND @ RTE-JOB-DROP = IF _RTHP-L-DROP-DONE THEN
+    _RTHP-L-CHUNK-FREE
+    0 _RTHP-L-P @ _RTHP.LANE-JOB ! 0 _RTHP-L-P @ _RTHP.LANE-ENTRY !
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-JOB-CLEAR RTE-S-OK <> IF
+        DROP SCB-S-INVALID _RTHP-L-FAULT EXIT
+    THEN
+    >R SCB-S-OK 0 R> ;
+
+\ ---------------------------------------------------------------------
+\  The next job
+\ ---------------------------------------------------------------------
+
+\ A picture the latest build described needs a copy made to fit the
+\ surface's pixels, rather than going as its file.
+: _RTHP-L-COPIES?  ( -- flag )
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        I _RTHP-L-DESCRIPTOR-AT UPICSN-FORMAT@ PIC-F-RGBA8 = IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP 0 ;
+
+: _RTHP-L-ASK-PIXELS  ( -- scb-status more? output-needed? )
+    \ The question is about this surface.  No frame is built until the
+    \ answer, which replaces the pixels known before.
+    _RTHP-L-P @ _RTHP.COLS @
+        _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.SURFACE-COLS !
+    _RTHP-L-P @ _RTHP.ROWS @
+        _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.SURFACE-ROWS !
+    0 0 _RTHP-L-P @ _RTHP.COLS @ _RTHP-L-P @ _RTHP.ROWS @
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-PIXELS-ASK
+    DUP RTE-S-OK = IF
+        DROP RTE-JOB-PIXELS _RTHP-L-P @ _RTHP.LANE-JOB ! SCB-S-OK -1 0 EXIT
+    THEN
+    DUP RTE-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
+    \ Busy for now: ask again on a later step.
+    RTE-S-WOULD-BLOCK = IF
+        0 _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.SURFACE-COLS !
+        SCB-S-OK -1 0 EXIT
+    THEN
+    \ A terminal that cannot be asked leaves this surface's pixels unknown.
+    0 _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.PIXEL-W !
+    0 _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.PIXEL-H !
+    SCB-S-OK 0 0 ;
+
+\ BANK's frame shows resource ID.
+: _RTHP-L-SHOWN?  ( id bank -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    DUP _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        DUP _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * +
+        DUP _RTE-STATIC.KIND @ RTE-STATIC-IMAGE =
+        SWAP _RTE-STATIC.RESOURCE @ 3 PICK = AND IF
+            2DROP -1 UNLOOP EXIT
+        THEN
+    LOOP 2DROP 0 ;
+
+\ A ready picture the latest build described shows ENTRY's copy.
+: _RTHP-L-WANTED?  ( entry -- flag )
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        I _RTHP-L-DESCRIPTOR-AT DUP UPICSN-STATE@ UPICSN-C-READY = IF
+            0 _RTHP-L-P @ _RTHP-RESOURCE-FOR OVER = IF
+                DROP -1 UNLOOP EXIT
+            THEN
+        ELSE DROP THEN
+    LOOP DROP 0 ;
+
+\ The first held picture no frame shows and no build wants, or -1.
+: _RTHP-L-DROP-INDEX  ( -- index|-1 )
+    _RTHP-L-ENTRIES 0 ?DO
+        I _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
+        _RTHP-L-ENTRY @ _RTHP-RS.STATE @ _RTHP-RS-HELD = IF
+            _RTHP-L-ENTRY @ _RTHP-RS.ID @
+                _RTHP-L-P @ _RTHP.TARGET-ACTIVE @ _RTHP-L-SHOWN? 0=
+            _RTHP-L-ENTRY @ _RTHP-RS.ID @
+                _RTHP-L-P @ _RTHP.TARGET-PENDING @ _RTHP-L-SHOWN? 0= AND
+            _RTHP-L-ENTRY @ _RTHP-L-WANTED? 0= AND IF I UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
+
+: _RTHP-L-START-DROP  ( index -- scb-status more? output-needed? )
+    DUP _RTHP-L-P @ _RTHP.LANE-ENTRY ! _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
+    _RTHP-L-P @ _RTHP.OWNER @ _RTHP-L-P @ _RTHP.OWNER-GEN @
+    _RTHP-L-ENTRY @ _RTHP-RS.ID @ _RTHP-L-ENTRY @ _RTHP-RS.BYTES @
+    _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-DROP
+    DUP RTE-S-OK = IF
+        DROP RTE-JOB-DROP _RTHP-L-P @ _RTHP.LANE-JOB ! SCB-S-OK -1 0 EXIT
+    THEN
+    0 _RTHP-L-P @ _RTHP.LANE-ENTRY !
+    DUP RTE-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
+    RTE-S-WOULD-BLOCK = IF SCB-S-OK -1 0 EXIT THEN
+    RTHP-WHY-OTHER _RTHP-L-HOLD SCB-S-OK 0 0 ;
+
+\ The first ready picture the latest build described whose copy the
+\ terminal neither holds nor is being sent, or 0.
+: _RTHP-L-WANTED  ( -- descriptor|0 )
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        I _RTHP-L-DESCRIPTOR-AT DUP UPICSN-STATE@ UPICSN-C-READY = IF
+            DUP 0 _RTHP-L-P @ _RTHP-RESOURCE-FOR 0= IF UNLOOP EXIT THEN
+        THEN DROP
+    LOOP 0 ;
+
+\ A picture the latest build described still waits for its copy, or for
+\ the terminal to hold it.
+: _RTHP-L-ON-ITS-WAY?  ( -- flag )
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0 ?DO
+        I _RTHP-L-DESCRIPTOR-AT DUP UPICSN-STATE@
+        DUP UPICSN-C-PENDING = IF 2DROP -1 UNLOOP EXIT THEN
+        UPICSN-C-READY = IF
+            0 _RTHP-L-P @ _RTHP-RESOURCE-FOR 0= IF -1 UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP 0 ;
+
+\ The owner holds room for one more resource of BYTES.
+: _RTHP-L-ROOM?  ( -- flag )
+    1 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@ _RTHP-L-USED @ U> 0= IF 0 EXIT THEN
+    _RTHP-L-USED-BYTES @ _RTHP-L-BYTES @ _RTHP-U+? 0= IF DROP 0 EXIT THEN
+    4 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@ U> 0= ;
+
+\ The terminal refused the lane more room, or could never give it, for
+\ REASON.  A smaller copy still shows the whole picture: when the owner
+\ holds a resource and at least a pixel's bytes that no picture uses, and
+\ fewer than copies keep within now, the pictures are described again to
+\ fit them.  Otherwise each stays as it is, and the fallback record says
+\ why.
+: _RTHP-L-FIT-HELD  ( reason -- scb-status more? output-needed? )
+    DUP _RTHP-L-P @ _RTHP.LANE-REFUSED !
+    4 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@ _RTHP-L-USED-BYTES @
+        2DUP U> IF - ELSE 2DROP 0 THEN _RTHP-L-FREE !
+    1 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@ _RTHP-L-USED @ U>
+    _RTHP-L-FREE @ 4 U< 0= AND
+    _RTHP-L-P @ _RTHP.LANE-BUDGET @ DUP 0= SWAP _RTHP-L-FREE @ U> OR AND IF
+        DROP
+        _RTHP-L-FREE @ _RTHP-L-P @ _RTHP.LANE-BUDGET !
+        1 _RTHP-L-P @ _RTHP.PICTURE-EPOCH +!
+        SCB-S-OK 0 -1 EXIT
+    THEN
+    _RTHP-L-FAIL SCB-S-OK 0 0 ;
+
+\ Ask the terminal for exactly what the owner holds and room for one more
+\ resource of BYTES.  A copy that replaces another of the same picture
+\ needs room for both while the old one shows, and USE counts it.
+: _RTHP-L-ASK-ROOM  ( -- scb-status more? output-needed? )
+    _RTHP-L-P @ _RTHP.HELD _RTHP-L-P @ _RTHP.NEED RTE-QUOTA-SIZE MOVE
+    _RTHP-L-USED @ 1+ 1 _RTHP-L-P @ _RTHP.NEED _RTHP-Q@ _RTHP-UMAX
+        1 _RTHP-L-P @ _RTHP.NEED _RTHP-Q!
+    _RTHP-L-USED-BYTES @ _RTHP-L-BYTES @ _RTHP-U+? 0= IF
+        DROP RTHP-WHY-LIMIT _RTHP-L-FIT-HELD EXIT
+    THEN
+    4 _RTHP-L-P @ _RTHP.NEED _RTHP-Q@ _RTHP-UMAX
+        4 _RTHP-L-P @ _RTHP.NEED _RTHP-Q!
+    _RTHP-L-P @ _RTHP-NEED-BEYOND-LIMITS? IF
+        RTHP-WHY-LIMIT _RTHP-L-FIT-HELD EXIT
+    THEN
+    _RTHP-L-P @ _RTHP-ASK-EXACT
+    1 _RTHP-L-RESIZE
+    DUP RTE-S-OK = IF DROP SCB-S-OK -1 0 EXIT THEN
+    DUP RTE-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
+    RTE-S-WOULD-BLOCK = IF SCB-S-OK -1 0 EXIT THEN
+    RTHP-WHY-REFUSED _RTHP-L-FIT-HELD ;
+
+\ The table has an entry for each resource the owner holds room for.
+: _RTHP-L-TABLE?  ( -- flag )
+    1 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@
+    DUP _RTHP-L-ENTRIES U> 0= IF DROP -1 EXIT THEN
+    _RTHP-RESOURCE-SIZE * DUP _RTHP-L-ALLOC DUP 0= IF 2DROP 0 EXIT THEN
+    2DUP SWAP 0 FILL
+    _RTHP-L-P @ _RTHP.RESOURCES-A @ ?DUP IF
+        OVER _RTHP-L-P @ _RTHP.RESOURCES-U @ MOVE
+        _RTHP-L-P @ _RTHP.RESOURCES-A @ _RTHP-L-P @ _RTHP.RESOURCES-U @
+            _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE
+    THEN
+    _RTHP-L-P @ _RTHP.RESOURCES-A ! _RTHP-L-P @ _RTHP.RESOURCES-U ! -1 ;
+
+: _RTHP-L-FREE-INDEX  ( -- index|-1 )
+    _RTHP-L-ENTRIES 0 ?DO
+        I _RTHP-L-ENTRY-AT _RTHP-RS.ID @ 0= IF I UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ A picture format as the facade names it; 0 for none it knows.
+: _RTHP-PICTURE>RTE  ( pic-format -- rte-format )
+    DUP PIC-F-RGBA8 = IF DROP RTE-PICTURE-RGBA8 EXIT THEN
+    DUP PIC-F-QOI = IF DROP RTE-PICTURE-QOI EXIT THEN
+    DUP PIC-F-PNG = IF DROP RTE-PICTURE-PNG EXIT THEN
+    PIC-F-JPEG = IF RTE-PICTURE-JPEG EXIT THEN
+    0 ;
+
+\ Send the wanted file or copy as the next resource.  Nothing is read yet:
+\ the upload asks for each chunk in turn (_RTHP-L-FEED).
+: _RTHP-L-START-UPLOAD  ( -- scb-status more? output-needed? )
+    _RTHP-L-DESC @ UPICSN-COPY-WIDTH@ _RTHP-L-DESC @ UPICSN-COPY-HEIGHT@ * 4 *
+        _RTHP-L-BYTES !
+    _RTHP-L-DESC @ UPICSN-COPY-BYTES@ _RTHP-L-SEND !
+    _RTHP-L-P @ _RTHP-HELD@ 0= IF SCB-S-INVALID _RTHP-L-FAULT EXIT THEN
+    _RTHP-L-USE
+    _RTHP-L-ROOM? 0= IF
+        _RTHP-L-P @ _RTHP.LANE-REFUSED @ ?DUP IF _RTHP-L-FIT-HELD EXIT THEN
+        _RTHP-L-ASK-ROOM EXIT
+    THEN
+    _RTHP-L-TABLE? 0= IF RTHP-WHY-MEMORY _RTHP-L-FAIL SCB-S-OK 0 0 EXIT THEN
+    _RTHP-L-FREE-INDEX DUP 0< IF
+        DROP RTHP-WHY-OTHER _RTHP-L-FAIL SCB-S-OK 0 0 EXIT
+    THEN _RTHP-L-INDEX !
+    _RTHP-L-INDEX @ _RTHP-L-ENTRY-AT _RTHP-L-ENTRY !
+    _RTHP-L-P @ _RTHP.NEXT-RESOURCE @ _RTHP-L-ENTRY @ _RTHP-RS.ID !
+    _RTHP-L-DESC @ UPICSN-COPY-WIDTH@ _RTHP-L-ENTRY @ _RTHP-RS.WIDTH !
+    _RTHP-L-DESC @ UPICSN-COPY-HEIGHT@ _RTHP-L-ENTRY @ _RTHP-RS.HEIGHT !
+    _RTHP-L-BYTES @ _RTHP-L-ENTRY @ _RTHP-RS.BYTES !
+    _RTHP-RS-UPLOADING _RTHP-L-ENTRY @ _RTHP-RS.STATE !
+    _RTHP-L-DESC @ UPICSN-FORMAT@ _RTHP-L-ENTRY @ _RTHP-RS.FORMAT !
+    _RTHP-L-DESC @ UPICSN-DOCUMENT@ _RTHP-L-ENTRY @ _RTHP-RS.DOCUMENT !
+    _RTHP-L-DESC @ UPICSN-SOURCE-INDEX@ _RTHP-L-ENTRY @ _RTHP-RS.INDEX !
+    _RTHP-L-DESC @ UPICSN-ROOT-KEY@ _RTHP-L-ENTRY @ _RTHP-RS.KEY !
+    _RTHP-L-DESC @ UPICSN-REVISION@ _RTHP-L-ENTRY @ _RTHP-RS.REVISION !
+    _RTHP-L-P @ _RTHP.OWNER @ _RTHP-L-P @ _RTHP.OWNER-GEN @
+    _RTHP-L-ENTRY @ _RTHP-RS.ID @
+    _RTHP-L-ENTRY @ _RTHP-RS.FORMAT @ _RTHP-PICTURE>RTE
+    _RTHP-L-ENTRY @ _RTHP-RS.WIDTH @ _RTHP-L-ENTRY @ _RTHP-RS.HEIGHT @
+    _RTHP-L-SEND @ _RTHP-L-P @ _RTHP.FACADE @ RTE-RESOURCE-UPLOAD
+    DUP RTE-S-OK = IF
+        DROP 1 _RTHP-L-P @ _RTHP.NEXT-RESOURCE +!
+        _RTHP-L-INDEX @ _RTHP-L-P @ _RTHP.LANE-ENTRY !
+        0 _RTHP-L-P @ _RTHP.LANE-FAILED !
+        RTE-JOB-UPLOAD _RTHP-L-P @ _RTHP.LANE-JOB ! SCB-S-OK -1 0 EXIT
+    THEN
+    _RTHP-L-ENTRY @ _RTHP-RESOURCE-SIZE 0 FILL
+    DUP RTE-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
+    RTE-S-WOULD-BLOCK = IF SCB-S-OK -1 0 EXIT THEN
+    RTHP-WHY-OTHER _RTHP-L-FAIL SCB-S-OK 0 0 ;
+
+\ Give back the room no picture uses: the owner keeps exactly the
+\ resources its pictures take and their bytes.  A terminal that keeps the
+\ room anyway is not asked again until another picture goes.
+: _RTHP-L-GIVE-BACK  ( -- scb-status more? output-needed? )
+    0 _RTHP-L-P @ _RTHP.LANE-SHRINK !
+    _RTHP-L-P @ _RTHP-HELD@ 0= IF SCB-S-INVALID _RTHP-L-FAULT EXIT THEN
+    _RTHP-L-USE
+    1 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@ _RTHP-L-USED @ U>
+    4 _RTHP-L-P @ _RTHP.HELD _RTHP-Q@ _RTHP-L-USED-BYTES @ U> OR 0= IF
+        SCB-S-OK 0 0 EXIT
+    THEN
+    _RTHP-L-P @ _RTHP.HELD _RTHP-L-P @ _RTHP.ASK RTE-QUOTA-SIZE MOVE
+    _RTHP-L-USED @ 1 _RTHP-L-P @ _RTHP.ASK _RTHP-Q!
+    _RTHP-L-USED-BYTES @ 4 _RTHP-L-P @ _RTHP.ASK _RTHP-Q!
+    _RTHP-L-P @ _RTHP.ASK _RTHP-L-P @ _RTHP.NEED RTE-QUOTA-SIZE MOVE
+    2 _RTHP-L-RESIZE
+    DUP RTE-S-OK = IF DROP SCB-S-OK -1 0 EXIT THEN
+    RTE-S-SESSION-LOST = IF SCB-S-SESSION-LOST _RTHP-L-FAULT EXIT THEN
+    SCB-S-OK 0 0 ;
+
+: _RTHP-L-FINISH  ( scb-status more? output-needed? -- same )
+    0 _RTHP-L-P ! 0 _RTHP-L-DESC ! 0 _RTHP-L-ENTRY !
+    0 _RTHP-L-OFFSET ! 0 _RTHP-L-CHUNK ! ;
+
+: _RTHP-LANE-BODY  ( -- scb-status more? output-needed? )
+    _RTHP-L-P @ _RTHP-LANE-ON? 0= IF SCB-S-OK 0 0 EXIT THEN
+    _RTHP-L-P @ _RTHP.LANE-JOB @ IF
+        _RTHP-L-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+        _RTHP-L-POLL EXIT
+    THEN
+    _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.SURFACE-COLS @
+        _RTHP-L-P @ _RTHP.COLS @ <>
+    _RTHP-L-P @ _RTHP.PICTURE-ASK UPICSN-ASK.SURFACE-ROWS @
+        _RTHP-L-P @ _RTHP.ROWS @ <> OR
+    _RTHP-L-COPIES? AND IF
+        _RTHP-L-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+        _RTHP-L-ASK-PIXELS EXIT
+    THEN
+    \ The frame on screen was built before the latest change in what it can
+    \ show of its pictures: wait for the one built again.
+    _RTHP-L-P @ _RTHP-PICTURES-CURRENT? 0= IF SCB-S-OK 0 0 EXIT THEN
+    \ A build that describes no picture ends a refusal or failure: the next
+    \ picture asks the terminal again, and the rich side takes it.
+    _RTHP-L-P @ _RTHP.PICTURE-COUNT @ 0= IF
+        0 _RTHP-L-P @ _RTHP.LANE-REFUSED ! 0 _RTHP-L-P @ _RTHP.LANE-BUDGET !
+        0 _RTHP-L-P @ _RTHP.LANE-FAILED !
+    THEN
+    _RTHP-L-HELD-BACK? IF SCB-S-OK 0 0 EXIT THEN
+    _RTHP-L-DROP-INDEX DUP 0< 0= IF
+        _RTHP-L-P @ RTHP-VALID? 0= IF DROP SCB-S-INVALID 0 0 EXIT THEN
+        _RTHP-L-START-DROP EXIT
+    THEN DROP
+    \ Room no picture uses goes back once no picture is on its way.
+    _RTHP-L-P @ _RTHP.LANE-SHRINK @ IF
+        _RTHP-L-ON-ITS-WAY? 0= IF
+            _RTHP-L-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+            _RTHP-L-GIVE-BACK EXIT
+        THEN
+    THEN
+    \ Uploads wait for a rich frame to show them in.
+    _RTHP-L-P @ _RTHP.PHASE @ _RTHP-PH-LIVE <> IF SCB-S-OK 0 0 EXIT THEN
+    _RTHP-L-WANTED DUP 0= IF DROP SCB-S-OK 0 0 EXIT THEN _RTHP-L-DESC !
+    _RTHP-L-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
+    _RTHP-L-START-UPLOAD ;
+
+\ _RTHP-LANE-STEP ( producer -- scb-status more? output-needed? )
+\   The picture lane's step for a LIVE or BLANK producer.
+: _RTHP-LANE-STEP  ( producer -- scb-status more? output-needed? )
+    _RTHP-L-P ! _RTHP-LANE-BODY _RTHP-L-FINISH ;
+
+\ A LIVE producer's step publishes nothing.  Before it runs the picture
+\ lane it checks only that this is the producer and the surface is
+\ unchanged; the lane proves the whole producer with RTHP-VALID? before it
+\ acts, as every other step and preparation does.
 : _RTHP-LIVE-IDLE?  ( producer -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
@@ -8041,7 +9187,7 @@ VARIABLE _RTHP-Z-OUTPUT
         _RTHP-STEP-SEALED EXIT
     THEN
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-LIVE = IF
-        SCB-S-OK 0 0 EXIT
+        _RTHP-S-P @ _RTHP-LANE-STEP EXIT
     THEN
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-READY-BLANK = IF
         SCB-S-OK 0 -1 EXIT
@@ -8058,7 +9204,7 @@ VARIABLE _RTHP-Z-OUTPUT
         _RTHP-STEP-SEALED EXIT
     THEN
     _RTHP-S-P @ _RTHP.PHASE @ _RTHP-PH-BLANK = IF
-        SCB-S-OK 0 0 EXIT
+        _RTHP-S-P @ _RTHP-LANE-STEP EXIT
     THEN
     SCB-S-INVALID _RTHP-S-P @ _RTHP-FAULT-RESULT ;
 
@@ -8195,13 +9341,14 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-X-I-LAST @ _RTHP-X-P @ _RTHP.ADMISSION
         _RTE-HA.INSTRUMENT-LAST @ = AND ;
 
-\ The candidate's item view controls, which need CONTROL-ITEMS.
-: _RTHP-X-ITEM-VIEWS  ( -- count )
-    0
+\ The candidate's controls of one kind: item views, which need
+\ CONTROL-ITEMS, or documents, which need CONTROL-DOCUMENTS.
+: _RTHP-X-KIND-COUNT  ( rte-kind -- count )
+    0 SWAP
     _RTHP-X-P @ _RTHP.CONTROL-COUNT @ 0 ?DO
         _RTHP-X-P @ _RTHP.CONTROLS-A @ I RTE-CONTROL-SIZE * +
-            _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF 1+ THEN
-    LOOP ;
+            _RTE-CONTROL.KIND @ OVER = IF SWAP 1+ SWAP THEN
+    LOOP DROP ;
 
 : _RTHP-INSTRUMENT-FIXED?  ( -- flag )
     _RTHP-X-P @ _RTHP.INSTRUMENT-COUNT @
@@ -8316,6 +9463,13 @@ VARIABLE _RTHP-SX-MAX
 VARIABLE _RTHP-SX-LAST
 VARIABLE _RTHP-SX-CLAIM
 VARIABLE _RTHP-SX-U
+VARIABLE _RTHP-SX-IMAGES
+VARIABLE _RTHP-SX-NEXT
+VARIABLE _RTHP-SX-CORR
+VARIABLE _RTHP-SX-ROW
+VARIABLE _RTHP-SX-COL
+VARIABLE _RTHP-SX-ROW-END
+VARIABLE _RTHP-SX-COL-END
 
 : _RTHP-SX-SPAN? ( address bytes -- flag )
     DUP 0= IF DROP 0= EXIT THEN
@@ -8327,17 +9481,60 @@ VARIABLE _RTHP-SX-U
     DUP _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @ U> IF DROP 0 EXIT THEN
     _RTHP-SX-TEXT ! -1 ;
 
+\ The part of the valid static ITEM shown: its clip, or all of it.  Its
+\ origin fits 32 signed bits and its clip lies inside it.
+: _RTHP-SX-SHOWN  ( -- )
+    _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ _RTHP-SX-ROW !
+    _RTHP-SX-ITEM @ _RTE-STATIC.COL @ _RTHP-SX-COL !
+    _RTHP-SX-ITEM @ _RTE-STATIC-UNCLIPPED? IF
+        _RTHP-SX-ITEM @ _RTE-STATIC.HEIGHT @ _RTHP-SX-ROW @ + _RTHP-SX-ROW-END !
+        _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ _RTHP-SX-COL @ + _RTHP-SX-COL-END !
+        EXIT
+    THEN
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-Y @ _RTHP-SX-ROW +!
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-X @ _RTHP-SX-COL +!
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-ROWS @ _RTHP-SX-ROW @ + _RTHP-SX-ROW-END !
+    _RTHP-SX-ITEM @ _RTE-STATIC.CLIP-COLS @ _RTHP-SX-COL @ + _RTHP-SX-COL-END ! ;
+
+\ Whether static I is a figure: a picture whose shown part a claim made
+\ before the statics, by its own root, holds.  It takes no claim of its
+\ own.
+: _RTHP-SX-IN-ROOT?  ( i -- flag )
+    _RTHP-SX-ITEM @ _RTE-STATIC.KIND @ RTE-STATIC-IMAGE <> IF DROP 0 EXIT THEN
+    _RTHP-STATIC-CORR-SIZE * _RTHP-SX-P @ _RTHP.STATIC-CORR-A @ + _RTHP-SX-CORR !
+    _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ RUCL-CLAIM-SIZE / 0 ?DO
+        _RTHP-SX-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-SX-CLAIM !
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ATTACHMENT@ _RTHP-SX-CORR @ @ =
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-SOURCE-INDEX@ _RTHP-SX-CORR @ 8 + @ = AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SX-ROW @ > 0= AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SX-COL @ > 0= AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SX-ROW-END @ < 0= AND
+        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL1@ _RTHP-SX-COL-END @ < 0= AND
+            IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ Any other static takes the next claim after the base, which is exactly
+\ the part of it shown.
+: _RTHP-SX-OWN-CLAIM?  ( -- flag )
+    _RTHP-SX-NEXT @ RUCL-CLAIM-SIZE _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+        _RTHP-SX-P @ _RTHP.CLAIMS-USED @ U> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.CLAIMS-A @ _RTHP-SX-NEXT @ + _RTHP-SX-CLAIM !
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SX-ROW @ =
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SX-COL @ = AND
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SX-ROW-END @ = AND
+    _RTHP-SX-CLAIM @ RUCL-CLAIM-COL1@ _RTHP-SX-COL-END @ = AND
+        0= IF 0 EXIT THEN
+    RUCL-CLAIM-SIZE _RTHP-SX-NEXT +! -1 ;
+
 : _RTHP-STATICS-FIXED? ( producer -- flag )
     _RTHP-SX-P !
     _RTHP-SX-P @ _RTHP.STATIC-COUNT @
         _RTHP-SX-P @ _RTHP.MAX-STATICS @ U> IF 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @
         _RTHP-SX-P @ _RTHP.STATIC-TEXT-U @ U> IF 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RUCL-CLAIM-SIZE _RTHP-U32*?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ _RTHP-U32+?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ DUP _RTHP-SX-NEXT !
+        DUP RUCL-CLAIM-SIZE MOD IF DROP 0 EXIT THEN
+        _RTHP-SX-P @ _RTHP.CLAIMS-USED @ U> IF 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.STATICS-A @
     _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE *
     _RTHP-SX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
@@ -8345,6 +9542,7 @@ VARIABLE _RTHP-SX-U
     _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @
     _RTHP-SX-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
     0 _RTHP-SX-TEXT ! 0 _RTHP-SX-ALIGNED ! 0 _RTHP-SX-MAX ! 0 _RTHP-SX-LAST !
+    0 _RTHP-SX-IMAGES !
     _RTHP-SX-P @ _RTHP.STATIC-COUNT @ 0 ?DO
         _RTHP-SX-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * + _RTHP-SX-ITEM !
         _RTHP-SX-ITEM @ _RTE-STATIC.OWNER @ _RTHP-SX-P @ _RTHP.OWNER @ <>
@@ -8369,21 +9567,17 @@ VARIABLE _RTHP-SX-U
             IF 0 UNLOOP EXIT THEN
         _RTHP-SX-ITEM @ RTE-STATIC-VALID? 0= IF 0 UNLOOP EXIT THEN
         _RTHP-SX-ITEM @ _RTE-STATIC.VISIBLE @ -1 <> IF 0 UNLOOP EXIT THEN
-        _RTHP-SX-ITEM @ _RTE-STATIC.ROW @
-            _RTHP-SX-P @ _RTHP.ROWS @ U< 0= IF 0 UNLOOP EXIT THEN
-        _RTHP-SX-ITEM @ _RTE-STATIC.COL @
-        _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ _RTHP-U32+?
-            0= IF DROP 0 UNLOOP EXIT THEN
-        _RTHP-SX-P @ _RTHP.COLS @ U> IF 0 UNLOOP EXIT THEN
-        _RTHP-SX-P @ _RTHP.CLAIMS-A @
-        _RTHP-SX-P @ _RTHP.STATIC-BASE-CLAIMS @ +
-            I RUCL-CLAIM-SIZE * + _RTHP-SX-CLAIM !
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW0@ _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ <>
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-SX-ITEM @ _RTE-STATIC.COL @ <> OR
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-ROW1@ _RTHP-SX-ITEM @ _RTE-STATIC.ROW @ 1+ <> OR
-        _RTHP-SX-CLAIM @ RUCL-CLAIM-COL1@
-            _RTHP-SX-ITEM @ _RTE-STATIC.COL @ _RTHP-SX-ITEM @ _RTE-STATIC.WIDTH @ + <> OR
-            IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ITEM @ _RTE-STATIC.KIND @ RTE-STATIC-IMAGE = IF
+            1 _RTHP-SX-IMAGES +!
+        THEN
+        \ The part shown lies on the surface; the rest may reach off it.
+        _RTHP-SX-SHOWN
+        _RTHP-SX-ROW @ 0< _RTHP-SX-COL @ 0< OR IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-ROW-END @ _RTHP-SX-P @ _RTHP.ROWS @ > IF 0 UNLOOP EXIT THEN
+        _RTHP-SX-COL-END @ _RTHP-SX-P @ _RTHP.COLS @ > IF 0 UNLOOP EXIT THEN
+        I _RTHP-SX-IN-ROOT? 0= IF
+            _RTHP-SX-OWN-CLAIM? 0= IF 0 UNLOOP EXIT THEN
+        THEN
         _RTHP-SX-ITEM @ _RTE-STATIC.LABEL-U @
         _RTHP-SX-ITEM @ _RTE-STATIC.VALUE-U @ + DUP
             _RTHP-SX-MAX @ MAX _RTHP-SX-MAX !
@@ -8391,6 +9585,7 @@ VARIABLE _RTHP-SX-U
         _RTHP-SX-ALIGNED @ _RTHP-U32+? 0= IF DROP 0 UNLOOP EXIT THEN
         _RTHP-SX-ALIGNED !
     LOOP
+    _RTHP-SX-NEXT @ _RTHP-SX-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
     _RTHP-SX-TEXT @ _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @ <>
     _RTHP-SX-LAST @ _RTHP-SX-P @ _RTHP.STATIC-LAST @ <> OR IF 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COUNT @
@@ -8400,8 +9595,12 @@ VARIABLE _RTHP-SX-U
     _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-MAX @ _RTHP-SX-MAX @ <> OR
     _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-LAST @ _RTHP-SX-LAST @ <> OR
     _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-OPS @
-        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <> OR IF 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE *
+        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <> OR
+    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-IMAGES @
+        _RTHP-SX-IMAGES @ <> OR IF 0 EXIT THEN
+    \ The neutral copy holds each status field's record and text; the
+    \ provider counts what a picture takes.
+    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ _RTHP-SX-IMAGES @ - RTE-STATIC-SIZE *
         _RTHP-SX-ALIGNED @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COPY @ <> IF 0 EXIT THEN
     _RTHP-SX-P @ _RTHP.STATIC-COUNT @ 0= IF
@@ -8692,7 +9891,9 @@ VARIABLE _RTHP-FX-UTF8
     _RTHP-X-P @ _RTHP-BASE-CLAIMS-DISJOINT? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP-STATICS-FIXED? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEM-VIEWS @
-        _RTHP-X-ITEM-VIEWS <> IF 0 EXIT THEN
+        RTE-CONTROL-ITEM-VIEW _RTHP-X-KIND-COUNT <> IF 0 EXIT THEN
+    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.DOCUMENT-CONTROLS @
+        RTE-CONTROL-DOCUMENT _RTHP-X-KIND-COUNT <> IF 0 EXIT THEN
 
     _RTHP-X-P @ _RTHP.CONTROL-COUNT @ IF
     _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.OWNER @
@@ -9183,6 +10384,11 @@ VARIABLE _RTHP-SR-NORMALIZED
             IF 0 UNLOOP EXIT THEN
         _RTHP-SR-OLD @ 56 + _RTHP-SR-NEW @ 56 + 0 _RTE-STATIC.SEVERITY 56 -
             _RTHP-IR-EQUAL? 0= IF 0 UNLOOP EXIT THEN
+        \ A picture shown through another clip has moved, as one moved has.
+        _RTHP-SR-OLD @ _RTE-STATIC.CLIP-X _RTHP-SR-NEW @ _RTE-STATIC.CLIP-X
+            RTE-STATIC-SIZE 0 _RTE-STATIC.CLIP-X - _RTHP-IR-EQUAL? 0= IF
+            0 UNLOOP EXIT
+        THEN
         _RTHP-SR-OLD @ _RTE-STATIC.ID @ 0=
         _RTHP-SR-NEW @ _RTE-STATIC.ID @ 0= OR IF 0 UNLOOP EXIT THEN
         _RTHP-SR-OLD @ _RTE-STATIC.REGION @ _RTHP-SR-A @ _RTHP-TB.REGION @ <>
@@ -9795,27 +11001,26 @@ VARIABLE _RTHP-D-REV-U
 VARIABLE _RTHP-D-REV-ACTIVE
 VARIABLE _RTHP-D-REV-PENDING
 
-\ STX1 and ITM1 both begin with the tag, version 1, a zero reserved field,
-\ and the content revision.
+\ STX1, ITM1 and DOC1 all begin with the tag, version 1, a zero reserved
+\ field, and the content revision.
+: _RTHP-D-CONTENT-HEADER  ( control -- tag header-bytes )
+    _RTE-CONTROL.KIND @ DUP RTE-CONTROL-ITEM-VIEW = IF
+        DROP USITM-TAG USITM-HEADER-SIZE EXIT
+    THEN
+    RTE-CONTROL-DOCUMENT = IF USDOC-TAG USDOC-HEADER-SIZE EXIT THEN
+    USSTX-TAG USSTX-CONTENT-HEADER-SIZE ;
+
 : _RTHP-D-CONTENT-REVISION?  ( control bank -- revision flag )
     _RTHP-D-REV-BANK ! _RTHP-D-REV-C !
     _RTHP-D-REV-C @ _RTE-CONTROL.CONTENT-U @ DUP _RTHP-D-REV-U !
-    _RTHP-D-REV-C @ _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF
-        USITM-HEADER-SIZE
-    ELSE
-        USSTX-CONTENT-HEADER-SIZE
-    THEN U< IF 0 0 EXIT THEN
+    _RTHP-D-REV-C @ _RTHP-D-CONTENT-HEADER NIP U< IF 0 0 EXIT THEN
     _RTHP-D-REV-C @ _RTE-CONTROL.CONTENT-A @ DUP _RTHP-D-REV-A !
     _RTHP-D-REV-U @
     _RTHP-D-REV-BANK @ _RTHP-D-SOURCE-A
     _RTHP-D-REV-BANK @ _RTHP-TB.SOURCE-TEXT-USED @
         _RTHP-TEXT-WITHIN? 0= IF 0 0 EXIT THEN
     _RTHP-D-REV-A @ _RTHP-D-BYTE-LE32@
-    _RTHP-D-REV-C @ _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF
-        USITM-TAG
-    ELSE
-        USSTX-TAG
-    THEN <> IF 0 0 EXIT THEN
+    _RTHP-D-REV-C @ _RTHP-D-CONTENT-HEADER DROP <> IF 0 0 EXIT THEN
     _RTHP-D-REV-A @ 4 + _RTHP-D-BYTE-LE16@ 1 <>
         IF 0 0 EXIT THEN
     _RTHP-D-REV-A @ 6 + _RTHP-D-BYTE-LE16@ IF 0 0 EXIT THEN
@@ -10859,12 +12064,15 @@ VARIABLE _RTHP-DS-OLD
 VARIABLE _RTHP-DS-NEW
 CREATE _RTHP-DS-RECORD-S RTE-STATIC-SIZE 7 + ALLOT
 : _RTHP-DS-RECORD ( -- record ) _RTHP-DS-RECORD-S 7 + -8 AND ;
-\ The status field in place INDEX shows something other than it did.
+\ The static in place INDEX shows something other than it did: a status
+\ field's severity, emphasis or text, or a picture's opacity, backdrop or
+\ resource, which share those places.
 : _RTHP-D-STATIC-CHANGED?  ( index -- flag )
     DUP _RTHP-D-ACTIVE @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * + _RTHP-DS-OLD !
     _RTHP-D-PENDING @ _RTHP-PACK-STATICS-A SWAP RTE-STATIC-SIZE * + _RTHP-DS-NEW !
     _RTHP-DS-OLD @ _RTE-STATIC.SEVERITY @ _RTHP-DS-NEW @ _RTE-STATIC.SEVERITY @ <>
     _RTHP-DS-OLD @ _RTE-STATIC.EMPHASIZED @ _RTHP-DS-NEW @ _RTE-STATIC.EMPHASIZED @ <>
+    OR _RTHP-DS-OLD @ _RTE-STATIC.RESOURCE @ _RTHP-DS-NEW @ _RTE-STATIC.RESOURCE @ <>
     OR IF -1 EXIT THEN
     _RTHP-DS-OLD @ _RTE-STATIC.LABEL-A _RTHP-D-ACTIVE @ _RTHP-D-STATIC-SPAN
     _RTHP-DS-NEW @ _RTE-STATIC.LABEL-A _RTHP-D-PENDING @ _RTHP-D-STATIC-SPAN
@@ -11347,9 +12555,21 @@ VARIABLE _RTHP-U-RESULT
         DROP 0 _RTHP-U-CLEAR-PLANE-BORROW EXIT
     THEN DROP ;
 
+\ Pictures sit outside the semantic aggregate, so a draw that shows any,
+\ or a frame that shows any or was built before the pixel size or a held
+\ picture changed, takes the full build.
+: _RTHP-U-PICTURES-QUIET?  ( -- flag )
+    _RTHP-U-P @ _RTHP.PICTURE-COUNT @ IF 0 EXIT THEN
+    _RTHP-U-P @ _RTHP-PICTURES-CURRENT? 0= IF 0 EXIT THEN
+    _RTHP-U-ACTIVE @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-U-ACTIVE @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * +
+            _RTE-STATIC.KIND @ RTE-STATIC-IMAGE = IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
 : _RTHP-UNCHANGED-CANDIDATE?  ( producer -- flag )
     _RTHP-U-P !
     _RTHP-U-ACTIVE? 0= IF 0 _RTHP-U-FINISH EXIT THEN
+    _RTHP-U-PICTURES-QUIET? 0= IF 0 _RTHP-U-FINISH EXIT THEN
     _RTHP-U-SNAPSHOT? 0= IF 0 _RTHP-U-FINISH EXIT THEN
     _RTHP-U-CLONE? 0= IF 0 _RTHP-U-FINISH EXIT THEN
     _RTHP-U-FENCE-PLAN? 0= IF 0 _RTHP-U-FINISH EXIT THEN
@@ -11837,6 +13057,7 @@ VARIABLE _RTHP-P-STATE
 
 : _RTHP-ACTIVE-DRAW-CURRENT?  ( producer -- flag )
     DUP RTHPX-CURRENT SWAP _RTHP-EXTENSION-CHECK 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-PICTURES-CURRENT? 0= IF DROP 0 EXIT THEN
     _RTHP.ACTIVE-DRAW @ DUP 0= IF DROP 0 EXIT THEN
     SCR-DRAW-GENERATION@ = ;
 
@@ -12062,6 +13283,22 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
     THEN
     _RTHP-P-P @ _RTHP-RECAPTURE-START ;
 
+\ Frames run between an upload's frames, taking turns with them, so an
+\ upload never holds up the screen.  While one of the job's frames awaits
+\ its answer the engine takes no update, so no frame is prepared.  The
+\ pixel question and a drop are one short exchange each: a frame waits for
+\ them too, so none is built at a pixel size about to change or shows a
+\ picture being given back.  OK when a frame may be prepared.
+: _RTHP-LANE-HOLDS-FRAMES  ( producer -- scb-status )
+    DUP _RTHP.LANE-JOB @ DUP 0= IF 2DROP SCB-S-OK EXIT THEN
+    DUP RTE-JOB-PIXELS = SWAP RTE-JOB-DROP = OR IF
+        DROP SCB-S-WOULD-BLOCK EXIT
+    THEN
+    _RTHP.FACADE @ RTE-JOB@
+    DUP RTE-S-OK <> IF >R 2DROP 2DROP R> _RTHP-RTE>SCB EXIT THEN
+    DROP 2DROP DROP
+    RTE-JOB-AWAITING = IF SCB-S-WOULD-BLOCK ELSE SCB-S-OK THEN ;
+
 : RTHP-PREPARE  ( cols rows generation producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-P-P ! _RTHP-P-GEN ! _RTHP-P-ROWS ! _RTHP-P-COLS !
@@ -12077,6 +13314,7 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
         _RTHP-P-P @ _RTHP.TARGET-ACTIVE @ IF SCB-S-WOULD-BLOCK ELSE SCB-S-OK THEN
         EXIT
     THEN
+    _RTHP-P-P @ _RTHP-LANE-HOLDS-FRAMES DUP SCB-S-OK <> IF EXIT THEN DROP
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-START = IF
         _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
             _RTHP-P-P @ _RTHP-PREPARE-START

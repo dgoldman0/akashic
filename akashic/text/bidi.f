@@ -31,10 +31,17 @@
 \        BIDI-RESOLVE applies L1 with the paragraph's end as the only
 \        line end; a caller breaking the paragraph into lines applies
 \        it at each line's end with this word.
+\    BIDI-INERT ( addr u -- )
+\        Make the explicit embeddings, overrides and isolates in valid
+\        UTF-8 text inert stand-ins, in place, as text from outside an
+\        application is published: each is invisible, reorders nothing,
+\        and segments and joins as the control does, as a layout that
+\        ignores explicit controls (TROW-F-UNTRUSTED) treats it.
 \
 \  The algorithm keeps its scratch state in module variables, so the
 \  resolving and reordering words are guarded in GUARDED builds.  They
-\  call only the pure UP- lookups.  BIDI-TRAILING? is pure.
+\  call only the pure UP- lookups.  BIDI-TRAILING? and BIDI-INERT are
+\  pure.
 \ =================================================================
 
 PROVIDED akashic-bidi
@@ -694,7 +701,35 @@ VARIABLE _BD-RO-LO
     _BD-RO-M @ ;
 
 \ =====================================================================
-\  §9 — Guard (Concurrency Safety)
+\  §9 — Inert stand-ins for untrusted text
+\ =====================================================================
+\
+\  An embedding or override (U+202A..U+202E) becomes U+200B and an
+\  isolate (U+2066..U+2069) U+180E, which, unlike U+200B, does not let
+\  Arabic letters join across it.  The text is valid UTF-8, so an 0xE2
+\  always starts a scalar, and each stand-in is three bytes too, so
+\  offsets into the text and style runs over it still fit.
+
+\ _BD-CONTROL ( addr -- kind )   1 when the three bytes there encode an
+\   embedding or override, 2 for an isolate, and 0 otherwise.
+: _BD-CONTROL  ( addr -- kind )
+    DUP C@ 0xE2 <> IF DROP 0 EXIT THEN
+    DUP 1+ C@ DUP 0x80 = IF DROP 2 + C@ 0xAA 0xAF WITHIN 1 AND EXIT THEN
+    0x81 = IF 2 + C@ 0xA6 0xAA WITHIN 2 AND EXIT THEN
+    DROP 0 ;
+
+: BIDI-INERT  ( addr u -- )
+    DUP 3 < IF 2DROP EXIT THEN
+    2 - 0 DO
+        DUP I + DUP _BD-CONTROL CASE
+            1 OF 0xE2 OVER C!  0x80 OVER 1+ C!  0x8B SWAP 2 + C! ENDOF
+            2 OF 0xE1 OVER C!  0xA0 OVER 1+ C!  0x8E SWAP 2 + C! ENDOF
+            NIP
+        ENDCASE
+    LOOP DROP ;
+
+\ =====================================================================
+\  §10 — Guard (Concurrency Safety)
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]

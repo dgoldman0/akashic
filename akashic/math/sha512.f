@@ -1,8 +1,9 @@
 \ =====================================================================
-\  sha512.f - Checked hardware SHA-512 one-shot operations
+\  sha512.f - Checked hardware SHA-512 and SHA-384 one-shot operations
 \ =====================================================================
-\  Megapad-64 / KDOS Forth      Prefix: SHA512-
-\  Depends on: checked BIOS SHA-512 INIT/UPDATE/FINAL/CLEAR words
+\  Megapad-64 / KDOS Forth      Prefix: SHA512-, SHA384-
+\  Depends on: checked BIOS SHA-512 INIT/UPDATE/FINAL/CLEAR words, and
+\              SHA384-INIT/FINAL
 \
 \  The BIOS owns the per-core streaming context.  This library exposes no
 \  caller-spanning streaming aliases: each public hash validates all caller
@@ -20,6 +21,13 @@
 \    SHA512->HEX          ( src dst -- n )
 \    SHA512-.             ( addr -- )
 \    SHA512-COMPARE       ( a b -- flag )
+\    SHA384-LEN           ( -- 48 )
+\    SHA384-HASH          ( src len dst -- status )
+\
+\  SHA-384 is SHA-512 from its own initial value, truncated to 48 bytes.
+\  The BIOS runs it in the calling core's SHA-512 context, so SHA384-HASH
+\  takes this unit's guard, checks as SHA512-HASH does, and returns the
+\  same statuses.
 \
 \  Status:
 \    0 OK, 1 STATE, 2 RANGE, 3 ALIAS, 4 LENGTH-OVERFLOW,
@@ -39,6 +47,7 @@ REQUIRE ../utils/memory-span.f
 
 64  CONSTANT SHA512-LEN
 128 CONSTANT SHA512-HEX-LEN
+48  CONSTANT SHA384-LEN
 
 0 CONSTANT SHA512-S-OK
 1 CONSTANT SHA512-S-STATE
@@ -383,3 +392,78 @@ GUARD-BLOCKING _sha512-guard
     THEN
     DROP
     ['] _S512-UNIT-3 CRYPTO-ACC-WITH-TRANSACTION ;
+
+\ =====================================================================
+\  SHA-384
+\ =====================================================================
+\  SHA384-INIT and SHA384-FINAL bracket SHA512-UPDATE in the core's one
+\  SHA-512 context, which SHA512-CLEAR clears whichever digest it holds.
+\  The single-span path mirrors SHA512-HASH's under the same guard; only
+\  INIT, FINAL and the destination's length differ.
+
+: _S384-PREFLIGHT  ( src len dst -- status )
+    >R
+    2DUP SHA512-CALLER-SPAN-STATUS ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    R@ SHA384-LEN SHA512-CALLER-SPAN-STATUS ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    2DUP R@ SHA384-LEN MSPAN-OVERLAP? IF
+        2DROP R> DROP SHA512-S-ALIAS EXIT
+    THEN
+    2DROP R> DROP SHA512-S-OK ;
+
+: _S384-PREFIX  ( src len dst -- dst bios-status )
+    >R
+    SHA384-INIT
+    DUP IF
+        >R 2DROP R> R> SWAP EXIT
+    THEN
+    DROP
+    SHA512-UPDATE
+    R> SWAP ;
+
+: _S384-FINISH  ( dst bios-status -- status )
+    _S512-BIOS>STATUS
+    DUP IF
+        NIP
+        _S512-CLEAR-AFTER-FAILURE
+        _sha512-guard GUARD-RELEASE
+        EXIT
+    THEN
+    DROP
+
+    ['] SHA384-FINAL CATCH
+    ?DUP IF
+        >R DROP
+        _S512-CLEAR-STATUS DROP
+        _sha512-guard GUARD-RELEASE
+        R> THROW
+    THEN
+    _S512-BIOS>STATUS
+    DUP IF
+        _S512-CLEAR-AFTER-FAILURE
+        _sha512-guard GUARD-RELEASE
+        EXIT
+    THEN
+    _sha512-guard GUARD-RELEASE ;
+
+: _S384-UNIT  ( src len dst -- status )
+    _sha512-guard GUARD-ACQUIRE
+    ['] _S384-PREFIX CATCH
+    ?DUP IF
+        >R _S512-DROP3 R> DROP
+        SHA512-S-CRYPTO _S512-CLEAR-AFTER-FAILURE
+        _sha512-guard GUARD-RELEASE
+        EXIT
+    THEN
+    _S384-FINISH ;
+
+: SHA384-HASH  ( src len dst -- status )
+    _S512-3DUP _S384-PREFLIGHT
+    DUP IF
+        >R _S512-DROP3 R> EXIT
+    THEN
+    DROP
+    ['] _S384-UNIT CRYPTO-ACC-WITH-TRANSACTION ;

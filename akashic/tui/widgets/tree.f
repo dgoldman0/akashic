@@ -3,7 +3,8 @@
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: TREE- / _TREE-
 \  Depends on: akashic-tui-widget, akashic-tui-draw, akashic-tui-region,
-\              akashic-tui-keys, akashic-tui-semantic-collections
+\              akashic-tui-keys, akashic-tui-semantic-collections,
+\              akashic-bidi
 \
 \  Collapsible tree display for hierarchical data.  The widget does
 \  NOT own the tree data — it discovers the structure through five
@@ -25,6 +26,8 @@
 \  Expansion is the set of expanded keys, so it follows each node however
 \  the rows above it change, and the selection is the selected node's key.
 \  The set is a sorted array that grows as needed; there is no node limit.
+\  TREE-EXPAND-KEY adds a key whether or not its node is shown, so an
+\  owner can open branches below closed ones.
 \
 \  Up/Down move the selection, Right expands, Left collapses or moves to
 \  the parent, and Enter opens the selection: the open callback runs if
@@ -33,9 +36,12 @@
 \  collapses it.  A renderer's item events do the same by key.
 \
 \  The tree publishes its visible rows as a renderer-neutral TREE item
-\  view (semantic-collections.f) for a selected rich renderer.
+\  view (semantic-collections.f) for a selected rich renderer.  When its
+\  labels come from outside the application (TREE-UNTRUSTED!), they are
+\  drawn as DRW-TEXT-UNTRUSTED draws and published with their direction
+\  controls inert (BIDI-INERT), as an untrusted list's are.
 \
-\  Descriptor layout (header + 15 cells = 160 bytes):
+\  Descriptor layout (header + 16 cells = 168 bytes):
 \   +40  root          Root node token
 \   +48  children-xt   Callback: first child
 \   +56  next-xt       Callback: next sibling
@@ -51,6 +57,7 @@
 \   +136 expanded-cap  Capacity of expanded-a, in keys
 \   +144 instance      Nonzero allocation-lifetime instance token
 \   +152 context       Caller's context cell
+\   +160 untrusted     Labels come from outside the application
 \ =================================================================
 
 PROVIDED akashic-tui-tree
@@ -60,6 +67,7 @@ REQUIRE ../region.f
 REQUIRE ../draw.f
 REQUIRE ../keys.f
 REQUIRE ../semantic-collections.f
+REQUIRE ../../text/bidi.f
 REQUIRE ../../utils/memory-span.f
 
 CREATE _TREE-OWNED-START
@@ -90,7 +98,8 @@ VARIABLE _TREE-OWNED-LIMIT
 136 CONSTANT _TREE-O-XCAP
 144 CONSTANT _TREE-O-INSTANCE
 152 CONSTANT _TREE-O-CONTEXT
-160 CONSTANT _TREE-DESC-SZ
+160 CONSTANT _TREE-O-UNTRUSTED
+168 CONSTANT _TREE-DESC-SZ
 
 2   CONSTANT _TREE-INDENT
 16  CONSTANT _TREE-X-FIRST-CAP
@@ -201,6 +210,7 @@ VARIABLE _TREE-FOUND  \ short-circuit flag
 : _TREE-LABEL  ( node -- addr len )  _TW-W @ _TREE-O-LABEL-XT + @ EXECUTE ;
 : _TREE-LEAF?  ( node -- flag )  _TW-W @ _TREE-O-LEAF-XT + @ EXECUTE ;
 : _TREE-KEY  ( parent-key node -- key )  _TW-W @ _TREE-O-KEY-XT + @ EXECUTE ;
+: _TREE-UNTRUSTED?  ( w -- flag )  _TREE-O-UNTRUSTED + @ 0<> ;
 
 \ TREE-WALK-CONTEXT ( -- context )
 \   While a callback runs, the calling tree's context cell.
@@ -326,7 +336,8 @@ VARIABLE _TREE-VH
     THEN                                          ( n k col srow cp )
     OVER 3 PICK DRW-CHAR                          ( n k col srow )
     SWAP 2 + ROT DROP                             ( n srow col+2 )
-    ROT _TREE-LABEL 2SWAP DRW-TEXT ;
+    ROT _TREE-LABEL 2SWAP
+    _TW-W @ _TREE-UNTRUSTED? IF DRW-TEXT-UNTRUSTED ELSE DRW-TEXT THEN ;
 
 : _TREE-DRAW  ( widget -- )
     DUP _TREE-SETTLE
@@ -592,6 +603,23 @@ VARIABLE _TREE-CV-PKEY
 VARIABLE _TREE-CV-ROW
 VARIABLE _TREE-CV-STATE
 
+VARIABLE _TREE-CF-N
+
+\ A label as published: an untrusted tree's with its direction controls
+\ inert stand-ins, as its text is drawn.
+: _TREE-CAPTURE-LABEL  ( addr len -- )
+    _TREE-C-W @ _TREE-UNTRUSTED? 0= IF
+        0 _TREE-C-BUILDER @ USCOL-ITEMS-FIELD DROP EXIT
+    THEN
+    2DUP 0 UTF8-SAFE-BYTES DUP _TREE-CF-N !
+    _TREE-C-BUILDER @ USCOL-ITEMS-FIELD-BEGIN DROP      ( a u dst|0 )
+    ?DUP IF
+        DUP >R 0 SWAP UTF8-SAFE-COPY  R> _TREE-CF-N @ BIDI-INERT
+    ELSE
+        2DROP
+    THEN
+    _TREE-C-BUILDER @ USCOL-ITEMS-FIELD-END DROP ;
+
 \ The builder latches its first failure, which USCOL-BUILDER-FINISH
 \ reports, so the visitor does not stop on one.
 : _TREE-CAPTURE-CB  ( node depth key parent-key row -- )
@@ -613,8 +641,7 @@ VARIABLE _TREE-CV-STATE
     _TREE-CV-KEY @ _TREE-CV-PKEY @ _TREE-CV-ROW @ _TREE-CV-DEPTH @
     _TREE-CV-STATE @ USCOL-IV-ITEM
         _TREE-C-BUILDER @ USCOL-ITEMS-ITEM-BEGIN DROP
-    _TREE-CV-NODE @ _TREE-LABEL 0
-        _TREE-C-BUILDER @ USCOL-ITEMS-FIELD DROP
+    _TREE-CV-NODE @ _TREE-LABEL _TREE-CAPTURE-LABEL
     _TREE-C-BUILDER @ USCOL-ITEMS-ITEM-END DROP ;
 
 : _TREE-CAPTURE-PREFLIGHT?  ( root destination capacity builder widget -- flag )
@@ -731,6 +758,12 @@ VARIABLE _TREE-CV-STATE
 : TREE-CONTEXT!  ( context w -- )  _TREE-O-CONTEXT + ! ;
 : TREE-CONTEXT@  ( w -- context )  _TREE-O-CONTEXT + @ ;
 
+\ TREE-UNTRUSTED! ( flag w -- )
+\   Whether the labels come from outside the application, as a document's
+\   or the network's text does: drawn as DRW-TEXT-UNTRUSTED draws, and
+\   published with their direction controls inert.
+: TREE-UNTRUSTED!  ( flag w -- )  SWAP 0<> SWAP _TREE-O-UNTRUSTED + ! ;
+
 : TREE-EXPAND  ( w node -- )
     OVER SWAP _TREE-AT-NODE IF _TREE-EXPAND-FOUND ELSE DROP THEN ;
 
@@ -739,6 +772,14 @@ VARIABLE _TREE-CV-STATE
 
 : TREE-TOGGLE  ( w node -- )
     OVER SWAP _TREE-AT-NODE IF _TREE-TOGGLE-FOUND ELSE DROP THEN ;
+
+\ TREE-EXPAND-KEY ( w key -- )
+\   Expand the node with KEY whether or not it is shown, so it shows its
+\   children whenever it is shown.  A key that names no branch shows
+\   nothing more.
+: TREE-EXPAND-KEY  ( w key -- )
+    DUP 0= IF 2DROP EXIT THEN
+    OVER _TREE-XADD DROP WDG-DIRTY ;
 
 \ TREE-EXPANDED? ( w node -- flag )   Is a shown node expanded?
 : TREE-EXPANDED?  ( w node -- flag )
@@ -809,9 +850,11 @@ GUARD _tree-guard
 ' TREE-ON-OPEN     CONSTANT _tree-onopen-xt
 ' TREE-CONTEXT!    CONSTANT _tree-context-s-xt
 ' TREE-CONTEXT@    CONSTANT _tree-context-g-xt
+' TREE-UNTRUSTED!  CONSTANT _tree-untrusted-xt
 ' TREE-EXPAND      CONSTANT _tree-exp-xt
 ' TREE-COLLAPSE    CONSTANT _tree-col-xt
 ' TREE-TOGGLE      CONSTANT _tree-tog-xt
+' TREE-EXPAND-KEY  CONSTANT _tree-exp-key-xt
 ' TREE-EXPANDED?   CONSTANT _tree-expq-xt
 ' TREE-EXPAND-ALL  CONSTANT _tree-exall-xt
 ' TREE-COLLAPSE-ALL CONSTANT _tree-colall-xt
@@ -830,9 +873,11 @@ GUARD _tree-guard
 : TREE-ON-OPEN     _tree-onopen-xt _tree-guard WITH-GUARD ;
 : TREE-CONTEXT!    _tree-context-s-xt _tree-guard WITH-GUARD ;
 : TREE-CONTEXT@    _tree-context-g-xt _tree-guard WITH-GUARD ;
+: TREE-UNTRUSTED!  _tree-untrusted-xt _tree-guard WITH-GUARD ;
 : TREE-EXPAND      _tree-exp-xt    _tree-guard WITH-GUARD ;
 : TREE-COLLAPSE    _tree-col-xt    _tree-guard WITH-GUARD ;
 : TREE-TOGGLE      _tree-tog-xt    _tree-guard WITH-GUARD ;
+: TREE-EXPAND-KEY  _tree-exp-key-xt _tree-guard WITH-GUARD ;
 : TREE-EXPANDED?   _tree-expq-xt   _tree-guard WITH-GUARD ;
 : TREE-EXPAND-ALL  _tree-exall-xt  _tree-guard WITH-GUARD ;
 : TREE-COLLAPSE-ALL _tree-colall-xt _tree-guard WITH-GUARD ;

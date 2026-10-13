@@ -7,12 +7,13 @@ The feature requires CORE alone. A status-only profile may have no glyph-run,
 instrument, or control capability. Its minimum outbound payload is 96 bytes;
 the minimum retained transaction limit is 296 bytes.
 
-The 176-byte `RTE-STATIC` / `RTAPT-STATIC` descriptor contains 22 cells:
+The 208-byte `RTE-STATIC` / `RTAPT-STATIC` descriptor contains 26 cells:
 owner, generation, ID, kind, visible, z, region, parent, row, column, height,
 width, root height, root width, label columns, severity, emphasized, label
-address/length, value address/length, and reserved. The initial kind is
-`*-STATIC-STATUS-FIELD = 1`. Parent and reserved are zero. Height is exactly
-one, width is positive, and visible/emphasized are canonical `0` or `-1`.
+address/length, value address/length, reserved, and an IMAGE's four clip
+cells. The initial kind is `*-STATIC-STATUS-FIELD = 1`. Parent, reserved and
+the clip cells are zero. Height is exactly one, width is positive, and
+visible/emphasized are canonical `0` or `-1`.
 Severity is 0 through 4. A nonempty label requires a positive label split;
 a nonempty value requires at least one remaining column.
 
@@ -22,7 +23,7 @@ boundary. Hidden status fields retain both strings and consume the same
 object and text quotas as visible ones.
 
 `RTE-STATIC-DEFINE` and `RTE-STATIC-REPLACE` dispatch the descriptor through
-independent facade callbacks. Provider capture owns 176 fixed bytes plus
+independent facade callbacks. Provider capture owns 208 fixed bytes plus
 `align8(label bytes + value bytes)`; source pointers are not retained. A
 status consumes one object, one operation, and exactly the combined UTF-8
 bytes. Its retained payload is `96 + text bytes`; the complete frame is
@@ -52,6 +53,35 @@ not revisit caller items or strings. Concrete capture, copied-record audit,
 and replay independently enforce the negotiated feature and owned bounds.
 The Desk producer may choose full owner replacement for changed status
 content; unchanged status participates in ordinary idle reuse.
+
+## IMAGE statics
+
+A picture is the second static kind, `*-STATIC-IMAGE = 2`, in the same
+208-byte descriptor. It has no text: its label and value cells are zero, and
+its kind-specific cells take the places of label columns (FIT: 0 stretch,
+1 contain, 2 cover), severity (OPACITY, 0 through 255), emphasized
+(BACKDROP, canonical `0` or `-1`) and reserved (RESOURCE, nonzero, a resource
+its owner generation has committed). Its height is any positive count. Its
+clip cells (CLIP-X, CLIP-Y, CLIP-COLS, CLIP-ROWS) name the part of its
+rectangle it shows, in cells from its origin with positive extents inside it,
+or are all zero for the whole: a picture partly scrolled out of a view
+keeps its whole rectangle and shows the part in view. It consumes one object
+and one operation and no UTF-8, and needs `RTE-F-IMAGE`.
+
+The admission summary counts image statics separately in STATIC-IMAGES at
+offset 456, which grows the hybrid summary to 464 bytes; the family summary
+carries the same count at 544, growing it to 552. STATIC-TEXT, -ALIGNED,
+-MAX and -COPY then describe the status fields alone, so copy bytes equal
+`208 * (count - images) + aligned text`, and the provider sizes each image
+itself. APT-1 captures an image as its own IMAGE object: 160 copied bytes, a
+96-byte payload and a 136-byte frame, published with `PT-IMAGE-DEFINE` or
+`PT-IMAGE-REPLACE`. Every IMAGE goes with RETAINED-1's `CLIP`, its whole
+rectangle when it shows all of it, so each frame has one exact size and a
+transaction's retained bytes follow from the IMAGE count alone. The APT-1
+bridge builds that record from the neutral descriptor, mapping the fit
+explicitly and copying the clip. A family of statics requires
+`RTE-F-STATUS-FIELDS` when it holds a status field and `RTE-F-IMAGE` when it
+holds an image.
 
 The ordinary OBJECT ledger retains aggregate object and text reservations,
 not per-object historical strings. Direct STATIC-REPLACE uses that existing

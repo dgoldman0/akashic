@@ -90,7 +90,7 @@
 \  Prefix: LST- (public), _LST- (internal)
 \  Provider: akashic-tui-list
 \  Dependencies: widget.f, draw.f, keys.f, semantic-collections.f,
-\                text-lines.f
+\                text-lines.f, bidi.f
 
 PROVIDED akashic-tui-list
 
@@ -101,6 +101,7 @@ REQUIRE ../semantic-collections.f
 REQUIRE ../style-palette.f
 REQUIRE ../../text/text-style.f
 REQUIRE ../../text/text-lines.f
+REQUIRE ../../text/bidi.f
 REQUIRE ../../utils/memory-span.f
 
 CREATE _LST-OWNED-START
@@ -1153,40 +1154,14 @@ VARIABLE _LST-CR-F
 \ A field is published as CELL shows it (UTF8-SAFE-COPY), a wrapping
 \ field with its line feeds, and in LST-UNTRUSTED mode each explicit
 \ embedding, override or isolate as an inert stand-in that CELL's
-\ untrusted layout treats alike.  Both keep one scalar for each scalar of
-\ the source, so style runs taken from it still fit.
+\ untrusted layout treats alike (BIDI-INERT).  Both keep one scalar for
+\ each scalar of the source, so style runs taken from it still fit.
 VARIABLE _LST-CF-A
 VARIABLE _LST-CF-U
 VARIABLE _LST-CF-N
 VARIABLE _LST-CF-COL
 VARIABLE _LST-CF-DST
 VARIABLE _LST-CF-KEEP
-
-\ _LST-BIDI-CONTROL ( addr -- kind )   1 when the three bytes there
-\   encode an embedding or override (U+202A..U+202E), 2 for an isolate
-\   (U+2066..U+2069), and 0 otherwise.
-: _LST-BIDI-CONTROL  ( addr -- kind )
-    DUP C@ 0xE2 <> IF DROP 0 EXIT THEN
-    DUP 1+ C@ DUP 0x80 = IF DROP 2 + C@ 0xAA 0xAF WITHIN 1 AND EXIT THEN
-    0x81 = IF 2 + C@ 0xA6 0xAA WITHIN 2 AND EXIT THEN
-    DROP 0 ;
-
-\ _LST-INERT-BIDI ( -- )
-\   Make the published field's direction controls stand-ins that are
-\   invisible, reorder nothing, and segment and join as the controls do,
-\   as CELL's untrusted layout treats them: an embedding or override
-\   becomes U+200B and an isolate U+180E, which, unlike U+200B, does not
-\   let Arabic letters join across it.  The field is valid UTF-8, so an
-\   0xE2 always starts a scalar, and each stand-in is three bytes too.
-: _LST-INERT-BIDI  ( -- )
-    _LST-CF-N @ 3 < IF EXIT THEN
-    _LST-CF-N @ 2 - 0 DO
-        _LST-CF-DST @ I + DUP _LST-BIDI-CONTROL CASE
-            1 OF 0xE2 OVER C!  0x80 OVER 1+ C!  0x8B SWAP 2 + C! ENDOF
-            2 OF 0xE1 OVER C!  0xA0 OVER 1+ C!  0x8E SWAP 2 + C! ENDOF
-            NIP
-        ENDCASE
-    LOOP ;
 
 : _LST-C-RUN  ( start length meaning -- ok? )
     _LST-C-BUILDER @ USCOL-ITEMS-FIELD-RUN DROP -1 ;
@@ -1200,7 +1175,7 @@ VARIABLE _LST-CF-KEEP
     ?DUP IF
         DUP _LST-CF-DST !
         >R _LST-CF-A @ _LST-CF-U @ _LST-CF-KEEP @ R> UTF8-SAFE-COPY
-        _LST-C-W @ _LST-UNTRUSTED? IF _LST-INERT-BIDI THEN
+        _LST-C-W @ _LST-UNTRUSTED? IF _LST-CF-DST @ _LST-CF-N @ BIDI-INERT THEN
     THEN
     _LST-CF-A @ _LST-CF-U @ _LST-CR-I @ _LST-CF-COL @ _LST-C-W @
     _LST-STYLE-FIELD IF

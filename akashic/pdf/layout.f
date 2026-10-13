@@ -1,0 +1,1079 @@
+\ =================================================================
+\  layout.f  —  a page's runs of text as a document's blocks
+\ =================================================================
+\  Megapad-64 / KDOS Forth      Prefix: PDF-LAYOUT-, PDF-BLOCK- (public),
+\                               _PDLY- (private)
+\  Depends on: pdf/filter.f, pdf/page.f, pdf/content.f, pdf/font.f,
+\              pdf/struct.f, pdf/navigate.f, text/text-style.f,
+\              media/document.f
+\
+\  Public API:
+\   PDF-LAYOUT-SIZE     ( -- bytes )                     a layout's record
+\   PDF-LAYOUT-READ     ( page content struct links layout -- status )
+\   PDF-LAYOUT-FREE     ( layout -- )
+\   PDF-LAYOUT-BLOCKS   ( layout -- n )
+\   PDF-LAYOUT-BLOCK    ( i layout -- block )
+\   PDF-BLOCK-KIND      ( block -- kind level )
+\   PDF-BLOCK-ITEM      ( block -- kind number width )
+\   PDF-BLOCK-TOP       ( block -- y )
+\   PDF-BLOCK-LOW       ( block -- y )
+\   PDF-BLOCK-ACROSS    ( block -- x0 x1 )
+\   PDF-BLOCK-SIZE      ( block -- size )
+\   PDF-BLOCK-TEXT      ( block layout -- a u )
+\   PDF-BLOCK-MEANINGS  ( block layout -- a )
+\   PDF-BLOCK-FIGURE    ( block -- num w h )
+\   PDF-LAYOUT-LINKS    ( layout -- n )
+\   PDF-LAYOUT-LINK     ( i layout -- block offset length link )
+\
+\  PDF-LAYOUT-READ lays out the runs PDF-CONTENT-READ read from PAGE as
+\  blocks of a document, in the order the content shows them, which is
+\  the order producers write text in.  On a tagged page, STRUCT (from
+\  pdf/struct.f, or 0) says which block each run belongs to: a block is
+\  an element's text, a heading or code when its element says so, in the
+\  list item or quote around it, and a list item's label gives its
+\  number; lines of code in elements one after another are one block.  Runs that follow on one baseline,
+\  moving right, make a line, with a space where the gap between them is
+\  a word's; artifacts are left out.  Lines make a paragraph while they
+\  keep its size and its kind of font, follow at its line spacing, and
+\  neither indent its first line nor follow a short last line.  A word
+\  split by a hyphen at a line's end is joined.
+\
+\  A page may set its text in columns.  Where body lines lie side by side
+\  on one baseline, the space between a line and the nearest beside it on
+\  its left is a gutter, and the leftmost start right of a gutter is a
+\  column's start; a line that starts left of a gutter and runs past that
+\  start, such as a title over both columns, spans them.  A line is short
+\  against the end of its column: the furthest end of the lines that
+\  overlap it across and span no gutter.  A paragraph whose last line
+\  runs to its column's end goes on at the top of the next column, when
+\  the line there starts at the column's start and is no bolder.
+\
+\  A picture the content draws (pdf/content.f) is a figure, a block of
+\  its own, DOC-B-FIGURE, where it falls among the text: before the first
+\  line of runs read after it.  Pictures drawn as artifacts, or smaller
+\  than the body text's size either way, are left out.  PDF-BLOCK-FIGURE
+\  gives a figure's picture object and the size it is drawn at; its text
+\  is empty.
+\
+\  A link (pdf/navigate.f, from LINKS, or 0 for none) covers the text of
+\  the runs its rectangle meets: a run whose height a third of its size
+\  above its baseline lies in the rectangle, and whose span across meets
+\  it, gives the bytes the rectangle's part of the span takes, in
+\  proportion, whole characters without spaces at either end.  Those
+\  bytes keep their link through the lines and blocks the run's text goes
+\  into, and PDF-LAYOUT-LINK gives each block's: the block, where in its
+\  text, how long, and the link's index.
+\
+\  A paragraph of up to three lines whose text is larger than the page's
+\  body text, or a single bold line of it, is a heading: level 1 at 1.6
+\  times the body's size, 2 at 1.3, 3 at 1.15, 4 for a bold line.  Lines
+\  in a fixed-pitch font make code, a line each.  A paragraph that starts
+\  with a bullet, or a number or letter followed by "." or ")", is a list
+\  item, its marker kept as the item's kind, number and width.  A line of
+\  digits alone that is the page's topmost or lowest is its number, left
+\  out.
+\
+\  Kinds and item kinds are the document's (media/document.f), and a
+\  block's text has a meaning a byte (text/text-style.f): strong for bold
+\  text, emphasis for italic, code for fixed-pitch text within prose.
+\
+\  Each block keeps where it lies on the page, which a destination's
+\  place is found by: its top (its first line's baseline plus its size);
+\  its low, the middle of its lowest line, a third of its size above its
+\  baseline; how far across its lines reach; and its first line's size.
+\  A figure's top and reach are its picture's box, its low the box's
+\  middle, and its size 0.  Points are in the page's default space, 16.16.
+\
+\  Memory comes from the content's memory source.  One call runs at a
+\  time.
+\ =================================================================
+
+PROVIDED akashic-pdf-layout
+
+REQUIRE filter.f
+REQUIRE page.f
+REQUIRE content.f
+REQUIRE font.f
+REQUIRE struct.f
+REQUIRE navigate.f
+REQUIRE ../text/text-style.f
+REQUIRE ../media/document.f
+
+\ The record: its memory source, the blocks, their text and meanings, and
+\ the links' places in it.
+: _PDLY.MSRC    ( l -- a )        ;
+: _PDLY.BLOCKS  ( l -- buf )  8 + ;
+: _PDLY.TEXT    ( l -- buf ) 32 + ;
+: _PDLY.MEAN    ( l -- buf ) 56 + ;
+: _PDLY.LINKS   ( l -- buf ) 80 + ;
+104 CONSTANT PDF-LAYOUT-SIZE
+
+\ A link's place: its block, where in the block's text, how long, and the
+\ link.
+32 CONSTANT _PDLY-PLACE
+
+\ A block: kind, level, item kind, number and width, top, text offset
+\ and length; a figure's picture object, width and height; low, left,
+\ right and size.
+120 CONSTANT _PDLY-BLOCK
+
+: PDF-LAYOUT-BLOCKS  ( layout -- n )  _PDLY.BLOCKS PDF-BUF.U @ _PDLY-BLOCK / ;
+: PDF-LAYOUT-BLOCK   ( i layout -- block )  _PDLY.BLOCKS PDF-BUF.A @ SWAP _PDLY-BLOCK * + ;
+: PDF-BLOCK-KIND     ( block -- kind level )  DUP @ SWAP 8 + @ ;
+: PDF-BLOCK-ITEM     ( block -- kind number width )  DUP 16 + @ OVER 24 + @ ROT 32 + @ ;
+: PDF-BLOCK-TOP      ( block -- y )  40 + @ ;
+: PDF-BLOCK-TEXT     ( block layout -- a u )  _PDLY.TEXT PDF-BUF.A @ OVER 48 + @ + SWAP 56 + @ ;
+: PDF-BLOCK-MEANINGS ( block layout -- a )  _PDLY.MEAN PDF-BUF.A @ SWAP 48 + @ + ;
+: PDF-BLOCK-FIGURE   ( block -- num w h )  DUP 64 + @ OVER 72 + @ ROT 80 + @ ;
+: PDF-BLOCK-LOW      ( block -- y )  88 + @ ;
+: PDF-BLOCK-ACROSS   ( block -- x0 x1 )  DUP 96 + @ SWAP 104 + @ ;
+: PDF-BLOCK-SIZE     ( block -- size )  112 + @ ;
+: PDF-LAYOUT-LINKS   ( layout -- n )  _PDLY.LINKS PDF-BUF.U @ _PDLY-PLACE / ;
+: PDF-LAYOUT-LINK    ( i layout -- block offset length link )
+    _PDLY.LINKS PDF-BUF.A @ SWAP _PDLY-PLACE * +
+    DUP @ OVER 8 + @ 2 PICK 16 + @ 3 ROLL 24 + @ ;
+
+VARIABLE _PDLY-L     \ the layout
+VARIABLE _PDLY-ST    \ the page's structure, or 0
+VARIABLE _PDLY-C     \ the content
+VARIABLE _PDLY-MS    \ the memory source
+VARIABLE _PDLY-LK    \ the page's links, or 0
+
+: _PDLY-APPEND  ( a u buf -- ok? )  _PDLY-MS @ PDF-BUF-APPEND ;
+
+\ Add U bytes of M to a buffer.
+: _PDLY-FILL+  ( u m buf -- ok? )
+    >R OVER R@ PDF-BUF.U @ + R@ _PDLY-MS @ PDF-BUF-GROW 0= IF 2DROP R> DROP 0 EXIT THEN
+    OVER R@ PDF-BUF.A @ R@ PDF-BUF.U @ + SWAP ROT FILL
+    R> PDF-BUF.U +!  -1 ;
+
+\ Buffers kept while laying out: the lines, their text and meanings, a
+\ count of sizes, where each run's text starts in the lines' text (-1 for
+\ none), the links' ranges of the lines' text, a line's links, the page's
+\ gutters, and its body lines by baseline.
+9 CONSTANT _PDLY-NBUFS
+CREATE _PDLY-BUFS-S _PDLY-NBUFS 24 * 7 + ALLOT
+: _PDLY-LINES  ( -- buf )  _PDLY-BUFS-S 7 + -8 AND ;
+: _PDLY-LTEXT  ( -- buf )  _PDLY-LINES 24 + ;
+: _PDLY-LMEAN  ( -- buf )  _PDLY-LINES 48 + ;
+: _PDLY-HIST   ( -- buf )  _PDLY-LINES 72 + ;
+: _PDLY-ROFF   ( -- buf )  _PDLY-LINES 96 + ;
+: _PDLY-LR     ( -- buf )  _PDLY-LINES 120 + ;
+: _PDLY-CAND   ( -- buf )  _PDLY-LINES 144 + ;
+: _PDLY-GUT    ( -- buf )  _PDLY-LINES 168 + ;
+: _PDLY-BODS   ( -- buf )  _PDLY-LINES 192 + ;
+
+\ =====================================================================
+\  Lines
+\ =====================================================================
+
+\ A line: start, end, baseline, size, what all its runs share, its text,
+\ whether it spans a column's start, and its column's end.
+: _PDLY.X0  ( ln -- a )      ;
+: _PDLY.X1  ( ln -- a )   8 + ;
+: _PDLY.Y   ( ln -- a )  16 + ;
+: _PDLY.SZ  ( ln -- a )  24 + ;
+: _PDLY.FL  ( ln -- a )  32 + ;
+: _PDLY.TO  ( ln -- a )  40 + ;
+: _PDLY.TU  ( ln -- a )  48 + ;
+: _PDLY.G   ( ln -- a )  56 + ;    \ its structure block's id, or 0
+: _PDLY.GK  ( ln -- a )  64 + ;    \ that block's kind, level and container
+: _PDLY.GL  ( ln -- a )  72 + ;
+: _PDLY.GI  ( ln -- a )  80 + ;
+: _PDLY.LB  ( ln -- a )  88 + ;    \ the number of a label before it, plus one, or 0
+: _PDLY.R   ( ln -- a )  96 + ;    \ the index of its first run
+: _PDLY.SP  ( ln -- a ) 104 + ;    \ it runs across a column's start
+: _PDLY.CR  ( ln -- a ) 112 + ;    \ the end of its column
+120 CONSTANT _PDLY-LINE
+
+1 CONSTANT _PDLY-F-BOLD   2 CONSTANT _PDLY-F-FIXED   4 CONSTANT _PDLY-F-ROTATED
+
+: _PDLY-NLINES  ( -- n )  _PDLY-LINES PDF-BUF.U @ _PDLY-LINE / ;
+: _PDLY-LINE@   ( i -- ln )  _PDLY-LINE * _PDLY-LINES PDF-BUF.A @ + ;
+: _PDLY-LTEXT@  ( ln -- a u )  _PDLY-LTEXT PDF-BUF.A @ OVER _PDLY.TO @ + SWAP _PDLY.TU @ ;
+: _PDLY-LMEAN@  ( ln -- a )  _PDLY-LMEAN PDF-BUF.A @ SWAP _PDLY.TO @ + ;
+
+CREATE _PDLY-NEW _PDLY-LINE ALLOT     \ the line being built
+VARIABLE _PDLY-OPEN?
+
+\ A run's facts.
+VARIABLE _PDLY-RX0  VARIABLE _PDLY-RY0  VARIABLE _PDLY-RX1  VARIABLE _PDLY-RY1
+VARIABLE _PDLY-RI   \ the run's index
+VARIABLE _PDLY-RSZ  VARIABLE _PDLY-RST
+
+: _PDLY-RUN@  ( run -- )
+    DUP PDF-RUN-START _PDLY-RY0 ! _PDLY-RX0 !
+    DUP PDF-RUN-END _PDLY-RY1 ! _PDLY-RX1 !
+    DUP PDF-RUN-SIZE _PDLY-RSZ !  PDF-RUN-STYLE _PDLY-RST ! ;
+
+\ A run's structure block, and a list item's label waiting for its item.
+VARIABLE _PDLY-RG   VARIABLE _PDLY-RGK   VARIABLE _PDLY-RGL   VARIABLE _PDLY-RGI
+VARIABLE _PDLY-LBL?   VARIABLE _PDLY-LBL-NUM
+
+: _PDLY-GROUP@  ( run -- )
+    0 _PDLY-RG !  0 _PDLY-RGK !  0 _PDLY-RGL !  0 _PDLY-RGI !
+    _PDLY-ST @ 0= IF DROP EXIT THEN
+    PDF-RUN-MCID _PDLY-ST @ PDF-STRUCT-BLOCK 0= IF EXIT THEN
+    _PDLY-RGI ! _PDLY-RGL ! _PDLY-RGK ! _PDLY-RG ! ;
+
+: _PDLY-LOWER?  ( c -- flag )  97 123 WITHIN ;
+
+\ A label's number: its digits, or its letter's place, or 0.
+: _PDLY-LABEL  ( a u -- number )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER C@ 40 = IF SWAP 1+ SWAP 1- THEN
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER C@ _PDLY-LOWER? IF DROP C@ 96 - EXIT THEN
+    0 -ROT OVER + SWAP ?DO
+        I C@ DUP 48 58 WITHIN 0= IF DROP LEAVE THEN 48 - SWAP 10 * +
+    LOOP ;
+
+: _PDLY-MEANING  ( style -- meaning )
+    DUP PDF-FONT-FIXED AND IF DROP TSTY-CODE EXIT THEN
+    DUP PDF-FONT-BOLD AND IF DROP TSTY-STRONG EXIT THEN
+    PDF-FONT-ITALIC AND IF TSTY-EMPHASIS ELSE TSTY-PLAIN THEN ;
+
+\ The flags a run gives a line.
+: _PDLY-RFLAGS  ( -- flags )
+    0  _PDLY-RST @ PDF-FONT-BOLD AND IF _PDLY-F-BOLD OR THEN
+    _PDLY-RST @ PDF-FONT-FIXED AND IF _PDLY-F-FIXED OR THEN
+    _PDLY-RY1 @ _PDLY-RY0 @ - ABS _PDLY-RSZ @ 4 / > IF _PDLY-F-ROTATED OR THEN ;
+
+\ Text onto the line, every byte with MEANING.
+: _PDLY-TEXT+  ( a u meaning -- ok? )
+    >R DUP R> _PDLY-LMEAN _PDLY-FILL+ >R  _PDLY-LTEXT _PDLY-APPEND R> AND ;
+
+: _PDLY-SPACE+  ( -- ok? )  S"  " TSTY-PLAIN _PDLY-TEXT+ ;
+
+: _PDLY-ENDS-SPACE?  ( -- flag )
+    _PDLY-LTEXT PDF-BUF.U @ _PDLY-NEW _PDLY.TO @ - 0= IF -1 EXIT THEN
+    _PDLY-LTEXT DUP PDF-BUF.A @ SWAP PDF-BUF.U @ + 1- C@ 32 = ;
+
+\ Close the line being built, keeping it when it has text.
+: _PDLY-CLOSE  ( -- ok? )
+    _PDLY-OPEN? @ 0= IF -1 EXIT THEN  0 _PDLY-OPEN? !
+    _PDLY-LTEXT PDF-BUF.U @ _PDLY-NEW _PDLY.TO @ - DUP _PDLY-NEW _PDLY.TU !
+    0= IF -1 EXIT THEN
+    _PDLY-NEW _PDLY-LINE _PDLY-LINES _PDLY-APPEND ;
+
+\ Whether the run continues the line: in its structure block, on its
+\ baseline, moving right.
+: _PDLY-JOINS?  ( -- flag )
+    _PDLY-OPEN? @ 0= IF 0 EXIT THEN
+    _PDLY-RG @ _PDLY-NEW _PDLY.G @ <> IF 0 EXIT THEN
+    _PDLY-NEW _PDLY.FL @ _PDLY-F-ROTATED AND IF 0 EXIT THEN
+    _PDLY-RFLAGS _PDLY-F-ROTATED AND IF 0 EXIT THEN
+    _PDLY-NEW _PDLY.SZ @ _PDLY-RSZ @ MAX                      ( size )
+    _PDLY-RY0 @ _PDLY-NEW _PDLY.Y @ - ABS OVER 2 * 5 / > IF DROP 0 EXIT THEN
+    _PDLY-RX0 @ _PDLY-NEW _PDLY.X1 @ ROT 2/ - < 0= ;
+
+\ A run, onto the line it continues or a new one; a label's, kept for its
+\ item.
+: _PDLY-RUN+  ( run -- ok? )
+    DUP _PDLY-RUN@  DUP _PDLY-GROUP@
+    _PDLY-RG @ IF _PDLY-RGK @ 0= IF
+        _PDLY-C @ PDF-RUN-TEXT _PDLY-LABEL _PDLY-LBL-NUM !  -1 _PDLY-LBL? !  -1 EXIT
+    THEN THEN
+    _PDLY-JOINS? IF
+        _PDLY-RX0 @ _PDLY-NEW _PDLY.X1 @ -
+        _PDLY-NEW _PDLY.SZ @ _PDLY-RSZ @ MAX 3 * 20 / > IF
+            _PDLY-ENDS-SPACE? 0= IF
+                DUP _PDLY-C @ PDF-RUN-TEXT DROP C@ 32 <> IF
+                    _PDLY-SPACE+ 0= IF DROP 0 EXIT THEN
+                THEN
+            THEN
+        THEN
+        _PDLY-RX1 @ _PDLY-NEW _PDLY.X1 @ MAX _PDLY-NEW _PDLY.X1 !
+        _PDLY-NEW _PDLY.SZ @ _PDLY-RSZ @ MAX _PDLY-NEW _PDLY.SZ !
+        _PDLY-NEW _PDLY.FL @ _PDLY-RFLAGS AND _PDLY-NEW _PDLY.FL !
+    ELSE
+        _PDLY-CLOSE 0= IF DROP 0 EXIT THEN
+        -1 _PDLY-OPEN? !
+        _PDLY-RX0 @ _PDLY-NEW _PDLY.X0 !  _PDLY-RX1 @ _PDLY-NEW _PDLY.X1 !
+        _PDLY-RY0 @ _PDLY-NEW _PDLY.Y !  _PDLY-RSZ @ _PDLY-NEW _PDLY.SZ !
+        _PDLY-RFLAGS _PDLY-NEW _PDLY.FL !
+        _PDLY-LTEXT PDF-BUF.U @ _PDLY-NEW _PDLY.TO !
+        _PDLY-RG @ _PDLY-NEW _PDLY.G !  _PDLY-RGK @ _PDLY-NEW _PDLY.GK !
+        _PDLY-RGL @ _PDLY-NEW _PDLY.GL !  _PDLY-RGI @ _PDLY-NEW _PDLY.GI !
+        _PDLY-LBL? @ IF _PDLY-LBL-NUM @ 1+ ELSE 0 THEN _PDLY-NEW _PDLY.LB !  0 _PDLY-LBL? !
+        _PDLY-RI @ _PDLY-NEW _PDLY.R !
+    THEN
+    _PDLY-LK @ IF
+        _PDLY-LTEXT PDF-BUF.U @ _PDLY-ROFF PDF-BUF.A @ _PDLY-RI @ CELLS + !
+    THEN
+    _PDLY-C @ PDF-RUN-TEXT _PDLY-RST @ _PDLY-MEANING _PDLY-TEXT+ ;
+
+CREATE _PDLY-NONE -1 ,
+
+: _PDLY-MAKE-LINES  ( -- ok? )
+    0 _PDLY-OPEN? !
+    _PDLY-C @ PDF-CONTENT-RUNS 0 ?DO
+        _PDLY-LK @ IF
+            _PDLY-NONE 8 _PDLY-ROFF _PDLY-APPEND 0= IF 0 UNLOOP EXIT THEN
+        THEN
+        I _PDLY-RI !  I _PDLY-C @ PDF-CONTENT-RUN
+        DUP PDF-RUN-STYLE PDF-RUN-ARTIFACT AND IF DROP ELSE
+            _PDLY-RUN+ 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _PDLY-CLOSE ;
+
+\ =====================================================================
+\  The lines' links
+\ =====================================================================
+
+VARIABLE _PDLY-LI     \ the line
+VARIABLE _PDLY-K      \ the link
+VARIABLE _PDLY-RA   VARIABLE _PDLY-RU   \ the run's text
+VARIABLE _PDLY-FROM  VARIABLE _PDLY-TO
+
+\ A link's rectangle's corners.
+: _PDLY-RECT  ( k -- x0 y0 x1 y1 )  _PDLY-LK @ PDF-LINK PDF-LINK-RECT ;
+
+\ The byte of the run's text that X across lies at, in proportion.
+: _PDLY-SHARE  ( x -- byte )
+    _PDLY-RX0 @ - _PDLY-RU @ *
+    _PDLY-RX1 @ _PDLY-RX0 @ - 1 MAX DUP 2/ ROT + SWAP /
+    0 MAX _PDLY-RU @ MIN ;
+
+\ Punctuation that closes a word, and that opens one.
+: _PDLY-CLOSER?  ( c -- flag )
+    DUP 46 = OVER 44 = OR OVER 59 = OR OVER 58 = OR OVER 33 = OR
+    OVER 63 = OR OVER 41 = OR OVER 93 = OR OVER 34 = OR SWAP 39 = OR ;
+: _PDLY-OPENER?  ( c -- flag )
+    DUP 40 = OVER 91 = OR OVER 34 = OR SWAP 39 = OR ;
+
+: _PDLY-AT-SPACE?  ( i -- flag )  _PDLY-RA @ + C@ 32 = ;
+
+\ Whether a word of the run's text starts (START?) or ends at byte I: at
+\ either end of the text, at a space, or inside punctuation that opens
+\ or closes a word.
+: _PDLY-BOUNDARY?  ( i start? -- flag )
+    IF
+        DUP 0= IF DROP -1 EXIT THEN
+        DUP 1- _PDLY-AT-SPACE? IF DROP -1 EXIT THEN
+        DUP 1- _PDLY-RA @ + C@ _PDLY-OPENER? 0= IF DROP 0 EXIT THEN
+        2 - DUP 0< IF DROP -1 EXIT THEN _PDLY-AT-SPACE? EXIT
+    THEN
+    DUP _PDLY-RU @ = IF DROP -1 EXIT THEN
+    DUP _PDLY-AT-SPACE? IF DROP -1 EXIT THEN
+    DUP _PDLY-RA @ + C@ _PDLY-CLOSER? 0= IF DROP 0 EXIT THEN
+    1+ DUP _PDLY-RU @ = IF DROP -1 EXIT THEN _PDLY-AT-SPACE? ;
+
+VARIABLE _PDLY-SNAP
+
+\ The place nearest byte I where a word starts (START?) or ends: the
+\ proportion places a link's ends near whole words, not on them.
+: _PDLY-NEAREST  ( i start? -- i' )
+    _PDLY-SNAP !
+    DUP BEGIN DUP 0> IF DUP _PDLY-SNAP @ _PDLY-BOUNDARY? 0= ELSE 0 THEN WHILE 1- REPEAT
+    OVER BEGIN DUP _PDLY-RU @ < IF DUP _PDLY-SNAP @ _PDLY-BOUNDARY? 0= ELSE 0 THEN
+    WHILE 1+ REPEAT                                       ( i l r )
+    2 PICK 2 PICK - OVER 4 PICK - > IF NIP NIP ELSE DROP NIP THEN ;
+
+\ The range of the run's text link K's rectangle covers, as _PDLY-FROM
+\ and _PDLY-TO; false when it covers none.
+: _PDLY-COVERED?  ( k -- flag )
+    _PDLY-RECT                                            ( x0 y0 x1 y1 )
+    _PDLY-RY0 @ _PDLY-RSZ @ 3 / +                         ( x0 y0 x1 y1 ymid )
+    TUCK < >R ROT < R> OR IF 2DROP 0 EXIT THEN            ( x0 x1 )
+    OVER _PDLY-RX1 @ < 0= OVER _PDLY-RX0 @ > 0= OR IF 2DROP 0 EXIT THEN
+    _PDLY-SHARE 0 _PDLY-NEAREST _PDLY-TO !  _PDLY-SHARE -1 _PDLY-NEAREST _PDLY-FROM !
+    BEGIN _PDLY-FROM @ _PDLY-TO @ < IF _PDLY-RA @ _PDLY-FROM @ + C@ 32 = ELSE 0 THEN
+    WHILE 1 _PDLY-FROM +! REPEAT
+    BEGIN _PDLY-TO @ _PDLY-FROM @ > IF _PDLY-RA @ _PDLY-TO @ + 1- C@ 32 = ELSE 0 THEN
+    WHILE -1 _PDLY-TO +! REPEAT
+    _PDLY-FROM @ _PDLY-TO @ < ;
+
+CREATE _PDLY-RANGE 32 ALLOT
+
+\ Whether the lines' text from A to B is spaces alone.
+: _PDLY-SPACES?  ( a b -- flag )
+    SWAP ?DO
+        _PDLY-LTEXT PDF-BUF.A @ I + C@ 32 <> IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ Add a range of the lines' text from START for U bytes to link K: onto
+\ the last range, when that is K's and only spaces lie between them, as
+\ between the words of a link that are runs of their own.
+: _PDLY-RANGE+  ( start u k -- ok? )
+    _PDLY-LR PDF-BUF.U @ IF
+        _PDLY-LR DUP PDF-BUF.A @ SWAP PDF-BUF.U @ + 24 -       ( start u k last )
+        DUP 16 + @ 2 PICK = IF
+            DUP @ OVER 8 + @ + 4 PICK OVER < 0= IF            ( start u k last end )
+                4 PICK _PDLY-SPACES? IF
+                    >R DROP + R@ @ - R> 8 + ! -1 EXIT
+                THEN
+            ELSE DROP THEN
+        THEN DROP
+    THEN
+    _PDLY-RANGE 16 + !  _PDLY-RANGE 8 + !  _PDLY-RANGE !
+    _PDLY-RANGE 24 _PDLY-LR _PDLY-APPEND ;
+
+\ The ranges of run R's text, which starts at OFFSET in the lines' text,
+\ that the line's links cover.
+: _PDLY-RUN-LINKS  ( offset r -- ok? )
+    _PDLY-C @ PDF-CONTENT-RUN DUP _PDLY-RUN@ _PDLY-C @ PDF-RUN-TEXT _PDLY-RU ! _PDLY-RA !
+    _PDLY-CAND PDF-BUF.U @ 0 ?DO
+        _PDLY-CAND PDF-BUF.A @ I + @ DUP _PDLY-K !
+        _PDLY-COVERED? IF
+            DUP _PDLY-FROM @ +  _PDLY-TO @ _PDLY-FROM @ -  _PDLY-K @ _PDLY-RANGE+
+            0= IF DROP 0 UNLOOP EXIT THEN
+        THEN
+    8 +LOOP DROP -1 ;
+
+CREATE _PDLY-CELL 8 ALLOT
+
+\ The links whose rectangles meet line LN's height, as candidates.
+: _PDLY-CANDIDATES  ( ln -- ok? )
+    0 _PDLY-CAND PDF-BUF.U !
+    DUP _PDLY.Y @ OVER _PDLY.SZ @ - SWAP DUP _PDLY.Y @ SWAP _PDLY.SZ @ +   ( lo hi )
+    _PDLY-LK @ PDF-LINKS-COUNT 0 ?DO
+        I _PDLY-RECT NIP ROT DROP                         ( lo hi y0 y1 )
+        3 PICK < 0= SWAP 2 PICK > 0= AND IF
+            I _PDLY-CELL !  _PDLY-CELL 8 _PDLY-CAND _PDLY-APPEND 0= IF 2DROP 0 UNLOOP EXIT THEN
+        THEN
+    LOOP 2DROP -1 ;
+
+\ For each line, the ranges of its text its links cover, in order.
+: _PDLY-LINE-LINKS  ( -- ok? )
+    _PDLY-LK @ 0= IF -1 EXIT THEN
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ _PDLY-CANDIDATES 0= IF 0 UNLOOP EXIT THEN
+        _PDLY-CAND PDF-BUF.U @ IF
+            I 1+ _PDLY-NLINES < IF I 1+ _PDLY-LINE@ _PDLY.R @ ELSE _PDLY-C @ PDF-CONTENT-RUNS THEN
+            I _PDLY-LINE@ _PDLY.R @ ?DO
+                _PDLY-ROFF PDF-BUF.A @ I CELLS + @ DUP 0< IF DROP ELSE
+                    I _PDLY-RUN-LINKS 0= IF 0 UNLOOP UNLOOP EXIT THEN
+                THEN
+            LOOP
+        THEN
+    LOOP -1 ;
+
+\ =====================================================================
+\  What the page's text is like
+\ =====================================================================
+
+VARIABLE _PDLY-BODY      \ the body text's size
+VARIABLE _PDLY-SPACING   \ its baselines' distance
+VARIABLE _PDLY-RIGHT     \ where its lines end, the furthest
+VARIABLE _PDLY-YMIN      \ the lowest baseline
+VARIABLE _PDLY-YMAX      \ the highest
+
+CREATE _PDLY-PAIR 16 ALLOT
+
+\ Count WEIGHT for KEY.
+: _PDLY-COUNT+  ( weight key -- ok? )
+    _PDLY-HIST PDF-BUF.A @ _PDLY-HIST PDF-BUF.U @ 16 / 0 ?DO
+        DUP I 16 * + @ 2 PICK = IF
+            I 16 * + 8 + NIP +!  -1 UNLOOP EXIT
+        THEN
+    LOOP DROP
+    _PDLY-PAIR !  _PDLY-PAIR 8 + !  _PDLY-PAIR 16 _PDLY-HIST _PDLY-APPEND ;
+
+VARIABLE _PDLY-BK   VARIABLE _PDLY-BC
+
+\ The key counted most, or -1; the count is emptied.
+: _PDLY-MOST  ( -- key )
+    -1 _PDLY-BK !  0 _PDLY-BC !
+    _PDLY-HIST PDF-BUF.A @ _PDLY-HIST PDF-BUF.U @ 16 / 0 ?DO
+        DUP I 16 * + DUP 8 + @ _PDLY-BC @ > IF
+            DUP @ _PDLY-BK !  8 + @ _PDLY-BC !
+        ELSE DROP THEN
+    LOOP DROP
+    0 _PDLY-HIST PDF-BUF.U !  _PDLY-BK @ ;
+
+\ Half points: a key for a size or a distance.
+: _PDLY-KEY    ( f -- key )  0x4000 + 15 RSHIFT ;
+: _PDLY-UNKEY  ( key -- f )  15 LSHIFT ;
+
+: _PDLY-BODY?  ( ln -- flag )
+    DUP _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP 0 EXIT THEN
+    _PDLY.SZ @ _PDLY-BODY @ - ABS _PDLY-BODY @ 10 / > 0= ;
+
+\ ---------------------------------------------------------------------
+\  Columns
+\ ---------------------------------------------------------------------
+
+\ A gutter: the leftmost end of the lines left of it, the rightmost start
+\ of the lines right of it, the leftmost of those starts (its column's
+\ start), and the furthest end of the lines of that column.
+32 CONSTANT _PDLY-GUTTER
+CREATE _PDLY-GAP _PDLY-GUTTER ALLOT
+VARIABLE _PDLY-CA   VARIABLE _PDLY-CB   VARIABLE _PDLY-CL   VARIABLE _PDLY-CP
+VARIABLE _PDLY-GLO  VARIABLE _PDLY-GHI
+VARIABLE _PDLY-COL0   \ the furthest end of the lines of the leftmost column
+
+: _PDLY-NGUT  ( -- n )  _PDLY-GUT PDF-BUF.U @ _PDLY-GUTTER / ;
+: _PDLY-GUT@  ( i -- g )  _PDLY-GUTTER * _PDLY-GUT PDF-BUF.A @ + ;
+: _PDLY-NBODS  ( -- n )  _PDLY-BODS PDF-BUF.U @ 8 / ;
+: _PDLY-BOD@   ( i -- ln )  CELLS _PDLY-BODS PDF-BUF.A @ + @ ;
+: _PDLY-BOD!   ( ln i -- )  CELLS _PDLY-BODS PDF-BUF.A @ + ! ;
+
+\ The body lines, by baseline, highest first: false when memory refuses.
+\ Content shows a column's lines top to bottom, so the sort has little
+\ to move.
+: _PDLY-SORT-BODIES  ( -- ok? )
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-BODY? IF
+            _PDLY-CELL ! _PDLY-CELL 8 _PDLY-BODS _PDLY-APPEND 0= IF 0 UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP
+    _PDLY-NBODS 1 > IF
+        _PDLY-NBODS 1 DO
+            I _PDLY-BOD@ I                                       ( ln j )
+            BEGIN
+                DUP 0> IF DUP 1- _PDLY-BOD@ _PDLY.Y @ 2 PICK _PDLY.Y @ < ELSE 0 THEN
+            WHILE
+                DUP 1- _PDLY-BOD@ OVER _PDLY-BOD!  1-
+            REPEAT
+            _PDLY-BOD!
+        LOOP
+    THEN -1 ;
+
+\ Whether line A lies beside line B: wholly left of it, its baseline
+\ within half the larger size of B's.
+: _PDLY-BESIDE?  ( a b -- flag )
+    OVER _PDLY.X1 @ OVER _PDLY.X0 @ < 0= IF 2DROP 0 EXIT THEN
+    OVER _PDLY.Y @ OVER _PDLY.Y @ - ABS >R
+    _PDLY.SZ @ SWAP _PDLY.SZ @ MAX 2/ R> < 0= ;
+
+\ Whether sorted body line Q's baseline lies within the body size of the
+\ line looked at, and so may lie beside it.
+: _PDLY-NEAR?  ( q -- flag )
+    _PDLY-BOD@ _PDLY.Y @ _PDLY-CB @ _PDLY.Y @ - ABS _PDLY-BODY @ > 0= ;
+
+\ Take sorted body line Q when it lies beside the line looked at, on its
+\ left, nearer it than the one taken.
+: _PDLY-CONSIDER  ( q -- )
+    _PDLY-BOD@ DUP _PDLY-CB @ _PDLY-BESIDE? IF
+        _PDLY-CL @ 0= IF _PDLY-CL ! ELSE
+            DUP _PDLY.X1 @ _PDLY-CL @ _PDLY.X1 @ > IF _PDLY-CL ! ELSE DROP THEN
+        THEN
+    ELSE DROP THEN ;
+
+\ The body line beside sorted body line P on its left whose end lies
+\ nearest it, or 0: only the lines sorted near it are looked at.
+: _PDLY-LEFT-OF  ( p -- ln | 0 )
+    DUP _PDLY-CP !  _PDLY-BOD@ _PDLY-CB !  0 _PDLY-CL !
+    _PDLY-CP @ BEGIN 1- DUP 0< 0= IF DUP _PDLY-NEAR? ELSE 0 THEN
+    WHILE DUP _PDLY-CONSIDER REPEAT DROP
+    _PDLY-CP @ BEGIN 1+ DUP _PDLY-NBODS < IF DUP _PDLY-NEAR? ELSE 0 THEN
+    WHILE DUP _PDLY-CONSIDER REPEAT DROP
+    _PDLY-CL @ ;
+
+\ The gutter between line LN and the line LEFT nearest it on its left:
+\ into the gutter it falls in, or a gutter of its own; false when memory
+\ refuses.
+: _PDLY-GUTTER+  ( left ln -- ok? )
+    _PDLY.X0 @ _PDLY-GHI !  _PDLY.X1 @ _PDLY-GLO !
+    _PDLY-NGUT 0 ?DO
+        I _PDLY-GUT@ DUP @ _PDLY-GHI @ < OVER 8 + @ _PDLY-GLO @ > AND IF
+            DUP @ _PDLY-GLO @ MIN OVER !
+            DUP 8 + @ _PDLY-GHI @ MAX OVER 8 + !
+            DUP 16 + @ _PDLY-GHI @ MIN SWAP 16 + !
+            -1 UNLOOP EXIT
+        THEN DROP
+    LOOP
+    _PDLY-GAP _PDLY-GUTTER 0 FILL
+    _PDLY-GLO @ _PDLY-GAP !  _PDLY-GHI @ DUP _PDLY-GAP 8 + !  _PDLY-GAP 16 + !
+    _PDLY-GAP _PDLY-GUTTER _PDLY-GUT _PDLY-APPEND ;
+
+\ Whether line LN starts left of a gutter and runs past its column's start.
+: _PDLY-SPANNING?  ( ln -- flag )
+    _PDLY-CA !
+    _PDLY-NGUT 0 ?DO
+        I _PDLY-GUT@ DUP @ _PDLY-CA @ _PDLY.X0 @ >
+        SWAP 16 + @ _PDLY-CA @ _PDLY.X1 @ < AND IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
+\ The gutter whose column holds line LN's start, the column starting
+\ furthest right that starts no more than the body size right of it; or
+\ 0 for the leftmost column.
+: _PDLY-COLUMN-OF  ( ln -- g | 0 )
+    _PDLY.X0 @ _PDLY-BODY @ + 0 SWAP                        ( g x )
+    _PDLY-NGUT 0 ?DO
+        I _PDLY-GUT@ 16 + @ OVER > 0= IF
+            OVER ?DUP IF 16 + @ I _PDLY-GUT@ 16 + @ < ELSE -1 THEN
+            IF NIP I _PDLY-GUT@ SWAP THEN
+        THEN
+    LOOP DROP ;
+
+\ Each column's furthest end, from its body lines that span no gutter.
+: _PDLY-COLUMN-ENDS  ( -- )
+    1 62 LSHIFT NEGATE DUP _PDLY-COL0 !
+    _PDLY-NGUT 0 ?DO DUP I _PDLY-GUT@ 24 + ! LOOP DROP
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-BODY? OVER _PDLY.SP @ 0= AND IF
+            DUP _PDLY.X1 @ SWAP _PDLY-COLUMN-OF ?DUP IF
+                24 + DUP @ ROT MAX SWAP !
+            ELSE _PDLY-COL0 @ MAX _PDLY-COL0 ! THEN
+        ELSE DROP THEN
+    LOOP ;
+
+\ Line LN's column's end: the furthest end of its column's lines; the
+\ page's furthest end on a page without gutters, for a line that spans
+\ one, and for a column with no line of its own.
+: _PDLY-COLUMN-END  ( ln -- x )
+    _PDLY-NGUT 0= IF DROP _PDLY-RIGHT @ EXIT THEN
+    DUP _PDLY.SP @ IF DROP _PDLY-RIGHT @ EXIT THEN
+    _PDLY-COLUMN-OF ?DUP IF 24 + @ ELSE _PDLY-COL0 @ THEN
+    DUP 1 62 LSHIFT NEGATE = IF DROP _PDLY-RIGHT @ THEN ;
+
+\ Whether a body line, in the order the content shows them, lies above
+\ the one before it, as the top of a column does: lines side by side on
+\ one baseline are never consecutive, so without such a step there are
+\ none.
+: _PDLY-STEPS-UP?  ( -- flag )
+    0 _PDLY-CA !
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-BODY? IF
+            _PDLY-CA @ IF
+                DUP _PDLY.Y @ _PDLY-CA @ _PDLY.Y @ - OVER _PDLY.SZ @ 2/ > IF
+                    DROP -1 UNLOOP EXIT
+                THEN
+            THEN
+            _PDLY-CA !
+        ELSE DROP THEN
+    LOOP 0 ;
+
+\ The page's gutters, which lines span them, and each line's column's
+\ end; false when memory refuses.
+: _PDLY-COLUMNS  ( -- ok? )
+    _PDLY-STEPS-UP? IF
+        _PDLY-SORT-BODIES 0= IF 0 EXIT THEN
+        _PDLY-NBODS 0 ?DO
+            I _PDLY-LEFT-OF ?DUP IF
+                I _PDLY-BOD@ _PDLY-GUTTER+ 0= IF 0 UNLOOP EXIT THEN
+            THEN
+        LOOP
+    THEN
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-SPANNING? SWAP _PDLY.SP !
+    LOOP
+    _PDLY-NGUT IF _PDLY-COLUMN-ENDS THEN
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-COLUMN-END SWAP _PDLY.CR !
+    LOOP -1 ;
+
+\ The body text's size, by the text in each size; its lines' furthest
+\ end; its baselines' commonest distance; and its columns.
+: _PDLY-MEASURE  ( -- ok? )
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP ELSE
+            DUP _PDLY.TU @ SWAP _PDLY.SZ @ _PDLY-KEY _PDLY-COUNT+
+            0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _PDLY-MOST DUP 0< IF DROP 10 16 LSHIFT ELSE _PDLY-UNKEY THEN _PDLY-BODY !
+    0 _PDLY-RIGHT !
+    1 62 LSHIFT DUP _PDLY-YMIN !  NEGATE _PDLY-YMAX !
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ _PDLY.Y @
+        DUP _PDLY-YMIN @ MIN _PDLY-YMIN !  _PDLY-YMAX @ MAX _PDLY-YMAX !
+    LOOP
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-BODY? IF _PDLY.X1 @ _PDLY-RIGHT @ MAX _PDLY-RIGHT ! ELSE DROP THEN
+    LOOP
+    _PDLY-NLINES 1 > IF
+        _PDLY-NLINES 1 DO
+            I 1- _PDLY-LINE@ I _PDLY-LINE@
+            OVER _PDLY-BODY? OVER _PDLY-BODY? AND IF
+                _PDLY.Y @ SWAP _PDLY.Y @ SWAP -
+                DUP 0> OVER _PDLY-BODY @ 3 * < AND IF
+                    1 SWAP _PDLY-KEY _PDLY-COUNT+ 0= IF 0 UNLOOP EXIT THEN
+                ELSE DROP THEN
+            ELSE 2DROP THEN
+        LOOP
+    THEN
+    _PDLY-MOST DUP 0< IF DROP _PDLY-BODY @ 6 * 5 / ELSE _PDLY-UNKEY THEN _PDLY-SPACING !
+    _PDLY-COLUMNS ;
+
+\ =====================================================================
+\  Blocks
+\ =====================================================================
+
+\ The block being built.
+CREATE _PDLY-BNEW _PDLY-BLOCK ALLOT
+VARIABLE _PDLY-BOPEN?
+VARIABLE _PDLY-BSZ       \ its size
+VARIABLE _PDLY-BFL       \ what all its lines share
+VARIABLE _PDLY-BLEFT     \ its lines' leftmost start
+VARIABLE _PDLY-BLINES    \ how many lines it has
+VARIABLE _PDLY-PREV      \ its last line
+VARIABLE _PDLY-ITEM-X    \ where a list item's text starts
+VARIABLE _PDLY-BG   VARIABLE _PDLY-BGK   VARIABLE _PDLY-BGL   \ its structure block
+
+: _PDLY-BTEXT-U  ( -- u )  _PDLY-L @ _PDLY.TEXT PDF-BUF.U @ ;
+
+\ Where line LN lies, onto the block being built: its middle, a third of
+\ its size above its baseline, the lowest the block's low may be, and
+\ its start and end, how far across the block reaches.
+: _PDLY-REACH  ( ln -- )
+    DUP _PDLY.Y @ OVER _PDLY.SZ @ 3 / + _PDLY-BNEW 88 + @ MIN _PDLY-BNEW 88 + !
+    DUP _PDLY.X0 @ _PDLY-BNEW 96 + @ MIN _PDLY-BNEW 96 + !
+    _PDLY.X1 @ _PDLY-BNEW 104 + @ MAX _PDLY-BNEW 104 + ! ;
+
+\ Text onto the block, every byte with MEANING.
+: _PDLY-BTEXT+  ( a u meaning -- ok? )
+    >R DUP R> _PDLY-L @ _PDLY.MEAN _PDLY-FILL+ >R
+    _PDLY-L @ _PDLY.TEXT _PDLY-APPEND R> AND ;
+
+VARIABLE _PDLY-LC     \ the next of the lines' link ranges to place
+VARIABLE _PDLY-O   VARIABLE _PDLY-E   VARIABLE _PDLY-P
+
+: _PDLY-NLR  ( -- n )  _PDLY-LR PDF-BUF.U @ 24 / ;
+: _PDLY-LR@  ( i -- range )  24 * _PDLY-LR PDF-BUF.A @ + ;
+
+\ Place the link ranges of the lines' text from O for U bytes, which the
+\ block's text took at P, in the block.  A range that goes on past them,
+\ into the next line, is placed again with that line.
+: _PDLY-PLACE-LINKS  ( o u p -- ok? )
+    _PDLY-P !  OVER + _PDLY-E !  _PDLY-O !
+    BEGIN _PDLY-LC @ _PDLY-NLR < IF _PDLY-LC @ _PDLY-LR@ @ _PDLY-E @ < ELSE 0 THEN WHILE
+        _PDLY-LC @ _PDLY-LR@
+        DUP @ OVER 8 + @ + _PDLY-E @ MIN                    ( range end )
+        OVER @ _PDLY-O @ MAX                                ( range end start )
+        2DUP > IF
+            _PDLY-L @ _PDLY.BLOCKS PDF-BUF.U @ _PDLY-BLOCK / _PDLY-RANGE !
+            DUP _PDLY-O @ - _PDLY-P @ + _PDLY-BNEW 48 + @ - _PDLY-RANGE 8 + !
+            - _PDLY-RANGE 16 + !  DUP 16 + @ _PDLY-RANGE 24 + !
+            _PDLY-RANGE _PDLY-PLACE _PDLY-L @ _PDLY.LINKS _PDLY-APPEND 0= IF DROP 0 EXIT THEN
+        ELSE 2DROP THEN
+        DUP @ SWAP 8 + @ + _PDLY-E @ > IF -1 EXIT THEN
+        1 _PDLY-LC +!
+    REPEAT -1 ;
+
+\ U bytes of text at A, with the U meanings at M, onto the block, with the
+\ links of the lines' text they come from.
+: _PDLY-COPY  ( a u m -- ok? )
+    _PDLY-LK @ IF
+        2 PICK _PDLY-LTEXT PDF-BUF.A @ - 2 PICK _PDLY-BTEXT-U _PDLY-PLACE-LINKS
+        0= IF DROP 2DROP 0 EXIT THEN
+    THEN
+    OVER _PDLY-L @ _PDLY.MEAN _PDLY-APPEND >R
+    _PDLY-L @ _PDLY.TEXT _PDLY-APPEND R> AND ;
+
+\ The block's text loses its last byte: a link placed over it does too.
+: _PDLY-UNLAST  ( -- )
+    -1 _PDLY-L @ _PDLY.TEXT PDF-BUF.U +!  -1 _PDLY-L @ _PDLY.MEAN PDF-BUF.U +!
+    _PDLY-L @ _PDLY.LINKS PDF-BUF.U @ 0= IF EXIT THEN
+    _PDLY-L @ _PDLY.LINKS DUP PDF-BUF.A @ SWAP PDF-BUF.U @ + _PDLY-PLACE -   ( place )
+    DUP @ _PDLY-L @ _PDLY.BLOCKS PDF-BUF.U @ _PDLY-BLOCK / <> IF DROP EXIT THEN
+    DUP 8 + @ OVER 16 + @ + _PDLY-BTEXT-U _PDLY-BNEW 48 + @ - > IF
+        -1 OVER 16 + +!
+        DUP 16 + @ 0= IF _PDLY-PLACE NEGATE _PDLY-L @ _PDLY.LINKS PDF-BUF.U +! THEN
+    THEN DROP ;
+
+\ The block's text byte BACK from its end, or 0.
+: _PDLY-LAST  ( back -- c )
+    _PDLY-BTEXT-U _PDLY-BNEW 48 + @ - OVER < IF DROP 0 EXIT THEN
+    _PDLY-L @ _PDLY.TEXT DUP PDF-BUF.A @ SWAP PDF-BUF.U @ + SWAP - C@ ;
+
+\ The characters of U bytes of UTF-8: the bytes that start one.
+: _PDLY-CHARS  ( a u -- n )
+    0 -ROT OVER + SWAP ?DO I C@ 0xC0 AND 0x80 <> IF 1+ THEN LOOP ;
+
+\ A bullet and a space at the start of a line's text: the marker's
+\ length, or 0.
+: _PDLY-BULLET  ( a u -- n )
+    DUP 2 < IF 2DROP 0 EXIT THEN
+    OVER C@ DUP 45 = SWAP 42 = OR IF OVER 1+ C@ 32 = IF 2DROP 2 EXIT THEN THEN
+    DUP 3 < IF 2DROP 0 EXIT THEN
+    OVER C@ 0xC2 = IF OVER 1+ C@ 0xB7 = IF OVER 2 + C@ 32 = IF 2DROP 3 EXIT THEN THEN THEN
+    DUP 4 < IF 2DROP 0 EXIT THEN
+    OVER 3 + C@ 32 <> IF 2DROP 0 EXIT THEN
+    DROP DUP C@ 8 LSHIFT OVER 1+ C@ OR 8 LSHIFT SWAP 2 + C@ OR
+    CASE
+        0xE280A2 OF 4 ENDOF   0xE280A3 OF 4 ENDOF   0xE28093 OF 4 ENDOF
+        0xE28183 OF 4 ENDOF   0xE297A6 OF 4 ENDOF   0xE296AA OF 4 ENDOF
+        0xE296AB OF 4 ENDOF   0xE296A0 OF 4 ENDOF   0xE296A1 OF 4 ENDOF
+        0xE297BE OF 4 ENDOF   0xEF82B7 OF 4 ENDOF   0xEF82A7 OF 4 ENDOF
+        0 SWAP
+    ENDCASE ;
+
+VARIABLE _PDLY-NUM   VARIABLE _PDLY-MA   VARIABLE _PDLY-MU   VARIABLE _PDLY-MI
+
+: _PDLY-AT  ( i -- c )  DUP _PDLY-MU @ < IF _PDLY-MA @ + C@ ELSE DROP 0 THEN ;
+
+\ Up to three digits or a letter, then "." or ")" and a space; or in
+\ parentheses, then a space: the number and the marker's length, or 0 0.
+: _PDLY-NUMBERED  ( a u -- number n )
+    _PDLY-MU ! _PDLY-MA !  0 _PDLY-NUM !
+    0 _PDLY-AT 40 = IF 1 ELSE 0 THEN DUP _PDLY-MI !
+    _PDLY-MI @ _PDLY-AT DUP 48 58 WITHIN IF
+        DROP
+        BEGIN _PDLY-MI @ _PDLY-AT DUP 48 58 WITHIN WHILE
+            48 - _PDLY-NUM @ 10 * + _PDLY-NUM !  1 _PDLY-MI +!
+        REPEAT DROP
+        _PDLY-MI @ OVER - 3 > IF DROP 0 0 EXIT THEN
+    ELSE
+        DUP _PDLY-LOWER? 0= IF 2DROP 0 0 EXIT THEN
+        96 - _PDLY-NUM !  1 _PDLY-MI +!
+    THEN
+    IF
+        _PDLY-MI @ _PDLY-AT 41 <> IF 0 0 EXIT THEN
+    ELSE
+        _PDLY-MI @ _PDLY-AT DUP 46 = SWAP 41 = OR 0= IF 0 0 EXIT THEN
+    THEN
+    1 _PDLY-MI +!
+    _PDLY-MI @ _PDLY-AT 32 <> IF 0 0 EXIT THEN
+    _PDLY-NUM @ _PDLY-MI @ 1+ ;
+
+\ The list item a line's text starts: its kind, number and marker's
+\ length in bytes, or 0 0 0.
+: _PDLY-MARKER  ( a u -- kind number n )
+    2DUP _PDLY-BULLET ?DUP IF NIP NIP DOC-C-BULLET 0 ROT EXIT THEN
+    _PDLY-NUMBERED ?DUP IF DOC-C-NUMBERED -ROT EXIT THEN
+    DROP 0 0 0 ;
+
+\ The cells a container's marker takes: a bullet or a quote's bar and a
+\ space, or the number and a dot and a space.
+: _PDLY-WIDTH  ( kind number -- cells )
+    SWAP DOC-C-NUMBERED <> IF DROP 2 EXIT THEN
+    2 SWAP BEGIN 10 / DUP WHILE SWAP 1+ SWAP REPEAT DROP 1+ ;
+
+\ Whether a line is the page's number: digits alone, the page's topmost
+\ or lowest line, on a page of more lines.
+: _PDLY-FOLIO?  ( ln -- flag )
+    _PDLY-NLINES 2 < IF DROP 0 EXIT THEN
+    DUP _PDLY-LTEXT@ DUP 0= IF 2DROP DROP 0 EXIT THEN
+    OVER + SWAP ?DO
+        I C@ DUP 48 58 WITHIN SWAP 32 = OR 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    _PDLY.Y @ DUP _PDLY-YMIN @ = SWAP _PDLY-YMAX @ = OR ;
+
+\ The container the block being built is in: its kind, number, width.
+: _PDLY-ITEM!  ( kind number -- )
+    2DUP _PDLY-WIDTH _PDLY-BNEW 32 + !  _PDLY-BNEW 24 + !  _PDLY-BNEW 16 + ! ;
+
+\ A paragraph's kind from its lines: code in a fixed-pitch font; else,
+\ outside a container, a heading by its size, or a single bold line of
+\ body text.
+: _PDLY-KIND  ( -- )
+    _PDLY-BFL @ _PDLY-F-FIXED AND IF DOC-B-CODE _PDLY-BNEW ! EXIT THEN
+    _PDLY-BNEW 16 + @ IF EXIT THEN
+    _PDLY-BSZ @ 100 * _PDLY-BODY @ 1 MAX /
+    DUP 115 < 0= _PDLY-BLINES @ 4 < AND IF
+        DOC-B-HEADING _PDLY-BNEW !
+        DUP 160 < 0= IF 1 ELSE DUP 130 < 0= IF 2 ELSE 3 THEN THEN _PDLY-BNEW 8 + !
+        DROP EXIT
+    THEN
+    95 < 0= _PDLY-BFL @ _PDLY-F-BOLD AND 0<> AND
+    _PDLY-BLINES @ 1 = AND _PDLY-BNEW 56 + @ 100 < AND IF
+        DOC-B-HEADING _PDLY-BNEW !  4 _PDLY-BNEW 8 + !
+    THEN ;
+
+\ Finish the block being built: its structure's kind, else its lines'.
+: _PDLY-FINISH  ( -- ok? )
+    _PDLY-BOPEN? @ 0= IF -1 EXIT THEN  0 _PDLY-BOPEN? !
+    _PDLY-BTEXT-U _PDLY-BNEW 48 + @ - DUP _PDLY-BNEW 56 + !
+    0= IF -1 EXIT THEN
+    DOC-B-PARAGRAPH _PDLY-BNEW !  0 _PDLY-BNEW 8 + !
+    _PDLY-BG @ IF _PDLY-BGK @ DOC-B-PARAGRAPH <> IF
+        _PDLY-BGK @ _PDLY-BNEW !  _PDLY-BGL @ _PDLY-BNEW 8 + !
+    THEN THEN
+    _PDLY-BNEW @ DOC-B-PARAGRAPH = IF _PDLY-KIND THEN
+    \ A heading's or code's text has no meanings of its own.
+    _PDLY-BNEW @ DOC-B-PARAGRAPH <> IF
+        _PDLY-L @ _PDLY.MEAN PDF-BUF.A @ _PDLY-BNEW 48 + @ +
+        _PDLY-BNEW 56 + @ TSTY-PLAIN FILL
+    THEN
+    _PDLY-BNEW _PDLY-BLOCK _PDLY-L @ _PDLY.BLOCKS _PDLY-APPEND ;
+
+\ Start a block with line LN: in the structure's container, with a
+\ label's number waiting for it; a marker at its start makes it an item,
+\ of the structure's list kind when it has one.
+: _PDLY-START  ( ln -- ok? )
+    _PDLY-FINISH 0= IF DROP 0 EXIT THEN
+    -1 _PDLY-BOPEN? !  1 _PDLY-BLINES !  DUP _PDLY-PREV !
+    DUP _PDLY.SZ @ _PDLY-BSZ !  DUP _PDLY.FL @ _PDLY-BFL !  DUP _PDLY.X0 @ _PDLY-BLEFT !
+    DUP _PDLY.G @ _PDLY-BG !  DUP _PDLY.GK @ _PDLY-BGK !  DUP _PDLY.GL @ _PDLY-BGL !
+    _PDLY-BNEW _PDLY-BLOCK 0 FILL
+    DUP _PDLY.Y @ OVER _PDLY.SZ @ + _PDLY-BNEW 40 + !
+    _PDLY-BTEXT-U _PDLY-BNEW 48 + !
+    1 62 LSHIFT DUP _PDLY-BNEW 88 + !  DUP _PDLY-BNEW 96 + !  NEGATE _PDLY-BNEW 104 + !
+    DUP _PDLY-REACH  DUP _PDLY.SZ @ _PDLY-BNEW 112 + !
+    DUP _PDLY.GI @ ?DUP IF OVER _PDLY.LB @ 1- 0 MAX _PDLY-ITEM! THEN
+    DUP _PDLY-LTEXT@ _PDLY-MARKER
+    ?DUP IF
+        >R
+        _PDLY-BNEW 16 + @ DUP DOC-C-BULLET = SWAP DOC-C-NUMBERED = OR IF
+            NIP _PDLY-BNEW 16 + @ SWAP
+        THEN
+        _PDLY-ITEM!
+        \ the item's text starts after its marker, its share of the line
+        DUP _PDLY-LTEXT@ DROP R@ _PDLY-CHARS
+        OVER _PDLY.X1 @ 2 PICK _PDLY.X0 @ - *
+        OVER _PDLY-LTEXT@ _PDLY-CHARS 1 MAX /
+        OVER _PDLY.X0 @ + _PDLY-ITEM-X !
+        DUP _PDLY-LTEXT@ R@ - SWAP R@ + SWAP
+        ROT _PDLY-LMEAN@ R> +
+    ELSE
+        2DROP DUP _PDLY.X0 @ _PDLY-ITEM-X !
+        DUP _PDLY-LTEXT@ ROT _PDLY-LMEAN@
+    THEN
+    _PDLY-COPY ;
+
+CREATE _PDLY-NL 10 C,
+
+\ A line of code's indent: the spaces its start lies right of the
+\ block's first line, a fixed-pitch character being six tenths of the
+\ size.
+: _PDLY-INDENT+  ( ln -- ok? )
+    DUP _PDLY.X0 @ _PDLY-BLEFT @ - SWAP _PDLY.SZ @ 3 * 5 / 1 MAX
+    DUP 2/ ROT + SWAP /
+    BEGIN DUP 0> WHILE
+        S"  " TSTY-PLAIN _PDLY-BTEXT+ 0= IF DROP 0 EXIT THEN 1-
+    REPEAT DROP -1 ;
+
+\ Join line LN to the block: a line of code by a line end and its
+\ indent; a word split by a hyphen into one; else with a space between.
+: _PDLY-JOIN  ( ln -- ok? )
+    1 _PDLY-BLINES +!  DUP _PDLY-PREV !  DUP _PDLY-REACH
+    DUP _PDLY.G @ ?DUP IF _PDLY-BG ! THEN
+    _PDLY-BFL @ OVER _PDLY.FL @ AND _PDLY-BFL !
+    _PDLY-BFL @ _PDLY-F-FIXED AND IF
+        _PDLY-NL 1 TSTY-PLAIN _PDLY-BTEXT+ 0= IF DROP 0 EXIT THEN
+        DUP _PDLY-INDENT+ 0= IF DROP 0 EXIT THEN
+    ELSE
+        DUP _PDLY.X0 @ _PDLY-BLEFT @ MIN _PDLY-BLEFT !
+        1 _PDLY-LAST 45 = 2 _PDLY-LAST _PDLY-LOWER? AND
+        OVER _PDLY-LTEXT@ IF C@ _PDLY-LOWER? ELSE DROP 0 THEN AND IF
+            _PDLY-UNLAST
+        ELSE 1 _PDLY-LAST 32 <> IF
+            S"  " TSTY-PLAIN _PDLY-BTEXT+ 0= IF DROP 0 EXIT THEN
+        THEN THEN
+    THEN
+    DUP _PDLY-LTEXT@ ROT _PDLY-LMEAN@ _PDLY-COPY ;
+
+\ How far below the last line the next of the block may lie: 1.3 times
+\ the body's spacing, scaled to the block's size.
+: _PDLY-LIMIT  ( -- dy )
+    _PDLY-SPACING @ _PDLY-BSZ @ * _PDLY-BODY @ 1 MAX / 13 * 10 / ;
+
+\ Whether line LN, the block's last line, ends short of its column's end
+\ by more than four times the block's size.
+: _PDLY-SHORT?  ( ln -- flag )
+    DUP _PDLY.X1 @ SWAP _PDLY.CR @ _PDLY-BSZ @ 4 * - < ;
+
+\ Whether a gutter's column starts within half the block's size of X.
+: _PDLY-AT-START?  ( x -- flag )
+    _PDLY-NGUT 0 ?DO
+        DUP I _PDLY-GUT@ 16 + @ - ABS _PDLY-BSZ @ 2/ > 0= IF
+            DROP -1 UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+\ Whether line LN starts the next column where the block's last line,
+\ which runs to its column's end, left off: it lies right of that line,
+\ starts at a column's start, and is no bolder than the block.
+: _PDLY-NEXT-COLUMN?  ( ln -- flag )
+    DUP _PDLY.X0 @ _PDLY-PREV @ _PDLY.X1 @ < IF DROP 0 EXIT THEN
+    DUP _PDLY.FL @ _PDLY-BFL @ INVERT AND _PDLY-F-BOLD AND IF DROP 0 EXIT THEN
+    _PDLY.X0 @ _PDLY-AT-START? 0= IF 0 EXIT THEN
+    _PDLY-PREV @ _PDLY-SHORT? 0= ;
+
+\ Whether line LN starts a block after the one being built.  On a tagged
+\ page, where its structure block does, but for lines of code that
+\ follow one another.  Else: a rotated line, another kind of font or
+\ size, a baseline not at the block's spacing below the last, a list
+\ item, a line out of a list item's text, a first line's indent, or a
+\ line after a short one.
+: _PDLY-BREAK?  ( ln -- flag )
+    _PDLY-BOPEN? @ 0= IF DROP -1 EXIT THEN
+    DUP _PDLY.G @ _PDLY-BG @ OR IF
+        DUP _PDLY.G @ _PDLY-BG @ = IF DROP 0 EXIT THEN
+        DUP _PDLY.FL @ _PDLY-BFL @ AND _PDLY-F-FIXED AND 0= IF DROP -1 EXIT THEN
+        _PDLY-PREV @ _PDLY.Y @ SWAP _PDLY.Y @ -
+        DUP 0> SWAP _PDLY-LIMIT > 0= AND 0= EXIT
+    THEN
+    DUP _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP -1 EXIT THEN
+    _PDLY-PREV @ _PDLY.FL @ _PDLY-F-ROTATED AND IF DROP -1 EXIT THEN
+    DUP _PDLY.FL @ _PDLY-BFL @ XOR _PDLY-F-FIXED AND IF DROP -1 EXIT THEN
+    DUP _PDLY.SZ @ _PDLY-BSZ @ - ABS _PDLY-BSZ @ 10 / > IF DROP -1 EXIT THEN
+    _PDLY-PREV @ _PDLY.Y @ OVER _PDLY.Y @ -
+    DUP 0> 0= IF
+        \ Above the last line: a break, unless the block goes on at the top
+        \ of the next column, whose start becomes its left.
+        DROP DUP _PDLY-NEXT-COLUMN? 0= IF DROP -1 EXIT THEN
+        DUP _PDLY.X0 @ _PDLY-BLEFT !  0
+    THEN
+    _PDLY-LIMIT > IF DROP -1 EXIT THEN
+    DUP _PDLY-LTEXT@ _PDLY-MARKER NIP NIP IF DROP -1 EXIT THEN
+    _PDLY-BFL @ _PDLY-F-FIXED AND IF DROP 0 EXIT THEN
+    _PDLY-BNEW 16 + @ IF
+        _PDLY.X0 @ _PDLY-ITEM-X @ - ABS _PDLY-BSZ @ > EXIT
+    THEN
+    DUP _PDLY.X0 @ _PDLY-BLEFT @ - _PDLY-BSZ @ > IF DROP -1 EXIT THEN
+    DROP
+    _PDLY-BSZ @ _PDLY-BODY @ - ABS _PDLY-BODY @ 10 / > IF 0 EXIT THEN
+    1 _PDLY-LAST 45 = IF 0 EXIT THEN
+    _PDLY-PREV @ _PDLY-SHORT? ;
+
+\ A picture drawn, a figure of its own unless it is an artifact or
+\ smaller than the body text either way.
+: _PDLY-FIGURE  ( fig -- ok? )
+    DUP PDF-FIG-STYLE PDF-RUN-ARTIFACT AND IF DROP -1 EXIT THEN
+    DUP PDF-FIG-BOX ROT - >R SWAP - R>                              ( fig w h )
+    2DUP MIN _PDLY-BODY @ < IF DROP 2DROP -1 EXIT THEN
+    _PDLY-FINISH 0= IF DROP 2DROP 0 EXIT THEN
+    _PDLY-BNEW _PDLY-BLOCK 0 FILL  DOC-B-FIGURE _PDLY-BNEW !
+    _PDLY-BNEW 80 + !  _PDLY-BNEW 72 + !
+    DUP PDF-FIG-NUM _PDLY-BNEW 64 + !
+    PDF-FIG-BOX DUP _PDLY-BNEW 40 + !  ROT + 2/ _PDLY-BNEW 88 + !
+    _PDLY-BNEW 104 + !  _PDLY-BNEW 96 + !
+    _PDLY-BTEXT-U _PDLY-BNEW 48 + !
+    _PDLY-BNEW _PDLY-BLOCK _PDLY-L @ _PDLY.BLOCKS _PDLY-APPEND ;
+
+VARIABLE _PDLY-FI   \ the next figure
+
+\ The figures drawn before run AT.
+: _PDLY-FIGURES  ( at -- ok? )
+    BEGIN
+        _PDLY-FI @ _PDLY-C @ PDF-CONTENT-FIGURES < IF
+            DUP _PDLY-FI @ _PDLY-C @ PDF-CONTENT-FIGURE PDF-FIG-AT < 0=
+        ELSE 0 THEN
+    WHILE
+        _PDLY-FI @ _PDLY-C @ PDF-CONTENT-FIGURE _PDLY-FIGURE 0= IF DROP 0 EXIT THEN
+        1 _PDLY-FI +!
+    REPEAT DROP -1 ;
+
+: _PDLY-MAKE-BLOCKS  ( -- ok? )
+    0 _PDLY-BOPEN? !  0 _PDLY-FI !
+    _PDLY-NLINES 0 ?DO
+        I _PDLY-LINE@ DUP _PDLY-FOLIO? IF DROP ELSE
+            DUP _PDLY.R @ _PDLY-FIGURES 0= IF DROP 0 UNLOOP EXIT THEN
+            DUP _PDLY-BREAK? IF _PDLY-START ELSE _PDLY-JOIN THEN
+            0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _PDLY-FINISH 0= IF 0 EXIT THEN
+    1 62 LSHIFT _PDLY-FIGURES ;
+
+\ =====================================================================
+\  Laying out a page
+\ =====================================================================
+
+\ PDF-LAYOUT-FREE ( layout -- )   Give back its blocks and their text.
+: PDF-LAYOUT-FREE  ( layout -- )
+    DUP _PDLY.MSRC @ ?DUP IF
+        >R DUP _PDLY.BLOCKS R@ PDF-BUF-FREE  DUP _PDLY.TEXT R@ PDF-BUF-FREE
+        DUP _PDLY.MEAN R@ PDF-BUF-FREE  DUP _PDLY.LINKS R> PDF-BUF-FREE
+    THEN
+    PDF-LAYOUT-SIZE 0 FILL ;
+
+\ PDF-LAYOUT-READ ( page content struct links layout -- status )
+\   The blocks of the runs CONTENT read from PAGE, which may be closed,
+\   by the page's structure STRUCT, or 0, with the places of the page's
+\   LINKS (pdf/navigate.f), or 0, in their text.
+: PDF-LAYOUT-READ  ( page content struct links layout -- status )
+    DUP _PDLY-L !  PDF-LAYOUT-SIZE 0 FILL  _PDLY-LK !  _PDLY-ST !  _PDLY-C !
+    _PDLY-LK @ IF _PDLY-LK @ PDF-LINKS-COUNT 0= IF 0 _PDLY-LK ! THEN THEN
+    PDF-PAGE-FILE PDF-FILE-MSRC DUP _PDLY-MS !  _PDLY-L @ _PDLY.MSRC !
+    0 _PDLY-LBL? !  0 _PDLY-LC !
+    _PDLY-LINES _PDLY-NBUFS PDF-BUF-SIZE * 0 FILL
+    _PDLY-MAKE-LINES IF _PDLY-LINE-LINKS IF _PDLY-MEASURE IF _PDLY-MAKE-BLOCKS
+    ELSE 0 THEN ELSE 0 THEN ELSE 0 THEN
+    _PDLY-NBUFS 0 DO _PDLY-LINES I PDF-BUF-SIZE * + _PDLY-MS @ PDF-BUF-FREE LOOP
+    IF PDF-S-OK ELSE PDF-S-MEMORY THEN ;

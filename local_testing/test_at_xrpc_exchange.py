@@ -145,6 +145,7 @@ RUNTIME_STAGES = (
     ("install", "_ATXR-INSTALL", "AT XRPC EXCHANGE SESSION READY"),
     ("owner-restart", "_ATXR-RESTART", "AT XRPC EXCHANGE REOPEN READY"),
     ("exchange", "_ATXET-QUALIFY", "AT XRPC EXCHANGE VERTICAL READY"),
+    ("gzip", "_ATXET-GZIP", "AT XRPC EXCHANGE GZIP READY"),
     ("finish", "_ATXET-FINISH", PASS_MARKER),
 )
 
@@ -227,6 +228,7 @@ def _assert_static() -> None:
     assert _requires(CONTRACT) == ["at-xrpc-auth-read-test.f"]
     for marker in (
         "_ATXET-QUALIFY",
+        "_ATXET-GZIP",
         "_ATXET-FINISH",
         "AT-XRPC-EXCHANGE-INIT",
         "AT-XRPC-EXCHANGE-BIND",

@@ -19,7 +19,7 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 │  rename    │        (LST-NEW table)            │
 │  Ctrl+N    │  ── or ──                         │
 │ Ctrl+Shift+N│                                    │
-│  Del,F2,F5 │  (TXTA-NEW) file preview          │
+│  Del,F2,F5 │  (MEDIA-NEW) file preview         │
 ├────────────┴───────────────────────────────────┤
 │ 42 items                 /projects/akashic      │
 └────────────────────────────────────────────────┘
@@ -35,7 +35,7 @@ Full-featured dual-pane file explorer for the Megapad-64 TUI.
 | tabs.f | `akashic-tui-tabs` |
 | status.f | `akashic-tui-status` |
 | menu.f | `akashic-tui-menu` |
-| textarea.f | `akashic-tui-textarea` |
+| media.f | `akashic-tui-media` |
 | input.f | `akashic-tui-input` |
 | dialog.f | `akashic-tui-dialog` |
 | app-desc.f | `akashic-tui-app-desc` |
@@ -137,7 +137,11 @@ The right pane uses tabbed view with two tabs:
   a header row) showing the directory's entries.  Selecting a row loads a
   file's preview without leaving the table; opening a row enters a directory
   or opens a file with its application.
-- **Preview**: Read-only textarea showing file content (up to 32 KiB)
+- **Preview**: a `<media id=preview>` element whose
+  [media widget](../../widgets/media.md) shows the selected file the way its
+  kind is shown: a QOI picture in half-block cells, a text or HTML file whole
+  in a text area, and otherwise the file's name, kind and size with why it
+  shows only those.
 
 ## Integration
 
@@ -187,8 +191,15 @@ while retaining the Explorer guard.
 - Rows and tree entries are keyed by `EXPL-ENTRY-KEY`, a hash of the parent's
   key and the name, so a rich renderer's item events name the entry it drew
   even after a refresh.
-- Preview reads up to 32 KiB with an exact checked transfer; a failed preview
-  read leaves the prior view intact.
+- Selecting a file gives its path to the preview's media widget, which opens
+  it in File Explorer's VFS. A text file is read whole into a buffer sized to
+  it and closed; a picture keeps its file open while it shows and decodes
+  only once the Preview tab draws it, a slice a pass from the shell's
+  service. A file that cannot be read, or text the memory refuses, shows its
+  facts and the reason.
+- One 32 KiB scratch buffer serves the file copy (two 16 KiB chunks, so a
+  copy can be compared with its source), the properties text, and the
+  agent's text preview.
 - Path built by walking `IN.PARENT @` chain up to root, then reversing segments
 - Clipboard captures a canonical source path rather than relying on a live
   inode pointer. Directories, same-path pastes, and existing destinations are

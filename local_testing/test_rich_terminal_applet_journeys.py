@@ -8,6 +8,7 @@ the physical runner would present and checks the one input each sends.
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,14 +56,21 @@ from rich_terminal_applet_journeys import (
     STREAMS_LINK,
     STREAMS_REPLY_TEXT,
     STREAMS_ROOT_TEXT,
+    FEXP_PHOTO,
+    FEXP_PHOTO_FACTS,
+    FEXP_PHOTO_SIZE,
     AgentAloneJourney,
     DaybookAloneJourney,
+    FexpAloneJourney,
     PadAloneJourney,
+    PhotoJourney,
+    DamagedPictureJourney,
     SmallTerminalJourney,
     StreamsAloneJourney,
     applet_journey,
 )
 from rich_terminal_desktop_acceptance import (
+    JourneyProgress,
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
 )
@@ -798,7 +806,8 @@ def test_every_single_applet_profile_has_a_journey() -> None:
         journey = applet_journey(name, profile.ready_markers)
         assert journey.ready_markers == profile.ready_markers
         # Desk and the one applet, nothing else but the Agent's demo provider.
-        applet = "pad" if name == "small-terminal" else name
+        applet = {"small-terminal": "pad", "photo": "fexp",
+                  "damaged": "fexp"}.get(name, name)
         provider = (akashic_tui._DESK_AGENT_PROVIDER,) if name == "agent" else ()
         assert profile.roots == (
             "tui/desk-apt1.f", akashic_tui.desk_applet(applet).module, *provider
@@ -953,3 +962,186 @@ def test_daybook_alone_requires_the_notice_in_rich_and_cell() -> None:
     frame = _daybook_frame(agenda=entry, checked=True, notice=True)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="CELL does not show"):
         journey.after_present(offer, 9, frame, sender)
+
+
+FEXP_READY = ("Details", "Tools")
+
+
+def _fexp_tree(expanded: bool):
+    """File Explorer's folder tree: its root, and one folder once expanded."""
+
+    root = SimpleNamespace(item_key=1, parent_key=0, state=ItemState.EXPANDABLE
+                           | (ItemState.EXPANDED if expanded else ItemState(0)))
+    folder = SimpleNamespace(item_key=2, parent_key=1, state=ItemState.EXPANDABLE)
+    return SimpleNamespace(content=SimpleNamespace(items=(root, folder) if expanded else (root,)),
+                           value=lambda key: f"item:{key}")
+
+
+def _upload_status(begin=0, chunk=0, commit=0, abort=0, present=0) -> dict:
+    """A status poll's frame counters for an upload beside the screen."""
+
+    return {"rich_terminal": {"frames_by_type": {
+        "0x1000": begin, "0x1001": chunk, "0x1002": commit, "0x000C": abort,
+        "0x2001": present,
+    }}}
+
+
+class _UploadProbe:
+    """Drive File Explorer's paced-link check through its first preview."""
+
+    def __init__(self, monkeypatch):
+        self.journey = FexpAloneJourney(FEXP_READY, paced_link=True)
+        self.journey.stage = self.journey.PICTURE_PREVIEWED
+        self.tree = _fexp_tree(False)
+        self.sent = []
+        self.offers = 0
+        monkeypatch.setattr(FexpAloneJourney, "_tree",
+                            staticmethod(lambda projection: self.tree))
+
+    def frame(self, *, pictures=(), **counts):
+        self.journey.observe_status(_upload_status(**counts))
+        self.offers += 1
+
+        def sender(method, value, offer, generation):
+            self.sent.append((method, value))
+            return "progress"
+
+        return self.journey._probe_upload(
+            SimpleNamespace(offer_id=self.offers, scope=None), 9, None, sender,
+            list(pictures))
+
+
+def test_fexp_on_a_paced_link_answers_input_while_its_picture_uploads(monkeypatch) -> None:
+    probe = _UploadProbe(monkeypatch)
+    journey = probe.journey
+    # The picture is being prepared; nothing goes until its chunks do.  The
+    # screen may not change meanwhile, so the runner shows the journey the
+    # frame on screen after each status poll.
+    assert journey.acts_between_frames
+    assert probe.frame(present=40) == JourneyProgress()
+    assert probe.frame(begin=1, present=40) == JourneyProgress()
+    assert probe.sent == []
+    assert probe.frame(begin=1, chunk=3, present=41).milestone == (
+        "fexp-input-sent-during-upload")
+    assert probe.sent == [("item_expand", "item:1")]
+    assert not journey.acts_between_frames
+    # A frame before the answer, then the answer while chunks still go.
+    assert probe.frame(begin=1, chunk=6, present=42) == JourneyProgress()
+    probe.tree = _fexp_tree(True)
+    assert probe.frame(begin=1, chunk=9, present=43).milestone == (
+        "fexp-input-answered-during-upload")
+    assert journey.frame_barrier == probe.offers
+    assert probe.frame(begin=1, chunk=12, present=43) == JourneyProgress()
+    assert probe.frame(begin=1, chunk=20, commit=1, present=45,
+                       pictures=("sunset",)).milestone == "fexp-picture-shown-after-input"
+    assert probe.sent[-1] == ("item_collapse", "item:1")
+    assert probe.frame(begin=1, chunk=20, commit=1, present=45,
+                       pictures=("sunset",)) == JourneyProgress()
+    probe.tree = _fexp_tree(False)
+    assert probe.frame(begin=1, chunk=20, commit=1, present=46, pictures=("sunset",)) is None
+    assert journey.evidence == {"paced_upload": {
+        "sent": dict(resource_begin=1, resource_chunk=3, resource_commit=0,
+                     resource_abort=0, present_commit=41),
+        "answered": dict(resource_begin=1, resource_chunk=9, resource_commit=0,
+                         resource_abort=0, present_commit=43),
+        "shown": dict(resource_begin=1, resource_chunk=20, resource_commit=1,
+                      resource_abort=0, present_commit=45),
+    }}
+
+
+@pytest.mark.parametrize(("answer", "pictures", "message"), (
+    (dict(chunk=20, commit=1, present=45), (), "arrived before the frame answering"),
+    (dict(chunk=9, present=43), ("sunset",), "arrived before the frame answering"),
+    (dict(chunk=9, abort=1, present=43), (), "upload stopped"),
+    (dict(chunk=9, present=41), (), "committed no frame"),
+))
+def test_fexp_on_a_paced_link_refuses_an_answer_that_waited(
+    monkeypatch, answer, pictures, message
+) -> None:
+    probe = _UploadProbe(monkeypatch)
+    probe.frame(begin=1, chunk=3, present=41)
+    probe.tree = _fexp_tree(True)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        probe.frame(begin=1, pictures=pictures, **answer)
+
+
+def test_fexp_on_a_paced_link_needs_the_upload_to_outlast_the_input(monkeypatch) -> None:
+    probe = _UploadProbe(monkeypatch)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="too fast"):
+        probe.frame(begin=1, chunk=20, commit=1, present=45, pictures=("sunset",))
+    probe = _UploadProbe(monkeypatch)
+    probe.frame(begin=1, chunk=3, present=41)
+    probe.tree = _fexp_tree(True)
+    probe.frame(begin=1, chunk=9, present=43)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no chunk"):
+        probe.frame(begin=1, chunk=9, commit=1, present=45, pictures=("sunset",))
+
+
+def test_only_a_paced_link_checks_an_upload() -> None:
+    plain = applet_journey("fexp", FEXP_READY)
+    assert plain._probe is None and plain.evidence is None
+    plain.stage = plain.PICTURE_PREVIEWED
+    assert not plain.acts_between_frames
+    paced = applet_journey("fexp", FEXP_READY, paced_link=True)
+    assert paced._probe == "pending" and paced.evidence == {"paced_upload": {}}
+    # The other journeys run unchanged on a paced link.
+    assert applet_journey("pad", PAD_READY, paced_link=True).evidence is None
+
+
+def _photo_frame(width, height, *, resource=7):
+    """A frame offer carrying one picture resource of WIDTH by HEIGHT."""
+
+    manifest = SimpleNamespace(owner_id=1, owner_generation=2, resource_id=resource,
+                               width=width, height=height, byte_length=width * height * 4)
+    return SimpleNamespace(retained=SimpleNamespace(resources=(manifest,)))
+
+
+# File Explorer's preview at its largest: 195 by 78 cells of 11 by 21 pixels.
+_PHOTO_SHOWN = SimpleNamespace(left=85, top=3, right=280, bottom=81, owner_id=1,
+                               owner_generation=2, resource_id=7)
+
+
+def test_the_photo_check_needs_the_photo_itself() -> None:
+    """The terminal decodes QOI, so it holds the whole photo, decoded from
+    the file, and fits it into the preview itself."""
+
+    assert (FEXP_PHOTO, FEXP_PHOTO_SIZE) == (
+        akashic_tui.SAMPLE_PHOTO_NAME, akashic_tui.SAMPLE_PHOTO_SIZE)
+    width, height = FEXP_PHOTO_SIZE
+    assert FEXP_PHOTO_FACTS == f"QOI, {width} \u00d7 {height}"
+    journey = PhotoJourney(("Details", "Tools"))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="cell size"):
+        journey._require_photo_itself(_photo_frame(2160, 1620), _PHOTO_SHOWN)
+    journey.cell_pixels = (11, 21)
+    journey._require_photo_itself(_photo_frame(2160, 1620), _PHOTO_SHOWN)
+    assert journey.evidence == {"photo": {
+        "photo_pixels": [2160, 1620], "area_cells": [195, 78], "cell_pixels": [11, 21],
+        "area_pixels": [2145, 1638], "held_pixels": [2160, 1620],
+        "held_bytes": 2160 * 1620 * 4,
+    }}
+    # A copy made for the area, of any size, is not the photo itself.
+    for width, height in ((2145, 1609), (160, 120), (1080, 810)):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="not the photo itself"):
+            journey._require_photo_itself(_photo_frame(width, height), _PHOTO_SHOWN)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="does not carry"):
+        journey._require_photo_itself(_photo_frame(2160, 1620, resource=8), _PHOTO_SHOWN)
+
+
+def test_the_damaged_check_needs_one_upload_the_terminal_answered() -> None:
+    """The damaged file goes to the terminal once: one upload begun, sent and
+    committed, which the terminal refused, and none after it."""
+
+    journey = DamagedPictureJourney(FEXP_READY)
+    journey.observe_status(_upload_status(begin=2, chunk=5, commit=2, present=30))
+    journey._before = dict(journey._frames)
+    journey.observe_status(_upload_status(begin=3, chunk=6, commit=2, present=31))
+    assert journey._sent_once() is None
+    journey.observe_status(_upload_status(begin=3, chunk=6, commit=3, present=32))
+    assert journey._sent_once() == dict(resource_begin=1, resource_chunk=1,
+                                        resource_commit=1, resource_abort=0)
+    # Sent again, stopped, or answered with nothing sent: not one upload.
+    for counts in (dict(begin=4, chunk=7, commit=4), dict(begin=3, chunk=6, abort=1, commit=2),
+                   dict(begin=2, chunk=5, commit=3)):
+        journey.observe_status(_upload_status(present=33, **counts))
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="not as one upload"):
+            journey._sent_once()

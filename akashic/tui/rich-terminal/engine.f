@@ -60,7 +60,8 @@ REQUIRE fdc1.f
 
 \ Neutral retained feature families.  These are Akashic capability bits, not
 \ provider-specific values.  CORE is required; SERIES depends on INSTRUMENT,
-\ CONTROL-COLLECTIONS on CONTROLS, and CONTROL-ITEMS on CONTROL-COLLECTIONS.
+\ CONTROL-COLLECTIONS on CONTROLS, and CONTROL-ITEMS and CONTROL-DOCUMENTS
+\ on CONTROL-COLLECTIONS.
 1  CONSTANT RTE-F-CORE
 2  CONSTANT RTE-F-VECTOR
 4  CONSTANT RTE-F-IMAGE
@@ -76,7 +77,16 @@ REQUIRE fdc1.f
 0x1000 CONSTANT RTE-F-FIELDS
 0x200 CONSTANT RTE-F-PANES
 0x800 CONSTANT RTE-F-TASKBARS
-0x3FFF CONSTANT _RTE-FEATURE-MASK
+0x4000 CONSTANT RTE-F-CONTROL-DOCUMENTS
+0x7FFF CONSTANT _RTE-FEATURE-MASK
+
+\ Neutral picture formats: raw RGBA8 pixels, or a QOI, PNG or JPEG file the
+\ terminal decodes.  A limits record's image formats hold format N as bit
+\ N-1; a terminal that takes pictures always takes raw pixels.
+1 CONSTANT RTE-PICTURE-RGBA8
+2 CONSTANT RTE-PICTURE-QOI
+3 CONSTANT RTE-PICTURE-PNG
+4 CONSTANT RTE-PICTURE-JPEG
 
 \ One fixed record captures negotiated admission bounds.  Its size is a
 \ record shape, never a product capacity.  Every count and byte maximum comes
@@ -102,8 +112,9 @@ REQUIRE fdc1.f
 : _RTE-L.SAMPLE-SLOTS    ( l -- a ) 144 + ;
 : _RTE-L.MIN-INTERVAL-US ( l -- a ) 152 + ;
 : _RTE-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;
+: _RTE-L.IMAGE-FORMATS   ( l -- a ) 168 + ;
 
-168 CONSTANT RTE-LIMITS-SIZE
+176 CONSTANT RTE-LIMITS-SIZE
 
 : RTE-LIMITS-BYTES  ( -- bytes )  RTE-LIMITS-SIZE ;
 
@@ -129,6 +140,13 @@ REQUIRE fdc1.f
 : RTE-LIMITS-MIN-INTERVAL-US@ ( l -- u )  _RTE-L.MIN-INTERVAL-US @ ;
 : RTE-LIMITS-OUTBOUND-PAYLOAD@ ( l -- u )
     _RTE-L.OUTBOUND-PAYLOAD @ ;
+: RTE-LIMITS-IMAGE-FORMATS@   ( l -- u )  _RTE-L.IMAGE-FORMATS @ ;
+
+\ RTE-LIMITS-PICTURE? ( format limits -- flag )
+\   The terminal takes pictures in FORMAT, one of RTE-PICTURE-.
+: RTE-LIMITS-PICTURE?  ( format limits -- flag )
+    OVER 1- 4 U< 0= IF 2DROP 0 EXIT THEN
+    _RTE-L.IMAGE-FORMATS @ SWAP 1- RSHIFT 1 AND 0<> ;
 
 \ Neutral retained update vocabulary.  Values need not equal any provider's.
 1 CONSTANT RTE-RETAINED-DELTA
@@ -188,8 +206,20 @@ REQUIRE fdc1.f
 : _RTE-F.OWNER-QUOTAS-XT ( f -- a ) 232 + ;
 : _RTE-F.ADMISSION-NEEDS-XT ( f -- a ) 240 + ;
 : _RTE-F.STORAGE-GROW-XT ( f -- a ) 248 + ;
+\ Pictures: one job at a time, an upload, a drop or a pixel question.  The
+\ IMAGE statics that show what an upload committed go through the static
+\ calls.
+: _RTE-F.RESOURCE-UPLOAD-XT ( f -- a ) 256 + ;
+: _RTE-F.RESOURCE-DROP-XT ( f -- a ) 264 + ;
+: _RTE-F.RESOURCE-CANCEL-XT ( f -- a ) 272 + ;
+: _RTE-F.JOB-XT ( f -- a ) 280 + ;
+: _RTE-F.JOB-CLEAR-XT ( f -- a ) 288 + ;
+: _RTE-F.PIXELS-ASK-XT ( f -- a ) 296 + ;
+: _RTE-F.PIXELS-XT ( f -- a ) 304 + ;
+: _RTE-F.RESOURCE-WANTS-XT ( f -- a ) 312 + ;
+: _RTE-F.RESOURCE-FEED-XT ( f -- a ) 320 + ;
 
-256 CONSTANT RTE-FACADE-SIZE
+328 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -306,9 +336,47 @@ REQUIRE fdc1.f
 : _RTE-STATIC.VALUE-A            ( record -- a ) 152 + ;
 : _RTE-STATIC.VALUE-U            ( record -- a ) 160 + ;
 : _RTE-STATIC.RESERVED           ( record -- a ) 168 + ;
+\ An IMAGE may show only part of its rectangle: CLIP-X, CLIP-Y, CLIP-COLS
+\ and CLIP-ROWS, a rectangle of cells relative to its origin with positive
+\ extents inside its own, or all four zero for the whole.  A status field's
+\ are zero.
+: _RTE-STATIC.CLIP-X             ( record -- a ) 176 + ;
+: _RTE-STATIC.CLIP-Y             ( record -- a ) 184 + ;
+: _RTE-STATIC.CLIP-COLS          ( record -- a ) 192 + ;
+: _RTE-STATIC.CLIP-ROWS          ( record -- a ) 200 + ;
 
-176 CONSTANT RTE-STATIC-SIZE
+208 CONSTANT RTE-STATIC-SIZE
 : RTE-STATIC-BYTES ( -- bytes ) RTE-STATIC-SIZE ;
+
+\ An IMAGE static shows one picture its owner generation has committed,
+\ scaled by FIT into its cell rectangle.  BACKDROP has the renderer paint its
+\ own background under the whole rectangle first, so nothing beneath shows.
+\ It has no text: its kind-specific cells take the places of a status
+\ field's LABEL-COLS, SEVERITY, EMPHASIZED and RESERVED.
+2 CONSTANT RTE-STATIC-IMAGE
+0 CONSTANT RTE-IMAGE-FIT-STRETCH
+1 CONSTANT RTE-IMAGE-FIT-CONTAIN
+2 CONSTANT RTE-IMAGE-FIT-COVER
+: _RTE-STATIC.FIT       ( record -- a ) 112 + ;
+: _RTE-STATIC.OPACITY   ( record -- a ) 120 + ;
+: _RTE-STATIC.BACKDROP  ( record -- a ) 128 + ;
+: _RTE-STATIC.RESOURCE  ( record -- a ) 168 + ;
+
+\ The one job a provider runs beside its updates.  QUEUED waits to be sent,
+\ AWAITING for the terminal, and WANTS for the caller to feed an upload's
+\ next chunk; DONE and FAILED hold the outcome until RTE-JOB-CLEAR.  Updates
+\ run between a job's frames: one may begin while the job is QUEUED or
+\ WANTS, and the job's next frame waits for it to end.  The two take turns,
+\ and no update may begin while the job is AWAITING.
+0 CONSTANT RTE-JOB-NONE
+1 CONSTANT RTE-JOB-QUEUED
+2 CONSTANT RTE-JOB-AWAITING
+3 CONSTANT RTE-JOB-DONE
+4 CONSTANT RTE-JOB-FAILED
+5 CONSTANT RTE-JOB-WANTS
+1 CONSTANT RTE-JOB-UPLOAD
+2 CONSTANT RTE-JOB-DROP
+3 CONSTANT RTE-JOB-PIXELS
 
 \ PANE carries ordinary outer/content geometry without requiring a title row.
 \ CONTENT coordinates are relative to its outer rectangle, and its unique
@@ -439,10 +507,11 @@ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
 
 \ Renderer-neutral semantic CONTROL vocabulary.  These values describe
 \ meaning above any terminal protocol; a concrete bridge maps each admitted
-\ kind and state bit explicitly.  TEXT_AREA, TEXT_GRID, TABSET, TAB, and
-\ ITEM_VIEW extend the existing CONTROL family and are gated by
-\ RTE-F-CONTROL-COLLECTIONS, and ITEM_VIEW also by RTE-F-CONTROL-ITEMS; they
-\ are not a second operation family.
+\ kind and state bit explicitly.  TEXT_AREA, TEXT_GRID, TABSET, TAB,
+\ ITEM_VIEW, and DOCUMENT extend the existing CONTROL family and are gated by
+\ RTE-F-CONTROL-COLLECTIONS, ITEM_VIEW also by RTE-F-CONTROL-ITEMS, and
+\ DOCUMENT also by RTE-F-CONTROL-DOCUMENTS; they are not a second operation
+\ family.
 1 CONSTANT RTE-CONTROL-MENU-BAR
 2 CONSTANT RTE-CONTROL-MENU
 3 CONSTANT RTE-CONTROL-MENU-ITEM
@@ -456,6 +525,7 @@ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
 11 CONSTANT RTE-CONTROL-TASK
 12 CONSTANT RTE-CONTROL-LAUNCHER
 13 CONSTANT RTE-CONTROL-FIELD
+14 CONSTANT RTE-CONTROL-DOCUMENT
 
 \ Input intents a renderer may report against one retained control.  The
 \ values are the APT-1 CONTROL_EVENT kinds, so a transport passes them
@@ -498,9 +568,9 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ retains no pointer.  CONTENT is one canonical renderer-neutral binary value.
 \ CONTENT-ITEMS and CONTENT-UTF8 are its already-derived quota aggregates,
 \ CONTENT-RUNS its total style runs, and CONTENT-FIELDS an item view's total
-\ fields.  With an item view's column count from its ITM1 header, they fix
-\ CONTENT-U exactly.  They are not capacities or a parallel item
-\ representation.
+\ fields or a document's total containers.  With an item view's column count
+\ from its ITM1 header, they fix CONTENT-U exactly.  They are not capacities
+\ or a parallel item representation.
 : _RTE-CONTROL.OWNER       ( control -- a )        ;
 : _RTE-CONTROL.GENERATION  ( control -- a )    8 + ;
 : _RTE-CONTROL.ID          ( control -- a )   16 + ;
@@ -538,7 +608,7 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ plan's sole item-bank pass.  Callback stack: plan count variable-bytes,
 \ aligned-variable-bytes, max-item-variable-bytes, last-id,
 \ collection-controls, item-view-controls, semantic-items, utf8-bytes, field-controls,
-\ context -- status.
+\ document-controls, context -- status.
 \ It may inspect already-validated header scalars but must not traverse the
 \ plan's ITEMS-A/ITEMS-U bank.
 : _RTE-CP.OWNER        ( plan -- a )        ;
@@ -731,8 +801,12 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 : _RTE-HA.SERIES-CHUNK-SAMPLES-MAX ( summary -- a ) 432 + ;
 : _RTE-HA.SERIES-CHUNK-BYTES-MAX ( summary -- a ) 440 + ;
 : _RTE-HA.WAVEFORM-COUNT     ( summary -- a ) 448 + ;
+\ How many of STATIC-COUNT are IMAGE statics.  STATIC-COPY, -TEXT, -ALIGNED
+\ and -MAX describe the status fields; a provider sizes images itself.
+: _RTE-HA.STATIC-IMAGES      ( summary -- a ) 456 + ;
+: _RTE-HA.DOCUMENT-CONTROLS  ( summary -- a ) 464 + ;
 
-456 CONSTANT RTE-HYBRID-ADMISSION-SIZE
+472 CONSTANT RTE-HYBRID-ADMISSION-SIZE
 
 : RTE-HYBRID-ADMISSION-BYTES  ( -- bytes )
     RTE-HYBRID-ADMISSION-SIZE ;
@@ -1092,26 +1166,58 @@ VARIABLE _RTE-LPV-COL-END
         R> /STRING
     REPEAT 2DROP -1 ;
 
-: _RTE-STATIC-FIELDS?  ( static -- flag )
+: _RTE-STATIC-COMMON?  ( static -- flag )
     DUP _RTE-STATIC.OWNER @ 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.GENERATION @ 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.ID @ 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.REGION @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.KIND @ RTE-STATIC-STATUS-FIELD <> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.PARENT @ IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.RESERVED @ IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.VISIBLE @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.EMPHASIZED @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.Z @ _RTE-I32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.ROW @ _RTE-I32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.COL @ _RTE-I32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.HEIGHT @ 1 <> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.WIDTH @ DUP 0= IF 2DROP 0 EXIT THEN
         _RTE-U32? 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.ROOT-HEIGHT @ DUP 0= IF 2DROP 0 EXIT THEN
         _RTE-U32? 0= IF DROP 0 EXIT THEN
-    DUP _RTE-STATIC.ROOT-WIDTH @ DUP 0= IF 2DROP 0 EXIT THEN
+    _RTE-STATIC.ROOT-WIDTH @ DUP 0= IF DROP 0 EXIT THEN _RTE-U32? ;
+
+\ No clip, or one of positive extents inside the static's rectangle.
+: _RTE-STATIC-CLIP?  ( static -- flag )
+    DUP _RTE-STATIC.CLIP-X @ OVER _RTE-STATIC.CLIP-Y @ OR
+    OVER _RTE-STATIC.CLIP-COLS @ OR OVER _RTE-STATIC.CLIP-ROWS @ OR
+        0= IF DROP -1 EXIT THEN
+    DUP _RTE-STATIC.CLIP-X @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-Y @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-COLS @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-ROWS @ DUP 0= SWAP _RTE-U32? 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-X @ OVER _RTE-STATIC.CLIP-COLS @ +
+        OVER _RTE-STATIC.WIDTH @ U> IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.CLIP-Y @ OVER _RTE-STATIC.CLIP-ROWS @ +
+        SWAP _RTE-STATIC.HEIGHT @ U> 0= ;
+
+: _RTE-STATIC-UNCLIPPED?  ( static -- flag )
+    DUP _RTE-STATIC.CLIP-X @ OVER _RTE-STATIC.CLIP-Y @ OR
+    OVER _RTE-STATIC.CLIP-COLS @ OR SWAP _RTE-STATIC.CLIP-ROWS @ OR 0= ;
+
+\ An IMAGE static: any positive height, a committed resource, a fit, an
+\ opacity and a backdrop flag, a clip, and no text.
+: _RTE-IMAGE-STATIC-FIELDS?  ( static -- flag )
+    DUP _RTE-STATIC.HEIGHT @ DUP 0= IF 2DROP 0 EXIT THEN
         _RTE-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC-CLIP? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.RESOURCE @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.FIT @ RTE-IMAGE-FIT-COVER U> IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.OPACITY @ 256 U< 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.BACKDROP @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.LABEL-A @ OVER _RTE-STATIC.LABEL-U @ OR
+    OVER _RTE-STATIC.VALUE-A @ OR SWAP _RTE-STATIC.VALUE-U @ OR 0= ;
+
+: _RTE-STATUS-FIELD-FIELDS?  ( static -- flag )
+    DUP _RTE-STATIC.RESERVED @ IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC-UNCLIPPED? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.EMPHASIZED @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.HEIGHT @ 1 <> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.SEVERITY @ 5 U< 0= IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.LABEL-COLS @ OVER _RTE-STATIC.WIDTH @ U> IF DROP 0 EXIT THEN
     DUP _RTE-STATIC.LABEL-U @ _RTE-U32? 0= IF DROP 0 EXIT THEN
@@ -1127,6 +1233,13 @@ VARIABLE _RTE-LPV-COL-END
     DUP _RTE-STATIC.VALUE-A @ OVER _RTE-STATIC.VALUE-U @
         _RTE-GLYPH-RUN-TEXT-SPAN? 0= IF DROP 0 EXIT THEN
     DROP -1 ;
+
+: _RTE-STATIC-FIELDS?  ( static -- flag )
+    DUP _RTE-STATIC-COMMON? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-STATIC.KIND @
+    DUP RTE-STATIC-STATUS-FIELD = IF DROP _RTE-STATUS-FIELD-FIELDS? EXIT THEN
+    RTE-STATIC-IMAGE = IF _RTE-IMAGE-STATIC-FIELDS? EXIT THEN
+    DROP 0 ;
 
 : RTE-STATIC-VALID?  ( static -- flag )
     DUP RTE-STATIC-SIZE _RTE-SPAN? 0= IF DROP 0 EXIT THEN
@@ -1539,6 +1652,7 @@ VARIABLE _RTE-LI-INSTRUMENT
 : _RTE-CONTROL-COLLECTION-KIND?  ( kind -- flag )
     DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-ITEM-VIEW = IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-DOCUMENT = IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-TABSET =
     SWAP RTE-CONTROL-TAB = OR ;
 
@@ -1554,6 +1668,7 @@ VARIABLE _RTE-LI-INSTRUMENT
     DUP _RTE-CONTROL-TEXT-COLLECTION-KIND? IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-ITEM-VIEW = IF DROP -1 EXIT THEN
     DUP RTE-CONTROL-FIELD = IF DROP -1 EXIT THEN
+    DUP RTE-CONTROL-DOCUMENT = IF DROP -1 EXIT THEN
     RTE-CONTROL-TABSET = ;
 
 : _RTE-CONTROL-CONTENT-ZERO?  ( -- flag )
@@ -1662,9 +1777,44 @@ VARIABLE _RTE-ITM1-SUM
         _RTE-ITM1-BYTES? 0= IF 2DROP 0 EXIT THEN
     SWAP _RTE-CONTROL.CONTENT-U @ = ;
 
+\ Canonical DOC1 is a 32-byte header, 32 bytes per block, 8 per container,
+\ the blocks' UTF-8, and 12 bytes per style run (SEMANTIC-CONTENT-1), so a
+\ document's scalars alone fix its exact length.
+: _RTE-DOC1-BYTES?  ( blocks containers utf8 runs -- bytes flag )
+    32 _RTE-ITM1-SUM !
+    12 _RTE-ITM1-TERM? 0= IF 2DROP DROP 0 0 EXIT THEN
+    _RTE-ITM1-ADD? 0= IF 2DROP 0 0 EXIT THEN
+    8 _RTE-ITM1-TERM? 0= IF DROP 0 0 EXIT THEN
+    32 _RTE-ITM1-TERM? 0= IF 0 0 EXIT THEN
+    _RTE-ITM1-SUM @ -1 ;
+
+\ A document carries at least the 32-byte smallest DOC1 body, exactly the
+\ length its block, container, UTF-8 and run totals give.
+: _RTE-CONTROL-DOCUMENT-SHAPE?  ( -- flag )
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ 32 U< IF 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-ITEMS @
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-FIELDS @
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-UTF8 @
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-RUNS @
+        _RTE-DOC1-BYTES? 0= IF DROP 0 EXIT THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.CONTENT-U @ = ;
+
+0x31434F44 CONSTANT _RTE-DOC1-TAG
+
+\ A document's content is one DOC1 value: its header names version 1 and
+\ the carried block count, and its reserved fields are zero.
+: _RTE-DOCUMENT-CONTENT?  ( control -- flag )
+    DUP _RTE-CONTROL.CONTENT-A @
+    DUP _RTE-LE32@ _RTE-DOC1-TAG <> IF 2DROP 0 EXIT THEN
+    DUP 4 + _RTE-LE16@ 1 <> IF 2DROP 0 EXIT THEN
+    DUP 6 + _RTE-LE16@ IF 2DROP 0 EXIT THEN
+    DUP 18 + _RTE-LE16@ IF 2DROP 0 EXIT THEN
+    DUP 28 + _RTE-LE32@ IF 2DROP 0 EXIT THEN
+    20 + _RTE-LE32@ SWAP _RTE-CONTROL.CONTENT-ITEMS @ = ;
+
 \ _RTE-CONTROL-CONTENT? ( control -- flag )
-\   The content span is canonical and, for an item view, its bytes agree
-\   with the scalars.  Callers prove the record's fields first.
+\   The content span is canonical and, for an item view or a document, its
+\   bytes agree with the scalars.  Callers prove the record's fields first.
 \ Exact FDC1 derives its own aggregates; caller declarations must agree.
 : _RTE-FIELD-CONTENT? ( control -- flag )
     >R
@@ -1680,6 +1830,9 @@ VARIABLE _RTE-ITM1-SUM
         _RTE-CONTROL-CONTENT-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RTE-CONTROL.KIND @ RTE-CONTROL-ITEM-VIEW = IF
         _RTE-ITEM-VIEW-CONTENT? EXIT
+    THEN
+    DUP _RTE-CONTROL.KIND @ RTE-CONTROL-DOCUMENT = IF
+        _RTE-DOCUMENT-CONTENT? EXIT
     THEN
     DUP _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF
         _RTE-FIELD-CONTENT? EXIT
@@ -1809,6 +1962,17 @@ VARIABLE _RTE-ITM1-SUM
             0 EXIT
         THEN
         _RTE-CONTROL-ITEM-VIEW-SHAPE? EXIT
+    THEN
+    _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-DOCUMENT = IF
+        _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.ORDER @ OR IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.LABEL-U @
+        _RTE-LC-CONTROL @ _RTE-CONTROL.SHORTCUT-U @ OR IF 0 EXIT THEN
+        _RTE-LC-CONTROL @ _RTE-CONTROL.STATE @
+            _RTE-CONTROL-COLLECTION-STATE-MASK INVERT AND IF
+            0 EXIT
+        THEN
+        _RTE-CONTROL-DOCUMENT-SHAPE? EXIT
     THEN
     _RTE-LC-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TABSET = IF
         _RTE-LC-CONTROL @ _RTE-CONTROL.PARENT @
@@ -2266,6 +2430,8 @@ VARIABLE _RTE-LV-FEATURES
     _RTE-LV-FEATURES @ RTE-F-CONTROLS AND 0= AND IF 0 EXIT THEN
     _RTE-LV-FEATURES @ RTE-F-CONTROL-ITEMS AND
     _RTE-LV-FEATURES @ RTE-F-CONTROL-COLLECTIONS AND 0= AND IF 0 EXIT THEN
+    _RTE-LV-FEATURES @ RTE-F-CONTROL-DOCUMENTS AND
+    _RTE-LV-FEATURES @ RTE-F-CONTROL-COLLECTIONS AND 0= AND IF 0 EXIT THEN
     _RTE-LV-FEATURES @ RTE-F-FIELDS AND
     _RTE-LV-FEATURES @ RTE-F-CONTROLS AND 0= AND IF 0 EXIT THEN
     _RTE-LV-FEATURES @ RTE-F-TASKBARS AND
@@ -2301,6 +2467,12 @@ VARIABLE _RTE-LV-FEATURES
     _RTE-LV-L @ _RTE-L.IMAGE-HEIGHT @
     _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
         0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.IMAGE-FORMATS @
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND IF
+        DUP 15 INVERT AND SWAP 1 AND 0= OR IF 0 EXIT THEN
+    ELSE
+        IF 0 EXIT THEN
     THEN
 
     _RTE-LV-FEATURES @
@@ -2464,6 +2636,15 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.OWNER-QUOTAS-XT @ 0= OR
     OVER _RTE-F.ADMISSION-NEEDS-XT @ 0= OR
     OVER _RTE-F.STORAGE-GROW-XT @ 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-F.RESOURCE-UPLOAD-XT @ 0=
+    OVER _RTE-F.RESOURCE-DROP-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-CANCEL-XT @ 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-F.JOB-XT @ 0=
+    OVER _RTE-F.JOB-CLEAR-XT @ 0= OR
+    OVER _RTE-F.PIXELS-ASK-XT @ 0= OR
+    OVER _RTE-F.PIXELS-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-WANTS-XT @ 0= OR
+    OVER _RTE-F.RESOURCE-FEED-XT @ 0= OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
@@ -2499,6 +2680,7 @@ VARIABLE _RTE-CPV-ROOTS
 VARIABLE _RTE-CPV-COLLECTIONS
 VARIABLE _RTE-CPV-ITEM-VIEWS
 VARIABLE _RTE-CPV-FIELDS
+VARIABLE _RTE-CPV-DOCUMENTS
 VARIABLE _RTE-CPV-CONTENT-ITEMS
 VARIABLE _RTE-CPV-UTF8-BYTES
 VARIABLE _RTE-CPV-ROOT-ID
@@ -2546,6 +2728,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-COLLECTIONS !
     0 _RTE-CPV-ITEM-VIEWS !
     0 _RTE-CPV-FIELDS !
+    0 _RTE-CPV-DOCUMENTS !
     0 _RTE-CPV-CONTENT-ITEMS !
     0 _RTE-CPV-UTF8-BYTES !
     0 _RTE-CPV-ROOT-ID !
@@ -2914,6 +3097,9 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF
         1 _RTE-CPV-FIELDS +!
     THEN
+    _RTE-CPV-ITEM @ _RTE-CONTROL.KIND @ RTE-CONTROL-DOCUMENT = IF
+        1 _RTE-CPV-DOCUMENTS +!
+    THEN
     _RTE-CPV-CONTENT-ITEMS @
     _RTE-CPV-ITEM @ _RTE-CONTROL.CONTENT-ITEMS @
         _RTE-UADD? 0= IF DROP 0 EXIT THEN
@@ -2943,6 +3129,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-COLLECTIONS !
     0 _RTE-CPV-ITEM-VIEWS !
     0 _RTE-CPV-FIELDS !
+    0 _RTE-CPV-DOCUMENTS !
     0 _RTE-CPV-CONTENT-ITEMS !
     0 _RTE-CPV-UTF8-BYTES !
     0 _RTE-CPV-ROOT-ID !
@@ -3005,10 +3192,12 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-OPEN-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
-\ RTE-OWNER-RESIZE asks the terminal to grow an open owner's reservation to
-\ the complete quota set given, each at least the one held.  The owner is
-\ RESIZING until the terminal answers, then OPEN with the larger set if it
-\ said yes and the old one if it had no room; RTE-OWNER-QUOTAS@ tells which.
+\ RTE-OWNER-RESIZE asks the terminal to change an open owner's reservation to
+\ the complete quota set given: each at least the one held, except the
+\ resource count and bytes, which may fall to what the owner's committed
+\ pictures use.  The owner is RESIZING until the terminal answers, then OPEN
+\ with the new set if it said yes and the old one if it had no room;
+\ RTE-OWNER-QUOTAS@ tells which.
 : RTE-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-RESIZE-XT @ EXECUTE
@@ -3098,6 +3287,7 @@ VARIABLE _RTE-SPV-ITEM-TEXT
 VARIABLE _RTE-SPV-TEXT-OFF
 VARIABLE _RTE-SPV-BYTES-A
 VARIABLE _RTE-SPV-BYTES-U
+VARIABLE _RTE-SPV-IMAGES
 
 VARIABLE _RTE-SRPV-ITEM
 VARIABLE _RTE-SRPV-COUNT
@@ -4043,6 +4233,8 @@ CREATE _RTE-HPV-OWNED-END
         _RTE-HPV-SUMMARY _RTE-HA.CONTROL-ITEM-VIEWS !
     _RTE-CPV-FIELDS @
         _RTE-HPV-SUMMARY _RTE-HA.FIELD-CONTROLS !
+    _RTE-CPV-DOCUMENTS @
+        _RTE-HPV-SUMMARY _RTE-HA.DOCUMENT-CONTROLS !
     _RTE-CPV-CONTENT-ITEMS @
         _RTE-HPV-SUMMARY _RTE-HA.CONTROL-ITEMS !
     _RTE-CPV-UTF8-BYTES @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-UTF8 !
@@ -4131,6 +4323,9 @@ CREATE _RTE-HPV-OWNED-END
     -8 AND _RTE-SPV-ALIGNED @ _RTE-UADD? 0= IF DROP 0 EXIT THEN
         _RTE-SPV-ALIGNED !
     _RTE-SPV-ITEM-TEXT @ _RTE-SPV-MAX @ MAX _RTE-SPV-MAX !
+    _RTE-SPV-ITEM @ _RTE-STATIC.KIND @ RTE-STATIC-IMAGE = IF
+        1 _RTE-SPV-IMAGES +!
+    THEN
     _RTE-SPV-FIRST @ 0= IF
         _RTE-SPV-ITEM @ _RTE-STATIC.ID @ _RTE-SPV-FIRST !
     THEN
@@ -4156,12 +4351,13 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-SPV-PLAN @ _RTE-SP.ITEMS-A @ _RTE-SPV-ITEM !
     0 _RTE-SPV-TEXT ! 0 _RTE-SPV-TEXT-OFF ! 0 _RTE-SPV-ALIGNED !
     0 _RTE-SPV-MAX ! 0 _RTE-SPV-FIRST ! 0 _RTE-SPV-LAST !
+    0 _RTE-SPV-IMAGES !
     _RTE-SPV-COUNT @ 0 ?DO
         _RTE-SPV-ITEM? 0= IF 0 UNLOOP EXIT THEN
         RTE-STATIC-SIZE _RTE-SPV-ITEM +!
     LOOP
     _RTE-SPV-TEXT @ _RTE-SPV-BYTES-U @ <> IF 0 EXIT THEN
-    _RTE-SPV-COUNT @ RTE-STATIC-SIZE _RTE-UMUL? 0= IF
+    _RTE-SPV-COUNT @ _RTE-SPV-IMAGES @ - RTE-STATIC-SIZE _RTE-UMUL? 0= IF
         DROP 0 EXIT
     THEN _RTE-SPV-ALIGNED @ _RTE-UADD? 0= IF DROP 0 EXIT THEN
         _RTE-SPV-COPY !
@@ -4176,6 +4372,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-SPV-LAST @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-LAST !
     _RTE-SPV-COPY @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-COPY !
     _RTE-SPV-OPS @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-OPS !
+    _RTE-SPV-IMAGES @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-IMAGES !
     -1 ;
 
 : _RTE-HPV-GLYPH-ITEM?  ( -- flag )
@@ -4389,6 +4586,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-CPV-CONTENT-ITEMS @
     _RTE-CPV-UTF8-BYTES @
     _RTE-CPV-FIELDS @
+    _RTE-CPV-DOCUMENTS @
     _RTE-CPV-FACADE @ _RTE-F.CONTEXT @
     _RTE-CPV-FACADE @ _RTE-F.CONTROL-PREFLIGHT-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN
@@ -4615,4 +4813,124 @@ VARIABLE _RTE-CD-CALLBACK-XT
 : RTE-OWNER-DROP  ( owner generation facade -- status )
     DUP RTE-VALID? 0= IF _RTE-DROP3 RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-DROP-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ =====================================================================
+\  Pictures
+\ =====================================================================
+\
+\ A picture goes to the terminal once as an immutable resource of its owner
+\ generation, as raw RGBA8 pixels or as a file in a format the terminal
+\ decodes; IMAGE statics then show it.  Uploads, drops and pixel
+\ questions run as the provider's one job, so a producer queues one, steps
+\ the provider until RTE-JOB@ says DONE or FAILED, reads the outcome and
+\ clears it.  An upload's bytes are fed a chunk at a time: whenever the job
+\ WANTS, the producer reads the chunk RTE-RESOURCE-WANTS@ names and hands
+\ it over with RTE-RESOURCE-FEED, so it holds one chunk, never the picture.
+\ Updates run between the job's frames, so an upload never holds up the
+\ screen (APT-1-RETAINED-1 section 8).
+
+VARIABLE _RTE-RU-U
+VARIABLE _RTE-RU-F
+
+: _RTE-RU-CLEAR  ( status -- status )
+    0 _RTE-RU-U ! 0 _RTE-RU-F ! ;
+
+\ RTE-RESOURCE-UPLOAD
+\   ( owner generation resource format width height bytes facade -- status )
+\   Queue an upload of BYTES bytes, a WIDTH by HEIGHT picture in FORMAT, one
+\   of RTE-PICTURE-, as RESOURCE of an open owner: raw row-major RGBA8
+\   pixels, or a file the terminal decodes, as it is.  The terminal must
+\   take FORMAT (RTE-LIMITS-PICTURE?).  RESOURCE must be above every ID the
+\   owner generation has used.  Once the terminal has begun the upload, the
+\   job WANTS each chunk in turn, which the caller feeds.  The owner holds
+\   the decoded picture, WIDTH * HEIGHT * 4 bytes, whatever the format;
+\   CAPACITY when it has no room for that: ask with RTE-OWNER-RESIZE.
+: RTE-RESOURCE-UPLOAD
+    _RTE-RU-F ! _RTE-RU-U !
+    _RTE-RU-F @ RTE-VALID? 0= IF
+        2DROP 2DROP 2DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT
+    THEN
+    _RTE-RU-U @ 0= IF 2DROP 2DROP 2DROP RTE-S-INVALID _RTE-RU-CLEAR EXIT THEN
+    _RTE-RU-U @
+    _RTE-RU-F @ _RTE-F.CONTEXT @ _RTE-RU-F @ _RTE-F.RESOURCE-UPLOAD-XT @
+        EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN _RTE-RU-CLEAR ;
+
+\ RTE-RESOURCE-WANTS@ ( facade -- offset most status )
+\   The chunk an upload WANTS: where it starts in the upload's bytes, and
+\   the most bytes it may carry.  INVALID unless the job WANTS a chunk.
+: RTE-RESOURCE-WANTS@  ( facade -- offset most status )
+    DUP RTE-VALID? 0= IF DROP 0 0 RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-WANTS-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-RESOURCE-FEED ( a u facade -- status )
+\   Hand an upload that WANTS its next chunk the chunk's bytes: U of them at
+\   A, at least one and no more than RTE-RESOURCE-WANTS@ allows, outside
+\   the facade and the provider.  The job's next frame carries them, and the
+\   caller keeps them unchanged until the job no longer holds them: once it
+\   WANTS again or ends.  INVALID, with nothing taken, for a chunk it does
+\   not want.
+: RTE-RESOURCE-FEED  ( a u facade -- status )
+    DUP RTE-VALID? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+    >R
+    DUP 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
+    2DUP R@ _RTE-HPV-FIXED-BYTE? 0= IF 2DROP R> DROP RTE-S-INVALID EXIT THEN
+    R@ _RTE-F.CONTEXT @ R> _RTE-F.RESOURCE-FEED-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-RESOURCE-DROP ( owner generation resource bytes facade -- status )
+\   Queue a drop of the owner's committed RESOURCE, whose decoded size is
+\   BYTES, which no IMAGE static shown or committed for showing may still
+\   name.  It gives back the owner's usage; RTE-OWNER-RESIZE gives back the
+\   reservation.
+: RTE-RESOURCE-DROP  ( owner generation resource bytes facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-DROP-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-RESOURCE-CANCEL ( facade -- status )
+\   Stop an upload that is QUEUED or WANTS; WOULD-BLOCK while its frame
+\   awaits the terminal.
+: RTE-RESOURCE-CANCEL  ( facade -- status )
+    DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RESOURCE-CANCEL-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-JOB@ ( facade -- state kind item result status )
+\   The job: its RTE-JOB- state and kind, its resource, or a pixel
+\   question's query ID, and once DONE or FAILED its outcome: OK, CAPACITY
+\   when the terminal had no room, SOURCE when it refused an upload's bytes
+\   as no picture of the size named, STALE when cancelled, WOULD-BLOCK when
+\   a drop found the picture still shown, INVALID otherwise.
+: RTE-JOB@  ( facade -- state kind item result status )
+    DUP RTE-VALID? 0= IF DROP 0 0 0 0 RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.JOB-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-JOB-CLEAR ( facade -- status )
+\   Forget a finished job so another can start; WOULD-BLOCK while one is in
+\   progress.
+: RTE-JOB-CLEAR  ( facade -- status )
+    DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.JOB-CLEAR-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-PIXELS-ASK ( x y cols rows facade -- status )
+\   Queue a question of how many pixels the cell rectangle X Y COLS ROWS of
+\   the surface covers.  The answer is advice: the terminal scales every
+\   picture to its IMAGE static's rectangle whatever its size.
+: RTE-PIXELS-ASK  ( x y cols rows facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.PIXELS-ASK-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+\ RTE-PIXELS@ ( facade -- geometry width height status )
+\   A DONE pixel question's answer: the geometry generation it holds for
+\   and the pixels the rectangle covers, zero when the terminal cannot say.
+\   WOULD-BLOCK while the question is in progress.
+: RTE-PIXELS@  ( facade -- geometry width height status )
+    DUP RTE-VALID? 0= IF DROP 0 0 0 RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.PIXELS-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;

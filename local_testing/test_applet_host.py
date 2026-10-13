@@ -12,6 +12,13 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui as harness  # noqa: E402
+import qoi_codec  # noqa: E402
+
+# A picture of 200 by 120 pixels in bands, which QOI stores in about a
+# kilobyte, so it decodes over more than one service slice.
+PICTURE = qoi_codec.encode(
+    [[(row * 2, 255 - row * 2, (row // 8) * 16, 255)] * 200 for row in range(120)]
+)
 
 
 PROFILE = "applet-host-contracts"
@@ -38,6 +45,9 @@ CREATE _ah-host AHOST-SIZE ALLOT
 CREATE _ah-context 8 ALLOT
 CREATE _ah-endpoint 8 ALLOT
 VARIABLE _ah-reg
+VARIABLE _ah-vfs
+VARIABLE _ah-service-passes
+\ PICTURE-BYTES
 VARIABLE _ah-screen
 VARIABLE _ah-temp-screen
 CREATE _ah-context-ptrs 17 CELLS ALLOT
@@ -253,7 +263,7 @@ VARIABLE _ah-tick-touch
     ['] _ah-state-fini _ah-comp COMP.STATE-FINI-XT !
     _ah-app APP-DESC-INIT
     _ah-comp _ah-app APP.COMP-DESC !
-    S" <uidl><input id=semantic-input/><menubar><menu id=semantic-menu label=File><item text=New/></menu></menubar></uidl>"
+    S" <uidl><input id=semantic-input/><menubar><menu id=semantic-menu label=File><item text=New/></menu></menubar><media id=picture/></uidl>"
         _ah-app APP.UIDL-U ! _ah-app APP.UIDL-A !
     ['] _ah-init _ah-app APP.INIT-XT !
     ['] _ah-activate _ah-app APP.ACTIVATE-XT !
@@ -313,6 +323,14 @@ VARIABLE _ah-ew
     CREG-NEW DUP 0= _ah-assert DROP _ah-reg !
     _ah-fill-descriptor
     _ah-comp _ah-reg @ CREG-TYPE+ 0= _ah-assert
+
+    \ A RAM VFS holds the picture the media milestone shows.  It lives for
+    \ the whole run, so the memory baselines below include it.
+    524288 A-XMEM ARENA-NEW IF -1 THROW THEN
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _ah-vfs !
+    S" /pic.qoi" _ah-vfs @ VFS-CREATE 0<> _ah-assert
+    S" /pic.qoi" VFS-FF-WRITE _ah-vfs @ VFS-OPEN? 0= _ah-assert
+    _ah-picture _ah-picture-u 2 PICK VFS-WRITE-EXACT 0= _ah-assert VFS-CLOSE
 
     \ Context ownership has no fixed pool ceiling.  Exceed the former
     \ sixteen-context arena cap, then prove exact allocator recovery.
@@ -570,6 +588,34 @@ VARIABLE _ah-ew
     _ah-stack
     ." AH-M7B-CAPTURE" CR
 
+    \ A picture a child's <media> element shows decodes from the host's
+    \ per-pass service, one bounded slice a pass, and only the slot whose
+    \ document changed is marked for repaint.  With nothing decoding the
+    \ service does nothing.
+    _ah-host AHOST-SERVICE 0= _ah-assert
+    _ah-slot-a @ AHS-CTX-SWITCH
+    S" /pic.qoi" _ah-vfs @ S" picture" UTUI-BY-ID UTUI-WIDGET@
+        MEDIA-OPEN-VFS 0= _ah-assert
+    S" picture" UTUI-BY-ID UIDL-DIRTY!
+    _ah-host AHOST-SERVICE 0= _ah-assert
+    -1 0 _ah-host AHOST-PAINT
+    PICT-WORK? _ah-assert
+    0 _ah-slot-a @ AHS.DIRTY !  0 _ah-slot-b @ AHS.DIRTY !
+    0 _ah-service-passes !
+    BEGIN _ah-host AHOST-SERVICE WHILE 1 _ah-service-passes +! REPEAT
+    _ah-service-passes @ 2 = _ah-assert
+    PICT-WORK? 0= _ah-assert
+    _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
+    _ah-slot-b @ AHS.DIRTY @ 0= _ah-assert
+    _ah-slot-a @ AHS-CTX-SWITCH
+    S" picture" UTUI-BY-ID DUP UIDL-DIRTY? _ah-assert
+    UTUI-WIDGET@ MEDIA-PICTURE@ PICT-CELL-COPY@ PIC-STATE@
+        PIC-ST-READY = _ah-assert
+    0 0 _ah-host AHOST-PAINT
+    _ah-slot-a @ AHS.DIRTY @ 0= _ah-assert
+    _ah-stack
+    ." AH-M7C-SERVICE" CR
+
     \ Every fail-closed result preserves the exact slot; ALLOW alone drains
     \ it and calls shutdown, owner release, and close projection once.
     _ah-inst-a @ _ah-close-target !
@@ -771,6 +817,17 @@ VARIABLE _ah-ew
 
 _ah-driver
 '''
+
+
+AUTOEXEC = AUTOEXEC.replace(
+    "\\ PICTURE-BYTES\n",
+    "CREATE _ah-picture\n"
+    + "".join(
+        " ".join(f"{byte} C," for byte in PICTURE[at:at + 32]) + "\n"
+        for at in range(0, len(PICTURE), 32)
+    )
+    + f"{len(PICTURE)} CONSTANT _ah-picture-u\n",
+)
 
 
 def main() -> int:

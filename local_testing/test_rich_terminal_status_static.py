@@ -24,6 +24,7 @@ from tests.simulator.test_kdos_exceptions import _load_exceptions  # noqa: E402
 MASK = (1 << 64) - 1
 SENTINEL = 0x1827364554637281
 SOURCE = (RICH / "engine.f").read_text()
+STATIC_SIZE = int(re.search(r"(?m)^(\d+) CONSTANT RTE-STATIC-SIZE$", SOURCE)[1])
 
 
 def _word(source, name):
@@ -61,11 +62,14 @@ VARIABLE SF-STATUS
                               step_budget=8_000_000)
         self.serial = 0
         self.spans = []
-        self.facade = self.allocate(bytes(256))
+        size = int(re.search(r"(?m)^(\d+) CONSTANT RTE-FACADE-SIZE", SOURCE)[1])
+        self.facade = self.allocate(bytes(size))
         callback = self.runtime.find("SF-CALLBACK").xt
-        fields = [0x5254454641434144, 0, 256, self.facade, 1,
-                  self.runtime.find("SF-DISJOINT").xt] + [callback] * 26
-        self.write(self.facade, struct.pack("<32Q", *fields))
+        # Magic, reserved, size, self and context, then every provider call.
+        fields = [0x5254454641434144, 0, size, self.facade, 1,
+                  self.runtime.find("SF-DISJOINT").xt]
+        fields += [callback] * (size // 8 - len(fields))
+        self.write(self.facade, struct.pack(f"<{len(fields)}Q", *fields))
 
     def call(self, word, *inputs, readonly=True):
         stack = self.runtime.main_context.data
@@ -126,20 +130,20 @@ VARIABLE SF-STATUS
 
     def static(self, label=b"Ready", value=b"online", **changes):
         fields, _, _ = self.status_fields(label, value, **changes)
-        return self.record("_RTE-STATIC", 176, fields)
+        return self.record("_RTE-STATIC", STATIC_SIZE, fields)
 
     def graph(self, label=b"Ready", value=b"online", **changes):
         fields, text_a, text_u = self.status_fields(label, value, **changes)
-        item = self.record("_RTE-STATIC", 176, fields)
+        item = self.record("_RTE-STATIC", STATIC_SIZE, fields)
         header = dict(OWNER=1, GENERATION=2, **{"SURFACE-COLS": 80,
                       "SURFACE-ROWS": 24, "REGION-ID": 1, "REGION-COLS": 80,
-                      "REGION-ROWS": 24, "ITEMS-A": item, "ITEMS-U": 176})
+                      "REGION-ROWS": 24, "ITEMS-A": item, "ITEMS-U": STATIC_SIZE})
         plan = self.record("_RTE-SP", 144, header)
         hybrid = self.record("_RTE-HP", 168, {"ATTEMPT": 1,
                              "SOURCE-GENERATION": 1, "SURFACE-GENERATION": 1,
                              "STATIC-PLAN": plan, "STATIC-BYTES-A": text_a,
                              "STATIC-BYTES-U": text_u})
-        admission = self.allocate(b"A" * 456)
+        admission = self.allocate(b"A" * 464)
         return item, plan, hybrid, admission
 
 
@@ -169,6 +173,8 @@ def test_static_accepts_independent_clean_fields(static, label, value, changes):
     ("LABEL-COLS", 0), ("LABEL-COLS", 20), ("LABEL-COLS", 21),
     ("ROW", 1 << 31), ("COL", -(1 << 31) - 1), ("Z", 1 << 31),
     ("LABEL-A", 0), ("VALUE-A", 0), ("LABEL-U", 1 << 32),
+    # Only an IMAGE shows part of its rectangle.
+    ("CLIP-X", 1), ("CLIP-ROWS", 1),
 ])
 def test_static_rejects_invalid_scalar_and_span_fields(static, field, value):
     record = static.static(**{field: value})
@@ -212,16 +218,64 @@ def test_static_only_hybrid_returns_exact_base_and_independent_aggregates(static
     item, plan, hybrid, admission = static.graph("État".encode(), b"ok")
     static.variable("SF-CALLS", 0)
     static.variable("SF-STATUS", 0)
-    sources = [(a, static.read(a, n)) for a, n in ((item, 176), (plan, 144), (hybrid, 168))]
+    sources = [(a, static.read(a, n)) for a, n in ((item, STATIC_SIZE), (plan, 144), (hybrid, 168))]
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade,
                        readonly=False) == (0,)
     assert static.variable("SF-CALLS") == 1
     for a, payload in sources:
         assert static.read(a, len(payload)) == payload
-    summary = struct.unpack("<57Q", static.read(admission, 456))
+    summary = struct.unpack("<58Q", static.read(admission, 464))
     assert summary[:15] == (1, 2, 80, 24, 1, 0, 0, 80, 24, 0, 0, 0, 0, 0, 0)
     assert summary[15:40] == (0,) * 25
-    assert summary[40:47] == (1, 7, 8, 7, 3, 184, 1)
+    assert summary[40:47] == (1, 7, 8, 7, 3, STATIC_SIZE + 8, 1)
+
+
+def _image_fields(**changes):
+    fields = dict(OWNER=1, GENERATION=2, ID=3, KIND=2, VISIBLE=-1, REGION=1,
+                  ROW=2, COL=4, HEIGHT=6, WIDTH=20, **{"ROOT-HEIGHT": 24,
+                  "ROOT-WIDTH": 80, "FIT": 1, "OPACITY": 255, "BACKDROP": -1,
+                  "RESOURCE": 9})
+    fields.update(changes)
+    return fields
+
+
+@pytest.mark.parametrize("changes,valid", [
+    ({}, True),
+    ({"FIT": 0, "OPACITY": 0, "BACKDROP": 0, "HEIGHT": 1}, True),
+    ({"FIT": 3}, False), ({"OPACITY": 256}, False), ({"BACKDROP": 1}, False),
+    ({"RESOURCE": 0}, False), ({"HEIGHT": 0}, False), ({"WIDTH": 0}, False),
+    ({"LABEL-U": 1}, False), ({"VALUE-A": 8}, False), ({"KIND": 3}, False),
+    # A clip: positive extents inside the rectangle, or none at all.
+    ({"CLIP-X": 2, "CLIP-Y": 1, "CLIP-COLS": 18, "CLIP-ROWS": 5}, True),
+    ({"CLIP-COLS": 20, "CLIP-ROWS": 6}, True),
+    ({"CLIP-X": 3, "CLIP-COLS": 18, "CLIP-ROWS": 6}, False),
+    ({"CLIP-Y": 1, "CLIP-COLS": 20, "CLIP-ROWS": 6}, False),
+    ({"CLIP-X": 1}, False), ({"CLIP-COLS": 4}, False),
+    ({"CLIP-COLS": 4, "CLIP-ROWS": 1 << 32}, False),
+])
+def test_image_static_has_its_own_fields_and_no_text(static, changes, valid):
+    record = static.record("_RTE-STATIC", STATIC_SIZE, _image_fields(**changes))
+    assert static.call("RTE-STATIC-VALID?", record) == ((MASK,) if valid else (0,))
+
+
+def test_image_static_hybrid_counts_images_apart_from_status_text(static):
+    item = static.record("_RTE-STATIC", STATIC_SIZE, _image_fields())
+    header = dict(OWNER=1, GENERATION=2, **{"SURFACE-COLS": 80,
+                  "SURFACE-ROWS": 24, "REGION-ID": 1, "REGION-COLS": 80,
+                  "REGION-ROWS": 24, "ITEMS-A": item, "ITEMS-U": STATIC_SIZE})
+    plan = static.record("_RTE-SP", 144, header)
+    hybrid = static.record("_RTE-HP", 168, {"ATTEMPT": 1,
+                           "SOURCE-GENERATION": 1, "SURFACE-GENERATION": 1,
+                           "STATIC-PLAN": plan})
+    admission = static.allocate(b"A" * 464)
+    static.variable("SF-CALLS", 0)
+    static.variable("SF-STATUS", 0)
+    assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade,
+                       readonly=False) == (0,)
+    summary = struct.unpack("<58Q", static.read(admission, 464))
+    # One static, no text and no status-field copy: it is an image.
+    assert summary[40:47] == (1, 0, 0, 0, 3, 0, 1)
+    assert summary[57] == 1
 
 
 @pytest.mark.parametrize("mutation", ("bank-short", "outside", "unaligned-record",
@@ -262,19 +316,19 @@ def test_failed_provider_does_not_publish_checked_summary(static):
 
 
 def test_status_only_capability_has_core_dependency_and_no_glyph_dependency(static):
-    limits = [0x401, 1, 1, 1, 0, 1, 0, 2, 296, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 96]
-    record = static.allocate(struct.pack("<21Q", *limits))
+    limits = [0x401, 1, 1, 1, 0, 1, 0, 2, 296, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 96, 0]
+    record = static.allocate(struct.pack("<22Q", *limits))
     assert static.call("RTE-LIMITS-VALID?", record) == (MASK,)
     static.cell(record, 0x400)
     assert static.call("RTE-LIMITS-VALID?", record) == (0,)
 
 
 def test_static_abi_is_separate_from_instruments():
-    assert "176 CONSTANT RTE-STATIC-SIZE" in SOURCE
+    assert "208 CONSTANT RTE-STATIC-SIZE" in SOURCE
     assert "144 CONSTANT RTE-STATIC-PLAN-SIZE" in SOURCE
     assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in SOURCE
-    assert "456 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
-    assert "256 CONSTANT RTE-FACADE-SIZE" in SOURCE
+    assert "472 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
+    assert "328 CONSTANT RTE-FACADE-SIZE" in SOURCE
     body = _word(SOURCE, "_RTE-HPV-STATIC?")
     assert "INSTRUMENT" not in body
     assert body.count("_RTE-SPV-ITEM?") == 1
@@ -289,18 +343,18 @@ def test_static_copy_padding_and_last_id_are_per_item_not_quota(static):
     for ordinal, identity in enumerate((3, 900)):
         fields, _, _ = static.status_fields(b"A", b"", ID=identity,
                                             **{"LABEL-A": text + ordinal})
-        item = static.record("_RTE-STATIC", 176, fields)
-        records.append(static.read(item, 176))
+        item = static.record("_RTE-STATIC", STATIC_SIZE, fields)
+        records.append(static.read(item, STATIC_SIZE))
     items = static.allocate(b"".join(records))
     static.cell(plan + _offset("_RTE-SP.ITEMS-A"), items)
-    static.cell(plan + _offset("_RTE-SP.ITEMS-U"), 352)
+    static.cell(plan + _offset("_RTE-SP.ITEMS-U"), 2 * STATIC_SIZE)
     static.cell(hybrid + _offset("_RTE-HP.STATIC-BYTES-A"), text)
     static.cell(hybrid + _offset("_RTE-HP.STATIC-BYTES-U"), 2)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade,
                        readonly=False) == (0,)
-    summary = struct.unpack("<57Q", static.read(admission, 456))
-    assert summary[40:47] == (2, 2, 16, 1, 900, 368, 2)
-    static.cell(items + 176 + _offset("_RTE-STATIC.ID"), 3)
+    summary = struct.unpack("<58Q", static.read(admission, 464))
+    assert summary[40:47] == (2, 2, 16, 1, 900, 2 * STATIC_SIZE + 16, 2)
+    static.cell(items + STATIC_SIZE + _offset("_RTE-STATIC.ID"), 3)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade) == (5,)
 
 
@@ -328,7 +382,7 @@ def test_static_and_glyph_lanes_share_root_and_order_identity_ranges(
                        readonly=bool(expected)) == (expected,)
     assert static.variable("SF-CALLS") == (expected == 0)
     if expected == 0:
-        summary = struct.unpack("<57Q", static.read(admission, 456))
+        summary = struct.unpack("<58Q", static.read(admission, 464))
         assert summary[4] == 1
         assert summary[23:28] == (1, 1, 8, 1, 4)
-        assert summary[40:47] == (1, 11, 16, 11, 3, 192, 1)
+        assert summary[40:47] == (1, 11, 16, 11, 3, STATIC_SIZE + 16, 1)

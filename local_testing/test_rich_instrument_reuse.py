@@ -23,6 +23,7 @@ class InstrumentHarness(GrowthHarness):
                          "tui/rich-terminal/uidl-claim-ledger.f",
                          "tui/rich-terminal/uidl-semantic-content-stx1.f",
                          "tui/rich-terminal/uidl-semantic-items-itm1.f",
+                         "tui/rich-terminal/uidl-semantic-documents-doc1.f",
                          "tui/uidl-menu-snapshot.f"):
             sources.append((ROOT / "akashic" / relative).read_text())
         self.definitions = _definitions("\n".join(sources))

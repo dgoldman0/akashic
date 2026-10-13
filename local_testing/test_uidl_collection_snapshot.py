@@ -25,11 +25,19 @@ AK = AKASHIC_ROOT / "akashic"
 # The snapshot module's REQUIRE closure in canonical load order, minus the
 # CSS and colour implementations this oracle replaces with STYLE_ABI_STUBS.
 _STUBBED_MODULES = {"css/css.f", "tui/color.f"}
-SOURCE_PATHS = [
-    AK / module
-    for module in dependency_order(AK, ("tui/uidl-collection-snapshot.f",))
-    if module not in _STUBBED_MODULES
+_CLOSURE = dependency_order(AK, ("tui/uidl-collection-snapshot.f",))
+SOURCE_PATHS = [AK / module for module in _CLOSURE if module not in _STUBBED_MODULES]
+
+# The colour stubs load where tui/color.f would, before its first user.
+COLOR_ABI_STUBS = [
+    ": TUI-RESOLVE-COLOR ( r g b -- index ) 3DROP 0 ;",
+    ": TUI-PALETTE>RGBA ( index -- rgba ) DROP 0x000000FF ;",
 ]
+COLOR_STUBS_BEFORE = next(
+    AK / module
+    for module in _CLOSURE[_CLOSURE.index("tui/color.f") + 1:]
+    if module not in _STUBBED_MODULES
+)
 
 # This oracle has no style declarations.  UIDL-TUI still needs the style ABI
 # while it compiles, but loading the complete CSS and colour implementations
@@ -58,8 +66,8 @@ def _load_forth_lines(path: Path) -> list[str]:
 def _closure_source() -> list[str]:
     source = []
     for path in SOURCE_PATHS:
-        if path.name == "data-graphics.f" and path.parent.name == "widgets":
-            source.append(": TUI-RESOLVE-COLOR ( r g b -- index ) 3DROP 0 ;")
+        if path == COLOR_STUBS_BEFORE:
+            source.extend(COLOR_ABI_STUBS)
         if path.name == "uidl-tui.f":
             source.extend(STYLE_ABI_STUBS)
         source.extend(_load_forth_lines(path))
@@ -1019,6 +1027,199 @@ def test_authored_and_mounted_tabs_share_generic_tabset_capture():
     assert int(summary.group(1)) >= 55
 
 
+def _media_collection_program() -> list[str]:
+    """A <media> element is captured as the text area or document it shows,
+    and only then."""
+
+    import qoi_codec
+
+    picture = qoi_codec.encode([[(8 * x, 12 * y, 7, 255) for x in range(30)] for y in range(20)])
+    picture_bytes = " ".join(f"{byte} C," for byte in picture)
+    markdown = b"# Notes\n\nSome *text* here.\n\n## List\n\n- one\n- two\n"
+    markdown_bytes = " ".join(f"{byte} C," for byte in markdown)
+    return [
+        "VARIABLE _UM-FAILS", "VARIABLE _UM-CHECKS", "VARIABLE _UM-DEPTH",
+        "VARIABLE _UM-RGN", "VARIABLE _UM-V",
+        "VARIABLE _UM-EM", "VARIABLE _UM-ET", "VARIABLE _UM-WM", "VARIABLE _UM-EL",
+        "VARIABLE _UM-COUNT", "VARIABLE _UM-USED", "VARIABLE _UM-STATUS",
+        f"CREATE _UM-QOI {picture_bytes}",
+        f"{len(picture)} CONSTANT _UM-QOI-U",
+        f"CREATE _UM-MD {markdown_bytes}",
+        f"{len(markdown)} CONSTANT _UM-MD-U",
+        "VARIABLE _UM-BLOCK",
+        # Compiled strings persist; an interpreted S" is overwritten by the next.
+        ': _UM-NOTES S" hello media" ;',
+        "CREATE _UM-BIN 0 C, 1 C, 2 C, 3 C,",
+        "CREATE _UM-BUILDER-MEM USCOL-BUILDER-SIZE 7 + ALLOT",
+        "CREATE _UM-VALIDATION-MEM 256 7 + ALLOT",
+        "CREATE _UM-WORK-MEM 896 7 + ALLOT",
+        "CREATE _UM-DESCRIPTORS-MEM 2 UCSN-DESCRIPTOR-BANK-BYTES 7 + ALLOT",
+        "CREATE _UM-NATIVE-MEM 2048 7 + ALLOT",
+        ": _UM-BUILDER _UM-BUILDER-MEM 7 + -8 AND ;",
+        ": _UM-VALIDATION _UM-VALIDATION-MEM 7 + -8 AND ;",
+        ": _UM-WORK _UM-WORK-MEM 7 + -8 AND ;",
+        ": _UM-DESCRIPTORS _UM-DESCRIPTORS-MEM 7 + -8 AND ;",
+        ": _UM-NATIVE _UM-NATIVE-MEM 7 + -8 AND ;",
+        ': _UM-ASSERT 1 _UM-CHECKS +! 0= IF 1 _UM-FAILS +! ." MEDIA ASSERT " _UM-CHECKS @ . CR THEN ;',
+        ": _UM-STACK DEPTH _UM-DEPTH @ = _UM-ASSERT ;",
+        ": _UM-D0 _UM-DESCRIPTORS ;",
+        ": _UM-D1 _UM-DESCRIPTORS UCSN-DESCRIPTOR-SIZE + ;",
+        ": _UM-INDEX ( elem -- index ) UIDL-ELEM-INDEX? 0= IF DROP -1 THEN ;",
+        ": _UM-CAPTURE ( native-a native-u -- )",
+        "  >R >R _UM-BUILDER _UM-VALIDATION 256 _UM-WORK 896",
+        "  _UM-DESCRIPTORS 2 UCSN-DESCRIPTOR-BANK-BYTES R> R> UCSN-CAPTURE",
+        "  _UM-STATUS ! _UM-USED ! _UM-COUNT ! ;",
+        ": _UM-ENTRY ( descriptor -- entry ) _UM-NATIVE UCSN-DESCRIPTOR-NATIVE DROP ;",
+        ": _UM-PUT ( a u path-a path-u -- )",
+        "  2DUP _UM-V @ VFS-CREATE 0= IF -101 THROW THEN",
+        "  VFS-FF-WRITE _UM-V @ VFS-OPEN? ?DUP IF THROW THEN",
+        "  DUP >R VFS-WRITE-EXACT IF -102 THROW THEN R> VFS-CLOSE ;",
+        ": _UM-OPEN ( path-a path-u -- ior ) _UM-V @ _UM-WM @ MEDIA-OPEN-VFS",
+        "  _UM-EM @ UIDL-DIRTY! ;",
+        ": _UM-SERVICE ( -- passes ) 0 BEGIN UTUI-SERVICE WHILE 1+ REPEAT ;",
+        "0 _UM-FAILS ! 0 _UM-CHECKS ! DEPTH _UM-DEPTH !",
+        "80 24 SCR-NEW SCR-USE",
+        "0 0 24 80 RGN-NEW _UM-RGN !",
+        "524288 A-XMEM ARENA-NEW IF -1 THROW THEN",
+        "VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN _UM-V !",
+        '_UM-NOTES S" /notes.txt" _UM-PUT',
+        '_UM-BIN 4 S" /data.bin" _UM-PUT',
+        '_UM-QOI _UM-QOI-U S" /logo.qoi" _UM-PUT',
+        '_UM-MD _UM-MD-U S" /notes.md" _UM-PUT',
+        # An authored visual rep shows its file from the current VFS.
+        "_UM-V @ VFS-USE",
+        'S" <uidl><region arrange=flex><media id=m/><textarea id=t/>'
+        "<media id=logo><rep modality=visual src='/logo.qoi' text=Logo/></media>"
+        '</region></uidl>" _UM-RGN @ UTUI-LOAD _UM-ASSERT',
+        'S" m" UTUI-BY-ID DUP _UM-EM ! UTUI-WIDGET@ DUP _UM-WM ! 0<> _UM-ASSERT',
+        "_UM-WM @ WDG-TYPE WDG-T-MEDIA = _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-NONE = _UM-ASSERT",
+        'S" t" UTUI-BY-ID DUP _UM-ET ! UTUI-WIDGET@ S" beta" ROT TXTA-SET-TEXT',
+        'S" logo" UTUI-BY-ID DUP _UM-EL ! UTUI-WIDGET@',
+        "  DUP MEDIA-VIEW@ MEDIA-V-PICTURE = _UM-ASSERT",
+        '  MEDIA-PICTURE@ _PICT-O-ALT-A + 2@ SWAP S" Logo" STR-STR= _UM-ASSERT',
+        # Text: the media element's own text area is a TEXT_AREA collection.
+        'S" /notes.txt" _UM-OPEN 0= _UM-ASSERT',
+        "UTUI-PAINT _UM-STACK",
+        "_UM-NATIVE 2048 _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT",
+        "_UM-COUNT @ 2 = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-EM @ _UM-INDEX = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-SOURCE-GENERATION@ 0= _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-ENTRY-FAMILY@ USCOL-F-TEXT-AREA = _UM-ASSERT",
+        '_UM-D0 _UM-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ S" hello media" STR-STR= _UM-ASSERT',
+        "_UM-D1 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-WIDTH@ _UM-EM @ _UTUI-SIDECAR _UTUI-SC-W@ = _UM-ASSERT",
+        # A bank over the media descriptor, which leads to that text area,
+        # is refused and the descriptor is untouched.
+        "_UM-WM @ _MEDIA-DESC-SIZE _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-TEXT = _UM-ASSERT",
+        "_UM-WM @ WDG-TYPE WDG-T-MEDIA = _UM-ASSERT",
+        # A document: the media element's document view is a DOCUMENT
+        # collection with the blocks it shows.
+        'S" /notes.md" _UM-OPEN 0= _UM-ASSERT',
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-DOCUMENT = _UM-ASSERT",
+        "UTUI-PAINT _UM-STACK",
+        "_UM-NATIVE 2048 _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT",
+        "_UM-COUNT @ 2 = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-EM @ _UM-INDEX = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-ENTRY-FAMILY@ USCOL-F-DOCUMENT = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-DOC-BLOCK-COUNT@ 5 = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-DOC-FIRST-BLOCK _UM-BLOCK !",
+        "_UM-BLOCK @ USCOL-BLOCK-KEY@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-BLOCK-KIND@ DOC-B-HEADING = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-BLOCK-LEVEL@ 1 = _UM-ASSERT",
+        '_UM-BLOCK @ USCOL-BLOCK-TEXT@ S" Notes" STR-STR= _UM-ASSERT',
+        "_UM-D1 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
+        # Banks over the document view, its document, or a block's content
+        # that the capture reads are refused.
+        "_UM-WM @ MEDIA-DOCUMENT@ _DOCV-DESC-SIZE _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DOC-SIZE _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "0 _UM-WM @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DOC-KEPT DUP 0<> _UM-ASSERT",
+        "DUP _DCT.BYTES @ _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-DOCUMENT = _UM-ASSERT",
+        "_UM-STACK",
+        # Contents: the document's contents' tree is an ITEM_VIEW of its
+        # entries, a TREE whose second entry is under the first; banks
+        # over the tree, its open entries, the entries' next siblings, or
+        # the document's contents are refused.
+        "_UM-WM @ _MEDIA-SHOW-CONTENTS _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-CONTENTS = _UM-ASSERT",
+        "_UM-EM @ UIDL-DIRTY! UTUI-PAINT _UM-STACK",
+        "_UM-NATIVE 2048 _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT",
+        "_UM-COUNT @ 2 = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-EM @ _UM-INDEX = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-ENTRY-FAMILY@ USCOL-F-ITEM-VIEW = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-IV-ROLE@ USCOL-IV-TREE = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-IV-ITEM-COUNT@ 2 = _UM-ASSERT",
+        "_UM-D0 _UM-ENTRY USCOL-IV-FIRST-ITEM _UM-BLOCK !",
+        "_UM-BLOCK @ USCOL-VI-KEY@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-PARENT@ 0= _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-DEPTH@ 0= _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-STATE@",
+        "  USCOL-IV-SELECTED USCOL-IV-EXPANDABLE OR USCOL-IV-EXPANDED OR = _UM-ASSERT",
+        '_UM-BLOCK @ USCOL-VI-FIRST-FIELD USCOL-FIELD-TEXT@ S" Notes" STR-STR= _UM-ASSERT',
+        "_UM-BLOCK @ USCOL-VI-NEXT _UM-BLOCK !",
+        "_UM-BLOCK @ USCOL-VI-KEY@ 2 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-PARENT@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-DEPTH@ 1 = _UM-ASSERT",
+        "_UM-BLOCK @ USCOL-VI-STATE@ 0= _UM-ASSERT",
+        '_UM-BLOCK @ USCOL-VI-FIRST-FIELD USCOL-FIELD-TEXT@ S" List" STR-STR= _UM-ASSERT',
+        "_UM-D1 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
+        "_UM-WM @ MEDIA-CONTENTS@ _TREE-DESC-SZ _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-CONTENTS@ DUP _TREE-O-XA + @ SWAP _TREE-O-XCAP + @ CELLS",
+        "  _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ _MEDIA-O-NEXT-A + @ _UM-WM @ _MEDIA-O-NEXT-N + @ CELLS _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-DOCUMENT@ DOCV-DOCUMENT@ DUP _DOC.ENTRIES-A @",
+        "  SWAP _DOC.ENTRIES-CAP @ _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-INVALID = _UM-ASSERT",
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-CONTENTS = _UM-ASSERT",
+        "_UM-STACK",
+        # Facts are ordinary CELL paint: only the textarea is captured.
+        'S" /data.bin" _UM-OPEN 0= _UM-ASSERT',
+        "_UM-WM @ MEDIA-VIEW@ MEDIA-V-FACTS = _UM-ASSERT",
+        "UTUI-PAINT _UM-NATIVE 2048 _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT _UM-COUNT @ 1 = _UM-ASSERT",
+        "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
+        # A picture decodes from the per-pass service once painted, and the
+        # element that changed is marked for repaint.
+        'S" /logo.qoi" _UM-OPEN 0= _UM-ASSERT',
+        # The authored logo has decoded since the first paint; this one
+        # waits for its own.
+        "_UM-SERVICE DROP",
+        "UTUI-SERVICE 0= _UM-ASSERT",
+        "UTUI-PAINT",
+        "PICT-WORK? _UM-ASSERT",
+        "_UM-EM @ UIDL-DIRTY? 0= _UM-ASSERT",
+        "_UM-SERVICE 0> _UM-ASSERT",
+        "PICT-WORK? 0= _UM-ASSERT",
+        "_UM-EM @ UIDL-DIRTY? _UM-ASSERT",
+        "_UM-WM @ MEDIA-PICTURE@ PICT-CELL-COPY@ PIC-STATE@ PIC-ST-READY = _UM-ASSERT",
+        "UTUI-PAINT _UM-NATIVE 2048 _UM-CAPTURE",
+        "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT _UM-COUNT @ 1 = _UM-ASSERT",
+        "_UM-STACK",
+        "UTUI-DETACH",
+        "_UM-STACK",
+        '_UM-FAILS @ 0= IF ." MEDIA COLLECTION PASS " ELSE ." MEDIA COLLECTION FAIL " THEN _UM-CHECKS @ . _UM-FAILS @ . CR',
+    ]
+
+
+def test_a_media_element_is_captured_as_the_view_it_shows():
+    output = _run_forth(_media_collection_program())
+    summary = re.search(r"MEDIA COLLECTION PASS\s+(\d+)\s+0", output)
+    assert summary, output[-10000:]
+    assert int(summary.group(1)) >= 81
+
+
 def _ruha_constructor_program() -> list[str]:
     """Compile ABI 7 over the generic snapshots and exercise its bank proof."""
 
@@ -1046,6 +1247,7 @@ def _ruha_constructor_program() -> list[str]:
     source += _load_forth_lines(AK / "tui" / "uidl-data-graphics-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-menu-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-status-field-snapshot.f")
+    source += _load_forth_lines(AK / "tui" / "uidl-picture-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-field-snapshot.f")
     source += _load_forth_lines(
         AK / "tui" / "rich-terminal" / "uidl-hybrid-adapter.f"

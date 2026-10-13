@@ -81,7 +81,7 @@ def test_public_descriptor_and_vocabulary_are_exact_and_generic() -> None:
 
 def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
     source = _source()
-    assert _constant(source, "RTAPT-HYBRID-ADMISSION-SIZE") == 456
+    assert _constant(source, "RTAPT-HYBRID-ADMISSION-SIZE") == 472
     fields = {
         "CLIP-X": 72,
         "CLIP-Y": 80,

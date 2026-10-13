@@ -228,7 +228,7 @@ def build_snapshot() -> None:
         payload_lines += _forth_lines(SOURCE_ROOT / module)
     payload_lines += _packed_source([
         "512 CONSTANT _FEXP-PATH-CAP",
-        "32768 CONSTANT _FEXP-PREVIEW-CAP",
+        "32768 CONSTANT _FEXP-SCRATCH-CAP",
         "0 CONSTANT _FEXP-CLIP-NONE",
         "1 CONSTANT _FEXP-CLIP-COPY",
         "2 CONSTANT _FEXP-CLIP-CUT",
@@ -249,7 +249,7 @@ def build_snapshot() -> None:
         "VARIABLE _FEXP-CLIP-PATH-LEN",
         "CREATE _FEXP-CLIP-PATH _FEXP-PATH-CAP ALLOT",
         "CREATE _FEXP-PATH-BUF _FEXP-PATH-CAP ALLOT",
-        "CREATE _FEXP-PREV-BUF _FEXP-PREVIEW-CAP ALLOT",
+        "CREATE _FEXP-SCRATCH _FEXP-SCRATCH-CAP ALLOT",
         ": _FEXP-SELECTED _FEXP-SEL-IN @ ;",
         ": ASHELL-TOAST 2DROP ;",
     ])

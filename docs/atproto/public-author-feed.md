@@ -17,7 +17,7 @@ The fixed request is:
 GET /xrpc/app.bsky.feed.getAuthorFeed?actor=<percent-encoded actor>&limit=8&filter=posts_no_replies&includePins=false HTTP/1.1
 Host: public.api.bsky.app
 Accept: application/json
-Accept-Encoding: identity
+Accept-Encoding: gzip
 User-Agent: Akashic-Streams/0.3
 Connection: close
 ```
@@ -74,8 +74,13 @@ transient body before freeing it, then clears the embedded response pointers.
 
 The provider admits only HTTP 200 with exactly one `Content-Type` whose media
 type is `application/json` (case-insensitive, with optional safe parameters).
-`Content-Encoding` may be absent or exactly `identity`, and duplicate encoding
-headers are rejected. HTTP, media, encoding, capacity, and transport failures
+`Content-Encoding` may be absent, exactly `identity`, or `gzip`, and duplicate
+encoding headers are rejected. A gzip body is inflated into the transient body
+as it arrives (see [http-buffered](../net/http-buffered.md)); the body as sent
+and as inflated each count against its 256 KiB, so a body past it fails with
+`PAF-CODE-BODY-OVERFLOW`, and a gzip body that is damaged, cut short or
+followed by more bytes fails with `PAF-CODE-CONTENT-ENCODING-DAMAGED`. HTTP,
+media, encoding, capacity, and transport failures
 remain distinguishable through `PAF.ERROR-KIND`, `PAF.ERROR-CODE`, and
 `XIOO.ERROR`. Cleanup failure is retained separately in
 `PAF.CLEANUP-ERROR`; a poisoned provider remains failed and refuses

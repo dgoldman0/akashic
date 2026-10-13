@@ -27,8 +27,12 @@
 \    TLINES-FREE    ( cursor -- )    release its buffers
 \    TLINES-START   ( addr u flags direction limit cursor -- line? )
 \        Read the text's first line.  FLAGS and DIRECTION are as for
-\        TROW-LAYOUT; a LIMIT below 1 counts as 1.  The text must stay
-\        unchanged while the cursor reads it.
+\        TROW-LAYOUT, and FLAGS may add TLINES-F-HARD; a LIMIT below 1
+\        counts as 1.  The text must stay unchanged while the cursor
+\        reads it.
+\    TLINES-F-HARD  ( -- flag )   hard lines, for text such as code whose
+\        spaces matter: a line ends only where the text reaches LIMIT, and
+\        the spaces at its end are part of it (Section 12)
 \    TLINES-NEXT    ( cursor -- line? )   Read the next line.
 \        Both are false past the last line, and when a paragraph cannot
 \        be laid out, which TLINES-FAILED? then tells.
@@ -76,6 +80,9 @@ TROW-SIZE 96 +  CONSTANT _TLN-O-MAP-CAP  \ entries the map has room for
 TROW-SIZE 104 + CONSTANT _TLN-O-SCALARS  \ a simple paragraph's scalars
 TROW-SIZE 112 + CONSTANT TLINES-SIZE
 
+\ Hard lines; TROW-LAYOUT never sees this flag.
+256 CONSTANT TLINES-F-HARD
+
 \ Kinds of paragraph.
 0 CONSTANT _TLN-K-ROW       \ laid out by TROW-LAYOUT
 1 CONSTANT _TLN-K-ASCII     \ printable ASCII: a character in each byte
@@ -95,6 +102,7 @@ VARIABLE _TLN-C       \ the cursor being read
 : _TLN-PARA-A  ( -- addr )  _TLN-O-TEXT-A _TLN@ _TLN-O-PARA _TLN@ + ;
 : _TLN-KIND  ( -- kind )  _TLN-O-KIND _TLN@ ;
 : _TLN-ROW?  ( -- flag )  _TLN-KIND _TLN-K-ROW = ;
+: _TLN-HARD?  ( -- flag )  _TLN-O-FLAGS _TLN@ TLINES-F-HARD AND 0<> ;
 
 \ A simple paragraph's scalar I starts at this byte of it; the map's last
 \ entry is the paragraph's end.
@@ -196,13 +204,31 @@ VARIABLE _TLN-PU
     3 PICK > IF NIP NIP EXIT THEN
     DROP NIP ;
 
+\ _TLN-HARD-END ( first -- end )
+\   Where a hard line that starts at character FIRST ends: before the
+\   first character that takes its width, spaces included, past the
+\   limit, or after its first character when that alone is wider.
+: _TLN-HARD-END  ( first -- end )
+    _TLN-ROW? 0= IF _TLN-O-LIMIT _TLN@ + _TLN-CHARS MIN EXIT THEN
+    0 _TLN-TOTAL !
+    _TLN-CHARS OVER ?DO
+        I _TLN-CHAR DROP _TLN-TOTAL @ +
+        DUP _TLN-O-LIMIT _TLN@ > IF
+            DROP I OVER > IF DROP I ELSE 1+ THEN UNLOOP EXIT
+        THEN
+        _TLN-TOTAL !
+    LOOP
+    DROP _TLN-CHARS ;
+
 \ Read the line that starts at character FIRST.
 : _TLN-SHOW  ( first -- )
     DUP _TLN-O-FIRST _TLN!
-    _TLN-ROW? IF _TLN-LINE-END ELSE _TLN-SIMPLE-END THEN
+    _TLN-HARD? IF _TLN-HARD-END
+    ELSE _TLN-ROW? IF _TLN-LINE-END ELSE _TLN-SIMPLE-END THEN THEN
     _TLN-O-END _TLN!
     _TLN-ROW? IF
-        _TLN-O-FIRST _TLN@ _TLN-O-END _TLN@ _TLN-C @ TROW-LINE
+        _TLN-O-FIRST _TLN@ _TLN-O-END _TLN@ _TLN-C @
+        _TLN-HARD? IF TROW-LINE-ALL ELSE TROW-LINE THEN
     THEN ;
 
 \ =====================================================================
@@ -289,7 +315,8 @@ VARIABLE _TLN-WIDE     \ the paragraph has a byte outside printable ASCII
     _TLN-O-PARA _TLN!
     _TLN-SCAN
     _TLN-ROW? IF
-        _TLN-PARA-A _TLN-O-PARA-U _TLN@ _TLN-O-FLAGS _TLN@ _TLN-O-DIR _TLN@
+        _TLN-PARA-A _TLN-O-PARA-U _TLN@
+        _TLN-O-FLAGS _TLN@ TLINES-F-HARD INVERT AND _TLN-O-DIR _TLN@
         _TLN-C @ TROW-LAYOUT 0= IF -1 _TLN-O-FAILED _TLN! 0 EXIT THEN
     THEN
     0 _TLN-SHOW -1 ;
@@ -331,9 +358,9 @@ VARIABLE _TLN-WIDE     \ the paragraph has a byte outside printable ASCII
     DUP _TLN-O-KIND + @ _TLN-K-ROW <> IF DROP 0 EXIT THEN
     TROW-PARA 1 AND 0<> ;
 
-\ The line's end, less the spaces at its end.
+\ The line's end, less the spaces at its end but on a hard line.
 : _TLN-LAST  ( -- last )
-    _TLN-O-END _TLN@ BEGIN
+    _TLN-O-END _TLN@ _TLN-HARD? IF EXIT THEN BEGIN
         DUP _TLN-O-FIRST _TLN@ > IF DUP 1- _TLN-SPACE? ELSE 0 THEN
     WHILE 1- REPEAT ;
 

@@ -34,6 +34,7 @@ knows each character's first scalar.
 | `BIDI-LEVELS` | `( work -- addr )` | The `n` resolved level bytes |
 | `BIDI-REORDER` | `( levels n order -- m )` | Rule L2 over a level byte array |
 | `BIDI-TRAILING?` | `( class -- flag )` | Does rule L1 reset this class at a line's end? |
+| `BIDI-INERT` | `( addr u -- )` | Make valid UTF-8 text's explicit controls inert stand-ins, in place |
 
 `classes` is a byte array of `UP-BC-*` values.  `scalars` is a 32-bit array
 of the same characters, consulted only for paired brackets; pass 0 when the
@@ -55,11 +56,24 @@ X9 removes) takes the paragraph level.  Every other L1 reset is the same on
 every line, so the paragraph's levels already hold it.  `TROW-LINE`
 ([text-row](text-row.md)) does this.
 
+## Untrusted text
+
+Text from outside an application is laid out ignoring its explicit
+embeddings, overrides and isolates (`TROW-F-UNTRUSTED`,
+[text-row](text-row.md)). `BIDI-INERT` makes the same text safe to publish
+to a renderer that honours them: in place, each embedding or override
+(U+202A to U+202E) becomes U+200B and each isolate (U+2066 to U+2069)
+U+180E, which, unlike U+200B, does not let Arabic letters join across it.
+Each stand-in is invisible, reorders nothing, and segments and joins as the
+control does, and is three bytes as the control is, so byte offsets and
+style runs over the text still fit. Lists in untrusted mode and document
+views publish their text this way.
+
 ## Concurrency
 
 The algorithm keeps its scratch state in module variables, so
 `BIDI-RESOLVE` and `BIDI-REORDER` take the module guard in `GUARDED`
-builds.  `BIDI-TRAILING?` is pure.  They call only the pure `UP-` lookups, so they cannot deadlock
+builds.  `BIDI-TRAILING?` and `BIDI-INERT` are pure.  They call only the pure `UP-` lookups, so they cannot deadlock
 with another guard.
 
 ## Tests

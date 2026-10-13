@@ -717,7 +717,7 @@ The host/backend boundary uses these stable ordinary status values:
 | 4 | `RTE-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
 | 5 | `RTE-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
 | 6 | `RTE-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
-| 7 | `RTE-S-SOURCE` | A semantic resource or series source failed. |
+| 7 | `RTE-S-SOURCE` | A semantic resource or series source failed, such as a picture file the terminal could not decode. |
 
 These statuses do not throw through an applet callback and are not returned to
 application rich-terminal code, because no such code exists. Local attachment
@@ -811,6 +811,18 @@ RTE-GLYPH-RUN-REPLACE
 RTE-RETAINED-SEAL
 RTE-RETAINED-CANCEL
 RTE-OWNER-DROP
+
+RTE-STATIC-DEFINE
+RTE-STATIC-REPLACE
+RTE-RESOURCE-UPLOAD
+RTE-RESOURCE-WANTS@
+RTE-RESOURCE-FEED
+RTE-RESOURCE-DROP
+RTE-RESOURCE-CANCEL
+RTE-PIXELS-ASK
+RTE-PIXELS@
+RTE-JOB@
+RTE-JOB-CLEAR
 ```
 
 The facade owns no storage, transport, host, UCTX, Desk, or application
@@ -824,16 +836,47 @@ provider opcodes or layouts. Public byte-count words, validators, and
 storage-disjoint queries are the ABI authority. Documentation must not freeze
 private descriptor offsets or copy an obsolete facade size.
 
-The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`, and
-`GLYPH_RUN`.
+Pictures cross the facade as one provider job at a time: an upload of an
+immutable resource, as raw RGBA8 pixels or as a file in a format the
+terminal decodes (`RTE-LIMITS-PICTURE?`), a drop, or a question of how many
+pixels a cell rectangle covers. The owner holds each picture's decoded size,
+width times height times four, whatever format it was sent in. A producer queues one, keeps
+stepping the provider until `RTE-JOB@` reports it DONE or FAILED, reads the
+outcome and clears it. An upload names its length but holds none of its
+bytes: once the terminal has begun it, the job WANTS each chunk in turn,
+`RTE-RESOURCE-WANTS@` says where the chunk starts and the most it may carry,
+and the producer reads that much and hands it over with `RTE-RESOURCE-FEED`.
+The producer may reuse its block once the job asks again or ends, so it never
+holds a whole picture. When the terminal refuses an upload's bytes as no
+picture of the size it named, the outcome is `SOURCE`. Updates run between
+the job's frames: one may begin while the job is QUEUED or WANTS, and the
+job's next frame waits for it to end, so an upload never holds up the
+screen. The two take turns. The step that takes an
+update's answer sends the job's next frame at once, before another update can
+begin, so a screen that changes every pass still lets the upload through. The
+step that takes one of the job's own answers sends nothing, and the shell
+paints before it steps again, so a frame waits behind at most one of the
+job's frames. While one of them awaits its answer no update may begin, and a
+producer prepares no frame then. An `IMAGE` static then shows a committed
+resource in a cell rectangle, fitted and painted over the renderer's own
+backdrop ([STATUS-FIELD-ADMISSION.md](STATUS-FIELD-ADMISSION.md)). The screen
+producer runs these jobs for the pictures ordinary `<media>` elements show
+([PICTURES-PRODUCER.md](PICTURES-PRODUCER.md)).
+
+The current neutral object vocabulary is `CONTROL`, `INSTRUMENT`, `STATIC`
+and `GLYPH_RUN`. A `STATIC` is a status field or, as an `IMAGE` static, a
+picture.
 `CONTROL` represents real menu bars, menus, items, separators, `TEXT_AREA`,
-`TEXT_GRID`, `TABSET`, `TAB`, and `ITEM_VIEW` with renderer-independent state
-and hierarchy. Text roots, item views, and tab root/descendant graphs share
-one collection-family boundary without changing menu validation. An
-`ITEM_VIEW` carries one ITM1 item collection and also needs the neutral
-`CONTROL-ITEMS` family (APT-1 `RET_CONTROL_ITEMS`). Its control record adds a
-field total, so the record's scalars and the ITM1 header's column count fix
-the exact content length, as the item, UTF-8, and run totals fix STX1's.
+`TEXT_GRID`, `TABSET`, `TAB`, `ITEM_VIEW`, and `DOCUMENT` with
+renderer-independent state and hierarchy. Text roots, item views, documents,
+and tab root/descendant graphs share one collection-family boundary without
+changing menu validation. An `ITEM_VIEW` carries one ITM1 item collection and
+also needs the neutral `CONTROL-ITEMS` family (APT-1 `RET_CONTROL_ITEMS`). Its
+control record adds a field total, so the record's scalars and the ITM1
+header's column count fix the exact content length, as the item, UTF-8, and
+run totals fix STX1's. A `DOCUMENT` carries one DOC1 document, the blocks a
+document view shows, and needs the neutral `CONTROL-DOCUMENTS` family (APT-1
+`RET_CONTROL_DOCUMENTS`).
 `INSTRUMENT` represents renderer-neutral `READOUT`, `METER`, and `STATUS`
 objects frozen from ordinary canonical `DATA_GRAPHICS` models.
 `GLYPH_RUN` represents unclaimed ordinary draw output. One hybrid plan binds
@@ -860,12 +903,14 @@ session destruction is required before owner storage can be reused.
 
 `RTE-LIMITS@` copies one coherent current-epoch neutral capability snapshot.
 The selected Desktop policy currently advertises exactly
-`RET_CORE | RET_INSTRUMENT | RET_CONTROLS | RET_CONTROL_COLLECTIONS |
-RET_CONTROL_ITEMS | RET_GRID_CELLS | RET_STATUS_FIELDS | RET_FIELDS |
-RET_SERIES | RET_PANES | RET_TASKBARS` (section 0.5); vector, image and
-cadence families remain unadvertised. Complete `AREA | GRID | TABSET | TAB` control support, complete
-`ITEM_VIEW` support for every ITM1 role and item event, and complete
-`READOUT | METER | STATUS` instrument support must be present. Their composition
+`RET_CORE | RET_RGBA_IMAGE | RET_INSTRUMENT | RET_SERIES | RET_CONTROLS |
+RET_CONTROL_COLLECTIONS | RET_CONTROL_ITEMS | RET_STATUS_FIELDS |
+RET_FIELDS | RET_GRID_CELLS | RET_CONTROL_DOCUMENTS`, with `RET_PANES |
+RET_TASKBARS` from the shell's quotas (section 0.5); vector and cadence
+families remain unadvertised. Complete `AREA | GRID | TABSET | TAB` control
+support, complete `ITEM_VIEW` support for every ITM1 role and item event,
+complete `DOCUMENT` support for DOC1 and its SCROLL and FOLLOW events, and
+complete `READOUT | METER | STATUS` instrument support must be present. Their composition
 with the ordinary Desktop passed the selected local physical boundary at
 `4b6a475`/`29bdfd6`; implementation alone remains insufficient evidence for a
 new family or consumer.
@@ -1042,11 +1087,12 @@ those ordinary models; it never implements an APT callback or passes a terminal
 descriptor.
 
 A resource snapshot contains semantic format, dimensions, exact byte length,
-content digest, monotonically increasing source revision, and a bounded pull
-source. The first retained image format is raw row-major sRGB straight-alpha
-RGBA8 with no row padding; byte length is checked `width * height * 4`. The
-backend calls the source only into its owned staging span, copies or consumes
-output before return, and retains no returned byte pointer.
+monotonically increasing source revision, and a bounded pull source. A
+picture is raw row-major sRGB straight-alpha RGBA8 with no row padding, whose
+byte length is checked `width * height * 4`, or a QOI, PNG or JPEG file the
+terminal decodes, sent as it is. The backend calls the source only into its
+owned staging span, copies or consumes output before return, and retains no
+returned byte pointer.
 
 A series snapshot declares semantic sample format, timestamp mode, capacity,
 current count, time-axis metadata, monotonically increasing source revision,
@@ -1062,10 +1108,10 @@ pull a source in bounded chunks, but terminal publication of one semantic
 history remains atomic under the admitted transaction bounds.
 
 Resource replacement uses a fresh increasing private wire resource ID, uploads
-and digest-commits the candidate, atomically replaces surviving references,
-then drops the old unreferenced resource. The previous terminal resource remains
-authoritative through any failed read, upload, digest, or replacement. Admitted
-capacity includes the required old/new overlap.
+and commits the candidate, atomically replaces surviving references, then
+drops the old unreferenced resource. The previous terminal resource remains
+authoritative through any failed read, upload, decode, or replacement.
+Admitted capacity includes the required old/new overlap.
 
 The backend quiesces every retained source context synchronously before the
 host calls arbitrary application shutdown or frees application state. No source
@@ -1159,7 +1205,9 @@ attempt before asynchronous owner work begins.
 The producer then plans menu controls, generically lowers `TEXT_AREA`,
 `TEXT_GRID`, `TABSET`, and `TAB` to their exact neutral control kinds, lowers
 `ITEM_VIEW` to the `ITEM_VIEW` control kind with its ITM1 body when the
-terminal negotiated `CONTROL-ITEMS` (otherwise the view stays residual), lowers
+terminal negotiated `CONTROL-ITEMS` and `DOCUMENT` to the `DOCUMENT` control
+kind with its DOC1 body when it negotiated `CONTROL-DOCUMENTS` (otherwise
+each stays residual), lowers
 selected `DATA_GRAPHICS` values to `READOUT`, `METER`, and `STATUS`, plans
 exclusive root claims, and builds one row-major residual glyph plane from the
 same completed CELL draw. Controls, instruments, and residual spans are
@@ -1368,9 +1416,9 @@ enhanced switch, and `APTSCB-PENDING?`. `APTSCB-PENDING?` combines
 `PT-SERVICE-PENDING?` with the attached publisher's `PENDING` callback.
 `_RTAPTSCB-WORK-PENDING?` reports a latched fault, the producer's latest
 `more-work?` observation, and `RTAPT-WORK-PENDING?`, which is true when the
-engine's next step would publish queued lifecycle work. An `output-needed?`
-observation is already a screen flush request, which the shell sees as paint
-due. Everything else, including completions, credit and discovery answers,
+engine's next step would publish queued lifecycle work or a queued job's next
+frame. An `output-needed?` observation is already a screen flush request,
+which the shell sees as paint due. Everything else, including completions, credit and discovery answers,
 arrives as UART input and ends the sleep. A producer that reports more work
 while it waits for credit keeps the loop awake until the credit arrives.
 

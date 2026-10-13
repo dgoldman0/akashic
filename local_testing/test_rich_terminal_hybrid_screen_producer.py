@@ -3673,22 +3673,25 @@ def test_provider_update_or_copy_pressure_retries_without_padding() -> None:
 
 def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     source = _source()
+    engine = ROOT.joinpath("akashic/tui/rich-terminal/engine.f").read_text()
     records = (
-        ("_RTHP.LIMITS", 168),
+        # The limits snapshot is the facade's whole record.
+        ("_RTHP.LIMITS", _constant(engine, "RTE-LIMITS-SIZE")),
         ("_RTHP.RUCP-Q", 280),
         ("_RTHP.RUCL-Q", 112),
         ("_RTHP.RGRP-Q", 280),
         ("_RTHP.CONTROL-PLAN", 144),
         ("_RTHP.GLYPH-PLAN", 144),
         ("_RTHP.HYBRID", 168),
-        ("_RTHP.ADMISSION", 456),
+        # The admission record is the engine's; the producer holds all of it.
+        ("_RTHP.ADMISSION", _constant(engine, "RTE-HYBRID-ADMISSION-SIZE")),
         ("_RTHP.RUN", 152),
     )
     expected = 464
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert expected == 2368
+    assert expected == 2392
     for name in (
         "_RTHP.TARGET0-A",
         "_RTHP.TARGET1-A",
@@ -3741,7 +3744,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 2720
+    assert expected == 2744
     assert _offset(source, "_RTHP.RUIP-Q") == expected
     expected += 368
     assert _offset(source, "_RTHP.INSTRUMENT-PLAN") == expected
@@ -3777,7 +3780,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3376
+    assert expected == 3400
     # Kept comparison facts for the active and pending banks.
     for name in ("_RTHP.ACTIVE-FACTS", "_RTHP.PENDING-FACTS"):
         assert _offset(source, name) == expected
@@ -3791,7 +3794,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3504
+    assert expected == 3528
     for name in (
         "_RTHP.MAX-STATUS-NATIVE",
         "_RTHP.MAX-STATICS",
@@ -3814,7 +3817,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3648
+    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3672
     expected += 144
     for name in (
         "_RTHP.MAX-FIELD-NATIVE", "_RTHP.MAX-FIELDS",
@@ -3838,11 +3841,11 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4080
+    assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4104
     expected += 48
-    assert _offset(source, "_RTHP.EXTENSION") == expected == 4128
+    assert _offset(source, "_RTHP.EXTENSION") == expected == 4152
     expected += 8
-    assert _offset(source, "_RTHP.OPEN-QUEUED") == expected == 4136
+    assert _offset(source, "_RTHP.OPEN-QUEUED") == expected == 4160
     expected += 8
     for name in ("RESUME-PHASE", "SPACE-REFUSED-DRAW"):
         assert _offset(source, "_RTHP." + name) == expected
@@ -3859,10 +3862,22 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name in ("FALLBACK-BYTES-ASKED", "FALLBACK-BYTES-HELD"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    for name in ("MEMORY", "KEPT-ARENA-A", "KEPT-ARENA-U", "KEPT-BANK-A", "KEPT-BANK-U"):
+    for name in ("MEMORY", "KEPT-ARENA-A", "KEPT-ARENA-U", "KEPT-BANK-A", "KEPT-BANK-U",
+                 "MAX-PICTURES", "PICTURES-A", "PICTURES-U", "PICTURE-COUNT"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4528
+    assert _offset(source, "_RTHP.PICTURE-ASK") == expected
+    expected += _constant(ROOT.joinpath("akashic/tui/uidl-picture-snapshot.f").read_text(),
+                          "UPICSN-ASK-SIZE")
+    for name in ("RESOURCES-A", "RESOURCES-U", "NEXT-RESOURCE", "LANE-JOB", "LANE-ENTRY",
+                 "CHUNK-A", "CHUNK-U", "PICTURE-EPOCH", "LANE-HOLD-DRAW",
+                 "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE",
+                 "LANE-FAILED", "GLYPH-DRAW", "GLYPH-CLAIMS-A", "GLYPH-CLAIMS-U",
+                 "GLYPH-CLAIMS-USED", "GLYPH-MENUS", "GLYPH-FIRST", "GLYPH-LIMIT",
+                 "GLYPH-COLS", "GLYPH-ROWS", "GLYPH-RUNS", "GLYPH-TEXT"):
+        assert _offset(source, "_RTHP." + name) == expected
+        expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 4856
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -3988,7 +4003,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
 
     assert (
         "max-documents max-records max-source-text max-collection-native "
-        "max-data-graphics-native max-status-native max-field-native max-cols max-rows"
+        "max-data-graphics-native max-status-native max-field-native max-pictures "
+        "max-cols max-rows"
     ) in storage
     assert "_RTHP-B-DOCUMENTS" in storage
     assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
@@ -4389,6 +4405,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         ("TEXT-AREA", "TEXT-AREA"),
         ("TEXT-GRID", "TEXT-GRID"),
         ("ITEM-VIEW", "ITEM-VIEW"),
+        ("DOCUMENT", "DOCUMENT"),
         ("TABSET", "TABSET"),
     ):
         assert re.search(
@@ -4396,13 +4413,14 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
             family_to_kind,
             re.S,
         )
-    assert family_to_kind.count("USCOL-F-") == 4
-    assert family_to_kind.count("RTE-CONTROL-") == 4
+    assert family_to_kind.count("USCOL-F-") == 5
+    assert family_to_kind.count("RTE-CONTROL-") == 5
     assert "ELSE 0 THEN" in family_to_kind
     assert text_kind.count("RTE-CONTROL-TEXT-") == 2
     content_kind = _word(source, "_RTHP-CONTENT-CONTROL-KIND?")
     assert "_RTHP-TEXT-COLLECTION-CONTROL-KIND?" in content_kind
     assert "RTE-CONTROL-ITEM-VIEW" in content_kind
+    assert "RTE-CONTROL-DOCUMENT" in content_kind
     assert "_RTHP-CONTENT-CONTROL-KIND?" in collection_kind
     assert "RTE-CONTROL-TABSET" in collection_kind
     assert "RTE-CONTROL-TAB" in collection_kind
@@ -4411,17 +4429,21 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     assert "RTE-CONTROL-TAB =" not in root_kind
     assert "USCOL-TEXT-FIXED-SIZE" in family_fixed
     assert "USCOL-TABSET-FIXED-SIZE" in family_fixed
+    assert "USCOL-DOC-FIXED-SIZE" in family_fixed
 
     # Every selected descriptor is an exact mounted-root clip tied back to
     # the exact native entry and summary before either lowering path runs.
     assert "UCSN-DESCRIPTOR-FAMILY@" in lower
     assert "_RTHP-W-LOWERS-FAMILY?" in lower
     assert "USCOL-F-" not in lower
-    # An item view lowers only when the terminal negotiated item views.
+    # An item view lowers only when the terminal negotiated item views, and
+    # a document only when it negotiated documents.
     lowers = _word(source, "_RTHP-W-LOWERS-FAMILY?")
     assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in lowers
-    assert "USCOL-F-ITEM-VIEW <>" in lowers
+    assert "USCOL-F-ITEM-VIEW =" in lowers
     assert "RTE-F-CONTROL-ITEMS AND" in lowers
+    assert "USCOL-F-DOCUMENT <>" in lowers
+    assert "RTE-F-CONTROL-DOCUMENTS AND" in lowers
     assert "_RTHP-USCOL-FAMILY>CONTROL-KIND" in write
     assert "USCOL-F-TABSET" in write
     for exact_clip in (
@@ -4664,9 +4686,11 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     assert "_RTHP-D-CONTROL-CONTENT-EQUAL?" in delta_control
     assert "_RTHP-D-BYTE-LE64@" in source
     revision = _word(source, "_RTHP-D-CONTENT-REVISION?")
+    header = _word(source, "_RTHP-D-CONTENT-HEADER")
     assert "_RTHP-TB.CONTENT-EPOCH" in revision
-    # STX1 and ITM1 share the tag, version, and revision prefix.
-    assert "USITM-TAG" in revision and "USSTX-TAG" in revision
+    # STX1, ITM1 and DOC1 share the tag, version, and revision prefix.
+    assert "_RTHP-D-CONTENT-HEADER" in revision
+    assert "USITM-TAG" in header and "USSTX-TAG" in header and "USDOC-TAG" in header
     assert (
         "_RTHP-D-ACTIVE @ _RTHP-TB.COLLECTION-ITEMS @\n"
         "        _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-ITEMS @ <>"
@@ -4687,14 +4711,16 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
         "        _RTHP-D-P @ _RTHP.COLLECTION-UTF8 @ <>"
         in delta_bind
     )
-    revision = _word(source, "_RTHP-D-CONTENT-REVISION?")
+    revision = _word(source, "_RTHP-D-CONTENT-REVISION?") + header
     for proof in (
         "USSTX-CONTENT-HEADER-SIZE",
         "USITM-HEADER-SIZE",
+        "USDOC-HEADER-SIZE",
         "_RTHP-TEXT-WITHIN?",
         "_RTHP-D-BYTE-LE32@",
         "USSTX-TAG",
         "USITM-TAG",
+        "USDOC-TAG",
         "4 + _RTHP-D-BYTE-LE16@ 1 <>",
         "6 + _RTHP-D-BYTE-LE16@ IF",
         "8 + _RTHP-D-BYTE-LE64@ DUP 0=",
@@ -4781,7 +4807,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "max-documents max-records max-source-text "
         "max-collection-native max-data-graphics-native max-cols max-rows"
     )
-    status_args = public_args.replace("max-cols", "max-status-native max-field-native max-cols")
+    status_args = public_args.replace(
+        "max-cols", "max-status-native max-field-native max-pictures max-cols")
     assert status_args in storage
     assert status_args in " ".join(init.replace("\\", " ").split())
     assert storage.index("_RTHP-B-DGRAPH-NATIVE !") < storage.index(
@@ -6169,8 +6196,11 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     assert "SCR-GET" not in source
     assert "RUCL-CLAIM-ROW0@" in mark_claims
     assert "RUCL-CLAIM-ROW1@" in mark_claims
+    # Only rectangles that came or went mark rows; a row's gaps stay with it.
+    assert "_RTHP-RD-ACKED-RECT?" in mark_claims
+    assert "_RTHP-RD-CURRENT-RECT?" in _word(source, "_RTHP-RD-MARK-OLD-PROJECTION?")
     assert "_RTHP-RD-COVER" in scan_active
-    assert "_RTHP-RD-DAMAGE!" in scan_active
+    assert "_RTHP-RD-DAMAGE!" not in scan_active
     assert "_RTE-LPI.TEXT-CAPACITY @" in copy_one
     assert (
         "_RTHP-W-GLYPH-FIRST @ _RTHP-RD-OUT-COUNT @ _RTHP-U+?"
@@ -6236,8 +6266,19 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     # marks every row before it plans them, so the shell never copies one.
     every_row = _word(source, "_RTHP-ROWS-ALL-REBUILT")
     assert "_RTHP.ROWS @" in every_row and "-1 FILL" in every_row
-    assert dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < dispatcher.index(
-        "_RTHP-ROWS-ALL-REBUILT") < dispatcher.index("_RTHP-BUILD-GLYPHS-FULL?")
+    # A plan the banks already hold for the same inputs is kept as a complete
+    # build leaves it, before GLYPH-DRAW is cleared and anything is planned.
+    held = dispatcher.index("_RTHP-GLYPHS-HELD?")
+    planning = dispatcher[dispatcher.index("0 OVER _RTHP.GLYPH-DRAW !"):]
+    kept = dispatcher[held:dispatcher.index("0 OVER _RTHP.GLYPH-DRAW !")]
+    assert held < dispatcher.index("_RTHP-BUILD-GLYPHS-DAMAGE?")
+    for restore in ("_RTHP.GLYPH-RUNS @ OVER _RTHP.GLYPH-COUNT !",
+                    "_RTHP.GLYPH-TEXT @ OVER _RTHP.GLYPH-TEXT-USED !",
+                    "_RTHP-ROWS-ALL-REBUILT", "_RTHP-WRAP-GLYPH-PLAN?"):
+        assert restore in kept
+    assert planning.index("_RTHP-BUILD-GLYPHS-DAMAGE?") < planning.index(
+        "_RTHP-ROWS-ALL-REBUILT") < planning.index("_RTHP-BUILD-GLYPHS-FULL?")
+    assert planning.index("_RTHP-BUILD-GLYPHS-FULL?") < planning.index("_RTHP-GLYPHS-KEEP")
 
 
 def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank() -> None:
@@ -6271,7 +6312,8 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 336
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 344
+    assert _offset(source, "_RTHP-TB.PICTURE-EPOCH") == 336
     assert _offset(source, "_RTHP-TB.STATIC-COUNT") == 224
     assert _offset(source, "_RTHP-TB.STATIC-TEXT-BYTES") == 232
     assert _offset(source, "_RTHP-TB.INSTRUMENT-REGION-COUNT") == 176
@@ -6833,7 +6875,7 @@ def test_a_draw_that_cannot_be_shown_rich_shows_as_cell_and_the_next_retries() -
         ("_RTHP-PH-BLANK-REVEAL-SEALED = IF",
          "_RTHP-PH-BLANK _RTHP-PH-READY-BLANK-REVEAL 0 _RTHP-S-P @\n"
          "        _RTHP-STEP-SEALED EXIT"),
-        ("_RTHP-PH-BLANK = IF", "SCB-S-OK 0 0 EXIT"),
+        ("_RTHP-PH-BLANK = IF", "_RTHP-S-P @ _RTHP-LANE-STEP EXIT"),
     ):
         branch = step[step.index(phase) :]
         assert branch.index(result) < branch.index("THEN"), phase
@@ -7136,11 +7178,16 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     assert "_RTHP-CONTENT-CONTROL-KIND?" in target_kind
     assert "DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !" in find
 
-    # ACTIVATE suits menus, items and tabs; EXTEND and FOLLOW only text
-    # areas; PLACE and SCROLL either text kind.
+    # ACTIVATE suits menus, items and tabs; EXTEND only text areas; FOLLOW
+    # text areas and documents; PLACE either text kind; SCROLL every root
+    # with content.
     assert "RTE-INTENT-ACTIVATE OF" in suits
     assert "RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
-    assert "RTE-INTENT-FOLLOW OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
+    assert (
+        "RTE-INTENT-FOLLOW OF\n"
+        "            DUP RTE-CONTROL-TEXT-AREA = SWAP RTE-CONTROL-DOCUMENT = OR\n"
+        "        ENDOF"
+    ) in suits
     assert "RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
     assert "RTE-INTENT-SCROLL OF _RTHP-CONTENT-CONTROL-KIND? ENDOF" in suits
     # The five item intents suit only an item view.
@@ -7170,7 +7217,9 @@ def test_target_pack_admits_published_control_families_and_keeps_shell_lane_sepa
             break
         kinds[int(match.group(1))] = match.group(2)
     assert {*range(1, 10), 13} <= set(kinds)
-    assert set(kinds) - {*range(1, 10), 13} <= {10, 11, 12}
+    # DOCUMENT (14) is an engine kind this producer does not emit yet, so
+    # its target pack does not admit it.
+    assert set(kinds) - {*range(1, 10), 13} <= {10, 11, 12, 14}
 
     check = _word(_source(), "_RTHP-CT-CONTROL?")
     assert f"{kinds[1]} < IF DROP 0 EXIT THEN" in check
@@ -7239,4 +7288,12 @@ def test_an_idle_live_step_checks_identity_and_every_acting_step_the_producer() 
     assert step.index("RTHP-VALID?") < step.index("_RTHP-CALL-SURFACE?")
     live = step[step.index("_RTHP.PHASE @ _RTHP-PH-LIVE = IF"):]
     assert live[: live.index("THEN")].split() == [
-        "_RTHP.PHASE", "@", "_RTHP-PH-LIVE", "=", "IF", "SCB-S-OK", "0", "0", "EXIT"]
+        "_RTHP.PHASE", "@", "_RTHP-PH-LIVE", "=", "IF",
+        "_RTHP-S-P", "@", "_RTHP-LANE-STEP", "EXIT"]
+    # The picture lane proves the whole producer right before each thing it
+    # does.
+    lane = _word(source, "_RTHP-LANE-BODY").splitlines()
+    for action in ("_RTHP-L-POLL", "_RTHP-L-ASK-PIXELS", "_RTHP-L-START-DROP",
+                   "_RTHP-L-START-UPLOAD"):
+        line = next(i for i, text in enumerate(lane) if action in text)
+        assert "_RTHP-L-P @ RTHP-VALID? 0= IF" in lane[line - 1], action

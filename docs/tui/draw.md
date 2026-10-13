@@ -309,13 +309,13 @@ these with its style map ([textarea](widgets/textarea.md)).
 text from outside the application, such as a list's cards in
 `LST-UNTRUSTED` mode ([list](widgets/list.md)).
 
-### DRW-FG@ and DRW-ATTR@
+### DRW-FG@, DRW-BG@ and DRW-ATTR@
 
 ```
-( -- fg )  ( -- attrs )
+( -- fg )  ( -- bg )  ( -- attrs )
 ```
 
-The current foreground and attributes.
+The current foreground, background and attributes.
 
 ### DRW-TEXT-UNTRUSTED
 
@@ -424,7 +424,7 @@ advancing horizontally.  Synonym for `DRW-HLINE`.
 | `DRW-TEXT-STYLED` | `( addr len row col xt -- )` | Draw text, each character in the style `xt` gives |
 | `DRW-TEXT-STYLED-UNTRUSTED` | `( addr len row col xt -- )` | As `DRW-TEXT-STYLED`, ignoring bidi controls as `DRW-TEXT-UNTRUSTED` does |
 | `DRW-TROW-STYLED` | `( trow row col start end attrs xt -- )` | Draw a laid-out row, each character in the style `xt` gives |
-| `DRW-FG@` / `DRW-ATTR@` | `( -- fg )` / `( -- attrs )` | The current foreground and attributes |
+| `DRW-FG@` / `DRW-BG@` / `DRW-ATTR@` | `( -- fg )` / `( -- bg )` / `( -- attrs )` | The current foreground, background and attributes |
 | `DRW-TEXT-UNTRUSTED` | `( addr len row col -- )` | Draw untrusted UTF-8, ignoring bidi controls |
 | `DRW-TEXT-CENTER` | `( addr len row col w -- )` | Center text |
 | `DRW-TEXT-RIGHT` | `( addr len row col w -- )` | Right-align text |

@@ -953,7 +953,7 @@ CONSTANT AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE
         THEN
     THEN
 
-    S" Accept-Encoding" S" identity"
+    S" Accept-Encoding" S" gzip"
     R@ _ATXW.INPUT AT-XRPC-AUTH-REQUEST-I.REQUEST @
     HREQ-HEADER _ATX-HREQ>STATUS ?DUP IF
         R> DROP EXIT

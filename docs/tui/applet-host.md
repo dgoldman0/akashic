@@ -98,6 +98,7 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-DISPATCH-KEY-ID` | `( event id host -- handled? )` | Route a key to one child, such as an overlay |
 | `AHOST-DISPATCH-MOUSE` | `( event host -- handled? )` | Hit-test and route a child mouse event; focused child wins overlapping regions |
 | `AHOST-TICK` | `( host -- )` | Tick eligible live children |
+| `AHOST-SERVICE` | `( host -- worked? )` | Give each live child's UIDL document its pending media work (`UTUI-SERVICE`) and mark a child whose document changed for repaint; at once false when no picture is decoding and no document view has work |
 | `AHOST-PAINT` | `( paint-all fullframe host -- )` | Paint eligible visible children |
 
 `AHS.*` words expose slot fields needed by a concrete layout/chrome owner.

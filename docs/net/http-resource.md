@@ -191,7 +191,7 @@ when some other protocol rule authoritatively identifies the body.
 ## Admission policy
 
 Every request is an exact origin-form `GET` with canonical `Host` (including a
-non-default port), caller-bounded `Accept`, `Accept-Encoding: identity`, a
+non-default port), caller-bounded `Accept`, `Accept-Encoding: gzip`, a
 fixed user agent, and `Connection: close`. No authorization, cookie,
 conditional, or provider-specific header is accepted from configuration.
 
@@ -208,14 +208,22 @@ owner can bind validators to the exact prior effective URI.
 
 Before any response is used, the resource rejects duplicate Content-Length,
 Content-Encoding, Location, ETag, or Last-Modified fields, Trailer
-declarations, and actual chunked trailers. Content-Encoding must be absent or
-singleton `identity`. Required media mode additionally rejects duplicate
+declarations, and actual chunked trailers. Content-Encoding must be absent,
+singleton `identity`, or singleton `gzip`. The buffered exchange inflates a
+gzip body into the response buffer as it arrives (see
+[http-buffered](http-buffered.md)), so the admitted body is always the
+representation itself. A gzip body that is damaged, cut short, or followed by
+more bytes is `HRES-O-CONTENT-ENCODING` with `HRES-D-CONTENT-DAMAGED`; any other
+coding is `HRES-O-CONTENT-ENCODING` with `HRES-D-CONTENT-ENCODING-MISMATCH`. Required media mode additionally rejects duplicate
 Content-Type, requires exactly one syntactically valid value, invokes the
 sealed media callback, and rejects duplicate media parameter names
 case-insensitively. Ignored mode does not inspect Content-Type.
 
 The body bound is the aggregate transfer-decoded body budget across redirect
-hops, not a total on-wire byte counter. Redirect responses are fully consumed
+hops, not a total on-wire byte counter. A hop's body counts as sent or as
+inflated, whichever is larger, so the budget bounds both what arrives and what
+is stored; a gzip body that inflates past the remaining budget is
+`HRES-O-BODY-OVERFLOW` with `HRES-D-BODY-BUDGET`. Redirect responses are fully consumed
 and closed before their Location is admitted, so an oversized redirect body
 fails capacity rather than being followed. Starting every followed hop also
 requires at least one byte of remaining body capacity; exact exhaustion on a

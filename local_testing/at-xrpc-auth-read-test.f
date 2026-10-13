@@ -649,7 +649,7 @@ VARIABLE _atxr-r-resolver-context
         _atxr-request-contains? _atxr-assert
     S" DPoP: deterministic-dpop-proof"
         _atxr-request-contains? _atxr-assert
-    S" Accept-Encoding: identity"
+    S" Accept-Encoding: gzip"
         _atxr-request-contains? _atxr-assert
     S" User-Agent: akashic-atproto/1"
         _atxr-request-contains? _atxr-assert

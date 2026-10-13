@@ -110,7 +110,7 @@ class SourceClient:
         p[5:7]=[self.TARGET,672];p[296:298]=[self.TARGET,self.TARGET+336]
         p[11:13]=[7,9];p[57]=1;p[298]=self.TARGET;p[302]=1;p[516]=self.S+176
         e=[0]*42;e[0]=0x5254415054454E47;e[1]=self.SESSION;e[31]=1;e[32:]=[1,0x2001,0,0,5,1,0,0,0,0]
-        session=[0]*124;session[15]=3;session[19]=1;session[24:26]=[12,8]
+        session=[0]*133;session[15]=3;session[19]=1;session[24:26]=[12,8]
         self.put(self.SESSION,session)
         s=[0]*30;s[:5]=[0x5253485350303031,240,self.S,self.P,self.SHSN]
         s[6:12]=[0xC0000,65536,self.B,40960,0xD0000,40960]

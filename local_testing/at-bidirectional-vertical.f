@@ -537,7 +537,7 @@ CREATE _atbv-crlfcrlf 13 C, 10 C, 13 C, 10 C,
     S" atproto-proxy: did:web:api.bsky.app#bsky_appview"
         _atbv-expected+
     _atbv-crlf 2 _atbv-expected+
-    S" Accept-Encoding: identity" _atbv-expected+
+    S" Accept-Encoding: gzip" _atbv-expected+
     _atbv-crlf 2 _atbv-expected+
     S" User-Agent: akashic-atproto/1" _atbv-expected+
     _atbv-crlf 2 _atbv-expected+

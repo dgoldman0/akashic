@@ -48,7 +48,7 @@ class FieldHarness(StatusHarness):
     def setup(self, *, field_native=1024, row=3, col=2, clip=None, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
         size, = self.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512,
-                             field_native, 32, 8)
+                             field_native, 0, 32, 8)
         assert size
         self.arena_size = size
         self.arena = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
@@ -181,8 +181,8 @@ def test_invalid_native_field_is_invalid_not_optional_refusal(h):
 
 
 def test_field_storage_admits_no_field_bank_and_rejects_a_partial_record(h):
-    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,0,32,8)[0] > 0
-    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,193,32,8)==(0,)
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,0,0,32,8)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,193,0,32,8)==(0,)
 
 
 @pytest.mark.parametrize("feature,short", ((False,False),(True,False),(True,True)))
@@ -374,7 +374,7 @@ def test_full_producer_dependency_closure_compiles_in_native_runtime():
     from test_field_model import field_runtime
     runtime=field_runtime(("tui/rich-terminal/hybrid-screen-producer.f",))
     runtime.evaluate(b"RTHP-SIZE _RTHP-TARGET-BANK-HEADER-SIZE _RTHP-TARGET-ENTRY-SIZE",source_name="field-producer-abi")
-    assert runtime.main_context.data.snapshot()==(4528,336,48)
+    assert runtime.main_context.data.snapshot()==(4856,344,48)
     assert runtime.main_context.returns.snapshot()==()
 
 

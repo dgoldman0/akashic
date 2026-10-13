@@ -32,6 +32,7 @@ _SEAMS = {
         "FP-BUILD-STATUS @ FP-BUILT @ ;"
     ),
     "_RTHP-PREPARE-START": ": _RTHP-PREPARE-START DROP 1 FP-STARTS +! SCB-S-OK ;",
+    "UPICSN-RELEASE-ALL": ": UPICSN-RELEASE-ALL 1 FP-RELEASES +! ;",
     "_RTPROF-MARK": ": _RTPROF-MARK DROP ;",
     # The empty frame never advances the candidate ID frontier, and no step
     # here publishes a rich target bank.
@@ -42,7 +43,7 @@ _SEAMS = {
 _FIXTURE_VARIABLES = (
     "FP-STATE", "FP-STATUS", "FP-CANCELS", "FP-BEGIN", "FP-BEGINS", "FP-BEGIN-STATUS",
     "FP-SEAL", "FP-SEALS", "FP-DRAW", "FP-BUILDS", "FP-BUILD-STATUS", "FP-BUILT",
-    "FP-STARTS",
+    "FP-STARTS", "FP-RELEASES",
 )
 
 
@@ -161,12 +162,14 @@ def blank(request):
 def test_a_refused_draw_asks_for_the_empty_frame_and_holds_cell(blank):
     blank.variable("_RTHP-W-P", blank.producer)
     blank.variable("_RTHP-W-DRAW", 12)
-    for refusal in ("RTE-S-CAPACITY", "RTE-S-UNAVAILABLE"):
+    for count, refusal in enumerate(("RTE-S-CAPACITY", "RTE-S-UNAVAILABLE"), 1):
         blank.phase("READY-START")
         assert blank.results("_RTHP-REBUILD-RESULT", blank.constant(refusal), 0) == (
             blank.constant("SCB-S-WOULD-BLOCK"), 0)
         assert blank.phase() == blank.constant("_RTHP-PH-READY-BLANK")
         assert blank.read("_RTHP.REFUSED-DRAW") == 12
+        # The empty frame shows no picture, so CELL shows each one.
+        assert blank.value("FP-RELEASES") == count
     # Backpressure only waits, and anything else stays fatal.
     blank.phase("READY-START")
     assert blank.results("_RTHP-REBUILD-RESULT", blank.constant("RTE-S-WOULD-BLOCK"), 0) == (

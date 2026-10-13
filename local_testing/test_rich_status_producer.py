@@ -11,6 +11,10 @@ import pytest
 from test_rich_glyph_growth import GrowthHarness, MASK64, PRODUCER
 from test_rich_terminal_control_map import MegaForthRuntime, ROOT, _definitions
 
+# The neutral static record's size, from the engine that defines it.
+STATIC = int(re.search(r"(?m)^(\d+) CONSTANT RTE-STATIC-SIZE$",
+                       (ROOT / "akashic/tui/rich-terminal/engine.f").read_text())[1])
+
 
 class StatusHarness(GrowthHarness):
     def __init__(self, backend, *, extra_words=(), overrides=None):
@@ -26,8 +30,10 @@ class StatusHarness(GrowthHarness):
             "tui/rich-terminal/uidl-claim-ledger.f",
             "tui/rich-terminal/uidl-semantic-content-stx1.f",
             "tui/rich-terminal/uidl-semantic-items-itm1.f",
+            "tui/rich-terminal/uidl-semantic-documents-doc1.f",
             "tui/uidl-menu-snapshot.f", "tui/semantic-collections.f",
             "tui/uidl-status-field-snapshot.f", "tui/status-field-model.f",
+            "tui/uidl-picture-snapshot.f",
             "tui/uidl-field-snapshot.f", "tui/field-model.f", "tui/field-content.f",
             "tui/rich-terminal/fdc1.f",
             "tui/data-graphics-model.f", "tui/uidl-data-graphics-snapshot.f",
@@ -91,9 +97,9 @@ class StatusHarness(GrowthHarness):
                               self.runtime.find(marker + "-OWNED-START").body_address + 8)
 
     def setup(self, *, label=b"Mode", value=b"Ready", width=20, label_cols=6,
-              row=3, col=2, clip=None, flags=3, status_native=512):
+              row=3, col=2, clip=None, flags=3, status_native=512, pictures=0):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        caps = (1, 1, 64, 256, 256, status_native, 0, 32, 8)
+        caps = (1, 1, 64, 256, 256, status_native, 0, pictures, 32, 8)
         size, = self.results("RTHP-STORAGE-BYTES", *caps)
         assert size > 0
         self.arena_size = size
@@ -105,7 +111,8 @@ class StatusHarness(GrowthHarness):
                              ("MAX-CONTROLS", 5), ("MAX-DGRAPH-NATIVE", 256),
                              ("MAX-DGRAPH-DESCRIPTORS", 1), ("MAX-INSTRUMENT-REGIONS", 1),
                              ("MAX-INSTRUMENTS", 2), ("MAX-STATUS-NATIVE", status_native),
-                             ("MAX-STATICS", status_native // 72), ("MAX-COLS", 32), ("MAX-ROWS", 8),
+                             ("MAX-STATICS", status_native // 72 + pictures),
+                             ("MAX-PICTURES", pictures), ("MAX-COLS", 32), ("MAX-ROWS", 8),
                              ("COLS", 32), ("ROWS", 8), ("OWNER", 1), ("OWNER-GEN", 2),
                              ("FIRST-OBJECT", 100), ("REGION", 7), ("SOURCE-GEN", 9),
                              ("DOCUMENT-COUNT", 1)):
@@ -151,7 +158,7 @@ class StatusHarness(GrowthHarness):
         for name, value in (("STATIC-COUNT", n), ("STATIC-TEXT", text),
                             ("STATIC-ALIGNED", aligned), ("STATIC-MAX", text),
                             ("STATIC-LAST", 100 if n else 0),
-                            ("STATIC-COPY", 176*n+aligned), ("STATIC-OPS", n)):
+                            ("STATIC-COPY", STATIC*n+aligned), ("STATIC-OPS", n)):
             self.field(admission, "_RTE-HA." + name, value)
         self.results("_RTHP-WRAP-HYBRID", self.producer)
 
@@ -181,7 +188,7 @@ def test_status_preserves_authored_slots_text_and_exact_claim(h):
     assert h.get("STATIC-LAST") == 100
     assert h.variable("_RTHP-W-GLYPH-FIRST") == 101
     item = h.get("STATICS-A")
-    fields = struct.unpack("<22Q", h.runtime.memory.read_bytes(item, 176))
+    fields = struct.unpack("<26Q", h.runtime.memory.read_bytes(item, STATIC))
     assert fields[:17] == (1, 2, 100, 1, MASK64, 3, 7, 0, 3, 2, 1, 20, 8, 32, 6, 2, MASK64)
     assert h.runtime.memory.read_bytes(fields[17], fields[18]) == h.label
     assert h.runtime.memory.read_bytes(fields[19], fields[20]) == h.value
@@ -356,8 +363,8 @@ def test_fixed_static_audit_rejects_changed_candidate(h, mutation):
 
 
 def test_storage_admits_no_status_bank_and_rejects_a_partial_record(h):
-    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 0, 0, 40, 12)[0] > 0
-    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 73, 0, 40, 12) == (0,)
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 0, 0, 0, 40, 12)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 73, 0, 0, 40, 12) == (0,)
 
 
 def test_static_overlap_strips_both_roots_without_claims(h):

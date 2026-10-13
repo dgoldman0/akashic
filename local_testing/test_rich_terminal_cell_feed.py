@@ -40,7 +40,7 @@ from simulator.rich_terminal_host import SemanticBatchStop, SimulatorSessionBack
 from tests.simulator.test_kdos_exceptions import _load_exceptions  # noqa: E402
 from tests.test_rich_terminal_driver import _retained_policy  # noqa: E402
 from tests.test_rich_terminal_dual_backend import (  # noqa: E402
-    ONE_CORE_UART_LOCK_SHIMS,
+    KDOS_SHIMS,
     RICH_TERMINAL_SOURCE,
     SIMULATOR_SOURCE_MAX_STEPS,
 )
@@ -48,6 +48,7 @@ from tests.test_rich_terminal_dual_backend import (  # noqa: E402
 
 SESSION_ID = 0x43454C4C46454544
 SENTINEL = 0x12345678
+MASK64 = (1 << 64) - 1
 # The observed baseline costs about 8,463 semantic operations per cell.
 # This watchdog bounds one 280-cell row, not a Desktop dispatch.
 ROW_STEP_BUDGET = 3_000_000
@@ -133,8 +134,8 @@ class _FeedHarness:
         self.views = []
         self.legacy_output = []
         self.runtime.evaluate(
-            ONE_CORE_UART_LOCK_SHIMS + RICH_TERMINAL_SOURCE.read_bytes(),
-            source_name="one-core-uart-lock-shims+complete-rich-terminal.f",
+            KDOS_SHIMS + RICH_TERMINAL_SOURCE.read_bytes(),
+            source_name="kdos-shims+complete-rich-terminal.f",
             step_budget=SIMULATOR_SOURCE_MAX_STEPS,
         )
         records = (
@@ -313,6 +314,63 @@ def test_public_cell_feed_rejects_before_wire_effects(feed, word, inputs):
             assert feed.backend.rich_terminal_host.accepted_egress_bytes == pending
         finally:
             runtime.memory.write_bytes(feed.engine, original)
+
+
+def test_a_checked_spans_cells_skip_the_checks_but_still_see_a_quarantine(feed):
+    """RTAPT-CELL-SPAN-BEGIN checks the engine once for its span's cells.  A
+    cell of the span skips that check but still sees a quarantine; a cell of
+    no span, or of another engine, gets every check."""
+
+    runtime = feed.runtime
+    engine = feed.engine
+    size = feed.call("RTAPT-ENGINE-SIZE")[0][0]
+    original = runtime.memory.read_bytes(engine, size)
+    span_e = feed.call("_RTAPT-SPAN-E")[0][0]
+    span_left = feed.call("_RTAPT-SPAN-LEFT")[0][0]
+    active = feed.call("_RTAPT-E.ACTIVE-KIND", engine)[0][0]
+    status = feed.call("_RTAPT-E.LAST-STATUS", engine)[0][0]
+    quarantine = feed.call("_RTAPT-ACTIVE-QUARANTINED")[0][0]
+
+    def token(owner, left):
+        runtime.memory.write64(span_e, owner)
+        runtime.memory.write64(span_left, left)
+
+    def span_cell(owner):
+        return feed.call("_RTAPT-SPAN-CELL?", SENTINEL, owner)[0]
+
+    try:
+        assert span_cell(engine) == (SENTINEL, 0)
+        token(engine, 2)
+        assert span_cell(engine) == (SENTINEL, MASK64)
+        assert span_cell(engine) == (SENTINEL, MASK64)
+        assert span_cell(engine) == (SENTINEL, 0)
+        token(engine, 2)
+        assert span_cell(engine + 8) == (SENTINEL, 0)
+        # A quarantine between a span's cells sends the cell the full way,
+        # which returns the latched status.
+        runtime.memory.write64(active, quarantine)
+        runtime.memory.write64(status, 7)
+        assert span_cell(engine) == (SENTINEL, 0)
+        values, _ = feed.call("RTAPT-CELL-WRITE", SENTINEL, 65, 7, 0, 1, 0, 0, engine)
+        assert values == (SENTINEL, 7)
+        runtime.memory.write_bytes(engine, original)
+        # A span begin the engine refuses leaves no span.
+        token(engine, 2)
+        runtime.memory.write64(engine, 0)
+        values, _ = feed.call("RTAPT-CELL-SPAN-BEGIN", SENTINEL, 0, 0, 1, 0, engine)
+        assert values == (SENTINEL, 3)
+        assert runtime.memory.read64(span_e) == 0
+        runtime.memory.write_bytes(engine, original)
+        # Every other CELL feed word ends the span.
+        for word, inputs in (("RTAPT-CELL-CURSOR", (0, 0, 1)),
+                             ("RTAPT-CELL-ABORT", (0,)),
+                             ("RTAPT-CELL-COMMIT", ())):
+            token(engine, 2)
+            feed.call(word, SENTINEL, *inputs, engine)
+            assert (runtime.memory.read64(span_e), runtime.memory.read64(span_left)) == (0, 0)
+    finally:
+        runtime.memory.write_bytes(engine, original)
+        token(0, 0)
 
 
 def _exercise(feed: _FeedHarness) -> dict:

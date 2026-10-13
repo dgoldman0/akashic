@@ -227,7 +227,7 @@ CREATE _atfv-quote 34 C,
     S" atproto-proxy: did:web:api.bsky.app#bsky_appview"
         _atfv-expected+
     _atfv-expected-crlf
-    S" Accept-Encoding: identity" _atfv-expected+
+    S" Accept-Encoding: gzip" _atfv-expected+
     _atfv-expected-crlf
     S" User-Agent: akashic-atproto/1" _atfv-expected+
     _atfv-expected-crlf

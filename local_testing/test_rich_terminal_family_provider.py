@@ -17,7 +17,11 @@ class FamilyProvider(ProviderHarness):
                          max_retained_transaction_bytes=4096,
                          base_max_transaction_bytes=4096,
                          max_objects=4,total_utf8_bytes=128,
-                         max_glyph_run_bytes=16 if extra_features & RetainedFeature.INSTRUMENT else 0)
+                         max_glyph_run_bytes=16 if extra_features & RetainedFeature.INSTRUMENT else 0,
+                         **(dict(max_resources=1, max_resource_chunk_bytes=64,
+                                 total_resource_bytes=1024, image_formats=1,
+                                 max_image_width=16, max_image_height=16)
+                            if extra_features & RetainedFeature.RGBA_IMAGE else {}))
         with patch.object(cf, "_retained_policy", return_value=policy):
             super().__init__(backend, features=(RetainedFeature.CORE |
                                                RetainedFeature.PANES | extra_features))
@@ -26,10 +30,10 @@ class FamilyProvider(ProviderHarness):
         assert self.call("RTAPT-LIMITS@", self.engine)[0][1] == 0
 
     def summary(self, changes=None):
-        values = {0:1,8:1,16:20,24:2,32:1,40:544,456:2,464:2,
+        values = {0:1,8:1,16:20,24:2,32:1,40:560,456:2,464:2,
                   472:1,480:1,488:1,496:4,504:8,512:4,520:1,536:0x201}
         values.update(changes or {})
-        data = bytearray(544)
+        data = bytearray(560)
         for offset,value in values.items():
             struct.pack_into("<Q",data,offset,value & MASK)
         return self.allocate(data)
@@ -54,12 +58,12 @@ def family(request):
 def test_family_pane_catalog_is_admitted_once_without_mutation(family):
     h = family
     summary = h.summary()
-    source = h.runtime.memory.read_bytes(summary,544)
+    source = h.runtime.memory.read_bytes(summary,560)
     before = h.snapshot()
     assert h.call("RTAPT-FAMILY-PREFLIGHT",summary,h.engine)[0] == (0,)
     assert h.snapshot() == before
-    assert h.runtime.memory.read_bytes(summary,544) == source
-    assert h.runtime.memory.read_bytes(h.constant("_RTAPT-FA-WORK"),544) == bytes(544)
+    assert h.runtime.memory.read_bytes(summary,560) == source
+    assert h.runtime.memory.read_bytes(h.constant("_RTAPT-FA-WORK"),560) == bytes(560)
 
 
 @pytest.mark.parametrize("changes",[
@@ -97,8 +101,12 @@ def test_family_summary_cannot_alias_module_query_scratch(family):
 
 @pytest.mark.parametrize("backend", ("python", "native"))
 @pytest.mark.parametrize("features,changes,copy_bytes", [
+    # A status field: its 208-byte record and 8 bytes of text.
     (RetainedFeature.STATUS_FIELDS,
-     {320:1,328:4,336:8,344:4,352:2,360:184,368:1,480:2,536:0x601},584),
+     {320:1,328:4,336:8,344:4,352:2,360:216,368:1,480:2,536:0x601},616),
+    # An IMAGE static: no text, its own 160-byte copy, the image feature.
+    (RetainedFeature.RGBA_IMAGE,
+     {320:1,352:2,368:1,544:1,480:2,536:0x205},560),
     (RetainedFeature.INSTRUMENT,
      {224:1,232:1,248:1,304:2,480:2,536:0x209},616),
     (RetainedFeature.CONTROLS | RetainedFeature.TASKBARS,
@@ -156,18 +164,18 @@ def test_family_series_only_initial_admission_has_no_phantom_region(backend,samp
     from test_rich_terminal_series_engine import SeriesProvider
     h = SeriesProvider(backend,open_owner=False)
     try:
-        values = {0:1,8:1,16:20,24:2,32:1,40:544,
+        values = {0:1,8:1,16:20,24:2,32:1,40:560,
                   384:1,392:1,400:9,408:9,416:40 if sampled else 0,
                   424:3 if sampled else 0,432:2 if sampled else 0,
                   440:16 if sampled else 0,536:0x19}
-        payload = bytearray(544)
+        payload = bytearray(560)
         for offset,value in values.items():
             struct.pack_into("<Q",payload,offset,value)
         summary = h.allocate(payload)
         before = h.snapshot()
         assert h.call("RTAPT-FAMILY-PREFLIGHT",summary,h.engine)[0] == (0,)
         assert h.snapshot() == before
-        assert h.runtime.memory.read_bytes(summary,544) == payload
+        assert h.runtime.memory.read_bytes(summary,560) == payload
         h.runtime.memory.write64(summary+456,1)
         h.runtime.memory.write64(summary+464,1)
         assert h.call("RTAPT-FAMILY-PREFLIGHT",summary,h.engine)[0] == (3,)

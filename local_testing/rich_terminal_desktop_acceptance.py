@@ -26,6 +26,7 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
+    DocumentHitTarget,
     FieldHitTarget,
     PixelRect,
     ControlIdentity,
@@ -37,9 +38,17 @@ from rich_terminal.pygame_view import (
     _text_area_shift,
     composite_draw_plane,
 )
-from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
+from rich_terminal.retained_scene import ControlKind, ControlState, ImageFit, StatusSeverity
 from rich_terminal.retained_wire import ControlEventKind
 from rich_terminal.semantic_content import SemanticTextContent, SemanticTextState
+from rich_terminal.semantic_documents import (
+    BlockKind,
+    DocumentBlock,
+    DocumentContent,
+    PlacedBlock,
+    placed_blocks,
+    shown_link,
+)
 from rich_terminal.semantic_items import (
     ItemState,
     ItemViewContent,
@@ -48,8 +57,10 @@ from rich_terminal.semantic_items import (
 )
 from rich_terminal.retained_view import (
     DisplayScope,
+    DocumentDraw,
     GlyphRunDraw,
     FieldDraw,
+    ImageDraw,
     ItemViewDraw,
     MeterDraw,
     PaneDraw,
@@ -75,7 +86,9 @@ from session_viewer import (
     _RetainedDisplayState,
     _accept_screen_update,
     _accept_status_update,
+    _DisplayResourceCache,
     _display_claimed,
+    _report_display_cell_pixels,
     _pygame_apt_modifiers,
     compose_terminal_frame_changes,
     draw_flip_and_present,
@@ -135,6 +148,17 @@ CELL_FINAL_STATIC_MARKERS = (
 )
 # Pad's Open prompt, which Ctrl+O shows in its tile.
 PAD_OPEN_PROMPT_MARKER = "Open:"
+# The sample picture the Desktop image keeps in its root directory, and the
+# upper-half block every CELL picture cell is drawn with.  While the rich side
+# shows a picture, its CELL view shows what the picture is instead, as the
+# picture widget writes it, and decodes nothing.
+FEXPLORER_PICTURE = "sunset.qoi"
+FEXPLORER_PICTURE_FACTS = "QOI, 160 \u00d7 100"
+# The sample Markdown document beside it, which File Explorer previews as a
+# document, and the text of its first block.
+FEXPLORER_DOCUMENT = "guide.md"
+FEXPLORER_DOCUMENT_HEADING = "A guide to Akashic"
+PICTURE_HALF_BLOCK = "\u2580"
 _ISO_DATE_PATTERN = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 PAD_FILE_MENU_EVIDENCE = "Pad/File"
 PAD_MENU_SIGNATURE = (
@@ -193,8 +217,9 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # File Explorer's detail table through item events and its rename prompt
 # (23-29), Pad's editor and caret
 # readout (30-34), and Daybook's calendar wheel (35).  Then typed text that
-# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).  Last, Pad
-# opens a Markdown file, highlighted, and follows its link (48-52).
+# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).  File
+# Explorer then previews the sample picture (48-50), and last, Pad opens a
+# Markdown file, highlighted, and follows its link (51-55).
 DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
@@ -227,14 +252,26 @@ DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 44
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 45
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 46
 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 47
-# Pad: Alt+1 focuses it (48), Ctrl+O opens its prompt (49), the notes path is
-# typed (50) and entered (51), and notes.md's style runs are checked before a
-# FOLLOW on its link opens example.f with its own runs (52).
-DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 48
-DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 49
-DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 50
-DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 51
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 52
+# File Explorer: Alt+2 focuses it (48), a SELECT on the sample document's
+# row selects it (49), and activating the Preview tab shows it as a rich
+# DOCUMENT from its first heading (50); the Details tab brings the table
+# back.  A SELECT on the sample picture's row selects it (51-52), and the
+# Preview tab shows the picture rich over its CELL half blocks (53).  The
+# picture stays shown to the end.
+DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 48
+DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 49
+DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 50
+DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 51
+DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 52
+DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 53
+# Pad: Alt+1 focuses it (54), Ctrl+O opens its prompt (55), the notes path is
+# typed (56) and entered (57), and notes.md's style runs are checked before a
+# FOLLOW on its link opens example.f with its own runs (58).
+DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 54
+DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 55
+DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 56
+DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 57
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 58
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -361,20 +398,20 @@ def _QUOTA_FIELDS(prefix: str, first: int) -> dict[str, int]:
 # The producer's fallback record (RTHP-FALLBACK@): draws that had a part stay
 # CELL and, for the latest, its parts, reason and quotas needed against held.
 _FALLBACK_FIELDS = {
-    "fallbacks": 541,
-    "fallback_draw": 542,
-    "fallback_parts": 543,
-    "fallback_reason": 544,
-    **_QUOTA_FIELDS("fallback_needed", 545),
-    **_QUOTA_FIELDS("fallback_held", 552),
-    "fallback_bytes_needed": 559,
-    "fallback_bytes_held": 560,
+    "fallbacks": 544,
+    "fallback_draw": 545,
+    "fallback_parts": 546,
+    "fallback_reason": 547,
+    **_QUOTA_FIELDS("fallback_needed", 548),
+    **_QUOTA_FIELDS("fallback_held", 555),
+    "fallback_bytes_needed": 562,
+    "fallback_bytes_held": 563,
 }
 
 _GUEST_FAILURE_RECORDS = {
     "pt_session": (
         "_A1D-FAILURE-SESSION-A",
-        124,
+        133,
         {
             "state": 15,
             "deadline": 16,
@@ -411,29 +448,30 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "publisher": (
         "_A1D-FAILURE-PUBLISHER-A",
-        26,
+        28,
         {
             "session": 0,
             "context": 1,
-            "base_magic": 10,
-            "engine": 11,
-            "rich_magic": 12,
-            "producer_context": 13,
-            "producer_bytes": 14,
-            "producer_budget": 15,
-            "adapter": 18,
-            "surface_cols": 19,
-            "surface_rows": 20,
-            "surface_generation": 21,
-            "more_work": 22,
-            "output_needed": 23,
-            "fault_status": 24,
-            "phase": 25,
+            "base_magic": 11,
+            "engine": 12,
+            "rich_magic": 13,
+            "producer_context": 14,
+            "producer_bytes": 15,
+            "producer_budget": 16,
+            "adapter": 19,
+            "surface_cols": 20,
+            "surface_rows": 21,
+            "surface_generation": 22,
+            "more_work": 23,
+            "output_needed": 24,
+            "fault_status": 25,
+            "phase": 26,
+            "neutral_empty": 27,
         },
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        566,
+        607,
         {
             "magic": 0,
             "size": 1,
@@ -464,101 +502,119 @@ _GUEST_FAILURE_RECORDS = {
             "control_count": 55,
             "glyph_count": 56,
             "physical_generation": 57,
-            "target_active_address": 298,
-            "target_pending_address": 299,
-            "next_region": 300,
-            "next_object": 301,
-            "active_draw": 302,
-            "max_documents": 303,
-            "source_directory_bytes": 306,
-            "document_count": 307,
-            "row_damage_address": 308,
-            "row_damage_bytes": 309,
-            "glyph_id_map_address": 310,
-            "glyph_id_map_bytes": 311,
-            "delta_plan_valid": 312,
-            "delta_plan_active_address": 313,
-            "delta_plan_pending_address": 314,
-            "delta_plan_active_draw": 315,
-            "delta_plan_pending_draw": 316,
-            "delta_plan_control_count": 317,
-            "delta_plan_glyph_count": 318,
-            "delta_plan_attempt": 319,
-            "delta_plan_source_generation": 320,
-            "delta_plan_pending_content": 321,
-            "delta_plan_active_content": 322,
-            "source_content_epoch": 323,
-            "max_collection_native": 324,
-            "max_collections": 325,
-            "max_controls": 326,
-            "source_menu_text_bytes": 327,
-            "collection_descriptor_bytes": 330,
-            "collection_native_bytes": 333,
-            "source_collection_count": 334,
-            "menu_control_count": 335,
-            "collection_count": 336,
-            "collection_items": 337,
-            "collection_utf8": 338,
-            "max_collection_descriptors": 339,
-            "max_data_graphics_native": 395,
-            "max_data_graphics_descriptors": 396,
-            "max_instrument_regions": 397,
-            "max_instruments": 398,
-            "data_graphics_descriptor_bytes": 401,
-            "data_graphics_native_bytes": 404,
-            "source_data_graphics_count": 405,
-            "instrument_unit_bytes": 412,
-            "instrument_region_count": 415,
-            "instrument_count": 416,
-            "instrument_claim_count": 419,
-            "base_claim_bytes": 420,
-            "menu_claim_count": 421,
-            "active_facts_bank": 422,
-            "pending_facts_bank": 428,
-            "refused_draw": 437,
-            "max_status_native": 438,
-            "max_statics": 439,
-            "status_descriptor_bytes": 442,
-            "status_native_bytes": 445,
-            "static_text_bytes": 450,
-            "static_count": 453,
-            "static_last": 454,
-            "static_base_claim_bytes": 455,
-            "max_field_native": 474,
-            "max_fields": 475,
-            "field_descriptor_bytes": 478,
-            "field_native_bytes": 481,
-            "field_count": 482,
-            "field_items": 483,
-            "field_utf8": 484,
-            "field_refused": 488,
-            "max_series": 489,
-            "series_address": 490,
-            "series_bytes": 491,
-            "series_samples_address": 492,
-            "series_samples_bytes": 493,
-            "series_samples_used": 494,
-            "series_count": 497,
-            "series_last": 498,
-            "series_slots": 499,
-            "series_chunks": 500,
-            "series_history_max": 501,
-            "series_chunk_max": 502,
-            "series_chunk_bytes_max": 503,
-            "waveform_count": 504,
-            "first_series": 505,
-            "next_series": 506,
-            "omitted_graphs_used": 509,
-            "extension_address": 516,
-            "open_queued": 517,
-            "resume_phase": 518,
-            "space_refused_draw": 519,
-            **_QUOTA_FIELDS("need", 520),
-            **_QUOTA_FIELDS("held", 527),
-            **_QUOTA_FIELDS("ask", 534),
+            "target_active_address": 301,
+            "target_pending_address": 302,
+            "next_region": 303,
+            "next_object": 304,
+            "active_draw": 305,
+            "max_documents": 306,
+            "source_directory_bytes": 309,
+            "document_count": 310,
+            "row_damage_address": 311,
+            "row_damage_bytes": 312,
+            "glyph_id_map_address": 313,
+            "glyph_id_map_bytes": 314,
+            "delta_plan_valid": 315,
+            "delta_plan_active_address": 316,
+            "delta_plan_pending_address": 317,
+            "delta_plan_active_draw": 318,
+            "delta_plan_pending_draw": 319,
+            "delta_plan_control_count": 320,
+            "delta_plan_glyph_count": 321,
+            "delta_plan_attempt": 322,
+            "delta_plan_source_generation": 323,
+            "delta_plan_pending_content": 324,
+            "delta_plan_active_content": 325,
+            "source_content_epoch": 326,
+            "max_collection_native": 327,
+            "max_collections": 328,
+            "max_controls": 329,
+            "source_menu_text_bytes": 330,
+            "collection_descriptor_bytes": 333,
+            "collection_native_bytes": 336,
+            "source_collection_count": 337,
+            "menu_control_count": 338,
+            "collection_count": 339,
+            "collection_items": 340,
+            "collection_utf8": 341,
+            "max_collection_descriptors": 342,
+            "max_data_graphics_native": 398,
+            "max_data_graphics_descriptors": 399,
+            "max_instrument_regions": 400,
+            "max_instruments": 401,
+            "data_graphics_descriptor_bytes": 404,
+            "data_graphics_native_bytes": 407,
+            "source_data_graphics_count": 408,
+            "instrument_unit_bytes": 415,
+            "instrument_region_count": 418,
+            "instrument_count": 419,
+            "instrument_claim_count": 422,
+            "base_claim_bytes": 423,
+            "menu_claim_count": 424,
+            "active_facts_bank": 425,
+            "pending_facts_bank": 431,
+            "refused_draw": 440,
+            "max_status_native": 441,
+            "max_statics": 442,
+            "status_descriptor_bytes": 445,
+            "status_native_bytes": 448,
+            "static_text_bytes": 453,
+            "static_count": 456,
+            "static_last": 457,
+            "static_base_claim_bytes": 458,
+            "max_field_native": 477,
+            "max_fields": 478,
+            "field_descriptor_bytes": 481,
+            "field_native_bytes": 484,
+            "field_count": 485,
+            "field_items": 486,
+            "field_utf8": 487,
+            "field_refused": 491,
+            "max_series": 492,
+            "series_address": 493,
+            "series_bytes": 494,
+            "series_samples_address": 495,
+            "series_samples_bytes": 496,
+            "series_samples_used": 497,
+            "series_count": 500,
+            "series_last": 501,
+            "series_slots": 502,
+            "series_chunks": 503,
+            "series_history_max": 504,
+            "series_chunk_max": 505,
+            "series_chunk_bytes_max": 506,
+            "waveform_count": 507,
+            "first_series": 508,
+            "next_series": 509,
+            "omitted_graphs_used": 512,
+            "extension_address": 519,
+            "open_queued": 520,
+            "resume_phase": 521,
+            "space_refused_draw": 522,
+            **_QUOTA_FIELDS("need", 523),
+            **_QUOTA_FIELDS("held", 530),
+            **_QUOTA_FIELDS("ask", 537),
             **_FALLBACK_FIELDS,
-            "memory": 561,
-            "kept_arena_bytes": 563,
+            "memory": 564,
+            "kept_arena_bytes": 566,
+            "max_pictures": 569,
+            "picture_count": 572,
+            "picture_pixel_width": 575,
+            "picture_pixel_height": 576,
+            "resource_table_bytes": 583,
+            "next_resource": 584,
+            "picture_job": 585,
+            "picture_job_entry": 586,
+            "picture_chunk_bytes": 588,
+            "picture_epoch": 589,
+            "picture_hold_draw": 590,
+            "picture_refused": 591,
+            "picture_budget": 592,
+            "picture_shrink": 593,
+            "picture_resize": 594,
+            "picture_failed": 595,
+            "glyph_draw": 596,
+            "glyph_runs": 605,
         },
     ),
     "engine": (
@@ -1753,6 +1809,81 @@ class _SemanticItemViewClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticDocumentClaim:
+    """One real retained DOCUMENT root in logical-screen coordinates, with
+    the blocks it carried."""
+
+    identity: ControlIdentity
+    left: int
+    top: int
+    right: int
+    bottom: int
+    content: DocumentContent
+    state: ControlState = ControlState.VISIBLE | ControlState.ENABLED
+
+    @property
+    def control_id(self) -> int:
+        return self.identity.control_id
+
+    @property
+    def placed(self) -> tuple[PlacedBlock, ...]:
+        """The carried blocks where the root shows them."""
+
+        return placed_blocks(self.content, self.right - self.left)
+
+    @property
+    def figures(self) -> tuple[tuple[int, _LogicalRectangle, _LogicalRectangle | None], ...]:
+        """Each carried figure: its block's key, the rectangle its picture
+        rows fill, which may reach past the root, and the part the root
+        shows, or None."""
+
+        return _document_figures(
+            _LogicalRectangle(self.left, self.top, self.right, self.bottom), self.content
+        )
+
+    @property
+    def top_block(self) -> DocumentBlock | None:
+        """The block the root's top row lies in."""
+
+        for placed in self.placed:
+            if placed.top + placed.rows > 0:
+                return placed.block
+        return None
+
+    def block_with(self, text: str) -> DocumentBlock | None:
+        """The carried block whose text contains TEXT, if exactly one."""
+
+        found = [block for block in self.content.blocks if text in block.text]
+        return found[0] if len(found) == 1 else None
+
+    def link(self, block: DocumentBlock, text: str) -> TextPosition | None:
+        """The start of BLOCK's link whose text is TEXT, when the root shows
+        it (SEMANTIC-CONTENT-1's shown link)."""
+
+        offset = block.text.find(text)
+        if offset < 0 or not shown_link(
+            self.content, self.right - self.left, self.bottom - self.top,
+            block.block_key, offset,
+        ):
+            return None
+        return TextPosition(block.block_key, offset)
+
+    def value(self, *fields: int) -> str:
+        """A journey input value naming this root, then FIELDS."""
+
+        identity = self.identity
+        return ",".join(
+            str(value)
+            for value in (
+                identity.owner_id,
+                identity.owner_generation,
+                identity.control_id,
+                *fields,
+            )
+        )
+
+
+@dataclass(frozen=True)
 class _CollectionState:
     """Authored collection state without retained-wire ControlIdentity."""
 
@@ -1873,6 +2004,39 @@ class _SemanticStatusFieldClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticImageClaim:
+    """A committed IMAGE whose painted part is wholly on screen: the
+    resource it shows, fitted over the renderer's backdrop in its cell
+    rectangle.  LEFT to BOTTOM is the part painted, its clip; WHOLE is the
+    rectangle the picture is fitted in, which may reach off the screen, and
+    is None when all of it is painted.  A figure in a document names the
+    DOCUMENT and the block whose picture rows it fills.
+
+    The resource's pixels stay with the terminal; the claim proves which
+    picture the frame names, not how the renderer scaled it.
+    """
+
+    owner_id: int
+    owner_generation: int
+    object_id: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+    resource_id: int
+    fit: ImageFit
+    opacity: int
+    whole: tuple[int, int, int, int] | None = None
+    figure: tuple[ControlIdentity, int] | None = None
+
+    @property
+    def clipped(self) -> bool:
+        """Whether the renderer paints only part of the picture."""
+
+        return self.whole is not None
+
+
+@dataclass(frozen=True)
 class _SemanticFieldClaim:
     """Committed FIELD state and slots, without clipped-text visibility inference."""
 
@@ -1970,6 +2134,8 @@ class RichScreenProjection:
     cells: tuple[tuple[str, ...], ...] = ()
     semantic_pane_claims: tuple[_SemanticPaneClaim, ...] = ()
     semantic_taskbar_claims: tuple[_SemanticTaskBarClaim, ...] = ()
+    semantic_image_claims: tuple[_SemanticImageClaim, ...] = ()
+    semantic_document_claims: tuple[_SemanticDocumentClaim, ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
         if self.cells:
@@ -2053,6 +2219,10 @@ class RichScreenProjection:
     @property
     def field_count(self) -> int:
         return len(self.semantic_field_claims)
+
+    @property
+    def image_count(self) -> int:
+        return len(self.semantic_image_claims)
 
     @property
     def collection_claim_identities(
@@ -3020,6 +3190,54 @@ def _tabset_claims_in_tile(
     )
 
 
+def _tab_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+    label: str,
+    where: str,
+) -> tuple[_SemanticTabClaim, bool]:
+    """The one tab LABEL of a TABSET wholly inside BOUNDS, which WHERE
+    names, and whether it is selected."""
+
+    left, top, right, bottom = bounds
+    tabs = [
+        (tab, tabset)
+        for tabset in projection.semantic_tabset_claims
+        if left <= tabset.left < tabset.right <= right
+        and top <= tabset.top < tabset.bottom <= bottom
+        for tab in tabset.tabs
+        if tab.label == label
+    ]
+    if len(tabs) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"{where} shows {len(tabs)} {label} tabs"
+        )
+    tab, tabset = tabs[0]
+    return tab, tab in tabset.selected_tabs
+
+
+def _tab_value(tab: _SemanticTabClaim) -> str:
+    """The journey input value that activates TAB."""
+
+    identity = tab.identity
+    return f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+
+
+def _image_claims_in(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+) -> tuple[_SemanticImageClaim, ...]:
+    """The IMAGE roots wholly inside BOUNDS."""
+
+    left, top, right, bottom = bounds
+    return tuple(
+        claim
+        for claim in projection.semantic_image_claims
+        if left <= claim.left < claim.right <= right
+        and top <= claim.top < claim.bottom <= bottom
+    )
+
+
 def _tab_signature(tab: _SemanticTabClaim) -> _TabSignature:
     """Return authored tab state compared independently of retained IDs."""
 
@@ -3361,8 +3579,12 @@ def _write_guest_failure_diagnostics(
     return path
 
 
-def _require_healthy_backend(status: dict, artifact_root: Path) -> None:
-    """Fail from the current status before another screen or input request."""
+def _require_healthy_backend(status: dict, artifact_root: Path, client=None) -> None:
+    """Fail from the current status before another screen or input request.
+
+    With CLIENT, the guest's own state is saved too, best effort: Desk's
+    failure record says why the guest stopped or closed its terminal.
+    """
     error = status.get("error")
     if not error and status.get("state") != "error":
         return
@@ -3375,6 +3597,12 @@ def _require_healthy_backend(status: dict, artifact_root: Path) -> None:
         detail = f"status saved to {path}"
     except OSError as exc:
         detail = f"status capture failed: {exc}"
+    if client is not None:
+        try:
+            guest = _write_guest_failure_diagnostics(client, artifact_root, reason)
+            detail += f"; guest state saved to {guest}"
+        except Exception as exc:  # noqa: BLE001 - diagnostics never mask the failure
+            detail += f"; guest state capture failed: {type(exc).__name__}: {exc}"
     raise PhysicalDesktopAcceptanceError(f"Desktop backend failed: {reason}; {detail}")
 
 
@@ -3956,6 +4184,43 @@ def _rectangle_intersection(
     return _LogicalRectangle(left, top, right, bottom)
 
 
+def _document_figures(
+    document: _LogicalRectangle,
+    content: DocumentContent,
+) -> tuple[tuple[int, _LogicalRectangle, _LogicalRectangle | None], ...]:
+    """Each figure a DOCUMENT root at DOCUMENT carries: its block's key, the
+    picture rows the root leaves unpainted for it, from the block's indent
+    across its text area, which may reach past the root, and the part of
+    them inside the root, or None."""
+
+    cols = document.right - document.left
+    figures = []
+    for placed in placed_blocks(content, cols):
+        block = placed.block
+        if block.kind is not BlockKind.FIGURE:
+            continue
+        indent = block.indent
+        whole = _LogicalRectangle(
+            document.left + indent,
+            document.top + placed.content_top,
+            document.left + min(cols, indent + max(cols - indent, 1)),
+            document.top + placed.text_top,
+        )
+        figures.append((block.block_key, whole, _rectangle_intersection(whole, document)))
+    return tuple(figures)
+
+
+def _image_clip_rectangle(whole: _LogicalRectangle, clip) -> _LogicalRectangle:
+    """The part of an IMAGE whose rectangle is WHOLE the renderer paints."""
+
+    return _LogicalRectangle(
+        whole.left + clip.x,
+        whole.top + clip.y,
+        whole.left + clip.x + clip.cols,
+        whole.top + clip.y + clip.rows,
+    )
+
+
 def _rectangle_cells(
     rectangle: _LogicalRectangle,
 ) -> set[tuple[int, int]]:
@@ -4265,8 +4530,10 @@ def reconstruct_retained_screen(
         TextGridDraw,
         TabSetDraw,
         ItemViewDraw,
+        DocumentDraw,
         StatusFieldDraw,
         FieldDraw,
+        ImageDraw,
     )
     instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
     supported_draw_types = base_draw_types + instrument_draw_types + (PaneDraw, TaskBarDraw)
@@ -4384,12 +4651,33 @@ def reconstruct_retained_screen(
     menu_bar_count = 0
     semantic_collection_claims: list[_SemanticCollectionClaim] = []
     semantic_item_view_claims: list[_SemanticItemViewClaim] = []
+    semantic_document_claims: list[_SemanticDocumentClaim] = []
     semantic_tabset_claims: list[_SemanticTabSetClaim] = []
     instrument_claims: list[_InstrumentClaim] = []
     semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
     semantic_field_claims: list[_SemanticFieldClaim] = []
+    semantic_image_claims: list[_SemanticImageClaim] = []
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
+    # A figure in a document is an IMAGE filling the picture rows its
+    # DOCUMENT leaves unpainted, in the same region, so the picture shows
+    # there.  Its cells lie in the document's claim.
+    document_figures: dict[
+        _LogicalRectangle,
+        tuple[int, ControlIdentity, int, _LogicalRectangle | None],
+    ] = {}
+    for region in plane.regions:
+        for draw in region.draws:
+            if not isinstance(draw, DocumentDraw):
+                continue
+            logical, visible = _visible_draw_rectangle(region, draw, cell.cols, cell.rows)
+            if visible is None:
+                continue
+            identity = ControlIdentity(region.owner_id, region.owner_generation,
+                                       draw.control_id)
+            for key, whole, inside in _document_figures(logical, draw.content):
+                shown = None if inside is None else _rectangle_intersection(inside, visible)
+                document_figures[whole] = (region.region_id, identity, key, shown)
 
     def claim_semantic_rectangle(
         left: int,
@@ -4419,6 +4707,12 @@ def reconstruct_retained_screen(
             cell.cols,
             cell.rows,
         )
+        whole = logical
+        if isinstance(draw, ImageDraw) and draw.clip is not None:
+            # A clipped IMAGE keeps its whole rectangle, which may reach off
+            # the screen; the renderer paints only the clip.
+            logical = _image_clip_rectangle(whole, draw.clip)
+            visible = None if visible is None else _rectangle_intersection(logical, visible)
         if visible is None:
             if isinstance(draw, instrument_draw_types):
                 continue
@@ -4539,6 +4833,46 @@ def reconstruct_retained_screen(
             opaque_semantic_cells.update(_rectangle_cells(visible))
             continue
 
+        if isinstance(draw, ImageDraw):
+            # The renderer paints its backdrop under the part it paints and
+            # fits the picture inside the whole rectangle, so nothing beneath
+            # shows through.
+            if not draw.backdrop:
+                raise PhysicalDesktopAcceptanceError(
+                    f"retained image {draw.object_id} has no backdrop for "
+                    "complete rich coverage"
+                )
+            figure = document_figures.get(whole)
+            if figure is not None:
+                figure_region, _document, key, shown = figure
+                if figure_region != region.region_id or shown != visible:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"retained image {draw.object_id} does not paint the part of "
+                        f"figure {key} its document shows"
+                    )
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_image_claims.append(
+                    _SemanticImageClaim(
+                        owner_id=region.owner_id,
+                        owner_generation=region.owner_generation,
+                        object_id=draw.object_id,
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        resource_id=draw.resource_id,
+                        fit=draw.fit,
+                        opacity=draw.opacity,
+                        whole=(None if whole == logical else
+                               (whole.left, whole.top, whole.right, whole.bottom)),
+                        figure=None if figure is None else (figure[1], figure[2]),
+                    )
+                )
+            if figure is None:
+                claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
         if isinstance(draw, StatusFieldDraw):
             # The viewer fills the complete square one-row material, then
             # clips each string independently to its explicit label/value
@@ -4611,6 +4945,27 @@ def reconstruct_retained_screen(
             if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
                 semantic_item_view_claims.append(
                     _SemanticItemViewClaim(
+                        identity=ControlIdentity(
+                            region.owner_id,
+                            region.owner_generation,
+                            draw.control_id,
+                        ),
+                        left=left,
+                        top=top,
+                        right=right,
+                        bottom=bottom,
+                        content=draw.content,
+                        state=draw.state,
+                    )
+                )
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
+        if isinstance(draw, DocumentDraw):
+            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
+                semantic_document_claims.append(
+                    _SemanticDocumentClaim(
                         identity=ControlIdentity(
                             region.owner_id,
                             region.owner_generation,
@@ -4775,6 +5130,7 @@ def reconstruct_retained_screen(
         semantic_collection_claims=tuple(semantic_collection_claims),
         semantic_tabset_claims=tuple(semantic_tabset_claims),
         semantic_item_view_claims=tuple(semantic_item_view_claims),
+        semantic_document_claims=tuple(semantic_document_claims),
         region_count=len(plane.regions),
         instrument_region_count=sum(any(isinstance(draw, instrument_draw_types)
                                         for draw in region.draws) for region in plane.regions),
@@ -4785,6 +5141,7 @@ def reconstruct_retained_screen(
         semantic_field_claims=tuple(semantic_field_claims),
         semantic_pane_claims=pane_claims,
         semantic_taskbar_claims=taskbar_claims,
+        semantic_image_claims=tuple(semantic_image_claims),
         cells=cells,
     )
 
@@ -5516,6 +5873,35 @@ def _shell_hit_target(offer, display_state, display_ack, identity, kind):
     return target, task.label
 
 
+def _tab_hit_target(offer, display_state, display_ack, identity):
+    """Bind one enabled, unselected TAB of any TABSET to the exact
+    acknowledged painter hit."""
+    token = _exact_hit_map_token(offer, display_state, display_ack, "tab activation")
+    if offer.retained is None:
+        raise PhysicalDesktopAcceptanceError("tab activation needs a retained TAB")
+    matches = [(tabset, tab) for region in offer.retained.regions
+               for tabset in region.draws if isinstance(tabset, TabSetDraw)
+               for tab in tabset.tabs
+               if ControlIdentity(region.owner_id, region.owner_generation, tab.control_id) == identity]
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError("tab activation does not name one committed tab")
+    tabset, tab = matches[0]
+    required = ControlState.VISIBLE | ControlState.ENABLED
+    if (tabset.state & required != required or tab.state & required != required
+            or tab.state & ControlState.SELECTED):
+        raise PhysicalDesktopAcceptanceError("tab activation target is not an enabled unselected tab")
+    targets = tuple(target for target in display_state.hit_targets
+                    if target.kind is ControlKind.TAB and target.identity == identity)
+    if len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError("tab activation lacks one acknowledged control target")
+    target = targets[0]
+    x, y = target.rect.left + target.rect.width // 2, target.rect.top + target.rect.height // 2
+    if target.rect.width <= 0 or target.rect.height <= 0 or display_state.hit_test(
+            x, y, display_token=token) != target:
+        raise PhysicalDesktopAcceptanceError("tab target is not an exposed acknowledged painter hit")
+    return target, tab.label
+
+
 def _pad_file_hit_target(
     offer: TerminalDisplayOffer,
     display_state: _RetainedDisplayState,
@@ -5892,6 +6278,8 @@ _POINTER_INPUT_METHODS = frozenset(
         "item_collapse",
         "item_check",
         "item_scroll",
+        "document_scroll",
+        "document_follow",
         "field_adjust",
         "field_activate",
     )
@@ -6174,6 +6562,122 @@ def _request_field_input(
     )
 
 
+def _request_document_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    params: dict[str, object],
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send SCROLL, or FOLLOW on a link, to a DOCUMENT where the physical
+    viewer would: the wheel over any visible point of the root, or a press
+    on the link character its paint pass drew for that position."""
+
+    if method == "document_scroll":
+        owner_id, owner_generation, control_id, detents = _canonical_integers(
+            value, 4, method
+        )
+        if not detents:
+            raise PhysicalDesktopAcceptanceError("document scroll input carries no detent")
+        position = None
+    else:
+        owner_id, owner_generation, control_id, block_key, offset = (
+            _canonical_integers(value, 5, method)
+        )
+        position = TextPosition(block_key, offset)
+    identity = ControlIdentity(owner_id, owner_generation, control_id)
+    token = _exact_hit_map_token(offer, display_state, display_ack, "document input")
+    targets = [
+        target
+        for target in display_state.hit_entries
+        if isinstance(target, DocumentHitTarget) and target.identity == identity
+    ]
+    if len(targets) != 1:
+        held = sorted({
+            type(entry).__name__
+            for entry in display_state.hit_entries
+            if getattr(entry, "identity", None) == identity
+            or (getattr(entry, "owner_id", None), getattr(entry, "owner_generation", None),
+                getattr(entry, "control_id", None))
+            == (identity.owner_id, identity.owner_generation, identity.control_id)
+        })
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged hit map has no enabled DOCUMENT target for the "
+            f"requested root (it holds {', '.join(held) or 'nothing'} for it)"
+        )
+    target = targets[0]
+    rect = target.rect
+    step_x = max(1, cell_width // 2)
+    step_y = max(1, cell_height // 2)
+    point = next(
+        (
+            (x, y)
+            for y in range(rect.top + step_y // 2, rect.bottom, step_y)
+            for x in range(rect.left + step_x // 2, rect.right, step_x)
+            if (position is None or target.link_at(x, y) == position)
+            and display_state.resolve_pointer(
+                x,
+                y,
+                display_token=token,
+                cell_width=cell_width,
+                cell_height=cell_height,
+            )
+            == target
+        ),
+        None,
+    )
+    if point is None:
+        raise PhysicalDesktopAcceptanceError(
+            f"DOCUMENT {'link ' + repr(position) if position else 'root'} is not "
+            "painted at any visible point"
+        )
+    request = dict(
+        params,
+        owner_id=owner_id,
+        owner_generation=owner_generation,
+        control_id=control_id,
+        modifiers=0,
+    )
+    evidence = {
+        "kind": ControlKind.DOCUMENT.name,
+        "owner_id": owner_id,
+        "owner_generation": owner_generation,
+        "control_id": control_id,
+        "content_revision": target.content_revision,
+        "pixel": list(point),
+    }
+    if position is None:
+        kind = ControlEventKind.SCROLL
+        request.update(event_kind=int(kind), wheel_x=0, wheel_y=detents)
+        evidence["wheel_y"] = detents
+    else:
+        # A press on a link follows it: a document is read-only.
+        kind = ControlEventKind.FOLLOW
+        request.update(
+            event_kind=int(kind),
+            content_revision=target.content_revision,
+            item_key=position.item_key,
+            scalar_offset=position.scalar_offset,
+        )
+        evidence["position"] = [position.item_key, position.scalar_offset]
+    evidence["event_kind"] = kind.name
+    if _display_bound_status(client, "send_text_event", request) != "progress":
+        return "backpressured", None
+    return "progress", AcceptedInputEvidence(
+        "send_text_event",
+        f"{method} {value}",
+        offer.offer_id,
+        params["generation"],
+        display_scope_to_wire(offer.scope),
+        evidence,
+    )
+
+
 def _request_item_input(
     client: SessionClient,
     method: str,
@@ -6284,7 +6788,8 @@ def _request_pointer_input(
     the release was backpressured and ``drag_owed`` when the move was too,
     and the journey must deliver it before any other input.  Text roots take
     PLACE, EXTEND, or SCROLL at a point whose position comes from the
-    viewer's own layout; SCROLL also reaches TEXT_GRID roots.
+    viewer's own layout; SCROLL also reaches TEXT_GRID roots.  Documents take
+    SCROLL, and FOLLOW on a link character the viewer painted.
     """
 
     if (
@@ -6298,6 +6803,11 @@ def _request_pointer_input(
         )
     if method in ("field_adjust", "field_activate"):
         return _request_field_input(
+            client, method, value, offer, params, display_state=display_state,
+            display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
+        )
+    if method in ("document_scroll", "document_follow"):
+        return _request_document_input(
             client, method, value, offer, params, display_state=display_state,
             display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
         )
@@ -6591,6 +7101,14 @@ def _request_acceptance_input(
                 "modifiers": 0,
             }
         )
+        semantic_target = _control_target_evidence(target, label=label)
+    elif method == "activate_tab":
+        owner, owner_generation, control_id = _canonical_integers(value, 3, "tab activation")
+        identity = ControlIdentity(owner, owner_generation, control_id)
+        target, label = _tab_hit_target(offer, display_state, display_ack, identity)
+        rpc_method = "send_control_event"
+        params.update(owner_id=owner, owner_generation=owner_generation,
+                      control_id=control_id, modifiers=0)
         semantic_target = _control_target_evidence(target, label=label)
     elif method in ("activate_shell_task", "activate_shell_launcher"):
         owner, owner_generation, control_id = _canonical_integers(value, 3, "shell activation")
@@ -6905,7 +7423,7 @@ def _read_shell_source(client, offer, generation, *, diagnostics=None) -> ShellS
             e = _shell_cells(client, engine, 42)
             note("engine", e)
             _shell_require(e[0] == 0x5254415054454E47, "provider descriptor is invalid")
-            session = _shell_cells(client, e[1], 124)
+            session = _shell_cells(client, e[1], 133)
             note("session", session)
             if (session[15] != 3 or session[19] != offer.scope.session_id or
                     session[33] != offer.scope.presentation_epoch or
@@ -7459,6 +7977,18 @@ class FrameBoundJourney:
     # A journey that expects a draw shown as CELL, with an empty retained
     # scene, sets this; every other journey refuses such a frame.
     allows_empty_retained_frames = False
+    # What a journey checked beyond its frames, for the performance trace.
+    evidence: dict | None = None
+    # The physical viewer's cell in pixels, (width, height), which the runner
+    # sets whenever it fits its font.
+    cell_pixels: tuple[int, int] | None = None
+    # Whether, between new frames, the runner shows the journey the frame on
+    # screen again after each status poll.
+    acts_between_frames = False
+
+    def observe_status(self, status) -> None:
+        """See each status the runner polls.  A journey that checks the
+        terminal's own frame counters keeps what it needs."""
 
     @property
     def has_pending_input(self) -> bool:
@@ -7659,6 +8189,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._daybook_wheel_date: str | None = None
         self._daybook_han_cell: tuple[int, int] = (0, 0)
         self._mixed_daybook_text: str | None = None
+        self._picture_shown = False
         self._followed_text: str | None = None
 
     @property
@@ -7685,12 +8216,19 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             raise PhysicalDesktopAcceptanceError(
                 "final CELL evidence has no acknowledged followed link"
             )
+        if not self._picture_shown:
+            raise PhysicalDesktopAcceptanceError(
+                "final CELL evidence has no acknowledged rich picture"
+            )
         return CELL_FINAL_STATIC_MARKERS + (
             self._daybook_wheel_date,
             # Daybook's task that mixes scripts, as its cells show it.
             mixed_text.visual(self._mixed_daybook_text),
             # The Forth file Pad's Markdown link opened.
             self._followed_text,
+            # What File Explorer's sample picture is, which CELL shows while
+            # the rich side shows the picture.
+            FEXPLORER_PICTURE_FACTS,
         )
 
     def _require_exercised_state_survives(
@@ -8275,6 +8813,18 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             return self._mixed_text_stage(offer, generation, projection, sender)
         if (
             DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE
+            < self.stage
+            <= DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE
+        ):
+            return self._document_stage(offer, generation, projection, sender)
+        if (
+            DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE
+            < self.stage
+            <= DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE
+        ):
+            return self._picture_stage(offer, generation, projection, sender)
+        if (
+            DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE
             < self.stage
             <= DESKTOP_ACCEPTANCE_FINAL_STAGE
         ):
@@ -9136,12 +9686,212 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         milestone = self._milestone("daybook-mixed-task-added")
         self._send(
             "send_key",
-            "alt+1",
-            DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE,
+            "alt+2",
+            DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE,
             offer,
             generation,
             sender,
         )
+        return JourneyProgress(milestone)
+
+    def _document_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Preview the sample Markdown document in File Explorer.
+
+        A SELECT on the document's row in the detail table loads its preview,
+        and activating the Preview tab shows it: the rich frame carries it as
+        one DOCUMENT from its first heading, which CELL beneath draws too,
+        and its figure in view as an IMAGE once the terminal holds it.  The
+        Details tab then brings the table back for the picture.
+        """
+
+        _require_soundlab_desktop_semantics(projection)
+        focused = _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
+        bounds = _desktop_tile_bounds(projection, FEXPLORER_DESKTOP_TILE)
+        if self.stage == DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE:
+            table = _fexplorer_table_claim(projection)
+            if not focused or table is None:
+                return JourneyProgress()
+            row = table.named(FEXPLORER_DOCUMENT)
+            content = table.content
+            if row is None or not _item_shown(table, row):
+                if (
+                    row is None
+                    and content.viewport_first + content.viewport_count
+                    >= content.item_total
+                ):
+                    raise PhysicalDesktopAcceptanceError(
+                        f"File Explorer's root lists no {FEXPLORER_DOCUMENT}"
+                    )
+                toward = (
+                    -1 if row is not None and row.ordinal < content.viewport_first
+                    else 1
+                )
+                milestone = self._milestone("fexplorer-scrolled-to-document")
+                self._send("item_scroll", table.value(toward),
+                           DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE, offer, generation, sender)
+                return JourneyProgress(milestone)
+            milestone = self._milestone("fexplorer-focused-for-document")
+            self._send("item_select", table.value(row.item_key),
+                       DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if not focused:
+            raise PhysicalDesktopAcceptanceError(
+                "File Explorer lost focus while previewing its document"
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE:
+            table = _fexplorer_table_claim(projection)
+            selected = None if table is None else table.selected
+            if (
+                selected is None
+                or selected.fields[0].text != FEXPLORER_DOCUMENT
+                or not _fexplorer_selected_path_is(projection, "/" + FEXPLORER_DOCUMENT)
+            ):
+                return JourneyProgress()
+            tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+            if shown:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's Preview tab was selected before it was activated"
+                )
+            milestone = self._milestone("fexplorer-document-selected")
+            self._send("activate_tab", _tab_value(tab),
+                       DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        _tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+        left, top, right, bottom = bounds
+        documents = [
+            claim
+            for claim in projection.semantic_document_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+        ]
+        if not shown or not documents:
+            return JourneyProgress()
+        if len(documents) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer shows {len(documents)} documents for {FEXPLORER_DOCUMENT}"
+            )
+        document, = documents
+        first = document.top_block
+        if (
+            first is None
+            or first.text != FEXPLORER_DOCUMENT_HEADING
+            or document.content.viewport_row
+        ):
+            raise PhysicalDesktopAcceptanceError(
+                f"{FEXPLORER_DOCUMENT}'s preview does not open at its first heading"
+            )
+        self._require_cell_text(
+            offer, projection, FEXPLORER_DOCUMENT_HEADING, FEXPLORER_DESKTOP_TILE
+        )
+        # Each figure with a row in view shows rich, in the picture rows the
+        # document leaves it.
+        for key, _whole, shown in document.figures:
+            if shown is not None and not any(
+                claim.figure == (document.identity, key)
+                for claim in projection.semantic_image_claims
+            ):
+                return JourneyProgress()
+        milestone = self._milestone("fexplorer-document-shown-rich")
+        details, _selected = _tab_in(projection, bounds, "Details", "File Explorer")
+        self._send("activate_tab", _tab_value(details),
+                   DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE, offer, generation, sender)
+        return JourneyProgress(milestone)
+
+    def _picture_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Preview the sample picture in File Explorer.
+
+        A SELECT on the picture's row in the detail table loads its preview,
+        and activating the Preview tab shows it: CELL draws the picture in
+        half blocks, and the rich frame shows it as one IMAGE over the same
+        cells once the terminal holds it.  The picture stays shown while Pad
+        is exercised to the end, so the last frames carry it too.
+        """
+
+        _require_soundlab_desktop_semantics(projection)
+        focused = _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
+        bounds = _desktop_tile_bounds(projection, FEXPLORER_DESKTOP_TILE)
+        if self.stage == DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE:
+            table = _fexplorer_table_claim(projection)
+            if not focused or table is None:
+                return JourneyProgress()
+            row = table.named(FEXPLORER_PICTURE)
+            content = table.content
+            if row is None or not _item_shown(table, row):
+                # The table carries the rows it shows and the selected one:
+                # one wheel detent toward the row, down unless it is carried
+                # above, and the stage looks again.
+                if (
+                    row is None
+                    and content.viewport_first + content.viewport_count
+                    >= content.item_total
+                ):
+                    raise PhysicalDesktopAcceptanceError(
+                        f"File Explorer's root lists no {FEXPLORER_PICTURE}"
+                    )
+                toward = (
+                    -1 if row is not None and row.ordinal < content.viewport_first
+                    else 1
+                )
+                milestone = self._milestone("fexplorer-scrolled-to-picture")
+                self._send("item_scroll", table.value(toward),
+                           DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE, offer, generation, sender)
+                return JourneyProgress(milestone)
+            milestone = self._milestone("fexplorer-focused-for-picture")
+            self._send("item_select", table.value(row.item_key),
+                       DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        if not focused:
+            raise PhysicalDesktopAcceptanceError(
+                "File Explorer lost focus while previewing its picture"
+            )
+        if self.stage == DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE:
+            table = _fexplorer_table_claim(projection)
+            selected = None if table is None else table.selected
+            if (
+                selected is None
+                or selected.fields[0].text != FEXPLORER_PICTURE
+                or not _fexplorer_selected_path_is(projection, "/" + FEXPLORER_PICTURE)
+            ):
+                return JourneyProgress()
+            tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+            if shown:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's Preview tab was selected before it was activated"
+                )
+            milestone = self._milestone("fexplorer-picture-selected")
+            self._send("activate_tab", _tab_value(tab),
+                       DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE, offer, generation, sender)
+            return JourneyProgress(milestone)
+        _tab, shown = _tab_in(projection, bounds, "Preview", "File Explorer")
+        pictures = _image_claims_in(projection, bounds)
+        if not shown or not pictures:
+            return JourneyProgress()
+        if len(pictures) != 1:
+            raise PhysicalDesktopAcceptanceError(
+                f"File Explorer shows {len(pictures)} pictures for {FEXPLORER_PICTURE}"
+            )
+        picture, = pictures
+        _require_picture_facts_in(
+            offer, FEXPLORER_PICTURE_FACTS,
+            (picture.left, picture.top, picture.right, picture.bottom),
+            "File Explorer's preview",
+        )
+        self._picture_shown = True
+        milestone = self._milestone("fexplorer-picture-shown-rich")
+        self._send("send_key", "alt+1", DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE,
+                   offer, generation, sender)
         return JourneyProgress(milestone)
 
     def _styled_text_stage(
@@ -9296,6 +10046,27 @@ def _require_cell_text_in(
         for row, column in offer.cell.find(visual)
     ):
         raise PhysicalDesktopAcceptanceError(f"CELL does not show {visual!r} in {where}")
+
+
+def _require_picture_facts_in(
+    offer: TerminalDisplayOffer,
+    facts: str,
+    bounds: tuple[int, int, int, int],
+    where: str,
+) -> None:
+    """While the rich side shows a picture inside BOUNDS, which WHERE names,
+    CELL shows what it is, FACTS, and none of its half blocks: the guest
+    decodes nothing for a picture CELL does not show."""
+
+    _require_cell_text_in(offer, facts, bounds, where)
+    left, top, right, bottom = bounds
+    if any(
+        top <= row < bottom and left <= column < right
+        for row, column in offer.cell.find(PICTURE_HALF_BLOCK)
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            f"CELL draws the picture in {where} while it shows rich"
+        )
 
 
 def _surface_rgba(pygame_module, surface) -> bytes:
@@ -9670,6 +10441,7 @@ def _record_frame(
     generation: int,
     projection: RichScreenProjection,
     composed_surface,
+    resource_surfaces=None,
 ) -> PresentedFrameEvidence:
     png_path = (artifact_root / f"{milestone}.png").resolve()
     retained_path = (artifact_root / f"{milestone}-retained-only.png").resolve()
@@ -9688,6 +10460,7 @@ def _record_frame(
         font,
         cell_width,
         cell_height,
+        resource_surfaces=resource_surfaces,
     )
     retained_bytes = _surface_rgba(pygame_module, retained_surface)
     nonblack = sum(
@@ -10087,6 +10860,9 @@ def run_physical_desktop_acceptance(
         terminal = VirtualTerminal(cols=cols, rows=rows)
         revision = -1
         display_state = _RetainedDisplayState()
+        # The exact pictures each offer's IMAGE draws show, fetched from the
+        # terminal before the offer is composed.
+        resource_cache = _DisplayResourceCache()
         manual_input_client = _ManualInputTraceClient(client, trace)
         keyboard = _GuestKeyboardForwarder(
             pygame,
@@ -10114,6 +10890,9 @@ def run_physical_desktop_acceptance(
             terminal.rows,
             fallback_fonts,
         )
+        # The terminal answers the guest's pixel questions from the pixels
+        # of one of this viewer's cells.
+        _report_display_cell_pixels(client, cell_width, cell_height)
         pointer = _PointerRouter(
             display_state,
             keyboard,
@@ -10154,11 +10933,13 @@ def run_physical_desktop_acceptance(
         composed_frame = None
         if journey is None:
             journey = DesktopAcceptanceJourney(tuple(ready_markers))
+        journey.cell_pixels = (cell_width, cell_height)
         frames: list[PresentedFrameEvidence] = []
         inputs: list[AcceptedInputEvidence] = []
         cell_fallback_evidence: dict[str, CellFallbackFrameEvidence] = {}
         last_accepted_offer: TerminalDisplayOffer | None = None
         last_accepted_generation: int | None = None
+        last_accepted_projection: RichScreenProjection | None = None
         latest_cell_text = ""
         latest_retained_text: str | None = None
         latest_retained_draw_count = 0
@@ -10263,7 +11044,8 @@ def run_physical_desktop_acceptance(
 
             status = client.request("status", detailed=False)
             last_status = status
-            _require_healthy_backend(status, artifact_root)
+            _require_healthy_backend(status, artifact_root, client)
+            journey.observe_status(status)
             pending_before_status = keyboard.pending_events
             generation_before_status = keyboard.generation
             display_required_before_status = keyboard.display_required
@@ -10272,6 +11054,7 @@ def run_physical_desktop_acceptance(
                 keyboard=keyboard,
                 display_state=display_state,
                 revision=revision,
+                resource_cache=resource_cache,
             )
             if keyboard.generation != generation_before_status:
                 status_drop_reason = "status_generation_changed"
@@ -10303,6 +11086,7 @@ def run_physical_desktop_acceptance(
                 keyboard=keyboard,
                 display_state=display_state,
                 revision=revision,
+                resource_cache=resource_cache,
             )
             if keyboard.generation != generation_before_screen:
                 screen_drop_reason = "screen_generation_changed"
@@ -10352,6 +11136,7 @@ def run_physical_desktop_acceptance(
                         fallback_fonts,
                     )
                 )
+                journey.cell_pixels = (cell_width, cell_height)
                 glyph_cache.clear()
                 composed_frame = None
                 pointer.cancel()
@@ -10524,6 +11309,37 @@ def run_physical_desktop_acceptance(
                         missing_ready_markers=retained_missing_markers,
                     )
                 )
+            resource_surfaces = resource_cache.acknowledged_surfaces
+            if frame_offer is not None:
+                fetch_started_ns = trace.now()
+                fetched = False
+                while not resource_cache.pending_ready(frame_offer, frame_generation):
+                    fetch_status = resource_cache.fetch_pending_chunk(
+                        client, pygame, frame_offer, frame_generation,
+                    )
+                    if fetch_status in {"stale_generation", "stale_display",
+                                        "invalid_resource"}:
+                        raise PhysicalDesktopAcceptanceError(
+                            f"display resource fetch was refused ({fetch_status})"
+                        )
+                    fetched = True
+                    pump_events(True)
+                if fetched:
+                    trace.mark(
+                        "display_resources_ready",
+                        started_ns=fetch_started_ns,
+                        offer_id=frame_offer.offer_id,
+                        resources=len(frame_offer.retained.resources),
+                        resource_bytes=sum(
+                            manifest.byte_length
+                            for manifest in frame_offer.retained.resources
+                        ),
+                    )
+                if not display_state.pending_resources_ready:
+                    display_state.stage_resources_ready(frame_offer)
+                resource_surfaces = resource_cache.pending_surfaces(
+                    frame_offer, frame_generation,
+                )
             composed_surface = None
             compose_duration_ns = None
 
@@ -10560,6 +11376,7 @@ def run_physical_desktop_acceptance(
                     control_font=chrome_font,
                     hovered=pointer.hovered,
                     pressed=pointer.pressed,
+                    resource_surfaces=resource_surfaces,
                     previous=composed_frame,
                 )
                 compose_duration_ns = max(trace.now() - compose_started_ns, 0)
@@ -10597,10 +11414,28 @@ def run_physical_desktop_acceptance(
                         last_accepted_generation,
                         send_input,
                     )
+                elif journey.acts_between_frames and last_accepted_projection is not None:
+                    # What the status shows may call for input while the
+                    # screen stays the same; it is bound to the frame on it.
+                    progress = journey.after_present(
+                        last_accepted_offer,
+                        last_accepted_generation,
+                        last_accepted_projection,
+                        send_input,
+                    )
+                    if progress.milestone is not None:
+                        trace.mark(
+                            "milestone_between_frames",
+                            status=status,
+                            milestone=progress.milestone,
+                            offer_id=last_accepted_offer.offer_id,
+                            journey_stage=journey.stage,
+                        )
                 time.sleep(0.01)
                 continue
             accepted_revision = display_state.finish_presentation(presentation)
             if accepted_revision is None:
+                resource_cache.clear()
                 trace.mark(
                     "presentation_rejected",
                     started_ns=presentation_started_ns,
@@ -10621,6 +11456,7 @@ def run_physical_desktop_acceptance(
                 time.sleep(0.01)
                 continue
             revision = accepted_revision
+            resource_cache.promote(frame_offer, frame_generation)
             pending_before_ack = keyboard.pending_events
             keyboard.acknowledge_display_offer(
                 frame_offer.offer_id,
@@ -10651,6 +11487,7 @@ def run_physical_desktop_acceptance(
                 )
             last_accepted_offer = frame_offer
             last_accepted_generation = frame_generation
+            last_accepted_projection = frame_projection
             announce(
                 AcceptanceDiagnosticState(
                     RETAINED_ACKNOWLEDGED_MODE,
@@ -10815,6 +11652,7 @@ def run_physical_desktop_acceptance(
                     frame_generation,
                     frame_projection,
                     composed_surface,
+                    resource_surfaces,
                 )
                 _store_milestone_frame(
                     frames,
@@ -10955,7 +11793,8 @@ def run_physical_desktop_acceptance(
                     ),
                 }
             )
-        trace.mark("acceptance_finished", status=last_status, outcome=trace_outcome)
+        trace.mark("acceptance_finished", status=last_status, outcome=trace_outcome,
+                   journey_evidence=None if journey is None else journey.evidence)
         trace.write(trace_outcome)
         if client is not None:
             client.close()

@@ -13,6 +13,7 @@
 \    UTUI-LOAD        ( xml-a xml-u rgn -- flag )
 \    UTUI-BIND-STATE  ( st -- )
 \    UTUI-PAINT       ( -- )
+\    UTUI-SERVICE     ( -- worked? )
 \    UTUI-DRAW-OBSERVE ( body-xt -- status )
 \    UTUI-RELAYOUT    ( -- )
 \    UTUI-DISPATCH-KEY   ( ev -- handled? )
@@ -81,6 +82,8 @@ REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
+REQUIRE widgets/media.f
+REQUIRE widgets/document.f
 REQUIRE widgets/text-grid.f
 REQUIRE widgets/tabs.f
 REQUIRE widgets/data-graphics.f
@@ -1396,6 +1399,20 @@ VARIABLE _UT-TAB-COL
     WDG-DRAW
     _UTUI-RESTORE-DOC-RGN ;
 
+\ --- Media: delegate to the materialized media widget, which draws the
+\     view it shows through the same widget boundary ---
+: _UTUI-RENDER-MEDIA  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    _UTUI-FILL-BG
+    DUP _UTUI-SIDECAR                  ( elem sc )
+    DUP _UTUI-SC-WPTR@                 ( elem sc wptr )
+    DUP 0= IF DROP 2DROP EXIT THEN
+    SWAP OVER _UTUI-SYNC-WFOCUS       ( elem wptr )
+    NIP                                ( wptr )
+    _UTUI-PROXY-FROM-UR
+    WDG-DRAW
+    _UTUI-RESTORE-DOC-RGN ;
+
 \ --- Canvas: fill background (actual CVS-* drawing is app-level) ---
 : _UTUI-RENDER-CANVAS  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
@@ -2395,6 +2412,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-RENDER-LIST      UIDL-T-COLLECTION EL-SET-RENDER
     ['] _UTUI-RENDER-TREE      UIDL-T-TREE       EL-SET-RENDER
     ['] _UTUI-RENDER-TEXTAREA  UIDL-T-TEXTAREA   EL-SET-RENDER
+    ['] _UTUI-RENDER-MEDIA     UIDL-T-MEDIA      EL-SET-RENDER
     ['] _UTUI-RENDER-SCROLL    UIDL-T-SCROLL     EL-SET-RENDER
     ['] _UTUI-RENDER-CANVAS    UIDL-T-CANVAS     EL-SET-RENDER
     ['] _UTUI-RENDER-NOP       UIDL-T-TEMPLATE   EL-SET-RENDER
@@ -2411,6 +2429,7 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     ['] _UTUI-H-MENU           UIDL-T-MENU       EL-SET-EVENT
     ['] _UTUI-H-ITEM           UIDL-T-ITEM       EL-SET-EVENT
     ['] _UTUI-H-TEXTAREA       UIDL-T-TEXTAREA   EL-SET-EVENT
+    ['] _UTUI-H-REGION         UIDL-T-MEDIA      EL-SET-EVENT
     ['] _UTUI-H-LIST           UIDL-T-COLLECTION EL-SET-EVENT
     ['] _UTUI-H-TREE           UIDL-T-TREE       EL-SET-EVENT
     ['] _UTUI-H-TABS           UIDL-T-TABS       EL-SET-EVENT
@@ -2926,6 +2945,36 @@ VARIABLE _UTUI-SKIP-CHILDREN
         THEN
     AGAIN ;
 
+\ UTUI-SERVICE ( -- worked? )
+\   Work that no input announces.  Each <media> element whose picture is
+\   still decoding, or whose document needs a part read or a picture's
+\   file made, advances one bounded slice, and one whose view changed is
+\   marked for repaint.  True when any slice ran, so the caller's loop
+\   does not sleep while work remains.  Hosts call it each pass with the
+\   document's context active; it returns at once when no picture
+\   anywhere is decoding and no document view has work.
+VARIABLE _USV-WORKED
+
+: UTUI-SERVICE  ( -- worked? )
+    PICT-WORK? DOCV-WORK? OR 0= IF 0 EXIT THEN
+    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
+    0 _USV-WORKED !
+    UIDL-ELEM-COUNT 0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UIDL-TYPE UIDL-T-MEDIA = IF
+            DUP _UTUI-SIDECAR DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL = IF
+                _UTUI-SC-WPTR@ ?DUP IF
+                    DUP MEDIA-PENDING? IF
+                        -1 _USV-WORKED !
+                        MEDIA-SERVICE IF DUP UIDL-DIRTY! THEN
+                    ELSE DROP THEN
+                THEN
+            ELSE DROP THEN
+        THEN
+        DROP
+    LOOP
+    _USV-WORKED @ ;
+
 \ =====================================================================
 \  §14 — Key Dispatch
 \ =====================================================================
@@ -3397,6 +3446,23 @@ VARIABLE _USH-H    VARIABLE _USH-W
     ELSE 2DROP THEN
     R> DROP ;
 
+\ --- Media materialization helper ---
+\ An authored visual <rep src=...> shows that file from the current VFS,
+\ with the rep's text, when it has one, as the picture's text alternative.
+: _UTUI-MAT-MEDIA  ( elem -- )
+    >R
+    R@ _UTUI-SIDECAR _UTUI-SYNC-PROXY
+    _UTUI-PROXY-RGN MEDIA-HEAP MEDIA-NEW
+    DUP _UTUI-MAT-W !
+    R@ _UTUI-SIDECAR _UTUI-SC-WPTR!
+    R> S" visual" UIDL-REP-BY-MOD ?DUP 0= IF EXIT THEN
+    DUP S" text" UIDL-ATTR IF
+        _UTUI-MAT-W @ MEDIA-ALT!
+    ELSE 2DROP THEN
+    S" src" UIDL-ATTR 0= IF 2DROP EXIT THEN
+    VFS-CUR ?DUP 0= IF 2DROP EXIT THEN
+    _UTUI-MAT-W @ MEDIA-OPEN-VFS DROP ;
+
 : _UTUI-MATERIALIZE  ( -- )
     UIDL-ROOT ?DUP 0= IF EXIT THEN
     BEGIN
@@ -3419,9 +3485,11 @@ VARIABLE _USH-H    VARIABLE _USH-W
             DROP DUP _UTUI-MAT-INPUT
         ELSE DUP UIDL-T-TEXTAREA = IF
             DROP DUP _UTUI-MAT-TXTA
+        ELSE DUP UIDL-T-MEDIA = IF
+            DROP DUP _UTUI-MAT-MEDIA
         ELSE
             DROP                       \ unmatched type
-        THEN THEN THEN THEN
+        THEN THEN THEN THEN THEN
         \ DFS advance
         DUP UIDL-FIRST-CHILD ?DUP IF NIP
         ELSE
@@ -3461,9 +3529,11 @@ VARIABLE _UDM-WPTR
             DROP
             _UDM-WPTR @ DUP _TXTA-O-BUF-A + @ FREE
             FREE
+        ELSE DUP UIDL-T-MEDIA = IF
+            DROP _UDM-WPTR @ MEDIA-FREE
         ELSE
             DROP _UDM-WPTR @ FREE       \ tabs state, etc.
-        THEN THEN THEN
+        THEN THEN THEN THEN
     THEN
     0 _UDM-SC @ _UTUI-SC-WPTR!
     _UTUI-WOWNER-UIDL _UDM-SC @ _UTUI-SC-WOWNER! ;
@@ -3502,6 +3572,8 @@ VARIABLE _UDM-WPTR
         DROP DUP _UTUI-MAT-INPUT
     ELSE DUP UIDL-T-TEXTAREA = IF
         DROP DUP _UTUI-MAT-TXTA
+    ELSE DUP UIDL-T-MEDIA = IF
+        DROP DUP _UTUI-MAT-MEDIA
     ELSE DUP UIDL-T-TABS = IF
         DROP
         8 ALLOCATE 0<> ABORT" tabs-state"
@@ -3509,7 +3581,7 @@ VARIABLE _UDM-WPTR
         OVER _UTUI-SIDECAR _UTUI-SC-WPTR!
     ELSE
         DROP
-    THEN THEN THEN THEN
+    THEN THEN THEN THEN THEN
     DROP ;
 ' _UTUI-DO-MATERIALIZE IS _UTUI-MATERIALIZE-ONE
 
@@ -4302,6 +4374,17 @@ VARIABLE _UTUI-MC-RCS-NEXT
     OVER _TXTA-O-INSTANCE + @ 0<> AND
     SWAP _WDG-O-REGION + @ DUP 0<> SWAP 7 AND 0= AND
     AND ;
+
+\ A UIDL-owned media widget, as _UTUI-MAT-MEDIA makes it.  Its view widgets
+\ share its proxy region.
+: _UTUI-MEDIA-GENUINE?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _MEDIA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-MEDIA <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _MEDIA-DRAW =
+    OVER _WDG-O-HANDLE-XT + @ ['] _MEDIA-HANDLE = AND
+    SWAP _WDG-O-REGION + @ _UTUI-PROXY-RGN = AND ;
 
 : _UTUI-MC-GENUINE-TEXTGRID?  ( widget -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -6588,8 +6671,8 @@ VARIABLE _UTUI-CS-ROOT-W
     THEN
     -1 USCOL-S-OK ;
 
-: _UTUI-CS-UIDL-TEXTAREA  ( -- disjoint status )
-    _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
+: _UTUI-CS-UIDL-TEXTAREA-WIDGET  ( widget -- disjoint status )
+    DUP 0= IF
         DROP -1 USCOL-S-OK EXIT
     THEN
     DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF
@@ -6603,6 +6686,31 @@ VARIABLE _UTUI-CS-ROOT-W
         0 USCOL-S-INVALID EXIT
     THEN
     _UTUI-CS-QUERY-WIDGET ;
+
+: _UTUI-CS-UIDL-TEXTAREA  ( -- disjoint status )
+    _UTUI-CS-SC @ _UTUI-SC-WPTR@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
+
+\ A media element is checked as the view it shows; its text view, its
+\ document view and its contents' tree are collections, read through the
+\ media descriptor.
+: _UTUI-CS-UIDL-MEDIA  ( -- disjoint status )
+    _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
+        DROP -1 USCOL-S-OK EXIT
+    THEN
+    DUP _UTUI-MEDIA-GENUINE? 0= IF DROP 0 USCOL-S-INVALID EXIT THEN
+    DUP _MEDIA-DESC-SIZE _UTUI-CS-RANGE-DISJOINT? 0= IF
+        DROP 0 USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT = IF
+        MEDIA-DOCUMENT@ >R _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ R>
+            DOCV-DOCUMENT-STORAGE-DISJOINT? USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-CONTENTS = IF
+        >R _UTUI-CS-SPAN-A @ _UTUI-CS-SPAN-U @ R>
+            MEDIA-CONTENTS-STORAGE-DISJOINT? USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP -1 USCOL-S-OK EXIT THEN
+    MEDIA-TEXT@ _UTUI-CS-UIDL-TEXTAREA-WIDGET ;
 
 : _UTUI-CS-UIDL-TABS  ( -- disjoint status )
     _UTUI-CS-SC @ _UTUI-SC-WPTR@ DUP 0= IF
@@ -6619,6 +6727,9 @@ VARIABLE _UTUI-CS-ROOT-W
         _UTUI-CS-ELEM @ UIDL-TYPE
         DUP UIDL-T-TEXTAREA = IF
             DROP _UTUI-CS-UIDL-TEXTAREA EXIT
+        THEN
+        DUP UIDL-T-MEDIA = IF
+            DROP _UTUI-CS-UIDL-MEDIA EXIT
         THEN
         UIDL-T-TABS = IF
             _UTUI-CS-UIDL-TABS EXIT
@@ -6733,6 +6844,7 @@ VARIABLE _UTUI-CS-ROOT-W
 VARIABLE _UTUI-VC-ELEM
 VARIABLE _UTUI-VC-SC
 VARIABLE _UTUI-VC-W
+VARIABLE _UTUI-VC-MEDIA
 VARIABLE _UTUI-VC-FAMILY
 VARIABLE _UTUI-VC-ROOT
 VARIABLE _UTUI-VC-DST
@@ -6753,7 +6865,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-A
 VARIABLE _UTUI-VC-T-SHORTCUT-U
 
 : _UTUI-VC-CLEAR  ( -- )
-    0 _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    0 _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W ! 0 _UTUI-VC-MEDIA !
     0 _UTUI-VC-FAMILY !
     0 _UTUI-VC-ROOT ! 0 _UTUI-VC-DST ! 0 _UTUI-VC-CAP !
     0 _UTUI-VC-BUILDER ! 0 _UTUI-VC-SPAN-A ! 0 _UTUI-VC-SPAN-U !
@@ -6764,11 +6876,46 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     0 _UTUI-VC-T-LABEL-A ! 0 _UTUI-VC-T-LABEL-U !
     0 _UTUI-VC-T-SHORTCUT-A ! 0 _UTUI-VC-T-SHORTCUT-U ! ;
 
+\ A media element is a text area while it shows text, a document while it
+\ shows one, and an item view while it shows a document's contents;
+\ _UTUI-VC-PREPARE finds its view and leaves any other view ordinary CELL
+\ paint.
 : _UTUI-VC-DIRECT-FAMILY@  ( elem -- family|0 )
     DUP UIDL-TYPE UIDL-T-TEXTAREA = IF
         DROP USCOL-F-TEXT-AREA EXIT
     THEN
+    DUP UIDL-TYPE UIDL-T-MEDIA = IF
+        DROP USCOL-F-TEXT-AREA EXIT
+    THEN
     UIDL-TYPE UIDL-T-TABS = IF USCOL-F-TABSET ELSE 0 THEN ;
+
+\ Replace the media widget in _UTUI-VC-W by the text area, document view
+\ or contents' tree it shows, keeping the media widget for the storage
+\ check.
+: _UTUI-VC-MEDIA-VIEW  ( -- status )
+    _UTUI-VC-W @ DUP _UTUI-MEDIA-GENUINE? 0= IF
+        DROP USCOL-S-INVALID EXIT
+    THEN
+    DUP _UTUI-VC-MEDIA !
+    DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT = IF
+        MEDIA-DOCUMENT@ DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
+        DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+        _UTUI-VC-W !
+        USCOL-F-DOCUMENT _UTUI-VC-FAMILY !
+        USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-CONTENTS = IF
+        MEDIA-CONTENTS@ DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
+        DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+        _UTUI-VC-W !
+        USCOL-F-ITEM-VIEW _UTUI-VC-FAMILY !
+        USCOL-S-OK EXIT
+    THEN
+    DUP MEDIA-VIEW@ MEDIA-V-TEXT <> IF DROP USCOL-S-UNSUPPORTED EXIT THEN
+    MEDIA-TEXT@ DUP 0= IF DROP USCOL-S-INVALID EXIT THEN
+    DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-W !
+    USCOL-S-OK ;
 
 \ A direct authored TABSET is the exact immediate <tab> child sequence that
 \ ordinary tab draw/layout consumes.  Malformed children are unsupported, so
@@ -6811,6 +6958,28 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
     USCOL-S-OK ;
 
+\ A media element's document view draws in the element's proxy region, as
+\ its text area does.
+: _UTUI-VC-PREPARE-DOCUMENT  ( -- status )
+    _UTUI-VC-W @ DOCV-GENUINE? 0= IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-W @ _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-VC-SC @ _UTUI-SYNC-PROXY
+    _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
+    USCOL-S-OK ;
+
+\ A media element's contents' tree draws in the element's proxy region, as
+\ its document view does.
+: _UTUI-VC-PREPARE-TREE  ( -- status )
+    _UTUI-VC-W @ _TREE-GENUINE? 0= IF USCOL-S-INVALID EXIT THEN
+    _UTUI-VC-W @ _WDG-O-REGION + @ _UTUI-PROXY-RGN <> IF
+        USCOL-S-INVALID EXIT
+    THEN
+    _UTUI-VC-SC @ _UTUI-SYNC-PROXY
+    _UTUI-VC-SC @ _UTUI-VC-W @ _UTUI-SYNC-WFOCUS
+    USCOL-S-OK ;
+
 : _UTUI-VC-PREPARE-TABS  ( -- status )
     _UTUI-VC-W @ 8 MSPAN-NONWRAPPING? 0= IF
         USCOL-S-INVALID EXIT
@@ -6826,7 +6995,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     USCOL-S-OK ;
 
 : _UTUI-VC-PREPARE  ( elem -- status )
-    _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W !
+    _UTUI-VC-ELEM ! 0 _UTUI-VC-SC ! 0 _UTUI-VC-W ! 0 _UTUI-VC-MEDIA !
     0 _UTUI-VC-FAMILY !
     _UTUI-RST-ACTIVE @ 0= IF USCOL-S-INVALID EXIT THEN
     _UTUI-VC-ELEM @ _UTUI-RST-ELEM @ <> IF USCOL-S-INVALID EXIT THEN
@@ -6857,11 +7026,20 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     DUP 7 AND IF DROP USCOL-S-INVALID EXIT THEN
     DUP _UTUI-VC-W !
     DROP
+    _UTUI-VC-ELEM @ UIDL-TYPE UIDL-T-MEDIA = IF
+        _UTUI-VC-MEDIA-VIEW DUP USCOL-S-OK <> IF EXIT THEN DROP
+    THEN
     _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
         _UTUI-VC-PREPARE-TEXTAREA EXIT
     THEN
     _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
         _UTUI-VC-PREPARE-TABS EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
+        _UTUI-VC-PREPARE-DOCUMENT EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _UTUI-VC-PREPARE-TREE EXIT
     THEN
     USCOL-S-INVALID ;
 
@@ -6887,6 +7065,7 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     2DUP TAB-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP LST-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TREE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP DOCV-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP _UTUI-STORAGE-DISJOINT-BODY? 0= IF 2DROP 0 EXIT THEN
     UTUI-COLLECTION-STORAGE-DISJOINT?
     DUP USCOL-S-OK <> IF 2DROP 0 EXIT THEN
@@ -6963,6 +7142,15 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
     _UTUI-VC-BUILDER @ USCOL-BUILDER-FINISH ;
 
+\ The builder and the destination lie clear of all that showing a media
+\ element's contents touches, the document's entries and the entries'
+\ next siblings among it, which the tree's own check does not know.
+: _UTUI-VC-CONTENTS-CLEAR?  ( -- flag )
+    _UTUI-VC-BUILDER @ USCOL-BUILDER-SIZE _UTUI-VC-MEDIA @
+        MEDIA-CONTENTS-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _UTUI-VC-DST @ _UTUI-VC-CAP @ 0 MAX _UTUI-VC-MEDIA @
+        MEDIA-CONTENTS-STORAGE-DISJOINT? ;
+
 : _UTUI-VC-CAPTURE-CURRENT  ( -- bytes status )
     _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
         _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
@@ -6970,6 +7158,15 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     THEN
     _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
         _UTUI-VC-TABSET-CAPTURE EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
+        _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
+        _UTUI-VC-BUILDER @ _UTUI-VC-W @ DOCV-DOCUMENT-CAPTURE EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _UTUI-VC-CONTENTS-CLEAR? 0= IF 0 USCOL-S-INVALID EXIT THEN
+        _UTUI-VC-ROOT @ _UTUI-VC-DST @ _UTUI-VC-CAP @
+        _UTUI-VC-BUILDER @ _UTUI-VC-W @ TREE-ITEM-VIEW-CAPTURE EXIT
     THEN
     0 USCOL-S-INVALID ;
 
@@ -7015,6 +7212,11 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
     _UTUI-VC-FAMILY @ USCOL-F-TEXT-AREA = IF
         _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @
             TXTA-TEXT-AREA-STORAGE-DISJOINT?
+        \ A media element's text area is reached through its descriptor.
+        DUP _UTUI-VC-MEDIA @ 0<> AND IF
+            DROP _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @
+            _UTUI-VC-MEDIA @ _MEDIA-DESC-SIZE MSPAN-OVERLAP? 0=
+        THEN
         USCOL-S-OK EXIT
     THEN
     _UTUI-VC-FAMILY @ USCOL-F-TABSET = IF
@@ -7029,6 +7231,22 @@ VARIABLE _UTUI-VC-T-SHORTCUT-U
         THEN
         _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @ 8
             MSPAN-OVERLAP? 0= USCOL-S-OK EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-DOCUMENT = IF
+        _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-W @
+            DOCV-DOCUMENT-STORAGE-DISJOINT?
+        \ A media element's document view is reached through its descriptor.
+        DUP IF
+            DROP _UTUI-VC-SPAN-U @ 0= IF -1 ELSE
+                _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @
+                _UTUI-VC-MEDIA @ _MEDIA-DESC-SIZE MSPAN-OVERLAP? 0=
+            THEN
+        THEN
+        USCOL-S-OK EXIT
+    THEN
+    _UTUI-VC-FAMILY @ USCOL-F-ITEM-VIEW = IF
+        _UTUI-VC-SPAN-A @ _UTUI-VC-SPAN-U @ _UTUI-VC-MEDIA @
+            MEDIA-CONTENTS-STORAGE-DISJOINT? USCOL-S-OK EXIT
     THEN
     0 USCOL-S-INVALID ;
 
@@ -7173,6 +7391,281 @@ _UTUI-SFI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-SFI-RESOLVED
     THEN
     _UTUI-SFI-CLEAR ;
 
+\ =====================================================================
+\  Direct picture observation
+\ =====================================================================
+\ This iterator visits the pictures <media> elements' UIDL-owned media
+\ widgets show, in source-index order: an element's own picture, with root
+\ key one, or the figures with a row in view in the document it shows, in
+\ block order, each with its block's key.  A picture's identity is its
+\ source index, generation zero and root key.  The words after it act on
+\ the visited picture widget only, and a copy record they return is
+\ borrowed for the visit: the widget may give it back once it ends.
+
+VARIABLE _UTUI-PCI-ACTIVE
+VARIABLE _UTUI-PCI-VISITOR
+VARIABLE _UTUI-PCI-TOTAL
+VARIABLE _UTUI-PCI-INDEX
+VARIABLE _UTUI-PCI-ELEM
+VARIABLE _UTUI-PCI-VISIBLE
+VARIABLE _UTUI-PCI-PICT       \ the visited picture widget
+VARIABLE _UTUI-PCI-KEY        \ its root key
+VARIABLE _UTUI-PCI-FIGURE     \ a figure in its element's document
+VARIABLE _UTUI-PCI-DOCV
+CREATE _UTUI-PCI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT
+_UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
+0 _UTUI-PCI-ACTIVE !
+
+: _UTUI-PCI-CLEAR  ( -- )
+    0 _UTUI-PCI-ACTIVE ! 0 _UTUI-PCI-VISITOR !
+    0 _UTUI-PCI-TOTAL ! 0 _UTUI-PCI-INDEX ! 0 _UTUI-PCI-ELEM !
+    0 _UTUI-PCI-VISIBLE ! 0 _UTUI-PCI-PICT ! 0 _UTUI-PCI-KEY !
+    0 _UTUI-PCI-FIGURE ! 0 _UTUI-PCI-DOCV !
+    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE 0 FILL
+    _UTUI-RS-CLEAR _UTUI-MC-SCRATCH-CLEAR ;
+
+\ The picture widget a <media> element's own media widget shows, or 0.
+: _UTUI-ELEM-PICTURE  ( elem -- picture|0 )
+    DUP UIDL-TYPE UIDL-T-MEDIA <> IF DROP 0 EXIT THEN
+    _UTUI-SIDECAR DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL <> IF
+        DROP 0 EXIT
+    THEN
+    _UTUI-SC-WPTR@ DUP _UTUI-MEDIA-GENUINE? 0= IF DROP 0 EXIT THEN
+    DUP MEDIA-VIEW@ MEDIA-V-PICTURE <> IF DROP 0 EXIT THEN
+    MEDIA-PICTURE@ ;
+
+\ The document view a <media> element's own media widget shows, or 0.
+: _UTUI-ELEM-DOCUMENT  ( elem -- docv|0 )
+    DUP UIDL-TYPE UIDL-T-MEDIA <> IF DROP 0 EXIT THEN
+    _UTUI-SIDECAR DUP _UTUI-SC-WOWNER@ _UTUI-WOWNER-UIDL <> IF
+        DROP 0 EXIT
+    THEN
+    _UTUI-SC-WPTR@ DUP _UTUI-MEDIA-GENUINE? 0= IF DROP 0 EXIT THEN
+    DUP MEDIA-VIEW@ MEDIA-V-DOCUMENT <> IF DROP 0 EXIT THEN
+    MEDIA-DOCUMENT@ ;
+
+\ The picture widget at ELEM with root KEY: the element's own picture for
+\ key one, or the figure of that block in the document it shows; or 0.
+: _UTUI-ELEM-KEYED-PICTURE  ( elem key -- picture|0 )
+    OVER _UTUI-ELEM-PICTURE ?DUP IF
+        SWAP 1 = IF NIP ELSE 2DROP 0 THEN EXIT
+    THEN
+    SWAP _UTUI-ELEM-DOCUMENT ?DUP IF DOCV-FIGURE-PICTURE EXIT THEN
+    DROP 0 ;
+
+: _UTUI-PCI-CURRENT?  ( -- flag )
+    _UTUI-PCI-ACTIVE @ 0= IF 0 EXIT THEN
+    _UTUI-PCI-ELEM @ UIDL-ELEM-INDEX? 0= IF DROP 0 EXIT THEN
+    _UTUI-PCI-INDEX @ <> IF 0 EXIT THEN
+    _UTUI-PCI-PICT @ DUP 0= IF EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-PCI-KEY @ _UTUI-ELEM-KEYED-PICTURE = ;
+
+\ The visited picture's complete cell rectangle and its clip: the element's
+\ for its own picture, and a figure's own region, which lies in the
+\ element's, for a figure.
+: _UTUI-PICTURE-GEOMETRY
+    ( -- origin-row origin-col extent-h extent-w clip-row clip-col clip-h clip-w ok? )
+    _UTUI-PCI-CURRENT? 0= IF 0 0 0 0 0 0 0 0 0 EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-SIDECAR _UTUI-SYNC-PROXY
+    _UTUI-PCI-FIGURE @ IF _UTUI-PCI-PICT @ WDG-REGION ELSE _UTUI-PROXY-RGN THEN
+    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE
+        _UTUI-CANONICAL-REGION-GEOMETRY
+    USCOL-S-OK = ;
+
+\ Whether the visited picture is a figure in its element's document, which
+\ that document's root already claims.
+: _UTUI-PICTURE-FIGURE?  ( -- flag )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-FIGURE @ 0<> ;
+
+\ Ask the visited picture for a rich copy of at most MAX-W by MAX-H pixels.
+: _UTUI-PICTURE-ASK  ( max-w max-h -- ok? )
+    _UTUI-PCI-CURRENT? 0= IF 2DROP 0 EXIT THEN
+    _UTUI-PCI-PICT @ PICT-RICH-ASK ;
+
+\ The visited picture's rich copy record, or 0, borrowed for the visit.
+: _UTUI-PICTURE-COPY@  ( -- pic|0 )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-PICT @ PICT-RICH@ ;
+
+\ The visited picture's revision: which picture it is, at any size.
+: _UTUI-PICTURE-REVISION@  ( -- revision )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-PICT @ PICT-REVISION@ ;
+
+\ Say whether the rich side shows the visited picture, or is taking it to
+\ show it, so its CELL view need decode nothing.
+: _UTUI-PICTURE-CLAIM!  ( flag -- )
+    _UTUI-PCI-CURRENT? 0= IF DROP EXIT THEN
+    _UTUI-PCI-PICT @ PICT-CLAIM! ;
+
+\ Why the rich side could not send the visited picture, or 0.
+: _UTUI-PICTURE-FAILED@  ( -- reason )
+    _UTUI-PCI-CURRENT? 0= IF 0 EXIT THEN
+    _UTUI-PCI-PICT @ PICT-RICH-FAILED@ ;
+
+\ The visited picture's file: its PIC-F- format, size and length, or
+\ 0 0 0 0 for none PIC-FILE knows.
+: _UTUI-PICTURE-FILE@  ( -- format width height bytes )
+    _UTUI-PCI-CURRENT? 0= IF 0 0 0 0 EXIT THEN
+    _UTUI-PCI-PICT @ >R
+    R@ PICT-FILE@ R> PICT-FILE-BYTES@ ;
+
+: _UTUI-PCI-VISIT  ( picture key figure? -- )
+    _UTUI-PCI-FIGURE ! _UTUI-PCI-KEY ! _UTUI-PCI-PICT !
+    _UTUI-PCI-INDEX @ 0 _UTUI-PCI-KEY @
+    _UTUI-PCI-RESOLVED UTUI-RESOLVED-SIZE _UTUI-PCI-VISITOR @ EXECUTE
+    0 _UTUI-PCI-PICT ! 0 _UTUI-PCI-KEY ! 0 _UTUI-PCI-FIGURE ! ;
+
+\ The element's own picture, or each figure with a row in view in the
+\ document it shows, in block order.
+: _UTUI-PCI-VISIT-ALL  ( -- )
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE ?DUP IF 1 0 _UTUI-PCI-VISIT EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-DOCUMENT ?DUP 0= IF EXIT THEN
+    _UTUI-PCI-DOCV !
+    _UTUI-PCI-DOCV @ DOCV-FIGURE-COUNT 0 ?DO
+        I _UTUI-PCI-DOCV @ DOCV-FIGURE@ ?DUP IF
+            SWAP -1 _UTUI-PCI-VISIT
+        ELSE DROP THEN
+    LOOP
+    0 _UTUI-PCI-DOCV ! ;
+
+: _UTUI-PCI-SOURCE  ( -- status )
+    _UTUI-PCI-ELEM @ UE.TYPE @ 0= IF _UTUI-MC-S-OK EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-PICTURE 0<>
+    _UTUI-PCI-ELEM @ _UTUI-ELEM-DOCUMENT 0<> OR 0= IF _UTUI-MC-S-OK EXIT THEN
+    _UTUI-PCI-ELEM @ _UTUI-RS-RESOLVE
+    DUP UTUI-RESOLVED-S-INVALID = IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    UTUI-RESOLVED-S-OK = IF
+        _UTUI-RS-VISIBLE @ _UTUI-PCI-VISIBLE !
+        _UTUI-PCI-RESOLVED _UTUI-RS-DST ! _UTUI-RS-WRITE
+        0 _UTUI-RS-DST !
+        _UTUI-PCI-VISIBLE @ IF _UTUI-PCI-VISIT-ALL THEN
+    THEN
+    _UTUI-RS-CLEAR _UTUI-MC-S-OK ;
+
+: _UTUI-PCI-BODY  ( -- status )
+    _UTUI-DOC-LOADED @ 0= IF _UTUI-MC-S-UNAVAILABLE EXIT THEN
+    _UTUI-ELEM-BASE @ _UDL-ELEMS <> IF _UTUI-MC-S-INVALID EXIT THEN
+    UIDL-ELEM-COUNT DUP 0< OVER _UTUI-MAX-ELEMS U> OR IF
+        DROP _UTUI-MC-S-INVALID EXIT
+    THEN _UTUI-PCI-TOTAL !
+    0 _UTUI-PCI-INDEX !
+    BEGIN _UTUI-PCI-INDEX @ _UTUI-PCI-TOTAL @ U< WHILE
+        _UTUI-PCI-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS + _UTUI-PCI-ELEM !
+        _UTUI-PCI-SOURCE DUP _UTUI-MC-S-OK <> IF EXIT THEN DROP
+        1 _UTUI-PCI-INDEX +!
+    REPEAT
+    _UTUI-MC-S-OK ;
+
+: _UTUI-PCI-OBSERVED  ( -- status )
+    ['] _UTUI-PCI-BODY UIDL-SEMANTIC-OBSERVE ;
+
+\ Visit every shown picture: the visitor gets
+\ ( source-index generation root-key resolved-a resolved-u -- ).
+: _UTUI-PICTURE-EACH-PREFLIGHTED  ( visitor-xt -- status )
+    _UTUI-PCI-ACTIVE @ _UTUI-SFI-ACTIVE @ OR
+    _UTUI-MI-ACTIVE @ OR _UTUI-RST-ACTIVE @ OR IF
+        DROP _UTUI-MC-S-INVALID EXIT
+    THEN
+    DUP 0= IF DROP _UTUI-MC-S-INVALID EXIT THEN
+    _UTUI-PCI-CLEAR _UTUI-PCI-VISITOR ! -1 _UTUI-PCI-ACTIVE !
+    ['] _UTUI-PCI-OBSERVED CATCH ?DUP IF
+        DROP _UTUI-MC-S-INVALID
+    THEN
+    _UTUI-PCI-CLEAR ;
+
+VARIABLE _UTUI-PP-INDEX
+VARIABLE _UTUI-PP-KEY
+VARIABLE _UTUI-PP-REVISION
+VARIABLE _UTUI-PP-FORMAT
+VARIABLE _UTUI-PP-W
+VARIABLE _UTUI-PP-H
+VARIABLE _UTUI-PP-LENGTH
+VARIABLE _UTUI-PP-OFFSET
+VARIABLE _UTUI-PP-DST
+VARIABLE _UTUI-PP-U
+
+\ A file goes as it is, read a span at a time from the picture's source,
+\ while the picture is still that file at that size.  A file that cannot
+\ be read is the picture's own failure: the rich side takes it no more
+\ until the widget is given another source.
+: _UTUI-PP-FILE  ( picture -- ok? )
+    >R R@ PICT-FILE@
+    _UTUI-PP-H @ = SWAP _UTUI-PP-W @ = AND SWAP _UTUI-PP-FORMAT @ = AND
+    R@ PICT-FILE-BYTES@ _UTUI-PP-LENGTH @ = AND 0= IF R> DROP 0 EXIT THEN
+    _UTUI-PP-DST @ _UTUI-PP-U @ _UTUI-PP-OFFSET @ R@ PICT-FILE-READ IF
+        PIC-R-READ R> PICT-RICH-FAILED! 0 EXIT
+    THEN
+    R> DROP -1 ;
+
+: _UTUI-PP-BODY  ( -- ok? )
+    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
+    _UTUI-PP-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
+    _UTUI-PP-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
+    _UTUI-PP-KEY @ _UTUI-ELEM-KEYED-PICTURE DUP 0= IF EXIT THEN
+    DUP PICT-REVISION@ _UTUI-PP-REVISION @ <> IF DROP 0 EXIT THEN
+    _UTUI-PP-FORMAT @ PIC-F-RGBA8 <> IF _UTUI-PP-FILE EXIT THEN
+    PICT-RICH@ DUP 0= IF EXIT THEN
+    DUP PIC-STATE@ PIC-ST-READY <> IF DROP 0 EXIT THEN
+    DUP PIC-WIDTH@ _UTUI-PP-W @ <> IF DROP 0 EXIT THEN
+    DUP PIC-HEIGHT@ _UTUI-PP-H @ <> IF DROP 0 EXIT THEN
+    DUP PIC-PIXELS NIP _UTUI-PP-LENGTH @ <> IF DROP 0 EXIT THEN
+    PIC-PIXELS DROP _UTUI-PP-OFFSET @ + _UTUI-PP-DST @ _UTUI-PP-U @ MOVE -1 ;
+
+: _UTUI-PP-OBSERVED  ( -- ok? )
+    ['] _UTUI-PP-BODY UIDL-SEMANTIC-OBSERVE ;
+
+\ _UTUI-PICTURE-PULL
+\   ( source-index root-key revision format width height length offset
+\     dest-a dest-u -- ok? )
+\   Copy DEST-U bytes from OFFSET of the picture at SOURCE-INDEX with
+\   ROOT-KEY into DEST, while it is still picture REVISION: for
+\   PIC-F-RGBA8 its ready rich copy of WIDTH by HEIGHT pixels and LENGTH
+\   bytes, and for a file format the file itself, as it is, when its
+\   picture is WIDTH by HEIGHT and the file LENGTH bytes.  The caller
+\   keeps the span within LENGTH.  A copy is the picture decoded at that
+\   size, so nothing else could be it.  False when the picture is no
+\   longer that copy or file, or the file could not be read.
+: _UTUI-PICTURE-PULL
+  ( source-index root-key revision format width height length offset dest-a dest-u -- ok? )
+    _UTUI-PP-U ! _UTUI-PP-DST ! _UTUI-PP-OFFSET ! _UTUI-PP-LENGTH !
+    _UTUI-PP-H ! _UTUI-PP-W ! _UTUI-PP-FORMAT ! _UTUI-PP-REVISION !
+    _UTUI-PP-KEY ! _UTUI-PP-INDEX !
+    ['] _UTUI-PP-OBSERVED CATCH ?DUP IF DROP 0 THEN
+    0 _UTUI-PP-INDEX ! 0 _UTUI-PP-KEY ! 0 _UTUI-PP-REVISION ! 0 _UTUI-PP-FORMAT !
+    0 _UTUI-PP-W ! 0 _UTUI-PP-H ! 0 _UTUI-PP-LENGTH ! 0 _UTUI-PP-OFFSET !
+    0 _UTUI-PP-DST ! 0 _UTUI-PP-U ! ;
+
+VARIABLE _UTUI-PF-INDEX
+VARIABLE _UTUI-PF-KEY
+VARIABLE _UTUI-PF-REVISION
+VARIABLE _UTUI-PF-REASON
+
+: _UTUI-PF-BODY  ( -- flag )
+    _UTUI-DOC-LOADED @ 0= IF 0 EXIT THEN
+    _UTUI-PF-INDEX @ UIDL-ELEM-COUNT U< 0= IF 0 EXIT THEN
+    _UTUI-PF-INDEX @ _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
+    _UTUI-PF-KEY @ _UTUI-ELEM-KEYED-PICTURE DUP 0= IF EXIT THEN
+    DUP PICT-REVISION@ _UTUI-PF-REVISION @ <> IF DROP 0 EXIT THEN
+    _UTUI-PF-REASON @ SWAP PICT-RICH-FAILED! -1 ;
+
+: _UTUI-PF-OBSERVED  ( -- flag )
+    ['] _UTUI-PF-BODY UIDL-SEMANTIC-OBSERVE ;
+
+\ _UTUI-PICTURE-FAILED! ( source-index root-key revision reason -- flag )
+\   The rich side could not send picture REVISION at SOURCE-INDEX with
+\   ROOT-KEY because of the picture itself, for REASON: its widget
+\   remembers why until it is given another source.  False once that
+\   place shows another picture or none.
+: _UTUI-PICTURE-FAILED!  ( source-index root-key revision reason -- flag )
+    _UTUI-PF-REASON ! _UTUI-PF-REVISION ! _UTUI-PF-KEY ! _UTUI-PF-INDEX !
+    ['] _UTUI-PF-OBSERVED CATCH ?DUP IF DROP 0 THEN
+    0 _UTUI-PF-INDEX ! 0 _UTUI-PF-KEY ! 0 _UTUI-PF-REVISION !
+    0 _UTUI-PF-REASON ! ;
+
 \ Independent canonical FIELD observation.  The iterator retains the closed
 \ relation privately; only its pointer-free source tuple reaches UFLSN.
 : _UTUI-FIELD-EACH-PREFLIGHTED  ( visitor-xt -- status )
@@ -7220,6 +7713,7 @@ GUARD _utui-guard
 ' UTUI-LOAD           CONSTANT _utui-load-xt
 ' UTUI-BIND-STATE     CONSTANT _utui-bind-state-xt
 ' UTUI-PAINT          CONSTANT _utui-paint-xt
+' UTUI-SERVICE        CONSTANT _utui-service-xt
 ' UTUI-RELAYOUT       CONSTANT _utui-relayout-xt
 ' UTUI-DISPATCH-KEY   CONSTANT _utui-dispatch-key-xt
 ' UTUI-DISPATCH-MOUSE CONSTANT _utui-dispatch-mouse-xt
@@ -7336,6 +7830,7 @@ GUARD _utui-guard
 \ Cross-core callers must post a lifecycle/render/input request to that owner.
 : UTUI-LOAD           _utui-load-xt EXECUTE ;
 : UTUI-PAINT          _utui-paint-xt EXECUTE ;
+: UTUI-SERVICE        _utui-service-xt EXECUTE ;
 : UTUI-RELAYOUT       _utui-relayout-xt EXECUTE ;
 : UTUI-VISIBLE! _utui-visible-s-xt EXECUTE ;
 : UTUI-QUIESCE  _utui-quiesce-xt EXECUTE ;

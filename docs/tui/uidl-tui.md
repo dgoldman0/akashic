@@ -63,8 +63,8 @@ REQUIRE tui/uidl-tui.f
 |---|---|
 | **One sidecar per element** | Every UIDL element receives a 96-byte sidecar in a parallel array, indexed by pool position. |
 | **No DOM intermediary** | Unlike `dom-tui.f`, this backend reads UIDL elements directly — no N.AUX, no DOM node walk. |
-| **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree`, `tabs`, `input`, and `textarea` allocate widget state. |
-| **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, manually attached widget) or mini state block (tabs active index). `+80` records whether that pointer belongs to UIDL or the caller. Zero `wptr` means "no widget state". |
+| **Adapter, not materialization** | Most widget types (status, split, scroll) are rendered inline by adapter words that read UIDL attributes. Only `tree`, `tabs`, `input`, `textarea`, and `media` allocate widget state. |
+| **Sidecar wptr** | The `+48` cell in each sidecar holds an optional widget-struct pointer (tree widget, input, textarea, media widget, manually attached widget) or mini state block (tabs active index). `+80` records whether that pointer belongs to UIDL or the caller. Zero `wptr` means "no widget state". |
 | **Proxy region** | A single static 40-byte region (`_UTUI-PROXY-RGN`) is synced from sidecar geometry before calling widget `_*-DRAW` / `_*-HANDLE`. Safe because the TUI is single-threaded. |
 | **Dynamic DOM** | `UTUI-ADD-ELEM` and `UTUI-REMOVE-ELEM` wrap the base UIDL tree operations with sidecar allocation, style resolution, materialization, and dirty propagation. Apps manipulate the tree like JavaScript's `appendChild` / `removeChild`. |
 | **Auto-dirty** | `_UTUI-NEEDS-PAINT` flag is set by any DOM / widget mutation. The shell converts this to `ASHELL-DIRTY!` at tick and paint time — apps never call `ASHELL-DIRTY!`. |
@@ -242,16 +242,17 @@ their `WDG-REGION` (+8).
 
 ## Widget Materialization
 
-Four types of UIDL elements need heap-allocated state beyond the
-sidecar (tree, tabs, input, textarea); a caller may also attach its own
-borrowed widget:
+Five types of UIDL elements need heap-allocated state beyond the
+sidecar (tree, tabs, input, textarea, media); a caller may also attach its
+own borrowed widget:
 
 | Element | wptr contents | Size | Lifecycle |
 |---------|---------------|------|-----------|
-| `<tree>` | Full `TREE-NEW` widget struct | 160 bytes, plus its expanded-key set | `TREE-NEW` at load, `TREE-FREE` at detach |
+| `<tree>` | Full `TREE-NEW` widget struct | 168 bytes, plus its expanded-key set | `TREE-NEW` at load, `TREE-FREE` at detach |
 | `<tabs>` | 8-byte state block (1 cell: active index) | 8 bytes | `ALLOCATE` at load, `FREE` at detach |
 | `<input>` | `INP-NEW` widget struct + 256-byte buffer | varies | `INP-NEW` at load/add, free buffer+struct at detach/remove |
 | `<textarea>` | `TXTA-NEW` widget struct + 4096-byte buffer | varies | `TXTA-NEW` at load/add, free buffer+struct at detach/remove |
+| `<media>` | `MEDIA-NEW` widget struct, its views sized to the file shown, from `MEDIA-HEAP` | varies | `MEDIA-NEW` at load/add, `MEDIA-FREE` at detach/remove |
 | `<region>` (manual) | Any widget attached via `UTUI-WIDGET-SET` | varies | App owns and frees it; UIDL only clears the borrowed pointer |
 
 All other element types (status, split, scroll, dialog, etc.) use
@@ -267,6 +268,7 @@ Materialize a single element by type dispatch.  Used by both the bulk
 | tree | Sync proxy region, `TREE-NEW` with 5 UIDL callbacks, store at wptr |
 | input | Allocate 256-byte buffer, `INP-NEW`, set text=/placeholder= attrs |
 | textarea | Allocate 4096-byte buffer, `TXTA-NEW`, set text= attr |
+| media | `MEDIA-NEW` on the proxy region with `MEDIA-HEAP`; a visual `<rep>` with `src=` opens that file from `VFS-CUR`, its `text=` the pictures' text alternative |
 | tabs | Allocate 8 bytes, zero (active = 0) |
 | other | No-op |
 
@@ -281,6 +283,7 @@ freed by element type; caller-owned pointers installed with
 |------|--------|
 | tree | `TREE-FREE` |
 | input / textarea | `FREE` buffer (widget+40), `FREE` descriptor |
+| media | `MEDIA-FREE`: close the file, free its views and descriptor |
 | other | `FREE` (generic heap block) |
 | caller-owned | Clear `wptr`; do not dereference or free |
 
@@ -298,6 +301,11 @@ DFS walk of the UIDL tree after layout.  For each element:
   widget, and applies `text=` and `placeholder=`.
 - **textarea:** `_UTUI-MAT-TXTA` creates the textarea widget and applies
   `text=` from UIDL attributes.
+- **media:** `_UTUI-MAT-MEDIA` creates the media widget
+  ([media.md](widgets/media.md)).  An authored visual `<rep src=...>` shows
+  that file from the current VFS, with the rep's `text=` as the pictures'
+  text alternative; otherwise the app gives it a file with `MEDIA-OPEN-VFS`
+  through `UTUI-WIDGET@`.
 
 Called by `UTUI-LOAD` after `UTUI-RELAYOUT`.
 
@@ -336,7 +344,7 @@ Parse a UIDL XML document and prepare the TUI backend:
 3. Set `_UTUI-ELEM-BASE` to pool base
 4. Clear sidecars and action table
 5. Run `UTUI-RELAYOUT` (compute geometry for all elements)
-6. Run `_UTUI-MATERIALIZE` (allocate tree/tabs/input/textarea state)
+6. Run `_UTUI-MATERIALIZE` (allocate tree/tabs/input/textarea/media state)
 7. Wire subscriptions (`_UTUI-WIRE-SUBS`)
 8. Set initial focus via `UTUI-FOCUS-NEXT`
 
@@ -468,6 +476,18 @@ Full repaint cycle:
    Invisible ancestors and closed menus prune their complete subtrees in both
    passes.
 4. Restore `RGN-ROOT` after the complete paint cycle.
+
+### UTUI-SERVICE — `( -- worked? )`
+
+Work that no input announces. Each `<media>` element whose picture is still
+decoding, or whose document needs a part read or a picture's file made,
+advances one bounded slice (`MEDIA-SERVICE`), and an element whose view
+changed is marked dirty, which requests a repaint. Returns true when any
+slice ran, so the caller's loop takes another pass instead of sleeping, and
+returns false at once when no picture anywhere is decoding (`PICT-WORK?`)
+and no document view has work (`DOCV-WORK?`). The app
+shell calls it each pass for its document, and `AHOST-SERVICE` for each
+applet's, with that document's context active.
 
 ### UTUI-RELAYOUT — `( -- )`
 
@@ -1201,8 +1221,17 @@ During `UTUI-RESOLVED-TREE-EACH`, the visitor-scoped collection words recognize
 the callback's exact UIDL-owned canonical `<textarea>` or authored `<tabs>`.
 `<textarea>` materializes a `TXTA` and contributes `TEXT_AREA`; `<tabs>` uses
 its ordinary inline active-index state and contributes one `TABSET` from its
-immediate `<tab>` children. There is no authored `<text-grid>` materialization
-path. The visitor refreshes the fixed proxy region and focus, then measures or
+immediate `<tab>` children. A `<media>` element is the view it shows: while
+it shows text its materialized `TXTA` contributes `TEXT_AREA` exactly as a
+`<textarea>` does, while it shows a document its document view contributes
+`DOCUMENT` (`DOCV-DOCUMENT-CAPTURE`), while it shows the document's
+contents their tree contributes the `ITEM_VIEW` it gives, a `TREE`
+(`TREE-ITEM-VIEW-CAPTURE`), and a picture or the facts view stays ordinary
+CELL paint. Pictures, an element's own or the figures of the
+document it shows, reach the rich side through the
+[picture snapshot](uidl-picture-snapshot.md) instead.
+There is no authored `<text-grid>` materialization path. The visitor
+refreshes the fixed proxy region and focus, then measures or
 copies without returning an owned pointer, starting another observation,
 drawing, or invoking an applet callback. Caller-mounted replacements return
 `UNSUPPORTED` on this direct visitor path.
@@ -1215,8 +1244,12 @@ ordinary tab layout, paint, and input. The semantic root claims the full width
 and at most the first two positive rows—the exact label plus underline header,
 not the active content panel. A malformed root stays entirely residual.
 
-The separate all-widget storage query scans direct canonical textareas and tab
-state plus genuine caller-mounted collection widgets regardless of visibility,
+The separate all-widget storage query scans direct canonical textareas, a
+media element's descriptor and the text area, document view or contents'
+tree it shows (with the document's records and the contents of the blocks
+in view, or its contents and the entries' next siblings), and
+tab state plus
+genuine caller-mounted collection widgets regardless of visibility,
 so upper caller banks cannot overwrite hidden live widget or borrowed model
 storage. `uidl-collection-snapshot.f` uses the public visitor seam for direct
 textareas and tabsets and a separate private relation seam for mounted
@@ -1504,6 +1537,8 @@ my-rgn RGN-FREE
 - [region.md](region.md) — Region primitives
 - [draw.md](draw.md) — Draw engine
 - [tree.md](widgets/tree.md) — Tree widget (materialized by UIDL-TUI)
+- [media.md](widgets/media.md) — Media widget (materialized from `<media>`)
+- [picture.md](widgets/picture.md) — Picture widget, the media widget's picture view
 - [tabs.md](widgets/tabs.md) — Tabs widget
 - [split.md](widgets/split.md) — Split pane widget
 - [status.md](widgets/status.md) — Status bar widget

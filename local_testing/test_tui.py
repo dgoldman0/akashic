@@ -318,6 +318,7 @@ def test_blocking_ui_guard_boundaries():
         (WIDGET_F, "WDG-HANDLE", "_wdg-handle-xt"),
         (UIDL_TUI_F, "UTUI-LOAD", "_utui-load-xt"),
         (UIDL_TUI_F, "UTUI-PAINT", "_utui-paint-xt"),
+        (UIDL_TUI_F, "UTUI-SERVICE", "_utui-service-xt"),
         (UIDL_TUI_F, "UTUI-RELAYOUT", "_utui-relayout-xt"),
         (UIDL_TUI_F, "UTUI-DISPATCH-KEY", "_utui-dispatch-key-xt"),
         (UIDL_TUI_F, "UTUI-DISPATCH-MOUSE", "_utui-dispatch-mouse-xt"),

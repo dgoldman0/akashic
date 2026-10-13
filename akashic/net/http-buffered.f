@@ -2,13 +2,22 @@
 \  http-buffered.f - Cooperative bounded HTTP exchange over a native port
 \ =====================================================================
 \  The caller owns the request, port, and response-body buffer. This module
-\  owns only parser state and a small receive scratch buffer.
+\  owns only parser state, a small receive scratch buffer, and an inflater
+\  record.
+\
+\  A caller that asks for gzip with HBUF-GZIP! gets a body whose one
+\  Content-Encoding is gzip inflated into its buffer as it arrives, the
+\  buffer serving as the inflater's window.  The bytes as sent and the
+\  bytes inflated each count against the buffer's capacity, and the body
+\  must be exactly one whole gzip member.  The caller still sends its own
+\  Accept-Encoding and admits the response's Content-Encoding.
 \ =====================================================================
 
 PROVIDED akashic-http-buffered
 
 REQUIRE http-request.f
 REQUIRE http-stream.f
+REQUIRE ../utils/inflate.f
 
 0 CONSTANT HBUF-S-OK
 1 CONSTANT HBUF-S-PENDING
@@ -20,6 +29,18 @@ REQUIRE http-stream.f
 7 CONSTANT HBUF-S-CANCELLED
 
 1 CONSTANT HBUF-F-PERSISTENT
+2 CONSTANT HBUF-F-GZIP
+
+\ How the body came.
+0 CONSTANT HBUF-C-IDENTITY
+1 CONSTANT HBUF-C-GZIP
+
+\ Why the body was refused.
+0 CONSTANT HBUF-B-OK
+1 CONSTANT HBUF-B-CAPACITY      \ as sent or as inflated, past the buffer
+2 CONSTANT HBUF-B-DAMAGED       \ a gzip body the inflater refused
+3 CONSTANT HBUF-B-TRAILING      \ bytes after a gzip body's member
+4 CONSTANT HBUF-B-CUT           \ a gzip body that ended inside its member
 
 0 CONSTANT HBUF-STATE-IDLE
 1 CONSTANT HBUF-STATE-SENDING
@@ -41,9 +62,12 @@ REQUIRE http-stream.f
  48 CONSTANT _HBUF-BODY-U
  56 CONSTANT _HBUF-HTTP-CODE
  64 CONSTANT _HBUF-FLAGS
- 72 CONSTANT _HBUF-PARSER
+ 72 CONSTANT _HBUF-CODING
+ 80 CONSTANT _HBUF-BODY-STATUS
+ 88 CONSTANT _HBUF-PARSER
 _HBUF-PARSER HSTR-PARSER-SIZE + CONSTANT _HBUF-RECV
-_HBUF-RECV HBUF-RECV-CAPACITY + CONSTANT HTTP-BUFFERED-SIZE
+_HBUF-RECV HBUF-RECV-CAPACITY + CONSTANT _HBUF-INFL
+_HBUF-INFL INFL-SIZE + CONSTANT HTTP-BUFFERED-SIZE
 
 : HBUF.PORT        ( exchange -- a ) _HBUF-PORT + ;
 : HBUF.REQUEST     ( exchange -- a ) _HBUF-REQUEST + ;
@@ -54,29 +78,85 @@ _HBUF-RECV HBUF-RECV-CAPACITY + CONSTANT HTTP-BUFFERED-SIZE
 : HBUF.BODY-U      ( exchange -- a ) _HBUF-BODY-U + ;
 : HBUF.HTTP-CODE   ( exchange -- a ) _HBUF-HTTP-CODE + ;
 : HBUF.FLAGS       ( exchange -- a ) _HBUF-FLAGS + ;
+: HBUF.CODING      ( exchange -- a ) _HBUF-CODING + ;
+: HBUF.BODY-STATUS ( exchange -- a ) _HBUF-BODY-STATUS + ;
 : HBUF.PARSER      ( exchange -- parser ) _HBUF-PARSER + ;
 : HBUF.RECV        ( exchange -- buffer ) _HBUF-RECV + ;
+: HBUF.INFL        ( exchange -- infl ) _HBUF-INFL + ;
+
+: HBUF-CODING@       ( exchange -- coding ) HBUF.CODING @ ;
+: HBUF-BODY-STATUS@  ( exchange -- status ) HBUF.BODY-STATUS @ ;
 
 VARIABLE _HBUFH-P
 VARIABLE _HBUFH-X
 
+\ Whether the response's one Content-Encoding names gzip.
+: _HBUF-GZIP-CODED?  ( parser -- flag )
+    >R S" content-encoding" R@ HSTR-HEADER-COUNT 1 <> IF
+        R> DROP 0 EXIT
+    THEN
+    S" content-encoding" R> HSTR-HEADER 0= IF 2DROP 0 EXIT THEN
+    2DUP S" gzip" STR-STRI= IF 2DROP -1 EXIT THEN
+    S" x-gzip" STR-STRI= ;
+
 : _HBUF-HEADERS  ( parser exchange -- status )
     _HBUFH-X ! _HBUFH-P !
-    _HBUFH-P @ HSTR.CODE @ _HBUFH-X @ HBUF.HTTP-CODE ! 0 ;
+    _HBUFH-P @ HSTR.CODE @ _HBUFH-X @ HBUF.HTTP-CODE !
+    _HBUFH-X @ HBUF.FLAGS @ HBUF-F-GZIP AND IF
+        _HBUFH-P @ _HBUF-GZIP-CODED? IF
+            HBUF-C-GZIP _HBUFH-X @ HBUF.CODING !
+            0 0 INFL-W-GZIP _HBUFH-X @ HBUF.INFL INFL-INIT
+        THEN
+    THEN 0 ;
 
 VARIABLE _HBUFB-P
 VARIABLE _HBUFB-X
 VARIABLE _HBUFB-A
 VARIABLE _HBUFB-U
 
-: _HBUF-BODY  ( parser exchange -- status )
-    _HBUFB-X ! _HBUFB-P !
-    _HBUFB-P @ HSTR-BODY-SLICE _HBUFB-U ! _HBUFB-A !
+\ Refuse the body for REASON; the parser stops on the nonzero status.
+: _HBUF-REFUSE  ( reason -- 1 )
+    _HBUFB-X @ HBUF.BODY-STATUS ! 1 ;
+
+: _HBUF-COPY  ( -- status )
     _HBUFB-X @ HBUF.BODY-U @ _HBUFB-U @ +
-    _HBUFB-X @ HBUF.BODY-CAP @ > IF 1 EXIT THEN
+    _HBUFB-X @ HBUF.BODY-CAP @ > IF HBUF-B-CAPACITY _HBUF-REFUSE EXIT THEN
     _HBUFB-A @ _HBUFB-X @ HBUF.BODY-A @
     _HBUFB-X @ HBUF.BODY-U @ + _HBUFB-U @ CMOVE
     _HBUFB-U @ _HBUFB-X @ HBUF.BODY-U +! 0 ;
+
+\ Inflate a slice of a gzip body into the buffer after the bytes before.
+: _HBUF-INFLATE  ( -- status )
+    _HBUFB-X @ HBUF.INFL INFL-DONE? IF HBUF-B-TRAILING _HBUF-REFUSE EXIT THEN
+    _HBUFB-P @ HSTR.BODY-TOTAL @ _HBUFB-U @ +
+    _HBUFB-X @ HBUF.BODY-CAP @ > IF HBUF-B-CAPACITY _HBUF-REFUSE EXIT THEN
+    _HBUFB-A @ _HBUFB-U @
+    _HBUFB-X @ HBUF.BODY-A @ _HBUFB-X @ HBUF.BODY-U @ +
+    _HBUFB-X @ HBUF.BODY-CAP @ _HBUFB-X @ HBUF.BODY-U @ -
+    _HBUFB-X @ HBUF.INFL INFL-FEED               ( in-used out-used status )
+    SWAP _HBUFB-X @ HBUF.BODY-U +!               ( in-used status )
+    DUP INFL-S-MORE = IF 2DROP 0 EXIT THEN
+    DUP INFL-S-FULL = IF 2DROP HBUF-B-CAPACITY _HBUF-REFUSE EXIT THEN
+    INFL-S-DONE = IF
+        _HBUFB-U @ < IF HBUF-B-TRAILING _HBUF-REFUSE ELSE 0 THEN EXIT
+    THEN
+    DROP HBUF-B-DAMAGED _HBUF-REFUSE ;
+
+: _HBUF-BODY  ( parser exchange -- status )
+    _HBUFB-X ! _HBUFB-P !
+    _HBUFB-P @ HSTR-BODY-SLICE _HBUFB-U ! _HBUFB-A !
+    _HBUFB-X @ HBUF.CODING @ HBUF-C-GZIP = IF
+        _HBUF-INFLATE
+    ELSE
+        _HBUF-COPY
+    THEN ;
+
+\ A gzip body ends with its member; a body of no bytes is empty.
+: _HBUF-BODY-ENDED?  ( exchange -- flag )
+    DUP HBUF.CODING @ HBUF-C-GZIP <> IF DROP -1 EXIT THEN
+    DUP HBUF.INFL INFL-DONE? IF DROP -1 EXIT THEN
+    DUP HBUF.PARSER HSTR.BODY-TOTAL @ 0= IF DROP -1 EXIT THEN
+    HBUF-B-CUT SWAP HBUF.BODY-STATUS ! 0 ;
 
 VARIABLE _HBUFI-X
 
@@ -98,12 +178,22 @@ VARIABLE _HBUFI-X
         HBUF.FLAGS DUP @ HBUF-F-PERSISTENT INVERT AND SWAP !
     THEN ;
 
+: HBUF-GZIP!  ( flag exchange -- )
+    SWAP IF
+        HBUF.FLAGS DUP @ HBUF-F-GZIP OR SWAP !
+    ELSE
+        HBUF.FLAGS DUP @ HBUF-F-GZIP INVERT AND SWAP !
+    THEN ;
+
 : _HBUF-MESSAGE-RESET  ( exchange -- )
     DUP HBUF.PARSER HSTR-RESET
     DUP HBUF.BODY-A @ OVER HBUF.BODY-CAP @ 0 FILL
     DUP 0 SWAP HBUF.BODY-U !
     DUP 0 SWAP HBUF.HTTP-CODE !
     DUP 0 SWAP HBUF.REQUEST !
+    DUP HBUF-C-IDENTITY SWAP HBUF.CODING !
+    DUP HBUF-B-OK SWAP HBUF.BODY-STATUS !
+    DUP HBUF.INFL INFL-SIZE 0 FILL
     DUP HBUF-S-OK SWAP HBUF.LAST-STATUS !
     HBUF-STATE-IDLE SWAP HBUF.STATE ! ;
 
@@ -286,6 +376,9 @@ VARIABLE _HBUFC-STATUS
             HBUF-S-PENDING EXIT
         THEN
         _HBUFP-PUMP @ HSTR-PUMP-DONE = IF
+            _HBUFP-X @ _HBUF-BODY-ENDED? 0= IF
+                HBUF-S-PROTOCOL _HBUFP-X @ _HBUF-FAIL EXIT
+            THEN
             _HBUFP-X @ _HBUF-PEER-REUSABLE? 0= IF
                 _HBUFP-X @ _HBUF-CLOSE-START EXIT
             THEN

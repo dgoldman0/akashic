@@ -97,6 +97,7 @@ def test_uidl_widget_renderers_use_the_common_draw_boundary() -> None:
         "_UTUI-RENDER-REGION",
         "_UTUI-RENDER-TREE",
         "_UTUI-RENDER-TEXTAREA",
+        "_UTUI-RENDER-MEDIA",
     ):
         renderer = _first(source, name)
         assert "WDG-DRAW" in renderer

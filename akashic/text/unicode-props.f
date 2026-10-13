@@ -27,6 +27,7 @@
 \                                        2 close
 \    UP-ARABIC-FORM  ( cp form -- cp' | 0 )  presentation form scalar
 \                                        (UP-FORM-*), 0 when none
+\    UP-PUNCT?       ( props -- flag )   General_Category P (punctuation)
 \
 \  Every word is pure: it reads only the immutable tables and the
 \  stack, so it is reentrant and needs no guard.
@@ -113,6 +114,7 @@ REQUIRE unicode-tables.f
 : UP-MIRRORED?       ( props -- flag )  2097152 AND 0<> ;
 : UP-BRACKET?        ( props -- flag )  4194304 AND 0<> ;
 : UP-ARABIC-FORMS?   ( props -- flag )  8388608 AND 0<> ;
+: UP-PUNCT?          ( props -- flag )  16777216 AND 0<> ;
 
 \ =====================================================================
 \  §3 — Lookup

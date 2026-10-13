@@ -188,9 +188,9 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
     init = _word(bridge, "_RTAPTE-INIT-BODY")
     callback = _word(bridge, "_RTAPTE-HYBRID-PREFLIGHT")
     layout = _word(bridge, "_RTAPTE-HYBRID-LAYOUT?")
-    assert _constant(engine, "RTE-FACADE-SIZE") == 256
+    assert _constant(engine, "RTE-FACADE-SIZE") == 328
     assert _offset(engine, "_RTE-F.HYBRID-PREFLIGHT-XT") == 184
-    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 456
+    assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 472
     for forbidden in ("ITEMS-A", "ITEMS-U", "REFS-A", "REFS-U", "TEXT-A", "?DO"):
         assert forbidden not in provider_path
     assert "RTAPT-HYBRID-PREFLIGHT _RTAPTE-STATUS>RTE" in callback
@@ -218,13 +218,13 @@ def test_provider_consumes_only_fixed_summary_and_bridge_installs_callback() -> 
             "STATIC-LAST", "STATIC-COPY", "STATIC-OPS", "FIELD-CONTROLS",
             "SERIES-COUNT", "SERIES-LAST", "SERIES-SLOTS", "SERIES-HISTORY-MAX",
             "SERIES-SAMPLE-BYTES", "SERIES-CHUNKS", "SERIES-CHUNK-SAMPLES-MAX",
-            "SERIES-CHUNK-BYTES-MAX", "WAVEFORM-COUNT",
+            "SERIES-CHUNK-BYTES-MAX", "WAVEFORM-COUNT", "STATIC-IMAGES",
     ):
         assert re.search(
             rf"0 _RTE-HA\.{field}\s+0 _RTAPT-HA\.{field} =",
             layout,
         )
-    assert layout.count(" AND") == 56
+    assert layout.count(" AND") == 58
     assert "['] _RTAPTE-HYBRID-PREFLIGHT" in init
     assert "_RTE-F.HYBRID-PREFLIGHT-XT !" in init
     for old in (

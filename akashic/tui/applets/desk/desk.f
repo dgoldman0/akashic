@@ -2851,11 +2851,12 @@ VARIABLE _DDT-M
     _DESK-HOST AHOST-TICK ;
 
 \ --- Service ---
-\ Work due between ticks: sandbox jobs a worker core finished.
+\ Work due between ticks: pictures the applets are still decoding, and
+\ sandbox jobs a worker core finished.
 : DESK-SERVICE-CB  ( instance -- worked? )
     _DESK-USE-STATE
-    _DESK-SBOX-READY? 0= IF FALSE EXIT THEN
-    _DESK-SANDBOX @ SBOX-CAPABILITY-POLL ;
+    _DESK-HOST AHOST-SERVICE
+    _DESK-SBOX-READY? IF _DESK-SANDBOX @ SBOX-CAPABILITY-POLL OR THEN ;
 
 \ --- Paint ---
 \

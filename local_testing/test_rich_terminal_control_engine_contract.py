@@ -53,12 +53,12 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "128 CONSTANT RTAPT-F-CONTROL-COLLECTIONS",
         "0x100 CONSTANT _RTAPT-PT-F-CONTROLS",
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
-        "168 CONSTANT RTAPT-LIMITS-SIZE",
+        "176 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "608 CONSTANT RTAPT-OWNER-SIZE",
+        "632 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
-        "552 CONSTANT RTAPT-ENGINE-SIZE",
+        "720 CONSTANT RTAPT-ENGINE-SIZE",
         ": _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;",
         ": _RTAPT-O.ACTIVE-CONTROLS ( o -- a ) 208 + ;",
         ": _RTAPT-O.HIDDEN-CONTROLS ( o -- a ) 216 + ;",
@@ -92,10 +92,10 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
         ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
         ": _RTAPT-E.LIMITS     ( e -- a ) 336 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 504 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 512 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 520 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 528 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 512 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 520 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 528 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 536 + ;",
     ):
         assert declaration in source
 
@@ -600,8 +600,9 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-FIELDS") == 0x1000
     assert _constant(source, "RTE-F-PANES") == 0x200
     assert _constant(source, "RTE-F-TASKBARS") == 0x800
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x3FFF
-    assert _constant(source, "RTE-LIMITS-SIZE") == 168
+    assert _constant(source, "RTE-F-CONTROL-DOCUMENTS") == 0x4000
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0x7FFF
+    assert _constant(source, "RTE-LIMITS-SIZE") == 176
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
     control_fields = {
@@ -830,6 +831,26 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     limits = _word(source, "_RTAPT-CONTROL-LIMITS")
     assert "RTAPT-CONTROL-ITEM-VIEW =" in limits
     assert "RTAPT-F-CONTROL-ITEMS AND 0=" in limits
+    # A document is a content root that only RET_CONTROL_DOCUMENTS admits.
+    assert _constant(source, "RTAPT-CONTROL-DOCUMENT") == 14
+    assert _constant(source, "RTAPT-F-CONTROL-DOCUMENTS") == 0x4000
+    assert _constant(source, "_RTAPT-PT-F-CONTROL-DOCUMENTS") == 0x10000
+    assert "RTAPT-CONTROL-DOCUMENT" in feature_kind
+    assert "RTAPT-CONTROL-DOCUMENT" in content_root
+    assert "RTAPT-CONTROL-DOCUMENT =" in limits
+    assert "RTAPT-F-CONTROL-DOCUMENTS AND 0=" in limits
+    # Its DOC1 body is checked as DOC1 on the define and copy paths, never as
+    # STX1, whose smallest body is the only one of 72 bytes.
+    assert "_RTAPT-DOC1-SHAPE?" in _word(source, "_RTAPT-CONTROL-CONTENT-SHAPE?")
+    assert "_RTAPT-DOC1-HEADER?" in _word(source, "_RTAPT-CONTROL-CONTENT-HEADER?")
+    assert "_RTAPT-DOC1-SHAPE?" in _word(source, "_RTAPT-CONTROL-CONTENT-META?")
+    assert "_RTAPT-DOC1-HEADER?" in _word(source, "_RTAPT-CONTROL-COPY-CONTENT-HEADER?")
+    assert "RTAPT-CONTROL-DOCUMENT" in copy_kind
+    assert "_RTAPT-CONTROL-TEXT-COLLECTION-KIND? IF\n" \
+        "            _RTAPT-CD-CONTENT-U @ 72 U<" in shape
+    for gate in ("_RTAPT-CONTROL-PREFLIGHT-BODY", "_RTAPT-HYBRID-PREFLIGHT-BODY"):
+        if gate in source:
+            assert "RTAPT-F-CONTROL-DOCUMENTS AND 0=" in _word(source, gate)
     # Every provider control kind reaches the wire; a kind without a PT
     # mapping would abort each transaction that carries it.
     kinds = []
@@ -838,9 +859,9 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
         match = re.fullmatch(r"(\d+) CONSTANT RTAPT-CONTROL-([A-Z-]+)", line)
         if match is None:
             break
-        assert int(match.group(1)) == (13 if match.group(2) == "FIELD" else len(kinds) + 1)
+        assert int(match.group(1)) == len(kinds) + 1
         kinds.append(match.group(2))
-    assert kinds[-5:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD"]
+    assert kinds[-6:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD", "DOCUMENT"]
     wire_names = {"MENUBAR": "MENU-BAR", "ITEM": "MENU-ITEM",
                   "SEPARATOR": "MENU-SEPARATOR"}
     for kind in kinds:

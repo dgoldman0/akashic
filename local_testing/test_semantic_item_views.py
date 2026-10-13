@@ -558,6 +558,50 @@ def test_a_tree_publishes_its_rows_and_carries_a_selection_out_of_view() -> None
     )
 
 
+# A label from outside the application: a right-to-left override, then a
+# control character.
+_ODD_LABEL = b"a\xe2\x80\xaeb\x07c"
+
+
+def test_an_untrusted_tree_draws_and_publishes_its_labels_safely() -> None:
+    program = _CAPTURE + _TREE + [
+        *_forth_bytes("_TU", _ODD_LABEL),
+        "_TU$ _TN 56 + ! _TN 48 + !",
+        "-1 _TW @ TREE-UNTRUSTED!",
+        "_TW @ WDG-DRAW",
+        # ChildA's row: its label starts two cells past its depth's mark.
+        "1 4 SCR-GET CELL-CP@ _N 1 5 SCR-GET CELL-CP@ _N",
+        "1 6 SCR-GET CELL-CP@ _N 1 7 SCR-GET CELL-CP@ _N",
+        "42 _B _TW @ TREE-ITEM-VIEW-MEASURE _N _N",
+        "42 _O 4096 _B _TW @ TREE-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+        "_PUBLISH",
+    ]
+    output = _run_forth(program, roots=WIDGET_ROOTS).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-3000:]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    cells, numbers = numbers[:4], numbers[4:]
+    # CELL ignores the override, so nothing is reordered, and shows the
+    # control as U+FFFD.
+    assert cells == [ord("a"), ord("b"), 0xFFFD, ord("c")]
+    measure_status, measured, capture_status, copied, valid, packed = numbers
+    assert (measure_status, capture_status, valid, packed) == (0, 0, 0, 0)
+    assert measured == copied
+    (payload,) = [
+        bytes(int(token) for token in body.split())
+        for body in re.findall("\x12(.*?)\x13", output, re.S)
+    ]
+    # Published, the override is an invisible U+200B that reorders nothing.
+    assert decode_item_view_content(payload) == ItemViewContent(
+        9, ItemViewRole.TREE, ItemViewFlag(0), (ItemColumn(ItemColumnKind.TEXT, ""),),
+        3, 0, 3,
+        (
+            _item(1, 0, "Root", state=S.EXPANDABLE | S.EXPANDED | S.SELECTED),
+            _item(2, 1, "a\u200bb\ufffdc", parent=1, depth=1),
+            _item(3, 2, "ChildB", parent=1, depth=1, state=S.EXPANDABLE),
+        ),
+    )
+
+
 _TABLE = [
     "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
     "CREATE _LCOLS LST-COLUMN-SIZE 2 * ALLOT",

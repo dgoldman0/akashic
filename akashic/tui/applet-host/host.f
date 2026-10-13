@@ -1123,6 +1123,34 @@ VARIABLE _AHTI-HOST
         AHS.NEXT @
     REPEAT ;
 
+\ AHOST-SERVICE ( host -- worked? )
+\   Give each live applet's UIDL document its pending media work, one
+\   bounded slice a pass, and mark a slot whose document changed for
+\   repaint.  True when any slice ran.  Returns at once when no picture
+\   anywhere is decoding and no document view has work.
+VARIABLE _AHSV-HOST
+VARIABLE _AHSV-WORKED
+VARIABLE _AHSV-PAINT
+
+: AHOST-SERVICE  ( host -- worked? )
+    PICT-WORK? DOCV-WORK? OR 0= IF DROP 0 EXIT THEN
+    _AHSV-HOST !  0 _AHSV-WORKED !
+    _UTUI-NEEDS-PAINT @ _AHSV-PAINT !
+    _AHSV-HOST @ AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS-ALIVE? OVER AHS-CALLABLE? AND OVER AHS.HAS-UIDL @ AND IF
+            0 _UTUI-NEEDS-PAINT !
+            DUP AHS-CTX-SWITCH
+            UTUI-SERVICE IF -1 _AHSV-WORKED ! THEN
+            _UTUI-NEEDS-PAINT @ IF
+                -1 OVER AHS.DIRTY !  -1 _AHSV-PAINT !
+            THEN
+        THEN
+        AHS.NEXT @
+    REPEAT
+    _AHSV-PAINT @ _UTUI-NEEDS-PAINT !
+    _AHSV-WORKED @ ;
+
 VARIABLE _AHP-HOST
 VARIABLE _AHP-PAINT-ALL
 VARIABLE _AHP-FULLFRAME

@@ -2,16 +2,51 @@
 
 `akashic/net/http-buffered.f` combines a caller-owned `HTTP-REQUEST`, `NIO`
 port, bounded response buffer, and incremental HTTP response parser. The
-exchange owns parser and receive scratch only; request, transport, response
-storage, cancellation authority, and semantic state remain with its caller.
+exchange owns parser and receive scratch and an inflater record only; request,
+transport, response storage, cancellation authority, and semantic state remain
+with its caller.
 
 ```forth
 body-a body-capacity exchange HBUF-INIT
+flag exchange HBUF-GZIP!
 request port exchange HBUF-START
 exchange HBUF-POLL
 exchange HBUF-CANCEL
 exchange HBUF-RESET
 ```
+
+## Gzip bodies
+
+After `HBUF-INIT`, `-1 exchange HBUF-GZIP!` asks the exchange to inflate gzip
+bodies; the flag lasts through `HBUF-RESET` and persistent reuse, until the next
+`HBUF-INIT`. The caller still sends its own `Accept-Encoding: gzip` and admits
+the response's `Content-Encoding` itself.
+
+A response whose one `Content-Encoding` field is `gzip` or `x-gzip`, in any
+case, is inflated into the response buffer as it arrives, whatever its framing
+and however the port splits it. The buffer is the [inflater's](../utils/inflate.md)
+window, so a gzip body costs the exchange's 3,024-byte inflater record and no
+other memory. `HBUF-CODING@` then answers `HBUF-C-GZIP`, and `HBUF.BODY-U` is
+the inflated length. Any other coding, two `Content-Encoding` fields, or a
+body the caller did not ask to inflate is kept as it came, `HBUF-C-IDENTITY`,
+for the caller to admit or refuse.
+
+The body as sent and the body as inflated each count against the buffer's
+capacity, so a small body cannot inflate past it and a body cannot be sent
+endlessly. The body must be exactly one whole gzip member. A body of no bytes,
+such as a `204` or `HEAD` response's, is empty. Otherwise the exchange fails
+with `HBUF-S-PROTOCOL`, cancels its port, and `HBUF-BODY-STATUS@` says why:
+
+| Status | Meaning |
+|---|---|
+| `HBUF-B-CAPACITY` | The body, as sent or as inflated, passed the buffer. |
+| `HBUF-B-DAMAGED` | The inflater refused the member; `exchange HBUF.INFL INFL-REASON@` says why. |
+| `HBUF-B-TRAILING` | Bytes followed the member, such as a second member. |
+| `HBUF-B-CUT` | The body ended inside the member. |
+
+An uncompressed body past the buffer also reports `HBUF-B-CAPACITY` when the
+parser's own body limit has not refused it first. Each message starts with
+`HBUF-B-OK`, `HBUF-C-IDENTITY` and a wiped inflater record.
 
 For a new or non-reused port, `HBUF-START` invokes `NIO-OPEN-START`; an eligible
 persistent reuse skips opening. An accepted start returns `HBUF-S-PENDING`. The
@@ -67,4 +102,10 @@ Run the deterministic opening and exchange contract with:
 
 ```sh
 python local_testing/akashic_tui.py smoke --profile http-buffered
+```
+
+and the gzip bodies, against Python's gzip, with:
+
+```sh
+python -m pytest local_testing/test_http_gzip.py
 ```

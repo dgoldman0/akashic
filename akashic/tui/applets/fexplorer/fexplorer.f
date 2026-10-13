@@ -6,7 +6,7 @@
 \              akashic-tui-textarea, akashic-tui-input,
 \              akashic-tui-dialog, akashic-tui-app-shell,
 \              akashic-tui-app-desc, akashic-tui-uidl-tui,
-\              akashic-vfs
+\              akashic-vfs, akashic-pdf-document
 \
 \  Dual-pane file manager.  UI is declared as UIDL XML and loaded
 \  by app-shell.f automatically.  The applet provides only:
@@ -21,7 +21,9 @@
 \   - Detail table (LST-* widget mounted on <region id="detail">):
 \     Name, Size, and Type columns; opening a row enters a directory or
 \     opens a file with its application
-\   - Text preview panel (UIDL <textarea id="preview">)
+\   - Preview panel (UIDL <media id="preview">): a picture, a Markdown or
+\     PDF document, a text file whole, or the facts of any other file; a
+\     link in a document selects the file it names and previews it
 \   - Menu bar via <menubar>/<menu>/<item> + do= actions
 \   - Status bar via <status>/<label> elements
 \   - Clipboard (copy / cut / paste via VFS)
@@ -42,7 +44,9 @@ PROVIDED akashic-tui-fexplorer
 
 REQUIRE ../../widgets/explorer.f
 REQUIRE ../../widgets/list.f
-REQUIRE ../../widgets/textarea.f
+REQUIRE ../../widgets/media.f
+REQUIRE ../../../pdf/document.f
+REQUIRE ../../../utils/fs/link-path.f
 REQUIRE ../../widgets/input.f
 REQUIRE ../../widgets/dialog.f
 REQUIRE ../../widgets/prompt.f
@@ -68,7 +72,7 @@ REQUIRE ../../../interop/resource.f
 \ =====================================================================
 
 512 CONSTANT _FEXP-PATH-CAP       \ path buffer capacity
-32768 CONSTANT _FEXP-PREVIEW-CAP  \ preview buffer 32 KiB
+32768 CONSTANT _FEXP-SCRATCH-CAP  \ scratch: two 16 KiB file-copy chunks
  4096 CONSTANT _FEXP-CAP-TEXT-MAX \ Agent-visible UTF-8 preview bytes
 512 CONSTANT _FEXP-PROMPT-CAP     \ command-bar input capacity
 
@@ -134,7 +138,7 @@ CMP-LAYOUT-BEGIN
 \ UIDL element handles (set in INIT-XT via UTUI-BY-ID)
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SIDEBAR    \ <region id="sidebar">
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-DETAIL     \ <region id="detail">
-_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-PREVIEW    \ <textarea id="preview">
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-PREVIEW    \ <media id="preview">
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-TABS       \ <tabs id="tabs">
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SBAR-L     \ <label id="sbar-left">
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-E-SBAR-R     \ <label id="sbar-right">
@@ -293,7 +297,8 @@ _FEXP-CURRENT-STATE CMP-CELL: _FEXP-CNT
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-DIR-KEY    \ key of the listed directory
 _FEXP-CURRENT-STATE LST-COLUMN-SIZE 3 * CMP-FIELD: _FEXP-COLUMNS
 
-_FEXP-CURRENT-STATE _FEXP-PREVIEW-CAP CMP-FIELD: _FEXP-PREV-BUF
+\ Scratch for copying files, the properties text and the agent's preview.
+_FEXP-CURRENT-STATE _FEXP-SCRATCH-CAP CMP-FIELD: _FEXP-SCRATCH
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-PATH-BUF
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-PATH-LEN
 
@@ -569,27 +574,27 @@ VARIABLE _FST-U
     _FEXP-DETAIL-DIRTY ;
 
 \ =====================================================================
-\  §8 — Preview: load file into textarea
+\  §8 — Preview: show the selected file
 \ =====================================================================
 
-VARIABLE _FPV-FD
-VARIABLE _FPV-LEN
+\ What a link in a previewed document does, once revealing a path is
+\ defined (_FEXP-DO-LINK).
+DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
 
-\ _FEXP-LOAD-PREVIEW ( -- )   Load the selected file into the preview.
+\ _FEXP-LOAD-PREVIEW ( -- )
+\   Give the selected file to the preview's media widget, which shows it
+\   the way its kind is shown, a PDF as a document.  A picture decodes only
+\   once the Preview tab draws it, and a document's links go to
+\   _FEXP-ON-LINK.
 : _FEXP-LOAD-PREVIEW  ( -- )
     _FEXP-SEL-LEN @ 0= IF EXIT THEN
-    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-OPEN-VFS
-    DUP 0= IF DROP EXIT THEN
-    _FPV-FD !
-    _FPV-FD @ VFS-SIZE _FEXP-PREVIEW-CAP MIN DUP _FPV-LEN !
-    _FEXP-PREV-BUF SWAP _FPV-FD @ VFS-READ-EXACT IF
-        _FPV-FD @ VFS-CLOSE EXIT
+    _FEXP-E-PREVIEW @ ?DUP 0= IF EXIT THEN
+    DUP UTUI-WIDGET@ ?DUP IF
+        PDF-DOC-READER MEDIA-K-PDF 2 PICK MEDIA-READER!
+        ['] _FEXP-ON-LINK 0 2 PICK MEDIA-FOLLOW!
+        >R _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-VFS @ R> MEDIA-OPEN-VFS DROP
     THEN
-    \ Set the UIDL textarea content via its materialized widget
-    _FEXP-E-PREVIEW @ UTUI-WIDGET@ ?DUP IF
-        _FEXP-PREV-BUF _FPV-LEN @ ROT TXTA-SET-TEXT
-    THEN
-    _FPV-FD @ VFS-CLOSE
+    UIDL-DIRTY!
     ASHELL-DIRTY! ;
 
 \ =====================================================================
@@ -597,7 +602,7 @@ VARIABLE _FPV-LEN
 \ =====================================================================
 
 16 CONSTANT _FCP-MAX-PATH-DEPTH
-_FEXP-PREVIEW-CAP 2 / CONSTANT _FCP-CHUNK-CAP
+_FEXP-SCRATCH-CAP 2 / CONSTANT _FCP-CHUNK-CAP
 
 VARIABLE _FCP-SRC       VARIABLE _FCP-DST
 VARIABLE _FCP-FDS       VARIABLE _FCP-FDD
@@ -745,10 +750,10 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
     0 _FCP-POS !
     BEGIN _FCP-POS @ _FCP-SIZE @ < WHILE
         _FCP-SIZE @ _FCP-POS @ - _FCP-CHUNK-CAP MIN _FCP-WANT !
-        _FEXP-PREV-BUF _FCP-WANT @ _FCP-FDS @ VFS-READ-EXACT IF
+        _FEXP-SCRATCH _FCP-WANT @ _FCP-FDS @ VFS-READ-EXACT IF
             FALSE EXIT
         THEN
-        _FEXP-PREV-BUF _FCP-WANT @ _FCP-FDD @ VFS-WRITE-EXACT IF
+        _FEXP-SCRATCH _FCP-WANT @ _FCP-FDD @ VFS-WRITE-EXACT IF
             FALSE EXIT
         THEN
         _FCP-WANT @ _FCP-POS +!
@@ -761,13 +766,13 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
     0 _FCP-POS !
     BEGIN _FCP-POS @ _FCP-SIZE @ < WHILE
         _FCP-SIZE @ _FCP-POS @ - _FCP-CHUNK-CAP MIN _FCP-WANT !
-        _FEXP-PREV-BUF _FCP-WANT @ _FCP-FDS @ VFS-READ-EXACT IF
+        _FEXP-SCRATCH _FCP-WANT @ _FCP-FDS @ VFS-READ-EXACT IF
             FALSE EXIT
         THEN
-        _FEXP-PREV-BUF _FCP-CHUNK-CAP +
+        _FEXP-SCRATCH _FCP-CHUNK-CAP +
         _FCP-WANT @ _FCP-FDD @ VFS-READ-EXACT IF FALSE EXIT THEN
-        _FEXP-PREV-BUF _FCP-WANT @
-        _FEXP-PREV-BUF _FCP-CHUNK-CAP + _FCP-WANT @
+        _FEXP-SCRATCH _FCP-WANT @
+        _FEXP-SCRATCH _FCP-CHUNK-CAP + _FCP-WANT @
         COMPARE 0<> IF FALSE EXIT THEN
         _FCP-WANT @ _FCP-POS +!
     REPEAT
@@ -1378,13 +1383,13 @@ VARIABLE _FPR-LEN
 
 \ _FPR+ ( addr len -- )   Append to the properties text.
 : _FPR+  ( addr len -- )
-    _FEXP-PREVIEW-CAP _FPR-LEN @ - MIN
-    DUP >R _FEXP-PREV-BUF _FPR-LEN @ + SWAP CMOVE R> _FPR-LEN +! ;
+    _FEXP-SCRATCH-CAP _FPR-LEN @ - MIN
+    DUP >R _FEXP-SCRATCH _FPR-LEN @ + SWAP CMOVE R> _FPR-LEN +! ;
 
 : _FEXP-DO-PROPS  ( elem -- )
     DROP
     _FEXP-SELECTED DUP 0= IF DROP EXIT THEN
-    \ The text is built in the preview buffer, reused for the moment.
+    \ The text is built in the scratch buffer.
     0 _FPR-LEN !
     S" Path: " _FPR+
     _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FPR+
@@ -1392,7 +1397,7 @@ VARIABLE _FPR-LEN
     DUP IN.TYPE @ VFS-T-DIR = IF S" dir" ELSE S" file" THEN _FPR+
     S"   Size: " _FPR+
     IN.SIZE-LO @ SIZE-FMT _FPR+
-    _FEXP-PREV-BUF _FPR-LEN @ DLG-INFO ;
+    _FEXP-SCRATCH _FPR-LEN @ DLG-INFO ;
 
 \ =====================================================================
 \  §14 — INIT callback ("document ready")
@@ -1577,6 +1582,21 @@ VARIABLE _FRV-TYPE
     _FEXP-UPDATE-STATUS ASHELL-DIRTY!
     0 ;
 
+\ A link in a previewed document selects the file it names, in its
+\ folder, and previews it.  A link that names no file says why.
+: _FEXP-DO-LINK  ( path-a path-u status ctx -- )
+    DROP CASE
+        LPATH-S-OK OF
+            _FEXP-REVEAL-PATH IF S" Path not found" 2000 ASHELL-TOAST THEN
+        ENDOF
+        LPATH-S-SCHEME OF
+            2DROP S" File Explorer opens only links to files" 2200 ASHELL-TOAST
+        ENDOF
+        LPATH-S-ROOM OF 2DROP S" The path is too long" 2000 ASHELL-TOAST ENDOF
+        >R 2DROP R>
+    ENDCASE ;
+' _FEXP-DO-LINK IS _FEXP-ON-LINK
+
 VARIABLE _FRH-A
 VARIABLE _FRH-U
 VARIABLE _FRS-REQ
@@ -1673,15 +1693,15 @@ VARIABLE _FRP-TEXT-EDGE-OK
         DROP EXIT
     THEN
     DROP
-    _FEXP-PREV-BUF _FEXP-CAP-TEXT-MAX 3 + ROT VFA-READ-PREFIX?
+    _FEXP-SCRATCH _FEXP-CAP-TEXT-MAX 3 + ROT VFA-READ-PREFIX?
     DUP IF 2DROP 2DROP EXIT THEN
     DROP DROP _FRP-SIZE ! _FRP-LEN !
-    _FEXP-PREV-BUF _FRP-LEN @
+    _FEXP-SCRATCH _FRP-LEN @
     _FRP-SIZE @ _FEXP-CAP-TEXT-MAX > _FEXP-CAP-TEXT-LEN? 0= IF
         DROP EXIT
     THEN
     _FRP-LEN !
-    _FEXP-PREV-BUF _FRP-LEN @ _FRP-REQ @ CBR.RESULT CV-STRING!
+    _FEXP-SCRATCH _FRP-LEN @ _FRP-REQ @ CBR.RESULT CV-STRING!
     IF EXIT THEN
     CBUS-S-OK _FRP-STATUS ! ;
 

@@ -36,6 +36,7 @@ REQUIRE ../uidl-menu-snapshot.f
 REQUIRE ../uidl-collection-snapshot.f
 REQUIRE ../uidl-data-graphics-snapshot.f
 REQUIRE ../uidl-status-field-snapshot.f
+REQUIRE ../uidl-picture-snapshot.f
 REQUIRE ../uidl-field-snapshot.f
 REQUIRE ../../utils/memory-span.f
 
@@ -3031,6 +3032,169 @@ VARIABLE _RUHA-ID-DRAW
 : RUHA-SNAPSHOT-IDENTITY@
   ( draw-generation adapter -- generation content-epoch documents status )
     ['] _RUHA-SNAPSHOT-IDENTITY-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
+
+\ =====================================================================
+\  Pictures
+\ =====================================================================
+\
+\ Pictures are described afresh for each candidate instead of being kept in
+\ the snapshot: the copies they ask for follow the terminal's pixel size and
+\ the space the producer has, which change while no document redraws.  Each
+\ visible document with no foreground paint over it describes its pictures
+\ in its own UCTX, and every descriptor records the document's token.  A
+\ pull copies one described copy's pixels from that document.
+
+VARIABLE _RUHA-P-ADAPTER
+VARIABLE _RUHA-P-A
+VARIABLE _RUHA-P-U
+VARIABLE _RUHA-P-USED
+VARIABLE _RUHA-P-COUNT
+VARIABLE _RUHA-P-STATUS
+VARIABLE _RUHA-P-RECORD
+VARIABLE _RUHA-P-ASK
+VARIABLE _RUHA-P-ORIGINAL
+
+: _RUHA-P-CLEAR  ( -- )
+    0 _RUHA-P-ADAPTER ! 0 _RUHA-P-A ! 0 _RUHA-P-U ! 0 _RUHA-P-USED !
+    0 _RUHA-P-COUNT ! 0 _RUHA-P-RECORD ! 0 _RUHA-P-ASK ! ;
+
+\ The UCTX of a visible document whose cells no foreground paint covers,
+\ or 0.
+: _RUHA-P-DOCUMENT-CTX  ( record -- uctx|0 )
+    DUP _RUHA-P-ADAPTER @ _RUHA-RECORD-VISIBLE? 0= IF DROP 0 EXIT THEN
+    DUP _RUHA-R.ROW @ OVER _RUHA-R.COL @
+    2 PICK _RUHA-R.HEIGHT @ 3 PICK _RUHA-R.WIDTH @
+        SCR-OCCLUSION-RECT? 0= IF 2DROP 0 EXIT THEN
+    OVER _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND IF DROP 0 EXIT THEN
+    _RUHA-R.UCTX @ ;
+
+: _RUHA-P-RECORD-PICTURES  ( record -- )
+    DUP _RUHA-P-RECORD ! _RUHA-P-DOCUMENT-CTX ?DUP 0= IF EXIT THEN
+    DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
+        RUHA-S-INVALID _RUHA-P-STATUS ! EXIT
+    THEN
+    \ Once the bank is short, the rest only count what they would take.
+    _RUHA-P-STATUS @ RUHA-S-CAPACITY = IF 0 0 ELSE
+        _RUHA-P-A @ _RUHA-P-USED @ + _RUHA-P-U @ _RUHA-P-USED @ -
+    THEN
+    _RUHA-P-ASK @ UPICSN-CAPTURE
+    DUP UPICSN-S-UNAVAILABLE = IF 2DROP EXIT THEN
+    DUP UPICSN-S-CAPACITY = IF
+        DROP _RUHA-P-COUNT +! RUHA-S-CAPACITY _RUHA-P-STATUS ! EXIT
+    THEN
+    UPICSN-S-OK <> IF DROP RUHA-S-INVALID _RUHA-P-STATUS ! EXIT THEN
+    DUP 0 ?DO
+        _RUHA-P-RECORD @ _RUHA-R.TOKEN @
+        _RUHA-P-A @ _RUHA-P-USED @ + I UPICSN-DESCRIPTOR-SIZE * +
+            UPICSN-DOCUMENT!
+    LOOP
+    DUP _RUHA-P-COUNT +! UPICSN-DESCRIPTOR-SIZE * _RUHA-P-USED +! ;
+
+: _RUHA-P-BODY  ( -- )
+    _RUHA-P-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-P-ADAPTER @ _RUHA-RECORD-AT _RUHA-P-RECORD-PICTURES
+        _RUHA-P-STATUS @ RUHA-S-INVALID = IF LEAVE THEN
+    LOOP ;
+
+: _RUHA-PICTURES-IN-DRAW
+  ( a u ask requested-draw adapter actual-draw -- count status )
+    >R _RUHA-P-ADAPTER !
+    R> <> IF 2DROP DROP 0 RUHA-S-STALE _RUHA-P-CLEAR EXIT THEN
+    _RUHA-P-ASK ! _RUHA-P-U ! _RUHA-P-A !
+    _RUHA-P-ADAPTER @ RUHA-VALID? 0= IF 0 RUHA-S-INVALID _RUHA-P-CLEAR EXIT THEN
+    _RUHA-P-U @ IF
+        _RUHA-P-A @ _RUHA-P-U @ _RUHA-P-ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? IF
+            0 RUHA-S-INVALID _RUHA-P-CLEAR EXIT
+        THEN
+    THEN
+    0 _RUHA-P-USED ! 0 _RUHA-P-COUNT ! RUHA-S-OK _RUHA-P-STATUS !
+    ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !
+    ['] _RUHA-P-BODY CATCH IF RUHA-S-INVALID _RUHA-P-STATUS ! THEN
+    _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF
+        DROP RUHA-S-INVALID _RUHA-P-STATUS !
+    THEN
+    \ Only a complete description is left in the bank.
+    _RUHA-P-STATUS @ RUHA-S-OK <> IF _RUHA-P-A @ _RUHA-P-USED @ 0 FILL THEN
+    _RUHA-P-STATUS @ RUHA-S-INVALID = IF 0 ELSE _RUHA-P-COUNT @ THEN
+    _RUHA-P-STATUS @ _RUHA-P-CLEAR ;
+
+\ RUHA-PICTURES@
+\   ( descriptors-a descriptors-u ask draw-generation adapter -- count status )
+\   Describe every picture the attached visible documents show for this
+\   completed draw into the caller's UPICSN descriptor bank, asking each for
+\   the copy UPICSN-CAPTURE describes under ASK, each descriptor naming its
+\   document's token.  CAPACITY, with how many descriptors it would take and
+\   none written, when the bank is short; STALE when DRAW-GENERATION is not
+\   the completed draw.
+: RUHA-PICTURES@
+    ['] _RUHA-PICTURES-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
+
+\ RUHA-PICTURE-PULL ( descriptor offset dest-a dest-u adapter -- status )
+\   Copy DEST-U bytes from OFFSET of a described picture's file or copy
+\   into DEST, from the document it was described in.  STALE once that
+\   document or picture no longer shows it, or its file could not be read.
+: _RUHA-PP-BODY  ( descriptor offset dest-a dest-u -- status )
+    _RUHA-P-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-P-ADAPTER @ _RUHA-RECORD-AT DUP _RUHA-R.TOKEN @
+        5 PICK UPICSN-DOCUMENT@ = IF
+            _RUHA-P-DOCUMENT-CTX ?DUP 0= IF
+                2DROP 2DROP RUHA-S-STALE UNLOOP EXIT
+            THEN
+            DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
+                2DROP 2DROP RUHA-S-INVALID UNLOOP EXIT
+            THEN
+            UPICSN-PULL
+            DUP UPICSN-S-OK = IF DROP RUHA-S-OK UNLOOP EXIT THEN
+            UPICSN-S-STALE = IF RUHA-S-STALE ELSE RUHA-S-INVALID THEN
+            UNLOOP EXIT
+        THEN DROP
+    LOOP
+    2DROP 2DROP RUHA-S-STALE ;
+
+: RUHA-PICTURE-PULL  ( descriptor offset dest-a dest-u adapter -- status )
+    DUP RUHA-VALID? 0= IF DROP 2DROP 2DROP RUHA-S-INVALID EXIT THEN
+    _RUHA-P-ADAPTER !
+    2DUP _RUHA-P-ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? IF
+        2DROP 2DROP RUHA-S-INVALID _RUHA-P-CLEAR EXIT
+    THEN
+    ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !
+    ['] _RUHA-PP-BODY CATCH IF 2DROP 2DROP RUHA-S-INVALID THEN
+    _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
+    _RUHA-P-CLEAR ;
+
+\ RUHA-PICTURE-FAIL
+\   ( document source-index root-key revision reason adapter -- status )
+\   The rich side could not send picture REVISION at SOURCE-INDEX with
+\   ROOT-KEY of DOCUMENT, by its token, because of the picture itself, for
+\   REASON: its widget remembers why (UPICSN-FAIL), in that document's
+\   context.  STALE once the document is gone or hidden or that place
+\   shows another picture.
+: _RUHA-PF-BODY  ( document source-index root-key revision reason -- status )
+    _RUHA-P-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-P-ADAPTER @ _RUHA-RECORD-AT DUP _RUHA-R.TOKEN @
+        6 PICK = IF
+            _RUHA-P-DOCUMENT-CTX ?DUP 0= IF
+                2DROP 2DROP DROP RUHA-S-STALE UNLOOP EXIT
+            THEN
+            DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
+                2DROP 2DROP DROP RUHA-S-INVALID UNLOOP EXIT
+            THEN
+            >R >R >R NIP R> R> R> UPICSN-FAIL
+            DUP UPICSN-S-OK = IF DROP RUHA-S-OK UNLOOP EXIT THEN
+            UPICSN-S-STALE = IF RUHA-S-STALE ELSE RUHA-S-INVALID THEN
+            UNLOOP EXIT
+        THEN DROP
+    LOOP
+    2DROP 2DROP DROP RUHA-S-STALE ;
+
+: RUHA-PICTURE-FAIL
+  ( document source-index root-key revision reason adapter -- status )
+    DUP RUHA-VALID? 0= IF DROP 2DROP 2DROP DROP RUHA-S-INVALID EXIT THEN
+    _RUHA-P-ADAPTER !
+    ASHELL-ACTIVE-CTX _RUHA-P-ORIGINAL !
+    ['] _RUHA-PF-BODY CATCH IF 2DROP 2DROP DROP RUHA-S-INVALID THEN
+    _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
+    _RUHA-P-CLEAR ;
 
 CREATE _RUHA-OWNED-END
 _RUHA-OWNED-END _RUHA-OWNED-LIMIT !

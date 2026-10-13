@@ -51,8 +51,10 @@ VARIABLE _DRW-ATTRS  0 _DRW-ATTRS !   \ default no attributes
 : DRW-ATTR!  ( attrs -- )
     _DRW-ATTRS ! ;
 
-\ DRW-FG@ ( -- fg )  DRW-ATTR@ ( -- attrs )   The current style.
+\ DRW-FG@ ( -- fg )  DRW-BG@ ( -- bg )  DRW-ATTR@ ( -- attrs )
+\   The current style.
 : DRW-FG@    ( -- fg )     _DRW-FG @ ;
+: DRW-BG@    ( -- bg )     _DRW-BG @ ;
 : DRW-ATTR@  ( -- attrs )  _DRW-ATTRS @ ;
 
 \ DRW-STYLE! ( fg bg attrs -- )  Set all three at once.

@@ -179,6 +179,25 @@ def main() -> int:
         LOCAL_TESTING / "sha512-scoped-test.f", "SHA512", "S512", 41
     )
     sha512_source = SHA512.read_text(encoding="utf-8")
+    # SHA-384's single-span path mirrors SHA512-HASH's under its guard.
+    sha384_prefix = _word_body(sha512_source, "_S384-PREFIX")
+    assert sha384_prefix.count("SHA384-INIT") == 1
+    assert sha384_prefix.count("SHA512-UPDATE") == 1
+    sha384_finish = _word_body(sha512_source, "_S384-FINISH")
+    assert "['] SHA384-FINAL CATCH" in sha384_finish
+    assert "_S512-CLEAR-AFTER-FAILURE" in sha384_finish
+    assert "R> THROW" in sha384_finish
+    sha384_unit = _word_body(sha512_source, "_S384-UNIT")
+    assert sha384_unit.index("_sha512-guard GUARD-ACQUIRE") < sha384_unit.index(
+        "_S384-PREFIX CATCH"
+    )
+    sha384_hash = _word_body(sha512_source, "SHA384-HASH")
+    assert sha384_hash.index("_S384-PREFLIGHT") < sha384_hash.index(
+        "CRYPTO-ACC-WITH-TRANSACTION"
+    )
+    assert _word_body(sha512_source, "_S384-PREFLIGHT").count(
+        "SHA512-CALLER-SPAN-STATUS"
+    ) == 2
     for removed_software_state in (
         "_S512-K",
         "_S512-IV",

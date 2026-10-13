@@ -955,6 +955,27 @@ python3 local_testing/physical_desktop_acceptance.py \
 Plain `akashic_tui.py accept --backend simulator` runs the same journey, with
 only its own 900-second timeout.
 
+For testing, `--terminal-link-pace BYTES_PER_SECOND:FRAME_US` on the launcher,
+or on `akashic_tui.py serve` and `accept`, makes the hosted terminal take the
+guest's bytes no faster than that rate, as a real serial link would, and ask
+for picture chunks the link carries in one FRAME_US frame time. Every frame
+crosses the paced link, so a slow pace slows the whole run. With `--applet
+fexp` the journey then also checks that the screen keeps answering input while
+the sample picture uploads: once the terminal has taken some of its chunks, an
+EXPAND on the folder tree must come back in a frame the terminal commits while
+the upload is still open, and more chunks must follow before the picture
+shows. `100000:1000`, chunks of 100 bytes, gives the sample about 640 chunks.
+The pace is a test setting, not a model of any particular link.
+
+`--applet photo` runs Desk with File Explorer holding a real photograph,
+`assets/pictures/spice-market.qoi`, 2160 by 1620 pixels. Its journey selects
+the photo, shows its Preview, and requires the copy the terminal shows to be
+made for the area: fitted inside the picture's rectangle in the viewer's
+pixels, it fills one side exactly and keeps the photo's shape, so the
+renderer never enlarges it. The photo takes about 6.6 billion guest steps to
+show the first time, near four minutes on the simulator, so this check has a
+600-second timeout.
+
 ## Opt-In Live Network
 
 The live profiles require a user-owned TAP interface. From the workspace root,

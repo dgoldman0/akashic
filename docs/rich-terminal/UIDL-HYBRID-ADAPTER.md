@@ -83,6 +83,36 @@ live recapture and fresh menu lineage; stale prior data cannot acquire the new
 component's provenance. Existing directory offsets through 216 stay fixed.
 
 
+## Pictures
+
+Pictures are not part of the snapshot: the copies they ask for follow the
+terminal's pixel size and the space the producer has, which change while no
+document redraws. `RUHA-PICTURES@ ( descriptors-a descriptors-u ask
+draw-generation adapter -- count status )` describes them afresh for one
+completed draw. Each visible document that no foreground paint covers, or
+that is an overlay, describes its pictures with `UPICSN-CAPTURE` in its own
+UCTX, and each descriptor names the document's attachment token. The context
+in force before is restored whatever happens. A bank too small answers
+CAPACITY with how many descriptors it would take and holds none; another
+draw answers STALE.
+
+`RUHA-PICTURE-PULL ( descriptor offset dest-a dest-u adapter -- status )`
+copies `dest-u` bytes from `offset` of a described picture's file or copy,
+from the document its token names, in that document's context, so a
+producer can send a picture a chunk at a time. It answers STALE once the
+document is no longer shown that way, the picture no longer shows that file
+or copy, or the file could not be read, so a producer stops sending a picture
+nothing will show.
+
+`RUHA-PICTURE-FAIL ( document source-index revision reason adapter --
+status )` says the rich side could not send picture `revision` at
+`source-index` of the document its token names, because of the picture
+itself. In that document's context, `UPICSN-FAIL` has the picture's widget
+remember the reason, so later captures describe it as failed. It answers
+STALE once the document is no longer shown that way or the element shows
+another picture.
+
+
 ## One authoritative observation
 
 For a live document capture, RUHA restores that document's authoritative UCTX

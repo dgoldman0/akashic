@@ -55,6 +55,13 @@ palette entry in two steps:
 
 The index with the smaller distance² wins.  Ties favour grayscale.
 
+**Known defect.** The cube snap starts from a best distance² of 999, which
+is less than the distance² from 48–63 to either neighbouring level (0 and
+95), so a component from 48 to 63 snaps to 0 instead of 95.  The grayscale
+step often hides it for grays; saturated dark colours and pictures show it.
+Tests model the current behaviour exactly, so fixing it means changing
+both.
+
 `TUI-PALETTE>RGBA` performs the exact reverse palette expansion:
 
 1. **Base colours** (indices 0–15) use MegaPad's terminal palette:

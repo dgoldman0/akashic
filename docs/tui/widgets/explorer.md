@@ -234,7 +234,7 @@ and a file goes to `on-open-xt` with `( inode explorer -- )`.
 |-----------|------|
 | Explorer descriptor | 104 B |
 | Rename buffer (persistent) | 256 B |
-| Embedded tree widget | 160 B |
+| Embedded tree widget | 168 B |
 | Tree expanded-key set | 8 B per expanded directory, allocated 16 keys at a time and doubled as needed |
 | Inline rename input (temporary) | 104 B |
 

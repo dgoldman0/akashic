@@ -108,19 +108,22 @@ def _parse(output: str) -> list[list[tuple]]:
     return texts
 
 
-def _expected(text: str, direction: int, limit: int) -> list[tuple]:
+HARD = 256
+
+
+def _expected(text: str, direction: int, limit: int, hard: bool = False) -> list[tuple]:
     """Each line of ``layout_lines`` in bytes: its first byte, the bytes up
-    to the spaces at its end, its width, whether it is RTL, and its visible
-    characters."""
+    to the spaces at its end (a hard line keeps them), its width, whether
+    it is RTL, and its visible characters."""
 
     def byte_at(offset: int) -> int:
         return len(text[:offset].encode("utf-8"))
 
     result = []
-    for line in text_rules.layout_lines(text, _DIRECTIONS[direction], limit):
+    for line in text_rules.layout_lines(text, _DIRECTIONS[direction], limit, hard):
         characters = text_rules.characters(text[line.start:line.end])
         last = line.end
-        while characters and characters[-1] == " ":
+        while not hard and characters and characters[-1] == " ":
             characters.pop()
             last -= 1
         placed = [
@@ -278,3 +281,28 @@ def test_counting_lines_keeps_ascii_cheap() -> None:
     assert ascii_cost < 600
     assert simple_cost < 2_000
     assert hebrew_cost < 26_000
+
+
+def test_hard_lines_match_the_terminal_on_random_text() -> None:
+    """Hard lines, for code, end only where the text reaches the limit and
+    keep the spaces at their end (APT-1-TEXT Section 12), on ASCII, on
+    simple text, and on text that needs layout."""
+
+    alphabet = (
+        list("abcdefghij") + [" "] * 8 + ["\n"]
+        + ["\u4e2d", "\u3000", "\u05d0", "\u05d1", "\u0628", "\u0627"]
+        + ["\u2014", "\u00e9", "\u0301", "\U0001F600", "\u200d"]
+    )
+    generator_ = random.Random(20261011)
+    cases = [("   ", LTR, HARD, 2), ("", LTR, HARD, 3), ("a  b", LTR, HARD, 1),
+             ("ab  \ncd", LTR, HARD, 2), ("\u4e2d\u4e2d", LTR, HARD, 1)]
+    for _ in range(90):
+        pool = alphabet if generator_.random() < 0.6 else list("ab ") + ["  "]
+        text = "".join(generator_.choice(pool) for _ in range(generator_.randint(0, 40)))
+        cases.append((text, generator_.choice((LTR, AUTO)), HARD, generator_.randint(1, 9)))
+    texts, counts, output = _run(cases)
+    assert len(texts) == len(cases), output[-3000:]
+    for (text, direction, flags, limit), got, count in zip(cases, texts, counts):
+        want = _expected(text, direction, limit, hard=True)
+        assert got == want, (text, direction, limit)
+        assert count == (1, len(want)), (text, limit)

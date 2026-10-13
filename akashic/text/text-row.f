@@ -52,6 +52,9 @@
 \        TROW-VISIBLE, TROW-VCHAR, TROW-AT-COLUMN, and the visible
 \        characters' levels and columns then describe the line, from its
 \        own column 0, until the next TROW-LAYOUT or TROW-LINE.
+\    TROW-LINE-ALL ( first end row -- )
+\        The same for a hard line, whose spaces at its end take their
+\        cells.
 \
 \  Layout keeps its scratch state in module variables and takes the
 \  module guard in GUARDED builds.  The read words only touch the row.
@@ -526,13 +529,15 @@ VARIABLE _TR-ODD
     _TR-RECORD DUP TROW.START _TR-LT @ < IF 26 + C@ EXIT THEN
     DROP _TR-R @ _TR-O-PARA + @ ;
 
-: TROW-LINE  ( first end row -- )
+VARIABLE _TR-ALL     \ the spaces at the line's end take their cells
+
+: _TR-LINE  ( first end row -- )
     _TR-SELECT _TR-LE ! _TR-LF !
     _TR-R @ _TR-O-LEVELS + @ IF _TR-LINE-TRAIL THEN
-    \ The spaces at the line's end take no cell.
-    _TR-LE @ BEGIN
+    \ The spaces at the line's end take no cell, but on a hard line.
+    _TR-LE @ _TR-ALL @ 0= IF BEGIN
         DUP _TR-LF @ > IF DUP 1- _TR-SPACE? ELSE 0 THEN
-    WHILE 1- REPEAT                               ( last )
+    WHILE 1- REPEAT THEN                          ( last )
     0 _TR-R @ _TR-O-VIS + !  0 _TR-ODD !
     _TR-LF @ ?DO
         I _TR-RECORD TROW.WIDTH IF
@@ -545,6 +550,9 @@ VARIABLE _TR-ODD
         THEN
     LOOP
     _TR-ODD @ _TR-PLACE ;
+
+: TROW-LINE      ( first end row -- )  0 _TR-ALL ! _TR-LINE ;
+: TROW-LINE-ALL  ( first end row -- )  -1 _TR-ALL ! _TR-LINE ;
 
 \ =====================================================================
 \  §7 — Guard (Concurrency Safety)
@@ -565,6 +573,7 @@ GUARD _trow-guard
 ' TROW-OFFSET>BYTE CONSTANT _trow-offset-byte-xt
 ' TROW-BYTE>OFFSET CONSTANT _trow-byte-offset-xt
 ' TROW-LINE        CONSTANT _trow-line-xt
+' TROW-LINE-ALL    CONSTANT _trow-line-all-xt
 
 : TROW-LAYOUT      _trow-layout-xt _trow-guard WITH-GUARD ;
 : TROW-CHAR        _trow-char-xt _trow-guard WITH-GUARD ;
@@ -577,4 +586,5 @@ GUARD _trow-guard
 : TROW-OFFSET>BYTE _trow-offset-byte-xt _trow-guard WITH-GUARD ;
 : TROW-BYTE>OFFSET _trow-byte-offset-xt _trow-guard WITH-GUARD ;
 : TROW-LINE        _trow-line-xt _trow-guard WITH-GUARD ;
+: TROW-LINE-ALL    _trow-line-all-xt _trow-guard WITH-GUARD ;
 [THEN] [THEN]

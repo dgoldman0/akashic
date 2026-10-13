@@ -125,6 +125,48 @@ VARIABLE _atxet-loss-recv-calls
     _atxr-response-crlf
     _atxet-body$ _atxr-response-append ;
 
+\ gzip of the getSession JSON _atxet-build-json makes
+CREATE _atxet-gz-session
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 171 C, 86 C,
+    202 C, 72 C, 204 C, 75 C, 201 C, 73 C, 85 C, 178 C, 82 C, 74 C, 204 C,
+    201 C, 76 C, 78 C, 213 C, 43 C, 73 C, 45 C, 46 C, 81 C, 210 C, 81 C,
+    74 C, 201 C, 76 C, 1 C, 10 C, 1 C, 73 C, 171 C, 130 C, 156 C, 100 C,
+    171 C, 196 C, 164 C, 228 C, 148 C, 212 C, 180 C, 244 C, 140 C, 204 C,
+    172 C, 236 C, 156 C, 220 C, 188 C, 252 C, 130 C, 194 C, 162 C, 226 C,
+    146 C, 210 C, 178 C, 242 C, 10 C, 165 C, 90 C, 0 C, 162 C, 181 C, 106 C,
+    208 C, 64 C, 0 C, 0 C, 0 C,
+HERE _atxet-gz-session - CONSTANT _atxet-gz-session-u
+\ gzip of 4097 zero bytes, one past the response arena
+CREATE _atxet-gz-zeros
+    31 C, 139 C, 8 C, 0 C, 0 C, 0 C, 0 C, 0 C, 2 C, 255 C, 237 C, 193 C,
+    1 C, 13 C, 0 C, 0 C, 0 C, 194 C, 160 C, 247 C, 79 C, 109 C, 15 C, 7 C,
+    20 C, 0 C, 0 C, 0 C, 112 C, 111 C, 127 C, 211 C, 117 C, 184 C, 1 C,
+    16 C, 0 C, 0 C,
+HERE _atxet-gz-zeros - CONSTANT _atxet-gz-zeros-u
+CREATE _atxet-gz-damaged 96 ALLOT
+
+\ The getSession response with a gzip body.
+: _atxet-build-gzip-response  ( body-a body-u -- )
+    _atxet-build-json
+    _atxr-response _ATXR-RESPONSE-CAPACITY 0 FILL
+    0 _atxr-response-u !
+    0 _atxr-response-pos !
+    S" HTTP/1.1 200 OK" _atxr-response-append
+    _atxr-response-crlf
+    S" Content-Type: application/json" _atxr-response-append
+    _atxr-response-crlf
+    S" DPoP-Nonce: pds-nonce-1" _atxr-response-append
+    _atxr-response-crlf
+    S" Content-Encoding: gzip" _atxr-response-append
+    _atxr-response-crlf
+    S" Content-Length: " _atxr-response-append
+    DUP NUM>STR _atxr-response-append
+    _atxr-response-crlf
+    S" Connection: close" _atxr-response-append
+    _atxr-response-crlf
+    _atxr-response-crlf
+    _atxr-response-append ;
+
 : _atxet-post-response+  ( address length -- )
     DUP _atxet-post-response-u @ +
     _ATXET-POST-RESPONSE-CAPACITY > IF
@@ -401,6 +443,70 @@ VARIABLE _atxet-polls
     _O2PKD-DPOP-NONCE-A @ 0= _atxr-assert
     _O2PKD-DPOP-NONCE-U @ 0= _atxr-assert ;
 
+: _atxet-prepare-get  ( -- )
+    _atxet-target HTARGET-INIT
+    S" https://pds.example/xrpc/com.atproto.server.getSession"
+    _atxet-target HTARGET-PARSE
+    HTARGET-S-OK _atxr-status
+    _ATXR-IAT AT-XRPC-METHOD-GET _atxet-target 0 0 0 0
+    _atxet-owner @
+    AT-XRPC-EXCHANGE-PREPARE
+    AT-XRPC-EXCHANGE-S-OK _atxr-status
+    _atxet-op XIO-OP-INIT
+    _atxr-sent @ _ATXR-REQUEST-CAPACITY 0 FILL
+    0 _atxr-sent-u !
+    _atxet-install-port ;
+
+\ A query whose response fails with STATUS, its arena wiped after.
+: _atxet-drive-refused  ( status -- )
+    _atxet-op _atxet-owner @ AT-XRPC-EXCHANGE-XIO-START
+    XIO-STEP-PENDING _atxr-status
+    0 _atxet-polls !
+    BEGIN
+        _atxet-op _atxet-owner @ AT-XRPC-EXCHANGE-XIO-POLL
+        DUP _atxet-step !
+        XIO-STEP-PENDING =
+    WHILE
+        1 _atxet-polls +!
+        _atxet-polls @ _ATXET-POLL-LIMIT >= IF
+            DROP 0 _atxr-assert EXIT
+        THEN
+    REPEAT
+    _atxet-step @ XIO-STEP-FAILED = _atxr-assert
+    _atxet-owner @ AT-XRPC-EXCHANGE-LAST-STATUS@ = _atxr-assert
+    _atxet-op _atxet-owner @ AT-XRPC-EXCHANGE-XIO-WIPE
+    _atxet-body-a @ _ATXET-BODY-CAPACITY
+    _atxr-zero? _atxr-assert ;
+
+\ The query answered with a gzip body is inflated into the response arena
+\ and admitted as before; a damaged member, and one that inflates past
+\ the arena, are refused.
+: _atxet-gzip-runs  ( -- )
+    _atxet-prepare-get
+    _atxet-gz-session _atxet-gz-session-u _atxet-build-gzip-response
+    _atxet-drive
+    _atxr-sent @ _atxr-sent-u @
+    S" Accept-Encoding: gzip" _atxr-contains? _atxr-assert
+    _atxet-owner @ ATXE.EXCHANGE HBUF-CODING@ HBUF-C-GZIP = _atxr-assert
+    _atxet-owner @ AT-XRPC-EXCHANGE-BODY@
+    AT-XRPC-EXCHANGE-S-OK _atxr-status
+    2DUP _atxet-body$ COMPARE 0= _atxr-assert
+    _atopt-profile _atxet-work @ AT-GETSESSION-ADMIT
+    AT-GETSESSION-S-OK _atxr-status
+    _atxet-op _atxet-owner @ AT-XRPC-EXCHANGE-XIO-WIPE
+    _atxet-body-a @ _ATXET-BODY-CAPACITY
+    _atxr-zero? _atxr-assert
+
+    _atxet-gz-session _atxet-gz-damaged _atxet-gz-session-u CMOVE
+    _atxet-gz-damaged _atxet-gz-session-u + 8 - DUP C@ 1 XOR SWAP C!
+    _atxet-prepare-get
+    _atxet-gz-damaged _atxet-gz-session-u _atxet-build-gzip-response
+    AT-XRPC-EXCHANGE-S-ENCODING _atxet-drive-refused
+
+    _atxet-prepare-get
+    _atxet-gz-zeros _atxet-gz-zeros-u _atxet-build-gzip-response
+    AT-XRPC-EXCHANGE-S-CAPACITY _atxet-drive-refused ;
+
 : _atxet-check-post-request  ( request-a request-u -- )
     2DUP
     S" POST /xrpc/com.atproto.repo.createRecord HTTP/1.1"
@@ -524,6 +630,20 @@ VARIABLE _atxet-polls
     _atxet-owner @ ATXE.PAYLOAD-A @ 0= _atxr-assert
     _atxet-owner @ ATXE.PAYLOAD-U @ 0= _atxr-assert
 
+    _atxet-owner @ AT-XRPC-EXCHANGE-UNBIND
+    AT-XRPC-EXCHANGE-S-OK _atxr-status
+    _atxr-stack ;
+
+\ Gzip bodies on a freshly bound owner, a stage of their own.
+: _ATXET-GZIP  ( -- )
+    _atxr-active-vault @
+    _atoct-config
+    _atopt-profile
+    _atxr-active-session @
+    _atxet-owner @ AT-XRPC-EXCHANGE-BIND
+    AT-XRPC-EXCHANGE-S-OK _atxr-status
+    _O2PKD-RESET
+    _atxet-gzip-runs
     _atxet-owner @ AT-XRPC-EXCHANGE-UNBIND
     AT-XRPC-EXCHANGE-S-OK _atxr-status
     _atxr-stack ;

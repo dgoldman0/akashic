@@ -27,9 +27,12 @@ from rich_terminal.pygame_view import (
     RegionOcclusion,
     TextHitTarget,
 )
+from rich_terminal.retained_model import ResourceFormat
 from rich_terminal.retained_scene import (
     ControlKind,
     ControlState,
+    ImageClip,
+    ImageFit,
     ObjectBounds,
     RGBA,
     StatusSeverity,
@@ -40,6 +43,12 @@ from rich_terminal.semantic_content import (
     SemanticTextItem,
     SemanticTextRole,
     SemanticTextState,
+)
+from rich_terminal.semantic_documents import (
+    BlockKind,
+    DocumentBlock,
+    DocumentContent,
+    DocumentFlag,
 )
 from rich_terminal.semantic_items import (
     ItemColumn,
@@ -54,7 +63,10 @@ from rich_terminal.semantic_items import (
 )
 from rich_terminal.retained_view import (
     DisplayScope,
+    DocumentDraw,
     GlyphRunDraw,
+    ImageDraw,
+    ImageResourceManifest,
     ItemViewDraw,
     MeterDraw,
     MenuBarDraw,
@@ -910,6 +922,24 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "arena_bytes": "ARENA-U",
         "memory": "MEMORY",
         "kept_arena_bytes": "KEPT-ARENA-U",
+        "max_pictures": "MAX-PICTURES",
+        "picture_count": "PICTURE-COUNT",
+        "picture_pixel_width": ("PICTURE-ASK", 2),
+        "picture_pixel_height": ("PICTURE-ASK", 3),
+        "resource_table_bytes": "RESOURCES-U",
+        "next_resource": "NEXT-RESOURCE",
+        "picture_job": "LANE-JOB",
+        "picture_job_entry": "LANE-ENTRY",
+        "picture_chunk_bytes": "CHUNK-U",
+        "picture_epoch": "PICTURE-EPOCH",
+        "picture_hold_draw": "LANE-HOLD-DRAW",
+        "picture_refused": "LANE-REFUSED",
+        "picture_budget": "LANE-BUDGET",
+        "picture_shrink": "LANE-SHRINK",
+        "picture_resize": "LANE-RESIZE",
+        "picture_failed": "LANE-FAILED",
+        "glyph_draw": "GLYPH-DRAW",
+        "glyph_runs": "GLYPH-RUNS",
     }
     # Seven-cell quota sets: each name is one quota within its set.
     quotas = ("regions", "resources", "objects", "series",
@@ -932,12 +962,46 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
     assert all(0 <= index < cell_count for index in fields.values())
 
 
+def test_publisher_diagnostic_schema_matches_the_forth_layout() -> None:
+    """The publisher record is the screen backend's publisher record
+    followed by the rich adapter's fields, each where its accessor says."""
+
+    root = Path(acceptance_runner.__file__).resolve().parents[1] / "akashic/tui"
+    backend = (root / "screen-backend-apt1.f").read_text(encoding="utf-8")
+    adapter = (root / "rich-terminal/screen-adapter-apt1.f").read_text(encoding="utf-8")
+    pointer, count, fields = acceptance_runner._GUEST_FAILURE_RECORDS["publisher"]
+    assert pointer == "_A1D-FAILURE-PUBLISHER-A"
+    base = int(re.search(r"(?m)^(\d+) CONSTANT APTSCB-PUBLISHER-SIZE$", backend)[1])
+    base_fields = {
+        name: int(value)
+        for value, name in re.findall(r"(?m)^\s*(\d+) CONSTANT _APTSCBP-O-(\S+)$", backend)
+    }
+    rich_fields = {
+        name: base + int(value or 0)
+        for value, name in re.findall(
+            r"(?m)^APTSCB-PUBLISHER-SIZE(?: (\d+) \+)? CONSTANT _RTAPTSCB-O-(\S+)$",
+            adapter,
+        )
+    }
+    size = re.search(r"(?m)^APTSCB-PUBLISHER-SIZE (\d+) \+ CONSTANT RTAPTSCB-SIZE$",
+                     adapter)
+    assert count == (base + int(size[1])) // 8
+    for name, index in fields.items():
+        if name in ("session", "context", "base_magic"):
+            expected = base_fields[{"base_magic": "MAGIC"}.get(name, name.upper())]
+        else:
+            accessor = {"rich_magic": "MAGIC", "producer_bytes": "PRODUCER-U"}.get(
+                name, name.upper().replace("_", "-"))
+            expected = rich_fields[accessor]
+        assert index * 8 == expected, name
+
+
 def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> None:
     source = (akashic_tui.MEGAPAD_ROOT / "rich-terminal.f").read_text(encoding="utf-8")
     pointer, count, fields = acceptance_runner._GUEST_FAILURE_RECORDS["pt_session"]
     assert pointer == "_A1D-FAILURE-SESSION-A"
-    assert count == 124
-    assert re.search(r"(?m)^992 CONSTANT /PT-SESSION$", source)
+    assert count == 133
+    assert re.search(r"(?m)^1064 CONSTANT /PT-SESSION$", source)
     aliases = {
         "tx_sequence": "TX-SEQ", "rx_sequence": "RX-SEQ", "tx_open": "TX-OPEN?",
         "spans": "TX-SPANS", "cells": "TX-CELLS", "spans_done": "TX-SPANS-DONE",
@@ -957,9 +1021,11 @@ def test_pt_session_diagnostic_schema_matches_forth_and_failure_capture() -> Non
         )
         assert match is not None, accessor
         assert index * 8 == int(match[1]), name
+    # No record is larger than the producer's.
+    largest = acceptance_runner._GUEST_FAILURE_RECORDS["hybrid_producer"][1]
     for pointer, count, fields in acceptance_runner._GUEST_FAILURE_RECORDS.values():
         assert pointer in acceptance_runner._GUEST_DIAGNOSTIC_WORDS
-        assert 0 < count <= 566
+        assert 0 < count <= largest
         assert all(0 <= index < count for index in fields.values())
 
     desk = (
@@ -1427,11 +1493,9 @@ def _pad_tabset_claim(
     labels: tuple[str, ...] = ("Untitled",),
     selected: int = 0,
     identity_base: int = 30_000,
+    tile: int = acceptance_runner.PAD_DESKTOP_TILE,
 ) -> acceptance_runner._SemanticTabSetClaim:
-    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(
-        projection,
-        acceptance_runner.PAD_DESKTOP_TILE,
-    )
+    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(projection, tile)
     return acceptance_runner._SemanticTabSetClaim(
         ControlIdentity(1, 1, identity_base),
         ControlState.VISIBLE | ControlState.ENABLED,
@@ -2813,6 +2877,145 @@ def test_status_field_rejects_semantic_and_residual_overlap() -> None:
         reconstruct_retained_screen(offer)
 
 
+def _image_offer(*images: ImageDraw, glyph_over: tuple[int, int] | None = None
+                 ) -> TerminalDisplayOffer:
+    cols, rows = 12, 4
+    offer = _offer("\n".join((" " * cols,) * rows))
+    region = offer.retained.regions[0]
+    gaps = set()
+    for image in images:
+        gaps.update(acceptance_runner._rectangle_cells(
+            acceptance_runner._draw_logical_rectangle(region, image)))
+    extra = () if glyph_over is None else (
+        _glyph_run(90_009, glyph_over[1], glyph_over[0], "x", cols=cols, rows=rows),)
+    resources = tuple(sorted({
+        ImageResourceManifest(region.owner_id, region.owner_generation, image.resource_id,
+                              ResourceFormat(1), 4, 2, 32)
+        for image in images}, key=lambda manifest: manifest.key))
+    return replace(offer, retained=replace(
+        offer.retained, resources=resources,
+        regions=(replace(region, draws=(
+            *_glyph_draws_outside(cols, rows, gaps), *images, *extra, region.draws[-1],
+        )),),
+    ))
+
+
+def test_an_image_claims_its_whole_rectangle_and_names_its_resource() -> None:
+    image = ImageDraw(90_000, 0, ObjectBounds(2, 1, 6, 2), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True)
+    offer = _image_offer(image)
+    projection = reconstruct_retained_screen(offer)
+    assert projection.image_count == 1
+    assert projection.glyph_cell_count == 12 * 4 - 12
+    claim, = projection.semantic_image_claims
+    region = offer.retained.regions[0]
+    assert (claim.owner_id, claim.owner_generation, claim.object_id) == (
+        region.owner_id, region.owner_generation, 90_000)
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (2, 1, 8, 3)
+    assert (claim.resource_id, claim.fit, claim.opacity) == (7, ImageFit.CONTAIN, 255)
+    assert projection.row_text(1, 2, 8) == " " * 6
+
+
+def test_an_image_without_a_backdrop_or_under_a_glyph_is_refused() -> None:
+    bare = ImageDraw(90_000, 0, ObjectBounds(2, 1, 6, 2), 7, ImageFit.CONTAIN, 255)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no backdrop"):
+        reconstruct_retained_screen(_image_offer(bare))
+    image = replace(bare, backdrop=True)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="residual glyphs overlap semantic"):
+        reconstruct_retained_screen(_image_offer(image, glyph_over=(3, 2)))
+
+
+def _figure_offer(*draws, gaps: set[tuple[int, int]]) -> TerminalDisplayOffer:
+    """A 12 by 8 screen whose one region carries DRAWS over glyphs outside
+    GAPS, with the menu bar on row 0: objects, then controls, in paint
+    order."""
+
+    cols, rows = 12, 8
+    offer = _offer("\n".join((" " * cols,) * rows))
+    region = offer.retained.regions[0]
+    images = tuple(draw for draw in draws if isinstance(draw, ImageDraw))
+    controls = tuple(draw for draw in draws if not isinstance(draw, ImageDraw))
+    resources = tuple(sorted({
+        ImageResourceManifest(region.owner_id, region.owner_generation, image.resource_id,
+                              ResourceFormat(1), 4, 2, 32)
+        for image in images}, key=lambda manifest: manifest.key))
+    return replace(offer, retained=replace(
+        offer.retained, resources=resources,
+        regions=(replace(region, draws=(
+            *_glyph_draws_outside(cols, rows, gaps), *images, region.draws[-1], *controls,
+        )),),
+    ))
+
+
+def _cells(left: int, top: int, right: int, bottom: int) -> set[tuple[int, int]]:
+    return acceptance_runner._rectangle_cells(
+        acceptance_runner._LogicalRectangle(left, top, right, bottom))
+
+
+# A DOCUMENT over rows 1 to 6 whose figure has a blank row before it, three
+# picture rows and its caption.
+FIGURE_DOCUMENT_CELLS = _cells(0, 1, 12, 7)
+
+
+def _figure_document(viewport_row: int = 0) -> DocumentDraw:
+    figure = DocumentBlock(2, BlockKind.FIGURE, "fig", rows_before=1, picture_rows=3)
+    blocks = (figure,) if viewport_row else (
+        DocumentBlock(1, BlockKind.HEADING, "Doc", level=1), figure)
+    return DocumentDraw(91_000, ControlState.VISIBLE | ControlState.ENABLED, 0, 0,
+                        ObjectBounds(0, 1, 12, 6),
+                        DocumentContent(1, DocumentFlag(0), blocks, viewport_row))
+
+
+def test_a_figure_paints_the_picture_rows_its_document_leaves_it() -> None:
+    """A figure's IMAGE fills the picture rows its DOCUMENT leaves unpainted
+    and lies inside the document's claim, so the two do not overlap; its
+    claim names the document and the figure's block."""
+
+    image = ImageDraw(90_000, 0, ObjectBounds(0, 3, 12, 3), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True)
+    projection = reconstruct_retained_screen(
+        _figure_offer(image, _figure_document(), gaps=FIGURE_DOCUMENT_CELLS))
+    claim, = projection.semantic_image_claims
+    assert claim.figure == (ControlIdentity(1, 1, 91_000), 2)
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (0, 3, 12, 6)
+    assert claim.whole is None and not claim.clipped
+    document, = projection.semantic_document_claims
+    whole = acceptance_runner._LogicalRectangle(0, 3, 12, 6)
+    assert document.figures == ((2, whole, whole),)
+
+
+def test_a_figure_scrolled_partly_out_paints_only_the_part_its_document_shows() -> None:
+    """Three rows down, the figure's first two picture rows lie above the
+    document: its IMAGE keeps the whole rectangle, off the document's top,
+    and paints only the row the document shows.  Painting more is refused."""
+
+    document = _figure_document(viewport_row=3)
+    image = ImageDraw(90_000, 0, ObjectBounds(0, -1, 12, 3), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True, clip=ImageClip(0, 2, 12, 1))
+    projection = reconstruct_retained_screen(
+        _figure_offer(image, document, gaps=FIGURE_DOCUMENT_CELLS))
+    claim, = projection.semantic_image_claims
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (0, 1, 12, 2)
+    assert claim.whole == (0, -1, 12, 2) and claim.clipped
+    assert claim.figure == (ControlIdentity(1, 1, 91_000), 2)
+    over = replace(image, clip=ImageClip(0, 1, 12, 2))
+    with pytest.raises(PhysicalDesktopAcceptanceError,
+                       match="does not paint the part of figure 2 its document shows"):
+        reconstruct_retained_screen(_figure_offer(over, document, gaps=FIGURE_DOCUMENT_CELLS))
+
+
+def test_an_element_picture_partly_hidden_claims_only_the_part_painted() -> None:
+    """A picture whose top row is hidden keeps its whole rectangle, which
+    reaches under the menu bar, and claims only the rows it paints."""
+
+    image = ImageDraw(90_000, 0, ObjectBounds(2, 0, 6, 3), 7, ImageFit.CONTAIN, 255,
+                      backdrop=True, clip=ImageClip(0, 1, 6, 2))
+    projection = reconstruct_retained_screen(_figure_offer(image, gaps=_cells(2, 1, 8, 3)))
+    claim, = projection.semantic_image_claims
+    assert (claim.left, claim.top, claim.right, claim.bottom) == (2, 1, 8, 3)
+    assert claim.whole == (2, 0, 8, 3) and claim.figure is None
+
+
 def test_foreground_instrument_withholds_the_whole_status_field_claim() -> None:
     field = StatusFieldDraw(90_000, 0, ObjectBounds(2, 1, 8, 1), "", "state", 0)
     offer = _status_field_offer(field)
@@ -3618,18 +3821,21 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     journey._daybook_wheel_date = "2027-01-08"
     journey._mixed_daybook_text = mixed_text.DAYBOOK_TASK
     journey._followed_text = styled_text.EXAMPLE_LINE
+    journey._picture_shown = True
     assert journey.final_cell_markers == (
         acceptance_runner.CELL_FINAL_STATIC_MARKERS
         + (
             "2027-01-08",
             mixed_text.visual(mixed_text.DAYBOOK_TASK),
             styled_text.EXAMPLE_LINE,
+            acceptance_runner.FEXPLORER_PICTURE_FACTS,
         )
     )
     journey._pointer_text_key = None
     journey._daybook_wheel_date = None
     journey._mixed_daybook_text = None
     journey._followed_text = None
+    journey._picture_shown = False
 
     progress = journey.after_present(
         _offer("X", offer_id=6, pad_menu=True),
@@ -5778,23 +5984,31 @@ def _pointer_fixture_state(
 FEXPLORER_TABLE_ID = 22_000
 FEXPLORER_TABLE_ROWS = 30
 FEXPLORER_TABLE_TOTAL = 40
-# large.txt sorts eleventh in File Explorer's root, so its key is 11.
+# large.txt sorts eleventh in File Explorer's root, so its key is 11, the
+# sample document is among the first rows the table shows, and the sample
+# picture sits below them.
 FEXPLORER_LARGE_ORDINAL = 10
+FEXPLORER_DOCUMENT_ORDINAL = 20
+FEXPLORER_PICTURE_ORDINAL = 35
 
 
 def _fexplorer_table(
     first: int,
     selected: int | None,
+    picture: int = FEXPLORER_PICTURE_ORDINAL,
 ) -> acceptance_runner._SemanticItemViewClaim:
     """File Explorer's detail table showing rows FIRST onward, with SELECTED
-    the key of the selected row, carried wherever it is."""
+    the key of the selected row, carried wherever it is, and the sample
+    picture at ordinal PICTURE."""
 
     def name(ordinal: int) -> str:
-        return (
-            "large.txt"
-            if ordinal == FEXPLORER_LARGE_ORDINAL
-            else f"source-{ordinal:02}.src"
-        )
+        if ordinal == FEXPLORER_LARGE_ORDINAL:
+            return "large.txt"
+        if ordinal == picture:
+            return acceptance_runner.FEXPLORER_PICTURE
+        if ordinal == FEXPLORER_DOCUMENT_ORDINAL:
+            return acceptance_runner.FEXPLORER_DOCUMENT
+        return f"source-{ordinal:02}.src"
 
     ordinals = set(range(first, first + FEXPLORER_TABLE_ROWS))
     if selected is not None:
@@ -6431,11 +6645,273 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
         added_frame,
         sender,
     )
-    # Adding the task hands on to Pad, which follows a Markdown link next.
+    # Adding the task hands on to File Explorer, which previews the sample
+    # document and then the sample picture.
     assert progress == acceptance_runner.JourneyProgress("daybook-mixed-task-added")
-    assert actions[-1] == ("send_key", "alt+1", 400)
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE
+    assert actions[-1] == ("send_key", "alt+2", 400)
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE
     assert journey._mixed_daybook_text == inserted
+
+
+FEXPLORER_TABS_ID = 31_000
+PICTURE_RECT = (104, 6, 176, 30)
+
+
+def _picture_frame(
+    *,
+    table: tuple[int, int | None] | None = None,
+    status: str | None = None,
+    preview: bool = False,
+    pictures: int = 0,
+    selected_tab: int | None = None,
+) -> RichScreenProjection:
+    """File Explorer focused, with its Details and Preview tabs: the detail
+    table while Details is selected, and PICTURES IMAGE claims over the
+    preview once Preview is.  SELECTED_TAB overrides which tab is selected."""
+
+    frame = _pointer_frame(
+        FEXPLORER_BUTTON,
+        table=None if preview else table,
+        status=status,
+        semantic_status=True,
+        daybook_date=MIXED_WEEK_LATER,
+    )
+    tabs = _pad_tabset_claim(
+        frame,
+        labels=("Details", "Preview"),
+        selected=(1 if preview else 0) if selected_tab is None else selected_tab,
+        identity_base=FEXPLORER_TABS_ID,
+        tile=acceptance_runner.FEXPLORER_DESKTOP_TILE,
+    )
+    left, top, right, bottom = PICTURE_RECT
+    return replace(
+        frame,
+        semantic_tabset_claims=frame.semantic_tabset_claims + (tabs,),
+        semantic_image_claims=tuple(
+            acceptance_runner._SemanticImageClaim(
+                1, 1, 40_000 + index, left, top + index, right, bottom,
+                index + 1, ImageFit.CONTAIN, 255,
+            )
+            for index in range(pictures)
+        ),
+    )
+
+
+def _picture_facts(offer_id: int, *, blocks: bool = False) -> TerminalDisplayOffer:
+    """CELL saying what the picture is inside PICTURE_RECT, and with BLOCKS
+    drawing its half blocks there too."""
+
+    left, top, _right, _bottom = PICTURE_RECT
+    placements = [(top + 2, left + 4, acceptance_runner.FEXPLORER_PICTURE_FACTS)]
+    if blocks:
+        placements.append((top + 3, left + 4, acceptance_runner.PICTURE_HALF_BLOCK * 8))
+    return _cell_offer(offer_id, tuple(placements))
+
+
+def _document_frame(*, viewport_row: int = 0, **changes) -> RichScreenProjection:
+    """File Explorer's Preview tab carrying the sample document as one
+    DOCUMENT over PICTURE_RECT, VIEWPORT_ROW rows into its first heading."""
+
+    frame = _picture_frame(preview=True, **changes)
+    left, top, right, bottom = PICTURE_RECT
+    content = DocumentContent(
+        1,
+        DocumentFlag(0),
+        (
+            DocumentBlock(1, BlockKind.HEADING, acceptance_runner.FEXPLORER_DOCUMENT_HEADING,
+                          level=1),
+            DocumentBlock(2, BlockKind.PARAGRAPH, "Akashic is a library of Forth modules.",
+                          rows_before=1),
+        ),
+        viewport_row,
+    )
+    return replace(
+        frame,
+        semantic_document_claims=(
+            acceptance_runner._SemanticDocumentClaim(
+                ControlIdentity(1, 1, 41_000), left, top, right, bottom, content,
+            ),
+        ),
+    )
+
+
+def _document_cell(offer_id: int) -> TerminalDisplayOffer:
+    """CELL drawing the sample document's first heading in PICTURE_RECT."""
+
+    left, top, _right, _bottom = PICTURE_RECT
+    return _cell_offer(
+        offer_id, ((top, left, acceptance_runner.FEXPLORER_DOCUMENT_HEADING),)
+    )
+
+
+def test_the_sample_document_is_the_one_previewed() -> None:
+    assert akashic_tui.SAMPLE_DOCUMENT_NAME == acceptance_runner.FEXPLORER_DOCUMENT
+    assert akashic_tui.SAMPLE_DOCUMENT.decode().startswith(
+        "# " + acceptance_runner.FEXPLORER_DOCUMENT_HEADING + "\n"
+    )
+
+
+def test_document_journey_previews_the_sample_rich_then_goes_back_to_details() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE
+    journey.frame_barrier = 450
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    key = FEXPLORER_DOCUMENT_ORDINAL + 1
+    path = "/" + acceptance_runner.FEXPLORER_DOCUMENT
+    steps = (
+        # Still on Daybook: wait for Alt+2 to reach File Explorer.
+        (_mixed_daybook_frame(agenda=mixed_text.DAYBOOK_ENTRY), None, None, None),
+        (_picture_frame(table=(10, 11)), None, "fexplorer-focused-for-document",
+         ("item_select", _table_value(key))),
+        # Selected, but the status bar does not name it yet.
+        (_picture_frame(table=(10, key)), None, None, None),
+        (_picture_frame(table=(10, key), status=path), None, "fexplorer-document-selected",
+         ("activate_tab", f"1,1,{FEXPLORER_TABS_ID + 2}")),
+        # Preview shows CELL until the document is carried rich.
+        (_picture_frame(status=path, preview=True), None, None, None),
+        (_document_frame(status=path), _document_cell(1), "fexplorer-document-shown-rich",
+         ("activate_tab", f"1,1,{FEXPLORER_TABS_ID + 1}")),
+    )
+    for index, (frame, cell_offer, milestone, action) in enumerate(steps):
+        offer_id = 451 + index
+        offer = (
+            _offer("X", offer_id=offer_id, pad_menu=True)
+            if cell_offer is None
+            else replace(cell_offer, offer_id=offer_id)
+        )
+        sent_before = len(actions)
+        progress = journey.after_present(offer, 9, frame, sender)
+        assert progress == acceptance_runner.JourneyProgress(milestone), index
+        assert actions[sent_before:] == (
+            [] if action is None else [(*action, offer_id)]
+        ), index
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
+
+
+@pytest.mark.parametrize(
+    ("frame", "cell", "message"),
+    (
+        # A preview scrolled away from its first heading.
+        (lambda: _document_frame(viewport_row=1), True, "first heading"),
+        # The rich document with CELL beneath not drawing it.
+        (lambda: _document_frame(), False, "CELL does not show"),
+    ),
+)
+def test_document_journey_refuses_what_is_not_the_sample(frame, cell, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE
+    journey.frame_barrier = 450
+
+    def sender(method, value, offer, generation):
+        return "progress"
+
+    offer = _document_cell(451) if cell else _offer("X", offer_id=451, pad_menu=True)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(offer, 9, frame(), sender)
+
+
+def test_the_sample_picture_facts_are_its_own() -> None:
+    sample = akashic_tui.SAMPLE_PICTURE
+    width, height = (int.from_bytes(sample[at:at + 4], "big") for at in (4, 8))
+    assert akashic_tui.SAMPLE_PICTURE_NAME == acceptance_runner.FEXPLORER_PICTURE
+    assert acceptance_runner.FEXPLORER_PICTURE_FACTS == f"QOI, {width} \u00d7 {height}"
+
+
+def test_picture_journey_previews_the_sample_rich_over_what_cell_says_it_is() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
+    journey.frame_barrier = 450
+    actions: list[tuple[str, str, int]] = []
+
+    def sender(method, value, offer, generation):
+        assert generation == 9
+        actions.append((method, value, offer.offer_id))
+        return "progress"
+
+    key = FEXPLORER_PICTURE_ORDINAL + 1
+    path = "/" + acceptance_runner.FEXPLORER_PICTURE
+    steps = (
+        # Still on Daybook: wait for Alt+2 to reach File Explorer.
+        (_mixed_daybook_frame(agenda=mixed_text.DAYBOOK_ENTRY), None, None, None),
+        # The picture's row is below the rows shown: one detent toward it.
+        (_picture_frame(table=(0, 11)), None, "fexplorer-scrolled-to-picture",
+         ("item_scroll", _table_value(1))),
+        (_picture_frame(table=(10, 11)), None, "fexplorer-focused-for-picture",
+         ("item_select", _table_value(key))),
+        # Selected, but the status bar does not name it yet.
+        (_picture_frame(table=(10, key)), None, None, None),
+        (_picture_frame(table=(10, key), status=path), None, "fexplorer-picture-selected",
+         ("activate_tab", f"1,1,{FEXPLORER_TABS_ID + 2}")),
+        # Preview shows CELL until the terminal holds the picture.
+        (_picture_frame(status=path, preview=True), None, None, None),
+        (_picture_frame(status=path, preview=True, pictures=1), _picture_facts(1),
+         "fexplorer-picture-shown-rich", ("send_key", "alt+1")),
+    )
+    for index, (frame, cell_offer, milestone, action) in enumerate(steps):
+        offer_id = 451 + index
+        offer = (
+            _offer("X", offer_id=offer_id, pad_menu=True)
+            if cell_offer is None
+            else replace(cell_offer, offer_id=offer_id)
+        )
+        sent_before = len(actions)
+        progress = journey.after_present(offer, 9, frame, sender)
+        assert progress == acceptance_runner.JourneyProgress(milestone), index
+        assert actions[sent_before:] == (
+            [] if action is None else [(*action, offer_id)]
+        ), index
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE
+    assert journey._picture_shown
+
+
+@pytest.mark.parametrize(
+    ("stage", "frame", "cell", "message"),
+    (
+        # A picture row above the rows shown is scrolled back toward.
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE,
+         lambda: _picture_frame(table=(10, 3, 2)), None, None),
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE,
+         lambda: _pointer_frame(PAD_BUTTON, daybook_date=MIXED_WEEK_LATER), None,
+         "lost focus"),
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE,
+         lambda: _picture_frame(table=(10, FEXPLORER_PICTURE_ORDINAL + 1),
+                                status="/" + acceptance_runner.FEXPLORER_PICTURE,
+                                selected_tab=1),
+         None, "before it was activated"),
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
+         lambda: _picture_frame(preview=True, pictures=2), "facts", "2 pictures"),
+        # The rich picture with nothing beneath it saying what it is.
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
+         lambda: _picture_frame(preview=True, pictures=1), None, "CELL does not show"),
+        # CELL drawing the picture while it shows rich.
+        (acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE,
+         lambda: _picture_frame(preview=True, pictures=1), "blocks", "draws the picture"),
+    ),
+)
+def test_picture_journey_refuses_what_is_not_the_preview(stage, frame, cell, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = stage
+    journey.frame_barrier = 450
+    actions: list[tuple[str, str]] = []
+
+    def sender(method, value, offer, generation):
+        actions.append((method, value))
+        return "progress"
+
+    offer = (_offer("X", offer_id=451, pad_menu=True) if cell is None
+             else _picture_facts(451, blocks=cell == "blocks"))
+    if message is None:
+        journey.after_present(offer, 9, frame(), sender)
+        assert actions == [("item_scroll", _table_value(-1))]
+        return
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(offer, 9, frame(), sender)
 
 
 # Pad's editor while it shows notes.md or example.f, with their style runs.
@@ -6491,6 +6967,7 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
     journey._pad_pointer_bounds = _pad_editor_bounds()
     journey._daybook_wheel_date = MIXED_WEEK_LATER
     journey._mixed_daybook_text = mixed_text.DAYBOOK_ENTRY
+    journey._picture_shown = True
     actions: list[tuple[str, str, int]] = []
 
     def sender(method, value, offer, generation):
@@ -6509,7 +6986,7 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
     )
     follow = styled_text.NOTES_LINE.index(styled_text.NOTES_LINK_WORD) + 2
     steps = (
-        # Still on Daybook: wait for Alt+1 to reach Pad.
+        # Not Pad yet: wait for Alt+1 to reach it.
         (_mixed_daybook_frame(agenda=mixed_text.DAYBOOK_ENTRY), None, None, None),
         (
             _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()),
@@ -6562,13 +7039,14 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
     )
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FINAL_STAGE
     # The final CELL gate names the focus the journey ends with, the Daybook
-    # task, and the Forth file the link opened.
+    # task, the Forth file the link opened, and what the rich picture is.
     assert journey.final_cell_markers == (
         acceptance_runner.PAD_FOCUS_MARKER,
         "SOUND LAB",
         MIXED_WEEK_LATER,
         mixed_text.visual(mixed_text.DAYBOOK_ENTRY),
         styled_text.EXAMPLE_LINE,
+        acceptance_runner.FEXPLORER_PICTURE_FACTS,
     )
     assert journey.final_cell_markers[0] in journey._taskbar_line(example)
 
@@ -7907,6 +8385,31 @@ def test_backend_failure_survives_diagnostic_write_failure(tmp_path: Path) -> No
         )
 
 
+def test_backend_failure_saves_the_guest_state_when_it_can(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    status = {"state": "terminal_failed", "error": "CLOSE crossed an open upload"}
+    saved = []
+
+    def capture(client, artifact_root, failure):
+        saved.append((client, failure))
+        return Path(artifact_root) / "guest-failure.json"
+
+    monkeypatch.setattr(acceptance_runner, "_write_guest_failure_diagnostics", capture)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="guest state saved to"):
+        acceptance_runner._require_healthy_backend(status, tmp_path, "client")
+    assert saved == [("client", "CLOSE crossed an open upload")]
+
+    def broken(client, artifact_root, failure):
+        raise ConnectionError("session gone")
+
+    monkeypatch.setattr(acceptance_runner, "_write_guest_failure_diagnostics", broken)
+    with pytest.raises(PhysicalDesktopAcceptanceError,
+                       match="open upload; status saved.*guest state capture failed"):
+        acceptance_runner._require_healthy_backend(status, tmp_path, "client")
+    assert json.loads((tmp_path / "backend-failure.json").read_text()) == status
+
+
 @pytest.mark.parametrize("state", ["running", "paused", "idle", "halted"])
 def test_nonerror_backend_status_does_not_fail_acceptance(tmp_path: Path, state) -> None:
     acceptance_runner._require_healthy_backend({"state": state, "error": None}, tmp_path)
@@ -7930,10 +8433,10 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "_APTSCB-STATUS": (0x1008, 0),
     }
     record_cells = {
-        0x2000: list(range(26)),
-        0x3000: list(range(566)),
+        0x2000: list(range(28)),
+        0x3000: list(range(607)),
         0x6000: list(range(62)),
-        0x8000: list(range(124)),
+        0x8000: list(range(133)),
     }
 
     record_cells[0x8000][16] = (1 << 63) + 1230  # deadline
@@ -7979,30 +8482,31 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == UINT64_MAX
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert peek_calls == [
-        (0x8000, 124),
-        (0x2000, 26),
+        (0x8000, 133),
+        (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 54),
+        (0x4000, 95),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
-        "adapter": 18,
-        "base_magic": 10,
+        "adapter": 19,
+        "base_magic": 11,
         "context": 1,
-        "engine": 11,
-        "fault_status": 24,
-        "more_work": 22,
-        "output_needed": 23,
-        "phase": 25,
-        "producer_budget": 15,
-        "producer_bytes": 14,
-        "producer_context": 13,
-        "rich_magic": 12,
+        "engine": 12,
+        "fault_status": 25,
+        "more_work": 23,
+        "neutral_empty": 27,
+        "output_needed": 24,
+        "phase": 26,
+        "producer_budget": 16,
+        "producer_bytes": 15,
+        "producer_context": 14,
+        "rich_magic": 13,
         "session": 0,
-        "surface_cols": 19,
-        "surface_generation": 21,
-        "surface_rows": 20,
+        "surface_cols": 20,
+        "surface_generation": 22,
+        "surface_rows": 21,
     }
     producer = payload["records"]["hybrid_producer"]["fields"]
     assert producer["phase"] == 15
@@ -8014,38 +8518,38 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 298
-    assert producer["target_pending_address"] == 299
-    assert producer["next_region"] == 300
-    assert producer["next_object"] == 301
-    assert producer["active_draw"] == 302
-    assert producer["source_directory_bytes"] == 306
-    assert producer["document_count"] == 307
-    assert producer["row_damage_address"] == 308
-    assert producer["row_damage_bytes"] == 309
-    assert producer["glyph_id_map_address"] == 310
-    assert producer["glyph_id_map_bytes"] == 311
-    assert producer["source_content_epoch"] == 323
-    assert producer["collection_count"] == 336
-    assert producer["collection_items"] == 337
-    assert producer["collection_utf8"] == 338
-    assert producer["instrument_region_count"] == 415
-    assert producer["instrument_count"] == 416
-    assert producer["instrument_claim_count"] == 419
-    assert producer["base_claim_bytes"] == 420
+    assert producer["target_active_address"] == 301
+    assert producer["target_pending_address"] == 302
+    assert producer["next_region"] == 303
+    assert producer["next_object"] == 304
+    assert producer["active_draw"] == 305
+    assert producer["source_directory_bytes"] == 309
+    assert producer["document_count"] == 310
+    assert producer["row_damage_address"] == 311
+    assert producer["row_damage_bytes"] == 312
+    assert producer["glyph_id_map_address"] == 313
+    assert producer["glyph_id_map_bytes"] == 314
+    assert producer["source_content_epoch"] == 326
+    assert producer["collection_count"] == 339
+    assert producer["collection_items"] == 340
+    assert producer["collection_utf8"] == 341
+    assert producer["instrument_region_count"] == 418
+    assert producer["instrument_count"] == 419
+    assert producer["instrument_claim_count"] == 422
+    assert producer["base_claim_bytes"] == 423
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 607
     assert producer["collection_items"] != producer["collection_utf8"]
-    assert producer["field_count"] == 482
-    assert producer["series_count"] == 497
-    assert producer["series_slots"] == 499
-    assert producer["waveform_count"] == 504
-    assert producer["omitted_graphs_used"] == 509
-    assert producer["extension_address"] == 516
+    assert producer["field_count"] == 485
+    assert producer["series_count"] == 500
+    assert producer["series_slots"] == 502
+    assert producer["waveform_count"] == 507
+    assert producer["omitted_graphs_used"] == 512
+    assert producer["extension_address"] == 519
     session = payload["records"]["pt_session"]
-    assert len(session["cells"]) * 8 == 992
+    assert len(session["cells"]) * 8 == 1064
     assert session["fields"]["deadline"] == (1 << 63) + 1230
     assert session["fields"]["close_reason"] == 6
     assert session["fields"]["close_pending"] == UINT64_MAX
@@ -8073,8 +8577,8 @@ def test_pt_session_diagnostic_rejects_malformed_bounded_snapshot(malformed) -> 
                 }}
             assert method == "peek"
             requests.append(params)
-            assert params == {"address": 0x8000, "count": 124}
-            response = {"address": 0x8000, "cell_size": 8, "values": list(range(124))}
+            assert params == {"address": 0x8000, "count": 133}
+            response = {"address": 0x8000, "cell_size": 8, "values": list(range(133))}
             if malformed == "short":
                 response["values"].pop()
             elif malformed == "address":
@@ -8088,7 +8592,7 @@ def test_pt_session_diagnostic_rejects_malformed_bounded_snapshot(malformed) -> 
     payload = acceptance_runner._guest_state_payload(
         Client(), {"paused": True}, reason_name="failure", reason="original exception",
     )
-    assert requests == [{"address": 0x8000, "count": 124}]
+    assert requests == [{"address": 0x8000, "count": 133}]
     assert payload["failure"] == "original exception"
     assert payload["record_source"] == "failure_snapshot"
     assert payload["variables"]["_A1D-FAILURE-MS"]["value"] == UINT64_MAX - 4
@@ -8142,8 +8646,8 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         },
     }
     record_cells = {
-        0x2000: list(range(26)),
-        0x3000: list(range(566)),
+        0x2000: list(range(28)),
+        0x3000: list(range(607)),
         0x6000: list(range(62)),
     }
     requested = set()
@@ -8203,10 +8707,10 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         for method, params in calls
         if method == "peek"
     ] == [
-        (0x2000, 26),
+        (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 54),
+        (0x4000, 95),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -8214,7 +8718,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert payload["machine"]["forth"]["word"]["name"] == (
         "_RTHP-BUILD-CANDIDATE"
     )
-    assert payload["records"]["publisher"]["fields"]["phase"] == 25
+    assert payload["records"]["publisher"]["fields"]["phase"] == 26
     producer = payload["records"]["hybrid_producer"]["fields"]
     assert producer["phase"] == 15
     assert producer["candidate_attempt"] == 20
@@ -8225,28 +8729,28 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 298
-    assert producer["target_pending_address"] == 299
-    assert producer["source_directory_bytes"] == 306
-    assert producer["active_draw"] == 302
-    assert producer["row_damage_address"] == 308
-    assert producer["row_damage_bytes"] == 309
-    assert producer["glyph_id_map_address"] == 310
-    assert producer["glyph_id_map_bytes"] == 311
-    assert producer["source_content_epoch"] == 323
-    assert producer["collection_count"] == 336
-    assert producer["instrument_region_count"] == 415
-    assert producer["instrument_count"] == 416
-    assert producer["base_claim_bytes"] == 420
+    assert producer["target_active_address"] == 301
+    assert producer["target_pending_address"] == 302
+    assert producer["source_directory_bytes"] == 309
+    assert producer["active_draw"] == 305
+    assert producer["row_damage_address"] == 311
+    assert producer["row_damage_bytes"] == 312
+    assert producer["glyph_id_map_address"] == 313
+    assert producer["glyph_id_map_bytes"] == 314
+    assert producer["source_content_epoch"] == 326
+    assert producer["collection_count"] == 339
+    assert producer["instrument_region_count"] == 418
+    assert producer["instrument_count"] == 419
+    assert producer["base_claim_bytes"] == 423
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 566
-    assert producer["series_samples_used"] == 494
-    assert producer["series_chunks"] == 500
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 607
+    assert producer["series_samples_used"] == 497
+    assert producer["series_chunks"] == 503
 
 
 def test_timeout_state_message_preserves_timeout_and_resumes_after_failure(
