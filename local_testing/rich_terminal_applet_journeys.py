@@ -58,6 +58,9 @@ FEXP_TABLE_COLUMNS = (
 )
 PAD_OPEN_PROMPT_MARKER = "Open:"
 DAYBOOK_ALONE_FOCUS_MARKER = "[1:Daybook*]"
+# The notice Desk shows when the reminder the Daybook-alone boot makes
+# fires (akashic_tui.DAYBOOK_REMINDER_TITLE).
+DAYBOOK_REMINDER_NOTICE = "Reminder: Water the plants"
 STREAMS_ALONE_FOCUS_MARKER = "[1:Streams*]"
 # Streams' feed alone on Desk (fixtures/streams/desk-timeline.json), in
 # feed order: a post with a web link, a reply to it, and another post.
@@ -432,7 +435,8 @@ class PadAloneJourney(_AppletJourney):
 
 class DaybookAloneJourney(_AppletJourney):
     """Desk with Daybook: add a task that mixes scripts through its prompt,
-    then check it off in the agenda.
+    check it off in the agenda, then see the notice of the reminder the boot
+    made when Desk fires it.
 
     The prompt shows the typed text in visual order.  Backspace after an
     emoji sequence deletes all of it; a click on a Han character's second
@@ -441,7 +445,8 @@ class DaybookAloneJourney(_AppletJourney):
     and the task is an unchecked checkable item under the TASKS heading; a
     CHECK on it marks it done.  While the prompt is open, Daybook's menu,
     calendar grid and agenda are withheld, as the document-atomic fallback
-    requires, and its cells stay complete.
+    requires, and its cells stay complete.  Desk's toast of the reminder's
+    notice must then reach the physical frame on the bottom row.
     """
 
     focus_marker = DAYBOOK_ALONE_FOCUS_MARKER
@@ -455,7 +460,9 @@ class DaybookAloneJourney(_AppletJourney):
         INSERTED,
         ADDED,
         CHECKED,
-    ) = range(9)
+        NOTICE_WAIT,
+        NOTICE,
+    ) = range(11)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -464,7 +471,7 @@ class DaybookAloneJourney(_AppletJourney):
 
     @property
     def final_stage(self) -> int:
-        return self.CHECKED
+        return self.NOTICE
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
@@ -553,7 +560,22 @@ class DaybookAloneJourney(_AppletJourney):
             if task is None or not task.state & ItemState.CHECKED:
                 return JourneyProgress()
             _require_cell_text_in(offer, "[x]", bounds, _WHERE)
-            return self._done("daybook-task-checked", offer)
+            self.stage = self.NOTICE_WAIT
+            self.frame_barrier = offer.offer_id
+            return JourneyProgress(self._milestone("daybook-task-checked"))
+        if self.stage == self.NOTICE_WAIT:
+            # The toast is an ordinary overlay on Desk's bottom row: the rich
+            # frame carries it as residual glyphs, and CELL as its cells.
+            bottom = projection.rows - 1
+            if DAYBOOK_REMINDER_NOTICE not in projection.row_text(bottom):
+                return self._wait(f"Desk's notice {DAYBOOK_REMINDER_NOTICE!r}")
+            if not any(
+                row == bottom for row, _ in offer.cell.find(DAYBOOK_REMINDER_NOTICE)
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "CELL does not show Desk's notice on its bottom row"
+                )
+            return self._done("daybook-reminder-notice", offer)
         if not prompt:
             if self.stage == self.PROMPT:
                 return JourneyProgress()

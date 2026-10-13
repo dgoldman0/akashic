@@ -1,6 +1,21 @@
 \ =====================================================================
 \  scripted.f - Deterministic streaming provider for tests and demos
 \ =====================================================================
+\  Its replies depend only on the prompt.  A source may give the provider
+\  a catalog (run-settings.f), as device-flow.f does; a turn then runs on
+\  the selected model, or on the one its designation names, which the
+\  catalog must offer.  Without a catalog it runs no designated turn.
+\  SCRIPTED-LAST-RUN tells which model the last turn ran on.
+\
+\  A turn's reference is not echoed: the reply says how many bytes it
+\  had and the first eight hex digits of its SHA3-256, before the prompt,
+\  and SCRIPTED-LAST-REFERENCE tells the same.
+\
+\  After echoing the prompt, a prompt naming a "source" or a "task" asks
+\  for a tool, one naming an "approval" asks for an approval, and one
+\  naming "linger" keeps the run open, saying nothing more, until it is
+\  cancelled.  Any other prompt completes.
+\ =====================================================================
 
 PROVIDED akashic-agent-scripted-provider
 
@@ -8,6 +23,7 @@ REQUIRE ../../provider-source.f
 REQUIRE ../../../../../interop/request-bus.f
 REQUIRE ../../../../../interop/codecs/json-value.f
 REQUIRE ../../../../../utils/string.f
+REQUIRE ../../../../../math/sha3.f
 
 0 CONSTANT _SP-IDLE
 1 CONSTANT _SP-STREAMING
@@ -25,7 +41,16 @@ REQUIRE ../../../../../utils/string.f
 40 CONSTANT _SP-SEQUENCE
 48 CONSTANT _SP-PROVIDER
 56 CONSTANT _SP-TURN-CONTEXT-N
-64 CONSTANT _SP-EVENT
+64 CONSTANT _SP-MODEL           \ the last turn's model, effort and tier,
+72 CONSTANT _SP-EFFORT          \ or 0
+80 CONSTANT _SP-TIER
+88 CONSTANT _SP-VERBOSITY
+96 CONSTANT _SP-REFERENCE-U      \ the last turn's reference: its bytes,
+104 CONSTANT _SP-REFERENCE-DIGEST \ and its SHA3-256
+\ What the reply says before the prompt.
+136 CONSTANT _SP-LEAD-U
+144 CONSTANT _SP-LEAD
+_SP-LEAD 80 + CONSTANT _SP-EVENT
 _SP-EVENT AGENT-EVENT-SIZE + CONSTANT SCRIPTED-PROVIDER-CONTEXT-SIZE
 
 : _SPC.STATE      ( context -- a ) _SP-STATE + ;
@@ -36,10 +61,85 @@ _SP-EVENT AGENT-EVENT-SIZE + CONSTANT SCRIPTED-PROVIDER-CONTEXT-SIZE
 : _SPC.SEQUENCE   ( context -- a ) _SP-SEQUENCE + ;
 : _SPC.PROVIDER   ( context -- a ) _SP-PROVIDER + ;
 : _SPC.TURN-CONTEXT-N ( context -- a ) _SP-TURN-CONTEXT-N + ;
+: _SPC.MODEL      ( context -- a ) _SP-MODEL + ;
+: _SPC.EFFORT     ( context -- a ) _SP-EFFORT + ;
+: _SPC.TIER       ( context -- a ) _SP-TIER + ;
+: _SPC.VERBOSITY  ( context -- a ) _SP-VERBOSITY + ;
+: _SPC.REFERENCE-U ( context -- a ) _SP-REFERENCE-U + ;
+: _SPC.REFERENCE-DIGEST ( context -- a ) _SP-REFERENCE-DIGEST + ;
+: _SPC.LEAD-U     ( context -- a ) _SP-LEAD-U + ;
+: _SPC.LEAD       ( context -- a ) _SP-LEAD + ;
 : _SPC.EVENT      ( context -- event ) _SP-EVENT + ;
 
 : SCRIPTED-LAST-CONTEXT-N  ( provider -- count )
     APROV.CONTEXT @ _SPC.TURN-CONTEXT-N @ ;
+
+\ The model the last turn ran on, with its effort and tier (0 for none)
+\ and its verbosity; all 0 when the provider has no catalog.
+: SCRIPTED-LAST-RUN  ( provider -- model effort tier verbosity )
+    APROV.CONTEXT @ >R
+    R@ _SPC.MODEL @ R@ _SPC.EFFORT @ R@ _SPC.TIER @ R> _SPC.VERBOSITY @ ;
+
+\ The last turn's reference: its bytes and the address of its SHA3-256,
+\ all zero when it had none.
+: SCRIPTED-LAST-REFERENCE  ( provider -- u digest )
+    APROV.CONTEXT @ DUP _SPC.REFERENCE-U @ SWAP _SPC.REFERENCE-DIGEST ;
+
+\ Adds text to what the reply says before the prompt.
+: _SCRIPTED-LEAD+  ( a u context -- )
+    >R DUP R@ _SPC.LEAD-U @ + 80 > IF 2DROP R> DROP EXIT THEN
+    R@ _SPC.LEAD R@ _SPC.LEAD-U @ + SWAP DUP R> _SPC.LEAD-U +! MOVE ;
+
+: _SCRIPTED-HEX  ( nibble -- c ) 15 AND DUP 10 < IF 48 + ELSE 87 + THEN ;
+
+VARIABLE _SPR-C
+CREATE _SPR-DIGIT 1 ALLOT
+
+\ Adds byte X's two hex digits to what the reply says before the prompt.
+: _SCRIPTED-HEX+  ( x -- )
+    DUP 4 RSHIFT _SCRIPTED-HEX _SPR-DIGIT C! _SPR-DIGIT 1 _SPR-C @ _SCRIPTED-LEAD+
+    _SCRIPTED-HEX _SPR-DIGIT C! _SPR-DIGIT 1 _SPR-C @ _SCRIPTED-LEAD+ ;
+
+\ Records TURN's reference, and what the reply says before the prompt:
+\ the reference's bytes and the first eight hex digits of its SHA3-256,
+\ when it has one.
+: _SCRIPTED-REFERENCE!  ( turn context -- )
+    DUP _SPR-C ! 0 SWAP _SPC.LEAD-U !
+    ATURN-REFERENCE DUP _SPR-C @ _SPC.REFERENCE-U !
+    ?DUP IF
+        _SPR-C @ _SPC.REFERENCE-DIGEST SHA3-256-HASH
+        S" With a reference of " _SPR-C @ _SCRIPTED-LEAD+
+        _SPR-C @ _SPC.REFERENCE-U @ NUM>STR _SPR-C @ _SCRIPTED-LEAD+
+        S"  bytes, SHA3 " _SPR-C @ _SCRIPTED-LEAD+
+        4 0 DO _SPR-C @ _SPC.REFERENCE-DIGEST I + C@ _SCRIPTED-HEX+ LOOP
+        S" . " _SPR-C @ _SCRIPTED-LEAD+
+    ELSE
+        DROP _SPR-C @ _SPC.REFERENCE-DIGEST 32 0 FILL
+    THEN
+    S" You asked: " _SPR-C @ _SCRIPTED-LEAD+ ;
+
+\ Records the model TURN runs on, with its options: the one its
+\ designation names, which the provider's catalog must offer, or else
+\ the selection.  2 when the catalog does not offer the designation.
+: _SCRIPTED-MODEL!  ( turn context -- ior )
+    >R ATURN.DESIGNATION @ ?DUP 0= IF
+        R@ _SPC.PROVIDER @ APROV-RUN-SETTINGS ?DUP IF
+            DUP ARSET-SELECTED-MODEL DUP R@ _SPC.MODEL !
+            DUP ARMODEL-SELECTED-EFFORT R@ _SPC.EFFORT !
+            ARMODEL-SELECTED-TIER R@ _SPC.TIER !
+            ARSET.VERBOSITY @ R> _SPC.VERBOSITY ! 0 EXIT
+        THEN
+        0 R@ _SPC.MODEL ! 0 R@ _SPC.EFFORT ! 0 R@ _SPC.TIER !
+        0 R> _SPC.VERBOSITY ! 0 EXIT
+    THEN
+    DUP R@ _SPC.PROVIDER @ APROV-RUN-SETTINGS ARSET-DESIGNATION
+    IF 2DROP R> DROP 2 EXIT THEN                      ( designation model )
+    DUP R@ _SPC.MODEL !
+    OVER ARDES-EFFORT 2 PICK ARMODEL-FIND-EFFORT
+    OVER ARMODEL-EFFORT-NTH R@ _SPC.EFFORT !
+    OVER ARDES-TIER 2 PICK ARMODEL-FIND-TIER
+    OVER ARMODEL-TIER-NTH R@ _SPC.TIER !
+    DROP ARDES.VERBOSITY @ R> _SPC.VERBOSITY ! 0 ;
 
 VARIABLE _SPE-KIND
 VARIABLE _SPE-NA
@@ -95,6 +195,8 @@ VARIABLE _SPS-C
     _SPS-C ! _SPS-Q ! _SPS-T !
     _SPS-C @ _SPC.STATE @ _SP-IDLE <> IF 1 EXIT THEN
     _SPS-T @ ATURN-VALID? 0= IF 1 EXIT THEN
+    _SPS-T @ _SPS-C @ _SCRIPTED-MODEL! ?DUP IF EXIT THEN
+    _SPS-T @ _SPS-C @ _SCRIPTED-REFERENCE!
     _SPS-T @ ATURN-PROMPT _SPS-U ! _SPS-A !
     _SPS-C @ _SPC.PROMPT-A @ ?DUP IF FREE THEN
     _SPS-U @ ALLOCATE DUP IF SWAP DROP EXIT THEN
@@ -131,7 +233,7 @@ VARIABLE _SPS-C
             _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT
         ENDOF
         1 OF
-            AEV-TEXT-DELTA 0 0 S" You asked: "
+            AEV-TEXT-DELTA 0 0 _SPP-C @ _SPC.LEAD _SPP-C @ _SPC.LEAD-U @
             _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT
         ENDOF
         2 OF
@@ -140,6 +242,11 @@ VARIABLE _SPS-C
             _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT
         ENDOF
         3 OF
+            _SPP-C @ _SPC.PROMPT-A @ _SPP-C @ _SPC.PROMPT-U @
+            S" linger" STR-STRI-CONTAINS IF
+                \ The run stays open, saying nothing more, until cancelled.
+                -1 _SPP-C @ _SPC.STEP +! 0
+            ELSE
             _SPP-C @ _SPC.PROMPT-A @ _SPP-C @ _SPC.PROMPT-U @
             S" source" STR-STRI-CONTAINS IF
                 _SP-WAITING _SPP-C @ _SPC.STATE !
@@ -162,6 +269,7 @@ VARIABLE _SPS-C
             ELSE
                 _SPP-Q @ _SPP-C @ _SCRIPTED-FINISH-MESSAGE
                 _SP-IDLE _SPP-C @ _SPC.STATE !
+            THEN
             THEN
             THEN
             THEN

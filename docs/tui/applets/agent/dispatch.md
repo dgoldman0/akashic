@@ -1,0 +1,283 @@
+# The Agent's scheduled runs
+
+`akashic/tui/applets/agent/dispatch.f` (`ADISP-`) runs the scheduled work
+Desk's [broker](../desk/schedule-broker.md) hands the Agent. Each run
+arrives as a plain
+[dispatch request](../../../interop/scheduled-actions.md#requests), with
+the authority the broker compiled for it from the user's permission. The
+Agent:
+- starts the run on exactly the model the request names;
+- runs it in a conversation of its own, never the chat's;
+- records it in its [run store](dispatch-store.md);
+- tells the broker how it stands and how it ended.
+
+The Agent lists the runs, and shows each one's transcript, in its
+[scheduled runs view](scheduled-runs.md).
+
+## One run at a time
+
+The Agent runs one thing at a time. A scheduled run that cannot start
+now, because chat or another scheduled run is running, waits and keeps its
+place in line. The broker offers it again once the Agent is idle, and the
+first run in line goes first.
+
+Chat waits behind scheduled runs. While a scheduled run waits or runs,
+`ARUNTIME-SEND` answers `ARUNTIME-E-HELD`, and the Agent shows "A
+scheduled run goes first". Chat cannot cancel a scheduled run either:
+`ARUNTIME-CANCEL` gives the same answer. Only Desk cancels one, for the
+user, for a revoked permission, or at shutdown.
+
+## Before a run starts
+
+A run is refused, and nothing is recorded, when:
+
+| Check | Reason |
+|---|---|
+| The Agent's provider is not the one the request names | model unavailable |
+| The provider has no catalog, or its catalog does not offer exactly the model, effort, tier and verbosity named | model unavailable |
+| The catalog is still loading, or the provider is not connected, or it needs a sign-in it does not have | Agent unavailable |
+| The prompt, with as much of its document as the run may disclose, does not fit the provider's room for a turn's input (`APROV-INPUT-FITS?`) | too large for the model |
+| The authority is no longer active, or cannot disclose the prompt | invalid request |
+| The run store cannot record the run | Agent unavailable |
+
+A refused run ends blocked. Its authority stays the broker's, which frees
+it.
+
+A run that passes is recorded, accepted, and then started. If it cannot
+start, it ends failed (its provider did not start), or blocked when there
+was no memory for its conversation. Its record keeps whatever its
+conversation says.
+
+## A run's document
+
+A run may name one exact version of a document as its context. The
+broker attaches the document through its owner for the run's start alone
+and lends `ADISP-START` a [resource client](../../../interop/resource-client.md)
+for it. Once the run is recorded, the Agent reads that version as the run
+([context-read.f](#reading-a-document)), and hands its text to the turn as
+a reference: the model reads it as data, never as instructions. The
+provider has taken the text once the start returns, and the Agent keeps no
+copy. The transcript notes which version was read, as a system line such as
+`Read the document: Field notes (revision 3, 21 bytes)`, never its text.
+
+| What happened | Outcome and reason |
+|---|---|
+| No document could be read: no client, or its owner is gone | blocked: document unavailable |
+| The document is no longer the version named | stopped for review: the document changed |
+| It is larger than the run may still disclose | ran out: over the disclosure limit |
+| The prompt and the text do not fit the provider's input | blocked: too large for the model |
+| The read failed, or the content is not UTF-8 text | failed: document unreadable |
+
+Each of these ends the run recorded but never started.
+
+### Reading a document
+
+`akashic/tui/applets/agent/context-read.f` (`ACREAD-`) reads it, each
+request under a one-use grant from the run
+([run-grant.f](#one-use-grants)):
+
+1. It describes the document, and stops when its current revision is not
+   the one the locator names, or its size is larger than the room the
+   run may still disclose.
+2. It takes a snapshot of that exact version; the resource client checks
+   the content against the locator's digest.
+3. The content must be UTF-8 text no larger than the room.
+
+The reader holds the text until `ACREAD-FREE`, which wipes it. The
+requests go as the Agent principal, with the run's Mandate and an
+invocation id of their own. Their arguments are not sealed, since a
+snapshot's carry a digest as bytes, which the typed seal cannot encode;
+the reader prepares, grants and sends each request at once, and nothing
+else holds it.
+
+| Word | Effect |
+|---|---|
+| `ACREAD-SIZE` | `( -- bytes )` |
+| `ACREAD-INIT` | `( reader -- )` |
+| `ACREAD-READ` | `( locator source run room reader -- status )` |
+| `ACREAD-TEXT` `ACREAD-TITLE` | `( reader -- a u )` |
+| `ACREAD-REVISION` | `( reader -- revision )` |
+| `ACREAD-FREE` | `( reader -- )` |
+
+### One-use grants
+
+`akashic/tui/applets/agent/run-grant.f` (`AGRANT-ISSUE ( grant-flags
+facet-flags request run bus -- status )`) issues a request a one-use grant
+from the run that makes it. The run's Mandate must be active and its facet
+must allow the request's operation on its target with the flags asked for;
+a grant on the Mandate's say alone is only for observing, and a reviewed
+commit must fall in the Mandate's commit window. A grant lasts a minute,
+and never past the run's deadline. The tool gateway issues its grants
+through the same word.
+
+## How a run ends
+
+| End | Outcome and reason |
+|---|---|
+| The model finished | completed |
+| The model asked for a tool or an approval | stopped for review: asked to use a tool, or asked for approval |
+| The run's time ran out | ran out: out of time |
+| Its reply passed the run's limit | ran out: reply too long |
+| Desk cancelled it | cancelled: by you, Desk shut down, or permission revoked |
+| The provider failed, or ended the run itself | failed: provider error |
+
+A scheduled run is offered no tools and reads no chat history. If its
+model asks for a tool or an approval anyway, the request is shown in its
+transcript and never made: the run stops for review.
+
+A reply keeps no more than the run's output limit, cut where a character
+ends. A reply past the limit runs out of room, however the run ended.
+
+When a run ends, its conversation's messages go to the run store as its
+transcript. A store that fails to write is tried again at the next pump.
+One that cannot take the end at all is given up on. A blocked store's
+next open finds the run still in flight and ends it as indeterminate.
+
+## Operations
+
+```forth
+ADISP-SIZE    ( -- bytes )
+ADISP-INIT    ( runtime vfs dispatch -- status )
+ADISP-FINI    ( dispatch -- )
+ADISP-VALID?  ( dispatch -- flag )
+ADISP-STORE   ( dispatch -- store )
+ADISP-START   ( request amrun source response dispatch -- status )
+ADISP-VET     ( request dispatch -- reason|0 )
+ADISP-MODELS  ( buffer capacity dispatch -- bytes status )
+ADISP-STATUS  ( key response dispatch -- status )
+ADISP-CANCEL  ( key reason dispatch -- status )
+ADISP-IDLE?   ( dispatch -- flag )
+ADISP-BUSY?   ( dispatch -- flag )
+ADISP-PUMP    ( dispatch -- )
+```
+
+`ADISP-INIT` configures a dispatcher for a runtime, with its run store at
+`/agent-dispatch.bin` in the VFS. It opens the store, and it ends as
+interrupted any run the store shows still in flight: the Agent was running
+it when it last stopped. The status is the store's (`ADST-S-`). The
+dispatcher works whatever state the store is in, so a store that cannot be
+used can say why.
+
+`ADISP-START`, `ADISP-STATUS` and `ADISP-CANCEL` answer with the dispatch
+contract's `SDSP-S-` statuses, as Desk's broker expects of its handler.
+- `ADISP-START` takes SOURCE, a resource client for the document the run
+  names, lent for that start alone, or 0. It answers:
+  - `STARTED`: the Agent owns the authority.
+  - `WAITING`: the run keeps its place in line.
+  - `RUNNING` or `ENDED`: a run the Agent knows by its dispatch key. A
+    request that is not the one its key's run was started for conflicts:
+    it ends indeterminate, and nothing new starts.
+  - `ENDED`: a run refused, or one that could not start.
+
+  The authority stays the caller's unless the answer is `STARTED`.
+- `ADISP-STATUS` answers `RUNNING`, `WAITING`, `ENDED` or `UNKNOWN`. A
+  response names the run's RID, its permission at its revision, and its
+  Practice. Its summary gives the outcome, the reason and how many bytes of
+  reply the run kept, never anything the run said. A summary larger than
+  the response's capacity answers `SMALL`.
+- `ADISP-CANCEL` takes a waiting run out of line, or stops the current
+  run. A reason that cannot explain a cancelled run counts as the user's.
+
+`ADISP-VET` and `ADISP-MODELS` serve a schedule before it is approved; see
+below.
+
+`ADISP-IDLE?` says whether a run could start now. `ADISP-BUSY?` says
+whether a scheduled run waits or runs, for Desk's shutdown question.
+
+`ADISP-PUMP` follows the current run after each runtime pump. It stops the
+run once its reply passes its limit, takes its end once it is over, and
+records that end. `ADISP-FINI` ends the current run as Desk shuts down,
+records what it can, releases chat, and closes the store.
+
+A run's correlation id is 2^48 plus its serial in the run store, so it
+never meets a chat run's id.
+
+## Before a schedule is approved
+
+Desk's broker asks the Agent two things through its
+[handler](../desk/schedule-broker.md#the-agent-as-the-handler) before a
+schedule's first run.
+
+`ADISP-VET` says why the Agent could not run an approval's request, which
+names no occurrence: the reason `ADISP-START` would refuse it for, from the
+first four checks above, or 0 when it could. The authority is not looked
+at, since an approval has none yet. A request that names an occurrence is
+invalid, and without a dispatcher the Agent is unavailable. A model the
+catalog does not offer, and a prompt too large for it, stay so until the
+catalog changes; an Agent that is not connected or not signed in, or
+whose catalog is still loading, may become available. Desk shows the
+reason as it asks its user.
+
+`ADISP-MODELS` writes the models the Agent can run as a
+[model list](../../../interop/scheduled-actions.md#model-lists): its
+provider's id, and each model its catalog offers, with its label, whether
+it takes a verbosity, and its efforts and tiers. Daybook offers these when
+a schedule names its model. The list is measured before it is written. One
+longer than the buffer answers `SDSP-S-SMALL` with the bytes it needs, and
+writes nothing. An Agent whose catalog is not ready, or whose provider has
+none, answers `SDSP-S-UNAVAILABLE`.
+
+## The runtime's side
+
+The runtime (`runtime.f`) gives a run a conversation of its own:
+
+| Word | Stack | Description |
+|---|---|---|
+| `ARUNTIME-IDLE?` | `( runtime -- flag )` | Whether a run could start now |
+| `ARUNTIME-RUN-START` | `( address length reference-a reference-u run-id designation conversation amrun runtime -- ior )` | Starts a run in its own conversation, with a reference (0 0 for none), under authority lent until it starts; the prompt and the reference count against its disclosure |
+| `ARUNTIME-RUN-ENDED?` | `( runtime -- flag )` | Whether that run is over, its end not yet taken |
+| `ARUNTIME-RUN-TAKE` | `( runtime -- conversation status cause )` | Hands back its conversation, the status it ended in, and why it stopped for review |
+| `ARUNTIME-RUN-STOP` | `( status runtime -- ior )` | Stops it, ending it cancelled or expired |
+| `ARUNTIME-HOLD!` | `( flag runtime -- )` | Holds chat while a scheduled run waits or runs |
+
+While such a run runs, the runtime's status is the run's. Once its end is
+taken, the runtime goes back to the status it had before, so chat sees no
+change.
+
+## Qualification
+
+`local_testing/test_agent_dispatch.py` runs a real runtime over the
+device-flow source's scripted provider and catalog, with the run store on a
+RAM filesystem and authority compiled as Desk's broker compiles it. It
+checks:
+- a run on the model it names while chat keeps its selection, chat held
+  and unable to cancel it, its transcript, the names in its answers, and
+  when it ran;
+- known keys, and a conflicting request that starts nothing;
+- 14 refusals that record nothing and leave the authority the caller's,
+  among them a provider signed out and one signing in, while a provider
+  that takes no sign-in runs whatever its sign-in says;
+- stopping for review on a tool call and on an approval request, and the
+  next run's end being its own;
+- the waiting order, and chat waiting behind scheduled runs;
+- a waiting run refused, or unable to start, when its turn comes;
+- cancelling a running and a waiting run;
+- output limits, including a cut that would split a character and a run
+  that completed before the dispatcher looked, and time limits;
+- a restart, including one whose reconcile could not be written;
+- shutdown with a run in flight and with runs waiting;
+- a store that fails to write an end, retried and given up on, and a store
+  that cannot be used;
+- a start the provider refuses;
+- no chat history and no tools for a scheduled turn;
+- the runtime's own words, used directly.
+
+Disabling any one of 96 guarded behaviors of the dispatcher, or of 40 in
+the runtime's part, makes a check fail, except five:
+- the summary's check that it fits its buffer, which the catalog's texts
+  never fill;
+- the dispatcher's alignment check, which its store repeats;
+- the end a review stop begins itself, which the provider's own cancel
+  event also brings;
+- `ARUNTIME-IDLE?`'s checks for an active run and for a running status,
+  each of which the other covers, since a run sets both.
+
+`local_testing/test_desk_schedule_agent.py` runs the dispatcher as Desk's
+broker's handler, and checks `ADISP-VET` and `ADISP-MODELS` through it:
+each reason a schedule could not run for, a prompt exactly at the
+provider's room and one byte over, asking about a schedule while another
+runs, and the model list byte for byte against a Python encoder, written
+over nonzero bytes, for a buffer of exactly its size and one byte short,
+for a model without a verbosity, and for an Agent without a ready catalog
+or without a dispatcher. Disabling any one of their 26 guarded behaviors
+makes a check fail.

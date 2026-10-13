@@ -22,6 +22,22 @@
 <item text=Previous_Day do=previous-day/>
 <item text=Next_Day do=next-day/>
 </menu>
+<menu label=Automations>
+<item text=Show_Automations do=automations key=F4/>
+<item text=New_Reminder do=reminder-new/>
+<item text=New_Agent_Run do=agent-run-new key=Ctrl+G/>
+<separator/>
+<item text=Mark_Reviewed do=automation-review/>
+<item text=Run_Now do=automation-run/>
+<item text=Ask_for_Approval do=automation-ask/>
+<item text=Cancel_Run do=automation-cancel/>
+<item text=Pause_or_Resume do=automation-pause/>
+<item text=Archive_or_Restore do=automation-archive/>
+<item text=Delete_Automation do=automation-delete/>
+<separator/>
+<item text=Show_Archived do=automation-archived/>
+<item text=Default_Zone do=automation-zone/>
+</menu>
 <menu label=Help>
 <item text=About_Daybook do=about/>
 </menu>
@@ -40,4 +56,6 @@
 <action do=delete key=Delete/>
 <action do=today key=Home/>
 <action do=quit key=Ctrl+Q/>
+<action do=automations key=F4/>
+<action do=agent-run-new key=Ctrl+G/>
 </uidl>

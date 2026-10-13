@@ -40,6 +40,33 @@ SSE events, projects native capability schemas into function tools, runs tool
 calls through Desk's Tool Gateway and approval policy, returns tool output, and
 continues without relying on server-side conversation storage.
 
+Each session builds its requests from a configuration. An ordinary turn's
+session uses the provider's configuration, which follows the selected model.
+A designated turn's session gets its own copy, which the provider's
+designator configures for the model the turn names. The designator has the
+signature `( designation config context -- status )`, returns an `ARSET-`
+status, and is set with `OPENAI-PROVIDER-DESIGNATOR!`. The copy lives as long
+as the session, so a designated turn never changes the selection. A provider
+without a designator refuses a designated turn with `OAIR-S-MODEL`. So does a
+designator that refuses the turn; one that runs out of room is
+`OAIR-S-CAPACITY`. `OAIR-SESSION-CONFIG` gives the configuration a session
+uses.
+
+A session sizes a turn's input (its history and prompt as JSON), the
+request body and the tool history it gathers to what they hold, so only
+memory bounds them. Each encoder writes into the buffer it is given and,
+when that is too small, returns the length it needs with
+`OAIREQ-S-CAPACITY`; `0 0` asks for the length alone. The session then takes
+a buffer of exactly that length and writes again. The body is lent to the
+HTTP request, which sends it after the head without copying it, and the
+head's buffer starts at 1 KiB and doubles until the head fits. Each buffer
+is zeroed before it is freed. The encoders check that the input and history
+they are given are JSON, and the session checks each history item, bounded
+by their own length (`JSON-VALID-LIMIT?`) rather than the process-wide
+64 KiB gate of `JSON-VALID?`. `OAI-TURN-INPUT-U` gives the exact bytes a
+turn with no history takes, and the provider reports them through
+`APROV-INPUT` with a room of -1.
+
 The request body remains owned until a valid 200 SSE response accepts it. On
 the first 401 for one logical request, the provider closes the model transport,
 starts `AAUTH-REFRESH`, waits while the runtime pumps authentication, and then
@@ -80,7 +107,12 @@ The current deterministic profiles require no API key or network:
 - `openai-provider` exercises HTTP/SSE, tools, approval, continuation,
   asynchronous token rotation, exact-body 401 replay, one-time history commit,
   terminal repeated authorization failure, and cancellation through a recorded
-  native transport.
+  native transport. It also checks designated turns: without a designator, or
+  with one that refuses or runs out of room, the turn starts nothing. With
+  one, the request names the designated model while the provider's
+  configuration stays as it was.
+- `test_agent_input.py` checks the input room against what the encoder
+  writes, at the buffer's exact boundary.
 - `openai-source` verifies source composition, ownership, authentication,
   reconnect, clearing, zeroization, and stack balance.
 - `agent-auth-ui` verifies masked entry and confirms fixture plaintext is absent

@@ -46,7 +46,8 @@ CONSTANT APROV-PF-CLASS-MASK
 112 CONSTANT _AP-AUTH            \ borrowed provider-auth port
 120 CONSTANT _AP-RUN-SETTINGS     \ borrowed run-settings port
 128 CONSTANT _AP-FREE-XT         \ ( provider -- )
-136 CONSTANT AGENT-PROVIDER-SIZE
+136 CONSTANT _AP-INPUT-XT        \ ( prompt-a prompt-u reference-a reference-u context -- used capacity )
+144 CONSTANT AGENT-PROVIDER-SIZE
 
 : APROV.ID-A           ( provider -- a ) _AP-ID-A + ;
 : APROV.ID-U           ( provider -- a ) _AP-ID-U + ;
@@ -65,6 +66,7 @@ CONSTANT APROV-PF-CLASS-MASK
 : APROV.AUTH           ( provider -- a ) _AP-AUTH + ;
 : APROV.RUN-SETTINGS   ( provider -- a ) _AP-RUN-SETTINGS + ;
 : APROV.FREE-XT        ( provider -- a ) _AP-FREE-XT + ;
+: APROV.INPUT-XT       ( provider -- a ) _AP-INPUT-XT + ;
 
 : APROV-INIT  ( provider -- ) AGENT-PROVIDER-SIZE 0 FILL ;
 
@@ -106,6 +108,19 @@ CONSTANT APROV-PF-CLASS-MASK
 
 : APROV-RUN-SETTINGS  ( provider -- settings | 0 )
     APROV.RUN-SETTINGS @ ;
+
+\ The bytes a turn with PROMPT, REFERENCE (turn-request.f) and no history
+\ takes of the room the provider has for one turn's input, and that room:
+\ -1 when only memory bounds it, or the provider does not say.  0 0 is no
+\ reference.  A reference at address 0 is REFERENCE-U bytes of text not
+\ yet read, counted at the least such text takes.
+: APROV-INPUT  ( prompt-a prompt-u reference-a reference-u provider -- used capacity )
+    DUP APROV.INPUT-XT @ ?DUP 0= IF DROP 2DROP NIP -1 EXIT THEN
+    >R APROV.CONTEXT @ R> EXECUTE ;
+
+\ Whether a turn with PROMPT, REFERENCE and no history fits that room.
+: APROV-INPUT-FITS?  ( prompt-a prompt-u reference-a reference-u provider -- flag )
+    APROV-INPUT DUP 0< IF 2DROP -1 EXIT THEN > 0= ;
 
 : APROV-FREE  ( provider -- )
     DUP 0= IF DROP EXIT THEN

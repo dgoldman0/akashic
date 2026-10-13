@@ -32,7 +32,6 @@ REQUIRE ../store/block.f
 REQUIRE ../utils/fmt.f
 REQUIRE ../net/gossip.f
 REQUIRE ../store/light.f
-REQUIRE ../utils/datetime.f
 
 PROVIDED akashic-rpc
 
@@ -428,15 +427,16 @@ VARIABLE _RPC-VP-DEPTH
 50  CONSTANT _RPC-RATE-MAX             \ bucket capacity (requests)
 1   CONSTANT _RPC-RATE-TPS             \ tokens added per second
 VARIABLE _RPC-RATE-TOKENS              \ current token count
-VARIABLE _RPC-RATE-LAST                \ epoch-seconds of last refill
+VARIABLE _RPC-RATE-LAST                \ uptime seconds of last refill
 
 : _RPC-RATE-INIT  ( -- )
     _RPC-RATE-MAX _RPC-RATE-TOKENS !
-    DT-NOW-S _RPC-RATE-LAST ! ;
+    MS@ 1000 / _RPC-RATE-LAST ! ;
 
-\ Refill tokens based on elapsed time, cap at _RPC-RATE-MAX.
+\ Refill tokens based on elapsed uptime, cap at _RPC-RATE-MAX.  Uptime
+\ keeps a wall-clock change from minting or withholding tokens.
 : _RPC-RATE-REFILL  ( -- )
-    DT-NOW-S DUP _RPC-RATE-LAST @ -   ( now elapsed )
+    MS@ 1000 / DUP _RPC-RATE-LAST @ - ( now elapsed )
     DUP 1 < IF 2DROP EXIT THEN
     _RPC-RATE-TPS *                    ( now tokens-to-add )
     _RPC-RATE-TOKENS @ +

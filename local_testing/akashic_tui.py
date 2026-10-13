@@ -10,6 +10,8 @@ MP64FS image.  No private emulator copy is required.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
 import os
 import re
@@ -4309,6 +4311,59 @@ VARIABLE _rt-result
 : _rt-all-zero?  ( addr len -- flag )
     -1 -ROT 0 ?DO DUP I + C@ IF SWAP DROP 0 SWAP THEN LOOP DROP ;
 
+\ The same request with its body lent: the buffer holds the head alone,
+\ and the send step sends the body from where it lies after it, so the
+\ port receives the same bytes.  A longer body crosses several sends.
+CREATE _rt-lent 300 ALLOT
+: _rt-build-lent  ( body-u -- )
+    >R
+    S" POST" S" /v1/responses" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    S" api.openai.com" _rt-request HREQ-HOST HREQ-S-OK = _rt-assert
+    S" test-secret" _rt-request HREQ-AUTH-BEARER HREQ-S-OK = _rt-assert
+    S" application/json" _rt-request HREQ-CONTENT-TYPE HREQ-S-OK = _rt-assert
+    S" text/event-stream" _rt-request HREQ-ACCEPT HREQ-S-OK = _rt-assert
+    _rt-request HREQ-CONNECTION-CLOSE HREQ-S-OK = _rt-assert
+    _rt-lent R> _rt-request HREQ-BODY-REF HREQ-S-OK = _rt-assert ;
+
+: _rt-send-all  ( -- )
+    200 0 DO
+        _rt-port _rt-request HREQ-SEND-STEP _rt-result !
+        _rt-result @ HREQ-PUMP-ERROR <> _rt-assert
+        _rt-result @ HREQ-PUMP-DONE = IF LEAVE THEN
+    LOOP
+    _rt-request HREQ.STATE @ HREQ-STATE-SENT = _rt-assert ;
+
+: _rt-run-lent  ( -- )
+    _rt-build-expected
+    123 _rt-lent C! 125 _rt-lent 1+ C!
+    _rt-request-reset 2 _rt-build-lent
+    _rt-request HREQ.STATE @ HREQ-STATE-SEALED = _rt-assert
+    _rt-request HREQ.BUFFER @ _rt-request HREQ.LENGTH @
+    _rt-expected _rt-expected-u @ 2 - STR-STR= _rt-assert
+    _rt-request HREQ.BODY-U @ 2 = _rt-assert
+    0 _rt-port-reset _rt-send-all
+    _rt-sink _rt-sink-u @ _rt-expected _rt-expected-u @ STR-STR= _rt-assert
+    _rt-request HREQ-CLEAR
+    _rt-request HREQ.BODY-A @ 0= _rt-assert
+    _rt-request HREQ.BODY-U @ 0= _rt-assert
+    _rt-lent C@ 123 = _rt-assert
+    \ A 300-byte body: its length in the head, then the body itself.
+    _rt-lent 300 97 FILL
+    _rt-request-reset 300 _rt-build-lent 0 _rt-port-reset _rt-send-all
+    _rt-sink-u @ _rt-request HREQ.LENGTH @ 300 + = _rt-assert
+    _rt-sink _rt-request HREQ.LENGTH @ S" Content-Length: 300" STR-STR-CONTAINS
+    _rt-assert
+    _rt-sink _rt-request HREQ.LENGTH @ + 300 _rt-lent 300 STR-STR= _rt-assert
+    \ Only a request being built takes a body, and a body must be there.
+    _rt-lent 2 _rt-request HREQ-BODY-REF HREQ-S-STATE = _rt-assert
+    _rt-request-reset
+    S" POST" S" /" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    0 2 _rt-request HREQ-BODY-REF HREQ-S-INVALID = _rt-assert
+    _rt-request-reset
+    S" POST" S" /" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    _rt-lent -1 _rt-request HREQ-BODY-REF HREQ-S-INVALID = _rt-assert
+    _rt-request-reset ;
+
 : _rt-run  ( -- )
     0 _rt-fails ! 0 _rt-checks ! DEPTH _rt-depth !
     _rt-build-expected _rt-request-reset _rt-build
@@ -4368,6 +4423,7 @@ VARIABLE _rt-result
     _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-ERROR = _rt-assert
     _rt-request HREQ-CLEAR _rt-request-reset _rt-build 5 _rt-port-reset
     _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-ERROR = _rt-assert
+    _rt-run-lent
 
     _rt-stack
     _rt-fails @ 0= IF
@@ -5762,9 +5818,10 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-gateway @ _oc-turn ATURN.TOOL-GATEWAY ! ;
 
 : _oc-start-request  ( -- status )
-    _oc-turn S" org.akashic.agent.openai.responses" _oc-config _oc-gateway @
-    _oc-out 65536 OAI-RESPONSES-START-JSON
-    SWAP _oc-out-u ! ;
+    _oc-turn S" org.akashic.agent.openai.responses" _oc-input 32768
+    OAI-TURN-INPUT-JSON DUP IF NIP EXIT THEN DROP _oc-input-u !
+    _oc-input _oc-input-u @ _oc-config _oc-gateway @ _oc-out 65536
+    OAI-RESPONSES-START-INPUT-JSON SWAP _oc-out-u ! ;
 
 : _oc-large-array!  ( char capacity address -- )
     _oc-large-array-a ! _oc-large-array-cap !
@@ -5773,29 +5830,39 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     34 _oc-large-array-a @ _oc-large-array-cap @ 2 - + C!
     93 _oc-large-array-a @ _oc-large-array-cap @ 1- + C! ;
 
-: _oc-test-composed-capacity  ( -- )
-    OAIR-INPUT-CAPACITY ALLOCATE
-        ABORT" OpenAI input capacity allocation failed" _oc-large-input !
-    OAIR-HISTORY-CAPACITY ALLOCATE
-        ABORT" OpenAI history capacity allocation failed" _oc-large-history !
-    OAIR-TOOL-OUTPUT-CAPACITY ALLOCATE
-        ABORT" OpenAI tool-output capacity allocation failed" _oc-large-output !
-    OAIR-BODY-CAPACITY ALLOCATE
-        ABORT" OpenAI body capacity allocation failed" _oc-large-body !
-    65 OAIR-INPUT-CAPACITY _oc-large-input @ _oc-large-array!
-    66 OAIR-HISTORY-CAPACITY _oc-large-history @ _oc-large-array!
-    _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY 92 FILL
-    _oc-large-input @ OAIR-INPUT-CAPACITY
-    _oc-large-history @ OAIR-HISTORY-CAPACITY
+\ A continuation with a 100,000-byte input, as much history, and a full
+\ tool result: the encoder says the exact length it needs, and a buffer of
+\ that length holds it.
+100000 CONSTANT _oc-large-n
+
+: _oc-continue-large  ( buffer capacity -- length status )
+    >R >R
+    _oc-large-input @ _oc-large-n
+    _oc-large-history @ _oc-large-n
     S" call-capacity"
     _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY
-    _oc-config _oc-gateway @ _oc-large-body @ OAIR-BODY-CAPACITY
-    OAI-RESPONSES-CONTINUE-JSON
-    DUP OAIREQ-S-OK = _oc-assert DROP _oc-out-u !
-    _oc-out-u @ 160000 > _oc-assert
-    _oc-out-u @ OAIR-BODY-CAPACITY <= _oc-assert
-    _oc-large-body @ _oc-out-u @ OAIR-BODY-CAPACITY
-        JSON-VALID-LIMIT? _oc-assert
+    _oc-config _oc-gateway @ R> R> OAI-RESPONSES-CONTINUE-JSON ;
+
+: _oc-test-composed-capacity  ( -- )
+    _oc-large-n ALLOCATE
+        ABORT" OpenAI large input allocation failed" _oc-large-input !
+    _oc-large-n ALLOCATE
+        ABORT" OpenAI large history allocation failed" _oc-large-history !
+    OAIR-TOOL-OUTPUT-CAPACITY ALLOCATE
+        ABORT" OpenAI tool-output capacity allocation failed" _oc-large-output !
+    65 _oc-large-n _oc-large-input @ _oc-large-array!
+    66 _oc-large-n _oc-large-history @ _oc-large-array!
+    _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY 92 FILL
+    0 0 _oc-continue-large
+    DUP OAIREQ-S-CAPACITY = _oc-assert DROP _oc-out-u !
+    _oc-out-u @ 200000 > _oc-assert
+    _oc-out-u @ ALLOCATE
+        ABORT" OpenAI large body allocation failed" _oc-large-body !
+    _oc-large-body @ _oc-out-u @ 1- _oc-continue-large
+    OAIREQ-S-CAPACITY = _oc-assert _oc-out-u @ = _oc-assert
+    _oc-large-body @ _oc-out-u @ _oc-continue-large
+    OAIREQ-S-OK = _oc-assert _oc-out-u @ = _oc-assert
+    _oc-large-body @ _oc-out-u @ DUP JSON-VALID-LIMIT? _oc-assert
     _oc-large-input @ FREE 0 _oc-large-input !
     _oc-large-history @ FREE 0 _oc-large-history !
     _oc-large-output @ FREE 0 _oc-large-output !
@@ -5809,10 +5876,7 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-config OAIC-HOST S" api.openai.com" STR-STR= _oc-assert
     _oc-config OAIC-PATH S" /v1/responses" STR-STR= _oc-assert
     _oc-config OAIC-MODEL S" gpt-5.5" STR-STR= _oc-assert
-    _oc-config OAIC.MAX-REQUEST @ 196608 = _oc-assert
     _oc-config OAIC.MAX-OUTPUT @ 49152 = _oc-assert
-    OAIR-BODY-CAPACITY 196608 = _oc-assert
-    OAIR-WIRE-CAPACITY 200704 = _oc-assert
     S" You assist the active Akashic applet."
     _oc-config OAIC-INSTRUCTIONS! OAIC-S-OK = _oc-assert
     S" bad host" _oc-config OAIC-HOST! OAIC-S-INVALID = _oc-assert
@@ -5907,9 +5971,9 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-start-request OAIREQ-S-OK = _oc-assert
     _oc-out _oc-out-u @ S" include" JSON-FIELD
     DUP 0= _oc-assert DROP 0= _oc-assert 2DROP
-    _oc-turn S" org.akashic.agent.openai.responses"
-    _oc-config 0 _oc-out 8 OAI-RESPONSES-START-JSON
-    OAIREQ-S-CAPACITY = _oc-assert DROP ;
+    _oc-input _oc-input-u @ _oc-config 0 _oc-out 8
+    OAI-RESPONSES-START-INPUT-JSON
+    OAIREQ-S-CAPACITY = _oc-assert 8 > _oc-assert ;
 
 : _oc-event-created  ( -- )
     _oc-json-begin JSON-{
@@ -6062,6 +6126,10 @@ CREATE _op-args 1024 ALLOT
 VARIABLE _op-args-u
 CREATE _op-request 67584 ALLOT
 VARIABLE _op-request-u
+\ Where the transport keeps what it is sent: the request buffer, or a
+\ larger one for a large turn.
+VARIABLE _op-capture-a
+VARIABLE _op-capture-cap
 CREATE _op-retry-request 67584 ALLOT
 VARIABLE _op-retry-request-u
 CREATE _op-turn-state 1024 ALLOT
@@ -6323,9 +6391,9 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _op-send-fail-once @ _op-send-failures @ 0= AND IF
         1 _op-send-failures +! 0 NIO-S-FAILED EXIT
     THEN
-    _op-request-u @ _op-send-u @ + 67584 > IF 0 NIO-S-FAILED EXIT THEN
+    _op-request-u @ _op-send-u @ + _op-capture-cap @ > IF 0 NIO-S-FAILED EXIT THEN
     _op-send-u @ 97 MIN _op-send-n !
-    _op-send-a @ _op-request _op-request-u @ + _op-send-n @ CMOVE
+    _op-send-a @ _op-capture-a @ _op-request-u @ + _op-send-n @ CMOVE
     _op-send-n @ _op-request-u +!
     _op-send-n @ NIO-S-OK ;
 
@@ -6368,6 +6436,7 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     0 _op-send-fail-once ! 0 _op-send-failures !
     0 _op-refreshes ! 0 _op-auth-polls !
     _op-turn-state 1024 65 FILL
+    _op-request _op-capture-a ! 67584 _op-capture-cap !
     _op-port NIO-INIT
     ['] _op-open _op-port NIO.OPEN-XT !
     ['] _op-open-start _op-port NIO.OPEN-START-XT !
@@ -6711,6 +6780,150 @@ VARIABLE _op-old-cancels
     8 _op-runtime @ ARUNTIME-PUMP DROP
     _op-opens @ 2 = _op-assert ;
 
+CREATE _op-designation AGENT-RUN-DESIGNATION-SIZE ALLOT
+VARIABLE _op-designations
+VARIABLE _op-designate-status
+: _op-designated-model  ( -- a u ) S" gpt-designated" ;
+
+\ A designator that puts the designated model in the configuration, or
+\ answers _op-designate-status when it is set.
+: _op-designate  ( designation config context -- status )
+    DROP 1 _op-designations +!
+    _op-designate-status @ ?DUP IF NIP NIP EXIT THEN
+    SWAP ARDES-MODEL ROT OAIC-MODEL! IF ARSET-S-CAPACITY ELSE ARSET-S-OK THEN ;
+
+: _op-designated-turn!  ( run-id -- )
+    _op-header-turn! _op-designation _op-header-turn ATURN.DESIGNATION ! ;
+
+: _op-start-designated  ( run-id -- status )
+    _op-designated-turn!
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START ;
+
+: _op-idle-without-session  ( -- )
+    _op-provider @ APROV.CONTEXT @ DUP OAIR-C.SESSION @ 0= _op-assert
+    OAIR-C.STATE @ OAIR-STATE-IDLE = _op-assert ;
+
+: _op-pump-provider-until-done  ( -- )
+    5000 0 DO
+        _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-POLL DROP
+        _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= IF LEAVE THEN
+    LOOP ;
+
+\ A turn that names its model runs on it, through its own copy of the
+\ provider's configuration; the provider's own configuration, which
+\ follows the selection, is left as it was.
+: _op-test-designation  ( -- )
+    ACTX-NEW DUP ACTX-S-OK = _op-assert DROP _op-header-context !
+    _op-designation ARDES-INIT
+    _op-designated-model
+    _op-designation ARDES.MODEL-U ! _op-designation ARDES.MODEL-A !
+    0 _op-designations ! 0 _op-designate-status !
+    \ Without a designator the provider runs no designated turn.
+    911 _op-start-designated OAIR-S-MODEL = _op-assert
+    _op-idle-without-session
+    \ A designator that refuses, or runs out of room.
+    ['] _op-designate 0 _op-provider @ OPENAI-PROVIDER-DESIGNATOR!
+    ARSET-S-UNSUPPORTED _op-designate-status !
+    912 _op-start-designated OAIR-S-MODEL = _op-assert
+    _op-idle-without-session
+    ARSET-S-CAPACITY _op-designate-status !
+    913 _op-start-designated OAIR-S-CAPACITY = _op-assert
+    _op-idle-without-session
+    _op-designations @ 2 = _op-assert
+    \ The request names the designated model.
+    0 _op-designate-status ! 2 _op-response-mode !
+    0 _op-opens ! 0 _op-closes ! 0 _op-request-u !
+    914 _op-start-designated OAIR-S-OK = _op-assert
+    _op-designations @ 3 = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    OAIR-SESSION-CONFIG DUP _op-provider @ OPENAI-PROVIDER-CONFIG <> _op-assert
+    OAIC-MODEL S" gpt-designated" STR-STR= _op-assert
+    _op-pump-provider-until-done
+    _op-idle-without-session
+    _op-request _op-request-u @ _op-request-body
+    JSON-ENTER S" model" JSON-KEY JSON-GET-STRING
+    S" gpt-designated" STR-STR= _op-assert
+    _op-provider @ OPENAI-PROVIDER-CONFIG OAIC-MODEL S" gpt-5.5" STR-STR= _op-assert
+    \ An undesignated turn's session uses the provider's configuration.
+    915 _op-header-turn!
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START
+    OAIR-S-OK = _op-assert
+    _op-designations @ 3 = _op-assert
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    OAIR-SESSION-CONFIG _op-provider @ OPENAI-PROVIDER-CONFIG = _op-assert
+    _op-pump-provider-until-done
+    _op-idle-without-session
+    _op-request _op-request-u @ _op-request-body
+    JSON-ENTER S" model" JSON-KEY JSON-GET-STRING
+    S" gpt-5.5" STR-STR= _op-assert
+    0 0 _op-provider @ OPENAI-PROVIDER-DESIGNATOR!
+    _op-header-context @ ACTX-FREE ;
+
+\ A turn far larger than any fixed buffer: a 300,000-byte reference.  The
+\ session sizes the turn's input and its request body to them, the body is
+\ sent after the head from where it lies, and what the transport receives
+\ is that head and body: a Content-Length of the body's length, and the
+\ body valid JSON holding the reference.
+300000 CONSTANT _op-big-ref-u
+400000 CONSTANT _op-big-capture-u
+VARIABLE _op-big-ref
+VARIABLE _op-big-capture
+VARIABLE _op-big-body-a
+VARIABLE _op-big-body-u
+CREATE _op-big-length 32 ALLOT
+VARIABLE _op-big-length-u
+
+: _op-big-length!  ( u -- )
+    0 _op-big-length-u !
+    S" Content-Length: " DUP _op-big-length-u ! _op-big-length SWAP CMOVE
+    NUM>STR DUP >R _op-big-length _op-big-length-u @ + SWAP CMOVE
+    R> _op-big-length-u +! ;
+
+: _op-test-large-turn  ( -- )
+    _op-big-ref-u ALLOCATE ABORT" large reference allocation failed" _op-big-ref !
+    _op-big-ref @ _op-big-ref-u 114 FILL
+    _op-big-capture-u ALLOCATE ABORT" large capture allocation failed" _op-big-capture !
+    _op-big-capture @ _op-capture-a ! _op-big-capture-u _op-capture-cap !
+    2 _op-response-mode ! 0 _op-opens ! 0 _op-closes ! 0 _op-request-u !
+    ACTX-NEW DUP ACTX-S-OK = _op-assert DROP _op-header-context !
+    921 _op-header-turn!
+    S" Summarize the report."
+    _op-header-turn ATURN.PROMPT-U ! _op-header-turn ATURN.PROMPT-A !
+    _op-big-ref @ _op-header-turn ATURN.REFERENCE-A !
+    _op-big-ref-u _op-header-turn ATURN.REFERENCE-U !
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START
+    OAIR-S-OK = _op-assert
+    \ The input is exactly the turn's, in a buffer of exactly that size.
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    DUP OAIR-S.INPUT-U @
+    S" Summarize the report." _op-big-ref @ _op-big-ref-u OAI-TURN-INPUT-U = _op-assert
+    DUP OAIR-S.INPUT-CAP @ OVER OAIR-S.INPUT-U @ = _op-assert
+    DUP OAIR-S.BODY-U @ _op-big-ref-u > _op-assert
+    DUP OAIR-S.BODY-CAP @ _op-big-ref-u > _op-assert
+    \ The body is lent to the request, not copied into its head's buffer.
+    OAIR-S.WIRE-CAP @ _op-big-ref-u < _op-assert
+    20000 0 DO
+        _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-POLL DROP
+        _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= IF LEAVE THEN
+    LOOP
+    _op-idle-without-session
+    _op-big-capture @ _op-request-u @ _op-request-body
+    _op-big-body-u ! _op-big-body-a !
+    _op-big-body-u @ _op-big-ref-u > _op-assert
+    _op-request-u @ _op-big-body-u @ - _op-big-capture-u < _op-assert
+    _op-big-body-u @ _op-big-length!
+    _op-big-capture @ _op-request-u @ _op-big-body-u @ -
+    _op-big-length _op-big-length-u @ STR-STR-CONTAINS _op-assert
+    _op-big-body-a @ _op-big-body-u @ DUP JSON-VALID-LIMIT? _op-assert
+    _op-big-body-a @ _op-big-body-u @ S" reference document" STR-STR-CONTAINS
+    _op-assert
+    _op-big-body-a @ _op-big-body-u @ _op-big-ref @ 4096 STR-STR-CONTAINS
+    _op-assert
+    _op-request _op-capture-a ! 67584 _op-capture-cap !
+    _op-big-capture @ FREE 0 _op-big-capture !
+    _op-big-ref @ FREE 0 _op-big-ref !
+    _op-header-context @ ACTX-FREE ;
+
 : _op-cleanup  ( -- )
     _op-legacy-opens @ 0= _op-assert
     _op-legacy-closes @ 0= _op-assert
@@ -6743,6 +6956,10 @@ VARIABLE _op-old-cancels
     _op-test-header-throw
     ." [openai-provider] unauthorized" CR
     _op-test-second-401
+    ." [openai-provider] designation" CR
+    _op-test-designation
+    ." [openai-provider] large turn" CR
+    _op-test-large-turn
     ." [openai-provider] cleanup" CR
     _op-cleanup _op-stack
     _op-fails @ 0= IF
@@ -7193,6 +7410,12 @@ VARIABLE _cc-callback
 VARIABLE _cc-callback-context
 VARIABLE _cc-pump-status
 VARIABLE _cc-large
+CREATE _cc-designation AGENT-RUN-DESIGNATION-SIZE ALLOT
+VARIABLE _cc-dconfig
+VARIABLE _cc-revision
+VARIABLE _cc-saved
+VARIABLE _cc-selected
+VARIABLE _cc-selected-effort
 
 JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
 
@@ -7444,6 +7667,82 @@ JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
     1 _cc-settings ARSET-TIER! ARSET-S-INVALID = _cc-assert
     9 _cc-settings ARSET-VERBOSITY! ARSET-S-INVALID = _cc-assert ;
 
+: _cc-designate!  ( model-a model-u effort-a effort-u tier-a tier-u verbosity -- )
+    _cc-designation ARDES-INIT
+    _cc-designation ARDES.VERBOSITY !
+    _cc-designation ARDES.TIER-U ! _cc-designation ARDES.TIER-A !
+    _cc-designation ARDES.EFFORT-U ! _cc-designation ARDES.EFFORT-A !
+    _cc-designation ARDES.MODEL-U ! _cc-designation ARDES.MODEL-A ! ;
+: _cc-designate  ( -- status )
+    _cc-designation _cc-dconfig @ _cc-catalog @ CDMC-DESIGNATE ;
+: _cc-fast  ( -- a u ) S" gpt-fast" ;
+: _cc-slow  ( -- a u ) S" gpt-slow" ;
+: _cc-gone  ( -- a u ) S" gpt-gone" ;
+: _cc-low  ( -- a u ) S" low" ;
+: _cc-medium  ( -- a u ) S" medium" ;
+: _cc-high  ( -- a u ) S" high" ;
+: _cc-priority  ( -- a u ) S" priority" ;
+
+\ A turn's designation configures another configuration; the selection,
+\ and the configuration it keeps, are left exactly as they were.
+: _cc-test-designation  ( -- )
+    OPENAI-CONFIG-SIZE ALLOCATE 0= _cc-assert _cc-dconfig !
+    _cc-dconfig @ CODEX-CONFIG-INIT OAIC-S-OK = _cc-assert
+    OPENAI-CONFIG-SIZE ALLOCATE 0= _cc-assert _cc-saved !
+    _cc-config _cc-saved @ OPENAI-CONFIG-SIZE CMOVE
+    _cc-settings ARSET.SELECTED @ _cc-selected !
+    _cc-settings ARSET-SELECTED-MODEL ARMODEL-SELECTED-EFFORT _cc-selected-effort !
+    _cc-settings ARSET.REVISION @ _cc-revision !
+    _cc-fast _cc-medium 0 0 ARVERB-HIGH _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-MODEL S" gpt-fast" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-EFFORT S" medium" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-TIER NIP 0= _cc-assert
+    _cc-dconfig @ OAIC-SUMMARY NIP 0= _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" high" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-INSTRUCTIONS S" Fast instructions." STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-RESPONSES-LITE? _cc-assert
+    _cc-slow _cc-high _cc-priority ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-MODEL S" gpt-slow" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-EFFORT S" high" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-TIER S" priority" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-SUMMARY S" auto" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" medium" STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-INSTRUCTIONS S" Slow instructions." STR-STR= _cc-assert
+    _cc-dconfig @ OAIC-RESPONSES-LITE? 0= _cc-assert
+    _cc-slow _cc-low 0 0 ARVERB-LOW _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" low" STR-STR= _cc-assert
+    _cc-slow _cc-low 0 0 ARVERB-MEDIUM _cc-designate!
+    _cc-designate ARSET-S-OK = _cc-assert
+    _cc-dconfig @ OAIC-VERBOSITY S" medium" STR-STR= _cc-assert
+    _cc-settings ARSET.SELECTED @ _cc-selected @ = _cc-assert
+    _cc-settings ARSET-SELECTED-MODEL ARMODEL-SELECTED-EFFORT
+    _cc-selected-effort @ = _cc-assert
+    _cc-settings ARSET.REVISION @ _cc-revision @ = _cc-assert
+    _cc-config OPENAI-CONFIG-SIZE _cc-saved @ OPENAI-CONFIG-SIZE COMPARE
+    0= _cc-assert
+    \ What the catalog does not offer, and a catalog still loading.
+    _cc-gone _cc-low 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-fast _cc-high 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-slow 0 0 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-fast _cc-low _cc-priority ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-UNSUPPORTED = _cc-assert
+    _cc-fast _cc-low 0 0 9 _cc-designate!
+    _cc-designate ARSET-S-INVALID = _cc-assert
+    ARSET-STATE-LOADING _cc-settings ARSET.STATE !
+    _cc-fast _cc-low 0 0 ARVERB-AUTO _cc-designate!
+    _cc-designate ARSET-S-PENDING = _cc-assert
+    ARSET-STATE-READY _cc-settings ARSET.STATE !
+    _cc-config OPENAI-CONFIG-SIZE _cc-saved @ OPENAI-CONFIG-SIZE COMPARE
+    0= _cc-assert
+    _cc-saved @ FREE 0 _cc-saved !
+    _cc-dconfig @ FREE 0 _cc-dconfig ! ;
+
 : _cc-test-auth-retry  ( -- )
     1 _cc-mode ! _cc-reset-io _cc-auth-ready
     _cc-settings ARSET-REFRESH ARSET-S-PENDING = _cc-assert
@@ -7483,6 +7782,7 @@ JSON-MAX-DOCUMENT 1024 + CONSTANT _CC-LARGE-U
     _cc-test-selection
     _cc-test-auth-retry
     _cc-test-recovery
+    _cc-test-designation
     _cc-cleanup _cc-stack
     _cc-fails @ 0= IF
         ." CODEX CATALOG PASS " _cc-checks @ .
@@ -7523,7 +7823,7 @@ VARIABLE _cm-auth-cancels
 VARIABLE _cm-model-cancels
 CREATE _cm-wire 4096 ALLOT
 CREATE _cm-request HTTP-REQUEST-SIZE ALLOT
-CREATE _cm-session 200 ALLOT
+CREATE _cm-session 256 ALLOT
 : _cm-assert  ( flag -- )
     1 _cm-checks +!
     0= IF 1 _cm-fails +! ." ASSERT " _cm-checks @ . CR THEN ;
@@ -7616,6 +7916,10 @@ CREATE _cm-session 200 ALLOT
     _cm-source @ CODEX-SOURCE-CATALOG CDMC.SETTINGS = _cm-assert
     _cm-source @ CODEX-SOURCE-CATALOG CDMC.CONFIG @
     _cm-provider @ OPENAI-PROVIDER-CONFIG = _cm-assert
+    \ A turn that names its model is configured from the catalog.
+    _cm-provider @ APROV.CONTEXT @ DUP OAIR-C.DESIGNATE-XT @
+    ['] CDMC-DESIGNATE = _cm-assert
+    OAIR-C.DESIGNATE-CONTEXT @ _cm-source @ CODEX-SOURCE-CATALOG = _cm-assert
     _cm-provider @ APROV.FEATURES @ APROV-F-CONTEXT AND 0<> _cm-assert
     _cm-provider @ ARUNTIME-NEW DUP 0= _cm-assert DROP _cm-runtime !
     _cm-runtime @ ARUNTIME-AUTH DUP 0<> _cm-assert
@@ -7632,12 +7936,24 @@ CREATE _cm-session 200 ALLOT
     _cm-wire 4096 _cm-request HREQ-INIT HREQ-S-OK = _cm-assert
     S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
     HREQ-S-OK = _cm-assert
-    _cm-session 200 0 FILL 42 _cm-session OAIR-S.THREAD-ID !
+    _cm-session 256 0 FILL 42 _cm-session OAIR-S.THREAD-ID !
+    _cm-provider @ OPENAI-PROVIDER-CONFIG _cm-session OAIR-S.CONFIG !
     _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
     OAIR-S-OK = _cm-assert
     _cm-wire _cm-request HREQ.LENGTH @
     S" x-openai-internal-codex-responses-lite: true"
     STR-STR-CONTAINS _cm-assert
+    \ The headers follow the session's own configuration, which a turn
+    \ naming its model has, not the provider's.
+    _cm-request HREQ-CLEAR
+    S" POST" CODEX-RESPONSES-PATH _cm-request HREQ-BEGIN
+    HREQ-S-OK = _cm-assert
+    _cm-source @ CODEX-SOURCE-CONFIG _cm-session OAIR-S.CONFIG !
+    _cm-request _cm-session _cm-provider @ _CODEX-HEADERS
+    OAIR-S-OK = _cm-assert
+    _cm-wire _cm-request HREQ.LENGTH @
+    S" x-openai-internal-codex-responses-lite: true"
+    STR-STR-CONTAINS 0= _cm-assert
     _cm-runtime @ ARUNTIME-FREE
     _cm-provider @ APROV-FREE
     _cm-source @ APSOURCE-FREE
@@ -12310,8 +12626,8 @@ CREATE _pr-io 256 ALLOT
 
 VARIABLE _pr-service-a VARIABLE _pr-service-u
 
-: _pr-service  ( id-a id-u ignored -- service | 0 )
-    DROP _pr-service-u ! _pr-service-a !
+: _pr-service  ( id-a id-u caller ignored -- service | 0 )
+    2DROP _pr-service-u ! _pr-service-a !
     _pr-service-a @ _pr-service-u @
         S" org.akashic.runtime.context" STR-STR= IF
         _pr-service-mode @ 2 = IF 0 ELSE _pr-context @ THEN EXIT
@@ -14021,6 +14337,263 @@ def desktop_apt1_shell_profile(
     )
 
 
+# Desk with Daybook, for Daybook's reminders in the CELL terminal.  The boot
+# creates two reminders through Daybook's own reminder owner, as a user's
+# creates would: a one-off due a minute and a half after the clock starts,
+# and a daily one at 09:00 UTC from tomorrow.  The journey checks that Desk
+# fires the one-off once, on time, with a notice, and works both through
+# Daybook's reminders view.
+DAYBOOK_REMINDER_TITLE = "Water the plants"
+DAYBOOK_REMINDER_DELAY_S = 90
+DAYBOOK_DAILY_TITLE = "Stretch"
+_DAYBOOK_REMINDER_SETUP_TEMPLATE = r"""\ Reminders made through Daybook's schedule owner.  A later boot of the same
+\ disk finds each create key already used, a conflict it leaves alone.
+CREATE _boot-reminders-raw DBAO-SIZE 7 + ALLOT
+CREATE _boot-draft-raw DBAO-DRAFT-SIZE 7 + ALLOT
+CREATE _boot-key RID-SIZE ALLOT
+CREATE _boot-rid RID-SIZE ALLOT
+: _boot-reminders  ( -- owner ) _boot-reminders-raw 7 + -8 AND ;
+: _boot-draft  ( -- draft ) _boot-draft-raw 7 + -8 AND ;
+\ Whether a create failed: made now, or on an earlier boot, is success.
+: _boot-made?  ( status -- failed? )
+    DUP DBAO-S-CONFLICT = IF DROP 0 THEN ;
+: _boot-reminder  ( -- )
+    _boot-reminders DBAO-SIZE 0 FILL
+    VFS-CUR S" /daybook-automations.bin" _boot-reminders DBAO-INIT
+        ABORT" reminder owner init failed"
+    _boot-reminders DBAO-OPEN ABORT" reminder store open failed"
+    _boot-draft DBAO-DRAFT-SIZE 0 FILL
+    DBAS-ACTION-REMINDER _boot-draft DBAO-D.ACTION !
+    DBREC-ONCE _boot-draft DBAO-D.RULE DBREC.FREQ !
+    1 _boot-draft DBAO-D.RULE DBREC.INTERVAL !
+    DBSVC-NOW 1000 / {delay} + _boot-draft DBAO-D.RULE DBREC.START !
+    S" {title}" _boot-draft DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
+    S" UTC0" _boot-draft DBAO-D.ZONE TZ-STRING-MAX DBAS-FIELD!
+    _boot-key RID-SIZE 7 FILL
+    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
+        _boot-made? ABORT" reminder create failed"
+    DBREC-DAILY _boot-draft DBAO-D.RULE DBREC.FREQ !
+    DBSVC-NOW 1000 / DUP 86400 MOD - 86400 + 32400 +
+        _boot-draft DBAO-D.RULE DBREC.START !
+    S" {daily}" _boot-draft DBAO-D.TITLE DBAS-TITLE-MAX DBAS-FIELD!
+    _boot-key RID-SIZE 8 FILL
+    _boot-key _boot-draft DBSVC-NOW _boot-rid _boot-reminders DBAO-CREATE
+        _boot-made? ABORT" daily reminder create failed"
+    _boot-reminders DBAO-CLOSE DROP ;
+_boot-reminder
+"""
+
+
+def daybook_reminder_setup(delay_s: int) -> str:
+    """The boot's reminders: the one-off DELAY_S seconds after the clock
+    reads at boot, and the daily one at 09:00 UTC from tomorrow."""
+
+    return _DAYBOOK_REMINDER_SETUP_TEMPLATE.replace(
+        "{delay}", str(delay_s)
+    ).replace("{title}", DAYBOOK_REMINDER_TITLE).replace(
+        "{daily}", DAYBOOK_DAILY_TITLE
+    )
+
+
+_DAYBOOK_REMINDER_APPLETS = (
+    replace(
+        desk_applet("daybook"),
+        setup=daybook_reminder_setup(DAYBOOK_REMINDER_DELAY_S),
+    ),
+)
+PROFILES["desktop-daybook-reminders"] = replace(
+    PROFILES["desktop"],
+    roots=desktop_roots(_DAYBOOK_REMINDER_APPLETS),
+    resources=desktop_resources(_DAYBOOK_REMINDER_APPLETS),
+    autoexec=desktop_autoexec(_DAYBOOK_REMINDER_APPLETS),
+    ready_markers=desktop_ready_markers(_DAYBOOK_REMINDER_APPLETS),
+    stable_markers=desktop_stable_markers(_DAYBOOK_REMINDER_APPLETS),
+    sample_date_clock=True,
+    idle_load_ceiling=0.10,
+)
+
+
+# Desk with Daybook and the Agent, whose device-flow fixture gives the
+# scripted provider a signed-in account and a ready catalog of two models.
+# Daybook's pages make Agent runs from it, and Desk's approval screen
+# allows them.
+_DAYBOOK_AGENT_DEVFLOW = "tui/applets/agent/providers/devtools/device-flow.f"
+_DAYBOOK_AGENT_SOURCE_BOOT = (
+    f"REQUIRE {_DAYBOOK_AGENT_DEVFLOW}\n"
+    ": _boot-agent-source  ( -- )\n"
+    '    DEVFLOW-SOURCE-NEW 0<> ABORT" device-flow source allocation failed"\n'
+    "    DUP _DFA-METADATA DROP AAUTH-STATE-READY OVER DFSRC.AUTH AAUTH.STATE !\n"
+    "    ARSET-STATE-READY OVER DFSRC.SETTINGS ARSET.STATE !\n"
+    "    0 OVER _DFS-MODEL-SELECT DROP\n"
+    "    DESK-AGENT-SOURCE! ;"
+)
+_DAYBOOK_AGENT_APPLETS = (desk_applet("daybook"), desk_applet("agent"))
+PROFILES["desktop-daybook-agent"] = replace(
+    PROFILES["desktop"],
+    roots=(*desktop_roots(_DAYBOOK_AGENT_APPLETS), _DAYBOOK_AGENT_DEVFLOW),
+    resources=desktop_resources(_DAYBOOK_AGENT_APPLETS),
+    autoexec=desktop_autoexec(_DAYBOOK_AGENT_APPLETS).replace(
+        _DESK_AGENT_SOURCE_BOOT, _DAYBOOK_AGENT_SOURCE_BOOT, 1
+    ),
+    ready_markers=desktop_ready_markers(_DAYBOOK_AGENT_APPLETS),
+    stable_markers=desktop_stable_markers(_DAYBOOK_AGENT_APPLETS),
+    sample_date_clock=True,
+    # The Agent is still starting when the ready screen appears, so a
+    # sample then says little; the journey holds Desk to the ceiling at
+    # its end, once an approved Agent run is scheduled.
+)
+# The same Desk, for an Agent run that lingers: revoked mid-run, then
+# carried through a power loss and a shutdown on machines booted from the
+# disk.
+PROFILES["desktop-daybook-agent-recovery"] = PROFILES["desktop-daybook-agent"]
+# The same Desk with Library: a scheduled Agent run reads one exact version
+# of a Library document.  Library sends that version to Daybook's new run,
+# and Desk attaches the document through Library while the run starts,
+# starting Library minimized when it is closed.
+_LIBRARY_DESK_APPLET = DeskApplet(
+    "library",
+    "tui/applets/library/library.f",
+    ("tui/applets/library/library.uidl",),
+    "LIBRARY-APPLET-ENTRY",
+    ready=("Browse",),
+    stable=("Browse",),
+)
+_DAYBOOK_AGENT_DOCUMENT_APPLETS = (*_DAYBOOK_AGENT_APPLETS, _LIBRARY_DESK_APPLET)
+PROFILES["desktop-daybook-agent-document"] = replace(
+    PROFILES["desktop-daybook-agent"],
+    roots=(
+        *desktop_roots(_DAYBOOK_AGENT_DOCUMENT_APPLETS), _DAYBOOK_AGENT_DEVFLOW
+    ),
+    resources=desktop_resources(_DAYBOOK_AGENT_DOCUMENT_APPLETS),
+    autoexec=desktop_autoexec(_DAYBOOK_AGENT_DOCUMENT_APPLETS).replace(
+        _DESK_AGENT_SOURCE_BOOT, _DAYBOOK_AGENT_SOURCE_BOOT, 1
+    ),
+    ready_markers=desktop_ready_markers(_DAYBOOK_AGENT_DOCUMENT_APPLETS),
+    stable_markers=desktop_stable_markers(_DAYBOOK_AGENT_DOCUMENT_APPLETS),
+    # Library makes its store for the first document and renames it later,
+    # each over a billion steps: about nine billion steps in all, which a
+    # slow host takes most of 900 s for.  The step limit is the Desktop's.
+    smoke_timeout=900.0,
+)
+
+
+DAYBOOK_AUTOMATION_FORMAT = 2
+
+
+def daybook_automations(data: bytes) -> dict[str, object]:
+    """The parts of Daybook's automation file a journey checks: its
+    generation; each schedule's state, action, next ordinal and title; each
+    Agent run schedule's approval and operands; and each item's ordinals,
+    count, kind, state and clock evidence, with an Agent run's phase,
+    outcome, reason, dispatch key, run, flags and summary.  The layout is
+    automation-store.f's; the guest checks the CRCs."""
+
+    assert data[:8] == b"AKDBAUTO", "not a Daybook automation file"
+    assert int.from_bytes(data[8:16], "little") == DAYBOOK_AUTOMATION_FORMAT, (
+        "not the Daybook automation format this reader knows"
+    )
+    generation = int.from_bytes(data[24:32], "little")
+    payload = 64
+
+    def cell(offset: int) -> int:
+        return int.from_bytes(data[offset:offset + 8], "little", signed=True)
+
+    schedules_n, occurrences_n = cell(payload + 48), cell(payload + 56)
+    keys_n, actions_n = cell(payload + 64), cell(payload + 216)
+    blob = (payload + 240 + schedules_n * 512 + actions_n * 144
+            + occurrences_n * 272 + keys_n * 96)
+
+    def blob_bytes(slot: int) -> bytes:
+        length = cell(slot + 8)
+        return data[blob + cell(slot):blob + cell(slot) + length] if length else b""
+
+    schedules = []
+    at = payload + 240
+    for _ in range(schedules_n):
+        title_u = cell(at + 184)
+        schedules.append({
+            "rid": data[at:at + 32].hex(),
+            "state": cell(at + 48),
+            "archived": cell(at + 56),
+            "revision": cell(at + 32),
+            "action": cell(at + 64),
+            "next": cell(at + 144),
+            "next_utc": cell(at + 152),
+            "last": cell(at + 160),
+            "result": cell(at + 168),
+            "title": data[at + 192:at + 192 + title_u].decode("utf-8"),
+        })
+        at += 512
+    actions = []
+    for _ in range(actions_n):
+        actions.append({
+            "rid": data[at:at + 32].hex(),
+            "action": cell(at + 32),
+            "authorized": cell(at + 48),
+            "practice": data[at + 56:at + 88].hex(),
+            "permission": data[at + 88:at + 120].hex(),
+            "permission_revision": cell(at + 120),
+            "operands": blob_bytes(at + 128),
+        })
+        at += 144
+    occurrences = []
+    for _ in range(occurrences_n):
+        occurrences.append({
+            "id": cell(at),
+            "rid": data[at + 8:at + 40].hex(),
+            "first": cell(at + 48),
+            "last": cell(at + 56),
+            "count": cell(at + 80),
+            "kind": cell(at + 88),
+            "state": cell(at + 96),
+            "basis": cell(at + 104),
+            "action": cell(at + 128),
+            "phase": cell(at + 136),
+            "outcome": cell(at + 144),
+            "reason": cell(at + 152),
+            "key": data[at + 160:at + 192].hex(),
+            "run": data[at + 192:at + 224].hex(),
+            "started": cell(at + 224),
+            "ended": cell(at + 232),
+            "flags": cell(at + 240),
+            "summary": blob_bytes(at + 248).decode("utf-8"),
+        })
+        at += 272
+    return {
+        "generation": generation,
+        "schedules": schedules,
+        "actions": actions,
+        "occurrences": occurrences,
+    }
+
+
+AGENT_OPERAND_CONTEXT = 1  # SACT-F-CONTEXT
+QLOC_SIZE = 320
+
+
+def agent_operands(data: bytes) -> dict[str, object]:
+    """An Agent run's operands as interop/scheduled-action.f lays them
+    out: its limits, verbosity, effects and flags, then each string
+    field, a cell holding its length and its bytes padded to a cell."""
+
+    def cell(offset: int) -> int:
+        return int.from_bytes(data[offset:offset + 8], "little", signed=True)
+
+    fields: dict[str, object] = {
+        "schema": cell(0), "flags": cell(8), "effects": cell(16),
+        "time_ms": cell(24), "disclosure": cell(32), "output": cell(40),
+        "verbosity": cell(48),
+    }
+    at = 56
+    for name in ("provider", "model", "effort", "tier", "prompt"):
+        if name == "prompt" and fields["flags"] & AGENT_OPERAND_CONTEXT:
+            at += QLOC_SIZE
+        length = cell(at)
+        fields[name] = data[at + 8:at + 8 + length].decode("utf-8")
+        at += 8 + ((length + 7) & ~7)
+    return fields
+
+
 # Desk publishes its panes and taskbar as rich objects through the shell
 # producer. A changed draw with the acknowledged layout goes out as a retained
 # DELTA; layout changes publish a complete hidden replacement. The scratch and
@@ -14053,8 +14626,19 @@ DESKTOP_APT1_APPLET_PROFILES = tuple(
 # Alone, it takes the tile and starts with a fixed feed, loaded as an
 # injected source would load one, so its cards have posts to show.  The
 # Agent alone starts from a long conversation saved through its own store,
-# so its transcript is taller than its view.
+# so its transcript is taller than its view.  Daybook alone starts with the
+# reminders the CELL reminders profile makes; on the rich terminal's real
+# clock the one-off fires two minutes after boot, once its journey's other
+# stages are done, and the journey requires its notice in the frame.
+DAYBOOK_APT1_REMINDER_DELAY_S = 120
 _DESKTOP_APT1_ALONE = {
+    "daybook": (
+        replace(
+            desk_applet("daybook"),
+            setup=daybook_reminder_setup(DAYBOOK_APT1_REMINDER_DELAY_S),
+        ),
+        (),
+    ),
     "agent": (
         replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),
         (),
@@ -17873,8 +18457,8 @@ VARIABLE _slc-saved-revision
         DROP 2R> 2DROP 0
     THEN ;
 
-: _slc-service-for  ( id-a id-u context -- service | 0 )
-    >R S" org.akashic.net.external-io" STR-STR= IF
+: _slc-service-for  ( id-a id-u caller context -- service | 0 )
+    NIP >R S" org.akashic.net.external-io" STR-STR= IF
         R>
     ELSE
         R> DROP 0
@@ -18426,8 +19010,8 @@ CREATE _slp-endpoint IENDPOINT-SIZE ALLOT
 : _slp-actor$  ( -- addr len )
     S" did:plc:z72i7hdynmk6r22z27h6tvur" ;
 
-: _slp-service-for  ( id-a id-u context -- service | 0 )
-    >R S" org.akashic.net.external-io" STR-STR= IF
+: _slp-service-for  ( id-a id-u caller context -- service | 0 )
+    NIP >R S" org.akashic.net.external-io" STR-STR= IF
         R>
     ELSE
         R> DROP 0
@@ -28356,10 +28940,13 @@ def smoke(
                 + (f" (missing {', '.join(unready)})" if unready else "")
             )
 
-        def measure_idle_load(virtual_ms: int = 1000) -> None:
+        def measure_idle_load(
+            virtual_ms: int = 1000, ceiling: float | None = None
+        ) -> None:
             """Note how busy the guest stays while its ready screen sits
             idle, as instructions per virtual second against the system
-            clock.  A guest that sleeps when idle runs a small fraction."""
+            clock.  A guest that sleeps when idle runs a small fraction.
+            CEILING, or else the profile's, is the most it may run."""
 
             nonlocal total_steps
             rtc = session.system.rtc
@@ -28390,7 +28977,8 @@ def smoke(
                 f"({per_second / rtc.CLOCK_HZ:.1%} of the clock) over "
                 f"{elapsed_ms:,} virtual ms"
             )
-            ceiling = profile.idle_load_ceiling
+            if ceiling is None:
+                ceiling = profile.idle_load_ceiling
             if ceiling is not None and per_second > ceiling * rtc.CLOCK_HZ:
                 journey_errors.append(
                     f"the guest stayed busy while idle: {per_second / rtc.CLOCK_HZ:.1%} "
@@ -29765,6 +30353,1651 @@ def smoke(
                 wall_timeout=25.0,
             )
 
+        def read_daybook_reminders() -> dict[str, object] | None:
+            live_fs = MP64FS(bytearray(session.system.storage._image_data))
+            try:
+                return daybook_automations(
+                    live_fs.read_file("daybook-automations.bin")
+                )
+            except FileNotFoundError:
+                return None
+
+        def run_schedule_permissions_step() -> None:
+            """Alt+P opens Desk's run permissions over the Practice's empty
+            permission file, which say none was allowed, and Escape closes
+            them."""
+
+            session.send_key("alt+p")
+            if not wait_screen(
+                "Scheduled run permissions",
+                "Alt+P did not open the run permissions",
+            ) or not wait_screen(
+                "No scheduled run has been allowed",
+                "the run permissions did not say none was allowed",
+            ):
+                return
+            session.send_key("escape")
+            wait_screen_gone(
+                "Scheduled run permissions",
+                "Esc did not close the run permissions",
+            )
+
+        def begin_daybook_agent_run(
+            title: str,
+            due_s: int,
+            repeat: str,
+            choices: tuple[tuple[str, str, int, str], ...],
+            minutes: str,
+            reply: str,
+        ) -> bool:
+            """Starts an Agent run in Daybook through ordinary keys, up to
+            its prompt page: its time and title, how it repeats, the
+            default zone, each model choice (the page's heading, the label
+            it must offer, how many rows down it is, and the failure when
+            it does not), and its limits."""
+
+            session.send_key("alt+1")
+            if not wait_screen("[1:Daybook*]", "Desk did not focus Daybook"):
+                return False
+            session.send_key("ctrl+g")
+            if not wait_screen(
+                "Agent run (HH:MM", "Ctrl+G did not ask for a new Agent run"
+            ):
+                return False
+            return continue_daybook_agent_run(
+                title, due_s, repeat, choices, minutes, reply,
+                "New Agent run: its prompt",
+            )
+
+        def continue_daybook_agent_run(
+            title: str,
+            due_s: int,
+            repeat: str,
+            choices: tuple[tuple[str, str, int, str], ...],
+            minutes: str,
+            reply: str,
+            heading: str,
+        ) -> bool:
+            """Takes a new Agent run's steps from the first, which asks
+            when it runs, up to its prompt page, whose HEADING it waits
+            for."""
+
+            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
+            session.send_text(f"{hhmm} {title}")
+            session.send_key("enter")
+            if not wait_screen(
+                "Repeat (once", "Daybook did not ask how the Agent run repeats"
+            ):
+                return False
+            session.send_text(repeat)
+            session.send_key("enter")
+            if not wait_screen(
+                "Zone (Enter for UTC0)", "Daybook did not ask for the zone"
+            ):
+                return False
+            session.send_key("enter")
+            for asks, choice, moves, failure in choices:
+                if not wait_screen(asks, failure) or not wait_screen(
+                    choice, f"{failure}: no {choice}"
+                ):
+                    return False
+                for _ in range(moves):
+                    session.send_key("down")
+                session.send_key("enter")
+            if not wait_screen(
+                "Minutes it may run:", "Daybook did not ask for the time limit"
+            ):
+                return False
+            session.send_text(minutes)
+            session.send_key("enter")
+            if not wait_screen(
+                "Bytes of its reply it keeps:",
+                "Daybook did not ask how much of the reply to keep",
+            ):
+                return False
+            session.send_text(reply)
+            session.send_key("enter")
+            return wait_screen(heading, "Daybook did not open the prompt")
+
+        def approve_daybook_agent_run(
+            shown: tuple[tuple[str, str], ...],
+            *,
+            step_budget: int = 500_000_000,
+            wall_timeout: float = 15.0,
+            note: str | None = None,
+        ) -> bool:
+            """Desk asks to approve an Agent run Daybook made.  The approval
+            shows each text SHOWN lists, unlocks Allow only once read to the
+            end, and A allows the run, which Daybook then says.  The
+            approval comes within STEP_BUDGET and WALL_TIMEOUT.  With NOTE,
+            a host note says how many steps and how much of the guest's
+            clock each took."""
+
+            asked = total_steps
+            asked_ms = session.system.rtc.uptime_ms
+            if not wait_screen(
+                "Approve a scheduled Agent run",
+                "Desk did not ask to approve the new Agent run",
+                step_budget=step_budget,
+                wall_timeout=wall_timeout,
+            ):
+                return False
+            shown_at = total_steps
+            shown_ms = session.system.rtc.uptime_ms
+            for text, failure in (
+                *shown, ("Read it to the end", "Allow was not locked before reading")
+            ):
+                if not wait_screen(text, failure):
+                    return False
+            session.send_key("end")
+            if not wait_screen(
+                "A allows it to run", "reading to the end did not unlock Allow"
+            ):
+                return False
+            allowed = total_steps
+            allowed_ms = session.system.rtc.uptime_ms
+            session.send_text("a")
+            if not wait_screen_gone(
+                "Approve a scheduled Agent run",
+                "A did not allow the new Agent run",
+            ):
+                return False
+            # Daybook's service polls for the answer once a second, and both
+            # the permission and the approval are written to disk first.
+            if not wait_screen(
+                "Approved", "Daybook did not say it was approved",
+                step_budget=1_500_000_000,
+                wall_timeout=45.0,
+            ):
+                return False
+            if note:
+                host_notes.append(
+                    f"{note}: the approval showed {shown_at - asked:,} steps "
+                    f"and {shown_ms - asked_ms:,} virtual ms after Ctrl+S; "
+                    f"Daybook said it was approved {total_steps - allowed:,} "
+                    f"steps and {session.system.rtc.uptime_ms - allowed_ms:,} "
+                    "virtual ms after A"
+                )
+            return True
+
+        def show_daybook_calendar() -> bool:
+            """Daybook's calendar, leaving its automations if they show."""
+
+            if " entries  |  " not in session.snapshot().text():
+                session.send_key("escape")
+            return wait_screen(
+                " entries  |  ", "Escape did not return to Daybook's calendar"
+            )
+
+        def show_daybook_automations() -> bool:
+            """Daybook's automations, opening them if the calendar shows."""
+
+            if " entries  |  " in session.snapshot().text():
+                session.send_key("f4")
+            return wait_screen_gone(
+                " entries  |  ", "F4 did not show Daybook's automations"
+            )
+
+        # Swift, the catalog's first model, at its default effort and
+        # verbosity: Enter on each page.  It offers no tier.
+        SWIFT_CHOICES = (
+            ("the model it uses", "Swift", 0,
+             "Daybook did not offer the Agent's models"),
+            ("the model's effort", "Low", 0,
+             "Daybook did not offer the model's efforts"),
+            ("how much the model says", "Default", 0,
+             "Daybook did not offer the model's verbosities"),
+        )
+
+        def newest_item(title: str) -> dict[str, object] | None:
+            items = items_for(title)
+            return max(items, key=lambda item: item["id"]) if items else None
+
+        def run_daybook_agent_create_journey() -> None:
+            """Daybook's pages make an Agent run through ordinary keys: its
+            time and title, how it repeats, its zone, the model and each
+            choice it offers, its limits, and a two-line prompt longer
+            than the editor's first buffer.  Escape once arms the
+            prompt's discard and typing disarms it.  Desk's approval screen
+            shows the run exactly, A allows it once it is read to the end,
+            and Daybook's file keeps it approved with exactly those
+            operands."""
+
+            rtc = session.system.rtc
+            title = "Morning brief"
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
+            first = "Summarize what changed in the project overnight,"
+            second = "then list the three most urgent follow-ups, briefly."
+            prompt = f"{first}\n{second}"
+            if not begin_daybook_agent_run(
+                title, due_s, "daily",
+                (
+                    ("the model it uses", "Deliberate", 1,
+                     "Daybook did not offer the Agent's models"),
+                    ("the model's effort", "High", 1,
+                     "Daybook did not offer the model's efforts"),
+                    ("the model's tier", "Fast", 1,
+                     "Daybook did not offer the model's tier and its default"),
+                    ("how much the model says", "Medium", 2,
+                     "Daybook did not offer the model's verbosities"),
+                ),
+                "10", "16384",
+            ):
+                return
+            # Each key redraws the page, so a typed line takes a while.
+            session.send_text(first)
+            if not wait_screen(
+                "overnight,", "the prompt did not show its first line",
+                step_budget=2_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen(
+                "Esc again discards",
+                "Escape with a prompt typed did not ask again first",
+            ):
+                return
+            session.send_key("enter")
+            session.send_text(second)
+            if not wait_screen(
+                "Ctrl+S create", "typing did not take back the discard"
+            ) or not wait_screen(
+                "briefly.", "the prompt did not show what was typed",
+                step_budget=2_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            session.send_key("ctrl+s")
+            if not approve_daybook_agent_run((
+                (title, "the approval did not name the schedule"),
+                ("gpt-slow", "the approval did not name the model"),
+                ("high effort", "the approval did not name the effort"),
+                ("priority tier", "the approval did not name the tier"),
+                ("medium verbosity", "the approval did not name the verbosity"),
+                ("10 min to run", "the approval did not show the time limit"),
+                (f"{len(prompt.encode())} bytes to disclose",
+                 "the approval did not disclose exactly the prompt"),
+                ("16384 bytes of reply", "the approval did not show the reply"),
+            )):
+                return
+            session.send_key("alt+p")
+            if not wait_screen(
+                "Scheduled run permissions", "Alt+P did not open the run permissions"
+            ) or not wait_screen(
+                title, "the run permissions did not name the new Agent run"
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Scheduled run permissions", "Esc did not close the run permissions"
+            ):
+                return
+            # Its details, full frame so no line wraps, say what it names in
+            # Desk's words, and its prompt.
+            session.send_key("alt+f")
+            session.send_key("enter")
+            if not wait_screen(
+                "Automation details", "Enter did not open the Agent run's details"
+            ):
+                return
+            for shown, failure in (
+                ("gpt-slow, high effort, priority tier, medium verbosity",
+                 "the details did not name the model as Desk's approval did"),
+                (f"10 min to run, {len(prompt.encode())} bytes to disclose, "
+                 "16384 bytes of reply",
+                 "the details did not show the limits as Desk's approval did"),
+                (first, "the details did not show the prompt's first line"),
+                (second, "the details did not show the prompt's second line"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Automation details", "Escape did not leave the details"
+            ) or not show_daybook_calendar():
+                return
+            session.send_key("alt+f")
+            if not wait_screen(
+                "Start a conversation", "Alt+F did not bring Desk's tiles back"
+            ):
+                return
+            stored = read_daybook_reminders() or {}
+            schedules = [
+                schedule for schedule in stored.get("schedules", ())
+                if schedule["title"] == title
+            ]
+            actions = [
+                action for action in stored.get("actions", ())
+                if schedules and action["rid"] == schedules[0]["rid"]
+            ]
+            if len(schedules) != 1 or schedules[0]["action"] != 2 or len(actions) != 1:
+                journey_errors.append(
+                    f"Daybook did not keep one Agent run schedule: {stored}"
+                )
+                return
+            operands = agent_operands(actions[0]["operands"])
+            expected = {
+                "provider": "org.akashic.agent.testing.device-flow",
+                "model": "gpt-slow", "effort": "high", "tier": "priority",
+                "verbosity": 2, "time_ms": 600_000, "output": 16384,
+                "disclosure": len(prompt.encode()), "effects": 0, "flags": 0,
+                "prompt": prompt,
+            }
+            if {key: operands[key] for key in expected} != expected:
+                journey_errors.append(
+                    f"the Agent run's operands are not what was chosen: {operands}"
+                )
+            if not actions[0]["authorized"] or actions[0]["permission_revision"] != 1:
+                journey_errors.append(
+                    f"the Agent run was not kept approved: {actions[0]}"
+                )
+            host_notes.append(
+                f"agent run: created and approved at generation {stored['generation']}"
+            )
+            run_daybook_agent_fire_journey(title, schedules[0]["rid"])
+
+        def run_daybook_agent_fire_journey(title: str, rid: str) -> None:
+            """The approved Agent run fires once, on time, while Daybook
+            and the Agent sit idle, runs on the model it names, and
+            completes; Daybook keeps one item for it and the Agent's
+            scheduled runs list it with its model."""
+
+            if not wait_screen(
+                f"Agent run: {title}", "the Agent run did not fire with its notice",
+                step_budget=6_000_000_000,
+                wall_timeout=300.0,
+            ):
+                return
+            if not wait_screen(
+                f"Agent run done: {title}", "the Agent run did not complete",
+                step_budget=3_000_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            done = read_daybook_reminders() or {}
+            items = [
+                item for item in done.get("occurrences", ()) if item["rid"] == rid
+            ]
+            if len(items) != 1:
+                journey_errors.append(f"the Agent run did not fire once: {items}")
+                return
+            item = items[0]
+            if (item["kind"], item["phase"], item["state"], item["outcome"],
+                    item["reason"]) != (1, 3, 3, 1, 0) or not int(item["run"], 16):
+                journey_errors.append(
+                    f"the Agent run did not complete on time with its run: {item}"
+                )
+            if not item["summary"]:
+                journey_errors.append("the completed Agent run kept no summary")
+            # The Agent lists the run, full frame, with the model it ran on.
+            session.send_key("alt+2")
+            session.send_key("alt+f")
+            session.send_key("f5")
+            for shown, failure in (
+                (title, "the Agent's scheduled runs did not list the run"),
+                ("completed", "the Agent's scheduled runs did not say it completed"),
+                ("gpt-slow", "the Agent's scheduled runs did not name its model"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            session.send_key("f5")
+            session.send_key("alt+f")
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook again"
+            ):
+                return
+            host_notes.append(f"agent run: completed at generation {done['generation']}")
+            run_daybook_agent_wait_journey(title, item["run"])
+
+        def run_daybook_agent_wait_journey(title: str, first_run: str) -> None:
+            """A chat run holds the schedule's next run: due on time, it is
+            handed over and waits, chat cannot send ahead of it, and once
+            the chat run is cancelled it runs next and completes as a run
+            of its own."""
+
+            rtc = session.system.rtc
+            schedule = reminder_state(title)
+            if not schedule or not wait_screen_gone(
+                f"Agent run done: {title}", "the run's notice never cleared",
+                step_budget=1_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("ctrl+l")
+            if not wait_screen("Ask:", "Ctrl+L did not open the Agent's composer"):
+                return
+            # The scripted provider keeps a "linger" run open until cancelled.
+            session.send_text("linger awhile")
+            session.send_key("enter")
+            if not wait_screen(
+                "[Agent: working]", "the chat run did not start",
+                step_budget=500_000_000,
+                wall_timeout=15.0,
+            ):
+                return
+            # Fifteen seconds before the next run: the jump makes nothing
+            # due, and the run then comes due on time.
+            rtc.seed_epoch_ms(schedule["next_utc"] * 1000 - 15_000)
+            if not wait_screen(
+                f"Agent run: {title}",
+                "the next run did not come due while the chat ran",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            waiting = newest_item(title)
+            if not waiting or (
+                waiting["kind"], waiting["phase"], waiting["state"]
+            ) != (1, 1, 0):
+                journey_errors.append(
+                    f"the run due while the chat ran did not wait: {waiting}"
+                )
+                return
+            session.send_key("ctrl+l")
+            if not wait_screen(
+                "Ask:", "Ctrl+L did not open the Agent's composer again"
+            ):
+                return
+            session.send_text("hello")
+            session.send_key("enter")
+            if not wait_screen(
+                "A scheduled run goes first",
+                "chat did not refuse to send ahead of the waiting run",
+            ):
+                return
+            # Escape cancels the chat run, and the waiting run goes next.
+            session.send_key("escape")
+            if not wait_screen(
+                f"Agent run done: {title}",
+                "the waiting run did not run once the chat was cancelled",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            ran = next(
+                (item for item in items_for(title) if item["id"] == waiting["id"]),
+                None,
+            )
+            if not ran or (
+                ran["kind"], ran["phase"], ran["state"], ran["outcome"],
+                ran["reason"],
+            ) != (1, 3, 3, 1, 0) or ran["run"] == first_run or not int(ran["run"], 16):
+                journey_errors.append(
+                    f"the waiting run did not complete as a run of its own: {ran}"
+                )
+                return
+            host_notes.append("agent run: waited behind the chat, then completed")
+            run_daybook_agent_clock_journey(title)
+
+        def run_daybook_agent_clock_journey(title: str) -> None:
+            """Setting the clock back over a run starts nothing again.  A
+            paused run starts nothing when its time passes, and resuming it
+            skips what fell in between.  A jump ahead over two runs starts
+            neither and leaves one missed item for review."""
+
+            rtc = session.system.rtc
+            before = read_daybook_reminders()
+            rtc.seed_epoch_ms(rtc.epoch_ms - 2 * 60_000)
+            if not advance_virtual(
+                150_000, "the guest did not run on after the clock went back"
+            ):
+                return
+            after = read_daybook_reminders()
+            if (
+                before is None or after is None
+                or after["generation"] != before["generation"]
+            ):
+                journey_errors.append(
+                    "setting the clock back over a run started it again"
+                )
+                return
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook"
+            ) or not show_daybook_automations() or not wait_screen(
+                "ACTIVE", "Daybook's automations did not list the Agent run"
+            ):
+                return
+            session.send_key("home")
+            session.send_text("p")
+            if not wait_screen("PAUSED", "P did not pause the Agent run"):
+                return
+            paused = read_daybook_reminders()
+            schedule = reminder_state(title)
+            if paused is None or not schedule or schedule["state"] != 2:
+                journey_errors.append(
+                    f"the Agent run was not saved as paused: {schedule}"
+                )
+                return
+            rtc.seed_epoch_ms(rtc.epoch_ms + 2 * 86_400_000)
+            if not advance_virtual(
+                5_000, "the guest did not run on after the clock jumped"
+            ):
+                return
+            later = read_daybook_reminders()
+            if later is None or later["generation"] != paused["generation"]:
+                journey_errors.append("a paused Agent run fired when its time passed")
+                return
+            session.send_key("home")
+            session.send_text("p")
+            if not wait_screen_gone("PAUSED", "P did not resume the Agent run"):
+                return
+            resumed = reminder_state(title)
+            now_s = rtc.epoch_ms // 1000
+            if (
+                not resumed or resumed["state"] != 1
+                or not now_s < resumed["next_utc"] <= now_s + 86_400
+                or len(items_for(title)) != 2
+            ):
+                journey_errors.append(
+                    "resuming did not skip to the next run: "
+                    f"{resumed} {items_for(title)}"
+                )
+                return
+            rtc.seed_epoch_ms(rtc.epoch_ms + 2 * 86_400_000)
+            if not wait_screen(
+                f"Needs review: {title}",
+                "the jump ahead did not leave the runs it passed for review",
+                step_budget=1_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            missed = newest_item(title)
+            if len(items_for(title)) != 3 or not missed or (
+                missed["kind"], missed["count"], missed["basis"], missed["phase"],
+                missed["state"], missed["outcome"], missed["reason"],
+            ) != (2, 2, 3, 3, 1, 8, 12) or int(missed["run"], 16):
+                journey_errors.append(
+                    "the jump ahead did not leave one missed item that never "
+                    f"started: {items_for(title)}"
+                )
+                return
+            if not show_daybook_calendar():
+                return
+            host_notes.append(
+                "agent run: nothing started on the clock set back, while "
+                "paused, or across a jump, which left one missed item"
+            )
+            run_daybook_agent_review_journey()
+
+        def run_daybook_agent_review_journey() -> None:
+            """An Agent run whose model asks to use a tool stops for review.
+            Daybook keeps it for review, with why, beside the missed runs,
+            and the Agent's scheduled runs say why it stopped."""
+
+            rtc = session.system.rtc
+            title = "Task sweep"
+            prompt = "Capture a task."
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
+            if not begin_daybook_agent_run(
+                title, due_s, "once", SWIFT_CHOICES, "5", "4096"
+            ):
+                return
+            session.send_text(prompt)
+            if not wait_screen(
+                prompt, "the prompt did not show what was typed",
+                step_budget=1_000_000_000,
+                wall_timeout=30.0,
+            ):
+                return
+            session.send_key("ctrl+s")
+            if not approve_daybook_agent_run((
+                (title, "the approval did not name the task run"),
+                ("gpt-fast, low effort", "the approval did not name its model"),
+            )):
+                return
+            rtc.seed_epoch_ms(due_s * 1000 - 15_000)
+            if not wait_screen(
+                f"Needs review: {title}",
+                "the task run did not stop for review",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            items = items_for(title)
+            if len(items) != 1 or (
+                items[0]["kind"], items[0]["phase"], items[0]["state"],
+                items[0]["outcome"], items[0]["reason"],
+            ) != (1, 3, 1, 5, 16) or not int(items[0]["run"], 16):
+                journey_errors.append(
+                    f"the task run did not stop for review on a tool: {items}"
+                )
+                return
+            # Full frame, Daybook's automations hold both for review, and
+            # the task run's details and the Agent's scheduled runs say why
+            # it stopped.
+            session.send_key("alt+f")
+            if not show_daybook_automations():
+                return
+            for shown, failure in (
+                ("NEEDS REVIEW", "Daybook's automations did not hold runs for review"),
+                ("stopped for review",
+                 "Daybook's automations did not show the task run stopped"),
+                ("missed 2, last", "Daybook's automations did not show the missed runs"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            # Its schedule, done, is the last row.
+            session.send_key("end")
+            session.send_key("enter")
+            if not wait_screen(
+                "Automation details", "Enter did not open the task run's details"
+            ) or not wait_screen(
+                "stopped for review: asked to use a tool",
+                "the task run's details did not say why it stopped",
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Automation details", "Escape did not leave the details"
+            ) or not show_daybook_calendar():
+                return
+            session.send_key("alt+f")
+            session.send_key("alt+2")
+            session.send_key("alt+f")
+            session.send_key("f5")
+            for shown, failure in (
+                (title, "the Agent's scheduled runs did not list the task run"),
+                ("stopped for review: asked to use a tool  gpt-fast",
+                 "the Agent's scheduled runs did not say why the task run stopped"),
+            ):
+                if not wait_screen(shown, failure):
+                    return
+            session.send_key("f5")
+            session.send_key("alt+f")
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook again"
+            ):
+                return
+            host_notes.append("agent run: a tool request stopped the task run for review")
+            # Desk then sleeps with the Agent runs scheduled and held for
+            # review: its broker, the Agent's dispatcher and Daybook's
+            # service add nothing while idle.
+            measure_idle_load(2000, ceiling=0.10)
+
+        def run_daybook_agent_recovery_journey() -> None:
+            """An Agent run that lingers runs under its permission: chat
+            cannot send meanwhile, and Desk asks before shutting down,
+            where Keep running keeps it.  The disk as it is then, mid-run,
+            is what a power loss would leave.  Revoking the permission
+            cancels the run.  The permission holds none of the run's
+            words."""
+
+            rtc = session.system.rtc
+            title = "Long watch"
+            prompt = "Keep watch and linger."
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
+            if not begin_daybook_agent_run(
+                title, due_s, "daily", SWIFT_CHOICES, "600", "4096"
+            ):
+                return
+            session.send_text(prompt)
+            if not wait_screen(
+                prompt, "the prompt did not show what was typed",
+                step_budget=1_000_000_000,
+                wall_timeout=30.0,
+            ):
+                return
+            session.send_key("ctrl+s")
+            if not approve_daybook_agent_run((
+                (title, "the approval did not name the lingering run"),
+                ("600 min to run", "the approval did not show its time limit"),
+            )):
+                return
+            permissions = MP64FS(bytearray(
+                session.system.storage._image_data
+            )).read_file("schedule-perms.bin")
+            words = [
+                word for word in (title, prompt, "gpt-fast")
+                if word.encode() in permissions
+            ]
+            if words:
+                journey_errors.append(
+                    f"the permission file holds the run's words: {words}"
+                )
+            rtc.seed_epoch_ms(due_s * 1000 - 15_000)
+            if not wait_screen(
+                f"Agent run: {title}", "the lingering run did not fire",
+                step_budget=1_500_000_000,
+                wall_timeout=60.0,
+            ) or not show_daybook_automations() or not wait_screen(
+                "running", "Daybook did not show the run running",
+                step_budget=500_000_000,
+                wall_timeout=15.0,
+            ):
+                return
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("ctrl+l")
+            if not wait_screen("Ask:", "Ctrl+L did not open the Agent's composer"):
+                return
+            session.send_text("hello")
+            session.send_key("enter")
+            if not wait_screen(
+                "A scheduled run goes first",
+                "chat did not refuse to send while a scheduled run ran",
+            ):
+                return
+            session.send_key("alt+q")
+            if not wait_screen(
+                "Shut down Desk?",
+                "Alt+Q did not ask first while a run was in flight",
+            ) or not wait_screen(
+                "Keep running", "the question did not offer to keep running"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "Shut down Desk?", "Keep running did not close the question"
+            ):
+                return
+            running = newest_item(title)
+            if not running or (
+                running["kind"], running["phase"], running["state"]
+            ) != (1, 2, 0):
+                journey_errors.append(
+                    f"the run was not in flight after Keep running: {running}"
+                )
+                return
+            # The disk now, mid-run, is what a power loss would leave.
+            power_loss = bytes(session.system.storage._image_data)
+            session.send_key("alt+p")
+            if not wait_screen(
+                "Scheduled run permissions",
+                "Alt+P did not open the run permissions",
+            ) or not wait_screen(title, "the run permissions did not name the run"):
+                return
+            session.send_text("r")
+            if not wait_screen(
+                "Revoked; any run under it is cancelled",
+                "R did not revoke the run's permission",
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Scheduled run permissions",
+                "Esc did not close the run permissions",
+            ) or not wait_screen(
+                f"Needs review: {title}", "revoking did not end the run",
+                step_budget=1_000_000_000,
+                wall_timeout=45.0,
+            ):
+                return
+            revoked = newest_item(title)
+            if not revoked or (
+                revoked["id"], revoked["phase"], revoked["state"],
+                revoked["outcome"], revoked["reason"],
+            ) != (running["id"], 3, 1, 3, 2):
+                journey_errors.append(f"revoking did not cancel the run: {revoked}")
+                return
+            host_notes.append("agent run: revoking its permission cancelled it mid-run")
+            run_daybook_agent_power_loss_journey(title, power_loss)
+
+        def run_daybook_agent_power_loss_journey(
+            title: str, power_loss: bytes
+        ) -> None:
+            """A second machine boots the disk a power loss left mid-run.
+            Daybook and the Agent show that run's end as unknown, and boot
+            starts nothing.  Run by hand there, the run makes Desk ask
+            before shutting down, and Shut down cancels it as Desk
+            closes."""
+
+            clock = session.system.rtc.epoch_ms + 60_000
+            with relaunched_desk(power_loss, "power-loss", clock) as (
+                machine, shows, _gone
+            ):
+                if not shows("Entry", "Desk did not come up after the power loss"):
+                    return
+                machine.send_key("alt+1")
+                if not shows(
+                    "[1:Daybook*]", "Desk did not focus Daybook after the power loss"
+                ):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f4")
+                if not shows(
+                    "indeterminate: interrupted",
+                    "Daybook did not show the interrupted run's end as unknown",
+                ):
+                    return
+                # The schedule is the last row, below the run for review.
+                machine.send_key("end")
+                machine.send_text("r")
+                if not shows("running", "R did not run it by hand"):
+                    return
+                # A bare Escape followed at once by an Alt key would read as
+                # Alt+Escape, so each waits for the calendar first.
+                machine.send_key("escape")
+                if not shows(" entries  |  ", "Escape did not return to the calendar"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("alt+2")
+                if not shows("[2:Agent*]", "Desk did not focus the Agent"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f5")
+                if not shows(
+                    "indeterminate: interrupted  gpt-fast",
+                    "the Agent's runs did not show the interrupted run",
+                ):
+                    return
+                machine.send_key("f5")
+                machine.send_key("alt+f")
+                machine.send_key("alt+q")
+                if not shows(
+                    "Shut down Desk?", "Alt+Q did not ask first while the run ran"
+                ):
+                    return
+                machine.send_key("down")
+                machine.send_key("enter")
+                if not shows("[akashic] desktop exited", "Shut down did not close Desk"):
+                    return
+                shut = bytes(machine.system.storage._image_data)
+                clock = machine.system.rtc.epoch_ms + 60_000
+            host_notes.append(
+                "agent run: a power loss mid-run left its end unknown; "
+                "Shut down cancelled the next"
+            )
+            run_daybook_agent_shutdown_journey(title, shut, clock)
+
+        def run_daybook_agent_shutdown_journey(
+            title: str, shut: bytes, clock: int
+        ) -> None:
+            """A third machine boots the disk Desk left as it shut down.
+            Daybook and the Agent show the run Shut down cancelled, and boot
+            starts nothing.  Deleting the schedule keeps a short record of
+            each run and leaves the Agent's runs; its permission, kept, is
+            then for a schedule Daybook no longer has, and R revokes it."""
+
+            def stored_items(machine) -> tuple[dict | None, list]:
+                stored = daybook_automations(MP64FS(bytearray(
+                    machine.system.storage._image_data
+                )).read_file("daybook-automations.bin"))
+                schedule = next((
+                    item for item in stored["schedules"]
+                    if item["rid"] == rid
+                ), None)
+                return schedule, sorted((
+                    item for item in stored["occurrences"] if item["rid"] == rid
+                ), key=lambda item: item["id"])
+
+            saved = daybook_automations(
+                MP64FS(bytearray(shut)).read_file("daybook-automations.bin")
+            )
+            rid = next((
+                item["rid"] for item in saved["schedules"]
+                if item["title"] == title
+            ), None)
+            with relaunched_desk(shut, "shutdown", clock) as (machine, shows, gone):
+                if not shows("Entry", "Desk did not come up after shutting down"):
+                    return
+                machine.send_key("alt+1")
+                if not shows(
+                    "[1:Daybook*]", "Desk did not focus Daybook after shutting down"
+                ):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f4")
+                for shown, failure in (
+                    ("cancelled: Desk shut down",
+                     "Daybook did not show the run Shut down cancelled"),
+                    ("indeterminate: interrupted",
+                     "Daybook lost the run the power loss interrupted"),
+                ):
+                    if not shows(shown, failure):
+                        return
+                _, items = stored_items(machine)
+                if [
+                    (item["kind"], item["phase"], item["state"],
+                     item["outcome"], item["reason"])
+                    for item in items
+                ] != [(1, 3, 1, 7, 26), (3, 3, 1, 3, 15)]:
+                    journey_errors.append(
+                        "Daybook did not keep the interrupted run and the run "
+                        f"Shut down cancelled, and only those: {items}"
+                    )
+                    return
+                # A run that ended indeterminate keeps its schedule until
+                # it is reviewed.  It is the second row, and Enter reviews
+                # it; the schedule is the last.
+                for check in ("refused", "deleted"):
+                    machine.send_key("end")
+                    machine.send_key("delete")
+                    if not shows(
+                        "Type DELETE to delete this automation:",
+                        "Delete did not ask first",
+                    ):
+                        return
+                    machine.send_text("DELETE")
+                    machine.send_key("enter")
+                    if check == "deleted":
+                        break
+                    if not shows(
+                        "Review its last run first",
+                        "deleting did not wait for the interrupted run's review",
+                    ):
+                        return
+                    machine.send_key("home")
+                    machine.send_key("down")
+                    machine.send_key("enter")
+                    if not gone(
+                        "indeterminate: interrupted",
+                        "Enter did not review the interrupted run",
+                    ):
+                        return
+                if not shows(
+                    "No automations",
+                    "deleting did not take the schedule and its runs from view",
+                ):
+                    return
+                schedule, records = stored_items(machine)
+                if not schedule or schedule["state"] != 4 or schedule["title"] or [
+                    (item["outcome"], item["reason"], item["flags"] & 1,
+                     item["summary"], bool(int(item["run"], 16)))
+                    for item in records
+                ] != [(7, 26, 1, "", True), (3, 15, 1, "", True)]:
+                    journey_errors.append(
+                        "deleting did not keep only a short record of each run: "
+                        f"{schedule} {records}"
+                    )
+                    return
+                machine.send_key("escape")
+                if not shows(" entries  |  ", "Escape did not return to the calendar"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("alt+2")
+                if not shows("[2:Agent*]", "Desk did not focus the Agent"):
+                    return
+                machine.send_key("alt+f")
+                machine.send_key("f5")
+                for shown, failure in (
+                    ("cancelled: Desk shut down  gpt-fast",
+                     "the Agent's runs did not keep the run Shut down cancelled"),
+                    ("indeterminate: interrupted  gpt-fast",
+                     "the Agent's runs did not keep the interrupted run"),
+                ):
+                    if not shows(shown, failure):
+                        return
+                machine.send_key("f5")
+                machine.send_key("alt+f")
+                machine.send_key("alt+p")
+                if not shows(
+                    "A schedule Daybook no longer has",
+                    "the run permissions did not say the schedule is gone",
+                ):
+                    return
+                machine.send_text("r")
+                if not shows(
+                    "Revoked; any run under it is cancelled",
+                    "R did not revoke the deleted schedule's permission",
+                ) or not gone(
+                    "A schedule Daybook no longer has",
+                    "the revoked permission stayed listed",
+                ):
+                    return
+                machine.send_key("escape")
+            host_notes.append(
+                "agent run: after a shutdown, deleting kept a short record of each run"
+            )
+
+        def run_daybook_agent_document_journey() -> None:
+            """A scheduled Agent run reads one exact Library document.
+            Library makes the document through its own steps and sends that
+            exact version to Daybook with Ctrl+G, whose new run then reads
+            it.  Desk's approval names the document with its title,
+            revision and size, and the run may disclose its prompt and that
+            document.  Closed before the run is due, Library is started
+            minimized when the run starts.  The run reads the document as
+            itself, the model is given its exact text as a reference, and
+            the transcript says which version was read, never its text."""
+
+            rtc = session.system.rtc
+            doc_title = "Field notes"
+            doc_text = "Quarterly figures rose by four percent."
+            title = "Notes digest"
+            prompt = "Summarize the notes."
+            size = len(doc_text.encode())
+            session.send_key("alt+3")
+            if not wait_screen("[3:Library*]", "Desk did not focus Library"):
+                return
+            session.send_key("ctrl+n")
+            if not wait_screen(
+                "New document title:", "Ctrl+N did not ask for the title"
+            ):
+                return
+            session.send_text(doc_title)
+            session.send_key("enter")
+            if not wait_screen("Initial text", "Library did not ask for the text"):
+                return
+            session.send_text(doc_text)
+            session.send_key("enter")
+            # Library's first document makes its store: 1.7 billion steps.
+            # Its tile is too narrow for the preview pane, but it reads the
+            # selected version's preview as it lists it, and that is the
+            # version Ctrl+G sends.
+            if not wait_screen(
+                f"M   {doc_title}", "Library did not list the new document",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ) or not wait_screen(
+                "|  1 rows", "Library did not count the new document"
+            ):
+                return
+            # Its exact version goes to Daybook, which begins a new run.
+            asked = total_steps
+            asked_ms = rtc.uptime_ms
+            session.send_key("ctrl+g")
+            if not wait_screen(
+                "[1:Daybook*]", "Ctrl+G did not bring Daybook forward"
+            ) or not wait_screen(
+                "Agent run (HH:MM", "Daybook did not begin a run reading it",
+                # Daybook asks Desk to describe the document through its
+                # owner before the steps begin.
+                step_budget=1_000_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            host_notes.append(
+                f"agent run: Daybook began it {total_steps - asked:,} steps "
+                f"and {rtc.uptime_ms - asked_ms:,} virtual ms after Ctrl+G, "
+                "with the document described through Library"
+            )
+            # The run is due well after the steps that make and approve it
+            # and close Library; the clock then moves to just before it.
+            due_s = (rtc.epoch_ms // 60_000 + 15) * 60
+            if not continue_daybook_agent_run(
+                title, due_s, "daily", SWIFT_CHOICES, "10", "4096",
+                f"New Agent run reading {doc_title}: its prompt",
+            ):
+                return
+            session.send_text(prompt)
+            if not wait_screen(prompt, "the prompt did not show what was typed"):
+                return
+            session.send_key("ctrl+s")
+            # Desk asks Library for the document's title, revision and size
+            # before it shows the approval.
+            if not approve_daybook_agent_run((
+                (title, "the approval did not name the schedule"),
+                (f"{doc_title}, revision 1, {size} bytes",
+                 "the approval did not name the document's version"),
+                (f"{len(prompt) + size} bytes to disclose",
+                 "the approval did not disclose the prompt and the document"),
+            ), step_budget=1_000_000_000, wall_timeout=120.0, note="agent run"):
+                return
+            stored = read_daybook_reminders() or {}
+            schedules = [
+                schedule for schedule in stored.get("schedules", ())
+                if schedule["title"] == title
+            ]
+            actions = [
+                action for action in stored.get("actions", ())
+                if schedules and action["rid"] == schedules[0]["rid"]
+            ]
+            if len(actions) != 1:
+                journey_errors.append(f"Daybook did not keep the run: {stored}")
+                return
+            operands = agent_operands(actions[0]["operands"])
+            if (operands["effects"], operands["flags"], operands["disclosure"],
+                    operands["prompt"]) != (1, 1, len(prompt) + size, prompt):
+                journey_errors.append(
+                    f"the run's operands do not read the document: {operands}"
+                )
+                return
+            # Library closes before the run is due, closing its store.
+            session.send_key("alt+3")
+            if not wait_screen("[3:Library*]", "Desk did not focus Library"):
+                return
+            closing = total_steps
+            closing_ms = rtc.uptime_ms
+            session.send_key("alt+w")
+            if not wait_screen_gone(
+                "[3:Library", "Alt+W did not close Library",
+                step_budget=1_000_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            host_notes.append(
+                f"agent run: Library closed {total_steps - closing:,} steps "
+                f"and {rtc.uptime_ms - closing_ms:,} virtual ms after Alt+W"
+            )
+            rtc.seed_epoch_ms(due_s * 1000 - 15_000)
+            # The run starts Library minimized to read the document.
+            if not wait_screen(
+                f"Agent run: {title}", "the run did not fire",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ) or not wait_screen(
+                f"Agent run done: {title}",
+                "the run reading the document did not complete",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ):
+                return
+            done = newest_item(title)
+            if not done or (
+                done["phase"], done["outcome"], done["reason"]
+            ) != (3, 1, 0):
+                journey_errors.append(f"the run did not complete: {done}")
+                return
+            # Desk started Library to read the document, minimized: in the
+            # taskbar, with no tile and no focus.  The run's notice may
+            # cover the taskbar for a while.
+            if not wait_screen(
+                "Library~]", "Desk did not start Library minimized"
+            ):
+                return
+            started = re.findall(
+                r"\[(\d+):Library([*~]?)\]", session.snapshot().text()
+            )
+            if len(started) != 1 or started[0][1] != "~":
+                journey_errors.append(
+                    f"Library is not running minimized after the run: {started}"
+                )
+                return
+            library_id = started[0][0]
+            digest = hashlib.sha3_256(doc_text.encode()).hexdigest()[:8]
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("alt+f")
+            session.send_key("f5")
+            if not wait_screen(title, "the Agent's runs did not list the run"):
+                return
+            session.send_key("enter")
+            # The transcript wraps to the terminal's width.
+            for shown, failure in (
+                (f"Read the document: {doc_title} (revision 1, {size} bytes)",
+                 "the transcript did not say which version was read"),
+                (f"With a reference of {size} bytes, SHA3 {digest}",
+                 "the model was not given the document's exact text"),
+            ):
+                if not wait_screen_normalized(shown, failure):
+                    return
+            if doc_text in " ".join(session.snapshot().text().split()):
+                journey_errors.append("the transcript shows the document's text")
+                return
+            # Back at the chat and out of full frame, Library comes back
+            # when the user asks for it by its number.
+            session.send_key("f5")
+            if not wait_screen(
+                "Start a conversation", "F5 did not return the Agent to its chat"
+            ):
+                return
+            session.send_key("alt+f")
+            session.send_key(f"alt+{library_id}")
+            if not wait_screen(
+                f"[{library_id}:Library*]",
+                f"Alt+{library_id} did not bring Library back",
+            ) or not wait_screen(
+                f"M   {doc_title}", "Library did not list the document again"
+            ):
+                return
+            host_notes.append("agent run: read its document once, as itself")
+            run_daybook_agent_changed_document_journey(title, doc_title)
+
+        def run_daybook_agent_changed_document_journey(
+            title: str, doc_title: str
+        ) -> None:
+            """Renamed in Library, the document is at a new revision, so the
+            daily run approved for the old one, run by hand, stops for
+            review before it reads anything.  Daybook, the schedule's
+            details and the Agent's runs say the document changed."""
+
+            renamed = f"{doc_title} (revised)"
+            session.send_key("f2")
+            if not wait_screen("Replace title:", "F2 did not ask for the new title"):
+                return
+            session.send_text(" (revised)")
+            renaming = total_steps
+            renaming_ms = session.system.rtc.uptime_ms
+            session.send_key("enter")
+            if not wait_screen(
+                f"M   {renamed}", "Library did not list the renamed document",
+                step_budget=3_000_000_000,
+                wall_timeout=300.0,
+            ):
+                return
+            host_notes.append(
+                f"agent run: Library renamed the document "
+                f"{total_steps - renaming:,} steps and "
+                f"{session.system.rtc.uptime_ms - renaming_ms:,} virtual ms "
+                "after Enter"
+            )
+            session.send_key("alt+1")
+            if not wait_screen("[1:Daybook*]", "Desk did not focus Daybook"):
+                return
+            # The schedule is the last row.  Run by hand, the run ends as
+            # Daybook hands it over, and its list shows it at once.
+            session.send_key("end")
+            session.send_text("r")
+            if not wait_screen(
+                "stopped for review: the document",
+                "the run of the changed document did not stop for review",
+                step_budget=1_500_000_000,
+                wall_timeout=120.0,
+            ):
+                return
+            stopped = newest_item(title)
+            if not stopped or (
+                stopped["phase"], stopped["outcome"], stopped["reason"]
+            ) != (3, 5, 18):
+                journey_errors.append(
+                    f"the run did not stop because the document changed: {stopped}"
+                )
+                return
+            # The schedule's details list its runs, newest first.
+            session.send_key("end")
+            session.send_key("enter")
+            if not wait_screen(
+                "Automation details", "Enter did not open the schedule's details"
+            ) or not wait_screen_normalized(
+                "stopped for review: the document changed",
+                "the run's details did not say the document changed",
+            ):
+                return
+            session.send_key("escape")
+            if not wait_screen_gone(
+                "Automation details", "Escape did not leave the details"
+            ):
+                return
+            session.send_key("alt+2")
+            if not wait_screen("[2:Agent*]", "Desk did not focus the Agent"):
+                return
+            session.send_key("alt+f")
+            session.send_key("f5")
+            if not wait_screen_normalized(
+                "stopped for review: the document changed",
+                "the Agent's runs did not say the document changed",
+            ):
+                return
+            session.send_key("f5")
+            session.send_key("alt+f")
+            if not wait_screen(
+                "Start a conversation", "Alt+F did not bring Desk's tiles back"
+            ):
+                return
+            host_notes.append(
+                "agent run: stopped for review once its document changed"
+            )
+
+        def run_daybook_reminders_journey() -> None:
+            """The reminder made at boot fires once inside Desk, on time,
+            with a notice, and stays as one review item."""
+
+            notice = f"Reminder: {DAYBOOK_REMINDER_TITLE}"
+            if not wait_screen(
+                notice,
+                "Desk did not show the boot reminder's notice",
+                step_budget=4_000_000_000,
+                wall_timeout=240.0,
+            ):
+                return
+            fired = read_daybook_reminders()
+            if fired is None:
+                journey_errors.append("Daybook's reminder file is missing")
+                return
+            expected = [{
+                "id": 1, "first": 1, "last": 1, "count": 1,
+                "kind": 1, "state": 1, "basis": 1, "action": 1,
+            }]
+            if [
+                {key: item[key] for key in expected[0]}
+                for item in fired["occurrences"]
+            ] != expected:
+                journey_errors.append(
+                    "the boot reminder did not fire once, on time: "
+                    f"{fired['occurrences']}"
+                )
+            states = {
+                schedule["title"]: schedule["state"]
+                for schedule in fired["schedules"]
+            }
+            if states != {DAYBOOK_REMINDER_TITLE: 3, DAYBOOK_DAILY_TITLE: 1}:
+                journey_errors.append(
+                    "the one-off reminder did not complete, or the daily one "
+                    f"changed, after firing: {fired['schedules']}"
+                )
+            # The notice times out and nothing is written again.
+            wait_screen_gone(
+                notice,
+                "the reminder's notice never cleared",
+                step_budget=2_000_000_000,
+                wall_timeout=120.0,
+            )
+            later = read_daybook_reminders()
+            if later is None or later["generation"] != fired["generation"]:
+                journey_errors.append(
+                    "Desk wrote Daybook's reminders again after the firing"
+                )
+            host_notes.append(
+                f"reminders: fired at generation {fired['generation']}"
+            )
+            run_daybook_reminders_view_journey()
+
+        def reminder_state(title: str) -> dict[str, int] | None:
+            current = read_daybook_reminders()
+            for schedule in (current or {}).get("schedules", ()):
+                if schedule["title"] == title:
+                    return schedule
+            return None
+
+        def run_daybook_reminders_view_journey() -> None:
+            """Daybook's reminders view reviews the firing, and pauses and
+            resumes the daily reminder, through ordinary keys."""
+
+            session.send_key("alt+1")
+            if not wait_screen(
+                "[1:Daybook*]", "Desk did not focus Daybook"
+            ):
+                return
+            session.send_key("f4")
+            if not wait_screen(
+                "NEEDS REVIEW", "F4 did not show Daybook's reminders"
+            ):
+                return
+            if not wait_screen(
+                "fired ", "the firing did not show as fired on time"
+            ):
+                return
+            if not wait_screen(
+                "next ", "the daily reminder did not show its next firing"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "NEEDS REVIEW", "Enter did not review the firing"
+            ):
+                return
+            reviewed = read_daybook_reminders()
+            if not reviewed or [
+                item["state"] for item in reviewed["occurrences"]
+            ] != [2]:
+                journey_errors.append(
+                    "the reviewed firing was not saved as reviewed: "
+                    f"{reviewed and reviewed['occurrences']}"
+                )
+            session.send_key("home")
+            session.send_text("p")
+            if not wait_screen(
+                "PAUSED", "P did not pause the daily reminder"
+            ):
+                return
+            paused = reminder_state(DAYBOOK_DAILY_TITLE)
+            if not paused or paused["state"] != 2:
+                journey_errors.append(
+                    f"the daily reminder was not saved as paused: {paused}"
+                )
+            session.send_text("p")
+            if not wait_screen_gone(
+                "PAUSED", "P did not resume the daily reminder"
+            ):
+                return
+            resumed = reminder_state(DAYBOOK_DAILY_TITLE)
+            if not resumed or (resumed["state"], resumed["revision"]) != (1, 3):
+                journey_errors.append(
+                    f"the daily reminder was not saved as resumed: {resumed}"
+                )
+            session.send_key("escape")
+            if wait_screen(
+                " entries  |  ", "Escape did not return to Daybook's calendar"
+            ):
+                run_daybook_reminders_create_journey()
+
+        def items_for(title: str) -> list[dict[str, int]]:
+            current = read_daybook_reminders() or {}
+            rids = {
+                schedule["rid"] for schedule in current.get("schedules", ())
+                if schedule["title"] == title
+            }
+            return [
+                item for item in current.get("occurrences", ())
+                if item["rid"] in rids
+            ]
+
+        def advance_virtual(virtual_ms: int, failure: str) -> bool:
+            """Let the guest run until its uptime moves VIRTUAL_MS on."""
+
+            nonlocal total_steps
+            rtc = session.system.rtc
+            started = rtc.uptime_ms
+            local_deadline = min(deadline, time.monotonic() + 120.0)
+            while (
+                rtc.uptime_ms - started < virtual_ms
+                and time.monotonic() < local_deadline
+            ):
+                report = session.run(
+                    max_steps=50_000_000,
+                    wall_timeout_s=1.0,
+                    advance_idle=True,
+                )
+                total_steps += report.steps
+                if report.reason == "halted":
+                    break
+            if rtc.uptime_ms - started < virtual_ms:
+                journey_errors.append(failure)
+                return False
+            return True
+
+        def run_daybook_reminders_create_journey() -> None:
+            """A reminder made through Daybook's prompts fires on time,
+            never again when the clock is set back over it, once as missed
+            when the clock is set two days ahead, and keeps its next firing
+            and review items across a restart."""
+
+            rtc = session.system.rtc
+            title = "Feed the cat"
+            due_s = (rtc.epoch_ms // 60_000 + 3) * 60
+            hhmm = time.strftime("%H:%M", time.gmtime(due_s))
+            session.send_key("f4")
+            if not wait_screen("ACTIVE", "F4 did not show the reminders again"):
+                return
+            session.send_key("ctrl+n")
+            if not wait_screen(
+                "Reminder (HH:MM", "Ctrl+N did not ask for a new reminder"
+            ):
+                return
+            session.send_text(f"{hhmm} {title}")
+            session.send_key("enter")
+            if not wait_screen(
+                "Repeat (once", "Daybook did not ask how the reminder repeats"
+            ):
+                return
+            session.send_text("daily")
+            session.send_key("enter")
+            if not wait_screen(
+                "Zone (Enter for UTC0)", "Daybook did not ask for the zone"
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen(
+                "Reminder created", "Daybook did not create the reminder"
+            ):
+                return
+            created = reminder_state(title)
+            if not created or (
+                created["state"], created["next"], created["next_utc"]
+            ) != (1, 1, due_s):
+                journey_errors.append(
+                    f"the new reminder was not saved due at {hhmm}: {created}"
+                )
+                return
+            if not wait_screen(
+                f"Reminder: {title}",
+                "the new reminder did not fire on time",
+                step_budget=4_000_000_000,
+                wall_timeout=240.0,
+            ):
+                return
+            if [
+                (item["kind"], item["count"], item["basis"])
+                for item in items_for(title)
+            ] != [(1, 1, 1)]:
+                journey_errors.append(
+                    f"the new reminder did not fire once, on time: "
+                    f"{items_for(title)}"
+                )
+            # Review the firing, and archive Stretch, which would otherwise
+            # also come due across the jump ahead.
+            session.send_key("home")
+            session.send_key("enter")
+            if not wait_screen_gone(
+                "NEEDS REVIEW", "Enter did not review the new firing"
+            ):
+                return
+            session.send_key("home")
+            session.send_text("a")
+            if not wait_screen_gone(
+                DAYBOOK_DAILY_TITLE, "A did not archive the daily reminder"
+            ):
+                return
+            stretch = reminder_state(DAYBOOK_DAILY_TITLE)
+            if not stretch or stretch["archived"] != 1:
+                journey_errors.append(
+                    f"the daily reminder was not saved as archived: {stretch}"
+                )
+            # Back six minutes, before the firing, then seven minutes on.
+            before = read_daybook_reminders()
+            rtc.seed_epoch_ms(rtc.epoch_ms - 6 * 60_000)
+            if not advance_virtual(
+                7 * 60_000, "the guest did not run on after the clock went back"
+            ):
+                return
+            after = read_daybook_reminders()
+            if (
+                before is None or after is None
+                or after["generation"] != before["generation"]
+                or f"Reminder: {title}" in session.snapshot().text()
+            ):
+                journey_errors.append(
+                    "setting the clock back fired the reminder again"
+                )
+            # Two days ahead: one missed item covering both days.
+            rtc.seed_epoch_ms(rtc.epoch_ms + 2 * 86_400_000)
+            if not wait_screen(
+                f"Missed: {title}",
+                "the jump ahead did not show a missed reminder",
+                step_budget=1_000_000_000,
+                wall_timeout=60.0,
+            ):
+                return
+            missed = items_for(title)
+            if [
+                (item["kind"], item["count"], item["basis"], item["state"])
+                for item in missed
+            ] != [(1, 1, 1, 2), (2, 2, 3, 1)]:
+                journey_errors.append(
+                    f"the jump ahead did not give one missed item: {missed}"
+                )
+            run_daybook_reminders_restart_journey(title)
+
+        @contextlib.contextmanager
+        def relaunched_desk(image: bytes, name: str, epoch_ms: int):
+            """A second machine booting IMAGE, a copy of a disk saved as
+            NAME beside the smoke's image, with its wall clock at EPOCH_MS.
+            Yields the machine, shows(marker, failure), which runs it until
+            its screen shows MARKER, and gone(marker, failure), which runs it
+            until MARKER leaves the screen.  Either records FAILURE when its
+            time runs out, and saves the screen beside the copy."""
+
+            path = image_path.with_name(
+                f"{image_path.stem}-{name}{image_path.suffix}"
+            )
+            path.write_bytes(image)
+            with MachineSession.from_bios(
+                MEGAPAD_ROOT / "bios.asm",
+                storage_image=path,
+                cols=cols,
+                rows=rows,
+                batch_steps=500_000,
+                ext_mem_size=ext_mem_mib << 20,
+                num_cores=full_cores,
+                num_clusters=clusters,
+                rtc_epoch_ms=epoch_ms,
+            ) as machine:
+                machine.boot()
+
+                def wait(marker: str, failure: str, present: bool) -> bool:
+                    local_deadline = min(deadline, time.monotonic() + 180.0)
+                    while time.monotonic() < local_deadline:
+                        if (marker in machine.snapshot().text()) == present:
+                            return True
+                        report = machine.run(
+                            max_steps=50_000_000,
+                            wall_timeout_s=1.0,
+                            until_text=marker if present else None,
+                            text_scope="screen",
+                            advance_idle=True,
+                        )
+                        if report.reason == "halted":
+                            break
+                    if (marker in machine.snapshot().text()) == present:
+                        return True
+                    journey_errors.append(failure)
+                    machine.snapshot().write_text(path.with_suffix(".txt"))
+                    return False
+
+                def shows(marker: str, failure: str) -> bool:
+                    return wait(marker, failure, True)
+
+                def gone(marker: str, failure: str) -> bool:
+                    return wait(marker, failure, False)
+
+                yield machine, shows, gone
+
+        def run_daybook_reminders_restart_journey(title: str) -> None:
+            """A second machine boots the disk as it now is and finds the
+            reminder's next firing and its missed item; booting fires
+            nothing new."""
+
+            image = bytes(session.system.storage._image_data)
+            saved = daybook_automations(MP64FS(bytearray(image)).read_file(
+                "daybook-automations.bin"
+            ))
+            schedule = next(
+                item for item in saved["schedules"] if item["title"] == title
+            )
+            next_text = time.strftime(
+                "next %Y-%m-%d %H:%M", time.gmtime(schedule["next_utc"])
+            )
+            with relaunched_desk(
+                image, "relaunch", session.system.rtc.epoch_ms + 60_000
+            ) as (second, second_shows, _second_gone):
+                if not second_shows("Entry", "the restarted Desk never came up"):
+                    return
+                second.send_key("alt+1")
+                if not second_shows(
+                    "[1:Daybook*]", "the restarted Desk did not focus Daybook"
+                ):
+                    return
+                second.send_key("f4")
+                if not second_shows(
+                    next_text,
+                    f"the restarted reminders did not show {next_text!r}",
+                ):
+                    return
+                if not second_shows(
+                    "missed 2", "the restarted reminders lost the missed item"
+                ):
+                    return
+                restarted = daybook_automations(MP64FS(bytearray(
+                    second.system.storage._image_data
+                )).read_file("daybook-automations.bin"))
+                if restarted["generation"] != saved["generation"]:
+                    journey_errors.append(
+                        "the restart fired or wrote reminders: generation "
+                        f"{saved['generation']} became {restarted['generation']}"
+                    )
+            host_notes.append(
+                f"reminders: restart kept generation {saved['generation']}"
+            )
+
         def run_shared_resource_journey() -> None:
             stale_marker = "PADOLD"
             owner_marker = "DBNEW"
@@ -30768,6 +33001,19 @@ def smoke(
         if initial_ready and profile_name == "desktop-resource":
             run_shared_resource_journey()
 
+        if initial_ready and profile_name == "desktop-daybook-reminders":
+            run_daybook_reminders_journey()
+            run_schedule_permissions_step()
+
+        if initial_ready and profile_name == "desktop-daybook-agent":
+            run_daybook_agent_create_journey()
+
+        if initial_ready and profile_name == "desktop-daybook-agent-recovery":
+            run_daybook_agent_recovery_journey()
+
+        if initial_ready and profile_name == "desktop-daybook-agent-document":
+            run_daybook_agent_document_journey()
+
         if initial_ready and profile_name == "desktop-streams":
             run_streams_persistence_journey()
 
@@ -31425,6 +33671,24 @@ def smoke(
                         wait_screen(
                             "Ready", "Agent did not recover to its ready state"
                         )
+
+            # F5 shows the scheduled runs, which a standalone Agent has
+            # none of, and Escape returns to the chat.
+            session.send_key("f5")
+            if wait_screen(
+                "Scheduled runs come through Desk",
+                "F5 did not show the Agent's scheduled runs",
+            ):
+                wait_screen("Scheduled runs", "the status did not name the runs view")
+                session.send_key("escape")
+                if wait_screen_gone(
+                    "Scheduled runs come through Desk",
+                    "Escape did not return from the scheduled runs",
+                ):
+                    wait_screen(
+                        "recovered after cancel",
+                        "the chat did not come back after the scheduled runs",
+                    )
 
         if initial_ready and profile_name == "agent-auth-ui":
             fixture_secret = "credential-must-not-render"
@@ -33104,11 +35368,54 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 : _dst-service  ( id-a id-u -- service | 0 )
     _dst-desk @ CINST-SERVICE ;
 
+\ The trusted Agent, Daybook and Library, as Desk's built-in constructor
+\ list names them, and an impostor that claims the Agent's id.
+CREATE _dst-agent-comp COMP-DESC ALLOT
+CREATE _dst-daybook-comp COMP-DESC ALLOT
+CREATE _dst-library-comp COMP-DESC ALLOT
+CREATE _dst-impostor-comp COMP-DESC ALLOT
+CREATE _dst-agent-app APP-DESC ALLOT
+CREATE _dst-daybook-app APP-DESC ALLOT
+CREATE _dst-library-app APP-DESC ALLOT
+VARIABLE _dst-agent
+VARIABLE _dst-daybook
+VARIABLE _dst-library
+VARIABLE _dst-impostor
+
+: _dst-comp  ( id-a id-u desc -- )
+    DUP COMP-DESC-INIT TUCK COMP.ID-U ! COMP.ID-A ! ;
+
+\ An instance of DESC that finds Desk's endpoint.
+: _dst-inst  ( desc -- instance )
+    CINST-NEW DUP 0= _dst-assert DROP
+    _DESK-ENDPOINT OVER CINST.ENDPOINT ! ;
+
+: _dst-trusted  ( -- )
+    S" org.akashic.agent" _dst-agent-comp _dst-comp
+    S" org.akashic.daybook" _dst-daybook-comp _dst-comp
+    S" org.akashic.library.applet" _dst-library-comp _dst-comp
+    S" org.akashic.agent" _dst-impostor-comp _dst-comp
+    _dst-agent-app APP-DESC-INIT _dst-agent-comp _dst-agent-app APP.COMP-DESC !
+    _dst-daybook-app APP-DESC-INIT
+        _dst-daybook-comp _dst-daybook-app APP.COMP-DESC !
+    _dst-library-app APP-DESC-INIT
+        _dst-library-comp _dst-library-app APP.COMP-DESC !
+    _dst-agent-app 0 _DESK-QUEUE-BUILTIN-RAW
+    _dst-daybook-app 0 _DESK-QUEUE-BUILTIN-RAW
+    _dst-library-app 0 _DESK-QUEUE-BUILTIN-RAW
+    _dst-agent-comp _dst-inst _dst-agent !
+    _dst-daybook-comp _dst-inst _dst-daybook !
+    _dst-library-comp _dst-inst _dst-library !
+    _dst-impostor-comp _dst-inst _dst-impostor ! ;
+
+: _dst-agent-service  ( id-a id-u -- service | 0 )
+    _dst-agent @ CINST-SERVICE ;
+
 : _dst-add-ok  ( id-a id-u -- )
-    ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
+    _DESK-ANY ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 14 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
     \ The sandbox is a capability now, not a service.
     S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0= _dst-assert
@@ -33116,6 +35423,7 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" org.akashic.agent.tool-gateway" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.provider-source" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.access-profile" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.agent.dispatch" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.runtime.registry" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.runtime.context" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.runtime.resource-registry"
@@ -33124,6 +35432,8 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" org.akashic.interop.resource-owner-pool"
         _DESK-SERVICE-FIND 0= _dst-assert
     S" org.akashic.resource.daybook" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.daybook.automations" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.runtime.resource-owners" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.interop.endpoint" _DESK-SERVICE-FIND 0<> _dst-assert ;
 
 : _dst-current-services  ( -- )
@@ -33132,14 +35442,16 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
         _DESK-EXTERNAL-IO = _dst-assert
     S" org.akashic.sandbox.pure-compute" _dst-service
         0= _dst-assert
-    S" org.akashic.agent.runtime" _dst-service
+    S" org.akashic.agent.runtime" _dst-agent-service
         _dst-runtime = _dst-assert
-    S" org.akashic.agent.tool-gateway" _dst-service
+    S" org.akashic.agent.tool-gateway" _dst-agent-service
         _dst-gateway = _dst-assert
-    S" org.akashic.agent.provider-source" _dst-service
+    S" org.akashic.agent.provider-source" _dst-agent-service
         _dst-source = _dst-assert
-    S" org.akashic.agent.access-profile" _dst-service
+    S" org.akashic.agent.access-profile" _dst-agent-service
         _dst-runtime ARUNTIME.ACCESS-PROFILE = _dst-assert
+    \ The fixture has not opened the dispatcher, so it lends nothing.
+    S" org.akashic.agent.dispatch" _dst-agent-service 0= _dst-assert
     S" org.akashic.runtime.registry" _dst-service
         _dst-registry = _dst-assert
     S" org.akashic.runtime.context" _dst-service
@@ -33149,6 +35461,9 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" org.akashic.interop.request-bus" _dst-service
         _dst-bus = _dst-assert
     S" org.akashic.resource.daybook" _dst-service
+        0= _dst-assert
+    \ The fixture has not opened the automation service, so it lends nothing.
+    S" org.akashic.daybook.automations" _dst-daybook @ CINST-SERVICE
         0= _dst-assert
     S" org.akashic.interop.endpoint" _dst-service
         _DESK-ENDPOINT = _dst-assert
@@ -33165,23 +35480,23 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
         _DESK-EXTERNAL-IO = _dst-assert
 
     0 _DESK-AGENT-RUNTIME !
-    S" org.akashic.agent.runtime" _dst-service 0= _dst-assert
-    S" org.akashic.agent.access-profile" _dst-service 0= _dst-assert
+    S" org.akashic.agent.runtime" _dst-agent-service 0= _dst-assert
+    S" org.akashic.agent.access-profile" _dst-agent-service 0= _dst-assert
     _dst-runtime _DESK-AGENT-RUNTIME !
-    S" org.akashic.agent.runtime" _dst-service
+    S" org.akashic.agent.runtime" _dst-agent-service
         _dst-runtime = _dst-assert
-    S" org.akashic.agent.access-profile" _dst-service
+    S" org.akashic.agent.access-profile" _dst-agent-service
         _dst-runtime ARUNTIME.ACCESS-PROFILE = _dst-assert
 
     0 _DESK-TOOL-GATEWAY !
-    S" org.akashic.agent.tool-gateway" _dst-service 0= _dst-assert
+    S" org.akashic.agent.tool-gateway" _dst-agent-service 0= _dst-assert
     _dst-gateway _DESK-TOOL-GATEWAY !
-    S" org.akashic.agent.tool-gateway" _dst-service
+    S" org.akashic.agent.tool-gateway" _dst-agent-service
         _dst-gateway = _dst-assert
     0 _DESK-AGENT-SOURCE !
-    S" org.akashic.agent.provider-source" _dst-service 0= _dst-assert
+    S" org.akashic.agent.provider-source" _dst-agent-service 0= _dst-assert
     _dst-source _DESK-AGENT-SOURCE !
-    S" org.akashic.agent.provider-source" _dst-service
+    S" org.akashic.agent.provider-source" _dst-agent-service
         _dst-source = _dst-assert
 
     SDOC-S-INVALID _DESK-DAYBOOK-STATUS !
@@ -33193,12 +35508,86 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" org.akashic.resource.daybook" _dst-service
         0= _dst-assert ;
 
+\ The Agent's services go to the trusted Agent alone, Daybook's
+\ automations to the trusted Daybook alone, and the resource owners to the
+\ trusted Library alone; the shared runtime services go to any component.
+: _dst-lending  ( -- )
+    S" org.akashic.agent.runtime" _dst-desk @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.runtime" _dst-daybook @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.runtime" _dst-impostor @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.tool-gateway" _dst-impostor @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.agent.provider-source" _dst-daybook @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.agent.access-profile" _dst-desk @ CINST-SERVICE
+        0= _dst-assert
+    VFS-CUR _DESK-REMINDERS DBSVC-OPEN 0= _dst-assert
+    S" org.akashic.daybook.automations" _dst-daybook @ CINST-SERVICE
+        _DESK-REMINDERS = _dst-assert
+    S" org.akashic.daybook.automations" _dst-agent @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.daybook.automations" _dst-impostor @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.daybook.automations" _dst-desk @ CINST-SERVICE
+        0= _dst-assert
+    _DESK-REMINDERS DBSVC-CLOSE
+    _dst-runtime VFS-CUR _DESK-AGENT-DISPATCH ADISP-INIT 0= _dst-assert
+    S" org.akashic.agent.dispatch" _dst-agent @ CINST-SERVICE
+        _DESK-AGENT-DISPATCH = _dst-assert
+    S" org.akashic.agent.dispatch" _dst-daybook @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.dispatch" _dst-impostor @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.agent.dispatch" _dst-desk @ CINST-SERVICE 0= _dst-assert
+    _DESK-AGENT-DISPATCH ADISP-FINI
+    S" org.akashic.agent.dispatch" _dst-agent @ CINST-SERVICE 0= _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-library @ CINST-SERVICE
+        _DESK-OWNERS = _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-daybook @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-impostor @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.runtime.resource-owners" _dst-desk @ CINST-SERVICE
+        0= _dst-assert
+    S" org.akashic.runtime.registry" _dst-impostor @ CINST-SERVICE
+        _dst-registry = _dst-assert
+    S" org.akashic.net.external-io" _dst-daybook @ CINST-SERVICE
+        _DESK-EXTERNAL-IO = _dst-assert
+    \ A lookup that names no caller gets only what any caller may.
+    S" org.akashic.agent.runtime" 0 _DESK-ENDPOINT IEND-SERVICE 0= _dst-assert
+    S" org.akashic.runtime.registry" 0 _DESK-ENDPOINT IEND-SERVICE
+        _dst-registry = _dst-assert ;
+
+\ Only the trusted Library publishes Library's documents' owner: not a
+\ component that only claims Library's id, nor Library an owner Desk does
+\ not know.
+CREATE _dst-library-claim-comp COMP-DESC ALLOT
+CREATE _dst-owner-root 8 ALLOT
+VARIABLE _dst-owner-reg
+: _dst-owner-policy  ( -- )
+    S" org.akashic.library.applet" _dst-library-claim-comp _dst-comp
+    CREG-NEW 0= _dst-assert _dst-owner-reg !
+    _dst-owner-reg @ _DESK-OWNERS ROWN-INIT
+    ['] _DESK-OWNER-ALLOWED? _dst-desk @ _DESK-OWNERS ROWN-POLICY!
+    _dst-library @ _dst-owner-reg @ CREG-INST+ 0= _dst-assert
+    _dst-library-claim-comp _dst-inst
+    DUP _dst-owner-reg @ CREG-INST+ 0= _dst-assert
+    S" org.akashic.library" _dst-owner-root ['] DROP 4 PICK
+        _DESK-OWNERS ROWN-PUBLISH ROWN-S-REFUSED = _dst-assert
+    S" org.akashic.library" _dst-owner-root ['] DROP _dst-library @
+        _DESK-OWNERS ROWN-PUBLISH ROWN-S-OK = _dst-assert
+    S" org.akashic.notes" _dst-owner-root ['] DROP _dst-library @
+        _DESK-OWNERS ROWN-PUBLISH ROWN-S-REFUSED = _dst-assert
+    _DESK-OWNERS ROWN-COUNT@ 1 = _dst-assert
+    DUP _dst-owner-reg @ CREG-INST- DROP CINST-FREE
+    _dst-library @ _dst-owner-reg @ CREG-INST- DROP
+    _DESK-OWNERS ROWN-FREE
+    _dst-owner-reg @ CREG-FREE ;
+
 : _dst-uniqueness  ( -- )
     _DESK-SERVICE-TABLE-INIT
     41 _dst-dynamic !
     S" duplicate" _dst-add-ok
     _DESK-SERVICE-COUNT @ 1 = _dst-assert
-    S" duplicate" ['] _dst-value@ _DESK-SERVICE+
+    S" duplicate" _DESK-ANY ['] _dst-value@ _DESK-SERVICE+
         _DSS-S-DUPLICATE = _dst-assert
     _DESK-SERVICE-COUNT @ 1 = _dst-assert
     S" duplicate" _DESK-SERVICE@ 41 = _dst-assert
@@ -33206,8 +35595,16 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" duplicate" _DESK-SERVICE@ 42 = _dst-assert
     S" Duplicate" _DESK-SERVICE@ 0= _dst-assert
     S" duplicate-extra" _DESK-SERVICE@ 0= _dst-assert
-    0 1 ['] _dst-value@ _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert
-    S" invalid-getter" 0 _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert ;
+    0 1 _DESK-ANY ['] _dst-value@ _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert
+    S" invalid-getter" _DESK-ANY 0 _DESK-SERVICE+ _DSS-S-INVALID = _dst-assert
+    \ An owner is named whole or not at all.
+    S" half-owner" 0 1 ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-INVALID = _dst-assert
+    S" half-owner" S" org.akashic.agent" DROP 0 ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-INVALID = _dst-assert
+    S" half-owner" S" org.akashic.agent" DROP -1 ['] _dst-value@ _DESK-SERVICE+
+        _DSS-S-INVALID = _dst-assert
+    _DESK-SERVICE-COUNT @ 1 = _dst-assert ;
 
 : _dst-full  ( -- )
     _DESK-SERVICE-TABLE-INIT
@@ -33220,14 +35617,14 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     S" fill-12" _dst-add-ok S" fill-13" _dst-add-ok
     S" fill-14" _dst-add-ok S" fill-15" _dst-add-ok
     _DESK-SERVICE-COUNT @ _DESK-SERVICE-CAPACITY = _dst-assert
-    S" fill-16" ['] _dst-value@ _DESK-SERVICE+
+    S" fill-16" _DESK-ANY ['] _dst-value@ _DESK-SERVICE+
         _DSS-S-FULL = _dst-assert
     _DESK-SERVICE-COUNT @ _DESK-SERVICE-CAPACITY = _dst-assert
     S" fill-16" _DESK-SERVICE@ 0= _dst-assert ;
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 14 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
@@ -33258,7 +35655,8 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     _DESK-ENDPOINT IENDPOINT-INIT
     _dst-desk @ _DESK-ENDPOINT IEND.CONTEXT !
     ['] _DESK-ENDPOINT-SERVICE _DESK-ENDPOINT IEND.SERVICE-XT !
-    _DESK-ENDPOINT _dst-desk @ CINST.ENDPOINT ! ;
+    _DESK-ENDPOINT _dst-desk @ CINST.ENDPOINT !
+    _dst-trusted ;
 
 \ A bounded policy, and a sealed one that bounds nothing.
 : _dst-policy-init  ( -- )
@@ -33307,6 +35705,8 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
 : _dst-cleanup  ( -- )
     _DESK-XIO-FINI XIO-S-OK = _dst-assert
     _DESK-SERVICE-TABLE-FINI
+    _dst-agent @ CINST-FREE _dst-daybook @ CINST-FREE _dst-impostor @ CINST-FREE
+    _dst-library @ CINST-FREE
     _dst-desk @ CINST-FREE
     0 _DESK-CURRENT-STATE ! ;
 
@@ -33318,6 +35718,8 @@ CREATE _dst-partial-raw SBOX-LIMITS-SIZE 7 + ALLOT
     _dst-production-ids _dst-stack
     _dst-current-services _dst-stack
     _dst-availability _dst-stack
+    _dst-lending _dst-stack
+    _dst-owner-policy _dst-stack
     _dst-uniqueness _dst-stack
     _dst-full _dst-stack
     _dst-teardown-wipe _dst-stack

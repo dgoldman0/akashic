@@ -79,10 +79,14 @@ REQUIRE ../../../net/tls-trust-registry.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
+REQUIRE ../daybook/automation-service.f
 REQUIRE agent-access-policy.f
+REQUIRE schedule-agent.f
 REQUIRE agent-cap-catalog.f
 REQUIRE ../../../interop/sandbox-capability.f
+REQUIRE ../../../interop/resource-owners.f
 REQUIRE sandbox-surface.f
+REQUIRE schedule-surface.f
 
 \ =====================================================================
 \  §1 — Host Slot Compatibility Views
@@ -309,7 +313,9 @@ _DESK-CURRENT-STATE CMP-CELL: _DTH-DESK-BG
  0 CONSTANT _DSS-ID-A
  8 CONSTANT _DSS-ID-U
 16 CONSTANT _DSS-GET-XT
-24 CONSTANT _DSS-ENTRY-SIZE
+24 CONSTANT _DSS-OWNER-A      \ the only component lent it; 0 for any
+32 CONSTANT _DSS-OWNER-U
+40 CONSTANT _DSS-ENTRY-SIZE
 16 CONSTANT _DESK-SERVICE-CAPACITY
 
 0 CONSTANT _DSS-S-OK
@@ -339,6 +345,16 @@ _DESK-CURRENT-STATE XIO-SERVICE-SIZE CMP-FIELD: _DESK-EXTERNAL-IO
 _DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-STATUS
+\ Daybook's reminders: the service Desk opens, ticks and lends.
+_DESK-CURRENT-STATE DBSVC-SIZE CMP-FIELD: _DESK-REMINDERS
+\ Scheduled runs: the broker that starts what Daybook hands over, and the
+\ Agent's dispatcher, its handler, which Desk lends the Agent.
+_DESK-CURRENT-STATE ADISP-SIZE CMP-FIELD: _DESK-AGENT-DISPATCH
+_DESK-CURRENT-STATE SBRK-HANDLER-SIZE CMP-FIELD: _DESK-SCHEDULE-HANDLER
+_DESK-CURRENT-STATE SBRK-SIZE CMP-FIELD: _DESK-BROKER
+\ The resource owners the running applets publish, which a scheduled
+\ run's document is read through.
+_DESK-CURRENT-STATE ROWN-SIZE CMP-FIELD: _DESK-OWNERS
 _DESK-CURRENT-STATE _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
     CMP-FIELD: _DESK-SERVICES
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SERVICE-COUNT
@@ -355,8 +371,11 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-LIST
 _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-LIST-RGN
 _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-ENTRIES
 _DESK-CURRENT-STATE CMP-CELL: _DESK-LAUNCHER-E-STATUS
-\ The open sandbox screen's slot, or 0.
-_DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-OVERLAY-ID
+\ The open Desk screen's slot, or 0: a sandbox screen, or a schedule's.
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SCREEN-ID
+\ Whether the user chose to shut down while a scheduled run was in flight:
+\ the next close goes ahead once.
+_DESK-CURRENT-STATE CMP-CELL: _DESK-SHUTDOWN-ARMED
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-SOURCE
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-PROVIDER
 _DESK-CURRENT-STATE CMP-CELL: _DESK-AGENT-RUNTIME
@@ -796,6 +815,7 @@ VARIABLE _DLB-H
 : _DESK-OVERLAY-BOX  ( desc -- row col h w true | false )
     DUP DESK-LAUNCHER-DESC = IF DROP _DESK-LAUNCHER-BOX TRUE EXIT THEN
     DUP SBXS-OVERLAY? IF SBXS-BOX TRUE EXIT THEN
+    DUP SCHS-OVERLAY? IF SCHS-BOX TRUE EXIT THEN
     DROP FALSE ;
 
 VARIABLE _DPO-SA
@@ -892,8 +912,8 @@ VARIABLE _DHR-FIRST
         _DESK-MARK-ALL-CHILDREN
         ASHELL-DIRTY!
     THEN
-    DUP _DESK-SBOX-OVERLAY-ID @ = IF
-        0 _DESK-SBOX-OVERLAY-ID !
+    DUP _DESK-SCREEN-ID @ = IF
+        0 _DESK-SCREEN-ID !
         -1 _DESK-BG-DIRTY !
         _DESK-MARK-ALL-CHILDREN
         ASHELL-DIRTY!
@@ -1038,8 +1058,45 @@ VARIABLE _DFI-INST
     _DESK-USE-STATE
     _DESK-BUS @ CBUS-POST ;
 
+VARIABLE _DTC-A
+VARIABLE _DTC-U
+VARIABLE _DTC-FOUND
+VARIABLE _DTC-DESC
+
+\ Resolve authority only from the exact component descriptor pointer carried
+\ by Desk's trusted built-in constructor list, or Desk's own system
+\ component.  Registry text identity alone
+\ is insufficient because an installed descriptor may impersonate a built-in
+\ component id.
+: _DESK-TRUSTED-COMP  ( id-a id-u -- descriptor | 0 )
+    _DTC-U ! _DTC-A ! 0 _DTC-FOUND !
+    \ Desk's own shared sandbox capability is trusted like a built-in.
+    SBOX-CAPABILITY-COMPONENT DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _DTC-A @ _DTC-U @ STR-STR= IF
+        SBOX-CAPABILITY-COMPONENT _DTC-FOUND !
+    THEN
+    _DESK-BUILTIN-N @ 0 ?DO
+        I _DESK-BUILTIN-ENTRY @ APP.COMP-DESC @ _DTC-DESC !
+        _DTC-DESC @ IF
+            _DTC-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
+                _DTC-A @ _DTC-U @ STR-STR= IF
+                _DTC-FOUND @ ?DUP IF
+                    _DTC-DESC @ <> IF 0 UNLOOP EXIT THEN
+                ELSE
+                    _DTC-DESC @ _DTC-FOUND !
+                THEN
+            THEN
+        THEN
+    LOOP
+    _DTC-FOUND @ ;
+
 \ The table contains only routing metadata.  Service ownership and lifetime
 \ remain with Desk; getters make those lifetimes visible at lookup time.
+\ An entry may name the one component it is lent to: only an instance of
+\ that component's trusted built-in descriptor may borrow it through the
+\ endpoint.  Applets share one address space, so this keeps each to its own
+\ services; it is not a boundary against native code, which the sandbox
+\ is.
 : _DESK-SERVICE-ENTRY  ( index -- entry )
     _DSS-ENTRY-SIZE * _DESK-SERVICES + ;
 
@@ -1061,13 +1118,22 @@ VARIABLE _DSSF-ENTRY
 
 VARIABLE _DSSA-ID-A
 VARIABLE _DSSA-ID-U
+VARIABLE _DSSA-OWNER-A
+VARIABLE _DSSA-OWNER-U
 VARIABLE _DSSA-GET-XT
 VARIABLE _DSSA-ENTRY
 
-: _DESK-SERVICE+  ( id-a id-u getter-xt -- status )
-    _DSSA-GET-XT ! _DSSA-ID-U ! _DSSA-ID-A !
+\ No owner: an entry any caller may borrow.
+: _DESK-ANY  ( -- 0 0 ) 0 0 ;
+
+\ Adds the service ID names, which GETTER-XT gets, lent only to the
+\ component OWNER names, or to any caller when OWNER is _DESK-ANY.
+: _DESK-SERVICE+  ( id-a id-u owner-a owner-u getter-xt -- status )
+    _DSSA-GET-XT ! _DSSA-OWNER-U ! _DSSA-OWNER-A ! _DSSA-ID-U ! _DSSA-ID-A !
     _DSSA-ID-A @ 0= _DSSA-ID-U @ 0> 0= OR
     _DSSA-GET-XT @ 0= OR IF _DSS-S-INVALID EXIT THEN
+    _DSSA-OWNER-A @ 0= _DSSA-OWNER-U @ 0= <>
+    _DSSA-OWNER-U @ 0< OR IF _DSS-S-INVALID EXIT THEN
     _DSSA-ID-A @ _DSSA-ID-U @ _DESK-SERVICE-FIND IF
         _DSS-S-DUPLICATE EXIT
     THEN
@@ -1079,6 +1145,8 @@ VARIABLE _DSSA-ENTRY
     _DSSA-ID-A @ _DSSA-ENTRY @ _DSS-ID-A + !
     _DSSA-ID-U @ _DSSA-ENTRY @ _DSS-ID-U + !
     _DSSA-GET-XT @ _DSSA-ENTRY @ _DSS-GET-XT + !
+    _DSSA-OWNER-A @ _DSSA-ENTRY @ _DSS-OWNER-A + !
+    _DSSA-OWNER-U @ _DSSA-ENTRY @ _DSS-OWNER-U + !
     1 _DESK-SERVICE-COUNT +!
     _DSS-S-OK ;
 
@@ -1127,37 +1195,125 @@ VARIABLE _DSSA-ENTRY
     _DESK-DAYBOOK-STATUS @ 0=
     _DESK-DAYBOOK-OWNER @ 0<> AND IF SDOC-SERVICE ELSE 0 THEN ;
 
+: _DESK-SERVICE-REMINDERS@  ( -- service | 0 )
+    _DESK-REMINDERS DUP DBSVC-VALID? 0= IF DROP 0 THEN ;
+
+: _DESK-SERVICE-AGENT-DISPATCH@  ( -- service | 0 )
+    _DESK-AGENT-DISPATCH DUP ADISP-VALID? 0= IF DROP 0 THEN ;
+
 : _DESK-SERVICE-ENDPOINT@  ( -- service )
     _DESK-ENDPOINT ;
 
+: _DESK-SERVICE-OWNERS@  ( -- service ) _DESK-OWNERS ;
+
+: _DESK-LIBRARY$  ( -- a u ) S" org.akashic.library.applet" ;
+
+\ Which built-in component runs each resource owner a locator can name:
+\ the only one that may publish it.  0 0 for an owner Desk does not know.
+: _DESK-OWNER-COMPONENT$  ( owner-a owner-u -- component-a component-u )
+    2DUP S" org.akashic.library" STR-STR= IF 2DROP _DESK-LIBRARY$ EXIT THEN
+    2DROP 0 0 ;
+
+\ The owner directory's policy: INSTANCE may publish OWNER when it is an
+\ instance of the trusted built-in that runs that owner.
+: _DESK-OWNER-ALLOWED?  ( owner-a owner-u instance desk-instance -- flag )
+    _DESK-USE-STATE >R _DESK-OWNER-COMPONENT$
+    DUP 0= IF 2DROP R> DROP 0 EXIT THEN
+    _DESK-TRUSTED-COMP DUP 0= IF R> 2DROP 0 EXIT THEN
+    R> CINST-DESC = ;
+
+\ Launches DESC minimized: it runs, but takes no tile and no focus.
+: _DESK-TRY-LAUNCH-MINIMIZED  ( desc -- id ior )
+    _DTL-DESC !
+    ['] _DTL-PREFLIGHT CATCH ?DUP IF -1 SWAP EXIT THEN
+    _DTL-DESC @ _DESK-HOST AHOST-TRY-LAUNCH-MINIMIZED
+    DUP 0= IF
+        _DTL-DESC @ 2 PICK _DESK-CATALOG-MARK-DESC
+    THEN ;
+
+\ The published owner named OWNER.  When its applet is not running, Desk
+\ starts it minimized from the catalog, and its INIT publishes it.  0 when
+\ Desk does not know the owner, or its applet runs without publishing it,
+\ cannot start, or does not publish it.
+: _DESK-OWNER  ( owner-a owner-u -- entry|0 )
+    2DUP _DESK-OWNERS ROWN-FIND ?DUP IF NIP NIP EXIT THEN
+    2DUP _DESK-OWNER-COMPONENT$ DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    _DESK-CATALOG @ ?DUP 0= IF 2DROP 2DROP 0 EXIT THEN
+    ACAT-FIND-ID ?DUP 0= IF 2DROP 0 EXIT THEN        ( owner-a owner-u entry )
+    DUP ACE.SLOT @ ?DUP IF _DESK-FIND-ID IF DROP 2DROP 0 EXIT THEN THEN
+    _DESK-CATALOG @ ACAT-RESOLVE IF DROP 2DROP 0 EXIT THEN
+    _DESK-TRY-LAUNCH-MINIMIZED NIP IF 2DROP 0 EXIT THEN
+    _DESK-OWNERS ROWN-FIND ;
+
+\ Attaches LOCATOR through its owner, which Desk starts first when it is
+\ not running, over Desk's own context and resource registry.
+: _DESK-OWNER-ATTACH  ( locator binding result desk-instance -- status )
+    _DESK-USE-STATE
+    2 PICK QLOC-OWNER$ _DESK-OWNER DROP
+    >R >R DESK-CONTEXT _DESK-RREG @ R> R> _DESK-OWNERS ROWN-ATTACH ;
+
+: _DESK-AGENT$    ( -- a u ) S" org.akashic.agent" ;
+: _DESK-DAYBOOK$  ( -- a u ) S" org.akashic.daybook" ;
+
+\ The Agent's services go only to the Agent, and Daybook's automations
+\ only to Daybook.  The shared runtime services stay open to any caller;
+\ narrowing them is the Practice permission work's.
 : _DESK-SERVICE-TABLE-SETUP  ( -- status )
     _DESK-SERVICE-TABLE-INIT
-    S" org.akashic.net.external-io" ['] _DESK-SERVICE-XIO@
+    S" org.akashic.net.external-io" _DESK-ANY ['] _DESK-SERVICE-XIO@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.runtime" ['] _DESK-SERVICE-AGENT-RUNTIME@
+    S" org.akashic.agent.runtime" _DESK-AGENT$
+        ['] _DESK-SERVICE-AGENT-RUNTIME@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.tool-gateway" ['] _DESK-SERVICE-TOOL-GATEWAY@
+    S" org.akashic.agent.tool-gateway" _DESK-AGENT$
+        ['] _DESK-SERVICE-TOOL-GATEWAY@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.provider-source" ['] _DESK-SERVICE-PROVIDER-SOURCE@
+    S" org.akashic.agent.provider-source" _DESK-AGENT$
+        ['] _DESK-SERVICE-PROVIDER-SOURCE@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.agent.access-profile" ['] _DESK-SERVICE-ACCESS-PROFILE@
+    S" org.akashic.agent.access-profile" _DESK-AGENT$
+        ['] _DESK-SERVICE-ACCESS-PROFILE@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.runtime.registry" ['] _DESK-SERVICE-REGISTRY@
+    S" org.akashic.agent.dispatch" _DESK-AGENT$
+        ['] _DESK-SERVICE-AGENT-DISPATCH@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.runtime.context" ['] _DESK-SERVICE-CONTEXT@
+    S" org.akashic.runtime.registry" _DESK-ANY ['] _DESK-SERVICE-REGISTRY@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.runtime.resource-registry"
+    S" org.akashic.runtime.context" _DESK-ANY ['] _DESK-SERVICE-CONTEXT@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.runtime.resource-registry" _DESK-ANY
         ['] _DESK-SERVICE-RESOURCE-REGISTRY@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.interop.request-bus" ['] _DESK-SERVICE-REQUEST-BUS@
+    S" org.akashic.interop.request-bus" _DESK-ANY
+        ['] _DESK-SERVICE-REQUEST-BUS@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.resource.daybook" ['] _DESK-SERVICE-DAYBOOK@
+    S" org.akashic.resource.daybook" _DESK-ANY ['] _DESK-SERVICE-DAYBOOK@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    S" org.akashic.interop.endpoint" ['] _DESK-SERVICE-ENDPOINT@
+    S" org.akashic.daybook.automations" _DESK-DAYBOOK$
+        ['] _DESK-SERVICE-REMINDERS@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.runtime.resource-owners" _DESK-LIBRARY$
+        ['] _DESK-SERVICE-OWNERS@
+        _DESK-SERVICE+ DUP IF EXIT THEN DROP
+    S" org.akashic.interop.endpoint" _DESK-ANY ['] _DESK-SERVICE-ENDPOINT@
         _DESK-SERVICE+ ;
 
-: _DESK-ENDPOINT-SERVICE  ( id-a id-u desk-instance -- service | 0 )
-    _DESK-USE-STATE _DESK-SERVICE@ ;
+\ Whether CALLER, the runtime instance asking, may borrow ENTRY's service:
+\ any caller when the entry names no owner, otherwise only an instance of
+\ the owner's trusted built-in descriptor.  A descriptor that only claims
+\ the owner's id is not the owner, and no instance has descriptor 0, the
+\ answer when no built-in is trusted for the id.
+: _DESK-LENDS?  ( caller entry -- flag )
+    DUP _DSS-OWNER-A + @ 0= IF 2DROP -1 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    DUP _DSS-OWNER-A + @ SWAP _DSS-OWNER-U + @ _DESK-TRUSTED-COMP
+    SWAP CINST-DESC = ;
+
+: _DESK-ENDPOINT-SERVICE  ( id-a id-u caller desk-instance -- service | 0 )
+    _DESK-USE-STATE
+    >R _DESK-SERVICE-FIND ?DUP 0= IF R> DROP 0 EXIT THEN
+    R> OVER _DESK-LENDS? 0= IF DROP 0 EXIT THEN
+    _DSS-GET-XT + @ EXECUTE ;
 
 VARIABLE _DIR-ID-A
 VARIABLE _DIR-ID-U
@@ -1389,6 +1545,42 @@ VARIABLE _DMF-EFFECTS
     THEN
     _DESK-DAYBOOK-OWNER ! ;
 
+\ Opens Daybook's reminders over the Practice filesystem.  A store Desk
+\ cannot use still opens a service, which says why.
+: _DESK-REMINDERS-INIT  ( -- )
+    DESK-CONTEXT CTX.VFS @ _DESK-REMINDERS DBSVC-OPEN DROP ;
+
+\ Opens scheduled runs over the Practice filesystem: the Agent's
+\ dispatcher over its runtime, the broker over the Practice's
+\ permissions with the dispatcher as its handler, and the broker's client
+\ for Daybook's service.  A store either cannot use still opens, and says
+\ why; in recovery there is no Practice, so no broker, and Daybook's
+\ service has no client: scheduled runs are unavailable.
+: _DESK-SCHEDULES-INIT  ( -- )
+    _DESK-AGENT-RUNTIME @ DESK-CONTEXT CTX.VFS @ _DESK-AGENT-DISPATCH ADISP-INIT DROP
+    _DESK-AGENT-DISPATCH _DESK-SCHEDULE-HANDLER DSAG-HANDLER-INIT
+    DESK-CONTEXT CTX.VFS @ DESK-PRACTICE DESK-CONTEXT _DESK-BROKER SBRK-INIT DROP
+    _DESK-BROKER SBRK-VALID? 0= IF EXIT THEN
+    _DESK-SCHEDULE-HANDLER _DESK-BROKER SBRK-HANDLER!
+    _DESK-BROKER SBRK-CLIENT _DESK-REMINDERS DBSVC-CLIENT! ;
+
+\ Cancels the scheduled runs in flight and closes their broker and
+\ dispatcher, while the runtime they run on is still there.
+: _DESK-SCHEDULES-FINI  ( -- )
+    0 _DESK-REMINDERS DBSVC-CLIENT!
+    _DESK-BROKER SBRK-FINI
+    _DESK-AGENT-DISPATCH ADISP-FINI ;
+
+\ A reminder that fires shows as a toast of the service's own notice text,
+\ which stays put until the next one, and the applets repaint so an open
+\ Daybook shows it.
+8000 CONSTANT _DESK-REMINDER-TOAST-MS
+: _DESK-REMINDERS-TICK  ( -- )
+    _DESK-REMINDERS DUP DBSVC-VALID? 0= IF DROP EXIT THEN
+    DBSVC-TICK 0= IF EXIT THEN
+    _DESK-REMINDERS DBSVC-NOTICE _DESK-REMINDER-TOAST-MS ASHELL-TOAST
+    _DESK-MARK-ALL-CHILDREN ASHELL-DIRTY! ;
+
 VARIABLE _DMA-A
 VARIABLE _DMA-U
 VARIABLE _DMA-EXPECTED
@@ -1398,38 +1590,6 @@ VARIABLE _DMA-EFFECTS
 VARIABLE _DMA-INST
 VARIABLE _DMA-DESC
 VARIABLE _DMA-CAP
-
-VARIABLE _DTC-A
-VARIABLE _DTC-U
-VARIABLE _DTC-FOUND
-VARIABLE _DTC-DESC
-
-\ Resolve authority only from the exact component descriptor pointer carried
-\ by Desk's trusted built-in constructor list, or Desk's own system
-\ component.  Registry text identity alone
-\ is insufficient because an installed descriptor may impersonate a built-in
-\ component id.
-: _DESK-TRUSTED-COMP  ( id-a id-u -- descriptor | 0 )
-    _DTC-U ! _DTC-A ! 0 _DTC-FOUND !
-    \ Desk's own shared sandbox capability is trusted like a built-in.
-    SBOX-CAPABILITY-COMPONENT DUP COMP.ID-A @ SWAP COMP.ID-U @
-        _DTC-A @ _DTC-U @ STR-STR= IF
-        SBOX-CAPABILITY-COMPONENT _DTC-FOUND !
-    THEN
-    _DESK-BUILTIN-N @ 0 ?DO
-        I _DESK-BUILTIN-ENTRY @ APP.COMP-DESC @ _DTC-DESC !
-        _DTC-DESC @ IF
-            _DTC-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
-                _DTC-A @ _DTC-U @ STR-STR= IF
-                _DTC-FOUND @ ?DUP IF
-                    _DTC-DESC @ <> IF 0 UNLOOP EXIT THEN
-                ELSE
-                    _DTC-DESC @ _DTC-FOUND !
-                THEN
-            THEN
-        THEN
-    LOOP
-    _DTC-FOUND @ ;
 
 \ Add the focused live implementation, or otherwise the first live
 \ implementation, of one explicitly named built-in
@@ -1592,6 +1752,7 @@ VARIABLE _DMC-CANDIDATE
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !
     VFS-CUR _DINI-CONTEXT @ CTX.VFS !
     _DESK-DAYBOOK-INIT
+    _DESK-REMINDERS-INIT
     _DESK-PENDING-AGENT-SOURCE @ ?DUP 0= IF
         OFFLINE-SOURCE-NEW
         0<> ABORT" desk: offline source allocation failed"
@@ -1617,6 +1778,11 @@ VARIABLE _DMC-CANDIDATE
     _DESK-PENDING-AGENT-ACCESS @ _DESK-AGENT-RUNTIME @
         ARUNTIME-ACCESS-PRESET!
     ABORT" desk: unavailable or invalid agent access preset"
+    _DESK-SCHEDULES-INIT
+    _DESK-REGISTRY @ _DESK-OWNERS ROWN-INIT
+    ['] _DESK-OWNER-ALLOWED? _DINI-INST @ _DESK-OWNERS ROWN-POLICY!
+    \ A scheduled run's document is attached through its owner.
+    ['] _DESK-OWNER-ATTACH _DINI-INST @ _DESK-BROKER SBRK-OWNERS!
 
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK <>
     ABORT" desk: service table setup failed"
@@ -1692,6 +1858,9 @@ VARIABLE _DIFI-XIO-STATUS
     _DESK-SERVICE-TABLE-FINI
     _DESK-DAYBOOK-DEACTIVATE
     _DESK-DAYBOOK-ACTIVATION-CLEANUP
+    _DESK-SCHEDULES-FINI
+    _DESK-REMINDERS DBSVC-CLOSE
+    _DESK-OWNERS ROWN-FREE
     _DESK-RREG @ ?DUP IF RREG-FREE THEN
     _DESK-AGENT-RUNTIME @ ?DUP IF
         DUP ARUNTIME-ACCESS-PROFILE ?DUP IF
@@ -1951,7 +2120,7 @@ VARIABLE _DSM-WIDTH
             DUP _DSM-PANE
         THEN _SL-NEXT @
     REPEAT
-    _DESK-LAUNCHER-ID @ _DESK-SBOX-OVERLAY-ID @ OR IF
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF
         SHM-F-INPUT-BLOCKED _DSM-M @ SHM.FLAGS !
     THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-ACTIVE? IF
@@ -2138,7 +2307,8 @@ VARIABLE _DSG-N
     0 _DESK-FULLFRAME !
     0 _DESK-CATALOG !
     0 _DESK-LAUNCHER-ID !
-    0 _DESK-SBOX-OVERLAY-ID !
+    0 _DESK-SCREEN-ID !
+    0 _DESK-SHUTDOWN-ARMED !
     0 _DESK-LAUNCHER-STATUS !
     0 _DESK-LAUNCHER-OPEN-REQ !
     0 _DESK-LAUNCHER-LIST !
@@ -2385,7 +2555,7 @@ _DESK-LAUNCHER-DESC-SETUP
     _DESK-LAUNCHER-ID @ ?DUP IF _DESK-FIND-ID ELSE 0 THEN ;
 
 : _DESK-SHOW-LAUNCHER  ( -- )
-    _DESK-LAUNCHER-ID @ _DESK-SBOX-OVERLAY-ID @ OR IF EXIT THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
     0 _DESK-LAUNCHER-STATUS !
     0 _DESK-LAUNCHER-OPEN-REQ !
@@ -2435,46 +2605,57 @@ _DESK-LAUNCHER-DESC-SETUP
     _DESK-LAUNCHER-ID @ _DESK-HOST AHOST-DISPATCH-KEY-ID DROP -1 ;
 
 \ ---------------------------------------------------------------------
-\ Sandbox screens.  Desk opens the shared sandbox's access prompt and its
-\ module inspector (sandbox-surface.f) in the launcher's overlay box, one
-\ overlay at a time.  A tick opens the prompt when a component asks to
-\ use a module and the user has no other overlay open and is not typing
-\ to the Agent; Alt+S opens the inspector.  Like the launcher, an open
-\ screen gets every key, a press outside it does nothing, and what the
-\ user chose is carried out after the host's dispatch returns.
+\ Desk's screens.  Desk opens its own screens in an overlay box above
+\ the tiles, one at a time: the shared sandbox's access prompt and its
+\ module inspector (sandbox-surface.f), and the approval of a scheduled
+\ run and the run permissions (schedule-surface.f).  A tick opens the
+\ access prompt when a component asks to use a module, or an approval
+\ when Daybook asks for one, while the user has no other overlay open and
+\ is not typing to the Agent; Alt+S opens the inspector and Alt+P the
+\ permissions.  Like the launcher, an open screen gets every key, a press
+\ outside it does nothing, and what the user chose is carried out after
+\ the host's dispatch returns.
 
-: _DESK-SBOX-OVERLAY-INST  ( -- instance|0 )
-    _DESK-SBOX-OVERLAY-ID @ ?DUP 0= IF 0 EXIT THEN
-    _DESK-FIND-ID ?DUP IF _SL-INST @ ELSE 0 THEN ;
+: _DESK-SCREEN-SLOT  ( -- slot|0 )
+    _DESK-SCREEN-ID @ ?DUP IF _DESK-FIND-ID ELSE 0 THEN ;
 
-: _DESK-SBOX-OVERLAY-CLOSE  ( -- )
-    _DESK-SBOX-OVERLAY-ID @ ?DUP 0= IF EXIT THEN
+: _DESK-SCREEN-CLOSE  ( -- )
+    _DESK-SCREEN-ID @ ?DUP 0= IF EXIT THEN
     APP-CLOSE-R-WINDOW _DESK-HOST AHOST-REQUEST-CLOSE-ID DROP ;
 
-: _DESK-SBOX-OVERLAY-SERVICE  ( -- )
-    _DESK-SBOX-OVERLAY-INST ?DUP 0= IF EXIT THEN
-    SBXS-SERVICE IF _DESK-SBOX-OVERLAY-CLOSE THEN ;
+\ Carries out what the user chose on the open screen, through its own
+\ surface, and closes the screen when the surface says so.  A schedule's
+\ screen is given the wall clock, for a permission granted.
+: _DESK-SCREEN-SERVICE  ( -- )
+    _DESK-SCREEN-SLOT ?DUP 0= IF EXIT THEN
+    DUP _SL-INST @ ?DUP 0= IF DROP EXIT THEN
+    SWAP _SL-DESC @ SBXS-OVERLAY? IF
+        SBXS-SERVICE
+    ELSE
+        DBSVC-NOW SWAP SCHS-SERVICE
+    THEN
+    IF _DESK-SCREEN-CLOSE THEN ;
 
-: _DESK-SBOX-OVERLAY-POINTER  ( ev -- )
+: _DESK-SCREEN-POINTER  ( ev -- )
     DUP ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON
     DUP KEY-MOUSE-DRAG = SWAP KEY-MOUSE-RELEASE = OR 0= IF
         DUP ASHELL-MOUSE-ROW OVER ASHELL-MOUSE-COL _DESK-HOST AHOST-TILE-AT
-        _DESK-SBOX-OVERLAY-ID @ _DESK-FIND-ID <> IF DROP EXIT THEN
+        _DESK-SCREEN-ID @ _DESK-FIND-ID <> IF DROP EXIT THEN
     THEN
     _DESK-HOST AHOST-DISPATCH-MOUSE DROP ;
 
-: _DESK-SBOX-OVERLAY-EVENT  ( ev -- consumed? )
+: _DESK-SCREEN-EVENT  ( ev -- consumed? )
     DUP ASHELL-MOUSE? IF
-        _DESK-SBOX-OVERLAY-POINTER
+        _DESK-SCREEN-POINTER
     ELSE
-        _DESK-SBOX-OVERLAY-ID @ _DESK-HOST AHOST-DISPATCH-KEY-ID DROP
+        _DESK-SCREEN-ID @ _DESK-HOST AHOST-DISPATCH-KEY-ID DROP
     THEN
-    _DESK-SBOX-OVERLAY-SERVICE -1 ;
+    _DESK-SCREEN-SERVICE -1 ;
 
 \ Opens the access prompt for ASK, a request waiting for the user.
 : _DESK-SHOW-SBOX-ACCESS  ( ask -- )
     SBXS-ACCESS-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF 2DROP EXIT THEN
-    DUP _DESK-SBOX-OVERLAY-ID !
+    DUP _DESK-SCREEN-ID !
     _DESK-FIND-ID ?DUP 0= IF DROP EXIT THEN _SL-INST @ >R
     DUP SBOX-CAPABILITY-ASK-ID@ _DESK-SANDBOX @ ['] _DESK-LAUNCHER-STYLE
     R> SBXS-ACCESS-BIND
@@ -2482,19 +2663,68 @@ _DESK-LAUNCHER-DESC-SETUP
 
 : _DESK-SHOW-SBOX-MODULES  ( -- )
     _DESK-SBOX-READY? 0= IF S" The sandbox is off" 1600 ASHELL-TOAST EXIT THEN
-    _DESK-LAUNCHER-ID @ _DESK-SBOX-OVERLAY-ID @ OR IF EXIT THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
     SBXS-INSPECT-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
-    DUP _DESK-SBOX-OVERLAY-ID !
+    DUP _DESK-SCREEN-ID !
     _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
     _DESK-SANDBOX @ ['] _DESK-LAUNCHER-STYLE R> SBXS-INSPECT-BIND
     ASHELL-DIRTY! ;
 
-: _DESK-SBOX-SURFACE-TICK  ( -- )
-    _DESK-SBOX-OVERLAY-ID @ IF _DESK-SBOX-OVERLAY-SERVICE EXIT THEN
+\ Opens the approval ID, the broker's oldest awaiting the user's answer.
+: _DESK-SHOW-SCHEDULE-APPROVAL  ( id -- )
+    SCHS-APPROVE-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF 2DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF DROP EXIT THEN _SL-INST @ >R
+    _DESK-BROKER ['] _DESK-LAUNCHER-STYLE R> SCHS-APPROVE-BIND
+    ASHELL-DIRTY! ;
+
+\ Opens the run permissions, each named by its schedule's title as
+\ Daybook's service gives it.
+: _DESK-SHOW-SCHEDULE-PERMISSIONS  ( -- )
+    _DESK-BROKER SBRK-VALID? 0= IF
+        S" Scheduled runs are unavailable" 1600 ASHELL-TOAST EXIT
+    THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
+    SCHS-PERMS-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
+    _DESK-BROKER ['] DBSVC-LABEL _DESK-REMINDERS ['] _DESK-LAUNCHER-STYLE
+    R> SCHS-PERMS-BIND
+    ASHELL-DIRTY! ;
+
+\ The user chose to shut down: the next close goes ahead, and Desk asks
+\ for it now.
+: _DESK-SHUTDOWN-CONFIRMED  ( -- ) -1 _DESK-SHUTDOWN-ARMED ! ASHELL-QUIT ;
+
+\ Asks whether to shut down while a scheduled run is in flight or
+\ waiting, in place of any overlay open.
+: _DESK-SHOW-SHUTDOWN-QUESTION  ( -- )
+    _DESK-SCREEN-SLOT ?DUP IF _SL-DESC @ SCHS-SHUTDOWN-DESC = IF EXIT THEN THEN
+    _DESK-LAUNCHER-ID @ IF _DESK-LAUNCHER-CLOSE THEN
+    _DESK-SCREEN-CLOSE
+    _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
+    _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
+    SCHS-SHUTDOWN-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
+    DUP _DESK-SCREEN-ID !
+    _DESK-FIND-ID ?DUP 0= IF EXIT THEN _SL-INST @ >R
+    ['] _DESK-SHUTDOWN-CONFIRMED ['] _DESK-LAUNCHER-STYLE R>
+    SCHS-SHUTDOWN-BIND
+    ASHELL-DIRTY! ;
+
+\ Services the open screen, or opens one a component or Daybook asks
+\ for: the sandbox's access prompt first, then a schedule's approval.
+: _DESK-SCREENS-TICK  ( -- )
+    _DESK-SCREEN-ID @ IF _DESK-SCREEN-SERVICE EXIT THEN
     _DESK-LAUNCHER-ID @ IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-ACTIVE? IF EXIT THEN THEN
-    _DESK-SANDBOX @ SBOX-CAPABILITY-ASK ?DUP IF _DESK-SHOW-SBOX-ACCESS THEN ;
+    _DESK-SBOX-READY? IF
+        _DESK-SANDBOX @ SBOX-CAPABILITY-ASK ?DUP IF _DESK-SHOW-SBOX-ACCESS EXIT THEN
+    THEN
+    _DESK-BROKER SBRK-VALID? IF
+        _DESK-BROKER SBRK-ASKING DROP ?DUP IF _DESK-SHOW-SCHEDULE-APPROVAL THEN
+    THEN ;
 
 \ Launch the first unlaunched hotbar entry.
 \ file field = .m64 binary path, desc field = entry word name.
@@ -2531,6 +2761,11 @@ _DESK-LAUNCHER-DESC-SETUP
         DROP _DESK-SHOW-LAUNCHER -1 EXIT THEN
     DUP 115 _DESK-ALT? IF
         DROP _DESK-SHOW-SBOX-MODULES -1 EXIT THEN
+    DUP 112 _DESK-ALT? IF
+        DROP _DESK-SHOW-SCHEDULE-PERMISSIONS -1 EXIT THEN
+    \ Alt+Q shuts Desk down, which asks first while a scheduled run is in
+    \ flight or waiting.
+    DUP 113 _DESK-ALT? IF DROP ASHELL-QUIT -1 EXIT THEN
     DUP 97 _DESK-ALT? IF
         DROP _DESK-SHOW-AGENT-PROMPT -1 EXIT THEN
     DROP 0 ;
@@ -2580,7 +2815,7 @@ VARIABLE _DDT-M
 : DESK-EVENT-CB  ( ev instance -- flag )
     _DESK-USE-STATE
     _DESK-LAUNCHER-ID @ IF _DESK-LAUNCHER-EVENT _DESK-LAUNCHER-SERVICE EXIT THEN
-    _DESK-SBOX-OVERLAY-ID @ IF _DESK-SBOX-OVERLAY-EVENT EXIT THEN
+    _DESK-SCREEN-ID @ IF _DESK-SCREEN-EVENT EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN DROP
     THEN
@@ -2604,12 +2839,15 @@ VARIABLE _DDT-M
             DROP _DESK-MARK-ALL-CHILDREN ASHELL-DIRTY!
         THEN
     THEN
+    \ Scheduled runs follow the runtime: the dispatcher takes the end of
+    \ the run it pumped, and the broker starts the next one waiting.
+    _DESK-AGENT-DISPATCH ADISP-PUMP
+    _DESK-BROKER SBRK-TICK
     _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP DROP THEN
     _DESK-XIO-READY? IF _DESK-EXTERNAL-IO XIO-TICK THEN
-    _DESK-SBOX-READY? IF
-        _DESK-SANDBOX @ SBOX-CAPABILITY-TICK DROP
-        _DESK-SBOX-SURFACE-TICK
-    THEN
+    _DESK-SBOX-READY? IF _DESK-SANDBOX @ SBOX-CAPABILITY-TICK DROP THEN
+    _DESK-SCREENS-TICK
+    _DESK-REMINDERS-TICK
     _DESK-HOST AHOST-TICK ;
 
 \ --- Service ---
@@ -2662,8 +2900,16 @@ VARIABLE _DPC-PAINT-ALL
     _DESK-HOST AHOST-SHELL-DRAW-COMPLETE DROP ;
 
 \ --- Close negotiation and shutdown ---
+\ A close while a scheduled run is in flight or waiting asks first: Desk
+\ defers and asks whether to shut down anyway.  Shut down arms the next
+\ close, once, and quits again; Desk's teardown then cancels the runs.
 : DESK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DESK-USE-STATE
+    _DESK-SHUTDOWN-ARMED @ 0 _DESK-SHUTDOWN-ARMED ! 0= IF
+        _DESK-BROKER SBRK-ACTIVE? IF
+            _DESK-SHOW-SHUTDOWN-QUESTION APP-CLOSE-D-DEFER EXIT
+        THEN
+    THEN
     APP-CLOSE-R-HOST-SHUTDOWN _DESK-HOST AHOST-REQUEST-CLOSE-ALL ;
 
 : DESK-QUIESCE-CB  ( instance -- ior )

@@ -75,8 +75,8 @@ VARIABLE _satpt-failed-text-u
     _satpt-service XIO-ACTIVE? 0=
     _satpt-service XIOS.RETAINED @ 0= AND ;
 
-: _satpt-service-for  ( id-a id-u context -- service|0 )
-    >R S" org.akashic.net.external-io" STR-STR= IF
+: _satpt-service-for  ( id-a id-u caller context -- service|0 )
+    NIP >R S" org.akashic.net.external-io" STR-STR= IF
         R>
     ELSE
         R> DROP 0

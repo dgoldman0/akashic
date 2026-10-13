@@ -82,18 +82,19 @@ VARIABLE _MW-RUN-FROM-XT
 \ =====================================================================
 \
 \ Logs: METHOD /path → STATUS
-\ Uses DT-NOW-MS for start/end timing.
+\ Uses MS@ uptime for start/end timing and the wall clock only for the
+\ log stamp.
 
 VARIABLE _MW-LOG-T0
 
 : MW-LOG  ( next-xt -- )
-    DT-NOW-MS _MW-LOG-T0 !
+    MS@ _MW-LOG-T0 !
     EXECUTE
     ." [" DT-NOW-S NUM>STR TYPE ." ] "
     REQ-METHOD TYPE SPACE
     REQ-PATH TYPE
     ."  -> " _RESP-CODE @ . 
-    ." (" DT-NOW-MS _MW-LOG-T0 @ - . ." ms)"
+    ." (" MS@ _MW-LOG-T0 @ - . ." ms)"
     CR ;
 
 \ =====================================================================

@@ -26,7 +26,7 @@ VARIABLE _CDPH-U
     S" ChatGPT-Account-ID" 2SWAP _CDPH-REQ @ HREQ-HEADER
     ?DUP IF EXIT THEN
     S" originator" S" akashic" _CDPH-REQ @ HREQ-HEADER ?DUP IF EXIT THEN
-    _CDPH-P @ OPENAI-PROVIDER-CONFIG OAIC-RESPONSES-LITE? IF
+    _CDPH-S @ OAIR-SESSION-CONFIG OAIC-RESPONSES-LITE? IF
         S" x-openai-internal-codex-responses-lite" S" true"
         _CDPH-REQ @ HREQ-HEADER ?DUP IF EXIT THEN
     THEN

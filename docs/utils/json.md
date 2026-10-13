@@ -491,6 +491,15 @@ Redirect builder output into a user-provided memory buffer.
 | `JSON-SET-OUTPUT` | `( addr max -- )` | Direct all builder output into buffer `addr` of capacity `max`. Resets write position to 0. Sets `JSON-EMIT-XT` and `JSON-TYPE-XT` to internal buffer-writing words. |
 | `JSON-OUTPUT-RESULT` | `( -- addr len )` | Return the buffer address and number of bytes written so far. |
 | `JSON-OUTPUT-RESET` | `( -- )` | Reset write position to 0 (re-use the same buffer). |
+| `JSON-OUTPUT-OK?` | `( -- flag )` | True while everything emitted fit the buffer and the nesting depth. |
+| `JSON-OUTPUT-NEED` | `( -- u )` | The bytes the output needed, those kept and those past the capacity. |
+
+An output that does not fit keeps what fits and counts the rest, so
+`JSON-OUTPUT-NEED` says exactly how large a buffer would hold it: a caller
+can encode once into whatever buffer it has, and again into one of that
+size. `0 0 JSON-SET-OUTPUT` keeps nothing and only measures. When the output
+failed although it needed no more than the capacity, its nesting was too
+deep, and no larger buffer helps.
 
 ### Structural Words
 
@@ -623,7 +632,8 @@ JSON-EXPECT-NUMBER JSON-GET-NUMBER .
 
 | Word | Stack | Description |
 |---|---|---|
-| `JSON-ESTR` | `( addr len -- )` | Emit a JSON string value with proper escaping. Handles `"` → `\"`, `\` → `\\`, newline → `\n`, CR → `\r`, tab → `\t`, backspace → `\b`, formfeed → `\f`. All other bytes are emitted verbatim. |
+| `JSON-ESTR` | `( addr len -- )` | Emit a JSON string value with proper escaping. Handles `"` → `\"`, `\` → `\\`, newline → `\n`, CR → `\r`, tab → `\t`, backspace → `\b`, formfeed → `\f`, and other control bytes → `\u00XX`. All other bytes are emitted verbatim. |
+| `JSON-ESTR-LEN` | `( addr len -- n )` | The bytes `JSON-ESTR` emits for the string, its quotes included. |
 | `JSON-KV-ESTR` | `( kaddr klen vaddr vlen -- )` | Key-value convenience with escaped string value. |
 
 ### When to Use `JSON-ESTR` vs `JSON-STR`
@@ -711,6 +721,8 @@ JSON-EXPECT-NULL       ( a u -- a u )      guard: must be null
 JSON-SET-OUTPUT        ( a m -- )          redirect to buffer
 JSON-OUTPUT-RESULT     ( -- a u )          get buffer contents
 JSON-OUTPUT-RESET      ( -- )              reset write position
+JSON-OUTPUT-OK?        ( -- f )            everything fit
+JSON-OUTPUT-NEED       ( -- u )            bytes the output needed
 JSON-BUILD-RESET       ( -- )              reset comma + vectors
 JSON-{                 ( -- )              emit {
 JSON-}                 ( -- )              emit }
@@ -719,6 +731,7 @@ JSON-]                 ( -- )              emit ]
 JSON-KEY:              ( a u -- )          emit "key":
 JSON-STR               ( a u -- )          emit "str" (raw)
 JSON-ESTR              ( a u -- )          emit "str" (escaped)
+JSON-ESTR-LEN          ( a u -- n )        bytes JSON-ESTR emits
 JSON-NUM               ( n -- )            emit number
 JSON-TRUE              ( -- )              emit true
 JSON-FALSE             ( -- )              emit false

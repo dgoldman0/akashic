@@ -4,6 +4,14 @@
 \  A provider must consume or copy this descriptor during START. The model
 \  context pointer is owned by the conversation and CONTEXT-N is the immutable
 \  snapshot boundary for this turn.
+\
+\  A turn runs on the model the provider has selected, or, when DESIGNATION
+\  is set, on the one it names (run-settings.f), whatever is selected.  The
+\  designation is borrowed like the prompt.
+\
+\  A turn may carry one reference: a document's text, which the model
+\  reads as data.  A provider sends it apart from the prompt, and never
+\  as instructions.  It is borrowed like the prompt, and is UTF-8.
 \ =====================================================================
 
 PROVIDED akashic-agent-turn-request
@@ -24,7 +32,10 @@ REQUIRE model-context.f
 56 CONSTANT _ATR-TOOL-GATEWAY
 64 CONSTANT _ATR-FLAGS
 72 CONSTANT _ATR-MAX-OUTPUT
-80 CONSTANT AGENT-TURN-REQUEST-SIZE
+80 CONSTANT _ATR-DESIGNATION
+88 CONSTANT _ATR-REFERENCE-A
+96 CONSTANT _ATR-REFERENCE-U
+104 CONSTANT AGENT-TURN-REQUEST-SIZE
 
 : ATURN.THREAD-ID        ( turn -- a ) _ATR-THREAD-ID + ;
 : ATURN.RUN-ID           ( turn -- a ) _ATR-RUN-ID + ;
@@ -36,11 +47,18 @@ REQUIRE model-context.f
 : ATURN.TOOL-GATEWAY     ( turn -- a ) _ATR-TOOL-GATEWAY + ;
 : ATURN.FLAGS            ( turn -- a ) _ATR-FLAGS + ;
 : ATURN.MAX-OUTPUT       ( turn -- a ) _ATR-MAX-OUTPUT + ;
+: ATURN.DESIGNATION      ( turn -- a ) _ATR-DESIGNATION + ;
+: ATURN.REFERENCE-A      ( turn -- a ) _ATR-REFERENCE-A + ;
+: ATURN.REFERENCE-U      ( turn -- a ) _ATR-REFERENCE-U + ;
 
 : ATURN-INIT  ( turn -- ) AGENT-TURN-REQUEST-SIZE 0 FILL ;
 
 : ATURN-PROMPT  ( turn -- addr len )
     DUP ATURN.PROMPT-A @ SWAP ATURN.PROMPT-U @ ;
+
+\ The turn's reference, 0 0 when it has none.
+: ATURN-REFERENCE  ( turn -- addr len )
+    DUP ATURN.REFERENCE-A @ SWAP ATURN.REFERENCE-U @ ;
 
 : ATURN-VALID?  ( turn -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -48,6 +66,11 @@ REQUIRE model-context.f
     DUP ATURN.RUN-ID @ 1 < IF DROP 0 EXIT THEN
     DUP ATURN.PROMPT-U @ DUP 1 < IF 2DROP 0 EXIT THEN
     OVER ATURN.PROMPT-A @ SWAP UTF8-VALID? 0= IF DROP 0 EXIT THEN
+    DUP ATURN.REFERENCE-U @ ?DUP IF
+        DUP 0< IF 2DROP 0 EXIT THEN
+        OVER ATURN.REFERENCE-A @ DUP 0= IF 2DROP DROP 0 EXIT THEN
+        SWAP UTF8-VALID? 0= IF DROP 0 EXIT THEN
+    THEN
     DUP ATURN.CONTEXT @ DUP 0= IF 2DROP 0 EXIT THEN
     >R DUP ATURN.CONTEXT-N @ DUP 0< SWAP R@ ACTX.COUNT @ > OR IF
         R> 2DROP 0 EXIT

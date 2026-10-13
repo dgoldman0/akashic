@@ -34,6 +34,9 @@ REQUIRE ../../concurrency/guard.f
 31 CONSTANT _CSB-F-ALL
 
 8 CONSTANT CSB-MAGIC-SIZE
+\ The longest map key the byte form holds, in bytes.  Keys are names, so
+\ the form keeps its own bound rather than the value system's.
+65536 CONSTANT CSB-KEY-MAX
 : CSB-MAGIC  ( -- address length ) S" AKSCHEMA" ;
 
 \ The types whose values have a length.
@@ -127,7 +130,7 @@ DEFER _CSB-MEASURE-NODE  ( depth -- ior )
 : _CSB-MEASURE-FIELD
   ( depth prev-a prev-u -- depth key-a key-u 0 | depth 0 0 ior )
     4 _CSB-TAKE 0= IF DROP CSB-E-INVALID _CSB-FIELD-FAIL EXIT THEN
-    _CSB-U32@ DUP CV-MAX-STRING-LEN > IF
+    _CSB-U32@ DUP CSB-KEY-MAX > IF
         DROP CSB-E-INVALID _CSB-FIELD-FAIL EXIT
     THEN
     DUP _CSB-TAKE 0= IF 2DROP CSB-E-INVALID _CSB-FIELD-FAIL EXIT THEN

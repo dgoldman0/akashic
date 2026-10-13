@@ -24,6 +24,9 @@ REQUIRE ../../../math/random.f
 REQUIRE ../../../math/sha3.f
 REQUIRE ../../../text/utf8.f
 REQUIRE ../../../utils/string.f
+REQUIRE projection-adapter.f
+REQUIRE ../../../interop/resource-owners.f
+REQUIRE ../../../interop/service-endpoint.f
 
 1 CONSTANT _LAPP-V-ACTIVE
 2 CONSTANT _LAPP-V-ARCHIVED
@@ -186,6 +189,11 @@ _LAPP-CURRENT-STATE CMP-CELL: _LAPP-PROMPT-MODE
 _LAPP-CURRENT-STATE _LAPP-PROMPT-CAP CMP-FIELD: _LAPP-PROMPT-BUF
 _LAPP-CURRENT-STATE _LAPP-STATUS-CAP CMP-FIELD: _LAPP-STATUS-BUF
 _LAPP-CURRENT-STATE CMP-CELL: _LAPP-STATUS-U
+
+\ The documents' owner Library publishes while it runs inside Desk: its
+\ projection root, and the directory it is published in.
+_LAPP-CURRENT-STATE CMP-CELL: _LAPP-PROJECTION
+_LAPP-CURRENT-STATE CMP-CELL: _LAPP-OWNERS
 
 CMP-LAYOUT-SIZE CONSTANT _LAPP-STATE-SIZE
 
@@ -381,7 +389,60 @@ VARIABLE _LAPP-ST-N
     >R _LAPP-CACHE-MEMORY-SIZE _LAPP-CACHE-SLOTS
     R> PPAGE-CACHE-INIT ;
 
+\ =====================================================================
+\  The documents' owner
+\ =====================================================================
+\  Inside Desk, the live instance publishes its documents' owner, so a
+\  locator naming org.akashic.library can be read through Library: a
+\  projection root over its open service, reached through Desk's context,
+\  registries and bus, in Desk's owner directory.  It publishes it each
+\  time its service opens, whether or not its store exists yet, and
+\  withdraws it before its service closes.  Outside Desk, or when Desk
+\  lends any of these not, it publishes nothing.
+
+: _LAPP-PROJECTION-FREE  ( root -- )
+    DUP LIBRARY-PROJECTION-ROOT-SIZE 0 FILL
+    LIBRARY-PROJECTION-ROOT-SIZE XMEM-FREE-BLOCK ;
+
+VARIABLE _LPO-ROOT  VARIABLE _LPO-OWNERS  VARIABLE _LPO-CONTEXT
+VARIABLE _LPO-CREG  VARIABLE _LPO-RREG  VARIABLE _LPO-BUS
+
+: _LAPP-PROJECTION-OPEN  ( instance -- )
+    >R
+    S" org.akashic.runtime.resource-owners" R@ CINST-SERVICE _LPO-OWNERS !
+    S" org.akashic.runtime.context" R@ CINST-SERVICE _LPO-CONTEXT !
+    S" org.akashic.runtime.registry" R@ CINST-SERVICE _LPO-CREG !
+    S" org.akashic.runtime.resource-registry" R@ CINST-SERVICE _LPO-RREG !
+    S" org.akashic.interop.request-bus" R@ CINST-SERVICE _LPO-BUS !
+    _LPO-OWNERS @ 0= _LPO-CONTEXT @ 0= OR _LPO-CREG @ 0= OR
+    _LPO-RREG @ 0= OR _LPO-BUS @ 0= OR IF R> DROP EXIT THEN
+    LIBRARY-PROJECTION-ROOT-SIZE XMEM-ALLOT? IF DROP R> DROP EXIT THEN
+    DUP _LPO-ROOT ! LIBRARY-PROJECTION-ROOT-SIZE 0 FILL
+    _LAPP-SERVICE _LPO-CONTEXT @ _LPO-CREG @ _LPO-RREG @ _LPO-BUS @ _LPO-ROOT @
+        LIBRARY-PROJECTION-ROOT-INIT RACQ-S-OK <> IF
+        _LPO-ROOT @ _LAPP-PROJECTION-FREE R> DROP EXIT
+    THEN
+    LIBRARY-PROJECTION-OWNER$ _LPO-ROOT @ ['] LIBRARY-PROJECTION-ATTACH
+        R@ _LPO-OWNERS @ ROWN-PUBLISH ROWN-S-OK <> IF
+        _LPO-ROOT @ DUP LIBRARY-PROJECTION-ROOT-FINI DROP _LAPP-PROJECTION-FREE
+        R> DROP EXIT
+    THEN
+    _LPO-OWNERS @ _LAPP-OWNERS ! _LPO-ROOT @ _LAPP-PROJECTION ! R> DROP ;
+
+\ Withdraws the owner and closes its root.  A root that still holds a
+\ document is kept rather than freed under it.
+: _LAPP-PROJECTION-CLOSE  ( instance -- )
+    _LAPP-PROJECTION @ 0= IF DROP EXIT THEN
+    LIBRARY-PROJECTION-OWNER$ ROT _LAPP-OWNERS @ ROWN-WITHDRAW DROP
+    _LAPP-PROJECTION @ DUP LIBRARY-PROJECTION-ROOT-FINI RACQ-S-OK = IF
+        _LAPP-PROJECTION-FREE
+    ELSE
+        DROP
+    THEN
+    0 _LAPP-PROJECTION ! 0 _LAPP-OWNERS ! ;
+
 : _LAPP-OWNER-CLOSE  ( -- )
+    _LAPP-CURRENT-INSTANCE @ _LAPP-PROJECTION-CLOSE
     _LAPP-RUNTIME@ 0= IF
         0 _LAPP-READY ! 0 _LAPP-OWNER-INITIALIZED ! EXIT
     THEN
@@ -447,6 +508,7 @@ VARIABLE _LAPP-ST-N
         LIBRARY-SERVICE-WORK-INIT _LAPP-SET-STATUS
     DUP IF EXIT THEN DROP
     -1 _LAPP-OWNER-INITIALIZED !
+    _LAPP-OWNS-LIVE @ IF _LAPP-CURRENT-INSTANCE @ _LAPP-PROJECTION-OPEN THEN
     _LAPP-REPOSITORY _LAPP-REPOSITORY-WORK
         LIBRARY-REPOSITORY-LOAD _LAPP-SET-STATUS
     DUP LIBRARY-SERVICE-S-OK = IF -1 _LAPP-READY ! THEN ;

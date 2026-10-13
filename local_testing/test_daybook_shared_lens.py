@@ -69,8 +69,8 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     _dsl-depth @ = _dsl-assert ;
 : _dsl-id!  ( value id -- ) DUP RID-CLEAR ! ;
 
-: _dsl-service  ( id-a id-u context -- service | 0 )
-    DROP
+: _dsl-service  ( id-a id-u caller context -- service | 0 )
+    2DROP
     2DUP S" org.akashic.runtime.context" STR-STR= IF
         2DROP _dsl-context @ EXIT
     THEN
@@ -85,8 +85,8 @@ CREATE _dsl-source-ref RREF-SIZE ALLOT
     THEN
     0 ;
 
-: _dsl-blocked-service  ( id-a id-u context -- service | 0 )
-    DROP
+: _dsl-blocked-service  ( id-a id-u caller context -- service | 0 )
+    2DROP
     S" org.akashic.runtime.context" STR-STR= IF
         _dsl-context @
     ELSE

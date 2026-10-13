@@ -86,6 +86,7 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-UIDL-READY!` | `( xt context host -- )` | Set the neutral post-UIDL, pre-app-init composition hook |
 | `AHOST-TRY-LAUNCH` | `( desc host -- id ior )` | Launch one already-installed descriptor transactionally |
 | `AHOST-TRY-LAUNCH-OVERLAY` | `( desc host -- id ior )` | Launch a descriptor as an overlay slot |
+| `AHOST-TRY-LAUNCH-MINIMIZED` | `( desc host -- id ior )` | Launch a descriptor as a minimized slot, with no tile and no focus |
 | `AHOST-REQUEST-CLOSE-ID` | `( id reason host -- decision )` | Negotiate and, on ALLOW, finalize one child |
 | `AHOST-REQUEST-CLOSE-ALL` | `( reason host -- decision )` | Negotiate every child without partial teardown |
 | `AHOST-QUIESCE-ALL` | `( host -- ior )` | Run `UTUI-QUIESCE` and then the descriptor barrier for each child |
@@ -112,10 +113,24 @@ claimed before arbitrary application code and is never repeated;
 `UTUI-DETACH`, the sole public final detach for both projection and document,
 must succeed before unlink, notification, or any owned-resource release.
 
+`AHOST-TICK` ticks each live child that is dirty, or that asks to be ticked
+while clean (`APP-F-TICK-WHEN-CLEAN`). A child whose instance a caller
+touched (`CINST-TOUCH`) since it was last painted is dirty. A child that
+touches its own instance while it ticks, to have a change of its own drawn,
+is marked dirty at once and asks the shell to paint, so the paint that
+follows the tick in the same pass draws it.
+
 Ordinary layouts keep child regions disjoint. A concrete owner may overlap
 them for presentation, as Desk does in full-frame mode. In that case pointer
 hit-testing tries the focused visible child first, matching key routing and
 paint ownership; otherwise list order determines the first containing slot.
+
+A child launched with `AHOST-TRY-LAUNCH-MINIMIZED` starts as a minimized
+slot, as the user would leave one: it runs, is ticked and has its document,
+but takes no tile and no focus. It lays out as a running slot while its INIT
+runs, so it has a region to load its UIDL into, and then gives up its tile.
+It is not the slot `AHOST-RESTORE` restores next, which stays the one the
+user last minimized; focusing it by its ID restores it.
 
 An overlay slot, launched with `AHOST-TRY-LAUNCH-OVERLAY`, is a child the
 owner places above the others, such as Desk's catalog launcher. The owner's

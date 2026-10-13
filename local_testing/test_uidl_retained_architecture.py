@@ -379,7 +379,7 @@ def test_uidl_action_registry_owns_and_compares_exact_names() -> None:
 
     expected = {
         "akashic/tui/applets/pad/pad.f": (32, 1025),
-        "akashic/tui/applets/daybook/daybook.f": (14, 441),
+        "akashic/tui/applets/daybook/daybook.f": (26, 912),
     }
     for relative, (count, arena_bytes) in expected.items():
         names = _registered_action_names(relative)

@@ -9,6 +9,58 @@ PROVIDED akashic-tui-library
 
 REQUIRE view.f
 REQUIRE capabilities.f
+REQUIRE projection-adapter.f
+REQUIRE ../../../interop/endpoint.f
+REQUIRE ../../../interop/qualified-locator.f
+
+\ =====================================================================
+\  Scheduling an Agent run
+\ =====================================================================
+\  Ctrl+G sends the selected document's exact version, the one its
+\  preview read, to Daybook, which begins a scheduled Agent run that
+\  reads it: the intent agent-run.schedule through Desk, carrying that
+\  version's locator.
+
+CREATE _LSR-REF RREF-SIZE ALLOT
+CREATE _LSR-LOCATOR QLOC-SIZE ALLOT
+VARIABLE _LSR-REQ
+
+\ The exact locator of the version the preview read.
+: _LAPP-PREVIEW-LOCATOR  ( -- status )
+    _LSR-REF RREF-INIT
+    _LAPP-ENTRY LIBE.ID _LSR-REF RREF.ID RID-COPY
+    LIBRARY-PROJECTION-OWNER$ _LSR-REF
+    _LAPP-ENTRY LIBE.DOMAIN-REVISION @ _LAPP-ENTRY LIBE.CONTENT-DIGEST
+    QLOC-DK-PROJECTION-CONTENT LIBRARY-PROJECTION-CONTRACT$
+    _LSR-LOCATOR QLOC-EXACT! ;
+
+: _LAPP-SCHEDULE-COMPLETE  ( request -- )
+    DUP CBR.STATUS @ CBUS-S-OK <> IF
+        S" Daybook could not begin the Agent run" 2600 ASHELL-TOAST
+    THEN
+    CBR-FREE ;
+
+: _LAPP-DO-SCHEDULE-RUN  ( elem -- )
+    DROP
+    _LAPP-VIEW @ _LAPP-V-COLLECTIONS =
+    _LAPP-VIEW @ _LAPP-V-HISTORY = OR IF
+        S" Select a document for the Agent run to read" 2200 ASHELL-TOAST EXIT
+    THEN
+    _LAPP-PREVIEW-READY @ 0= IF _LAPP-SHOW-STATUS-TOAST EXIT THEN
+    _LAPP-PREVIEW-LOCATOR IF
+        S" This document cannot be named exactly" 2200 ASHELL-TOAST EXIT
+    THEN
+    CBR-NEW IF DROP S" No memory to ask Daybook" 2200 ASHELL-TOAST EXIT THEN
+    _LSR-REQ !
+    CPRINC-COMPONENT _LSR-REQ @ CBR.PRINCIPAL !
+    _LSR-LOCATOR _LSR-REQ @ CBR.ARGS QLOC-VALUE! IF
+        _LSR-REQ @ CBR-FREE S" No memory to ask Daybook" 2200 ASHELL-TOAST EXIT
+    THEN
+    ['] _LAPP-SCHEDULE-COMPLETE _LSR-REQ @ CBR.COMPLETE-XT !
+    S" agent-run.schedule" _LSR-REQ @ _LAPP-CURRENT-INSTANCE @ CINST-POST-INTENT
+    CBUS-S-OK <> IF
+        _LSR-REQ @ CBR-FREE S" Daybook cannot schedule runs here" 2200 ASHELL-TOAST
+    THEN ;
 
 \ =====================================================================
 \  Applet lifecycle and descriptor
@@ -28,6 +80,7 @@ REQUIRE capabilities.f
     S" rename-title" ['] _LAPP-DO-RENAME UTUI-DO!
     S" archive" ['] _LAPP-DO-ARCHIVE UTUI-DO!
     S" unarchive" ['] _LAPP-DO-UNARCHIVE UTUI-DO!
+    S" schedule-agent-run" ['] _LAPP-DO-SCHEDULE-RUN UTUI-DO!
     S" next-page" ['] _LAPP-DO-NEXT-PAGE UTUI-DO!
     S" previous-page" ['] _LAPP-DO-PREVIOUS-PAGE UTUI-DO!
     S" retry-create" ['] _LAPP-DO-RETRY-CREATE UTUI-DO!

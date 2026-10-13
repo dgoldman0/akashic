@@ -185,7 +185,9 @@ history.
 
 This checkpoint provides one durable active conversation and model-context
 ledger, corruption fallback, interrupted-state recovery, exact reviewed-action
-audit records, and durable clear. Snapshot capacity remains a hard boundary:
+audit records, and durable clear. Scheduled runs never write into it: each
+keeps its own transcript in the Agent's
+[run store](dispatch-store.md). Snapshot capacity remains a hard boundary:
 the runtime reports the store failure, the Agent applet labels history as
 unavailable, and clearing the conversation is the explicit recovery path; it
 does not silently discard older records to make a save fit.

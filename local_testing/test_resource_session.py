@@ -207,6 +207,8 @@ VARIABLE _rs-bus-calls
 VARIABLE _rs-named-seen
 VARIABLE _rs-mutate-after-named
 VARIABLE _rs-after-named-runtime
+VARIABLE _rs-foreign-callers
+VARIABLE _rs-alias-client
 
 : _rs-query-counts-clear  ( -- )
     0 _rs-named-a-calls !
@@ -215,7 +217,12 @@ VARIABLE _rs-after-named-runtime
     0 _rs-bus-calls !
     0 _rs-named-seen !
     0 _rs-mutate-after-named !
-    0 _rs-after-named-runtime ! ;
+    0 _rs-after-named-runtime !
+    0 _rs-foreign-callers ! ;
+
+\ Counts a lookup made for any instance but the client opening the session.
+: _rs-caller  ( caller -- )
+    _rs-alias-client @ <> IF 1 _rs-foreign-callers +! THEN ;
 
 : _rs-runtime-observe  ( -- )
     _rs-mutate-after-named @ _rs-named-seen @ 0<> AND IF
@@ -260,8 +267,8 @@ VARIABLE _rs-after-named-runtime
     THEN
     2DROP 0 ;
 
-: _rs-service-a  ( id-a id-u offer -- service | 0 )
-    >R
+: _rs-service-a  ( id-a id-u caller offer -- service | 0 )
+    SWAP _rs-caller >R
     2DUP S" org.akashic.resource.test-a" STR-STR= IF
         1 _rs-named-a-calls +!
         -1 _rs-named-seen !
@@ -269,15 +276,15 @@ VARIABLE _rs-after-named-runtime
     THEN
     R> DROP _rs-runtime-service ;
 
-: _rs-service-b  ( id-a id-u offer -- service | 0 )
-    >R
+: _rs-service-b  ( id-a id-u caller offer -- service | 0 )
+    SWAP _rs-caller >R
     2DUP S" org.akashic.resource.test-b" STR-STR= IF
         2DROP R> EXIT
     THEN
     R> DROP _rs-runtime-service ;
 
-: _rs-blocked-service  ( id-a id-u context -- service | 0 )
-    DROP
+: _rs-blocked-service  ( id-a id-u caller context -- service | 0 )
+    2DROP
     S" org.akashic.runtime.context" STR-STR= IF
         _rs-context @
     ELSE
@@ -347,7 +354,6 @@ VARIABLE _rs-blocked-client
 VARIABLE _rs-client-a
 VARIABLE _rs-client-b
 VARIABLE _rs-canonical-client
-VARIABLE _rs-alias-client
 VARIABLE _rs-saved-runtime
 VARIABLE _rs-old-revision
 VARIABLE _rs-request-before-fini
@@ -608,6 +614,8 @@ VARIABLE _rs-request-before-fini
     _rs-rreg-calls @ 1 = _rs-assert
     _rs-bus-calls @ 1 = _rs-assert
     _rs-named-a-calls @ 1 = _rs-assert
+    \ Every lookup names the instance opening the session.
+    _rs-foreign-callers @ 0= _rs-assert
     _rs-after-named-runtime @ 0= _rs-assert
     _rs-mutate-after-named @ _rs-assert
     _rs-blocked-session RSES.RID _rs-rid-a RID= _rs-assert

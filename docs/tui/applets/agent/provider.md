@@ -54,10 +54,80 @@ remain provider-owned until its revision changes.
 changes during a run or review. Desk and Agent render these choices without
 depending on Codex, OpenAI, or any particular model slug.
 
-The native OpenAI transport uses a 196,608-byte request-body allowance and a
-200,704-byte HTTP wire buffer so its independent 32 KiB prompt, 64 KiB history,
-and 32 KiB tool-result ceilings can compose with JSON and header overhead. Its
-default maximum assembled response text is 49,152 bytes. That lower output
+### Designations
+
+A turn runs on the selected model unless it names another in a designation.
+A designation (`AGENT-RUN-DESIGNATION-SIZE`, the `ARDES.` fields) names a
+model, an effort and a tier by id, and a verbosity. It borrows its strings. A
+scheduled run keeps one from when it was approved, so it runs on exactly the
+model the user approved, whatever is selected when it runs. An empty effort
+names none, for a model that has none. An empty tier asks for no service
+tier.
+
+`ATURN.DESIGNATION` holds a turn's designation, or 0 for the selection. A
+provider running a designated turn leaves the selection as it was.
+
+| Word | Stack | Description |
+|---|---|---|
+| `ARSET-DESIGNATION` | `( designation settings -- model\|0 status )` | The model the catalog offers for exactly what the designation names |
+| `ARSET-FIND-MODEL` | `( id-a id-u settings -- model \| 0 )` | The model with an id |
+| `ARMODEL-FIND-EFFORT` / `ARMODEL-FIND-TIER` | `( id-a id-u model -- index )` | A choice's index by id, or -1 |
+| `ARMODEL-SELECTED-EFFORT` / `ARMODEL-SELECTED-TIER` | `( model -- choice \| 0 )` | The model's selected choice |
+
+`ARSET-DESIGNATION` answers OK only when all of these hold:
+- the model is in the catalog;
+- its effort is one of the model's, or none for a model with none;
+- its tier is none or one of the model's;
+- its verbosity is automatic, or the model lets a run choose one.
+
+Otherwise it answers `ARSET-S-UNSUPPORTED`. The answer is `ARSET-S-PENDING`
+while the catalog is not ready, and `ARSET-S-INVALID` for a missing argument
+or a verbosity outside the `ARVERB-` values.
+
+A provider without a catalog runs no designated turn. The scripted
+provider checks a designation against the catalog its source gives it, as
+the device-flow source does. `SCRIPTED-LAST-RUN` reports the model, effort,
+tier and verbosity its last turn ran on; `test_agent_designation.py` covers
+designations and the scripted provider.
+
+Disabling any one of the guarded behaviors in designations, the input room,
+the Responses engine's designated sessions and the Codex designator makes a
+native test or a smoke fail, except one. `ARMODEL-SELECTED-EFFORT` checks
+for no model before it reads one. Without that check it reads low memory,
+which is zero in the simulator, so the answer comes out the same.
+
+### Input room
+
+`APROV-INPUT ( prompt-a prompt-u reference-a reference-u provider -- used
+capacity )` tells how much of the provider's room for one turn's input a
+turn with that prompt and reference and no history takes, and how large that
+room is. `0 0` is no reference. A reference at address 0 is that many bytes
+of text not yet read, counted at the least such text takes. The capacity is
+-1 when only memory bounds it, or when the provider does not say.
+`APROV-INPUT-FITS? ( prompt-a prompt-u reference-a reference-u provider --
+flag )` says whether it fits. A provider fills `APROV.INPUT-XT`
+`( prompt-a prompt-u reference-a reference-u context -- used capacity )`.
+A scheduled run's prompt, with as much of its document as it may disclose,
+is checked against this room when it is approved and again before it
+starts, and once its document is read, the prompt and the text are checked
+exactly. A turn that does not fit is refused, never cut.
+
+### References
+
+A turn may carry one reference (`ATURN-REFERENCE`): a document's text,
+which the model reads as data. A provider sends it apart from the prompt
+and never as instructions. The OpenAI encoder sends it as a user item of
+its own ahead of the prompt: a note that the next text is a reference
+document to read as data, then the text, each an input text.
+`OAI-TURN-INPUT-U` counts it exactly. The scripted provider does not echo a
+reference: its reply says how many bytes it had and the first eight hex
+digits of its SHA3-256, and `SCRIPTED-LAST-REFERENCE` tells the same.
+
+The native OpenAI transport sizes a turn's input, its request body and its
+tool history to what they hold, and sends the body without copying it, so
+only memory bounds a turn's input and `APROV-INPUT` reports a room of -1. A
+tool result keeps the gateway's 32 KiB ceiling. The transport's default
+maximum assembled response text is 49,152 bytes. That lower output
 boundary leaves room for the visible response, its model-context copy, and thread
 metadata to coexist under the 262,144-byte conversation snapshot ceiling; the
 transport limit is not presented as an aggregate history budget.
@@ -85,7 +155,11 @@ same three objects for renderer-free tests. Source selection is explicit through
 `AGENT-SOURCE!`; loading a provider module has no selection side effect.
 
 `providers/offline.f` and `providers/devtools/scripted.f` supply sources through
-the same contract. There is no parallel global factory path.
+the same contract. There is no parallel global factory path. The scripted
+provider's replies depend only on the prompt. After echoing it, a prompt
+naming a "source" or a "task" asks for a tool, one naming an "approval"
+asks for an approval, and one naming "linger" keeps the run open, saying
+nothing more, until it is cancelled. Any other prompt completes.
 
 ## Desk Access Profiles
 
@@ -205,6 +279,14 @@ Provider ownership is independent of transcript ownership.
 `ARUNTIME-CONVERSATION-STORE!` transfers one store to a runtime. Desk and the
 directly tested Agent applet compose the native VFS adapter from
 `tui/applets/agent/storage/vfs-conversation.f`; providers never open transcript files.
+
+A run writes into the runtime's run conversation, `ARUNTIME-RUN-CONV`: its
+messages, its model context, the provider's events and its end all go there.
+A chat run's run conversation is the chat conversation, which the store
+persists. A run with a conversation of its own saves nothing into the chat
+conversation's store while it runs. Chat history, persistence and clearing
+always concern the chat conversation. Scheduled runs are such runs; see
+[dispatch.md](dispatch.md).
 
 The runtime must be freed before its provider and provider source. A borrowed
 VFS must remain alive until after the runtime has released its store. See

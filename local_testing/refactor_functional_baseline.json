@@ -35,7 +35,7 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/library/library.uidl",
         "menus": ["File", "Browse", "Document", "Page", "Help"],
-        "actions": ["about", "archive", "back", "clear-search", "collections", "history", "new-managed", "next-page", "previous-page", "quit", "reload", "rename-title", "retry-create", "search", "show-active", "show-all", "show-archived", "unarchive"],
+        "actions": ["about", "archive", "back", "clear-search", "collections", "history", "new-managed", "next-page", "previous-page", "quit", "reload", "rename-title", "retry-create", "schedule-agent-run", "search", "show-active", "show-all", "show-archived", "unarchive"],
         "shortcuts": {
           "back": "Backspace",
           "clear-search": "Ctrl+Shift+F",
@@ -47,6 +47,7 @@
           "reload": "Ctrl+R",
           "rename-title": "F2",
           "retry-create": "Ctrl+Shift+R",
+          "schedule-agent-run": "Ctrl+G",
           "search": "Ctrl+F"
         },
         "element_ids": ["library-body", "mbar", "sbar", "sbar-page", "sbar-state", "sbar-view"]
@@ -209,22 +210,22 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/agent/agent.uidl",
         "menus": ["Agent", "Run", "Connection", "Access", "Review", "Help"],
-        "actions": ["about", "access-assist", "access-chat", "access-library-burrow", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "settings"],
-        "shortcuts": {"account": "F9", "approve": "F6", "cancel": "Escape", "clear-credential": "Ctrl+Shift+K", "credential": "Ctrl+K", "deny": "F7", "prompt": "Ctrl+L", "quit": "Ctrl+Q", "settings": "F8"},
+        "actions": ["about", "access-assist", "access-chat", "access-library-burrow", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "scheduled", "settings"],
+        "shortcuts": {"account": "F9", "approve": "F6", "cancel": "Escape", "clear-credential": "Ctrl+Shift+K", "credential": "Ctrl+K", "deny": "F7", "prompt": "Ctrl+L", "quit": "Ctrl+Q", "scheduled": "F5", "settings": "F8"},
         "element_ids": ["access", "agent-body", "effort", "mbar", "meta", "model", "provider", "sbar", "source-class", "state"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/agent/agent.f",
           "word": "_AG-PANEL-HANDLE",
-          "sha256": "329855e19470ae99e42c460ce806100bd8d138cc12c5e82568dbb78d5718f629",
-          "bindings": ["Enter -> prompt", "Escape -> cancel run", "Up -> scroll the open review, else the transcript, one row older", "Down -> scroll the open review, else the transcript, one row newer", "PageUp -> scroll the open review, else the transcript, one page older", "PageDown -> scroll the open review, else the transcript, one page newer", "Home -> the open review's first row, else the transcript's first message", "End -> the open review's last row, else the transcript's end, which it then follows", "Wheel -> scroll the open review, else the transcript, three rows"]
+          "sha256": "da39b65aab6bc832616c296acf1d2e085527fc7863eada235ffff4e795f4971c",
+          "bindings": ["Enter -> prompt, in the chat", "Escape -> back from a scheduled run's transcript to the runs and from the runs to the chat, else cancel run", "Up -> scroll the open review, else the transcript shown, one row older; in the scheduled runs, select the run above", "Down -> scroll the open review, else the transcript shown, one row newer; in the scheduled runs, select the run below", "PageUp -> scroll the open review, else the transcript shown, one page older; in the scheduled runs, select a page above", "PageDown -> scroll the open review, else the transcript shown, one page newer; in the scheduled runs, select a page below", "Home -> the open review's first row, else the transcript's first message, or the newest scheduled run", "End -> the open review's last row, else the transcript's end, which it then follows, or the oldest scheduled run", "Wheel -> scroll the open review, else the scheduled runs or the transcript shown, three rows", "Enter on a scheduled run -> open its transcript"]
         },
         {
           "path": "akashic/tui/applets/agent/agent.f",
           "word": "AGENT-EVENT-CB",
-          "sha256": "95e56de3dcafdd20b1954c74d63de388e4f84949e1e98e772f954bb235bab69d",
-          "bindings": ["F6 -> approve review", "F7 -> deny review", "F8 -> settings", "F9 -> account", "Ctrl+L -> prompt", "Ctrl+K -> credential", "Ctrl+Shift+K -> clear credential"]
+          "sha256": "3345de0a1930a890ee6dcaa41505378c644085296772bc377317f7cf27e50672",
+          "bindings": ["F5 -> scheduled runs, or back to the chat", "F6 -> approve review", "F7 -> deny review", "F8 -> settings", "F9 -> account", "Ctrl+L -> prompt, back in the chat", "Ctrl+K -> credential", "Ctrl+Shift+K -> clear credential"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/agent/agent.f", "literal_prefix": "agent.", "ids": []},
@@ -271,6 +272,13 @@
           "facets": ["persistence", "failures", "journeys"],
           "preserve": ["Durable transcript and audit entries", "Clear, interrupted-run normalization, corrupt-candidate fallback and recovery", "Provider-neutral runtime state remains consistent through reopen and Desk relaunch"],
           "evidence": ["profile:conversation-store", "profile:agent-persistence", "profile:desktop-agent-hardening"]
+        },
+        {
+          "id": "agent.scheduled-runs",
+          "coverage": "covered",
+          "facets": ["actions", "persistence", "failures", "interfaces"],
+          "preserve": ["A scheduled run starts only on the exact model, effort, tier and verbosity it names, in a conversation of its own, with no tools and no chat history, under authority lent until it starts", "One run at a time: a scheduled run waits its turn in arrival order, chat waits behind it and cannot cancel it, and a known dispatch key never starts a second run", "Each run is recorded before its provider starts and ended once with its transcript; the newest runs keep their transcripts by a stored setting, and a run left in flight ends interrupted at the next open", "F5 lists the scheduled runs newest first and opens a kept run's transcript in place of the chat; Escape steps back to the runs, then the chat"],
+          "evidence": ["profile:agent-ui", "pytest:local_testing/test_agent_dispatch.py::test_a_run_starts_on_its_model_and_completes", "pytest:local_testing/test_agent_dispatch.py::test_a_known_key_answers_its_run_and_a_conflict_starts_nothing", "pytest:local_testing/test_agent_dispatch.py::test_refusals_record_nothing", "pytest:local_testing/test_agent_dispatch.py::test_runs_wait_their_turn_and_chat_waits_behind_them", "pytest:local_testing/test_agent_dispatch.py::test_a_scheduled_run_reads_no_history_and_gets_no_tools", "pytest:local_testing/test_agent_dispatch.py::test_a_restart_finds_the_run_left_in_flight", "pytest:local_testing/test_agent_dispatch_store.py::test_keeping_the_newest_runs_whole", "pytest:local_testing/test_agent_dispatch_store.py::test_disk_faults", "pytest:local_testing/test_agent_scheduled_runs.py::test_rows_newest_first", "pytest:local_testing/test_agent_scheduled_runs.py::test_a_transcript_opens_and_closes"]
         }
       ],
       "prerequisites": [
@@ -288,20 +296,26 @@
       "active_landings": ["L2", "L3", "L5", "L6", "L7", "L9", "L14"],
       "uidl_surface": {
         "path": "akashic/tui/applets/daybook/daybook.uidl",
-        "menus": ["File", "Entry", "Go", "Help"],
-        "actions": ["about", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reveal-source", "save", "today", "toggle"],
-        "shortcuts": {"delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
+        "menus": ["File", "Entry", "Go", "Automations", "Help"],
+        "actions": ["about", "agent-run-new", "automation-archive", "automation-archived", "automation-ask", "automation-cancel", "automation-delete", "automation-pause", "automation-review", "automation-run", "automation-zone", "automations", "delete", "edit-source", "new-event", "new-note", "new-task", "next-day", "previous-day", "quit", "reload", "reminder-new", "reveal-source", "save", "today", "toggle"],
+        "shortcuts": {"agent-run-new": "Ctrl+G", "automations": "F4", "delete": "Delete", "edit-source": "Ctrl+O", "new-event": "Ctrl+E", "new-note": "Ctrl+Shift+N", "new-task": "Ctrl+N", "quit": "Ctrl+Q", "reload": "Ctrl+R", "save": "Ctrl+S", "today": "Home"},
         "element_ids": ["daybook-body", "mbar", "sbar", "sbar-date", "sbar-state"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/daybook/daybook.f",
           "word": "_DB-PANEL-HANDLE",
-          "sha256": "0a0b6745d2d2cebb2cc604edd4e2af3c18c69c28052831038d932b7e4830fac8",
-          "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today"]
+          "sha256": "5a417e6203b1e66a71ac59555f205300c0090ec5a85fa75b95114e0cd9a05d70",
+          "bindings": ["Left -> previous day", "Right -> next day", "PageUp -> previous week", "PageDown -> next week", "Up -> previous entry", "Down -> next entry", "Home -> today", "Enter -> toggle selected task", "Delete -> delete selected entry", "Space -> toggle selected task", "t -> today", "Reminders view shown -> keys go to the reminders"]
+        },
+        {
+          "path": "akashic/tui/applets/daybook/daybook.f",
+          "word": "_DB-AV-HANDLE",
+          "sha256": "8447e5ae18817dbb7300033e2ac502ac192bbdd8413af86cd90b4a7df07f3ef1",
+          "bindings": ["Escape -> back to the calendar", "Delete -> delete the selected automation after typing DELETE", "p -> pause or resume the selected automation", "a -> archive or restore the selected automation", "h -> show or hide archived automations", "r -> run the selected Agent run now", "y -> ask Desk to approve the selected Agent run", "x -> cancel the selected Agent run in progress", "A page shown, a new Agent run's or a schedule's details -> keys go to that page", "Space -> mark the selected firing or run reviewed", "Other special keys -> move in the automations list", "Mouse over the list -> the automations list"]
         }
       ],
-      "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.source", "daybook.task.capture"]},
+      "capability_surface": {"path": "akashic/tui/applets/daybook/daybook.f", "literal_prefix": "daybook.", "ids": ["daybook.agenda.markdown", "daybook.agent-run.new", "daybook.source", "daybook.task.capture"]},
       "source_contracts": [
         {"path": "akashic/tui/applets/daybook/daybook.f", "required_literals": ["org.akashic.daybook", "org.akashic.resource.daybook", "DAYBOOK-INIT-CB", "DAYBOOK-REQUEST-CLOSE-CB", "DAYBOOK-SHUTDOWN-CB", "DAYBOOK-ENTRY", "DAYBOOK-RUN", "daybook.task.capture", "daybook.source", "daybook.agenda.markdown"]},
         {"path": "akashic/tui/applets/daybook/shared-document.f", "required_literals": ["resource.describe", "resource.snapshot", "resource.replace"]}
@@ -329,6 +343,20 @@
           "facets": ["interfaces", "journeys", "failures"],
           "preserve": ["Edit Source routes to Pad through the semantic resource lens", "Competing commit yields stale refusal without clobber, owner survives Daybook close and relaunch", "Agent gets exact Daybook facets and approved/denied task capture"],
           "evidence": ["profile:desktop-resource", "profile:desktop-agent-hardening", "pytest:local_testing/test_daybook_owner_dependency.py::test_concrete_owner_lives_only_in_the_daybook_domain"]
+        },
+        {
+          "id": "daybook.reminders",
+          "coverage": "covered",
+          "facets": ["actions", "persistence", "failures", "journeys"],
+          "preserve": ["Reminders fire inside Desk once, on time, in their time zone, whether or not Daybook is open", "A clock set back fires nothing twice; a jump ahead, a restart or setting the clock gives one missed item per reminder", "The reminder file blocks rather than reads as empty when corrupt, future, unreadable or uncertain, and survives a fault at every replacement step", "The reminders view reviews, pauses, archives and deletes, and creates reminders through its prompts with an idempotent create key"],
+          "evidence": ["profile:desktop-daybook-reminders", "pytest:local_testing/test_daybook_automation_store.py::test_a_fault_at_each_replacement_step", "pytest:local_testing/test_daybook_automation_owner.py::test_firing_catching_up_and_review", "pytest:local_testing/test_daybook_automation_service.py::test_a_reminder_fires_once_and_never_again_after_a_jump_back", "pytest:local_testing/test_daybook_automation_service.py::test_a_jump_forward_and_a_restart_each_give_one_missed_item", "pytest:local_testing/test_daybook_automation_view.py::test_actions_and_their_refusals", "pytest:local_testing/test_daybook_automation_view.py::test_a_create_submitted_twice_makes_one_reminder"]
+        },
+        {
+          "id": "daybook.agent-runs",
+          "coverage": "covered",
+          "facets": ["actions", "failures", "journeys"],
+          "preserve": ["An Agent run is made in Daybook's automations view from the models the Agent offers, with each effort, tier and verbosity its model offers, its limits, and a prompt of any length that is exactly what it may disclose", "Desk is asked to approve the Agent run exactly as made, and Daybook keeps it approved with exactly those operands", "Agent runs show waiting, running and how they ended, and run now, ask for approval and cancel through Daybook's automation service"],
+          "evidence": ["profile:desktop-daybook-agent", "pytest:local_testing/test_daybook_automation_view_create.py::test_an_agent_run_is_created_and_asks_for_approval", "pytest:local_testing/test_daybook_automation_view_create.py::test_a_long_prompt_is_kept_whole", "pytest:local_testing/test_daybook_automation_view_runs.py::test_a_run_waits_runs_and_ends_for_review", "pytest:local_testing/test_daybook_automation_view_runs.py::test_run_now_and_cancel"]
         }
       ],
       "prerequisites": [
@@ -546,12 +574,12 @@
         {
           "path": "akashic/tui/applets/desk/desk.f",
           "word": "_DESK-SHORTCUT?",
-          "sha256": "18595970ad1541f63ebf4dec6fa5033a9dfe927fbd43a8417aef566a2a076db7",
-          "bindings": ["Ctrl+Space -> Agent composer", "Alt+1..9 -> focus slot", "Alt+Tab -> cycle focus", "Alt+M -> minimize focused slot", "Alt+R -> restore", "Alt+F -> toggle full frame", "Alt+L -> toggle vertical/horizontal layout", "Alt+W -> close focused slot", "Alt+H -> applet launcher", "Alt+A -> Agent composer", "Alt+S -> sandbox module inspector"]
+          "sha256": "b20206cd42742f6059e127f5bedca208c6fd5479e067cdd7cf6133d5f8494e6c",
+          "bindings": ["Ctrl+Space -> Agent composer", "Alt+1..9 -> focus slot", "Alt+Tab -> cycle focus", "Alt+M -> minimize focused slot", "Alt+R -> restore", "Alt+F -> toggle full frame", "Alt+L -> toggle vertical/horizontal layout", "Alt+W -> close focused slot", "Alt+H -> applet launcher", "Alt+A -> Agent composer", "Alt+S -> sandbox module inspector", "Alt+P -> scheduled run permissions", "Alt+Q -> shut Desk down, asking first while a scheduled run is in flight or waiting"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.theme"], "ids": []},
-      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]},
+      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.agent.dispatch", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.daybook.automations", "org.akashic.runtime.resource-owners", "org.akashic.interop.endpoint"]},
       "source_contracts": [
         {"path": "akashic/tui/applets/desk/desk.f", "required_literals": ["org.akashic.desk", "DESK-RUN", "DESK-TRY-LAUNCH", "DESK-REQUEST-CLOSE-ID", "DESK-FOCUS-ID", "DESK-MINIMIZE-ID", "DESK-RESTORE", "DESK-FULLFRAME!", "DESK-TOGGLE-VH", "DESK-SANDBOX-CONFIGURE", "SBOX-CAPABILITY-COMPONENT", "org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]}
       ],

@@ -87,6 +87,10 @@ result or with where the module failed.
 | `input` | string | the input value as JSON text, `null` for none |
 | `memory` | integer | bytes of guest memory, rounded up to whole cells, at most what the host's policy grants |
 
+The text the capability carries (source, an input as JSON, schema text in a
+listing, and a run's result) is bounded by `SBOX-CAPABILITY-TEXT-MAX`, 65,536
+bytes. It is the capability's own bound, not the value system's.
+
 ## Installed modules
 
 A module has a name, spelled as an entry name is, and every revision of it is

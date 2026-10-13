@@ -128,7 +128,6 @@ def build_snapshot() -> None:
         ": CORE-RUN WAKE-CORE ;",
         ": CORE-WAIT BEGIN DUP CORE-STATUS 0<> WHILE REPEAT DROP ;",
         "NCORES 4 MIN CONSTANT N-FULL-CORES",
-        ": MS@ EPOCH@ ;",
         ": 0>= 0< INVERT ;",
         "CREATE _HANDLERS NCORES CELLS ALLOT _HANDLERS NCORES CELLS 0 FILL",
         ": HANDLER COREID CELLS _HANDLERS + ;",

@@ -153,14 +153,15 @@ PROVIDED akashic-semaphore
 \   Try to acquire the semaphore within `ms` milliseconds.
 \   Returns TRUE (-1) if acquired, FALSE (0) if timed out.
 \
-\   Uses EPOCH@ (BIOS: milliseconds since boot) for timing.
+\   Uses MS@ (BIOS uptime in milliseconds) for timing, so setting the
+\   wall clock can neither stretch nor cut a timeout.
 
 \ _SEM-DEADLINE removed — deadline now lives on the return stack
 \ inside SEM-WAIT-TIMEOUT to avoid shared-state corruption when
 \ multiple tasks call SEM-WAIT-TIMEOUT concurrently.  (Tier 0b fix)
 
 : SEM-WAIT-TIMEOUT  ( sem ms -- flag )
-    EPOCH@ + >R                        \ deadline on R  R: ( deadline )
+    MS@ + >R                           \ deadline on R  R: ( deadline )
     BEGIN
         \ Try to decrement under lock
         EVT-LOCK LOCK
@@ -172,7 +173,7 @@ PROVIDED akashic-semaphore
         THEN
         EVT-LOCK UNLOCK
         \ Check timeout
-        EPOCH@ R@ > IF
+        MS@ R@ > IF
             R> DROP                    \ discard deadline
             DROP 0 EXIT                \ timed out
         THEN

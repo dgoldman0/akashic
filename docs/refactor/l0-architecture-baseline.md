@@ -1342,3 +1342,492 @@ worker-job descriptor.
 | mutable-state | `6e8d589e102b2223e20c178e5a0e52489a0ddcbb87133700de30c5f5314b6ea1` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook schedules reviewed ratchet update
+
+This section records the moves the Daybook scheduler made, through its
+reminders and the first three landings of scheduled Agent runs, which
+were not recorded here as they happened. The graph rises from 635 modules
+and 2,251 resolved `REQUIRE` occurrences and unique edges to 645 modules and
+2,276. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+The new modules:
+- `utils/posix-tz.f`, POSIX TZ zones with daylight rules, requires
+  `utils/datetime.f`.
+- `utils/record-table.f`, the growing sorted record tables the stores share,
+  requires nothing.
+- `interop/scheduled-action.f`, the catalog of actions a schedule can name,
+  requires `interop/qualified-locator.f`, `math/sha3.f` and `text/utf8.f`.
+- `interop/scheduled-dispatch.f`, the portable contract between Daybook's
+  runner and Desk's broker, requires `interop/scheduled-action.f`.
+- `tui/applets/daybook/recurrence.f` requires `utils/posix-tz.f`.
+- `tui/applets/daybook/automation-store.f`, the durable store, requires
+  `tui/applets/daybook/recurrence.f`, `interop/scheduled-action.f`,
+  `runtime/identity.f`, `math/entropy.f`, `text/utf8.f`,
+  `utils/checked-record.f`, `utils/fs/vfs.f`, `utils/fs/vfs-replace.f` and
+  `utils/record-table.f`.
+- `tui/applets/daybook/automation-owner.f` requires the store, `math/sha3.f`
+  and `interop/scheduled-dispatch.f`.
+- `tui/applets/daybook/automation-runner.f` requires the owner.
+- `tui/applets/daybook/automation-service.f` requires the runner and
+  `utils/string.f`.
+- `tui/applets/daybook/reminders.f`, Daybook's view, requires the service,
+  `math/entropy.f` and `utils/string.f`.
+
+`tui/applets/daybook/daybook.f` now requires `reminders.f`, and
+`tui/applets/desk/desk.f` requires `automation-service.f`, because Desk hosts
+the service. `web/rpc.f` no longer requires `utils/datetime.f`: its rate
+limiter measures intervals on uptime.
+
+Applet globals rise from 3,539 to 3,543:
+- `_DBAS-BLOB-A`, `_DBAS-BLOB-U` and `_DBAS-AT` are the store's scratch while
+  it checks or writes a file's variable-length region. The store is
+  caller-serialized, and a check never yields.
+- `_DB-RV-ASK-DELETE-D` is a forward reference, set once at load, through
+  which the reminders view's keys reach the delete confirmation.
+
+Independent globals rise from 10,092 to 10,096:
+- `_SACT-PAIRS` is the catalog's immutable table of outcome and reason pairs.
+- `_SACT-CELLS`, `_SDSP-ID` and `_SDSP-DIGEST` are scratch for one digest
+  inside one call.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3ef311a1f07caf2de02a04c81efcbcf6d701256c3e99a22327d61d84c1fa1d10` |
+| mutable-state | `7dcd427a5bb86ac0716c3bdc0da17e038b211fc7b609822ef4e7b1e5dd4b3529` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Schedule permissions reviewed ratchet update
+
+`runtime/schedule-permission.f` keeps the permissions that let Desk's broker
+start a schedule's runs. It requires `runtime/identity.f`, `math/sha3.f`,
+`math/entropy.f`, `utils/checked-record.f`, `utils/fs/vfs.f`,
+`utils/fs/vfs-replace.f`, `utils/record-table.f` and
+`interop/scheduled-dispatch.f`. The graph rises to 646 modules and 2,284
+resolved `REQUIRE` occurrences and unique edges. The 78 reviewed unresolved
+imports are unchanged, and no cycle, layer violation, placement debt,
+identity or addressability issue appears.
+
+Independent globals stay at 10,096: the store keeps its table, its scratch
+and the payload a check reads in the caller's store record. The
+mutable-state digest changes because it covers the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `dd3abfeacdd464b3765f6c76ce07b3d946dde8d10d45ac9798cb65bd27a5953c` |
+| mutable-state | `669f5d5348934fe3ebea0a3a3ee2681957c17662a235751bfc7ccccfb468455a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Caller-checked lending reviewed ratchet update
+
+Desk's interoperability endpoint now learns which runtime instance asks for
+a service: the service callback takes the caller, `CINST-SERVICE` passes the
+instance it is given, and a resource session passes the instance opening
+it. An entry in Desk's service table may name the one component it is lent
+to, and Desk then lends it only to an instance of that component's trusted
+built-in descriptor. The Agent's four services go to the Agent alone, and
+Daybook's automations to Daybook alone. No module or `REQUIRE` changes, so
+the graph stays at 646 modules and 2,284 resolved occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+Applet globals rise from 3,543 to 3,545: `_DSSA-OWNER-A` and
+`_DSSA-OWNER-U` stage an entry's owner while `_DESK-SERVICE+` adds it,
+beside the table's existing staging cells for the id and the getter.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `dd3abfeacdd464b3765f6c76ce07b3d946dde8d10d45ac9798cb65bd27a5953c` |
+| mutable-state | `eb7a780ac00615c73aab4d1d95adfee4c9802afbc88ec35b099d6f765d3df92a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Schedule dispatch reviewed ratchet update
+
+Daybook's automation service now hands Agent runs to Desk's broker through
+the dispatch client and follows them to their ends.
+`tui/applets/daybook/recurrence.f` now requires `utils/buffer-writer.f`, to
+describe a rule in words, and `tui/applets/daybook/automation-service.f`
+requires it too, to write a request's trigger. The graph keeps 646 modules
+and rises to 2,286 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Globals are unchanged: the service keeps its client, its growing request and
+response buffers, its approval state and its scratch in its own record, and
+the description writes through the caller's buffer writer.
+
+| Digest | Value |
+| --- | --- |
+| graph | `d91e0ddede4f5147c562bbea070f8cc6b615d4d5bbdedb753f43f2440d352003` |
+| mutable-state (unchanged) | `eb7a780ac00615c73aab4d1d95adfee4c9802afbc88ec35b099d6f765d3df92a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Schedule broker reviewed ratchet update
+
+Desk gains its schedule broker, `tui/applets/desk/schedule-broker.f`. It
+checks each scheduled run against the schedule permissions and compiles
+the run's authority from them. It requires `runtime/schedule-permission.f`
+and `interop/policy.f`. It also requires the Agent's public composition
+seam, `tui/applets/agent/service.f`, for the Mandate-run constructor that
+Desk's chat factory also uses. That import is a new reviewed public applet
+seam. The broker reaches no other Agent module; importing
+`tui/applets/agent/mandate-run.f` directly still fails as a sibling import.
+
+The graph rises to 647 modules and 2,289 resolved `REQUIRE` occurrences
+and unique edges. The 78 reviewed unresolved imports are unchanged, and no
+cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+Globals are unchanged: applet globals stay at 3,545 and independent globals
+at 10,096. The broker keeps its scratch, its response, Mandate and facet
+buffers and its permission store in its own record. Its runs and approvals
+are allocated nodes. The mutable-state digest changes because it covers
+the new module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `3670c3e1e7c9b3dfae7f8dcdae6a2b19d74ec6a7b826062ab53d59424a0538e6` |
+| mutable-state | `97e3a91c9d43eb7580f779f218723969b38d0d645ebd21c096de91b2e6f7919c` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Model designations reviewed ratchet update
+
+An Agent turn can now name the model it runs on, so a scheduled run keeps
+the model it was approved with. No module or `REQUIRE` changes, so the
+graph stays at 647 modules and 2,289 resolved occurrences and unique edges.
+The 78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Applet globals fall from 3,545 to 3,544:
+- The Agent applet's private copy of the selected-effort search, with its
+  two cells `_AGSE-MODEL` and `_AGSE-I`, gives way to the shared
+  `ARMODEL-SELECTED-EFFORT`.
+- The Codex catalog gains `_CDSEL-CONFIG`, which names the configuration
+  its model-configuration step writes: the selection's, or a designated
+  run's own copy.
+
+Independent globals stay at 10,096: `JSON-ESTR-LEN` needs none.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `3670c3e1e7c9b3dfae7f8dcdae6a2b19d74ec6a7b826062ab53d59424a0538e6` |
+| mutable-state | `58591852ce0f8906b12a6d93a0edd0fffe235caf9649c599fcd4fdd247eb6c11` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Shared blob slots reviewed ratchet update
+
+The blob slots that let Daybook's store hold operands and summaries of any
+length move into the new `utils/blob-slot.f`, as its record tables moved
+into `utils/record-table.f`. The Agent's run store uses them next. The
+new module requires `utils/record-table.f`, and
+`tui/applets/daybook/automation-store.f` now requires it too. The graph
+rises to 648 modules and 2,291 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+Daybook's file bytes do not change.
+
+Applet globals fall from 3,544 to 3,541. The store's three blob-walk cells,
+`_DBAS-BLOB-A`, `_DBAS-BLOB-U` and `_DBAS-AT`, become a cursor in the
+store's record. Independent globals stay at 10,096: the new module keeps
+its cursor in the caller's record.
+
+| Digest | Value |
+| --- | --- |
+| graph | `1237c71f2930f0998b575260ff569f03a8487bb9b4d5c9581c083a74604d0f24` |
+| mutable-state | `853fbc4f6fd374e5b1f3951924fe69a595ad9442d8f5320defdd8f0c4d90e02f` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent run store reviewed ratchet update
+
+The Agent gains its run store, `tui/applets/agent/storage/dispatch-store.f`,
+which records each scheduled run once, before its provider starts, with how
+it ended and its transcript. It requires `runtime/identity.f`,
+`math/sha3.f`, `math/entropy.f`, `utils/checked-record.f`,
+`utils/fs/vfs.f`, `utils/fs/vfs-replace.f`, `utils/record-table.f`,
+`utils/blob-slot.f` and `interop/scheduled-dispatch.f`, all below the applet
+layer. The graph rises to 649 modules and 2,300 resolved `REQUIRE`
+occurrences and unique edges. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,541 and independent globals
+at 10,096. The store keeps all its state, including its check's scratch and
+blob cursor, in the caller's store record. The mutable-state digest moves
+because the applet class gains a module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `4d975b071881acf6d02ef3c81ed6e732656d9a07a2edd52d21046ad3db011aed` |
+| mutable-state | `c075f671256c17ad3bd759f198027bc650aff58ca83f723f29f935ed39f1a1b9` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent dispatcher reviewed ratchet update
+
+The Agent gains its dispatcher, `tui/applets/agent/dispatch.f`, which runs
+the scheduled work Desk's broker hands it: on the model each run names, in
+a conversation of its own, one run at a time with chat waiting behind, and
+recorded in the run store. It requires the Agent's `runtime.f`,
+`run-settings.f`, `storage/dispatch-store.f` and `storage/thread-codec.f`,
+and `utils/datetime.f`, `utils/record-table.f` and `utils/string.f`. The
+graph rises to 650 modules and 2,307 resolved `REQUIRE` occurrences and
+unique edges. The 78 reviewed unresolved imports are unchanged, and no
+cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+Applet globals rise from 3,541 to 3,544: the runtime's
+`ARUNTIME-RUN-START` takes seven arguments and keeps three of them in
+cells, `_ARRS-DES`, `_ARRS-CONV` and `_ARRS-AMRUN`, as the runtime's other
+entry points keep theirs. The dispatcher keeps all its state in its
+caller's record. Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph | `2c02e4766b553978f421625601061daadbff7b958a1b5196d447b1534f877381` |
+| mutable-state | `991105e34de922892f14ae70643d8a7183bf506e17aa0d200c5b52a02637b758` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent scheduled-runs view reviewed ratchet update
+
+The Agent gains its view of its scheduled runs,
+`tui/applets/agent/scheduled-runs.f`, which lists the runs its dispatcher
+recorded, newest first, and opens a kept run's transcript for the Agent to
+show in place of the chat. It requires the Agent's `dispatch.f` and
+`storage/thread-codec.f`, and `utils/datetime.f` and `utils/string.f`, and
+the Agent's `agent.f` requires it. The graph rises to 651 modules and
+2,312 resolved `REQUIRE` occurrences and unique edges. The 78 reviewed
+unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,544 and independent
+globals at 10,096. The view keeps all its state, including the buffer its
+row text is written into, in the caller's view record, and the Agent keeps
+the view, its list and its region in its component state. The
+mutable-state digest moves because the applet class gains a module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `83a0207185e06d31dc37b73e852236ac4c11dd5cbf5855b615a61e902fd82ef5` |
+| mutable-state | `735e4d88e838a5ef6125ad88060a4d996075e4f4fa1acf55b07270ce83d67c05` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Agent handler reviewed ratchet update
+
+Desk gains `tui/applets/desk/schedule-agent.f`, which makes the Agent's
+scheduled-run dispatcher the schedule broker's handler: the dispatcher's
+own words start, follow and cancel runs, list the models, and vet
+approvals. It requires `schedule-broker.f` and the Agent's public
+`service.f`, which now requires the Agent's `dispatch.f`, so Desk reaches
+the dispatcher through the one public Agent composition seam. A new
+reviewed public applet seam records the adapter's import of `service.f`;
+without it the import is a sibling-applet violation. The graph rises to
+652 modules and 2,315 resolved `REQUIRE` occurrences and unique edges. The
+78 reviewed unresolved imports are unchanged, and no cycle, layer
+violation, placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,544 and independent
+globals at 10,096. The dispatcher keeps the model list's scratch, where it
+writes and whether it is measuring, in its caller's record. The
+mutable-state digest moves because the applet class gains a module.
+
+| Digest | Value |
+| --- | --- |
+| graph | `692673826fbc09dc3daf3e61cc0c9cd4d1b357840ac25fd397f82b1c49b88c2d` |
+| mutable-state | `a7931976fd57d28366784add9ebac2058abe9d2cd47a85198505aff8185007d0` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk-hosted scheduled runs reviewed ratchet update
+
+Desk's `desk.f` now requires `schedule-agent.f`, within Desk, and hosts
+the Agent's scheduled-run dispatcher and the schedule broker in its
+component state: it lends the dispatcher to the Agent and gives the
+broker's client to Daybook's automation service. The graph keeps 652
+modules and rises to 2,316 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue
+appears.
+
+Globals are unchanged: applet globals stay at 3,544 and independent
+globals at 10,096. The dispatcher, the handler and the broker are fields
+of Desk's component state. The mutable-state digest is unchanged.
+
+| Digest | Value |
+| --- | --- |
+| graph | `484b27ab060072ca7c48706cd7565ee4065265dd5f8e2f7d5686447f2179b238` |
+| mutable-state (unchanged) | `a7931976fd57d28366784add9ebac2058abe9d2cd47a85198505aff8185007d0` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk schedule screens reviewed ratchet update
+
+Desk gains `tui/applets/desk/schedule-surface.f`, its screens for
+scheduled runs: the approval of a schedule Daybook asks Desk's user to
+approve, and the run permissions, which revokes them. It requires
+`app-desc.f`, `uidl-tui.f`, `region.f`, `keys.f`, `widgets/list.f`,
+`utils/datetime.f`, `utils/string.f` and the schedule broker, and Desk's
+`desk.f` requires it. Daybook's automation service gains `DBSVC-LABEL`,
+which names a schedule for the permissions. The graph rises to 653
+modules and 2,325 resolved `REQUIRE` occurrences and unique edges. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Applet globals rise from 3,544 to 3,549, the five records the screens
+define once at load, as the sandbox screens do: an application and a
+component descriptor for each of the two overlays, and the list's column
+records they share. Each overlay keeps its state in its own instance.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph | `ab07c60f63aa2ea8bd3b7d74753094d584af97415ef88a23dcfcfa188b1feee8` |
+| mutable-state | `df2012b5e79bc4baad6579fe860c03f0787c11944e97b3dcf4952915b0489839` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Desk shutdown question reviewed ratchet update
+
+Desk's schedule screens gain a third, the shutdown question, which Desk's
+close negotiation opens while a scheduled run is in flight or waiting.
+The graph keeps 653 modules and 2,325 resolved `REQUIRE` occurrences and
+unique edges. The 78 reviewed unresolved imports are unchanged, and no
+cycle, layer violation, placement debt, identity or addressability issue
+appears.
+
+Applet globals rise from 3,549 to 3,551: the question's application and
+component descriptors, defined once at load like the other two screens'.
+Desk's choice to shut down is a cell of its component state.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `ab07c60f63aa2ea8bd3b7d74753094d584af97415ef88a23dcfcfa188b1feee8` |
+| mutable-state | `b47752e655e339e4d2a1e81c96419d1d8e38081ae366535ff1d8768445623a5a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook automations view rename reviewed ratchet update
+
+Daybook's reminders view, `tui/applets/daybook/reminders.f`, becomes its
+automations view, `tui/applets/daybook/automation-view.f` (`DBAV-`), as
+it comes to show Agent runs as well as reminders. The module's requires
+and Daybook's require of it are unchanged, so the graph keeps 653 modules
+and 2,325 resolved `REQUIRE` occurrences and unique edges; its digest
+moves with the module's path. The 78 reviewed unresolved imports are
+unchanged, and no cycle, layer violation, placement debt, identity or
+addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,551 and independent
+globals at 10,096. The mutable-state digest moves with the path.
+
+| Digest | Value |
+| --- | --- |
+| graph | `2667cd44d390c4429e6ad07cc45eb9e1018d8c1b235869aab029e783e565735e` |
+| mutable-state | `7f849d28601021a76e89910f462ff1cc691ebd96a41efef52b6f5152b062ffc4` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook Agent run create view reviewed ratchet update
+
+Daybook's automations view, `tui/applets/daybook/automation-view.f`, now
+makes Agent runs from the model list Desk's broker gives. It reads that
+list itself with the dispatch contract's readers, so it requires
+`interop/scheduled-dispatch.f` directly, which it reached before only
+through the automation owner. The graph keeps 653 modules and gains that
+one resolved `REQUIRE` occurrence and unique edge, 2,326 of each. The 78
+reviewed unresolved imports are unchanged, and no cycle, layer violation,
+placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,551 and independent
+globals at 10,096, and the mutable-state digest with them.
+
+| Digest | Value |
+| --- | --- |
+| graph | `f13bc06ca1bc144cd6e1b5b1298cb4e587095dc6b2351c4ce08647a5e90827e1` |
+| mutable-state (unchanged) | `7f849d28601021a76e89910f462ff1cc691ebd96a41efef52b6f5152b062ffc4` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook Agent run create pages reviewed ratchet update
+
+Daybook gains its pages for making an Agent run: a list of each choice
+its model offers, and an editor for its prompt. The editor copies, cuts
+and pastes through the shared clipboard, so `tui/applets/daybook/daybook.f`
+requires `utils/clipboard.f`, as Pad does. The graph keeps 653 modules and
+gains that one resolved `REQUIRE` occurrence and unique edge, 2,327 of
+each. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue
+appears.
+
+Applet globals rise from 3,551 to 3,553: the deferred words through which
+Daybook's automations body draws a create page and gives it keys, set once
+at load to words defined after the prompts they use, as Daybook's delete
+prompt already is. The pages' state is cells of Daybook's component state.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph | `b9901f04b463aa28df588ac387820510f777632dbb4a24fd39716ed788b8f254` |
+| mutable-state | `f53366f1ca991a53d6b8513475c17b0e0b58c159f59ab7490c980f9b38a4386a` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Daybook automation details reviewed ratchet update
+
+Daybook's automations view opens a schedule in detail, and says an Agent
+run's model and limits in the words Desk's approval shows. Those words
+move from Desk's schedule surface into the action catalog,
+`interop/scheduled-action.f`, as `SACT-SAY-MODEL` and `SACT-SAY-LIMITS`,
+so both say them the same way. The catalog writes numbers with
+`NUM>STR`, so it requires `utils/string.f`. The graph keeps 653 modules
+and gains that one resolved `REQUIRE` occurrence and unique edge, 2,328 of
+each. The 78 reviewed unresolved imports are unchanged, and no cycle,
+layer violation, placement debt, identity or addressability issue appears.
+
+Globals are unchanged: applet globals stay at 3,553 and independent
+globals at 10,096. The mutable-state digest moves because Daybook's two
+deferred page words are renamed for all of the automations' pages, not
+only a new Agent run's.
+
+| Digest | Value |
+| --- | --- |
+| graph | `993a6ff7bdd6e94bfbc05536fbed0639c9692bbb7073523b3bedf79a056f6b6a` |
+| mutable-state | `63d8f240398481094d7e590daae107de0646916712bfee093ecbe9dd926206a7` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Document-size limit reviewed ratchet update
+
+The value system's limit on one string or byte value
+(`CV-MAX-STRING-LEN`) and the resource contract's content limit
+(`RCON-CONTENT-MAX`, now defined as the former) rise from 64 KiB to
+16 MiB, so a document travels whole. A value allocates only its own
+length, so the bound reserves nothing. Library's projection snapshot
+drops its fixed 64 KiB buffer and reads into one of exactly the
+document's size, freed when the snapshot's handler returns. The sandbox
+capability and the binary schema form keep their documented 64 KiB
+bounds under their own names (`SBOX-CAPABILITY-TEXT-MAX`, `CSB-KEY-MAX`).
+
+The graph is unchanged: 653 modules, 2,328 resolved `REQUIRE`
+occurrences and unique edges, and the 78 reviewed unresolved imports. No
+cycle, layer violation, placement debt, identity or addressability issue
+appears. Applet globals rise from 3,553 to 3,554: Library's fixed buffer
+goes, and the buffer's address and size become two variables.
+Independent globals stay at 10,096.
+
+| Digest | Value |
+| --- | --- |
+| graph (unchanged) | `993a6ff7bdd6e94bfbc05536fbed0639c9692bbb7073523b3bedf79a056f6b6a` |
+| mutable-state | `1fbc435687ec866df62f3517428b280f3b2bbfb695159e641fa71c3a4ad8ba5e` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |

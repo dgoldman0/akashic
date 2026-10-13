@@ -58,6 +58,28 @@ CREATE _dtt-b 32 ALLOT
     DT-S-RANGE _dtt-status
     0= _dtt-assert 0= _dtt-assert 0= _dtt-assert ;
 
+: _dtt-test-weekday  ( -- )
+    0 DT-WEEKDAY DT-S-OK _dtt-status 4 = _dtt-assert
+    259200 DT-WEEKDAY DT-S-OK _dtt-status 7 = _dtt-assert
+    345600 DT-WEEKDAY DT-S-OK _dtt-status 1 = _dtt-assert
+    345599 DT-WEEKDAY DT-S-OK _dtt-status 7 = _dtt-assert
+    951782400 DT-WEEKDAY DT-S-OK _dtt-status 2 = _dtt-assert
+    DT-EPOCH-S-MAX DT-WEEKDAY DT-S-OK _dtt-status 5 = _dtt-assert
+    -1 DT-WEEKDAY DT-S-RANGE _dtt-status 0= _dtt-assert
+    DT-EPOCH-S-MAX 1+ DT-WEEKDAY DT-S-RANGE _dtt-status 0= _dtt-assert
+    -1 7 0 DO
+        I 86400 * DT-WEEKDAY DT-S-OK _dtt-status
+        I 3 + 7 MOD 1+ = AND
+    LOOP _dtt-assert ;
+
+\ The session starts with an unset wall clock; EPOCH! sets it.
+: _dtt-test-clock  ( -- )
+    DT-CLOCK-VALID? 0= _dtt-assert
+    1760000000000 EPOCH!
+    DT-CLOCK-VALID? _dtt-assert
+    DT-NOW-MS 1760000000000 - 0 1000 WITHIN _dtt-assert
+    DT-NOW-S 1760000000 - 0 2 WITHIN _dtt-assert ;
+
 : _dtt-test-format  ( -- )
     _dtt-a 32 165 FILL
     1718465400 _dtt-a 32 DT-RFC3339-UTC-S
@@ -93,6 +115,8 @@ CREATE _dtt-b 32 ALLOT
     0 _dtt-failed !
     _dtt-test-statuses
     _dtt-test-calendar
+    _dtt-test-weekday
+    _dtt-test-clock
     _dtt-test-format
     DEPTH 0= _dtt-assert
     _dtt-failed @ IF

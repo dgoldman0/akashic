@@ -142,8 +142,9 @@ CREATE _NODE-HTMP 32 ALLOT
     SYNC-STEP                          \ deferred block requests
     SRV-STEP                           \ [FIX P33] accept HTTP connection
     _NODE-PERSIST-TICK                 \ [FIX P35] save new blocks
-    \ [FIX D03] Time-based block production
-    DT-NOW-S DUP _NODE-LAST-PRODUCE-T @ -
+    \ [FIX D03] Time-based block production.  The interval runs on
+    \ uptime seconds; only the block's own timestamp is wall time.
+    MS@ 1000 / DUP _NODE-LAST-PRODUCE-T @ -
     _NODE-BLK-INTERVAL @ >= IF
         _NODE-LAST-PRODUCE-T !
         _NODE-PRODUCE-BLOCK
@@ -154,12 +155,12 @@ CREATE _NODE-HTMP 32 ALLOT
 \ =====================================================================
 \  7. Yield helper  [FIX P36]
 \ =====================================================================
-\  Busy-wait for at least ms milliseconds using DT-NOW-MS.
+\  Busy-wait for at least ms milliseconds of MS@ uptime.
 \  Prevents the main loop from consuming 100% CPU.
 
 : _NODE-YIELD  ( ms -- )
-    DT-NOW-MS +                        ( deadline )
-    BEGIN DUP DT-NOW-MS > WHILE REPEAT DROP ;
+    MS@ +                              ( deadline )
+    BEGIN DUP MS@ > WHILE REPEAT DROP ;
 
 \ =====================================================================
 \  8. NODE-RUN / NODE-STOP
@@ -180,7 +181,7 @@ CREATE _NODE-HTMP 32 ALLOT
 
 : NODE-RUN  ( -- )
     NODE-RUNNING _NODE-STATE !
-    DT-NOW-S _NODE-LAST-PRODUCE-T !   \ [FIX D03] seed production timer
+    MS@ 1000 / _NODE-LAST-PRODUCE-T ! \ [FIX D03] seed production timer
     BEGIN
         _NODE-STATE @ NODE-STOPPED <>
     WHILE

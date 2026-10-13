@@ -19,6 +19,11 @@ The widget can use a caller-provided flat byte buffer or a bound canonical gap
 buffer. In either mode `0x0A` is the line separator and the same ordinary draw,
 cursor, selection, scroll, and input state is authoritative.
 
+A flat buffer refuses an insert that would overflow it. A caller that wants
+the text to grow gives the widget a larger buffer holding the same text with
+`TXTA-BUFFER!` before the edit, as Daybook's prompt editor does; the caret,
+selection and scroll stay.
+
 ## Characters and Cells
 
 Text follows the shared text rules (`docs/rich-terminal/APT-1-TEXT.md`,
@@ -107,6 +112,8 @@ on a link places the caret, so the link's text can still be edited.
 |------|-------|-------------|
 | `TXTA-SET-TEXT` | `( text-a text-u widget -- )` | Set text; clamps to capacity; cursor at end |
 | `TXTA-GET-TEXT` | `( widget -- addr len )` | Allocate a contiguous text snapshot; caller must `FREE` `addr` |
+| `TXTA-LENGTH` | `( widget -- u )` | Bytes of text held, in either mode |
+| `TXTA-BUFFER!` | `( buf cap widget -- flag )` | Move a flat-mode widget to `cap` bytes at `buf` that already hold its text; false, changing nothing, in GB mode or when `cap` is less than the text |
 | `TXTA-CLEAR` | `( widget -- )` | Clear buffer, reset cursor and scroll |
 
 ### Cursor and Identity Queries

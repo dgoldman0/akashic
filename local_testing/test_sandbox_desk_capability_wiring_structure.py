@@ -161,20 +161,21 @@ def test_desk_opens_the_sandbox_screens_as_ordinary_overlays() -> None:
     # carried out after the host's dispatch, not inside its callbacks.
     event = _definition(source, "DESK-EVENT-CB")
     assert event.index("_DESK-LAUNCHER-ID @ IF") < event.index(
-        "_DESK-SBOX-OVERLAY-ID @ IF _DESK-SBOX-OVERLAY-EVENT EXIT THEN"
+        "_DESK-SCREEN-ID @ IF _DESK-SCREEN-EVENT EXIT THEN"
     )
-    overlay_event = _definition(source, "_DESK-SBOX-OVERLAY-EVENT")
+    overlay_event = _definition(source, "_DESK-SCREEN-EVENT")
     assert overlay_event.index("AHOST-DISPATCH-KEY-ID") < overlay_event.index(
-        "_DESK-SBOX-OVERLAY-SERVICE"
+        "_DESK-SCREEN-SERVICE"
     )
+    assert "SBXS-SERVICE" in _definition(source, "_DESK-SCREEN-SERVICE")
     assert "SBOX-CAPABILITY-ANSWER" not in source
 
     # The prompt opens from the tick, after the capability has run.
     tick = _definition(source, "DESK-TICK-CB")
     assert tick.index("SBOX-CAPABILITY-TICK") < tick.index(
-        "_DESK-SBOX-SURFACE-TICK"
+        "_DESK-SCREENS-TICK"
     ) < tick.index("_DESK-HOST AHOST-TICK")
-    surface_tick = _definition(source, "_DESK-SBOX-SURFACE-TICK")
+    surface_tick = _definition(source, "_DESK-SCREENS-TICK")
     assert "PRM-ACTIVE?" in surface_tick
     assert "_DESK-LAUNCHER-ID @ IF EXIT THEN" in surface_tick
 

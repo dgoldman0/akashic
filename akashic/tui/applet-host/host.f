@@ -15,6 +15,11 @@
 \  AHOST-DISPATCH-KEY-ID.  Its ID comes from a separate negative range, from
 \  -2 down, so opening one never shifts the numbers of ordinary children.
 \
+\  A child launched minimized starts as a minimized slot, as the user
+\  would leave one: it runs and is ticked, but has no tile and takes no
+\  focus, and the user restores it from the taskbar.  It is not the slot
+\  the host restores next, which stays the one the user last minimized.
+\
 \  It owns no product catalog, chrome, tiling policy, service namespace, or
 \  concrete applet.  The caller injects its registry, endpoint, relayout,
 \  owner-resource release, and closed-slot projection through AHOST state.
@@ -701,6 +706,12 @@ VARIABLE _AHL-INIT-STARTED
 VARIABLE _AHL-ID
 VARIABLE _AHL-IOR
 VARIABLE _AHL-OVERLAY
+VARIABLE _AHL-MINIMIZED
+
+\ How a launch places its child.
+0 CONSTANT _AHL-M-TILED
+1 CONSTANT _AHL-M-OVERLAY
+2 CONSTANT _AHL-M-MINIMIZED
 
 : _AHL-BODY  ( -- )
     _AHL-DESC @ APP-DESC-VALID? 0= IF AHOST-LAUNCH-E-DESC THROW THEN
@@ -737,7 +748,8 @@ VARIABLE _AHL-OVERLAY
         -1 _AHL-SLOT @ AHS.HAS-UIDL !
     THEN
     _AHL-SLOT @ _AHL-HOST @ _AHOST-APPEND
-    _AHL-HOST @ AHOST.FOCUS @ 0= _AHL-OVERLAY @ 0= AND IF
+    _AHL-HOST @ AHOST.FOCUS @ 0= _AHL-OVERLAY @ 0= AND
+    _AHL-MINIMIZED @ 0= AND IF
         AHS-S-FOCUSED _AHL-SLOT @ AHS.STATE !
         _AHL-SLOT @ _AHL-HOST @ AHOST.FOCUS !
     THEN
@@ -767,7 +779,13 @@ VARIABLE _AHL-OVERLAY
     -1 _AHL-INIT-STARTED !
     -1 _AHL-SLOT @ AHS.INIT-STARTED !
     _AHL-DESC @ APP.INIT-XT @ ?DUP IF _AHL-INST @ SWAP EXECUTE THEN
-    _AHL-SLOT @ AHS.HAS-UIDL @ IF _AHL-SLOT @ AHS-CTX-SAVE THEN ;
+    _AHL-SLOT @ AHS.HAS-UIDL @ IF _AHL-SLOT @ AHS-CTX-SAVE THEN
+    \ It laid out as a running slot, to have a region to load its UIDL
+    \ into; minimized, it now gives up its tile.
+    _AHL-MINIMIZED @ IF
+        AHS-S-MINIMIZED _AHL-SLOT @ AHS.STATE !
+        _AHL-HOST @ _AHOST-RELAYOUT
+    THEN ;
 
 VARIABLE _AHR-IOR
 VARIABLE _AHR-CLOSED
@@ -806,8 +824,10 @@ VARIABLE _AHR-CLOSED
     0 _AHL-INIT-STARTED !
     _AHR-IOR @ ?DUP IF THROW THEN ;
 
-: _AHOST-TRY-LAUNCH  ( desc host overlay? -- id ior )
-    0<> _AHL-OVERLAY ! _AHL-HOST ! _AHL-DESC !
+: _AHOST-TRY-LAUNCH  ( desc host mode -- id ior )
+    DUP _AHL-M-OVERLAY = _AHL-OVERLAY !
+    _AHL-M-MINIMIZED = _AHL-MINIMIZED !
+    _AHL-HOST ! _AHL-DESC !
     0 _AHL-INST ! 0 _AHL-SLOT ! 0 _AHL-REGISTERED !
     0 _AHL-INIT-STARTED ! -1 _AHL-ID ! 0 _AHL-IOR !
     ['] _AHL-BODY CATCH ?DUP IF
@@ -819,11 +839,17 @@ VARIABLE _AHR-CLOSED
     THEN
     _AHL-ID @ 0 ;
 
-: AHOST-TRY-LAUNCH  ( desc host -- id ior )  0 _AHOST-TRY-LAUNCH ;
+: AHOST-TRY-LAUNCH  ( desc host -- id ior )  _AHL-M-TILED _AHOST-TRY-LAUNCH ;
 
 \ AHOST-TRY-LAUNCH-OVERLAY ( desc host -- id ior )
 \   Launch a child as an overlay slot (see the module header).
-: AHOST-TRY-LAUNCH-OVERLAY  ( desc host -- id ior )  -1 _AHOST-TRY-LAUNCH ;
+: AHOST-TRY-LAUNCH-OVERLAY  ( desc host -- id ior )
+    _AHL-M-OVERLAY _AHOST-TRY-LAUNCH ;
+
+\ AHOST-TRY-LAUNCH-MINIMIZED ( desc host -- id ior )
+\   Launch a child minimized (see the module header).
+: AHOST-TRY-LAUNCH-MINIMIZED  ( desc host -- id ior )
+    _AHL-M-MINIMIZED _AHOST-TRY-LAUNCH ;
 
 \ =====================================================================
 \  Focus, minimize, restore
@@ -1082,8 +1108,14 @@ VARIABLE _AHTI-HOST
             R@ AHS.DESC @ APP.FLAGS @ APP-F-TICK-WHEN-CLEAN AND OR IF
                 R@ AHS.HAS-UIDL @ IF R@ AHS-CTX-SWITCH THEN
                 R@ AHS-ACTIVATE
+                R@ AHS.INST @ CINST.REVISION @              ( revision )
                 R@ AHS.DESC @ APP.TICK-XT @ ?DUP IF
                     R@ AHS.INST @ SWAP EXECUTE
+                THEN
+                \ A child its own tick touched is drawn in this pass, whose
+                \ paint follows the tick.
+                R@ AHS.INST @ CINST.REVISION @ <> IF
+                    -1 R@ AHS.DIRTY ! ASHELL-DIRTY!
                 THEN
             THEN
             R> DROP

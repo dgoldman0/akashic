@@ -233,7 +233,7 @@ the builder pointer is cleared before the catalog is freed.
 
 Desk's interoperability endpoint resolves services through an activation-local
 table in Desk component state. The table has a fixed capacity of 16 and Desk
-currently installs eleven entries. Each entry borrows an immutable exact service
+currently installs twelve entries. Each entry borrows an immutable exact service
 ID and stores a getter XT; it does not cache or own the returned service. Lookups
 are exact byte matches, and an unknown ID returns `0`.
 
@@ -282,8 +282,9 @@ remaining requests and releases the root Context and Practice state.
 ### Sandbox screens
 
 Desk shows two screens for the sandbox (`sandbox-surface.f`). Each is an
-ordinary UIDL document with a canonical list, opened in the launcher's
-centred overlay box, one overlay at a time. Like the launcher, an open screen
+ordinary UIDL document with a canonical list, opened in a centred overlay
+box, one Desk screen at a time, as Desk's
+[schedule screens](#schedule-screens) are. Like the launcher, an open screen
 gets every key, a press outside it does nothing, and what the user chose is
 carried out after the host's dispatch returns, never from inside the screen's
 own callbacks.
@@ -333,7 +334,9 @@ instance and matching operation effects, so a smaller Desk composition receives
 only its live subset. Library query/read and all destructive or external effects
 remain outside every Agent profile.
 
-Children can borrow the composition through the Desk interoperability endpoint:
+The Agent borrows the composition through the Desk interoperability
+endpoint. Desk lends these services to the Agent alone (see
+[Lending services](#lending-services)):
 
 | Service ID | Value |
 |------------|-------|
@@ -341,8 +344,9 @@ Children can borrow the composition through the Desk interoperability endpoint:
 | `org.akashic.agent.tool-gateway` | Shared scoped tool gateway |
 | `org.akashic.agent.provider-source` | Host-retained provider source |
 | `org.akashic.agent.access-profile` | Current immutable profile descriptor |
+| `org.akashic.agent.dispatch` | The Agent's scheduled-run dispatcher, while it is open (see [Desk-hosted scheduled runs](#desk-hosted-scheduled-runs)) |
 
-The source remains host-retained; children must not free it. A preset change
+The source remains host-retained; the Agent must not free it. A preset change
 is rejected while a run or review is active, and the runtime freezes the
 compiled facet for the duration of each accepted run.
 
@@ -367,6 +371,8 @@ endpoint:
 | `org.akashic.runtime.resource-registry` | Activation-local `RREG` |
 | `org.akashic.interop.request-bus` | Desk request bus |
 | `org.akashic.resource.daybook` | Owner-lent Daybook `ROFFER` (exact RID + owning pool) |
+| `org.akashic.daybook.automations` | Daybook's automation service (`DBSVC`), lent to Daybook alone |
+| `org.akashic.runtime.resource-owners` | Desk's [resource owner directory](../../../interop/resource-owners.md), lent to Library alone |
 | `org.akashic.net.external-io` | Machine-owned cooperative external-I/O service |
 
 The endpoint does not expose the owner instance or a pool independently. A
@@ -409,6 +415,133 @@ native code can still write `/daybook.md` directly, outside the owner's
 revision sequence. The current claim is intentionally narrower: Daybook and
 Pad sessions coordinate through one Daybook owner by convention. Desk hosts
 and routes that owner but does not acquire its data or semantic authority.
+
+## Desk-hosted Daybook reminders
+
+Daybook owns reminders; Desk only runs them. On activation, after the
+Daybook document owner, Desk opens one
+[reminder service](../daybook/automations.md) in its component state over
+the Practice filesystem, at `/daybook-automations.bin`. A store Desk cannot
+use still yields a service, which tells Daybook why.
+
+Each Desk tick calls `DBSVC-TICK` before the applet host ticks. An idle
+tick reads uptime and compares it with the next look, once a second, and
+does nothing else. When a look fires reminders, Desk shows the service's
+notice as an eight-second toast and marks its children dirty, so an open
+Daybook shows the new review item. The notice text lives in the service,
+in Desk's state, so the toast's pointer stays valid until the next notice.
+
+Desk lends the service to Daybook alone, as
+`org.akashic.daybook.automations`. It closes the service during
+dispatch-quiesced teardown, after the Daybook document owner.
+
+## Desk-hosted scheduled runs
+
+A Daybook schedule may run the Agent. Desk hosts the two pieces that do
+it, in its component state over the Practice filesystem, once the Agent
+runtime exists:
+- the Agent's [dispatcher](../agent/dispatch.md), over that runtime, with
+  its run store at `/agent-dispatch.bin`;
+- the [schedule broker](schedule-broker.md), over the Practice's
+  permissions at `/schedule-perms.bin`, with the dispatcher as its
+  [handler](schedule-broker.md#the-agent-as-the-handler).
+
+Desk gives the broker's client to Daybook's automation service, through
+which Daybook asks for approvals, hands runs over, and follows them. A
+store either piece cannot use still opens, and says why. In recovery there
+is no Practice, so the broker does not open, Daybook's service gets no
+client, and scheduled runs are unavailable.
+
+A run may read one exact version of a document. Desk keeps a
+[resource owner directory](../../../interop/resource-owners.md) in which
+the applet that runs a document's owner publishes it while it runs: Library
+publishes `org.akashic.library`, and Desk's policy lets only
+`org.akashic.library.applet` publish it. The broker attaches a run's
+document through Desk's owners (`SBRK-OWNERS!`): Desk finds the document's
+owner in the directory, and when its applet is not running, Desk starts it
+minimized from the catalog (`AHOST-TRY-LAUNCH-MINIMIZED`): it runs and
+ticks, but takes no tile and no focus, and it is not the slot Alt+R
+restores. Its INIT publishes the owner before the launch returns, so
+nothing waits on a timer. Alt+ the slot's number, or a press on its label,
+restores it.
+
+Each Desk tick pumps the dispatcher right after the Agent runtime, so it
+takes the end of the run the runtime advanced, then ticks the broker,
+which starts the next waiting run once the Agent is idle, and then
+Daybook's service. Desk lends the dispatcher to the Agent alone, as
+`org.akashic.agent.dispatch`, for its scheduled runs view.
+
+During dispatch-quiesced teardown, before Daybook's service closes and
+while the runtime is still there, Desk takes the client back from
+Daybook's service, closes the broker, which cancels the runs in flight,
+and closes the dispatcher, which records how the current run ended.
+
+### Schedule screens
+
+Desk shows two screens for scheduled runs (`schedule-surface.f`), ordinary
+UIDL documents with a canonical list like the sandbox's, in an overlay
+box as tall as the screen allows. Only one Desk screen is open at a time,
+and like the launcher an open screen gets every key, a press outside it
+does nothing, and what the user chose is carried out after the host's
+dispatch returns.
+
+- **Approve a scheduled Agent run.** When Daybook asks the broker for an
+  approval, the next tick opens this screen for the oldest one awaiting an
+  answer, unless another overlay is open or the user is typing to the
+  Agent; a sandbox access prompt goes first. It shows the schedule's
+  title, when it runs, the model with its effort, tier and verbosity, the
+  provider, the limits, the document it reads, if any, and the prompt in
+  full, each as a card. The document shows as its owner describes it when
+  the screen opens: its title, the revision the run reads and its size,
+  and whether it has changed since, so that a run would stop for review;
+  one whose owner cannot say is named by its revision alone. When the
+  Agent could not run the schedule, a note says why, first. A allows it,
+  and R or Esc refuses. Allow is locked until the view has shown the
+  request's last line, and is not offered when the catalog does not offer
+  the model or the prompt is too large for it; an Agent that only is not
+  connected does not stop it, since the run is checked again as it
+  starts. Allow asks the Agent again before it grants. A grant the
+  permission store refuses keeps the screen open, and the status line
+  says why. The screen follows the broker: if Daybook asks again for the
+  same schedule, the approval shown is withdrawn, and the screen shows
+  nothing of it and closes unanswered.
+- **Scheduled run permissions.** Alt+P lists the permissions granted,
+  each named by its schedule's title, which Daybook's service gives
+  (`DBSVC-LABEL`), with when it was granted and its limits. R revokes the
+  selected one, which cancels any run in flight under it, and the status
+  line says how it went. Esc closes it.
+- **Shut down Desk?** When Desk is asked to close, as Alt+Q asks it,
+  while a scheduled run is in flight or waiting (`SBRK-ACTIVE?`), it
+  defers the close and asks:
+  "A scheduled Agent run is in progress or waiting. Shut down anyway? It
+  will be cancelled." in place of any overlay open. Keep running is the
+  first row, so Enter alone keeps Desk running, as Esc does. Shut down
+  arms the next close, once, and asks to close again; the applets are
+  then asked as usual, and Desk's teardown cancels the runs, which the
+  Agent records as cancelled because Desk shut down. Desk itself offers no
+  command that closes it; the question guards any close that comes.
+
+## Lending services
+
+Every lookup through the interoperability endpoint names the instance
+asking: `CINST-SERVICE` passes the instance it is given, and a resource
+session passes the instance that opens it. An entry in Desk's service table
+may name the one component it is lent to. Desk then lends it only to an
+instance whose descriptor is that component's trusted built-in descriptor,
+the one `_DESK-TRUSTED-COMP` finds, never to a descriptor that only claims
+the id:
+- `org.akashic.agent.*` goes to `org.akashic.agent`;
+- `org.akashic.daybook.automations` goes to `org.akashic.daybook`;
+- `org.akashic.runtime.resource-owners` goes to `org.akashic.library.applet`.
+
+A lookup that names no instance gets only what any child may. The shared
+runtime services, such as the root Context, stay open to every child;
+narrowing them is the Practice permission work's.
+
+Native applets share one address space, so this keeps each applet to its own
+services and names who each service is for. It is not a boundary against
+native code that names another instance as itself; the sandbox is that
+boundary.
 
 ## Config Loading
 
@@ -496,11 +629,13 @@ All shortcuts require **Alt** modifier:
 | Alt+W | Close focused slot |
 | Alt+H | Open the selectable catalog launcher |
 | Alt+S | Open the sandbox module inspector |
+| Alt+P | Open the scheduled run permissions |
+| Alt+Q | Shut Desk down, asking first while a scheduled run is in flight or waiting |
 
 Inside the launcher: Up/Down, PgUp/PgDn, Home/End move; Enter, a press on
 the selected row, or an OPEN item event focuses or launches; Esc closes it.
-The modal consumes input without blocking Desk ticks. The sandbox screens
-below behave the same way.
+The modal consumes input without blocking Desk ticks. The sandbox and
+schedule screens behave the same way.
 
 Alt+Arrow, Alt+Del, Alt+End, and Alt+PgDn are reserved by&nbsp;the shell
 cursor and never reach desk’s event handler.

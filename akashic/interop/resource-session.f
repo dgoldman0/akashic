@@ -182,11 +182,13 @@ REQUIRE resource-owner-pool.f
 : _RSES-ENDPOINT-PREFLIGHT  ( endpoint session -- status )
     >R IENDPOINT-SIZE R> _RSES-BORROWED-PREFLIGHT ;
 
-: _RSES-RUNTIME-SERVICES  ( endpoint -- context rreg bus )
-    >R
-    S" org.akashic.runtime.context" R@ IEND-SERVICE
-    S" org.akashic.runtime.resource-registry" R@ IEND-SERVICE
-    S" org.akashic.interop.request-bus" R> IEND-SERVICE ;
+\ The runtime services ENDPOINT lends CALLER, the instance opening the
+\ session.
+: _RSES-RUNTIME-SERVICES  ( caller endpoint -- context rreg bus )
+    S" org.akashic.runtime.context" 3 PICK 3 PICK IEND-SERVICE >R
+    S" org.akashic.runtime.resource-registry" 3 PICK 3 PICK IEND-SERVICE >R
+    S" org.akashic.interop.request-bus" 2SWAP IEND-SERVICE
+    R> R> SWAP ROT ;
 
 : _RSES-RUNTIME-RAW-PREFLIGHT
   ( context rreg bus session -- context rreg bus status )
@@ -577,9 +579,9 @@ REQUIRE resource-owner-pool.f
     \ Stage each runtime service first, exactly once.  Keep those results on
     \ the return stack while the exact named service is queried once and last;
     \ no later endpoint callback can mutate the offer after discovery.
-    DUP _RSES-RUNTIME-SERVICES
+    2 PICK OVER _RSES-RUNTIME-SERVICES
     >R >R >R
-    4 PICK 4 PICK 2 PICK IEND-SERVICE
+    4 PICK 4 PICK 4 PICK 3 PICK IEND-SERVICE
     R> R> R>
 
     \ Collect and protect the complete raw offer/pool/runtime geometry before

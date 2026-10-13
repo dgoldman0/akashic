@@ -1288,8 +1288,8 @@ _LC1-wb-decoded CV-INIT
     _LC1-wb-buffers-free
     LIBRARY-DOCUMENT-READ-RESULT-SCHEMA-TYPED-MAX
         _LC1-wb-allocate _LC1-wb-buffer !
-    CV-MAX-STRING-LEN _LC1-wb-allocate DUP _LC1-wb-control !
-        CV-MAX-STRING-LEN 1 FILL ;
+    LIBRARY-CAPABILITY-READ-CONTENT-MAX _LC1-wb-allocate DUP _LC1-wb-control !
+        LIBRARY-CAPABILITY-READ-CONTENT-MAX 1 FILL ;
 
 : _LC1-wb-root-free  ( -- ) _LC1-wb-root CV-FREE ;
 
@@ -1403,10 +1403,10 @@ _LC1-wb-decoded CV-INIT
     S" text/markdown" 13
         S" media_type" 5 _LC1-wb-root-slot _LC1-wb-text!
     S" content_bytes" 6 _LC1-wb-root-slot
-    _LC1-wb-schema-wide @ IF CV-CELL-MAX ELSE CV-MAX-STRING-LEN THEN
+    _LC1-wb-schema-wide @ IF CV-CELL-MAX ELSE LIBRARY-CAPABILITY-READ-CONTENT-MAX THEN
         SWAP CV-INT!
     S" content_digest" 7 _LC1-wb-root-slot _LC1-wb-digest!
-    _LC1-wb-control @ CV-MAX-STRING-LEN
+    _LC1-wb-control @ LIBRARY-CAPABILITY-READ-CONTENT-MAX
         S" content" 8 _LC1-wb-root-slot CV-STRING! _LC1-ok ;
 
 : _LC1-wb-exact-encode  ( expected encoder-xt -- )
@@ -1507,7 +1507,7 @@ _LC1-wb-decoded CV-INIT
     S" content" _LC1-wb-decoded CV-MAP-FIND
         DUP 0<> _LC1-assert
         DUP CV-TYPE@ CV-T-STRING = _LC1-assert
-        CV-LEN@ CV-MAX-STRING-LEN = _LC1-assert
+        CV-LEN@ LIBRARY-CAPABILITY-READ-CONTENT-MAX = _LC1-assert
     _LC1-wb-root-free _LC1-wb-decoded CV-FREE
     _LC1-stack ;
 

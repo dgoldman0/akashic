@@ -7,6 +7,9 @@
 \    - 2026-07-10 09:30 | timed event
 \    > 2026-07-10 | note
 \
+\  Inside Desk, F4 shows the automations Desk runs for Daybook
+\  (automation-view.f).
+\
 \  Entry: DAYBOOK-ENTRY ( desc -- )  for Desk
 \         DAYBOOK-RUN   ( -- )       standalone
 \ =====================================================================
@@ -37,6 +40,8 @@ REQUIRE ../../../interop/intent.f
 REQUIRE ../../../interop/lens-binding.f
 REQUIRE ../../../interop/resource.f
 REQUIRE ../../../interop/resource-session.f
+REQUIRE automation-view.f
+REQUIRE ../../../utils/clipboard.f
 
 86400 CONSTANT _DB-SECONDS-DAY
 96    CONSTANT _DB-MAX-ENTRIES
@@ -75,6 +80,23 @@ USCOL-TEXT-FIXED-SIZE _DB-GRID-TITLE-ITEM-CAP +
 3 CONSTANT _DB-PRM-NOTE
 4 CONSTANT _DB-PRM-DISCARD-CLOSE
 5 CONSTANT _DB-PRM-DISCARD-RELOAD
+6 CONSTANT _DB-PRM-DELETE-AUTOMATION
+7 CONSTANT _DB-PRM-REMINDER-WHEN
+8 CONSTANT _DB-PRM-REMINDER-REPEAT
+9 CONSTANT _DB-PRM-REMINDER-ZONE
+10 CONSTANT _DB-PRM-DEFAULT-ZONE
+11 CONSTANT _DB-PRM-AGENT-MINUTES
+12 CONSTANT _DB-PRM-AGENT-REPLY
+
+\ What the automations show: their list; a page of a new Agent run, a
+\ choice its model makes or its prompt; or a schedule's details.
+0 CONSTANT _DB-PAGE-LIST
+1 CONSTANT _DB-PAGE-CHOICE
+2 CONSTANT _DB-PAGE-PROMPT
+3 CONSTANT _DB-PAGE-DETAILS
+\ A new Agent run's prompt starts with this much room, which doubles as
+\ the prompt needs.
+64 CONSTANT _DB-PE-START
 
 0 CONSTANT _DB-L-S-OK
 1 CONSTANT _DB-L-S-MISSING
@@ -159,6 +181,42 @@ _DB-CURRENT-STATE CMP-CELL: _DB-IO-U
 _DB-CURRENT-STATE 16 CMP-FIELD: _DB-DATE-BUF
 _DB-CURRENT-STATE 96 CMP-FIELD: _DB-STATUS-BUF
 _DB-CURRENT-STATE CMP-CELL: _DB-STATUS-U
+
+\ The body shows the calendar or, inside Desk, the automations.  The view
+\ borrows the automation service Desk lends.
+_DB-CURRENT-STATE CMP-CELL: _DB-AUTOMATIONS-SHOWN
+_DB-CURRENT-STATE DBAV-SIZE CMP-FIELD: _DB-AV
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-LIST
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-RGN
+_DB-CURRENT-STATE LST-COLUMN-SIZE 2 * CMP-FIELD: _DB-AV-COLUMNS
+\ The key of the selected row, kept across rebuilds.
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-KEYSEL
+\ The row a delete prompt names.
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-DOOMED
+\ The approval note the status line shows, to see it change.
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-ASK-SHOWN
+\ The zone prompt's label, which names the default zone and stays put
+\ while the prompt shows.
+_DB-CURRENT-STATE 32 TZ-STRING-MAX + CMP-FIELD: _DB-RN-LABEL
+_DB-CURRENT-STATE CMP-CELL: _DB-RN-LABEL-U
+\ What the prompts make: a reminder or an Agent run.
+_DB-CURRENT-STATE CMP-CELL: _DB-CREATING
+\ A new Agent run's pages: which shows, the kind of choice, the list of
+\ choices, and the prompt's text area over a buffer that grows as the
+\ prompt is typed.  Escape once with a prompt typed arms its discard.
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-PAGE
+_DB-CURRENT-STATE CMP-CELL: _DB-AV-KIND
+_DB-CURRENT-STATE CMP-CELL: _DB-CH-LIST
+_DB-CURRENT-STATE CMP-CELL: _DB-CH-RGN
+_DB-CURRENT-STATE CMP-CELL: _DB-PE-TXTA
+_DB-CURRENT-STATE CMP-CELL: _DB-PE-RGN
+_DB-CURRENT-STATE CMP-CELL: _DB-PE-BUF
+_DB-CURRENT-STATE CMP-CELL: _DB-PE-CAP
+_DB-CURRENT-STATE CMP-CELL: _DB-PE-ARMED
+\ A schedule's details: a list of cards, each a fact's label and text.
+_DB-CURRENT-STATE CMP-CELL: _DB-DT-LIST
+_DB-CURRENT-STATE CMP-CELL: _DB-DT-RGN
+_DB-CURRENT-STATE LST-COLUMN-SIZE 2 * CMP-FIELD: _DB-DT-COLUMNS
 
 CMP-LAYOUT-SIZE CONSTANT _DB-STATE-SIZE
 
@@ -707,7 +765,27 @@ VARIABLE _DB-ST-N
     _DB-ST-A @ _DB-STATUS-BUF _DB-STATUS-U @ + _DB-ST-N @ CMOVE
     _DB-ST-N @ _DB-STATUS-U +! ;
 
+\ What the status bar says while the automations show: on a new Agent
+\ run's page how to work it; otherwise their note, where an approval
+\ asked for stands, or how to work them.
+: _DB-AV-HINT  ( -- address length )
+    _DB-AV-PAGE @ _DB-PAGE-CHOICE = IF S" Enter choose  Esc cancel" EXIT THEN
+    _DB-AV-PAGE @ _DB-PAGE-PROMPT = IF
+        _DB-PE-ARMED @ IF S" Esc again discards" EXIT THEN
+        S" Ctrl+S create  Esc cancel" EXIT
+    THEN
+    _DB-AV DBAV-NOTE DUP 0= IF 2DROP _DB-AV DBAV-ASK-NOTE THEN
+    DUP IF EXIT THEN 2DROP
+    _DB-AV-PAGE @ _DB-PAGE-DETAILS = IF S" R run  Y approve  X cancel  Esc back" EXIT THEN
+    S" R run  Y approve  X cancel  P pause  A archive  Esc calendar" ;
+
+: _DB-AV-STATUS  ( -- )
+    _DB-AV DBAV-ASK-NOTE DROP _DB-AV-ASK-SHOWN !
+    _DB-E-SBAR-DATE @ ?DUP IF S" text" S" Automations" UTUI-SET-ATTR THEN
+    _DB-E-SBAR-STATE @ ?DUP IF S" text" _DB-AV-HINT UTUI-SET-ATTR THEN ;
+
 : _DB-UPDATE-STATUS  ( -- )
+    _DB-AUTOMATIONS-SHOWN @ IF _DB-AV-STATUS EXIT THEN
     _DB-SELECTED-DATE @ _DB-DATE-BUF 16 DT-DATE-S 2DROP
     _DB-E-SBAR-DATE @ ?DUP IF
         S" text" _DB-DATE-BUF 10 UTUI-SET-ATTR
@@ -844,7 +922,7 @@ VARIABLE _DB-G-LAYOUT-COLUMN
     DUP IF 2DROP 0 EXIT THEN DROP _DB-G-DAYS !
     _DB-G-YEAR @ _DB-G-MONTH @ 1 DT-YMD>EPOCH-S
     DUP IF 2DROP 0 EXIT THEN DROP DUP _DB-G-FIRST-EPOCH !
-    _DB-SECONDS-DAY / 3 + 7 MOD _DB-G-WEEKDAY !
+    DT-WEEKDAY DROP 1- _DB-G-WEEKDAY !      \ Monday-first column
     _DB-GRID-TITLE! ;
 
 : _DB-GRID-INACTIVE  ( -- address )
@@ -1104,9 +1182,202 @@ CREATE _DB-TIME-BUF 5 ALLOT
         _DB-PANEL-RGN @ WDG-DRAW-IN
     THEN ;
 
+\ --- Reminders ---
+\ The list's callbacks may run while another instance is active.
+
+: _DB-AV-KEY  ( index widget -- key )
+    LST-CONTEXT@ _DB-ACTIVATE _DB-AV DBAV-KEY ;
+
+\ Columns: a reminder's title, then when it fires or how a firing went.
+: _DB-AV-FIELD  ( index column widget -- addr len )
+    LST-CONTEXT@ _DB-ACTIVATE
+    IF _DB-AV DBAV-DETAIL ELSE _DB-AV DBAV-TITLE THEN ;
+
+: _DB-AV-FLAGS  ( index widget -- flags )
+    LST-CONTEXT@ _DB-ACTIVATE
+    _DB-AV DBAV-ROW DROP DBAV-HEADING = IF LST-ROW-SECTION ELSE 0 THEN ;
+
+: _DB-AV-COLUMNS-INIT  ( -- )
+    _DB-AV-COLUMNS LST-COLUMN-SIZE 2 * 0 FILL
+    LST-TEXT-COLUMN _DB-AV-COLUMNS LST-COLUMN-KIND + !
+    LST-TEXT-COLUMN _DB-AV-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-KIND + !
+    32 _DB-AV-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + ! ;
+
+: _DB-AV-SELECTED  ( index widget -- )
+    LST-CONTEXT@ _DB-ACTIVATE
+    _DB-AV DBAV-KEY _DB-AV-KEYSEL !
+    _DB-VIEW-CHANGED ;
+
+\ _DB-AV-SYNC ( -- )   Give the list the reminders' rows when the store
+\   changed, and keep the selection on the row it was on.
+: _DB-AV-SYNC  ( -- )
+    _DB-AV-LIST @ 0= IF EXIT THEN
+    _DB-AV DBAV-STALE? 0= IF EXIT THEN
+    _DB-AV DBAV-REBUILD IF
+        S" Automations could not be listed" 2400 ASHELL-TOAST
+    THEN
+    _DB-AV DBAV-COUNT@ _DB-AV-LIST @ LST-ROWS!
+    _DB-AV DBAV-COUNT@ 0 ?DO
+        I _DB-AV DBAV-KEY _DB-AV-KEYSEL @ = IF
+            I _DB-AV-LIST @ LST-SELECT UNLOOP EXIT
+        THEN
+    LOOP ;
+
+\ After an action: say what went wrong, and show the reminders as they
+\ now are.
+: _DB-AV-DONE  ( status -- )
+    ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST THEN
+    _DB-AV-SYNC _DB-VIEW-CHANGED ;
+
+: _DB-AV-SELECTION  ( -- index )
+    _DB-AV-LIST @ ?DUP IF LST-SELECTED ELSE -1 THEN ;
+
+: _DB-AV-REVIEW  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-REVIEW _DB-AV-DONE ;
+: _DB-AV-RUN-NOW  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-RUN-NOW _DB-AV-DONE ;
+: _DB-AV-CANCEL  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-CANCEL _DB-AV-DONE ;
+\ Asks Desk's user to approve the selected Agent run; the status line
+\ then says where that stands.
+: _DB-AV-ASK  ( -- )
+    _DB-AV-SELECTION _DB-AV DBAV-ASK _DB-AV-DONE _DB-UPDATE-STATUS ;
+: _DB-AV-PAUSE  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-PAUSE _DB-AV-DONE ;
+: _DB-AV-ARCHIVE  ( -- ) _DB-AV-SELECTION _DB-AV DBAV-ARCHIVE _DB-AV-DONE ;
+
+: _DB-AV-TOGGLE-ARCHIVED  ( -- )
+    _DB-AV DBAV-ARCHIVED@ 0= _DB-AV DBAV-ARCHIVED!
+    _DB-AV DBAV-ARCHIVED@ IF
+        S" Showing archived automations" ELSE S" Hiding archived automations"
+    THEN 1600 ASHELL-TOAST
+    _DB-AV-SYNC _DB-VIEW-CHANGED ;
+
+\ The details' cards: a fact's label, then its text, which wraps.
+: _DB-DT-KEY  ( index widget -- key ) DROP 1+ ;
+
+: _DB-DT-FIELD  ( index column widget -- addr len )
+    LST-CONTEXT@ _DB-ACTIVATE
+    IF _DB-AV DBAV-FACT-TEXT ELSE _DB-AV DBAV-FACT-LABEL THEN ;
+
+: _DB-DT-COLUMNS-INIT  ( -- )
+    _DB-DT-COLUMNS LST-COLUMN-SIZE 2 * 0 FILL
+    LST-TEXT-COLUMN _DB-DT-COLUMNS LST-COLUMN-KIND + !
+    _DB-DT-COLUMNS LST-COLUMN-SIZE +
+        LST-TEXT-COLUMN OVER LST-COLUMN-KIND + !
+        LST-COLUMN-WRAP SWAP LST-COLUMN-FLAGS + ! ;
+
+\ The details' cards as the facts now are.
+: _DB-DT-SYNC  ( -- )
+    _DB-DT-LIST @ ?DUP IF _DB-AV DBAV-FACTS@ SWAP LST-ROWS! THEN
+    _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+
+\ The details of the schedule row INDEX shows.
+: _DB-DT-SHOW  ( index -- )
+    _DB-AV DBAV-OPEN ?DUP IF
+        DBAV-MESSAGE 2400 ASHELL-TOAST _DB-AV-SYNC _DB-VIEW-CHANGED EXIT
+    THEN
+    _DB-PAGE-DETAILS _DB-AV-PAGE !
+    _DB-DT-SYNC ;
+
+\ Opening a schedule shows its details; opening a firing or a run marks
+\ it reviewed.
+: _DB-AV-OPENED  ( index widget -- )
+    LST-CONTEXT@ _DB-ACTIVATE
+    DUP _DB-AV DBAV-SCHEDULE? IF _DB-DT-SHOW EXIT THEN
+    DUP _DB-AV DBAV-ROW DROP DBAV-ITEM <> IF DROP EXIT THEN
+    _DB-AV DBAV-REVIEW _DB-AV-DONE ;
+
+DEFER _DB-AV-ASK-DELETE-D
+' NOOP IS _DB-AV-ASK-DELETE-D
+
+: _DB-SHOW-AUTOMATIONS  ( -- )
+    -1 _DB-AUTOMATIONS-SHOWN !
+    _DB-AV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+
+: _DB-SHOW-CALENDAR  ( -- )
+    0 _DB-AUTOMATIONS-SHOWN !
+    _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+
+\ Whether a pointer event falls in region RGN.
+: _DB-POINTER-IN?  ( event rgn -- flag )
+    SWAP 16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
+    ROT
+    DUP RGN-COL ROT SWAP - OVER RGN-W U< >R
+    DUP RGN-ROW ROT SWAP - SWAP RGN-H U<
+    R> AND ;
+
+: _DB-AV-POINTER?  ( event -- flag ) _DB-AV-RGN @ _DB-POINTER-IN? ;
+
+\ The automations' pages draw and take keys through these, which come
+\ after the prompts a new Agent run's pages use.
+DEFER _DB-PAGE-DRAW-D  ( -- )
+' NOOP IS _DB-PAGE-DRAW-D
+: _DB-PAGE-HANDLE-NONE  ( event -- consumed? ) DROP 0 ;
+DEFER _DB-PAGE-HANDLE-D  ( event -- consumed? )
+' _DB-PAGE-HANDLE-NONE IS _DB-PAGE-HANDLE-D
+
+\ Keys in the automations: the list moves and opens; P pauses or resumes,
+\ A archives or brings back, H shows or hides archived ones, Delete asks
+\ to delete, R runs an Agent run now, Y asks Desk to approve it, X
+\ cancels its run in progress, and Escape goes back to the calendar.
+: _DB-AV-HANDLE  ( event -- consumed? )
+    _DB-AV-PAGE @ IF _DB-PAGE-HANDLE-D EXIT THEN
+    _DB-AV-LIST @ 0= IF DROP 0 EXIT THEN
+    DUP @ KEY-T-MOUSE = IF
+        DUP _DB-AV-POINTER? 0= IF DROP 0 EXIT THEN
+        _DB-AV-LIST @ WDG-HANDLE EXIT
+    THEN
+    DUP @ KEY-T-SPECIAL = IF
+        DUP 8 + @ KEY-ESC = IF DROP _DB-SHOW-CALENDAR -1 EXIT THEN
+        DUP 8 + @ KEY-DEL = IF DROP _DB-AV-ASK-DELETE-D -1 EXIT THEN
+        _DB-AV-LIST @ WDG-HANDLE EXIT
+    THEN
+    DUP @ KEY-T-CHAR = IF
+        DUP 16 + @ 0= IF
+            8 + @ CASE
+                [CHAR] p OF _DB-AV-PAUSE -1 EXIT ENDOF
+                [CHAR] a OF _DB-AV-ARCHIVE -1 EXIT ENDOF
+                [CHAR] h OF _DB-AV-TOGGLE-ARCHIVED -1 EXIT ENDOF
+                [CHAR] r OF _DB-AV-RUN-NOW -1 EXIT ENDOF
+                [CHAR] y OF _DB-AV-ASK -1 EXIT ENDOF
+                [CHAR] x OF _DB-AV-CANCEL -1 EXIT ENDOF
+                BL OF _DB-AV-REVIEW -1 EXIT ENDOF
+            ENDCASE
+            0 EXIT
+        THEN
+    THEN
+    DROP 0 ;
+
+\ The automations fill the body: a header with any note on their state,
+\ then the list; or a page of a new Agent run.
+: _DB-DRAW-AUTOMATIONS  ( -- )
+    _DB-AV-PAGE @ IF _DB-PAGE-DRAW-D EXIT THEN
+    253 234 0 DRW-STYLE!
+    32 0 0 _DB-DH @ _DB-DW @ DRW-FILL-RECT
+    255 234 1 DRW-STYLE!
+    S" Automations" 0 2 DRW-TEXT
+    _DB-AV DBAV-NOTE DUP IF
+        244 234 0 DRW-STYLE! 0 13 DRW-TEXT
+    ELSE
+        2DROP
+    THEN
+    239 234 0 DRW-STYLE!
+    9472 1 1 _DB-DW @ 2 - DRW-HLINE
+    _DB-AV DBAV-COUNT@ 0= IF
+        _DB-AV DBAV-NOTE NIP 0= IF
+            244 234 CELL-A-DIM DRW-STYLE!
+            S" No automations" 3 2 DRW-TEXT
+        THEN
+        EXIT
+    THEN
+    _DB-AV-LIST @ ?DUP IF
+        _DB-PANEL-RGN @ DUP RGN-ROW 2 + SWAP RGN-COL
+            _DB-DH @ 2 - 0 MAX _DB-DW @ _DB-AV-RGN @ RGN-BOUNDS!
+        253 234 0 DRW-STYLE! DRW-STYLE-SAVE
+        _DB-PANEL-RGN @ WDG-DRAW-IN
+    THEN ;
+
 : _DB-PANEL-DRAW  ( widget -- )
     DUP WDG-REGION RGN-W _DB-DW !
     WDG-REGION RGN-H _DB-DH !
+    _DB-AUTOMATIONS-SHOWN @ IF _DB-DRAW-AUTOMATIONS DRW-STYLE-RESET EXIT THEN
     _DB-DW @ _DB-DH @ _DB-WIDE-LAYOUT? IF
         _DB-CALENDAR-WIDTH 1+ _DB-AGENDA-COL !
         _DB-DW @ _DB-AGENDA-COL @ - _DB-AGENDA-W !
@@ -1191,6 +1462,7 @@ VARIABLE _DB-H-WIDGET
 
 : _DB-PANEL-HANDLE  ( event widget -- consumed? )
     _DB-H-WIDGET !
+    _DB-AUTOMATIONS-SHOWN @ IF _DB-AV-HANDLE EXIT THEN
     DUP _DB-GRID-HANDLE? IF DROP -1 EXIT THEN
     DUP _DB-AGENDA-HANDLE? IF DROP -1 EXIT THEN
     DUP @ KEY-T-SPECIAL = IF
@@ -1234,9 +1506,350 @@ VARIABLE _DB-SHOW-LU
     _DB-SHOW-LA @ _DB-SHOW-LU @ 0 0 _DB-PROMPT @ PRM-SHOW
     ASHELL-DIRTY! ;
 
-: _DB-DO-NEW-TASK  ( elem -- ) DROP _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT ;
 : _DB-DO-NEW-EVENT ( elem -- ) DROP _DB-PRM-EVENT S" Event (HH:MM title):" _DB-SHOW-PROMPT ;
 : _DB-DO-NEW-NOTE  ( elem -- ) DROP _DB-PRM-NOTE S" New note:" _DB-SHOW-PROMPT ;
+
+\ Deleting a reminder asks first: it is gone for good.  The row is kept
+\ while the prompt shows; if the reminders change meanwhile, the delete
+\ does nothing and says so.
+: _DB-AV-ASK-DELETE  ( -- )
+    _DB-AV-SELECTION DUP _DB-AV DBAV-SCHEDULE? 0= IF
+        DROP S" Select an automation to delete" 2000 ASHELL-TOAST EXIT
+    THEN
+    _DB-AV-DOOMED !
+    _DB-PRM-DELETE-AUTOMATION S" Type DELETE to delete this automation:"
+    _DB-SHOW-PROMPT ;
+
+' _DB-AV-ASK-DELETE IS _DB-AV-ASK-DELETE-D
+
+\ A new reminder takes three prompts: when and its title, how it repeats,
+\ and its zone.  Each wrong answer says why and asks again.
+: _DB-RN-WHEN  ( -- )
+    _DB-PRM-REMINDER-WHEN
+    _DB-CREATING @ DBAS-ACTION-AGENT = IF
+        S" Agent run (HH:MM or YYYY-MM-DD HH:MM, then title):"
+    ELSE
+        S" Reminder (HH:MM or YYYY-MM-DD HH:MM, then title):"
+    THEN _DB-SHOW-PROMPT ;
+
+: _DB-RN-REPEAT  ( -- )
+    _DB-PRM-REMINDER-REPEAT
+    S" Repeat (once, daily, weekdays, weekly, monthly, yearly):"
+    _DB-SHOW-PROMPT ;
+
+: _DB-RN-LABEL+  ( addr len -- )
+    32 TZ-STRING-MAX + _DB-RN-LABEL-U @ - MIN 0 MAX
+    TUCK _DB-RN-LABEL _DB-RN-LABEL-U @ + SWAP MOVE _DB-RN-LABEL-U +! ;
+
+: _DB-RN-ZONE  ( -- )
+    0 _DB-RN-LABEL-U !
+    S" Zone (Enter for " _DB-RN-LABEL+
+    _DB-AV DBAV-DEFAULT-ZONE$ _DB-RN-LABEL+
+    S" ):" _DB-RN-LABEL+
+    _DB-PRM-REMINDER-ZONE _DB-RN-LABEL _DB-RN-LABEL-U @ _DB-SHOW-PROMPT ;
+
+\ A create shows the automations, and waits while a new Agent run's page
+\ shows.
+\ Closes a schedule's details, if they show.
+: _DB-DT-CLOSE  ( -- )
+    _DB-AV-PAGE @ _DB-PAGE-DETAILS <> IF EXIT THEN
+    _DB-AV DBAV-SHUT _DB-PAGE-LIST _DB-AV-PAGE !
+    _DB-AV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+
+\ Whether a new Agent run's page shows.
+: _DB-AR-PAGE?  ( -- flag )
+    _DB-AV-PAGE @ DUP _DB-PAGE-CHOICE = SWAP _DB-PAGE-PROMPT = OR ;
+
+: _DB-CREATE-READY?  ( -- flag )
+    _DB-AV DBAV-SERVICE? 0= IF
+        S" Automations run inside Desk" 2000 ASHELL-TOAST 0 EXIT
+    THEN
+    _DB-AUTOMATIONS-SHOWN @ 0= IF _DB-SHOW-AUTOMATIONS THEN
+    _DB-AR-PAGE? IF
+        S" Finish or cancel the new Agent run first" 2000 ASHELL-TOAST 0 EXIT
+    THEN
+    _DB-DT-CLOSE -1 ;
+
+: _DB-RN-START  ( -- )
+    _DB-CREATE-READY? 0= IF EXIT THEN
+    DBAS-ACTION-REMINDER _DB-AV DBAV-BEGIN ?DUP IF
+        DBAV-MESSAGE 2400 ASHELL-TOAST EXIT
+    THEN
+    DBAS-ACTION-REMINDER _DB-CREATING !
+    _DB-RN-WHEN ;
+
+: _DB-RN-DEFAULT-ZONE  ( -- )
+    _DB-AV DBAV-SERVICE? 0= IF
+        S" Automations run inside Desk" 2000 ASHELL-TOAST EXIT
+    THEN
+    _DB-PRM-DEFAULT-ZONE S" Zone for new automations (POSIX TZ):"
+    _DB-SHOW-PROMPT ;
+
+\ ---------------------------------------------------------------------
+\  A new Agent run
+\ ---------------------------------------------------------------------
+\  It takes the reminder's three prompts, then a page for each choice its
+\  model offers, two prompts for its limits, and a page for its prompt.
+\  Escape on a page leaves the new Agent run; with a prompt typed it asks
+\  again first.  Ctrl+S creates it, and Desk's user is asked to approve
+\  it.
+
+: _DB-AR-MINUTES  ( -- )
+    _DB-PRM-AGENT-MINUTES S" Minutes it may run:" _DB-SHOW-PROMPT ;
+
+: _DB-AR-REPLY  ( -- )
+    _DB-PRM-AGENT-REPLY S" Bytes of its reply it keeps:" _DB-SHOW-PROMPT ;
+
+\ Back to the automations' list.
+: _DB-AR-LIST  ( -- )
+    _DB-PAGE-LIST _DB-AV-PAGE ! 0 _DB-PE-ARMED !
+    _DB-AV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+
+\ The page of the choices of KIND.
+: _DB-AR-CHOOSE  ( kind -- )
+    _DB-AV-KIND !
+    _DB-PAGE-CHOICE _DB-AV-PAGE !
+    _DB-CH-LIST @ ?DUP IF
+        _DB-AV-KIND @ _DB-AV DBAV-CHOICES OVER LST-ROWS!
+        0 SWAP LST-SELECT
+    THEN
+    _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+
+: _DB-CH-KEY  ( index widget -- key )
+    LST-CONTEXT@ _DB-ACTIVATE 1+ _DB-AV-KIND @ 16 LSHIFT OR ;
+
+: _DB-CH-FIELD  ( index column widget -- addr len )
+    LST-CONTEXT@ _DB-ACTIVATE DROP _DB-AV-KIND @ _DB-AV DBAV-CHOICE$ ;
+
+\ A choice made, the next the model offers, or the limits.
+: _DB-CH-OPENED  ( index widget -- )
+    LST-CONTEXT@ _DB-ACTIVATE
+    _DB-AV-KIND @ _DB-AV DBAV-CHOOSE ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST EXIT THEN
+    _DB-AV-KIND @ _DB-AV DBAV-NEXT-KIND ?DUP IF _DB-AR-CHOOSE EXIT THEN
+    _DB-AR-LIST _DB-AR-MINUTES ;
+
+\ The prompt emptied, back in the room it starts with.
+: _DB-PE-RESET  ( -- )
+    _DB-PE-TXTA @ TXTA-CLEAR 0 _DB-PE-ARMED !
+    _DB-PE-CAP @ _DB-PE-START > 0= IF EXIT THEN
+    _DB-PE-START ALLOCATE IF DROP EXIT THEN
+    DUP _DB-PE-START _DB-PE-TXTA @ TXTA-BUFFER! DROP
+    _DB-PE-BUF @ FREE _DB-PE-BUF ! _DB-PE-START _DB-PE-CAP ! ;
+
+\ The page of the prompt.
+: _DB-AR-EDIT  ( -- )
+    _DB-PE-TXTA @ 0= IF EXIT THEN
+    _DB-PE-RESET
+    _DB-PAGE-PROMPT _DB-AV-PAGE !
+    _DB-VIEW-CHANGED _DB-UPDATE-STATUS ;
+
+\ Room in the prompt's buffer for U more bytes: when it lacks them, a
+\ buffer twice as large, or as large as the text needs, holding the same
+\ text.  False when there is no memory for it.
+: _DB-PE-ROOM  ( u -- ok? )
+    _DB-PE-TXTA @ TXTA-LENGTH +
+    DUP _DB-PE-CAP @ > 0= IF DROP -1 EXIT THEN
+    _DB-PE-CAP @ 2 * MAX                       ( capacity )
+    DUP ALLOCATE IF 2DROP 0 EXIT THEN          ( capacity buffer )
+    _DB-PE-BUF @ OVER _DB-PE-TXTA @ TXTA-LENGTH MOVE
+    2DUP SWAP _DB-PE-TXTA @ TXTA-BUFFER! DROP
+    _DB-PE-BUF @ FREE
+    _DB-PE-BUF ! _DB-PE-CAP ! -1 ;
+
+: _DB-PE-NOROOM  ( -- )
+    S" Not enough memory for a longer prompt" 2400 ASHELL-TOAST ;
+
+\ Ctrl+S: the prompt completes the Agent run, which is created, and
+\ Desk's user is asked to approve it.
+: _DB-PE-FINISH  ( -- )
+    _DB-PE-BUF @ _DB-PE-TXTA @ TXTA-LENGTH _DB-AV DBAV-PROMPT!
+    ?DUP 0= IF _DB-AV DBAV-CREATE THEN
+    ?DUP IF DBAV-MESSAGE 2600 ASHELL-TOAST EXIT THEN
+    _DB-PE-RESET _DB-AR-LIST
+    _DB-AV DBAV-ASK-CREATED ?DUP IF
+        DBAV-MESSAGE 2600 ASHELL-TOAST
+    ELSE
+        S" Agent run created; approve it in Desk" 2400 ASHELL-TOAST
+    THEN
+    _DB-UPDATE-STATUS ;
+
+\ Escape leaves the new Agent run, after asking again when a prompt is
+\ typed.
+: _DB-PE-ESCAPE  ( -- )
+    _DB-PE-TXTA @ TXTA-LENGTH 0<> _DB-PE-ARMED @ 0= AND IF
+        -1 _DB-PE-ARMED ! _DB-UPDATE-STATUS EXIT
+    THEN
+    _DB-PE-RESET _DB-AR-LIST
+    S" Agent run not created" 1600 ASHELL-TOAST ;
+
+: _DB-PE-COPY  ( -- )
+    _DB-PE-TXTA @ TXTA-GET-SEL DUP 0= IF 2DROP EXIT THEN CLIP-COPY DROP ;
+
+: _DB-PE-CUT  ( -- )
+    _DB-PE-TXTA @ TXTA-GET-SEL DUP 0= IF 2DROP EXIT THEN CLIP-COPY DROP
+    _DB-PE-TXTA @ TXTA-DEL-SEL DROP ;
+
+: _DB-PE-PASTE  ( -- )
+    CLIP-PASTE DUP 0= IF 2DROP EXIT THEN
+    DUP _DB-PE-ROOM 0= IF 2DROP _DB-PE-NOROOM EXIT THEN
+    _DB-PE-TXTA @ TXTA-INS-STR ;
+
+\ Any key but Escape takes back an armed discard.
+: _DB-PE-DISARM  ( -- )
+    _DB-PE-ARMED @ IF 0 _DB-PE-ARMED ! _DB-UPDATE-STATUS THEN ;
+
+\ Keys on the prompt's page: Escape leaves, Ctrl+S creates, Ctrl+C, X and
+\ V copy, cut and paste, and the rest edit the prompt, room made first
+\ for what they insert.
+: _DB-PE-HANDLE  ( event -- consumed? )
+    DUP @ KEY-T-MOUSE = IF
+        DUP _DB-PE-RGN @ _DB-POINTER-IN? 0= IF DROP 0 EXIT THEN
+        _DB-PE-TXTA @ WDG-HANDLE EXIT
+    THEN
+    DUP @ KEY-T-SPECIAL = IF
+        DUP 8 + @ KEY-ESC = IF DROP _DB-PE-ESCAPE -1 EXIT THEN
+        _DB-PE-DISARM
+        DUP 8 + @ KEY-ENTER = IF
+            1 _DB-PE-ROOM 0= IF DROP _DB-PE-NOROOM -1 EXIT THEN
+        THEN
+        _DB-PE-TXTA @ WDG-HANDLE EXIT
+    THEN
+    DUP @ KEY-T-CHAR = IF
+        _DB-PE-DISARM
+        DUP 16 + @ KEY-MOD-CTRL AND IF
+            DUP 8 + @ CASE
+                [CHAR] s OF DROP _DB-PE-FINISH -1 EXIT ENDOF
+                [CHAR] c OF DROP _DB-PE-COPY -1 EXIT ENDOF
+                [CHAR] x OF DROP _DB-PE-CUT -1 EXIT ENDOF
+                [CHAR] v OF DROP _DB-PE-PASTE -1 EXIT ENDOF
+            ENDCASE
+            _DB-PE-TXTA @ WDG-HANDLE EXIT
+        THEN
+        4 _DB-PE-ROOM 0= IF DROP _DB-PE-NOROOM -1 EXIT THEN
+        _DB-PE-TXTA @ WDG-HANDLE EXIT
+    THEN
+    DROP 0 ;
+
+\ Keys on a choice's page: Escape leaves the new Agent run; the list
+\ moves, and Enter chooses.
+: _DB-CH-HANDLE  ( event -- consumed? )
+    DUP @ KEY-T-MOUSE = IF
+        DUP _DB-CH-RGN @ _DB-POINTER-IN? 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP @ KEY-T-SPECIAL = IF
+        DUP 8 + @ KEY-ESC = IF
+            DROP _DB-AR-LIST S" Agent run not created" 1600 ASHELL-TOAST -1 EXIT
+        THEN
+    THEN
+    _DB-CH-LIST @ WDG-HANDLE ;
+
+\ A key a page takes redraws it: its list's selection, the prompt's text
+\ and caret live in widgets the body only draws.
+\ The details follow the store: read again when it changed, and closed
+\ when the schedule is gone.
+: _DB-DT-REFRESH  ( -- )
+    _DB-AV DBAV-OPENED-STALE? 0= IF EXIT THEN
+    _DB-AV DBAV-REREAD ?DUP IF
+        DBAV-MESSAGE 2400 ASHELL-TOAST _DB-DT-CLOSE EXIT
+    THEN
+    _DB-DT-SYNC ;
+
+: _DB-DT-DONE  ( status -- )
+    ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST THEN
+    _DB-DT-REFRESH _DB-UPDATE-STATUS ;
+
+\ Keys on a schedule's details: Escape returns to the list; R runs the
+\ Agent run now, Y asks Desk to approve it, and X cancels its run in
+\ progress; the rest move through the details.
+: _DB-DT-HANDLE  ( event -- consumed? )
+    DUP @ KEY-T-MOUSE = IF
+        DUP _DB-DT-RGN @ _DB-POINTER-IN? 0= IF DROP 0 EXIT THEN
+        _DB-DT-LIST @ WDG-HANDLE EXIT
+    THEN
+    DUP @ KEY-T-SPECIAL = IF
+        DUP 8 + @ KEY-ESC = IF DROP _DB-DT-CLOSE -1 EXIT THEN
+        _DB-DT-LIST @ WDG-HANDLE EXIT
+    THEN
+    DUP @ KEY-T-CHAR = IF
+        DUP 16 + @ 0= IF
+            DUP 8 + @ CASE
+                [CHAR] r OF DROP _DB-AV DBAV-OPENED-RUN-NOW _DB-DT-DONE -1 EXIT ENDOF
+                [CHAR] y OF DROP _DB-AV DBAV-OPENED-ASK _DB-DT-DONE -1 EXIT ENDOF
+                [CHAR] x OF DROP _DB-AV DBAV-OPENED-CANCEL _DB-DT-DONE -1 EXIT ENDOF
+            ENDCASE
+        THEN
+    THEN
+    DROP 0 ;
+
+: _DB-PAGE-HANDLE  ( event -- consumed? )
+    _DB-AV-PAGE @ CASE
+        _DB-PAGE-CHOICE OF _DB-CH-HANDLE ENDOF
+        _DB-PAGE-DETAILS OF _DB-DT-HANDLE ENDOF
+        >R _DB-PE-HANDLE R>
+    ENDCASE
+    DUP IF _DB-VIEW-CHANGED THEN ;
+' _DB-PAGE-HANDLE IS _DB-PAGE-HANDLE-D
+
+\ The prompt page's heading, which names the document the run reads.
+CREATE _DB-HEAD-BUF RCON-TITLE-MAX 64 + ALLOT  VARIABLE _DB-HEAD-U
+: _DB-HEAD+  ( address length -- )
+    TUCK _DB-HEAD-BUF _DB-HEAD-U @ + SWAP MOVE _DB-HEAD-U +! ;
+: _DB-PROMPT-HEADING  ( -- address length )
+    _DB-AV DBAV-DOCUMENT? 0= IF S" New Agent run: its prompt" EXIT THEN
+    0 _DB-HEAD-U ! S" New Agent run reading " _DB-HEAD+
+    _DB-AV DBAV-DOCUMENT$ _DB-HEAD+ S" : its prompt" _DB-HEAD+
+    _DB-HEAD-BUF _DB-HEAD-U @ ;
+
+: _DB-PAGE-HEADING  ( -- address length )
+    _DB-AV-PAGE @ _DB-PAGE-DETAILS = IF S" Automation details" EXIT THEN
+    _DB-AV-PAGE @ _DB-PAGE-PROMPT = IF _DB-PROMPT-HEADING EXIT THEN
+    _DB-AV-KIND @ CASE
+        DBAV-MODEL-KIND OF S" New Agent run: the model it uses" ENDOF
+        DBAV-EFFORT-KIND OF S" New Agent run: the model's effort" ENDOF
+        DBAV-TIER-KIND OF S" New Agent run: the model's tier" ENDOF
+        >R S" New Agent run: how much the model says" R>
+    ENDCASE ;
+
+\ A page: what it shows, then the list of choices or details, or the
+\ prompt.
+: _DB-PAGE-DRAW  ( -- )
+    253 234 0 DRW-STYLE!
+    32 0 0 _DB-DH @ _DB-DW @ DRW-FILL-RECT
+    255 234 1 DRW-STYLE!
+    _DB-PAGE-HEADING 0 2 DRW-TEXT
+    239 234 0 DRW-STYLE!
+    9472 1 1 _DB-DW @ 2 - DRW-HLINE
+    _DB-AV-PAGE @ CASE
+        _DB-PAGE-CHOICE OF _DB-CH-LIST @ _DB-CH-RGN @ ENDOF
+        _DB-PAGE-DETAILS OF _DB-DT-LIST @ _DB-DT-RGN @ ENDOF
+        >R _DB-PE-TXTA @ _DB-PE-RGN @
+        _DB-PE-TXTA @ ?DUP IF WDG-FOCUS-SET THEN R>
+    ENDCASE                                    ( widget rgn )
+    OVER 0= IF 2DROP EXIT THEN
+    >R _DB-PANEL-RGN @ DUP RGN-ROW 2 + SWAP RGN-COL
+        _DB-DH @ 2 - 0 MAX _DB-DW @ R> RGN-BOUNDS!
+    253 234 0 DRW-STYLE! DRW-STYLE-SAVE
+    _DB-PANEL-RGN @ WDG-DRAW-IN ;
+' _DB-PAGE-DRAW IS _DB-PAGE-DRAW-D
+
+\ Ctrl+G: a new Agent run.  The Agent's models are fetched first, so a
+\ create the Agent offers nothing for never starts.  A run Library sends
+\ reads one exact version of a document, named before the steps begin.
+: _DB-AR-BEGIN  ( locator|0 -- )
+    _DB-CREATE-READY? 0= IF DROP EXIT THEN
+    DBAS-ACTION-AGENT _DB-AV DBAV-BEGIN ?DUP 0= IF _DB-AV DBAV-MODELS-FETCH THEN
+    ?DUP IF NIP DBAV-MESSAGE 2400 ASHELL-TOAST EXIT THEN
+    ?DUP IF _DB-AV DBAV-DOCUMENT! ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST EXIT THEN THEN
+    DBAS-ACTION-AGENT _DB-CREATING !
+    _DB-RN-WHEN ;
+
+: _DB-AR-START  ( -- ) 0 _DB-AR-BEGIN ;
+
+\ Ctrl+N makes something new in the view that shows: a task beside the
+\ calendar, a reminder beside the reminders.
+: _DB-DO-NEW-TASK  ( elem -- )
+    DROP _DB-AUTOMATIONS-SHOWN @ IF _DB-RN-START EXIT THEN
+    _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT ;
 
 VARIABLE _DB-SUB-A
 VARIABLE _DB-SUB-U
@@ -1299,6 +1912,61 @@ VARIABLE _DB-SUB-MINUTE
     _DB-PRM-DISCARD-RELOAD S" Type RELOAD to discard unsaved changes:"
     _DB-SHOW-PROMPT ;
 
+\ The reminder prompts' answers.  An empty repeat or zone is an answer.
+: _DB-RN-SUBMIT  ( -- )
+    _DB-SUB-MODE @ _DB-PRM-REMINDER-WHEN = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-WHEN! ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-WHEN
+        ELSE
+            _DB-RN-REPEAT
+        THEN EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-REMINDER-REPEAT = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-REPEAT! ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-REPEAT
+        ELSE
+            _DB-RN-ZONE
+        THEN EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-REMINDER-ZONE = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-ZONE! ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-ZONE EXIT
+        THEN
+        _DB-CREATING @ DBAS-ACTION-AGENT = IF DBAV-MODEL-KIND _DB-AR-CHOOSE EXIT THEN
+        _DB-AV DBAV-CREATE ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST
+        ELSE
+            S" Reminder created" 1800 ASHELL-TOAST
+        THEN
+        _DB-AV-SYNC EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-AGENT-MINUTES = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-MINUTES! ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-AR-MINUTES
+        ELSE
+            _DB-AR-REPLY
+        THEN EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-AGENT-REPLY = IF
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-REPLY! ?DUP IF
+            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-AR-REPLY
+        ELSE
+            _DB-AR-EDIT
+        THEN EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-DEFAULT-ZONE = IF
+        _DB-SUB-U @ 0= IF EXIT THEN
+        _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-DEFAULT-ZONE! ?DUP IF
+            DUP DBAV-MESSAGE 2600 ASHELL-TOAST
+            DBAO-S-ZONE = IF _DB-RN-DEFAULT-ZONE THEN
+        ELSE
+            S" New automations start in that zone" 1800 ASHELL-TOAST
+        THEN
+    THEN ;
+
+: _DB-RN-MODE?  ( mode -- flag )
+    _DB-PRM-REMINDER-WHEN _DB-PRM-AGENT-REPLY 1+ WITHIN ;
+
 : _DB-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT _DB-SUB-U ! _DB-SUB-A !
     \ The direct-paint prompt has just gone inactive.  Repaint the UIDL
@@ -1306,6 +1974,22 @@ VARIABLE _DB-SUB-MINUTE
     _DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _DB-PROMPT-MODE @ _DB-SUB-MODE !
     _DB-PRM-NONE _DB-PROMPT-MODE !
+    _DB-SUB-MODE @ _DB-RN-MODE? IF
+        _DB-RN-SUBMIT
+        _DB-PROMPT @ PRM-ACTIVE? 0= IF
+            _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+        THEN
+        _DB-INVALIDATE EXIT
+    THEN
+    _DB-SUB-MODE @ _DB-PRM-DELETE-AUTOMATION = IF
+        _DB-SUB-A @ _DB-SUB-U @ S" DELETE" STR-STR= IF
+            _DB-AV-DOOMED @ _DB-AV DBAV-DELETE _DB-AV-DONE
+        ELSE
+            S" Enter DELETE exactly to delete" 2000 ASHELL-TOAST
+        THEN
+        _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
+        _DB-INVALIDATE EXIT
+    THEN
     _DB-SUB-MODE @ _DB-PRM-DISCARD-CLOSE = IF
         _DB-SUB-A @ _DB-SUB-U @ S" DISCARD" STR-STR= IF
             -1 _DB-DISCARD-ARMED !
@@ -1372,7 +2056,11 @@ VARIABLE _DB-SUB-MINUTE
     _DB-INVALIDATE ;
 
 : _DB-DO-SAVE  ( elem -- )
-    DROP _DB-SAVE IF
+    DROP
+    _DB-AUTOMATIONS-SHOWN @ _DB-AV-PAGE @ _DB-PAGE-PROMPT = AND IF
+        _DB-PE-FINISH EXIT
+    THEN
+    _DB-SAVE IF
         _DB-SAVE-ERROR-TOAST
     ELSE
         S" Daybook saved" 1600 ASHELL-TOAST
@@ -1386,12 +2074,38 @@ VARIABLE _DB-SUB-MINUTE
     THEN ;
 
 : _DB-DO-TOGGLE ( elem -- ) DROP _DB-TOGGLE-SELECTED ;
-: _DB-DO-DELETE ( elem -- ) DROP _DB-DELETE-SELECTED ;
+: _DB-DO-DELETE ( elem -- )
+    DROP _DB-AUTOMATIONS-SHOWN @ IF _DB-AV-ASK-DELETE ELSE _DB-DELETE-SELECTED THEN ;
 : _DB-DO-TODAY  ( elem -- ) DROP _DB-TODAY _DB-SELECTED-DATE ! 0 _DB-SELECTED ! _DB-TOUCH _DB-INVALIDATE ;
 : _DB-DO-PREVIOUS ( elem -- ) DROP -1 _DB-MOVE-DATE ;
 : _DB-DO-NEXT ( elem -- ) DROP 1 _DB-MOVE-DATE ;
 : _DB-DO-QUIT ( elem -- ) DROP ASHELL-QUIT ;
 : _DB-DO-ABOUT ( elem -- ) DROP S" Daybook - tasks, events, and daily notes" 2600 ASHELL-TOAST ;
+
+\ F4 switches between the calendar and the reminders.  The Reminders menu
+\ works on the reminders, showing them first.
+: _DB-DO-AUTOMATIONS  ( elem -- )
+    DROP _DB-AUTOMATIONS-SHOWN @ IF _DB-SHOW-CALENDAR ELSE _DB-SHOW-AUTOMATIONS THEN ;
+\ An automations action from the menu acts on the list's selection,
+\ after closing the details of it, and waits while a new Agent run's page
+\ shows.
+: _DB-AV-MENU  ( xt -- )
+    _DB-AUTOMATIONS-SHOWN @ 0= IF DROP _DB-SHOW-AUTOMATIONS EXIT THEN
+    _DB-AR-PAGE? IF
+        DROP S" Finish or cancel the new Agent run first" 2000 ASHELL-TOAST EXIT
+    THEN
+    _DB-DT-CLOSE EXECUTE ;
+: _DB-DO-AV-REVIEW  ( elem -- ) DROP ['] _DB-AV-REVIEW _DB-AV-MENU ;
+: _DB-DO-AV-RUN  ( elem -- ) DROP ['] _DB-AV-RUN-NOW _DB-AV-MENU ;
+: _DB-DO-AV-ASK  ( elem -- ) DROP ['] _DB-AV-ASK _DB-AV-MENU ;
+: _DB-DO-AV-CANCEL  ( elem -- ) DROP ['] _DB-AV-CANCEL _DB-AV-MENU ;
+: _DB-DO-AV-PAUSE  ( elem -- ) DROP ['] _DB-AV-PAUSE _DB-AV-MENU ;
+: _DB-DO-AV-ARCHIVE  ( elem -- ) DROP ['] _DB-AV-ARCHIVE _DB-AV-MENU ;
+: _DB-DO-AV-DELETE  ( elem -- ) DROP ['] _DB-AV-ASK-DELETE _DB-AV-MENU ;
+: _DB-DO-AV-ARCHIVED  ( elem -- ) DROP ['] _DB-AV-TOGGLE-ARCHIVED _DB-AV-MENU ;
+: _DB-DO-AV-NEW  ( elem -- ) DROP _DB-RN-START ;
+: _DB-DO-AR-NEW  ( elem -- ) DROP _DB-AR-START ;
+: _DB-DO-AV-ZONE  ( elem -- ) DROP _DB-RN-DEFAULT-ZONE ;
 
 VARIABLE _DB-SOURCE-REQ
 VARIABLE _DB-INIT-LOAD-STATUS
@@ -1447,6 +2161,11 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-ACTIVATE
     \ Launch rollback may call shutdown after any later step throws.
     _DB-RESOURCE-SESSION RSES-CLEAR
+    0 _DB-AV DBAV-INIT
+    0 _DB-AV-LIST ! 0 _DB-AV-RGN ! 0 _DB-AUTOMATIONS-SHOWN ! 0 _DB-AV-KEYSEL !
+    0 _DB-AV-PAGE ! 0 _DB-CH-LIST ! 0 _DB-CH-RGN ! 0 _DB-PE-ARMED !
+    0 _DB-PE-TXTA ! 0 _DB-PE-RGN ! 0 _DB-PE-BUF ! 0 _DB-PE-CAP !
+    0 _DB-DT-LIST ! 0 _DB-DT-RGN !
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN ! _DB-PRM-NONE _DB-PROMPT-MODE !
     0 _DB-GRID-WIDGET ! 0 _DB-GRID-RGN !
     0 _DB-AGENDA ! 0 _DB-AGENDA-RGN ! 0 _DB-ROW-N !
@@ -1458,6 +2177,9 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-VFS @ _DB-LOAD-SCOPE VFA-SCOPE-INIT
     0<> ABORT" daybook: access scope initialization failed"
     _DB-SHARED-INIT
+    \ Inside Desk the reminders are Desk's to run and Daybook's to show.
+    S" org.akashic.daybook.automations" _DB-CURRENT-INSTANCE @ CINST-SERVICE
+        _DB-AV DBAV-INIT
     _DB-RESOURCE-MODE @ RSES-M-DIRECT = IF
         _DB-VFS @ _DB-REPLACE VREPL-INIT
         0<> ABORT" daybook: replacement initialization failed"
@@ -1492,6 +2214,27 @@ VARIABLE _DB-SOURCE-VALUE
         ['] _DB-AGENDA-CHECKED OVER LST-ON-CHECK
         ['] _DB-AGENDA-CHECKED SWAP LST-ON-OPEN
         0 _DB-ROW-N !
+        _DB-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _DB-AV-RGN !
+        ['] _DB-AV-KEY ['] _DB-AV-FIELD LST-NEW DUP _DB-AV-LIST !
+        _DB-CURRENT-INSTANCE @ OVER LST-CONTEXT!
+        _DB-AV-COLUMNS-INIT
+        _DB-AV-COLUMNS 2 2 PICK LST-COLUMNS!
+        ['] _DB-AV-FLAGS OVER LST-ROW-FLAGS!
+        ['] _DB-AV-SELECTED OVER LST-ON-SELECT
+        ['] _DB-AV-OPENED SWAP LST-ON-OPEN
+        _DB-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _DB-CH-RGN !
+        ['] _DB-CH-KEY ['] _DB-CH-FIELD LST-NEW DUP _DB-CH-LIST !
+        _DB-CURRENT-INSTANCE @ OVER LST-CONTEXT!
+        ['] _DB-CH-OPENED SWAP LST-ON-OPEN
+        _DB-PE-START ALLOCATE 0<> ABORT" daybook: prompt buffer"
+        DUP _DB-PE-BUF ! _DB-PE-START _DB-PE-CAP !
+        _DB-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _DB-PE-RGN !
+        SWAP _DB-PE-START TXTA-NEW _DB-PE-TXTA !
+        _DB-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _DB-DT-RGN !
+        ['] _DB-DT-KEY ['] _DB-DT-FIELD LST-NEW DUP _DB-DT-LIST !
+        _DB-CURRENT-INSTANCE @ OVER LST-CONTEXT!
+        LST-CARDS LST-LOG OR LST-UNTRUSTED OR OVER LST-MODE!
+        _DB-DT-COLUMNS-INIT _DB-DT-COLUMNS 2 ROT LST-COLUMNS!
         _DB-GRID-LAYOUT
         TGRID-NEW DUP _DB-GRID-WIDGET !
         ['] _DB-GRID-SELECTED OVER TGRID-ON-SELECT
@@ -1514,6 +2257,18 @@ VARIABLE _DB-SOURCE-VALUE
     S" about" ['] _DB-DO-ABOUT UTUI-DO!
     S" edit-source" ['] _DB-DO-EDIT-SOURCE UTUI-DO!
     S" reveal-source" ['] _DB-DO-REVEAL-SOURCE UTUI-DO!
+    S" automations" ['] _DB-DO-AUTOMATIONS UTUI-DO!
+    S" automation-review" ['] _DB-DO-AV-REVIEW UTUI-DO!
+    S" automation-run" ['] _DB-DO-AV-RUN UTUI-DO!
+    S" automation-ask" ['] _DB-DO-AV-ASK UTUI-DO!
+    S" automation-cancel" ['] _DB-DO-AV-CANCEL UTUI-DO!
+    S" automation-pause" ['] _DB-DO-AV-PAUSE UTUI-DO!
+    S" automation-archive" ['] _DB-DO-AV-ARCHIVE UTUI-DO!
+    S" automation-delete" ['] _DB-DO-AV-DELETE UTUI-DO!
+    S" automation-archived" ['] _DB-DO-AV-ARCHIVED UTUI-DO!
+    S" reminder-new" ['] _DB-DO-AV-NEW UTUI-DO!
+    S" agent-run-new" ['] _DB-DO-AR-NEW UTUI-DO!
+    S" automation-zone" ['] _DB-DO-AV-ZONE UTUI-DO!
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _DB-CLAMP-SELECTION _DB-AGENDA-SYNC _DB-UPDATE-STATUS
     _DB-INIT-LOAD-STATUS @ ?DUP IF _DB-LOAD-ERROR-TOAST THEN ;
@@ -1538,13 +2293,34 @@ VARIABLE _DB-SOURCE-VALUE
 : DAYBOOK-TICK-CB  ( instance -- )
     _DB-ACTIVATE
     _DB-REFRESH-TODAY IF -1 _DB-VIEW-DIRTY ! THEN
+    \ Automations fire, and approvals are answered, in Desk's tick; show
+    \ what changed.  A tick runs while Daybook has nothing to draw, so a
+    \ change touches the instance, which has Desk draw it.
+    _DB-AUTOMATIONS-SHOWN @ IF
+        _DB-AV DBAV-STALE? IF
+            _DB-AV-SYNC _DB-VIEW-CHANGED _DB-UPDATE-STATUS _DB-TOUCH
+        THEN
+        _DB-AV DBAV-ASK-NOTE DROP _DB-AV-ASK-SHOWN @ <> IF
+            _DB-UPDATE-STATUS _DB-TOUCH
+        THEN
+        _DB-AV-PAGE @ _DB-PAGE-DETAILS = IF
+            _DB-AV DBAV-OPENED-STALE? IF _DB-DT-REFRESH _DB-TOUCH THEN
+        THEN
+    THEN
     _DB-VIEW-DIRTY @ IF
         0 _DB-VIEW-DIRTY !
-        _DB-INVALIDATE
+        _DB-INVALIDATE _DB-TOUCH
     THEN ;
 
 : DAYBOOK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DB-ACTIVATE
+    \ A new Agent run's typed prompt is not lost to a close.
+    _DB-AV-PAGE @ _DB-PAGE-PROMPT = IF
+        _DB-PE-TXTA @ TXTA-LENGTH IF
+            S" Finish or cancel the new Agent run before closing" 2400 ASHELL-TOAST
+            APP-CLOSE-D-CANCEL EXIT
+        THEN
+    THEN
     _DB-DIRTY @ 0= IF
         0 _DB-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
     THEN
@@ -1575,6 +2351,19 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-GRID-RGN @ ?DUP IF RGN-FREE THEN
     _DB-AGENDA @ ?DUP IF LST-FREE THEN
     _DB-AGENDA-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-AV-LIST @ ?DUP IF LST-FREE THEN
+    _DB-AV-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-CH-LIST @ ?DUP IF LST-FREE THEN
+    _DB-CH-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-PE-TXTA @ ?DUP IF TXTA-FREE THEN
+    _DB-PE-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-PE-BUF @ ?DUP IF FREE THEN
+    _DB-DT-LIST @ ?DUP IF LST-FREE THEN
+    _DB-DT-RGN @ ?DUP IF RGN-FREE THEN
+    _DB-AV DBAV-FREE
+    0 _DB-AV-LIST ! 0 _DB-AV-RGN ! 0 _DB-AV-PAGE !
+    0 _DB-CH-LIST ! 0 _DB-CH-RGN ! 0 _DB-PE-TXTA ! 0 _DB-PE-RGN !
+    0 _DB-PE-BUF ! 0 _DB-PE-CAP ! 0 _DB-DT-LIST ! 0 _DB-DT-RGN !
     _DB-PANEL-RGN @ ?DUP IF RGN-FREE THEN
     0 _DB-PROMPT ! 0 _DB-PROMPT-RGN !
     0 _DB-GRID-WIDGET ! 0 _DB-GRID-RGN !
@@ -1586,12 +2375,16 @@ CREATE _DB-TEXT-SCHEMA CS-SIZE ALLOT
 CREATE _DB-AGENDA-SCHEMA CS-SIZE ALLOT
 CREATE _DB-RESOURCE-SCHEMA CS-SIZE ALLOT
 CREATE _DB-INT-SCHEMA CS-SIZE ALLOT
-3 CONSTANT _DB-CAP-COUNT
+4 CONSTANT _DB-CAP-COUNT
 CREATE DAYBOOK-CAPS _DB-CAP-COUNT CAP-DESC * ALLOT
 CREATE _DB-CAP-BUILDER CAPB-SIZE ALLOT
 : DAYBOOK-CAP-CAPTURE  ( -- cap ) DAYBOOK-CAPS ;
 : DAYBOOK-CAP-SOURCE   ( -- cap ) DAYBOOK-CAPS CAP-DESC + ;
 : DAYBOOK-CAP-AGENDA   ( -- cap ) DAYBOOK-CAPS CAP-DESC 2 * + ;
+: DAYBOOK-CAP-AGENT-RUN  ( -- cap ) DAYBOOK-CAPS CAP-DESC 3 * + ;
+\ The one intent Daybook takes: agent-run.schedule, a new Agent run that
+\ reads the exact document version it carries.
+CREATE DAYBOOK-INTENTS CINT-DESC-SIZE ALLOT
 
 VARIABLE _DBCH-A
 VARIABLE _DBCH-U
@@ -1651,6 +2444,13 @@ VARIABLE _DBCH-PERSIST-THROW
     _DB-IO-BUF _DB-IO-U @ ROT CBR.RESULT CV-STRING!
     IF CBUS-S-FAILED ELSE CBUS-S-OK THEN ;
 
+\ The steps of a new Agent run that reads the document the request names.
+CREATE _DB-AR-LOCATOR QLOC-SIZE ALLOT
+: _DB-CAP-AGENT-RUN-HANDLER  ( request instance -- status )
+    _DB-ACTIVATE
+    CBR.ARGS _DB-AR-LOCATOR QLOC-VALUE@ QLOC-S-OK <> IF CBUS-S-INVALID EXIT THEN
+    _DB-AR-LOCATOR _DB-AR-BEGIN CBUS-S-OK ;
+
 : _DB-CAP-SETUP  ( -- )
     _DB-TEXT-SCHEMA CS-INIT
     CV-T-STRING _DB-TEXT-SCHEMA CS-ALLOW!
@@ -1700,7 +2500,24 @@ VARIABLE _DBCH-PERSIST-THROW
         ?DUP IF THROW THEN
     ['] _DB-CAP-AGENDA-HANDLER 0 0 _DB-CAP-BUILDER CAPB-CALLBACKS
         ?DUP IF THROW THEN
-    DAYBOOK-CAP-AGENDA _DB-CAP-BUILDER CAPB-SEAL ?DUP IF THROW THEN ;
+    DAYBOOK-CAP-AGENDA _DB-CAP-BUILDER CAPB-SEAL ?DUP IF THROW THEN
+
+    _DB-CAP-BUILDER CAPB-BEGIN ?DUP IF THROW THEN
+    CAP-K-COMMAND S" daybook.agent-run.new" S" New Agent run"
+        S" Begin a scheduled Agent run that reads one exact document version"
+        _DB-CAP-BUILDER CAPB-META ?DUP IF THROW THEN
+    QLOC-VALUE-SCHEMA 0 CAP-E-NAVIGATE CAP-F-NEEDS-TARGET
+        0 CCLASS-OWNER-COMMIT _DB-CAP-BUILDER CAPB-CONTRACT
+        ?DUP IF THROW THEN
+    ['] _DB-CAP-AGENT-RUN-HANDLER 0 0 _DB-CAP-BUILDER CAPB-CALLBACKS
+        ?DUP IF THROW THEN
+    DAYBOOK-CAP-AGENT-RUN _DB-CAP-BUILDER CAPB-SEAL ?DUP IF THROW THEN
+
+    DAYBOOK-INTENTS CINT-DESC-INIT
+    S" agent-run.schedule"
+    DAYBOOK-INTENTS CINTD.ID-U ! DAYBOOK-INTENTS CINTD.ID-A !
+    DAYBOOK-CAP-AGENT-RUN DAYBOOK-INTENTS CINTD.CAP !
+    100 DAYBOOK-INTENTS CINTD.PRIORITY ! ;
 
 CREATE DAYBOOK-COMP-DESC COMP-DESC ALLOT
 
@@ -1713,7 +2530,9 @@ CREATE DAYBOOK-COMP-DESC COMP-DESC ALLOT
     DAYBOOK-COMP-DESC COMP.VERSION-U ! DAYBOOK-COMP-DESC COMP.VERSION-A !
     _DB-STATE-SIZE DAYBOOK-COMP-DESC COMP.STATE-SIZE !
     DAYBOOK-CAPS DAYBOOK-COMP-DESC COMP.CAPS-A !
-    _DB-CAP-COUNT DAYBOOK-COMP-DESC COMP.CAPS-N ! ;
+    _DB-CAP-COUNT DAYBOOK-COMP-DESC COMP.CAPS-N !
+    DAYBOOK-INTENTS DAYBOOK-COMP-DESC COMP.INTENTS-A !
+    1 DAYBOOK-COMP-DESC COMP.INTENTS-N ! ;
 
 : DAYBOOK-ENTRY  ( desc -- )
     _DAYBOOK-COMP-SETUP
@@ -1722,6 +2541,10 @@ CREATE DAYBOOK-COMP-DESC COMP-DESC ALLOT
     ['] DAYBOOK-INIT-CB OVER APP.INIT-XT !
     ['] DAYBOOK-EVENT-CB OVER APP.EVENT-XT !
     ['] DAYBOOK-TICK-CB OVER APP.TICK-XT !
+    \ Daybook ticks while it has nothing to draw: the day turns over, and
+    \ Desk fires automations and answers approvals that the automations
+    \ view shows.  A tick that finds nothing changed draws nothing.
+    APP-F-TICK-WHEN-CLEAN OVER APP.FLAGS !
     ['] DAYBOOK-PAINT-CB OVER APP.PAINT-XT !
     ['] DAYBOOK-SHUTDOWN-CB OVER APP.SHUTDOWN-XT !
     ['] _DB-ACTIVATE OVER APP.ACTIVATE-XT !

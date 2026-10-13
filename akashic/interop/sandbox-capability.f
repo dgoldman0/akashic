@@ -65,6 +65,11 @@ REQUIRE ../runtime/sandbox-module-store.f
 4 CONSTANT SBOX-CAPABILITY-S-NOMEM
 5 CONSTANT SBOX-CAPABILITY-S-STORE
 
+\ The longest text the capability carries, in bytes: a module's source,
+\ an input as JSON, a listing's schema text, or a run's result.  It is
+\ the capability's own bound, not the value system's.
+65536 CONSTANT SBOX-CAPABILITY-TEXT-MAX
+
 \ =====================================================================
 \  Codes
 \ =====================================================================
@@ -1278,10 +1283,10 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
 \ ---------------------------------------------------------------------
 
 \ Sandbox schema bytes as JSON Schema text, written into BUFFER, which
-\ holds CV-MAX-STRING-LEN bytes.
+\ holds SBOX-CAPABILITY-TEXT-MAX bytes.
 : _SBXC-SCHEMA-TEXT  ( schema schema-u buffer -- text text-u ior )
     >R _SBXC-GRAPH ?DUP IF NIP NIP R> 0 ROT EXIT THEN
-    SWAP R@ CV-MAX-STRING-LEN CSJSON-ENCODE
+    SWAP R@ SBOX-CAPABILITY-TEXT-MAX CSJSON-ENCODE
     ROT FREE R> -ROT ;
 
 \ Writes {input, name, output} for entry INDEX of DECLARATION into SPEC.
@@ -1375,7 +1380,7 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
         DROP >R S" The sandbox is not running" CBUS-S-FAILED
         R> _SBXC-REFUSE EXIT
     THEN
-    CV-MAX-STRING-LEN ALLOCATE IF
+    SBOX-CAPABILITY-TEXT-MAX ALLOCATE IF
         2DROP >R S" The sandbox ran out of memory" CBUS-S-FAILED
         R> _SBXC-REFUSE EXIT
     THEN
@@ -1445,8 +1450,8 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
 \ Replies with the run's decoded value as JSON text, or, when JSON
 \ cannot carry it, with why.
 : _SBXC-REPLY-RESULT  ( run -- status )
-    CV-MAX-STRING-LEN ALLOCATE IF 2DROP CBUS-S-FAILED EXIT THEN
-    2DUP SWAP _SBXR.VALUE SWAP CV-MAX-STRING-LEN IVJSON-ENCODE
+    SBOX-CAPABILITY-TEXT-MAX ALLOCATE IF 2DROP CBUS-S-FAILED EXIT THEN
+    2DUP SWAP _SBXR.VALUE SWAP SBOX-CAPABILITY-TEXT-MAX IVJSON-ENCODE
     ?DUP IF
         NIP _SBXC-JSON-CODE$ S" result" 2SWAP 5 PICK _SBXC-FAIL!
         FREE _SBXC-REPLY-STATUS EXIT
@@ -1917,21 +1922,21 @@ _SBXR-PRACTICE RID-SIZE + CONSTANT _SBXR-SIZE
 : _SBXC-SCHEMAS-INIT  ( -- )
     _SBXS-SOURCE _SBXC-SCHEMA
         CV-T-STRING OVER CS-ALLOW!
-        CV-MAX-STRING-LEN SWAP CS-MAX-LEN!
+        SBOX-CAPABILITY-TEXT-MAX SWAP CS-MAX-LEN!
     \ An entry or a module name.
     _SBXS-NAME _SBXC-SCHEMA
         CV-T-STRING OVER CS-ALLOW!
         SBOX-ABI-ENTRY-NAME-MAX SWAP CS-MAX-LEN!
     _SBXS-JSON _SBXC-SCHEMA
         CV-T-STRING OVER CS-ALLOW!
-        CV-MAX-STRING-LEN SWAP CS-MAX-LEN!
+        SBOX-CAPABILITY-TEXT-MAX SWAP CS-MAX-LEN!
     _SBXS-NATURAL _SBXC-SCHEMA
         CV-T-INT OVER CS-ALLOW!
         0 SWAP CS-MIN!
     CV-T-BOOL _SBXS-BOOL _SBXC-SCHEMA CS-ALLOW!
     _SBXS-RESULT _SBXC-SCHEMA
         CV-T-STRING _SBXC-OR-NULL OVER CS-ALLOW-MASK!
-        CV-MAX-STRING-LEN SWAP CS-MAX-LEN!
+        SBOX-CAPABILITY-TEXT-MAX SWAP CS-MAX-LEN!
     CV-T-STRING _SBXS-TEXT _SBXC-SCHEMA CS-ALLOW!
     CV-T-STRING _SBXC-OR-NULL _SBXS-MAYBE-TEXT _SBXC-SCHEMA CS-ALLOW-MASK!
     _SBXS-POSITION _SBXC-SCHEMA

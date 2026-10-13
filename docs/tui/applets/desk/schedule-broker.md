@@ -1,0 +1,288 @@
+# Desk's schedule broker
+
+`akashic/tui/applets/desk/schedule-broker.f` (`SBRK-`) starts the
+scheduled work Daybook hands over, and only work a user approved. It keeps
+the [schedule permissions](../../../runtime/schedule-permission.md) and
+answers Daybook through the
+[dispatch contract](../../../interop/scheduled-actions.md#the-dispatch-contract).
+A handler that Desk sets starts the runs.
+
+A broker belongs to one Practice: its head, its root Context, and the
+filesystem holding its permissions at `/schedule-perms.bin`. Neither
+Daybook nor the handler sees the other. Daybook gets the broker's client
+record, and the handler gets plain requests and the authority the broker
+compiled.
+
+## Operations
+
+```forth
+SBRK-SIZE          ( -- bytes )
+SBRK-INIT          ( vfs head context broker -- status )
+SBRK-FINI          ( broker -- )
+SBRK-VALID?        ( broker -- flag )
+SBRK-STORE         ( broker -- store )
+SBRK-CLIENT        ( broker -- client )
+SBRK-HANDLER!      ( handler broker -- )
+SBRK-OWNERS!       ( xt context broker -- )
+SBRK-TICK          ( broker -- )
+SBRK-ASKING        ( broker -- id request | 0 0 )
+SBRK-ANSWER        ( id allowed? now broker -- status )
+SBRK-VET           ( request broker -- reason|0 )
+SBRK-REVOKE        ( rid broker -- status )
+SBRK-ACTIVE?       ( broker -- flag )
+```
+
+`SBRK-INIT` takes a valid Practice head and its own root Context (the
+Context's Practice must be that head), then opens the permissions. The
+broker works whatever state the permissions are in, so a damaged file can
+say why. The status is the store's: `SPERM-S-BLOCKED` for a file that
+blocked the store, and `SPERM-S-INVALID` or `SPERM-S-STATE` for bad
+arguments or a broker already open.
+
+`SBRK-STORE` is the permission store, for listing. `SBRK-CLIENT` is the
+client record for Daybook's service. The caller owns the `SBRK-SIZE`-byte,
+cell-aligned broker and serializes every call; Desk calls it from its own
+loop.
+
+## The handler
+
+`SBRK-HANDLER-INIT ( context handler -- )` makes a handler record
+(`SBRK-HANDLER-SIZE`). Fill in its words through the `SBRK-H.` fields and
+set it with `SBRK-HANDLER!`. A missing, damaged or moved record counts as no
+handler.
+
+| Word | Effect |
+|---|---|
+| start | `( request run source response context -- status )` |
+| status | `( key response context -- status )` |
+| cancel | `( key reason context -- status )` |
+| models | `( buffer capacity context -- bytes status )` |
+| idle? | `( context -- flag )` |
+| vet | `( request context -- reason\|0 )` |
+
+Start gets a request, `run`, the authority the broker compiled for it, and
+`source`: a resource client for the document the run names, lent for that
+start alone, or 0. It answers as status would after the attempt:
+
+| Answer | Meaning |
+|---|---|
+| started | The run started. The response names it, and the handler now owns `run`. |
+| waiting | It cannot start a run now. It keeps this run's place in line until start or cancel names the dispatch key again. |
+| running, ended, small | A run with that dispatch key already exists. |
+| ended | It refused, and the response says why. |
+
+Any other answer means it could not answer. Unless the answer is started,
+`run` stays the broker's, and the broker releases it.
+
+Status, cancel and models answer as the client's words do, and a response
+names the run's permission. Cancel ends a run for `reason`, or gives up a
+waiting run's place. Idle? says whether start could start a run now. Vet
+says why the handler could not run an approval's request, which names no
+occurrence, as an `SACT-R-` reason, or 0 when it could.
+
+### The Agent as the handler
+
+`akashic/tui/applets/desk/schedule-agent.f` (`DSAG-`) fills the handler
+Desk uses: `DSAG-HANDLER-INIT ( dispatch handler -- )` makes the Agent's
+[dispatcher](../agent/dispatch.md) its context, and the dispatcher's own
+words its words. Each has the stack the broker gives its handler's word:
+
+| Handler word | The dispatcher's |
+|---|---|
+| start | `ADISP-START` |
+| status | `ADISP-STATUS` |
+| cancel | `ADISP-CANCEL` |
+| models | `ADISP-MODELS` |
+| idle? | `ADISP-IDLE?` |
+| vet | `ADISP-VET` |
+
+## Daybook's client
+
+| Word | What the broker does |
+|---|---|
+| submit | Checks the request and starts its run (below). A dispatch key the broker already knows is answered as status, so one occurrence handed over twice is one run. |
+| status | Answers a run it holds, and asks the handler about any other. |
+| cancel | Ends a waiting run itself, cancelled by you. A run that already ended at the broker is left as it is. It asks the handler to cancel any other run. |
+| ask | Records an approval for Desk's user (below). |
+| asked | Gives an approval's answer. |
+| check | Says how a request that names no occurrence stands. |
+| models | Asks the handler. |
+| describe | Attaches the document a locator names through its owner, describes it as Desk itself, and lets it go at once. Desk's approval and Daybook's new runs show what it says. |
+
+### How a request stands
+
+A request stands as `SPERM-MATCH` answers in Desk's Practice. One
+exception: a permission whose limits differ from the ones the request's
+operands carry has changed. The operand digest binds both, so they differ
+only when the permission file was altered past its checks.
+
+### Starting a run
+
+A submitted request must be one `SDSP-REQUEST-OK?` accepts as a hand-over.
+Anything else is invalid. The broker then:
+1. Checks that the request's permission stands. If it does not, the run is
+   blocked:
+
+   | Standing | Reason |
+   |---|---|
+   | none | not approved |
+   | withdrawn | revoked |
+   | changed | changed |
+   | another Practice | another Practice |
+   | unavailable | Agent unavailable |
+
+2. Attaches the document the request names, if any, for the run's start
+   (below). One that cannot be attached ends the run.
+3. Compiles the run's authority from that permission alone, never from a
+   chat preset:
+   - a new active child of the Practice's root Context, with no
+     filesystem, bindings or facets;
+   - a capability facet with no entries but, for a run with a document,
+     two: describing and taking a snapshot of that one document,
+     automatically, for what the permission lets it disclose;
+   - a read-only Mandate for the Agent, with the permission's effects
+     (none, or observing its document) and its time and disclosure
+     limits, and no tool, memory or token budget.
+
+   The Mandate's and the facet's IDs are SHA3-256 of the Practice, the
+   activation's epoch, the dispatch key, the child Context's ID and
+   generation, and a tag (`desk.schedule.mandate` or
+   `desk.schedule.facet`). An authority that cannot be made fails as an
+   internal error, or is blocked as out of room when memory ran out.
+4. Offers the run to the handler, then releases the document.
+
+An answer other than the five above blocks the run as the Agent being
+unavailable. When the broker blocks or ends a run itself, the response
+names the request's permission and revision and Desk's Practice, and holds
+no run and no summary. That way Daybook clears its approval only when the
+refusal is about the permission it holds.
+
+### A run's document
+
+A run holds its document only while it starts. The broker attaches the
+document with the Practice's root Context through the word Desk sets with
+`SBRK-OWNERS!` ( locator binding result context -- status ), an
+[`RACQ-ATTACH`](../../../interop/resource-acquisition.md) status. Desk's word
+finds the document's owner in its
+[owner directory](../../../interop/resource-owners.md), starting the owning
+applet minimized when it is not running. The broker makes a
+[resource client](../../../interop/resource-client.md) for the attachment
+on the root Context and lends it to start. Once start answers, whatever
+it answered, the broker releases the document. An owner that will not
+release it yet is asked again at the start of each `SBRK-TICK`; one whose
+owner has gone has nothing left to release.
+
+| Attaching | The run ends |
+|---|---|
+| The approved version is gone, or the document changed under the same revision | stopped for review: the document changed |
+| No room | blocked: out of room |
+| No owners set, no such document, or anything else | blocked: document unavailable |
+
+### Waiting runs
+
+A run the handler answers waiting stays with the broker, holding a copy of
+its request. Runs wait in the order they were handed over. Each
+`SBRK-TICK` goes through them while the handler is idle, and offers each
+one again as above. So a waiting run is checked again, and gets a freshly
+compiled authority, only when it can start.
+- A run that starts lets go of its request.
+- A run the handler answers waiting again stops the tick. The runs behind
+  it are not offered, so none of them can go first.
+- A run that is refused, or that the handler ends without naming a run,
+  ends at the broker, and the handler gives up its place.
+- A run the handler ends while naming a run is the handler's. Status asks
+  the handler about it.
+
+### Remembering runs
+
+The broker remembers the runs of this session until Daybook hears how they
+ended:
+- A waiting run answers waiting.
+- A run the broker ended is told once, and then forgotten.
+- A started run is asked about through the handler. It is forgotten once
+  the handler says it ended in full, or that it knows no such run.
+
+The handler keeps the record of each run it started.
+
+## Approvals
+
+Ask takes a request that `SPERM-GRANTABLE?` accepts in Desk's Practice.
+Anything else is invalid, and nothing is recorded. The broker keeps a copy
+of the request and answers pending with the approval's id. Ids count up
+from 1.
+
+Approvals wait in the order they were asked for. `SBRK-ASKING` gives the
+oldest one awaiting an answer, with its request; the pointer stays valid
+until the broker is next called. Desk shows that request, and
+`SBRK-VET` says why the handler could not run it: a reason, or 0. Without
+a handler, or one with no vet word, the Agent is unavailable.
+
+If the same schedule of the same store is asked about again, the broker
+withdraws the approval still awaiting an answer for it. An approval that
+was already answered keeps its answer.
+
+`SBRK-ANSWER` records the user's answer. `now` is the wall clock in
+milliseconds, or -1 when it is not set.
+- Allow grants the request's permission in Desk's Practice with
+  `SPERM-GRANT`. If the store refuses the grant, the approval keeps
+  waiting, and the status is the store's.
+- Refuse records a refusal.
+- An id that is unknown, or already answered, is `SPERM-S-NOT-FOUND`.
+
+Asked answers pending while the user has not answered. After that it gives
+the answer once, then forgets the approval:
+- allowed, with the response naming the permission, its revision and the
+  Practice;
+- refused;
+- gone, for an approval that was withdrawn, or that it no longer knows.
+
+## Revoking, closing, and what is in flight
+
+`SBRK-REVOKE` revokes a permission through the store. If that write fails,
+the status is the store's and nothing else changes. Otherwise every run in
+flight under the permission is cancelled, as revoked:
+- a waiting run ends at the broker, and gives up its place;
+- the handler cancels a run that started.
+
+`SBRK-ACTIVE?` answers whether a run is in flight: waiting, or started and
+not ended as far as the handler says. Ended, too long to tell, or unknown
+all count as over. Any other answer, or no handler, counts as in flight.
+
+`SBRK-FINI` cancels every run in flight, because Desk shut down, in the same
+way revoking does. It then frees what the broker holds and closes the
+store.
+
+## Qualification
+
+`local_testing/test_schedule_broker.py` runs on the native simulator over a
+RAM filesystem, with a fake handler. The fake retains each run it is given,
+as a gateway would. A run the broker keeps is therefore seen to be released
+by the broker, and a run the handler took is seen to be left alone. The
+suite checks:
+- the lifecycle and its refusals;
+- approvals, their answers and order, and the one a repeated ask
+  withdraws;
+- grants the store refuses;
+- each standing;
+- every refusal before the handler is offered a run, including handler
+  records that are not one;
+- the authority a run gets, and its IDs against hashlib;
+- each answer the handler can give;
+- waiting runs, which start in order once the handler is idle and are
+  checked again as they start;
+- cancelling, revoking and closing;
+- what counts as in flight.
+
+`local_testing/test_desk_schedule_agent.py` joins the broker to the
+Agent's real dispatcher through `DSAG-HANDLER-INIT`, over a real runtime
+and scripted provider, and asks and hands over through the client, as
+Daybook does: a run approved, started and followed to its end; the model
+list; why a schedule could not run; asking about one while another runs;
+a run waiting behind chat; revoking a run; and closing the broker with
+runs in flight, then asking a new broker about them.
+
+Disabling any one of 147 guarded behaviors of the broker, or of the 7 the
+adapter sets, makes a test fail, except one.
+`SBRK-ANSWER` checks for an unknown id before it reads the approval. Without
+that check, it reads the state of a null approval from low memory, which
+happens not to say pending, so the answer is still not found.

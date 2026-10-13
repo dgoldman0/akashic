@@ -24,6 +24,8 @@
 <item text=Rename_Title do=rename-title key=F2/>
 <item text=Archive do=archive/>
 <item text=Unarchive do=unarchive/>
+<separator/>
+<item text=Schedule_Agent_Run do=schedule-agent-run key=Ctrl+G/>
 </menu>
 <menu label=Page>
 <item text=Previous_Page do=previous-page key=PageUp/>
@@ -47,6 +49,7 @@
 <action do=history key=Ctrl+H/>
 <action do=back key=Backspace/>
 <action do=rename-title key=F2/>
+<action do=schedule-agent-run key=Ctrl+G/>
 <action do=previous-page key=PageUp/>
 <action do=next-page key=PageDown/>
 <action do=quit key=Ctrl+Q/>

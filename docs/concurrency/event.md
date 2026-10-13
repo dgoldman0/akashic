@@ -161,7 +161,8 @@ EVT-WAIT-TIMEOUT ( ev ms -- flag )
 Wait up to `ms` milliseconds.  Returns TRUE (-1) if the event was
 signaled within the deadline, FALSE (0) if the timeout expired.
 
-Uses `EPOCH@` (BIOS: milliseconds since boot) for timing.
+Uses `MS@` (BIOS uptime in milliseconds) for timing, so setting the wall
+clock can neither stretch nor cut a timeout.
 
 ```forth
 io-complete 5000 EVT-WAIT-TIMEOUT
