@@ -52,10 +52,20 @@ designator that refuses the turn; one that runs out of room is
 `OAIR-S-CAPACITY`. `OAIR-SESSION-CONFIG` gives the configuration a session
 uses.
 
-A turn's input, its history and prompt as JSON, must fit the session's
-32 KiB input buffer. `OAI-TURN-INPUT-U` gives the exact bytes a turn with
-no history takes, and the provider reports that room through
-`APROV-INPUT`.
+A session sizes a turn's input (its history and prompt as JSON), the
+request body and the tool history it gathers to what they hold, so only
+memory bounds them. Each encoder writes into the buffer it is given and,
+when that is too small, returns the length it needs with
+`OAIREQ-S-CAPACITY`; `0 0` asks for the length alone. The session then takes
+a buffer of exactly that length and writes again. The body is lent to the
+HTTP request, which sends it after the head without copying it, and the
+head's buffer starts at 1 KiB and doubles until the head fits. Each buffer
+is zeroed before it is freed. The encoders check that the input and history
+they are given are JSON, and the session checks each history item, bounded
+by their own length (`JSON-VALID-LIMIT?`) rather than the process-wide
+64 KiB gate of `JSON-VALID?`. `OAI-TURN-INPUT-U` gives the exact bytes a
+turn with no history takes, and the provider reports them through
+`APROV-INPUT` with a room of -1.
 
 The request body remains owned until a valid 200 SSE response accepts it. On
 the first 401 for one logical request, the provider closes the model transport,

@@ -1014,7 +1014,7 @@ VARIABLE _hrc-policy-media
     HRES-HOST-VALUE-STORAGE 264 = _hrc-assert
     _HRES-LOCATION _HRES-HOST-VALUE -
         HRES-HOST-VALUE-STORAGE = _hrc-assert
-    HTTP-RESOURCE-SIZE 45888 = _hrc-assert
+    HTTP-RESOURCE-SIZE 45896 = _hrc-assert
     _hrc-spec HRES-SPEC-INIT
     199 299 _hrc-spec HRES-SPEC-SUCCESS-RANGE!
         HRES-S-INVALID = _hrc-assert

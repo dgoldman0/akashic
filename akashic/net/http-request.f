@@ -4,6 +4,11 @@
 \  The request owns no socket and allocates no memory. Its caller supplies a
 \  buffer and a net/io-port transport. Clearing the descriptor zeroes the
 \  complete buffer, including any Authorization header copied into it.
+\
+\  A body is either copied into the buffer after the head (HREQ-BODY) or
+\  lent (HREQ-BODY-REF): the buffer then holds the head alone, the send
+\  step sends the body from where it lies after the head, and the caller
+\  keeps it unchanged until the request is sent or cleared.
 \ =====================================================================
 
 PROVIDED akashic-http-request
@@ -40,8 +45,9 @@ REQUIRE ../utils/string.f
 32 CONSTANT _HREQ-STATE
 40 CONSTANT _HREQ-STATUS
 48 CONSTANT _HREQ-FLAGS
-56 CONSTANT _HREQ-RESERVED
-64 CONSTANT HTTP-REQUEST-SIZE
+56 CONSTANT _HREQ-BODY-A      \ a lent body, sent after the head
+64 CONSTANT _HREQ-BODY-U
+72 CONSTANT HTTP-REQUEST-SIZE
 
 : HREQ.BUFFER   ( request -- a ) _HREQ-BUFFER + ;
 : HREQ.CAPACITY ( request -- a ) _HREQ-CAPACITY + ;
@@ -50,6 +56,8 @@ REQUIRE ../utils/string.f
 : HREQ.STATE    ( request -- a ) _HREQ-STATE + ;
 : HREQ.STATUS   ( request -- a ) _HREQ-STATUS + ;
 : HREQ.FLAGS    ( request -- a ) _HREQ-FLAGS + ;
+: HREQ.BODY-A   ( request -- a ) _HREQ-BODY-A + ;
+: HREQ.BODY-U   ( request -- a ) _HREQ-BODY-U + ;
 
 CREATE _HREQ-CRLF 13 C, 10 C,
 
@@ -314,6 +322,37 @@ VARIABLE _HRE-R
     HREQ-STATE-SEALED _HRE-R @ HREQ.STATE !
     HREQ-S-OK ;
 
+\ Seals the request around a lent body: the head gets its Content-Length,
+\ and the send step sends the body from BODY-A after the head.
+: HREQ-BODY-REF  ( body-a body-u request -- status )
+    _HRE-R ! _HRE-U ! _HRE-A !
+    _HRE-R @ HREQ.STATE @ HREQ-STATE-BUILDING <> IF
+        HREQ-S-STATE _HRE-R @ _HREQ-FAIL EXIT
+    THEN
+    _HRE-U @ 0< _HRE-A @ 0= _HRE-U @ 0> AND OR IF
+        HREQ-S-INVALID _HRE-R @ _HREQ-FAIL EXIT
+    THEN
+    _HRE-U @ _HRE-R @ HREQ-CONTENT-LENGTH ?DUP IF EXIT THEN
+    _HREQ-CRLF 2 _HRE-R @ _HREQ-APPEND ?DUP IF EXIT THEN
+    _HRE-A @ _HRE-R @ HREQ.BODY-A !
+    _HRE-U @ _HRE-R @ HREQ.BODY-U !
+    HREQ-STATE-SEALED _HRE-R @ HREQ.STATE !
+    HREQ-S-OK ;
+
+\ All the bytes the request sends: its buffer, then any lent body.
+: _HREQ-TOTAL  ( request -- u )
+    DUP HREQ.LENGTH @ SWAP HREQ.BODY-U @ + ;
+
+\ The bytes to send next: the rest of the buffer, then the rest of the
+\ lent body.
+: _HREQ-NEXT  ( request -- address count )
+    DUP HREQ.SENT @ OVER HREQ.LENGTH @ < IF
+        DUP HREQ.BUFFER @ OVER HREQ.SENT @ +
+        SWAP DUP HREQ.LENGTH @ SWAP HREQ.SENT @ - EXIT
+    THEN
+    DUP HREQ.BODY-A @ OVER HREQ.SENT @ + OVER HREQ.LENGTH @ -
+    SWAP DUP _HREQ-TOTAL SWAP HREQ.SENT @ - ;
+
 VARIABLE _HRP-PORT
 VARIABLE _HRP-R
 VARIABLE _HRP-N
@@ -328,14 +367,14 @@ VARIABLE _HRP-REMAINING
     DUP HREQ-STATE-SEALED <> SWAP HREQ-STATE-SENDING <> AND IF
         HREQ-S-STATE _HRP-R @ _HREQ-FAIL DROP HREQ-PUMP-ERROR EXIT
     THEN
-    _HRP-R @ HREQ.LENGTH @ _HRP-R @ HREQ.SENT @ - DUP _HRP-REMAINING !
+    _HRP-R @ _HREQ-TOTAL _HRP-R @ HREQ.SENT @ -
     DUP 0< SWAP 0= OR IF
         HREQ-STATE-SENT _HRP-R @ HREQ.STATE ! HREQ-PUMP-DONE EXIT
     THEN
     HREQ-STATE-SENDING _HRP-R @ HREQ.STATE !
     _HRP-PORT @ NIO-POLL
-    _HRP-R @ HREQ.BUFFER @ _HRP-R @ HREQ.SENT @ +
-    _HRP-REMAINING @ _HRP-PORT @ NIO-SEND
+    _HRP-R @ _HREQ-NEXT DUP _HRP-REMAINING !
+    _HRP-PORT @ NIO-SEND
     _HRP-IO ! _HRP-N !
     _HRP-IO @ NIO-S-CANCELLED = IF
         HREQ-S-CANCELLED _HRP-R @ _HREQ-FAIL DROP HREQ-PUMP-CANCELLED EXIT
@@ -348,7 +387,7 @@ VARIABLE _HRP-REMAINING
     THEN
     _HRP-N @ 0= IF HREQ-PUMP-IDLE EXIT THEN
     _HRP-N @ _HRP-R @ HREQ.SENT +!
-    _HRP-R @ HREQ.SENT @ _HRP-R @ HREQ.LENGTH @ = IF
+    _HRP-R @ HREQ.SENT @ _HRP-R @ _HREQ-TOTAL = IF
         HREQ-STATE-SENT _HRP-R @ HREQ.STATE ! HREQ-PUMP-DONE
     ELSE
         HREQ-PUMP-PROGRESS

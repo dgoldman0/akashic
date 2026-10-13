@@ -123,11 +123,11 @@ document to read as data, then the text, each an input text.
 reference: its reply says how many bytes it had and the first eight hex
 digits of its SHA3-256, and `SCRIPTED-LAST-REFERENCE` tells the same.
 
-The native OpenAI transport uses a 196,608-byte request-body allowance and a
-200,704-byte HTTP wire buffer so its independent 32 KiB prompt, 64 KiB history,
-and 32 KiB tool-result ceilings can compose with JSON and header overhead.
-The 32 KiB prompt room is the encoded input, and `APROV-INPUT` reports it. Its
-default maximum assembled response text is 49,152 bytes. That lower output
+The native OpenAI transport sizes a turn's input, its request body and its
+tool history to what they hold, and sends the body without copying it, so
+only memory bounds a turn's input and `APROV-INPUT` reports a room of -1. A
+tool result keeps the gateway's 32 KiB ceiling. The transport's default
+maximum assembled response text is 49,152 bytes. That lower output
 boundary leaves room for the visible response, its model-context copy, and thread
 metadata to coexist under the 262,144-byte conversation snapshot ceiling; the
 transport limit is not presented as an aggregate history budget.

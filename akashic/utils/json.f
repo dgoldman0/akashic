@@ -978,18 +978,22 @@ VARIABLE JSON-TYPE-XT              \ ( addr len -- )
 \    Return what was written so far.
 \  JSON-OUTPUT-RESET  ( -- )
 \    Reset write position to 0.
+\  JSON-OUTPUT-NEED ( -- u )
+\    The bytes the output needed, kept or not: a buffer this large holds
+\    an output that did not fit.  0 0 JSON-SET-OUTPUT measures only.
 
 VARIABLE _JB-BUF                   \ buffer base address
 VARIABLE _JB-MAX                   \ buffer capacity
 VARIABLE _JB-POS                   \ current write position
 VARIABLE _JB-OVERFLOW              \ output exceeded caller capacity
+VARIABLE _JB-SPILL                 \ bytes past the capacity, counted only
 
 : _JB-EMIT  ( c -- )
     _JB-POS @  _JB-MAX @  < IF
         _JB-BUF @ _JB-POS @ + C!
         1 _JB-POS +!
     ELSE
-        DROP -1 _JB-OVERFLOW !
+        DROP -1 _JB-OVERFLOW ! 1 _JB-SPILL +!
     THEN ;
 
 : _JB-TYPE  ( addr len -- )
@@ -998,7 +1002,7 @@ VARIABLE _JB-OVERFLOW              \ output exceeded caller capacity
     LOOP DROP ;
 
 : JSON-SET-OUTPUT  ( addr max -- )
-    _JB-MAX ! _JB-BUF !  0 _JB-POS ! 0 _JB-OVERFLOW !
+    _JB-MAX ! _JB-BUF !  0 _JB-POS ! 0 _JB-OVERFLOW ! 0 _JB-SPILL !
     ['] _JB-EMIT JSON-EMIT-XT !
     ['] _JB-TYPE JSON-TYPE-XT ! ;
 
@@ -1006,10 +1010,13 @@ VARIABLE _JB-OVERFLOW              \ output exceeded caller capacity
     _JB-BUF @ _JB-POS @ ;
 
 : JSON-OUTPUT-RESET  ( -- )
-    0 _JB-POS ! 0 _JB-OVERFLOW ! ;
+    0 _JB-POS ! 0 _JB-OVERFLOW ! 0 _JB-SPILL ! ;
 
 : JSON-OUTPUT-OK?  ( -- flag )
     _JB-OVERFLOW @ 0= ;
+
+: JSON-OUTPUT-NEED  ( -- u )
+    _JB-POS @ _JB-SPILL @ + ;
 
 \ ── Comma-state stack ────────────────────────────────────────────────
 \  Each nesting level has a flag: 0 = no comma needed, 1 = need comma.
@@ -1289,6 +1296,7 @@ GUARD _json-builder-guard
 ' JSON-OUTPUT-RESULT CONSTANT _json-builder-output-result-xt
 ' JSON-OUTPUT-RESET CONSTANT _json-builder-output-reset-xt
 ' JSON-OUTPUT-OK? CONSTANT _json-builder-output-ok-q-xt
+' JSON-OUTPUT-NEED CONSTANT _json-builder-output-need-xt
 ' JSON-{          CONSTANT _json-builder-ob-xt
 ' JSON-}          CONSTANT _json-builder-cb-xt
 ' JSON-[          CONSTANT _json-builder-os-xt
@@ -1320,6 +1328,7 @@ GUARD _json-builder-guard
 : JSON-OUTPUT-RESULT _json-builder-output-result-xt JSON-WITH-BUILDER ;
 : JSON-OUTPUT-RESET _json-builder-output-reset-xt JSON-WITH-BUILDER ;
 : JSON-OUTPUT-OK? _json-builder-output-ok-q-xt JSON-WITH-BUILDER ;
+: JSON-OUTPUT-NEED _json-builder-output-need-xt JSON-WITH-BUILDER ;
 : JSON-{          _json-builder-ob-xt JSON-WITH-BUILDER ;
 : JSON-}          _json-builder-cb-xt JSON-WITH-BUILDER ;
 : JSON-[          _json-builder-os-xt JSON-WITH-BUILDER ;

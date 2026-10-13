@@ -4294,6 +4294,59 @@ VARIABLE _rt-result
 : _rt-all-zero?  ( addr len -- flag )
     -1 -ROT 0 ?DO DUP I + C@ IF SWAP DROP 0 SWAP THEN LOOP DROP ;
 
+\ The same request with its body lent: the buffer holds the head alone,
+\ and the send step sends the body from where it lies after it, so the
+\ port receives the same bytes.  A longer body crosses several sends.
+CREATE _rt-lent 300 ALLOT
+: _rt-build-lent  ( body-u -- )
+    >R
+    S" POST" S" /v1/responses" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    S" api.openai.com" _rt-request HREQ-HOST HREQ-S-OK = _rt-assert
+    S" test-secret" _rt-request HREQ-AUTH-BEARER HREQ-S-OK = _rt-assert
+    S" application/json" _rt-request HREQ-CONTENT-TYPE HREQ-S-OK = _rt-assert
+    S" text/event-stream" _rt-request HREQ-ACCEPT HREQ-S-OK = _rt-assert
+    _rt-request HREQ-CONNECTION-CLOSE HREQ-S-OK = _rt-assert
+    _rt-lent R> _rt-request HREQ-BODY-REF HREQ-S-OK = _rt-assert ;
+
+: _rt-send-all  ( -- )
+    200 0 DO
+        _rt-port _rt-request HREQ-SEND-STEP _rt-result !
+        _rt-result @ HREQ-PUMP-ERROR <> _rt-assert
+        _rt-result @ HREQ-PUMP-DONE = IF LEAVE THEN
+    LOOP
+    _rt-request HREQ.STATE @ HREQ-STATE-SENT = _rt-assert ;
+
+: _rt-run-lent  ( -- )
+    _rt-build-expected
+    123 _rt-lent C! 125 _rt-lent 1+ C!
+    _rt-request-reset 2 _rt-build-lent
+    _rt-request HREQ.STATE @ HREQ-STATE-SEALED = _rt-assert
+    _rt-request HREQ.BUFFER @ _rt-request HREQ.LENGTH @
+    _rt-expected _rt-expected-u @ 2 - STR-STR= _rt-assert
+    _rt-request HREQ.BODY-U @ 2 = _rt-assert
+    0 _rt-port-reset _rt-send-all
+    _rt-sink _rt-sink-u @ _rt-expected _rt-expected-u @ STR-STR= _rt-assert
+    _rt-request HREQ-CLEAR
+    _rt-request HREQ.BODY-A @ 0= _rt-assert
+    _rt-request HREQ.BODY-U @ 0= _rt-assert
+    _rt-lent C@ 123 = _rt-assert
+    \ A 300-byte body: its length in the head, then the body itself.
+    _rt-lent 300 97 FILL
+    _rt-request-reset 300 _rt-build-lent 0 _rt-port-reset _rt-send-all
+    _rt-sink-u @ _rt-request HREQ.LENGTH @ 300 + = _rt-assert
+    _rt-sink _rt-request HREQ.LENGTH @ S" Content-Length: 300" STR-STR-CONTAINS
+    _rt-assert
+    _rt-sink _rt-request HREQ.LENGTH @ + 300 _rt-lent 300 STR-STR= _rt-assert
+    \ Only a request being built takes a body, and a body must be there.
+    _rt-lent 2 _rt-request HREQ-BODY-REF HREQ-S-STATE = _rt-assert
+    _rt-request-reset
+    S" POST" S" /" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    0 2 _rt-request HREQ-BODY-REF HREQ-S-INVALID = _rt-assert
+    _rt-request-reset
+    S" POST" S" /" _rt-request HREQ-BEGIN HREQ-S-OK = _rt-assert
+    _rt-lent -1 _rt-request HREQ-BODY-REF HREQ-S-INVALID = _rt-assert
+    _rt-request-reset ;
+
 : _rt-run  ( -- )
     0 _rt-fails ! 0 _rt-checks ! DEPTH _rt-depth !
     _rt-build-expected _rt-request-reset _rt-build
@@ -4353,6 +4406,7 @@ VARIABLE _rt-result
     _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-ERROR = _rt-assert
     _rt-request HREQ-CLEAR _rt-request-reset _rt-build 5 _rt-port-reset
     _rt-port _rt-request HREQ-SEND-STEP HREQ-PUMP-ERROR = _rt-assert
+    _rt-run-lent
 
     _rt-stack
     _rt-fails @ 0= IF
@@ -5747,9 +5801,10 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-gateway @ _oc-turn ATURN.TOOL-GATEWAY ! ;
 
 : _oc-start-request  ( -- status )
-    _oc-turn S" org.akashic.agent.openai.responses" _oc-config _oc-gateway @
-    _oc-out 65536 OAI-RESPONSES-START-JSON
-    SWAP _oc-out-u ! ;
+    _oc-turn S" org.akashic.agent.openai.responses" _oc-input 32768
+    OAI-TURN-INPUT-JSON DUP IF NIP EXIT THEN DROP _oc-input-u !
+    _oc-input _oc-input-u @ _oc-config _oc-gateway @ _oc-out 65536
+    OAI-RESPONSES-START-INPUT-JSON SWAP _oc-out-u ! ;
 
 : _oc-large-array!  ( char capacity address -- )
     _oc-large-array-a ! _oc-large-array-cap !
@@ -5758,29 +5813,39 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     34 _oc-large-array-a @ _oc-large-array-cap @ 2 - + C!
     93 _oc-large-array-a @ _oc-large-array-cap @ 1- + C! ;
 
-: _oc-test-composed-capacity  ( -- )
-    OAIR-INPUT-CAPACITY ALLOCATE
-        ABORT" OpenAI input capacity allocation failed" _oc-large-input !
-    OAIR-HISTORY-CAPACITY ALLOCATE
-        ABORT" OpenAI history capacity allocation failed" _oc-large-history !
-    OAIR-TOOL-OUTPUT-CAPACITY ALLOCATE
-        ABORT" OpenAI tool-output capacity allocation failed" _oc-large-output !
-    OAIR-BODY-CAPACITY ALLOCATE
-        ABORT" OpenAI body capacity allocation failed" _oc-large-body !
-    65 OAIR-INPUT-CAPACITY _oc-large-input @ _oc-large-array!
-    66 OAIR-HISTORY-CAPACITY _oc-large-history @ _oc-large-array!
-    _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY 92 FILL
-    _oc-large-input @ OAIR-INPUT-CAPACITY
-    _oc-large-history @ OAIR-HISTORY-CAPACITY
+\ A continuation with a 100,000-byte input, as much history, and a full
+\ tool result: the encoder says the exact length it needs, and a buffer of
+\ that length holds it.
+100000 CONSTANT _oc-large-n
+
+: _oc-continue-large  ( buffer capacity -- length status )
+    >R >R
+    _oc-large-input @ _oc-large-n
+    _oc-large-history @ _oc-large-n
     S" call-capacity"
     _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY
-    _oc-config _oc-gateway @ _oc-large-body @ OAIR-BODY-CAPACITY
-    OAI-RESPONSES-CONTINUE-JSON
-    DUP OAIREQ-S-OK = _oc-assert DROP _oc-out-u !
-    _oc-out-u @ 160000 > _oc-assert
-    _oc-out-u @ OAIR-BODY-CAPACITY <= _oc-assert
-    _oc-large-body @ _oc-out-u @ OAIR-BODY-CAPACITY
-        JSON-VALID-LIMIT? _oc-assert
+    _oc-config _oc-gateway @ R> R> OAI-RESPONSES-CONTINUE-JSON ;
+
+: _oc-test-composed-capacity  ( -- )
+    _oc-large-n ALLOCATE
+        ABORT" OpenAI large input allocation failed" _oc-large-input !
+    _oc-large-n ALLOCATE
+        ABORT" OpenAI large history allocation failed" _oc-large-history !
+    OAIR-TOOL-OUTPUT-CAPACITY ALLOCATE
+        ABORT" OpenAI tool-output capacity allocation failed" _oc-large-output !
+    65 _oc-large-n _oc-large-input @ _oc-large-array!
+    66 _oc-large-n _oc-large-history @ _oc-large-array!
+    _oc-large-output @ OAIR-TOOL-OUTPUT-CAPACITY 92 FILL
+    0 0 _oc-continue-large
+    DUP OAIREQ-S-CAPACITY = _oc-assert DROP _oc-out-u !
+    _oc-out-u @ 200000 > _oc-assert
+    _oc-out-u @ ALLOCATE
+        ABORT" OpenAI large body allocation failed" _oc-large-body !
+    _oc-large-body @ _oc-out-u @ 1- _oc-continue-large
+    OAIREQ-S-CAPACITY = _oc-assert _oc-out-u @ = _oc-assert
+    _oc-large-body @ _oc-out-u @ _oc-continue-large
+    OAIREQ-S-OK = _oc-assert _oc-out-u @ = _oc-assert
+    _oc-large-body @ _oc-out-u @ DUP JSON-VALID-LIMIT? _oc-assert
     _oc-large-input @ FREE 0 _oc-large-input !
     _oc-large-history @ FREE 0 _oc-large-history !
     _oc-large-output @ FREE 0 _oc-large-output !
@@ -5794,10 +5859,7 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-config OAIC-HOST S" api.openai.com" STR-STR= _oc-assert
     _oc-config OAIC-PATH S" /v1/responses" STR-STR= _oc-assert
     _oc-config OAIC-MODEL S" gpt-5.5" STR-STR= _oc-assert
-    _oc-config OAIC.MAX-REQUEST @ 196608 = _oc-assert
     _oc-config OAIC.MAX-OUTPUT @ 49152 = _oc-assert
-    OAIR-BODY-CAPACITY 196608 = _oc-assert
-    OAIR-WIRE-CAPACITY 200704 = _oc-assert
     S" You assist the active Akashic applet."
     _oc-config OAIC-INSTRUCTIONS! OAIC-S-OK = _oc-assert
     S" bad host" _oc-config OAIC-HOST! OAIC-S-INVALID = _oc-assert
@@ -5892,9 +5954,9 @@ CREATE _oc-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _oc-start-request OAIREQ-S-OK = _oc-assert
     _oc-out _oc-out-u @ S" include" JSON-FIELD
     DUP 0= _oc-assert DROP 0= _oc-assert 2DROP
-    _oc-turn S" org.akashic.agent.openai.responses"
-    _oc-config 0 _oc-out 8 OAI-RESPONSES-START-JSON
-    OAIREQ-S-CAPACITY = _oc-assert DROP ;
+    _oc-input _oc-input-u @ _oc-config 0 _oc-out 8
+    OAI-RESPONSES-START-INPUT-JSON
+    OAIREQ-S-CAPACITY = _oc-assert 8 > _oc-assert ;
 
 : _oc-event-created  ( -- )
     _oc-json-begin JSON-{
@@ -6047,6 +6109,10 @@ CREATE _op-args 1024 ALLOT
 VARIABLE _op-args-u
 CREATE _op-request 67584 ALLOT
 VARIABLE _op-request-u
+\ Where the transport keeps what it is sent: the request buffer, or a
+\ larger one for a large turn.
+VARIABLE _op-capture-a
+VARIABLE _op-capture-cap
 CREATE _op-retry-request 67584 ALLOT
 VARIABLE _op-retry-request-u
 CREATE _op-turn-state 1024 ALLOT
@@ -6308,9 +6374,9 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     _op-send-fail-once @ _op-send-failures @ 0= AND IF
         1 _op-send-failures +! 0 NIO-S-FAILED EXIT
     THEN
-    _op-request-u @ _op-send-u @ + 67584 > IF 0 NIO-S-FAILED EXIT THEN
+    _op-request-u @ _op-send-u @ + _op-capture-cap @ > IF 0 NIO-S-FAILED EXIT THEN
     _op-send-u @ 97 MIN _op-send-n !
-    _op-send-a @ _op-request _op-request-u @ + _op-send-n @ CMOVE
+    _op-send-a @ _op-capture-a @ _op-request-u @ + _op-send-n @ CMOVE
     _op-send-n @ _op-request-u +!
     _op-send-n @ NIO-S-OK ;
 
@@ -6353,6 +6419,7 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     0 _op-send-fail-once ! 0 _op-send-failures !
     0 _op-refreshes ! 0 _op-auth-polls !
     _op-turn-state 1024 65 FILL
+    _op-request _op-capture-a ! 67584 _op-capture-cap !
     _op-port NIO-INIT
     ['] _op-open _op-port NIO.OPEN-XT !
     ['] _op-open-start _op-port NIO.OPEN-START-XT !
@@ -6775,6 +6842,71 @@ VARIABLE _op-designate-status
     0 0 _op-provider @ OPENAI-PROVIDER-DESIGNATOR!
     _op-header-context @ ACTX-FREE ;
 
+\ A turn far larger than any fixed buffer: a 300,000-byte reference.  The
+\ session sizes the turn's input and its request body to them, the body is
+\ sent after the head from where it lies, and what the transport receives
+\ is that head and body: a Content-Length of the body's length, and the
+\ body valid JSON holding the reference.
+300000 CONSTANT _op-big-ref-u
+400000 CONSTANT _op-big-capture-u
+VARIABLE _op-big-ref
+VARIABLE _op-big-capture
+VARIABLE _op-big-body-a
+VARIABLE _op-big-body-u
+CREATE _op-big-length 32 ALLOT
+VARIABLE _op-big-length-u
+
+: _op-big-length!  ( u -- )
+    0 _op-big-length-u !
+    S" Content-Length: " DUP _op-big-length-u ! _op-big-length SWAP CMOVE
+    NUM>STR DUP >R _op-big-length _op-big-length-u @ + SWAP CMOVE
+    R> _op-big-length-u +! ;
+
+: _op-test-large-turn  ( -- )
+    _op-big-ref-u ALLOCATE ABORT" large reference allocation failed" _op-big-ref !
+    _op-big-ref @ _op-big-ref-u 114 FILL
+    _op-big-capture-u ALLOCATE ABORT" large capture allocation failed" _op-big-capture !
+    _op-big-capture @ _op-capture-a ! _op-big-capture-u _op-capture-cap !
+    2 _op-response-mode ! 0 _op-opens ! 0 _op-closes ! 0 _op-request-u !
+    ACTX-NEW DUP ACTX-S-OK = _op-assert DROP _op-header-context !
+    921 _op-header-turn!
+    S" Summarize the report."
+    _op-header-turn ATURN.PROMPT-U ! _op-header-turn ATURN.PROMPT-A !
+    _op-big-ref @ _op-header-turn ATURN.REFERENCE-A !
+    _op-big-ref-u _op-header-turn ATURN.REFERENCE-U !
+    _op-header-turn _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-START
+    OAIR-S-OK = _op-assert
+    \ The input is exactly the turn's, in a buffer of exactly that size.
+    _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
+    DUP OAIR-S.INPUT-U @
+    S" Summarize the report." _op-big-ref @ _op-big-ref-u OAI-TURN-INPUT-U = _op-assert
+    DUP OAIR-S.INPUT-CAP @ OVER OAIR-S.INPUT-U @ = _op-assert
+    DUP OAIR-S.BODY-U @ _op-big-ref-u > _op-assert
+    DUP OAIR-S.BODY-CAP @ _op-big-ref-u > _op-assert
+    \ The body is lent to the request, not copied into its head's buffer.
+    OAIR-S.WIRE-CAP @ _op-big-ref-u < _op-assert
+    20000 0 DO
+        _op-runtime @ ARUNTIME.EVENTS @ _op-provider @ APROV-POLL DROP
+        _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ 0= IF LEAVE THEN
+    LOOP
+    _op-idle-without-session
+    _op-big-capture @ _op-request-u @ _op-request-body
+    _op-big-body-u ! _op-big-body-a !
+    _op-big-body-u @ _op-big-ref-u > _op-assert
+    _op-request-u @ _op-big-body-u @ - _op-big-capture-u < _op-assert
+    _op-big-body-u @ _op-big-length!
+    _op-big-capture @ _op-request-u @ _op-big-body-u @ -
+    _op-big-length _op-big-length-u @ STR-STR-CONTAINS _op-assert
+    _op-big-body-a @ _op-big-body-u @ DUP JSON-VALID-LIMIT? _op-assert
+    _op-big-body-a @ _op-big-body-u @ S" reference document" STR-STR-CONTAINS
+    _op-assert
+    _op-big-body-a @ _op-big-body-u @ _op-big-ref @ 4096 STR-STR-CONTAINS
+    _op-assert
+    _op-request _op-capture-a ! 67584 _op-capture-cap !
+    _op-big-capture @ FREE 0 _op-big-capture !
+    _op-big-ref @ FREE 0 _op-big-ref !
+    _op-header-context @ ACTX-FREE ;
+
 : _op-cleanup  ( -- )
     _op-legacy-opens @ 0= _op-assert
     _op-legacy-closes @ 0= _op-assert
@@ -6809,6 +6941,8 @@ VARIABLE _op-designate-status
     _op-test-second-401
     ." [openai-provider] designation" CR
     _op-test-designation
+    ." [openai-provider] large turn" CR
+    _op-test-large-turn
     ." [openai-provider] cleanup" CR
     _op-cleanup _op-stack
     _op-fails @ 0= IF
