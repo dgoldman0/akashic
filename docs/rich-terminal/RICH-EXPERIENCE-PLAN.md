@@ -1447,8 +1447,10 @@ them, a link to a far page reading that page alone.
 and 7, step 9's preview and step 10's samples: File Explorer previews a
 PDF as a document, read a page at a time, with its pictures, links,
 contents and page labels, and a link or a contents entry shows the place
-its destination names. Step 11 is measured. File Explorer's PDF stages
-in the physical journey and AES remain.
+its destination names. Step 11 is measured. File Explorer's check
+through the physical viewer previews the sample PDF in CELL and rich, and
+the Desktop journey passes after it
+(`local_testing/evidence/pdf-journey-20261012.md`). AES remains.
 
 - Step 11's counts (`local_testing/measure_pdf.py`), for a 100-page PDF of
   249 KB that xelatex writes with hyperref, shown at File Explorer's
