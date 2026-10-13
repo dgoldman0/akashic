@@ -41,7 +41,7 @@ VARIABLE _atfv-sent-u
 VARIABLE _atfv-expected-a
 VARIABLE _atfv-expected-u
 VARIABLE _atfv-readback-a
-VARIABLE _atfv-exchange
+VARIABLE _atfv-xrpc-exchange
 VARIABLE _atfv-generation
 VARIABLE _atfv-instance
 VARIABLE _atfv-applet-vfs
@@ -243,7 +243,7 @@ VARIABLE _atfv-io-a
 VARIABLE _atfv-io-u
 VARIABLE _atfv-io-n
 
-: _atfv-open  ( context -- io-status )
+: _atfv-peer-open  ( context -- io-status )
     DROP
     _atfv-sent-u @ _atfv-request-start !
     1 _atfv-open-count +!
@@ -255,7 +255,7 @@ VARIABLE _atfv-io-n
     _atfv-response-end !
     NIO-S-OK ;
 
-: _atfv-send  ( buffer length context -- count io-status )
+: _atfv-peer-send  ( buffer length context -- count io-status )
     DROP
     _atfv-io-u !
     _atfv-io-a !
@@ -281,7 +281,7 @@ VARIABLE _atfv-io-n
     THEN
     _atfv-io-u @ NIO-S-OK ;
 
-: _atfv-recv  ( buffer capacity context -- count io-status )
+: _atfv-peer-recv  ( buffer capacity context -- count io-status )
     DROP
     _atfv-io-u !
     _atfv-io-a !
@@ -295,13 +295,13 @@ VARIABLE _atfv-io-n
     _atfv-io-n @ _atfv-response-pos +!
     _atfv-io-n @ NIO-S-OK ;
 
-: _atfv-poll  ( context -- )
+: _atfv-peer-poll  ( context -- )
     DROP ;
 
-: _atfv-cancel  ( context -- )
+: _atfv-peer-cancel  ( context -- )
     DROP ;
 
-: _atfv-close  ( context -- io-status )
+: _atfv-peer-close  ( context -- io-status )
     DROP
     _atfv-sent-u @ _atfv-request-start @ -
     _atfv-close-count @ 0= IF
@@ -317,14 +317,14 @@ VARIABLE _atfv-io-n
     DUP 0<> _atxr-assert
     DUP NIO-INIT
     DUP DUP NIO.CONTEXT !
-    ['] _atfv-open OVER NIO.OPEN-START-XT !
-    ['] _atfv-open OVER NIO.OPEN-POLL-XT !
-    ['] _atfv-send OVER NIO.SEND-XT !
-    ['] _atfv-recv OVER NIO.RECV-XT !
-    ['] _atfv-poll OVER NIO.POLL-XT !
-    ['] _atfv-cancel OVER NIO.CANCEL-XT !
-    ['] _atfv-close OVER NIO.CLOSE-START-XT !
-    ['] _atfv-close SWAP NIO.CLOSE-POLL-XT ! ;
+    ['] _atfv-peer-open OVER NIO.OPEN-START-XT !
+    ['] _atfv-peer-open OVER NIO.OPEN-POLL-XT !
+    ['] _atfv-peer-send OVER NIO.SEND-XT !
+    ['] _atfv-peer-recv OVER NIO.RECV-XT !
+    ['] _atfv-peer-poll OVER NIO.POLL-XT !
+    ['] _atfv-peer-cancel OVER NIO.CANCEL-XT !
+    ['] _atfv-peer-close OVER NIO.CLOSE-START-XT !
+    ['] _atfv-peer-close SWAP NIO.CLOSE-POLL-XT ! ;
 
 \ ---------------------------------------------------------------------
 \ Injected Streams transform and output connector
@@ -625,17 +625,17 @@ VARIABLE _atfv-io-n
     _atxr-assert
     _atfv-owner @ AT-AUTHOR-FEED-CONNECTOR-EXCHANGE@
     AT-AUTHOR-FEED-CONNECTOR-S-OK _atxr-status
-    DUP _atfv-exchange !
+    DUP _atfv-xrpc-exchange !
     AT-XRPC-EXCHANGE-STATE@
     AT-XRPC-EXCHANGE-S-OK _atxr-status
     AT-XRPC-EXCHANGE-STATE-READY = _atxr-assert
-    _atfv-exchange @ AT-XRPC-EXCHANGE-HTTP-CODE@
+    _atfv-xrpc-exchange @ AT-XRPC-EXCHANGE-HTTP-CODE@
     AT-XRPC-EXCHANGE-S-OK _atxr-status
     200 = _atxr-assert
-    _atfv-exchange @ AT-XRPC-EXCHANGE-ATTEMPTS@
+    _atfv-xrpc-exchange @ AT-XRPC-EXCHANGE-ATTEMPTS@
     AT-XRPC-EXCHANGE-S-OK _atxr-status
     2 = _atxr-assert
-    _atfv-exchange @ AT-XRPC-EXCHANGE-NONCE-GENERATION@
+    _atfv-xrpc-exchange @ AT-XRPC-EXCHANGE-NONCE-GENERATION@
     AT-XRPC-EXCHANGE-S-OK _atxr-status
     2 = _atxr-assert
     _atfv-owner @ AT-AUTHOR-FEED-CONNECTOR-BODY@
@@ -845,7 +845,7 @@ VARIABLE _atfv-io-n
     0 _atfv-sent-cap !
     0 _atfv-sent-u !
     0 _atfv-expected-u !
-    0 _atfv-exchange !
+    0 _atfv-xrpc-exchange !
     0 _atfv-generation !
     0 _atfv-instance !
     0 _atfv-applet-vfs !

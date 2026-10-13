@@ -510,6 +510,7 @@ def _forth_code(source: str) -> str:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     provider = PROVIDER.read_text(encoding="utf-8")
     interface = INTERFACE.read_text(encoding="utf-8")
     streams = STREAMS.read_text(encoding="utf-8")

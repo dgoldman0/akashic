@@ -291,6 +291,7 @@ def _forth_code(source: str) -> str:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     feed = FEED_CONNECTOR.read_text(encoding="utf-8")
     post = POST_CONNECTOR.read_text(encoding="utf-8")
     fixture = CONTRACT.read_text(encoding="utf-8")

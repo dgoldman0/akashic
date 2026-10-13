@@ -305,7 +305,61 @@ def _assert_physical_comments(path: Path, source: str) -> None:
             )
 
 
+# KDOS finds a word whatever its case, so a fixture name that matches an
+# earlier one in any case hides the earlier word from all code compiled
+# after it.  The feed fixture's stage word _ATFV-EXCHANGE once hid its
+# variable _atfv-exchange, and its release then ran the whole exchange.
+DEFINING_WORDS = frozenset(
+    {
+        ":",
+        "VARIABLE",
+        "2VARIABLE",
+        "CREATE",
+        "CONSTANT",
+        "2CONSTANT",
+        "VALUE",
+        "DEFER",
+        "XBUF",
+        "BUFFER:",
+    }
+)
+
+
+def defined_names(source: str) -> tuple[str, ...]:
+    """The names SOURCE defines at top level, in order."""
+    names: list[str] = []
+    compiling = False
+    for line in source.splitlines():
+        tokens = harness._forth_line_tokens(line)  # noqa: SLF001
+        for word, name in zip(tokens, (*tokens[1:], None)):
+            upper = word.upper()
+            if upper == ";":
+                compiling = False
+            elif not compiling and upper in DEFINING_WORDS and name:
+                names.append(name)
+                compiling = upper == ":"
+    return tuple(names)
+
+
+def assert_distinct_fixture_names(items: tuple[LoadItem, ...]) -> None:
+    """No two fixture definitions may share a name in any case."""
+    seen: dict[str, str] = {}
+    for item in items:
+        source = (
+            item.inline
+            if item.inline is not None
+            else item.source.read_text(encoding="utf-8")
+        )
+        for name in defined_names(source):
+            folded = name.casefold()
+            assert folded not in seen, (
+                f"{item.name} defines {name}, which hides {seen[folded]}"
+            )
+            seen[folded] = f"{name} from {item.name}"
+
+
 def _assert_static_contracts() -> None:
+    assert_distinct_fixture_names(FIXTURE_LOAD_ITEMS)
     fixture = CONTRACT.read_text(encoding="utf-8")
     xrpc = XRPC.read_text(encoding="utf-8")
     request = HTTP_REQUEST.read_text(encoding="utf-8")

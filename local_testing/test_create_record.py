@@ -243,6 +243,7 @@ def _word_body(source: str, name: str) -> str:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     owner = OWNER.read_text(encoding="utf-8")
     codec = CODEC.read_text(encoding="utf-8")
     doc = DOC.read_text(encoding="utf-8")

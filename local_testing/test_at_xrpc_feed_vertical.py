@@ -330,6 +330,7 @@ def _requires(path: Path) -> list[str]:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     target = FEED_TARGET.read_text(encoding="utf-8")
     connector = FEED_CONNECTOR.read_text(encoding="utf-8")
     presenter = FEED_PRESENT.read_text(encoding="utf-8")

@@ -175,6 +175,7 @@ def _requires(path: Path) -> list[str]:
 
 
 def _assert_static() -> None:
+    auth_read.assert_distinct_fixture_names(FIXTURE_ITEMS)
     exchange = EXCHANGE.read_text(encoding="utf-8")
     getsession = GETSESSION.read_text(encoding="utf-8")
     fixture = CONTRACT.read_text(encoding="utf-8")
