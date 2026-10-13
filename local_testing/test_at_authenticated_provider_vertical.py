@@ -30,11 +30,16 @@ MAX_PHASE_STEPS = 180_000_000
 EXT_MEM_SIZE = 128 << 20
 NUM_CORES = 1
 LINKED = False
+# Checkpoints are packed to about this size.  A top-level unit larger than
+# it cannot be split, so it is a checkpoint of its own, still bounded by
+# the stage's step ceiling (markup/html-entities.f's table is one 28 KB
+# unit).
 COMPILE_CHECKPOINT_BYTES = 12 * 1024
 # Each checkpoint is its own stage; a bundle only puts several in one file,
 # so the image's files stay inside MP64FS's 128 entries as the closure grows
 # (3.1 MB in 259 checkpoints made 130 two-checkpoint files).  A bundle stays
-# well under the 120 KB a linked chunk may be.
+# well under the 120 KB a linked chunk may be, and takes fewer checkpoints
+# when a large one would take it past BUNDLE_BYTES.
 BUNDLE_BYTES = 64 * 1024
 CHECKPOINTS_PER_BUNDLE = 4
 # The deterministic fake PDS completes this request in four cooperative XIO
@@ -339,15 +344,12 @@ def _top_level_units(payload: bytes) -> tuple[bytes, ...]:
 
 
 def _source_fragments() -> tuple[bytes, ...]:
-    """Pack complete top-level units into bounded compile checkpoints."""
+    """Pack complete top-level units into compile checkpoints of about
+    COMPILE_CHECKPOINT_BYTES; a larger unit is a checkpoint of its own."""
     fragments: list[bytes] = []
     current = bytearray()
     for item in (*MODULE_ITEMS, *FIXTURE_ITEMS):
         for source_unit in _top_level_units(_bundle_source(item)):
-            if len(source_unit) > COMPILE_CHECKPOINT_BYTES:
-                raise RuntimeError(
-                    f"authenticated provider source unit too large: {item.name}"
-                )
             if (
                 current
                 and len(current) + len(source_unit)
@@ -356,6 +358,9 @@ def _source_fragments() -> tuple[bytes, ...]:
                 fragments.append(bytes(current))
                 current.clear()
             current.extend(source_unit)
+            if len(current) > COMPILE_CHECKPOINT_BYTES:
+                fragments.append(bytes(current))
+                current.clear()
     if current:
         fragments.append(bytes(current))
     return tuple(fragments)
@@ -372,46 +377,60 @@ def _internal_marker(index: int, part: int) -> str:
     return f"AT AUTH PROVIDER BUNDLE {index:02d} PART {part:02d} READY"
 
 
-def _source_bundles() -> tuple[SourceBundle, ...]:
-    """Group checkpoints so the image remains below the MP64FS entry limit."""
-    bundles: list[SourceBundle] = []
-    for offset in range(0, len(SOURCE_FRAGMENTS), CHECKPOINTS_PER_BUNDLE):
-        index = len(bundles) + 1
-        fragments = SOURCE_FRAGMENTS[
-            offset : offset + CHECKPOINTS_PER_BUNDLE
-        ]
-        payload = bytearray()
-        stages: list[tuple[str, str]] = []
-        for part, fragment in enumerate(fragments, start=1):
-            payload.extend(fragment)
-            if part == len(fragments):
-                continue
-            marker = _internal_marker(index, part)
-            stages.append((f"bundle-{index:02d}-part-{part:02d}", marker))
-            payload.extend(
-                (
-                    "\nDEPTH IF .\" AT AUTH PROVIDER LOAD STACK FAIL "
-                    f"bundle-{index:02d}-part-{part:02d}"
-                    "\" CR TX-FLUSH THEN\n"
-                    f'." {marker}" CR TX-FLUSH\nKEY DROP\n'
-                ).encode("utf-8")
-            )
-        stages.append((f"bundle-{index:02d}", _bundle_marker(index)))
-        coalesced = harness._coalesce_audited_forth_lines(  # noqa: SLF001
-            bytes(payload),
-            harness.MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+def _source_bundle(index: int, fragments: tuple[bytes, ...]) -> SourceBundle:
+    """One bundle file: its checkpoints, each closed by its own stage."""
+    payload = bytearray()
+    stages: list[tuple[str, str]] = []
+    for part, fragment in enumerate(fragments, start=1):
+        payload.extend(fragment)
+        if part == len(fragments):
+            continue
+        marker = _internal_marker(index, part)
+        stages.append((f"bundle-{index:02d}-part-{part:02d}", marker))
+        payload.extend(
+            (
+                "\nDEPTH IF .\" AT AUTH PROVIDER LOAD STACK FAIL "
+                f"bundle-{index:02d}-part-{part:02d}"
+                "\" CR TX-FLUSH THEN\n"
+                f'." {marker}" CR TX-FLUSH\nKEY DROP\n'
+            ).encode("utf-8")
         )
-        if len(coalesced) > BUNDLE_BYTES:
+    stages.append((f"bundle-{index:02d}", _bundle_marker(index)))
+    coalesced = harness._coalesce_audited_forth_lines(  # noqa: SLF001
+        bytes(payload),
+        harness.MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+    )
+    return SourceBundle(
+        guest=f"local_testing/satpv-b{index:02d}.f",
+        payload=coalesced,
+        stages=tuple(stages),
+    )
+
+
+def _source_bundles() -> tuple[SourceBundle, ...]:
+    """Group checkpoints so the image remains below the MP64FS entry limit:
+    up to CHECKPOINTS_PER_BUNDLE to a file, fewer when a large checkpoint
+    would take the file past BUNDLE_BYTES."""
+    bundles: list[SourceBundle] = []
+    group: list[bytes] = []
+    for fragment in SOURCE_FRAGMENTS:
+        if group and (
+            len(group) == CHECKPOINTS_PER_BUNDLE
+            or len(
+                _source_bundle(len(bundles) + 1, (*group, fragment)).payload
+            )
+            > BUNDLE_BYTES
+        ):
+            bundles.append(_source_bundle(len(bundles) + 1, tuple(group)))
+            group = []
+        group.append(fragment)
+    if group:
+        bundles.append(_source_bundle(len(bundles) + 1, tuple(group)))
+    for index, bundle in enumerate(bundles, start=1):
+        if len(bundle.payload) > BUNDLE_BYTES:
             raise RuntimeError(
                 f"authenticated provider bundle too large: bundle {index}"
             )
-        bundles.append(
-            SourceBundle(
-                guest=f"local_testing/satpv-b{index:02d}.f",
-                payload=coalesced,
-                stages=tuple(stages),
-            )
-        )
     return tuple(bundles)
 
 
@@ -544,11 +563,16 @@ def _assert_static() -> None:
     assert POST_DRIVE_CHECKPOINTS == 2
     assert SOURCE_FRAGMENTS
     assert BUNDLE_FILES
+    # Only a unit that cannot be split may make a checkpoint past the size.
     assert all(
         len(source) <= COMPILE_CHECKPOINT_BYTES
+        or len(_top_level_units(source)) == 1
         for source in SOURCE_FRAGMENTS
     )
     assert all(len(source) <= BUNDLE_BYTES for _, source in BUNDLE_FILES)
+    assert all(
+        len(bundle.stages) <= CHECKPOINTS_PER_BUNDLE for bundle in BUNDLES
+    )
 
     for marker in (
         "PROVIDED akashic-streams-atowner",
