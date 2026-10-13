@@ -1921,3 +1921,154 @@ the room it had.
 | mutable-state | `d4d184ef64f520cc63580da7fbb05f47bcc94a2b678d2a665612c19c62791928` |
 | placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
 | unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
+
+## Documents and PDFs landing reviewed ratchet update
+
+Pictures, documents and PDFs land on main beside the Daybook scheduler.
+Their branch updated the reviewed policy as it went but recorded no
+section here. This landing records its moves as one, from the Daybook
+landing's 656 modules to 693.
+
+Thirty-seven modules join the graph: the media layer below the widgets;
+the Markdown reader with its HTML entity table; the picture, media and
+document widgets; the PDF reader; decompression and PNG; QOI rows and
+encoding; the MD5, RC4 and Adler-32 primitives; the shared rule for the
+path a link names; and the rich side's picture snapshot and DOC1 packer.
+Each requires:
+
+- `markup/html-entities.f` requires nothing.
+- `markup/markdown.f` requires `markup/html-entities.f`, `media/document.f`, `text/text-style.f` and `text/unicode-props.f`.
+- `math/adler32.f` requires nothing.
+- `math/md5.f` requires `concurrency/guard.f`.
+- `math/rc4.f` requires nothing.
+- `media/document.f` requires `concurrency/guard.f`, `media/source.f`, `utils/memory-source.f`, `utils/memory-span.f` and `utils/string.f`.
+- `media/kind.f` requires `concurrency/guard.f` and `text/utf8.f`.
+- `media/picture.f` requires `concurrency/guard.f`, `media/source.f`, `render/png.f`, `render/qoi.f` and `utils/memory-source.f`.
+- `media/source.f` requires nothing.
+- `media/vfs-source.f` requires `media/source.f`, `utils/fs/vfs-access.f` and `utils/fs/vfs.f`.
+- `pdf/cmap.f` requires `pdf/filter.f` and `pdf/lexer.f`.
+- `pdf/content.f` requires `pdf/file.f`, `pdf/filter.f`, `pdf/font.f`, `pdf/lexer.f` and `pdf/page.f`.
+- `pdf/crypt.f` requires `math/aes.f`, `math/md5.f`, `math/rc4.f`, `math/sha256.f`, `math/sha512.f`, `pdf/lexer.f` and `utils/memory-source.f`.
+- `pdf/document.f` requires `media/document.f`, `media/picture.f`, `pdf/content.f`, `pdf/file.f`, `pdf/filter.f`, `pdf/font.f`, `pdf/image.f`, `pdf/labels.f`, `pdf/layout.f`, `pdf/navigate.f`, `pdf/page.f`, `pdf/struct.f`, `text/text-style.f` and `utils/string.f`.
+- `pdf/file.f` requires `media/source.f`, `pdf/crypt.f`, `pdf/filter.f` and `pdf/lexer.f`.
+- `pdf/filter.f` requires `pdf/lexer.f`, `render/png.f`, `utils/inflate.f` and `utils/memory-source.f`.
+- `pdf/font.f` requires `pdf/cmap.f`, `pdf/file.f`, `pdf/filter.f`, `pdf/lexer.f`, `pdf/text-tables.f` and `pdf/textstr.f`.
+- `pdf/image.f` requires `media/picture.f`, `media/source.f`, `pdf/file.f`, `pdf/filter.f`, `pdf/lexer.f`, `render/png.f`, `render/qoi-rows.f` and `utils/inflate.f`.
+- `pdf/labels.f` requires `pdf/file.f`, `pdf/filter.f`, `pdf/lexer.f`, `pdf/textstr.f`, `pdf/tree.f` and `utils/string.f`.
+- `pdf/layout.f` requires `media/document.f`, `pdf/content.f`, `pdf/filter.f`, `pdf/font.f`, `pdf/navigate.f`, `pdf/page.f`, `pdf/struct.f` and `text/text-style.f`.
+- `pdf/lexer.f` requires nothing.
+- `pdf/navigate.f` requires `pdf/file.f`, `pdf/filter.f`, `pdf/lexer.f`, `pdf/page.f`, `pdf/textstr.f` and `pdf/tree.f`.
+- `pdf/page.f` requires `pdf/file.f`, `pdf/filter.f` and `pdf/lexer.f`.
+- `pdf/struct.f` requires `media/document.f`, `pdf/file.f`, `pdf/filter.f`, `pdf/lexer.f`, `pdf/page.f` and `pdf/tree.f`.
+- `pdf/text-tables.f` requires nothing.
+- `pdf/textstr.f` requires `pdf/filter.f` and `pdf/text-tables.f`.
+- `pdf/tree.f` requires `pdf/file.f`, `pdf/filter.f` and `pdf/lexer.f`.
+- `render/png.f` requires `concurrency/guard.f`, `math/crc.f` and `utils/inflate.f`.
+- `render/qoi-encode.f` requires `concurrency/guard.f`, `render/qoi-rows.f` and `render/surface.f`.
+- `render/qoi-rows.f` requires `concurrency/guard.f` and `render/qoi.f`.
+- `tui/rich-terminal/uidl-semantic-documents-doc1.f` requires `tui/semantic-collections.f`.
+- `tui/uidl-picture-snapshot.f` requires `tui/uidl-tui.f` and `utils/memory-span.f`.
+- `tui/widgets/document.f` requires `concurrency/guard.f`, `media/document.f`, `media/picture.f`, `media/source.f`, `text/bidi.f`, `text/text-lines.f`, `tui/draw.f`, `tui/keys.f`, `tui/region.f`, `tui/semantic-collections.f`, `tui/style-palette.f`, `tui/widget.f`, `tui/widgets/picture.f`, `utils/memory-source.f`, `utils/memory-span.f` and `utils/string.f`.
+- `tui/widgets/media.f` requires `concurrency/guard.f`, `markup/markdown.f`, `media/document.f`, `media/kind.f`, `media/source.f`, `media/vfs-source.f`, `tui/draw.f`, `tui/keys.f`, `tui/widget.f`, `tui/widgets/document.f`, `tui/widgets/picture.f`, `tui/widgets/textarea.f`, `tui/widgets/tree.f`, `utils/fs/link-path.f`, `utils/memory-source.f`, `utils/memory-span.f` and `utils/string.f`.
+- `tui/widgets/picture.f` requires `concurrency/guard.f`, `media/picture.f`, `tui/color.f`, `tui/draw.f`, `tui/widget.f`, `utils/memory-source.f` and `utils/string.f`.
+- `utils/fs/link-path.f` requires `concurrency/guard.f` and `utils/string.f`.
+- `utils/inflate.f` requires `concurrency/guard.f`, `math/adler32.f` and `math/crc.f`.
+
+Existing modules gain or lose these edges:
+
+- `net/http-buffered.f` now requires `utils/inflate.f`.
+- `render/qoi.f` no longer requires `render/surface.f`.
+- `tui/applets/fexplorer/fexplorer.f` now requires `pdf/document.f`, `tui/widgets/media.f` and `utils/fs/link-path.f`; no longer requires `tui/widgets/textarea.f`.
+- `tui/applets/pad/pad.f` now requires `utils/fs/link-path.f`.
+- `tui/rich-terminal/hybrid-screen-producer.f` now requires `tui/rich-terminal/uidl-semantic-documents-doc1.f` and `tui/uidl-picture-snapshot.f`.
+- `tui/rich-terminal/uidl-hybrid-adapter.f` now requires `tui/uidl-picture-snapshot.f`.
+- `tui/uidl-tui.f` now requires `tui/widgets/document.f` and `tui/widgets/media.f`.
+- `tui/widgets/list.f` now requires `text/bidi.f`.
+- `tui/widgets/tree.f` now requires `text/bidi.f`.
+
+The graph rises from 656 modules and 2,353 resolved `REQUIRE` occurrences
+and unique edges to 693 and 2,523. That is exactly the two branches' own
+additions to the 635 modules and 2,251 edges they started from: neither
+branch added a module or an edge the other did. The 78 reviewed unresolved
+imports are unchanged, and no cycle, layer violation, placement debt,
+identity or addressability issue appears.
+
+Applet globals fall from 3,577 to 3,574, desk-ecosystem globals rise from
+6,191 to 6,542, and independent globals rise from 10,104 to 10,896. The new
+modules hold nearly all of them, mostly the scratch cells their words use
+inside one call, and their tables, as elsewhere in the tree. The table gives each
+module's count. Among the changes to existing modules:
+
+- `render/qoi.f` becomes a resumable decoder of its own cells, `_QD-*`.
+  The 33 encoder and whole-file decoder cells leave it, and the encoder
+  moves to `qoi-rows.f` and `qoi-encode.f`.
+- File Explorer drops `_FPV-FD` and `_FPV-LEN`, its old preview's file
+  read, and gains `_FEXP-ON-LINK`, the deferred word a followed link
+  takes.
+- Pad drops `_PLS-A` and `_PLS-U`, now `utils/fs/link-path.f`'s.
+- The HTTP resource drops `_HRADM-BODY`.
+- `math/aes.f`'s GCM guard becomes `_aes-guard`, one guard for GCM and
+  CBC.
+- The applet host gains `_AHSV-HOST`, `_AHSV-PAINT` and `_AHSV-WORKED` for
+  its media service pass.
+
+| Module | Class | Added | Removed |
+| --- | --- | ---: | ---: |
+| `markup/html-entities.f` | independent | 8 | 0 |
+| `markup/markdown.f` | independent | 150 | 0 |
+| `math/aes.f` | independent | 1 | 1 |
+| `math/md5.f` | independent | 13 | 0 |
+| `media/document.f` | independent | 36 | 0 |
+| `media/kind.f` | independent | 18 | 0 |
+| `media/picture.f` | independent | 20 | 0 |
+| `net/http-resource.f` | independent | 0 | 1 |
+| `pdf/cmap.f` | independent | 15 | 0 |
+| `pdf/content.f` | independent | 40 | 0 |
+| `pdf/crypt.f` | independent | 27 | 0 |
+| `pdf/document.f` | independent | 35 | 0 |
+| `pdf/file.f` | independent | 60 | 0 |
+| `pdf/filter.f` | independent | 38 | 0 |
+| `pdf/font.f` | independent | 41 | 0 |
+| `pdf/image.f` | independent | 24 | 0 |
+| `pdf/labels.f` | independent | 14 | 0 |
+| `pdf/layout.f` | independent | 68 | 0 |
+| `pdf/lexer.f` | independent | 14 | 0 |
+| `pdf/navigate.f` | independent | 21 | 0 |
+| `pdf/page.f` | independent | 27 | 0 |
+| `pdf/struct.f` | independent | 15 | 0 |
+| `pdf/text-tables.f` | independent | 14 | 0 |
+| `pdf/textstr.f` | independent | 5 | 0 |
+| `pdf/tree.f` | independent | 14 | 0 |
+| `render/png.f` | independent | 20 | 0 |
+| `render/qoi-encode.f` | independent | 5 | 0 |
+| `render/qoi-rows.f` | independent | 21 | 0 |
+| `render/qoi.f` | independent | 13 | 33 |
+| `text/text-row.f` | independent | 1 | 0 |
+| `tui/applet-host/host.f` | desk-ecosystem | 3 | 0 |
+| `tui/applets/fexplorer/fexplorer.f` | applet | 1 | 2 |
+| `tui/applets/pad/pad.f` | applet | 0 | 2 |
+| `tui/rich-terminal/apt1-engine.f` | desk-ecosystem | 44 | 0 |
+| `tui/rich-terminal/engine-apt1.f` | desk-ecosystem | 1 | 0 |
+| `tui/rich-terminal/engine.f` | desk-ecosystem | 4 | 0 |
+| `tui/rich-terminal/hybrid-screen-producer.f` | desk-ecosystem | 40 | 0 |
+| `tui/rich-terminal/residual-glyph-planner.f` | desk-ecosystem | 14 | 0 |
+| `tui/rich-terminal/screen-adapter-apt1.f` | desk-ecosystem | 2 | 0 |
+| `tui/rich-terminal/shell-screen-producer.f` | desk-ecosystem | 2 | 0 |
+| `tui/rich-terminal/uidl-hybrid-adapter.f` | desk-ecosystem | 7 | 0 |
+| `tui/rich-terminal/uidl-semantic-documents-doc1.f` | desk-ecosystem | 25 | 0 |
+| `tui/semantic-collections.f` | desk-ecosystem | 29 | 0 |
+| `tui/uidl-picture-snapshot.f` | desk-ecosystem | 34 | 0 |
+| `tui/uidl-tui.f` | desk-ecosystem | 27 | 0 |
+| `tui/widgets/document.f` | desk-ecosystem | 58 | 0 |
+| `tui/widgets/media.f` | desk-ecosystem | 29 | 0 |
+| `tui/widgets/picture.f` | desk-ecosystem | 28 | 0 |
+| `tui/widgets/tree.f` | desk-ecosystem | 1 | 0 |
+| `utils/fs/link-path.f` | independent | 9 | 0 |
+| `utils/inflate.f` | independent | 40 | 0 |
+
+| Digest | Value |
+| --- | --- |
+| graph | `57bc92bcda6bb80aa8ebef008de6b08883d68b9af517f3844354af2d0956d582` |
+| mutable-state | `79e7877df7cafc7cbb7ff21c00c5cc66a4ef8cc6084a43aa3e11dacdab779205` |
+| placement (unchanged) | `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945` |
+| unresolved-import (unchanged) | `98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb` |
