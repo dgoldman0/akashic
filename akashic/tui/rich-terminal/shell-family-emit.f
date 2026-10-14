@@ -253,6 +253,20 @@ CREATE _RTE-FDE-PTRS 24 ALLOT
     _RTE-FEM-KIND @ RTE-FAMILY-SERIES = IF 0 32 _RTE-FDE-BYTES= EXIT THEN
     0 0 _RTE-CP.ITEMS-A _RTE-FDE-BYTES= ;
 
+\ A glyph family whose runs, references and text are byte for byte the
+\ active family's: each run's record and referenced text are then the
+\ active run's, which is all _RTE-FDE-SAME? compares.
+: _RTE-FDE-GLYPHS-SAME? ( -- flag )
+    _RTE-FEM-KIND @ RTE-FAMILY-GLYPH <> IF 0 EXIT THEN
+    _RTE-FEM-COUNT @ _RTE-FDE-ACOUNT @ <> IF 0 EXIT THEN
+    _RTE-FEM-ITEM @ _RTE-FEM-COUNT @ _RTE-FEM-STRIDE @ *
+    _RTE-FDE-AITEM @ OVER _RTE-FDE-SPAN= 0= IF 0 EXIT THEN
+    _RTE-FEM-REF @ _RTE-FEM-COUNT @ 16 *
+    _RTE-FDE-AREF @ OVER _RTE-FDE-SPAN= 0= IF 0 EXIT THEN
+    _RTE-FEM-ENTRY @ DUP _RTE-FE.BYTES-A @ SWAP _RTE-FE.BYTES-U @
+    _RTE-FDE-AE @ DUP _RTE-FE.BYTES-A @ SWAP _RTE-FE.BYTES-U @
+    _RTE-FDE-SPAN= ;
+
 : _RTE-FDE-FAMILY ( -- status )
     _RTE-FEM-ENTRY @ _RTE-FE.KIND @ DUP _RTE-FEM-KIND !
         RTE-FAMILY-ITEM-SIZE _RTE-FEM-STRIDE !
@@ -270,13 +284,15 @@ CREATE _RTE-FDE-PTRS 24 ALLOT
     _RTE-FEM-COUNT @ _RTE-FDE-ACOUNT @ U< IF RTE-S-INVALID EXIT THEN
     _RTE-FEM-COUNT @ _RTE-FDE-ACOUNT @ <>
     _RTE-FEM-KIND @ RTE-FAMILY-GLYPH <> AND IF RTE-S-INVALID EXIT THEN
+    \ The first glyph run or pane both banks hold is the fence.
+    _RTE-FEM-KIND @ RTE-FAMILY-GLYPH = _RTE-FEM-KIND @ RTE-FAMILY-PANE = OR
+    _RTE-FEM-COUNT @ 0<> AND _RTE-FDE-ACOUNT @ 0<> AND
+    _RTE-FDE-FENCE-E @ 0= AND IF
+        _RTE-FEM-ENTRY @ _RTE-FDE-FENCE-E ! 0 _RTE-FDE-FENCE-I !
+    THEN
+    _RTE-FDE-GLYPHS-SAME? IF RTE-S-OK EXIT THEN
     _RTE-FEM-COUNT @ 0 ?DO
         I _RTE-FDE-ACOUNT @ U< IF
-            _RTE-FEM-KIND @ RTE-FAMILY-GLYPH =
-            _RTE-FEM-KIND @ RTE-FAMILY-PANE = OR
-            _RTE-FDE-FENCE-E @ 0= AND IF
-                _RTE-FEM-ENTRY @ _RTE-FDE-FENCE-E ! I _RTE-FDE-FENCE-I !
-            THEN
             _RTE-FDE-SAME? 0= IF
                 _RTE-FDE-REPLACE DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
                 1 _RTE-FDE-OPS +!
