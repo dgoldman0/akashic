@@ -2,6 +2,7 @@
 
 Status: approved for parts 1 to 4 and 7 on 2026-10-14, and for parts 5 and
 6 later that day. Parts 1 to 5 and 7 are done; each records what it did.
+Part 6 is under way: 6.1 and 6.2 are done.
 
 Earlier work: [PER-KEY-FRAME-REPEATS.md](PER-KEY-FRAME-REPEATS.md)
 (2026-09-28) and part 10 of the [rich experience plan](RICH-EXPERIENCE-PLAN.md)
@@ -33,8 +34,8 @@ change it is:
 - **Repeat:** it removes work that is provably repeated, or whose result is
   never used, and says how that is proved.
 - **Behavior:** it changes what is sent, and says why nothing is lost.
-- **Design:** it changes how the frame is built. It stays exact because the
-  full path is kept and checked against it.
+- **Exact speed-up:** it does the same work in fewer steps. Its tests check
+  that the outputs are byte-identical.
 
 No part skips a check on another module's word or gives up a guarantee.
 
@@ -330,54 +331,90 @@ engine's general storage proof instead cost about 0.8M steps a frame: the
 checks themselves, and other modules' range proofs split around the
 blocks.
 
-## Part 6. Build and compare only what changed — design
+## Part 6. Remove what the call tree shows is still repeated — repeat, exact speed-up
 
-**Today.** On each key:
-- The hybrid producer builds a complete candidate with fresh identities and
-  packs it. The comparison then maps it back to the acknowledged identities.
-- Desk's shell producer builds its own complete batch from that. It maps
-  identities slot by slot, freezes a complete bank, and compares every item
-  with the acknowledged bank to find what to send.
-- Glyph rows already follow the screen's exact row damage. Clean rows are still
-  copied one at a time and renumbered.
+**Today.** After part 5 a burst frame's build costs 16.7M steps. A call tree
+of those frames, with every call chain kept (`MEGAPAD_PROFILE_CHAINS=0
+MEGAPAD_PROFILE_CHAIN_DEPTH=0`), shows where they go:
+- Desk's shell producer: its preflight 2.2M, its freeze 2.0M, its glyph
+  planning 1.3M and its emission 0.5M. Building the batch itself is about
+  0.6M.
+- The hybrid producer's candidate: 3.8M, of which controls 1.1M, glyph runs
+  1.1M and the engine's admission 1.0M.
+- The comparison with the acknowledged frame: 1.5M.
 
-**Change.**
-- The shell derives its DELTA batch from its acknowledged bank. It replaces
-  only the controls the hybrid producer's comparison marked as changed, and the
-  glyph rows in the exact row damage.
-- The shell's DELTA path admits the batch it sends. Today its preflight admits
-  the batch before identities are mapped to the acknowledged ones
-  (`_RSHSP-BUILD-DELTA`), so the admission summary describes another batch and
-  goes unused. The mapped batch cannot simply be admitted instead: its new
-  runs take identities above the frontier, out of the order the admission
-  requires across a START batch. A DELTA needs identity rules of its own.
-- Emission takes its list of changes from those same marks, instead of
-  comparing every item. The freeze still checks the finished bank once.
-- The hybrid producer keeps the acknowledged identities of the rows and
-  controls it reuses, so they need no renumbering and no matching.
+**Change.** Four items, smallest risk first, each measured as it lands:
+1. Check the shell batch's structure once.
+2. Append plain glyph cells without the planner's general path.
+3. Remove what the two admissions still do twice for each item.
+4. Take the shell's emission from the changes it has already marked, and
+   keep the acknowledged identities of the rows and controls the hybrid
+   producer reuses.
 
-**Exactness.** This part changes how the frame is built, so a check keeps it
-exact, not proof alone:
-- The full path stays. A diagnostic mode runs both paths on every frame and
-  requires the same pending banks and the same operations, byte for byte. It
-  is a switch in the producer, not in any applet.
-- Tests over seeded edit streams compare the two paths, as
-  `test_rich_kept_comparison_facts.py` does for the kept facts. The streams
-  cover text, moves, growth, shrinking, new controls and refusals.
-- A shadow run over typing and the canonical journey must record zero
-  differences before the new path is used for real.
-- Any frame the new path cannot handle takes the full path. That includes a
-  START, a refusal, a change of geometry or owner, storage growth, a different
-  family layout, and a change to the shell model.
+### 6.1 Check the shell batch's structure once
 
-**Rule change to approve.** The hybrid producer's rule today is that its
-candidate is byte-identical to a full rebuild before identities are mapped.
-That is why every frame mints fresh identities and maps them back. This part
-would hold the rule at the outputs instead: the pending banks and the
-operations are byte-identical to the full path's.
+**Today.** The shell checked each frame's family batch graph three times:
+the family preflight when it admits the batch, the freeze when it measures
+it, and the frozen bank. The middle check cost about 0.75M steps a frame.
 
-**Effect.** Most of what the earlier parts leave of the build, the freeze and
-the comparison.
+**Proof.** The middle check repeats the first. A START freezes right after
+its preflight. A DELTA's identity mapping writes the batch in between, but
+nothing the graph check reads: it reads identities only as a pane's, which
+stay nonzero, and the new glyph arrays come fresh from the work space, apart
+from every span the batch names. The freeze still checks every span's shape
+and storage, and the frozen bank is still checked in full.
+
+**Done** (Akashic `bf1a0d1a`). The freeze fell from 2.03M to 1.25M steps a
+burst frame, and the frame build from 16.66M to 15.86M.
+
+### 6.2 Append plain glyph cells directly — exact speed-up
+
+**Today.** The residual glyph planner read every cell through its general
+path: load and check the cell, encode it, compare its style, feed the
+grapheme segmenter, append it. That cost about 600 steps a cell, and the two
+producers scan about 1,100 cells a frame on the changed rows.
+
+**Change.** Once the general path has added a printable ASCII cell to an open
+run, each next cell of that kind, in the run's style and at a column where
+no claim begins or ends, is appended directly, up to the run text limit and
+the text room. Any other cell goes through the general path as before.
+`cell.f` gains `CELL-STYLE@`, a cell with its codepoint cleared, so the
+planner compares colours and attributes without knowing the layout.
+
+**Proof.** For such a cell every step of the general path has a known
+result:
+- a zero claim difference changes no count, so the plane read stays;
+- a raw style equal to the run's passes every attribute check and continues
+  the run;
+- the text is the cell's one byte, or a space for an empty cell;
+- the segmenter, given an ordinary character after an ordinary character,
+  breaks and keeps its state, as `GR-BREAK?` documents.
+
+A Python model of the general path, written from the planner's contract,
+is the oracle in the planner's tests. Random rows with menus, claims, clips,
+small run limits and tight text room, holding every kind of cell, give
+exactly its results and runs. Mutating the fast path fails them.
+
+**Done** (Akashic `fd7348f9`). A blank cell costs 90 steps instead of 583.
+Per burst frame the planner fell from 1.55M to 0.97M steps, and the frame
+build from 15.86M to 15.33M. The isolated first character's frame build
+fell from 25.69M to 24.64M.
+
+What the planner has left is mostly per call. The shell calls it once for
+each changed band of each pane the band crosses, ten to fourteen times a
+frame in the typing run, and every call checks every claim and every span:
+0.34M and 0.17M a frame across both producers. One call per region would
+save about 0.25M of that, but both producers would have to take their kept
+rows through the planner, so it is not part of this plan. Copying the
+unchanged rows' runs costs another 0.7M a frame.
+
+### 6.3 What the admissions still do twice
+
+To be designed from the call tree after 6.2.
+
+### 6.4 Emission from marks, and kept identities
+
+To be designed from the call tree after 6.3.
 
 ## Part 7. Reserve glyph slots from what is needed — repeat, device memory
 
@@ -428,8 +465,8 @@ These are recorded here and not fixed, unless a part touches the code:
     unacknowledged batch.
   - After a failed or grown re-freeze, the variable can name a bank that is
     being rewritten.
-  - This is inferred from the code, not run. Part 6 touches this code and would
-    fix it.
+  - This is inferred from the code, not run. No part of this design touches
+    that code.
 - **A possible full START while typing fast.** A newer draw can arrive after a
   sealed DELTA is acknowledged, but before the step observes the ACK. Then
   `_RTHP-DELTA-ACKED-RECAPTURE` (`hybrid-screen-producer.f:13115`) promotes the
@@ -445,7 +482,7 @@ These are recorded here and not fixed, unless a part touches the code:
 | 3 | Part 4 | this review | done |
 | 4 | Part 7 | this review | done |
 | 5 | Part 5 | its own, for the engine copy | done |
-| 6 | Part 6 | its own, for the rule change | in progress |
+| 6 | Part 6 | its own | in progress: 6.1 and 6.2 done |
 
 For each slice:
 - unit and byte-oracle tests;
@@ -476,7 +513,8 @@ next, as the storage its range proofs check shifts with unrelated changes.
 | Part 4 (measured) | 22.7M | 19.9M |
 | Part 7 (measured) | 22.8M | 19.6M |
 | Part 5 (measured) | 19.3M | 16.7M |
-| Part 6 | | about 9M |
+| 6.1 (measured) | 18.7M | 15.9M |
+| 6.2 (measured) | 17.9M | 15.3M |
 
 Part 4 saves nothing in this run, because no run disappears before the typing
 starts. In a session where a menu has closed it saves up to 12% of a key.
