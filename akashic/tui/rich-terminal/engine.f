@@ -3365,8 +3365,7 @@ _RTE-HPV-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-HPV-SUMMARY
 \ item.  Only the boundary writes its copy, and only from items it has just
 \ checked.  The copy lives in a block the engine takes from the memory
 \ source RTE-ADMITTED-MEMORY! gives it; every caller span an admission
-\ reads or writes is proved apart from that block, as from the engine's own
-\ storage.  Without a memory source nothing is kept and every item is
+\ reads or writes is proved apart from that block.  Without a memory source nothing is kept and every item is
 \ checked.
 \
 \ A store: its block and the block's bytes, the bytes its copy uses (zero
@@ -3405,10 +3404,16 @@ CREATE _RTE-HPV-OWNED-END
     DUP _RTE-AM.A @ 0= IF DROP 2DROP -1 EXIT THEN
     DUP _RTE-AM.A @ SWAP _RTE-AM.U @ MSPAN-OVERLAP? 0= ;
 
+\ Only the two admission boundaries read or write the copies, so only
+\ their proofs of a caller span include the copies' blocks.  The general
+\ proof below guards each validator's own scratch, which the copies are
+\ not, so other modules' proofs need not, and do not, name them.
+: _RTE-AM-OUTSIDE?  ( a u -- flag )
+    2DUP _RTE-AM-HYBRID _RTE-AM-APART? 0= IF 2DROP 0 EXIT THEN
+    _RTE-AM-FAMILY _RTE-AM-APART? ;
+
 : _RTE-HPV-OWNED-DISJOINT?  ( a u -- flag )
     2DUP FDC1-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
-    2DUP _RTE-AM-HYBRID _RTE-AM-APART? 0= IF 2DROP 0 EXIT THEN
-    2DUP _RTE-AM-FAMILY _RTE-AM-APART? 0= IF 2DROP 0 EXIT THEN
     2DUP _RTE-HPV-OWNED-START
         _RTE-HPV-OWNED-END _RTE-HPV-OWNED-START -
         MSPAN-OVERLAP? 0= NIP NIP ;
@@ -3444,7 +3449,7 @@ CREATE _RTE-HPV-OWNED-END
     0 OVER _RTE-AM.A ! 0 OVER _RTE-AM.U ! 0 OVER _RTE-AM.USED !
     DUP _RTE-AM.NEED @ DUP 1 RSHIFT + 7 + -8 AND
     DUP _RTE-AM-MEMORY @ MSRC-ALLOC ?DUP 0= IF 2DROP EXIT THEN
-    2DUP SWAP _RTE-HPV-OWNED-DISJOINT? 0= IF
+    2DUP SWAP 2DUP _RTE-HPV-OWNED-DISJOINT? >R _RTE-AM-OUTSIDE? R> AND 0= IF
         SWAP _RTE-AM-MEMORY @ MSRC-FREE DROP EXIT
     THEN
     ROT TUCK _RTE-AM.A ! _RTE-AM.U ! ;
@@ -3553,6 +3558,7 @@ CREATE _RTE-HPV-OWNED-END
     2DUP _RTE-HPV-OWNED-DISJOINT? 0= IF
         2DROP R> DROP 0 EXIT
     THEN
+    2DUP _RTE-AM-OUTSIDE? 0= IF 2DROP R> DROP 0 EXIT THEN
     R> RTE-STORAGE-DISJOINT? ;
 
 : _RTE-HPV-FIXED-BYTE?  ( a u facade -- flag )
@@ -3564,6 +3570,7 @@ CREATE _RTE-HPV-OWNED-END
     2DUP _RTE-HPV-OWNED-DISJOINT? 0= IF
         2DROP R> DROP 0 EXIT
     THEN
+    2DUP _RTE-AM-OUTSIDE? 0= IF 2DROP R> DROP 0 EXIT THEN
     R> RTE-STORAGE-DISJOINT? ;
 
 : _RTE-HPV-FIXED-DISJOINT?  ( a1 u1 a2 u2 -- flag )
@@ -4293,6 +4300,8 @@ CREATE _RTE-HPV-OWNED-END
     THEN
     DUP RTE-HYBRID-ADMISSION-SIZE
         _RTE-HPV-OWNED-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    DUP RTE-HYBRID-ADMISSION-SIZE
+        _RTE-AM-OUTSIDE? 0= IF 2DROP R> DROP 0 EXIT THEN
     DUP RTE-HYBRID-ADMISSION-SIZE R@
         RTE-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
     _RTE-HPV-ADMISSION-GRAPH-DISJOINT?

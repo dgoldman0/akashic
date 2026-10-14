@@ -80,11 +80,20 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     )
     # The engine's only other storage: each admission boundary's copy of
     # what it last admitted, whose block comes from the caller's memory
-    # source and is protected like the engine's own storage.
+    # source. The admission proofs keep every candidate span and admission
+    # record apart from both blocks; the general proof of validator scratch
+    # does not name them.
+    outside = _definition(source, "_RTE-AM-OUTSIDE?")
     for store in ("_RTE-AM-HYBRID", "_RTE-AM-FAMILY"):
         assert f"CREATE {store}-MEM _RTE-AM-SIZE 7 + ALLOT" in code
-        assert f"{store} _RTE-AM-APART? 0= IF 2DROP 0 EXIT THEN" in _definition(
-            source, "_RTE-HPV-OWNED-DISJOINT?")
+        assert store in outside
+        assert store not in _definition(source, "_RTE-HPV-OWNED-DISJOINT?")
+    for proof in ("_RTE-HPV-FIXED-RECORD?", "_RTE-HPV-FIXED-BYTE?",
+                  "_RTE-HPV-ADMISSION-AUTHORITY?"):
+        assert "_RTE-AM-OUTSIDE? 0= IF" in _definition(source, proof)
+    family = (FACADE.parent / "family-batch.f").read_text(encoding="utf-8")
+    for proof in ("_RTE-FA-STORAGE?", "_RTE-FA-AUTHORITY?"):
+        assert "_RTE-AM-OUTSIDE? 0= IF" in _definition(family, proof)
     assert code.index("CREATE _RTE-AM-FAMILY-MEM") < code.index(
         "CREATE _RTE-HPV-OWNED-END")
     assert "_RTE-AM-MEMORY @ MSRC-ALLOC" in _definition(source, "_RTE-AM-READY")
