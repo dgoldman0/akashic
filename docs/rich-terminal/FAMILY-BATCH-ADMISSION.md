@@ -39,6 +39,11 @@ Unreferenced catalog rows are rejected.
 validator writes scratch, all source spans and the output must exclude the
 catalog, engine, parser, family, facade, and concrete-provider storage. Output
 must also be disjoint from every source span. Failures leave output unchanged.
+The module and provider storage queries decide by overlap alone, so they run
+once over the enclosure of the nonempty spans, and per span only when that
+enclosure is refused; the answer is the per-span one either way. The checks
+against the output record and the shell facade, which can lie among the
+spans, run per span.
 
 The optional shell facade is 56 bytes: magic, size, self, base RTE facade,
 scalar preflight callback, PANE DEFINE callback, PANE REPLACE callback.

@@ -836,7 +836,10 @@ BUSY while a capture is open, or UNSUPPORTED when nothing needs to grow. The APT
 `RTAPT`; generic UIDL capture and the hybrid producer do not depend on
 provider opcodes or layouts. Public byte-count words, validators, and
 storage-disjoint queries are the ABI authority. Documentation must not freeze
-private descriptor offsets or copy an obsolete facade size.
+private descriptor offsets or copy an obsolete facade size. A provider's
+storage-disjoint callback decides by overlap alone: when it accepts a range,
+it accepts every part of that range. Family admission and emission rely on
+this to prove a batch's spans with one query over their enclosure.
 
 Pictures cross the facade as one provider job at a time: an upload of an
 immutable resource, as raw RGBA8 pixels or as a file in a format the

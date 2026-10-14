@@ -130,14 +130,35 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
     DUP _RTE-SH.BASE @ RTE-FACADE-SIZE RTE-FAMILY-STORAGE-DISJOINT? 0= IF DROP 0 EXIT THEN
     DUP RTE-SHELL-FACADE-SIZE ROT _RTE-SH.BASE @ RTE-STORAGE-DISJOINT? ;
 
-: _RTE-FA-EXTERNAL? ( a u out shell -- flag )
-    >R >R
-    2DUP RTE-FAMILY-STORAGE-DISJOINT? 0= IF 2DROP R> DROP R> DROP 0 EXIT THEN
-    DUP 0= IF 2DROP R> DROP R> DROP -1 EXIT THEN
-    2DUP R@ RTE-FAMILY-ADMISSION-SIZE MSPAN-OVERLAP? IF 2DROP R> DROP R> DROP 0 EXIT THEN
-    R> DROP
-    2DUP R@ RTE-SHELL-FACADE-SIZE MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+\ The authority pass is stack-only: it writes no scratch before it has proved
+\ every span apart from the storage it protects.  Its storage-disjoint
+\ queries decide by overlap alone, so a range they accept proves every part
+\ of it.  They run once over the enclosure of a batch's nonempty spans, and
+\ per span only when that enclosure is refused, as when protected storage
+\ lies between two spans; either way the answer is the per-span one.  Checks
+\ against storage that can lie among the spans themselves stay per span.
+
+\ The enclosure of a fixed batch's nonempty canonical spans as LOW END, or
+\ -1 0 when it has none.
+: _RTE-FAMILY-ENCLOSURE ( batch -- low end )
+    -1 0 ROT DUP RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+        I OVER RTE-FAMILY-BATCH-SPAN@
+        2DUP _RTE-CONTROL-TEXT-SPAN? OVER 0> AND IF
+            OVER + ROT >R
+            ROT 2DUP U< IF NIP ELSE DROP THEN
+            -ROT 2DUP U> IF NIP ELSE DROP THEN
+            SWAP R>
+        ELSE 2DROP THEN
+    LOOP DROP ;
+\ The storage-disjoint queries for one range of a batch admitted to SHELL.
+: _RTE-FA-STORAGE? ( a u shell -- flag )
+    >R 2DUP RTE-FAMILY-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
     R> _RTE-SH.BASE @ RTE-STORAGE-DISJOINT? ;
+\ The admission record and the shell facade can lie among the spans.
+: _RTE-FA-PLACE? ( a u out shell -- flag )
+    >R >R 2DUP R> RTE-FAMILY-ADMISSION-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN R> RTE-SHELL-FACADE-SIZE MSPAN-OVERLAP? 0= ;
 : _RTE-FA-AUTHORITY? ( batch out shell -- flag )
     DUP RTE-SHELL-VALID? 0= IF DROP 2DROP 0 EXIT THEN
     2 PICK RTE-FAMILY-BATCH-FIXED? 0= IF DROP 2DROP 0 EXIT THEN
@@ -145,11 +166,21 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
     OVER RTE-FAMILY-ADMISSION-SIZE RTE-FAMILY-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
     OVER RTE-FAMILY-ADMISSION-SIZE 2 PICK RTE-SHELL-FACADE-SIZE MSPAN-OVERLAP? IF DROP 2DROP 0 EXIT THEN
     OVER RTE-FAMILY-ADMISSION-SIZE 2 PICK _RTE-SH.BASE @ RTE-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
-    2 PICK RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
-        I 3 PICK RTE-FAMILY-BATCH-SPAN@ 3 PICK 3 PICK _RTE-FA-EXTERNAL? 0= IF
-            DROP 2DROP 0 UNLOOP EXIT
-        THEN
-    LOOP DROP 2DROP -1 ;
+    2 PICK _RTE-FAMILY-ENCLOSURE OVER -1 = IF 2DROP -1 ELSE
+        OVER - 2 PICK _RTE-FA-STORAGE?
+    THEN
+    3 PICK RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+        I 4 PICK RTE-FAMILY-BATCH-SPAN@
+        2DUP _RTE-CONTROL-TEXT-SPAN? 0= IF 2DROP 2DROP 2DROP 0 UNLOOP EXIT THEN
+        DUP IF
+            2DUP 6 PICK 6 PICK _RTE-FA-PLACE? 0= IF
+                2DROP 2DROP 2DROP 0 UNLOOP EXIT
+            THEN
+            2 PICK IF 2DROP ELSE
+                3 PICK _RTE-FA-STORAGE? 0= IF 2DROP 2DROP 0 UNLOOP EXIT THEN
+            THEN
+        ELSE 2DROP THEN
+    LOOP 2DROP 2DROP -1 ;
 
 : _RTE-FA-ADD! ( n address -- flag )
     DUP >R @ SWAP _RTE-UADD? 0= IF DROP R> DROP 0 EXIT THEN R> ! -1 ;
