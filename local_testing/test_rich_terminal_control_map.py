@@ -44,6 +44,10 @@ def _definitions(producer_source: str) -> dict[str, str]:
         "tui/rich-terminal/engine.f",
         "tui/rich-terminal/uidl-control-planner.f",
         "tui/rich-terminal/uidl-instrument-planner.f",
+        # Content headers: normalization keeps an unchanged body's revision.
+        "tui/rich-terminal/uidl-semantic-content-stx1.f",
+        "tui/rich-terminal/uidl-semantic-items-itm1.f",
+        "tui/rich-terminal/uidl-semantic-documents-doc1.f",
         "utils/memory-span.f",
         "utils/memory-source.f",
         "utils/uint-range.f",

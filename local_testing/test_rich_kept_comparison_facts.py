@@ -25,11 +25,11 @@ def _identity(randomizer: random.Random) -> tuple[int, ...]:
 
 
 class FactsHarness(GrowthHarness):
-    def __init__(self, backend, *, producer_source=None):
+    def __init__(self, backend, *, producer_source=None, extra_words=()):
         super().__init__(backend, producer_source=producer_source, extra_words=(
             "_RTHP-D-BUILD-CONTROL-MAP?", "_RTHP-D-TRY-GLYPH-LAYOUT?",
             "_RTHP-D-NORMALIZE", "_RTHP-D-KEEP-FACTS", "_RTHP-FACTS-PUBLISH",
-            "_RTHP-D-KEPT?", "_RTHP-TARGET-ABORT"))
+            "_RTHP-D-KEPT?", "_RTHP-TARGET-ABORT", *extra_words))
         self.item = self.constant("RTE-GLYPH-RUN-PLAN-ITEM-SIZE")
         self.control = self.constant("RTE-CONTROL-SIZE")
         self.correlation = self.constant("RUCP-CORRELATION-SIZE")

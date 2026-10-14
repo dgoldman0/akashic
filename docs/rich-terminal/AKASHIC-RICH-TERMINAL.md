@@ -442,7 +442,9 @@ after the exact complete composite has been physically acknowledged:
   producer's acknowledged target bank records menus, menu items, tabs, and
   visible enabled `TEXT_AREA`/`TEXT_GRID` roots with their kinds, and
   `RTHP-CONTROL-TARGET@` resolves an intent only against a control whose kind
-  accepts it, returning the target's cell and shared content revision.
+  accepts it, returning the target's cell and content revision. A
+  collection's content revision is the aggregate epoch of the frame that last
+  changed its body; an unchanged body keeps its revision and is not resent.
   `ACTIVATE` becomes an ordinary primary press at the target cell, as before.
   `PLACE` and `EXTEND` must name that content revision; they become
   `KEY-MOUSE-TEXT-PLACE`/`KEY-MOUSE-TEXT-EXTEND` at the root's first cell,
