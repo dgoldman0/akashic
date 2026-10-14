@@ -11648,11 +11648,13 @@ VARIABLE _RTHP-D-SCAN-END
 
 \ Text-only updates commonly keep the entire glyph layout.  The active bank's
 \ slots are canonical, by BUILD-SLOT-MAP's audit or by the facts kept from the
-\ comparison that built it, and its IDs were just proved one permutation.
+\ comparison that built it, and its IDs were just proved one permutation:
+\ its visible runs come first and any invisible tombstones form its tail.
 \ Exact equality of every non-ID item byte transfers that layout proof to
-\ the pending bank; its fresh IDs, text references and map entries still need
-\ their own checks.  A miss changes neither bank nor the map, so the general
-\ spatial matcher can run immediately with its original inputs.
+\ the pending bank, tail included; its fresh IDs, text references and map
+\ entries still need their own checks.  A miss changes neither bank nor the
+\ map, so the general spatial matcher can run immediately with its original
+\ inputs.
 VARIABLE _RTHP-D-LAYOUT-A-ITEMS
 VARIABLE _RTHP-D-LAYOUT-P-ITEMS
 VARIABLE _RTHP-D-LAYOUT-A-REFS
@@ -11663,8 +11665,6 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
 
 : _RTHP-D-GLYPH-LAYOUT?  ( -- flag )
     _RTHP-D-ACTIVE-SLOTS @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
-    \ Invisible reserves are rebuilt canonically by the general tail pass.
-    _RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @
         _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
     _RTHP-D-ACTIVE @ _RTHP-TB.ROWS @
@@ -11705,17 +11705,25 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
     LOOP -1 ;
 
 \ A successful proof fixes both packed layouts for this immediate pass.
-\ Every visible anchor keeps its original ordinal, exactly as the general
-\ matcher would assign it.  Populate the same sparse
-\ change markers for ordinary compaction; do not retain this proof at emit.
+\ Every visible anchor keeps its original ordinal, and every tombstone of
+\ the tail its acknowledged ID in order, exactly as the general matcher
+\ would assign them.  A tail reference takes the canonical form the general
+\ tail pass writes.  Populate the same sparse change markers for ordinary
+\ compaction; do not retain this proof at emit.
 : _RTHP-D-TRY-GLYPH-LAYOUT?  ( -- flag )
     _RTHP-D-GLYPH-LAYOUT? 0= IF 0 EXIT THEN
-    \ The unchanged-frame revision fence also needs this draw's visible count.
-    _RTHP-D-SLOTS @ _RTHP-D-PENDING-VISIBLE !
+    \ The unchanged-frame revision fence also needs this draw's visible count,
+    \ which equal item bytes make the acknowledged one.
+    _RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-PENDING-VISIBLE !
     _RTHP-D-SLOTS @ 0 ?DO
         _RTHP-D-LAYOUT-A-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + @
         DUP _RTHP-D-LAYOUT-P-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + !
         _RTHP-D-GLYPH-BASE @ - _RTHP-D-MAP-AT _RTHP-D-MAP-ENTRY !
+        I _RTHP-D-ACTIVE-VISIBLE @ U< 0= IF
+            _RTHP-D-LAYOUT-P-REFS @ I RGRP-TEXT-REF-SIZE * +
+                DUP RGRP-TEXT-REF-SIZE 0 FILL
+            _RTHP-D-PENDING @ _RTHP-TB.GLYPH-TEXT-USED @ SWAP _RGRP-T.OFFSET !
+        THEN
         _RTHP-D-LAYOUT-A-REFS @ I RGRP-TEXT-REF-SIZE * +
             DUP RGRP-TEXT-REF-OFFSET@ _RTHP-D-LAYOUT-A-TEXT @ +
             SWAP RGRP-TEXT-REF-LENGTH@
