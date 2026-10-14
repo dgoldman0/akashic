@@ -1,7 +1,7 @@
 # A typed character's frame work — design, 2026-10-14
 
-Status: proposed for review. Nothing here is built yet, apart from the
-measurements and the leaner range words (Akashic `f0645eea`).
+Status: approved for parts 1 to 4 and 7 on 2026-10-14; parts 5 and 6 need
+their own approval. Part 1 is done (Akashic `dc8b20fa`, see part 1).
 
 Earlier work: [PER-KEY-FRAME-REPEATS.md](PER-KEY-FRAME-REPEATS.md)
 (2026-09-28) and part 10 of the [rich experience plan](RICH-EXPERIENCE-PLAN.md)
@@ -71,6 +71,14 @@ calls another.
 At a quarter of the area (140 × 42), a key still costs 20.3M steps. So most
 of the cost follows the number of items on screen, not the number of cells.
 Before `f0645eea`, a key cost 29.3M steps.
+
+Each slice is measured with the project's typing tool,
+`local_testing/physical_typing_cadence.py --screen-profile`, read by
+`local_testing/screen_change_profile.py`. It charges every guest step to the
+words it ran under, exactly, at each host boundary. Its baseline, on this
+design's commit (Akashic `28d118d2`): the isolated first character costs
+34.9M guest steps; the burst of 18 characters makes 10 frames of 25.0M steps
+each, and each frame sends 9 retained operations, 17.6 KB.
 
 ## What a keystroke changes
 
@@ -147,6 +155,13 @@ acknowledged bank, byte for byte. Both are its own data.
   is part of today's 4.8% for emission.
 - The host terminal no longer decodes and validates six controls a key.
 
+**Done** (Akashic `dc8b20fa`). In the typing run, a burst frame now sends 2
+retained operations and 736 bytes instead of 9 and 17.6 KB, and the isolated
+character 4 and 1.1 KB instead of 11 and 18.0 KB. Guest steps per frame did not
+change measurably (25.0M and 24.8M): emission fell by 0.3M, and RUHA's storage
+proofs rose by about 0.5M because the new words moved storage, which changes
+where its enclosures split. Desk with Pad and the full Desktop journey pass.
+
 ## Part 2. Prove storage once per enclosure — repeat
 
 **Today.** Each boundary proves that the spans it handles do not overlap any
@@ -162,7 +177,9 @@ module's private storage, the provider's storage or the live screen.
   header check twice and three spans four times, with nothing written in
   between (`_RSHSP-AUTHORITY?`, `shell-screen-producer.f:918`).
 
-Altogether, storage checks take 14.7% of a key.
+Altogether, storage checks take 14.7% of a key. In the typing run, per
+frame: the family preflight's per-span checks take 0.35M steps, emission's two
+passes 0.76M, and the shell's own checks 1.91M.
 
 **Change.**
 - A boundary module groups the spans it checks into enclosures that it
@@ -189,7 +206,10 @@ Altogether, storage checks take 14.7% of a key.
   must decide by intersection alone, so that a disjoint enclosure implies
   disjoint parts.
 
-**Effect.** Most of the 14.7%.
+**Effect.** About 1.5M to 2M steps a frame. An enclosure that spans a gap
+between two storage blocks is refused and split, so its cost depends on where
+storage lies; RUHA's existing proofs moved by 0.5M steps a frame when Part 1's
+words shifted storage.
 
 ## Part 3. Check once what was just checked — repeat
 
@@ -220,7 +240,9 @@ or into an acknowledged bank between its check and its last use. First verify
 that the hybrid producer's banks are its own storage. Any check of
 caller-provided memory that is re-validated on purpose stays.
 
-**Effect.** About 1M steps from the model passes, plus smaller repeats.
+**Effect.** About 0.3M steps a frame: the planner's and the membership
+builder's model checks take 0.26M, and the hybrid producer's repeats less than
+0.1M.
 
 ## Part 4. Keep the comparison's fast path when the slot tail is invisible — repeat
 
@@ -384,7 +406,6 @@ These are recorded here and not fixed, unless a part touches the code:
 
 | Slice | Content | Approval |
 | --- | --- | --- |
-| 0 | Commit the guest call-chain sampler and the wire-operation counter as host-side tools | — |
 | 1 | Part 1 | this review |
 | 2 | Parts 2 and 3 | this review |
 | 3 | Part 4 | this review |
@@ -402,18 +423,23 @@ For each slice:
 
 ## Expected effect
 
-These are estimates from the shares above. Each slice is measured as it lands.
+Guest steps per burst frame in the typing run. These are estimates from the
+measured cost of each stage; each slice is measured as it lands.
 
-| After | Guest steps per key |
+| After | Guest steps per frame |
 | --- | ---: |
-| Today (measured) | 27.5M |
-| Parts 1 to 4 | about 19M |
-| Part 5 | about 14M |
-| Part 6 | about 8 to 10M |
+| Before part 1 (measured) | 25.0M |
+| Part 1 (measured) | 24.8M |
+| Parts 2 to 4 | about 22.5M |
+| Part 5 | about 17.5M |
+| Part 6 | about 11M |
+
+Part 4 saves nothing in this run, because no run disappears before the typing
+starts. In a session where a menu has closed it saves up to 12% of a key.
 
 What would remain:
-- the documents' snapshot, 2.9M;
-- Desk's painting and the terminal service, 2M;
+- the documents' snapshot, 3.4M;
+- Desk's painting and the terminal service, about 2.5M;
 - the work on the changed items themselves.
 
 Going further needs the snapshot itself to follow change.
