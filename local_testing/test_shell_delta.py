@@ -180,3 +180,45 @@ _RSHSP-DELTA-PREPARE _SS-OK
 _SD-EMIT _SS-OK _SD-GREPLACE @ 0= _SS-A _SD-PREPLACE @ 1 = _SS-A
 _SS-DONE
 ''', minimum=13)
+
+
+def test_a_reused_region_reserves_slots_for_its_rows_not_its_cells():
+    """A DELTA reserves glyph slots for the acknowledged runs it copies and
+    one per cell of each changed row, not one per cell of the region. The
+    pane is the last glyph region built, so its figures are the ones left in
+    the producer's variables."""
+    staged_run(DELTA + r'''
+CREATE _SD-ROWS 64 ALLOT CREATE _SD-SAVE 131072 ALLOT VARIABLE _SD-USED
+VARIABLE _SD-START-WORK VARIABLE _SD-ROW-WORK
+: _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
+\ Every cell of row 5 differs in style from its neighbours: one run a cell,
+\ the most a changed row can take.
+: _SD-STRIPES _SD-HELLO DRW-STYLE-SAVE
+    32 0 DO I 1 AND 1+ 0 0 DRW-STYLE! 65 I + 5 I DRW-CHAR LOOP
+    DRW-STYLE-RESTORE ;
+_SX-SETUP _SD-HOOKS
+_SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+_SX-S RSHSP-WORK-USED@ _SD-START-WORK !
+' _SD-STRIPES _SD-DRAW _SD-TA _SD-PENDING
+0 _SD-MAP -1 _SD-ROWS 5 + C!
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A
+\ The pane's 9 x 19 cells: its acknowledged runs and the changed row's 19
+\ cells, every slot used but the one of row 5's acknowledged run.
+_RSHSP-GCELLS @ 171 = _SS-A
+_RSHSP-GSLOTS @ _RSHSP-GA-N @ 19 + = _SS-A
+_RSHSP-GCOUNT @ 1+ _RSHSP-GSLOTS @ = _SS-A
+_SX-S RSHSP-WORK-USED@ DUP _SD-ROW-WORK ! _SD-START-WORK @ U< _SS-A
+_SX-KB RSHSP-BANK.USED @ DUP _SD-USED ! _SX-KB _SD-SAVE ROT MOVE
+\ With every row changed the reservation is a START's, one slot a cell,
+\ and the bank is the same.
+_SX-S _RSHSP-ABORT -1 _SD-MAP
+_RSHSP-DELTA-PREPARE _SS-OK
+_RSHSP-GSLOTS @ 171 = _SS-A
+_SX-S RSHSP-WORK-USED@ _SD-START-WORK @ = _SS-A
+_SX-KB RSHSP-BANK.USED @ _SD-USED @ = _SS-A
+_SX-KB _SD-USED @ _SD-SAVE _SD-USED @ COMPARE 0= _SS-A
+." SHELL GLYPH WORK " _SD-START-WORK @ . _SD-ROW-WORK @ . CR
+_SS-DONE
+''', minimum=11)
