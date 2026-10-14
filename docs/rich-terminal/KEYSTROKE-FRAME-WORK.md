@@ -1,7 +1,7 @@
 # A typed character's frame work — design, 2026-10-14
 
 Status: approved for parts 1 to 4 and 7 on 2026-10-14; parts 5 and 6 need
-their own approval. Part 1 is done (Akashic `dc8b20fa`, see part 1).
+their own approval. Parts 1 to 4 and 7 are done; each records what it did.
 
 Earlier work: [PER-KEY-FRAME-REPEATS.md](PER-KEY-FRAME-REPEATS.md)
 (2026-09-28) and part 10 of the [rich experience plan](RICH-EXPERIENCE-PLAN.md)
@@ -182,34 +182,36 @@ frame: the family preflight's per-span checks take 0.35M steps, emission's two
 passes 0.76M, and the shell's own checks 1.91M.
 
 **Change.**
-- A boundary module groups the spans it checks into enclosures that it
-  computes itself.
-- It checks that each span lies inside its enclosure, which takes two
-  comparisons. Then it proves each enclosure once with
-  `MSPAN-SET-PROVE-DISJOINT?` (`utils/memory-span.f:207`). That word splits an
-  enclosure only when the enclosure is refused. RUHA already proves storage
-  this way.
-- The per-span shape checks stay: alignment, no wrapping, not empty.
-- The shell checks each span once per call. When its work space grows during
-  a call, it proves the new block before use, as today's per-span checks do.
+- Family admission and family emission compute the enclosure of a batch's
+  nonempty spans themselves, on the stack, and ask the module checks and the
+  provider about it once. Only when the enclosure is refused do they ask about
+  each span, exactly as before.
+- The checks against the admission record and the shell facade, which can lie
+  among the spans, stay per span. So do the shape checks: alignment, no
+  wrapping, not empty.
+- The pass stays stack-only: nothing is written before every span is proved
+  apart from the module's own storage.
+- The shell checks its header once per call. It proves RUHA's storage apart
+  from its four spans in one proof instead of four.
 
 **Proof.**
 - If a span lies inside an enclosure, and the enclosure is disjoint from a
   region, the span is disjoint from it too.
-- A refused enclosure is split down to single spans. So the result is exactly
-  what the per-span checks would give.
-- The module derives the enclosures from the spans it is checking, so it
-  relies on no other module.
-- Every proof is still made during the call, so live storage that has moved
-  is still caught.
-- One condition must be verified for each provider. Its disjointness callback
-  must decide by intersection alone, so that a disjoint enclosure implies
-  disjoint parts.
+- A refused enclosure falls back to the per-span checks. So the result is
+  exactly what the per-span checks give.
+- The module derives the enclosure from the spans it is checking, so it relies
+  on no other module.
+- Every proof is still made during the call, so live storage that has moved is
+  still caught.
+- A provider's storage-disjoint callback must decide by overlap alone, so that
+  a disjoint enclosure implies disjoint parts. The provider contract now says
+  so, and the APT-1 provider's chain was read for it.
 
-**Effect.** About 1.5M to 2M steps a frame. An enclosure that spans a gap
-between two storage blocks is refused and split, so its cost depends on where
-storage lies; RUHA's existing proofs moved by 0.5M steps a frame when Part 1's
-words shifted storage.
+**Done** (Akashic `50a179db` and `ff30db0b`). Measured together with part 3:
+a burst frame went from 24.8M to 23.0M steps. Emission fell from 1.03M to
+0.52M, the shell's own checks from 1.91M to 1.14M, and the family preflight
+from 3.59M to 3.34M. An enclosure that spans protected storage is refused and
+falls back, so the saving depends on where storage lies.
 
 ## Part 3. Check once what was just checked — repeat
 
@@ -221,28 +223,19 @@ words shifted storage.
   - in the frozen bank (`shell-screen-producer.f:759`).
 
   Each pass cost about 0.3M steps in October.
-- The hybrid producer checks its own copy of each document three more times
-  (`_RTHP-W-COPIED-DOCUMENT?`). It also checks the acknowledged bank's header
-  and menu directory about four times a key.
 
-**Change.**
-- Use the `-PROVED` pattern the code already has. The planner's band words
-  skip the model check for a caller that has just made it
-  (`shell-planner.f:226`); give `RSHPL-BUILD` and `RSHMM-BUILD` the same
-  peers.
-- Check each copied document once.
-- Check the acknowledged bank's header once, when it is published. The shell
-  already does this: each of its banks is "checked once when frozen".
+**Change.** Use the `-PROVED` pattern the code already has. The planner's band
+words skip the model check for a caller that has just made it
+(`shell-planner.f:226`); `RSHPL-BUILD` and `RSHMM-BUILD` get the same peers.
+The public builders still check, and the frozen bank's check stays, since it
+covers the copy in the bank.
 
-**Proof.** No word writes the checked bytes between the checks. Tests pin this,
-as they do for the kept comparison facts: nothing may store into the model copy
-or into an acknowledged bank between its check and its last use. First verify
-that the hybrid producer's banks are its own storage. Any check of
-caller-provided memory that is re-validated on purpose stays.
+**Proof.** The shell checks its copy right after copying it, and only reads it
+afterwards. Tests pin this: the copy is checked before the only calls to the
+proved builders, and nothing stores into it.
 
-**Effect.** About 0.3M steps a frame: the planner's and the membership
-builder's model checks take 0.26M, and the hybrid producer's repeats less than
-0.1M.
+**Done** (Akashic `50a179db`), measured with part 2. The planner's and the
+membership builder's model checks took 0.26M steps a frame.
 
 ## Part 4. Keep the comparison's fast path when the slot tail is invisible — repeat
 
@@ -255,8 +248,9 @@ builder's model checks take 0.26M, and the hybrid producer's repeats less than
   (`_RTHP-RESERVE-GLYPHS?`, 7442). The tail stays until the next full
   replacement.
 - From then on, every frame takes the general matcher: identity
-  normalization, then a compare of every slot. In the typing run the fast path
-  never ran, and the general matcher took 12.1% of each key.
+  normalization, then a compare of every slot. In the sampled run, typed after
+  the Desktop keyboard journey had opened and closed menus, the fast path never
+  ran, and the general matcher took 12.1% of each key.
 
 **Change.** Also take the fast path when both banks have the same slot count,
 the same visible prefix, and canonical tombstone tails.
@@ -265,13 +259,18 @@ the same visible prefix, and canonical tombstone tails.
 - The acknowledged bank's tail is canonical. Either the audit or the kept facts
   prove it (`_RTHP-D-CANONICAL-SLOT?`).
 - On a byte-equal visible prefix, the general matcher gives equal anchors the
-  same IDs and rebuilds the tail canonically (11495). That is exactly what the
-  fast path produces.
-- Extend the comparison's tests over seeded edit streams with tombstone tails.
-  They must give exactly the general matcher's result.
+  same IDs and rebuilds the tail canonically (11495). The fast path keeps each
+  tombstone's ID and writes the same canonical text reference.
+- The tests run both paths on the same banks with a tombstone tail: unchanged
+  text, a changed run, and a tail reference that arrived non-canonical. The
+  results are byte-identical, change markers and compaction plan included.
 
 **Effect.** Up to 12.1% of a key, less the fast path's own pass, which is one
 compare per slot.
+
+**Done** (Akashic `46754721`). The typing tool's run never leaves a tombstone
+tail, so its frames did not change: 23.0M and 22.7M steps a burst frame, within
+run-to-run noise.
 
 ## Part 5. Admission keeps what it admitted — repeat, with memory
 
@@ -367,20 +366,38 @@ the comparison.
 
 **Today.** For each glyph region, the shell reserves a slot for every cell
 before planning (`shell-screen-producer.f:610-617`). At 280 × 84 that is about
-3.3 MB, zero-filled on every key and then compacted. The simulator counts a
-`FILL` as one step, so none of this appears in the tables above. On the device
-it is real memory traffic: `BFILL` takes N + 2 cycles, so about 3.3 million
+3.3 MB for the base region alone, zero-filled on every key and then compacted,
+and each pane's content region adds its own area. The simulator counts a `FILL`
+as one step, so none of this appears in the tables above. On the device it is
+real memory traffic: `BFILL` takes N + 2 cycles, so at least 3.3 million
 cycles a key.
 
-**Change.** Reserve from the planned run count. Reused rows take the
-acknowledged count, and damaged rows take the planner's measure. The
-reservation grows on demand, like the rest of the work space.
+**Change.** A DELTA region that reuses the acknowledged rows reserves one slot
+for each acknowledged visible run, and for each changed row one slot per
+scanned cell, the most the planner makes in a row. It never reserves more than
+one slot a cell, the old reservation. A region planned whole, as in a START,
+keeps one slot a cell. The text keeps its limit of four bytes a cell: a
+character of several scalars can take more, so a changed row's text has no
+smaller bound. The reservation grows on demand, like the rest of the work
+space.
 
-**Proof.** The reserved bytes are zeroed, then overwritten or compacted away.
-The batch's content does not depend on the size of the reservation. The shell's
-DELTA tests check that the batch is unchanged.
+**Proof.**
+- Copied runs come from the acknowledged visible runs, and every run the
+  planner makes holds at least one cell of its own. So below the cap no copy or
+  planner call runs out of room, and at the cap the build fails exactly where
+  it did.
+- The reserved bytes are zeroed, then overwritten or compacted away, so the
+  batch does not depend on the size of the reservation. In the shell's test,
+  planning one row and planning every row give byte-identical banks.
 
-**Effect.** About 3.3 million device cycles a key; no simulator steps.
+**Done** (Akashic `230d83b3`). In the shell's test, one changed row of a 9 × 19
+pane, with every cell its own run, reserves 28 slots instead of 171 and uses
+27. The build's work-space high-water falls from 66,392 to 27,000 bytes, and
+with every row changed it is exactly a START's. On the 280 × 84 Desktop a key
+changes one or two rows, so the base region's slots fall from 23,520 (3.2 MB)
+to its acknowledged runs plus 280 a changed row; the text's 94 KB stays. That
+is an estimate from the formula: the typing tool counts steps, not memory
+traffic. Guest steps did not change measurably.
 
 ## Defects found on the way
 
@@ -404,14 +421,14 @@ These are recorded here and not fixed, unless a part touches the code:
 
 ## Order and checks
 
-| Slice | Content | Approval |
-| --- | --- | --- |
-| 1 | Part 1 | this review |
-| 2 | Parts 2 and 3 | this review |
-| 3 | Part 4 | this review |
-| 4 | Part 7 | this review |
-| 5 | Part 5 | its own, for the engine copy |
-| 6 | Part 6 | its own, for the rule change |
+| Slice | Content | Approval | State |
+| --- | --- | --- | --- |
+| 1 | Part 1 | this review | done |
+| 2 | Parts 2 and 3 | this review | done |
+| 3 | Part 4 | this review | done |
+| 4 | Part 7 | this review | done |
+| 5 | Part 5 | its own, for the engine copy | not started |
+| 6 | Part 6 | its own, for the rule change | not started |
 
 For each slice:
 - unit and byte-oracle tests;
@@ -423,19 +440,24 @@ For each slice:
 
 ## Expected effect
 
-Guest steps per burst frame in the typing run. These are estimates from the
-measured cost of each stage; each slice is measured as it lands.
+Guest steps per burst frame in the typing run. Rows marked measured come from
+the typing tool; the others are estimates from the measured cost of each
+stage. Frames vary by about 0.3M from run to run, mostly in Desk's painting
+and in where storage lies.
 
 | After | Guest steps per frame |
 | --- | ---: |
 | Before part 1 (measured) | 25.0M |
 | Part 1 (measured) | 24.8M |
-| Parts 2 to 4 | about 22.5M |
+| Parts 2 and 3 (measured) | 23.0M |
+| Part 4 (measured) | 22.7M |
+| Part 7 (measured) | 22.8M |
 | Part 5 | about 17.5M |
 | Part 6 | about 11M |
 
 Part 4 saves nothing in this run, because no run disappears before the typing
 starts. In a session where a menu has closed it saves up to 12% of a key.
+Part 7 saves device memory traffic, not steps.
 
 What would remain:
 - the documents' snapshot, 3.4M;
