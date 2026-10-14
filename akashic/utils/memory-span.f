@@ -14,8 +14,10 @@ REQUIRE uint-range.f
 : MSPAN-NONWRAPPING?  ( address length -- flag )
     URANGE-VALID? ;
 
+\ URANGE-OVERLAP? reports malformed geometry as false false, so its
+\ overlap flag alone is already this word's false-for-invalid answer.
 : MSPAN-OVERLAP?  ( a1 u1 a2 u2 -- flag )
-    URANGE-OVERLAP? 0= IF DROP 0 EXIT THEN ;
+    URANGE-OVERLAP? DROP ;
 
 \ =====================================================================
 \  Caller-owned bounded span sets
