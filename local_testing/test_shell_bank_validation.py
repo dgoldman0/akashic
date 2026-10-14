@@ -148,6 +148,10 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
     assert spans.count("_RUHA-SAFE-PROVE?") == 1 and "['] _RSHSP-APART?" in spans
     assert "_RSHSP-SPAN?" not in spans
     assert "_RUHA-SAFE-PROVE?" not in word("_RSHSP-EXTERNAL?")
+    # The live predicate already makes the source's checks of the live
+    # owners; the shell asks nothing private of the source.
+    external = word("_RSHSP-EXTERNAL?")
+    assert "SHSN-LIVE-STORAGE-DISJOINT?" in external and "_SHSN-" not in external
     authority = word("_RSHSP-AUTHORITY?")
     # Only the producer's arena, which the header does not cover, is checked.
     assert "_RSHSP-HEADER?" not in authority

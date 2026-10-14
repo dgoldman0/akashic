@@ -639,12 +639,17 @@ VARIABLE _SHSN-D-S VARIABLE _SHSN-D-I VARIABLE _SHSN-D-P
 \ A/B capacities, including the currently inactive bank. No live root or
 \ child pointer needs to escape to perform this proof.
 VARIABLE _SHSN-SD-S
-: SHSN-SOURCE-STORAGE-DISJOINT? ( a u source -- flag )
-    2 PICK 2 PICK SHSN-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
-    DUP SHSN-VALID? 0= IF DROP 2DROP 0 EXIT THEN _SHSN-SD-S !
+\ The span lies apart from SOURCE's descriptor and both full banks.  For a
+\ span SHSN-STORAGE-DISJOINT? and a source SHSN-VALID? have just accepted.
+: _SHSN-SOURCE-APART? ( a u source -- flag )
+    _SHSN-SD-S !
     2DUP _SHSN-SD-S @ SHSN-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP _SHSN-SD-S @ _SHSN.A @ _SHSN-SD-S @ _SHSN.A-U @ MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     _SHSN-SD-S @ _SHSN.B @ _SHSN-SD-S @ _SHSN.B-U @ MSPAN-OVERLAP? 0= ;
+: SHSN-SOURCE-STORAGE-DISJOINT? ( a u source -- flag )
+    2 PICK 2 PICK SHSN-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
+    DUP SHSN-VALID? 0= IF DROP 2DROP 0 EXIT THEN
+    _SHSN-SOURCE-APART? ;
 
 \ Final-writer fallback is deliberately separate from model validation:
 \ toast/cursor/modal foreground may cover a truthful ordinary shell slot.
@@ -704,6 +709,9 @@ VARIABLE _SHSN-LD-R
         _SHSN-LD-R @ RGN-SIZE _SHSN-LD-DISJOINT? 0= IF 0 EXIT THEN
         _SHSN-LD-R @ _RGN-O-PARENT + @ _SHSN-LD-R !
     REPEAT -1 ;
+\ The live owners of the current draw.  Each check _SHSN-I-AUTHORITY? makes
+\ of them is made here as strictly or more, so a span the live predicate
+\ accepts passes it too.
 : _SHSN-LD-CURRENT? ( -- flag )
     _SCR-CUR @ IF
         _SHSN-LD-A @ _SHSN-LD-U @ SCR-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
@@ -714,8 +722,9 @@ VARIABLE _SHSN-LD-R
     _ASHELL-INST @ ?DUP IF _SHSN-LD-INSTANCE? 0= IF 0 EXIT THEN THEN
     _ASHELL-DESC @ _SHSN-LD-APP? 0= IF 0 EXIT THEN
     ASHELL-REGION _SHSN-LD-REGION? ;
+\ SHSN-LIVE-STORAGE-DISJOINT? has just accepted the span and the source.
 : _SHSN-LD-BODY? ( -- flag )
-    _SHSN-LD-A @ _SHSN-LD-U @ _SHSN-LD-S @ SHSN-SOURCE-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _SHSN-LD-A @ _SHSN-LD-U @ _SHSN-LD-S @ _SHSN-SOURCE-APART? 0= IF 0 EXIT THEN
     _SHSN-LD-CURRENT? 0= IF 0 EXIT THEN
     _SHSN-LD-S @ _SHSN.HOST @ DUP 0= IF DROP -1 EXIT THEN _SHSN-LD-H !
     \ Public source metadata cannot invent a different live pointer graph.

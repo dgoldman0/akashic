@@ -212,6 +212,14 @@ _ST-CHILD @ COMP-INST 1- + 1 _ST-LIVE? 0= _SS-A
 _ST-CHILD @ CINST.STATE @ 63 + 1 _ST-LIVE? 0= _SS-A
 _ST-RGN @ RGN-SIZE 1- + 1 _ST-LIVE? 0= _SS-A
 _ST-SCREEN @ _SCR-O-BACK + @ 8 _ST-LIVE? 0= _SS-A
+\ Each live owner the source's install-time check refuses a span for, the
+\ live predicate refuses it for too, so a publisher needs no second check.
+: _ST-COVERS ( a u -- ) 2DUP _SHSN-I-AUTHORITY? 0= _SS-A _ST-LIVE? 0= _SS-A ;
+_ST-SCREEN @ _SCR-O-BACK + @ 8 _ST-COVERS
+_ST-I @ COMP-INST 1- + 1 _ST-COVERS
+_ST-D COMP-DESC 1- + 1 _ST-COVERS
+_ST-STATE @ 63 + 1 _ST-COVERS
+_SS-O 4096 _SHSN-I-AUTHORITY? _SS-A
 \ Additional child descriptors, region parents, saved UCTX and UIDL spans.
 CREATE _ST-APP APP-DESC ALLOT VARIABLE _ST-PARENT VARIABLE _ST-CONTEXT VARIABLE _ST-UIDL
 _ST-APP APP-DESC-INIT _ST-D _ST-APP APP.COMP-DESC !
