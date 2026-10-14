@@ -1,7 +1,7 @@
 # A typed character's frame work — design, 2026-10-14
 
-Status: approved for parts 1 to 4 and 7 on 2026-10-14; parts 5 and 6 need
-their own approval. Parts 1 to 4 and 7 are done; each records what it did.
+Status: approved for parts 1 to 4 and 7 on 2026-10-14, and for parts 5 and
+6 later that day. Parts 1 to 5 and 7 are done; each records what it did.
 
 Earlier work: [PER-KEY-FRAME-REPEATS.md](PER-KEY-FRAME-REPEATS.md)
 (2026-09-28) and part 10 of the [rich experience plan](RICH-EXPERIENCE-PLAN.md)
@@ -285,39 +285,50 @@ In September, skipping checks of unchanged items on the producer's word was
 rejected, because that would weaken the boundary. The exact way was left open:
 a copy owned by the admitting module.
 
-The shell's DELTA path has a further problem. Its preflight admits the batch
-before the identities are mapped to the acknowledged ones (`_RSHSP-BUILD-DELTA`,
-1319). So the batch it admits is not the one that is frozen and sent, and its
-admission summary goes unused. Changed items are checked again, one operation
-at a time, when they are sent (`engine.f:4628-4651`).
-
 **Change.**
-- Each admitting module keeps its own copy of the items it last admitted. With
-  them it keeps the context they were checked against: limits, catalog
-  geometry and owner.
-- It compares each new item with its copy (`COMPARE`, a block compare on the
-  device). It fully checks only items that differ, or every item when the
-  context differs.
-- Admission still records its totals per frame. It keeps each item's share of
-  them and adds them up.
-- Checks across items stay whole-frame: span overlap, identity order and region
-  membership.
-- The copy is sized from the admitted frame and grows on demand. A typing
-  frame at 280 × 84 is about 700 glyph runs and 150 controls, so the copy is
-  on the order of 200 KB per boundary. September's 14 MB figure was sized for
-  a 400 × 200 maximum.
-- The shell's DELTA path admits the batch it actually sends: identities are
-  mapped first, then the batch is admitted.
+- Each admission boundary keeps its own copy of the glyph plans and control
+  plans it last admitted, with the plan header each was checked against
+  (owner, generation, surface and region geometry). Fields are not kept: a
+  field's content check also places its label.
+- An item equal to its copy, against an equal header, skips the checks that
+  read only what was compared:
+  - a glyph run, in every byte but its identity, text included: its fields,
+    geometry and ranges, and the UTF-8 decode of its text;
+  - a control, in every byte but its identity, its parent and its span
+    addresses, with or without a parent as its copy, and with the same
+    label, shortcut and content bytes: its fields and kind, its content's
+    shape, and its label text.
+- Every item still gets the checks that read anything else: its identity and
+  order, its text reference or its spans' shape and place, and, for a control,
+  its correlation and graph. Totals are added up item by item as before.
+- Glyph runs are matched in row-major order, so a changed row shifts nothing
+  after it; controls are matched by position. A match never decides
+  validity: only the byte comparison does.
+- The copy is the engine's own. Its block comes from a memory source the
+  caller attaches (`RTE-ADMITTED-MEMORY!`); it is grown, to what the last
+  admission needed and half again, before the next admission's first proof,
+  and written only after the provider accepted the batch. Without a memory
+  source nothing is kept.
+- The admission proofs keep every candidate span and admission record apart
+  from the blocks. The engine's general storage proof, which guards each
+  validator's own scratch and which many modules reach, does not name them.
 
 **Proof.** Only the admitting module writes the copy, from items it has just
-checked in full. An item equal to its copy in every byte, against the same
-context, passes the same item checks.
+checked in full against the same header. An item equal to its copy in every
+byte its skipped checks read passes them again; the copy cannot be the
+candidate, because the candidate's spans are proved apart from it.
 
 **Effect.** Most of the 23.1% the two admissions take today, chiefly their
 per-item checks, such as the UTF-8 decode of every glyph run's text.
 
-**Needs approval.** This adds memory to the neutral engine contract, and
-September said that needs its own approval.
+**Done** (Akashic `ced4b866`, `a330639c`, `f1656a90`). Per burst frame, the
+engine's admission fell from 2.34M to 1.01M steps and the shell's preflight
+from 3.34M to 2.15M; the frame build fell from 19.56M to 16.66M. In unit
+tests, sixty unchanged runs cost 45.0K steps instead of 118.7K, and ten
+unchanged controls 34.2K instead of 54.7K. Putting the blocks into the
+engine's general storage proof instead cost about 0.8M steps a frame: the
+checks themselves, and other modules' range proofs split around the
+blocks.
 
 ## Part 6. Build and compare only what changed — design
 
@@ -334,6 +345,12 @@ September said that needs its own approval.
 - The shell derives its DELTA batch from its acknowledged bank. It replaces
   only the controls the hybrid producer's comparison marked as changed, and the
   glyph rows in the exact row damage.
+- The shell's DELTA path admits the batch it sends. Today its preflight admits
+  the batch before identities are mapped to the acknowledged ones
+  (`_RSHSP-BUILD-DELTA`), so the admission summary describes another batch and
+  goes unused. The mapped batch cannot simply be admitted instead: its new
+  runs take identities above the frontier, out of the order the admission
+  requires across a START batch. A DELTA needs identity rules of its own.
 - Emission takes its list of changes from those same marks, instead of
   comparing every item. The freeze still checks the finished bank once.
 - The hybrid producer keeps the acknowledged identities of the rows and
@@ -427,8 +444,8 @@ These are recorded here and not fixed, unless a part touches the code:
 | 2 | Parts 2 and 3 | this review | done |
 | 3 | Part 4 | this review | done |
 | 4 | Part 7 | this review | done |
-| 5 | Part 5 | its own, for the engine copy | not started |
-| 6 | Part 6 | its own, for the rule change | not started |
+| 5 | Part 5 | its own, for the engine copy | done |
+| 6 | Part 6 | its own, for the rule change | in progress |
 
 For each slice:
 - unit and byte-oracle tests;
@@ -440,20 +457,26 @@ For each slice:
 
 ## Expected effect
 
-Guest steps per burst frame in the typing run. Rows marked measured come from
+Guest steps per burst frame in the typing run, and of those the frame build
+(`_RTHP-PREPARE-LIVE`), which the parts change. Rows marked measured come from
 the typing tool; the others are estimates from the measured cost of each
-stage. Frames vary by about 0.3M from run to run, mostly in Desk's painting
-and in where storage lies.
+stage.
 
-| After | Guest steps per frame |
-| --- | ---: |
-| Before part 1 (measured) | 25.0M |
-| Part 1 (measured) | 24.8M |
-| Parts 2 and 3 (measured) | 23.0M |
-| Part 4 (measured) | 22.7M |
-| Part 7 (measured) | 22.8M |
-| Part 5 | about 17.5M |
-| Part 6 | about 11M |
+All steps per frame also count Desk's painting, which happens once a key: when
+the host is slower, more keys fold into each frame and the figure rises
+without any change in the guest. The frame build is the measure to compare.
+Within it, the documents' snapshot moves by up to 0.8M from one build to the
+next, as the storage its range proofs check shifts with unrelated changes.
+
+| After | Steps per frame | Frame build |
+| --- | ---: | ---: |
+| Before part 1 (measured) | 25.0M | 20.9M |
+| Part 1 (measured) | 24.8M | 21.1M |
+| Parts 2 and 3 (measured) | 23.0M | 19.8M |
+| Part 4 (measured) | 22.7M | 19.9M |
+| Part 7 (measured) | 22.8M | 19.6M |
+| Part 5 (measured) | 19.3M | 16.7M |
+| Part 6 | | about 9M |
 
 Part 4 saves nothing in this run, because no run disappears before the typing
 starts. In a session where a menu has closed it saves up to 12% of a key.
