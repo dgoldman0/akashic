@@ -649,6 +649,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
     DUP SCB-S-OK <> IF EXIT THEN DROP
 
     ['] _A1D-ALLOC ['] _A1D-FREE 0 0 _A1D-MEMORY MSRC-INIT
+    \ The engine keeps what each admission boundary last admitted here.
+    _A1D-MEMORY RTE-ADMITTED-MEMORY! RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
     _A1D-ENGINE-BANKS? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-SESSION
     _A1D-RTAPT-OWNERS _A1D-RTAPT-OWNERS-U
@@ -762,6 +764,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
     \ The screen producer holds nothing the facade or engine still need.  Its
     \ arenas go back before the engine's banks, the reverse of the order
     \ they were taken, so the system heap hands the same blocks out again.
+    \ The admitted copies were taken after both.
+    RTE-ADMITTED-FINI
     _A1D-SCREEN RTHP-FINI
     _A1D-SCREEN-FIRST-FREE
 

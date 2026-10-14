@@ -10,7 +10,10 @@
 \  caller-owned, immutable
 \  after provider construction, carries one explicit provider context, and
 \  reports only the neutral state of the session-global update slot.  It owns
-\  no storage, transport, host, UCTX, Desk, or application authority.
+\  no transport, host, UCTX, Desk, or application authority.  Its only
+\  storage beyond its own fields is the copy each admission boundary keeps
+\  of what it last admitted, in blocks from a memory source the caller gives
+\  it (RTE-ADMITTED-MEMORY!).
 \
 \  Prefix: RTE- (public), _RTE- (private)
 \  Provider: akashic-tui-rte
@@ -18,6 +21,7 @@
 PROVIDED akashic-tui-rte
 
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../../utils/memory-source.f
 REQUIRE ../../utils/string.f
 REQUIRE fdc1.f
 
@@ -1002,10 +1006,15 @@ VARIABLE _RTE-LPV-COL-END
     THEN
     -1 ;
 
-: _RTE-GLYPH-RUN-PLAN-ITEM?  ( -- flag )
+\ A run's identity, against the one before it.
+: _RTE-GLYPH-RUN-PLAN-ITEM-ID?  ( -- flag )
     _RTE-LPV-ITEM @ _RTE-LPI.OBJECT @ DUP 0= IF DROP 0 EXIT THEN
     DUP _RTE-LPV-PRIOR-OBJECT @ U> 0= IF DROP 0 EXIT THEN
-    _RTE-LPV-PRIOR-OBJECT !
+    _RTE-LPV-PRIOR-OBJECT ! -1 ;
+
+\ Everything else about a run reads only its other fields and its plan's
+\ region size.
+: _RTE-GLYPH-RUN-PLAN-ITEM-FIELDS?  ( -- flag )
     _RTE-LPV-ITEM @ _RTE-LPI.PARENT @ IF 0 EXIT THEN
     _RTE-LPV-ITEM @ _RTE-LPI.VISIBLE @ _RTE-BOOL? 0= IF 0 EXIT THEN
     _RTE-LPV-ITEM @ _RTE-LPI.FG-RGBA @ 0xFFFFFFFF U> IF 0 EXIT THEN
@@ -1015,6 +1024,10 @@ VARIABLE _RTE-LPV-COL-END
     _RTE-LPV-ITEM @ _RTE-LPI.TEXT-CAPACITY @ 0< IF 0 EXIT THEN
     _RTE-LPV-ITEM @ _RTE-LPI.RESERVED @ IF 0 EXIT THEN
     _RTE-GLYPH-RUN-PLAN-ITEM-GEOMETRY? ;
+
+: _RTE-GLYPH-RUN-PLAN-ITEM?  ( -- flag )
+    _RTE-GLYPH-RUN-PLAN-ITEM-ID? 0= IF 0 EXIT THEN
+    _RTE-GLYPH-RUN-PLAN-ITEM-FIELDS? ;
 
 : _RTE-GLYPH-RUN-PLAN-HEADER?  ( -- flag )
     _RTE-LPV-PLAN @ RTE-GLYPH-RUN-PLAN-SIZE _RTE-SPAN? 0= IF 0 EXIT THEN
@@ -3340,13 +3353,192 @@ VARIABLE _RTE-HPV-INSTRUMENT-FIRST-REGION
 \ fixed-record ABI requires cell alignment.
 CREATE _RTE-HPV-SUMMARY-MEM RTE-HYBRID-ADMISSION-SIZE 7 + ALLOT
 _RTE-HPV-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-HPV-SUMMARY
+
+\ ---------------------------------------------------------------------
+\  Admitted copies
+\ ---------------------------------------------------------------------
+\ Each admission boundary, the hybrid preflight and the family batch
+\ preflight, keeps a copy of what it last admitted.  An item equal to its
+\ copy in every byte that its own checks read, against the same context,
+\ passes those checks again, so they are not repeated.  Checks that read
+\ anything else, such as identity, order, offsets and totals, run for every
+\ item.  Only the boundary writes its copy, and only from items it has just
+\ checked.  The copy lives in a block the engine takes from the memory
+\ source RTE-ADMITTED-MEMORY! gives it; every caller span an admission
+\ reads or writes is proved apart from that block, as from the engine's own
+\ storage.  Without a memory source nothing is kept and every item is
+\ checked.
+\
+\ A store: its block and the block's bytes, the bytes its copy uses (zero
+\ for none), and what the last admission needed, which the next one grows
+\ the block to before its first proof.
+: _RTE-AM.A     ( store -- a ) ;
+: _RTE-AM.U     ( store -- a ) 8 + ;
+: _RTE-AM.USED  ( store -- a ) 16 + ;
+: _RTE-AM.NEED  ( store -- a ) 24 + ;
+32 CONSTANT _RTE-AM-SIZE
+CREATE _RTE-AM-HYBRID-MEM _RTE-AM-SIZE 7 + ALLOT
+_RTE-AM-HYBRID-MEM 7 + -8 AND CONSTANT _RTE-AM-HYBRID
+CREATE _RTE-AM-FAMILY-MEM _RTE-AM-SIZE 7 + ALLOT
+_RTE-AM-FAMILY-MEM 7 + -8 AND CONSTANT _RTE-AM-FAMILY
+VARIABLE _RTE-AM-MEMORY     \ the memory source, or 0
+VARIABLE _RTE-AM-S          \ the store of the admission in progress, or 0
+VARIABLE _RTE-AM-W          \ bytes of the copy being written
+VARIABLE _RTE-AM-SHORT      \ true once the block cannot hold the copy
+VARIABLE _RTE-AM-R          \ the copy record of the plan being checked
+VARIABLE _RTE-AM-J          \ the record's next run
+VARIABLE _RTE-AM-N          \ the record's runs
+VARIABLE _RTE-AM-RUN        \ run J
+VARIABLE _RTE-AM-TEXT       \ run J's text
+VARIABLE _RTE-AM-KIND
+VARIABLE _RTE-AM-PLAN
+VARIABLE _RTE-AM-END
+VARIABLE _RTE-AM-W-PLAN
+VARIABLE _RTE-AM-W-ITEMS
+VARIABLE _RTE-AM-W-N
+VARIABLE _RTE-AM-W-TEXT
+VARIABLE _RTE-AM-W-TEXT-U
+VARIABLE _RTE-AM-W-BYTES
 CREATE _RTE-HPV-OWNED-END
+
+: _RTE-AM-APART?  ( a u store -- flag )
+    DUP _RTE-AM.A @ 0= IF DROP 2DROP -1 EXIT THEN
+    DUP _RTE-AM.A @ SWAP _RTE-AM.U @ MSPAN-OVERLAP? 0= ;
 
 : _RTE-HPV-OWNED-DISJOINT?  ( a u -- flag )
     2DUP FDC1-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP _RTE-AM-HYBRID _RTE-AM-APART? 0= IF 2DROP 0 EXIT THEN
+    2DUP _RTE-AM-FAMILY _RTE-AM-APART? 0= IF 2DROP 0 EXIT THEN
     2DUP _RTE-HPV-OWNED-START
         _RTE-HPV-OWNED-END _RTE-HPV-OWNED-START -
         MSPAN-OVERLAP? 0= NIP NIP ;
+
+\ RTE-ADMITTED-MEMORY! ( memory -- rte-status )
+\   The memory source the engine takes its admitted copies from.  Attach it
+\   before the first admission; RTE-ADMITTED-FINI gives the blocks back.
+: RTE-ADMITTED-MEMORY!  ( memory -- rte-status )
+    DUP MSRC-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
+    _RTE-AM-MEMORY @ ?DUP IF = IF RTE-S-OK ELSE RTE-S-INVALID THEN EXIT THEN
+    _RTE-AM-MEMORY ! RTE-S-OK ;
+
+: _RTE-AM-RELEASE  ( store -- )
+    DUP _RTE-AM.A @ ?DUP IF OVER _RTE-AM.U @ _RTE-AM-MEMORY @ MSRC-FREE THEN
+    _RTE-AM-SIZE 0 FILL ;
+
+\ RTE-ADMITTED-FINI ( -- )
+\   Give back the admitted copies' blocks and forget the memory source.
+\   Call it once no admission is in progress.
+: RTE-ADMITTED-FINI  ( -- )
+    _RTE-AM-MEMORY @ 0= IF EXIT THEN
+    _RTE-AM-HYBRID _RTE-AM-RELEASE _RTE-AM-FAMILY _RTE-AM-RELEASE
+    0 _RTE-AM-MEMORY ! ;
+
+\ Before an admission's first proof: when the last admission needed more
+\ than STORE's block holds, take a block for that and half again.  The copy
+\ in the old block is dropped, so this admission checks every item.  A block
+\ that is refused or touches the engine's storage leaves no copy.
+: _RTE-AM-READY  ( store -- )
+    _RTE-AM-MEMORY @ 0= IF DROP EXIT THEN
+    DUP _RTE-AM.NEED @ OVER _RTE-AM.U @ U> 0= IF DROP EXIT THEN
+    DUP _RTE-AM.A @ ?DUP IF OVER _RTE-AM.U @ _RTE-AM-MEMORY @ MSRC-FREE THEN
+    0 OVER _RTE-AM.A ! 0 OVER _RTE-AM.U ! 0 OVER _RTE-AM.USED !
+    DUP _RTE-AM.NEED @ DUP 1 RSHIFT + 7 + -8 AND
+    DUP _RTE-AM-MEMORY @ MSRC-ALLOC ?DUP 0= IF 2DROP EXIT THEN
+    2DUP SWAP _RTE-HPV-OWNED-DISJOINT? 0= IF
+        SWAP _RTE-AM-MEMORY @ MSRC-FREE DROP EXIT
+    THEN
+    ROT TUCK _RTE-AM.A ! _RTE-AM.U ! ;
+
+\ After an admission's checks passed: its copy replaces the old one.  A
+\ record that does not fit leaves no copy and grows the block next time.
+: _RTE-AM-WRITE-BEGIN  ( store -- )
+    DUP _RTE-AM-S ! 0 SWAP _RTE-AM.USED ! 0 _RTE-AM-W ! 0 _RTE-AM-SHORT ! ;
+: _RTE-AM-WRITE-END  ( -- )
+    _RTE-AM-W @ _RTE-AM-S @ _RTE-AM.NEED !
+    _RTE-AM-SHORT @ IF 0 ELSE _RTE-AM-W @ THEN _RTE-AM-S @ _RTE-AM.USED ! ;
+
+\ A record: its bytes, its kind, its items, its text bytes, the first 120
+\ bytes of its plan's header, the items, then the text in item order.
+1 CONSTANT _RTE-AM-K-GLYPH
+152 CONSTANT _RTE-AM-RECORD
+: _RTE-AM-PUT-GLYPHS  ( plan items-a count text-a text-u -- )
+    _RTE-AM-W-TEXT-U ! _RTE-AM-W-TEXT ! _RTE-AM-W-N ! _RTE-AM-W-ITEMS !
+    _RTE-AM-W-PLAN !
+    _RTE-AM-W-N @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RTE-AM-RECORD +
+        _RTE-AM-W-TEXT-U @ 7 + -8 AND + _RTE-AM-W-BYTES !
+    _RTE-AM-S @ _RTE-AM.A @ 0=
+    _RTE-AM-W @ _RTE-AM-W-BYTES @ + _RTE-AM-S @ _RTE-AM.U @ U> OR IF
+        -1 _RTE-AM-SHORT !
+    THEN
+    _RTE-AM-SHORT @ 0= IF
+        _RTE-AM-S @ _RTE-AM.A @ _RTE-AM-W @ + >R
+        _RTE-AM-W-BYTES @ R@ !
+        _RTE-AM-K-GLYPH R@ 8 + !
+        _RTE-AM-W-N @ R@ 16 + !
+        _RTE-AM-W-TEXT-U @ R@ 24 + !
+        _RTE-AM-W-PLAN @ R@ 32 + 120 MOVE
+        _RTE-AM-W-ITEMS @ R@ _RTE-AM-RECORD +
+            _RTE-AM-W-N @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * MOVE
+        _RTE-AM-W-TEXT @
+            R> _RTE-AM-RECORD + _RTE-AM-W-N @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * +
+            _RTE-AM-W-TEXT-U @ MOVE
+    THEN
+    _RTE-AM-W-BYTES @ _RTE-AM-W +! ;
+
+\ The copy's record of KIND for PLAN, whose first 120 header bytes it
+\ holds, or 0.
+: _RTE-AM-FIND  ( kind plan -- record|0 )
+    _RTE-AM-PLAN ! _RTE-AM-KIND !
+    _RTE-AM-S @ ?DUP 0= IF 0 EXIT THEN
+    DUP _RTE-AM.USED @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-AM.A @ SWAP _RTE-AM.USED @ OVER + _RTE-AM-END !
+    BEGIN DUP _RTE-AM-END @ U< WHILE
+        DUP 8 + @ _RTE-AM-KIND @ = IF
+            DUP 32 + 120 _RTE-AM-PLAN @ 120 COMPARE 0= IF EXIT THEN
+        THEN
+        DUP @ +
+    REPEAT DROP 0 ;
+
+\ Start comparing PLAN's runs with its record, if the copy holds one.
+: _RTE-AM-RUNS-BEGIN  ( plan -- )
+    _RTE-AM-K-GLYPH SWAP _RTE-AM-FIND DUP _RTE-AM-R ! ?DUP 0= IF EXIT THEN
+    DUP 16 + @ _RTE-AM-N ! 0 _RTE-AM-J !
+    _RTE-AM-RECORD + DUP _RTE-AM-RUN !
+    _RTE-AM-N @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RTE-AM-TEXT ! ;
+
+: _RTE-AM-RUN-NEXT  ( -- )
+    _RTE-AM-RUN @ _RTE-LPI.TEXT-CAPACITY @ _RTE-AM-TEXT +!
+    RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RTE-AM-RUN +! 1 _RTE-AM-J +! ;
+
+\ Whether the record's run J comes before ITEM's place in row-major order.
+: _RTE-AM-RUN-BEFORE?  ( item -- flag )
+    _RTE-AM-RUN @ _RTE-LPI.ROW @ OVER _RTE-LPI.ROW @ 2DUP <> IF
+        < NIP EXIT
+    THEN 2DROP
+    _RTE-AM-RUN @ _RTE-LPI.COL @ SWAP _RTE-LPI.COL @ < ;
+
+\ Whether ITEM, a visible run whose TEXT has already been bounded, equals
+\ the record's run at its place in every byte but its identity, text
+\ included.  Visible runs come row by row and left to right, so the search
+\ resumes where the last one stopped; anything else only finds no run.
+: _RTE-AM-RUN-SAME?  ( item text -- flag )
+    _RTE-AM-R @ 0= IF 2DROP 0 EXIT THEN
+    OVER _RTE-LPI.VISIBLE @ 0= IF 2DROP 0 EXIT THEN
+    BEGIN
+        _RTE-AM-J @ _RTE-AM-N @ U< 0= IF 2DROP 0 EXIT THEN
+        _RTE-AM-RUN @ _RTE-LPI.VISIBLE @ 0= IF 2DROP 0 EXIT THEN
+        OVER _RTE-AM-RUN-BEFORE?
+    WHILE _RTE-AM-RUN-NEXT REPEAT
+    OVER _RTE-LPI.ROW @ _RTE-AM-RUN @ _RTE-LPI.ROW @ <>
+    2 PICK _RTE-LPI.COL @ _RTE-AM-RUN @ _RTE-LPI.COL @ <> OR IF
+        2DROP 0 EXIT
+    THEN
+    OVER 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 -
+    _RTE-AM-RUN @ 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 - COMPARE IF
+        2DROP 0 _RTE-AM-RUN-NEXT EXIT
+    THEN
+    SWAP _RTE-LPI.TEXT-CAPACITY @ _RTE-AM-TEXT @ OVER COMPARE 0=
+    _RTE-AM-RUN-NEXT ;
 
 \ Renderer-neutral planners may validate negotiated limits without a facade.
 \ This read-only authority proof covers every admission/limits validator,
@@ -4375,15 +4567,23 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-SPV-IMAGES @ _RTE-HPV-SUMMARY _RTE-HA.STATIC-IMAGES !
     -1 ;
 
+\ The checks a run passes again when it equals its admitted copy: they read
+\ only its fields other than its identity, its TEXT, and its plan's region
+\ size, which the copy's record matched.
+: _RTE-HPV-GLYPH-ITEM-CHECKED?  ( text -- flag )
+    _RTE-GLYPH-RUN-PLAN-ITEM-FIELDS? 0= IF DROP 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.ROW @ _RTE-I32? 0= IF DROP 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.COL @ _RTE-I32? 0= IF DROP 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ _RTE-U32? 0= IF DROP 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.Z @ _RTE-I32? 0= IF DROP 0 EXIT THEN
+    _RTE-HPV-ITEM-TEXT @ IF _RTE-HPV-ITEM-TEXT @ _RTE-GLYPH-RUN-TEXT? EXIT THEN
+    DROP -1 ;
+
+\ Identity, the text reference and the totals are checked for every run;
+\ the reference also bounds the text before anything reads it.
 : _RTE-HPV-GLYPH-ITEM?  ( -- flag )
-    _RTE-GLYPH-RUN-PLAN-ITEM? 0= IF 0 EXIT THEN
-    _RTE-LPV-ITEM @ _RTE-LPI.ROW @ _RTE-I32? 0= IF 0 EXIT THEN
-    _RTE-LPV-ITEM @ _RTE-LPI.COL @ _RTE-I32? 0= IF 0 EXIT THEN
-    _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ _RTE-U32? 0= IF 0 EXIT THEN
-    _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ _RTE-U32? 0= IF 0 EXIT THEN
-    _RTE-LPV-ITEM @ _RTE-LPI.Z @ _RTE-I32? 0= IF 0 EXIT THEN
-    _RTE-LPV-ITEM @ _RTE-LPI.TEXT-CAPACITY @
-        _RTE-U32? 0= IF 0 EXIT THEN
+    _RTE-GLYPH-RUN-PLAN-ITEM-ID? 0= IF 0 EXIT THEN
     _RTE-HPV-REF @ _RTE-HTR.OFFSET @ DUP _RTE-U32? 0= IF
         DROP 0 EXIT
     THEN DUP _RTE-HPV-TEXT-OFF !
@@ -4396,10 +4596,10 @@ CREATE _RTE-HPV-OWNED-END
         _RTE-UADD? 0= IF DROP 0 EXIT THEN
     DUP _RTE-HPV-TEXT-END !
     _RTE-HPV-TEXT-U @ U> IF 0 EXIT THEN
-    _RTE-HPV-ITEM-TEXT @ IF
-        _RTE-HPV-TEXT-A @ _RTE-HPV-TEXT-OFF @
-            _RTE-UADD? 0= IF DROP 0 EXIT THEN
-        _RTE-HPV-ITEM-TEXT @ _RTE-GLYPH-RUN-TEXT? 0= IF 0 EXIT THEN
+    _RTE-HPV-TEXT-A @ _RTE-HPV-TEXT-OFF @
+        _RTE-UADD? 0= IF DROP 0 EXIT THEN
+    _RTE-LPV-ITEM @ OVER _RTE-AM-RUN-SAME? IF DROP ELSE
+        _RTE-HPV-GLYPH-ITEM-CHECKED? 0= IF 0 EXIT THEN
     THEN
     _RTE-HPV-TEXT-END @ _RTE-HPV-GLYPH-TEXT !
     _RTE-HPV-ITEM-TEXT @ 7 _RTE-UADD? 0= IF DROP 0 EXIT THEN
@@ -4422,6 +4622,7 @@ CREATE _RTE-HPV-OWNED-END
     THEN
     _RTE-HPV-GLYPH @ _RTE-LPV-PLAN !
     _RTE-GLYPH-RUN-PLAN-HEADER? 0= IF 0 EXIT THEN
+    _RTE-HPV-GLYPH @ _RTE-AM-RUNS-BEGIN
     _RTE-HPV-GLYPH-ITEMS-A @ _RTE-LPV-ITEMS-A !
     _RTE-HPV-GLYPH-ITEMS-U @ _RTE-LPV-ITEMS-U !
     0 _RTE-LPV-PRIOR-OBJECT !
@@ -4445,6 +4646,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-HPV-GLYPH-MAX @ _RTE-HPV-SUMMARY _RTE-HA.GLYPH-MAX !
     _RTE-HPV-GLYPH-LAST @ _RTE-HPV-SUMMARY _RTE-HA.GLYPH-LAST !
     0 _RTE-GLYPH-RUN-PLAN-VALID-FINISH DROP
+    0 _RTE-AM-R !
     -1 ;
 
 : _RTE-HPV-IDENTITY-RANGES?  ( -- flag )
@@ -4525,10 +4727,22 @@ CREATE _RTE-HPV-OWNED-END
     0 _RTE-HPV-GLYPH-LAST !
     0 _RTE-HPV-INSTRUMENT-LAST !
     0 _RTE-HPV-INSTRUMENT-FIRST-REGION !
+    0 _RTE-AM-R ! 0 _RTE-AM-J ! 0 _RTE-AM-N !
+    0 _RTE-AM-RUN ! 0 _RTE-AM-TEXT !
     0 _RTE-SADD-A ! 0 _RTE-SADD-B ! 0 _RTE-SADD-SUM !
     0 _RTE-CPV-FINISH DROP
     0 _RTE-IPV-FINISH DROP
     0 _RTE-GLYPH-RUN-PLAN-VALID-FINISH DROP ;
+
+\ The hybrid admission's copy: its glyph plan.
+: _RTE-HPV-KEEP  ( -- )
+    _RTE-AM-MEMORY @ 0= IF EXIT THEN
+    _RTE-AM-HYBRID _RTE-AM-WRITE-BEGIN
+    _RTE-HPV-GLYPH @ IF
+        _RTE-HPV-GLYPH @ _RTE-HPV-GLYPH-ITEMS-A @ _RTE-HPV-GLYPH-COUNT @
+        _RTE-HPV-TEXT-A @ _RTE-HPV-TEXT-U @ _RTE-AM-PUT-GLYPHS
+    THEN
+    _RTE-AM-WRITE-END ;
 
 : _RTE-HYBRID-PREFLIGHT-BODY  ( -- status )
     _RTE-HPV-INIT
@@ -4544,9 +4758,11 @@ CREATE _RTE-HPV-OWNED-END
     DUP RTE-S-OK = IF
         _RTE-HPV-SUMMARY _RTE-HPV-ADMISSION @
             RTE-HYBRID-ADMISSION-SIZE MOVE
+        _RTE-HPV-KEEP
     THEN ;
 
 : RTE-HYBRID-PREFLIGHT  ( hybrid admission facade -- status )
+    _RTE-AM-HYBRID _RTE-AM-READY
     >R
     OVER R@ _RTE-HPV-FIXED-AUTHORITY? 0= IF
         2DROP R> DROP RTE-S-INVALID EXIT
@@ -4559,10 +4775,12 @@ CREATE _RTE-HPV-OWNED-END
     THEN
     R> _RTE-HPV-FACADE !
     _RTE-HPV-ADMISSION ! _RTE-HPV-HYBRID !
+    _RTE-AM-HYBRID _RTE-AM-S !
     ['] _RTE-HYBRID-PREFLIGHT-BODY CATCH ?DUP IF
         DROP RTE-S-INVALID
     THEN
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN
+    0 _RTE-AM-S !
     _RTE-HPV-FINISH ;
 
 : RTE-CONTROL-PREFLIGHT  ( plan facade -- status )

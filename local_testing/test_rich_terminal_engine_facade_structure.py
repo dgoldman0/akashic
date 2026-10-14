@@ -42,6 +42,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "PROVIDED akashic-tui-rte" in code
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "../../utils/memory-span.f",
+        "../../utils/memory-source.f",
         "../../utils/string.f",
         "fdc1.f",
     ]
@@ -66,15 +67,27 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert set(re.findall(r"(?m)^CREATE\s+(\S+)", code)) == {
         "_RTE-HPV-OWNED-START",
         "_RTE-HPV-SUMMARY-MEM",
+        "_RTE-AM-HYBRID-MEM",
+        "_RTE-AM-FAMILY-MEM",
         "_RTE-HPV-OWNED-END",
         "_RTE-SV-OWNED-START",
         "_RTE-SV-OWNED-END",
     }
-    assert code.count("ALLOT") == 1
+    assert code.count("ALLOT") == 3
     assert (
         "CREATE _RTE-HPV-SUMMARY-MEM "
         "RTE-HYBRID-ADMISSION-SIZE 7 + ALLOT" in code
     )
+    # The engine's only other storage: each admission boundary's copy of
+    # what it last admitted, whose block comes from the caller's memory
+    # source and is protected like the engine's own storage.
+    for store in ("_RTE-AM-HYBRID", "_RTE-AM-FAMILY"):
+        assert f"CREATE {store}-MEM _RTE-AM-SIZE 7 + ALLOT" in code
+        assert f"{store} _RTE-AM-APART? 0= IF 2DROP 0 EXIT THEN" in _definition(
+            source, "_RTE-HPV-OWNED-DISJOINT?")
+    assert code.index("CREATE _RTE-AM-FAMILY-MEM") < code.index(
+        "CREATE _RTE-HPV-OWNED-END")
+    assert "_RTE-AM-MEMORY @ MSRC-ALLOC" in _definition(source, "_RTE-AM-READY")
     assert (
         "_RTE-HPV-SUMMARY-MEM 7 + -8 AND "
         "CONSTANT _RTE-HPV-SUMMARY" in code
@@ -675,11 +688,15 @@ def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> Non
     assert "_RTE-GLYPH-RUN-PLAN-HEADER?" in valid
     assert "_RTE-GLYPH-RUN-PLAN-ITEM?" in valid
     item = _definition(source, "_RTE-GLYPH-RUN-PLAN-ITEM?")
-    assert "_RTE-LPV-PRIOR-OBJECT @ U>" in item
-    assert "_RTE-LPI.PARENT @ IF" in item
-    assert "_RTE-LPI.TEXT-CAPACITY @ 0<" in item
-    monotone = item.index("_RTE-LPV-PRIOR-OBJECT @ U>")
-    publish_high = item.index("_RTE-LPV-PRIOR-OBJECT !", monotone)
+    item_id = _definition(source, "_RTE-GLYPH-RUN-PLAN-ITEM-ID?")
+    item_fields = _definition(source, "_RTE-GLYPH-RUN-PLAN-ITEM-FIELDS?")
+    assert item.index("_RTE-GLYPH-RUN-PLAN-ITEM-ID? 0= IF 0 EXIT THEN") < item.index(
+        "_RTE-GLYPH-RUN-PLAN-ITEM-FIELDS?")
+    assert "_RTE-LPV-PRIOR-OBJECT @ U>" in item_id
+    assert "_RTE-LPI.PARENT @ IF" in item_fields
+    assert "_RTE-LPI.TEXT-CAPACITY @ 0<" in item_fields
+    monotone = item_id.index("_RTE-LPV-PRIOR-OBJECT @ U>")
+    publish_high = item_id.index("_RTE-LPV-PRIOR-OBJECT !", monotone)
     assert monotone < publish_high
     assert "strictly increasing but may be sparse" in source
     assert "exact owner object quota is item" in source
@@ -699,8 +716,16 @@ def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> Non
     assert "_RTE-LPI.WIDTH @ 0> 0=" not in geometry
     assert "_RTE-LPI.HEIGHT @ 0=" not in geometry[visible_branch:]
     assert "_RTE-LPI.WIDTH @ 0=" not in geometry[visible_branch:]
+    # A hybrid run's identity and text reference are checked first, always;
+    # the rest of its checks unless it equals its admitted copy.
     hybrid_item = _definition(source, "_RTE-HPV-GLYPH-ITEM?")
-    assert "_RTE-GLYPH-RUN-PLAN-ITEM? 0= IF 0 EXIT THEN" in hybrid_item
+    identity = hybrid_item.index("_RTE-GLYPH-RUN-PLAN-ITEM-ID? 0= IF 0 EXIT THEN")
+    bounded = hybrid_item.index("_RTE-HPV-TEXT-U @ U> IF 0 EXIT THEN", identity)
+    same = hybrid_item.index("_RTE-AM-RUN-SAME?", bounded)
+    checked = hybrid_item.index("_RTE-HPV-GLYPH-ITEM-CHECKED?", same)
+    assert identity < bounded < same < checked
+    assert "_RTE-GLYPH-RUN-PLAN-ITEM-FIELDS?" in _definition(
+        source, "_RTE-HPV-GLYPH-ITEM-CHECKED?")
     signed_add = _definition(source, "_RTE-SADD?")
     assert all(word not in signed_add for word in (">R", "R@", "R>"))
 
