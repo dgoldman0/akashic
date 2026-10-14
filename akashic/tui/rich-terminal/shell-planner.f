@@ -252,10 +252,14 @@ VARIABLE _RSHPL-PROVED
 : _RSHPL-BAND-BOUNDS-PROVED ( kind model bytes -- row col height width status )
     -1 _RSHPL-PROVED ! _RSHPL-BAND-BOUNDS-OF 0 _RSHPL-PROVED ! ;
 
-\ Deep source validation precedes every count or record dereference.
+\ Deep source validation precedes every count or record dereference.  A
+\ -PROVED build skips only the frozen model's validation, as the band helpers'
+\ peers do, for a caller that validated its model and has not written it since.
 : _RSHPL-SOURCE? ( -- flag )
-    _RSHPL-Q @ _RSHPL-Q.MODEL-A @ _RSHPL-Q @ _RSHPL-Q.MODEL-U @
-        SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF 0 EXIT THEN
+    _RSHPL-PROVED @ 0= IF
+        _RSHPL-Q @ _RSHPL-Q.MODEL-A @ _RSHPL-Q @ _RSHPL-Q.MODEL-U @
+            SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF 0 EXIT THEN
+    THEN
     _RSHPL-Q @ _RSHPL-Q.MODEL-A @ _RSHPL-M !
     _RSHPL-Q @ _RSHPL-Q.RESERVED @ IF 0 EXIT THEN
     _RSHPL-Q @ _RSHPL-Q.OWNER @ 0= _RSHPL-Q @ _RSHPL-Q.GENERATION @ 0= OR
@@ -658,10 +662,13 @@ VARIABLE _RSHPL-GAP-C VARIABLE _RSHPL-GAP-END
     _RSHPL-COUNT? 0= IF RSHPL-S-INVALID EXIT THEN
     _RSHPL-CAPACITY? 0= IF RSHPL-S-CAPACITY EXIT THEN
     _RSHPL-EMIT _RSHPL-RESULT RSHPL-S-OK ;
-: RSHPL-BUILD ( q -- status )
+: _RSHPL-BUILD-OF ( q -- status )
     _RSHPL-SPANS? 0= IF RSHPL-S-INVALID EXIT THEN
     _RSHPL-CLEAR-OUTPUTS
     ['] _RSHPL-BODY CATCH ?DUP IF
         DROP _RSHPL-CLEAR-OUTPUTS RSHPL-S-INVALID EXIT
     THEN DUP RSHPL-S-OK <> IF _RSHPL-CLEAR-OUTPUTS THEN ;
+: RSHPL-BUILD ( q -- status ) 0 _RSHPL-PROVED ! _RSHPL-BUILD-OF ;
+: _RSHPL-BUILD-PROVED ( q -- status )
+    -1 _RSHPL-PROVED ! _RSHPL-BUILD-OF 0 _RSHPL-PROVED ! ;
 HERE _RSHPL-OWNED-LIMIT !

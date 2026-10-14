@@ -111,3 +111,65 @@ _SS-BUILD
 0 _SS-M SHM-ENTRY 3 _SS-M SHM-ENTRY _RSHSP-OVERLAP? _RC-A
 _RC-DONE
 ''', minimum=9)
+
+
+def test_ruha_storage_is_proved_apart_from_all_four_sidecar_spans():
+    """One proof of RUHA's spans covers the descriptor, work space and both
+    banks: a range touching any of them is refused, a range between them
+    is not."""
+    run(FIXTURE + r'''
+4096 64 0 _RSHSP-SPAN! 8192 128 1 _RSHSP-SPAN!
+16384 256 2 _RSHSP-SPAN! 32768 512 3 _RSHSP-SPAN!
+4096 1 _RSHSP-APART? 0= _RC-A 8255 2 _RSHSP-APART? 0= _RC-A
+16639 1 _RSHSP-APART? 0= _RC-A 33279 1 _RSHSP-APART? 0= _RC-A
+1 4095 _RSHSP-APART? _RC-A 4160 4032 _RSHSP-APART? _RC-A
+33280 64 _RSHSP-APART? _RC-A
+_RC-DONE
+''', minimum=7)
+
+
+def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
+    """Each sidecar span's shape is checked once per call, RUHA's storage
+    is proved apart from all four spans in one proof, and the shell's model
+    copy is validated once, after the copy, before the builders that skip
+    that check. The copy is only read afterwards."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1]
+              / "akashic/tui/rich-terminal/shell-screen-producer.f").read_text()
+
+    def word(name):
+        match = re.search(rf"(?ms)^: {re.escape(name)}(?=\s).*?;\s*$", source)
+        assert match is not None, name
+        return match.group(0)
+
+    spans = word("_RSHSP-SPANS?")
+    assert spans.count("_RUHA-SAFE-PROVE?") == 1 and "['] _RSHSP-APART?" in spans
+    assert "_RSHSP-SPAN?" not in spans
+    assert "_RUHA-SAFE-PROVE?" not in word("_RSHSP-EXTERNAL?")
+    authority = word("_RSHSP-AUTHORITY?")
+    # Only the producer's arena, which the header does not cover, is checked.
+    assert "_RSHSP-HEADER?" not in authority
+    assert authority.count("_RSHSP-SPAN?") == 1
+    assert "_RTHP.ARENA-U @ _RSHSP-SPAN?" in authority
+    # Every caller checks the header, or each span, first.
+    for caller, first, then in (("RSHSP-VALID?", "_RSHSP-HEADER?", "_RSHSP-AUTHORITY?"),
+                                ("_RSHSP-DISPATCH", "_RSHSP-HEADER?", "_RSHSP-AUTHORITY?"),
+                                ("RSHSP-INIT", "_RSHSP-SPAN?", "_RSHSP-SPANS?")):
+        body = word(caller)
+        assert body.index(first) < body.index(then), caller
+    build = word("_RSHSP-BUILD-BATCH")
+    assert (build.index("_RSHSP-COPY _RSHSP-M !") < build.index("SHSN-FROZEN-VALIDATE")
+            < build.index("_RSHSP-ALLOCATE-PLAN"))
+    plan = word("_RSHSP-ALLOCATE-PLAN")
+    for name in ("_RSHPL-BUILD-PROVED", "_RSHMM-BUILD-PROVED"):
+        assert source.count(name) == 1 and name in plan, name
+    # The copy is only read: passed on as a span, entered, or a field fetched.
+    for match in re.finditer(r"_RSHSP-M @ (\S+) (\S+)", source):
+        follower, after = match.groups()
+        if follower.startswith("SHM."):
+            assert after == "@", match.group(0)
+        else:
+            assert follower in ("_RSHSP-MU", "SHM-ENTRY"), match.group(0)
+    assert not re.search(r"\bSHME?\.[A-Z-]+ \+?!", source)

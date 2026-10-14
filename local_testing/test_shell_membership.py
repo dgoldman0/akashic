@@ -114,3 +114,17 @@ _SS-F _SS-U @ 0 0 0 0 0 0 RSHMM-BUILD _SS-OK OR 0= _SS-A
 0 0 1 1 0 0 RSHMM-RECT-MEMBER RSHMM-S-UNAVAILABLE = _SS-A 0= _SS-A
 _SS-DONE
 ''', minimum=36)
+
+
+def test_proved_build_skips_only_the_model_check():
+    """The proved peer gives the public build's map for a model its caller
+    validated, the proof flag does not outlive the call, and the public
+    build still validates the model."""
+    run(PRELUDE + r'''
+_MM-ARGS _MM-O 224 _RSHMM-BUILD-PROVED _SS-OK 112 = _SS-A 1 = _SS-A _MM-UNCHANGED
+_RSHMM-PROVED @ 0= _SS-A
+\ A model whose entry count no longer fits its bytes fails validation only.
+999 _SS-F SHM.COUNT ! _MM-INVALID
+_RSHMM-PROVED @ 0= _SS-A
+_SS-DONE
+''', minimum=7)
