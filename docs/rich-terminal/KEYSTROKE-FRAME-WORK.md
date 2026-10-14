@@ -1,8 +1,7 @@
 # A typed character's frame work — design, 2026-10-14
 
 Status: approved for parts 1 to 4 and 7 on 2026-10-14, and for parts 5 and
-6 later that day. Parts 1 to 5 and 7 are done; each records what it did.
-Part 6 is under way: 6.1 to 6.3 are done, and 6.4's emission half.
+6 later that day. All seven parts are done; each records what it did.
 
 Earlier work: [PER-KEY-FRAME-REPEATS.md](PER-KEY-FRAME-REPEATS.md)
 (2026-09-28) and part 10 of the [rich experience plan](RICH-EXPERIENCE-PLAN.md)
@@ -346,10 +345,9 @@ MEGAPAD_PROFILE_CHAIN_DEPTH=0`), shows where they go:
 **Change.** Four items, smallest risk first, each measured as it lands:
 1. Check the shell batch's structure once.
 2. Append plain glyph cells without the planner's general path.
-3. Remove what the two admissions still do twice for each item.
-4. Take the shell's emission from the changes it has already marked, and
-   keep the acknowledged identities of the rows and controls the hybrid
-   producer reuses.
+3. Remove what the admissions and the shell's storage proof still repeat.
+4. Skip, in the shell's emission, glyph families equal to the acknowledged
+   ones.
 
 ### 6.1 Check the shell batch's structure once
 
@@ -436,28 +434,19 @@ dependent storage were also checked twice; they are now checked once.
 fell from 1.16M to 0.91M steps and its preflight from 2.16M to 1.97M; the
 frame build fell from 15.33M to 14.89M.
 
-### 6.4 Emission and identities
+### 6.4 Skip equal glyph families in emission — exact speed-up
 
-**Emission — exact speed-up.** The shell's DELTA emission compares each glyph
-run of the pending bank with the active bank's. When a glyph family has as
-many runs as the active family, and its runs, references and text are byte
-for byte the active family's, every run is the same, so the family is
-skipped after three block comparisons. Any difference takes the run-by-run
-path. This is the emitter's own comparison of its own two banks.
+**Change.** The shell's DELTA emission compares each glyph run of the pending
+bank with the active bank's. When a glyph family has as many runs as the
+active family, and its runs, references and text are byte for byte the active
+family's, every run is the same, so the family is skipped after three block
+comparisons. Any difference takes the run-by-run path. This is the emitter's
+own comparison of its own two banks.
 
 **Done** (Akashic `57fafc36`). Emission fell from 0.49M to 0.40M steps a
 burst frame. The frame build rose from 14.89M to 15.10M in that run because
 the documents' snapshot rose from 2.99M to 3.26M; without the snapshot it
 fell from 11.90M to 11.84M.
-
-**Kept identities — not started.** The hybrid producer's comparison costs
-1.5M a frame. Keeping the acknowledged identities of reused controls and rows
-could remove its identity matching, at most about 0.5M: the control map
-0.26M, normalization 0.14M, and the reference and slot maps 0.14M. The
-equality checks that find what changed, 0.9M, would stay. It needs the
-candidate to depend on the acknowledged frame, a change to the rule that the
-candidate is byte-identical to a full rebuild, and a dual-path check to keep
-it exact.
 
 ## Part 7. Reserve glyph slots from what is needed — repeat, device memory
 
@@ -525,7 +514,7 @@ These are recorded here and not fixed, unless a part touches the code:
 | 3 | Part 4 | this review | done |
 | 4 | Part 7 | this review | done |
 | 5 | Part 5 | its own, for the engine copy | done |
-| 6 | Part 6 | its own | 6.1 to 6.3 and 6.4's emission done |
+| 6 | Part 6 | its own | done |
 
 For each slice:
 - unit and byte-oracle tests;
@@ -559,13 +548,13 @@ next, as the storage its range proofs check shifts with unrelated changes.
 | 6.1 (measured) | 18.7M | 15.9M |
 | 6.2 (measured) | 17.9M | 15.3M |
 | 6.3 (measured) | 18.0M | 14.9M |
-| 6.4 emission (measured) | 17.8M | 15.1M |
+| 6.4 (measured) | 17.8M | 15.1M |
 
 Part 4 saves nothing in this run, because no run disappears before the typing
 starts. In a session where a menu has closed it saves up to 12% of a key.
 Part 7 saves device memory traffic, not steps.
 
-What remains of a burst frame's 15.1M build, measured after 6.4's emission:
+What remains of a burst frame's 15.1M build, measured after part 6:
 - the documents' snapshot, 3.0M to 3.3M;
 - the hybrid producer's candidate, 3.5M, with the engine's admission 1.0M;
 - the shell's preflight 2.0M, freeze 1.25M, storage proof 0.9M and
