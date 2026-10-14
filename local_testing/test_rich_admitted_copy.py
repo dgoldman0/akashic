@@ -244,3 +244,128 @@ def test_fini_gives_every_block_back(backend):
     # A batch admitted afterwards is checked in full and keeps nothing.
     assert harness.admit(*harness.family())[0] == 0
     assert harness.store("_RTE-AM-FAMILY") == (0, 0, 0, 0)
+
+
+# A menu bar with two menus of three items each, then a text area.
+FIRST = 200
+
+
+def _menu_controls():
+    specs = [dict(KIND=1, STATE=3, HEIGHT=1, WIDTH=80)]
+    for order, name in enumerate((b"File", b"Edit"), 1):
+        specs.append(dict(KIND=2, STATE=3, PARENT=FIRST, ORDER=order, label=name))
+    for menu in range(2):
+        for order in range(1, 4):
+            specs.append(dict(KIND=3, STATE=3, PARENT=FIRST + 1 + menu, ORDER=order,
+                              label=f"Item {menu}.{order}".encode(), shortcut=b"Ctrl+K"))
+    text = b"hello, world"
+    specs.append(dict(KIND=5, STATE=3, ROW=2, HEIGHT=10, WIDTH=80,
+                      content=bytes(72 + 36 + len(text) + 12),
+                      **{"CONTENT-ITEMS": 1, "CONTENT-UTF8": len(text), "CONTENT-RUNS": 1}))
+    return specs
+
+
+def _control_plan(harness, rows=24, edit=None):
+    """(plan, items, bytes, bytes-u, region) for the menu controls in a
+    region ROWS high. EDIT may change a control's fields or label."""
+    specs = [dict(spec) for spec in _menu_controls()]
+    if edit:
+        for index, spec in enumerate(specs):
+            edit(index, spec)
+    spans = bytearray()
+    places = []
+    for spec in specs:
+        place = []
+        for part in ("label", "shortcut", "content"):
+            payload = spec.pop(part, b"")
+            place.append((len(spans), len(payload)))
+            spans += payload
+        places.append(place)
+    bank = harness.allocate(bytes(spans) or b"\0" * 8)
+    records = bytearray()
+    for index, (spec, place) in enumerate(zip(specs, places)):
+        record = bytearray(200)
+        fields = dict(OWNER=1, GENERATION=2, ID=FIRST + index, REGION=1,
+                      **{"ROOT-HEIGHT": rows, "ROOT-WIDTH": 80})
+        fields.update(spec)
+        for (offset_, length), part in zip(place, ("LABEL", "SHORTCUT", "CONTENT")):
+            fields[part + "-A"] = bank + offset_ if length else 0
+            fields[part + "-U"] = length
+        for name, value in fields.items():
+            struct.pack_into("<Q", record, offset("_RTE-CONTROL." + name), value & MASK)
+        records += record
+    region = harness.region(1, h=rows)
+    items = harness.allocate(bytes(records))
+    return harness.plan(items, len(records), region), items, bank, len(spans), region
+
+
+def _controls_family(harness, **kwargs):
+    plan, items, bank, size, region = _control_plan(harness, **kwargs)
+    entry = harness.allocate(struct.pack("<8Q", 1, plan, 144, bank, size, 0, 0, 0))
+    batch, out, *_ = harness.finish([region], [entry])
+    return batch, out
+
+
+def _controls_hybrid(harness, **kwargs):
+    plan, items, bank, size, _ = _control_plan(harness, **kwargs)
+    hybrid = harness.allocate(struct.pack("<21Q", 1, 2, 3, plan, 0, 0, 0, 0, 0,
+                                          bank, size, *([0] * 10)))
+    return hybrid, harness.allocate(bytes(472))
+
+
+def _controls(harness, boundary):
+    build = _controls_family if boundary == "family" else _controls_hybrid
+    admit = harness.admit if boundary == "family" else harness.admit_hybrid
+    return (lambda **kwargs: build(harness, **kwargs)), admit
+
+
+@pytest.mark.parametrize("boundary", ("family", "hybrid"))
+def test_unchanged_controls_are_admitted_from_the_copy_with_the_same_record(backend, boundary):
+    harness = Admitted(backend)
+    plain = Admitted(backend, memory=False)
+    build, admit = _controls(harness, boundary)
+    results = _warm(harness, build, admit)
+    plain_build, plain_admit = _controls(plain, boundary)
+    expected = plain_admit(*plain_build())
+    assert expected[0] == 0
+    for status, record, _ in results:
+        assert (status, record) == expected[:2]
+    assert results[2][2] < results[1][2] * 0.8, [steps for *_, steps in results]
+
+
+@pytest.mark.parametrize("boundary", ("family", "hybrid"))
+@pytest.mark.parametrize("change", ("label", "state", "geometry", "parent", "shortcut"))
+def test_a_control_that_differs_from_its_copy_is_checked_in_full(backend, boundary, change):
+    harness = Admitted(backend)
+    build, admit = _controls(harness, boundary)
+    _warm(harness, build, admit)
+
+    def edit(index, spec):
+        if index == 4:   # the second item of the first menu
+            if change == "label":
+                spec["label"] = b"Item\x010.2"
+            elif change == "state":
+                spec["STATE"] = 0x40 | 3
+            elif change == "geometry":
+                spec["ROW"] = 1
+            elif change == "shortcut":
+                spec["shortcut"] = b"Ctrl\x7f"
+        if index == 2 and change == "parent":
+            spec["PARENT"] = 0
+    assert admit(*build(edit=edit))[0] == INVALID
+
+
+@pytest.mark.parametrize("boundary", ("family", "hybrid"))
+def test_a_changed_valid_control_gets_the_record_a_full_check_gives(backend, boundary):
+    harness = Admitted(backend)
+    plain = Admitted(backend, memory=False)
+    build, admit = _controls(harness, boundary)
+    _warm(harness, build, admit)
+
+    def edit(index, spec):
+        if index == 5:
+            spec["label"] = b"Renamed item"
+    got = admit(*build(edit=edit))
+    plain_build, plain_admit = _controls(plain, boundary)
+    expected = plain_admit(*plain_build(edit=edit))
+    assert got[:2] == expected[:2] and got[0] == 0

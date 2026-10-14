@@ -380,12 +380,17 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
         THEN
         RTE-INSTRUMENT-REGION-SIZE _RTE-FA-REGION +!
     LOOP -1 ;
-\ The family admission's copy: its glyph families, in batch order.
+\ The family admission's copy: its control and glyph families, in batch
+\ order.
 : _RTE-FA-KEEP ( -- )
     _RTE-AM-MEMORY @ 0= IF EXIT THEN
     _RTE-AM-FAMILY _RTE-AM-WRITE-BEGIN
     _RTE-FA-BATCH @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
         _RTE-FA-BATCH @ _RTE-FB.FAMILIES-A @ I RTE-FAMILY-ENTRY-SIZE * +
+        DUP _RTE-FE.KIND @ RTE-FAMILY-CONTROL = IF
+            DUP _RTE-FE.PLAN-A @ OVER RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE /
+            3 PICK _RTE-FE.BYTES-U @ _RTE-AM-PUT-CONTROLS
+        THEN
         DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH = IF
             DUP _RTE-FE.PLAN-A @ OVER RTE-FAMILY-ITEMS@
                 RTE-GLYPH-RUN-PLAN-ITEM-SIZE /

@@ -2671,6 +2671,164 @@ VARIABLE _RTE-LV-FEATURES
     R@ _RTE-F.CONTEXT @ R> _RTE-F.DISJOINT-XT @ EXECUTE
     DUP _RTE-BOOL? 0= IF DROP 0 THEN ;
 
+\ ---------------------------------------------------------------------
+\  Admitted copies
+\ ---------------------------------------------------------------------
+\ Each admission boundary, the hybrid preflight and the family batch
+\ preflight, keeps a copy of what it last admitted.  An item equal to its
+\ copy in every byte that its own checks read, against the same context,
+\ passes those checks again, so they are not repeated.  Checks that read
+\ anything else, such as identity, order, offsets and totals, run for every
+\ item.  Only the boundary writes its copy, and only from items it has just
+\ checked.  The copy lives in a block the engine takes from the memory
+\ source RTE-ADMITTED-MEMORY! gives it; every caller span an admission
+\ reads or writes is proved apart from that block.  Without a memory source
+\ nothing is kept and every item is checked.
+\
+\ A store: its block and the block's bytes, the bytes its copy uses (zero
+\ for none), and what the last admission needed, which the next one grows
+\ the block to before its first proof.  The copy is a sequence of records,
+\ one for each plan: the record's bytes, its kind, its items, its text or
+\ span bytes, the first 120 bytes of its plan's header, the items, then the
+\ bytes in item order.
+: _RTE-AM.A     ( store -- a ) ;
+: _RTE-AM.U     ( store -- a ) 8 + ;
+: _RTE-AM.USED  ( store -- a ) 16 + ;
+: _RTE-AM.NEED  ( store -- a ) 24 + ;
+32 CONSTANT _RTE-AM-SIZE
+CREATE _RTE-AM-HYBRID-MEM _RTE-AM-SIZE 7 + ALLOT
+_RTE-AM-HYBRID-MEM 7 + -8 AND CONSTANT _RTE-AM-HYBRID
+CREATE _RTE-AM-FAMILY-MEM _RTE-AM-SIZE 7 + ALLOT
+_RTE-AM-FAMILY-MEM 7 + -8 AND CONSTANT _RTE-AM-FAMILY
+VARIABLE _RTE-AM-MEMORY     \ the memory source, or 0
+VARIABLE _RTE-AM-S          \ the store of the admission in progress, or 0
+VARIABLE _RTE-AM-W          \ bytes of the copy being written
+VARIABLE _RTE-AM-SHORT      \ true once the block cannot hold the copy
+VARIABLE _RTE-AM-R          \ the copy record of the plan being checked
+VARIABLE _RTE-AM-J          \ the record's next run
+VARIABLE _RTE-AM-N          \ the record's runs
+VARIABLE _RTE-AM-RUN        \ run J
+VARIABLE _RTE-AM-TEXT       \ run J's text
+VARIABLE _RTE-AM-KIND
+VARIABLE _RTE-AM-PLAN
+VARIABLE _RTE-AM-END
+VARIABLE _RTE-AM-W-PLAN
+VARIABLE _RTE-AM-W-ITEMS
+VARIABLE _RTE-AM-W-N
+VARIABLE _RTE-AM-W-TEXT
+VARIABLE _RTE-AM-W-TEXT-U
+VARIABLE _RTE-AM-W-BYTES
+VARIABLE _RTE-AM-AT         \ where the next span's bytes are, in a record
+VARIABLE _RTE-AM-C          \ the control being compared
+1 CONSTANT _RTE-AM-K-GLYPH
+2 CONSTANT _RTE-AM-K-CONTROL
+152 CONSTANT _RTE-AM-RECORD
+
+\ The copy's record of KIND for PLAN, whose first 120 header bytes it
+\ holds, or 0.
+: _RTE-AM-FIND  ( kind plan -- record|0 )
+    _RTE-AM-PLAN ! _RTE-AM-KIND !
+    _RTE-AM-S @ ?DUP 0= IF 0 EXIT THEN
+    DUP _RTE-AM.USED @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-AM.A @ SWAP _RTE-AM.USED @ OVER + _RTE-AM-END !
+    BEGIN DUP _RTE-AM-END @ U< WHILE
+        DUP 8 + @ _RTE-AM-KIND @ = IF
+            DUP 32 + 120 _RTE-AM-PLAN @ 120 COMPARE 0= IF EXIT THEN
+        THEN
+        DUP @ +
+    REPEAT DROP 0 ;
+
+\ Start comparing PLAN's runs with its record, if the copy holds one.
+: _RTE-AM-RUNS-BEGIN  ( plan -- )
+    _RTE-AM-K-GLYPH SWAP _RTE-AM-FIND DUP _RTE-AM-R ! ?DUP 0= IF EXIT THEN
+    DUP 16 + @ _RTE-AM-N ! 0 _RTE-AM-J !
+    _RTE-AM-RECORD + DUP _RTE-AM-RUN !
+    _RTE-AM-N @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RTE-AM-TEXT ! ;
+
+: _RTE-AM-RUN-NEXT  ( -- )
+    _RTE-AM-RUN @ _RTE-LPI.TEXT-CAPACITY @ _RTE-AM-TEXT +!
+    RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RTE-AM-RUN +! 1 _RTE-AM-J +! ;
+
+\ Whether the record's run J comes before ITEM's place in row-major order.
+: _RTE-AM-RUN-BEFORE?  ( item -- flag )
+    _RTE-AM-RUN @ _RTE-LPI.ROW @ OVER _RTE-LPI.ROW @ 2DUP <> IF
+        < NIP EXIT
+    THEN 2DROP
+    _RTE-AM-RUN @ _RTE-LPI.COL @ SWAP _RTE-LPI.COL @ < ;
+
+\ Whether ITEM, a visible run whose TEXT has already been bounded, equals
+\ the record's run at its place in every byte but its identity, text
+\ included.  Visible runs come row by row and left to right, so the search
+\ resumes where the last one stopped; anything else only finds no run.
+: _RTE-AM-RUN-SAME?  ( item text -- flag )
+    _RTE-AM-R @ 0= IF 2DROP 0 EXIT THEN
+    OVER _RTE-LPI.VISIBLE @ 0= IF 2DROP 0 EXIT THEN
+    BEGIN
+        _RTE-AM-J @ _RTE-AM-N @ U< 0= IF 2DROP 0 EXIT THEN
+        _RTE-AM-RUN @ _RTE-LPI.VISIBLE @ 0= IF 2DROP 0 EXIT THEN
+        OVER _RTE-AM-RUN-BEFORE?
+    WHILE _RTE-AM-RUN-NEXT REPEAT
+    OVER _RTE-LPI.ROW @ _RTE-AM-RUN @ _RTE-LPI.ROW @ <>
+    2 PICK _RTE-LPI.COL @ _RTE-AM-RUN @ _RTE-LPI.COL @ <> OR IF
+        2DROP 0 EXIT
+    THEN
+    OVER 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 -
+    _RTE-AM-RUN @ 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 - COMPARE IF
+        2DROP 0 _RTE-AM-RUN-NEXT EXIT
+    THEN
+    SWAP _RTE-LPI.TEXT-CAPACITY @ _RTE-AM-TEXT @ OVER COMPARE 0=
+    _RTE-AM-RUN-NEXT ;
+
+\ Start comparing PLAN's controls with its record, if the copy holds one.
+: _RTE-AM-CONTROLS-BEGIN  ( plan -- )
+    _RTE-AM-K-CONTROL SWAP _RTE-AM-FIND DUP _RTE-AM-R ! ?DUP 0= IF EXIT THEN
+    DUP 16 + @ _RTE-AM-N ! 0 _RTE-AM-J !
+    _RTE-AM-RECORD + DUP _RTE-AM-RUN !
+    _RTE-AM-N @ RTE-CONTROL-SIZE * + _RTE-AM-TEXT ! ;
+
+: _RTE-AM-CONTROL-NEXT  ( -- )
+    _RTE-AM-RUN @ DUP _RTE-CONTROL.LABEL-U @ OVER _RTE-CONTROL.SHORTCUT-U @ +
+        SWAP _RTE-CONTROL.CONTENT-U @ + _RTE-AM-TEXT +!
+    RTE-CONTROL-SIZE _RTE-AM-RUN +! 1 _RTE-AM-J +! ;
+
+\ The record parts the control checks read but for its identity, its
+\ parent and its span addresses, and whether it has a parent.
+: _RTE-AM-CONTROL-PARTS=  ( control copy -- flag )
+    OVER 16 2 PICK 16 COMPARE IF 2DROP 0 EXIT THEN
+    OVER 24 + 32 2 PICK 24 + 32 COMPARE IF 2DROP 0 EXIT THEN
+    OVER 64 + 56 2 PICK 64 + 56 COMPARE IF 2DROP 0 EXIT THEN
+    OVER 128 + 8 2 PICK 128 + 8 COMPARE IF 2DROP 0 EXIT THEN
+    OVER 144 + 8 2 PICK 144 + 8 COMPARE IF 2DROP 0 EXIT THEN
+    OVER 160 + 40 2 PICK 160 + 40 COMPARE IF 2DROP 0 EXIT THEN
+    _RTE-CONTROL.PARENT @ 0= SWAP _RTE-CONTROL.PARENT @ 0= = ;
+
+\ Whether the span's bytes equal the record's at AT, which moves past them.
+: _RTE-AM-SPAN=  ( a u -- flag )
+    DUP >R _RTE-AM-AT @ R@ COMPARE 0= R> _RTE-AM-AT +! ;
+
+\ Whether CONTROL, whose spans have already been bounded, equals the
+\ record's control in its place: in its parts, and in its label, shortcut
+\ and content bytes.  Controls are compared in order.  A field's content is
+\ checked together with its label's place, so a field is always checked.
+: _RTE-AM-CONTROL-SAME?  ( control -- flag )
+    _RTE-AM-C !
+    _RTE-AM-R @ 0= IF 0 EXIT THEN
+    _RTE-AM-J @ _RTE-AM-N @ U< 0= IF 0 EXIT THEN
+    _RTE-AM-TEXT @ _RTE-AM-AT !
+    _RTE-AM-C @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD <> IF
+        _RTE-AM-C @ _RTE-AM-RUN @ _RTE-AM-CONTROL-PARTS=
+    ELSE 0 THEN
+    DUP IF
+        DROP
+        _RTE-AM-C @ DUP _RTE-CONTROL.LABEL-A @ SWAP _RTE-CONTROL.LABEL-U @
+            _RTE-AM-SPAN=
+        _RTE-AM-C @ DUP _RTE-CONTROL.SHORTCUT-A @
+            SWAP _RTE-CONTROL.SHORTCUT-U @ _RTE-AM-SPAN= AND
+        _RTE-AM-C @ DUP _RTE-CONTROL.CONTENT-A @
+            SWAP _RTE-CONTROL.CONTENT-U @ _RTE-AM-SPAN= AND
+    THEN
+    _RTE-AM-CONTROL-NEXT ;
+
 \ CONTROL plan validation performs exactly one pass over the caller's item
 \ bank.  Besides full intrinsic validation it proves header correlation,
 \ contiguous parent-first identity, fixed-depth menu graph/order/state,
@@ -3121,10 +3279,40 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     _RTE-CPV-COUNT !
     -1 ;
 
-: _RTE-CPV-ITEM?  ( -- flag )
+\ Every control's spans: their shape and their place among the plan's bytes.
+: _RTE-CPV-ITEM-SPANS?  ( -- flag )
+    _RTE-CPV-ITEM @ RTE-CONTROL-SIZE _RTE-SPAN? 0= IF 0 EXIT THEN
+    _RTE-CPV-ITEM @ _RTE-CONTROL.LABEL-A @
+    _RTE-CPV-ITEM @ _RTE-CONTROL.LABEL-U @
+        _RTE-CONTROL-TEXT-SPAN? 0= IF 0 EXIT THEN
+    _RTE-CPV-ITEM @ _RTE-CONTROL.SHORTCUT-A @
+    _RTE-CPV-ITEM @ _RTE-CONTROL.SHORTCUT-U @
+        _RTE-CONTROL-TEXT-SPAN? 0= IF 0 EXIT THEN
+    _RTE-CPV-ITEM @ _RTE-CONTROL.CONTENT-A @
+    _RTE-CPV-ITEM @ _RTE-CONTROL.CONTENT-U @
+        _RTE-CONTROL-CONTENT-SPAN? 0= IF 0 EXIT THEN
+    _RTE-CPV-ITEM-BYTES-AUTHORITY? ;
+
+\ The checks a control passes again when it equals its admitted copy.  They
+\ read its record but for its identity, its parent and its span addresses,
+\ whether it has a parent, and the bytes its spans hold: an empty span's
+\ address is zero by its shape, and a field, whose content check also
+\ places its label, is never taken from the copy.
+: _RTE-CPV-ITEM-CHECKED?  ( -- flag )
     _RTE-CPV-ITEM-STRUCTURAL? 0= IF 0 EXIT THEN
-    _RTE-CPV-ITEM-BYTES-AUTHORITY? 0= IF 0 EXIT THEN
-    _RTE-CPV-ITEM-TEXT? 0= IF 0 EXIT THEN
+    _RTE-CPV-ITEM-TEXT? ;
+
+\ Identity, spans, correlation, graph and totals are checked for every
+\ control; the record's own checks unless it equals its copy, and then the
+\ two of them that read its identity.
+: _RTE-CPV-ITEM?  ( -- flag )
+    _RTE-CPV-ITEM-SPANS? 0= IF 0 EXIT THEN
+    _RTE-CPV-ITEM @ _RTE-AM-CONTROL-SAME? IF
+        _RTE-CPV-ITEM @ _RTE-CONTROL.ID @ DUP 0= IF DROP 0 EXIT THEN
+        _RTE-CPV-ITEM @ _RTE-CONTROL.PARENT @ = IF 0 EXIT THEN
+    ELSE
+        _RTE-CPV-ITEM-CHECKED? 0= IF 0 EXIT THEN
+    THEN
     _RTE-CPV-ITEM-CORRELATES? 0= IF 0 EXIT THEN
     _RTE-CPV-GRAPH? 0= IF 0 EXIT THEN
     _RTE-CPV-ITEM-AGGREGATE? ;
@@ -3354,50 +3542,6 @@ VARIABLE _RTE-HPV-INSTRUMENT-FIRST-REGION
 CREATE _RTE-HPV-SUMMARY-MEM RTE-HYBRID-ADMISSION-SIZE 7 + ALLOT
 _RTE-HPV-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-HPV-SUMMARY
 
-\ ---------------------------------------------------------------------
-\  Admitted copies
-\ ---------------------------------------------------------------------
-\ Each admission boundary, the hybrid preflight and the family batch
-\ preflight, keeps a copy of what it last admitted.  An item equal to its
-\ copy in every byte that its own checks read, against the same context,
-\ passes those checks again, so they are not repeated.  Checks that read
-\ anything else, such as identity, order, offsets and totals, run for every
-\ item.  Only the boundary writes its copy, and only from items it has just
-\ checked.  The copy lives in a block the engine takes from the memory
-\ source RTE-ADMITTED-MEMORY! gives it; every caller span an admission
-\ reads or writes is proved apart from that block.  Without a memory source nothing is kept and every item is
-\ checked.
-\
-\ A store: its block and the block's bytes, the bytes its copy uses (zero
-\ for none), and what the last admission needed, which the next one grows
-\ the block to before its first proof.
-: _RTE-AM.A     ( store -- a ) ;
-: _RTE-AM.U     ( store -- a ) 8 + ;
-: _RTE-AM.USED  ( store -- a ) 16 + ;
-: _RTE-AM.NEED  ( store -- a ) 24 + ;
-32 CONSTANT _RTE-AM-SIZE
-CREATE _RTE-AM-HYBRID-MEM _RTE-AM-SIZE 7 + ALLOT
-_RTE-AM-HYBRID-MEM 7 + -8 AND CONSTANT _RTE-AM-HYBRID
-CREATE _RTE-AM-FAMILY-MEM _RTE-AM-SIZE 7 + ALLOT
-_RTE-AM-FAMILY-MEM 7 + -8 AND CONSTANT _RTE-AM-FAMILY
-VARIABLE _RTE-AM-MEMORY     \ the memory source, or 0
-VARIABLE _RTE-AM-S          \ the store of the admission in progress, or 0
-VARIABLE _RTE-AM-W          \ bytes of the copy being written
-VARIABLE _RTE-AM-SHORT      \ true once the block cannot hold the copy
-VARIABLE _RTE-AM-R          \ the copy record of the plan being checked
-VARIABLE _RTE-AM-J          \ the record's next run
-VARIABLE _RTE-AM-N          \ the record's runs
-VARIABLE _RTE-AM-RUN        \ run J
-VARIABLE _RTE-AM-TEXT       \ run J's text
-VARIABLE _RTE-AM-KIND
-VARIABLE _RTE-AM-PLAN
-VARIABLE _RTE-AM-END
-VARIABLE _RTE-AM-W-PLAN
-VARIABLE _RTE-AM-W-ITEMS
-VARIABLE _RTE-AM-W-N
-VARIABLE _RTE-AM-W-TEXT
-VARIABLE _RTE-AM-W-TEXT-U
-VARIABLE _RTE-AM-W-BYTES
 CREATE _RTE-HPV-OWNED-END
 
 : _RTE-AM-APART?  ( a u store -- flag )
@@ -3462,10 +3606,7 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-AM-W @ _RTE-AM-S @ _RTE-AM.NEED !
     _RTE-AM-SHORT @ IF 0 ELSE _RTE-AM-W @ THEN _RTE-AM-S @ _RTE-AM.USED ! ;
 
-\ A record: its bytes, its kind, its items, its text bytes, the first 120
-\ bytes of its plan's header, the items, then the text in item order.
-1 CONSTANT _RTE-AM-K-GLYPH
-152 CONSTANT _RTE-AM-RECORD
+\ A glyph record's bytes are its runs' text.
 : _RTE-AM-PUT-GLYPHS  ( plan items-a count text-a text-u -- )
     _RTE-AM-W-TEXT-U ! _RTE-AM-W-TEXT ! _RTE-AM-W-N ! _RTE-AM-W-ITEMS !
     _RTE-AM-W-PLAN !
@@ -3490,60 +3631,40 @@ CREATE _RTE-HPV-OWNED-END
     THEN
     _RTE-AM-W-BYTES @ _RTE-AM-W +! ;
 
-\ The copy's record of KIND for PLAN, whose first 120 header bytes it
-\ holds, or 0.
-: _RTE-AM-FIND  ( kind plan -- record|0 )
-    _RTE-AM-PLAN ! _RTE-AM-KIND !
-    _RTE-AM-S @ ?DUP 0= IF 0 EXIT THEN
-    DUP _RTE-AM.USED @ 0= IF DROP 0 EXIT THEN
-    DUP _RTE-AM.A @ SWAP _RTE-AM.USED @ OVER + _RTE-AM-END !
-    BEGIN DUP _RTE-AM-END @ U< WHILE
-        DUP 8 + @ _RTE-AM-KIND @ = IF
-            DUP 32 + 120 _RTE-AM-PLAN @ 120 COMPARE 0= IF EXIT THEN
-        THEN
-        DUP @ +
-    REPEAT DROP 0 ;
-
-\ Start comparing PLAN's runs with its record, if the copy holds one.
-: _RTE-AM-RUNS-BEGIN  ( plan -- )
-    _RTE-AM-K-GLYPH SWAP _RTE-AM-FIND DUP _RTE-AM-R ! ?DUP 0= IF EXIT THEN
-    DUP 16 + @ _RTE-AM-N ! 0 _RTE-AM-J !
-    _RTE-AM-RECORD + DUP _RTE-AM-RUN !
-    _RTE-AM-N @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RTE-AM-TEXT ! ;
-
-: _RTE-AM-RUN-NEXT  ( -- )
-    _RTE-AM-RUN @ _RTE-LPI.TEXT-CAPACITY @ _RTE-AM-TEXT +!
-    RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RTE-AM-RUN +! 1 _RTE-AM-J +! ;
-
-\ Whether the record's run J comes before ITEM's place in row-major order.
-: _RTE-AM-RUN-BEFORE?  ( item -- flag )
-    _RTE-AM-RUN @ _RTE-LPI.ROW @ OVER _RTE-LPI.ROW @ 2DUP <> IF
-        < NIP EXIT
-    THEN 2DROP
-    _RTE-AM-RUN @ _RTE-LPI.COL @ SWAP _RTE-LPI.COL @ < ;
-
-\ Whether ITEM, a visible run whose TEXT has already been bounded, equals
-\ the record's run at its place in every byte but its identity, text
-\ included.  Visible runs come row by row and left to right, so the search
-\ resumes where the last one stopped; anything else only finds no run.
-: _RTE-AM-RUN-SAME?  ( item text -- flag )
-    _RTE-AM-R @ 0= IF 2DROP 0 EXIT THEN
-    OVER _RTE-LPI.VISIBLE @ 0= IF 2DROP 0 EXIT THEN
-    BEGIN
-        _RTE-AM-J @ _RTE-AM-N @ U< 0= IF 2DROP 0 EXIT THEN
-        _RTE-AM-RUN @ _RTE-LPI.VISIBLE @ 0= IF 2DROP 0 EXIT THEN
-        OVER _RTE-AM-RUN-BEFORE?
-    WHILE _RTE-AM-RUN-NEXT REPEAT
-    OVER _RTE-LPI.ROW @ _RTE-AM-RUN @ _RTE-LPI.ROW @ <>
-    2 PICK _RTE-LPI.COL @ _RTE-AM-RUN @ _RTE-LPI.COL @ <> OR IF
-        2DROP 0 EXIT
+\ A control record holds the plan's controls, then each one's label,
+\ shortcut and content bytes in turn.  Their total is the plan's checked
+\ byte count, so the bytes fill the record exactly.
+: _RTE-AM-PUT-SPAN  ( a u -- )
+    DUP IF _RTE-AM-AT @ SWAP DUP _RTE-AM-AT +! MOVE ELSE 2DROP THEN ;
+: _RTE-AM-PUT-CONTROLS  ( plan items-a count bytes -- )
+    _RTE-AM-W-TEXT-U ! _RTE-AM-W-N ! _RTE-AM-W-ITEMS ! _RTE-AM-W-PLAN !
+    _RTE-AM-W-N @ RTE-CONTROL-SIZE * _RTE-AM-RECORD +
+        _RTE-AM-W-TEXT-U @ 7 + -8 AND + _RTE-AM-W-BYTES !
+    _RTE-AM-S @ _RTE-AM.A @ 0=
+    _RTE-AM-W @ _RTE-AM-W-BYTES @ + _RTE-AM-S @ _RTE-AM.U @ U> OR IF
+        -1 _RTE-AM-SHORT !
     THEN
-    OVER 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 -
-    _RTE-AM-RUN @ 8 + RTE-GLYPH-RUN-PLAN-ITEM-SIZE 8 - COMPARE IF
-        2DROP 0 _RTE-AM-RUN-NEXT EXIT
+    _RTE-AM-SHORT @ 0= IF
+        _RTE-AM-S @ _RTE-AM.A @ _RTE-AM-W @ + >R
+        _RTE-AM-W-BYTES @ R@ !
+        _RTE-AM-K-CONTROL R@ 8 + !
+        _RTE-AM-W-N @ R@ 16 + !
+        _RTE-AM-W-TEXT-U @ R@ 24 + !
+        _RTE-AM-W-PLAN @ R@ 32 + 120 MOVE
+        _RTE-AM-W-ITEMS @ R@ _RTE-AM-RECORD +
+            _RTE-AM-W-N @ RTE-CONTROL-SIZE * MOVE
+        R> _RTE-AM-RECORD + _RTE-AM-W-N @ RTE-CONTROL-SIZE * + _RTE-AM-AT !
+        _RTE-AM-W-N @ 0 ?DO
+            _RTE-AM-W-ITEMS @ I RTE-CONTROL-SIZE * +
+            DUP _RTE-CONTROL.LABEL-A @ OVER _RTE-CONTROL.LABEL-U @
+                _RTE-AM-PUT-SPAN
+            DUP _RTE-CONTROL.SHORTCUT-A @ OVER _RTE-CONTROL.SHORTCUT-U @
+                _RTE-AM-PUT-SPAN
+            DUP _RTE-CONTROL.CONTENT-A @ SWAP _RTE-CONTROL.CONTENT-U @
+                _RTE-AM-PUT-SPAN
+        LOOP
     THEN
-    SWAP _RTE-LPI.TEXT-CAPACITY @ _RTE-AM-TEXT @ OVER COMPARE 0=
-    _RTE-AM-RUN-NEXT ;
+    _RTE-AM-W-BYTES @ _RTE-AM-W +! ;
 
 \ Renderer-neutral planners may validate negotiated limits without a facade.
 \ This read-only authority proof covers every admission/limits validator,
@@ -4419,7 +4540,9 @@ CREATE _RTE-HPV-OWNED-END
     -1 _RTE-CPV-FIXED-AUTHORITY !
     _RTE-HPV-CONTROL-BYTES-A @ _RTE-CPV-CONTROL-BYTES-A !
     _RTE-HPV-CONTROL-BYTES-U @ _RTE-CPV-CONTROL-BYTES-U !
+    _RTE-HPV-CONTROL @ _RTE-AM-CONTROLS-BEGIN
     _RTE-CONTROL-PLAN-VALID-BODY 0= IF 0 EXIT THEN
+    0 _RTE-AM-R !
     _RTE-HPV-CONTROL-BYTES-U @ _RTE-CPV-BYTES @ <> IF 0 EXIT THEN
     _RTE-HPV-CONTROL @ _RTE-HPV-COPY-BASE-HEADER
     _RTE-CPV-COUNT @ _RTE-HPV-SUMMARY _RTE-HA.CONTROL-COUNT !
@@ -4743,10 +4866,15 @@ CREATE _RTE-HPV-OWNED-END
     0 _RTE-IPV-FINISH DROP
     0 _RTE-GLYPH-RUN-PLAN-VALID-FINISH DROP ;
 
-\ The hybrid admission's copy: its glyph plan.
+\ The hybrid admission's copy: its control and glyph plans.
 : _RTE-HPV-KEEP  ( -- )
     _RTE-AM-MEMORY @ 0= IF EXIT THEN
     _RTE-AM-HYBRID _RTE-AM-WRITE-BEGIN
+    _RTE-HPV-CONTROL @ IF
+        _RTE-HPV-CONTROL @ _RTE-HPV-CONTROL-ITEMS-A @
+        _RTE-HPV-CONTROL-ITEMS-U @ RTE-CONTROL-SIZE /
+        _RTE-HPV-CONTROL-BYTES-U @ _RTE-AM-PUT-CONTROLS
+    THEN
     _RTE-HPV-GLYPH @ IF
         _RTE-HPV-GLYPH @ _RTE-HPV-GLYPH-ITEMS-A @ _RTE-HPV-GLYPH-COUNT @
         _RTE-HPV-TEXT-A @ _RTE-HPV-TEXT-U @ _RTE-AM-PUT-GLYPHS

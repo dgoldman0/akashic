@@ -700,14 +700,28 @@ def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
         "_RTE-CPV-ITEMS-A @ _RTE-CPV-ITEMS-U @ MSPAN-OVERLAP?",
         "RTE-STORAGE-DISJOINT?",
     )
+    # Every control's spans are shaped and placed before anything reads
+    # them; its own checks run unless it equals its admitted copy.
     _ordered(
         item,
-        "_RTE-CPV-ITEM-STRUCTURAL?",
-        "_RTE-CPV-ITEM-BYTES-AUTHORITY?",
-        "_RTE-CPV-ITEM-TEXT?",
+        "_RTE-CPV-ITEM-SPANS?",
+        "_RTE-AM-CONTROL-SAME?",
+        "_RTE-CPV-ITEM-CHECKED?",
         "_RTE-CPV-ITEM-CORRELATES?",
         "_RTE-CPV-GRAPH?",
         "_RTE-CPV-ITEM-AGGREGATE?",
+    )
+    _ordered(
+        _word(source, "_RTE-CPV-ITEM-SPANS?"),
+        "RTE-CONTROL-SIZE _RTE-SPAN?",
+        "_RTE-CONTROL-TEXT-SPAN?",
+        "_RTE-CONTROL-CONTENT-SPAN?",
+        "_RTE-CPV-ITEM-BYTES-AUTHORITY?",
+    )
+    _ordered(
+        _word(source, "_RTE-CPV-ITEM-CHECKED?"),
+        "_RTE-CPV-ITEM-STRUCTURAL?",
+        "_RTE-CPV-ITEM-TEXT?",
     )
     assert body.count("?DO") == 1
     assert body.count("_RTE-CPV-ITEM?") == 1
