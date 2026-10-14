@@ -801,10 +801,18 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
 \ Freezing is the only write to a bank and checks the finished bank once.
 \ STAGE freezes into the bank ACTIVE does not name after dropping PENDING,
 \ so a bank that PENDING or ACTIVE names is never written again, and later
-\ uses compare its identities only. RSHFC-MEASURE checks the batch, and no
-\ write here can reach it, so the copy need not check it again.
+\ uses compare its identities only.
+\ The batch's graph was checked by the preflight that admitted it, at the
+\ end of BUILD-BATCH, and nothing since has changed what that check reads.
+\ A START freezes right after it.  A DELTA's identity mapping rewrites
+\ identities, which the graph check reads only as a pane's, nonzero before
+\ and after; and it gives a glyph family new item and reference arrays,
+\ fresh from the work space and so apart from every other span, holding the
+\ admitted runs in order and then canonical tombstones with no text, whose
+\ references continue the family's text at its end.  So the measure and the
+\ copy take the batch as proved; the measure still checks every span.
 : _RSHSP-FREEZE ( -- )
-    _RSHSP-BATCH @ RSHFC-MEASURE RSHFC-S-OK = _RSHSP-CHECK _RSHSP-CLONE-U !
+    _RSHSP-BATCH @ _RSHFC-MEASURE-PROVED RSHFC-S-OK = _RSHSP-CHECK _RSHSP-CLONE-U !
     RSHSP-BANK-HEADER-SIZE _RSHSP-MU @ _RSHSP-ALIGN _RSHSP-ADD
     _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ RSHPL-CORRELATION-SIZE _RSHSP-MUL _RSHSP-ADD
     _RSHSP-RESULT @ RSHPL-RESULT.ACTION-BYTES @ _RSHSP-ALIGN _RSHSP-ADD

@@ -173,3 +173,37 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
         else:
             assert follower in ("_RSHSP-MU", "SHM-ENTRY"), match.group(0)
     assert not re.search(r"\bSHME?\.[A-Z-]+ \+?!", source)
+
+
+def test_the_freeze_takes_the_graph_the_preflight_checked():
+    """The batch's graph is checked by the preflight at the end of
+    BUILD-BATCH; the freeze measures and copies it as proved. Between the two
+    only the DELTA's identity mapping writes the batch, and the frozen bank
+    is still checked in full."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1]
+              / "akashic/tui/rich-terminal/shell-screen-producer.f").read_text()
+    code = "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
+
+    def word(name):
+        match = re.search(rf"(?ms)^: {re.escape(name)}(?=\s).*?;\s*$", code)
+        assert match is not None, name
+        return match.group(0)
+
+    build = word("_RSHSP-BUILD-BATCH")
+    assert build.rstrip().endswith("RTE-FAMILY-BATCH-PREFLIGHT DUP IF THROW ELSE DROP THEN ;")
+    freeze = word("_RSHSP-FREEZE")
+    assert "_RSHSP-BATCH @ _RSHFC-MEASURE-PROVED" in freeze
+    assert "RSHFC-MEASURE " not in freeze and "_RSHFC-COPY-PROVED" in freeze
+    assert freeze.rstrip().endswith("_RSHSP-BANK-VALID? _RSHSP-CHECK ;")
+    # Every freeze follows a preflight, with only the mapping between them.
+    start = word("_RSHSP-BUILD")
+    assert start.index("_RSHSP-BUILD-BATCH") < start.index("_RSHSP-FREEZE")
+    delta = word("_RSHSP-BUILD-DELTA")
+    between = delta[delta.index("_RSHSP-BUILD-BATCH"):delta.index("_RSHSP-FREEZE")]
+    writers = {w for w in re.findall(r"_RSHSP-D-[A-Z-]+", between)}
+    assert writers == {"_RSHSP-D-CATALOG", "_RSHSP-D-FAMILIES", "_RSHSP-D-METADATA",
+                       "_RSHSP-D-NEXT-OBJECT"}
+    assert code.count("_RSHSP-FREEZE") == 3
