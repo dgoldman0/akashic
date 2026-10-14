@@ -2,7 +2,7 @@
 
 Status: approved for parts 1 to 4 and 7 on 2026-10-14, and for parts 5 and
 6 later that day. Parts 1 to 5 and 7 are done; each records what it did.
-Part 6 is under way: 6.1 and 6.2 are done.
+Part 6 is under way: 6.1 to 6.3 are done, and 6.4's emission half.
 
 Earlier work: [PER-KEY-FRAME-REPEATS.md](PER-KEY-FRAME-REPEATS.md)
 (2026-09-28) and part 10 of the [rich experience plan](RICH-EXPERIENCE-PLAN.md)
@@ -408,13 +408,56 @@ save about 0.25M of that, but both producers would have to take their kept
 rows through the planner, so it is not part of this plan. Copying the
 unchanged rows' runs costs another 0.7M a frame.
 
-### 6.3 What the admissions still do twice
+### 6.3 What the admissions and the shell's proofs still repeat
 
-To be designed from the call tree after 6.2.
+**Today.** After 6.2 the two admissions cost 3.2M a burst frame. Their
+per-item work is the copy comparison of part 5 and the checks part 5 keeps:
+each item's spans, which lie at new addresses every frame, its identity and
+order, the control graph and the totals. None of that repeats within a
+frame. Two repeats sit beside them.
 
-### 6.4 Emission from marks, and kept identities
+**The batch's span check.** The family preflight's pairwise span check takes
+one pass over spans that rise in address in the order the batch lists them:
+plan, items, text, references. The shell laid out each glyph family's
+references before its text, so every glyph family's references sent the
+check down its slow path, which compares a span with every span before it:
+about 1,400 pairs a frame. The shell now reserves and compacts a glyph
+family's text before its references. Every move still goes to a destination
+at or before its source, and only where the two spans lie changes.
 
-To be designed from the call tree after 6.3.
+**The shell's storage proof.** For each of its four spans the shell asked the
+shell source's live predicate, and then the source's install-time check of
+the live owners. The live predicate already makes each of those checks on the
+same span, as strictly or more, so the second call is gone. Inside the live
+predicate, the source's validity and the span's place beside the source's
+dependent storage were also checked twice; they are now checked once.
+
+**Done** (Akashic `646da06b`, `c08bc3be`). Per burst frame the shell's proof
+fell from 1.16M to 0.91M steps and its preflight from 2.16M to 1.97M; the
+frame build fell from 15.33M to 14.89M.
+
+### 6.4 Emission and identities
+
+**Emission — exact speed-up.** The shell's DELTA emission compares each glyph
+run of the pending bank with the active bank's. When a glyph family has as
+many runs as the active family, and its runs, references and text are byte
+for byte the active family's, every run is the same, so the family is
+skipped after three block comparisons. Any difference takes the run-by-run
+path. This is the emitter's own comparison of its own two banks.
+
+**Done** (Akashic `57fafc36`). Emission fell from 0.49M to 0.40M steps a
+burst frame. The frame build rose from 14.89M to 15.10M in that run because
+the documents' snapshot rose from 2.99M to 3.26M; without the snapshot it
+fell from 11.90M to 11.84M.
+
+**Kept identities — not started.** The hybrid producer's comparison costs
+1.5M a frame. Keeping the acknowledged identities of reused controls and rows
+could remove its identity matching, at most about 0.5M: the control map
+0.26M, normalization 0.14M, and the reference and slot maps 0.14M. The
+equality checks that find what changed, 0.9M, would stay. It needs the
+candidate to depend on the acknowledged frame, a change to the rule that the
+candidate is byte-identical to a full rebuild, and a dual-path check to keep
+it exact.
 
 ## Part 7. Reserve glyph slots from what is needed — repeat, device memory
 
@@ -482,7 +525,7 @@ These are recorded here and not fixed, unless a part touches the code:
 | 3 | Part 4 | this review | done |
 | 4 | Part 7 | this review | done |
 | 5 | Part 5 | its own, for the engine copy | done |
-| 6 | Part 6 | its own | in progress: 6.1 and 6.2 done |
+| 6 | Part 6 | its own | 6.1 to 6.3 and 6.4's emission done |
 
 For each slice:
 - unit and byte-oracle tests;
@@ -515,17 +558,36 @@ next, as the storage its range proofs check shifts with unrelated changes.
 | Part 5 (measured) | 19.3M | 16.7M |
 | 6.1 (measured) | 18.7M | 15.9M |
 | 6.2 (measured) | 17.9M | 15.3M |
+| 6.3 (measured) | 18.0M | 14.9M |
+| 6.4 emission (measured) | 17.8M | 15.1M |
 
 Part 4 saves nothing in this run, because no run disappears before the typing
 starts. In a session where a menu has closed it saves up to 12% of a key.
 Part 7 saves device memory traffic, not steps.
 
-What would remain:
-- the documents' snapshot, 3.4M;
-- Desk's painting and the terminal service, about 2.5M;
-- the work on the changed items themselves.
+What remains of a burst frame's 15.1M build, measured after 6.4's emission:
+- the documents' snapshot, 3.0M to 3.3M;
+- the hybrid producer's candidate, 3.5M, with the engine's admission 1.0M;
+- the shell's preflight 2.0M, freeze 1.25M, storage proof 0.9M and
+  emission 0.4M;
+- the comparison, 1.5M;
+- glyph planning and the copying of unchanged rows' runs, about 1.9M across
+  both producers.
 
-Going further needs the snapshot itself to follow change.
+Smaller repeats measured on the way, each needing a change in more than one
+module:
+- the planner checks every claim and span once per call, about ten calls a
+  frame; one call per region would save about 0.25M;
+- the shell's storage proof checks the source's validity and walks UIDL's
+  collections once for each of its four spans, about 0.25M together;
+- copying unchanged rows' runs one at a time, about 0.7M, could take whole
+  rows at once.
+
+The adapter re-validates its own state at each entry, six times a frame and
+0.8M in all. That state lives in caller-provided storage, which this design
+keeps re-validating.
+
+Going further than that needs the snapshot itself to follow change.
 
 ## Not in this design
 
