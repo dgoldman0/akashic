@@ -109,15 +109,51 @@ def test_equal_text_at_different_valid_offsets_is_not_marked_changed(harness):
     assert memory.read_bytes(harness.mapping, 24) == bytes(24)
 
 
-def test_invisible_reserve_keeps_general_tombstone_canonicalization(harness):
-    harness.setup((*ACTIVE[:2], (102, 0, 0, None)),
-                  ((0, 0, "A"), (0, 2, "B"), (0, 0, None)))
+TAILED = (*ACTIVE[:2], (102, 0, 0, None))
+
+
+@pytest.mark.parametrize("changed,offset", (((), None), ((1,), None), ((), 0)))
+def test_invisible_tail_takes_the_layout_path_with_the_general_result(harness, changed, offset):
+    """An acknowledged frame whose tail is an invisible tombstone, as after a
+    run disappeared, keeps the fast path. Its result is the general
+    matcher's, byte for byte: the tombstone keeps its acknowledged ID and
+    takes the canonical text reference, whatever reference it came with."""
+    pending = tuple((row, col, "X" if i in changed else text)
+                    for i, (_, row, col, text) in enumerate(TAILED[:2])) + ((0, 0, None),)
+    harness.setup(TAILED, pending)
+    memory = harness.runtime.memory
+    if offset is not None:
+        memory.write64(harness.references() + 2 * 16, offset)
+    fresh = memory.read_bytes(harness.pending, harness.bank_capacity)
+    assert harness.call("_RTHP-D-BUILD-SLOT-MAP?")
+    harness.variable("_RTHP-D-OPS", 7)
+    assert harness.call("_RTHP-D-TRY-GLYPH-LAYOUT?")
+    fast = harness.observe()
+    assert harness.variable("_RTHP-D-PENDING-VISIBLE") == 2
+    assert harness.call("_RTHP-D-PLAN-COMPACT-GLYPHS")
+    count = harness.variable("_RTHP-D-PLAN-GLYPHS")
+    fast_plan = [harness.results("_RTHP-D-PLAN-GLYPH-AT", i) for i in range(count)]
+    memory.write_bytes(harness.pending, fresh)
+    harness.variable("_RTHP-D-OPS", 7)
+    harness.normalize()
+    for index in range(harness.final_count):
+        assert harness.call("_RTHP-D-GLYPH-COMPATIBLE-AND-MARK?", index)
+    assert harness.observe() == fast
+    assert harness.variable("_RTHP-D-OPS") == 7 + len(changed)
+    assert harness.call("_RTHP-D-PLAN-COMPACT-GLYPHS")
+    count = harness.variable("_RTHP-D-PLAN-GLYPHS")
+    assert [harness.results("_RTHP-D-PLAN-GLYPH-AT", i) for i in range(count)] == fast_plan
+    assert memory.read_bytes(harness.active, harness.bank_capacity) == harness.active_before
+
+
+def test_a_run_in_place_of_the_tail_leaves_the_general_matcher(harness):
+    """A new visible run where the acknowledged tail holds a tombstone differs
+    in its item bytes, so the fast path declines without writing."""
+    harness.setup(TAILED, ((0, 0, "A"), (0, 2, "B"), (1, 4, "N")))
     assert harness.call("_RTHP-D-BUILD-SLOT-MAP?")
     before = harness.observe()
     assert not harness.call("_RTHP-D-TRY-GLYPH-LAYOUT?")
     assert harness.observe() == before
-    assert harness.call("_RTHP-D-NORMALIZE-GLYPH-IDS?")
-    assert harness.plan() == []
 
 
 def test_empty_layout_is_a_noop(harness):

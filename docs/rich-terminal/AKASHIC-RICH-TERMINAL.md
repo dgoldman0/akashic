@@ -442,7 +442,9 @@ after the exact complete composite has been physically acknowledged:
   producer's acknowledged target bank records menus, menu items, tabs, and
   visible enabled `TEXT_AREA`/`TEXT_GRID` roots with their kinds, and
   `RTHP-CONTROL-TARGET@` resolves an intent only against a control whose kind
-  accepts it, returning the target's cell and shared content revision.
+  accepts it, returning the target's cell and content revision. A
+  collection's content revision is the aggregate epoch of the frame that last
+  changed its body; an unchanged body keeps its revision and is not resent.
   `ACTIVATE` becomes an ordinary primary press at the target cell, as before.
   `PLACE` and `EXTEND` must name that content revision; they become
   `KEY-MOUSE-TEXT-PLACE`/`KEY-MOUSE-TEXT-EXTEND` at the root's first cell,
@@ -834,7 +836,10 @@ BUSY while a capture is open, or UNSUPPORTED when nothing needs to grow. The APT
 `RTAPT`; generic UIDL capture and the hybrid producer do not depend on
 provider opcodes or layouts. Public byte-count words, validators, and
 storage-disjoint queries are the ABI authority. Documentation must not freeze
-private descriptor offsets or copy an obsolete facade size.
+private descriptor offsets or copy an obsolete facade size. A provider's
+storage-disjoint callback decides by overlap alone: when it accepts a range,
+it accepts every part of that range. Family admission and emission rely on
+this to prove a batch's spans with one query over their enclosure.
 
 Pictures cross the facade as one provider job at a time: an upload of an
 immutable resource, as raw RGBA8 pixels or as a file in a format the

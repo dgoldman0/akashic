@@ -3239,8 +3239,9 @@ VARIABLE _RTHP-TL-INTENT
 \   Resolve one reported intent against the exact acknowledged target.  The
 \   control must be a unique target of a kind that accepts the RTE-INTENT-*
 \   value.  The cell lies inside the ordinary widget that drew it, and
-\   revision is the target's exact semantic content revision. Collections use
-\   the aggregate epoch; FIELD retains its independently authored revision.
+\   revision is the target's exact semantic content revision. A collection's
+\   revision is the aggregate epoch of the frame that last changed its body;
+\   FIELD retains its independently authored revision.
 : RTHP-CONTROL-TARGET@
   ( owner generation control-id intent producer -- row col revision found? )
     _RTHP-TL-P ! _RTHP-TL-INTENT ! _RTHP-TL-ID !
@@ -11010,6 +11011,8 @@ VARIABLE _RTHP-D-REV-PENDING
     RTE-CONTROL-DOCUMENT = IF USDOC-TAG USDOC-HEADER-SIZE EXIT THEN
     USSTX-TAG USSTX-CONTENT-HEADER-SIZE ;
 
+\ A body takes the aggregate epoch of the frame that changed it and keeps it
+\ while it stays unchanged, so a bank's revisions never exceed its epoch.
 : _RTHP-D-CONTENT-REVISION?  ( control bank -- revision flag )
     _RTHP-D-REV-BANK ! _RTHP-D-REV-C !
     _RTHP-D-REV-C @ _RTE-CONTROL.CONTENT-U @ DUP _RTHP-D-REV-U !
@@ -11025,7 +11028,7 @@ VARIABLE _RTHP-D-REV-PENDING
         IF 0 0 EXIT THEN
     _RTHP-D-REV-A @ 6 + _RTHP-D-BYTE-LE16@ IF 0 0 EXIT THEN
     _RTHP-D-REV-A @ 8 + _RTHP-D-BYTE-LE64@ DUP 0= IF DROP 0 0 EXIT THEN
-    DUP _RTHP-D-REV-BANK @ _RTHP-TB.CONTENT-EPOCH @ <> IF
+    DUP _RTHP-D-REV-BANK @ _RTHP-TB.CONTENT-EPOCH @ U> IF
         DROP 0 0 EXIT
     THEN
     -1 ;
@@ -11036,6 +11039,33 @@ VARIABLE _RTHP-D-REV-PENDING
     _RTHP-D-PENDING-C @ _RTHP-D-PENDING @ _RTHP-D-CONTENT-REVISION?
         0= IF DROP 0 EXIT THEN _RTHP-D-REV-PENDING !
     _RTHP-D-REV-PENDING @ _RTHP-D-REV-ACTIVE @ U> ;
+
+\ True when both contents are valid and equal in every byte but the 8-byte
+\ revision that STX1, ITM1 and DOC1 all carry at offset 8 of their headers.
+\ Such a body is unchanged: it keeps the revision the terminal holds.
+: _RTHP-D-CONTROL-BODY-EQUAL?  ( -- flag )
+    _RTHP-D-ACTIVE-C @ _RTHP-D-ACTIVE @ _RTHP-D-CONTENT-REVISION?
+        NIP 0= IF 0 EXIT THEN
+    _RTHP-D-PENDING-C @ _RTHP-D-PENDING @ _RTHP-D-CONTENT-REVISION?
+        NIP 0= IF 0 EXIT THEN
+    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-U @
+        _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-U @ <> IF 0 EXIT THEN
+    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-A @ 8
+    _RTHP-D-ACTIVE @ _RTHP-D-SOURCE-A
+    _RTHP-D-ACTIVE @ _RTHP-TB.SOURCE-TEXT-USED @
+    _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-A @ 8
+    _RTHP-D-PENDING @ _RTHP-D-SOURCE-A
+    _RTHP-D-PENDING @ _RTHP-TB.SOURCE-TEXT-USED @
+        _RTHP-D-TEXTS-EQUAL? 0= IF 0 EXIT THEN
+    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-A @ 16 +
+    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-U @ 16 -
+    _RTHP-D-ACTIVE @ _RTHP-D-SOURCE-A
+    _RTHP-D-ACTIVE @ _RTHP-TB.SOURCE-TEXT-USED @
+    _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-A @ 16 +
+    _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-U @ 16 -
+    _RTHP-D-PENDING @ _RTHP-D-SOURCE-A
+    _RTHP-D-PENDING @ _RTHP-TB.SOURCE-TEXT-USED @
+        _RTHP-D-TEXTS-EQUAL? ;
 
 : _RTHP-D-CONTROL-COMPATIBLE?  ( index -- flag )
     _RTHP-D-CONTROL-PAIR 0= IF 0 EXIT THEN
@@ -11087,7 +11117,11 @@ VARIABLE _RTHP-D-REV-PENDING
         DROP
         _RTHP-D-CONTROL-LABEL-EQUAL? 0= IF 0 EXIT THEN
         _RTHP-D-CONTROL-SHORTCUT-EQUAL? 0= IF 0 EXIT THEN
-        _RTHP-D-CONTROL-CONTENT-EQUAL? IF
+        \ An unchanged body is unchanged even though this frame stamped it
+        \ with its own epoch; normalization restores the revision it keeps.
+        _RTHP-D-CONTROL-CONTENT-EQUAL? IF -1 ELSE
+            _RTHP-D-CONTROL-BODY-EQUAL?
+        THEN IF
             _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-ITEMS @
                 _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-ITEMS @ <>
                 IF 0 EXIT THEN
@@ -11614,11 +11648,13 @@ VARIABLE _RTHP-D-SCAN-END
 
 \ Text-only updates commonly keep the entire glyph layout.  The active bank's
 \ slots are canonical, by BUILD-SLOT-MAP's audit or by the facts kept from the
-\ comparison that built it, and its IDs were just proved one permutation.
+\ comparison that built it, and its IDs were just proved one permutation:
+\ its visible runs come first and any invisible tombstones form its tail.
 \ Exact equality of every non-ID item byte transfers that layout proof to
-\ the pending bank; its fresh IDs, text references and map entries still need
-\ their own checks.  A miss changes neither bank nor the map, so the general
-\ spatial matcher can run immediately with its original inputs.
+\ the pending bank, tail included; its fresh IDs, text references and map
+\ entries still need their own checks.  A miss changes neither bank nor the
+\ map, so the general spatial matcher can run immediately with its original
+\ inputs.
 VARIABLE _RTHP-D-LAYOUT-A-ITEMS
 VARIABLE _RTHP-D-LAYOUT-P-ITEMS
 VARIABLE _RTHP-D-LAYOUT-A-REFS
@@ -11629,8 +11665,6 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
 
 : _RTHP-D-GLYPH-LAYOUT?  ( -- flag )
     _RTHP-D-ACTIVE-SLOTS @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
-    \ Invisible reserves are rebuilt canonically by the general tail pass.
-    _RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @
         _RTHP-D-SLOTS @ <> IF 0 EXIT THEN
     _RTHP-D-ACTIVE @ _RTHP-TB.ROWS @
@@ -11671,17 +11705,25 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
     LOOP -1 ;
 
 \ A successful proof fixes both packed layouts for this immediate pass.
-\ Every visible anchor keeps its original ordinal, exactly as the general
-\ matcher would assign it.  Populate the same sparse
-\ change markers for ordinary compaction; do not retain this proof at emit.
+\ Every visible anchor keeps its original ordinal, and every tombstone of
+\ the tail its acknowledged ID in order, exactly as the general matcher
+\ would assign them.  A tail reference takes the canonical form the general
+\ tail pass writes.  Populate the same sparse change markers for ordinary
+\ compaction; do not retain this proof at emit.
 : _RTHP-D-TRY-GLYPH-LAYOUT?  ( -- flag )
     _RTHP-D-GLYPH-LAYOUT? 0= IF 0 EXIT THEN
-    \ The unchanged-frame revision fence also needs this draw's visible count.
-    _RTHP-D-SLOTS @ _RTHP-D-PENDING-VISIBLE !
+    \ The unchanged-frame revision fence also needs this draw's visible count,
+    \ which equal item bytes make the acknowledged one.
+    _RTHP-D-ACTIVE-VISIBLE @ _RTHP-D-PENDING-VISIBLE !
     _RTHP-D-SLOTS @ 0 ?DO
         _RTHP-D-LAYOUT-A-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + @
         DUP _RTHP-D-LAYOUT-P-ITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + !
         _RTHP-D-GLYPH-BASE @ - _RTHP-D-MAP-AT _RTHP-D-MAP-ENTRY !
+        I _RTHP-D-ACTIVE-VISIBLE @ U< 0= IF
+            _RTHP-D-LAYOUT-P-REFS @ I RGRP-TEXT-REF-SIZE * +
+                DUP RGRP-TEXT-REF-SIZE 0 FILL
+            _RTHP-D-PENDING @ _RTHP-TB.GLYPH-TEXT-USED @ SWAP _RGRP-T.OFFSET !
+        THEN
         _RTHP-D-LAYOUT-A-REFS @ I RGRP-TEXT-REF-SIZE * +
             DUP RGRP-TEXT-REF-OFFSET@ _RTHP-D-LAYOUT-A-TEXT @ +
             SWAP RGRP-TEXT-REF-LENGTH@
@@ -11981,6 +12023,32 @@ VARIABLE _RTHP-D-LAST-ID
     _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
         DUP 0<> ;
 
+\ An unchanged body keeps the revision the terminal already holds for it,
+\ whatever its state, as RETAINED-1 requires of a state-only replacement.
+\ Only the pending bank's own copy of the content changes.
+: _RTHP-D-KEEP-CONTENT-REVISION  ( -- )
+    _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @
+        _RTHP-CONTENT-CONTROL-KIND? 0= IF EXIT THEN
+    _RTHP-D-CONTROL-BODY-EQUAL? 0= IF EXIT THEN
+    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-A @ 8 +
+    _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-A @ 8 + 8 MOVE ;
+
+VARIABLE _RTHP-D-TARGET-E
+
+\ Move one input target to its control's final ID.  A content target also
+\ takes its control's content revision as normalization has just settled
+\ it, so positioned and item input names exactly the content the terminal
+\ holds.  Other targets keep the revision they were extracted with.
+: _RTHP-D-NORMALIZE-TARGET?  ( entry -- flag )
+    DUP _RTHP-D-TARGET-E ! _RTHP-TE.ID @
+    DUP _RTHP-D-RAW>NORMALIZED? 0= IF 2DROP 0 EXIT THEN
+    _RTHP-D-TARGET-E @ _RTHP-TE.ID !
+    _RTHP-D-TARGET-E @ _RTHP-TE.KIND @
+        _RTHP-CONTENT-CONTROL-KIND? 0= IF DROP -1 EXIT THEN
+    _RTHP-D-PENDING-FIRST @ - _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT
+    _RTHP-D-PENDING @ _RTHP-D-CONTENT-REVISION? 0= IF DROP 0 EXIT THEN
+    _RTHP-D-TARGET-E @ _RTHP-TE.REVISION ! -1 ;
+
 : _RTHP-D-NORMALIZE  ( -- flag )
     \ Stable glyph IDs have already been written into the spatially ordered
     \ inactive bank.  First turn the packed control array into the exact
@@ -11992,6 +12060,7 @@ VARIABLE _RTHP-D-LAST-ID
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         I _RTHP-D-CONTROL-PAIR 0= IF 0 UNLOOP EXIT THEN
         _RTHP-D-MATCHED @ IF
+            _RTHP-D-KEEP-CONTENT-REVISION
             _RTHP-D-ACTIVE-C @ _RTE-CONTROL.ID @
         ELSE
             _RTHP-D-EXPECTED-P @
@@ -12015,10 +12084,8 @@ VARIABLE _RTHP-D-LAST-ID
             THEN _RTHP-D-PENDING-X @ _RUCP-X.CONTROL-ID !
     LOOP
     _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
-        I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY DUP _RTHP-TE.ID @
-        _RTHP-D-RAW>NORMALIZED? 0= IF
-            2DROP 0 UNLOOP EXIT
-        THEN SWAP _RTHP-TE.ID !
+        I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY
+        _RTHP-D-NORMALIZE-TARGET? 0= IF 0 UNLOOP EXIT THEN
     LOOP
     _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-INSTRUMENTS-NORMALIZE
     _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-STATICS-NORMALIZE

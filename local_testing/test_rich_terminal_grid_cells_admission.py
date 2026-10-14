@@ -37,6 +37,7 @@ ITEM = struct.Struct("<QIIIIHHII")
 SOURCES = (
     ROOT / "akashic/utils/uint-range.f",
     ROOT / "akashic/utils/memory-span.f",
+    ROOT / "akashic/utils/memory-source.f",
     RICH / "stx1-roles.f",
     RICH / "engine.f",
     RICH / "apt1-engine.f",

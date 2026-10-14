@@ -89,6 +89,7 @@ VARIABLE _RSHSP-HEADS VARIABLE _RSHSP-EVENTS VARIABLE _RSHSP-EVENTS-U
 VARIABLE _RSHSP-DIFF VARIABLE _RSHSP-GQ
 VARIABLE _RSHSP-GITEMS VARIABLE _RSHSP-GREFS VARIABLE _RSHSP-GTEXT
 VARIABLE _RSHSP-GCOUNT VARIABLE _RSHSP-GUSED VARIABLE _RSHSP-GLIMIT VARIABLE _RSHSP-GCELLS
+VARIABLE _RSHSP-GSLOTS
 VARIABLE _RSHSP-GBASE VARIABLE _RSHSP-GR VARIABLE _RSHSP-REUSE
 VARIABLE _RSHSP-GX0 VARIABLE _RSHSP-GW VARIABLE _RSHSP-GY0 VARIABLE _RSHSP-GY1
 VARIABLE _RSHSP-GCX VARIABLE _RSHSP-GCY VARIABLE _RSHSP-GCW VARIABLE _RSHSP-GCH VARIABLE _RSHSP-GCF
@@ -221,7 +222,7 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-CLAIMS @ _RSHSP-N @ 4 * 2 + RSHPL-CLAIM-SIZE *
     _RSHSP-ACTIONS @ _RSHSP-MU @ _RSHSP-RESULT @ RSHPL-RESULT-SIZE
     _RSHSP-Q @ RSHPL-REQUEST-OUTPUT!
-    _RSHSP-Q @ RSHPL-BUILD RSHPL-S-OK = _RSHSP-CHECK
+    _RSHSP-Q @ _RSHPL-BUILD-PROVED RSHPL-S-OK = _RSHSP-CHECK
     _RSHSP-RESULT @ RSHPL-RESULT.PANES @
     _RSHSP-RESULT @ RSHPL-RESULT.TASKBARS @ OR _RSHSP-CHECK
     _RSHSP-RESULT @ RSHPL-RESULT.CONTROLS @ _RSHSP-SHELL-CONTROLS !
@@ -230,7 +231,7 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-M @ _RSHSP-MU @
     _RSHSP-P @ _RTHP.SOURCE-DIR-A @ _RSHSP-P @ _RTHP.SOURCE-DIR-USED @
     _RSHSP-CORR @ _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ RSHPL-CORRELATION-SIZE *
-    _RSHSP-MAP @ _RSHSP-N @ RSHMM-ENTRY-SIZE * RSHMM-BUILD
+    _RSHSP-MAP @ _RSHSP-N @ RSHMM-ENTRY-SIZE * _RSHMM-BUILD-PROVED
         RSHMM-S-OK = _RSHSP-CHECK _RSHSP-MAP-U ! DROP ;
 
 : _RSHSP-INSTRUMENT-CLIP! ( copied-region -- )
@@ -498,9 +499,9 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-GQ @ RGRP-REQUEST-WORK!
     _RSHSP-PLAN @ RTE-GLYPH-RUN-PLAN-SIZE
     _RSHSP-GITEMS @ _RSHSP-GCOUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * +
-        _RSHSP-GCELLS @ _RSHSP-GCOUNT @ - RTE-GLYPH-RUN-PLAN-ITEM-SIZE *
+        _RSHSP-GSLOTS @ _RSHSP-GCOUNT @ - RTE-GLYPH-RUN-PLAN-ITEM-SIZE *
     _RSHSP-GREFS @ _RSHSP-GCOUNT @ 16 * +
-        _RSHSP-GCELLS @ _RSHSP-GCOUNT @ - 16 *
+        _RSHSP-GSLOTS @ _RSHSP-GCOUNT @ - 16 *
     _RSHSP-GTEXT @ _RSHSP-GUSED @ + _RSHSP-GLIMIT @ _RSHSP-GUSED @ -
     _RSHSP-GQ @ RGRP-REQUEST-OUTPUT!
     \ MENU-CLAIMS already counts records; CLAIMS-USED is the byte extent.
@@ -547,7 +548,7 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
 : _RSHSP-GLYPH-COPY ( index -- )
     DUP RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RSHSP-GA-ITEMS @ + _RSHSP-GA-ITEM !
     16 * _RSHSP-GA-REFS @ + _RSHSP-GA-REF !
-    _RSHSP-GCOUNT @ _RSHSP-GCELLS @ U< 0= IF RTE-S-CAPACITY THROW THEN
+    _RSHSP-GCOUNT @ _RSHSP-GSLOTS @ U< 0= IF RTE-S-CAPACITY THROW THEN
     _RSHSP-GA-REF @ 8 + @ _RSHSP-GA-ITEM @ _RTE-LPI.TEXT-CAPACITY @ = _RSHSP-CHECK
     _RSHSP-GA-REF @ @ _RSHSP-GA-REF @ 8 + @ _RSHSP-ADD
         _RSHSP-GA-TEXT-U @ U> 0= _RSHSP-CHECK
@@ -584,6 +585,20 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
             _RSHSP-GR @ _RSHSP-GCY @ - _RSHSP-GCH ! _RSHSP-GLYPH-PLAN
         ELSE _RSHSP-GLYPH-ROW-COPY 1 _RSHSP-GR +! THEN
     REPEAT ;
+\ The slots a reused region's runs can take: the acknowledged visible runs
+\ its unchanged rows copy, and on each changed row one for every scanned
+\ cell, the most the planner makes there. The acknowledged runs of changed
+\ rows are counted too, as slack. The count never exceeds one slot a cell,
+\ the reservation of a region planned whole, so the build runs out of room
+\ exactly where it did with that reservation.
+: _RSHSP-GLYPH-SLOTS ( -- slots )
+    _RSHSP-GA-N @
+    _RSHSP-GY0 @ _RSHSP-GR !
+    BEGIN _RSHSP-GR @ _RSHSP-GY1 @ < WHILE
+        _RSHSP-ROW-DAMAGED? IF _RSHSP-GW @ + THEN
+        1 _RSHSP-GR +!
+    REPEAT
+    _RSHSP-GCELLS @ MIN ;
 : _RSHSP-GLYPH-HEADER ( -- )
     _RSHSP-PLAN @ RTE-GLYPH-RUN-PLAN-SIZE 0 FILL
     _RSHSP-P @ _RTHP.OWNER @ _RSHSP-PLAN @ _RTE-LP.OWNER !
@@ -610,15 +625,22 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-REGION @ _RTE-IR.FLAGS @ RTE-REGION-CLIPPED AND IF
         _RSHSP-REGION @ _RTE-IR.CLIP-COLS @ _RSHSP-REGION @ _RTE-IR.CLIP-ROWS @
     ELSE _RSHSP-P @ _RTHP.COLS @ _RSHSP-P @ _RTHP.ROWS @ THEN
-        _RSHSP-MUL _RSHSP-GCELLS !
-    _RSHSP-GCELLS @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-GITEMS !
-    _RSHSP-GCELLS @ 16 _RSHSP-MUL _RSHSP-TAKE _RSHSP-GREFS !
+        _RSHSP-MUL DUP _RSHSP-GCELLS ! _RSHSP-GSLOTS !
+    \ A region planned whole can take a slot for every cell; a reused one
+    \ takes what its rows can. Text keeps its limit of four bytes a cell in
+    \ both: a character of several scalars can take more, so a changed row's
+    \ text has no smaller bound.
+    _RSHSP-GLYPH-ACTIVE? DUP IF
+        _RSHSP-GLYPH-SCAN-RECT _RSHSP-GLYPH-SLOTS _RSHSP-GSLOTS !
+    THEN
+    _RSHSP-GSLOTS @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-GITEMS !
     _RSHSP-GCELLS @ 4 _RSHSP-MUL
         _RSHSP-P @ _RTHP.GLYPH-TEXT-U @ MIN _RSHSP-GLIMIT !
     _RSHSP-GLIMIT @ _RSHSP-TAKE _RSHSP-GTEXT !
+    _RSHSP-GSLOTS @ 16 _RSHSP-MUL _RSHSP-TAKE _RSHSP-GREFS !
     0 _RSHSP-GCOUNT ! 0 _RSHSP-GUSED ! _RSHSP-NEXT-ID @ _RSHSP-GBASE !
-    _RSHSP-GLYPH-ACTIVE? IF
-        _RSHSP-GLYPH-SCAN-RECT _RSHSP-GLYPH-ROWS
+    IF
+        _RSHSP-GLYPH-ROWS
     ELSE
         _RSHSP-REGION @ _RTE-IR.CLIP-X @ _RSHSP-GCX !
         _RSHSP-REGION @ _RTE-IR.CLIP-Y @ _RSHSP-GCY !
@@ -632,16 +654,19 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     THEN
     _RSHSP-GBASE @ _RSHSP-GCOUNT @ _RSHSP-ADD _RSHSP-NEXT-ID !
     _RSHSP-GLYPH-HEADER
-    \ Compact the transient worst-case slots in place. MOVE is overlap-safe;
-    \ every destination is at or before its corresponding source.
+    \ Compact the reserved slots in place, items, text, then references,
+    \ the order the batch lists a family's spans in, so the admission's
+    \ pairwise span check takes one pass. MOVE is overlap-safe; every
+    \ destination is at or before its corresponding source, and the text
+    \ ends before the references' source begins.
     _RSHSP-GITEMS @ _RSHSP-GCOUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RSHSP-NEW !
+    _RSHSP-GTEXT @ _RSHSP-NEW @ _RSHSP-GUSED @ MOVE
+    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
+    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-ALIGN + _RSHSP-NEW !
     _RSHSP-GREFS @ _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * MOVE
     _RSHSP-NEW @ _RSHSP-FAMILY @ _RTE-FE.REFS-A !
     _RSHSP-GCOUNT @ 16 * _RSHSP-FAMILY @ _RTE-FE.REFS-U !
-    _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * + _RSHSP-NEW !
-    _RSHSP-GTEXT @ _RSHSP-NEW @ _RSHSP-GUSED @ MOVE
-    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
-    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-ALIGN + _RSHSP-CURSOR ! ;
+    _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * + _RSHSP-CURSOR ! ;
 : _RSHSP-GLYPHS-BODY ( -- )
     _RSHSP-GLYPH-WORK
     _RSHSP-P @ _RTHP.REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
@@ -779,10 +804,18 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
 \ Freezing is the only write to a bank and checks the finished bank once.
 \ STAGE freezes into the bank ACTIVE does not name after dropping PENDING,
 \ so a bank that PENDING or ACTIVE names is never written again, and later
-\ uses compare its identities only. RSHFC-MEASURE checks the batch, and no
-\ write here can reach it, so the copy need not check it again.
+\ uses compare its identities only.
+\ The batch's graph was checked by the preflight that admitted it, at the
+\ end of BUILD-BATCH, and nothing since has changed what that check reads.
+\ A START freezes right after it.  A DELTA's identity mapping rewrites
+\ identities, which the graph check reads only as a pane's, nonzero before
+\ and after; and it gives a glyph family new item and reference arrays,
+\ fresh from the work space and so apart from every other span, holding the
+\ admitted runs in order and then canonical tombstones with no text, whose
+\ references continue the family's text at its end.  So the measure and the
+\ copy take the batch as proved; the measure still checks every span.
 : _RSHSP-FREEZE ( -- )
-    _RSHSP-BATCH @ RSHFC-MEASURE RSHFC-S-OK = _RSHSP-CHECK _RSHSP-CLONE-U !
+    _RSHSP-BATCH @ _RSHFC-MEASURE-PROVED RSHFC-S-OK = _RSHSP-CHECK _RSHSP-CLONE-U !
     RSHSP-BANK-HEADER-SIZE _RSHSP-MU @ _RSHSP-ALIGN _RSHSP-ADD
     _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ RSHPL-CORRELATION-SIZE _RSHSP-MUL _RSHSP-ADD
     _RSHSP-RESULT @ RSHPL-RESULT.ACTION-BYTES @ _RSHSP-ALIGN _RSHSP-ADD
@@ -831,7 +864,8 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     _RSHSP-M @ SHM.WIDTH @ _RSHSP-P @ _RTHP.COLS @ = _RSHSP-CHECK
     _RSHSP-M @ SHM.HEIGHT @ _RSHSP-P @ _RTHP.ROWS @ = _RSHSP-CHECK
     _RSHSP-M @ _RSHSP-MU @ _RSHSP-COPY _RSHSP-M !
-    \ The copy is checked once here; the band helpers below then skip it.
+    \ The copy is checked once here; the band helpers, the planner and the
+    \ membership builder below then skip it.  Nothing writes it afterwards.
     5 _RSHSP-PSTAGE !
     _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK = _RSHSP-CHECK
     6 _RSHSP-PSTAGE !
@@ -869,7 +903,11 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU
 : _RSHSP-10DROP ( x x x x x x x x x x -- ) 2DROP 2DROP 2DROP 2DROP 2DROP ;
 : _RSHSP-SPAN! ( a u i -- ) 16 * _RSHSP-SPANS + >R R@ 8 + ! R> ! ;
 : _RSHSP-SPAN@ ( i -- a u ) 16 * _RSHSP-SPANS + DUP @ SWAP 8 + @ ;
-: _RSHSP-DISJOINT? ( a u -- flag ) _RSHSP-IA @ _RSHSP-IU @ MSPAN-OVERLAP? 0= ;
+\ RUHA's storage proof: a RUHA span lies apart from all four sidecar spans.
+: _RSHSP-APART? ( a u -- flag )
+    4 0 DO
+        2DUP I _RSHSP-SPAN@ MSPAN-OVERLAP? IF 2DROP 0 UNLOOP EXIT THEN
+    LOOP 2DROP -1 ;
 : _RSHSP-EXTERNAL? ( a u -- flag )
     _RSHSP-IU ! _RSHSP-IA !
     _RSHSP-IA @ _RSHSP-IU @ _RSHSP-P @ RTHP-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
@@ -877,20 +915,23 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU
         MSPAN-OVERLAP? IF 0 EXIT THEN
     _RSHSP-IA @ _RSHSP-IU @ _RSHSP-ISHELL @ RTE-SHELL-FACADE-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
     _RSHSP-IA @ _RSHSP-IU @ _RSHSP-P @ _RTHP.FACADE @ RTE-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    \ The live predicate covers the source's banks, the screen, UIDL and the
+    \ shell's live owners (shell-snapshot.md).
     _RSHSP-LIVE-PROOF @ IF
         _RSHSP-IA @ _RSHSP-IU @ _RSHSP-ISOURCE @ SHSN-LIVE-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-        _RSHSP-IA @ _RSHSP-IU @ _SHSN-I-AUTHORITY? 0= IF 0 EXIT THEN
     ELSE
         _RSHSP-IA @ _RSHSP-IU @ _RSHSP-ISOURCE @ SHSN-SOURCE-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
-    THEN
-    _RSHSP-P @ _RTHP.ADAPTER @ ['] _RSHSP-DISJOINT? _RUHA-SAFE-PROVE? ;
+    THEN -1 ;
+\ The caller has checked each of the four spans with _RSHSP-SPAN? just
+\ before.  RUHA's storage is proved apart from all four in one proof, which
+\ builds RUHA's span set once rather than once per sidecar span.
 : _RSHSP-SPANS? ( -- flag )
     4 0 DO
-        I _RSHSP-SPAN@ _RSHSP-SPAN? 0= IF 0 UNLOOP EXIT THEN
         I _RSHSP-SPAN@ _RSHSP-EXTERNAL? 0= IF 0 UNLOOP EXIT THEN
         I 0 ?DO I _RSHSP-SPAN@ _RSHSP-IA @ _RSHSP-IU @ MSPAN-OVERLAP? IF
             0 UNLOOP UNLOOP EXIT THEN LOOP
-    LOOP -1 ;
+    LOOP
+    _RSHSP-P @ _RTHP.ADAPTER @ ['] _RSHSP-APART? _RUHA-SAFE-PROVE? ;
 : _RSHSP-HEADER? ( sidecar -- flag )
     DUP RSHSP-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RSHSP.MAGIC @ _RSHSP-MAGIC <>
@@ -915,18 +956,14 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU
     OVER _RSHSP.PENDING @ 0= 2 PICK _RSHSP.PENDING-TARGET @ 0= <> OR
     OVER _RSHSP.PENDING @ 0= 2 PICK _RSHSP.PENDING-DRAW @ 0= <> OR IF DROP 0 EXIT THEN
     DROP -1 ;
+\ The caller has checked the header before its first store.  The header
+\ proves the sidecar, producer, source, shell, work and bank spans with
+\ _RSHSP-SPAN?, a pure function of each span, so they are not checked again.
 : _RSHSP-AUTHORITY? ( sidecar -- flag )
-    DUP _RSHSP-HEADER? 0= IF DROP 0 EXIT THEN
-    DUP _RSHSP.PRODUCER @ RTHP-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
-    DUP _RSHSP.SOURCE @ SHSN-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
-    DUP _RSHSP.SHELL @ RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     _RSHSP-S !
     _RSHSP-S @ _RSHSP.PRODUCER @ _RSHSP-P !
     _RSHSP-S @ _RSHSP.SOURCE @ _RSHSP-ISOURCE !
     _RSHSP-S @ _RSHSP.SHELL @ _RSHSP-ISHELL !
-    _RSHSP-P @ RTHP-SIZE _RSHSP-SPAN? 0= IF 0 EXIT THEN
-    _RSHSP-ISOURCE @ SHSN-SIZE _RSHSP-SPAN? 0= IF 0 EXIT THEN
-    _RSHSP-ISHELL @ RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF 0 EXIT THEN
     _RSHSP-P @ DUP _RTHP.MAGIC @ _RTHP-MAGIC <>
     OVER _RTHP.SIZE @ RTHP-SIZE <> OR
     OVER _RTHP.SELF @ 2 PICK <> OR IF DROP 0 EXIT THEN DROP
@@ -1552,7 +1589,6 @@ VARIABLE _RSHSP-INPUT-ROOT VARIABLE _RSHSP-INPUT-CHILD VARIABLE _RSHSP-INPUT-SAV
     _RSHSP-INPUT-CORR @ RSHPL-CORRELATION.ACTION-BYTES @ COMPARE 0= ;
 : RSHSP-CONTROL-TARGET@
 \ owner generation control-id intent sidecar -- row col revision found?
-    DUP _RSHSP-HEADER? 0= IF DROP 2DROP 2DROP _RSHSP-INPUT-NONE EXIT THEN
     DUP RSHSP-VALID? 0= IF DROP 2DROP 2DROP _RSHSP-INPUT-NONE EXIT THEN DROP
     _RSHSP-INPUT-INTENT ! _RSHSP-INPUT-ID ! _RSHSP-INPUT-GEN ! _RSHSP-INPUT-OWNER !
     _RSHSP-S @ _RSHSP.EXTENSION _RSHSP-P @ _RTHP.EXTENSION @ <> IF _RSHSP-INPUT-NONE EXIT THEN

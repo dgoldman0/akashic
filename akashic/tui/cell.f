@@ -103,6 +103,12 @@ HEX FFFF000000000000 INVERT CONSTANT _CELL-ATTRS-CLR DECIMAL
 : CELL-ATTRS@  ( cell -- attrs )
     _CELL-ATTRS-SHIFT RSHIFT ;
 
+\ CELL-STYLE@ ( cell -- style )  The cell with its codepoint cleared.
+\   Two cells have the same fg, bg and attrs exactly when their styles
+\   are equal.
+: CELL-STYLE@  ( cell -- style )
+    _CELL-CP-CLR AND ;
+
 \ =====================================================================
 \ 5. Field setters (non-destructive — return new cell)
 \ =====================================================================

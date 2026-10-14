@@ -14,14 +14,24 @@ PROVIDED akashic-uint-range
 
 : URANGE-VALID?  ( start count -- flag )
     DUP 0< IF 2DROP 0 EXIT THEN
-    >R DUP R@ + SWAP U< 0= R> DROP ;
+    OVER + U> 0= ;
+
+\ At least one count is zero or negative, so neither range overlaps; only
+\ validity remains to report.  An empty range with a nonnegative count is
+\ always valid.
+: _URANGE-EDGE-OVERLAP?  ( a-start a-count b-start b-count -- overlap? valid? )
+    2OVER URANGE-VALID? 0= IF 2DROP 2DROP 0 0 EXIT THEN
+    URANGE-VALID? NIP NIP 0 SWAP ;
 
 : URANGE-OVERLAP?  ( a-start a-count b-start b-count -- overlap? valid? )
-    2OVER URANGE-VALID? 0= IF 2DROP 2DROP 0 0 EXIT THEN
-    2DUP URANGE-VALID? 0= IF 2DROP 2DROP 0 0 EXIT THEN
-    DUP 0= IF 2DROP 2DROP 0 -1 EXIT THEN
-    2 PICK 0= IF 2DROP 2DROP 0 -1 EXIT THEN
-    \ Both nonempty ranges are nonwrapping.  Unsigned half-open comparisons
-    \ are therefore exact and equality at either end remains disjoint.
-    2OVER + >R OVER R> U< >R
-    + >R DROP R> U< R> AND -1 ;
+    2 PICK 0> OVER 0> AND IF
+        \ Both counts are positive, so each range is valid exactly when
+        \ its exclusive end does not wrap below its start.
+        OVER + 2DUP U> IF 2DROP 2DROP 0 0 EXIT THEN
+        2SWAP OVER + 2DUP U> IF 2DROP 2DROP 0 0 EXIT THEN
+        \ ( b-start b-end a-start a-end )  Both nonempty ranges are
+        \ nonwrapping.  Unsigned half-open comparisons are therefore exact
+        \ and equality at either end remains disjoint.
+        >R U> SWAP R> U< AND -1 EXIT
+    THEN
+    _URANGE-EDGE-OVERLAP? ;

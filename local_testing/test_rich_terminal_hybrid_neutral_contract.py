@@ -160,10 +160,13 @@ def test_control_byte_envelope_is_exact_authority_not_a_capacity() -> None:
         "_RTE-CPV-SPAN-A @ _RTE-CPV-CONTROL-BYTES-A @ U<",
         "_RTE-CPV-SPAN-A @ _RTE-CPV-SPAN-U @ +",
     )
+    # Every control's spans are placed in the byte envelope first; its own
+    # checks follow unless it equals its admitted copy.
+    _ordered(item, "_RTE-CPV-ITEM-SPANS?", "_RTE-CPV-ITEM-CHECKED?")
+    assert "_RTE-CPV-ITEM-BYTES-AUTHORITY?" in _word(source, "_RTE-CPV-ITEM-SPANS?")
     _ordered(
-        item,
+        _word(source, "_RTE-CPV-ITEM-CHECKED?"),
         "_RTE-CPV-ITEM-STRUCTURAL?",
-        "_RTE-CPV-ITEM-BYTES-AUTHORITY?",
         "_RTE-CPV-ITEM-TEXT?",
     )
     assert "_RTE-HPV-CONTROL-BYTES-U @ _RTE-CPV-BYTES @ <>" in control

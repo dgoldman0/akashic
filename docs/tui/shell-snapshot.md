@@ -73,7 +73,9 @@ the inactive bank, so candidate storage cannot silently alias a future copy.
 `SHSN-LIVE-STORAGE-DISJOINT?` additionally protects the ordinary model's full
 capacity and its retained host, root and child lifecycle storage, including
 component state, descriptors, region parents, saved UCTX and UIDL buffers.
-It also checks current screen/UIDL authority. Publishers use this stronger
+It also checks current screen/UIDL authority. It makes every check of the
+live owners that `SHSN-INIT` makes of the source's own storage, so a
+publisher needs no other. Publishers use this stronger
 predicate before constructing or capturing into a writable span; checking
 only frozen banks would allow an ordinary model or root-state alias. The
 query performs no caller-memory writes, rejects private-scratch aliases

@@ -115,6 +115,7 @@ All extractors consume the cell and return the extracted value.
 | `CELL-FG@` | `( cell -- fg )` | Foreground index (0–255) |
 | `CELL-BG@` | `( cell -- bg )` | Background index (0–255) |
 | `CELL-ATTRS@` | `( cell -- attrs )` | Attribute flags (low-bit form, 0–65535) |
+| `CELL-STYLE@` | `( cell -- style )` | The cell with its codepoint cleared; two cells have the same fg, bg and attrs exactly when their styles are equal |
 
 ```forth
 CELL-BLANK CELL-CP@     \ → 32 (space)
@@ -188,6 +189,7 @@ CELL-A-BOLD  65 7 0 CELL-A-BOLD CELL-MAKE  CELL-HAS-ATTR?  \ → -1
 | `CELL-FG@` | `( cell -- fg )` | Get foreground |
 | `CELL-BG@` | `( cell -- bg )` | Get background |
 | `CELL-ATTRS@` | `( cell -- attrs )` | Get attributes |
+| `CELL-STYLE@` | `( cell -- style )` | Get fg, bg and attrs as one value |
 | `CELL-FG!` | `( fg cell -- cell' )` | Set foreground |
 | `CELL-BG!` | `( bg cell -- cell' )` | Set background |
 | `CELL-ATTRS!` | `( attrs cell -- cell' )` | Set attributes |

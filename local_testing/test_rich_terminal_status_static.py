@@ -46,7 +46,7 @@ class StaticHarness:
     def __init__(self, backend):
         self.runtime = _load_exceptions(MegaForthRuntime(execution_backend=backend))
         source = []
-        for name in ("uint-range.f", "memory-span.f"):
+        for name in ("uint-range.f", "memory-span.f", "memory-source.f"):
             source.append(_clean((ROOT / "akashic/utils" / name).read_text()))
         source.append(_word((ROOT / "akashic/utils/string.f").read_text(), "/STRING"))
         source.append(_clean((RICH / "fdc1.f").read_text()))

@@ -385,3 +385,30 @@ _SP-BUILD
 _SP-O RSHPL-RESULT.CLAIMS @ 2 = _SS-A
 _SS-DONE
 ''', 85)
+
+
+def test_shell_planner_proved_build_skips_only_the_model_check():
+    """A caller that validated its model copy may build without the planner
+    validating it again; the result is the public build's, the proof flag
+    does not outlive the call, and the public build still validates."""
+    run(PLAN + r'''
+CREATE _PV-BUF 6872 ALLOT VARIABLE _PV-AT
+: _PV-PUT ( a u -- ) DUP >R _PV-BUF _PV-AT @ + SWAP MOVE R> _PV-AT +! ;
+: _PV-SAME? ( a u -- flag )
+    DUP >R _PV-BUF _PV-AT @ + R@ COMPARE 0= R> _PV-AT +! ;
+: _PV-SAVE 0 _PV-AT !
+    _SP-R 1024 _PV-PUT _SP-P 1024 _PV-PUT _SP-C 1600 _PV-PUT _SP-T 256 _PV-PUT
+    _SP-X 1536 _PV-PUT _SP-L 1024 _PV-PUT _SP-ACT 256 _PV-PUT _SP-O 152 _PV-PUT ;
+: _PV-CHECK 0 _PV-AT !
+    _SP-R 1024 _PV-SAME? _SS-A _SP-P 1024 _PV-SAME? _SS-A
+    _SP-C 1600 _PV-SAME? _SS-A _SP-T 256 _PV-SAME? _SS-A
+    _SP-X 1536 _PV-SAME? _SS-A _SP-L 1024 _PV-SAME? _SS-A
+    _SP-ACT 256 _PV-SAME? _SS-A _SP-O 152 _PV-SAME? _SS-A ;
+_SP-INIT _SP-BUILD _PV-SAVE
+_SP-Q _RSHPL-BUILD-PROVED _SS-OK _PV-CHECK
+_RSHPL-PROVED @ 0= _SS-A
+\ A model whose entry count no longer fits its bytes fails validation only.
+999 _SS-F SHM.COUNT ! _SP-Q RSHPL-BUILD RSHPL-S-INVALID = _SS-A _SP-CLEARED
+_RSHPL-PROVED @ 0= _SS-A
+    _SS-DONE
+''', 20)

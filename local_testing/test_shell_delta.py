@@ -104,6 +104,8 @@ _SX-SETUP _SD-HOOKS
 _SX-P _RTHP.NEXT-OBJECT @ _SD-FRONTIER !
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
 _SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A
+\ The mapped batch still passes the graph check the freeze takes as proved.
+_RSHSP-BATCH @ RTE-FAMILY-BATCH-VALID? _SS-A
 _SD-EMIT _SS-OK
 _SD-GDEFINE @ 2 = _SS-A _SD-GREPLACE @ 0> _SS-A
 _SD-LAST-OBJECT @ _SD-FRONTIER @ 1+ = _SS-A
@@ -114,6 +116,7 @@ _SD-ACK _SX-P _RTHP.NEXT-OBJECT @ _SD-FRONTIER @ 2 + = _SS-A
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
 _SX-S _RSHSP.PENDING @ _SX-KA = _SS-A
 _SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A
+_RSHSP-BATCH @ RTE-FAMILY-BATCH-VALID? _SS-A
 _SD-EMIT _SS-OK _SD-GDEFINE @ 0= _SS-A _SD-GREPLACE @ 2 > _SS-A
 _SX-KA RSHSP-BANK.NEXT-OBJECT @ _SX-KB RSHSP-BANK.NEXT-OBJECT @ = _SS-A
 _SD-ACK
@@ -124,7 +127,7 @@ _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
 _SD-EMIT _SS-OK
 _SD-PREPLACE @ 1 = _SS-A _SD-GREPLACE @ 0= _SS-A _SD-GDEFINE @ 0= _SS-A
 _SS-DONE
-''', minimum=22)
+''', minimum=24)
 
 
 def test_taskbar_or_layout_changes_and_start_candidates_stay_on_start():
@@ -180,3 +183,69 @@ _RSHSP-DELTA-PREPARE _SS-OK
 _SD-EMIT _SS-OK _SD-GREPLACE @ 0= _SS-A _SD-PREPLACE @ 1 = _SS-A
 _SS-DONE
 ''', minimum=13)
+
+
+def test_a_reused_region_reserves_slots_for_its_rows_not_its_cells():
+    """A DELTA reserves glyph slots for the acknowledged runs it copies and
+    one per cell of each changed row, not one per cell of the region. The
+    pane is the last glyph region built, so its figures are the ones left in
+    the producer's variables."""
+    staged_run(DELTA + r'''
+CREATE _SD-ROWS 64 ALLOT CREATE _SD-SAVE 131072 ALLOT VARIABLE _SD-USED
+VARIABLE _SD-START-WORK VARIABLE _SD-ROW-WORK
+: _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
+\ Every cell of row 5 differs in style from its neighbours: one run a cell,
+\ the most a changed row can take.
+: _SD-STRIPES _SD-HELLO DRW-STYLE-SAVE
+    32 0 DO I 1 AND 1+ 0 0 DRW-STYLE! 65 I + 5 I DRW-CHAR LOOP
+    DRW-STYLE-RESTORE ;
+_SX-SETUP _SD-HOOKS
+_SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+_SX-S RSHSP-WORK-USED@ _SD-START-WORK !
+' _SD-STRIPES _SD-DRAW _SD-TA _SD-PENDING
+0 _SD-MAP -1 _SD-ROWS 5 + C!
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A
+\ The pane's 9 x 19 cells: its acknowledged runs and the changed row's 19
+\ cells, every slot used but the one of row 5's acknowledged run.
+_RSHSP-GCELLS @ 171 = _SS-A
+_RSHSP-GSLOTS @ _RSHSP-GA-N @ 19 + = _SS-A
+_RSHSP-GCOUNT @ 1+ _RSHSP-GSLOTS @ = _SS-A
+_SX-S RSHSP-WORK-USED@ DUP _SD-ROW-WORK ! _SD-START-WORK @ U< _SS-A
+_SX-KB RSHSP-BANK.USED @ DUP _SD-USED ! _SX-KB _SD-SAVE ROT MOVE
+\ With every row changed the reservation is a START's, one slot a cell,
+\ and the bank is the same.
+_SX-S _RSHSP-ABORT -1 _SD-MAP
+_RSHSP-DELTA-PREPARE _SS-OK
+_RSHSP-GSLOTS @ 171 = _SS-A
+_SX-S RSHSP-WORK-USED@ _SD-START-WORK @ = _SS-A
+_SX-KB RSHSP-BANK.USED @ _SD-USED @ = _SS-A
+_SX-KB _SD-USED @ _SD-SAVE _SD-USED @ COMPARE 0= _SS-A
+." SHELL GLYPH WORK " _SD-START-WORK @ . _SD-ROW-WORK @ . CR
+_SS-DONE
+''', minimum=11)
+
+
+def test_a_glyph_family_lays_out_its_spans_in_the_order_the_batch_lists_them():
+    """The batch lists a family's spans as plan, items, text and references.
+    A glyph family lays them out in that order, so the family preflight's
+    pairwise span check passes over them in one pass."""
+    staged_run(DELTA + r'''
+VARIABLE _SD-GLYPHS
+: _SD-IN-ORDER? ( batch -- flag )
+    0 _SD-GLYPHS !
+    DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 ?DO
+        DUP I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH = IF
+            1 _SD-GLYPHS +!
+            DUP RTE-FAMILY-ITEMS@ + OVER _RTE-FE.BYTES-A @ U> IF
+                2DROP 0 UNLOOP EXIT THEN
+            DUP _RTE-FE.BYTES-A @ OVER _RTE-FE.BYTES-U @ +
+                OVER _RTE-FE.REFS-A @ U> IF 2DROP 0 UNLOOP EXIT THEN
+        THEN DROP
+    LOOP DROP -1 ;
+_SX-SETUP _SD-HOOKS
+' _SD-SPLIT _SD-DRAW _RSHSP-PREPARE _SS-OK
+_RSHSP-BATCH @ _SD-IN-ORDER? _SS-A _SD-GLYPHS @ 0> _SS-A
+_SS-DONE
+''', minimum=3)
