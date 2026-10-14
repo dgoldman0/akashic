@@ -225,3 +225,27 @@ _SX-KB _SD-USED @ _SD-SAVE _SD-USED @ COMPARE 0= _SS-A
 ." SHELL GLYPH WORK " _SD-START-WORK @ . _SD-ROW-WORK @ . CR
 _SS-DONE
 ''', minimum=11)
+
+
+def test_a_glyph_family_lays_out_its_spans_in_the_order_the_batch_lists_them():
+    """The batch lists a family's spans as plan, items, text and references.
+    A glyph family lays them out in that order, so the family preflight's
+    pairwise span check passes over them in one pass."""
+    staged_run(DELTA + r'''
+VARIABLE _SD-GLYPHS
+: _SD-IN-ORDER? ( batch -- flag )
+    0 _SD-GLYPHS !
+    DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 ?DO
+        DUP I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH = IF
+            1 _SD-GLYPHS +!
+            DUP RTE-FAMILY-ITEMS@ + OVER _RTE-FE.BYTES-A @ U> IF
+                2DROP 0 UNLOOP EXIT THEN
+            DUP _RTE-FE.BYTES-A @ OVER _RTE-FE.BYTES-U @ +
+                OVER _RTE-FE.REFS-A @ U> IF 2DROP 0 UNLOOP EXIT THEN
+        THEN DROP
+    LOOP DROP -1 ;
+_SX-SETUP _SD-HOOKS
+' _SD-SPLIT _SD-DRAW _RSHSP-PREPARE _SS-OK
+_RSHSP-BATCH @ _SD-IN-ORDER? _SS-A _SD-GLYPHS @ 0> _SS-A
+_SS-DONE
+''', minimum=3)

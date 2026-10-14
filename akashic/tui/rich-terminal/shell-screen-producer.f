@@ -634,10 +634,10 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
         _RSHSP-GLYPH-SCAN-RECT _RSHSP-GLYPH-SLOTS _RSHSP-GSLOTS !
     THEN
     _RSHSP-GSLOTS @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-GITEMS !
-    _RSHSP-GSLOTS @ 16 _RSHSP-MUL _RSHSP-TAKE _RSHSP-GREFS !
     _RSHSP-GCELLS @ 4 _RSHSP-MUL
         _RSHSP-P @ _RTHP.GLYPH-TEXT-U @ MIN _RSHSP-GLIMIT !
     _RSHSP-GLIMIT @ _RSHSP-TAKE _RSHSP-GTEXT !
+    _RSHSP-GSLOTS @ 16 _RSHSP-MUL _RSHSP-TAKE _RSHSP-GREFS !
     0 _RSHSP-GCOUNT ! 0 _RSHSP-GUSED ! _RSHSP-NEXT-ID @ _RSHSP-GBASE !
     IF
         _RSHSP-GLYPH-ROWS
@@ -654,16 +654,19 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     THEN
     _RSHSP-GBASE @ _RSHSP-GCOUNT @ _RSHSP-ADD _RSHSP-NEXT-ID !
     _RSHSP-GLYPH-HEADER
-    \ Compact the reserved slots in place. MOVE is overlap-safe;
-    \ every destination is at or before its corresponding source.
+    \ Compact the reserved slots in place, items, text, then references,
+    \ the order the batch lists a family's spans in, so the admission's
+    \ pairwise span check takes one pass. MOVE is overlap-safe; every
+    \ destination is at or before its corresponding source, and the text
+    \ ends before the references' source begins.
     _RSHSP-GITEMS @ _RSHSP-GCOUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RSHSP-NEW !
+    _RSHSP-GTEXT @ _RSHSP-NEW @ _RSHSP-GUSED @ MOVE
+    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
+    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-ALIGN + _RSHSP-NEW !
     _RSHSP-GREFS @ _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * MOVE
     _RSHSP-NEW @ _RSHSP-FAMILY @ _RTE-FE.REFS-A !
     _RSHSP-GCOUNT @ 16 * _RSHSP-FAMILY @ _RTE-FE.REFS-U !
-    _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * + _RSHSP-NEW !
-    _RSHSP-GTEXT @ _RSHSP-NEW @ _RSHSP-GUSED @ MOVE
-    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
-    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-ALIGN + _RSHSP-CURSOR ! ;
+    _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * + _RSHSP-CURSOR ! ;
 : _RSHSP-GLYPHS-BODY ( -- )
     _RSHSP-GLYPH-WORK
     _RSHSP-P @ _RTHP.REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
