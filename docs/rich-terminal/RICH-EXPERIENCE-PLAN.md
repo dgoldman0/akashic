@@ -390,27 +390,172 @@ has no Agent steps: there the Agent starts with an empty conversation.
 
 ## 5. Fields, buttons, dialogs and status
 
-**Today.** Prompts, dialogs, toasts, progress bars and status lines are
-painted text. After part 1 they can be clicked, but only as painted cells.
+**Today.** A little of this part exists. Sound Lab's settings are canonical
+typed fields (`tui/widgets/field.f`), published as `FIELD` controls that the
+wheel adjusts, and the labels of a UIDL `<status>` bar are published as
+`STATUS_FIELD` objects. Both have been selected in the Desktop profile since
+2026-09-30 ([FIELD-PRODUCER.md](FIELD-PRODUCER.md),
+[STATUS-FIELDS-PRODUCER.md](STATUS-FIELDS-PRODUCER.md)). A `FIELD` of kind
+TEXT can carry only committed text, with no caret, selection or scrolling,
+and nothing publishes one. Everything else is painted text:
 
-**Plan,** following inventory sections 6.4, 6.5 and 6.8:
+- **Prompts.** One shared prompt (`tui/widgets/prompt.f`, over
+  `tui/widgets/input.f`) serves Desk and eight applications: about 40
+  prompts, one of them masked. It paints over the status row as foreground
+  paint, and the aggregate adapter then withholds every semantic slice of
+  the document beneath. So while a prompt is open, its application's menus,
+  text areas, grids and lists all go out as residual glyphs, and Sound Lab's
+  fields drop to CELL.
+- **Dialogs.** One shared dialog (`tui/widgets/dialog.f`) asks the nine
+  questions of File Explorer, Pad, Grid, the Agent and Sound Lab, such as
+  closing with unsaved changes or deleting a file. It runs its own blocking
+  input loop, so all of Desk stops until it is answered, and it ignores the
+  mouse.
+- **Confirmations by typed word.** Daybook (DELETE, DISCARD and RELOAD),
+  Library (DISCARD) and Streams (REMOVE) ask the user to type a word into a
+  prompt.
+- **Desk's own screens.** The launcher, schedule approval, permissions,
+  shutdown, sandbox access and the sandbox inspector are overlay documents
+  of labels around a canonical list. The lists are item views. Their titles,
+  questions and hints are residual, and nothing says the screen is a dialog
+  or that it is modal.
+- **Toasts.** About 300 calls in ten applications go through the app shell's
+  one toast bar (`ASHELL-TOAST`), which is foreground paint with no meaning:
+  an error looks like a success.
+- **Toggles and choices.** Menu items that toggle or choose, such as File
+  Explorer's Show Hidden and Sort, Pad's panels and the Agent's Access
+  presets, show no checked state. The Agent's settings rows, the Worlds valve
+  and Streams' source switches are painted.
+- **Status.** Library, Sound Lab, Streams, Worlds, Observatory, Grid's
+  formula bar and Desk's agent state paint their status instead of using
+  status labels.
 
-1. Fields: one-line input with a label, value, placeholder, caret, masked
-   mode, validation, and submit or cancel. The canonical input and prompt
-   widgets are the source.
-2. Dialogs: overlays with a title, contained controls, default and cancel
-   actions, and a modal focus scope.
-3. Buttons, checkboxes, choices and ranges, from the UIDL action, toggle,
-   selector and range types.
-4. Notices, toasts, progress and textual status.
+No application uses UIDL's own `<input>`, `<toggle>`, `<dialog>` or visible
+`<action>` elements, and nothing shows a progress bar.
 
-Consumers include File Explorer rename and go-to, Streams search, Agent's Ask
-and masked credential prompts, Agent settings, Daybook task checkboxes and
-Sound Lab parameters. Agent approval stays in Agent's hands, with its
-existing checks.
+**Decided on 2026-10-14.**
 
-**Done when** the journey renames a file through a semantic field and
-answers a dialog with a semantic button.
+- Dialogs stop freezing Desk. A dialog is modal only for its own
+  application: Desk and the other applications keep running, and the dialog
+  takes the mouse.
+- Confirmations by typed word become confirm dialogs. The destructive button
+  is never the default.
+- Notices carry a meaning: info, success, warning or error, the severities
+  status fields already have. Toasts that report a failure or a warning are
+  marked where they are raised; the rest stay plain.
+- The work goes through the shared widgets applications already use: the
+  prompt, the dialog, the app shell's toast, the field and the list. UIDL's
+  input, toggle, dialog and action elements, and progress bars, wait for a
+  real use.
+
+**Plan.**
+
+1. **Contract,** in both copies of APT-1-RETAINED-1 and APT-1-WIRE, and in
+   MegaPad's SEMANTIC-CONTENT-1:
+   - *Text fields that show typing.* A TEXT `FIELD` carries its caret, an
+     optional selection anchor, its scroll in cells and a placeholder, and a
+     `MASKED` flag. A masked field's value holds one mask character for each
+     character, never the secret. `SELECTED` means the field has the
+     keyboard, and only then does the terminal draw the caret. `PLACE` and
+     `EXTEND` name a position in a writable TEXT field as they do in a text
+     area. TEXT fields lose `ACTIVATE`, which nothing sends.
+   - *Modal regions.* A region flag, `MODAL`, makes the region's rectangle a
+     modal scope. Its barrier already keeps points from the regions beneath;
+     the flag also lets the renderer show what lies beneath as inactive. A
+     prompt or a dialog sits in a modal region over its application's pane,
+     and a modal screen of Desk's in one over the whole screen.
+   - *Dialogs and buttons.* Two control kinds behind a new feature bit 17,
+     `RET_DIALOGS`. A `DIALOG`'s label is its title, and its content gives
+     its message lines, its severity and a `NOTICE` flag. A `BUTTON`'s
+     content says whether it is the default, the cancel or a destructive
+     button, and it takes `ACTIVATE`. A dialog's buttons, fields and lists
+     are roots of their own inside its rectangle, above it in the same
+     region. Within a region the topmost control takes a point, as the hit
+     map already orders them. A notice is a `DIALOG` with the `NOTICE` flag
+     and no buttons, in a region that covers only itself.
+   - *Catching up.* APT-1-WIRE gains what RETAINED-1 already has: `ACTIVATE`
+     on `TASK`, `LAUNCHER` and `FIELD`, the `ADJUST` event, and `TASKBAR` and
+     `FIELD` among the surfaces where no raw gesture starts.
+2. **MegaPad.** The codec, the scene and terminal checks, the guest module's
+   writers, the reference renderer and its hit map, the viewer's routing,
+   the shared-viewer transport and the flowing appearance, for the whole
+   contract at once.
+3. **Prompts.**
+   - The prompt publishes a TEXT field from its input's own state: label,
+     text (masked when the prompt masks), caret, selection, scroll and
+     placeholder. Draw observation finds it, as it finds the other canonical
+     widgets.
+   - The producer puts the field in a modal region over its pane. The
+     document beneath keeps its semantics, inactive under the modal region,
+     except for a root the prompt's paint covers, such as the status field
+     the prompt replaces. Foreground paint that is not a captured overlay,
+     such as the Agent's own panels, keeps today's rule.
+   - `PLACE` and `EXTEND` reach the input widget, which sets its caret and
+     selection from scalar offsets.
+   - Desk's Ask prompt, on the taskbar row, goes out the same way through
+     the shell producer.
+4. **Dialogs.**
+   - The dialog widget stops blocking. An application opens a dialog with
+     a callback for its answer, and the app shell, or Desk's applet host,
+     draws it over the application and gives it the application's input
+     until it closes. It takes the mouse in CELL too. The nine call sites
+     move to callbacks.
+   - The dialog publishes a `DIALOG`, and a `BUTTON` for each answer, in a
+     modal region over its pane.
+   - The confirmations by typed word become confirm dialogs.
+   - Desk's screens mark their title and message in their UIDL, so they go
+     out as a `DIALOG` around their lists, modal over the whole screen.
+     Schedule approval keeps its rule: Allow stays unavailable until the
+     request has been read to its end.
+   - The Agent's approval review shows Approve and Deny as buttons. Approve
+     stays unavailable until the review's last row has been shown, as today.
+5. **Notices.** The app shell's toast publishes a notice with its meaning,
+   in a region of its own. Toasts that report failures and warnings are
+   marked where they are raised.
+6. **Toggles, choices and ranges.**
+   - UIDL menu items gain a checked state taken from the application's
+     state. CELL draws it, and the menu snapshot publishes it as `CHECKED`:
+     Show Hidden, Sort, Pad's panels and the Access presets.
+   - The Agent's settings rows become `CHOICE` fields and the Worlds valve
+     an `INTEGER` field, through the canonical field widget.
+   - Streams' Sources and Burrows views become card lists whose check boxes
+     switch a source on and off.
+7. **Status.** Painted status moves to UIDL status labels: Library, Sound
+   Lab's output and playback lines, Streams, Worlds, Observatory and Desk's
+   agent state. Grid's formula bar becomes a read-only TEXT field.
+8. **Measure.** Guest steps for a key typed into a prompt, for opening and
+   answering a dialog, and for showing a notice, rich and CELL.
+
+**Checks,** in order:
+
+- Contract: codec vectors and refusals for the new field state, `DIALOG`,
+  `BUTTON` and modal regions; the terminal's checks; off-screen compositor
+  checks of the reference renderer; and hit-map checks that a modal region
+  stops points beneath it, that the topmost control takes a point, and that
+  `PLACE`, `EXTEND` and `ACTIVATE` reach the right control.
+- Widgets: CELL byte oracles for the prompt and the dialog, unchanged except
+  where the mouse now works; the dialog's callbacks; and each application's
+  own tests and standalone smoke once its call sites move.
+- Producer: capture and lowering of prompts, dialogs and notices; refusal
+  leaving CELL; a document under a prompt staying semantic; and input
+  reaching the widgets.
+- Desk with each application through the physical viewer as its step lands:
+  File Explorer's rename, go-to and delete; Pad's Open prompt and its
+  close-tab question; Daybook's task prompt and confirmations; the Agent's
+  masked credential prompt; Sound Lab's exact-value prompt; Desk's launcher
+  and shutdown screens.
+- The full Desktop journey once at the end, with new milestones.
+
+**Done when** the Desktop journey, in the physical viewer, renames a file in
+File Explorer through a semantic field, answers a dialog with a semantic
+button and shows a notice with its meaning; while a prompt or a dialog is
+open, the rest of its application stays rich and inactive beneath it; and
+Desk keeps running while a dialog waits.
+
+**Not in this part.** Progress bars and busy indicators. UIDL's input,
+toggle, selector, range and dialog elements in documents that use them.
+Adjusting splits. Editing a grid cell in place. Plots and vector lines,
+which are part 6.
 
 ## 6. Plots and waveforms
 
