@@ -286,8 +286,10 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert re.search(r"(?m)^\s*FREE\b", code) is None
     assert "SCR-GET" not in code
     load_cell = _word(source, "_RGRP-LOAD-CELL?")
-    assert "_RGRP-PLANE-A" in load_cell
-    assert "_RGRP-PLANE-W" in load_cell
+    cell_at = _word(source, "_RGRP-CELL-AT")
+    assert "_RGRP-COL @ _RGRP-CELL-AT @" in load_cell
+    assert "_RGRP-PLANE-A" in cell_at
+    assert "_RGRP-PLANE-W" in cell_at
     assert "_RGRP-ENCODE-CELL?" in load_cell
     encode_cell = _word(source, "_RGRP-ENCODE-CELL?")
     assert "0x20 >=" in encode_cell
@@ -365,8 +367,8 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
         assert f"_RTE-LP.CLIP-{clip_field} !" in publish
     assert "_RGRP-PUBLISH-PLAN?" not in _word(source, "_RGRP-SCAN?")
     load_cell = _word(source, "_RGRP-LOAD-CELL?")
-    assert "_RGRP-SCAN-Y" in load_cell
-    assert "_RGRP-SCAN-X" in load_cell
+    assert "_RGRP-SCAN-Y" in cell_at
+    assert "_RGRP-SCAN-X" in cell_at
     assert "CELL-A-BLINK" in load_cell
     assert "SCR-CLUSTER@" in encode_cell
     assert "UTF8-ENCODE" in encode_cell
@@ -413,8 +415,9 @@ def test_paired_projection_preserves_request_and_independent_claim_channels() ->
     # is read only in paired mode, where it exists.
     assert "DUP @ _RGRP-PAIRED @ IF OVER 8 + @ OR THEN 0= IF DROP -1 EXIT THEN" in advance
     assert advance.index("0= IF DROP -1 EXIT THEN") < advance.index("_RGRP-ADVANCE-ACTIVE?")
-    assert "_RGRP-MENU-ACTIVE" in _word(source, "_RGRP-LOAD-CELL?")
-    assert "_RGRP-RESIDUE-A @" in _word(source, "_RGRP-LOAD-CELL?")
+    assert "_RGRP-CELL-AT" in _word(source, "_RGRP-LOAD-CELL?")
+    assert "_RGRP-MENU-ACTIVE" in _word(source, "_RGRP-CELL-AT")
+    assert "_RGRP-RESIDUE-A @" in _word(source, "_RGRP-CELL-AT")
     scan = _word(source, "_RGRP-SCAN-ROW?")
     assert scan.index("_RGRP-ACTIVE @ IF") < scan.index("_RGRP-RESIDUAL-CELL?")
 

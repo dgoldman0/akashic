@@ -35,6 +35,7 @@ def test_cell_value_operations_remain_pure_and_unguarded() -> None:
         "CELL-FG@",
         "CELL-BG@",
         "CELL-ATTRS@",
+        "CELL-STYLE@",
         "CELL-FG!",
         "CELL-BG!",
         "CELL-ATTRS!",

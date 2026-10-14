@@ -1090,15 +1090,19 @@ CREATE _RGRP-SEG GR-STATE-SIZE ALLOT
     THEN
     -1 ;
 
-: _RGRP-LOAD-CELL?  ( -- flag )
-    _RGRP-ROW @ _RGRP-SCAN-Y @ + _RGRP-PLANE-W @ *
-    _RGRP-COL @ _RGRP-SCAN-X @ + + 8 *
+\ The address of the cell at COLUMN of the scan's row, in the plane the
+\ scan reads there: the preserved residue under a menu claim, else BACK.
+: _RGRP-CELL-AT  ( column -- a )
+    _RGRP-SCAN-X @ +
+    _RGRP-ROW @ _RGRP-SCAN-Y @ + _RGRP-PLANE-W @ * + 8 *
     _RGRP-PAIRED @ _RGRP-MENU-ACTIVE @ 0<> AND IF
         _RGRP-RESIDUE-A @
     ELSE
         _RGRP-PLANE-A @
-    THEN
-    + @ _RGRP-CELL !
+    THEN + ;
+
+: _RGRP-LOAD-CELL?  ( -- flag )
+    _RGRP-COL @ _RGRP-CELL-AT @ _RGRP-CELL !
     _RGRP-CELL @ CELL-ATTRS@ DUP
     _RGRP-CELL-ATTR-MASK INVERT AND IF DROP _RGRP-SET-INVALID 0 EXIT THEN
     DUP CELL-A-BLINK AND IF DROP _RGRP-SET-UNREPRESENTABLE 0 EXIT THEN
@@ -1300,6 +1304,65 @@ VARIABLE _RGRP-RP-U
     _RGRP-RP-W @ 1- _RGRP-COL +!
     _RGRP-CLOSE-RUN? ;
 
+\ =====================================================================
+\ Plain cells
+\ =====================================================================
+\
+\ Most cells are printable ASCII in the style of the run before them.
+\ After the general path below adds such a cell to an open run, each next
+\ cell of that kind, at a column where no claim begins or ends, would take
+\ the general path to an end known in advance.  The claim counts, and with
+\ them the plane read, stay as they are.  The cell's attributes pass every
+\ check, and its colours and attributes are the run's, so the run goes on.
+\ Its text is its one byte, a space for an empty cell.  The segmenter,
+\ given an ordinary character after an ordinary character, breaks before
+\ it and keeps its state (GR-BREAK?), so no character joins.  Only the run
+\ text limit and the text room can stop the run.  Such cells are appended
+\ here directly.  A cell of any other kind, or at a claim's edge, the
+\ limit, the room or the scan's end, is left to the general path.
+
+VARIABLE _RGRP-PLAIN-STYLE  \ the style of the open run's plain cells
+VARIABLE _RGRP-PLAIN-N      \ the plain cells appended to it so far
+
+\ CELL's text byte when it is a plain cell of the open run, else -1.
+: _RGRP-PLAIN-BYTE  ( cell -- byte|-1 )
+    DUP CELL-STYLE@ _RGRP-PLAIN-STYLE @ <> IF DROP -1 EXIT THEN
+    CELL-CP@ DUP 0= IF DROP 32 EXIT THEN
+    DUP 0x20 0x7F WITHIN IF EXIT THEN
+    DROP -1 ;
+
+\ Whether no claim begins or ends at COLUMN.
+: _RGRP-COLUMN-QUIET?  ( column -- flag )
+    _RGRP-WORK-ACTIVE @ 0= IF DROP -1 EXIT THEN
+    _RGRP-DIFF-AT DUP @
+    _RGRP-PAIRED @ IF SWAP 8 + @ OR ELSE NIP THEN 0= ;
+
+\ The plain cells the open run can still take, a byte each: up to the
+\ scan's end, the run text limit and the text room.
+: _RGRP-PLAIN-ROOM  ( -- n )
+    _RGRP-SCAN-W @ _RGRP-COL @ - 1-
+    _RGRP-MAX-RUN-U @ _RGRP-RUN-TEXT-U @ - MIN
+    _RGRP-TEXT-U @ _RGRP-TEXT-USED @ - MIN ;
+
+\ The cell the general path just added: when the run is open and the cell
+\ is plain in it, append the plain cells after it.
+: _RGRP-PLAIN-CELLS  ( -- )
+    _RGRP-RUN-OPEN @ 0= IF EXIT THEN
+    0 _RGRP-RUN-FG @ _RGRP-RUN-BG @ _RGRP-RUN-ATTRS @ CELL-MAKE
+        CELL-STYLE@ _RGRP-PLAIN-STYLE !
+    _RGRP-CELL @ _RGRP-PLAIN-BYTE 0< IF EXIT THEN
+    0 _RGRP-PLAIN-N !
+    _RGRP-COL @ _RGRP-CELL-AT 8 +             ( next-cell )
+    _RGRP-TEXT-A @ _RGRP-TEXT-USED @ +        ( next-cell next-byte )
+    _RGRP-PLAIN-ROOM 0 ?DO
+        _RGRP-COL @ 1+ I + _RGRP-COLUMN-QUIET? 0= IF LEAVE THEN
+        OVER I 8 * + @ _RGRP-PLAIN-BYTE DUP 0< IF DROP LEAVE THEN
+        OVER I + C!
+        1 _RGRP-PLAIN-N +!
+    LOOP 2DROP
+    _RGRP-PLAIN-N @ DUP _RGRP-COL +! DUP _RGRP-TEXT-USED +!
+    DUP _RGRP-RUN-TEXT-U +! _RGRP-RUN-WIDTH +! ;
+
 : _RGRP-RESIDUAL-CELL?  ( -- flag )
     _RGRP-LOAD-CELL? 0= IF 0 EXIT THEN
     _RGRP-RUN-OPEN @ IF
@@ -1314,11 +1377,14 @@ VARIABLE _RGRP-RP-U
         _RGRP-SEG GR-RESET _RGRP-SEG-FIRST? DROP
     THEN
     _RGRP-SEG-REST
-    _RGRP-RUN-OPEN @ IF _RGRP-APPEND-CELL? EXIT THEN
-    _RGRP-OPEN-RUN
-    _RGRP-APPEND-CELL? 0= IF 0 EXIT THEN
-    _RGRP-RP-COUNT @ IF _RGRP-ADOPT? EXIT THEN
-    -1 ;
+    _RGRP-RUN-OPEN @ IF
+        _RGRP-APPEND-CELL? 0= IF 0 EXIT THEN
+    ELSE
+        _RGRP-OPEN-RUN
+        _RGRP-APPEND-CELL? 0= IF 0 EXIT THEN
+        _RGRP-RP-COUNT @ IF _RGRP-ADOPT? 0= IF 0 EXIT THEN THEN
+    THEN
+    _RGRP-PLAIN-CELLS -1 ;
 
 : _RGRP-ADVANCE-ACTIVE?  ( difference -- flag )
     _RGRP-ACTIVE @ SWAP _RGRP-SADD? 0= IF
@@ -1529,6 +1595,7 @@ VARIABLE _RGRP-RP-U
     0 _RGRP-CELL ! 0 _RGRP-CELL-CP ! 0 _RGRP-CELL-U !
     0 _RGRP-CELL-FG ! 0 _RGRP-CELL-BG ! 0 _RGRP-CELL-ATTRS !
     0 _RGRP-CELL-XA ! 0 _RGRP-CELL-XN ! 0 _RGRP-PENDING !
+    0 _RGRP-PLAIN-STYLE ! 0 _RGRP-PLAIN-N !
     0 _RGRP-NEXT-U ! 0 _RGRP-NEXT-TEXT ! 0 _RGRP-ALIGNED-ONE !
     0 _RGRP-OBJECT ! 0 _RGRP-ITEM ! 0 _RGRP-REF !
     _RGRP-UTF8 8 0 FILL ;
