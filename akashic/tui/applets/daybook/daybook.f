@@ -22,6 +22,7 @@ REQUIRE ../../widgets/list.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
+REQUIRE ../../widgets/dialog.f
 REQUIRE ../../draw.f
 REQUIRE ../../region.f
 REQUIRE ../../keys.f
@@ -78,15 +79,12 @@ USCOL-TEXT-FIXED-SIZE _DB-GRID-TITLE-ITEM-CAP +
 1 CONSTANT _DB-PRM-TASK
 2 CONSTANT _DB-PRM-EVENT
 3 CONSTANT _DB-PRM-NOTE
-4 CONSTANT _DB-PRM-DISCARD-CLOSE
-5 CONSTANT _DB-PRM-DISCARD-RELOAD
-6 CONSTANT _DB-PRM-DELETE-AUTOMATION
-7 CONSTANT _DB-PRM-REMINDER-WHEN
-8 CONSTANT _DB-PRM-REMINDER-REPEAT
-9 CONSTANT _DB-PRM-REMINDER-ZONE
-10 CONSTANT _DB-PRM-DEFAULT-ZONE
-11 CONSTANT _DB-PRM-AGENT-MINUTES
-12 CONSTANT _DB-PRM-AGENT-REPLY
+4 CONSTANT _DB-PRM-REMINDER-WHEN
+5 CONSTANT _DB-PRM-REMINDER-REPEAT
+6 CONSTANT _DB-PRM-REMINDER-ZONE
+7 CONSTANT _DB-PRM-DEFAULT-ZONE
+8 CONSTANT _DB-PRM-AGENT-MINUTES
+9 CONSTANT _DB-PRM-AGENT-REPLY
 
 \ What the automations show: their list; a page of a new Agent run, a
 \ choice its model makes or its prompt; or a schedule's details.
@@ -1509,16 +1507,21 @@ VARIABLE _DB-SHOW-LU
 : _DB-DO-NEW-EVENT ( elem -- ) DROP _DB-PRM-EVENT S" Event (HH:MM title):" _DB-SHOW-PROMPT ;
 : _DB-DO-NEW-NOTE  ( elem -- ) DROP _DB-PRM-NOTE S" New note:" _DB-SHOW-PROMPT ;
 
-\ Deleting a reminder asks first: it is gone for good.  The row is kept
-\ while the prompt shows; if the reminders change meanwhile, the delete
-\ does nothing and says so.
+\ Deleting an automation asks first: it is gone for good.  The row is
+\ kept while the question shows; if the automations change meanwhile,
+\ the delete does nothing and says so.
+: _DB-AV-DELETE-CONFIRMED  ( confirmed? context -- )
+    DROP IF _DB-AV-DOOMED @ _DB-AV DBAV-DELETE _DB-AV-DONE THEN ;
+
 : _DB-AV-ASK-DELETE  ( -- )
     _DB-AV-SELECTION DUP _DB-AV DBAV-SCHEDULE? 0= IF
         DROP S" Select an automation to delete" 2000 ASHELL-TOAST EXIT
     THEN
     _DB-AV-DOOMED !
-    _DB-PRM-DELETE-AUTOMATION S" Type DELETE to delete this automation:"
-    _DB-SHOW-PROMPT ;
+    S" Delete the selected automation?" S" Delete"
+        ['] _DB-AV-DELETE-CONFIRMED 0 DLG-CONFIRM 0= IF
+        S" Nothing was deleted" 1800 ASHELL-TOAST
+    THEN ;
 
 ' _DB-AV-ASK-DELETE IS _DB-AV-ASK-DELETE-D
 
@@ -1904,13 +1907,8 @@ VARIABLE _DB-SUB-MINUTE
         S" Daybook reloaded" 1400 ASHELL-TOAST
     THEN ;
 
-: _DB-RESHOW-DISCARD-CLOSE  ( -- )
-    _DB-PRM-DISCARD-CLOSE S" Type DISCARD to close without saving:"
-    _DB-SHOW-PROMPT ;
-
-: _DB-RESHOW-DISCARD-RELOAD  ( -- )
-    _DB-PRM-DISCARD-RELOAD S" Type RELOAD to discard unsaved changes:"
-    _DB-SHOW-PROMPT ;
+: _DB-RELOAD-CONFIRMED  ( confirmed? context -- )
+    DROP IF _DB-RELOAD-NOW THEN ;
 
 \ The reminder prompts' answers.  An empty repeat or zone is an answer.
 : _DB-RN-SUBMIT  ( -- )
@@ -1981,35 +1979,6 @@ VARIABLE _DB-SUB-MINUTE
         THEN
         _DB-INVALIDATE EXIT
     THEN
-    _DB-SUB-MODE @ _DB-PRM-DELETE-AUTOMATION = IF
-        _DB-SUB-A @ _DB-SUB-U @ S" DELETE" STR-STR= IF
-            _DB-AV-DOOMED @ _DB-AV DBAV-DELETE _DB-AV-DONE
-        ELSE
-            S" Enter DELETE exactly to delete" 2000 ASHELL-TOAST
-        THEN
-        _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
-        _DB-INVALIDATE EXIT
-    THEN
-    _DB-SUB-MODE @ _DB-PRM-DISCARD-CLOSE = IF
-        _DB-SUB-A @ _DB-SUB-U @ S" DISCARD" STR-STR= IF
-            -1 _DB-DISCARD-ARMED !
-            S" Unsaved Daybook changes will be discarded" 1800 ASHELL-TOAST
-            ASHELL-QUIT
-        ELSE
-            S" Enter DISCARD exactly to confirm" 2000 ASHELL-TOAST
-            _DB-RESHOW-DISCARD-CLOSE
-        THEN
-        _DB-INVALIDATE EXIT
-    THEN
-    _DB-SUB-MODE @ _DB-PRM-DISCARD-RELOAD = IF
-        _DB-SUB-A @ _DB-SUB-U @ S" RELOAD" STR-STR= IF
-            _DB-RELOAD-NOW
-        ELSE
-            S" Enter RELOAD exactly to confirm" 2000 ASHELL-TOAST
-            _DB-RESHOW-DISCARD-RELOAD
-        THEN
-        _DB-INVALIDATE EXIT
-    THEN
     _DB-SUB-U @ 0= IF _DB-INVALIDATE EXIT THEN
     _DB-SUB-MODE @ CASE
         _DB-PRM-TASK OF
@@ -2067,11 +2036,9 @@ VARIABLE _DB-SUB-MINUTE
     THEN ;
 
 : _DB-DO-RELOAD  ( elem -- )
-    DROP _DB-DIRTY @ IF
-        _DB-RESHOW-DISCARD-RELOAD
-    ELSE
-        _DB-RELOAD-NOW
-    THEN ;
+    DROP _DB-DIRTY @ 0= IF _DB-RELOAD-NOW EXIT THEN
+    S" Reload Daybook and discard unsaved changes?" S" Discard"
+        ['] _DB-RELOAD-CONFIRMED 0 DLG-CONFIRM DROP ;
 
 : _DB-DO-TOGGLE ( elem -- ) DROP _DB-TOGGLE-SELECTED ;
 : _DB-DO-DELETE ( elem -- )
@@ -2312,6 +2279,11 @@ VARIABLE _DB-SOURCE-VALUE
         _DB-INVALIDATE _DB-TOUCH
     THEN ;
 
+: _DB-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP IF -1 _DB-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ Unsaved changes defer the close to a question; agreeing to discard them
+\ asks to close again, and that close goes ahead.
 : DAYBOOK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DB-ACTIVATE
     \ A new Agent run's typed prompt is not lost to a close.
@@ -2327,17 +2299,14 @@ VARIABLE _DB-SOURCE-VALUE
     _DB-DISCARD-ARMED @ IF
         0 _DB-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
     THEN
-    _DB-PROMPT @ 0= IF APP-CLOSE-D-CANCEL EXIT THEN
-    _DB-PROMPT @ PRM-ACTIVE? IF
-        _DB-PROMPT-MODE @ _DB-PRM-DISCARD-CLOSE = IF
-            APP-CLOSE-D-DEFER EXIT
-        THEN
+    _DB-PROMPT @ ?DUP IF PRM-ACTIVE? ELSE 0 THEN IF
         S" Finish or cancel the current Daybook prompt before closing"
         2400 ASHELL-TOAST
         APP-CLOSE-D-CANCEL EXIT
     THEN
-    _DB-RESHOW-DISCARD-CLOSE
-    APP-CLOSE-D-DEFER ;
+    S" Close Daybook and discard unsaved changes?" S" Discard"
+        ['] _DB-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : DAYBOOK-SHUTDOWN-CB  ( instance -- )
     _DB-ACTIVATE

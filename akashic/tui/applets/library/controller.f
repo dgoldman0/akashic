@@ -39,7 +39,6 @@ REQUIRE ../../../interop/service-endpoint.f
 2 CONSTANT _LAPP-PRM-CREATE-TITLE
 3 CONSTANT _LAPP-PRM-CREATE-BODY
 4 CONSTANT _LAPP-PRM-RENAME
-5 CONSTANT _LAPP-PRM-DISCARD-PENDING
 
 1  CONSTANT _LAPP-CREATE-PREPARED
 -1 CONSTANT _LAPP-CREATE-DISPATCHED
@@ -1254,14 +1253,8 @@ VARIABLE _LAPP-SHOW-INITIAL-U
     THEN DROP
     _LAPP-REFRESH-AFTER-MUTATION ;
 
-: _LAPP-DO-QUIT  ( elem -- )
-    DROP
-    _LAPP-PENDING-CREATE @ IF
-        _LAPP-PRM-DISCARD-PENDING
-        S" Type DISCARD to abandon the pending operation:"
-        0 0 _LAPP-SHOW-PROMPT EXIT
-    THEN
-    ASHELL-QUIT ;
+\ A quit is a close request, which asks first when a create is pending.
+: _LAPP-DO-QUIT  ( elem -- )  DROP ASHELL-QUIT ;
 
 : _LAPP-DO-ABOUT  ( elem -- )
     DROP S" Library UX probe - public owner APIs, single instance" 3000
@@ -1345,18 +1338,6 @@ VARIABLE _LAPP-SUB-MODE
                 ELSE
                     DROP _LAPP-REFRESH-AFTER-MUTATION
                 THEN
-            THEN
-        ENDOF
-        _LAPP-PRM-DISCARD-PENDING OF
-            _LAPP-SUB-A @ _LAPP-SUB-U @ S" DISCARD" STR-STR= IF
-                _LAPP-CLEAR-PENDING -1 _LAPP-DISCARD-ARMED !
-                ASHELL-QUIT
-            ELSE
-                S" Enter DISCARD exactly to abandon the retry key"
-                    2600 ASHELL-TOAST
-                _LAPP-PRM-DISCARD-PENDING
-                    S" Type DISCARD to abandon the pending operation:"
-                    0 0 _LAPP-SHOW-PROMPT
             THEN
         ENDOF
     ENDCASE

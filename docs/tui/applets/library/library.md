@@ -34,7 +34,9 @@ deep editor.
 A create becomes a complete prepared request with its generated operation key
 before provisioning or dispatch. `Retry Pending Create` resubmits that exact
 request. It neither rebuilds a request from changed prompts nor treats equal
-content as equal identity.
+content as equal identity. Closing Library would lose a pending create's
+operation key, so the close asks first in a confirm dialog whose default is
+Cancel; Discard abandons the create and closes.
 
 Initialization opens the existing repository before considering first-use
 provisioning. A later applet activation reconstructs its first page, selection,

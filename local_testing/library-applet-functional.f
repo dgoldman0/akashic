@@ -433,6 +433,19 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
     _laf-preview-body? _laf-assert
     _laf-stack ;
 
+CREATE _laf-evs 31 ALLOT
+: _laf-ev  ( -- event )  _laf-evs 7 + -8 AND ;
+\ A key for the dialog Library shows; true when a dialog took it.
+: _laf-key  ( key -- handled? )
+    KEY-T-SPECIAL _laf-ev ! _laf-ev 8 + ! 0 _laf-ev 16 + !
+    _laf-ev DLG-HOST-EVENT ;
+: _laf-close  ( -- decision )
+    0 _LAPP-CURRENT-INSTANCE @ LIBRARY-APPLET-REQUEST-CLOSE-CB ;
+: _laf-asks-discard?  ( -- flag )
+    DLG-SHOWN ?DUP 0= IF 0 EXIT THEN
+    DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @
+    S" Close Library and discard the pending create?" STR-STR= ;
+
 : _laf-pending-close-and-discard  ( -- )
     S" Discard pending" DUP _LAPP-PENDING-TITLE-U !
         _LAPP-PENDING-TITLE SWAP CMOVE
@@ -440,18 +453,21 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
         _LAPP-PENDING-BODY SWAP CMOVE
     _LAPP-CONFIGURE-CREATE
         LIBRARY-SERVICE-S-OK = _laf-assert
-    0 _LAPP-CURRENT-INSTANCE @ LIBRARY-APPLET-REQUEST-CLOSE-CB
-        APP-CLOSE-D-DEFER = _laf-assert
-    _LAPP-PROMPT-MODE @ _LAPP-PRM-DISCARD-PENDING = _laf-assert
-    S" DISCARD" _LAPP-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
-    _LAPP-PROMPT @ PRM-HIDE
-    _LAPP-PROMPT @ _LAPP-PROMPT-SUBMIT
+    \ A close asks first; Cancel, the default, keeps the pending create.
+    _laf-close APP-CLOSE-D-DEFER = _laf-assert
+    _laf-asks-discard? _laf-assert
+    KEY-ENTER _laf-key _laf-assert DLG-SHOWN 0= _laf-assert
+    _LAPP-PENDING-CREATE @ 0<> _laf-assert
+    _LAPP-DISCARD-ARMED @ 0= _laf-assert
+    \ Discard abandons it and asks to close again.
+    _laf-close APP-CLOSE-D-DEFER = _laf-assert
+    KEY-LEFT _laf-key _laf-assert KEY-ENTER _laf-key _laf-assert
+    DLG-SHOWN 0= _laf-assert
     _LAPP-PENDING-CREATE @ 0= _laf-assert
     _LAPP-CREATE-REQUEST LIBRARY-DOCUMENT-CREATE-REQUEST-SIZE
         _laf-zero? _laf-assert
     _LAPP-DISCARD-ARMED @ _laf-assert
-    0 _LAPP-CURRENT-INSTANCE @ LIBRARY-APPLET-REQUEST-CLOSE-CB
-        APP-CLOSE-D-ALLOW = _laf-assert
+    _laf-close APP-CLOSE-D-ALLOW = _laf-assert
     _LAPP-DISCARD-ARMED @ 0= _laf-assert
     _laf-stack ;
 

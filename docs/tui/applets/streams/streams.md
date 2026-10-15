@@ -397,9 +397,9 @@ move an independent per-instance selection, and enable or disable the selected
 exact revision. `R` and the `Refresh_Selected_Source` menu action submit the
 same exact selected-source operation used by the typed capability. Creation
 uses manual, bounded defaults and does not fetch by itself. Removal captures
-the selected RID and revision before prompting and requires the exact text
-`REMOVE`; a selection change or concurrent update cannot redirect the
-confirmed action.
+the selected RID and revision before it asks, in a confirm dialog whose
+default is Cancel; a selection change or concurrent update cannot redirect
+the confirmed action.
 In this milestone `R` accepts only enabled syndication sources; watched pages
 remain configurable but receive a precise unsupported-kind notice and no
 refresh-owner mutation.

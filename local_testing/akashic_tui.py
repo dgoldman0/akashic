@@ -13096,6 +13096,7 @@ VARIABLE _dt-cap-heap-before
 VARIABLE _dt-agenda-u
 VARIABLE _dt-close-prompt
 VARIABLE _dt-close-rgn
+CREATE _dt-close-evs 31 ALLOT
 CREATE _dt-big _DB-IO-CAP 1+ ALLOT
 CREATE _dt-agenda-before 256 ALLOT
 CREATE _dt-entry-before _DB-ENTRY-SZ ALLOT
@@ -13341,46 +13342,68 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     0 _DB-SOURCE-BLOCKED ! 0 _DB-DISCARD-ARMED !
     _dt-stack ;
 
-: _dt-test-close  ( -- )
-    0 _DB-DIRTY !
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-ALLOW = _dt-assert
-    -1 _DB-DIRTY ! 0 _DB-PROMPT ! 0 _DB-DISCARD-ARMED !
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-CANCEL = _dt-assert
+: _dt-close-ev  ( -- event )  _dt-close-evs 7 + -8 AND ;
+\ A key for the dialog Daybook shows; true when a dialog took it.
+: _dt-close-key  ( key -- handled? )
+    KEY-T-SPECIAL _dt-close-ev ! _dt-close-ev 8 + ! 0 _dt-close-ev 16 + !
+    _dt-close-ev DLG-HOST-EVENT ;
+\ Daybook shows the question MSG.
+: _dt-asks?  ( msg-a msg-u -- flag )
+    DLG-SHOWN ?DUP 0= IF 2DROP 0 EXIT THEN
+    DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @ STR-STR= ;
+: _dt-close-request  ( -- decision )
+    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB ;
 
+: _dt-test-close  ( -- )
+    \ As under a running shell, so that a quit shows.
+    ASHELL-CANCEL-QUIT
+    0 _DB-DIRTY ! 0 _DB-PROMPT ! 0 _DB-DISCARD-ARMED !
+    _dt-close-request APP-CLOSE-D-ALLOW = _dt-assert
+
+    \ Reloading over unsaved changes asks first.  Cancel, the default,
+    \ keeps them; Discard reloads.
+    -1 _DB-DIRTY !
+    0 _DB-DO-RELOAD
+    S" Reload Daybook and discard unsaved changes?" _dt-asks? _dt-assert
+    KEY-ENTER _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert _DB-DIRTY @ _dt-assert
+    0 _DB-DO-RELOAD
+    KEY-LEFT _dt-close-key _dt-assert KEY-ENTER _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-DIRTY @ 0= _dt-assert _dt-model-canonical? _dt-assert
+
+    \ Closing over unsaved changes defers to a question.  A close asked
+    \ while it is open is refused, and Escape cancels it.
+    -1 _DB-DIRTY !
+    _dt-close-request APP-CLOSE-D-DEFER = _dt-assert
+    S" Close Daybook and discard unsaved changes?" _dt-asks? _dt-assert
+    _dt-close-request APP-CLOSE-D-CANCEL = _dt-assert
+    KEY-ESC _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-DISCARD-ARMED @ 0= _dt-assert ASHELL-QUIT-PENDING? 0= _dt-assert
+
+    \ Discard arms the next close and asks to close again, and that close
+    \ goes ahead.
+    _dt-close-request APP-CLOSE-D-DEFER = _dt-assert
+    KEY-LEFT _dt-close-key _dt-assert KEY-ENTER _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-DISCARD-ARMED @ _dt-assert ASHELL-QUIT-PENDING? _dt-assert
+    _dt-close-request APP-CLOSE-D-ALLOW = _dt-assert
+    _DB-DISCARD-ARMED @ 0= _dt-assert
+    ASHELL-CANCEL-QUIT
+
+    \ An open prompt is finished or cancelled before a close asks.
     0 0 1 80 RGN-NEW DUP _dt-close-rgn ! DUP _DB-PROMPT-RGN !
     _DB-PROMPT-BUF _DB-PROMPT-CAP PRM-NEW
     DUP _dt-close-prompt ! _DB-PROMPT !
-    0 _DB-DO-RELOAD
-    _DB-PROMPT-MODE @ _DB-PRM-DISCARD-RELOAD = _dt-assert
-    _DB-PROMPT @ PRM-ACTIVE? _dt-assert _DB-DIRTY @ _dt-assert
-    S" RELOAD" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
-    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
-    _DB-DIRTY @ 0= _dt-assert _dt-model-canonical? _dt-assert
-
-    -1 _DB-DIRTY !
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-DEFER = _dt-assert
-    _DB-PROMPT-MODE @ _DB-PRM-DISCARD-CLOSE = _dt-assert
+    _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT
     _DB-PROMPT @ PRM-ACTIVE? _dt-assert
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-DEFER = _dt-assert
-
-    S" discard" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
-    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
-    _DB-DISCARD-ARMED @ 0= _dt-assert
-    _DB-PROMPT @ PRM-ACTIVE? _dt-assert
-    S" DISCARD" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
-    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
-    _DB-DISCARD-ARMED @ _dt-assert
-    ASHELL-QUIT-PENDING? _dt-assert
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-ALLOW = _dt-assert
-    _DB-DISCARD-ARMED @ 0= _dt-assert
-    ASHELL-CANCEL-QUIT
+    _dt-close-request APP-CLOSE-D-CANCEL = _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-PROMPT @ PRM-HIDE _DB-PRM-NONE _DB-PROMPT-MODE !
     _dt-close-prompt @ PRM-FREE 0 _DB-PROMPT !
     _dt-close-rgn @ RGN-FREE 0 _DB-PROMPT-RGN !
+    0 _DB-DIRTY !
     _dt-stack ;
 
 : _dt-run  ( -- )
@@ -31509,11 +31532,12 @@ def smoke(
                     machine.send_key("end")
                     machine.send_key("delete")
                     if not shows(
-                        "Type DELETE to delete this automation:",
+                        "Delete the selected automation?",
                         "Delete did not ask first",
                     ):
                         return
-                    machine.send_text("DELETE")
+                    # Cancel is the default; Left selects Delete.
+                    machine.send_key("left")
                     machine.send_key("enter")
                     if check == "deleted":
                         break
@@ -32737,11 +32761,12 @@ def smoke(
 
             session.send_key("d")
             if not wait_screen(
-                "Type REMOVE to delete selected source:",
-                "Desk Streams did not open exact source-removal confirmation",
+                "Remove the selected source?",
+                "Desk Streams did not ask before removing the source",
             ):
                 return
-            session.send_text("REMOVE")
+            # Cancel is the default; Left selects Remove.
+            session.send_key("left")
             session.send_key("enter")
             if not wait_screen(
                 "No sources configured",
@@ -35095,6 +35120,7 @@ VARIABLE _suc-i3
 VARIABLE _suc-owner-revision
 
 CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
+CREATE _suc-evs 31 ALLOT
 
 : _suc-assert  ( flag -- )
     1 _suc-checks +! 0= IF
@@ -35125,6 +35151,20 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
 : _suc-count=  ( expected -- flag )
     >R _suc-i1 @ STREAMS-SOURCES-COUNT@
     STREAMS-SOURCE-S-OK = SWAP R> = AND ;
+: _suc-ev  ( -- event )  _suc-evs 7 + -8 AND ;
+\ A key for the dialog Streams shows; true when a dialog took it.
+: _suc-key  ( key -- handled? )
+    KEY-T-SPECIAL _suc-ev ! _suc-ev 8 + ! 0 _suc-ev 16 + !
+    _suc-ev DLG-HOST-EVENT ;
+\ Streams asks whether to remove the selected source.
+: _suc-asks-remove?  ( -- flag )
+    DLG-SHOWN ?DUP 0= IF 0 EXIT THEN
+    DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @
+    S" Remove the selected source?" STR-STR= ;
+\ Answer Remove: Cancel is the default, and Left selects Remove.
+: _suc-remove  ( -- )
+    KEY-LEFT _suc-key _suc-assert KEY-ENTER _suc-key _suc-assert
+    DLG-SHOWN 0= _suc-assert ;
 
 : _suc-test-view-isolation  ( -- )
     _suc-i1 @ _STM-ACTIVATE
@@ -35251,12 +35291,14 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     _suc-scratch-zero? _suc-assert _suc-stack ;
 
 : _suc-test-confirmed-remove  ( -- )
+    \ Cancel, the default, keeps the source.
     _suc-owner-capture
     _STM-BEGIN-SOURCE-REMOVE
     _STM-SOURCE-PENDING-ARMED @ 0<> _suc-assert
     _STM-SOURCE-PENDING-RID RID-PRESENT? _suc-assert
     _STM-SOURCE-PENDING-REVISION @ 2 = _suc-assert
-    S" remove" _STM-APPLY-SOURCE-REMOVE
+    _suc-asks-remove? _suc-assert
+    KEY-ENTER _suc-key _suc-assert DLG-SHOWN 0= _suc-assert
     _suc-owner-stable 2 _suc-count= _suc-assert
     _suc-pending-zero? _suc-assert
 
@@ -35267,7 +35309,7 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
         STREAMS-SOURCE-ENABLE-OWNER
         STREAMS-SOURCE-S-OK = _suc-assert
     _suc-owner-advanced
-    S" REMOVE" _STM-APPLY-SOURCE-REMOVE
+    _suc-remove
     _suc-owner-stable 2 _suc-count= _suc-assert
     _suc-pending-zero? _suc-assert
 
@@ -35277,7 +35319,7 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     _STM-BEGIN-SOURCE-REMOVE
     _STM-SOURCE-PENDING-REVISION @ 3 = _suc-assert
     0 _STM-SOURCE-SELECTED !
-    S" REMOVE" _STM-APPLY-SOURCE-REMOVE
+    _suc-remove
     _suc-owner-advanced 1 _suc-count= _suc-assert
     _STM-SOURCE-SELECTED @ 0= _suc-assert
     0 _suc-source DUP SSOURCE.KIND @ SSOURCE-KIND-SYNDICATION =

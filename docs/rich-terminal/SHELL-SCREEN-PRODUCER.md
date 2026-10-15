@@ -122,7 +122,8 @@ root to lie inside the pane's content, and requires the four bands of the
 pane's outer rectangle around the root to be clear. The root's own cells are
 taken as the overlay's paint, as the adapter took them. A button goes where
 its pane's dialog goes, and a button whose pane shows no dialog refuses the
-candidate.
+candidate. An application that asks a question while its prompt is open
+shows two overlays, so its screen goes out as CELL until one of them closes.
 
 When the terminal negotiated `RTE-F-DIALOGS`, each overlay gets a modal
 region after the planner's regions, in control order: surface-sized logical

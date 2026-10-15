@@ -12,6 +12,7 @@ REQUIRE capabilities.f
 REQUIRE projection-adapter.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/qualified-locator.f
+REQUIRE ../../widgets/dialog.f
 
 \ =====================================================================
 \  Scheduling an Agent run
@@ -166,17 +167,16 @@ VARIABLE _LSR-REQ
     THEN
     _LAPP-PROMPT @ WDG-DRAW ;
 
+: _LAPP-DISCARD-CONFIRMED  ( confirmed? context -- )
+    DROP IF _LAPP-CLEAR-PENDING -1 _LAPP-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ Closing would lose a pending create's retry key, so the close asks
+\ first; discarding the create asks to close again, and that close goes
+\ ahead.
 : LIBRARY-APPLET-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _LAPP-ACTIVATE
     _LAPP-DISCARD-ARMED @ IF
         0 _LAPP-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
-    THEN
-    _LAPP-PENDING-CREATE @ IF
-        _LAPP-PROMPT @ 0= IF APP-CLOSE-D-CANCEL EXIT THEN
-        _LAPP-PRM-DISCARD-PENDING
-        S" Type DISCARD to abandon the pending operation:"
-        0 0 _LAPP-SHOW-PROMPT
-        APP-CLOSE-D-DEFER EXIT
     THEN
     _LAPP-PROMPT @ ?DUP IF
         PRM-ACTIVE? IF
@@ -184,6 +184,11 @@ VARIABLE _LSR-REQ
                 ASHELL-TOAST
             APP-CLOSE-D-CANCEL EXIT
         THEN
+    THEN
+    _LAPP-PENDING-CREATE @ IF
+        S" Close Library and discard the pending create?" S" Discard"
+            ['] _LAPP-DISCARD-CONFIRMED 0 DLG-CONFIRM
+        IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN EXIT
     THEN
     APP-CLOSE-D-ALLOW ;
 
