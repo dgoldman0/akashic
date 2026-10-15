@@ -1429,35 +1429,35 @@ VARIABLE _POP-ORIG
 
 : _PAD-REPORT-OPEN-RESULT  ( ior -- )
     DUP 0= IF DROP EXIT THEN
-    DUP -1 = IF DROP S" File not found" 2000 ASHELL-TOAST EXIT THEN
-    DUP -2 = IF DROP S" Max buffers reached" 2000 ASHELL-TOAST EXIT THEN
+    DUP -1 = IF DROP S" File not found" 2000 ASHELL-TOAST-WARNING EXIT THEN
+    DUP -2 = IF DROP S" Max buffers reached" 2000 ASHELL-TOAST-WARNING EXIT THEN
     DUP -3 = IF
-        DROP S" Invalid or unsupported path" 2200 ASHELL-TOAST EXIT
+        DROP S" Invalid or unsupported path" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP -4 = IF
-        DROP S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST EXIT
+        DROP S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP -5 = IF
         DROP S" File read failed; document was not changed"
-        2500 ASHELL-TOAST EXIT
+        2500 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP -6 = IF
         DROP S" File recovery is required before opening"
-        2500 ASHELL-TOAST EXIT
+        2500 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP -7 = IF
         DROP S" File open failed safely after an internal storage fault"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _PAD-E-SHARED-UNAVAILABLE = IF
         DROP S" Shared Daybook resource is unavailable"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _PAD-E-STALE = IF
         DROP S" changed elsewhere; reload before saving"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
-    DROP S" Shared Daybook open failed" 2400 ASHELL-TOAST ;
+    DROP S" Shared Daybook open failed" 2400 ASHELL-TOAST-ERROR ;
 
 \ =====================================================================
 \  S11b -- Following links
@@ -1485,7 +1485,7 @@ VARIABLE _POP-ORIG
         ENDOF
         LPATH-S-EMPTY OF DROP ENDOF
         LPATH-S-SCHEME OF
-            DROP S" Pad opens only links to files" 2200 ASHELL-TOAST
+            DROP S" Pad opens only links to files" 2200 ASHELL-TOAST-WARNING
         ENDOF
         >R DROP -3 _PAD-REPORT-OPEN-RESULT R>
     ENDCASE ;
@@ -1493,17 +1493,17 @@ VARIABLE _POP-ORIG
 : _PAD-REPORT-SAVE-ERROR  ( ior -- )
     DUP _PAD-E-STALE = IF
         DROP S" changed elsewhere; reload before saving"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _PAD-E-SHARED-UNAVAILABLE = IF
         DROP S" Shared Daybook resource is unavailable"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _PAD-E-DAYBOOK-PROTECTED = IF
         DROP S" /daybook.md is owned by the shared Daybook resource"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
-    DROP S" Save failed" 2000 ASHELL-TOAST ;
+    DROP S" Save failed" 2000 ASHELL-TOAST-ERROR ;
 
 \ =====================================================================
 \  S12 -- Explorer Callback
@@ -1514,7 +1514,7 @@ VARIABLE _POP-ORIG
     DUP 0= IF DROP EXIT THEN
     DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
     _PAD-INODE-PATH-CHECKED IF
-        2DROP S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST EXIT
+        2DROP S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _PAD-OPEN-PATH
     _PAD-REPORT-OPEN-RESULT ;
@@ -1526,7 +1526,7 @@ VARIABLE _POP-ORIG
 : _PAD-DO-NEW  ( elem -- )
     DROP
     _PAD-BUF-OPEN DUP 0< IF
-        DROP S" Max buffers reached" 2000 ASHELL-TOAST EXIT
+        DROP S" Max buffers reached" 2000 ASHELL-TOAST-WARNING EXIT
     THEN DROP
     _PAD-TXTA @ ?DUP IF TXTA-CLEAR THEN
     _PAD-UPDATE-STATUS ASHELL-DIRTY! ;
@@ -1615,13 +1615,13 @@ VARIABLE _PSA-STALE
     _PAD-UPDATE-STATUS ASHELL-DIRTY!
     _PSA-STALE @ IF
         S" changed elsewhere; reload before saving"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _PSA-FAILED @ IF
-        S" Some buffers failed to save" 2500 ASHELL-TOAST EXIT
+        S" Some buffers failed to save" 2500 ASHELL-TOAST-ERROR EXIT
     THEN
     _PSA-SKIPPED @ IF
-        S" Saved named buffers; untitled buffers remain" 2500 ASHELL-TOAST EXIT
+        S" Saved named buffers; untitled buffers remain" 2500 ASHELL-TOAST-WARNING EXIT
     THEN
     _PSA-SAVED @ IF
         S" All modified buffers saved" 1800 ASHELL-TOAST
@@ -1757,16 +1757,16 @@ VARIABLE _PBUILD-DIAG-U
 : _PAD-DO-BUILD-INSTALL  ( elem -- )
     DROP
     _PAD-ACTIVE @ 0< IF
-        S" Open a project manifest before building" 2400 ASHELL-TOAST EXIT
+        S" Open a project manifest before building" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-FNAME-L + @ 0= IF
-        S" Save the project manifest before building" 2600 ASHELL-TOAST EXIT
+        S" Save the project manifest before building" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _PAD-HAS-DIRTY? IF
         0 _PAD-DO-SAVE-ALL
         _PSA-FAILED @ IF
             S" Build stopped because a modified file could not be saved"
-                3000 ASHELL-TOAST EXIT
+                3000 ASHELL-TOAST-ERROR EXIT
         THEN
     THEN
     _PAD-OUTPUT-RESET _PAD-DIAG-RESET
@@ -1790,7 +1790,7 @@ VARIABLE _PBUILD-DIAG-U
         ELSE
             _PBUILD-STATUS @ _PAD-BUILD-GENERIC-ERROR _PAD-OUTPUT-NL
         THEN
-        S" Build & Install failed" 2600 ASHELL-TOAST
+        S" Build & Install failed" 2600 ASHELL-TOAST-ERROR
     THEN
     _PAD-OUTPUT-SHOW ;
 
@@ -2193,11 +2193,11 @@ VARIABLE _PGLC-OFF
 
 : _PAD-GOTO-LINE-TEXT  ( addr len -- )
     STR>NUM 0= IF
-        DROP S" Invalid line number" 1800 ASHELL-TOAST EXIT
+        DROP S" Invalid line number" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
-    DUP 1 < IF DROP S" Line numbers start at 1" 1800 ASHELL-TOAST EXIT THEN
+    DUP 1 < IF DROP S" Line numbers start at 1" 1800 ASHELL-TOAST-WARNING EXIT THEN
     1 _PAD-GOTO-LINE-COLUMN 0= IF
-        S" Line is outside the document" 1800 ASHELL-TOAST
+        S" Line is outside the document" 1800 ASHELL-TOAST-WARNING
     THEN ;
 
 : _PAD-DO-FIND  ( elem -- )
@@ -2221,7 +2221,7 @@ VARIABLE _PGLC-OFF
     _PAD-DIAG-PATH _PAD-DIAG-PATH-U @ _PAD-OPEN-PATH
     DUP IF _PAD-REPORT-OPEN-RESULT EXIT THEN DROP
     _PAD-DIAG-LINE @ _PAD-DIAG-COLUMN @ _PAD-GOTO-LINE-COLUMN 0= IF
-        S" Build diagnostic is outside the current source" 2200 ASHELL-TOAST
+        S" Build diagnostic is outside the current source" 2200 ASHELL-TOAST-WARNING
         EXIT
     THEN
     S" Opened build diagnostic" 1400 ASHELL-TOAST ;

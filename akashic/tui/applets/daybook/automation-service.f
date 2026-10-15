@@ -33,6 +33,7 @@
 \    DBSVC-CLIENT!     ( client service -- )
 \    DBSVC-TICK        ( service -- notice? )
 \    DBSVC-NOTICE      ( service -- address length )
+\    DBSVC-NOTICE-SEVERITY ( service -- severity )
 \    DBSVC-OWNER       ( service -- owner )
 \    DBSVC-CLOCK@      ( service -- clock )
 \    DBSVC-STATUS@     ( service -- status )
@@ -109,7 +110,8 @@ DBREC-DESCRIBE-MAX 3 + TZ-STRING-MAX + CONSTANT _DBSVC-TRIGGER-MAX
 200 CONSTANT _DBSVC-S           \ the schedule
 208 CONSTANT _DBSVC-I           \ the item, or 0
 216 CONSTANT _DBSVC-A           \ the schedule's action
-224 CONSTANT _DBSVC-WRITER      \ CBW-SIZE bytes
+224 CONSTANT _DBSVC-SEVERITY    \ the notice's meaning
+232 CONSTANT _DBSVC-WRITER      \ CBW-SIZE bytes
 _DBSVC-WRITER CBW-SIZE + CONSTANT _DBSVC-TEXT
 _DBSVC-TEXT DBSVC-NOTICE-MAX + 7 + -8 AND CONSTANT _DBSVC-TRIGGER
 _DBSVC-TRIGGER _DBSVC-TRIGGER-MAX + 7 + -8 AND CONSTANT _DBSVC-ENTRIES
@@ -121,6 +123,7 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
 : _DBSVC.SELF         ( service -- a ) _DBSVC-SELF + ;
 : _DBSVC.STATUS       ( service -- a ) _DBSVC-STATUS + ;
 : _DBSVC.LEN          ( service -- a ) _DBSVC-LEN + ;
+: _DBSVC.SEVERITY     ( service -- a ) _DBSVC-SEVERITY + ;
 : _DBSVC.WALL         ( service -- a ) _DBSVC-WALL + ;
 : _DBSVC.BASIS        ( service -- a ) _DBSVC-BASIS + ;
 : _DBSVC.FIRED        ( service -- a ) _DBSVC-FIRED + ;
@@ -158,6 +161,10 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
 \ The latest notice.
 : DBSVC-NOTICE  ( service -- address length )
     DUP _DBSVC.TEXT SWAP _DBSVC.LEN @ ;
+
+\ What the latest notice means, as a status field's severity: a warning
+\ (3) for a missed reminder and a run that needs review, else neutral (0).
+: DBSVC-NOTICE-SEVERITY  ( service -- severity ) _DBSVC.SEVERITY @ ;
 
 \ What the runner last saw of the wall clock: DBRUN-CLOCK-*.
 : DBSVC-CLOCK@  ( service -- clock ) _DBSVC.RUNNER DBRUN-CLOCK@ ;
@@ -223,13 +230,21 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
     THEN
     DBAS-O.KIND @ DBAS-MISSED = IF S" Missed: " ELSE S" Reminder: " THEN ;
 
+\ What one item's notice means, as its prefix says it.
+: _DBSVC-ITEM-SEVERITY  ( item -- severity )
+    DUP DBAS-O.ACTION @ DBAS-ACTION-AGENT = IF
+        DUP DBAS-O.PHASE @ DBAS-ENDED <> IF DROP 0 EXIT THEN
+        DBAS-O.STATE @ DBAS-CLEAR = IF 0 ELSE 3 THEN EXIT
+    THEN
+    DBAS-O.KIND @ DBAS-MISSED = IF 3 ELSE 0 THEN ;
+
 \ "Reminder: <title>" or "Missed: <title>" for one reminder; "Agent run:
 \ <title>" for a run handed over, "Agent run done: <title>" for one that
 \ completed, and "Needs review: <title>" for one that ended otherwise;
 \ "Reminders: <title> and N more" (or "Automations:" when not all were
 \ reminders) when several came due.
 : _DBSVC-NOTICE!  ( service -- )
-    0 OVER _DBSVC.LEN !
+    0 OVER _DBSVC.LEN ! 0 OVER _DBSVC.SEVERITY !
     DUP _DBSVC.ITEM @ OVER DBSVC-OWNER DBAO-STORE DBAS-FIND-OCCURRENCE 0= IF
         2DROP EXIT
     THEN                                               ( service index )
@@ -239,7 +254,7 @@ _DBSVC-RUNNER DBRUN-SIZE + CONSTANT DBSVC-SIZE
     2 PICK _DBSVC.FIRED @ 1 > IF
         NIP OVER _DBSVC.MIXED @ IF S" Automations: " ELSE S" Reminders: " THEN
     ELSE
-        SWAP _DBSVC-PREFIX
+        SWAP DUP _DBSVC-ITEM-SEVERITY 3 PICK _DBSVC.SEVERITY ! _DBSVC-PREFIX
     THEN                                               ( service schedule a u )
     3 PICK _DBSVC-ADD
     DBAS-S.TITLE DBAS-FIELD$ 2 PICK _DBSVC-ADD         ( service )

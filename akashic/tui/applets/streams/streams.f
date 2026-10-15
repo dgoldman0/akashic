@@ -820,31 +820,31 @@ VARIABLE _STM-SOD-STATUS
 
 : _STM-SOURCE-OWNER-ERROR-TOAST  ( owner-status -- )
     DUP STREAMS-SOURCE-S-BLOCKED = IF
-        DROP _STM-SOURCE-STORAGE-STATUS$ 3000 ASHELL-TOAST EXIT
+        DROP _STM-SOURCE-STORAGE-STATUS$ 3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP STREAMS-SOURCE-S-CONFLICT = IF
         DROP S" Sources changed elsewhere; reopen Streams before editing"
-        3200 ASHELL-TOAST EXIT
+        3200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-STALE = IF
         DROP S" Selected source changed; action was not applied"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-FULL =
     OVER STREAMS-SOURCE-S-CAPACITY = OR IF
         DROP S" Streams already has the maximum 16 sources"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-BUSY = IF
         DROP S" Source storage is busy; action was not applied"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-STORAGE = IF
         DROP S" Source storage failed; action was not applied"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP S" Source settings were invalid; action was not applied"
-    2800 ASHELL-TOAST ;
+    2800 ASHELL-TOAST-ERROR ;
 
 : _STM-SOURCE-URL-CHAR?  ( char -- flag )
     DUP 33 < OVER 126 > OR
@@ -1318,11 +1318,11 @@ _STM-BURROW-BUILD? [IF]
 : _STM-OPEN-THREAD  ( -- )
     _STM-SELECTION-VALID? 0= IF
         S" No retained item is selected; context is unavailable"
-        2200 ASHELL-TOAST EXIT
+        2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SELECTED @ _STM-THREAD-ANCHOR! 0= IF
         S" Selected item has no usable context identity"
-        2200 ASHELL-TOAST EXIT
+        2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-V-THREAD _STM-VIEW ! _STM-SET-VIEW-LABEL _STM-INVALIDATE ;
 : _STM-OPEN-TIMELINE  ( -- )
@@ -2218,7 +2218,7 @@ VARIABLE _STM-SHOW-IU
     _STM-SHOW-IU ! _STM-SHOW-IA ! _STM-SHOW-LU ! _STM-SHOW-LA !
     _STM-SHOW-MODE !
     _STM-PROMPT @ 0= IF
-        S" Streams prompt is unavailable" 1800 ASHELL-TOAST EXIT
+        S" Streams prompt is unavailable" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SHOW-MODE @ _STM-PROMPT-MODE !
     _STM-SHOW-LA @ _STM-SHOW-LU @
@@ -2256,7 +2256,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
     _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @
         _STM-SOURCE-URL-VALID? 0= IF
         S" Enter a printable HTTPS URL of at most 1024 bytes"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-CANDIDATE STREAMS-SOURCE-INIT
     _STM-SOURCE-UI-KIND @ _STM-SOURCE-UI-CANDIDATE SSOURCE.KIND !
@@ -2298,18 +2298,18 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
     THEN
     _STM-AUTH-AVAILABLE? 0= IF
-        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-ACTIVE? IF
         S" Finish authenticated work before adding a source"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-U @ DUP 1 < SWAP STREAMS-SOURCE-ENDPOINT-MAX > OR IF
-        S" Enter an authenticated actor handle or DID" 2600 ASHELL-TOAST EXIT
+        S" Enter an authenticated actor handle or DID" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @ UTF8-VALID? 0= IF
         S" Authenticated actor identity is not valid UTF-8"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @
     _STM-AUTH-OP-NONE _STM-AUTH-OP-KIND !
@@ -2320,21 +2320,25 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         _STM-SOURCE-UI-SCRATCH-WIPE
         _STM-SOURCE-UI-STATUS @
         DUP SAUTH-S-UNAVAILABLE = IF
-            DROP S" Authenticated account is offline"
+            DROP S" Authenticated account is offline" ASHELL-SEVERITY-WARNING
         ELSE DUP SAUTH-S-BUSY = IF
             DROP S" Finish authenticated work before adding a source"
+            ASHELL-SEVERITY-WARNING
         ELSE DUP SAUTH-S-CAPACITY = IF
-            DROP S" Authenticated source exceeds bounded storage"
+            DROP S" Authenticated source exceeds bounded storage" ASHELL-SEVERITY-ERROR
         ELSE DUP SAUTH-S-STATE = IF
             DROP S" Authenticated account cannot build a source in this state"
+            ASHELL-SEVERITY-WARNING
         ELSE DUP SAUTH-S-CLEANUP = IF
             DROP S" Authenticated cleanup failed; source was not saved"
+            ASHELL-SEVERITY-ERROR
         ELSE DUP SAUTH-S-INVALID = IF
             DROP S" Account rejected that actor identity or binding"
+            ASHELL-SEVERITY-ERROR
         ELSE
-            DROP S" Authenticated source could not be built"
+            DROP S" Authenticated source could not be built" ASHELL-SEVERITY-ERROR
         THEN THEN THEN THEN THEN THEN
-        3000 ASHELL-TOAST EXIT
+        >R 3000 R> ASHELL-NOTICE EXIT
     THEN
     _STM-SOURCE-UI-CANDIDATE _STM-SOURCE-UI-RID
         _STM-CURRENT-INSTANCE @ STREAMS-SOURCE-CREATE-OWNER
@@ -2373,7 +2377,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
 : _STM-BEGIN-SOURCE-ATPROTO  ( -- )
     _STM-SOURCE-CAN-ADD? 0= IF EXIT THEN
     _STM-AUTH-AVAILABLE? 0= IF
-        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-PM-SOURCE-ATPROTO S" Authenticated actor handle or DID:" 0 0
         _STM-SHOW-PROMPT ;
@@ -2385,7 +2389,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
     THEN
     _STM-SOURCE-SELECTED@ DUP 0= IF
-        DROP S" No source is selected" 1800 ASHELL-TOAST EXIT
+        DROP S" No source is selected" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SSOURCE.ID _STM-SOURCE-UI-RID RID-COPY
     DUP SSOURCE.REVISION @ _STM-SOURCE-UI-REVISION !
@@ -2414,7 +2418,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
 \ meanwhile.
 : _STM-APPLY-SOURCE-REMOVE  ( -- )
     _STM-SOURCE-PENDING-ARMED @ 0= IF
-        S" Source removal was not armed" 2000 ASHELL-TOAST EXIT
+        S" Source removal was not armed" 2000 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-PENDING-RID _STM-SOURCE-PENDING-REVISION @
         _STM-CURRENT-INSTANCE @ STREAMS-SOURCE-REMOVE-OWNER
@@ -2438,7 +2442,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
     THEN
     _STM-SOURCE-SELECTED@ DUP 0= IF
-        DROP S" No source is selected" 1800 ASHELL-TOAST EXIT
+        DROP S" No source is selected" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SSOURCE.ID _STM-SOURCE-PENDING-RID RID-COPY
     SSOURCE.REVISION @ _STM-SOURCE-PENDING-REVISION !
@@ -2463,14 +2467,14 @@ VARIABLE _STM-ACTOR-SET-STATUS
     STR-TRIM _STM-SUB-U ! _STM-SUB-A !
     _STM-SUB-U @ 0= IF
         _STM-SEARCH-CLEAR
-        S" Search query is empty; selection unchanged" 2200 ASHELL-TOAST
+        S" Search query is empty; selection unchanged" 2200 ASHELL-TOAST-WARNING
         EXIT
     THEN
     _STM-SUB-U @ _STM-QUERY-CAP > IF
-        S" Search is limited to 96 UTF-8 bytes" 2200 ASHELL-TOAST EXIT
+        S" Search is limited to 96 UTF-8 bytes" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SUB-A @ _STM-SUB-U @ UTF8-VALID? 0= IF
-        S" Search query is not valid UTF-8" 2200 ASHELL-TOAST EXIT
+        S" Search query is not valid UTF-8" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SUB-U @ _STM-SEARCH-U !
     _STM-SUB-A @ _STM-SEARCH-BUF _STM-SUB-U @ MOVE
@@ -2510,24 +2514,23 @@ VARIABLE _STM-ACTOR-SET-STATUS
         ENDOF
         _STM-PM-DRAFT OF
             _STM-SUB-A @ _STM-SUB-U @ _STM-DRAFT-OWNER! IF
-                S" Draft saved locally; nothing was published"
+                S" Draft saved locally; nothing was published" 2200 ASHELL-TOAST
             ELSE
-                S" Draft could not be updated locally"
+                S" Draft could not be updated locally" 2200 ASHELL-TOAST-ERROR
             THEN
-            2200 ASHELL-TOAST
         ENDOF
         _STM-PM-ACTOR OF
             _STM-SUB-A @ _STM-SUB-U @ _STM-ACTOR!
             DUP _STM-ACTOR-SET-STATUS ! CBUS-S-OK = IF
-                S" Public actor selected; press R to refresh"
+                S" Public actor selected; press R to refresh" 2400 ASHELL-TOAST
             ELSE
                 _STM-ACTOR-SET-STATUS @ CBUS-S-BUSY = IF
                     S" Finish the active refresh before changing actor"
                 ELSE
                     S" Enter a valid Bluesky handle or DID"
                 THEN
+                2400 ASHELL-TOAST-WARNING
             THEN
-            2400 ASHELL-TOAST
         ENDOF
         _STM-PM-SOURCE-SYNDICATION OF
             _STM-SUB-A @ _STM-SUB-U @ SSOURCE-KIND-SYNDICATION
@@ -2559,7 +2562,7 @@ VARIABLE _STM-ACTOR-SET-STATUS
 
 : _STM-BEGIN-DRAFT  ( -- )
     _STM-DRAFT-PERSIST-MODE @ _STM-DP-BLOCKED = IF
-        _STM-DRAFT-BLOCKED-TEXT 2600 ASHELL-TOAST EXIT
+        _STM-DRAFT-BLOCKED-TEXT 2600 ASHELL-TOAST-ERROR EXIT
     THEN
     _STM-PM-DRAFT S" Draft:"
     _STM-DRAFT-REV @ IF _STM-DRAFT-BUF _STM-DRAFT-U @ ELSE 0 0 THEN
@@ -2568,11 +2571,11 @@ VARIABLE _STM-ACTOR-SET-STATUS
 : _STM-BEGIN-ACTOR  ( -- )
     _STM-LIVE-AVAILABLE? 0= IF
         S" Public feeds require the Desk external-I/O service"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET <> IF
         S" Finish the active refresh before changing actor"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-PM-ACTOR S" Bluesky handle or DID:"
     _STM-ACTOR@ _STM-SHOW-PROMPT ;
@@ -2598,49 +2601,49 @@ VARIABLE _STM-ACTOR-SET-STATUS
         S" Authenticated feed refresh accepted" 2400 ASHELL-TOAST EXIT
     THEN
     DUP SAUTH-S-UNAVAILABLE = IF
-        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST EXIT
+        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-BUSY = IF
         DROP S" Authenticated account or external I/O is busy"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-INVALID = IF
         DROP S" Authenticated source revision or account binding was rejected"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CAPACITY = IF
         DROP S" Authenticated refresh ran out of bounded capacity"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CLEANUP = IF
         DROP _STM-INVALIDATE
         S" Authenticated cleanup failed; no new feed was presented"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-STATE = IF
         DROP S" Authenticated provider is not ready for a feed refresh"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-POST = IF
         DROP S" Finish the authenticated publication before refreshing"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-FEED = IF
         DROP S" Authenticated feed operation was rejected"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-INDETERMINATE = IF
         DROP _STM-INVALIDATE
         S" Authenticated refresh start is indeterminate; no new feed was presented"
-        3200 ASHELL-TOAST EXIT
+        3200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-CANCELLED = IF
         DROP _STM-INVALIDATE
         S" Authenticated refresh was cancelled before presentation"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DROP _STM-INVALIDATE
-    S" Authenticated feed refresh could not start" 2600 ASHELL-TOAST ;
+    S" Authenticated feed refresh could not start" 2600 ASHELL-TOAST-ERROR ;
 
 : _STM-PUBLIC-REFRESH-ACTION  ( -- )
     _STM-REFRESH-START
@@ -2650,23 +2653,22 @@ VARIABLE _STM-ACTOR-SET-STATUS
     THEN
     DUP CBUS-S-NOT-FOUND = IF
         DROP S" Public feeds require the Desk external-I/O service"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP CBUS-S-INVALID = IF
-        DROP S" Select a valid actor with A first" 2400 ASHELL-TOAST EXIT
+        DROP S" Select a valid actor with A first" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     CBUS-S-BUSY = IF
-        S" External I/O is already busy"
+        S" External I/O is already busy" 2400 ASHELL-TOAST-WARNING
     ELSE
-        S" Public feed refresh could not start"
-    THEN
-    2400 ASHELL-TOAST ;
+        S" Public feed refresh could not start" 2400 ASHELL-TOAST-ERROR
+    THEN ;
 
 : _STM-REFRESH-ACTION  ( -- )
     _STM-REFRESH-TARGET @ _STM-REFRESH-AUTHENTICATED = IF
         _STM-AUTH-CURRENT-SOURCE DUP 0= IF
             DROP S" The retained authenticated source revision is no longer current"
-            3000 ASHELL-TOAST EXIT
+            3000 ASHELL-TOAST-WARNING EXIT
         THEN
         _STM-AUTH-REFRESH-START _STM-AUTH-REFRESH-RESULT EXIT
     THEN
@@ -2694,14 +2696,14 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
 : _STM-SOURCE-REFRESH-ACTION  ( -- )
     _STM-SOURCE-ENSURE-MANAGEMENT-VIEW
     _STM-SOURCE-SELECTED@ DUP 0= IF
-        DROP S" No source is selected" 1800 ASHELL-TOAST EXIT
+        DROP S" No source is selected" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _STM-AUTH-SOURCE? IF
         _STM-AUTH-REFRESH-START _STM-AUTH-REFRESH-RESULT EXIT
     THEN
     DUP STREAMS-REFRESH-SOURCE-SUPPORTED? 0= IF
         DROP S" Only enabled syndication sources can be refreshed"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-REFRESH-START-CORE
     _STM-SOURCE-REFRESH-CHANGED? IF _STM-OWNER-TOUCH _STM-INVALIDATE THEN
@@ -2709,20 +2711,20 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
         DROP S" Syndication refresh accepted" 2200 ASHELL-TOAST EXIT
     THEN
     DUP SREF-S-UNAVAILABLE = IF
-        DROP S" Configured syndication is offline" 2400 ASHELL-TOAST EXIT
+        DROP S" Configured syndication is offline" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SREF-S-BUSY = IF
-        DROP S" External I/O is already busy" 2200 ASHELL-TOAST EXIT
+        DROP S" External I/O is already busy" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SREF-S-BLOCKED = OVER SREF-S-STORAGE = OR IF
         DROP S" Observation storage is blocked; source was not fetched"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SREF-S-INVALID = IF
         DROP S" Source or reviewed host authorization was rejected"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
-    DROP S" Syndication refresh could not start" 2400 ASHELL-TOAST ;
+    DROP S" Syndication refresh could not start" 2400 ASHELL-TOAST-ERROR ;
 
 VARIABLE _STM-AUTH-ACTION-SOURCE
 
@@ -2738,69 +2740,69 @@ VARIABLE _STM-AUTH-ACTION-SOURCE
     _STM-AUTH-OP-NONE _STM-AUTH-OP-KIND !
     0 _STM-AUTH-PUBLISH-DRAFT-REVISION !
     DUP SAUTH-S-UNAVAILABLE = IF
-        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST EXIT
+        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-BUSY = IF
         DROP S" Authenticated account or external I/O is busy"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-INVALID = IF
         DROP S" Draft, source revision, or account binding was rejected"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CAPACITY = IF
         DROP S" Publication ran out of bounded capacity"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CLEANUP = IF
         DROP _STM-INVALIDATE
         S" Publication cleanup failed; success was not reported"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-STATE = IF
         DROP S" Authenticated provider is not ready to publish"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-FEED = IF
         DROP S" Finish the authenticated feed refresh before publishing"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-POST = IF
         DROP S" Authenticated publication was rejected"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-INDETERMINATE = IF
         DROP _STM-INVALIDATE
         S" Publication start is indeterminate; check account state before retrying"
-        3400 ASHELL-TOAST EXIT
+        3400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-CANCELLED = IF
         DROP _STM-INVALIDATE
         S" Publication was cancelled before delivery"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DROP _STM-INVALIDATE
-    S" Publication could not start" 2400 ASHELL-TOAST ;
+    S" Publication could not start" 2400 ASHELL-TOAST-ERROR ;
 
 : _STM-PUBLISH-ACTION  ( -- )
     _STM-DRAFT-REV @ 0= _STM-DRAFT-U @ 0= OR IF
         S" Create a non-empty local draft before publishing"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-AVAILABLE? 0= IF
-        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-CURRENT-SOURCE DUP 0= IF
         DROP S" Refresh a current authenticated source before publishing"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _STM-AUTH-PROVIDER @ SAUTH-SOURCE-SUPPORTED? 0= IF
         DROP S" The authenticated source is disabled, stale, or belongs to another account"
-        3200 ASHELL-TOAST EXIT
+        3200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-ACTIVE? IF
         DROP S" Finish the active authenticated operation before publishing"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-ACTION-SOURCE !
     _STM-AUTH-OP-POST _STM-AUTH-OP-KIND !
@@ -2880,19 +2882,20 @@ VARIABLE _STM-BUI-CHANGED
         2400 ASHELL-TOAST EXIT
     THEN
     _STM-BUI-STATUS @ SRBPROV-S-NOT-FOUND = IF
-        S" No Burrow is selected"
+        S" No Burrow is selected" ASHELL-SEVERITY-WARNING
     ELSE _STM-BUI-STATUS @ SRBPROV-S-STATE = IF
         S" Selected Burrow is not in a compatible lifecycle state"
+        ASHELL-SEVERITY-WARNING
     ELSE _STM-BUI-STATUS @ SRBPROV-S-CONFLICT = IF
-        S" Selected Burrow changed; review its current state"
+        S" Selected Burrow changed; review its current state" ASHELL-SEVERITY-WARNING
     ELSE _STM-BUI-STATUS @ SRBPROV-S-CAPACITY = IF
-        S" Burrow lifecycle storage is at capacity"
+        S" Burrow lifecycle storage is at capacity" ASHELL-SEVERITY-ERROR
     ELSE _STM-BUI-STATUS @ SRBPROV-S-BUSY = IF
-        S" Burrow lifecycle is busy"
+        S" Burrow lifecycle is busy" ASHELL-SEVERITY-WARNING
     ELSE
-        S" Burrow lifecycle action failed"
+        S" Burrow lifecycle action failed" ASHELL-SEVERITY-ERROR
     THEN THEN THEN THEN THEN
-    2800 ASHELL-TOAST ;
+    >R 2800 R> ASHELL-NOTICE ;
 
 : _STM-BURROW-START-ACTION  ( -- )
     SRBMGR-OP-START DUP _STM-BURROW-UI-MUTATE _STM-BURROW-UI-RESULT ;
@@ -2903,10 +2906,10 @@ VARIABLE _STM-BUI-CHANGED
 [ELSE]
 
 : _STM-BURROW-START-ACTION  ( -- )
-    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST ;
+    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST-WARNING ;
 
 : _STM-BURROW-STOP-ACTION  ( -- )
-    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST ;
+    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST-WARNING ;
 
 [THEN]
 
@@ -3627,16 +3630,16 @@ VARIABLE _STM-AUTH-TICK-CHANGED
     _STM-PROMPT @ ?DUP IF
         PRM-ACTIVE? IF
             S" Finish or cancel the Streams prompt before closing"
-            2400 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+            2400 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
         THEN
     THEN
     _STM-BURROW-QUIESCE? 0= IF
         S" Burrow cleanup is still retained; close was cancelled"
-        3000 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+        3000 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
     THEN
     _STM-AUTH-QUIESCE? 0= IF
         S" Authenticated work could not detach safely; close was cancelled"
-        3000 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+        3000 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
     THEN
     _STM-AUTH-QUIESCE-CHANGED @ IF
         _STM-OWNER-TOUCH _STM-INVALIDATE

@@ -75,6 +75,7 @@ DBSVC-CLOSE       ( service -- )
 DBSVC-CLIENT!     ( client service -- )
 DBSVC-TICK        ( service -- notice? )
 DBSVC-NOTICE      ( service -- address length )
+DBSVC-NOTICE-SEVERITY ( service -- severity )
 DBSVC-OWNER       ( service -- owner )
 DBSVC-CLOCK@      ( service -- clock )
 DBSVC-STATUS@     ( service -- status )
@@ -103,6 +104,9 @@ DBSVC-WHEN$       ( schedule service -- address length )
   <title> and N more`, or `Automations: ...` when not all were reminders. A
   look that accepted nothing but saw a run end makes that run's notice. The
   text stays put until the next notice, so a toast can point at it.
+- `DBSVC-NOTICE-SEVERITY` is what the latest notice means, as a status
+  field's severity: a warning (3) for a missed reminder and for a run that
+  needs review, else neutral (0). Desk raises the notice with it.
 - `DBSVC-OWNER` is the [owner](automation-owner.md) for Daybook's views,
   and `DBSVC-NOW` reads the clock the way its operations take it.
 - `DBSVC-CLOCK@` says what the last look saw (`DBRUN-CLOCK-SET`,
@@ -269,6 +273,13 @@ buffer that grows to them, or says the schedule was deleted.
 the opened Agent run, and refuse while its facts are older than the store;
 the run cancel finds is its newest item, since a schedule has at most one
 run in flight and runs no other meanwhile.
+
+`DBAV-MESSAGE ( status -- address length )` says what a status of these
+operations means in words, and `DBAV-SEVERITY ( status -- severity )` as a
+status field's severity: neutral (0) for success, an error (4) when
+something failed (storage, memory, randomness, or a document's owner),
+and a warning (3) for what the user can put right or wait out. Daybook
+raises its notices with both.
 
 `local_testing/test_daybook_automation_view.py` and
 `test_daybook_automation_view_runs.py` check the automations view, the

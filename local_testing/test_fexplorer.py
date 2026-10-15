@@ -8,12 +8,17 @@ title and sort constants.  Every check runs on a fresh native machine
 from native_forth import NativeForth
 
 # The app-shell's real terminal lifecycle is outside this unit test, so the
-# four app-shell words fexplorer uses stand in for app-shell.f itself.
+# app-shell words fexplorer uses stand in for app-shell.f itself.
 APP_SHELL_STANDIN = (
     ': ASHELL-DIRTY!  ( -- ) ;',
     ': ASHELL-QUIT    ( -- ) ;',
     ': ASHELL-RUN     ( desc -- ) DROP ;',
+    '3 CONSTANT ASHELL-SEVERITY-WARNING',
+    '4 CONSTANT ASHELL-SEVERITY-ERROR',
+    ': ASHELL-NOTICE  ( addr len ms severity -- ) 2DROP 2DROP ;',
     ': ASHELL-TOAST   ( addr len ms -- ) 2DROP DROP ;',
+    ': ASHELL-TOAST-WARNING ( addr len ms -- ) 2DROP DROP ;',
+    ': ASHELL-TOAST-ERROR ( addr len ms -- ) 2DROP DROP ;',
 )
 
 SUITE = NativeForth(

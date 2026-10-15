@@ -327,7 +327,7 @@ VARIABLE _AGL-START
 
 : _AG-SHOW-ACCOUNT  ( -- )
     _AG-RUNTIME @ ARUNTIME-AUTH 0= IF
-        S" This provider has no account interface" 1800 ASHELL-TOAST EXIT
+        S" This provider has no account interface" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _AG-PROMPT @ ?DUP IF PRM-HIDE THEN
     _AG-SETTINGS-PANEL @ ?DUP IF WDG-HIDE THEN
@@ -336,7 +336,7 @@ VARIABLE _AGL-START
 
 : _AG-SHOW-SETTINGS  ( -- )
     _AG-RUNTIME @ ARUNTIME-RUN-SETTINGS 0= IF
-        S" This provider has no run settings" 1800 ASHELL-TOAST EXIT
+        S" This provider has no run settings" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _AG-PROMPT @ ?DUP IF PRM-HIDE THEN
     _AG-AUTH-PANEL @ ?DUP IF WDG-HIDE THEN
@@ -361,10 +361,10 @@ VARIABLE _AGL-START
     _AG-PROMPT @ 0= IF EXIT THEN
     _AG-RUNTIME @ ARUNTIME.PROVIDER @ APROV.FEATURES @
     APROV-F-AUTH AND 0= IF
-        S" This provider uses no credential" 1600 ASHELL-TOAST EXIT
+        S" This provider uses no credential" 1600 ASHELL-TOAST-WARNING EXIT
     THEN
     _AG-RUNTIME @ ARUNTIME-BUSY? IF
-        S" Finish or cancel the active run first" 1800 ASHELL-TOAST EXIT
+        S" Finish or cancel the active run first" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _AG-HIDE-OVERLAYS
     _AG-PROMPT @ PRM-WIPE
@@ -375,32 +375,37 @@ VARIABLE _AGL-START
 
 : _AG-AUTH-SET-TOAST  ( status -- )
     CASE
-        AAUTH-S-OK OF S" Credential set" 1200 ENDOF
-        AAUTH-S-UNSUPPORTED OF S" Provider does not accept a credential" 1800 ENDOF
-        AAUTH-S-CAPACITY OF S" Credential is too long" 1800 ENDOF
-        AAUTH-S-BUSY OF S" Finish or cancel the active run first" 1800 ENDOF
-        DROP S" Credential was rejected" 1800 0
+        AAUTH-S-OK OF S" Credential set" 1200 ASHELL-SEVERITY-NEUTRAL ENDOF
+        AAUTH-S-UNSUPPORTED OF S" Provider does not accept a credential" 1800
+            ASHELL-SEVERITY-WARNING ENDOF
+        AAUTH-S-CAPACITY OF S" Credential is too long" 1800
+            ASHELL-SEVERITY-WARNING ENDOF
+        AAUTH-S-BUSY OF S" Finish or cancel the active run first" 1800
+            ASHELL-SEVERITY-WARNING ENDOF
+        DROP S" Credential was rejected" 1800 ASHELL-SEVERITY-ERROR 0
     ENDCASE
-    ASHELL-TOAST ;
+    ASHELL-NOTICE ;
 
 VARIABLE _AG-AUTH-STATUS
 
 : _AG-SEND-STATUS-TOAST  ( status -- )
     CASE
-        1 OF S" Request scope or input was rejected" 2200 ENDOF
-        2 OF S" Another run or review is active" 2000 ENDOF
-        3 OF S" Conversation context is full; clear it before sending" 2600 ENDOF
-        4 OF S" Model settings are not ready" 2000 ENDOF
-        ARUNTIME-E-HELD OF S" A scheduled run goes first; send again after it" 2600 ENDOF
+        1 OF S" Request scope or input was rejected" 2200 ASHELL-SEVERITY-ERROR ENDOF
+        2 OF S" Another run or review is active" 2000 ASHELL-SEVERITY-WARNING ENDOF
+        3 OF S" Conversation context is full; clear it before sending" 2600
+            ASHELL-SEVERITY-WARNING ENDOF
+        4 OF S" Model settings are not ready" 2000 ASHELL-SEVERITY-WARNING ENDOF
+        ARUNTIME-E-HELD OF S" A scheduled run goes first; send again after it" 2600
+            ASHELL-SEVERITY-WARNING ENDOF
         DROP
         _AG-RUNTIME @ ARUNTIME.STATUS @ ARUN-S-OFFLINE = IF
-            S" Agent is offline" 1800
+            S" Agent is offline" 1800 ASHELL-SEVERITY-WARNING
         ELSE
-            S" Request could not be started" 2200
+            S" Request could not be started" 2200 ASHELL-SEVERITY-ERROR
         THEN
         0
     ENDCASE
-    ASHELL-TOAST ;
+    ASHELL-NOTICE ;
 
 : _AG-PROMPT-SUBMIT  ( prompt -- )
     _AG-PROMPT-MODE @ _AG-PRM-AUTH = IF
@@ -413,7 +418,7 @@ VARIABLE _AG-AUTH-STATUS
         _AG-INVALIDATE EXIT
     THEN
     PRM-GET-TEXT DUP 0= IF
-        2DROP S" Message is empty" 1400 ASHELL-TOAST
+        2DROP S" Message is empty" 1400 ASHELL-TOAST-WARNING
     ELSE
         _AG-RUNTIME @ ARUNTIME-SEND DUP IF
             _AG-SEND-STATUS-TOAST
@@ -1040,13 +1045,13 @@ VARIABLE _AGRD-BCOUNT
     LST-CONTEXT@ _AG-ACTIVATE
     _AG-RUNS ASRV-STALE? IF
         DROP _AG-RUNS-SYNC _AG-INVALIDATE
-        S" The runs changed; choose one again" 2000 ASHELL-TOAST EXIT
+        S" The runs changed; choose one again" 2000 ASHELL-TOAST-WARNING EXIT
     THEN
     _AG-RUNS ASRV-OPEN CASE
         ASRV-S-OK OF _AG-V-TRANSCRIPT _AG-VIEW ! _AG-SHOWN-CHANGED ENDOF
-        ASRV-S-NONE OF S" This run's transcript was not kept" 2000 ASHELL-TOAST ENDOF
-        ASRV-S-NOMEM OF S" No memory to open the transcript" 2000 ASHELL-TOAST ENDOF
-        S" The transcript could not be read" 2000 ASHELL-TOAST
+        ASRV-S-NONE OF S" This run's transcript was not kept" 2000 ASHELL-TOAST-WARNING ENDOF
+        ASRV-S-NOMEM OF S" No memory to open the transcript" 2000 ASHELL-TOAST-ERROR ENDOF
+        S" The transcript could not be read" 2000 ASHELL-TOAST-ERROR
     ENDCASE ;
 
 : _AG-RUNS-LIST-NEW  ( rgn -- list )
@@ -1166,7 +1171,7 @@ VARIABLE _AG-REVIEW-APPROVED
                         S" Approval disabled: exact canonical operand unavailable"
                     THEN
                 THEN
-                    2600 ASHELL-TOAST
+                    2600 ASHELL-TOAST-WARNING
                 _AG-INVALIDATE EXIT
             THEN
         THEN
@@ -1180,10 +1185,10 @@ VARIABLE _AG-REVIEW-APPROVED
                 ATOOLG-S-COMPLETE OF S" Review rejected: gateway complete" ENDOF
                 S" Review state is invalid" ROT
             ENDCASE
+            1800 ASHELL-TOAST-ERROR
         ELSE
-            S" No review request is pending"
+            S" No review request is pending" 1800 ASHELL-TOAST-WARNING
         THEN
-        1800 ASHELL-TOAST
     ELSE
         _AG-REVIEW-APPROVED @ IF
             S" Request approved" 1000 ASHELL-TOAST
@@ -1228,15 +1233,14 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : _AG-CLEAR-STATUS-TOAST  ( ior -- )
     IF
-        S" Finish or cancel the active run before clearing" 2200
+        S" Finish or cancel the active run before clearing" 2200 ASHELL-TOAST-WARNING
     ELSE
-        S" Conversation cleared" 1200
-    THEN
-    ASHELL-TOAST ;
+        S" Conversation cleared" 1200 ASHELL-TOAST
+    THEN ;
 
 : _AG-RECONNECT-STATUS-TOAST  ( ior -- )
-    IF S" Agent reconnect failed" 1800 ELSE S" Reconnect requested" 1200 THEN
-    ASHELL-TOAST ;
+    IF S" Agent reconnect failed" 1800 ASHELL-TOAST-ERROR
+    ELSE S" Reconnect requested" 1200 ASHELL-TOAST THEN ;
 
 : _AG-DO-CLEAR  ( elem -- )
     DROP _AG-RUNTIME @ ARUNTIME-CLEAR _AG-CLEAR-STATUS-TOAST
@@ -1251,13 +1255,15 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : _AG-ACCESS-STATUS-TOAST  ( status -- )
     CASE
-        AAP-S-OK OF S" Agent access profile changed" 1400 ENDOF
-        AAP-S-INVALID OF S" Access preset is invalid" 1800 ENDOF
-        AAP-S-BUSY OF S" Finish or cancel the active run before changing access" 2400 ENDOF
-        AAP-S-UNAVAILABLE OF S" Access controls require a Desk scope" 2200 ENDOF
-        DROP S" Access profile change failed" 2000 0
+        AAP-S-OK OF S" Agent access profile changed" 1400 ASHELL-SEVERITY-NEUTRAL ENDOF
+        AAP-S-INVALID OF S" Access preset is invalid" 1800 ASHELL-SEVERITY-WARNING ENDOF
+        AAP-S-BUSY OF S" Finish or cancel the active run before changing access" 2400
+            ASHELL-SEVERITY-WARNING ENDOF
+        AAP-S-UNAVAILABLE OF S" Access controls require a Desk scope" 2200
+            ASHELL-SEVERITY-WARNING ENDOF
+        DROP S" Access profile change failed" 2000 ASHELL-SEVERITY-ERROR 0
     ENDCASE
-    ASHELL-TOAST ;
+    ASHELL-NOTICE ;
 
 : _AG-ACCESS!  ( preset -- )
     _AG-RUNTIME @ ARUNTIME-ACCESS-PRESET!
@@ -1274,7 +1280,7 @@ VARIABLE _AG-REVIEW-APPROVED
     ARSET-S-PENDING = SWAP ARSET-S-OK = OR IF
         S" Model catalog refresh started" 1200 ASHELL-TOAST
     ELSE
-        S" Model catalog refresh failed" 1800 ASHELL-TOAST
+        S" Model catalog refresh failed" 1800 ASHELL-TOAST-ERROR
     THEN
     _AG-SHOW-SETTINGS ;
 : _AG-DO-CLEAR-CREDENTIAL ( elem -- )
@@ -1450,7 +1456,7 @@ VARIABLE _AG-REVIEW-APPROVED
     DROP 0= IF EXIT THEN
     _AG-RUNTIME @ ?DUP IF
         ARUNTIME-CANCEL IF
-            S" The active run could not be stopped" 2000 ASHELL-TOAST EXIT
+            S" The active run could not be stopped" 2000 ASHELL-TOAST-ERROR EXIT
         THEN
     THEN
     -1 _AG-CLOSE-ARMED ! ASHELL-QUIT ;

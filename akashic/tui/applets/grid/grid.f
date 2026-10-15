@@ -1163,7 +1163,7 @@ VARIABLE _GRID-SUB-MODE
     _GRID-SUB-MODE @ CASE
         _GRID-PRM-EDIT OF
             _GRID-SUB-U @ _GRID-SOURCE-CAP > IF
-                S" A Grid cell is limited to 40 bytes" 2200 ASHELL-TOAST
+                S" A Grid cell is limited to 40 bytes" 2200 ASHELL-TOAST-WARNING
             ELSE
                 _GRID-SUB-A @ _GRID-SUB-U @
                 _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-SET-CELL
@@ -1176,7 +1176,7 @@ VARIABLE _GRID-SUB-MODE
                 _GRID-SEL-COL ! _GRID-SEL-ROW !
                 _GRID-METRICS _GRID-ENSURE-VISIBLE
             ELSE
-                2DROP S" Invalid cell name" 1800 ASHELL-TOAST
+                2DROP S" Invalid cell name" 1800 ASHELL-TOAST-WARNING
             THEN
         ENDOF
     ENDCASE
@@ -1189,31 +1189,31 @@ VARIABLE _GRID-SUB-MODE
     _GRID-INVALIDATE ;
 
 : _GRID-DO-SAVE  ( elem -- )
-    DROP _GRID-SAVE IF S" Grid save failed" ELSE S" Grid saved" THEN
-    1500 ASHELL-TOAST ;
+    DROP _GRID-SAVE IF S" Grid save failed" 1500 ASHELL-TOAST-ERROR
+    ELSE S" Grid saved" 1500 ASHELL-TOAST THEN ;
 
 : _GRID-LOAD-ERROR-TOAST  ( status -- )
     DUP _GRID-L-S-TOO-LARGE = IF
         DROP S" Grid source exceeds 96 KiB; current sheet kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-RECOVERY = IF
         DROP S" Grid recovery failed; current sheet kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-CAPACITY = IF
         DROP S" Grid source exceeds 64 rows or 16 columns"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-FIELD = IF
         DROP S" Grid source has a field over 40 bytes"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-INVALID = IF
         DROP S" Grid source is malformed; current sheet kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
-    DROP S" Grid read failed; current sheet kept" 2800 ASHELL-TOAST ;
+    DROP S" Grid read failed; current sheet kept" 2800 ASHELL-TOAST-ERROR ;
 
 : _GRID-RELOAD-NOW  ( -- )
     _GRID-LOAD DUP IF
@@ -1253,13 +1253,13 @@ VARIABLE _GRID-INIT-LOAD-STATUS
 
 : _GRID-SOURCE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
-        S" Could not route the Grid source" 2000 ASHELL-TOAST
+        S" Could not route the Grid source" 2000 ASHELL-TOAST-ERROR
     THEN
     CBR-FREE ;
 
 : _GRID-POST-SOURCE-INTENT  ( intent-a intent-u -- )
     CBR-NEW DUP IF
-        2DROP 2DROP S" Could not allocate source request" 1800 ASHELL-TOAST EXIT
+        2DROP 2DROP S" Could not allocate source request" 1800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP _GRID-SOURCE-REQ !
     CPRINC-COMPONENT _GRID-SOURCE-REQ @ CBR.PRINCIPAL !
@@ -1270,7 +1270,7 @@ VARIABLE _GRID-INIT-LOAD-STATUS
     _GRID-SOURCE-REQ @ _GRID-CURRENT-INSTANCE @ CINST-POST-INTENT
     DUP CBUS-S-OK <> IF
         DROP _GRID-SOURCE-REQ @ CBR-FREE
-        S" Source routing is unavailable outside Desk" 1800 ASHELL-TOAST
+        S" Source routing is unavailable outside Desk" 1800 ASHELL-TOAST-WARNING
     ELSE DROP THEN ;
 
 : _GRID-DO-EDIT-SOURCE  ( elem -- )

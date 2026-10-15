@@ -298,44 +298,44 @@ CBR-ARGS-CANONICAL-MAX 13 - CONSTANT _WORLD-TS-HEX-MAX
 
 : _WORLD-ANALYZE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK = IF
-        S" Observatory accepted the exact telemetry snapshot"
+        S" Observatory accepted the exact telemetry snapshot" 2200 ASHELL-TOAST
     ELSE
-        S" Observatory refused the telemetry snapshot"
+        S" Observatory refused the telemetry snapshot" 2200 ASHELL-TOAST-ERROR
     THEN
-    2200 ASHELL-TOAST CBR-FREE ;
+    CBR-FREE ;
 
 : _WORLD-ANALYZE-ACTION  ( -- )
     _WORLD-RUN WORLD-TELEMETRY-SNAPSHOT-SIZE
     DUP IF
-        2DROP S" Current telemetry cannot be represented" 2200 ASHELL-TOAST EXIT
+        2DROP S" Current telemetry cannot be represented" 2200 ASHELL-TOAST-ERROR EXIT
     THEN DROP _WORLD-ANALYZE-U !
     _WORLD-ANALYZE-U @ ALLOCATE DUP IF
-        2DROP S" Could not allocate telemetry snapshot" 2200 ASHELL-TOAST EXIT
+        2DROP S" Could not allocate telemetry snapshot" 2200 ASHELL-TOAST-ERROR EXIT
     THEN DROP _WORLD-ANALYZE-SNAPSHOT !
     _WORLD-RUN _WORLD-ANALYZE-SNAPSHOT @ _WORLD-ANALYZE-U @
         WORLD-TELEMETRY-SNAPSHOT
     DUP IF
         2DROP _WORLD-ANALYZE-SNAPSHOT @ FREE
-        S" Telemetry snapshot construction failed" 2200 ASHELL-TOAST EXIT
+        S" Telemetry snapshot construction failed" 2200 ASHELL-TOAST-ERROR EXIT
     THEN DROP DROP
     _WORLD-ANALYZE-U @ 2* DUP _WORLD-ANALYZE-HEX-U !
     DUP _WORLD-TS-HEX-MAX > IF
         DROP _WORLD-ANALYZE-SNAPSHOT @ FREE
-        S" Snapshot exceeds the typed request envelope" 2200 ASHELL-TOAST EXIT
+        S" Snapshot exceeds the typed request envelope" 2200 ASHELL-TOAST-ERROR EXIT
     THEN
     ALLOCATE DUP IF
         2DROP _WORLD-ANALYZE-SNAPSHOT @ FREE
-        S" Could not allocate telemetry envelope" 2200 ASHELL-TOAST EXIT
+        S" Could not allocate telemetry envelope" 2200 ASHELL-TOAST-ERROR EXIT
     THEN DROP _WORLD-ANALYZE-HEX !
     _WORLD-ANALYZE-SNAPSHOT @ _WORLD-ANALYZE-U @
         _WORLD-ANALYZE-HEX @ FMT->HEX
     _WORLD-ANALYZE-HEX-U @ <> IF
         _WORLD-ANALYZE-HEX @ FREE _WORLD-ANALYZE-SNAPSHOT @ FREE
-        S" Telemetry envelope construction failed" 2200 ASHELL-TOAST EXIT
+        S" Telemetry envelope construction failed" 2200 ASHELL-TOAST-ERROR EXIT
     THEN
     CBR-NEW DUP IF
         2DROP _WORLD-ANALYZE-HEX @ FREE _WORLD-ANALYZE-SNAPSHOT @ FREE
-        S" Could not allocate analysis request" 2200 ASHELL-TOAST EXIT
+        S" Could not allocate analysis request" 2200 ASHELL-TOAST-ERROR EXIT
     THEN DROP _WORLD-ANALYZE-REQ !
     CPRINC-COMPONENT _WORLD-ANALYZE-REQ @ CBR.PRINCIPAL !
     _WORLD-ANALYZE-HEX @ _WORLD-ANALYZE-HEX-U @
@@ -344,20 +344,20 @@ CBR-ARGS-CANONICAL-MAX 13 - CONSTANT _WORLD-TS-HEX-MAX
     _WORLD-ANALYZE-SNAPSHOT @ FREE
     IF
         _WORLD-ANALYZE-REQ @ CBR-FREE
-        S" Could not own analysis arguments" 2200 ASHELL-TOAST EXIT
+        S" Could not own analysis arguments" 2200 ASHELL-TOAST-ERROR EXIT
     THEN
     ['] _WORLD-ANALYZE-COMPLETE
         _WORLD-ANALYZE-REQ @ CBR.COMPLETE-XT !
     _WORLD-ANALYZE-REQ @ CBR-ARGS-SEAL! CBUS-S-OK <> IF
         _WORLD-ANALYZE-REQ @ CBR-FREE
-        S" Could not seal analysis arguments" 2200 ASHELL-TOAST EXIT
+        S" Could not seal analysis arguments" 2200 ASHELL-TOAST-ERROR EXIT
     THEN
     S" dataset.analyze" _WORLD-ANALYZE-REQ @
         _WORLD-CURRENT-INSTANCE @ CINST-POST-INTENT
     CBUS-S-OK <> IF
         _WORLD-ANALYZE-REQ @ CBR-FREE
         S" Launch Observatory once in Desk before Analyze"
-            2600 ASHELL-TOAST
+            2600 ASHELL-TOAST-WARNING
     THEN ;
 
 \ =====================================================================

@@ -828,14 +828,14 @@ DEFER _DB-AGENDA-SYNC-D
 : _DB-SAVE-ERROR-TOAST  ( -- )
     _DB-SAVE-STALE @ IF
         S" Daybook changed elsewhere; reload before saving"
-        3000 ASHELL-TOAST
+        3000 ASHELL-TOAST-WARNING
     ELSE _DB-RESOURCE-MODE @ RSES-M-BLOCKED = IF
         S" Shared Daybook resource is unavailable; saving is blocked"
-        3000 ASHELL-TOAST
+        3000 ASHELL-TOAST-WARNING
     ELSE _DB-SOURCE-BLOCKED @ IF
-        S" Reload a valid Daybook source before saving" 2600 ASHELL-TOAST
+        S" Reload a valid Daybook source before saving" 2600 ASHELL-TOAST-WARNING
     ELSE
-        S" Daybook save failed" 2200 ASHELL-TOAST
+        S" Daybook save failed" 2200 ASHELL-TOAST-ERROR
     THEN THEN THEN ;
 
 : _DB-COMMIT  ( -- )
@@ -1212,7 +1212,7 @@ CREATE _DB-TIME-BUF 5 ALLOT
     _DB-AV-LIST @ 0= IF EXIT THEN
     _DB-AV DBAV-STALE? 0= IF EXIT THEN
     _DB-AV DBAV-REBUILD IF
-        S" Automations could not be listed" 2400 ASHELL-TOAST
+        S" Automations could not be listed" 2400 ASHELL-TOAST-ERROR
     THEN
     _DB-AV DBAV-COUNT@ _DB-AV-LIST @ LST-ROWS!
     _DB-AV DBAV-COUNT@ 0 ?DO
@@ -1221,10 +1221,14 @@ CREATE _DB-TIME-BUF 5 ALLOT
         THEN
     LOOP ;
 
+\ Say what a status of the automations means, with its meaning.
+: _DB-AV-SAY  ( status ms -- )
+    OVER DBAV-SEVERITY >R >R DBAV-MESSAGE R> R> ASHELL-NOTICE ;
+
 \ After an action: say what went wrong, and show the reminders as they
 \ now are.
 : _DB-AV-DONE  ( status -- )
-    ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST THEN
+    ?DUP IF 2400 _DB-AV-SAY THEN
     _DB-AV-SYNC _DB-VIEW-CHANGED ;
 
 : _DB-AV-SELECTION  ( -- index )
@@ -1269,7 +1273,7 @@ CREATE _DB-TIME-BUF 5 ALLOT
 \ The details of the schedule row INDEX shows.
 : _DB-DT-SHOW  ( index -- )
     _DB-AV DBAV-OPEN ?DUP IF
-        DBAV-MESSAGE 2400 ASHELL-TOAST _DB-AV-SYNC _DB-VIEW-CHANGED EXIT
+        2400 _DB-AV-SAY _DB-AV-SYNC _DB-VIEW-CHANGED EXIT
     THEN
     _DB-PAGE-DETAILS _DB-AV-PAGE !
     _DB-DT-SYNC ;
@@ -1515,12 +1519,12 @@ VARIABLE _DB-SHOW-LU
 
 : _DB-AV-ASK-DELETE  ( -- )
     _DB-AV-SELECTION DUP _DB-AV DBAV-SCHEDULE? 0= IF
-        DROP S" Select an automation to delete" 2000 ASHELL-TOAST EXIT
+        DROP S" Select an automation to delete" 2000 ASHELL-TOAST-WARNING EXIT
     THEN
     _DB-AV-DOOMED !
     S" Delete the selected automation?" S" Delete"
         ['] _DB-AV-DELETE-CONFIRMED 0 DLG-CONFIRM 0= IF
-        S" Nothing was deleted" 1800 ASHELL-TOAST
+        S" Nothing was deleted" 1800 ASHELL-TOAST-WARNING
     THEN ;
 
 ' _DB-AV-ASK-DELETE IS _DB-AV-ASK-DELETE-D
@@ -1565,25 +1569,25 @@ VARIABLE _DB-SHOW-LU
 
 : _DB-CREATE-READY?  ( -- flag )
     _DB-AV DBAV-SERVICE? 0= IF
-        S" Automations run inside Desk" 2000 ASHELL-TOAST 0 EXIT
+        S" Automations run inside Desk" 2000 ASHELL-TOAST-WARNING 0 EXIT
     THEN
     _DB-AUTOMATIONS-SHOWN @ 0= IF _DB-SHOW-AUTOMATIONS THEN
     _DB-AR-PAGE? IF
-        S" Finish or cancel the new Agent run first" 2000 ASHELL-TOAST 0 EXIT
+        S" Finish or cancel the new Agent run first" 2000 ASHELL-TOAST-WARNING 0 EXIT
     THEN
     _DB-DT-CLOSE -1 ;
 
 : _DB-RN-START  ( -- )
     _DB-CREATE-READY? 0= IF EXIT THEN
     DBAS-ACTION-REMINDER _DB-AV DBAV-BEGIN ?DUP IF
-        DBAV-MESSAGE 2400 ASHELL-TOAST EXIT
+        2400 _DB-AV-SAY EXIT
     THEN
     DBAS-ACTION-REMINDER _DB-CREATING !
     _DB-RN-WHEN ;
 
 : _DB-RN-DEFAULT-ZONE  ( -- )
     _DB-AV DBAV-SERVICE? 0= IF
-        S" Automations run inside Desk" 2000 ASHELL-TOAST EXIT
+        S" Automations run inside Desk" 2000 ASHELL-TOAST-WARNING EXIT
     THEN
     _DB-PRM-DEFAULT-ZONE S" Zone for new automations (POSIX TZ):"
     _DB-SHOW-PROMPT ;
@@ -1627,7 +1631,7 @@ VARIABLE _DB-SHOW-LU
 \ A choice made, the next the model offers, or the limits.
 : _DB-CH-OPENED  ( index widget -- )
     LST-CONTEXT@ _DB-ACTIVATE
-    _DB-AV-KIND @ _DB-AV DBAV-CHOOSE ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST EXIT THEN
+    _DB-AV-KIND @ _DB-AV DBAV-CHOOSE ?DUP IF 2400 _DB-AV-SAY EXIT THEN
     _DB-AV-KIND @ _DB-AV DBAV-NEXT-KIND ?DUP IF _DB-AR-CHOOSE EXIT THEN
     _DB-AR-LIST _DB-AR-MINUTES ;
 
@@ -1660,17 +1664,17 @@ VARIABLE _DB-SHOW-LU
     _DB-PE-BUF ! _DB-PE-CAP ! -1 ;
 
 : _DB-PE-NOROOM  ( -- )
-    S" Not enough memory for a longer prompt" 2400 ASHELL-TOAST ;
+    S" Not enough memory for a longer prompt" 2400 ASHELL-TOAST-ERROR ;
 
 \ Ctrl+S: the prompt completes the Agent run, which is created, and
 \ Desk's user is asked to approve it.
 : _DB-PE-FINISH  ( -- )
     _DB-PE-BUF @ _DB-PE-TXTA @ TXTA-LENGTH _DB-AV DBAV-PROMPT!
     ?DUP 0= IF _DB-AV DBAV-CREATE THEN
-    ?DUP IF DBAV-MESSAGE 2600 ASHELL-TOAST EXIT THEN
+    ?DUP IF 2600 _DB-AV-SAY EXIT THEN
     _DB-PE-RESET _DB-AR-LIST
     _DB-AV DBAV-ASK-CREATED ?DUP IF
-        DBAV-MESSAGE 2600 ASHELL-TOAST
+        2600 _DB-AV-SAY
     ELSE
         S" Agent run created; approve it in Desk" 2400 ASHELL-TOAST
     THEN
@@ -1683,7 +1687,7 @@ VARIABLE _DB-SHOW-LU
         -1 _DB-PE-ARMED ! _DB-UPDATE-STATUS EXIT
     THEN
     _DB-PE-RESET _DB-AR-LIST
-    S" Agent run not created" 1600 ASHELL-TOAST ;
+    S" Agent run not created" 1600 ASHELL-TOAST-ERROR ;
 
 : _DB-PE-COPY  ( -- )
     _DB-PE-TXTA @ TXTA-GET-SEL DUP 0= IF 2DROP EXIT THEN CLIP-COPY DROP ;
@@ -1741,7 +1745,7 @@ VARIABLE _DB-SHOW-LU
     THEN
     DUP @ KEY-T-SPECIAL = IF
         DUP 8 + @ KEY-ESC = IF
-            DROP _DB-AR-LIST S" Agent run not created" 1600 ASHELL-TOAST -1 EXIT
+            DROP _DB-AR-LIST S" Agent run not created" 1600 ASHELL-TOAST-ERROR -1 EXIT
         THEN
     THEN
     _DB-CH-LIST @ WDG-HANDLE ;
@@ -1753,12 +1757,12 @@ VARIABLE _DB-SHOW-LU
 : _DB-DT-REFRESH  ( -- )
     _DB-AV DBAV-OPENED-STALE? 0= IF EXIT THEN
     _DB-AV DBAV-REREAD ?DUP IF
-        DBAV-MESSAGE 2400 ASHELL-TOAST _DB-DT-CLOSE EXIT
+        2400 _DB-AV-SAY _DB-DT-CLOSE EXIT
     THEN
     _DB-DT-SYNC ;
 
 : _DB-DT-DONE  ( status -- )
-    ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST THEN
+    ?DUP IF 2400 _DB-AV-SAY THEN
     _DB-DT-REFRESH _DB-UPDATE-STATUS ;
 
 \ Keys on a schedule's details: Escape returns to the list; R runs the
@@ -1841,8 +1845,8 @@ CREATE _DB-HEAD-BUF RCON-TITLE-MAX 64 + ALLOT  VARIABLE _DB-HEAD-U
 : _DB-AR-BEGIN  ( locator|0 -- )
     _DB-CREATE-READY? 0= IF DROP EXIT THEN
     DBAS-ACTION-AGENT _DB-AV DBAV-BEGIN ?DUP 0= IF _DB-AV DBAV-MODELS-FETCH THEN
-    ?DUP IF NIP DBAV-MESSAGE 2400 ASHELL-TOAST EXIT THEN
-    ?DUP IF _DB-AV DBAV-DOCUMENT! ?DUP IF DBAV-MESSAGE 2400 ASHELL-TOAST EXIT THEN THEN
+    ?DUP IF NIP 2400 _DB-AV-SAY EXIT THEN
+    ?DUP IF _DB-AV DBAV-DOCUMENT! ?DUP IF 2400 _DB-AV-SAY EXIT THEN THEN
     DBAS-ACTION-AGENT _DB-CREATING !
     _DB-RN-WHEN ;
 
@@ -1864,39 +1868,39 @@ VARIABLE _DB-SUB-MINUTE
     _DB-K-TASK _DB-KIND-COUNT + 1- 0 MAX _DB-SELECTED ! ;
 
 : _DB-ADD-FAILED-TOAST  ( -- )
-    S" Entry is too long or Daybook is full" 2400 ASHELL-TOAST ;
+    S" Entry is too long or Daybook is full" 2400 ASHELL-TOAST-WARNING ;
 
 : _DB-LOAD-ERROR-TOAST  ( status -- )
     DUP _DB-L-S-STALE = IF
         DROP S" Daybook changed while reloading; reload again"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _DB-L-S-SHARED = IF
         DROP S" Shared Daybook resource is unavailable; saving is blocked"
-        3200 ASHELL-TOAST EXIT
+        3200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _DB-L-S-TOO-LARGE = IF
         DROP S" Daybook source exceeds 32 KiB; current entries kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _DB-L-S-RECOVERY = IF
         DROP S" Daybook recovery failed; current entries kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _DB-L-S-INVALID = IF
         DROP S" Daybook source is invalid; current entries kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _DB-L-S-CAPACITY = IF
         DROP S" Daybook source has more than 96 entries; current entries kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     _DB-L-S-TEXT = IF
         S" Daybook source has text over 120 bytes; current entries kept"
     ELSE
         S" Daybook read failed; current entries kept"
     THEN
-    3000 ASHELL-TOAST ;
+    3000 ASHELL-TOAST-ERROR ;
 
 : _DB-RELOAD-NOW  ( -- )
     _DB-LOAD DUP IF
@@ -1914,25 +1918,25 @@ VARIABLE _DB-SUB-MINUTE
 : _DB-RN-SUBMIT  ( -- )
     _DB-SUB-MODE @ _DB-PRM-REMINDER-WHEN = IF
         _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-WHEN! ?DUP IF
-            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-WHEN
+            2600 _DB-AV-SAY _DB-RN-WHEN
         ELSE
             _DB-RN-REPEAT
         THEN EXIT
     THEN
     _DB-SUB-MODE @ _DB-PRM-REMINDER-REPEAT = IF
         _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-REPEAT! ?DUP IF
-            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-REPEAT
+            2600 _DB-AV-SAY _DB-RN-REPEAT
         ELSE
             _DB-RN-ZONE
         THEN EXIT
     THEN
     _DB-SUB-MODE @ _DB-PRM-REMINDER-ZONE = IF
         _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-ZONE! ?DUP IF
-            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-RN-ZONE EXIT
+            2600 _DB-AV-SAY _DB-RN-ZONE EXIT
         THEN
         _DB-CREATING @ DBAS-ACTION-AGENT = IF DBAV-MODEL-KIND _DB-AR-CHOOSE EXIT THEN
         _DB-AV DBAV-CREATE ?DUP IF
-            DBAV-MESSAGE 2600 ASHELL-TOAST
+            2600 _DB-AV-SAY
         ELSE
             S" Reminder created" 1800 ASHELL-TOAST
         THEN
@@ -1940,14 +1944,14 @@ VARIABLE _DB-SUB-MINUTE
     THEN
     _DB-SUB-MODE @ _DB-PRM-AGENT-MINUTES = IF
         _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-MINUTES! ?DUP IF
-            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-AR-MINUTES
+            2600 _DB-AV-SAY _DB-AR-MINUTES
         ELSE
             _DB-AR-REPLY
         THEN EXIT
     THEN
     _DB-SUB-MODE @ _DB-PRM-AGENT-REPLY = IF
         _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-REPLY! ?DUP IF
-            DBAV-MESSAGE 2600 ASHELL-TOAST _DB-AR-REPLY
+            2600 _DB-AV-SAY _DB-AR-REPLY
         ELSE
             _DB-AR-EDIT
         THEN EXIT
@@ -1955,7 +1959,7 @@ VARIABLE _DB-SUB-MINUTE
     _DB-SUB-MODE @ _DB-PRM-DEFAULT-ZONE = IF
         _DB-SUB-U @ 0= IF EXIT THEN
         _DB-SUB-A @ _DB-SUB-U @ _DB-AV DBAV-DEFAULT-ZONE! ?DUP IF
-            DUP DBAV-MESSAGE 2600 ASHELL-TOAST
+            DUP 2600 _DB-AV-SAY
             DBAO-S-ZONE = IF _DB-RN-DEFAULT-ZONE THEN
         ELSE
             S" New automations start in that zone" 1800 ASHELL-TOAST
@@ -1989,11 +1993,11 @@ VARIABLE _DB-SUB-MINUTE
         ENDOF
         _DB-PRM-EVENT OF
             _DB-SUB-U @ 6 < IF
-                S" Use HH:MM followed by a title" 2200 ASHELL-TOAST
+                S" Use HH:MM followed by a title" 2200 ASHELL-TOAST-WARNING
             ELSE
                 _DB-SUB-A @ 5 _DB-PARSE-TIME
                 0= IF
-                    DROP S" Invalid event time" 2200 ASHELL-TOAST
+                    DROP S" Invalid event time" 2200 ASHELL-TOAST-WARNING
                 ELSE
                     _DB-SUB-MINUTE !
                     _DB-K-EVENT 0 _DB-SELECTED-DATE @ _DB-SUB-MINUTE @
@@ -2059,7 +2063,7 @@ VARIABLE _DB-SUB-MINUTE
 : _DB-AV-MENU  ( xt -- )
     _DB-AUTOMATIONS-SHOWN @ 0= IF DROP _DB-SHOW-AUTOMATIONS EXIT THEN
     _DB-AR-PAGE? IF
-        DROP S" Finish or cancel the new Agent run first" 2000 ASHELL-TOAST EXIT
+        DROP S" Finish or cancel the new Agent run first" 2000 ASHELL-TOAST-WARNING EXIT
     THEN
     _DB-DT-CLOSE EXECUTE ;
 : _DB-DO-AV-REVIEW  ( elem -- ) DROP ['] _DB-AV-REVIEW _DB-AV-MENU ;
@@ -2094,13 +2098,13 @@ VARIABLE _DB-SOURCE-VALUE
 
 : _DB-SOURCE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
-        S" Could not route the Daybook source" 2000 ASHELL-TOAST
+        S" Could not route the Daybook source" 2000 ASHELL-TOAST-ERROR
     THEN
     CBR-FREE ;
 
 : _DB-POST-SOURCE-INTENT  ( intent-a intent-u -- )
     CBR-NEW DUP IF
-        2DROP 2DROP S" Could not allocate source request" 1800 ASHELL-TOAST EXIT
+        2DROP 2DROP S" Could not allocate source request" 1800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP _DB-SOURCE-REQ !
     CPRINC-COMPONENT _DB-SOURCE-REQ @ CBR.PRINCIPAL !
@@ -2108,14 +2112,14 @@ VARIABLE _DB-SOURCE-VALUE
         2DROP _DB-SOURCE-REQ @ CBR-FREE
         _DB-RESOURCE-MODE @ DUP RSES-M-BLOCKED =
             SWAP RSES-M-STALE = OR IF
-            S" Shared Daybook resource is unavailable" 2200 ASHELL-TOAST
+            S" Shared Daybook resource is unavailable" 2200 ASHELL-TOAST-WARNING
         THEN EXIT
     THEN
     ['] _DB-SOURCE-COMPLETE _DB-SOURCE-REQ @ CBR.COMPLETE-XT !
     _DB-SOURCE-REQ @ _DB-CURRENT-INSTANCE @ CINST-POST-INTENT
     DUP CBUS-S-OK <> IF
         DROP _DB-SOURCE-REQ @ CBR-FREE
-        S" Source routing is unavailable outside Desk" 1800 ASHELL-TOAST
+        S" Source routing is unavailable outside Desk" 1800 ASHELL-TOAST-WARNING
     ELSE DROP THEN ;
 
 : _DB-DO-EDIT-SOURCE  ( elem -- )
@@ -2289,7 +2293,7 @@ VARIABLE _DB-SOURCE-VALUE
     \ A new Agent run's typed prompt is not lost to a close.
     _DB-AV-PAGE @ _DB-PAGE-PROMPT = IF
         _DB-PE-TXTA @ TXTA-LENGTH IF
-            S" Finish or cancel the new Agent run before closing" 2400 ASHELL-TOAST
+            S" Finish or cancel the new Agent run before closing" 2400 ASHELL-TOAST-WARNING
             APP-CLOSE-D-CANCEL EXIT
         THEN
     THEN
@@ -2301,7 +2305,7 @@ VARIABLE _DB-SOURCE-VALUE
     THEN
     _DB-PROMPT @ ?DUP IF PRM-ACTIVE? ELSE 0 THEN IF
         S" Finish or cancel the current Daybook prompt before closing"
-        2400 ASHELL-TOAST
+        2400 ASHELL-TOAST-WARNING
         APP-CLOSE-D-CANCEL EXIT
     THEN
     S" Close Daybook and discard unsaved changes?" S" Discard"

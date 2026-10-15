@@ -577,23 +577,23 @@ VARIABLE _SL-SHOW-IU
     _SL-PROMPT-MODE @ _SL-SUB-MODE !
     _SL-PM-NONE _SL-PROMPT-MODE !
     _SL-SUB-A @ _SL-SUB-U @ STR>NUM 0= IF
-        DROP S" Enter a whole number" 1800 ASHELL-TOAST
+        DROP S" Enter a whole number" 1800 ASHELL-TOAST-WARNING
     ELSE
         _SL-SUB-N !
         _SL-SUB-MODE @ CASE
             _SL-PM-FREQUENCY OF
                 _SL-SUB-N @ DUP _SL-FREQ-MIN < SWAP _SL-FREQ-MAX > OR IF
-                    S" Frequency must be 40-2000 Hz" 2200 ASHELL-TOAST
+                    S" Frequency must be 40-2000 Hz" 2200 ASHELL-TOAST-WARNING
                 ELSE _SL-SUB-N @ _SL-FREQUENCY ! _SL-PARAM-CHANGED THEN
             ENDOF
             _SL-PM-AMPLITUDE OF
                 _SL-SUB-N @ DUP _SL-AMP-MIN < SWAP _SL-AMP-MAX > OR IF
-                    S" Amplitude must be 0-100 percent" 2200 ASHELL-TOAST
+                    S" Amplitude must be 0-100 percent" 2200 ASHELL-TOAST-WARNING
                 ELSE _SL-SUB-N @ _SL-AMPLITUDE ! _SL-PARAM-CHANGED THEN
             ENDOF
             _SL-PM-DURATION OF
                 _SL-SUB-N @ DUP _SL-DURATION-MIN < SWAP _SL-DURATION-MAX > OR IF
-                    S" Duration must be 100-2000 ms" 2200 ASHELL-TOAST
+                    S" Duration must be 100-2000 ms" 2200 ASHELL-TOAST-WARNING
                 ELSE _SL-SUB-N @ _SL-DURATION ! _SL-PARAM-CHANGED THEN
             ENDOF
         ENDCASE
@@ -1074,7 +1074,7 @@ VARIABLE _SL-FIELD-EVENT
 
 : _SL-RENDER-ACTION  ( -- )
     _SL-RENDER IF
-        S" Signal render failed; previous PCM was kept" 2800 ASHELL-TOAST
+        S" Signal render failed; previous PCM was kept" 2800 ASHELL-TOAST-ERROR
     ELSE
         S" Signal rendered and analyzed" 1600 ASHELL-TOAST
     THEN ;
@@ -1082,17 +1082,17 @@ VARIABLE _SL-FIELD-EVENT
 : _SL-SAVE-ACTION  ( -- )
     _SL-SAVE IF
         _SL-RENDER-VALID @ IF
-            S" WAV save failed; rendered PCM was kept"
+            S" WAV save failed; rendered PCM was kept" 2600 ASHELL-TOAST-ERROR
         ELSE
-            S" Render current settings before saving"
-        THEN 2600 ASHELL-TOAST
+            S" Render current settings before saving" 2600 ASHELL-TOAST-WARNING
+        THEN
     ELSE
         S" Saved /soundlab.wav" 1600 ASHELL-TOAST
     THEN ;
 
 : _SL-PLAYBACK-ACTION  ( -- )
     _SL-RENDER-VALID @ 0= IF
-        S" Render current settings before playback" 2200 ASHELL-TOAST EXIT
+        S" Render current settings before playback" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _SL-PLAY
     DUP AUDIO-OUT-S-OK = IF
@@ -1103,7 +1103,7 @@ VARIABLE _SL-FIELD-EVENT
         THEN
         2800 ASHELL-TOAST EXIT
     THEN
-    _SL-PLAY-ERROR-TEXT 3200 ASHELL-TOAST ;
+    _SL-PLAY-ERROR-TEXT 3200 ASHELL-TOAST-ERROR ;
 
 VARIABLE _SL-H-WIDGET
 
@@ -1164,17 +1164,17 @@ VARIABLE _SL-SOURCE-REQ
 
 : _SL-REVEAL-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
-        S" Could not reveal the Sound Lab output" 2000 ASHELL-TOAST
+        S" Could not reveal the Sound Lab output" 2000 ASHELL-TOAST-ERROR
     THEN
     CBR-FREE ;
 
 : _SL-DO-REVEAL-OUTPUT  ( elem -- )
     DROP
     _SL-SAVED-ONCE @ 0= IF
-        S" Save a WAV before revealing the output" 1800 ASHELL-TOAST EXIT
+        S" Save a WAV before revealing the output" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     CBR-NEW DUP IF
-        2DROP S" Could not allocate reveal request" 1800 ASHELL-TOAST EXIT
+        2DROP S" Could not allocate reveal request" 1800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP _SL-SOURCE-REQ !
     CPRINC-COMPONENT _SL-SOURCE-REQ @ CBR.PRINCIPAL !
@@ -1185,7 +1185,7 @@ VARIABLE _SL-SOURCE-REQ
     _SL-SOURCE-REQ @ _SL-CURRENT-INSTANCE @ CINST-POST-INTENT
     DUP CBUS-S-OK <> IF
         DROP _SL-SOURCE-REQ @ CBR-FREE
-        S" Output reveal is unavailable outside Desk" 1800 ASHELL-TOAST
+        S" Output reveal is unavailable outside Desk" 1800 ASHELL-TOAST-WARNING
     ELSE DROP THEN ;
 
 \ ---------------------------------------------------------------------
@@ -1260,7 +1260,7 @@ VARIABLE _SL-INIT-RENDER-IOR
     _SL-RENDER _SL-INIT-RENDER-IOR !
     _SL-INIT-RENDER-IOR @ IF
         S" Initial signal render failed; controls remain available"
-        3000 ASHELL-TOAST
+        3000 ASHELL-TOAST-ERROR
     THEN ;
 
 : SOUNDLAB-EVENT-CB  ( event instance -- consumed? )
@@ -1299,7 +1299,7 @@ VARIABLE _SL-INIT-RENDER-IOR
     _SL-PROMPT @ ?DUP IF
         PRM-ACTIVE? IF
             S" Finish or cancel the Sound Lab prompt before closing"
-            2400 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+            2400 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
         THEN
     THEN
     _SL-UNSAVED @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN

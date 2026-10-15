@@ -252,6 +252,11 @@ def build_snapshot() -> None:
         "CREATE _FEXP-SCRATCH _FEXP-SCRATCH-CAP ALLOT",
         ": _FEXP-SELECTED _FEXP-SEL-IN @ ;",
         ": ASHELL-TOAST 2DROP ;",
+        "3 CONSTANT ASHELL-SEVERITY-WARNING",
+        "4 CONSTANT ASHELL-SEVERITY-ERROR",
+        ": ASHELL-NOTICE 2DROP 2DROP ;",
+        ": ASHELL-TOAST-WARNING 2DROP DROP ;",
+        ": ASHELL-TOAST-ERROR 2DROP DROP ;",
     ])
     payload_lines += _transaction_source()
     payload_lines += HELPERS

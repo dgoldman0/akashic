@@ -229,6 +229,7 @@ def test_the_service_on_the_real_clock(clocked):
     assert fired == [30]
     output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
     assert output.strip() == "Reminder: Take the medicine"
+    assert run(clocked, ["SV DBSVC-NOTICE-SEVERITY . CR"]) == [[0]]
 
     # Two daily reminders at 09:00 tomorrow; the clock is set two days on.
     rows = run(clocked, [
@@ -265,6 +266,8 @@ def test_a_missed_notice(clocked):
     assert rows == [[-1]]
     output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
     assert output.strip() == "Missed: Water the plants"
+    # A missed reminder warns.
+    assert run(clocked, ["SV DBSVC-NOTICE-SEVERITY . CR"]) == [[3]]
 
 
 def test_idle_ticks_cost_the_same_with_many_reminders(clocked):
@@ -326,6 +329,7 @@ def test_an_agent_run_with_no_broker_needs_review(clocked):
         [-1, OK, ENDED, DUE, O_BLOCKED, R_AGENT_UNAVAILABLE]]
     output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
     assert output.strip() == "Needs review: Read the news"
+    assert run(clocked, ["SV DBSVC-NOTICE-SEVERITY . CR"]) == [[3]]
 
     # A reminder and an Agent run due together.
     rows = run(clocked, [
@@ -339,6 +343,8 @@ def test_an_agent_run_with_no_broker_needs_review(clocked):
     output = clocked.run(["SV DBSVC-NOTICE TYPE CR"], 10_000_000).decode()
     assert output.strip() in ("Automations: Read the news and 1 more",
                               "Automations: Water the plants and 1 more")
+    # Several at once say no more than that they came due.
+    assert run(clocked, ["SV DBSVC-NOTICE-SEVERITY . CR"]) == [[0]]
 
     # Then two reminders due together, and no Agent run.
     rows = run(clocked, [
