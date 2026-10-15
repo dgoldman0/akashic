@@ -168,7 +168,10 @@ detail: width  = two less than the bounds
 
 The message is broken at the width less four. When its rows outrun the
 `height - 5` rows the dialog has for them, the last of those rows says
-`PgDn: more below` until the message's last line is in view.
+`PgDn: more below` until the message's last line is in view. A dialog five
+rows high shows one message row on its lower blank row; a shorter one has
+no row for the message, so it is never read and a `DLG-B-READ-FIRST`
+button stays unavailable until a taller paint shows the last line.
 
 ```
 ┌─ Title ──────────────┐  row 0   box top

@@ -2591,6 +2591,22 @@ def test_dlg_read_first_button_waits_for_the_last_line_and_takes_its_key():
          _DLG_LONG_CLEANUP], "1 1 8888")
 
 
+def test_dlg_a_box_with_no_message_row_never_reads_its_message():
+    """A dialog shorter than five rows has no row for its message, so
+    scrolling to its end reads nothing and Approve stays unavailable; once
+    a paint shows the last line, it can be chosen."""
+    for rows, height in ((4, 2), (6, 4)):
+        check(f"no message row in {rows} rows",
+            _DLG_SETUP + _DLG_LONG + [
+             f': _TINY 0 0 {rows} 40 ; \' _TINY IS _DLG-BOUNDS-HOOK',
+             '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT DLG-SHOWN WDG-REGION RGN-H .',
+             'KEY-END _KEY DLG-HOST-PAINT DLG-SHOWN 0 _DLG-AVAILABLE? .',
+             'KEY-F6 _KEY DLG-SHOWN 0<> .',
+             "' _LBOUNDS IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT DLG-SHOWN 0 _DLG-AVAILABLE? .",
+             'KEY-F6 _KEY DLG-SHOWN 0<> . _ANS @ . 8888 .',
+             _DLG_LONG_CLEANUP], f"{height} 0 -1 -1 0 0 8888")
+
+
 def test_dlg_capture_shows_the_rows_in_view_and_what_can_be_chosen():
     """The model holds the two rows in view and the row saying more lies
     below; Approve is visible but not enabled until the last line has been

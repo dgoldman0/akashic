@@ -319,18 +319,21 @@ VARIABLE _DLG-L-HT
     _DLG-L-BH @ 2 - _DLG-FLOOR1 _DLG-L-HT ! ;
 
 \ The message broken inside the box, the rows in view, the first of them
-\ kept inside the message, and whether the last row has been shown.
+\ kept inside the message, and whether the last row has been shown.  The
+\ message has the rows between the blank rows under the top and over the
+\ buttons, or the lower blank row when that is all there is.  A box of
+\ fewer than five rows has no row for it, so its message is never read.
 VARIABLE _DLG-L-ROWS
 VARIABLE _DLG-L-VIEW
 : _DLG-MESSAGE-LAYOUT  ( -- )
     _DLG-L-WD @ 4 - _DLG-FLOOR1 DUP _DLG-L-W @ _DLG-O-MW + !
     _DLG-L-W @ SWAP _DLG-ROWS DUP _DLG-L-ROWS ! _DLG-L-W @ _DLG-O-ROWS + !
-    _DLG-L-HT @ 5 - _DLG-FLOOR1 _DLG-L-VIEW !
+    _DLG-L-HT @ 5 < IF 0 ELSE _DLG-L-HT @ 5 - _DLG-FLOOR1 THEN _DLG-L-VIEW !
     _DLG-L-ROWS @ _DLG-L-VIEW @ > _DLG-L-VIEW @ 1 > AND IF -1 _DLG-L-VIEW +! THEN
     _DLG-L-VIEW @ _DLG-L-W @ _DLG-O-VIEW + !
     _DLG-L-ROWS @ _DLG-L-VIEW @ - _DLG-FLOOR0
         _DLG-L-W @ _DLG-O-TOP + @ MIN _DLG-L-W @ _DLG-O-TOP + !
-    _DLG-L-ROWS @ IF
+    _DLG-L-ROWS @ 0<> _DLG-L-VIEW @ 0<> AND IF
         _DLG-L-W @ _DLG-O-TOP + @ _DLG-L-VIEW @ + _DLG-L-ROWS @ < 0= IF
             -1 _DLG-L-W @ _DLG-O-READ + !
         THEN
@@ -384,6 +387,7 @@ VARIABLE _DLG-DRW-BROW    \ button row
 
 : _DLG-DRAW-MORE  ( -- )
     _DLG-DRW-W @ _DLG-MORE? 0= IF EXIT THEN
+    _DLG-DRW-W @ _DLG-O-VIEW + @ 0= IF EXIT THEN
     244 24 0 DRW-STYLE!
     _DLG-MORE$ _DLG-DRW-W @ _DLG-O-VIEW + @ 2 + 2 DRW-TEXT ;
 
