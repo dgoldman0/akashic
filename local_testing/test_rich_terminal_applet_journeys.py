@@ -51,6 +51,8 @@ from rich_terminal_applet_journeys import (
     AGENT_REQUEST,
     AGENT_REVIEW_MARKER,
     AGENT_REVIEW_REASON,
+    DAYBOOK_DAILY_SCHEDULE,
+    DAYBOOK_DELETE_QUESTION,
     DAYBOOK_REMINDER_NOTICE,
     DESK_PROMPT_OVER,
     DESK_PROMPT_TEXT,
@@ -587,6 +589,60 @@ def _daybook_frame(
     return projection
 
 
+AUTOMATIONS_ID = 20_005
+DAILY_KEY = 9
+
+
+def _daybook_automations(*, selected: bool = False, daily: bool = True):
+    """Daybook's automations: the boot's two reminders under ACTIVE, the
+    daily one keyed DAILY_KEY, and SELECTED when SELECTED."""
+
+    state = ItemState.SELECTED if selected else ItemState(0)
+    items = (
+        ViewItem(1, 0, 0, 0, ItemState(0), ItemRole.SECTION, (ItemField("ACTIVE"),)),
+        ViewItem(8, 1, 1, 1, ItemState(0), ItemRole.ITEM,
+                 (ItemField("Water the plants"), ItemField("next 12:02"))),
+    )
+    if daily:
+        items += (ViewItem(DAILY_KEY, 1, 2, 1, state, ItemRole.ITEM,
+                           (ItemField(DAYBOOK_DAILY_SCHEDULE), ItemField("next 09:00"))),)
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, AUTOMATIONS_ID),
+        1,
+        4,
+        60,
+        12,
+        ItemViewContent(
+            1,
+            ItemViewRole.SECTIONS,
+            ItemViewFlag(0),
+            (ItemColumn(ItemColumnKind.TEXT), ItemColumn(ItemColumnKind.TEXT)),
+            len(items),
+            0,
+            len(items),
+            items,
+        ),
+    )
+
+
+def _automations_frame(*, selected: bool = False, daily: bool = True):
+    """Daybook's menu and its automations in place of the calendar."""
+
+    rows = {0: " File  Entry  Go  Automations  Help", ROWS - 1: "[1:Daybook*]"}
+    projection = _screen(rows, (acceptance_runner.DAYBOOK_MENU_SIGNATURE,))
+    return replace(
+        projection,
+        semantic_item_view_claims=(_daybook_automations(selected=selected, daily=daily),),
+    )
+
+
+def _automations_offer(*, question: bool = False):
+    cells = ((6, 2, DAYBOOK_DAILY_SCHEDULE),)
+    if question:
+        cells += ((32, 62, DAYBOOK_DELETE_QUESTION),)
+    return _cell_offer(1, cells)
+
+
 def _prompt_offer(text: str, caret: int | None = None):
     reversed_cells = () if caret is None else ((PROMPT_ROW, caret),)
     return _cell_offer(
@@ -632,6 +688,25 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
             _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),)),
             _daybook_frame(agenda=entry, checked=True),
         ),
+        # F4 has not shown the automations yet.
+        (
+            _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),)),
+            _daybook_frame(agenda=entry, checked=True),
+        ),
+        (_automations_offer(), _automations_frame()),
+        (_automations_offer(), _automations_frame(selected=True)),
+        # Delete has not asked yet.
+        (_automations_offer(), _automations_frame(selected=True)),
+        (
+            _automations_offer(question=True),
+            _asked(_automations_frame(selected=True),
+                   _question(DAYBOOK_DELETE_QUESTION, DAYBOOK_QUESTION_BUTTONS)),
+        ),
+        (_automations_offer(), _automations_frame(selected=True)),
+        (
+            _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),)),
+            _daybook_frame(agenda=entry, checked=True),
+        ),
         # The reminder has not fired yet.
         (
             _cell_offer(1, ((10, 28, "[x] " + mixed_text.visual(entry)),)),
@@ -656,7 +731,16 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
         (None, []),
         ("daybook-mixed-task-added", [("item_check", f"1,1,{AGENDA_ID},16")]),
         (None, []),
-        ("daybook-task-checked", []),
+        ("daybook-task-checked", [("send_key", "f4")]),
+        (None, []),
+        ("daybook-automations-shown",
+         [("item_select", f"1,1,{AUTOMATIONS_ID},{DAILY_KEY}")]),
+        ("daybook-daily-reminder-selected", [("send_key", "delete")]),
+        (None, []),
+        ("daybook-delete-question-shown",
+         [("activate_button", f"1,1,{PROMPT_ID + 2}")]),
+        ("daybook-delete-cancelled", [("send_key", "f4")]),
+        ("daybook-calendar-shown-again", []),
         (None, []),
         ("daybook-reminder-notice", []),
     ]
@@ -693,6 +777,42 @@ def test_daybook_alone_refuses_a_partial_backspace_and_leaked_semantics() -> Non
     bare = replace(_daybook_frame(prompt=head), semantic_item_view_claims=())
     with pytest.raises(PhysicalDesktopAcceptanceError, match="calendar or agenda"):
         journey.after_present(_prompt_offer(head), 9, bare, sender)
+
+
+DAYBOOK_QUESTION_BUTTONS = (
+    ("Delete", ButtonFlag.DESTRUCTIVE),
+    ("Cancel", ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
+)
+
+
+def test_daybook_alone_refuses_a_cancel_that_lost_the_daily_reminder() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    journey = DaybookAloneJourney(DAYBOOK_READY)
+    journey.stage = DaybookAloneJourney.DELETE_CANCELLED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    offer = replace(_automations_offer(), offer_id=1)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="keep Daybook's daily"):
+        journey.after_present(offer, 9, _automations_frame(daily=False), sender)
+
+
+def test_daybook_alone_refuses_a_delete_that_is_not_destructive() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    journey = DaybookAloneJourney(DAYBOOK_READY)
+    journey.stage = DaybookAloneJourney.DELETE_ASKED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    buttons = (
+        ("Delete", ButtonFlag(0)),
+        ("Cancel", ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
+    )
+    frame = _asked(_automations_frame(selected=True),
+                   _question(DAYBOOK_DELETE_QUESTION, buttons))
+    offer = replace(_automations_offer(question=True), offer_id=1)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="is not destructive"):
+        journey.after_present(offer, 9, frame, sender)
 
 
 TIMELINE_ID = 30_001

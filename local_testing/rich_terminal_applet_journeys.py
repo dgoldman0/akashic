@@ -69,6 +69,8 @@ PAD_CLOSE_QUESTION = "Discard unsaved changes?"
 PAD_CLOSE_DISCARD = "Discard"
 FEXP_DELETE_QUESTION = "Delete the selected item?"
 FEXP_DELETE = "Delete"
+DAYBOOK_DELETE_QUESTION = "Delete the selected automation?"
+DAYBOOK_DELETE = "Delete"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # The canonical Desktop image's large sample sits in the root directory,
 # beside its sample picture.
@@ -130,6 +132,10 @@ DAYBOOK_ALONE_FOCUS_MARKER = "[1:Daybook*]"
 # The notice Desk shows when the reminder the Daybook-alone boot makes
 # fires (akashic_tui.DAYBOOK_REMINDER_TITLE).
 DAYBOOK_REMINDER_NOTICE = "Reminder: Water the plants"
+# The daily reminder that boot makes too (akashic_tui.DAYBOOK_DAILY_TITLE),
+# first due tomorrow, and the section of Daybook's automations it is in.
+DAYBOOK_DAILY_SCHEDULE = "Stretch"
+DAYBOOK_ACTIVE_SECTION = "ACTIVE"
 STREAMS_ALONE_FOCUS_MARKER = "[1:Streams*]"
 # Streams' feed alone on Desk (fixtures/streams/desk-timeline.json), in
 # feed order: a post with a web link, a reply to it, and another post.
@@ -610,8 +616,8 @@ class PadAloneJourney(_AppletJourney):
 
 class DaybookAloneJourney(_AppletJourney):
     """Desk with Daybook: add a task that mixes scripts through its prompt,
-    check it off in the agenda, then see the notice of the reminder the boot
-    made when Desk fires it.
+    check it off in the agenda, ask to delete the daily reminder and keep it,
+    then see the notice of the reminder the boot made when Desk fires it.
 
     The prompt is a TEXT field in a modal region over Daybook's tile: it
     carries the typed text logically while its CELL cells show it in visual
@@ -621,9 +627,12 @@ class DaybookAloneJourney(_AppletJourney):
     task.  The agenda is a SECTIONS item view, and the task is an unchecked
     checkable item under the TASKS heading; a CHECK on it marks it done.
     While the prompt is open, Daybook's menu, calendar grid and agenda stay
-    rich beneath it and inactive, and its cells stay complete.  Desk's toast
-    of the reminder's notice must then reach the physical frame on the
-    bottom row.
+    rich beneath it and inactive, and its cells stay complete.  F4 then
+    shows Daybook's automations, a SECTIONS item view too; a SELECT on the
+    daily reminder and Delete ask first, in a DIALOG whose Delete is
+    destructive and whose Cancel is the default, and an ACTIVATE on Cancel
+    keeps the reminder.  F4 returns to the calendar, and Desk's toast of the
+    reminder's notice must then reach the physical frame on the bottom row.
     """
 
     focus_marker = DAYBOOK_ALONE_FOCUS_MARKER
@@ -637,9 +646,14 @@ class DaybookAloneJourney(_AppletJourney):
         INSERTED,
         ADDED,
         CHECKED,
+        AUTOMATIONS,
+        SCHEDULE_SELECTED,
+        DELETE_ASKED,
+        DELETE_CANCELLED,
+        CALENDAR,
         NOTICE_WAIT,
         NOTICE,
-    ) = range(11)
+    ) = range(16)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -692,6 +706,8 @@ class DaybookAloneJourney(_AppletJourney):
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
+        if self.AUTOMATIONS <= self.stage <= self.CALENDAR:
+            return self._automations(offer, generation, projection, bounds, sender)
         prompt = _prompt_claim(projection, DAYBOOK_PROMPT_MARKER, bounds)
         collections = tuple(
             claim
@@ -737,9 +753,8 @@ class DaybookAloneJourney(_AppletJourney):
             if task is None or not task.state & ItemState.CHECKED:
                 return JourneyProgress()
             _require_cell_text_in(offer, "[x]", bounds, _WHERE)
-            self.stage = self.NOTICE_WAIT
-            self.frame_barrier = offer.offer_id
-            return JourneyProgress(self._milestone("daybook-task-checked"))
+            return self._step("daybook-task-checked", "send_key", "f4",
+                              self.AUTOMATIONS, offer, generation, sender)
         if self.stage == self.NOTICE_WAIT:
             # The toast is an ordinary overlay on Desk's bottom row: the rich
             # frame carries it as residual glyphs, and CELL as its cells.
@@ -816,6 +831,60 @@ class DaybookAloneJourney(_AppletJourney):
             return JourneyProgress()
         return self._step("daybook-prompt-text-inserted-at-click", "send_key", "enter",
                           self.ADDED, offer, generation, sender)
+
+    def _automations(self, offer, generation, projection, bounds, sender):
+        """Ask to delete the daily reminder from Daybook's automations, keep
+        it through Cancel, and return to the calendar."""
+
+        dialog = _dialog_claim(projection, DAYBOOK_DELETE_QUESTION, bounds)
+        if self.stage == self.DELETE_ASKED:
+            if dialog is None:
+                return self._wait("Daybook's question after Delete")
+            value = _cancel_of_confirm(offer, projection, dialog, bounds, DAYBOOK_DELETE,
+                                       DAYBOOK_MENU_SIGNATURE, "Daybook")
+            return self._step("daybook-delete-question-shown", "activate_button", value,
+                              self.DELETE_CANCELLED, offer, generation, sender)
+        if dialog is not None:
+            return self._wait("Daybook's question to close after Cancel")
+        if self.stage == self.CALENDAR:
+            agenda = self._agenda(projection, bounds)
+            task = None if agenda is None else self._task(agenda, mixed_text.DAYBOOK_ENTRY)
+            if task is None or not _collection_claims_in(
+                projection, ControlKind.TEXT_GRID, bounds
+            ):
+                return self._wait("Daybook's calendar after F4")
+            if not task.state & ItemState.CHECKED:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook's task lost its check in the automations"
+                )
+            self.stage = self.NOTICE_WAIT
+            self.frame_barrier = offer.offer_id
+            return JourneyProgress(self._milestone("daybook-calendar-shown-again"))
+        automations = self._agenda(projection, bounds)
+        schedule = None if automations is None else automations.named(DAYBOOK_DAILY_SCHEDULE)
+        if schedule is None:
+            if (
+                self.stage == self.DELETE_CANCELLED
+                and automations is not None
+                and automations.named(DAYBOOK_ACTIVE_SECTION) is not None
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "Cancel did not keep Daybook's daily reminder"
+                )
+            return self._wait(f"Daybook's automations listing {DAYBOOK_DAILY_SCHEDULE!r}")
+        if self.stage == self.AUTOMATIONS:
+            return self._step("daybook-automations-shown", "item_select",
+                              automations.value(schedule.item_key),
+                              self.SCHEDULE_SELECTED, offer, generation, sender)
+        if self.stage == self.SCHEDULE_SELECTED:
+            selected = automations.selected
+            if selected is None or selected.item_key != schedule.item_key:
+                return self._wait(f"{DAYBOOK_DAILY_SCHEDULE!r} selected")
+            return self._step("daybook-daily-reminder-selected", "send_key", "delete",
+                              self.DELETE_ASKED, offer, generation, sender)
+        _require_cell_text_in(offer, DAYBOOK_DAILY_SCHEDULE, bounds, _WHERE)
+        return self._step("daybook-delete-cancelled", "send_key", "f4",
+                          self.CALENDAR, offer, generation, sender)
 
     def _added(self, offer, generation, projection, bounds, entry, sender):
         agenda = self._agenda(projection, bounds)
