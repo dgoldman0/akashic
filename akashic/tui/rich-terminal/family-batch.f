@@ -8,7 +8,7 @@ PROVIDED akashic-tui-rte-family-batch
 REQUIRE region-catalog.f
 REQUIRE stx1-roles.f
 
-560 CONSTANT RTE-FAMILY-ADMISSION-SIZE
+568 CONSTANT RTE-FAMILY-ADMISSION-SIZE
 1 CONSTANT RTE-FAMILY-ADMISSION-ABI
 : _RTE-FA.OWNER ( summary -- a ) ;
 : _RTE-FA.GENERATION ( summary -- a ) 8 + ;
@@ -31,6 +31,8 @@ REQUIRE stx1-roles.f
 : _RTE-FA.STATIC-IMAGES ( summary -- a ) 544 + ;
 \ How many controls are documents, as _RTE-HA.DOCUMENT-CONTROLS.
 : _RTE-FA.DOCUMENT-CONTROLS ( summary -- a ) 552 + ;
+\ How many catalog regions are modal; any needs RTE-F-DIALOGS.
+: _RTE-FA.MODAL-REGIONS ( summary -- a ) 560 + ;
 
 : _RTE-FA.CONTROL-COUNT ( summary -- a ) 120 + ;
 : _RTE-FA.CONTROL-BYTES ( summary -- a ) 128 + ;
@@ -378,8 +380,13 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
         _RTE-FA-INSTRUMENT-REGION? IF
             1 _RTE-FA-SUMMARY _RTE-HA.INSTRUMENT-REGION-COUNT _RTE-FA-ADD! 0= IF 0 UNLOOP EXIT THEN
         THEN
+        _RTE-FA-REGION @ _RTE-IR.FLAGS @ RTE-REGION-MODAL AND IF
+            1 _RTE-FA-SUMMARY _RTE-FA.MODAL-REGIONS _RTE-FA-ADD! 0= IF 0 UNLOOP EXIT THEN
+        THEN
         RTE-INSTRUMENT-REGION-SIZE _RTE-FA-REGION +!
-    LOOP -1 ;
+    LOOP
+    _RTE-FA-SUMMARY _RTE-FA.MODAL-REGIONS @ IF RTE-F-DIALOGS _RTE-FA-FEATURE+ THEN
+    -1 ;
 \ The family admission's copy: its control and glyph families, in batch
 \ order.
 : _RTE-FA-KEEP ( -- )

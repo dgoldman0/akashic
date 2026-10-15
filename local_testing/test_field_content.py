@@ -9,12 +9,15 @@ HEADER = struct.Struct("<IHHQIIiiIIiiIIqqqqII")
 
 
 def _expected(kind, *, value=0, minimum=0, maximum=0, step=0,
-              label=(0, 0, 4, 1), value_slot=(4, 0, 16, 1), choices=(), text=b"", revision=9, flags=0):
+              label=(0, 0, 4, 1), value_slot=(4, 0, 16, 1), choices=(), text=b"", revision=9, flags=0,
+              caret=0, anchor=0, scroll=0, placeholder=b""):
     # Native rows/columns lower to wire x/y. The outer label is separate.
-    body = text if kind == 3 else b"".join(
+    # TEXT has its edit record, then its value and its placeholder.
+    body = (struct.pack("<IIII", caret, anchor, scroll, len(placeholder)) + text + placeholder
+            if kind == 3 else b"".join(
         struct.pack("<qII", number, len(label_text), 0) + label_text
         for number, label_text in choices
-    )
+    ))
     return HEADER.pack(0x31434446, 1, kind, revision, flags, 0,
                        *label, *value_slot,
                        value, minimum, maximum, step, len(choices), len(text)) + body
@@ -58,6 +61,13 @@ S" 界ab" _FM-B UFLD-TEXT _FM-OK _FM-FINISH''',
 0 0 _FM-B UFLD-TEXT _FM-OK _FM-FINISH''',
           _expected(3, label=(1, 2, 4, 2), value_slot=(7, 5, 16, 3),
                     revision=(1 << 63) + 1, flags=1))
+    # A masked value sends its mask characters; the edit state follows them.
+    _pack(r"""_FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 3 9 20 2 3 UFLD-F-MASKED _FM-B UFLD-BEGIN _FM-OK _FM-SLOTS _FM-LABEL
+S" •••" _FM-B UFLD-TEXT _FM-OK 3 1 0 S" Password" _FM-B UFLD-TEXT-EDIT _FM-OK
+_FM-FINISH""",
+          _expected(3, flags=2, text="•••".encode(), caret=3, anchor=1,
+                    placeholder=b"Password"))
 
 
 def test_field_content_atomic_capacity_alias_and_invalid_source_refusals():
@@ -76,13 +86,13 @@ _FM-M _FM-U @ _UFLD-M 1024 UFLDC-PACK _FC-REFUSE _FM-SAME
 _FM-M _FM-U @ _USF-I-DST 1024 UFLDC-PACK _FC-REFUSE _FM-SAME
 _FM-M _FM-U @ 0 1024 UFLDC-PACK _FC-REFUSE
 _FM-M _FM-U @ -8 1024 UFLDC-PACK _FC-REFUSE
-_UFLDC-M 192 _FC-O 1024 UFLDC-PACK _FC-REFUSE _FC-SAME _FM-A
-_UFLDC-M 192 UFLDC-BYTES _FC-REFUSE
+_UFLDC-M 224 _FC-O 1024 UFLDC-PACK _FC-REFUSE _FC-SAME _FM-A
+_UFLDC-M 224 UFLDC-BYTES _FC-REFUSE
 _FM-M 1+ _FM-U @ _FC-O 1024 UFLDC-PACK _FC-REFUSE _FC-SAME _FM-A
 2 _FM-M UFLD-ABI-OFFSET + !
 _FM-M _FM-U @ _FC-O 1024 UFLDC-PACK _FC-REFUSE _FC-SAME _FM-A
 _FM-M _FM-U @ UFLDC-BYTES _FC-REFUSE
-_FM-CHOICES 1 _FM-M 196 + C!
+_FM-CHOICES 1 _FM-M 228 + C!
 _FM-M _FM-U @ _FC-O 1024 UFLDC-PACK _FC-REFUSE _FC-SAME _FM-A
 _FM-DONE
 '''

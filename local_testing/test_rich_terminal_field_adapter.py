@@ -66,7 +66,7 @@ def _field_adapter_program():
     lines[at:at] = [
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
         "_RA-DIR-A @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@ 128 = _RA-ASSERT",
-        "_RA-DIR-A @ RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@ 200 = _RA-ASSERT",
+        "_RA-DIR-A @ RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@ 232 = _RA-ASSERT",
         "_FA-FIRST DUP _FA-PREV ! UFLD-REVISION@ 21 = _RA-ASSERT",
         "_FA-FIRST UFLD-KEY@ 992 = _RA-ASSERT",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
@@ -74,7 +74,7 @@ def _field_adapter_program():
     at = lines.index('S" aggregate beta" _RA-TEXTAREA @ TXTA-SET-TEXT')
     lines[at:at] = [
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
-        "_FA-FIRST DUP _FA-PREV @ <> _RA-ASSERT 200 _FA-PREV @ 200 COMPARE 0= _RA-ASSERT",
+        "_FA-FIRST DUP _FA-PREV @ <> _RA-ASSERT 232 _FA-PREV @ 232 COMPARE 0= _RA-ASSERT",
         "_FA-UPDATE",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
     ]
@@ -98,7 +98,8 @@ def test_field_separate_banks_reuse_revision_and_overlay_fallback():
 def test_field_short_bank_falls_back_all_families_and_retries():
     lines = _field_adapter_program()
     at = lines.index("1 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT")
-    lines = [line.replace("_FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT", "_FA-NATIVE 384 _RA-ADAPTER RUHA-INIT") for line in lines[:at+1]]
+    # Each half holds one model header but not the 232-byte labelled model.
+    lines = [line.replace("_FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT", "_FA-NATIVE 448 _RA-ADAPTER RUHA-INIT") for line in lines[:at+1]]
     lines += [
         "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",

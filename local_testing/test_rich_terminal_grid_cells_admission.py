@@ -333,10 +333,10 @@ def test_grid_gate_does_not_extend_records_or_scan_aggregate_preflight():
     provider = (RICH / "apt1-engine.f").read_text()
     bridge = (RICH / "engine-apt1.f").read_text()
     for source, declarations in (
-        (engine, {"RTE-F-GRID-CELLS": 0x2000, "_RTE-FEATURE-MASK": 0x7FFF,
+        (engine, {"RTE-F-GRID-CELLS": 0x2000, "_RTE-FEATURE-MASK": 0xFFFF,
                   "RTE-LIMITS-SIZE": 176, "RTE-CONTROL-SIZE": 200,
                   "RTE-CONTROL-PLAN-SIZE": 144}),
-        (provider, {"RTAPT-F-GRID-CELLS": 0x2000, "_RTAPT-FEATURE-MASK": 0x7FFF,
+        (provider, {"RTAPT-F-GRID-CELLS": 0x2000, "_RTAPT-FEATURE-MASK": 0xFFFF,
                     "_RTAPT-PT-F-GRID-CELLS": 0x8000, "RTAPT-LIMITS-SIZE": 176,
                     "RTAPT-OWNER-SIZE": 632, "RTAPT-ENGINE-SIZE": 720,
                     "RTAPT-CONFIG-SIZE": 80, "RTAPT-OP-SIZE": 40,

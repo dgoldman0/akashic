@@ -175,7 +175,19 @@ def test_field_hybrid_and_standalone_admission_use_only_certified_aggregates(fie
     for count in (0,2,MASK):
         field.runtime.memory.write64(admission+376,count)
         assert field.call('RTAPT-HYBRID-PREFLIGHT',admission,field.engine)[0] == (3,)
+    field.runtime.memory.write64(admission+376,1)
+    # Only a family batch's catalog charges a modal region to DIALOGS, so a
+    # hybrid candidate's or a standalone plan's region is never modal.
+    field.runtime.memory.write64(admission+112,5)
+    assert field.call('RTAPT-HYBRID-PREFLIGHT',admission,field.engine)[0] == (3,)
     field.runtime.memory.write_bytes(text,source)
+    modal=field.allocate(struct.pack('<18Q',1,1,20,2,1,0,0,20,2,0,0,0,0,0,5,record,200,0))
+    wrapper[3]=modal
+    hybrid=field.allocate(struct.pack('<21Q',*wrapper))
+    before=field.runtime.memory.read_bytes(admission,456)
+    assert field.call('RTE-HYBRID-PREFLIGHT',hybrid,admission,field.facade)[0] == (5,)
+    assert field.call('RTE-CONTROL-PREFLIGHT',modal,field.facade)[0] == (5,)
+    assert field.runtime.memory.read_bytes(admission,456) == before
 
 
 def test_field_malformed_copy_bounds_are_rejected_without_source_walk(field):

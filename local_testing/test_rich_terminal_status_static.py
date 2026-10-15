@@ -280,7 +280,7 @@ def test_image_static_hybrid_counts_images_apart_from_status_text(static):
 
 @pytest.mark.parametrize("mutation", ("bank-short", "outside", "unaligned-record",
                                       "plan-alias", "bank-alias", "admission-alias",
-                                      "scratch-bank", "bad-text", "bad-root"))
+                                      "scratch-bank", "bad-text", "bad-root", "modal"))
 def test_static_hybrid_refuses_bad_graph_before_provider_and_output(static, mutation):
     item, plan, hybrid, admission = static.graph()
     static.variable("SF-CALLS", 0)
@@ -304,6 +304,9 @@ def test_static_hybrid_refuses_bad_graph_before_provider_and_output(static, muta
         static.write(a, b"\n")
     elif mutation == "bad-root":
         static.cell(item + _offset("_RTE-STATIC.ROOT-WIDTH"), 79)
+    elif mutation == "modal":
+        # Only a family batch's catalog charges a modal region to DIALOGS.
+        static.cell(plan + _offset("_RTE-SP.REGION-FLAGS"), 4)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade) == (5,)
     assert static.variable("SF-CALLS") == 0
 

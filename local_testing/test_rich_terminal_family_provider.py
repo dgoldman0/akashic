@@ -30,10 +30,10 @@ class FamilyProvider(ProviderHarness):
         assert self.call("RTAPT-LIMITS@", self.engine)[0][1] == 0
 
     def summary(self, changes=None):
-        values = {0:1,8:1,16:20,24:2,32:1,40:560,456:2,464:2,
+        values = {0:1,8:1,16:20,24:2,32:1,40:568,456:2,464:2,
                   472:1,480:1,488:1,496:4,504:8,512:4,520:1,536:0x201}
         values.update(changes or {})
-        data = bytearray(560)
+        data = bytearray(568)
         for offset,value in values.items():
             struct.pack_into("<Q",data,offset,value & MASK)
         return self.allocate(data)
@@ -58,12 +58,12 @@ def family(request):
 def test_family_pane_catalog_is_admitted_once_without_mutation(family):
     h = family
     summary = h.summary()
-    source = h.runtime.memory.read_bytes(summary,560)
+    source = h.runtime.memory.read_bytes(summary,568)
     before = h.snapshot()
     assert h.call("RTAPT-FAMILY-PREFLIGHT",summary,h.engine)[0] == (0,)
     assert h.snapshot() == before
-    assert h.runtime.memory.read_bytes(summary,560) == source
-    assert h.runtime.memory.read_bytes(h.constant("_RTAPT-FA-WORK"),560) == bytes(560)
+    assert h.runtime.memory.read_bytes(summary,568) == source
+    assert h.runtime.memory.read_bytes(h.constant("_RTAPT-FA-WORK"),568) == bytes(568)
 
 
 @pytest.mark.parametrize("changes",[
@@ -97,6 +97,29 @@ def test_family_summary_cannot_alias_module_query_scratch(family):
     for word in ("_RTAPT-FA-WORK","_RTAPT-FA-SOURCE","_RTAPT-HAF-OWNER"):
         assert h.call("RTAPT-FAMILY-PREFLIGHT",h.constant(word),h.engine)[0] == (3,)
         assert h.snapshot() == before
+
+
+@pytest.mark.parametrize("backend", ("python", "native"))
+def test_family_modal_regions_need_negotiated_dialogs(backend):
+    modal = {560:1,536:0x8201}
+    h = FamilyProvider(backend,extra_features=RetainedFeature.CONTROLS | RetainedFeature.DIALOGS)
+    try:
+        before = h.snapshot()
+        assert h.call("RTAPT-FAMILY-PREFLIGHT",h.summary(modal),h.engine)[0] == (0,)
+        # The summary charges DIALOGS exactly when a catalog region is modal,
+        # and no more regions are modal than the catalog has.
+        for changes in ({560:1},{536:0x8201},{560:3,536:0x8201}):
+            assert h.call("RTAPT-FAMILY-PREFLIGHT",h.summary(changes),h.engine)[0] == (3,)
+        assert h.snapshot() == before
+    finally:
+        h.close()
+    h = FamilyProvider(backend)
+    try:
+        before = h.snapshot()
+        assert h.call("RTAPT-FAMILY-PREFLIGHT",h.summary(modal),h.engine)[0] == (4,)
+        assert h.snapshot() == before
+    finally:
+        h.close()
 
 
 @pytest.mark.parametrize("backend", ("python", "native"))
@@ -164,18 +187,18 @@ def test_family_series_only_initial_admission_has_no_phantom_region(backend,samp
     from test_rich_terminal_series_engine import SeriesProvider
     h = SeriesProvider(backend,open_owner=False)
     try:
-        values = {0:1,8:1,16:20,24:2,32:1,40:560,
+        values = {0:1,8:1,16:20,24:2,32:1,40:568,
                   384:1,392:1,400:9,408:9,416:40 if sampled else 0,
                   424:3 if sampled else 0,432:2 if sampled else 0,
                   440:16 if sampled else 0,536:0x19}
-        payload = bytearray(560)
+        payload = bytearray(568)
         for offset,value in values.items():
             struct.pack_into("<Q",payload,offset,value)
         summary = h.allocate(payload)
         before = h.snapshot()
         assert h.call("RTAPT-FAMILY-PREFLIGHT",summary,h.engine)[0] == (0,)
         assert h.snapshot() == before
-        assert h.runtime.memory.read_bytes(summary,560) == payload
+        assert h.runtime.memory.read_bytes(summary,568) == payload
         h.runtime.memory.write64(summary+456,1)
         h.runtime.memory.write64(summary+464,1)
         assert h.call("RTAPT-FAMILY-PREFLIGHT",summary,h.engine)[0] == (3,)

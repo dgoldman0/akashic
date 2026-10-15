@@ -601,7 +601,8 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-PANES") == 0x200
     assert _constant(source, "RTE-F-TASKBARS") == 0x800
     assert _constant(source, "RTE-F-CONTROL-DOCUMENTS") == 0x4000
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x7FFF
+    assert _constant(source, "RTE-F-DIALOGS") == 0x8000
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0xFFFF
     assert _constant(source, "RTE-LIMITS-SIZE") == 176
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
@@ -849,6 +850,10 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     assert _constant(source, "RTAPT-CONTROL-DOCUMENT") == 14
     assert _constant(source, "RTAPT-F-CONTROL-DOCUMENTS") == 0x4000
     assert _constant(source, "_RTAPT-PT-F-CONTROL-DOCUMENTS") == 0x10000
+    # RET_DIALOGS (bit 17) and the modal region flag it admits.
+    assert _constant(source, "RTAPT-F-DIALOGS") == 0x8000
+    assert _constant(source, "_RTAPT-PT-F-DIALOGS") == 0x20000
+    assert _constant(source, "_RTAPT-REGION-F-MODAL") == 4
     assert "RTAPT-CONTROL-DOCUMENT" in feature_kind
     assert "RTAPT-CONTROL-DOCUMENT" in content_root
     assert "RTAPT-CONTROL-DOCUMENT =" in limits

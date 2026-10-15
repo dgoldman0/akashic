@@ -28,10 +28,13 @@ def model(*, kind=1, revision=17, label=b"Rate", text=b"value", state=3,
         label_slot = (0, 0, 0, 0)
     else:
         label_slot = (0, 1, 1, 4)
-    cells = (192 + len(body), 1, 23, kind, revision, 20, 3, state, flags,
+    # The 224-byte header ends with a TEXT field's caret, anchor, scroll and
+    # placeholder bytes, all zero here.
+    cells = (224 + len(body), 1, 23, kind, revision, 20, 3, state, flags,
              *label_slot, 1, 7, 1, 8, value, minimum, maximum, step,
-             len(label), len(text) if kind == 3 else 0, len(choices) if kind == 2 else 0)
-    return struct.pack("<24Q", *(n & MASK64 for n in cells)) + body
+             len(label), len(text) if kind == 3 else 0, len(choices) if kind == 2 else 0,
+             0, 0, 0, 0)
+    return struct.pack("<28Q", *(n & MASK64 for n in cells)) + body
 
 
 class FieldHarness(StatusHarness):
@@ -55,10 +58,10 @@ class FieldHarness(StatusHarness):
         for name, n in {"ARENA-A": self.arena, "ARENA-U": size, "MAX-DOCUMENTS": 1,
                         "MAX-RECORDS": 1, "MAX-TEXT": 64, "MAX-COLLECTION-NATIVE": 256,
                         "MAX-COLLECTION-DESCRIPTORS": 8, "MAX-COLLECTIONS": 4,
-                        "MAX-CONTROLS": 5 + field_native//192, "MAX-DGRAPH-NATIVE": 256,
+                        "MAX-CONTROLS": 5 + field_native//224, "MAX-DGRAPH-NATIVE": 256,
                         "MAX-DGRAPH-DESCRIPTORS": 1, "MAX-INSTRUMENT-REGIONS": 1,
                         "MAX-INSTRUMENTS": 2, "MAX-STATUS-NATIVE": 512, "MAX-STATICS": 7,
-                        "MAX-FIELD-NATIVE": field_native, "MAX-FIELDS": field_native//192,
+                        "MAX-FIELD-NATIVE": field_native, "MAX-FIELDS": field_native//224,
                         "MAX-COLS": 32, "MAX-ROWS": 8, "COLS": 32, "ROWS": 8,
                         "OWNER": 1, "OWNER-GEN": 2, "REGION": 7, "FIRST-OBJECT": 100,
                         "SOURCE-GEN": 9, "SOURCE-CONTENT-EPOCH": 29, "SOURCE-DRAW": 12,
@@ -149,7 +152,10 @@ def test_real_field_retains_authored_slots_revision_and_choice_accounting(h,kind
     h.guards()
 
 
-@pytest.mark.parametrize("kind,intent,expected",((1,1,True),(1,11,True),(2,11,True),(3,1,True),(3,11,False)))
+# INTEGER and CHOICE take ACTIVATE (1) and ADJUST (11); a TEXT field takes
+# PLACE (2) and EXTEND (3) at positions in its value.
+@pytest.mark.parametrize("kind,intent,expected",((1,1,True),(1,11,True),(2,11,True),(1,2,False),
+                                                  (3,1,False),(3,11,False),(3,2,True),(3,3,True)))
 def test_input_uses_value_slot_and_independent_acknowledged_revision(h,kind,intent,expected):
     h.setup(kind=kind,revision=(1<<63)+9)
     assert h.build() == (0,)
@@ -337,7 +343,7 @@ def test_unchanged_field_clone_rebases_owned_spans_and_preserves_revision(h):
         assert h.runtime.memory.read_bytes(before,size)==h.runtime.memory.read_bytes(after,size)
     entry=pending+h.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
     assert h.runtime.memory.read64(entry+32)==17
-    assert h.runtime.memory.read64(entry+40)==1<<1
+    assert h.runtime.memory.read64(entry+40)==(1<<2)|(1<<3)
     h.guards()
 
 

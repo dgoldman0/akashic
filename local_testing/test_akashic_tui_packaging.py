@@ -2739,10 +2739,12 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         == DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
         == rich.guest_collection_native_bytes
     )
-    assert DESKTOP_APT1_FIELD_HEADER_BYTES == 192
+    assert DESKTOP_APT1_FIELD_HEADER_BYTES == 224
     assert DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES == 24
     assert DESKTOP_APT1_FIELD_NATIVE_BYTES == rich.guest_field_native_bytes == 393_216
-    assert DESKTOP_APT1_MAX_FIELDS == 2_048
+    assert DESKTOP_APT1_MAX_FIELDS == (
+        DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_HEADER_BYTES
+    ) == 1_755
     assert DESKTOP_APT1_FIELD_CHOICES == 16_384
     assert DESKTOP_APT1_STATUS_FIELD_HEADER_BYTES == 72
     assert DESKTOP_APT1_STATUS_FIELD_NATIVE_BYTES == (
@@ -2906,9 +2908,9 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_MAX_REGIONS == 7_169
     assert DESKTOP_APT1_COLLECTION_CONTROLS == 8_191
     assert DESKTOP_APT1_CONTENT_ITEMS == 22_528
-    assert DESKTOP_APT1_MAX_CONTROLS == 18_431
-    assert DESKTOP_APT1_MAX_OBJECTS == 133_588
-    assert DESKTOP_APT1_MAX_OPERATIONS == 245_660
+    assert DESKTOP_APT1_MAX_CONTROLS == 18_138
+    assert DESKTOP_APT1_MAX_OBJECTS == 133_295
+    assert DESKTOP_APT1_MAX_OPERATIONS == 245_367
     assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
     assert DESKTOP_APT1_INSTRUMENT_FORMATTED_BYTES == 11_468_800
     assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 13_361_664
@@ -2921,8 +2923,8 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_GUEST_TX_BYTES == 917_648
     assert DESKTOP_APT1_INSTRUMENT_WIRE_BYTES == 2_007_040
     assert DESKTOP_APT1_REGION_WIRE_BYTES == 745_576
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 28_312_040
-    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 28_962_496
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 28_276_880
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 28_927_336
     # The Desktop's terminal is this shell-free base plus the shell's quotas,
     # which test_rich_shell_composition.py checks one by one.
     assert DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy.to_dict() == {
@@ -2973,7 +2975,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert retained.features & (RetainedFeature.PANES | RetainedFeature.TASKBARS)
     coupled = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + DESKTOP_APT1_SHELL_WIRE_BYTES
     assert retained.max_retained_transaction_bytes == retained.base_max_transaction_bytes
-    assert retained.max_retained_transaction_bytes == coupled == 29_040_072
+    assert retained.max_retained_transaction_bytes == coupled == 29_004_912
 
     arguments = _rich_terminal_server_arguments(profile)
     assert arguments[2] == "--retained-terminal-policy"

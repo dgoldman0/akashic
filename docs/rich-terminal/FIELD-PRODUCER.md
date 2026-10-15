@@ -12,7 +12,7 @@ fields from painted text.
 `max-pictures`. The bound is zero or an aligned unsigned 32-bit byte count;
 zero selects no FIELD bank.
 
-For FIELD native capacity `N`, the constructor reserves `floor(N / 192)`
+For FIELD native capacity `N`, the constructor reserves `floor(N / 224)`
 source descriptors and control roots. Each descriptor occupies 128 bytes.
 The independent native source bank occupies `N` bytes. The shared control
 text bank grows by `N`: native headers and padded choice records are larger
@@ -67,8 +67,8 @@ content-delta path.
 
 Return coordinates identify the first cell of the declared value rectangle,
 which may be offset within the root. Disabled and read-only fields produce
-no input target. Editable TEXT accepts ACTIVATE; INTEGER and CHOICE also
-accept ADJUST. `RTHP-CONTROL-TARGET@` returns the revision from that field's
+no input target. A writable TEXT field accepts PLACE and EXTEND at offsets
+in its value; INTEGER and CHOICE accept ACTIVATE and ADJUST. `RTHP-CONTROL-TARGET@` returns the revision from that field's
 acknowledged FDC1 value, not the bank-wide source epoch. Owner, generation,
 draw, identity, and intent checks precede the return. The ordinary input
 bridge and widget additionally check the current application revision before

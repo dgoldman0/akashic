@@ -1334,7 +1334,7 @@ def _reuse_definitions() -> dict[str, str]:
         "_RUHA-O.DGRAPH": "320 CONSTANT _RUHA-O.DGRAPH",
         "_RUHA-O.SFIELD": "368 CONSTANT _RUHA-O.SFIELD",
         "_RUHA-O.FIELD": "416 CONSTANT _RUHA-O.FIELD",
-        "UFLD-HEADER-SIZE": "192 CONSTANT UFLD-HEADER-SIZE",
+        "UFLD-HEADER-SIZE": "224 CONSTANT UFLD-HEADER-SIZE",
         "UFLSN-DESCRIPTOR-SIZE": "128 CONSTANT UFLSN-DESCRIPTOR-SIZE",
         "USF-HEADER-SIZE": "72 CONSTANT USF-HEADER-SIZE",
         "USFSN-DESCRIPTOR-SIZE": "128 CONSTANT USFSN-DESCRIPTOR-SIZE",
@@ -1612,7 +1612,7 @@ def test_last_field_native_capacity_failure_preserves_every_prior_bank(reuse):
     assert reuse.runtime.memory.read_bytes(record, 128) == record_before
 
 
-@pytest.mark.parametrize("family,native_bytes", (("STATUS", 144), ("FIELD", 384)))
+@pytest.mark.parametrize("family,native_bytes", (("STATUS", 144), ("FIELD", 448)))
 def test_optional_field_banks_require_canonical_absence_or_complete_banks(reuse, family, native_bytes):
     word = f"_RUHA-{family}-STORAGE?"
     assert reuse.results(word, 0, 0, 0, 0) == (MASK64,)

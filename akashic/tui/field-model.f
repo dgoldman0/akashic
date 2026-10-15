@@ -1,8 +1,11 @@
 \ =====================================================================
 \ field-model.f -- Caller-owned canonical typed FIELD values
 \ =====================================================================
-\ ABI 1 is pointer-free: header192, label/pad8, then text/pad8 or choices.
-\ This is ordinary application data, independent of terminal wire formats.
+\ ABI 1 is pointer-free: header224, label/pad8, then TEXT's value/pad8 and
+\ placeholder/pad8, or CHOICE's choices.  A TEXT model also carries its
+\ caret, selection anchor and scroll; MASKED says its value stands for a
+\ secret, one mask character per character.  This is ordinary application
+\ data, independent of terminal wire formats.
 PROVIDED akashic-tui-field-model
 REQUIRE status-field-model.f
 
@@ -18,7 +21,8 @@ REQUIRE status-field-model.f
 2 CONSTANT UFLD-STATE-ENABLED
 4 CONSTANT UFLD-STATE-SELECTED
 1 CONSTANT UFLD-F-READ-ONLY
-192 CONSTANT UFLD-HEADER-SIZE
+2 CONSTANT UFLD-F-MASKED
+224 CONSTANT UFLD-HEADER-SIZE
 24 CONSTANT UFLD-CHOICE-HEADER-SIZE
 40 CONSTANT UFLD-BUILDER-SIZE
 0 CONSTANT UFLD-BYTES-OFFSET
@@ -45,6 +49,13 @@ REQUIRE status-field-model.f
 168 CONSTANT UFLD-LABEL-BYTES-OFFSET
 176 CONSTANT UFLD-TEXT-BYTES-OFFSET
 184 CONSTANT UFLD-CHOICE-COUNT-OFFSET
+\ TEXT only: Unicode-scalar caret and anchor (equal when nothing is
+\ selected), scroll in cells from the value's start edge, and the
+\ placeholder's bytes, which follow the value.
+192 CONSTANT UFLD-CARET-OFFSET
+200 CONSTANT UFLD-ANCHOR-OFFSET
+208 CONSTANT UFLD-SCROLL-OFFSET
+216 CONSTANT UFLD-PLACEHOLDER-BYTES-OFFSET
 
 CREATE _UFLD-OWNED-START
 VARIABLE _UFLD-OWNED-LIMIT
@@ -74,12 +85,18 @@ VARIABLE _UFLD-OWNED-LIMIT
 : UFLD-LABEL-BYTES@ ( model -- value ) UFLD-LABEL-BYTES-OFFSET + @ ;
 : UFLD-TEXT-BYTES@ ( model -- value ) UFLD-TEXT-BYTES-OFFSET + @ ;
 : UFLD-CHOICE-COUNT@ ( model -- value ) UFLD-CHOICE-COUNT-OFFSET + @ ;
+: UFLD-CARET@ ( model -- value ) UFLD-CARET-OFFSET + @ ;
+: UFLD-ANCHOR@ ( model -- value ) UFLD-ANCHOR-OFFSET + @ ;
+: UFLD-SCROLL@ ( model -- value ) UFLD-SCROLL-OFFSET + @ ;
+: UFLD-PLACEHOLDER-BYTES@ ( model -- value ) UFLD-PLACEHOLDER-BYTES-OFFSET + @ ;
 
 : _UFLD-ALIGN8 ( u -- aligned ) 7 + -8 AND ;
 : UFLD-LABEL@ ( model -- a u ) DUP UFLD-HEADER-SIZE + SWAP UFLD-LABEL-BYTES@ ;
 : UFLD-CHOICE-FIRST ( model -- record )
     DUP UFLD-LABEL-BYTES@ _UFLD-ALIGN8 UFLD-HEADER-SIZE + + ;
 : UFLD-TEXT@ ( model -- a u ) DUP UFLD-CHOICE-FIRST SWAP UFLD-TEXT-BYTES@ ;
+: UFLD-PLACEHOLDER@ ( model -- a u )
+    DUP UFLD-TEXT@ _UFLD-ALIGN8 + SWAP UFLD-PLACEHOLDER-BYTES@ ;
 : UFLD-CHOICE-NEXT ( record -- next ) DUP @ + ;
 : UFLD-CHOICE-VALUE@ ( record -- value ) 8 + @ ;
 : UFLD-CHOICE-LABEL@ ( record -- a u ) DUP UFLD-CHOICE-HEADER-SIZE + SWAP 16 + @ ;
@@ -90,7 +107,8 @@ VARIABLE _UFLD-OWNED-LIMIT
     0 ?DO DUP UFLD-CHOICE-VALUE@ 2 PICK = IF NIP UNLOOP EXIT THEN
         UFLD-CHOICE-NEXT LOOP 2DROP 0 ;
 : UFLD-UTF8-BYTES@ ( validated-model -- bytes )
-    DUP UFLD-LABEL-BYTES@ OVER UFLD-TEXT-BYTES@ + SWAP
+    DUP UFLD-LABEL-BYTES@ OVER UFLD-TEXT-BYTES@ +
+    OVER UFLD-PLACEHOLDER-BYTES@ + SWAP
     DUP UFLD-CHOICE-COUNT@ SWAP UFLD-CHOICE-FIRST SWAP
     0 ?DO DUP 16 + @ ROT + SWAP UFLD-CHOICE-NEXT LOOP DROP ;
 
@@ -125,10 +143,18 @@ VARIABLE _UFLD-V-VR VARIABLE _UFLD-V-VC VARIABLE _UFLD-V-VH VARIABLE _UFLD-V-VW
     _UFLD-V-M @ UFLD-HEIGHT@ _UFLD-POS32? 0= OR IF 0 EXIT THEN
     _UFLD-V-M @ UFLD-STATE@ DUP 7 INVERT AND IF DROP 0 EXIT THEN
     DUP UFLD-STATE-SELECTED AND IF 3 AND 3 <> IF 0 EXIT THEN ELSE DROP THEN
-    _UFLD-V-M @ UFLD-FLAGS@ UFLD-F-READ-ONLY INVERT AND IF 0 EXIT THEN
+    _UFLD-V-M @ UFLD-FLAGS@ UFLD-F-READ-ONLY UFLD-F-MASKED OR INVERT AND IF
+        0 EXIT
+    THEN
+    _UFLD-V-M @ UFLD-FLAGS@ UFLD-F-MASKED AND
+    _UFLD-V-M @ UFLD-KIND@ UFLD-K-TEXT <> AND IF 0 EXIT THEN
     _UFLD-V-M @ UFLD-LABEL-BYTES@ _UFLD-U32? 0=
     _UFLD-V-M @ UFLD-TEXT-BYTES@ _UFLD-U32? 0= OR
-    _UFLD-V-M @ UFLD-CHOICE-COUNT@ _UFLD-U32? 0= OR 0= ;
+    _UFLD-V-M @ UFLD-CHOICE-COUNT@ _UFLD-U32? 0= OR
+    _UFLD-V-M @ UFLD-CARET@ _UFLD-U32? 0= OR
+    _UFLD-V-M @ UFLD-ANCHOR@ _UFLD-U32? 0= OR
+    _UFLD-V-M @ UFLD-SCROLL@ _UFLD-U32? 0= OR
+    _UFLD-V-M @ UFLD-PLACEHOLDER-BYTES@ _UFLD-U32? 0= OR 0= ;
 
 : _UFLD-RECTS? ( -- flag )
     _UFLD-V-M @ UFLD-LABEL-ROW@ DUP _UFLD-V-LR ! _UFLD-COORD? 0= IF 0 EXIT THEN
@@ -151,6 +177,14 @@ VARIABLE _UFLD-V-VR VARIABLE _UFLD-V-VC VARIABLE _UFLD-V-VH VARIABLE _UFLD-V-VW
     _UFLD-V-VR @ _UFLD-V-LR @ _UFLD-V-LH @ + U< AND
     _UFLD-V-LC @ _UFLD-V-VC @ _UFLD-V-VW @ + U< AND
     _UFLD-V-VC @ _UFLD-V-LC @ _UFLD-V-LW @ + U< AND 0= ;
+
+\ The Unicode scalars of validated UTF-8: its bytes that start a scalar.
+: _UFLD-SCALARS ( a u -- n )
+    0 ROT ROT OVER + SWAP ?DO I C@ 0xC0 AND 0x80 <> - LOOP ;
+
+\ A model of another kind carries no edit state.
+: _UFLD-NO-EDIT? ( -- flag )
+    _UFLD-V-M @ UFLD-CARET-OFFSET + 32 _UFLD-ZERO? ;
 
 \ Validate one padded string, advancing the bounded byte offset.
 : _UFLD-V-STRING? ( bytes -- flag )
@@ -191,12 +225,14 @@ VARIABLE _UFLD-V-VR VARIABLE _UFLD-V-VC VARIABLE _UFLD-V-VH VARIABLE _UFLD-V-VW
 : _UFLD-CONTENT? ( -- flag )
     _UFLD-V-M @ UFLD-KIND@ CASE
         UFLD-K-INTEGER OF
+            _UFLD-NO-EDIT? 0= IF 0 EXIT THEN
             _UFLD-V-M @ UFLD-TEXT-BYTES@ _UFLD-V-M @ UFLD-CHOICE-COUNT@ OR IF 0 EXIT THEN
             _UFLD-V-M @ UFLD-STEP@ 0> 0= IF 0 EXIT THEN
             _UFLD-V-M @ UFLD-MINIMUM@ _UFLD-V-M @ UFLD-VALUE@ >
             _UFLD-V-M @ UFLD-VALUE@ _UFLD-V-M @ UFLD-MAXIMUM@ > OR 0=
         ENDOF
         UFLD-K-CHOICE OF
+            _UFLD-NO-EDIT? 0= IF 0 EXIT THEN
             _UFLD-V-M @ UFLD-MINIMUM@ _UFLD-V-M @ UFLD-MAXIMUM@ OR
             _UFLD-V-M @ UFLD-STEP@ OR _UFLD-V-M @ UFLD-TEXT-BYTES@ OR IF 0 EXIT THEN
             _UFLD-CHOICES?
@@ -205,7 +241,13 @@ VARIABLE _UFLD-V-VR VARIABLE _UFLD-V-VC VARIABLE _UFLD-V-VH VARIABLE _UFLD-V-VW
             _UFLD-V-M @ UFLD-VALUE@ _UFLD-V-M @ UFLD-MINIMUM@ OR
             _UFLD-V-M @ UFLD-MAXIMUM@ OR _UFLD-V-M @ UFLD-STEP@ OR
             _UFLD-V-M @ UFLD-CHOICE-COUNT@ OR IF 0 EXIT THEN
-            _UFLD-V-M @ UFLD-TEXT-BYTES@ _UFLD-V-STRING?
+            _UFLD-V-M @ UFLD-TEXT-BYTES@ _UFLD-V-STRING? 0= IF 0 EXIT THEN
+            _UFLD-V-M @ UFLD-PLACEHOLDER-BYTES@ _UFLD-V-STRING? 0= IF 0 EXIT THEN
+            \ The scroll's bound, the value's width in cells, is the
+            \ terminal's text rule; the widget that scrolls keeps to it.
+            _UFLD-V-M @ UFLD-TEXT@ _UFLD-SCALARS
+            DUP _UFLD-V-M @ UFLD-CARET@ U<
+            SWAP _UFLD-V-M @ UFLD-ANCHOR@ U< OR 0=
         ENDOF
         0 SWAP
     ENDCASE ;
@@ -220,7 +262,8 @@ VARIABLE _UFLD-V-VR VARIABLE _UFLD-V-VC VARIABLE _UFLD-V-VH VARIABLE _UFLD-V-VW
     _UFLD-BASE? 0= IF UFLD-S-INVALID EXIT THEN
     UFLD-HEADER-SIZE _UFLD-V-O !
     _UFLD-V-PHASE @ 1 = IF
-        _UFLD-V-M @ UFLD-HEADER-SIZE 56 - + 56 _UFLD-ZERO? 0= IF UFLD-S-INVALID EXIT THEN
+        _UFLD-V-M @ UFLD-VALUE-OFFSET +
+        UFLD-HEADER-SIZE UFLD-VALUE-OFFSET - _UFLD-ZERO? 0= IF UFLD-S-INVALID EXIT THEN
         _UFLD-V-U @ UFLD-HEADER-SIZE = IF UFLD-S-OK ELSE UFLD-S-INVALID THEN EXIT
     THEN
     _UFLD-RECTS? 0= IF UFLD-S-INVALID EXIT THEN
@@ -228,6 +271,7 @@ VARIABLE _UFLD-V-VR VARIABLE _UFLD-V-VC VARIABLE _UFLD-V-VH VARIABLE _UFLD-V-VW
     _UFLD-V-M @ UFLD-LABEL-BYTES@ _UFLD-V-STRING? 0= IF UFLD-S-INVALID EXIT THEN
     _UFLD-V-PHASE @ 2 = IF
         _UFLD-V-M @ UFLD-VALUE-OFFSET + 32 _UFLD-ZERO? 0= IF UFLD-S-INVALID EXIT THEN
+        _UFLD-NO-EDIT? 0= IF UFLD-S-INVALID EXIT THEN
         _UFLD-V-M @ UFLD-TEXT-BYTES@ _UFLD-V-M @ UFLD-CHOICE-COUNT@ OR IF UFLD-S-INVALID EXIT THEN
     ELSE
         _UFLD-CONTENT? 0= IF UFLD-S-INVALID EXIT THEN
@@ -282,7 +326,10 @@ CREATE _UFLD-SLOT-TEMP UFLD-HEADER-SIZE ALLOT
     _UFLD-KIND @ DUP 1 < SWAP 3 > OR IF UFLD-S-UNSUPPORTED EXIT THEN
     _UFLD-KEY @ 0= _UFLD-REV @ 0= OR IF UFLD-S-INVALID EXIT THEN
     _UFLD-W @ _UFLD-POS32? 0= _UFLD-H @ _UFLD-POS32? 0= OR IF UFLD-S-INVALID EXIT THEN
-    _UFLD-STATE @ 7 INVERT AND _UFLD-FLAGS @ 1 INVERT AND OR IF UFLD-S-INVALID EXIT THEN
+    _UFLD-STATE @ 7 INVERT AND _UFLD-FLAGS @ 3 INVERT AND OR IF UFLD-S-INVALID EXIT THEN
+    _UFLD-FLAGS @ UFLD-F-MASKED AND _UFLD-KIND @ UFLD-K-TEXT <> AND IF
+        UFLD-S-INVALID EXIT
+    THEN
     _UFLD-STATE @ 4 AND IF _UFLD-STATE @ 3 AND 3 <> IF UFLD-S-INVALID EXIT THEN THEN
     _UFLD-CAP @ UFLD-HEADER-SIZE U< IF UFLD-S-CAPACITY EXIT THEN
     _UFLD-M @ UFLD-HEADER-SIZE 0 FILL UFLD-HEADER-SIZE _UFLD-USED!
@@ -356,6 +403,78 @@ CREATE _UFLD-SLOT-TEMP UFLD-HEADER-SIZE ALLOT
     _UFLD-APPEND-TEXT _UFLD-U @ _UFLD-M @ UFLD-TEXT-BYTES-OFFSET + !
     3 _UFLD-PHASE! UFLD-S-OK ;
 
+\ UFLD-TEXT-FILL ( codepoint count builder -- status )
+\   A TEXT value of COUNT copies of one character, as a masked field sends
+\   one mask character for each character of its secret.
+VARIABLE _UFLD-F-CP VARIABLE _UFLD-F-N VARIABLE _UFLD-F-BYTES
+: _UFLD-CP-BYTES ( cp -- bytes|0 )
+    DUP 0x80 U< IF DROP 1 EXIT THEN
+    DUP 0x800 U< IF DROP 2 EXIT THEN
+    DUP 0xD800 0xE000 WITHIN IF DROP 0 EXIT THEN
+    DUP 0x10000 U< IF DROP 3 EXIT THEN
+    0x110000 U< IF 4 ELSE 0 THEN ;
+\ Encode CP's UTF-8 at A, the bytes _UFLD-CP-BYTES gives.
+: _UFLD-CP! ( cp a -- )
+    OVER 0x80 U< IF C! EXIT THEN
+    OVER 0x800 U< IF
+        OVER 6 RSHIFT 0xC0 OR OVER C!
+        SWAP 0x3F AND 0x80 OR SWAP 1+ C! EXIT
+    THEN
+    OVER 0x10000 U< IF
+        OVER 12 RSHIFT 0xE0 OR OVER C!
+        OVER 6 RSHIFT 0x3F AND 0x80 OR OVER 1+ C!
+        SWAP 0x3F AND 0x80 OR SWAP 2 + C! EXIT
+    THEN
+    OVER 18 RSHIFT 0xF0 OR OVER C!
+    OVER 12 RSHIFT 0x3F AND 0x80 OR OVER 1+ C!
+    OVER 6 RSHIFT 0x3F AND 0x80 OR OVER 2 + C!
+    SWAP 0x3F AND 0x80 OR SWAP 3 + C! ;
+: UFLD-TEXT-FILL ( codepoint count builder -- status )
+    DUP 2 _UFLD-PHASE? 0= IF 2DROP DROP UFLD-S-INVALID EXIT THEN
+    DUP @ UFLD-KIND@ UFLD-K-TEXT <> IF 2DROP DROP UFLD-S-INVALID EXIT THEN
+    _UFLD-B-LOAD _UFLD-F-N ! _UFLD-F-CP !
+    _UFLD-F-CP @ _UFLD-CP-BYTES DUP 0= IF DROP UFLD-S-INVALID EXIT THEN
+        _UFLD-F-BYTES !
+    _UFLD-F-N @ _UFLD-U32? 0= IF UFLD-S-INVALID EXIT THEN
+    _UFLD-F-N @ _UFLD-F-BYTES @ * DUP _UFLD-U32? 0= IF DROP UFLD-S-INVALID EXIT THEN
+    _UFLD-U !
+    _UFLD-TEXT-FITS? 0= IF UFLD-S-CAPACITY EXIT THEN
+    _UFLD-M @ _UFLD-USED @ + _UFLD-U @ _UFLD-ALIGN8 0 FILL
+    _UFLD-F-N @ 0 ?DO
+        _UFLD-F-CP @ _UFLD-M @ _UFLD-USED @ + I _UFLD-F-BYTES @ * + _UFLD-CP!
+    LOOP
+    \ The character must be clean single-line text, as any value is.
+    _UFLD-M @ _UFLD-USED @ + _UFLD-U @ USF-TEXT? 0= IF
+        _UFLD-M @ _UFLD-USED @ + _UFLD-U @ _UFLD-ALIGN8 0 FILL UFLD-S-INVALID EXIT
+    THEN
+    _UFLD-NEED @ _UFLD-USED! _UFLD-U @ _UFLD-M @ UFLD-TEXT-BYTES-OFFSET + !
+    3 _UFLD-PHASE! UFLD-S-OK ;
+
+\ UFLD-TEXT-EDIT ( caret anchor scroll placeholder-a placeholder-u builder
+\                  -- status )
+\   Give a TEXT model its edit state after its value: the caret and anchor
+\   as Unicode-scalar offsets into the value, the scroll in cells, and the
+\   placeholder shown while the value is empty.  Once per model.
+VARIABLE _UFLD-E-CARET VARIABLE _UFLD-E-ANCHOR VARIABLE _UFLD-E-SCROLL
+: UFLD-TEXT-EDIT ( caret anchor scroll placeholder-a placeholder-u builder -- status )
+    2 PICK 2 PICK 2 PICK _UFLD-TEXT-INPUT? 0= IF 2DROP 2DROP 2DROP UFLD-S-INVALID EXIT THEN
+    DUP 24 + @ 3 <> OVER @ UFLD-KIND@ UFLD-K-TEXT <> OR IF
+        2DROP 2DROP 2DROP UFLD-S-INVALID EXIT
+    THEN
+    DUP @ UFLD-CARET-OFFSET + 32 _UFLD-ZERO? 0= IF 2DROP 2DROP 2DROP UFLD-S-INVALID EXIT THEN
+    _UFLD-B-LOAD _UFLD-U ! _UFLD-A !
+    _UFLD-E-SCROLL ! _UFLD-E-ANCHOR ! _UFLD-E-CARET !
+    _UFLD-E-CARET @ _UFLD-U32? 0= _UFLD-E-ANCHOR @ _UFLD-U32? 0= OR
+    _UFLD-E-SCROLL @ _UFLD-U32? 0= OR IF UFLD-S-INVALID EXIT THEN
+    _UFLD-M @ UFLD-TEXT@ _UFLD-SCALARS
+    DUP _UFLD-E-CARET @ U< SWAP _UFLD-E-ANCHOR @ U< OR IF UFLD-S-INVALID EXIT THEN
+    _UFLD-TEXT-FITS? 0= IF UFLD-S-CAPACITY EXIT THEN
+    _UFLD-APPEND-TEXT
+    _UFLD-E-CARET @ _UFLD-M @ UFLD-CARET-OFFSET + !
+    _UFLD-E-ANCHOR @ _UFLD-M @ UFLD-ANCHOR-OFFSET + !
+    _UFLD-E-SCROLL @ _UFLD-M @ UFLD-SCROLL-OFFSET + !
+    _UFLD-U @ _UFLD-M @ UFLD-PLACEHOLDER-BYTES-OFFSET + ! UFLD-S-OK ;
+
 : UFLD-CHOICE-VALUE ( value builder -- status )
     DUP 2 _UFLD-PHASE? 0= IF 2DROP UFLD-S-INVALID EXIT THEN
     DUP @ UFLD-KIND@ UFLD-K-CHOICE <> IF 2DROP UFLD-S-INVALID EXIT THEN
@@ -427,6 +546,8 @@ GUARD _ufld-guard
 ' UFLD-LABEL CONSTANT _ufld-label-xt
 ' UFLD-INTEGER CONSTANT _ufld-integer-xt
 ' UFLD-TEXT CONSTANT _ufld-text-xt
+' UFLD-TEXT-EDIT CONSTANT _ufld-text-edit-xt
+' UFLD-TEXT-FILL CONSTANT _ufld-text-fill-xt
 ' UFLD-CHOICE-VALUE CONSTANT _ufld-choice-value-xt
 ' UFLD-CHOICE CONSTANT _ufld-choice-xt
 ' UFLD-FINISH CONSTANT _ufld-finish-xt
@@ -439,6 +560,8 @@ GUARD _ufld-guard
 : UFLD-LABEL _ufld-label-xt _ufld-guard WITH-GUARD ;
 : UFLD-INTEGER _ufld-integer-xt _ufld-guard WITH-GUARD ;
 : UFLD-TEXT _ufld-text-xt _ufld-guard WITH-GUARD ;
+: UFLD-TEXT-EDIT _ufld-text-edit-xt _ufld-guard WITH-GUARD ;
+: UFLD-TEXT-FILL _ufld-text-fill-xt _ufld-guard WITH-GUARD ;
 : UFLD-CHOICE-VALUE _ufld-choice-value-xt _ufld-guard WITH-GUARD ;
 : UFLD-CHOICE _ufld-choice-xt _ufld-guard WITH-GUARD ;
 : UFLD-FINISH _ufld-finish-xt _ufld-guard WITH-GUARD ;

@@ -165,13 +165,14 @@ to at most three bytes. All text belongs to the independent native USF bank.
 `RUHA-INIT` then takes UFLSN descriptor address/bytes and native address/bytes
 for FIELDS, following the STATUS arguments and before the adapter. The
 all-zero quartet is canonical absence; enabled descriptor storage is a positive multiple of 256,
-native storage a positive multiple of 16, with each half at least 192 bytes.
+native storage a positive multiple of 16, with each half at least 224 bytes.
 The shared validation ledger must hold eight bytes per FIELD descriptor, or
 more if another family's existing bound is larger. A native FIELD uses
-`192 + align8(label-bytes)` plus `align8(text-bytes)` for TEXT, or
+`224 + align8(label-bytes)` plus `align8(text-bytes) + align8(placeholder-bytes)`
+for TEXT, or
 `sum(24 + align8(choice-label-bytes))` for CHOICE; INTEGER adds nothing.
-Its descriptor UTF8 total includes the outer label, TEXT value and every choice
-label. Formatted INTEGER digits consume no UTF8 quota. Root and choice object
+Its descriptor UTF8 total includes the outer label, TEXT value and placeholder,
+and every choice label. Formatted INTEGER digits consume no UTF8 quota. Root and choice object
 ceilings remain independent of native storage bounds.
 
 The constructor validates nonwrapping spans, required alignment and record-size

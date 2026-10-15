@@ -7178,17 +7178,26 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     assert "_RTHP-CONTENT-CONTROL-KIND?" in target_kind
     assert "DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !" in find
 
-    # ACTIVATE suits menus, items and tabs; EXTEND only text areas; FOLLOW
-    # text areas and documents; PLACE either text kind; SCROLL every root
-    # with content.
+    # ACTIVATE suits menus, items, tabs and fields; EXTEND text areas and
+    # TEXT fields; FOLLOW text areas and documents; PLACE either text kind
+    # and TEXT fields; SCROLL every root with content.  Which of a field's
+    # intents apply follows its FDC1 kind, in its target entry.
     assert "RTE-INTENT-ACTIVATE OF" in suits
-    assert "RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
+    assert (
+        "RTE-INTENT-EXTEND OF\n"
+        "            DUP RTE-CONTROL-TEXT-AREA = SWAP RTE-CONTROL-FIELD = OR\n"
+        "        ENDOF"
+    ) in suits
     assert (
         "RTE-INTENT-FOLLOW OF\n"
         "            DUP RTE-CONTROL-TEXT-AREA = SWAP RTE-CONTROL-DOCUMENT = OR\n"
         "        ENDOF"
     ) in suits
-    assert "RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
+    assert (
+        "RTE-INTENT-PLACE OF\n"
+        "            DUP _RTHP-TEXT-COLLECTION-CONTROL-KIND? SWAP RTE-CONTROL-FIELD = OR\n"
+        "        ENDOF"
+    ) in suits
     assert "RTE-INTENT-SCROLL OF _RTHP-CONTENT-CONTROL-KIND? ENDOF" in suits
     # The five item intents suit only an item view.
     for intent in ("SELECT", "OPEN", "EXPAND", "COLLAPSE", "CHECK"):

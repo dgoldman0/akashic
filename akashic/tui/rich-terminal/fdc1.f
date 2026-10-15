@@ -5,6 +5,10 @@
 \  UFLD storage and any terminal provider. Validation derives choice/text
 \  quota totals, retains no pointers, and never changes source bytes.
 \  Choices use bounded prior-record scans to enforce unique signed values.
+\  A TEXT field carries a 16-byte edit record after its header (caret,
+\  anchor, scroll, placeholder bytes), then its value and its placeholder;
+\  the caret and anchor lie within the value's scalars.  The scroll's bound,
+\  the value's width in cells, belongs to the terminal's text rules.
 
 PROVIDED akashic-tui-fdc1
 REQUIRE ../../utils/memory-span.f
@@ -173,14 +177,41 @@ CREATE _FDC1-OWNED-END
     REPEAT
     _FDC1-P @ _FDC1-END @ = _FDC1-FOUND @ AND ;
 
+\ Unicode scalars in one validated UTF-8 span: its non-continuation bytes.
+: _FDC1-SCALARS  ( a u -- n )
+    0 ROT ROT 0 ?DO
+        DUP I + C@ _FDC1-UTF8-CONT? 0= IF SWAP 1+ SWAP THEN
+    LOOP DROP ;
+
+\ The value at 112 and the placeholder after it, the edit record between the
+\ header and them; both strings are charged as content UTF-8.
+: _FDC1-TEXT-CONTENT?  ( -- flag )
+    _FDC1-A @ 56 + _FDC1-LE64@ _FDC1-A @ 88 + _FDC1-LE32@ OR IF FALSE EXIT THEN
+    _FDC1-U @ 112 U< IF FALSE EXIT THEN
+    _FDC1-A @ 92 + _FDC1-LE32@ _FDC1-A @ 108 + _FDC1-LE32@ +
+    DUP _FDC1-UTF8 ! 112 + _FDC1-U @ <> IF FALSE EXIT THEN
+    _FDC1-A @ 92 + _FDC1-LE32@ DUP IF
+        _FDC1-A @ 112 + SWAP FDC1-TEXT? 0= IF FALSE EXIT THEN
+    ELSE DROP THEN
+    _FDC1-A @ 108 + _FDC1-LE32@ DUP IF
+        _FDC1-A @ 112 + _FDC1-A @ 92 + _FDC1-LE32@ + SWAP FDC1-TEXT?
+        0= IF FALSE EXIT THEN
+    ELSE DROP THEN
+    _FDC1-A @ 112 + _FDC1-A @ 92 + _FDC1-LE32@ _FDC1-SCALARS
+    DUP _FDC1-A @ 96 + _FDC1-LE32@ U< IF DROP FALSE EXIT THEN
+    _FDC1-A @ 100 + _FDC1-LE32@ U< 0= ;
+
 : _FDC1-CONTENT?  ( -- flag )
     _FDC1-A @ _FDC1-U @ + _FDC1-END !
     _FDC1-A @ _FDC1-LE32@ 0x31434446 <> IF FALSE EXIT THEN
     _FDC1-A @ 4 + _FDC1-LE16@ 1 <> IF FALSE EXIT THEN
     _FDC1-A @ 6 + _FDC1-LE16@ DUP 1 U< SWAP 3 U> OR IF FALSE EXIT THEN
     _FDC1-A @ 8 + _FDC1-LE64@ 0= IF FALSE EXIT THEN
-    _FDC1-A @ 16 + _FDC1-LE32@ 1 INVERT AND
+    \ READ_ONLY is bit 0 and MASKED bit 1, which only TEXT carries.
+    _FDC1-A @ 16 + _FDC1-LE32@ 3 INVERT AND
     _FDC1-A @ 20 + _FDC1-LE32@ OR IF FALSE EXIT THEN
+    _FDC1-A @ 16 + _FDC1-LE32@ 2 AND
+    _FDC1-A @ 6 + _FDC1-LE16@ 3 <> AND IF FALSE EXIT THEN
     _FDC1-GEOMETRY? 0= IF FALSE EXIT THEN
     _FDC1-A @ 6 + _FDC1-LE16@ 1 = IF
         _FDC1-U @ 96 <> IF FALSE EXIT THEN
@@ -199,11 +230,7 @@ CREATE _FDC1-OWNED-END
         _FDC1-A @ 92 + _FDC1-LE32@ IF FALSE EXIT THEN
         _FDC1-CHOICES? EXIT
     THEN
-    _FDC1-A @ 56 + _FDC1-LE64@ _FDC1-A @ 88 + _FDC1-LE32@ OR IF FALSE EXIT THEN
-    _FDC1-A @ 92 + _FDC1-LE32@ _FDC1-U @ 96 - <> IF FALSE EXIT THEN
-    _FDC1-A @ 92 + _FDC1-LE32@ DUP _FDC1-UTF8 ! DUP IF
-        _FDC1-A @ 96 + SWAP FDC1-TEXT?
-    ELSE DROP TRUE THEN ;
+    _FDC1-TEXT-CONTENT? ;
 
 
 : _FDC1-SCRUB ( -- )
