@@ -78,7 +78,7 @@ from rich_terminal.retained_view import (
     TextGridDraw,
     WaveformDraw,
 )
-from rich_terminal.semantic_fields import FieldContent
+from rich_terminal.semantic_fields import FieldContent, FieldKind
 from shared.session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
@@ -215,63 +215,64 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
 # then the pointer journey drives Desk, File Explorer, and Pad by mouse:
 # File Explorer's detail table through item events and its rename prompt
-# (23-29), Pad's editor and caret
-# readout (30-34), and Daybook's calendar wheel (35).  Then typed text that
-# mixes scripts goes into Pad (36-41) and a Daybook task (42-47).  File
-# Explorer then previews the sample picture (48-50), and last, Pad opens a
-# Markdown file, highlighted, and follows its link (51-55).
+# (23-30), Pad's editor and caret
+# readout (31-35), and Daybook's calendar wheel (36).  Then typed text that
+# mixes scripts goes into Pad (37-42) and a Daybook task (43-48).  File
+# Explorer then previews the sample document and picture (49-54), and last,
+# Pad opens a Markdown file, highlighted, and follows its link (55-59).
 DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
 DESKTOP_ACCEPTANCE_LIST_ROW_STAGE = 25
 DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE = 26
-DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE = 27
-DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE = 28
-DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE = 29
-DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 30
-DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 31
-DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 32
-DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 33
-DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 34
-DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE = 35
-# Pad: End and Enter open a line after the selected one (36-37), typing
-# fills it (38), a click lands on the combined accent (39), Right moves over
-# both its scalars (40), and a click lands inside the Hebrew word (41).
-DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE = 36
-DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE = 37
-DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE = 38
-DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE = 39
-DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE = 40
-DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE = 41
-# Daybook: focus and its task prompt (42-43), typing a task (44), a click on
-# a Han character's second cell (45), one character typed there (46), and
-# Enter adds the task (47).
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE = 42
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 43
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 44
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 45
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 46
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 47
-# File Explorer: Alt+2 focuses it (48), a SELECT on the sample document's
-# row selects it (49), and activating the Preview tab shows it as a rich
-# DOCUMENT from its first heading (50); the Details tab brings the table
-# back.  A SELECT on the sample picture's row selects it (51-52), and the
-# Preview tab shows the picture rich over its CELL half blocks (53).  The
+DESKTOP_ACCEPTANCE_RENAME_PLACED_STAGE = 27
+DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE = 28
+DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE = 29
+DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE = 30
+DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 31
+DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 32
+DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 33
+DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 34
+DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 35
+DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE = 36
+# Pad: End and Enter open a line after the selected one (37-38), typing
+# fills it (39), a click lands on the combined accent (40), Right moves over
+# both its scalars (41), and a click lands inside the Hebrew word (42).
+DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE = 37
+DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE = 38
+DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE = 39
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE = 40
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE = 41
+DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE = 42
+# Daybook: focus and its task prompt (43-44), typing a task (45), a PLACE
+# at a Han character in the prompt's field (46), one character typed there
+# (47), and Enter adds the task (48).
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE = 43
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 44
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 45
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 46
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 47
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 48
+# File Explorer: Alt+2 focuses it (49), a SELECT on the sample document's
+# row selects it (50), and activating the Preview tab shows it as a rich
+# DOCUMENT from its first heading (51); the Details tab brings the table
+# back.  A SELECT on the sample picture's row selects it (52-53), and the
+# Preview tab shows the picture rich over its CELL half blocks (54).  The
 # picture stays shown to the end.
-DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 48
-DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 49
-DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 50
-DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 51
-DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 52
-DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 53
-# Pad: Alt+1 focuses it (54), Ctrl+O opens its prompt (55), the notes path is
-# typed (56) and entered (57), and notes.md's style runs are checked before a
-# FOLLOW on its link opens example.f with its own runs (58).
-DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 54
-DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 55
-DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 56
-DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 57
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 58
+DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 49
+DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 50
+DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 51
+DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 52
+DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 53
+DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 54
+# Pad: Alt+1 focuses it (55), Ctrl+O opens its prompt (56), the notes path is
+# typed (57) and entered (58), and notes.md's style runs are checked before a
+# FOLLOW on its link opens example.f with its own runs (59).
+DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 55
+DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 56
+DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 57
+DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 58
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 59
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -2048,6 +2049,9 @@ class _SemanticFieldClaim:
     label: str
     state: ControlState
     content: FieldContent
+    # In a MODAL region: a prompt or dialog's own field, over the
+    # application it holds modal.
+    modal: bool = False
 
     @property
     def label_bounds(self) -> tuple[int, int, int, int] | None:
@@ -2136,6 +2140,11 @@ class RichScreenProjection:
     semantic_taskbar_claims: tuple[_SemanticTaskBarClaim, ...] = ()
     semantic_image_claims: tuple[_SemanticImageClaim, ...] = ()
     semantic_document_claims: tuple[_SemanticDocumentClaim, ...] = ()
+    # Every control a visible MODAL region above it makes inactive: it takes
+    # no input while the prompt or dialog is open, and may show dimmed.
+    inactive_controls: frozenset[ControlIdentity] = frozenset()
+    # The root identity of each menu bar in menu_signatures, in its order.
+    menu_bar_identities: tuple[ControlIdentity, ...] = ()
 
     def _row_cells(self, row: int) -> tuple[str, ...]:
         if self.cells:
@@ -2756,43 +2765,6 @@ def _item_view_text_in_tile(
     )
 
 
-def _text_cell_in(
-    projection: RichScreenProjection,
-    marker: str,
-    bounds: tuple[int, int, int, int],
-    where: str,
-) -> tuple[int, int] | None:
-    """Return the (column, row) of marker's only residual copy in BOUNDS,
-    which WHERE names for errors."""
-
-    if not isinstance(marker, str) or not marker:
-        raise ValueError("marker must be a nonempty string")
-    left, top, right, bottom = bounds
-    cells = [
-        (column, row)
-        for row in range(top, min(bottom, len(projection.lines)))
-        for column in projection.find_cells(marker, row, left, right)
-    ]
-    if len(cells) > 1:
-        raise PhysicalDesktopAcceptanceError(f"{marker!r} is not unique in {where}")
-    return cells[0] if cells else None
-
-
-def _tile_text_cell(
-    projection: RichScreenProjection,
-    marker: str,
-    tile: int,
-) -> tuple[int, int] | None:
-    """Return the (column, row) of marker's only residual copy in one tile."""
-
-    return _text_cell_in(
-        projection,
-        marker,
-        _desktop_tile_bounds(projection, tile),
-        f"Desk tile {tile}",
-    )
-
-
 def _taskbar_has_focus(projection: RichScreenProjection, marker: str, *, legacy_row=False) -> bool:
     """Known journey label plus typed focus state, or the complete legacy row."""
     if projection.semantic_taskbar_claims:
@@ -2983,20 +2955,138 @@ def _require_pad_readout(
         )
 
 
-def _prompt_row_text(
+def _prompt_claim(
     projection: RichScreenProjection,
-    cell: tuple[int, int],
-    tile: int,
-) -> str:
-    """Return a prompt's text from its label's cell to the tile's edge."""
+    label: str,
+    bounds: tuple[int, int, int, int],
+) -> _SemanticFieldClaim | None:
+    """The open prompt labelled LABEL inside BOUNDS, or None.
 
-    column, row = cell
-    left, top, right, bottom = _desktop_pane_content_bounds(projection, tile)
-    if not (left <= column < right and top <= row < bottom):
-        return ""
-    if row >= len(projection.lines):
-        return ""
-    return projection.row_text(row, column, right).rstrip()
+    An application's shared prompt goes out as a TEXT field in a MODAL
+    region over its pane.  The rest of the application stays rich beneath it
+    and inactive, except the roots the prompt's row covers."""
+
+    left, top, right, bottom = bounds
+    claims = [
+        claim
+        for claim in projection.semantic_field_claims
+        if claim.label == label
+        and left <= claim.left and claim.right <= right
+        and top <= claim.top and claim.bottom <= bottom
+    ]
+    if not claims:
+        return None
+    if len(claims) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"{len(claims)} prompts are labelled {label!r}"
+        )
+    claim = claims[0]
+    if claim.content.kind is not FieldKind.TEXT or not claim.modal:
+        raise PhysicalDesktopAcceptanceError(
+            f"the prompt {label!r} is not a TEXT field in a modal region"
+        )
+    if claim.identity in projection.inactive_controls:
+        raise PhysicalDesktopAcceptanceError(f"the prompt {label!r} is inactive")
+    return claim
+
+
+def _require_held_beneath_prompt(
+    projection: RichScreenProjection,
+    prompt: _SemanticFieldClaim,
+    bounds: tuple[int, int, int, int],
+    menu_signature: tuple[str, ...],
+    owner: str,
+) -> None:
+    """While PROMPT is open, OWNER stays rich beneath it and inactive: its
+    menu bar and every other control root inside BOUNDS take no input."""
+
+    if projection.menu_signatures.count(menu_signature) != 1:
+        raise PhysicalDesktopAcceptanceError(f"{owner}'s prompt withheld its menu bar")
+    menu = projection.menu_bar_identities[projection.menu_signatures.index(menu_signature)]
+    left, top, right, bottom = bounds
+    roots = [menu] + [
+        claim.identity
+        for claims in (
+            projection.semantic_collection_claims,
+            projection.semantic_item_view_claims,
+            projection.semantic_document_claims,
+            projection.semantic_tabset_claims,
+            projection.semantic_field_claims,
+        )
+        for claim in claims
+        if left <= claim.left and claim.right <= right
+        and top <= claim.top and claim.bottom <= bottom
+        and claim.identity != prompt.identity
+    ]
+    active = [identity for identity in roots if identity not in projection.inactive_controls]
+    if active:
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s prompt left {len(active)} controls beneath it active"
+        )
+
+
+def _tile_prompt(
+    projection: RichScreenProjection,
+    label: str,
+    tile: int,
+) -> _SemanticFieldClaim | None:
+    """The open prompt labelled LABEL in one canonical Desk tile, or None."""
+
+    return _prompt_claim(projection, label, _desktop_tile_bounds(projection, tile))
+
+
+def _require_tile_prompt(
+    projection: RichScreenProjection,
+    label: str,
+    tile: int,
+    menu_signature: tuple[str, ...],
+    owner: str,
+) -> _SemanticFieldClaim:
+    """Require OWNER's open prompt in its Desk tile, modal for OWNER alone.
+
+    The prompt is a TEXT field in a MODAL region over the tile's content.
+    OWNER stays rich beneath it and inactive, and no status field is left
+    under the prompt's row.  Desk and every other applet stay active."""
+
+    bounds = _desktop_tile_bounds(projection, tile)
+    prompt = _prompt_claim(projection, label, bounds)
+    if prompt is None:
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s prompt {label!r} is not a field inside its Desk tile"
+        )
+    _require_held_beneath_prompt(projection, prompt, bounds, menu_signature, owner)
+    if any(
+        claim.top < prompt.bottom and prompt.top < claim.bottom
+        for claim in _status_field_claims_in_tile(projection, tile)
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            f"a status field remains under {owner}'s prompt"
+        )
+    left, top, right, bottom = bounds
+    others = [
+        identity
+        for signature, identity in zip(
+            projection.menu_signatures, projection.menu_bar_identities
+        )
+        if signature != menu_signature
+    ] + [
+        claim.identity
+        for claims in (
+            projection.semantic_collection_claims,
+            projection.semantic_item_view_claims,
+            projection.semantic_document_claims,
+            projection.semantic_tabset_claims,
+            projection.semantic_field_claims,
+        )
+        for claim in claims
+        if not (left <= claim.left and claim.right <= right
+                and top <= claim.top and claim.bottom <= bottom)
+    ]
+    if any(identity in projection.inactive_controls for identity in others):
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s prompt made another applet inactive"
+        )
+    return prompt
 
 
 def _daybook_dates(projection: RichScreenProjection) -> tuple[str, ...]:
@@ -4463,6 +4553,18 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                     indices[pane.content_region_id]):
                 raise PhysicalDesktopAcceptanceError("PANE instrument region does not paint between chrome and content")
             roles[region.region_id] = "instrument"
+        elif region.modal and region.draws and all(
+                isinstance(draw, FieldDraw) for draw in region.draws):
+            viewport = _region_viewport_rectangle(region, cols, rows)
+            matches = [pane for pane in panes if viewport == pane.content_bounds]
+            if (not region.clipped or _region_logical_rectangle(region) != screen
+                    or len(matches) != 1):
+                raise PhysicalDesktopAcceptanceError(
+                    "MODAL region does not hold exactly one PANE's content")
+            if indices[region.region_id] < indices[matches[0].content_region_id]:
+                raise PhysicalDesktopAcceptanceError(
+                    "MODAL region paints beneath its PANE content")
+            roles[region.region_id] = "modal"
         elif region.draws and all(isinstance(draw, GlyphRunDraw) for draw in region.draws):
             full_surface(region)
             for draw in region.draws:
@@ -4475,7 +4577,7 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
     # An otherwise empty full-frame region still installs an input barrier.
     # Residual/chrome cannot follow TASKBAR or interactive pane content.
     targets = [indices[region_id] for region_id, role in roles.items()
-               if role in ("content", "taskbar")]
+               if role in ("content", "taskbar", "modal")]
     for region_id, role in roles.items():
         if role in ("chrome", "residual") and any(indices[region_id] >= index for index in targets):
             raise PhysicalDesktopAcceptanceError("full-surface shell region blocks an earlier interactive region")
@@ -4491,9 +4593,9 @@ def reconstruct_retained_screen(
     """Validate one complete rich screen and reconstruct its logical text.
 
     The canonical Desktop always shows some applet's semantic menu bar.  Desk
-    holding a single applet shows none while that applet's modal prompt
-    withholds its menu, so a journey for it may relax REQUIRE_MENU_BAR and
-    check the menu itself.
+    holding a single applet shows none while a painted overlay, such as the
+    Agent's review, withholds its menu, so a journey for it may relax
+    REQUIRE_MENU_BAR and check the menu itself.
 
     A draw the producer cannot show rich replaces the retained scene with an
     empty one, and the viewer then shows the CELL plane.  A journey that
@@ -4648,7 +4750,13 @@ def reconstruct_retained_screen(
     instrument_cells: set[tuple[int, int]] = set()
     semantic_lines: list[str] = []
     menu_signatures: list[tuple[str, ...]] = []
+    menu_bar_identities: list[ControlIdentity] = []
     menu_bar_count = 0
+    inactive_controls = frozenset(
+        ControlIdentity(region.owner_id, region.owner_generation, control_id)
+        for region in plane.regions
+        for control_id in region.inactive_controls
+    )
     semantic_collection_claims: list[_SemanticCollectionClaim] = []
     semantic_item_view_claims: list[_SemanticItemViewClaim] = []
     semantic_document_claims: list[_SemanticDocumentClaim] = []
@@ -4806,6 +4914,9 @@ def reconstruct_retained_screen(
             if not evidence_cells & foreground_instrument_cells:
                 menu_bar_count += 1
                 menu_signatures.append(signature)
+                menu_bar_identities.append(ControlIdentity(
+                    region.owner_id, region.owner_generation, draw.control_id,
+                ))
                 labels = list(signature)
                 labels.extend(
                     entry.label
@@ -4828,6 +4939,7 @@ def reconstruct_retained_screen(
                     ),
                     left=left, top=top, right=right, bottom=bottom,
                     label=draw.label, state=draw.state, content=draw.content,
+                    modal=region.modal,
                 ))
             claim_semantic_rectangle(left, top, right, bottom)
             opaque_semantic_cells.update(_rectangle_cells(visible))
@@ -5143,6 +5255,8 @@ def reconstruct_retained_screen(
         semantic_taskbar_claims=taskbar_claims,
         semantic_image_claims=tuple(semantic_image_claims),
         cells=cells,
+        inactive_controls=inactive_controls,
+        menu_bar_identities=tuple(menu_bar_identities),
     )
 
 
@@ -5237,72 +5351,6 @@ def _require_canonical_desktop_semantics(
         )
 
 
-def _require_daybook_prompt_fallback_semantics(
-    projection: RichScreenProjection,
-) -> None:
-    """Require the exact document-atomic fallback while Daybook is modal."""
-
-    unaffected_menus = tuple(
-        signature
-        for signature in DESKTOP_MENU_SIGNATURES
-        if signature != DAYBOOK_MENU_SIGNATURE
-    )
-    _require_exact_menu_aggregate(
-        projection,
-        unaffected_menus,
-        "Daybook prompt fallback does not retain exactly the four unaffected "
-        "canonical menu forests and no Daybook or unexpected applet",
-    )
-
-    missing = _canonical_pad_semantic_failures(projection)
-    daybook_collections = tuple(
-        claim
-        for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
-        for claim in _collection_claims_in_tile(
-            projection,
-            kind,
-            DAYBOOK_DESKTOP_TILE,
-        )
-    )
-    if daybook_collections:
-        missing.append(
-            "the document-atomic Daybook fallback must not retain a partial "
-            f"text collection (found {len(daybook_collections)})"
-        )
-    daybook_items = _item_view_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE)
-    if daybook_items:
-        missing.append(
-            "the document-atomic Daybook fallback must not retain a partial "
-            f"item view (found {len(daybook_items)})"
-        )
-    daybook_tabsets = _tabset_claims_in_tile(
-        projection,
-        DAYBOOK_DESKTOP_TILE,
-    )
-    if daybook_tabsets:
-        missing.append(
-            "the document-atomic Daybook fallback must not retain a partial "
-            f"TABSET (found {len(daybook_tabsets)})"
-        )
-    if not _residual_tile_contains(
-        projection,
-        DAYBOOK_PROMPT_MARKER,
-        DAYBOOK_DESKTOP_TILE,
-    ):
-        missing.append("the Daybook prompt is not visible inside its Desk tile")
-    if _field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
-        raise PhysicalDesktopAcceptanceError(
-            "modal document fallback retained a FIELD root"
-        )
-    if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
-        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
-    if missing:
-        raise PhysicalDesktopAcceptanceError(
-            "Daybook prompt retained fallback is incomplete: "
-            f"{', '.join(missing)}"
-        )
-
-
 def _desk_launcher_claim(
     projection: RichScreenProjection,
 ) -> _SemanticItemViewClaim | None:
@@ -5356,16 +5404,8 @@ def _require_desk_launcher_selection(
 def _soundlab_semantic_failures(
     projection: RichScreenProjection,
     expected_menus: tuple[tuple[str, ...], ...],
-    *,
-    daybook_prompt: bool = False,
-    pad_prompt: bool = False,
 ) -> list[str]:
-    """List what a launched-Sound-Lab frame lacks, given its menu forests.
-
-    With ``daybook_prompt`` Daybook's prompt is open, so its calendar is
-    withheld with the rest of its slices; with ``pad_prompt`` Pad's is, so
-    its text areas and tabs are.
-    """
+    """List what a launched-Sound-Lab frame lacks, given its menu forests."""
 
     missing = tuple(
         signature
@@ -5404,9 +5444,7 @@ def _soundlab_semantic_failures(
     pad_areas = _collection_claims_in_tile(
         projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
     )
-    if not pad_prompt and not any(
-        _collection_is_available(claim) for claim in pad_areas
-    ):
+    if not any(_collection_is_available(claim) for claim in pad_areas):
         missing_semantics.append(
             f"at least one TEXT_AREA in Pad tile {PAD_DESKTOP_TILE} must be "
             "visibly enabled"
@@ -5414,19 +5452,16 @@ def _soundlab_semantic_failures(
     daybook_grids = _collection_claims_in_tile(
         projection, ControlKind.TEXT_GRID, DAYBOOK_DESKTOP_TILE
     )
-    if not daybook_prompt and (
-        len(daybook_grids) != 1 or not _collection_is_available(daybook_grids[0])
-    ):
+    if len(daybook_grids) != 1 or not _collection_is_available(daybook_grids[0]):
         missing_semantics.append(
             f"exactly one TEXT_GRID in Daybook tile {DAYBOOK_DESKTOP_TILE} "
             "must be visibly enabled "
             f"(found {len(daybook_grids)})"
         )
-    if not pad_prompt:
-        try:
-            _canonical_pad_tabset_claim(projection)
-        except PhysicalDesktopAcceptanceError as exc:
-            missing_semantics.append(str(exc))
+    try:
+        _canonical_pad_tabset_claim(projection)
+    except PhysicalDesktopAcceptanceError as exc:
+        missing_semantics.append(str(exc))
     if (
         projection.instrument_region_count != 1
         or projection.instrument_cell_count == 0
@@ -5458,174 +5493,6 @@ def _require_soundlab_desktop_semantics(
         raise PhysicalDesktopAcceptanceError(
             "launched Sound Lab retained frame is missing exact product "
             f"semantics: {', '.join(missing)}"
-        )
-
-
-def _require_soundlab_daybook_prompt_fallback_semantics(
-    projection: RichScreenProjection,
-) -> None:
-    """Require the document-atomic fallback while Daybook's prompt is open
-    after Sound Lab's launch: Daybook's menu forest and collections are
-    withheld and its tile stays complete through residual glyphs, while
-    the other applets, Sound Lab included, stay rich."""
-
-    missing = _soundlab_semantic_failures(
-        projection,
-        tuple(
-            signature
-            for signature in DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
-            if signature != DAYBOOK_MENU_SIGNATURE
-        ),
-        daybook_prompt=True,
-    )
-    collections = tuple(
-        claim
-        for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
-        for claim in _collection_claims_in_tile(
-            projection,
-            kind,
-            DAYBOOK_DESKTOP_TILE,
-        )
-    )
-    if collections:
-        missing.append(
-            "the document-atomic Daybook fallback must not retain a partial "
-            f"text collection (found {len(collections)})"
-        )
-    items = _item_view_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE)
-    if items:
-        missing.append(
-            "the document-atomic Daybook fallback must not retain a partial "
-            f"item view (found {len(items)})"
-        )
-    if not _residual_tile_contains(
-        projection,
-        DAYBOOK_PROMPT_MARKER,
-        DAYBOOK_DESKTOP_TILE,
-    ):
-        missing.append("the Daybook prompt is not visible inside its Desk tile")
-    if _field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
-        raise PhysicalDesktopAcceptanceError(
-            "modal document fallback retained a FIELD root"
-        )
-    if _status_field_claims_in_tile(projection, DAYBOOK_DESKTOP_TILE):
-        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
-    if missing:
-        raise PhysicalDesktopAcceptanceError(
-            "Daybook prompt retained fallback is incomplete: "
-            f"{', '.join(missing)}"
-        )
-
-
-def _require_soundlab_pad_prompt_fallback_semantics(
-    projection: RichScreenProjection,
-) -> None:
-    """Require the document-atomic fallback while Pad's Open prompt is up:
-    Pad's menu forest, tabs, text areas, and item views are withheld and its
-    tile stays complete through residual glyphs, while the other applets,
-    Sound Lab included, stay rich."""
-
-    missing = _soundlab_semantic_failures(
-        projection,
-        tuple(
-            signature
-            for signature in DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
-            if signature != PAD_MENU_SIGNATURE
-        ),
-        pad_prompt=True,
-    )
-    collections = _collection_claims_in_tile(
-        projection, ControlKind.TEXT_AREA, PAD_DESKTOP_TILE
-    )
-    tabsets = _tabset_claims_in_tile(projection, PAD_DESKTOP_TILE)
-    item_views = _item_view_claims_in_tile(projection, PAD_DESKTOP_TILE)
-    if collections or tabsets or item_views:
-        missing.append(
-            "the document-atomic Pad fallback must not retain a partial text "
-            f"area, tabset, or item view (found {len(collections)}, "
-            f"{len(tabsets)}, and {len(item_views)})"
-        )
-    if not _residual_tile_contains(
-        projection,
-        PAD_OPEN_PROMPT_MARKER,
-        PAD_DESKTOP_TILE,
-    ):
-        missing.append("the Pad prompt is not visible inside its Desk tile")
-    if _field_claims_in_tile(projection, PAD_DESKTOP_TILE):
-        raise PhysicalDesktopAcceptanceError(
-            "modal document fallback retained a FIELD root"
-        )
-    if _status_field_claims_in_tile(projection, PAD_DESKTOP_TILE):
-        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
-    if missing:
-        raise PhysicalDesktopAcceptanceError(
-            f"Pad prompt retained fallback is incomplete: {', '.join(missing)}"
-        )
-
-
-def _require_fexplorer_prompt_fallback_semantics(
-    projection: RichScreenProjection,
-) -> None:
-    """Require the document-atomic fallback while File Explorer is modal.
-
-    Its rename prompt is an ordinary final-writer overlay, so, exactly as for
-    Daybook's prompt, all of File Explorer's semantic slices are withheld
-    until it closes and its tile stays complete through residual glyphs.  The
-    other applets, Sound Lab included, stay rich.
-    """
-
-    missing = _soundlab_semantic_failures(
-        projection,
-        tuple(
-            signature
-            for signature in DESKTOP_MENU_SIGNATURES + (SOUNDLAB_MENU_SIGNATURE,)
-            if signature != FEXPLORER_MENU_SIGNATURE
-        ),
-    )
-    collections = tuple(
-        claim
-        for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
-        for claim in _collection_claims_in_tile(
-            projection,
-            kind,
-            FEXPLORER_DESKTOP_TILE,
-        )
-    )
-    if collections:
-        missing.append(
-            "the document-atomic File Explorer fallback must not retain a "
-            f"partial text collection (found {len(collections)})"
-        )
-    tabsets = _tabset_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE)
-    if tabsets:
-        missing.append(
-            "the document-atomic File Explorer fallback must not retain a "
-            f"partial TABSET (found {len(tabsets)})"
-        )
-    item_views = _item_view_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE)
-    if item_views:
-        missing.append(
-            "the document-atomic File Explorer fallback must not retain a "
-            f"partial item view (found {len(item_views)})"
-        )
-    if not _residual_tile_contains(
-        projection,
-        RENAME_PROMPT_LABEL,
-        FEXPLORER_DESKTOP_TILE,
-    ):
-        missing.append(
-            "the File Explorer prompt is not visible inside its Desk tile"
-        )
-    if _field_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE):
-        raise PhysicalDesktopAcceptanceError(
-            "modal document fallback retained a FIELD root"
-        )
-    if _status_field_claims_in_tile(projection, FEXPLORER_DESKTOP_TILE):
-        missing.append("document-atomic prompt fallback retained a STATUS_FIELD")
-    if missing:
-        raise PhysicalDesktopAcceptanceError(
-            "File Explorer prompt retained fallback is incomplete: "
-            f"{', '.join(missing)}"
         )
 
 
@@ -6917,14 +6784,20 @@ def _request_pointer_input(
         )
         position = TextPosition(item_key, offset)
     identity = ControlIdentity(owner_id, owner_generation, control_id)
+    # A writable TEXT field, such as a prompt's, takes positions in its
+    # value as a text area does; item key zero names them.
+    kinds = {
+        "text_scroll": (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID),
+        "text_place": (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID, ControlKind.FIELD),
+        "text_extend": (ControlKind.TEXT_AREA, ControlKind.FIELD),
+        "text_follow": (ControlKind.TEXT_AREA,),
+    }[method]
     text_target, token = _text_hit_target(
         offer,
         display_state,
         display_ack,
         identity,
-        (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
-        if position is None or method == "text_place"
-        else (ControlKind.TEXT_AREA,),
+        kinds,
     )
     x, y = _text_target_point(
         display_state,
@@ -7837,26 +7710,42 @@ class SoundLabSeriesProbe:
             return self._send("send_key", "alt+6", 1, offer, generation, sender)
         if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER):
             return False
-        fields = {claim.label: claim for claim in _field_claims_in_tile(projection, 5)}
-        prompt = "Duration (100-2000 ms):" if self.stage < 7 else "Amplitude (0-100 percent):"
+        label = "Duration (100-2000 ms):" if self.stage < 7 else "Amplitude (0-100 percent):"
+        prompt = _tile_prompt(projection, label, SOUNDLAB_DESKTOP_TILE)
+        fields = {
+            claim.label: claim
+            for claim in _field_claims_in_tile(projection, SOUNDLAB_DESKTOP_TILE)
+            if prompt is None or claim.identity != prompt.identity
+        }
+        own = {"Waveform", "Frequency (Hz)", "Amplitude (%)", "Duration (ms)"}
         if self.stage in (2, 7):
-            if prompt not in projection.text:
+            if prompt is None:
                 return False
-            if fields:
-                raise PhysicalDesktopAcceptanceError("Sound Lab modal prompt retained covered FIELD roots")
-            _require_cell_fallback_evidence("series-prompt", offer, generation, (prompt,))
+            _require_tile_prompt(
+                projection, label, SOUNDLAB_DESKTOP_TILE, SOUNDLAB_MENU_SIGNATURE, "Sound Lab"
+            )
+            # Sound Lab's own fields stay rich and inactive beneath the prompt.
+            if set(fields) != own:
+                raise PhysicalDesktopAcceptanceError("Sound Lab's prompt withheld its fields")
+            _require_cell_fallback_evidence("series-prompt", offer, generation, (label,))
             return self._send("send_key", "ctrl+a", self.stage + 1, offer, generation, sender)
         if self.stage in (3, 8):
-            if prompt not in projection.text:
+            if prompt is None:
+                return False
+            # Ctrl+A selected the whole value the prompt opened with.
+            content = prompt.content
+            if content.anchor == content.caret or {content.anchor, content.caret} != {
+                0, len(content.text)
+            }:
                 return False
             value = "2000" if self.stage == 3 else str(self.changed_amplitude)
             return self._send("send_text", value, self.stage + 1, offer, generation, sender)
         if self.stage in (4, 9):
             value = "2000" if self.stage == 4 else str(self.changed_amplitude)
-            if f"{prompt} {value}" not in projection.text:
+            if prompt is None or prompt.content.text != value:
                 return False
             return self._send("send_key", "enter", self.stage + 1, offer, generation, sender)
-        if set(fields) != {"Waveform", "Frequency (Hz)", "Amplitude (%)", "Duration (ms)"}:
+        if prompt is not None or set(fields) != own:
             return False
         if self.stage == 1:
             identity = fields["Duration (ms)"].identity
@@ -8181,7 +8070,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._pad_area_before_tab_activation: _CollectionStates | None = None
         self._pad_area_after_tab_activation: _CollectionStates | None = None
         self._pointer_list_first: int | None = None
-        self._rename_prompt_cell: tuple[int, int] | None = None
+        self._rename_prompt: ControlIdentity | None = None
         self._pad_tabset_before_pointer_open: _TabSetState | None = None
         self._pad_pointer_bounds: _SemanticBounds | None = None
         self._pad_pointer_viewport: int | None = None
@@ -8316,21 +8205,24 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if offer.offer_id <= self.frame_barrier:
             return JourneyProgress()
         text = projection.text
-        daybook_prompt_visible = _residual_tile_contains(
+        daybook_prompt = _tile_prompt(
             projection,
             DAYBOOK_PROMPT_MARKER,
             DAYBOOK_DESKTOP_TILE,
         )
+        daybook_prompt_visible = daybook_prompt is not None
         if 0 < self.stage <= DESKTOP_ACCEPTANCE_PAD_TAB_STAGE:
+            # The prompt holds Daybook alone modal: Daybook stays rich and
+            # inactive beneath it, and every other applet stays rich.
+            _require_canonical_desktop_semantics(projection)
             if self.stage in (6, 7, 8) and daybook_prompt_visible:
-                # The prompt is an ordinary final-writer overlay.  RUHA's
-                # existing document-atomic rule therefore withholds all of
-                # Daybook's intersected semantic slices until the overlay is
-                # gone; the other applets remain rich and Daybook remains
-                # physically complete through residual glyphs.
-                _require_daybook_prompt_fallback_semantics(projection)
-            else:
-                _require_canonical_desktop_semantics(projection)
+                _require_tile_prompt(
+                    projection,
+                    DAYBOOK_PROMPT_MARKER,
+                    DAYBOOK_DESKTOP_TILE,
+                    DAYBOOK_MENU_SIGNATURE,
+                    "Daybook",
+                )
         if self._pending is not None:
             # Backpressure is admitted only with zero accepted input.  A newer
             # acknowledged frame therefore discards the old authorization and
@@ -8448,7 +8340,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and daybook_prompt_visible
         ):
-            if DAYBOOK_ACCEPTANCE_TASK in text:
+            if daybook_prompt.content.text or DAYBOOK_ACCEPTANCE_TASK in text:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook acceptance marker was visible before task input"
                 )
@@ -8465,7 +8357,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             self.stage == 7
             and _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER)
             and daybook_prompt_visible
-            and DAYBOOK_ACCEPTANCE_TASK in text
+            and daybook_prompt.content.text == DAYBOOK_ACCEPTANCE_TASK
         ):
             self._send("send_key", "enter", 8, offer, generation, sender)
             return JourneyProgress()
@@ -8905,19 +8797,17 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         Sound Lab stays live throughout.
         """
 
-        if (
-            DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE
-            <= self.stage
-            <= DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE
-            and _residual_tile_contains(
+        _require_soundlab_desktop_semantics(projection)
+        rename = _tile_prompt(projection, RENAME_PROMPT_LABEL, FEXPLORER_DESKTOP_TILE)
+        if rename is not None:
+            # The rename prompt holds File Explorer alone modal.
+            _require_tile_prompt(
                 projection,
                 RENAME_PROMPT_LABEL,
                 FEXPLORER_DESKTOP_TILE,
+                FEXPLORER_MENU_SIGNATURE,
+                "File Explorer",
             )
-        ):
-            _require_fexplorer_prompt_fallback_semantics(projection)
-        else:
-            _require_soundlab_desktop_semantics(projection)
         taskbar = self._taskbar_line(projection)
         if self.stage == DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE:
             if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
@@ -9004,55 +8894,76 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
-        prompt = f"{RENAME_PROMPT_LABEL} {POINTER_LIST_FILE}"
-        renamed = f"{RENAME_PROMPT_LABEL} {RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
+        renamed = f"{RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
         if self.stage == DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE:
             if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer lost focus before its rename prompt"
                 )
-            cell = _tile_text_cell(projection, prompt, FEXPLORER_DESKTOP_TILE)
-            if cell is None:
+            if rename is None:
                 return JourneyProgress()
-            if _prompt_row_text(projection, cell, FEXPLORER_DESKTOP_TILE) != prompt:
+            if rename.content.text != POINTER_LIST_FILE:
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer's rename prompt does not hold exactly the "
                     "selected file's name"
                 )
-            self._rename_prompt_cell = cell
-            column, row = cell
-            start = column + len(RENAME_PROMPT_LABEL) + 1
+            self._rename_prompt = rename.identity
             milestone = self._milestone("fexplorer-rename-prompt-opened")
+            # A press at the name's start, as the viewer sends it: a PLACE.
             self._send(
-                "pointer_drag",
-                f"{start},{row},{start + len(RENAME_STEM)},{row}",
-                DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
+                "text_place",
+                self._text_value(rename, 0, 0),
+                DESKTOP_ACCEPTANCE_RENAME_PLACED_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
         if self.stage in (
+            DESKTOP_ACCEPTANCE_RENAME_PLACED_STAGE,
             DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
             DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
         ):
-            cell = self._rename_prompt_cell
-            if cell is None:
+            if self._rename_prompt is None:
                 raise PhysicalDesktopAcceptanceError(
                     "rename stage has no acknowledged prompt"
                 )
             if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
-                    "the prompt drag moved focus away from File Explorer"
+                    "the prompt selection moved focus away from File Explorer"
                 )
-            text = _prompt_row_text(projection, cell, FEXPLORER_DESKTOP_TILE)
+            if rename is None or rename.identity != self._rename_prompt:
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's rename prompt closed during the rename"
+                )
+            text = rename.content.text
+            if self.stage == DESKTOP_ACCEPTANCE_RENAME_PLACED_STAGE:
+                if text != POINTER_LIST_FILE:
+                    raise PhysicalDesktopAcceptanceError(
+                        f"placing the prompt's caret changed its text to {text!r}"
+                    )
+                if rename.content.caret != 0:
+                    return JourneyProgress()
+                milestone = self._milestone("fexplorer-rename-caret-placed")
+                # The drag across the stem, as the viewer sends it: an EXTEND.
+                self._send(
+                    "text_extend",
+                    self._text_value(rename, 0, len(RENAME_STEM)),
+                    DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
+                    offer,
+                    generation,
+                    sender,
+                )
+                return JourneyProgress(milestone)
             if self.stage == DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE:
                 # A selection changes no text; the next frame authorizes the
                 # typing that replaces it.
-                if text != prompt:
+                if text != POINTER_LIST_FILE:
                     raise PhysicalDesktopAcceptanceError(
-                        f"the prompt drag changed its text to {text!r}"
+                        f"the prompt selection changed its text to {text!r}"
                     )
+                if (rename.content.anchor, rename.content.caret) != (0, len(RENAME_STEM)):
+                    return JourneyProgress()
                 milestone = self._milestone("fexplorer-rename-stem-dragged")
                 self._send(
                     "send_text",
@@ -9065,16 +8976,16 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 return JourneyProgress(milestone)
             # The guest may paint after each typed scalar.  Anything but the
             # original text or the replacement typed over exactly the stem
-            # means the drag selected the wrong span.
+            # means the selection held the wrong span.
             partial = {
-                f"{RENAME_PROMPT_LABEL} {RENAME_REPLACEMENT[:length]}.{RENAME_SUFFIX}"
+                f"{RENAME_REPLACEMENT[:length]}.{RENAME_SUFFIX}"
                 for length in range(1, len(RENAME_REPLACEMENT))
             }
-            if text == prompt or text in partial:
+            if text == POINTER_LIST_FILE or text in partial:
                 return JourneyProgress()
             if text != renamed:
                 raise PhysicalDesktopAcceptanceError(
-                    f"typing over the dragged stem produced {text!r}, not "
+                    f"typing over the selected stem produced {text!r}, not "
                     f"{renamed!r}"
                 )
             milestone = self._milestone("fexplorer-rename-stem-replaced")
@@ -9092,11 +9003,9 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "cancelling the rename moved focus away from File Explorer"
                 )
-            if _residual_tile_contains(
-                projection,
-                RENAME_PROMPT_LABEL,
-                FEXPLORER_DESKTOP_TILE,
-            ) or not _fexplorer_selected_path_is(projection, POINTER_LIST_PATH):
+            if rename is not None or not _fexplorer_selected_path_is(
+                projection, POINTER_LIST_PATH
+            ):
                 return JourneyProgress()
             if _residual_tile_contains(
                 projection,
@@ -9353,21 +9262,27 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         caret at its start; Right moves over both its scalars; and a click
         inside the Hebrew word lands on that letter.  Pad's Ln/Col readout
         counts characters in every frame that moves the caret.  Then Daybook
-        takes a mixed task through its prompt, whose residual glyph runs and
-        CELL cells show it in visual order; a click on a Han character's
-        second cell puts the caret before that character, where one typed
-        character lands, and Enter adds the task to the agenda.
+        takes a mixed task through its prompt, a TEXT field that carries it
+        logically while CELL shows it in visual order; a PLACE at a Han
+        character, where the viewer lays it out, puts the caret before that
+        character, where one typed character lands, and Enter adds the task
+        to the agenda.
         """
 
-        daybook_prompt = _residual_tile_contains(
+        _require_soundlab_desktop_semantics(projection)
+        daybook_prompt = _tile_prompt(
             projection,
             DAYBOOK_PROMPT_MARKER,
             DAYBOOK_DESKTOP_TILE,
         )
-        if daybook_prompt:
-            _require_soundlab_daybook_prompt_fallback_semantics(projection)
-        else:
-            _require_soundlab_desktop_semantics(projection)
+        if daybook_prompt is not None:
+            _require_tile_prompt(
+                projection,
+                DAYBOOK_PROMPT_MARKER,
+                DAYBOOK_DESKTOP_TILE,
+                DAYBOOK_MENU_SIGNATURE,
+                "Daybook",
+            )
         key = self._pointer_text_key
         if key is None:
             raise PhysicalDesktopAcceptanceError(
@@ -9557,7 +9472,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         generation: int,
         projection: RichScreenProjection,
         sender: InputSender,
-        daybook_prompt: bool,
+        daybook_prompt: _SemanticFieldClaim | None,
     ) -> JourneyProgress:
         if not _taskbar_has_focus(projection, DAYBOOK_FOCUS_MARKER, legacy_row=True):
             if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE:
@@ -9567,7 +9482,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
         inserted = mixed_text.DAYBOOK_ENTRY
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE:
-            if daybook_prompt:
+            if daybook_prompt is not None:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook's prompt was open before its task shortcut"
                 )
@@ -9581,13 +9496,19 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
+        task = mixed_text.DAYBOOK_TASK
+        han = task.index(mixed_text.DAYBOOK_HAN)
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE:
-            if not daybook_prompt:
+            if daybook_prompt is None:
                 return JourneyProgress()
+            if daybook_prompt.content.text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Daybook's prompt opened holding {daybook_prompt.content.text!r}"
+                )
             milestone = self._milestone("daybook-mixed-prompt-opened")
             self._send(
                 "send_text",
-                mixed_text.DAYBOOK_TASK,
+                task,
                 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE,
                 offer,
                 generation,
@@ -9595,43 +9516,34 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage < DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE:
-            if not daybook_prompt:
+            if daybook_prompt is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook's prompt closed during mixed task input"
                 )
-            prompt = _tile_text_cell(
-                projection, DAYBOOK_PROMPT_MARKER, DAYBOOK_DESKTOP_TILE
-            )
-            if prompt is None:
-                raise PhysicalDesktopAcceptanceError(
-                    "Daybook's prompt label has no unique cell"
-                )
-            _column, row = prompt
-            left, _top, right, _bottom = _desktop_tile_bounds(
-                projection, DAYBOOK_DESKTOP_TILE
-            )
+            text = daybook_prompt.content.text
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE:
-            if not projection.find_cells(
-                mixed_text.visual(mixed_text.DAYBOOK_TASK), row, left, right
-            ):
+            if text != task:
                 return JourneyProgress()
             self._require_cell_text(
                 offer,
                 projection,
-                mixed_text.visual(mixed_text.DAYBOOK_TASK),
+                mixed_text.visual(task),
                 DAYBOOK_DESKTOP_TILE,
             )
-            columns = projection.find_cells(mixed_text.DAYBOOK_HAN, row, left, right)
-            if len(columns) != 1:
+            cells = [
+                (column, row)
+                for row, column in offer.cell.find(mixed_text.DAYBOOK_HAN)
+                if row == daybook_prompt.top
+            ]
+            if len(cells) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook's prompt does not show its Han character once"
                 )
-            self._daybook_han_cell = (columns[0], row)
+            self._daybook_han_cell = cells[0]
             milestone = self._milestone("daybook-mixed-task-typed")
-            # The character's second cell names its start (APT-1-TEXT 9.1).
             self._send(
-                "pointer_click",
-                f"{columns[0] + 1},{row}",
+                "text_place",
+                self._text_value(daybook_prompt, 0, han),
                 DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE,
                 offer,
                 generation,
@@ -9641,8 +9553,9 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE:
             column, han_row = self._daybook_han_cell
             cell = offer.cell.cells[han_row][column]
-            # The focused caret now marks the Han character's cells.
-            if not cell.attrs & ATTR_REVERSE:
+            # The caret is before the Han character, and CELL's focused
+            # caret marks its cells.
+            if daybook_prompt.content.caret != han or not cell.attrs & ATTR_REVERSE:
                 return JourneyProgress()
             milestone = self._milestone("daybook-prompt-caret-on-han")
             self._send(
@@ -9655,7 +9568,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE:
-            if not projection.find_cells(mixed_text.visual(inserted), row, left, right):
+            if text != inserted:
                 return JourneyProgress()
             milestone = self._milestone("daybook-prompt-text-inserted-at-click")
             self._send(
@@ -9667,7 +9580,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
-        if daybook_prompt:
+        if daybook_prompt is not None:
             return JourneyProgress()
         left, top, right, bottom = _desktop_tile_bounds(
             projection, DAYBOOK_DESKTOP_TILE
@@ -9908,21 +9821,24 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         link, sent where the viewer's own hit map finds the link, as Ctrl and
         a click is, opens example.f, whose keywords its runs mark and whose
         cells show it.  While Pad's Open prompt is up, Pad's menu, tabs, and
-        text areas are withheld, as for any modal prompt.
+        text areas stay rich and inactive beneath it.
         """
 
-        pad_prompt = _residual_tile_contains(
-            projection, PAD_OPEN_PROMPT_MARKER, PAD_DESKTOP_TILE
-        )
-        if pad_prompt:
-            _require_soundlab_pad_prompt_fallback_semantics(projection)
-        else:
-            _require_soundlab_desktop_semantics(projection)
+        _require_soundlab_desktop_semantics(projection)
+        pad_prompt = _tile_prompt(projection, PAD_OPEN_PROMPT_MARKER, PAD_DESKTOP_TILE)
+        if pad_prompt is not None:
+            _require_tile_prompt(
+                projection,
+                PAD_OPEN_PROMPT_MARKER,
+                PAD_DESKTOP_TILE,
+                PAD_MENU_SIGNATURE,
+                "Pad",
+            )
         focused = _taskbar_has_focus(projection, PAD_FOCUS_MARKER, legacy_row=True)
         if self.stage == DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE:
             if not focused:
                 return JourneyProgress()
-            if pad_prompt:
+            if pad_prompt is not None:
                 raise PhysicalDesktopAcceptanceError(
                     "Pad's prompt was open before its Open shortcut"
                 )
@@ -9941,7 +9857,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 "Pad lost focus while opening and following a link"
             )
         if self.stage == DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE:
-            if not pad_prompt:
+            if pad_prompt is None:
                 return JourneyProgress()
             milestone = self._milestone("pad-open-prompt-shown")
             self._send(
@@ -9954,13 +9870,11 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if self.stage == DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE:
-            if not pad_prompt:
+            if pad_prompt is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Pad's prompt closed before its path was entered"
                 )
-            if not _residual_tile_contains(
-                projection, styled_text.NOTES_PATH, PAD_DESKTOP_TILE
-            ):
+            if pad_prompt.content.text != styled_text.NOTES_PATH:
                 return JourneyProgress()
             milestone = self._milestone("pad-notes-path-typed")
             self._send(
@@ -9972,7 +9886,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
-        if pad_prompt:
+        if pad_prompt is not None:
             return JourneyProgress()
         claim = self._pad_editor_claim(projection)
         if claim is None:

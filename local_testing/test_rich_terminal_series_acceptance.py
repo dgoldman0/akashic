@@ -18,6 +18,7 @@ from rich_terminal.semantic_content import SemanticTextContent, SemanticContentF
 from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from test_rich_terminal_desktop_acceptance import (
     _offer, _glyph_draws_outside, _peek_record_fixture, _soundlab_desktop_projection,
+    _with_tile_prompt,
 )
 
 MASK = (1 << 64) - 1
@@ -263,6 +264,16 @@ def field_projection(*, duration=2000, amplitude=75, selected='Amplitude (%)', f
     return replace(_soundlab_desktop_projection(), semantic_field_claims=tuple(claims))
 
 
+def prompt_projection(label, value, base=None):
+    """Sound Lab's value prompt holding VALUE, all of it selected, as Ctrl+A
+    leaves it, over Sound Lab's fields, which stay rich and inactive."""
+    return _with_tile_prompt(
+        field_projection() if base is None else base, label,
+        acceptance.SOUNDLAB_DESKTOP_TILE, acceptance.SOUNDLAB_MENU_SIGNATURE,
+        value, anchor=0,
+    )
+
+
 def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_redraw():
     probe = acceptance.SoundLabSeriesProbe()
     sent = []
@@ -278,12 +289,12 @@ def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_redraw():
     assert step(normal) is False and probe.stage == 2
     for prefix, value, start in (('Duration (100-2000 ms):', '2000', 2),
                                 ('Amplitude (0-100 percent):', '40', 7)):
-        prompt = replace(normal, lines=(acceptance.SOUNDLAB_FOCUS_MARKER, f'{prefix} {value}'),
-                         cells=(), semantic_field_claims=())
+        prompt = prompt_projection(prefix, value, normal)
         # Exercise the real fallback evidence boundary against the exact
         # immutable CELL prompt; a mocked recorder hid a full-run failure.
+        cell_lines = (acceptance.SOUNDLAB_FOCUS_MARKER, f'{prefix} {value}')
         prompt_cell = _offer('\n'.join(
-            line.ljust(280) for line in (*prompt.lines, *('',) * (84 - len(prompt.lines)))
+            line.ljust(280) for line in (*cell_lines, *('',) * (84 - len(cell_lines)))
         )).cell
         prompt_offer = replace(offer, cell=prompt_cell)
         assert probe.stage == start
@@ -421,9 +432,7 @@ def test_new_frame_rechecks_focus_or_prompt_before_rebinding_unaccepted_input(st
     probe = acceptance.SoundLabSeriesProbe()
     probe.stage = stage
     normal = field_projection()
-    prompt = replace(normal, lines=(acceptance.SOUNDLAB_FOCUS_MARKER,
-                                    'Duration (100-2000 ms): 2000'),
-                     cells=(), semantic_field_claims=())
+    prompt = prompt_projection('Duration (100-2000 ms):', '2000', normal)
     projection = normal if stage == 1 else prompt
     old, fresh = wave_offer(), wave_offer(offer_id=2)
     calls = []

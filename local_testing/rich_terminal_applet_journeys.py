@@ -11,7 +11,6 @@ and its taskbar button is slot 1.
 
 from __future__ import annotations
 
-from rich_terminal import text_rules
 from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.retained_wire import RetainedMessageType
@@ -44,7 +43,9 @@ from rich_terminal_desktop_acceptance import (
     _collection_claims_in,
     _desk_content_bounds,
     _image_claims_in,
+    _prompt_claim,
     _require_cell_text_in,
+    _require_held_beneath_prompt,
     _require_pad_readout,
     _require_picture_facts_in,
     _residual_contains,
@@ -53,7 +54,6 @@ from rich_terminal_desktop_acceptance import (
     _tab_value,
     _taskbar_has_focus,
     _text_area_pointer_state,
-    _text_cell_in,
 )
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
@@ -130,6 +130,7 @@ STREAMS_CARDS = (
 STREAMS_CONTEXT_MARKER = "Retained timeline context (partial)"
 AGENT_ALONE_FOCUS_MARKER = "[1:Agent*]"
 AGENT_PROMPT_MARKER = "Ask:"
+AGENT_MENU_SIGNATURE = ("Agent", "Run", "Connection", "Access", "Review", "Help")
 # The demo provider asks for approval when a request names one.
 AGENT_REQUEST = "approval check"
 AGENT_REVIEW_MARKER = "Provider approval request (no local tool envelope)"
@@ -183,8 +184,8 @@ class _AppletJourney(FrameBoundJourney):
     """A journey through Desk holding the one applet FOCUS_MARKER names."""
 
     focus_marker = ""
-    # The applet's modal prompt withholds its only menu bar; each journey
-    # checks the menu itself.
+    # A painted overlay, such as the Agent's review, withholds the applet's
+    # only menu bar; each journey checks the menu itself.
     requires_menu_bar = False
 
     def _admit(self, offer, generation, projection, sender) -> bool:
@@ -277,10 +278,12 @@ class PadAloneJourney(_AppletJourney):
     longer than one TEXT event allows, as several events.  Pad's Ln/Col
     readout counts characters in every frame that moves the caret.
 
-    Pad then opens notes.md through its Open prompt.  Its TEXT_AREA carries
-    the heading's, link's, and strong text's style runs, and a FOLLOW on the
-    link, sent where the viewer finds the link as a Ctrl press would, opens
-    example.f, whose keywords its runs mark.
+    Pad then opens notes.md through its Open prompt, a TEXT field in a
+    modal region over Pad's tile while Pad's menu bar and editor stay rich
+    and inactive beneath it.  Its TEXT_AREA carries the heading's, link's,
+    and strong text's style runs, and a FOLLOW on the link, sent where the
+    viewer finds the link as a Ctrl press would, opens example.f, whose
+    keywords its runs mark.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
@@ -444,30 +447,38 @@ class PadAloneJourney(_AppletJourney):
         """Open notes.md, check its style runs, and follow its link."""
 
         bounds = _desk_content_bounds(projection)
-        prompt = _residual_contains(projection, PAD_OPEN_PROMPT_MARKER, bounds)
-        if prompt and (
-            projection.menu_signatures
-            or _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
-        ):
-            raise PhysicalDesktopAcceptanceError(
-                "Pad's prompt did not withhold its menu and text areas"
-            )
+        prompt = _prompt_claim(projection, PAD_OPEN_PROMPT_MARKER, bounds)
+        if prompt is not None:
+            _require_held_beneath_prompt(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
+            if not _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds):
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's prompt withheld its editor"
+                )
         if self.stage == self.OPEN_PROMPT:
-            if not prompt:
+            if prompt is None:
                 return self._wait("Pad's Open prompt after Ctrl+O")
+            if prompt.content.text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Pad's Open prompt opened holding {prompt.content.text!r}"
+                )
+            _require_cell_text_in(offer, PAD_OPEN_PROMPT_MARKER, bounds, _WHERE)
             return self._step("pad-open-prompt-shown", "send_text",
                               styled_text.NOTES_PATH, self.PATH_TYPED, offer,
                               generation, sender)
         if self.stage == self.PATH_TYPED:
-            if not prompt:
+            if prompt is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Pad's Open prompt closed before its path was entered"
                 )
-            if not _residual_contains(projection, styled_text.NOTES_PATH, bounds):
+            if prompt.content.text != styled_text.NOTES_PATH:
                 return self._wait("the typed path in Pad's Open prompt")
+            if prompt.content.caret != len(styled_text.NOTES_PATH):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Pad's Open prompt has its caret at {prompt.content.caret}"
+                )
             return self._step("pad-notes-path-typed", "send_key", "enter",
                               self.NOTES_OPENED, offer, generation, sender)
-        if prompt:
+        if prompt is not None:
             return self._wait("Pad's Open prompt to close")
         if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
             return self._wait("Pad's menu bar after its prompt")
@@ -509,15 +520,17 @@ class DaybookAloneJourney(_AppletJourney):
     check it off in the agenda, then see the notice of the reminder the boot
     made when Desk fires it.
 
-    The prompt shows the typed text in visual order.  Backspace after an
-    emoji sequence deletes all of it; a click on a Han character's second
-    cell puts the caret before that character, where one typed character
-    lands; and Enter adds the task.  The agenda is a SECTIONS item view,
-    and the task is an unchecked checkable item under the TASKS heading; a
-    CHECK on it marks it done.  While the prompt is open, Daybook's menu,
-    calendar grid and agenda are withheld, as the document-atomic fallback
-    requires, and its cells stay complete.  Desk's toast of the reminder's
-    notice must then reach the physical frame on the bottom row.
+    The prompt is a TEXT field in a modal region over Daybook's tile: it
+    carries the typed text logically while its CELL cells show it in visual
+    order.  Backspace after an emoji sequence deletes all of it; a PLACE at
+    a Han character, sent where the viewer lays that character out, puts the
+    caret before it, where one typed character lands; and Enter adds the
+    task.  The agenda is a SECTIONS item view, and the task is an unchecked
+    checkable item under the TASKS heading; a CHECK on it marks it done.
+    While the prompt is open, Daybook's menu, calendar grid and agenda stay
+    rich beneath it and inactive, and its cells stay complete.  Desk's toast
+    of the reminder's notice must then reach the physical frame on the
+    bottom row.
     """
 
     focus_marker = DAYBOOK_ALONE_FOCUS_MARKER
@@ -537,8 +550,7 @@ class DaybookAloneJourney(_AppletJourney):
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
-        self._field: tuple[int, int] | None = None  # (column, row)
-        self._han_column = 0
+        self._han_cell: tuple[int, int] | None = None  # (row, column) in CELL
 
     @property
     def final_stage(self) -> int:
@@ -587,21 +599,22 @@ class DaybookAloneJourney(_AppletJourney):
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
-        prompt = _residual_contains(projection, DAYBOOK_PROMPT_MARKER, bounds)
+        prompt = _prompt_claim(projection, DAYBOOK_PROMPT_MARKER, bounds)
         collections = tuple(
             claim
             for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
             for claim in _collection_claims_in(projection, kind, bounds)
         )
-        if prompt:
+        if prompt is not None:
+            _require_held_beneath_prompt(
+                projection, prompt, bounds, DAYBOOK_MENU_SIGNATURE, "Daybook"
+            )
             if (
-                projection.menu_signatures
-                or collections
-                or projection.semantic_item_view_claims
+                not any(claim.kind is ControlKind.TEXT_GRID for claim in collections)
+                or self._agenda(projection, bounds) is None
             ):
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook's prompt did not withhold its menu, collections "
-                    "and agenda"
+                    "Daybook's prompt withheld its calendar or agenda"
                 )
         elif projection.menu_signatures != (DAYBOOK_MENU_SIGNATURE,) or not any(
             claim.kind is ControlKind.TEXT_GRID for claim in collections
@@ -616,13 +629,13 @@ class DaybookAloneJourney(_AppletJourney):
         entry = mixed_text.DAYBOOK_ENTRY
 
         if self.stage == self.READY:
-            if prompt:
+            if prompt is not None:
                 raise PhysicalDesktopAcceptanceError("Daybook's prompt was already open")
             return self._step("daybook-ready", "send_key", "ctrl+n", self.PROMPT,
                               offer, generation, sender)
         if self.stage == self.ADDED:
             # Enter closes the prompt; the agenda then shows the task.
-            if prompt:
+            if prompt is not None:
                 return JourneyProgress()
             return self._added(offer, generation, projection, bounds, entry, sender)
         if self.stage == self.CHECKED:
@@ -647,66 +660,66 @@ class DaybookAloneJourney(_AppletJourney):
                     "CELL does not show Desk's notice on its bottom row"
                 )
             return self._done("daybook-reminder-notice", offer)
-        if not prompt:
+        if prompt is None:
             if self.stage == self.PROMPT:
                 return JourneyProgress()
             raise PhysicalDesktopAcceptanceError("Daybook's prompt closed early")
-        label = _text_cell_in(projection, DAYBOOK_PROMPT_MARKER, bounds, _WHERE)
-        if label is None:
-            return JourneyProgress()
-        _column, row = label
-        left, _top, right, _bottom = bounds
+        text = prompt.content.text
         if self.stage == self.PROMPT:
+            if text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Daybook's prompt opened holding {text!r}"
+                )
             return self._step("daybook-prompt-opened", "send_text", head,
                               self.HEAD_TYPED, offer, generation, sender)
         if self.stage == self.HEAD_TYPED:
-            columns = projection.find_cells(mixed_text.visual(head), row, left, right)
-            if not columns:
+            if text != head:
                 return JourneyProgress()
-            self._field = (columns[0], row)
             return self._step("daybook-prompt-head-typed", "send_key", "backspace",
                               self.EMOJI_DELETED, offer, generation, sender)
-        column, field_row = self._field
-        if field_row != row:
-            raise PhysicalDesktopAcceptanceError("Daybook's prompt moved")
-
-        def shows(line: str) -> bool:
-            return _field_shows(projection, column, row, line, entry)
-
         if self.stage == self.EMOJI_DELETED:
-            if shows(head):
+            if text == head:
                 return JourneyProgress()
-            if not shows(shortened):
+            if text != shortened:
                 raise PhysicalDesktopAcceptanceError(
                     "Backspace in Daybook's prompt did not delete the whole emoji "
-                    f"sequence: {projection.row_text(row, column, right)!r}"
+                    f"sequence: {text!r}"
                 )
             return self._step("daybook-emoji-sequence-deleted", "send_text",
                               task[len(shortened):], self.TASK_TYPED, offer,
                               generation, sender)
         if self.stage == self.TASK_TYPED:
             # The guest may paint between typed characters.
-            if not shows(task):
+            if text != task:
                 return JourneyProgress()
             _require_cell_text_in(offer, mixed_text.visual(task), bounds, _WHERE)
-            columns = projection.find_cells(mixed_text.DAYBOOK_HAN, row, left, right)
-            if len(columns) != 1:
+            cells = [
+                (row, column)
+                for row, column in offer.cell.find(mixed_text.DAYBOOK_HAN)
+                if row == prompt.top
+            ]
+            if len(cells) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook's prompt does not show its Han character once"
                 )
-            self._han_column = columns[0]
-            # The character's second cell names its start (APT-1-TEXT 9.1).
-            return self._step("daybook-mixed-task-typed", "pointer_click",
-                              f"{columns[0] + 1},{row}", self.CLICKED, offer,
-                              generation, sender)
+            self._han_cell = cells[0]
+            identity = prompt.identity
+            value = (f"{identity.owner_id},{identity.owner_generation},"
+                     f"{identity.control_id},0,{task.index(mixed_text.DAYBOOK_HAN)}")
+            return self._step("daybook-mixed-task-typed", "text_place", value,
+                              self.CLICKED, offer, generation, sender)
         if self.stage == self.CLICKED:
-            # The focused caret now marks the Han character's cells.
-            if not offer.cell.cells[row][self._han_column].attrs & ATTR_REVERSE:
+            # The caret is now before the Han character, and CELL's focused
+            # caret marks its cells.
+            row, column = self._han_cell
+            if prompt.content.caret != task.index(mixed_text.DAYBOOK_HAN):
+                return JourneyProgress()
+            if not offer.cell.cells[row][column].attrs & ATTR_REVERSE:
                 return JourneyProgress()
             return self._step("daybook-prompt-caret-on-han", "send_text",
                               mixed_text.DAYBOOK_INSERT, self.INSERTED, offer,
                               generation, sender)
-        if not shows(entry):
+        if text != entry:
             return JourneyProgress()
         return self._step("daybook-prompt-text-inserted-at-click", "send_key", "enter",
                           self.ADDED, offer, generation, sender)
@@ -1896,10 +1909,12 @@ class AgentAloneJourney(_AppletJourney):
     whose column wraps.  It is a log, so no card is selected and the view
     follows the end.  The stored answer is taller than the view, so the
     transcript starts cut inside it; one wheel detent scrolls three screen
-    rows up, and End returns to the end.  Ctrl+L opens the Ask prompt; the
-    request makes the demo provider ask for approval, in a dialog over the
-    transcript that shows its request and unlocks F6 once it has shown its
-    last row.  While the prompt or the dialog is open, the Agent's menu and
+    rows up, and End returns to the end.  Ctrl+L opens the Ask prompt, a
+    TEXT field in a modal region over the Agent's tile, with the Agent's
+    menu and transcript rich and inactive beneath it.  The request makes the
+    demo provider ask for approval, in a dialog over the transcript that
+    shows its request and unlocks F6 once it has shown its last row; the
+    dialog is still painted, so while it is open the Agent's menu and
     transcript are withheld and CELL shows it.  F6 approves, and the
     transcript then ends with the approved exchange.  CELL shows each end
     of the transcript on its last row.
@@ -2033,15 +2048,23 @@ class AgentAloneJourney(_AppletJourney):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
         transcript = self._transcript(projection, bounds)
-        prompt = _residual_contains(projection, AGENT_PROMPT_MARKER, bounds)
+        prompt = _prompt_claim(projection, AGENT_PROMPT_MARKER, bounds)
         review = _residual_contains(projection, AGENT_REVIEW_MARKER, bounds)
-        if (prompt or review) and (transcript is not None or projection.menu_signatures):
+        if review and (transcript is not None or projection.menu_signatures):
             raise PhysicalDesktopAcceptanceError(
-                "the Agent's prompt or review did not withhold its menu and transcript"
+                "the Agent's review did not withhold its menu and transcript"
             )
+        if prompt is not None:
+            _require_held_beneath_prompt(
+                projection, prompt, bounds, AGENT_MENU_SIGNATURE, "the Agent"
+            )
+            if transcript is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "the Agent's prompt withheld its transcript"
+                )
         stored = agent_transcript.CARDS
         if self.stage in (self.READY, self.SCROLLED, self.ENDED):
-            if prompt or review:
+            if prompt is not None or review:
                 raise PhysicalDesktopAcceptanceError(
                     "the Agent opened its prompt or a review unasked"
                 )
@@ -2074,14 +2097,14 @@ class AgentAloneJourney(_AppletJourney):
             return self._step("agent-transcript-end-again", "send_key", "ctrl+l",
                               self.PROMPT, offer, generation, sender)
         if self.stage == self.PROMPT:
-            if not prompt:
+            if prompt is None:
                 return self._wait("the Agent's Ask prompt")
             return self._step("agent-prompt-opened", "send_text", AGENT_REQUEST,
                               self.TYPED, offer, generation, sender)
         if self.stage == self.TYPED:
-            if not prompt:
+            if prompt is None:
                 raise PhysicalDesktopAcceptanceError("the Agent's Ask prompt closed early")
-            if not _residual_contains(projection, AGENT_REQUEST, bounds):
+            if prompt.content.text != AGENT_REQUEST:
                 return self._wait("the typed request")
             return self._step("agent-request-typed", "send_key", "enter",
                               self.REVIEW, offer, generation, sender)
@@ -2109,14 +2132,15 @@ class SmallTerminalJourney(_AppletJourney):
     rich frame returns once a screen fits again.
 
     Pad's empty editor fits, so the journey starts rich: Pad's menu bar and
-    its editor as a text area.  Ctrl+O opens Pad's Open prompt, which leaves
-    the whole screen to residual glyphs, more text than the terminal holds;
+    its editor as a text area.  Ctrl+O opens Pad's Open prompt, a TEXT field
+    over the editor, which still fits, and the large sample's path is typed
+    into it.  The 48-line large sample is more text than the terminal holds:
     the producer replaces the rich frame with an empty one and the viewer
     shows CELL.  Every frame is either complete rich output or an empty
     retained scene over complete CELL, never older rich output over a newer
-    CELL frame.  The 48-line large sample is too much as well, and stays
-    CELL.  Opening the two-line example.f through the same prompt brings the
-    rich frame back, with example.f in Pad's text area.
+    CELL frame.  The prompt over the large sample is too much as well, and
+    stays CELL.  Opening the two-line example.f through it brings the rich
+    frame back, with example.f in Pad's text area.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
@@ -2178,10 +2202,8 @@ class SmallTerminalJourney(_AppletJourney):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
         empty = self._empty(projection)
-        if not empty and (projection.draw_count == 0 or not projection.menu_signatures
-                          and not _residual_contains(projection, PAD_OPEN_PROMPT_MARKER,
-                                                     bounds)):
-            # A rich frame is complete: Pad's menu, or its prompt as residual.
+        if not empty and (projection.draw_count == 0 or not projection.menu_signatures):
+            # A rich frame is complete: Pad's menu is in every one.
             raise PhysicalDesktopAcceptanceError(
                 "a rich frame on the small terminal was incomplete"
             )
@@ -2196,17 +2218,23 @@ class SmallTerminalJourney(_AppletJourney):
             _require_cell_text_in(offer, "Untitled", bounds, _WHERE)
             return self._step("small-terminal-pad-rich", "send_key", "ctrl+o",
                               self.PROMPT, offer, generation, sender)
-        if self.stage == self.PROMPT:
-            if not self._empty_showing(offer, projection, PAD_OPEN_PROMPT_MARKER,
-                                       bounds, "Pad's Open prompt"):
-                return self._wait("the Open prompt shown as CELL")
-            return self._step("small-terminal-prompt-shown-as-cell", "send_text",
-                              SMALL_TERMINAL_LARGE_PATH, self.TYPED, offer,
-                              generation, sender)
-        if self.stage == self.TYPED:
-            if not self._empty_showing(offer, projection, SMALL_TERMINAL_LARGE_PATH,
-                                       bounds, "the typed path"):
-                return self._wait("the typed path shown as CELL")
+        if self.stage in (self.PROMPT, self.TYPED):
+            if empty:
+                if self._cell_shows(offer, PAD_OPEN_PROMPT_MARKER, bounds):
+                    raise PhysicalDesktopAcceptanceError(
+                        "Pad's Open prompt over its empty editor did not fit"
+                    )
+                return self._wait("Pad's Open prompt")
+            prompt = _prompt_claim(projection, PAD_OPEN_PROMPT_MARKER, bounds)
+            if prompt is None:
+                return self._wait("Pad's Open prompt")
+            _require_held_beneath_prompt(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
+            if self.stage == self.PROMPT:
+                return self._step("small-terminal-prompt-shown-rich", "send_text",
+                                  SMALL_TERMINAL_LARGE_PATH, self.TYPED, offer,
+                                  generation, sender)
+            if prompt.content.text != SMALL_TERMINAL_LARGE_PATH:
+                return self._wait("the typed path in the Open prompt")
             return self._step("small-terminal-large-path-typed", "send_key", "enter",
                               self.LARGE, offer, generation, sender)
         if self.stage == self.LARGE:
@@ -2231,18 +2259,6 @@ class SmallTerminalJourney(_AppletJourney):
             return self._wait("example.f shown rich again")
         _require_cell_text_in(offer, styled_text.EXAMPLE_LINE, bounds, _WHERE)
         return self._done("small-terminal-rich-again", offer)
-
-
-def _field_shows(projection, column, row, line: str, longest: str) -> bool:
-    """Whether a field from COLUMN of ROW shows LINE's cells, then only
-    blanks as far as the longest line LONGEST would reach."""
-
-    width = text_rules.string_width(line)
-    end = column + text_rules.string_width(longest) + 1
-    return (
-        projection.row_text(row, column, column + width) == mixed_text.visual(line)
-        and not projection.row_text(row, column + width, end).strip()
-    )
 
 
 def applet_journey(

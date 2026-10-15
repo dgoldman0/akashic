@@ -22,6 +22,7 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import ControlIdentity
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.retained_view import MenuBarDraw
+from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
     StyleRun,
@@ -45,6 +46,7 @@ from rich_terminal_applet_journeys import (
     AGENT_APPROVE_MARKER,
     AGENT_AUDIT,
     AGENT_EXCHANGE,
+    AGENT_MENU_SIGNATURE,
     AGENT_REQUEST,
     AGENT_REVIEW_MARKER,
     AGENT_REVIEW_REASON,
@@ -85,6 +87,7 @@ EDITOR_ROW = 4
 EDITOR_COL = 5
 PROMPT_ROW = 82
 FIELD_COL = len(" New task: ")
+PROMPT_ID = 40_000
 
 
 def _area_state(lines: tuple[str, ...], primary: tuple[int, int]) -> tuple:
@@ -130,6 +133,49 @@ def _screen(rows: dict[int, str], menus: tuple) -> RichScreenProjection:
         COLS * ROWS,
         menu_bar_count=len(menus),
         menu_signatures=menus,
+        menu_bar_identities=tuple(
+            ControlIdentity(1, 1, 30_100 + index) for index in range(len(menus))
+        ),
+    )
+
+
+def _prompt(label: str, typed: str, *, row: int, caret: int | None = None):
+    """The shared prompt over ROW: a TEXT field in a modal region, its label
+    then TYPED with the caret at CARET, by default its end."""
+
+    start = len(label) + 2
+    content = FieldContent(
+        1 + len(typed),
+        FieldKind.TEXT,
+        FieldFlag(0),
+        FieldRect(1, 0, len(label), 1),
+        FieldRect(start, 0, COLS - start, 1),
+        text=typed,
+        caret=len(typed) if caret is None else caret,
+    )
+    return acceptance_runner._SemanticFieldClaim(
+        ControlIdentity(1, 1, PROMPT_ID), 0, row, COLS, row + 1, label,
+        ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED,
+        content, modal=True,
+    )
+
+
+def _held(frame: RichScreenProjection, prompt) -> RichScreenProjection:
+    """FRAME with PROMPT open over it: every control beneath is inactive."""
+
+    inactive = set(frame.menu_bar_identities)
+    for claims in (
+        frame.semantic_collection_claims,
+        frame.semantic_item_view_claims,
+        frame.semantic_document_claims,
+        frame.semantic_tabset_claims,
+        frame.semantic_field_claims,
+    ):
+        inactive.update(claim.identity for claim in claims)
+    return replace(
+        frame,
+        semantic_field_claims=frame.semantic_field_claims + (prompt,),
+        inactive_controls=frozenset(inactive),
     )
 
 
@@ -206,9 +252,14 @@ def _pad_frame(
 
 
 def _pad_prompt_frame(typed: str):
-    """Pad's Open prompt, which withholds its menu and text areas."""
+    """Pad's Open prompt over its status row, with Pad's menu bar and text
+    areas rich and inactive beneath it."""
 
-    return _screen({81: f" Open: {typed}", ROWS - 1: "[1:Akashic Pa*]"}, ())
+    return _held(_pad_frame("", (1, 0)), _prompt("Open:", typed, row=81))
+
+
+def _pad_prompt_offer(typed: str = ""):
+    return _cell_offer(1, ((81, 1, f"Open: {typed}"),))
 
 
 def _keyed(key: int, runs) -> tuple[tuple[int, int, int, int], ...]:
@@ -259,10 +310,10 @@ def test_pad_alone_types_mixed_text_and_moves_by_whole_characters() -> None:
         (_pad_offer(shortened), _pad_frame(shortened, (1, family))),
         (_pad_offer(full), _pad_frame(full, (1, family_end))),
         (blank, _pad_frame(full, (1, lamed))),
-        # Ctrl+O opens the prompt, which withholds the editor.
-        (blank, _pad_prompt_frame("")),
-        (blank, _pad_prompt_frame(styled_text.NOTES_PATH)),
-        (blank, _pad_prompt_frame(styled_text.NOTES_PATH)),
+        # Ctrl+O opens the prompt over the editor.
+        (_pad_prompt_offer(), _pad_prompt_frame("")),
+        (_pad_prompt_offer(styled_text.NOTES_PATH), _pad_prompt_frame(styled_text.NOTES_PATH)),
+        (_pad_prompt_offer(styled_text.NOTES_PATH), _pad_prompt_frame(styled_text.NOTES_PATH)),
         (
             blank,
             _pad_frame(
@@ -402,35 +453,40 @@ def _notice_row() -> str:
 def _daybook_frame(
     *,
     prompt: str | None = None,
+    caret: int | None = None,
     agenda: str | None = None,
     checked: bool = False,
     notice: bool = False,
 ):
+    """Daybook's menu, calendar and agenda, with its task prompt holding
+    PROMPT open over them when given."""
+
     taskbar = _notice_row() if notice else "[1:Daybook*]"
     rows = {0: " File  Entry  Go  Reminders  Help", ROWS - 1: taskbar}
-    menus = () if prompt is not None else (acceptance_runner.DAYBOOK_MENU_SIGNATURE,)
-    projection = _screen(rows, menus)
-    if prompt is None:
-        grid = acceptance_runner._SemanticCollectionClaim(
-            ControlKind.TEXT_GRID,
-            ControlIdentity(1, 1, 20_001),
-            0,
-            1,
-            25,
-            11,
-            content_revision=1,
-            primary_key=1,
-            content_state=_area_state(("1",), (1, 0)),
-        )
-        projection = replace(projection, semantic_collection_claims=(grid,))
+    projection = _screen(rows, (acceptance_runner.DAYBOOK_MENU_SIGNATURE,))
+    grid = acceptance_runner._SemanticCollectionClaim(
+        ControlKind.TEXT_GRID,
+        ControlIdentity(1, 1, 20_001),
+        0,
+        1,
+        25,
+        11,
+        content_revision=1,
+        primary_key=1,
+        content_state=_area_state(("1",), (1, 0)),
+    )
+    projection = replace(projection, semantic_collection_claims=(grid,))
+    if prompt is not None and agenda is None:
+        agenda = "Water the plants"
     if agenda is not None:
         projection = replace(
             projection,
             semantic_item_view_claims=(_daybook_agenda(agenda, checked=checked),),
         )
     if prompt is not None:
-        projection = _place_cells(projection, PROMPT_ROW, 1, "New task: ")
-        projection = _place_cells(projection, PROMPT_ROW, FIELD_COL, mixed_text.visual(prompt))
+        projection = _held(
+            projection, _prompt("New task:", prompt, row=PROMPT_ROW, caret=caret)
+        )
     return projection
 
 
@@ -450,6 +506,7 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
     han = FIELD_COL + text_rules.string_width(
         visual_task[: visual_task.index(mixed_text.DAYBOOK_HAN)]
     )
+    han_offset = task.index(mixed_text.DAYBOOK_HAN)
     journey = applet_journey("daybook", DAYBOOK_READY)
     assert isinstance(journey, DaybookAloneJourney)
     blank = _cell_offer(1, ())
@@ -461,7 +518,7 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
         (_prompt_offer(task), _daybook_frame(prompt=task)),
         # The caret has not reached the Han character yet.
         (_prompt_offer(task), _daybook_frame(prompt=task)),
-        (_prompt_offer(task, han), _daybook_frame(prompt=task)),
+        (_prompt_offer(task, han), _daybook_frame(prompt=task, caret=han_offset)),
         (_prompt_offer(entry), _daybook_frame(prompt=entry)),
         # Enter has not closed the prompt yet.
         (_prompt_offer(entry), _daybook_frame(prompt=entry)),
@@ -494,7 +551,8 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
         ("daybook-prompt-opened", [("send_text", head)]),
         ("daybook-prompt-head-typed", [("send_key", "backspace")]),
         ("daybook-emoji-sequence-deleted", [("send_text", task[len(shortened):])]),
-        ("daybook-mixed-task-typed", [("pointer_click", f"{han + 1},{PROMPT_ROW}")]),
+        ("daybook-mixed-task-typed",
+         [("text_place", f"1,1,{PROMPT_ID},0,{han_offset}")]),
         (None, []),
         ("daybook-prompt-caret-on-han", [("send_text", mixed_text.DAYBOOK_INSERT)]),
         ("daybook-prompt-text-inserted-at-click", [("send_key", "enter")]),
@@ -520,7 +578,6 @@ def test_daybook_alone_refuses_a_partial_backspace_and_leaked_semantics() -> Non
 
     journey = DaybookAloneJourney(DAYBOOK_READY)
     journey.stage = DaybookAloneJourney.EMOJI_DELETED
-    journey._field = (FIELD_COL, PROMPT_ROW)
     journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
     partial = head[:-1]
     with pytest.raises(PhysicalDesktopAcceptanceError, match="whole emoji"):
@@ -528,17 +585,17 @@ def test_daybook_alone_refuses_a_partial_backspace_and_leaked_semantics() -> Non
             _prompt_offer(partial), 9, _daybook_frame(prompt=partial), sender
         )
 
-    # While the prompt is open, Daybook's menu must be withheld.
-    leaked = replace(
-        _daybook_frame(prompt=head),
-        menu_bar_count=1,
-        menu_signatures=(acceptance_runner.DAYBOOK_MENU_SIGNATURE,),
-    )
+    # While the prompt is open, everything beneath it is inactive.
+    leaked = replace(_daybook_frame(prompt=head), inactive_controls=frozenset())
     journey = DaybookAloneJourney(DAYBOOK_READY)
     journey.stage = DaybookAloneJourney.HEAD_TYPED
     journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="withhold"):
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
         journey.after_present(_prompt_offer(head), 9, leaked, sender)
+    # Nor may it withhold the agenda.
+    bare = replace(_daybook_frame(prompt=head), semantic_item_view_claims=())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="calendar or agenda"):
+        journey.after_present(_prompt_offer(head), 9, bare, sender)
 
 
 TIMELINE_ID = 30_001
@@ -704,6 +761,14 @@ def _agent_frame(view=None, rows: dict[int, str] | None = None, menus=()):
     return projection
 
 
+def _agent_prompt_frame(typed: str):
+    """The Ask prompt over the Agent's last row, its menu and transcript
+    rich and inactive beneath it."""
+
+    frame = _agent_frame(_agent_view(STORED, STORED_END), menus=(AGENT_MENU_SIGNATURE,))
+    return _held(frame, _prompt("Ask:", typed, row=82))
+
+
 def _agent_offer(last: str, *placements):
     """CELL with LAST on the transcript's last row, where card text starts."""
 
@@ -740,8 +805,8 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
         at_end,
         scrolled,
         at_end,
-        (_agent_offer(""), _agent_frame(rows={82: " Ask: "})),
-        (_agent_offer(""), _agent_frame(rows={82: f" Ask: {AGENT_REQUEST}"})),
+        (_agent_offer(""), _agent_prompt_frame("")),
+        (_agent_offer(""), _agent_prompt_frame(AGENT_REQUEST)),
         (_agent_offer("", (31, 2, AGENT_REVIEW_MARKER)), _agent_frame(rows=REVIEW_ROWS)),
         (
             _agent_offer(AGENT_AUDIT),
@@ -871,8 +936,10 @@ def test_small_terminal_shows_unfitting_screens_as_cell_and_returns_to_rich() ->
         ready,
         # Ctrl+O has not reached Pad yet.
         ready,
-        _empty_frame((PROMPT_ROW, 1, "Open: ")),
-        _empty_frame((PROMPT_ROW, 1, f"Open: {SMALL_TERMINAL_LARGE_PATH}")),
+        # The prompt over Pad's empty editor fits.
+        (_pad_prompt_offer(), _pad_prompt_frame("")),
+        (_pad_prompt_offer(SMALL_TERMINAL_LARGE_PATH),
+         _pad_prompt_frame(SMALL_TERMINAL_LARGE_PATH)),
         _empty_frame((EDITOR_ROW, EDITOR_COL, SMALL_TERMINAL_LARGE_LINE)),
         _empty_frame((PROMPT_ROW, 1, "Open: ")),
         _empty_frame((PROMPT_ROW, 1, f"Open: {styled_text.EXAMPLE_PATH}")),
@@ -884,7 +951,7 @@ def test_small_terminal_shows_unfitting_screens_as_cell_and_returns_to_rich() ->
     assert [(result.milestone, sent) for result, sent in results] == [
         ("small-terminal-pad-rich", [("send_key", "ctrl+o")]),
         (None, []),
-        ("small-terminal-prompt-shown-as-cell", [("send_text", SMALL_TERMINAL_LARGE_PATH)]),
+        ("small-terminal-prompt-shown-rich", [("send_text", SMALL_TERMINAL_LARGE_PATH)]),
         ("small-terminal-large-path-typed", [("send_key", "enter")]),
         ("small-terminal-large-file-shown-as-cell", [("send_key", "ctrl+o")]),
         ("small-terminal-prompt-shown-again", [("send_text", styled_text.EXAMPLE_PATH)]),
@@ -910,10 +977,11 @@ def test_small_terminal_refuses_a_screen_that_fit_or_a_plain_start() -> None:
     offer, empty = _empty_frame((0, 1, "File  Edit  Selection"), (2, 1, "Untitled"))
     with pytest.raises(PhysicalDesktopAcceptanceError, match="not shown rich"):
         journey_at(SmallTerminalJourney.READY).after_present(offer, 9, empty, sender)
-    # A prompt or a large file shown rich means the terminal held them.
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="fit the small terminal"):
-        journey_at(SmallTerminalJourney.PROMPT).after_present(
-            _cell_offer(1, ()), 9, _pad_prompt_frame(""), sender)
+    # The prompt over Pad's empty editor shown as CELL did not fit.
+    offer, empty = _empty_frame((81, 1, "Open: "))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="did not fit"):
+        journey_at(SmallTerminalJourney.PROMPT).after_present(offer, 9, empty, sender)
+    # A large file shown rich means the terminal held it.
     large = _pad_frame(SMALL_TERMINAL_LARGE_LINE, (1, 0))
     with pytest.raises(PhysicalDesktopAcceptanceError, match="fit the small terminal"):
         journey_at(SmallTerminalJourney.LARGE).after_present(
@@ -922,8 +990,8 @@ def test_small_terminal_refuses_a_screen_that_fit_or_a_plain_start() -> None:
 
 
 def test_frames_of_desk_with_one_applet_may_lack_a_menu_bar() -> None:
-    # A frame of residual glyphs alone, as while Daybook's prompt withholds
-    # the only applet's menu.
+    # A frame of residual glyphs alone, as while a painted overlay, such as
+    # the Agent's review, withholds the only applet's menu.
     offer = _offer("xxxxx\nyyyyy")
     region = offer.retained.regions[0]
     draws = tuple(draw for draw in region.draws if not isinstance(draw, MenuBarDraw))

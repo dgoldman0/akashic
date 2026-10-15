@@ -37,6 +37,7 @@ from rich_terminal.retained_scene import (
     RGBA,
     StatusSeverity,
 )
+from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
     SemanticTextContent,
@@ -1397,6 +1398,10 @@ def _projection(text: str) -> RichScreenProjection:
         sum(map(len, lines)),
         menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES),
         menu_signatures=acceptance_runner.DESKTOP_MENU_SIGNATURES,
+        menu_bar_identities=tuple(
+            ControlIdentity(1, 1, 50_000 + index)
+            for index in range(len(acceptance_runner.DESKTOP_MENU_SIGNATURES))
+        ),
     )
     pad_left, pad_top, pad_right, pad_bottom = (
         acceptance_runner._desktop_tile_bounds(
@@ -1535,45 +1540,81 @@ def _desktop_projection(
     return _projection("\n".join(lines))
 
 
+PROMPT_CONTROL_ID = 59_000
+
+
+def _with_tile_prompt(
+    projection: RichScreenProjection,
+    label: str,
+    tile: int,
+    menu_signature: tuple[str, ...],
+    typed: str = "",
+    *,
+    caret: int | None = None,
+    anchor: int | None = None,
+    row: int | None = None,
+) -> RichScreenProjection:
+    """PROJECTION with LABEL's prompt open over TILE's status row, or ROW: a
+    TEXT field in a modal region holding TYPED, with the applet's menu bar
+    and every control in the tile inactive beneath it."""
+
+    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(projection, tile)
+    row = bottom - 2 if row is None else row
+    start = len(label) + 2
+    caret = len(typed) if caret is None else caret
+    content = FieldContent(
+        1 + len(typed),
+        FieldKind.TEXT,
+        FieldFlag(0),
+        FieldRect(1, 0, len(label), 1),
+        FieldRect(start, 0, right - left - start, 1),
+        text=typed,
+        caret=caret,
+        anchor=caret if anchor is None else anchor,
+    )
+    prompt = acceptance_runner._SemanticFieldClaim(
+        ControlIdentity(1, 1, PROMPT_CONTROL_ID), left, row, right, row + 1, label,
+        ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED,
+        content, modal=True,
+    )
+    inactive = {
+        projection.menu_bar_identities[projection.menu_signatures.index(menu_signature)]
+    }
+    for claims in (
+        projection.semantic_collection_claims,
+        projection.semantic_item_view_claims,
+        projection.semantic_document_claims,
+        projection.semantic_tabset_claims,
+        projection.semantic_field_claims,
+    ):
+        inactive.update(
+            claim.identity
+            for claim in claims
+            if left <= claim.left and claim.right <= right
+            and top <= claim.top and claim.bottom <= bottom
+        )
+    return replace(
+        projection,
+        semantic_field_claims=projection.semantic_field_claims + (prompt,),
+        inactive_controls=projection.inactive_controls | frozenset(inactive),
+    )
+
+
 def _daybook_prompt_projection(
     *,
     task_visible: bool = False,
     focused: bool = True,
 ) -> RichScreenProjection:
-    """Model RUHA's document-atomic fallback under Daybook's prompt."""
+    """Daybook's prompt open over its tile, Daybook rich and inactive
+    beneath it."""
 
-    seed = _projection("")
-    daybook_left, _, _, daybook_bottom = acceptance_runner._desktop_tile_bounds(
-        seed,
+    placements = [(83, 0, DAYBOOK_FOCUS_MARKER)] if focused else []
+    return _with_tile_prompt(
+        _desktop_projection(*placements),
+        DAYBOOK_PROMPT_MARKER,
         acceptance_runner.DAYBOOK_DESKTOP_TILE,
-    )
-    prompt_text = DAYBOOK_PROMPT_MARKER
-    if task_visible:
-        prompt_text += DAYBOOK_ACCEPTANCE_TASK
-    placements = [(daybook_bottom - 2, daybook_left + 1, prompt_text)]
-    if focused:
-        placements.append((83, 0, DAYBOOK_FOCUS_MARKER))
-    projection = _desktop_projection(*placements)
-    unaffected_menus = tuple(
-        signature
-        for signature in acceptance_runner.DESKTOP_MENU_SIGNATURES
-        if signature != acceptance_runner.DAYBOOK_MENU_SIGNATURE
-    )
-    daybook_grids = acceptance_runner._collection_claims_in_tile(
-        projection,
-        ControlKind.TEXT_GRID,
-        acceptance_runner.DAYBOOK_DESKTOP_TILE,
-    )
-    assert len(daybook_grids) == 1
-    return replace(
-        projection,
-        menu_bar_count=len(unaffected_menus),
-        menu_signatures=unaffected_menus,
-        semantic_collection_claims=tuple(
-            claim
-            for claim in projection.semantic_collection_claims
-            if claim not in daybook_grids
-        ),
+        acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+        DAYBOOK_ACCEPTANCE_TASK if task_visible else "",
     )
 
 
@@ -1815,6 +1856,9 @@ def _soundlab_desktop_projection(
         menu_signatures=(
             acceptance_runner.DESKTOP_MENU_SIGNATURES
             + (acceptance_runner.SOUNDLAB_MENU_SIGNATURE,)
+        ),
+        menu_bar_identities=projection.menu_bar_identities + (
+            ControlIdentity(1, 1, 50_000 + len(acceptance_runner.DESKTOP_MENU_SIGNATURES)),
         ),
         region_count=2,
         instrument_region_count=1,
@@ -3059,20 +3103,29 @@ def test_pad_caret_uses_exact_status_field_state_only_in_the_status_row() -> Non
         ), bounds)
 
 
-def test_daybook_modal_fallback_withholds_status_fields_as_well_as_collections() -> None:
+def test_a_tile_prompt_leaves_no_status_field_under_its_row() -> None:
     projection = _daybook_prompt_projection(task_visible=False)
-    acceptance_runner._require_daybook_prompt_fallback_semantics(projection)
+    require = lambda frame: acceptance_runner._require_tile_prompt(  # noqa: E731
+        frame,
+        DAYBOOK_PROMPT_MARKER,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+        "Daybook",
+    )
+    require(projection)
     left, _top, right, bottom = acceptance_runner._desktop_tile_bounds(
         projection, acceptance_runner.DAYBOOK_DESKTOP_TILE,
     )
     claim = acceptance_runner._SemanticStatusFieldClaim(
-        1, 1, 90_000, left, bottom - 1, right, bottom, 0, "", "Ready",
+        1, 1, 90_000, left, bottom - 2, right, bottom - 1, 0, "", "Ready",
         StatusSeverity.NEUTRAL, False,
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="retained a STATUS_FIELD"):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(replace(
-            projection, semantic_status_field_claims=(claim,),
-        ))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="status field remains"):
+        require(replace(projection, semantic_status_field_claims=(claim,)))
+    # A status field on another row of the tile is not under the prompt.
+    require(replace(projection, semantic_status_field_claims=(
+        replace(claim, top=bottom - 1, bottom=bottom),
+    )))
 
 
 def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> None:
@@ -3642,121 +3695,67 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
         )
 
 
-def test_daybook_prompt_gate_requires_exact_document_atomic_fallback() -> None:
+def test_daybook_prompt_gate_holds_daybook_alone_modal() -> None:
     prompt = _daybook_prompt_projection()
-    acceptance_runner._require_daybook_prompt_fallback_semantics(prompt)
 
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="four unaffected canonical menu forests",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                menu_bar_count=prompt.menu_bar_count + 1,
-                menu_signatures=prompt.menu_signatures
-                + (acceptance_runner.DAYBOOK_MENU_SIGNATURE,),
-            )
-        )
-
-    complete = _projection("READY")
-    daybook_grid = acceptance_runner._collection_claims_in_tile(
-        complete,
-        ControlKind.TEXT_GRID,
-        acceptance_runner.DAYBOOK_DESKTOP_TILE,
-    )
-    assert len(daybook_grid) == 1
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="partial text collection",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                semantic_collection_claims=(
-                    prompt.semantic_collection_claims + daybook_grid
-                ),
-            )
-        )
-
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="TEXT_AREA"):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                semantic_collection_claims=tuple(
-                    claim
-                    for claim in prompt.semantic_collection_claims
-                    if claim.kind is not ControlKind.TEXT_AREA
-                ),
-            )
-        )
-
-    daybook_left, daybook_top, daybook_right, daybook_bottom = (
-        acceptance_runner._desktop_tile_bounds(
-            prompt,
+    def require(frame):
+        return acceptance_runner._require_tile_prompt(
+            frame,
+            DAYBOOK_PROMPT_MARKER,
             acceptance_runner.DAYBOOK_DESKTOP_TILE,
+            acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+            "Daybook",
         )
+
+    acceptance_runner._require_canonical_desktop_semantics(prompt)
+    assert require(prompt).identity.control_id == PROMPT_CONTROL_ID
+
+    field = prompt.semantic_field_claims[-1]
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="is not a field inside"):
+        require(replace(prompt, semantic_field_claims=()))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="modal region"):
+        require(replace(prompt, semantic_field_claims=(replace(field, modal=False),)))
+
+    grid = next(
+        claim
+        for claim in prompt.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_GRID
     )
-    prompt_row = daybook_bottom - 2
-    without_prompt = list(prompt.lines)
-    without_prompt[prompt_row] = " " * prompt.cols
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="prompt is not visible inside its Desk tile",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(prompt, lines=tuple(without_prompt))
-        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
+        require(replace(
+            prompt, inactive_controls=prompt.inactive_controls - {grid.identity},
+        ))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="withheld its menu bar"):
+        require(replace(
+            prompt,
+            menu_bar_count=prompt.menu_bar_count - 1,
+            menu_signatures=tuple(
+                signature for signature in prompt.menu_signatures
+                if signature != acceptance_runner.DAYBOOK_MENU_SIGNATURE
+            ),
+            menu_bar_identities=tuple(
+                identity for signature, identity in zip(
+                    prompt.menu_signatures, prompt.menu_bar_identities)
+                if signature != acceptance_runner.DAYBOOK_MENU_SIGNATURE
+            ),
+        ))
 
     pad_area = next(
         claim
         for claim in prompt.semantic_collection_claims
         if claim.kind is ControlKind.TEXT_AREA
     )
-    semantic_prompt = replace(
-        pad_area,
-        identity=ControlIdentity(1, 1, 29_999),
-        left=daybook_left,
-        top=daybook_top,
-        right=daybook_right,
-        bottom=daybook_bottom,
-        visible_text=(DAYBOOK_PROMPT_MARKER,),
-    )
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="partial text collection",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                lines=tuple(without_prompt),
-                semantic_collection_claims=(
-                    prompt.semantic_collection_claims + (semantic_prompt,)
-                ),
-            )
-        )
-
-    pad_tabset = prompt.semantic_tabset_claims[0]
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="partial TABSET"):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                semantic_tabset_claims=prompt.semantic_tabset_claims
-                + (
-                    replace(
-                        pad_tabset,
-                        identity=ControlIdentity(1, 1, 39_999),
-                        left=daybook_left,
-                        top=daybook_top,
-                        right=daybook_right,
-                        bottom=daybook_bottom,
-                    ),
-                ),
-            )
-        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="another applet inactive"):
+        require(replace(
+            prompt, inactive_controls=prompt.inactive_controls | {pad_area.identity},
+        ))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="is inactive"):
+        require(replace(
+            prompt, inactive_controls=prompt.inactive_controls | {field.identity},
+        ))
 
 
-def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None:
+def test_journey_types_the_daybook_task_only_into_its_open_prompt() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = 6
     actions: list[tuple[str, str, int]] = []
@@ -3847,23 +3846,20 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     assert journey.stage == 10
     assert actions[-1] == ("send_key", "ctrl+o", 6)
 
-    outside = _daybook_prompt_projection()
-    _, _, _, daybook_bottom = acceptance_runner._desktop_tile_bounds(
-        outside,
-        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    # A prompt with Daybook's label in another tile is not Daybook's.
+    outside = _with_tile_prompt(
+        _desktop_projection((83, 0, DAYBOOK_FOCUS_MARKER)),
+        DAYBOOK_PROMPT_MARKER,
+        acceptance_runner.PAD_DESKTOP_TILE,
+        acceptance_runner.PAD_MENU_SIGNATURE,
     )
-    outside_lines = list(outside.lines)
-    outside_lines[daybook_bottom - 2] = " " * outside.cols
-    outside_lines[0] = DAYBOOK_PROMPT_MARKER.ljust(outside.cols)
     wrong_tile = DesktopAcceptanceJourney(("READY",))
     wrong_tile.stage = 6
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="every canonical"):
-        wrong_tile.after_present(
-            _offer("X", offer_id=1, pad_menu=True),
-            9,
-            replace(outside, lines=tuple(outside_lines)),
-            sender,
-        )
+    sent = len(actions)
+    wrong_tile.after_present(
+        _offer("X", offer_id=1, pad_menu=True), 9, outside, sender,
+    )
+    assert wrong_tile.stage == 6 and len(actions) == sent
 
 
 def test_collection_transition_matches_bounds_across_rebased_wire_ids() -> None:
@@ -6059,7 +6055,8 @@ def _pointer_frame(
     status: str | None = None,
     semantic_status: bool = False,
     prompt: str | None = None,
-    withhold: bool = True,
+    prompt_caret: int | None = None,
+    prompt_anchor: int | None = None,
     readout: tuple[int, int] | None = None,
     daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
     extra: tuple[tuple[int, int, str], ...] = (),
@@ -6071,11 +6068,12 @@ def _pointer_frame(
     """A launched-Sound-Lab Desktop frame during the pointer journey.
 
     ``table`` is File Explorer's detail table as (first shown row,
-    selected key).  A File Explorer prompt paints over its status row from
-    column 94 and, unless ``withhold`` is false, withholds its menu forest
-    and table as the guest's document-atomic fallback does.  Pad's caret
-    readout uses the ordinary menu/body/status layout's row 39; row 40 is
-    unused content, and row 41 is the horizontal Desk divider.
+    selected key).  ``prompt`` is the text of File Explorer's rename prompt,
+    a TEXT field in a modal region over its tile with the caret at
+    ``prompt_caret`` and the anchor at ``prompt_anchor``; File Explorer stays
+    rich and inactive beneath it.  Pad's caret readout uses the ordinary
+    menu/body/status layout's row 39; row 40 is unused content, and row 41
+    is the horizontal Desk divider.
     """
 
     projection = _soundlab_desktop_projection(daybook_date=daybook_date)
@@ -6100,20 +6098,10 @@ def _pointer_frame(
 
     if status is not None:
         status_value(100, 180, status)
-    if prompt is not None:
-        place(40, 94, prompt)
     if readout is not None:
         status_value(50, 90, "Ln {}, Col {}".format(*readout))
     for row, col, value in extra:
         place(row, col, value)
-    if prompt is not None and withhold:
-        signatures = list(projection.menu_signatures)
-        signatures.remove(acceptance_runner.FEXPLORER_MENU_SIGNATURE)
-        projection = replace(
-            projection,
-            menu_signatures=tuple(signatures),
-            menu_bar_count=projection.menu_bar_count - 1,
-        )
     claims = []
     for claim in projection.semantic_collection_claims:
         if (
@@ -6133,7 +6121,7 @@ def _pointer_frame(
             )
         claims.append(claim)
     item_views = ()
-    if table is not None and not (prompt is not None and withhold):
+    if table is not None:
         item_views = (_fexplorer_table(*table),)
     projection = replace(
         projection,
@@ -6142,7 +6130,7 @@ def _pointer_frame(
         semantic_item_view_claims=item_views,
         semantic_status_field_claims=tuple(status_claims),
     )
-    return replace(
+    projection = replace(
         projection,
         semantic_tabset_claims=(
             _pad_tabset_claim(
@@ -6152,6 +6140,17 @@ def _pointer_frame(
             ),
         ),
     )
+    if prompt is not None:
+        projection = _with_tile_prompt(
+            projection,
+            acceptance_runner.RENAME_PROMPT_LABEL,
+            acceptance_runner.FEXPLORER_DESKTOP_TILE,
+            acceptance_runner.FEXPLORER_MENU_SIGNATURE,
+            prompt,
+            caret=prompt_caret,
+            anchor=prompt_anchor,
+        )
+    return projection
 
 
 LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/large.txt")
@@ -6199,25 +6198,34 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
             ("send_key", "f2"),
         ),
         (build_frame(fe, table=(3, 11), status="/large.txt"), None, None),
-        # The name follows "Rename: " at column 94, so its stem is 102-106.
+        # The viewer turns a drag across the stem into a PLACE at its start
+        # and an EXTEND to its end, in the prompt's field.
         (
-            build_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, table=(3, 11), prompt="large.txt"),
             "fexplorer-rename-prompt-opened",
-            ("pointer_drag", "102,40,107,40"),
+            ("text_place", f"1,1,{PROMPT_CONTROL_ID},0,0"),
+        ),
+        # The caret has not moved yet.
+        (build_frame(fe, table=(3, 11), prompt="large.txt"), None, None),
+        (
+            build_frame(fe, table=(3, 11), prompt="large.txt", prompt_caret=0),
+            "fexplorer-rename-caret-placed",
+            ("text_extend", f"1,1,{PROMPT_CONTROL_ID},0,5"),
         ),
         (
-            build_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, table=(3, 11), prompt="large.txt", prompt_caret=5,
+                        prompt_anchor=0),
             "fexplorer-rename-stem-dragged",
             ("send_text", "notes"),
         ),
         # The guest may paint between typed scalars.
-        (build_frame(fe, prompt="Rename: no.txt"), None, None),
+        (build_frame(fe, table=(3, 11), prompt="no.txt"), None, None),
         (
-            build_frame(fe, prompt="Rename: notes.txt"),
+            build_frame(fe, table=(3, 11), prompt="notes.txt"),
             "fexplorer-rename-stem-replaced",
             ("send_key", "escape"),
         ),
-        (build_frame(fe, prompt="Rename: notes.txt"), None, None),
+        (build_frame(fe, table=(3, 11), prompt="notes.txt"), None, None),
         (
             build_frame(fe, table=(3, 11), status="/large.txt"),
             "fexplorer-rename-cancelled",
@@ -6315,29 +6323,6 @@ def test_exact_desk_content_bounds_reserve_dividers_and_assign_remainders() -> N
     assert acceptance_runner._menu_body_status_bounds((93, 0, 185, 41)) == (93, 39, 185, 40)
     assert acceptance_runner._menu_body_status_bounds((0, 0, 280, 83)) == (0, 81, 280, 82)
 
-
-
-def test_prompt_exact_text_excludes_real_desk_divider_but_preserves_content() -> None:
-    prompt = "Rename: large.txt"
-    projection = _pointer_frame(FEXPLORER_BUTTON, extra=(
-        (39, 94, prompt), (39, 185, "│"), (39, 186, "adjacent pane"),
-    ))
-    assert projection.row_text(39, 185, 186) == "│"
-    assert acceptance_runner._prompt_row_text(
-        projection, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ) == prompt
-    wrong = _pointer_frame(FEXPLORER_BUTTON, extra=(
-        (39, 94, prompt), (39, 184, "!"), (39, 185, "│"),
-    ))
-    assert acceptance_runner._prompt_row_text(
-        wrong, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ).endswith("!")
-    assert acceptance_runner._prompt_row_text(
-        projection, (185, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ) == ""
-    assert acceptance_runner._prompt_row_text(
-        projection, (94, 41), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ) == ""
 
 
 def test_selected_path_uses_exact_typed_status_in_its_authored_row() -> None:
@@ -6465,7 +6450,7 @@ def _mixed_pad_frame(
 
 
 def _mixed_daybook_frame(
-    prompt: str | None = None, agenda: str | None = None
+    prompt: str | None = None, agenda: str | None = None, caret: int | None = None
 ) -> RichScreenProjection:
     frame = _pointer_frame(
         DAYBOOK_BUTTON,
@@ -6478,22 +6463,15 @@ def _mixed_daybook_frame(
         frame = _place_cells(frame, 10, 196, "[ ] " + mixed_text.visual(agenda))
     if prompt is None:
         return frame
-    # The prompt withholds all of Daybook's slices, as for any modal prompt.
-    signatures = list(frame.menu_signatures)
-    signatures.remove(acceptance_runner.DAYBOOK_MENU_SIGNATURE)
-    frame = replace(
+    # The prompt holds Daybook alone modal, Daybook rich beneath it.
+    return _with_tile_prompt(
         frame,
-        menu_signatures=tuple(signatures),
-        menu_bar_count=frame.menu_bar_count - 1,
-        semantic_collection_claims=tuple(
-            claim
-            for claim in frame.semantic_collection_claims
-            if claim.kind is not ControlKind.TEXT_GRID
-        ),
-    )
-    frame = _place_cells(frame, MIXED_PROMPT_ROW, MIXED_PROMPT_COL, "New task: ")
-    return _place_cells(
-        frame, MIXED_PROMPT_ROW, MIXED_TASK_COL, mixed_text.visual(prompt)
+        DAYBOOK_PROMPT_MARKER,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+        prompt,
+        caret=caret,
+        row=MIXED_PROMPT_ROW,
     )
 
 
@@ -6602,12 +6580,12 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
             _mixed_daybook_frame(prompt=task),
             prompt_offer,
             "daybook-mixed-task-typed",
-            ("pointer_click", f"{han_column + 1},{MIXED_PROMPT_ROW}"),
+            ("text_place", f"1,1,{PROMPT_CONTROL_ID},0,{task.index(han)}"),
         ),
         # The caret has not reached the Han character yet.
         (_mixed_daybook_frame(prompt=task), prompt_offer, None, None),
         (
-            _mixed_daybook_frame(prompt=task),
+            _mixed_daybook_frame(prompt=task, caret=task.index(han)),
             _cell_offer(
                 1,
                 ((MIXED_PROMPT_ROW, MIXED_TASK_COL, mixed_text.visual(task)),),
@@ -6936,23 +6914,17 @@ def _styled_pad_frame(lines: tuple[str, ...], runs) -> RichScreenProjection:
 
 
 def _pad_prompt_frame(typed: str) -> RichScreenProjection:
-    """Pad's Open prompt, which withholds Pad's menu, tabs, and text areas."""
+    """Pad's Open prompt over its tile, with Pad's menu, tabs, and text
+    areas rich and inactive beneath it."""
 
-    frame = _styled_pad_frame((styled_text.EXAMPLE_LINE,), ())
-    signatures = list(frame.menu_signatures)
-    signatures.remove(acceptance_runner.PAD_MENU_SIGNATURE)
-    frame = replace(
-        frame,
-        menu_signatures=tuple(signatures),
-        menu_bar_count=frame.menu_bar_count - 1,
-        semantic_collection_claims=tuple(
-            claim
-            for claim in frame.semantic_collection_claims
-            if claim.identity.control_id not in (20_000, 20_002, 20_003)
-        ),
-        semantic_tabset_claims=(),
+    return _with_tile_prompt(
+        _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()),
+        acceptance_runner.PAD_OPEN_PROMPT_MARKER,
+        acceptance_runner.PAD_DESKTOP_TILE,
+        acceptance_runner.PAD_MENU_SIGNATURE,
+        typed,
+        row=39,
     )
-    return _place_cells(frame, 39, 2, f"Open: {typed}")
 
 
 def _keyed(key: int, runs) -> tuple[tuple[int, int, int, int], ...]:
@@ -7066,12 +7038,10 @@ def test_styled_text_journey_refuses_missing_runs_and_leaked_semantics() -> None
     with pytest.raises(PhysicalDesktopAcceptanceError, match="style runs"):
         journey.after_present(_offer("X", offer_id=501, pad_menu=True), 9, unstyled, sender)
 
-    # A prompt that leaves Pad's text areas in place is not the fallback.
+    # A prompt that leaves Pad's editor active beneath it is refused.
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE
-    leaky = _place_cells(
-        _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()), 39, 2, "Open: "
-    )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad prompt"):
+    leaky = replace(_pad_prompt_frame(""), inactive_controls=frozenset())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
         journey.after_present(_offer("X", offer_id=502, pad_menu=True), 9, leaky, sender)
 
 
@@ -7230,26 +7200,25 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE,
             {},
-            lambda: _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: large.txt.bak"),
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="large.txt.bak"),
             "exactly the selected file's name",
         ),
-        # While the prompt shows, File Explorer's semantics must be withheld.
+        # While the prompt shows, File Explorer stays rich but inactive.
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE,
             {},
-            lambda: _pointer_frame(
-                FEXPLORER_BUTTON,
-                prompt="Rename: large.txt",
-                withhold=False,
+            lambda: replace(
+                _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="large.txt"),
+                inactive_controls=frozenset(),
             ),
-            "fallback is incomplete",
+            "beneath it active",
         ),
-        # The drag selected more or less than the stem.
+        # The selection held more or less than the stem.
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
-            {"_rename_prompt_cell": (94, 40)},
-            lambda: _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: noteslarge.txt"),
-            "typing over the dragged stem",
+            {"_rename_prompt": ControlIdentity(1, 1, PROMPT_CONTROL_ID)},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="noteslarge.txt"),
+            "typing over the selected stem",
         ),
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE,
@@ -7370,38 +7339,39 @@ def test_owed_drag_finishes_its_move_and_release_before_other_input() -> None:
         "pointer_drag": ["drag_owed"],
         "pointer_drag_rest": ["backpressured", "release_owed"],
         "pointer_release": ["progress"],
-        "send_text": ["progress"],
+        "text_place": ["progress"],
     }
 
     def sender(method, value, offer, generation):
         actions.append((method, value, offer.offer_id))
         return statuses[method].pop(0)
 
-    prompt = _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: large.txt")
+    prompt = _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="large.txt")
     first = _offer("X", offer_id=1, pad_menu=True)
-    progress = journey.after_present(first, 9, prompt, sender)
-    assert progress.milestone == "fexplorer-rename-prompt-opened"
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE
+    # A raw drag over residual cells whose move and release the terminal
+    # could not take yet.
+    journey._send("pointer_drag", "102,40,107,40", journey.stage, first, 9, sender)
     assert journey.has_pending_input
     # The move and release retry against the same frame; once the move is
     # in, only the release is owed.
     assert journey.retry_pending_current(first, 9, sender)
     assert journey.retry_pending_current(first, 9, sender)
     assert journey.has_pending_input
+    # The next frame finishes the release before the stage sends its own input.
     progress = journey.after_present(
         _offer("X", offer_id=2, pad_menu=True),
         9,
         prompt,
         sender,
     )
-    assert progress.milestone == "fexplorer-rename-stem-dragged"
+    assert progress.milestone == "fexplorer-rename-prompt-opened"
     assert not journey.has_pending_input
     assert actions == [
         ("pointer_drag", "102,40,107,40", 1),
         ("pointer_drag_rest", "107,40", 1),
         ("pointer_drag_rest", "107,40", 1),
         ("pointer_release", "107,40", 2),
-        ("send_text", "notes", 2),
+        ("text_place", f"1,1,{PROMPT_CONTROL_ID},0,0", 2),
     ]
 
 

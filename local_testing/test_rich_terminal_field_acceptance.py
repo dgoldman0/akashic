@@ -134,7 +134,7 @@ def test_field_adjust_uses_exact_real_value_hit_and_revision(pygame_font, kind, 
     assert len(client.requests) == 1
 
 
-@pytest.mark.parametrize('kind', tuple(FieldKind))
+@pytest.mark.parametrize('kind', (FieldKind.INTEGER, FieldKind.CHOICE))
 def test_field_activate_uses_existing_revisionless_activate_wire(pygame_font, kind):
     offer, state, ack = _input_environment(pygame_font, _field(kind))
     client = _Client()
@@ -143,6 +143,16 @@ def test_field_activate_uses_existing_revisionless_activate_wire(pygame_font, ki
     method, params = client.requests[0]
     assert method == 'send_control_event'
     assert 'content_revision' not in params and 'adjustment' not in params
+
+
+def test_a_writable_text_field_takes_positions_not_activate(pygame_font):
+    # The viewer lays a writable TEXT field's value out as a text target,
+    # which takes PLACE and EXTEND; nothing sends it ACTIVATE.
+    offer, state, ack = _input_environment(pygame_font, _field(FieldKind.TEXT))
+    client = _Client()
+    with pytest.raises(acceptance.PhysicalDesktopAcceptanceError):
+        _request(client, offer, state, ack, 'field_activate', '1,1,90000')
+    assert client.requests == []
 
 
 @pytest.mark.parametrize('mutation', ['stale', 'wrong_slot', 'occluded', 'no_ack', 'unknown_identity', 'readonly', 'disabled', 'text_adjust'])

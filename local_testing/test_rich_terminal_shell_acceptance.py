@@ -16,10 +16,11 @@ from rich_terminal.pygame_view import (
 )
 from rich_terminal.retained_scene import ControlKind, ControlState, ObjectBounds, RGBA
 from rich_terminal.retained_view import (
-    DisplayScope, GlyphRunDraw, PaneDraw, ReadoutDraw, RetainedDrawPlane,
+    DisplayScope, FieldDraw, GlyphRunDraw, PaneDraw, ReadoutDraw, RetainedDrawPlane,
     RetainedRegionDraw, TabDraw, TabSetDraw, TaskBarDraw, TaskDraw,
     retained_draw_order,
 )
+from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from shared.session import TerminalCell, TerminalDisplayOffer, TerminalSnapshot
 
 COLS, ROWS = 12, 8
@@ -59,8 +60,18 @@ def _offer(regions, *, cols=COLS,rows=ROWS):
     return TerminalDisplayOffer(1,scope,snapshot,plane)
 
 
+def _prompt(x, y, w):
+    """A prompt's TEXT field over one content row: label A, value hi."""
+    content=FieldContent(1,FieldKind.TEXT,FieldFlag(0),FieldRect(0,0,1,1),
+                         FieldRect(2,0,w-2,1),text='hi',caret=2,anchor=2)
+    return FieldDraw(600,ACTIVE|ControlState.SELECTED,0,255,ObjectBounds(x,y,w,1),'A',content)
+
+
 def _scene(*, instruments=False,tabs=False,zero_chrome=False,
-           title='TITLE ONLY',bar=None,late_bar=False,missing=False):
+           title='TITLE ONLY',bar=None,late_bar=False,missing=False,prompt=False):
+    """Two panes and a taskbar.  With PROMPT, pane 0's last content row is a
+    prompt's field in a MODAL region over that content, which holds the
+    pane's controls inactive."""
     bar=_bar() if bar is None else bar
     panes=[];contents=[];extra=[]
     slots=((0,6),(6,6)) if not zero_chrome else ((0,12),)
@@ -71,15 +82,22 @@ def _scene(*, instruments=False,tabs=False,zero_chrome=False,
         panes.append(PaneDraw(100+index,0,ObjectBounds(left,0,width,7),3+index,
                               content,title,index==0))
         draws=[]
+        held=prompt and index==0
         for row in range(y,y+h):
             if instruments and row==2:continue
             if tabs and row==1:continue
             if missing and index==0 and row==y:continue
+            if held and row==y+h-1:continue
             draws.append(_glyph(1000+index*100+row,x,row,chr(65+index)*w))
         if tabs:
             draws.append(TabSetDraw(200+index*10,ACTIVE,0,1,ObjectBounds(x,1,w,1),
                          (TabDraw(201+index*10,ACTIVE|ControlState.SELECTED,0,'Keep',''),)))
-        contents.append(_region(3+index,draws,z=3,clip=(x,y,w,h)))
+        region=_region(3+index,draws,z=3,clip=(x,y,w,h))
+        if held:
+            region=replace(region,inactive_controls=frozenset((200,201) if tabs else ()))
+            modal=_region(20,(_prompt(x,y+h-1,w),),z=5,clip=(x,y,w,h))
+            extra.append(replace(modal,modal=True))
+        contents.append(region)
         if instruments:
             readout=ReadoutDraw(800+index,0,ObjectBounds(0,0,w,1),WHITE,BLACK,'42')
             extra.append(_region(10+index,(readout,),z=2,clip=(x,2,w,1),logical=(x,2,w,1)))
@@ -467,3 +485,32 @@ def test_task_and_launcher_bands_share_exact_clip_with_authored_divider(renderer
     assert painted.hit_test(25,85) is None
     assert painted.hit_test(33,85) is None
     assert acceptance._residual_contains(projection,' |',(3,7,5,8))
+
+
+def test_a_prompt_in_a_modal_region_over_its_pane_is_held_evidence():
+    projection=_project(_scene(tabs=True,prompt=True))
+    field,=projection.semantic_field_claims
+    assert field.modal and field.label=='A' and field.content.text=='hi'
+    assert (field.left,field.top,field.right,field.bottom)==(1,5,5,6)
+    assert projection.inactive_controls=={ControlIdentity(7,9,200),ControlIdentity(7,9,201)}
+    assert acceptance._prompt_claim(projection,'A',(0,0,6,7)) is field
+    assert acceptance._prompt_claim(projection,'A',(6,0,12,7)) is None
+    # The other pane's tabset stays active.
+    assert ControlIdentity(7,9,210) not in projection.inactive_controls
+
+
+@pytest.mark.parametrize('changes,message',[
+    ({'clip_x':0,'clip_cols':5},'exactly one'),
+    ({'z_order':2},'beneath'),
+    # Unclipped, it would also stop the taskbar's points.
+    ({'clipped':False,'clip_x':0,'clip_y':0,'clip_cols':0,'clip_rows':0},
+     'exactly one|blocks TASKBAR'),
+])
+def test_a_modal_region_must_hold_exactly_its_pane_content_above_it(changes,message):
+    with pytest.raises(ERROR,match=message):
+        _project(_replace_region(_scene(tabs=True,prompt=True),20,**changes))
+
+
+def test_a_field_region_that_is_not_modal_is_not_a_prompt():
+    with pytest.raises(ERROR,match='unrelated|nonmatching'):
+        _project(_replace_region(_scene(tabs=True,prompt=True),20,modal=False))
