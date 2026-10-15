@@ -8147,7 +8147,6 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._pad_area_before_tab_activation: _CollectionStates | None = None
         self._pad_area_after_tab_activation: _CollectionStates | None = None
         self._pointer_list_first: int | None = None
-        self._rename_prompt: ControlIdentity | None = None
         self._pad_tabset_before_pointer_open: _TabSetState | None = None
         self._pad_pointer_bounds: _SemanticBounds | None = None
         self._pad_pointer_viewport: int | None = None
@@ -8984,7 +8983,6 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     "File Explorer's rename prompt does not hold exactly the "
                     "selected file's name"
                 )
-            self._rename_prompt = rename.identity
             milestone = self._milestone("fexplorer-rename-prompt-opened")
             # A press at the name's start, as the viewer sends it: a PLACE.
             self._send(
@@ -9001,15 +8999,14 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
             DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
         ):
-            if self._rename_prompt is None:
-                raise PhysicalDesktopAcceptanceError(
-                    "rename stage has no acknowledged prompt"
-                )
             if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
                     "the prompt selection moved focus away from File Explorer"
                 )
-            if rename is None or rename.identity != self._rename_prompt:
+            # A complete START gives the prompt a fresh wire identity, so
+            # each frame finds it again and input names the identity of the
+            # frame it follows.
+            if rename is None:
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer's rename prompt closed during the rename"
                 )

@@ -1553,10 +1553,12 @@ def _with_tile_prompt(
     caret: int | None = None,
     anchor: int | None = None,
     row: int | None = None,
+    control: int = PROMPT_CONTROL_ID,
 ) -> RichScreenProjection:
     """PROJECTION with LABEL's prompt open over TILE's status row, or ROW: a
     TEXT field in a modal region holding TYPED, with the applet's menu bar
-    and every control in the tile inactive beneath it."""
+    and every control in the tile inactive beneath it.  CONTROL is its wire
+    identity, which a complete START renumbers."""
 
     left, top, right, bottom = acceptance_runner._desktop_tile_bounds(projection, tile)
     row = bottom - 2 if row is None else row
@@ -1573,7 +1575,7 @@ def _with_tile_prompt(
         anchor=caret if anchor is None else anchor,
     )
     prompt = acceptance_runner._SemanticFieldClaim(
-        ControlIdentity(1, 1, PROMPT_CONTROL_ID), left, row, right, row + 1, label,
+        ControlIdentity(1, 1, control), left, row, right, row + 1, label,
         ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED,
         content, modal=True,
     )
@@ -6076,6 +6078,7 @@ def _pointer_frame(
     prompt: str | None = None,
     prompt_caret: int | None = None,
     prompt_anchor: int | None = None,
+    prompt_control: int = PROMPT_CONTROL_ID,
     readout: tuple[int, int] | None = None,
     daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
     extra: tuple[tuple[int, int, str], ...] = (),
@@ -6168,6 +6171,7 @@ def _pointer_frame(
             prompt,
             caret=prompt_caret,
             anchor=prompt_anchor,
+            control=prompt_control,
         )
     return projection
 
@@ -6226,10 +6230,12 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
         ),
         # The caret has not moved yet.
         (build_frame(fe, table=(3, 11), prompt="large.txt"), None, None),
+        # A complete START renumbered the prompt; the EXTEND names it anew.
         (
-            build_frame(fe, table=(3, 11), prompt="large.txt", prompt_caret=0),
+            build_frame(fe, table=(3, 11), prompt="large.txt", prompt_caret=0,
+                        prompt_control=PROMPT_CONTROL_ID + 7),
             "fexplorer-rename-caret-placed",
-            ("text_extend", f"1,1,{PROMPT_CONTROL_ID},0,5"),
+            ("text_extend", f"1,1,{PROMPT_CONTROL_ID + 7},0,5"),
         ),
         (
             build_frame(fe, table=(3, 11), prompt="large.txt", prompt_caret=5,
@@ -7235,9 +7241,16 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
         # The selection held more or less than the stem.
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
-            {"_rename_prompt": ControlIdentity(1, 1, PROMPT_CONTROL_ID)},
+            {},
             lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="noteslarge.txt"),
             "typing over the selected stem",
+        ),
+        # The prompt closed before the rename was typed.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
+            {},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), status="/large.txt"),
+            "closed during the rename",
         ),
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE,
