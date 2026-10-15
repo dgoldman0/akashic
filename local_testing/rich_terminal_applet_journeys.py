@@ -12,7 +12,7 @@ and its taskbar button is slot 1.
 from __future__ import annotations
 
 from rich_terminal.pygame_view import ATTR_REVERSE
-from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
 from rich_terminal.retained_wire import RetainedMessageType
 from rich_terminal.semantic_documents import BlockKind
 from rich_terminal.semantic_items import (
@@ -46,9 +46,11 @@ from rich_terminal_desktop_acceptance import (
     _desk_prompt_claim,
     _dialog_claim,
     _image_claims_in,
+    _notice_claim,
     _prompt_claim,
     _require_cell_text_in,
     _require_held_beneath_overlay,
+    _require_notice,
     _require_pad_readout,
     _require_picture_facts_in,
     _residual_contains,
@@ -85,6 +87,11 @@ FEXP_FILE = "large.txt"
 # F2 renames the selected file through a prompt labelled so; the journey
 # selects the name's stem, types over it, and cancels.
 FEXP_RENAME_LABEL = "Rename:"
+# File Explorer's Go to prompt opens holding the folder shown, the root; the
+# path typed after it names nothing, so File Explorer warns.
+FEXP_GOTO_LABEL = "Go to:"
+FEXP_GOTO_MISSING = "no-such-folder"
+FEXP_GOTO_NOTICE = "Path not found"
 FEXP_RENAME_STEM = "large"
 FEXP_RENAME_TYPED = "notes"
 # The photo check's picture, a real photograph wider than File Explorer's
@@ -644,8 +651,10 @@ class DaybookAloneJourney(_AppletJourney):
     shows Daybook's automations, a SECTIONS item view too; a SELECT on the
     daily reminder and Delete ask first, in a DIALOG whose Delete is
     destructive and whose Cancel is the default, and an ACTIVATE on Cancel
-    keeps the reminder.  F4 returns to the calendar, and Desk's toast of the
-    reminder's notice must then reach the physical frame on the bottom row.
+    keeps the reminder.  F4 returns to the calendar, and the reminder's
+    notice must then reach the physical frame: the app shell's notice, a
+    neutral DIALOG with the NOTICE flag on the bottom row, in a region of its
+    own over Desk's taskbar, as CELL shows it there too.
     """
 
     focus_marker = DAYBOOK_ALONE_FOCUS_MARKER
@@ -769,17 +778,10 @@ class DaybookAloneJourney(_AppletJourney):
             return self._step("daybook-task-checked", "send_key", "f4",
                               self.AUTOMATIONS, offer, generation, sender)
         if self.stage == self.NOTICE_WAIT:
-            # The toast is an ordinary overlay on Desk's bottom row: the rich
-            # frame carries it as residual glyphs, and CELL as its cells.
-            bottom = projection.rows - 1
-            if DAYBOOK_REMINDER_NOTICE not in projection.row_text(bottom):
+            notice = _notice_claim(projection, DAYBOOK_REMINDER_NOTICE)
+            if notice is None:
                 return self._wait(f"Desk's notice {DAYBOOK_REMINDER_NOTICE!r}")
-            if not any(
-                row == bottom for row, _ in offer.cell.find(DAYBOOK_REMINDER_NOTICE)
-            ):
-                raise PhysicalDesktopAcceptanceError(
-                    "CELL does not show Desk's notice on its bottom row"
-                )
+            _require_notice(offer, notice, StatusSeverity.NEUTRAL)
             return self._done("daybook-reminder-notice", offer)
         if prompt is None:
             if self.stage == self.PROMPT:
@@ -929,7 +931,11 @@ class FexpAloneJourney(_AppletJourney):
     tile with its menu bar and every root it does not cover rich and
     inactive beneath it, offers Delete, destructive, and Cancel, the
     default, and pressing Cancel closes it and leaves the file listed and
-    selected.  A
+    selected.  Ctrl+G opens the Go to prompt holding the folder shown, the
+    root, and a path typed after it names nothing: Enter closes the prompt,
+    and File Explorer warns that the path was not found, in the app shell's
+    notice, a DIALOG with the NOTICE flag and the warning's meaning on the
+    bottom row, as CELL shows it there too.  A
     SELECT on sunset.qoi's row loads its preview, and activating the
     Preview tab shows it: the rich frame shows it as an IMAGE once the
     terminal holds it, while CELL beneath shows what the picture is and
@@ -984,6 +990,9 @@ class FexpAloneJourney(_AppletJourney):
         RENAME_CANCELLED,
         DELETE_ASKED,
         DELETE_CANCELLED,
+        GOTO_PROMPT,
+        GOTO_TYPED,
+        GOTO_WARNED,
         PICTURE_SELECTED,
         PICTURE_PREVIEWED,
         PICTURE_DETAILS,
@@ -1017,7 +1026,7 @@ class FexpAloneJourney(_AppletJourney):
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(42)
+    ) = range(45)
     _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
                         LINKED_DOCUMENT)
     _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_OUTLINE_CLOSED,
@@ -1150,6 +1159,32 @@ class FexpAloneJourney(_AppletJourney):
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
         return (self.focus_marker, FEXP_FILE)
+
+    def _goto(self, offer, generation, sender, goto) -> JourneyProgress:
+        """The Go to prompt: it opens holding the root; type a path that
+        names nothing after it, and Enter."""
+
+        if goto is None:
+            if self.stage == self.GOTO_PROMPT:
+                return self._wait("File Explorer's Go to prompt after Ctrl+G")
+            raise PhysicalDesktopAcceptanceError("File Explorer's Go to prompt closed early")
+        text = goto.content.text
+        if self.stage == self.GOTO_PROMPT:
+            if text != "/":
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's Go to prompt opened holding {text!r}"
+                )
+            return self._step("fexp-goto-opened", "send_text", FEXP_GOTO_MISSING,
+                              self.GOTO_TYPED, offer, generation, sender)
+        typed = "/" + FEXP_GOTO_MISSING
+        if text != typed:
+            if typed.startswith(text):
+                return self._wait("the path typed into the Go to prompt")
+            raise PhysicalDesktopAcceptanceError(
+                f"typing into File Explorer's Go to prompt gave {text!r}"
+            )
+        return self._step("fexp-goto-typed", "send_key", "enter", self.GOTO_WARNED,
+                          offer, generation, sender)
 
     def _rename(self, offer, generation, projection, sender, rename) -> JourneyProgress:
         """The rename prompt: select the name's stem, type over it, cancel."""
@@ -1686,9 +1721,19 @@ class FexpAloneJourney(_AppletJourney):
             )
         if self.RENAME_PROMPT <= self.stage <= self.RENAME_TYPED:
             return self._rename(offer, generation, projection, sender, rename)
-        if self.stage in (self.FILE_SELECTED, self.RENAME_CANCELLED, self.DELETE_CANCELLED):
+        goto = _prompt_claim(projection, FEXP_GOTO_LABEL, bounds)
+        if goto is not None:
+            _require_held_beneath_overlay(
+                projection, goto, bounds, FEXPLORER_MENU_SIGNATURE, "File Explorer"
+            )
+        if self.stage in (self.GOTO_PROMPT, self.GOTO_TYPED):
+            return self._goto(offer, generation, sender, goto)
+        if self.stage in (self.FILE_SELECTED, self.RENAME_CANCELLED, self.DELETE_CANCELLED,
+                          self.GOTO_WARNED):
             if rename is not None:
                 return self._wait("the rename prompt closed")
+            if goto is not None:
+                return self._wait("the Go to prompt closed")
             selected = table.selected
             if selected is None or selected.fields[0].text != FEXP_FILE:
                 return self._wait(f"{FEXP_FILE}'s row selected")
@@ -1709,6 +1754,13 @@ class FexpAloneJourney(_AppletJourney):
             if self.stage == self.RENAME_CANCELLED:
                 return self._step("fexp-rename-cancelled", "send_key", "delete",
                                   self.DELETE_ASKED, offer, generation, sender)
+            if self.stage == self.DELETE_CANCELLED:
+                return self._step("fexp-delete-cancelled", "send_key", "ctrl+g",
+                                  self.GOTO_PROMPT, offer, generation, sender)
+            notice = _notice_claim(projection, FEXP_GOTO_NOTICE)
+            if notice is None:
+                return self._wait(f"File Explorer's warning {FEXP_GOTO_NOTICE!r}")
+            _require_notice(offer, notice, StatusSeverity.WARNING)
             row = table.named(FEXPLORER_PICTURE)
             if row is None:
                 raise PhysicalDesktopAcceptanceError(
@@ -1716,8 +1768,8 @@ class FexpAloneJourney(_AppletJourney):
                 )
             if not self._shown(table, row):
                 return self._step("fexp-table-scrolled", "item_scroll", table.value(1),
-                                  self.DELETE_CANCELLED, offer, generation, sender)
-            return self._step("fexp-delete-cancelled", "item_select",
+                                  self.GOTO_WARNED, offer, generation, sender)
+            return self._step("fexp-goto-warned", "item_select",
                               table.value(row.item_key), self.PICTURE_SELECTED,
                               offer, generation, sender)
         if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,

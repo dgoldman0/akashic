@@ -3086,6 +3086,52 @@ def _require_held_beneath_overlay(
         )
 
 
+def _notice_claim(projection: RichScreenProjection, message: str) -> _SemanticDialogClaim | None:
+    """The app shell's notice saying MESSAGE, or None: a DIALOG with the
+    NOTICE flag on the bottom row, untitled and with no buttons, in a region
+    of its own that is no modal scope."""
+
+    claims = [
+        claim
+        for claim in projection.semantic_dialog_claims
+        if claim.content.notice and claim.content.message == message
+    ]
+    if not claims:
+        return None
+    if len(claims) != 1:
+        raise PhysicalDesktopAcceptanceError(f"{len(claims)} notices say {message!r}")
+    claim = claims[0]
+    if claim.modal or claim.buttons or claim.title:
+        raise PhysicalDesktopAcceptanceError(f"the notice {message!r} is not a plain notice")
+    if (claim.top, claim.bottom) != (projection.rows - 1, projection.rows):
+        raise PhysicalDesktopAcceptanceError(f"the notice {message!r} is not on the bottom row")
+    return claim
+
+
+def _require_notice(offer, notice: _SemanticDialogClaim, severity: StatusSeverity) -> None:
+    """NOTICE carries SEVERITY, and CELL shows its message on its row."""
+
+    if notice.content.severity != severity:
+        raise PhysicalDesktopAcceptanceError(
+            f"the notice {notice.content.message!r} means "
+            f"{StatusSeverity(notice.content.severity).name}, not {severity.name}"
+        )
+    if not any(row == notice.top for row, _ in offer.cell.find(notice.content.message)):
+        raise PhysicalDesktopAcceptanceError("CELL does not show the notice on its row")
+
+
+def _notice_covers(projection: RichScreenProjection, bounds: _LogicalRectangle) -> bool:
+    """Whether a notice lies over part of BOUNDS, which a press there then
+    reaches instead."""
+
+    return any(
+        claim.content.notice and _rectangle_intersection(
+            bounds, _LogicalRectangle(claim.left, claim.top, claim.right, claim.bottom)
+        ) is not None
+        for claim in projection.semantic_dialog_claims
+    )
+
+
 def _dialog_claim(
     projection: RichScreenProjection,
     message: str,
@@ -9024,6 +9070,11 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 projection,
                 FEXPLORER_TASKBAR_BUTTON,
             )
+            # A notice over the task takes a press there until it ends.
+            if any(_notice_covers(projection, task.bounds)
+                   for bar in projection.semantic_taskbar_claims for task in bar.tasks
+                   if task.bounds.left <= column < task.bounds.right):
+                return JourneyProgress()
             milestone = self._milestone("soundlab-restored-after-menus")
             method, value = "pointer_click", f"{column},{row}"
             if projection.semantic_taskbar_claims:

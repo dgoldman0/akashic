@@ -20,7 +20,7 @@ import styled_text
 import rich_terminal_desktop_acceptance as acceptance_runner
 from rich_terminal import text_rules
 from rich_terminal.pygame_view import ControlIdentity
-from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
 from rich_terminal.retained_view import MenuBarDraw
 from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
 from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
@@ -279,6 +279,32 @@ def _question(message: str, buttons, *, row: int = 30, col: int = 60):
         ControlIdentity(1, 1, PROMPT_ID), col, row, col + width, row + 6, "Confirm",
         ControlState.VISIBLE, content, modal=True, buttons=claims,
     )
+
+
+def _notice(message: str, severity: StatusSeverity = StatusSeverity.NEUTRAL):
+    """The app shell's notice saying MESSAGE, centred on the bottom row, its
+    bar four cells wider than its text."""
+
+    width = len(message) + 4
+    left = (COLS - width) // 2
+    content = DialogContent(1, DialogFlag.NOTICE, severity, FieldRect(0, 0, 0, 0),
+                            FieldRect(2, 0, len(message), 1), message=message)
+    return acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, 40_000), left, ROWS - 1, left + width, ROWS, "",
+        ControlState.VISIBLE, content)
+
+
+def _noticed(frame: RichScreenProjection, notice) -> RichScreenProjection:
+    """FRAME with NOTICE over its bottom row, which holds nothing modal."""
+
+    return replace(frame, semantic_dialog_claims=frame.semantic_dialog_claims + (notice,))
+
+
+def _notice_offer(message: str):
+    """CELL with MESSAGE in the notice's bar on the bottom row."""
+
+    width = len(message) + 4
+    return _cell_offer(1, ((ROWS - 1, (COLS - width) // 2 + 2, message),))
 
 
 def _asked(frame: RichScreenProjection, dialog) -> RichScreenProjection:
@@ -542,15 +568,6 @@ def _daybook_agenda(task: str, *, checked: bool = False):
     )
 
 
-def _notice_row() -> str:
-    """Desk's taskbar with the reminder's toast centred over it."""
-
-    width = len(DAYBOOK_REMINDER_NOTICE) + 4
-    start = (COLS - width) // 2
-    toast = DAYBOOK_REMINDER_NOTICE.center(width)
-    return ("[1:Daybook*]".ljust(start) + toast).ljust(COLS)
-
-
 def _daybook_frame(
     *,
     prompt: str | None = None,
@@ -562,8 +579,7 @@ def _daybook_frame(
     """Daybook's menu, calendar and agenda, with its task prompt holding
     PROMPT open over them when given."""
 
-    taskbar = _notice_row() if notice else "[1:Daybook*]"
-    rows = {0: " File  Entry  Go  Reminders  Help", ROWS - 1: taskbar}
+    rows = {0: " File  Entry  Go  Reminders  Help", ROWS - 1: "[1:Daybook*]"}
     projection = _screen(rows, (acceptance_runner.DAYBOOK_MENU_SIGNATURE,))
     grid = acceptance_runner._SemanticCollectionClaim(
         ControlKind.TEXT_GRID,
@@ -588,6 +604,8 @@ def _daybook_frame(
         projection = _held(
             projection, _prompt("New task:", prompt, row=PROMPT_ROW, caret=caret)
         )
+    if notice:
+        projection = _noticed(projection, _notice(DAYBOOK_REMINDER_NOTICE))
     return projection
 
 
@@ -715,7 +733,7 @@ def test_daybook_alone_adds_a_mixed_task_through_its_prompt() -> None:
             _daybook_frame(agenda=entry, checked=True),
         ),
         (
-            _cell_offer(1, ((ROWS - 1, 0, _notice_row()),)),
+            _notice_offer(DAYBOOK_REMINDER_NOTICE),
             _daybook_frame(agenda=entry, checked=True, notice=True),
         ),
     )
@@ -1379,7 +1397,7 @@ def test_daybook_alone_requires_the_notice_in_rich_and_cell() -> None:
         raise AssertionError("waiting for the notice sends nothing")
 
     # Only CELL shows the notice: the rich frame lacks it, so wait.
-    offer = replace(_cell_offer(1, ((ROWS - 1, 0, _notice_row()),)), offer_id=1)
+    offer = replace(_notice_offer(DAYBOOK_REMINDER_NOTICE), offer_id=1)
     frame = _daybook_frame(agenda=entry, checked=True)
     assert not journey.after_present(offer, 9, frame, sender).complete
     assert DAYBOOK_REMINDER_NOTICE in journey.waiting
@@ -1388,6 +1406,18 @@ def test_daybook_alone_requires_the_notice_in_rich_and_cell() -> None:
     frame = _daybook_frame(agenda=entry, checked=True, notice=True)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="CELL does not show"):
         journey.after_present(offer, 9, frame, sender)
+    # A reminder is neutral; a notice of another meaning, modal, or off the
+    # bottom row is not the reminder's.
+    for notice, message in (
+        (_notice(DAYBOOK_REMINDER_NOTICE, StatusSeverity.WARNING), "WARNING, not NEUTRAL"),
+        (replace(_notice(DAYBOOK_REMINDER_NOTICE), modal=True), "not a plain notice"),
+        (replace(_notice(DAYBOOK_REMINDER_NOTICE), top=ROWS - 2, bottom=ROWS - 1),
+         "not on the bottom row"),
+    ):
+        offer = replace(_notice_offer(DAYBOOK_REMINDER_NOTICE), offer_id=3)
+        frame = _noticed(_daybook_frame(agenda=entry, checked=True), notice)
+        with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+            journey.after_present(offer, 9, frame, sender)
 
 
 FEXP_READY = ("Details", "Tools")
@@ -1577,11 +1607,14 @@ TABLE_ID, TREE_ID = 31_000, 31_001
 
 
 def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str | None = None,
-                caret: int | None = None, anchor: int | None = None, delete: bool = False):
+                caret: int | None = None, anchor: int | None = None, delete: bool = False,
+                goto: str | None = None, warned: bool = False):
     """Desk with File Explorer: its detail table listing large.txt and the
     sample picture with SELECTED selected, its folder tree, its menu bar,
     and the selected path in its status bar; with RENAME, the rename prompt
-    holding it over the tile, and with DELETE, its delete question."""
+    holding it over the tile, with GOTO, the Go to prompt holding it, with
+    DELETE, its delete question, and with WARNED, its warning that the path
+    was not found."""
 
     rows = {0: " File  Edit  View  Tools", ROWS - 1: "[1:File Explo*]"}
     if status:
@@ -1614,6 +1647,10 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
         if anchor is not None:
             prompt = replace(prompt, content=replace(prompt.content, anchor=anchor))
         frame = _held(frame, prompt)
+    if goto is not None:
+        frame = _held(frame, _prompt("Go to:", goto, row=81))
+    if warned:
+        frame = _noticed(frame, _notice("Path not found", StatusSeverity.WARNING))
     if delete:
         # The question covers the detail table, which the capture withholds.
         frame = replace(frame, semantic_item_view_claims=(tree,))
@@ -1648,6 +1685,13 @@ def test_fexp_alone_cancels_its_rename_prompt_and_its_delete_question() -> None:
         # Cancel has not closed the question yet.
         (question_offer, _fexp_frame(delete=True)),
         (blank, _fexp_frame()),
+        (blank, _fexp_frame(status=False, goto="/")),
+        # The guest may paint between typed characters.
+        (blank, _fexp_frame(status=False, goto="/no-such")),
+        (blank, _fexp_frame(status=False, goto="/no-such-folder")),
+        # Enter has closed the prompt, and the warning is not up yet.
+        (blank, _fexp_frame()),
+        (_notice_offer("Path not found"), _fexp_frame(warned=True)),
     )
     results = _run(journey, steps)
     value = f"1,1,{PROMPT_ID},0,{{}}".format
@@ -1663,7 +1707,12 @@ def test_fexp_alone_cancels_its_rename_prompt_and_its_delete_question() -> None:
         ("fexp-rename-cancelled", [("send_key", "delete")]),
         ("fexp-delete-question-shown", [("activate_button", f"1,1,{PROMPT_ID + 2}")]),
         (None, []),
-        ("fexp-delete-cancelled", [("item_select", f"1,1,{TABLE_ID},2")]),
+        ("fexp-delete-cancelled", [("send_key", "ctrl+g")]),
+        ("fexp-goto-opened", [("send_text", "no-such-folder")]),
+        (None, []),
+        ("fexp-goto-typed", [("send_key", "enter")]),
+        (None, []),
+        ("fexp-goto-warned", [("item_select", f"1,1,{TABLE_ID},2")]),
     ]
     assert journey.stage == FexpAloneJourney.PICTURE_SELECTED
 
