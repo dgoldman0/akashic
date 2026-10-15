@@ -1309,15 +1309,17 @@ compare generation for equality rather than inferring ordering from its sign.
 
 ## UIDL Context (UCTX) System
 
-Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of 31 global
-UIDL/UTUI values and 11 copied pool arrays. The complete context is 107,768
+Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of 32 global
+UIDL/UTUI values and 11 copied pool arrays. The complete context is 107,776
 bytes, approximately 105 KiB.
 The scalars include six neutral
 projection-lifecycle values: token, status, visibility, attached, quiescing,
 and quiesced, plus the open-menu pointer, saved focus, and compact rectangle/z
 needed to keep menu state context-local, and the prompt the last observed draw
-painted over the document with that prompt's instance. The final two scalar
-slots hold the mounted-canonical relation head and count. The eleventh pool is the 4,096-byte
+painted over the document with that prompt's instance, and the dialog its
+application shows. The final two scalar slots hold the mounted-canonical
+relation head and count. A context freed or cleared with a dialog still open
+frees the dialog without answering it. The eleventh pool is the 4,096-byte
 mounted-source generation/next-key table.
 Projection-adapter context and callbacks are composition authority and never
 enter a UCTX. There is no mounted-provider table or callback borrow. The
@@ -1330,12 +1332,12 @@ variable and manage that live alias ownership.
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
 | `UCTX-FREE` | `( ctx -- )` | Release an inactive context, including its saved relation chain, through the platform allocator. A live context or active draw observation is rejected. |
-| `UCTX-SAVE` | `( ctx -- )` | Save the 31 values, 11 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
+| `UCTX-SAVE` | `( ctx -- )` | Save the 32 values, 11 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
 | `UCTX-RESTORE` | `( ctx -- )` | Restore an inactive context only when the live globals are disowned, then make `ctx` their unique owner. |
 | `UCTX-CLEAR` | `( ctx -- )` | Release saved relations and zero-fill an inactive context buffer. A live context or active draw observation is rejected. |
 | `UCTX-LIVE?` | `( ctx -- flag )` | Report whether `ctx` owns the relation aliases exposed through the live UIDL globals. |
 | `UCTX-LIVE-DISOWN` | `( -- )` | After saving, remove the live aliases without freeing the chain now owned by that context. Draw observation must be quiescent. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (107,768). |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (107,776). |
 
 Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`) and by
 `applet-host/host.f`, which allocates and releases the UCTX buffers that Desk
@@ -1448,7 +1450,7 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
-UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (107,768 bytes)
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (107,776 bytes)
 UCTX-FREE              ( ctx -- )                    Free an inactive context and its saved relations
 UCTX-SAVE              ( ctx -- )                    Save globals, pools, and relation aliases to the live owner
 UCTX-RESTORE           ( ctx -- )                    Restore a context into disowned live globals

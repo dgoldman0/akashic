@@ -273,6 +273,24 @@ VARIABLE _ah-tick-touch
     ['] _ah-request-close _ah-app APP.REQUEST-CLOSE-XT !
     ['] _ah-shutdown _ah-app APP.SHUTDOWN-XT ! ;
 
+\ A dialog child A asks, answered through ordinary host dispatch.
+VARIABLE _ah-dialog-answer
+VARIABLE _ah-dialog-saved
+CREATE _ah-dialog-btn 3 CELLS ALLOT
+: _ah-dialog-answered  ( index context -- )
+    55 = _ah-assert _ah-dialog-answer ! ;
+: _ah-dialog-ask  ( -- ok? )
+    S" OK" _ah-dialog-btn 8 + ! _ah-dialog-btn !
+    DLG-B-DEFAULT DLG-B-CANCEL OR _ah-dialog-btn 16 + !
+    S" Question" S" Answer it" _ah-dialog-btn 1
+        ['] _ah-dialog-answered 55 DLG-ASK ;
+: _ah-inside?  ( rgn outer -- flag )
+    OVER RGN-ROW OVER RGN-ROW >=
+    2 PICK RGN-COL 2 PICK RGN-COL >= AND
+    2 PICK RGN-ROW 3 PICK RGN-H + 2 PICK RGN-ROW 3 PICK RGN-H + <= AND
+    2 PICK RGN-COL 3 PICK RGN-W + 2 PICK RGN-COL 3 PICK RGN-W + <= AND
+    NIP NIP ;
+
 : _ah-semantic-event!  ( row col -- )
     KEY-T-MOUSE _ah-semantic-event !
     KEY-MOUSE-LEFT _ah-semantic-event 8 + !
@@ -486,6 +504,30 @@ VARIABLE _ah-ew
     _ah-id-a @ _ah-host AHOST-FOCUS-ID
     _ah-stack
     ." AH-M5B-CROSS-FOCUS-MENU" CR
+
+    \ A dialog a child shows takes its keys before the child's handler,
+    \ paints inside the child's document region, and once answered runs
+    \ its callback with that child current.
+    ASHELL-CANCEL-QUIT
+    _ah-slot-a @ AHS-CTX-SWITCH
+    -1 _ah-dialog-answer !
+    _ah-dialog-ask _ah-assert DLG-SHOWN 0<> _ah-assert
+    _ah-events-a @ _ah-dialog-saved !
+    KEY-T-SPECIAL KEY-UP _ah-semantic-escape _ah-semantic-key!
+    _ah-semantic-escape _ah-host AHOST-DISPATCH-KEY _ah-assert
+    _ah-events-a @ _ah-dialog-saved @ = _ah-assert
+    _ah-dialog-answer @ -1 = _ah-assert DLG-SHOWN 0<> _ah-assert
+    \ It centres in the child's document region.
+    _ah-slot-a @ AHS-CTX-SWITCH DLG-HOST-PAINT
+    DLG-SHOWN WDG-REGION _UTUI-RGN @ _ah-inside? _ah-assert
+    KEY-T-SPECIAL KEY-ESC _ah-semantic-escape _ah-semantic-key!
+    _ah-semantic-escape _ah-host AHOST-DISPATCH-KEY _ah-assert
+    _ah-events-a @ _ah-dialog-saved @ = _ah-assert
+    _ah-dialog-answer @ 0= _ah-assert
+    DLG-SHOWN 0= _ah-assert
+    _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
+    _ah-stack
+    ." AH-DIALOG" CR
 
     \ Event, tick, paint and revision/dirty accounting remain host-generic.
     ASHELL-CANCEL-QUIT

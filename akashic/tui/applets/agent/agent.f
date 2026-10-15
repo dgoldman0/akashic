@@ -51,6 +51,9 @@ _AG-CURRENT-STATE CMP-CELL: _AG-RUNTIME
 _AG-CURRENT-STATE CMP-CELL: _AG-PROVIDER
 _AG-CURRENT-STATE CMP-CELL: _AG-SOURCE
 _AG-CURRENT-STATE CMP-CELL: _AG-OWNS-RUNTIME
+\ Set once the user stopped the active run to close, so the close the
+\ Agent then asks for goes ahead.
+_AG-CURRENT-STATE CMP-CELL: _AG-CLOSE-ARMED
 _AG-CURRENT-STATE CMP-CELL: _AG-E-BODY
 _AG-CURRENT-STATE CMP-CELL: _AG-E-META
 _AG-CURRENT-STATE CMP-CELL: _AG-E-SBAR
@@ -1486,19 +1489,26 @@ VARIABLE _AG-REVIEW-APPROVED
 \ lens.  Closing that lens must never cancel work another view or the owner
 \ is supervising.  A standalone Agent owns its runtime, so an active stream
 \ or approval is explicitly cancelled before its resources are released.
+: _AG-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP 0= IF EXIT THEN
+    _AG-RUNTIME @ ?DUP IF
+        ARUNTIME-CANCEL IF
+            S" The active run could not be stopped" 2000 ASHELL-TOAST EXIT
+        THEN
+    THEN
+    -1 _AG-CLOSE-ARMED ! ASHELL-QUIT ;
+
+\ An active run it owns defers the close to a question; stopping the run
+\ asks to close again, and that close goes ahead.
 : AGENT-REQUEST-CLOSE-CB  ( reason instance -- decision )
     _AG-ACTIVATE DROP
+    _AG-CLOSE-ARMED @ IF 0 _AG-CLOSE-ARMED ! APP-CLOSE-D-ALLOW EXIT THEN
     _AG-RUNTIME @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
     _AG-OWNS-RUNTIME @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
     _AG-RUNTIME @ ARUNTIME-BUSY? 0= IF APP-CLOSE-D-ALLOW EXIT THEN
-    S" Cancel the active Agent run and close?" DLG-CONFIRM 0= IF
-        APP-CLOSE-D-CANCEL EXIT
-    THEN
-    _AG-RUNTIME @ ARUNTIME-CANCEL IF
-        APP-CLOSE-D-CANCEL
-    ELSE
-        APP-CLOSE-D-ALLOW
-    THEN ;
+    S" Stop the active Agent run and close?" S" Stop and close"
+        ['] _AG-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : AGENT-SHUTDOWN-CB  ( instance -- )
     _AG-ACTIVATE

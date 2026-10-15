@@ -150,6 +150,9 @@ _SL-CURRENT-STATE UFLD-BUILDER-SIZE CMP-FIELD: _SL-FIELD-BUILDER
 _SL-CURRENT-STATE CMP-CELL: _SL-PCM
 _SL-CURRENT-STATE CMP-CELL: _SL-RENDER-VALID
 _SL-CURRENT-STATE CMP-CELL: _SL-UNSAVED
+\ Set when the user agreed to discard the unsaved render and close, so the
+\ close Sound Lab then asks for goes ahead.
+_SL-CURRENT-STATE CMP-CELL: _SL-DISCARD-ARMED
 _SL-CURRENT-STATE CMP-CELL: _SL-LAST-ERROR
 _SL-CURRENT-STATE CMP-CELL: _SL-LAST-PLAY-STATUS
 _SL-CURRENT-STATE CMP-CELL: _SL-LAST-PLAY-ERROR
@@ -1286,6 +1289,11 @@ VARIABLE _SL-INIT-RENDER-IOR
         THEN
     THEN ;
 
+: _SL-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP IF -1 _SL-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ An unsaved render defers the close to a question; agreeing to discard it
+\ asks to close again, and that close goes ahead.
 : SOUNDLAB-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _SL-ACTIVATE
     _SL-PROMPT @ ?DUP IF
@@ -1295,11 +1303,10 @@ VARIABLE _SL-INIT-RENDER-IOR
         THEN
     THEN
     _SL-UNSAVED @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
-    S" Close Sound Lab and discard the unsaved render?" DLG-CONFIRM IF
-        APP-CLOSE-D-ALLOW
-    ELSE
-        APP-CLOSE-D-CANCEL
-    THEN ;
+    _SL-DISCARD-ARMED @ IF 0 _SL-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT THEN
+    S" Close Sound Lab and discard the unsaved render?" S" Discard"
+        ['] _SL-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : SOUNDLAB-SHUTDOWN-CB  ( instance -- )
     _SL-ACTIVATE

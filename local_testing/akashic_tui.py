@@ -34603,6 +34603,8 @@ def smoke(
                             "Delete the selected item?",
                             "Delete did not open its confirmation dialog",
                         ):
+                            # Cancel is the default; Left selects Delete.
+                            session.send_key("left")
                             session.send_key("enter")
                             wait_screen_gone(
                                 "Delete the selected item?",
@@ -34625,6 +34627,7 @@ def smoke(
                     "Delete the selected item?",
                     "empty-folder Delete did not open confirmation",
                 ):
+                    session.send_key("left")
                     session.send_key("enter")
                     wait_screen_gone(
                         "Delete the selected item?",

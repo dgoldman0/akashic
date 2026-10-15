@@ -474,11 +474,11 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
             rf"(?m)^\s*{re.escape(field)}\s+_UCTX-VARS {slot} CELLS \+ !",
             context_init,
         )
-    assert "31 CONSTANT _UCTX-NVAR" in tui
-    assert "248 CONSTANT _UCTX-VAR-SZ" in tui
+    assert "32 CONSTANT _UCTX-NVAR" in tui
+    assert "256 CONSTANT _UCTX-VAR-SZ" in tui
     assert "11 CONSTANT _UCTX-NPOOL" in tui
-    assert "107,768 bytes" in tui
-    assert "107,768" in _text("docs/tui/uidl-tui.md")
+    assert "107,776 bytes" in tui
+    assert "107,776" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-PAA-BINDING !" in tui
     assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 
@@ -1767,7 +1767,7 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
     assert app < toast < cursor < complete
 
 
-def test_blocking_dialog_uses_the_complete_rich_presentation_lifecycle() -> None:
+def test_dialogs_are_hosted_by_their_application_host_and_never_block() -> None:
     shell = _text("akashic/tui/app-shell.f")
     dialog = _text("akashic/tui/widgets/dialog.f")
     host = _text("akashic/tui/applet-host/host.f")
@@ -1778,29 +1778,30 @@ def test_blocking_dialog_uses_the_complete_rich_presentation_lifecycle() -> None
     assert "_DLG-DRAW-BODY" not in wrapper.replace(expected, "")
     assert dialog.count("_DLG-DRAW-BODY") == 2
 
-    default_present = _word(dialog, "_DLG-PRESENT-DEFAULT")
-    assert default_present.index("SCR-DRAW-COMPLETE") < default_present.index(
-        "SCR-FLUSH"
-    )
-    show = _word(dialog, "DLG-SHOW")
-    assert show.count("_DLG-PRESENT-HOOK") == 2
-    assert "SCR-FLUSH" not in show
+    # No input loop of its own: the host gives a dialog its events.
+    for blocking in ("KEY-READ", "KEY-POLL", "SCR-FLUSH", "_DLG-PRESENT-HOOK"):
+        assert blocking not in dialog, blocking
+    assert "_ASHELL-DIALOG-PRESENT" not in shell
+    assert "ASHELL-DRAW-MODAL" not in shell
 
-    present = _word(shell, "_ASHELL-DIALOG-PRESENT")
-    projection = present.index("UTUI-DRAW-COMPLETE")
-    draw_complete = present.index("SCR-DRAW-COMPLETE", projection)
-    service = present.index("_ASHELL-TERM-SERVICE", draw_complete)
-    flush = present.index("SCR-FLUSH?", service)
-    accepted = present.index("SCB-S-OK", flush)
-    pressure = present.index("SCB-S-WOULD-BLOCK", accepted)
-    retry = present.index("YIELD?", pressure)
-    fatal = present.index("_ASHELL-TERM-THROW", pressure)
-    assert projection < draw_complete < service < flush < accepted < pressure
-    assert retry > pressure
-    assert fatal > pressure
-    assert "-1 _ASHELL-OUTPUT-PENDING !" in present
-    assert "0 _ASHELL-OUTPUT-PENDING ! EXIT" in present
-    assert "' _ASHELL-DIALOG-PRESENT IS _DLG-PRESENT-HOOK" in shell
+    # The app shell: a dialog takes keys and pointer events before the
+    # app's handler, and paints after the app and before the toast.
+    for word in ("_ASHELL-DISPATCH-KEY", "_ASHELL-DISPATCH-MOUSE-IMPL"):
+        body = _word(shell, word)
+        assert body.index("DLG-HOST-EVENT") < body.index("APP.EVENT-XT"), word
+    paint = _word(shell, "_ASHELL-PAINT")
+    assert (paint.index("APP.PAINT-XT") < paint.index("DLG-HOST-PAINT")
+            < paint.index("_ASHELL-DRAW-TOAST"))
+    child = _word(shell, "_ASPC-DRAW-BODY")
+    assert child.index("APP.PAINT-XT") < child.index("DLG-HOST-PAINT")
+    assert "DLG-DISCARD" in _word(shell, "_ASHELL-TD-UIDL")
+
+    # Desk's applet host: after the child's context is current and before
+    # its handler, for keys and pointer events alike.
+    for word in ("_AHOST-DISPATCH-KEY-SLOT", "AHOST-DISPATCH-MOUSE"):
+        body = _word(host, word)
+        assert (body.index("AHS-CTX-SWITCH") < body.index("DLG-HOST-EVENT")
+                < body.index("APP.EVENT-XT")), word
 
     close = _word(host, "_AHOST-REQUEST-CLOSE-SLOT")
     deactivate = close.index("['] _AHQ-EXIT CATCH")

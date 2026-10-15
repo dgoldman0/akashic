@@ -354,25 +354,30 @@ VARIABLE _quit
     BEGIN
         _EV KEY-READ DROP
 
-        _EV @ KEY-T-SPECIAL = IF
-            _EV 8 + @ KEY-ESC = IF
-                -1 _quit !
-            THEN
-            _EV 8 + @ KEY-TAB = IF
-                _CYCLE-FOCUS
-            THEN
-            _EV 8 + @ KEY-ENTER = IF
-                _CUR-WDG _lst = IF
-                    S" Not implemented yet." DLG-INFO
-                    _DRAW-FRAME
-                    _REDRAW-DIRTY
+        DLG-SHOWN IF
+            \ The demo hosts its dialog: it takes every key until it closes.
+            _EV DLG-HOST-EVENT DROP
+            _DRAW-FRAME _REDRAW-DIRTY DLG-HOST-PAINT
+        ELSE
+            _EV @ KEY-T-SPECIAL = IF
+                _EV 8 + @ KEY-ESC = IF
+                    -1 _quit !
+                THEN
+                _EV 8 + @ KEY-TAB = IF
+                    _CYCLE-FOCUS
+                THEN
+                _EV 8 + @ KEY-ENTER = IF
+                    _CUR-WDG _lst = IF
+                        S" Not implemented yet." DLG-INFO DROP
+                        DLG-HOST-PAINT
+                    THEN
                 THEN
             THEN
-        THEN
 
-        _quit @ 0= IF
-            _EV _CUR-WDG WDG-HANDLE DROP
-            _REDRAW-DIRTY
+            _quit @ 0= DLG-SHOWN 0= AND IF
+                _EV _CUR-WDG WDG-HANDLE DROP
+                _REDRAW-DIRTY
+            THEN
         THEN
 
         _quit @

@@ -214,6 +214,9 @@ _PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-TAB-LABEL-CAP *
 
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ACTIVE
 _PAD-CURRENT-STATE CMP-CELL: _PAD-BUF-CNT
+\ Set when the user agreed to discard unsaved changes and close, so the
+\ close Pad then asks for goes ahead.
+_PAD-CURRENT-STATE CMP-CELL: _PAD-DISCARD-ARMED
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ARENA
 
 \ ---- Composite panel widget (mounted on editor-area) ----
@@ -1791,19 +1794,21 @@ VARIABLE _PBUILD-DIAG-U
     THEN
     _PAD-OUTPUT-SHOW ;
 
+\ A close question names its buffer; it closes only while still open.
+: _PAD-CLOSE-TAB-CONFIRMED  ( confirmed? index -- )
+    SWAP 0= IF DROP EXIT THEN
+    DUP _PAD-BUF-ENTRY _PBE-FLAGS + @ IF _PAD-BUF-CLOSE ELSE DROP THEN ;
+
 : _PAD-DO-CLOSE-TAB  ( elem -- )
     DROP
     _PAD-ACTIVE @ 0< IF EXIT THEN
-    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
-        S" Discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= IF
+        _PAD-ACTIVE @ _PAD-BUF-CLOSE EXIT
     THEN
-    _PAD-ACTIVE @ _PAD-BUF-CLOSE ;
+    S" Discard unsaved changes?" S" Discard"
+        ['] _PAD-CLOSE-TAB-CONFIRMED _PAD-ACTIVE @ DLG-CONFIRM DROP ;
 
-: _PAD-DO-CLOSE-ALL  ( elem -- )
-    DROP
-    _PAD-HAS-DIRTY? IF
-        S" Close all and discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
-    THEN
+: _PAD-CLOSE-ALL-NOW  ( -- )
     BEGIN _PAD-BUF-CNT @ 0> WHILE
         _PAD-ACTIVE @ 0< IF
             _PAD-MAX-BUFS 0 DO
@@ -1815,6 +1820,15 @@ VARIABLE _PBUILD-DIAG-U
         _PAD-ACTIVE @ 0< IF EXIT THEN
         _PAD-ACTIVE @ _PAD-BUF-CLOSE
     REPEAT ;
+
+: _PAD-CLOSE-ALL-CONFIRMED  ( confirmed? context -- )
+    DROP IF _PAD-CLOSE-ALL-NOW THEN ;
+
+: _PAD-DO-CLOSE-ALL  ( elem -- )
+    DROP
+    _PAD-HAS-DIRTY? 0= IF _PAD-CLOSE-ALL-NOW EXIT THEN
+    S" Close all and discard unsaved changes?" S" Discard"
+        ['] _PAD-CLOSE-ALL-CONFIRMED 0 DLG-CONFIRM DROP ;
 
 : _PAD-DO-QUIT  ( elem -- )
     DROP ASHELL-QUIT ;
@@ -2753,14 +2767,20 @@ VARIABLE _PSW-BYTE
 \  S23 -- SHUTDOWN Callback
 \ =====================================================================
 
+: _PAD-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP IF -1 _PAD-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ Unsaved changes defer the close to a question; agreeing to discard them
+\ asks to close again, and that close goes ahead.
 : PAD-REQUEST-CLOSE-CB  ( reason instance -- decision )
     _PAD-ACTIVATE DROP
     _PAD-HAS-DIRTY? 0= IF APP-CLOSE-D-ALLOW EXIT THEN
-    S" Close Pad and discard all unsaved changes?" DLG-CONFIRM IF
-        APP-CLOSE-D-ALLOW
-    ELSE
-        APP-CLOSE-D-CANCEL
-    THEN ;
+    _PAD-DISCARD-ARMED @ IF
+        0 _PAD-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
+    THEN
+    S" Close Pad and discard all unsaved changes?" S" Discard"
+        ['] _PAD-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : PAD-SHUTDOWN-CB  ( instance -- )
     _PAD-ACTIVATE

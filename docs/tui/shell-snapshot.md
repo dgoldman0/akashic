@@ -113,9 +113,8 @@ publications in one transaction are ambiguous and decline the snapshot.
 `ASHELL-DRAW-COMPLETE` occurs only after successful root paint, toast, cursor
 and `SCR-DRAW-COMPLETE`. It publishes the staged copy only for the same
 instance and screen, the immediately completed generation, and the still
-current host model. A throwing paint never sends COMPLETE. A dialog sends
-`ASHELL-DRAW-MODAL` before its separate completed draw and invalidates both
-pending and published shell data. A screen change, resize, later draw without
+current host model. A throwing paint never sends COMPLETE. A screen change,
+resize, later draw without
 fresh observation or host-model invalidation makes old snapshots unavailable.
 Callback exceptions are caught by ordinary observation and cannot stop CELL
 publication. These APIs execute synchronously on the UI owner core.

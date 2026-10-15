@@ -212,16 +212,17 @@ def test_dialogs_wrap_between_characters_and_clip_their_title_by_cells() -> None
     rows, numbers = _run(
         [
             "40 12 SCR-NEW DUP SCR-USE SCR-CLEAR",
-            "CREATE _DBTN 16 ALLOT",
+            "CREATE _DBTN 24 ALLOT",
             ': _DOK S" OK" ;',
-            "_DOK _DBTN 8 + ! _DBTN !",
-            # The dialog keeps its strings' addresses, so they must last.
+            "_DOK _DBTN 8 + ! _DBTN ! DLG-B-DEFAULT _DBTN 16 + !",
             f': _DT S" {title}" ;',
             f': _DM S" {message}" ;',
-            "_DT _DM _DBTN 1 DLG-NEW",
-            f"1 1 8 {width} RGN-NEW OVER DLG-SET-REGION",
-            "WDG-DRAW",
-            "1 3 18 _WROW 3 3 18 _WROW 4 3 18 _WROW",
+            # Bounds two cells wider than the dialog: it is laid out 22
+            # cells wide, at row 2 and column 1.
+            f": _DBOUNDS 0 0 12 {width + 2} ;",
+            "' _DBOUNDS IS _DLG-BOUNDS-HOOK",
+            "_DT _DM _DBTN 1 0 0 DLG-ASK DROP DLG-HOST-PAINT",
+            "2 3 18 _WROW 4 3 18 _WROW 5 3 18 _WROW",
             f'S" {message}" 18 _DLG-MSG-LINES _WN',
         ]
     )

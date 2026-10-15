@@ -255,7 +255,7 @@ def test_hidden_ack_boundaries_abort_and_larger_base_frontiers_never_publish_or_
         # Ordinary source authority may disappear before the old hidden ACK is
         # consumed. The exact immutable pending tuple remains its authority.
         old_draw = h.get("_RSHSP.PENDING-DRAW", h.s)
-        assert h.call("_ASHELL-DRAW-OBSERVE", h.constant("ASHELL-DRAW-MODAL"))[0] == (0,)
+        assert h.call("_ASHELL-DRAW-OBSERVE", h.constant("ASHELL-DRAW-BEGIN"))[0] == (0,)
         assert h.call("SHSN-SNAPSHOT-FOR@", old_draw, h.constant("_SX-C"))[0][2] != 0
         assert h.call("_AK-STEP")[0] == (0, 0, MASK)
         consumed = h.frontiers()

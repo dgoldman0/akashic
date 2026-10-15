@@ -165,6 +165,14 @@ VARIABLE _RGNB-W
     0   _DRW-CLIP-W !
     0   _DRW-CLIP-ON ! ;
 
+\ RGN-CURRENT ( -- rgn|0 )
+\   The current drawing region, or 0 for the full screen.
+: RGN-CURRENT  ( -- rgn|0 )  _RGN-CUR @ ;
+
+\ RGN-RESTORE ( rgn|0 -- )
+\   Make current again a region RGN-CURRENT gave, the full screen for 0.
+: RGN-RESTORE  ( rgn|0 -- )  ?DUP IF RGN-USE ELSE RGN-ROOT THEN ;
+
 \ =====================================================================
 \ 6. Sub-regions
 \ =====================================================================
@@ -253,6 +261,8 @@ GUARD _rgn-guard
 ' RGN-BOUNDS!     CONSTANT _rgn-bounds-s-xt
 ' RGN-CONTAINS?   CONSTANT _rgn-contains-xt
 ' RGN-CLIP        CONSTANT _rgn-clip-xt
+' RGN-CURRENT     CONSTANT _rgn-current-xt
+' RGN-RESTORE     CONSTANT _rgn-restore-xt
 
 : RGN-NEW         _rgn-new-xt       _rgn-guard WITH-GUARD ;
 : RGN-FREE        _rgn-free-xt      _rgn-guard WITH-GUARD ;
@@ -266,4 +276,6 @@ GUARD _rgn-guard
 : RGN-BOUNDS!     _rgn-bounds-s-xt  _rgn-guard WITH-GUARD ;
 : RGN-CONTAINS?   _rgn-contains-xt  _rgn-guard WITH-GUARD ;
 : RGN-CLIP        _rgn-clip-xt      _rgn-guard WITH-GUARD ;
+: RGN-CURRENT     _rgn-current-xt   _rgn-guard WITH-GUARD ;
+: RGN-RESTORE     _rgn-restore-xt   _rgn-guard WITH-GUARD ;
 [THEN] [THEN]

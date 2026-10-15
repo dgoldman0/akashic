@@ -216,14 +216,18 @@ For each key event:
 0. **Shell cursor** — `_ASHELL-CUR-KEY?` intercepts Alt+Arrow (move),
    Alt+Del/End/PgDn (click).  The shell owns these before any app sees
    them.  Any non-Alt key hides the cursor.
-1. **App handler** — `APP.EVENT-XT` gets first crack.  If it returns
+1. **Dialog** — a dialog the app shows takes every event
+   (`DLG-HOST-EVENT`) until a button is chosen; then it closes and calls
+   the app back.
+2. **App handler** — `APP.EVENT-XT` gets first crack.  If it returns
    true, the event is consumed and the screen is marked dirty.
-2. **UIDL dispatch** — `UTUI-DISPATCH-KEY` routes to shortcuts and
+3. **UIDL dispatch** — `UTUI-DISPATCH-KEY` routes to shortcuts and
    focused elements.  If it returns true, the screen is marked dirty.
-3. **Drop** — unhandled events are discarded.
+4. **Drop** — unhandled events are discarded.
 
 For mouse events (synthesised by cursor clicks):
 
+0. **Dialog** — as for keys; a press on one of its buttons chooses it.
 1. **App handler** — `APP.EVENT-XT` gets first crack (e.g.
    `DESK-EVENT-CB` routes to the tile under the cursor).
 2. **UIDL dispatch** — `UTUI-DISPATCH-MOUSE` hit-tests the element
@@ -240,6 +244,7 @@ focus.  Desk's applet host routes hosted children in the same order.
 1. `RGN-ROOT` — reset region to full screen
 2. `UTUI-PAINT` — UIDL elements (if loaded)
 3. `APP.PAINT-XT` — app's custom widget drawing (on top of UIDL)
+3a. `DLG-HOST-PAINT` — a dialog the app shows, over everything it paints
 4. Toast overlay — `_ASHELL-DRAW-TOAST` (if visible)
 5. Cursor overlay — `_ASHELL-DRAW-CURSOR` (save cell + draw glyph)
 6. `UTUI-DRAW-COMPLETE` — publish the direct UIDL projection after the complete draw (if UIDL is loaded)
@@ -559,10 +564,9 @@ UI owner core, return no values, and must not mutate shell state.
 - `ASHELL-DRAW-BEGIN=0` runs before any write of an actual dirty root paint.
 - `ASHELL-DRAW-COMPLETE=1` runs after app paint, toast, cursor and
   `SCR-DRAW-COMPLETE` all finish successfully. A throwing paint omits it.
-- `ASHELL-DRAW-MODAL=2` runs before a dialog publishes its separate frame.
 
-Observers may stage copied metadata on BEGIN and publish it only on COMPLETE;
-MODAL invalidates any pending root publication. Callback exceptions are
+Observers may stage copied metadata on BEGIN and publish it only on
+COMPLETE. Callback exceptions are
 caught and cannot interrupt ordinary CELL output. The installer must check
 existing ownership before installing and remove its callback before freeing
 its context. `ASHELL-STORAGE-DISJOINT? ( address bytes -- flag )` protects

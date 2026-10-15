@@ -167,6 +167,10 @@ _FEXP-CURRENT-STATE CMP-CELL: _FEXP-DIR-LEN
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-DIR-PATH
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-SEL-LEN       \ 0 when nothing is selected
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-SEL-PATH
+\ The item a delete question asks about.  The answer comes later, so the
+\ delete goes ahead only while that item is still the one selected.
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-DEL-LEN
+_FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-DEL-PATH
 
 \ _FEXP-SELECTED ( -- inode | 0 )
 \   The selected entry as it is now, valid until the next VFS operation.
@@ -1243,13 +1247,26 @@ VARIABLE _FDEL-LISTED
     _FEXP-REFRESH-DETAIL
     TRUE ;
 
-: _FEXP-DELETE-SELECTED  ( -- flag )
-    _FEXP-SEL-LEN @ 0= IF FALSE EXIT THEN
-    _FEXP-SEL-PATH _FEXP-SEL-LEN @ S" /" COMPARE 0= IF FALSE EXIT THEN
-    \ Never hold the VFS guard, or a VFS entry, across the modal
-    \ confirmation/yield loop.
-    S" Delete the selected item?" DLG-CONFIRM 0= IF FALSE EXIT THEN
-    ['] _FEXP-DELETE-BODY VFS-TRANSACTION ;
+: _FEXP-DELETE-CONFIRMED  ( confirmed? context -- )
+    DROP 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DEL-PATH _FEXP-DEL-LEN @ COMPARE IF
+        S" The selection changed; nothing was deleted" 2000 ASHELL-TOAST EXIT
+    THEN
+    ['] _FEXP-DELETE-BODY VFS-TRANSACTION 0= IF
+        S" Delete failed" 1800 ASHELL-TOAST
+    THEN ;
+
+\ Ask before deleting the selected item.  No VFS guard or entry is held
+\ while the question is open.
+: _FEXP-DELETE-SELECTED  ( -- )
+    _FEXP-SEL-LEN @ 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ S" /" COMPARE 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-DEL-PATH _FEXP-SEL-LEN @ MOVE
+    _FEXP-SEL-LEN @ _FEXP-DEL-LEN !
+    S" Delete the selected item?" S" Delete"
+        ['] _FEXP-DELETE-CONFIRMED 0 DLG-CONFIRM 0= IF
+        S" Nothing was deleted" 1800 ASHELL-TOAST
+    THEN ;
 
 \ =====================================================================
 \  §13 — Action handlers (registered via UTUI-DO!)
@@ -1264,9 +1281,7 @@ VARIABLE _FDEL-LISTED
 : _FEXP-DO-NEW-DIR    ( elem -- )
     DROP _FEXP-PRM-NEW-DIR S" New folder:" 0 0 _FEXP-SHOW-PROMPT ;
 : _FEXP-DO-DELETE     ( elem -- )
-    DROP _FEXP-DELETE-SELECTED 0= IF
-        S" Delete cancelled or failed" 1800 ASHELL-TOAST
-    THEN ;
+    DROP _FEXP-DELETE-SELECTED ;
 : _FEXP-DO-RENAME     ( elem -- )
     DROP
     _FEXP-SEL-LEN @ 0= IF EXIT THEN
@@ -1397,7 +1412,7 @@ VARIABLE _FPR-LEN
     DUP IN.TYPE @ VFS-T-DIR = IF S" dir" ELSE S" file" THEN _FPR+
     S"   Size: " _FPR+
     IN.SIZE-LO @ SIZE-FMT _FPR+
-    _FEXP-SCRATCH _FPR-LEN @ DLG-INFO ;
+    _FEXP-SCRATCH _FPR-LEN @ DLG-INFO DROP ;
 
 \ =====================================================================
 \  §14 — INIT callback ("document ready")

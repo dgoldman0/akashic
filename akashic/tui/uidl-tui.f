@@ -3301,6 +3301,12 @@ VARIABLE _UDR-SC
     _UTUI-DIRTY-RECT ;
 ' _UTUI-DIALOG-DISMISS IS _DLG-DISMISS-HOOK
 
+\ The dialog this context's application shows, or 0.  It is saved with
+\ the context, so each application has its own.
+VARIABLE _UTUI-MODAL
+0 _UTUI-MODAL !
+' _UTUI-MODAL IS _DLG-CELL-HOOK
+
 : _UTUI-DIALOG-BOUNDS  ( -- row col h w )
     _UTUI-RGN @ IF
         _UTUI-RGN @ RGN-ROW
@@ -5412,8 +5418,8 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  §18b — UIDL Context Save / Restore  (UCTX)
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 31 scalar variables and 11 copied
-\  pool arrays. Total: 107,768 bytes (approximately 105 KiB).  The mounted
+\  Per sub-app UIDL context buffer holding 32 scalar variables and 11 copied
+\  pool arrays. Total: 107,776 bytes (approximately 105 KiB).  The mounted
 \  canonical relation head is context-owned dynamic state; context buffers
 \  are consequently opaque, non-copyable, and may be cleared/freed only while
 \  inactive.
@@ -5423,8 +5429,8 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  calls only the public API: UCTX-ALLOC, UCTX-FREE, UCTX-SAVE,
 \  UCTX-RESTORE, UCTX-CLEAR, UCTX-LIVE?, UCTX-LIVE-DISOWN, UCTX-TOTAL.
 
-31 CONSTANT _UCTX-NVAR
-248 CONSTANT _UCTX-VAR-SZ       \ 31 × 8
+32 CONSTANT _UCTX-NVAR
+256 CONSTANT _UCTX-VAR-SZ       \ 32 × 8
 
 \ Pool sizes (must match module declarations)
 32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
@@ -5453,8 +5459,9 @@ _UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
 _UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-O-MCS
 _UCTX-O-MCS    _UCTX-MCS-SZ    +                   CONSTANT UCTX-TOTAL
 
-29 CELLS CONSTANT _UCTX-O-MC-HEAD
-30 CELLS CONSTANT _UCTX-O-MC-COUNT
+29 CELLS CONSTANT _UCTX-O-MODAL
+30 CELLS CONSTANT _UCTX-O-MC-HEAD
+31 CELLS CONSTANT _UCTX-O-MC-COUNT
 
 \ Non-serialized ownership of the dynamic relation alias currently exposed
 \ through the live UIDL globals.  Exactly one restored UCTX may own it.
@@ -5470,7 +5477,7 @@ VARIABLE _UCTX-LIVE-OWNER
 
 \ --- Variable table: maps index → global VARIABLE address ---
 CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
-29 CONSTANT _UCTX-NPLAIN
+30 CONSTANT _UCTX-NPLAIN
 
 : _UCTX-INIT-VARS  ( -- )
     _UDL-ECNT           _UCTX-VARS  0 CELLS + !
@@ -5502,8 +5509,9 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
     _UTUI-MENU-SAVE-Z     _UCTX-VARS 26 CELLS + !
     _UTUI-OVERLAY          _UCTX-VARS 27 CELLS + !
     _UTUI-OVERLAY-INSTANCE _UCTX-VARS 28 CELLS + !
-    _UTUI-MC-HEAD          _UCTX-VARS 29 CELLS + !
-    _UTUI-MC-COUNT         _UCTX-VARS 30 CELLS + ! ;
+    _UTUI-MODAL            _UCTX-VARS 29 CELLS + !
+    _UTUI-MC-HEAD          _UCTX-VARS 30 CELLS + !
+    _UTUI-MC-COUNT         _UCTX-VARS 31 CELLS + ! ;
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
@@ -5602,7 +5610,14 @@ VARIABLE _UCTX-R-COUNT
     0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !
     _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL
     _UTUI-MC-S-OK _UTUI-MC-STATUS !
+    \ The owner's dialog is saved with it; the live cell must not name it,
+    \ or whatever runs next would take that application's dialog as its own.
+    0 _UTUI-MODAL !
     0 _UCTX-LIVE-OWNER ! ;
+
+\ A dialog its application never answered goes with the context.
+: _UCTX-FREE-SAVED-DIALOG  ( ctx -- )
+    _UCTX-O-MODAL + DUP @ ?DUP IF DLG-FREE THEN 0 SWAP ! ;
 
 : UCTX-FREE  ( ctx -- )
     DUP 0= IF DROP EXIT THEN
@@ -5610,6 +5625,7 @@ VARIABLE _UCTX-R-COUNT
         ABORT" UCTX-FREE requires an inactive context"
     _UCTX-STAGE-QUIESCENT? 0=
         ABORT" UCTX-FREE during draw observation"
+    DUP _UCTX-FREE-SAVED-DIALOG
     DUP _UCTX-FREE-SAVED-RELATIONS
     _UTUI-MC-SCRATCH-CLEAR
     FREE ;
@@ -5670,6 +5686,7 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
         ABORT" UCTX-CLEAR requires an inactive context"
     _UCTX-STAGE-QUIESCENT? 0=
         ABORT" UCTX-CLEAR during draw observation"
+    DUP _UCTX-FREE-SAVED-DIALOG
     DUP _UCTX-FREE-SAVED-RELATIONS
     _UTUI-MC-SCRATCH-CLEAR
     UCTX-TOTAL 0 FILL ;

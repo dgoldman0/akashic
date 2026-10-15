@@ -31,7 +31,7 @@ directly to `tree.f`'s `children-xt` / `next-xt` callback model.
 | Enter | Open a file (fires `on-open-xt`) or expand/collapse a directory |
 | F2 | Start inline rename of selected entry |
 | F5 | Refresh (re-trigger `_VFS-ENSURE-CHILDREN`, redraw) |
-| Delete | Delete selected entry with `DLG-CONFIRM` dialog |
+| Delete | Ask with `DLG-CONFIRM` before deleting the selected entry |
 | Ctrl+N | Create new file (`"newfile"`) in selected directory |
 | Ctrl+Shift+N | Create new subdirectory (`"newfolder"`) |
 | Ctrl+R | Refresh (same as F5) |
@@ -139,7 +139,7 @@ by them in item events.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `EXPL-RENAME` | `( widget -- )` | Start inline rename — creates `INP-*` widget pre-filled with current name, sets rename-active flag |
-| `EXPL-DELETE` | `( widget -- )` | Delete selected entry — shows `DLG-CONFIRM`, then `VFS-RM` with CWD swap to parent, then `VFS-SYNC` |
+| `EXPL-DELETE` | `( widget -- )` | Ask with `DLG-CONFIRM` before deleting the selected entry; confirming, while that entry is still selected, runs `VFS-RM` with CWD swapped to its parent, then `VFS-SYNC` |
 | `EXPL-NEW-FILE` | `( widget -- )` | Create `"newfile"` in the selected directory (or parent of selected file) via `VFS-MKFILE`, then `VFS-SYNC` |
 | `EXPL-NEW-DIR` | `( widget -- )` | Create `"newfolder"` subdirectory via `VFS-MKDIR`, then `VFS-SYNC` |
 

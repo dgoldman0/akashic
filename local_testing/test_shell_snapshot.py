@@ -290,7 +290,6 @@ SCR-FREE _ST-SCREEN @ SCR-USE
 _ST-BEGIN _ST-END _ST-UNAVAILABLE
 _ST-BEGIN _ST-STAGE _ST-STAGE _ST-END _ST-UNAVAILABLE
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
-ASHELL-DRAW-MODAL _ASHELL-DRAW-OBSERVE _SS-OK _ST-UNAVAILABLE
 \ Inactive-bank capacity refusal leaves both previously completed bytes intact.
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
 _ST-A _SS-F 4096 MOVE _ST-B _SS-O 4096 MOVE
@@ -340,7 +339,7 @@ _SS-DONE
 
 
 
-def test_shell_root_observer_catch_preserves_actual_paint_and_modal_output():
+def test_shell_root_observer_catch_preserves_actual_paint():
     program = PRELUDE + r'''
 CREATE _AP-CD COMP-DESC ALLOT CREATE _AP-AD APP-DESC ALLOT
 VARIABLE _AP-I VARIABLE _AP-S VARIABLE _AP-N VARIABLE _AP-PAINT-N
@@ -372,10 +371,10 @@ _AP-N @ 1 = _SS-A _AP-PAINT-N @ 2 = _SS-A
 SCR-DRAW-GENERATION@ 1 = _SS-A
 0 _AP-THROW ! -1 _ASHELL-DIRTY ! _ASHELL-PAINT
 _AP-N @ 1 = _SS-A SCR-DRAW-GENERATION@ 2 = _SS-A
-\\ A reinstalled observer runs again, including for a modal frame.
+\\ A reinstalled observer runs again.
 ' _AP-OBSERVER 123 ASHELL-DRAW-OBSERVE!
-_ASHELL-DIALOG-PRESENT
-_AP-N @ 2 = _SS-A _AP-PHASES 8 + @ ASHELL-DRAW-MODAL = _SS-A
+-1 _ASHELL-DIRTY ! _ASHELL-PAINT
+_AP-N @ 2 = _SS-A _AP-PHASES 8 + @ ASHELL-DRAW-BEGIN = _SS-A
 ASHELL-DRAW-OBSERVER@ OR 0= _SS-A
 SCR-DRAW-GENERATION@ 3 = _SS-A
 0 0 ASHELL-DRAW-OBSERVE!

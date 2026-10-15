@@ -178,7 +178,9 @@ VARIABLE _ASPC-INVALIDATE
     THEN
     _ASPC-DESC @ APP.PAINT-XT @ ?DUP IF
         _ASPC-INST @ SWAP EXECUTE
-    THEN ;
+    THEN
+    \ A dialog the child shows is its context's, over everything it paints.
+    _ASPC-HAS-UIDL @ IF DLG-HOST-PAINT THEN ;
 
 : _ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance invalidate? -- )
     _ASPC-INVALIDATE !
@@ -902,12 +904,14 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
         ASHELL-DIRTY!
     THEN
     _ASHELL-ACTIVATE
-    \ 1. App's event handler gets first crack
+    \ 1. A dialog the app shows takes all its input
+    DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN
+    \ 2. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
         OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
         IF DROP ASHELL-DIRTY! EXIT THEN
     THEN
-    \ 2. UIDL dispatch (shortcuts, focused element)
+    \ 3. UIDL dispatch (shortcuts, focused element)
     _ASHELL-HAS-UIDL @ IF
         DUP UTUI-DISPATCH-KEY        ( ev consumed? )
         IF ASHELL-DIRTY! THEN
@@ -919,6 +923,8 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 \   ev layout: +0=KEY-T-MOUSE, +8=btn, +16=row<<16|col
 : _ASHELL-DISPATCH-MOUSE-IMPL  ( ev -- )
     _ASHELL-ACTIVATE
+    \ 0. A dialog the app shows takes all its input
+    DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN
     \ 1. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
         OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
@@ -1003,14 +1009,12 @@ VARIABLE _ASHELL-TICK-TMP
 
 \ Terminal-free observation of the complete ordinary root paint transaction.
 \ BEGIN precedes every write. COMPLETE follows the final toast/cursor and
-\ SCR-DRAW-COMPLETE, and is absent when app paint throws. MODAL invalidates
-\ a staged or completed root before a dialog publishes its separate frame.
+\ SCR-DRAW-COMPLETE, and is absent when app paint throws.
 \ Observers borrow (phase root-instance context), return no values, and may
 \ not change shell state. Their exceptions remain diagnostic and do not
 \ interrupt ordinary CELL publication. The installer owns callback lifetime.
 0 CONSTANT ASHELL-DRAW-BEGIN
 1 CONSTANT ASHELL-DRAW-COMPLETE
-2 CONSTANT ASHELL-DRAW-MODAL
 VARIABLE _ASHELL-DRAW-OBSERVER
 VARIABLE _ASHELL-DRAW-OBSERVER-CTX
 VARIABLE _ASHELL-DRAW-PHASE
@@ -1036,32 +1040,6 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
     THEN ;
 : ASHELL-DRAW-OBSERVER-IOR@ ( -- ior ) _ASHELL-DRAW-OBSERVER-IOR @ ;
 
-\ A blocking dialog owns its own input loop, so it cannot return to the shell
-\ between drawing a modal frame and waiting for the next key.  Drive the same
-\ completed-draw, optional-owner service, and status-aware screen publication
-\ boundary here.  WOULD_BLOCK is ordinary retained hidden/reveal progress;
-\ every other refusal keeps the normal fail-closed terminal-owner semantics.
-: _ASHELL-DIALOG-PRESENT  ( -- )
-    ASHELL-DRAW-MODAL _ASHELL-DRAW-OBSERVE DROP
-    _ASHELL-HAS-UIDL @
-    ASHELL-ACTIVE-CTX 0<> OR IF UTUI-DRAW-COMPLETE THEN
-    SCR-DRAW-COMPLETE
-    -1 _ASHELL-OUTPUT-PENDING !
-    BEGIN
-        _ASHELL-TERM-SERVICE
-        SCR-FLUSH?
-        DUP SCB-S-OK = IF
-            DROP 0 _ASHELL-OUTPUT-PENDING ! EXIT
-        THEN
-        DUP SCB-S-WOULD-BLOCK = IF
-            DROP YIELD?
-        ELSE
-            _ASHELL-TERM-THROW
-        THEN
-    AGAIN ;
-
-' _ASHELL-DIALOG-PRESENT IS _DLG-PRESENT-HOOK
-
 : _ASHELL-PAINT  ( -- )
     \ Check UIDL needs-paint flag (set by UIDL-DIRTY! hook)
     _UTUI-NEEDS-PAINT @ IF
@@ -1083,6 +1061,8 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
         _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
             _ASHELL-INST @ SWAP EXECUTE
         THEN
+        \ A dialog the app shows, over everything the app paints
+        DLG-HOST-PAINT
         \ Toast overlay (drawn last, on top of everything)
         ASHELL-TOAST-VISIBLE? IF
             _ASHELL-DRAW-TOAST
@@ -1240,6 +1220,8 @@ VARIABLE _ASHELL-TD-IOR
     THEN ;
 
 : _ASHELL-TD-UIDL  ( -- )
+    \ A dialog the app never answered goes with it.
+    DLG-DISCARD
     _ASHELL-HAS-UIDL @ IF
         UTUI-DETACH
         0 _ASHELL-HAS-UIDL !

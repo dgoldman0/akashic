@@ -385,11 +385,12 @@ VARIABLE _AHQ-DECISION
         \ and the close can be retried without orphaning its dynamic state.
         APP-CLOSE-D-CANCEL _AHQ-DECISION !
     THEN
-    \ A synchronous close callback may have painted a confirmation dialog.
-    \ Dirty every callback-touched slot before returning: even an ALLOW slot
-    \ can survive when a later close-all participant cancels, or when forced
-    \ retirement converts that decision to DEFER.  Immediate removal simply
-    \ discards this harmless repaint request.
+    \ A close callback may have opened a dialog to ask first, which shows at
+    \ the slot's next paint.  Dirty every callback-touched slot before
+    \ returning: even an ALLOW slot can survive when a later close-all
+    \ participant cancels, or when forced retirement converts that decision
+    \ to DEFER.  Immediate removal simply discards this harmless repaint
+    \ request.
     -1 _AHQ-SLOT @ AHS.DIRTY !
     ASHELL-DIRTY!
     _AHQ-DECISION @ ;
@@ -995,6 +996,17 @@ VARIABLE _AHMO-HIT-COL
     _AHMO-HOST @ AHOST.CAPTURE-ROW @ _AHMO-HIT-ROW !
     _AHMO-HOST @ AHOST.CAPTURE-COL @ _AHMO-HIT-COL ! ;
 
+\ After an application handled a pointer event: a quit it asked for
+\ becomes a close request for its slot, and a handled event repaints it.
+: _AHMO-AFTER  ( consumed? -- handled? )
+    ASHELL-QUIT-PENDING? IF
+        DROP ASHELL-CANCEL-QUIT
+        _AHMO-SLOT @ AHS.ID @ APP-CLOSE-R-QUIT _AHMO-HOST @
+            AHOST-REQUEST-CLOSE-ID DROP
+        -1 EXIT
+    THEN
+    DUP IF -1 _AHMO-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! THEN ;
+
 : AHOST-DISPATCH-MOUSE  ( event host -- handled? )
     _AHMO-HOST ! _AHMO-EV ! 0 _AHMO-FOCUS-CHANGED !
     _AHMO-EV @ ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON _AHMO-BUTTON !
@@ -1022,7 +1034,11 @@ VARIABLE _AHMO-HIT-COL
         THEN
         _AHMO-SLOT @ AHS.ID @ _AHMO-HOST @ AHOST-FOCUS-ID
     THEN
-    _AHMO-SLOT @ AHS.HAS-UIDL @ IF _AHMO-SLOT @ AHS-CTX-SWITCH THEN
+    _AHMO-SLOT @ AHS.HAS-UIDL @ IF
+        _AHMO-SLOT @ AHS-CTX-SWITCH
+        \ A dialog the application shows takes all its input.
+        _AHMO-EV @ DLG-HOST-EVENT IF -1 _AHMO-AFTER EXIT THEN
+    THEN
     \ An application paints overlays such as its prompt above its UIDL
     \ elements, so, as with keys, its own handler sees the event first.  It
     \ takes only events for those overlays and returns the rest for UIDL to
@@ -1030,15 +1046,7 @@ VARIABLE _AHMO-HIT-COL
     _AHMO-SLOT @ AHS.DESC @ ?DUP IF
         APP.EVENT-XT @ ?DUP IF
             _AHMO-EV @ _AHMO-SLOT @ AHS.INST @ ROT EXECUTE
-            ASHELL-QUIT-PENDING? IF
-                DROP ASHELL-CANCEL-QUIT
-                _AHMO-SLOT @ AHS.ID @ APP-CLOSE-R-QUIT _AHMO-HOST @
-                    AHOST-REQUEST-CLOSE-ID DROP
-                -1 EXIT
-            THEN
-            IF
-                -1 _AHMO-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! -1 EXIT
-            THEN
+            _AHMO-AFTER IF -1 EXIT THEN
         THEN
     THEN
     _AHMO-SLOT @ AHS.HAS-UIDL @ IF
@@ -1054,21 +1062,28 @@ VARIABLE _AHE-EV
 VARIABLE _AHE-HOST
 VARIABLE _AHE-SLOT
 
+\ After an application handled a key: a quit it asked for becomes a close
+\ request for its slot, and a handled key repaints it.
+: _AHE-AFTER  ( consumed? -- handled? )
+    ASHELL-QUIT-PENDING? IF
+        DROP ASHELL-CANCEL-QUIT
+        _AHE-SLOT @ AHS.ID @ APP-CLOSE-R-QUIT _AHE-HOST @
+            AHOST-REQUEST-CLOSE-ID DROP
+        -1 EXIT
+    THEN
+    DUP IF -1 _AHE-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! THEN ;
+
 : _AHOST-DISPATCH-KEY-SLOT  ( -- handled? )
     _AHE-SLOT @ AHS-CALLABLE? 0= IF 0 EXIT THEN
-    _AHE-SLOT @ AHS.HAS-UIDL @ IF _AHE-SLOT @ AHS-CTX-SWITCH THEN
+    _AHE-SLOT @ AHS.HAS-UIDL @ IF
+        _AHE-SLOT @ AHS-CTX-SWITCH
+        \ A dialog the application shows takes all its input.
+        _AHE-EV @ DLG-HOST-EVENT IF -1 _AHE-AFTER EXIT THEN
+    THEN
     _AHE-SLOT @ AHS.DESC @ ?DUP IF
         APP.EVENT-XT @ ?DUP IF
             _AHE-EV @ _AHE-SLOT @ AHS.INST @ ROT EXECUTE
-            ASHELL-QUIT-PENDING? IF
-                DROP ASHELL-CANCEL-QUIT
-                _AHE-SLOT @ AHS.ID @ APP-CLOSE-R-QUIT _AHE-HOST @
-                    AHOST-REQUEST-CLOSE-ID DROP
-                -1 EXIT
-            THEN
-            IF
-                -1 _AHE-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! -1 EXIT
-            THEN
+            _AHE-AFTER IF -1 EXIT THEN
         THEN
     THEN
     _AHE-SLOT @ AHS.HAS-UIDL @ IF

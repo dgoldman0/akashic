@@ -99,6 +99,9 @@ _GRID-CURRENT-STATE CMP-CELL: _GRID-SEL-COL
 _GRID-CURRENT-STATE CMP-CELL: _GRID-SCROLL-ROW
 _GRID-CURRENT-STATE CMP-CELL: _GRID-SCROLL-COL
 _GRID-CURRENT-STATE CMP-CELL: _GRID-DIRTY
+\ Set when the user agreed to discard unsaved changes and close, so the
+\ close Grid then asks for goes ahead.
+_GRID-CURRENT-STATE CMP-CELL: _GRID-DISCARD-ARMED
 _GRID-CURRENT-STATE CMP-CELL: _GRID-VFS
 _GRID-CURRENT-STATE VFA-SCOPE-SIZE CMP-FIELD: _GRID-LOAD-SCOPE
 _GRID-CURRENT-STATE VREPL-SIZE CMP-FIELD: _GRID-REPLACE
@@ -1220,14 +1223,14 @@ VARIABLE _GRID-SUB-MODE
         _GRID-INVALIDATE S" Grid reloaded" 1400 ASHELL-TOAST
     THEN ;
 
+: _GRID-RELOAD-CONFIRMED  ( confirmed? context -- )
+    DROP IF _GRID-RELOAD-NOW THEN ;
+
 : _GRID-DO-RELOAD  ( elem -- )
     DROP
-    _GRID-DIRTY @ IF
-        S" Reload Grid and discard unsaved changes?" DLG-CONFIRM 0= IF
-            EXIT
-        THEN
-    THEN
-    _GRID-RELOAD-NOW ;
+    _GRID-DIRTY @ 0= IF _GRID-RELOAD-NOW EXIT THEN
+    S" Reload Grid and discard unsaved changes?" S" Discard"
+        ['] _GRID-RELOAD-CONFIRMED 0 DLG-CONFIRM DROP ;
 
 : _GRID-DO-EDIT  ( elem -- ) DROP _GRID-BEGIN-EDIT ;
 : _GRID-DO-CLEAR-CELL  ( elem -- ) DROP _GRID-CLEAR-SELECTED ;
@@ -1365,14 +1368,20 @@ VARIABLE _GRID-INIT-LOAD-STATUS
 
 : GRID-TICK-CB  ( instance -- ) _GRID-ACTIVATE ;
 
+: _GRID-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP IF -1 _GRID-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ Unsaved changes defer the close to a question; agreeing to discard them
+\ asks to close again, and that close goes ahead.
 : GRID-REQUEST-CLOSE-CB  ( reason instance -- decision )
     _GRID-ACTIVATE DROP
     _GRID-DIRTY @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
-    S" Close Grid and discard unsaved changes?" DLG-CONFIRM IF
-        APP-CLOSE-D-ALLOW
-    ELSE
-        APP-CLOSE-D-CANCEL
-    THEN ;
+    _GRID-DISCARD-ARMED @ IF
+        0 _GRID-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
+    THEN
+    S" Close Grid and discard unsaved changes?" S" Discard"
+        ['] _GRID-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : GRID-SHUTDOWN-CB  ( instance -- )
     _GRID-ACTIVATE
