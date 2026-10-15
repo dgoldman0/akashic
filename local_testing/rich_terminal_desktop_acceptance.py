@@ -4562,6 +4562,14 @@ def _pane_chrome_rectangles(
     ) if rect.left < rect.right and rect.top < rect.bottom)
 
 
+def _notice_region(region) -> bool:
+    """The app shell's notice: one DIALOG with the NOTICE flag in a region
+    of its own that is no modal scope."""
+
+    return (not region.modal and len(region.draws) == 1
+            and isinstance(region.draws[0], DialogDraw) and region.draws[0].content.notice)
+
+
 def _shell_scene_geometry(plane, cols: int, rows: int):
     """Validate the canonical shell's region membership before crediting paint.
 
@@ -4676,8 +4684,10 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                 continue
             bounds = _draw_logical_rectangle(region, draw)
             for later_region in plane.regions[indices[region.region_id] + 1:]:
-                if later_region.modal:
-                    # A modal scope holds the taskbar inactive beneath it.
+                if later_region.modal or _notice_region(later_region):
+                    # A modal scope holds the taskbar inactive beneath it,
+                    # and a notice is the topmost thing where it lies, as
+                    # in CELL, where a press on it reaches no task.
                     continue
                 viewport = _region_viewport_rectangle(later_region, cols, rows)
                 if viewport is not None and _rectangle_intersection(bounds, viewport) is not None:
@@ -4716,8 +4726,10 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                     and isinstance(region.draws[0], FieldDraw)
                     and _draw_logical_rectangle(region, region.draws[0]) == last_row):
                 # Desk's own prompt: one field across the last row, in a
-                # modal scope over the whole screen, above every region.
-                if indices[region.region_id] != len(plane.regions) - 1:
+                # modal scope over the whole screen, above every region but
+                # a notice.
+                if not all(_notice_region(later) for later
+                           in plane.regions[indices[region.region_id] + 1:]):
                     raise PhysicalDesktopAcceptanceError(
                         "Desk's prompt region does not paint above every other region")
             elif viewport == screen:
@@ -4754,6 +4766,19 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                     raise PhysicalDesktopAcceptanceError(
                         "MODAL region paints beneath its PANE content")
             roles[region.region_id] = "modal"
+        elif _notice_region(region):
+            # The app shell's notice, clipped to itself above every other
+            # region, apart from every pane.
+            viewport = _region_viewport_rectangle(region, cols, rows)
+            if (not region.clipped or _region_logical_rectangle(region) != screen
+                    or viewport != _draw_logical_rectangle(region, region.draws[0])):
+                raise PhysicalDesktopAcceptanceError("a notice's region is not clipped to the notice")
+            if indices[region.region_id] != len(plane.regions) - 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "a notice's region does not paint above every other region")
+            if _rectangle_cells(viewport) & content_cells:
+                raise PhysicalDesktopAcceptanceError("a notice lies over PANE content")
+            roles[region.region_id] = "notice"
         elif region.draws and all(isinstance(draw, GlyphRunDraw) for draw in region.draws):
             full_surface(region)
             for draw in region.draws:
@@ -5159,7 +5184,13 @@ def reconstruct_retained_screen(
                 raise PhysicalDesktopAcceptanceError(
                     f"retained dialog {draw.control_id} is not wholly on screen"
                 )
-            claim_semantic_rectangle(left, top, right, bottom)
+            if _notice_region(region):
+                # The app shell's notice lies in a region of its own above
+                # every other, so it may lie over the taskbar or Desk's
+                # prompt, which it hides where it lies.
+                semantic_cells.update(_rectangle_cells(visible))
+            else:
+                claim_semantic_rectangle(left, top, right, bottom)
             opaque_semantic_cells.update(_rectangle_cells(visible))
             dialog_extents[region.region_id] = _rectangle_cells(visible)
             dialog_contents[region.region_id] = set()

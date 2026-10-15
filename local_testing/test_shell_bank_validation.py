@@ -177,7 +177,7 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
         if follower.startswith("SHM."):
             assert after == "@", match.group(0)
         else:
-            assert follower in ("_RSHSP-MU", "SHM-ENTRY", "SHM-PROMPT@"), match.group(0)
+            assert follower in ("_RSHSP-MU", "SHM-ENTRY", "SHM-PROMPT@", "SHM-NOTICE@"), match.group(0)
     assert not re.search(r"\bSHME?\.[A-Z-]+ \+?!", source)
 
 

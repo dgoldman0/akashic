@@ -651,3 +651,47 @@ def test_a_button_outside_its_dialog_is_refused():
 def test_a_dialog_region_must_hold_exactly_its_pane_content_above_it():
     with pytest.raises(ERROR,match='beneath'):
         _project(_replace_region(_scene(tabs=True,dialog=True),20,z_order=2))
+
+
+def _notice(x, y, w, *, severity=3, message='Saved'):
+    """The app shell's notice: one row as wide as its bar, its message two
+    cells in."""
+    content=DialogContent(1,DialogFlag.NOTICE,severity,FieldRect(0,0,0,0),
+                          FieldRect(2,0,w-4,1),message=message)
+    return DialogDraw(700,ControlState.VISIBLE,0,0,ObjectBounds(x,y,w,1),'',content)
+
+
+def _notice_scene(*, x=1, width=9, row=ROWS-1, z=7, clip=None, base=None):
+    """The two panes and the taskbar, and a notice over the taskbar row in a
+    region of its own above every other."""
+    base=_scene() if base is None else base
+    region=_region(40,(_notice(x,row,width),),z=z,clip=clip or (x,row,width,1))
+    return _offer([*base.retained.regions,region])
+
+
+def test_a_notice_lies_over_the_taskbar_in_a_region_of_its_own():
+    projection=_project(_notice_scene())
+    notice,=projection.semantic_dialog_claims
+    assert notice.content.notice and notice.content.severity==3 and not notice.modal
+    assert notice.content.message=='Saved' and notice.title==''
+    assert (notice.left,notice.top,notice.right,notice.bottom)==(1,ROWS-1,10,ROWS)
+    # The taskbar it covers stays semantic beneath it, and active.
+    bar,=projection.semantic_taskbar_claims
+    assert [task.identity.control_id for task in bar.tasks]==[501,502]
+    assert not projection.inactive_controls
+
+
+def test_a_notice_lies_over_desks_prompt():
+    projection=_project(_notice_scene(base=_desk_prompt_scene()))
+    notice,=projection.semantic_dialog_claims
+    assert notice.content.notice and not projection.semantic_taskbar_claims
+
+
+@pytest.mark.parametrize('changes,message',[
+    ({'clip':(0,ROWS-1,COLS,1)},'not clipped to the notice'),
+    ({'z':2},'above every other region'),
+    ({'row':3},'over PANE content'),
+])
+def test_a_notice_lies_clipped_to_itself_above_everything_apart_from_panes(changes,message):
+    with pytest.raises(ERROR,match=message):
+        _project(_notice_scene(**changes))

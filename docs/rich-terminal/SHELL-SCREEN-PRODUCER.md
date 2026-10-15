@@ -180,6 +180,21 @@ modal regions. `PLACE` and `EXTEND` on it resolve to its value's first cell
 on that row and its field's revision, and Desk's prompt takes them through
 its ordinary event path.
 
+The app shell's notice, while the paint shows one, is in the shell model
+too: its UDLG model and where its root lies, apart from every pane. With
+dialogs the shell makes it a `DIALOG` with the `NOTICE` flag, packed from
+that model, after Desk's prompt or the taskbar's controls, in a region of
+its own: surface-sized logical bounds, the notice's root as its clip,
+`VISIBLE | CLIPPED`, and z four above the content z, above every other
+region, Desk's prompt too. It is no modal scope: the notice takes no input,
+and what lies beneath it stays active. A claim on its root keeps residual
+glyphs off it. Its cells are its own paint, so the taskbar bands and their
+blank gaps are proved clear only outside it, and the taskbar it covers
+stays semantic beneath it; the identity reservation, and the statics and
+instruments after it, move up one more to make room for it. Without dialogs
+the notice is paint over the taskbar, which then stays ordinary while it
+shows.
+
 Modal/unavailable SHSN authority also refuses the candidate. Every refusal uses
 the unchanged, already admitted legacy RTHP candidate, with no shell claims
 leaking into that candidate.
@@ -215,8 +230,10 @@ Before the base producer compares its candidate, DELTA-PROBE checks that the
 shell model of the new draw equals the copied acknowledged model apart from
 its epoch, which every paint advances, and the field of Desk's prompt, which
 typing changes; the prompt must be in both models at the same place or in
-neither. A renamed or refocused task, a new pane, the prompt opening or
-closing, or any other model change leaves the draw to a complete START
+neither. The app shell's notice, which follows the prompt, must be the same
+in both, wherever the prompt's size puts it. A renamed or refocused task, a
+new pane, the prompt opening or closing, a notice appearing, changing or
+ending, or any other model change leaves the draw to a complete START
 without further comparison.
 
 After the base producer has matched its controls, statics, instruments and
@@ -231,6 +248,7 @@ acknowledged identity in the same place:
 - applet controls must already carry their acknowledged identities;
 - Desk's prompt takes its acknowledged identity and may change, so typing in
   it sends one CONTROL-REPLACE;
+- the notice takes its acknowledged identity and is unchanged;
 - the taskbar takes the acknowledged identities and must otherwise be
   unchanged, because a DELTA cannot replace taskbar controls;
 - instruments and series take the identities in place and must be unchanged;
