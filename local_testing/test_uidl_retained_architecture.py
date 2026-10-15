@@ -829,6 +829,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY",
         "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY",
         "APT1-DESK-FIELDS-NATIVE-CAPACITY",
+        "APT1-DESK-DIALOGS-NATIVE-CAPACITY",
         "APT1-DESK-TX-CAPACITY",
     ]
     assert "_DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS" in code
@@ -860,6 +861,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-UIDL-TEXT-U MAX\n"
         "    APT1-DESK-FIELDS-NATIVE-CAPACITY MAX\n"
+        "    APT1-DESK-DIALOGS-NATIVE-CAPACITY MAX\n"
         "    _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+\n"
         "    CONSTANT _A1D-MAX-CONTROL-PAYLOAD-U"
     ) in code
@@ -1031,7 +1033,18 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-VALIDATE-DATA-GRAPHICS-BOUND\n"
         "_A1D-VALIDATE-STATUS-FIELDS-BOUND\n"
         "_A1D-VALIDATE-FIELDS-BOUND\n"
+        "_A1D-VALIDATE-DIALOGS-BOUND\n"
         "_A1D-VALIDATE-TRANSPORT-BOUNDS\n"
+    ) in code
+    dialog_guard = _word(composition, "_A1D-VALIDATE-DIALOGS-BOUND")
+    assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY _A1D-U32-POSITIVE?" in dialog_guard
+    assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY UDLG-HEADER-SIZE U<" in dialog_guard
+    assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY 7 AND" in dialog_guard
+    # One dialog descriptor a document, never an application count.
+    assert (
+        "_A1D-UIDL-BINDINGS UDLSN-DESCRIPTOR-SIZE _A1D-CAPACITY*\n"
+        "    2 _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U"
     ) in code
     assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
     assert (
@@ -1144,6 +1157,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "        _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U\n"
         "    _A1D-RUHA-SNAPSHOT-FIELD-NATIVE\n"
         "        _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U\n"
+        "    _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS\n"
+        "        _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U\n"
+        "    _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE\n"
+        "        _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE-U\n"
         "    _A1D-RUHA RUHA-INIT"
     ) in setup
     assert (

@@ -2,8 +2,8 @@
 
 `tui/rich-terminal/uidl-hybrid-adapter.f` observes the ordinary completed
 UIDL-TUI draw boundary and freezes the renderer-neutral menu, canonical
-widget-collection, `DATA_GRAPHICS`, `STATUS_FIELD`, and typed `FIELD` models for every visible
-attached UCTX. It also consults the ordinary screen's final-writer provenance:
+widget-collection, `DATA_GRAPHICS`, `STATUS_FIELD`, and typed `FIELD` models, and
+the dialog each shows, for every visible attached UCTX. It also consults the ordinary screen's final-writer provenance:
 when later foreground paint intersects a document, the adapter withholds all
 of that document's semantic slices for the draw so residual output owns both
 its pixels and hit area. It does not create an app scene, inspect CELL values,
@@ -15,12 +15,12 @@ Custom widgets and panels require no adapter. Anything not represented by an
 ordinary core UIDL semantic type remains eligible for the residual projection
 of the completed draw. CELL remains the complete fallback.
 
-## Published ABI 9
+## Published ABI 10
 
-Each 240-byte document directory entry identifies one ordinary visible
+Each 272-byte document directory entry identifies one ordinary visible
 document. It carries the attachment token, slot identity, absolute surface
-geometry, menu exact/topology lineage, and offset/byte pairs into ten aggregate
-payload banks:
+geometry, menu exact/topology lineage, and offset/byte pairs into twelve
+aggregate payload banks:
 
 - UMSN menu records;
 - UMSN menu text;
@@ -31,30 +31,32 @@ payload banks:
 - USFSN status-field descriptors; and
 - USFSN native status-field values;
 - UFLSN FIELD descriptors; and
-- UFLSN native typed FIELD values.
+- UFLSN native typed FIELD values;
+- UDLSN dialog descriptors; and
+- UDLSN native dialog models.
 
 A document contributes an ordinary semantic entry when any menu, collection,
-data-graphics forest, status-field list, or typed FIELD list is nonempty. A document intrinsically empty in all
+data-graphics forest, status-field list, or typed FIELD list is nonempty, or
+it shows a dialog. A document intrinsically empty in all
 enabled families contributes no entry. A visible document occluded by later
 foreground paint, or one whose content a family refuses, instead contributes a
-directory-only identity with all ten semantic slices zero for that draw. The
+directory-only identity with all twelve semantic slices zero for that draw. The
 paired payload of an empty family is
 also empty: menu records cannot name menu text without records, and native
 bytes cannot appear without their corresponding descriptors.
 
-The borrowed aggregate snapshot is 208 bytes. In addition to generation,
+The borrowed aggregate snapshot is 240 bytes. In addition to generation,
 draw-generation, document count, content epoch, directory, menu-record, and
-menu-text fields, ABI 9 publishes the used spans of UCSN, UDGSN, USFSN, and UFLSN
-descriptor/native bank pairs. `RUHA-SNAPSHOT-COLLECTION-COUNT@` and
-`RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@`, and
-`RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@`, and
-`RUHA-SNAPSHOT-FIELDS-COUNT@` derive family counts from their descriptor
-extents. The snapshot and all of its spans remain borrowed only until lifecycle
+menu-text fields, ABI 10 publishes the used spans of UCSN, UDGSN, USFSN, UFLSN
+and UDLSN descriptor/native bank pairs. `RUHA-SNAPSHOT-COLLECTION-COUNT@`,
+`RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@`, `RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@`,
+`RUHA-SNAPSHOT-FIELDS-COUNT@` and `RUHA-SNAPSHOT-DIALOGS-COUNT@` derive family
+counts from their descriptor extents. The snapshot and all of its spans remain borrowed only until lifecycle
 invalidation or the next successful aggregate publication; a downstream
 producer must copy them into its own immutable attempt before asynchronous
 owner work begins.
 
-The checked adapter ABI is 9 and the adapter is 1024 bytes. It embeds the
+The checked adapter ABI is 10 and the adapter is 1136 bytes. It embeds the
 collection and data-graphics builders and two snapshots; following offsets
 are derived from each embedded size. Existing directory offsets through menu
 topology epoch at 152 stay fixed. Status descriptor offset/bytes are at
@@ -62,15 +64,18 @@ topology epoch at 152 stay fixed. Status descriptor offset/bytes are at
 bytes are at 144/152 and native address/bytes at 160/168. FIELD appends directory
 descriptor offset/bytes at 192/200 and native offset/bytes at 208/216; snapshot
 FIELD descriptor address/bytes are 176/184 and native address/bytes 192/200.
-The independent 48-byte FIELD bank family moves snapshot A/B to 608/816.
+The independent 48-byte FIELD bank family follows. Dialogs append
+directory descriptor offset/bytes at 240/248 and native offset/bytes at
+256/264; snapshot dialog descriptor address/bytes are 208/216 and native
+address/bytes 224/232. Their independent 48-byte bank family moves snapshot
+A/B to 656/896.
 
-ABI 9 appends `OWNER-ID` at directory offset 224 and `OWNER-GEN` at
-232. `RUHA-DOCUMENT-OWNER-ID@` and
+`OWNER-ID` is at directory offset 224 and `OWNER-GEN` at 232. `RUHA-DOCUMENT-OWNER-ID@` and
 `RUHA-DOCUMENT-OWNER-GENERATION@` expose the nonzero identity tuple read
 from the slot's actual `AHS.INST` component instance. The attachment record
-is 128 bytes, the snapshot 208 bytes, and the adapter 1024 bytes. The record's
-last four cells hold the screen cells of the overlay field the document's last
-draw painted, described below, or zero.
+is 128 bytes, the snapshot 240 bytes, and the adapter 1136 bytes. The record's
+last four cells hold the screen cells of the overlay the document's last draw
+painted, described below, or zero.
 The owner tuple describes the source component; it is separate from a
 downstream terminal owner's identity and from the signed slot identity.
 
@@ -177,6 +182,15 @@ Its descriptor UTF8 total includes the outer label, TEXT value and placeholder,
 and every choice label. Formatted INTEGER digits consume no UTF8 quota. Root and choice object
 ceilings remain independent of native storage bounds.
 
+`RUHA-INIT` then takes UDLSN descriptor address/bytes and native address/bytes
+for dialogs, following the FIELD arguments and before the adapter. The
+all-zero quartet is canonical absence, and a document's dialog then stays
+painted text. Enabled descriptor storage is a positive multiple of `2 * 64`,
+native storage a positive multiple of 16, with each half at least the
+160-byte UDLG header. A document shows at most one dialog, so one descriptor
+a document suffices; its native model takes `160 + align8(title) +
+align8(message)` and `64 + align8(label)` a button.
+
 The constructor validates nonwrapping spans, required alignment and record-size
 multiples, exact A/B division, directory capacity against lifecycle-record
 capacity, pairwise disjointness of every borrowed range, and disjointness from
@@ -225,20 +239,25 @@ One kind of foreground paint is the document's own: the canonical prompt
 (`tui/widgets/prompt.f`) an application paints over its status row while it
 asks for a line of text. UIDL-TUI's draw observer records the prompt a
 document's observed draw paints, by pointer and instance, in the document's
-own context, and RUHA copies its screen cells into the attachment record when
-that draw completes. When all the foreground paint over a document lies
-inside that prompt's cells, the document is captured as usual except that
+own context. The other is the dialog the document shows
+(`tui/widgets/dialog.f`), which its host paints after everything the
+document paints. When that draw completes, RUHA copies the overlay's screen
+cells into the attachment record (`UTUI-OVERLAY-ROOT@`): the dialog's, as its
+last paint laid it out, else the prompt's. When all the foreground paint over a document lies
+inside that overlay's cells, the document is captured as usual except that
 UIDL-TUI clips away every root whose visible cells the paint meets, through
 the canonical geometry every family shares, so those roots stay CELL's and
 the rest stay semantic. The prompt itself becomes the document's overlay
 TEXT field: UFLSN appends it after the mounted fields as the bank's last
 record, from source `UFLSN-SOURCE-OVERLAY`, index 0, generation 1, the
 prompt's instance as root key and paint order 255, and the prompt builds its
-UFLD model from its input's state (`PRM-FIELD-CAPTURE`). Any other
+UFLD model from its input's state (`PRM-FIELD-CAPTURE`). A dialog becomes
+the document's dialog slice: UDLSN captures its UDLG model, written by the
+widget as its last paint laid it out (`DLG-MODEL-CAPTURE`). Any other
 foreground paint over the document keeps the document-granular rule.
 
 A family refusal falls back the same way, one document at a time. When the
-menu, collection, data-graphics, status-field, or typed FIELD capture of a document reports `CAPACITY`,
+menu, collection, data-graphics, status-field, typed FIELD, or dialog capture of a document reports `CAPACITY`,
 `UNAVAILABLE`, or `INVALID`, that document contributes the directory-only
 zero-slice identity, its record stays dirty so the next draw captures it
 again, and nothing of it is staged. Its ordinary cells take the residual path
@@ -254,13 +273,13 @@ refuse the whole aggregate.
 The content epoch is a provenance certificate, not a revision guess, digest,
 or byte-equality shortcut. It carries only when every nonempty emitted document
 arrived through validated prior whole-document reuse, the document count and
-complete 240-byte directory are identical, and all ten aggregate payload byte
-totals match. Any live recapture takes the ordinary new-epoch path even if the
+complete 272-byte directory are identical, and all twelve aggregate payload
+byte totals match. Any live recapture takes the ordinary new-epoch path even if the
 resulting bytes happen to be equal.
 
 ## Downstream status
 
-ABI 9 makes the frozen UCSN, UDGSN, USFSN, and UFLSN descriptor/native banks available at the
+ABI 10 makes the frozen UCSN, UDGSN, USFSN, UFLSN, and UDLSN descriptor/native banks available at the
 generic aggregate boundary. The selected producer lowers native text roots plus
 TABSET/TAB root/descendant graphs through one generic collection boundary and
 lowers canonical `DATA_GRAPHICS` values through the distinct instrument
@@ -280,7 +299,7 @@ That is software/reference-view evidence, not physical UART or panel proof.
 ## Bounded selector
 
 `local_testing/test_rich_terminal_uidl_hybrid_adapter.py` is the seconds-scale
-structural and executed reuse selector for ABI 9.
+structural and executed reuse selector for ABI 10.
 `local_testing/test_rich_adapter_provenance.py` loads the actual full AHOST,
 CINST, app-shell and UIDL dependency closure. It verifies replacement-instance
 and generation-only recapture, frozen tuple corruption, directory-only fallback,
@@ -302,7 +321,7 @@ Every caller span is proved against the status model, widget, snapshot scratch,
 and mounted authority as well as the older families. Snapshot publication still
 selects the inactive bank only after all families and context restoration succeed.
 The executed selector covers canonical absent banks, complete A/B shape, copied
-status slices, last-bank exhaustion without mutation, and all 17 protected spans.
+status slices, last-bank exhaustion without mutation, and all 19 protected spans.
 
 `local_testing/test_uidl_field_snapshot.py` executes all three FIELD types,
 exact multirow slots and revisions, copy independence, corrupt frozen metadata,

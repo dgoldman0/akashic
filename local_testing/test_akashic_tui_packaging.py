@@ -2016,6 +2016,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/uidl-status-field-snapshot.f",
         "tui/uidl-menu-snapshot.f",
         "tui/uidl-picture-snapshot.f",
+        "tui/uidl-dialog-snapshot.f",
     }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
