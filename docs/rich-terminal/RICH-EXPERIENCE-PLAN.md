@@ -565,10 +565,20 @@ and Streams' source removal. Desk with Daybook answers the delete question
 for its daily reminder through Cancel. An application that asks while its
 prompt is open goes out as CELL until one of them closes, since the shell
 allows one overlay a pane; Daybook and Library refuse a close while their
-prompt is open. Desk's screens and the Agent's approval buttons come next.
+prompt is open. Desk's screens are UIDL dialogs too: the launcher, the
+sandbox's access prompt and inspector, and the schedule's approval and
+permissions frame their lists in a `<dialog>` whose title and leading
+labels are its message, and it goes out as a `DIALOG` around its contents.
+In the shell frame a screen is an overlay pane over the panes beneath it,
+its document in a modal region over the whole screen, so the panes and the
+taskbar show inactive while it is open; in the physical viewer Desk with
+File Explorer opens its launcher that way. A screen that crosses the
+divider between two tiles still goes out without the shell, because the
+planner keeps a pane's chrome from lying under an overlay. The Agent's
+approval buttons come next.
 
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
-toggle, selector, range and dialog elements in documents that use them.
+toggle, selector and range elements in documents that use them.
 Adjusting splits. Editing a grid cell in place. Plots and vector lines,
 which are part 6.
 
