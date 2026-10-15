@@ -10941,7 +10941,8 @@ def _connect(
 
 def _write_failure_frame(artifact_root: Path, offer: TerminalDisplayOffer) -> None:
     """Keep the retained frame a journey refused, for its diagnosis: each
-    region's place, flags and inactive controls, and each of its draws."""
+    region's place, flags and inactive controls, and each of its draws.
+    The guest's state goes to timeout-state.json, as for a timeout."""
 
     lines = []
     plane = offer.retained
@@ -11730,8 +11731,11 @@ def run_physical_desktop_acceptance(
                     frame_projection,
                     send_input,
                 )
-            except PhysicalDesktopAcceptanceError:
+            except PhysicalDesktopAcceptanceError as exc:
+                # The frame, and the guest's state as the timeout state
+                # records it, for the refusal's diagnosis.
                 _write_failure_frame(artifact_root, frame_offer)
+                _timeout_state_message(client, artifact_root, f"journey refused: {exc}")
                 raise
             if journey.waiting is not None and journey.waiting != waited:
                 print(
