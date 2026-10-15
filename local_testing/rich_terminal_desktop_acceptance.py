@@ -4642,11 +4642,17 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                 ))
                 add_material((bounds,))
 
+    # Panes whose content regions share a depth never overlap.  An overlay
+    # pane, such as one of Desk's screens, has its content region above the
+    # ordinary panes' and may lie over them.
     content_cells = set()
+    layers: dict[int, set[tuple[int, int]]] = {}
     for pane in panes:
         cells = _rectangle_cells(pane.content_bounds)
-        if cells & (content_cells | shell_cells):
+        layer = layers.setdefault(regions[pane.content_region_id].z_order, set())
+        if cells & (layer | shell_cells):
             raise PhysicalDesktopAcceptanceError("PANE contents overlap another pane or shell material")
+        layer.update(cells)
         content_cells.update(cells)
     for region in plane.regions:
         band_bounds = [_draw_logical_rectangle(region, draw) for draw in region.draws
@@ -4661,6 +4667,9 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                 continue
             bounds = _draw_logical_rectangle(region, draw)
             for later_region in plane.regions[indices[region.region_id] + 1:]:
+                if later_region.modal:
+                    # A modal scope holds the taskbar inactive beneath it.
+                    continue
                 viewport = _region_viewport_rectangle(later_region, cols, rows)
                 if viewport is not None and _rectangle_intersection(bounds, viewport) is not None:
                     raise PhysicalDesktopAcceptanceError("a later region blocks TASKBAR input slots")
@@ -4687,22 +4696,47 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                     indices[pane.content_region_id]):
                 raise PhysicalDesktopAcceptanceError("PANE instrument region does not paint between chrome and content")
             roles[region.region_id] = "instrument"
-        elif region.modal and region.draws and all(
-                isinstance(draw, (FieldDraw, DialogDraw, ButtonDraw)) for draw in region.draws):
+        elif region.modal and region.draws and not any(
+                isinstance(draw, (PaneDraw, TaskBarDraw, GlyphRunDraw) + instrument_types)
+                for draw in region.draws):
             viewport = _region_viewport_rectangle(region, cols, rows)
             if not region.clipped or _region_logical_rectangle(region) != screen:
                 raise PhysicalDesktopAcceptanceError("MODAL region is not a clipped surface")
-            if viewport == screen:
+            last_row = _LogicalRectangle(0, rows - 1, cols, rows)
+            if (viewport == screen and len(region.draws) == 1
+                    and isinstance(region.draws[0], FieldDraw)
+                    and _draw_logical_rectangle(region, region.draws[0]) == last_row):
                 # Desk's own prompt: one field across the last row, in a
                 # modal scope over the whole screen, above every region.
-                if (len(region.draws) != 1 or _draw_logical_rectangle(region, region.draws[0])
-                        != _LogicalRectangle(0, rows - 1, cols, rows)):
-                    raise PhysicalDesktopAcceptanceError(
-                        "a whole-screen MODAL region is not Desk's prompt across the last row")
                 if indices[region.region_id] != len(plane.regions) - 1:
                     raise PhysicalDesktopAcceptanceError(
                         "Desk's prompt region does not paint above every other region")
+            elif viewport == screen:
+                # An overlay pane's document, such as one of Desk's screens:
+                # its controls, all inside the one pane's content, in a modal
+                # scope over the whole screen above that content.
+                # The pane is the uppermost one around them: panes at one
+                # depth never overlap.
+                matches = [
+                    pane for pane in panes
+                    if all(_rectangle_intersection(
+                        _draw_logical_rectangle(region, draw), pane.content_bounds)
+                        == _draw_logical_rectangle(region, draw)
+                        for draw in region.draws)
+                ]
+                if not matches:
+                    raise PhysicalDesktopAcceptanceError(
+                        "a whole-screen MODAL region is neither Desk's prompt across "
+                        "the last row nor a PANE's document")
+                pane = max(matches, key=lambda match: indices[match.content_region_id])
+                if indices[region.region_id] < indices[pane.content_region_id]:
+                    raise PhysicalDesktopAcceptanceError(
+                        "a whole-screen MODAL region paints beneath its PANE content")
             else:
+                if not all(isinstance(draw, (FieldDraw, DialogDraw, ButtonDraw))
+                           for draw in region.draws):
+                    raise PhysicalDesktopAcceptanceError(
+                        "a PANE's MODAL region holds more than its prompt or dialog")
                 matches = [pane for pane in panes if viewport == pane.content_bounds]
                 if len(matches) != 1:
                     raise PhysicalDesktopAcceptanceError(

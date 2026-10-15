@@ -87,6 +87,7 @@ VARIABLE _RSHSP-REGION VARIABLE _RSHSP-FAMILY VARIABLE _RSHSP-PLAN
 VARIABLE _RSHSP-I VARIABLE _RSHSP-J VARIABLE _RSHSP-RUN VARIABLE _RSHSP-MEMBER
 VARIABLE _RSHSP-TEMP VARIABLE _RSHSP-SAVED VARIABLE _RSHSP-NEW
 VARIABLE _RSHSP-CLAIM-BANK VARIABLE _RSHSP-CLAIM-U VARIABLE _RSHSP-BASE-CLAIM-U
+VARIABLE _RSHSP-UNDER-CLAIM-U
 VARIABLE _RSHSP-HEADS VARIABLE _RSHSP-EVENTS VARIABLE _RSHSP-EVENTS-U
 VARIABLE _RSHSP-DIFF VARIABLE _RSHSP-GQ
 VARIABLE _RSHSP-GITEMS VARIABLE _RSHSP-GREFS VARIABLE _RSHSP-GTEXT
@@ -147,6 +148,10 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-RECT-CLEAR?
     SHSN-S-OK = _RSHSP-CHECK _RSHSP-CHECK ;
 : _RSHSP-ENTRY ( i -- e ) _RSHSP-M @ SHM-ENTRY ;
+\ An overlay pane: a slot its host paints above the others, such as one of
+\ Desk's own screens.
+: _RSHSP-OVERLAY-PANE? ( e -- flag )
+    DUP SHME.KIND @ SHM-K-PANE = SWAP SHME.FLAGS @ SHM-F-OVERLAY AND 0<> AND ;
 : _RSHSP-CONTENT-RECT ( e -- row col h w )
     >R R@ SHME.CONTENT-ROW @ R@ SHME.CONTENT-COL @
     R@ SHME.CONTENT-H @ R> SHME.CONTENT-W @ ;
@@ -155,6 +160,67 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     OVER SHME.CONTENT-ROW @ 2 PICK SHME.CONTENT-H @ + R@ SHME.CONTENT-ROW @ > AND
     OVER SHME.CONTENT-COL @ R@ SHME.CONTENT-COL @ R@ SHME.CONTENT-W @ + < AND
     SWAP DUP SHME.CONTENT-COL @ SWAP SHME.CONTENT-W @ + R> SHME.CONTENT-COL @ > AND ;
+\ Panes do not overlap, but an overlay pane lies over the ordinary panes
+\ beneath it.
+: _RSHSP-PANES-APART? ( e e -- flag )
+    OVER _RSHSP-OVERLAY-PANE? OVER _RSHSP-OVERLAY-PANE? <> IF 2DROP -1 EXIT THEN
+    _RSHSP-OVERLAP? 0= ;
+\ The host paints an overlay pane after the panes beneath it, as foreground,
+\ and that paint is the overlay pane's own.  A rectangle of a pane beneath
+\ is clear when every cell no overlay pane covers is: its rows are taken in
+\ bands between the overlay panes' top and bottom edges, and each band in
+\ the spans between the overlay panes it meets.  Overlay panes do not
+\ overlap one another; where they would, the cells of the later one are
+\ checked, which refuses.
+VARIABLE _RSHSP-CX-R0 VARIABLE _RSHSP-CX-C0 VARIABLE _RSHSP-CX-R1 VARIABLE _RSHSP-CX-C1
+VARIABLE _RSHSP-CX-A VARIABLE _RSHSP-CX-B VARIABLE _RSHSP-CX-COL
+VARIABLE _RSHSP-CX-S VARIABLE _RSHSP-CX-E
+: _RSHSP-CX-EDGE ( row -- )
+    DUP _RSHSP-CX-A @ > OVER _RSHSP-CX-B @ < AND IF _RSHSP-CX-B ! ELSE DROP THEN ;
+\ B: the first overlay pane edge below row A, or the rectangle's end.
+: _RSHSP-CX-BAND ( -- )
+    _RSHSP-CX-R1 @ _RSHSP-CX-B !
+    _RSHSP-N @ 0 ?DO
+        I _RSHSP-ENTRY DUP _RSHSP-OVERLAY-PANE? IF
+            DUP SHME.CONTENT-ROW @ _RSHSP-CX-EDGE
+            DUP SHME.CONTENT-ROW @ OVER SHME.CONTENT-H @ + _RSHSP-CX-EDGE
+        THEN DROP
+    LOOP ;
+\ S..E: the first span from COL on that an overlay pane covers in band
+\ A..B, cut to the rectangle; S = E = the rectangle's end when none does.
+: _RSHSP-CX-SPAN ( -- )
+    _RSHSP-CX-C1 @ DUP _RSHSP-CX-S ! _RSHSP-CX-E !
+    _RSHSP-N @ 0 ?DO
+        I _RSHSP-ENTRY DUP _RSHSP-OVERLAY-PANE? IF
+            DUP SHME.CONTENT-ROW @ _RSHSP-CX-A @ > 0=
+            OVER DUP SHME.CONTENT-ROW @ SWAP SHME.CONTENT-H @ + _RSHSP-CX-B @ < 0= AND IF
+                DUP SHME.CONTENT-COL @ _RSHSP-CX-C0 @ MAX
+                OVER DUP SHME.CONTENT-COL @ SWAP SHME.CONTENT-W @ + _RSHSP-CX-C1 @ MIN
+                2DUP <
+                2 PICK _RSHSP-CX-COL @ < 0= AND
+                2 PICK _RSHSP-CX-S @ < AND IF
+                    _RSHSP-CX-E ! _RSHSP-CX-S !
+                ELSE 2DROP THEN
+            THEN
+        THEN DROP
+    LOOP ;
+: _RSHSP-UNCOVERED-CLEAR ( row col h w -- )
+    _RSHSP-CX-C1 ! _RSHSP-CX-R1 ! _RSHSP-CX-C0 ! _RSHSP-CX-R0 !
+    _RSHSP-CX-C0 @ _RSHSP-CX-C1 +! _RSHSP-CX-R0 @ _RSHSP-CX-R1 +!
+    _RSHSP-CX-R0 @ _RSHSP-CX-A !
+    BEGIN _RSHSP-CX-A @ _RSHSP-CX-R1 @ < WHILE
+        _RSHSP-CX-BAND _RSHSP-CX-C0 @ _RSHSP-CX-COL !
+        BEGIN _RSHSP-CX-COL @ _RSHSP-CX-C1 @ < WHILE
+            _RSHSP-CX-SPAN
+            _RSHSP-CX-S @ _RSHSP-CX-COL @ > IF
+                _RSHSP-CX-A @ _RSHSP-CX-COL @
+                _RSHSP-CX-B @ _RSHSP-CX-A @ - _RSHSP-CX-S @ _RSHSP-CX-COL @ -
+                _RSHSP-CLEAR-RECT
+            THEN
+            _RSHSP-CX-E @ _RSHSP-CX-COL !
+        REPEAT
+        _RSHSP-CX-B @ _RSHSP-CX-A !
+    REPEAT ;
 \ A pane's overlay.  The document in a pane may paint one overlay over its
 \ own content: the prompt it shows, captured as the last record of its
 \ field snapshot, or the dialog it shows, a DIALOG with its buttons after
@@ -215,7 +281,7 @@ VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
     LOOP DROP 0 ;
 : _RSHSP-OV-CONTROL ( record -- control ) @ RTE-CONTROL-SIZE * _RSHSP-SRC-CONTROLS @ + ;
 : _RSHSP-BAND-CLEAR ( row col h w -- )
-    DUP 0> 2 PICK 0> AND IF _RSHSP-CLEAR-RECT ELSE 2DROP 2DROP THEN ;
+    DUP 0> 2 PICK 0> AND IF _RSHSP-UNCOVERED-CLEAR ELSE 2DROP 2DROP THEN ;
 \ The overlay's root lies inside the pane's content, and the four bands of
 \ the pane around it are clear.  The overlay's own cells are taken as its
 \ paint, as the aggregate adapter took them; a dialog's buttons lie inside
@@ -241,9 +307,15 @@ VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
     _RSHSP-OVR @ _RSHSP-OVC @ _RSHSP-OVW @ + _RSHSP-OVH @
         _RSHSP-E @ SHME.COL @ _RSHSP-E @ SHME.WIDTH @ + _RSHSP-OVC @ _RSHSP-OVW @ + -
         _RSHSP-BAND-CLEAR ;
+\ Every cell of a pane is the shell's to project but its document's overlay
+\ and the overlay panes above it.  An overlay pane's cells are its own
+\ foreground paint.  Its document shows no overlay of its own, which would
+\ need a modal region above the overlay pane's.
 : _RSHSP-PANE-CLEAR ( index entry -- )
+    DUP _RSHSP-OVERLAY-PANE? IF DROP _RSHSP-PANE-OVERLAY 0= _RSHSP-CHECK EXIT THEN
     SWAP _RSHSP-PANE-OVERLAY ?DUP IF _RSHSP-OV-CONTROL _RSHSP-OVERLAY-CLEAR EXIT THEN
-    >R R@ SHME.ROW @ R@ SHME.COL @ R@ SHME.HEIGHT @ R> SHME.WIDTH @ _RSHSP-CLEAR-RECT ;
+    >R R@ SHME.ROW @ R@ SHME.COL @ R@ SHME.HEIGHT @ R> SHME.WIDTH @
+    DUP 0> 2 PICK 0> AND _RSHSP-CHECK _RSHSP-UNCOVERED-CLEAR ;
 \ Desk's own prompt, while it holds the hidden taskbar row: its field's
 \ UFLD model in the copied shell model, its control and its region.
 VARIABLE _RSHSP-PROMPT-A VARIABLE _RSHSP-PROMPT-U VARIABLE _RSHSP-PROMPT-N
@@ -254,7 +326,7 @@ VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
     _RSHSP-N @ 0 ?DO I _RSHSP-ENTRY DUP SHME.KIND @ SHM-K-PANE = IF
         DUP _RSHSP-E ! I SWAP _RSHSP-PANE-CLEAR
         I 0 ?DO I _RSHSP-ENTRY DUP SHME.KIND @ SHM-K-PANE = IF
-            _RSHSP-E @ _RSHSP-OVERLAP? 0= _RSHSP-CHECK ELSE DROP THEN LOOP
+            _RSHSP-E @ _RSHSP-PANES-APART? _RSHSP-CHECK ELSE DROP THEN LOOP
         1 _RSHSP-ELIGIBLE @ I 8 * + !
     ELSE DROP THEN LOOP ;
 : _RSHSP-GAP-BLANK? ( row col h w -- flag )
@@ -366,19 +438,30 @@ VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
             OVER _RTE-IR.FLAGS !
         96 +
     LOOP ;
-\ Desk's own screens take every key while they are open and ignore a
-\ press outside them, so with dialogs an overlay pane's content region is
-\ a modal scope over the whole screen, its logical bounds.
-VARIABLE _RSHSP-OM-X
-: _RSHSP-OVERLAY-MODAL! ( -- )
-    _RSHSP-DIALOGS? 0= IF EXIT THEN
-    _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ 0 ?DO
-        _RSHSP-CORR @ I RSHPL-CORRELATION-SIZE * + _RSHSP-OM-X !
-        _RSHSP-OM-X @ RSHPL-CORRELATION.INDEX @ _RSHSP-ENTRY
-        DUP SHME.KIND @ SHM-K-PANE = SWAP SHME.FLAGS @ SHM-F-OVERLAY AND 0<> AND IF
-            _RSHSP-OM-X @ RSHPL-CORRELATION.CONTENT-REGION @ _RSHSP-REGION@
-            DUP _RTE-IR.FLAGS @ RTE-REGION-MODAL OR SWAP _RTE-IR.FLAGS !
-        THEN
+\ An overlay pane's host gives it every key while it is open and ignores a
+\ press outside it, as Desk does its own screens.  With dialogs the
+\ overlay pane's document therefore goes in a modal region over the whole
+\ screen, surface-sized with the surface as its clip: a modal scope over
+\ everything beneath it.  The regions follow the overlays' modal regions
+\ at the same z, so they lie above them, and Desk's prompt lies above all.
+VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
+: _RSHSP-SCREEN-ROWS ( first-row -- next-row )
+    _RSHSP-ROW-ID @ _RSHSP-SCREEN-FIRST !
+    _RSHSP-SCREEN-N @ 0 ?DO
+        _RSHSP-ROW-ID @ OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
+        _RSHSP-P @ _RTHP.COLS @ 2DUP SWAP _RTE-IR.COLS ! OVER _RTE-IR.CLIP-COLS !
+        _RSHSP-P @ _RTHP.ROWS @ 2DUP SWAP _RTE-IR.ROWS ! OVER _RTE-IR.CLIP-ROWS !
+        _RSHSP-CONTENT-Z @ 2 + OVER _RTE-IR.Z !
+        RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR
+            OVER _RTE-IR.FLAGS !
+        96 +
+    LOOP ;
+\ The modal region of the overlay pane at INDEX, in pane order, or 0.
+: _RSHSP-SCREEN-REGION ( index -- region|0 )
+    _RSHSP-SCREEN-N @ 0= IF DROP 0 EXIT THEN
+    DUP _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? 0= IF DROP 0 EXIT THEN
+    _RSHSP-SCREEN-FIRST @ SWAP 0 ?DO
+        I _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? IF 1+ THEN
     LOOP ;
 \ Desk's own prompt holds the hidden taskbar row.  With dialogs its region
 \ is a modal scope over the whole screen, since Desk takes no other input
@@ -406,9 +489,15 @@ VARIABLE _RSHSP-OM-X
     _RSHSP-P @ _RTHP.COLS @ _RSHSP-CATALOG @ _RTE-RC.SURFACE-COLS !
     _RSHSP-P @ _RTHP.ROWS @ _RSHSP-CATALOG @ _RTE-RC.SURFACE-ROWS !
     _RSHSP-DIALOGS? IF _RSHSP-OV-N @ ELSE 0 THEN _RSHSP-MODAL-N !
+    0 _RSHSP-SCREEN-N ! _RSHSP-DIALOGS? IF
+        _RSHSP-N @ 0 ?DO
+            I _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? IF 1 _RSHSP-SCREEN-N +! THEN
+        LOOP
+    THEN
     _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @
     _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ _RSHSP-ADD 1 _RSHSP-ADD
-    _RSHSP-MODAL-N @ _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD _RSHSP-REGION-N !
+    _RSHSP-MODAL-N @ _RSHSP-ADD _RSHSP-SCREEN-N @ _RSHSP-ADD
+    _RSHSP-PROMPT-N @ _RSHSP-ADD _RSHSP-REGION-N !
     _RSHSP-REGION-N @ 96 _RSHSP-MUL _RSHSP-TAKE _RSHSP-OUT !
     _RSHSP-OUT @ _RSHSP-CATALOG @ _RTE-RC.REGIONS-A !
     _RSHSP-REGION-N @ 96 * _RSHSP-CATALOG @ _RTE-RC.REGIONS-U !
@@ -427,8 +516,7 @@ VARIABLE _RSHSP-OM-X
     _RSHSP-FIRST-REGION @ _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + _RSHSP-ROW-ID !
     _RSHSP-OUT @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ 1+
         _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + 96 * + _RSHSP-MODAL-ROWS
-        _RSHSP-PROMPT-REGION-ROW
-    _RSHSP-OVERLAY-MODAL!
+        _RSHSP-SCREEN-ROWS _RSHSP-PROMPT-REGION-ROW
     _RSHSP-CATALOG @ RTE-REGION-CATALOG-VALID? _RSHSP-CHECK
     _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-P @ _RTHP.STATIC-COUNT @ _RSHSP-ADD
     _RSHSP-N @ _RSHSP-ADD 6 _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD _RSHSP-FAMILY-CAP !
@@ -497,13 +585,16 @@ VARIABLE _RSHSP-OM-X
         THEN
     LOOP
     _RSHSP-SAVED @ _RSHSP-CURSOR ! _RSHSP-START @ _RSHSP-BYTES @ _RSHSP-FAMILY-BYTES! ;
-\ An overlay with a modal region goes there; any other control goes to the
-\ content region of its document's pane.
+\ An overlay with a modal region goes there, and any other control of an
+\ overlay pane's document to that pane's modal region; any other control
+\ goes to the content region of its document's pane.
 : _RSHSP-ROOT-MEMBER ( index -- region )
     _RSHSP-MODAL-N @ 0 ?DO
         I _RSHSP-OV @ OVER = IF DROP I _RSHSP-OV 16 + @ UNLOOP EXIT THEN
     LOOP
-    _RSHSP-SRC-ATTACHMENT _RSHSP-MEMBER@ RSHMM.CONTENT-REGION @ ;
+    _RSHSP-SRC-ATTACHMENT _RSHSP-MEMBER@
+    DUP RSHMM.SOURCE-INDEX @ _RSHSP-SCREEN-REGION ?DUP IF NIP EXIT THEN
+    RSHMM.CONTENT-REGION @ ;
 \ A dialog widget's button goes where its dialog does: the overlay of its
 \ pane.
 : _RSHSP-CONTROL-MEMBER ( index -- region )
@@ -880,9 +971,17 @@ VARIABLE _RSHSP-OM-X
             _RSHSP-CATALOG @ _RTE-RC.REGIONS-U @ 96 - MOVE
         -96 _RSHSP-CATALOG @ _RTE-RC.REGIONS-U +!
     THEN
+    \ An ordinary pane's content leaves out the overlay panes above it,
+    \ whose own content regions hold those cells.
     _RSHSP-BASE-CLAIM-U @ _RSHSP-CLAIM-U !
+    _RSHSP-N @ 0 ?DO I _RSHSP-ENTRY DUP _RSHSP-OVERLAY-PANE? IF
+        I SWAP _RSHSP-CONTENT-RECT _RSHSP-CLAIM-RECT ELSE DROP THEN LOOP
+    _RSHSP-CLAIM-U @ _RSHSP-UNDER-CLAIM-U !
     _RSHSP-MAP-U @ RSHMM-ENTRY-SIZE / 0 ?DO
-        _RSHSP-MAP @ I RSHMM-ENTRY-SIZE * + RSHMM.CONTENT-REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
+        _RSHSP-MAP @ I RSHMM-ENTRY-SIZE * +
+        DUP RSHMM.SOURCE-INDEX @ _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? IF
+            _RSHSP-BASE-CLAIM-U ELSE _RSHSP-UNDER-CLAIM-U THEN @ _RSHSP-CLAIM-U !
+        RSHMM.CONTENT-REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
     LOOP ;
 \ Every planner request, claim, work and output span lies in the work arena,
 \ so one proof that the arena is disjoint from screen storage covers every

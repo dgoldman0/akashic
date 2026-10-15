@@ -110,7 +110,8 @@ shell claims. Its full-surface region sorts below interactive regions so sparse
 residual glyphs cannot create an input barrier.
 
 The policy refuses the entire optional shell candidate when pane contents
-overlap or a final writer covers any pane outer rectangle, with one exception:
+overlap or a final writer covers any pane outer rectangle, with two
+exceptions: an overlay pane over the panes beneath it, described below, and
 the overlay a pane's document paints over its own content, the prompt or the
 dialog widget it shows. The aggregate adapter captures a prompt as the document's
 overlay field, the last record of its field snapshot, and the base candidate
@@ -136,13 +137,33 @@ rest of that application inactive while the overlay is open; Desk and other
 applications stay active. Without dialogs the prompt stays in its pane's
 content region, and the base candidate carries no dialog.
 
-Desk's own screens are overlay panes, which Desk gives every key while
-they are open and which ignore a press outside them. With dialogs an
-overlay pane's content region is therefore `MODAL` as well: its logical
-bounds are already the surface, so it is a modal scope over the whole
-screen, and the panes beneath it show inactive. An overlay whose
-document is in no pane refuses the candidate, as any control of such a
-document does.
+An overlay whose document is in no pane refuses the candidate, as any
+control of such a document does.
+
+An overlay pane is a slot its host paints above the others, as foreground,
+such as one of Desk's own screens: the launcher, the sandbox's access prompt
+and inspector, and the schedule's approval and permissions. It may lie over
+the ordinary panes beneath it. Its cells are its own paint, and in a pane
+beneath it only the cells no overlay pane covers must be clear: the shell
+takes that pane's rows in bands between the overlay panes' edges and checks
+each band in the spans between them. Overlay panes do not overlap one
+another, and an overlay pane's document shows no overlay of its own; either
+refuses the candidate. The planner gives an overlay pane's content region a
+z one above the content z, and still refuses an overlay pane over another
+pane's chrome, such as the divider between two tiles, so a screen that
+covers one goes out as the base candidate. A pane beneath leaves the
+overlay panes' cells out of its residual glyphs, which the overlay pane's
+content region holds.
+
+Desk gives an open screen every key and ignores a press outside it. With
+dialogs each overlay pane's document therefore goes in a modal region over
+the whole screen, after the overlays' modal regions and at the same z, so
+above them: surface-sized with the surface as its clip and `VISIBLE |
+CLIPPED | MODAL`. Every control of the document goes there, so the screen
+is a modal scope over everything beneath it, and the terminal shows the
+panes and taskbar beneath inactive while it is open. The document's
+residual glyphs stay in its content region. Without dialogs its controls
+stay in its content region.
 
 Desk's own Ask prompt is the shell's. While it is open Desk hides its
 taskbar, takes no other input, and paints the prompt over the taskbar row,

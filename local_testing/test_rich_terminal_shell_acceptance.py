@@ -124,6 +124,27 @@ def _scene(*, instruments=False,tabs=False,zero_chrome=False,
                    *extra,*contents])
 
 
+def _screen_scene(*, depth=4, dialog=(3,2), modal_z=5):
+    """One zero-chrome pane of A and, over it, an overlay pane, one of
+    Desk's screens: a dialog over rows 2 to 4 and columns 3 to 8 in a modal
+    region over the whole screen, which holds the taskbar inactive beneath
+    it.  The pane's glyphs leave the screen's cells to it."""
+    pane=PaneDraw(100,0,ObjectBounds(0,0,COLS,7),3,ObjectBounds(0,0,COLS,7),'Files',True)
+    screen=PaneDraw(101,0,ObjectBounds(3,2,6,3),4,ObjectBounds(0,0,6,3),'Applets',False)
+    glyphs=[]
+    for row in range(7):
+        if 2<=row<5:
+            glyphs+=[_glyph(1000+row*2,0,row,'AAA'),_glyph(1001+row*2,9,row,'AAA')]
+        else:
+            glyphs.append(_glyph(1000+row*2,0,row,'A'*COLS))
+    bar=replace(_region(2,(_bar(),),z=1,clip=(0,7,COLS,1)),
+                inactive_controls=frozenset((500,501,502)))
+    modal=replace(_region(20,_dialog(*dialog,6),z=modal_z,clip=(0,0,COLS,ROWS)),modal=True)
+    return _offer([_region(1,(pane,screen),z=0,clip=(0,0,COLS,ROWS)),bar,
+                   _region(3,glyphs,z=3,clip=(0,0,COLS,7)),
+                   _region(4,(),z=depth,clip=(3,2,6,3)),modal])
+
+
 def _project(offer):
     return acceptance.reconstruct_retained_screen(offer,require_menu_bar=False)
 
@@ -233,6 +254,32 @@ def test_overlapping_material_and_pane_content_are_not_partial_evidence():
 def test_instrument_membership_and_painter_order_are_not_inferred_from_labels(changes):
     with pytest.raises((ERROR,ValueError)):
         _project(_replace_region(_scene(instruments=True),10,**changes))
+
+
+def test_an_overlay_pane_lies_over_the_pane_beneath_with_its_document_modal():
+    """One of Desk's screens: its pane lies over the pane beneath, and its
+    dialog is in a modal scope over the whole screen, taskbar included."""
+    projection=_project(_screen_scene())
+    panes=projection.semantic_pane_claims
+    assert [(p.object_id,p.content_bounds) for p in panes]==[
+        (100,RECT(0,0,12,7)),(101,RECT(3,2,9,5))]
+    dialog,=projection.semantic_dialog_claims
+    assert dialog.modal and (dialog.left,dialog.top,dialog.right,dialog.bottom)==(3,2,9,5)
+    assert dialog.identity not in projection.inactive_controls
+    assert ControlIdentity(7,9,500) in projection.inactive_controls
+
+
+@pytest.mark.parametrize('changes,match',[
+    # The screen's pane at the depth of the pane beneath it.
+    ({'depth':3},'overlap'),
+    # A dialog that reaches the taskbar row, outside every pane.
+    ({'dialog':(3,5)},"neither Desk's prompt"),
+    # A modal region beneath the screen's content.
+    ({'modal_z':3},'beneath'),
+])
+def test_an_overlay_panes_document_needs_its_own_depth_and_pane(changes,match):
+    with pytest.raises(ERROR,match=match):
+        _project(_screen_scene(**changes))
 
 
 def test_late_fullframe_taskbar_is_rejected_for_its_input_barrier():
@@ -553,8 +600,8 @@ def test_desks_prompt_holds_the_taskbar_row_in_a_whole_screen_modal_scope():
 
 
 @pytest.mark.parametrize('changes,message',[
-    ({'row':ROWS-2},"not Desk's prompt"),
-    ({'width':COLS-1},"not Desk's prompt"),
+    ({'row':ROWS-2},"neither Desk's prompt"),
+    ({'width':COLS-1},"neither Desk's prompt"),
     ({'z':2},'above every other region'),
     ({'glyph':True},'intrude'),
 ])
