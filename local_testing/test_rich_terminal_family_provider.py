@@ -123,6 +123,28 @@ def test_family_modal_regions_need_negotiated_dialogs(backend):
 
 
 @pytest.mark.parametrize("backend", ("python", "native"))
+def test_family_dialog_controls_need_negotiated_dialogs(backend):
+    # Dialogs and buttons have no count of their own: a batch may require
+    # DIALOGS without a modal region only when it carries controls.
+    controls = {120:1,152:1,480:2,520:2,536:0x8241}
+    h = FamilyProvider(backend,extra_features=RetainedFeature.CONTROLS | RetainedFeature.DIALOGS)
+    try:
+        before = h.snapshot()
+        assert h.call("RTAPT-FAMILY-PREFLIGHT",h.summary(controls),h.engine)[0] == (0,)
+        assert h.call("RTAPT-FAMILY-PREFLIGHT",h.summary({536:0x8201}),h.engine)[0] == (3,)
+        assert h.snapshot() == before
+    finally:
+        h.close()
+    h = FamilyProvider(backend,extra_features=RetainedFeature.CONTROLS)
+    try:
+        before = h.snapshot()
+        assert h.call("RTAPT-FAMILY-PREFLIGHT",h.summary(controls),h.engine)[0] == (4,)
+        assert h.snapshot() == before
+    finally:
+        h.close()
+
+
+@pytest.mark.parametrize("backend", ("python", "native"))
 @pytest.mark.parametrize("features,changes,copy_bytes", [
     # A status field: its 208-byte record and 8 bytes of text.
     (RetainedFeature.STATUS_FIELDS,

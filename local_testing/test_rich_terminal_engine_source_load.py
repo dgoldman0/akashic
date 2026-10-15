@@ -92,6 +92,7 @@ def test_neutral_engine_dependency_closure_source_loads_in_definition_order() ->
         "concurrency/guard.f",
         "utils/string.f",
         "tui/rich-terminal/fdc1.f",
+        "tui/rich-terminal/dlg1.f",
         "tui/rich-terminal/engine.f",
     )
 

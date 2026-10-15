@@ -880,7 +880,8 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
             break
         assert int(match.group(1)) == len(kinds) + 1
         kinds.append(match.group(2))
-    assert kinds[-6:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD", "DOCUMENT"]
+    assert kinds[-8:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD", "DOCUMENT",
+                          "DIALOG", "BUTTON"]
     wire_names = {"MENUBAR": "MENU-BAR", "ITEM": "MENU-ITEM",
                   "SEPARATOR": "MENU-SEPARATOR"}
     for kind in kinds:

@@ -94,6 +94,34 @@ def test_a_modal_catalog_region_needs_dialogs(families):
     q=struct.unpack('<71Q',families.read(o,568))
     assert q[66:]==(0,1|0x200|0x8000,0,0,1)
 
+def test_dialog_and_button_controls_charge_dialogs(families):
+    from test_rich_terminal_dlg1 import MESSAGE, button, dialog
+    f=families
+    r1=f.region(1);r2=f.region(2,y=1,h=23,z=1)
+    title=f.allocate(b'Pane')
+    pane=f.record('_RTE-PANE',184,dict(OWNER=1,GENERATION=2,ID=4,KIND=1,VISIBLE=-1,REGION=1,HEIGHT=24,WIDTH=80,FOCUSED=-1,**{'ROOT-HEIGHT':24,'ROOT-WIDTH':80,'CONTENT-REGION':2,'CONTENT-ROW':1,'CONTENT-HEIGHT':23,'CONTENT-WIDTH':80,'TITLE-A':title,'TITLE-U':4}))
+    pe=f.entry(6,f.plan(pane,184,r1),title,4)
+    box=dialog()
+    text=f.allocate(b'Delete'+box+b'Delete'+button(4)+b'Cancel'+button(3))
+    values=[]
+    for id,kind,state,z,row,col,h,w,label,content,utf8 in [
+            (1,15,1,0,5,20,6,40,0,(6,len(box)),len(MESSAGE)),
+            (2,16,3,1,9,24,1,10,6+len(box),(12+len(box),8),0),
+            (3,16,11,1,9,40,1,10,20+len(box),(26+len(box),8),0)]:
+        values.append(f.record('_RTE-CONTROL',200,dict(OWNER=1,GENERATION=2,ID=id,KIND=kind,STATE=state,Z=z,REGION=2,ROW=row,COL=col,HEIGHT=h,WIDTH=w,**{'ROOT-HEIGHT':23,'ROOT-WIDTH':80,'LABEL-A':text+label,'LABEL-U':6,'CONTENT-A':text+content[0],'CONTENT-U':content[1],'CONTENT-UTF8':utf8})))
+    ci=f.allocate(b''.join(f.read(x,200) for x in values))
+    ce=f.entry(1,f.plan(ci,600,r2),text,34+len(box))
+    b,o,c,v=f.finish([r1,r2],[ce,pe])
+    assert f.call('RTE-FAMILY-BATCH-VALID?',b)==(MASK,)
+    assert f.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,f.shell,readonly=False)==(0,)
+    q=struct.unpack('<71Q',f.read(o,568))
+    # Three controls: the dialog's title and DLG1, then each button's label
+    # and BTN1; the UTF-8 is the labels and the message.
+    size=6+len(box)
+    assert q[15:23]==(3,size+28,((size+7)&-8)+32,size,3,0,0,18+len(MESSAGE))
+    assert q[66:]==(0,1|0x40|0x200|0x8000,0,0,0)
+
+
 @pytest.mark.parametrize('target,key,value', [
     ('static','ID',4),('glyph','OBJECT',5),('pane','ID',6),
     ('wave','SERIES-ID',99),('series','CAPACITY',0),

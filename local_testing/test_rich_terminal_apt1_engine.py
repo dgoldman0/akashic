@@ -385,8 +385,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-UPDATE-COHERENT?" in validate
     assert "_RTAPT-CONTROL-LEDGER-VALID?" in validate
     assert "_RTAPT-OWNER-LEDGERS?" in validate
-    assert proof.count("PT-STORAGE-DISJOINT?") == 6
+    assert proof.count("PT-STORAGE-DISJOINT?") == 7
     assert "_FDC1-OWNED-START _FDC1-OWNED-END _FDC1-OWNED-START -" in proof
+    assert "_DLG1-OWNED-START _DLG1-OWNED-END _DLG1-OWNED-START -" in proof
     assert proof.count("MSPAN-OVERLAP?") == 10
     assert "_RTAPT-E.CONTROL-LEDGER-CAP" in proof
     assert "_RTAPT-E.CONTROL-LEDGER-USED" in tails
@@ -1046,7 +1047,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     # session record, so neither word overlaps it separately.
     queried = storage_disjoint + _definition(source, "_RTAPT-LAYOUT-PROOF?")
     assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 1
-    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", queried)) == 7
+    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", queried)) == 8
     assert storage_disjoint.count("MSPAN-OVERLAP?") == 5
     assert queried.count("MSPAN-OVERLAP?") == 15
     assert "PT-SESSION-SIZE\n        MSPAN-OVERLAP?" not in queried

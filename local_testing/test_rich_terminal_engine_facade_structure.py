@@ -45,6 +45,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "../../utils/memory-source.f",
         "../../utils/string.f",
         "fdc1.f",
+        "dlg1.f",
     ]
     for forbidden in (
         "PT-",

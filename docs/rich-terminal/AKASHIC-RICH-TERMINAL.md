@@ -881,7 +881,10 @@ control record adds a field total, so the record's scalars and the ITM1
 header's column count fix the exact content length, as the item, UTF-8, and
 run totals fix STX1's. A `DOCUMENT` carries one DOC1 document, the blocks a
 document view shows, and needs the neutral `CONTROL-DOCUMENTS` family (APT-1
-`RET_CONTROL_DOCUMENTS`).
+`RET_CONTROL_DOCUMENTS`). A `DIALOG` carries one DLG1 title, message and
+severity, and a `BUTTON` one BTN1 set of roles; both need the neutral
+`DIALOGS` family (APT-1 `RET_DIALOGS`), which modal regions need too
+([DIALOG-ADMISSION.md](DIALOG-ADMISSION.md)).
 `INSTRUMENT` represents renderer-neutral `READOUT`, `METER`, and `STATUS`
 objects frozen from ordinary canonical `DATA_GRAPHICS` models.
 `GLYPH_RUN` represents unclaimed ordinary draw output. One hybrid plan binds

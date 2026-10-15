@@ -50,6 +50,7 @@ class StaticHarness:
             source.append(_clean((ROOT / "akashic/utils" / name).read_text()))
         source.append(_word((ROOT / "akashic/utils/string.f").read_text(), "/STRING"))
         source.append(_clean((RICH / "fdc1.f").read_text()))
+        source.append(_clean((RICH / "dlg1.f").read_text()))
         source.append(_clean(SOURCE))
         source.append("""
 VARIABLE SF-CALLS

@@ -35,7 +35,7 @@ class StatusHarness(GrowthHarness):
             "tui/uidl-status-field-snapshot.f", "tui/status-field-model.f",
             "tui/uidl-picture-snapshot.f",
             "tui/uidl-field-snapshot.f", "tui/field-model.f", "tui/field-content.f",
-            "tui/rich-terminal/fdc1.f",
+            "tui/rich-terminal/fdc1.f", "tui/rich-terminal/dlg1.f",
             "tui/data-graphics-model.f", "tui/uidl-data-graphics-snapshot.f",
             "tui/uidl-collection-snapshot.f", "text/utf8.f", "utils/string.f",
         ):
@@ -51,7 +51,8 @@ class StatusHarness(GrowthHarness):
                 self.definitions[match[2]] = match[0]
         self.definitions["_USF-OWNED-START"] = "CREATE _USF-OWNED-START 8 ALLOT"
         for marker in ("_UFLD-OWNED-START", "_UFLDC-OWNED-START",
-                       "_FDC1-OWNED-START", "_FDC1-OWNED-END"):
+                       "_FDC1-OWNED-START", "_FDC1-OWNED-END",
+                       "_DLG1-OWNED-START", "_DLG1-OWNED-END"):
             self.definitions[marker] = f"CREATE {marker} 8 ALLOT"
         self.definitions["_RUCL-OWNED-START"] = "CREATE _RUCL-OWNED-START 8 ALLOT"
         self.definitions["_UTF8-DECODE-STATE"] = "CREATE _UTF8-DECODE-STATE 48 ALLOT"

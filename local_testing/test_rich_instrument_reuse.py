@@ -24,7 +24,7 @@ class InstrumentHarness(GrowthHarness):
                          "tui/rich-terminal/uidl-semantic-content-stx1.f",
                          "tui/rich-terminal/uidl-semantic-items-itm1.f",
                          "tui/rich-terminal/uidl-semantic-documents-doc1.f",
-                         "tui/uidl-menu-snapshot.f"):
+                         "tui/uidl-menu-snapshot.f", "tui/field-content.f"):
             sources.append((ROOT / "akashic" / relative).read_text())
         self.definitions = _definitions("\n".join(sources))
         chunks, seen = [], set()

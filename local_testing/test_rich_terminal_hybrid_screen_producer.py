@@ -7226,9 +7226,9 @@ def test_target_pack_admits_published_control_families_and_keeps_shell_lane_sepa
             break
         kinds[int(match.group(1))] = match.group(2)
     assert {*range(1, 10), 13} <= set(kinds)
-    # DOCUMENT (14) is an engine kind this producer does not emit yet, so
-    # its target pack does not admit it.
-    assert set(kinds) - {*range(1, 10), 13} <= {10, 11, 12, 14}
+    # DOCUMENT (14), DIALOG (15) and BUTTON (16) are engine kinds this
+    # producer does not emit yet, so its target pack does not admit them.
+    assert set(kinds) - {*range(1, 10), 13} <= {10, 11, 12, 14, 15, 16}
 
     check = _word(_source(), "_RTHP-CT-CONTROL?")
     assert f"{kinds[1]} < IF DROP 0 EXIT THEN" in check

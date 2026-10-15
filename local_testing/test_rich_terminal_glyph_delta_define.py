@@ -23,16 +23,17 @@ class GlyphDefinitionHarness:
         kdos = (MEGAPAD_ROOT / "kdos.f").read_text()
         exceptions = kdos[kdos.index("CREATE _HANDLERS  "):
                           kdos.index("\\ BIOS dictionary emitters")]
-        # Publication audits validate FIELD content with fdc1.f and typed grid
-        # roles with stx1-roles.f.
+        # Publication audits validate FIELD content with fdc1.f, DIALOG and
+        # BUTTON content with dlg1.f, and typed grid roles with stx1-roles.f.
         content = "\n".join((ROOT / "akashic/tui/rich-terminal" / name).read_text()
-                             for name in ("fdc1.f", "stx1-roles.f"))
+                             for name in ("fdc1.f", "dlg1.f", "stx1-roles.f"))
         self.definitions = _definitions(
             source + "\n" + (MEGAPAD_ROOT / "rich-terminal.f").read_text() +
             "\n" + exceptions + "\n" + content
         )
-        # fdc1.f brackets its variables with owned-storage markers.
-        for marker in ("_FDC1-OWNED-START", "_FDC1-OWNED-END"):
+        # fdc1.f and dlg1.f bracket their variables with owned-storage markers.
+        for marker in ("_FDC1-OWNED-START", "_FDC1-OWNED-END",
+                       "_DLG1-OWNED-START", "_DLG1-OWNED-END"):
             self.definitions[marker] = f"CREATE {marker} 8 ALLOT"
         # The complete audit also uses production constant expressions, such
         # as combined masks and the signed maximum.  Compile their original
