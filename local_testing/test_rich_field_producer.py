@@ -48,7 +48,7 @@ class FieldHarness(StatusHarness):
                                       "_RTHP-U-CLONE?", "_RTHP-TARGET-BANK-ENTRIES?",
                                       "RTE-CONTROL-PLAN-VALID?", "_RTHP-W-TOTAL"))
 
-    def setup(self, *, field_native=1024, row=3, col=2, clip=None, **kwargs):
+    def setup(self, *, field_native=1024, row=3, col=2, clip=None, source=1, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
         size, = self.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512,
                              field_native, 0, 32, 8)
@@ -80,7 +80,7 @@ class FieldHarness(StatusHarness):
             utf8 += len(kwargs.get("text", b"value"))
         elif kwargs.get("kind", 1) == 2:
             utf8 += sum(len(t) for n, t in kwargs.get("choices", ((-10,b"same"),(900,b"same"),(7,b"third"))))
-        self.descriptor = struct.pack("<16Q", 1, 4, 6, 99, 0, row, col, 3, 20,
+        self.descriptor = struct.pack("<16Q", source, 4, 6, 99, 0, row, col, 3, 20,
                                       cr, cc, ch, cw, 3, len(self.model), utf8)
         self.runtime.memory.write_bytes(self.get("FIELD-NATIVE-A"), self.model)
         self.runtime.memory.write_bytes(self.get("FIELD-DESCRIPTORS-A"), self.descriptor)
@@ -133,6 +133,18 @@ class FieldHarness(StatusHarness):
 @pytest.fixture(params=("python","native"))
 def h(request):
     return FieldHarness(request.param)
+
+
+def test_a_prompt_from_the_overlay_source_passes_the_field_audit(h):
+    """A document's prompt is its overlay field: the audit takes its source
+    beside the UIDL one, and a source of neither kind still fails it."""
+    h.setup(kind=3, source=2)
+    assert h.build() == (0,)
+    assert h.fixed()
+    correlation = h.get("CORR-A")
+    assert h.runtime.memory.read64(correlation + 8) == 2
+    h.runtime.memory.write64(correlation + 8, 3)
+    assert not h.fixed()
 
 
 @pytest.mark.parametrize("kind",(1,2,3))
