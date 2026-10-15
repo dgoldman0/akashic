@@ -1042,6 +1042,8 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         "projection-adapter.f",
         "../../../interop/endpoint.f",
         "../../../interop/qualified-locator.f",
+        # Its close asks through the shared dialog.
+        "../../widgets/dialog.f",
     }
     assert direct_requires["view.f"] == {"controller.f"}
     # The controller publishes the documents' owner with its service's
