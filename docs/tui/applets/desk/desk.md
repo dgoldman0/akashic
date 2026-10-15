@@ -68,7 +68,7 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (107,752 bytes,
+Sub-apps are isolated via per-app **UIDL context** buffers (107,768 bytes,
 approximately 105 KiB, each), which save/restore 29 UIDL scalar values and
 11 pool arrays. That state now includes the context-owned mounted-canonical
 relation head/count and source generation/next-key pool. Semantic
@@ -684,7 +684,7 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 107,752-byte (approximately 105 KiB)
+Each sub-app with a UIDL document gets a 107,768-byte (approximately 105 KiB)
 context buffer that captures:
 
 - **29 scalar values**: element count, attribute count, string position,

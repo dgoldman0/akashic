@@ -474,11 +474,11 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
             rf"(?m)^\s*{re.escape(field)}\s+_UCTX-VARS {slot} CELLS \+ !",
             context_init,
         )
-    assert "29 CONSTANT _UCTX-NVAR" in tui
-    assert "232 CONSTANT _UCTX-VAR-SZ" in tui
+    assert "31 CONSTANT _UCTX-NVAR" in tui
+    assert "248 CONSTANT _UCTX-VAR-SZ" in tui
     assert "11 CONSTANT _UCTX-NPOOL" in tui
-    assert "107,752 bytes" in tui
-    assert "107,752" in _text("docs/tui/uidl-tui.md")
+    assert "107,768 bytes" in tui
+    assert "107,768" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-PAA-BINDING !" in tui
     assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 
