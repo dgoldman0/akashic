@@ -581,7 +581,17 @@ Approve once (F6) is a read-first button that cannot be chosen until a
 paint has shown the last line, beside Deny (F7), the default and cancel
 button. In the physical viewer Desk with the Agent approves a request
 through the Approve once button, with the Agent's menu inactive beneath
-the dialog. Notices come next.
+the dialog. Notices are done too. The app shell's toast is a notice with a
+meaning, neutral, info, success, warning or error, a status field's
+severities; it keeps its own copy of its text and fits the screen, and a
+press on it lands on it. Applications mark the failures and warnings they
+raise where they raise them. Desk's shell model carries the notice a paint
+shows, and with dialogs the shell candidate shows it as a `DIALOG` with the
+`NOTICE` flag in a region of its own above the taskbar, which stays rich
+beneath it. In the physical viewer Desk with Daybook shows the reminder as
+a neutral notice, and Desk with File Explorer warns that a path typed into
+Go to was not found. Without dialogs, and for an application run without
+Desk, a notice is still paint. Toggles, choices and ranges come next.
 
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
 toggle, selector and range elements in documents that use them.
