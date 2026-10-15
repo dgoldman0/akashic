@@ -1192,8 +1192,7 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
 
 \ Every dropdown row keeps a mark column before its text, where a checked
 \ item shows its check mark.  Labels stay aligned whichever items are
-\ checked, and a menu's width follows from its labels alone, as in the rich
-\ terminal's menus.
+\ checked, and a menu's width follows from its labels alone.
 2 CONSTANT _UTUI-MENU-MARK-W
 
 \ A menu item's checked state is its runtime CHECKED bit, which its authored

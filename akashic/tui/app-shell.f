@@ -921,9 +921,9 @@ VARIABLE _ASHELL-LAY-WHOLE
 
 \ _ASHELL-ON-NOTICE? ( ev -- flag )
 \   A press or a wheel turn on the notice the screen shows lands on the
-\   notice, which takes none, as a rich terminal shows it in a region of
-\   its own.  A gesture begun elsewhere goes on: drags, releases and the
-\   positions a renderer names still reach their targets.
+\   notice, which takes none, as it does where a renderer shows the notice
+\   in a region of its own.  A gesture begun elsewhere goes on: drags,
+\   releases and the positions a renderer names still reach their targets.
 : _ASHELL-ON-NOTICE?  ( ev -- flag )
     _ASHELL-TOAST-SHOWN @ 0= IF DROP 0 EXIT THEN
     DUP 8 + @ KEY-MOUSE-BUTTON

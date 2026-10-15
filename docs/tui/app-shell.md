@@ -320,9 +320,9 @@ everything else but the shell cursor.  When it ends, `_ASHELL-CHECK-TICK`
 has its cells repainted.
 
 A press or a wheel turn on the notice the screen shows lands on the
-notice, which takes none, as a rich terminal shows it in a region of its
-own.  A gesture begun elsewhere goes on: drags, releases and the positions
-a renderer names still reach their targets.
+notice, which takes none, as it does where a renderer shows the notice in a
+region of its own.  A gesture begun elsewhere goes on: drags, releases and
+the positions a renderer names still reach their targets.
 
 `ASHELL-NOTICE-CAPTURE` gives a renderer the notice the paint shows as a
 UDLG notice: flagged `NOTICE`, of the severity it was raised with, keyed by

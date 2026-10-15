@@ -956,8 +956,8 @@ checks nothing by itself: the item's action sets the state it stands for.
 ```
 
 Every row of a CELL dropdown keeps a two-cell mark column before its label,
-as the rich terminal's menus keep a check column, and a checked item's check
-mark (U+2713) goes there. A menu snapshot carries the state as
+whichever items are checked, and a checked item's check mark (U+2713) goes
+there. A menu snapshot carries the state as
 `UMSN-F-CHECKED`, and the retained menu item as `RTE-CONTROL-CHECKED`.
 
 ### UTUI-CHECKED! — `( flag elem -- )`
