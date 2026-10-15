@@ -44,10 +44,11 @@ from rich_terminal_desktop_acceptance import (
     _collection_claims_in,
     _desk_content_bounds,
     _desk_prompt_claim,
+    _dialog_claim,
     _image_claims_in,
     _prompt_claim,
     _require_cell_text_in,
-    _require_held_beneath_prompt,
+    _require_held_beneath_overlay,
     _require_pad_readout,
     _require_picture_facts_in,
     _residual_contains,
@@ -59,6 +60,11 @@ from rich_terminal_desktop_acceptance import (
 )
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
+# Ctrl+W on Pad's edited buffer asks before discarding it, with Discard,
+# destructive, beside Cancel, the default; the journey answers Cancel.
+PAD_CLOSE_QUESTION = "Discard unsaved changes?"
+PAD_CLOSE_DISCARD = "Discard"
+PAD_CLOSE_CANCEL = "Cancel"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # The canonical Desktop image's large sample sits in the root directory,
 # beside its sample picture.
@@ -297,6 +303,11 @@ class PadAloneJourney(_AppletJourney):
     longer than one TEXT event allows, as several events.  Pad's Ln/Col
     readout counts characters in every frame that moves the caret.
 
+    Ctrl+W on the edited buffer asks first: Pad's dialog, in a modal region
+    over its tile with Pad's menu bar and editor rich and inactive beneath
+    it, offers Discard, destructive, and Cancel, the default.  Pressing
+    Cancel closes the dialog and keeps the buffer.
+
     Pad then opens notes.md through its Open prompt, a TEXT field in a
     modal region over Pad's tile while Pad's menu bar and editor stay rich
     and inactive beneath it.  Its TEXT_AREA carries the heading's, link's,
@@ -315,11 +326,13 @@ class PadAloneJourney(_AppletJourney):
         FAMILY_DELETED,
         RESTORED,
         IN_HEBREW,
+        CLOSE_ASKED,
+        CLOSE_CANCELLED,
         OPEN_PROMPT,
         PATH_TYPED,
         NOTES_OPENED,
         LINK_FOLLOWED,
-    ) = range(12)
+    ) = range(14)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -357,6 +370,8 @@ class PadAloneJourney(_AppletJourney):
             return JourneyProgress()
         if self.stage >= self.OPEN_PROMPT:
             return self._styled(offer, generation, projection, sender)
+        if self.stage >= self.CLOSE_ASKED:
+            return self._close_question(offer, generation, projection, sender)
         if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
             raise PhysicalDesktopAcceptanceError(
                 f"Desk with Pad shows menus {projection.menu_signatures!r}"
@@ -460,7 +475,54 @@ class PadAloneJourney(_AppletJourney):
                                    "backspace", self.FAMILY_DELETED, offer, generation,
                                    sender)
         return self._send_from(state, "pad-caret-placed-in-hebrew", "send_key",
-                               "ctrl+o", self.OPEN_PROMPT, offer, generation, sender)
+                               "ctrl+w", self.CLOSE_ASKED, offer, generation, sender)
+
+    def _close_question(self, offer, generation, projection, sender) -> JourneyProgress:
+        """Ctrl+W asks before it discards the edited buffer; Cancel keeps it."""
+
+        bounds = _desk_content_bounds(projection)
+        dialog = _dialog_claim(projection, PAD_CLOSE_QUESTION, bounds)
+        if self.stage == self.CLOSE_ASKED:
+            if dialog is None:
+                return self._wait("Pad's question after Ctrl+W")
+            _require_held_beneath_overlay(projection, dialog, bounds, PAD_MENU_SIGNATURE, "Pad")
+            if not _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds):
+                raise PhysicalDesktopAcceptanceError("Pad's question withheld its editor")
+            discard = dialog.button(PAD_CLOSE_DISCARD)
+            cancel = dialog.button(PAD_CLOSE_CANCEL)
+            if discard is None or cancel is None or len(dialog.buttons) != 2:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's question does not offer exactly Discard and Cancel: "
+                    f"{[button.label for button in dialog.buttons]!r}"
+                )
+            if not discard.content.destructive or discard.content.default:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's Discard is not destructive, or is the default"
+                )
+            if not (cancel.content.default and cancel.content.cancel):
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's Cancel is not the default cancel button"
+                )
+            _require_cell_text_in(offer, dialog.content.lines[0], bounds, _WHERE)
+            identity = cancel.identity
+            return self._step(
+                "pad-close-question-shown", "activate_button",
+                f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
+                self.CLOSE_CANCELLED, offer, generation, sender,
+            )
+        if dialog is not None:
+            return self._wait("Pad's question to close after Cancel")
+        if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
+            return self._wait("Pad's menu bar after its question")
+        claim = self._editor(projection)
+        if claim is None:
+            return self._wait("Pad's editor after its question")
+        if _claim_item_text(claim, 1) != mixed_text.PAD_TEXT:
+            raise PhysicalDesktopAcceptanceError(
+                f"Cancel did not keep Pad's buffer: {_claim_item_text(claim, 1)!r}"
+            )
+        return self._step("pad-close-cancelled", "send_key", "ctrl+o",
+                          self.OPEN_PROMPT, offer, generation, sender)
 
     def _styled(self, offer, generation, projection, sender) -> JourneyProgress:
         """Open notes.md, check its style runs, and follow its link."""
@@ -468,7 +530,7 @@ class PadAloneJourney(_AppletJourney):
         bounds = _desk_content_bounds(projection)
         prompt = _prompt_claim(projection, PAD_OPEN_PROMPT_MARKER, bounds)
         if prompt is not None:
-            _require_held_beneath_prompt(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
+            _require_held_beneath_overlay(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
             if not _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds):
                 raise PhysicalDesktopAcceptanceError(
                     "Pad's prompt withheld its editor"
@@ -625,7 +687,7 @@ class DaybookAloneJourney(_AppletJourney):
             for claim in _collection_claims_in(projection, kind, bounds)
         )
         if prompt is not None:
-            _require_held_beneath_prompt(
+            _require_held_beneath_overlay(
                 projection, prompt, bounds, DAYBOOK_MENU_SIGNATURE, "Daybook"
             )
             if (
@@ -1471,7 +1533,7 @@ class FexpAloneJourney(_AppletJourney):
                               generation, sender)
         rename = _prompt_claim(projection, FEXP_RENAME_LABEL, bounds)
         if rename is not None:
-            _require_held_beneath_prompt(
+            _require_held_beneath_overlay(
                 projection, rename, bounds, FEXPLORER_MENU_SIGNATURE, "File Explorer"
             )
         if self.RENAME_PROMPT <= self.stage <= self.RENAME_TYPED:
@@ -2160,7 +2222,7 @@ class AgentAloneJourney(_AppletJourney):
                 "the Agent's review did not withhold its menu and transcript"
             )
         if prompt is not None:
-            _require_held_beneath_prompt(
+            _require_held_beneath_overlay(
                 projection, prompt, bounds, AGENT_MENU_SIGNATURE, "the Agent"
             )
             if transcript is None:
@@ -2408,7 +2470,7 @@ class SmallTerminalJourney(_AppletJourney):
             prompt = _prompt_claim(projection, PAD_OPEN_PROMPT_MARKER, bounds)
             if prompt is None:
                 return self._wait("Pad's Open prompt")
-            _require_held_beneath_prompt(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
+            _require_held_beneath_overlay(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
             if self.stage == self.PROMPT:
                 return self._step("small-terminal-prompt-shown-rich", "send_text",
                                   SMALL_TERMINAL_LARGE_PATH, self.TYPED, offer,

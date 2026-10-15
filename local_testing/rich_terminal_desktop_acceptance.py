@@ -15,7 +15,7 @@ import re
 import socket
 import struct
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
@@ -56,6 +56,8 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal.retained_view import (
+    ButtonDraw,
+    DialogDraw,
     DisplayScope,
     DocumentDraw,
     GlyphRunDraw,
@@ -78,6 +80,7 @@ from rich_terminal.retained_view import (
     TextGridDraw,
     WaveformDraw,
 )
+from rich_terminal.semantic_dialogs import ButtonContent, DialogContent
 from rich_terminal.semantic_fields import FieldContent, FieldKind
 from shared.session import TerminalDisplayOffer
 from session_viewer import (
@@ -2073,6 +2076,41 @@ class _SemanticFieldClaim:
 
 
 @dataclass(frozen=True)
+class _SemanticButtonClaim:
+    """A committed BUTTON inside its dialog."""
+
+    identity: ControlIdentity
+    left: int
+    top: int
+    right: int
+    bottom: int
+    label: str
+    state: ControlState
+    content: ButtonContent
+
+
+@dataclass(frozen=True)
+class _SemanticDialogClaim:
+    """A committed DIALOG, its message lines and the buttons inside it."""
+
+    identity: ControlIdentity
+    left: int
+    top: int
+    right: int
+    bottom: int
+    title: str
+    state: ControlState
+    content: DialogContent
+    # In a MODAL region: over the application it holds modal.
+    modal: bool = False
+    buttons: tuple[_SemanticButtonClaim, ...] = ()
+
+    def button(self, label: str) -> _SemanticButtonClaim | None:
+        found = [button for button in self.buttons if button.label == label]
+        return found[0] if len(found) == 1 else None
+
+
+@dataclass(frozen=True)
 class _SemanticPaneClaim:
     owner_id: int
     owner_generation: int
@@ -2140,6 +2178,7 @@ class RichScreenProjection:
     semantic_taskbar_claims: tuple[_SemanticTaskBarClaim, ...] = ()
     semantic_image_claims: tuple[_SemanticImageClaim, ...] = ()
     semantic_document_claims: tuple[_SemanticDocumentClaim, ...] = ()
+    semantic_dialog_claims: tuple[_SemanticDialogClaim, ...] = ()
     # Every control a visible MODAL region above it makes inactive: it takes
     # no input while the prompt or dialog is open, and may show dimmed.
     inactive_controls: frozenset[ControlIdentity] = frozenset()
@@ -2990,18 +3029,19 @@ def _prompt_claim(
     return claim
 
 
-def _require_held_beneath_prompt(
+def _require_held_beneath_overlay(
     projection: RichScreenProjection,
-    prompt: _SemanticFieldClaim,
+    overlay: _SemanticFieldClaim | _SemanticDialogClaim,
     bounds: tuple[int, int, int, int],
     menu_signature: tuple[str, ...],
     owner: str,
 ) -> None:
-    """While PROMPT is open, OWNER stays rich beneath it and inactive: its
-    menu bar and every other control root inside BOUNDS take no input."""
+    """While OVERLAY, a prompt or a dialog, is open, OWNER stays rich beneath
+    it and inactive: its menu bar and every other control root inside BOUNDS
+    take no input."""
 
     if projection.menu_signatures.count(menu_signature) != 1:
-        raise PhysicalDesktopAcceptanceError(f"{owner}'s prompt withheld its menu bar")
+        raise PhysicalDesktopAcceptanceError(f"{owner}'s overlay withheld its menu bar")
     menu = projection.menu_bar_identities[projection.menu_signatures.index(menu_signature)]
     left, top, right, bottom = bounds
     roots = [menu] + [
@@ -3016,13 +3056,47 @@ def _require_held_beneath_prompt(
         for claim in claims
         if left <= claim.left and claim.right <= right
         and top <= claim.top and claim.bottom <= bottom
-        and claim.identity != prompt.identity
+        and claim.identity != overlay.identity
     ]
     active = [identity for identity in roots if identity not in projection.inactive_controls]
     if active:
         raise PhysicalDesktopAcceptanceError(
-            f"{owner}'s prompt left {len(active)} controls beneath it active"
+            f"{owner}'s overlay left {len(active)} controls beneath it active"
         )
+
+
+def _dialog_claim(
+    projection: RichScreenProjection,
+    message: str,
+    bounds: tuple[int, int, int, int],
+) -> _SemanticDialogClaim | None:
+    """The open dialog saying MESSAGE inside BOUNDS, or None.
+
+    An application's dialog goes out as a DIALOG with its buttons inside it,
+    in a MODAL region over its pane, and the rest of the application stays
+    rich beneath it and inactive.  The message is read as its lines joined
+    by spaces, however the dialog wrapped it."""
+
+    left, top, right, bottom = bounds
+    claims = [
+        claim
+        for claim in projection.semantic_dialog_claims
+        if " ".join(claim.content.lines) == message
+        and left <= claim.left and claim.right <= right
+        and top <= claim.top and claim.bottom <= bottom
+    ]
+    if not claims:
+        return None
+    if len(claims) != 1:
+        raise PhysicalDesktopAcceptanceError(f"{len(claims)} dialogs say {message!r}")
+    claim = claims[0]
+    if not claim.modal:
+        raise PhysicalDesktopAcceptanceError(
+            f"the dialog {message!r} is not in a modal region"
+        )
+    if any(part.identity in projection.inactive_controls for part in (claim, *claim.buttons)):
+        raise PhysicalDesktopAcceptanceError(f"the dialog {message!r} is inactive")
+    return claim
 
 
 DESK_PROMPT_LABEL = "Ask:"
@@ -3095,7 +3169,7 @@ def _require_tile_prompt(
         raise PhysicalDesktopAcceptanceError(
             f"{owner}'s prompt {label!r} is not a field inside its Desk tile"
         )
-    _require_held_beneath_prompt(projection, prompt, bounds, menu_signature, owner)
+    _require_held_beneath_overlay(projection, prompt, bounds, menu_signature, owner)
     if any(
         claim.top < prompt.bottom and prompt.top < claim.bottom
         for claim in _status_field_claims_in_tile(projection, tile)
@@ -4602,7 +4676,7 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                 raise PhysicalDesktopAcceptanceError("PANE instrument region does not paint between chrome and content")
             roles[region.region_id] = "instrument"
         elif region.modal and region.draws and all(
-                isinstance(draw, FieldDraw) for draw in region.draws):
+                isinstance(draw, (FieldDraw, DialogDraw, ButtonDraw)) for draw in region.draws):
             viewport = _region_viewport_rectangle(region, cols, rows)
             if not region.clipped or _region_logical_rectangle(region) != screen:
                 raise PhysicalDesktopAcceptanceError("MODAL region is not a clipped surface")
@@ -4695,6 +4769,8 @@ def reconstruct_retained_screen(
         DocumentDraw,
         StatusFieldDraw,
         FieldDraw,
+        DialogDraw,
+        ButtonDraw,
         ImageDraw,
     )
     instrument_draw_types = (ReadoutDraw, MeterDraw, StatusDraw, WaveformDraw)
@@ -4825,6 +4901,9 @@ def reconstruct_retained_screen(
     semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
     semantic_field_claims: list[_SemanticFieldClaim] = []
     semantic_image_claims: list[_SemanticImageClaim] = []
+    # Each dialog's claim and its buttons, by region, as the draws give them:
+    # a dialog's buttons follow it and lie inside it.
+    dialogs: dict[int, list[tuple[_SemanticDialogClaim, list[_SemanticButtonClaim]]]] = {}
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
     # A figure in a document is an IMAGE filling the picture rows its
@@ -5003,6 +5082,42 @@ def reconstruct_retained_screen(
                 ))
             claim_semantic_rectangle(left, top, right, bottom)
             opaque_semantic_cells.update(_rectangle_cells(visible))
+            continue
+
+        if isinstance(draw, DialogDraw):
+            # The dialog's whole root is opaque material; its title and
+            # message lie in exact slots and its buttons inside it.
+            if visible != logical:
+                raise PhysicalDesktopAcceptanceError(
+                    f"retained dialog {draw.control_id} is not wholly on screen"
+                )
+            claim_semantic_rectangle(left, top, right, bottom)
+            opaque_semantic_cells.update(_rectangle_cells(visible))
+            dialogs.setdefault(region.region_id, []).append((_SemanticDialogClaim(
+                identity=ControlIdentity(region.owner_id, region.owner_generation,
+                                         draw.control_id),
+                left=left, top=top, right=right, bottom=bottom,
+                title=draw.title, state=draw.state, content=draw.content,
+                modal=region.modal,
+            ), []))
+            continue
+
+        if isinstance(draw, ButtonDraw):
+            held = dialogs.get(region.region_id)
+            if (not held or visible != logical
+                    or _rectangle_cells(visible)
+                    - _rectangle_cells(_LogicalRectangle(
+                        held[-1][0].left, held[-1][0].top,
+                        held[-1][0].right, held[-1][0].bottom))):
+                raise PhysicalDesktopAcceptanceError(
+                    f"retained button {draw.control_id} lies in no dialog before it"
+                )
+            held[-1][1].append(_SemanticButtonClaim(
+                identity=ControlIdentity(region.owner_id, region.owner_generation,
+                                         draw.control_id),
+                left=left, top=top, right=right, bottom=bottom,
+                label=draw.label, state=draw.state, content=draw.content,
+            ))
             continue
 
         if isinstance(draw, ImageDraw):
@@ -5303,6 +5418,10 @@ def reconstruct_retained_screen(
         semantic_tabset_claims=tuple(semantic_tabset_claims),
         semantic_item_view_claims=tuple(semantic_item_view_claims),
         semantic_document_claims=tuple(semantic_document_claims),
+        semantic_dialog_claims=tuple(
+            replace(claim, buttons=tuple(buttons))
+            for held in dialogs.values() for claim, buttons in held
+        ),
         region_count=len(plane.regions),
         instrument_region_count=sum(any(isinstance(draw, instrument_draw_types)
                                         for draw in region.draws) for region in plane.regions),
@@ -5840,6 +5959,33 @@ def _tab_hit_target(offer, display_state, display_ack, identity):
             x, y, display_token=token) != target:
         raise PhysicalDesktopAcceptanceError("tab target is not an exposed acknowledged painter hit")
     return target, tab.label
+
+
+def _button_hit_target(offer, display_state, display_ack, identity):
+    """Bind one shown, enabled BUTTON to the exact acknowledged painter hit."""
+    token = _exact_hit_map_token(offer, display_state, display_ack, "button activation")
+    if offer.retained is None:
+        raise PhysicalDesktopAcceptanceError("button activation needs a retained BUTTON")
+    matches = [draw for region in offer.retained.regions for draw in region.draws
+               if isinstance(draw, ButtonDraw)
+               and ControlIdentity(region.owner_id, region.owner_generation,
+                                   draw.control_id) == identity]
+    if len(matches) != 1:
+        raise PhysicalDesktopAcceptanceError("button activation does not name one committed button")
+    button = matches[0]
+    required = ControlState.VISIBLE | ControlState.ENABLED
+    if button.state & required != required:
+        raise PhysicalDesktopAcceptanceError("button activation target is not an enabled button")
+    targets = tuple(target for target in display_state.hit_targets
+                    if target.kind is ControlKind.BUTTON and target.identity == identity)
+    if len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError("button activation lacks one acknowledged control target")
+    target = targets[0]
+    x, y = target.rect.left + target.rect.width // 2, target.rect.top + target.rect.height // 2
+    if target.rect.width <= 0 or target.rect.height <= 0 or display_state.hit_test(
+            x, y, display_token=token) != target:
+        raise PhysicalDesktopAcceptanceError("button target is not an exposed acknowledged painter hit")
+    return target, button.label
 
 
 def _pad_file_hit_target(
@@ -7056,6 +7202,14 @@ def _request_acceptance_input(
         owner, owner_generation, control_id = _canonical_integers(value, 3, "tab activation")
         identity = ControlIdentity(owner, owner_generation, control_id)
         target, label = _tab_hit_target(offer, display_state, display_ack, identity)
+        rpc_method = "send_control_event"
+        params.update(owner_id=owner, owner_generation=owner_generation,
+                      control_id=control_id, modifiers=0)
+        semantic_target = _control_target_evidence(target, label=label)
+    elif method == "activate_button":
+        owner, owner_generation, control_id = _canonical_integers(value, 3, "button activation")
+        identity = ControlIdentity(owner, owner_generation, control_id)
+        target, label = _button_hit_target(offer, display_state, display_ack, identity)
         rpc_method = "send_control_event"
         params.update(owner_id=owner, owner_generation=owner_generation,
                       control_id=control_id, modifiers=0)

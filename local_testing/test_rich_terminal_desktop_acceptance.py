@@ -37,6 +37,7 @@ from rich_terminal.retained_scene import (
     RGBA,
     StatusSeverity,
 )
+from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
 from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
@@ -63,6 +64,8 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal.retained_view import (
+    ButtonDraw,
+    DialogDraw,
     DisplayScope,
     DocumentDraw,
     GlyphRunDraw,
@@ -4738,6 +4741,86 @@ def test_pad_file_activation_preserves_zero_acceptance_backpressure() -> None:
     )
     assert status == "backpressured"
     assert evidence is None
+
+
+def _offer_with_question(*, offer_id: int, cancel_state: ControlState | None = None):
+    """A question over the screen: its message, then Discard and Cancel."""
+
+    offer = _offer("\n".join("." * 12 for _ in range(7)), offer_id=offer_id, pad_menu=True)
+    region = offer.retained.regions[0]
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    dialog = DialogDraw(31_000, ControlState.VISIBLE, 0, 255, ObjectBounds(0, 2, 12, 4), "",
+                        DialogContent(1, DialogFlag(0), 3, FieldRect(0, 0, 0, 0),
+                                      FieldRect(1, 0, 10, 1), message="Discard?"))
+    discard = ButtonDraw(31_001, ordinary, 0, 255, ObjectBounds(1, 4, 5, 1), "Discard", "",
+                         ButtonContent(ButtonFlag.DESTRUCTIVE))
+    cancel = ButtonDraw(31_002, ordinary | ControlState.SELECTED if cancel_state is None
+                        else cancel_state, 0, 255, ObjectBounds(6, 4, 5, 1), "Cancel", "",
+                        ButtonContent(ButtonFlag.DEFAULT | ButtonFlag.CANCEL))
+    offer = replace(offer, retained=replace(offer.retained, regions=(
+        replace(region, draws=region.draws + (dialog, discard, cancel)),)))
+    target = ControlHitTarget(
+        ControlIdentity(region.owner_id, region.owner_generation, 31_002),
+        ControlKind.BUTTON, PixelRect(60, 80, 110, 100),
+    )
+    return offer, target
+
+
+def test_button_activation_uses_the_exact_acknowledged_button_target() -> None:
+    offer, target = _offer_with_question(offer_id=9)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+    requests = []
+
+    class Client:
+        def request(self, method, **params):
+            requests.append((method, params))
+            return {"status": "progress", "accepted_events": 1}
+
+    identity = target.identity
+    value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(), "activate_button", value, offer, 11,
+        display_state=display_state, display_ack=display_ack,
+    )
+    assert status == "progress"
+    assert requests == [(
+        "send_control_event",
+        {
+            "generation": 11,
+            "display_offer_id": offer.offer_id,
+            "display_scope": acceptance_runner.display_scope_to_wire(offer.scope),
+            "owner_id": identity.owner_id,
+            "owner_generation": identity.owner_generation,
+            "control_id": identity.control_id,
+            "modifiers": 0,
+        },
+    )]
+    assert evidence is not None and evidence.value == value
+    assert evidence.semantic_target["kind"] == "BUTTON"
+    assert evidence.semantic_target["label"] == "Cancel"
+    other = f"{identity.owner_id},{identity.owner_generation},31001"
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="one acknowledged control target"):
+        acceptance_runner._request_acceptance_input(
+            Client(), "activate_button", other, offer, 11,
+            display_state=display_state, display_ack=display_ack,
+        )
+
+
+def test_button_activation_refuses_a_disabled_button() -> None:
+    offer, target = _offer_with_question(offer_id=9, cancel_state=ControlState.VISIBLE)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+
+    class Client:
+        def request(self, method, **params):
+            raise AssertionError("no input may be sent")
+
+    identity = target.identity
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not an enabled button"):
+        acceptance_runner._request_acceptance_input(
+            Client(), "activate_button",
+            f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
+            offer, 11, display_state=display_state, display_ack=display_ack,
+        )
 
 
 def test_pad_tab_activation_uses_exact_acknowledged_generic_tab_target() -> None:

@@ -16,10 +16,12 @@ from rich_terminal.pygame_view import (
 )
 from rich_terminal.retained_scene import ControlKind, ControlState, ObjectBounds, RGBA
 from rich_terminal.retained_view import (
+    ButtonDraw, DialogDraw,
     DisplayScope, FieldDraw, GlyphRunDraw, PaneDraw, ReadoutDraw, RetainedDrawPlane,
     RetainedRegionDraw, TabDraw, TabSetDraw, TaskBarDraw, TaskDraw,
     retained_draw_order,
 )
+from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
 from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from shared.session import TerminalCell, TerminalDisplayOffer, TerminalSnapshot
 
@@ -67,11 +69,26 @@ def _prompt(x, y, w):
     return FieldDraw(600,ACTIVE|ControlState.SELECTED,0,255,ObjectBounds(x,y,w,1),'A',content)
 
 
+def _dialog(x, y, w):
+    """A dialog over three content rows from Y: the message Go? on its first,
+    and the buttons Y, the default, and N, the cancel button, on its last."""
+    content=DialogContent(1,DialogFlag(0),3,FieldRect(0,0,0,0),FieldRect(0,0,w,1),
+                          message='Go?')
+    half=w//2
+    return (DialogDraw(600,ControlState.VISIBLE,0,255,ObjectBounds(x,y,w,3),'',content),
+            ButtonDraw(601,ACTIVE|ControlState.SELECTED,0,255,ObjectBounds(x,y+2,half,1),
+                       'Y','',ButtonContent(ButtonFlag.DEFAULT)),
+            ButtonDraw(602,ACTIVE,0,255,ObjectBounds(x+half,y+2,w-half,1),
+                       'N','',ButtonContent(ButtonFlag.CANCEL)))
+
+
 def _scene(*, instruments=False,tabs=False,zero_chrome=False,
-           title='TITLE ONLY',bar=None,late_bar=False,missing=False,prompt=False):
+           title='TITLE ONLY',bar=None,late_bar=False,missing=False,prompt=False,
+           dialog=False):
     """Two panes and a taskbar.  With PROMPT, pane 0's last content row is a
     prompt's field in a MODAL region over that content, which holds the
-    pane's controls inactive."""
+    pane's controls inactive; with DIALOG, its last three rows are a dialog
+    and its buttons there."""
     bar=_bar() if bar is None else bar
     panes=[];contents=[];extra=[]
     slots=((0,6),(6,6)) if not zero_chrome else ((0,12),)
@@ -82,12 +99,12 @@ def _scene(*, instruments=False,tabs=False,zero_chrome=False,
         panes.append(PaneDraw(100+index,0,ObjectBounds(left,0,width,7),3+index,
                               content,title,index==0))
         draws=[]
-        held=prompt and index==0
+        held=(prompt or dialog) and index==0
         for row in range(y,y+h):
             if instruments and row==2:continue
             if tabs and row==1:continue
             if missing and index==0 and row==y:continue
-            if held and row==y+h-1:continue
+            if held and row>=y+h-(3 if dialog else 1):continue
             draws.append(_glyph(1000+index*100+row,x,row,chr(65+index)*w))
         if tabs:
             draws.append(TabSetDraw(200+index*10,ACTIVE,0,1,ObjectBounds(x,1,w,1),
@@ -95,7 +112,8 @@ def _scene(*, instruments=False,tabs=False,zero_chrome=False,
         region=_region(3+index,draws,z=3,clip=(x,y,w,h))
         if held:
             region=replace(region,inactive_controls=frozenset((200,201) if tabs else ()))
-            modal=_region(20,(_prompt(x,y+h-1,w),),z=5,clip=(x,y,w,h))
+            overlay=_dialog(x,y+h-3,w) if dialog else (_prompt(x,y+h-1,w),)
+            modal=_region(20,overlay,z=5,clip=(x,y,w,h))
             extra.append(replace(modal,modal=True))
         contents.append(region)
         if instruments:
@@ -548,3 +566,30 @@ def test_desks_prompt_scope_must_be_its_row_alone_above_everything(changes,messa
 def test_a_field_region_that_is_not_modal_is_not_a_prompt():
     with pytest.raises(ERROR,match='unrelated|nonmatching'):
         _project(_replace_region(_scene(tabs=True,prompt=True),20,modal=False))
+
+
+def test_a_dialog_and_its_buttons_in_a_modal_region_over_its_pane_are_held_evidence():
+    projection=_project(_scene(tabs=True,dialog=True))
+    dialog,=projection.semantic_dialog_claims
+    assert dialog.modal and dialog.title=='' and dialog.content.message=='Go?'
+    assert (dialog.left,dialog.top,dialog.right,dialog.bottom)==(1,3,5,6)
+    assert [(button.label,button.left,button.top,button.right,button.bottom)
+            for button in dialog.buttons]==[('Y',1,5,3,6),('N',3,5,5,6)]
+    assert dialog.button('N').content.cancel and dialog.button('Y').content.default
+    assert dialog.button('Z') is None
+    assert projection.inactive_controls=={ControlIdentity(7,9,200),ControlIdentity(7,9,201)}
+    assert ControlIdentity(7,9,210) not in projection.inactive_controls
+
+
+def test_a_button_outside_its_dialog_is_refused():
+    offer=_scene(tabs=True,dialog=True)
+    region=next(r for r in offer.retained.regions if r.region_id==20)
+    dialog,first,second=region.draws
+    moved=replace(second,bounds=ObjectBounds(3,2,2,1))
+    with pytest.raises(ERROR,match='no dialog'):
+        _project(_replace_region(offer,20,draws=retained_draw_order((dialog,first,moved))))
+
+
+def test_a_dialog_region_must_hold_exactly_its_pane_content_above_it():
+    with pytest.raises(ERROR,match='beneath'):
+        _project(_replace_region(_scene(tabs=True,dialog=True),20,z_order=2))

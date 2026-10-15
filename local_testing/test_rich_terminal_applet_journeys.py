@@ -22,6 +22,7 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import ControlIdentity
 from rich_terminal.retained_scene import ControlKind, ControlState
 from rich_terminal.retained_view import MenuBarDraw
+from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
 from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
@@ -176,7 +177,7 @@ def _held(frame: RichScreenProjection, prompt) -> RichScreenProjection:
         inactive.update(claim.identity for claim in claims)
     return replace(
         frame,
-        semantic_field_claims=frame.semantic_field_claims + (prompt,),
+        semantic_field_claims=frame.semantic_field_claims + ((prompt,) if prompt else ()),
         inactive_controls=frozenset(inactive),
     )
 
@@ -253,6 +254,48 @@ def _pad_frame(
     return projection
 
 
+def _question(message: str, buttons, *, row: int = 30, col: int = 60):
+    """An application's question in a modal region: MESSAGE on one line,
+    then BUTTONS, each (label, flags), along the dialog's last row."""
+
+    width = max(len(message) + 4, 12 * len(buttons) + 4)
+    content = DialogContent(1, DialogFlag(0), 3, FieldRect(2, 0, 7, 1),
+                            FieldRect(2, 2, len(message), 1), message=message)
+    state = ControlState.VISIBLE | ControlState.ENABLED
+    claims = tuple(
+        acceptance_runner._SemanticButtonClaim(
+            ControlIdentity(1, 1, PROMPT_ID + 1 + index),
+            col + 2 + 12 * index, row + 4, col + 12 + 12 * index, row + 5, label,
+            state | (ControlState.SELECTED if flags & ButtonFlag.DEFAULT else 0),
+            ButtonContent(flags),
+        )
+        for index, (label, flags) in enumerate(buttons)
+    )
+    return acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, PROMPT_ID), col, row, col + width, row + 6, "Confirm",
+        ControlState.VISIBLE, content, modal=True, buttons=claims,
+    )
+
+
+def _asked(frame: RichScreenProjection, dialog) -> RichScreenProjection:
+    """FRAME with DIALOG open over it: every control beneath is inactive."""
+
+    held = _held(frame, None)
+    return replace(held, semantic_field_claims=frame.semantic_field_claims,
+                   semantic_dialog_claims=(dialog,))
+
+
+PAD_QUESTION_BUTTONS = (
+    ("Discard", ButtonFlag.DESTRUCTIVE),
+    ("Cancel", ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
+)
+
+
+def _pad_question_offer(text: str):
+    return _cell_offer(1, ((EDITOR_ROW, EDITOR_COL, mixed_text.visual(text)),
+                           (32, 62, "Discard unsaved changes?")))
+
+
 def _pad_prompt_frame(typed: str):
     """Pad's Open prompt over its status row, with Pad's menu bar and text
     areas rich and inactive beneath it."""
@@ -312,6 +355,11 @@ def test_pad_alone_types_mixed_text_and_moves_by_whole_characters() -> None:
         (_pad_offer(shortened), _pad_frame(shortened, (1, family))),
         (_pad_offer(full), _pad_frame(full, (1, family_end))),
         (blank, _pad_frame(full, (1, lamed))),
+        # Ctrl+W asks first; Cancel keeps the buffer.
+        (_pad_question_offer(full),
+         _asked(_pad_frame(full, (1, lamed)),
+                _question("Discard unsaved changes?", PAD_QUESTION_BUTTONS))),
+        (_pad_offer(full), _pad_frame(full, (1, lamed))),
         # Ctrl+O opens the prompt over the editor.
         (_pad_prompt_offer(), _pad_prompt_frame("")),
         (_pad_prompt_offer(styled_text.NOTES_PATH), _pad_prompt_frame(styled_text.NOTES_PATH)),
@@ -349,7 +397,9 @@ def test_pad_alone_types_mixed_text_and_moves_by_whole_characters() -> None:
         ("pad-caret-after-emoji-sequence", [("send_key", "backspace")]),
         ("pad-emoji-sequence-deleted", [("send_key", "ctrl+z")]),
         ("pad-emoji-sequence-restored", [("text_place", value(lamed))]),
-        ("pad-caret-placed-in-hebrew", [("send_key", "ctrl+o")]),
+        ("pad-caret-placed-in-hebrew", [("send_key", "ctrl+w")]),
+        ("pad-close-question-shown", [("activate_button", f"1,1,{PROMPT_ID + 2}")]),
+        ("pad-close-cancelled", [("send_key", "ctrl+o")]),
         ("pad-open-prompt-shown", [("send_text", styled_text.NOTES_PATH)]),
         ("pad-notes-path-typed", [("send_key", "enter")]),
         # A frame before the prompt closes waits.
@@ -360,6 +410,51 @@ def test_pad_alone_types_mixed_text_and_moves_by_whole_characters() -> None:
     assert results[-1][0].complete
     assert journey.stage == journey.final_stage
     assert journey.final_cell_markers == ("[1:Akashic Pa*]", styled_text.EXAMPLE_LINE)
+
+
+@pytest.mark.parametrize(
+    ("buttons", "held", "message"),
+    (
+        # Discard as the default, Cancel only a cancel button.
+        ((("Discard", ButtonFlag.DEFAULT), ("Cancel", ButtonFlag.CANCEL)), True,
+         "Discard is not destructive"),
+        ((("Discard", ButtonFlag.DESTRUCTIVE), ("Cancel", ButtonFlag.CANCEL)), True,
+         "Cancel is not the default"),
+        ((("Discard", ButtonFlag.DESTRUCTIVE),), True, "exactly Discard and Cancel"),
+        # The editor beneath the question still takes input.
+        (PAD_QUESTION_BUTTONS, False, "controls beneath it active"),
+    ),
+)
+def test_pad_alone_refuses_a_question_that_does_not_hold_pad(buttons, held, message) -> None:
+    full = mixed_text.PAD_TEXT
+    lamed = full.index(mixed_text.PAD_HEBREW) + 1
+    journey = PadAloneJourney(PAD_READY)
+    journey.stage = PadAloneJourney.CLOSE_ASKED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey._editor_bounds = (0, 3, 229, 60)
+    frame = _asked(_pad_frame(full, (1, lamed)),
+                   _question("Discard unsaved changes?", buttons))
+    if not held:
+        frame = replace(frame, inactive_controls=frozenset())
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(_pad_question_offer(full), 9, frame, sender)
+
+
+def test_pad_alone_refuses_a_cancel_that_lost_the_buffer() -> None:
+    journey = PadAloneJourney(PAD_READY)
+    journey.stage = PadAloneJourney.CLOSE_CANCELLED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey._editor_bounds = (0, 3, 229, 60)
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="did not keep"):
+        journey.after_present(_pad_offer(""), 9, _pad_frame("", (1, 0)), sender)
 
 
 def test_pad_alone_refuses_missing_style_runs() -> None:
