@@ -552,6 +552,16 @@ button and shows a notice with its meaning; while a prompt or a dialog is
 open, the rest of its application stays rich and inactive beneath it; and
 Desk keeps running while a dialog waits.
 
+**Status.** In progress. Steps 1 to 3 are done, and so is the dialog's own
+part of step 4: since 2026-10-15 a dialog asks without stopping Desk and
+goes out as a `DIALOG`, with a `BUTTON` for each answer, in a modal region
+over its pane ([DIALOG-PRODUCER.md](DIALOG-PRODUCER.md)). In the physical
+viewer, Desk with Pad answers Pad's close-tab question and Desk with File
+Explorer its delete question, each through its Cancel button. A dialog
+covers the roots it lies over, which go out as residual glyphs until it
+closes. The confirmations by typed word, Desk's screens and the Agent's
+approval buttons come next.
+
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
 toggle, selector, range and dialog elements in documents that use them.
 Adjusting splits. Editing a grid cell in place. Plots and vector lines,
