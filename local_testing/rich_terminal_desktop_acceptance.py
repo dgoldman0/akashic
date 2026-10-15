@@ -4525,6 +4525,13 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                     draw.title, draw.focused,
                 ))
                 add_material(_pane_chrome_rectangles(outer, content))
+            elif (isinstance(draw, FieldDraw) and region.modal and region.clipped
+                    and _region_viewport_rectangle(region, cols, rows) == screen
+                    and _draw_logical_rectangle(region, draw)
+                    == _LogicalRectangle(0, rows - 1, cols, rows)):
+                # Desk's own prompt holds the taskbar row: no residual glyph
+                # may paint there.  Its region is checked below.
+                add_material((_draw_logical_rectangle(region, draw),))
             elif isinstance(draw, TaskBarDraw):
                 viewport = _region_viewport_rectangle(region, cols, rows)
                 if (_region_logical_rectangle(region) != screen or not region.clipped or
@@ -4597,14 +4604,26 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
         elif region.modal and region.draws and all(
                 isinstance(draw, FieldDraw) for draw in region.draws):
             viewport = _region_viewport_rectangle(region, cols, rows)
-            matches = [pane for pane in panes if viewport == pane.content_bounds]
-            if (not region.clipped or _region_logical_rectangle(region) != screen
-                    or len(matches) != 1):
-                raise PhysicalDesktopAcceptanceError(
-                    "MODAL region does not hold exactly one PANE's content")
-            if indices[region.region_id] < indices[matches[0].content_region_id]:
-                raise PhysicalDesktopAcceptanceError(
-                    "MODAL region paints beneath its PANE content")
+            if not region.clipped or _region_logical_rectangle(region) != screen:
+                raise PhysicalDesktopAcceptanceError("MODAL region is not a clipped surface")
+            if viewport == screen:
+                # Desk's own prompt: one field across the last row, in a
+                # modal scope over the whole screen, above every region.
+                if (len(region.draws) != 1 or _draw_logical_rectangle(region, region.draws[0])
+                        != _LogicalRectangle(0, rows - 1, cols, rows)):
+                    raise PhysicalDesktopAcceptanceError(
+                        "a whole-screen MODAL region is not Desk's prompt across the last row")
+                if indices[region.region_id] != len(plane.regions) - 1:
+                    raise PhysicalDesktopAcceptanceError(
+                        "Desk's prompt region does not paint above every other region")
+            else:
+                matches = [pane for pane in panes if viewport == pane.content_bounds]
+                if len(matches) != 1:
+                    raise PhysicalDesktopAcceptanceError(
+                        "MODAL region does not hold exactly one PANE's content")
+                if indices[region.region_id] < indices[matches[0].content_region_id]:
+                    raise PhysicalDesktopAcceptanceError(
+                        "MODAL region paints beneath its PANE content")
             roles[region.region_id] = "modal"
         elif region.draws and all(isinstance(draw, GlyphRunDraw) for draw in region.draws):
             full_surface(region)

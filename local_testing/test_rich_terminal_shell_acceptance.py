@@ -504,11 +504,45 @@ def test_a_prompt_in_a_modal_region_over_its_pane_is_held_evidence():
     ({'z_order':2},'beneath'),
     # Unclipped, it would also stop the taskbar's points.
     ({'clipped':False,'clip_x':0,'clip_y':0,'clip_cols':0,'clip_rows':0},
-     'exactly one|blocks TASKBAR'),
+     'clipped surface|blocks TASKBAR'),
 ])
 def test_a_modal_region_must_hold_exactly_its_pane_content_above_it(changes,message):
     with pytest.raises(ERROR,match=message):
         _project(_replace_region(_scene(tabs=True,prompt=True),20,**changes))
+
+
+def _desk_prompt_scene(*, row=ROWS-1, width=COLS, z=6, glyph=False):
+    """Two panes with Desk's own prompt in place of the taskbar: one field
+    across the last row in a MODAL region over the whole screen, above
+    every other region.  With GLYPH a residual run paints on that row too."""
+    held={3:frozenset((200,201)),4:frozenset((210,211))}
+    regions=[replace(r,inactive_controls=held.get(r.region_id,frozenset()))
+             for r in _scene(tabs=True).retained.regions if r.region_id!=2]
+    if glyph:
+        regions.append(_region(30,(_glyph(3000,0,ROWS-1,'Z'),),z=-1,clip=(0,0,COLS,ROWS)))
+    modal=_region(21,(_prompt(0,row,width),),z=z,clip=(0,0,COLS,ROWS))
+    return _offer([*regions,replace(modal,modal=True)])
+
+
+def test_desks_prompt_holds_the_taskbar_row_in_a_whole_screen_modal_scope():
+    projection=_project(_desk_prompt_scene())
+    field,=projection.semantic_field_claims
+    assert field.modal and (field.left,field.top,field.right,field.bottom)==(0,ROWS-1,COLS,ROWS)
+    assert not projection.semantic_taskbar_claims
+    # Every pane's controls are held beneath it.
+    assert {ControlIdentity(7,9,200),ControlIdentity(7,9,201),
+            ControlIdentity(7,9,210),ControlIdentity(7,9,211)}<=projection.inactive_controls
+
+
+@pytest.mark.parametrize('changes,message',[
+    ({'row':ROWS-2},"not Desk's prompt"),
+    ({'width':COLS-1},"not Desk's prompt"),
+    ({'z':2},'above every other region'),
+    ({'glyph':True},'intrude'),
+])
+def test_desks_prompt_scope_must_be_its_row_alone_above_everything(changes,message):
+    with pytest.raises(ERROR,match=message):
+        _project(_desk_prompt_scene(**changes))
 
 
 def test_a_field_region_that_is_not_modal_is_not_a_prompt():
