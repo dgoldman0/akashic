@@ -68,7 +68,9 @@ ABI 9 appends `OWNER-ID` at directory offset 224 and `OWNER-GEN` at
 232. `RUHA-DOCUMENT-OWNER-ID@` and
 `RUHA-DOCUMENT-OWNER-GENERATION@` expose the nonzero identity tuple read
 from the slot's actual `AHS.INST` component instance. The attachment record
-remains 96 bytes, the snapshot 208 bytes, and the adapter 1024 bytes.
+is 128 bytes, the snapshot 208 bytes, and the adapter 1024 bytes. The record's
+last four cells hold the screen cells of the overlay field the document's last
+draw painted, described below, or zero.
 The owner tuple describes the source component; it is separate from a
 downstream terminal owner's identity and from the signed slot identity.
 
@@ -218,6 +220,22 @@ directory-only identity with zero semantic slices and leaves the lifecycle
 record dirty. A later exposed draw therefore performs a fresh semantic capture
 instead of reusing the occluded zero-slice entry. This is generic atomic
 fallback and click-through prevention, not a retained overlay family.
+
+One kind of foreground paint is the document's own: the canonical prompt
+(`tui/widgets/prompt.f`) an application paints over its status row while it
+asks for a line of text. UIDL-TUI's draw observer records the prompt a
+document's observed draw paints, by pointer and instance, in the document's
+own context, and RUHA copies its screen cells into the attachment record when
+that draw completes. When all the foreground paint over a document lies
+inside that prompt's cells, the document is captured as usual except that
+UIDL-TUI clips away every root whose visible cells the paint meets, through
+the canonical geometry every family shares, so those roots stay CELL's and
+the rest stay semantic. The prompt itself becomes the document's overlay
+TEXT field: UFLSN appends it after the mounted fields as the bank's last
+record, from source `UFLSN-SOURCE-OVERLAY`, index 0, generation 1, the
+prompt's instance as root key and paint order 255, and the prompt builds its
+UFLD model from its input's state (`PRM-FIELD-CAPTURE`). Any other
+foreground paint over the document keeps the document-granular rule.
 
 A family refusal falls back the same way, one document at a time. When the
 menu, collection, data-graphics, status-field, or typed FIELD capture of a document reports `CAPACITY`,

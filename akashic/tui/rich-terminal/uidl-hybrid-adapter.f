@@ -62,6 +62,12 @@ REQUIRE ../../utils/memory-span.f
 : _RUHA-R.HEIGHT   ( record -- a )  72 + ;
 : _RUHA-R.WIDTH    ( record -- a )  80 + ;
 : _RUHA-R.FLAGS    ( record -- a )  88 + ;
+\ The screen cells of the overlay field the document's last draw painted,
+\ a prompt, or all zero: its own foreground paint.
+: _RUHA-R.OV-ROW     ( record -- a )  96 + ;
+: _RUHA-R.OV-COL     ( record -- a ) 104 + ;
+: _RUHA-R.OV-HEIGHT  ( record -- a ) 112 + ;
+: _RUHA-R.OV-WIDTH   ( record -- a ) 120 + ;
 
 1 CONSTANT _RUHA-RF-DIRTY
 2 CONSTANT _RUHA-RF-EMPTY
@@ -69,7 +75,7 @@ REQUIRE ../../utils/memory-span.f
 8 CONSTANT _RUHA-RF-STAGED-EMPTY
 15 CONSTANT _RUHA-RF-MASK
 
-96 CONSTANT RUHA-RECORD-SIZE
+128 CONSTANT RUHA-RECORD-SIZE
 
 : RUHA-RECORD-BYTES  ( -- bytes )  RUHA-RECORD-SIZE ;
 
@@ -1278,6 +1284,11 @@ VARIABLE _RUHA-P-RECORD
         _RUHA-RECORD-STORAGE-CURRENT? 0= IF RUHA-S-INVALID EXIT THEN
     _RUHA-P-ADAPTER @ _RUHA-INVALIDATE
     _RUHA-P-RECORD @ _RUHA-RECORD-DIRTY!
+    UTUI-OVERLAY-FIELD-ROOT@ DROP
+    _RUHA-P-RECORD @ _RUHA-R.OV-WIDTH !
+    _RUHA-P-RECORD @ _RUHA-R.OV-HEIGHT !
+    _RUHA-P-RECORD @ _RUHA-R.OV-COL !
+    _RUHA-P-RECORD @ _RUHA-R.OV-ROW !
     RUHA-S-OK ;
 
 VARIABLE _RUHA-Q-TOKEN
@@ -2679,6 +2690,41 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
         DROP 0 _RUHA-B-RECORD @ _RUHA-B-STAGE RUHA-S-OK
     THEN ;
 
+\ _RUHA-OVERLAY-ONLY? ( record -- flag )
+\   All the foreground paint over the document is its own overlay field's:
+\   the field lies inside the document, and no foreground paint meets the
+\   document above, below, left or right of it.
+VARIABLE _RUHA-OV-R
+: _RUHA-OV-BAND-CLEAR?  ( row col height width -- flag )
+    DUP 0> 2 PICK 0> AND 0= IF 2DROP 2DROP -1 EXIT THEN
+    SCR-OCCLUSION-RECT? IF 0= ELSE DROP 0 THEN ;
+: _RUHA-OV-BOTTOM  ( record -- row )  DUP _RUHA-R.OV-ROW @ SWAP _RUHA-R.OV-HEIGHT @ + ;
+: _RUHA-OV-RIGHT   ( record -- col )  DUP _RUHA-R.OV-COL @ SWAP _RUHA-R.OV-WIDTH @ + ;
+: _RUHA-DOC-BOTTOM ( record -- row )  DUP _RUHA-R.ROW @ SWAP _RUHA-R.HEIGHT @ + ;
+: _RUHA-DOC-RIGHT  ( record -- col )  DUP _RUHA-R.COL @ SWAP _RUHA-R.WIDTH @ + ;
+: _RUHA-OVERLAY-ONLY?  ( record -- flag )
+    _RUHA-OV-R !
+    _RUHA-OV-R @ _RUHA-R.OV-HEIGHT @ 0> _RUHA-OV-R @ _RUHA-R.OV-WIDTH @ 0> AND
+        0= IF 0 EXIT THEN
+    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-R.ROW @ <
+    _RUHA-OV-R @ _RUHA-R.OV-COL @ _RUHA-OV-R @ _RUHA-R.COL @ < OR
+    _RUHA-OV-R @ _RUHA-OV-BOTTOM _RUHA-OV-R @ _RUHA-DOC-BOTTOM > OR
+    _RUHA-OV-R @ _RUHA-OV-RIGHT _RUHA-OV-R @ _RUHA-DOC-RIGHT > OR IF 0 EXIT THEN
+    _RUHA-OV-R @ _RUHA-R.ROW @ _RUHA-OV-R @ _RUHA-R.COL @
+    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-R.ROW @ -
+    _RUHA-OV-R @ _RUHA-R.WIDTH @ _RUHA-OV-BAND-CLEAR? 0= IF 0 EXIT THEN
+    _RUHA-OV-R @ _RUHA-OV-BOTTOM _RUHA-OV-R @ _RUHA-R.COL @
+    _RUHA-OV-R @ _RUHA-DOC-BOTTOM _RUHA-OV-R @ _RUHA-OV-BOTTOM -
+    _RUHA-OV-R @ _RUHA-R.WIDTH @ _RUHA-OV-BAND-CLEAR? 0= IF 0 EXIT THEN
+    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-R.COL @
+    _RUHA-OV-R @ _RUHA-R.OV-HEIGHT @
+    _RUHA-OV-R @ _RUHA-R.OV-COL @ _RUHA-OV-R @ _RUHA-R.COL @ -
+        _RUHA-OV-BAND-CLEAR? 0= IF 0 EXIT THEN
+    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-OV-RIGHT
+    _RUHA-OV-R @ _RUHA-R.OV-HEIGHT @
+    _RUHA-OV-R @ _RUHA-DOC-RIGHT _RUHA-OV-R @ _RUHA-OV-RIGHT -
+        _RUHA-OV-BAND-CLEAR? ;
+
 : _RUHA-B-CAPTURE-RECORD ( record -- status )
     _RUHA-B-RECORD !
     _RUHA-B-RECORD @ _RUHA-B-ADAPTER @ _RUHA-RECORD-VISIBLE? 0= IF
@@ -2700,6 +2746,10 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
     \ after exposure instead of reusing this directory-only zero-slice state.
     \ An overlay slot's document is itself foreground paint, the final writer
     \ of its own cells, so it is the one document the test passes over.
+    \ When all the paint over a document is its own overlay field, the
+    \ prompt it drew, the document keeps every root that paint does not
+    \ meet: the capture clips the others away, and the field joins its
+    \ fields.
     _RUHA-B-RECORD @ _RUHA-R.ROW @
     _RUHA-B-RECORD @ _RUHA-R.COL @
     _RUHA-B-RECORD @ _RUHA-R.HEIGHT @
@@ -2707,8 +2757,11 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
         SCR-OCCLUSION-RECT? 0= IF DROP RUHA-S-INVALID EXIT THEN
     _RUHA-B-RECORD @ _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND
     IF
-        _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
-        0 0 0 0 0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT EXIT
+        _RUHA-B-RECORD @ _RUHA-OVERLAY-ONLY? 0= IF
+            _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
+            0 0 0 0 0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT EXIT
+        THEN
+        -1 UTUI-CAPTURE-OCCLUDED!
     THEN
     _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY? IF
         _RUHA-B-CAPTURE-CURRENT EXIT
@@ -2772,6 +2825,7 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
     RUHA-S-OK _RUHA-B-STATUS !
     _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
         I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT _RUHA-B-CAPTURE-RECORD
+        0 UTUI-CAPTURE-OCCLUDED!
         DUP RUHA-S-OK <> IF _RUHA-B-STATUS ! LEAVE THEN DROP
     LOOP
     _RUHA-B-STATUS @ ;
@@ -2943,6 +2997,7 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
     0 _RUHA-B-FIELD-NATIVE-U ! 0 _RUHA-B-DOCUMENTS !
     ['] _RUHA-B-CAPTURE CATCH DUP IF
         DROP RUHA-S-INVALID _RUHA-B-STATUS !
+        0 UTUI-CAPTURE-OCCLUDED!
     ELSE
         DROP _RUHA-B-STATUS !
     THEN
@@ -3053,19 +3108,26 @@ VARIABLE _RUHA-P-STATUS
 VARIABLE _RUHA-P-RECORD
 VARIABLE _RUHA-P-ASK
 VARIABLE _RUHA-P-ORIGINAL
+VARIABLE _RUHA-P-OCCLUDED
 
 : _RUHA-P-CLEAR  ( -- )
     0 _RUHA-P-ADAPTER ! 0 _RUHA-P-A ! 0 _RUHA-P-U ! 0 _RUHA-P-USED !
-    0 _RUHA-P-COUNT ! 0 _RUHA-P-RECORD ! 0 _RUHA-P-ASK ! ;
+    0 _RUHA-P-COUNT ! 0 _RUHA-P-RECORD ! 0 _RUHA-P-ASK !
+    0 _RUHA-P-OCCLUDED ! ;
 
 \ The UCTX of a visible document whose cells no foreground paint covers,
-\ or 0.
+\ or that only its own overlay field covers, or 0.  _RUHA-P-OCCLUDED says
+\ which, so a description clips away the pictures that field meets.
 : _RUHA-P-DOCUMENT-CTX  ( record -- uctx|0 )
+    0 _RUHA-P-OCCLUDED !
     DUP _RUHA-P-ADAPTER @ _RUHA-RECORD-VISIBLE? 0= IF DROP 0 EXIT THEN
     DUP _RUHA-R.ROW @ OVER _RUHA-R.COL @
     2 PICK _RUHA-R.HEIGHT @ 3 PICK _RUHA-R.WIDTH @
         SCR-OCCLUSION-RECT? 0= IF 2DROP 0 EXIT THEN
-    OVER _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND IF DROP 0 EXIT THEN
+    OVER _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND IF
+        DUP _RUHA-OVERLAY-ONLY? 0= IF DROP 0 EXIT THEN
+        -1 _RUHA-P-OCCLUDED !
+    THEN
     _RUHA-R.UCTX @ ;
 
 : _RUHA-P-RECORD-PICTURES  ( record -- )
@@ -3077,7 +3139,8 @@ VARIABLE _RUHA-P-ORIGINAL
     _RUHA-P-STATUS @ RUHA-S-CAPACITY = IF 0 0 ELSE
         _RUHA-P-A @ _RUHA-P-USED @ + _RUHA-P-U @ _RUHA-P-USED @ -
     THEN
-    _RUHA-P-ASK @ UPICSN-CAPTURE
+    _RUHA-P-ASK @ _RUHA-P-OCCLUDED @ UTUI-CAPTURE-OCCLUDED!
+    ['] UPICSN-CAPTURE CATCH 0 UTUI-CAPTURE-OCCLUDED! THROW
     DUP UPICSN-S-UNAVAILABLE = IF 2DROP EXIT THEN
     DUP UPICSN-S-CAPACITY = IF
         DROP _RUHA-P-COUNT +! RUHA-S-CAPACITY _RUHA-P-STATUS ! EXIT

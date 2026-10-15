@@ -698,8 +698,8 @@ def test_menu_lifecycle_state_is_context_local_and_cleared_at_boundaries() -> No
     init = _definition(source, "_UCTX-INIT-VARS")
     clear = _definition(source, "_UTUI-MENU-STATE-CLEAR")
 
-    assert "29 CONSTANT _UCTX-NVAR" in source
-    assert "232 CONSTANT _UCTX-VAR-SZ" in source
+    assert "31 CONSTANT _UCTX-NVAR" in source
+    assert "248 CONSTANT _UCTX-VAR-SZ" in source
     fields = (
         "_UTUI-MENU-OPEN",
         "_UTUI-MENU-SAVED-FOC",
@@ -714,10 +714,13 @@ def test_menu_lifecycle_state_is_context_local_and_cleared_at_boundaries() -> No
         assert f"0 {field} !" in clear
 
     assert "_UTUI-SEMANTIC-RESOLVED-GENERATION" not in init
+    # The overlay field and its instance are context-owned too.
+    assert "_UTUI-OVERLAY          _UCTX-VARS 27 CELLS + !" in init
+    assert "_UTUI-OVERLAY-INSTANCE _UCTX-VARS 28 CELLS + !" in init
     assert "_UTUI-MC-HEAD" in init
-    assert "_UCTX-VARS 27 CELLS + !" in init
+    assert "_UCTX-VARS 29 CELLS + !" in init
     assert "_UTUI-MC-COUNT" in init
-    assert "_UCTX-VARS 28 CELLS + !" in init
+    assert "_UCTX-VARS 30 CELLS + !" in init
 
     assert "_UTUI-MENU-STATE-CLEAR" in _definition(source, "UTUI-LOAD")
     assert "_UTUI-MENU-STATE-CLEAR" in _definition(source, "UTUI-DETACH")
@@ -1145,9 +1148,9 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     for token in forbidden:
         assert token not in source
 
-    assert "29 CONSTANT _UCTX-NVAR" in source
-    assert "232 CONSTANT _UCTX-VAR-SZ" in source
-    assert "27 CONSTANT _UCTX-NPLAIN" in source
+    assert "31 CONSTANT _UCTX-NVAR" in source
+    assert "248 CONSTANT _UCTX-VAR-SZ" in source
+    assert "29 CONSTANT _UCTX-NPLAIN" in source
     assert "11 CONSTANT _UCTX-NPOOL" in source
     assert "16 CONSTANT _UTUI-MC-SOURCE-SIZE" in source
     assert (
@@ -1163,9 +1166,9 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
         "_UCTX-O-MCS    _UCTX-MCS-SZ    +                   "
         "CONSTANT UCTX-TOTAL"
     ) in source
-    assert "107,752 bytes" in source
-    assert 107_752 == (
-        232
+    assert "107,768 bytes" in source
+    assert 107_768 == (
+        248
         + 32_768
         + 20_480
         + 12_288
@@ -1180,8 +1183,8 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     )
 
     init_vars = _definition(source, "_UCTX-INIT-VARS")
-    assert "_UTUI-MC-HEAD          _UCTX-VARS 27 CELLS + !" in init_vars
-    assert "_UTUI-MC-COUNT         _UCTX-VARS 28 CELLS + !" in init_vars
+    assert "_UTUI-MC-HEAD          _UCTX-VARS 29 CELLS + !" in init_vars
+    assert "_UTUI-MC-COUNT         _UCTX-VARS 30 CELLS + !" in init_vars
 
     init_pools = _definition(source, "_UCTX-INIT-POOLS")
     assert "_UTUI-MC-SOURCES  _UCTX-POOLS 240 + !" in init_pools

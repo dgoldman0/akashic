@@ -983,6 +983,64 @@ def test_input_drag_selects_from_a_press_made_in_the_field() -> None:
     assert values == [0, 2, 0, -1, 0, 0, 3, -1, -1, 4, 1, -1, -1]
 
 
+def test_input_takes_positions_a_rich_renderer_names() -> None:
+    """A rich renderer that laid the field's value out names positions as
+    Unicode-scalar offsets into it, mask characters when it masks, with item
+    key zero.  PLACE moves the caret there; EXTEND keeps the anchor."""
+
+    values = _numbers(
+        _field()
+        + [
+            ": _TXT  ( code offset key -- consumed? )",
+            "  KEY-MOUSE-TEXT-KEY ! KEY-MOUSE-TEXT-OFFSET ! 2 5 _IW @ _PT ;",
+            # Scalar 2 of "AéCD" starts at byte 3.
+            "KEY-MOUSE-TEXT-PLACE 2 0 _TXT",
+            "_IW @ _INP-O-CURSOR + @ _IW @ _INP-SEL?",
+            "KEY-MOUSE-TEXT-EXTEND 4 0 _TXT",
+            "_IW @ _INP-SEL-RANGE",
+            # Past the end names the end, and a PLACE drops the selection.
+            "KEY-MOUSE-TEXT-PLACE 9 0 _TXT DROP",
+            "_IW @ _INP-O-CURSOR + @ _IW @ _INP-SEL?",
+            # A field has no items, so an item key names nothing here.
+            "KEY-MOUSE-TEXT-PLACE 1 1 _TXT",
+            # A masked field's value is one mask character per character.
+            "42 _IW @ INP-MASK!",
+            "KEY-MOUSE-TEXT-PLACE 3 0 _TXT DROP _IW @ _INP-O-CURSOR + @",
+        ]
+        + _report(10)
+    )
+
+    assert values[::-1] == [-1, 3, 0, -1, 3, 5, 5, 0, 0, 4]
+
+
+def test_input_revision_advances_with_every_shown_change() -> None:
+    values = _numbers(
+        _field()
+        + _KEYS
+        + [
+            ": _REV  _IW @ INP-REVISION@ ;",
+            # One at creation and one for the text it was given.
+            "_REV",
+            "_REV 120 0 _CH DROP _REV SWAP -",
+            "_REV KEY-UP 0 _SP DROP _REV SWAP -",
+            "_REV KEY-LEFT 0 _SP DROP _REV SWAP -",
+            "_REV _IW @ WDG-DRAW _REV SWAP -",
+            # Characters, caret, anchor and scroll, as the value counts.
+            "_IW @ INP-SHOWN-STATE",
+            # A draw that scrolls the caret into view is a change too.
+            "CREATE _NBUF 64 ALLOT VARIABLE _NW",
+            "4 5 1 4 RGN-NEW _NBUF 64 INP-NEW _NW !",
+            'S" abcdefgh" _NW @ INP-SET-TEXT',
+            ": _NREV  _NW @ INP-REVISION@ ;",
+            "_NREV _NW @ WDG-DRAW _NREV SWAP -",
+            "_NREV _NW @ WDG-DRAW _NREV SWAP -",
+        ]
+        + _report(11)
+    )
+
+    assert values[::-1] == [2, 1, 0, 1, 0, 5, 4, 4, 0, 1, 0]
+
+
 def test_input_drag_past_either_edge_scrolls_one_column_per_step() -> None:
     values = _numbers(
         _field()

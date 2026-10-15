@@ -148,3 +148,59 @@ def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_
     ]
     output = run_status_forth(lines)
     assert re.search(r"FIELD PRIOR PASS\s+\d+\s+0", output), output[-18000:]
+
+
+PROMPT_OVERLAY = [
+    "VARIABLE _FA-PR CREATE _FA-PBUF 64 ALLOT",
+    ': _FA-PLABEL S" Find:" ; : _FA-PVALUE S" abc" ;',
+    ": _FA-PROMPT-PAINT UTUI-PAINT _FA-PR @ PRM-ACTIVE? IF _FA-PR @ WDG-DRAW THEN ;",
+    ": _FA-PROMPT-DRAW ['] _FA-PROMPT-PAINT UTUI-DRAW-OBSERVE 0= _RA-ASSERT UTUI-DRAW-COMPLETE ;",
+    ": _FA-SECOND-FIELD ( -- descriptor )",
+    "  _RA-SNAP @ RUHA-SNAPSHOT-FIELDS-DESCRIPTORS@ DROP",
+    "  _RA-DIR-A @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@ + UFLSN-DESCRIPTOR-SIZE + ;",
+    # A prompt over the status row, as applications paint theirs.
+    'S" state" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ 0 1 20 RGN-NEW',
+    "  _FA-PBUF 64 PRM-NEW _FA-PR !",
+    "_FA-PLABEL _FA-PVALUE _FA-PR @ PRM-SHOW _FA-PROMPT-DRAW",
+    "6 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    # The document keeps every root the prompt does not cover, the prompt
+    # joins its fields, and only the status field it covers stays CELL's.
+    "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 2 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 0= _RA-ASSERT",
+    "_FA-SECOND-FIELD UFLSN-DESCRIPTOR-SOURCE@ UFLSN-SOURCE-OVERLAY = _RA-ASSERT",
+    "_FA-SECOND-FIELD UFLSN-DESCRIPTOR-WIDTH@ 20 = _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.OV-WIDTH @ 20 = _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.OV-HEIGHT @ 1 = _RA-ASSERT",
+    # Foreground paint that is not the prompt keeps today's rule.
+    ": _FA-ELSEWHERE RGN-ROOT 35 0 0 DRW-CHAR ; ' _FA-ELSEWHERE DRW-OVERLAY",
+    "7 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 0= _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",
+    "_RA-RECORDS _RUHA-RECORD-DIRTY? _RA-ASSERT",
+    # Closing the prompt repaints what it covered; the record forgets it.
+    "_FA-PR @ PRM-HIDE",
+    'S" note" UTUI-BY-ID UIDL-DIRTY! S" state" UTUI-BY-ID UIDL-PARENT UIDL-DIRTY!',
+    "_FA-PROMPT-DRAW",
+    "8 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.OV-WIDTH @ 0= _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 1 = _RA-ASSERT",
+    "_RA-STACK",
+]
+
+
+def test_a_prompt_keeps_its_document_rich_except_what_it_covers():
+    # Room for the mounted field's descriptor and the prompt's in each half.
+    lines = [line.replace("CREATE _FA-DESCRIPTORS-S 256 7 + ALLOT", "CREATE _FA-DESCRIPTORS-S 512 7 + ALLOT")
+             .replace("_FA-DESCRIPTORS 256 _FA-NATIVE 1024", "_FA-DESCRIPTORS 512 _FA-NATIVE 1024")
+             for line in _field_adapter_program()]
+    at = next(i for i, line in enumerate(lines) if 'RUHA CONSTRUCTOR PASS' in line)
+    lines[at:at] = PROMPT_OVERLAY
+    output = run_status_forth(lines)
+    summary = re.search(r"RUHA CONSTRUCTOR PASS\s+(\d+)\s+0", output)
+    assert summary, output[-18000:]
+    assert int(summary.group(1)) >= 110

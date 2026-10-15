@@ -80,6 +80,7 @@ REQUIRE keys.f
 REQUIRE ../text/cell-width.f
 REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
+REQUIRE widgets/prompt.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
 REQUIRE widgets/media.f
@@ -4127,6 +4128,21 @@ VARIABLE _UTUI-MC-HEAD
 VARIABLE _UTUI-MC-COUNT
 VARIABLE _UTUI-MC-STATUS
 
+\ An application may paint one canonical prompt over its document, after
+\ UIDL, as foreground paint.  The draw observer records the prompt the last
+\ observed draw painted, with its instance, so a projection can publish it
+\ as the document's overlay TEXT field.  Both are context-owned; the next
+\ observed draw of the document replaces them.
+VARIABLE _UTUI-OVERLAY
+VARIABLE _UTUI-OVERLAY-INSTANCE
+0 _UTUI-OVERLAY ! 0 _UTUI-OVERLAY-INSTANCE !
+
+\ While a projection captures a document whose only foreground paint is
+\ its overlay field, a root that paint covers is clipped away and stays
+\ CELL's.  Composition sets this around that one capture.
+VARIABLE _UTUI-CAPTURE-OCCLUDED
+0 _UTUI-CAPTURE-OCCLUDED !
+
 VARIABLE _UTUI-MC-STAGE-ACTIVE
 VARIABLE _UTUI-MC-STAGE-ROOT
 VARIABLE _UTUI-MC-STAGE-SOURCE
@@ -5155,13 +5171,19 @@ VARIABLE _UTUI-MC-U-REL
         _UTUI-MC-STAGE-ROOT @ = IF _UTUI-MC-STAGE-CLEAR THEN
     ELSE DROP THEN ;
 
+: _UTUI-OVERLAY-NOTE  ( widget -- )
+    DUP _PRM-GENUINE? 0= IF DROP EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
+    DUP PRM-INSTANCE@ _UTUI-OVERLAY-INSTANCE ! _UTUI-OVERLAY ! ;
+
 : _UTUI-MC-DRAW-OBSERVER  ( widget phase context -- status )
     DROP
     DUP WDG-DRAW-PHASE-FULL-BEGIN = IF
         DROP _UTUI-MC-OBS-FULL-BEGIN WDG-DRAW-OBS-S-OK EXIT
     THEN
     DUP WDG-DRAW-PHASE-FULL-END = IF
-        DROP _UTUI-MC-OBS-FULL-END WDG-DRAW-OBS-S-OK EXIT
+        DROP DUP _UTUI-OVERLAY-NOTE
+        _UTUI-MC-OBS-FULL-END WDG-DRAW-OBS-S-OK EXIT
     THEN
     DUP WDG-DRAW-PHASE-FULL-ABORT = IF
         DROP _UTUI-MC-OBS-FULL-ABORT WDG-DRAW-OBS-S-OK EXIT
@@ -5250,6 +5272,7 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
         _UTUI-MC-S-OK _UTUI-MC-STATUS !
     THEN
     _UTUI-MC-OBS-BODY ! 0 _UTUI-MC-OBS-IOR !
+    0 _UTUI-OVERLAY ! 0 _UTUI-OVERLAY-INSTANCE !
     ['] _UTUI-MC-OBS-EXECUTE CATCH _UTUI-MC-OBS-IOR !
     0 _UTUI-MC-OBS-BODY !
     _UTUI-MC-OBS-IOR @ ?DUP IF
@@ -5263,6 +5286,28 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
         _UTUI-MC-STAGE-CLEAR _UTUI-MC-SET-INVALID
     THEN
     _UTUI-MC-STATUS @ _UTUI-MC-SCRATCH-CLEAR ;
+
+\ _UTUI-OVERLAY-FIELD@ ( -- prompt|0 )
+\   The prompt the document's last observed draw painted, while it is still
+\   that live prompt, shown and visible.
+: _UTUI-OVERLAY-FIELD@  ( -- prompt|0 )
+    _UTUI-OVERLAY @ DUP 0= IF EXIT THEN
+    DUP PRM-INSTANCE@ DUP 0= SWAP _UTUI-OVERLAY-INSTANCE @ <> OR IF
+        DROP 0 EXIT
+    THEN
+    DUP PRM-ACTIVE? 0= IF DROP 0 EXIT THEN
+    DUP WDG-VISIBLE? 0= IF DROP 0 EXIT THEN ;
+
+\ UTUI-OVERLAY-FIELD-ROOT@ ( -- row col height width found? )
+\   The screen cells of the document's overlay field, if it has one.
+: UTUI-OVERLAY-FIELD-ROOT@  ( -- row col height width found? )
+    _UTUI-OVERLAY-FIELD@ ?DUP 0= IF 0 0 0 0 0 EXIT THEN
+    PRM-FIELD-ROOT -1 ;
+
+\ UTUI-CAPTURE-OCCLUDED! ( flag -- )
+\   Set for the capture of a document whose only foreground paint is its
+\   overlay field; clear it after.
+: UTUI-CAPTURE-OCCLUDED!  ( flag -- )  0<> _UTUI-CAPTURE-OCCLUDED ! ;
 
 \ UTUI-WIDGET-SET ( wptr elem -- )
 \   Attach a manually created widget to a UIDL element.
@@ -5359,6 +5404,7 @@ VARIABLE _UTUI-WS-OLD-OWNER
     0 _UTUI-FOCUS-P !
     0 _UTUI-DOC-LOADED !
     0 _UTUI-RGN !
+    0 _UTUI-OVERLAY ! 0 _UTUI-OVERLAY-INSTANCE !
     _UTUI-PROJECTION-CLEAR
     _UTUI-MC-SCRATCH-CLEAR ;
 
@@ -5366,8 +5412,8 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  §18b — UIDL Context Save / Restore  (UCTX)
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 29 scalar variables and 11 copied
-\  pool arrays. Total: 107,752 bytes (approximately 105 KiB).  The mounted
+\  Per sub-app UIDL context buffer holding 31 scalar variables and 11 copied
+\  pool arrays. Total: 107,768 bytes (approximately 105 KiB).  The mounted
 \  canonical relation head is context-owned dynamic state; context buffers
 \  are consequently opaque, non-copyable, and may be cleared/freed only while
 \  inactive.
@@ -5377,8 +5423,8 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  calls only the public API: UCTX-ALLOC, UCTX-FREE, UCTX-SAVE,
 \  UCTX-RESTORE, UCTX-CLEAR, UCTX-LIVE?, UCTX-LIVE-DISOWN, UCTX-TOTAL.
 
-29 CONSTANT _UCTX-NVAR
-232 CONSTANT _UCTX-VAR-SZ       \ 29 × 8
+31 CONSTANT _UCTX-NVAR
+248 CONSTANT _UCTX-VAR-SZ       \ 31 × 8
 
 \ Pool sizes (must match module declarations)
 32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
@@ -5407,8 +5453,8 @@ _UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
 _UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-O-MCS
 _UCTX-O-MCS    _UCTX-MCS-SZ    +                   CONSTANT UCTX-TOTAL
 
-27 CELLS CONSTANT _UCTX-O-MC-HEAD
-28 CELLS CONSTANT _UCTX-O-MC-COUNT
+29 CELLS CONSTANT _UCTX-O-MC-HEAD
+30 CELLS CONSTANT _UCTX-O-MC-COUNT
 
 \ Non-serialized ownership of the dynamic relation alias currently exposed
 \ through the live UIDL globals.  Exactly one restored UCTX may own it.
@@ -5424,7 +5470,7 @@ VARIABLE _UCTX-LIVE-OWNER
 
 \ --- Variable table: maps index → global VARIABLE address ---
 CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
-27 CONSTANT _UCTX-NPLAIN
+29 CONSTANT _UCTX-NPLAIN
 
 : _UCTX-INIT-VARS  ( -- )
     _UDL-ECNT           _UCTX-VARS  0 CELLS + !
@@ -5454,8 +5500,10 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
     _UTUI-MENU-SAVE-H     _UCTX-VARS 24 CELLS + !
     _UTUI-MENU-SAVE-W     _UCTX-VARS 25 CELLS + !
     _UTUI-MENU-SAVE-Z     _UCTX-VARS 26 CELLS + !
-    _UTUI-MC-HEAD          _UCTX-VARS 27 CELLS + !
-    _UTUI-MC-COUNT         _UCTX-VARS 28 CELLS + ! ;
+    _UTUI-OVERLAY          _UCTX-VARS 27 CELLS + !
+    _UTUI-OVERLAY-INSTANCE _UCTX-VARS 28 CELLS + !
+    _UTUI-MC-HEAD          _UCTX-VARS 29 CELLS + !
+    _UTUI-MC-COUNT         _UCTX-VARS 30 CELLS + ! ;
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
@@ -6262,6 +6310,18 @@ VARIABLE _UTUI-CG-I-RIGHT
         _UTUI-CG-CLIP-RIGHT !
     -1 ;
 
+\ A visible clip that foreground paint meets is clipped away completely.
+: _UTUI-CG-OCCLUDE  ( -- )
+    _UTUI-CG-CLIP-BOTTOM @ _UTUI-CG-CLIP-TOP @ > 0= IF EXIT THEN
+    _UTUI-CG-CLIP-RIGHT @ _UTUI-CG-CLIP-LEFT @ > 0= IF EXIT THEN
+    _UTUI-CG-CLIP-TOP @ _UTUI-CG-CLIP-LEFT @
+    _UTUI-CG-CLIP-BOTTOM @ _UTUI-CG-CLIP-TOP @ -
+    _UTUI-CG-CLIP-RIGHT @ _UTUI-CG-CLIP-LEFT @ -
+    SCR-OCCLUSION-RECT? AND IF
+        _UTUI-CG-CLIP-TOP @ _UTUI-CG-CLIP-BOTTOM !
+        _UTUI-CG-CLIP-LEFT @ _UTUI-CG-CLIP-RIGHT !
+    THEN ;
+
 \ Return the complete canonical widget origin/extent separately from its
 \ exact region-ancestry clip.  The source record contributes semantic UIDL
 \ clipping; no physical screen size, renderer allocation, or reflow enters
@@ -6306,6 +6366,7 @@ VARIABLE _UTUI-CG-I-RIGHT
     _UTUI-CG-SOURCE-A @ 16 + @
     _UTUI-CG-SOURCE-A @ 24 + @
         _UTUI-CG-INTERSECT? 0= IF _UTUI-CG-FAIL EXIT THEN
+    _UTUI-CAPTURE-OCCLUDED @ IF _UTUI-CG-OCCLUDE THEN
 
     _UTUI-CG-ORIGIN-ROW @ _UTUI-CG-ORIGIN-COL @
     _UTUI-CG-EXTENT-H @ _UTUI-CG-EXTENT-W @
