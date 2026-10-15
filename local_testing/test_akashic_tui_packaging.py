@@ -1988,6 +1988,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/rich-terminal/fdc1.f",
         "tui/rich-terminal/dlg1.f",
         "tui/field-content.f",
+        "tui/dialog-content.f",
         "tui/uidl-field-snapshot.f",
         "tui/rich-terminal/engine-apt1.f",
         "tui/rich-terminal/screen-adapter-apt1.f",

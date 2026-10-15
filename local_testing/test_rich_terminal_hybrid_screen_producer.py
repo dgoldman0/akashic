@@ -3874,10 +3874,16 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE",
                  "LANE-FAILED", "GLYPH-DRAW", "GLYPH-CLAIMS-A", "GLYPH-CLAIMS-U",
                  "GLYPH-CLAIMS-USED", "GLYPH-MENUS", "GLYPH-FIRST", "GLYPH-LIMIT",
-                 "GLYPH-COLS", "GLYPH-ROWS", "GLYPH-RUNS", "GLYPH-TEXT"):
+                 "GLYPH-COLS", "GLYPH-ROWS", "GLYPH-RUNS", "GLYPH-TEXT",
+                 "MAX-DIALOG-NATIVE", "MAX-DIALOGS", "MAX-DIALOG-CONTROLS",
+                 "DIALOG-DESCRIPTORS-A", "DIALOG-DESCRIPTORS-U",
+                 "DIALOG-DESCRIPTORS-USED", "DIALOG-NATIVE-A", "DIALOG-NATIVE-U",
+                 "DIALOG-NATIVE-USED", "DIALOG-COUNT", "DIALOG-CONTROLS",
+                 "DIALOG-BASE-CONTROLS", "DIALOG-BASE-TEXT", "DIALOG-BASE-CLAIMS",
+                 "DIALOG-REFUSED", "DIALOG-UTF8"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4856
+    assert _constant(source, "RTHP-SIZE") == expected == 4984
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -4003,8 +4009,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
 
     assert (
         "max-documents max-records max-source-text max-collection-native "
-        "max-data-graphics-native max-status-native max-field-native max-pictures "
-        "max-cols max-rows"
+        "max-data-graphics-native max-status-native max-field-native "
+        "max-dialog-native max-pictures max-cols max-rows"
     ) in storage
     assert "_RTHP-B-DOCUMENTS" in storage
     assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
@@ -4808,7 +4814,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "max-collection-native max-data-graphics-native max-cols max-rows"
     )
     status_args = public_args.replace(
-        "max-cols", "max-status-native max-field-native max-pictures max-cols")
+        "max-cols",
+        "max-status-native max-field-native max-dialog-native max-pictures max-cols")
     assert status_args in storage
     assert status_args in " ".join(init.replace("\\", " ").split())
     assert storage.index("_RTHP-B-DGRAPH-NATIVE !") < storage.index(
@@ -4991,7 +4998,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         )
     assert "_RTHP-BUILD-INSTRUMENTS" not in menu_retry
     assert source.count("_RTHP-BUILD-INSTRUMENTS") == 2
-    assert source.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 4
+    assert source.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 5
 
     # Opaque provider CAPACITY/UNAVAILABLE strips status first, then explores
     # collection/instrument combinations. Every reconstruction may reintroduce
@@ -5004,8 +5011,10 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     provider_refusals = candidate[candidate.index("_RTHP-W-ADMIT") :]
     assert provider_refusals.count(
         "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR"
-    ) == 9
+    ) == 11
     assert "_RTHP-W-REBUILD-WITHOUT-FIELDS" in provider_refusals
+    assert provider_refusals.index("_RTHP-W-REBUILD-WITHOUT-DIALOGS") < (
+        provider_refusals.index("_RTHP-W-REBUILD-WITHOUT-FIELDS"))
     assert "_RTHP-W-STRIP-COLLECTIONS?" in menu_retry
     assert "RTE-CONTROL-PREFLIGHT" not in menu_retry
     menu_retry_order = (
@@ -6312,8 +6321,11 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 344
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 368
     assert _offset(source, "_RTHP-TB.PICTURE-EPOCH") == 336
+    assert _offset(source, "_RTHP-TB.DIALOG-CONTROLS") == 344
+    assert _offset(source, "_RTHP-TB.DIALOG-COUNT") == 352
+    assert _offset(source, "_RTHP-TB.DIALOG-UTF8") == 360
     assert _offset(source, "_RTHP-TB.STATIC-COUNT") == 224
     assert _offset(source, "_RTHP-TB.STATIC-TEXT-BYTES") == 232
     assert _offset(source, "_RTHP-TB.INSTRUMENT-REGION-COUNT") == 176

@@ -9,19 +9,20 @@ CELL drawing remains the fallback and does not depend on negotiation.
 ## Composition and bounds
 
 The constructors take `max-status-native` immediately after
-`max-data-graphics-native` (and before `max-field-native` and
-`max-pictures`):
+`max-data-graphics-native` (and before `max-field-native`,
+`max-dialog-native` and `max-pictures`):
 
 ```forth
 RTHP-STORAGE-BYTES
   ( max-documents max-records max-source-text max-collection-native
     max-data-graphics-native max-status-native max-field-native
-    max-pictures max-cols max-rows -- bytes|0 )
+    max-dialog-native max-pictures max-cols max-rows -- bytes|0 )
 
 RTHP-INIT
   ( adapter facade arena-a arena-u max-documents max-records max-source-text
     max-collection-native max-data-graphics-native max-status-native
-    max-field-native max-pictures max-cols max-rows owner owner-generation
+    max-field-native max-dialog-native max-pictures max-cols max-rows
+    owner owner-generation
     region first-object first-series producer -- scb-status )
 ```
 

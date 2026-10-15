@@ -51,7 +51,7 @@ class FieldHarness(StatusHarness):
     def setup(self, *, field_native=1024, row=3, col=2, clip=None, source=1, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
         size, = self.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512,
-                             field_native, 0, 32, 8)
+                             field_native, 0, 0, 32, 8)
         assert size
         self.arena_size = size
         self.arena = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
@@ -93,6 +93,11 @@ class FieldHarness(StatusHarness):
         return self.results("_RTHP-BUILD-FIELDS", self.producer)
 
     def fixed(self):
+        # The pipeline's dialog lane follows the fields; with no dialog it
+        # begins and ends where the fields end.
+        for lane, end in (("CONTROLS", "CONTROL-COUNT"), ("TEXT", "SOURCE-TEXT-USED"),
+                          ("CLAIMS", "CLAIMS-USED")):
+            self.field(self.producer, "_RTHP.DIALOG-BASE-" + lane, self.get(end))
         self.field(self.producer, "_RTHP.BASE-CLAIMS-USED", self.get("CLAIMS-USED"))
         return self.call("_RTHP-FIELDS-FIXED?", self.producer)
 
@@ -199,8 +204,8 @@ def test_invalid_native_field_is_invalid_not_optional_refusal(h):
 
 
 def test_field_storage_admits_no_field_bank_and_rejects_a_partial_record(h):
-    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,0,0,32,8)[0] > 0
-    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,193,0,32,8)==(0,)
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,0,0,0,32,8)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,193,0,0,32,8)==(0,)
 
 
 @pytest.mark.parametrize("feature,short", ((False,False),(True,False),(True,True)))
@@ -409,7 +414,7 @@ def test_full_producer_dependency_closure_compiles_in_native_runtime():
     from test_field_model import field_runtime
     runtime=field_runtime(("tui/rich-terminal/hybrid-screen-producer.f",))
     runtime.evaluate(b"RTHP-SIZE _RTHP-TARGET-BANK-HEADER-SIZE _RTHP-TARGET-ENTRY-SIZE",source_name="field-producer-abi")
-    assert runtime.main_context.data.snapshot()==(4856,344,48)
+    assert runtime.main_context.data.snapshot()==(4984,368,48)
     assert runtime.main_context.returns.snapshot()==()
 
 

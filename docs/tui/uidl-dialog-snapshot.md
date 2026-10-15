@@ -25,7 +25,7 @@ The descriptor is 64 bytes of native cells:
 
 | Offset | Field |
 |---:|---|
-| 0 | Source: `UDLSN-SOURCE-OVERLAY = 1` |
+| 0 | Source: `UDLSN-SOURCE-OVERLAY = 3`, apart from the field sources |
 | 8 | The dialog's instance, its identity while it lives |
 | 16 | Native offset in the document's native bank, zero |
 | 24 | Root row on the screen |

@@ -36,7 +36,9 @@ REQUIRE ../utils/memory-span.f
 : UDLSN-STATUS-VALID?  ( status -- flag )  4 U< ;
 
 \ The document's dialog, drawn over it after everything else it paints.
-1 CONSTANT UDLSN-SOURCE-OVERLAY
+\ The value is apart from the field sources, UIDL 1 and the overlay prompt
+\ 2, so a dialog's controls never share a correlation with a field's.
+3 CONSTANT UDLSN-SOURCE-OVERLAY
 
 \ Descriptor fields are native cells and contain no pointer.
 \
