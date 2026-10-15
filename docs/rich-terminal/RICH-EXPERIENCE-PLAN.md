@@ -591,7 +591,20 @@ shows, and with dialogs the shell candidate shows it as a `DIALOG` with the
 beneath it. In the physical viewer Desk with Daybook shows the reminder as
 a neutral notice, and Desk with File Explorer warns that a path typed into
 Go to was not found. Without dialogs, and for an application run without
-Desk, a notice is still paint. Toggles, choices and ranges come next.
+Desk, a notice is still paint. A review of the dialogs found four faults,
+now fixed: a dialog too short for any message row counted its message read;
+a Desk shutdown that applications deferred to their questions stopped once
+they agreed, and now goes on; the reference renderer started right-to-left
+dialog text and button labels at the left; and a wheel over a dialog went
+nowhere in the physical viewer, where a dialog that is not a notice now
+takes `SCROLL`. Toggles have begun: a UIDL menu item can be checked, every
+CELL menu keeps a two-cell mark column for it, and the menu snapshot carries
+it as `CHECKED`. The applications' checked items come next.
+
+Before part 5 closes, the full Desktop journey also requires the launcher's
+whole-screen modal scope, not only its selection; File Explorer's journey
+completes a rename rather than cancelling it; and the Agent's journey
+scrolls its approval review with the wheel.
 
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
 toggle, selector and range elements in documents that use them.
