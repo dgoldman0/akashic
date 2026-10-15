@@ -1048,6 +1048,9 @@ class FexpAloneJourney(_AppletJourney):
         # Whether a scroll step has shown the document's figure partly
         # scrolled out.
         self._figure_clipped = False
+        # Whether a frame has shown File Explorer's warning.  It lasts two
+        # seconds, so the input after it may be retried once it is gone.
+        self._warned = False
         # The upload check's step: pending, sent, answered, shown, or None
         # when there is none or it is over.
         self._probe = "pending" if paced_link else None
@@ -1757,10 +1760,12 @@ class FexpAloneJourney(_AppletJourney):
             if self.stage == self.DELETE_CANCELLED:
                 return self._step("fexp-delete-cancelled", "send_key", "ctrl+g",
                                   self.GOTO_PROMPT, offer, generation, sender)
-            notice = _notice_claim(projection, FEXP_GOTO_NOTICE)
-            if notice is None:
-                return self._wait(f"File Explorer's warning {FEXP_GOTO_NOTICE!r}")
-            _require_notice(offer, notice, StatusSeverity.WARNING)
+            if not self._warned:
+                notice = _notice_claim(projection, FEXP_GOTO_NOTICE)
+                if notice is None:
+                    return self._wait(f"File Explorer's warning {FEXP_GOTO_NOTICE!r}")
+                _require_notice(offer, notice, StatusSeverity.WARNING)
+                self._warned = True
             row = table.named(FEXPLORER_PICTURE)
             if row is None:
                 raise PhysicalDesktopAcceptanceError(

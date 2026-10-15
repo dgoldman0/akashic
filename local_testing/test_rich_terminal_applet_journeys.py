@@ -1717,6 +1717,29 @@ def test_fexp_alone_cancels_its_rename_prompt_and_its_delete_question() -> None:
     assert journey.stage == FexpAloneJourney.PICTURE_SELECTED
 
 
+def test_fexp_alone_retries_its_step_after_a_warning_that_has_ended() -> None:
+    """The warning lasts two seconds: input refused for backpressure is sent
+    again on a later frame, once the warning has gone."""
+
+    journey = FexpAloneJourney(FEXP_READY)
+    journey.stage = FexpAloneJourney.GOTO_WARNED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    statuses = iter(("backpressured", "progress"))
+    sent = []
+
+    def sender(method, value, *_):
+        sent.append((method, value))
+        return next(statuses)
+
+    offer = replace(_notice_offer("Path not found"), offer_id=1)
+    journey.after_present(offer, 9, _fexp_frame(warned=True), sender)
+    assert journey.stage == FexpAloneJourney.GOTO_WARNED
+    offer = replace(_cell_offer(1, ()), offer_id=2)
+    journey.after_present(offer, 9, _fexp_frame(), sender)
+    assert sent == [("item_select", f"1,1,{TABLE_ID},2")] * 2
+    assert journey.stage == FexpAloneJourney.PICTURE_SELECTED
+
+
 def test_fexp_alone_refuses_a_rename_that_held_the_wrong_span_or_left_the_table_active() -> None:
     def sender(*_args):
         raise AssertionError("no input may be sent")
