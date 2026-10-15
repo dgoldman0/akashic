@@ -141,8 +141,10 @@ TSC-F-HAS       CONSTANT _UTUI-SCF-HAS
 TSC-F-VISIBLE   CONSTANT _UTUI-SCF-VIS
 TSC-F-FOCUSABLE CONSTANT _UTUI-SCF-FOC
 TSC-F-HIDE      CONSTANT _UTUI-SCF-HIDE
+TSC-F-MARK      CONSTANT _UTUI-SCF-MARK
 
 1 CONSTANT _UTUI-RUNTIME-F-HIDDEN
+2 CONSTANT _UTUI-RUNTIME-F-CHECKED
 
 \ Layout owns HAS/VIS but must not erase durable style/focus state while it
 \ assigns a child's rectangle.  Runtime show/hide lives in AUX6 and therefore
@@ -1185,9 +1187,24 @@ VARIABLE _UTUI-MENU-SAVED-FOC  \ focus before menu opened
 \  admitted visible descendants without re-deferring nested nodes.
 
 VARIABLE _UMD-COL      \ dropdown left column
-VARIABLE _UMD-MAXW     \ widest item text, in cells
+VARIABLE _UMD-MAXW     \ widest row: mark column and item text, in cells
+VARIABLE _UMD-MARK     \ mark column, in cells: 2 with a checkable item, else 0
 VARIABLE _UMD-ICNT     \ item count
 VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
+
+\ A menu item is checkable when it carries a checked attribute, whose value
+\ seeds the item's state when its document loads.  The state itself is the
+\ runtime CHECKED bit that UTUI-CHECKED! changes, so checking an item never
+\ copies text into UIDL's string pool.
+: _UTUI-CHECKABLE?  ( elem -- flag )
+    DUP UIDL-TYPE UIDL-T-ITEM <> IF DROP 0 EXIT THEN
+    S" checked" UIDL-ATTR NIP NIP ;
+
+: _UTUI-CHECKED?  ( elem -- flag )
+    DUP _UTUI-SIDECAR _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-CHECKED AND 0= IF
+        DROP 0 EXIT
+    THEN
+    _UTUI-CHECKABLE? ;
 
 \ Menu rows follow the same semantic/layout admission rule as ordinary flow.
 \ Only items and separators are valid rows; when=false, display:none, and
@@ -1224,9 +1241,11 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
     TSC-F-HIDDEN _UTUI-SCF-HIDE OR AND IF DROP 0 EXIT THEN
     _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-HIDDEN AND 0= ;
 
-\ Measure admitted items and find the widest text= label.
+\ Measure admitted items and find the widest text= label.  A menu with an
+\ admitted checkable item gives every row a mark column, so the labels stay
+\ aligned whichever items are checked.
 : _UTUI-MENU-MEASURE  ( menu-elem -- )
-    0 _UMD-MAXW !   0 _UMD-ICNT !
+    0 _UMD-MAXW !   0 _UMD-MARK !   0 _UMD-ICNT !
     UIDL-FIRST-CHILD
     BEGIN DUP 0<> WHILE
         DUP _UTUI-MENU-ROW? IF
@@ -1235,10 +1254,12 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
                 DUP S" text" UIDL-ATTR IF
                     CW-SWIDTH _UMD-MAXW @ MAX _UMD-MAXW !
                 ELSE 2DROP THEN
+                DUP _UTUI-CHECKABLE? IF 2 _UMD-MARK ! THEN
             THEN
         THEN
         UIDL-NEXT-SIB
-    REPEAT DROP ;
+    REPEAT DROP
+    _UMD-MARK @ _UMD-MAXW +! ;
 
 \ Render <menu>: draw border box when this menu is the open dropdown.
 \ Geometry already covers the dropdown area (set by _UTUI-MENU-OPEN!).
@@ -1251,7 +1272,8 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
     \ Draw single-line border
     BOX-SINGLE _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @ BOX-DRAW ;
 
-\ Render <item>: self-rendering — bg fill + text + reverse highlight
+\ Render <item>: self-rendering — bg fill + text + reverse highlight.  A row
+\ with a mark column shows a check mark there when its item is checked.
 : _UTUI-RENDER-ITEM  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     \ Highlight if this item is focused
@@ -1259,8 +1281,15 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
         _DRW-ATTRS @ CELL-A-REVERSE OR _DRW-ATTRS !
     THEN
     _UTUI-FILL-BG
+    _UR-COL @ 1+ _UR-TMP !
+    DUP _UTUI-SIDECAR _UTUI-SC-FLAGS@ _UTUI-SCF-MARK AND IF
+        DUP _UTUI-CHECKED? IF
+            10003 _UR-ROW @ _UR-TMP @ DRW-CHAR      \ U+2713 CHECK MARK
+        THEN
+        2 _UR-TMP +!
+    THEN
     DUP S" text" UIDL-ATTR IF
-        _UR-ROW @ _UR-COL @ 1+ DRW-TEXT
+        _UR-ROW @ _UR-TMP @ DRW-TEXT
     ELSE 2DROP THEN
     DROP ;
 
@@ -2094,6 +2123,7 @@ VARIABLE _UL-CW   \ child width for flex
             THEN
             DUP _UTUI-SIDECAR         ( ... child sc )
             _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+            _UMD-MARK @ IF _UTUI-SCF-MARK OR THEN
                 OVER _UTUI-SC-LAYOUT-FLAGS!
             _UMD-ROW @ 3 PICK 1+ +
                 OVER _UTUI-SC-ROW!     \ row = dropdown_top+1+idx
@@ -4139,6 +4169,31 @@ VARIABLE _USA-VL
     _USA-ELEM @ UIDL-PARENT ?DUP IF UIDL-TYPE UIDL-T-DIALOG = OR THEN
     IF 1 _UTUI-DLG-REVISION +! THEN ;
 
+\ UTUI-CHECKED? ( elem -- flag )
+\   Whether elem is a checkable menu item that is checked.
+: UTUI-CHECKED?  ( elem -- flag )
+    DUP UIDL-ELEM-INDEX? NIP 0= IF DROP 0 EXIT THEN
+    _UTUI-CHECKED? ;
+
+\ UTUI-CHECKED! ( flag elem -- )
+\   Check or uncheck a checkable menu item, which repaints when its state
+\   changes.  Any other element is left as it is.
+VARIABLE _UCK-ELEM
+
+: UTUI-CHECKED!  ( flag elem -- )
+    DUP UIDL-ELEM-INDEX? NIP 0= IF 2DROP EXIT THEN
+    DUP _UTUI-CHECKABLE? 0= IF 2DROP EXIT THEN
+    _UCK-ELEM !
+    _UCK-ELEM @ _UTUI-SIDECAR _UTUI-SC-RUNTIME@      ( flag old )
+    DUP ROT IF
+        _UTUI-RUNTIME-F-CHECKED OR
+    ELSE
+        _UTUI-RUNTIME-F-CHECKED INVERT AND
+    THEN                                             ( old new )
+    TUCK = IF DROP EXIT THEN                         ( new )
+    _UCK-ELEM @ _UTUI-SIDECAR _UTUI-SC-RUNTIME!
+    _UCK-ELEM @ UIDL-DIRTY! ;
+
 \ =====================================================================
 \  §17a — Automatic mounted canonical-widget relations
 \ =====================================================================
@@ -5435,6 +5490,21 @@ VARIABLE _UTUI-WS-OLD-OWNER
     DUP _UTUI-STATE !
     ST-USE ;
 
+\ Seed each checkable menu item's state from its authored checked value.
+: _UTUI-SEED-CHECKED  ( -- )
+    _UDL-ECNT @ 0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ UIDL-T-ITEM = IF
+            DUP S" checked" UIDL-ATTR IF
+                S" true" STR-STR= IF
+                    DUP _UTUI-SIDECAR DUP _UTUI-SC-RUNTIME@
+                    _UTUI-RUNTIME-F-CHECKED OR SWAP _UTUI-SC-RUNTIME!
+                THEN
+            ELSE 2DROP THEN
+        THEN
+        DROP
+    LOOP ;
+
 : UTUI-LOAD  ( xml-a xml-u rgn -- flag )
     _UTUI-MENU-STATE-CLEAR
     _UTUI-RGN !
@@ -5450,6 +5520,7 @@ VARIABLE _UTUI-WS-OLD-OWNER
 
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
+    _UTUI-SEED-CHECKED
 
     UTUI-RELAYOUT
     _UTUI-MATERIALIZE
@@ -7890,6 +7961,8 @@ GUARD _utui-guard
 ' UTUI-ADD-ELEM       CONSTANT _utui-add-elem-xt
 ' UTUI-REMOVE-ELEM    CONSTANT _utui-remove-elem-xt
 ' UTUI-SET-ATTR       CONSTANT _utui-set-attr-xt
+' UTUI-CHECKED!       CONSTANT _utui-checked-s-xt
+' UTUI-CHECKED?       CONSTANT _utui-checked-q-xt
 ' UTUI-WIDGET-SET     CONSTANT _utui-widget-set-xt
 ' UTUI-ELEM-RGN       CONSTANT _utui-elem-rgn-xt
 ' UTUI-ELEM-RESOLVED-STATE@
@@ -7928,6 +8001,8 @@ GUARD _utui-guard
 : UTUI-ADD-ELEM       _utui-add-elem-xt       _utui-guard WITH-GUARD ;
 : UTUI-REMOVE-ELEM    _utui-remove-elem-xt    _utui-guard WITH-GUARD ;
 : UTUI-SET-ATTR       _utui-set-attr-xt       _utui-guard WITH-GUARD ;
+: UTUI-CHECKED!       _utui-checked-s-xt      _utui-guard WITH-GUARD ;
+: UTUI-CHECKED?       _utui-checked-q-xt      _utui-guard WITH-GUARD ;
 : UTUI-WIDGET-SET     _utui-widget-set-xt     _utui-guard WITH-GUARD ;
 : UTUI-ELEM-RGN       _utui-elem-rgn-xt       _utui-guard WITH-GUARD ;
 

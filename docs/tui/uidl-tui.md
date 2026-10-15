@@ -45,6 +45,7 @@ REQUIRE tui/uidl-tui.f
 - [Actions & Shortcuts](#actions--shortcuts)
 - [Dynamic DOM Mutation](#dynamic-dom-mutation)
 - [Attribute Mutation](#attribute-mutation)
+- [Checked Menu Items](#checked-menu-items)
 - [Widget Attachment](#widget-attachment)
 - [Element Region Accessor](#element-region-accessor)
 - [Automatic Dirty Propagation](#automatic-dirty-propagation)
@@ -96,7 +97,7 @@ Each sidecar is 96 bytes (12 cells), stored in the parallel array
 | +64 | `offsets` | packed | top(16s), right(16s), bottom(16s), left(16s) |
 | +72 | `margin` | packed | MT(8), MR(8), MB(8), ML(8) in bits 0-31 |
 | +80 | `wowner` | enum | 0 = UIDL-owned allocation, 1 = caller-owned attachment |
-| +88 | `runtime` | bitfield | UIDL-TUI runtime state; bit 0 persistently suppresses paint without changing layout participation |
+| +88 | `runtime` | bitfield | UIDL-TUI runtime state; bit 0 persistently suppresses paint without changing layout participation, and bit 1 is a checkable menu item's checked state |
 
 ### Sidecar Flag Bits
 
@@ -106,6 +107,7 @@ Each sidecar is 96 bytes (12 cells), stored in the parallel array
 | `_UTUI-SCF-VIS` | 2 | Visible |
 | `_UTUI-SCF-FOC` | 4 | Focused |
 | `_UTUI-SCF-HIDE` | 128 | display:none |
+| `_UTUI-SCF-MARK` | 256 | Menu row keeps a check-mark column |
 
 ### Element → Sidecar Mapping
 
@@ -506,7 +508,9 @@ relayout uses this order:
 6. Final open-menu overlay geometry, admitted row placement, and effective
    z-index. Items and separators may occupy rows; only items enter keyboard
    navigation. `when=false`, `display:none`, positioned, and unsupported
-   children gain neither dropdown rows nor visibility.
+   children gain neither dropdown rows nor visibility. A menu with an
+   admitted checkable item gives every row a two-cell mark column before
+   its text, so the labels stay aligned whichever items are checked.
 7. Projection geometry notification
 
 The projection callback therefore never observes a mixture of new flow
@@ -937,6 +941,38 @@ S" title" UTUI-BY-ID  S" text" S" Hello World"  UTUI-SET-ATTR
 
 This is the Forth equivalent of JavaScript's `element.setAttribute()`
 — it modifies the DOM and the engine notices.
+
+---
+
+## Checked Menu Items
+
+A menu `<item>` with a `checked` attribute is checkable, and the attribute's
+value seeds its state when `UTUI-LOAD` loads the document: `checked=true`
+starts checked, any other value unchecked. The state itself is the item's
+runtime checked bit. The application owns what an item means, so activating
+a checkable item changes nothing by itself: the item's action sets the state
+it stands for.
+
+```xml
+<item id="view-hidden" text="Show Hidden Files" do="toggle-hidden" checked="false"/>
+```
+
+CELL draws a checked item's check mark (U+2713) in its menu's mark column. A
+menu snapshot carries the state as `UMSN-F-CHECKED`, and the retained menu
+item as `RTE-CONTROL-CHECKED`.
+
+### UTUI-CHECKED! — `( flag elem -- )`
+
+Check or uncheck a checkable menu item. The item repaints when its state
+changes. Any other element is left as it is. Checking writes no attribute, so
+it never uses UIDL's string pool.
+
+### UTUI-CHECKED? — `( elem -- flag )`
+
+Whether `elem` is a checkable menu item that is checked.
+
+An item `UTUI-ADD-ELEM` adds after the document loads starts unchecked; give
+it a `checked` attribute and then set its state with `UTUI-CHECKED!`.
 
 ---
 
