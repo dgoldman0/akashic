@@ -4041,6 +4041,25 @@ def test_final_cell_markers_require_the_acknowledged_daybook_date() -> None:
         _ = journey.final_cell_markers
 
 
+def test_escape_is_a_plain_key_where_no_pad_menu_forest_shows() -> None:
+    # Desk holding another applet alone shows no Pad menu; Escape there, as
+    # in a prompt, is an ordinary key with no menu evidence.
+    offer = _offer("READY", offer_id=3)
+    assert not acceptance_runner._shows_pad_menu_forest(offer)
+    state, display_ack = _acknowledged_hit_state(offer)
+
+    class Client:
+        def request(self, method, **params):
+            assert (method, params["key"]) == ("send_key", "escape")
+            return {"status": "progress", "accepted_events": 1}
+
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(), "send_key", "escape", offer, 9,
+        display_state=state, display_ack=display_ack,
+    )
+    assert status == "progress" and evidence.semantic_target is None
+
+
 def test_open_pad_file_requires_normal_uidl_selection_state() -> None:
     offer = _offer("READY", offer_id=3, pad_menu=True, file_open=True)
     assert acceptance_runner._pad_file_menu_is_open(offer)

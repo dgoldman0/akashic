@@ -5540,6 +5540,19 @@ def _pad_file_menu(
     return matches[0]
 
 
+def _shows_pad_menu_forest(offer: TerminalDisplayOffer) -> bool:
+    """Whether the retained frame carries Pad's menu forest at all; Desk
+    holding another applet alone shows none."""
+
+    plane = offer.retained
+    return plane is not None and any(
+        isinstance(draw, MenuBarDraw)
+        and tuple(menu.label for menu in draw.menus) == PAD_MENU_SIGNATURE
+        for region in plane.regions
+        for draw in region.draws
+    )
+
+
 def _pad_file_menu_is_open(offer: TerminalDisplayOffer) -> bool:
     _region, menu_bar, menu = _pad_file_menu(offer)
     root_state = menu_bar.state
@@ -6889,7 +6902,11 @@ def _request_acceptance_input(
     evidence_value = value
     semantic_target = None
     if method == "send_key":
-        if value == "escape" and _pad_file_menu_is_open(offer):
+        if (
+            value == "escape"
+            and _shows_pad_menu_forest(offer)
+            and _pad_file_menu_is_open(offer)
+        ):
             popup_targets = _require_pad_file_popup_hits(
                 offer,
                 display_state,
