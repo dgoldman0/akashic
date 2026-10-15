@@ -575,7 +575,13 @@ taskbar show inactive while it is open; in the physical viewer Desk with
 File Explorer opens its launcher that way. A screen that crosses the
 divider between two tiles still goes out without the shell, because the
 planner keeps a pane's chrome from lying under an overlay. The Agent's
-approval buttons come next.
+approval review asks in the shared dialog: its message, the request's
+paragraphs broken by the shared line rule as untrusted text, scrolls, and
+Approve once (F6) is a read-first button that cannot be chosen until a
+paint has shown the last line, beside Deny (F7), the default and cancel
+button. In the physical viewer Desk with the Agent approves a request
+through the Approve once button, with the Agent's menu inactive beneath
+the dialog. Notices come next.
 
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
 toggle, selector and range elements in documents that use them.
