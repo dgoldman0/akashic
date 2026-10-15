@@ -19,10 +19,10 @@
 <item text=Clear_credential do=clear-credential key=Ctrl+Shift+K/>
 </menu>
 <menu label=Access>
-<item text=Chat do=access-chat/>
-<item text=Read-only do=access-read/>
-<item text=Assist do=access-assist/>
-<item text=Library-Burrow do=access-library-burrow/>
+<item id=access-chat text=Chat do=access-chat/>
+<item id=access-read text=Read-only do=access-read/>
+<item id=access-assist text=Assist do=access-assist/>
+<item id=access-library-burrow text=Library-Burrow do=access-library-burrow/>
 </menu>
 <menu label=Review>
 <item text=Approve do=approve key=F6/>

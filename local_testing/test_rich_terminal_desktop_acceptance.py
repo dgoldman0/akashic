@@ -1935,8 +1935,10 @@ def _ordinary_menus_offer(
     *,
     focus_marker: str,
     open_key: str | None = None,
+    checked: frozenset[str] | None = None,
 ) -> TerminalDisplayOffer:
-    """Model canonical 280x84 File Explorer and Daybook menu bars in tiles."""
+    """Model canonical 280x84 File Explorer and Daybook menu bars in tiles,
+    the open popup checking CHECKED, by default the capture's own."""
 
     cols = acceptance_runner.CANONICAL_DESKTOP_COLS
     rows = acceptance_runner.CANONICAL_DESKTOP_ROWS
@@ -1967,7 +1969,13 @@ def _ordinary_menus_offer(
                     if entry is None
                     else MenuItemDraw(
                         control_id + 1 + index,
-                        ordinary,
+                        ordinary | (
+                            ControlState.CHECKED
+                            if entry[0] in (
+                                capture.checked if checked is None else checked
+                            )
+                            else 0
+                        ),
                         index,
                         entry[0],
                         entry[1],
@@ -4563,6 +4571,20 @@ def test_manual_pointer_trace_names_offer_supersession_drop_reason(
     assert dropped["pending_before"] == 1
     assert dropped["pending_after"] == 0
     assert dropped["offer_id"] == 8
+
+
+def test_an_ordinary_popup_must_check_exactly_its_captures_items() -> None:
+    marker = acceptance_runner.FEXPLORER_FOCUS_MARKER
+    capture = acceptance_runner.ORDINARY_MENU_CAPTURES["fexplorer-view"]
+    assert capture.checked == frozenset({"Sort:_Name"})
+    opened = _ordinary_menus_offer(61, focus_marker=marker, open_key="fexplorer-view")
+    acceptance_runner._require_ordinary_menu_state(opened, capture, True)
+    for checked in (frozenset(), frozenset({"Sort:_Name", "Show_Hidden"})):
+        wrong = _ordinary_menus_offer(
+            61, focus_marker=marker, open_key="fexplorer-view", checked=checked,
+        )
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="popup checks"):
+            acceptance_runner._require_ordinary_menu_state(wrong, capture, True)
 
 
 def test_ordinary_menu_inputs_bind_exact_acknowledged_targets() -> None:

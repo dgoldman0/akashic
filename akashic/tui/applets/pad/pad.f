@@ -1663,6 +1663,13 @@ VARIABLE _PBUILD-DIAG-U
 
 : _PAD-OUTPUT-NUM  ( n -- ) NUM>STR _PAD-OUTPUT-APPEND ;
 
+\ The View menu checks the sidebar and the output panel while they show,
+\ and Show Hidden Files while hidden files show.
+: _PAD-VIEW-CHECKS  ( -- )
+    _PAD-SIDEBAR-VIS @ S" view-sidebar" UTUI-BY-ID UTUI-CHECKED!
+    _PAD-OUTPUT-VIS @ S" view-output" UTUI-BY-ID UTUI-CHECKED!
+    _PAD-SHOW-HIDDEN @ S" view-hidden" UTUI-BY-ID UTUI-CHECKED! ;
+
 : _PAD-OUTPUT-SHOW  ( -- )
     -1 _PAD-OUTPUT-VIS !
     _PAD-E-EO-SPLIT @ ?DUP IF S" ratio" S" 80" UTUI-SET-ATTR THEN
@@ -1670,6 +1677,7 @@ VARIABLE _PBUILD-DIAG-U
         >R _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @ R> TXTA-SET-TEXT
     THEN
     _PAD-E-OUTPUT @ ?DUP IF UIDL-DIRTY! THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 : _PAD-DIAG-RESET  ( -- )
@@ -2309,6 +2317,7 @@ VARIABLE _PPSUB-MODE
         -1 _PAD-SIDEBAR-VIS !
         _PAD-E-MAIN-SPLIT @ S" ratio" S" 20" UTUI-SET-ATTR
     THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 : _PAD-DO-TOGGLE-OUTPUT  ( elem -- )
@@ -2320,6 +2329,7 @@ VARIABLE _PPSUB-MODE
         -1 _PAD-OUTPUT-VIS !
         _PAD-E-EO-SPLIT @ S" ratio" S" 80" UTUI-SET-ATTR
     THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 : _PAD-DO-TOGGLE-HIDDEN  ( elem -- )
@@ -2329,6 +2339,7 @@ VARIABLE _PPSUB-MODE
         _PAD-SHOW-HIDDEN @ SWAP EXPL-SHOW-HIDDEN!
         _PAD-EXPL @ EXPL-REFRESH
     THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 \ =====================================================================
@@ -2605,6 +2616,7 @@ VARIABLE _PSW-BYTE
     _PAD-E-EDITOR-AREA @ ?DUP IF UTUI-FOCUS! THEN
 
     \ ---- Initial status ----
+    _PAD-VIEW-CHECKS
     _PAD-UPDATE-STATUS ;
 
 \ =====================================================================

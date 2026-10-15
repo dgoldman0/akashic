@@ -1298,14 +1298,25 @@ VARIABLE _FDEL-LISTED
 : _FEXP-DO-CUT        ( elem -- ) DROP FEXP-CLIP-CUT ;
 : _FEXP-DO-PASTE      ( elem -- ) DROP FEXP-CLIP-PASTE ;
 
+\ The View menu checks Show Hidden while hidden files show, and the sort in
+\ use.
+: _FEXP-VIEW-CHECKS  ( -- )
+    _FEXP-EXPL @ EXPL-SHOW-HIDDEN? S" view-hidden" UTUI-BY-ID UTUI-CHECKED!
+    _FEXP-SORT @ FEXP-SORT-NAME = S" view-sort-name" UTUI-BY-ID UTUI-CHECKED!
+    _FEXP-SORT @ FEXP-SORT-SIZE = S" view-sort-size" UTUI-BY-ID UTUI-CHECKED!
+    _FEXP-SORT @ FEXP-SORT-TYPE = S" view-sort-type" UTUI-BY-ID UTUI-CHECKED! ;
+
 : _FEXP-DO-TOGGLE-HIDDEN  ( elem -- )
     DROP
     _FEXP-EXPL @ DUP EXPL-SHOW-HIDDEN? 0= SWAP EXPL-SHOW-HIDDEN!
+    _FEXP-VIEW-CHECKS
     _FEXP-TREE-REFRESH _FEXP-REFRESH-DETAIL ;
 
-: _FEXP-DO-SORT-NAME  ( elem -- ) DROP FEXP-SORT-NAME _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
-: _FEXP-DO-SORT-SIZE  ( elem -- ) DROP FEXP-SORT-SIZE _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
-: _FEXP-DO-SORT-TYPE  ( elem -- ) DROP FEXP-SORT-TYPE _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
+: _FEXP-SORT-BY  ( mode -- )
+    _FEXP-SORT ! _FEXP-VIEW-CHECKS _FEXP-REFRESH-DETAIL ;
+: _FEXP-DO-SORT-NAME  ( elem -- ) DROP FEXP-SORT-NAME _FEXP-SORT-BY ;
+: _FEXP-DO-SORT-SIZE  ( elem -- ) DROP FEXP-SORT-SIZE _FEXP-SORT-BY ;
+: _FEXP-DO-SORT-TYPE  ( elem -- ) DROP FEXP-SORT-TYPE _FEXP-SORT-BY ;
 
 : _FEXP-DO-EXPAND-ALL  ( elem -- )
     DROP _FEXP-EXPL @ EXPL-EXPAND-ALL _FEXP-SIDEBAR-DIRTY ASHELL-DIRTY! ;
@@ -1518,6 +1529,7 @@ VARIABLE _FPR-LEN
     \ Populate initial directory listing
     _FEXP-SHOW-DIR
 
+    _FEXP-VIEW-CHECKS
     _FEXP-UPDATE-STATUS ;
 
 \ =====================================================================

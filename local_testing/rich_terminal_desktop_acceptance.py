@@ -6260,7 +6260,8 @@ def _require_pad_file_popup_hits(
 
 @dataclass(frozen=True)
 class _OrdinaryMenuCapture:
-    """One ordinary applet menu opened and closed after Sound Lab is live."""
+    """One ordinary applet menu opened and closed after Sound Lab is live,
+    and the labels of the items it shows checked."""
 
     key: str
     signature: tuple[str, ...]
@@ -6268,6 +6269,7 @@ class _OrdinaryMenuCapture:
     tile: int
     focus_marker: str
     entries: tuple[tuple[str, str] | None, ...]
+    checked: frozenset[str] = frozenset()
 
 
 ORDINARY_MENU_CAPTURES = {
@@ -6289,6 +6291,8 @@ ORDINARY_MENU_CAPTURES = {
                 ("Expand_All", ""),
                 ("Collapse_All", ""),
             ),
+            # File Explorer starts sorting by name, without hidden files.
+            frozenset({"Sort:_Name"}),
         ),
         _OrdinaryMenuCapture(
             "daybook-go",
@@ -6401,6 +6405,16 @@ def _require_ordinary_menu_state(
             raise PhysicalDesktopAcceptanceError(
                 f"{capture.key}: expected a visible enabled ordinary popup item"
             )
+    checked = frozenset(
+        entry.label
+        for entry in menu.entries
+        if isinstance(entry, MenuItemDraw) and entry.state & ControlState.CHECKED
+    )
+    if checked != capture.checked:
+        raise PhysicalDesktopAcceptanceError(
+            f"{capture.key}: popup checks {sorted(checked)!r}, "
+            f"not {sorted(capture.checked)!r}"
+        )
     return region, bar, menu
 
 
