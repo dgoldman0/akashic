@@ -57,13 +57,16 @@ FIELD lane stays refused throughout that candidate's later family retries.
 
 Packed acknowledgement banks own both the outer label and complete FDC1
 bytes. Packing and unchanged cloning rebase all pointers into their own
-banks. A change only to the SELECTED state bit uses one CONTROL-REPLACE while
-preserving the exact label, shortcut, FDC1 bytes, revision, geometry, and
-content accounting. This allows ordinary selection movement to retain an
-unchanged SERIES/WAVEFORM graph. Other FIELD state changes, or changes to
-label, value, revision, slots, membership, or identity, still require complete
-owner replacement. FIELD semantic content does not use the collection
-content-delta path.
+banks. A DELTA replaces a FIELD with one CONTROL-REPLACE when its label,
+shortcut, geometry and every state bit but SELECTED are unchanged, and its
+FDC1 bytes are either unchanged or carry a strictly newer revision. A change
+to SELECTED alone keeps the exact FDC1 bytes, revision and content
+accounting, so ordinary selection movement retains an unchanged
+SERIES/WAVEFORM graph; new content, such as the text a prompt's user types,
+replaces the field without replacing anything else. Other state changes,
+content whose revision is not newer, and changes to the label, membership or
+identity still require complete owner replacement. FIELD semantic content
+does not use the collection content-delta path.
 
 Return coordinates identify the first cell of the declared value rectangle,
 which may be offset within the root. Disabled and read-only fields produce

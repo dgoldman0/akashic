@@ -169,13 +169,32 @@ def test_selected_fields_reuse_full_history_through_delta_and_delayed_emit(mixed
     h.guards()
 
 
-@pytest.mark.parametrize("mutation",["revision","value","disabled","geometry"])
+def test_newer_field_content_replaces_the_field_and_keeps_history(mixed):
+    """A value published with a strictly newer revision, as a prompt's text
+    is with every key, is one CONTROL-REPLACE beside the selection change."""
+    h=mixed
+    control=h.results("_RTHP-D-CONTROL-AT",0,h.pending)[0]
+    content=h.runtime.memory.read64(control+152)
+    h.runtime.memory.write64(content+8,18)
+    h.runtime.memory.write64(content+56,8)
+    assert h.call("_RTHP-DELTA-CANDIDATE?",h.producer)
+    assert h.get("DELTA-PLAN-CONTROLS")==2 and h.get("DELTA-PLAN-GLYPHS")==0
+    assert h.call("_RTHP-D-PLAN-BIND?",h.producer)
+    assert h.results("_RTHP-EMIT-DELTA",h.producer)==(0,)
+    assert h.variable("FS-REPLACEMENTS")==2 and h.variable("FS-OTHER")==0
+    assert h.runtime.memory.read_bytes(h.active,len(h.active_bytes))==h.active_bytes
+    h.guards()
+
+
+@pytest.mark.parametrize("mutation",["value","stale","disabled","geometry"])
 def test_field_payload_or_nonselection_changes_still_refuse_history_delta(mixed,mutation):
     h=mixed
     control=h.results("_RTHP-D-CONTROL-AT",0,h.pending)[0]
     content=h.runtime.memory.read64(control+152)
-    if mutation=="revision":h.runtime.memory.write64(content+8,18)
-    elif mutation=="value":h.runtime.memory.write64(content+56,8)
+    if mutation=="value":h.runtime.memory.write64(content+56,8)
+    elif mutation=="stale":
+        h.runtime.memory.write64(content+8,16)
+        h.runtime.memory.write64(content+56,8)
     elif mutation=="disabled":h.runtime.memory.write64(control+32,1)
     else:h.runtime.memory.write64(control+80,1)
     before=h.runtime.memory.read_bytes(h.pending,h.bank_size)

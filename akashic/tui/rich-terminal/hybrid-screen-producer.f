@@ -11048,6 +11048,28 @@ VARIABLE _RTHP-D-REV-PENDING
         0= IF DROP 0 EXIT THEN _RTHP-D-REV-PENDING !
     _RTHP-D-REV-PENDING @ _RTHP-D-REV-ACTIVE @ U> ;
 
+\ FDC1 carries its field's own revision at offset 8, which the field's
+\ widget advances with every change it shows; no frame epoch bounds it.
+: _RTHP-D-FIELD-REVISION?  ( control bank -- revision flag )
+    _RTHP-D-REV-BANK ! _RTHP-D-REV-C !
+    _RTHP-D-REV-C @ _RTE-CONTROL.CONTENT-U @ DUP _RTHP-D-REV-U !
+    UFLDC-HEADER-SIZE U< IF 0 0 EXIT THEN
+    _RTHP-D-REV-C @ _RTE-CONTROL.CONTENT-A @ DUP _RTHP-D-REV-A !
+    _RTHP-D-REV-U @
+    _RTHP-D-REV-BANK @ _RTHP-D-SOURCE-A
+    _RTHP-D-REV-BANK @ _RTHP-TB.SOURCE-TEXT-USED @
+        _RTHP-TEXT-WITHIN? 0= IF 0 0 EXIT THEN
+    _RTHP-D-REV-A @ _RTHP-D-BYTE-LE32@ UFLDC-TAG <> IF 0 0 EXIT THEN
+    _RTHP-D-REV-A @ 8 + _RTHP-D-BYTE-LE64@ DUP 0= IF DROP 0 0 EXIT THEN
+    -1 ;
+
+: _RTHP-D-FIELD-NEWER?  ( -- flag )
+    _RTHP-D-ACTIVE-C @ _RTHP-D-ACTIVE @ _RTHP-D-FIELD-REVISION?
+        0= IF DROP 0 EXIT THEN _RTHP-D-REV-ACTIVE !
+    _RTHP-D-PENDING-C @ _RTHP-D-PENDING @ _RTHP-D-FIELD-REVISION?
+        0= IF DROP 0 EXIT THEN _RTHP-D-REV-PENDING !
+    _RTHP-D-REV-PENDING @ _RTHP-D-REV-ACTIVE @ U> ;
+
 \ True when both contents are valid and equal in every byte but the 8-byte
 \ revision that STX1, ITM1 and DOC1 all carry at offset 8 of their headers.
 \ Such a body is unchanged: it keeps the revision the terminal holds.
@@ -11107,17 +11129,26 @@ VARIABLE _RTHP-D-REV-PENDING
         -1 _RTHP-D-CHANGED !
     THEN
     _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = IF
-        \ Selection alone may use CONTROL-REPLACE while the exact owned
-        \ content/revision and geometry remain unchanged. Other state
-        \ changes still need a complete candidate replacement.
+        \ A field keeps its label and every state bit but SELECTED, and its
+        \ geometry is exact.  Its FDC1 content may change, as a prompt's
+        \ does with every key, when its revision is strictly newer: one
+        \ CONTROL-REPLACE carries it.  Any other change needs a complete
+        \ candidate replacement.
         _RTHP-D-ACTIVE-C @ _RTE-CONTROL.STATE @
         _RTHP-D-PENDING-C @ _RTE-CONTROL.STATE @ XOR
             RTE-CONTROL-SELECTED INVERT AND IF 0 EXIT THEN
         _RTHP-D-CONTROL-LABEL-EQUAL? 0= IF 0 EXIT THEN
         _RTHP-D-CONTROL-SHORTCUT-EQUAL? 0= IF 0 EXIT THEN
-        _RTHP-D-CONTROL-CONTENT-EQUAL? 0= IF 0 EXIT THEN
-        _RTHP-D-ACTIVE-C @ 168 + 32 _RTHP-D-PENDING-C @ 168 + 32
-            COMPARE IF 0 EXIT THEN
+        _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-RUNS 16
+            _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-RUNS 16 COMPARE IF 0 EXIT THEN
+        _RTHP-D-CONTROL-CONTENT-EQUAL? IF
+            _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-ITEMS 16
+                _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-ITEMS 16
+                COMPARE IF 0 EXIT THEN
+        ELSE
+            _RTHP-D-FIELD-NEWER? 0= IF 0 EXIT THEN
+            -1 _RTHP-D-CHANGED !
+        THEN
         _RTHP-D-CHANGED @ IF 1 _RTHP-D-OPS +! THEN -1 EXIT
     THEN
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.KIND @ DUP

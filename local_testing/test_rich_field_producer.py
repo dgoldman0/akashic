@@ -301,26 +301,43 @@ def test_packed_field_owns_label_content_and_target_revision(h):
     assert h.results("RTHP-CONTROL-TARGET@",1,2,100,11,h.producer)==(4,9,17,MASK64)
 
 
-@pytest.mark.parametrize("mutation",(None,"revision","value","selected","disabled","label","slot"))
-def test_only_field_selection_can_change_in_content_preserving_delta(h,mutation):
+# A DELTA keeps a field's label, geometry and state but for SELECTED.  Its
+# FDC1 content may change only with a strictly newer revision (17 to 18),
+# and then one CONTROL-REPLACE carries it.
+FIELD_DELTA_MUTATIONS = {
+    None: (True, 0),
+    "revision": (True, 1),
+    "value": (False, 0),
+    "newer-value": (True, 1),
+    "selected": (True, 1),
+    "disabled": (False, 0),
+    "label": (False, 0),
+    "slot": (False, 0),
+    "newer-slot": (True, 1),
+}
+
+
+@pytest.mark.parametrize("mutation",tuple(FIELD_DELTA_MUTATIONS))
+def test_field_delta_keeps_label_and_state_and_takes_only_newer_content(h,mutation):
     h.setup();assert h.build()==(0,)
     active=h.pack()
     assert h.call("_RTHP-STRIP-FIELDS?",h.producer)
     h.field(h.producer,"_RTHP.FIRST-OBJECT",200)
     assert h.build()==(0,)
     c=h.get("CONTROLS-A");a=h.runtime.memory.read64(c+152)
-    if mutation=="revision":h.runtime.memory.write64(a+8,18)
-    elif mutation=="value":h.runtime.memory.write64(a+56,8)
+    if mutation in ("revision","newer-value","newer-slot"):h.runtime.memory.write64(a+8,18)
+    if mutation in ("value","newer-value"):h.runtime.memory.write64(a+56,8)
     elif mutation=="selected":h.runtime.memory.write64(c+32,11)
     elif mutation=="disabled":h.runtime.memory.write64(c+32,1)
     elif mutation=="label":h.runtime.memory.write_bytes(h.runtime.memory.read64(c+120),b"Pace")
-    elif mutation=="slot":h.runtime.memory.write_bytes(a+40,struct.pack("<i",8))
+    elif mutation in ("slot","newer-slot"):h.runtime.memory.write_bytes(a+40,struct.pack("<i",8))
     pending=h.pack(index=1)
     for name,value in (("P",h.producer),("ACTIVE",active),("PENDING",pending),("PENDING-FIRST",200)):
         h.variable("_RTHP-D-"+name,value)
     h.runtime.memory.write64(h.get("ORDER2-A"),1)
-    assert h.call("_RTHP-D-CONTROL-COMPATIBLE?",0)==(mutation in (None,"selected"))
-    assert h.variable("_RTHP-D-OPS")==int(mutation=="selected")
+    compatible,ops=FIELD_DELTA_MUTATIONS[mutation]
+    assert h.call("_RTHP-D-CONTROL-COMPATIBLE?",0)==compatible
+    assert h.variable("_RTHP-D-OPS")==ops
     h.guards()
 
 
