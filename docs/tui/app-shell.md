@@ -121,12 +121,18 @@ limit the supported Desk child UCTX scope above.
 | `ASHELL-LOAD-UIDL` | `( path-a path-u rgn -- buf \| 0 )` | Open a file through the active VFS, read it through a 512-byte DMA-safe bounce buffer, and parse it as UIDL into `rgn`. Returns retained XMEM or 0. |
 | `ASHELL-FREE-UIDL-BUF` | `( buf -- )` | Release retained storage returned by `ASHELL-LOAD-UIDL`; 0 is a no-op. Callers do not depend on the shell's private allocation size. |
 
-### Toast
+### Notices
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `ASHELL-TOAST` | `( addr u ms -- )` | Show a toast message for *ms* milliseconds. Auto-dismisses. |
-| `ASHELL-TOAST-VISIBLE?` | `( -- flag )` | True if a toast is currently showing. |
+| `ASHELL-NOTICE` | `( addr u ms severity -- )` | Show a notice for *ms* milliseconds, with its meaning: `ASHELL-SEVERITY-NEUTRAL`, `-INFO`, `-SUCCESS`, `-WARNING` or `-ERROR`, 0 to 4, a status field's severities. Another value is neutral. The shell keeps its own copy of the text. |
+| `ASHELL-TOAST` | `( addr u ms -- )` | A neutral notice. |
+| `ASHELL-TOAST-WARNING` | `( addr u ms -- )` | A notice that warns. |
+| `ASHELL-TOAST-ERROR` | `( addr u ms -- )` | A notice that something failed. |
+| `ASHELL-TOAST-VISIBLE?` | `( -- flag )` | True while the notice raised last has not ended. |
+| `ASHELL-NOTICE-SHOWN?` | `( -- flag )` | Whether the paint shows a notice. |
+| `ASHELL-NOTICE-ROOT` | `( -- row col height width )` | The cells the paint's notice lies in; all zero when it shows none. |
+| `ASHELL-NOTICE-CAPTURE` | `( dst cap -- bytes status )` | The notice the paint shows, as a [UDLG model](dialog-model.md) at DST; with DST 0 and CAP 0 only measure it. |
 
 ### Deferred Actions
 
@@ -245,7 +251,7 @@ focus.  Desk's applet host routes hosted children in the same order.
 2. `UTUI-PAINT` — UIDL elements (if loaded)
 3. `APP.PAINT-XT` — app's custom widget drawing (on top of UIDL)
 3a. `DLG-HOST-PAINT` — a dialog the app shows, over everything it paints
-4. Toast overlay — `_ASHELL-DRAW-TOAST` (if visible)
+4. The notice — `_ASHELL-DRAW-TOAST` (if the paint shows one)
 5. Cursor overlay — `_ASHELL-DRAW-CURSOR` (save cell + draw glyph)
 6. `UTUI-DRAW-COMPLETE` — publish the direct UIDL projection after the complete draw (if UIDL is loaded)
 7. `SCR-DRAW-COMPLETE`, then `RGN-ROOT` — finish the CELL draw and reset the region
@@ -281,20 +287,49 @@ Instead, the framework detects changes automatically:
 This means: modify the DOM or widget state, and the framework repaints.
 No manual dirty signalling needed.
 
-## Toast Facility
+## Notices
 
-`ASHELL-TOAST` provides a shell-level toast overlay.  The app passes
-a message string and a duration in milliseconds.  The shell handles
-all rendering and timing.
+`ASHELL-NOTICE` shows a short message for a while, with its meaning.  The
+app passes the text, a duration in milliseconds and a severity; the shell
+handles drawing and timing.  `ASHELL-TOAST` raises a neutral notice, and
+an application marks a failure or a warning where it raises it, with
+`ASHELL-TOAST-ERROR` or `ASHELL-TOAST-WARNING`.
 
 ```forth
-S" Saved!" 2000 ASHELL-TOAST    \ toast appears for 2 seconds
+S" Saved" 2000 ASHELL-TOAST                 \ neutral, for 2 seconds
+S" Could not save" 3000 ASHELL-TOAST-ERROR  \ a failure
 ```
 
-The toast is drawn last in the paint cycle (on top of everything).
-Expiry is checked in `_ASHELL-CHECK-TICK` — when the toast expires,
-the shell auto-dirties to clear it.  No timer or paint code in the
-app.
+The shell copies the text into a buffer it owns, which grows when a longer
+one is raised, so the caller may reuse its own.  Without memory for the
+copy the notice is not shown.  A later notice replaces an earlier one.
+
+Each paint decides once, as it begins, which notice it shows, and lays it
+out for the screen's width: a bar on the bottom row, centred, four cells
+wider than its text, which starts two cells in.  Text wider than the
+screen allows is cut between characters and ends in an ellipsis.  The bar
+takes its severity's colours, grey when neutral, then blue, green, amber
+and red from info to error, and the text is drawn as untrusted text
+(`DRW-TEXT-UNTRUSTED`).  The paint's text is a second owned copy, so a
+notice raised while a paint runs shows from the next paint and never
+changes what this one draws or publishes.  A screen too narrow for the
+padding and a cell of text shows none.  The notice is drawn after
+everything else but the shell cursor.  When it ends, `_ASHELL-CHECK-TICK`
+has its cells repainted.
+
+A press or a wheel turn on the notice the screen shows lands on the
+notice, which takes none, as a rich terminal shows it in a region of its
+own.  A gesture begun elsewhere goes on: drags, releases and the positions
+a renderer names still reach their targets.
+
+`ASHELL-NOTICE-CAPTURE` gives a renderer the notice the paint shows as a
+UDLG notice: flagged `NOTICE`, of the severity it was raised with, keyed by
+its serial number, with a revision new at every layout, one row high and
+as wide as its bar, its text the message's one line in a slot two cells
+in.  The text's direction controls go out as inert stand-ins
+(`BIDI-INERT`), as the paint ignored them.  A paint that shows no notice,
+or whose text is not clean single-line text, gives `UDLG-S-UNSUPPORTED`,
+and the notice stays painted.
 
 ## Shell Cursor
 
@@ -448,8 +483,10 @@ cross-core synchronization primitives.
 
 The bounded guarded operations are `ASHELL-DIRTY!`, `ASHELL-REGION`,
 `ASHELL-TICK-MS!`, `ASHELL-POST`,
-`ASHELL-UIDL?`, `ASHELL-DESC`, `ASHELL-INSTANCE`, `ASHELL-TOAST`,
-`ASHELL-TOAST-VISIBLE?`.
+`ASHELL-UIDL?`, `ASHELL-DESC`, `ASHELL-INSTANCE`, `ASHELL-NOTICE`,
+`ASHELL-TOAST`, `ASHELL-TOAST-WARNING`, `ASHELL-TOAST-ERROR`,
+`ASHELL-TOAST-VISIBLE?`.  The capture words are paint-time helpers of the
+UI owner core and are not guarded.
 
 `ASHELL-REQUEST-CLOSE`, `ASHELL-QUIT-PENDING?`, `ASHELL-CANCEL-QUIT`,
 `ASHELL-LOAD-UIDL`, `ASHELL-ACTIVE-CTX`, `ASHELL-CTX-FORGET`,
@@ -539,9 +576,12 @@ This works because the RUNNING flag is set *before* the init callback.
 | `_ASHELL-EV` | — | 24-byte key event buffer |
 | `_ASHELL-POST-Q` | — | 16-slot deferred action FIFO |
 
-| `_ASHELL-TOAST-MSG` | 0 0 | Toast message addr + len (2 cells) |
-| `_ASHELL-TOAST-EXPIRY` | 0 | Toast `MS@` deadline |
+| `_ASHELL-TOAST-MSG` | 0 0 | The notice's owned text, addr + len (2 cells) |
+| `_ASHELL-TOAST-EXPIRY` | 0 | The notice's `MS@` deadline |
 | `_ASHELL-TOAST-WAS-VIS` | 0 | Was-visible flag for expiry detection |
+| `_ASHELL-TOAST-SEVERITY` | 0 | Its severity |
+| `_ASHELL-TOAST-SERIAL` | 0 | One more for each notice raised |
+| `_ASHELL-TOAST-SHOWN` | 0 | The last paint showed a notice |
 | `_ASHELL-CUR-ROW` | mid | Cursor row position |
 | `_ASHELL-CUR-COL` | mid | Cursor column position |
 | `_ASHELL-CUR-VIS` | 0 | Cursor visible flag |
