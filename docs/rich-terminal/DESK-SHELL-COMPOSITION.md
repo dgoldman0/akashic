@@ -50,18 +50,20 @@ with 64 panes, 64 tasks and 12 pins and their text. Desk's own model is not
 bounded by them; a larger shell asks the terminal for more space, which the
 terminal may refuse. Let `E = 140` be the entry budget and
 `T = 49152 - 128 - 168 * E = 25504` the text budget. The derived budgets are
-`R = E + 3 = 143` regions, `C = E + 2 = 142` controls and `P = E = 140` panes.
+`R = 2E + 3 = 283` regions, `C = E + 2 = 142` controls and `P = E = 140` panes.
+Each entry may be a pane, which takes a content region and, while its
+application shows a prompt, a modal region over that content.
 Each valid title or label uses a disjoint part of the model's text, so
 variable UTF-8 is counted once. Copied action IDs stay in the sidecar and are
 not emitted again as provider text.
 
 | Selected host allowance | Addition |
 | --- | ---: |
-| Regions | `R = 143` |
+| Regions | `R = 283` |
 | Objects | `C + P = 282` |
-| Operations per transaction | `R + C + P = 425` |
+| Operations per transaction | `R + C + P = 565` |
 | Retained UTF-8 | `T = 25504` bytes |
-| Retained and base transaction bytes | `104*R + 120*C + 144*P + T = 77576` |
+| Retained and base transaction bytes | `104*R + 120*C + 144*P + T = 92136` |
 
 The guest needs no matching reservation: the engine's working banks grow to
 what each admission needs.

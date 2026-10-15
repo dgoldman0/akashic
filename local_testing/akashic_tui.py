@@ -14247,7 +14247,9 @@ DESKTOP_APT1_SHELL_MAX_ENTRIES = 140
 DESKTOP_APT1_SHELL_TEXT_BYTES = (
     DESKTOP_APT1_SHELL_MODEL_BYTES - 128 - 168 * DESKTOP_APT1_SHELL_MAX_ENTRIES
 )
-DESKTOP_APT1_SHELL_REGIONS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 3
+# Each entry may be a pane, with a content region and, while its
+# application shows a prompt, a modal region over that content.
+DESKTOP_APT1_SHELL_REGIONS = 2 * DESKTOP_APT1_SHELL_MAX_ENTRIES + 3
 DESKTOP_APT1_SHELL_CONTROLS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 2
 DESKTOP_APT1_SHELL_PANES = DESKTOP_APT1_SHELL_MAX_ENTRIES
 DESKTOP_APT1_SHELL_OBJECTS = DESKTOP_APT1_SHELL_CONTROLS + DESKTOP_APT1_SHELL_PANES
@@ -14307,6 +14309,7 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
             | RetainedFeature.GRID_CELLS
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
+            | RetainedFeature.DIALOGS
             | RetainedFeature.SERIES
             | RetainedFeature.RGBA_IMAGE
         ),

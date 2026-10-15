@@ -108,11 +108,29 @@ ordinary. Global residue holds only cells outside pane content and admitted
 shell claims. Its full-surface region sorts below interactive regions so sparse
 residual glyphs cannot create an input barrier.
 
-The initial conservative policy refuses the entire optional shell candidate
-when pane contents overlap or a final writer covers any pane outer rectangle.
-Modal/unavailable SHSN authority also refuses it. Every refusal uses the
-unchanged, already admitted legacy RTHP candidate, with no shell claims leaking
-into that candidate.
+The policy refuses the entire optional shell candidate when pane contents
+overlap or a final writer covers any pane outer rectangle, with one exception:
+the prompt a pane's document paints over its own content. The aggregate
+adapter captures that prompt as the document's overlay field, the last record
+of its field snapshot, and the base candidate carries it as a `FIELD` control
+whose correlation names the overlay source. The shell finds the pane through
+the control's document slot, allows one prompt a pane, requires its root to lie
+inside the pane's content, and requires the four bands of the pane's outer
+rectangle around the root to be clear. The root's own cells are taken as the
+prompt's paint, as the adapter took them.
+
+When the terminal negotiated `RTE-F-DIALOGS`, each prompt gets a modal region
+after the planner's regions, in control order: surface-sized logical bounds,
+the pane's content as its clip, `VISIBLE | CLIPPED | MODAL`, and z two above
+the content z, so above every region the shell defines. The prompt's control
+goes in it, and the terminal shows the rest of that application inactive
+while the prompt is open; Desk and other applications stay active. Without
+dialogs the prompt stays in its pane's content region. A prompt whose document
+is in no pane refuses the candidate, as any control of such a document does.
+
+Modal/unavailable SHSN authority also refuses the candidate. Every refusal uses
+the unchanged, already admitted legacy RTHP candidate, with no shell claims
+leaking into that candidate.
 
 ## START, ACK and teardown
 

@@ -2938,6 +2938,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             | RetainedFeature.GRID_CELLS
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
+            | RetainedFeature.DIALOGS
             | RetainedFeature.SERIES
             | RetainedFeature.RGBA_IMAGE
         ),
@@ -2975,7 +2976,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert retained.features & (RetainedFeature.PANES | RetainedFeature.TASKBARS)
     coupled = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + DESKTOP_APT1_SHELL_WIRE_BYTES
     assert retained.max_retained_transaction_bytes == retained.base_max_transaction_bytes
-    assert retained.max_retained_transaction_bytes == coupled == 29_004_912
+    assert retained.max_retained_transaction_bytes == coupled == 29_019_472
 
     arguments = _rich_terminal_server_arguments(profile)
     assert arguments[2] == "--retained-terminal-policy"
