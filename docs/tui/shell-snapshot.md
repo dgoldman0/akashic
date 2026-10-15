@@ -38,8 +38,9 @@ caller supplies two separately bounded, aligned banks. Each bank needs
 `128 + 168 * reserved-entry-limit + copied-text-bytes` bytes. The reserved
 entry extent uses the limit, not the active count. `SHSN-BANK-BYTES` checks
 nonnegative 32-bit inputs and result; zero means an invalid or oversized
-request. Desk's existing 49,152-byte ordinary model bound can be used for
-each copied bank; no additional validation workspace is required.
+request. With a memory source attached by `SHSN-MEMORY!`, the source owns
+its banks and grows them as models need; Desk's start at the model header.
+No additional validation workspace is required.
 
 A host callback copies exactly `SHM.USED` bytes once to the inactive bank,
 sets only that copy's `SHM.CAPACITY` to the exact extent, and deeply validates
@@ -51,6 +52,13 @@ action spans must occupy the text arena exactly in record and field order;
 empty spans have offset zero or the current text cursor. No overlap, gap or
 trailing bytes is admitted. All text is strict display-safe UTF-8. Unsafe
 ordinary display text declines the whole copied model, leaving CELL intact.
+
+Desk's own prompt, while it holds the hidden taskbar row, ends the model:
+`SHM.PROMPT-OFF` and `SHM.PROMPT-U` name the UFLD model of its field at the
+first eight-byte boundary after the text, the padding before it zero. The
+copy admits it only under a hidden taskbar, only as a valid TEXT field one
+row high and as wide as the screen, and only when its bytes are exactly the
+field's and end the model. Without a prompt both header fields are zero.
 
 The constructor checks full A/B capacities and descriptor disjointness
 before any mutation. It rejects module scratch, invalid and wrapping spans,

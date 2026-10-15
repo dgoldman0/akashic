@@ -52,7 +52,9 @@ terminal may refuse. Let `E = 140` be the entry budget and
 `T = 49152 - 128 - 168 * E = 25504` the text budget. The derived budgets are
 `R = 2E + 3 = 283` regions, `C = E + 2 = 142` controls and `P = E = 140` panes.
 Each entry may be a pane, which takes a content region and, while its
-application shows a prompt, a modal region over that content.
+application shows a prompt, a modal region over that content. Desk's own Ask
+prompt hides the taskbar while it is open, so its region and its field
+control take the place of the taskbar's region and controls.
 Each valid title or label uses a disjoint part of the model's text, so
 variable UTF-8 is counted once. Copied action IDs stay in the sidecar and are
 not emitted again as provider text.

@@ -185,12 +185,30 @@ CREATE _SHSN-V-GR GR-CURSOR-SIZE ALLOT
         _SHSN-V-E @ _SHSN-V-M @ SHME-LABEL$ _SHSN-V-GR GR-SWIDTH-WITH
         _SHSN-V-E @ SHME.WIDTH @ <> IF 0 EXIT THEN
     THEN -1 ;
+\ Desk's own prompt, while it holds the hidden taskbar row: a TEXT field's
+\ UFLD model, one row as wide as the screen, after every string at the next
+\ eight-byte boundary, its padding zero.
+VARIABLE _SHSN-V-PO VARIABLE _SHSN-V-PU
+: _SHSN-V-PROMPT? ( -- flag )
+    _SHSN-V-M @ SHM.PROMPT-OFF @ _SHSN-V-PO ! _SHSN-V-M @ SHM.PROMPT-U @ _SHSN-V-PU !
+    _SHSN-V-PU @ 0= IF _SHSN-V-PO @ 0= EXIT THEN
+    _SHSN-V-M @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND 0= IF 0 EXIT THEN
+    _SHSN-V-CURSOR @ 7 + -8 AND _SHSN-V-PO @ <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-CURSOR @ + _SHSN-V-PO @ _SHSN-V-CURSOR @ -
+        _SHSN-ZERO? 0= IF 0 EXIT THEN
+    _SHSN-V-PU @ _SHSN-V-U @ _SHSN-V-PO @ - U> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-PO @ + _SHSN-V-PU @ UFLD-VALIDATE UFLD-S-OK <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-PO @ +
+    DUP UFLD-BYTES@ _SHSN-V-PU @ <> IF DROP 0 EXIT THEN
+    DUP UFLD-KIND@ UFLD-K-TEXT <> IF DROP 0 EXIT THEN
+    DUP UFLD-WIDTH@ _SHSN-V-M @ SHM.WIDTH @ <> IF DROP 0 EXIT THEN
+    UFLD-HEIGHT@ 1 <> IF 0 EXIT THEN
+    _SHSN-V-PO @ _SHSN-V-PU @ + _SHSN-V-CURSOR ! -1 ;
 : _SHSN-FROZEN? ( -- flag )
     _SHSN-V-M @ SHM.ABI @ SHM-ABI <>
     _SHSN-V-M @ SHM.CAPACITY @ _SHSN-V-U @ <> OR
     _SHSN-V-M @ SHM.USED @ _SHSN-V-U @ <> OR
     _SHSN-V-M @ SHM.READY @ -1 <> OR IF 0 EXIT THEN
-    _SHSN-V-M @ 112 + 16 _SHSN-ZERO? 0= IF 0 EXIT THEN
     _SHSN-V-M @ SHM.OWNER-ID @ 0= _SHSN-V-M @ SHM.OWNER-GEN @ 0= OR
     _SHSN-V-M @ SHM.EPOCH @ 0= OR IF 0 EXIT THEN
     _SHSN-V-M @ SHM.WIDTH @ _SHSN-POS? 0=
@@ -217,6 +235,7 @@ CREATE _SHSN-V-GR GR-CURSOR-SIZE ALLOT
         _SHSN-V-ENTRY? 0= IF 0 UNLOOP EXIT THEN
     LOOP
     _SHSN-V-END @ _SHSN-V-M @ SHM.END-COL @ U> IF 0 EXIT THEN
+    _SHSN-V-PROMPT? 0= IF 0 EXIT THEN
     _SHSN-V-CURSOR @ _SHSN-V-U @ = ;
 : SHSN-FROZEN-VALIDATE ( model bytes -- status )
     DUP SHM-HEADER-SIZE U< IF 2DROP SHSN-S-INVALID EXIT THEN

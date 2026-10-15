@@ -18,9 +18,9 @@ VARIABLE _SB-BO VARIABLE _SB-U VARIABLE _SB-OLD
     _SS-FREEZE _SS-VALID 0= _RC-A
     _SB-S 240 0 FILL _SB-B 32768 0 FILL
     _SB-B _SB-S _RSHSP.A ! 32768 _SB-S _RSHSP.A-U !
-    128 _SB-B RSHSP-BANK.MODEL ! _SS-U @ _SB-B RSHSP-BANK.MODEL-U !
-    _SS-F _SB-B 128 + _SS-U @ MOVE
-    _SS-U @ 7 + -8 AND 128 + DUP _SB-BO ! _SB-B RSHSP-BANK.BATCH !
+    RSHSP-BANK-HEADER-SIZE _SB-B RSHSP-BANK.MODEL ! _SS-U @ _SB-B RSHSP-BANK.MODEL-U !
+    _SS-F _SB-B RSHSP-BANK-HEADER-SIZE + _SS-U @ MOVE
+    _SS-U @ 7 + -8 AND RSHSP-BANK-HEADER-SIZE + DUP _SB-BO ! _SB-B RSHSP-BANK.BATCH !
     _RC-BATCH _SB-B _SB-BO @ + 32768 _SB-BO @ - RSHFC-COPY 0= _RC-A
     _SB-BO @ + DUP _SB-U ! _SB-B RSHSP-BANK.USED !
     1234 _SB-B RSHSP-BANK.TARGET ! 3 _SB-B RSHSP-BANK.DRAW !
@@ -51,12 +51,14 @@ _SB-BUILD _SB-VALID _RC-A
 22 _SB-B RSHSP-BANK.NEXT-REGION _SB-BAD
 0 _SB-B RSHSP-BANK.NEXT-OBJECT _SB-BAD
 107 _SB-B RSHSP-BANK.NEXT-OBJECT _SB-BAD
+\ A prompt identity for a model without Desk's prompt.
+101 _SB-B RSHSP-BANK.PROMPT _SB-BAD
 _SB-U @ 8 + _SB-B RSHSP-BANK.USED _SB-BAD
 _SB-BO @ 8 + _SB-B RSHSP-BANK.BATCH _SB-BAD
-136 _SB-B RSHSP-BANK.MODEL _SB-BAD
-81 _SB-B 128 + SHM.WIDTH _SB-BAD
+RSHSP-BANK-HEADER-SIZE 8 + _SB-B RSHSP-BANK.MODEL _SB-BAD
+81 _SB-B RSHSP-BANK-HEADER-SIZE + SHM.WIDTH _SB-BAD
 _RC-CAT _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
-_SB-B 128 + _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
+_SB-B RSHSP-BANK-HEADER-SIZE + _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
 _RC-FAM _SB-BATCH _RTE-FB.FAMILIES-A _SB-BAD
 _SB-BATCH _RTE-FB.FAMILIES-A @ _RTE-FE.PLAN-A DUP @ _SB-OLD !
 _RC-CP SWAP ! _SB-VALID 0= _RC-A
@@ -72,7 +74,7 @@ _RC-FAM 256 + _RC-FAM 64 MOVE 64 _RC-BATCH _RTE-FB.FAMILIES-U !
 0 _RC-FAM _RTE-FE.BYTES-A ! 0 _RC-FAM _RTE-FE.BYTES-U !
 _SB-BUILD _SB-VALID 0= _RC-A
 _RC-DONE
-''', minimum=20)
+''', minimum=21)
 
 
 def test_nested_descriptor_alias_refuses_before_private_scratch_store():
@@ -175,7 +177,7 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
         if follower.startswith("SHM."):
             assert after == "@", match.group(0)
         else:
-            assert follower in ("_RSHSP-MU", "SHM-ENTRY"), match.group(0)
+            assert follower in ("_RSHSP-MU", "SHM-ENTRY", "SHM-PROMPT@"), match.group(0)
     assert not re.search(r"\bSHME?\.[A-Z-]+ \+?!", source)
 
 

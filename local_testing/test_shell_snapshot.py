@@ -428,3 +428,66 @@ _SS-FREEZE _SS-VALID _SS-OK
 _SS-DONE
 '''
     _run(program, minimum=20)
+
+
+# Desk's own prompt on the hidden taskbar row: a model with one pane whose
+# title leaves the text cursor off an eight-byte boundary, then the prompt's
+# TEXT field "Ask:" "hi", one row as wide as the screen.
+PROMPT_MODEL = PRELUDE + r'''
+CREATE _SP-BS 47 ALLOT : _SP-B _SP-BS 7 + -8 AND ;
+VARIABLE _SP-DST VARIABLE _SP-CAP VARIABLE _SP-OFF
+: _SP-FIELD ( dst cap -- bytes status )
+    _SP-B UFLD-BUILDER-INIT ?DUP IF 0 SWAP EXIT THEN
+    1 UFLD-K-TEXT 3 32 1 7 0 _SP-B UFLD-BEGIN ?DUP IF 0 SWAP EXIT THEN
+    0 1 1 4 0 6 1 26 _SP-B UFLD-SLOTS ?DUP IF 0 SWAP EXIT THEN
+    S" Ask:" _SP-B UFLD-LABEL ?DUP IF 0 SWAP EXIT THEN
+    S" hi" _SP-B UFLD-TEXT ?DUP IF 0 SWAP EXIT THEN
+    _SP-B UFLD-FINISH ;
+: _SP-BUILD
+    4096 4 _SS-M SHM-INIT _SS-A
+    7 _SS-M SHM.OWNER-ID ! 9 _SS-M SHM.OWNER-GEN ! 1 _SS-M SHM.EPOCH !
+    32 _SS-M SHM.WIDTH ! 12 _SS-M SHM.HEIGHT !
+    SHM-F-TASKBAR-HIDDEN SHM-F-INPUT-BLOCKED OR _SS-M SHM.FLAGS !
+    _SS-M SHM-APPEND DUP _SS-E !
+    11 OVER SHME.KEY ! 1 OVER SHME.KIND ! 1 OVER SHME.FLAGS !
+    10 OVER SHME.HEIGHT ! 20 OVER SHME.WIDTH !
+    9 OVER SHME.CONTENT-H ! 19 OVER SHME.CONTENT-W !
+    2 OVER SHME.OWNER-ID ! 3 OVER SHME.OWNER-GEN !
+    11 OVER SHME.IDENTITY ! 11 SWAP SHME.ACTION !
+    S" Editor" _SS-M SHM-COPY$ _SS-A _SS-E @ SHME.TITLE-OFF ! 6 _SS-E @ SHME.TITLE-U !
+    _SS-M SHM-PROMPT-ROOM _SS-A _SP-CAP ! _SP-DST !
+    _SP-DST @ _SP-CAP @ _SP-FIELD _SS-OK
+    _SS-M SHM-PROMPT-TAKE _SS-A
+    _SS-M SHM-SEAL ;
+\ A byte of the frozen copy changed, validated, and put back.
+: _SP-BAD-BYTE ( value offset -- )
+    _SS-F + DUP C@ >R TUCK C! _SS-VALID SHSN-S-INVALID = _SS-A R> SWAP C! ;
+'''
+
+
+def test_desks_prompt_is_a_text_field_after_every_string_of_its_model():
+    program = PROMPT_MODEL + r'''
+_SP-BUILD _SS-FREEZE _SS-VALID _SS-OK
+\ The prompt follows the title at the next eight-byte boundary.
+_SS-F SHM.PROMPT-OFF @ DUP _SP-OFF ! 128 4 168 * + 6 + 7 + -8 AND = _SS-A
+_SS-F SHM.PROMPT-U @ _SS-F SHM.PROMPT-OFF @ + _SS-U @ = _SS-A
+_SS-F SHM-PROMPT@ DUP 0<> _SS-A OVER UFLD-BYTES@ = _SS-A
+DUP UFLD-LABEL@ S" Ask:" STR-STR= _SS-A UFLD-TEXT@ S" hi" STR-STR= _SS-A
+\ One prompt a build, and none once sealed.
+_SS-M SHM-PROMPT-ROOM 0= _SS-A 2DROP
+16 _SS-M SHM-PROMPT-TAKE 0= _SS-A
+\ Only the hidden taskbar row holds it, its padding is zero, it is a TEXT
+\ field one row as wide as the screen, and it ends the model.
+0 _SS-F SHM.FLAGS _SS-BAD
+1 _SP-OFF @ 1- _SP-BAD-BYTE
+_SP-OFF @ 8 + _SS-F SHM.PROMPT-OFF _SS-BAD
+_SS-F SHM.PROMPT-U @ 8 - _SS-F SHM.PROMPT-U _SS-BAD
+31 _SS-F _SP-OFF @ + UFLD-WIDTH-OFFSET + _SS-BAD
+2 _SS-F _SP-OFF @ + UFLD-HEIGHT-OFFSET + _SS-BAD
+1 _SS-F _SP-OFF @ + UFLD-KIND-OFFSET + _SS-BAD
+_SS-VALID _SS-OK
+\ A model without a prompt keeps both fields zero.
+0 _SS-F SHM.PROMPT-U _SS-BAD
+_SS-DONE
+'''
+    _run(program, minimum=20)

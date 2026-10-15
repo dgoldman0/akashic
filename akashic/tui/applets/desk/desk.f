@@ -2108,6 +2108,20 @@ VARIABLE _DSM-WIDTH
 
 \ Build the model into the bank _DSM-M names.  _DSM-OK says whether it
 \ fit: every refusal is a bank without room for an entry or its text.
+\ Desk's own prompt, while open on the hidden taskbar row, goes in the model
+\ as its field, so a renderer can show it as one.  A bank without
+\ room for it grows like one out of room for anything else; a prompt that
+\ cannot be captured stays the cells it paints.
+: _DESK-SHELL-PROMPT ( -- )
+    _DESK-AGENT-PROMPT @ ?DUP 0= IF EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
+    SCR-H 1- 0 1 SCR-W 4 PICK PRM-SET-BOUNDS >R
+    _DSM-M @ SHM-PROMPT-ROOM 0= IF 2DROP R> DROP FALSE _DSM-OK ! EXIT THEN
+    R> PRM-FIELD-CAPTURE
+    DUP UFLD-S-CAPACITY = IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    UFLD-S-OK <> IF DROP EXIT THEN
+    _DSM-M @ SHM-PROMPT-TAKE 0= IF FALSE _DSM-OK ! THEN ;
+
 : _DESK-SHELL-BUILD ( -- )
     TRUE _DSM-OK !
     _DSM-M @ SHM-BEGIN 0= IF FALSE _DSM-OK ! EXIT THEN
@@ -2146,6 +2160,7 @@ VARIABLE _DSM-WIDTH
         THEN
     THEN
     _DSM-COL @ SCR-W MIN _DSM-M @ SHM.END-COL !
+    _DSM-OK @ IF _DESK-SHELL-PROMPT THEN
     _DSM-OK @ IF _DSM-M @ SHM-SEAL THEN ;
 
 VARIABLE _DSG-CELL

@@ -193,3 +193,139 @@ _SX-S _RSHSP.PENDING @ 0= _SS-A
 _RSHSP-PREPARE _SS-OK _SX-S _RSHSP.PENDING @ _SX-KB = _SS-A _SX-KB _SP-MODALS 0= _SS-A
 _SS-DONE
 ''', minimum=20)
+
+
+# Desk's own Ask prompt.  While it is open Desk hides its taskbar, blocks
+# input to its panes, and paints the prompt over the taskbar row, the
+# screen's last, as an overlay; its shell model carries the prompt's TEXT
+# field after every string.  Each draw here rebuilds the model as Desk does:
+# the pane alone, and while _SQ-ON is set the prompt "Ask:" showing VALUE at
+# REVISION, one row as wide as the screen.  A closed prompt gives the row
+# back to an empty taskbar.
+DESK_PROMPT = DELTA_PROMPT + r'''
+CREATE _SQ-BS 47 ALLOT : _SQ-B _SQ-BS 7 + -8 AND ;
+VARIABLE _SQ-ON VARIABLE _SQ-REV VARIABLE _SQ-VA VARIABLE _SQ-VU
+: _SQ-FIELD ( dst cap -- bytes status )
+    _SQ-B UFLD-BUILDER-INIT ?DUP IF 0 SWAP EXIT THEN
+    1 UFLD-K-TEXT _SQ-REV @ 32 1 7 0 _SQ-B UFLD-BEGIN ?DUP IF 0 SWAP EXIT THEN
+    0 1 1 4 0 6 1 26 _SQ-B UFLD-SLOTS ?DUP IF 0 SWAP EXIT THEN
+    S" Ask:" _SQ-B UFLD-LABEL ?DUP IF 0 SWAP EXIT THEN
+    _SQ-VA @ _SQ-VU @ _SQ-B UFLD-TEXT ?DUP IF 0 SWAP EXIT THEN
+    _SQ-B UFLD-FINISH ;
+: _SQ-MODEL ( -- )
+    _SS-M SHM.EPOCH @ 4096 4 _SS-M SHM-INIT _SS-A _SS-M SHM.EPOCH !
+    _SX-I @ CINST.ID @ _SS-M SHM.OWNER-ID !
+    _SX-I @ CINST.GENERATION @ _SS-M SHM.OWNER-GEN !
+    32 _SS-M SHM.WIDTH ! 12 _SS-M SHM.HEIGHT !
+    _SQ-ON @ IF SHM-F-TASKBAR-HIDDEN SHM-F-INPUT-BLOCKED OR _SS-M SHM.FLAGS ! THEN
+    _SS-M SHM-APPEND DUP _SS-E !
+    11 OVER SHME.KEY ! SHM-K-PANE OVER SHME.KIND ! 1 OVER SHME.FLAGS !
+    10 OVER SHME.HEIGHT ! 20 OVER SHME.WIDTH !
+    9 OVER SHME.CONTENT-H ! 19 OVER SHME.CONTENT-W !
+    _SX-CHILD @ CINST.ID @ OVER SHME.OWNER-ID !
+    _SX-CHILD @ CINST.GENERATION @ OVER SHME.OWNER-GEN !
+    11 OVER SHME.IDENTITY ! 11 SWAP SHME.ACTION !
+    S" Editor" _SS-M SHM-COPY$ _SS-A _SS-E @ SHME.TITLE-OFF ! 6 _SS-E @ SHME.TITLE-U !
+    _SQ-ON @ IF
+        _SS-M SHM-PROMPT-ROOM _SS-A _SQ-FIELD _SS-OK _SS-M SHM-PROMPT-TAKE _SS-A
+    THEN
+    _SS-M SHM-SEAL ;
+: _SQ-ROW 32 0 DO 65 11 I DRW-CHAR LOOP ;
+\ The pane's HELLO, with the prompt over the taskbar row while it is open.
+: _SQ-PAINT _SD-HELLO _SQ-MODEL
+    _SQ-ON @ IF ['] _SQ-ROW DRW-OVERLAY ELSE 32 0 DO 32 11 I DRW-CHAR LOOP THEN ;
+: _SQ-OPEN ( a u revision -- )
+    _SQ-REV ! _SQ-VU ! _SQ-VA ! -1 _SQ-ON ! ['] _SQ-PAINT _SD-DRAW ;
+: _SQ-CLOSE ( -- ) 0 _SQ-ON ! ['] _SQ-PAINT _SD-DRAW ;
+: _SQ-VALUE S" hi" ;
+: _SQ-PROMPT ( bank -- control|0 ) RTE-CONTROL-FIELD SWAP _SP-CONTROL ;
+: _SQ-REGIONS ( bank -- n ) _SP-BATCH _RTE-FB.CATALOG-A @ _RTE-RC.REGIONS-U @ 96 / ;
+'''
+
+
+def test_desks_prompt_is_a_field_on_the_taskbar_row_in_a_whole_screen_modal_scope():
+    staged_run(DESK_PROMPT + r'''
+_SX-SETUP _SD-HOOKS _SP-DIALOGS
+_SQ-VALUE 1 _SQ-OPEN _RSHSP-PREPARE _SS-OK
+_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+\ One modal region, the catalog's last, over the whole screen above the rest.
+_SX-KA _SP-MODALS 1 = _SS-A
+_SP-MODAL @ _RTE-IR.ID @ _SX-KA RSHSP-BANK.NEXT-REGION @ 1- = _SS-A
+_SP-MODAL @ _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR = _SS-A
+_SP-MODAL @ _RTE-IR.CLIP-X @ 0= _SS-A _SP-MODAL @ _RTE-IR.CLIP-Y @ 0= _SS-A
+_SP-MODAL @ _RTE-IR.CLIP-COLS @ 32 = _SS-A _SP-MODAL @ _RTE-IR.CLIP-ROWS @ 12 = _SS-A
+_SP-MODAL @ _RTE-IR.Z @ 3 = _SS-A
+\ The prompt is a FIELD across the taskbar row, after the application's
+\ control, and the bank names it.
+_SX-KA _SQ-PROMPT DUP 0<> _SS-A
+DUP _RTE-CONTROL.REGION @ _SP-MODAL @ _RTE-IR.ID @ = _SS-A
+DUP _RTE-CONTROL.ID @ 101 = _SS-A
+DUP _RTE-CONTROL.ID @ _SX-KA RSHSP-BANK.PROMPT @ = _SS-A
+DUP _RTE-CONTROL.ROW @ 11 = _SS-A DUP _RTE-CONTROL.COL @ 0= _SS-A
+DUP _RTE-CONTROL.HEIGHT @ 1 = _SS-A DUP _RTE-CONTROL.WIDTH @ 32 = _SS-A
+DUP _RTE-CONTROL.LABEL-A @ OVER _RTE-CONTROL.LABEL-U @ S" Ask:" STR-STR= _SS-A
+_RTE-CONTROL.CONTENT-UTF8 @ 2 = _SS-A
+\ The application's control stays beneath it, in the pane.
+1 _SX-KA _SP-CONTROL _RTE-CONTROL.REGION @ _SP-MODAL @ _RTE-IR.ID @ <> _SS-A
+\ The admission emits every region of the catalog.
+_SX-KA _SP-BATCH _SX-FX RTE-FAMILY-BATCH-EMIT _SS-OK
+_SX-REGIONS @ _SX-KA _SQ-REGIONS = _SS-A
+_SS-DONE
+''', minimum=26)
+
+
+def test_without_dialogs_desks_prompt_holds_only_the_taskbar_row():
+    staged_run(DESK_PROMPT + r'''
+_SX-SETUP _SD-HOOKS
+_SQ-VALUE 1 _SQ-OPEN _RSHSP-PREPARE _SS-OK
+_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-MODALS 0= _SS-A
+_SX-KA _SQ-PROMPT DUP 0<> _SS-A
+_RTE-CONTROL.REGION @ _SX-KA _SP-REGION DUP 0<> _SS-A
+DUP _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR = _SS-A
+DUP _RTE-IR.CLIP-X @ 0= _SS-A DUP _RTE-IR.CLIP-Y @ 11 = _SS-A
+DUP _RTE-IR.CLIP-COLS @ 32 = _SS-A DUP _RTE-IR.CLIP-ROWS @ 1 = _SS-A
+_RTE-IR.Z @ 3 = _SS-A
+_SS-DONE
+''', minimum=12)
+
+
+def test_typing_in_desks_prompt_replaces_its_field_and_closing_it_restarts():
+    """Positions in the prompt's value are input targets; typing is a DELTA
+    that replaces only the field under its acknowledged identity; closing the
+    prompt gives the taskbar row back with a START."""
+    staged_run(DESK_PROMPT + r'''
+_SX-SETUP _SD-HOOKS _SP-DIALOGS
+_SQ-VALUE 1 _SQ-OPEN _RSHSP-PREPARE _SS-OK _SD-ACK
+_SX-S _RSHSP.ACTIVE @ _SX-KA = _SS-A _RSHSP-CURRENT? _SS-A
+_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A
+\ PLACE and EXTEND name positions in the value, from its first cell on the
+\ taskbar row, against the field's revision; nothing else targets it.
+_SX-KA RSHSP-BANK.PROMPT @ DUP 0<> _SS-A _RSHSP-INPUT-ID !
+_RSHSP-CONTROL-FIND DUP 0<> _SS-A _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = _SS-A
+RTE-INTENT-PLACE _RSHSP-INPUT-INTENT ! _RSHSP-PROMPT-TARGET _SS-A
+    1 = _SS-A 6 = _SS-A 11 = _SS-A
+RTE-INTENT-EXTEND _RSHSP-INPUT-INTENT ! _RSHSP-PROMPT-TARGET _SS-A 2DROP DROP
+RTE-INTENT-ACTIVATE _RSHSP-INPUT-INTENT ! _RSHSP-PROMPT-TARGET 0= _SS-A 2DROP DROP
+\ A typed character changes only the prompt's field: one CONTROL-REPLACE
+\ under the identity the terminal acknowledged.
+: _SQ-NEXT S" hi!" ; _SQ-NEXT 2 _SQ-OPEN _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A _SD-CATALOGS= _SS-A
+_SX-KB RSHSP-BANK.PROMPT @ _SX-KA RSHSP-BANK.PROMPT @ = _SS-A
+_SX-KB _SQ-PROMPT _RTE-CONTROL.CONTENT-UTF8 @ 3 = _SS-A
+_SD-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A _SD-GREPLACE @ 0= _SS-A _SD-GDEFINE @ 0= _SS-A
+_SD-ACK _SX-S _RSHSP.ACTIVE @ _SX-KB = _SS-A
+\ The same field again is a DELTA with nothing to send.
+_SQ-NEXT 2 _SQ-OPEN _SD-TB _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SD-EMIT _SS-OK _SD-CREPLACE @ 0= _SS-A _SD-GREPLACE @ 0= _SS-A
+_SD-ACK _SX-S _RSHSP.ACTIVE @ _SX-KA = _SS-A
+\ With the prompt closed the shell model changes: a START, with no modal
+\ region and no prompt.
+_SQ-CLOSE _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE RTE-S-OK <> _SS-A
+_RSHSP-PREPARE _SS-OK _SX-S _RSHSP.PENDING @ _SX-KB = _SS-A
+_SX-KB _SP-MODALS 0= _SS-A _SX-KB RSHSP-BANK.PROMPT @ 0= _SS-A
+_SX-KB _SQ-PROMPT 0= _SS-A
+_SS-DONE
+''', minimum=36)

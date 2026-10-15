@@ -14,7 +14,8 @@ def run(program, minimum=1):
 def test_shell_producer_actual_dependency_closure_and_header_contract():
     run(PRELUDE + r'''
 RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 208 = _FM-A
-RSHSP-BANK-HEADER-SIZE 128 = _FM-A
+RSHSP-BANK-HEADER-SIZE 136 = _FM-A
+0 RSHSP-BANK.PROMPT 128 = _FM-A
 0 _RSHSP.PRODUCER 24 = _FM-A 0 _RSHSP.SOURCE 32 = _FM-A
 0 _RSHSP.A 64 = _FM-A 0 _RSHSP.B 80 = _FM-A
 0 _RSHSP.ACTIVE 96 = _FM-A 0 _RSHSP.PENDING 104 = _FM-A

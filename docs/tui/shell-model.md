@@ -34,17 +34,36 @@ calls the normal catalog-open path, which either restores/focuses the live
 app or launches it. Disabled/quarantined entries remain visible and inert.
 Legacy pre-catalog TOML pins remain visible but have no launch authority.
 
-Desk reserves two 49,152-byte banks with 140 records each. Its component
-registry bounds live instances at 64; two records per child plus 12 pins fit
-this record allowance. The text arena remains independently bounded. Any
-record or string capacity refusal declines the **whole** model and paints the
-complete legacy CELL shell; no partial model is published. Model mutation
-rejects invalid, wrapping, null, unaligned or module-scratch-aliasing storage,
+Desk starts each of its two banks at 16 records and 1,024 text bytes. A
+build that runs out of records or text replaces the bank with one twice as
+large and builds again until the model fits; a bank four times larger than
+its model needs is replaced by the smallest that fits. Only when no memory
+is left for a bank is there no model, and Desk paints the complete CELL
+shell; no partial model is published. Model mutation rejects invalid,
+wrapping, null, unaligned or module-scratch-aliasing storage,
 corrupt headers and source/destination bank aliases. Sealing rejects further
 append/copy operations. Caller-owned memory must actually back admitted spans.
 
 An active prompt owns the bottom row and suppresses the taskbar model and its
-hits. A launcher overlay blocks background taskbar input while preserving its
+hits. While it is open the model also carries the prompt itself, so a rich
+terminal can show it as a field: after every string, at the next eight-byte
+boundary, the UFLD model of its TEXT field ([field model](field-model.md)),
+one row as wide as the screen. The header's `SHM.PROMPT-OFF` (112) and
+`SHM.PROMPT-U` (120) name it and are zero otherwise.
+
+| Word | Stack | Purpose |
+| --- | --- | --- |
+| `SHM-PROMPT-ROOM` | `( model -- dst cap ok? )` | The room after the strings |
+| `SHM-PROMPT-TAKE` | `( bytes model -- ok? )` | Record the field captured there |
+| `SHM-PROMPT@` | `( model -- ufld-a ufld-u )` | The prompt's field, or `0 0` |
+
+The caller captures the field into the room (Desk uses
+`PRM-FIELD-CAPTURE`), and `SHM-PROMPT-TAKE` records it and zeroes the
+padding before it. A build takes one prompt, before sealing. A bank without
+room for it grows like a bank without room for anything else; a prompt that
+cannot be captured stays the cells it paints.
+
+A launcher overlay blocks background taskbar input while preserving its
 paint. Changes to layout, child lifetime or focus invalidate old taskbar
 publication before dispatch. Even a captured task entry must resolve its
 exact slot and component instance identity against the live host.

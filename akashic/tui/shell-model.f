@@ -13,6 +13,7 @@
 PROVIDED akashic-tui-shell-model
 REQUIRE ../text/grapheme.f
 REQUIRE ../utils/memory-span.f
+REQUIRE field-model.f
 
 CREATE _SHM-OWNED-START
 VARIABLE _SHM-OWNED-LIMIT
@@ -47,6 +48,10 @@ VARIABLE _SHM-OWNED-LIMIT
 : SHM.DIVIDER-COL  ( m -- a ) 88 + ;
 : SHM.END-COL      ( m -- a ) 96 + ;
 : SHM.READY        ( m -- a ) 104 + ;
+\ Desk's own prompt, while it holds the hidden taskbar row: the bank offset
+\ and bytes of a UFLD model of its field, or zero.
+: SHM.PROMPT-OFF   ( m -- a ) 112 + ;
+: SHM.PROMPT-U     ( m -- a ) 120 + ;
 
 : SHME.KEY         ( e -- a ) ;
 : SHME.KIND        ( e -- a ) 8 + ;
@@ -181,6 +186,31 @@ VARIABLE _SHMC-A
     OVER SHME.TITLE-OFF @ + SWAP SHME.TITLE-U @ ;
 : SHME-ACTION$  ( entry model -- a u )
     OVER SHME.ACTION-OFF @ + SWAP SHME.ACTION-U @ ;
+
+\ Desk's own prompt follows every string at the next eight-byte boundary.
+\ SHM-PROMPT-ROOM gives the room there; the caller captures the field's
+\ UFLD model into it and SHM-PROMPT-TAKE records it, zeroing the padding
+\ before it.  One prompt a build.
+VARIABLE _SHMP-M VARIABLE _SHMP-O
+: _SHM-PROMPT-AT? ( model -- flag )
+    DUP _SHMP-M ! SHM-VALID? 0= IF FALSE EXIT THEN
+    _SHMP-M @ SHM.READY @ _SHMP-M @ SHM.PROMPT-U @ OR IF FALSE EXIT THEN
+    _SHMP-M @ SHM.USED @ 7 + -8 AND DUP _SHMP-O !
+    _SHMP-M @ SHM.CAPACITY @ U> 0= ;
+: SHM-PROMPT-ROOM ( model -- dst cap ok? )
+    _SHM-PROMPT-AT? 0= IF 0 0 FALSE EXIT THEN
+    _SHMP-M @ _SHMP-O @ +
+    _SHMP-M @ SHM.CAPACITY @ _SHMP-O @ - TRUE ;
+: SHM-PROMPT-TAKE ( bytes model -- ok? )
+    _SHM-PROMPT-AT? 0= IF DROP FALSE EXIT THEN
+    DUP 0> 0= IF DROP FALSE EXIT THEN
+    DUP _SHMP-M @ SHM.CAPACITY @ _SHMP-O @ - U> IF DROP FALSE EXIT THEN
+    _SHMP-M @ DUP SHM.USED @ + _SHMP-O @ _SHMP-M @ SHM.USED @ - 0 FILL
+    _SHMP-O @ _SHMP-M @ SHM.PROMPT-OFF !
+    DUP _SHMP-M @ SHM.PROMPT-U !
+    _SHMP-O @ + _SHMP-M @ SHM.USED ! TRUE ;
+: SHM-PROMPT@ ( model -- ufld-a ufld-u )
+    DUP SHM.PROMPT-U @ DUP IF SWAP DUP SHM.PROMPT-OFF @ + SWAP ELSE NIP 0 SWAP THEN ;
 
 : SHM-SEAL  ( model -- )
     DUP SHM-VALID? IF TRUE SWAP SHM.READY ! ELSE DROP THEN ;

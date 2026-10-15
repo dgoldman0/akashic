@@ -16,6 +16,8 @@ VARIABLE _dh-seen-shell
 CREATE _dh-stale-task SHM-ENTRY-SIZE ALLOT
 CREATE _dh-long-title 50000 ALLOT
 _dh-long-title 50000 65 FILL
+CREATE _dh-field-s 4103 ALLOT
+: _dh-field ( -- a ) _dh-field-s 7 + -8 AND ;
 
 : _dh-shell-observer ( model host context -- )
     731 = _dh-assert
@@ -82,12 +84,24 @@ CREATE _dh-press 24 ALLOT
     _DESK-HOST AHOST-SHELL-MODEL@ 0= _dh-assert
     _dh-bid @ DESK-FOCUS-ID
 
-    \ Prompt paint owns the taskbar row and removes its hit targets.
-    S" Ask:" 0 0 _DESK-AGENT-PROMPT @ PRM-SHOW
+    \ Prompt paint owns the taskbar row and removes its hit targets.  The
+    \ model carries the prompt as its TEXT field across the screen, as the
+    \ paint left it: a value too long for the row scrolled the same way.
+    S" Ask:" _dh-long-title 100 _DESK-AGENT-PROMPT @ PRM-SHOW
     _dh-desk @ DESK-PAINT-CB
     _dh-model @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND 0<> _dh-assert
     SCR-H 1- 0 _dh-model @ SHM-HIT 0= _dh-assert
+    _dh-model @ SHM-PROMPT@ DUP 0<> _dh-assert DROP
+    DUP UFLD-KIND@ UFLD-K-TEXT = _dh-assert
+    DUP UFLD-WIDTH@ SCR-W = _dh-assert
+    DUP UFLD-SCROLL-OFFSET + @ 0> _dh-assert
+    UFLD-LABEL@ S" Ask:" STR-STR= _dh-assert
+    _dh-field 4096 _DESK-AGENT-PROMPT @ PRM-FIELD-CAPTURE UFLD-S-OK = _dh-assert
+    _dh-field SWAP _dh-model @ SHM-PROMPT@ COMPARE 0= _dh-assert
+    \ Closed, it leaves the model.
     _DESK-AGENT-PROMPT @ PRM-HIDE
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM.PROMPT-U @ 0= _dh-assert
 
     \ A title too long for the model's bank grows the bank: the whole title
     \ is published. Restore descriptors before continuing.

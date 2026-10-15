@@ -44,7 +44,7 @@ keeps the bytes asked for and held; the shell never truncates an object,
 string, action or sample history. The model's size is its source's to bound;
 the shell producer carries no entry or text limit of its own.
 
-Each immutable bank starts with this128-byte header:
+Each immutable bank starts with this 136-byte header:
 
 | Offset | Value |
 |---:|---|
@@ -58,13 +58,14 @@ Each immutable bank starts with this128-byte header:
 |88|Completed draw|
 |96/104|Wire owner/generation|
 |112/120|Next region/object identity|
+|128|Control identity of Desk's prompt, or 0|
 
 The metadata spans use canonical consecutive aligned offsets. The deep-copied
 family graph follows them. Every graph pointer is bounded within that suffix
 before nested parsing. Catalog/object maxima must equal the stored next IDs
 minus one. The exact packed requirement is:
 
-`128 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
+`136 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
 
 The work space uses checked aligned bump allocation. Glyph projection reserves
 bounded temporary slots per clip, then compacts actual runs before the next
@@ -128,6 +129,21 @@ while the prompt is open; Desk and other applications stay active. Without
 dialogs the prompt stays in its pane's content region. A prompt whose document
 is in no pane refuses the candidate, as any control of such a document does.
 
+Desk's own Ask prompt is the shell's. While it is open Desk hides its
+taskbar, takes no other input, and paints the prompt over the taskbar row,
+and its shell model carries the prompt's TEXT field (see the [shell
+model](../tui/shell-model.md)). The shell makes that field a `FIELD`
+control after its taskbar controls, packed from the model's UFLD record, on
+a root across the last row, with a claim on the row so no residual glyph
+covers it. Statics and instruments move up one identity to follow it, and
+the bank records its identity. With dialogs its region is a modal scope over
+the whole screen, surface-sized with the surface as its clip, since Desk
+takes no other input while the prompt is open; without them it is the last
+row alone. Either way it sits three above the content z, above the panes'
+modal regions. `PLACE` and `EXTEND` on it resolve to its value's first cell
+on that row and its field's revision, and Desk's prompt takes them through
+its ordinary event path.
+
 Modal/unavailable SHSN authority also refuses the candidate. Every refusal uses
 the unchanged, already admitted legacy RTHP candidate, with no shell claims
 leaking into that candidate.
@@ -161,9 +177,11 @@ control and waveform history under its acknowledged identity.
 
 Before the base producer compares its candidate, DELTA-PROBE checks that the
 shell model of the new draw equals the copied acknowledged model apart from
-its epoch, which every paint advances. A renamed or refocused task, a new pane
-or any other model change leaves the draw to a complete START without further
-comparison.
+its epoch, which every paint advances, and the field of Desk's prompt, which
+typing changes; the prompt must be in both models at the same place or in
+neither. A renamed or refocused task, a new pane, the prompt opening or
+closing, or any other model change leaves the draw to a complete START
+without further comparison.
 
 After the base producer has matched its controls, statics, instruments and
 series to their acknowledged identities, DELTA-PREPARE builds the shell
@@ -175,6 +193,8 @@ acknowledged identity in the same place:
 - the catalog must be identical, region identities included;
 - families must match in order, kind and region;
 - applet controls must already carry their acknowledged identities;
+- Desk's prompt takes its acknowledged identity and may change, so typing in
+  it sends one CONTROL-REPLACE;
 - the taskbar takes the acknowledged identities and must otherwise be
   unchanged, because a DELTA cannot replace taskbar controls;
 - instruments and series take the identities in place and must be unchanged;
