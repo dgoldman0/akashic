@@ -1400,11 +1400,11 @@ TABLE_ID, TREE_ID = 31_000, 31_001
 
 
 def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str | None = None,
-                caret: int | None = None, anchor: int | None = None):
+                caret: int | None = None, anchor: int | None = None, delete: bool = False):
     """Desk with File Explorer: its detail table listing large.txt and the
     sample picture with SELECTED selected, its folder tree, its menu bar,
     and the selected path in its status bar; with RENAME, the rename prompt
-    holding it over the tile."""
+    holding it over the tile, and with DELETE, its delete question."""
 
     rows = {0: " File  Edit  View  Tools", ROWS - 1: "[1:File Explo*]"}
     if status:
@@ -1437,14 +1437,20 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
         if anchor is not None:
             prompt = replace(prompt, content=replace(prompt.content, anchor=anchor))
         frame = _held(frame, prompt)
+    if delete:
+        frame = _asked(frame, _question("Delete the selected item?", (
+            ("Delete", ButtonFlag.DESTRUCTIVE),
+            ("Cancel", ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
+        )))
     return frame
 
 
-def test_fexp_alone_selects_a_names_stem_in_its_rename_prompt_and_cancels() -> None:
+def test_fexp_alone_cancels_its_rename_prompt_and_its_delete_question() -> None:
     journey = FexpAloneJourney(FEXP_READY)
     journey.stage = FexpAloneJourney.FILE_SELECTED
     journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
     prompt_offer = _cell_offer(1, ((81, 1, "Rename: large.txt"),))
+    question_offer = _cell_offer(1, ((32, 62, "Delete the selected item?"),))
     blank = _cell_offer(1, ())
     steps = (
         (blank, _fexp_frame()),
@@ -1459,6 +1465,10 @@ def test_fexp_alone_selects_a_names_stem_in_its_rename_prompt_and_cancels() -> N
         # Escape has not closed the prompt yet.
         (blank, _fexp_frame(status=False, rename="notes.txt")),
         (blank, _fexp_frame()),
+        (question_offer, _fexp_frame(delete=True)),
+        # Cancel has not closed the question yet.
+        (question_offer, _fexp_frame(delete=True)),
+        (blank, _fexp_frame()),
     )
     results = _run(journey, steps)
     value = f"1,1,{PROMPT_ID},0,{{}}".format
@@ -1471,7 +1481,10 @@ def test_fexp_alone_selects_a_names_stem_in_its_rename_prompt_and_cancels() -> N
         (None, []),
         ("fexp-rename-stem-replaced", [("send_key", "escape")]),
         (None, []),
-        ("fexp-rename-cancelled", [("item_select", f"1,1,{TABLE_ID},2")]),
+        ("fexp-rename-cancelled", [("send_key", "delete")]),
+        ("fexp-delete-question-shown", [("activate_button", f"1,1,{PROMPT_ID + 2}")]),
+        (None, []),
+        ("fexp-delete-cancelled", [("item_select", f"1,1,{TABLE_ID},2")]),
     ]
     assert journey.stage == FexpAloneJourney.PICTURE_SELECTED
 
@@ -1494,3 +1507,8 @@ def test_fexp_alone_refuses_a_rename_that_held_the_wrong_span_or_left_the_table_
     with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
         journey_at(FexpAloneJourney.RENAME_PROMPT).after_present(
             _cell_offer(1, ((81, 1, "Rename: large.txt"),)), 9, active, sender)
+    # The delete question, likewise, holds the table and tree beneath it.
+    asked = replace(_fexp_frame(delete=True), inactive_controls=frozenset())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
+        journey_at(FexpAloneJourney.DELETE_ASKED).after_present(
+            _cell_offer(1, ((32, 62, "Delete the selected item?"),)), 9, asked, sender)

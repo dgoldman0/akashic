@@ -60,11 +60,15 @@ from rich_terminal_desktop_acceptance import (
 )
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
-# Ctrl+W on Pad's edited buffer asks before discarding it, with Discard,
-# destructive, beside Cancel, the default; the journey answers Cancel.
+# A confirm question offers its verb, destructive, beside Cancel, the
+# default; the journeys answer Cancel.  Ctrl+W on Pad's edited buffer asks
+# before discarding it, and Delete in File Explorer before deleting the
+# selected item.
+CONFIRM_CANCEL = "Cancel"
 PAD_CLOSE_QUESTION = "Discard unsaved changes?"
 PAD_CLOSE_DISCARD = "Discard"
-PAD_CLOSE_CANCEL = "Cancel"
+FEXP_DELETE_QUESTION = "Delete the selected item?"
+FEXP_DELETE = "Delete"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # The canonical Desktop image's large sample sits in the root directory,
 # beside its sample picture.
@@ -195,6 +199,35 @@ def _status_shows(projection: RichScreenProjection, marker: str, bounds) -> bool
         marker in claim.label or marker in claim.value
         for claim in _status_field_claims_in(projection, bounds)
     )
+
+
+def _cancel_of_confirm(offer, projection, dialog, bounds, verb, menu_signature,
+                       owner) -> str:
+    """The value that presses Cancel on DIALOG, OWNER's confirm question.
+
+    OWNER stays rich and inactive beneath it; it offers exactly VERB,
+    destructive and never the default, and Cancel, the default cancel
+    button; and CELL shows its question."""
+
+    _require_held_beneath_overlay(projection, dialog, bounds, menu_signature, owner)
+    chosen = dialog.button(verb)
+    cancel = dialog.button(CONFIRM_CANCEL)
+    if chosen is None or cancel is None or len(dialog.buttons) != 2:
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s question does not offer exactly {verb} and Cancel: "
+            f"{[button.label for button in dialog.buttons]!r}"
+        )
+    if not chosen.content.destructive or chosen.content.default:
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s {verb} is not destructive, or is the default"
+        )
+    if not (cancel.content.default and cancel.content.cancel):
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s Cancel is not the default cancel button"
+        )
+    _require_cell_text_in(offer, dialog.content.lines[0], bounds, _WHERE)
+    identity = cancel.identity
+    return f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
 
 
 class _AppletJourney(FrameBoundJourney):
@@ -485,31 +518,12 @@ class PadAloneJourney(_AppletJourney):
         if self.stage == self.CLOSE_ASKED:
             if dialog is None:
                 return self._wait("Pad's question after Ctrl+W")
-            _require_held_beneath_overlay(projection, dialog, bounds, PAD_MENU_SIGNATURE, "Pad")
             if not _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds):
                 raise PhysicalDesktopAcceptanceError("Pad's question withheld its editor")
-            discard = dialog.button(PAD_CLOSE_DISCARD)
-            cancel = dialog.button(PAD_CLOSE_CANCEL)
-            if discard is None or cancel is None or len(dialog.buttons) != 2:
-                raise PhysicalDesktopAcceptanceError(
-                    "Pad's question does not offer exactly Discard and Cancel: "
-                    f"{[button.label for button in dialog.buttons]!r}"
-                )
-            if not discard.content.destructive or discard.content.default:
-                raise PhysicalDesktopAcceptanceError(
-                    "Pad's Discard is not destructive, or is the default"
-                )
-            if not (cancel.content.default and cancel.content.cancel):
-                raise PhysicalDesktopAcceptanceError(
-                    "Pad's Cancel is not the default cancel button"
-                )
-            _require_cell_text_in(offer, dialog.content.lines[0], bounds, _WHERE)
-            identity = cancel.identity
-            return self._step(
-                "pad-close-question-shown", "activate_button",
-                f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
-                self.CLOSE_CANCELLED, offer, generation, sender,
-            )
+            value = _cancel_of_confirm(offer, projection, dialog, bounds, PAD_CLOSE_DISCARD,
+                                       PAD_MENU_SIGNATURE, "Pad")
+            return self._step("pad-close-question-shown", "activate_button", value,
+                              self.CLOSE_CANCELLED, offer, generation, sender)
         if dialog is not None:
             return self._wait("Pad's question to close after Cancel")
         if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
@@ -830,7 +844,11 @@ class FexpAloneJourney(_AppletJourney):
     over the tile with the table and tree rich and inactive beneath it; a
     PLACE at the name's start and an EXTEND to the end of its stem, as the
     viewer sends a drag, select the stem, typing replaces it, and Escape
-    cancels, leaving the file as it was.  A
+    cancels, leaving the file as it was.  Delete then asks before it
+    deletes the file: File Explorer's dialog, in a modal region over the
+    tile with the table and tree rich and inactive beneath it, offers
+    Delete, destructive, and Cancel, the default, and pressing Cancel
+    closes it and leaves the file listed and selected.  A
     SELECT on sunset.qoi's row loads its preview, and activating the
     Preview tab shows it: the rich frame shows it as an IMAGE once the
     terminal holds it, while CELL beneath shows what the picture is and
@@ -881,6 +899,8 @@ class FexpAloneJourney(_AppletJourney):
         RENAME_SELECTED,
         RENAME_TYPED,
         RENAME_CANCELLED,
+        DELETE_ASKED,
+        DELETE_CANCELLED,
         PICTURE_SELECTED,
         PICTURE_PREVIEWED,
         PICTURE_DETAILS,
@@ -914,7 +934,7 @@ class FexpAloneJourney(_AppletJourney):
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(40)
+    ) = range(42)
     _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
                         LINKED_DOCUMENT)
     _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_OUTLINE_CLOSED,
@@ -1538,9 +1558,19 @@ class FexpAloneJourney(_AppletJourney):
             )
         if self.RENAME_PROMPT <= self.stage <= self.RENAME_TYPED:
             return self._rename(offer, generation, projection, sender, rename)
-        if self.stage in (self.FILE_SELECTED, self.RENAME_CANCELLED):
+        delete = _dialog_claim(projection, FEXP_DELETE_QUESTION, bounds)
+        if self.stage == self.DELETE_ASKED:
+            if delete is None:
+                return self._wait("File Explorer's question after Delete")
+            value = _cancel_of_confirm(offer, projection, delete, bounds, FEXP_DELETE,
+                                       FEXPLORER_MENU_SIGNATURE, "File Explorer")
+            return self._step("fexp-delete-question-shown", "activate_button", value,
+                              self.DELETE_CANCELLED, offer, generation, sender)
+        if self.stage in (self.FILE_SELECTED, self.RENAME_CANCELLED, self.DELETE_CANCELLED):
             if rename is not None:
                 return self._wait("the rename prompt closed")
+            if delete is not None:
+                return self._wait("File Explorer's question to close after Cancel")
             selected = table.selected
             if selected is None or selected.fields[0].text != FEXP_FILE:
                 return self._wait(f"{FEXP_FILE}'s row selected")
@@ -1558,6 +1588,9 @@ class FexpAloneJourney(_AppletJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "cancelling the rename prompt renamed the file"
                 )
+            if self.stage == self.RENAME_CANCELLED:
+                return self._step("fexp-rename-cancelled", "send_key", "delete",
+                                  self.DELETE_ASKED, offer, generation, sender)
             row = table.named(FEXPLORER_PICTURE)
             if row is None:
                 raise PhysicalDesktopAcceptanceError(
@@ -1565,8 +1598,8 @@ class FexpAloneJourney(_AppletJourney):
                 )
             if not self._shown(table, row):
                 return self._step("fexp-table-scrolled", "item_scroll", table.value(1),
-                                  self.RENAME_CANCELLED, offer, generation, sender)
-            return self._step("fexp-rename-cancelled", "item_select",
+                                  self.DELETE_CANCELLED, offer, generation, sender)
+            return self._step("fexp-delete-cancelled", "item_select",
                               table.value(row.item_key), self.PICTURE_SELECTED,
                               offer, generation, sender)
         if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
