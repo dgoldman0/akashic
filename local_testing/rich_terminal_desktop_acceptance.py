@@ -385,6 +385,18 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RSHSP-DIAG-PREPARE-STATUS",
     "_RSHSP-DIAG-PREPARE-STAGE",
     "_RSHSP-DIAG-GROWTHS",
+    # The latest control intent the terminal sent: whether its resolver found
+    # a target, and the cell and revision it gave.
+    "_APTAS-CONTROL-HAS",
+    "_APTAS-CONTROL-ROW",
+    "_APTAS-CONTROL-COL",
+    "_APTAS-CONTROL-REVISION",
+    # The latest pointer event an application host dispatched, and the column
+    # a dialog's button hit test last measured.
+    "_AHMO-BUTTON",
+    "_AHMO-HIT-ROW",
+    "_AHMO-HIT-COL",
+    "_DLG-HIT-C",
 )
 
 def _QUOTA_FIELDS(prefix: str, first: int) -> dict[str, int]:
