@@ -776,8 +776,8 @@ CREATE DESK-LAUNCHER-DESC APP-DESC ALLOT
 : _DESK-LAUNCHER-PAGE  ( -- n )
     SCR-H 8 - 1 MAX 10 MIN ;
 
-\ The centred box holds the title, a page of entries, the status and hint
-\ rows, and one spare row.
+\ The centred box holds the launcher's dialog: its frame, with the title
+\ on the top edge, the status and hint rows, and a page of entries.
 VARIABLE _DLB-W
 VARIABLE _DLB-H
 : _DESK-LAUNCHER-BOX  ( -- row col h w )
@@ -2436,7 +2436,7 @@ CREATE _DESK-EV  24 ALLOT
     _DESK-CATALOG @ ?DUP IF ACAT-COUNT ELSE 0 THEN ;
 
 : _DESK-LAUNCHER-UIDL  ( -- a u )
-    S" <uidl arrange=stack><label id=title text=Applets/><region id=entries/><label id=status/><label id=hint/></uidl>" ;
+    S" <uidl arrange=stack><dialog id=screen title=Applets><label id=status/><label id=hint/><region id=entries/></dialog></uidl>" ;
 
 : _DESK-LAUNCHER-HINT$  ( -- a u )
     S" Up/Down PgUp/PgDn Home/End  Enter open  Esc close" ;
@@ -2496,11 +2496,7 @@ CREATE _DESK-LAUNCHER-COLUMNS  2 LST-COLUMN-SIZE * ALLOT
 \ the status line current.
 : _DESK-LAUNCHER-ACTIVATE  ( instance -- )
     DROP
-    UIDL-ROOT _DESK-LAUNCHER-STYLE
-    UIDL-ROOT ?DUP IF
-        UIDL-FIRST-CHILD
-        BEGIN ?DUP WHILE DUP _DESK-LAUNCHER-STYLE UIDL-NEXT-SIB REPEAT
-    THEN
+    ['] _DESK-LAUNCHER-STYLE UTUI-EACH-ELEM
     _DESK-LAUNCHER-LIST @ ?DUP IF
         _DESK-LAUNCHER-COUNT DUP _DESK-LAUNCHER-ROWS @ <> IF
             DUP _DESK-LAUNCHER-ROWS ! SWAP LST-ROWS!

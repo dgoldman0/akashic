@@ -332,8 +332,10 @@ _SXS-COL1 _SXS-STATE-MAX + CONSTANT _SXS-SIZE
 \  Overlay lifecycle
 \ =====================================================================
 
+\ A screen is a dialog: its title, then its message, the question an
+\ access prompt asks and the status and hint lines, then its rows.
 : _SXS-UIDL  ( -- a u )
-    S" <uidl arrange=stack><label id=title/><label id=ask/><region id=rows/><label id=status/><label id=hint/></uidl>" ;
+    S" <uidl arrange=stack><dialog id=screen><label id=ask/><label id=status/><label id=hint/><region id=rows/></dialog></uidl>" ;
 
 : _SXS-TITLE$  ( s -- a u )
     _SXS-ACCESS? IF S" Module access" ELSE S" Sandbox modules" THEN ;
@@ -363,13 +365,7 @@ CREATE _SXS-INSPECT-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
     DUP _SXS-MODULE-N SWAP _SXS-GRANT-N + ;
 
 : _SXS-STYLE-ALL  ( s -- )
-    _SXS.STYLE @ ?DUP 0= IF EXIT THEN
-    UIDL-ROOT OVER EXECUTE
-    UIDL-ROOT ?DUP IF
-        UIDL-FIRST-CHILD
-        BEGIN ?DUP WHILE 2DUP SWAP EXECUTE UIDL-NEXT-SIB REPEAT
-    THEN
-    DROP ;
+    _SXS.STYLE @ ?DUP IF UTUI-EACH-ELEM THEN ;
 
 \ Activation runs with the overlay's UIDL context current, before each of
 \ its events, ticks and paints.  It keeps the style, the rows, the
@@ -411,7 +407,7 @@ CREATE _SXS-INSPECT-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
     -1 R@ _SXS.SHOWN !
     S" ask" UTUI-BY-ID R@ _SXS.E-ASK !
     S" status" UTUI-BY-ID R@ _SXS.E-STATUS !
-    S" title" UTUI-BY-ID ?DUP IF S" text" R@ _SXS-TITLE$ UTUI-SET-ATTR THEN
+    S" screen" UTUI-BY-ID ?DUP IF S" title" R@ _SXS-TITLE$ UTUI-SET-ATTR THEN
     S" hint" UTUI-BY-ID ?DUP IF S" text" R@ _SXS-HINT$ UTUI-SET-ATTR THEN
     S" rows" UTUI-BY-ID DUP R@ _SXS.E-LIST ! 0= IF R> DROP EXIT THEN
     R@ _SXS.E-LIST @ UTUI-ELEM-RGN RGN-NEW DUP R@ _SXS.LIST-RGN !
@@ -518,10 +514,11 @@ _SXS-SETUP
 : SBXS-OVERLAY?  ( desc -- flag )
     DUP SBXS-ACCESS-DESC = SWAP SBXS-INSPECT-DESC = OR ;
 
-\ The centred box an overlay of DESC takes: the title, the question or a
-\ page of rows, the status and hint lines, and one spare row.
+\ The centred box an overlay of DESC takes, its dialog's: the frame, with
+\ the title on its top edge; the question, status and hint lines; and an
+\ access prompt's two rows or the inspector's page of rows.
 : SBXS-BOX  ( desc -- row col h w )
-    SBXS-ACCESS-DESC = IF 7 ELSE SCR-H 8 - 1 MAX 10 MIN 4 + THEN
+    SBXS-ACCESS-DESC = IF 7 ELSE SCR-H 8 - 1 MAX 10 MIN 5 + THEN
     SCR-W 4 - 68 MIN DUP 24 < IF DROP SCR-W 2 - THEN
     OVER SCR-H SWAP - 2 / 0 MAX
     OVER SCR-W SWAP - 2 / 0 MAX

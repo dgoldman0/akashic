@@ -517,6 +517,12 @@ handlers include:
 |---------|---------|-----------|
 | `_UTUI-LAYOUT-TABS` | `<tabs>` | Horizontal tab bar + content pane |
 | `_UTUI-LAYOUT-MBAR` | `<menubar>` | Horizontal layout: each `<menu>` child placed at parent row, advancing column by label-length + 2, height 1 |
+| `_UTUI-LAYOUT-DLG` | `<dialog>` | Keeps the rectangle its parent gives it; inside its frame a leaf child takes a row and a container the rows the children after it leave, a row at least |
+
+The ordinary stack layout reserves a row for every leaf child, so a
+container after a leaf loses that leaf's row a second time: a document of
+a menu bar, a body and a status bar leaves a blank row under its status
+bar. The dialog layout counts only the children after a container.
 
 ---
 
@@ -746,10 +752,20 @@ Called once during `UTUI-LOAD`, after materialization.
 
 ## Dialog Management
 
+A `<dialog>` is a framed container. It keeps the rectangle its parent's
+layout gives it, so a document whose root holds only a dialog is that
+dialog. It paints its background, a single-line frame and its title (the
+`title` attribute) on the frame's top edge, and its children stack inside
+the frame. Its leading `<label>` children, one row each, are its message;
+the children after them are its contents. Like any dialog it paints in the
+overlay pass, at z 255 unless its style says otherwise. Desk's own screens
+are such documents.
+
 | Word | Stack | Description |
 |------|-------|---------|
 | `UTUI-SHOW-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-SHOW` |
 | `UTUI-HIDE-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-HIDE` |
+| `UTUI-EACH-ELEM` | `( xt -- )` | Run `xt ( elem -- )` on every element, each before its children; `xt` must not change the tree |
 
 ---
 

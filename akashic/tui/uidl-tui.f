@@ -24,6 +24,7 @@
 \    UTUI-FOCUS-NEXT  ( -- )
 \    UTUI-FOCUS-PREV  ( -- )
 \    UTUI-BY-ID       ( id-a id-l -- elem | 0 )
+\    UTUI-EACH-ELEM   ( xt -- )
 \    UTUI-DO!         ( do-a do-l xt -- )
 \    UTUI-SHOW-DIALOG ( id-a id-l -- )
 \    UTUI-HIDE-DIALOG ( id-a id-l -- )
@@ -1277,15 +1278,6 @@ VARIABLE _UST-FIRST
     DROP
     32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT ;
 
-\ --- Dialog ---
-: _UTUI-RENDER-DLG  ( elem -- )
-    _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    DROP
-    \ Fill area
-    _UTUI-FILL-BG
-    \ Border
-    BOX-ROUND _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @ BOX-DRAW ;
-
 \ --- Split: draw vertical divider at ratio= position ---
 : _UTUI-RENDER-SPLIT  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
@@ -2250,27 +2242,73 @@ VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
     THEN
     2DROP ;
 
-\ --- Dialog layout: centered overlay ---
-VARIABLE _UDL-DLG-SC
+\ --- Dialog: a framed container ---
+\ A dialog keeps the rectangle its parent's layout gives it.  A frame
+\ takes its outer rows and columns and its title (the title attribute)
+\ sits on the top edge.  Inside the frame its children stack: a leaf takes
+\ a row, and a container the rows the children after it leave, a row at
+\ least; actions and positioned children take none.  Its leading label
+\ children are its message, and the children after them its contents.
+
+VARIABLE _UDL-DLG-POS
+VARIABLE _UDL-DLG-END
+VARIABLE _UDL-DLG-COL
+VARIABLE _UDL-DLG-W
+
+\ A child the dialog lays out.
+: _UTUI-DLG-PLACED?  ( child -- flag )
+    DUP UIDL-EVAL-WHEN IF _UL-SKIP-LAYOUT? 0= ELSE DROP 0 THEN ;
+
+\ The rows the placed children after CHILD keep: a row each.
+: _UTUI-DLG-AFTER  ( child -- rows )
+    0 SWAP UIDL-NEXT-SIB
+    BEGIN ?DUP WHILE
+        DUP _UTUI-DLG-PLACED? IF SWAP 1+ SWAP THEN UIDL-NEXT-SIB
+    REPEAT ;
+
+: _UTUI-DLG-PLACE  ( child sc -- )
+    _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-LAYOUT-FLAGS!
+    _UDL-DLG-POS @ OVER _UTUI-SC-ROW!
+    _UDL-DLG-COL @ OVER _UTUI-SC-COL!
+    _UDL-DLG-W @ OVER _UTUI-SC-W!
+    SWAP DUP _UL-IS-LEAF? IF
+        DROP 1
+    ELSE
+        _UDL-DLG-END @ _UDL-DLG-POS @ - SWAP _UTUI-DLG-AFTER - 1 MAX
+    THEN
+    DUP _UDL-DLG-POS +! SWAP _UTUI-SC-H! ;
 
 : _UTUI-LAYOUT-DLG  ( elem -- )
-    DUP _UTUI-SIDECAR _UDL-DLG-SC !
-    _UDL-DLG-SC @ _UTUI-SC-VIS? 0= IF DROP EXIT THEN
+    DUP _UTUI-SIDECAR DUP _UTUI-SC-VIS? 0= IF 2DROP EXIT THEN
+    DUP _UTUI-SC-ROW@ 1+ _UDL-DLG-POS !
+    DUP _UTUI-SC-COL@ 1+ _UDL-DLG-COL !
+    DUP _UTUI-SC-W@ 2 - 0 MAX _UDL-DLG-W !
+    DUP _UTUI-SC-ROW@ SWAP _UTUI-SC-H@ + 1- _UDL-DLG-END !
+    UIDL-FIRST-CHILD
+    BEGIN ?DUP WHILE
+        DUP _UTUI-SIDECAR
+        OVER UIDL-EVAL-WHEN 0= IF
+            _UTUI-SCF-HAS SWAP _UTUI-SC-LAYOUT-FLAGS!
+        ELSE OVER _UL-SKIP-LAYOUT? IF
+            _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
+            _UDL-DLG-POS @ OVER _UTUI-SC-ROW!
+            _UDL-DLG-COL @ OVER _UTUI-SC-COL!
+            0 OVER _UTUI-SC-W! 0 SWAP _UTUI-SC-H!
+        ELSE
+            OVER SWAP _UTUI-DLG-PLACE
+        THEN THEN
+        UIDL-NEXT-SIB
+    REPEAT ;
 
-    \ Dialog dimensions: 60% width (min 10), children+4 height (5–20)
-    _UTUI-RGN @ RGN-W 60 * 100 /
-    10 MAX _UDL-DLG-SC @ _UTUI-SC-W!
-    DUP UIDL-NCHILDREN 4 + 5 MAX 20 MIN
-    _UDL-DLG-SC @ _UTUI-SC-H!
-    \ Center in root region
-    _UTUI-RGN @ RGN-H _UDL-DLG-SC @ _UTUI-SC-H@ - 2/ DUP 0< IF DROP 0 THEN
-    _UTUI-RGN @ RGN-ROW +
-    _UDL-DLG-SC @ _UTUI-SC-ROW!
-    _UTUI-RGN @ RGN-W _UDL-DLG-SC @ _UTUI-SC-W@ - 2/ DUP 0< IF DROP 0 THEN
-    _UTUI-RGN @ RGN-COL +
-    _UDL-DLG-SC @ _UTUI-SC-COL!
-    \ Layout children inside dialog (stack)
-    _UTUI-LAYOUT-STACK ;
+\ Its background, and the frame with the title on its top edge; the
+\ children paint over it.
+: _UTUI-RENDER-DLG  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    _UTUI-FILL-BG
+    _UR-H @ 2 < _UR-W @ 2 < OR IF DROP EXIT THEN
+    S" title" UIDL-ATTR 0= IF 2DROP 0 0 THEN
+    >R >R BOX-SINGLE R> R> _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @
+        BOX-DRAW-TITLED ;
 
 \ --- Scroll: reserve 1 col for scrollbar track on child ---
 : _UTUI-LAYOUT-SCROLL  ( elem -- )
@@ -3988,6 +4026,20 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 \ =====================================================================
 
 : UTUI-BY-ID  ( id-a id-l -- elem | 0 )  UIDL-BY-ID ;
+
+\ UTUI-EACH-ELEM ( xt -- )
+\   Run XT ( elem -- ) on every element of the document, each before its
+\   children.  XT must not change the tree.
+VARIABLE _UEE-XT
+: _UEE-NEXT  ( elem -- next|0 )
+    DUP UIDL-FIRST-CHILD ?DUP IF NIP EXIT THEN
+    BEGIN
+        DUP UIDL-NEXT-SIB ?DUP IF NIP EXIT THEN
+        UIDL-PARENT DUP 0=
+    UNTIL ;
+: UTUI-EACH-ELEM  ( xt -- )
+    _UEE-XT ! UIDL-ROOT
+    BEGIN ?DUP WHILE DUP _UEE-XT @ EXECUTE _UEE-NEXT REPEAT ;
 
 \ UTUI-WIDGET@ ( elem -- wptr | 0 )
 \   Return the widget pointer associated with a UIDL element, or 0.
