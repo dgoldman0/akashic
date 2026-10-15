@@ -2302,9 +2302,11 @@ def test_mnu_no_consume_when_closed():
 # (cancel).  _ON-ANSWER records the answer and the asker's context.
 _DLG_SETUP = [
     '80 24 SCR-NEW DUP SCR-USE SCR-CLEAR',
-    'CREATE _BT 48 ALLOT',
-    'S" OK" _BT 8 + ! _BT ! DLG-B-DEFAULT _BT 16 + !',
-    'S" Cancel" _BT 32 + ! _BT 24 + ! DLG-B-CANCEL _BT 40 + !',
+    # Interpreted strings share one buffer, so the labels come from words.
+    ': _OK S" OK" ; : _CANCEL S" Cancel" ;',
+    'CREATE _BT 64 ALLOT _BT 64 0 FILL',
+    '_OK _BT 8 + ! _BT ! DLG-B-DEFAULT _BT 16 + !',
+    '_CANCEL _BT 40 + ! _BT 32 + ! DLG-B-CANCEL _BT 48 + !',
     'VARIABLE _ANS -2 _ANS ! VARIABLE _ANS-CTX 0 _ANS-CTX !',
     ': _ON-ANSWER ( index ctx -- ) _ANS-CTX ! _ANS ! ;',
     ": _ASK S\" Title\" S\" Hello world\" _BT 2 ['] _ON-ANSWER 77 DLG-ASK ;",
@@ -2326,18 +2328,21 @@ def test_dlg_ask_opens_one_dialog_for_the_application():
 
 
 def test_dlg_refuses_buttons_that_are_not_valid():
-    """No buttons, an empty label, a destructive default, two defaults or
-    two cancels open nothing."""
+    """No buttons, an empty label, a destructive default, two defaults, two
+    cancels, an unknown role, a key that is not a function key, or two
+    buttons with one key open nothing."""
     check("invalid buttons",
         _DLG_SETUP + [
          ": _TRY S\" T\" S\" M\" _BT 2 0 0 DLG-ASK . DLG-SHOWN 0= . ;",
          "S\" T\" S\" M\" _BT 0 0 0 DLG-ASK . DLG-SHOWN 0= .",
-         '0 _BT 32 + ! _TRY S" Cancel" _BT 32 + ! _BT 24 + !',
+         '0 _BT 40 + ! _TRY _CANCEL _BT 40 + ! _BT 32 + !',
          'DLG-B-DEFAULT DLG-B-DESTRUCTIVE OR _BT 16 + ! _TRY',
-         'DLG-B-DEFAULT _BT 16 + ! DLG-B-DEFAULT _BT 40 + ! _TRY',
-         'DLG-B-CANCEL _BT 16 + ! DLG-B-CANCEL _BT 40 + ! _TRY',
-         '8 _BT 16 + ! 0 _BT 40 + ! _TRY 8888 .',
-         _DLG_CLEANUP], "0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 8888")
+         'DLG-B-DEFAULT _BT 16 + ! DLG-B-DEFAULT _BT 48 + ! _TRY',
+         'DLG-B-CANCEL _BT 16 + ! DLG-B-CANCEL _BT 48 + ! _TRY',
+         '16 _BT 16 + ! 0 _BT 48 + ! _TRY 0 _BT 16 + !',
+         'KEY-UP _BT 24 + ! _TRY',
+         'KEY-F6 _BT 24 + ! KEY-F6 _BT 56 + ! _TRY 8888 .',
+         _DLG_CLEANUP], "0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 8888")
 
 
 def test_dlg_keys_move_choose_and_answer_with_the_context():
@@ -2481,7 +2486,7 @@ def test_dlg_capture_describes_what_the_paint_shows():
          'CREATE _CAPS 1031 ALLOT : _CAP _CAPS 7 + -8 AND ;',
          '_ASK DROP 0 0 DLG-SHOWN DLG-MODEL-CAPTURE . .',
          'DLG-HOST-PAINT 0 0 DLG-SHOWN DLG-MODEL-CAPTURE . .',
-         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . . _CAP 328 UDLG-VALIDATE .',
+         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . . _CAP 344 UDLG-VALIDATE .',
          '_CAP UDLG-WIDTH@ . _CAP UDLG-HEIGHT@ . _CAP UDLG-SEVERITY@ .',
          '_CAP UDLG-KEY@ DLG-SHOWN DLG-INSTANCE@ = .',
          '_CAP UDLG-TITLE-SLOT@ . . . . _CAP UDLG-MESSAGE-SLOT@ . . . .',
@@ -2490,7 +2495,7 @@ def test_dlg_capture_describes_what_the_paint_shows():
          'UDLG-BUTTON-NEXT DUP UDLG-BUTTON-SLOT@ . . . . UDLG-BUTTON-STATE@ .',
          'DLG-SHOWN DLG-ROOT . . . . 8888 .',
          _DLG_CLEANUP],
-        "1 0 0 328 0 328 0 21 6 0 -1 5 1 2 0 17 1 2 2 0 6 1 2 4 7 10 1 9 4 3"
+        "1 0 0 344 0 344 0 21 6 0 -1 5 1 2 0 17 1 2 2 0 6 1 2 4 7 10 1 9 4 3"
         " 21 6 29 9 8888")
 
 
@@ -2526,6 +2531,114 @@ def test_dlg_instances_differ_and_info_and_confirm_carry_meaning():
          "KEY-ENTER _KEY S\" Delete it?\" S\" Delete\" 0 5 DLG-CONFIRM DROP",
          'DLG-SHOWN _DLG-O-SEVERITY + @ . 0 DLG-INSTANCE@ . 8888 .',
          _DLG_CLEANUP], "-1 0 -1 1 3 0 8888")
+
+
+# A message of ten one-word paragraphs, L1 to L10, in bounds of 10 rows by
+# 40 columns: the 21 by 8 dialog at row 1 and column 9 has three message
+# rows, so it shows two and says on the third that more lies below.
+_DLG_LONG = [
+    'CREATE _LONG 64 ALLOT VARIABLE _LONG-U',
+    ': _LC+ ( c -- ) _LONG _LONG-U @ + C! 1 _LONG-U +! ;',
+    ': _LONG-BUILD 0 _LONG-U ! 11 1 DO I 1 > IF 10 _LC+ THEN',
+    '    76 _LC+ I 10 < IF I 48 + _LC+ ELSE 49 _LC+ 48 _LC+ THEN LOOP ;',
+    ': _LBOUNDS 0 0 10 40 ;',
+    "' _LBOUNDS IS _DLG-BOUNDS-HOOK",
+    ": _ASK-LONG S\" Title\" _LONG _LONG-U @ _BT 2 ['] _ON-ANSWER 77 DLG-ASK ;",
+    ': _CP ( row col -- cp ) SCR-GET CELL-CP@ ;',
+    # [ F6 Approve ] waits for the message to be read; [ F7 Deny ] is the
+    # default and cancel button.
+    ': _APPROVE S" Approve" ; : _DENY S" Deny" ;',
+    'CREATE _RB 64 ALLOT _RB 64 0 FILL',
+    '_APPROVE _RB 8 + ! _RB ! DLG-B-READ-FIRST _RB 16 + ! KEY-F6 _RB 24 + !',
+    '_DENY _RB 40 + ! _RB 32 + ! DLG-B-DEFAULT DLG-B-CANCEL OR _RB 48 + !',
+    'KEY-F7 _RB 56 + !',
+    ": _ASK-READ S\" Review\" _LONG _LONG-U @ _RB 2 ['] _ON-ANSWER 77 DLG-ASK ;",
+    'CREATE _CAPS 2055 ALLOT : _CAP _CAPS 7 + -8 AND ;',
+]
+_DLG_LONG_CLEANUP = "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK " + _DLG_CLEANUP
+
+
+def test_dlg_scrolls_a_long_message_and_says_more_lies_below():
+    """Down, End and Home move the message; the row after the view says
+    more lies below until its last line is in view."""
+    check("scroll",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-LONG DROP DLG-HOST-PAINT',
+         'DLG-SHOWN WDG-REGION DUP RGN-ROW . DUP RGN-COL . DUP RGN-H . RGN-W .',
+         '3 12 _CP . 4 12 _CP . 5 11 _CP .',
+         'KEY-DOWN _KEY DLG-HOST-PAINT 3 12 _CP . 4 12 _CP .',
+         'KEY-END _KEY DLG-HOST-PAINT 3 12 _CP . 4 13 _CP . 5 11 _CP .',
+         'KEY-HOME _KEY DLG-HOST-PAINT 3 12 _CP . 5 11 _CP . 8888 .',
+         _DLG_LONG_CLEANUP],
+        "1 9 8 21 49 50 80 50 51 57 48 32 49 80 8888")
+
+
+def test_dlg_read_first_button_waits_for_the_last_line_and_takes_its_key():
+    """F6 cannot choose Approve until a paint has shown the message's last
+    line; then it does."""
+    check("read first",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT',
+         'KEY-F6 _KEY DLG-SHOWN 0<> . _ANS @ .',
+         'DLG-SHOWN 0 _DLG-AVAILABLE? . DLG-SHOWN 1 _DLG-AVAILABLE? .',
+         'KEY-END _KEY KEY-F6 _KEY DLG-SHOWN 0<> .',
+         'DLG-HOST-PAINT KEY-F6 _KEY DLG-SHOWN 0<> . _ANS @ . 8888 .',
+         _DLG_LONG_CLEANUP], "-1 -2 0 -1 -1 0 0 8888")
+    check("f7 and escape",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT KEY-F7 _KEY _ANS @ .',
+         '_ASK-READ DROP DLG-HOST-PAINT KEY-ESC _KEY _ANS @ . 8888 .',
+         _DLG_LONG_CLEANUP], "1 1 8888")
+
+
+def test_dlg_capture_shows_the_rows_in_view_and_what_can_be_chosen():
+    """The model holds the two rows in view and the row saying more lies
+    below; Approve is visible but not enabled until the last line has been
+    shown, and each button names its key."""
+    check("capture in view",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT',
+         '_CAP 2048 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-MESSAGE-SLOT@ . . . .',
+         '_CAP UDLG-MESSAGE@ DUP . DROP DUP C@ . 6 + C@ .',
+         '_CAP UDLG-BUTTON-FIRST DUP UDLG-BUTTON-STATE@ .',
+         'DUP UDLG-BUTTON-SHORTCUT@ DROP C@ . UDLG-BUTTON-NEXT DUP UDLG-BUTTON-STATE@ .',
+         'UDLG-BUTTON-SHORTCUT@ NIP .',
+         'KEY-END _KEY DLG-HOST-PAINT _CAP 2048 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-MESSAGE-SLOT@ . . . . _CAP UDLG-BUTTON-FIRST UDLG-BUTTON-STATE@ .',
+         '8888 .',
+         _DLG_LONG_CLEANUP], "0 26 3 2 2 22 76 80 1 70 7 2 0 26 2 2 2 3 8888")
+
+
+def test_dlg_ask_detail_takes_the_host_area_and_shows_each_look():
+    """A detail dialog takes the bounds but a cell at each side; a label,
+    an exact value and a fault each have their own colour."""
+    check("detail",
+        _DLG_SETUP + [
+         'CREATE _PR 72 ALLOT _PR 72 0 FILL',
+         ': _P! ( a u look i -- ) 24 * _PR + >R R@ 16 + ! R@ 8 + ! R> ! ;',
+         ': _PARAS S" Operation:" DLG-LOOK-LABEL 0 _P! S" copy" DLG-LOOK-VALUE 1 _P!',
+         '    S" Denied" DLG-LOOK-FAULT 2 _P! ;',
+         ': _ASK-DETAIL S" Review" _PR 3 _BT 2 0 0 DLG-ASK-DETAIL ;',
+         '_PARAS _ASK-DETAIL . DLG-HOST-PAINT',
+         'DLG-SHOWN WDG-REGION DUP RGN-ROW . DUP RGN-COL . DUP RGN-H . RGN-W .',
+         '3 3 SCR-GET DUP CELL-CP@ . CELL-FG@ .',
+         '4 3 SCR-GET DUP CELL-CP@ . CELL-FG@ .',
+         '5 3 SCR-GET DUP CELL-CP@ . CELL-FG@ . 8888 .',
+         _DLG_CLEANUP], "-1 1 1 22 78 79 229 99 159 68 217 8888")
+
+
+def test_dlg_capture_makes_the_messages_direction_controls_inert():
+    """An override in the message is ignored as the paint ignored it: the
+    model carries an inert stand-in in its place."""
+    check("inert",
+        _DLG_SETUP + [
+         'CREATE _CAPS 1031 ALLOT : _CAP _CAPS 7 + -8 AND ;',
+         ': _RLO S" abc‮def" ;',
+         ': _ASK-RLO S" T" _RLO _BT 2 0 0 DLG-ASK ;',
+         '_ASK-RLO DROP DLG-HOST-PAINT _CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-MESSAGE@ DUP . DROP DUP 3 + C@ . DUP 4 + C@ . 5 + C@ . 8888 .',
+         _DLG_CLEANUP], "0 9 226 128 139 8888")
 
 
 # =====================================================================

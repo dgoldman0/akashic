@@ -13,8 +13,8 @@ MESSAGE = b"Remove notes.md?\nIt cannot be undone."
 DLG1 = struct.Struct("<IHHQIIiiIIiiII")
 
 # A 30 by 8 dialog: the title "Delete" on the top edge, two message lines,
-# and [ Delete ], destructive, beside [ Cancel ], the selected default and
-# cancel button.
+# and [ F9 Delete ], destructive, which F9 chooses, beside [ Cancel ], the
+# selected default and cancel button.
 PRELUDE = r'''
 VARIABLE _DM-N VARIABLE _DM-FAIL VARIABLE _DM-U
 CREATE _DM-MS 2055 ALLOT : _DM-M _DM-MS 7 + -8 AND ;
@@ -30,8 +30,8 @@ CREATE _DM-OS 1031 ALLOT : _DM-O _DM-OS 7 + -8 AND 1+ ;
     2 2 2 26 _DM-M UDLG-MESSAGE-SLOT!
     S" Remove notes.md?" _DM-M UDLG-LINE+
     S" It cannot be undone." _DM-M UDLG-LINE+
-    6 4 1 10 UDLG-B-DESTRUCTIVE 3 S" Delete" _DM-M UDLG-BUTTON+
-    6 16 1 10 UDLG-B-DEFAULT UDLG-B-CANCEL OR 7 S" Cancel" _DM-M UDLG-BUTTON+
+    6 4 1 10 UDLG-B-DESTRUCTIVE 3 S" Delete" S" F9" _DM-M UDLG-BUTTON+
+    6 16 1 10 UDLG-B-DEFAULT UDLG-B-CANCEL OR 7 S" Cancel" 0 0 _DM-M UDLG-BUTTON+
     _DM-M UDLG-BYTES@ _DM-U ! ;
 \ Validate a copy with one cell, or one byte, changed.
 : _DM-CELL ( value offset -- status )
@@ -60,8 +60,8 @@ def _run(program, minimum):
 def test_dialog_model_writes_a_canonical_value_and_reads_it_back():
     _run(r'''
 _DM-BUILD
-_DM-U @ 352 = _DM-A
-6 37 UDLG-TEXT-BYTES 6 UDLG-BUTTON-BYTES 2* + 352 = _DM-A
+_DM-U @ 376 = _DM-A
+6 37 UDLG-TEXT-BYTES 6 2 UDLG-BUTTON-BYTES + 6 0 UDLG-BUTTON-BYTES + 376 = _DM-A
 _DM-M _DM-U @ UDLG-VALIDATE _DM-OK
 _DM-M UDLG-KEY@ 42 = _DM-A _DM-M UDLG-REVISION@ 7 = _DM-A
 _DM-M UDLG-WIDTH@ 30 = _DM-A _DM-M UDLG-HEIGHT@ 8 = _DM-A
@@ -70,18 +70,20 @@ _DM-M UDLG-TITLE@ S" Delete" COMPARE 0= _DM-A
 _DM-M UDLG-MESSAGE@ NIP 37 = _DM-A
 _DM-M UDLG-MESSAGE-SLOT@ 26 = _DM-A 2 = _DM-A 2 = _DM-A 2 = _DM-A
 _DM-M UDLG-BUTTON-COUNT@ 2 = _DM-A
-_DM-M UDLG-UTF8-BYTES@ 55 = _DM-A
+_DM-M UDLG-UTF8-BYTES@ 57 = _DM-A
 _DM-M UDLG-BUTTON-FIRST DUP UDLG-BUTTON-LABEL@ S" Delete" COMPARE 0= _DM-A
+DUP UDLG-BUTTON-SHORTCUT@ S" F9" COMPARE 0= _DM-A
 DUP UDLG-BUTTON-ROLES@ UDLG-B-DESTRUCTIVE = _DM-A
 DUP UDLG-BUTTON-STATE@ 3 = _DM-A
 DUP UDLG-BUTTON-SLOT@ 10 = _DM-A 1 = _DM-A 4 = _DM-A 6 = _DM-A
 UDLG-BUTTON-NEXT DUP UDLG-BUTTON-LABEL@ S" Cancel" COMPARE 0= _DM-A
+DUP UDLG-BUTTON-SHORTCUT@ NIP 0= _DM-A
 DUP UDLG-BUTTON-ROLES@ 3 = _DM-A UDLG-BUTTON-STATE@ 7 = _DM-A
-''', 24)
+''', 26)
 
 
 # Each change, by cell or byte offset, and the status it leaves.  The
-# buttons begin at 208 and 280.
+# buttons begin at 208 and 296; the first's shortcut text is at 288.
 CELL_REFUSALS = [
     (2, 8, 1),          # another ABI is unsupported
     (0, 16, 3),         # no identity
@@ -98,16 +100,19 @@ CELL_REFUSALS = [
     (5, 216, 3),        # a destructive default
     (1, 216, 3),        # two defaults
     (7, 224, 3),        # two selected
-    (5, 296, 3),        # selected but not enabled
+    (5, 312, 3),        # selected but not enabled
     (12, 240, 3),       # buttons that meet
     (0, 232, 3),        # a button on the title's row...
     (80, 208, 3),       # a button record of the wrong size
+    (1, 272, 3),        # a shortcut the record has no room for
     (344, 0, 3),        # a length that is not the value's
 ]
 BYTE_REFUSALS = [
     (1, 166, 3),        # nonzero title padding
     (9, 172, 3),        # a tab in the message
     (10, 168 + 36, 3),  # an extra line
+    (9, 288, 3),        # a tab in a shortcut
+    (1, 290, 3),        # nonzero shortcut padding
 ]
 
 
@@ -131,7 +136,7 @@ def test_dialog_model_without_title_or_message_and_a_notice():
     _run(r'''
 \ Buttons alone.
 1 1 12 3 0 0 _DM-M UDLG-START
-1 1 1 10 UDLG-B-DEFAULT 7 S" OK" _DM-M UDLG-BUTTON+
+1 1 1 10 UDLG-B-DEFAULT 7 S" OK" 0 0 _DM-M UDLG-BUTTON+
 _DM-M DUP UDLG-BYTES@ UDLG-VALIDATE _DM-OK
 \ A notice: a message and no buttons.
 2 1 20 1 UDLG-F-NOTICE 4 _DM-M UDLG-START

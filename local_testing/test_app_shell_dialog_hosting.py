@@ -13,13 +13,14 @@ from test_shell_snapshot import PRELUDE, _run
 HOSTING = PRELUDE + r'''
 CREATE _AD-CD COMP-DESC ALLOT CREATE _AD-AD APP-DESC ALLOT
 CREATE _AD-EVS 31 ALLOT : _AD-EV _AD-EVS 7 + -8 AND ;
-CREATE _AD-BT 48 ALLOT
+CREATE _AD-BT 64 ALLOT _AD-BT 64 0 FILL
 VARIABLE _AD-I VARIABLE _AD-S VARIABLE _AD-EVENTS VARIABLE _AD-CHILD
 VARIABLE _AD-ANS VARIABLE _AD-ROW VARIABLE _AD-COL
 : _AD-EVENT ( ev instance -- consumed? ) 2DROP 1 _AD-EVENTS +! -1 ;
 : _AD-ANSWER ( index context -- ) DROP _AD-ANS ! ;
-S" OK" _AD-BT 8 + ! _AD-BT ! DLG-B-DEFAULT _AD-BT 16 + !
-S" No" _AD-BT 32 + ! _AD-BT 24 + ! DLG-B-CANCEL _AD-BT 40 + !
+: _AD-OK S" OK" ; : _AD-NO S" No" ;
+_AD-OK _AD-BT 8 + ! _AD-BT ! DLG-B-DEFAULT _AD-BT 16 + !
+_AD-NO _AD-BT 40 + ! _AD-BT 32 + ! DLG-B-CANCEL _AD-BT 48 + !
 : _AD-ASK ( -- ok? ) S" Title" S" Proceed?" _AD-BT 2 ['] _AD-ANSWER 0 DLG-ASK ;
 \ The dialog's top-left cell, and a left press on its first button.
 : _AD-CORNER ( -- row col ) DLG-SHOWN WDG-REGION DUP RGN-ROW SWAP RGN-COL ;

@@ -276,7 +276,7 @@ VARIABLE _ah-tick-touch
 \ A dialog child A asks, answered through ordinary host dispatch.
 VARIABLE _ah-dialog-answer
 VARIABLE _ah-dialog-saved
-CREATE _ah-dialog-btn 3 CELLS ALLOT
+CREATE _ah-dialog-btn 4 CELLS ALLOT  _ah-dialog-btn 4 CELLS 0 FILL
 : _ah-dialog-answered  ( index context -- )
     55 = _ah-assert _ah-dialog-answer ! ;
 : _ah-dialog-ask  ( -- ok? )

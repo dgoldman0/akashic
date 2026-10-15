@@ -443,8 +443,7 @@ CREATE _laf-evs 31 ALLOT
     0 _LAPP-CURRENT-INSTANCE @ LIBRARY-APPLET-REQUEST-CLOSE-CB ;
 : _laf-asks-discard?  ( -- flag )
     DLG-SHOWN ?DUP 0= IF 0 EXIT THEN
-    DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @
-    S" Close Library and discard the pending create?" STR-STR= ;
+    0 DLG-PARAGRAPH S" Close Library and discard the pending create?" STR-STR= ;
 
 : _laf-pending-close-and-discard  ( -- )
     S" Discard pending" DUP _LAPP-PENDING-TITLE-U !

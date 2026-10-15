@@ -2,7 +2,8 @@
 \ dialog-model.f -- Caller-owned canonical DIALOG values
 \ =====================================================================
 \ ABI 1 is pointer-free: header160, the title/pad8, the message/pad8,
-\ then one record a button: header64 and its label/pad8.  The message is
+\ then one record a button: header72, its label/pad8 and its shortcut's
+\ text/pad8, which may be empty.  The message is
 \ the lines the dialog shows, joined by line feeds.  The title, the
 \ message and each button have a slot, a rectangle of cells inside the
 \ dialog's root, and no two slots meet.  A notice has no buttons.  This is
@@ -30,7 +31,7 @@ REQUIRE status-field-model.f
 2 CONSTANT UDLG-STATE-ENABLED
 4 CONSTANT UDLG-STATE-SELECTED
 160 CONSTANT UDLG-HEADER-SIZE
-64 CONSTANT UDLG-BUTTON-HEADER-SIZE
+72 CONSTANT UDLG-BUTTON-HEADER-SIZE
 0 CONSTANT UDLG-BYTES-OFFSET
 8 CONSTANT UDLG-ABI-OFFSET
 16 CONSTANT UDLG-KEY-OFFSET
@@ -52,6 +53,7 @@ REQUIRE status-field-model.f
 16 CONSTANT UDLG-BUTTON-STATE-OFFSET
 24 CONSTANT UDLG-BUTTON-SLOT-OFFSET
 56 CONSTANT UDLG-BUTTON-LABEL-BYTES-OFFSET
+64 CONSTANT UDLG-BUTTON-SHORTCUT-BYTES-OFFSET
 
 CREATE _UDLG-OWNED-START
 VARIABLE _UDLG-OWNED-LIMIT
@@ -89,11 +91,19 @@ VARIABLE _UDLG-OWNED-LIMIT
     UDLG-BUTTON-SLOT-OFFSET + UDLG-SLOT@ ;
 : UDLG-BUTTON-LABEL@ ( button -- a u )
     DUP UDLG-BUTTON-HEADER-SIZE + SWAP UDLG-BUTTON-LABEL-BYTES-OFFSET + @ ;
-\ The title, the message with its line feeds, and every label.
+\ The text of the key that chooses the button, empty when none does.
+: UDLG-BUTTON-SHORTCUT@ ( button -- a u )
+    DUP UDLG-BUTTON-LABEL@ _UDLG-ALIGN8 +
+    SWAP UDLG-BUTTON-SHORTCUT-BYTES-OFFSET + @ ;
+\ The title, the message with its line feeds, and every label and
+\ shortcut.
 : UDLG-UTF8-BYTES@ ( validated-model -- bytes )
     DUP UDLG-TITLE-BYTES@ OVER UDLG-MESSAGE-BYTES@ + SWAP
     DUP UDLG-BUTTON-COUNT@ SWAP UDLG-BUTTON-FIRST SWAP
-    0 ?DO DUP UDLG-BUTTON-LABEL@ NIP ROT + SWAP UDLG-BUTTON-NEXT LOOP DROP ;
+    0 ?DO
+        DUP UDLG-BUTTON-LABEL@ NIP ROT + OVER UDLG-BUTTON-SHORTCUT@ NIP +
+        SWAP UDLG-BUTTON-NEXT
+    LOOP DROP ;
 
 : UDLG-STORAGE-DISJOINT? ( address bytes -- flag )
     2DUP USF-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
@@ -225,7 +235,9 @@ VARIABLE _UDLG-S-R VARIABLE _UDLG-S-C VARIABLE _UDLG-S-H VARIABLE _UDLG-S-W
     _UDLG-V-M @ _UDLG-V-O @ + _UDLG-V-R !
     _UDLG-V-R @ UDLG-BUTTON-LABEL@ NIP DUP 0= IF DROP 0 EXIT THEN
     DUP _UDLG-U32? 0= IF DROP 0 EXIT THEN
-    UDLG-BUTTON-HEADER-SIZE SWAP _UDLG-ALIGN8 +
+    _UDLG-V-R @ UDLG-BUTTON-SHORTCUT-BYTES-OFFSET + @
+        DUP _UDLG-U32? 0= IF 2DROP 0 EXIT THEN
+    _UDLG-ALIGN8 SWAP _UDLG-ALIGN8 + UDLG-BUTTON-HEADER-SIZE +
         _UDLG-V-R @ UDLG-BUTTON-BYTES-OFFSET + @ <> IF 0 EXIT THEN
     _UDLG-V-R @ UDLG-BUTTON-ROLES@ _UDLG-V-ROLES? 0= IF 0 EXIT THEN
     _UDLG-V-R @ UDLG-BUTTON-STATE@ _UDLG-V-STATE? 0= IF 0 EXIT THEN
@@ -235,7 +247,8 @@ VARIABLE _UDLG-S-R VARIABLE _UDLG-S-C VARIABLE _UDLG-S-H VARIABLE _UDLG-S-W
     _UDLG-V-M @ UDLG-MESSAGE-SLOT-OFFSET + _UDLG-MEETS? IF 0 EXIT THEN
     _UDLG-V-PRIOR-APART? 0= IF 0 EXIT THEN
     UDLG-BUTTON-HEADER-SIZE _UDLG-V-O +!
-    _UDLG-V-R @ UDLG-BUTTON-LABEL@ NIP _UDLG-V-STRING? ;
+    _UDLG-V-R @ UDLG-BUTTON-LABEL@ NIP _UDLG-V-STRING? 0= IF 0 EXIT THEN
+    _UDLG-V-R @ UDLG-BUTTON-SHORTCUT-BYTES-OFFSET + @ _UDLG-V-STRING? ;
 
 : _UDLG-V-BUTTONS? ( -- flag )
     0 _UDLG-V-DEFAULTS ! 0 _UDLG-V-CANCELS ! 0 _UDLG-V-SELECTED !
@@ -276,13 +289,15 @@ VARIABLE _UDLG-S-R VARIABLE _UDLG-S-C VARIABLE _UDLG-S-H VARIABLE _UDLG-S-W
 \ The bytes of the header, the title and the message, and of one button.
 : UDLG-TEXT-BYTES ( title-u message-u -- bytes )
     _UDLG-ALIGN8 SWAP _UDLG-ALIGN8 + UDLG-HEADER-SIZE + ;
-: UDLG-BUTTON-BYTES ( label-u -- bytes )
-    _UDLG-ALIGN8 UDLG-BUTTON-HEADER-SIZE + ;
+: UDLG-BUTTON-BYTES ( label-u shortcut-u -- bytes )
+    _UDLG-ALIGN8 SWAP _UDLG-ALIGN8 + UDLG-BUTTON-HEADER-SIZE + ;
 
 VARIABLE _UDLG-W-M
 VARIABLE _UDLG-W-P
 VARIABLE _UDLG-W-S
 VARIABLE _UDLG-W-LINES
+VARIABLE _UDLG-W-SA
+VARIABLE _UDLG-W-SU
 
 \ BYTES always holds the end of what is written.
 : _UDLG-W-TEXT-END! ( -- )
@@ -333,13 +348,16 @@ VARIABLE _UDLG-W-LINES
     _UDLG-W-M @ UDLG-MESSAGE-BYTES@ DUP _UDLG-ALIGN8 SWAP - 0 FILL
     _UDLG-W-TEXT-END! ;
 
-: UDLG-BUTTON+ ( row col height width roles state a u model -- )
-    _UDLG-W-M !
+: UDLG-BUTTON+ ( row col height width roles state a u shortcut-a shortcut-u model -- )
+    _UDLG-W-M ! _UDLG-W-SU ! _UDLG-W-SA !
     _UDLG-W-M @ DUP UDLG-BYTES@ + _UDLG-W-P !
     _UDLG-W-P @ UDLG-BUTTON-HEADER-SIZE 0 FILL
-    DUP UDLG-BUTTON-BYTES _UDLG-W-P @ UDLG-BUTTON-BYTES-OFFSET + !
+    DUP _UDLG-W-SU @ UDLG-BUTTON-BYTES _UDLG-W-P @ UDLG-BUTTON-BYTES-OFFSET + !
     DUP _UDLG-W-P @ UDLG-BUTTON-LABEL-BYTES-OFFSET + !
-    _UDLG-W-P @ UDLG-BUTTON-HEADER-SIZE + _UDLG-W-TEXT
+    _UDLG-W-SU @ _UDLG-W-P @ UDLG-BUTTON-SHORTCUT-BYTES-OFFSET + !
+    DUP >R _UDLG-W-P @ UDLG-BUTTON-HEADER-SIZE + _UDLG-W-TEXT
+    _UDLG-W-SA @ _UDLG-W-SU @
+        _UDLG-W-P @ UDLG-BUTTON-HEADER-SIZE + R> _UDLG-ALIGN8 + _UDLG-W-TEXT
     _UDLG-W-P @ UDLG-BUTTON-STATE-OFFSET + !
     _UDLG-W-P @ UDLG-BUTTON-ROLES-OFFSET + !
     _UDLG-W-P @ UDLG-BUTTON-SLOT-OFFSET + _UDLG-SLOT-STORE

@@ -26,8 +26,9 @@ def pad(data):
     return data + bytes((-len(data)) % 8)
 
 
-def button(label, slot, roles, state):
-    return struct.pack("<8Q", 64 + len(pad(label)), roles, state, *slot, len(label)) + pad(label)
+def button(label, slot, roles, state, shortcut=b""):
+    return (struct.pack("<9Q", 72 + len(pad(label)) + len(pad(shortcut)), roles, state,
+                        *slot, len(label), len(shortcut)) + pad(label) + pad(shortcut))
 
 
 # A 30 by 8 dialog: the title "Delete" on the top edge, two message lines,
@@ -64,11 +65,11 @@ class DialogHarness(StatusHarness):
         for name, n in {"ARENA-A": self.arena, "ARENA-U": size, "MAX-DOCUMENTS": 1,
                         "MAX-RECORDS": 1, "MAX-TEXT": 64, "MAX-COLLECTION-NATIVE": 256,
                         "MAX-COLLECTION-DESCRIPTORS": 8, "MAX-COLLECTIONS": 4,
-                        "MAX-CONTROLS": 5 + dialog_native // 64, "MAX-DGRAPH-NATIVE": 256,
+                        "MAX-CONTROLS": 5 + dialog_native // 72, "MAX-DGRAPH-NATIVE": 256,
                         "MAX-DGRAPH-DESCRIPTORS": 1, "MAX-INSTRUMENT-REGIONS": 1,
                         "MAX-INSTRUMENTS": 2, "MAX-STATUS-NATIVE": 512, "MAX-STATICS": 7,
                         "MAX-DIALOG-NATIVE": dialog_native, "MAX-DIALOGS": dialog_native // 160,
-                        "MAX-DIALOG-CONTROLS": dialog_native // 64,
+                        "MAX-DIALOG-CONTROLS": dialog_native // 72,
                         "MAX-COLS": 32, "MAX-ROWS": 8, "COLS": 32, "ROWS": 8,
                         "OWNER": 1, "OWNER-GEN": 2, "REGION": 7, "FIRST-OBJECT": 100,
                         "SOURCE-GEN": 9, "SOURCE-CONTENT-EPOCH": 29, "SOURCE-DRAW": 12,
@@ -181,6 +182,19 @@ def test_a_dialog_lowers_to_one_dialog_and_its_buttons(h):
     claim = struct.unpack("<10Q", h.runtime.memory.read_bytes(h.get("CLAIMS-A"), 80))
     assert claim == (11, 9, SOURCE, 0, KEY, 254, 0, 1, 8, 31)
     h.guards()
+
+
+def test_a_button_carries_the_text_of_the_key_that_chooses_it(h):
+    h.setup(buttons=((b"Delete", (6, 4, 1, 10), 4, 3, b"F9"), (b"Cancel", (6, 16, 1, 10), 3, 7)))
+    assert h.build() == (0,)
+    assert h.fixed()
+    assert h.get("DIALOG-UTF8") == len(TITLE) + len(MESSAGE) + 12 + 2
+    assert h.span(h.control(1), "SHORTCUT") == b"F9"
+    assert h.read(h.control(2), "_RTE-CONTROL.SHORTCUT-U") == 0
+    bank = h.pack()
+    h.activate(bank)
+    assert h.results("RTHP-CONTROL-TARGET@", 1, 2, 101, h.constant("RTE-INTENT-ACTIVATE"),
+                     h.producer) == (6, 5, 29, MASK64)
 
 
 def test_a_button_takes_a_press_at_its_first_cell_and_the_dialog_none(h):

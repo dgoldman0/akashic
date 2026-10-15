@@ -29,9 +29,10 @@ PRELUDE = [
     "VARIABLE _DS-FAILS VARIABLE _DS-CHECKS",
     ": _DS-A 1 _DS-CHECKS +! 0= IF 1 _DS-FAILS +! .\" DLGSN ASSERT \" _DS-CHECKS @ . CR THEN ;",
     ": _DS-DONE _DS-FAILS @ 0= IF .\" DLGSN PASS \" ELSE .\" DLGSN FAIL \" THEN _DS-CHECKS @ . CR ;",
-    "CREATE _DS-BT 48 ALLOT",
-    "S\" OK\" _DS-BT 8 + ! _DS-BT ! DLG-B-DEFAULT _DS-BT 16 + !",
-    "S\" Cancel\" _DS-BT 32 + ! _DS-BT 24 + ! DLG-B-CANCEL _DS-BT 40 + !",
+    "CREATE _DS-BT 64 ALLOT _DS-BT 64 0 FILL",
+    ": _DS-OK S\" OK\" ; : _DS-CANCEL S\" Cancel\" ;",
+    "_DS-OK _DS-BT 8 + ! _DS-BT ! DLG-B-DEFAULT _DS-BT 16 + !",
+    "_DS-CANCEL _DS-BT 40 + ! _DS-BT 32 + ! DLG-B-CANCEL _DS-BT 48 + !",
     ": _DS-ASK S\" Title\" S\" Hello world\" _DS-BT 2 0 0 DLG-ASK ;",
     "CREATE _DS-DM 175 ALLOT : _DS-D _DS-DM 7 + -8 AND ;",
     "CREATE _DS-NM 1031 ALLOT : _DS-N _DS-NM 7 + -8 AND ;",
@@ -59,15 +60,15 @@ def test_a_painted_dialog_is_captured_with_its_place_and_identity():
     _run([
         "1024 _DS-CAPTURE 0= _DS-A 0= _DS-A 0= _DS-A",
         "_DS-ASK _DS-A 1024 _DS-CAPTURE 0= _DS-A 0= _DS-A 0= _DS-A",
-        "DLG-HOST-PAINT 1024 _DS-CAPTURE 0= _DS-A 328 = _DS-A 1 = _DS-A",
+        "DLG-HOST-PAINT 1024 _DS-CAPTURE 0= _DS-A 344 = _DS-A 1 = _DS-A",
         "_DS-D UDLSN-DESCRIPTOR-SOURCE@ UDLSN-SOURCE-OVERLAY = _DS-A",
         "_DS-D UDLSN-DESCRIPTOR-KEY@ DLG-SHOWN DLG-INSTANCE@ = _DS-A",
         "_DS-D UDLSN-DESCRIPTOR-ROW@ 9 = _DS-A _DS-D UDLSN-DESCRIPTOR-COLUMN@ 29 = _DS-A",
         "_DS-D UDLSN-DESCRIPTOR-HEIGHT@ 6 = _DS-A _DS-D UDLSN-DESCRIPTOR-WIDTH@ 21 = _DS-A",
-        "_DS-D UDLSN-DESCRIPTOR-ENTRY-BYTES@ 328 = _DS-A",
+        "_DS-D UDLSN-DESCRIPTOR-ENTRY-BYTES@ 344 = _DS-A",
         "_DS-D UDLSN-DESCRIPTOR-Z@ 255 = _DS-A _DS-D UDLSN-DESCRIPTOR-CONTENTS@ 0= _DS-A",
-        "_DS-N 328 UDLG-VALIDATE UDLG-S-OK = _DS-A",
-        "_DS-D 80 _DS-N 328 UDLSN-FROZEN-VALIDATE UDLSN-S-OK = _DS-A",
+        "_DS-N 344 UDLG-VALIDATE UDLG-S-OK = _DS-A",
+        "_DS-D 80 _DS-N 344 UDLSN-FROZEN-VALIDATE UDLSN-S-OK = _DS-A",
         "0 0 0 0 UDLSN-FROZEN-VALIDATE UDLSN-S-OK = _DS-A",
         "DLG-DISCARD 1024 _DS-CAPTURE 0= _DS-A 0= _DS-A 0= _DS-A",
     ], 24)
@@ -76,7 +77,7 @@ def test_a_painted_dialog_is_captured_with_its_place_and_identity():
 def test_frozen_validation_refuses_a_slice_its_descriptor_does_not_name():
     _run([
         "_DS-ASK DROP DLG-HOST-PAINT 1024 _DS-CAPTURE 2DROP DROP",
-        ": _DS-FROZEN ( -- status ) _DS-D 80 _DS-N 328 UDLSN-FROZEN-VALIDATE ;",
+        ": _DS-FROZEN ( -- status ) _DS-D 80 _DS-N 344 UDLSN-FROZEN-VALIDATE ;",
         ": _DS-CELL ( value offset -- status ) _DS-D + DUP @ >R TUCK ! _DS-FROZEN",
         "    SWAP R> SWAP ! ;",
         "_DS-FROZEN UDLSN-S-OK = _DS-A",
@@ -91,7 +92,7 @@ def test_frozen_validation_refuses_a_slice_its_descriptor_does_not_name():
         "1 72 _DS-CELL UDLSN-S-INVALID = _DS-A",
         "_DS-D 80 _DS-N 320 UDLSN-FROZEN-VALIDATE UDLSN-S-INVALID = _DS-A",
         "0 0 _DS-N 8 UDLSN-FROZEN-VALIDATE UDLSN-S-INVALID = _DS-A",
-        "_DS-D 160 _DS-N 328 UDLSN-FROZEN-VALIDATE UDLSN-S-INVALID = _DS-A",
+        "_DS-D 160 _DS-N 344 UDLSN-FROZEN-VALIDATE UDLSN-S-INVALID = _DS-A",
         "_DS-N 8 + DUP @ 1+ SWAP ! _DS-FROZEN UDLSN-S-INVALID = _DS-A",
         "DLG-DISCARD",
     ], 13)
@@ -209,7 +210,7 @@ def test_a_dialog_element_with_unrepresented_children_stays_cell():
 def test_a_shown_dialog_widget_is_captured_before_a_dialog_element():
     _run(ELEMENT + _load(DIALOG) + [
         "_DS-MOUNT _DS-ASK _DS-A DLG-HOST-PAINT",
-        "1024 _DS-CAPTURE 0= _DS-A 328 = _DS-A 1 = _DS-A",
+        "1024 _DS-CAPTURE 0= _DS-A 344 = _DS-A 1 = _DS-A",
         "_DS-D UDLSN-DESCRIPTOR-SOURCE@ UDLSN-SOURCE-OVERLAY = _DS-A",
         "DLG-DISCARD 1024 _DS-CAPTURE 0= _DS-A 184 = _DS-A 1 = _DS-A",
         "_DS-D UDLSN-DESCRIPTOR-SOURCE@ UDLSN-SOURCE-ELEMENT = _DS-A",

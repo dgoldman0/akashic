@@ -38,19 +38,23 @@ bytes, then one record a button:
 
 | Record offset | Field |
 |---:|---|
-| 0 | Exact record bytes, 64 and the padded label |
+| 0 | Exact record bytes: 72, the padded label and the padded shortcut |
 | 8 | Roles: DEFAULT=1, CANCEL=2, DESTRUCTIVE=4 |
 | 16 | State: VISIBLE=1, ENABLED=2, SELECTED=4 |
 | 24 | Slot: row, column, height, width |
 | 56 | Label bytes, positive u32 |
+| 64 | Shortcut bytes, u32: the text of the key that chooses the button, zero when none does |
 
-The title and every label are clean single-line text. The message is the
+The label follows the record's header and the shortcut follows the label,
+each padded with zeros to eight bytes. The title, every label and every
+nonempty shortcut are clean single-line text. The message is the
 lines the dialog shows, joined by line feeds; each line is empty or clean
 single-line text, and there are no more lines than the message slot has
 rows. At most one button is the default and one the cancel button, and
 none is destructive and the default. At most one is selected, and only a
-visible enabled one. `UDLG-UTF8-BYTES@` counts the title, the message and
-every label.
+visible enabled one; a button that is not available yet is visible and not
+enabled. `UDLG-UTF8-BYTES@` counts the title, the message and every label
+and shortcut.
 
 ## Words
 
@@ -58,12 +62,12 @@ every label.
 UDLG-VALIDATE           ( model bytes -- status )
 UDLG-STORAGE-DISJOINT?  ( address bytes -- flag )
 UDLG-TEXT-BYTES         ( title-u message-u -- bytes )
-UDLG-BUTTON-BYTES       ( label-u -- bytes )
+UDLG-BUTTON-BYTES       ( label-u shortcut-u -- bytes )
 UDLG-START   ( key revision width height flags severity model -- )
 UDLG-TITLE!  ( row col height width a u model -- )
 UDLG-MESSAGE-SLOT! ( row col height width model -- )
 UDLG-LINE+   ( a u model -- )
-UDLG-BUTTON+ ( row col height width roles state a u model -- )
+UDLG-BUTTON+ ( row col height width roles state a u shortcut-a shortcut-u model -- )
 ```
 
 A writer measures the model with `UDLG-TEXT-BYTES` and one
@@ -72,8 +76,9 @@ order: `UDLG-START`, the title, the message slot and its lines, then the
 buttons. Each line after the first follows a line feed, an empty line
 too. The writers keep `bytes` at the end of what is written and check
 nothing; `UDLG-VALIDATE` proves the result. Accessors (`UDLG-TITLE@`,
-`UDLG-MESSAGE@`, `UDLG-BUTTON-FIRST`, `UDLG-BUTTON-NEXT` and the field
-readers) require a validated model.
+`UDLG-MESSAGE@`, `UDLG-BUTTON-FIRST`, `UDLG-BUTTON-NEXT`,
+`UDLG-BUTTON-LABEL@`, `UDLG-BUTTON-SHORTCUT@` and the field readers)
+require a validated model.
 
 Statuses are `UDLG-S-OK=0`, `UDLG-S-UNSUPPORTED=1` for another ABI,
 `UDLG-S-CAPACITY=2` and `UDLG-S-INVALID=3`. The validator keeps its scratch

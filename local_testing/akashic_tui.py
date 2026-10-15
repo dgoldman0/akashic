@@ -13350,7 +13350,7 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
 \ Daybook shows the question MSG.
 : _dt-asks?  ( msg-a msg-u -- flag )
     DLG-SHOWN ?DUP 0= IF 2DROP 0 EXIT THEN
-    DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @ STR-STR= ;
+    0 DLG-PARAGRAPH STR-STR= ;
 : _dt-close-request  ( -- decision )
     APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB ;
 
@@ -35159,8 +35159,7 @@ CREATE _suc-evs 31 ALLOT
 \ Streams asks whether to remove the selected source.
 : _suc-asks-remove?  ( -- flag )
     DLG-SHOWN ?DUP 0= IF 0 EXIT THEN
-    DUP _DLG-O-MSG-A + @ SWAP _DLG-O-MSG-U + @
-    S" Remove the selected source?" STR-STR= ;
+    0 DLG-PARAGRAPH S" Remove the selected source?" STR-STR= ;
 \ Answer Remove: Cancel is the default, and Left selects Remove.
 : _suc-remove  ( -- )
     KEY-LEFT _suc-key _suc-assert KEY-ENTER _suc-key _suc-assert
