@@ -1213,3 +1213,103 @@ def test_the_damaged_check_needs_one_upload_the_terminal_answered() -> None:
         journey.observe_status(_upload_status(present=33, **counts))
         with pytest.raises(PhysicalDesktopAcceptanceError, match="not as one upload"):
             journey._sent_once()
+
+
+TABLE_ID, TREE_ID = 31_000, 31_001
+
+
+def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str | None = None,
+                caret: int | None = None, anchor: int | None = None):
+    """Desk with File Explorer: its detail table listing large.txt and the
+    sample picture with SELECTED selected, its folder tree, its menu bar,
+    and the selected path in its status bar; with RENAME, the rename prompt
+    holding it over the tile."""
+
+    rows = {0: " File  Edit  View  Tools", ROWS - 1: "[1:File Explo*]"}
+    if status:
+        rows[81] = f" /{selected}"
+    frame = _screen(rows, (acceptance_runner.FEXPLORER_MENU_SIGNATURE,))
+    names = ("large.txt", acceptance_runner.FEXPLORER_PICTURE)
+    items = tuple(
+        ViewItem(ordinal + 1, 0, ordinal, 0,
+                 ItemState.SELECTED if name == selected else ItemState(0), ItemRole.ITEM,
+                 (ItemField(name), ItemField("2K"), ItemField("file")))
+        for ordinal, name in enumerate(names)
+    )
+    table = acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, TABLE_ID), 30, 2, COLS, 60,
+        ItemViewContent(1, ItemViewRole.TABLE, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT, "Name"),
+                         ItemColumn(ItemColumnKind.NUMBER, "Size"),
+                         ItemColumn(ItemColumnKind.TEXT, "Type")),
+                        len(items), 0, len(items), items),
+    )
+    root = ViewItem(1, 0, 0, 0, ItemState.EXPANDABLE, ItemRole.ITEM, (ItemField("/"),))
+    tree = acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, TREE_ID), 0, 2, 29, 60,
+        ItemViewContent(1, ItemViewRole.TREE, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT),), 1, 0, 1, (root,)),
+    )
+    frame = replace(frame, semantic_item_view_claims=(table, tree))
+    if rename is not None:
+        prompt = _prompt("Rename:", rename, row=81, caret=caret)
+        if anchor is not None:
+            prompt = replace(prompt, content=replace(prompt.content, anchor=anchor))
+        frame = _held(frame, prompt)
+    return frame
+
+
+def test_fexp_alone_selects_a_names_stem_in_its_rename_prompt_and_cancels() -> None:
+    journey = FexpAloneJourney(FEXP_READY)
+    journey.stage = FexpAloneJourney.FILE_SELECTED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    prompt_offer = _cell_offer(1, ((81, 1, "Rename: large.txt"),))
+    blank = _cell_offer(1, ())
+    steps = (
+        (blank, _fexp_frame()),
+        (prompt_offer, _fexp_frame(status=False, rename="large.txt")),
+        # The caret has not moved yet.
+        (blank, _fexp_frame(status=False, rename="large.txt")),
+        (blank, _fexp_frame(status=False, rename="large.txt", caret=0)),
+        (blank, _fexp_frame(status=False, rename="large.txt", caret=5, anchor=0)),
+        # The guest may paint between typed characters.
+        (blank, _fexp_frame(status=False, rename="no.txt")),
+        (blank, _fexp_frame(status=False, rename="notes.txt")),
+        # Escape has not closed the prompt yet.
+        (blank, _fexp_frame(status=False, rename="notes.txt")),
+        (blank, _fexp_frame()),
+    )
+    results = _run(journey, steps)
+    value = f"1,1,{PROMPT_ID},0,{{}}".format
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("fexp-file-selected", [("send_key", "f2")]),
+        ("fexp-rename-prompt-opened", [("text_place", value(0))]),
+        (None, []),
+        ("fexp-rename-caret-placed", [("text_extend", value(5))]),
+        ("fexp-rename-stem-selected", [("send_text", "notes")]),
+        (None, []),
+        ("fexp-rename-stem-replaced", [("send_key", "escape")]),
+        (None, []),
+        ("fexp-rename-cancelled", [("item_select", f"1,1,{TABLE_ID},2")]),
+    ]
+    assert journey.stage == FexpAloneJourney.PICTURE_SELECTED
+
+
+def test_fexp_alone_refuses_a_rename_that_held_the_wrong_span_or_left_the_table_active() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    def journey_at(stage):
+        journey = FexpAloneJourney(FEXP_READY)
+        journey.stage = stage
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        return journey
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="gave 'noteslarge.txt'"):
+        journey_at(FexpAloneJourney.RENAME_TYPED).after_present(
+            _cell_offer(1, ()), 9, _fexp_frame(status=False, rename="noteslarge.txt"), sender)
+    active = replace(_fexp_frame(status=False, rename="large.txt"),
+                     inactive_controls=frozenset())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
+        journey_at(FexpAloneJourney.RENAME_PROMPT).after_present(
+            _cell_offer(1, ((81, 1, "Rename: large.txt"),)), 9, active, sender)
