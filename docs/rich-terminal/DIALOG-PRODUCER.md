@@ -78,8 +78,11 @@ removes the dialog lane after them, which is then built again.
 ## Input, packing and DELTA
 
 A shown, enabled BUTTON is a press target at its first cell, which the
-dialog's own button covers, so ACTIVATE becomes an ordinary click there. The
-DIALOG takes no input of its own.
+dialog's own button covers, so ACTIVATE becomes an ordinary click there. A
+shown DIALOG that is not a notice takes only the wheel: its SCROLL becomes an
+ordinary wheel step at the dialog's first cell, which the dialog takes as it
+takes every pointer event of its application, and scrolls its message, as
+CELL's wheel does. The new lines in view go out as newer DLG1 content.
 
 Packed acknowledgement banks own every title, label, DLG1 and BTN1; packing
 and unchanged cloning rebase them. A DELTA keeps the dialog lane's shape: a

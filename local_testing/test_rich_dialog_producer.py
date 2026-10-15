@@ -197,7 +197,7 @@ def test_a_button_carries_the_text_of_the_key_that_chooses_it(h):
                      h.producer) == (6, 5, 29, MASK64)
 
 
-def test_a_button_takes_a_press_at_its_first_cell_and_the_dialog_none(h):
+def test_a_button_takes_a_press_at_its_first_cell_and_the_dialog_only_the_wheel(h):
     h.setup()
     assert h.build() == (0,)
     bank = h.pack()
@@ -211,6 +211,12 @@ def test_a_button_takes_a_press_at_its_first_cell_and_the_dialog_none(h):
     assert h.results("RTHP-CONTROL-TARGET@", 1, 2, 101,
                      h.constant("RTE-INTENT-ADJUST"), h.producer) == (0, 0, 0, 0)
     assert h.results("RTHP-CONTROL-TARGET@", 1, 3, 101, activate, h.producer) == (0, 0, 0, 0)
+    # A wheel over the dialog scrolls it from its root's first cell; a
+    # button takes none.
+    scroll = h.constant("RTE-INTENT-SCROLL")
+    assert h.results("RTHP-CONTROL-TARGET@", 1, 2, 100, scroll, h.producer) == (
+        0, 1, 29, MASK64)
+    assert h.results("RTHP-CONTROL-TARGET@", 1, 2, 101, scroll, h.producer) == (0, 0, 0, 0)
 
 
 def test_hidden_or_disabled_buttons_show_no_target_and_keep_their_index(h):

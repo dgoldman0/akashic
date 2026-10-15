@@ -603,13 +603,14 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-DIALOG-KIND?  ( rte-kind -- flag )
     DUP RTE-CONTROL-DIALOG = SWAP RTE-CONTROL-BUTTON = OR ;
 
-\ The retained control kinds that can be hit-test targets.  A dialog is
-\ never one; its buttons are.
+\ The retained control kinds that can be hit-test targets.  A dialog is one
+\ only for the wheel; its buttons take presses.
 : _RTHP-TARGET-KIND?  ( rte-kind -- flag )
     DUP RTE-CONTROL-MENU = OVER RTE-CONTROL-MENU-ITEM = OR
     OVER RTE-CONTROL-TAB = OR
     OVER RTE-CONTROL-FIELD = OR
     OVER RTE-CONTROL-BUTTON = OR
+    OVER RTE-CONTROL-DIALOG = OR
     SWAP _RTHP-CONTENT-CONTROL-KIND? OR ;
 
 \ Which retained control kinds accept which reported intent.
@@ -630,7 +631,9 @@ VARIABLE _RTHP-OWNED-LIMIT
         RTE-INTENT-PLACE OF
             DUP _RTHP-TEXT-COLLECTION-CONTROL-KIND? SWAP RTE-CONTROL-FIELD = OR
         ENDOF
-        RTE-INTENT-SCROLL OF _RTHP-CONTENT-CONTROL-KIND? ENDOF
+        RTE-INTENT-SCROLL OF
+            DUP _RTHP-CONTENT-CONTROL-KIND? SWAP RTE-CONTROL-DIALOG = OR
+        ENDOF
         RTE-INTENT-SELECT OF RTE-CONTROL-ITEM-VIEW = ENDOF
         RTE-INTENT-OPEN OF RTE-CONTROL-ITEM-VIEW = ENDOF
         RTE-INTENT-EXPAND OF RTE-CONTROL-ITEM-VIEW = ENDOF
@@ -1921,11 +1924,23 @@ VARIABLE _RTHP-FT-INTENTS
     LOOP -1 ;
 
 \ A shown, enabled BUTTON is a press target, routed like a text root to its
-\ first cell, which the dialog's own button covers.  A DIALOG takes no input
-\ of its own.
+\ first cell, which the dialog's own button covers.  A DIALOG takes only the
+\ wheel, below.
 : _RTHP-CT-BUTTON? ( -- target? valid? )
     _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-BUTTON <> IF 0 -1 EXIT THEN
     _RTHP-CT-TEXT-ROOT? ;
+
+\ A dialog that is not a notice takes the wheel, which scrolls its message.
+\ Its routing cell is its root's first cell, as a text root's is, and it is
+\ a target while visible, having no enabled state.  The NOTICE flag is bit 0
+\ of its DLG1 flags.
+: _RTHP-CT-DIALOG? ( -- target? valid? )
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-DIALOG <> IF 0 -1 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.CONTENT-A @ 6 + C@ UDLG-F-NOTICE AND IF
+        0 -1 EXIT
+    THEN
+    _RTHP-CT-TEXT-ROOT? 0= IF DROP 0 0 EXIT THEN DROP
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.STATE @ RTE-CONTROL-VISIBLE AND 0<> -1 ;
 
 : _RTHP-TG-DIALOG-TARGETS? ( -- flag )
     _RTHP-TG-P @ _RTHP.DIALOG-CONTROLS @
@@ -1935,6 +1950,9 @@ VARIABLE _RTHP-FT-INTENTS
         _RTHP-TG-P @ _RTHP.CONTROLS-A @ I RTE-CONTROL-SIZE * +
             DUP _RTHP-CT-CONTROL ! _RTE-CONTROL.ID @ _RTHP-CT-ID !
         _RTHP-CT-BUTTON? 0= IF DROP 0 UNLOOP EXIT THEN IF
+            _RTHP-TG-APPEND-CURRENT? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+        _RTHP-CT-DIALOG? 0= IF DROP 0 UNLOOP EXIT THEN IF
             _RTHP-TG-APPEND-CURRENT? 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP -1 ;

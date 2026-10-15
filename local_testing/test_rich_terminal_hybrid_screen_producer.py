@@ -7210,7 +7210,11 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
         "            DUP _RTHP-TEXT-COLLECTION-CONTROL-KIND? SWAP RTE-CONTROL-FIELD = OR\n"
         "        ENDOF"
     ) in suits
-    assert "RTE-INTENT-SCROLL OF _RTHP-CONTENT-CONTROL-KIND? ENDOF" in suits
+    assert (
+        "RTE-INTENT-SCROLL OF\n"
+        "            DUP _RTHP-CONTENT-CONTROL-KIND? SWAP RTE-CONTROL-DIALOG = OR\n"
+        "        ENDOF"
+    ) in suits
     # The five item intents suit only an item view.
     for intent in ("SELECT", "OPEN", "EXPAND", "COLLAPSE", "CHECK"):
         assert f"RTE-INTENT-{intent} OF RTE-CONTROL-ITEM-VIEW = ENDOF" in suits
