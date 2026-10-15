@@ -3356,11 +3356,12 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
         ),
     )
     # UIDL-TUI advances by the five UTF-8 bytes in "Fïle", then two
-    # padding cells.  The two-byte item label makes a six-cell popup.
+    # padding cells.  The two-byte item label and its row's two-cell mark
+    # column make an eight-cell popup.
     expected_gap = {
         (col, row)
         for row in range(1, 5)
-        for col in range(8, 14)
+        for col in range(8, 16)
     }
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]
@@ -3451,12 +3452,12 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
     first_gap = {
         (col, row)
         for row in range(1, 4)
-        for col in range(1, 8)
+        for col in range(1, 10)
     }
     second_gap = {
         (col, row)
         for row in range(8, 11)
-        for col in range(24, 35)
+        for col in range(24, 37)
     }
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]

@@ -141,7 +141,6 @@ TSC-F-HAS       CONSTANT _UTUI-SCF-HAS
 TSC-F-VISIBLE   CONSTANT _UTUI-SCF-VIS
 TSC-F-FOCUSABLE CONSTANT _UTUI-SCF-FOC
 TSC-F-HIDE      CONSTANT _UTUI-SCF-HIDE
-TSC-F-MARK      CONSTANT _UTUI-SCF-MARK
 
 1 CONSTANT _UTUI-RUNTIME-F-HIDDEN
 2 CONSTANT _UTUI-RUNTIME-F-CHECKED
@@ -1188,23 +1187,20 @@ VARIABLE _UTUI-MENU-SAVED-FOC  \ focus before menu opened
 
 VARIABLE _UMD-COL      \ dropdown left column
 VARIABLE _UMD-MAXW     \ widest row: mark column and item text, in cells
-VARIABLE _UMD-MARK     \ mark column, in cells: 2 with a checkable item, else 0
 VARIABLE _UMD-ICNT     \ item count
 VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
 
-\ A menu item is checkable when it carries a checked attribute, whose value
-\ seeds the item's state when its document loads.  The state itself is the
-\ runtime CHECKED bit that UTUI-CHECKED! changes, so checking an item never
-\ copies text into UIDL's string pool.
-: _UTUI-CHECKABLE?  ( elem -- flag )
-    DUP UIDL-TYPE UIDL-T-ITEM <> IF DROP 0 EXIT THEN
-    S" checked" UIDL-ATTR NIP NIP ;
+\ Every dropdown row keeps a mark column before its text, where a checked
+\ item shows its check mark.  Labels stay aligned whichever items are
+\ checked, and a menu's width follows from its labels alone, as in the rich
+\ terminal's menus.
+2 CONSTANT _UTUI-MENU-MARK-W
 
+\ A menu item's checked state is its runtime CHECKED bit, which its authored
+\ checked=true seeds when its document loads and UTUI-CHECKED! changes, so
+\ checking an item never copies text into UIDL's string pool.
 : _UTUI-CHECKED?  ( elem -- flag )
-    DUP _UTUI-SIDECAR _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-CHECKED AND 0= IF
-        DROP 0 EXIT
-    THEN
-    _UTUI-CHECKABLE? ;
+    _UTUI-SIDECAR _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-CHECKED AND 0<> ;
 
 \ Menu rows follow the same semantic/layout admission rule as ordinary flow.
 \ Only items and separators are valid rows; when=false, display:none, and
@@ -1241,11 +1237,10 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
     TSC-F-HIDDEN _UTUI-SCF-HIDE OR AND IF DROP 0 EXIT THEN
     _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-HIDDEN AND 0= ;
 
-\ Measure admitted items and find the widest text= label.  A menu with an
-\ admitted checkable item gives every row a mark column, so the labels stay
-\ aligned whichever items are checked.
+\ Measure admitted items and find the widest text= label.  A row is the
+\ mark column and the label.
 : _UTUI-MENU-MEASURE  ( menu-elem -- )
-    0 _UMD-MAXW !   0 _UMD-MARK !   0 _UMD-ICNT !
+    0 _UMD-MAXW !   0 _UMD-ICNT !
     UIDL-FIRST-CHILD
     BEGIN DUP 0<> WHILE
         DUP _UTUI-MENU-ROW? IF
@@ -1254,12 +1249,11 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
                 DUP S" text" UIDL-ATTR IF
                     CW-SWIDTH _UMD-MAXW @ MAX _UMD-MAXW !
                 ELSE 2DROP THEN
-                DUP _UTUI-CHECKABLE? IF 2 _UMD-MARK ! THEN
             THEN
         THEN
         UIDL-NEXT-SIB
     REPEAT DROP
-    _UMD-MARK @ _UMD-MAXW +! ;
+    _UTUI-MENU-MARK-W _UMD-MAXW +! ;
 
 \ Render <menu>: draw border box when this menu is the open dropdown.
 \ Geometry already covers the dropdown area (set by _UTUI-MENU-OPEN!).
@@ -1272,8 +1266,7 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
     \ Draw single-line border
     BOX-SINGLE _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @ BOX-DRAW ;
 
-\ Render <item>: self-rendering — bg fill + text + reverse highlight.  A row
-\ with a mark column shows a check mark there when its item is checked.
+\ Render <item>: self-rendering — bg fill + mark + text + reverse highlight
 : _UTUI-RENDER-ITEM  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     \ Highlight if this item is focused
@@ -1281,15 +1274,11 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
         _DRW-ATTRS @ CELL-A-REVERSE OR _DRW-ATTRS !
     THEN
     _UTUI-FILL-BG
-    _UR-COL @ 1+ _UR-TMP !
-    DUP _UTUI-SIDECAR _UTUI-SC-FLAGS@ _UTUI-SCF-MARK AND IF
-        DUP _UTUI-CHECKED? IF
-            10003 _UR-ROW @ _UR-TMP @ DRW-CHAR      \ U+2713 CHECK MARK
-        THEN
-        2 _UR-TMP +!
+    DUP _UTUI-CHECKED? IF
+        10003 _UR-ROW @ _UR-COL @ 1+ DRW-CHAR      \ U+2713 CHECK MARK
     THEN
     DUP S" text" UIDL-ATTR IF
-        _UR-ROW @ _UR-TMP @ DRW-TEXT
+        _UR-ROW @ _UR-COL @ 1+ _UTUI-MENU-MARK-W + DRW-TEXT
     ELSE 2DROP THEN
     DROP ;
 
@@ -2123,7 +2112,6 @@ VARIABLE _UL-CW   \ child width for flex
             THEN
             DUP _UTUI-SIDECAR         ( ... child sc )
             _UTUI-SCF-HAS _UTUI-SCF-VIS OR
-            _UMD-MARK @ IF _UTUI-SCF-MARK OR THEN
                 OVER _UTUI-SC-LAYOUT-FLAGS!
             _UMD-ROW @ 3 PICK 1+ +
                 OVER _UTUI-SC-ROW!     \ row = dropdown_top+1+idx
@@ -4170,19 +4158,19 @@ VARIABLE _USA-VL
     IF 1 _UTUI-DLG-REVISION +! THEN ;
 
 \ UTUI-CHECKED? ( elem -- flag )
-\   Whether elem is a checkable menu item that is checked.
+\   Whether elem is a checked menu item.
 : UTUI-CHECKED?  ( elem -- flag )
     DUP UIDL-ELEM-INDEX? NIP 0= IF DROP 0 EXIT THEN
     _UTUI-CHECKED? ;
 
 \ UTUI-CHECKED! ( flag elem -- )
-\   Check or uncheck a checkable menu item, which repaints when its state
-\   changes.  Any other element is left as it is.
+\   Check or uncheck a menu item, which repaints when its state changes.
+\   Any other element is left as it is.
 VARIABLE _UCK-ELEM
 
 : UTUI-CHECKED!  ( flag elem -- )
     DUP UIDL-ELEM-INDEX? NIP 0= IF 2DROP EXIT THEN
-    DUP _UTUI-CHECKABLE? 0= IF 2DROP EXIT THEN
+    DUP UIDL-TYPE UIDL-T-ITEM <> IF 2DROP EXIT THEN
     _UCK-ELEM !
     _UCK-ELEM @ _UTUI-SIDECAR _UTUI-SC-RUNTIME@      ( flag old )
     DUP ROT IF
@@ -5490,7 +5478,7 @@ VARIABLE _UTUI-WS-OLD-OWNER
     DUP _UTUI-STATE !
     ST-USE ;
 
-\ Seed each checkable menu item's state from its authored checked value.
+\ Seed each menu item's checked state from its authored checked value.
 : _UTUI-SEED-CHECKED  ( -- )
     _UDL-ECNT @ 0 ?DO
         I _UDL-ELEMSZ * _UDL-ELEMS +

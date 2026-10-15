@@ -67,7 +67,6 @@ REQUIRE draw.f
  32 CONSTANT TSC-F-DIRTY        \ needs repaint (DOM)
  64 CONSTANT TSC-F-GEOM-DIRTY   \ geometry changed (DOM)
 128 CONSTANT TSC-F-HIDE         \ display:none (UIDL)
-256 CONSTANT TSC-F-MARK         \ menu row keeps a check-mark column (UIDL)
 
 \ =====================================================================
 \  §3 — Style Packing

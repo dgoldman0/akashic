@@ -4329,7 +4329,8 @@ def _menu_popup_source_claim(
     """Derive the ordinary UIDL-TUI cell rectangle owned by one popup.
 
     UIDL-TUI positions menu siblings and measures item labels from the byte
-    lengths returned by ``UIDL-ATTR``.  The retained draw projection omits
+    lengths returned by ``UIDL-ATTR``; every popup row keeps a two-cell mark
+    column before its label.  The retained draw projection omits
     invisible controls.  Canonical acceptance therefore requires every
     layout-participating menu and row needed by an open popup to be visible; a
     gap in either zero-based sibling order is proof that this invariant was
@@ -4375,7 +4376,7 @@ def _menu_popup_source_claim(
             ),
             default=0,
         )
-        + 4
+        + 6
     )
     popup_height = len(menu.entries) + 2
     if (

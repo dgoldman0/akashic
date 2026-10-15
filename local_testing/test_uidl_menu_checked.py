@@ -1,10 +1,9 @@
 """Checked menu items, from UIDL to the retained control state.
 
-A menu item with a checked attribute is checkable, and the attribute's value
-seeds its state when the document loads.  UTUI-CHECKED! changes the state
-afterwards without touching UIDL's string pool.  CELL gives every row of a
-menu with a checkable item a mark column, and the menu snapshot publishes the
-state as UMSN-F-CHECKED, which the control planner retains as
+A menu item's authored checked=true seeds its state when the document loads,
+and UTUI-CHECKED! changes the state afterwards without touching UIDL's string
+pool.  CELL gives every menu row a mark column, and the menu snapshot
+publishes the state as UMSN-F-CHECKED, which the control planner retains as
 RTE-CONTROL-CHECKED.
 """
 
@@ -77,7 +76,7 @@ def _values(text, marker):
     return line[len(marker):].split()
 
 
-def test_checked_attribute_seeds_state_and_only_checkable_items_change() -> None:
+def test_checked_attribute_seeds_state_and_only_items_change() -> None:
     text = _run([
         '." S:" S" hidden" UTUI-BY-ID UTUI-CHECKED? .',
         'S" sort" UTUI-BY-ID UTUI-CHECKED? .',
@@ -85,12 +84,14 @@ def test_checked_attribute_seeds_state_and_only_checkable_items_change() -> None
         '0 S" hidden" UTUI-BY-ID UTUI-CHECKED!',
         '-1 S" sort" UTUI-BY-ID UTUI-CHECKED!',
         '-1 S" refresh" UTUI-BY-ID UTUI-CHECKED!',
+        '-1 S" view" UTUI-BY-ID UTUI-CHECKED!',
         'S" hidden" UTUI-BY-ID UTUI-CHECKED? .',
         'S" sort" UTUI-BY-ID UTUI-CHECKED? .',
         'S" refresh" UTUI-BY-ID UTUI-CHECKED? .',
+        'S" view" UTUI-BY-ID UTUI-CHECKED? .',
         '0 UTUI-CHECKED? . CR',
     ])
-    assert _values(text, "S:") == ["-1", "0", "0", "0", "-1", "0", "0"]
+    assert _values(text, "S:") == ["-1", "0", "0", "0", "-1", "-1", "0", "0"]
 
 
 def test_checking_an_item_leaves_the_string_pool_alone() -> None:
@@ -104,9 +105,9 @@ def test_checking_an_item_leaves_the_string_pool_alone() -> None:
     assert _values(text, "P:") == ["-1"]
 
 
-def test_a_menu_with_a_checkable_item_keeps_a_mark_column() -> None:
-    # View's widest label, "Show Hidden", is 11 cells and its rows keep a
-    # two-cell mark column; Help has no checkable item and keeps none.
+def test_every_menu_row_keeps_a_mark_column() -> None:
+    # View's widest label, "Show Hidden", is 11 cells and Help's, "About", 5;
+    # every row keeps a two-cell mark column before its label.
     text = _run([
         'S" view" UTUI-BY-ID _UTUI-MENU-OPEN!',
         '." V:" S" view" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-W@ .',
@@ -121,7 +122,8 @@ def test_a_menu_with_a_checkable_item_keeps_a_mark_column() -> None:
         'S" help" UTUI-BY-ID _UTUI-MENU-OPEN!',
         '." H:" S" help" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-W@ .',
         'UIDL-ROOT ?DUP IF _UTUI-DIRTY-SUBTREE THEN UTUI-PAINT',
-        'S" about" UTUI-BY-ID 1 T-AT . CR',
+        'S" about" UTUI-BY-ID 1 T-AT .',
+        'S" about" UTUI-BY-ID 3 T-AT . CR',
     ])
     assert _values(text, "V:") == [
         "17", "15",
@@ -129,7 +131,7 @@ def test_a_menu_with_a_checkable_item_keeps_a_mark_column() -> None:
         "32", str(ord("R")),
         "32", str(ord("S")),
     ]
-    assert _values(text, "H:") == ["9", str(ord("A"))]
+    assert _values(text, "H:") == ["11", "32", str(ord("A"))]
 
 
 def test_the_menu_snapshot_publishes_each_items_checked_state() -> None:
