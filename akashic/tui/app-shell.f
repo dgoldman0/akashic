@@ -146,6 +146,14 @@ VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
     DUP ?DUP IF UCTX-RESTORE THEN
     _ASHELL-ACTIVE-CTX ! ;
 
+\ _ASHELL-OWN-UIDL? ( -- flag )
+\   The UIDL globals are the shell application's own: no child context is
+\   restored over them.  A child's context stays current after the child
+\   paints or is captured, so its dialog is then in the globals; that
+\   dialog is its host's to run, and the shell must not take it as its own
+\   application's.
+: _ASHELL-OWN-UIDL?  ( -- flag )  _ASHELL-ACTIVE-CTX @ 0= ;
+
 \ ASHELL-CTX-SAVE ( uctx -- )
 \   Force-save the current globals into uctx.  Used when a sub-app
 \   event handler has mutated state and the caller wants to persist
@@ -905,7 +913,7 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
     THEN
     _ASHELL-ACTIVATE
     \ 1. A dialog the app shows takes all its input
-    DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN
+    _ASHELL-OWN-UIDL? IF DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN THEN
     \ 2. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
         OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
@@ -924,7 +932,7 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 : _ASHELL-DISPATCH-MOUSE-IMPL  ( ev -- )
     _ASHELL-ACTIVATE
     \ 0. A dialog the app shows takes all its input
-    DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN
+    _ASHELL-OWN-UIDL? IF DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN THEN
     \ 1. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
         OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
@@ -1062,7 +1070,7 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
             _ASHELL-INST @ SWAP EXECUTE
         THEN
         \ A dialog the app shows, over everything the app paints
-        DLG-HOST-PAINT
+        _ASHELL-OWN-UIDL? IF DLG-HOST-PAINT THEN
         \ Toast overlay (drawn last, on top of everything)
         ASHELL-TOAST-VISIBLE? IF
             _ASHELL-DRAW-TOAST
@@ -1221,7 +1229,7 @@ VARIABLE _ASHELL-TD-IOR
 
 : _ASHELL-TD-UIDL  ( -- )
     \ A dialog the app never answered goes with it.
-    DLG-DISCARD
+    _ASHELL-OWN-UIDL? IF DLG-DISCARD THEN
     _ASHELL-HAS-UIDL @ IF
         UTUI-DETACH
         0 _ASHELL-HAS-UIDL !

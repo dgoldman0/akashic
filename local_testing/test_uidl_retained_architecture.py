@@ -1812,6 +1812,15 @@ def test_dialogs_are_hosted_by_their_application_host_and_never_block() -> None:
     child = _word(shell, "_ASPC-DRAW-BODY")
     assert child.index("APP.PAINT-XT") < child.index("DLG-HOST-PAINT")
     assert "DLG-DISCARD" in _word(shell, "_ASHELL-TD-UIDL")
+    # The shell hosts only its own application's dialog: a child's, which
+    # its context leaves in the globals after it paints, is its host's.
+    for word, call in (("_ASHELL-DISPATCH-KEY", "DLG-HOST-EVENT"),
+                       ("_ASHELL-DISPATCH-MOUSE-IMPL", "DLG-HOST-EVENT"),
+                       ("_ASHELL-PAINT", "DLG-HOST-PAINT"),
+                       ("_ASHELL-TD-UIDL", "DLG-DISCARD")):
+        body = _word(shell, word)
+        assert body.index("_ASHELL-OWN-UIDL? IF") < body.index(call), word
+    assert "_ASHELL-ACTIVE-CTX @ 0=" in _word(shell, "_ASHELL-OWN-UIDL?")
 
     # Desk's applet host: after the child's context is current and before
     # its handler, for keys and pointer events alike.
