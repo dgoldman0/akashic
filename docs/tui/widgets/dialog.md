@@ -90,7 +90,8 @@ A host calls these with an application's state current.
 | `DLG-SHOWN` | `( -- widget\|0 )` | The dialog the current application shows |
 | `DLG-HOST-EVENT` | `( event -- handled? )` | Give an event to that dialog before the application sees it; once a button is chosen, close it and call the asker back. False when there is no dialog. |
 | `DLG-HOST-PAINT` | `( -- )` | Paint that dialog over the application, after the application has painted, keeping the caller's drawing region |
-| `DLG-DISCARD` | `( -- )` | Free that dialog unanswered: the application is going away, or no longer asks |
+| `DLG-DISCARD` | `( -- )` | Free that dialog unanswered: the application is going away |
+| `DLG-WITHDRAW` | `( -- )` | Close that dialog unanswered and have the host repaint what it covered: the application no longer asks |
 
 The host decides which cell holds the current application's dialog through
 `_DLG-CELL-HOOK`. UIDL-TUI keeps it in each UIDL context, so each

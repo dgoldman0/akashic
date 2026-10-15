@@ -11889,26 +11889,30 @@ VARIABLE _aui-depth
     0= ABORT" agent review dialog contract" ;
 
 VARIABLE _aui-screen
-VARIABLE _aui-region
+VARIABLE _aui-first
 CREATE _aui-long 320 ALLOT
+CREATE _aui-evs 31 ALLOT
+: _aui-ev  ( -- event )  _aui-evs 7 + -8 AND ;
 
 : _aui-long-text  ( -- addr len )
     60 0 DO S" word " _aui-long I 5 * + SWAP MOVE LOOP
     _aui-long 300 ;
 
-\ Does the dialog's footer, its sixth row, start with TEXT?
-CREATE _aui-row 40 ALLOT
-: _aui-footer?  ( addr len -- flag )
-    40 0 DO
-        5 I SCR-GET CELL-CP@ DUP 0= IF DROP 32 THEN _aui-row I + C!
-    LOOP
-    _aui-row 2 + OVER COMPARE 0= ;
+\ A key for the review's dialog.
+: _aui-key  ( code -- )
+    KEY-T-SPECIAL _aui-ev ! _aui-ev 8 + ! 0 _aui-ev 16 + !
+    _aui-ev DLG-HOST-EVENT DROP ;
+\ Eight rows of the screen for the dialog, which is then six rows tall and
+\ shows one row of the long request at a time.
+: _aui-bounds  ( -- row col h w )  0 0 8 40 ;
+\ Whether Approve once can be chosen.
+: _aui-approve?  ( -- flag )  DLG-SHOWN _AG-REVIEW-APPROVE @ _DLG-AVAILABLE? ;
 
-\ A provider review opens its dialog locked, at its top.  A drawn frame
-\ that shows the last row unlocks approval; any change to the review
-\ locks it again and returns to the top; resolving it clears the tracking.
-\ The walk that draws the rows also counts them, so a six-row dialog with
-\ a long request cannot unlock before its last row is drawn.
+\ A provider review asks in a dialog with Approve once and Deny.  Approve
+\ once waits: a paint a row short of the end does not let F6 choose it,
+\ and the paint that shows the last row does.  Any change to the review
+\ asks again, unread; resolving it withdraws the dialog and clears the
+\ tracking.
 : _aui-review-dialog-contract  ( -- )
     _aui-state _AG-STATE-SIZE 0 FILL
     _aui-runtime AGENT-RUNTIME-SIZE 0 FILL
@@ -11925,44 +11929,46 @@ CREATE _aui-row 40 ALLOT
     _aui-message @ _aui-runtime ARUNTIME.APPROVAL-MSG !
     ARUN-S-APPROVAL _aui-runtime ARUNTIME.STATUS !
     40 12 SCR-NEW DUP _aui-screen ! SCR-USE
-    0 0 6 40 RGN-NEW DUP _aui-region ! _AG-REVIEW-INIT
     DEPTH _aui-depth !
 
-    _AG-SYNC-REVIEW
+    _AG-REVIEW-PRESENT
     _AG-REVIEW-REQUEST-ID @ _aui-message @ = _aui-assert
-    _AG-REVIEW WDG-DRAW
-    _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ > _aui-assert
-    _AG-REVIEW-SPAN @ 4 = _aui-assert
-    _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
-    _AG-REVIEW-APPROVABLE? 0= _aui-assert
-    \ One row short of the end is still locked.
-    _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ - 1- _AGRV-SCROLL
-    _AG-REVIEW WDG-DRAW
-    _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
-    S" PgDn to inspect all rows" _aui-footer? _aui-assert
-    \ The frame that shows the last row says approval is open.
-    1 _AGRV-SCROLL _AG-REVIEW WDG-DRAW
-    _AG-REVIEW-BOTTOM-SEEN @ _aui-assert
-    _AG-REVIEW-APPROVABLE? _aui-assert
-    S" [F6] Approve once" _aui-footer? _aui-assert
+    _AG-REVIEW-SHOWN? _aui-assert
+    DLG-SHOWN DLG-BTN-COUNT 2 = _aui-assert
+    _AG-REVIEW-APPROVE @ 0= _aui-assert
+    DLG-HOST-PAINT
+    DLG-SHOWN WDG-REGION RGN-H 6 = _aui-assert
+    _aui-approve? 0= _aui-assert
+    \ A row short of the end, Approve once still waits, and F6 does nothing.
+    KEY-END _aui-key KEY-UP _aui-key DLG-HOST-PAINT
+    _aui-approve? 0= _aui-assert
+    KEY-F6 _aui-key _AG-REVIEW-SHOWN? _aui-assert
+    \ The paint that shows the last row lets it be chosen.
+    KEY-END _aui-key DLG-HOST-PAINT
+    _aui-approve? _aui-assert
 
+    \ A changed review asks again, unread.
+    DLG-SHOWN DLG-INSTANCE@ _aui-first !
     1 _aui-runtime ARUNTIME.REVISION +!
-    _AG-REVIEW-APPROVABLE? 0= _aui-assert
-    _AG-SYNC-REVIEW
-    _AG-REVIEW-TOP @ 0= _aui-assert
+    _AG-REVIEW-PRESENT
+    _AG-REVIEW-SHOWN? _aui-assert
+    DLG-SHOWN DLG-INSTANCE@ _aui-first @ <> _aui-assert
+    DLG-HOST-PAINT _aui-approve? 0= _aui-assert
     _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
     DEPTH _aui-depth @ = _aui-assert
 
+    \ Resolved elsewhere, the review withdraws its dialog.
     0 _aui-runtime ARUNTIME.APPROVAL-MSG !
     ARUN-S-IDLE _aui-runtime ARUNTIME.STATUS !
-    _AG-SYNC-REVIEW
+    _AG-REVIEW-PRESENT
     _AG-REVIEW-REQUEST-ID @ 0= _aui-assert
-    _AG-REVIEW-OPEN? 0= _aui-assert
-    _aui-region @ RGN-FREE
+    DLG-SHOWN 0= _aui-assert
     _aui-screen @ SCR-FREE
     0 _AG-CURRENT-STATE ! ;
 
+' _aui-bounds IS _DLG-BOUNDS-HOOK
 _aui-review-dialog-contract
+' _UTUI-DIALOG-BOUNDS IS _DLG-BOUNDS-HOOK
 
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
@@ -29582,7 +29588,10 @@ def smoke(
                 screen = session.snapshot()
                 if views is not None:
                     views.append(screen.text())
-                if "[F6] Approve once" in screen.text():
+                # The review's dialog has shown its last line once it no
+                # longer says more lies below.
+                if ("Review required" in screen.text()
+                        and "PgDn: more below" not in screen.text()):
                     return True
                 before_revision = session.revision
                 session.send_key("pagedown")
@@ -29817,7 +29826,7 @@ def smoke(
                 session.send_text("task smoke")
                 session.send_key("enter")
                 if wait_screen(
-                    "PgDn to inspect all rows",
+                    "Review required",
                     "persistent app tool did not enter its locked approval view",
                     step_budget=1_200_000_000,
                     wall_timeout=30.0,
@@ -30017,7 +30026,7 @@ def smoke(
                 session.send_key("enter")
                 if review:
                     if not wait_screen(
-                        "PgDn to inspect all rows",
+                        "Review required",
                         f"the install in {prompt!r} did not start its review",
                         step_budget=1_500_000_000,
                         wall_timeout=40.0,
@@ -30316,7 +30325,7 @@ def smoke(
 
             approved_prompt = "task approved-hardening"
             if compose(approved_prompt, "reviewed scoped write") and wait_screen(
-                "PgDn to inspect all rows",
+                "Review required",
                 "scoped persistent write did not start at its locked review top",
                 step_budget=1_200_000_000,
                 wall_timeout=30.0,
@@ -30366,7 +30375,7 @@ def smoke(
 
             denied_prompt = "task denied-hardening"
             if compose(denied_prompt, "denied scoped write") and wait_screen(
-                "PgDn to inspect all rows",
+                "Review required",
                 "second scoped write did not start at its locked review top",
                 step_budget=1_200_000_000,
                 wall_timeout=30.0,
@@ -34013,8 +34022,8 @@ def smoke(
                         for marker in (
                             "Provider approval request",
                             "no local tool envelope",
-                            "[F6] Approve once",
-                            "[F7] Deny",
+                            "F6 Approve once",
+                            "F7 Deny",
                         ):
                             if marker not in provider_review:
                                 journey_errors.append(

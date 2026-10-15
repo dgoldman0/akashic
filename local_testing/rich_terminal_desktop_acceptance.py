@@ -2099,6 +2099,8 @@ class _SemanticButtonClaim:
     label: str
     state: ControlState
     content: ButtonContent
+    # The name of the key that chooses it, or "".
+    shortcut: str = ""
 
 
 @dataclass(frozen=True)
@@ -5185,6 +5187,7 @@ def reconstruct_retained_screen(
                                          draw.control_id),
                 left=left, top=top, right=right, bottom=bottom,
                 label=draw.label, state=draw.state, content=draw.content,
+                shortcut=draw.shortcut,
             ))
             continue
 

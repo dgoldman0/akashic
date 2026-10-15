@@ -16,7 +16,6 @@ REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../widgets/list.f
-REQUIRE ../../../text/text-lines.f
 REQUIRE ../../../runtime/state-layout.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE service.f
@@ -67,8 +66,6 @@ _AG-CURRENT-STATE 40 CMP-FIELD: _AG-PANEL
 _AG-CURRENT-STATE CMP-CELL: _AG-PANEL-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-LIST
 _AG-CURRENT-STATE CMP-CELL: _AG-LIST-RGN
-_AG-CURRENT-STATE 40 CMP-FIELD: _AG-REVIEW
-_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT-MODE
@@ -83,9 +80,10 @@ _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-REQUEST-ID
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-GATEWAY-REV
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-RUNTIME-REV
 _AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-BOTTOM-SEEN
-_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-TOP     \ rows above the dialog's view
-_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-ROWS    \ rows at its last drawn width
-_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-SPAN    \ rows its last draw showed
+\ The instance of the dialog the review asks in, or 0, and which of its
+\ buttons approves, or -1.
+_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-DIALOG
+_AG-CURRENT-STATE CMP-CELL: _AG-REVIEW-APPROVE
 _AG-CURRENT-STATE _AG-HEADER-CAP CMP-FIELD: _AG-HEADER-BUF
 _AG-CURRENT-STATE ACONV-MAX-MESSAGES _AGDT-SIZE * CMP-FIELD: _AG-DISPLAY
 \ What the body shows: chat, the scheduled runs, or one run's transcript.
@@ -716,8 +714,18 @@ VARIABLE _AGSR-RREV
     0 _AG-REVIEW-REQUEST-ID !
     0 _AG-REVIEW-GATEWAY-REV !
     0 _AG-REVIEW-RUNTIME-REV !
-    0 _AG-REVIEW-BOTTOM-SEEN !
-    0 _AG-REVIEW-TOP ! ;
+    0 _AG-REVIEW-BOTTOM-SEEN ! ;
+
+\ The dialog the Agent shows is the one its review asks in.
+: _AG-REVIEW-SHOWN?  ( -- flag )
+    _AG-REVIEW-DIALOG @ ?DUP 0= IF 0 EXIT THEN
+    DLG-SHOWN ?DUP 0= IF DROP 0 EXIT THEN
+    DLG-INSTANCE@ = ;
+
+\ Close the review's dialog unanswered: the review it asks about has been
+\ resolved elsewhere, or has changed.
+: _AG-REVIEW-WITHDRAW  ( -- )
+    _AG-REVIEW-SHOWN? IF DLG-WITHDRAW THEN 0 _AG-REVIEW-DIALOG ! ;
 
 \ _AG-REVIEW-CURRENT? ( -- flag )
 \   Is the tracked review the one pending now, at the same gateway and
@@ -735,22 +743,24 @@ VARIABLE _AGSR-RREV
     _AGSR-GREV @ _AG-REVIEW-GATEWAY-REV @ = AND
     _AGSR-RREV @ _AG-REVIEW-RUNTIME-REV @ = AND ;
 
-\ Every new or changed review opens at the top of its dialog, locked.  A
-\ resolved review lets the transcript show its end, where the result
-\ appears; an ordinary transcript keeps where the user scrolled it.
+\ A new or changed review withdraws any dialog of the review before it
+\ and is unread.  A resolved review withdraws its dialog and lets the
+\ transcript show its end, where the result appears; an ordinary
+\ transcript keeps where the user scrolled it.
 : _AG-SYNC-REVIEW  ( -- )
     _AG-REVIEW-IDENTITY 0= IF
         _AG-REVIEW-REQUEST-ID @ IF
             _AG-LIST @ ?DUP IF LST-SCROLL-END THEN
         THEN
+        _AG-REVIEW-WITHDRAW
         _AG-REVIEW-TRACKING-CLEAR EXIT
     THEN
     _AG-REVIEW-CURRENT? IF EXIT THEN
+    _AG-REVIEW-WITHDRAW
     _AGSR-REQ @ _AG-REVIEW-REQUEST-ID !
     _AGSR-GREV @ _AG-REVIEW-GATEWAY-REV !
     _AGSR-RREV @ _AG-REVIEW-RUNTIME-REV !
     0 _AG-REVIEW-BOTTOM-SEEN !
-    0 _AG-REVIEW-TOP !
     _AG-INVALIDATE ;
 
 : _AG-REVIEW-INSPECTED?  ( -- flag )
@@ -763,10 +773,6 @@ VARIABLE _AGSR-RREV
     ELSE
         _AG-REVIEW-IDENTITY 0<> _AG-REVIEW-INSPECTED? AND
     THEN ;
-
-: _AG-REVIEW-OPEN?  ( -- flag )
-    _AG-RUNTIME @ 0= IF 0 EXIT THEN
-    _AG-REVIEW-IDENTITY 0<> ;
 
 \ An account or run-settings panel the user opened covers the body.
 : _AG-USER-OVERLAY?  ( -- flag )
@@ -785,14 +791,15 @@ VARIABLE _AGSR-RREV
 \  Review dialog
 \ =====================================================================
 \
-\  A pending review opens a dialog over the transcript.  It shows the
-\  message that asked for the review, then every detail of the request,
-\  each paragraph broken into lines at the dialog's width by the shared
-\  line rule, and scrolls by rows.  One walk over the paragraphs both
-\  counts the rows and draws them, so the two always agree.  Approve (F6)
-\  unlocks only after a drawn frame has shown the last row; Deny (F7)
-\  never locks.  Exact values (identifiers, numbers, the digest, and the
-\  operand) show every byte: a space as a middle dot.
+\  A pending review asks in a dialog over the Agent (widgets/dialog.f):
+\  the message that asked for the review, then every detail of the
+\  request, as paragraphs the dialog breaks into lines at its width and
+\  scrolls.  Approve once (F6) can be chosen only after a paint has shown
+\  the last line; Deny (F7) is the default and answers Escape.  A request
+\  whose exact operand cannot be shown has no Approve.  Exact values
+\  (identifiers, numbers, the digest, and the operand) show every byte: a
+\  space as a middle dot.  A review that changes asks again, unread, and
+\  one resolved elsewhere withdraws its dialog.
 
 \ Looks.
 0 CONSTANT _AGRV-TEXT
@@ -805,13 +812,15 @@ VARIABLE _AGSR-RREV
 : _AGRV-EXACT?  ( look -- flag )
     DUP _AGRV-VALUE = SWAP _AGRV-OPERAND = OR ;
 
-: _AGRV-LOOK!  ( look -- )
+\ The dialog's look for a paragraph's.
+: _AGRV-DLG-LOOK  ( look -- dlg-look )
     CASE
-        _AGRV-LABEL OF 220 234 1 DRW-STYLE! ENDOF
-        _AGRV-OPERAND OF 117 234 0 DRW-STYLE! ENDOF
-        _AGRV-FAULT OF 203 234 1 DRW-STYLE! ENDOF
-        _AGRV-HEAD OF 81 234 1 DRW-STYLE! ENDOF
-        253 234 0 DRW-STYLE!
+        _AGRV-LABEL OF DLG-LOOK-LABEL ENDOF
+        _AGRV-VALUE OF DLG-LOOK-VALUE ENDOF
+        _AGRV-OPERAND OF DLG-LOOK-VALUE ENDOF
+        _AGRV-FAULT OF DLG-LOOK-FAULT ENDOF
+        _AGRV-HEAD OF DLG-LOOK-HEADING ENDOF
+        DLG-LOOK-TEXT SWAP
     ENDCASE ;
 
 VARIABLE _AGRV-XT       \ the walk's visitor ( addr len look -- )
@@ -904,7 +913,7 @@ VARIABLE _AGRV-SB-CAP  0 _AGRV-SB-CAP !
     _AGRV-SB-A ! _AGRV-SB-CAP ! -1 ;
 
 \ The paragraph as the dialog shows it.  An exact value that finds no
-\ memory for its copy fails the walk, which keeps approval locked.
+\ memory for its copy fails the walk, and the review has no Approve.
 VARIABLE _AGRV-FAILED
 
 : _AGRV-SHOWN  ( addr len look -- addr' len' )
@@ -919,126 +928,50 @@ VARIABLE _AGRV-FAILED
         THEN
     LOOP ;
 
-CREATE _AG-TLN TLINES-SIZE ALLOT  _AG-TLN TLINES-INIT
+\ The review's paragraphs as the dialog takes them: a record of three
+\ cells each, text-a text-u look, then their text, in one block that lives
+\ until the dialog has its copies.
+VARIABLE _AGRD-N        \ paragraphs
+VARIABLE _AGRD-BYTES    \ their shown text
+VARIABLE _AGRD-A        \ the block
+VARIABLE _AGRD-AT       \ where the next text goes
 
-VARIABLE _AGRV-W        \ the dialog's text width
-VARIABLE _AGRV-N        \ rows counted, or the row being drawn
-VARIABLE _AGRV-Y0       \ the dialog's first content row
-VARIABLE _AGRV-VIEWH    \ content rows it shows
-VARIABLE _AGRV-RW       \ the dialog's width
-VARIABLE _AGRV-RH       \ and height
+: _AGRD-COUNT  ( addr len look -- )
+    _AGRV-SHOWN NIP _AGRD-BYTES +! 1 _AGRD-N +! ;
 
-: _AGRV-COUNT  ( addr len look -- )
-    _AGRV-SHOWN TROW-F-UNTRUSTED BIDI-AUTO _AGRV-W @ _AG-TLN TLINES-COUNT
-    0= IF -1 _AGRV-FAILED ! THEN _AGRV-N +! ;
+: _AGRD-PUT  ( addr len look -- )
+    DUP >R _AGRV-SHOWN R> _AGRV-DLG-LOOK
+    _AGRD-A @ _AGRD-N @ 24 * + TUCK 16 + !
+    OVER OVER 8 + ! _AGRD-AT @ SWAP !
+    _AGRD-AT @ SWAP DUP _AGRD-AT +! MOVE
+    1 _AGRD-N +! ;
 
-: _AGRV-ROWS  ( -- rows )
-    0 _AGRV-N ! ['] _AGRV-COUNT _AGRV-EACH _AGRV-N @ ;
+\ Approve once (F6), which waits for the review to be read, when the
+\ request can be approved, then Deny (F7), the default and cancel button.
+CREATE _AGRD-BUTTONS 64 ALLOT
+VARIABLE _AGRD-BCOUNT
 
-\ Draw the line the cursor has read, when its row is in view.
-: _AGRV-DRAW-LINE  ( -- )
-    _AGRV-N @ _AG-REVIEW-TOP @ -
-    DUP 0< OVER _AGRV-VIEWH @ < 0= OR IF DROP EXIT THEN
-    _AGRV-Y0 @ +                                     ( row )
-    _AG-TLN TLINES-ROW ?DUP IF
-        SWAP 1
-        _AG-TLN TLINES-RTL? IF _AGRV-W @ _AG-TLN TLINES-WIDTH - 0 MAX + THEN
-        DRW-TROW EXIT
+: _AGRD-BUTTON!  ( a u roles key -- )
+    _AGRD-BUTTONS _AGRD-BCOUNT @ 32 * + >R
+    R@ 24 + ! R@ 16 + ! R@ 8 + ! R> !
+    1 _AGRD-BCOUNT +! ;
+
+: _AGRD-BUTTONS!  ( approvable? -- )
+    _AGRD-BUTTONS 64 0 FILL 0 _AGRD-BCOUNT ! -1 _AG-REVIEW-APPROVE !
+    IF
+        0 _AG-REVIEW-APPROVE !
+        S" Approve once" DLG-B-READ-FIRST KEY-F6 _AGRD-BUTTON!
     THEN
-    _AG-TLN TLINES-BYTES ROT 1 DRW-TEXT ;
+    S" Deny" DLG-B-DEFAULT DLG-B-CANCEL OR KEY-F7 _AGRD-BUTTON! ;
 
-: _AGRV-DRAW-P  ( addr len look -- )
-    DUP _AGRV-LOOK!
-    _AGRV-SHOWN TROW-F-UNTRUSTED BIDI-AUTO _AGRV-W @ _AG-TLN TLINES-START
-    BEGIN WHILE
-        _AGRV-DRAW-LINE 1 _AGRV-N +!
-        _AG-TLN TLINES-NEXT
-    REPEAT
-    _AG-TLN TLINES-FAILED? IF -1 _AGRV-FAILED ! THEN ;
-
-: _AGRV-DRAW-WALK  ( -- )
-    0 _AGRV-N ! ['] _AGRV-DRAW-P _AGRV-EACH ;
-
-: _AGRV-FOOTER$  ( -- addr len )
-    _AG-REVIEW-REQUEST IF
-        _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ _AG-INPUT-REVIEWABLE? 0= IF
-            S" Operand cannot be approved  [F7] Deny" EXIT
-        THEN
-    THEN
-    _AG-REVIEW-INSPECTED? IF S" [F6] Approve once  [F7] Deny" EXIT THEN
-    S" PgDn to inspect all rows  F6 locked  [F7] Deny" ;
-
-\ A title row when the dialog has room, its content, and a footer row.
-: _AGRV-GEOMETRY  ( widget -- )
-    WDG-REGION DUP RGN-W _AGRV-RW ! RGN-H _AGRV-RH !
-    _AGRV-RH @ 3 < IF 0 ELSE 1 THEN _AGRV-Y0 !
-    _AGRV-RH @ _AGRV-Y0 @ - 1- 0 MAX _AGRV-VIEWH !
-    _AGRV-RW @ 2 - 1 MAX _AGRV-W ! ;
-
-: _AGRV-DRAW-BODY  ( widget -- )
-    _AGRV-GEOMETRY
-    253 234 0 DRW-STYLE!
-    32 0 0 _AGRV-RH @ _AGRV-RW @ DRW-FILL-RECT
-    _AGRV-Y0 @ IF
-        15 24 1 DRW-STYLE!
-        32 0 0 1 _AGRV-RW @ DRW-FILL-RECT
-        S" Review required" 0 2 DRW-TEXT
-    THEN
-    0 _AGRV-FAILED !
-    _AGRV-ROWS DUP _AG-REVIEW-ROWS !
-    _AGRV-VIEWH @ - 0 MAX _AG-REVIEW-TOP @ MIN 0 MAX _AG-REVIEW-TOP !
-    _AGRV-VIEWH @ _AG-REVIEW-SPAN !
-    ['] _AGRV-DRAW-WALK _AGRV-Y0 @ 1 _AGRV-VIEWH @ _AGRV-W @ DRW-WITH-CLIP
-    \ A frame that shows the last row unlocks approval, and its own footer
-    \ says so.
-    _AGRV-FAILED @ 0= _AGRV-VIEWH @ 0> AND
-    _AG-REVIEW-TOP @ _AGRV-VIEWH @ + _AG-REVIEW-ROWS @ < 0= AND IF
-        _AG-REVIEW-CURRENT? IF -1 _AG-REVIEW-BOTTOM-SEEN ! THEN
-    THEN
-    _AGRV-RH @ 1 > IF
-        253 236 0 DRW-STYLE!
-        32 _AGRV-RH @ 1- 0 1 _AGRV-RW @ DRW-FILL-RECT
-        _AGRV-FOOTER$ _AGRV-RH @ 1- 2 DRW-TEXT
-    THEN
-    DRW-STYLE-RESET ;
-
-: _AGRV-DRAW  ( widget -- )  ['] _AGRV-DRAW-BODY DRW-OVERLAY ;
-
-: _AGRV-SCROLL  ( rows -- )
-    _AG-REVIEW-TOP @ + _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ - 0 MAX MIN 0 MAX
-    _AG-REVIEW-TOP !
-    _AG-REVIEW WDG-DIRTY ASHELL-DIRTY! ;
-
-: _AGRV-PAGE  ( -- rows )  _AG-REVIEW-SPAN @ 1- 1 MAX ;
-
-: _AG-REVIEW-HANDLE  ( event widget -- consumed? )
-    DROP
-    DUP @ KEY-T-SPECIAL = IF
-        8 + @ CASE
-            KEY-UP OF -1 _AGRV-SCROLL -1 ENDOF
-            KEY-DOWN OF 1 _AGRV-SCROLL -1 ENDOF
-            KEY-PGUP OF _AGRV-PAGE NEGATE _AGRV-SCROLL -1 ENDOF
-            KEY-PGDN OF _AGRV-PAGE _AGRV-SCROLL -1 ENDOF
-            KEY-HOME OF _AG-REVIEW-TOP @ NEGATE _AGRV-SCROLL -1 ENDOF
-            KEY-END OF _AG-REVIEW-ROWS @ _AGRV-SCROLL -1 ENDOF
-            0 SWAP
-        ENDCASE
-        EXIT
-    THEN
-    DUP @ KEY-T-MOUSE = IF
-        8 + @ KEY-MOUSE-BUTTON CASE
-            KEY-MOUSE-SCROLL-UP OF -3 _AGRV-SCROLL ENDOF
-            KEY-MOUSE-SCROLL-DN OF 3 _AGRV-SCROLL ENDOF
-        ENDCASE
-        \ Every press on the dialog is its own.
-        -1 EXIT
-    THEN
-    DROP 0 ;
-
-: _AG-REVIEW-INIT  ( region -- )
-    DUP _AG-REVIEW-RGN !
-    _AG-REVIEW 42 ROT
-    ['] _AGRV-DRAW ['] _AG-REVIEW-HANDLE WDG-INIT ;
+\ A provider's approval, or a local request whose exact operand can be
+\ shown, can be approved once read, if every exact value found room for
+\ its shown copy.
+: _AGRD-APPROVABLE?  ( -- flag )
+    _AGRV-FAILED @ IF 0 EXIT THEN
+    _AG-REVIEW-REQUEST 0= IF -1 EXIT THEN
+    _AG-RUNTIME @ ARUNTIME.TOOL-GATEWAY @ ?DUP 0= IF 0 EXIT THEN
+    _AG-INPUT-REVIEWABLE? ;
 
 \ =====================================================================
 \  Scheduled runs
@@ -1169,8 +1102,8 @@ VARIABLE _AGD-H
         S" Agent runtime unavailable" 1 2 DRW-TEXT
         DRW-STYLE-RESET EXIT
     THEN
-    \ A dialog or panel covers the body: the transcript waits beneath it.
-    _AG-USER-OVERLAY? _AG-REVIEW-OPEN? OR IF DRW-STYLE-RESET EXIT THEN
+    \ A panel covers the body: the transcript waits beneath it.
+    _AG-USER-OVERLAY? IF DRW-STYLE-RESET EXIT THEN
     _AG-VIEW @ _AG-V-RUNS = IF _AG-RUNS-DRAW EXIT THEN
     _AG-SHOWN-CONV ACONV.COUNT @ ?DUP 0= IF
         244 234 0 DRW-STYLE!
@@ -1184,9 +1117,9 @@ VARIABLE _AGD-H
     DRW-STYLE-RESET ;
 
 \ Escape steps back from the runs' views, and otherwise cancels; in the
-\ chat, Enter asks.  Other keys and the pointer scroll the review dialog
-\ while it is open, and otherwise the runs or the transcript; Enter on a
-\ run opens it.
+\ chat, Enter asks.  Other keys and the pointer scroll the runs or the
+\ transcript; Enter on a run opens it.  While the review asks, its dialog
+\ takes the Agent's input before any of this.
 : _AG-PANEL-HANDLE  ( event widget -- consumed? )
     DROP
     DUP @ KEY-T-SPECIAL = IF
@@ -1198,7 +1131,6 @@ VARIABLE _AGD-H
             DUP 8 + @ KEY-ENTER = IF DROP _AG-SHOW-PROMPT -1 EXIT THEN
         THEN
     THEN
-    _AG-REVIEW-OPEN? IF _AG-REVIEW WDG-HANDLE EXIT THEN
     _AG-USER-OVERLAY? IF DROP 0 EXIT THEN
     _AG-VIEW @ _AG-V-RUNS = IF
         _AG-RUNS ASRV-COUNT@ 0= IF DROP 0 EXIT THEN
@@ -1263,6 +1195,36 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : _AG-DO-APPROVE ( elem -- ) DROP -1 _AG-RESOLVE-REVIEW ;
 : _AG-DO-DENY    ( elem -- ) DROP 0 _AG-RESOLVE-REVIEW ;
+
+\ The review's dialog answered: Approve once, which its dialog let be
+\ chosen only after its last line was shown, or Deny.
+: _AG-REVIEW-ANSWERED  ( index context -- )
+    DROP 0 _AG-REVIEW-DIALOG !
+    _AG-REVIEW-APPROVE @ = IF -1 _AG-REVIEW-BOTTOM-SEEN ! -1 ELSE 0 THEN
+    _AG-RESOLVE-REVIEW ;
+
+\ Ask about the pending review in a dialog: the paragraphs, counted and
+\ then copied into one block, and the buttons the request allows.
+: _AG-REVIEW-ASK  ( -- )
+    0 _AGRD-N ! 0 _AGRD-BYTES ! 0 _AGRV-FAILED !
+    ['] _AGRD-COUNT _AGRV-EACH
+    _AGRD-N @ 24 * _AGRD-BYTES @ + ALLOCATE IF DROP EXIT THEN _AGRD-A !
+    _AGRD-A @ _AGRD-N @ 24 * + _AGRD-AT ! 0 _AGRD-N !
+    ['] _AGRD-PUT _AGRV-EACH
+    _AGRD-APPROVABLE? _AGRD-BUTTONS!
+    S" Review required" _AGRD-A @ _AGRD-N @ _AGRD-BUTTONS _AGRD-BCOUNT @
+        ['] _AG-REVIEW-ANSWERED 0 DLG-ASK-DETAIL
+    IF DLG-SHOWN DLG-INSTANCE@ _AG-REVIEW-DIALOG ! ASHELL-DIRTY! THEN
+    _AGRD-A @ FREE ;
+
+\ A pending review the Agent does not show asks, once no other question
+\ is waiting.
+: _AG-REVIEW-PRESENT  ( -- )
+    _AG-SYNC-REVIEW
+    _AG-REVIEW-IDENTITY 0= IF EXIT THEN
+    _AG-REVIEW-SHOWN? IF EXIT THEN
+    DLG-SHOWN IF EXIT THEN
+    _AG-REVIEW-ASK ;
 
 : _AG-CLEAR-STATUS-TOAST  ( ior -- )
     IF
@@ -1336,7 +1298,7 @@ VARIABLE _AG-REVIEW-APPROVED
     _AG-ACTIVATE
     0 _AG-OWNS-RUNTIME !
     -1 _AG-COMPACT-STATUS !
-    _AG-REVIEW-TRACKING-CLEAR
+    _AG-REVIEW-TRACKING-CLEAR 0 _AG-REVIEW-DIALOG ! -1 _AG-REVIEW-APPROVE !
     _AG-DISPLAY ACONV-MAX-MESSAGES _AGDT-SIZE * 0 FILL
     0 _AG-LAST-REVISION ! _AG-PRM-ASK _AG-PROMPT-MODE !
     _AG-V-CHAT _AG-VIEW ! 0 _AG-RUNS-SELECTED !
@@ -1385,7 +1347,6 @@ VARIABLE _AG-REVIEW-APPROVED
         _AG-RUNS-COLUMNS-INIT
         _AG-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _AG-RUNS-RGN !
             _AG-RUNS-LIST-NEW _AG-RUNS-LIST !
-        _AG-E-BODY @ UTUI-ELEM-RGN RGN-NEW _AG-REVIEW-INIT
         _AG-PANEL _AG-E-BODY @ UTUI-WIDGET-SET
         _AG-E-BODY @ UTUI-ELEM-RGN RGN-NEW DUP _AG-AUTH-RGN !
         _AG-RUNTIME @ SWAP AAUTHP-NEW _AG-AUTH-PANEL !
@@ -1462,7 +1423,7 @@ VARIABLE _AG-REVIEW-APPROVED
 : AGENT-TICK-CB  ( instance -- )
     _AG-ACTIVATE
     _AG-OWNS-RUNTIME @ IF 8 _AG-RUNTIME @ ARUNTIME-PUMP DROP THEN
-    _AG-SYNC-REVIEW
+    _AG-REVIEW-PRESENT
     _AG-SYNC-STATUS-MODE
     _AG-RUNTIME @ ARUNTIME.REVISION @ _AG-LAST-REVISION @ <> IF
         _AG-RUNTIME @ ARUNTIME.REVISION @ _AG-LAST-REVISION !
@@ -1474,10 +1435,6 @@ VARIABLE _AG-REVIEW-APPROVED
 
 : AGENT-PAINT-CB  ( instance -- )
     _AG-ACTIVATE
-    _AG-USER-OVERLAY? 0= _AG-REVIEW-OPEN? AND IF
-        _AG-REVIEW-RGN @ _AG-OVER-PANEL
-        _AG-REVIEW WDG-DRAW
-    THEN
     _AG-AUTH-PANEL @ ?DUP IF DUP AAUTHP-ACTIVE? IF WDG-DRAW ELSE DROP THEN THEN
     _AG-SETTINGS-PANEL @ ?DUP IF DUP ARSP-ACTIVE? IF WDG-DRAW ELSE DROP THEN THEN
     _AG-PROMPT @ ?DUP 0= IF EXIT THEN
@@ -1524,7 +1481,6 @@ VARIABLE _AG-REVIEW-APPROVED
     _AG-RUNS-LIST @ ?DUP IF LST-FREE THEN
     _AG-RUNS-RGN @ ?DUP IF RGN-FREE THEN
     _AG-RUNS ASRV-FREE
-    _AG-REVIEW-RGN @ ?DUP IF RGN-FREE THEN
     _AG-PANEL-RGN @ ?DUP IF RGN-FREE THEN
     _AG-DISPLAY-RELEASE
     _AG-OWNS-RUNTIME @ IF
@@ -1534,7 +1490,7 @@ VARIABLE _AG-REVIEW-APPROVED
     THEN
     0 _AG-RUNTIME ! 0 _AG-PROVIDER ! 0 _AG-SOURCE ! 0 _AG-PROMPT !
     0 _AG-AUTH-PANEL ! 0 _AG-SETTINGS-PANEL !
-    0 _AG-LIST ! 0 _AG-LIST-RGN ! 0 _AG-REVIEW-RGN !
+    0 _AG-LIST ! 0 _AG-LIST-RGN !
     0 _AG-RUNS-LIST ! 0 _AG-RUNS-RGN ! _AG-V-CHAT _AG-VIEW ! ;
 
 CREATE AGENT-COMP-DESC COMP-DESC ALLOT

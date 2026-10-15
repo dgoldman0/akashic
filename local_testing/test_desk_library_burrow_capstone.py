@@ -247,7 +247,7 @@ class CapstoneProductJourney(checkpoint4.ProductJourney):
             text = self.session.snapshot().text()
             if (
                 self.session.revision > after_revision
-                and "PgDn to inspect all rows" in text
+                and "Review required" in text
             ):
                 return
             before = self.total_steps

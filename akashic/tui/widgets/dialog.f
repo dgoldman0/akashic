@@ -734,15 +734,17 @@ CREATE _DLG-OK-BTN _DLG-BTN-SIZE ALLOT
 \   The dialog the current application shows.
 : DLG-SHOWN  ( -- widget|0 )  _DLG-CELL-HOOK @ ;
 
+\ The host repaints what a closing dialog covered.
+: _DLG-DISMISS  ( widget -- )
+    WDG-REGION >R R@ RGN-ROW R@ RGN-COL R@ RGN-H R> RGN-W
+    2DUP * IF _DLG-DISMISS-HOOK ELSE 2DROP 2DROP THEN ;
+
 \ Close an answered dialog: the host repaints what it covered, and the
 \ asker is called back.  The dialog is freed first, so a callback that
 \ throws leaks nothing and one that asks again finds no dialog shown.
 VARIABLE _DLG-ANS-W
 : _DLG-ANSWER  ( widget -- )
-    _DLG-ANS-W !
-    _DLG-ANS-W @ WDG-REGION >R
-    R@ RGN-ROW R@ RGN-COL R@ RGN-H R> RGN-W
-    2DUP * IF _DLG-DISMISS-HOOK ELSE 2DROP 2DROP THEN
+    DUP _DLG-ANS-W ! _DLG-DISMISS
     _DLG-ANS-W @ _DLG-O-RESULT + @
     _DLG-ANS-W @ _DLG-O-CONFIRM + @ IF 0= THEN
     _DLG-ANS-W @ _DLG-O-CTX + @
@@ -786,9 +788,16 @@ VARIABLE _DLG-P-T
 
 \ DLG-DISCARD ( -- )
 \   Free the dialog the current application shows, unanswered: the
-\   application is going away, or no longer asks.
+\   application is going away.
 : DLG-DISCARD  ( -- )
     _DLG-CELL-HOOK @ ?DUP IF DLG-FREE 0 _DLG-CELL-HOOK ! THEN ;
+
+\ DLG-WITHDRAW ( -- )
+\   Close the dialog the current application shows, unanswered, and have
+\   the host repaint what it covered: the application no longer asks.
+: DLG-WITHDRAW  ( -- )
+    _DLG-CELL-HOOK @ ?DUP 0= IF EXIT THEN
+    0 _DLG-CELL-HOOK ! DUP _DLG-DISMISS DLG-FREE ;
 
 \ =====================================================================
 \ 12. Capture
@@ -978,6 +987,7 @@ GUARD _dlg-guard
 ' DLG-HOST-EVENT  CONSTANT _dlg-host-event-xt
 ' DLG-HOST-PAINT  CONSTANT _dlg-host-paint-xt
 ' DLG-DISCARD     CONSTANT _dlg-discard-xt
+' DLG-WITHDRAW    CONSTANT _dlg-withdraw-xt
 ' DLG-INSTANCE@   CONSTANT _dlg-instance-xt
 ' DLG-ROOT        CONSTANT _dlg-root-xt
 ' DLG-MODEL-CAPTURE CONSTANT _dlg-capture-xt
@@ -997,6 +1007,8 @@ GUARD _dlg-guard
 : DLG-HOST-EVENT  _dlg-host-event-xt EXECUTE ;
 : DLG-HOST-PAINT  _dlg-host-paint-xt EXECUTE ;
 : DLG-DISCARD     _dlg-discard-xt   _dlg-guard WITH-GUARD ;
+\ Withdrawing repaints through the host's hook, as answering does.
+: DLG-WITHDRAW    _dlg-withdraw-xt EXECUTE ;
 : DLG-INSTANCE@   _dlg-instance-xt  _dlg-guard WITH-GUARD ;
 : DLG-ROOT        _dlg-root-xt      _dlg-guard WITH-GUARD ;
 : DLG-MODEL-CAPTURE _dlg-capture-xt _dlg-guard WITH-GUARD ;

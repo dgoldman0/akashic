@@ -303,8 +303,8 @@ def _assert_static_contracts() -> None:
         'AAP-PRESET-PRACTICE-LIBRARY-BURROW OF S" Burrow" ENDOF'
         in " ".join(agent.split())
     )
-    assert 'S" PgDn to inspect all rows"' in agent
-    assert 'S" [F6] Approve once  [F7] Deny"' in agent
+    assert 'S" Approve once" DLG-B-READ-FIRST KEY-F6' in agent
+    assert 'S" Review required"' in agent
     assert fixture_code.count("DESK-QUEUE-LAUNCH") == 3
     assert "AAP-PRESET-PRACTICE-LIBRARY-BURROW" in fixture_code
     assert "DESK-AGENT-ACCESS-PRESET!" in fixture_code
@@ -591,9 +591,11 @@ class ProductJourney:
         self.settle_input()
 
     def approve_once(self, call_number: int) -> None:
-        self.wait_screen("PgDn to inspect all rows")
+        self.wait_screen("Review required")
         for _ in range(33):
-            if "[F6] Approve once" in self.session.snapshot().text():
+            # The review's dialog has shown its last line once it no longer
+            # says more lies below.
+            if "PgDn: more below" not in self.session.snapshot().text():
                 self.session.send_key("f6")
                 return
             self.session.send_key("pagedown")

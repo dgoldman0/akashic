@@ -44,7 +44,9 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal_applet_journeys import (
-    AGENT_APPROVE_MARKER,
+    AGENT_REVIEW_BUTTONS,
+    AGENT_REVIEW_TITLE,
+    DIALOG_MORE,
     AGENT_AUDIT,
     AGENT_EXCHANGE,
     AGENT_MENU_SIGNATURE,
@@ -1012,11 +1014,46 @@ STORED = agent_transcript.CARDS
 STORED_END = sum(_agent_rows(STORED)) - AGENT_BODY
 APPROVED = STORED + AGENT_EXCHANGE
 APPROVED_END = sum(_agent_rows(APPROVED)) - AGENT_BODY
-REVIEW_ROWS = {
-    30: "  " + AGENT_REVIEW_REASON,
-    31: "  " + AGENT_REVIEW_MARKER,
-    33: "  " + AGENT_APPROVE_MARKER + "  [F7] Deny",
-}
+REVIEW_ID = 40_010
+REVIEW_LINES = ("AGENT", AGENT_REVIEW_REASON, AGENT_REVIEW_MARKER)
+
+
+def _agent_review(lines=REVIEW_LINES, *, approve=True, buttons=AGENT_REVIEW_BUTTONS,
+                  modal=True):
+    """The Agent's review over its tile: LINES as its message, then Approve
+    once, which F6 chooses and which APPROVE says can be chosen, and Deny,
+    which F7 chooses, the default and cancel button."""
+
+    width = max(len(line) for line in lines)
+    content = DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, len(AGENT_REVIEW_TITLE), 1),
+                            FieldRect(2, 2, width, len(lines)), message="\n".join(lines))
+    enabled = ControlState.VISIBLE | ControlState.ENABLED
+    flags = (ButtonFlag(0), ButtonFlag.DEFAULT | ButtonFlag.CANCEL)
+    states = (enabled if approve else ControlState.VISIBLE,
+              enabled | ControlState.SELECTED)
+    claims = tuple(
+        acceptance_runner._SemanticButtonClaim(
+            ControlIdentity(1, 1, REVIEW_ID + 1 + index),
+            4 + 30 * index, 76, 24 + 30 * index, 77, label, states[index],
+            ButtonContent(flags[index]), shortcut,
+        )
+        for index, (label, shortcut) in enumerate(buttons)
+    )
+    return acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, REVIEW_ID), 1, 2, COLS - 1, 80, AGENT_REVIEW_TITLE,
+        ControlState.VISIBLE, content, modal=modal, buttons=claims,
+    )
+
+
+def _agent_review_frame(review=None):
+    """The Agent's review open over its tile, its menu rich and inactive
+    beneath it and its transcript withheld under the dialog."""
+
+    return _asked(_agent_frame(menus=(AGENT_MENU_SIGNATURE,)),
+                  _agent_review() if review is None else review)
+
+
+REVIEW_OFFER = _agent_offer("", (31, 2, AGENT_REVIEW_MARKER))
 
 
 def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
@@ -1055,7 +1092,13 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
         at_end,
         (_agent_offer(""), _agent_prompt_frame("")),
         (_agent_offer(""), _agent_prompt_frame(AGENT_REQUEST)),
-        (_agent_offer("", (31, 2, AGENT_REVIEW_MARKER)), _agent_frame(rows=REVIEW_ROWS)),
+        # The review says more lies below, and Approve once waits.
+        (REVIEW_OFFER, _agent_review_frame(
+            _agent_review(REVIEW_LINES + (DIALOG_MORE,), approve=False))),
+        # The paging has not reached the Agent yet.
+        (REVIEW_OFFER, _agent_review_frame(
+            _agent_review(REVIEW_LINES + (DIALOG_MORE,), approve=False))),
+        (REVIEW_OFFER, _agent_review_frame()),
         (
             _agent_offer(AGENT_AUDIT),
             _agent_frame(_agent_view(streaming, APPROVED_END, styled=False)),
@@ -1081,7 +1124,9 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
         ("desk-prompt-cancelled", [("send_key", "ctrl+l")]),
         ("agent-prompt-opened", [("send_text", AGENT_REQUEST)]),
         ("agent-request-typed", [("send_key", "enter")]),
-        ("agent-review-unlocked", [("send_key", "f6")]),
+        ("agent-review-paged", [("send_key", "pagedown")]),
+        ("agent-review-paged", [("send_key", "pagedown")]),
+        ("agent-review-unlocked", [("activate_button", f"1,1,{REVIEW_ID + 1}")]),
         (None, []),
         ("agent-review-approved", []),
     ]
@@ -1118,9 +1163,21 @@ def test_agent_alone_refuses_a_selection_a_wrong_scroll_and_leaked_semantics() -
     one_row = _agent_frame(_agent_view(STORED, STORED_END - 1))
     with pytest.raises(PhysicalDesktopAcceptanceError, match="3 rows"):
         journey_at(AgentAloneJourney.SCROLLED).after_present(offer, 9, one_row, sender)
-    leaked = _agent_frame(_agent_view(STORED, STORED_END), rows=REVIEW_ROWS)
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="did not withhold"):
-        journey_at(AgentAloneJourney.REVIEW).after_present(offer, 9, leaked, sender)
+    # A review that lets Approve once be chosen before its last line, offers
+    # other buttons, is not modal, or leaves the Agent's menu active.
+    early = _agent_review_frame(_agent_review(REVIEW_LINES + (DIALOG_MORE,)))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="before the review was read"):
+        journey_at(AgentAloneJourney.REVIEW).after_present(REVIEW_OFFER, 9, early, sender)
+    swapped = _agent_review_frame(_agent_review(buttons=(("Approve once", "F7"), ("Deny", "F6"))))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="offers"):
+        journey_at(AgentAloneJourney.REVIEW).after_present(REVIEW_OFFER, 9, swapped, sender)
+    loose = _agent_review_frame(_agent_review(modal=False))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not modal"):
+        journey_at(AgentAloneJourney.REVIEW).after_present(REVIEW_OFFER, 9, loose, sender)
+    active = replace(_agent_frame(menus=(AGENT_MENU_SIGNATURE,)),
+                     semantic_dialog_claims=(_agent_review(),))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="active"):
+        journey_at(AgentAloneJourney.REVIEW).after_present(REVIEW_OFFER, 9, active, sender)
 
 
 def test_agent_alone_refuses_a_desk_prompt_that_is_not_modal_for_all_of_desk() -> None:

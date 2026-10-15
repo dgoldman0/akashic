@@ -165,7 +165,13 @@ AGENT_MENU_SIGNATURE = ("Agent", "Run", "Connection", "Access", "Review", "Help"
 AGENT_REQUEST = "approval check"
 AGENT_REVIEW_MARKER = "Provider approval request (no local tool envelope)"
 AGENT_REVIEW_REASON = "Persist the simulated change?"
-AGENT_APPROVE_MARKER = "[F6] Approve once"
+# The Agent's review: a dialog titled Review required whose Approve once,
+# which F6 chooses, waits for the review's last line, beside Deny, which F7
+# chooses, the default and cancel button.  While more of the review lies
+# below, the last line in view says so.
+AGENT_REVIEW_TITLE = "Review required"
+AGENT_REVIEW_BUTTONS = (("Approve once", "F6"), ("Deny", "F7"))
+DIALOG_MORE = "PgDn: more below"
 AGENT_AUDIT = (
     "Approved agent action: provider org.akashic.agent.testing.scripted: "
     + AGENT_REVIEW_REASON
@@ -2219,12 +2225,15 @@ class AgentAloneJourney(_AppletJourney):
     Agent's Ask prompt, a TEXT field in a modal region over the Agent's
     tile, with the Agent's menu and transcript rich and inactive beneath
     it.  The request makes the
-    demo provider ask for approval, in a dialog over the transcript that
-    shows its request and unlocks F6 once it has shown its last row; the
-    dialog is still painted, so while it is open the Agent's menu and
-    transcript are withheld and CELL shows it.  F6 approves, and the
-    transcript then ends with the approved exchange.  CELL shows each end
-    of the transcript on its last row.
+    demo provider ask for approval in a dialog over the Agent: a DIALOG
+    titled Review required in a modal region over its tile, with the
+    Agent's menu rich and inactive beneath it.  Its message shows the
+    request; Approve once, which F6 chooses, cannot be chosen until the
+    message's last line has been shown, and PgDn moves the message while
+    it says more lies below.  Deny, which F7 chooses, is the default and
+    cancel button.  Its Approve once BUTTON approves, and the transcript
+    then ends with the approved exchange.  CELL shows each end of the
+    transcript on its last row.
     """
 
     focus_marker = AGENT_ALONE_FOCUS_MARKER
@@ -2265,6 +2274,57 @@ class AgentAloneJourney(_AppletJourney):
                 "the Agent's tile carries an item view other than its transcript"
             )
         return views[0]
+
+    @staticmethod
+    def _review(projection: RichScreenProjection, bounds):
+        """The Agent's review in its tile, or None."""
+
+        left, top, right, bottom = bounds
+        found = [
+            claim
+            for claim in projection.semantic_dialog_claims
+            if claim.title == AGENT_REVIEW_TITLE
+            and left <= claim.left and claim.right <= right
+            and top <= claim.top and claim.bottom <= bottom
+        ]
+        if not found:
+            return None
+        if len(found) != 1:
+            raise PhysicalDesktopAcceptanceError(f"{len(found)} reviews in the Agent's tile")
+        return found[0]
+
+    @staticmethod
+    def _approve_of_review(projection: RichScreenProjection, review, bounds):
+        """Approve once on REVIEW: the review is modal and active over the
+        Agent, which stays rich and inactive beneath it; it names the
+        request and why it asks; and it offers Approve once, which F6
+        chooses, and Deny, which F7 chooses, the default and cancel
+        button."""
+
+        if not review.modal:
+            raise PhysicalDesktopAcceptanceError("the Agent's review is not modal")
+        if any(part.identity in projection.inactive_controls
+               for part in (review, *review.buttons)):
+            raise PhysicalDesktopAcceptanceError("the Agent's review is inactive")
+        _require_held_beneath_overlay(projection, review, bounds, AGENT_MENU_SIGNATURE,
+                                      "the Agent")
+        message = " ".join(review.content.lines)
+        for marker in (AGENT_REVIEW_MARKER, AGENT_REVIEW_REASON):
+            if marker not in message:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the Agent's review does not say {marker!r}"
+                )
+        offered = tuple((button.label, button.shortcut) for button in review.buttons)
+        if offered != AGENT_REVIEW_BUTTONS:
+            raise PhysicalDesktopAcceptanceError(f"the Agent's review offers {offered!r}")
+        approve, deny = review.buttons
+        if approve.content.default or approve.content.cancel or approve.content.destructive:
+            raise PhysicalDesktopAcceptanceError("the Agent's Approve once has a role")
+        if not (deny.content.default and deny.content.cancel):
+            raise PhysicalDesktopAcceptanceError(
+                "the Agent's Deny is not the default cancel button"
+            )
+        return approve
 
     @staticmethod
     def _shows(transcript, cards) -> bool:
@@ -2361,11 +2421,7 @@ class AgentAloneJourney(_AppletJourney):
         bounds = _desk_content_bounds(projection)
         transcript = self._transcript(projection, bounds)
         prompt = _prompt_claim(projection, AGENT_PROMPT_MARKER, bounds)
-        review = _residual_contains(projection, AGENT_REVIEW_MARKER, bounds)
-        if review and (transcript is not None or projection.menu_signatures):
-            raise PhysicalDesktopAcceptanceError(
-                "the Agent's review did not withhold its menu and transcript"
-            )
+        review = self._review(projection, bounds)
         if prompt is not None:
             _require_held_beneath_overlay(
                 projection, prompt, bounds, AGENT_MENU_SIGNATURE, "the Agent"
@@ -2384,7 +2440,7 @@ class AgentAloneJourney(_AppletJourney):
                 )
         stored = agent_transcript.CARDS
         if self.stage in (self.READY, self.SCROLLED, self.ENDED, *self.DESK_STAGES):
-            if prompt is not None or review:
+            if prompt is not None or review is not None:
                 raise PhysicalDesktopAcceptanceError(
                     "the Agent opened its prompt or a review unasked"
                 )
@@ -2440,16 +2496,26 @@ class AgentAloneJourney(_AppletJourney):
             return self._step("agent-request-typed", "send_key", "enter",
                               self.REVIEW, offer, generation, sender)
         if self.stage == self.REVIEW:
-            if not review:
+            if review is None:
                 return self._wait("the Agent's review")
-            for marker in (AGENT_REVIEW_REASON, AGENT_APPROVE_MARKER):
-                if not _residual_contains(projection, marker, bounds):
-                    return self._wait(f"{marker!r} in the review")
+            approve = self._approve_of_review(projection, review, bounds)
             _require_cell_text_in(offer, AGENT_REVIEW_MARKER, bounds, _WHERE)
-            return self._step("agent-review-unlocked", "send_key", "f6",
+            chosen = bool(approve.state & ControlState.ENABLED)
+            if review.content.lines[-1:] == (DIALOG_MORE,):
+                if chosen:
+                    raise PhysicalDesktopAcceptanceError(
+                        "Approve once could be chosen before the review was read"
+                    )
+                return self._step("agent-review-paged", "send_key", "pagedown",
+                                  self.REVIEW, offer, generation, sender)
+            if not chosen:
+                return self._wait("Approve once after the review's last line")
+            identity = approve.identity
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            return self._step("agent-review-unlocked", "activate_button", value,
                               self.APPROVED, offer, generation, sender)
         cards = stored + AGENT_EXCHANGE
-        if review or transcript is None or not self._shows(transcript, cards):
+        if review is not None or transcript is None or not self._shows(transcript, cards):
             return self._wait("the approved exchange")
         self._check(transcript, cards)
         self._at_end(transcript, cards)
