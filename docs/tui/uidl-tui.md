@@ -779,6 +779,20 @@ Hide an overlay element by string ID:
 4. Clear the overlay's screen area (`DRW-CLEAR-RECT`)
 5. Restore focus to the saved element (if it's still visible)
 
+### A document's overlay, for projection
+
+A document may show one foreground overlay its own paint draws over it:
+the prompt it opened, painted as its overlay field, or the dialog it asked,
+which its host paints after everything the document paints. An optional
+projection reads where that overlay is, so the document beneath it keeps
+its semantics everywhere the overlay does not reach.
+
+| Word | Stack | Description |
+|------|-------|---------|
+| `UTUI-OVERLAY-FIELD-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay field, if it has one |
+| `UTUI-OVERLAY-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay: the dialog it shows, as its last paint laid it out, else its overlay field |
+| `UTUI-CAPTURE-OCCLUDED!` | `( flag -- )` | Set around the capture of a document whose only foreground paint is its overlay: a root that paint meets is clipped away and stays CELL's |
+
 ### How Overlay Paint Works
 
 The paint cycle (`UTUI-PAINT`) uses a two-pass approach:

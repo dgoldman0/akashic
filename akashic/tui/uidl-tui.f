@@ -5310,6 +5310,16 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
     _UTUI-OVERLAY-FIELD@ ?DUP 0= IF 0 0 0 0 0 EXIT THEN
     PRM-FIELD-ROOT -1 ;
 
+\ UTUI-OVERLAY-ROOT@ ( -- row col height width found? )
+\   The screen cells of the document's overlay: the dialog it shows, as
+\   its last paint laid it out, else its overlay field.  A dialog's host
+\   paints it after the document, over everything the document paints.
+: UTUI-OVERLAY-ROOT@  ( -- row col height width found? )
+    DLG-SHOWN ?DUP IF
+        DLG-ROOT 2DUP * IF -1 EXIT THEN 2DROP 2DROP
+    THEN
+    UTUI-OVERLAY-FIELD-ROOT@ ;
+
 \ UTUI-CAPTURE-OCCLUDED! ( flag -- )
 \   Set for the capture of a document whose only foreground paint is its
 \   overlay field; clear it after.
