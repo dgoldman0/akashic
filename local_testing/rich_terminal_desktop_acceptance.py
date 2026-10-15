@@ -10939,6 +10939,29 @@ def _connect(
     )
 
 
+def _write_failure_frame(artifact_root: Path, offer: TerminalDisplayOffer) -> None:
+    """Keep the retained frame a journey refused, for its diagnosis: each
+    region's place, flags and inactive controls, and each of its draws."""
+
+    lines = []
+    plane = offer.retained
+    for region in () if plane is None else plane.regions:
+        lines.append(
+            f"region {region.region_id} owner={region.owner_id} "
+            f"z={getattr(region, 'z_order', '?')} modal={region.modal} "
+            f"clipped={region.clipped} logical={_region_logical_rectangle(region)} "
+            f"inactive={sorted(region.inactive_controls)}"
+        )
+        for draw in region.draws:
+            identity = getattr(draw, "control_id", getattr(draw, "object_id", "?"))
+            lines.append(
+                f"  {type(draw).__name__} {identity} "
+                f"z={getattr(draw, 'z_order', '?')} {getattr(draw, 'bounds', '')}"
+            )
+    path = Path(artifact_root) / "failure-frame.txt"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def run_physical_desktop_acceptance(
     socket_path: str,
     artifact_root: Path,
@@ -11700,12 +11723,16 @@ def run_physical_desktop_acceptance(
                         cell_utf8_bytes=initial_cell.cell_utf8_bytes,
                     )
             waited = journey.waiting
-            progress = journey.after_present(
-                frame_offer,
-                frame_generation,
-                frame_projection,
-                send_input,
-            )
+            try:
+                progress = journey.after_present(
+                    frame_offer,
+                    frame_generation,
+                    frame_projection,
+                    send_input,
+                )
+            except PhysicalDesktopAcceptanceError:
+                _write_failure_frame(artifact_root, frame_offer)
+                raise
             if journey.waiting is not None and journey.waiting != waited:
                 print(
                     f"Journey stage {journey.stage} waits for: {journey.waiting}",
