@@ -2817,7 +2817,11 @@ def _item_view_text_in_tile(
 
 
 def _taskbar_has_focus(projection: RichScreenProjection, marker: str, *, legacy_row=False) -> bool:
-    """Known journey label plus typed focus state, or the complete legacy row."""
+    """Known journey label plus typed focus state, or the complete legacy row.
+
+    While one of Desk's screens is open Desk takes no taskbar input and
+    disables the bar, which lies inactive beneath the screen's modal scope;
+    the focused task keeps its selection there."""
     if projection.semantic_taskbar_claims:
         matches = [(bar, task) for bar in projection.semantic_taskbar_claims
                    for task in bar.tasks if task.kind is ControlKind.TASK and
@@ -2825,10 +2829,13 @@ def _taskbar_has_focus(projection: RichScreenProjection, marker: str, *, legacy_
         if len(matches) != 1:
             return False
         bar, task = matches[0]
+        if task.state & ControlState.MINIMIZED:
+            return False
+        if task.identity in projection.inactive_controls:
+            shown = ControlState.VISIBLE | ControlState.SELECTED
+            return task.state & shown == shown
         required = ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED
-        return bool(bar.state & ControlState.ENABLED and
-                    task.state & required == required and
-                    not task.state & ControlState.MINIMIZED)
+        return bool(bar.state & ControlState.ENABLED and task.state & required == required)
     legacy = projection.row_text(projection.rows - 1) if legacy_row else projection.text
     return marker in legacy
 

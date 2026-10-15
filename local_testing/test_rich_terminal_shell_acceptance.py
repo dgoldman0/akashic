@@ -124,7 +124,7 @@ def _scene(*, instruments=False,tabs=False,zero_chrome=False,
                    *extra,*contents])
 
 
-def _screen_scene(*, depth=4, dialog=(3,2), modal_z=5):
+def _screen_scene(*, depth=4, dialog=(3,2), modal_z=5, bar=None):
     """One zero-chrome pane of A and, over it, an overlay pane, one of
     Desk's screens: a dialog over rows 2 to 4 and columns 3 to 8 in a modal
     region over the whole screen, which holds the taskbar inactive beneath
@@ -137,7 +137,7 @@ def _screen_scene(*, depth=4, dialog=(3,2), modal_z=5):
             glyphs+=[_glyph(1000+row*2,0,row,'AAA'),_glyph(1001+row*2,9,row,'AAA')]
         else:
             glyphs.append(_glyph(1000+row*2,0,row,'A'*COLS))
-    bar=replace(_region(2,(_bar(),),z=1,clip=(0,7,COLS,1)),
+    bar=replace(_region(2,(_bar() if bar is None else bar,),z=1,clip=(0,7,COLS,1)),
                 inactive_controls=frozenset((500,501,502)))
     modal=replace(_region(20,_dialog(*dialog,6),z=modal_z,clip=(0,0,COLS,ROWS)),modal=True)
     return _offer([_region(1,(pane,screen),z=0,clip=(0,0,COLS,ROWS)),bar,
@@ -267,6 +267,17 @@ def test_an_overlay_pane_lies_over_the_pane_beneath_with_its_document_modal():
     assert dialog.modal and (dialog.left,dialog.top,dialog.right,dialog.bottom)==(3,2,9,5)
     assert dialog.identity not in projection.inactive_controls
     assert ControlIdentity(7,9,500) in projection.inactive_controls
+
+
+def test_a_screens_modal_scope_keeps_the_focused_task_beneath_it():
+    """Desk disables its taskbar while a screen is open; the focused task
+    keeps its selection beneath the screen's modal scope, inactive."""
+    projection=_project(_screen_scene(bar=_bar(enabled=False)))
+    assert acceptance._taskbar_has_focus(projection,acceptance.PAD_FOCUS_MARKER)
+    projection=_project(_screen_scene(bar=_bar(enabled=False,selected=False)))
+    assert not acceptance._taskbar_has_focus(projection,acceptance.PAD_FOCUS_MARKER)
+    projection=_project(_screen_scene(bar=_bar(enabled=False,selected=False,minimized=True)))
+    assert not acceptance._taskbar_has_focus(projection,acceptance.PAD_FOCUS_MARKER)
 
 
 @pytest.mark.parametrize('changes,match',[
