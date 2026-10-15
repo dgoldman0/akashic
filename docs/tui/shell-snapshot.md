@@ -60,6 +60,14 @@ copy admits it only under a hidden taskbar, only as a valid TEXT field one
 row high and as wide as the screen, and only when its bytes are exactly the
 field's and end the model. Without a prompt both header fields are zero.
 
+The app shell's notice, while the paint shows one, follows: `SHM.NOTICE-OFF`
+and `SHM.NOTICE-U` name its UDLG model at the first eight-byte boundary after
+the prompt or the text, the padding before it zero. The copy admits it only
+as a valid UDLG notice, with the `NOTICE` flag, whose root at
+`SHM.NOTICE-ROW` and `SHM.NOTICE-COL` lies inside the screen and apart from
+every pane, and only when its bytes are exactly the model's and end the
+model. Without a notice all four header fields are zero.
+
 The constructor checks full A/B capacities and descriptor disjointness
 before any mutation. It rejects module scratch, invalid and wrapping spans,
 active screen and UIDL authority, and the current root instance/state when

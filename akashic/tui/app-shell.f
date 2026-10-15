@@ -860,6 +860,20 @@ VARIABLE _ASHELL-LAY-WHOLE
     SCR-W _ASHELL-SHOWN-SW !
     1 _ASHELL-SHOWN-REVISION +! TRUE ;
 
+\ _ASHELL-TOAST-HIDE ( -- )
+\   Show no notice: have its cells repainted, and give back the text the
+\   paint showed, and the notice's own once it has ended.  A notice holds
+\   memory only while it lasts.
+: _ASHELL-TOAST-HIDE  ( -- )
+    _ASHELL-DIRTY-TOAST-RECT
+    0 _ASHELL-TOAST-SHOWN !
+    _ASHELL-SHOWN-BUF @ ?DUP IF FREE THEN
+    0 _ASHELL-SHOWN-BUF ! 0 _ASHELL-SHOWN-CAP !
+    ASHELL-TOAST-VISIBLE? IF EXIT THEN
+    _ASHELL-TOAST-BUF @ ?DUP IF FREE THEN
+    0 _ASHELL-TOAST-BUF ! 0 _ASHELL-TOAST-CAP !
+    0 0 _ASHELL-TOAST-MSG 2! ;
+
 \ _ASHELL-TOAST-LATCH ( -- )
 \   Decide the notice this paint shows: the one raised last while it has
 \   not ended, centred on the bottom row.  Its layout is kept while the
@@ -867,12 +881,12 @@ VARIABLE _ASHELL-LAY-WHOLE
 \   a bar's four cells of padding and one of text shows none.
 : _ASHELL-TOAST-LATCH  ( -- )
     ASHELL-TOAST-VISIBLE? SCR-W 5 < 0= AND SCR-H 0> AND 0= IF
-        0 _ASHELL-TOAST-SHOWN ! EXIT
+        _ASHELL-TOAST-HIDE EXIT
     THEN
     _ASHELL-TOAST-SHOWN @
     _ASHELL-SHOWN-SERIAL @ _ASHELL-TOAST-SERIAL @ = AND
     _ASHELL-SHOWN-SW @ SCR-W = AND 0= IF
-        _ASHELL-TOAST-LAYOUT 0= IF 0 _ASHELL-TOAST-SHOWN ! EXIT THEN
+        _ASHELL-TOAST-LAYOUT 0= IF _ASHELL-TOAST-HIDE EXIT THEN
     THEN
     SCR-H 1- _ASHELL-SHOWN-ROW !
     SCR-W _ASHELL-SHOWN-W @ - 2/ _ASHELL-SHOWN-COL !

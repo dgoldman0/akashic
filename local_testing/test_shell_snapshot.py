@@ -82,18 +82,18 @@ CREATE _SS-MS 4103 ALLOT CREATE _SS-FS 4103 ALLOT CREATE _SS-OS 4103 ALLOT
 
 def test_shell_snapshot_full_closure_and_deep_frozen_contract():
     program = PRELUDE + r'''
-0 0 SHSN-BANK-BYTES 128 = _SS-A
-4 30 SHSN-BANK-BYTES 830 = _SS-A
+0 0 SHSN-BANK-BYTES 160 = _SS-A
+4 30 SHSN-BANK-BYTES 862 = _SS-A
 -1 0 SHSN-BANK-BYTES 0= _SS-A
 0 0x100000000 SHSN-BANK-BYTES 0= _SS-A
 0xFFFFFFFF 0 SHSN-BANK-BYTES 0= _SS-A
 _SS-BUILD _SS-FREEZE _SS-VALID _SS-OK
-_SS-U @ 830 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
+_SS-U @ 862 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
 0 _SS-ENTRY _SS-F SHME-TITLE$ S" Editor" STR-STR= _SS-A
 1 _SS-ENTRY _SS-F SHME-LABEL$ S" Edit" STR-STR= _SS-A
 2 _SS-ENTRY _SS-F SHME-ACTION$ S" start" STR-STR= _SS-A
 2 _SS-F SHM.ABI _SS-BAD 4096 _SS-F SHM.CAPACITY _SS-BAD
-829 _SS-F SHM.USED _SS-BAD 0 _SS-F SHM.READY _SS-BAD
+861 _SS-F SHM.USED _SS-BAD 0 _SS-F SHM.READY _SS-BAD
 0 _SS-F SHM.OWNER-ID _SS-BAD 0 _SS-F SHM.OWNER-GEN _SS-BAD 0 _SS-F SHM.EPOCH _SS-BAD
 0 _SS-F SHM.WIDTH _SS-BAD 0x100000000 _SS-F SHM.HEIGHT _SS-BAD
 4 _SS-F SHM.FLAGS _SS-BAD 1 _SS-F SHM.FLAGS _SS-BAD
@@ -113,7 +113,7 @@ _SS-U @ 830 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
 0 2 _SS-ENTRY SHME.IDENTITY _SS-BAD 0 2 _SS-ENTRY SHME.ACTION _SS-BAD
 1 2 _SS-ENTRY SHME.FLAGS _SS-BAD
 0 1 _SS-ENTRY SHME.LABEL-OFF _SS-BAD 3 1 _SS-ENTRY SHME.LABEL-U _SS-BAD
-831 2 _SS-ENTRY SHME.ACTION-OFF _SS-BAD 4096 2 _SS-ENTRY SHME.ACTION-U _SS-BAD
+863 2 _SS-ENTRY SHME.ACTION-OFF _SS-BAD 4096 2 _SS-ENTRY SHME.ACTION-U _SS-BAD
 : _SS-CONTROL
     1 _SS-ENTRY SHME.LABEL-OFF @ _SS-F + DUP C@ >R DUP 10 SWAP C!
     _SS-VALID SHSN-S-INVALID = _SS-A R> SWAP C! ; _SS-CONTROL
@@ -125,7 +125,7 @@ _SS-VALID _SS-OK
 _SS-M 4096 0 FILL _SS-VALID _SS-OK
 _SS-F 1+ _SS-U @ SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
 _SS-F _SS-U @ 1- SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
-_SHSN-V-M 128 SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
+_SHSN-V-M SHM-HEADER-SIZE SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
 _SS-DONE
 '''
     _run(program, minimum=60)
@@ -196,7 +196,7 @@ _SS-F _ST-C _SHSN.STAGED _ST-BAD-SOURCE
 _ST-C _SHSN.STAGED @ _ST-C _SHSN.ACTIVE _ST-BAD-SOURCE
 0 _ST-C _SHSN.HOST _ST-BAD-SOURCE
 _ST-END _ST-GOOD
-_ST-P @ _ST-A = _SS-A _ST-U @ 830 = _SS-A
+_ST-P @ _ST-A = _SS-A _ST-U @ 862 = _SS-A
 \ A publisher must protect the live ordinary graph, not just frozen A/B.
 : _ST-LIVE? _ST-C SHSN-LIVE-STORAGE-DISJOINT? ;
 _SS-O 4096 _ST-LIVE? _SS-A
@@ -266,7 +266,7 @@ _SS-F _ST-C _SHSN.STAGED _ST-BAD-SOURCE
     _ST-UNAVAILABLE R> _ST-C _SHSN.HOST ! ; _ST-HOST-CORRUPT
 _ST-GOOD
 \ Later mutation of ordinary model text cannot change the owned completed bank.
-88 _SS-M 800 + C! _ST-GOOD _ST-P @ 800 + C@ 69 = _SS-A
+88 _SS-M 832 + C! _ST-GOOD _ST-P @ 832 + C@ 69 = _SS-A
 _ST-BUILD 2 _SS-M SHM.EPOCH !
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD _ST-P @ _ST-B = _SS-A
 _ST-A _ST-U @ _SS-F _SS-U @ COMPARE 0= _SS-A
@@ -293,7 +293,7 @@ _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
 \ Inactive-bank capacity refusal leaves both previously completed bytes intact.
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
 _ST-A _SS-F 4096 MOVE _ST-B _SS-O 4096 MOVE
-_ST-C _SHSN.ACTIVE @ _ST-A = IF 829 _ST-C _SHSN.B-U ! ELSE 829 _ST-C _SHSN.A-U ! THEN
+_ST-C _SHSN.ACTIVE @ _ST-A = IF 861 _ST-C _SHSN.B-U ! ELSE 861 _ST-C _SHSN.A-U ! THEN
 _ST-BEGIN _ST-STAGE _ST-END _ST-UNAVAILABLE
 _ST-A 4096 _SS-F 4096 COMPARE 0= _SS-A
 _ST-B 4096 _SS-O 4096 COMPARE 0= _SS-A
@@ -412,7 +412,7 @@ _SS-FREEZE _SS-VALID _SS-OK
 1 _SS-F SHM.END-COL _SS-BAD 0 _SS-F SHM.DIVIDER-COL _SS-BAD
 \ Full-frame/empty shell snapshots do not fabricate child panes or tasks.
 _SO-BASE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
-_SS-F SHM.COUNT @ 0= _SS-A _SS-U @ 464 = _SS-A
+_SS-F SHM.COUNT @ 0= _SS-A _SS-U @ 496 = _SS-A
 \ Two launchers share one catalog generation and root owner, but not keys.
 : _SO-LAUNCH ( key col -- )
     >R >R _SS-M SHM-APPEND DUP _SS-E !
@@ -442,7 +442,7 @@ VARIABLE _SP-DST VARIABLE _SP-CAP VARIABLE _SP-OFF
     S" Ask:" _SP-B UFLD-LABEL ?DUP IF 0 SWAP EXIT THEN
     S" hi" _SP-B UFLD-TEXT ?DUP IF 0 SWAP EXIT THEN
     _SP-B UFLD-FINISH ;
-: _SP-BUILD
+: _SP-BODY
     4096 4 _SS-M SHM-INIT _SS-A
     7 _SS-M SHM.OWNER-ID ! 9 _SS-M SHM.OWNER-GEN ! 1 _SS-M SHM.EPOCH !
     32 _SS-M SHM.WIDTH ! 12 _SS-M SHM.HEIGHT !
@@ -456,8 +456,8 @@ VARIABLE _SP-DST VARIABLE _SP-CAP VARIABLE _SP-OFF
     S" Editor" _SS-M SHM-COPY$ _SS-A _SS-E @ SHME.TITLE-OFF ! 6 _SS-E @ SHME.TITLE-U !
     _SS-M SHM-PROMPT-ROOM _SS-A _SP-CAP ! _SP-DST !
     _SP-DST @ _SP-CAP @ _SP-FIELD _SS-OK
-    _SS-M SHM-PROMPT-TAKE _SS-A
-    _SS-M SHM-SEAL ;
+    _SS-M SHM-PROMPT-TAKE _SS-A ;
+: _SP-BUILD _SP-BODY _SS-M SHM-SEAL ;
 \ A byte of the frozen copy changed, validated, and put back.
 : _SP-BAD-BYTE ( value offset -- )
     _SS-F + DUP C@ >R TUCK C! _SS-VALID SHSN-S-INVALID = _SS-A R> SWAP C! ;
@@ -468,7 +468,7 @@ def test_desks_prompt_is_a_text_field_after_every_string_of_its_model():
     program = PROMPT_MODEL + r'''
 _SP-BUILD _SS-FREEZE _SS-VALID _SS-OK
 \ The prompt follows the title at the next eight-byte boundary.
-_SS-F SHM.PROMPT-OFF @ DUP _SP-OFF ! 128 4 168 * + 6 + 7 + -8 AND = _SS-A
+_SS-F SHM.PROMPT-OFF @ DUP _SP-OFF ! SHM-HEADER-SIZE 4 168 * + 6 + 7 + -8 AND = _SS-A
 _SS-F SHM.PROMPT-U @ _SS-F SHM.PROMPT-OFF @ + _SS-U @ = _SS-A
 _SS-F SHM-PROMPT@ DUP 0<> _SS-A OVER UFLD-BYTES@ = _SS-A
 DUP UFLD-LABEL@ S" Ask:" STR-STR= _SS-A UFLD-TEXT@ S" hi" STR-STR= _SS-A
@@ -490,3 +490,52 @@ _SS-VALID _SS-OK
 _SS-DONE
 '''
     _run(program, minimum=20)
+
+
+# The app shell's notice: "Saved" as a UDLG warning notice nine cells wide,
+# its root on the bottom row at column 10, apart from the pane.
+NOTICE_MODEL = PROMPT_MODEL + r"""
+VARIABLE _SN-OFF
+: _SN-SAVED S" Saved" ;
+: _SN-NOTICE ( dst -- bytes )
+    >R 5 1 9 1 UDLG-F-NOTICE 3 R@ UDLG-START
+    0 2 1 5 R@ UDLG-MESSAGE-SLOT! _SN-SAVED R@ UDLG-LINE+ R> UDLG-BYTES@ ;
+: _SN-TAKE ( row col -- )
+    _SS-M SHM-NOTICE-ROOM _SS-A DROP _SN-NOTICE _SS-M SHM-NOTICE-TAKE _SS-A ;
+"""
+
+
+def test_the_app_shells_notice_follows_every_string_and_the_prompt():
+    program = NOTICE_MODEL + r"""
+\ After every string, in a model with no prompt.
+_SS-BUILD 0 _SS-M SHM.READY !
+11 10 _SN-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.NOTICE-OFF @ DUP _SN-OFF ! SHM-HEADER-SIZE 4 168 * + 30 + 7 + -8 AND = _SS-A
+_SS-F SHM.NOTICE-U @ _SN-OFF @ + _SS-U @ = _SS-A
+_SS-F SHM.NOTICE-ROW @ 11 = _SS-A _SS-F SHM.NOTICE-COL @ 10 = _SS-A
+_SS-F SHM-NOTICE@ DUP 0<> _SS-A OVER UDLG-BYTES@ = _SS-A
+UDLG-MESSAGE@ _SN-SAVED STR-STR= _SS-A
+\ One notice a build, none once sealed, and no prompt after it.
+_SS-M SHM-NOTICE-ROOM 0= _SS-A 2DROP
+0 _SS-M SHM.READY ! _SS-M SHM-NOTICE-ROOM 0= _SS-A 2DROP
+_SS-M SHM-PROMPT-ROOM 0= _SS-A 2DROP
+\ It sits at the next boundary with zero padding, is a notice, lies
+\ inside the screen and apart from every pane, and ends the model.
+_SN-OFF @ 8 + _SS-F SHM.NOTICE-OFF _SS-BAD
+1 _SN-OFF @ 1- _SP-BAD-BYTE
+0 _SS-F _SN-OFF @ + UDLG-FLAGS-OFFSET + _SS-BAD
+24 _SS-F SHM.NOTICE-COL _SS-BAD
+12 _SS-F SHM.NOTICE-ROW _SS-BAD
+5 _SS-F SHM.NOTICE-ROW _SS-BAD
+_SS-F SHM.NOTICE-U @ 8 - _SS-F SHM.NOTICE-U _SS-BAD
+_SS-VALID _SS-OK
+\ A model without a notice keeps its fields zero.
+0 _SS-F SHM.NOTICE-U _SS-BAD
+\ After Desk's prompt.
+_SP-BODY 11 10 _SN-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.PROMPT-OFF @ _SS-F SHM.PROMPT-U @ + 7 + -8 AND
+    _SS-F SHM.NOTICE-OFF @ = _SS-A
+_SS-F SHM.NOTICE-U @ _SS-F SHM.NOTICE-OFF @ + _SS-U @ = _SS-A
+_SS-DONE
+"""
+    _run(program, minimum=24)

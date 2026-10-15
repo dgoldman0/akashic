@@ -7421,14 +7421,23 @@ def _shell_text(raw):
     return value
 
 
+_SHM_HEADER = 160
+
+
 def _decode_shell_model(payload: bytes) -> ShellNativeModel:
-    """Decode the actual bounded, pointer-free SHSN copy of ordinary SHM."""
-    _shell_require(isinstance(payload, bytes) and 128 <= len(payload) <= 49152,
+    """Decode the actual bounded, pointer-free SHSN copy of ordinary SHM.
+
+    Desk's prompt and the app shell's notice, when present, follow the text
+    at eight-byte boundaries; their own models are proved natively, so only
+    their placement is checked here."""
+    _shell_require(isinstance(payload, bytes) and _SHM_HEADER <= len(payload) <= 49152,
                    "model extent is outside the canonical owned bank")
-    h = struct.unpack_from("<16Q", payload)
-    abi, capacity, limit, count, used, owner, generation, epoch, cols, rows, flags, divider, end, ready, r0, r1 = h
+    h = struct.unpack_from("<20Q", payload)
+    (abi, capacity, limit, count, used, owner, generation, epoch, cols, rows, flags, divider,
+     end, ready, prompt_offset, prompt_bytes, notice_offset, notice_bytes, notice_row,
+     notice_col) = h
     _shell_require(abi == 1 and capacity == used == len(payload) and ready == (1 << 64) - 1 and
-                   r0 == r1 == 0 and owner > 0 and generation > 0 and epoch > 0,
+                   owner > 0 and generation > 0 and epoch > 0,
                    "model header is not a complete immutable SHM")
     _shell_require(0 < cols < 1 << 32 and 0 < rows < 1 << 32 and flags & ~3 == 0 and
                    (not flags & 1 or flags == 3), "surface or model flags are invalid")
@@ -7436,14 +7445,15 @@ def _decode_shell_model(payload: bytes) -> ShellNativeModel:
     _shell_require(divider == -1 or 0 <= divider < cols, "divider is outside the surface")
     _shell_require(end <= cols and (not flags & 1 or divider == -1 and end == 0),
                    "taskbar endpoint is invalid")
-    _shell_require(count <= limit <= (len(payload) - 128) // 168,
+    _shell_require(count <= limit <= (len(payload) - _SHM_HEADER) // 168,
                    "entry reservation is outside the model")
-    cursor = 128 + 168 * limit
-    _shell_require(not any(payload[128 + 168 * count:cursor]), "unused reserved entries are nonzero")
+    cursor = _SHM_HEADER + 168 * limit
+    _shell_require(not any(payload[_SHM_HEADER + 168 * count:cursor]),
+                   "unused reserved entries are nonzero")
     entries, identities = [], set()
     last_kind = slot_end = selected = 0
     for index in range(count):
-        v = struct.unpack_from("<21Q", payload, 128 + index * 168)
+        v = struct.unpack_from("<21Q", payload, _SHM_HEADER + index * 168)
         key, kind, entry_flags, row, col, height, width, crow, ccol, ch, cw, child_owner, child_gen, identity, action = v[:15]
         identity, action = _signed_cell(identity), _signed_cell(action)
         _shell_require(0 < key < 1 << 63 and child_owner > 0 and child_gen > 0 and last_kind <= kind <= 3 and kind >= 1,
@@ -7492,6 +7502,18 @@ def _decode_shell_model(payload: bytes) -> ShellNativeModel:
                                "LAUNCHER catalog authority is invalid")
         entries.append(ShellNativeEntry(index, key, kind, entry_flags, bounds, content,
                                         child_owner, child_gen, identity, action, label, title, action_id))
+    for offset, size, present in ((prompt_offset, prompt_bytes, bool(flags & 1)),
+                                  (notice_offset, notice_bytes, True)):
+        if not size:
+            _shell_require(offset == 0, "an absent record has an offset")
+            continue
+        start = (cursor + 7) & ~7
+        _shell_require(present and offset == start and size <= len(payload) - start and
+                       not any(payload[cursor:start]),
+                       "a prompt or notice is not placed after the text")
+        cursor = start + size
+    _shell_require(notice_bytes or notice_row == notice_col == 0,
+                   "an absent notice has a place")
     _shell_require(cursor == len(payload) and slot_end <= end, "model has unowned trailing text or slots")
     return ShellNativeModel(owner, generation, epoch, cols, rows, flags, divider, end,
                             tuple(entries), hashlib.sha256(payload).hexdigest())

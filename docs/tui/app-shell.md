@@ -302,7 +302,9 @@ S" Could not save" 3000 ASHELL-TOAST-ERROR  \ a failure
 
 The shell copies the text into a buffer it owns, which grows when a longer
 one is raised, so the caller may reuse its own.  Without memory for the
-copy the notice is not shown.  A later notice replaces an earlier one.
+copy the notice is not shown.  A later notice replaces an earlier one.  The
+first paint after a notice ends gives its memory back, so a notice holds
+memory only while it lasts.
 
 Each paint decides once, as it begins, which notice it shows, and lays it
 out for the screen's width: a bar on the bottom row, centred, four cells
@@ -329,7 +331,8 @@ as wide as its bar, its text the message's one line in a slot two cells
 in.  The text's direction controls go out as inert stand-ins
 (`BIDI-INERT`), as the paint ignored them.  A paint that shows no notice,
 or whose text is not clean single-line text, gives `UDLG-S-UNSUPPORTED`,
-and the notice stays painted.
+and the notice stays painted.  Desk puts the notice in its shell model
+([shell-model.md](shell-model.md)).
 
 ## Shell Cursor
 

@@ -39,7 +39,7 @@ class ShellHarness(GrowthHarness):
         self.serial = 0
 
     def model(self, count=4, text_bytes=64):
-        size = 128 + count * 168 + text_bytes
+        size = 160 + count * 168 + text_bytes
         bank = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
         assert self.call("SHM-INIT", size, count, bank)
         return bank, size
@@ -55,10 +55,10 @@ def test_copy_seal_limits_and_independent_banks(shell):
     right, _ = shell.model(1, 7)
     label = shell.allocate(b"[x]\xc3\xa9!")
     entry, = shell.results("SHM-APPEND", left)
-    assert entry == left + 128
+    assert entry == left + 160
     assert shell.results("SHM-APPEND", left) == (0,)
     offset, ok = shell.results("SHM-COPY$", label, 6, left)
-    assert (offset, ok) == (296, MASK64)
+    assert (offset, ok) == (328, MASK64)
     shell.field(entry, "SHME.LABEL-OFF", offset)
     shell.field(entry, "SHME.LABEL-U", 6)
     before = shell.runtime.memory.read_bytes(left, size)
@@ -80,7 +80,7 @@ def test_copy_seal_limits_and_independent_banks(shell):
 def test_begin_and_unappend_leave_the_bytes_a_fresh_bank_has(shell):
     model, size = shell.model(4, 64)
     fresh, _ = shell.model(4, 64)
-    table = 128 + 4 * 168
+    table = 160 + 4 * 168
     label = shell.allocate(b"abcdef")
 
     def matches_fresh():
@@ -140,8 +140,8 @@ def test_hit_exact_slots_separators_disabled_and_modal(shell):
     assert shell.results("SHM-HIT", 23, 0, model) == (0,)
     shell.results("SHM-SEAL", model)
     for col in (0, 4):
-        assert shell.results("SHM-HIT", 23, col, model) == (model + 128,)
-    assert shell.results("SHM-HIT", 23, 6, model) == (model + 296,)
+        assert shell.results("SHM-HIT", 23, col, model) == (model + 160,)
+    assert shell.results("SHM-HIT", 23, 6, model) == (model + 328,)
     for row, col in ((23, 5), (23, 10), (23, 12), (22, 0), (23, 80)):
         assert shell.results("SHM-HIT", row, col, model) == (0,)
     for flags in (1, 2, 3):

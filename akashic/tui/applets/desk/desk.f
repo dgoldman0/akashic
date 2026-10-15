@@ -2122,6 +2122,20 @@ VARIABLE _DSM-WIDTH
     UFLD-S-OK <> IF DROP EXIT THEN
     _DSM-M @ SHM-PROMPT-TAKE 0= IF FALSE _DSM-OK ! THEN ;
 
+\ The app shell's notice, while this paint shows one apart from every pane,
+\ goes in the model as its UDLG notice, so a renderer can show it as one.
+\ A bank without room for it grows; a notice that cannot be captured stays
+\ the cells it paints.
+: _DESK-SHELL-NOTICE ( -- )
+    ASHELL-NOTICE-SHOWN? 0= IF EXIT THEN
+    ASHELL-NOTICE-ROOT _DSM-M @ SHM-APART-FROM-PANES? 0= IF EXIT THEN
+    _DSM-M @ SHM-NOTICE-ROOM 0= IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    ASHELL-NOTICE-CAPTURE
+    DUP UDLG-S-CAPACITY = IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    UDLG-S-OK <> IF DROP EXIT THEN
+    >R ASHELL-NOTICE-ROOT 2DROP R> _DSM-M @ SHM-NOTICE-TAKE
+        0= IF FALSE _DSM-OK ! THEN ;
+
 : _DESK-SHELL-BUILD ( -- )
     TRUE _DSM-OK !
     _DSM-M @ SHM-BEGIN 0= IF FALSE _DSM-OK ! EXIT THEN
@@ -2161,6 +2175,7 @@ VARIABLE _DSM-WIDTH
     THEN
     _DSM-COL @ SCR-W MIN _DSM-M @ SHM.END-COL !
     _DSM-OK @ IF _DESK-SHELL-PROMPT THEN
+    _DSM-OK @ IF _DESK-SHELL-NOTICE THEN
     _DSM-OK @ IF _DSM-M @ SHM-SEAL THEN ;
 
 VARIABLE _DSG-CELL

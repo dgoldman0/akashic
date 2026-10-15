@@ -103,6 +103,28 @@ CREATE _dh-press 24 ALLOT
     _dh-desk @ DESK-PAINT-CB
     _dh-model @ SHM.PROMPT-U @ 0= _dh-assert
 
+    \ The app shell's notice, while the paint shows one, goes in the model as
+    \ its UDLG notice where the paint put it, after Desk's prompt while that
+    \ is open, and leaves when it ends.
+    S" Saved" 60000 ASHELL-TOAST-WARNING _ASHELL-TOAST-LATCH
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM-NOTICE@ DUP 0<> _dh-assert OVER UDLG-BYTES@ = _dh-assert
+    DUP UDLG-FLAGS@ UDLG-F-NOTICE = _dh-assert
+    DUP UDLG-SEVERITY@ 3 = _dh-assert
+    UDLG-MESSAGE@ S" Saved" STR-STR= _dh-assert
+    ASHELL-NOTICE-ROOT 2DROP
+    _dh-model @ SHM.NOTICE-COL @ = _dh-assert
+    DUP SCR-H 1- = _dh-assert _dh-model @ SHM.NOTICE-ROW @ = _dh-assert
+    S" Ask:" _dh-long-title 3 _DESK-AGENT-PROMPT @ PRM-SHOW
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM.PROMPT-U @ 0<> _dh-assert
+    _dh-model @ SHM.PROMPT-OFF @ _dh-model @ SHM.PROMPT-U @ + 7 + -8 AND
+        _dh-model @ SHM.NOTICE-OFF @ = _dh-assert
+    _DESK-AGENT-PROMPT @ PRM-HIDE
+    MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM.NOTICE-U @ 0= _dh-assert
+
     \ A title too long for the model's bank grows the bank: the whole title
     \ is published. Restore descriptors before continuing.
     _dh-long-title _dh-app-a APP.TITLE-A ! 50000 _dh-app-a APP.TITLE-U !

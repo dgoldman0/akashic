@@ -5,10 +5,10 @@ CELL divider paint, taskbar paint and taskbar pointer hit testing. It does
 not contain terminal IDs, wire encoders, retained scenes or app-name rules.
 
 Desk builds one inactive caller-owned bank before painting. Each bank has a
-128-byte header, a bounded array of 168-byte records and a copied text arena.
+160-byte header, a bounded array of 168-byte records and a copied text arena.
 The header records screen dimensions, component instance ID/generation,
 completed-frame epoch, prompt/modal flags, taskbar separator and occupied
-extent. Records identify a pane, task or launcher and carry exact screen
+extent, and where Desk's prompt and the app shell's notice lie. Records identify a pane, task or launcher and carry exact screen
 CELL bounds, pane content bounds, state, lifecycle identity, copied display
 label, copied full title and, for catalog launchers, copied catalog ID.
 String fields use bank-relative offsets. No descriptor, slot or catalog
@@ -62,6 +62,27 @@ The caller captures the field into the room (Desk uses
 padding before it. A build takes one prompt, before sealing. A bank without
 room for it grows like a bank without room for anything else; a prompt that
 cannot be captured stays the cells it paints.
+
+While the paint shows the app shell's notice ([app shell](app-shell.md)),
+the model carries it too, so a rich terminal can show it as a notice: after
+the prompt, or after every string, at the next eight-byte boundary, its
+[UDLG model](dialog-model.md). The header's `SHM.NOTICE-OFF` (128) and
+`SHM.NOTICE-U` (136) name it, and `SHM.NOTICE-ROW` (144) and
+`SHM.NOTICE-COL` (152) give the screen cell of its root's top left; all four
+are zero otherwise. Its root lies apart from every pane.
+
+| Word | Stack | Purpose |
+| --- | --- | --- |
+| `SHM-NOTICE-ROOM` | `( model -- dst cap ok? )` | The room after the prompt or the strings |
+| `SHM-NOTICE-TAKE` | `( row col bytes model -- ok? )` | Record the notice captured there, its root's top left at ROW COL |
+| `SHM-NOTICE@` | `( model -- udlg-a udlg-u )` | The notice's model, or `0 0` |
+| `SHM-APART-FROM-PANES?` | `( row col height width model -- flag )` | No pane meets the rectangle |
+
+Desk captures the notice with `ASHELL-NOTICE-CAPTURE` once it has taken the
+prompt, when the notice lies apart from every pane. A build takes one
+notice, after the prompt and before sealing, and no prompt after it. A bank
+without room for it grows; a notice that cannot be captured stays the cells
+it paints.
 
 A launcher overlay blocks background taskbar input while preserving its
 paint. Changes to layout, child lifetime or focus invalidate old taskbar

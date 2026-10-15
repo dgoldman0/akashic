@@ -93,10 +93,11 @@ _NT-SAVED 60000 ASHELL-TOAST-WARNING _ASHELL-TOAST-LATCH _ASHELL-DRAW-TOAST
 \ The layout is kept while the notice and the width stay the same.
 _ASHELL-SHOWN-REVISION @ _NT-U ! _ASHELL-TOAST-LATCH
 _ASHELL-SHOWN-REVISION @ _NT-U @ = _SS-A
-\ A notice that has ended shows no more.
+\ A notice that has ended shows no more, and holds no memory.
 MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH ASHELL-NOTICE-SHOWN? 0= _SS-A
 ASHELL-NOTICE-ROOT OR OR OR 0= _SS-A
-''' + CLEANUP, minimum=23)
+_ASHELL-TOAST-BUF @ 0= _SS-A _ASHELL-SHOWN-BUF @ 0= _SS-A
+''' + CLEANUP, minimum=25)
 
 
 def test_a_notice_raised_during_a_paint_shows_from_the_next():
@@ -125,9 +126,11 @@ _ASHELL-TOAST-LATCH _ASHELL-SHOWN-CELLS @ 7 = _SS-A _ASHELL-SHOWN-U @ 12 = _SS-A
 \ A width that fits keeps the whole text.
 S" abcdefgh" 60000 ASHELL-TOAST _ASHELL-TOAST-LATCH
 _NT-SHOWN S" abcdefgh" COMPARE 0= _SS-A
-\ A screen without room for a cell of text shows none.
+\ A screen without room for a cell of text shows none, but keeps the
+\ notice while it lasts.
 _NT-S @ SCR-FREE 4 4 _NT-SCREEN _ASHELL-TOAST-LATCH ASHELL-NOTICE-SHOWN? 0= _SS-A
-''' + CLEANUP, minimum=12)
+_ASHELL-SHOWN-BUF @ 0= _SS-A _ASHELL-TOAST-MSG 2@ S" abcdefgh" COMPARE 0= _SS-A
+''' + CLEANUP, minimum=14)
 
 
 def test_the_notice_capture_is_a_canonical_udlg_notice():

@@ -32,7 +32,7 @@ VARIABLE _SHM-OWNED-LIMIT
 1 CONSTANT SHM-F-TASKBAR-HIDDEN
 2 CONSTANT SHM-F-INPUT-BLOCKED
 
-128 CONSTANT SHM-HEADER-SIZE
+160 CONSTANT SHM-HEADER-SIZE
 168 CONSTANT SHM-ENTRY-SIZE
 : SHM.ABI          ( m -- a ) ;
 : SHM.CAPACITY     ( m -- a ) 8 + ;
@@ -52,6 +52,13 @@ VARIABLE _SHM-OWNED-LIMIT
 \ and bytes of a UFLD model of its field, or zero.
 : SHM.PROMPT-OFF   ( m -- a ) 112 + ;
 : SHM.PROMPT-U     ( m -- a ) 120 + ;
+\ The app shell's notice, while the paint shows one: the bank offset and
+\ bytes of its UDLG model, and the screen cell of its root's top left, or
+\ all zero.
+: SHM.NOTICE-OFF   ( m -- a ) 128 + ;
+: SHM.NOTICE-U     ( m -- a ) 136 + ;
+: SHM.NOTICE-ROW   ( m -- a ) 144 + ;
+: SHM.NOTICE-COL   ( m -- a ) 152 + ;
 
 : SHME.KEY         ( e -- a ) ;
 : SHME.KIND        ( e -- a ) 8 + ;
@@ -190,11 +197,12 @@ VARIABLE _SHMC-A
 \ Desk's own prompt follows every string at the next eight-byte boundary.
 \ SHM-PROMPT-ROOM gives the room there; the caller captures the field's
 \ UFLD model into it and SHM-PROMPT-TAKE records it, zeroing the padding
-\ before it.  One prompt a build.
+\ before it.  One prompt a build, before the notice.
 VARIABLE _SHMP-M VARIABLE _SHMP-O
 : _SHM-PROMPT-AT? ( model -- flag )
     DUP _SHMP-M ! SHM-VALID? 0= IF FALSE EXIT THEN
-    _SHMP-M @ SHM.READY @ _SHMP-M @ SHM.PROMPT-U @ OR IF FALSE EXIT THEN
+    _SHMP-M @ SHM.READY @ _SHMP-M @ SHM.PROMPT-U @ OR
+    _SHMP-M @ SHM.NOTICE-U @ OR IF FALSE EXIT THEN
     _SHMP-M @ SHM.USED @ 7 + -8 AND DUP _SHMP-O !
     _SHMP-M @ SHM.CAPACITY @ U> 0= ;
 : SHM-PROMPT-ROOM ( model -- dst cap ok? )
@@ -211,6 +219,48 @@ VARIABLE _SHMP-M VARIABLE _SHMP-O
     _SHMP-O @ + _SHMP-M @ SHM.USED ! TRUE ;
 : SHM-PROMPT@ ( model -- ufld-a ufld-u )
     DUP SHM.PROMPT-U @ DUP IF SWAP DUP SHM.PROMPT-OFF @ + SWAP ELSE NIP 0 SWAP THEN ;
+
+\ The app shell's notice follows the prompt, or every string, at the next
+\ eight-byte boundary.  SHM-NOTICE-ROOM gives the room there; the caller
+\ captures the notice's UDLG model into it and SHM-NOTICE-TAKE records it
+\ with its root's top-left cell, zeroing the padding before it.  One
+\ notice a build, after the prompt.
+VARIABLE _SHMN-M VARIABLE _SHMN-O
+: _SHM-NOTICE-AT? ( model -- flag )
+    DUP _SHMN-M ! SHM-VALID? 0= IF FALSE EXIT THEN
+    _SHMN-M @ SHM.READY @ _SHMN-M @ SHM.NOTICE-U @ OR IF FALSE EXIT THEN
+    _SHMN-M @ SHM.USED @ 7 + -8 AND DUP _SHMN-O !
+    _SHMN-M @ SHM.CAPACITY @ U> 0= ;
+: SHM-NOTICE-ROOM ( model -- dst cap ok? )
+    _SHM-NOTICE-AT? 0= IF 0 0 FALSE EXIT THEN
+    _SHMN-M @ _SHMN-O @ +
+    _SHMN-M @ SHM.CAPACITY @ _SHMN-O @ - TRUE ;
+: SHM-NOTICE-TAKE ( row col bytes model -- ok? )
+    _SHM-NOTICE-AT? 0= IF DROP 2DROP FALSE EXIT THEN
+    DUP 0> 0= IF DROP 2DROP FALSE EXIT THEN
+    DUP _SHMN-M @ SHM.CAPACITY @ _SHMN-O @ - U> IF DROP 2DROP FALSE EXIT THEN
+    _SHMN-M @ DUP SHM.USED @ + _SHMN-O @ _SHMN-M @ SHM.USED @ - 0 FILL
+    _SHMN-O @ _SHMN-M @ SHM.NOTICE-OFF !
+    DUP _SHMN-M @ SHM.NOTICE-U !
+    _SHMN-O @ + _SHMN-M @ SHM.USED !
+    _SHMN-M @ SHM.NOTICE-COL ! _SHMN-M @ SHM.NOTICE-ROW ! TRUE ;
+: SHM-NOTICE@ ( model -- udlg-a udlg-u )
+    DUP SHM.NOTICE-U @ DUP IF SWAP DUP SHM.NOTICE-OFF @ + SWAP ELSE NIP 0 SWAP THEN ;
+
+\ No entry of kind PANE meets the rectangle.  A notice lies apart from
+\ every pane.
+VARIABLE _SHMA-ROW VARIABLE _SHMA-COL VARIABLE _SHMA-ROW1 VARIABLE _SHMA-COL1
+: SHM-APART-FROM-PANES? ( row col height width model -- flag )
+    >R 2 PICK + _SHMA-COL1 ! 2 PICK + _SHMA-ROW1 ! _SHMA-COL ! _SHMA-ROW !
+    R> DUP SHM.COUNT @ 0 ?DO
+        I OVER SHM-ENTRY DUP SHME.KIND @ SHM-K-PANE = IF
+            DUP SHME.ROW @ _SHMA-ROW1 @ <
+            OVER SHME.ROW @ 2 PICK SHME.HEIGHT @ + _SHMA-ROW @ > AND
+            OVER SHME.COL @ _SHMA-COL1 @ < AND
+            OVER SHME.COL @ 2 PICK SHME.WIDTH @ + _SHMA-COL @ > AND
+            IF 2DROP FALSE UNLOOP EXIT THEN
+        THEN DROP
+    LOOP DROP TRUE ;
 
 : SHM-SEAL  ( model -- )
     DUP SHM-VALID? IF TRUE SWAP SHM.READY ! ELSE DROP THEN ;
