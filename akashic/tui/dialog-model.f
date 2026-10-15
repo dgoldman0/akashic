@@ -282,6 +282,7 @@ VARIABLE _UDLG-S-R VARIABLE _UDLG-S-C VARIABLE _UDLG-S-H VARIABLE _UDLG-S-W
 VARIABLE _UDLG-W-M
 VARIABLE _UDLG-W-P
 VARIABLE _UDLG-W-S
+VARIABLE _UDLG-W-LINES
 
 \ BYTES always holds the end of what is written.
 : _UDLG-W-TEXT-END! ( -- )
@@ -298,7 +299,8 @@ VARIABLE _UDLG-W-S
     _UDLG-W-M @ UDLG-HEIGHT-OFFSET + ! _UDLG-W-M @ UDLG-WIDTH-OFFSET + !
     _UDLG-W-M @ UDLG-REVISION-OFFSET + ! _UDLG-W-M @ UDLG-KEY-OFFSET + !
     UDLG-ABI _UDLG-W-M @ UDLG-ABI-OFFSET + !
-    UDLG-HEADER-SIZE _UDLG-W-M @ UDLG-BYTES-OFFSET + ! ;
+    UDLG-HEADER-SIZE _UDLG-W-M @ UDLG-BYTES-OFFSET + !
+    0 _UDLG-W-LINES ! ;
 
 \ Store a slot's four cells at an address.
 : _UDLG-SLOT-STORE ( row col height width slot -- )
@@ -316,14 +318,15 @@ VARIABLE _UDLG-W-S
     UDLG-MESSAGE-SLOT-OFFSET + _UDLG-SLOT-STORE ;
 
 \ Append one line to the message, after a line feed unless it is the
-\ first.
+\ first; a line may be empty.
 : UDLG-LINE+ ( a u model -- )
     _UDLG-W-M !
     _UDLG-W-M @ UDLG-MESSAGE@ + _UDLG-W-P !
-    _UDLG-W-M @ UDLG-MESSAGE-BYTES@ IF
+    _UDLG-W-LINES @ IF
         10 _UDLG-W-P @ C! 1 _UDLG-W-P +!
         1 _UDLG-W-M @ UDLG-MESSAGE-BYTES-OFFSET + +!
     THEN
+    1 _UDLG-W-LINES +!
     DUP _UDLG-W-M @ UDLG-MESSAGE-BYTES-OFFSET + +!
     _UDLG-W-P @ SWAP MOVE
     _UDLG-W-M @ UDLG-MESSAGE@ +

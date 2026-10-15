@@ -69,7 +69,8 @@ UDLG-BUTTON+ ( row col height width roles state a u model -- )
 A writer measures the model with `UDLG-TEXT-BYTES` and one
 `UDLG-BUTTON-BYTES` a button, owns that many aligned bytes, and writes in
 order: `UDLG-START`, the title, the message slot and its lines, then the
-buttons. The writers keep `bytes` at the end of what is written and check
+buttons. Each line after the first follows a line feed, an empty line
+too. The writers keep `bytes` at the end of what is written and check
 nothing; `UDLG-VALIDATE` proves the result. Accessors (`UDLG-TITLE@`,
 `UDLG-MESSAGE@`, `UDLG-BUTTON-FIRST`, `UDLG-BUTTON-NEXT` and the field
 readers) require a validated model.

@@ -173,12 +173,16 @@ VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
     RTE-CONTROL-SIZE * _RSHSP-SRC-CONTROLS @ + _RTE-CONTROL.KIND @ ;
 : _RSHSP-SRC-ATTACHMENT ( index -- token )
     RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-ATTACHMENT@ ;
-\ The root of an overlay: a document's prompt field, or its dialog.
+: _RSHSP-SRC-SOURCE ( index -- source )
+    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-SOURCE@ ;
+\ The root of an overlay: a document's prompt field, or the dialog widget
+\ it shows.  A dialog element is the document's own paint, not an overlay.
 : _RSHSP-OVERLAY-CONTROL? ( index -- flag )
-    DUP _RSHSP-SRC-KIND DUP RTE-CONTROL-DIALOG = IF 2DROP -1 EXIT THEN
+    DUP _RSHSP-SRC-KIND DUP RTE-CONTROL-DIALOG = IF
+        DROP _RSHSP-SRC-SOURCE UDLSN-SOURCE-OVERLAY = EXIT
+    THEN
     RTE-CONTROL-FIELD <> IF DROP 0 EXIT THEN
-    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-SOURCE@
-        UFLSN-SOURCE-OVERLAY = ;
+    _RSHSP-SRC-SOURCE UFLSN-SOURCE-OVERLAY = ;
 \ The signed slot of the document a token names; refuses an absent one.
 : _RSHSP-DOCUMENT-SLOT ( token -- slot-id )
     _RSHSP-P @ _RTHP.SOURCE-DIR-USED @ RUHA-DOCUMENT-SIZE / 0 ?DO
@@ -362,6 +366,20 @@ VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
             OVER _RTE-IR.FLAGS !
         96 +
     LOOP ;
+\ Desk's own screens take every key while they are open and ignore a
+\ press outside them, so with dialogs an overlay pane's content region is
+\ a modal scope over the whole screen, its logical bounds.
+VARIABLE _RSHSP-OM-X
+: _RSHSP-OVERLAY-MODAL! ( -- )
+    _RSHSP-DIALOGS? 0= IF EXIT THEN
+    _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ 0 ?DO
+        _RSHSP-CORR @ I RSHPL-CORRELATION-SIZE * + _RSHSP-OM-X !
+        _RSHSP-OM-X @ RSHPL-CORRELATION.INDEX @ _RSHSP-ENTRY
+        DUP SHME.KIND @ SHM-K-PANE = SWAP SHME.FLAGS @ SHM-F-OVERLAY AND 0<> AND IF
+            _RSHSP-OM-X @ RSHPL-CORRELATION.CONTENT-REGION @ _RSHSP-REGION@
+            DUP _RTE-IR.FLAGS @ RTE-REGION-MODAL OR SWAP _RTE-IR.FLAGS !
+        THEN
+    LOOP ;
 \ Desk's own prompt holds the hidden taskbar row.  With dialogs its region
 \ is a modal scope over the whole screen, since Desk takes no other input
 \ while the prompt is open; without them it is that row alone.  It sits
@@ -410,6 +428,7 @@ VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
     _RSHSP-OUT @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ 1+
         _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + 96 * + _RSHSP-MODAL-ROWS
         _RSHSP-PROMPT-REGION-ROW
+    _RSHSP-OVERLAY-MODAL!
     _RSHSP-CATALOG @ RTE-REGION-CATALOG-VALID? _RSHSP-CHECK
     _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-P @ _RTHP.STATIC-COUNT @ _RSHSP-ADD
     _RSHSP-N @ _RSHSP-ADD 6 _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD _RSHSP-FAMILY-CAP !
@@ -485,9 +504,11 @@ VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
         I _RSHSP-OV @ OVER = IF DROP I _RSHSP-OV 16 + @ UNLOOP EXIT THEN
     LOOP
     _RSHSP-SRC-ATTACHMENT _RSHSP-MEMBER@ RSHMM.CONTENT-REGION @ ;
-\ A dialog's button goes where its dialog does: the overlay of its pane.
+\ A dialog widget's button goes where its dialog does: the overlay of its
+\ pane.
 : _RSHSP-CONTROL-MEMBER ( index -- region )
-    DUP _RSHSP-SRC-KIND RTE-CONTROL-BUTTON = IF
+    DUP _RSHSP-SRC-KIND RTE-CONTROL-BUTTON =
+    OVER _RSHSP-SRC-SOURCE UDLSN-SOURCE-OVERLAY = AND IF
         _RSHSP-SRC-ATTACHMENT _RSHSP-DOCUMENT-SLOT _RSHSP-SLOT-PANE
         _RSHSP-PANE-OVERLAY DUP _RSHSP-CHECK @
         DUP _RSHSP-SRC-KIND RTE-CONTROL-DIALOG = _RSHSP-CHECK

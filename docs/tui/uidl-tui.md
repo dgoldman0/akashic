@@ -766,6 +766,7 @@ are such documents.
 | `UTUI-SHOW-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-SHOW` |
 | `UTUI-HIDE-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-HIDE` |
 | `UTUI-EACH-ELEM` | `( xt -- )` | Run `xt ( elem -- )` on every element, each before its children; `xt` must not change the tree |
+| `UTUI-DIALOG-REVISION` | `( -- n )` | A revision that grows whenever a dialog is laid out or its title or one of its labels is set; a capture of a dialog element takes it |
 
 ---
 

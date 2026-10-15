@@ -4,10 +4,13 @@
 \
 \  One coherent UIDL-TUI observation captures the dialog the current
 \  document shows, as its last paint laid it out, into a caller-owned
-\  native bank as one UDLG model, with a pointer-free descriptor.  A
-\  document shows at most one dialog, so a capture has no record or one.
-\  A dialog not yet painted, not wholly on the screen, or one its widget
-\  cannot describe stays painted text: the capture records nothing for it.
+\  native bank as one UDLG model, with a pointer-free descriptor: the
+\  dialog widget it shows, or else the one dialog element its resolved
+\  tree shows.  A capture has no record or one.  A dialog not yet painted,
+\  not wholly on the screen, or one that cannot be described stays painted
+\  text: the capture records nothing for it.  A dialog element is described
+\  when its leading labels are its message and each of its later children
+\  is a mounted widget, its contents; its descriptor says how many.
 \  A refused capture reports no bytes used, and the caller publishes none
 \  of what it may have written.  Caller banks must be disjoint from each
 \  other, from module scratch and from UIDL authority.
@@ -40,6 +43,14 @@ REQUIRE ../utils/memory-span.f
 \ 2, so a dialog's controls never share a correlation with a field's.
 3 CONSTANT UDLSN-SOURCE-OVERLAY
 
+\ A dialog element of the document's own UIDL.  Its contents are other
+\ roots of the document inside it, which paint above it.
+4 CONSTANT UDLSN-SOURCE-ELEMENT
+
+\ A dialog widget paints after everything its document paints: its buttons
+\ at this depth, and the dialog just below them.
+255 CONSTANT _UDLSN-WIDGET-Z
+
 \ Descriptor fields are native cells and contain no pointer.
 \
 \   +0   source kind
@@ -50,6 +61,8 @@ REQUIRE ../utils/memory-span.f
 \   +40  root height
 \   +48  root width
 \   +56  native entry bytes
+\   +64  the depth its contents paint at; the dialog lies just below
+\   +72  the roots its contents are: none for a dialog widget
 
 : _UDLSN-D.SOURCE    ( descriptor -- address )       ;
 : _UDLSN-D.KEY       ( descriptor -- address )   8 + ;
@@ -59,8 +72,10 @@ REQUIRE ../utils/memory-span.f
 : _UDLSN-D.HEIGHT    ( descriptor -- address )  40 + ;
 : _UDLSN-D.WIDTH     ( descriptor -- address )  48 + ;
 : _UDLSN-D.ENTRY-U   ( descriptor -- address )  56 + ;
+: _UDLSN-D.Z         ( descriptor -- address )  64 + ;
+: _UDLSN-D.CONTENTS  ( descriptor -- address )  72 + ;
 
-64 CONSTANT UDLSN-DESCRIPTOR-SIZE
+80 CONSTANT UDLSN-DESCRIPTOR-SIZE
 
 : UDLSN-DESCRIPTOR-BYTES  ( -- bytes )  UDLSN-DESCRIPTOR-SIZE ;
 : UDLSN-DESCRIPTOR-SOURCE@  ( descriptor -- value )  _UDLSN-D.SOURCE @ ;
@@ -73,6 +88,8 @@ REQUIRE ../utils/memory-span.f
 : UDLSN-DESCRIPTOR-WIDTH@  ( descriptor -- value )  _UDLSN-D.WIDTH @ ;
 : UDLSN-DESCRIPTOR-ENTRY-BYTES@  ( descriptor -- value )
     _UDLSN-D.ENTRY-U @ ;
+: UDLSN-DESCRIPTOR-Z@  ( descriptor -- value )  _UDLSN-D.Z @ ;
+: UDLSN-DESCRIPTOR-CONTENTS@  ( descriptor -- value )  _UDLSN-D.CONTENTS @ ;
 : UDLSN-DESCRIPTOR-NATIVE  ( descriptor native-base -- model bytes )
     OVER UDLSN-DESCRIPTOR-NATIVE-OFFSET@ +
     SWAP UDLSN-DESCRIPTOR-ENTRY-BYTES@ ;
@@ -90,6 +107,25 @@ VARIABLE _UDLSN-COLUMN
 VARIABLE _UDLSN-HEIGHT
 VARIABLE _UDLSN-WIDTH
 VARIABLE _UDLSN-NEED
+VARIABLE _UDLSN-SOURCE
+VARIABLE _UDLSN-Z
+VARIABLE _UDLSN-CONTENTS
+VARIABLE _UDLSN-E
+VARIABLE _UDLSN-E-N
+VARIABLE _UDLSN-C
+VARIABLE _UDLSN-LINES
+VARIABLE _UDLSN-MU
+VARIABLE _UDLSN-TU
+VARIABLE _UDLSN-TW
+VARIABLE _UDLSN-V-IX
+VARIABLE _UDLSN-V-EFF
+VARIABLE _UDLSN-V-RES
+VARIABLE _UDLSN-V-AV
+\ Resolved records, aligned as their capture requires.
+CREATE _UDLSN-RES-RAW UTUI-RESOLVED-BYTES 7 + ALLOT
+CREATE _UDLSN-CRES-RAW UTUI-RESOLVED-BYTES 7 + ALLOT
+: _UDLSN-RES  ( -- a )  _UDLSN-RES-RAW 7 + -8 AND ;
+: _UDLSN-CRES  ( -- a )  _UDLSN-CRES-RAW 7 + -8 AND ;
 VARIABLE _UDLSN-OWNED-LIMIT
 
 : _UDLSN-OPTIONAL-SPAN?  ( address bytes -- flag )
@@ -136,21 +172,27 @@ VARIABLE _UDLSN-OWNED-LIMIT
         _UDLSN-AUTHORITY-DISJOINT? 0= IF 0 EXIT THEN
     _UDLSN-NATIVE-A @ _UDLSN-NATIVE-U @ _UDLSN-AUTHORITY-DISJOINT? ;
 
-\ The dialog the document shows, wholly on the screen as its last paint
-\ laid it out; false for none, or one left to CELL.
-: _UDLSN-SHOWN?  ( -- flag )
-    DLG-SHOWN DUP _UDLSN-W ! 0= IF 0 EXIT THEN
-    _UDLSN-W @ DLG-INSTANCE@ DUP _UDLSN-KEY ! 0= IF 0 EXIT THEN
-    _UDLSN-W @ DLG-ROOT
-        _UDLSN-WIDTH ! _UDLSN-HEIGHT ! _UDLSN-COLUMN ! _UDLSN-ROW !
+\ The root lies wholly on the screen.
+: _UDLSN-ON-SCREEN?  ( -- flag )
     _UDLSN-HEIGHT @ 0> 0= _UDLSN-WIDTH @ 0> 0= OR IF 0 EXIT THEN
     _UDLSN-ROW @ 0< _UDLSN-COLUMN @ 0< OR IF 0 EXIT THEN
     _UDLSN-ROW @ _UDLSN-HEIGHT @ + SCR-H >
     _UDLSN-COLUMN @ _UDLSN-WIDTH @ + SCR-W > OR 0= ;
 
+\ The dialog widget the document shows, wholly on the screen as its last
+\ paint laid it out; false for none, or one left to CELL.
+: _UDLSN-SHOWN?  ( -- flag )
+    DLG-SHOWN DUP _UDLSN-W ! 0= IF 0 EXIT THEN
+    _UDLSN-W @ DLG-INSTANCE@ DUP _UDLSN-KEY ! 0= IF 0 EXIT THEN
+    _UDLSN-W @ DLG-ROOT
+        _UDLSN-WIDTH ! _UDLSN-HEIGHT ! _UDLSN-COLUMN ! _UDLSN-ROW !
+    _UDLSN-ON-SCREEN? ;
+
 : _UDLSN-DESCRIBE  ( -- )
     _UDLSN-DESCRIPTORS-A @ UDLSN-DESCRIPTOR-SIZE 0 FILL
-    UDLSN-SOURCE-OVERLAY _UDLSN-DESCRIPTORS-A @ _UDLSN-D.SOURCE !
+    _UDLSN-SOURCE @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.SOURCE !
+    _UDLSN-Z @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.Z !
+    _UDLSN-CONTENTS @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.CONTENTS !
     _UDLSN-KEY @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.KEY !
     _UDLSN-ROW @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.ROW !
     _UDLSN-COLUMN @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.COLUMN !
@@ -158,10 +200,111 @@ VARIABLE _UDLSN-OWNED-LIMIT
     _UDLSN-WIDTH @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.WIDTH !
     _UDLSN-NEED @ _UDLSN-DESCRIPTORS-A @ _UDLSN-D.ENTRY-U ! ;
 
-: _UDLSN-CAPTURE-BODY  ( -- descriptor-count native-used status )
-    _UDLSN-SHAPES? 0= IF 0 0 UDLSN-S-INVALID EXIT THEN
-    _UDLSN-AUTHORITY? 0= IF 0 0 UDLSN-S-INVALID EXIT THEN
-    _UDLSN-SHOWN? 0= IF 0 0 UDLSN-S-OK EXIT THEN
+\ The dialog elements the document shows, and the last one's key and
+\ resolved state.
+: _UDLSN-E-VISIT  ( elem index ordinal local effective resolved available -- )
+    _UDLSN-V-AV ! _UDLSN-V-RES ! _UDLSN-V-EFF ! 2DROP _UDLSN-V-IX !
+    DUP UIDL-TYPE UIDL-T-DIALOG <>
+    _UDLSN-V-EFF @ 0= OR
+    _UDLSN-V-AV @ UTUI-RESOLVED-BYTES <> OR IF DROP EXIT THEN
+    _UDLSN-E ! 1 _UDLSN-E-N +!
+    _UDLSN-V-IX @ 1+ _UDLSN-KEY !
+    _UDLSN-V-RES @ _UDLSN-RES UTUI-RESOLVED-BYTES MOVE ;
+
+\ The one dialog element the document shows, wholly on the screen and
+\ with room for its frame and title.
+: _UDLSN-ELEMENT?  ( -- flag )
+    0 _UDLSN-E ! 0 _UDLSN-E-N !
+    ['] _UDLSN-E-VISIT UTUI-RESOLVED-TREE-EACH
+        UTUI-RESOLVED-S-OK <> IF 0 EXIT THEN
+    _UDLSN-E-N @ 1 <> IF 0 EXIT THEN
+    _UDLSN-RES @ _UDLSN-ROW !
+    _UDLSN-RES 8 + @ _UDLSN-COLUMN !
+    _UDLSN-RES 16 + @ _UDLSN-HEIGHT !
+    _UDLSN-RES 24 + @ _UDLSN-WIDTH !
+    _UDLSN-RES 64 + @ _UDLSN-Z !
+    _UDLSN-Z @ 1 256 WITHIN 0= IF 0 EXIT THEN
+    _UDLSN-HEIGHT @ 3 < _UDLSN-WIDTH @ 5 < OR IF 0 EXIT THEN
+    _UDLSN-ON-SCREEN? ;
+
+\ A message line: a start-aligned label one row high, on the message's
+\ next row, with clean text.
+: _UDLSN-LINE?  ( child -- flag )
+    _UDLSN-CRES 56 + @ IF DROP 0 EXIT THEN
+    _UDLSN-CRES 16 + @ 1 <> IF DROP 0 EXIT THEN
+    _UDLSN-CRES @ _UDLSN-ROW @ 1+ _UDLSN-LINES @ + <> IF DROP 0 EXIT THEN
+    UIDL-TEXT@ 2DUP USF-TEXT? 0= IF 2DROP 0 EXIT THEN
+    NIP _UDLSN-LINES @ IF 1+ THEN _UDLSN-MU +!
+    1 _UDLSN-LINES +! -1 ;
+
+\ Its leading visible labels are its message; each later visible child is
+\ one of its contents, a widget mounted on it.  Anything else it holds
+\ would be painted text beneath its own paint, so it stays CELL.
+: _UDLSN-CHILDREN?  ( -- flag )
+    0 _UDLSN-LINES ! 0 _UDLSN-MU ! 0 _UDLSN-CONTENTS !
+    _UDLSN-E @ UIDL-FIRST-CHILD
+    BEGIN ?DUP WHILE
+        DUP _UDLSN-C !
+        _UDLSN-CRES UTUI-RESOLVED-BYTES UTUI-ELEM-RESOLVED-CAPTURE
+        DUP UTUI-RESOLVED-S-INVALID = IF 2DROP 0 EXIT THEN
+        UTUI-RESOLVED-S-OK = AND IF
+            _UDLSN-C @ UIDL-TYPE UIDL-T-LABEL =
+            _UDLSN-CONTENTS @ 0= AND IF
+                _UDLSN-C @ _UDLSN-LINE? 0= IF 0 EXIT THEN
+            ELSE
+                _UDLSN-C @ UTUI-WIDGET@ 0= IF 0 EXIT THEN
+                1 _UDLSN-CONTENTS +!
+            THEN
+        THEN
+        _UDLSN-C @ UIDL-NEXT-SIB
+    REPEAT -1 ;
+
+: _UDLSN-TITLE  ( -- a u )
+    _UDLSN-E @ S" title" UIDL-ATTR 0= IF 2DROP 0 0 THEN ;
+
+\ The model's bytes, or 0 when its title cannot be shown on its top edge.
+: _UDLSN-E-MEASURE  ( -- bytes )
+    _UDLSN-TITLE 2DUP USF-TEXT? 0= IF 2DROP 0 EXIT THEN
+    DUP _UDLSN-TU ! CW-SWIDTH _UDLSN-WIDTH @ 4 - MIN _UDLSN-TW !
+    _UDLSN-TU @ IF _UDLSN-TW @ 0> 0= IF 0 EXIT THEN THEN
+    _UDLSN-TU @ _UDLSN-MU @ UDLG-TEXT-BYTES ;
+
+\ The model, as the dialog paints: its title on the top edge, two cells
+\ in, and its message on the rows under it, inside the frame.
+: _UDLSN-E-WRITE  ( -- )
+    _UDLSN-KEY @ UTUI-DIALOG-REVISION _UDLSN-WIDTH @ _UDLSN-HEIGHT @ 0 0
+        _UDLSN-NATIVE-A @ UDLG-START
+    _UDLSN-TU @ IF
+        0 2 1 _UDLSN-TW @ _UDLSN-TITLE _UDLSN-NATIVE-A @ UDLG-TITLE!
+    THEN
+    _UDLSN-MU @ 0= IF EXIT THEN
+    1 1 _UDLSN-LINES @ _UDLSN-WIDTH @ 2 - _UDLSN-NATIVE-A @ UDLG-MESSAGE-SLOT!
+    _UDLSN-LINES @ _UDLSN-E @ UIDL-FIRST-CHILD
+    BEGIN OVER 0> OVER 0<> AND WHILE
+        DUP UTUI-ELEM-RESOLVED-STATE@ UTUI-RESOLVED-S-OK = AND IF
+            DUP UIDL-TEXT@ _UDLSN-NATIVE-A @ UDLG-LINE+
+            SWAP 1- SWAP
+        THEN
+        UIDL-NEXT-SIB
+    REPEAT 2DROP ;
+
+\ The document's dialog element, in one observation of its resolved tree.
+: _UDLSN-ELEMENT-BODY  ( -- descriptor-count native-used status )
+    _UDLSN-ELEMENT? 0= IF 0 0 UDLSN-S-OK EXIT THEN
+    _UDLSN-CHILDREN? 0= IF 0 0 UDLSN-S-OK EXIT THEN
+    _UDLSN-E-MEASURE DUP 0= IF 0 UDLSN-S-OK EXIT THEN _UDLSN-NEED !
+    _UDLSN-DESCRIPTORS-U @ UDLSN-DESCRIPTOR-SIZE U<
+    _UDLSN-NATIVE-U @ _UDLSN-NEED @ U< OR IF 0 0 UDLSN-S-CAPACITY EXIT THEN
+    _UDLSN-E-WRITE
+    _UDLSN-NATIVE-A @ _UDLSN-NEED @ UDLG-VALIDATE UDLG-S-OK <> IF
+        0 0 UDLSN-S-INVALID EXIT
+    THEN
+    UDLSN-SOURCE-ELEMENT _UDLSN-SOURCE !
+    _UDLSN-DESCRIBE
+    1 _UDLSN-NEED @ UDLSN-S-OK ;
+
+\ The dialog widget the document shows.
+: _UDLSN-WIDGET-BODY  ( -- descriptor-count native-used status )
     0 0 _UDLSN-W @ DLG-MODEL-CAPTURE
     DUP UDLG-S-UNSUPPORTED = IF 2DROP 0 0 UDLSN-S-OK EXIT THEN
     IF DROP 0 0 UDLSN-S-INVALID EXIT THEN
@@ -174,14 +317,26 @@ VARIABLE _UDLSN-OWNED-LIMIT
         0 0 ROT EXIT
     THEN DROP
     _UDLSN-NEED @ <> IF 0 0 UDLSN-S-INVALID EXIT THEN
+    UDLSN-SOURCE-OVERLAY _UDLSN-SOURCE !
+    _UDLSN-WIDGET-Z _UDLSN-Z ! 0 _UDLSN-CONTENTS !
     _UDLSN-DESCRIBE
     1 _UDLSN-NEED @ UDLSN-S-OK ;
+
+: _UDLSN-CAPTURE-BODY  ( -- descriptor-count native-used status )
+    _UDLSN-SHAPES? 0= IF 0 0 UDLSN-S-INVALID EXIT THEN
+    _UDLSN-AUTHORITY? 0= IF 0 0 UDLSN-S-INVALID EXIT THEN
+    _UDLSN-SHOWN? IF _UDLSN-WIDGET-BODY EXIT THEN
+    ['] _UDLSN-ELEMENT-BODY UTUI-RESOLVED-OBSERVE ;
 
 : _UDLSN-SCRUB  ( -- )
     0 _UDLSN-DESCRIPTORS-A ! 0 _UDLSN-DESCRIPTORS-U !
     0 _UDLSN-NATIVE-A ! 0 _UDLSN-NATIVE-U ! 0 _UDLSN-W !
     0 _UDLSN-KEY ! 0 _UDLSN-ROW ! 0 _UDLSN-COLUMN !
-    0 _UDLSN-HEIGHT ! 0 _UDLSN-WIDTH ! 0 _UDLSN-NEED ! ;
+    0 _UDLSN-HEIGHT ! 0 _UDLSN-WIDTH ! 0 _UDLSN-NEED !
+    0 _UDLSN-SOURCE ! 0 _UDLSN-Z ! 0 _UDLSN-CONTENTS !
+    0 _UDLSN-E ! 0 _UDLSN-E-N ! 0 _UDLSN-C ! 0 _UDLSN-LINES !
+    0 _UDLSN-MU ! 0 _UDLSN-TU ! 0 _UDLSN-TW ! 0 _UDLSN-V-IX !
+    0 _UDLSN-V-EFF ! 0 _UDLSN-V-RES ! 0 _UDLSN-V-AV ! ;
 
 \ UDLSN-CAPTURE ( descriptors-a descriptors-u native-a native-u
 \                 -- descriptor-count native-used status )
@@ -204,7 +359,14 @@ VARIABLE _UDLSN-F-M
 : _UDLSN-F-POS?  ( n -- flag )  DUP 0<> SWAP 0x100000000 U< AND ;
 
 : _UDLSN-F-ONE?  ( -- flag )
-    _UDLSN-F-D @ UDLSN-DESCRIPTOR-SOURCE@ UDLSN-SOURCE-OVERLAY <> IF 0 EXIT THEN
+    _UDLSN-F-D @ UDLSN-DESCRIPTOR-SOURCE@ UDLSN-SOURCE-OVERLAY = IF
+        _UDLSN-F-D @ UDLSN-DESCRIPTOR-Z@ _UDLSN-WIDGET-Z <>
+        _UDLSN-F-D @ UDLSN-DESCRIPTOR-CONTENTS@ 0<> OR IF 0 EXIT THEN
+    ELSE
+        _UDLSN-F-D @ UDLSN-DESCRIPTOR-SOURCE@ UDLSN-SOURCE-ELEMENT <> IF 0 EXIT THEN
+        _UDLSN-F-D @ UDLSN-DESCRIPTOR-Z@ 1 256 WITHIN 0= IF 0 EXIT THEN
+        _UDLSN-F-D @ UDLSN-DESCRIPTOR-CONTENTS@ 0x100000000 U< 0= IF 0 EXIT THEN
+    THEN
     _UDLSN-F-D @ UDLSN-DESCRIPTOR-KEY@ 0= IF 0 EXIT THEN
     _UDLSN-F-D @ UDLSN-DESCRIPTOR-NATIVE-OFFSET@ IF 0 EXIT THEN
     _UDLSN-F-D @ UDLSN-DESCRIPTOR-ENTRY-BYTES@ _UDLSN-NATIVE-U @ <> IF

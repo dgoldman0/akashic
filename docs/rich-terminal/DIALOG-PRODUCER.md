@@ -2,11 +2,11 @@
 
 The hybrid producer lowers each document's frozen dialog, which
 [UDLSN](../tui/uidl-dialog-snapshot.md) captures from the ordinary
-[dialog widget](../tui/widgets/dialog.md) and `RUHA` carries in its snapshot,
-into one `RTE-CONTROL-DIALOG` and an `RTE-CONTROL-BUTTON` for each shown
-button. The widget's canonical [UDLG model](../tui/dialog-model.md) is the
-only source of the dialog's place, title, message, severity, revision and
-buttons. Applications call no terminal API, and the producer infers nothing
+[dialog widget](../tui/widgets/dialog.md) or from a `<dialog>` element of
+the document's own UIDL, and `RUHA` carries in its snapshot, into one
+`RTE-CONTROL-DIALOG` and an `RTE-CONTROL-BUTTON` for each shown button. The
+canonical [UDLG model](../tui/dialog-model.md) is the only source of the
+dialog's place, title, message, severity, revision and buttons. Applications call no terminal API, and the producer infers nothing
 from painted text. [DIALOG-ADMISSION.md](DIALOG-ADMISSION.md) gives the
 controls' wire rules.
 
@@ -17,7 +17,7 @@ after `max-field-native` and before `max-pictures`; `RTHP-FIRST-CAPACITIES`
 starts it at zero. The bound is zero or an aligned unsigned 32-bit byte
 count, and zero selects no dialog bank.
 
-For dialog native capacity `N`, the arena holds `floor(N / 160)` 64-byte
+For dialog native capacity `N`, the arena holds `floor(N / 160)` 80-byte
 UDLSN descriptors, since every model has its 160-byte header, and an `N`-byte
 native bank. A dialog's controls are its DIALOG and its buttons, and every
 button takes a 64-byte record, so the lane holds at most `floor(N / 64)`
@@ -45,12 +45,18 @@ dialog does, its title the label (none when the dialog has no title), its
 content DLG1 and its UTF8 the message. Each shown button follows at the
 dialog's origin plus its slot, its label the label and BTN1 the content, its
 state VISIBLE, ENABLED and SELECTED as the model gives them. A hidden button
-takes no control. Every control has the depth of a document's overlay, 255;
-buttons follow their dialog and so draw over it.
+takes no control. A dialog's contents paint above it (APT-1-RETAINED-1
+Section 9.1), so the DIALOG takes the depth just below the descriptor's:
+a dialog widget's buttons lie at 255, a document overlay's depth, and the
+dialog at 254; a dialog element's contents lie at their resolved paint
+depth, 255 unless its style says otherwise, with the DIALOG one below and
+its buttons, if any, at the contents' depth.
 
-Each correlation names the dialog: the document's token, the source
-`UDLSN-SOURCE-OVERLAY`, which no field source shares, the dialog's key in
-SUBKEY and SCOPE, and index 0 for the DIALOG and `i + 1` for button `i`. Its
+Each correlation names the dialog: the document's token, the descriptor's
+source, `UDLSN-SOURCE-OVERLAY` for a dialog widget and
+`UDLSN-SOURCE-ELEMENT` for a dialog element, which no field source shares,
+the dialog's key in SUBKEY and SCOPE, and index 0 for the DIALOG and
+`i + 1` for button `i`. Its
 lifecycle generation is 1: the key, a dialog widget's instance, is already
 unique for the dialog's life.
 
@@ -59,7 +65,11 @@ paint lie inside that claim. A dialog off the screen or outside its
 document's rectangle stays CELL. One that meets another dialog's claim
 removes the whole lane; one that meets an earlier family's claim refuses the
 rich candidate, as a field does, since that family's projection would then be
-wrong under it. Local capacity removes the lane and restores the exact
+wrong under it. A dialog element's contents are the exception: the claims
+of its own document's roots that lie wholly inside it and above it. Their
+number must be the one its descriptor gives, or the dialog stays painted
+text and nothing is refused, since a content left out of the candidate
+would be painted text beneath the dialog's claim. Local capacity removes the lane and restores the exact
 control, text and claim prefixes. An opaque provider refusal is retried
 without dialogs after statics and before fields, and a lane refused once
 stays refused through that candidate's later retries. Removing the fields

@@ -4916,6 +4916,10 @@ def reconstruct_retained_screen(
     # Each dialog's claim and its buttons, by region, as the draws give them:
     # a dialog's buttons follow it and lie inside it.
     dialogs: dict[int, list[tuple[_SemanticDialogClaim, list[_SemanticButtonClaim]]]] = {}
+    # The cells of the last dialog in each region, and of the roots drawn
+    # over it inside it: its contents.
+    dialog_extents: dict[int, set[tuple[int, int]]] = {}
+    dialog_contents: dict[int, set[tuple[int, int]]] = {}
     menu_underlay_cells: set[tuple[int, int]] = set()
     menu_bar_planes: list[tuple[set[tuple[int, int]], int]] = []
     # A figure in a document is an IMAGE filling the picture rows its
@@ -4945,7 +4949,16 @@ def reconstruct_retained_screen(
         bottom: int,
     ) -> None:
         claimed = _rectangle_cells(_LogicalRectangle(left, top, right, bottom))
-        overlap = claimed & semantic_cells
+        # A root drawn after the last dialog of its region and wholly inside
+        # it is one of that dialog's contents: it lies on the dialog and must
+        # meet no other root.
+        extent = dialog_extents.get(region.region_id)
+        if extent is not None and claimed <= extent:
+            contents = dialog_contents[region.region_id]
+            overlap = claimed & ((semantic_cells - extent) | contents)
+            contents.update(claimed)
+        else:
+            overlap = claimed & semantic_cells
         if overlap:
             raise PhysicalDesktopAcceptanceError(
                 "retained semantic root claims overlap: "
@@ -5105,6 +5118,8 @@ def reconstruct_retained_screen(
                 )
             claim_semantic_rectangle(left, top, right, bottom)
             opaque_semantic_cells.update(_rectangle_cells(visible))
+            dialog_extents[region.region_id] = _rectangle_cells(visible)
+            dialog_contents[region.region_id] = set()
             dialogs.setdefault(region.region_id, []).append((_SemanticDialogClaim(
                 identity=ControlIdentity(region.owner_id, region.owner_generation,
                                          draw.control_id),

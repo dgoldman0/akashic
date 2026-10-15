@@ -9232,3 +9232,44 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
             (initial_cell, final_cell),
             manual_input_rpc_count=1,
         )
+
+
+def _offer_with_dialog_contents(view_bounds: ObjectBounds):
+    """A dialog element over rows 1 to 6, titled Applets with one message
+    line, and a list drawn after it, above it, at VIEW_BOUNDS."""
+
+    offer = _offer("\n".join("." * 12 for _ in range(8)), offer_id=3)
+    region = offer.retained.regions[0]
+    dialog = DialogDraw(31_000, ControlState.VISIBLE, 0, 254, ObjectBounds(0, 1, 12, 6),
+                        "Applets",
+                        DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, 7, 1),
+                                      FieldRect(1, 1, 10, 1), message="ready"))
+    view = ItemViewDraw(
+        31_001, ControlState.VISIBLE | ControlState.ENABLED, 0, 255, view_bounds,
+        ItemViewContent(1, ItemViewRole.LIST, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT, ""),), 1, 0, 1,
+                        (ViewItem(1, 0, 0, 0, ItemState.SELECTED, ItemRole.ITEM,
+                                  (ItemField("Pad"),)),)),
+    )
+    # The dialog claims its rows, so no residual glyph run covers them.
+    residual = tuple(
+        draw for draw in region.draws
+        if not isinstance(draw, GlyphRunDraw) or not 1 <= draw.bounds.cell_y <= 6
+    )
+    return replace(offer, retained=replace(offer.retained, regions=(
+        replace(region, draws=residual + (dialog, view)),)))
+
+
+def test_a_root_drawn_over_a_dialog_inside_it_is_its_content() -> None:
+    projection = reconstruct_retained_screen(_offer_with_dialog_contents(
+        ObjectBounds(1, 3, 10, 3)))
+    (dialog,) = projection.semantic_dialog_claims
+    (view,) = projection.semantic_item_view_claims
+    assert (dialog.title, dialog.content.lines) == ("Applets", ("ready",))
+    assert (dialog.left, dialog.top, dialog.right, dialog.bottom) == (0, 1, 12, 7)
+    assert (view.left, view.top, view.right, view.bottom) == (1, 3, 11, 6)
+
+
+def test_a_root_reaching_past_its_dialog_still_overlaps_it() -> None:
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="claims overlap"):
+        reconstruct_retained_screen(_offer_with_dialog_contents(ObjectBounds(1, 5, 10, 3)))

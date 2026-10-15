@@ -25,6 +25,7 @@
 \    UTUI-FOCUS-PREV  ( -- )
 \    UTUI-BY-ID       ( id-a id-l -- elem | 0 )
 \    UTUI-EACH-ELEM   ( xt -- )
+\    UTUI-DIALOG-REVISION ( -- n )
 \    UTUI-DO!         ( do-a do-l xt -- )
 \    UTUI-SHOW-DIALOG ( id-a id-l -- )
 \    UTUI-HIDE-DIALOG ( id-a id-l -- )
@@ -2250,6 +2251,14 @@ VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
 \ least; actions and positioned children take none.  Its leading label
 \ children are its message, and the children after them its contents.
 
+\ Dialogs' revision: newer whenever a dialog is laid out or its title or
+\ one of its labels is set, so a capture of an unchanged dialog keeps its
+\ revision and one that changed takes a newer.  It belongs to no document
+\ and only grows.
+VARIABLE _UTUI-DLG-REVISION
+1 _UTUI-DLG-REVISION !
+: UTUI-DIALOG-REVISION  ( -- n )  _UTUI-DLG-REVISION @ ;
+
 VARIABLE _UDL-DLG-POS
 VARIABLE _UDL-DLG-END
 VARIABLE _UDL-DLG-COL
@@ -2280,6 +2289,7 @@ VARIABLE _UDL-DLG-W
 
 : _UTUI-LAYOUT-DLG  ( elem -- )
     DUP _UTUI-SIDECAR DUP _UTUI-SC-VIS? 0= IF 2DROP EXIT THEN
+    1 _UTUI-DLG-REVISION +!
     DUP _UTUI-SC-ROW@ 1+ _UDL-DLG-POS !
     DUP _UTUI-SC-COL@ 1+ _UDL-DLG-COL !
     DUP _UTUI-SC-W@ 2 - 0 MAX _UDL-DLG-W !
@@ -4124,7 +4134,10 @@ VARIABLE _USA-VL
     THEN
     _USA-ELEM @ _USA-NA @ _USA-NL @ _USA-VA @ _USA-VL @
     UIDL-SET-ATTR
-    _USA-ELEM @ UIDL-DIRTY! ;
+    _USA-ELEM @ UIDL-DIRTY!
+    _USA-ELEM @ UIDL-TYPE UIDL-T-DIALOG =
+    _USA-ELEM @ UIDL-PARENT ?DUP IF UIDL-TYPE UIDL-T-DIALOG = OR THEN
+    IF 1 _UTUI-DLG-REVISION +! THEN ;
 
 \ =====================================================================
 \  §17a — Automatic mounted canonical-widget relations

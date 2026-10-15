@@ -1634,3 +1634,45 @@ def test_fexp_alone_refuses_a_rename_that_held_the_wrong_span_or_left_the_table_
     with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
         journey_at(FexpAloneJourney.DELETE_ASKED).after_present(
             _cell_offer(1, ((32, 62, "Delete the selected item?"),)), 9, asked, sender)
+
+
+def _launcher(*, modal=True, lines=None, inactive=False):
+    """Desk's launcher: its dialog titled Applets around its two-column list."""
+
+    message = "\n".join(lines or ("select an applet",
+                                  "Up/Down PgUp/PgDn Home/End  Enter open  Esc close"))
+    rows = message.count("\n") + 1
+    content = DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, 7, 1),
+                            FieldRect(1, 1, 50, rows), message=message)
+    dialog = acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, 50_000), 20, 10, 88, 24, "Applets",
+        ControlState.VISIBLE, content, modal=modal)
+    items = (ViewItem(1, 0, 0, 0, ItemState.SELECTED, ItemRole.ITEM,
+                      (ItemField("File Explorer"), ItemField("running"))),)
+    view = acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, 50_001), 21, 13, 87, 23,
+        ItemViewContent(1, ItemViewRole.LIST, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT), ItemColumn(ItemColumnKind.TEXT)),
+                        len(items), 0, len(items), items))
+    projection = replace(
+        _screen({ROWS - 1: "[1:File Explo*]"}, ()),
+        semantic_dialog_claims=(dialog,), semantic_item_view_claims=(view,),
+        inactive_controls=frozenset({view.identity}) if inactive else frozenset(),
+    )
+    return projection, view
+
+
+def test_the_launcher_is_a_modal_dialog_around_its_list() -> None:
+    projection, view = _launcher()
+    assert FexpAloneJourney._launcher_dialog(projection, view).title == "Applets"
+
+
+@pytest.mark.parametrize("kwargs,message", (
+    ({"modal": False}, "not modal"),
+    ({"lines": ("select an applet",)}, "launcher says"),
+    ({"inactive": True}, "inactive"),
+))
+def test_the_launcher_check_refuses_a_launcher_that_is_not_that(kwargs, message) -> None:
+    projection, view = _launcher(**kwargs)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        FexpAloneJourney._launcher_dialog(projection, view)

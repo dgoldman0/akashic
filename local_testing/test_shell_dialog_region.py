@@ -168,3 +168,18 @@ _SX-S _RSHSP.PENDING @ 0= _SS-A
 _RSHSP-PREPARE _SS-OK _SX-S _RSHSP.PENDING @ _SX-KA = _SS-A _SX-KA _SP-MODALS 0= _SS-A
 _SS-DONE
 ''', minimum=18)
+
+
+def test_a_dialog_element_and_its_buttons_stay_in_the_panes_content():
+    """A dialog element is the document's own paint, not an overlay: it and
+    its buttons stay in the pane's content region, with no modal region."""
+    staged_run(STAGED_DIALOG + r'''
+: _SG-ELEMENT ( -- ) 4 1 DO UDLSN-SOURCE-ELEMENT I _SG-X 8 + ! LOOP ;
+_SX-SETUP _SG-CANDIDATE _SP-DIALOGS _SG-ELEMENT
+_RSHSP-PREPARE _SS-OK
+_SX-KA _SP-MODALS 0= _SS-A
+RTE-CONTROL-DIALOG _SX-KA _SP-CONTROL DUP 0<> _SS-A
+_RTE-CONTROL.REGION @ _SX-KA _SP-CONTENT _RTE-IR.ID @ = _SS-A
+_SX-KA _SP-CONTENT _RTE-IR.ID @ _SX-KA _SG-BUTTONS-IN 2 = _SS-A
+_SS-DONE
+''', minimum=4)

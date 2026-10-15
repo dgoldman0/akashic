@@ -112,7 +112,7 @@ residual glyphs cannot create an input barrier.
 The policy refuses the entire optional shell candidate when pane contents
 overlap or a final writer covers any pane outer rectangle, with one exception:
 the overlay a pane's document paints over its own content, the prompt or the
-dialog it shows. The aggregate adapter captures a prompt as the document's
+dialog widget it shows. The aggregate adapter captures a prompt as the document's
 overlay field, the last record of its field snapshot, and the base candidate
 carries it as a `FIELD` control whose correlation names the overlay source; a
 dialog it carries as a `DIALOG` with its `BUTTON`s after it, inside its root
@@ -124,6 +124,8 @@ taken as the overlay's paint, as the adapter took them. A button goes where
 its pane's dialog goes, and a button whose pane shows no dialog refuses the
 candidate. An application that asks a question while its prompt is open
 shows two overlays, so its screen goes out as CELL until one of them closes.
+A dialog element is the document's own paint, not an overlay: it and its
+contents stay in the pane's content region.
 
 When the terminal negotiated `RTE-F-DIALOGS`, each overlay gets a modal
 region after the planner's regions, in control order: surface-sized logical
@@ -132,7 +134,13 @@ above the content z, so above every region the shell defines. The prompt's
 control, or the dialog and its buttons, go in it, and the terminal shows the
 rest of that application inactive while the overlay is open; Desk and other
 applications stay active. Without dialogs the prompt stays in its pane's
-content region, and the base candidate carries no dialog. An overlay whose
+content region, and the base candidate carries no dialog.
+
+Desk's own screens are overlay panes, which Desk gives every key while
+they are open and which ignore a press outside them. With dialogs an
+overlay pane's content region is therefore `MODAL` as well: its logical
+bounds are already the surface, so it is a modal scope over the whole
+screen, and the panes beneath it show inactive. An overlay whose
 document is in no pane refuses the candidate, as any control of such a
 document does.
 

@@ -18,6 +18,8 @@ MESSAGE = b"Remove notes.md?\nIt cannot be undone."
 DLG1 = struct.Struct("<IHHQIIiiIIiiII")
 SOURCE = 3
 KEY = 42
+# A UDLSN descriptor's bytes.
+DESCRIPTOR = 80
 
 
 def pad(data):
@@ -80,14 +82,16 @@ class DialogHarness(StatusHarness):
         self.runtime.memory.write_bytes(self.dir, struct.pack("<6Q", 11, 5, *document))
         self.model = model(**kwargs)
         self.row, self.col = row, col
-        self.descriptor = struct.pack("<8Q", SOURCE, KEY, 0, row, col,
+        # A dialog widget's descriptor: its buttons lie at 255, and it has no
+        # contents.
+        self.descriptor = struct.pack("<10Q", SOURCE, KEY, 0, row, col,
                                       kwargs.get("height", 8), kwargs.get("width", 30),
-                                      len(self.model))
+                                      len(self.model), 255, 0)
         self.runtime.memory.write_bytes(self.get("DIALOG-NATIVE-A"), self.model)
         self.runtime.memory.write_bytes(self.get("DIALOG-DESCRIPTORS-A"), self.descriptor)
-        self.field(self.producer, "_RTHP.DIALOG-DESCRIPTORS-USED", 64)
+        self.field(self.producer, "_RTHP.DIALOG-DESCRIPTORS-USED", DESCRIPTOR)
         self.field(self.producer, "_RTHP.DIALOG-NATIVE-USED", len(self.model))
-        for offset, n in ((240, 0), (248, 64), (256, 0), (264, len(self.model))):
+        for offset, n in ((240, 0), (248, DESCRIPTOR), (256, 0), (264, len(self.model))):
             self.runtime.memory.write64(self.dir + offset, n)
 
     def build(self):
@@ -161,7 +165,8 @@ def test_a_dialog_lowers_to_one_dialog_and_its_buttons(h):
              for c in (dialog, delete, cancel)]
     assert rects == [(0, 1, 8, 30), (6, 5, 1, 10), (6, 17, 1, 10)]
     assert [h.read(c, "_RTE-CONTROL.STATE") for c in (dialog, delete, cancel)] == [1, 3, 11]
-    assert [h.read(c, "_RTE-CONTROL.Z") for c in (dialog, delete, cancel)] == [255] * 3
+    # The dialog lies just below its buttons.
+    assert [h.read(c, "_RTE-CONTROL.Z") for c in (dialog, delete, cancel)] == [254, 255, 255]
     assert h.span(dialog, "LABEL") == TITLE
     assert h.span(dialog, "CONTENT") == DLG1.pack(
         0x31474C44, 1, 0, 7, 3, len(MESSAGE), 2, 0, 6, 1, 2, 2, 26, 2) + MESSAGE
@@ -174,7 +179,7 @@ def test_a_dialog_lowers_to_one_dialog_and_its_buttons(h):
     assert [h.correlation(i) for i in range(3)] == [
         (11, SOURCE, i, KEY, 100 + i, 1, KEY) for i in range(3)]
     claim = struct.unpack("<10Q", h.runtime.memory.read_bytes(h.get("CLAIMS-A"), 80))
-    assert claim == (11, 9, SOURCE, 0, KEY, 255, 0, 1, 8, 31)
+    assert claim == (11, 9, SOURCE, 0, KEY, 254, 0, 1, 8, 31)
     h.guards()
 
 
@@ -280,7 +285,7 @@ def test_dialog_source_copy_omits_an_unnegotiated_or_unaffordable_lane(h, featur
     descriptors = h.allocate(h.descriptor)
     native = h.allocate(h.model)
     directory = h.allocate(h.runtime.memory.read_bytes(h.dir, h.constant("RUHA-DOCUMENT-SIZE")))
-    for offset, value in ((208, descriptors), (216, 64), (224, native), (232, len(h.model))):
+    for offset, value in ((208, descriptors), (216, DESCRIPTOR), (224, native), (232, len(h.model))):
         h.runtime.memory.write64(snapshot + offset, value)
     h.variable("_RTHP-W-SNAP", snapshot)
     h.variable("_RTHP-W-DIRECTORY-A", directory)
@@ -291,10 +296,10 @@ def test_dialog_source_copy_omits_an_unnegotiated_or_unaffordable_lane(h, featur
     h.runtime.memory.write_bytes(h.get("DIALOG-NATIVE-A"), bytes(len(h.model)))
     assert h.call("_RTHP-COPY-DIALOG-SOURCE?")
     copied = feature and not short
-    assert h.get("DIALOG-DESCRIPTORS-USED") == 64 * copied
+    assert h.get("DIALOG-DESCRIPTORS-USED") == DESCRIPTOR * copied
     assert h.get("DIALOG-NATIVE-USED") == len(h.model) * copied
     entry = h.runtime.memory.read_bytes(h.dir + 240, 32)
-    assert entry == (struct.pack("<4Q", 0, 64, 0, len(h.model)) if copied else bytes(32))
+    assert entry == (struct.pack("<4Q", 0, DESCRIPTOR, 0, len(h.model)) if copied else bytes(32))
     assert h.build() == (0,)
     assert h.get("DIALOG-COUNT") == int(copied)
     h.guards()
@@ -306,7 +311,7 @@ def test_a_dialog_extent_past_its_bank_is_invalid_without_the_feature(h):
     descriptors = h.allocate(h.descriptor)
     native = h.allocate(h.model)
     directory = h.allocate(h.runtime.memory.read_bytes(h.dir, h.constant("RUHA-DOCUMENT-SIZE")))
-    for offset, value in ((208, descriptors), (216, 64), (224, native), (232, len(h.model))):
+    for offset, value in ((208, descriptors), (216, DESCRIPTOR), (224, native), (232, len(h.model))):
         h.runtime.memory.write64(snapshot + offset, value)
     h.runtime.memory.write64(directory + 264, len(h.model) + 8)
     h.variable("_RTHP-W-SNAP", snapshot)
@@ -440,3 +445,59 @@ def test_an_unchanged_dialog_clone_rebases_its_owned_spans(h):
 def test_dialog_storage_admits_no_dialog_bank_and_rejects_a_partial_header(h):
     assert h.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512, 0, 0, 0, 32, 8)[0] > 0
     assert h.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512, 0, 164, 0, 32, 8) == (0,)
+
+
+def _element(h, *, contents=1, z=255):
+    """Make the harness's dialog a dialog element whose CONTENTS roots paint
+    at Z."""
+    h.runtime.memory.write_bytes(h.get("DIALOG-DESCRIPTORS-A"), struct.pack(
+        "<10Q", 4, KEY, 0, h.row, h.col, 8, 30, len(h.model), z, contents))
+
+
+def _claim(h, *, attachment=11, z=255, rect=(2, 3, 5, 20)):
+    """An earlier family's claim, before the dialog lane: attachment, source
+    generation, source, index, subkey, z, then rows and columns."""
+    at = h.get("CLAIMS-A") + h.get("CLAIMS-USED")
+    h.runtime.memory.write_bytes(at, struct.pack("<10Q", attachment, 9, 1, 5, 1, z, *rect))
+    h.field(h.producer, "_RTHP.CLAIMS-USED", h.get("CLAIMS-USED") + 80)
+
+
+def test_a_dialog_elements_contents_are_admitted_above_it(h):
+    """The roots of its document inside it, above it, are its contents: they
+    may lie on its claim, and the dialog takes the depth below them."""
+    h.setup()
+    _element(h)
+    _claim(h)
+    assert h.build() == (0,)
+    assert h.get("DIALOG-COUNT") == 1
+    dialog, delete, cancel = (h.control(i) for i in range(3))
+    assert [h.read(c, "_RTE-CONTROL.Z") for c in (dialog, delete, cancel)] == [254, 255, 255]
+    assert [h.correlation(i)[1] for i in range(3)] == [4, 4, 4]
+    claim = struct.unpack("<10Q", h.runtime.memory.read_bytes(h.get("CLAIMS-A") + 80, 80))
+    assert claim == (11, 9, 4, 0, KEY, 254, 0, 1, 8, 31)
+    assert h.fixed()
+    h.guards()
+
+
+def test_a_dialog_element_whose_contents_are_not_all_there_stays_painted(h):
+    """A content left out would be painted text beneath the dialog's claim,
+    so the dialog is left out too, and nothing is refused."""
+    h.setup()
+    _element(h, contents=2)
+    _claim(h)
+    assert h.build() == (0,)
+    assert (h.get("DIALOG-COUNT"), h.get("DIALOG-CONTROLS")) == (0, 0)
+    h.guards()
+
+
+@pytest.mark.parametrize("attachment,z,rect", (
+    (12, 255, (2, 3, 5, 20)),     # another document's root
+    (11, 254, (2, 3, 5, 20)),     # not above it
+    (11, 255, (2, 3, 9, 20)),     # not wholly inside it
+))
+def test_a_claim_that_is_not_its_content_still_refuses_the_dialog(h, attachment, z, rect):
+    h.setup()
+    _element(h)
+    _claim(h, attachment=attachment, z=z, rect=rect)
+    assert h.build() == (h.constant("RTE-S-UNAVAILABLE"),)
+    h.guards()
