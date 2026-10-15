@@ -337,9 +337,9 @@ class PadAloneJourney(_AppletJourney):
     readout counts characters in every frame that moves the caret.
 
     Ctrl+W on the edited buffer asks first: Pad's dialog, in a modal region
-    over its tile with Pad's menu bar and editor rich and inactive beneath
-    it, offers Discard, destructive, and Cancel, the default.  Pressing
-    Cancel closes the dialog and keeps the buffer.
+    over its tile with Pad's menu bar and every root it does not cover rich
+    and inactive beneath it, offers Discard, destructive, and Cancel, the
+    default.  Pressing Cancel closes the dialog and keeps the buffer.
 
     Pad then opens notes.md through its Open prompt, a TEXT field in a
     modal region over Pad's tile while Pad's menu bar and editor stay rich
@@ -518,8 +518,6 @@ class PadAloneJourney(_AppletJourney):
         if self.stage == self.CLOSE_ASKED:
             if dialog is None:
                 return self._wait("Pad's question after Ctrl+W")
-            if not _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds):
-                raise PhysicalDesktopAcceptanceError("Pad's question withheld its editor")
             value = _cancel_of_confirm(offer, projection, dialog, bounds, PAD_CLOSE_DISCARD,
                                        PAD_MENU_SIGNATURE, "Pad")
             return self._step("pad-close-question-shown", "activate_button", value,
@@ -846,9 +844,10 @@ class FexpAloneJourney(_AppletJourney):
     viewer sends a drag, select the stem, typing replaces it, and Escape
     cancels, leaving the file as it was.  Delete then asks before it
     deletes the file: File Explorer's dialog, in a modal region over the
-    tile with the table and tree rich and inactive beneath it, offers
-    Delete, destructive, and Cancel, the default, and pressing Cancel
-    closes it and leaves the file listed and selected.  A
+    tile with its menu bar and every root it does not cover rich and
+    inactive beneath it, offers Delete, destructive, and Cancel, the
+    default, and pressing Cancel closes it and leaves the file listed and
+    selected.  A
     SELECT on sunset.qoi's row loads its preview, and activating the
     Preview tab shows it: the rich frame shows it as an IMAGE once the
     terminal holds it, while CELL beneath shows what the picture is and
@@ -1520,6 +1519,20 @@ class FexpAloneJourney(_AppletJourney):
             return self._document(offer, generation, projection, sender)
         if self.stage in self._PDF_STAGES:
             return self._pdf(offer, generation, projection, sender)
+        if self.stage in (self.DELETE_ASKED, self.DELETE_CANCELLED):
+            # The question may cover the detail table, which the capture
+            # then withholds until it closes.
+            bounds = _desk_content_bounds(projection)
+            delete = _dialog_claim(projection, FEXP_DELETE_QUESTION, bounds)
+            if self.stage == self.DELETE_ASKED:
+                if delete is None:
+                    return self._wait("File Explorer's question after Delete")
+                value = _cancel_of_confirm(offer, projection, delete, bounds, FEXP_DELETE,
+                                           FEXPLORER_MENU_SIGNATURE, "File Explorer")
+                return self._step("fexp-delete-question-shown", "activate_button", value,
+                                  self.DELETE_CANCELLED, offer, generation, sender)
+            if delete is not None:
+                return self._wait("File Explorer's question to close after Cancel")
         table, tree = self._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")
@@ -1558,19 +1571,9 @@ class FexpAloneJourney(_AppletJourney):
             )
         if self.RENAME_PROMPT <= self.stage <= self.RENAME_TYPED:
             return self._rename(offer, generation, projection, sender, rename)
-        delete = _dialog_claim(projection, FEXP_DELETE_QUESTION, bounds)
-        if self.stage == self.DELETE_ASKED:
-            if delete is None:
-                return self._wait("File Explorer's question after Delete")
-            value = _cancel_of_confirm(offer, projection, delete, bounds, FEXP_DELETE,
-                                       FEXPLORER_MENU_SIGNATURE, "File Explorer")
-            return self._step("fexp-delete-question-shown", "activate_button", value,
-                              self.DELETE_CANCELLED, offer, generation, sender)
         if self.stage in (self.FILE_SELECTED, self.RENAME_CANCELLED, self.DELETE_CANCELLED):
             if rename is not None:
                 return self._wait("the rename prompt closed")
-            if delete is not None:
-                return self._wait("File Explorer's question to close after Cancel")
             selected = table.selected
             if selected is None or selected.fields[0].text != FEXP_FILE:
                 return self._wait(f"{FEXP_FILE}'s row selected")

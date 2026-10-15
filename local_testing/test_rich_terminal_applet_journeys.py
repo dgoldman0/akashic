@@ -1438,6 +1438,8 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
             prompt = replace(prompt, content=replace(prompt.content, anchor=anchor))
         frame = _held(frame, prompt)
     if delete:
+        # The question covers the detail table, which the capture withholds.
+        frame = replace(frame, semantic_item_view_claims=(tree,))
         frame = _asked(frame, _question("Delete the selected item?", (
             ("Delete", ButtonFlag.DESTRUCTIVE),
             ("Cancel", ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
