@@ -407,6 +407,14 @@ VARIABLE _INP-SA-N      \ its cells
         _INP-W @ _INP-O-SCROLL + !
     THEN ;
 
+\ _INP-SETTLE-VIEW ( widget -- )
+\   Lay the value out and scroll the caret into view, as every draw does
+\   first.  A changed scroll is a shown change.
+: _INP-SETTLE-VIEW  ( widget -- )
+    _INP-PREP
+    _INP-SX _INP-SCROLL-ADJ
+    _INP-SX <> IF 1 _INP-W @ _INP-O-REVISION + +! THEN ;
+
 \ =====================================================================
 \ 5. Internal draw
 \ =====================================================================
@@ -463,9 +471,7 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
 \   A selection shows in reverse video instead, so the caret is not drawn
 \   beside it where it would look like one more selected character.
 : _INP-DRAW  ( widget -- )
-    _INP-PREP
-    _INP-SX _INP-SCROLL-ADJ
-    _INP-SX <> IF 1 _INP-W @ _INP-O-REVISION + +! THEN
+    _INP-SETTLE-VIEW
     32 0 0 _INP-FW DRW-HLINE
     _INP-U 0= IF
         _INP-W @ _INP-O-PH-U + @ 0> IF
@@ -747,9 +753,10 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
 \   The field as a renderer would show its value: how many characters a
 \   masked value has, or the value's scalars when it does not mask, and the
 \   caret, the selection anchor (the caret when nothing is selected) and
-\   the scroll, counted as the value counts.  Valid after a draw.
+\   the scroll, counted as the value counts.  It settles the scroll first,
+\   as a draw does, so it holds before the next draw as after it.
 : INP-SHOWN-STATE  ( widget -- characters caret anchor scroll )
-    DUP _INP-W !
+    DUP _INP-SETTLE-VIEW
     DUP _INP-O-MASK-CP + @ IF ['] _INP-CHARS-IN ELSE ['] _INP-SCALARS-IN THEN
     >R
     _INP-U R@ EXECUTE                       ( w characters )

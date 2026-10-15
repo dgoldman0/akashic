@@ -322,8 +322,8 @@ _PRM-F-BUILDER-S 7 + -8 AND CONSTANT _PRM-F-BUILDER
 \ PRM-FIELD-CAPTURE ( dst cap prompt -- bytes status )
 \   Write the shown prompt's TEXT field model at DST, an aligned span of
 \   CAP bytes apart from everything the prompt reads, or with DST 0 and
-\   CAP 0 only measure it.  The status is a UFLD-S- value.  Valid after the
-\   prompt has drawn.
+\   CAP 0 only measure it.  The status is a UFLD-S- value.  It lays the
+\   prompt out as its draw does, so it holds before that draw as after it.
 : PRM-FIELD-CAPTURE  ( dst cap prompt -- bytes status )
     DUP _PRM-GENUINE? 0= IF 2DROP DROP 0 UFLD-S-INVALID EXIT THEN
     DUP _PRM-O-ACTIVE + @ 0= IF 2DROP DROP 0 UFLD-S-INVALID EXIT THEN

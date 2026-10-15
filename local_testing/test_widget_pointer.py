@@ -1041,6 +1041,27 @@ def test_input_revision_advances_with_every_shown_change() -> None:
     assert values[::-1] == [2, 1, 0, 1, 0, 5, 4, 4, 0, 1, 0]
 
 
+def test_input_shown_state_before_a_draw_is_what_the_draw_shows() -> None:
+    """A capture taken before the draw settles the scroll as the draw would."""
+    values = _numbers(
+        _field()
+        + [
+            "CREATE _NBUF 64 ALLOT VARIABLE _NW",
+            "4 5 1 4 RGN-NEW _NBUF 64 INP-NEW _NW !",
+            'S" abcdefgh" _NW @ INP-SET-TEXT',
+            ": _NREV  _NW @ INP-REVISION@ ;",
+            # Before any draw, the caret past the eighth character scrolls
+            # five cells into view, a shown change.
+            "_NREV _NW @ INP-SHOWN-STATE _NREV 5 ROLL -",
+            # The draw then shows that scroll and changes nothing.
+            "_NREV _NW @ WDG-DRAW _NREV SWAP - _NW @ _INP-O-SCROLL + @",
+        ]
+        + _report(7)
+    )
+
+    assert values[::-1] == [8, 8, 8, 5, 1, 0, 5]
+
+
 def test_input_drag_past_either_edge_scrolls_one_column_per_step() -> None:
     values = _numbers(
         _field()
