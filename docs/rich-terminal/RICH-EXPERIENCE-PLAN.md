@@ -559,8 +559,13 @@ over its pane ([DIALOG-PRODUCER.md](DIALOG-PRODUCER.md)). In the physical
 viewer, Desk with Pad answers Pad's close-tab question and Desk with File
 Explorer its delete question, each through its Cancel button. A dialog
 covers the roots it lies over, which go out as residual glyphs until it
-closes. The confirmations by typed word, Desk's screens and the Agent's
-approval buttons come next.
+closes. The confirmations by typed word are confirm dialogs too: Daybook's
+delete, reload and close questions, Library's close with a create pending
+and Streams' source removal. Desk with Daybook answers the delete question
+for its daily reminder through Cancel. An application that asks while its
+prompt is open goes out as CELL until one of them closes, since the shell
+allows one overlay a pane; Daybook and Library refuse a close while their
+prompt is open. Desk's screens and the Agent's approval buttons come next.
 
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
 toggle, selector, range and dialog elements in documents that use them.
