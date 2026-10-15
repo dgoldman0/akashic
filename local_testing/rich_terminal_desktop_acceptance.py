@@ -3025,6 +3025,47 @@ def _require_held_beneath_prompt(
         )
 
 
+DESK_PROMPT_LABEL = "Ask:"
+
+
+def _desk_prompt_claim(projection: RichScreenProjection) -> _SemanticFieldClaim | None:
+    """Desk's own Ask prompt, or None.
+
+    While it is open Desk hides its taskbar and takes no other input.  The
+    prompt goes out as a TEXT field across the screen's last row, in a modal
+    region over the whole screen: no taskbar is left, and every other control
+    stays rich beneath it and inactive."""
+
+    row = (0, projection.rows - 1, projection.cols, projection.rows)
+    prompt = _prompt_claim(projection, DESK_PROMPT_LABEL, row)
+    if prompt is None:
+        return None
+    if (prompt.left, prompt.top, prompt.right, prompt.bottom) != row:
+        raise PhysicalDesktopAcceptanceError(
+            "Desk's prompt does not hold the whole taskbar row"
+        )
+    if projection.semantic_taskbar_claims:
+        raise PhysicalDesktopAcceptanceError("Desk's prompt left the taskbar beside it")
+    roots = list(projection.menu_bar_identities) + [
+        claim.identity
+        for claims in (
+            projection.semantic_collection_claims,
+            projection.semantic_item_view_claims,
+            projection.semantic_document_claims,
+            projection.semantic_tabset_claims,
+            projection.semantic_field_claims,
+        )
+        for claim in claims
+        if claim.identity != prompt.identity
+    ]
+    active = [identity for identity in roots if identity not in projection.inactive_controls]
+    if active:
+        raise PhysicalDesktopAcceptanceError(
+            f"Desk's prompt left {len(active)} controls beneath it active"
+        )
+    return prompt
+
+
 def _tile_prompt(
     projection: RichScreenProjection,
     label: str,

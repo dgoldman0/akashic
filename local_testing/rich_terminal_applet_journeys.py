@@ -43,6 +43,7 @@ from rich_terminal_desktop_acceptance import (
     _claim_item_text,
     _collection_claims_in,
     _desk_content_bounds,
+    _desk_prompt_claim,
     _image_claims_in,
     _prompt_claim,
     _require_cell_text_in,
@@ -160,6 +161,10 @@ AGENT_EXCHANGE = (
 )
 # One wheel detent scrolls a list three screen rows.
 AGENT_WHEEL_ROWS = 3
+# Typed into Desk's own Ask prompt, whose second to fourth characters are
+# then selected and typed over before Escape cancels it.
+DESK_PROMPT_TEXT = "hello"
+DESK_PROMPT_OVER = "EL"
 # The canonical image's large sample: 48 lines, too much text for the small
 # terminal once Pad shows it.
 SMALL_TERMINAL_LARGE_PATH = "/large.txt"
@@ -194,10 +199,16 @@ class _AppletJourney(FrameBoundJourney):
     # only menu bar; each journey checks the menu itself.
     requires_menu_bar = False
 
+    def _desk_prompt_expected(self) -> bool:
+        """Whether Desk's own prompt may hold the taskbar row now."""
+
+        return False
+
     def _admit(self, offer, generation, projection, sender) -> bool:
         """Whether the journey may act on this frame: one newer than its last
         input's frame, in the session's lineage, once any pointer gesture the
-        guest owes is complete, with the applet up and focused."""
+        guest owes is complete, with the applet up and focused.  While Desk's
+        own prompt is expected it may hold the taskbar row instead."""
 
         lineage = self._frame_lineage(offer, generation)
         if self._lineage is not None and lineage != self._lineage:
@@ -222,7 +233,9 @@ class _AppletJourney(FrameBoundJourney):
                 self.waiting = f"{self.focus_marker} after Alt+1"
                 self._send("send_key", "alt+1", 0, offer, generation, sender)
                 return False
-        elif not _taskbar_has_focus(projection, self.focus_marker):
+        elif not _taskbar_has_focus(projection, self.focus_marker) and not (
+            self._desk_prompt_expected() and _desk_prompt_claim(projection) is not None
+        ):
             raise PhysicalDesktopAcceptanceError(
                 f"the applet lost focus: {self._taskbar_line(projection).strip()!r}"
             )
@@ -1990,9 +2003,15 @@ class AgentAloneJourney(_AppletJourney):
     whose column wraps.  It is a log, so no card is selected and the view
     follows the end.  The stored answer is taller than the view, so the
     transcript starts cut inside it; one wheel detent scrolls three screen
-    rows up, and End returns to the end.  Ctrl+L opens the Ask prompt, a
-    TEXT field in a modal region over the Agent's tile, with the Agent's
-    menu and transcript rich and inactive beneath it.  The request makes the
+    rows up, and End returns to the end.  Alt+A opens Desk's own Ask
+    prompt, a TEXT field across the taskbar row in a modal region over the
+    whole screen, with the taskbar gone and the Agent's menu and transcript
+    rich and inactive beneath it.  Text typed into it, a PLACE and an EXTEND
+    that select three of its characters, and text typed over them show in
+    the field; Escape cancels it and the taskbar returns.  Ctrl+L opens the
+    Agent's Ask prompt, a TEXT field in a modal region over the Agent's
+    tile, with the Agent's menu and transcript rich and inactive beneath
+    it.  The request makes the
     demo provider ask for approval, in a dialog over the transcript that
     shows its request and unlocks F6 once it has shown its last row; the
     dialog is still painted, so while it is open the Agent's menu and
@@ -2002,7 +2021,9 @@ class AgentAloneJourney(_AppletJourney):
     """
 
     focus_marker = AGENT_ALONE_FOCUS_MARKER
-    READY, SCROLLED, ENDED, PROMPT, TYPED, REVIEW, APPROVED = range(7)
+    (READY, SCROLLED, ENDED, DESK_PROMPT, DESK_TYPED, DESK_PLACED, DESK_SELECTED,
+     DESK_REPLACED, DESK_CLOSED, PROMPT, TYPED, REVIEW, APPROVED) = range(13)
+    DESK_STAGES = range(DESK_PROMPT, DESK_CLOSED + 1)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -2015,6 +2036,9 @@ class AgentAloneJourney(_AppletJourney):
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
         return (self.focus_marker, AGENT_AUDIT)
+
+    def _desk_prompt_expected(self) -> bool:
+        return self.stage in self.DESK_STAGES
 
     @staticmethod
     def _transcript(projection, bounds):
@@ -2143,8 +2167,16 @@ class AgentAloneJourney(_AppletJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "the Agent's prompt withheld its transcript"
                 )
+        # Admission refuses Desk's prompt outside its stages, since it hides
+        # the taskbar; beneath it the Agent stays rich, and inactive.
+        desk_prompt = _desk_prompt_claim(projection)
+        if desk_prompt is not None:
+            if transcript is None or projection.menu_signatures.count(AGENT_MENU_SIGNATURE) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "Desk's Ask prompt withheld the Agent's menu or transcript"
+                )
         stored = agent_transcript.CARDS
-        if self.stage in (self.READY, self.SCROLLED, self.ENDED):
+        if self.stage in (self.READY, self.SCROLLED, self.ENDED, *self.DESK_STAGES):
             if prompt is not None or review:
                 raise PhysicalDesktopAcceptanceError(
                     "the Agent opened its prompt or a review unasked"
@@ -2175,8 +2207,19 @@ class AgentAloneJourney(_AppletJourney):
             if above != self._end_row:
                 return self._wait("the transcript back at its end")
             self._require_last_row(offer, transcript, agent_transcript.LAST)
-            return self._step("agent-transcript-end-again", "send_key", "ctrl+l",
+            return self._step("agent-transcript-end-again", "send_key", "alt+a",
+                              self.DESK_PROMPT, offer, generation, sender)
+        if self.stage == self.DESK_CLOSED:
+            if desk_prompt is not None:
+                return self._wait("Desk's Ask prompt closed by Escape")
+            if self._rows(transcript, stored)[0] != self._end_row:
+                raise PhysicalDesktopAcceptanceError(
+                    "Desk's Ask prompt moved the Agent's transcript"
+                )
+            return self._step("desk-prompt-cancelled", "send_key", "ctrl+l",
                               self.PROMPT, offer, generation, sender)
+        if self.stage in self.DESK_STAGES:
+            return self._desk_prompt(offer, generation, sender, desk_prompt)
         if self.stage == self.PROMPT:
             if prompt is None:
                 return self._wait("the Agent's Ask prompt")
@@ -2205,6 +2248,62 @@ class AgentAloneJourney(_AppletJourney):
         self._at_end(transcript, cards)
         self._require_last_row(offer, transcript, AGENT_AUDIT)
         return self._done("agent-review-approved", offer)
+
+    def _desk_prompt(self, offer, generation, sender, prompt) -> JourneyProgress:
+        """Desk's Ask prompt: type, select three characters, type over
+        them, cancel."""
+
+        if prompt is None:
+            if self.stage == self.DESK_PROMPT:
+                return self._wait("Desk's Ask prompt after Alt+A")
+            raise PhysicalDesktopAcceptanceError("Desk's Ask prompt closed early")
+        content = prompt.content
+        identity = prompt.identity
+        value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id},0,{{}}"
+        if self.stage == self.DESK_PROMPT:
+            if content.text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Desk's Ask prompt opened holding {content.text!r}"
+                )
+            return self._step("desk-prompt-opened", "send_text", DESK_PROMPT_TEXT,
+                              self.DESK_TYPED, offer, generation, sender)
+        if self.stage == self.DESK_TYPED:
+            # The guest may paint after each typed scalar.
+            if content.text != DESK_PROMPT_TEXT:
+                if DESK_PROMPT_TEXT.startswith(content.text):
+                    return self._wait("the text typed into Desk's Ask prompt")
+                raise PhysicalDesktopAcceptanceError(
+                    f"typing into Desk's Ask prompt gave {content.text!r}"
+                )
+            return self._step("desk-prompt-typed", "text_place", value.format(1),
+                              self.DESK_PLACED, offer, generation, sender)
+        if content.text != DESK_PROMPT_TEXT and self.stage != self.DESK_REPLACED:
+            raise PhysicalDesktopAcceptanceError(
+                f"selecting in Desk's Ask prompt changed its text to {content.text!r}"
+            )
+        if self.stage == self.DESK_PLACED:
+            if content.caret != 1:
+                return self._wait("the caret after the first character of Desk's prompt")
+            return self._step("desk-prompt-caret-placed", "text_extend", value.format(4),
+                              self.DESK_SELECTED, offer, generation, sender)
+        if self.stage == self.DESK_SELECTED:
+            if (content.anchor, content.caret) != (1, 4):
+                return self._wait("three characters of Desk's prompt selected")
+            return self._step("desk-prompt-selected", "send_text", DESK_PROMPT_OVER,
+                              self.DESK_REPLACED, offer, generation, sender)
+        head, tail = DESK_PROMPT_TEXT[:1], DESK_PROMPT_TEXT[4:]
+        typed = head + DESK_PROMPT_OVER + tail
+        if content.text == DESK_PROMPT_TEXT or content.text in {
+            head + DESK_PROMPT_OVER[:length] + tail for length in range(1, len(DESK_PROMPT_OVER))
+        }:
+            return self._wait("the text typed over the selection in Desk's prompt")
+        if content.text != typed:
+            raise PhysicalDesktopAcceptanceError(
+                f"typing over the selection in Desk's Ask prompt gave {content.text!r}, "
+                f"not {typed!r}"
+            )
+        return self._step("desk-prompt-replaced", "send_key", "escape",
+                          self.DESK_CLOSED, offer, generation, sender)
 
 
 class SmallTerminalJourney(_AppletJourney):

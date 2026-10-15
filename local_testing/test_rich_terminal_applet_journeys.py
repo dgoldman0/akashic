@@ -51,6 +51,8 @@ from rich_terminal_applet_journeys import (
     AGENT_REVIEW_MARKER,
     AGENT_REVIEW_REASON,
     DAYBOOK_REMINDER_NOTICE,
+    DESK_PROMPT_OVER,
+    DESK_PROMPT_TEXT,
     SMALL_TERMINAL_LARGE_LINE,
     SMALL_TERMINAL_LARGE_PATH,
     STREAMS_CARDS,
@@ -769,6 +771,22 @@ def _agent_prompt_frame(typed: str):
     return _held(frame, _prompt("Ask:", typed, row=82))
 
 
+DESK_PROMPT_ID = 40_002
+
+
+def _desk_prompt_frame(typed: str, *, caret: int | None = None, anchor: int | None = None):
+    """Desk's Ask prompt across the taskbar row: the taskbar gone, the
+    Agent's menu and transcript rich and inactive beneath it."""
+
+    frame = _screen({ROWS - 1: " Ask: " + typed}, (AGENT_MENU_SIGNATURE,))
+    frame = replace(frame, semantic_item_view_claims=(_agent_view(STORED, STORED_END),))
+    prompt = replace(_prompt("Ask:", typed, row=ROWS - 1, caret=caret),
+                     identity=ControlIdentity(1, 1, DESK_PROMPT_ID))
+    if anchor is not None:
+        prompt = replace(prompt, content=replace(prompt.content, anchor=anchor))
+    return _held(frame, prompt)
+
+
 def _agent_offer(last: str, *placements):
     """CELL with LAST on the transcript's last row, where card text starts."""
 
@@ -799,11 +817,26 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
     streaming = STORED + AGENT_EXCHANGE[:1] + (
         ("AGENT  ...", AGENT_EXCHANGE[1][1].removesuffix(" Approved.")),
     ) + AGENT_EXCHANGE[2:]
+    typed_over = DESK_PROMPT_TEXT[:1] + DESK_PROMPT_OVER + DESK_PROMPT_TEXT[4:]
+    desk = _agent_offer(agent_transcript.LAST)
     steps = (
         at_end,
         # The wheel has not reached the Agent yet.
         at_end,
         scrolled,
+        at_end,
+        (desk, _desk_prompt_frame("")),
+        # The guest may paint between typed characters.
+        (desk, _desk_prompt_frame(DESK_PROMPT_TEXT[:3])),
+        (desk, _desk_prompt_frame(DESK_PROMPT_TEXT)),
+        # The PLACE has not moved the caret yet.
+        (desk, _desk_prompt_frame(DESK_PROMPT_TEXT)),
+        (desk, _desk_prompt_frame(DESK_PROMPT_TEXT, caret=1)),
+        (desk, _desk_prompt_frame(DESK_PROMPT_TEXT, caret=4, anchor=1)),
+        (desk, _desk_prompt_frame(typed_over[:2] + DESK_PROMPT_TEXT[4:])),
+        (desk, _desk_prompt_frame(typed_over)),
+        # Escape has not closed the prompt yet.
+        (desk, _desk_prompt_frame(typed_over)),
         at_end,
         (_agent_offer(""), _agent_prompt_frame("")),
         (_agent_offer(""), _agent_prompt_frame(AGENT_REQUEST)),
@@ -815,11 +848,22 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
         (_agent_offer(AGENT_AUDIT), _agent_frame(_agent_view(APPROVED, APPROVED_END))),
     )
     results = _run(journey, steps)
+    desk_value = f"1,1,{DESK_PROMPT_ID},0,{{}}".format
     assert [(result.milestone, sent) for result, sent in results] == [
         ("agent-transcript-at-end", [("item_scroll", f"1,1,{AGENT_VIEW_ID},-1")]),
         (None, []),
         ("agent-transcript-scrolled", [("send_key", "end")]),
-        ("agent-transcript-end-again", [("send_key", "ctrl+l")]),
+        ("agent-transcript-end-again", [("send_key", "alt+a")]),
+        ("desk-prompt-opened", [("send_text", DESK_PROMPT_TEXT)]),
+        (None, []),
+        ("desk-prompt-typed", [("text_place", desk_value(1))]),
+        (None, []),
+        ("desk-prompt-caret-placed", [("text_extend", desk_value(4))]),
+        ("desk-prompt-selected", [("send_text", DESK_PROMPT_OVER)]),
+        (None, []),
+        ("desk-prompt-replaced", [("send_key", "escape")]),
+        (None, []),
+        ("desk-prompt-cancelled", [("send_key", "ctrl+l")]),
         ("agent-prompt-opened", [("send_text", AGENT_REQUEST)]),
         ("agent-request-typed", [("send_key", "enter")]),
         ("agent-review-unlocked", [("send_key", "f6")]),
@@ -862,6 +906,48 @@ def test_agent_alone_refuses_a_selection_a_wrong_scroll_and_leaked_semantics() -
     leaked = _agent_frame(_agent_view(STORED, STORED_END), rows=REVIEW_ROWS)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="did not withhold"):
         journey_at(AgentAloneJourney.REVIEW).after_present(offer, 9, leaked, sender)
+
+
+def test_agent_alone_refuses_a_desk_prompt_that_is_not_modal_for_all_of_desk() -> None:
+    """Desk's prompt takes the whole taskbar row with no taskbar beside it,
+    holds every control beneath it inactive, keeps the Agent rich, opens
+    only when asked, and shows what was typed into it."""
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    def journey_at(stage: int) -> AgentAloneJourney:
+        journey = AgentAloneJourney(("Agent",))
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        journey.stage = stage
+        journey._end_row = STORED_END
+        return journey
+
+    offer = _agent_offer(agent_transcript.LAST)
+    opened = _desk_prompt_frame("")
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
+        journey_at(AgentAloneJourney.DESK_PROMPT).after_present(
+            offer, 9, replace(opened, inactive_controls=frozenset()), sender)
+    bar = acceptance_runner._SemanticTaskBarClaim(
+        ControlIdentity(1, 1, 30_200), ControlState.VISIBLE | ControlState.ENABLED,
+        acceptance_runner._LogicalRectangle(0, ROWS - 1, 10, ROWS), ())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="taskbar beside it"):
+        journey_at(AgentAloneJourney.DESK_PROMPT).after_present(
+            offer, 9, replace(opened, semantic_taskbar_claims=(bar,)), sender)
+    narrow = replace(opened, semantic_field_claims=tuple(
+        replace(claim, right=COLS - 1) for claim in opened.semantic_field_claims))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="whole taskbar row"):
+        journey_at(AgentAloneJourney.DESK_PROMPT).after_present(offer, 9, narrow, sender)
+    withheld = replace(opened, semantic_item_view_claims=())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="withheld the Agent"):
+        journey_at(AgentAloneJourney.DESK_PROMPT).after_present(offer, 9, withheld, sender)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="gave 'hellx'"):
+        journey_at(AgentAloneJourney.DESK_TYPED).after_present(
+            offer, 9, _desk_prompt_frame("hellx"), sender)
+    # Desk's prompt opened unasked hides the taskbar: a lost focus.
+    for stage in (AgentAloneJourney.ENDED, AgentAloneJourney.PROMPT):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="lost focus"):
+            journey_at(stage).after_present(offer, 9, opened, sender)
 
 
 def test_every_single_applet_profile_has_a_journey() -> None:
