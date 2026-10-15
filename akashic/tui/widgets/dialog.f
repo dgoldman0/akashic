@@ -20,7 +20,7 @@
 \  opens, DLG-B-CANCEL answers Escape, and DLG-B-DESTRUCTIVE marks an
 \  action that cannot be undone, which is never the default.
 \
-\  Dialog descriptor (128 bytes, then its button records and its text):
+\  Dialog descriptor (152 bytes, then its button records and its text):
 \    +0..+39  widget header  (type = WDG-T-DIALOG; the region is its own)
 \    +40  title-a       +48  title-u
 \    +56  msg-a         +64  msg-u
@@ -31,11 +31,18 @@
 \    +104 answer-xt     ( index context -- ), or 0
 \    +112 context
 \    +120 confirm?      the answer is a flag, true for the first button
+\    +128 instance      its identity for as long as it lives
+\    +136 revision      0 until laid out, then new whenever its size changes
+\    +144 severity      a status field's: neutral, info, success, warning,
+\                       error
 \
 \  The title, message and labels are the dialog's own copies, so an asker
 \  may pass text it reuses.  Titles, messages and labels are measured in
 \  cells, and a message wraps between whole characters (APT-1-TEXT
 \  Sections 3 and 4).
+\
+\  DLG-MODEL-CAPTURE writes the dialog its last paint laid out as a
+\  canonical UDLG model, so a renderer can show it as a dialog.
 \
 \  Prefix: DLG- (public), _DLG- (internal)
 \  Provider: akashic-tui-dialog
@@ -50,6 +57,8 @@ REQUIRE ../box.f
 REQUIRE ../region.f
 REQUIRE ../../text/grapheme.f
 REQUIRE ../../text/cell-width.f
+REQUIRE ../dialog-model.f
+REQUIRE ../../utils/memory-span.f
 
 \ =====================================================================
 \ 1. Host hooks
@@ -90,13 +99,23 @@ DEFER _DLG-BOUNDS-HOOK  ( -- row col h w )
 104 CONSTANT _DLG-O-XT
 112 CONSTANT _DLG-O-CTX
 120 CONSTANT _DLG-O-CONFIRM
+128 CONSTANT _DLG-O-INSTANCE
+136 CONSTANT _DLG-O-REVISION
+144 CONSTANT _DLG-O-SEVERITY
 
-128 CONSTANT _DLG-DESC-SIZE
+152 CONSTANT _DLG-DESC-SIZE
 24  CONSTANT _DLG-BTN-SIZE
 
 1 CONSTANT DLG-B-DEFAULT
 2 CONSTANT DLG-B-CANCEL
 4 CONSTANT DLG-B-DESTRUCTIVE
+
+\ Instances and revisions only ever grow, so neither repeats across
+\ dialogs.
+VARIABLE _DLG-INSTANCES
+0 _DLG-INSTANCES !
+VARIABLE _DLG-REVISIONS
+0 _DLG-REVISIONS !
 
 \ =====================================================================
 \ 3. Internal helpers
@@ -404,6 +423,7 @@ VARIABLE _DLG-N-C
     -1 _DLG-N-W @ _DLG-O-RESULT + !
     _DLG-N-W @ DLG-B-DEFAULT _DLG-ROLE-INDEX 0 MAX
         _DLG-N-W @ _DLG-O-SEL + !
+    1 _DLG-INSTANCES +! _DLG-INSTANCES @ _DLG-N-W @ _DLG-O-INSTANCE + !
     _DLG-N-W @ ;
 
 \ DLG-FREE ( widget -- )
@@ -463,7 +483,10 @@ CREATE _DLG-CONFIRM-BTNS 2 _DLG-BTN-SIZE * ALLOT
         _DLG-CONFIRM-BTNS _DLG-BTN-SIZE + !
     DLG-B-DEFAULT DLG-B-CANCEL OR _DLG-CONFIRM-BTNS _DLG-BTN-SIZE + 16 + !
     S" Confirm" 2SWAP _DLG-CONFIRM-BTNS 2 _DLG-A-XT @ _DLG-A-CTX @ DLG-ASK
-    DUP IF -1 _DLG-CELL-HOOK @ _DLG-O-CONFIRM + ! THEN ;
+    DUP IF
+        -1 _DLG-CELL-HOOK @ _DLG-O-CONFIRM + !
+        3 _DLG-CELL-HOOK @ _DLG-O-SEVERITY + !
+    THEN ;
 
 CREATE _DLG-OK-BTN _DLG-BTN-SIZE ALLOT
 
@@ -472,7 +495,8 @@ CREATE _DLG-OK-BTN _DLG-BTN-SIZE ALLOT
 : DLG-INFO  ( msg-a msg-u -- ok? )
     S" OK" _DLG-OK-BTN 8 + ! _DLG-OK-BTN !
     DLG-B-DEFAULT DLG-B-CANCEL OR _DLG-OK-BTN 16 + !
-    S" Info" 2SWAP _DLG-OK-BTN 1 0 0 DLG-ASK ;
+    S" Info" 2SWAP _DLG-OK-BTN 1 0 0 DLG-ASK
+    DUP IF 1 _DLG-CELL-HOOK @ _DLG-O-SEVERITY + ! THEN ;
 
 \ =====================================================================
 \ 10. Hosting
@@ -512,12 +536,23 @@ VARIABLE _DLG-ANS-W
     DUP DLG-RESULT 0< IF DROP TRUE EXIT THEN
     0 _DLG-CELL-HOOK ! _DLG-ANSWER TRUE ;
 
+\ A dialog laid out at another size shows new content.
+VARIABLE _DLG-P-H
+VARIABLE _DLG-P-W
+: _DLG-RELAYOUT  ( widget -- )
+    DUP WDG-REGION DUP RGN-H _DLG-P-H ! RGN-W _DLG-P-W !
+    DUP _DLG-LAYOUT
+    DUP WDG-REGION DUP RGN-H _DLG-P-H @ <> SWAP RGN-W _DLG-P-W @ <> OR
+    OVER _DLG-O-REVISION + @ 0= OR IF
+        1 _DLG-REVISIONS +! _DLG-REVISIONS @ OVER _DLG-O-REVISION + !
+    THEN DROP ;
+
 \ DLG-HOST-PAINT ( -- )
 \   Paint the dialog the current application shows over it, centred in
 \   the host's bounds, keeping the drawing region the caller had.
 : DLG-HOST-PAINT  ( -- )
     _DLG-CELL-HOOK @ ?DUP 0= IF EXIT THEN
-    DUP _DLG-LAYOUT DUP WDG-DIRTY
+    DUP _DLG-RELAYOUT DUP WDG-DIRTY
     RGN-CURRENT >R ['] WDG-DRAW CATCH R> RGN-RESTORE
     ?DUP IF NIP THROW THEN ;
 
@@ -528,7 +563,167 @@ VARIABLE _DLG-ANS-W
     _DLG-CELL-HOOK @ ?DUP IF DLG-FREE 0 _DLG-CELL-HOOK ! THEN ;
 
 \ =====================================================================
-\ 11. Guard
+\ 11. Capture
+\ =====================================================================
+\
+\   A dialog its host has painted goes out as a UDLG model: its title on
+\   the top edge, its message's rows as the paint wrapped them, and a
+\   button record where the paint put each button, the selected one
+\   SELECTED.  A dialog laid out too small to show its parts apart, or
+\   whose text is not clean single-line text, is left as painted text.
+
+VARIABLE _DLG-C-W
+VARIABLE _DLG-C-DST
+VARIABLE _DLG-C-CAP
+VARIABLE _DLG-C-H
+VARIABLE _DLG-C-WD
+VARIABLE _DLG-C-MW
+VARIABLE _DLG-C-TU
+VARIABLE _DLG-C-TW
+VARIABLE _DLG-C-MU
+VARIABLE _DLG-C-LINES
+VARIABLE _DLG-C-CLEAN
+VARIABLE _DLG-C-NEED
+VARIABLE _DLG-C-XT
+VARIABLE _DLG-C-LA
+VARIABLE _DLG-C-LU
+VARIABLE _DLG-C-ROWS
+
+\ A live dialog this module made, with its own region.
+: _DLG-GENUINE?  ( widget -- flag )
+    DUP 0= OVER 7 AND OR IF DROP 0 EXIT THEN
+    DUP _WDG-O-HANDLE-XT + @ ['] _DLG-HANDLE <> IF DROP 0 EXIT THEN
+    DUP _DLG-O-INSTANCE + @ 0= IF DROP 0 EXIT THEN
+    WDG-REGION DUP 0= SWAP 7 AND OR 0= ;
+
+\ DLG-INSTANCE@ ( widget -- instance|0 )
+\   The dialog's identity for as long as it lives; 0 for anything else.
+: DLG-INSTANCE@  ( widget -- instance|0 )
+    DUP _DLG-GENUINE? 0= IF DROP 0 EXIT THEN _DLG-O-INSTANCE + @ ;
+
+\ DLG-ROOT ( widget -- row col height width )
+\   The screen cells its last paint laid it out in; all zero before that.
+: DLG-ROOT  ( widget -- row col height width )
+    DUP _DLG-O-REVISION + @ 0= IF DROP 0 0 0 0 EXIT THEN
+    WDG-REGION >R R@ RGN-ROW R@ RGN-COL R@ RGN-H R> RGN-W ;
+
+\ The dialog's allocation: descriptor, button records and text.
+VARIABLE _DLG-SZ-W
+: _DLG-C-SIZE  ( widget -- bytes )
+    DUP _DLG-SZ-W !
+    DUP _DLG-O-BCNT + @ _DLG-BTN-SIZE * _DLG-DESC-SIZE +
+    OVER _DLG-O-TITLE-U + @ + SWAP _DLG-O-MSG-U + @ +
+    _DLG-SZ-W @ _DLG-O-BCNT + @ 0 ?DO
+        _DLG-SZ-W @ _DLG-O-BTNS + @ I _DLG-BTN-LABEL NIP +
+    LOOP ;
+
+\ Run XT ( a u -- ) on each message row the paint draws.
+: _DLG-C-EACH-LINE  ( xt -- )
+    _DLG-C-XT !
+    _DLG-C-W @ _DLG-O-MSG-A + @ _DLG-C-LA !
+    _DLG-C-W @ _DLG-O-MSG-U + @ _DLG-C-LU !
+    _DLG-C-H @ 5 - DUP 1 < IF DROP 1 THEN _DLG-C-ROWS !
+    BEGIN _DLG-C-LU @ 0> _DLG-C-ROWS @ 0> AND WHILE
+        _DLG-C-LA @ _DLG-C-LU @ _DLG-C-MW @ _DLG-FIT
+        _DLG-C-LA @ OVER _DLG-C-XT @ EXECUTE
+        DUP _DLG-C-LA +! NEGATE _DLG-C-LU +!
+        -1 _DLG-C-ROWS +!
+    REPEAT ;
+
+: _DLG-C-COUNT-LINE  ( a u -- )
+    2DUP USF-TEXT? 0= IF 0 _DLG-C-CLEAN ! THEN
+    NIP _DLG-C-LINES @ IF 1+ THEN _DLG-C-MU +!
+    1 _DLG-C-LINES +! ;
+
+: _DLG-C-WRITE-LINE  ( a u -- )  _DLG-C-DST @ UDLG-LINE+ ;
+
+\ Whether every button lies inside the box and has a clean label.
+: _DLG-C-BUTTONS?  ( -- flag )
+    _DLG-C-W @ _DLG-O-BCNT + @ 0 ?DO
+        _DLG-C-W @ I _DLG-BTN-COL DUP 0< IF DROP 0 UNLOOP EXIT THEN
+        _DLG-C-W @ I _DLG-BTN-WIDTH + _DLG-C-WD @ > IF 0 UNLOOP EXIT THEN
+        _DLG-C-W @ _DLG-O-BTNS + @ I _DLG-BTN-LABEL USF-TEXT? 0= IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP -1 ;
+
+\ Lay the model out as the paint does, and measure it; false when it
+\ cannot be shown as a dialog.
+: _DLG-C-PREPARE  ( -- representable? )
+    _DLG-C-W @ WDG-REGION DUP RGN-H _DLG-C-H ! RGN-W _DLG-C-WD !
+    _DLG-C-H @ 5 < _DLG-C-WD @ 5 < OR IF 0 EXIT THEN
+    _DLG-C-WD @ 4 - _DLG-C-MW !
+    _DLG-C-W @ _DLG-O-TITLE-A + @ _DLG-C-W @ _DLG-O-TITLE-U + @
+    2DUP CW-SWIDTH DUP _DLG-C-TW ! IF
+        USF-TEXT? 0= IF 0 EXIT THEN
+        _DLG-C-W @ _DLG-O-TITLE-U + @ _DLG-C-TU !
+        _DLG-C-TW @ _DLG-C-MW @ MIN _DLG-C-TW !
+    ELSE
+        2DROP 0 _DLG-C-TU !
+    THEN
+    _DLG-C-BUTTONS? 0= IF 0 EXIT THEN
+    0 _DLG-C-MU ! 0 _DLG-C-LINES ! -1 _DLG-C-CLEAN !
+    ['] _DLG-C-COUNT-LINE _DLG-C-EACH-LINE
+    _DLG-C-CLEAN @ 0= IF 0 EXIT THEN
+    _DLG-C-TU @ _DLG-C-MU @ UDLG-TEXT-BYTES
+    _DLG-C-W @ _DLG-O-BCNT + @ 0 ?DO
+        _DLG-C-W @ _DLG-O-BTNS + @ I _DLG-BTN-LABEL NIP UDLG-BUTTON-BYTES +
+    LOOP _DLG-C-NEED ! -1 ;
+
+\ The destination lies apart from the dialog and its region.
+: _DLG-C-APART?  ( -- flag )
+    _DLG-C-DST @ _DLG-C-CAP @
+    2DUP _DLG-C-W @ DUP _DLG-C-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    _DLG-C-W @ WDG-REGION RGN-SIZE MSPAN-OVERLAP? 0= ;
+
+: _DLG-C-WRITE  ( -- )
+    _DLG-C-W @ _DLG-O-INSTANCE + @ _DLG-C-W @ _DLG-O-REVISION + @
+    _DLG-C-WD @ _DLG-C-H @ 0 _DLG-C-W @ _DLG-O-SEVERITY + @
+    _DLG-C-DST @ UDLG-START
+    _DLG-C-TU @ IF
+        0 2 1 _DLG-C-TW @
+        _DLG-C-W @ _DLG-O-TITLE-A + @ _DLG-C-TU @ _DLG-C-DST @ UDLG-TITLE!
+    THEN
+    _DLG-C-LINES @ IF
+        2 2 _DLG-C-LINES @ _DLG-C-MW @ _DLG-C-DST @ UDLG-MESSAGE-SLOT!
+        ['] _DLG-C-WRITE-LINE _DLG-C-EACH-LINE
+    THEN
+    _DLG-C-W @ _DLG-O-BCNT + @ 0 ?DO
+        _DLG-C-H @ 2 - _DLG-C-W @ I _DLG-BTN-COL 1 _DLG-C-W @ I _DLG-BTN-WIDTH
+        _DLG-C-W @ _DLG-O-BTNS + @ I _DLG-BTN-ROLES
+        UDLG-STATE-VISIBLE UDLG-STATE-ENABLED OR
+            I _DLG-C-W @ _DLG-O-SEL + @ = IF UDLG-STATE-SELECTED OR THEN
+        _DLG-C-W @ _DLG-O-BTNS + @ I _DLG-BTN-LABEL _DLG-C-DST @ UDLG-BUTTON+
+    LOOP ;
+
+\ DLG-MODEL-CAPTURE ( dst cap widget -- bytes status )
+\   Write the dialog its last paint laid out as a UDLG model at DST, an
+\   aligned span of CAP bytes apart from the dialog, or with DST 0 and
+\   CAP 0 only measure it.  The status is a UDLG-S- value: UNSUPPORTED
+\   for a dialog not yet laid out, or one that cannot be shown as a
+\   dialog.
+: DLG-MODEL-CAPTURE  ( dst cap widget -- bytes status )
+    DUP _DLG-GENUINE? 0= IF 2DROP DROP 0 UDLG-S-INVALID EXIT THEN
+    DUP _DLG-O-REVISION + @ 0= IF 2DROP DROP 0 UDLG-S-UNSUPPORTED EXIT THEN
+    _DLG-C-W ! _DLG-C-CAP ! _DLG-C-DST !
+    _DLG-C-PREPARE 0= IF 0 UDLG-S-UNSUPPORTED EXIT THEN
+    _DLG-C-DST @ 0= IF
+        _DLG-C-CAP @ IF 0 UDLG-S-INVALID EXIT THEN
+        _DLG-C-NEED @ UDLG-S-OK EXIT
+    THEN
+    _DLG-C-DST @ 7 AND IF 0 UDLG-S-INVALID EXIT THEN
+    _DLG-C-DST @ _DLG-C-CAP @ UDLG-STORAGE-DISJOINT? 0= IF
+        0 UDLG-S-INVALID EXIT
+    THEN
+    _DLG-C-APART? 0= IF 0 UDLG-S-INVALID EXIT THEN
+    _DLG-C-CAP @ _DLG-C-NEED @ U< IF 0 UDLG-S-CAPACITY EXIT THEN
+    _DLG-C-WRITE
+    _DLG-C-DST @ _DLG-C-NEED @ UDLG-VALIDATE
+    DUP IF 0 SWAP EXIT THEN
+    _DLG-C-NEED @ SWAP ;
+
+\ =====================================================================
+\ 12. Guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -547,6 +742,9 @@ GUARD _dlg-guard
 ' DLG-HOST-EVENT  CONSTANT _dlg-host-event-xt
 ' DLG-HOST-PAINT  CONSTANT _dlg-host-paint-xt
 ' DLG-DISCARD     CONSTANT _dlg-discard-xt
+' DLG-INSTANCE@   CONSTANT _dlg-instance-xt
+' DLG-ROOT        CONSTANT _dlg-root-xt
+' DLG-MODEL-CAPTURE CONSTANT _dlg-capture-xt
 
 : DLG-NEW         _dlg-new-xt       _dlg-guard WITH-GUARD ;
 : DLG-SELECTED    _dlg-selected-xt  _dlg-guard WITH-GUARD ;
@@ -562,4 +760,7 @@ GUARD _dlg-guard
 : DLG-HOST-EVENT  _dlg-host-event-xt EXECUTE ;
 : DLG-HOST-PAINT  _dlg-host-paint-xt EXECUTE ;
 : DLG-DISCARD     _dlg-discard-xt   _dlg-guard WITH-GUARD ;
+: DLG-INSTANCE@   _dlg-instance-xt  _dlg-guard WITH-GUARD ;
+: DLG-ROOT        _dlg-root-xt      _dlg-guard WITH-GUARD ;
+: DLG-MODEL-CAPTURE _dlg-capture-xt _dlg-guard WITH-GUARD ;
 [THEN] [THEN]

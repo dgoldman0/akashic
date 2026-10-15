@@ -2472,6 +2472,62 @@ def test_dlg_discard_never_answers():
          'SCR-FREE'], "0 -2 8888")
 
 
+def test_dlg_capture_describes_what_the_paint_shows():
+    """Once painted, the 21x6 dialog's model holds the title on its top
+    edge, its message row, and [ OK ], the selected default, and
+    [ Cancel ] where the paint put them."""
+    check("capture",
+        _DLG_SETUP + [
+         'CREATE _CAPS 1031 ALLOT : _CAP _CAPS 7 + -8 AND ;',
+         '_ASK DROP 0 0 DLG-SHOWN DLG-MODEL-CAPTURE . .',
+         'DLG-HOST-PAINT 0 0 DLG-SHOWN DLG-MODEL-CAPTURE . .',
+         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . . _CAP 328 UDLG-VALIDATE .',
+         '_CAP UDLG-WIDTH@ . _CAP UDLG-HEIGHT@ . _CAP UDLG-SEVERITY@ .',
+         '_CAP UDLG-KEY@ DLG-SHOWN DLG-INSTANCE@ = .',
+         '_CAP UDLG-TITLE-SLOT@ . . . . _CAP UDLG-MESSAGE-SLOT@ . . . .',
+         '_CAP UDLG-MESSAGE@ S" Hello world" COMPARE .',
+         '_CAP UDLG-BUTTON-FIRST DUP UDLG-BUTTON-SLOT@ . . . . DUP UDLG-BUTTON-STATE@ .',
+         'UDLG-BUTTON-NEXT DUP UDLG-BUTTON-SLOT@ . . . . UDLG-BUTTON-STATE@ .',
+         'DLG-SHOWN DLG-ROOT . . . . 8888 .',
+         _DLG_CLEANUP],
+        "1 0 0 328 0 328 0 21 6 0 -1 5 1 2 0 17 1 2 2 0 6 1 2 4 7 10 1 9 4 3"
+        " 21 6 29 9 8888")
+
+
+def test_dlg_revision_follows_size_and_a_cramped_dialog_stays_painted():
+    """Painting at the same size keeps the revision; another size makes a
+    new one.  A dialog too short to keep its parts apart has no model."""
+    check("revision and size",
+        _DLG_SETUP + [
+         'CREATE _CAPS 1031 ALLOT : _CAP _CAPS 7 + -8 AND ; VARIABLE _R1',
+         '_ASK DROP DLG-HOST-PAINT DLG-SHOWN _DLG-O-REVISION + @ DUP _R1 ! 0<> .',
+         'DLG-HOST-PAINT DLG-SHOWN _DLG-O-REVISION + @ _R1 @ = .',
+         ': _SHORT 0 0 7 80 ; : _CRAMPED 0 0 6 80 ;',
+         "' _SHORT IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT",
+         'DLG-SHOWN _DLG-O-REVISION + @ _R1 @ > . DLG-SHOWN WDG-REGION RGN-H .',
+         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-REVISION@ DLG-SHOWN _DLG-O-REVISION + @ = .',
+         "' _CRAMPED IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT",
+         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . . 8888 .',
+         "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK",
+         _DLG_CLEANUP], "-1 -1 -1 5 0 -1 1 0 8888")
+
+
+def test_dlg_instances_differ_and_info_and_confirm_carry_meaning():
+    """Every dialog has its own identity; Info is informational and a
+    confirmation a warning."""
+    check("meaning",
+        _DLG_SETUP + [
+         'VARIABLE _I1',
+         '_ASK DROP DLG-SHOWN DLG-INSTANCE@ DUP _I1 ! 0<> .',
+         'DLG-SHOWN _DLG-O-SEVERITY + @ .',
+         'KEY-ENTER _KEY _ASK DROP DLG-SHOWN DLG-INSTANCE@ _I1 @ > .',
+         'KEY-ENTER _KEY S" Saved" DLG-INFO DROP DLG-SHOWN _DLG-O-SEVERITY + @ .',
+         "KEY-ENTER _KEY S\" Delete it?\" S\" Delete\" 0 5 DLG-CONFIRM DROP",
+         'DLG-SHOWN _DLG-O-SEVERITY + @ . 0 DLG-INSTANCE@ . 8888 .',
+         _DLG_CLEANUP], "-1 0 -1 1 3 0 8888")
+
+
 # =====================================================================
 #  Canvas tests (Layer 7 — Braille canvas with per-cell colour)
 # =====================================================================

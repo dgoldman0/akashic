@@ -3,7 +3,7 @@
 **Layer:** 4C  
 **Prefix:** `DLG-` (public), `_DLG-` (internal)  
 **Provider:** `akashic-tui-dialog`  
-**Dependencies:** `keys.f`, `screen.f`, `widget.f`, `draw.f`, `box.f`, `region.f`
+**Dependencies:** `keys.f`, `screen.f`, `widget.f`, `draw.f`, `box.f`, `region.f`, `dialog-model.f`
 
 ## Overview
 
@@ -44,8 +44,8 @@ the `BTN1` flags of the rich terminal contract.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `DLG-ASK` | `( title-a title-u msg-a msg-u buttons count xt context -- ok? )` | Open a dialog over the asking application. Once a button is chosen, `xt` (unless 0) runs `( index context -- )` in that application. False when the application already shows a dialog, the buttons are not valid, or memory is short. |
-| `DLG-CONFIRM` | `( msg-a msg-u verb-a verb-u xt context -- ok? )` | Ask before an action that cannot be undone, under the title Confirm: *verb*, destructive, and Cancel, the default. `xt` runs `( confirmed? context -- )`, true only for *verb*. |
-| `DLG-INFO` | `( msg-a msg-u -- ok? )` | An Info dialog with OK, which Escape also chooses. |
+| `DLG-CONFIRM` | `( msg-a msg-u verb-a verb-u xt context -- ok? )` | Ask before an action that cannot be undone, under the title Confirm: *verb*, destructive, and Cancel, the default. `xt` runs `( confirmed? context -- )`, true only for *verb*. Its meaning is a warning. |
+| `DLG-INFO` | `( msg-a msg-u -- ok? )` | An Info dialog with OK, which Escape also chooses. Its meaning is informational. |
 
 The dialog keeps its own copies of the title, message and labels, so an
 asker may pass text it reuses. The callback runs with the application's
@@ -68,6 +68,27 @@ application has its own and a context freed with an open dialog frees the
 dialog too. `_DLG-BOUNDS-HOOK` gives the area to centre in, and
 `_DLG-DISMISS-HOOK` marks the rectangle a closing dialog leaves for
 repainting.
+
+### Capture
+
+A renderer that can show a dialog as a dialog takes it from these.
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `DLG-INSTANCE@` | `( widget -- instance\|0 )` | The dialog's identity for as long as it lives; 0 for anything else |
+| `DLG-ROOT` | `( widget -- row col height width )` | The screen cells its last paint laid it out in; all zero before |
+| `DLG-MODEL-CAPTURE` | `( dst cap widget -- bytes status )` | Write the dialog its last paint laid out as a [UDLG model](../dialog-model.md) at DST, an aligned span apart from the dialog; with DST 0 and CAP 0 only measure it |
+
+The model has the title on the top edge, from column 2 and as wide as the
+paint shows it; the message rows as the paint wrapped them, from row 2 and
+column 2; and a record a button where the paint put it, the selected one
+`SELECTED`. Its revision is new whenever the dialog is laid out at another
+size, its only change of content; instances and revisions only grow, so
+neither repeats across dialogs. A plain dialog is neutral, an Info dialog
+informational and a confirmation a warning. A dialog not yet painted, one
+laid out shorter than five rows or narrower than five columns, or one whose
+title, message or labels are not clean single-line text, has no model:
+`UDLG-S-UNSUPPORTED`, and it stays painted text.
 
 ### Constructor and accessors
 
