@@ -111,23 +111,29 @@ residual glyphs cannot create an input barrier.
 
 The policy refuses the entire optional shell candidate when pane contents
 overlap or a final writer covers any pane outer rectangle, with one exception:
-the prompt a pane's document paints over its own content. The aggregate
-adapter captures that prompt as the document's overlay field, the last record
-of its field snapshot, and the base candidate carries it as a `FIELD` control
-whose correlation names the overlay source. The shell finds the pane through
-the control's document slot, allows one prompt a pane, requires its root to lie
-inside the pane's content, and requires the four bands of the pane's outer
-rectangle around the root to be clear. The root's own cells are taken as the
-prompt's paint, as the adapter took them.
+the overlay a pane's document paints over its own content, the prompt or the
+dialog it shows. The aggregate adapter captures a prompt as the document's
+overlay field, the last record of its field snapshot, and the base candidate
+carries it as a `FIELD` control whose correlation names the overlay source; a
+dialog it carries as a `DIALOG` with its `BUTTON`s after it, inside its root
+(see the [dialog lane](DIALOG-PRODUCER.md)). The shell finds the pane through
+the overlay root's document slot, allows one overlay a pane, requires the
+root to lie inside the pane's content, and requires the four bands of the
+pane's outer rectangle around the root to be clear. The root's own cells are
+taken as the overlay's paint, as the adapter took them. A button goes where
+its pane's dialog goes, and a button whose pane shows no dialog refuses the
+candidate.
 
-When the terminal negotiated `RTE-F-DIALOGS`, each prompt gets a modal region
-after the planner's regions, in control order: surface-sized logical bounds,
-the pane's content as its clip, `VISIBLE | CLIPPED | MODAL`, and z two above
-the content z, so above every region the shell defines. The prompt's control
-goes in it, and the terminal shows the rest of that application inactive
-while the prompt is open; Desk and other applications stay active. Without
-dialogs the prompt stays in its pane's content region. A prompt whose document
-is in no pane refuses the candidate, as any control of such a document does.
+When the terminal negotiated `RTE-F-DIALOGS`, each overlay gets a modal
+region after the planner's regions, in control order: surface-sized logical
+bounds, the pane's content as its clip, `VISIBLE | CLIPPED | MODAL`, and z two
+above the content z, so above every region the shell defines. The prompt's
+control, or the dialog and its buttons, go in it, and the terminal shows the
+rest of that application inactive while the overlay is open; Desk and other
+applications stay active. Without dialogs the prompt stays in its pane's
+content region, and the base candidate carries no dialog. An overlay whose
+document is in no pane refuses the candidate, as any control of such a
+document does.
 
 Desk's own Ask prompt is the shell's. While it is open Desk hides its
 taskbar, takes no other input, and paints the prompt over the taskbar row,

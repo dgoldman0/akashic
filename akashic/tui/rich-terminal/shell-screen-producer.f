@@ -155,24 +155,30 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     OVER SHME.CONTENT-ROW @ 2 PICK SHME.CONTENT-H @ + R@ SHME.CONTENT-ROW @ > AND
     OVER SHME.CONTENT-COL @ R@ SHME.CONTENT-COL @ R@ SHME.CONTENT-W @ + < AND
     SWAP DUP SHME.CONTENT-COL @ SWAP SHME.CONTENT-W @ + R> SHME.CONTENT-COL @ > AND ;
-\ A pane's prompt.  The document in a pane may paint one overlay field over
-\ its own content: the prompt it shows, captured as the last record of its
-\ field snapshot.  The prompt's cells are that field's; every other cell of
+\ A pane's overlay.  The document in a pane may paint one overlay over its
+\ own content: the prompt it shows, captured as the last record of its
+\ field snapshot, or the dialog it shows, a DIALOG with its buttons after
+\ it and inside it.  The overlay's cells are its own; every other cell of
 \ the pane must still be the shell's to project.  With dialogs negotiated
-\ the field goes in a modal region over the pane's content, so the terminal
-\ shows the rest of that application inactive while the prompt is open.
-\ Without them it stays in the pane's content region.  A record per prompt:
-\ its control index, its pane's SHM entry index, and its modal region (0
-\ while there is none).
+\ the overlay goes in a modal region over the pane's content, so the
+\ terminal shows the rest of that application inactive while it is open.
+\ Without them a prompt stays in the pane's content region, and there is no
+\ dialog.  A record per overlay: its root's control index, its pane's SHM
+\ entry index, and its modal region (0 while there is none).
 24 CONSTANT _RSHSP-OV-SIZE
 VARIABLE _RSHSP-OVERLAYS VARIABLE _RSHSP-OV-N VARIABLE _RSHSP-MODAL-N
 VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
 : _RSHSP-OV ( i -- record ) _RSHSP-OV-SIZE * _RSHSP-OVERLAYS @ + ;
+: _RSHSP-SRC-KIND ( index -- kind )
+    RTE-CONTROL-SIZE * _RSHSP-SRC-CONTROLS @ + _RTE-CONTROL.KIND @ ;
+: _RSHSP-SRC-ATTACHMENT ( index -- token )
+    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-ATTACHMENT@ ;
+\ The root of an overlay: a document's prompt field, or its dialog.
 : _RSHSP-OVERLAY-CONTROL? ( index -- flag )
-    DUP RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-SOURCE@
-        UFLSN-SOURCE-OVERLAY =
-    SWAP RTE-CONTROL-SIZE * _RSHSP-SRC-CONTROLS @ + _RTE-CONTROL.KIND @
-        RTE-CONTROL-FIELD = AND ;
+    DUP _RSHSP-SRC-KIND DUP RTE-CONTROL-DIALOG = IF 2DROP -1 EXIT THEN
+    RTE-CONTROL-FIELD <> IF DROP 0 EXIT THEN
+    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-SOURCE@
+        UFLSN-SOURCE-OVERLAY = ;
 \ The signed slot of the document a token names; refuses an absent one.
 : _RSHSP-DOCUMENT-SLOT ( token -- slot-id )
     _RSHSP-P @ _RTHP.SOURCE-DIR-USED @ RUHA-DOCUMENT-SIZE / 0 ?DO
@@ -191,9 +197,8 @@ VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
     0 _RSHSP-OV-N !
     _RSHSP-P @ _RTHP.CONTROL-COUNT @ 0 ?DO
         I _RSHSP-OVERLAY-CONTROL? IF
-            I RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-ATTACHMENT@
-            _RSHSP-DOCUMENT-SLOT _RSHSP-SLOT-PANE
-            \ One prompt a pane.
+            I _RSHSP-SRC-ATTACHMENT _RSHSP-DOCUMENT-SLOT _RSHSP-SLOT-PANE
+            \ One overlay a pane.
             _RSHSP-OV-N @ 0 ?DO DUP I _RSHSP-OV 8 + @ <> _RSHSP-CHECK LOOP
             _RSHSP-OV-N @ _RSHSP-N @ U< _RSHSP-CHECK
             _RSHSP-OV-N @ _RSHSP-OV I OVER ! TUCK 8 + ! 0 SWAP 16 + !
@@ -207,10 +212,11 @@ VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
 : _RSHSP-OV-CONTROL ( record -- control ) @ RTE-CONTROL-SIZE * _RSHSP-SRC-CONTROLS @ + ;
 : _RSHSP-BAND-CLEAR ( row col h w -- )
     DUP 0> 2 PICK 0> AND IF _RSHSP-CLEAR-RECT ELSE 2DROP 2DROP THEN ;
-\ The prompt's root lies inside the pane's content, and the four bands of
-\ the pane around it are clear.  The prompt's own cells are taken as its
-\ paint, as the aggregate adapter took them.
-: _RSHSP-PROMPT-CLEAR ( entry control -- )
+\ The overlay's root lies inside the pane's content, and the four bands of
+\ the pane around it are clear.  The overlay's own cells are taken as its
+\ paint, as the aggregate adapter took them; a dialog's buttons lie inside
+\ its root.
+: _RSHSP-OVERLAY-CLEAR ( entry control -- )
     DUP _RTE-CONTROL.ROW @ _RSHSP-OVR ! DUP _RTE-CONTROL.COL @ _RSHSP-OVC !
     DUP _RTE-CONTROL.HEIGHT @ _RSHSP-OVH ! _RTE-CONTROL.WIDTH @ _RSHSP-OVW !
     _RSHSP-E !
@@ -232,7 +238,7 @@ VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
         _RSHSP-E @ SHME.COL @ _RSHSP-E @ SHME.WIDTH @ + _RSHSP-OVC @ _RSHSP-OVW @ + -
         _RSHSP-BAND-CLEAR ;
 : _RSHSP-PANE-CLEAR ( index entry -- )
-    SWAP _RSHSP-PANE-OVERLAY ?DUP IF _RSHSP-OV-CONTROL _RSHSP-PROMPT-CLEAR EXIT THEN
+    SWAP _RSHSP-PANE-OVERLAY ?DUP IF _RSHSP-OV-CONTROL _RSHSP-OVERLAY-CLEAR EXIT THEN
     >R R@ SHME.ROW @ R@ SHME.COL @ R@ SHME.HEIGHT @ R> SHME.WIDTH @ _RSHSP-CLEAR-RECT ;
 \ Desk's own prompt, while it holds the hidden taskbar row: its field's
 \ UFLD model in the copied shell model, its control and its region.
@@ -337,7 +343,7 @@ VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
     DUP _RTE-IR.ROWS @ OVER _RTE-IR.CLIP-ROWS !
     DUP _RTE-IR.FLAGS @ RTE-REGION-CLIPPED OR SWAP _RTE-IR.FLAGS ! ;
 
-\ A modal region for each prompt follows the planner's regions.  Like a
+\ A modal region for each overlay follows the planner's regions.  Like a
 \ pane's content region it has the surface as its logical bounds and the
 \ pane's content as its clip, and it sits above every region of the shell.
 : _RSHSP-MODAL-ROWS ( first-row -- next-row )
@@ -472,14 +478,21 @@ VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
         THEN
     LOOP
     _RSHSP-SAVED @ _RSHSP-CURSOR ! _RSHSP-START @ _RSHSP-BYTES @ _RSHSP-FAMILY-BYTES! ;
-\ A prompt with a modal region goes there; any other control goes to the
+\ An overlay with a modal region goes there; any other control goes to the
 \ content region of its document's pane.
-: _RSHSP-CONTROL-MEMBER ( index -- region )
+: _RSHSP-ROOT-MEMBER ( index -- region )
     _RSHSP-MODAL-N @ 0 ?DO
         I _RSHSP-OV @ OVER = IF DROP I _RSHSP-OV 16 + @ UNLOOP EXIT THEN
     LOOP
-    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ +
-        RUCP-CORRELATION-ATTACHMENT@ _RSHSP-MEMBER@ RSHMM.CONTENT-REGION @ ;
+    _RSHSP-SRC-ATTACHMENT _RSHSP-MEMBER@ RSHMM.CONTENT-REGION @ ;
+\ A dialog's button goes where its dialog does: the overlay of its pane.
+: _RSHSP-CONTROL-MEMBER ( index -- region )
+    DUP _RSHSP-SRC-KIND RTE-CONTROL-BUTTON = IF
+        _RSHSP-SRC-ATTACHMENT _RSHSP-DOCUMENT-SLOT _RSHSP-SLOT-PANE
+        _RSHSP-PANE-OVERLAY DUP _RSHSP-CHECK @
+        DUP _RSHSP-SRC-KIND RTE-CONTROL-DIALOG = _RSHSP-CHECK
+    THEN
+    _RSHSP-ROOT-MEMBER ;
 \ Desk's prompt as a FIELD: its field's FDC1 on a root across the hidden
 \ taskbar row.
 : _RSHSP-PROMPT-CONTROL ( -- )
