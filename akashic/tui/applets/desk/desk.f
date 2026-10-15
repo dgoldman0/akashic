@@ -2930,10 +2930,13 @@ VARIABLE _DPC-PAINT-ALL
 \ --- Close negotiation and shutdown ---
 \ A close while a scheduled run is in flight or waiting asks first: Desk
 \ defers and asks whether to shut down anyway.  Shut down arms the next
-\ close, once, and quits again; Desk's teardown then cancels the runs.
+\ close, once, and quits again; Desk's teardown then cancels the runs.  A
+\ shutdown that waited on its applications' questions has passed that
+\ question already, and the host quits again to go on with it.
 : DESK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DESK-USE-STATE
-    _DESK-SHUTDOWN-ARMED @ 0 _DESK-SHUTDOWN-ARMED ! 0= IF
+    _DESK-SHUTDOWN-ARMED @ 0 _DESK-SHUTDOWN-ARMED ! 0=
+    _DESK-HOST AHOST-SHUTDOWN-PENDING? 0= AND IF
         _DESK-BROKER SBRK-ACTIVE? IF
             _DESK-SHOW-SHUTDOWN-QUESTION APP-CLOSE-D-DEFER EXIT
         THEN

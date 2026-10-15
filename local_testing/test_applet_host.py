@@ -309,6 +309,32 @@ CREATE _ah-dialog-btn 4 CELLS ALLOT  _ah-dialog-btn 4 CELLS 0 FILL
     _ah-app _ah-host AHOST-TRY-LAUNCH
     _ah-launch-ior ! _ah-launch-id ! ;
 
+\ Like Pad with unsaved work, a child asks before it closes, and agreeing
+\ to discard arms the next close and quits again.
+VARIABLE _ah-q-armed-a
+VARIABLE _ah-q-armed-b
+VARIABLE _ah-q-asks
+: _ah-q-armed  ( instance -- a )
+    _ah-inst-a @ = IF _ah-q-armed-a ELSE _ah-q-armed-b THEN ;
+: _ah-q-answered  ( confirmed? instance -- )
+    SWAP IF -1 SWAP _ah-q-armed ! ASHELL-QUIT ELSE DROP THEN ;
+: _ah-q-request-close  ( reason instance -- decision )
+    NIP DUP _ah-q-armed @ IF 0 SWAP _ah-q-armed ! APP-CLOSE-D-ALLOW EXIT THEN
+    1 _ah-q-asks +!
+    >R S" Close and discard?" S" Discard" ['] _ah-q-answered R> DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
+\ Send the focused child a key.
+: _ah-q-key  ( code -- )
+    KEY-T-SPECIAL SWAP _ah-semantic-escape _ah-semantic-key!
+    _ah-semantic-escape _ah-host AHOST-DISPATCH-KEY _ah-assert ;
+: _ah-q-launch-two  ( -- )
+    0 _ah-inst-a ! 0 _ah-inst-b !
+    _ah-try-launch _ah-launch-ior @ 0= _ah-assert
+    _ah-launch-id @ DUP _ah-id-a ! _ah-host AHOST-FIND-ID _ah-slot-a !
+    _ah-try-launch _ah-launch-ior @ 0= _ah-assert
+    _ah-launch-id @ DUP _ah-id-b ! _ah-host AHOST-FIND-ID _ah-slot-b !
+    0 _ah-q-armed-a ! 0 _ah-q-armed-b ! 0 _ah-q-asks ! ;
+
 VARIABLE _ah-er
 VARIABLE _ah-ec
 VARIABLE _ah-eh
@@ -843,6 +869,74 @@ VARIABLE _ah-ew
     _ah-memory-clean
     _ah-stack
     ." AH-M12-MINIMIZED" CR
+
+    \ Children that ask before they close hold the host's shutdown: it
+    \ waits on their questions and asks neither again, a child that says
+    \ to discard closes at once, and once none still asks the host quits
+    \ again so its shutdown goes on.
+    _ah-memory-snapshot
+    ['] _ah-q-request-close _ah-app APP.REQUEST-CLOSE-XT !
+    ASHELL-CANCEL-QUIT
+    _ah-q-launch-two
+    APP-CLOSE-R-HOST-SHUTDOWN _ah-host AHOST-REQUEST-CLOSE-ALL
+        APP-CLOSE-D-DEFER = _ah-assert
+    _ah-q-asks @ 2 = _ah-assert
+    _ah-host AHOST-SHUTDOWN-PENDING? _ah-assert
+    _ah-slot-a @ AHS.DEFERRED @ APP-CLOSE-R-HOST-SHUTDOWN = _ah-assert
+    _ah-slot-b @ AHS.DEFERRED @ APP-CLOSE-R-HOST-SHUTDOWN = _ah-assert
+    APP-CLOSE-R-HOST-SHUTDOWN _ah-host AHOST-REQUEST-CLOSE-ALL
+        APP-CLOSE-D-DEFER = _ah-assert
+    _ah-q-asks @ 2 = _ah-assert
+    _ah-id-a @ _ah-host AHOST-FOCUS-ID
+    KEY-LEFT _ah-q-key KEY-ENTER _ah-q-key
+    _ah-id-a @ _ah-host AHOST-FIND-ID 0= _ah-assert
+    ASHELL-QUIT-PENDING? 0= _ah-assert
+    _ah-host AHOST-SHUTDOWN-PENDING? _ah-assert
+    _ah-id-b @ _ah-host AHOST-FOCUS-ID
+    KEY-LEFT _ah-q-key KEY-ENTER _ah-q-key
+    _ah-id-b @ _ah-host AHOST-FIND-ID 0= _ah-assert
+    ASHELL-QUIT-PENDING? _ah-assert
+    ASHELL-CANCEL-QUIT
+    _ah-q-asks @ 2 = _ah-assert
+    APP-CLOSE-R-HOST-SHUTDOWN _ah-host AHOST-REQUEST-CLOSE-ALL
+        APP-CLOSE-D-ALLOW = _ah-assert
+    _ah-host AHOST-SHUTDOWN-PENDING? 0= _ah-assert
+    _ah-host AHOST-SLOT-COUNT 0= _ah-assert
+    _ah-memory-clean
+    _ah-stack
+    ." AH-M13-SHUTDOWN-GOES-ON" CR
+
+    \ A child that declines ends the shutdown: the other child's open
+    \ question then answers only its own close, which quits nothing more.
+    _ah-memory-snapshot
+    _ah-q-launch-two
+    APP-CLOSE-R-HOST-SHUTDOWN _ah-host AHOST-REQUEST-CLOSE-ALL
+        APP-CLOSE-D-DEFER = _ah-assert
+    _ah-id-a @ _ah-host AHOST-FOCUS-ID
+    KEY-ESC _ah-q-key
+    _ah-id-a @ _ah-host AHOST-FIND-ID _ah-slot-a @ = _ah-assert
+    _ah-slot-a @ AHS.DEFERRED @ 0= _ah-assert
+    _ah-slot-b @ AHS.DEFERRED @ APP-CLOSE-R-QUIT = _ah-assert
+    _ah-host AHOST-SHUTDOWN-PENDING? 0= _ah-assert
+    ASHELL-QUIT-PENDING? 0= _ah-assert
+    _ah-id-b @ _ah-host AHOST-FOCUS-ID
+    KEY-LEFT _ah-q-key KEY-ENTER _ah-q-key
+    _ah-id-b @ _ah-host AHOST-FIND-ID 0= _ah-assert
+    ASHELL-QUIT-PENDING? 0= _ah-assert
+    _ah-host AHOST-SLOT-COUNT 1 = _ah-assert
+    \ Its own close asks it again.
+    _ah-id-a @ APP-CLOSE-R-WINDOW _ah-host AHOST-REQUEST-CLOSE-ID
+        APP-CLOSE-D-DEFER = _ah-assert
+    _ah-q-asks @ 3 = _ah-assert
+    _ah-slot-a @ AHS.DEFERRED @ APP-CLOSE-R-WINDOW = _ah-assert
+    KEY-LEFT _ah-q-key KEY-ENTER _ah-q-key
+    _ah-id-a @ _ah-host AHOST-FIND-ID 0= _ah-assert
+    ASHELL-QUIT-PENDING? 0= _ah-assert
+    ['] _ah-request-close _ah-app APP.REQUEST-CLOSE-XT !
+    _ah-host AHOST-SLOT-COUNT 0= _ah-assert
+    _ah-memory-clean
+    _ah-stack
+    ." AH-M14-SHUTDOWN-DECLINED" CR
 
     ASHELL-QUIT RGN-ROOT 0 SCR-USE
     _ah-screen @ SCR-FREE _ah-reg @ CREG-FREE

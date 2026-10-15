@@ -678,7 +678,8 @@ def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
     assert "80 CONSTANT _AH-O-UIDL-READY-XT" in host
     assert "88 CONSTANT _AH-O-UIDL-READY-CONTEXT" in host
     assert "128 CONSTANT _AH-O-SHELL-MODEL" in host
-    assert "136 CONSTANT AHOST-SIZE" in host
+    assert "136 CONSTANT _AH-O-SHUTDOWN" in host
+    assert "144 CONSTANT AHOST-SIZE" in host
     setter = _word(host, "AHOST-UIDL-READY!")
     body = _word(host, "_AHUR-BODY")
     invoke = _word(host, "_AHOST-UIDL-READY")
@@ -1255,7 +1256,8 @@ def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:
     assert "88 CONSTANT _AHS-O-CLOSE-PHASE" in host
     assert "96 CONSTANT _AHS-O-INIT-STARTED" in host
     assert "104 CONSTANT _AHS-O-OVERLAY" in host
-    assert "112 CONSTANT AHS-SIZE" in host
+    assert "112 CONSTANT _AHS-O-DEFERRED" in host
+    assert "120 CONSTANT AHS-SIZE" in host
     assert "5 U<" in _word(host, "AHS-CLOSE-PHASE-VALID?")
     assert (
         "AHS.CLOSE-PHASE @ AHS-CLOSE-S-LIVE ="

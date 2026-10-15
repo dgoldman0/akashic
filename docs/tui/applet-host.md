@@ -51,10 +51,11 @@ from a host callback or interleave one across a yield.
 
 ## Owned mechanics
 
-The host owns linked 112-byte `AHS-SIZE` child slots and their descriptor
+The host owns linked 120-byte `AHS-SIZE` child slots and their descriptor
 instance, stable region handle, display state, monotonic host ID, UIDL context,
 retained file buffer, dirty/revision state, close phase, persistent
-application-init boundary, and overlay flag. It provides:
+application-init boundary, overlay flag, and the reason of a close the child
+deferred to a question. It provides:
 
 - transactional `AHOST-TRY-LAUNCH` with first-error-preserving rollback;
 - fail-closed per-child and all-child close negotiation;
@@ -89,6 +90,7 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-TRY-LAUNCH-MINIMIZED` | `( desc host -- id ior )` | Launch a descriptor as a minimized slot, with no tile and no focus |
 | `AHOST-REQUEST-CLOSE-ID` | `( id reason host -- decision )` | Negotiate and, on ALLOW, finalize one child |
 | `AHOST-REQUEST-CLOSE-ALL` | `( reason host -- decision )` | Negotiate every child without partial teardown |
+| `AHOST-SHUTDOWN-PENDING?` | `( host -- flag )` | Whether the host's shutdown waits on its children's questions |
 | `AHOST-QUIESCE-ALL` | `( host -- ior )` | Run `UTUI-QUIESCE` and then the descriptor barrier for each child |
 | `AHOST-DRAIN` | `( host -- ior )` | Retire children in order, stopping when no safe progress is possible |
 | `AHOST-FOCUS-ID` | `( id host -- )` | Focus or restore one child |
@@ -104,6 +106,27 @@ Desk's injected callbacks during cleanup without importing Desk.
 `AHS.*` words expose slot fields needed by a concrete layout/chrome owner.
 They do not transfer ownership. Host lifecycle operations remain owner-core
 work because app callbacks can throw, yield, or request close.
+
+### Deferred closes and the host's shutdown
+
+A child that answers a close request with `APP-CLOSE-D-DEFER` usually asks a
+question first, such as whether to discard unsaved work. The slot remembers
+the request's reason until that question is answered. While the question is
+open, a later close request does not ask the child again: it defers, and a
+shutdown's reason (`APP-CLOSE-R-HOST-SHUTDOWN`) replaces the remembered one.
+
+A quit the child asks for from its answer becomes a close request for its
+slot, as any quit from the child does, and the child, having agreed, closes.
+When its dialog closes without that quit, the close is declined.
+
+`AHOST-REQUEST-CLOSE-ALL` with `APP-CLOSE-R-HOST-SHUTDOWN` that defers leaves
+the host's shutdown pending (`AHOST-SHUTDOWN-PENDING?`). Each child that then
+agrees closes at once, and when the last child still asking agrees, the host
+calls `ASHELL-QUIT`, so its owner asks to close every child again and goes on
+with its shutdown. A child that declines abandons the shutdown: no further
+quit follows, and another child's open question answers only that child's own
+close. The shutdown also ends whenever a close of every child allows or
+cancels.
 
 Each slot advances independently through `LIVE`, `QUIESCING`, `QUIESCED`,
 `SHUTDOWN-CLAIMED`, and `DETACHED`. Quiesce first makes the slot noncallable,
