@@ -341,6 +341,16 @@ already exists, its value is overwritten.  Otherwise a new attribute is
 created via the attribute pool.  Both name and value are copied to the
 string pool.
 
+**Known defect.** The string pool (12,288 bytes) only grows: it is reset
+when a document loads and never reclaims a replaced value.  A new value of
+the same length is written in place, but one of another length is copied to
+the pool's end, and the old bytes stay used.  Status text that changes
+length, such as Pad's `Ln N, Col M` as the caret crosses a digit boundary,
+therefore uses the pool up over a long session, and every later attribute
+update then stores an empty value (`UIDL-E-STR-FULL`).  Values that toggle
+between fixed alternatives should live in runtime state instead, as a menu
+item's checked state does in UIDL-TUI.
+
 #### UIDL-REMOVE-ATTR
 ```forth
 UIDL-REMOVE-ATTR ( elem name-a name-l -- )
