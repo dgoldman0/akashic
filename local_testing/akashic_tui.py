@@ -934,6 +934,17 @@ def desk_applet(name: str) -> DeskApplet:
     raise ValueError(f"no Desktop applet {name!r}")
 
 
+# Worlds' valve field: its label, then its value right-aligned in a slot as
+# wide as the largest setting the run accepts (10000).
+WORLDS_VALVE_LABEL = "valve (milliunits/tick)"
+
+
+def worlds_valve(value: int) -> str:
+    """The valve field's row as CELL shows it holding VALUE."""
+
+    return f"{WORLDS_VALVE_LABEL} {value:>5}"
+
+
 PROFILES = {
     "credential": Profile(
         roots=("security/credential.f",),
@@ -14011,6 +14022,22 @@ SOUNDLAB-RUN
 """,
         ready_markers=("SOUND LAB", "Waveform", "Playback"),
         stable_markers=("SOUND LAB", "Waveform", "Playback"),
+        linked=True,
+        include_large_sample=False,
+    ),
+    "worlds": Profile(
+        roots=("tui/applets/worlds/worlds.f",),
+        resources=("tui/applets/worlds/worlds.uidl",),
+        autoexec=r"""\ autoexec.f - standalone Worlds profile
+ENTER-USERLAND
+." [akashic] loading worlds" CR
+REQUIRE tui/applets/worlds/worlds.f
+." [akashic] starting worlds" CR
+WORLDS-RUN
+." [akashic] worlds exited" CR
+""",
+        ready_markers=("WORLDS / RESERVOIR FACILITY", worlds_valve(500)),
+        stable_markers=("WORLDS / RESERVOIR FACILITY", "Recent canonical transitions"),
         linked=True,
         include_large_sample=False,
     ),
@@ -33300,6 +33327,38 @@ def smoke(
                 "Pad did not switch back to smoke.txt",
             )
 
+        def run_worlds_valve_journey() -> None:
+            """Worlds' valve is a canonical INTEGER field: Right opens it a
+            step, the wheel over its value closes it a step, and a press on
+            the value sets the next setting, as V does.  Each setting is a
+            journaled valve.set."""
+
+            session.send_key("right")
+            if not wait_screen(
+                worlds_valve(750), "Right did not open Worlds' valve a step"
+            ) or not wait_screen(
+                "valve.set", "Worlds did not journal the valve setting"
+            ):
+                return
+            hits = screen.find(worlds_valve(750))
+            if len(hits) != 1:
+                journey_errors.append("Worlds did not show its valve field once")
+                return
+            row, left = hits[0]
+            value_col = left + len(worlds_valve(750)) - 1
+            send_sgr_mouse(row, value_col, button=65)
+            if not wait_screen(
+                worlds_valve(500),
+                "The wheel over Worlds' valve did not close it a step",
+            ):
+                return
+            send_sgr_mouse(row, value_col)
+            send_sgr_mouse(row, value_col, release=True)
+            wait_screen(
+                worlds_valve(750),
+                "A press on Worlds' valve did not set its next setting",
+            )
+
         def run_daybook_mixed_text_journey() -> None:
             """Add a mixed-script task through Daybook's prompt: typed,
             corrected with Backspace, and edited at a clicked character.
@@ -33400,6 +33459,9 @@ def smoke(
                 journey_errors.append(
                     "Daybook did not persist the mixed-script task's exact UTF-8"
                 )
+
+        if initial_ready and profile_name == "worlds":
+            run_worlds_valve_journey()
 
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()

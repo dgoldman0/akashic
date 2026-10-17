@@ -234,6 +234,56 @@ VARIABLE _OW-SEQ-RUN
     _OW-REPLAY _OW-RUN-A WRUN-REPLAY WRUN-S-OK _OW-STATUS
     _OW-STACK ;
 
+VARIABLE _OW-VALVE-REV
+VARIABLE _OW-VALVE-N
+
+\ The valve: one canonical INTEGER field over the run's own range, moved a
+\ step at a time by Left and Right and by the field's own adjustments.
+: _OW-VALVE-MODEL  ( -- model )
+    _WORLD-VALVE-ENSURE _OW-ASSERT _WORLD-VALVE-ACTIVE-A @ ;
+
+: _OW-VALVE-KEY  ( key -- )
+    _OW-EVENT 24 0 FILL
+    KEY-T-SPECIAL _OW-EVENT ! _OW-EVENT 8 + !
+    _OW-EVENT _WORLD-PANEL _WORLD-PANEL-HANDLE _OW-ASSERT ;
+
+: _OW-WORLD-VALVE  ( -- )
+    _OW-VALVE-MODEL DUP 0<> _OW-ASSERT
+    DUP UFLD-KIND@ UFLD-K-INTEGER = _OW-ASSERT
+    DUP UFLD-VALUE@ 500 = _OW-ASSERT
+    DUP UFLD-MINIMUM@ 0= _OW-ASSERT
+    DUP UFLD-MAXIMUM@ _WORLD-RUN WRUN.UPPER-CAP @ = _OW-ASSERT
+    DUP UFLD-STEP@ _WORLD-VALVE-STEP = _OW-ASSERT
+    DUP UFLD-STATE@ UFLD-STATE-SELECTED AND 0<> _OW-ASSERT
+    UFLD-LABEL@ S" valve (milliunits/tick)" COMPARE 0= _OW-ASSERT
+    _WORLD-VALVE-REVISION @ _OW-VALVE-REV !
+    \ Right opens the valve a step, journaled as valve.set, and the field
+    \ is a new revision showing it.
+    KEY-RIGHT _OW-VALVE-KEY
+    _WORLD-RUN WRUN.VALVE @ 750 = _OW-ASSERT
+    6 _WORLD-JOURNAL-ACTIVE-A @ _OW-ITEM@
+        S" valve.set" _OW-ITEM-TEXT= _OW-ASSERT
+    7 _WORLD-JOURNAL-ACTIVE-A @ _OW-ITEM@ S" 750" _OW-ITEM-TEXT= _OW-ASSERT
+    _OW-VALVE-MODEL UFLD-VALUE@ 750 = _OW-ASSERT
+    _WORLD-VALVE-REVISION @ _OW-VALVE-REV @ > _OW-ASSERT
+    \ An adjustment past closed holds at closed, and Left there commits
+    \ nothing.
+    -4 _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ADJUSTED
+    _WORLD-RUN WRUN.VALVE @ 0= _OW-ASSERT
+    _WORLD-RUN WRUN.JOURNAL-N @ _OW-VALVE-N !
+    KEY-LEFT _OW-VALVE-KEY
+    _WORLD-RUN WRUN.JOURNAL-N @ _OW-VALVE-N @ = _OW-ASSERT
+    \ Activating the field sets the next setting, as V does; past the
+    \ upper reservoir's capacity that closes the valve again.
+    _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ACTIVATED
+    _WORLD-RUN WRUN.VALVE @ _WORLD-VALVE-STEP = _OW-ASSERT
+    _OW-VALVE-MODEL UFLD-VALUE@ _WORLD-VALVE-STEP = _OW-ASSERT
+    100 _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ADJUSTED
+    _WORLD-RUN WRUN.VALVE @ _WORLD-RUN WRUN.UPPER-CAP @ = _OW-ASSERT
+    _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ACTIVATED
+    _WORLD-RUN WRUN.VALVE @ 0= _OW-ASSERT
+    _OW-STACK ;
+
 : _OW-APP-CONTRACTS  ( -- )
     _OW-WORLDS-DESC WORLDS-ENTRY
     _OW-WORLDS-DESC APP-DESC-VALID? _OW-ASSERT
@@ -274,6 +324,7 @@ VARIABLE _OW-SEQ-RUN
     7 _WORLD-JOURNAL-ACTIVE-A @ _OW-ITEM@
         S" 500" _OW-ITEM-TEXT= _OW-ASSERT
     _OW-STACK
+    _OW-WORLD-VALVE
     _OW-WORLD-INSTANCE @ WORLDS-SHUTDOWN-CB
     _OW-WORLD-INSTANCE @ CINST-FREE 0 _OW-WORLD-INSTANCE !
     _OW-OBS-DESC OBSERVATORY-ENTRY
@@ -483,6 +534,14 @@ UDG-S-INVALID CONSTANT DGRAPH-S-INVALID
 : DGRAPH-BIND DROP UDG-ENTRY-VALIDATE ;
 : DGRAPH-FREE DROP ;
 : WDG-DRAW-IN 2DROP ;
+: FLD-NEW DROP 1 ;
+: FLD-BIND DROP UFLD-VALIDATE ;
+: FLD-UNBIND DROP ;
+: FLD-FREE DROP ;
+: FLD-STYLE! 2DROP 2DROP ;
+: FLD-SELECTED-STYLE! 2DROP 2DROP ;
+: FLD-ON-ACTIVATE 2DROP ;
+: FLD-ON-ADJUST 2DROP ;
 REQUIRE local_testing/ow-worlds.f
 REQUIRE local_testing/ow-observatory.f'''
 
@@ -526,6 +585,7 @@ def main() -> int:
             "runtime/state-layout.f",
             "tui/semantic-collections.f",
             "tui/data-graphics-model.f",
+            "tui/field-model.f",
             "tui/app-desc.f",
             "interop/capability.f",
             "interop/intent.f",

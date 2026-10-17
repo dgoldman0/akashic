@@ -106,20 +106,21 @@ def test_applet_data_graphics_source_contract() -> None:
     sound_stop = _definition(sound, "SOUNDLAB-SHUTDOWN-CB")
     _ordered(sound_stop, "DGRAPH-FREE", "_SL-PANEL-RGN @ ?DUP IF RGN-FREE")
 
-    # Worlds: twelve readouts, two meters, three truthful statuses.
-    assert 112 + 11 * 144 + 160 + 2 * 144 + 3 * 128 == 2528
+    # Worlds: eleven readouts, two meters, three truthful statuses.  The
+    # valve is a canonical INTEGER field, not a readout.
+    assert 112 + 11 * 144 + 2 * 144 + 3 * 128 == 2368
     assert re.search(
         r"UDG-HEADER-SIZE\s+0 UDG-READOUT-RECORD-BYTES 11 \* \+\s+"
-        r"16 UDG-READOUT-RECORD-BYTES \+\s+"
         r"UDG-METER-RECORD-SIZE 2 \* \+\s+"
         r"UDG-STATUS-RECORD-SIZE 3 \* \+\s+"
         r"CONSTANT _WORLD-DGRAPH-CAP",
         worlds,
     )
-    assert "17 CONSTANT _WORLD-DGRAPH-OBJECT-COUNT" in worlds
+    assert "16 CONSTANT _WORLD-DGRAPH-OBJECT-COUNT" in worlds
     assert _definition(worlds, "_WORLD-DGRAPH-EMIT-READOUTS").count(
         "_WORLD-DGRAPH-READOUT"
-    ) == 12
+    ) == 11
+    assert "WRUN.VALVE" not in _definition(worlds, "_WORLD-DGRAPH-EMIT-READOUTS")
     assert _definition(worlds, "_WORLD-DGRAPH-EMIT-METERS").count(
         "_WORLD-DGRAPH-METER"
     ) == 2
