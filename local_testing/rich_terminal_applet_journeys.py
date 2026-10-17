@@ -86,7 +86,8 @@ FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # beside its sample picture.
 FEXP_FILE = "large.txt"
 # F2 renames the selected file through a prompt labelled so; the journey
-# selects the name's stem, types over it, and cancels.
+# selects the name's stem, types over it, and enters the new name, which
+# File Explorer then keeps selected while its notice says it was renamed.
 FEXP_RENAME_LABEL = "Rename:"
 # File Explorer's Go to prompt opens holding the folder shown, the root; the
 # path typed after it names nothing, so File Explorer warns.
@@ -95,6 +96,8 @@ FEXP_GOTO_MISSING = "no-such-folder"
 FEXP_GOTO_NOTICE = "Path not found"
 FEXP_RENAME_STEM = "large"
 FEXP_RENAME_TYPED = "notes"
+FEXP_RENAMED = FEXP_RENAME_TYPED + FEXP_FILE[len(FEXP_RENAME_STEM):]
+FEXP_RENAMED_NOTICE = "Renamed"
 # The photo check's picture, a real photograph wider than File Explorer's
 # preview at its largest on the physical viewer (assets/pictures/README.md),
 # and what its CELL view says it is while the rich side shows it.
@@ -960,11 +963,12 @@ class FexpAloneJourney(_AppletJourney):
     opens the rename prompt holding the name, a TEXT field in a modal region
     over the tile with the table and tree rich and inactive beneath it; a
     PLACE at the name's start and an EXTEND to the end of its stem, as the
-    viewer sends a drag, select the stem, typing replaces it, and Escape
-    cancels, leaving the file as it was.  Delete then asks before it
-    deletes the file: File Explorer's dialog, in a modal region over the
-    tile with its menu bar and every root it does not cover rich and
-    inactive beneath it, offers Delete, destructive, and Cancel, the
+    viewer sends a drag, select the stem, typing replaces it, and Enter
+    renames large.txt to notes.txt, which stays selected while File
+    Explorer says it was renamed in a neutral notice.  Delete then asks
+    before it deletes the file: File Explorer's dialog, in a modal region
+    over the tile with its menu bar and every root it does not cover rich
+    and inactive beneath it, offers Delete, destructive, and Cancel, the
     default, and pressing Cancel closes it and leaves the file listed and
     selected.  Ctrl+G opens the Go to prompt holding the folder shown, the
     root, and a path typed after it names nothing: Enter closes the prompt,
@@ -975,7 +979,7 @@ class FexpAloneJourney(_AppletJourney):
     Preview tab shows it: the rich frame shows it as an IMAGE once the
     terminal holds it, while CELL beneath shows what the picture is and
     draws none of it.  Activating the Details tab brings the table back
-    and the picture goes.  The Preview tab shows it again; large.txt's
+    and the picture goes.  The Preview tab shows it again; notes.txt's
     preview is text, with no picture; and guide.md's is a DOCUMENT from its
     first heading, with its figure, the same picture, in view and shown
     rich as an IMAGE in the picture rows the document leaves it.  SCROLL
@@ -1022,7 +1026,7 @@ class FexpAloneJourney(_AppletJourney):
         RENAME_PLACED,
         RENAME_SELECTED,
         RENAME_TYPED,
-        RENAME_CANCELLED,
+        RENAMED,
         DELETE_ASKED,
         DELETE_CANCELLED,
         GOTO_PROMPT,
@@ -1083,8 +1087,10 @@ class FexpAloneJourney(_AppletJourney):
         # Whether a scroll step has shown the document's figure partly
         # scrolled out.
         self._figure_clipped = False
-        # Whether a frame has shown File Explorer's warning.  It lasts two
-        # seconds, so the input after it may be retried once it is gone.
+        # Whether a frame has shown File Explorer's notices, that the file
+        # was renamed and the warning.  Each lasts a second or two, so the
+        # input after it may be retried once it is gone.
+        self._renamed = False
         self._warned = False
         # The upload check's step: pending, sent, answered, shown, or None
         # when there is none or it is over.
@@ -1196,7 +1202,7 @@ class FexpAloneJourney(_AppletJourney):
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, FEXP_FILE)
+        return (self.focus_marker, FEXP_RENAMED)
 
     def _goto(self, offer, generation, sender, goto) -> JourneyProgress:
         """The Go to prompt: it opens holding the root; type a path that
@@ -1225,7 +1231,7 @@ class FexpAloneJourney(_AppletJourney):
                           offer, generation, sender)
 
     def _rename(self, offer, generation, projection, sender, rename) -> JourneyProgress:
-        """The rename prompt: select the name's stem, type over it, cancel."""
+        """The rename prompt: select the name's stem, type over it, enter it."""
 
         if rename is None:
             if self.stage == self.RENAME_PROMPT:
@@ -1269,8 +1275,8 @@ class FexpAloneJourney(_AppletJourney):
             raise PhysicalDesktopAcceptanceError(
                 f"typing over the selected stem gave {content.text!r}, not {typed!r}"
             )
-        return self._step("fexp-rename-stem-replaced", "send_key", "escape",
-                          self.RENAME_CANCELLED, offer, generation, sender)
+        return self._step("fexp-rename-stem-replaced", "send_key", "enter",
+                          self.RENAMED, offer, generation, sender)
 
     @staticmethod
     def _launcher(projection: RichScreenProjection):
@@ -1373,7 +1379,7 @@ class FexpAloneJourney(_AppletJourney):
 
     def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
         """The Preview tab shows the picture rich, over what CELL says it is,
-        or large.txt's text with no picture; then the Details tab brings the
+        or notes.txt's text with no picture; then the Details tab brings the
         table back."""
 
         picture, details_stage = self._PREVIEWS[self.stage]
@@ -1407,7 +1413,7 @@ class FexpAloneJourney(_AppletJourney):
                 for claim in _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
                 for line in claim.visible_text
             ):
-                return self._wait(f"{FEXP_FILE}'s text in the preview")
+                return self._wait(f"{FEXP_RENAMED}'s text in the preview")
             milestone = "fexp-text-shown"
         details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
         return self._step(milestone, "activate_tab", _tab_value(details),
@@ -1766,31 +1772,37 @@ class FexpAloneJourney(_AppletJourney):
             )
         if self.stage in (self.GOTO_PROMPT, self.GOTO_TYPED):
             return self._goto(offer, generation, sender, goto)
-        if self.stage in (self.FILE_SELECTED, self.RENAME_CANCELLED, self.DELETE_CANCELLED,
+        if self.stage in (self.FILE_SELECTED, self.RENAMED, self.DELETE_CANCELLED,
                           self.GOTO_WARNED):
             if rename is not None:
                 return self._wait("the rename prompt closed")
             if goto is not None:
                 return self._wait("the Go to prompt closed")
+            name = FEXP_FILE if self.stage == self.FILE_SELECTED else FEXP_RENAMED
             selected = table.selected
-            if selected is None or selected.fields[0].text != FEXP_FILE:
-                return self._wait(f"{FEXP_FILE}'s row selected")
-            if not _status_shows(projection, "/" + FEXP_FILE, bounds):
+            if selected is None or selected.fields[0].text != name:
+                return self._wait(f"{name}'s row selected")
+            if not _status_shows(projection, "/" + name, bounds):
                 return self._wait("the selected file's path in the status bar")
             if _image_claims_in(projection, bounds):
                 raise PhysicalDesktopAcceptanceError(
-                    f"File Explorer shows a picture for {FEXP_FILE}"
+                    f"File Explorer shows a picture for {name}"
                 )
             if self.stage == self.FILE_SELECTED:
                 return self._step("fexp-file-selected", "send_key", "f2",
                                   self.RENAME_PROMPT, offer, generation, sender)
-            renamed = f"{FEXP_RENAME_TYPED}.{FEXP_FILE.split('.', 1)[1]}"
-            if table.named(renamed) is not None:
+            if table.named(FEXP_FILE) is not None:
                 raise PhysicalDesktopAcceptanceError(
-                    "cancelling the rename prompt renamed the file"
+                    f"File Explorer still lists {FEXP_FILE} after renaming it"
                 )
-            if self.stage == self.RENAME_CANCELLED:
-                return self._step("fexp-rename-cancelled", "send_key", "delete",
+            if self.stage == self.RENAMED:
+                if not self._renamed:
+                    notice = _notice_claim(projection, FEXP_RENAMED_NOTICE)
+                    if notice is None:
+                        return self._wait(f"File Explorer's notice {FEXP_RENAMED_NOTICE!r}")
+                    _require_notice(offer, notice, StatusSeverity.NEUTRAL)
+                    self._renamed = True
+                return self._step("fexp-renamed", "send_key", "delete",
                                   self.DELETE_ASKED, offer, generation, sender)
             if self.stage == self.DELETE_CANCELLED:
                 return self._step("fexp-delete-cancelled", "send_key", "ctrl+g",
@@ -1815,7 +1827,7 @@ class FexpAloneJourney(_AppletJourney):
         if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
                           self.DOCUMENT_SELECTED, self.PDF_SELECTED,
                           self.ENCRYPTED_SELECTED, self.PICTURE_RESELECTED):
-            name = {self.TEXT_SELECTED: FEXP_FILE,
+            name = {self.TEXT_SELECTED: FEXP_RENAMED,
                     self.DOCUMENT_SELECTED: FEXP_DOCUMENT,
                     self.PDF_SELECTED: FEXP_PDF,
                     self.ENCRYPTED_SELECTED: FEXP_PDF_ENCRYPTED}.get(
@@ -1851,7 +1863,7 @@ class FexpAloneJourney(_AppletJourney):
                                   offer, generation, sender)
             # The file each Details stage selects next, and the stage after.
             follows = {
-                self.PICTURE_DETAILS_AGAIN: (FEXP_FILE, self.TEXT_SELECTED),
+                self.PICTURE_DETAILS_AGAIN: (FEXP_RENAMED, self.TEXT_SELECTED),
                 self.TEXT_DETAILS: (FEXP_DOCUMENT, self.DOCUMENT_SELECTED),
                 self.DOCUMENT_DETAILS: (FEXP_PDF, self.PDF_SELECTED),
                 self.PDF_DETAILS: (FEXP_PDF_ENCRYPTED, self.ENCRYPTED_SELECTED),
@@ -1886,7 +1898,7 @@ class FexpAloneJourney(_AppletJourney):
                               table.value(directories[0].item_key),
                               self.DIRECTORY_OPENED, offer, generation, sender)
         if self.stage == self.DIRECTORY_OPENED:
-            if table.named(FEXP_FILE) is not None or not _status_shows(
+            if table.named(FEXP_RENAMED) is not None or not _status_shows(
                 projection, "/" + self._directory, bounds
             ):
                 return self._wait(f"the table listing /{self._directory}")
@@ -1933,7 +1945,7 @@ class FexpAloneJourney(_AppletJourney):
             raise PhysicalDesktopAcceptanceError(
                 "collapsing the root did not move the selection to it"
             )
-        if table.named(FEXP_FILE) is None:
+        if table.named(FEXP_RENAMED) is None:
             return self._wait("the table listing the root again")
         return self._step("fexp-tree-collapsed", "send_key", "alt+h",
                           self.LAUNCHER_OPENED, offer, generation, sender)

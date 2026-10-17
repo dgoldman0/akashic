@@ -1768,19 +1768,21 @@ TABLE_ID, TREE_ID = 31_000, 31_001
 
 def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str | None = None,
                 caret: int | None = None, anchor: int | None = None, delete: bool = False,
-                goto: str | None = None, warned: bool = False):
-    """Desk with File Explorer: its detail table listing large.txt and the
+                goto: str | None = None, warned: bool = False, listed: str = "large.txt",
+                renamed: bool = False):
+    """Desk with File Explorer: its detail table listing LISTED and the
     sample picture with SELECTED selected, its folder tree, its menu bar,
     and the selected path in its status bar; with RENAME, the rename prompt
     holding it over the tile, with GOTO, the Go to prompt holding it, with
-    DELETE, its delete question, and with WARNED, its warning that the path
-    was not found."""
+    DELETE, its delete question, with WARNED, its warning that the path
+    was not found, and with RENAMED, its notice that the file was
+    renamed."""
 
     rows = {0: " File  Edit  View  Tools", ROWS - 1: "[1:File Explo*]"}
     if status:
         rows[81] = f" /{selected}"
     frame = _screen(rows, (acceptance_runner.FEXPLORER_MENU_SIGNATURE,))
-    names = ("large.txt", acceptance_runner.FEXPLORER_PICTURE)
+    names = (listed, acceptance_runner.FEXPLORER_PICTURE)
     items = tuple(
         ViewItem(ordinal + 1, 0, ordinal, 0,
                  ItemState.SELECTED if name == selected else ItemState(0), ItemRole.ITEM,
@@ -1811,6 +1813,8 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
         frame = _held(frame, _prompt("Go to:", goto, row=81))
     if warned:
         frame = _noticed(frame, _notice("Path not found", StatusSeverity.WARNING))
+    if renamed:
+        frame = _noticed(frame, _notice("Renamed", StatusSeverity.NEUTRAL))
     if delete:
         # The question covers the detail table, which the capture withholds.
         frame = replace(frame, semantic_item_view_claims=(tree,))
@@ -1821,7 +1825,7 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
     return frame
 
 
-def test_fexp_alone_cancels_its_rename_prompt_and_its_delete_question() -> None:
+def test_fexp_alone_renames_through_its_prompt_and_cancels_its_delete_question() -> None:
     journey = FexpAloneJourney(FEXP_READY)
     journey.stage = FexpAloneJourney.FILE_SELECTED
     journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
@@ -1838,20 +1842,23 @@ def test_fexp_alone_cancels_its_rename_prompt_and_its_delete_question() -> None:
         # The guest may paint between typed characters.
         (blank, _fexp_frame(status=False, rename="no.txt")),
         (blank, _fexp_frame(status=False, rename="notes.txt")),
-        # Escape has not closed the prompt yet.
+        # Enter has not closed the prompt yet.
         (blank, _fexp_frame(status=False, rename="notes.txt")),
-        (blank, _fexp_frame()),
-        (question_offer, _fexp_frame(delete=True)),
+        # The file is renamed and selected, but the notice is not up yet.
+        (blank, _fexp_frame("notes.txt", listed="notes.txt")),
+        (_notice_offer("Renamed"), _fexp_frame("notes.txt", listed="notes.txt", renamed=True)),
+        (question_offer, _fexp_frame("notes.txt", listed="notes.txt", delete=True)),
         # Cancel has not closed the question yet.
-        (question_offer, _fexp_frame(delete=True)),
-        (blank, _fexp_frame()),
-        (blank, _fexp_frame(status=False, goto="/")),
+        (question_offer, _fexp_frame("notes.txt", listed="notes.txt", delete=True)),
+        (blank, _fexp_frame("notes.txt", listed="notes.txt")),
+        (blank, _fexp_frame(status=False, goto="/", listed="notes.txt")),
         # The guest may paint between typed characters.
-        (blank, _fexp_frame(status=False, goto="/no-such")),
-        (blank, _fexp_frame(status=False, goto="/no-such-folder")),
+        (blank, _fexp_frame(status=False, goto="/no-such", listed="notes.txt")),
+        (blank, _fexp_frame(status=False, goto="/no-such-folder", listed="notes.txt")),
         # Enter has closed the prompt, and the warning is not up yet.
-        (blank, _fexp_frame()),
-        (_notice_offer("Path not found"), _fexp_frame(warned=True)),
+        (blank, _fexp_frame("notes.txt", listed="notes.txt")),
+        (_notice_offer("Path not found"),
+         _fexp_frame("notes.txt", listed="notes.txt", warned=True)),
     )
     results = _run(journey, steps)
     value = f"1,1,{PROMPT_ID},0,{{}}".format
@@ -1862,9 +1869,10 @@ def test_fexp_alone_cancels_its_rename_prompt_and_its_delete_question() -> None:
         ("fexp-rename-caret-placed", [("text_extend", value(5))]),
         ("fexp-rename-stem-selected", [("send_text", "notes")]),
         (None, []),
-        ("fexp-rename-stem-replaced", [("send_key", "escape")]),
+        ("fexp-rename-stem-replaced", [("send_key", "enter")]),
         (None, []),
-        ("fexp-rename-cancelled", [("send_key", "delete")]),
+        (None, []),
+        ("fexp-renamed", [("send_key", "delete")]),
         ("fexp-delete-question-shown", [("activate_button", f"1,1,{PROMPT_ID + 2}")]),
         (None, []),
         ("fexp-delete-cancelled", [("send_key", "ctrl+g")]),
@@ -1892,10 +1900,11 @@ def test_fexp_alone_retries_its_step_after_a_warning_that_has_ended() -> None:
         return next(statuses)
 
     offer = replace(_notice_offer("Path not found"), offer_id=1)
-    journey.after_present(offer, 9, _fexp_frame(warned=True), sender)
+    journey.after_present(offer, 9, _fexp_frame("notes.txt", listed="notes.txt", warned=True),
+                          sender)
     assert journey.stage == FexpAloneJourney.GOTO_WARNED
     offer = replace(_cell_offer(1, ()), offer_id=2)
-    journey.after_present(offer, 9, _fexp_frame(), sender)
+    journey.after_present(offer, 9, _fexp_frame("notes.txt", listed="notes.txt"), sender)
     assert sent == [("item_select", f"1,1,{TABLE_ID},2")] * 2
     assert journey.stage == FexpAloneJourney.PICTURE_SELECTED
 
