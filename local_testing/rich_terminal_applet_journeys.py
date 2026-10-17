@@ -180,8 +180,10 @@ AGENT_REVIEW_REASON = "Persist the simulated change?"
 AGENT_REVIEW_TITLE = "Review required"
 AGENT_REVIEW_BUTTONS = (("Approve once", "F6"), ("Deny", "F7"))
 DIALOG_MORE = "PgDn: more below"
+# The Agent alone runs on the device-flow fixture, whose provider records
+# the approval under its own ID.
 AGENT_AUDIT = (
-    "Approved agent action: provider org.akashic.agent.testing.scripted: "
+    "Approved agent action: provider org.akashic.agent.testing.device-flow: "
     + AGENT_REVIEW_REASON
 )
 # The cards an approved request adds: the request, the reply, the review,
