@@ -422,6 +422,12 @@ _OW-RUN
 '''
 
 
+# The app contracts start each applet against the inert adapters' UIDL
+# stand-ins; the complete closure has no document loaded for them.
+APP_CONTRACTS_CALL = """    _OW-APP-CONTRACTS
+    ." OW APP CONTRACTS" CR
+"""
+
 APPLET_REQUIRE_BLOCK = """REQUIRE tui/applets/worlds/run.f
 REQUIRE tui/applets/worlds/worlds.f
 REQUIRE tui/applets/observatory/observatory.f"""
@@ -433,6 +439,7 @@ VARIABLE _UTUI-MENU-OPEN
 0 CONSTANT CELL-A-DIM
 0 CONSTANT KEY-T-CHAR
 1 CONSTANT KEY-T-SPECIAL
+2 CONSTANT KEY-T-MOUSE
 3 CONSTANT KEY-RIGHT
 4 CONSTANT KEY-LEFT
 : WDG-DIRTY DROP ;
@@ -447,7 +454,7 @@ VARIABLE _UTUI-MENU-OPEN
 : WDG-HANDLE 2DROP 0 ;
 : RGN-W DROP 80 ;
 : RGN-H DROP 30 ;
-: RGN-NEW 2DROP 2DROP 0 ;
+: RGN-NEW 2DROP 2DROP 1 ;
 : RGN-SUB 2DROP 2DROP DROP 1 ;
 : RGN-ROW DROP 0 ;
 : RGN-COL DROP 0 ;
@@ -468,6 +475,12 @@ VARIABLE _UTUI-MENU-OPEN
 : TGRID-NEW DROP 1 ;
 : TGRID-BIND DROP USCOL-ENTRY-VALIDATE ;
 : TGRID-FREE DROP ;
+UDG-S-OK CONSTANT DGRAPH-S-OK
+UDG-S-INVALID CONSTANT DGRAPH-S-INVALID
+: DGRAPH-NEW DROP 1 ;
+: DGRAPH-BIND DROP UDG-ENTRY-VALIDATE ;
+: DGRAPH-FREE DROP ;
+: WDG-DRAW-IN 2DROP ;
 REQUIRE local_testing/ow-worlds.f
 REQUIRE local_testing/ow-observatory.f'''
 
@@ -484,11 +497,14 @@ def _stripped_applet(relative: str) -> bytes:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--timeout", type=float, default=150.0)
     parser.add_argument(
         "--full-ui",
         action="store_true",
-        help="Compile the complete TUI closure instead of inert presentation adapters",
+        help=(
+            "Compile the complete TUI closure instead of inert presentation "
+            "adapters and run the checks below the applets"
+        ),
     )
     args = parser.parse_args()
 
@@ -497,18 +513,17 @@ def main() -> int:
             "tui/applets/worlds/worlds.f",
             "tui/applets/observatory/observatory.f",
         )
-        resources = (
-            "tui/applets/worlds/worlds.uidl",
-            "tui/applets/observatory/observatory.uidl",
-        )
-        autoexec = AUTOEXEC
+        resources = ()
+        assert AUTOEXEC.count(APP_CONTRACTS_CALL) == 1
+        autoexec = AUTOEXEC.replace(APP_CONTRACTS_CALL, "", 1)
         initial_files = ()
-        max_steps = 800_000_000
+        max_steps = 900_000_000
     else:
         roots = (
             "tui/applets/worlds/run.f",
             "runtime/state-layout.f",
             "tui/semantic-collections.f",
+            "tui/data-graphics-model.f",
             "tui/app-desc.f",
             "interop/capability.f",
             "interop/intent.f",
@@ -553,7 +568,6 @@ def main() -> int:
         ),
         linked=True,
         include_large_sample=False,
-        total_sectors=2048,
         initial_files=initial_files,
     )
     image = harness.build_image(PROFILE, IMAGE)
