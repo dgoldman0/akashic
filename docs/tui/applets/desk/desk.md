@@ -202,6 +202,15 @@ focuses that exact slot and restores it first if minimized.  The one-cell
 separators between labels are inert.  This does not yet make pinned catalog
 entries pointer-launchable; their keyboard/launcher behavior is unchanged.
 
+The taskbar's right end shows the Agent's state, such as `[Agent: ready]`,
+one cell before the row's edge when the entries leave room for it: `ready`,
+`working`, `review` while a request waits for approval, `offline`, `error`,
+`cancelled` or `expired`; `unavailable` without a runtime and `history
+error` when its store failed; and `[Practice: recovery]` or `[Practice:
+fallback]` while the Practice is in recovery or fallback.  Desk's shell
+model carries it as a status field with a severity for each state, so a
+rich terminal shows it as one ([shell model](../../shell-model.md)).
+
 `Alt+H` opens a non-blocking modal over the desktop.  It lists every catalog
 row and its status.  Up/Down, PgUp/PgDn, Home/End select; Enter focuses an
 already-running row or lazily resolves and transactionally launches it; Esc

@@ -103,6 +103,22 @@ CREATE _dh-press 24 ALLOT
     _dh-desk @ DESK-PAINT-CB
     _dh-model @ SHM.PROMPT-U @ 0= _dh-assert
 
+    \ With the taskbar back, Desk's agent state goes in the model as a status
+    \ field where the paint put it, after every string: its label's slot is
+    \ the cells of "[Agent: ", its value's the rest, up to the closing
+    \ bracket.  The prompt took it out while it held the row.
+    _dh-model @ SHM-STATUS@ DUP 0<> _dh-assert OVER USF-BYTES@ = _dh-assert
+    DUP USF-LABEL@ S" Agent" STR-STR= _dh-assert
+    DUP USF-VALUE@ _DAGS-VA @ _DAGS-VU @ STR-STR= _dh-assert
+    DUP USF-SEVERITY@ _DAGS-SEVERITY @ = _dh-assert
+    DUP USF-LABEL-COLS@ 8 = _dh-assert
+    USF-WIDTH@ DUP _DAGS-VU @ 9 + = _dh-assert
+    SCR-W SWAP - 1- _dh-model @ SHM.STATUS-COL @ = _dh-assert
+    _dh-model @ SHM.STATUS-ROW @ SCR-H 1- = _dh-assert
+    SCR-H 1- _dh-model @ SHM.STATUS-COL @ SCR-GET CELL-CP@ 91 = _dh-assert
+    SCR-H 1- _dh-model @ SHM.STATUS-COL @ 8 + SCR-GET CELL-CP@
+        _DAGS-VA @ C@ = _dh-assert
+
     \ The app shell's notice, while the paint shows one, goes in the model as
     \ its UDLG notice where the paint put it, after Desk's prompt while that
     \ is open, and leaves when it ends.
@@ -115,9 +131,13 @@ CREATE _dh-press 24 ALLOT
     ASHELL-NOTICE-ROOT 2DROP
     _dh-model @ SHM.NOTICE-COL @ = _dh-assert
     DUP SCR-H 1- = _dh-assert _dh-model @ SHM.NOTICE-ROW @ = _dh-assert
+    \ The agent state follows the notice.
+    _dh-model @ SHM.NOTICE-OFF @ _dh-model @ SHM.NOTICE-U @ + 7 + -8 AND
+        _dh-model @ SHM.STATUS-OFF @ = _dh-assert
     S" Ask:" _dh-long-title 3 _DESK-AGENT-PROMPT @ PRM-SHOW
     _dh-desk @ DESK-PAINT-CB
     _dh-model @ SHM.PROMPT-U @ 0<> _dh-assert
+    _dh-model @ SHM.STATUS-U @ 0= _dh-assert
     _dh-model @ SHM.PROMPT-OFF @ _dh-model @ SHM.PROMPT-U @ + 7 + -8 AND
         _dh-model @ SHM.NOTICE-OFF @ = _dh-assert
     _DESK-AGENT-PROMPT @ PRM-HIDE

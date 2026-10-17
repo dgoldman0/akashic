@@ -195,6 +195,21 @@ instruments after it, move up one more to make room for it. Without dialogs
 the notice is paint over the taskbar, which then stays ordinary while it
 shows.
 
+Desk's status, the Agent's state at the taskbar's right end, is in the
+shell model too while the taskbar shows it: its USF model and the cell of
+its left end, past the taskbar's entries. When the terminal negotiated
+status fields, the shell makes it a `STATUS_FIELD` static with the model's
+label, value, label slot, severity and emphasis, in a region of its own
+across the taskbar row past the entries: surface-sized logical bounds, that
+span of the last row as its clip, `VISIBLE | CLIPPED`, at the taskbar's z.
+It takes no input. A claim on its root keeps residual glyphs off it. Its
+cells the notice leaves must be the shell's own paint; a notice over part
+of it hides that part, and the status stays semantic beneath. Otherwise,
+or without status fields, it is residual glyphs, as before. Its static
+takes the first identity past the base candidate's objects, which COPY-RUN
+moves up past the shell's controls with the statics and instruments, and
+the identity reservation grows by one more for it.
+
 Modal/unavailable SHSN authority also refuses the candidate. Every refusal uses
 the unchanged, already admitted legacy RTHP candidate, with no shell claims
 leaking into that candidate.
@@ -234,7 +249,11 @@ neither. The app shell's notice, which follows the prompt, must be the same
 in both, wherever the prompt's size puts it. A renamed or refocused task, a
 new pane, the prompt opening or closing, a notice appearing, changing or
 ending, or any other model change leaves the draw to a complete START
-without further comparison.
+without further comparison. Desk's status, which shows only with the
+taskbar and so never with the prompt, must end both models or neither; its
+value, severity and place may change. Its region spans the taskbar row past
+the entries, whatever the status's width, so a change of the Agent's state
+keeps the catalog and replaces the status field in a DELTA.
 
 After the base producer has matched its controls, statics, instruments and
 series to their acknowledged identities, DELTA-PREPARE builds the shell

@@ -82,18 +82,18 @@ CREATE _SS-MS 4103 ALLOT CREATE _SS-FS 4103 ALLOT CREATE _SS-OS 4103 ALLOT
 
 def test_shell_snapshot_full_closure_and_deep_frozen_contract():
     program = PRELUDE + r'''
-0 0 SHSN-BANK-BYTES 160 = _SS-A
-4 30 SHSN-BANK-BYTES 862 = _SS-A
+0 0 SHSN-BANK-BYTES 192 = _SS-A
+4 30 SHSN-BANK-BYTES 894 = _SS-A
 -1 0 SHSN-BANK-BYTES 0= _SS-A
 0 0x100000000 SHSN-BANK-BYTES 0= _SS-A
 0xFFFFFFFF 0 SHSN-BANK-BYTES 0= _SS-A
 _SS-BUILD _SS-FREEZE _SS-VALID _SS-OK
-_SS-U @ 862 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
+_SS-U @ 894 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
 0 _SS-ENTRY _SS-F SHME-TITLE$ S" Editor" STR-STR= _SS-A
 1 _SS-ENTRY _SS-F SHME-LABEL$ S" Edit" STR-STR= _SS-A
 2 _SS-ENTRY _SS-F SHME-ACTION$ S" start" STR-STR= _SS-A
 2 _SS-F SHM.ABI _SS-BAD 4096 _SS-F SHM.CAPACITY _SS-BAD
-861 _SS-F SHM.USED _SS-BAD 0 _SS-F SHM.READY _SS-BAD
+893 _SS-F SHM.USED _SS-BAD 0 _SS-F SHM.READY _SS-BAD
 0 _SS-F SHM.OWNER-ID _SS-BAD 0 _SS-F SHM.OWNER-GEN _SS-BAD 0 _SS-F SHM.EPOCH _SS-BAD
 0 _SS-F SHM.WIDTH _SS-BAD 0x100000000 _SS-F SHM.HEIGHT _SS-BAD
 4 _SS-F SHM.FLAGS _SS-BAD 1 _SS-F SHM.FLAGS _SS-BAD
@@ -113,7 +113,7 @@ _SS-U @ 862 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
 0 2 _SS-ENTRY SHME.IDENTITY _SS-BAD 0 2 _SS-ENTRY SHME.ACTION _SS-BAD
 1 2 _SS-ENTRY SHME.FLAGS _SS-BAD
 0 1 _SS-ENTRY SHME.LABEL-OFF _SS-BAD 3 1 _SS-ENTRY SHME.LABEL-U _SS-BAD
-863 2 _SS-ENTRY SHME.ACTION-OFF _SS-BAD 4096 2 _SS-ENTRY SHME.ACTION-U _SS-BAD
+895 2 _SS-ENTRY SHME.ACTION-OFF _SS-BAD 4096 2 _SS-ENTRY SHME.ACTION-U _SS-BAD
 : _SS-CONTROL
     1 _SS-ENTRY SHME.LABEL-OFF @ _SS-F + DUP C@ >R DUP 10 SWAP C!
     _SS-VALID SHSN-S-INVALID = _SS-A R> SWAP C! ; _SS-CONTROL
@@ -196,7 +196,7 @@ _SS-F _ST-C _SHSN.STAGED _ST-BAD-SOURCE
 _ST-C _SHSN.STAGED @ _ST-C _SHSN.ACTIVE _ST-BAD-SOURCE
 0 _ST-C _SHSN.HOST _ST-BAD-SOURCE
 _ST-END _ST-GOOD
-_ST-P @ _ST-A = _SS-A _ST-U @ 862 = _SS-A
+_ST-P @ _ST-A = _SS-A _ST-U @ 894 = _SS-A
 \ A publisher must protect the live ordinary graph, not just frozen A/B.
 : _ST-LIVE? _ST-C SHSN-LIVE-STORAGE-DISJOINT? ;
 _SS-O 4096 _ST-LIVE? _SS-A
@@ -266,7 +266,7 @@ _SS-F _ST-C _SHSN.STAGED _ST-BAD-SOURCE
     _ST-UNAVAILABLE R> _ST-C _SHSN.HOST ! ; _ST-HOST-CORRUPT
 _ST-GOOD
 \ Later mutation of ordinary model text cannot change the owned completed bank.
-88 _SS-M 832 + C! _ST-GOOD _ST-P @ 832 + C@ 69 = _SS-A
+88 _SS-M 864 + C! _ST-GOOD _ST-P @ 864 + C@ 69 = _SS-A
 _ST-BUILD 2 _SS-M SHM.EPOCH !
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD _ST-P @ _ST-B = _SS-A
 _ST-A _ST-U @ _SS-F _SS-U @ COMPARE 0= _SS-A
@@ -293,7 +293,7 @@ _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
 \ Inactive-bank capacity refusal leaves both previously completed bytes intact.
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
 _ST-A _SS-F 4096 MOVE _ST-B _SS-O 4096 MOVE
-_ST-C _SHSN.ACTIVE @ _ST-A = IF 861 _ST-C _SHSN.B-U ! ELSE 861 _ST-C _SHSN.A-U ! THEN
+_ST-C _SHSN.ACTIVE @ _ST-A = IF 893 _ST-C _SHSN.B-U ! ELSE 893 _ST-C _SHSN.A-U ! THEN
 _ST-BEGIN _ST-STAGE _ST-END _ST-UNAVAILABLE
 _ST-A 4096 _SS-F 4096 COMPARE 0= _SS-A
 _ST-B 4096 _SS-O 4096 COMPARE 0= _SS-A
@@ -412,7 +412,7 @@ _SS-FREEZE _SS-VALID _SS-OK
 1 _SS-F SHM.END-COL _SS-BAD 0 _SS-F SHM.DIVIDER-COL _SS-BAD
 \ Full-frame/empty shell snapshots do not fabricate child panes or tasks.
 _SO-BASE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
-_SS-F SHM.COUNT @ 0= _SS-A _SS-U @ 496 = _SS-A
+_SS-F SHM.COUNT @ 0= _SS-A _SS-U @ 528 = _SS-A
 \ Two launchers share one catalog generation and root owner, but not keys.
 : _SO-LAUNCH ( key col -- )
     >R >R _SS-M SHM-APPEND DUP _SS-E !
@@ -536,6 +536,58 @@ _SP-BODY 11 10 _SN-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
 _SS-F SHM.PROMPT-OFF @ _SS-F SHM.PROMPT-U @ + 7 + -8 AND
     _SS-F SHM.NOTICE-OFF @ = _SS-A
 _SS-F SHM.NOTICE-U @ _SS-F SHM.NOTICE-OFF @ + _SS-U @ = _SS-A
+_SS-DONE
+"""
+    _run(program, minimum=24)
+
+
+# Desk's status: "[Agent: ready]" as a USF fourteen cells wide, its label's
+# slot the eight cells of "[Agent: ", on the bottom row at column 17, past
+# the taskbar's entries and apart from the pane.
+STATUS_MODEL = NOTICE_MODEL + r"""
+VARIABLE _SF-OFF
+: _SF-AGENT S" Agent" ; : _SF-READY S" ready" ;
+: _SF-STATUS ( dst cap -- bytes )
+    >R >R 1 14 8 0 USF-F-VISIBLE _SF-AGENT _SF-READY R> R> USF-INIT _SS-OK ;
+: _SF-TAKE ( row col -- )
+    _SS-M SHM-STATUS-ROOM _SS-A _SF-STATUS _SS-M SHM-STATUS-TAKE _SS-A ;
+"""
+
+
+def test_desks_status_follows_every_string_and_the_notice():
+    program = STATUS_MODEL + r"""
+\ After every string, in a model with no prompt or notice.
+_SS-BUILD 0 _SS-M SHM.READY !
+11 17 _SF-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.STATUS-OFF @ DUP _SF-OFF ! SHM-HEADER-SIZE 4 168 * + 30 + 7 + -8 AND = _SS-A
+_SS-F SHM.STATUS-U @ _SF-OFF @ + _SS-U @ = _SS-A
+_SS-F SHM.STATUS-ROW @ 11 = _SS-A _SS-F SHM.STATUS-COL @ 17 = _SS-A
+_SS-F SHM-STATUS@ DUP 0<> _SS-A OVER USF-BYTES@ = _SS-A
+DUP USF-LABEL@ _SF-AGENT STR-STR= _SS-A USF-VALUE@ _SF-READY STR-STR= _SS-A
+\ One status a build, none once sealed, and no prompt or notice after it.
+_SS-M SHM-STATUS-ROOM 0= _SS-A 2DROP
+0 _SS-M SHM.READY ! _SS-M SHM-STATUS-ROOM 0= _SS-A 2DROP
+_SS-M SHM-NOTICE-ROOM 0= _SS-A 2DROP _SS-M SHM-PROMPT-ROOM 0= _SS-A 2DROP
+\ It sits at the next boundary with zero padding, is visible, lies on the
+\ taskbar's row past its entries and inside the screen, and ends the model.
+_SF-OFF @ 8 + _SS-F SHM.STATUS-OFF _SS-BAD
+1 _SF-OFF @ 1- _SP-BAD-BYTE
+0 _SS-F _SF-OFF @ + USF-FLAGS-OFFSET + _SS-BAD
+10 _SS-F SHM.STATUS-ROW _SS-BAD
+7 _SS-F SHM.STATUS-COL _SS-BAD
+19 _SS-F SHM.STATUS-COL _SS-BAD
+_SS-F SHM.STATUS-U @ 8 - _SS-F SHM.STATUS-U _SS-BAD
+_SS-VALID _SS-OK
+\ A model without a status keeps its fields zero.
+0 _SS-F SHM.STATUS-U _SS-BAD
+\ After the notice.
+_SS-BUILD 0 _SS-M SHM.READY ! 11 10 _SN-TAKE 11 17 _SF-TAKE
+_SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.NOTICE-OFF @ _SS-F SHM.NOTICE-U @ + 7 + -8 AND
+    _SS-F SHM.STATUS-OFF @ = _SS-A
+_SS-F SHM.STATUS-U @ _SS-F SHM.STATUS-OFF @ + _SS-U @ = _SS-A
+\ The taskbar it lies on must show: none while Desk's prompt holds the row.
+_SP-BODY 11 17 _SF-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID SHSN-S-INVALID = _SS-A
 _SS-DONE
 """
     _run(program, minimum=24)

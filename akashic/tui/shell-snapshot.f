@@ -230,6 +230,32 @@ VARIABLE _SHSN-V-NO VARIABLE _SHSN-V-NU
         ROT DUP UDLG-HEIGHT@ SWAP UDLG-WIDTH@ _SHSN-V-M @ SHM-APART-FROM-PANES?
         0= IF 0 EXIT THEN
     _SHSN-V-NO @ _SHSN-V-NU @ + _SHSN-V-CURSOR ! -1 ;
+\ Desk's status at the taskbar's right end, while the paint shows it: a
+\ visible USF one row high on the shown taskbar's row, past its entries and
+\ apart from every pane, after the notice, the prompt or every string at
+\ the next eight-byte boundary, its padding zero.
+VARIABLE _SHSN-V-SO VARIABLE _SHSN-V-SU
+: _SHSN-V-STATUS? ( -- flag )
+    _SHSN-V-M @ SHM.STATUS-OFF @ _SHSN-V-SO ! _SHSN-V-M @ SHM.STATUS-U @ _SHSN-V-SU !
+    _SHSN-V-SU @ 0= IF
+        _SHSN-V-SO @ _SHSN-V-M @ SHM.STATUS-ROW @ OR
+        _SHSN-V-M @ SHM.STATUS-COL @ OR 0= EXIT
+    THEN
+    _SHSN-V-M @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND IF 0 EXIT THEN
+    _SHSN-V-CURSOR @ 7 + -8 AND _SHSN-V-SO @ <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-CURSOR @ + _SHSN-V-SO @ _SHSN-V-CURSOR @ -
+        _SHSN-ZERO? 0= IF 0 EXIT THEN
+    _SHSN-V-SU @ _SHSN-V-U @ _SHSN-V-SO @ - U> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-SO @ + _SHSN-V-SU @ USF-VALIDATE USF-S-OK <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-SO @ +
+    DUP USF-FLAGS@ USF-F-VISIBLE AND 0= IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-ROW @ _SHSN-V-M @ SHM.HEIGHT @ 1- <> IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-COL @ _SHSN-V-M @ SHM.END-COL @ < IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-COL @ OVER USF-WIDTH@
+        _SHSN-V-M @ SHM.WIDTH @ _SHSN-V-AXIS? 0= IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-ROW @ _SHSN-V-M @ SHM.STATUS-COL @ 1
+        ROT USF-WIDTH@ _SHSN-V-M @ SHM-APART-FROM-PANES? 0= IF 0 EXIT THEN
+    _SHSN-V-SO @ _SHSN-V-SU @ + _SHSN-V-CURSOR ! -1 ;
 : _SHSN-FROZEN? ( -- flag )
     _SHSN-V-M @ SHM.ABI @ SHM-ABI <>
     _SHSN-V-M @ SHM.CAPACITY @ _SHSN-V-U @ <> OR
@@ -263,6 +289,7 @@ VARIABLE _SHSN-V-NO VARIABLE _SHSN-V-NU
     _SHSN-V-END @ _SHSN-V-M @ SHM.END-COL @ U> IF 0 EXIT THEN
     _SHSN-V-PROMPT? 0= IF 0 EXIT THEN
     _SHSN-V-NOTICE? 0= IF 0 EXIT THEN
+    _SHSN-V-STATUS? 0= IF 0 EXIT THEN
     _SHSN-V-CURSOR @ _SHSN-V-U @ = ;
 : SHSN-FROZEN-VALIDATE ( model bytes -- status )
     DUP SHM-HEADER-SIZE U< IF 2DROP SHSN-S-INVALID EXIT THEN

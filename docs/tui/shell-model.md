@@ -5,10 +5,11 @@ CELL divider paint, taskbar paint and taskbar pointer hit testing. It does
 not contain terminal IDs, wire encoders, retained scenes or app-name rules.
 
 Desk builds one inactive caller-owned bank before painting. Each bank has a
-160-byte header, a bounded array of 168-byte records and a copied text arena.
+192-byte header, a bounded array of 168-byte records and a copied text arena.
 The header records screen dimensions, component instance ID/generation,
 completed-frame epoch, prompt/modal flags, taskbar separator and occupied
-extent, and where Desk's prompt and the app shell's notice lie. Records identify a pane, task or launcher and carry exact screen
+extent, and where Desk's prompt, the app shell's notice and Desk's status
+lie. Records identify a pane, task or launcher and carry exact screen
 CELL bounds, pane content bounds, state, lifecycle identity, copied display
 label, copied full title and, for catalog launchers, copied catalog ID.
 String fields use bank-relative offsets. No descriptor, slot or catalog
@@ -82,6 +83,33 @@ Desk captures the notice with `ASHELL-NOTICE-CAPTURE` once it has taken the
 prompt, when the notice lies apart from every pane. A build takes one
 notice, after the prompt and before sealing, and no prompt after it. A bank
 without room for it grows; a notice that cannot be captured stays the cells
+it paints.
+
+While the taskbar shows Desk's status, the Agent's state at its right end,
+the model carries it too, so a rich terminal can show it as a status field:
+after the notice, the prompt or every string, at the next eight-byte
+boundary, its [USF model](status-field-model.md). The header's
+`SHM.STATUS-OFF` (160) and `SHM.STATUS-U` (168) name it, and
+`SHM.STATUS-ROW` (176) and `SHM.STATUS-COL` (184) give the screen cell of
+its left end; all four are zero otherwise. It lies on the taskbar row past
+the taskbar's entries and apart from every pane.
+
+| Word | Stack | Purpose |
+| --- | --- | --- |
+| `SHM-STATUS-ROOM` | `( model -- dst cap ok? )` | The room after the notice, the prompt or the strings |
+| `SHM-STATUS-TAKE` | `( row col bytes model -- ok? )` | Record the status captured there, its left end at ROW COL |
+| `SHM-STATUS@` | `( model -- usf-a usf-u )` | The status's model, or `0 0` |
+
+Desk takes its status last, while the taskbar shows it apart from every
+pane. Its label is `Agent`, or `Practice` while the Practice is in recovery
+or fallback, and its value the state's word. Each state has a severity:
+`working` is info, `review`, `offline`, `expired` and the Practice states
+are warnings, `error` and `history error` are errors, and the rest are
+neutral; `review` is emphasized, as CELL highlights it. CELL paints it as
+`[label: value]`, and its label's slot is the cells CELL gives `[label: `,
+so each string lies where CELL puts it. A build takes one status, after
+the notice and before sealing, and no prompt or notice after it. A bank
+without room for it grows; a status that cannot be captured stays the cells
 it paints.
 
 A launcher overlay blocks background taskbar input while preserving its

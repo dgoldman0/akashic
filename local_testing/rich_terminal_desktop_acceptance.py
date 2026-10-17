@@ -4718,6 +4718,25 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
             raise PhysicalDesktopAcceptanceError("PANE contents overlap another pane or shell material")
         layer.update(cells)
         content_cells.update(cells)
+    # Desk's status: one STATUS_FIELD in a region of its own across the
+    # taskbar row past its entries, apart from every pane and the taskbar.
+    # A status field in a PANE's instrument region lies in its content.
+    status_regions = set()
+    for region in plane.regions:
+        if (region.modal or len(region.draws) != 1 or
+                not isinstance(region.draws[0], StatusFieldDraw)):
+            continue
+        viewport = _region_viewport_rectangle(region, cols, rows)
+        if (viewport is None or viewport.bottom != rows or
+                _rectangle_cells(viewport) & content_cells):
+            continue
+        bounds, visible = _visible_draw_rectangle(region, region.draws[0], cols, rows)
+        if (not region.clipped or _region_logical_rectangle(region) != screen or
+                viewport.top != rows - 1 or viewport.right != cols or bounds != visible):
+            raise PhysicalDesktopAcceptanceError(
+                "Desk's status region is not the taskbar row past its entries")
+        add_material((bounds,))
+        status_regions.add(region.region_id)
     for region in plane.regions:
         band_bounds = [_draw_logical_rectangle(region, draw) for draw in region.draws
                        if isinstance(draw, TaskBarDraw)]
@@ -4747,7 +4766,9 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
             if any(isinstance(draw, (PaneDraw, TaskBarDraw) + instrument_types) for draw in region.draws):
                 raise PhysicalDesktopAcceptanceError("PANE content region has nonmatching shell or instrument draws")
             continue
-        if region.draws and all(isinstance(draw, PaneDraw) for draw in region.draws):
+        if region.region_id in status_regions:
+            roles[region.region_id] = "status"
+        elif region.draws and all(isinstance(draw, PaneDraw) for draw in region.draws):
             roles[region.region_id] = "chrome"
         elif region.draws and all(isinstance(draw, TaskBarDraw) for draw in region.draws):
             roles[region.region_id] = "taskbar"
@@ -7513,21 +7534,21 @@ def _shell_text(raw):
     return value
 
 
-_SHM_HEADER = 160
+_SHM_HEADER = 192
 
 
 def _decode_shell_model(payload: bytes) -> ShellNativeModel:
     """Decode the actual bounded, pointer-free SHSN copy of ordinary SHM.
 
-    Desk's prompt and the app shell's notice, when present, follow the text
-    at eight-byte boundaries; their own models are proved natively, so only
-    their placement is checked here."""
+    Desk's prompt, the app shell's notice and Desk's status, when present,
+    follow the text at eight-byte boundaries; their own models are proved
+    natively, so only their placement is checked here."""
     _shell_require(isinstance(payload, bytes) and _SHM_HEADER <= len(payload) <= 49152,
                    "model extent is outside the canonical owned bank")
-    h = struct.unpack_from("<20Q", payload)
+    h = struct.unpack_from("<24Q", payload)
     (abi, capacity, limit, count, used, owner, generation, epoch, cols, rows, flags, divider,
      end, ready, prompt_offset, prompt_bytes, notice_offset, notice_bytes, notice_row,
-     notice_col) = h
+     notice_col, status_offset, status_bytes, status_row, status_col) = h
     _shell_require(abi == 1 and capacity == used == len(payload) and ready == (1 << 64) - 1 and
                    owner > 0 and generation > 0 and epoch > 0,
                    "model header is not a complete immutable SHM")
@@ -7595,17 +7616,22 @@ def _decode_shell_model(payload: bytes) -> ShellNativeModel:
         entries.append(ShellNativeEntry(index, key, kind, entry_flags, bounds, content,
                                         child_owner, child_gen, identity, action, label, title, action_id))
     for offset, size, present in ((prompt_offset, prompt_bytes, bool(flags & 1)),
-                                  (notice_offset, notice_bytes, True)):
+                                  (notice_offset, notice_bytes, True),
+                                  (status_offset, status_bytes, not flags & 1)):
         if not size:
             _shell_require(offset == 0, "an absent record has an offset")
             continue
         start = (cursor + 7) & ~7
         _shell_require(present and offset == start and size <= len(payload) - start and
                        not any(payload[cursor:start]),
-                       "a prompt or notice is not placed after the text")
+                       "a prompt, notice or status is not placed after the text")
         cursor = start + size
     _shell_require(notice_bytes or notice_row == notice_col == 0,
                    "an absent notice has a place")
+    _shell_require(status_bytes or status_row == status_col == 0,
+                   "an absent status has a place")
+    _shell_require(not status_bytes or status_row == rows - 1 and end <= status_col < cols,
+                   "the status is not on the taskbar's row past its entries")
     _shell_require(cursor == len(payload) and slot_end <= end, "model has unowned trailing text or slots")
     return ShellNativeModel(owner, generation, epoch, cols, rows, flags, divider, end,
                             tuple(entries), hashlib.sha256(payload).hexdigest())

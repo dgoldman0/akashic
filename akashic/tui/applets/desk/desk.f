@@ -54,6 +54,7 @@
 PROVIDED akashic-tui-desk
 
 REQUIRE ../../app-shell.f
+REQUIRE ../../status-field-model.f
 REQUIRE ../../applet-host/host.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../uidl-tui.f
@@ -1944,44 +1945,60 @@ VARIABLE _DESK-TB-POS
 
 VARIABLE _DTB-COL
 VARIABLE _DTB-ROW
-VARIABLE _DAS-A
-VARIABLE _DAS-U
-VARIABLE _DAS-COL
 
-: _DESK-AGENT-STATE-TEXT  ( -- addr len )
-    DESK-RECOVERY? IF S" [Practice: recovery]" EXIT THEN
-    _DESK-PRACTICE-ACTIVATION PACT-FALLBACK? IF
-        S" [Practice: fallback]" EXIT
+\ Desk's agent state as a status field shows it: what it is about, its
+\ value, its severity and whether it asks for attention, and where it lies.
+\ CELL paints it as [label: value] one cell before the taskbar row's right
+\ end, when that leaves it past the taskbar's entries.
+VARIABLE _DAGS-LA VARIABLE _DAGS-LU VARIABLE _DAGS-VA VARIABLE _DAGS-VU
+VARIABLE _DAGS-SEVERITY VARIABLE _DAGS-FLAGS
+VARIABLE _DAGS-LABEL-W VARIABLE _DAGS-W VARIABLE _DAGS-COL
+: _DAGS! ( value-a value-u severity -- ) _DAGS-SEVERITY ! _DAGS-VU ! _DAGS-VA ! ;
+: _DESK-AGENT-VALUE ( -- )
+    S" Agent" _DAGS-LU ! _DAGS-LA ! USF-F-VISIBLE _DAGS-FLAGS !
+    DESK-RECOVERY? IF
+        S" Practice" _DAGS-LU ! _DAGS-LA !
+        S" recovery" ASHELL-SEVERITY-WARNING _DAGS! EXIT
     THEN
-    _DESK-AGENT-RUNTIME @ 0= IF S" [Agent: unavailable]" EXIT THEN
+    _DESK-PRACTICE-ACTIVATION PACT-FALLBACK? IF
+        S" Practice" _DAGS-LU ! _DAGS-LA !
+        S" fallback" ASHELL-SEVERITY-WARNING _DAGS! EXIT
+    THEN
+    _DESK-AGENT-RUNTIME @ 0= IF
+        S" unavailable" ASHELL-SEVERITY-NEUTRAL _DAGS! EXIT
+    THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK <> IF
-        S" [Agent: history error]" EXIT
+        S" history error" ASHELL-SEVERITY-ERROR _DAGS! EXIT
     THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME.STATUS @ CASE
-        ARUN-S-IDLE OF S" [Agent: ready]" ENDOF
-        ARUN-S-RUNNING OF S" [Agent: working]" ENDOF
-        ARUN-S-APPROVAL OF S" [Agent: review]" ENDOF
-        ARUN-S-OFFLINE OF S" [Agent: offline]" ENDOF
-        ARUN-S-ERROR OF S" [Agent: error]" ENDOF
-        ARUN-S-CANCELLED OF S" [Agent: cancelled]" ENDOF
-        ARUN-S-EXPIRED OF S" [Agent: expired]" ENDOF
-        S" [Agent: unknown]" ROT
-    ENDCASE ;
+        ARUN-S-IDLE OF S" ready" ASHELL-SEVERITY-NEUTRAL ENDOF
+        ARUN-S-RUNNING OF S" working" ASHELL-SEVERITY-INFO ENDOF
+        ARUN-S-APPROVAL OF
+            USF-F-EMPHASIZED _DAGS-FLAGS +! S" review" ASHELL-SEVERITY-WARNING
+        ENDOF
+        ARUN-S-OFFLINE OF S" offline" ASHELL-SEVERITY-WARNING ENDOF
+        ARUN-S-ERROR OF S" error" ASHELL-SEVERITY-ERROR ENDOF
+        ARUN-S-CANCELLED OF S" cancelled" ASHELL-SEVERITY-NEUTRAL ENDOF
+        ARUN-S-EXPIRED OF S" expired" ASHELL-SEVERITY-WARNING ENDOF
+        >R S" unknown" ASHELL-SEVERITY-WARNING R>
+    ENDCASE _DAGS! ;
+: _DESK-AGENT-STATE ( -- )
+    _DESK-AGENT-VALUE
+    _DAGS-LA @ _DAGS-LU @ GR-SWIDTH 3 + _DAGS-LABEL-W !
+    _DAGS-VA @ _DAGS-VU @ GR-SWIDTH 1+ _DAGS-LABEL-W @ + _DAGS-W !
+    SCR-W _DAGS-W @ - 1- 0 MAX _DAGS-COL ! ;
 
 : _DESK-PAINT-AGENT-STATE  ( -- )
-    _DESK-AGENT-STATE-TEXT _DAS-U ! _DAS-A !
-    SCR-W _DAS-U @ - 1- 0 MAX _DAS-COL !
-    _DAS-COL @ _DTB-COL @ <= IF EXIT THEN
-    _DESK-AGENT-RUNTIME @ ?DUP IF
-        ARUNTIME.STATUS @ ARUN-S-APPROVAL =
-    ELSE
-        0
-    THEN IF
+    _DAGS-COL @ _DTB-COL @ <= IF EXIT THEN
+    _DAGS-FLAGS @ USF-F-EMPHASIZED AND IF
         0 220 1 DRW-STYLE!
     ELSE
         _DTH-CLOCK-FG @ _DTH-CLOCK-BG @ 0 DRW-STYLE!
     THEN
-    _DAS-A @ _DAS-U @ _DTB-ROW @ _DAS-COL @ DRW-TEXT ;
+    0 _DESK-TB-POS !
+    91 _DTB-CH _DAGS-LA @ _DAGS-LU @ _DTB-STR 58 _DTB-CH 32 _DTB-CH
+    _DAGS-VA @ _DAGS-VU @ _DTB-STR 93 _DTB-CH
+    _DESK-TB-BUF _DESK-TB-POS @ _DTB-ROW @ _DAGS-COL @ DRW-TEXT ;
 
 \ =====================================================================
 \ Ordinary immutable shell projection
@@ -2137,6 +2154,22 @@ VARIABLE _DSM-WIDTH
     >R ASHELL-NOTICE-ROOT 2DROP R> _DSM-M @ SHM-NOTICE-TAKE
         0= IF FALSE _DSM-OK ! THEN ;
 
+\ Desk's agent state, while this paint shows it apart from every pane,
+\ goes in the model as a status field, so a renderer can show it as one:
+\ its label's slot is the cells CELL gives "[label: ".  A bank without room
+\ for it grows; a state that cannot be captured stays the cells it paints.
+: _DESK-SHELL-STATUS ( -- )
+    _DSM-M @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND IF EXIT THEN
+    _DAGS-COL @ _DSM-M @ SHM.END-COL @ <= IF EXIT THEN
+    SCR-H 1- _DAGS-COL @ 1 _DAGS-W @ _DSM-M @ SHM-APART-FROM-PANES? 0= IF EXIT THEN
+    _DSM-M @ SHM-STATUS-ROOM 0= IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    >R >R 1 _DAGS-W @ _DAGS-LABEL-W @ _DAGS-SEVERITY @ _DAGS-FLAGS @
+    _DAGS-LA @ _DAGS-LU @ _DAGS-VA @ _DAGS-VU @ R> R> USF-INIT
+    DUP USF-S-CAPACITY = IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    USF-S-OK <> IF DROP EXIT THEN
+    >R SCR-H 1- _DAGS-COL @ R> _DSM-M @ SHM-STATUS-TAKE
+        0= IF FALSE _DSM-OK ! THEN ;
+
 : _DESK-SHELL-BUILD ( -- )
     TRUE _DSM-OK !
     _DSM-M @ SHM-BEGIN 0= IF FALSE _DSM-OK ! EXIT THEN
@@ -2177,6 +2210,8 @@ VARIABLE _DSM-WIDTH
     _DSM-COL @ SCR-W MIN _DSM-M @ SHM.END-COL !
     _DSM-OK @ IF _DESK-SHELL-PROMPT THEN
     _DSM-OK @ IF _DESK-SHELL-NOTICE THEN
+    _DESK-AGENT-STATE
+    _DSM-OK @ IF _DESK-SHELL-STATUS THEN
     _DSM-OK @ IF _DSM-M @ SHM-SEAL THEN ;
 
 VARIABLE _DSG-CELL

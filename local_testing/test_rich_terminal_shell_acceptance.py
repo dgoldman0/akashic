@@ -18,7 +18,7 @@ from rich_terminal.retained_scene import ControlKind, ControlState, ObjectBounds
 from rich_terminal.retained_view import (
     ButtonDraw, DialogDraw,
     DisplayScope, FieldDraw, GlyphRunDraw, PaneDraw, ReadoutDraw, RetainedDrawPlane,
-    RetainedRegionDraw, TabDraw, TabSetDraw, TaskBarDraw, TaskDraw,
+    RetainedRegionDraw, StatusFieldDraw, TabDraw, TabSetDraw, TaskBarDraw, TaskDraw,
     retained_draw_order,
 )
 from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
@@ -695,3 +695,43 @@ def test_a_notice_lies_over_desks_prompt():
 def test_a_notice_lies_clipped_to_itself_above_everything_apart_from_panes(changes,message):
     with pytest.raises(ERROR,match=message):
         _project(_notice_scene(**changes))
+
+
+def _status_scene(*, clip=(8,ROWS-1,4,1), x=8, row=ROWS-1, notice=False):
+    """The two panes and a taskbar over columns 0 to 7, and Desk's status,
+    A: ok, in a region of its own across the rest of the taskbar row; with
+    NOTICE, a notice over columns 1 to 9 above it."""
+    tasks=(TaskDraw(501,ControlKind.TASK,ACTIVE|ControlState.SELECTED,0,ObjectBounds(0,0,3,1),
+                    acceptance.PAD_FOCUS_MARKER),
+           TaskDraw(502,ControlKind.LAUNCHER,ACTIVE,1,ObjectBounds(5,0,3,1),'Apps'))
+    bar=TaskBarDraw(500,ACTIVE,0,0,ObjectBounds(0,ROWS-1,8,1),tasks)
+    base=_scene(bar=bar)
+    regions=[replace(r,clip_cols=8) if r.region_id==2 else r for r in base.retained.regions]
+    status=StatusFieldDraw(710,0,ObjectBounds(x,row,4,1),'A','ok',2)
+    regions.append(_region(30,(status,),z=1,clip=clip))
+    if notice:
+        regions.append(_region(40,(_notice(1,ROWS-1,9),),z=7,clip=(1,ROWS-1,9,1)))
+    return _offer(regions)
+
+
+def test_desks_status_lies_across_the_taskbar_row_past_its_entries():
+    offer=_status_scene()
+    panes,bars,cells,roles=acceptance._shell_scene_geometry(offer.retained,COLS,ROWS)
+    assert roles[30]=='status' and roles[2]=='taskbar'
+    assert {(col,ROWS-1) for col in range(8,12)} <= cells
+    claim,=_project(offer).semantic_status_field_claims
+    assert (claim.label,claim.value,claim.label_cols)==('A','ok',2)
+    assert (claim.left,claim.top,claim.right,claim.bottom)==(8,ROWS-1,12,ROWS)
+    # A notice over it hides part of it and leaves the region a status.
+    assert acceptance._shell_scene_geometry(
+        _status_scene(notice=True).retained,COLS,ROWS)[3][30]=='status'
+
+
+@pytest.mark.parametrize('changes,message',[
+    ({'clip':(8,ROWS-2,4,2)},'taskbar row past its entries'),
+    ({'clip':(8,ROWS-1,3,1),'x':8},'taskbar row past its entries'),
+    ({'clip':(6,ROWS-1,6,1),'x':6},'shell material claims overlap'),
+])
+def test_desks_status_region_must_be_the_taskbar_row_past_its_entries(changes,message):
+    with pytest.raises(ERROR,match=message):
+        _project(_status_scene(**changes))

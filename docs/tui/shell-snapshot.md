@@ -58,15 +58,25 @@ Desk's own prompt, while it holds the hidden taskbar row, ends the model:
 first eight-byte boundary after the text, the padding before it zero. The
 copy admits it only under a hidden taskbar, only as a valid TEXT field one
 row high and as wide as the screen, and only when its bytes are exactly the
-field's and end the model. Without a prompt both header fields are zero.
+field's; only the notice may follow it. Without a prompt both header fields
+are zero.
 
 The app shell's notice, while the paint shows one, follows: `SHM.NOTICE-OFF`
 and `SHM.NOTICE-U` name its UDLG model at the first eight-byte boundary after
 the prompt or the text, the padding before it zero. The copy admits it only
 as a valid UDLG notice, with the `NOTICE` flag, whose root at
 `SHM.NOTICE-ROW` and `SHM.NOTICE-COL` lies inside the screen and apart from
-every pane, and only when its bytes are exactly the model's and end the
-model. Without a notice all four header fields are zero.
+every pane, and only when its bytes are exactly the model's; only Desk's
+status may follow it. Without a notice all four header fields are zero.
+
+Desk's status, while the taskbar shows it, follows: `SHM.STATUS-OFF` and
+`SHM.STATUS-U` name its USF model at the first eight-byte boundary after the
+notice, the prompt or the text, the padding before it zero. The copy admits
+it only with the taskbar shown, only as a valid visible USF whose root, one
+row high at `SHM.STATUS-ROW` and `SHM.STATUS-COL`, lies on the taskbar's row
+past its entries, inside the screen and apart from every pane, and only when
+its bytes are exactly the model's and end the model. Without a status all
+four header fields are zero.
 
 The constructor checks full A/B capacities and descriptor disjointness
 before any mutation. It rejects module scratch, invalid and wrapping spans,
