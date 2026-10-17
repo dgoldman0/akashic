@@ -66,9 +66,13 @@ from rich_terminal_applet_journeys import (
     SMALL_TERMINAL_LARGE_PATH,
     STREAMS_CARDS,
     STREAMS_CONTEXT_MARKER,
+    STREAMS_FEED_PROMPT,
+    STREAMS_FEED_URL,
     STREAMS_LINK,
+    STREAMS_NO_SOURCES,
     STREAMS_REPLY_TEXT,
     STREAMS_ROOT_TEXT,
+    STREAMS_SOURCE_CARD,
     FEXP_PHOTO,
     FEXP_PHOTO_FACTS,
     FEXP_PHOTO_SIZE,
@@ -919,12 +923,96 @@ def test_streams_alone_selects_and_opens_a_reply_through_its_cards() -> None:
         (None, []),
         ("streams-reply-selected", [("item_open", f"1,1,{TIMELINE_ID},2")]),
         (None, []),
-        ("streams-context-opened", []),
+        ("streams-context-opened", [("send_key", "s")]),
+    ]
+    assert journey.stage == StreamsAloneJourney.SOURCES
+
+
+SOURCES_ID = 30_003
+
+
+def _source_cards(*, checked: bool, revision: int):
+    """Streams' one source card, a checkable card checked when CHECKED."""
+
+    fields = list(STREAMS_SOURCE_CARD)
+    fields[1] = fields[1].replace("revision 1", f"revision {revision}")
+    fields[3] = "last never refreshed"
+    state = ItemState.SELECTED | ItemState.CHECKABLE
+    if checked:
+        state |= ItemState.CHECKED
+    item = ViewItem(1, 0, 0, 0, state, ItemRole.ITEM,
+                    tuple(ItemField(text) for text in fields))
+    return acceptance_runner._SemanticItemViewClaim(
+        ControlIdentity(1, 1, SOURCES_ID), 0, 3, COLS, ROWS - 4,
+        ItemViewContent(
+            1, ItemViewRole.CARDS, ItemViewFlag(0),
+            (ItemColumn(ItemColumnKind.TEXT),) * 5, 1, 0, 1, (item,),
+        ),
+    )
+
+
+def _sources_frame(*, cards=None, prompt=None, empty: bool = False):
+    rows = {
+        1: "  STREAMS",
+        2: "  F feed | P page | B auth AT | R refresh | E toggle",
+        ROWS - 1: "[1:Streams*]",
+    }
+    if empty:
+        rows[4] = "  " + STREAMS_NO_SOURCES + ". F feed | P page | B authenticated AT."
+    frame = replace(_screen(rows, ()), semantic_item_view_claims=(cards,) if cards else ())
+    return _held(frame, prompt) if prompt else frame
+
+
+def test_streams_alone_adds_a_source_and_switches_it_off_by_its_check_box() -> None:
+    journey = StreamsAloneJourney(STREAMS_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey.stage = StreamsAloneJourney.SOURCES
+    blank = _cell_offer(1, ())
+    checked = _cell_offer(1, ((3, 1, "[x] Syndication feed"),))
+    unchecked = _cell_offer(1, ((3, 1, "[ ] Syndication feed"),))
+    prompt_row = ROWS - 2
+    steps = (
+        (blank, _sources_frame(empty=True)),
+        (blank, _sources_frame(prompt=_prompt(STREAMS_FEED_PROMPT, "", row=prompt_row))),
+        # The typing has not reached the prompt yet.
+        (blank, _sources_frame(prompt=_prompt(STREAMS_FEED_PROMPT, "", row=prompt_row))),
+        (blank, _sources_frame(
+            prompt=_prompt(STREAMS_FEED_PROMPT, STREAMS_FEED_URL, row=prompt_row))),
+        (checked, _sources_frame(cards=_source_cards(checked=True, revision=1))),
+        # The CHECK has not reached Streams yet.
+        (checked, _sources_frame(cards=_source_cards(checked=True, revision=1))),
+        (unchecked, _sources_frame(cards=_source_cards(checked=False, revision=2))),
+    )
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("streams-sources-empty", [("send_key", "f")]),
+        ("streams-feed-prompt", [("send_text", STREAMS_FEED_URL)]),
+        (None, []),
+        ("streams-feed-typed", [("send_key", "enter")]),
+        ("streams-source-added", [("item_check", f"1,1,{SOURCES_ID},1")]),
+        (None, []),
+        ("streams-source-switched-off", []),
     ]
     assert results[-1][0].complete
     assert journey.final_cell_markers == (
-        "[1:Streams*]", STREAMS_CONTEXT_MARKER, STREAMS_REPLY_TEXT
+        "[1:Streams*]", "[ ] Syndication feed", STREAMS_FEED_URL
     )
+
+
+def test_streams_alone_refuses_a_source_card_that_reads_wrong() -> None:
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    journey = StreamsAloneJourney(STREAMS_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey.stage = StreamsAloneJourney.SOURCE
+    offer = _cell_offer(1, ((3, 1, "[x] Syndication feed"),))
+    off = _sources_frame(cards=_source_cards(checked=False, revision=1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="begin enabled"):
+        journey.after_present(offer, 9, off, sender)
+    later = _sources_frame(cards=_source_cards(checked=True, revision=2))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="new source card reads"):
+        journey.after_present(offer, 9, later, sender)
 
 
 def test_streams_alone_requires_the_link_run_and_a_select_that_stays() -> None:

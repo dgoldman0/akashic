@@ -166,6 +166,28 @@ STREAMS_CARDS = (
     ("kai.test  2026-07-14T10:31:00-04:00", STREAMS_OTHER_TEXT, ""),
 )
 STREAMS_CONTEXT_MARKER = "Retained timeline context (partial)"
+# A feed source the journey adds in Streams' Sources view: its card's
+# fields, enabled at revision 1 and then switched off at revision 2.  The
+# fourth says how its last refresh went, which depends on the refreshes
+# Desk composes, not on the card.
+STREAMS_NO_SOURCES = "No sources configured"
+STREAMS_FEED_PROMPT = "HTTPS feed URL:"
+STREAMS_FEED_URL = "https://example.test/streams/feed.xml"
+STREAMS_SOURCE_CARD = (
+    "Syndication feed",
+    "syndication / auto  revision 1",
+    STREAMS_FEED_URL,
+    "last ",
+    "no retained observations",
+)
+
+
+def _source_card_reads(fields: tuple[str, ...], card: tuple[str, ...]) -> bool:
+    return (
+        len(fields) == len(card)
+        and all(f == c for i, (f, c) in enumerate(zip(fields, card)) if i != 3)
+        and fields[3].startswith(card[3])
+    )
 AGENT_ALONE_FOCUS_MARKER = "[1:Agent*]"
 AGENT_PROMPT_MARKER = "Ask:"
 AGENT_MENU_SIGNATURE = ("Agent", "Run", "Connection", "Access", "Review", "Help")
@@ -2149,7 +2171,8 @@ class DamagedPictureJourney(_AppletJourney):
 
 class StreamsAloneJourney(_AppletJourney):
     """Desk with Streams and a fixed feed: select a reply and open its
-    context, through item events on Streams' cards.
+    context, through item events on Streams' cards, then add a feed source
+    and switch it off through its card's check box.
 
     The timeline is a CARDS item view of three text fields per post: its
     author and time, its text, and "reply" when it replies.  The web link
@@ -2157,18 +2180,88 @@ class StreamsAloneJourney(_AppletJourney):
     card selects it; an OPEN on it opens its context, a second CARDS view
     holding only the thread's two posts with the reply selected.  CELL shows
     the cards throughout.
+
+    S opens the Sources view, empty at first; F asks for a feed's address
+    in a prompt.  The new source is a checkable card, checked because it
+    is enabled; a CHECK on it disables it, at its next revision.
     """
 
     focus_marker = STREAMS_ALONE_FOCUS_MARKER
-    READY, SELECTED, OPENED = range(3)
+    READY, SELECTED, OPENED, SOURCES, PROMPT, TYPED, SOURCE, UNCHECKED = range(8)
 
     @property
     def final_stage(self) -> int:
-        return self.OPENED
+        return self.UNCHECKED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, STREAMS_CONTEXT_MARKER, STREAMS_REPLY_TEXT)
+        return (self.focus_marker, "[ ] Syndication feed", STREAMS_FEED_URL)
+
+    @staticmethod
+    def _sources(projection, bounds):
+        """The Sources view's cards: one checkable card per source."""
+
+        left, top, right, bottom = bounds
+        views = [
+            claim
+            for claim in projection.semantic_item_view_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+            and claim.content.role is ItemViewRole.CARDS
+            and any(item.state & ItemState.CHECKABLE for item in claim.content.items)
+        ]
+        return views[0] if len(views) == 1 else None
+
+    def _source_steps(self, offer, generation, projection, sender, bounds) -> JourneyProgress:
+        prompt = _prompt_claim(projection, STREAMS_FEED_PROMPT, bounds)
+        if self.stage == self.SOURCES:
+            if not _residual_contains(projection, STREAMS_NO_SOURCES, bounds):
+                return self._wait("Streams' empty Sources view")
+            return self._step("streams-sources-empty", "send_key", "f",
+                              self.PROMPT, offer, generation, sender)
+        if self.stage == self.PROMPT:
+            if prompt is None:
+                return self._wait("Streams' feed address prompt")
+            return self._step("streams-feed-prompt", "send_text", STREAMS_FEED_URL,
+                              self.TYPED, offer, generation, sender)
+        if self.stage == self.TYPED:
+            if prompt is None:
+                raise PhysicalDesktopAcceptanceError("Streams' feed prompt closed early")
+            if prompt.content.text != STREAMS_FEED_URL:
+                return self._wait("the typed feed address")
+            return self._step("streams-feed-typed", "send_key", "enter",
+                              self.SOURCE, offer, generation, sender)
+        if prompt is not None:
+            return self._wait("Streams' feed prompt closed")
+        sources = self._sources(projection, bounds)
+        if sources is None:
+            return self._wait("Streams' source cards")
+        (item,) = sources.content.items
+        fields = tuple(field.text for field in item.fields)
+        if self.stage == self.SOURCE:
+            if not _source_card_reads(fields, STREAMS_SOURCE_CARD):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Streams' new source card reads {fields!r}"
+                )
+            if not item.state & ItemState.CHECKED:
+                raise PhysicalDesktopAcceptanceError(
+                    "Streams' new source did not begin enabled"
+                )
+            _require_cell_text_in(offer, "[x] Syndication feed", bounds, _WHERE)
+            return self._step("streams-source-added", "item_check",
+                              sources.value(item.item_key), self.UNCHECKED, offer,
+                              generation, sender)
+        if item.state & ItemState.CHECKED:
+            return self._wait("the source switched off by its check box")
+        switched = (STREAMS_SOURCE_CARD[0],
+                    STREAMS_SOURCE_CARD[1].replace("revision 1", "revision 2"),
+                    *STREAMS_SOURCE_CARD[2:])
+        if not _source_card_reads(fields, switched):
+            raise PhysicalDesktopAcceptanceError(
+                f"Streams' switched-off source card reads {fields!r}"
+            )
+        _require_cell_text_in(offer, "[ ] Syndication feed", bounds, _WHERE)
+        return self._done("streams-source-switched-off", offer)
 
     @staticmethod
     def _cards(projection):
@@ -2228,6 +2321,8 @@ class StreamsAloneJourney(_AppletJourney):
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
+        if self.stage >= self.SOURCES:
+            return self._source_steps(offer, generation, projection, sender, bounds)
         cards = self._cards(projection)
         if cards is None:
             return self._wait("Streams' cards")
@@ -2273,7 +2368,8 @@ class StreamsAloneJourney(_AppletJourney):
                 "the reply is not selected in its context"
             )
         _require_cell_text_in(offer, STREAMS_REPLY_TEXT, bounds, _WHERE)
-        return self._done("streams-context-opened", offer)
+        return self._step("streams-context-opened", "send_key", "s",
+                          self.SOURCES, offer, generation, sender)
 
 
 class AgentAloneJourney(_AppletJourney):

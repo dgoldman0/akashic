@@ -32613,13 +32613,13 @@ def smoke(
             session.send_text(source_url)
             session.send_key("enter")
             if not wait_screen(
-                "[on ] Syndication feed",
+                "Syndication feed",
                 "Desk Streams did not render the newly configured feed source",
                 step_budget=1_200_000_000,
                 wall_timeout=30.0,
             ):
                 return
-            if "[on ]" not in session.snapshot().text():
+            if "[x] Syndication feed" not in session.snapshot().text():
                 journey_errors.append(
                     "new Desk Streams source did not begin enabled"
                 )
@@ -32635,7 +32635,7 @@ def smoke(
                 return
             session.send_key("e")
             if not wait_screen(
-                "[off]",
+                "[ ] Syndication feed",
                 "Desk Streams did not disable the selected exact source revision",
             ):
                 return
@@ -32780,7 +32780,7 @@ def smoke(
                 "relaunched Desk Streams did not recover the configured source",
             ):
                 return
-            if "[off]" not in session.snapshot().text():
+            if "[ ] Syndication feed" not in session.snapshot().text():
                 journey_errors.append(
                     "relaunched Desk Streams lost the source enabled state"
                 )
@@ -35347,12 +35347,18 @@ CREATE _suc-evs 31 ALLOT
     DUP STREAMS-SOURCE-LABEL$ S" Watched page" STR-STR= _suc-assert
     STREAMS-SOURCE-ENDPOINT$ S" https://example.test/page"
         STR-STR= _suc-assert
-    6 _STM-DH ! _STM-SOURCE-ENSURE-VISIBLE
-    _STM-SOURCE-TOP @ 1 = _suc-assert
-    0 _STM-SOURCE-SELECTED ! _STM-SOURCE-ENSURE-VISIBLE
-    _STM-SOURCE-TOP @ 0= _suc-assert
-    1 _STM-SOURCE-SELECTED ! 32 _STM-DH ! _STM-SOURCE-ENSURE-VISIBLE
-    _STM-SOURCE-TOP @ 0= _suc-assert
+    \ Each source is a card: its kind, format and revision on one line,
+    \ and its refresh and latest observation on two more.
+    0 _suc-source _STM-SOURCE-KIND-LINE$
+        S" syndication / auto  revision 1" STR-STR= _suc-assert
+    1 _suc-source _STM-SOURCE-KIND-LINE$
+        S" watched-page / auto  revision 1" STR-STR= _suc-assert
+    0 _suc-source _STM-SOURCE-LATEST-LINE$
+        S" no retained observations" STR-STR= _suc-assert
+    \ A selection past the last source comes back to it.
+    5 _STM-SOURCE-SELECTED ! _STM-SOURCE-CLAMP
+    _STM-SOURCE-SELECTED @ 1 = _suc-assert
+    _STM-SOURCE-SHOWN 2 = _suc-assert
     _suc-scratch-zero? _suc-assert _suc-stack ;
 
 : _suc-test-selection-and-toggle  ( -- )

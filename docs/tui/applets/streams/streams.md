@@ -409,6 +409,15 @@ source reads until an explicit recovery or fresh lifecycle proves safe state.
 Opening Sources preserves the retained feed selection, open context, and draft.
 Returning to Timeline intentionally closes that context while preserving the
 feed selection and draft. Labels and endpoints are rendered as untrusted text.
+The sources are cards on the shared list widget, published as a `CARDS` item
+view: a source's card holds its label, its kind, format and revision, its
+endpoint, its last refresh, and its latest retained title, and carries a
+check box that is checked while the source is enabled. Space, a press on the
+box, or a renderer's `CHECK` event switches that exact source on or off, as
+`E` and Enter do for the selected one. Burrows are cards too: the Burrow, its
+state, collection, scope, profile, peers and services, and its cleanup and
+last result; `G` and `X` act on the selected one. Both lists fill the view
+below its heading and follow the per-instance selection.
 
 Search and draft editing use the shared nonblocking prompt widget, so the applet
 continues to route paint, resize, and close decisions through its ordinary
