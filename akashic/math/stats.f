@@ -470,7 +470,7 @@ VARIABLE _SOL-DELTA2
     _SOL-CTX @ _SOL-M2 !
 
     \ sum += x (48.16 accumulator)
-    _SOL-X32 @ _ACCUM-FP32>FX48
+    _SOL-X32 @ FP32>FX
     _SOL-CTX @ _SOL-SUM @ +
     _SOL-CTX @ _SOL-SUM !
 
@@ -543,7 +543,7 @@ VARIABLE _SPN-NNEW
 
     \ sum accumulator
     _STAT-SRC @ _STAT-N @ SIMD-SUM-N
-    _ACCUM-FP32>FX48
+    FP32>FX
     _SOL-CTX @ _SOL-SUM @ +
     _SOL-CTX @ _SOL-SUM ! ;
 

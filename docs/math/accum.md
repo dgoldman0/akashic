@@ -24,7 +24,6 @@ Auto-loads `fp32.f` via `REQUIRE`.
 - [Extraction](#extraction)
 - [Typical Pipeline](#typical-pipeline)
 - [Precision Budget](#precision-budget)
-- [Internals](#internals)
 - [Quick Reference](#quick-reference)
 
 ---
@@ -148,49 +147,11 @@ ACCUM-CTX ACCUM-GET-FP32       \ final sum as FP32
 | Input data | FP16 | 3.3 digits | ±65504 |
 | Tile reduction | FP32 (hardware) | 7.2 digits | ±3.4 × 10³⁸ |
 | Cross-tile accumulation | 48.16 (integer) | exact | ±1.4 × 10¹⁴ |
-| Final output | FP32 (software) | 7.2 digits | ±3.4 × 10³⁸ |
+| Final output | FP32 (`FX>FP32`, correctly rounded) | 7.2 digits | ±3.4 × 10³⁸ |
 
 The 48.16 integer accumulation eliminates all rounding during the
 most error-sensitive phase — summing hundreds or thousands of FP32
 partial results.
-
----
-
-## Internals
-
-### Conversion Helpers
-
-| Word | Stack | Description |
-|---|---|---|
-| `_ACCUM-FP32>FX48` | `( fp32 -- fx48 )` | FP32 → signed 48.16 integer |
-| `_ACCUM-FX48>FP32` | `( fx48 -- fp32 )` | Signed 48.16 → FP32 (find MSB, pack) |
-
-### FP32 → 48.16 Algorithm
-
-1. Extract sign, exponent (unbias: $e = \text{biased} - 127$), and
-   24-bit mantissa (with implicit 1).
-2. Shift amount = $e - 7$ (places the binary point at bit 16).
-3. If shift ≥ 0: left-shift mantissa.  If shift < 0: right-shift.
-4. Apply sign.
-
-### 48.16 → FP32 Algorithm
-
-1. Take absolute value, record sign.
-2. Find MSB position $p$ (0-based).
-3. Biased exponent = $p + 111$ (accounts for 48.16 → real scaling).
-4. Extract 23-bit mantissa by shifting relative to MSB.
-5. Pack sign, exponent, mantissa.
-
-### Module Variables
-
-| Variable | Purpose |
-|---|---|
-| `_AC-SIGN` | Sign of current FP32 being converted |
-| `_AC-EXP` | Unbiased exponent during conversion |
-| `_AC-MANT` | 24-bit mantissa with implicit 1 |
-| `_AC-F-SIGN` | Sign during FX48 → FP32 conversion |
-| `_AC-F-MAG` | Magnitude during FX48 → FP32 |
-| `_AC-F-MSB` | MSB position during FX48 → FP32 |
 
 ---
 
