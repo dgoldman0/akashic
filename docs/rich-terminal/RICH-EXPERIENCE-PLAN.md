@@ -606,8 +606,17 @@ field widget draws in its panel; in the physical viewer Desk with the Agent
 moves Reasoning with an adjustment and Model with an activation. The
 Worlds valve is an `INTEGER` field over the run's own range; Worlds is in
 no Desktop profile, so a standalone CELL smoke and the Observatory/Worlds
-slice check it. Streams' card lists come next, and need the contract
-first: SEMANTIC-CONTENT-1 lets no `CARDS` item carry a check box.
+slice check it. Streams' sources and Burrows are card lists now, and a
+source's card carries a check box that is checked while the source is
+enabled: SEMANTIC-CONTENT-1 lets a `CARDS` item be `CHECKABLE`, with its
+box on its first row and its first field narrower to make room, and the
+shared list draws, hit-tests and publishes it. In the physical viewer Desk
+with Streams adds a feed source through its prompt and switches it off by
+its card's check box. That check found that Streams' prompt left its paint
+on the status bar's row after closing, which hid the whole Streams document
+from the rich frame; Streams now repaints the status bar, as five other
+applications did. Grid's and Library's prompts still leave that row
+unrepainted; step 7 changes both applications' status and takes it up.
 
 Before part 5 closes, the full Desktop journey also requires the launcher's
 whole-screen modal scope, not only its selection; File Explorer's journey
