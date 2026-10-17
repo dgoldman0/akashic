@@ -135,10 +135,21 @@ POINTER_PLACE_OFFSET = 6
 POINTER_EXTEND_OFFSET = 13
 # With the fixture's row selected, F2 opens File Explorer's rename prompt
 # holding its name.  A drag across the name's stem selects exactly that stem,
-# typing replaces it, and Escape cancels without renaming anything.
+# typing replaces it, and Enter renames the file, which File Explorer keeps
+# selected while its notice, a neutral one, says it was renamed.
 RENAME_PROMPT_LABEL = "Rename:"
 RENAME_STEM, RENAME_SUFFIX = POINTER_LIST_FILE.split(".", 1)
 RENAME_REPLACEMENT = "notes"
+RENAMED_FILE = f"{RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
+RENAMED_PATH = "/" + RENAMED_FILE
+RENAMED_NOTICE = "Renamed"
+# Delete then asks before deleting the renamed file: a confirm question that
+# offers Delete, destructive, beside Cancel, the default.  Desk keeps running
+# while it waits: Alt+1 focuses Pad, Alt+2 brings File Explorer back with its
+# question still open, and its Cancel button answers it.
+CONFIRM_CANCEL = "Cancel"
+FEXPLORER_DELETE_QUESTION = "Delete the selected item?"
+FEXPLORER_DELETE = "Delete"
 # Pad's status bar shows its caret as "Ln L, Col C": L is the caret's item
 # key (its line plus one) and C the characters before it plus one.  The readout must
 # change in the same frame as the caret, whether the mouse or a key moved it.
@@ -225,12 +236,12 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
 DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
 # Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
 # then the pointer journey drives Desk, File Explorer, and Pad by mouse:
-# File Explorer's detail table through item events and its rename prompt
-# (23-30), Pad's editor and caret
-# readout (31-35), and Daybook's calendar wheel (36).  Then typed text that
-# mixes scripts goes into Pad (37-42) and a Daybook task (43-48).  File
-# Explorer then previews the sample document and picture (49-54), and last,
-# Pad opens a Markdown file, highlighted, and follows its link (55-59).
+# File Explorer's detail table through item events, its rename prompt and
+# its delete question (23-34), Pad's editor and caret readout (35-39), and
+# Daybook's calendar wheel (40).  Then typed text that mixes scripts goes
+# into Pad (41-46) and a Daybook task (47-52).  File Explorer then previews
+# the sample document and picture (53-58), and last, Pad opens a Markdown
+# file, highlighted, and follows its link (59-63).
 DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
 DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
 DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
@@ -239,51 +250,58 @@ DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE = 26
 DESKTOP_ACCEPTANCE_RENAME_PLACED_STAGE = 27
 DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE = 28
 DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE = 29
-DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE = 30
-DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 31
-DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 32
-DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 33
-DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 34
-DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 35
-DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE = 36
-# Pad: End and Enter open a line after the selected one (37-38), typing
-# fills it (39), a click lands on the combined accent (40), Right moves over
-# both its scalars (41), and a click lands inside the Hebrew word (42).
-DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE = 37
-DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE = 38
-DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE = 39
-DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE = 40
-DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE = 41
-DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE = 42
-# Daybook: focus and its task prompt (43-44), typing a task (45), a PLACE
-# at a Han character in the prompt's field (46), one character typed there
-# (47), and Enter adds the task (48).
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE = 43
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 44
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 45
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 46
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 47
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 48
-# File Explorer: Alt+2 focuses it (49), a SELECT on the sample document's
-# row selects it (50), and activating the Preview tab shows it as a rich
-# DOCUMENT from its first heading (51); the Details tab brings the table
-# back.  A SELECT on the sample picture's row selects it (52-53), and the
-# Preview tab shows the picture rich over its CELL half blocks (54).  The
+# File Explorer: Enter renames the file (30), and Delete asks its question
+# (31); Alt+1 focuses Pad while it waits (32), Alt+2 returns to it (33), and
+# its Cancel button answers it (34).
+DESKTOP_ACCEPTANCE_RENAMED_STAGE = 30
+DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE = 31
+DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE = 32
+DESKTOP_ACCEPTANCE_DELETE_RETURNED_STAGE = 33
+DESKTOP_ACCEPTANCE_DELETE_CANCELLED_STAGE = 34
+DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 35
+DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 36
+DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 37
+DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 38
+DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 39
+DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE = 40
+# Pad: End and Enter open a line after the selected one (41-42), typing
+# fills it (43), a click lands on the combined accent (44), Right moves over
+# both its scalars (45), and a click lands inside the Hebrew word (46).
+DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE = 41
+DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE = 42
+DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE = 43
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE = 44
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE = 45
+DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE = 46
+# Daybook: focus and its task prompt (47-48), typing a task (49), a PLACE
+# at a Han character in the prompt's field (50), one character typed there
+# (51), and Enter adds the task (52).
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE = 47
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 48
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 49
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 50
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 51
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 52
+# File Explorer: Alt+2 focuses it (53), a SELECT on the sample document's
+# row selects it (54), and activating the Preview tab shows it as a rich
+# DOCUMENT from its first heading (55); the Details tab brings the table
+# back.  A SELECT on the sample picture's row selects it (56-57), and the
+# Preview tab shows the picture rich over its CELL half blocks (58).  The
 # picture stays shown to the end.
-DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 49
-DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 50
-DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 51
-DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 52
-DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 53
-DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 54
-# Pad: Alt+1 focuses it (55), Ctrl+O opens its prompt (56), the notes path is
-# typed (57) and entered (58), and notes.md's style runs are checked before a
-# FOLLOW on its link opens example.f with its own runs (59).
-DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 55
-DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 56
-DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 57
-DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 58
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 59
+DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 53
+DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 54
+DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 55
+DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 56
+DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 57
+DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 58
+# Pad: Alt+1 focuses it (59), Ctrl+O opens its prompt (60), the notes path is
+# typed (61) and entered (62), and notes.md's style runs are checked before a
+# FOLLOW on its link opens example.f with its own runs (63).
+DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 59
+DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 60
+DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 61
+DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 62
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 63
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -3252,6 +3270,20 @@ def _require_tile_prompt(
         raise PhysicalDesktopAcceptanceError(
             f"a status field remains under {owner}'s prompt"
         )
+    _require_others_active(projection, bounds, menu_signature, f"{owner}'s prompt")
+    return prompt
+
+
+def _require_others_active(
+    projection: RichScreenProjection,
+    bounds: tuple[int, int, int, int],
+    menu_signature: tuple[str, ...],
+    overlay: str,
+) -> None:
+    """While OVERLAY, an applet's prompt or dialog over its tile BOUNDS, is
+    open, every other applet's menu bar and every control outside BOUNDS
+    stay active."""
+
     left, top, right, bottom = bounds
     others = [
         identity
@@ -3273,10 +3305,59 @@ def _require_tile_prompt(
                 and top <= claim.top and claim.bottom <= bottom)
     ]
     if any(identity in projection.inactive_controls for identity in others):
+        raise PhysicalDesktopAcceptanceError(f"{overlay} made another applet inactive")
+
+
+def _require_tile_dialog(
+    projection: RichScreenProjection,
+    message: str,
+    tile: int,
+    menu_signature: tuple[str, ...],
+    owner: str,
+) -> _SemanticDialogClaim:
+    """Require OWNER's open dialog saying MESSAGE in its Desk tile, modal
+    for OWNER alone: OWNER stays rich beneath it and inactive, and every
+    other applet stays active."""
+
+    bounds = _desktop_tile_bounds(projection, tile)
+    dialog = _dialog_claim(projection, message, bounds)
+    if dialog is None:
         raise PhysicalDesktopAcceptanceError(
-            f"{owner}'s prompt made another applet inactive"
+            f"{owner}'s dialog {message!r} is not inside its Desk tile"
         )
-    return prompt
+    _require_held_beneath_overlay(projection, dialog, bounds, menu_signature, owner)
+    _require_others_active(projection, bounds, menu_signature, f"{owner}'s dialog")
+    return dialog
+
+
+def _cancel_of_confirm(offer, projection, dialog, bounds, verb, menu_signature,
+                       owner, where) -> str:
+    """The value that presses Cancel on DIALOG, OWNER's confirm question in
+    BOUNDS, which WHERE names.
+
+    OWNER stays rich and inactive beneath it; it offers exactly VERB,
+    destructive and never the default, and Cancel, the default cancel
+    button; and CELL shows its question."""
+
+    _require_held_beneath_overlay(projection, dialog, bounds, menu_signature, owner)
+    chosen = dialog.button(verb)
+    cancel = dialog.button(CONFIRM_CANCEL)
+    if chosen is None or cancel is None or len(dialog.buttons) != 2:
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s question does not offer exactly {verb} and Cancel: "
+            f"{[button.label for button in dialog.buttons]!r}"
+        )
+    if not chosen.content.destructive or chosen.content.default:
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s {verb} is not destructive, or is the default"
+        )
+    if not (cancel.content.default and cancel.content.cancel):
+        raise PhysicalDesktopAcceptanceError(
+            f"{owner}'s Cancel is not the default cancel button"
+        )
+    _require_cell_text_in(offer, dialog.content.lines[0], bounds, where)
+    identity = cancel.identity
+    return f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
 
 
 def _daybook_dates(projection: RichScreenProjection) -> tuple[str, ...]:
@@ -8696,6 +8777,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._mixed_daybook_text: str | None = None
         self._picture_shown = False
         self._followed_text: str | None = None
+        self._renamed = False
 
     @property
     def final_stage(self) -> int:
@@ -9410,8 +9492,11 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         moves its detail table three rows, and a SELECT on the fixture's row
         selects it, which shows its path and preview.  F2 opens the rename
         prompt; a drag across the name's stem selects it, typing replaces it,
-        and Escape cancels.  An OPEN on the row opens the file in Pad, where
-        one detent scrolls three
+        and Enter renames the file, which stays selected while File
+        Explorer's notice says so.  Delete asks before deleting it; while the
+        question waits Alt+1 focuses Pad and Alt+2 comes back, and the
+        question's Cancel button answers it.  An OPEN on the row opens the
+        renamed file in Pad, where one detent scrolls three
         lines, a press places the caret, a drag extends the selection, and a
         Right key moves the caret; Pad's Ln/Col readout follows in each frame
         that moves the caret.  Last, one wheel step over Daybook's calendar
@@ -9428,6 +9513,18 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             _require_tile_prompt(
                 projection,
                 RENAME_PROMPT_LABEL,
+                FEXPLORER_DESKTOP_TILE,
+                FEXPLORER_MENU_SIGNATURE,
+                "File Explorer",
+            )
+        fexplorer_bounds = _desktop_tile_bounds(projection, FEXPLORER_DESKTOP_TILE)
+        delete = _dialog_claim(projection, FEXPLORER_DELETE_QUESTION, fexplorer_bounds)
+        if delete is not None:
+            # The question holds File Explorer alone modal, whichever applet
+            # has focus.
+            _require_tile_dialog(
+                projection,
+                FEXPLORER_DELETE_QUESTION,
                 FEXPLORER_DESKTOP_TILE,
                 FEXPLORER_MENU_SIGNATURE,
                 "File Explorer",
@@ -9518,7 +9615,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 sender,
             )
             return JourneyProgress(milestone)
-        renamed = f"{RENAME_REPLACEMENT}.{RENAME_SUFFIX}"
+        renamed = RENAMED_FILE
         if self.stage == DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE:
             if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
@@ -9613,42 +9710,137 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             milestone = self._milestone("fexplorer-rename-stem-replaced")
             self._send(
                 "send_key",
-                "escape",
-                DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE,
+                "enter",
+                DESKTOP_ACCEPTANCE_RENAMED_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
-        if self.stage == DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE:
+        if self.stage == DESKTOP_ACCEPTANCE_RENAMED_STAGE:
             if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
                 raise PhysicalDesktopAcceptanceError(
-                    "cancelling the rename moved focus away from File Explorer"
+                    "renaming the file moved focus away from File Explorer"
                 )
+            if not self._renamed:
+                notice = _notice_claim(projection, RENAMED_NOTICE)
+                if notice is not None:
+                    _require_notice(offer, notice, StatusSeverity.NEUTRAL)
+                    self._renamed = True
             if rename is not None or not _fexplorer_selected_path_is(
-                projection, POINTER_LIST_PATH
+                projection, RENAMED_PATH
             ):
                 return JourneyProgress()
-            if _residual_tile_contains(
-                projection,
-                f"{RENAME_REPLACEMENT}.{RENAME_SUFFIX}",
-                FEXPLORER_DESKTOP_TILE,
-            ):
-                raise PhysicalDesktopAcceptanceError(
-                    "cancelling the rename prompt renamed the file"
-                )
             table = _fexplorer_table_claim(projection)
-            row = None if table is None else table.named(POINTER_LIST_FILE)
+            row = None if table is None else table.named(RENAMED_FILE)
             if row is None:
                 return JourneyProgress()
+            if table.named(POINTER_LIST_FILE) is not None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer still lists {POINTER_LIST_FILE} after renaming it"
+                )
             if not row.state & ItemState.SELECTED:
                 raise PhysicalDesktopAcceptanceError(
-                    "cancelling the rename moved the table's selection"
+                    "File Explorer did not keep the renamed file selected"
+                )
+            if not self._renamed:
+                return JourneyProgress()
+            milestone = self._milestone("fexplorer-renamed")
+            self._send(
+                "send_key",
+                "delete",
+                DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage in (
+            DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE,
+            DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE,
+            DESKTOP_ACCEPTANCE_DELETE_RETURNED_STAGE,
+        ):
+            # Desk keeps running while the question waits: focus leaves File
+            # Explorer and comes back, and the question stays open throughout.
+            waiting = self.stage == DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE
+            focus = PAD_FOCUS_MARKER if waiting else FEXPLORER_FOCUS_MARKER
+            if not _taskbar_has_focus(projection, focus, legacy_row=True):
+                if self.stage == DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE:
+                    raise PhysicalDesktopAcceptanceError(
+                        "File Explorer lost focus before its delete question"
+                    )
+                return JourneyProgress()
+            if delete is None:
+                if self.stage == DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE:
+                    return JourneyProgress()
+                raise PhysicalDesktopAcceptanceError(
+                    "File Explorer's delete question closed while it waited"
+                )
+            if self.stage == DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE:
+                _cancel_of_confirm(
+                    offer, projection, delete, fexplorer_bounds, FEXPLORER_DELETE,
+                    FEXPLORER_MENU_SIGNATURE, "File Explorer", "File Explorer's tile",
+                )
+                milestone = self._milestone("fexplorer-delete-asked")
+                self._send(
+                    "send_key",
+                    "alt+1",
+                    DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE,
+                    offer,
+                    generation,
+                    sender,
+                )
+                return JourneyProgress(milestone)
+            if waiting:
+                milestone = self._milestone("pad-focused-while-asked")
+                self._send(
+                    "send_key",
+                    "alt+2",
+                    DESKTOP_ACCEPTANCE_DELETE_RETURNED_STAGE,
+                    offer,
+                    generation,
+                    sender,
+                )
+                return JourneyProgress(milestone)
+            value = _cancel_of_confirm(
+                offer, projection, delete, fexplorer_bounds, FEXPLORER_DELETE,
+                FEXPLORER_MENU_SIGNATURE, "File Explorer", "File Explorer's tile",
+            )
+            milestone = self._milestone("fexplorer-delete-returned")
+            self._send(
+                "activate_button",
+                value,
+                DESKTOP_ACCEPTANCE_DELETE_CANCELLED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_DELETE_CANCELLED_STAGE:
+            if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
+                raise PhysicalDesktopAcceptanceError(
+                    "cancelling the delete question moved focus away from File Explorer"
+                )
+            if delete is not None or not _fexplorer_selected_path_is(
+                projection, RENAMED_PATH
+            ):
+                return JourneyProgress()
+            table = _fexplorer_table_claim(projection)
+            if table is None:
+                return JourneyProgress()
+            row = table.named(RENAMED_FILE)
+            if row is None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"cancelling the delete question deleted {RENAMED_FILE}"
+                )
+            if not row.state & ItemState.SELECTED:
+                raise PhysicalDesktopAcceptanceError(
+                    "cancelling the delete question moved the table's selection"
                 )
             self._pad_tabset_before_pointer_open = _tabset_state(
                 _canonical_pad_tabset_claim(projection)
             )
-            milestone = self._milestone("fexplorer-rename-cancelled")
+            milestone = self._milestone("fexplorer-delete-cancelled")
             self._send(
                 "item_open",
                 table.value(row.item_key),
@@ -9671,10 +9863,10 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 or tabset.bounds != before.bounds
                 or tabset.tabs[:-1] != before.tabs
                 or tabset.selected != tabset.tabs[-1]
-                or POINTER_LIST_PATH not in tabset.selected[1]
+                or RENAMED_PATH not in tabset.selected[1]
             ):
                 raise PhysicalDesktopAcceptanceError(
-                    "opening the clicked file did not append and select one "
+                    "opening the renamed file did not append and select one "
                     "Pad tab for it"
                 )
             state = _text_area_pointer_state(claim)

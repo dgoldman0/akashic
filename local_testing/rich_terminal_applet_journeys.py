@@ -32,6 +32,8 @@ import styled_text
 from rich_terminal_desktop_acceptance import (
     DAYBOOK_MENU_SIGNATURE,
     DAYBOOK_PROMPT_MARKER,
+    FEXPLORER_DELETE,
+    FEXPLORER_DELETE_QUESTION,
     FEXPLORER_MENU_SIGNATURE,
     FEXPLORER_PICTURE,
     FEXPLORER_PICTURE_FACTS,
@@ -41,6 +43,7 @@ from rich_terminal_desktop_acceptance import (
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
     _claim_item_runs,
+    _cancel_of_confirm,
     _claim_item_text,
     _collection_claims_in,
     _desk_content_bounds,
@@ -67,12 +70,9 @@ PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
 # A confirm question offers its verb, destructive, beside Cancel, the
 # default; the journeys answer Cancel.  Ctrl+W on Pad's edited buffer asks
 # before discarding it, and Delete in File Explorer before deleting the
-# selected item.
-CONFIRM_CANCEL = "Cancel"
+# selected item, as in the full Desktop journey.
 PAD_CLOSE_QUESTION = "Discard unsaved changes?"
 PAD_CLOSE_DISCARD = "Discard"
-FEXP_DELETE_QUESTION = "Delete the selected item?"
-FEXP_DELETE = "Delete"
 DAYBOOK_DELETE_QUESTION = "Delete the selected automation?"
 DAYBOOK_DELETE = "Delete"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
@@ -281,35 +281,6 @@ def _status_shows(projection: RichScreenProjection, marker: str, bounds) -> bool
         marker in claim.label or marker in claim.value
         for claim in _status_field_claims_in(projection, bounds)
     )
-
-
-def _cancel_of_confirm(offer, projection, dialog, bounds, verb, menu_signature,
-                       owner) -> str:
-    """The value that presses Cancel on DIALOG, OWNER's confirm question.
-
-    OWNER stays rich and inactive beneath it; it offers exactly VERB,
-    destructive and never the default, and Cancel, the default cancel
-    button; and CELL shows its question."""
-
-    _require_held_beneath_overlay(projection, dialog, bounds, menu_signature, owner)
-    chosen = dialog.button(verb)
-    cancel = dialog.button(CONFIRM_CANCEL)
-    if chosen is None or cancel is None or len(dialog.buttons) != 2:
-        raise PhysicalDesktopAcceptanceError(
-            f"{owner}'s question does not offer exactly {verb} and Cancel: "
-            f"{[button.label for button in dialog.buttons]!r}"
-        )
-    if not chosen.content.destructive or chosen.content.default:
-        raise PhysicalDesktopAcceptanceError(
-            f"{owner}'s {verb} is not destructive, or is the default"
-        )
-    if not (cancel.content.default and cancel.content.cancel):
-        raise PhysicalDesktopAcceptanceError(
-            f"{owner}'s Cancel is not the default cancel button"
-        )
-    _require_cell_text_in(offer, dialog.content.lines[0], bounds, _WHERE)
-    identity = cancel.identity
-    return f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
 
 
 class _AppletJourney(FrameBoundJourney):
@@ -601,7 +572,7 @@ class PadAloneJourney(_AppletJourney):
             if dialog is None:
                 return self._wait("Pad's question after Ctrl+W")
             value = _cancel_of_confirm(offer, projection, dialog, bounds, PAD_CLOSE_DISCARD,
-                                       PAD_MENU_SIGNATURE, "Pad")
+                                       PAD_MENU_SIGNATURE, "Pad", _WHERE)
             return self._step("pad-close-question-shown", "activate_button", value,
                               self.CLOSE_CANCELLED, offer, generation, sender)
         if dialog is not None:
@@ -912,7 +883,7 @@ class DaybookAloneJourney(_AppletJourney):
             if dialog is None:
                 return self._wait("Daybook's question after Delete")
             value = _cancel_of_confirm(offer, projection, dialog, bounds, DAYBOOK_DELETE,
-                                       DAYBOOK_MENU_SIGNATURE, "Daybook")
+                                       DAYBOOK_MENU_SIGNATURE, "Daybook", _WHERE)
             return self._step("daybook-delete-question-shown", "activate_button", value,
                               self.DELETE_CANCELLED, offer, generation, sender)
         if dialog is not None:
@@ -1705,12 +1676,12 @@ class FexpAloneJourney(_AppletJourney):
             # The question may cover the detail table, which the capture
             # then withholds until it closes.
             bounds = _desk_content_bounds(projection)
-            delete = _dialog_claim(projection, FEXP_DELETE_QUESTION, bounds)
+            delete = _dialog_claim(projection, FEXPLORER_DELETE_QUESTION, bounds)
             if self.stage == self.DELETE_ASKED:
                 if delete is None:
                     return self._wait("File Explorer's question after Delete")
-                value = _cancel_of_confirm(offer, projection, delete, bounds, FEXP_DELETE,
-                                           FEXPLORER_MENU_SIGNATURE, "File Explorer")
+                value = _cancel_of_confirm(offer, projection, delete, bounds, FEXPLORER_DELETE,
+                                           FEXPLORER_MENU_SIGNATURE, "File Explorer", _WHERE)
                 return self._step("fexp-delete-question-shown", "activate_button", value,
                                   self.DELETE_CANCELLED, offer, generation, sender)
             if delete is not None:

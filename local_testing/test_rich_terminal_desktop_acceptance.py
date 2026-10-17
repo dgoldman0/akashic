@@ -1583,6 +1583,23 @@ def _with_tile_prompt(
         ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED,
         content, modal=True,
     )
+    return replace(
+        projection,
+        semantic_field_claims=projection.semantic_field_claims + (prompt,),
+        inactive_controls=projection.inactive_controls
+        | _tile_held(projection, tile, menu_signature),
+    )
+
+
+def _tile_held(
+    projection: RichScreenProjection,
+    tile: int,
+    menu_signature: tuple[str, ...],
+) -> frozenset[ControlIdentity]:
+    """The applet's menu bar and every control in TILE: what its prompt or
+    dialog holds inactive beneath it."""
+
+    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(projection, tile)
     inactive = {
         projection.menu_bar_identities[projection.menu_signatures.index(menu_signature)]
     }
@@ -1599,11 +1616,67 @@ def _with_tile_prompt(
             if left <= claim.left and claim.right <= right
             and top <= claim.top and claim.bottom <= bottom
         )
+    return frozenset(inactive)
+
+
+QUESTION_ID = 59_100
+QUESTION_ROW, QUESTION_COL = 16, 101
+DELETE_BUTTONS = (
+    (acceptance_runner.FEXPLORER_DELETE, ButtonFlag.DESTRUCTIVE),
+    (acceptance_runner.CONFIRM_CANCEL, ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
+)
+
+
+def _with_tile_question(
+    projection: RichScreenProjection,
+    message: str,
+    buttons: tuple[tuple[str, ButtonFlag], ...],
+    tile: int,
+    menu_signature: tuple[str, ...],
+) -> RichScreenProjection:
+    """PROJECTION with an applet's question open in TILE: MESSAGE on one
+    line from QUESTION_ROW, QUESTION_COL, then BUTTONS, each (label, flags),
+    along its last row, in a modal region, with the applet's menu bar and
+    every control in the tile inactive beneath it."""
+
+    col, row = QUESTION_COL, QUESTION_ROW
+    width = max(len(message) + 4, 12 * len(buttons) + 4)
+    content = DialogContent(1, DialogFlag(0), 3, FieldRect(2, 0, 7, 1),
+                            FieldRect(2, 2, len(message), 1), message=message)
+    state = ControlState.VISIBLE | ControlState.ENABLED
+    claims = tuple(
+        acceptance_runner._SemanticButtonClaim(
+            ControlIdentity(1, 1, QUESTION_ID + 1 + index),
+            col + 2 + 12 * index, row + 4, col + 12 + 12 * index, row + 5, label,
+            state | (ControlState.SELECTED if flags & ButtonFlag.DEFAULT else 0),
+            ButtonContent(flags),
+        )
+        for index, (label, flags) in enumerate(buttons)
+    )
+    dialog = acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, QUESTION_ID), col, row, col + width, row + 6, "Confirm",
+        ControlState.VISIBLE, content, modal=True, buttons=claims,
+    )
     return replace(
         projection,
-        semantic_field_claims=projection.semantic_field_claims + (prompt,),
-        inactive_controls=projection.inactive_controls | frozenset(inactive),
+        semantic_dialog_claims=projection.semantic_dialog_claims + (dialog,),
+        inactive_controls=projection.inactive_controls
+        | _tile_held(projection, tile, menu_signature),
     )
+
+
+def _desk_notice(message: str, severity: StatusSeverity = StatusSeverity.NEUTRAL):
+    """The app shell's notice saying MESSAGE, centred on the bottom row, its
+    bar four cells wider than its text."""
+
+    cols, rows = acceptance_runner.CANONICAL_DESKTOP_COLS, acceptance_runner.CANONICAL_DESKTOP_ROWS
+    width = len(message) + 4
+    left = (cols - width) // 2
+    content = DialogContent(1, DialogFlag.NOTICE, severity, FieldRect(0, 0, 0, 0),
+                            FieldRect(2, 0, len(message), 1), message=message)
+    return acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, 40_000), left, rows - 1, left + width, rows, "",
+        ControlState.VISIBLE, content)
 
 
 def _daybook_prompt_projection(
@@ -6158,14 +6231,15 @@ def _fexplorer_table(
     first: int,
     selected: int | None,
     picture: int = FEXPLORER_PICTURE_ORDINAL,
+    large: str = "large.txt",
 ) -> acceptance_runner._SemanticItemViewClaim:
     """File Explorer's detail table showing rows FIRST onward, with SELECTED
-    the key of the selected row, carried wherever it is, and the sample
-    picture at ordinal PICTURE."""
+    the key of the selected row, carried wherever it is, the sample picture
+    at ordinal PICTURE, and the large fixture named LARGE."""
 
     def name(ordinal: int) -> str:
         if ordinal == FEXPLORER_LARGE_ORDINAL:
-            return "large.txt"
+            return large
         if ordinal == picture:
             return acceptance_runner.FEXPLORER_PICTURE
         if ordinal == FEXPLORER_DOCUMENT_ORDINAL:
@@ -6231,14 +6305,20 @@ def _pointer_frame(
     pad_revision: int = 10,
     pad_tabs: tuple[str, ...] = ("Untitled*", "/daybook.md"),
     pad_lines: tuple[str, ...] = POINTER_FIXTURE_LINES,
+    large: str = "large.txt",
+    notice: str | None = None,
+    question: bool = False,
 ) -> RichScreenProjection:
     """A launched-Sound-Lab Desktop frame during the pointer journey.
 
     ``table`` is File Explorer's detail table as (first shown row,
-    selected key).  ``prompt`` is the text of File Explorer's rename prompt,
-    a TEXT field in a modal region over its tile with the caret at
-    ``prompt_caret`` and the anchor at ``prompt_anchor``; File Explorer stays
-    rich and inactive beneath it.  Pad's caret readout uses the ordinary
+    selected key), its large fixture named ``large``.  ``prompt`` is the
+    text of File Explorer's rename prompt, a TEXT field in a modal region
+    over its tile with the caret at ``prompt_caret`` and the anchor at
+    ``prompt_anchor``; ``question`` opens its delete question there instead.
+    File Explorer stays rich and inactive beneath either.  ``notice`` is the
+    app shell's neutral notice on the bottom row.  Pad's caret readout uses
+    the ordinary
     menu/body/status layout's row 39; row 40 is unused content, and row 41
     is the horizontal Desk divider.
     """
@@ -6289,7 +6369,7 @@ def _pointer_frame(
         claims.append(claim)
     item_views = ()
     if table is not None:
-        item_views = (_fexplorer_table(*table),)
+        item_views = (_fexplorer_table(*table, large=large),)
     projection = replace(
         projection,
         lines=tuple(lines),
@@ -6318,10 +6398,23 @@ def _pointer_frame(
             anchor=prompt_anchor,
             control=prompt_control,
         )
+    if question:
+        projection = _with_tile_question(
+            projection,
+            acceptance_runner.FEXPLORER_DELETE_QUESTION,
+            DELETE_BUTTONS,
+            acceptance_runner.FEXPLORER_DESKTOP_TILE,
+            acceptance_runner.FEXPLORER_MENU_SIGNATURE,
+        )
+    if notice is not None:
+        projection = replace(
+            projection,
+            semantic_dialog_claims=projection.semantic_dialog_claims + (_desk_notice(notice),),
+        )
     return projection
 
 
-LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/large.txt")
+LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/notes.txt")
 
 
 @pytest.mark.parametrize("semantic_status", [False, True])
@@ -6342,7 +6435,13 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
 
     fe, pad = FEXPLORER_BUTTON, PAD_BUTTON
     tabs = {"pad_tabs": LARGE_PAD_TABS}
+    renamed = {"table": (3, 11), "status": "/notes.txt", "large": "notes.txt"}
+    noticed = ((83, 136, "Renamed"),)
+    asked = ((QUESTION_ROW + 2, QUESTION_COL + 2,
+              acceptance_runner.FEXPLORER_DELETE_QUESTION),)
     week_later = "2026-09-10"
+    # Each step is a frame, the milestone it reaches and the input it sends,
+    # and, where the journey reads CELL, what CELL shows.
     steps = (
         (
             build_frame(fe, table=(0, None)),
@@ -6393,12 +6492,45 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
         (
             build_frame(fe, table=(3, 11), prompt="notes.txt"),
             "fexplorer-rename-stem-replaced",
-            ("send_key", "escape"),
+            ("send_key", "enter"),
         ),
         (build_frame(fe, table=(3, 11), prompt="notes.txt"), None, None),
+        # The renamed file stays selected; the journey waits for the notice
+        # that says so.
+        (build_frame(fe, **renamed), None, None),
         (
-            build_frame(fe, table=(3, 11), status="/large.txt"),
-            "fexplorer-rename-cancelled",
+            build_frame(fe, notice="Renamed", **renamed),
+            "fexplorer-renamed",
+            ("send_key", "delete"),
+            noticed,
+        ),
+        (build_frame(fe, **renamed), None, None),
+        (
+            build_frame(fe, question=True, **renamed),
+            "fexplorer-delete-asked",
+            ("send_key", "alt+1"),
+            asked,
+        ),
+        # Desk keeps running while the question waits: Pad takes focus, and
+        # File Explorer's question stays open and holds it alone.
+        (build_frame(fe, question=True, **renamed), None, None, asked),
+        (
+            build_frame(pad, question=True, **renamed),
+            "pad-focused-while-asked",
+            ("send_key", "alt+2"),
+            asked,
+        ),
+        (build_frame(pad, question=True, **renamed), None, None, asked),
+        (
+            build_frame(fe, question=True, **renamed),
+            "fexplorer-delete-returned",
+            ("activate_button", f"1,1,{QUESTION_ID + 2}"),
+            asked,
+        ),
+        (build_frame(fe, question=True, **renamed), None, None, asked),
+        (
+            build_frame(fe, **renamed),
+            "fexplorer-delete-cancelled",
             ("item_open", _table_value(11)),
         ),
         # Loaded text puts the caret at its end, so Pad opens at the bottom
@@ -6448,11 +6580,12 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
             None,
         ),
     )
-    for index, (frame, milestone, action) in enumerate(steps):
+    for index, (frame, milestone, action, *cells) in enumerate(steps):
         offer_id = 101 + index
         sent_before = len(actions)
         progress = journey.after_present(
-            _offer("X", offer_id=offer_id, pad_menu=True),
+            _cell_offer(offer_id, cells[0]) if cells
+            else _offer("X", offer_id=offer_id, pad_menu=True),
             9,
             frame,
             sender,
@@ -7258,6 +7391,15 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
         )
 
 
+RENAMED_FRAME = {"table": (3, 11), "status": "/notes.txt", "large": "notes.txt"}
+
+
+def _also_inactive(projection: RichScreenProjection, identity: ControlIdentity):
+    """PROJECTION with IDENTITY's control inactive too."""
+
+    return replace(projection, inactive_controls=projection.inactive_controls | {identity})
+
+
 @pytest.mark.parametrize(
     ("stage", "setup", "frame", "message"),
     (
@@ -7397,15 +7539,61 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
             lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), status="/large.txt"),
             "closed during the rename",
         ),
+        # The rename lost the file's selection, or its notice means more
+        # than a rename.
         (
-            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE,
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAMED_STAGE,
+            {"_renamed": True},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, None),
+                                   status="/notes.txt", large="notes.txt"),
+            "keep the renamed file selected",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAMED_STAGE,
             {},
-            lambda: _pointer_frame(
-                FEXPLORER_BUTTON,
-                status="/large.txt",
-                extra=((12, 100, "notes.txt"),),
+            lambda: replace(
+                _pointer_frame(FEXPLORER_BUTTON, **RENAMED_FRAME),
+                semantic_dialog_claims=(_desk_notice("Renamed", StatusSeverity.WARNING),),
             ),
-            "renamed the file",
+            "means WARNING, not NEUTRAL",
+        ),
+        # Delete must be destructive.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE,
+            {},
+            lambda: _with_tile_question(
+                _pointer_frame(FEXPLORER_BUTTON, **RENAMED_FRAME),
+                acceptance_runner.FEXPLORER_DELETE_QUESTION,
+                ((acceptance_runner.FEXPLORER_DELETE, ButtonFlag(0)),
+                 (acceptance_runner.CONFIRM_CANCEL, ButtonFlag.DEFAULT | ButtonFlag.CANCEL)),
+                acceptance_runner.FEXPLORER_DESKTOP_TILE,
+                acceptance_runner.FEXPLORER_MENU_SIGNATURE,
+            ),
+            "is not destructive, or is the default",
+        ),
+        # While the question waits, it holds File Explorer alone: Pad, with
+        # focus, stays active, and the question stays open.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE,
+            {},
+            lambda: _also_inactive(
+                _pointer_frame(PAD_BUTTON, question=True, **RENAMED_FRAME),
+                ControlIdentity(1, 1, 20_000),
+            ),
+            "dialog made another applet inactive",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE,
+            {},
+            lambda: _pointer_frame(PAD_BUTTON, **RENAMED_FRAME),
+            "closed while it waited",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_CANCELLED_STAGE,
+            {},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11),
+                                   status="/notes.txt", large="other.txt"),
+            "deleted notes.txt",
         ),
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE,
