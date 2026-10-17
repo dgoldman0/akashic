@@ -2239,6 +2239,11 @@ class StreamsAloneJourney(_AppletJourney):
         (item,) = sources.content.items
         fields = tuple(field.text for field in item.fields)
         if self.stage == self.SOURCE:
+            # The status bar repaints the row the closed prompt covered.
+            if offer.cell.find(STREAMS_FEED_PROMPT):
+                raise PhysicalDesktopAcceptanceError(
+                    "CELL kept Streams' closed feed prompt"
+                )
             if not _source_card_reads(fields, STREAMS_SOURCE_CARD):
                 raise PhysicalDesktopAcceptanceError(
                     f"Streams' new source card reads {fields!r}"

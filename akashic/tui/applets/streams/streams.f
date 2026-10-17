@@ -2490,7 +2490,11 @@ VARIABLE _STM-ACTOR-SET-STATUS
     THEN
     1900 ASHELL-TOAST ;
 
+\ The prompt painted over the status bar's row and has just gone inactive.
+\ The status bar repaints that whole row, or its cells would keep the
+\ prompt's paint, in CELL and as foreground over the document.
 : _STM-PROMPT-SUBMIT  ( prompt -- )
+    _STM-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     DUP PRM-GET-TEXT _STM-SUB-U ! _STM-SUB-A !
     _STM-PROMPT-MODE @ _STM-SUB-MODE !
     _STM-PM-NONE _STM-PROMPT-MODE !
@@ -2537,6 +2541,7 @@ VARIABLE _STM-ACTOR-SET-STATUS
     _STM-INVALIDATE ;
 
 : _STM-PROMPT-CANCEL  ( prompt -- )
+    _STM-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     PRM-WIPE _STM-PM-NONE _STM-PROMPT-MODE !
     _STM-SOURCE-PENDING-WIPE _STM-SOURCE-UI-SCRATCH-WIPE
     _STM-E-BODY @ ?DUP IF UTUI-FOCUS! THEN

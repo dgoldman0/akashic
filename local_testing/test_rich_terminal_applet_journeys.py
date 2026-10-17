@@ -1013,6 +1013,11 @@ def test_streams_alone_refuses_a_source_card_that_reads_wrong() -> None:
     later = _sources_frame(cards=_source_cards(checked=True, revision=2))
     with pytest.raises(PhysicalDesktopAcceptanceError, match="new source card reads"):
         journey.after_present(offer, 9, later, sender)
+    stale = _cell_offer(1, ((3, 1, "[x] Syndication feed"),
+                            (ROWS - 2, 1, STREAMS_FEED_PROMPT + " " + STREAMS_FEED_URL)))
+    added = _sources_frame(cards=_source_cards(checked=True, revision=1))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="closed feed prompt"):
+        journey.after_present(stale, 9, added, sender)
 
 
 def test_streams_alone_requires_the_link_run_and_a_select_that_stays() -> None:
