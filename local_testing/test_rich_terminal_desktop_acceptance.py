@@ -6203,17 +6203,32 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         assert progress.milestone == milestone, offer_id
         if action is not None:
             assert actions.pop() == (*action, offer_id, 9)
-    set_projection = replace(
+    rendered = replace(
         soundlab_projection,
-        semantic_field_claims=_soundlab_field_claims(880),
+        semantic_field_claims=soundlab_projection.semantic_field_claims[:-4]
+        + _soundlab_field_claims(880),
+    )
+    # The new setting leaves the analysis stale: Sound Lab withdraws its
+    # readouts and meters until F5 renders it again.
+    stale = replace(
+        rendered,
+        instrument_cell_count=3,
+        instrument_claims=tuple(claim for claim in rendered.instrument_claims
+                                if claim.kind == "STATUS"),
     )
     progress = journey.after_present(
-        _offer("X", offer_id=5200, pad_menu=True),
-        9,
-        set_projection,
-        sender,
+        _offer("X", offer_id=5200, pad_menu=True), 9, stale, sender,
     )
     assert progress.milestone == "soundlab-frequency-set"
+    assert actions.pop() == ("send_key", "f5", 5200, 9)
+    progress = journey.after_present(
+        _offer("X", offer_id=5201, pad_menu=True), 9, stale, sender,
+    )
+    assert progress == acceptance_runner.JourneyProgress()
+    progress = journey.after_present(
+        _offer("X", offer_id=5300, pad_menu=True), 9, rendered, sender,
+    )
+    assert progress.milestone == "soundlab-rerendered"
     assert (
         journey.stage
         == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
@@ -6221,7 +6236,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     # A click inside the taskbar's File Explorer button starts the pointer
     # journey, which its own test follows to completion.
     button = TEST_TASKBAR.index(acceptance_runner.FEXPLORER_TASKBAR_BUTTON)
-    assert actions.pop() == ("pointer_click", f"{button + 1},83", 5200, 9)
+    assert actions.pop() == ("pointer_click", f"{button + 1},83", 5300, 9)
     assert actions[-7:] == [
         ("send_key", "alt+2", 35, 9),
         ("activate_ordinary_menu", "fexplorer-view", 3701, 9),
@@ -7740,6 +7755,10 @@ def test_pointer_journey_refuses_wrong_results(stage, setup, frame, message) -> 
     (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_TYPED_STAGE,
      lambda: _soundlab_prompt(_soundlab_desktop_projection(), "4408"),
      "typing over the selected value gave '4408'"),
+    # The set value holds while Sound Lab renders.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE,
+     lambda: _soundlab_desktop_projection(frequency=440),
+     "frequency changed while it rendered"),
 ))
 def test_soundlab_prompt_refuses_wrong_results(stage, frame, message) -> None:
     journey = DesktopAcceptanceJourney(("READY",))
@@ -7757,7 +7776,7 @@ def test_soundlab_prompt_refuses_wrong_results(stage, frame, message) -> None:
 
 def test_owed_click_release_precedes_any_other_input() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
-    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SET_STAGE
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
     journey._soundlab_frequency = 880
     # The exercised-state proof has its own test; this one follows the click
     # on File Explorer's taskbar button that starts the pointer journey.
@@ -7780,7 +7799,7 @@ def test_owed_click_release_precedes_any_other_input() -> None:
         _soundlab_desktop_projection(frequency=880),
         sender,
     )
-    assert progress.milestone == "soundlab-frequency-set"
+    assert progress.milestone == "soundlab-rerendered"
     assert (
         journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     )
