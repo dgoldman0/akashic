@@ -1401,7 +1401,7 @@ variable and manage that live alias ownership.
 | `UCTX-CLEAR` | `( ctx -- )` | Release saved relations and zero-fill an inactive context buffer. A live context or active draw observation is rejected. |
 | `UCTX-LIVE?` | `( ctx -- flag )` | Report whether `ctx` owns the relation aliases exposed through the live UIDL globals. |
 | `UCTX-LIVE-DISOWN` | `( -- )` | After saving, remove the live aliases without freeing the chain now owned by that context. Draw observation must be quiescent. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (107,776). |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (111,872). |
 
 Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`) and by
 `applet-host/host.f`, which allocates and releases the UCTX buffers that Desk
@@ -1521,7 +1521,7 @@ UCTX-RESTORE           ( ctx -- )                    Restore a context into diso
 UCTX-CLEAR             ( ctx -- )                    Clear an inactive context and its saved relations
 UCTX-LIVE?             ( ctx -- flag )               Test unique ownership of the live aliases
 UCTX-LIVE-DISOWN       ( -- )                        Disown saved live aliases before another restore
-UCTX-TOTAL             ( -- n )                      Context buffer byte size (107752)
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (111872)
 ```
 
 ---

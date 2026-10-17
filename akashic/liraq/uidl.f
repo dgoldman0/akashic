@@ -322,13 +322,15 @@ VARIABLE _ER-NA   VARIABLE _ER-NL   VARIABLE _ER-TID
 : UE.BIND-A  ( e -- a )  112 + ;
 : UE.BIND-L  ( e -- a )  120 + ;
 
-\ Attribute node — 40 bytes (5 cells)
-40 CONSTANT _UDL-ATTRSZ
+\ Attribute node — 48 bytes (6 cells).  VAL-CAP is the room the value
+\ holds in the string pool, which a later value of up to that length reuses.
+48 CONSTANT _UDL-ATTRSZ
 : UA.NEXT    ( a -- a )  ;
 : UA.NAME-A  ( a -- a )  8 + ;
 : UA.NAME-L  ( a -- a )  16 + ;
 : UA.VAL-A   ( a -- a )  24 + ;
 : UA.VAL-L   ( a -- a )  32 + ;
+: UA.VAL-CAP ( a -- a )  40 + ;
 
 \ =====================================================================
 \  Static Pools
@@ -383,6 +385,14 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
     _UDL-STRS _UDL-SPOS @ +    ( pool-a )
     R>                          ( pool-a len )
     DUP _UDL-SPOS +! ;
+
+\ _UDL-STR-ROOM ( bytes -- pool-a | 0 )   BYTES of the pool, or 0 when it
+\   is full.
+: _UDL-STR-ROOM  ( bytes -- pool-a | 0 )
+    _UDL-SPOS @ OVER + _UDL-STR-SZ > IF
+        DROP UIDL-E-STR-FULL _UDL-ERR ! 0 EXIT
+    THEN
+    _UDL-STRS _UDL-SPOS @ + SWAP _UDL-SPOS +! ;
 
 \ =====================================================================
 \  Element Allocation
@@ -521,6 +531,7 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
     DUP 0= IF DROP 2DROP 2DROP DROP EXIT THEN
     >R
     _UDL-STR-COPY
+    DUP R@ UA.VAL-CAP !
     R@ UA.VAL-L !  R@ UA.VAL-A !
     _UDL-STR-COPY
     R@ UA.NAME-L !  R@ UA.NAME-A !
@@ -1042,15 +1053,22 @@ VARIABLE _UDL-MUT-P   \ parent temp for mutations
             \ Found — overwrite value
             >R                         \ ( elem na nl va vl  R: attr )
             2SWAP 2DROP ROT DROP       \ ( va vl  R: attr )
-            \ Equal-sized dynamic values can safely reuse their existing
-            \ storage.  This is the common status/counter update path and
-            \ avoids consuming the bump-only string pool per keystroke.
-            DUP R@ UA.VAL-L @ = IF
-                R@ UA.VAL-A @ SWAP CMOVE
-                R> DROP EXIT
+            \ A value no longer than the attribute's room is written there.
+            \ A longer one takes new room, twice the old or its own length,
+            \ so however often a value changes, the rooms it has taken add
+            \ up to less than four times its longest.  A full pool leaves
+            \ it empty.
+            DUP R@ UA.VAL-CAP @ U> IF
+                DUP R@ UA.VAL-CAP @ 2* MAX
+                DUP _UDL-STR-ROOM ?DUP 0= IF
+                    DROP 2DROP
+                    0 R@ UA.VAL-L ! 0 R@ UA.VAL-CAP ! 0 R> UA.VAL-A !
+                    EXIT
+                THEN
+                R@ UA.VAL-A ! R@ UA.VAL-CAP !
             THEN
-            _UDL-STR-COPY
-            R@ UA.VAL-L ! R> UA.VAL-A !
+            DUP R@ UA.VAL-L !
+            R> UA.VAL-A @ SWAP CMOVE
             EXIT
         THEN
         UA.NEXT @
