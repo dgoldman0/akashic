@@ -50,6 +50,7 @@ from rich_terminal_desktop_acceptance import (
     _notice_claim,
     _prompt_claim,
     _require_cell_text_in,
+    _require_desk_launcher_dialog,
     _require_held_beneath_overlay,
     _require_notice,
     _require_pad_readout,
@@ -74,13 +75,6 @@ FEXP_DELETE_QUESTION = "Delete the selected item?"
 FEXP_DELETE = "Delete"
 DAYBOOK_DELETE_QUESTION = "Delete the selected automation?"
 DAYBOOK_DELETE = "Delete"
-# Desk's launcher: a dialog titled Applets whose message is its status and
-# hint lines, around its list.
-DESK_LAUNCHER_TITLE = "Applets"
-DESK_LAUNCHER_MESSAGE = (
-    "select an applet",
-    "Up/Down PgUp/PgDn Home/End  Enter open  Esc close",
-)
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # The canonical Desktop image's large sample sits in the root directory,
 # beside its sample picture.
@@ -1316,36 +1310,6 @@ class FexpAloneJourney(_AppletJourney):
         return views[0] if len(views) == 1 else None
 
     @staticmethod
-    def _launcher_dialog(projection: RichScreenProjection, launcher):
-        """Desk's launcher dialog around LAUNCHER, its list: modal over the
-        whole screen, with the list active inside it."""
-
-        found = [
-            claim
-            for claim in projection.semantic_dialog_claims
-            if claim.title == DESK_LAUNCHER_TITLE
-            and claim.left <= launcher.left and launcher.right <= claim.right
-            and claim.top <= launcher.top and launcher.bottom <= claim.bottom
-        ]
-        if len(found) != 1:
-            raise PhysicalDesktopAcceptanceError(
-                "Desk's launcher is not one dialog around its list"
-            )
-        dialog = found[0]
-        if not dialog.modal:
-            raise PhysicalDesktopAcceptanceError("Desk's launcher is not modal")
-        if tuple(dialog.content.lines) != DESK_LAUNCHER_MESSAGE:
-            raise PhysicalDesktopAcceptanceError(
-                f"Desk's launcher says {dialog.content.lines!r}"
-            )
-        if dialog.buttons:
-            raise PhysicalDesktopAcceptanceError("Desk's launcher has buttons")
-        if (dialog.identity in projection.inactive_controls
-                or launcher.identity in projection.inactive_controls):
-            raise PhysicalDesktopAcceptanceError("Desk's launcher is inactive")
-        return dialog
-
-    @staticmethod
     def _content_views(projection: RichScreenProjection, role):
         left, top, right, bottom = _desk_content_bounds(projection)
         return [
@@ -1720,7 +1684,7 @@ class FexpAloneJourney(_AppletJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer's lists stayed rich beneath the launcher"
                 )
-            self._launcher_dialog(projection, launcher)
+            _require_desk_launcher_dialog(projection, launcher)
             row = launcher.named("File Explorer")
             if not row.state & ItemState.SELECTED:
                 raise PhysicalDesktopAcceptanceError(

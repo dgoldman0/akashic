@@ -193,7 +193,7 @@ _SS-DONE
 ''', 75)
 
 
-def test_shell_planner_shared_chrome_never_hides_under_admitted_content():
+def test_shell_planner_chrome_hides_only_under_an_overlay_panes_content():
     run(PLAN + r'''
 _SP-INIT
 4096 2 _SS-M SHM-INIT _SS-A
@@ -215,14 +215,19 @@ _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
 _SS-U @ _SP-Q _RSHPL-Q.MODEL-U ! 16 _SP-Q _RSHPL-Q.ELIGIBLE-U !
 0 _SP-Q _RSHPL-Q.BANDS ! 1 _SP-E 8 + !
 \ Distinct ordinary/overlay lifecycle with the same display key is valid
-\ source. Its normal chrome cannot be published underneath overlay content.
-_SP-Q RSHPL-BUILD RSHPL-S-INVALID = _SS-A _SP-CLEARED
+\ source. The overlay's content lies over the normal pane's chrome, as one
+\ of Desk's screens lies over the divider between two tiles.
+_SP-BUILD
+_SP-O RSHPL-RESULT.PANES @ 2 = _SS-A
+_SP-O RSHPL-RESULT.CLAIMS @ 2 = _SS-A
+1 _SP-CORR RSHPL-CORRELATION.IDENTITY @ -2 = _SS-A
 0 _SP-E ! _SP-BUILD
 _SP-O RSHPL-RESULT.PANES @ 1 = _SS-A
 _SP-O RSHPL-RESULT.CLAIMS @ 0= _SS-A
 0 _SP-CORR RSHPL-CORRELATION.IDENTITY @ -2 = _SS-A
 0 _SP-CORR RSHPL-CORRELATION.OWNER @ 3 = _SS-A
-\ Reverse geometry likewise refuses overlay chrome underneath normal content.
+\ Reverse geometry still refuses an overlay's chrome underneath normal
+\ content, where the content would hide it.
 1 _SP-E !
 10 0 _SS-ENTRY SHME.CONTENT-H ! 20 0 _SS-ENTRY SHME.CONTENT-W !
 9 1 _SS-ENTRY SHME.CONTENT-H ! 19 1 _SS-ENTRY SHME.CONTENT-W !
@@ -230,7 +235,7 @@ _SP-Q RSHPL-BUILD RSHPL-S-INVALID = _SS-A _SP-CLEARED
 0 _SP-E ! _SP-BUILD
 _SP-O RSHPL-RESULT.CLAIMS @ 2 = _SS-A
 _SS-DONE
-''', 34)
+''', 29)
 
 
 def test_shell_planner_pane_descriptor_publishes_through_real_provider():

@@ -572,9 +572,9 @@ labels are its message, and it goes out as a `DIALOG` around its contents.
 In the shell frame a screen is an overlay pane over the panes beneath it,
 its document in a modal region over the whole screen, so the panes and the
 taskbar show inactive while it is open; in the physical viewer Desk with
-File Explorer opens its launcher that way. A screen that crosses the
-divider between two tiles still goes out without the shell, because the
-planner keeps a pane's chrome from lying under an overlay. The Agent's
+File Explorer opens its launcher that way. A screen may cross the divider
+between two tiles: its overlay pane lies over the chrome of the panes
+beneath it, and its own glyphs cover the divider. The Agent's
 approval review asks in the shared dialog: its message, the request's
 paragraphs broken by the shared line rule as untrusted text, scrolls, and
 Approve once (F6) is a read-first button that cannot be chosen until a

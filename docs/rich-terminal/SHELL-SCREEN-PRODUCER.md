@@ -149,11 +149,12 @@ takes that pane's rows in bands between the overlay panes' edges and checks
 each band in the spans between them. Overlay panes do not overlap one
 another, and an overlay pane's document shows no overlay of its own; either
 refuses the candidate. The planner gives an overlay pane's content region a
-z one above the content z, and still refuses an overlay pane over another
-pane's chrome, such as the divider between two tiles, so a screen that
-covers one goes out as the base candidate. A pane beneath leaves the
-overlay panes' cells out of its residual glyphs, which the overlay pane's
-content region holds.
+z one above the content z, so it may also lie over the chrome of the panes
+beneath it, such as the divider between two tiles. A pane beneath leaves
+the overlay panes' cells out of its residual glyphs, which the overlay
+pane's content region holds. The overlay pane's own residual glyphs leave
+out every claim but the panes' chrome: where it lies over a divider its
+glyphs cover it.
 
 Desk gives an open screen every key and ignores a press outside it. With
 dialogs each overlay pane's document therefore goes in a modal region over

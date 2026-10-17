@@ -197,6 +197,13 @@ DESKTOP_MENU_SIGNATURES = (
     ("Agent", "Run", "Connection", "Access", "Review", "Help"),
 )
 SOUNDLAB_MENU_SIGNATURE = ("File", "Signal", "Render", "Help")
+# Desk's launcher: a dialog titled Applets whose message is its status and
+# hint lines, around its list of every canonical applet.
+DESK_LAUNCHER_TITLE = "Applets"
+DESK_LAUNCHER_MESSAGE = (
+    "select an applet",
+    "Up/Down PgUp/PgDn Home/End  Enter open  Esc close",
+)
 DESKTOP_LAUNCHER_TITLES = (
     "Akashic Pad",
     "File Explorer",
@@ -4630,6 +4637,7 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
     panes, bars = [], []
     roles = {}
     shell_cells = set()
+    chrome_cells = []
     owners = {(region.owner_id, region.owner_generation) for region in plane.regions}
     if len(owners) != 1:
         raise PhysicalDesktopAcceptanceError("shell regions do not share one aggregate owner")
@@ -4675,7 +4683,9 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                     region.region_id, target.region_id, outer, content,
                     draw.title, draw.focused,
                 ))
-                add_material(_pane_chrome_rectangles(outer, content))
+                chrome = _pane_chrome_rectangles(outer, content)
+                add_material(chrome)
+                chrome_cells.append(set().union(*map(_rectangle_cells, chrome)))
             elif (isinstance(draw, FieldDraw) and region.modal and region.clipped
                     and _region_viewport_rectangle(region, cols, rows) == screen
                     and _draw_logical_rectangle(region, draw)
@@ -4707,15 +4717,19 @@ def _shell_scene_geometry(plane, cols: int, rows: int):
                 ))
                 add_material((bounds,))
 
-    # Panes whose content regions share a depth never overlap.  An overlay
-    # pane, such as one of Desk's screens, has its content region above the
-    # ordinary panes' and may lie over them.
+    # Panes whose content regions share a depth never overlap, and no pane's
+    # content lies over shell material.  An overlay pane, such as one of
+    # Desk's screens, has its content region above the ordinary panes' and
+    # may lie over them, their chrome included.
     content_cells = set()
     layers: dict[int, set[tuple[int, int]]] = {}
-    for pane in panes:
+    depths = [regions[pane.content_region_id].z_order for pane in panes]
+    for pane, depth in zip(panes, depths):
         cells = _rectangle_cells(pane.content_bounds)
-        layer = layers.setdefault(regions[pane.content_region_id].z_order, set())
-        if cells & (layer | shell_cells):
+        layer = layers.setdefault(depth, set())
+        beneath = set().union(*(chrome for chrome, other in zip(chrome_cells, depths)
+                                if other < depth))
+        if cells & (layer | (shell_cells - beneath)):
             raise PhysicalDesktopAcceptanceError("PANE contents overlap another pane or shell material")
         layer.update(cells)
         content_cells.update(cells)
@@ -4936,6 +4950,7 @@ def reconstruct_retained_screen(
     pane_claims, taskbar_claims, shell_cells, shell_roles = (
         _shell_scene_geometry(plane, cell.cols, cell.rows) if has_shell
         else ((), (), set(), {}))
+    regions_by_id = {region.region_id: region for region in plane.regions}
     later_region_cells = {}
     if pane_claims:
         base_region = None
@@ -5085,7 +5100,9 @@ def reconstruct_retained_screen(
         right: int,
         bottom: int,
     ) -> None:
-        claimed = _rectangle_cells(_LogicalRectangle(left, top, right, bottom))
+        claim_semantic_cells(_rectangle_cells(_LogicalRectangle(left, top, right, bottom)))
+
+    def claim_semantic_cells(claimed: set[tuple[int, int]]) -> None:
         # A root drawn after the last dialog of its region and wholly inside
         # it is one of that dialog's contents: it lies on the dialog and must
         # meet no other root.
@@ -5142,9 +5159,17 @@ def reconstruct_retained_screen(
 
         if isinstance(draw, PaneDraw):
             pane = next(item for item in pane_claims if item.object_id == draw.object_id)
+            # An overlay pane above this one, such as one of Desk's screens,
+            # hides the chrome it lies over, the divider between two tiles.
+            depth = regions_by_id[pane.content_region_id].z_order
+            hidden = set().union(*(
+                _rectangle_cells(other.content_bounds) for other in pane_claims
+                if regions_by_id[other.content_region_id].z_order > depth
+            ))
             for band in _pane_chrome_rectangles(pane.bounds, pane.content_bounds):
-                claim_semantic_rectangle(band.left, band.top, band.right, band.bottom)
-                opaque_semantic_cells.update(_rectangle_cells(band))
+                shown = _rectangle_cells(band) - hidden
+                claim_semantic_cells(shown)
+                opaque_semantic_cells.update(shown)
             continue
 
         if isinstance(draw, TaskBarDraw):
@@ -5750,6 +5775,64 @@ def _require_desk_launcher_selection(
             f"{title!r}"
         )
     return launcher
+
+def _require_desk_launcher_dialog(
+    projection: RichScreenProjection,
+    launcher: _SemanticItemViewClaim,
+) -> _SemanticDialogClaim:
+    """Require Desk's launcher dialog around LAUNCHER, its list, in the
+    shell's frame: modal over the whole screen, with the list active inside
+    it, and every control beneath it inactive, the taskbar's and each
+    applet's."""
+
+    found = [
+        claim
+        for claim in projection.semantic_dialog_claims
+        if claim.title == DESK_LAUNCHER_TITLE
+        and claim.left <= launcher.left and launcher.right <= claim.right
+        and claim.top <= launcher.top and launcher.bottom <= claim.bottom
+    ]
+    if len(found) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "Desk's launcher is not one dialog around its list"
+        )
+    dialog = found[0]
+    if not dialog.modal:
+        raise PhysicalDesktopAcceptanceError("Desk's launcher is not modal")
+    if tuple(dialog.content.lines) != DESK_LAUNCHER_MESSAGE:
+        raise PhysicalDesktopAcceptanceError(
+            f"Desk's launcher says {dialog.content.lines!r}"
+        )
+    if dialog.buttons:
+        raise PhysicalDesktopAcceptanceError("Desk's launcher has buttons")
+    if (dialog.identity in projection.inactive_controls
+            or launcher.identity in projection.inactive_controls):
+        raise PhysicalDesktopAcceptanceError("Desk's launcher is inactive")
+    if not projection.semantic_pane_claims or not projection.semantic_taskbar_claims:
+        raise PhysicalDesktopAcceptanceError(
+            "Desk's launcher went out without the shell's panes and taskbar"
+        )
+    beneath = [bar.identity for bar in projection.semantic_taskbar_claims]
+    beneath += projection.menu_bar_identities
+    beneath += [
+        claim.identity
+        for claims in (
+            projection.semantic_collection_claims,
+            projection.semantic_item_view_claims,
+            projection.semantic_document_claims,
+            projection.semantic_tabset_claims,
+            projection.semantic_field_claims,
+        )
+        for claim in claims
+        if claim.identity != launcher.identity
+    ]
+    active = [identity for identity in beneath if identity not in projection.inactive_controls]
+    if active:
+        raise PhysicalDesktopAcceptanceError(
+            f"Desk's launcher left {len(active)} controls beneath it active"
+        )
+    return dialog
+
 
 def _soundlab_semantic_failures(
     projection: RichScreenProjection,
@@ -9123,7 +9206,10 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if self.stage == DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE:
             if not _desk_launcher_selected(projection, "Akashic Pad"):
                 return JourneyProgress()
-            _require_desk_launcher_selection(projection, "Akashic Pad")
+            launcher = _require_desk_launcher_selection(projection, "Akashic Pad")
+            # The launcher crosses the divider between two tiles and still
+            # goes out in the shell's frame, a modal scope over all of it.
+            _require_desk_launcher_dialog(projection, launcher)
             milestone = self._milestone("desk-launcher-open")
             self._send(
                 "send_key",

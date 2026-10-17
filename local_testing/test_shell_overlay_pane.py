@@ -155,6 +155,25 @@ _SS-DONE
 ''', minimum=33)
 
 
+def test_an_overlay_pane_lies_over_the_chrome_beneath_it():
+    """An overlay over the pane's bottom border row, as one of Desk's
+    screens lies over the divider between two tiles: its own glyphs cover
+    that row, and the pane beneath leaves them to it."""
+    staged_run(STAGED_OVERLAY + r'''
+6 4 4 10 _SO-SETUP _SP-DIALOGS
+_RSHSP-PREPARE _SS-OK
+_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+79 _SX-KA _SO-CONTENT DUP _RTE-IR.CLIP-Y @ 6 = _SS-A _RTE-IR.CLIP-ROWS @ 4 = _SS-A
+\ The overlay's glyphs fill all four of its rows, the border row included.
+79 _SX-KA _SO-CONTENT _RTE-IR.ID @ _SX-KA _SO-GLYPHS
+2DUP 66 _SO-COUNT 40 = _SS-A 65 _SO-COUNT 0= _SS-A
+\ The pane's content loses the three rows the overlay covers there.
+77 _SX-KA _SO-CONTENT _RTE-IR.ID @ _SX-KA _SO-GLYPHS
+2DUP 65 _SO-COUNT 141 = _SS-A 66 _SO-COUNT 0= _SS-A
+_SS-DONE
+''', minimum=8)
+
+
 def test_without_dialogs_the_overlay_documents_controls_stay_in_its_content():
     staged_run(STAGED_OVERLAY + r'''
 2 4 4 10 _SO-SETUP
@@ -174,8 +193,6 @@ REFUSALS = {
     "left": ": _SO-STRAY 88 3 1 DRW-CHAR ;\n2 4 4 10 _SO-SETUP ' _SO-STRAY DRW-OVERLAY",
     "right": ": _SO-STRAY 88 3 15 DRW-CHAR ;\n2 4 4 10 _SO-SETUP ' _SO-STRAY DRW-OVERLAY",
     "above": ": _SO-STRAY 88 1 5 DRW-CHAR ;\n2 4 4 10 _SO-SETUP ' _SO-STRAY DRW-OVERLAY",
-    # An overlay over the pane's chrome, its bottom border row.
-    "chrome": "6 4 4 10 _SO-SETUP",
     # An overlay pane whose document shows a prompt of its own.
     "own-overlay": "2 4 4 10 _SO-SETUP\n"
     "RTE-CONTROL-FIELD _SO-CI RTE-CONTROL-SIZE + _RTE-CONTROL.KIND !\n"
@@ -184,7 +201,7 @@ REFUSALS = {
 
 
 @pytest.mark.parametrize("case", sorted(REFUSALS))
-def test_unexplained_paint_chrome_or_a_nested_overlay_refuses_the_candidate(case):
+def test_unexplained_paint_or_a_nested_overlay_refuses_the_candidate(case):
     staged_run(STAGED_OVERLAY + REFUSALS[case] + r'''
 _SP-DIALOGS _RSHSP-PREPARE RTE-S-UNAVAILABLE = _SS-A
 _SX-S _RSHSP.PENDING @ 0= _SS-A

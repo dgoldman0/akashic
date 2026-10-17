@@ -145,6 +145,40 @@ def _screen_scene(*, depth=4, dialog=(3,2), modal_z=5, bar=None):
                    _region(4,(),z=depth,clip=(3,2,6,3)),modal])
 
 
+def _divider_screen_scene(*, top=2, height=3, gap=False):
+    """Two panes with chrome side by side and, over the divider between
+    them, an overlay pane, one of Desk's screens, over columns 3 to 8 from
+    row TOP, its dialog over rows 2 to 4 in a modal region over the whole
+    screen.  The screen's own glyphs fill its rows outside the dialog, over
+    both panes' content and chrome; with GAP they leave the chrome out."""
+    box=range(top,top+height)
+    panes=[PaneDraw(100,0,ObjectBounds(0,0,6,7),3,ObjectBounds(1,1,4,5),'Files',True),
+           PaneDraw(101,0,ObjectBounds(6,0,6,7),4,ObjectBounds(1,1,4,5),'Notes',False),
+           PaneDraw(102,0,ObjectBounds(3,top,6,height),5,ObjectBounds(0,0,6,height),
+                    'Applets',False)]
+    contents=[]
+    for index,(left,char) in enumerate(((1,'A'),(7,'B'))):
+        glyphs=[]
+        for row in range(1,6):
+            if row not in box:
+                glyphs.append(_glyph(1000+index*100+row,left,row,char*4))
+            elif index==0:
+                glyphs.append(_glyph(1000+row,1,row,char*2))
+            else:
+                glyphs.append(_glyph(1100+row,9,row,char*2))
+        contents.append(_region(3+index,glyphs,z=3,clip=(left,1,4,5)))
+    glyphs=[]
+    for row in box:
+        if 2<=row<5:continue
+        glyphs+=([_glyph(1200+row*2,3,row,'SS'),_glyph(1201+row*2,7,row,'SS')] if gap
+                 else [_glyph(1200+row*2,3,row,'S'*6)])
+    bar=replace(_region(2,(_bar(),),z=1,clip=(0,7,COLS,1)),
+                inactive_controls=frozenset((500,501,502)))
+    modal=replace(_region(20,_dialog(3,2,6),z=5,clip=(0,0,COLS,ROWS)),modal=True)
+    return _offer([_region(1,panes,z=0,clip=(0,0,COLS,ROWS)),bar,*contents,
+                   _region(5,glyphs,z=4,clip=(3,top,6,height)),modal])
+
+
 def _project(offer):
     return acceptance.reconstruct_retained_screen(offer,require_menu_bar=False)
 
@@ -278,6 +312,25 @@ def test_a_screens_modal_scope_keeps_the_focused_task_beneath_it():
     assert not acceptance._taskbar_has_focus(projection,acceptance.PAD_FOCUS_MARKER)
     projection=_project(_screen_scene(bar=_bar(enabled=False,selected=False,minimized=True)))
     assert not acceptance._taskbar_has_focus(projection,acceptance.PAD_FOCUS_MARKER)
+
+
+@pytest.mark.parametrize('top,height',[(2,3),(1,5)])
+def test_an_overlay_pane_lies_over_the_divider_between_two_panes(top,height):
+    """One of Desk's screens across the divider between two tiles: it hides
+    the chrome it lies over, its dialog and its own glyphs covering it."""
+    projection=_project(_divider_screen_scene(top=top,height=height))
+    assert [p.object_id for p in projection.semantic_pane_claims]==[100,101,102]
+    dialog,=projection.semantic_dialog_claims
+    assert dialog.modal and (dialog.left,dialog.top,dialog.right,dialog.bottom)==(3,2,9,5)
+    assert ControlIdentity(7,9,500) in projection.inactive_controls
+    if height==5:
+        assert projection.row_text(1)[3:9]=='S'*6
+        assert projection.row_text(5)[3:9]=='S'*6
+
+
+def test_a_screen_whose_glyphs_leave_out_the_divider_leaves_cells_uncovered():
+    with pytest.raises(ERROR,match='uncovered'):
+        _project(_divider_screen_scene(top=1,height=5,gap=True))
 
 
 @pytest.mark.parametrize('changes,match',[

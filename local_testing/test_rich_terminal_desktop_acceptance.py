@@ -1755,7 +1755,7 @@ def _activated_pad_tab_projection(
     )
 
 
-LAUNCHER_ID = 50_000
+LAUNCHER_ID = 58_000
 
 
 def _desk_launcher_claim(
@@ -1796,11 +1796,49 @@ def _desk_launcher_claim(
     )
 
 
-def _desk_launcher_projection(selected_title: str) -> RichScreenProjection:
+def _desk_launcher_projection(
+    selected_title: str, *, modal: bool = True,
+) -> RichScreenProjection:
+    """The canonical Desktop with Desk's launcher open across the divider
+    between two tiles: its dialog around its list in an overlay pane, in the
+    shell's frame, with the taskbar and every applet's controls inactive
+    beneath its modal scope.  Without MODAL, the base frame without it."""
+
     assert selected_title in acceptance_runner.DESKTOP_LAUNCHER_TITLES
+    projection = _desktop_projection()
+    view = _desk_launcher_claim(selected_title)
+    if not modal:
+        return replace(projection, semantic_item_view_claims=(view,))
+    box = acceptance_runner._LogicalRectangle(106, 35, 174, 49)
+    message = "\n".join(acceptance_runner.DESK_LAUNCHER_MESSAGE)
+    dialog = acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, LAUNCHER_ID + 1), box.left, box.top, box.right, box.bottom,
+        acceptance_runner.DESK_LAUNCHER_TITLE, ControlState.VISIBLE,
+        DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, 7, 1),
+                      FieldRect(1, 1, 60, 2), message=message),
+        modal=True)
+    pane = acceptance_runner._SemanticPaneClaim(1, 1, 40_000, 1, 2, box, box, "", False)
+    rows, cols = projection.rows, projection.cols
+    bar = acceptance_runner._SemanticTaskBarClaim(
+        ControlIdentity(1, 1, 30_200), ControlState.VISIBLE,
+        acceptance_runner._LogicalRectangle(0, rows - 1, cols, rows), ())
+    beneath = {bar.identity, *projection.menu_bar_identities} | {
+        claim.identity
+        for claims in (
+            projection.semantic_collection_claims,
+            projection.semantic_document_claims,
+            projection.semantic_tabset_claims,
+            projection.semantic_field_claims,
+        )
+        for claim in claims
+    }
     return replace(
-        _desktop_projection(),
-        semantic_item_view_claims=(_desk_launcher_claim(selected_title),),
+        projection,
+        semantic_item_view_claims=(view,),
+        semantic_dialog_claims=(dialog,),
+        semantic_pane_claims=(pane,),
+        semantic_taskbar_claims=(bar,),
+        inactive_controls=frozenset(beneath),
     )
 
 
@@ -7876,6 +7914,30 @@ def test_soundlab_product_gate_requires_exact_ordinary_instrument_family() -> No
         match="outside-tile-5",
     ):
         acceptance_runner._require_soundlab_desktop_semantics(outside_soundlab)
+
+
+@pytest.mark.parametrize("change,message", (
+    ("base", "not one dialog around its list"),
+    ("no-shell", "without the shell"),
+    ("active", "controls beneath it active"),
+))
+def test_canonical_launcher_needs_the_shells_modal_scope(change, message) -> None:
+    """Desk's launcher crosses the divider between two tiles; the journey
+    still requires it in the shell's frame, a modal scope over everything
+    beneath it."""
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE
+    projection = _desk_launcher_projection("Akashic Pad", modal=change != "base")
+    if change == "no-shell":
+        projection = replace(projection, semantic_pane_claims=(), semantic_taskbar_claims=())
+    elif change == "active":
+        projection = replace(projection, inactive_controls=frozenset())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(_offer("X", offer_id=20, pad_menu=True), 9, projection, sender)
 
 
 def test_pad_edit_marker_and_revision_must_share_one_matched_text_area_root() -> None:

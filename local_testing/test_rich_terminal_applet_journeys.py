@@ -95,6 +95,7 @@ from rich_terminal_desktop_acceptance import (
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
+    _require_desk_launcher_dialog,
 )
 from test_rich_terminal_desktop_acceptance import _cell_offer, _offer, _place_cells
 
@@ -1972,8 +1973,10 @@ def test_fexp_alone_refuses_a_rename_that_held_the_wrong_span_or_left_the_table_
             _cell_offer(1, ((32, 62, "Delete the selected item?"),)), 9, asked, sender)
 
 
-def _launcher(*, modal=True, lines=None, inactive=False):
-    """Desk's launcher: its dialog titled Applets around its two-column list."""
+def _launcher(*, modal=True, lines=None, inactive=False, beneath=True, shell=True):
+    """Desk's launcher: its dialog titled Applets around its two-column list,
+    in the shell's frame, File Explorer's pane and the taskbar inactive
+    beneath it, unless BENEATH leaves File Explorer's menu bar active."""
 
     message = "\n".join(lines or ("select an applet",
                                   "Up/Down PgUp/PgDn Home/End  Enter open  Esc close"))
@@ -1990,28 +1993,41 @@ def _launcher(*, modal=True, lines=None, inactive=False):
         ItemViewContent(1, ItemViewRole.LIST, ItemViewFlag(0),
                         (ItemColumn(ItemColumnKind.TEXT), ItemColumn(ItemColumnKind.TEXT)),
                         len(items), 0, len(items), items))
+    pane = acceptance_runner._SemanticPaneClaim(
+        1, 1, 40_000, 1, 2, acceptance_runner._LogicalRectangle(0, 0, COLS, ROWS - 1),
+        acceptance_runner._LogicalRectangle(0, 0, COLS, ROWS - 1), "File Explorer", True)
+    bar = acceptance_runner._SemanticTaskBarClaim(
+        ControlIdentity(1, 1, 30_200), ControlState.VISIBLE,
+        acceptance_runner._LogicalRectangle(0, ROWS - 1, 10, ROWS), ())
+    projection = _screen({ROWS - 1: "[1:File Explo*]"},
+                         (acceptance_runner.FEXPLORER_MENU_SIGNATURE,))
+    held = {bar.identity} | ({projection.menu_bar_identities[0]} if beneath else set())
     projection = replace(
-        _screen({ROWS - 1: "[1:File Explo*]"}, ()),
+        projection,
         semantic_dialog_claims=(dialog,), semantic_item_view_claims=(view,),
-        inactive_controls=frozenset({view.identity}) if inactive else frozenset(),
+        semantic_pane_claims=(pane,) if shell else (),
+        semantic_taskbar_claims=(bar,) if shell else (),
+        inactive_controls=frozenset(held | ({view.identity} if inactive else set())),
     )
     return projection, view
 
 
 def test_the_launcher_is_a_modal_dialog_around_its_list() -> None:
     projection, view = _launcher()
-    assert FexpAloneJourney._launcher_dialog(projection, view).title == "Applets"
+    assert _require_desk_launcher_dialog(projection, view).title == "Applets"
 
 
 @pytest.mark.parametrize("kwargs,message", (
     ({"modal": False}, "not modal"),
     ({"lines": ("select an applet",)}, "launcher says"),
-    ({"inactive": True}, "inactive"),
+    ({"inactive": True}, "is inactive"),
+    ({"beneath": False}, "1 controls beneath it active"),
+    ({"shell": False}, "without the shell"),
 ))
 def test_the_launcher_check_refuses_a_launcher_that_is_not_that(kwargs, message) -> None:
     projection, view = _launcher(**kwargs)
     with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
-        FexpAloneJourney._launcher_dialog(projection, view)
+        _require_desk_launcher_dialog(projection, view)
 
 
 def test_agent_alone_refuses_a_long_review_that_fits_or_unlocks_early() -> None:
