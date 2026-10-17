@@ -1757,14 +1757,12 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
     shell = _text("akashic/tui/app-shell.f")
     prompt = _text("akashic/tui/widgets/prompt.f")
     auth = _text("akashic/tui/applets/agent/widgets/agent-auth.f")
-    settings = _text("akashic/tui/applets/agent/widgets/agent-settings.f")
 
     painters = (
         (shell, "_ASHELL-DRAW-TOAST", "_ASHELL-DRAW-TOAST-BODY"),
         (shell, "_ASHELL-DRAW-CURSOR", "_ASHELL-DRAW-CURSOR-BODY"),
         (prompt, "_PRM-DRAW", "_PRM-DRAW-BODY"),
         (auth, "_AAUP-DRAW", "_AAUP-DRAW-BODY"),
-        (settings, "_ARSP-DRAW", "_ARSP-DRAW-BODY"),
     )
     for source, wrapper_name, body_name in painters:
         wrapper = _word(source, wrapper_name)
@@ -1776,7 +1774,6 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
 
     assert "['] _PRM-DRAW ['] _PRM-HANDLE WDG-INIT" in prompt
     assert "['] _AAUP-DRAW ['] _AAUP-HANDLE WDG-INIT" in auth
-    assert "['] _ARSP-DRAW ['] _ARSP-HANDLE WDG-INIT" in settings
 
     paint = _word(shell, "_ASHELL-PAINT")
     app = paint.index("_ASHELL-DESC @ APP.PAINT-XT")
@@ -1784,6 +1781,31 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
     cursor = paint.index("_ASHELL-DRAW-CURSOR", toast)
     complete = paint.index("UTUI-DRAW-COMPLETE", cursor)
     assert app < toast < cursor < complete
+
+
+def test_the_agent_run_settings_are_fields_the_mounted_panel_draws() -> None:
+    """The run settings are no foreground overlay: the Agent's mounted panel
+    draws them in its place, and each setting is a canonical field in a
+    region beneath the panel's, so a projection finds it as a FIELD."""
+
+    agent = _text("akashic/tui/applets/agent/agent.f")
+    settings = _text("akashic/tui/applets/agent/widgets/agent-settings.f")
+
+    assert "DRW-OVERLAY" not in settings
+    assert "['] _ARSP-DRAW ['] _ARSP-HANDLE WDG-INIT" in settings
+    new = _word(settings, "ARSP-NEW")
+    assert "RGN-SUB" in new and "FLD-NEW" in new
+    assert "FLD-ON-ACTIVATE" in new and "FLD-ON-ADJUST" in new
+    build = _word(settings, "_ARSP-BUILD")
+    assert "UFLD-K-CHOICE" in build and "FLD-BIND" in build
+    assert "_ARSP-ROOM?" in build
+    assert "_ARSP-P @ WDG-REGION WDG-DRAW-IN" in _word(settings, "_ARSP-DRAW-FIELDS")
+
+    panel = _word(agent, "_AG-PANEL-DRAW")
+    assert panel.index("ARSP-ACTIVE?") < panel.index("_AG-USER-OVERLAY?")
+    assert "_AG-PANEL-RGN @ WDG-DRAW-IN" in panel
+    assert "_AG-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _AG-SETTINGS-RGN !" in agent
+    assert "ARSP-ACTIVE? IF WDG-DRAW" not in _word(agent, "AGENT-PAINT-CB")
 
 
 def test_dialogs_are_hosted_by_their_application_host_and_never_block() -> None:

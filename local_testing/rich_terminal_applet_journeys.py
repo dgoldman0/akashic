@@ -15,6 +15,7 @@ from rich_terminal.pygame_view import ATTR_REVERSE
 from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
 from rich_terminal.retained_wire import RetainedMessageType
 from rich_terminal.semantic_documents import BlockKind
+from rich_terminal.semantic_fields import FieldKind
 from rich_terminal.semantic_items import (
     ItemColumnKind,
     ItemField,
@@ -197,6 +198,16 @@ AGENT_EXCHANGE = (
 )
 # One wheel detent scrolls a list three screen rows.
 AGENT_WHEEL_ROWS = 3
+# The Agent alone runs on the device-flow fixture's catalog: Swift, with Low
+# or Medium reasoning and no speed tiers, then Deliberate, with Low or High
+# reasoning and a Fast tier.  Its run settings are four CHOICE fields.
+AGENT_SETTINGS_LABELS = ("Model", "Reasoning", "Speed", "Verbosity")
+AGENT_SETTINGS_SHOWN = {
+    "Model": "Swift", "Reasoning": "Low", "Speed": "Standard", "Verbosity": "Auto",
+}
+AGENT_SETTINGS_CHOSEN = {
+    "Model": "Deliberate", "Reasoning": "High", "Speed": "Standard", "Verbosity": "Auto",
+}
 # Typed into Desk's own Ask prompt, whose second to fourth characters are
 # then selected and typed over before Escape cancels it.
 DESK_PROMPT_TEXT = "hello"
@@ -2290,12 +2301,18 @@ class AgentAloneJourney(_AppletJourney):
     it says more lies below.  Deny, which F7 chooses, is the default and
     cancel button.  Its Approve once BUTTON approves, and the transcript
     then ends with the approved exchange.  CELL shows each end of the
-    transcript on its last row.
+    transcript on its last row.  F8 then shows the run settings in the
+    transcript's place: Model, Reasoning, Speed and Verbosity are CHOICE
+    fields holding Swift, Low, Standard and Auto.  An ADJUST moves Reasoning
+    to Medium, an ACTIVATE takes Model to Deliberate, whose own reasoning,
+    High, it then holds, and whose speeds are Standard and Fast; Escape
+    returns to the transcript.
     """
 
     focus_marker = AGENT_ALONE_FOCUS_MARKER
     (READY, SCROLLED, ENDED, DESK_PROMPT, DESK_TYPED, DESK_PLACED, DESK_SELECTED,
-     DESK_REPLACED, DESK_CLOSED, PROMPT, TYPED, REVIEW, APPROVED) = range(13)
+     DESK_REPLACED, DESK_CLOSED, PROMPT, TYPED, REVIEW, APPROVED, SETTINGS,
+     REASONED, CHOSEN, SETTINGS_CLOSED) = range(17)
     DESK_STAGES = range(DESK_PROMPT, DESK_CLOSED + 1)
 
     def __init__(self, ready_markers: tuple[str, ...]):
@@ -2304,7 +2321,7 @@ class AgentAloneJourney(_AppletJourney):
 
     @property
     def final_stage(self) -> int:
-        return self.APPROVED
+        return self.SETTINGS_CLOSED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
@@ -2571,13 +2588,98 @@ class AgentAloneJourney(_AppletJourney):
             value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
             return self._step("agent-review-unlocked", "activate_button", value,
                               self.APPROVED, offer, generation, sender)
+        if self.stage >= self.SETTINGS:
+            return self._settings(offer, generation, projection, sender, bounds, transcript)
         cards = stored + AGENT_EXCHANGE
         if review is not None or transcript is None or not self._shows(transcript, cards):
             return self._wait("the approved exchange")
         self._check(transcript, cards)
         self._at_end(transcript, cards)
         self._require_last_row(offer, transcript, AGENT_AUDIT)
-        return self._done("agent-review-approved", offer)
+        return self._step("agent-review-approved", "send_key", "f8", self.SETTINGS,
+                          offer, generation, sender)
+
+    @staticmethod
+    def _settings_fields(projection: RichScreenProjection, bounds):
+        """The run settings' fields in the Agent's tile, by label, or none."""
+
+        left, top, right, bottom = bounds
+        found = [
+            claim
+            for claim in projection.semantic_field_claims
+            if left <= claim.left and claim.right <= right
+            and top <= claim.top and claim.bottom <= bottom
+        ]
+        if not found:
+            return {}
+        labels = tuple(claim.label for claim in found)
+        if sorted(labels) != sorted(AGENT_SETTINGS_LABELS):
+            raise PhysicalDesktopAcceptanceError(
+                f"the Agent's tile carries the fields {labels!r}"
+            )
+        for claim in found:
+            if claim.content.kind is not FieldKind.CHOICE or claim.modal:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the Agent's {claim.label} setting is not a plain CHOICE field"
+                )
+        return {claim.label: claim for claim in found}
+
+    @staticmethod
+    def _field_value(claim, count: int | None = None) -> str:
+        identity = claim.identity
+        value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+        return value if count is None else f"{value},{count}"
+
+    def _settings(self, offer, generation, projection, sender, bounds,
+                  transcript) -> JourneyProgress:
+        """The run settings in the transcript's place: an ADJUST moves
+        Reasoning, an ACTIVATE takes Model to its next choice, and Escape
+        returns to the transcript."""
+
+        fields = self._settings_fields(projection, bounds)
+        if self.stage == self.SETTINGS_CLOSED:
+            if fields:
+                return self._wait("the run settings closed by Escape")
+            cards = agent_transcript.CARDS + AGENT_EXCHANGE
+            if transcript is None or not self._shows(transcript, cards):
+                return self._wait("the transcript after the run settings")
+            self._require_last_row(offer, transcript, AGENT_AUDIT)
+            return self._done("agent-settings-closed", offer)
+        if not fields:
+            return self._wait("the Agent's run settings after F8")
+        if transcript is not None:
+            raise PhysicalDesktopAcceptanceError(
+                "the Agent's run settings left its transcript shown"
+            )
+        shown = {label: claim.content.display_text for label, claim in fields.items()}
+        if self.stage == self.SETTINGS:
+            choices = tuple(choice.label for choice in fields["Reasoning"].content.choices)
+            if shown != AGENT_SETTINGS_SHOWN or choices != ("Low", "Medium"):
+                raise PhysicalDesktopAcceptanceError(
+                    f"the Agent's run settings show {shown!r}, reasoning {choices!r}"
+                )
+            return self._step("agent-settings-shown", "field_adjust",
+                              self._field_value(fields["Reasoning"], 1), self.REASONED,
+                              offer, generation, sender)
+        if self.stage == self.REASONED:
+            if shown["Reasoning"] == "Low":
+                return self._wait("Reasoning after the adjustment")
+            if shown != {**AGENT_SETTINGS_SHOWN, "Reasoning": "Medium"}:
+                raise PhysicalDesktopAcceptanceError(
+                    f"adjusting Reasoning showed {shown!r}"
+                )
+            return self._step("agent-reasoning-adjusted", "field_activate",
+                              self._field_value(fields["Model"]), self.CHOSEN,
+                              offer, generation, sender)
+        if shown["Model"] == "Swift":
+            return self._wait("the next model after the activation")
+        speeds = tuple(choice.label for choice in fields["Speed"].content.choices)
+        if shown != AGENT_SETTINGS_CHOSEN or speeds != ("Standard", "Fast"):
+            raise PhysicalDesktopAcceptanceError(
+                f"activating Model showed {shown!r}, speeds {speeds!r}"
+            )
+        return self._step("agent-model-chosen", "send_key", "escape",
+                          self.SETTINGS_CLOSED, offer, generation, sender)
 
     def _desk_prompt(self, offer, generation, sender, prompt) -> JourneyProgress:
         """Desk's Ask prompt: type, select three characters, type over

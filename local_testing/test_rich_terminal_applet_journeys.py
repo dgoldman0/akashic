@@ -23,7 +23,9 @@ from rich_terminal.pygame_view import ControlIdentity
 from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
 from rich_terminal.retained_view import MenuBarDraw
 from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
-from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
+from rich_terminal.semantic_fields import (
+    FieldChoice, FieldContent, FieldFlag, FieldKind, FieldRect,
+)
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
     StyleRun,
@@ -53,6 +55,8 @@ from rich_terminal_applet_journeys import (
     AGENT_REQUEST,
     AGENT_REVIEW_MARKER,
     AGENT_REVIEW_REASON,
+    AGENT_SETTINGS_CHOSEN,
+    AGENT_SETTINGS_SHOWN,
     DAYBOOK_DAILY_SCHEDULE,
     DAYBOOK_DELETE_QUESTION,
     DAYBOOK_REMINDER_NOTICE,
@@ -1036,6 +1040,44 @@ REVIEW_ID = 40_010
 REVIEW_LINES = ("AGENT", AGENT_REVIEW_REASON, AGENT_REVIEW_MARKER)
 
 
+SETTINGS_ID = 40_020
+
+
+def _agent_settings_frame(shown, choices):
+    """The Agent's run settings in its transcript's place: a CHOICE field a
+    setting, by label, on rows 3, 5, 7 and 9, showing SHOWN's choice of
+    CHOICES' labels."""
+
+    claims = []
+    for index, label in enumerate(("Model", "Reasoning", "Speed", "Verbosity")):
+        labels = choices[label]
+        content = FieldContent(
+            index + 1, FieldKind.CHOICE, FieldFlag(0), FieldRect(2, 0, 15, 1),
+            FieldRect(18, 0, COLS - 21, 1), value=labels.index(shown[label]),
+            choices=tuple(FieldChoice(value, choice) for value, choice in enumerate(labels)),
+        )
+        row = 2 * index + 4
+        state = ControlState.VISIBLE | ControlState.ENABLED
+        if index == 0:
+            state |= ControlState.SELECTED
+        claims.append(acceptance_runner._SemanticFieldClaim(
+            ControlIdentity(1, 1, SETTINGS_ID + index), 1, row, COLS - 1, row + 1, label,
+            state, content,
+        ))
+    return replace(_agent_frame(menus=(AGENT_MENU_SIGNATURE,)),
+                   semantic_field_claims=tuple(claims))
+
+
+SETTINGS_CHOICES = {
+    "Model": ("Swift", "Deliberate"),
+    "Reasoning": ("Low", "Medium"),
+    "Speed": ("Standard",),
+    "Verbosity": ("Auto", "Low", "Medium", "High"),
+}
+CHOSEN_CHOICES = {**SETTINGS_CHOICES, "Reasoning": ("Low", "High"),
+                  "Speed": ("Standard", "Fast")}
+
+
 def _agent_review(lines=REVIEW_LINES, *, approve=True, buttons=AGENT_REVIEW_BUTTONS,
                   modal=True):
     """The Agent's review over its tile: LINES as its message, then Approve
@@ -1122,6 +1164,15 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
             _agent_frame(_agent_view(streaming, APPROVED_END, styled=False)),
         ),
         (_agent_offer(AGENT_AUDIT), _agent_frame(_agent_view(APPROVED, APPROVED_END))),
+        (_agent_offer(""), _agent_settings_frame(AGENT_SETTINGS_SHOWN, SETTINGS_CHOICES)),
+        # The adjustment has not reached the Agent yet.
+        (_agent_offer(""), _agent_settings_frame(AGENT_SETTINGS_SHOWN, SETTINGS_CHOICES)),
+        (_agent_offer(""), _agent_settings_frame(
+            {**AGENT_SETTINGS_SHOWN, "Reasoning": "Medium"}, SETTINGS_CHOICES)),
+        (_agent_offer(""), _agent_settings_frame(AGENT_SETTINGS_CHOSEN, CHOSEN_CHOICES)),
+        # Escape has not closed the settings yet.
+        (_agent_offer(""), _agent_settings_frame(AGENT_SETTINGS_CHOSEN, CHOSEN_CHOICES)),
+        (_agent_offer(AGENT_AUDIT), _agent_frame(_agent_view(APPROVED, APPROVED_END))),
     )
     results = _run(journey, steps)
     desk_value = f"1,1,{DESK_PROMPT_ID},0,{{}}".format
@@ -1146,7 +1197,13 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
         ("agent-review-paged", [("send_key", "pagedown")]),
         ("agent-review-unlocked", [("activate_button", f"1,1,{REVIEW_ID + 1}")]),
         (None, []),
-        ("agent-review-approved", []),
+        ("agent-review-approved", [("send_key", "f8")]),
+        ("agent-settings-shown", [("field_adjust", f"1,1,{SETTINGS_ID + 1},1")]),
+        (None, []),
+        ("agent-reasoning-adjusted", [("field_activate", f"1,1,{SETTINGS_ID}")]),
+        ("agent-model-chosen", [("send_key", "escape")]),
+        (None, []),
+        ("agent-settings-closed", []),
     ]
     assert results[-1][0].complete
     assert journey.final_cell_markers == ("[1:Agent*]", AGENT_AUDIT)
@@ -1246,13 +1303,20 @@ def test_every_single_applet_profile_has_a_journey() -> None:
         profile = akashic_tui.PROFILES[f"desktop-apt1-{name}"]
         journey = applet_journey(name, profile.ready_markers)
         assert journey.ready_markers == profile.ready_markers
-        # Desk and the one applet, nothing else but the Agent's demo provider.
+        # Desk and the one applet, nothing else but the Agent's demo provider
+        # and the device-flow fixture that gives it a catalog.
         applet = {"small-terminal": "pad", "photo": "fexp",
                   "damaged": "fexp"}.get(name, name)
-        provider = (akashic_tui._DESK_AGENT_PROVIDER,) if name == "agent" else ()
+        provider = (
+            (akashic_tui._DESK_AGENT_PROVIDER, akashic_tui._DAYBOOK_AGENT_DEVFLOW)
+            if name == "agent" else ()
+        )
         assert profile.roots == (
             "tui/desk-apt1.f", akashic_tui.desk_applet(applet).module, *provider
         )
+    assert akashic_tui._DAYBOOK_AGENT_SOURCE_BOOT in (
+        akashic_tui.PROFILES["desktop-apt1-agent"].autoexec
+    )
 
 
 def test_daybook_alone_boots_the_reminder_its_journey_waits_for() -> None:

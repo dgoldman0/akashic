@@ -14743,6 +14743,19 @@ for _name in DESKTOP_APT1_APPLETS:
     )
 del _name, _applet, _files, _applets
 
+# The Agent alone also opens its run settings, so its source is the
+# device-flow fixture's, as Daybook's with the Agent is: a signed-in account
+# and a ready catalog of two models, which the scripted provider runs turns
+# on.
+PROFILES["desktop-apt1-agent"] = replace(
+    PROFILES["desktop-apt1-agent"],
+    roots=(*PROFILES["desktop-apt1-agent"].roots, _DAYBOOK_AGENT_DEVFLOW),
+    autoexec=PROFILES["desktop-apt1-agent"].autoexec.replace(
+        _DESK_AGENT_SOURCE_BOOT, _DAYBOOK_AGENT_SOURCE_BOOT, 1
+    ),
+)
+assert _DAYBOOK_AGENT_SOURCE_BOOT in PROFILES["desktop-apt1-agent"].autoexec
+
 # A terminal with little room for retained text.  Pad's empty editor fits
 # it.  Its Open prompt, which leaves the whole screen to residual glyphs, and
 # a file of 48 lines do not, so the producer shows those screens as CELL; the
