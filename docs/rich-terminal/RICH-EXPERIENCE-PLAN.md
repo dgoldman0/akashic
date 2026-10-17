@@ -632,7 +632,23 @@ formula bar is a read-only TEXT field through the shared field widget, its
 value the cell's source as a display shows it; Grid is in no Desktop
 profile, so its CELL smoke and its own tests check it. A UIDL status label
 still goes out neutral, since UIDL gives a label no severity; the first
-application whose status needs one adds it.
+application whose status needs one adds it. The measures of step 8 are
+recorded in `local_testing/evidence/part5-interaction-costs-20261017.md`,
+from File Explorer, Daybook and the Agent with Desk. A key typed into Desk's
+Ask prompt is a DELTA of about 4 to 6 million guest steps. A key typed into
+an application's prompt is a START, mostly 12 to 15 million steps a frame,
+of which about 3 to 6 million lie outside the rich producer, what a CELL
+session spends; a PLACE or an EXTEND on the same prompt is a DELTA of 2 to
+3.5 million. Opening or closing a prompt or a dialog, and a notice coming
+or going, add or remove a region, so each is a START by design, about 6 to
+27 million steps in the rich producer; a notice shown costs about 12.7
+million there and 0.5 million in Desk's paint. Answering a dialog costs 24
+to 35 million steps outside the producer, since the application paints far
+more after its dialog closes than after its prompt does. Two costs remain
+to cut: typing into an application's prompt should be a DELTA, as typing
+into Desk's is, but the producer does not match those draws, for a cause
+not yet found; and a dialog that closes should not cost its application
+more paint than a prompt that closes.
 
 Before part 5 closes, the full Desktop journey also requires the launcher's
 whole-screen modal scope, not only its selection; File Explorer's journey
