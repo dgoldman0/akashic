@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from test_widget_pointer import _run_forth  # also puts MegaPad on the path
+from test_widget_pointer import _POINTER, _SHOW, _run_forth, _screen_rows  # also puts MegaPad on the path
 
 from rich_terminal.semantic_content import StyleRun, TextStyle
 from rich_terminal.semantic_items import (
@@ -401,9 +401,9 @@ def test_the_deep_validation_refuses_the_card_rules() -> None:
     # A column flag the contract does not name.
     assert _validate_status([(1, 0, 0, 0, 0, ITEM, ["a"])], role=ItemViewRole.CARDS,
                             column_flags=(2,)) == 4
-    # A card with a check box.
+    # A card may have a check box.
     assert _validate_status([(1, 0, 0, 0, CHK, ITEM, ["a"])],
-                            role=ItemViewRole.CARDS) == 4
+                            role=ItemViewRole.CARDS) == 0
     # An empty view has its viewport at zero, rows included.
     assert _validate_status([], role=ItemViewRole.CARDS, row=1) == 4
 
@@ -797,6 +797,96 @@ def test_cards_publish_their_lines_style_runs_and_safe_text() -> None:
                   state=S.SELECTED),
         ),
     )
+
+
+# Checkable cards, as Streams' sources are: a name that wraps after the
+# check box, and a note on a line of its own.  Keys are 400 + row; _KF holds
+# each card's flags, which the check callback toggles.  The row callback
+# also asks for a heading, which a card never is.
+_CHECK_CARDS = [
+    "24 80 SCR-NEW DUP SCR-USE SCR-CLEAR DRW-STYLE-RESET",
+    *_POINTER,
+    *_SHOW,
+    ': _KN0 S" Morning bulletin" ; : _KN1 S" Evening" ;',
+    ': _KT0 S" rss" ; : _KT1 S" atom" ;',
+    "CREATE _KF 16 ALLOT",
+    "LST-ROW-CHECKABLE LST-ROW-CHECKED OR _KF ! LST-ROW-CHECKABLE _KF 8 + !",
+    ": _KK  ( index widget -- key )  DROP 400 + ;",
+    ": _KFLD  ( index column widget -- a u )",
+    "  DROP IF IF _KT1 ELSE _KT0 THEN ELSE IF _KN1 ELSE _KN0 THEN THEN ;",
+    ": _KR  ( index widget -- flags )  DROP 8 * _KF + @ LST-ROW-SECTION OR ;",
+    ": _KC  ( index widget -- )  DROP 8 * _KF + DUP @ LST-ROW-CHECKED XOR SWAP ! ;",
+    "CREATE _KCOLS LST-COLUMN-SIZE 2 * ALLOT",
+    "_KCOLS LST-COLUMN-SIZE 2 * 0 FILL",
+    "LST-TEXT-COLUMN _KCOLS LST-COLUMN-KIND + !",
+    "LST-COLUMN-WRAP _KCOLS LST-COLUMN-FLAGS + !",
+    "LST-TEXT-COLUMN _KCOLS LST-COLUMN-SIZE + LST-COLUMN-KIND + !",
+    "CREATE _KEV 24 ALLOT",
+    ": _KSPACE  ( widget -- consumed? )",
+    "  _KEV 24 0 FILL KEY-T-CHAR _KEV ! BL _KEV 8 + ! _KEV SWAP WDG-HANDLE ;",
+    "VARIABLE _KW",
+    "0 0 6 20 RGN-NEW ' _KK ' _KFLD LST-NEW _KW !",
+    "_KCOLS 2 _KW @ LST-COLUMNS! LST-CARDS _KW @ LST-MODE!",
+    "' _KR _KW @ LST-ROW-FLAGS! ' _KC _KW @ LST-ON-CHECK 2 _KW @ LST-ROWS!",
+]
+
+
+def test_checkable_cards_draw_publish_and_check_their_boxes() -> None:
+    from rich_terminal.semantic_items import card_row_count
+
+    program = _CAPTURE + _CHECK_CARDS + [
+        "_KW @ WDG-DRAW 0 _ROW$ 1 _ROW$ 2 _ROW$ 3 _ROW$ 4 _ROW$",
+        "42 _O 4096 _B _KW @ LST-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+        "_PUBLISH",
+        # A press on the second card's box checks it; a press on the first
+        # card's second line, beside where a box would be, does not; Space
+        # checks the selected first card off.
+        "KEY-MOUSE-LEFT 3 2 _KW @ _PT _N",
+        "KEY-MOUSE-LEFT 1 2 _KW @ _PT _N",
+        "_KW @ _KSPACE _N",
+        "_KF @ _N _KF 8 + @ _N",
+        "42 _O 4096 _B _KW @ LST-ITEM-VIEW-CAPTURE _N DUP _U ! _N",
+        "_PUBLISH",
+    ]
+    output = _run_forth(program, roots=WIDGET_ROOTS).decode("utf-8", errors="replace")
+    assert "not found" not in output and "underflow" not in output, output[-3000:]
+    blocks = re.findall("\x12(.*?)\x13", output, re.S)
+    # The box is one cell in on a card's first row, and the name starts
+    # after it at 14 cells wide, so "Morning bulletin" breaks.
+    assert _screen_rows("".join(f"\x12{b}\x13" for b in blocks[:5])) == [
+        " [x] Morning        ",
+        "     bulletin       ",
+        "   rss              ",
+        " [ ] Evening        ",
+        "   atom             ",
+    ]
+    numbers = [int(value) for value in re.findall(r"\x02\s*(-?\d+)\s*\x03", output)]
+    (status, _copied, valid, packed, box_press, line_press, space, first, second,
+     status2, _copied2, valid2, packed2) = numbers
+    assert (status, valid, packed, status2, valid2, packed2) == (0,) * 6
+    assert (box_press, line_press, space) == (-1, -1, -1)
+    checkable, checked = 2, 4
+    assert (first, second) == (checkable, checkable | checked)
+    before, after = [
+        decode_item_view_content(bytes(int(token) for token in body.split()))
+        for body in blocks[5:]
+    ]
+    text = ItemColumn(ItemColumnKind.TEXT, "")
+    wrapped = ItemColumn(ItemColumnKind.TEXT, "", wrap=True)
+    assert before == ItemViewContent(
+        9, ItemViewRole.CARDS, ItemViewFlag(0), (wrapped, text), 2, 0, 2,
+        (
+            _item(400, 0, "Morning bulletin", "rss",
+                  state=S.SELECTED | S.CHECKABLE | S.CHECKED),
+            _item(401, 1, "Evening", "atom", state=S.CHECKABLE),
+        ),
+    )
+    # The terminal counts the same rows.
+    assert [card_row_count(before, item, 20) for item in before.items] == [3, 2]
+    assert [item.state for item in after.items] == [
+        S.SELECTED | S.CHECKABLE,
+        S.CHECKABLE | S.CHECKED,
+    ]
 
 
 # Card lists whose text column wraps, each in its own region.  Every field

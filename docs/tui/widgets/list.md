@@ -43,7 +43,10 @@ separate paragraphs; a line of a right-to-left paragraph starts at the
 field's right edge.  Any other field is one line, cut at its width.  So a
 card takes one screen row for each field, but one for each line of a
 wrapping field, exactly as a rich terminal lays the same card out.  A card
-is never a heading and has no check box, whatever the row callback says.
+is never a heading, whatever the row callback says.  A checkable card shows
+`[ ]` or `[x]` one cell in on its first screen row, and its first field
+after the box, five cells in and at most the region's width less six
+cells; a press on the box, or Space on the selected card, checks it.
 In `LST-LOG` mode the list is a log, such as a conversation's messages:
 no row is ever selected, the keys and the wheel scroll the view, and the
 view follows the log's end, so rows added there come into view, until

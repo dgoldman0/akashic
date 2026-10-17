@@ -47,8 +47,10 @@
 \  width, as APT-1-TEXT Section 12 breaks text (text-lines.f), and its
 \  line feeds separate paragraphs; any other field is one line, cut at
 \  that width.  The view scrolls by screen rows, so a card taller than
-\  the view shows part of itself.  A card is never a heading and has no
-\  check box, whatever the row callback says.  In
+\  the view shows part of itself.  A card is never a heading, whatever
+\  the row callback says.  A checkable card shows its check box one cell
+\  in on its first screen row, and its first field after the box, at
+\  most the region's width less six cells.  In
 \  LST-UNTRUSTED mode the text comes from outside the application, so it
 \  is drawn as DRW-TEXT-UNTRUSTED draws and published without direction
 \  controls.  An optional style source, ( text-a text-u map index column
@@ -214,10 +216,14 @@ VARIABLE _LST-NEXT-INSTANCE
     DROP 0 ;
 
 \ _LST-FLAGS ( index widget -- flags )   The row callback's flags.  A card
-\   is never a heading and has no check box.
+\   is never a heading.
 : _LST-FLAGS  ( index widget -- flags )
-    DUP _LST-CARDS? IF 2DROP 0 EXIT THEN
-    DUP _LST-O-ROW-XT + @ ?DUP IF EXECUTE ELSE 2DROP 0 THEN ;
+    DUP _LST-O-ROW-XT + @ 0= IF 2DROP 0 EXIT THEN
+    DUP _LST-CARDS? IF
+        DUP _LST-O-ROW-XT + @ EXECUTE
+        LST-ROW-SECTION INVERT AND EXIT
+    THEN
+    DUP _LST-O-ROW-XT + @ EXECUTE ;
 
 : _LST-SECTION?  ( index widget -- flag )
     _LST-FLAGS LST-ROW-SECTION AND 0<> ;
@@ -281,11 +287,19 @@ VARIABLE _LST-G-X
 \ 3. Rows, the view, selection and scrolling
 \ =====================================================================
 
-\ A card's first field is one cell in and each other three, and each is at
-\ most the region's width less two cells, and less four, and at least one.
-: _LST-CARD-X  ( column -- x )  IF 3 ELSE 1 THEN ;
-: _LST-CARD-LIMIT  ( column widget -- cells )
-    WDG-REGION RGN-W SWAP IF 4 ELSE 2 THEN - 1 MAX ;
+\ A card's first field is one cell in, or after the check box of a
+\ checkable card, and each other three; each is at most the region's
+\ width less two cells, or six after a check box, and less four, and at
+\ least one (SEMANTIC-CONTENT-1).
+: _LST-CARD-BOX?  ( index widget -- flag )
+    _LST-FLAGS LST-ROW-CHECKABLE AND 0<> ;
+: _LST-CARD-X  ( index column widget -- x )
+    SWAP IF 2DROP 3 EXIT THEN
+    _LST-CARD-BOX? IF 1 _LST-BOX-W + ELSE 1 THEN ;
+: _LST-CARD-LIMIT  ( index column widget -- cells )
+    DUP WDG-REGION RGN-W >R
+    SWAP IF 2DROP R> 4 - 1 MAX EXIT THEN
+    _LST-CARD-BOX? IF 2 _LST-BOX-W + ELSE 2 THEN R> SWAP - 1 MAX ;
 
 \ The text flags a laid-out field takes.
 : _LST-TFLAGS  ( widget -- flags )
@@ -379,7 +393,7 @@ VARIABLE _LST-FR-E
     _LST-FR-W ! _LST-FR-C ! _LST-FR-I !
     _LST-FR-C @ _LST-FR-W @ _LST-COL-WRAP? 0= IF 1 EXIT THEN
     _LST-FR-I @ _LST-FR-C @ _LST-FR-W @ _LST-FIELD _LST-FR-U ! _LST-FR-A !
-    _LST-FR-C @ _LST-FR-W @ _LST-CARD-LIMIT _LST-FR-L !
+    _LST-FR-I @ _LST-FR-C @ _LST-FR-W @ _LST-CARD-LIMIT _LST-FR-L !
     _LST-FR-W @ _LST-TFLAGS _LST-FR-F !
     _LST-FR-I @ _LST-FR-C @ _LST-FR-W @ _LST-RC-ENTRY DUP _LST-FR-E ! IF
         _LST-RC-KEPT? IF _LST-FR-E @ _LST-RC-LINES + @ EXIT THEN
@@ -541,7 +555,9 @@ VARIABLE _LST-SN-W
     NIP _LST-SN-W @ _LST-O-SCROLL + @ - ;
 
 \ _LST-ITEM-AT ( y widget -- index )   The row on the body's screen row Y,
-\   or the count below the last.
+\   or the count below the last.  _LST-AT-LINE keeps which of the row's
+\   screen rows Y is.
+VARIABLE _LST-AT-LINE
 : _LST-ITEM-AT  ( y widget -- index )
     _LST-SN-W !
     _LST-SN-W @ _LST-O-SCROLL-ROW + @ +
@@ -553,7 +569,7 @@ VARIABLE _LST-SN-W
     WHILE
         DUP _LST-SN-W @ _LST-ROWS ROT SWAP - SWAP 1+
     REPEAT
-    NIP ;
+    SWAP _LST-AT-LINE ! ;
 
 VARIABLE _LST-SK-DIR
 
@@ -777,8 +793,10 @@ VARIABLE _LST-LOOK-AT    \ where the drawn text starts in its field
     ['] _LST-HEADING-TEXT _LST-DRW-ROW @ 0 1
         _LST-DRW-W @ WDG-REGION RGN-W DRW-WITH-CLIP ;
 
-\ _LST-BOX-COL ( widget -- col )   Where a row's check box starts.
+\ _LST-BOX-COL ( widget -- col )   Where a row's check box starts: one
+\   cell in on a card.
 : _LST-BOX-COL  ( widget -- col )
+    DUP _LST-CARDS? IF DROP 1 EXIT THEN
     _LST-SECTIONED? IF _LST-INDENT ELSE 0 THEN ;
 
 : _LST-DRAW-BOX  ( row col -- )
@@ -854,12 +872,16 @@ VARIABLE _LST-CD-PAD      \ cells before a right-to-left line
         _LST-TLN TLINES-NEXT
     REPEAT ;
 
+\ A checkable card's box is on its first screen row, when that is shown.
 : _LST-DRAW-CARD  ( -- )
+    _LST-DRW-FLAGS @ LST-ROW-CHECKABLE AND _LST-DRW-TOP @ 0< 0= AND IF
+        _LST-DRW-ROW @ _LST-DRW-W @ _LST-BOX-COL _LST-DRAW-BOX
+    THEN
     _LST-DRW-TOP @ _LST-CD-LINE !
     _LST-DRW-W @ _LST-NCOLS 0 DO
         _LST-CD-LINE @ _LST-DRW-W @ _LST-BODY-H < 0= IF LEAVE THEN
-        I _LST-CARD-X _LST-CD-X !
-        I _LST-DRW-W @ _LST-CARD-LIMIT _LST-CD-LIMIT !
+        _LST-DRW-IDX @ I _LST-DRW-W @ _LST-CARD-X _LST-CD-X !
+        _LST-DRW-IDX @ I _LST-DRW-W @ _LST-CARD-LIMIT _LST-CD-LIMIT !
         _LST-DRW-IDX @ I _LST-DRW-W @ _LST-FIELD _LST-CD-FU ! _LST-CD-FA !
         _LST-CD-FA @ _LST-CD-FU @ _LST-DRW-IDX @ I _LST-DRW-W @
             _LST-STYLE-FIELD _LST-TX-STYLED !
@@ -956,8 +978,10 @@ VARIABLE _LST-FK-KEY
 VARIABLE _LST-HND-COL    \ column of a press, relative to the region
 
 \ _LST-BOX-HIT? ( index widget -- flag )   Is the press on the row's box?
+\   A card's box is on its first screen row.
 : _LST-BOX-HIT?  ( index widget -- flag )
     2DUP _LST-FLAGS LST-ROW-CHECKABLE AND 0= IF 2DROP 0 EXIT THEN
+    DUP _LST-CARDS? _LST-AT-LINE @ 0<> AND IF 2DROP 0 EXIT THEN
     NIP _LST-BOX-COL _LST-HND-COL @ SWAP - _LST-BOX-W 1- U< ;
 
 : _LST-POINTER  ( event widget -- consumed? )

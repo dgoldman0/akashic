@@ -106,7 +106,7 @@ nonzero and unique, and an item is not its own parent. At most one item is
 selected and at most one is current, and an unavailable item is not selected.
 An expanded item is expandable and a checked item is checkable. Each item has
 between one field and one per column. `LIST`, `TABLE`, and `CARDS` hold only
-top-level items that cannot expand, and a card has no check box. Only cards
+top-level items that cannot expand. Only cards
 have a viewport row or a wrapping column; an empty view's viewport row is
 zero. A field keeps line feeds only when its column wraps. The viewport row
 must lie inside the first viewport card, but its bound depends on the root's
