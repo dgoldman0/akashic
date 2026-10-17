@@ -2183,19 +2183,21 @@ class StreamsAloneJourney(_AppletJourney):
 
     S opens the Sources view, empty at first; F asks for a feed's address
     in a prompt.  The new source is a checkable card, checked because it
-    is enabled; a CHECK on it disables it, at its next revision.
+    is enabled; a CHECK on it disables it, at its next revision.  Escape
+    returns to the timeline.
     """
 
     focus_marker = STREAMS_ALONE_FOCUS_MARKER
-    READY, SELECTED, OPENED, SOURCES, PROMPT, TYPED, SOURCE, UNCHECKED = range(8)
+    (READY, SELECTED, OPENED, SOURCES, PROMPT, TYPED, SOURCE, UNCHECKED,
+     BACK) = range(9)
 
     @property
     def final_stage(self) -> int:
-        return self.UNCHECKED
+        return self.BACK
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, "[ ] Syndication feed", STREAMS_FEED_URL)
+        return (self.focus_marker, STREAMS_REPLY_TEXT)
 
     @staticmethod
     def _sources(projection, bounds):
@@ -2213,6 +2215,12 @@ class StreamsAloneJourney(_AppletJourney):
         return views[0] if len(views) == 1 else None
 
     def _source_steps(self, offer, generation, projection, sender, bounds) -> JourneyProgress:
+        if self.stage == self.BACK:
+            cards = self._cards(projection)
+            if cards is None or self._posts(cards) != list(STREAMS_CARDS):
+                return self._wait("the timeline after Escape")
+            _require_cell_text_in(offer, STREAMS_REPLY_TEXT, bounds, _WHERE)
+            return self._done("streams-timeline-again", offer)
         prompt = _prompt_claim(projection, STREAMS_FEED_PROMPT, bounds)
         if self.stage == self.SOURCES:
             if not _residual_contains(projection, STREAMS_NO_SOURCES, bounds):
@@ -2266,7 +2274,8 @@ class StreamsAloneJourney(_AppletJourney):
                 f"Streams' switched-off source card reads {fields!r}"
             )
         _require_cell_text_in(offer, "[ ] Syndication feed", bounds, _WHERE)
-        return self._done("streams-source-switched-off", offer)
+        return self._step("streams-source-switched-off", "send_key", "escape",
+                          self.BACK, offer, generation, sender)
 
     @staticmethod
     def _cards(projection):

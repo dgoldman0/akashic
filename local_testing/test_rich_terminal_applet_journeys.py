@@ -982,6 +982,9 @@ def test_streams_alone_adds_a_source_and_switches_it_off_by_its_check_box() -> N
         # The CHECK has not reached Streams yet.
         (checked, _sources_frame(cards=_source_cards(checked=True, revision=1))),
         (unchecked, _sources_frame(cards=_source_cards(checked=False, revision=2))),
+        # Escape has not reached Streams yet.
+        (unchecked, _sources_frame(cards=_source_cards(checked=False, revision=2))),
+        (_streams_offer(), _streams_frame(_streams_cards(STREAMS_CARDS, 0, TIMELINE_ID))),
     )
     results = _run(journey, steps)
     assert [(result.milestone, sent) for result, sent in results] == [
@@ -991,12 +994,12 @@ def test_streams_alone_adds_a_source_and_switches_it_off_by_its_check_box() -> N
         ("streams-feed-typed", [("send_key", "enter")]),
         ("streams-source-added", [("item_check", f"1,1,{SOURCES_ID},1")]),
         (None, []),
-        ("streams-source-switched-off", []),
+        ("streams-source-switched-off", [("send_key", "escape")]),
+        (None, []),
+        ("streams-timeline-again", []),
     ]
     assert results[-1][0].complete
-    assert journey.final_cell_markers == (
-        "[1:Streams*]", "[ ] Syndication feed", STREAMS_FEED_URL
-    )
+    assert journey.final_cell_markers == ("[1:Streams*]", STREAMS_REPLY_TEXT)
 
 
 def test_streams_alone_refuses_a_source_card_that_reads_wrong() -> None:
