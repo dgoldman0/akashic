@@ -14020,8 +14020,8 @@ REQUIRE tui/applets/soundlab/soundlab.f
 SOUNDLAB-RUN
 ." [akashic] sound lab exited" CR
 """,
-        ready_markers=("SOUND LAB", "Waveform", "Playback"),
-        stable_markers=("SOUND LAB", "Waveform", "Playback"),
+        ready_markers=("SOUND LAB", "Waveform", "audio device"),
+        stable_markers=("SOUND LAB", "Waveform", "audio device"),
         linked=True,
         include_large_sample=False,
     ),

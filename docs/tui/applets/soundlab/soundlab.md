@@ -38,6 +38,15 @@ waveform projector draws the CELL view. The compact frequency line
 marks the pitch estimate (`P`) and centroid (`C`); it is deliberately described
 as landmarks rather than a full spectrum plot.
 
+Three lamps under the controls say whether the render is current, whether an
+audio device is present and whether Sound Lab's own playback is active, each
+with a fixed caption. The status bar says what the output and playback are:
+the signal, then `Render required`, `Rendered / unsaved`, `Rendered / saved`,
+`Render failed` or `Output recovery blocked`, then `Audio absent`, `Audible
+sink` or `Capture only`. They are UIDL status labels, so a rich terminal
+shows them as status fields; the playback label follows an audible sink
+that comes or goes.
+
 ## Playback Boundary
 
 Sound Lab requires `audio/output.f` and submits only the current valid render

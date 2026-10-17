@@ -125,6 +125,7 @@ _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-BOUND-H
 _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-BOUND-W
 _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-OWNED-ACTIVE
 _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-AUDIO-PRESENT
+_SL-CURRENT-STATE CMP-CELL: _SL-STATUS-SINK
 _SL-CURRENT-STATE CMP-CELL: _SL-PROMPT
 _SL-CURRENT-STATE CMP-CELL: _SL-PROMPT-RGN
 _SL-CURRENT-STATE CMP-CELL: _SL-PROMPT-MODE
@@ -360,6 +361,7 @@ VARIABLE _SL-TN
         THEN THEN THEN THEN
         S" text" 2SWAP UTUI-SET-ATTR
     THEN
+    AUDIO-OUT-SINK? _SL-STATUS-SINK !
     _SL-E-SBAR-PLAYBACK @ ?DUP IF
         AUDIO-OUT-PRESENT? 0= IF
             S" Audio absent"
@@ -895,11 +897,11 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
         _SL-DG-INACTIVE _SL-DG-RMS _SL-RENDER-VALID @
         UDG-STATUS-CIRCLE _SL-DGRAPH-BUILDER UDG-STATUS
     DUP IF EXIT THEN DROP
-    31 9 4 1 1 2 UDG-OBJECT-VISIBLE
+    31 8 30 1 1 2 UDG-OBJECT-VISIBLE
         _SL-DG-INACTIVE _SL-DG-PEAK _SL-OWNED-ACTIVE?
         UDG-STATUS-DIAMOND _SL-DGRAPH-BUILDER UDG-STATUS
     DUP IF EXIT THEN DROP
-    32 9 2 1 1 2 UDG-OBJECT-VISIBLE
+    32 8 14 1 1 2 UDG-OBJECT-VISIBLE
         _SL-DG-INACTIVE _SL-DG-DEVICE AUDIO-OUT-PRESENT?
         UDG-STATUS-SQUARE _SL-DGRAPH-BUILDER UDG-STATUS
     DUP IF EXIT THEN DROP
@@ -997,24 +999,12 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
     _SL-DRAW-SETTINGS
     239 234 0 DRW-STYLE!
     9472 7 1 _SL-DW @ 2 - 0 MAX DRW-HLINE
-    220 234 0 DRW-STYLE!
-    _SL-OUTPUT-BLOCKED @ IF
-        S" Output: recovery blocked"
-    ELSE _SL-RENDER-VALID @ IF
-        _SL-UNSAVED @ IF S" Output: rendered, not saved"
-        ELSE S" Output: /soundlab.wav" THEN
-    ELSE
-        S" Output: render current settings before saving"
-    THEN THEN 8 4 DRW-TEXT
+    \ The lamps' captions.  What the output and playback are now is the
+    \ status bar's to say.
     203 234 CELL-A-DIM DRW-STYLE!
-    AUDIO-OUT-PRESENT? 0= IF
-        S" Playback: audio device absent"
-    ELSE AUDIO-OUT-SINK? IF
-        S" Playback: audible sink ready (P to play)"
-    ELSE
-        S" Playback: deterministic capture only (P captures; no sound)"
-    THEN THEN
-    _SL-DW @ 8 - 0 MAX MIN 9 6 DRW-TEXT
+    S" rendered" 8 4 DRW-TEXT
+    S" audio device" 8 16 DRW-TEXT
+    S" playing" 8 32 DRW-TEXT
     _SL-DRAW-WAVEFORM
     _SL-DRAW-ANALYSIS
     _SL-DGRAPH-WIDGET @ ?DUP IF
@@ -1285,8 +1275,12 @@ VARIABLE _SL-INIT-RENDER-IOR
     _SL-DGRAPH-WIDGET @ IF
         _SL-OWNED-ACTIVE? _SL-DGRAPH-OWNED-ACTIVE @ <>
         AUDIO-OUT-PRESENT? _SL-DGRAPH-AUDIO-PRESENT @ <> OR IF
-            _SL-DGRAPH-INVALIDATE
+            _SL-DGRAPH-INVALIDATE EXIT
         THEN
+    THEN
+    \ An audible sink that comes or goes changes only the playback label.
+    AUDIO-OUT-SINK? _SL-STATUS-SINK @ <> IF
+        _SL-UPDATE-STATUS ASHELL-DIRTY!
     THEN ;
 
 : _SL-CLOSE-CONFIRMED  ( confirmed? context -- )
