@@ -237,6 +237,36 @@ VARIABLE _OW-SEQ-RUN
 VARIABLE _OW-VALVE-REV
 VARIABLE _OW-VALVE-N
 
+[UNDEFINED] _OW-LBL$ [IF]
+\ With the complete closure a label's text is its UIDL text attribute.
+: _OW-LBL$  ( elem -- a u )
+    ?DUP 0= IF 0 0 EXIT THEN
+    S" text" UIDL-ATTR 0= IF 2DROP 0 0 THEN ;
+[THEN]
+
+: _OW-LBL=  ( elem a u -- flag )  ROT _OW-LBL$ COMPARE 0= ;
+
+: _OW-CHAR  ( char -- )
+    _OW-EVENT 24 0 FILL
+    KEY-T-CHAR _OW-EVENT ! _OW-EVENT 8 + !
+    _OW-EVENT _WORLD-PANEL _WORLD-PANEL-HANDLE _OW-ASSERT ;
+
+\ The status bar: whether the run is running, how the last action went,
+\ and how the last replay went.
+: _OW-WORLD-STATUS  ( -- )
+    _WORLD-E-RUN @ S" Paused" _OW-LBL= _OW-ASSERT
+    _WORLD-E-RESULT @ S" Ready" _OW-LBL= _OW-ASSERT
+    _WORLD-E-REPLAY @ S" Not replayed" _OW-LBL= _OW-ASSERT
+    BL _OW-CHAR
+    _WORLD-E-RUN @ S" Running fixed-step" _OW-LBL= _OW-ASSERT
+    BL _OW-CHAR
+    _WORLD-E-RUN @ S" Paused" _OW-LBL= _OW-ASSERT
+    \ No checkpoint yet: the replay is refused and says so.
+    [CHAR] r _OW-CHAR
+    _WORLD-E-RESULT @ S" Create a checkpoint first" _OW-LBL= _OW-ASSERT
+    _WORLD-E-REPLAY @ S" Replay failed" _OW-LBL= _OW-ASSERT
+    _OW-STACK ;
+
 \ The valve: one canonical INTEGER field over the run's own range, moved a
 \ step at a time by Left and Right and by the field's own adjustments.
 : _OW-VALVE-MODEL  ( -- model )
@@ -325,6 +355,7 @@ VARIABLE _OW-VALVE-N
         S" 500" _OW-ITEM-TEXT= _OW-ASSERT
     _OW-STACK
     _OW-WORLD-VALVE
+    _OW-WORLD-STATUS
     _OW-WORLD-INSTANCE @ WORLDS-SHUTDOWN-CB
     _OW-WORLD-INSTANCE @ CINST-FREE 0 _OW-WORLD-INSTANCE !
     _OW-OBS-DESC OBSERVATORY-ENTRY
@@ -520,7 +551,22 @@ VARIABLE _UTUI-MENU-OPEN
 : DRW-TEXT DROP DROP DROP DROP ;
 : DRW-HLINE DROP DROP DROP DROP ;
 : DRW-CHAR DROP DROP DROP ;
-: UTUI-BY-ID 2DROP 1 ;
+\ An element is the address of the id its lookup names, so each lookup
+\ site has its own; a label's text is recorded where a check can read it.
+: UTUI-BY-ID DROP ;
+CREATE _OW-LBL 192 ALLOT  _OW-LBL 192 0 FILL
+: _OW-LBL-SLOT  ( elem -- slot|0 )
+    8 0 DO
+        I 24 * _OW-LBL +
+        DUP @ 2 PICK = IF NIP UNLOOP EXIT THEN
+        DUP @ 0= IF TUCK ! UNLOOP EXIT THEN
+        DROP
+    LOOP DROP 0 ;
+: UTUI-SET-ATTR  ( elem name-a name-l val-a val-l -- )
+    2SWAP 2DROP ROT _OW-LBL-SLOT ?DUP 0= IF 2DROP EXIT THEN
+    >R R@ 16 + ! R> 8 + ! ;
+: _OW-LBL$  ( elem -- a u )
+    _OW-LBL-SLOT ?DUP IF DUP 8 + @ SWAP 16 + @ ELSE 0 0 THEN ;
 : UTUI-ELEM-RGN DROP 0 0 80 30 ;
 : UTUI-WIDGET-SET 2DROP ;
 : UTUI-FOCUS! DROP ;

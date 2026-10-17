@@ -33354,10 +33354,27 @@ def smoke(
                 return
             send_sgr_mouse(row, value_col)
             send_sgr_mouse(row, value_col, release=True)
-            wait_screen(
+            if not wait_screen(
                 worlds_valve(750),
                 "A press on Worlds' valve did not set its next setting",
-            )
+            ):
+                return
+            # The status bar says the run is paused, how the last action
+            # went, and that nothing was replayed; Space runs and pauses.
+            if not wait_screen_state(
+                lambda shown: all(
+                    text in shown.text() for text in ("Paused", "Ready", "Not replayed")
+                ),
+                "Worlds' status bar does not show its run, result and replay",
+            ):
+                return
+            session.send_text(" ")
+            if not wait_screen(
+                "Running fixed-step", "Space did not show Worlds' run as running"
+            ):
+                return
+            session.send_text(" ")
+            wait_screen("Paused", "Space did not show Worlds' run as paused")
 
         def run_daybook_mixed_text_journey() -> None:
             """Add a mixed-script task through Daybook's prompt: typed,

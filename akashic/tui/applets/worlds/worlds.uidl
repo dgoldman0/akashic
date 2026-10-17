@@ -17,8 +17,9 @@
 </menubar>
 <region id=worlds-body style=color:#eeeeee;background-color:#121212/>
 <status id=sbar style=color:white;background-color:#005f5f>
-<label id=sbar-model text=Two-reservoir_facility/>
-<label id=sbar-state text=Session-only_deterministic_run/>
+<label id=sbar-run text=Paused/>
+<label id=sbar-result text=Ready/>
+<label id=sbar-replay text=Not_replayed/>
 </status>
 <action do=quit key=Ctrl+Q/>
 </uidl>

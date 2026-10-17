@@ -63,6 +63,16 @@ older value is refused rather than applied to a value it never saw. A
 panel too narrow for the label shortens it first, and one with no room for
 a label cell beside the value shows no field.
 
+## Status
+
+The status bar says whether the run is running (`Running fixed-step` or
+`Paused`), how its last action went (`Ready`, or why the run refused it,
+such as `Stale revision refused` or `Create a checkpoint first`), and how
+its last replay went (`Not replayed`, `Replay exact` or `Replay failed`).
+They are UIDL status labels, so a rich terminal shows them as status
+fields. The instrument graph keeps its readouts, the two reservoir meters
+and the checkpoint's lamp.
+
 ## Keys
 
 | Key | Action |

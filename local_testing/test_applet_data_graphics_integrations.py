@@ -106,17 +106,18 @@ def test_applet_data_graphics_source_contract() -> None:
     sound_stop = _definition(sound, "SOUNDLAB-SHUTDOWN-CB")
     _ordered(sound_stop, "DGRAPH-FREE", "_SL-PANEL-RGN @ ?DUP IF RGN-FREE")
 
-    # Worlds: eleven readouts, two meters, three truthful statuses.  The
-    # valve is a canonical INTEGER field, not a readout.
-    assert 112 + 11 * 144 + 2 * 144 + 3 * 128 == 2368
+    # Worlds: eleven readouts, two meters, and the checkpoint's status.  The
+    # valve is a canonical INTEGER field, and running, the last action and
+    # the replay are status-bar labels.
+    assert 112 + 11 * 144 + 2 * 144 + 128 == 2112
     assert re.search(
         r"UDG-HEADER-SIZE\s+0 UDG-READOUT-RECORD-BYTES 11 \* \+\s+"
         r"UDG-METER-RECORD-SIZE 2 \* \+\s+"
-        r"UDG-STATUS-RECORD-SIZE 3 \* \+\s+"
+        r"UDG-STATUS-RECORD-SIZE \+\s+"
         r"CONSTANT _WORLD-DGRAPH-CAP",
         worlds,
     )
-    assert "16 CONSTANT _WORLD-DGRAPH-OBJECT-COUNT" in worlds
+    assert "14 CONSTANT _WORLD-DGRAPH-OBJECT-COUNT" in worlds
     assert _definition(worlds, "_WORLD-DGRAPH-EMIT-READOUTS").count(
         "_WORLD-DGRAPH-READOUT"
     ) == 11
@@ -126,7 +127,7 @@ def test_applet_data_graphics_source_contract() -> None:
     ) == 2
     assert _definition(worlds, "_WORLD-DGRAPH-EMIT-STATUSES").count(
         "_WORLD-DGRAPH-STATUS"
-    ) == 3
+    ) == 1
     world_build = _definition(worlds, "_WORLD-DGRAPH-REBUILD")
     assert "_WORLD-RUN WRUN-VALID?" in world_build
     _bind_before_flip(world_build, "_WORLD-DGRAPH-ACTIVE-A !")
@@ -138,9 +139,12 @@ def test_applet_data_graphics_source_contract() -> None:
         "_WORLD-REPLAY-ATTEMPTED !",
         "_WORLD-APPLY-STATUS",
     )
-    world_panel = _definition(worlds, "_WORLD-PANEL-DRAW")
-    assert "_WORLD-REPLAY-ATTEMPTED @" in world_panel
-    assert "_WORLD-REPLAY-STATUS @ WRUN-S-OK = AND" in world_panel
+    world_status = _definition(worlds, "_WORLD-UPDATE-STATUS")
+    assert "_WORLD-REPLAY-ATTEMPTED @" in world_status
+    assert "_WORLD-REPLAY-STATUS @ WRUN-S-OK =" in world_status
+    assert "_WORLD-UPDATE-STATUS" in _definition(worlds, "_WORLD-INVALIDATE")
+    assert "DRW-TEXT" not in _definition(worlds, "_WORLD-PANEL-DRAW").split(
+        "_WORLD-DRAW-JOURNAL", 1)[1]
     assert "_WORLD-PANEL-RGN @ WDG-DRAW-IN" in _definition(
         worlds, "_WORLD-DRAW-INSTRUMENT"
     )
