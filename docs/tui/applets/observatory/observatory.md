@@ -49,6 +49,13 @@ profile information while larger regions add the plot. The applet uses direct
 drawing because the current canvas mounting path does not yet offer a safe
 resize/remount ownership contract.
 
+The status bar's state label says how the profile went: `Profiled N
+samples` for the current series, or `Profile refused:` and why (`series
+too large`, `not exact in FP16`, `digest mismatch`, `out of memory` or
+`invalid series`) when the last series offered was refused, which leaves
+the prior series and its profile in place. It is a UIDL status label, so a
+rich terminal shows it as a status field.
+
 ## Public words
 
 | Word | Stack | Purpose |

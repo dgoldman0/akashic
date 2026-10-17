@@ -10,7 +10,7 @@
 <region id=observatory-body style=color:#eeeeee;background-color:#121212/>
 <status id=sbar style=color:white;background-color:#005f5f>
 <label id=sbar-instrument text=series.profile.v1/>
-<label id=sbar-state text=Owner-serialized_FP16_result/>
+<label id=sbar-state text=No_profile/>
 </status>
 <action do=rerun key=F5/>
 <action do=quit key=Ctrl+Q/>

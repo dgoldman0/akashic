@@ -113,6 +113,7 @@ VARIABLE _OBS-CURRENT-INSTANCE
 
 CMP-LAYOUT-BEGIN
 _OBS-CURRENT-STATE CMP-CELL: _OBS-E-BODY
+_OBS-CURRENT-STATE CMP-CELL: _OBS-E-STATE
 _OBS-CURRENT-STATE 40 CMP-FIELD: _OBS-PANEL
 _OBS-CURRENT-STATE CMP-CELL: _OBS-PANEL-RGN
 _OBS-CURRENT-STATE CMP-CELL: _OBS-DGRAPH-WIDGET
@@ -283,7 +284,34 @@ DEFER _OBS-TABLE-REBUILD-D
 ' NOOP IS _OBS-DGRAPH-REBUILD-D
 ' NOOP IS _OBS-TABLE-REBUILD-D
 
+\ The status bar's state: the profile of the current series, or why the
+\ last one was refused.
+CREATE _OBS-STATUS-BUF 40 ALLOT
+VARIABLE _OBS-STATUS-U
+
+: _OBS-STATUS+  ( addr len -- )
+    40 _OBS-STATUS-U @ - MIN
+    >R _OBS-STATUS-BUF _OBS-STATUS-U @ + R@ MOVE R> _OBS-STATUS-U +! ;
+
+: _OBS-PROFILE$  ( -- addr len )
+    _OBS-LAST-PROFILE-STATUS @ CASE
+        OBS-S-OK OF
+            0 _OBS-STATUS-U ! S" Profiled " _OBS-STATUS+
+            _OBS-COUNT @ NUM>STR _OBS-STATUS+ S"  samples" _OBS-STATUS+
+            _OBS-STATUS-BUF _OBS-STATUS-U @
+        ENDOF
+        OBS-S-CAPACITY OF S" Profile refused: series too large" ENDOF
+        OBS-S-PRECISION OF S" Profile refused: not exact in FP16" ENDOF
+        OBS-S-DIGEST OF S" Profile refused: digest mismatch" ENDOF
+        OBS-S-NOMEM OF S" Profile refused: out of memory" ENDOF
+        >R S" Profile refused: invalid series" R>
+    ENDCASE ;
+
+: _OBS-UPDATE-STATUS  ( -- )
+    _OBS-E-STATE @ ?DUP IF S" text" _OBS-PROFILE$ UTUI-SET-ATTR THEN ;
+
 : _OBS-VIEW-INVALIDATE  ( -- )
+    _OBS-UPDATE-STATUS
     _OBS-PANEL WDG-DIRTY
     _OBS-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
     ASHELL-DIRTY! ;
@@ -386,8 +414,9 @@ VARIABLE _OBS-ACCEPT-EXPECTED-U
         _OBS-ACCEPT-X @ _OBS-ACCEPT-LAST-X !
         1 _OBS-ACCEPT-I +!
     REPEAT
+    \ A refused profile keeps the prior series, and the status bar says why.
     _OBS-PROFILE-CANDIDATE DUP _OBS-LAST-PROFILE-STATUS ! DUP IF
-        _OBS-CANDIDATE-FREE EXIT
+        _OBS-CANDIDATE-FREE _OBS-VIEW-INVALIDATE EXIT
     THEN DROP
     _OBS-COMMIT-CANDIDATE OBS-S-OK ;
 
@@ -855,6 +884,7 @@ CREATE OBSERVATORY-INTENT CINT-DESC-SIZE ALLOT
     _OBS-DEMO _OBS-DEMO-SIZE _OBS-ACCEPT-SNAPSHOT
         0<> ABORT" observatory: demonstration series failed"
     S" observatory-body" UTUI-BY-ID _OBS-E-BODY !
+    S" sbar-state" UTUI-BY-ID _OBS-E-STATE !
     _OBS-E-BODY @ ?DUP IF
         UTUI-ELEM-RGN RGN-NEW _OBS-PANEL-INIT
         _OBS-PANEL-RGN @ DGRAPH-NEW _OBS-DGRAPH-WIDGET !
@@ -870,7 +900,8 @@ CREATE OBSERVATORY-INTENT CINT-DESC-SIZE ALLOT
         _OBS-E-BODY @ UTUI-FOCUS!
     THEN
     S" rerun" ['] _OBS-DO-RERUN UTUI-DO!
-    S" quit" ['] _OBS-DO-QUIT UTUI-DO! ;
+    S" quit" ['] _OBS-DO-QUIT UTUI-DO!
+    _OBS-UPDATE-STATUS ;
 
 : OBSERVATORY-EVENT-CB  ( event instance -- consumed? )
     _OBS-ACTIVATE
