@@ -597,9 +597,17 @@ a Desk shutdown that applications deferred to their questions stopped once
 they agreed, and now goes on; the reference renderer started right-to-left
 dialog text and button labels at the left; and a wheel over a dialog went
 nowhere in the physical viewer, where a dialog that is not a notice now
-takes `SCROLL`. Toggles have begun: a UIDL menu item can be checked, every
-CELL menu keeps a two-cell mark column for it, and the menu snapshot carries
-it as `CHECKED`. The applications' checked items come next.
+takes `SCROLL`. Toggles and choices are under way. A UIDL menu item can be
+checked from its application's state, every CELL menu keeps a two-cell
+mark column for it, and the menu snapshot carries it as `CHECKED`: File
+Explorer's Show Hidden and sort orders, Pad's panels and the Agent's Access
+presets. The Agent's run settings are four `CHOICE` fields that the shared
+field widget draws in its panel; in the physical viewer Desk with the Agent
+moves Reasoning with an adjustment and Model with an activation. The
+Worlds valve is an `INTEGER` field over the run's own range; Worlds is in
+no Desktop profile, so a standalone CELL smoke and the Observatory/Worlds
+slice check it. Streams' card lists come next, and need the contract
+first: SEMANTIC-CONTENT-1 lets no `CARDS` item carry a check box.
 
 Before part 5 closes, the full Desktop journey also requires the launcher's
 whole-screen modal scope, not only its selection; File Explorer's journey
