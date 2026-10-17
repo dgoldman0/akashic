@@ -212,14 +212,14 @@
         "menus": ["Agent", "Run", "Connection", "Access", "Review", "Help"],
         "actions": ["about", "access-assist", "access-chat", "access-library-burrow", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "scheduled", "settings"],
         "shortcuts": {"account": "F9", "approve": "F6", "cancel": "Escape", "clear-credential": "Ctrl+Shift+K", "credential": "Ctrl+K", "deny": "F7", "prompt": "Ctrl+L", "quit": "Ctrl+Q", "scheduled": "F5", "settings": "F8"},
-        "element_ids": ["access", "agent-body", "effort", "mbar", "meta", "model", "provider", "sbar", "source-class", "state"]
+        "element_ids": ["access", "access-assist", "access-chat", "access-library-burrow", "access-read", "agent-body", "effort", "mbar", "meta", "model", "provider", "sbar", "source-class", "state"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/agent/agent.f",
           "word": "_AG-PANEL-HANDLE",
-          "sha256": "da39b65aab6bc832616c296acf1d2e085527fc7863eada235ffff4e795f4971c",
-          "bindings": ["Enter -> prompt, in the chat", "Escape -> back from a scheduled run's transcript to the runs and from the runs to the chat, else cancel run", "Up -> scroll the open review, else the transcript shown, one row older; in the scheduled runs, select the run above", "Down -> scroll the open review, else the transcript shown, one row newer; in the scheduled runs, select the run below", "PageUp -> scroll the open review, else the transcript shown, one page older; in the scheduled runs, select a page above", "PageDown -> scroll the open review, else the transcript shown, one page newer; in the scheduled runs, select a page below", "Home -> the open review's first row, else the transcript's first message, or the newest scheduled run", "End -> the open review's last row, else the transcript's end, which it then follows, or the oldest scheduled run", "Wheel -> scroll the open review, else the scheduled runs or the transcript shown, three rows", "Enter on a scheduled run -> open its transcript"]
+          "sha256": "ed9a200459a19067c9c5d6d385c5adf407fca30002c2a565059ed9f03f02672e",
+          "bindings": ["Enter -> prompt, in the chat", "Escape -> back from a scheduled run's transcript to the runs and from the runs to the chat, else cancel run", "Up -> the transcript shown, one row older; in the scheduled runs, select the run above", "Down -> the transcript shown, one row newer; in the scheduled runs, select the run below", "PageUp -> the transcript shown, one page older; in the scheduled runs, select a page above", "PageDown -> the transcript shown, one page newer; in the scheduled runs, select a page below", "Home -> the transcript's first message, or the newest scheduled run", "End -> the transcript's end, which it then follows, or the oldest scheduled run", "Wheel -> scroll the scheduled runs or the transcript shown, three rows", "Enter on a scheduled run -> open its transcript"]
         },
         {
           "path": "akashic/tui/applets/agent/agent.f",
@@ -377,7 +377,7 @@
         "menus": ["File", "Build", "Edit", "Selection", "View", "Go", "Help"],
         "actions": ["about", "build-install", "close-all", "close-tab", "copy", "cut", "delete-line", "find", "find-next", "find-open", "goto-build-error", "goto-file", "goto-line", "new", "next-tab", "open", "paste", "prev-tab", "quit", "redo", "replace", "save", "save-all", "save-as", "select-all", "select-line", "select-word", "shortcuts", "toggle-hidden", "toggle-output", "toggle-sidebar", "undo"],
         "shortcuts": {"build-install": "Ctrl+Shift+B", "close-tab": "Ctrl+W", "copy": "Ctrl+C", "cut": "Ctrl+X", "delete-line": "Ctrl+Shift+K", "find": "Ctrl+F", "find-next": "F3", "find-open": "Ctrl+Shift+F", "goto-build-error": "F4", "goto-file": "Ctrl+P", "goto-line": "Ctrl+G", "new": "Ctrl+N", "next-tab": "Ctrl+PageDown", "open": "Ctrl+O", "paste": "Ctrl+V", "prev-tab": "Ctrl+PageUp", "quit": "Ctrl+Q", "redo": "Ctrl+Y", "replace": "Ctrl+H", "save": "Ctrl+S", "save-as": "Ctrl+Shift+S", "select-all": "Ctrl+A", "select-line": "Ctrl+L", "select-word": "Ctrl+D", "toggle-output": "Ctrl+J", "toggle-sidebar": "Ctrl+B", "undo": "Ctrl+Z"},
-        "element_ids": ["editor-area", "eo-split", "main-split", "mbar", "output", "output-scroll", "sbar", "sbar-enc", "sbar-file", "sbar-pos", "sbar-tabs", "sidebar", "sidebar-scroll"]
+        "element_ids": ["editor-area", "eo-split", "main-split", "mbar", "output", "output-scroll", "sbar", "sbar-enc", "sbar-file", "sbar-pos", "sbar-tabs", "sidebar", "sidebar-scroll", "view-hidden", "view-output", "view-sidebar"]
       },
       "direct_input_contracts": [
         {
@@ -511,7 +511,7 @@
         "menus": ["File", "Edit", "View", "Tools"],
         "actions": ["collapse-all", "copy", "cut", "delete", "expand-all", "goto", "new-dir", "new-file", "open", "parent-dir", "paste", "props", "quit", "refresh", "rename", "show-details", "show-preview", "sort-name", "sort-size", "sort-type", "toggle-hidden"],
         "shortcuts": {"copy": "Ctrl+C", "cut": "Ctrl+X", "delete": "Delete", "goto": "Ctrl+G", "new-dir": "Ctrl+Shift+N", "new-file": "Ctrl+N", "open": "Ctrl+O", "parent-dir": "Backspace", "paste": "Ctrl+V", "props": "Ctrl+I", "quit": "Ctrl+Q", "refresh": "F5", "rename": "F2", "show-details": "Alt+1", "show-preview": "Alt+2", "toggle-hidden": "Ctrl+H"},
-        "element_ids": ["detail", "mbar", "preview", "sbar", "sbar-left", "sbar-right", "scroller", "sidebar", "tabs"]
+        "element_ids": ["detail", "mbar", "preview", "sbar", "sbar-left", "sbar-right", "scroller", "sidebar", "tabs", "view-hidden", "view-sort-name", "view-sort-size", "view-sort-type"]
       },
       "capability_surface": {"path": "akashic/tui/applets/fexplorer/fexplorer.f", "literal_prefix": "fexplorer.", "ids": ["fexplorer.preview.text", "fexplorer.resource.reveal", "fexplorer.resource.selected"]},
       "source_contracts": [
