@@ -597,7 +597,7 @@ a Desk shutdown that applications deferred to their questions stopped once
 they agreed, and now goes on; the reference renderer started right-to-left
 dialog text and button labels at the left; and a wheel over a dialog went
 nowhere in the physical viewer, where a dialog that is not a notice now
-takes `SCROLL`. Toggles and choices are under way. A UIDL menu item can be
+takes `SCROLL`. Toggles and choices are done. A UIDL menu item can be
 checked from its application's state, every CELL menu keeps a two-cell
 mark column for it, and the menu snapshot carries it as `CHECKED`: File
 Explorer's Show Hidden and sort orders, Pad's panels and the Agent's Access
@@ -615,8 +615,24 @@ with Streams adds a feed source through its prompt and switches it off by
 its card's check box. That check found that Streams' prompt left its paint
 on the status bar's row after closing, which hid the whole Streams document
 from the rich frame; Streams now repaints the status bar, as five other
-applications did. Grid's and Library's prompts still leave that row
-unrepainted; step 7 changes both applications' status and takes it up.
+applications did, and Grid and Library do too. Status is done as well.
+UIDL's string pool now gives each attribute the room its value holds, so
+status text whose length changes no longer uses the pool up over a long
+session. Worlds says its run state, its last action's outcome and its last
+replay in status labels, in place of a painted footer; Observatory's state
+label says how its profile went, or why it was refused; and Sound Lab
+leaves its output and playback to its status labels, its lamps kept with
+fixed captions. Streams and Library already said their status in labels,
+and what they paint beside them is content. Desk's agent state is a status
+field: Desk's shell model carries it, the shell candidate shows it in a
+region of its own across the taskbar row past the entries, with a severity
+for each state, and a change of state goes out as a DELTA. In the physical
+viewer Desk with the Agent shows it through the approval review. Grid's
+formula bar is a read-only TEXT field through the shared field widget, its
+value the cell's source as a display shows it; Grid is in no Desktop
+profile, so its CELL smoke and its own tests check it. A UIDL status label
+still goes out neutral, since UIDL gives a label no severity; the first
+application whose status needs one adds it.
 
 Before part 5 closes, the full Desktop journey also requires the launcher's
 whole-screen modal scope, not only its selection; File Explorer's journey
