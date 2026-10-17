@@ -67,7 +67,9 @@ current values need not be aligned to the step. TEXT requires zero numeric
 fields and zero choice count.
 
 All strings use `USF-TEXT?`: well-formed Unicode-scalar UTF-8, excluding C0,
-DEL, C1, U+2028, and U+2029. No implicit display projection occurs. Validation
+DEL, C1, U+2028, and U+2029. No implicit display projection occurs; a caller
+with text that may hold such characters builds its TEXT value with
+`UFLD-TEXT-DISPLAY`, below. Validation
 checks every exact byte count and every padding byte; trailing bytes are
 invalid. Counts are bounded by the supplied extent before record traversal.
 Choice uniqueness validation uses a bounded quadratic scan and needs no
@@ -87,6 +89,7 @@ UFLD-SLOTS        ( lr lc lh lw vr vc vh vw builder -- status )
 UFLD-LABEL        ( address bytes builder -- status )
 UFLD-INTEGER      ( value minimum maximum step builder -- status )
 UFLD-TEXT         ( address bytes builder -- status )
+UFLD-TEXT-DISPLAY ( address bytes builder -- status )
 UFLD-CHOICE-VALUE ( value builder -- status )
 UFLD-CHOICE       ( value label-address label-bytes builder -- status )
 UFLD-FINISH       ( builder -- bytes status )
@@ -99,6 +102,13 @@ CHOICE-VALUE starts content and repeated CHOICE calls append records. The
 current value may be absent while building, but FINISH rejects an empty choice
 list or a missing current value. FINISH validates the complete result and does
 not seal or allocate storage. Its returned extent is zero on refusal.
+
+TEXT's content is `UFLD-TEXT`, which takes clean text exactly, or
+`UFLD-TEXT-DISPLAY`, which takes any text and stores it as a display shows
+it: each ill-formed part, control and line or paragraph separator becomes
+U+FFFD, as `USF-INIT-DISPLAY` does for a status field and CELL drawing does
+on screen. Its source may be any caller storage apart from the builder and
+the destination's capacity.
 
 Every refused builder operation preserves the destination and builder bytes.
 Shape, phase, capacity, string validity, and overlap checks precede writes.

@@ -40,6 +40,7 @@ USF-INIT-DISPLAY ( key width split severity flags la lu va vu dst cap -- used st
 USF-VALIDATE     ( model bytes -- status )
 USF-TEXT?        ( address bytes -- flag )
 USF-DISPLAY-BYTES ( address bytes -- bytes status )
+USF-DISPLAY-COPY ( address bytes destination -- )
 USF-STORAGE-DISJOINT? ( address bytes -- flag )
 ```
 
@@ -60,7 +61,9 @@ CELL drawing. This includes malformed maximal subparts, C0, DEL, C1 and
 line separators; other scalars keep their ordinary text semantics.
 Its byte measurement and copying agree and leave the
 source unchanged. `USF-DISPLAY-BYTES` permits measuring that expansion
-without an intermediate text buffer. Neither constructor is a measure-only
+without an intermediate text buffer, and `USF-DISPLAY-COPY` writes it at a
+destination the caller has proved has that room, apart from the source; the
+field model's `UFLD-TEXT-DISPLAY` uses the pair. Neither constructor is a measure-only
 call; use the sizing words first.
 
 `USF-BYTES@`, `USF-ABI@`, `USF-KEY@`, `USF-WIDTH@`,

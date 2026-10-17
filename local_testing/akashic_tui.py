@@ -33714,6 +33714,12 @@ def smoke(
                     wait_screen(
                         "91", "Grid did not recalculate the dependent SUM range"
                     )
+                    # The formula bar, a read-only TEXT field, shows the
+                    # selected cell's source where the cell shows its value.
+                    wait_screen(
+                        "=B2*C2+5",
+                        "Grid's formula bar did not show the edited source",
+                    )
                     session.send_key("ctrl+s")
                     wait_screen(
                         "Grid saved", "Ctrl+S did not save Grid's worksheet"

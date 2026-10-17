@@ -359,13 +359,18 @@ CREATE _UFLD-SLOT-TEMP UFLD-HEADER-SIZE ALLOT
     _UFLD-SLOT-TEMP UFLD-LABEL-ROW-OFFSET +
     _UFLD-M @ UFLD-LABEL-ROW-OFFSET + 64 MOVE UFLD-S-OK ;
 
-: _UFLD-TEXT-INPUT? ( a u builder -- flag )
+\ A source string is caller storage apart from the builder and from the
+\ destination's whole capacity.
+: _UFLD-SOURCE? ( a u builder -- flag )
     >R 2DUP UFLD-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
     DUP _UFLD-U32? 0= IF 2DROP R> DROP 0 EXIT THEN
-    2DUP USF-TEXT? 0= IF 2DROP R> DROP 0 EXIT THEN
     R@ _UFLD-B? 0= IF 2DROP R> DROP 0 EXIT THEN
     2DUP R@ UFLD-BUILDER-SIZE MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
     R@ @ R> 8 + @ MSPAN-OVERLAP? 0= ;
+\ A text input is such a source and clean single-line text.
+: _UFLD-TEXT-INPUT? ( a u builder -- flag )
+    2 PICK 2 PICK 2 PICK _UFLD-SOURCE? 0= IF 2DROP DROP 0 EXIT THEN
+    DROP USF-TEXT? ;
 : _UFLD-APPEND-TEXT ( -- )
     _UFLD-M @ _UFLD-USED @ + _UFLD-U @ _UFLD-ALIGN8 0 FILL
     _UFLD-A @ _UFLD-M @ _UFLD-USED @ + _UFLD-U @ MOVE
@@ -401,6 +406,23 @@ CREATE _UFLD-SLOT-TEMP UFLD-HEADER-SIZE ALLOT
     _UFLD-B-LOAD _UFLD-U ! _UFLD-A !
     _UFLD-TEXT-FITS? 0= IF UFLD-S-CAPACITY EXIT THEN
     _UFLD-APPEND-TEXT _UFLD-U @ _UFLD-M @ UFLD-TEXT-BYTES-OFFSET + !
+    3 _UFLD-PHASE! UFLD-S-OK ;
+
+\ UFLD-TEXT-DISPLAY ( a u builder -- status )
+\   A TEXT value of any text as a display shows it: each ill-formed part,
+\   control and line or paragraph separator becomes U+FFFD, as
+\   USF-DISPLAY-BYTES measures it and CELL drawing shows it.
+VARIABLE _UFLD-D-U
+: UFLD-TEXT-DISPLAY ( a u builder -- status )
+    2 PICK 2 PICK 2 PICK _UFLD-SOURCE? 0= IF 2DROP DROP UFLD-S-INVALID EXIT THEN
+    DUP 24 + @ 2 <> OVER @ UFLD-KIND@ UFLD-K-TEXT <> OR IF 2DROP DROP UFLD-S-INVALID EXIT THEN
+    _UFLD-B-LOAD _UFLD-D-U ! _UFLD-A !
+    _UFLD-A @ _UFLD-D-U @ USF-DISPLAY-BYTES IF DROP UFLD-S-INVALID EXIT THEN
+    DUP _UFLD-U32? 0= IF DROP UFLD-S-INVALID EXIT THEN _UFLD-U !
+    _UFLD-TEXT-FITS? 0= IF UFLD-S-CAPACITY EXIT THEN
+    _UFLD-M @ _UFLD-USED @ + _UFLD-U @ _UFLD-ALIGN8 0 FILL
+    _UFLD-A @ _UFLD-D-U @ _UFLD-M @ _UFLD-USED @ + USF-DISPLAY-COPY
+    _UFLD-NEED @ _UFLD-USED! _UFLD-U @ _UFLD-M @ UFLD-TEXT-BYTES-OFFSET + !
     3 _UFLD-PHASE! UFLD-S-OK ;
 
 \ UFLD-TEXT-FILL ( codepoint count builder -- status )
@@ -546,6 +568,7 @@ GUARD _ufld-guard
 ' UFLD-LABEL CONSTANT _ufld-label-xt
 ' UFLD-INTEGER CONSTANT _ufld-integer-xt
 ' UFLD-TEXT CONSTANT _ufld-text-xt
+' UFLD-TEXT-DISPLAY CONSTANT _ufld-text-display-xt
 ' UFLD-TEXT-EDIT CONSTANT _ufld-text-edit-xt
 ' UFLD-TEXT-FILL CONSTANT _ufld-text-fill-xt
 ' UFLD-CHOICE-VALUE CONSTANT _ufld-choice-value-xt
@@ -560,6 +583,7 @@ GUARD _ufld-guard
 : UFLD-LABEL _ufld-label-xt _ufld-guard WITH-GUARD ;
 : UFLD-INTEGER _ufld-integer-xt _ufld-guard WITH-GUARD ;
 : UFLD-TEXT _ufld-text-xt _ufld-guard WITH-GUARD ;
+: UFLD-TEXT-DISPLAY _ufld-text-display-xt _ufld-guard WITH-GUARD ;
 : UFLD-TEXT-EDIT _ufld-text-edit-xt _ufld-guard WITH-GUARD ;
 : UFLD-TEXT-FILL _ufld-text-fill-xt _ufld-guard WITH-GUARD ;
 : UFLD-CHOICE-VALUE _ufld-choice-value-xt _ufld-guard WITH-GUARD ;

@@ -107,7 +107,10 @@ VARIABLE _USF-OWNED-LIMIT
         -ROT
     REPEAT 2DROP USF-S-OK ;
 
-: _USF-DISPLAY-COPY ( address bytes destination -- )
+\ USF-DISPLAY-COPY ( address bytes destination -- )
+\   Write the text as a display shows it, USF-DISPLAY-BYTES long, at
+\   DESTINATION.  The caller proves that room, apart from the text.
+: USF-DISPLAY-COPY ( address bytes destination -- )
     >R BEGIN DUP WHILE
         UTF8-DECODE ROT _USF-DISPLAY-CP R> UTF8-ENCODE >R
     REPEAT 2DROP R> DROP ;
@@ -224,10 +227,10 @@ VARIABLE _USF-I-OUT-VU
     _USF-I-OUT-VU @ _USF-I-DST @ USF-VALUE-BYTES-OFFSET + !
     _USF-I-DISPLAY @ IF
         _USF-I-LA @ _USF-I-LU @ _USF-I-DST @ USF-HEADER-SIZE +
-            _USF-DISPLAY-COPY
+            USF-DISPLAY-COPY
         _USF-I-VA @ _USF-I-VU @
             _USF-I-DST @ USF-HEADER-SIZE + _USF-I-OUT-LU @ +
-            _USF-DISPLAY-COPY
+            USF-DISPLAY-COPY
     ELSE
         _USF-I-LA @ _USF-I-DST @ USF-HEADER-SIZE + _USF-I-LU @ MOVE
         _USF-I-VA @ _USF-I-DST @ USF-HEADER-SIZE + _USF-I-LU @ +

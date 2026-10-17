@@ -313,3 +313,31 @@ _FM-M 232 _FM-B UFLD-BUILDER-INIT _FM-OK
 _FM-DONE
 """
     run_field(program, minimum=20)
+
+
+def test_display_text_value_shows_what_cell_drawing_shows():
+    program = PRELUDE + """
+CREATE _FM-RAW 8 ALLOT
+\\ a, TAB, b, a stray continuation byte and c: the TAB and the stray byte
+\\ each show as U+FFFD, three bytes.
+97 _FM-RAW C! 9 _FM-RAW 1+ C! 98 _FM-RAW 2 + C! 0x80 _FM-RAW 3 + C! 99 _FM-RAW 4 + C!
+: _FM-DTEXT ( a u -- status ) >R >R 3 _FM-START _FM-EMPTY R> R> _FM-B UFLD-TEXT-DISPLAY ;
+_FM-RAW 5 _FM-DTEXT _FM-OK _FM-FINISH
+_FM-M UFLD-TEXT@ S" a�b�c" COMPARE 0= _FM-A _FM-M UFLD-TEXT-BYTES@ 9 = _FM-A
+\\ Clean text is kept as it is, and a line separator shows as U+FFFD.
+S" =B2*C2" _FM-DTEXT _FM-OK _FM-FINISH _FM-M UFLD-TEXT@ S" =B2*C2" COMPARE 0= _FM-A
+S" a b" _FM-DTEXT _FM-OK _FM-FINISH _FM-M UFLD-TEXT@ S" a�b" COMPARE 0= _FM-A
+0 0 _FM-DTEXT _FM-OK _FM-FINISH _FM-M UFLD-TEXT-BYTES@ 0= _FM-A
+\\ It fills only a TEXT value, after the label, from a source apart from the
+\\ destination, and must fit; a refusal changes nothing.
+_FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 1 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
+_FM-RAW 5 _FM-B UFLD-TEXT-DISPLAY UFLD-S-INVALID = _FM-A _FM-SAME
+3 _FM-START _FM-EMPTY _FM-SAVE
+_FM-M 300 + 4 _FM-B UFLD-TEXT-DISPLAY UFLD-S-INVALID = _FM-A _FM-SAME
+_FM-M 232 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 3 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
+_FM-RAW 5 _FM-B UFLD-TEXT-DISPLAY UFLD-S-CAPACITY = _FM-A _FM-SAME
+_FM-DONE
+"""
+    run_field(program, minimum=24)
