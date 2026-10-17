@@ -1156,7 +1156,11 @@ VARIABLE _GRID-SUB-A
 VARIABLE _GRID-SUB-U
 VARIABLE _GRID-SUB-MODE
 
+\ The prompt painted over the status bar's row and has just gone inactive.
+\ The status bar repaints that whole row, or its cells would keep the
+\ prompt's paint, in CELL and as foreground over the document.
 : _GRID-PROMPT-SUBMIT  ( prompt -- )
+    _GRID-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     PRM-GET-TEXT _GRID-SUB-U ! _GRID-SUB-A !
     _GRID-PROMPT-MODE @ _GRID-SUB-MODE !
     _GRID-PRM-NONE _GRID-PROMPT-MODE !
@@ -1184,6 +1188,7 @@ VARIABLE _GRID-SUB-MODE
     _GRID-INVALIDATE ;
 
 : _GRID-PROMPT-CANCEL  ( prompt -- )
+    _GRID-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     DROP _GRID-PRM-NONE _GRID-PROMPT-MODE !
     _GRID-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _GRID-INVALIDATE ;

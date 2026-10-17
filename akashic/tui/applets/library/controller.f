@@ -1289,7 +1289,11 @@ VARIABLE _LAPP-SUB-MODE
         DUP _LAPP-VIEW ! _LAPP-RETURN-VIEW !
     THEN ;
 
+\ The prompt painted over the status bar's row and has just gone inactive.
+\ The status bar repaints that whole row, or its cells would keep the
+\ prompt's paint, in CELL and as foreground over the document.
 : _LAPP-PROMPT-SUBMIT  ( prompt -- )
+    _LAPP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     PRM-GET-TEXT _LAPP-SUB-U ! _LAPP-SUB-A !
     _LAPP-PROMPT-MODE @ _LAPP-SUB-MODE !
     _LAPP-PRM-NONE _LAPP-PROMPT-MODE !
@@ -1363,5 +1367,6 @@ VARIABLE _LAPP-SUB-MODE
     _LAPP-FOCUS-BODY _LAPP-INVALIDATE ;
 
 : _LAPP-PROMPT-CANCEL  ( prompt -- )
+    _LAPP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     DROP _LAPP-PRM-NONE _LAPP-PROMPT-MODE !
     _LAPP-FOCUS-BODY _LAPP-INVALIDATE ;
