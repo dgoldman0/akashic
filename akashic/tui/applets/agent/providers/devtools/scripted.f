@@ -14,7 +14,9 @@
 \  After echoing the prompt, a prompt naming a "source" or a "task" asks
 \  for a tool, one naming an "approval" asks for an approval, and one
 \  naming "linger" keeps the run open, saying nothing more, until it is
-\  cancelled.  Any other prompt completes.
+\  cancelled.  Any other prompt completes.  An approval asked by a prompt
+\  that also names "long" gives its reason a line for each of a hundred
+\  simulated changes, so the review it opens is taller than a screen.
 \ =====================================================================
 
 PROVIDED akashic-agent-scripted-provider
@@ -173,6 +175,27 @@ VARIABLE _SPP-C
     THEN
     _SPE-C @ _SPC.EVENT _SPE-Q @ AEQ-POST ;
 
+\ The long approval's reason: the reason every approval gives, then a line
+\ for each simulated change.  It is built once, on first use.
+100 CONSTANT _SP-LONG-CHANGES
+\ The reason's 29 bytes, then a line of at most 32 for each change.
+29 _SP-LONG-CHANGES 32 * + CONSTANT _SP-LONG-CAP
+CREATE _SP-LONG _SP-LONG-CAP ALLOT
+VARIABLE _SP-LONG-U  0 _SP-LONG-U !
+: _SP-LONG+  ( a u -- )
+    DUP >R _SP-LONG _SP-LONG-U @ + SWAP MOVE R> _SP-LONG-U +! ;
+: _SCRIPTED-LONG-REASON  ( -- a u )
+    _SP-LONG-U @ 0= IF
+        S" Persist the simulated change?" _SP-LONG+
+        _SP-LONG-CHANGES 1+ 1 DO
+            10 _SP-LONG _SP-LONG-U @ + C! 1 _SP-LONG-U +!
+            S" Simulated change " _SP-LONG+ I NUM>STR _SP-LONG+
+            S"  of " _SP-LONG+ _SP-LONG-CHANGES NUM>STR _SP-LONG+
+            S" ." _SP-LONG+
+        LOOP
+    THEN
+    _SP-LONG _SP-LONG-U @ ;
+
 : _SCRIPTED-CONNECT  ( queue context -- ior )
     _SPP-C ! _SPP-Q !
     APROV-S-READY _SPP-C @ _SPC.PROVIDER @ APROV.STATE !
@@ -264,7 +287,10 @@ VARIABLE _SPS-C
             S" approval" STR-STRI-CONTAINS IF
                 _SP-WAITING _SPP-C @ _SPC.STATE !
                 AEV-APPROVAL S" simulated.persist"
-                S" Persist the simulated change?"
+                _SPP-C @ _SPC.PROMPT-A @ _SPP-C @ _SPC.PROMPT-U @
+                S" long" STR-STRI-CONTAINS IF
+                    _SCRIPTED-LONG-REASON
+                ELSE S" Persist the simulated change?" THEN
                 _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT
             ELSE
                 _SPP-Q @ _SPP-C @ _SCRIPTED-FINISH-MESSAGE

@@ -223,6 +223,30 @@ AGENT_EXCHANGE = (
     ("SYSTEM", AGENT_REVIEW_REASON),
     ("SYSTEM", AGENT_AUDIT),
 )
+# A long request asks for a review whose reason has a line for each of a
+# hundred simulated changes, taller than the review's dialog: the wheel
+# scrolls it, and Approve once waits until its last line has been shown.
+AGENT_LONG_REQUEST = "long approval check"
+AGENT_LONG_CHANGES = 100
+AGENT_LONG_REASON = AGENT_REVIEW_REASON + "".join(
+    f"\nSimulated change {change} of {AGENT_LONG_CHANGES}."
+    for change in range(1, AGENT_LONG_CHANGES + 1)
+)
+AGENT_LONG_LAST = f"Simulated change {AGENT_LONG_CHANGES} of {AGENT_LONG_CHANGES}."
+AGENT_LONG_EXCHANGE = (
+    ("YOU", AGENT_LONG_REQUEST),
+    (
+        "AGENT",
+        "Connected through Akashic's provider-neutral runtime. "
+        f"You asked: {AGENT_LONG_REQUEST} Approved.",
+    ),
+    ("SYSTEM", AGENT_LONG_REASON),
+    ("SYSTEM", "Approved agent action: provider org.akashic.agent.testing.device-flow: "
+     + AGENT_LONG_REASON),
+)
+# Wheel detents a step over the long review sends; a dialog scrolls three
+# rows a detent.
+AGENT_REVIEW_DETENTS = 5
 # One wheel detent scrolls a list three screen rows.
 AGENT_WHEEL_ROWS = 3
 # The Agent alone runs on the device-flow fixture's catalog: Swift, with Low
@@ -2430,26 +2454,34 @@ class AgentAloneJourney(_AppletJourney):
     fields holding Swift, Low, Standard and Auto.  An ADJUST moves Reasoning
     to Medium, an ACTIVATE takes Model to Deliberate, whose own reasoning,
     High, it then holds, and whose speeds are Standard and Fast; Escape
-    returns to the transcript.
+    returns to the transcript.  Last, Ctrl+L asks a long request, whose
+    review is taller than its dialog: the wheel over the dialog scrolls the
+    message while it says more lies below, Approve once waits until its
+    last line has been shown and then approves, and the transcript ends
+    with the long exchange.
     """
 
     focus_marker = AGENT_ALONE_FOCUS_MARKER
     (READY, SCROLLED, ENDED, DESK_PROMPT, DESK_TYPED, DESK_PLACED, DESK_SELECTED,
      DESK_REPLACED, DESK_CLOSED, PROMPT, TYPED, REVIEW, APPROVED, SETTINGS,
-     REASONED, CHOSEN, SETTINGS_CLOSED) = range(17)
+     REASONED, CHOSEN, SETTINGS_CLOSED, LONG_PROMPT, LONG_TYPED, LONG_REVIEW,
+     LONG_APPROVED) = range(21)
     DESK_STAGES = range(DESK_PROMPT, DESK_CLOSED + 1)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
         self._end_row = 0  # screen rows above the view at the stored end
+        # The long review's first line in view when the wheel last turned,
+        # or None before it has.
+        self._review_top: str | None = None
 
     @property
     def final_stage(self) -> int:
-        return self.SETTINGS_CLOSED
+        return self.LONG_APPROVED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, AGENT_AUDIT)
+        return (self.focus_marker, AGENT_LONG_LAST)
 
     def _desk_prompt_expected(self) -> bool:
         return self.stage in self.DESK_STAGES
@@ -2492,12 +2524,13 @@ class AgentAloneJourney(_AppletJourney):
         return found[0]
 
     @staticmethod
-    def _approve_of_review(projection: RichScreenProjection, review, bounds):
+    def _approve_of_review(projection: RichScreenProjection, review, bounds,
+                           markers=(AGENT_REVIEW_MARKER, AGENT_REVIEW_REASON)):
         """Approve once on REVIEW: the review is modal and active over the
-        Agent, which stays rich and inactive beneath it; it names the
-        request and why it asks; and it offers Approve once, which F6
-        chooses, and Deny, which F7 chooses, the default and cancel
-        button."""
+        Agent, which stays rich and inactive beneath it; the lines in view
+        say MARKERS, the request and why it asks; and it offers Approve
+        once, which F6 chooses, and Deny, which F7 chooses, the default and
+        cancel button."""
 
         if not review.modal:
             raise PhysicalDesktopAcceptanceError("the Agent's review is not modal")
@@ -2507,7 +2540,7 @@ class AgentAloneJourney(_AppletJourney):
         _require_held_beneath_overlay(projection, review, bounds, AGENT_MENU_SIGNATURE,
                                       "the Agent")
         message = " ".join(review.content.lines)
-        for marker in (AGENT_REVIEW_MARKER, AGENT_REVIEW_REASON):
+        for marker in markers:
             if marker not in message:
                 raise PhysicalDesktopAcceptanceError(
                     f"the Agent's review does not say {marker!r}"
@@ -2712,8 +2745,11 @@ class AgentAloneJourney(_AppletJourney):
             value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
             return self._step("agent-review-unlocked", "activate_button", value,
                               self.APPROVED, offer, generation, sender)
-        if self.stage >= self.SETTINGS:
+        if self.SETTINGS <= self.stage <= self.SETTINGS_CLOSED:
             return self._settings(offer, generation, projection, sender, bounds, transcript)
+        if self.stage >= self.LONG_PROMPT:
+            return self._long(offer, generation, projection, sender, bounds, transcript,
+                              prompt, review)
         cards = stored + AGENT_EXCHANGE
         if review is not None or transcript is None or not self._shows(transcript, cards):
             return self._wait("the approved exchange")
@@ -2768,7 +2804,8 @@ class AgentAloneJourney(_AppletJourney):
             if transcript is None or not self._shows(transcript, cards):
                 return self._wait("the transcript after the run settings")
             self._require_last_row(offer, transcript, AGENT_AUDIT)
-            return self._done("agent-settings-closed", offer)
+            return self._step("agent-settings-closed", "send_key", "ctrl+l",
+                              self.LONG_PROMPT, offer, generation, sender)
         if not fields:
             return self._wait("the Agent's run settings after F8")
         if transcript is not None:
@@ -2804,6 +2841,71 @@ class AgentAloneJourney(_AppletJourney):
             )
         return self._step("agent-model-chosen", "send_key", "escape",
                           self.SETTINGS_CLOSED, offer, generation, sender)
+
+    def _long(self, offer, generation, projection, sender, bounds, transcript, prompt,
+              review) -> JourneyProgress:
+        """The long request: its review is taller than its dialog, so the
+        wheel over the dialog scrolls it while it says more lies below, and
+        Approve once waits until its last line has been shown."""
+
+        if self.stage == self.LONG_PROMPT:
+            if prompt is None:
+                return self._wait("the Agent's Ask prompt for the long request")
+            return self._step("agent-long-prompt-opened", "send_text", AGENT_LONG_REQUEST,
+                              self.LONG_TYPED, offer, generation, sender)
+        if self.stage == self.LONG_TYPED:
+            if prompt is None:
+                raise PhysicalDesktopAcceptanceError("the Agent's Ask prompt closed early")
+            if prompt.content.text != AGENT_LONG_REQUEST:
+                return self._wait("the typed long request")
+            return self._step("agent-long-request-typed", "send_key", "enter",
+                              self.LONG_REVIEW, offer, generation, sender)
+        if self.stage == self.LONG_REVIEW:
+            if review is None:
+                return self._wait("the long request's review")
+            approve = self._approve_of_review(projection, review, bounds, markers=())
+            chosen = bool(approve.state & ControlState.ENABLED)
+            lines = review.content.lines
+            if lines[-1:] == (DIALOG_MORE,):
+                if chosen:
+                    raise PhysicalDesktopAcceptanceError(
+                        "Approve once could be chosen before the long review was read"
+                    )
+                if self._review_top is None:
+                    if AGENT_REVIEW_REASON not in lines:
+                        raise PhysicalDesktopAcceptanceError(
+                            "the long review does not open at its reason"
+                        )
+                elif lines[0] == self._review_top:
+                    return self._wait("the long review scrolled by the wheel")
+                self._review_top = lines[0]
+                identity = review.identity
+                value = (f"{identity.owner_id},{identity.owner_generation},"
+                         f"{identity.control_id},{AGENT_REVIEW_DETENTS}")
+                return self._step("agent-long-review-scrolled", "dialog_scroll", value,
+                                  self.LONG_REVIEW, offer, generation, sender)
+            if self._review_top is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "the long review fit its dialog, so the wheel had nothing to scroll"
+                )
+            if lines[-1:] != (AGENT_REVIEW_MARKER,) or AGENT_LONG_LAST not in lines:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the long review's end in view is {lines[-3:]!r}"
+                )
+            if not chosen:
+                return self._wait("Approve once after the long review's last line")
+            _require_cell_text_in(offer, AGENT_REVIEW_MARKER, bounds, _WHERE)
+            identity = approve.identity
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            return self._step("agent-long-review-unlocked", "activate_button", value,
+                              self.LONG_APPROVED, offer, generation, sender)
+        cards = agent_transcript.CARDS + AGENT_EXCHANGE + AGENT_LONG_EXCHANGE
+        if review is not None or transcript is None or not self._shows(transcript, cards):
+            return self._wait("the approved long exchange")
+        self._check(transcript, cards)
+        self._at_end(transcript, cards)
+        self._require_last_row(offer, transcript, AGENT_LONG_LAST)
+        return self._done("agent-long-review-approved", offer)
 
     def _desk_prompt(self, offer, generation, sender, prompt) -> JourneyProgress:
         """Desk's Ask prompt: type, select three characters, type over

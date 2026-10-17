@@ -23,6 +23,7 @@ from rich_terminal.pygame_view import (
     ControlHitTarget,
     ControlIdentity,
     ControlSurface,
+    DialogHitTarget,
     PixelRect,
     RegionOcclusion,
     TextHitTarget,
@@ -9296,3 +9297,36 @@ def test_a_root_drawn_over_a_dialog_inside_it_is_its_content() -> None:
 def test_a_root_reaching_past_its_dialog_still_overlaps_it() -> None:
     with pytest.raises(PhysicalDesktopAcceptanceError, match="claims overlap"):
         reconstruct_retained_screen(_offer_with_dialog_contents(ObjectBounds(1, 5, 10, 3)))
+
+
+def test_dialog_scroll_sends_the_wheel_a_dialog_takes_where_the_viewer_would() -> None:
+    """A wheel over a dialog that is not a notice scrolls its message: the
+    sender proves a point of the acknowledged hit map lands on the dialog
+    and sends SCROLL there, as the physical viewer does."""
+
+    offer = _offer("READY", offer_id=7, pad_menu=True)
+    dialog = DialogHitTarget(ControlIdentity(1, 1, 500), PixelRect(100, 40, 600, 300))
+    display_state, display_ack = _acknowledged_hit_state(offer, dialog)
+
+    def send(client, value):
+        return acceptance_runner._request_acceptance_input(
+            client, "dialog_scroll", value, offer, 9, display_state=display_state,
+            display_ack=display_ack, cell_width=10, cell_height=20,
+        )
+
+    client = _PointerClient("progress")
+    status, evidence = send(client, "1,1,500,5")
+    assert status == "progress"
+    (method, request), = client.requests
+    assert method == "send_text_event"
+    assert (request["owner_id"], request["owner_generation"], request["control_id"]) == (1, 1, 500)
+    assert request["event_kind"] == int(acceptance_runner.ControlEventKind.SCROLL)
+    assert (request["wheel_x"], request["wheel_y"]) == (0, 5)
+    assert evidence.semantic_target["kind"] == "DIALOG"
+    assert evidence.semantic_target["wheel_y"] == 5
+
+    assert send(_PointerClient("backpressured"), "1,1,500,5") == ("backpressured", None)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no detent"):
+        send(_PointerClient(), "1,1,500,0")
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no DIALOG target"):
+        send(_PointerClient(), "1,1,501,5")

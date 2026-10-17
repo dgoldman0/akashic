@@ -26,6 +26,7 @@ from rich_terminal import text_rules
 from rich_terminal.pygame_view import (
     ATTR_REVERSE,
     ControlHitTarget,
+    DialogHitTarget,
     DocumentHitTarget,
     FieldHitTarget,
     PixelRect,
@@ -6550,6 +6551,7 @@ _POINTER_INPUT_METHODS = frozenset(
         "item_scroll",
         "document_scroll",
         "document_follow",
+        "dialog_scroll",
         "field_adjust",
         "field_activate",
     )
@@ -6948,6 +6950,91 @@ def _request_document_input(
     )
 
 
+def _request_dialog_input(
+    client: SessionClient,
+    method: str,
+    value: str,
+    offer: TerminalDisplayOffer,
+    params: dict[str, object],
+    *,
+    display_state: _RetainedDisplayState,
+    display_ack: tuple[int, DisplayScope] | None,
+    cell_width: int,
+    cell_height: int,
+) -> tuple[str, AcceptedInputEvidence | None]:
+    """Send SCROLL to a DIALOG where the physical viewer would: the wheel
+    over a visible point of a dialog that is not a notice, whose message it
+    moves (RETAINED-1 section 9.3)."""
+
+    owner_id, owner_generation, control_id, detents = _canonical_integers(
+        value, 4, method
+    )
+    if not detents:
+        raise PhysicalDesktopAcceptanceError("dialog scroll input carries no detent")
+    identity = ControlIdentity(owner_id, owner_generation, control_id)
+    token = _exact_hit_map_token(offer, display_state, display_ack, "dialog input")
+    targets = [
+        target
+        for target in display_state.hit_entries
+        if isinstance(target, DialogHitTarget) and target.identity == identity
+    ]
+    if len(targets) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            "acknowledged hit map has no DIALOG target for the requested dialog"
+        )
+    target = targets[0]
+    rect = target.rect
+    step_x = max(1, cell_width // 2)
+    step_y = max(1, cell_height // 2)
+    point = next(
+        (
+            (x, y)
+            for y in range(rect.top + step_y // 2, rect.bottom, step_y)
+            for x in range(rect.left + step_x // 2, rect.right, step_x)
+            if display_state.resolve_pointer(
+                x,
+                y,
+                display_token=token,
+                cell_width=cell_width,
+                cell_height=cell_height,
+            )
+            == target
+        ),
+        None,
+    )
+    if point is None:
+        raise PhysicalDesktopAcceptanceError("the DIALOG is not shown at any visible point")
+    request = dict(
+        params,
+        owner_id=owner_id,
+        owner_generation=owner_generation,
+        control_id=control_id,
+        event_kind=int(ControlEventKind.SCROLL),
+        modifiers=0,
+        wheel_x=0,
+        wheel_y=detents,
+    )
+    evidence = {
+        "kind": ControlKind.DIALOG.name,
+        "owner_id": owner_id,
+        "owner_generation": owner_generation,
+        "control_id": control_id,
+        "pixel": list(point),
+        "event_kind": ControlEventKind.SCROLL.name,
+        "wheel_y": detents,
+    }
+    if _display_bound_status(client, "send_text_event", request) != "progress":
+        return "backpressured", None
+    return "progress", AcceptedInputEvidence(
+        "send_text_event",
+        f"{method} {value}",
+        offer.offer_id,
+        params["generation"],
+        display_scope_to_wire(offer.scope),
+        evidence,
+    )
+
+
 def _request_item_input(
     client: SessionClient,
     method: str,
@@ -7078,6 +7165,11 @@ def _request_pointer_input(
         )
     if method in ("document_scroll", "document_follow"):
         return _request_document_input(
+            client, method, value, offer, params, display_state=display_state,
+            display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
+        )
+    if method == "dialog_scroll":
+        return _request_dialog_input(
             client, method, value, offer, params, display_state=display_state,
             display_ack=display_ack, cell_width=cell_width, cell_height=cell_height,
         )

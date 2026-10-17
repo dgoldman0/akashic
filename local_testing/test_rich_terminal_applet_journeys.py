@@ -46,6 +46,11 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal_applet_journeys import (
+    AGENT_LONG_CHANGES,
+    AGENT_LONG_EXCHANGE,
+    AGENT_LONG_LAST,
+    AGENT_LONG_REQUEST,
+    AGENT_REVIEW_DETENTS,
     AGENT_REVIEW_BUTTONS,
     AGENT_REVIEW_TITLE,
     DIALOG_MORE,
@@ -1132,8 +1137,16 @@ STORED = agent_transcript.CARDS
 STORED_END = sum(_agent_rows(STORED)) - AGENT_BODY
 APPROVED = STORED + AGENT_EXCHANGE
 APPROVED_END = sum(_agent_rows(APPROVED)) - AGENT_BODY
+LONG_APPROVED = APPROVED + AGENT_LONG_EXCHANGE
+LONG_APPROVED_END = sum(_agent_rows(LONG_APPROVED)) - AGENT_BODY
 REVIEW_ID = 40_010
 REVIEW_LINES = ("AGENT", AGENT_REVIEW_REASON, AGENT_REVIEW_MARKER)
+# The long review's lines in view: at its top, part way down, and at its end.
+LONG_CHANGE_LINES = tuple(f"Simulated change {change} of {AGENT_LONG_CHANGES}."
+                          for change in range(1, AGENT_LONG_CHANGES + 1))
+LONG_TOP = ("AGENT", AGENT_REVIEW_REASON) + LONG_CHANGE_LINES[:30]
+LONG_MIDDLE = LONG_CHANGE_LINES[15:47]
+LONG_END = LONG_CHANGE_LINES[-31:] + (AGENT_REVIEW_MARKER,)
 
 
 SETTINGS_ID = 40_020
@@ -1269,6 +1282,21 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
         # Escape has not closed the settings yet.
         (_agent_offer(""), _agent_settings_frame(AGENT_SETTINGS_CHOSEN, CHOSEN_CHOICES)),
         (_agent_offer(AGENT_AUDIT), _agent_frame(_agent_view(APPROVED, APPROVED_END))),
+        (_agent_offer(""), _agent_prompt_frame("")),
+        (_agent_offer(""), _agent_prompt_frame(AGENT_LONG_REQUEST)),
+        # The long review opens at its top, more below, and Approve once waits.
+        (REVIEW_OFFER, _agent_review_frame(
+            _agent_review(LONG_TOP + (DIALOG_MORE,), approve=False))),
+        # The wheel has not reached the Agent yet.
+        (REVIEW_OFFER, _agent_review_frame(
+            _agent_review(LONG_TOP + (DIALOG_MORE,), approve=False))),
+        (REVIEW_OFFER, _agent_review_frame(
+            _agent_review(LONG_MIDDLE + (DIALOG_MORE,), approve=False))),
+        # The end shows, but no paint has unlocked Approve once yet.
+        (REVIEW_OFFER, _agent_review_frame(_agent_review(LONG_END, approve=False))),
+        (REVIEW_OFFER, _agent_review_frame(_agent_review(LONG_END))),
+        (_agent_offer(AGENT_LONG_LAST),
+         _agent_frame(_agent_view(LONG_APPROVED, LONG_APPROVED_END))),
     )
     results = _run(journey, steps)
     desk_value = f"1,1,{DESK_PROMPT_ID},0,{{}}".format
@@ -1299,10 +1327,20 @@ def test_agent_alone_scrolls_its_transcript_and_approves_a_review() -> None:
         ("agent-reasoning-adjusted", [("field_activate", f"1,1,{SETTINGS_ID}")]),
         ("agent-model-chosen", [("send_key", "escape")]),
         (None, []),
-        ("agent-settings-closed", []),
+        ("agent-settings-closed", [("send_key", "ctrl+l")]),
+        ("agent-long-prompt-opened", [("send_text", AGENT_LONG_REQUEST)]),
+        ("agent-long-request-typed", [("send_key", "enter")]),
+        ("agent-long-review-scrolled",
+         [("dialog_scroll", f"1,1,{REVIEW_ID},{AGENT_REVIEW_DETENTS}")]),
+        (None, []),
+        ("agent-long-review-scrolled",
+         [("dialog_scroll", f"1,1,{REVIEW_ID},{AGENT_REVIEW_DETENTS}")]),
+        (None, []),
+        ("agent-long-review-unlocked", [("activate_button", f"1,1,{REVIEW_ID + 1}")]),
+        ("agent-long-review-approved", []),
     ]
     assert results[-1][0].complete
-    assert journey.final_cell_markers == ("[1:Agent*]", AGENT_AUDIT)
+    assert journey.final_cell_markers == ("[1:Agent*]", AGENT_LONG_LAST)
 
 
 def test_agent_alone_refuses_a_selection_a_wrong_scroll_and_leaked_semantics() -> None:
@@ -1974,3 +2012,28 @@ def test_the_launcher_check_refuses_a_launcher_that_is_not_that(kwargs, message)
     projection, view = _launcher(**kwargs)
     with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
         FexpAloneJourney._launcher_dialog(projection, view)
+
+
+def test_agent_alone_refuses_a_long_review_that_fits_or_unlocks_early() -> None:
+    """The long review must be taller than its dialog, so the wheel has
+    something to scroll, and Approve once must wait for its end."""
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    def journey_at(stage: int) -> AgentAloneJourney:
+        journey = AgentAloneJourney(("Agent",))
+        journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+        journey.stage = stage
+        return journey
+
+    fits = _agent_review_frame(_agent_review(("AGENT",) + LONG_END))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="nothing to scroll"):
+        journey_at(AgentAloneJourney.LONG_REVIEW).after_present(REVIEW_OFFER, 9, fits, sender)
+    early = _agent_review_frame(_agent_review(LONG_TOP + (DIALOG_MORE,)))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="before the long review"):
+        journey_at(AgentAloneJourney.LONG_REVIEW).after_present(REVIEW_OFFER, 9, early, sender)
+    elsewhere = _agent_review_frame(_agent_review(LONG_MIDDLE + (DIALOG_MORE,), approve=False))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="does not open at its reason"):
+        journey_at(AgentAloneJourney.LONG_REVIEW).after_present(
+            REVIEW_OFFER, 9, elsewhere, sender)
