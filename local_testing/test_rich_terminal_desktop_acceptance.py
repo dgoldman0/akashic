@@ -39,7 +39,9 @@ from rich_terminal.retained_scene import (
     StatusSeverity,
 )
 from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
-from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
+from rich_terminal.semantic_fields import (
+    FieldChoice, FieldContent, FieldFlag, FieldKind, FieldRect,
+)
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
     SemanticTextContent,
@@ -1915,10 +1917,58 @@ def _desk_launcher_projection(
     )
 
 
+SOUNDLAB_FIELD_ID = 45_000
+
+
+def _soundlab_field_claims(frequency: int) -> tuple:
+    """Sound Lab's four setting fields in its tile, Frequency showing
+    FREQUENCY."""
+
+    state = ControlState.VISIBLE | ControlState.ENABLED
+    settings = (
+        ("Waveform", FieldKind.CHOICE, 0, (FieldChoice(0, "sine"), FieldChoice(1, "square"))),
+        ("Frequency (Hz)", FieldKind.INTEGER, frequency, ()),
+        ("Amplitude (%)", FieldKind.INTEGER, 50, ()),
+        ("Duration (ms)", FieldKind.INTEGER, 500, ()),
+    )
+    return tuple(
+        acceptance_runner._SemanticFieldClaim(
+            ControlIdentity(1, 1, SOUNDLAB_FIELD_ID + index), 188, 50 + index, 270,
+            51 + index, label, state,
+            FieldContent(1, kind, FieldFlag(0), FieldRect(1, 0, len(label), 1),
+                         FieldRect(60, 0, 20, 1), value=value, minimum=0,
+                         maximum=2000 if choices == () else 0, step=1 if choices == () else 0,
+                         choices=choices),
+        )
+        for index, (label, kind, value, choices) in enumerate(settings)
+    )
+
+
+def _soundlab_prompt(
+    projection: RichScreenProjection,
+    typed: str,
+    *,
+    anchor: int | None = None,
+) -> RichScreenProjection:
+    """PROJECTION with Sound Lab's frequency prompt open over its tile's
+    status row, holding TYPED with the caret at its end and the anchor at
+    ANCHOR, by default the caret."""
+
+    return _with_tile_prompt(
+        projection,
+        acceptance_runner.SOUNDLAB_FREQUENCY_PROMPT,
+        acceptance_runner.SOUNDLAB_DESKTOP_TILE,
+        acceptance_runner.SOUNDLAB_MENU_SIGNATURE,
+        typed,
+        anchor=anchor,
+    )
+
+
 def _soundlab_desktop_projection(
     *,
     pad_tab_identity_base: int = 30_000,
     daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
+    frequency: int = 440,
 ) -> RichScreenProjection:
     projection = _desktop_projection(
         (4, 4, PAD_ACCEPTANCE_TEXT),
@@ -1981,6 +2031,8 @@ def _soundlab_desktop_projection(
         instrument_region_count=1,
         instrument_cell_count=len(claims),
         instrument_claims=claims,
+        semantic_field_claims=projection.semantic_field_claims
+        + _soundlab_field_claims(frequency),
     )
 
 
@@ -6124,6 +6176,44 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "soundlab-restored-after-menus"
     assert not progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE
+    # Activating Sound Lab's Frequency field opens its exact-value prompt.
+    frequency = f"1,1,{SOUNDLAB_FIELD_ID + 1}"
+    assert actions.pop() == ("field_activate", frequency, 5000, 9)
+    label = acceptance_runner.SOUNDLAB_FREQUENCY_PROMPT
+    prompted = _cell_offer(5100, ((81, 187, f"{label} 440"),))
+    for offer_id, projection, milestone, action in (
+        # The prompt has not opened yet.
+        (5001, soundlab_projection, None, None),
+        (5100, _soundlab_prompt(soundlab_projection, "440"), "soundlab-prompt-opened",
+         ("send_key", "ctrl+a")),
+        (5101, _soundlab_prompt(soundlab_projection, "440"), None, None),
+        (5102, _soundlab_prompt(soundlab_projection, "440", anchor=0),
+         "soundlab-value-selected", ("send_text", "880")),
+        # The guest may paint between typed digits.
+        (5103, _soundlab_prompt(soundlab_projection, "88"), None, None),
+        (5104, _soundlab_prompt(soundlab_projection, "880"), "soundlab-value-typed",
+         ("send_key", "enter")),
+        # The field has not taken the value yet.
+        (5105, soundlab_projection, None, None),
+    ):
+        offer = (replace(prompted, offer_id=offer_id) if offer_id == 5100
+                 else _offer("X", offer_id=offer_id, pad_menu=True))
+        progress = journey.after_present(offer, 9, projection, sender)
+        assert progress.milestone == milestone, offer_id
+        if action is not None:
+            assert actions.pop() == (*action, offer_id, 9)
+    set_projection = replace(
+        soundlab_projection,
+        semantic_field_claims=_soundlab_field_claims(880),
+    )
+    progress = journey.after_present(
+        _offer("X", offer_id=5200, pad_menu=True),
+        9,
+        set_projection,
+        sender,
+    )
+    assert progress.milestone == "soundlab-frequency-set"
     assert (
         journey.stage
         == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
@@ -6131,7 +6221,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     # A click inside the taskbar's File Explorer button starts the pointer
     # journey, which its own test follows to completion.
     button = TEST_TASKBAR.index(acceptance_runner.FEXPLORER_TASKBAR_BUTTON)
-    assert actions.pop() == ("pointer_click", f"{button + 1},83", 5000, 9)
+    assert actions.pop() == ("pointer_click", f"{button + 1},83", 5200, 9)
     assert actions[-7:] == [
         ("send_key", "alt+2", 35, 9),
         ("activate_ordinary_menu", "fexplorer-view", 3701, 9),
@@ -7628,9 +7718,47 @@ def test_pointer_journey_refuses_wrong_results(stage, setup, frame, message) -> 
         )
 
 
+@pytest.mark.parametrize("stage,frame,message", (
+    # The prompt must open holding the frequency the field shows.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE,
+     lambda: _soundlab_prompt(_soundlab_desktop_projection(), "441"),
+     "opened holding '441'"),
+    # Sound Lab stays inactive beneath its prompt.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE,
+     lambda: replace(_soundlab_prompt(_soundlab_desktop_projection(), "440"),
+                     inactive_controls=frozenset()),
+     "beneath it active"),
+    # Its fields stay rich beneath it.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE,
+     lambda: replace(_soundlab_prompt(_soundlab_desktop_projection(), "440"),
+                     semantic_field_claims=_soundlab_prompt(
+                         _soundlab_desktop_projection(), "440").semantic_field_claims[1:]),
+     "left its fields"),
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SELECTED_STAGE,
+     lambda: _soundlab_desktop_projection(),
+     "closed before its value was set"),
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_TYPED_STAGE,
+     lambda: _soundlab_prompt(_soundlab_desktop_projection(), "4408"),
+     "typing over the selected value gave '4408'"),
+))
+def test_soundlab_prompt_refuses_wrong_results(stage, frame, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = stage
+    journey._soundlab_frequency_before = 440
+    journey._soundlab_frequency = 880
+
+    def sender(*_args):
+        raise AssertionError("a refused frame sent input")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(_cell_offer(5, ((81, 187, "Frequency (40-2000 Hz): 440"),)),
+                              9, frame(), sender)
+
+
 def test_owed_click_release_precedes_any_other_input() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
-    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_POINTER_STAGE
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SET_STAGE
+    journey._soundlab_frequency = 880
     # The exercised-state proof has its own test; this one follows the click
     # on File Explorer's taskbar button that starts the pointer journey.
     journey._require_exercised_state_survives = lambda _projection: None
@@ -7649,10 +7777,10 @@ def test_owed_click_release_precedes_any_other_input() -> None:
     progress = journey.after_present(
         restored,
         9,
-        _soundlab_desktop_projection(),
+        _soundlab_desktop_projection(frequency=880),
         sender,
     )
-    assert progress.milestone == "soundlab-restored-after-menus"
+    assert progress.milestone == "soundlab-frequency-set"
     assert (
         journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     )

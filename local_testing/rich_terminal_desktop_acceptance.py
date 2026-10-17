@@ -208,6 +208,14 @@ DESKTOP_MENU_SIGNATURES = (
     ("Agent", "Run", "Connection", "Access", "Review", "Help"),
 )
 SOUNDLAB_MENU_SIGNATURE = ("File", "Signal", "Render", "Help")
+# Sound Lab's settings are fields.  Activating Frequency opens its exact-value
+# prompt, labelled with the range it takes; the journey sets 880, or 660 if
+# it already shows 880.
+SOUNDLAB_FIELDS = ("Waveform", "Frequency (Hz)", "Amplitude (%)", "Duration (ms)")
+SOUNDLAB_FREQUENCY_FIELD = "Frequency (Hz)"
+SOUNDLAB_FREQUENCY_PROMPT = "Frequency (40-2000 Hz):"
+SOUNDLAB_FREQUENCY = 880
+SOUNDLAB_FREQUENCY_ALTERNATE = 660
 # Desk's launcher: a dialog titled Applets whose message is its status and
 # hint lines, around its list of every canonical applet.
 DESK_LAUNCHER_TITLE = "Applets"
@@ -234,74 +242,81 @@ DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
 # close File Explorer's View and Daybook's Go menus through their acknowledged
 # hit maps; stage 22 restores Sound Lab focus with all exercised state intact.
 DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
-# Stage 22 proves Sound Lab and the exercised state after the ordinary menus,
-# then the pointer journey drives Desk, File Explorer, and Pad by mouse:
-# File Explorer's detail table through item events, its rename prompt and
-# its delete question (23-34), Pad's editor and caret readout (35-39), and
-# Daybook's calendar wheel (40).  Then typed text that mixes scripts goes
-# into Pad (41-46) and a Daybook task (47-52).  File Explorer then previews
-# the sample document and picture (53-58), and last, Pad opens a Markdown
-# file, highlighted, and follows its link (59-63).
-DESKTOP_ACCEPTANCE_POINTER_STAGE = 22
-DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 23
-DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 24
-DESKTOP_ACCEPTANCE_LIST_ROW_STAGE = 25
-DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE = 26
-DESKTOP_ACCEPTANCE_RENAME_PLACED_STAGE = 27
-DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE = 28
-DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE = 29
-# File Explorer: Enter renames the file (30), and Delete asks its question
-# (31); Alt+1 focuses Pad while it waits (32), Alt+2 returns to it (33), and
-# its Cancel button answers it (34).
-DESKTOP_ACCEPTANCE_RENAMED_STAGE = 30
-DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE = 31
-DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE = 32
-DESKTOP_ACCEPTANCE_DELETE_RETURNED_STAGE = 33
-DESKTOP_ACCEPTANCE_DELETE_CANCELLED_STAGE = 34
-DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 35
-DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 36
-DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 37
-DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 38
-DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 39
-DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE = 40
-# Pad: End and Enter open a line after the selected one (41-42), typing
-# fills it (43), a click lands on the combined accent (44), Right moves over
-# both its scalars (45), and a click lands inside the Hebrew word (46).
-DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE = 41
-DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE = 42
-DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE = 43
-DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE = 44
-DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE = 45
-DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE = 46
-# Daybook: focus and its task prompt (47-48), typing a task (49), a PLACE
-# at a Han character in the prompt's field (50), one character typed there
-# (51), and Enter adds the task (52).
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE = 47
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 48
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 49
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 50
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 51
-DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 52
-# File Explorer: Alt+2 focuses it (53), a SELECT on the sample document's
-# row selects it (54), and activating the Preview tab shows it as a rich
-# DOCUMENT from its first heading (55); the Details tab brings the table
-# back.  A SELECT on the sample picture's row selects it (56-57), and the
-# Preview tab shows the picture rich over its CELL half blocks (58).  The
+# Stage 22 proves Sound Lab and the exercised state after the ordinary menus.
+# Sound Lab's exact-value prompt then sets its frequency: activating the
+# Frequency field opens the prompt (23), Ctrl+A selects the value it holds
+# (24), and a new value is typed (25) and entered (26).  Then the pointer
+# journey drives Desk, File Explorer, and Pad by mouse: File Explorer's
+# detail table through item events, its rename prompt and its delete
+# question (27-38), Pad's editor and caret readout (39-43), and Daybook's
+# calendar wheel (44).  Then typed text that mixes scripts goes into Pad
+# (45-50) and a Daybook task (51-56).  File Explorer then previews the
+# sample document and picture (57-62), and last, Pad opens a Markdown file,
+# highlighted, and follows its link (63-67).
+DESKTOP_ACCEPTANCE_SOUNDLAB_RESTORED_STAGE = 22
+DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE = 23
+DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SELECTED_STAGE = 24
+DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_TYPED_STAGE = 25
+DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SET_STAGE = 26
+DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE = 27
+DESKTOP_ACCEPTANCE_LIST_WHEEL_STAGE = 28
+DESKTOP_ACCEPTANCE_LIST_ROW_STAGE = 29
+DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE = 30
+DESKTOP_ACCEPTANCE_RENAME_PLACED_STAGE = 31
+DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE = 32
+DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE = 33
+# File Explorer: Enter renames the file (34), and Delete asks its question
+# (35); Alt+1 focuses Pad while it waits (36), Alt+2 returns to it (37), and
+# its Cancel button answers it (38).
+DESKTOP_ACCEPTANCE_RENAMED_STAGE = 34
+DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE = 35
+DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE = 36
+DESKTOP_ACCEPTANCE_DELETE_RETURNED_STAGE = 37
+DESKTOP_ACCEPTANCE_DELETE_CANCELLED_STAGE = 38
+DESKTOP_ACCEPTANCE_PAD_OPENED_STAGE = 39
+DESKTOP_ACCEPTANCE_PAD_WHEEL_STAGE = 40
+DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE = 41
+DESKTOP_ACCEPTANCE_PAD_EXTEND_STAGE = 42
+DESKTOP_ACCEPTANCE_PAD_KEY_STAGE = 43
+DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE = 44
+# Pad: End and Enter open a line after the selected one (45-46), typing
+# fills it (47), a click lands on the combined accent (48), Right moves over
+# both its scalars (49), and a click lands inside the Hebrew word (50).
+DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE = 45
+DESKTOP_ACCEPTANCE_MIXED_LINE_OPENED_STAGE = 46
+DESKTOP_ACCEPTANCE_MIXED_TYPED_STAGE = 47
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_PLACED_STAGE = 48
+DESKTOP_ACCEPTANCE_MIXED_CLUSTER_RIGHT_STAGE = 49
+DESKTOP_ACCEPTANCE_MIXED_HEBREW_PLACED_STAGE = 50
+# Daybook: focus and its task prompt (51-52), typing a task (53), a PLACE
+# at a Han character in the prompt's field (54), one character typed there
+# (55), and Enter adds the task (56).
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_FOCUS_STAGE = 51
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_PROMPT_STAGE = 52
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_TYPED_STAGE = 53
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_CLICKED_STAGE = 54
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_INSERTED_STAGE = 55
+DESKTOP_ACCEPTANCE_DAYBOOK_MIXED_ADDED_STAGE = 56
+# File Explorer: Alt+2 focuses it (57), a SELECT on the sample document's
+# row selects it (58), and activating the Preview tab shows it as a rich
+# DOCUMENT from its first heading (59); the Details tab brings the table
+# back.  A SELECT on the sample picture's row selects it (60-61), and the
+# Preview tab shows the picture rich over its CELL half blocks (62).  The
 # picture stays shown to the end.
-DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 53
-DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 54
-DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 55
-DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 56
-DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 57
-DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 58
-# Pad: Alt+1 focuses it (59), Ctrl+O opens its prompt (60), the notes path is
-# typed (61) and entered (62), and notes.md's style runs are checked before a
-# FOLLOW on its link opens example.f with its own runs (63).
-DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 59
-DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 60
-DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 61
-DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 62
-DESKTOP_ACCEPTANCE_FINAL_STAGE = 63
+DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE = 57
+DESKTOP_ACCEPTANCE_DOCUMENT_SELECTED_STAGE = 58
+DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE = 59
+DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE = 60
+DESKTOP_ACCEPTANCE_PICTURE_SELECTED_STAGE = 61
+DESKTOP_ACCEPTANCE_PICTURE_PREVIEW_STAGE = 62
+# Pad: Alt+1 focuses it (63), Ctrl+O opens its prompt (64), the notes path is
+# typed (65) and entered (66), and notes.md's style runs are checked before a
+# FOLLOW on its link opens example.f with its own runs (67).
+DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE = 63
+DESKTOP_ACCEPTANCE_STYLED_PROMPT_STAGE = 64
+DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE = 65
+DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE = 66
+DESKTOP_ACCEPTANCE_FINAL_STAGE = 67
 DESKTOP_TILE_COLUMNS = 3
 DESKTOP_TILE_ROWS = 2
 PAD_DESKTOP_TILE = 0
@@ -3475,6 +3490,19 @@ def _field_claims_in_tile(
     tile: int,
 ) -> tuple[_SemanticFieldClaim, ...]:
     return _field_claims_in(projection, _desktop_pane_content_bounds(projection, tile))
+
+
+def _soundlab_fields(
+    projection: RichScreenProjection,
+    prompt: _SemanticFieldClaim | None = None,
+) -> dict[str, _SemanticFieldClaim]:
+    """Sound Lab's setting fields in its tile, by label, without PROMPT."""
+
+    return {
+        claim.label: claim
+        for claim in _field_claims_in_tile(projection, SOUNDLAB_DESKTOP_TILE)
+        if prompt is None or claim.identity != prompt.identity
+    }
 
 
 def _status_field_claims_in(
@@ -8415,7 +8443,7 @@ class SoundLabSeriesProbe:
             for claim in _field_claims_in_tile(projection, SOUNDLAB_DESKTOP_TILE)
             if prompt is None or claim.identity != prompt.identity
         }
-        own = {"Waveform", "Frequency (Hz)", "Amplitude (%)", "Duration (ms)"}
+        own = set(SOUNDLAB_FIELDS)
         if self.stage in (2, 7):
             if prompt is None:
                 return False
@@ -8778,6 +8806,8 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._picture_shown = False
         self._followed_text: str | None = None
         self._renamed = False
+        self._soundlab_frequency_before: int | None = None
+        self._soundlab_frequency: int | None = None
 
     @property
     def final_stage(self) -> int:
@@ -9354,7 +9384,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if (
             DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE
             < self.stage
-            < DESKTOP_ACCEPTANCE_POINTER_STAGE
+            < DESKTOP_ACCEPTANCE_SOUNDLAB_RESTORED_STAGE
         ):
             return self._ordinary_menu_stage(
                 offer,
@@ -9362,9 +9392,26 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 projection,
                 sender,
             )
-        if self.stage == DESKTOP_ACCEPTANCE_POINTER_STAGE:
+        if (
+            DESKTOP_ACCEPTANCE_SOUNDLAB_RESTORED_STAGE
+            <= self.stage
+            < DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SET_STAGE
+        ):
+            return self._soundlab_prompt_stage(offer, generation, projection, sender)
+        if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SET_STAGE:
             _require_soundlab_desktop_semantics(projection)
             if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER, legacy_row=True):
+                raise PhysicalDesktopAcceptanceError(
+                    "Sound Lab lost focus after its prompt"
+                )
+            fields = _soundlab_fields(projection)
+            frequency = fields.get(SOUNDLAB_FREQUENCY_FIELD)
+            if (
+                _tile_prompt(projection, SOUNDLAB_FREQUENCY_PROMPT, SOUNDLAB_DESKTOP_TILE)
+                is not None
+                or frequency is None
+                or frequency.content.value != self._soundlab_frequency
+            ):
                 return JourneyProgress()
             self._require_exercised_state_survives(projection)
             column, row = _taskbar_button_cell(
@@ -9376,7 +9423,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                    for bar in projection.semantic_taskbar_claims for task in bar.tasks
                    if task.bounds.left <= column < task.bounds.right):
                 return JourneyProgress()
-            milestone = self._milestone("soundlab-restored-after-menus")
+            milestone = self._milestone("soundlab-frequency-set")
             method, value = "pointer_click", f"{column},{row}"
             if projection.semantic_taskbar_claims:
                 matches = [task for bar in projection.semantic_taskbar_claims for task in bar.tasks
@@ -9398,7 +9445,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             )
             return JourneyProgress(milestone)
         if (
-            DESKTOP_ACCEPTANCE_POINTER_STAGE
+            DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SET_STAGE
             < self.stage
             <= DESKTOP_ACCEPTANCE_DAYBOOK_WHEEL_STAGE
         ):
@@ -9428,6 +9475,127 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         ):
             return self._styled_text_stage(offer, generation, projection, sender)
         return JourneyProgress()
+
+    def _soundlab_prompt_stage(
+        self,
+        offer: TerminalDisplayOffer,
+        generation: int,
+        projection: RichScreenProjection,
+        sender: InputSender,
+    ) -> JourneyProgress:
+        """Set Sound Lab's frequency through its exact-value prompt.
+
+        With Sound Lab focused and the exercised state intact, activating its
+        Frequency field opens the prompt over its tile's status row, holding
+        the value it shows: a TEXT field in a modal region, with Sound Lab's
+        menu bar and fields rich and inactive beneath it and every other
+        applet active.  Ctrl+A selects the value, the new one is typed over
+        it, and Enter sets it.
+        """
+
+        if not _taskbar_has_focus(projection, SOUNDLAB_FOCUS_MARKER, legacy_row=True):
+            if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_RESTORED_STAGE:
+                _require_soundlab_desktop_semantics(projection)
+                return JourneyProgress()
+            raise PhysicalDesktopAcceptanceError("Sound Lab lost focus during its prompt")
+        prompt = _tile_prompt(projection, SOUNDLAB_FREQUENCY_PROMPT, SOUNDLAB_DESKTOP_TILE)
+        fields = _soundlab_fields(projection, prompt)
+        if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_RESTORED_STAGE:
+            _require_soundlab_desktop_semantics(projection)
+            self._require_exercised_state_survives(projection)
+            frequency = fields.get(SOUNDLAB_FREQUENCY_FIELD)
+            if prompt is not None or frequency is None:
+                return JourneyProgress()
+            self._soundlab_frequency_before = frequency.content.value
+            self._soundlab_frequency = (
+                SOUNDLAB_FREQUENCY if frequency.content.value != SOUNDLAB_FREQUENCY
+                else SOUNDLAB_FREQUENCY_ALTERNATE
+            )
+            identity = frequency.identity
+            milestone = self._milestone("soundlab-restored-after-menus")
+            self._send(
+                "field_activate",
+                f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
+                DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if prompt is None:
+            if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE:
+                return JourneyProgress()
+            raise PhysicalDesktopAcceptanceError("Sound Lab's prompt closed before its value was set")
+        _require_tile_prompt(
+            projection,
+            SOUNDLAB_FREQUENCY_PROMPT,
+            SOUNDLAB_DESKTOP_TILE,
+            SOUNDLAB_MENU_SIGNATURE,
+            "Sound Lab",
+        )
+        if set(fields) != set(SOUNDLAB_FIELDS):
+            raise PhysicalDesktopAcceptanceError(
+                f"Sound Lab's prompt left its fields {sorted(fields)!r} beneath it"
+            )
+        content = prompt.content
+        target = str(self._soundlab_frequency)
+        if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE:
+            if content.text != str(self._soundlab_frequency_before):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Sound Lab's prompt opened holding {content.text!r}, not the "
+                    f"frequency its field shows, {self._soundlab_frequency_before}"
+                )
+            _require_cell_text_in(
+                offer,
+                SOUNDLAB_FREQUENCY_PROMPT,
+                _desktop_tile_bounds(projection, SOUNDLAB_DESKTOP_TILE),
+                "Sound Lab's tile",
+            )
+            milestone = self._milestone("soundlab-prompt-opened")
+            self._send(
+                "send_key",
+                "ctrl+a",
+                DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SELECTED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        if self.stage == DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SELECTED_STAGE:
+            # Ctrl+A selects the whole value the prompt opened with.
+            if content.anchor == content.caret or {content.anchor, content.caret} != {
+                0, len(content.text)
+            }:
+                return JourneyProgress()
+            milestone = self._milestone("soundlab-value-selected")
+            self._send(
+                "send_text",
+                target,
+                DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_TYPED_STAGE,
+                offer,
+                generation,
+                sender,
+            )
+            return JourneyProgress(milestone)
+        # The guest may paint after each typed digit.
+        if content.text != target:
+            if content.text == str(self._soundlab_frequency_before) or any(
+                content.text == target[:length] for length in range(1, len(target))
+            ):
+                return JourneyProgress()
+            raise PhysicalDesktopAcceptanceError(
+                f"typing over the selected value gave {content.text!r}, not {target!r}"
+            )
+        milestone = self._milestone("soundlab-value-typed")
+        self._send(
+            "send_key",
+            "enter",
+            DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SET_STAGE,
+            offer,
+            generation,
+            sender,
+        )
+        return JourneyProgress(milestone)
 
     def _ordinary_menu_stage(
         self,
