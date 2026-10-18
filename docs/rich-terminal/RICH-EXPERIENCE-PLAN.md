@@ -552,9 +552,10 @@ button and shows a notice with its meaning; while a prompt or a dialog is
 open, the rest of its application stays rich and inactive beneath it; and
 Desk keeps running while a dialog waits.
 
-**Status.** In progress. Steps 1 to 3 are done, and so is the dialog's own
-part of step 4: since 2026-10-15 a dialog asks without stopping Desk and
-goes out as a `DIALOG`, with a `BUTTON` for each answer, in a modal region
+**Status.** Done on 2026-10-17. The closing runs are recorded in
+`local_testing/evidence/part5-desktop-journey-20261017.md`. Prompts are
+`TEXT` fields in a modal region over their pane. Since 2026-10-15 a dialog
+asks without stopping Desk and goes out as a `DIALOG`, with a `BUTTON` for each answer, in a modal region
 over its pane ([DIALOG-PRODUCER.md](DIALOG-PRODUCER.md)). In the physical
 viewer, Desk with Pad answers Pad's close-tab question and Desk with File
 Explorer its delete question, each through its Cancel button. A dialog
@@ -650,10 +651,21 @@ into Desk's is, but the producer does not match those draws, for a cause
 not yet found; and a dialog that closes should not cost its application
 more paint than a prompt that closes.
 
-Before part 5 closes, the full Desktop journey also requires the launcher's
-whole-screen modal scope, not only its selection; File Explorer's journey
-completes a rename rather than cancelling it; and the Agent's journey
-scrolls its approval review with the wheel.
+The full Desktop journey closed the part. In the physical viewer it renames
+a file in File Explorer through its rename prompt, a semantic field, and
+checks File Explorer's neutral notice. Delete then asks File Explorer's
+question; Alt+1 gives Pad focus while it waits and Alt+2 brings File
+Explorer back, its question still open and holding File Explorer alone,
+and the question's Cancel button answers it. Sound Lab's frequency is set
+through its exact-value prompt, with Sound Lab rich and inactive beneath
+it, and F5 renders it again. The launcher, which crosses the divider
+between File Explorer's tile and the Agent's, goes out in the shell's
+frame, modal over everything beneath it. File Explorer's own journey
+completes its rename, and the Agent's scrolls its approval review with the
+wheel. The closing runs found one more fault: the app shell started a
+notice's time when the notice was raised, so a paint that came late, as on
+the busy Desktop, could show no notice at all. A notice's time now counts
+from the first paint that shows it.
 
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
 toggle, selector and range elements in documents that use them.
