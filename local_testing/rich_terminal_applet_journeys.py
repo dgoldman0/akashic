@@ -359,14 +359,7 @@ class _AppletJourney(FrameBoundJourney):
             )
         return self._offer_lineage(offer, generation)
 
-    def _wait(self, reason: str) -> JourneyProgress:
-        """Wait for a newer frame, remembering why for timeout diagnostics."""
-
-        self.waiting = reason
-        return JourneyProgress()
-
     def _step(self, milestone, method, value, target, offer, generation, sender):
-        self.waiting = None
         milestone = self._milestone(milestone)
         self._send(method, value, target, offer, generation, sender)
         return JourneyProgress(milestone)

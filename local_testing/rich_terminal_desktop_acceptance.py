@@ -8667,6 +8667,12 @@ class FrameBoundJourney:
             owner_generation,
         )
 
+    def _wait(self, reason: str) -> JourneyProgress:
+        """Wait for a newer frame, remembering why for timeout diagnostics."""
+
+        self.waiting = reason
+        return JourneyProgress()
+
     def _send(
         self,
         method: str,
@@ -8676,6 +8682,7 @@ class FrameBoundJourney:
         generation: int,
         sender: InputSender,
     ) -> None:
+        self.waiting = None
         attempted = _PendingJourneyInput(
             method,
             value,
@@ -9919,14 +9926,14 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 if notice is not None:
                     _require_notice(offer, notice, StatusSeverity.NEUTRAL)
                     self._renamed = True
-            if rename is not None or not _fexplorer_selected_path_is(
-                projection, RENAMED_PATH
-            ):
-                return JourneyProgress()
+            if rename is not None:
+                return self._wait("the rename prompt closed")
+            if not _fexplorer_selected_path_is(projection, RENAMED_PATH):
+                return self._wait(f"{RENAMED_PATH} in File Explorer's status bar")
             table = _fexplorer_table_claim(projection)
             row = None if table is None else table.named(RENAMED_FILE)
             if row is None:
-                return JourneyProgress()
+                return self._wait(f"{RENAMED_FILE}'s row in File Explorer's table")
             if table.named(POINTER_LIST_FILE) is not None:
                 raise PhysicalDesktopAcceptanceError(
                     f"File Explorer still lists {POINTER_LIST_FILE} after renaming it"
@@ -9936,7 +9943,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     "File Explorer did not keep the renamed file selected"
                 )
             if not self._renamed:
-                return JourneyProgress()
+                return self._wait(f"File Explorer's notice {RENAMED_NOTICE!r}")
             milestone = self._milestone("fexplorer-renamed")
             self._send(
                 "send_key",
@@ -9961,10 +9968,10 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     raise PhysicalDesktopAcceptanceError(
                         "File Explorer lost focus before its delete question"
                     )
-                return JourneyProgress()
+                return self._wait(f"{focus} while the delete question waits")
             if delete is None:
                 if self.stage == DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE:
-                    return JourneyProgress()
+                    return self._wait("File Explorer's delete question")
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer's delete question closed while it waited"
                 )
@@ -10013,13 +10020,13 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "cancelling the delete question moved focus away from File Explorer"
                 )
-            if delete is not None or not _fexplorer_selected_path_is(
-                projection, RENAMED_PATH
-            ):
-                return JourneyProgress()
+            if delete is not None:
+                return self._wait("the delete question closed")
+            if not _fexplorer_selected_path_is(projection, RENAMED_PATH):
+                return self._wait(f"{RENAMED_PATH} in File Explorer's status bar")
             table = _fexplorer_table_claim(projection)
             if table is None:
-                return JourneyProgress()
+                return self._wait("File Explorer's table")
             row = table.named(RENAMED_FILE)
             if row is None:
                 raise PhysicalDesktopAcceptanceError(
