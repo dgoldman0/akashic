@@ -21,9 +21,9 @@ class GrowthHarness:
             PRODUCER.read_text() if producer_source is None else producer_source
         )
         # A DELTA reads a field's FDC1 tag and revision with field-content.f's
-        # constants.
+        # constants, and a dialog's DLG1 tag with dlg1.f's.
         for relative in ("residual-glyph-planner.f", "uidl-hybrid-adapter.f",
-                         "../field-content.f"):
+                         "../field-content.f", "dlg1.f"):
             source = (PRODUCER.parent / relative).read_text()
             for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;\s*$", source):
                 self.definitions[match[1]] = match[0]

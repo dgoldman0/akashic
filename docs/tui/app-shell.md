@@ -309,8 +309,9 @@ memory only while it lasts.
 A notice's time counts from when the first output that shows it has gone
 out, not from when it was raised or painted.  Until then it has not begun
 to end and sets no deadline of its own; raising it asks for the paint that
-shows it.  The paint's flush sends that output: at once for CELL, and for
-a rich terminal when the frame carrying the notice is revealed, which on a
+shows it.  The paint's flush succeeds once that output has gone out: at
+once for plain cells, and for a terminal that shows a frame only when all
+of it has arrived, when the frame carrying the notice is shown, which on a
 busy screen can come more than a second after the paint.  So a late paint
 or a slow frame still shows the notice for its whole time instead of
 letting it end unseen.

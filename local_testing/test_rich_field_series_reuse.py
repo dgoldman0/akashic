@@ -223,9 +223,9 @@ def test_native_pt_host_field_selection_delta_emits_no_history_operations():
         ).replace(b"CF-LEDGER RTAPT-CONTROL-LEDGER-SIZE\n",
                   b"CF-LEDGER RTAPT-CONTROL-LEDGER-SIZE 2 *\n")
 
-    with patch.object(cf,"_fixture_source",side_effect=fixture), patch.object(
-            series,"FEATURES",series.FEATURES|RetainedFeature.CONTROLS|RetainedFeature.FIELDS):
-        h=series.SeriesProvider("native")
+    with patch.object(cf,"_fixture_source",side_effect=fixture):
+        h=series.SeriesProvider(
+            "native",features=series.FEATURES|RetainedFeature.CONTROLS|RetainedFeature.FIELDS)
     try:
         h.begin()
         values=tuple(i-8000 for i in range(16000))

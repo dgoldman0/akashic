@@ -93,7 +93,11 @@ def test_shell_selection_grows_atomic_payload_and_transport_for_smaller_app_bank
                    retained_policy=replace(DESKTOP_APT1_RICH_TERMINAL_BASE.retained_policy,
                                            client_to_terminal_max_payload=4096,
                                            max_resource_chunk_bytes=4096 - 32,
-                                           max_samples_per_append=128))
+                                           max_samples_per_append=128,
+                                           # A line's points come from the
+                                           # same smaller graphics bank.
+                                           max_path_points=240 // 16,
+                                           total_path_points=240 // 16))
     selected = packaging.desktop_apt1_shell_profile(base=base)
     assert selected.retained_policy.client_to_terminal_max_payload == 25608
     assert selected.guest_tx_bytes == 25648
