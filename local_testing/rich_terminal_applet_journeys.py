@@ -30,6 +30,9 @@ import agent_transcript
 import mixed_text
 import styled_text
 from rich_terminal_desktop_acceptance import (
+    SOUNDLAB_FREQUENCY_FIELD,
+    SOUNDLAB_FREQUENCY_PROMPT,
+    SOUNDLAB_LANDMARK_CAPTION,
     DAYBOOK_MENU_SIGNATURE,
     DAYBOOK_PROMPT_MARKER,
     FEXPLORER_DELETE,
@@ -48,6 +51,7 @@ from rich_terminal_desktop_acceptance import (
     _collection_claims_in,
     _desk_content_bounds,
     _desk_prompt_claim,
+    _field_claims_in,
     _dialog_claim,
     _image_claims_in,
     _notice_claim,
@@ -58,6 +62,9 @@ from rich_terminal_desktop_acceptance import (
     _require_notice,
     _require_pad_readout,
     _require_picture_facts_in,
+    _require_soundlab_landmark_cells,
+    _soundlab_landmarks,
+    _visible_draw_rectangle,
     _residual_contains,
     _status_field_claims_in,
     _tab_in,
@@ -65,6 +72,7 @@ from rich_terminal_desktop_acceptance import (
     _taskbar_has_focus,
     _text_area_pointer_state,
 )
+from rich_terminal.retained_view import PlotDraw, PolylineDraw, TextGridDraw
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
 # A confirm question offers its verb, destructive, beside Cancel, the
@@ -262,6 +270,22 @@ DESK_PROMPT_OVER = "EL"
 SMALL_TERMINAL_LARGE_PATH = "/large.txt"
 SMALL_TERMINAL_LARGE_LINE = "Large fixture line 001"
 _WHERE = "Desk's single tile"
+# Sound Lab alone sets a new frequency through its prompt, as the Desktop
+# journey does: 880, or 660 if it already shows 880.
+SOUNDLAB_ALONE_FOCUS_MARKER = "[1:Sound Lab*]"
+SOUNDLAB_ALONE_FREQUENCIES = (880, 660)
+# Desk holds Observatory, then Worlds, each in half the screen.  Observatory
+# starts with its own eight-sample series, ticks 0 to 7 falling from 8000 by
+# 500; Worlds steps its run three times and hands the run's telemetry to
+# Observatory through Analyze, which Observatory then profiles again on R.
+OBSERVATORY_FOCUS_MARKER = "[1:Observatory*]"
+WORLDS_FOCUS_MARKER = "[2:Worlds*]"
+OBSERVATORY_DEMO_SERIES = tuple((tick, 8000 - 500 * tick) for tick in range(8))
+OBSERVATORY_PLOT_CAPTION = "Upper amount projection"
+OBSERVATORY_PLOT_LINE = (0x5F, 0xD7, 0xFF, 0xFF)
+OBSERVATORY_BASELINE = (0x4E, 0x4E, 0x4E, 0xFF)
+WORLDS_STEPS = 3
+OBSERVATORY_PROFILED = "Profiled "
 # The frames the terminal counts that show a picture's upload beside the
 # screen's own frames (APT-1-RETAINED-1 section 8).
 _UPLOAD_FRAMES = {
@@ -3027,6 +3051,287 @@ class SmallTerminalJourney(_AppletJourney):
         return self._done("small-terminal-rich-again", offer)
 
 
+class SoundLabAloneJourney(_AppletJourney):
+    """Desk with Sound Lab alone: its frequency landmarks go out as three
+    lines that move when it renders new settings.
+
+    Sound Lab renders its starting settings as it opens.  With room below
+    its analysis, its graph carries a line from 0 Hz to 4 kHz and on it a
+    mark at the pitch and one at the spectral centroid, which CELL draws
+    the same way and names P and C in the row above.  Activating the
+    Frequency field opens its exact-value prompt; a new frequency is typed
+    over the value and Enter sets it, which leaves the analysis stale until
+    F5 renders again.  The new render moves the pitch mark along the same
+    line, in the terminal and in CELL alike.
+    """
+
+    focus_marker = SOUNDLAB_ALONE_FOCUS_MARKER
+    (READY, PROMPT, SELECTED, TYPED, SET, RENDERED) = range(6)
+
+    def __init__(self, ready_markers):
+        super().__init__(ready_markers)
+        self._landmarks_before = None
+        self._frequency_before = None
+        self._frequency = None
+
+    @property
+    def final_stage(self) -> int:
+        return self.RENDERED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, SOUNDLAB_LANDMARK_CAPTION)
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        prompt = _prompt_claim(projection, SOUNDLAB_FREQUENCY_PROMPT, bounds)
+        fields = {claim.label: claim for claim in _field_claims_in(projection, bounds)
+                  if prompt is None or claim.identity != prompt.identity}
+        frequency = fields.get(SOUNDLAB_FREQUENCY_FIELD)
+        if self.stage == self.READY:
+            landmarks = _soundlab_landmarks(projection, bounds)
+            if landmarks is None or frequency is None:
+                return self._wait("Sound Lab's landmarks from its first render")
+            _require_soundlab_landmark_cells(offer, landmarks)
+            self._landmarks_before = landmarks
+            self._frequency_before = frequency.content.value
+            self._frequency = next(value for value in SOUNDLAB_ALONE_FREQUENCIES
+                                   if value != self._frequency_before)
+            identity = frequency.identity
+            return self._step(
+                "soundlab-landmarks-shown", "field_activate",
+                f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
+                self.PROMPT, offer, generation, sender)
+        if self.stage == self.PROMPT:
+            if prompt is None:
+                return self._wait("Sound Lab's frequency prompt")
+            if prompt.content.text != str(self._frequency_before):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Sound Lab's prompt opened holding {prompt.content.text!r}")
+            return self._step("soundlab-frequency-prompt", "send_key", "ctrl+a",
+                              self.SELECTED, offer, generation, sender)
+        if self.stage in (self.SELECTED, self.TYPED) and prompt is None:
+            raise PhysicalDesktopAcceptanceError("Sound Lab's prompt closed early")
+        if self.stage == self.SELECTED:
+            content = prompt.content
+            if content.anchor == content.caret or {content.anchor, content.caret} != {
+                    0, len(content.text)}:
+                return self._wait("the prompt's whole value selected")
+            return self._step("soundlab-frequency-selected", "send_text",
+                              str(self._frequency), self.TYPED, offer, generation, sender)
+        if self.stage == self.TYPED:
+            if prompt.content.text != str(self._frequency):
+                return self._wait("the typed frequency")
+            return self._step("soundlab-frequency-typed", "send_key", "enter",
+                              self.SET, offer, generation, sender)
+        if prompt is not None:
+            return self._wait("Sound Lab's prompt closed")
+        if self.stage == self.SET:
+            if frequency is None or frequency.content.value != self._frequency:
+                return self._wait("Sound Lab's new frequency")
+            return self._step("soundlab-frequency-set", "send_key", "f5",
+                              self.RENDERED, offer, generation, sender)
+        if frequency is None or frequency.content.value != self._frequency:
+            raise PhysicalDesktopAcceptanceError("Sound Lab's frequency changed while it rendered")
+        landmarks = _soundlab_landmarks(projection, bounds)
+        before = self._landmarks_before
+        if landmarks is None or landmarks.pitch == before.pitch:
+            return self._wait("the pitch mark moved by the new render")
+        if (landmarks.row, landmarks.left, landmarks.right) != (
+                before.row, before.left, before.right):
+            raise PhysicalDesktopAcceptanceError("Sound Lab's landmark line moved")
+        _require_soundlab_landmark_cells(offer, landmarks)
+        return self._done("soundlab-landmarks-moved", offer)
+
+
+def _desk_halves(projection) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """Desk's two tiles when it holds two applets: the screen above the
+    taskbar split in two columns, one divider cell between them."""
+
+    width = (projection.cols - 1) // 2
+    bottom = max(1, projection.rows - 1)
+    return (0, 0, width, bottom), (width + 1, 0, projection.cols, bottom)
+
+
+def _observatory_plot(offer, bounds):
+    """Observatory's plot inside BOUNDS: the plot's rectangle and its
+    series' samples as (tick, value) pairs, once its baseline lies along
+    the row below it; or None while it shows none."""
+
+    plane = offer.retained
+    if plane is None:
+        return None
+    left, top, right, bottom = bounds
+    plots, lines = [], []
+    for region in plane.regions:
+        for draw in region.draws:
+            if not isinstance(draw, (PlotDraw, PolylineDraw)):
+                continue
+            logical, visible = _visible_draw_rectangle(
+                region, draw, offer.cell.cols, offer.cell.rows)
+            if not (left <= logical.left and logical.right <= right
+                    and top <= logical.top and logical.bottom <= bottom):
+                continue
+            if visible != logical:
+                raise PhysicalDesktopAcceptanceError("Observatory's plot is clipped")
+            (plots if isinstance(draw, PlotDraw) else lines).append((region, logical, draw))
+    if not plots and not lines:
+        return None
+    if len(plots) != 1 or len(lines) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"Observatory shows {len(plots)} plots and {len(lines)} lines")
+    (region, plot, draw), (_, baseline, line) = plots[0], lines[0]
+    color = (draw.line.red, draw.line.green, draw.line.blue, draw.line.alpha)
+    if color != OBSERVATORY_PLOT_LINE or draw.fill_to_minimum:
+        raise PhysicalDesktopAcceptanceError("Observatory's plot changed its style")
+    shade = (line.color.red, line.color.green, line.color.blue, line.color.alpha)
+    if (shade != OBSERVATORY_BASELINE or line.closed
+            or (baseline.left, baseline.right, baseline.top) != (plot.left, plot.right, plot.bottom)
+            or baseline.bottom - baseline.top != 1
+            or [(point.x, point.y) for point in line.points]
+            != [(0, 0x7FFFFFFF), (0xFFFFFFFF, 0x7FFFFFFF)]):
+        raise PhysicalDesktopAcceptanceError("Observatory's baseline is not the row below its plot")
+    histories = [history for history in plane.series
+                 if history.key == (region.owner_id, region.owner_generation, draw.series_id)]
+    if len(histories) != 1:
+        raise PhysicalDesktopAcceptanceError("Observatory's plot names no series of its own")
+    samples = tuple((sample.timestamp_us, sample.value) for sample in histories[0].samples)
+    if samples:
+        values = [value for _, value in samples]
+        low, high = min(values), max(values)
+        if low == high:
+            low, high = low - 1, high + 1
+        if (draw.minimum, draw.maximum) != (low, high):
+            raise PhysicalDesktopAcceptanceError("Observatory's plot range is not its series' own")
+        if draw.draw_points != (len(samples) <= plot.right - plot.left):
+            raise PhysicalDesktopAcceptanceError("Observatory's plot marks the wrong samples")
+    return plot, samples
+
+
+def _observatory_table(offer, bounds) -> tuple[tuple[int, int], ...]:
+    """The samples Observatory's table shows inside BOUNDS, as (tick, value)."""
+
+    plane = offer.retained
+    grids = [draw for region in plane.regions for draw in region.draws
+             if isinstance(draw, TextGridDraw)
+             and bounds[0] <= _visible_draw_rectangle(region, draw, offer.cell.cols,
+                                                      offer.cell.rows)[0].left < bounds[2]]
+    if len(grids) != 1:
+        raise PhysicalDesktopAcceptanceError(f"Observatory shows {len(grids)} tables")
+    cells = {(item.row, item.column): item.text for item in grids[0].content.items}
+    rows = sorted({row for row, _ in cells if row > 0})
+    return tuple((int(cells[row, 0]), int(cells[row, 1])) for row in rows)
+
+
+class ObservatoryJourney(_AppletJourney):
+    """Desk with Observatory and Worlds: Observatory's plot goes out as a
+    PLOT over an exact series, its baseline a line along the row below.
+
+    Observatory first plots its own starting series.  Worlds then steps its
+    run and Analyze hands the run's telemetry over: Observatory's series is
+    replaced, and the plot's series holds exactly the samples its table
+    shows.  R profiles the series again and the plot stays.
+    """
+
+    focus_marker = OBSERVATORY_FOCUS_MARKER
+    (READY, WORLDS, STEPPED, ANALYZE, ANALYZED, RERUN) = range(6)
+
+    def __init__(self, ready_markers):
+        super().__init__(ready_markers)
+        self._steps = 0
+        self._analyzed = None
+
+    @property
+    def final_stage(self) -> int:
+        return self.RERUN
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (OBSERVATORY_FOCUS_MARKER, OBSERVATORY_PLOT_CAPTION)
+
+    def _admit(self, offer, generation, projection, sender) -> bool:
+        """As every applet journey admits a frame, except that focus moves
+        to Worlds and back, which each stage checks for itself."""
+
+        if self.stage == self.READY:
+            return super()._admit(offer, generation, projection, sender)
+        if self._frame_lineage(offer, generation) != self._lineage:
+            raise PhysicalDesktopAcceptanceError(
+                "physical acceptance frame left its original session lineage")
+        if offer.offer_id <= self.frame_barrier:
+            return False
+        self._pending = None
+        if not self._deliver_owed_pointer(offer, generation, sender):
+            self.waiting = "the rest of a pointer gesture"
+            return False
+        return True
+
+    def _shown(self, offer, observatory):
+        shown = _observatory_plot(offer, observatory)
+        if shown is None:
+            return None
+        plot, samples = shown
+        table = _observatory_table(offer, observatory)
+        if samples[:len(table)] != table:
+            raise PhysicalDesktopAcceptanceError(
+                "Observatory's plot holds other samples than its table shows")
+        _require_cell_text_in(offer, OBSERVATORY_PLOT_CAPTION, observatory, "Observatory's tile")
+        return samples
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        observatory, worlds = _desk_halves(projection)
+        if self.stage == self.READY:
+            samples = self._shown(offer, observatory)
+            if samples is None:
+                return self._wait("Observatory's plot of its starting series")
+            if samples != OBSERVATORY_DEMO_SERIES:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Observatory's starting plot holds {samples!r}")
+            return self._step("observatory-plot-shown", "send_key", "alt+2",
+                              self.WORLDS, offer, generation, sender)
+        if self.stage in (self.WORLDS, self.STEPPED, self.ANALYZE):
+            if not _taskbar_has_focus(projection, WORLDS_FOCUS_MARKER):
+                if self.stage == self.WORLDS:
+                    return self._wait(f"{WORLDS_FOCUS_MARKER} after Alt+2")
+                raise PhysicalDesktopAcceptanceError("Worlds lost focus")
+        if self.stage in (self.WORLDS, self.STEPPED):
+            if self._steps < WORLDS_STEPS:
+                self._steps += 1
+                return self._step(f"worlds-step-{self._steps}", "send_key", "s",
+                                  self.STEPPED, offer, generation, sender)
+            return self._step("worlds-analyze", "send_key", "a",
+                              self.ANALYZE, offer, generation, sender)
+        if self.stage == self.ANALYZE:
+            # Worlds' notice that Observatory accepted the run lasts a moment
+            # only; the plot itself shows the handover.
+            samples = self._shown(offer, observatory)
+            if samples is None or samples == OBSERVATORY_DEMO_SERIES:
+                return self._wait("Observatory's plot of Worlds' telemetry")
+            if len(samples) < 2:
+                raise PhysicalDesktopAcceptanceError("Worlds handed over one sample")
+            self._analyzed = samples
+            return self._step("observatory-plots-telemetry", "send_key", "alt+1",
+                              self.ANALYZED, offer, generation, sender)
+        if not _taskbar_has_focus(projection, OBSERVATORY_FOCUS_MARKER):
+            if self.stage == self.ANALYZED:
+                return self._wait(f"{OBSERVATORY_FOCUS_MARKER} after Alt+1")
+            raise PhysicalDesktopAcceptanceError("Observatory lost focus")
+        samples = self._shown(offer, observatory)
+        if samples != self._analyzed:
+            raise PhysicalDesktopAcceptanceError("Observatory's plot changed before its rerun")
+        if self.stage == self.ANALYZED:
+            return self._step("observatory-rerun", "send_key", "r",
+                              self.RERUN, offer, generation, sender)
+        profiled = OBSERVATORY_PROFILED + f"{len(samples)} samples"
+        if not _status_shows(projection, profiled, observatory):
+            return self._wait(f"Observatory's status {profiled!r}")
+        return self._done("observatory-rerun-kept-plot", offer)
+
+
 def applet_journey(
     name: str, ready_markers: tuple[str, ...], *, paced_link: bool = False
 ) -> FrameBoundJourney:
@@ -3040,6 +3345,8 @@ def applet_journey(
         "daybook": DaybookAloneJourney,
         "streams": StreamsAloneJourney,
         "agent": AgentAloneJourney,
+        "soundlab": SoundLabAloneJourney,
+        "observatory": ObservatoryJourney,
         "small-terminal": SmallTerminalJourney,
         "photo": PhotoJourney,
         "damaged": DamagedPictureJourney,

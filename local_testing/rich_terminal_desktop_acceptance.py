@@ -218,6 +218,19 @@ SOUNDLAB_FREQUENCY_FIELD = "Frequency (Hz)"
 SOUNDLAB_FREQUENCY_PROMPT = "Frequency (40-2000 Hz):"
 SOUNDLAB_FREQUENCY = 880
 SOUNDLAB_FREQUENCY_ALTERNATE = 660
+# With room below its analysis, Sound Lab's graph carries its frequency
+# landmarks as three POLYLINEs: a grey line across one row from 0 Hz to
+# 4 kHz, and on it a mark down one cell at the pitch, in the waveform's
+# color, and one at the spectral centroid, in gold.  CELL names the marks
+# with their letters in the row above, beneath the caption.
+SOUNDLAB_LANDMARK_CAPTION = "Frequency landmarks: 0 Hz"
+_SOUNDLAB_LANDMARK_COLORS = {
+    "line": (0x80, 0x80, 0x80, 0xFF),
+    "pitch": (0x5F, 0xD7, 0xFF, 0xFF),
+    "centroid": (0xFF, 0xD7, 0x00, 0xFF),
+}
+_UNORM_ONE = 0xFFFFFFFF
+_UNORM_HALF = 0x7FFFFFFF
 # Desk's launcher: a dialog titled Applets whose message is its status and
 # hint lines, around its list of every canonical applet.
 DESK_LAUNCHER_TITLE = "Applets"
@@ -2022,7 +2035,8 @@ class _LogicalRectangle:
 
 @dataclass(frozen=True)
 class _InstrumentClaim:
-    """One retained instrument rectangle intersecting the selected surface."""
+    """One retained instrument rectangle intersecting the selected surface.
+    A POLYLINE also keeps its color, points and whether it is closed."""
 
     kind: str
     owner_id: int
@@ -2032,6 +2046,9 @@ class _InstrumentClaim:
     top: int
     right: int
     bottom: int
+    color: tuple[int, int, int, int] | None = None
+    points: tuple[tuple[int, int], ...] = ()
+    closed: bool = False
 
 
 @dataclass(frozen=True)
@@ -4219,12 +4236,13 @@ def _read_soundlab_waveform_source(client) -> SoundLabWaveformSource:
             raise PhysicalDesktopAcceptanceError("Sound Lab canonical graph header is inconsistent")
         offset, previous_key, records, objects = 14, 1, 0, 0
         series = waveform = None
+        landmarks = []
         while offset < len(cells):
             if offset + 3 > len(cells):
                 raise PhysicalDesktopAcceptanceError("truncated Sound Lab graph record")
             byte_count, kind, key = cells[offset:offset + 3]
             if (byte_count < 24 or byte_count % 8 or offset + byte_count // 8 > len(cells)
-                    or key <= previous_key or kind not in (1, 2, 3, 4, 5)):
+                    or key <= previous_key or kind not in (1, 2, 3, 4, 5, 7)):
                 raise PhysicalDesktopAcceptanceError("invalid Sound Lab graph record extent or identity")
             record = cells[offset:offset + byte_count // 8]
             if kind == 4:
@@ -4239,9 +4257,16 @@ def _read_soundlab_waveform_source(client) -> SoundLabWaveformSource:
                     if waveform is not None or series is None or len(record) != 18:
                         raise PhysicalDesktopAcceptanceError("Sound Lab waveform lacks an earlier owned history")
                     waveform = record
+                if kind == 7:
+                    # A landmark line: its points follow its 15-cell header.
+                    if len(record) < 19 or len(record) != 15 + 2 * record[13]:
+                        raise PhysicalDesktopAcceptanceError("truncated Sound Lab landmark line")
+                    landmarks.append(key)
             offset += byte_count // 8
             records += 1
             previous_key = key
+        if landmarks not in ([], [50, 51, 52]):
+            raise PhysicalDesktopAcceptanceError("Sound Lab lines are not its three landmarks")
         if (series is None or waveform is None or cells[8:11] != [records, objects, 1]
                 or not 1 <= series[6] <= 16000 or series[2:6] != [40, series[6], 1, 125]
                 or series[7:9] != [0, 0] or len(series) != 9 + series[6]
@@ -4308,6 +4333,76 @@ def _require_soundlab_waveform_evidence(offer, generation, source: SoundLabWavef
             "source_graph_sha256": source.graph_sha256, "duration_ms": source.duration,
             "amplitude_percent": source.amplitude, "frequency_hz": source.frequency,
             "shape": source.shape, "every_sample_compared": True}
+
+
+@dataclass(frozen=True)
+class SoundLabLandmarks:
+    """Where the terminal draws Sound Lab's landmark line and its marks."""
+
+    row: int
+    left: int
+    right: int
+    pitch: int
+    centroid: int
+
+
+def _soundlab_landmarks(projection, bounds) -> SoundLabLandmarks | None:
+    """Sound Lab's frequency landmarks inside BOUNDS as the terminal received
+    them, or None while it shows none."""
+
+    left, top, right, bottom = bounds
+    found = {}
+    for claim in projection.instrument_claims:
+        if claim.kind != "POLYLINE" or not (
+                left <= claim.left and claim.right <= right
+                and top <= claim.top and claim.bottom <= bottom):
+            continue
+        names = [name for name, value in _SOUNDLAB_LANDMARK_COLORS.items()
+                 if value == claim.color]
+        if len(names) != 1 or names[0] in found:
+            raise PhysicalDesktopAcceptanceError("Sound Lab draws a line that is no landmark")
+        found[names[0]] = claim
+    if not found:
+        return None
+    if set(found) != set(_SOUNDLAB_LANDMARK_COLORS):
+        raise PhysicalDesktopAcceptanceError(f"Sound Lab shows only its landmarks {sorted(found)!r}")
+    line = found["line"]
+    if (line.bottom - line.top != 1 or line.closed
+            or line.points != ((0, _UNORM_HALF), (_UNORM_ONE, _UNORM_HALF))):
+        raise PhysicalDesktopAcceptanceError("Sound Lab's landmark line is not one row across")
+    for name in ("pitch", "centroid"):
+        mark = found[name]
+        if ((mark.top, mark.bottom) != (line.top, line.bottom) or mark.right - mark.left != 1
+                or not line.left <= mark.left < line.right or mark.closed
+                or mark.points != ((_UNORM_HALF, 0), (_UNORM_HALF, _UNORM_ONE))):
+            raise PhysicalDesktopAcceptanceError(f"Sound Lab's {name} mark is not a cell on its line")
+    return SoundLabLandmarks(line.top, line.left, line.right,
+                             found["pitch"].left, found["centroid"].left)
+
+
+def _require_soundlab_landmark_cells(offer, landmarks: SoundLabLandmarks) -> None:
+    """CELL draws the same landmarks where the terminal does: the caption,
+    then the letters naming the marks, P at the pitch and C at the centroid
+    or * where they meet, then the line with a mark at each."""
+
+    cell = offer.cell
+    row = landmarks.row
+    if not cell.row_text(row - 2, landmarks.left).startswith(SOUNDLAB_LANDMARK_CAPTION):
+        raise PhysicalDesktopAcceptanceError("CELL lacks Sound Lab's landmark caption")
+    letters = ((landmarks.pitch, "*"),) if landmarks.pitch == landmarks.centroid else (
+        (landmarks.pitch, "P"), (landmarks.centroid, "C"))
+    for column, letter in letters:
+        if cell.row_text(row - 1, column, column + 1) != letter:
+            raise PhysicalDesktopAcceptanceError(
+                f"CELL does not name Sound Lab's mark {letter!r} at column {column}")
+        if cell.row_text(row, column, column + 1) != "\u2502":
+            raise PhysicalDesktopAcceptanceError(
+                f"CELL does not draw Sound Lab's mark at column {column}")
+    marks = {column for column, _ in letters}
+    line = cell.row_text(row, landmarks.left, landmarks.right)
+    if any(char != "\u2500" for column, char in enumerate(line, landmarks.left)
+           if column not in marks):
+        raise PhysicalDesktopAcceptanceError("CELL does not draw Sound Lab's landmark line")
 
 
 def _write_timeout_state_diagnostics(
@@ -5639,6 +5734,14 @@ def reconstruct_retained_screen(
                 region.region_id in background_instrument_regions
                 and _rectangle_cells(visible) & base_draw_cells
             ):
+                line = {}
+                if isinstance(draw, PolylineDraw):
+                    line = dict(
+                        color=(draw.color.red, draw.color.green, draw.color.blue,
+                               draw.color.alpha),
+                        points=tuple((point.x, point.y) for point in draw.points),
+                        closed=draw.closed,
+                    )
                 instrument_claims.append(
                     _InstrumentClaim(
                         kind=kind,
@@ -5649,6 +5752,7 @@ def reconstruct_retained_screen(
                         top=top,
                         right=right,
                         bottom=bottom,
+                        **line,
                     )
                 )
             instrument_cells.update(_rectangle_cells(visible))
@@ -8832,6 +8936,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         self._renamed = False
         self._soundlab_frequency_before: int | None = None
         self._soundlab_frequency: int | None = None
+        self._soundlab_landmarks_before: SoundLabLandmarks | None = None
 
     @property
     def final_stage(self) -> int:
@@ -9395,6 +9500,14 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 return JourneyProgress()
             _require_soundlab_desktop_semantics(projection)
             self._require_exercised_state_survives(projection)
+            # Its tile has room for the frequency landmarks, which go out as
+            # three lines of the same graph as its instruments.
+            landmarks = _soundlab_landmarks(
+                projection, _desktop_pane_content_bounds(projection, SOUNDLAB_DESKTOP_TILE))
+            if landmarks is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Sound Lab's instruments are live without its frequency landmarks")
+            self._soundlab_landmarks_before = landmarks
             milestone = self._milestone("soundlab-instruments-live")
             self._send(
                 "send_key",
@@ -9460,6 +9573,18 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             ):
                 return JourneyProgress()
             self._require_exercised_state_survives(projection)
+            # The new render moves the pitch mark along the same line.
+            landmarks = _soundlab_landmarks(
+                projection, _desktop_pane_content_bounds(projection, SOUNDLAB_DESKTOP_TILE))
+            before = self._soundlab_landmarks_before
+            if landmarks is None or before is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "Sound Lab rendered again without its frequency landmarks")
+            if ((landmarks.row, landmarks.left, landmarks.right)
+                    != (before.row, before.left, before.right)
+                    or landmarks.pitch == before.pitch):
+                raise PhysicalDesktopAcceptanceError(
+                    "Sound Lab's pitch mark did not move with its new frequency")
             column, row = _taskbar_button_cell(
                 projection,
                 FEXPLORER_TASKBAR_BUTTON,

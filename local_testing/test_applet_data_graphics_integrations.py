@@ -73,7 +73,13 @@ def test_applet_data_graphics_source_contract() -> None:
     assert "1960 CONSTANT _SL-DGRAPH-BASE-BYTES" in sound
     assert re.search(
         r"_SL-DGRAPH-BASE-BYTES UDG-SERIES-HEADER-SIZE \+ UDG-WAVEFORM-RECORD-SIZE \+\s+"
-        r"_SL-DGRAPH-SAMPLE-BYTES \+ CONSTANT _SL-DGRAPH-CAP", sound)
+        r"_SL-DGRAPH-SAMPLE-BYTES \+ _SL-DGRAPH-LANDMARK-BYTES \+\s+"
+        r"CONSTANT _SL-DGRAPH-CAP", sound)
+    assert "2 UDG-POLYLINE-RECORD-BYTES 3 * CONSTANT _SL-DGRAPH-LANDMARK-BYTES" in sound
+    landmarks = _definition(sound, "_SL-DGRAPH-LANDMARKS")
+    assert landmarks.count("UDG-POLYLINE") == 1
+    assert landmarks.count("_SL-DGRAPH-MARK") == 2
+    assert "DRW-HLINE" not in _definition(sound, "_SL-DRAW-ANALYSIS")
     assert "13 CONSTANT _SL-DGRAPH-OBJECT-COUNT" in sound
     sound_build = _definition(sound, "_SL-DGRAPH-REBUILD")
     assert sound_build.count("_SL-DGRAPH-BUILDER UDG-READOUT") == 8
@@ -156,14 +162,20 @@ def test_applet_data_graphics_source_contract() -> None:
     world_stop = _definition(worlds, "WORLDS-SHUTDOWN-CB")
     _ordered(world_stop, "DGRAPH-FREE", "_WORLD-PANEL-RGN @ ?DUP IF RGN-FREE")
 
-    # Observatory: nine readouts plus a status tied only to a real profile attempt.
-    assert 112 + 9 * 144 + 128 == 1536
+    # Observatory: nine readouts plus a status tied only to a real profile
+    # attempt, and with room for it, the exact series, its plot and the
+    # plot's baseline.  The plot is the graph's; only its caption is painted.
     assert re.search(
         r"UDG-HEADER-SIZE\s+0 UDG-READOUT-RECORD-BYTES 9 \* \+\s+"
-        r"UDG-STATUS-RECORD-SIZE \+\s+CONSTANT _OBS-DGRAPH-CAP",
+        r"UDG-STATUS-RECORD-SIZE \+\s+CONSTANT _OBS-DGRAPH-BASE-BYTES",
         observatory,
     )
-    assert "10 CONSTANT _OBS-DGRAPH-OBJECT-COUNT" in observatory
+    assert "10 CONSTANT _OBS-DGRAPH-BASE-OBJECTS" in observatory
+    plot = _definition(observatory, "_OBS-DGRAPH-EMIT-PLOT")
+    _ordered(plot, "UDG-SERIES", "UDG-PLOT", "UDG-POLYLINE")
+    assert "_OBS-SERIES @ _OBS-COUNT @" in plot
+    painted = _definition(observatory, "_OBS-DRAW-PLOT")
+    assert "DRW-CHAR" not in painted and "DRW-HLINE" not in painted
     assert _definition(observatory, "_OBS-DGRAPH-EMIT-READOUTS").count(
         "_OBS-DGRAPH-READOUT"
     ) == 9

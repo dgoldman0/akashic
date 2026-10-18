@@ -2016,7 +2016,7 @@ def _soundlab_desktop_projection(
             45,
         )
         for index, kind in enumerate(kinds)
-    )
+    ) + _soundlab_landmark_claims(frequency)
     return replace(
         projection,
         menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES) + 1,
@@ -2033,6 +2033,32 @@ def _soundlab_desktop_projection(
         instrument_claims=claims,
         semantic_field_claims=projection.semantic_field_claims
         + _soundlab_field_claims(frequency),
+    )
+
+
+# Sound Lab's frequency landmarks in its canonical tile: a line from 0 Hz to
+# 4 kHz across row 73, with the pitch mark at FREQUENCY and the centroid's
+# two columns on.
+SOUNDLAB_LANDMARK_ROW = 73
+SOUNDLAB_LANDMARK_LEFT = 188
+SOUNDLAB_LANDMARK_RIGHT = 276
+
+
+def _soundlab_landmark_claims(frequency: int) -> tuple:
+    half, one = 0x7FFFFFFF, 0xFFFFFFFF
+    row, left, right = (SOUNDLAB_LANDMARK_ROW, SOUNDLAB_LANDMARK_LEFT,
+                        SOUNDLAB_LANDMARK_RIGHT)
+    pitch = left + frequency * (right - left - 1) // 4000
+
+    def line(identity, column, width, color, points):
+        return acceptance_runner._InstrumentClaim(
+            "POLYLINE", 1, 1, identity, column, row, column + width, row + 1,
+            color, points)
+
+    return (
+        line(40_050, left, right - left, (0x80, 0x80, 0x80, 0xFF), ((0, half), (one, half))),
+        line(40_051, pitch, 1, (0x5F, 0xD7, 0xFF, 0xFF), ((half, 0), (half, one))),
+        line(40_052, pitch + 2, 1, (0xFF, 0xD7, 0x00, 0xFF), ((half, 0), (half, one))),
     )
 
 
@@ -6207,6 +6233,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
         soundlab_projection,
         semantic_field_claims=soundlab_projection.semantic_field_claims[:-4]
         + _soundlab_field_claims(880),
+        instrument_claims=_soundlab_desktop_projection(frequency=880).instrument_claims,
     )
     # The new setting leaves the analysis stale: Sound Lab withdraws its
     # readouts and meters until F5 renders it again.
@@ -7778,6 +7805,8 @@ def test_owed_click_release_precedes_any_other_input() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
     journey._soundlab_frequency = 880
+    journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), (186, 42, 280, 83))
     # The exercised-state proof has its own test; this one follows the click
     # on File Explorer's taskbar button that starts the pointer journey.
     journey._require_exercised_state_survives = lambda _projection: None
@@ -9727,3 +9756,83 @@ def test_dialog_scroll_sends_the_wheel_a_dialog_takes_where_the_viewer_would() -
         send(_PointerClient(), "1,1,500,0")
     with pytest.raises(PhysicalDesktopAcceptanceError, match="no DIALOG target"):
         send(_PointerClient(), "1,1,501,5")
+
+
+SOUNDLAB_TILE = (186, 42, 280, 83)
+
+
+def test_soundlab_landmarks_are_found_by_shape_and_color() -> None:
+    landmarks = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), SOUNDLAB_TILE)
+    pitch = SOUNDLAB_LANDMARK_LEFT + 440 * 87 // 4000
+    assert landmarks == acceptance_runner.SoundLabLandmarks(
+        SOUNDLAB_LANDMARK_ROW, SOUNDLAB_LANDMARK_LEFT, SOUNDLAB_LANDMARK_RIGHT,
+        pitch, pitch + 2)
+    # Before a render there are no landmarks to find.
+    bare = replace(_soundlab_desktop_projection(), instrument_claims=())
+    assert acceptance_runner._soundlab_landmarks(bare, SOUNDLAB_TILE) is None
+
+
+@pytest.mark.parametrize("change,message", (
+    (lambda claims: claims[:-1], "shows only its landmarks"),
+    (lambda claims: claims + (claims[-1],), "no landmark"),
+    (lambda claims: claims[:-3] + (replace(claims[-3], bottom=claims[-3].bottom + 1),)
+     + claims[-2:], "not one row across"),
+    (lambda claims: claims[:-2] + (replace(claims[-2], points=((0, 0), (1, 1))),)
+     + claims[-1:], "pitch mark is not a cell"),
+    (lambda claims: claims[:-1] + (replace(claims[-1], top=claims[-1].top - 1,
+                                           bottom=claims[-1].bottom - 1),),
+     "centroid mark is not a cell"),
+))
+def test_soundlab_landmarks_refuse_other_lines(change, message) -> None:
+    projection = _soundlab_desktop_projection()
+    projection = replace(projection, instrument_claims=change(projection.instrument_claims))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        acceptance_runner._soundlab_landmarks(projection, SOUNDLAB_TILE)
+
+
+def _landmark_cells(landmarks, *, letters=("P", "C"), line="─", mark="│"):
+    row, left, right = landmarks.row, landmarks.left, landmarks.right
+    drawn = [line] * (right - left)
+    for column in (landmarks.pitch, landmarks.centroid):
+        drawn[column - left] = mark
+    placements = [
+        (row - 2, left, acceptance_runner.SOUNDLAB_LANDMARK_CAPTION),
+        (row - 1, landmarks.pitch, letters[0]),
+        (row - 1, landmarks.centroid, letters[1]),
+        (row, left, "".join(drawn)),
+    ]
+    return _cell_offer(7, tuple(placements))
+
+
+def test_soundlab_landmark_cells_match_the_terminal_lines() -> None:
+    landmarks = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), SOUNDLAB_TILE)
+    acceptance_runner._require_soundlab_landmark_cells(_landmark_cells(landmarks), landmarks)
+    for offer, message in (
+        (_landmark_cells(landmarks, letters=("C", "P")), "name Sound Lab's mark 'P'"),
+        (_landmark_cells(landmarks, mark="─"), "draw Sound Lab's mark"),
+        (_landmark_cells(landmarks, line=" "), "landmark line"),
+    ):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+            acceptance_runner._require_soundlab_landmark_cells(offer, landmarks)
+    # Marks in one column are named * there.
+    shared = replace(landmarks, centroid=landmarks.pitch)
+    acceptance_runner._require_soundlab_landmark_cells(
+        _landmark_cells(shared, letters=("*", "*")), shared)
+
+
+def test_soundlab_rerender_refuses_a_pitch_mark_that_did_not_move() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
+    journey._soundlab_frequency = 880
+    journey._require_exercised_state_survives = lambda _projection: None
+    journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(frequency=880), SOUNDLAB_TILE)
+
+    def sender(*_args):
+        raise AssertionError("a refused frame sent input")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="pitch mark did not move"):
+        journey.after_present(_offer("X", offer_id=1, pad_menu=True), 9,
+                              _soundlab_desktop_projection(frequency=880), sender)

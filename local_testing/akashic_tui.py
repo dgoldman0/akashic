@@ -717,6 +717,26 @@ DESK_APPLETS = (
         ),
     ),
 )
+# Applets Desk runs that the Desktop profile does not compose.  Desk with
+# one of them checks its work on the optional rich terminal.
+ADJACENT_DESK_APPLETS = (
+    DeskApplet(
+        "observatory",
+        "tui/applets/observatory/observatory.f",
+        ("tui/applets/observatory/observatory.uidl",),
+        "OBSERVATORY-ENTRY",
+        ready=("OBSERVATORY / SERIES PROFILE",),
+        stable=("OBSERVATORY / SERIES PROFILE",),
+    ),
+    DeskApplet(
+        "worlds",
+        "tui/applets/worlds/worlds.f",
+        ("tui/applets/worlds/worlds.uidl",),
+        "WORLDS-ENTRY",
+        ready=("WORLDS / RESERVOIR FACILITY",),
+        stable=("WORLDS / RESERVOIR FACILITY",),
+    ),
+)
 _DESK_AGENT_PROVIDER = "tui/applets/agent/providers/devtools/scripted.f"
 
 _DESK_PRACTICE_PROVISION = r"""\ Development-image installation step: provision only genuinely blank media.
@@ -926,12 +946,12 @@ def desktop_stable_markers(applets) -> tuple[str, ...]:
 
 
 def desk_applet(name: str) -> DeskApplet:
-    """The Desktop applet NAME."""
+    """The Desk applet NAME, from the Desktop's or the adjacent ones."""
 
-    for applet in DESK_APPLETS:
+    for applet in (*DESK_APPLETS, *ADJACENT_DESK_APPLETS):
         if applet.name == name:
             return applet
-    raise ValueError(f"no Desktop applet {name!r}")
+    raise ValueError(f"no Desk applet {name!r}")
 
 
 # Worlds' valve field: its label, then its value right-aligned in a slot as
@@ -14097,8 +14117,7 @@ DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES = (
 # Complete snapshot storage bounds include one DEFINE per native history and
 # at most one sample chunk per i64 value. Declared history reservations are
 # independent finite limits; sparse/empty histories still consume their full
-# authored capacity. These limits are available for qualification but SERIES
-# remains unadvertised until its composed publication/input run is accepted.
+# authored capacity.
 DESKTOP_APT1_SERIES_HEADER_BYTES = 72
 DESKTOP_APT1_MAX_SERIES = (
     DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_SERIES_HEADER_BYTES
@@ -14111,6 +14130,13 @@ DESKTOP_APT1_SERIES_WIRE_BYTES = (
     80 * DESKTOP_APT1_SERIES_OPERATIONS + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
 )
 DESKTOP_APT1_MAX_HISTORY_PER_SERIES = 32_768
+# A POLYLINE keeps each point as two native cells, sixteen bytes, in the same
+# DATA_GRAPHICS bank, so that bank bounds both the points of one line and the
+# points of every line.  An owner asks for only the points its lines need.
+DESKTOP_APT1_POLYLINE_POINT_BYTES = 16
+DESKTOP_APT1_MAX_PATH_POINTS = (
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_POLYLINE_POINT_BYTES
+)
 DESKTOP_APT1_TOTAL_SAMPLE_SLOTS = 65_536
 DESKTOP_APT1_MAX_SAMPLES_PER_APPEND = 4_096
 # Two thirds of the machine is general XMEM, where Desk's rich storage grows;
@@ -14261,7 +14287,8 @@ DESKTOP_APT1_CONTROL_VARIABLE_BYTES = (
     + DESKTOP_APT1_FIELD_NATIVE_BYTES
 )
 # METER has the largest fixed INSTRUMENT frame (152 bytes); adding the entire
-# DATA_GRAPHICS bank separately covers every READOUT unit span.  This is a
+# DATA_GRAPHICS bank separately covers every READOUT unit span and every
+# POLYLINE's points, eight wire bytes for each sixteen native ones.  This is a
 # conservative combined-family wire bound selected from caller-owned bytes,
 # not a hidden per-unit or per-applet limit.
 DESKTOP_APT1_INSTRUMENT_WIRE_BYTES = (
@@ -14367,6 +14394,7 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
             | RetainedFeature.FIELDS
             | RetainedFeature.DIALOGS
             | RetainedFeature.SERIES
+            | RetainedFeature.VECTOR
             | RetainedFeature.RGBA_IMAGE
         ),
         max_owner_records=1,
@@ -14385,13 +14413,14 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
         image_formats=IMAGE_FORMATS,
         max_image_width=DESKTOP_APT1_MAX_IMAGE_SIDE,
         max_image_height=DESKTOP_APT1_MAX_IMAGE_SIDE,
-        max_path_points=0,
+        max_path_points=DESKTOP_APT1_MAX_PATH_POINTS,
         max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
         max_history_per_series=DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
         minimum_presentation_interval_us=0,
         total_sample_slots=DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
         total_utf8_bytes=DESKTOP_APT1_TOTAL_UTF8_BYTES,
+        total_path_points=DESKTOP_APT1_MAX_PATH_POINTS,
         client_to_terminal_max_payload=DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         terminal_to_client_max_payload=64,
         base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
@@ -14716,7 +14745,9 @@ PROFILES["desktop-apt1"] = replace(
 # Desk with only the applet being worked on, on the optional rich terminal.
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
-DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
+DESKTOP_APT1_APPLETS = (
+    "pad", "fexp", "daybook", "streams", "agent", "soundlab", "observatory",
+)
 # Development checks beyond one applet: Desk with Pad on a terminal with
 # little room for retained text, and Desk with File Explorer showing a real
 # photograph (below).
@@ -14724,6 +14755,11 @@ DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damage
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
+# On the Desktop, Sound Lab is a built-in without a tile; alone it takes
+# the tile, where its frequency landmarks have room below its analysis.
+# Observatory is checked beside Worlds, which hands it a run's telemetry
+# through Analyze: Observatory starts first, so Desk has its handler when
+# Worlds asks.
 # On the Desktop, Streams is a built-in without a tile and without a feed.
 # Alone, it takes the tile and starts with a fixed feed, loaded as an
 # injected source would load one, so its cards have posts to show.  The
@@ -14735,30 +14771,40 @@ DESKTOP_APT1_APPLET_PROFILES = tuple(
 DAYBOOK_APT1_REMINDER_DELAY_S = 120
 _DESKTOP_APT1_ALONE = {
     "daybook": (
-        replace(
+        (replace(
             desk_applet("daybook"),
             setup=daybook_reminder_setup(DAYBOOK_APT1_REMINDER_DELAY_S),
-        ),
+        ),),
         (),
     ),
     "agent": (
-        replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),
+        (replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),),
         (),
     ),
     "streams": (
-        replace(
+        (replace(
             desk_applet("streams"),
             tile=True,
             setup=streams_fixture_init("/testing/streams/desk-timeline.json"),
             ready=("STREAMS", "T thread"),
             stable=("STREAMS", "T thread"),
-        ),
+        ),),
         (("testing/streams/desk-timeline.json", STREAMS_DESK_TIMELINE_FIXTURE),),
     ),
+    "soundlab": (
+        (replace(
+            desk_applet("soundlab"),
+            tile=True,
+            note="",
+            ready=("SOUND LAB", "Waveform"),
+            stable=("SOUND LAB", "Waveform"),
+        ),),
+        (),
+    ),
+    "observatory": ((desk_applet("observatory"), desk_applet("worlds")), ()),
 }
 for _name in DESKTOP_APT1_APPLETS:
-    _applet, _files = _DESKTOP_APT1_ALONE.get(_name, (desk_applet(_name), ()))
-    _applets = (_applet,)
+    _applets, _files = _DESKTOP_APT1_ALONE.get(_name, ((desk_applet(_name),), ()))
     PROFILES[f"desktop-apt1-{_name}"] = replace(
         PROFILES["desktop-apt1"],
         roots=desktop_roots(_applets, rich=True),
@@ -14768,7 +14814,7 @@ for _name in DESKTOP_APT1_APPLETS:
         stable_markers=desktop_stable_markers(_applets),
         initial_files=PROFILES["desktop-apt1"].initial_files + _files,
     )
-del _name, _applet, _files, _applets
+del _name, _files, _applets
 
 # The Agent alone also opens its run settings, so its source is the
 # device-flow fixture's, as Daybook's with the Agent is: a signed-in account

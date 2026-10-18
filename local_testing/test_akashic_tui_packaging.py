@@ -2945,6 +2945,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
             | RetainedFeature.FIELDS
             | RetainedFeature.DIALOGS
             | RetainedFeature.SERIES
+            | RetainedFeature.VECTOR
             | RetainedFeature.RGBA_IMAGE
         ),
         "max_owner_records": 1,
@@ -2964,13 +2965,16 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         "image_formats": 0b1111,
         "max_image_width": 4_096,
         "max_image_height": 4_096,
-        "max_path_points": 0,
+        # Sixteen native bytes a point, so the DATA_GRAPHICS bank bounds
+        # one line's points and every line's.
+        "max_path_points": DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // 16,
         "max_glyph_run_bytes": DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         "max_samples_per_append": DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
         "max_history_per_series": DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
         "minimum_presentation_interval_us": 0,
         "total_sample_slots": DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
         "total_utf8_bytes": DESKTOP_APT1_TOTAL_UTF8_BYTES,
+        "total_path_points": DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // 16,
         "client_to_terminal_max_payload": DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         "terminal_to_client_max_payload": 64,
         "base_max_transaction_bytes": (

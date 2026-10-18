@@ -56,12 +56,16 @@ REQUIRE ../../../audio/output.f
 
 \ The base graph has eight READOUTs, two METERs and three STATUS objects.
 \ A visible rendered waveform adds one SERIES containing every PCM frame
-\ and one WAVEFORM.  Two immutable banks and fixed conversion scratch are
-\ caller-owned; graph rebuilding never allocates a new sample buffer.
+\ and one WAVEFORM, and a panel with room for the frequency landmarks adds
+\ their line and its two marks as POLYLINEs.  Two immutable banks and fixed
+\ conversion scratch are caller-owned; graph rebuilding never allocates a
+\ new sample buffer.
 1960 CONSTANT _SL-DGRAPH-BASE-BYTES
+2 UDG-POLYLINE-RECORD-BYTES 3 * CONSTANT _SL-DGRAPH-LANDMARK-BYTES
 _SL-MAX-FRAMES 8 * CONSTANT _SL-DGRAPH-SAMPLE-BYTES
 _SL-DGRAPH-BASE-BYTES UDG-SERIES-HEADER-SIZE + UDG-WAVEFORM-RECORD-SIZE +
-    _SL-DGRAPH-SAMPLE-BYTES + CONSTANT _SL-DGRAPH-CAP
+    _SL-DGRAPH-SAMPLE-BYTES + _SL-DGRAPH-LANDMARK-BYTES +
+    CONSTANT _SL-DGRAPH-CAP
    1 CONSTANT _SL-DGRAPH-ROOT-KEY
   13 CONSTANT _SL-DGRAPH-OBJECT-COUNT
 
@@ -73,6 +77,16 @@ _SL-DGRAPH-BASE-BYTES UDG-SERIES-HEADER-SIZE + UDG-WAVEFORM-RECORD-SIZE +
 0x666666FF CONSTANT _SL-DG-INACTIVE
 0xFFFF00FF CONSTANT _SL-DG-DEVICE
 0x5FD7FFFF CONSTANT _SL-DG-TRACE
+\ The landmark line and its marks: the pitch mark takes the trace's color
+\ and the centroid's the color its letter always had.
+0x808080FF CONSTANT _SL-DG-LANDMARK-LINE
+0x5FD7FFFF CONSTANT _SL-DG-PITCH-MARK
+0xFFD700FF CONSTANT _SL-DG-CENTROID-MARK
+0x20000000 CONSTANT _SL-DG-LANDMARK-STROKE
+\ The landmark points, a line across one row and a mark down one cell,
+\ are the same for every panel.
+CREATE _SL-LANDMARK-SPACE 64 7 + ALLOT
+: _SL-LANDMARK-POINTS  ( -- a ) _SL-LANDMARK-SPACE 7 + -8 AND ;
 0x4E4E4EFF CONSTANT _SL-DG-ZERO
 
 -1 CONSTANT _SL-PLAY-S-NEVER
@@ -656,6 +670,21 @@ VARIABLE _SL-METER-W
     THEN
     _SL-DW @ 16 - 4 MAX 52 MIN _SL-METER-W ! ;
 
+\ The frequency landmarks: a caption, then a row of letters naming the
+\ marks, then the line from 0 Hz to 4 kHz with a mark at the pitch and one
+\ at the spectral centroid.  Shown with a valid render when the panel has
+\ the rows.  The marks' columns serve the graph and the letters alike.
+: _SL-LANDMARKS-SHOWN?  ( -- flag )
+    _SL-ANALYSIS-ROW @ 6 + _SL-DH @ < ;
+
+: _SL-LANDMARK-X  ( hz -- column )
+    0 MAX 4000 MIN _SL-LANDMARK-W @ 1- * 4000 / 2 + ;
+
+: _SL-LANDMARKS-LAYOUT  ( -- )
+    _SL-DW @ 6 - 4 MAX _SL-LANDMARK-W !
+    _SL-M-PITCH @ FP16>INT _SL-LANDMARK-X _SL-PITCH-X !
+    _SL-M-CENTROID @ FP16>INT _SL-LANDMARK-X _SL-CENTROID-X ! ;
+
 \ ---------------------------------------------------------------------
 \ Canonical typed parameter fields.  Models contain application meaning;
 \ widgets own ordinary paint and input, and no renderer-specific API is
@@ -822,6 +851,34 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
         _SL-DG-SAMPLE-COUNT @ 8 * + _SL-DG-EXPECTED-BYTES +!
     1 _SL-DG-EXPECTED-OBJECTS +! UDG-S-OK ;
 
+\ A line across one row, and a mark down one cell.
+: _SL-LANDMARK-POINTS!  ( -- )
+    0 _SL-LANDMARK-POINTS ! 0x7FFFFFFF _SL-LANDMARK-POINTS 8 + !
+    UDG-UNORM-ONE _SL-LANDMARK-POINTS 16 + !
+    0x7FFFFFFF _SL-LANDMARK-POINTS 24 + !
+    0x7FFFFFFF _SL-LANDMARK-POINTS 32 + ! 0 _SL-LANDMARK-POINTS 40 + !
+    0x7FFFFFFF _SL-LANDMARK-POINTS 48 + !
+    UDG-UNORM-ONE _SL-LANDMARK-POINTS 56 + ! ;
+
+: _SL-DGRAPH-MARK  ( key column color -- status )
+    >R >R _SL-ANALYSIS-ROW @ 6 + R> 1 1 1 _SL-DG-FLAGS @
+        _SL-DG-LANDMARK-STROKE R> 0 _SL-LANDMARK-POINTS 32 + 2
+        _SL-DGRAPH-BUILDER UDG-POLYLINE ;
+
+: _SL-DGRAPH-LANDMARKS  ( -- status )
+    _SL-LANDMARKS-SHOWN? 0= IF UDG-S-OK EXIT THEN
+    _SL-LANDMARKS-LAYOUT _SL-LANDMARK-POINTS!
+    50 _SL-ANALYSIS-ROW @ 6 + 2 1 _SL-LANDMARK-W @ 0 _SL-DG-FLAGS @
+        _SL-DG-LANDMARK-STROKE _SL-DG-LANDMARK-LINE 0
+        _SL-LANDMARK-POINTS 2 _SL-DGRAPH-BUILDER UDG-POLYLINE
+    DUP IF EXIT THEN DROP
+    51 _SL-PITCH-X @ _SL-DG-PITCH-MARK _SL-DGRAPH-MARK
+    DUP IF EXIT THEN DROP
+    52 _SL-CENTROID-X @ _SL-DG-CENTROID-MARK _SL-DGRAPH-MARK
+    DUP IF EXIT THEN DROP
+    _SL-DGRAPH-LANDMARK-BYTES _SL-DG-EXPECTED-BYTES +!
+    3 _SL-DG-EXPECTED-OBJECTS +! UDG-S-OK ;
+
 : _SL-DGRAPH-REBUILD  ( -- status )
     _SL-DGRAPH-WIDGET @ 0= IF DGRAPH-S-OK EXIT THEN
     _SL-LAYOUT
@@ -907,6 +964,7 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
     DUP IF EXIT THEN DROP
 
     _SL-DGRAPH-WAVEFORM DUP IF EXIT THEN DROP
+    _SL-DGRAPH-LANDMARKS DUP IF EXIT THEN DROP
     _SL-DGRAPH-BUILDER UDG-END
     DUP IF EXIT THEN DROP
     _SL-DGRAPH-BUILDER UDG-BUILDER-FINISH
@@ -969,21 +1027,18 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
     S" Peak level" _SL-ANALYSIS-ROW @ 2 + 2 DRW-TEXT
     S" RMS level" _SL-ANALYSIS-ROW @ 3 + 2 DRW-TEXT
 
-    _SL-ANALYSIS-ROW @ 6 + _SL-DH @ < IF
-        _SL-DW @ 6 - 4 MAX _SL-LANDMARK-W !
+    \ The line and its marks are the graph's; the caption and the letters
+    \ naming the marks are painted above them.
+    _SL-LANDMARKS-SHOWN? IF
+        _SL-LANDMARKS-LAYOUT
         244 234 CELL-A-DIM DRW-STYLE!
-        S" Frequency landmarks: 0 Hz" _SL-ANALYSIS-ROW @ 5 + 2 DRW-TEXT
-        S" 4 kHz" _SL-ANALYSIS-ROW @ 5 + 2 _SL-LANDMARK-W @ DRW-TEXT-RIGHT
-        9472 _SL-ANALYSIS-ROW @ 6 + 2 _SL-LANDMARK-W @ DRW-HLINE
-        _SL-M-PITCH @ FP16>INT 0 MAX 4000 MIN _SL-LANDMARK-W @ 1- * 4000 /
-        2 + _SL-PITCH-X !
-        _SL-M-CENTROID @ FP16>INT 0 MAX 4000 MIN _SL-LANDMARK-W @ 1- * 4000 /
-        2 + _SL-CENTROID-X !
+        S" Frequency landmarks: 0 Hz" _SL-ANALYSIS-ROW @ 4 + 2 DRW-TEXT
+        S" 4 kHz" _SL-ANALYSIS-ROW @ 4 + 2 _SL-LANDMARK-W @ DRW-TEXT-RIGHT
         81 234 CELL-A-BOLD DRW-STYLE!
-        [CHAR] P _SL-ANALYSIS-ROW @ 6 + _SL-PITCH-X @ DRW-CHAR
+        [CHAR] P _SL-ANALYSIS-ROW @ 5 + _SL-PITCH-X @ DRW-CHAR
         220 DRW-FG!
         _SL-CENTROID-X @ _SL-PITCH-X @ = IF [CHAR] * ELSE [CHAR] C THEN
-        _SL-ANALYSIS-ROW @ 6 + _SL-CENTROID-X @ DRW-CHAR
+        _SL-ANALYSIS-ROW @ 5 + _SL-CENTROID-X @ DRW-CHAR
     THEN ;
 
 : _SL-PANEL-DRAW  ( widget -- )
