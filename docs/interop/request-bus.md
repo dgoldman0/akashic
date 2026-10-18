@@ -30,6 +30,20 @@ the request result to `CBUS-S-FAILED` and frees the rejected value. Every other
 non-result-bearing handler or bus status also frees `CBR.RESULT`; effectful
 Agent failures follow the existing failed/indeterminate Practice-turn rules.
 
+## Handler scope
+
+A host may run every handler of a bus inside a scope of its own:
+`CBUS-SCOPE! ( xt context bus -- )`. After every dispatch check the bus
+calls `xt ( handler-xt instance context -- )` in place of the handler, and
+xt executes `handler-xt` as the host runs that instance's own callbacks.
+Desk gives its applet host's `AHOST-CALL-SCOPED`
+([`../tui/applet-host.md`](../tui/applet-host.md)), so a handler runs in its
+own applet's UIDL context and may set its own elements, whichever applet's
+context was live when the request pump ran. A throw from the handler
+unwinds through the scope and fails the request as it would without one.
+`0 0 bus CBUS-SCOPE!` removes the scope; a bus without one calls each
+handler directly.
+
 ## Deferred completion
 
 A handler for long-running work may return `CBUS-S-ACCEPTED`: its owner keeps

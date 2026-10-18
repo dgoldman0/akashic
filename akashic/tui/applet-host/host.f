@@ -294,6 +294,38 @@ VARIABLE _AHF-HOST
     REPEAT
     0 ;
 
+\ AHOST-FIND-INSTANCE ( instance host -- slot | 0 )
+\   The live slot holding the instance.
+VARIABLE _AHFI-INST
+: AHOST-FIND-INSTANCE  ( instance host -- slot | 0 )
+    SWAP _AHFI-INST ! AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS-ALIVE? OVER AHS.INST @ _AHFI-INST @ = AND IF EXIT THEN
+        AHS.NEXT @
+    REPEAT
+    0 ;
+
+\ AHOST-CALL-SCOPED ( xt instance host -- )
+\   Run xt as the host runs the instance's own callbacks: activated, in its
+\   slot's UIDL context, where its elements are, with a repaint its UIDL
+\   asks for marking the slot dirty.  A child context live before is live
+\   again after, even when xt throws; with none live before, the slot's
+\   context stays current, as after a paint.  xt runs as it is for an
+\   instance no live slot with UIDL holds, such as the host's own.  A
+\   request bus takes this as its scope (CBUS-SCOPE!), so a capability
+\   handler may use its own UIDL elements whichever context was live.
+: _AHCS-RUN  ( xt slot -- ) AHS-CTX-SWITCH EXECUTE ;
+: AHOST-CALL-SCOPED  ( xt instance host -- )
+    AHOST-FIND-INSTANCE DUP 0= IF DROP EXECUTE EXIT THEN
+    DUP AHS.HAS-UIDL @ 0= IF DROP EXECUTE EXIT THEN
+    ASHELL-ACTIVE-CTX >R _UTUI-NEEDS-PAINT @ >R
+    0 _UTUI-NEEDS-PAINT !
+    DUP >R ['] _AHCS-RUN CATCH DUP IF NIP NIP THEN R>
+    _UTUI-NEEDS-PAINT @ IF -1 SWAP AHS.DIRTY ! ASHELL-DIRTY! ELSE DROP THEN
+    R> _UTUI-NEEDS-PAINT @ OR _UTUI-NEEDS-PAINT !
+    R> ?DUP IF ASHELL-CTX-SWITCH THEN
+    THROW ;
+
 VARIABLE _AHU-SLOT
 VARIABLE _AHU-HOST
 VARIABLE _AHU-PREV

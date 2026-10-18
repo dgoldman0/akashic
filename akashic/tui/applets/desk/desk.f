@@ -1749,6 +1749,9 @@ VARIABLE _DMC-CANDIDATE
     _DINI-CONTEXT @ CTX.EPOCH @ RANDOM AHT-NEW
     0<> ABORT" desk: authority table allocation failed" _DESK-AUTHORITY !
     _DESK-AUTHORITY @ _DESK-BUS @ CBUS-AUTHORITY!
+    \ Capability handlers run from the request pump, under whichever
+    \ child's UIDL context is live; each runs in its own child's instead.
+    ['] AHOST-CALL-SCOPED _DESK-HOST _DESK-BUS @ CBUS-SCOPE!
     _DESK-AUTHORITY @ _DINI-CONTEXT @ CTX.AUTHORITY !
     _DESK-BUS @ _DINI-CONTEXT @ CTX.QUEUE !
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !

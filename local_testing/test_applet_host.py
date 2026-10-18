@@ -60,6 +60,8 @@ VARIABLE _ah-xwalk
 
 VARIABLE _ah-inst-a
 VARIABLE _ah-inst-b
+VARIABLE _ah-scoped-ctx
+VARIABLE _ah-scoped-calls
 VARIABLE _ah-id-a
 VARIABLE _ah-id-b
 VARIABLE _ah-launch-id
@@ -346,6 +348,14 @@ VARIABLE _ah-ew
     OVER RGN-COL _ah-ec @ = AND
     OVER RGN-H _ah-eh @ = AND
     SWAP RGN-W _ah-ew @ = AND ;
+
+\ What a capability handler does with its own UIDL elements.
+: _ah-scoped-touch  ( -- )
+    1 _ah-scoped-calls +! ASHELL-ACTIVE-CTX _ah-scoped-ctx !
+    S" picture" UTUI-BY-ID DUP 0<> _ah-assert UIDL-DIRTY! ;
+: _ah-scoped-throw  ( -- ) _ah-scoped-touch -733 THROW ;
+: _ah-scoped-plain  ( -- )
+    1 _ah-scoped-calls +! ASHELL-ACTIVE-CTX _ah-scoped-ctx ! ;
 
 : _ah-run  ( -- )
     0 _ah-fails ! 0 _ah-checks ! DEPTH _ah-depth !
@@ -683,6 +693,42 @@ VARIABLE _ah-ew
     _ah-slot-a @ AHS.DIRTY @ 0= _ah-assert
     _ah-stack
     ." AH-M7C-SERVICE" CR
+
+    \ A capability handler the request bus runs for a child runs as the
+    \ child's own callbacks do: in its UIDL context, where its elements are,
+    \ and a repaint it asks for marks its slot.  The child context live
+    \ before is live again after, even when the handler throws.
+    _ah-slot-b @ AHS-CTX-SWITCH
+    0 _ah-slot-a @ AHS.DIRTY !  0 _ah-slot-b @ AHS.DIRTY !
+    0 _UTUI-NEEDS-PAINT !  0 _ah-scoped-calls !
+    _ah-inst-a @ _ah-host AHOST-FIND-INSTANCE _ah-slot-a @ = _ah-assert
+    _ah-inst-b @ _ah-host AHOST-FIND-INSTANCE _ah-slot-b @ = _ah-assert
+    12345 _ah-host AHOST-FIND-INSTANCE 0= _ah-assert
+    ['] _ah-scoped-touch _ah-inst-a @ _ah-host AHOST-CALL-SCOPED
+    _ah-scoped-calls @ 1 = _ah-assert
+    _ah-scoped-ctx @ _ah-slot-a @ AHS.UCTX @ = _ah-assert
+    ASHELL-ACTIVE-CTX _ah-slot-b @ AHS.UCTX @ = _ah-assert
+    _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
+    _ah-slot-b @ AHS.DIRTY @ 0= _ah-assert
+    _UTUI-NEEDS-PAINT @ _ah-assert
+    0 _ah-slot-a @ AHS.DIRTY !  0 _UTUI-NEEDS-PAINT !
+    ['] _ah-scoped-throw _ah-inst-a @ _ah-host ['] AHOST-CALL-SCOPED CATCH
+        -733 = _ah-assert 2DROP DROP
+    _ah-scoped-calls @ 2 = _ah-assert
+    ASHELL-ACTIVE-CTX _ah-slot-b @ AHS.UCTX @ = _ah-assert
+    _ah-slot-a @ AHS.DIRTY @ -1 = _ah-assert
+    \ With no child context live before, the child's context stays current,
+    \ as after a paint.  An instance no slot holds runs as it is.
+    0 ASHELL-CTX-SWITCH
+    ['] _ah-scoped-plain _ah-inst-a @ _ah-host AHOST-CALL-SCOPED
+    ASHELL-ACTIVE-CTX _ah-slot-a @ AHS.UCTX @ = _ah-assert
+    ['] _ah-scoped-plain 12345 _ah-host AHOST-CALL-SCOPED
+    _ah-scoped-calls @ 4 = _ah-assert
+    _ah-scoped-ctx @ _ah-slot-a @ AHS.UCTX @ = _ah-assert
+    0 0 _ah-host AHOST-PAINT
+    0 _UTUI-NEEDS-PAINT !
+    _ah-stack
+    ." AH-M7D-SCOPED" CR
 
     \ Every fail-closed result preserves the exact slot; ALLOW alone drains
     \ it and calls shutdown, owner release, and close projection once.

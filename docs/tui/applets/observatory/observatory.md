@@ -22,16 +22,6 @@ profiles a separately allocated candidate series and swaps that candidate into
 the active view only after every check succeeds. A refusal preserves the
 previous dataset and profile.
 
-Desk runs the handler from its request pump, while another application's
-UIDL context may be live, so the handler changes only Observatory's own
-state: the series, its profile, the sample table and the graph. It marks
-the view stale. Observatory's tick, which Desk runs in Observatory's own
-context once the request bus has advanced the instance, sets the status
-label and repaints the panel before Desk paints, so the CELL panel and a
-rich terminal's plot show the new run in the same frame. The bus advances
-the instance only for an accepted snapshot, so a refusal that changes what
-Observatory shows advances it in the handler.
-
 This slice consumes a closed Worlds projection rather than pretending to be a
 general dataset service. A neutral qualified-locator/resource acquisition
 contract, owner routing, durable provenance, and multiple open datasets remain

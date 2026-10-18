@@ -331,7 +331,9 @@ GUARD _cbr-args-seal-guard
  40 CONSTANT _CBUS-POLICY
  48 CONSTANT _CBUS-DROPPED
  56 CONSTANT _CBUS-RESERVED
- 64 CONSTANT _CBUS-RING
+ 64 CONSTANT _CBUS-SCOPE
+ 72 CONSTANT _CBUS-SCOPE-CONTEXT
+ 80 CONSTANT _CBUS-RING
 _CBUS-RING CBUS-CAPACITY 8 * + CONSTANT CBUS-SIZE
 
 : CBUS.HEAD      ( bus -- a ) _CBUS-HEAD + ;
@@ -343,6 +345,8 @@ _CBUS-RING CBUS-CAPACITY 8 * + CONSTANT CBUS-SIZE
 : CBUS.DROPPED   ( bus -- a ) _CBUS-DROPPED + ;
 : CBUS.RING      ( bus -- a ) _CBUS-RING + ;
 : CBUS.AUTHORITY ( bus -- a ) _CBUS-RESERVED + ;
+: CBUS.SCOPE     ( bus -- a ) _CBUS-SCOPE + ;
+: CBUS.SCOPE-CONTEXT ( bus -- a ) _CBUS-SCOPE-CONTEXT + ;
 
 \ Ring state, dispatch scratch, and the handler-to-revision owner commit form
 \ one synchronous owner boundary.  The guard is recursive so policy,
@@ -364,6 +368,14 @@ VARIABLE _CBUS-OWNER-OP-DEPTH
     _CBUS-DISPATCH-GUARD WITH-GUARD ;
 
 : CBUS-AUTHORITY!  ( table bus -- ) CBUS.AUTHORITY ! ;
+
+\ CBUS-SCOPE! ( xt context bus -- )
+\   Have every handler run inside a scope the bus's host gives.  The bus
+\   calls xt ( handler-xt instance context -- ), which executes handler-xt
+\   as the host runs that instance's own callbacks, such as in its UIDL
+\   context.  0 0 removes the scope.
+: CBUS-SCOPE!  ( xt context bus -- )
+    TUCK CBUS.SCOPE-CONTEXT ! CBUS.SCOPE ! ;
 
 : CBUS-NEW  ( registry policy -- bus ior )
     >R >R
@@ -461,9 +473,14 @@ VARIABLE _CBC-DESC
     _CBC-DESC @ COMP.CAPS-N @ CAP-DESC * + < AND
     _CBC-CAP @ _CBC-DESC @ COMP.CAPS-A @ - CAP-DESC MOD 0= AND ;
 
-: _CBUS-CALL-HANDLER  ( -- )
+: _CBUS-RUN-HANDLER  ( -- )
     _CBD-REQ @ _CBD-INST @ _CBD-CAP @ CAP.HANDLER-XT @ EXECUTE
     _CBD-STATUS ! ;
+
+: _CBUS-CALL-HANDLER  ( -- )
+    _CBD-BUS @ CBUS.SCOPE @ ?DUP 0= IF _CBUS-RUN-HANDLER EXIT THEN
+    >R ['] _CBUS-RUN-HANDLER _CBD-INST @ _CBD-BUS @ CBUS.SCOPE-CONTEXT @
+    R> EXECUTE ;
 
 : CBR-AUTH-BIND!  ( request binding -- status )
     _CBAB-BIND ! _CBAB-REQ !

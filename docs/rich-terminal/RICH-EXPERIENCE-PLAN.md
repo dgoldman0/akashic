@@ -827,17 +827,17 @@ renderer limits the consumers here do not meet, since their lines are
 opaque and thin: translucent wide strokes blend twice at joins, and
 diagonal strokes draw thinner than asked.
 
-**Found on the way.** A capability handler runs from Desk's request pump
-while another application's UIDL context is live, so the UIDL elements it
-sets are that application's. Observatory's handler set its status label and
+**Found on the way.** A capability handler ran from Desk's request pump
+while another application's UIDL context was live, so the UIDL elements it
+set were that application's. Observatory's handler set its status label and
 marked its body for repaint that way, so after Analyze its CELL panel kept
-the old series under the new plot. It now leaves both to its own tick,
-which Desk runs in its context before painting. Handlers in Daybook (agent
-run), File Explorer (reveal), Grid (set and save), Pad (open), Sound Lab
-(shape, frequency, amplitude, duration, render, play and save) and Streams
-(drafts, refreshes and source enabling) still set UIDL elements from there,
-and they stay open: each can do as Observatory does, or Desk can run a
-handler in its instance's context.
+the old series under the new plot. Handlers in Daybook (agent run), File
+Explorer (reveal), Grid (set and save), Pad (open), Sound Lab (shape,
+frequency, amplitude, duration, render, play and save) and Streams (drafts,
+refreshes and source enabling) did the same. Desk now gives its request bus
+a scope that runs each handler in its own applet's context, so all of them
+set their own elements, and Observatory's handler shows what it changed
+itself again.
 
 A press can be lost too. The terminal accepts it bound to the frame on
 screen, but when the guest replaces that frame with a START before it reads

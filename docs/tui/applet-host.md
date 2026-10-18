@@ -102,6 +102,8 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-TICK` | `( host -- )` | Tick eligible live children |
 | `AHOST-SERVICE` | `( host -- worked? )` | Give each live child's UIDL document its pending media work (`UTUI-SERVICE`) and mark a child whose document changed for repaint; at once false when no picture is decoding and no document view has work |
 | `AHOST-PAINT` | `( paint-all fullframe host -- )` | Paint eligible visible children |
+| `AHOST-FIND-INSTANCE` | `( instance host -- slot \| 0 )` | The live slot holding an instance |
+| `AHOST-CALL-SCOPED` | `( xt instance host -- )` | Run xt as the instance's own callbacks run: activated, in its slot's UIDL context, a repaint it asks for marking the slot |
 
 `AHS.*` words expose slot fields needed by a concrete layout/chrome owner.
 They do not transfer ownership. Host lifecycle operations remain owner-core
@@ -143,6 +145,17 @@ touched (`CINST-TOUCH`) since it was last painted is dirty. A child that
 touches its own instance while it ticks, to have a change of its own drawn,
 is marked dirty at once and asks the shell to paint, so the paint that
 follows the tick in the same pass draws it.
+
+Code that runs for a child from outside its callbacks, such as a capability
+handler the request bus calls from its owner's tick, would otherwise run in
+whichever child's UIDL context is live, and the elements it set would be
+that child's. `AHOST-CALL-SCOPED` runs it as the child's own callbacks run:
+activated and in its slot's UIDL context, with a repaint its UIDL asks for
+marking the slot dirty. A child context live before is live again after,
+even when xt throws; with none live before, the slot's context stays
+current, as after a paint. An instance that no live slot with UIDL holds,
+such as the host's own, runs xt as it is. A request bus takes it as its
+scope ([`../interop/request-bus.md`](../interop/request-bus.md)).
 
 Ordinary layouts keep child regions disjoint. A concrete owner may overlap
 them for presentation, as Desk does in full-frame mode. In that case pointer
