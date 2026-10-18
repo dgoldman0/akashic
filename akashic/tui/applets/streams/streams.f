@@ -20,6 +20,7 @@ REQUIRE ../../region.f
 REQUIRE ../../keys.f
 REQUIRE ../../widget.f
 REQUIRE ../../widgets/prompt.f
+REQUIRE ../../widgets/dialog.f
 REQUIRE ../../widgets/list.f
 REQUIRE ../../../utils/string.f
 REQUIRE ../../../utils/memory-span.f
@@ -57,6 +58,13 @@ BFM-TEXT-CAP CONSTANT _STM-PROMPT-CAP
 
 \ A post's card: its author and time, its text, and whether it replies.
 3 CONSTANT _STM-CARD-FIELDS
+\ A source's card: its label, its kind, format and revision, its endpoint,
+\ its last refresh, and its latest observation.  Its check box says
+\ whether it is enabled.
+5 CONSTANT _STM-SOURCE-FIELDS
+\ A Burrow's card: the Burrow, its state, its collection, its scope, its
+\ profile, its peers and services, and its cleanup and last result.
+7 CONSTANT _STM-BURROW-FIELDS
 
 0 CONSTANT _STM-PM-NONE
 1 CONSTANT _STM-PM-SEARCH
@@ -64,8 +72,7 @@ BFM-TEXT-CAP CONSTANT _STM-PROMPT-CAP
 3 CONSTANT _STM-PM-ACTOR
 4 CONSTANT _STM-PM-SOURCE-SYNDICATION
 5 CONSTANT _STM-PM-SOURCE-PAGE
-6 CONSTANT _STM-PM-SOURCE-REMOVE
-7 CONSTANT _STM-PM-SOURCE-ATPROTO
+6 CONSTANT _STM-PM-SOURCE-ATPROTO
 
 0 CONSTANT _STM-V-TIMELINE
 1 CONSTANT _STM-V-THREAD
@@ -148,6 +155,9 @@ _STM-CURRENT-STATE CMP-CELL: _STM-TIMELINE-RGN
 _STM-CURRENT-STATE CMP-CELL: _STM-THREAD-LIST
 _STM-CURRENT-STATE CMP-CELL: _STM-THREAD-RGN
 _STM-CURRENT-STATE LST-COLUMN-SIZE _STM-CARD-FIELDS * CMP-FIELD: _STM-CARD-COLUMNS
+_STM-CURRENT-STATE CMP-CELL: _STM-SOURCES-LIST
+_STM-CURRENT-STATE CMP-CELL: _STM-SOURCES-RGN
+_STM-CURRENT-STATE LST-COLUMN-SIZE _STM-SOURCE-FIELDS * CMP-FIELD: _STM-SOURCE-COLUMNS
 _STM-CURRENT-STATE CMP-CELL: _STM-THREAD-ROOT-U
 _STM-CURRENT-STATE BFM-URI-CAP CMP-FIELD: _STM-THREAD-ROOT-BUF
 _STM-CURRENT-STATE _STM-QUERY-CAP CMP-FIELD: _STM-SEARCH-BUF
@@ -169,7 +179,6 @@ _STM-CURRENT-STATE STREAMS-SOURCE-REGISTRY-SIZE CMP-FIELD: _STM-SOURCE-CANDIDATE
 _STM-CURRENT-STATE STREAMS-SOURCE-SIZE CMP-FIELD: _STM-SOURCE-CANDIDATE
 _STM-CURRENT-STATE RREF-SIZE CMP-FIELD: _STM-SOURCE-RREF
 _STM-CURRENT-STATE CMP-CELL: _STM-SOURCE-SELECTED
-_STM-CURRENT-STATE CMP-CELL: _STM-SOURCE-TOP
 _STM-CURRENT-STATE RID-SIZE CMP-FIELD: _STM-SOURCE-PENDING-RID
 _STM-CURRENT-STATE CMP-CELL: _STM-SOURCE-PENDING-REVISION
 _STM-CURRENT-STATE CMP-CELL: _STM-SOURCE-PENDING-ARMED
@@ -216,7 +225,9 @@ _STM-CURRENT-STATE RID-SIZE CMP-FIELD: _STM-BURROW-UI-INVOCATION
 _STM-CURRENT-STATE RID-SIZE CMP-FIELD: _STM-BURROW-UI-DIGEST
 _STM-CURRENT-STATE SHA3-256-HEX-LEN CMP-FIELD: _STM-BURROW-HEX
 _STM-CURRENT-STATE CMP-CELL: _STM-BURROW-SELECTED
-_STM-CURRENT-STATE CMP-CELL: _STM-BURROW-TOP
+_STM-CURRENT-STATE CMP-CELL: _STM-BURROWS-LIST
+_STM-CURRENT-STATE CMP-CELL: _STM-BURROWS-RGN
+_STM-CURRENT-STATE LST-COLUMN-SIZE _STM-BURROW-FIELDS * CMP-FIELD: _STM-BURROW-COLUMNS
 _STM-CURRENT-STATE CMP-CELL: _STM-BURROW-UI-SEQUENCE
 [THEN]
 CMP-LAYOUT-SIZE CONSTANT _STM-STATE-SIZE
@@ -820,31 +831,31 @@ VARIABLE _STM-SOD-STATUS
 
 : _STM-SOURCE-OWNER-ERROR-TOAST  ( owner-status -- )
     DUP STREAMS-SOURCE-S-BLOCKED = IF
-        DROP _STM-SOURCE-STORAGE-STATUS$ 3000 ASHELL-TOAST EXIT
+        DROP _STM-SOURCE-STORAGE-STATUS$ 3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP STREAMS-SOURCE-S-CONFLICT = IF
         DROP S" Sources changed elsewhere; reopen Streams before editing"
-        3200 ASHELL-TOAST EXIT
+        3200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-STALE = IF
         DROP S" Selected source changed; action was not applied"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-FULL =
     OVER STREAMS-SOURCE-S-CAPACITY = OR IF
         DROP S" Streams already has the maximum 16 sources"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-BUSY = IF
         DROP S" Source storage is busy; action was not applied"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP STREAMS-SOURCE-S-STORAGE = IF
         DROP S" Source storage failed; action was not applied"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP S" Source settings were invalid; action was not applied"
-    2800 ASHELL-TOAST ;
+    2800 ASHELL-TOAST-ERROR ;
 
 : _STM-SOURCE-URL-CHAR?  ( char -- flag )
     DUP 33 < OVER 126 > OR
@@ -1013,12 +1024,10 @@ _STM-BURROW-BUILD? [IF]
 
 : _STM-BURROW-CLAMP  ( -- )
     _STM-BURROW-COUNT DUP 0= IF
-        DROP 0 _STM-BURROW-SELECTED ! 0 _STM-BURROW-TOP ! EXIT
+        DROP 0 _STM-BURROW-SELECTED ! EXIT
     THEN
     1- _STM-BURROW-SELECTED @ _STM-NONNEG MIN
-        _STM-BURROW-SELECTED !
-    _STM-BURROW-TOP @ _STM-NONNEG _STM-BURROW-SELECTED @ MIN
-        _STM-BURROW-TOP ! ;
+        _STM-BURROW-SELECTED ! ;
 
 : _STM-BURROW-SELECTED@  ( -- declaration|0 )
     _STM-BURROW-CLAMP
@@ -1318,11 +1327,11 @@ _STM-BURROW-BUILD? [IF]
 : _STM-OPEN-THREAD  ( -- )
     _STM-SELECTION-VALID? 0= IF
         S" No retained item is selected; context is unavailable"
-        2200 ASHELL-TOAST EXIT
+        2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SELECTED @ _STM-THREAD-ANCHOR! 0= IF
         S" Selected item has no usable context identity"
-        2200 ASHELL-TOAST EXIT
+        2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-V-THREAD _STM-VIEW ! _STM-SET-VIEW-LABEL _STM-INVALIDATE ;
 : _STM-OPEN-TIMELINE  ( -- )
@@ -1416,12 +1425,14 @@ VARIABLE _STM-CARD-HEAD-U
 : _STM-CARD-OPENED  ( row list -- )
     NIP LST-CONTEXT@ _STM-ACTIVATE _STM-OPEN-THREAD ;
 
+\ _STM-TEXT-COLUMNS ( columns n -- )   N unlabelled text columns.
+: _STM-TEXT-COLUMNS  ( columns n -- )
+    2DUP LST-COLUMN-SIZE * 0 FILL
+    0 ?DO LST-TEXT-COLUMN OVER I LST-COLUMN-SIZE * + LST-COLUMN-KIND + ! LOOP
+    DROP ;
+
 : _STM-CARD-COLUMNS-INIT  ( -- )
-    _STM-CARD-COLUMNS LST-COLUMN-SIZE _STM-CARD-FIELDS * 0 FILL
-    _STM-CARD-FIELDS 0 DO
-        LST-TEXT-COLUMN
-            _STM-CARD-COLUMNS I LST-COLUMN-SIZE * + LST-COLUMN-KIND + !
-    LOOP ;
+    _STM-CARD-COLUMNS _STM-CARD-FIELDS _STM-TEXT-COLUMNS ;
 
 \ _STM-CARDS-NEW ( rgn -- list )   A card list in RGN.
 : _STM-CARDS-NEW  ( rgn -- list )
@@ -1434,12 +1445,15 @@ VARIABLE _STM-CARD-HEAD-U
     ['] _STM-CARD-OPENED OVER LST-ON-OPEN ;
 
 \ _STM-CARD-ROWS ( first-row -- rows )
-\   The rows from FIRST-ROW down to the result panel and the draft, which
-\   keep theirs.
+\   The rows from FIRST-ROW down to the panel's last, or, under the posts
+\   of the timeline and a context, to the result panel and the draft,
+\   which keep theirs.
 : _STM-CARD-ROWS  ( first-row -- rows )
     _STM-DH @ SWAP -
-    _STM-DRAFT-REV @ IF 3 - THEN
-    _STM-AUTH-RESULT-PANEL? IF _STM-AUTH-RESULT-ROWS - THEN
+    _STM-VIEW @ _STM-V-SOURCES < IF
+        _STM-DRAFT-REV @ IF 3 - THEN
+        _STM-AUTH-RESULT-PANEL? IF _STM-AUTH-RESULT-ROWS - THEN
+    THEN
     _STM-NONNEG ;
 
 VARIABLE _STM-CP-LIST
@@ -1471,35 +1485,6 @@ VARIABLE _STM-CP-LIST
     2DUP LST-SELECTED = R> 0= AND IF 2DROP EXIT THEN
     LST-SELECT ;
 
-\ _STM-CARDS-SYNC ( -- )
-\   Bring the shown view's list up to the model: its place, its rows, and
-\   the selected post.  The other list keeps its view.
-: _STM-CARDS-SYNC  ( -- )
-    _STM-VIEW @ _STM-V-TIMELINE = IF
-        _STM-TIMELINE-LIST @ ?DUP 0= IF EXIT THEN
-        _STM-TIMELINE-FIRST-ROW OVER _STM-CARDS-PLACE >R
-        _STM-ITEM-COUNT OVER _STM-CARDS-ROWS R> OR >R
-        _STM-SELECTED @ SWAP R> _STM-CARDS-FOLLOW EXIT
-    THEN
-    _STM-VIEW @ _STM-V-THREAD = IF
-        _STM-THREAD-LIST @ ?DUP 0= IF EXIT THEN
-        _STM-THREAD-FIRST-ROW OVER _STM-CARDS-PLACE >R
-        _STM-THREAD-COUNT OVER _STM-CARDS-ROWS R> OR >R
-        _STM-SELECTED @ _STM-THREAD-POSITION 0= IF DROP -1 THEN
-        SWAP R> _STM-CARDS-FOLLOW
-    THEN ;
-
-\ _STM-CARDS-SHOWN ( -- list|0 )   The shown view's list, when it has cards.
-: _STM-CARDS-SHOWN  ( -- list|0 )
-    _STM-VIEW @ _STM-V-TIMELINE = IF
-        _STM-TIMELINE-LIST @
-    ELSE _STM-VIEW @ _STM-V-THREAD = IF
-        _STM-THREAD-LIST @
-    ELSE
-        0
-    THEN THEN
-    DUP IF DUP LST-COUNT 0= IF DROP 0 THEN THEN ;
-
 \ A list draws in its place, in the panel's colours.
 : _STM-DRAW-CARDS  ( list -- )
     ?DUP 0= IF EXIT THEN
@@ -1527,8 +1512,21 @@ VARIABLE _STM-CP-LIST
     _STM-THREAD-ROOT$ 4 7 DRW-TEXT-UNTRUSTED
     _STM-THREAD-LIST @ _STM-DRAW-CARDS ;
 
-5 CONSTANT _STM-SOURCE-CARD-ROWS
 3 CONSTANT _STM-SOURCE-FIRST-ROW
+
+\ One line of a source's or a Burrow's card, composed for the list to
+\ draw or publish at once.  The longest is "latest " and an observation's
+\ title.
+OCHK-TITLE-MAX 64 + CONSTANT _STM-LINE-CAP
+CREATE _STM-LINE _STM-LINE-CAP ALLOT
+VARIABLE _STM-LINE-U
+
+: _STM-LINE+  ( addr len -- )
+    _STM-LINE-CAP _STM-LINE-U @ - MIN
+    >R _STM-LINE _STM-LINE-U @ + R@ MOVE
+    R> _STM-LINE-U +! ;
+: _STM-LINE-NUM+  ( n -- )  NUM>STR _STM-LINE+ ;
+: _STM-LINE$  ( -- addr len )  _STM-LINE _STM-LINE-U @ ;
 
 : _STM-CONFIGURED-CHECKPOINT  ( -- checkpoint|0 )
     _STM-CONFIGURED-REFRESH STREAMS-REFRESH-OWNER-VALID? 0= IF 0 EXIT THEN
@@ -1626,103 +1624,97 @@ VARIABLE _STM-OBS-BEST-SEQUENCE
         S" unknown" ROT
     ENDCASE ;
 
-: _STM-SOURCE-VISIBLE-ITEMS  ( -- count )
-    _STM-DH @ _STM-SOURCE-FIRST-ROW - _STM-NONNEG
-    _STM-SOURCE-CARD-ROWS / ;
-
 : _STM-SOURCE-CLAMP  ( -- )
-    _STM-SOURCE-READY? 0= IF
-        0 _STM-SOURCE-SELECTED ! 0 _STM-SOURCE-TOP ! EXIT
-    THEN
+    _STM-SOURCE-READY? 0= IF 0 _STM-SOURCE-SELECTED ! EXIT THEN
     _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT DUP 0= IF
-        DROP 0 _STM-SOURCE-SELECTED ! 0 _STM-SOURCE-TOP ! EXIT
+        DROP 0 _STM-SOURCE-SELECTED ! EXIT
     THEN
-    1- _STM-SOURCE-SELECTED @ _STM-NONNEG MIN _STM-SOURCE-SELECTED !
-    _STM-SOURCE-TOP @ _STM-NONNEG _STM-SOURCE-SELECTED @ MIN
-        _STM-SOURCE-TOP ! ;
+    1- _STM-SOURCE-SELECTED @ _STM-NONNEG MIN _STM-SOURCE-SELECTED ! ;
 
-VARIABLE _STM-SOURCE-ENSURE-COUNT
-VARIABLE _STM-SOURCE-ENSURE-WINDOW
+\ _STM-SOURCE-SHOWN ( -- count )   The sources the Sources view lists.
+: _STM-SOURCE-SHOWN  ( -- count )
+    _STM-SOURCE-READY? IF _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT ELSE 0 THEN ;
 
-: _STM-SOURCE-ENSURE-VISIBLE  ( -- )
-    _STM-SOURCE-CLAMP
-    _STM-SOURCE-READY? 0= IF EXIT THEN
-    _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT
-        DUP _STM-SOURCE-ENSURE-COUNT ! 0= IF EXIT THEN
-    _STM-SOURCE-VISIBLE-ITEMS
-        DUP _STM-SOURCE-ENSURE-WINDOW ! 0= IF
-        _STM-SOURCE-SELECTED @ _STM-SOURCE-TOP ! EXIT
-    THEN
-    _STM-SOURCE-SELECTED @ _STM-SOURCE-TOP @ < IF
-        _STM-SOURCE-SELECTED @ _STM-SOURCE-TOP !
-    ELSE
-        _STM-SOURCE-SELECTED @ _STM-SOURCE-TOP @
-            _STM-SOURCE-ENSURE-WINDOW @ + >= IF
-            _STM-SOURCE-SELECTED @ _STM-SOURCE-ENSURE-WINDOW @ - 1+
-                _STM-NONNEG _STM-SOURCE-TOP !
-        THEN
-    THEN
-    _STM-SOURCE-ENSURE-COUNT @ _STM-SOURCE-ENSURE-WINDOW @ -
-        _STM-NONNEG _STM-SOURCE-TOP @ MIN _STM-SOURCE-TOP ! ;
+: _STM-SOURCE-KIND-LINE$  ( source -- addr len )
+    0 _STM-LINE-U !
+    DUP SSOURCE.KIND @ _STM-SOURCE-KIND-NAME$ _STM-LINE+
+    S"  / " _STM-LINE+
+    DUP SSOURCE.FORMAT @ _STM-SOURCE-FORMAT-NAME$ _STM-LINE+
+    S"   revision " _STM-LINE+
+    SSOURCE.REVISION @ _STM-LINE-NUM+ _STM-LINE$ ;
 
-VARIABLE _STM-SOURCE-DRAW-SOURCE
-
-: _STM-DRAW-SOURCE  ( index row -- )
-    _STM-ROW !
-    DUP _STM-SOURCE-REGISTRY STREAMS-SOURCE-NTH
-        DUP 0= IF 2DROP EXIT THEN _STM-SOURCE-DRAW-SOURCE !
-    _STM-SOURCE-SELECTED @ = IF
-        15 24 CELL-A-BOLD
-    ELSE
-        253 234 0
-    THEN
-    DRW-STYLE!
-    32 _STM-ROW @ 0 _STM-SOURCE-CARD-ROWS _STM-DW @ DRW-FILL-RECT
-    _STM-SOURCE-DRAW-SOURCE @ SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND IF
-        S" [on ]"
-    ELSE
-        S" [off]"
-    THEN
-    _STM-ROW @ 2 DRW-TEXT
-    _STM-SOURCE-DRAW-SOURCE @ STREAMS-SOURCE-LABEL$
-        _STM-ROW @ 8 DRW-TEXT-UNTRUSTED
-    _STM-SOURCE-DRAW-SOURCE @ SSOURCE.KIND @ _STM-SOURCE-KIND-NAME$
-        _STM-ROW @ 1+ 4 DRW-TEXT
-    S" /" _STM-ROW @ 1+ 20 DRW-TEXT
-    _STM-SOURCE-DRAW-SOURCE @ SSOURCE.FORMAT @ _STM-SOURCE-FORMAT-NAME$
-        _STM-ROW @ 1+ 22 DRW-TEXT
-    S" revision" _STM-ROW @ 1+ 37 DRW-TEXT
-    _STM-SOURCE-DRAW-SOURCE @ SSOURCE.REVISION @ NUM>STR
-        _STM-ROW @ 1+ 46 DRW-TEXT
-    _STM-SOURCE-DRAW-SOURCE @ STREAMS-SOURCE-ENDPOINT$
-        _STM-ROW @ 2 + 4 DRW-TEXT-UNTRUSTED
-    S" last" _STM-ROW @ 3 + 4 DRW-TEXT
-    _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-ACQUISITION-STATE$
-        _STM-ROW @ 3 + 9 DRW-TEXT
-    _STM-SOURCE-DRAW-SOURCE @ _STM-AUTH-SOURCE? IF
-        S" Authenticated rows are presented directly in the timeline"
-            _STM-ROW @ 4 + 4 DRW-TEXT
-    ELSE
-        _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-ATTEMPT-HEAD ?DUP IF
+\ The last refresh, with the counts of one that succeeded.
+: _STM-SOURCE-LAST-LINE$  ( source -- addr len )
+    0 _STM-LINE-U !
+    S" last " _STM-LINE+
+    DUP _STM-SOURCE-ACQUISITION-STATE$ _STM-LINE+
+    DUP _STM-AUTH-SOURCE? 0= IF
+        DUP _STM-SOURCE-ATTEMPT-HEAD ?DUP IF
             DUP OCS.STATE @ OCHK-ATTEMPT-SUCCEEDED = IF
-                S" new" _STM-ROW @ 3 + 24 DRW-TEXT
-                DUP OCS.NEW-COUNT @ NUM>STR _STM-ROW @ 3 + 28 DRW-TEXT
-                S" revised" _STM-ROW @ 3 + 34 DRW-TEXT
-                DUP OCS.REVISED-COUNT @ NUM>STR _STM-ROW @ 3 + 42 DRW-TEXT
-                S" unchanged" _STM-ROW @ 3 + 48 DRW-TEXT
-                OCS.UNCHANGED-COUNT @ NUM>STR _STM-ROW @ 3 + 58 DRW-TEXT
-            ELSE
-                DROP
+                S"   new " _STM-LINE+ DUP OCS.NEW-COUNT @ _STM-LINE-NUM+
+                S"   revised " _STM-LINE+ DUP OCS.REVISED-COUNT @ _STM-LINE-NUM+
+                S"   unchanged " _STM-LINE+ DUP OCS.UNCHANGED-COUNT @ _STM-LINE-NUM+
             THEN
+            DROP
         THEN
-        _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-LATEST-OBSERVATION ?DUP IF
-            S" latest" _STM-ROW @ 4 + 4 DRW-TEXT
-            _STM-CONFIGURED-CHECKPOINT OCHK-OBSERVATION-TITLE$
-                _STM-ROW @ 4 + 11 DRW-TEXT-UNTRUSTED
-        ELSE
-            S" no retained observations" _STM-ROW @ 4 + 4 DRW-TEXT
-        THEN
+    THEN
+    DROP _STM-LINE$ ;
+
+: _STM-SOURCE-LATEST-LINE$  ( source -- addr len )
+    DUP _STM-AUTH-SOURCE? IF
+        DROP S" Authenticated rows are presented directly in the timeline" EXIT
+    THEN
+    _STM-SOURCE-LATEST-OBSERVATION ?DUP 0= IF
+        S" no retained observations" EXIT
+    THEN
+    0 _STM-LINE-U ! S" latest " _STM-LINE+
+    _STM-CONFIGURED-CHECKPOINT OCHK-OBSERVATION-TITLE$ _STM-LINE+
+    _STM-LINE$ ;
+
+\ The source list's callbacks may run while another instance is active.
+\ A row is the registry's Nth source, and its check box is its enabled
+\ flag; checking it selects the source and asks the owner to switch it.
+: _STM-SOURCE-FIELD  ( row column list -- addr len )
+    LST-CONTEXT@ _STM-ACTIVATE
+    SWAP _STM-SOURCE-REGISTRY STREAMS-SOURCE-NTH
+    DUP 0= IF 2DROP 0 0 EXIT THEN
+    SWAP CASE
+        0 OF STREAMS-SOURCE-LABEL$ ENDOF
+        1 OF _STM-SOURCE-KIND-LINE$ ENDOF
+        2 OF STREAMS-SOURCE-ENDPOINT$ ENDOF
+        3 OF _STM-SOURCE-LAST-LINE$ ENDOF
+        >R _STM-SOURCE-LATEST-LINE$ R>
+    ENDCASE ;
+
+: _STM-SOURCE-ROW-FLAGS  ( row list -- flags )
+    LST-CONTEXT@ _STM-ACTIVATE
+    _STM-SOURCE-REGISTRY STREAMS-SOURCE-NTH DUP 0= IF EXIT THEN
+    SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND IF
+        LST-ROW-CHECKABLE LST-ROW-CHECKED OR
+    ELSE
+        LST-ROW-CHECKABLE
     THEN ;
+
+: _STM-SOURCE-ROW-PICKED  ( row list -- )
+    LST-CONTEXT@ _STM-ACTIVATE
+    DUP _STM-SOURCE-SELECTED @ = IF DROP EXIT THEN
+    _STM-SOURCE-SELECTED ! _STM-INVALIDATE ;
+
+DEFER _STM-SOURCE-TOGGLE-D
+
+: _STM-SOURCE-ROW-CHECKED  ( row list -- )
+    LST-CONTEXT@ _STM-ACTIVATE
+    _STM-SOURCE-SELECTED ! _STM-SOURCE-TOGGLE-D ;
+
+\ _STM-SOURCE-CARDS-NEW ( rgn -- list )   The source cards in RGN.
+: _STM-SOURCE-CARDS-NEW  ( rgn -- list )
+    ['] _STM-CARD-KEY ['] _STM-SOURCE-FIELD LST-NEW
+    _STM-CURRENT-INSTANCE @ OVER LST-CONTEXT!
+    _STM-SOURCE-COLUMNS _STM-SOURCE-FIELDS 2 PICK LST-COLUMNS!
+    LST-CARDS LST-UNTRUSTED OR OVER LST-MODE!
+    ['] _STM-SOURCE-ROW-FLAGS OVER LST-ROW-FLAGS!
+    ['] _STM-SOURCE-ROW-PICKED OVER LST-ON-SELECT
+    ['] _STM-SOURCE-ROW-CHECKED OVER LST-ON-CHECK ;
 
 : _STM-DRAW-SOURCES  ( -- )
     _STM-SOURCE-READY? 0= IF
@@ -1731,52 +1723,16 @@ VARIABLE _STM-SOURCE-DRAW-SOURCE
         244 234 0 DRW-STYLE!
         _STM-SOURCE-STORAGE-STATUS$ 5 4 DRW-TEXT EXIT
     THEN
-    _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT DUP 0= IF
-        DROP 244 234 0 DRW-STYLE!
+    _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT 0= IF
+        244 234 0 DRW-STYLE!
         S" No sources configured. F feed | P page | B authenticated AT."
         4 2 DRW-TEXT EXIT
-    THEN DROP
-    _STM-SOURCE-ENSURE-VISIBLE
-    _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT _STM-SOURCE-TOP @ -
-        _STM-NONNEG _STM-SOURCE-VISIBLE-ITEMS MIN
-    0 ?DO
-        _STM-SOURCE-TOP @ I +
-        _STM-SOURCE-FIRST-ROW I _STM-SOURCE-CARD-ROWS * +
-        _STM-DRAW-SOURCE
-    LOOP ;
+    THEN
+    _STM-SOURCES-LIST @ _STM-DRAW-CARDS ;
 
 _STM-BURROW-BUILD? [IF]
 
-7 CONSTANT _STM-BURROW-CARD-ROWS
 3 CONSTANT _STM-BURROW-FIRST-ROW
-
-: _STM-BURROW-VISIBLE-ITEMS  ( -- count )
-    _STM-DH @ _STM-BURROW-FIRST-ROW - _STM-NONNEG
-    _STM-BURROW-CARD-ROWS / ;
-
-VARIABLE _STM-BURROW-ENSURE-COUNT
-VARIABLE _STM-BURROW-ENSURE-WINDOW
-
-: _STM-BURROW-ENSURE-VISIBLE  ( -- )
-    _STM-BURROW-CLAMP
-    _STM-BURROW-COUNT DUP _STM-BURROW-ENSURE-COUNT ! 0= IF
-        EXIT
-    THEN
-    _STM-BURROW-VISIBLE-ITEMS
-        DUP _STM-BURROW-ENSURE-WINDOW ! 0= IF
-        _STM-BURROW-SELECTED @ _STM-BURROW-TOP ! EXIT
-    THEN
-    _STM-BURROW-SELECTED @ _STM-BURROW-TOP @ < IF
-        _STM-BURROW-SELECTED @ _STM-BURROW-TOP !
-    ELSE
-        _STM-BURROW-SELECTED @ _STM-BURROW-TOP @
-            _STM-BURROW-ENSURE-WINDOW @ + >= IF
-            _STM-BURROW-SELECTED @ _STM-BURROW-ENSURE-WINDOW @ - 1+
-                _STM-NONNEG _STM-BURROW-TOP !
-        THEN
-    THEN
-    _STM-BURROW-ENSURE-COUNT @ _STM-BURROW-ENSURE-WINDOW @ -
-        _STM-NONNEG _STM-BURROW-TOP @ MIN _STM-BURROW-TOP ! ;
 
 : _STM-BURROW-PROVIDER-STATUS$  ( status -- addr len )
     CASE
@@ -1816,68 +1772,94 @@ VARIABLE _STM-BURROW-ENSURE-WINDOW
         S" invalid" ROT
     ENDCASE ;
 
-VARIABLE _STM-BURROW-DRAW-DECL
+: _STM-LINE-HEX+  ( digest -- )
+    _STM-BURROW-HEX SHA3-256->HEX DROP
+    _STM-BURROW-HEX SHA3-256-HEX-LEN _STM-LINE+ ;
 
-: _STM-DRAW-BURROW  ( ordinal row -- )
-    _STM-ROW !
-    DUP _STM-BURROW-MANAGER SRBMGR-MANAGER-NTH
-        DUP 0= IF 2DROP EXIT THEN _STM-BURROW-DRAW-DECL !
-    _STM-BURROW-SELECTED @ = IF
-        15 24 CELL-A-BOLD
-    ELSE
-        253 234 0
-    THEN
-    DRW-STYLE!
-    32 _STM-ROW @ 0 _STM-BURROW-CARD-ROWS _STM-DW @ DRW-FILL-RECT
-    S" burrow" _STM-ROW @ 2 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.BURROW
-        _STM-BURROW-HEX SHA3-256->HEX DROP
-    _STM-BURROW-HEX SHA3-256-HEX-LEN _STM-ROW @ 10 DRW-TEXT
-    S" state" _STM-ROW @ 1+ 4 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.STATE @ _STM-BURROW-STATE$
-        _STM-ROW @ 1+ 10 DRW-TEXT
-    S" revision" _STM-ROW @ 1+ 24 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.DOMAIN-REVISION @ NUM>STR
-        _STM-ROW @ 1+ 33 DRW-TEXT
-    S" epoch" _STM-ROW @ 1+ 43 DRW-TEXT
-    _STM-BURROW-MANAGER SRBMGR.ACTIVATION-EPOCH @ NUM>STR
-        _STM-ROW @ 1+ 49 DRW-TEXT
-    S" collection" _STM-ROW @ 2 + 4 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.SPEC SRBPROV-SPEC.COLLECTION
-        _STM-BURROW-HEX SHA3-256->HEX DROP
-    _STM-BURROW-HEX SHA3-256-HEX-LEN _STM-ROW @ 2 + 15 DRW-TEXT
-    S" scope revision" _STM-ROW @ 3 + 4 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.SPEC
-        SRBPROV-SPEC.COLLECTION-REVISION @ NUM>STR
-        _STM-ROW @ 3 + 19 DRW-TEXT
-    S" digest" _STM-ROW @ 3 + 31 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.SPEC
-        SRBPROV-SPEC.REQUEST-DIGEST _STM-BURROW-HEX SHA3-256->HEX DROP
-    _STM-BURROW-HEX SHA3-256-HEX-LEN _STM-ROW @ 3 + 38 DRW-TEXT
-    S" profile library-read-v1 / memory-duplex / deterministic-fixture"
-        _STM-ROW @ 4 + 4 DRW-TEXT
-    S" peers" _STM-ROW @ 5 + 4 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.PEER-COUNT @ NUM>STR
-        _STM-ROW @ 5 + 10 DRW-TEXT
-    S" /" _STM-ROW @ 5 + 16 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.SPEC
-        SRBPROV-SPEC.PEER-CAPACITY @ NUM>STR
-        _STM-ROW @ 5 + 18 DRW-TEXT
-    S" services" _STM-ROW @ 5 + 28 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.SERVICE-COUNT @ NUM>STR
-        _STM-ROW @ 5 + 37 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.CLEANUP-PENDING @ IF
-        S" cleanup pending"
-    ELSE
-        S" cleanup clear"
-    THEN
-    _STM-ROW @ 6 + 4 DRW-TEXT
-    S" last" _STM-ROW @ 6 + 22 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.LAST-STATUS @
-        _STM-BURROW-PROVIDER-STATUS$ _STM-ROW @ 6 + 27 DRW-TEXT
-    S" /" _STM-ROW @ 6 + 41 DRW-TEXT
-    _STM-BURROW-DRAW-DECL @ SRBMGR-DECL.LAST-DETAIL @
-        _STM-BURROW-PROVIDER-DETAIL$ _STM-ROW @ 6 + 43 DRW-TEXT ;
+\ A row is the manager's Nth Burrow.
+: _STM-BURROW-FIELD  ( row column list -- addr len )
+    LST-CONTEXT@ _STM-ACTIVATE
+    SWAP _STM-BURROW-MANAGER SRBMGR-MANAGER-NTH
+    DUP 0= IF 2DROP 0 0 EXIT THEN
+    0 _STM-LINE-U !
+    SWAP CASE
+        0 OF S" burrow " _STM-LINE+ SRBMGR-DECL.BURROW _STM-LINE-HEX+ ENDOF
+        1 OF
+            S" state " _STM-LINE+
+            DUP SRBMGR-DECL.STATE @ _STM-BURROW-STATE$ _STM-LINE+
+            S"   revision " _STM-LINE+
+            SRBMGR-DECL.DOMAIN-REVISION @ _STM-LINE-NUM+
+            S"   epoch " _STM-LINE+
+            _STM-BURROW-MANAGER SRBMGR.ACTIVATION-EPOCH @ _STM-LINE-NUM+
+        ENDOF
+        2 OF
+            S" collection " _STM-LINE+
+            SRBMGR-DECL.SPEC SRBPROV-SPEC.COLLECTION _STM-LINE-HEX+
+        ENDOF
+        3 OF
+            S" scope revision " _STM-LINE+
+            DUP SRBMGR-DECL.SPEC SRBPROV-SPEC.COLLECTION-REVISION @
+                _STM-LINE-NUM+
+            S"   digest " _STM-LINE+
+            SRBMGR-DECL.SPEC SRBPROV-SPEC.REQUEST-DIGEST _STM-LINE-HEX+
+        ENDOF
+        4 OF
+            DROP
+            S" profile library-read-v1 / memory-duplex / deterministic-fixture"
+                _STM-LINE+
+        ENDOF
+        5 OF
+            S" peers " _STM-LINE+
+            DUP SRBMGR-DECL.PEER-COUNT @ _STM-LINE-NUM+
+            S"  / " _STM-LINE+
+            DUP SRBMGR-DECL.SPEC SRBPROV-SPEC.PEER-CAPACITY @ _STM-LINE-NUM+
+            S"   services " _STM-LINE+
+            SRBMGR-DECL.SERVICE-COUNT @ _STM-LINE-NUM+
+        ENDOF
+        >R
+            DUP SRBMGR-DECL.CLEANUP-PENDING @ IF
+                S" cleanup pending"
+            ELSE
+                S" cleanup clear"
+            THEN _STM-LINE+
+            S"   last " _STM-LINE+
+            DUP SRBMGR-DECL.LAST-STATUS @ _STM-BURROW-PROVIDER-STATUS$
+                _STM-LINE+
+            S"  / " _STM-LINE+
+            SRBMGR-DECL.LAST-DETAIL @ _STM-BURROW-PROVIDER-DETAIL$ _STM-LINE+
+        R>
+    ENDCASE
+    _STM-LINE$ ;
+
+: _STM-BURROW-ROW-PICKED  ( row list -- )
+    LST-CONTEXT@ _STM-ACTIVATE
+    DUP _STM-BURROW-SELECTED @ = IF DROP EXIT THEN
+    _STM-BURROW-SELECTED ! _STM-INVALIDATE ;
+
+: _STM-BURROW-CARDS-NEW  ( -- )
+    _STM-BURROW-COLUMNS _STM-BURROW-FIELDS _STM-TEXT-COLUMNS
+    _STM-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _STM-BURROWS-RGN !
+    ['] _STM-CARD-KEY ['] _STM-BURROW-FIELD LST-NEW
+    _STM-CURRENT-INSTANCE @ OVER LST-CONTEXT!
+    _STM-BURROW-COLUMNS _STM-BURROW-FIELDS 2 PICK LST-COLUMNS!
+    LST-CARDS LST-UNTRUSTED OR OVER LST-MODE!
+    ['] _STM-BURROW-ROW-PICKED OVER LST-ON-SELECT
+    _STM-BURROWS-LIST ! ;
+
+: _STM-BURROW-CARDS-FREE  ( -- )
+    _STM-BURROWS-LIST @ ?DUP IF LST-FREE THEN
+    _STM-BURROWS-RGN @ ?DUP IF RGN-FREE THEN
+    0 _STM-BURROWS-LIST ! 0 _STM-BURROWS-RGN ! ;
+
+: _STM-BURROW-CARDS  ( -- list|0 )  _STM-BURROWS-LIST @ ;
+
+: _STM-BURROW-CARDS-SYNC  ( -- )
+    _STM-BURROWS-LIST @ ?DUP 0= IF EXIT THEN
+    _STM-BURROW-FIRST-ROW OVER _STM-CARDS-PLACE >R
+    _STM-BURROW-COUNT OVER _STM-CARDS-ROWS R> OR >R
+    _STM-BURROW-CLAMP
+    _STM-BURROW-COUNT IF _STM-BURROW-SELECTED @ ELSE -1 THEN
+    SWAP R> _STM-CARDS-FOLLOW ;
 
 : _STM-DRAW-BURROWS  ( -- )
     _STM-BURROW-READY? 0= IF
@@ -1885,27 +1867,63 @@ VARIABLE _STM-BURROW-DRAW-DECL
         S" Burrow lifecycle is unavailable for this activation."
             3 2 DRW-TEXT EXIT
     THEN
-    _STM-BURROW-COUNT DUP 0= IF
-        DROP 244 234 0 DRW-STYLE!
+    _STM-BURROW-COUNT 0= IF
+        244 234 0 DRW-STYLE!
         S" No Burrows configured. Reviewed creation is available through Desk."
             4 2 DRW-TEXT EXIT
-    THEN DROP
-    _STM-BURROW-ENSURE-VISIBLE
-    _STM-BURROW-COUNT _STM-BURROW-TOP @ - _STM-NONNEG
-        _STM-BURROW-VISIBLE-ITEMS MIN
-    0 ?DO
-        _STM-BURROW-TOP @ I +
-        _STM-BURROW-FIRST-ROW I _STM-BURROW-CARD-ROWS * +
-        _STM-DRAW-BURROW
-    LOOP ;
+    THEN
+    _STM-BURROWS-LIST @ _STM-DRAW-CARDS ;
 
 [ELSE]
+
+: _STM-BURROW-CARDS-NEW  ( -- ) ;
+: _STM-BURROW-CARDS-FREE  ( -- ) ;
+: _STM-BURROW-CARDS  ( -- list|0 ) 0 ;
+: _STM-BURROW-CARDS-SYNC  ( -- ) ;
 
 : _STM-DRAW-BURROWS  ( -- )
     81 234 CELL-A-BOLD DRW-STYLE!
     S" Burrow extension is not installed in this image." 3 2 DRW-TEXT ;
 
 [THEN]
+
+\ _STM-CARDS-SYNC ( -- )
+\   Bring the shown view's list up to the model: its place, its rows, and
+\   the selected post, source or Burrow.  The other lists keep their views.
+: _STM-CARDS-SYNC  ( -- )
+    _STM-VIEW @ _STM-V-TIMELINE = IF
+        _STM-TIMELINE-LIST @ ?DUP 0= IF EXIT THEN
+        _STM-TIMELINE-FIRST-ROW OVER _STM-CARDS-PLACE >R
+        _STM-ITEM-COUNT OVER _STM-CARDS-ROWS R> OR >R
+        _STM-SELECTED @ SWAP R> _STM-CARDS-FOLLOW EXIT
+    THEN
+    _STM-VIEW @ _STM-V-THREAD = IF
+        _STM-THREAD-LIST @ ?DUP 0= IF EXIT THEN
+        _STM-THREAD-FIRST-ROW OVER _STM-CARDS-PLACE >R
+        _STM-THREAD-COUNT OVER _STM-CARDS-ROWS R> OR >R
+        _STM-SELECTED @ _STM-THREAD-POSITION 0= IF DROP -1 THEN
+        SWAP R> _STM-CARDS-FOLLOW EXIT
+    THEN
+    _STM-VIEW @ _STM-V-SOURCES = IF
+        _STM-SOURCES-LIST @ ?DUP 0= IF EXIT THEN
+        _STM-SOURCE-FIRST-ROW OVER _STM-CARDS-PLACE >R
+        _STM-SOURCE-SHOWN OVER _STM-CARDS-ROWS R> OR >R
+        _STM-SOURCE-CLAMP
+        _STM-SOURCE-SHOWN IF _STM-SOURCE-SELECTED @ ELSE -1 THEN
+        SWAP R> _STM-CARDS-FOLLOW EXIT
+    THEN
+    _STM-BURROW-CARDS-SYNC ;
+
+\ _STM-CARDS-SHOWN ( -- list|0 )   The shown view's list, when it has cards.
+: _STM-CARDS-SHOWN  ( -- list|0 )
+    _STM-VIEW @ CASE
+        _STM-V-TIMELINE OF _STM-TIMELINE-LIST @ ENDOF
+        _STM-V-THREAD OF _STM-THREAD-LIST @ ENDOF
+        _STM-V-SOURCES OF _STM-SOURCES-LIST @ ENDOF
+        _STM-V-BURROW OF _STM-BURROW-CARDS ENDOF
+        >R 0 R>
+    ENDCASE
+    DUP IF DUP LST-COUNT 0= IF DROP 0 THEN THEN ;
 
 VARIABLE _STM-AUTH-PANEL-ROW
 
@@ -1979,37 +1997,6 @@ VARIABLE _STM-AUTH-PANEL-ROW
         THEN
     THEN
     DRW-STYLE-RESET ;
-
-: _STM-SOURCE-MOVE  ( delta -- )
-    _STM-SOURCE-READY? 0= IF DROP _STM-INVALIDATE EXIT THEN
-    _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT DUP 0= IF
-        2DROP _STM-INVALIDATE EXIT
-    THEN
-    1- SWAP _STM-SOURCE-SELECTED @ + _STM-NONNEG SWAP MIN
-        _STM-SOURCE-SELECTED !
-    _STM-SOURCE-ENSURE-VISIBLE _STM-INVALIDATE ;
-
-_STM-BURROW-BUILD? [IF]
-
-: _STM-BURROW-MOVE  ( delta -- )
-    _STM-BURROW-COUNT DUP 0= IF
-        2DROP _STM-INVALIDATE EXIT
-    THEN
-    1- SWAP _STM-BURROW-SELECTED @ + _STM-NONNEG SWAP MIN
-        _STM-BURROW-SELECTED !
-    _STM-BURROW-ENSURE-VISIBLE _STM-INVALIDATE ;
-
-[ELSE]
-
-: _STM-BURROW-MOVE  ( delta -- ) DROP _STM-INVALIDATE ;
-
-[THEN]
-
-\ The timeline and context lists take their own movement keys.
-: _STM-MOVE  ( delta -- )
-    _STM-VIEW @ _STM-V-BURROW = IF _STM-BURROW-MOVE EXIT THEN
-    _STM-VIEW @ _STM-V-SOURCES = IF _STM-SOURCE-MOVE EXIT THEN
-    DROP ;
 
 VARIABLE _STM-DRAFT-SAVE-A
 VARIABLE _STM-DRAFT-SAVE-U
@@ -2218,7 +2205,7 @@ VARIABLE _STM-SHOW-IU
     _STM-SHOW-IU ! _STM-SHOW-IA ! _STM-SHOW-LU ! _STM-SHOW-LA !
     _STM-SHOW-MODE !
     _STM-PROMPT @ 0= IF
-        S" Streams prompt is unavailable" 1800 ASHELL-TOAST EXIT
+        S" Streams prompt is unavailable" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SHOW-MODE @ _STM-PROMPT-MODE !
     _STM-SHOW-LA @ _STM-SHOW-LU @
@@ -2256,7 +2243,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
     _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @
         _STM-SOURCE-URL-VALID? 0= IF
         S" Enter a printable HTTPS URL of at most 1024 bytes"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-CANDIDATE STREAMS-SOURCE-INIT
     _STM-SOURCE-UI-KIND @ _STM-SOURCE-UI-CANDIDATE SSOURCE.KIND !
@@ -2279,7 +2266,6 @@ VARIABLE _STM-SOURCE-UI-ENABLED
     STREAMS-SOURCE-S-OK = IF
         _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT 1- _STM-NONNEG
             _STM-SOURCE-SELECTED !
-        _STM-SOURCE-ENSURE-VISIBLE
         _STM-SOURCE-UI-KIND @ SSOURCE-KIND-SYNDICATION = IF
             S" Syndication source saved; no fetch was started"
         ELSE
@@ -2298,18 +2284,18 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
     THEN
     _STM-AUTH-AVAILABLE? 0= IF
-        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-ACTIVE? IF
         S" Finish authenticated work before adding a source"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-U @ DUP 1 < SWAP STREAMS-SOURCE-ENDPOINT-MAX > OR IF
-        S" Enter an authenticated actor handle or DID" 2600 ASHELL-TOAST EXIT
+        S" Enter an authenticated actor handle or DID" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @ UTF8-VALID? 0= IF
         S" Authenticated actor identity is not valid UTF-8"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @
     _STM-AUTH-OP-NONE _STM-AUTH-OP-KIND !
@@ -2320,21 +2306,25 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         _STM-SOURCE-UI-SCRATCH-WIPE
         _STM-SOURCE-UI-STATUS @
         DUP SAUTH-S-UNAVAILABLE = IF
-            DROP S" Authenticated account is offline"
+            DROP S" Authenticated account is offline" ASHELL-SEVERITY-WARNING
         ELSE DUP SAUTH-S-BUSY = IF
             DROP S" Finish authenticated work before adding a source"
+            ASHELL-SEVERITY-WARNING
         ELSE DUP SAUTH-S-CAPACITY = IF
-            DROP S" Authenticated source exceeds bounded storage"
+            DROP S" Authenticated source exceeds bounded storage" ASHELL-SEVERITY-ERROR
         ELSE DUP SAUTH-S-STATE = IF
             DROP S" Authenticated account cannot build a source in this state"
+            ASHELL-SEVERITY-WARNING
         ELSE DUP SAUTH-S-CLEANUP = IF
             DROP S" Authenticated cleanup failed; source was not saved"
+            ASHELL-SEVERITY-ERROR
         ELSE DUP SAUTH-S-INVALID = IF
             DROP S" Account rejected that actor identity or binding"
+            ASHELL-SEVERITY-ERROR
         ELSE
-            DROP S" Authenticated source could not be built"
+            DROP S" Authenticated source could not be built" ASHELL-SEVERITY-ERROR
         THEN THEN THEN THEN THEN THEN
-        3000 ASHELL-TOAST EXIT
+        >R 3000 R> ASHELL-NOTICE EXIT
     THEN
     _STM-SOURCE-UI-CANDIDATE _STM-SOURCE-UI-RID
         _STM-CURRENT-INSTANCE @ STREAMS-SOURCE-CREATE-OWNER
@@ -2342,7 +2332,6 @@ VARIABLE _STM-SOURCE-UI-ENABLED
     STREAMS-SOURCE-S-OK = IF
         _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT 1- _STM-NONNEG
             _STM-SOURCE-SELECTED !
-        _STM-SOURCE-ENSURE-VISIBLE
         S" Authenticated AT source saved; press R to refresh"
         2800 ASHELL-TOAST
     ELSE
@@ -2373,7 +2362,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
 : _STM-BEGIN-SOURCE-ATPROTO  ( -- )
     _STM-SOURCE-CAN-ADD? 0= IF EXIT THEN
     _STM-AUTH-AVAILABLE? 0= IF
-        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-PM-SOURCE-ATPROTO S" Authenticated actor handle or DID:" 0 0
         _STM-SHOW-PROMPT ;
@@ -2385,7 +2374,7 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
     THEN
     _STM-SOURCE-SELECTED@ DUP 0= IF
-        DROP S" No source is selected" 1800 ASHELL-TOAST EXIT
+        DROP S" No source is selected" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SSOURCE.ID _STM-SOURCE-UI-RID RID-COPY
     DUP SSOURCE.REVISION @ _STM-SOURCE-UI-REVISION !
@@ -2407,29 +2396,15 @@ VARIABLE _STM-SOURCE-UI-ENABLED
         _STM-SOURCE-UI-STATUS @ _STM-SOURCE-OWNER-ERROR-TOAST
     THEN
     _STM-SOURCE-UI-SCRATCH-WIPE _STM-INVALIDATE ;
+' _STM-SOURCE-TOGGLE IS _STM-SOURCE-TOGGLE-D
 
-: _STM-BEGIN-SOURCE-REMOVE  ( -- )
-    _STM-SOURCE-ENSURE-MANAGEMENT-VIEW
-    _STM-SOURCE-PENDING-WIPE
-    _STM-SOURCE-READY? 0= IF
-        STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
-    THEN
-    _STM-SOURCE-SELECTED@ DUP 0= IF
-        DROP S" No source is selected" 1800 ASHELL-TOAST EXIT
-    THEN
-    DUP SSOURCE.ID _STM-SOURCE-PENDING-RID RID-COPY
-    SSOURCE.REVISION @ _STM-SOURCE-PENDING-REVISION !
-    -1 _STM-SOURCE-PENDING-ARMED !
-    _STM-PM-SOURCE-REMOVE S" Type REMOVE to delete selected source:" 0 0
-        _STM-SHOW-PROMPT ;
-
-: _STM-APPLY-SOURCE-REMOVE  ( addr len -- )
+\ Removing a source asks first.  The question is about the source
+\ selected when it opened, at its revision then: a later selection does
+\ not change which source goes, and the owner refuses one that changed
+\ meanwhile.
+: _STM-APPLY-SOURCE-REMOVE  ( -- )
     _STM-SOURCE-PENDING-ARMED @ 0= IF
-        2DROP S" Source removal was not armed" 2000 ASHELL-TOAST EXIT
-    THEN
-    S" REMOVE" STR-STR= 0= IF
-        _STM-SOURCE-PENDING-WIPE
-        S" Enter REMOVE exactly; source was kept" 2400 ASHELL-TOAST EXIT
+        S" Source removal was not armed" 2000 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-PENDING-RID _STM-SOURCE-PENDING-REVISION @
         _STM-CURRENT-INSTANCE @ STREAMS-SOURCE-REMOVE-OWNER
@@ -2440,6 +2415,28 @@ VARIABLE _STM-SOURCE-UI-ENABLED
     ELSE
         _STM-SOURCE-PENDING-WIPE
         _STM-SOURCE-UI-STATUS @ _STM-SOURCE-OWNER-ERROR-TOAST
+    THEN ;
+
+: _STM-SOURCE-REMOVE-CONFIRMED  ( confirmed? context -- )
+    DROP IF _STM-APPLY-SOURCE-REMOVE ELSE _STM-SOURCE-PENDING-WIPE THEN
+    _STM-INVALIDATE ;
+
+: _STM-BEGIN-SOURCE-REMOVE  ( -- )
+    _STM-SOURCE-ENSURE-MANAGEMENT-VIEW
+    _STM-SOURCE-PENDING-WIPE
+    _STM-SOURCE-READY? 0= IF
+        STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
+    THEN
+    _STM-SOURCE-SELECTED@ DUP 0= IF
+        DROP S" No source is selected" 1800 ASHELL-TOAST-WARNING EXIT
+    THEN
+    DUP SSOURCE.ID _STM-SOURCE-PENDING-RID RID-COPY
+    SSOURCE.REVISION @ _STM-SOURCE-PENDING-REVISION !
+    -1 _STM-SOURCE-PENDING-ARMED !
+    S" Remove the selected source?" S" Remove"
+        ['] _STM-SOURCE-REMOVE-CONFIRMED 0 DLG-CONFIRM 0= IF
+        _STM-SOURCE-PENDING-WIPE
+        S" The source was kept" 1800 ASHELL-TOAST
     THEN ;
 
 VARIABLE _STM-SUB-A
@@ -2456,14 +2453,14 @@ VARIABLE _STM-ACTOR-SET-STATUS
     STR-TRIM _STM-SUB-U ! _STM-SUB-A !
     _STM-SUB-U @ 0= IF
         _STM-SEARCH-CLEAR
-        S" Search query is empty; selection unchanged" 2200 ASHELL-TOAST
+        S" Search query is empty; selection unchanged" 2200 ASHELL-TOAST-WARNING
         EXIT
     THEN
     _STM-SUB-U @ _STM-QUERY-CAP > IF
-        S" Search is limited to 96 UTF-8 bytes" 2200 ASHELL-TOAST EXIT
+        S" Search is limited to 96 UTF-8 bytes" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SUB-A @ _STM-SUB-U @ UTF8-VALID? 0= IF
-        S" Search query is not valid UTF-8" 2200 ASHELL-TOAST EXIT
+        S" Search query is not valid UTF-8" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SUB-U @ _STM-SEARCH-U !
     _STM-SUB-A @ _STM-SEARCH-BUF _STM-SUB-U @ MOVE
@@ -2493,7 +2490,11 @@ VARIABLE _STM-ACTOR-SET-STATUS
     THEN
     1900 ASHELL-TOAST ;
 
+\ The prompt painted over the status bar's row and has just gone inactive.
+\ The status bar repaints that whole row, or its cells would keep the
+\ prompt's paint, in CELL and as foreground over the document.
 : _STM-PROMPT-SUBMIT  ( prompt -- )
+    _STM-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     DUP PRM-GET-TEXT _STM-SUB-U ! _STM-SUB-A !
     _STM-PROMPT-MODE @ _STM-SUB-MODE !
     _STM-PM-NONE _STM-PROMPT-MODE !
@@ -2503,24 +2504,23 @@ VARIABLE _STM-ACTOR-SET-STATUS
         ENDOF
         _STM-PM-DRAFT OF
             _STM-SUB-A @ _STM-SUB-U @ _STM-DRAFT-OWNER! IF
-                S" Draft saved locally; nothing was published"
+                S" Draft saved locally; nothing was published" 2200 ASHELL-TOAST
             ELSE
-                S" Draft could not be updated locally"
+                S" Draft could not be updated locally" 2200 ASHELL-TOAST-ERROR
             THEN
-            2200 ASHELL-TOAST
         ENDOF
         _STM-PM-ACTOR OF
             _STM-SUB-A @ _STM-SUB-U @ _STM-ACTOR!
             DUP _STM-ACTOR-SET-STATUS ! CBUS-S-OK = IF
-                S" Public actor selected; press R to refresh"
+                S" Public actor selected; press R to refresh" 2400 ASHELL-TOAST
             ELSE
                 _STM-ACTOR-SET-STATUS @ CBUS-S-BUSY = IF
                     S" Finish the active refresh before changing actor"
                 ELSE
                     S" Enter a valid Bluesky handle or DID"
                 THEN
+                2400 ASHELL-TOAST-WARNING
             THEN
-            2400 ASHELL-TOAST
         ENDOF
         _STM-PM-SOURCE-SYNDICATION OF
             _STM-SUB-A @ _STM-SUB-U @ SSOURCE-KIND-SYNDICATION
@@ -2533,9 +2533,6 @@ VARIABLE _STM-ACTOR-SET-STATUS
         _STM-PM-SOURCE-ATPROTO OF
             _STM-SUB-A @ _STM-SUB-U @ _STM-APPLY-AUTH-SOURCE-CREATE
         ENDOF
-        _STM-PM-SOURCE-REMOVE OF
-            _STM-SUB-A @ _STM-SUB-U @ _STM-APPLY-SOURCE-REMOVE
-        ENDOF
     ENDCASE
     _STM-SOURCE-PENDING-WIPE
     _STM-SOURCE-UI-SCRATCH-WIPE
@@ -2544,6 +2541,7 @@ VARIABLE _STM-ACTOR-SET-STATUS
     _STM-INVALIDATE ;
 
 : _STM-PROMPT-CANCEL  ( prompt -- )
+    _STM-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     PRM-WIPE _STM-PM-NONE _STM-PROMPT-MODE !
     _STM-SOURCE-PENDING-WIPE _STM-SOURCE-UI-SCRATCH-WIPE
     _STM-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
@@ -2555,7 +2553,7 @@ VARIABLE _STM-ACTOR-SET-STATUS
 
 : _STM-BEGIN-DRAFT  ( -- )
     _STM-DRAFT-PERSIST-MODE @ _STM-DP-BLOCKED = IF
-        _STM-DRAFT-BLOCKED-TEXT 2600 ASHELL-TOAST EXIT
+        _STM-DRAFT-BLOCKED-TEXT 2600 ASHELL-TOAST-ERROR EXIT
     THEN
     _STM-PM-DRAFT S" Draft:"
     _STM-DRAFT-REV @ IF _STM-DRAFT-BUF _STM-DRAFT-U @ ELSE 0 0 THEN
@@ -2564,11 +2562,11 @@ VARIABLE _STM-ACTOR-SET-STATUS
 : _STM-BEGIN-ACTOR  ( -- )
     _STM-LIVE-AVAILABLE? 0= IF
         S" Public feeds require the Desk external-I/O service"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-XIO-OP XIOO.STATE @ XIO-STATE-RESET <> IF
         S" Finish the active refresh before changing actor"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-PM-ACTOR S" Bluesky handle or DID:"
     _STM-ACTOR@ _STM-SHOW-PROMPT ;
@@ -2594,49 +2592,49 @@ VARIABLE _STM-ACTOR-SET-STATUS
         S" Authenticated feed refresh accepted" 2400 ASHELL-TOAST EXIT
     THEN
     DUP SAUTH-S-UNAVAILABLE = IF
-        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST EXIT
+        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-BUSY = IF
         DROP S" Authenticated account or external I/O is busy"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-INVALID = IF
         DROP S" Authenticated source revision or account binding was rejected"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CAPACITY = IF
         DROP S" Authenticated refresh ran out of bounded capacity"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CLEANUP = IF
         DROP _STM-INVALIDATE
         S" Authenticated cleanup failed; no new feed was presented"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-STATE = IF
         DROP S" Authenticated provider is not ready for a feed refresh"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-POST = IF
         DROP S" Finish the authenticated publication before refreshing"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-FEED = IF
         DROP S" Authenticated feed operation was rejected"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-INDETERMINATE = IF
         DROP _STM-INVALIDATE
         S" Authenticated refresh start is indeterminate; no new feed was presented"
-        3200 ASHELL-TOAST EXIT
+        3200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-CANCELLED = IF
         DROP _STM-INVALIDATE
         S" Authenticated refresh was cancelled before presentation"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DROP _STM-INVALIDATE
-    S" Authenticated feed refresh could not start" 2600 ASHELL-TOAST ;
+    S" Authenticated feed refresh could not start" 2600 ASHELL-TOAST-ERROR ;
 
 : _STM-PUBLIC-REFRESH-ACTION  ( -- )
     _STM-REFRESH-START
@@ -2646,23 +2644,22 @@ VARIABLE _STM-ACTOR-SET-STATUS
     THEN
     DUP CBUS-S-NOT-FOUND = IF
         DROP S" Public feeds require the Desk external-I/O service"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP CBUS-S-INVALID = IF
-        DROP S" Select a valid actor with A first" 2400 ASHELL-TOAST EXIT
+        DROP S" Select a valid actor with A first" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     CBUS-S-BUSY = IF
-        S" External I/O is already busy"
+        S" External I/O is already busy" 2400 ASHELL-TOAST-WARNING
     ELSE
-        S" Public feed refresh could not start"
-    THEN
-    2400 ASHELL-TOAST ;
+        S" Public feed refresh could not start" 2400 ASHELL-TOAST-ERROR
+    THEN ;
 
 : _STM-REFRESH-ACTION  ( -- )
     _STM-REFRESH-TARGET @ _STM-REFRESH-AUTHENTICATED = IF
         _STM-AUTH-CURRENT-SOURCE DUP 0= IF
             DROP S" The retained authenticated source revision is no longer current"
-            3000 ASHELL-TOAST EXIT
+            3000 ASHELL-TOAST-WARNING EXIT
         THEN
         _STM-AUTH-REFRESH-START _STM-AUTH-REFRESH-RESULT EXIT
     THEN
@@ -2690,14 +2687,14 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
 : _STM-SOURCE-REFRESH-ACTION  ( -- )
     _STM-SOURCE-ENSURE-MANAGEMENT-VIEW
     _STM-SOURCE-SELECTED@ DUP 0= IF
-        DROP S" No source is selected" 1800 ASHELL-TOAST EXIT
+        DROP S" No source is selected" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _STM-AUTH-SOURCE? IF
         _STM-AUTH-REFRESH-START _STM-AUTH-REFRESH-RESULT EXIT
     THEN
     DUP STREAMS-REFRESH-SOURCE-SUPPORTED? 0= IF
         DROP S" Only enabled syndication sources can be refreshed"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-SOURCE-REFRESH-START-CORE
     _STM-SOURCE-REFRESH-CHANGED? IF _STM-OWNER-TOUCH _STM-INVALIDATE THEN
@@ -2705,20 +2702,20 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
         DROP S" Syndication refresh accepted" 2200 ASHELL-TOAST EXIT
     THEN
     DUP SREF-S-UNAVAILABLE = IF
-        DROP S" Configured syndication is offline" 2400 ASHELL-TOAST EXIT
+        DROP S" Configured syndication is offline" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SREF-S-BUSY = IF
-        DROP S" External I/O is already busy" 2200 ASHELL-TOAST EXIT
+        DROP S" External I/O is already busy" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SREF-S-BLOCKED = OVER SREF-S-STORAGE = OR IF
         DROP S" Observation storage is blocked; source was not fetched"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SREF-S-INVALID = IF
         DROP S" Source or reviewed host authorization was rejected"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
-    DROP S" Syndication refresh could not start" 2400 ASHELL-TOAST ;
+    DROP S" Syndication refresh could not start" 2400 ASHELL-TOAST-ERROR ;
 
 VARIABLE _STM-AUTH-ACTION-SOURCE
 
@@ -2734,69 +2731,69 @@ VARIABLE _STM-AUTH-ACTION-SOURCE
     _STM-AUTH-OP-NONE _STM-AUTH-OP-KIND !
     0 _STM-AUTH-PUBLISH-DRAFT-REVISION !
     DUP SAUTH-S-UNAVAILABLE = IF
-        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST EXIT
+        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-BUSY = IF
         DROP S" Authenticated account or external I/O is busy"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-INVALID = IF
         DROP S" Draft, source revision, or account binding was rejected"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CAPACITY = IF
         DROP S" Publication ran out of bounded capacity"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-CLEANUP = IF
         DROP _STM-INVALIDATE
         S" Publication cleanup failed; success was not reported"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-STATE = IF
         DROP S" Authenticated provider is not ready to publish"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-FEED = IF
         DROP S" Finish the authenticated feed refresh before publishing"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-POST = IF
         DROP S" Authenticated publication was rejected"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP SAUTH-S-INDETERMINATE = IF
         DROP _STM-INVALIDATE
         S" Publication start is indeterminate; check account state before retrying"
-        3400 ASHELL-TOAST EXIT
+        3400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP SAUTH-S-CANCELLED = IF
         DROP _STM-INVALIDATE
         S" Publication was cancelled before delivery"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DROP _STM-INVALIDATE
-    S" Publication could not start" 2400 ASHELL-TOAST ;
+    S" Publication could not start" 2400 ASHELL-TOAST-ERROR ;
 
 : _STM-PUBLISH-ACTION  ( -- )
     _STM-DRAFT-REV @ 0= _STM-DRAFT-U @ 0= OR IF
         S" Create a non-empty local draft before publishing"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-AVAILABLE? 0= IF
-        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-CURRENT-SOURCE DUP 0= IF
         DROP S" Refresh a current authenticated source before publishing"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _STM-AUTH-PROVIDER @ SAUTH-SOURCE-SUPPORTED? 0= IF
         DROP S" The authenticated source is disabled, stale, or belongs to another account"
-        3200 ASHELL-TOAST EXIT
+        3200 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-ACTIVE? IF
         DROP S" Finish the active authenticated operation before publishing"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-WARNING EXIT
     THEN
     _STM-AUTH-ACTION-SOURCE !
     _STM-AUTH-OP-POST _STM-AUTH-OP-KIND !
@@ -2876,19 +2873,20 @@ VARIABLE _STM-BUI-CHANGED
         2400 ASHELL-TOAST EXIT
     THEN
     _STM-BUI-STATUS @ SRBPROV-S-NOT-FOUND = IF
-        S" No Burrow is selected"
+        S" No Burrow is selected" ASHELL-SEVERITY-WARNING
     ELSE _STM-BUI-STATUS @ SRBPROV-S-STATE = IF
         S" Selected Burrow is not in a compatible lifecycle state"
+        ASHELL-SEVERITY-WARNING
     ELSE _STM-BUI-STATUS @ SRBPROV-S-CONFLICT = IF
-        S" Selected Burrow changed; review its current state"
+        S" Selected Burrow changed; review its current state" ASHELL-SEVERITY-WARNING
     ELSE _STM-BUI-STATUS @ SRBPROV-S-CAPACITY = IF
-        S" Burrow lifecycle storage is at capacity"
+        S" Burrow lifecycle storage is at capacity" ASHELL-SEVERITY-ERROR
     ELSE _STM-BUI-STATUS @ SRBPROV-S-BUSY = IF
-        S" Burrow lifecycle is busy"
+        S" Burrow lifecycle is busy" ASHELL-SEVERITY-WARNING
     ELSE
-        S" Burrow lifecycle action failed"
+        S" Burrow lifecycle action failed" ASHELL-SEVERITY-ERROR
     THEN THEN THEN THEN THEN
-    2800 ASHELL-TOAST ;
+    >R 2800 R> ASHELL-NOTICE ;
 
 : _STM-BURROW-START-ACTION  ( -- )
     SRBMGR-OP-START DUP _STM-BURROW-UI-MUTATE _STM-BURROW-UI-RESULT ;
@@ -2899,18 +2897,21 @@ VARIABLE _STM-BUI-CHANGED
 [ELSE]
 
 : _STM-BURROW-START-ACTION  ( -- )
-    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST ;
+    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST-WARNING ;
 
 : _STM-BURROW-STOP-ACTION  ( -- )
-    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST ;
+    S" Burrow extension is not installed in this image" 2800 ASHELL-TOAST-WARNING ;
 
 [THEN]
 
 \ _STM-CARDS-EVENT? ( event list -- flag )
-\   The shown list takes the keys that move through its cards, and pointer
-\   input over them, including a renderer's item events, which arrive at
-\   its first cell.
+\   The shown list takes the keys that move through its cards, Space, which
+\   checks a source's card, and pointer input over them, including a
+\   renderer's item events, which arrive at its first cell.
 : _STM-CARDS-EVENT?  ( event list -- flag )
+    OVER @ KEY-T-CHAR = IF
+        DROP DUP 16 + @ 0= SWAP 8 + @ BL = AND EXIT
+    THEN
     OVER @ KEY-T-SPECIAL = IF
         DROP 8 + @
         DUP KEY-UP = OVER KEY-DOWN = OR OVER KEY-PGUP = OR
@@ -2929,8 +2930,8 @@ VARIABLE _STM-BUI-CHANGED
     THEN
     DUP @ KEY-T-SPECIAL = IF
         8 + @ CASE
-            KEY-UP OF -1 _STM-MOVE -1 EXIT ENDOF
-            KEY-DOWN OF 1 _STM-MOVE -1 EXIT ENDOF
+            KEY-UP OF -1 EXIT ENDOF
+            KEY-DOWN OF -1 EXIT ENDOF
             KEY-ENTER OF
                 _STM-VIEW @ _STM-V-BURROW = IF
                     S" Use G to start or X to stop/retry cleanup"
@@ -3000,14 +3001,22 @@ VARIABLE _STM-BUI-CHANGED
     _STM-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _STM-TIMELINE-RGN !
         _STM-CARDS-NEW _STM-TIMELINE-LIST !
     _STM-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _STM-THREAD-RGN !
-        _STM-CARDS-NEW _STM-THREAD-LIST ! ;
+        _STM-CARDS-NEW _STM-THREAD-LIST !
+    _STM-SOURCE-COLUMNS _STM-SOURCE-FIELDS _STM-TEXT-COLUMNS
+    _STM-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _STM-SOURCES-RGN !
+        _STM-SOURCE-CARDS-NEW _STM-SOURCES-LIST !
+    _STM-BURROW-CARDS-NEW ;
 
 : _STM-PANEL-FREE  ( -- )
     _STM-TIMELINE-LIST @ ?DUP IF LST-FREE THEN
     _STM-TIMELINE-RGN @ ?DUP IF RGN-FREE THEN
     _STM-THREAD-LIST @ ?DUP IF LST-FREE THEN
     _STM-THREAD-RGN @ ?DUP IF RGN-FREE THEN
+    _STM-SOURCES-LIST @ ?DUP IF LST-FREE THEN
+    _STM-SOURCES-RGN @ ?DUP IF RGN-FREE THEN
+    _STM-BURROW-CARDS-FREE
     _STM-PANEL-RGN @ ?DUP IF RGN-FREE THEN
+    0 _STM-SOURCES-LIST ! 0 _STM-SOURCES-RGN !
     0 _STM-TIMELINE-LIST ! 0 _STM-TIMELINE-RGN !
     0 _STM-THREAD-LIST ! 0 _STM-THREAD-RGN ! 0 _STM-PANEL-RGN ! ;
 
@@ -3046,7 +3055,7 @@ VARIABLE _STM-XIO-RESET-STATUS
 _STM-BURROW-BUILD? [IF]
 
 : _STM-BURROW-INIT  ( -- status )
-    0 _STM-BURROW-SELECTED ! 0 _STM-BURROW-TOP !
+    0 _STM-BURROW-SELECTED ! 0 _STM-BURROWS-LIST ! 0 _STM-BURROWS-RGN !
     0 _STM-BURROW-UI-SEQUENCE !
     _STM-BURROW-UI-PLAN SRBMGR-PLAN-SIZE 0 FILL
     _STM-BURROW-UI-INVOCATION RID-SIZE 0 FILL
@@ -3512,10 +3521,11 @@ VARIABLE _STM-TERMINAL-STATE
     0 _STM-PANEL-RGN ! 0 _STM-PROMPT ! 0 _STM-PROMPT-RGN !
     0 _STM-TIMELINE-LIST ! 0 _STM-TIMELINE-RGN !
     0 _STM-THREAD-LIST ! 0 _STM-THREAD-RGN !
+    0 _STM-SOURCES-LIST ! 0 _STM-SOURCES-RGN !
     _STM-PM-NONE _STM-PROMPT-MODE !
     _STM-V-TIMELINE _STM-VIEW !
     0 _STM-SELECTED ! _STM-THREAD-CLEAR
-    0 _STM-SOURCE-SELECTED ! 0 _STM-SOURCE-TOP !
+    0 _STM-SOURCE-SELECTED !
     _STM-BURROW-INIT DROP
     _STM-SOURCE-PENDING-WIPE _STM-SOURCE-UI-SCRATCH-WIPE
     0 _STM-SEARCH-U ! 0 _STM-SEARCH-MATCH-N !
@@ -3623,16 +3633,16 @@ VARIABLE _STM-AUTH-TICK-CHANGED
     _STM-PROMPT @ ?DUP IF
         PRM-ACTIVE? IF
             S" Finish or cancel the Streams prompt before closing"
-            2400 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+            2400 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
         THEN
     THEN
     _STM-BURROW-QUIESCE? 0= IF
         S" Burrow cleanup is still retained; close was cancelled"
-        3000 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+        3000 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
     THEN
     _STM-AUTH-QUIESCE? 0= IF
         S" Authenticated work could not detach safely; close was cancelled"
-        3000 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+        3000 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
     THEN
     _STM-AUTH-QUIESCE-CHANGED @ IF
         _STM-OWNER-TOUCH _STM-INVALIDATE

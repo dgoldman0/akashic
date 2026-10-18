@@ -9,10 +9,10 @@ fields from painted text.
 
 `RTHP-STORAGE-BYTES` and `RTHP-INIT` take a caller-selected
 `max-field-native` argument immediately after `max-status-native`, and before
-`max-pictures`. The bound is zero or an aligned unsigned 32-bit byte count;
+`max-dialog-native`. The bound is zero or an aligned unsigned 32-bit byte count;
 zero selects no FIELD bank.
 
-For FIELD native capacity `N`, the constructor reserves `floor(N / 192)`
+For FIELD native capacity `N`, the constructor reserves `floor(N / 224)`
 source descriptors and control roots. Each descriptor occupies 128 bytes.
 The independent native source bank occupies `N` bytes. The shared control
 text bank grows by `N`: native headers and padded choice records are larger
@@ -24,8 +24,8 @@ resulting maximum control count. The owner reservation conservatively adds
 number of choices. Choices consume shared object slots without consuming
 control IDs or extra control operations.
 
-The producer record is 4736 bytes. Its inline admission
-record is 464 bytes at offset 1760. The packed target header is 344 bytes;
+The producer record is 5032 bytes. Its inline admission
+record is 472 bytes at offset 1768. The packed target header is 368 bytes;
 FIELD root, choice, and UTF8 totals remain at offsets 240, 248, and 256.
 Each target entry is
 48 bytes: ID, row, column, kind, revision, and accepted-intent bit mask.
@@ -37,7 +37,8 @@ extents remain invalid even when the capability is absent. Lowering deeply
 validates each native model and preserves its exact authored slots. An
 optional empty label has the canonical null-address/zero-length shape.
 
-Admitted FIELD controls form a suffix after menus and collections. The shared
+Admitted FIELD controls follow menus and collections, and the
+[dialog lane](DIALOG-PRODUCER.md) follows them. The shared
 plan derives its record extent from the committed aggregate CONTROL-COUNT,
 including the FIELD suffix; stripping restores the exact prefix extent. Their
 IDs precede instruments, static status fields, and residual glyphs. Each
@@ -57,18 +58,23 @@ FIELD lane stays refused throughout that candidate's later family retries.
 
 Packed acknowledgement banks own both the outer label and complete FDC1
 bytes. Packing and unchanged cloning rebase all pointers into their own
-banks. A change only to the SELECTED state bit uses one CONTROL-REPLACE while
-preserving the exact label, shortcut, FDC1 bytes, revision, geometry, and
-content accounting. This allows ordinary selection movement to retain an
-unchanged SERIES/WAVEFORM graph. Other FIELD state changes, or changes to
-label, value, revision, slots, membership, or identity, still require complete
-owner replacement. FIELD semantic content does not use the collection
-content-delta path.
+banks. A DELTA replaces a FIELD with one CONTROL-REPLACE when its label,
+shortcut, geometry and every state bit but SELECTED are unchanged, and its
+FDC1 bytes are either unchanged or carry a strictly newer revision. A change
+to SELECTED alone keeps the exact FDC1 bytes, revision and content
+accounting, so ordinary selection movement retains an unchanged
+SERIES/WAVEFORM graph; new content, such as the text a prompt's user types,
+replaces the field without replacing anything else. The new text may be
+longer or shorter: each field is compared on its own, and the fields' total
+text may differ from the acknowledged bank's. Other state changes,
+content whose revision is not newer, and changes to the label, membership or
+identity still require complete owner replacement. FIELD semantic content
+does not use the collection content-delta path.
 
 Return coordinates identify the first cell of the declared value rectangle,
 which may be offset within the root. Disabled and read-only fields produce
-no input target. Editable TEXT accepts ACTIVATE; INTEGER and CHOICE also
-accept ADJUST. `RTHP-CONTROL-TARGET@` returns the revision from that field's
+no input target. A writable TEXT field accepts PLACE and EXTEND at offsets
+in its value; INTEGER and CHOICE accept ACTIVATE and ADJUST. `RTHP-CONTROL-TARGET@` returns the revision from that field's
 acknowledged FDC1 value, not the bank-wide source epoch. Owner, generation,
 draw, identity, and intent checks precede the return. The ordinary input
 bridge and widget additionally check the current application revision before

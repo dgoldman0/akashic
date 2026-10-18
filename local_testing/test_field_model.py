@@ -75,19 +75,19 @@ CREATE _FM-BS 47 ALLOT CREATE _FM-OBS 47 ALLOT
 def test_field_native_contract_and_canonical_extent():
     program = PRELUDE + r'''
 _FM-INT
-_FM-U @ 200 = _FM-A
+_FM-U @ 232 = _FM-A
 _FM-M UFLD-KEY@ 42 = _FM-A _FM-M UFLD-REVISION@ 9 = _FM-A
 _FM-M UFLD-LABEL@ S" Gain" COMPARE 0= _FM-A
 _FM-M UFLD-VALUE@ 7 = _FM-A _FM-M UFLD-STEP@ 4 = _FM-A
-_FM-M 196 + 4 _UFLD-ZERO? _FM-A
+_FM-M 228 + 4 _UFLD-ZERO? _FM-A
 3 _FM-START _FM-EMPTY S" Full text" _FM-B UFLD-TEXT _FM-OK _FM-FINISH
-_FM-U @ 208 = _FM-A
+_FM-U @ 240 = _FM-A
 _FM-M UFLD-TEXT@ S" Full text" COMPARE 0= _FM-A
 _FM-M UFLD-UTF8-BYTES@ 9 = _FM-A
 3 _FM-START _FM-EMPTY 0 0 _FM-B UFLD-TEXT _FM-OK _FM-FINISH
-_FM-U @ 192 = _FM-A
+_FM-U @ 224 = _FM-A
 _FM-CHOICES
-_FM-M UFLD-CHOICE-COUNT@ 3 = _FM-A _FM-U @ 296 = _FM-A
+_FM-M UFLD-CHOICE-COUNT@ 3 = _FM-A _FM-U @ 328 = _FM-A
 _FM-M UFLD-UTF8-BYTES@ 17 = _FM-A
 _FM-M UFLD-CHOICE-FIRST UFLD-CHOICE-VALUE@ -10 = _FM-A
 _FM-M UFLD-CHOICE-SELECTED@ UFLD-CHOICE-VALUE@ 900 = _FM-A
@@ -128,15 +128,18 @@ _FM-M _FM-U @ UFLD-VALIDATE UFLD-S-INVALID = _FM-A
         ("STEP", 0, "INVALID"), ("MINIMUM", 8, "INVALID"), ("MAXIMUM", 6, "INVALID"),
         ("TEXT-BYTES", 1, "INVALID"), ("CHOICE-COUNT", 1, "INVALID"),
         ("LABEL-BYTES", -1, "INVALID"),
+        # Only a TEXT model has edit state.
+        ("CARET", 1, "INVALID"), ("ANCHOR", 1, "INVALID"),
+        ("SCROLL", 1, "INVALID"), ("PLACEHOLDER-BYTES", 1, "INVALID"),
     ):
         program += f"\n_FM-INT {value} _FM-M UFLD-{field}-OFFSET + !\n_FM-M _FM-U @ UFLD-VALIDATE UFLD-S-{status} = _FM-A\n"
     program += r'''
-_FM-INT 1 _FM-M 196 + C! _FM-M _FM-U @ UFLD-VALIDATE UFLD-S-INVALID = _FM-A
+_FM-INT 1 _FM-M 228 + C! _FM-M _FM-U @ UFLD-VALIDATE UFLD-S-INVALID = _FM-A
 _FM-INT _FM-M _FM-U @ 8 + UFLD-VALIDATE UFLD-S-INVALID = _FM-A
-_FM-M 191 UFLD-VALIDATE UFLD-S-INVALID = _FM-A
+_FM-M 223 UFLD-VALIDATE UFLD-S-INVALID = _FM-A
 _FM-M 1+ _FM-U @ UFLD-VALIDATE UFLD-S-INVALID = _FM-A
 -8 200 UFLD-VALIDATE UFLD-S-INVALID = _FM-A
-_UFLD-V-M 192 UFLD-VALIDATE UFLD-S-INVALID = _FM-A
+_UFLD-V-M 224 UFLD-VALIDATE UFLD-S-INVALID = _FM-A
 _FM-DONE
 '''
     run_field(program, minimum=250)
@@ -145,7 +148,7 @@ _FM-DONE
 def test_field_builder_atomic_refusals_aliases_and_clean_text():
     program = PRELUDE + r'''
 _FM-M 2048 90 FILL
-_FM-M 191 _FM-B UFLD-BUILDER-INIT _FM-OK _FM-SAVE
+_FM-M 223 _FM-B UFLD-BUILDER-INIT _FM-OK _FM-SAVE
 42 1 1 20 2 3 0 _FM-B UFLD-BEGIN UFLD-S-CAPACITY = _FM-A _FM-SAME
 _FM-M 2048 _FM-M UFLD-BUILDER-INIT UFLD-S-INVALID = _FM-A _FM-SAME
 _UFLD-M 2048 _FM-B UFLD-BUILDER-INIT UFLD-S-INVALID = _FM-A _FM-SAME
@@ -183,13 +186,13 @@ CREATE _FM-BAD 8 ALLOT
 3 _FM-START _FM-EMPTY _FM-SAVE
 _FM-M 1 _FM-B UFLD-TEXT UFLD-S-INVALID = _FM-A _FM-SAME
 -2 8 _FM-B UFLD-TEXT UFLD-S-INVALID = _FM-A _FM-SAME
-_FM-M 192 _FM-B UFLD-BUILDER-INIT _FM-OK
+_FM-M 224 _FM-B UFLD-BUILDER-INIT _FM-OK
 42 3 1 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
 S" x" _FM-B UFLD-TEXT UFLD-S-CAPACITY = _FM-A _FM-SAME
-_FM-M 199 _FM-B UFLD-BUILDER-INIT _FM-OK
+_FM-M 231 _FM-B UFLD-BUILDER-INIT _FM-OK
 42 1 1 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-SLOTS _FM-SAVE
 S" Gain" _FM-B UFLD-LABEL UFLD-S-CAPACITY = _FM-A _FM-SAME
-_FM-M 224 _FM-B UFLD-BUILDER-INIT _FM-OK
+_FM-M 256 _FM-B UFLD-BUILDER-INIT _FM-OK
 42 2 1 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY
 7 _FM-B UFLD-CHOICE-VALUE _FM-OK
 7 S" one" _FM-B UFLD-CHOICE _FM-OK _FM-SAVE
@@ -217,3 +220,124 @@ def test_field_integer_clamp_signed_extremes_and_large_adjustments():
     for args in ((0, 1, 2, 1, 0), (3, 1, 2, 1, 0), (1, 0, 2, 0, 1), (1, 0, 2, -1, 1)):
         program += " ".join(map(str, args)) + " UFLD-INTEGER-CLAMP UFLD-S-INVALID = _FM-A 0= _FM-A\n"
     run_field(program + "\n_FM-DONE\n", minimum=100)
+
+
+TEXT_EDIT = PRELUDE + r"""
+\ A three-scalar value, "a界b", and a placeholder.
+: _FM-TEXT  ( flags -- )
+    >R _FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+    42 3 9 20 2 3 R> _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY
+    S" a界b" _FM-B UFLD-TEXT _FM-OK ;
+: _FM-EDIT  ( -- )  2 0 1 S" Name" _FM-B UFLD-TEXT-EDIT _FM-OK ;
+CREATE _FM-NL 10 C,
+"""
+
+
+def test_text_field_carries_its_caret_selection_scroll_and_placeholder():
+    program = TEXT_EDIT + r"""
+0 _FM-TEXT _FM-EDIT _FM-FINISH
+_FM-U @ 240 = _FM-A
+_FM-M UFLD-CARET@ 2 = _FM-A _FM-M UFLD-ANCHOR@ 0 = _FM-A _FM-M UFLD-SCROLL@ 1 = _FM-A
+_FM-M UFLD-PLACEHOLDER@ S" Name" COMPARE 0= _FM-A
+_FM-M UFLD-TEXT@ S" a界b" COMPARE 0= _FM-A
+_FM-M UFLD-UTF8-BYTES@ 9 = _FM-A
+\ No edit call leaves the caret, anchor and scroll at zero and no placeholder.
+0 _FM-TEXT _FM-FINISH _FM-U @ 232 = _FM-A
+_FM-M UFLD-PLACEHOLDER-BYTES@ 0= _FM-A _FM-M UFLD-UTF8-BYTES@ 5 = _FM-A
+\ MASKED belongs to TEXT alone.
+UFLD-F-MASKED _FM-TEXT _FM-EDIT _FM-FINISH
+_FM-M UFLD-FLAGS@ UFLD-F-MASKED = _FM-A
+_FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 1 9 20 2 3 UFLD-F-MASKED _FM-B UFLD-BEGIN UFLD-S-INVALID = _FM-A
+\ The caret and anchor lie within the value's scalars.
+0 _FM-TEXT 3 3 0 0 0 _FM-B UFLD-TEXT-EDIT _FM-OK
+0 _FM-TEXT _FM-SAVE
+4 0 0 0 0 _FM-B UFLD-TEXT-EDIT UFLD-S-INVALID = _FM-A _FM-SAME
+0 4 0 0 0 _FM-B UFLD-TEXT-EDIT UFLD-S-INVALID = _FM-A _FM-SAME
+0 0 1 32 LSHIFT 0 0 _FM-B UFLD-TEXT-EDIT UFLD-S-INVALID = _FM-A _FM-SAME
+\ Once per model, after the value, and only for TEXT.
+_FM-EDIT _FM-SAVE
+0 0 0 0 0 _FM-B UFLD-TEXT-EDIT UFLD-S-INVALID = _FM-A _FM-SAME
+_FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 3 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
+0 0 0 0 0 _FM-B UFLD-TEXT-EDIT UFLD-S-INVALID = _FM-A _FM-SAME
+_FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 2 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY 7 _FM-B UFLD-CHOICE-VALUE _FM-OK
+7 S" one" _FM-B UFLD-CHOICE _FM-OK _FM-SAVE
+0 0 0 0 0 _FM-B UFLD-TEXT-EDIT UFLD-S-INVALID = _FM-A _FM-SAME
+\ The placeholder is clean single-line text and must fit.
+0 _FM-TEXT _FM-SAVE
+0 0 0 _FM-NL 1 _FM-B UFLD-TEXT-EDIT UFLD-S-INVALID = _FM-A _FM-SAME
+_FM-M 232 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 3 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY
+S" a界b" _FM-B UFLD-TEXT _FM-OK _FM-SAVE
+0 0 0 S" Name" _FM-B UFLD-TEXT-EDIT UFLD-S-CAPACITY = _FM-A _FM-SAME
+\ A finished model whose caret or anchor leaves the value is refused.
+0 _FM-TEXT _FM-EDIT _FM-FINISH
+4 _FM-M UFLD-CARET-OFFSET + ! _FM-M _FM-U @ UFLD-VALIDATE UFLD-S-INVALID = _FM-A
+0 _FM-TEXT _FM-EDIT _FM-FINISH
+4 _FM-M UFLD-ANCHOR-OFFSET + ! _FM-M _FM-U @ UFLD-VALIDATE UFLD-S-INVALID = _FM-A
+0 _FM-TEXT _FM-EDIT _FM-FINISH
+5 _FM-M UFLD-PLACEHOLDER-BYTES-OFFSET + ! _FM-M _FM-U @ UFLD-VALIDATE UFLD-S-INVALID = _FM-A
+_FM-DONE
+"""
+    run_field(program, minimum=40)
+
+
+def test_masked_text_value_is_one_mask_character_per_character():
+    program = TEXT_EDIT + r"""
+: _FM-MASKED  ( cp count -- status )
+    >R >R _FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+    42 3 9 20 2 3 UFLD-F-MASKED _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY
+    R> R> _FM-B UFLD-TEXT-FILL ;
+\ Three bullets, U+2022, nine bytes; the caret counts characters.
+0x2022 3 _FM-MASKED _FM-OK 3 1 0 0 0 _FM-B UFLD-TEXT-EDIT _FM-OK _FM-FINISH
+_FM-M UFLD-TEXT@ S" •••" COMPARE 0= _FM-A _FM-U @ 240 = _FM-A
+_FM-M UFLD-CARET@ 3 = _FM-A _FM-M UFLD-ANCHOR@ 1 = _FM-A
+\ ASCII, two-byte and four-byte characters, and no characters at all.
+42 2 _FM-MASKED _FM-OK _FM-FINISH _FM-M UFLD-TEXT@ S" **" COMPARE 0= _FM-A
+0xE9 1 _FM-MASKED _FM-OK _FM-FINISH _FM-M UFLD-TEXT@ S" é" COMPARE 0= _FM-A
+0x1F512 1 _FM-MASKED _FM-OK _FM-FINISH _FM-M UFLD-TEXT-BYTES@ 4 = _FM-A
+0x2022 0 _FM-MASKED _FM-OK _FM-FINISH _FM-M UFLD-TEXT-BYTES@ 0= _FM-A
+\ A control character, a surrogate, or no scalar at all is refused.
+10 1 _FM-MASKED UFLD-S-INVALID = _FM-A
+0xD800 1 _FM-MASKED UFLD-S-INVALID = _FM-A
+0x110000 1 _FM-MASKED UFLD-S-INVALID = _FM-A
+\ It fills only a TEXT value, after the label, and must fit.
+_FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 1 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
+42 1 _FM-B UFLD-TEXT-FILL UFLD-S-INVALID = _FM-A _FM-SAME
+_FM-M 232 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 3 9 20 2 3 UFLD-F-MASKED _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
+42 9 _FM-B UFLD-TEXT-FILL UFLD-S-CAPACITY = _FM-A _FM-SAME
+_FM-DONE
+"""
+    run_field(program, minimum=20)
+
+
+def test_display_text_value_shows_what_cell_drawing_shows():
+    program = PRELUDE + """
+CREATE _FM-RAW 8 ALLOT
+\\ a, TAB, b, a stray continuation byte and c: the TAB and the stray byte
+\\ each show as U+FFFD, three bytes.
+97 _FM-RAW C! 9 _FM-RAW 1+ C! 98 _FM-RAW 2 + C! 0x80 _FM-RAW 3 + C! 99 _FM-RAW 4 + C!
+: _FM-DTEXT ( a u -- status ) >R >R 3 _FM-START _FM-EMPTY R> R> _FM-B UFLD-TEXT-DISPLAY ;
+_FM-RAW 5 _FM-DTEXT _FM-OK _FM-FINISH
+_FM-M UFLD-TEXT@ S" a�b�c" COMPARE 0= _FM-A _FM-M UFLD-TEXT-BYTES@ 9 = _FM-A
+\\ Clean text is kept as it is, and a line separator shows as U+FFFD.
+S" =B2*C2" _FM-DTEXT _FM-OK _FM-FINISH _FM-M UFLD-TEXT@ S" =B2*C2" COMPARE 0= _FM-A
+S" a b" _FM-DTEXT _FM-OK _FM-FINISH _FM-M UFLD-TEXT@ S" a�b" COMPARE 0= _FM-A
+0 0 _FM-DTEXT _FM-OK _FM-FINISH _FM-M UFLD-TEXT-BYTES@ 0= _FM-A
+\\ It fills only a TEXT value, after the label, from a source apart from the
+\\ destination, and must fit; a refusal changes nothing.
+_FM-M 2048 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 1 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
+_FM-RAW 5 _FM-B UFLD-TEXT-DISPLAY UFLD-S-INVALID = _FM-A _FM-SAME
+3 _FM-START _FM-EMPTY _FM-SAVE
+_FM-M 300 + 4 _FM-B UFLD-TEXT-DISPLAY UFLD-S-INVALID = _FM-A _FM-SAME
+_FM-M 232 _FM-B UFLD-BUILDER-INIT _FM-OK
+42 3 9 20 2 3 0 _FM-B UFLD-BEGIN _FM-OK _FM-EMPTY _FM-SAVE
+_FM-RAW 5 _FM-B UFLD-TEXT-DISPLAY UFLD-S-CAPACITY = _FM-A _FM-SAME
+_FM-DONE
+"""
+    run_field(program, minimum=24)

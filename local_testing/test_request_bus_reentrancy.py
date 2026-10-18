@@ -80,6 +80,20 @@ VARIABLE _rb-deferred-b-done
 VARIABLE _rb-deferred-c-done
 VARIABLE _rb-deferred-mutate-done
 
+VARIABLE _rb-scope-inst
+VARIABLE _rb-scope-context
+VARIABLE _rb-scope-depth
+VARIABLE _rb-scope-calls
+VARIABLE _rb-ok-depth
+VARIABLE _rb-scoped-ok
+VARIABLE _rb-scoped-throw
+VARIABLE _rb-outer-scoped
+VARIABLE _rb-scoped-nested
+VARIABLE _rb-scoped-ok-done
+VARIABLE _rb-scoped-throw-done
+VARIABLE _rb-outer-scoped-done
+VARIABLE _rb-scoped-nested-done
+
 : _rb-complete  ( request -- )
     CBR.COMPLETE-DATA @ 1 SWAP +! ;
 
@@ -99,7 +113,7 @@ VARIABLE _rb-deferred-mutate-done
     CBUS-S-OK ;
 
 : _rb-inner-ok-handler  ( request instance -- status )
-    2DROP 1 _rb-inner-ok-calls +! CBUS-S-OK ;
+    2DROP 1 _rb-inner-ok-calls +! _rb-scope-depth @ _rb-ok-depth ! CBUS-S-OK ;
 
 : _rb-inner-throw-handler  ( request instance -- status )
     2DROP -731 THROW ;
@@ -116,6 +130,13 @@ VARIABLE _rb-deferred-mutate-done
 
 : _rb-deferring-handler  ( request instance -- status )
     DROP _rb-held ! 1 _rb-deferred-calls +! CBUS-S-ACCEPTED ;
+
+\ A host's scope runs a handler as it runs the instance's own callbacks.
+\ This one counts how deep it is and lets a throw unwind through it.
+: _rb-scope  ( handler-xt instance context -- )
+    _rb-scope-context ! _rb-scope-inst !
+    1 _rb-scope-calls +! 1 _rb-scope-depth +!
+    CATCH -1 _rb-scope-depth +! THROW ;
 
 : _rb-policy-decide  ( principal effects context -- decision )
     2DROP DROP
@@ -289,7 +310,19 @@ VARIABLE _rb-new-instance
         _rb-deferred-c-done OVER CBR.COMPLETE-DATA ! DROP
     _rb-inner-deferred-mutate-cap _rb-inner-instance @ _rb-request-new
         DUP _rb-deferred-mutate !
-        _rb-deferred-mutate-done OVER CBR.COMPLETE-DATA ! DROP ;
+        _rb-deferred-mutate-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-ok-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-scoped-ok !
+        _rb-scoped-ok-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-throw-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-scoped-throw !
+        _rb-scoped-throw-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-outer-cap _rb-outer-instance @ _rb-request-new
+        DUP _rb-outer-scoped !
+        _rb-outer-scoped-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-ok-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-scoped-nested !
+        _rb-scoped-nested-done OVER CBR.COMPLETE-DATA ! DROP ;
 
 : _rb-success-case  ( -- )
     -1 _rb-handler-nests !
@@ -478,6 +511,44 @@ VARIABLE _rb-new-instance
     _rb-frame-restored
     _rb-stack ;
 
+\ A host may give a bus a scope its handlers run in, such as the target
+\ instance's own UIDL context.  The handler runs inside it with its own
+\ instance, a throw unwinds through it, a nested dispatch on a scoped bus
+\ leaves the outer frame current, and removing it runs handlers as they are.
+: _rb-scope-case  ( -- )
+    0 _rb-scope-calls ! 0 _rb-scope-depth ! 0 _rb-ok-depth !
+    ['] _rb-scope 77 _rb-inner-bus @ CBUS-SCOPE!
+    _rb-scoped-ok @ _rb-inner-bus @ CBUS-DISPATCH CBUS-S-OK = _rb-assert
+    _rb-scope-calls @ 1 = _rb-assert
+    _rb-scope-inst @ _rb-inner-instance @ = _rb-assert
+    _rb-scope-context @ 77 = _rb-assert
+    _rb-ok-depth @ 1 = _rb-assert
+    _rb-scope-depth @ 0= _rb-assert
+    _rb-scoped-ok-done @ 1 = _rb-assert
+    _rb-frame-restored
+    _rb-scoped-throw @ _rb-inner-bus @ CBUS-DISPATCH
+        CBUS-S-FAILED = _rb-assert
+    _rb-scoped-throw @ CBR.ERROR-CODE @ -731 = _rb-assert
+    _rb-scope-calls @ 2 = _rb-assert
+    _rb-scope-depth @ 0= _rb-assert
+    _rb-scoped-throw-done @ 1 = _rb-assert
+    _rb-frame-restored
+    -1 _rb-handler-nests !
+    _rb-scoped-nested @ _rb-nested-request !
+    0 _rb-ok-depth !
+    _rb-outer-scoped @ _rb-outer-bus @ CBUS-DISPATCH CBUS-S-OK = _rb-assert
+    _rb-nested-status @ CBUS-S-OK = _rb-assert
+    _rb-scope-calls @ 3 = _rb-assert
+    _rb-ok-depth @ 1 = _rb-assert
+    _rb-scope-depth @ 0= _rb-assert
+    _rb-outer-scoped-done @ 1 = _rb-assert
+    _rb-scoped-nested-done @ 1 = _rb-assert
+    _rb-frame-restored
+    0 0 _rb-inner-bus @ CBUS-SCOPE!
+    _rb-inner-bus @ CBUS.SCOPE @ 0= _rb-assert
+    _rb-outer-bus @ CBUS.SCOPE @ 0= _rb-assert
+    _rb-stack ;
+
 : _rb-cleanup  ( -- )
     _rb-outer-ok @ CBR-FREE _rb-inner-ok @ CBR-FREE
     _rb-outer-stale @ CBR-FREE _rb-inner-stale @ CBR-FREE
@@ -487,6 +558,8 @@ VARIABLE _rb-new-instance
     _rb-inner-no-effect-bad @ CBR-FREE
     _rb-deferred-a @ CBR-FREE _rb-deferred-b @ CBR-FREE
     _rb-deferred-c @ CBR-FREE _rb-deferred-mutate @ CBR-FREE
+    _rb-scoped-ok @ CBR-FREE _rb-scoped-throw @ CBR-FREE
+    _rb-outer-scoped @ CBR-FREE _rb-scoped-nested @ CBR-FREE
     _rb-outer-bus @ CBUS-FREE _rb-inner-bus @ CBUS-FREE
     _rb-outer-instance @ _rb-registry @ CREG-INST- 0= _rb-assert
     _rb-inner-instance @ _rb-registry @ CREG-INST- 0= _rb-assert
@@ -511,6 +584,7 @@ VARIABLE _rb-new-instance
     _rb-deferred-case
     _rb-deferred-pump-case
     _rb-deferred-cancel-case
+    _rb-scope-case
     _rb-cleanup
     _rb-fails @ 0= IF
         ." REQUEST BUS REENTRANCY PASS " _rb-checks @ .

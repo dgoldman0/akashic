@@ -214,6 +214,9 @@ _PAD-CURRENT-STATE _PAD-MAX-BUFS _PAD-TAB-LABEL-CAP *
 
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ACTIVE
 _PAD-CURRENT-STATE CMP-CELL: _PAD-BUF-CNT
+\ Set when the user agreed to discard unsaved changes and close, so the
+\ close Pad then asks for goes ahead.
+_PAD-CURRENT-STATE CMP-CELL: _PAD-DISCARD-ARMED
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ARENA
 
 \ ---- Composite panel widget (mounted on editor-area) ----
@@ -1426,35 +1429,35 @@ VARIABLE _POP-ORIG
 
 : _PAD-REPORT-OPEN-RESULT  ( ior -- )
     DUP 0= IF DROP EXIT THEN
-    DUP -1 = IF DROP S" File not found" 2000 ASHELL-TOAST EXIT THEN
-    DUP -2 = IF DROP S" Max buffers reached" 2000 ASHELL-TOAST EXIT THEN
+    DUP -1 = IF DROP S" File not found" 2000 ASHELL-TOAST-WARNING EXIT THEN
+    DUP -2 = IF DROP S" Max buffers reached" 2000 ASHELL-TOAST-WARNING EXIT THEN
     DUP -3 = IF
-        DROP S" Invalid or unsupported path" 2200 ASHELL-TOAST EXIT
+        DROP S" Invalid or unsupported path" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP -4 = IF
-        DROP S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST EXIT
+        DROP S" File exceeds the 64 KiB Pad limit" 2500 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP -5 = IF
         DROP S" File read failed; document was not changed"
-        2500 ASHELL-TOAST EXIT
+        2500 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP -6 = IF
         DROP S" File recovery is required before opening"
-        2500 ASHELL-TOAST EXIT
+        2500 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP -7 = IF
         DROP S" File open failed safely after an internal storage fault"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _PAD-E-SHARED-UNAVAILABLE = IF
         DROP S" Shared Daybook resource is unavailable"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _PAD-E-STALE = IF
         DROP S" changed elsewhere; reload before saving"
-        2600 ASHELL-TOAST EXIT
+        2600 ASHELL-TOAST-WARNING EXIT
     THEN
-    DROP S" Shared Daybook open failed" 2400 ASHELL-TOAST ;
+    DROP S" Shared Daybook open failed" 2400 ASHELL-TOAST-ERROR ;
 
 \ =====================================================================
 \  S11b -- Following links
@@ -1482,7 +1485,7 @@ VARIABLE _POP-ORIG
         ENDOF
         LPATH-S-EMPTY OF DROP ENDOF
         LPATH-S-SCHEME OF
-            DROP S" Pad opens only links to files" 2200 ASHELL-TOAST
+            DROP S" Pad opens only links to files" 2200 ASHELL-TOAST-WARNING
         ENDOF
         >R DROP -3 _PAD-REPORT-OPEN-RESULT R>
     ENDCASE ;
@@ -1490,17 +1493,17 @@ VARIABLE _POP-ORIG
 : _PAD-REPORT-SAVE-ERROR  ( ior -- )
     DUP _PAD-E-STALE = IF
         DROP S" changed elsewhere; reload before saving"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _PAD-E-SHARED-UNAVAILABLE = IF
         DROP S" Shared Daybook resource is unavailable"
-        2400 ASHELL-TOAST EXIT
+        2400 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _PAD-E-DAYBOOK-PROTECTED = IF
         DROP S" /daybook.md is owned by the shared Daybook resource"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
-    DROP S" Save failed" 2000 ASHELL-TOAST ;
+    DROP S" Save failed" 2000 ASHELL-TOAST-ERROR ;
 
 \ =====================================================================
 \  S12 -- Explorer Callback
@@ -1511,7 +1514,7 @@ VARIABLE _POP-ORIG
     DUP 0= IF DROP EXIT THEN
     DUP IN.TYPE @ VFS-T-FILE <> IF DROP EXIT THEN
     _PAD-INODE-PATH-CHECKED IF
-        2DROP S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST EXIT
+        2DROP S" Path exceeds Pad's safe path limit" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _PAD-OPEN-PATH
     _PAD-REPORT-OPEN-RESULT ;
@@ -1523,7 +1526,7 @@ VARIABLE _POP-ORIG
 : _PAD-DO-NEW  ( elem -- )
     DROP
     _PAD-BUF-OPEN DUP 0< IF
-        DROP S" Max buffers reached" 2000 ASHELL-TOAST EXIT
+        DROP S" Max buffers reached" 2000 ASHELL-TOAST-WARNING EXIT
     THEN DROP
     _PAD-TXTA @ ?DUP IF TXTA-CLEAR THEN
     _PAD-UPDATE-STATUS ASHELL-DIRTY! ;
@@ -1612,13 +1615,13 @@ VARIABLE _PSA-STALE
     _PAD-UPDATE-STATUS ASHELL-DIRTY!
     _PSA-STALE @ IF
         S" changed elsewhere; reload before saving"
-        2800 ASHELL-TOAST EXIT
+        2800 ASHELL-TOAST-WARNING EXIT
     THEN
     _PSA-FAILED @ IF
-        S" Some buffers failed to save" 2500 ASHELL-TOAST EXIT
+        S" Some buffers failed to save" 2500 ASHELL-TOAST-ERROR EXIT
     THEN
     _PSA-SKIPPED @ IF
-        S" Saved named buffers; untitled buffers remain" 2500 ASHELL-TOAST EXIT
+        S" Saved named buffers; untitled buffers remain" 2500 ASHELL-TOAST-WARNING EXIT
     THEN
     _PSA-SAVED @ IF
         S" All modified buffers saved" 1800 ASHELL-TOAST
@@ -1660,6 +1663,13 @@ VARIABLE _PBUILD-DIAG-U
 
 : _PAD-OUTPUT-NUM  ( n -- ) NUM>STR _PAD-OUTPUT-APPEND ;
 
+\ The View menu checks the sidebar and the output panel while they show,
+\ and Show Hidden Files while hidden files show.
+: _PAD-VIEW-CHECKS  ( -- )
+    _PAD-SIDEBAR-VIS @ S" view-sidebar" UTUI-BY-ID UTUI-CHECKED!
+    _PAD-OUTPUT-VIS @ S" view-output" UTUI-BY-ID UTUI-CHECKED!
+    _PAD-SHOW-HIDDEN @ S" view-hidden" UTUI-BY-ID UTUI-CHECKED! ;
+
 : _PAD-OUTPUT-SHOW  ( -- )
     -1 _PAD-OUTPUT-VIS !
     _PAD-E-EO-SPLIT @ ?DUP IF S" ratio" S" 80" UTUI-SET-ATTR THEN
@@ -1667,6 +1677,7 @@ VARIABLE _PBUILD-DIAG-U
         >R _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @ R> TXTA-SET-TEXT
     THEN
     _PAD-E-OUTPUT @ ?DUP IF UIDL-DIRTY! THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 : _PAD-DIAG-RESET  ( -- )
@@ -1754,16 +1765,16 @@ VARIABLE _PBUILD-DIAG-U
 : _PAD-DO-BUILD-INSTALL  ( elem -- )
     DROP
     _PAD-ACTIVE @ 0< IF
-        S" Open a project manifest before building" 2400 ASHELL-TOAST EXIT
+        S" Open a project manifest before building" 2400 ASHELL-TOAST-WARNING EXIT
     THEN
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-FNAME-L + @ 0= IF
-        S" Save the project manifest before building" 2600 ASHELL-TOAST EXIT
+        S" Save the project manifest before building" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _PAD-HAS-DIRTY? IF
         0 _PAD-DO-SAVE-ALL
         _PSA-FAILED @ IF
             S" Build stopped because a modified file could not be saved"
-                3000 ASHELL-TOAST EXIT
+                3000 ASHELL-TOAST-ERROR EXIT
         THEN
     THEN
     _PAD-OUTPUT-RESET _PAD-DIAG-RESET
@@ -1787,23 +1798,25 @@ VARIABLE _PBUILD-DIAG-U
         ELSE
             _PBUILD-STATUS @ _PAD-BUILD-GENERIC-ERROR _PAD-OUTPUT-NL
         THEN
-        S" Build & Install failed" 2600 ASHELL-TOAST
+        S" Build & Install failed" 2600 ASHELL-TOAST-ERROR
     THEN
     _PAD-OUTPUT-SHOW ;
+
+\ A close question names its buffer; it closes only while still open.
+: _PAD-CLOSE-TAB-CONFIRMED  ( confirmed? index -- )
+    SWAP 0= IF DROP EXIT THEN
+    DUP _PAD-BUF-ENTRY _PBE-FLAGS + @ IF _PAD-BUF-CLOSE ELSE DROP THEN ;
 
 : _PAD-DO-CLOSE-TAB  ( elem -- )
     DROP
     _PAD-ACTIVE @ 0< IF EXIT THEN
-    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
-        S" Discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
+    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= IF
+        _PAD-ACTIVE @ _PAD-BUF-CLOSE EXIT
     THEN
-    _PAD-ACTIVE @ _PAD-BUF-CLOSE ;
+    S" Discard unsaved changes?" S" Discard"
+        ['] _PAD-CLOSE-TAB-CONFIRMED _PAD-ACTIVE @ DLG-CONFIRM DROP ;
 
-: _PAD-DO-CLOSE-ALL  ( elem -- )
-    DROP
-    _PAD-HAS-DIRTY? IF
-        S" Close all and discard unsaved changes?" DLG-CONFIRM 0= IF EXIT THEN
-    THEN
+: _PAD-CLOSE-ALL-NOW  ( -- )
     BEGIN _PAD-BUF-CNT @ 0> WHILE
         _PAD-ACTIVE @ 0< IF
             _PAD-MAX-BUFS 0 DO
@@ -1815,6 +1828,15 @@ VARIABLE _PBUILD-DIAG-U
         _PAD-ACTIVE @ 0< IF EXIT THEN
         _PAD-ACTIVE @ _PAD-BUF-CLOSE
     REPEAT ;
+
+: _PAD-CLOSE-ALL-CONFIRMED  ( confirmed? context -- )
+    DROP IF _PAD-CLOSE-ALL-NOW THEN ;
+
+: _PAD-DO-CLOSE-ALL  ( elem -- )
+    DROP
+    _PAD-HAS-DIRTY? 0= IF _PAD-CLOSE-ALL-NOW EXIT THEN
+    S" Close all and discard unsaved changes?" S" Discard"
+        ['] _PAD-CLOSE-ALL-CONFIRMED 0 DLG-CONFIRM DROP ;
 
 : _PAD-DO-QUIT  ( elem -- )
     DROP ASHELL-QUIT ;
@@ -2179,11 +2201,11 @@ VARIABLE _PGLC-OFF
 
 : _PAD-GOTO-LINE-TEXT  ( addr len -- )
     STR>NUM 0= IF
-        DROP S" Invalid line number" 1800 ASHELL-TOAST EXIT
+        DROP S" Invalid line number" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
-    DUP 1 < IF DROP S" Line numbers start at 1" 1800 ASHELL-TOAST EXIT THEN
+    DUP 1 < IF DROP S" Line numbers start at 1" 1800 ASHELL-TOAST-WARNING EXIT THEN
     1 _PAD-GOTO-LINE-COLUMN 0= IF
-        S" Line is outside the document" 1800 ASHELL-TOAST
+        S" Line is outside the document" 1800 ASHELL-TOAST-WARNING
     THEN ;
 
 : _PAD-DO-FIND  ( elem -- )
@@ -2207,7 +2229,7 @@ VARIABLE _PGLC-OFF
     _PAD-DIAG-PATH _PAD-DIAG-PATH-U @ _PAD-OPEN-PATH
     DUP IF _PAD-REPORT-OPEN-RESULT EXIT THEN DROP
     _PAD-DIAG-LINE @ _PAD-DIAG-COLUMN @ _PAD-GOTO-LINE-COLUMN 0= IF
-        S" Build diagnostic is outside the current source" 2200 ASHELL-TOAST
+        S" Build diagnostic is outside the current source" 2200 ASHELL-TOAST-WARNING
         EXIT
     THEN
     S" Opened build diagnostic" 1400 ASHELL-TOAST ;
@@ -2295,6 +2317,7 @@ VARIABLE _PPSUB-MODE
         -1 _PAD-SIDEBAR-VIS !
         _PAD-E-MAIN-SPLIT @ S" ratio" S" 20" UTUI-SET-ATTR
     THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 : _PAD-DO-TOGGLE-OUTPUT  ( elem -- )
@@ -2306,6 +2329,7 @@ VARIABLE _PPSUB-MODE
         -1 _PAD-OUTPUT-VIS !
         _PAD-E-EO-SPLIT @ S" ratio" S" 80" UTUI-SET-ATTR
     THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 : _PAD-DO-TOGGLE-HIDDEN  ( elem -- )
@@ -2315,6 +2339,7 @@ VARIABLE _PPSUB-MODE
         _PAD-SHOW-HIDDEN @ SWAP EXPL-SHOW-HIDDEN!
         _PAD-EXPL @ EXPL-REFRESH
     THEN
+    _PAD-VIEW-CHECKS
     ASHELL-DIRTY! ;
 
 \ =====================================================================
@@ -2591,6 +2616,7 @@ VARIABLE _PSW-BYTE
     _PAD-E-EDITOR-AREA @ ?DUP IF UTUI-FOCUS! THEN
 
     \ ---- Initial status ----
+    _PAD-VIEW-CHECKS
     _PAD-UPDATE-STATUS ;
 
 \ =====================================================================
@@ -2753,14 +2779,20 @@ VARIABLE _PSW-BYTE
 \  S23 -- SHUTDOWN Callback
 \ =====================================================================
 
+: _PAD-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP IF -1 _PAD-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ Unsaved changes defer the close to a question; agreeing to discard them
+\ asks to close again, and that close goes ahead.
 : PAD-REQUEST-CLOSE-CB  ( reason instance -- decision )
     _PAD-ACTIVATE DROP
     _PAD-HAS-DIRTY? 0= IF APP-CLOSE-D-ALLOW EXIT THEN
-    S" Close Pad and discard all unsaved changes?" DLG-CONFIRM IF
-        APP-CLOSE-D-ALLOW
-    ELSE
-        APP-CLOSE-D-CANCEL
-    THEN ;
+    _PAD-DISCARD-ARMED @ IF
+        0 _PAD-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
+    THEN
+    S" Close Pad and discard all unsaved changes?" S" Discard"
+        ['] _PAD-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : PAD-SHUTDOWN-CB  ( instance -- )
     _PAD-ACTIVATE

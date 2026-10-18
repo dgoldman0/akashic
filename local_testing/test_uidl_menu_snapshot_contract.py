@@ -238,7 +238,7 @@ def test_local_visibility_and_effective_paintability_remain_distinct() -> None:
     args = _word(source, "_UMSN-V-ARGS?")
     state = _word(source, "_UMSN-V-BUILD-STATE")
     parent_selected = _word(source, "_UMSN-V-MARK-PARENT-SELECTED")
-    validate = _word(source, "_UMSN-E-STATE?")
+    validate = _word(source, "UMSN-STATE-VALID?")
 
     assert args.count("_UMSN-V-RESOLVED-U @ 0=") == 1
     assert "_UMSN-V-EFFECTIVE @ _UMSN-V-LOCAL @ 0= AND" in args
@@ -246,5 +246,10 @@ def test_local_visibility_and_effective_paintability_remain_distinct() -> None:
     assert "_UMSN-V-EFFECTIVE @ IF UMSN-F-PAINTABLE" in state
     assert "_UTUI-HAS-FOCUS?" not in source
     assert "UMSN-F-SELECTED OR SWAP _UMSN-W.STATE !" in parent_selected
-    assert "UMSN-F-PAINTABLE AND" in validate
-    assert "UMSN-F-VISIBLE AND 0= AND" in validate
+    assert "DUP UMSN-F-PAINTABLE AND IF" in validate
+    assert "DUP UMSN-F-VISIBLE AND 0= IF 2DROP 0 EXIT THEN" in validate
+    assert "UMSN-F-OPEN UMSN-F-SELECTED OR AND IF 2DROP 0 EXIT THEN" in validate
+    # Only an item is checked, from its own UIDL-TUI state.
+    assert "_UMSN-F-MASK UMSN-F-CHECKED INVERT AND" in validate
+    assert "_UMSN-F-MASK UMSN-F-OPEN INVERT AND" in validate
+    assert "_UMSN-V-ELEM @ _UTUI-CHECKED? IF" in state

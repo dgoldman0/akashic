@@ -234,6 +234,86 @@ VARIABLE _OW-SEQ-RUN
     _OW-REPLAY _OW-RUN-A WRUN-REPLAY WRUN-S-OK _OW-STATUS
     _OW-STACK ;
 
+VARIABLE _OW-VALVE-REV
+VARIABLE _OW-VALVE-N
+
+[UNDEFINED] _OW-LBL$ [IF]
+\ With the complete closure a label's text is its UIDL text attribute.
+: _OW-LBL$  ( elem -- a u )
+    ?DUP 0= IF 0 0 EXIT THEN
+    S" text" UIDL-ATTR 0= IF 2DROP 0 0 THEN ;
+[THEN]
+
+: _OW-LBL=  ( elem a u -- flag )  ROT _OW-LBL$ COMPARE 0= ;
+
+: _OW-CHAR  ( char -- )
+    _OW-EVENT 24 0 FILL
+    KEY-T-CHAR _OW-EVENT ! _OW-EVENT 8 + !
+    _OW-EVENT _WORLD-PANEL _WORLD-PANEL-HANDLE _OW-ASSERT ;
+
+\ The status bar: whether the run is running, how the last action went,
+\ and how the last replay went.
+: _OW-WORLD-STATUS  ( -- )
+    _WORLD-E-RUN @ S" Paused" _OW-LBL= _OW-ASSERT
+    _WORLD-E-RESULT @ S" Ready" _OW-LBL= _OW-ASSERT
+    _WORLD-E-REPLAY @ S" Not replayed" _OW-LBL= _OW-ASSERT
+    BL _OW-CHAR
+    _WORLD-E-RUN @ S" Running fixed-step" _OW-LBL= _OW-ASSERT
+    BL _OW-CHAR
+    _WORLD-E-RUN @ S" Paused" _OW-LBL= _OW-ASSERT
+    \ No checkpoint yet: the replay is refused and says so.
+    [CHAR] r _OW-CHAR
+    _WORLD-E-RESULT @ S" Create a checkpoint first" _OW-LBL= _OW-ASSERT
+    _WORLD-E-REPLAY @ S" Replay failed" _OW-LBL= _OW-ASSERT
+    _OW-STACK ;
+
+\ The valve: one canonical INTEGER field over the run's own range, moved a
+\ step at a time by Left and Right and by the field's own adjustments.
+: _OW-VALVE-MODEL  ( -- model )
+    _WORLD-VALVE-ENSURE _OW-ASSERT _WORLD-VALVE-ACTIVE-A @ ;
+
+: _OW-VALVE-KEY  ( key -- )
+    _OW-EVENT 24 0 FILL
+    KEY-T-SPECIAL _OW-EVENT ! _OW-EVENT 8 + !
+    _OW-EVENT _WORLD-PANEL _WORLD-PANEL-HANDLE _OW-ASSERT ;
+
+: _OW-WORLD-VALVE  ( -- )
+    _OW-VALVE-MODEL DUP 0<> _OW-ASSERT
+    DUP UFLD-KIND@ UFLD-K-INTEGER = _OW-ASSERT
+    DUP UFLD-VALUE@ 500 = _OW-ASSERT
+    DUP UFLD-MINIMUM@ 0= _OW-ASSERT
+    DUP UFLD-MAXIMUM@ _WORLD-RUN WRUN.UPPER-CAP @ = _OW-ASSERT
+    DUP UFLD-STEP@ _WORLD-VALVE-STEP = _OW-ASSERT
+    DUP UFLD-STATE@ UFLD-STATE-SELECTED AND 0<> _OW-ASSERT
+    UFLD-LABEL@ S" valve (milliunits/tick)" COMPARE 0= _OW-ASSERT
+    _WORLD-VALVE-REVISION @ _OW-VALVE-REV !
+    \ Right opens the valve a step, journaled as valve.set, and the field
+    \ is a new revision showing it.
+    KEY-RIGHT _OW-VALVE-KEY
+    _WORLD-RUN WRUN.VALVE @ 750 = _OW-ASSERT
+    6 _WORLD-JOURNAL-ACTIVE-A @ _OW-ITEM@
+        S" valve.set" _OW-ITEM-TEXT= _OW-ASSERT
+    7 _WORLD-JOURNAL-ACTIVE-A @ _OW-ITEM@ S" 750" _OW-ITEM-TEXT= _OW-ASSERT
+    _OW-VALVE-MODEL UFLD-VALUE@ 750 = _OW-ASSERT
+    _WORLD-VALVE-REVISION @ _OW-VALVE-REV @ > _OW-ASSERT
+    \ An adjustment past closed holds at closed, and Left there commits
+    \ nothing.
+    -4 _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ADJUSTED
+    _WORLD-RUN WRUN.VALVE @ 0= _OW-ASSERT
+    _WORLD-RUN WRUN.JOURNAL-N @ _OW-VALVE-N !
+    KEY-LEFT _OW-VALVE-KEY
+    _WORLD-RUN WRUN.JOURNAL-N @ _OW-VALVE-N @ = _OW-ASSERT
+    \ Activating the field sets the next setting, as V does; past the
+    \ upper reservoir's capacity that closes the valve again.
+    _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ACTIVATED
+    _WORLD-RUN WRUN.VALVE @ _WORLD-VALVE-STEP = _OW-ASSERT
+    _OW-VALVE-MODEL UFLD-VALUE@ _WORLD-VALVE-STEP = _OW-ASSERT
+    100 _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ADJUSTED
+    _WORLD-RUN WRUN.VALVE @ _WORLD-RUN WRUN.UPPER-CAP @ = _OW-ASSERT
+    _WORLD-VALVE-WIDGET @ _WORLD-VALVE-ACTIVATED
+    _WORLD-RUN WRUN.VALVE @ 0= _OW-ASSERT
+    _OW-STACK ;
+
 : _OW-APP-CONTRACTS  ( -- )
     _OW-WORLDS-DESC WORLDS-ENTRY
     _OW-WORLDS-DESC APP-DESC-VALID? _OW-ASSERT
@@ -274,6 +354,8 @@ VARIABLE _OW-SEQ-RUN
     7 _WORLD-JOURNAL-ACTIVE-A @ _OW-ITEM@
         S" 500" _OW-ITEM-TEXT= _OW-ASSERT
     _OW-STACK
+    _OW-WORLD-VALVE
+    _OW-WORLD-STATUS
     _OW-WORLD-INSTANCE @ WORLDS-SHUTDOWN-CB
     _OW-WORLD-INSTANCE @ CINST-FREE 0 _OW-WORLD-INSTANCE !
     _OW-OBS-DESC OBSERVATORY-ENTRY
@@ -299,6 +381,7 @@ VARIABLE _OW-SEQ-RUN
         S" 0" _OW-ITEM-TEXT= _OW-ASSERT
     3 _OBS-TABLE-ACTIVE-A @ _OW-ITEM@
         S" 8000" _OW-ITEM-TEXT= _OW-ASSERT
+    _OBS-E-STATE @ S" Profiled 8 samples" _OW-LBL= _OW-ASSERT
     _OBS-TABLE-ACTIVE-A @ _OW-OBS-BANK-BEFORE !
     _OW-EVENT 24 0 FILL
     KEY-T-CHAR _OW-EVENT ! [CHAR] z _OW-EVENT 8 + !
@@ -342,6 +425,7 @@ VARIABLE _OW-SEQ-RUN
     _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OBS-ACCEPT-SNAPSHOT
         OBS-S-PRECISION _OW-STATUS
     _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    _OBS-E-STATE @ S" Profile refused: not exact in FP16" _OW-LBL= _OW-ASSERT
     6500 _OW-WORLDS-SNAPSHOT _OTS.SAMPLES + OBS-TS-SAMPLE-SIZE + 8 +
         OBS-TS-BE64!
     _OW-REHASH-SNAPSHOT
@@ -373,6 +457,7 @@ VARIABLE _OW-SEQ-RUN
     _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
         CBUS-S-OK _OW-STATUS
     _OBS-COUNT @ 3 = _OW-ASSERT
+    _OBS-E-STATE @ S" Profiled 3 samples" _OW-LBL= _OW-ASSERT
     _OBS-SOURCE-RUN @ 101 = _OW-ASSERT
     _OBS-SOURCE-BRANCH @ 2 = _OW-ASSERT
     _OBS-SOURCE-REVISION @ 4 = _OW-ASSERT
@@ -446,6 +531,8 @@ VARIABLE _UTUI-MENU-OPEN
 : UIDL-DIRTY! DROP ;
 : ASHELL-DIRTY! ;
 : ASHELL-TOAST DROP 2DROP ;
+: ASHELL-TOAST-WARNING DROP 2DROP ;
+: ASHELL-TOAST-ERROR DROP 2DROP ;
 : ASHELL-QUIT ;
 : ASHELL-RUN DROP ;
 : WDG-REGION DROP 0 ;
@@ -467,7 +554,22 @@ VARIABLE _UTUI-MENU-OPEN
 : DRW-TEXT DROP DROP DROP DROP ;
 : DRW-HLINE DROP DROP DROP DROP ;
 : DRW-CHAR DROP DROP DROP ;
-: UTUI-BY-ID 2DROP 1 ;
+\ An element is the address of the id its lookup names, so each lookup
+\ site has its own; a label's text is recorded where a check can read it.
+: UTUI-BY-ID DROP ;
+CREATE _OW-LBL 192 ALLOT  _OW-LBL 192 0 FILL
+: _OW-LBL-SLOT  ( elem -- slot|0 )
+    8 0 DO
+        I 24 * _OW-LBL +
+        DUP @ 2 PICK = IF NIP UNLOOP EXIT THEN
+        DUP @ 0= IF TUCK ! UNLOOP EXIT THEN
+        DROP
+    LOOP DROP 0 ;
+: UTUI-SET-ATTR  ( elem name-a name-l val-a val-l -- )
+    2SWAP 2DROP ROT _OW-LBL-SLOT ?DUP 0= IF 2DROP EXIT THEN
+    >R R@ 16 + ! R> 8 + ! ;
+: _OW-LBL$  ( elem -- a u )
+    _OW-LBL-SLOT ?DUP IF DUP 8 + @ SWAP 16 + @ ELSE 0 0 THEN ;
 : UTUI-ELEM-RGN DROP 0 0 80 30 ;
 : UTUI-WIDGET-SET 2DROP ;
 : UTUI-FOCUS! DROP ;
@@ -477,10 +579,19 @@ VARIABLE _UTUI-MENU-OPEN
 : TGRID-FREE DROP ;
 UDG-S-OK CONSTANT DGRAPH-S-OK
 UDG-S-INVALID CONSTANT DGRAPH-S-INVALID
+UDG-S-CAPACITY CONSTANT DGRAPH-S-CAPACITY
 : DGRAPH-NEW DROP 1 ;
 : DGRAPH-BIND DROP UDG-ENTRY-VALIDATE ;
 : DGRAPH-FREE DROP ;
 : WDG-DRAW-IN 2DROP ;
+: FLD-NEW DROP 1 ;
+: FLD-BIND DROP UFLD-VALIDATE ;
+: FLD-UNBIND DROP ;
+: FLD-FREE DROP ;
+: FLD-STYLE! 2DROP 2DROP ;
+: FLD-SELECTED-STYLE! 2DROP 2DROP ;
+: FLD-ON-ACTIVATE 2DROP ;
+: FLD-ON-ADJUST 2DROP ;
 REQUIRE local_testing/ow-worlds.f
 REQUIRE local_testing/ow-observatory.f'''
 
@@ -524,6 +635,7 @@ def main() -> int:
             "runtime/state-layout.f",
             "tui/semantic-collections.f",
             "tui/data-graphics-model.f",
+            "tui/field-model.f",
             "tui/app-desc.f",
             "interop/capability.f",
             "interop/intent.f",

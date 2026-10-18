@@ -120,12 +120,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "632 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "680 CONSTANT RTAPT-OWNER-SIZE" in source
     assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
     assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
-    assert "720 CONSTANT RTAPT-ENGINE-SIZE" in source
-    assert "176 CONSTANT RTAPT-LIMITS-SIZE" in source
+    assert "728 CONSTANT RTAPT-ENGINE-SIZE" in source
+    assert "184 CONSTANT RTAPT-LIMITS-SIZE" in source
     assert ": RTAPT-CONTROL-LEDGER-BYTES" in source
     assert ": _RTAPT-E.LIMITS" in source
     owner_fields = {
@@ -179,6 +179,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "A-SERIES": 528,
         "A-SERIES-HIGH": 536,
         "A-SAMPLES": 544,
+        "PATH-POINTS": 632,
+        "ASK-PATH-POINTS": 640,
+        "ACTIVE-PATH-POINTS": 648,
+        "HIDDEN-PATH-POINTS": 656,
+        "PENDING-PATH-POINTS": 664,
+        "A-PATH-POINTS": 672,
     }
     for field, offset in owner_fields.items():
         definition = _definition(source, f"_RTAPT-O.{field}")
@@ -227,10 +233,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         else:
             assert f"{offset} +" in definition
     for field, offset in {
-        "CONTROL-LEDGER-A": 512,
-        "CONTROL-LEDGER-U": 520,
-        "CONTROL-LEDGER-CAP": 528,
-        "CONTROL-LEDGER-USED": 536,
+        "CONTROL-LEDGER-A": 520,
+        "CONTROL-LEDGER-U": 528,
+        "CONTROL-LEDGER-CAP": 536,
+        "CONTROL-LEDGER-USED": 544,
     }.items():
         assert f"{offset} +" in _definition(source, f"_RTAPT-E.{field}")
     assert "104 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
@@ -385,8 +391,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-UPDATE-COHERENT?" in validate
     assert "_RTAPT-CONTROL-LEDGER-VALID?" in validate
     assert "_RTAPT-OWNER-LEDGERS?" in validate
-    assert proof.count("PT-STORAGE-DISJOINT?") == 6
+    assert proof.count("PT-STORAGE-DISJOINT?") == 7
     assert "_FDC1-OWNED-START _FDC1-OWNED-END _FDC1-OWNED-START -" in proof
+    assert "_DLG1-OWNED-START _DLG1-OWNED-END _DLG1-OWNED-START -" in proof
     assert proof.count("MSPAN-OVERLAP?") == 10
     assert "_RTAPT-E.CONTROL-LEDGER-CAP" in proof
     assert "_RTAPT-E.CONTROL-LEDGER-USED" in tails
@@ -763,7 +770,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD-HEIGHT @ DUP 0=" in glyph_run_geometry
     assert "_RTAPT-LD-WIDTH @ DUP 0=" in glyph_run_geometry
     assert glyph_run_geometry.count("_RTAPT-LPF-SADD?") == 2
-    assert "UNORM" not in source
+    # Only a POLYLINE's points are UNORM32; glyph geometry never is.
+    for body in (glyph_run_geometry, glyph_run_body, glyph_run_replace_body):
+        assert "UNORM" not in body
     for body in (glyph_run_body, glyph_run_replace_body):
         for raw_store in (
             "_RTAPT-LD-COL @ _RTAPT-LD-COPY @ _RTAPT-LD.X !",
@@ -1046,7 +1055,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     # session record, so neither word overlaps it separately.
     queried = storage_disjoint + _definition(source, "_RTAPT-LAYOUT-PROOF?")
     assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 1
-    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", queried)) == 7
+    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", queried)) == 8
     assert storage_disjoint.count("MSPAN-OVERLAP?") == 5
     assert queried.count("MSPAN-OVERLAP?") == 15
     assert "PT-SESSION-SIZE\n        MSPAN-OVERLAP?" not in queried
@@ -1084,6 +1093,7 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         "SAMPLE-SLOTS": 144,
         "MIN-INTERVAL-US": 152,
         "IMAGE-FORMATS": 168,
+        "TOTAL-PATH-POINTS": 176,
     }
     for field, offset in expected_fields.items():
         definition = _definition(source, f"_RTAPT-L.{field}")
@@ -1116,9 +1126,9 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         assert f"_RTAPT-L.{field} !" in copied
     for caps_offset in (8, 16, 20, 24, 28, 32, 36, 40, 44, 48, 56):
         assert f"_RTAPT-LS-CAPS-A @ {caps_offset} +" in copied
-    for formats_offset in (8, 12, 16, 20, 24, 28, 32, 36, 40, 48):
+    for formats_offset in (8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56):
         assert f"_RTAPT-LS-FORMATS-A @ {formats_offset} +" in copied
-    assert copied.count("_RTAPT-LE64@") == 5
+    assert copied.count("_RTAPT-LE64@") == 6
 
     valid = _definition(source, "_RTAPT-LIMITS-VALID-BODY")
     for relationship in (

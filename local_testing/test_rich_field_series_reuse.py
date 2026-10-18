@@ -33,18 +33,18 @@ VARIABLE FS-REPLACEMENTS VARIABLE FS-OTHER
         if name not in self.cache:self.cache[name]=self.results(name,0)[0]
         return self.cache[name]
 
-    def setup(self):
+    def setup(self,*,kind=1,texts=(b"value",b"value"),pending=None):
         self.producer=self.allocate(bytes(self.constant("RTHP-SIZE")))
         n=131072
-        self.arena_size,=self.results("RTHP-STORAGE-BYTES",1,1,64,256,n,0,1024,0,32,8)
+        self.arena_size,=self.results("RTHP-STORAGE-BYTES",1,1,64,256,n,0,1024,0,0,32,8)
         self.arena=self.allocate(b"LEFTGUAR"+bytes(self.arena_size)+b"RIGHTGUA")+8
         fields={
             "ARENA-A":self.arena,"ARENA-U":self.arena_size,"MAX-DOCUMENTS":1,
             "MAX-RECORDS":1,"MAX-TEXT":64,"MAX-COLLECTION-NATIVE":256,
-            "MAX-COLLECTION-DESCRIPTORS":8,"MAX-COLLECTIONS":4,"MAX-CONTROLS":10,
+            "MAX-COLLECTION-DESCRIPTORS":8,"MAX-COLLECTIONS":4,"MAX-CONTROLS":5+1024//224,
             "MAX-DGRAPH-NATIVE":n,"MAX-DGRAPH-DESCRIPTORS":1,
             "MAX-INSTRUMENT-REGIONS":1,"MAX-INSTRUMENTS":n//128,
-            "MAX-SERIES":n//72,"MAX-FIELD-NATIVE":1024,"MAX-FIELDS":5,
+            "MAX-SERIES":n//72,"MAX-FIELD-NATIVE":1024,"MAX-FIELDS":1024//224,
             "MAX-COLS":32,"MAX-ROWS":8,"COLS":32,"ROWS":8,
             "OWNER":1,"OWNER-GEN":2,"REGION":7,"FIRST-OBJECT":100,
             "SOURCE-GEN":9,"SOURCE-CONTENT-EPOCH":29,"SOURCE-DRAW":12,
@@ -77,14 +77,16 @@ VARIABLE FS-REPLACEMENTS VARIABLE FS-OTHER
         self.field(self.facade,"_RTE-F.DISJOINT-XT",self.runtime.find("FS-DISJOINT").xt)
         self.field(self.facade,"_RTE-F.CONTROL-REPLACE-XT",self.runtime.find("FS-REPLACE").xt)
         self.field(self.producer,"_RTHP.FACADE",self.facade)
-        self.active=self.stage(0,first=100,region=7,series=300,draw=12,selected=0)
+        self.active=self.stage(0,first=100,region=7,series=300,draw=12,selected=0,
+                               kind=kind,fields=tuple((text,17) for text in texts))
         self.active_bytes=self.runtime.memory.read_bytes(self.active,self.bank_size)
-        self.pending=self.stage(1,first=104,region=17,series=301,draw=13,selected=1)
+        self.pending=self.stage(1,first=104,region=17,series=301,draw=13,selected=1,
+                                kind=kind,fields=pending or tuple((text,17) for text in texts))
         for name,value in {"TARGET-ACTIVE":self.active,"TARGET-PENDING":self.pending,
                            "ACTIVE-DRAW":12,"NEXT-OBJECT":104,"ATTEMPT":13}.items():
             self.field(self.producer,"_RTHP."+name,value)
 
-    def stage(self,index,*,first,region,series,draw,selected):
+    def stage(self,index,*,first,region,series,draw,selected,kind,fields):
         m=self.runtime.memory
         self.field(self.producer,"_RTHP.FIRST-OBJECT",first)
         self.field(self.producer,"_RTHP.REGION",region)
@@ -96,10 +98,11 @@ VARIABLE FS-REPLACEMENTS VARIABLE FS-OTHER
         self.field(self.producer,"_RTHP.SOURCE-TEXT-USED",0)
         self.field(self.producer,"_RTHP.CLAIMS-USED",0)
         native=bytearray();descriptors=bytearray()
-        for i in range(2):
-            body=model(state=7 if i==selected else 3)
+        for i,(text,revision) in enumerate(fields):
+            body=model(kind=kind,text=text,revision=revision,state=7 if i==selected else 3)
+            utf8=4+(len(text) if kind==3 else 0)
             descriptors.extend(struct.pack("<16Q",1,4+i,6,99,len(native),i*3,0,3,20,
-                                            i*3,0,3,20,3,len(body),4))
+                                            i*3,0,3,20,3,len(body),utf8))
             native.extend(body)
         m.write_bytes(self.get("FIELD-NATIVE-A"),native)
         m.write_bytes(self.get("FIELD-DESCRIPTORS-A"),descriptors)
@@ -124,7 +127,7 @@ VARIABLE FS-REPLACEMENTS VARIABLE FS-OTHER
         headers={"COLS":32,"ROWS":8,"DOCUMENT-COUNT":1,"OWNER":1,"GENERATION":2,
                  "REGION":region,"FIRST-OBJECT":first,"DRAW":draw,"SOURCE-GEN":draw,
                  "PHYSICAL-GEN":1,"CONTENT-EPOCH":29+draw,"GLYPH-RUN-LIMIT":256,
-                 "CONTROL-COUNT":2,"FIELD-COUNT":2,"FIELD-UTF8":8,
+                 "CONTROL-COUNT":2,"FIELD-COUNT":2,"FIELD-UTF8":self.get("FIELD-UTF8"),
                  "SOURCE-TEXT-USED":self.get("SOURCE-TEXT-USED"),
                  "GLYPH-SLOT-COUNT":1,"GLYPH-TEXT-USED":1,"INSTRUMENT-COUNT":1,
                  "INSTRUMENT-REGION-COUNT":1,"SERIES-COUNT":1,"FIRST-SERIES":series,
@@ -169,13 +172,57 @@ def test_selected_fields_reuse_full_history_through_delta_and_delayed_emit(mixed
     h.guards()
 
 
-@pytest.mark.parametrize("mutation",["revision","value","disabled","geometry"])
+def test_newer_field_content_replaces_the_field_and_keeps_history(mixed):
+    """A value published with a strictly newer revision, as a prompt's text
+    is with every key, is one CONTROL-REPLACE beside the selection change."""
+    h=mixed
+    control=h.results("_RTHP-D-CONTROL-AT",0,h.pending)[0]
+    content=h.runtime.memory.read64(control+152)
+    h.runtime.memory.write64(content+8,18)
+    h.runtime.memory.write64(content+56,8)
+    assert h.call("_RTHP-DELTA-CANDIDATE?",h.producer)
+    assert h.get("DELTA-PLAN-CONTROLS")==2 and h.get("DELTA-PLAN-GLYPHS")==0
+    assert h.call("_RTHP-D-PLAN-BIND?",h.producer)
+    assert h.results("_RTHP-EMIT-DELTA",h.producer)==(0,)
+    assert h.variable("FS-REPLACEMENTS")==2 and h.variable("FS-OTHER")==0
+    assert h.runtime.memory.read_bytes(h.active,len(h.active_bytes))==h.active_bytes
+    h.guards()
+
+
+def test_typed_text_of_another_length_replaces_the_field_and_keeps_history():
+    """Typing changes a prompt's text and its length, so the fields' text
+    total differs from the acknowledged bank's. The newer revision still
+    makes it one CONTROL-REPLACE beside the selection change."""
+    h=FieldSeriesHarness()
+    h.setup(kind=3,pending=((b"values",18),(b"value",17)))
+    totals=[h.runtime.memory.read64(bank+h.offset("_RTHP-TB.FIELD-UTF8"))
+            for bank in (h.active,h.pending)]
+    assert totals==[18,19]
+    assert h.call("_RTHP-DELTA-CANDIDATE?",h.producer)
+    assert h.get("DELTA-PLAN-CONTROLS")==2 and h.get("DELTA-PLAN-GLYPHS")==0
+    assert h.call("_RTHP-D-PLAN-BIND?",h.producer)
+    assert h.results("_RTHP-EMIT-DELTA",h.producer)==(0,)
+    assert h.variable("FS-REPLACEMENTS")==2 and h.variable("FS-OTHER")==0
+    assert h.runtime.memory.read_bytes(h.active,len(h.active_bytes))==h.active_bytes
+    h.guards()
+
+
+def test_typed_text_without_a_newer_revision_still_refuses():
+    h=FieldSeriesHarness()
+    h.setup(kind=3,pending=((b"values",17),(b"value",17)))
+    assert not h.call("_RTHP-DELTA-CANDIDATE?",h.producer)
+    h.guards()
+
+
+@pytest.mark.parametrize("mutation",["value","stale","disabled","geometry"])
 def test_field_payload_or_nonselection_changes_still_refuse_history_delta(mixed,mutation):
     h=mixed
     control=h.results("_RTHP-D-CONTROL-AT",0,h.pending)[0]
     content=h.runtime.memory.read64(control+152)
-    if mutation=="revision":h.runtime.memory.write64(content+8,18)
-    elif mutation=="value":h.runtime.memory.write64(content+56,8)
+    if mutation=="value":h.runtime.memory.write64(content+56,8)
+    elif mutation=="stale":
+        h.runtime.memory.write64(content+8,16)
+        h.runtime.memory.write64(content+56,8)
     elif mutation=="disabled":h.runtime.memory.write64(control+32,1)
     else:h.runtime.memory.write64(control+80,1)
     before=h.runtime.memory.read_bytes(h.pending,h.bank_size)
@@ -204,9 +251,9 @@ def test_native_pt_host_field_selection_delta_emits_no_history_operations():
         ).replace(b"CF-LEDGER RTAPT-CONTROL-LEDGER-SIZE\n",
                   b"CF-LEDGER RTAPT-CONTROL-LEDGER-SIZE 2 *\n")
 
-    with patch.object(cf,"_fixture_source",side_effect=fixture), patch.object(
-            series,"FEATURES",series.FEATURES|RetainedFeature.CONTROLS|RetainedFeature.FIELDS):
-        h=series.SeriesProvider("native")
+    with patch.object(cf,"_fixture_source",side_effect=fixture):
+        h=series.SeriesProvider(
+            "native",features=series.FEATURES|RetainedFeature.CONTROLS|RetainedFeature.FIELDS)
     try:
         h.begin()
         values=tuple(i-8000 for i in range(16000))

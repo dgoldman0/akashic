@@ -291,3 +291,67 @@ _GP-CHECKS @ . _GP-FAILS @ . CR
         output, runtime.main_context.data.snapshot())
     assert runtime.main_context.data.snapshot() == ()
     assert runtime.main_context.returns.snapshot() == ()
+
+
+def test_grid_formula_bar_is_a_read_only_text_field() -> None:
+    """The selected cell's name, and its source as a display shows it, in
+    one read-only TEXT field across the panel's first row."""
+    runtime = _grid_runtime()
+    runtime.drain_uart_output()
+    runtime.evaluate('''
+VARIABLE _GF-FAILS VARIABLE _GF-CHECKS VARIABLE _GF-CELL VARIABLE _GF-REV
+: _GF-ASSERT
+    1 _GF-CHECKS +! 0= IF
+        1 _GF-FAILS +! ." GRID FBAR ASSERT " _GF-CHECKS @ . CR
+    THEN ;
+: _GF-CP ( row col -- cp ) SCR-GET CELL-CP@ ;
+: _GF-M ( -- model ) _GRID-FBAR-WIDGET @ FLD-MODEL@ DROP ;
+: _GF-SOURCE! ( byte index -- ) _GF-CELL @ _GC-SOURCE + + C! ;
+_GRID-STATE-SIZE ALLOCATE DROP DUP _GRID-CURRENT-STATE !
+_GRID-STATE-SIZE 0 FILL
+240 84 SCR-NEW SCR-USE
+_GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * ALLOCATE DROP
+DUP _GRID-CELLS ! _GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * 0 FILL
+3 0 20 40 RGN-NEW _GRID-PANEL-INIT
+_GRID-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _GRID-FBAR-RGN !
+FLD-NEW _GRID-FBAR-WIDGET ! 253 236 0 _GRID-FBAR-WIDGET @ FLD-STYLE!
+-1 _GRID-FBAR-DIRTY !
+\\ B2 holds =A1, a TAB and 7.
+1 1 _GRID-CELL _GF-CELL !
+61 0 _GF-SOURCE! 65 1 _GF-SOURCE! 49 2 _GF-SOURCE! 9 3 _GF-SOURCE! 55 4 _GF-SOURCE!
+5 _GF-CELL @ _GC-LEN + !
+1 _GRID-SEL-ROW ! 1 _GRID-SEL-COL !
+_GRID-PANEL WDG-DRAW
+_GRID-FBAR-WIDGET @ FLD-MODEL@ NIP 0<> _GF-ASSERT
+_GF-M UFLD-KIND@ UFLD-K-TEXT = _GF-ASSERT
+_GF-M UFLD-FLAGS@ UFLD-F-READ-ONLY = _GF-ASSERT
+_GF-M UFLD-STATE@ UFLD-STATE-VISIBLE UFLD-STATE-ENABLED OR = _GF-ASSERT
+_GF-M UFLD-WIDTH@ 40 = _GF-ASSERT
+_GF-M UFLD-LABEL@ S" B2" COMPARE 0= _GF-ASSERT
+_GF-M UFLD-TEXT@ S" =A1�7" COMPARE 0= _GF-ASSERT
+_GF-M UFLD-VALUE-COLUMN@ 8 = _GF-ASSERT _GF-M UFLD-VALUE-WIDTH@ 31 = _GF-ASSERT
+\\ CELL draws the name from column 1 and the source from column 8.
+3 1 _GF-CP 66 = _GF-ASSERT 3 2 _GF-CP 50 = _GF-ASSERT
+3 8 _GF-CP 61 = _GF-ASSERT 3 11 _GF-CP 0xFFFD = _GF-ASSERT 3 12 _GF-CP 55 = _GF-ASSERT
+\\ Another draw keeps the model; a move binds the next cell in a new
+\\ revision.
+_GF-M UFLD-REVISION@ _GF-REV ! _GRID-PANEL WDG-DRAW
+_GF-M UFLD-REVISION@ _GF-REV @ = _GF-ASSERT
+1 0 _GRID-MOVE _GRID-PANEL WDG-DRAW
+_GF-M UFLD-REVISION@ _GF-REV @ > _GF-ASSERT
+_GF-M UFLD-LABEL@ S" B3" COMPARE 0= _GF-ASSERT _GF-M UFLD-TEXT-BYTES@ 0= _GF-ASSERT
+\\ Read-only, it takes no activation or adjustment.
+_GRID-FBAR-WIDGET @ FLD-ACTIVATE 0= _GF-ASSERT
+1 _GRID-FBAR-WIDGET @ FLD-ADJUST 0= _GF-ASSERT
+\\ A panel with no room for one cell of source shows no bar.
+3 0 20 9 _GRID-PANEL-RGN @ RGN-BOUNDS! _GRID-PANEL WDG-DRAW
+_GRID-FBAR-WIDGET @ FLD-MODEL@ NIP 0= _GF-ASSERT
+DEPTH 0= _GF-ASSERT
+_GF-FAILS @ 0= IF ." GRID FBAR PASS " ELSE ." GRID FBAR FAIL " THEN
+_GF-CHECKS @ . _GF-FAILS @ . CR
+'''.encode(), source_name="grid-formula-bar-checks", step_budget=60_000_000)
+    output = runtime.drain_uart_output().decode(errors="replace")
+    assert re.search(r"GRID FBAR PASS\s+22\s+0", output), (
+        output, runtime.main_context.data.snapshot())
+    assert runtime.main_context.data.snapshot() == ()
+    assert runtime.main_context.returns.snapshot() == ()

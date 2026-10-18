@@ -20,11 +20,14 @@ class GrowthHarness:
         self.definitions = _definitions(
             PRODUCER.read_text() if producer_source is None else producer_source
         )
-        for relative in ("residual-glyph-planner.f", "uidl-hybrid-adapter.f"):
+        # A DELTA reads a field's FDC1 tag and revision with field-content.f's
+        # constants, and a dialog's DLG1 tag with dlg1.f's.
+        for relative in ("residual-glyph-planner.f", "uidl-hybrid-adapter.f",
+                         "../field-content.f", "dlg1.f"):
             source = (PRODUCER.parent / relative).read_text()
             for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;\s*$", source):
                 self.definitions[match[1]] = match[0]
-            for match in re.finditer(r"(?m)^\s*(\d+)\s+CONSTANT\s+(\S+)", source):
+            for match in re.finditer(r"(?m)^\s*(0x[0-9A-Fa-f]+|\d+)\s+CONSTANT\s+(\S+)", source):
                 self.definitions[match[2]] = match[0]
         self.definitions.update(NO_EXTENSION_SEAM)
         chunks, seen = [], set()

@@ -46,6 +46,12 @@
 \    ASHELL-REGION    ( -- rgn )       Root region
 \    ASHELL-TICK-MS!  ( ms -- )        Set tick interval (default 50)
 \    ASHELL-POST      ( xt -- )        Enqueue deferred action
+\    ASHELL-NOTICE    ( addr u ms severity -- )  Show a notice
+\    ASHELL-TOAST     ( addr u ms -- ) Show a neutral notice
+\    ASHELL-TOAST-WARNING / ASHELL-TOAST-ERROR ( addr u ms -- )
+\                                      Show a warning or a failure
+\    ASHELL-NOTICE-CAPTURE ( dst cap -- bytes status )  The notice a
+\                                      paint shows, as a UDLG model
 \    ASHELL-UIDL?     ( -- flag )      Is a UIDL document loaded?
 \    ASHELL-DESC      ( -- desc )      Current app descriptor
 \    ASHELL-ACTIVE-CTX ( -- uctx )     Active child UIDL context
@@ -79,8 +85,11 @@ REQUIRE screen.f
 REQUIRE region.f
 REQUIRE draw.f
 REQUIRE ../text/cell-width.f
+REQUIRE ../text/grapheme.f
+REQUIRE ../text/bidi.f
 REQUIRE focus.f
 REQUIRE uidl-tui.f
+REQUIRE dialog-model.f
 REQUIRE ../utils/term.f
 REQUIRE app-desc.f
 REQUIRE ../utils/fs/vfs.f
@@ -146,6 +155,14 @@ VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
     DUP ?DUP IF UCTX-RESTORE THEN
     _ASHELL-ACTIVE-CTX ! ;
 
+\ _ASHELL-OWN-UIDL? ( -- flag )
+\   The UIDL globals are the shell application's own: no child context is
+\   restored over them.  A child's context stays current after the child
+\   paints or is captured, so its dialog is then in the globals; that
+\   dialog is its host's to run, and the shell must not take it as its own
+\   application's.
+: _ASHELL-OWN-UIDL?  ( -- flag )  _ASHELL-ACTIVE-CTX @ 0= ;
+
 \ ASHELL-CTX-SAVE ( uctx -- )
 \   Force-save the current globals into uctx.  Used when a sub-app
 \   event handler has mutated state and the caller wants to persist
@@ -178,7 +195,9 @@ VARIABLE _ASPC-INVALIDATE
     THEN
     _ASPC-DESC @ APP.PAINT-XT @ ?DUP IF
         _ASPC-INST @ SWAP EXECUTE
-    THEN ;
+    THEN
+    \ A dialog the child shows is its context's, over everything it paints.
+    _ASPC-HAS-UIDL @ IF DLG-HOST-PAINT THEN ;
 
 : _ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance invalidate? -- )
     _ASPC-INVALIDATE !
@@ -362,16 +381,64 @@ VARIABLE _ASHELL-TICK-MS      \ Tick interval in milliseconds
 VARIABLE _ASHELL-LAST-TICK    \ MS@ snapshot of last tick
 0 _ASHELL-LAST-TICK !
 
-\ --- Toast state ---
-CREATE _ASHELL-TOAST-MSG  2 CELLS ALLOT   \ addr + len
+\ --- Notice state ---
+\  The notice ASHELL-NOTICE raised last: its text, copied into a buffer
+\  the shell owns and grows when a longer one is raised, its severity,
+\  its serial number, how long it lasts and, once a paint has shown it,
+\  when it ends.
+CREATE _ASHELL-TOAST-MSG  2 CELLS ALLOT   \ addr + len of the owned copy
 0 _ASHELL-TOAST-MSG !
 0 _ASHELL-TOAST-MSG CELL+ !
 
-VARIABLE _ASHELL-TOAST-EXPIRY             \ MS@ deadline
+VARIABLE _ASHELL-TOAST-EXPIRY             \ MS@ deadline, once armed
 0 _ASHELL-TOAST-EXPIRY !
+
+VARIABLE _ASHELL-TOAST-MS                 \ its duration in milliseconds
+0 _ASHELL-TOAST-MS !
+
+VARIABLE _ASHELL-TOAST-ARMED              \ a paint has shown it: it ends
+0 _ASHELL-TOAST-ARMED !
 
 VARIABLE _ASHELL-TOAST-WAS-VIS            \ was-visible flag
 0 _ASHELL-TOAST-WAS-VIS !
+
+VARIABLE _ASHELL-TOAST-BUF                \ the owned text, or 0
+0 _ASHELL-TOAST-BUF !
+VARIABLE _ASHELL-TOAST-CAP                \ its buffer's bytes
+0 _ASHELL-TOAST-CAP !
+VARIABLE _ASHELL-TOAST-SEVERITY
+0 _ASHELL-TOAST-SEVERITY !
+VARIABLE _ASHELL-TOAST-SERIAL             \ one more for each notice raised
+0 _ASHELL-TOAST-SERIAL !
+
+\  The notice a paint shows, decided once as the paint begins: its text as
+\  it fits the screen, copied into a second owned buffer, so a notice
+\  raised while the paint runs shows from the next paint and never changes
+\  what this one draws or publishes.
+VARIABLE _ASHELL-TOAST-SHOWN              \ the last paint showed a notice
+0 _ASHELL-TOAST-SHOWN !
+VARIABLE _ASHELL-SHOWN-BUF                \ the text it shows, or 0
+0 _ASHELL-SHOWN-BUF !
+VARIABLE _ASHELL-SHOWN-CAP                \ its buffer's bytes
+0 _ASHELL-SHOWN-CAP !
+VARIABLE _ASHELL-SHOWN-U                  \ the text's bytes
+0 _ASHELL-SHOWN-U !
+VARIABLE _ASHELL-SHOWN-CELLS              \ and cells
+0 _ASHELL-SHOWN-CELLS !
+VARIABLE _ASHELL-SHOWN-SERIAL             \ the notice laid out
+0 _ASHELL-SHOWN-SERIAL !
+VARIABLE _ASHELL-SHOWN-SEVERITY
+0 _ASHELL-SHOWN-SEVERITY !
+VARIABLE _ASHELL-SHOWN-REVISION           \ one more for each layout
+0 _ASHELL-SHOWN-REVISION !
+VARIABLE _ASHELL-SHOWN-SW                 \ the screen width laid out for
+0 _ASHELL-SHOWN-SW !
+VARIABLE _ASHELL-SHOWN-ROW                \ where the notice's bar lies
+0 _ASHELL-SHOWN-ROW !
+VARIABLE _ASHELL-SHOWN-COL
+0 _ASHELL-SHOWN-COL !
+VARIABLE _ASHELL-SHOWN-W
+0 _ASHELL-SHOWN-W !
 
 \ --- Shell cursor state ---
 \  A keyboard-driven pointer activated by Alt+Arrow.
@@ -685,53 +752,258 @@ VARIABLE _ALUF-TOTAL
     THEN ;
 
 \ ASHELL-TOAST-VISIBLE? ( -- flag )
-\   True if toast message is currently showing.
+\   True while the notice raised last has not ended.  A notice no output
+\   has shown yet has not begun to end: its time counts from when the first
+\   output that shows it has gone out, so output that comes late, after a
+\   late paint or a slow frame, still shows it.
 : ASHELL-TOAST-VISIBLE?  ( -- flag )
     \ Avoid an eight-byte RTC read on every event-loop and paint pass
-    \ when no toast is active.  _ASHELL-TOAST-WAS-VIS is set together
-    \ with the deadline by ASHELL-TOAST and cleared by the expiry path.
+    \ when no toast is active.  _ASHELL-TOAST-WAS-VIS is set by
+    \ ASHELL-NOTICE and cleared by the expiry path.
     _ASHELL-TOAST-WAS-VIS @ 0= IF 0 EXIT THEN
+    _ASHELL-TOAST-ARMED @ 0= IF -1 EXIT THEN
     _ASHELL-TOAST-EXPIRY @ MS@ > ;
 
+\ Have UIDL repaint the cells the notice on screen covers.
 : _ASHELL-DIRTY-TOAST-RECT  ( -- )
     _ASHELL-HAS-UIDL @ 0= IF EXIT THEN
-    _ASHELL-TOAST-MSG 2@ CW-SWIDTH 4 + >R
-    SCR-H 1-
-    SCR-W R@ - 2 /
-    1 R>
+    _ASHELL-TOAST-SHOWN @ 0= IF EXIT THEN
+    _ASHELL-SHOWN-ROW @ _ASHELL-SHOWN-COL @ 1 _ASHELL-SHOWN-W @
     _UTUI-DIRTY-RECT-D ;
 
-\ ASHELL-TOAST ( addr u ms -- )
-\   Show a toast message for ms milliseconds.
-: ASHELL-TOAST  ( addr u ms -- )
-    _ASHELL-TOAST-WAS-VIS @ IF _ASHELL-DIRTY-TOAST-RECT THEN
-    MS@ + _ASHELL-TOAST-EXPIRY !
-    _ASHELL-TOAST-MSG 2!
+\ Severities a notice carries, a status field's: neutral, info, success,
+\ warning and error.
+0 CONSTANT ASHELL-SEVERITY-NEUTRAL
+1 CONSTANT ASHELL-SEVERITY-INFO
+2 CONSTANT ASHELL-SEVERITY-SUCCESS
+3 CONSTANT ASHELL-SEVERITY-WARNING
+4 CONSTANT ASHELL-SEVERITY-ERROR
+
+\ _ASHELL-ROOM ( bytes cap-var buf-var -- ok? )
+\   Grow the owned buffer BUF-VAR holds, of CAP-VAR's bytes, to hold
+\   BYTES: to twice its size, or to BYTES when that is more.  What it held
+\   is not kept.
+: _ASHELL-ROOM  ( bytes cap-var buf-var -- ok? )
+    >R OVER OVER @ U> 0= IF 2DROP R> DROP TRUE EXIT THEN
+    DUP @ 2* ROT MAX
+    DUP ALLOCATE IF 2DROP DROP R> DROP FALSE EXIT THEN
+    R@ @ ?DUP IF FREE THEN
+    R> ! SWAP ! TRUE ;
+
+\ ASHELL-NOTICE ( addr u ms severity -- )
+\   Show a notice for MS milliseconds from the first paint that shows it:
+\   the text, with its meaning.  The shell keeps its own copy of the text,
+\   so the caller may reuse its buffer.  A severity the shell does not
+\   know is neutral.  With no memory for the copy, the notice is not shown.
+VARIABLE _ASHELL-NT-MS
+VARIABLE _ASHELL-NT-SEVERITY
+: ASHELL-NOTICE  ( addr u ms severity -- )
+    DUP ASHELL-SEVERITY-ERROR U> IF DROP ASHELL-SEVERITY-NEUTRAL THEN
+    _ASHELL-NT-SEVERITY ! _ASHELL-NT-MS !
+    DUP _ASHELL-TOAST-CAP _ASHELL-TOAST-BUF _ASHELL-ROOM 0= IF 2DROP EXIT THEN
+    _ASHELL-DIRTY-TOAST-RECT
+    _ASHELL-TOAST-BUF @ SWAP DUP >R MOVE
+    _ASHELL-TOAST-BUF @ R> _ASHELL-TOAST-MSG 2!
+    _ASHELL-NT-SEVERITY @ _ASHELL-TOAST-SEVERITY !
+    1 _ASHELL-TOAST-SERIAL +!
+    _ASHELL-NT-MS @ _ASHELL-TOAST-MS ! 0 _ASHELL-TOAST-ARMED !
     -1 _ASHELL-TOAST-WAS-VIS !
     ASHELL-DIRTY! ;
 
+\ ASHELL-TOAST ( addr u ms -- )   A neutral notice.
+: ASHELL-TOAST  ( addr u ms -- )
+    ASHELL-SEVERITY-NEUTRAL ASHELL-NOTICE ;
+\ ASHELL-TOAST-WARNING ( addr u ms -- )   A notice that warns.
+: ASHELL-TOAST-WARNING  ( addr u ms -- )
+    ASHELL-SEVERITY-WARNING ASHELL-NOTICE ;
+\ ASHELL-TOAST-ERROR ( addr u ms -- )   A notice that something failed.
+: ASHELL-TOAST-ERROR  ( addr u ms -- )
+    ASHELL-SEVERITY-ERROR ASHELL-NOTICE ;
+
+\ _ASHELL-TOAST-FIT ( a u limit -- bytes cells whole? )
+\   The leading characters of the text that fit LIMIT cells: all of them,
+\   or else those that leave a cell for an ellipsis.
+CREATE _ASHELL-FIT-CURSOR GR-CURSOR-SIZE ALLOT
+VARIABLE _ASHELL-FIT-A
+VARIABLE _ASHELL-FIT-U
+VARIABLE _ASHELL-FIT-LIMIT
+VARIABLE _ASHELL-FIT-CELLS
+VARIABLE _ASHELL-FIT-U1
+VARIABLE _ASHELL-FIT-C1
+: _ASHELL-TOAST-FIT  ( a u limit -- bytes cells whole? )
+    _ASHELL-FIT-LIMIT ! 2DUP _ASHELL-FIT-U ! _ASHELL-FIT-A !
+    0 _ASHELL-FIT-CELLS ! 0 _ASHELL-FIT-U1 ! 0 _ASHELL-FIT-C1 !
+    0 _ASHELL-FIT-CURSOR GR-CURSOR-INIT
+    BEGIN _ASHELL-FIT-CURSOR GR-NEXT WHILE
+        _ASHELL-FIT-CELLS @ _ASHELL-FIT-CURSOR GR-C-WIDTH +
+        DUP _ASHELL-FIT-LIMIT @ > IF
+            DROP _ASHELL-FIT-U1 @ _ASHELL-FIT-C1 @ FALSE EXIT
+        THEN
+        DUP _ASHELL-FIT-CELLS !
+        _ASHELL-FIT-LIMIT @ < IF
+            _ASHELL-FIT-CURSOR GR-C-ADDR _ASHELL-FIT-CURSOR GR-C-BYTES +
+                _ASHELL-FIT-A @ - _ASHELL-FIT-U1 !
+            _ASHELL-FIT-CELLS @ _ASHELL-FIT-C1 !
+        THEN
+    REPEAT
+    _ASHELL-FIT-U @ _ASHELL-FIT-CELLS @ TRUE ;
+
+\ _ASHELL-TOAST-LAYOUT ( -- ok? )
+\   Lay out the notice raised last for the screen's width: the text that
+\   fits four cells less than the screen, ending in an ellipsis when cut,
+\   in the shown buffer, and a bar four cells wider than it.
+VARIABLE _ASHELL-LAY-WHOLE
+: _ASHELL-TOAST-LAYOUT  ( -- ok? )
+    _ASHELL-TOAST-MSG 2@ SCR-W 4 - _ASHELL-TOAST-FIT
+    _ASHELL-LAY-WHOLE ! _ASHELL-SHOWN-CELLS ! _ASHELL-SHOWN-U !
+    _ASHELL-SHOWN-U @ 3 + _ASHELL-SHOWN-CAP _ASHELL-SHOWN-BUF _ASHELL-ROOM
+        0= IF FALSE EXIT THEN
+    _ASHELL-TOAST-MSG 2@ DROP _ASHELL-SHOWN-BUF @ _ASHELL-SHOWN-U @ MOVE
+    _ASHELL-LAY-WHOLE @ 0= IF
+        \ U+2026 HORIZONTAL ELLIPSIS
+        _ASHELL-SHOWN-BUF @ _ASHELL-SHOWN-U @ +
+        0xE2 OVER C!  0x80 OVER 1+ C!  0xA6 SWAP 2 + C!
+        3 _ASHELL-SHOWN-U +!  1 _ASHELL-SHOWN-CELLS +!
+    THEN
+    _ASHELL-SHOWN-CELLS @ 4 + _ASHELL-SHOWN-W !
+    _ASHELL-TOAST-SERIAL @ _ASHELL-SHOWN-SERIAL !
+    _ASHELL-TOAST-SEVERITY @ _ASHELL-SHOWN-SEVERITY !
+    SCR-W _ASHELL-SHOWN-SW !
+    1 _ASHELL-SHOWN-REVISION +! TRUE ;
+
+\ _ASHELL-TOAST-HIDE ( -- )
+\   Show no notice: have its cells repainted, and give back the text the
+\   paint showed, and the notice's own once it has ended.  A notice holds
+\   memory only while it lasts.
+: _ASHELL-TOAST-HIDE  ( -- )
+    _ASHELL-DIRTY-TOAST-RECT
+    0 _ASHELL-TOAST-SHOWN !
+    _ASHELL-SHOWN-BUF @ ?DUP IF FREE THEN
+    0 _ASHELL-SHOWN-BUF ! 0 _ASHELL-SHOWN-CAP !
+    ASHELL-TOAST-VISIBLE? IF EXIT THEN
+    _ASHELL-TOAST-BUF @ ?DUP IF FREE THEN
+    0 _ASHELL-TOAST-BUF ! 0 _ASHELL-TOAST-CAP !
+    0 0 _ASHELL-TOAST-MSG 2! ;
+
+\ _ASHELL-TOAST-ARM ( -- )
+\   The first output that shows the notice raised last starts its time once
+\   it has gone out.
+: _ASHELL-TOAST-ARM  ( -- )
+    _ASHELL-TOAST-ARMED @ IF EXIT THEN
+    MS@ _ASHELL-TOAST-MS @ + _ASHELL-TOAST-EXPIRY !
+    -1 _ASHELL-TOAST-ARMED ! ;
+
+\ _ASHELL-TOAST-LATCH ( -- )
+\   Decide the notice this paint shows: the one raised last while it has
+\   not ended, centred on the bottom row.  Its layout is kept while the
+\   notice and the screen's width stay the same.  A screen too narrow for
+\   a bar's four cells of padding and one of text shows none.
+: _ASHELL-TOAST-LATCH  ( -- )
+    ASHELL-TOAST-VISIBLE? SCR-W 5 < 0= AND SCR-H 0> AND 0= IF
+        _ASHELL-TOAST-HIDE EXIT
+    THEN
+    _ASHELL-TOAST-SHOWN @
+    _ASHELL-SHOWN-SERIAL @ _ASHELL-TOAST-SERIAL @ = AND
+    _ASHELL-SHOWN-SW @ SCR-W = AND 0= IF
+        _ASHELL-TOAST-LAYOUT 0= IF _ASHELL-TOAST-HIDE EXIT THEN
+    THEN
+    SCR-H 1- _ASHELL-SHOWN-ROW !
+    SCR-W _ASHELL-SHOWN-W @ - 2/ _ASHELL-SHOWN-COL !
+    -1 _ASHELL-TOAST-SHOWN ! ;
+
+\ _ASHELL-NOTICE-STYLE ( severity -- )
+\   The bar's colours: grey when neutral, then blue, green, amber and red
+\   from info to error.
+: _ASHELL-NOTICE-STYLE  ( severity -- )
+    CASE
+        ASHELL-SEVERITY-INFO    OF 255  24 0 ENDOF
+        ASHELL-SEVERITY-SUCCESS OF 255  28 0 ENDOF
+        ASHELL-SEVERITY-WARNING OF  16 214 0 ENDOF
+        ASHELL-SEVERITY-ERROR   OF 255 124 1 ENDOF
+        >R 253 236 0 R>
+    ENDCASE DRW-STYLE! ;
+
 \ _ASHELL-DRAW-TOAST ( -- )
-\   Render toast overlay centred on bottom row.
+\   Draw the notice the paint shows: its bar in its severity's colours,
+\   and its text as untrusted text, two cells in.
 : _ASHELL-DRAW-TOAST-BODY  ( -- )
     RGN-ROOT
-    253 DRW-FG!  236 DRW-BG!  0 DRW-ATTR!
-    _ASHELL-TOAST-MSG 2@               ( a u )
-    2DUP CW-SWIDTH 4 +                 ( a u tw )
-    \ Fill background bar:  ( cp row col h w -- )
-    32
-    SCR-H 1-
-    SCR-W 3 PICK - 2/                 ( a u tw 32 row col )
-    1  4 PICK
-    DRW-FILL-RECT                      ( a u tw )
-    \ Centre text:  ( addr len row col w -- )
-    SCR-H 1-
-    SCR-W 2 PICK - 2/                 ( a u tw row col )
-    ROT                                ( a u row col tw )
-    DRW-TEXT-CENTER
+    _ASHELL-SHOWN-SEVERITY @ _ASHELL-NOTICE-STYLE
+    32 _ASHELL-SHOWN-ROW @ _ASHELL-SHOWN-COL @ 1 _ASHELL-SHOWN-W @
+        DRW-FILL-RECT
+    _ASHELL-SHOWN-BUF @ _ASHELL-SHOWN-U @
+        _ASHELL-SHOWN-ROW @ _ASHELL-SHOWN-COL @ 2 + DRW-TEXT-UNTRUSTED
     DRW-STYLE-RESET ;
 
 : _ASHELL-DRAW-TOAST  ( -- )
     ['] _ASHELL-DRAW-TOAST-BODY DRW-OVERLAY ;
+
+\ _ASHELL-ON-NOTICE? ( ev -- flag )
+\   A press or a wheel turn on the notice the screen shows lands on the
+\   notice, which takes none, as it does where a renderer shows the notice
+\   in a region of its own.  A gesture begun elsewhere goes on: drags,
+\   releases and the positions a renderer names still reach their targets.
+: _ASHELL-ON-NOTICE?  ( ev -- flag )
+    _ASHELL-TOAST-SHOWN @ 0= IF DROP 0 EXIT THEN
+    DUP 8 + @ KEY-MOUSE-BUTTON
+    DUP KEY-MOUSE-RIGHT U> OVER KEY-MOUSE-SCROLL-UP <> AND
+        SWAP KEY-MOUSE-SCROLL-DN <> AND IF DROP 0 EXIT THEN
+    16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND
+    SWAP _ASHELL-SHOWN-ROW @ <> IF DROP 0 EXIT THEN
+    _ASHELL-SHOWN-COL @ - _ASHELL-SHOWN-W @ U< ;
+
+\ ASHELL-NOTICE-SHOWN? ( -- flag )
+\   Whether the paint shows a notice.
+: ASHELL-NOTICE-SHOWN?  ( -- flag )  _ASHELL-TOAST-SHOWN @ 0<> ;
+
+\ ASHELL-NOTICE-ROOT ( -- row col height width )
+\   The cells the paint's notice lies in; all zero when it shows none.
+: ASHELL-NOTICE-ROOT  ( -- row col height width )
+    _ASHELL-TOAST-SHOWN @ 0= IF 0 0 0 0 EXIT THEN
+    _ASHELL-SHOWN-ROW @ _ASHELL-SHOWN-COL @ 1 _ASHELL-SHOWN-W @ ;
+
+\ ASHELL-NOTICE-CAPTURE ( dst cap -- bytes status )
+\   Write the notice the paint shows as a UDLG model at DST, an aligned
+\   span apart from the shell's storage: a notice of the severity it was
+\   raised with, keyed by its serial number, one row high, its text on
+\   that row two cells in.  The text's direction controls go out as inert
+\   stand-ins, as the paint ignored them.  With DST 0 and CAP 0 only
+\   measure it.  UNSUPPORTED when the paint shows no notice or its text is
+\   not clean single-line text, which then stays painted.
+VARIABLE _ASHELL-NC-DST
+: ASHELL-NOTICE-CAPTURE  ( dst cap -- bytes status )
+    _ASHELL-TOAST-SHOWN @ 0= IF 2DROP 0 UDLG-S-UNSUPPORTED EXIT THEN
+    _ASHELL-SHOWN-U @ IF
+        _ASHELL-SHOWN-BUF @ _ASHELL-SHOWN-U @ USF-TEXT?
+        _ASHELL-SHOWN-CELLS @ 0> AND 0= IF 2DROP 0 UDLG-S-UNSUPPORTED EXIT THEN
+    THEN
+    0 _ASHELL-SHOWN-U @ UDLG-TEXT-BYTES >R
+    OVER 0= OVER 0= AND IF 2DROP R> UDLG-S-OK EXIT THEN
+    R@ U< IF DROP R> UDLG-S-CAPACITY EXIT THEN
+    DUP 7 AND IF DROP R> UDLG-S-INVALID EXIT THEN
+    DUP R@ UDLG-STORAGE-DISJOINT? 0= IF DROP R> UDLG-S-INVALID EXIT THEN
+    DUP R@ _ASHELL-SHOWN-BUF @ _ASHELL-SHOWN-CAP @ MSPAN-OVERLAP? IF
+        DROP R> UDLG-S-INVALID EXIT
+    THEN
+    _ASHELL-NC-DST !
+    _ASHELL-SHOWN-SERIAL @ _ASHELL-SHOWN-REVISION @ _ASHELL-SHOWN-W @ 1
+        UDLG-F-NOTICE _ASHELL-SHOWN-SEVERITY @ _ASHELL-NC-DST @ UDLG-START
+    _ASHELL-SHOWN-U @ IF
+        0 2 1 _ASHELL-SHOWN-CELLS @ _ASHELL-NC-DST @ UDLG-MESSAGE-SLOT!
+        _ASHELL-SHOWN-BUF @ _ASHELL-SHOWN-U @ _ASHELL-NC-DST @ UDLG-LINE+
+        _ASHELL-NC-DST @ UDLG-MESSAGE@ BIDI-INERT
+    THEN
+    R> UDLG-S-OK ;
+
+\ _ASHELL-TOAST-FREE ( -- )
+\   Give back both text buffers and show no notice.
+: _ASHELL-TOAST-FREE  ( -- )
+    _ASHELL-TOAST-BUF @ ?DUP IF FREE THEN
+    _ASHELL-SHOWN-BUF @ ?DUP IF FREE THEN
+    0 _ASHELL-TOAST-BUF ! 0 _ASHELL-TOAST-CAP !
+    0 _ASHELL-SHOWN-BUF ! 0 _ASHELL-SHOWN-CAP !
+    0 0 _ASHELL-TOAST-MSG 2!
+    0 _ASHELL-TOAST-WAS-VIS ! 0 _ASHELL-TOAST-SHOWN ! ;
 
 \ =====================================================================
 \  §5 — Key Event Buffer
@@ -902,12 +1174,14 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
         ASHELL-DIRTY!
     THEN
     _ASHELL-ACTIVATE
-    \ 1. App's event handler gets first crack
+    \ 1. A dialog the app shows takes all its input
+    _ASHELL-OWN-UIDL? IF DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN THEN
+    \ 2. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
         OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
         IF DROP ASHELL-DIRTY! EXIT THEN
     THEN
-    \ 2. UIDL dispatch (shortcuts, focused element)
+    \ 3. UIDL dispatch (shortcuts, focused element)
     _ASHELL-HAS-UIDL @ IF
         DUP UTUI-DISPATCH-KEY        ( ev consumed? )
         IF ASHELL-DIRTY! THEN
@@ -918,13 +1192,17 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 \   Route a mouse event through the app's handler, then UIDL dispatch.
 \   ev layout: +0=KEY-T-MOUSE, +8=btn, +16=row<<16|col
 : _ASHELL-DISPATCH-MOUSE-IMPL  ( ev -- )
+    \ 0. The notice on screen takes a press on it
+    DUP _ASHELL-ON-NOTICE? IF DROP EXIT THEN
     _ASHELL-ACTIVATE
-    \ 1. App's event handler gets first crack
+    \ 1. A dialog the app shows takes all its input
+    _ASHELL-OWN-UIDL? IF DUP DLG-HOST-EVENT IF DROP ASHELL-DIRTY! EXIT THEN THEN
+    \ 2. App's event handler gets first crack
     _ASHELL-DESC @ APP.EVENT-XT @ ?DUP IF
         OVER _ASHELL-INST @ ROT EXECUTE  ( ev consumed? )
         IF DROP ASHELL-DIRTY! EXIT THEN
     THEN
-    \ 2. UIDL mouse dispatch
+    \ 3. UIDL mouse dispatch
     _ASHELL-HAS-UIDL @ IF
         DUP 16 + @ DUP 16 RSHIFT SWAP 0xFFFF AND   ( ev row col )
         2 PICK 8 + @                                 ( ev row col btn )
@@ -1003,14 +1281,12 @@ VARIABLE _ASHELL-TICK-TMP
 
 \ Terminal-free observation of the complete ordinary root paint transaction.
 \ BEGIN precedes every write. COMPLETE follows the final toast/cursor and
-\ SCR-DRAW-COMPLETE, and is absent when app paint throws. MODAL invalidates
-\ a staged or completed root before a dialog publishes its separate frame.
+\ SCR-DRAW-COMPLETE, and is absent when app paint throws.
 \ Observers borrow (phase root-instance context), return no values, and may
 \ not change shell state. Their exceptions remain diagnostic and do not
 \ interrupt ordinary CELL publication. The installer owns callback lifetime.
 0 CONSTANT ASHELL-DRAW-BEGIN
 1 CONSTANT ASHELL-DRAW-COMPLETE
-2 CONSTANT ASHELL-DRAW-MODAL
 VARIABLE _ASHELL-DRAW-OBSERVER
 VARIABLE _ASHELL-DRAW-OBSERVER-CTX
 VARIABLE _ASHELL-DRAW-PHASE
@@ -1036,32 +1312,6 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
     THEN ;
 : ASHELL-DRAW-OBSERVER-IOR@ ( -- ior ) _ASHELL-DRAW-OBSERVER-IOR @ ;
 
-\ A blocking dialog owns its own input loop, so it cannot return to the shell
-\ between drawing a modal frame and waiting for the next key.  Drive the same
-\ completed-draw, optional-owner service, and status-aware screen publication
-\ boundary here.  WOULD_BLOCK is ordinary retained hidden/reveal progress;
-\ every other refusal keeps the normal fail-closed terminal-owner semantics.
-: _ASHELL-DIALOG-PRESENT  ( -- )
-    ASHELL-DRAW-MODAL _ASHELL-DRAW-OBSERVE DROP
-    _ASHELL-HAS-UIDL @
-    ASHELL-ACTIVE-CTX 0<> OR IF UTUI-DRAW-COMPLETE THEN
-    SCR-DRAW-COMPLETE
-    -1 _ASHELL-OUTPUT-PENDING !
-    BEGIN
-        _ASHELL-TERM-SERVICE
-        SCR-FLUSH?
-        DUP SCB-S-OK = IF
-            DROP 0 _ASHELL-OUTPUT-PENDING ! EXIT
-        THEN
-        DUP SCB-S-WOULD-BLOCK = IF
-            DROP YIELD?
-        ELSE
-            _ASHELL-TERM-THROW
-        THEN
-    AGAIN ;
-
-' _ASHELL-DIALOG-PRESENT IS _DLG-PRESENT-HOOK
-
 : _ASHELL-PAINT  ( -- )
     \ Check UIDL needs-paint flag (set by UIDL-DIRTY! hook)
     _UTUI-NEEDS-PAINT @ IF
@@ -1071,6 +1321,8 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
     _ASHELL-DIRTY @ IF
         0 _ASHELL-DIRTY !
         ASHELL-DRAW-BEGIN _ASHELL-DRAW-OBSERVE DROP
+        \ The notice this paint shows, for the app's paint to read
+        _ASHELL-TOAST-LATCH
         \ Restore the cell that the cursor glyph overwrote last frame
         _ASHELL-CUR-RESTORE
         _ASHELL-ACTIVATE
@@ -1083,8 +1335,10 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
         _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
             _ASHELL-INST @ SWAP EXECUTE
         THEN
-        \ Toast overlay (drawn last, on top of everything)
-        ASHELL-TOAST-VISIBLE? IF
+        \ A dialog the app shows, over everything the app paints
+        _ASHELL-OWN-UIDL? IF DLG-HOST-PAINT THEN
+        \ The notice (drawn last, on top of everything)
+        _ASHELL-TOAST-SHOWN @ IF
             _ASHELL-DRAW-TOAST
         THEN
         \ Shell cursor (drawn above toast)
@@ -1105,8 +1359,11 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
     \ stream owner proves a synchronized ANSI handoff; never emit a raw
     \ fallback transaction from the paint path itself.
     _ASHELL-OUTPUT-PENDING @ SCR-DIRTY? OR 0= IF EXIT THEN
-    SCR-FLUSH?
-    SCB-S-OK = IF 0 _ASHELL-OUTPUT-PENDING ! THEN ;
+    SCR-FLUSH? SCB-S-OK = IF
+        0 _ASHELL-OUTPUT-PENDING !
+        \ The output that shows a notice has gone out: its time starts.
+        _ASHELL-TOAST-SHOWN @ IF _ASHELL-TOAST-ARM THEN
+    THEN ;
 
 \ =====================================================================
 \  §10 — Lifecycle: Init
@@ -1240,6 +1497,8 @@ VARIABLE _ASHELL-TD-IOR
     THEN ;
 
 : _ASHELL-TD-UIDL  ( -- )
+    \ A dialog the app never answered goes with it.
+    _ASHELL-OWN-UIDL? IF DLG-DISCARD THEN
     _ASHELL-HAS-UIDL @ IF
         UTUI-DETACH
         0 _ASHELL-HAS-UIDL !
@@ -1347,6 +1606,7 @@ VARIABLE _ASHELL-TD-IOR
     0 _ASHELL-POST-HEAD !
     0 _ASHELL-POST-TAIL !
     0 _ASHELL-CUR-VIS !
+    _ASHELL-TOAST-FREE
     _ASHELL-TD-IOR @ ;
 
 \ =====================================================================
@@ -1390,12 +1650,16 @@ VARIABLE _ASHELL-TD-IOR
 
 \ _ASHELL-NEXT-DEADLINE ( -- ms|-1 )
 \   The next moment the shell must act without input: the next tick or a
-\   visible toast's expiry.  Nothing wakes a sleeping core when the
-\   terminal is resized, so without an owner, which reports resizes as
-\   input, the hardware flag is still polled once a tick.
+\   shown toast's expiry.  A toast no paint has shown yet has no expiry;
+\   raising it asked for the paint that starts its time.  Nothing wakes a
+\   sleeping core when the terminal is resized, so without an owner,
+\   which reports resizes as input, the hardware flag is still polled
+\   once a tick.
 : _ASHELL-NEXT-DEADLINE  ( -- ms|-1 )
     _ASHELL-TICK-DEADLINE
-    _ASHELL-TOAST-WAS-VIS @ IF _ASHELL-TOAST-EXPIRY @ _ASHELL-UMIN THEN
+    _ASHELL-TOAST-WAS-VIS @ _ASHELL-TOAST-ARMED @ AND IF
+        _ASHELL-TOAST-EXPIRY @ _ASHELL-UMIN
+    THEN
     _ASHELL-TERM-OWNS @ 0= IF MS@ _ASHELL-TICK-MS @ + _ASHELL-UMIN THEN ;
 
 : _ASHELL-DISPATCH-EVENT  ( -- )
@@ -1509,6 +1773,9 @@ GUARD _ashell-guard
 ' ASHELL-INSTANCE CONSTANT _ashell-inst-xt
 ' ASHELL-REQUEST-CLOSE CONSTANT _ashell-request-close-xt
 ' ASHELL-TOAST   CONSTANT _ashell-toast-xt
+' ASHELL-TOAST-WARNING CONSTANT _ashell-toast-warning-xt
+' ASHELL-TOAST-ERROR CONSTANT _ashell-toast-error-xt
+' ASHELL-NOTICE  CONSTANT _ashell-notice-xt
 ' ASHELL-TOAST-VISIBLE? CONSTANT _ashell-toast-vis-xt
 
 \ ASHELL-RUN is an owner-core lifecycle driver and deliberately does not
@@ -1533,6 +1800,9 @@ GUARD _ashell-guard
 \ critical section; cross-core callers must post the request to the owner.
 : ASHELL-REQUEST-CLOSE _ashell-request-close-xt EXECUTE ;
 : ASHELL-TOAST    _ashell-toast-xt    _ashell-guard WITH-GUARD ;
+: ASHELL-TOAST-WARNING _ashell-toast-warning-xt _ashell-guard WITH-GUARD ;
+: ASHELL-TOAST-ERROR _ashell-toast-error-xt _ashell-guard WITH-GUARD ;
+: ASHELL-NOTICE   _ashell-notice-xt   _ashell-guard WITH-GUARD ;
 : ASHELL-TOAST-VISIBLE? _ashell-toast-vis-xt _ashell-guard WITH-GUARD ;
 [THEN] [THEN]
 HERE _ASHELL-OWNED-LIMIT !

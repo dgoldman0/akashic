@@ -41,7 +41,7 @@ class Families(StaticHarness):
         cat=self.record('_RTE-RC',56,dict(OWNER=1,GENERATION=2,**{'SURFACE-COLS':80,'SURFACE-ROWS':24,'REGIONS-A':rows,'REGIONS-U':len(regions)*96}))
         vector=self.allocate(b''.join(self.read(e,64) for e in entries))
         batch=self.record('_RTE-FB',72,dict(ABI=1,ATTEMPT=1,**{'CATALOG-A':cat,'CATALOG-U':56,'FAMILIES-A':vector,'FAMILIES-U':len(entries)*64,'SOURCE-GENERATION':2,'SURFACE-GENERATION':3}))
-        return batch,self.allocate(b'A'*560),cat,vector
+        return batch,self.allocate(b'A'*600),cat,vector
 
     def graph(self,mixed=False):
         r1=self.region(1);r2=self.region(2,y=1,h=23,z=1)
@@ -72,8 +72,8 @@ def test_exact_mixed_batch_summary_and_empty_pane_region(families,mixed):
     assert families.call('RTE-SHELL-VALID?',families.shell)==(MASK,)
     assert families.call('_RTE-FA-AUTHORITY?',b,o,families.shell)==(MASK,)
     assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell,readonly=False)==(0,)
-    q=struct.unpack('<70Q',families.read(o,560))
-    assert q[:6]==(1,2,80,24,1,560)
+    q=struct.unpack('<75Q',families.read(o,600))
+    assert q[:6]==(1,2,80,24,1,600)
     assert q[6:15]==(0,)*9
     assert q[57:61]==(2,2,1,7 if mixed else 1)
     assert q[61:66]==(1,4,8,4,7 if mixed else 1)
@@ -82,8 +82,45 @@ def test_exact_mixed_batch_summary_and_empty_pane_region(families,mixed):
         assert q[28:33]==(1,1,0,0,0)
         assert q[40:47]==(1,2,8,2,5,STATIC_SIZE+8,1)
         assert q[48:57]==(1,1,16000,16000,0,0,0,0,1)
-        assert q[66:]==(3,1|8|16|64|0x200|0x400|0x800,0,0)
-    else:assert q[66:]==(0,1|0x200,0,0)
+        assert q[66:]==(3,1|8|16|64|0x200|0x400|0x800,0,0,0,0,0,0,0)
+    else:assert q[66:]==(0,1|0x200,0,0,0,0,0,0,0)
+
+def test_a_modal_catalog_region_needs_dialogs(families):
+    b,o,c,v,items=families.graph(False)
+    rows=struct.unpack('<Q',families.read(c+offset('_RTE-RC.REGIONS-A'),8))[0]
+    families.cell(rows+96+offset('_RTE-IR.FLAGS'),7)
+    assert families.call('RTE-FAMILY-BATCH-VALID?',b)==(MASK,)
+    assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell,readonly=False)==(0,)
+    q=struct.unpack('<75Q',families.read(o,600))
+    assert q[66:]==(0,1|0x200|0x8000,0,0,1,0,0,0,0)
+
+def test_dialog_and_button_controls_charge_dialogs(families):
+    from test_rich_terminal_dlg1 import MESSAGE, button, dialog
+    f=families
+    r1=f.region(1);r2=f.region(2,y=1,h=23,z=1)
+    title=f.allocate(b'Pane')
+    pane=f.record('_RTE-PANE',184,dict(OWNER=1,GENERATION=2,ID=4,KIND=1,VISIBLE=-1,REGION=1,HEIGHT=24,WIDTH=80,FOCUSED=-1,**{'ROOT-HEIGHT':24,'ROOT-WIDTH':80,'CONTENT-REGION':2,'CONTENT-ROW':1,'CONTENT-HEIGHT':23,'CONTENT-WIDTH':80,'TITLE-A':title,'TITLE-U':4}))
+    pe=f.entry(6,f.plan(pane,184,r1),title,4)
+    box=dialog()
+    text=f.allocate(b'Delete'+box+b'Delete'+button(4)+b'Cancel'+button(3))
+    values=[]
+    for id,kind,state,z,row,col,h,w,label,content,utf8 in [
+            (1,15,1,0,5,20,6,40,0,(6,len(box)),len(MESSAGE)),
+            (2,16,3,1,9,24,1,10,6+len(box),(12+len(box),8),0),
+            (3,16,11,1,9,40,1,10,20+len(box),(26+len(box),8),0)]:
+        values.append(f.record('_RTE-CONTROL',200,dict(OWNER=1,GENERATION=2,ID=id,KIND=kind,STATE=state,Z=z,REGION=2,ROW=row,COL=col,HEIGHT=h,WIDTH=w,**{'ROOT-HEIGHT':23,'ROOT-WIDTH':80,'LABEL-A':text+label,'LABEL-U':6,'CONTENT-A':text+content[0],'CONTENT-U':content[1],'CONTENT-UTF8':utf8})))
+    ci=f.allocate(b''.join(f.read(x,200) for x in values))
+    ce=f.entry(1,f.plan(ci,600,r2),text,34+len(box))
+    b,o,c,v=f.finish([r1,r2],[ce,pe])
+    assert f.call('RTE-FAMILY-BATCH-VALID?',b)==(MASK,)
+    assert f.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,f.shell,readonly=False)==(0,)
+    q=struct.unpack('<75Q',f.read(o,600))
+    # Three controls: the dialog's title and DLG1, then each button's label
+    # and BTN1; the UTF-8 is the labels and the message.
+    size=6+len(box)
+    assert q[15:23]==(3,size+28,((size+7)&-8)+32,size,3,0,0,18+len(MESSAGE))
+    assert q[66:]==(0,1|0x40|0x200|0x8000,0,0,0,0,0,0,0)
+
 
 @pytest.mark.parametrize('target,key,value', [
     ('static','ID',4),('glyph','OBJECT',5),('pane','ID',6),
@@ -95,9 +132,9 @@ def test_cross_family_ids_references_and_semantics_reject_before_provider(famili
     prefixes={'static':'_RTE-STATIC','glyph':'_RTE-LPI','pane':'_RTE-PANE',
               'wave':'_RTE-INSTRUMENT','series':'_RTE-SERIES','control':'_RTE-CONTROL'}
     families.cell(items[target]+offset(prefixes[target]+'.'+key),value)
-    before=families.read(o,560); calls=families.variable('SF-CALLS')
+    before=families.read(o,600); calls=families.variable('SF-CALLS')
     assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell)==(5,)
-    assert families.read(o,560)==before and families.variable('SF-CALLS')==calls
+    assert families.read(o,600)==before and families.variable('SF-CALLS')==calls
 
 
 def test_waveform_rejects_forward_history_entry(families):
@@ -123,7 +160,7 @@ def test_duplicate_instrument_region_is_charged_once_across_entries(families):
     vector=families.allocate(b''.join([*entries[:3],families.read(ie,64),*entries[3:]]))
     families.cell(b+24,vector);families.cell(b+32,7*64)
     assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell,readonly=False)==(0,)
-    q=struct.unpack('<70Q',families.read(o,560))
+    q=struct.unpack('<75Q',families.read(o,600))
     assert q[28:30]==(1,2) and q[56]==2 and q[57]==2 and q[60]==8
 
 
@@ -142,19 +179,19 @@ def test_controls_remain_contiguous_across_region_plans(families,gap):
     families.cell(b+24,vector);families.cell(b+32,7*64)
     assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell,readonly=False)==((5 if gap else 0),)
     if not gap:
-        q=struct.unpack('<70Q',families.read(o,560))
+        q=struct.unpack('<75Q',families.read(o,600))
         assert q[15]==4 and q[19]==4 and q[66]==4
 
 
 @pytest.mark.parametrize('result',[1,2,3,4,5,6,7,999])
 def test_provider_refusal_keeps_output_unchanged(families,result):
     b,o,c,v,items=families.graph(True)
-    before=families.read(o,560);calls=families.variable('SF-CALLS')
+    before=families.read(o,600);calls=families.variable('SF-CALLS')
     families.variable('SF-STATUS',result)
     try:
         expected=result if result<=7 else 5
         assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell)==(expected,)
-        assert families.read(o,560)==before and families.variable('SF-CALLS')==calls+1
+        assert families.read(o,600)==before and families.variable('SF-CALLS')==calls+1
     finally:families.variable('SF-STATUS',0)
 
 
@@ -164,9 +201,9 @@ def test_output_authority_rejected_before_writes(families,output):
     b,o,c,v,items=families.graph(True)
     spans={'batch':b,'catalog':c,'families':v,'shell':families.shell,'facade':families.facade,**items}
     address=spans[output] if output in spans else (families.call(output)[0] if output == '_RTE-FA-SUMMARY' else families.runtime.find(output).body_address)
-    before=families.read(address,560);calls=families.variable('SF-CALLS')
+    before=families.read(address,600);calls=families.variable('SF-CALLS')
     assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,address,families.shell)==(5,)
-    assert families.read(address,560)==before and families.variable('SF-CALLS')==calls
+    assert families.read(address,600)==before and families.variable('SF-CALLS')==calls
 
 
 @pytest.mark.parametrize('source',['_RTE-FA-BATCH','_RTE-FA-SUMMARY','_RTE-RC-BATCH','_RTE-HPV-SUMMARY','_FDC1-A'])
@@ -199,7 +236,7 @@ def test_history_only_empty_catalog_and_exact_chunk_reservations(families,count,
     e=families.entry(5,plan,samples,count*8)
     b,o,c,v=families.finish([], [e])
     assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell,readonly=False)==(0,)
-    q=struct.unpack('<70Q',families.read(o,560))
+    q=struct.unpack('<75Q',families.read(o,600))
     assert q[48:57]==(1,9,16000,16000,count*8,(count+chunk-1)//chunk if count else 0,chunk,min(count,chunk)*8,0)
     assert q[57:67]==(0,)*10
     assert q[67]==1|8|16
@@ -209,12 +246,12 @@ def test_provider_throw_scrubs_temporary_borrows_and_preserves_output(families):
     b,o,c,v,items=families.graph(True)
     families.runtime.evaluate(b': FAMILY-THROW 2DROP -999 THROW ;')
     callback=families.runtime.memory.read64(families.shell+32)
-    before=families.read(o,560)
+    before=families.read(o,600)
     families.cell(families.shell+32,families.runtime.find('FAMILY-THROW').xt)
     try:
         assert families.call('RTE-FAMILY-BATCH-PREFLIGHT',b,o,families.shell)==(5,)
-        assert families.read(o,560)==before
+        assert families.read(o,600)==before
         assert families.variable('_RTE-FA-BATCH')==0
         assert families.variable('_RTE-FA-ENTRY')==0
-        assert families.read(families.call('_RTE-FA-SUMMARY')[0],560)==bytes(560)
+        assert families.read(families.call('_RTE-FA-SUMMARY')[0],600)==bytes(600)
     finally:families.cell(families.shell+32,callback)

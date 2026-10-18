@@ -14,7 +14,8 @@ def run(program, minimum=1):
 def test_shell_producer_actual_dependency_closure_and_header_contract():
     run(PRELUDE + r'''
 RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 208 = _FM-A
-RSHSP-BANK-HEADER-SIZE 128 = _FM-A
+RSHSP-BANK-HEADER-SIZE 136 = _FM-A
+0 RSHSP-BANK.PROMPT 128 = _FM-A
 0 _RSHSP.PRODUCER 24 = _FM-A 0 _RSHSP.SOURCE 32 = _FM-A
 0 _RSHSP.A 64 = _FM-A 0 _RSHSP.B 80 = _FM-A
 0 _RSHSP.ACTIVE 96 = _FM-A 0 _RSHSP.PENDING 104 = _FM-A
@@ -223,8 +224,9 @@ _SX-TASK-ID @ _SX-HIT _SX-LAUNCH-ID @ _SX-HIT
     11 _SX-FIND _RTE-CONTROL.ORDER DUP @ >R DUP >R 2 SWAP !
     _SX-TASK-ID @ _SX-REFUSED-HIT R> R> SWAP ! ;
 _SX-WRONG-ORDER _SX-TASK-ID @ _SX-HIT
-\ A later ordinary source invalidation revokes current input authority.
-ASHELL-DRAW-MODAL _ASHELL-DRAW-OBSERVE _SS-OK
+\ A later ordinary source invalidation, a new root draw beginning, revokes
+\ current input authority.
+ASHELL-DRAW-BEGIN _ASHELL-DRAW-OBSERVE _SS-OK
 _RSHSP-CURRENT? 0= _SS-A
 _SS-DONE
 ''', minimum=63)
@@ -234,7 +236,7 @@ def test_pending_exact_ack_survives_source_invalidation_without_restoring_input(
     staged_run(STAGED + r'''
 _SX-SETUP _RSHSP-PREPARE _SS-OK _RSHSP-PENDING? _SS-A
 _SX-S _RSHSP.ACTIVE @ 0= _SS-A
-ASHELL-DRAW-MODAL _ASHELL-DRAW-OBSERVE _SS-OK
+ASHELL-DRAW-BEGIN _ASHELL-DRAW-OBSERVE _SS-OK
 SCR-DRAW-GENERATION@ _SX-C SHSN-SNAPSHOT-FOR@ SHSN-S-UNAVAILABLE = _SS-A 2DROP
 _RSHSP-PENDING? _SS-A
 _SX-TARGET _SX-P _RTHP.TARGET-ACTIVE !

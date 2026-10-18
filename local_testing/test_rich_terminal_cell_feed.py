@@ -150,6 +150,8 @@ class _FeedHarness:
              "tui/rich-terminal/stx1-roles.f"),
             (b"fdc1.f", b"akashic-tui-fdc1",
              "tui/rich-terminal/fdc1.f"),
+            (b"dlg1.f", b"akashic-tui-dlg1",
+             "tui/rich-terminal/dlg1.f"),
             (b"apt1-engine.f", b"akashic-tui-rtapt",
              "tui/rich-terminal/apt1-engine.f"),
         )

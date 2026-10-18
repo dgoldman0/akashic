@@ -35,7 +35,8 @@ class StatusHarness(GrowthHarness):
             "tui/uidl-status-field-snapshot.f", "tui/status-field-model.f",
             "tui/uidl-picture-snapshot.f",
             "tui/uidl-field-snapshot.f", "tui/field-model.f", "tui/field-content.f",
-            "tui/rich-terminal/fdc1.f",
+            "tui/rich-terminal/fdc1.f", "tui/rich-terminal/dlg1.f",
+            "tui/dialog-model.f", "tui/dialog-content.f", "tui/uidl-dialog-snapshot.f",
             "tui/data-graphics-model.f", "tui/uidl-data-graphics-snapshot.f",
             "tui/uidl-collection-snapshot.f", "text/utf8.f", "utils/string.f",
         ):
@@ -51,7 +52,9 @@ class StatusHarness(GrowthHarness):
                 self.definitions[match[2]] = match[0]
         self.definitions["_USF-OWNED-START"] = "CREATE _USF-OWNED-START 8 ALLOT"
         for marker in ("_UFLD-OWNED-START", "_UFLDC-OWNED-START",
-                       "_FDC1-OWNED-START", "_FDC1-OWNED-END"):
+                       "_FDC1-OWNED-START", "_FDC1-OWNED-END",
+                       "_DLG1-OWNED-START", "_DLG1-OWNED-END",
+                       "_UDLG-OWNED-START", "_UDLGC-OWNED-START", "_UDLSN-OWNED-START"):
             self.definitions[marker] = f"CREATE {marker} 8 ALLOT"
         self.definitions["_RUCL-OWNED-START"] = "CREATE _RUCL-OWNED-START 8 ALLOT"
         self.definitions["_UTF8-DECODE-STATE"] = "CREATE _UTF8-DECODE-STATE 48 ALLOT"
@@ -91,7 +94,7 @@ class StatusHarness(GrowthHarness):
         self.serial = 0
         self.variable("_USF-OWNED-LIMIT", self.runtime.find("_USF-OWNED-START").body_address + 8)
         self.variable("_RUCL-OWNED-LIMIT", self.runtime.find("_RUCL-OWNED-START").body_address + 8)
-        for marker in ("_UFLD", "_UFLDC"):
+        for marker in ("_UFLD", "_UFLDC", "_UDLG", "_UDLGC", "_UDLSN"):
             if self.runtime.find(marker + "-OWNED-LIMIT"):
                 self.variable(marker + "-OWNED-LIMIT",
                               self.runtime.find(marker + "-OWNED-START").body_address + 8)
@@ -99,7 +102,7 @@ class StatusHarness(GrowthHarness):
     def setup(self, *, label=b"Mode", value=b"Ready", width=20, label_cols=6,
               row=3, col=2, clip=None, flags=3, status_native=512, pictures=0):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        caps = (1, 1, 64, 256, 256, status_native, 0, pictures, 32, 8)
+        caps = (1, 1, 64, 256, 256, status_native, 0, 0, pictures, 32, 8)
         size, = self.results("RTHP-STORAGE-BYTES", *caps)
         assert size > 0
         self.arena_size = size
@@ -363,8 +366,8 @@ def test_fixed_static_audit_rejects_changed_candidate(h, mutation):
 
 
 def test_storage_admits_no_status_bank_and_rejects_a_partial_record(h):
-    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 0, 0, 0, 40, 12)[0] > 0
-    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 73, 0, 0, 40, 12) == (0,)
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 0, 0, 0, 0, 40, 12)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES", 2, 8, 128, 512, 256, 73, 0, 0, 0, 40, 12) == (0,)
 
 
 def test_static_overlap_strips_both_roots_without_claims(h):

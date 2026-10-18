@@ -16,6 +16,8 @@ VARIABLE _dh-seen-shell
 CREATE _dh-stale-task SHM-ENTRY-SIZE ALLOT
 CREATE _dh-long-title 50000 ALLOT
 _dh-long-title 50000 65 FILL
+CREATE _dh-field-s 4103 ALLOT
+: _dh-field ( -- a ) _dh-field-s 7 + -8 AND ;
 
 : _dh-shell-observer ( model host context -- )
     731 = _dh-assert
@@ -82,12 +84,66 @@ CREATE _dh-press 24 ALLOT
     _DESK-HOST AHOST-SHELL-MODEL@ 0= _dh-assert
     _dh-bid @ DESK-FOCUS-ID
 
-    \ Prompt paint owns the taskbar row and removes its hit targets.
-    S" Ask:" 0 0 _DESK-AGENT-PROMPT @ PRM-SHOW
+    \ Prompt paint owns the taskbar row and removes its hit targets.  The
+    \ model carries the prompt as its TEXT field across the screen, as the
+    \ paint left it: a value too long for the row scrolled the same way.
+    S" Ask:" _dh-long-title 100 _DESK-AGENT-PROMPT @ PRM-SHOW
     _dh-desk @ DESK-PAINT-CB
     _dh-model @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND 0<> _dh-assert
     SCR-H 1- 0 _dh-model @ SHM-HIT 0= _dh-assert
+    _dh-model @ SHM-PROMPT@ DUP 0<> _dh-assert DROP
+    DUP UFLD-KIND@ UFLD-K-TEXT = _dh-assert
+    DUP UFLD-WIDTH@ SCR-W = _dh-assert
+    DUP UFLD-SCROLL-OFFSET + @ 0> _dh-assert
+    UFLD-LABEL@ S" Ask:" STR-STR= _dh-assert
+    _dh-field 4096 _DESK-AGENT-PROMPT @ PRM-FIELD-CAPTURE UFLD-S-OK = _dh-assert
+    _dh-field SWAP _dh-model @ SHM-PROMPT@ COMPARE 0= _dh-assert
+    \ Closed, it leaves the model.
     _DESK-AGENT-PROMPT @ PRM-HIDE
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM.PROMPT-U @ 0= _dh-assert
+
+    \ With the taskbar back, Desk's agent state goes in the model as a status
+    \ field where the paint put it, after every string: its label's slot is
+    \ the cells of "[Agent: ", its value's the rest, up to the closing
+    \ bracket.  The prompt took it out while it held the row.
+    _dh-model @ SHM-STATUS@ DUP 0<> _dh-assert OVER USF-BYTES@ = _dh-assert
+    DUP USF-LABEL@ S" Agent" STR-STR= _dh-assert
+    DUP USF-VALUE@ _DAGS-VA @ _DAGS-VU @ STR-STR= _dh-assert
+    DUP USF-SEVERITY@ _DAGS-SEVERITY @ = _dh-assert
+    DUP USF-LABEL-COLS@ 8 = _dh-assert
+    USF-WIDTH@ DUP _DAGS-VU @ 9 + = _dh-assert
+    SCR-W SWAP - 1- _dh-model @ SHM.STATUS-COL @ = _dh-assert
+    _dh-model @ SHM.STATUS-ROW @ SCR-H 1- = _dh-assert
+    SCR-H 1- _dh-model @ SHM.STATUS-COL @ SCR-GET CELL-CP@ 91 = _dh-assert
+    SCR-H 1- _dh-model @ SHM.STATUS-COL @ 8 + SCR-GET CELL-CP@
+        _DAGS-VA @ C@ = _dh-assert
+
+    \ The app shell's notice, while the paint shows one, goes in the model as
+    \ its UDLG notice where the paint put it, after Desk's prompt while that
+    \ is open, and leaves when it ends.
+    S" Saved" 60000 ASHELL-TOAST-WARNING _ASHELL-TOAST-LATCH
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM-NOTICE@ DUP 0<> _dh-assert OVER UDLG-BYTES@ = _dh-assert
+    DUP UDLG-FLAGS@ UDLG-F-NOTICE = _dh-assert
+    DUP UDLG-SEVERITY@ 3 = _dh-assert
+    UDLG-MESSAGE@ S" Saved" STR-STR= _dh-assert
+    ASHELL-NOTICE-ROOT 2DROP
+    _dh-model @ SHM.NOTICE-COL @ = _dh-assert
+    DUP SCR-H 1- = _dh-assert _dh-model @ SHM.NOTICE-ROW @ = _dh-assert
+    \ The agent state follows the notice.
+    _dh-model @ SHM.NOTICE-OFF @ _dh-model @ SHM.NOTICE-U @ + 7 + -8 AND
+        _dh-model @ SHM.STATUS-OFF @ = _dh-assert
+    S" Ask:" _dh-long-title 3 _DESK-AGENT-PROMPT @ PRM-SHOW
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM.PROMPT-U @ 0<> _dh-assert
+    _dh-model @ SHM.STATUS-U @ 0= _dh-assert
+    _dh-model @ SHM.PROMPT-OFF @ _dh-model @ SHM.PROMPT-U @ + 7 + -8 AND
+        _dh-model @ SHM.NOTICE-OFF @ = _dh-assert
+    _DESK-AGENT-PROMPT @ PRM-HIDE
+    MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH
+    _dh-desk @ DESK-PAINT-CB
+    _dh-model @ SHM.NOTICE-U @ 0= _dh-assert
 
     \ A title too long for the model's bank grows the bank: the whole title
     \ is published. Restore descriptors before continuing.

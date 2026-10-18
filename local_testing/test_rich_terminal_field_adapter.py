@@ -56,7 +56,7 @@ def _field_adapter_program():
     lines = _status_adapter_program()
     at = lines.index("0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !")
     lines[at:at] = FIELD_FIXTURE
-    lines = [line.replace("0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK", "_FA-DESCRIPTORS 256 _FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT RUHA-S-OK")
+    lines = [line.replace("0 0 0 0 0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK", "_FA-DESCRIPTORS 256 _FA-NATIVE 1024 0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK")
              .replace("</status></uidl>", "</status><region id=field/></uidl>") for line in lines]
     at = lines.index("UTUI-PAINT UTUI-DRAW-COMPLETE _RA-STACK")
     lines.insert(at, "_FA-INSTALL")
@@ -66,7 +66,7 @@ def _field_adapter_program():
     lines[at:at] = [
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
         "_RA-DIR-A @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@ 128 = _RA-ASSERT",
-        "_RA-DIR-A @ RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@ 200 = _RA-ASSERT",
+        "_RA-DIR-A @ RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@ 232 = _RA-ASSERT",
         "_FA-FIRST DUP _FA-PREV ! UFLD-REVISION@ 21 = _RA-ASSERT",
         "_FA-FIRST UFLD-KEY@ 992 = _RA-ASSERT",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
@@ -74,7 +74,7 @@ def _field_adapter_program():
     at = lines.index('S" aggregate beta" _RA-TEXTAREA @ TXTA-SET-TEXT')
     lines[at:at] = [
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
-        "_FA-FIRST DUP _FA-PREV @ <> _RA-ASSERT 200 _FA-PREV @ 200 COMPARE 0= _RA-ASSERT",
+        "_FA-FIRST DUP _FA-PREV @ <> _RA-ASSERT 232 _FA-PREV @ 232 COMPARE 0= _RA-ASSERT",
         "_FA-UPDATE",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
     ]
@@ -98,7 +98,8 @@ def test_field_separate_banks_reuse_revision_and_overlay_fallback():
 def test_field_short_bank_falls_back_all_families_and_retries():
     lines = _field_adapter_program()
     at = lines.index("1 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT")
-    lines = [line.replace("_FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT", "_FA-NATIVE 384 _RA-ADAPTER RUHA-INIT") for line in lines[:at+1]]
+    # Each half holds one model header but not the 232-byte labelled model.
+    lines = [line.replace("_FA-NATIVE 1024 0 0 0 0 _RA-ADAPTER RUHA-INIT", "_FA-NATIVE 448 0 0 0 0 _RA-ADAPTER RUHA-INIT") for line in lines[:at+1]]
     lines += [
         "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",
@@ -135,9 +136,9 @@ def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
         "_FA-FIRST UFLD-MAXIMUM@ 200 = _RA-ASSERT",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
-        # The constructor's full seventeen-span proof protects old ownership.
+        # The constructor's full nineteen-span proof protects old ownership.
         "_RA-INIT-ARGS _RA-SF-DESCRIPTORS 256 _RA-SF-NATIVE 256",
-        "_RA-SF-DESCRIPTORS 256 _FA-NATIVE 1024 _RA-ADAPTER RUHA-INIT",
+        "_RA-SF-DESCRIPTORS 256 _FA-NATIVE 1024 0 0 0 0 _RA-ADAPTER RUHA-INIT",
         "RUHA-S-INVALID = _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-FIELD-DESCRIPTORS-A @ _FA-DESCRIPTORS = _RA-ASSERT",
@@ -147,3 +148,59 @@ def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_
     ]
     output = run_status_forth(lines)
     assert re.search(r"FIELD PRIOR PASS\s+\d+\s+0", output), output[-18000:]
+
+
+PROMPT_OVERLAY = [
+    "VARIABLE _FA-PR CREATE _FA-PBUF 64 ALLOT",
+    ': _FA-PLABEL S" Find:" ; : _FA-PVALUE S" abc" ;',
+    ": _FA-PROMPT-PAINT UTUI-PAINT _FA-PR @ PRM-ACTIVE? IF _FA-PR @ WDG-DRAW THEN ;",
+    ": _FA-PROMPT-DRAW ['] _FA-PROMPT-PAINT UTUI-DRAW-OBSERVE 0= _RA-ASSERT UTUI-DRAW-COMPLETE ;",
+    ": _FA-SECOND-FIELD ( -- descriptor )",
+    "  _RA-SNAP @ RUHA-SNAPSHOT-FIELDS-DESCRIPTORS@ DROP",
+    "  _RA-DIR-A @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@ + UFLSN-DESCRIPTOR-SIZE + ;",
+    # A prompt over the status row, as applications paint theirs.
+    'S" state" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ 0 1 20 RGN-NEW',
+    "  _FA-PBUF 64 PRM-NEW _FA-PR !",
+    "_FA-PLABEL _FA-PVALUE _FA-PR @ PRM-SHOW _FA-PROMPT-DRAW",
+    "6 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    # The document keeps every root the prompt does not cover, the prompt
+    # joins its fields, and only the status field it covers stays CELL's.
+    "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 2 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 0= _RA-ASSERT",
+    "_FA-SECOND-FIELD UFLSN-DESCRIPTOR-SOURCE@ UFLSN-SOURCE-OVERLAY = _RA-ASSERT",
+    "_FA-SECOND-FIELD UFLSN-DESCRIPTOR-WIDTH@ 20 = _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.OV-WIDTH @ 20 = _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.OV-HEIGHT @ 1 = _RA-ASSERT",
+    # Foreground paint that is not the prompt keeps today's rule.
+    ": _FA-ELSEWHERE RGN-ROOT 35 0 0 DRW-CHAR ; ' _FA-ELSEWHERE DRW-OVERLAY",
+    "7 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 0= _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",
+    "_RA-RECORDS _RUHA-RECORD-DIRTY? _RA-ASSERT",
+    # Closing the prompt repaints what it covered; the record forgets it.
+    "_FA-PR @ PRM-HIDE",
+    'S" note" UTUI-BY-ID UIDL-DIRTY! S" state" UTUI-BY-ID UIDL-PARENT UIDL-DIRTY!',
+    "_FA-PROMPT-DRAW",
+    "8 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.OV-WIDTH @ 0= _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 1 = _RA-ASSERT",
+    "_RA-STACK",
+]
+
+
+def test_a_prompt_keeps_its_document_rich_except_what_it_covers():
+    # Room for the mounted field's descriptor and the prompt's in each half.
+    lines = [line.replace("CREATE _FA-DESCRIPTORS-S 256 7 + ALLOT", "CREATE _FA-DESCRIPTORS-S 512 7 + ALLOT")
+             .replace("_FA-DESCRIPTORS 256 _FA-NATIVE 1024", "_FA-DESCRIPTORS 512 _FA-NATIVE 1024")
+             for line in _field_adapter_program()]
+    at = next(i for i, line in enumerate(lines) if 'RUHA CONSTRUCTOR PASS' in line)
+    lines[at:at] = PROMPT_OVERLAY
+    output = run_status_forth(lines)
+    summary = re.search(r"RUHA CONSTRUCTOR PASS\s+(\d+)\s+0", output)
+    assert summary, output[-18000:]
+    assert int(summary.group(1)) >= 110

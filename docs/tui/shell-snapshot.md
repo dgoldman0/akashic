@@ -38,8 +38,9 @@ caller supplies two separately bounded, aligned banks. Each bank needs
 `128 + 168 * reserved-entry-limit + copied-text-bytes` bytes. The reserved
 entry extent uses the limit, not the active count. `SHSN-BANK-BYTES` checks
 nonnegative 32-bit inputs and result; zero means an invalid or oversized
-request. Desk's existing 49,152-byte ordinary model bound can be used for
-each copied bank; no additional validation workspace is required.
+request. With a memory source attached by `SHSN-MEMORY!`, the source owns
+its banks and grows them as models need; Desk's start at the model header.
+No additional validation workspace is required.
 
 A host callback copies exactly `SHM.USED` bytes once to the inactive bank,
 sets only that copy's `SHM.CAPACITY` to the exact extent, and deeply validates
@@ -51,6 +52,31 @@ action spans must occupy the text arena exactly in record and field order;
 empty spans have offset zero or the current text cursor. No overlap, gap or
 trailing bytes is admitted. All text is strict display-safe UTF-8. Unsafe
 ordinary display text declines the whole copied model, leaving CELL intact.
+
+Desk's own prompt, while it holds the hidden taskbar row, ends the model:
+`SHM.PROMPT-OFF` and `SHM.PROMPT-U` name the UFLD model of its field at the
+first eight-byte boundary after the text, the padding before it zero. The
+copy admits it only under a hidden taskbar, only as a valid TEXT field one
+row high and as wide as the screen, and only when its bytes are exactly the
+field's; only the notice may follow it. Without a prompt both header fields
+are zero.
+
+The app shell's notice, while the paint shows one, follows: `SHM.NOTICE-OFF`
+and `SHM.NOTICE-U` name its UDLG model at the first eight-byte boundary after
+the prompt or the text, the padding before it zero. The copy admits it only
+as a valid UDLG notice, with the `NOTICE` flag, whose root at
+`SHM.NOTICE-ROW` and `SHM.NOTICE-COL` lies inside the screen and apart from
+every pane, and only when its bytes are exactly the model's; only Desk's
+status may follow it. Without a notice all four header fields are zero.
+
+Desk's status, while the taskbar shows it, follows: `SHM.STATUS-OFF` and
+`SHM.STATUS-U` name its USF model at the first eight-byte boundary after the
+notice, the prompt or the text, the padding before it zero. The copy admits
+it only with the taskbar shown, only as a valid visible USF whose root, one
+row high at `SHM.STATUS-ROW` and `SHM.STATUS-COL`, lies on the taskbar's row
+past its entries, inside the screen and apart from every pane, and only when
+its bytes are exactly the model's and end the model. Without a status all
+four header fields are zero.
 
 The constructor checks full A/B capacities and descriptor disjointness
 before any mutation. It rejects module scratch, invalid and wrapping spans,
@@ -105,9 +131,8 @@ publications in one transaction are ambiguous and decline the snapshot.
 `ASHELL-DRAW-COMPLETE` occurs only after successful root paint, toast, cursor
 and `SCR-DRAW-COMPLETE`. It publishes the staged copy only for the same
 instance and screen, the immediately completed generation, and the still
-current host model. A throwing paint never sends COMPLETE. A dialog sends
-`ASHELL-DRAW-MODAL` before its separate completed draw and invalidates both
-pending and published shell data. A screen change, resize, later draw without
+current host model. A throwing paint never sends COMPLETE. A screen change,
+resize, later draw without
 fresh observation or host-model invalidation makes old snapshots unavailable.
 Callback exceptions are caught by ordinary observation and cannot stop CELL
 publication. These APIs execute synchronously on the UI owner core.

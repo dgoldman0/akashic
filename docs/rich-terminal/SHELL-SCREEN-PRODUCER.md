@@ -44,7 +44,7 @@ keeps the bytes asked for and held; the shell never truncates an object,
 string, action or sample history. The model's size is its source's to bound;
 the shell producer carries no entry or text limit of its own.
 
-Each immutable bank starts with this128-byte header:
+Each immutable bank starts with this 136-byte header:
 
 | Offset | Value |
 |---:|---|
@@ -58,13 +58,14 @@ Each immutable bank starts with this128-byte header:
 |88|Completed draw|
 |96/104|Wire owner/generation|
 |112/120|Next region/object identity|
+|128|Control identity of Desk's prompt, or 0|
 
 The metadata spans use canonical consecutive aligned offsets. The deep-copied
 family graph follows them. Every graph pointer is bounded within that suffix
 before nested parsing. Catalog/object maxima must equal the stored next IDs
 minus one. The exact packed requirement is:
 
-`128 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
+`136 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
 
 The work space uses checked aligned bump allocation. Glyph projection reserves
 bounded temporary slots per clip, then compacts actual runs before the next
@@ -108,11 +109,111 @@ ordinary. Global residue holds only cells outside pane content and admitted
 shell claims. Its full-surface region sorts below interactive regions so sparse
 residual glyphs cannot create an input barrier.
 
-The initial conservative policy refuses the entire optional shell candidate
-when pane contents overlap or a final writer covers any pane outer rectangle.
-Modal/unavailable SHSN authority also refuses it. Every refusal uses the
-unchanged, already admitted legacy RTHP candidate, with no shell claims leaking
-into that candidate.
+The policy refuses the entire optional shell candidate when pane contents
+overlap or a final writer covers any pane outer rectangle, with two
+exceptions: an overlay pane over the panes beneath it, described below, and
+the overlay a pane's document paints over its own content, the prompt or the
+dialog widget it shows. The aggregate adapter captures a prompt as the document's
+overlay field, the last record of its field snapshot, and the base candidate
+carries it as a `FIELD` control whose correlation names the overlay source; a
+dialog it carries as a `DIALOG` with its `BUTTON`s after it, inside its root
+(see the [dialog lane](DIALOG-PRODUCER.md)). The shell finds the pane through
+the overlay root's document slot, allows one overlay a pane, requires the
+root to lie inside the pane's content, and requires the four bands of the
+pane's outer rectangle around the root to be clear. The root's own cells are
+taken as the overlay's paint, as the adapter took them. A button goes where
+its pane's dialog goes, and a button whose pane shows no dialog refuses the
+candidate. An application that asks a question while its prompt is open
+shows two overlays, so its screen goes out as CELL until one of them closes.
+A dialog element is the document's own paint, not an overlay: it and its
+contents stay in the pane's content region.
+
+When the terminal negotiated `RTE-F-DIALOGS`, each overlay gets a modal
+region after the planner's regions, in control order: surface-sized logical
+bounds, the pane's content as its clip, `VISIBLE | CLIPPED | MODAL`, and z two
+above the content z, so above every region the shell defines. The prompt's
+control, or the dialog and its buttons, go in it, and the terminal shows the
+rest of that application inactive while the overlay is open; Desk and other
+applications stay active. Without dialogs the prompt stays in its pane's
+content region, and the base candidate carries no dialog.
+
+An overlay whose document is in no pane refuses the candidate, as any
+control of such a document does.
+
+An overlay pane is a slot its host paints above the others, as foreground,
+such as one of Desk's own screens: the launcher, the sandbox's access prompt
+and inspector, and the schedule's approval and permissions. It may lie over
+the ordinary panes beneath it. Its cells are its own paint, and in a pane
+beneath it only the cells no overlay pane covers must be clear: the shell
+takes that pane's rows in bands between the overlay panes' edges and checks
+each band in the spans between them. Overlay panes do not overlap one
+another, and an overlay pane's document shows no overlay of its own; either
+refuses the candidate. The planner gives an overlay pane's content region a
+z one above the content z, so it may also lie over the chrome of the panes
+beneath it, such as the divider between two tiles. A pane beneath leaves
+the overlay panes' cells out of its residual glyphs, which the overlay
+pane's content region holds. The overlay pane's own residual glyphs leave
+out every claim but the panes' chrome: where it lies over a divider its
+glyphs cover it.
+
+Desk gives an open screen every key and ignores a press outside it. With
+dialogs each overlay pane's document therefore goes in a modal region over
+the whole screen, after the overlays' modal regions and at the same z, so
+above them: surface-sized with the surface as its clip and `VISIBLE |
+CLIPPED | MODAL`. Every control of the document goes there, so the screen
+is a modal scope over everything beneath it, and the terminal shows the
+panes and taskbar beneath inactive while it is open. The document's
+residual glyphs stay in its content region. Without dialogs its controls
+stay in its content region.
+
+Desk's own Ask prompt is the shell's. While it is open Desk hides its
+taskbar, takes no other input, and paints the prompt over the taskbar row,
+and its shell model carries the prompt's TEXT field (see the [shell
+model](../tui/shell-model.md)). The shell makes that field a `FIELD`
+control after its taskbar controls, packed from the model's UFLD record, on
+a root across the last row, with a claim on the row so no residual glyph
+covers it. Statics and instruments move up one identity to follow it, and
+the bank records its identity. With dialogs its region is a modal scope over
+the whole screen, surface-sized with the surface as its clip, since Desk
+takes no other input while the prompt is open; without them it is the last
+row alone. Either way it sits three above the content z, above the panes'
+modal regions. `PLACE` and `EXTEND` on it resolve to its value's first cell
+on that row and its field's revision, and Desk's prompt takes them through
+its ordinary event path.
+
+The app shell's notice, while the paint shows one, is in the shell model
+too: its UDLG model and where its root lies, apart from every pane. With
+dialogs the shell makes it a `DIALOG` with the `NOTICE` flag, packed from
+that model, after Desk's prompt or the taskbar's controls, in a region of
+its own: surface-sized logical bounds, the notice's root as its clip,
+`VISIBLE | CLIPPED`, and z four above the content z, above every other
+region, Desk's prompt too. It is no modal scope: the notice takes no input,
+and what lies beneath it stays active. A claim on its root keeps residual
+glyphs off it. Its cells are its own paint, so the taskbar bands and their
+blank gaps are proved clear only outside it, and the taskbar it covers
+stays semantic beneath it; the identity reservation, and the statics and
+instruments after it, move up one more to make room for it. Without dialogs
+the notice is paint over the taskbar, which then stays ordinary while it
+shows.
+
+Desk's status, the Agent's state at the taskbar's right end, is in the
+shell model too while the taskbar shows it: its USF model and the cell of
+its left end, past the taskbar's entries. When the terminal negotiated
+status fields, the shell makes it a `STATUS_FIELD` static with the model's
+label, value, label slot, severity and emphasis, in a region of its own
+across the taskbar row past the entries: surface-sized logical bounds, that
+span of the last row as its clip, `VISIBLE | CLIPPED`, at the taskbar's z.
+It takes no input. A claim on its root keeps residual glyphs off it. Its
+cells the notice leaves must be the shell's own paint; a notice over part
+of it hides that part, and the status stays semantic beneath. Otherwise,
+or without status fields, it is residual glyphs, as before. Its static
+takes the first identity past the base candidate's objects, which COPY-RUN
+moves up past the shell's controls with the statics and instruments, and
+the identity reservation grows by one more for it.
+
+Modal/unavailable SHSN authority also refuses the candidate. Every refusal uses
+the unchanged, already admitted legacy RTHP candidate, with no shell claims
+leaking into that candidate.
 
 ## START, ACK and teardown
 
@@ -143,20 +244,33 @@ control and waveform history under its acknowledged identity.
 
 Before the base producer compares its candidate, DELTA-PROBE checks that the
 shell model of the new draw equals the copied acknowledged model apart from
-its epoch, which every paint advances. A renamed or refocused task, a new pane
-or any other model change leaves the draw to a complete START without further
-comparison.
+its epoch, which every paint advances, and the field of Desk's prompt, which
+typing changes; the prompt must be in both models at the same place or in
+neither. The app shell's notice, which follows the prompt, must be the same
+in both, wherever the prompt's size puts it. A renamed or refocused task, a
+new pane, the prompt opening or closing, a notice appearing, changing or
+ending, or any other model change leaves the draw to a complete START
+without further comparison. Desk's status, which shows only with the
+taskbar and so never with the prompt, must end both models or neither; its
+value, severity and place may change. Its region spans the taskbar row past
+the entries, whatever the status's width, so a change of the Agent's state
+keeps the catalog and replaces the status field in a DELTA.
 
 After the base producer has matched its controls, statics, instruments and
 series to their acknowledged identities, DELTA-PREPARE builds the shell
-candidate. It reads the base candidate's controls and instruments from the
-producer's pending target bank, which carries those identities, instead of
-from the candidate fields a START reads. It then gives each item the
-acknowledged identity in the same place:
+candidate. It reads the base candidate's controls, instruments and series
+from the producer's pending target bank, which carries those identities,
+instead of from the candidate fields a START reads. The family check runs
+on this batch as built, so a waveform or plot and the series it names must
+come from the same place: the candidate itself numbers its series afresh.
+The shell then gives each item the acknowledged identity in the same place:
 
 - the catalog must be identical, region identities included;
 - families must match in order, kind and region;
 - applet controls must already carry their acknowledged identities;
+- Desk's prompt takes its acknowledged identity and may change, so typing in
+  it sends one CONTROL-REPLACE;
+- the notice takes its acknowledged identity and is unchanged;
 - the taskbar takes the acknowledged identities and must otherwise be
   unchanged, because a DELTA cannot replace taskbar controls;
 - instruments and series take the identities in place and must be unchanged;
@@ -194,8 +308,13 @@ from screen storage covers them all, as the base producer does for its rows.
 The producer's unchanged-frame shortcut republishes its own target alone, so
 with the shell installed every changed draw takes the full build. Private
 counters record DELTA-PROBE refusals, DELTA-PREPARE refusals and successes,
-and where the last refusal happened; Desk acceptance runs record them with the
-terminal's count of committed PRESENT modes.
+and where the last refusal happened. They also count each refusal by its
+reason: a probe by the part of the two shell models that differed, a
+preparation by its stage times 16 plus the build's stage or the family's
+kind. The base producer counts its own DELTA refusals the same way, by the
+check of its gate that refused. Desk acceptance runs record all of them in
+`final-guest-diagnostics.json`, with the terminal's count of committed
+PRESENT modes.
 
 A bank is checked in full once, when it is frozen. STAGE freezes into the
 bank that ACTIVE does not name, after dropping PENDING, so a bank that

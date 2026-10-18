@@ -341,6 +341,16 @@ already exists, its value is overwritten.  Otherwise a new attribute is
 created via the attribute pool.  Both name and value are copied to the
 string pool.
 
+The string pool (12,288 bytes) is reset when a document loads.  Each
+attribute keeps the room its value holds there: a new value no longer than
+that room is written in place, and a longer one takes new room, twice the
+old or its own length, whichever is more.  So status text that changes
+length, such as Pad's `Ln N, Col M` as the caret crosses a digit boundary,
+stops costing the pool once its room fits its longest value, and however
+often a value changes, the rooms it has taken add up to less than four
+times its longest.  When the pool is full, the update stores an empty value
+(`UIDL-E-STR-FULL`).
+
 #### UIDL-REMOVE-ATTR
 ```forth
 UIDL-REMOVE-ATTR ( elem name-a name-l -- )
@@ -760,7 +770,7 @@ separate from the definition flags in the registry.
 | Pool | Capacity |
 |------|----------|
 | Elements | 256 × 128 bytes = 32 KB |
-| Attributes | 512 × 40 bytes = 20 KB |
+| Attributes | 512 × 48 bytes = 24 KB |
 | Strings | 12 KB |
 | ID hash table | 256 buckets (linear probing) |
 | Subscriptions | 128 × 24 bytes = 3 KB |

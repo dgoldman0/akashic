@@ -18,6 +18,7 @@ from rich_terminal.semantic_content import SemanticTextContent, SemanticContentF
 from rich_terminal.semantic_fields import FieldContent, FieldFlag, FieldKind, FieldRect
 from test_rich_terminal_desktop_acceptance import (
     _offer, _glyph_draws_outside, _peek_record_fixture, _soundlab_desktop_projection,
+    _with_tile_prompt,
 )
 
 MASK = (1 << 64) - 1
@@ -263,6 +264,16 @@ def field_projection(*, duration=2000, amplitude=75, selected='Amplitude (%)', f
     return replace(_soundlab_desktop_projection(), semantic_field_claims=tuple(claims))
 
 
+def prompt_projection(label, value, base=None):
+    """Sound Lab's value prompt holding VALUE, all of it selected, as Ctrl+A
+    leaves it, over Sound Lab's fields, which stay rich and inactive."""
+    return _with_tile_prompt(
+        field_projection() if base is None else base, label,
+        acceptance.SOUNDLAB_DESKTOP_TILE, acceptance.SOUNDLAB_MENU_SIGNATURE,
+        value, anchor=0,
+    )
+
+
 def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_redraw():
     probe = acceptance.SoundLabSeriesProbe()
     sent = []
@@ -278,12 +289,12 @@ def test_probe_uses_ordinary_inputs_compares_two_renders_and_proves_redraw():
     assert step(normal) is False and probe.stage == 2
     for prefix, value, start in (('Duration (100-2000 ms):', '2000', 2),
                                 ('Amplitude (0-100 percent):', '40', 7)):
-        prompt = replace(normal, lines=(acceptance.SOUNDLAB_FOCUS_MARKER, f'{prefix} {value}'),
-                         cells=(), semantic_field_claims=())
+        prompt = prompt_projection(prefix, value, normal)
         # Exercise the real fallback evidence boundary against the exact
         # immutable CELL prompt; a mocked recorder hid a full-run failure.
+        cell_lines = (acceptance.SOUNDLAB_FOCUS_MARKER, f'{prefix} {value}')
         prompt_cell = _offer('\n'.join(
-            line.ljust(280) for line in (*prompt.lines, *('',) * (84 - len(prompt.lines)))
+            line.ljust(280) for line in (*cell_lines, *('',) * (84 - len(cell_lines)))
         )).cell
         prompt_offer = replace(offer, cell=prompt_cell)
         assert probe.stage == start
@@ -421,9 +432,7 @@ def test_new_frame_rechecks_focus_or_prompt_before_rebinding_unaccepted_input(st
     probe = acceptance.SoundLabSeriesProbe()
     probe.stage = stage
     normal = field_projection()
-    prompt = replace(normal, lines=(acceptance.SOUNDLAB_FOCUS_MARKER,
-                                    'Duration (100-2000 ms): 2000'),
-                     cells=(), semantic_field_claims=())
+    prompt = prompt_projection('Duration (100-2000 ms):', '2000', normal)
     projection = normal if stage == 1 else prompt
     old, fresh = wave_offer(), wave_offer(offer_id=2)
     calls = []
@@ -485,3 +494,39 @@ def test_render_stage_rebinding_refreshes_baseline_without_duplicate_render_evid
                                    wave_offer(changed, identity=3, offer_id=4), 7,
                                    lambda *args: pytest.fail('completed redraw must not send input'), lambda: second)
         assert probe.evidence['stable_reuse']['history_key'] == [1, 1, 3]
+
+
+def _with_landmarks(client, keys=(50, 51, 52)):
+    """CLIENT's graph with Sound Lab's three landmark lines after its
+    waveform: a line across one row and a mark down one cell at each of two
+    columns on it."""
+
+    graph = client.records[0x200000]
+    lines = []
+    for key, column, width in zip(keys, (2, 11, 13), (84, 1, 1)):
+        lines += [152, 7, key, 0, 30, column, 1, width, int(key != keys[0]), 1,
+                  0x20000000, 0x808080FF, 0, 2, 0,
+                  0, 0x7FFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF]
+    graph.extend(lines)
+    graph[0] += len(lines) * 8
+    graph[8] += len(keys)
+    graph[9] += len(keys)
+    client.records[0x100000][1] = graph[0]
+    return client
+
+
+def test_source_read_takes_the_landmark_lines_after_the_waveform():
+    source = acceptance._read_soundlab_waveform_source(_with_landmarks(SourceClient()))
+    assert source.values == VALUES
+    assert source.bounds == (190, 55, 276, 67)
+
+
+def test_source_read_refuses_lines_that_are_not_the_landmarks():
+    with pytest.raises(acceptance.PhysicalDesktopAcceptanceError, match="three landmarks"):
+        acceptance._read_soundlab_waveform_source(
+            _with_landmarks(SourceClient(), keys=(50, 51, 53)))
+    client = _with_landmarks(SourceClient())
+    # A line whose point count disagrees with its extent.
+    client.records[0x200000][-6] = 3
+    with pytest.raises(acceptance.PhysicalDesktopAcceptanceError, match="landmark line"):
+        acceptance._read_soundlab_waveform_source(client)

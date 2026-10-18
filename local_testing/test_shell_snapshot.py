@@ -82,18 +82,18 @@ CREATE _SS-MS 4103 ALLOT CREATE _SS-FS 4103 ALLOT CREATE _SS-OS 4103 ALLOT
 
 def test_shell_snapshot_full_closure_and_deep_frozen_contract():
     program = PRELUDE + r'''
-0 0 SHSN-BANK-BYTES 128 = _SS-A
-4 30 SHSN-BANK-BYTES 830 = _SS-A
+0 0 SHSN-BANK-BYTES 192 = _SS-A
+4 30 SHSN-BANK-BYTES 894 = _SS-A
 -1 0 SHSN-BANK-BYTES 0= _SS-A
 0 0x100000000 SHSN-BANK-BYTES 0= _SS-A
 0xFFFFFFFF 0 SHSN-BANK-BYTES 0= _SS-A
 _SS-BUILD _SS-FREEZE _SS-VALID _SS-OK
-_SS-U @ 830 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
+_SS-U @ 894 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
 0 _SS-ENTRY _SS-F SHME-TITLE$ S" Editor" STR-STR= _SS-A
 1 _SS-ENTRY _SS-F SHME-LABEL$ S" Edit" STR-STR= _SS-A
 2 _SS-ENTRY _SS-F SHME-ACTION$ S" start" STR-STR= _SS-A
 2 _SS-F SHM.ABI _SS-BAD 4096 _SS-F SHM.CAPACITY _SS-BAD
-829 _SS-F SHM.USED _SS-BAD 0 _SS-F SHM.READY _SS-BAD
+893 _SS-F SHM.USED _SS-BAD 0 _SS-F SHM.READY _SS-BAD
 0 _SS-F SHM.OWNER-ID _SS-BAD 0 _SS-F SHM.OWNER-GEN _SS-BAD 0 _SS-F SHM.EPOCH _SS-BAD
 0 _SS-F SHM.WIDTH _SS-BAD 0x100000000 _SS-F SHM.HEIGHT _SS-BAD
 4 _SS-F SHM.FLAGS _SS-BAD 1 _SS-F SHM.FLAGS _SS-BAD
@@ -113,7 +113,7 @@ _SS-U @ 830 = _SS-A _SS-F SHM.COUNT @ 3 = _SS-A
 0 2 _SS-ENTRY SHME.IDENTITY _SS-BAD 0 2 _SS-ENTRY SHME.ACTION _SS-BAD
 1 2 _SS-ENTRY SHME.FLAGS _SS-BAD
 0 1 _SS-ENTRY SHME.LABEL-OFF _SS-BAD 3 1 _SS-ENTRY SHME.LABEL-U _SS-BAD
-831 2 _SS-ENTRY SHME.ACTION-OFF _SS-BAD 4096 2 _SS-ENTRY SHME.ACTION-U _SS-BAD
+895 2 _SS-ENTRY SHME.ACTION-OFF _SS-BAD 4096 2 _SS-ENTRY SHME.ACTION-U _SS-BAD
 : _SS-CONTROL
     1 _SS-ENTRY SHME.LABEL-OFF @ _SS-F + DUP C@ >R DUP 10 SWAP C!
     _SS-VALID SHSN-S-INVALID = _SS-A R> SWAP C! ; _SS-CONTROL
@@ -125,7 +125,7 @@ _SS-VALID _SS-OK
 _SS-M 4096 0 FILL _SS-VALID _SS-OK
 _SS-F 1+ _SS-U @ SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
 _SS-F _SS-U @ 1- SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
-_SHSN-V-M 128 SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
+_SHSN-V-M SHM-HEADER-SIZE SHSN-FROZEN-VALIDATE SHSN-S-INVALID = _SS-A
 _SS-DONE
 '''
     _run(program, minimum=60)
@@ -196,7 +196,7 @@ _SS-F _ST-C _SHSN.STAGED _ST-BAD-SOURCE
 _ST-C _SHSN.STAGED @ _ST-C _SHSN.ACTIVE _ST-BAD-SOURCE
 0 _ST-C _SHSN.HOST _ST-BAD-SOURCE
 _ST-END _ST-GOOD
-_ST-P @ _ST-A = _SS-A _ST-U @ 830 = _SS-A
+_ST-P @ _ST-A = _SS-A _ST-U @ 894 = _SS-A
 \ A publisher must protect the live ordinary graph, not just frozen A/B.
 : _ST-LIVE? _ST-C SHSN-LIVE-STORAGE-DISJOINT? ;
 _SS-O 4096 _ST-LIVE? _SS-A
@@ -266,7 +266,7 @@ _SS-F _ST-C _SHSN.STAGED _ST-BAD-SOURCE
     _ST-UNAVAILABLE R> _ST-C _SHSN.HOST ! ; _ST-HOST-CORRUPT
 _ST-GOOD
 \ Later mutation of ordinary model text cannot change the owned completed bank.
-88 _SS-M 800 + C! _ST-GOOD _ST-P @ 800 + C@ 69 = _SS-A
+88 _SS-M 864 + C! _ST-GOOD _ST-P @ 864 + C@ 69 = _SS-A
 _ST-BUILD 2 _SS-M SHM.EPOCH !
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD _ST-P @ _ST-B = _SS-A
 _ST-A _ST-U @ _SS-F _SS-U @ COMPARE 0= _SS-A
@@ -290,11 +290,10 @@ SCR-FREE _ST-SCREEN @ SCR-USE
 _ST-BEGIN _ST-END _ST-UNAVAILABLE
 _ST-BEGIN _ST-STAGE _ST-STAGE _ST-END _ST-UNAVAILABLE
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
-ASHELL-DRAW-MODAL _ASHELL-DRAW-OBSERVE _SS-OK _ST-UNAVAILABLE
 \ Inactive-bank capacity refusal leaves both previously completed bytes intact.
 _ST-BEGIN _ST-STAGE _ST-END _ST-GOOD
 _ST-A _SS-F 4096 MOVE _ST-B _SS-O 4096 MOVE
-_ST-C _SHSN.ACTIVE @ _ST-A = IF 829 _ST-C _SHSN.B-U ! ELSE 829 _ST-C _SHSN.A-U ! THEN
+_ST-C _SHSN.ACTIVE @ _ST-A = IF 893 _ST-C _SHSN.B-U ! ELSE 893 _ST-C _SHSN.A-U ! THEN
 _ST-BEGIN _ST-STAGE _ST-END _ST-UNAVAILABLE
 _ST-A 4096 _SS-F 4096 COMPARE 0= _SS-A
 _ST-B 4096 _SS-O 4096 COMPARE 0= _SS-A
@@ -340,7 +339,7 @@ _SS-DONE
 
 
 
-def test_shell_root_observer_catch_preserves_actual_paint_and_modal_output():
+def test_shell_root_observer_catch_preserves_actual_paint():
     program = PRELUDE + r'''
 CREATE _AP-CD COMP-DESC ALLOT CREATE _AP-AD APP-DESC ALLOT
 VARIABLE _AP-I VARIABLE _AP-S VARIABLE _AP-N VARIABLE _AP-PAINT-N
@@ -372,10 +371,10 @@ _AP-N @ 1 = _SS-A _AP-PAINT-N @ 2 = _SS-A
 SCR-DRAW-GENERATION@ 1 = _SS-A
 0 _AP-THROW ! -1 _ASHELL-DIRTY ! _ASHELL-PAINT
 _AP-N @ 1 = _SS-A SCR-DRAW-GENERATION@ 2 = _SS-A
-\\ A reinstalled observer runs again, including for a modal frame.
+\\ A reinstalled observer runs again.
 ' _AP-OBSERVER 123 ASHELL-DRAW-OBSERVE!
-_ASHELL-DIALOG-PRESENT
-_AP-N @ 2 = _SS-A _AP-PHASES 8 + @ ASHELL-DRAW-MODAL = _SS-A
+-1 _ASHELL-DIRTY ! _ASHELL-PAINT
+_AP-N @ 2 = _SS-A _AP-PHASES 8 + @ ASHELL-DRAW-BEGIN = _SS-A
 ASHELL-DRAW-OBSERVER@ OR 0= _SS-A
 SCR-DRAW-GENERATION@ 3 = _SS-A
 0 0 ASHELL-DRAW-OBSERVE!
@@ -413,7 +412,7 @@ _SS-FREEZE _SS-VALID _SS-OK
 1 _SS-F SHM.END-COL _SS-BAD 0 _SS-F SHM.DIVIDER-COL _SS-BAD
 \ Full-frame/empty shell snapshots do not fabricate child panes or tasks.
 _SO-BASE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
-_SS-F SHM.COUNT @ 0= _SS-A _SS-U @ 464 = _SS-A
+_SS-F SHM.COUNT @ 0= _SS-A _SS-U @ 528 = _SS-A
 \ Two launchers share one catalog generation and root owner, but not keys.
 : _SO-LAUNCH ( key col -- )
     >R >R _SS-M SHM-APPEND DUP _SS-E !
@@ -428,3 +427,167 @@ _SS-FREEZE _SS-VALID _SS-OK
 _SS-DONE
 '''
     _run(program, minimum=20)
+
+
+# Desk's own prompt on the hidden taskbar row: a model with one pane whose
+# title leaves the text cursor off an eight-byte boundary, then the prompt's
+# TEXT field "Ask:" "hi", one row as wide as the screen.
+PROMPT_MODEL = PRELUDE + r'''
+CREATE _SP-BS 47 ALLOT : _SP-B _SP-BS 7 + -8 AND ;
+VARIABLE _SP-DST VARIABLE _SP-CAP VARIABLE _SP-OFF
+: _SP-FIELD ( dst cap -- bytes status )
+    _SP-B UFLD-BUILDER-INIT ?DUP IF 0 SWAP EXIT THEN
+    1 UFLD-K-TEXT 3 32 1 7 0 _SP-B UFLD-BEGIN ?DUP IF 0 SWAP EXIT THEN
+    0 1 1 4 0 6 1 26 _SP-B UFLD-SLOTS ?DUP IF 0 SWAP EXIT THEN
+    S" Ask:" _SP-B UFLD-LABEL ?DUP IF 0 SWAP EXIT THEN
+    S" hi" _SP-B UFLD-TEXT ?DUP IF 0 SWAP EXIT THEN
+    _SP-B UFLD-FINISH ;
+: _SP-BODY
+    4096 4 _SS-M SHM-INIT _SS-A
+    7 _SS-M SHM.OWNER-ID ! 9 _SS-M SHM.OWNER-GEN ! 1 _SS-M SHM.EPOCH !
+    32 _SS-M SHM.WIDTH ! 12 _SS-M SHM.HEIGHT !
+    SHM-F-TASKBAR-HIDDEN SHM-F-INPUT-BLOCKED OR _SS-M SHM.FLAGS !
+    _SS-M SHM-APPEND DUP _SS-E !
+    11 OVER SHME.KEY ! 1 OVER SHME.KIND ! 1 OVER SHME.FLAGS !
+    10 OVER SHME.HEIGHT ! 20 OVER SHME.WIDTH !
+    9 OVER SHME.CONTENT-H ! 19 OVER SHME.CONTENT-W !
+    2 OVER SHME.OWNER-ID ! 3 OVER SHME.OWNER-GEN !
+    11 OVER SHME.IDENTITY ! 11 SWAP SHME.ACTION !
+    S" Editor" _SS-M SHM-COPY$ _SS-A _SS-E @ SHME.TITLE-OFF ! 6 _SS-E @ SHME.TITLE-U !
+    _SS-M SHM-PROMPT-ROOM _SS-A _SP-CAP ! _SP-DST !
+    _SP-DST @ _SP-CAP @ _SP-FIELD _SS-OK
+    _SS-M SHM-PROMPT-TAKE _SS-A ;
+: _SP-BUILD _SP-BODY _SS-M SHM-SEAL ;
+\ A byte of the frozen copy changed, validated, and put back.
+: _SP-BAD-BYTE ( value offset -- )
+    _SS-F + DUP C@ >R TUCK C! _SS-VALID SHSN-S-INVALID = _SS-A R> SWAP C! ;
+'''
+
+
+def test_desks_prompt_is_a_text_field_after_every_string_of_its_model():
+    program = PROMPT_MODEL + r'''
+_SP-BUILD _SS-FREEZE _SS-VALID _SS-OK
+\ The prompt follows the title at the next eight-byte boundary.
+_SS-F SHM.PROMPT-OFF @ DUP _SP-OFF ! SHM-HEADER-SIZE 4 168 * + 6 + 7 + -8 AND = _SS-A
+_SS-F SHM.PROMPT-U @ _SS-F SHM.PROMPT-OFF @ + _SS-U @ = _SS-A
+_SS-F SHM-PROMPT@ DUP 0<> _SS-A OVER UFLD-BYTES@ = _SS-A
+DUP UFLD-LABEL@ S" Ask:" STR-STR= _SS-A UFLD-TEXT@ S" hi" STR-STR= _SS-A
+\ One prompt a build, and none once sealed.
+_SS-M SHM-PROMPT-ROOM 0= _SS-A 2DROP
+16 _SS-M SHM-PROMPT-TAKE 0= _SS-A
+\ Only the hidden taskbar row holds it, its padding is zero, it is a TEXT
+\ field one row as wide as the screen, and it ends the model.
+0 _SS-F SHM.FLAGS _SS-BAD
+1 _SP-OFF @ 1- _SP-BAD-BYTE
+_SP-OFF @ 8 + _SS-F SHM.PROMPT-OFF _SS-BAD
+_SS-F SHM.PROMPT-U @ 8 - _SS-F SHM.PROMPT-U _SS-BAD
+31 _SS-F _SP-OFF @ + UFLD-WIDTH-OFFSET + _SS-BAD
+2 _SS-F _SP-OFF @ + UFLD-HEIGHT-OFFSET + _SS-BAD
+1 _SS-F _SP-OFF @ + UFLD-KIND-OFFSET + _SS-BAD
+_SS-VALID _SS-OK
+\ A model without a prompt keeps both fields zero.
+0 _SS-F SHM.PROMPT-U _SS-BAD
+_SS-DONE
+'''
+    _run(program, minimum=20)
+
+
+# The app shell's notice: "Saved" as a UDLG warning notice nine cells wide,
+# its root on the bottom row at column 10, apart from the pane.
+NOTICE_MODEL = PROMPT_MODEL + r"""
+VARIABLE _SN-OFF
+: _SN-SAVED S" Saved" ;
+: _SN-NOTICE ( dst -- bytes )
+    >R 5 1 9 1 UDLG-F-NOTICE 3 R@ UDLG-START
+    0 2 1 5 R@ UDLG-MESSAGE-SLOT! _SN-SAVED R@ UDLG-LINE+ R> UDLG-BYTES@ ;
+: _SN-TAKE ( row col -- )
+    _SS-M SHM-NOTICE-ROOM _SS-A DROP _SN-NOTICE _SS-M SHM-NOTICE-TAKE _SS-A ;
+"""
+
+
+def test_the_app_shells_notice_follows_every_string_and_the_prompt():
+    program = NOTICE_MODEL + r"""
+\ After every string, in a model with no prompt.
+_SS-BUILD 0 _SS-M SHM.READY !
+11 10 _SN-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.NOTICE-OFF @ DUP _SN-OFF ! SHM-HEADER-SIZE 4 168 * + 30 + 7 + -8 AND = _SS-A
+_SS-F SHM.NOTICE-U @ _SN-OFF @ + _SS-U @ = _SS-A
+_SS-F SHM.NOTICE-ROW @ 11 = _SS-A _SS-F SHM.NOTICE-COL @ 10 = _SS-A
+_SS-F SHM-NOTICE@ DUP 0<> _SS-A OVER UDLG-BYTES@ = _SS-A
+UDLG-MESSAGE@ _SN-SAVED STR-STR= _SS-A
+\ One notice a build, none once sealed, and no prompt after it.
+_SS-M SHM-NOTICE-ROOM 0= _SS-A 2DROP
+0 _SS-M SHM.READY ! _SS-M SHM-NOTICE-ROOM 0= _SS-A 2DROP
+_SS-M SHM-PROMPT-ROOM 0= _SS-A 2DROP
+\ It sits at the next boundary with zero padding, is a notice, lies
+\ inside the screen and apart from every pane, and ends the model.
+_SN-OFF @ 8 + _SS-F SHM.NOTICE-OFF _SS-BAD
+1 _SN-OFF @ 1- _SP-BAD-BYTE
+0 _SS-F _SN-OFF @ + UDLG-FLAGS-OFFSET + _SS-BAD
+24 _SS-F SHM.NOTICE-COL _SS-BAD
+12 _SS-F SHM.NOTICE-ROW _SS-BAD
+5 _SS-F SHM.NOTICE-ROW _SS-BAD
+_SS-F SHM.NOTICE-U @ 8 - _SS-F SHM.NOTICE-U _SS-BAD
+_SS-VALID _SS-OK
+\ A model without a notice keeps its fields zero.
+0 _SS-F SHM.NOTICE-U _SS-BAD
+\ After Desk's prompt.
+_SP-BODY 11 10 _SN-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.PROMPT-OFF @ _SS-F SHM.PROMPT-U @ + 7 + -8 AND
+    _SS-F SHM.NOTICE-OFF @ = _SS-A
+_SS-F SHM.NOTICE-U @ _SS-F SHM.NOTICE-OFF @ + _SS-U @ = _SS-A
+_SS-DONE
+"""
+    _run(program, minimum=24)
+
+
+# Desk's status: "[Agent: ready]" as a USF fourteen cells wide, its label's
+# slot the eight cells of "[Agent: ", on the bottom row at column 17, past
+# the taskbar's entries and apart from the pane.
+STATUS_MODEL = NOTICE_MODEL + r"""
+VARIABLE _SF-OFF
+: _SF-AGENT S" Agent" ; : _SF-READY S" ready" ;
+: _SF-STATUS ( dst cap -- bytes )
+    >R >R 1 14 8 0 USF-F-VISIBLE _SF-AGENT _SF-READY R> R> USF-INIT _SS-OK ;
+: _SF-TAKE ( row col -- )
+    _SS-M SHM-STATUS-ROOM _SS-A _SF-STATUS _SS-M SHM-STATUS-TAKE _SS-A ;
+"""
+
+
+def test_desks_status_follows_every_string_and_the_notice():
+    program = STATUS_MODEL + r"""
+\ After every string, in a model with no prompt or notice.
+_SS-BUILD 0 _SS-M SHM.READY !
+11 17 _SF-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.STATUS-OFF @ DUP _SF-OFF ! SHM-HEADER-SIZE 4 168 * + 30 + 7 + -8 AND = _SS-A
+_SS-F SHM.STATUS-U @ _SF-OFF @ + _SS-U @ = _SS-A
+_SS-F SHM.STATUS-ROW @ 11 = _SS-A _SS-F SHM.STATUS-COL @ 17 = _SS-A
+_SS-F SHM-STATUS@ DUP 0<> _SS-A OVER USF-BYTES@ = _SS-A
+DUP USF-LABEL@ _SF-AGENT STR-STR= _SS-A USF-VALUE@ _SF-READY STR-STR= _SS-A
+\ One status a build, none once sealed, and no prompt or notice after it.
+_SS-M SHM-STATUS-ROOM 0= _SS-A 2DROP
+0 _SS-M SHM.READY ! _SS-M SHM-STATUS-ROOM 0= _SS-A 2DROP
+_SS-M SHM-NOTICE-ROOM 0= _SS-A 2DROP _SS-M SHM-PROMPT-ROOM 0= _SS-A 2DROP
+\ It sits at the next boundary with zero padding, is visible, lies on the
+\ taskbar's row past its entries and inside the screen, and ends the model.
+_SF-OFF @ 8 + _SS-F SHM.STATUS-OFF _SS-BAD
+1 _SF-OFF @ 1- _SP-BAD-BYTE
+0 _SS-F _SF-OFF @ + USF-FLAGS-OFFSET + _SS-BAD
+10 _SS-F SHM.STATUS-ROW _SS-BAD
+7 _SS-F SHM.STATUS-COL _SS-BAD
+19 _SS-F SHM.STATUS-COL _SS-BAD
+_SS-F SHM.STATUS-U @ 8 - _SS-F SHM.STATUS-U _SS-BAD
+_SS-VALID _SS-OK
+\ A model without a status keeps its fields zero.
+0 _SS-F SHM.STATUS-U _SS-BAD
+\ After the notice.
+_SS-BUILD 0 _SS-M SHM.READY ! 11 10 _SN-TAKE 11 17 _SF-TAKE
+_SS-M SHM-SEAL _SS-FREEZE _SS-VALID _SS-OK
+_SS-F SHM.NOTICE-OFF @ _SS-F SHM.NOTICE-U @ + 7 + -8 AND
+    _SS-F SHM.STATUS-OFF @ = _SS-A
+_SS-F SHM.STATUS-U @ _SS-F SHM.STATUS-OFF @ + _SS-U @ = _SS-A
+\ The taskbar it lies on must show: none while Desk's prompt holds the row.
+_SP-BODY 11 17 _SF-TAKE _SS-M SHM-SEAL _SS-FREEZE _SS-VALID SHSN-S-INVALID = _SS-A
+_SS-DONE
+"""
+    _run(program, minimum=24)

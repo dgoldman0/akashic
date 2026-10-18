@@ -1416,60 +1416,11 @@ performance) and picks the widest value or header length.
 
 ---
 
-### 4.7 tui/widgets/dialog.f — Modal Dialog Boxes
+### 4.7 tui/widgets/dialog.f — Dialogs
 
-**Goal:** Modal popup dialog with a message and buttons.  Blocks
-input to other widgets while visible.  Returns which button was
-pressed.
-
-File: `tui/widgets/dialog.f`
-Prefix: `DLG-` (public), `_DLG-` (internal)
-Provider: `PROVIDED akashic-tui-dialog`
-Dependencies: `REQUIRE draw.f`, `REQUIRE box.f`, `REQUIRE region.f`, `REQUIRE label.f`
-
-~180 lines
-
-#### Dialog Descriptor (header + 7 cells = 96 bytes)
-
-| Offset | Field | Description |
-|--------|-------|-------------|
-| +0..+32 | (widget header) | type=WDG-T-DIALOG |
-| +40 | title-a | Title string address |
-| +48 | title-u | Title string length |
-| +56 | msg-a | Message string address |
-| +64 | msg-u | Message string length |
-| +72 | buttons | Address of button label array (addr+len pairs) |
-| +80 | btn-count | Number of buttons |
-| +88 | selected-btn | Currently focused button index |
-
-#### Words
-
-| Word | Stack | Description |
-|------|-------|-------------|
-| `DLG-NEW` | `( title-a title-u msg-a msg-u btns count -- widget )` | Create dialog |
-| `DLG-SHOW` | `( widget -- index )` | Show dialog, run modal loop, return button index |
-| `DLG-INFO` | `( msg-a msg-u -- )` | Quick: show OK-only info dialog |
-| `DLG-CONFIRM` | `( msg-a msg-u -- flag )` | Quick: show Yes/No dialog, return TRUE for Yes |
-| `DLG-FREE` | `( widget -- )` | Free dialog |
-
-#### Algorithm Notes
-
-`DLG-SHOW` saves the current screen state, draws the dialog centered
-on screen with a box border, runs its own event sub-loop handling
-Tab (cycle buttons), Enter (select), Escape (cancel = last button),
-then restores the saved screen and returns.
-
-The dialog's region is auto-sized based on message length and button
-count, centered within the current screen.
-
-#### Test targets: ~10 tests
-
-- Info dialog shows message, returns 0
-- Confirm dialog returns correct flag
-- Multiple buttons, Tab cycles
-- Escape selects cancel button
-- Long messages word-wrap
-- Dialog centering
+Built.  A dialog never blocks: its application's host gives it the
+application's input and paints it until a button is chosen, then calls
+the application back.  See `docs/tui/widgets/dialog.md`.
 
 ---
 

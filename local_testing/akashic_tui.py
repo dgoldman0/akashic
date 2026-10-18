@@ -717,6 +717,26 @@ DESK_APPLETS = (
         ),
     ),
 )
+# Applets Desk runs that the Desktop profile does not compose.  Desk with
+# one of them checks its work on the optional rich terminal.
+ADJACENT_DESK_APPLETS = (
+    DeskApplet(
+        "observatory",
+        "tui/applets/observatory/observatory.f",
+        ("tui/applets/observatory/observatory.uidl",),
+        "OBSERVATORY-ENTRY",
+        ready=("OBSERVATORY / SERIES PROFILE",),
+        stable=("OBSERVATORY / SERIES PROFILE",),
+    ),
+    DeskApplet(
+        "worlds",
+        "tui/applets/worlds/worlds.f",
+        ("tui/applets/worlds/worlds.uidl",),
+        "WORLDS-ENTRY",
+        ready=("WORLDS / RESERVOIR FACILITY",),
+        stable=("WORLDS / RESERVOIR FACILITY",),
+    ),
+)
 _DESK_AGENT_PROVIDER = "tui/applets/agent/providers/devtools/scripted.f"
 
 _DESK_PRACTICE_PROVISION = r"""\ Development-image installation step: provision only genuinely blank media.
@@ -926,12 +946,23 @@ def desktop_stable_markers(applets) -> tuple[str, ...]:
 
 
 def desk_applet(name: str) -> DeskApplet:
-    """The Desktop applet NAME."""
+    """The Desk applet NAME, from the Desktop's or the adjacent ones."""
 
-    for applet in DESK_APPLETS:
+    for applet in (*DESK_APPLETS, *ADJACENT_DESK_APPLETS):
         if applet.name == name:
             return applet
-    raise ValueError(f"no Desktop applet {name!r}")
+    raise ValueError(f"no Desk applet {name!r}")
+
+
+# Worlds' valve field: its label, then its value right-aligned in a slot as
+# wide as the largest setting the run accepts (10000).
+WORLDS_VALVE_LABEL = "valve (milliunits/tick)"
+
+
+def worlds_valve(value: int) -> str:
+    """The valve field's row as CELL shows it holding VALUE."""
+
+    return f"{WORLDS_VALVE_LABEL} {value:>5}"
 
 
 PROFILES = {
@@ -11889,26 +11920,30 @@ VARIABLE _aui-depth
     0= ABORT" agent review dialog contract" ;
 
 VARIABLE _aui-screen
-VARIABLE _aui-region
+VARIABLE _aui-first
 CREATE _aui-long 320 ALLOT
+CREATE _aui-evs 31 ALLOT
+: _aui-ev  ( -- event )  _aui-evs 7 + -8 AND ;
 
 : _aui-long-text  ( -- addr len )
     60 0 DO S" word " _aui-long I 5 * + SWAP MOVE LOOP
     _aui-long 300 ;
 
-\ Does the dialog's footer, its sixth row, start with TEXT?
-CREATE _aui-row 40 ALLOT
-: _aui-footer?  ( addr len -- flag )
-    40 0 DO
-        5 I SCR-GET CELL-CP@ DUP 0= IF DROP 32 THEN _aui-row I + C!
-    LOOP
-    _aui-row 2 + OVER COMPARE 0= ;
+\ A key for the review's dialog.
+: _aui-key  ( code -- )
+    KEY-T-SPECIAL _aui-ev ! _aui-ev 8 + ! 0 _aui-ev 16 + !
+    _aui-ev DLG-HOST-EVENT DROP ;
+\ Eight rows of the screen for the dialog, which is then six rows tall and
+\ shows one row of the long request at a time.
+: _aui-bounds  ( -- row col h w )  0 0 8 40 ;
+\ Whether Approve once can be chosen.
+: _aui-approve?  ( -- flag )  DLG-SHOWN _AG-REVIEW-APPROVE @ _DLG-AVAILABLE? ;
 
-\ A provider review opens its dialog locked, at its top.  A drawn frame
-\ that shows the last row unlocks approval; any change to the review
-\ locks it again and returns to the top; resolving it clears the tracking.
-\ The walk that draws the rows also counts them, so a six-row dialog with
-\ a long request cannot unlock before its last row is drawn.
+\ A provider review asks in a dialog with Approve once and Deny.  Approve
+\ once waits: a paint a row short of the end does not let F6 choose it,
+\ and the paint that shows the last row does.  Any change to the review
+\ asks again, unread; resolving it withdraws the dialog and clears the
+\ tracking.
 : _aui-review-dialog-contract  ( -- )
     _aui-state _AG-STATE-SIZE 0 FILL
     _aui-runtime AGENT-RUNTIME-SIZE 0 FILL
@@ -11925,44 +11960,46 @@ CREATE _aui-row 40 ALLOT
     _aui-message @ _aui-runtime ARUNTIME.APPROVAL-MSG !
     ARUN-S-APPROVAL _aui-runtime ARUNTIME.STATUS !
     40 12 SCR-NEW DUP _aui-screen ! SCR-USE
-    0 0 6 40 RGN-NEW DUP _aui-region ! _AG-REVIEW-INIT
     DEPTH _aui-depth !
 
-    _AG-SYNC-REVIEW
+    _AG-REVIEW-PRESENT
     _AG-REVIEW-REQUEST-ID @ _aui-message @ = _aui-assert
-    _AG-REVIEW WDG-DRAW
-    _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ > _aui-assert
-    _AG-REVIEW-SPAN @ 4 = _aui-assert
-    _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
-    _AG-REVIEW-APPROVABLE? 0= _aui-assert
-    \ One row short of the end is still locked.
-    _AG-REVIEW-ROWS @ _AG-REVIEW-SPAN @ - 1- _AGRV-SCROLL
-    _AG-REVIEW WDG-DRAW
-    _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
-    S" PgDn to inspect all rows" _aui-footer? _aui-assert
-    \ The frame that shows the last row says approval is open.
-    1 _AGRV-SCROLL _AG-REVIEW WDG-DRAW
-    _AG-REVIEW-BOTTOM-SEEN @ _aui-assert
-    _AG-REVIEW-APPROVABLE? _aui-assert
-    S" [F6] Approve once" _aui-footer? _aui-assert
+    _AG-REVIEW-SHOWN? _aui-assert
+    DLG-SHOWN DLG-BTN-COUNT 2 = _aui-assert
+    _AG-REVIEW-APPROVE @ 0= _aui-assert
+    DLG-HOST-PAINT
+    DLG-SHOWN WDG-REGION RGN-H 6 = _aui-assert
+    _aui-approve? 0= _aui-assert
+    \ A row short of the end, Approve once still waits, and F6 does nothing.
+    KEY-END _aui-key KEY-UP _aui-key DLG-HOST-PAINT
+    _aui-approve? 0= _aui-assert
+    KEY-F6 _aui-key _AG-REVIEW-SHOWN? _aui-assert
+    \ The paint that shows the last row lets it be chosen.
+    KEY-END _aui-key DLG-HOST-PAINT
+    _aui-approve? _aui-assert
 
+    \ A changed review asks again, unread.
+    DLG-SHOWN DLG-INSTANCE@ _aui-first !
     1 _aui-runtime ARUNTIME.REVISION +!
-    _AG-REVIEW-APPROVABLE? 0= _aui-assert
-    _AG-SYNC-REVIEW
-    _AG-REVIEW-TOP @ 0= _aui-assert
+    _AG-REVIEW-PRESENT
+    _AG-REVIEW-SHOWN? _aui-assert
+    DLG-SHOWN DLG-INSTANCE@ _aui-first @ <> _aui-assert
+    DLG-HOST-PAINT _aui-approve? 0= _aui-assert
     _AG-REVIEW-BOTTOM-SEEN @ 0= _aui-assert
     DEPTH _aui-depth @ = _aui-assert
 
+    \ Resolved elsewhere, the review withdraws its dialog.
     0 _aui-runtime ARUNTIME.APPROVAL-MSG !
     ARUN-S-IDLE _aui-runtime ARUNTIME.STATUS !
-    _AG-SYNC-REVIEW
+    _AG-REVIEW-PRESENT
     _AG-REVIEW-REQUEST-ID @ 0= _aui-assert
-    _AG-REVIEW-OPEN? 0= _aui-assert
-    _aui-region @ RGN-FREE
+    DLG-SHOWN 0= _aui-assert
     _aui-screen @ SCR-FREE
     0 _AG-CURRENT-STATE ! ;
 
+' _aui-bounds IS _DLG-BOUNDS-HOOK
 _aui-review-dialog-contract
+' _UTUI-DIALOG-BOUNDS IS _DLG-BOUNDS-HOOK
 
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"
@@ -13096,6 +13133,7 @@ VARIABLE _dt-cap-heap-before
 VARIABLE _dt-agenda-u
 VARIABLE _dt-close-prompt
 VARIABLE _dt-close-rgn
+CREATE _dt-close-evs 31 ALLOT
 CREATE _dt-big _DB-IO-CAP 1+ ALLOT
 CREATE _dt-agenda-before 256 ALLOT
 CREATE _dt-entry-before _DB-ENTRY-SZ ALLOT
@@ -13341,46 +13379,68 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     0 _DB-SOURCE-BLOCKED ! 0 _DB-DISCARD-ARMED !
     _dt-stack ;
 
-: _dt-test-close  ( -- )
-    0 _DB-DIRTY !
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-ALLOW = _dt-assert
-    -1 _DB-DIRTY ! 0 _DB-PROMPT ! 0 _DB-DISCARD-ARMED !
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-CANCEL = _dt-assert
+: _dt-close-ev  ( -- event )  _dt-close-evs 7 + -8 AND ;
+\ A key for the dialog Daybook shows; true when a dialog took it.
+: _dt-close-key  ( key -- handled? )
+    KEY-T-SPECIAL _dt-close-ev ! _dt-close-ev 8 + ! 0 _dt-close-ev 16 + !
+    _dt-close-ev DLG-HOST-EVENT ;
+\ Daybook shows the question MSG.
+: _dt-asks?  ( msg-a msg-u -- flag )
+    DLG-SHOWN ?DUP 0= IF 2DROP 0 EXIT THEN
+    0 DLG-PARAGRAPH STR-STR= ;
+: _dt-close-request  ( -- decision )
+    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB ;
 
+: _dt-test-close  ( -- )
+    \ As under a running shell, so that a quit shows.
+    ASHELL-CANCEL-QUIT
+    0 _DB-DIRTY ! 0 _DB-PROMPT ! 0 _DB-DISCARD-ARMED !
+    _dt-close-request APP-CLOSE-D-ALLOW = _dt-assert
+
+    \ Reloading over unsaved changes asks first.  Cancel, the default,
+    \ keeps them; Discard reloads.
+    -1 _DB-DIRTY !
+    0 _DB-DO-RELOAD
+    S" Reload Daybook and discard unsaved changes?" _dt-asks? _dt-assert
+    KEY-ENTER _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert _DB-DIRTY @ _dt-assert
+    0 _DB-DO-RELOAD
+    KEY-LEFT _dt-close-key _dt-assert KEY-ENTER _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-DIRTY @ 0= _dt-assert _dt-model-canonical? _dt-assert
+
+    \ Closing over unsaved changes defers to a question.  A close asked
+    \ while it is open is refused, and Escape cancels it.
+    -1 _DB-DIRTY !
+    _dt-close-request APP-CLOSE-D-DEFER = _dt-assert
+    S" Close Daybook and discard unsaved changes?" _dt-asks? _dt-assert
+    _dt-close-request APP-CLOSE-D-CANCEL = _dt-assert
+    KEY-ESC _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-DISCARD-ARMED @ 0= _dt-assert ASHELL-QUIT-PENDING? 0= _dt-assert
+
+    \ Discard arms the next close and asks to close again, and that close
+    \ goes ahead.
+    _dt-close-request APP-CLOSE-D-DEFER = _dt-assert
+    KEY-LEFT _dt-close-key _dt-assert KEY-ENTER _dt-close-key _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-DISCARD-ARMED @ _dt-assert ASHELL-QUIT-PENDING? _dt-assert
+    _dt-close-request APP-CLOSE-D-ALLOW = _dt-assert
+    _DB-DISCARD-ARMED @ 0= _dt-assert
+    ASHELL-CANCEL-QUIT
+
+    \ An open prompt is finished or cancelled before a close asks.
     0 0 1 80 RGN-NEW DUP _dt-close-rgn ! DUP _DB-PROMPT-RGN !
     _DB-PROMPT-BUF _DB-PROMPT-CAP PRM-NEW
     DUP _dt-close-prompt ! _DB-PROMPT !
-    0 _DB-DO-RELOAD
-    _DB-PROMPT-MODE @ _DB-PRM-DISCARD-RELOAD = _dt-assert
-    _DB-PROMPT @ PRM-ACTIVE? _dt-assert _DB-DIRTY @ _dt-assert
-    S" RELOAD" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
-    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
-    _DB-DIRTY @ 0= _dt-assert _dt-model-canonical? _dt-assert
-
-    -1 _DB-DIRTY !
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-DEFER = _dt-assert
-    _DB-PROMPT-MODE @ _DB-PRM-DISCARD-CLOSE = _dt-assert
+    _DB-PRM-TASK S" New task:" _DB-SHOW-PROMPT
     _DB-PROMPT @ PRM-ACTIVE? _dt-assert
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-DEFER = _dt-assert
-
-    S" discard" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
-    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
-    _DB-DISCARD-ARMED @ 0= _dt-assert
-    _DB-PROMPT @ PRM-ACTIVE? _dt-assert
-    S" DISCARD" _DB-PROMPT @ _PRM-O-INPUT + @ INP-SET-TEXT
-    _DB-PROMPT @ PRM-HIDE _DB-PROMPT @ _DB-PROMPT-SUBMIT
-    _DB-DISCARD-ARMED @ _dt-assert
-    ASHELL-QUIT-PENDING? _dt-assert
-    APP-CLOSE-R-WINDOW _dt-inst @ DAYBOOK-REQUEST-CLOSE-CB
-    APP-CLOSE-D-ALLOW = _dt-assert
-    _DB-DISCARD-ARMED @ 0= _dt-assert
-    ASHELL-CANCEL-QUIT
+    _dt-close-request APP-CLOSE-D-CANCEL = _dt-assert
+    DLG-SHOWN 0= _dt-assert
+    _DB-PROMPT @ PRM-HIDE _DB-PRM-NONE _DB-PROMPT-MODE !
     _dt-close-prompt @ PRM-FREE 0 _DB-PROMPT !
     _dt-close-rgn @ RGN-FREE 0 _DB-PROMPT-RGN !
+    0 _DB-DIRTY !
     _dt-stack ;
 
 : _dt-run  ( -- )
@@ -13980,8 +14040,24 @@ REQUIRE tui/applets/soundlab/soundlab.f
 SOUNDLAB-RUN
 ." [akashic] sound lab exited" CR
 """,
-        ready_markers=("SOUND LAB", "Waveform", "Playback"),
-        stable_markers=("SOUND LAB", "Waveform", "Playback"),
+        ready_markers=("SOUND LAB", "Waveform", "audio device"),
+        stable_markers=("SOUND LAB", "Waveform", "audio device"),
+        linked=True,
+        include_large_sample=False,
+    ),
+    "worlds": Profile(
+        roots=("tui/applets/worlds/worlds.f",),
+        resources=("tui/applets/worlds/worlds.uidl",),
+        autoexec=r"""\ autoexec.f - standalone Worlds profile
+ENTER-USERLAND
+." [akashic] loading worlds" CR
+REQUIRE tui/applets/worlds/worlds.f
+." [akashic] starting worlds" CR
+WORLDS-RUN
+." [akashic] worlds exited" CR
+""",
+        ready_markers=("WORLDS / RESERVOIR FACILITY", worlds_valve(500)),
+        stable_markers=("WORLDS / RESERVOIR FACILITY", "Recent canonical transitions"),
         linked=True,
         include_large_sample=False,
     ),
@@ -14018,10 +14094,10 @@ DESKTOP_APT1_MAX_STATUS_FIELDS = (
 )
 DESKTOP_APT1_STATUS_FIELD_PAYLOAD_FIXED_BYTES = 96
 DESKTOP_APT1_STATUS_FIELD_FRAME_FIXED_BYTES = 136
-# A canonical FIELD needs a 192-byte root; each CHOICE consumes at least its
+# A canonical FIELD needs a 224-byte root; each CHOICE consumes at least its
 # 24-byte native record. These independent conservative bounds account for
 # roots and content items without hard-coding Sound Lab's four parameters.
-DESKTOP_APT1_FIELD_HEADER_BYTES = 192
+DESKTOP_APT1_FIELD_HEADER_BYTES = 224
 DESKTOP_APT1_FIELD_CHOICE_HEADER_BYTES = 24
 DESKTOP_APT1_FIELD_NATIVE_BYTES = DESKTOP_APT1_UIDL_AGGREGATE_TEXT_BYTES
 DESKTOP_APT1_MAX_FIELDS = DESKTOP_APT1_FIELD_NATIVE_BYTES // DESKTOP_APT1_FIELD_HEADER_BYTES
@@ -14041,8 +14117,7 @@ DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES = (
 # Complete snapshot storage bounds include one DEFINE per native history and
 # at most one sample chunk per i64 value. Declared history reservations are
 # independent finite limits; sparse/empty histories still consume their full
-# authored capacity. These limits are available for qualification but SERIES
-# remains unadvertised until its composed publication/input run is accepted.
+# authored capacity.
 DESKTOP_APT1_SERIES_HEADER_BYTES = 72
 DESKTOP_APT1_MAX_SERIES = (
     DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_SERIES_HEADER_BYTES
@@ -14055,6 +14130,13 @@ DESKTOP_APT1_SERIES_WIRE_BYTES = (
     80 * DESKTOP_APT1_SERIES_OPERATIONS + DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES
 )
 DESKTOP_APT1_MAX_HISTORY_PER_SERIES = 32_768
+# A POLYLINE keeps each point as two native cells, sixteen bytes, in the same
+# DATA_GRAPHICS bank, so that bank bounds both the points of one line and the
+# points of every line.  An owner asks for only the points its lines need.
+DESKTOP_APT1_POLYLINE_POINT_BYTES = 16
+DESKTOP_APT1_MAX_PATH_POINTS = (
+    DESKTOP_APT1_DATA_GRAPHICS_NATIVE_BYTES // DESKTOP_APT1_POLYLINE_POINT_BYTES
+)
 DESKTOP_APT1_TOTAL_SAMPLE_SLOTS = 65_536
 DESKTOP_APT1_MAX_SAMPLES_PER_APPEND = 4_096
 # Two thirds of the machine is general XMEM, where Desk's rich storage grows;
@@ -14205,7 +14287,8 @@ DESKTOP_APT1_CONTROL_VARIABLE_BYTES = (
     + DESKTOP_APT1_FIELD_NATIVE_BYTES
 )
 # METER has the largest fixed INSTRUMENT frame (152 bytes); adding the entire
-# DATA_GRAPHICS bank separately covers every READOUT unit span.  This is a
+# DATA_GRAPHICS bank separately covers every READOUT unit span and every
+# POLYLINE's points, eight wire bytes for each sixteen native ones.  This is a
 # conservative combined-family wire bound selected from caller-owned bytes,
 # not a hidden per-unit or per-applet limit.
 DESKTOP_APT1_INSTRUMENT_WIRE_BYTES = (
@@ -14247,7 +14330,9 @@ DESKTOP_APT1_SHELL_MAX_ENTRIES = 140
 DESKTOP_APT1_SHELL_TEXT_BYTES = (
     DESKTOP_APT1_SHELL_MODEL_BYTES - 128 - 168 * DESKTOP_APT1_SHELL_MAX_ENTRIES
 )
-DESKTOP_APT1_SHELL_REGIONS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 3
+# Each entry may be a pane, with a content region and, while its
+# application shows a prompt, a modal region over that content.
+DESKTOP_APT1_SHELL_REGIONS = 2 * DESKTOP_APT1_SHELL_MAX_ENTRIES + 3
 DESKTOP_APT1_SHELL_CONTROLS = DESKTOP_APT1_SHELL_MAX_ENTRIES + 2
 DESKTOP_APT1_SHELL_PANES = DESKTOP_APT1_SHELL_MAX_ENTRIES
 DESKTOP_APT1_SHELL_OBJECTS = DESKTOP_APT1_SHELL_CONTROLS + DESKTOP_APT1_SHELL_PANES
@@ -14307,7 +14392,9 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
             | RetainedFeature.GRID_CELLS
             | RetainedFeature.STATUS_FIELDS
             | RetainedFeature.FIELDS
+            | RetainedFeature.DIALOGS
             | RetainedFeature.SERIES
+            | RetainedFeature.VECTOR
             | RetainedFeature.RGBA_IMAGE
         ),
         max_owner_records=1,
@@ -14326,13 +14413,14 @@ DESKTOP_APT1_RICH_TERMINAL_BASE = RichTerminalProfile(
         image_formats=IMAGE_FORMATS,
         max_image_width=DESKTOP_APT1_MAX_IMAGE_SIDE,
         max_image_height=DESKTOP_APT1_MAX_IMAGE_SIDE,
-        max_path_points=0,
+        max_path_points=DESKTOP_APT1_MAX_PATH_POINTS,
         max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         max_samples_per_append=DESKTOP_APT1_MAX_SAMPLES_PER_APPEND,
         max_history_per_series=DESKTOP_APT1_MAX_HISTORY_PER_SERIES,
         minimum_presentation_interval_us=0,
         total_sample_slots=DESKTOP_APT1_TOTAL_SAMPLE_SLOTS,
         total_utf8_bytes=DESKTOP_APT1_TOTAL_UTF8_BYTES,
+        total_path_points=DESKTOP_APT1_MAX_PATH_POINTS,
         client_to_terminal_max_payload=DESKTOP_APT1_MAX_PAYLOAD_BYTES,
         terminal_to_client_max_payload=64,
         base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
@@ -14657,7 +14745,9 @@ PROFILES["desktop-apt1"] = replace(
 # Desk with only the applet being worked on, on the optional rich terminal.
 # Each checks that applet's work through the physical viewer before the full
 # Desktop journey runs as regression.
-DESKTOP_APT1_APPLETS = ("pad", "fexp", "daybook", "streams", "agent")
+DESKTOP_APT1_APPLETS = (
+    "pad", "fexp", "daybook", "streams", "agent", "soundlab", "observatory",
+)
 # Development checks beyond one applet: Desk with Pad on a terminal with
 # little room for retained text, and Desk with File Explorer showing a real
 # photograph (below).
@@ -14665,6 +14755,11 @@ DESKTOP_APT1_CHECKS = (*DESKTOP_APT1_APPLETS, "small-terminal", "photo", "damage
 DESKTOP_APT1_APPLET_PROFILES = tuple(
     f"desktop-apt1-{name}" for name in DESKTOP_APT1_CHECKS
 )
+# On the Desktop, Sound Lab is a built-in without a tile; alone it takes
+# the tile, where its frequency landmarks have room below its analysis.
+# Observatory is checked beside Worlds, which hands it a run's telemetry
+# through Analyze: Observatory starts first, so Desk has its handler when
+# Worlds asks.
 # On the Desktop, Streams is a built-in without a tile and without a feed.
 # Alone, it takes the tile and starts with a fixed feed, loaded as an
 # injected source would load one, so its cards have posts to show.  The
@@ -14676,30 +14771,40 @@ DESKTOP_APT1_APPLET_PROFILES = tuple(
 DAYBOOK_APT1_REMINDER_DELAY_S = 120
 _DESKTOP_APT1_ALONE = {
     "daybook": (
-        replace(
+        (replace(
             desk_applet("daybook"),
             setup=daybook_reminder_setup(DAYBOOK_APT1_REMINDER_DELAY_S),
-        ),
+        ),),
         (),
     ),
     "agent": (
-        replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),
+        (replace(desk_applet("agent"), setup=agent_transcript.forth_seed()),),
         (),
     ),
     "streams": (
-        replace(
+        (replace(
             desk_applet("streams"),
             tile=True,
             setup=streams_fixture_init("/testing/streams/desk-timeline.json"),
             ready=("STREAMS", "T thread"),
             stable=("STREAMS", "T thread"),
-        ),
+        ),),
         (("testing/streams/desk-timeline.json", STREAMS_DESK_TIMELINE_FIXTURE),),
     ),
+    "soundlab": (
+        (replace(
+            desk_applet("soundlab"),
+            tile=True,
+            note="",
+            ready=("SOUND LAB", "Waveform"),
+            stable=("SOUND LAB", "Waveform"),
+        ),),
+        (),
+    ),
+    "observatory": ((desk_applet("observatory"), desk_applet("worlds")), ()),
 }
 for _name in DESKTOP_APT1_APPLETS:
-    _applet, _files = _DESKTOP_APT1_ALONE.get(_name, (desk_applet(_name), ()))
-    _applets = (_applet,)
+    _applets, _files = _DESKTOP_APT1_ALONE.get(_name, ((desk_applet(_name),), ()))
     PROFILES[f"desktop-apt1-{_name}"] = replace(
         PROFILES["desktop-apt1"],
         roots=desktop_roots(_applets, rich=True),
@@ -14709,7 +14814,20 @@ for _name in DESKTOP_APT1_APPLETS:
         stable_markers=desktop_stable_markers(_applets),
         initial_files=PROFILES["desktop-apt1"].initial_files + _files,
     )
-del _name, _applet, _files, _applets
+del _name, _files, _applets
+
+# The Agent alone also opens its run settings, so its source is the
+# device-flow fixture's, as Daybook's with the Agent is: a signed-in account
+# and a ready catalog of two models, which the scripted provider runs turns
+# on.
+PROFILES["desktop-apt1-agent"] = replace(
+    PROFILES["desktop-apt1-agent"],
+    roots=(*PROFILES["desktop-apt1-agent"].roots, _DAYBOOK_AGENT_DEVFLOW),
+    autoexec=PROFILES["desktop-apt1-agent"].autoexec.replace(
+        _DESK_AGENT_SOURCE_BOOT, _DAYBOOK_AGENT_SOURCE_BOOT, 1
+    ),
+)
+assert _DAYBOOK_AGENT_SOURCE_BOOT in PROFILES["desktop-apt1-agent"].autoexec
 
 # A terminal with little room for retained text.  Pad's empty editor fits
 # it.  Its Open prompt, which leaves the whole screen to residual glyphs, and
@@ -29556,7 +29674,10 @@ def smoke(
                 screen = session.snapshot()
                 if views is not None:
                     views.append(screen.text())
-                if "[F6] Approve once" in screen.text():
+                # The review's dialog has shown its last line once it no
+                # longer says more lies below.
+                if ("Review required" in screen.text()
+                        and "PgDn: more below" not in screen.text()):
                     return True
                 before_revision = session.revision
                 session.send_key("pagedown")
@@ -29791,7 +29912,7 @@ def smoke(
                 session.send_text("task smoke")
                 session.send_key("enter")
                 if wait_screen(
-                    "PgDn to inspect all rows",
+                    "Review required",
                     "persistent app tool did not enter its locked approval view",
                     step_budget=1_200_000_000,
                     wall_timeout=30.0,
@@ -29991,7 +30112,7 @@ def smoke(
                 session.send_key("enter")
                 if review:
                     if not wait_screen(
-                        "PgDn to inspect all rows",
+                        "Review required",
                         f"the install in {prompt!r} did not start its review",
                         step_budget=1_500_000_000,
                         wall_timeout=40.0,
@@ -30290,7 +30411,7 @@ def smoke(
 
             approved_prompt = "task approved-hardening"
             if compose(approved_prompt, "reviewed scoped write") and wait_screen(
-                "PgDn to inspect all rows",
+                "Review required",
                 "scoped persistent write did not start at its locked review top",
                 step_budget=1_200_000_000,
                 wall_timeout=30.0,
@@ -30340,7 +30461,7 @@ def smoke(
 
             denied_prompt = "task denied-hardening"
             if compose(denied_prompt, "denied scoped write") and wait_screen(
-                "PgDn to inspect all rows",
+                "Review required",
                 "second scoped write did not start at its locked review top",
                 step_budget=1_200_000_000,
                 wall_timeout=30.0,
@@ -31506,11 +31627,12 @@ def smoke(
                     machine.send_key("end")
                     machine.send_key("delete")
                     if not shows(
-                        "Type DELETE to delete this automation:",
+                        "Delete the selected automation?",
                         "Delete did not ask first",
                     ):
                         return
-                    machine.send_text("DELETE")
+                    # Cancel is the default; Left selects Delete.
+                    machine.send_key("left")
                     machine.send_key("enter")
                     if check == "deleted":
                         break
@@ -32537,13 +32659,13 @@ def smoke(
             session.send_text(source_url)
             session.send_key("enter")
             if not wait_screen(
-                "[on ] Syndication feed",
+                "Syndication feed",
                 "Desk Streams did not render the newly configured feed source",
                 step_budget=1_200_000_000,
                 wall_timeout=30.0,
             ):
                 return
-            if "[on ]" not in session.snapshot().text():
+            if "[x] Syndication feed" not in session.snapshot().text():
                 journey_errors.append(
                     "new Desk Streams source did not begin enabled"
                 )
@@ -32559,7 +32681,7 @@ def smoke(
                 return
             session.send_key("e")
             if not wait_screen(
-                "[off]",
+                "[ ] Syndication feed",
                 "Desk Streams did not disable the selected exact source revision",
             ):
                 return
@@ -32704,7 +32826,7 @@ def smoke(
                 "relaunched Desk Streams did not recover the configured source",
             ):
                 return
-            if "[off]" not in session.snapshot().text():
+            if "[ ] Syndication feed" not in session.snapshot().text():
                 journey_errors.append(
                     "relaunched Desk Streams lost the source enabled state"
                 )
@@ -32734,11 +32856,12 @@ def smoke(
 
             session.send_key("d")
             if not wait_screen(
-                "Type REMOVE to delete selected source:",
-                "Desk Streams did not open exact source-removal confirmation",
+                "Remove the selected source?",
+                "Desk Streams did not ask before removing the source",
             ):
                 return
-            session.send_text("REMOVE")
+            # Cancel is the default; Left selects Remove.
+            session.send_key("left")
             session.send_key("enter")
             if not wait_screen(
                 "No sources configured",
@@ -33250,6 +33373,55 @@ def smoke(
                 "Pad did not switch back to smoke.txt",
             )
 
+        def run_worlds_valve_journey() -> None:
+            """Worlds' valve is a canonical INTEGER field: Right opens it a
+            step, the wheel over its value closes it a step, and a press on
+            the value sets the next setting, as V does.  Each setting is a
+            journaled valve.set."""
+
+            session.send_key("right")
+            if not wait_screen(
+                worlds_valve(750), "Right did not open Worlds' valve a step"
+            ) or not wait_screen(
+                "valve.set", "Worlds did not journal the valve setting"
+            ):
+                return
+            hits = screen.find(worlds_valve(750))
+            if len(hits) != 1:
+                journey_errors.append("Worlds did not show its valve field once")
+                return
+            row, left = hits[0]
+            value_col = left + len(worlds_valve(750)) - 1
+            send_sgr_mouse(row, value_col, button=65)
+            if not wait_screen(
+                worlds_valve(500),
+                "The wheel over Worlds' valve did not close it a step",
+            ):
+                return
+            send_sgr_mouse(row, value_col)
+            send_sgr_mouse(row, value_col, release=True)
+            if not wait_screen(
+                worlds_valve(750),
+                "A press on Worlds' valve did not set its next setting",
+            ):
+                return
+            # The status bar says the run is paused, how the last action
+            # went, and that nothing was replayed; Space runs and pauses.
+            if not wait_screen_state(
+                lambda shown: all(
+                    text in shown.text() for text in ("Paused", "Ready", "Not replayed")
+                ),
+                "Worlds' status bar does not show its run, result and replay",
+            ):
+                return
+            session.send_text(" ")
+            if not wait_screen(
+                "Running fixed-step", "Space did not show Worlds' run as running"
+            ):
+                return
+            session.send_text(" ")
+            wait_screen("Paused", "Space did not show Worlds' run as paused")
+
         def run_daybook_mixed_text_journey() -> None:
             """Add a mixed-script task through Daybook's prompt: typed,
             corrected with Backspace, and edited at a clicked character.
@@ -33350,6 +33522,9 @@ def smoke(
                 journey_errors.append(
                     "Daybook did not persist the mixed-script task's exact UTF-8"
                 )
+
+        if initial_ready and profile_name == "worlds":
+            run_worlds_valve_journey()
 
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
@@ -33584,6 +33759,12 @@ def smoke(
                 ):
                     wait_screen(
                         "91", "Grid did not recalculate the dependent SUM range"
+                    )
+                    # The formula bar, a read-only TEXT field, shows the
+                    # selected cell's source where the cell shows its value.
+                    wait_screen(
+                        "=B2*C2+5",
+                        "Grid's formula bar did not show the edited source",
                     )
                     session.send_key("ctrl+s")
                     wait_screen(
@@ -33985,8 +34166,8 @@ def smoke(
                         for marker in (
                             "Provider approval request",
                             "no local tool envelope",
-                            "[F6] Approve once",
-                            "[F7] Deny",
+                            "F6 Approve once",
+                            "F7 Deny",
                         ):
                             if marker not in provider_review:
                                 journey_errors.append(
@@ -34600,6 +34781,8 @@ def smoke(
                             "Delete the selected item?",
                             "Delete did not open its confirmation dialog",
                         ):
+                            # Cancel is the default; Left selects Delete.
+                            session.send_key("left")
                             session.send_key("enter")
                             wait_screen_gone(
                                 "Delete the selected item?",
@@ -34622,6 +34805,7 @@ def smoke(
                     "Delete the selected item?",
                     "empty-folder Delete did not open confirmation",
                 ):
+                    session.send_key("left")
                     session.send_key("enter")
                     wait_screen_gone(
                         "Delete the selected item?",
@@ -35089,6 +35273,7 @@ VARIABLE _suc-i3
 VARIABLE _suc-owner-revision
 
 CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
+CREATE _suc-evs 31 ALLOT
 
 : _suc-assert  ( flag -- )
     1 _suc-checks +! 0= IF
@@ -35119,6 +35304,19 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
 : _suc-count=  ( expected -- flag )
     >R _suc-i1 @ STREAMS-SOURCES-COUNT@
     STREAMS-SOURCE-S-OK = SWAP R> = AND ;
+: _suc-ev  ( -- event )  _suc-evs 7 + -8 AND ;
+\ A key for the dialog Streams shows; true when a dialog took it.
+: _suc-key  ( key -- handled? )
+    KEY-T-SPECIAL _suc-ev ! _suc-ev 8 + ! 0 _suc-ev 16 + !
+    _suc-ev DLG-HOST-EVENT ;
+\ Streams asks whether to remove the selected source.
+: _suc-asks-remove?  ( -- flag )
+    DLG-SHOWN ?DUP 0= IF 0 EXIT THEN
+    0 DLG-PARAGRAPH S" Remove the selected source?" STR-STR= ;
+\ Answer Remove: Cancel is the default, and Left selects Remove.
+: _suc-remove  ( -- )
+    KEY-LEFT _suc-key _suc-assert KEY-ENTER _suc-key _suc-assert
+    DLG-SHOWN 0= _suc-assert ;
 
 : _suc-test-view-isolation  ( -- )
     _suc-i1 @ _STM-ACTIVATE
@@ -35218,12 +35416,18 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     DUP STREAMS-SOURCE-LABEL$ S" Watched page" STR-STR= _suc-assert
     STREAMS-SOURCE-ENDPOINT$ S" https://example.test/page"
         STR-STR= _suc-assert
-    6 _STM-DH ! _STM-SOURCE-ENSURE-VISIBLE
-    _STM-SOURCE-TOP @ 1 = _suc-assert
-    0 _STM-SOURCE-SELECTED ! _STM-SOURCE-ENSURE-VISIBLE
-    _STM-SOURCE-TOP @ 0= _suc-assert
-    1 _STM-SOURCE-SELECTED ! 32 _STM-DH ! _STM-SOURCE-ENSURE-VISIBLE
-    _STM-SOURCE-TOP @ 0= _suc-assert
+    \ Each source is a card: its kind, format and revision on one line,
+    \ and its refresh and latest observation on two more.
+    0 _suc-source _STM-SOURCE-KIND-LINE$
+        S" syndication / auto  revision 1" STR-STR= _suc-assert
+    1 _suc-source _STM-SOURCE-KIND-LINE$
+        S" watched-page / auto  revision 1" STR-STR= _suc-assert
+    0 _suc-source _STM-SOURCE-LATEST-LINE$
+        S" no retained observations" STR-STR= _suc-assert
+    \ A selection past the last source comes back to it.
+    5 _STM-SOURCE-SELECTED ! _STM-SOURCE-CLAMP
+    _STM-SOURCE-SELECTED @ 1 = _suc-assert
+    _STM-SOURCE-SHOWN 2 = _suc-assert
     _suc-scratch-zero? _suc-assert _suc-stack ;
 
 : _suc-test-selection-and-toggle  ( -- )
@@ -35245,12 +35449,14 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     _suc-scratch-zero? _suc-assert _suc-stack ;
 
 : _suc-test-confirmed-remove  ( -- )
+    \ Cancel, the default, keeps the source.
     _suc-owner-capture
     _STM-BEGIN-SOURCE-REMOVE
     _STM-SOURCE-PENDING-ARMED @ 0<> _suc-assert
     _STM-SOURCE-PENDING-RID RID-PRESENT? _suc-assert
     _STM-SOURCE-PENDING-REVISION @ 2 = _suc-assert
-    S" remove" _STM-APPLY-SOURCE-REMOVE
+    _suc-asks-remove? _suc-assert
+    KEY-ENTER _suc-key _suc-assert DLG-SHOWN 0= _suc-assert
     _suc-owner-stable 2 _suc-count= _suc-assert
     _suc-pending-zero? _suc-assert
 
@@ -35261,7 +35467,7 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
         STREAMS-SOURCE-ENABLE-OWNER
         STREAMS-SOURCE-S-OK = _suc-assert
     _suc-owner-advanced
-    S" REMOVE" _STM-APPLY-SOURCE-REMOVE
+    _suc-remove
     _suc-owner-stable 2 _suc-count= _suc-assert
     _suc-pending-zero? _suc-assert
 
@@ -35271,7 +35477,7 @@ CREATE _suc-over STREAMS-SOURCE-ENDPOINT-MAX 1+ ALLOT
     _STM-BEGIN-SOURCE-REMOVE
     _STM-SOURCE-PENDING-REVISION @ 3 = _suc-assert
     0 _STM-SOURCE-SELECTED !
-    S" REMOVE" _STM-APPLY-SOURCE-REMOVE
+    _suc-remove
     _suc-owner-advanced 1 _suc-count= _suc-assert
     _STM-SOURCE-SELECTED @ 0= _suc-assert
     0 _suc-source DUP SSOURCE.KIND @ SSOURCE-KIND-SYNDICATION =

@@ -100,18 +100,18 @@ class Admitted(Families):
 
     def admit(self, batch, out):
         (status,), steps = self.run("RTE-FAMILY-BATCH-PREFLIGHT", batch, out, self.shell)
-        return status, self.read(out, 560), steps
+        return status, self.read(out, 600), steps
 
     def hybrid(self, **kwargs):
         plan, items, refs, text, count, _ = self.runs(**kwargs)
         hybrid = self.allocate(struct.pack("<21Q", 1, 2, 3, 0, plan, refs, 16 * count,
                                            text, self._text_bytes(refs, count),
                                            *([0] * 12)))
-        return hybrid, self.allocate(bytes(472))
+        return hybrid, self.allocate(bytes(504))
 
     def admit_hybrid(self, hybrid, out):
         (status,), steps = self.run("RTE-HYBRID-PREFLIGHT", hybrid, out, self.facade)
-        return status, self.read(out, 472), steps
+        return status, self.read(out, 504), steps
 
 
 @pytest.fixture(params=("python", "native"))
@@ -310,7 +310,7 @@ def _controls_hybrid(harness, **kwargs):
     plan, items, bank, size, _ = _control_plan(harness, **kwargs)
     hybrid = harness.allocate(struct.pack("<21Q", 1, 2, 3, plan, 0, 0, 0, 0, 0,
                                           bank, size, *([0] * 10)))
-    return hybrid, harness.allocate(bytes(472))
+    return hybrid, harness.allocate(bytes(504))
 
 
 def _controls(harness, boundary):

@@ -55,8 +55,8 @@ All other family emission uses the existing base facade APIs.
 
 ## Checked summary
 
-The new admission is 544 bytes. Cells0..31 are owner, generation, and surface
-columns/rows; cells32/40 are ABI1 and size544; bytes48..119 are zero reserved.
+The new admission is 568 bytes. Cells0..31 are owner, generation, and surface
+columns/rows; cells32/40 are ABI1 and size568; bytes48..119 are zero reserved.
 The named family aggregate offsets120..455 retain the existing HA meanings.
 The instrument-region count is the number of distinct catalog rows actually
 used by instruments, regardless of how many family plans copy those rows.
@@ -71,6 +71,15 @@ used by instruments, regardless of how many family plans copy those rows.
 | 520 | Last PANE identity |
 | 528 | TASKBAR/TASK/LAUNCHER control count |
 | 536 | Exact required neutral feature bits |
+| 544 | IMAGE static count |
+| 552 | DOCUMENT control count |
+| 560 | MODAL catalog region count |
+
+A batch requires DIALOGS when a catalog region is modal or a control is a
+DIALOG or BUTTON. Dialogs and buttons have no count of their own, so the
+provider accepts that requirement only from a batch with a modal region or
+with controls, and gates each dialog or button again when it is captured
+([DIALOG-ADMISSION.md](DIALOG-ADMISSION.md)).
 
 CONTROL entries precede other OBJECT families and their identities remain
 contiguous across plans. All OBJECT identities are globally increasing in

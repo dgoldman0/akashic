@@ -5,10 +5,11 @@ CELL divider paint, taskbar paint and taskbar pointer hit testing. It does
 not contain terminal IDs, wire encoders, retained scenes or app-name rules.
 
 Desk builds one inactive caller-owned bank before painting. Each bank has a
-128-byte header, a bounded array of 168-byte records and a copied text arena.
+192-byte header, a bounded array of 168-byte records and a copied text arena.
 The header records screen dimensions, component instance ID/generation,
 completed-frame epoch, prompt/modal flags, taskbar separator and occupied
-extent. Records identify a pane, task or launcher and carry exact screen
+extent, and where Desk's prompt, the app shell's notice and Desk's status
+lie. Records identify a pane, task or launcher and carry exact screen
 CELL bounds, pane content bounds, state, lifecycle identity, copied display
 label, copied full title and, for catalog launchers, copied catalog ID.
 String fields use bank-relative offsets. No descriptor, slot or catalog
@@ -34,17 +35,84 @@ calls the normal catalog-open path, which either restores/focuses the live
 app or launches it. Disabled/quarantined entries remain visible and inert.
 Legacy pre-catalog TOML pins remain visible but have no launch authority.
 
-Desk reserves two 49,152-byte banks with 140 records each. Its component
-registry bounds live instances at 64; two records per child plus 12 pins fit
-this record allowance. The text arena remains independently bounded. Any
-record or string capacity refusal declines the **whole** model and paints the
-complete legacy CELL shell; no partial model is published. Model mutation
-rejects invalid, wrapping, null, unaligned or module-scratch-aliasing storage,
+Desk starts each of its two banks at 16 records and 1,024 text bytes. A
+build that runs out of records or text replaces the bank with one twice as
+large and builds again until the model fits; a bank four times larger than
+its model needs is replaced by the smallest that fits. Only when no memory
+is left for a bank is there no model, and Desk paints the complete CELL
+shell; no partial model is published. Model mutation rejects invalid,
+wrapping, null, unaligned or module-scratch-aliasing storage,
 corrupt headers and source/destination bank aliases. Sealing rejects further
 append/copy operations. Caller-owned memory must actually back admitted spans.
 
 An active prompt owns the bottom row and suppresses the taskbar model and its
-hits. A launcher overlay blocks background taskbar input while preserving its
+hits. While it is open the model also carries the prompt itself, so a rich
+terminal can show it as a field: after every string, at the next eight-byte
+boundary, the UFLD model of its TEXT field ([field model](field-model.md)),
+one row as wide as the screen. The header's `SHM.PROMPT-OFF` (112) and
+`SHM.PROMPT-U` (120) name it and are zero otherwise.
+
+| Word | Stack | Purpose |
+| --- | --- | --- |
+| `SHM-PROMPT-ROOM` | `( model -- dst cap ok? )` | The room after the strings |
+| `SHM-PROMPT-TAKE` | `( bytes model -- ok? )` | Record the field captured there |
+| `SHM-PROMPT@` | `( model -- ufld-a ufld-u )` | The prompt's field, or `0 0` |
+
+The caller captures the field into the room (Desk uses
+`PRM-FIELD-CAPTURE`), and `SHM-PROMPT-TAKE` records it and zeroes the
+padding before it. A build takes one prompt, before sealing. A bank without
+room for it grows like a bank without room for anything else; a prompt that
+cannot be captured stays the cells it paints.
+
+While the paint shows the app shell's notice ([app shell](app-shell.md)),
+the model carries it too, so a rich terminal can show it as a notice: after
+the prompt, or after every string, at the next eight-byte boundary, its
+[UDLG model](dialog-model.md). The header's `SHM.NOTICE-OFF` (128) and
+`SHM.NOTICE-U` (136) name it, and `SHM.NOTICE-ROW` (144) and
+`SHM.NOTICE-COL` (152) give the screen cell of its root's top left; all four
+are zero otherwise. Its root lies apart from every pane.
+
+| Word | Stack | Purpose |
+| --- | --- | --- |
+| `SHM-NOTICE-ROOM` | `( model -- dst cap ok? )` | The room after the prompt or the strings |
+| `SHM-NOTICE-TAKE` | `( row col bytes model -- ok? )` | Record the notice captured there, its root's top left at ROW COL |
+| `SHM-NOTICE@` | `( model -- udlg-a udlg-u )` | The notice's model, or `0 0` |
+| `SHM-APART-FROM-PANES?` | `( row col height width model -- flag )` | No pane meets the rectangle |
+
+Desk captures the notice with `ASHELL-NOTICE-CAPTURE` once it has taken the
+prompt, when the notice lies apart from every pane. A build takes one
+notice, after the prompt and before sealing, and no prompt after it. A bank
+without room for it grows; a notice that cannot be captured stays the cells
+it paints.
+
+While the taskbar shows Desk's status, the Agent's state at its right end,
+the model carries it too, so a rich terminal can show it as a status field:
+after the notice, the prompt or every string, at the next eight-byte
+boundary, its [USF model](status-field-model.md). The header's
+`SHM.STATUS-OFF` (160) and `SHM.STATUS-U` (168) name it, and
+`SHM.STATUS-ROW` (176) and `SHM.STATUS-COL` (184) give the screen cell of
+its left end; all four are zero otherwise. It lies on the taskbar row past
+the taskbar's entries and apart from every pane.
+
+| Word | Stack | Purpose |
+| --- | --- | --- |
+| `SHM-STATUS-ROOM` | `( model -- dst cap ok? )` | The room after the notice, the prompt or the strings |
+| `SHM-STATUS-TAKE` | `( row col bytes model -- ok? )` | Record the status captured there, its left end at ROW COL |
+| `SHM-STATUS@` | `( model -- usf-a usf-u )` | The status's model, or `0 0` |
+
+Desk takes its status last, while the taskbar shows it apart from every
+pane. Its label is `Agent`, or `Practice` while the Practice is in recovery
+or fallback, and its value the state's word. Each state has a severity:
+`working` is info, `review`, `offline`, `expired` and the Practice states
+are warnings, `error` and `history error` are errors, and the rest are
+neutral; `review` is emphasized, as CELL highlights it. CELL paints it as
+`[label: value]`, and its label's slot is the cells CELL gives `[label: `,
+so each string lies where CELL puts it. A build takes one status, after
+the notice and before sealing, and no prompt or notice after it. A bank
+without room for it grows; a status that cannot be captured stays the cells
+it paints.
+
+A launcher overlay blocks background taskbar input while preserving its
 paint. Changes to layout, child lifetime or focus invalidate old taskbar
 publication before dispatch. Even a captured task entry must resolve its
 exact slot and component instance identity against the live host.

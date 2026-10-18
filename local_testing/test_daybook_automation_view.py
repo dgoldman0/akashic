@@ -365,3 +365,20 @@ def test_a_create_submitted_twice_makes_one_reminder(clocked):
         "VW _DBAV.KEY 32 TBUF 32 COMPARE 0<> . CR",
     ])
     assert lines == ["0 0 0 0 0 0 1 0 0 -1"]
+
+
+def test_every_status_has_a_meaning(clocked):
+    """Success is neutral, a failure an error, and what the user can put
+    right or wait out a warning; a status the view does not name is an
+    error, as its message says the change failed."""
+
+    lines = run_text(clocked, [
+        "DBAO-S-OK DBAV-SEVERITY . DBAO-S-IO DBAV-SEVERITY . "
+        "DBAV-S-NOMEM DBAV-SEVERITY . DBAO-S-ENTROPY DBAV-SEVERITY . "
+        "DBAV-S-DOCUMENT DBAV-SEVERITY . CR",
+        "DBAV-S-WHEN DBAV-SEVERITY . DBAO-S-ZONE DBAV-SEVERITY . "
+        "DBAO-S-BUSY DBAV-SEVERITY . DBSVC-S-PENDING DBAV-SEVERITY . "
+        "DBAV-S-PROMPT DBAV-SEVERITY . CR",
+        "12345 DBAV-SEVERITY . CR",
+    ])
+    assert lines == ["0 4 4 4 4", "3 3 3 3 3", "4"]

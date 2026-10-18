@@ -68,7 +68,7 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (107,752 bytes,
+Sub-apps are isolated via per-app **UIDL context** buffers (107,776 bytes,
 approximately 105 KiB, each), which save/restore 29 UIDL scalar values and
 11 pool arrays. That state now includes the context-owned mounted-canonical
 relation head/count and source generation/next-key pool. Semantic
@@ -201,6 +201,16 @@ the focused `*` and minimized `~` suffixes.  A left press on one of those labels
 focuses that exact slot and restores it first if minimized.  The one-cell
 separators between labels are inert.  This does not yet make pinned catalog
 entries pointer-launchable; their keyboard/launcher behavior is unchanged.
+
+The taskbar's right end shows the Agent's state, such as `[Agent: ready]`,
+one cell before the row's edge when the entries leave room for it: `ready`,
+`working`, `review` while a request waits for approval, `offline`, `error`,
+`cancelled` or `expired`; `unavailable` without a runtime and `history
+error` when its store failed; and `[Practice: recovery]` or `[Practice:
+fallback]` while the Practice is in recovery or fallback.  Desk's shell
+model carries it as a status field with a severity for each state, so a
+renderer that draws status fields shows it as one
+([shell model](../../shell-model.md)).
 
 `Alt+H` opens a non-blocking modal over the desktop.  It lists every catalog
 row and its status.  Up/Down, PgUp/PgDn, Home/End select; Enter focuses an
@@ -684,7 +694,7 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 107,752-byte (approximately 105 KiB)
+Each sub-app with a UIDL document gets a 107,776-byte (approximately 105 KiB)
 context buffer that captures:
 
 - **29 scalar values**: element count, attribute count, string position,
@@ -705,6 +715,13 @@ the private variables being serialised. Context storage uses the platform
 Because the saved relation head owns a dynamic chain, a UCTX is opaque and
 non-copyable. It may be cleared or freed only while inactive; context switching
 saves and disowns the old live aliases before restoring a unique new owner.
+
+Desk's request bus runs each capability handler in its own child's
+context. The request pump runs in Desk's tick, while the context of the
+child painted last is live, so Desk gives the bus the host's
+`AHOST-CALL-SCOPED` as its scope (`CBUS-SCOPE!`): a handler for a child runs
+activated in that child's context, may set its own UIDL elements, and a
+repaint it asks for marks its tile.
 
 Context switch (`_DESK-CTX-SWITCH`) is a compatibility view of the embedded
 host operation. Only one sub-app's context is live at a time. The host uses

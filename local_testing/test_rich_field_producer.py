@@ -28,10 +28,13 @@ def model(*, kind=1, revision=17, label=b"Rate", text=b"value", state=3,
         label_slot = (0, 0, 0, 0)
     else:
         label_slot = (0, 1, 1, 4)
-    cells = (192 + len(body), 1, 23, kind, revision, 20, 3, state, flags,
+    # The 224-byte header ends with a TEXT field's caret, anchor, scroll and
+    # placeholder bytes, all zero here.
+    cells = (224 + len(body), 1, 23, kind, revision, 20, 3, state, flags,
              *label_slot, 1, 7, 1, 8, value, minimum, maximum, step,
-             len(label), len(text) if kind == 3 else 0, len(choices) if kind == 2 else 0)
-    return struct.pack("<24Q", *(n & MASK64 for n in cells)) + body
+             len(label), len(text) if kind == 3 else 0, len(choices) if kind == 2 else 0,
+             0, 0, 0, 0)
+    return struct.pack("<28Q", *(n & MASK64 for n in cells)) + body
 
 
 class FieldHarness(StatusHarness):
@@ -45,20 +48,20 @@ class FieldHarness(StatusHarness):
                                       "_RTHP-U-CLONE?", "_RTHP-TARGET-BANK-ENTRIES?",
                                       "RTE-CONTROL-PLAN-VALID?", "_RTHP-W-TOTAL"))
 
-    def setup(self, *, field_native=1024, row=3, col=2, clip=None, **kwargs):
+    def setup(self, *, field_native=1024, row=3, col=2, clip=None, source=1, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
         size, = self.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512,
-                             field_native, 0, 32, 8)
+                             field_native, 0, 0, 32, 8)
         assert size
         self.arena_size = size
         self.arena = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
         for name, n in {"ARENA-A": self.arena, "ARENA-U": size, "MAX-DOCUMENTS": 1,
                         "MAX-RECORDS": 1, "MAX-TEXT": 64, "MAX-COLLECTION-NATIVE": 256,
                         "MAX-COLLECTION-DESCRIPTORS": 8, "MAX-COLLECTIONS": 4,
-                        "MAX-CONTROLS": 5 + field_native//192, "MAX-DGRAPH-NATIVE": 256,
+                        "MAX-CONTROLS": 5 + field_native//224, "MAX-DGRAPH-NATIVE": 256,
                         "MAX-DGRAPH-DESCRIPTORS": 1, "MAX-INSTRUMENT-REGIONS": 1,
                         "MAX-INSTRUMENTS": 2, "MAX-STATUS-NATIVE": 512, "MAX-STATICS": 7,
-                        "MAX-FIELD-NATIVE": field_native, "MAX-FIELDS": field_native//192,
+                        "MAX-FIELD-NATIVE": field_native, "MAX-FIELDS": field_native//224,
                         "MAX-COLS": 32, "MAX-ROWS": 8, "COLS": 32, "ROWS": 8,
                         "OWNER": 1, "OWNER-GEN": 2, "REGION": 7, "FIRST-OBJECT": 100,
                         "SOURCE-GEN": 9, "SOURCE-CONTENT-EPOCH": 29, "SOURCE-DRAW": 12,
@@ -77,7 +80,7 @@ class FieldHarness(StatusHarness):
             utf8 += len(kwargs.get("text", b"value"))
         elif kwargs.get("kind", 1) == 2:
             utf8 += sum(len(t) for n, t in kwargs.get("choices", ((-10,b"same"),(900,b"same"),(7,b"third"))))
-        self.descriptor = struct.pack("<16Q", 1, 4, 6, 99, 0, row, col, 3, 20,
+        self.descriptor = struct.pack("<16Q", source, 4, 6, 99, 0, row, col, 3, 20,
                                       cr, cc, ch, cw, 3, len(self.model), utf8)
         self.runtime.memory.write_bytes(self.get("FIELD-NATIVE-A"), self.model)
         self.runtime.memory.write_bytes(self.get("FIELD-DESCRIPTORS-A"), self.descriptor)
@@ -90,6 +93,11 @@ class FieldHarness(StatusHarness):
         return self.results("_RTHP-BUILD-FIELDS", self.producer)
 
     def fixed(self):
+        # The pipeline's dialog lane follows the fields; with no dialog it
+        # begins and ends where the fields end.
+        for lane, end in (("CONTROLS", "CONTROL-COUNT"), ("TEXT", "SOURCE-TEXT-USED"),
+                          ("CLAIMS", "CLAIMS-USED")):
+            self.field(self.producer, "_RTHP.DIALOG-BASE-" + lane, self.get(end))
         self.field(self.producer, "_RTHP.BASE-CLAIMS-USED", self.get("CLAIMS-USED"))
         return self.call("_RTHP-FIELDS-FIXED?", self.producer)
 
@@ -132,6 +140,18 @@ def h(request):
     return FieldHarness(request.param)
 
 
+def test_a_prompt_from_the_overlay_source_passes_the_field_audit(h):
+    """A document's prompt is its overlay field: the audit takes its source
+    beside the UIDL one, and a source of neither kind still fails it."""
+    h.setup(kind=3, source=2)
+    assert h.build() == (0,)
+    assert h.fixed()
+    correlation = h.get("CORR-A")
+    assert h.runtime.memory.read64(correlation + 8) == 2
+    h.runtime.memory.write64(correlation + 8, 3)
+    assert not h.fixed()
+
+
 @pytest.mark.parametrize("kind",(1,2,3))
 def test_real_field_retains_authored_slots_revision_and_choice_accounting(h,kind):
     h.setup(kind=kind)
@@ -149,7 +169,10 @@ def test_real_field_retains_authored_slots_revision_and_choice_accounting(h,kind
     h.guards()
 
 
-@pytest.mark.parametrize("kind,intent,expected",((1,1,True),(1,11,True),(2,11,True),(3,1,True),(3,11,False)))
+# INTEGER and CHOICE take ACTIVATE (1) and ADJUST (11); a TEXT field takes
+# PLACE (2) and EXTEND (3) at positions in its value.
+@pytest.mark.parametrize("kind,intent,expected",((1,1,True),(1,11,True),(2,11,True),(1,2,False),
+                                                  (3,1,False),(3,11,False),(3,2,True),(3,3,True)))
 def test_input_uses_value_slot_and_independent_acknowledged_revision(h,kind,intent,expected):
     h.setup(kind=kind,revision=(1<<63)+9)
     assert h.build() == (0,)
@@ -181,8 +204,8 @@ def test_invalid_native_field_is_invalid_not_optional_refusal(h):
 
 
 def test_field_storage_admits_no_field_bank_and_rejects_a_partial_record(h):
-    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,0,0,32,8)[0] > 0
-    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,193,0,32,8)==(0,)
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,0,0,0,32,8)[0] > 0
+    assert h.results("RTHP-STORAGE-BYTES",1,1,64,256,256,512,193,0,0,32,8)==(0,)
 
 
 @pytest.mark.parametrize("feature,short", ((False,False),(True,False),(True,True)))
@@ -295,26 +318,43 @@ def test_packed_field_owns_label_content_and_target_revision(h):
     assert h.results("RTHP-CONTROL-TARGET@",1,2,100,11,h.producer)==(4,9,17,MASK64)
 
 
-@pytest.mark.parametrize("mutation",(None,"revision","value","selected","disabled","label","slot"))
-def test_only_field_selection_can_change_in_content_preserving_delta(h,mutation):
+# A DELTA keeps a field's label, geometry and state but for SELECTED.  Its
+# FDC1 content may change only with a strictly newer revision (17 to 18),
+# and then one CONTROL-REPLACE carries it.
+FIELD_DELTA_MUTATIONS = {
+    None: (True, 0),
+    "revision": (True, 1),
+    "value": (False, 0),
+    "newer-value": (True, 1),
+    "selected": (True, 1),
+    "disabled": (False, 0),
+    "label": (False, 0),
+    "slot": (False, 0),
+    "newer-slot": (True, 1),
+}
+
+
+@pytest.mark.parametrize("mutation",tuple(FIELD_DELTA_MUTATIONS))
+def test_field_delta_keeps_label_and_state_and_takes_only_newer_content(h,mutation):
     h.setup();assert h.build()==(0,)
     active=h.pack()
     assert h.call("_RTHP-STRIP-FIELDS?",h.producer)
     h.field(h.producer,"_RTHP.FIRST-OBJECT",200)
     assert h.build()==(0,)
     c=h.get("CONTROLS-A");a=h.runtime.memory.read64(c+152)
-    if mutation=="revision":h.runtime.memory.write64(a+8,18)
-    elif mutation=="value":h.runtime.memory.write64(a+56,8)
+    if mutation in ("revision","newer-value","newer-slot"):h.runtime.memory.write64(a+8,18)
+    if mutation in ("value","newer-value"):h.runtime.memory.write64(a+56,8)
     elif mutation=="selected":h.runtime.memory.write64(c+32,11)
     elif mutation=="disabled":h.runtime.memory.write64(c+32,1)
     elif mutation=="label":h.runtime.memory.write_bytes(h.runtime.memory.read64(c+120),b"Pace")
-    elif mutation=="slot":h.runtime.memory.write_bytes(a+40,struct.pack("<i",8))
+    elif mutation in ("slot","newer-slot"):h.runtime.memory.write_bytes(a+40,struct.pack("<i",8))
     pending=h.pack(index=1)
     for name,value in (("P",h.producer),("ACTIVE",active),("PENDING",pending),("PENDING-FIRST",200)):
         h.variable("_RTHP-D-"+name,value)
     h.runtime.memory.write64(h.get("ORDER2-A"),1)
-    assert h.call("_RTHP-D-CONTROL-COMPATIBLE?",0)==(mutation in (None,"selected"))
-    assert h.variable("_RTHP-D-OPS")==int(mutation=="selected")
+    compatible,ops=FIELD_DELTA_MUTATIONS[mutation]
+    assert h.call("_RTHP-D-CONTROL-COMPATIBLE?",0)==compatible
+    assert h.variable("_RTHP-D-OPS")==ops
     h.guards()
 
 
@@ -337,7 +377,7 @@ def test_unchanged_field_clone_rebases_owned_spans_and_preserves_revision(h):
         assert h.runtime.memory.read_bytes(before,size)==h.runtime.memory.read_bytes(after,size)
     entry=pending+h.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
     assert h.runtime.memory.read64(entry+32)==17
-    assert h.runtime.memory.read64(entry+40)==1<<1
+    assert h.runtime.memory.read64(entry+40)==(1<<2)|(1<<3)
     h.guards()
 
 
@@ -374,7 +414,7 @@ def test_full_producer_dependency_closure_compiles_in_native_runtime():
     from test_field_model import field_runtime
     runtime=field_runtime(("tui/rich-terminal/hybrid-screen-producer.f",))
     runtime.evaluate(b"RTHP-SIZE _RTHP-TARGET-BANK-HEADER-SIZE _RTHP-TARGET-ENTRY-SIZE",source_name="field-producer-abi")
-    assert runtime.main_context.data.snapshot()==(4856,344,48)
+    assert runtime.main_context.data.snapshot()==(5064,368,48)
     assert runtime.main_context.returns.snapshot()==()
 
 

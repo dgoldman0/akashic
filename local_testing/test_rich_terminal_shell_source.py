@@ -31,7 +31,7 @@ def fixture(selected=1, minimized=0, revision=1):
                         slot, slot, str(slot), f"Task {slot}", ""])
     entries.append([1, 3, 32, 7, 8, 1, 4, 0, 0, 0, 0, 50, 2, 99, 1,
                     "Run!", "Launch existing.", "app.one"])
-    size = 128 + len(entries) * 168
+    size = 192 + len(entries) * 168
     strings = bytearray()
     records = []
     for entry in entries:
@@ -42,8 +42,9 @@ def fixture(selected=1, minimized=0, revision=1):
             strings += raw
         records.extend(record)
     size += len(strings)
-    header = [1, size, len(entries), len(entries), size, 50, 2, revision, 12, 8, 0, 6, 12, MASK, 0, 0]
-    payload = struct.pack(f'<{16 + len(records)}Q', *header, *records) + strings
+    header = [1, size, len(entries), len(entries), size, 50, 2, revision, 12, 8, 0, 6, 12, MASK,
+              0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    payload = struct.pack(f'<{24 + len(records)}Q', *header, *records) + strings
     model = a._decode_shell_model(bytes(payload))
     correlations = []
     panes, regions, tasks = [], [], []
@@ -183,8 +184,9 @@ def test_native_shm_builder_and_snapshot_validator_decode_without_label_inferenc
 
 
 @pytest.mark.parametrize('offset,value',[(0,2),(8,0),(24,100),(32,127),(40,0),(48,0),(56,0),(64,0),
-    (72,1<<32),(80,4),(88,12),(96,13),(104,0),(112,1),(128+8,4),(128+16,2),
-    (128+24,8),(128+48,13),(128+88,0),(128+104,0),(128+15*8,100)])
+    (72,1<<32),(80,4),(88,12),(96,13),(104,0),(112,1),(128,8),(144,1),(152,1),
+    (160,8),(176,1),(184,1),
+    (192+8,4),(192+16,2),(192+24,8),(192+48,13),(192+88,0),(192+104,0),(192+15*8,100)])
 def test_model_decoder_rejects_forged_owned_header_entry_and_text_extent(offset,value):
     payload,*_=fixture();raw=bytearray(payload);struct.pack_into('<Q',raw,offset,value)
     with pytest.raises(ERROR):a._decode_shell_model(bytes(raw))
@@ -524,7 +526,7 @@ def test_runner_same_ack_backpressure_does_not_extend_deadline_or_repeat_action(
 def test_decoder_rejects_signed_min_overlay_key_like_native_snapshot_validator():
     payload,*_=fixture();raw=bytearray(payload)
     for index,value in ((0,1<<63),(2,8),(13,1<<63),(14,1<<63)):
-        struct.pack_into('<Q',raw,128+index*8,value)
+        struct.pack_into('<Q',raw,192+index*8,value)
     with pytest.raises(ERROR,match='lifecycle identity'):a._decode_shell_model(bytes(raw))
 
 

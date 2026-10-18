@@ -390,40 +390,482 @@ has no Agent steps: there the Agent starts with an empty conversation.
 
 ## 5. Fields, buttons, dialogs and status
 
-**Today.** Prompts, dialogs, toasts, progress bars and status lines are
-painted text. After part 1 they can be clicked, but only as painted cells.
+**Today.** A little of this part exists. Sound Lab's settings are canonical
+typed fields (`tui/widgets/field.f`), published as `FIELD` controls that the
+wheel adjusts, and the labels of a UIDL `<status>` bar are published as
+`STATUS_FIELD` objects. Both have been selected in the Desktop profile since
+2026-09-30 ([FIELD-PRODUCER.md](FIELD-PRODUCER.md),
+[STATUS-FIELDS-PRODUCER.md](STATUS-FIELDS-PRODUCER.md)). A `FIELD` of kind
+TEXT can carry only committed text, with no caret, selection or scrolling,
+and nothing publishes one. Everything else is painted text:
 
-**Plan,** following inventory sections 6.4, 6.5 and 6.8:
+- **Prompts.** One shared prompt (`tui/widgets/prompt.f`, over
+  `tui/widgets/input.f`) serves Desk and eight applications: about 40
+  prompts, one of them masked. It paints over the status row as foreground
+  paint, and the aggregate adapter then withholds every semantic slice of
+  the document beneath. So while a prompt is open, its application's menus,
+  text areas, grids and lists all go out as residual glyphs, and Sound Lab's
+  fields drop to CELL.
+- **Dialogs.** One shared dialog (`tui/widgets/dialog.f`) asks the nine
+  questions of File Explorer, Pad, Grid, the Agent and Sound Lab, such as
+  closing with unsaved changes or deleting a file. It runs its own blocking
+  input loop, so all of Desk stops until it is answered, and it ignores the
+  mouse.
+- **Confirmations by typed word.** Daybook (DELETE, DISCARD and RELOAD),
+  Library (DISCARD) and Streams (REMOVE) ask the user to type a word into a
+  prompt.
+- **Desk's own screens.** The launcher, schedule approval, permissions,
+  shutdown, sandbox access and the sandbox inspector are overlay documents
+  of labels around a canonical list. The lists are item views. Their titles,
+  questions and hints are residual, and nothing says the screen is a dialog
+  or that it is modal.
+- **Toasts.** About 300 calls in ten applications go through the app shell's
+  one toast bar (`ASHELL-TOAST`), which is foreground paint with no meaning:
+  an error looks like a success.
+- **Toggles and choices.** Menu items that toggle or choose, such as File
+  Explorer's Show Hidden and Sort, Pad's panels and the Agent's Access
+  presets, show no checked state. The Agent's settings rows, the Worlds valve
+  and Streams' source switches are painted.
+- **Status.** Library, Sound Lab, Streams, Worlds, Observatory, Grid's
+  formula bar and Desk's agent state paint their status instead of using
+  status labels.
 
-1. Fields: one-line input with a label, value, placeholder, caret, masked
-   mode, validation, and submit or cancel. The canonical input and prompt
-   widgets are the source.
-2. Dialogs: overlays with a title, contained controls, default and cancel
-   actions, and a modal focus scope.
-3. Buttons, checkboxes, choices and ranges, from the UIDL action, toggle,
-   selector and range types.
-4. Notices, toasts, progress and textual status.
+No application uses UIDL's own `<input>`, `<toggle>`, `<dialog>` or visible
+`<action>` elements, and nothing shows a progress bar.
 
-Consumers include File Explorer rename and go-to, Streams search, Agent's Ask
-and masked credential prompts, Agent settings, Daybook task checkboxes and
-Sound Lab parameters. Agent approval stays in Agent's hands, with its
-existing checks.
+**Decided on 2026-10-14.**
 
-**Done when** the journey renames a file through a semantic field and
-answers a dialog with a semantic button.
+- Dialogs stop freezing Desk. A dialog is modal only for its own
+  application: Desk and the other applications keep running, and the dialog
+  takes the mouse.
+- Confirmations by typed word become confirm dialogs. The destructive button
+  is never the default.
+- Notices carry a meaning: info, success, warning or error, the severities
+  status fields already have. Toasts that report a failure or a warning are
+  marked where they are raised; the rest stay plain.
+- The work goes through the shared widgets applications already use: the
+  prompt, the dialog, the app shell's toast, the field and the list. UIDL's
+  input, toggle, dialog and action elements, and progress bars, wait for a
+  real use.
+
+**Plan.**
+
+1. **Contract,** in both copies of APT-1-RETAINED-1 and APT-1-WIRE, and in
+   MegaPad's SEMANTIC-CONTENT-1:
+   - *Text fields that show typing.* A TEXT `FIELD` carries its caret, an
+     optional selection anchor, its scroll in cells and a placeholder, and a
+     `MASKED` flag. A masked field's value holds one mask character for each
+     character, never the secret. `SELECTED` means the field has the
+     keyboard, and only then does the terminal draw the caret. `PLACE` and
+     `EXTEND` name a position in a writable TEXT field as they do in a text
+     area. TEXT fields lose `ACTIVATE`, which nothing sends.
+   - *Modal regions.* A region flag, `MODAL`, makes the region's rectangle a
+     modal scope. Its barrier already keeps points from the regions beneath;
+     the flag also lets the renderer show what lies beneath as inactive. A
+     prompt or a dialog sits in a modal region over its application's pane,
+     and a modal screen of Desk's in one over the whole screen.
+   - *Dialogs and buttons.* Two control kinds behind a new feature bit 17,
+     `RET_DIALOGS`. A `DIALOG`'s label is its title, and its content gives
+     its message lines, its severity and a `NOTICE` flag. A `BUTTON`'s
+     content says whether it is the default, the cancel or a destructive
+     button, and it takes `ACTIVATE`. A dialog's buttons, fields and lists
+     are roots of their own inside its rectangle, above it in the same
+     region. Within a region the topmost control takes a point, as the hit
+     map already orders them. A notice is a `DIALOG` with the `NOTICE` flag
+     and no buttons, in a region that covers only itself.
+   - *Catching up.* APT-1-WIRE gains what RETAINED-1 already has: `ACTIVATE`
+     on `TASK`, `LAUNCHER` and `FIELD`, the `ADJUST` event, and `TASKBAR` and
+     `FIELD` among the surfaces where no raw gesture starts.
+2. **MegaPad.** The codec, the scene and terminal checks, the guest module's
+   writers, the reference renderer and its hit map, the viewer's routing,
+   the shared-viewer transport and the flowing appearance, for the whole
+   contract at once.
+3. **Prompts.**
+   - The prompt publishes a TEXT field from its input's own state: label,
+     text (masked when the prompt masks), caret, selection, scroll and
+     placeholder. Draw observation finds it, as it finds the other canonical
+     widgets.
+   - The producer puts the field in a modal region over its pane. The
+     document beneath keeps its semantics, inactive under the modal region,
+     except for a root the prompt's paint covers, such as the status field
+     the prompt replaces. Foreground paint that is not a captured overlay,
+     such as the Agent's own panels, keeps today's rule.
+   - `PLACE` and `EXTEND` reach the input widget, which sets its caret and
+     selection from scalar offsets.
+   - Desk's Ask prompt, on the taskbar row, goes out the same way through
+     the shell producer.
+4. **Dialogs.**
+   - The dialog widget stops blocking. An application opens a dialog with
+     a callback for its answer, and the app shell, or Desk's applet host,
+     draws it over the application and gives it the application's input
+     until it closes. It takes the mouse in CELL too. The nine call sites
+     move to callbacks.
+   - The dialog publishes a `DIALOG`, and a `BUTTON` for each answer, in a
+     modal region over its pane.
+   - The confirmations by typed word become confirm dialogs.
+   - Desk's screens mark their title and message in their UIDL, so they go
+     out as a `DIALOG` around their lists, modal over the whole screen.
+     Schedule approval keeps its rule: Allow stays unavailable until the
+     request has been read to its end.
+   - The Agent's approval review shows Approve and Deny as buttons. Approve
+     stays unavailable until the review's last row has been shown, as today.
+5. **Notices.** The app shell's toast publishes a notice with its meaning,
+   in a region of its own. Toasts that report failures and warnings are
+   marked where they are raised.
+6. **Toggles, choices and ranges.**
+   - UIDL menu items gain a checked state taken from the application's
+     state. CELL draws it, and the menu snapshot publishes it as `CHECKED`:
+     Show Hidden, Sort, Pad's panels and the Access presets.
+   - The Agent's settings rows become `CHOICE` fields and the Worlds valve
+     an `INTEGER` field, through the canonical field widget.
+   - Streams' Sources and Burrows views become card lists whose check boxes
+     switch a source on and off.
+7. **Status.** Painted status moves to UIDL status labels: Library, Sound
+   Lab's output and playback lines, Streams, Worlds, Observatory and Desk's
+   agent state. Grid's formula bar becomes a read-only TEXT field.
+8. **Measure.** Guest steps for a key typed into a prompt, for opening and
+   answering a dialog, and for showing a notice, rich and CELL.
+
+**Checks,** in order:
+
+- Contract: codec vectors and refusals for the new field state, `DIALOG`,
+  `BUTTON` and modal regions; the terminal's checks; off-screen compositor
+  checks of the reference renderer; and hit-map checks that a modal region
+  stops points beneath it, that the topmost control takes a point, and that
+  `PLACE`, `EXTEND` and `ACTIVATE` reach the right control.
+- Widgets: CELL byte oracles for the prompt and the dialog, unchanged except
+  where the mouse now works; the dialog's callbacks; and each application's
+  own tests and standalone smoke once its call sites move.
+- Producer: capture and lowering of prompts, dialogs and notices; refusal
+  leaving CELL; a document under a prompt staying semantic; and input
+  reaching the widgets.
+- Desk with each application through the physical viewer as its step lands:
+  File Explorer's rename, go-to and delete; Pad's Open prompt and its
+  close-tab question; Daybook's task prompt and confirmations; the Agent's
+  masked credential prompt; Sound Lab's exact-value prompt; Desk's launcher
+  and shutdown screens.
+- The full Desktop journey once at the end, with new milestones.
+
+**Done when** the Desktop journey, in the physical viewer, renames a file in
+File Explorer through a semantic field, answers a dialog with a semantic
+button and shows a notice with its meaning; while a prompt or a dialog is
+open, the rest of its application stays rich and inactive beneath it; and
+Desk keeps running while a dialog waits.
+
+**Status.** Done on 2026-10-17. The closing runs are recorded in
+`local_testing/evidence/part5-desktop-journey-20261017.md`. Prompts are
+`TEXT` fields in a modal region over their pane. Since 2026-10-15 a dialog
+asks without stopping Desk and goes out as a `DIALOG`, with a `BUTTON` for each answer, in a modal region
+over its pane ([DIALOG-PRODUCER.md](DIALOG-PRODUCER.md)). In the physical
+viewer, Desk with Pad answers Pad's close-tab question and Desk with File
+Explorer its delete question, each through its Cancel button. A dialog
+covers the roots it lies over, which go out as residual glyphs until it
+closes. The confirmations by typed word are confirm dialogs too: Daybook's
+delete, reload and close questions, Library's close with a create pending
+and Streams' source removal. Desk with Daybook answers the delete question
+for its daily reminder through Cancel. An application that asks while its
+prompt is open goes out as CELL until one of them closes, since the shell
+allows one overlay a pane; Daybook and Library refuse a close while their
+prompt is open. Desk's screens are UIDL dialogs too: the launcher, the
+sandbox's access prompt and inspector, and the schedule's approval and
+permissions frame their lists in a `<dialog>` whose title and leading
+labels are its message, and it goes out as a `DIALOG` around its contents.
+In the shell frame a screen is an overlay pane over the panes beneath it,
+its document in a modal region over the whole screen, so the panes and the
+taskbar show inactive while it is open; in the physical viewer Desk with
+File Explorer opens its launcher that way. A screen may cross the divider
+between two tiles: its overlay pane lies over the chrome of the panes
+beneath it, and its own glyphs cover the divider. The Agent's
+approval review asks in the shared dialog: its message, the request's
+paragraphs broken by the shared line rule as untrusted text, scrolls, and
+Approve once (F6) is a read-first button that cannot be chosen until a
+paint has shown the last line, beside Deny (F7), the default and cancel
+button. In the physical viewer Desk with the Agent approves a request
+through the Approve once button, with the Agent's menu inactive beneath
+the dialog. Notices are done too. The app shell's toast is a notice with a
+meaning, neutral, info, success, warning or error, a status field's
+severities; it keeps its own copy of its text and fits the screen, and a
+press on it lands on it. Applications mark the failures and warnings they
+raise where they raise them. Desk's shell model carries the notice a paint
+shows, and with dialogs the shell candidate shows it as a `DIALOG` with the
+`NOTICE` flag in a region of its own above the taskbar, which stays rich
+beneath it. In the physical viewer Desk with Daybook shows the reminder as
+a neutral notice, and Desk with File Explorer warns that a path typed into
+Go to was not found. Without dialogs, and for an application run without
+Desk, a notice is still paint. A review of the dialogs found four faults,
+now fixed: a dialog too short for any message row counted its message read;
+a Desk shutdown that applications deferred to their questions stopped once
+they agreed, and now goes on; the reference renderer started right-to-left
+dialog text and button labels at the left; and a wheel over a dialog went
+nowhere in the physical viewer, where a dialog that is not a notice now
+takes `SCROLL`. Toggles and choices are done. A UIDL menu item can be
+checked from its application's state, every CELL menu keeps a two-cell
+mark column for it, and the menu snapshot carries it as `CHECKED`: File
+Explorer's Show Hidden and sort orders, Pad's panels and the Agent's Access
+presets. The Agent's run settings are four `CHOICE` fields that the shared
+field widget draws in its panel; in the physical viewer Desk with the Agent
+moves Reasoning with an adjustment and Model with an activation. The
+Worlds valve is an `INTEGER` field over the run's own range; Worlds is in
+no Desktop profile, so a standalone CELL smoke and the Observatory/Worlds
+slice check it. Streams' sources and Burrows are card lists now, and a
+source's card carries a check box that is checked while the source is
+enabled: SEMANTIC-CONTENT-1 lets a `CARDS` item be `CHECKABLE`, with its
+box on its first row and its first field narrower to make room, and the
+shared list draws, hit-tests and publishes it. In the physical viewer Desk
+with Streams adds a feed source through its prompt and switches it off by
+its card's check box. That check found that Streams' prompt left its paint
+on the status bar's row after closing, which hid the whole Streams document
+from the rich frame; Streams now repaints the status bar, as five other
+applications did, and Grid and Library do too. Status is done as well.
+UIDL's string pool now gives each attribute the room its value holds, so
+status text whose length changes no longer uses the pool up over a long
+session. Worlds says its run state, its last action's outcome and its last
+replay in status labels, in place of a painted footer; Observatory's state
+label says how its profile went, or why it was refused; and Sound Lab
+leaves its output and playback to its status labels, its lamps kept with
+fixed captions. Streams and Library already said their status in labels,
+and what they paint beside them is content. Desk's agent state is a status
+field: Desk's shell model carries it, the shell candidate shows it in a
+region of its own across the taskbar row past the entries, with a severity
+for each state, and a change of state goes out as a DELTA. In the physical
+viewer Desk with the Agent shows it through the approval review. Grid's
+formula bar is a read-only TEXT field through the shared field widget, its
+value the cell's source as a display shows it; Grid is in no Desktop
+profile, so its CELL smoke and its own tests check it. A UIDL status label
+still goes out neutral, since UIDL gives a label no severity; the first
+application whose status needs one adds it. The measures of step 8 are
+recorded in `local_testing/evidence/part5-interaction-costs-20261017.md`,
+from File Explorer, Daybook and the Agent with Desk. A key typed into Desk's
+Ask prompt is a DELTA of about 4 to 6 million guest steps. A key typed into
+an application's prompt is a START, mostly 12 to 15 million steps a frame,
+of which about 3 to 6 million lie outside the rich producer, what a CELL
+session spends; a PLACE or an EXTEND on the same prompt is a DELTA of 2 to
+3.5 million. Opening or closing a prompt or a dialog, and a notice coming
+or going, add or remove a region, so each is a START by design, about 6 to
+27 million steps in the rich producer; a notice shown costs about 12.7
+million there and 0.5 million in Desk's paint. Answering a dialog costs 24
+to 35 million steps outside the producer, since the application paints far
+more after its dialog closes than after its prompt does. Typing into an
+application's prompt was a START because the producer's DELTA gate also
+required the fields' total text to keep its length, so any key that
+changed the length refused the DELTA before a field was compared; since
+f4890d19 such a key is a DELTA, as typing into Desk's prompt is. One cost
+remains to cut: a dialog that closes should not cost its application more
+paint than a prompt that closes.
+
+The full Desktop journey closed the part. In the physical viewer it renames
+a file in File Explorer through its rename prompt, a semantic field, and
+checks File Explorer's neutral notice. Delete then asks File Explorer's
+question; Alt+1 gives Pad focus while it waits and Alt+2 brings File
+Explorer back, its question still open and holding File Explorer alone,
+and the question's Cancel button answers it. Sound Lab's frequency is set
+through its exact-value prompt, with Sound Lab rich and inactive beneath
+it, and F5 renders it again. The launcher, which crosses the divider
+between File Explorer's tile and the Agent's, goes out in the shell's
+frame, modal over everything beneath it. File Explorer's own journey
+completes its rename, and the Agent's scrolls its approval review with the
+wheel. The closing runs found one more fault: the app shell started a
+notice's time when the notice was raised, so a paint that came late, as on
+the busy Desktop, could show no notice at all. A notice's time now counts
+from when the first output that shows it has gone out (part 6 moved it
+there from the first paint, for frames slower than the notice).
+
+**Not in this part.** Progress bars and busy indicators. UIDL's input,
+toggle, selector and range elements in documents that use them.
+Adjusting splits. Editing a grid cell in place. Plots and vector lines,
+which are part 6.
 
 ## 6. Plots and waveforms
 
-**Today.** MegaPad supports vector lines, bounded series, plots and
-waveforms from wire to screen. Series and waveforms are done on the Akashic
-side: the data-graphics model carries them, Sound Lab's waveform uses that
-model, the canonical widget draws it in CELL too, and the Desktop advertises
-the series family (see [SERIES-PRODUCER.md](SERIES-PRODUCER.md)).
+**Today.** MegaPad supports `GROUP`, `POLYLINE`, `PLOT` and `WAVEFORM`
+from the guest module's writers to the screen: codec, scene checks,
+reference renderer and shared view. Series and waveforms are done on the
+Akashic side: the data-graphics model carries them, Sound Lab's waveform
+uses that model, the canonical widget draws it in CELL too, and the Desktop
+advertises the series family (see [SERIES-PRODUCER.md](SERIES-PRODUCER.md)).
+That family covers `PLOT` too, but nothing in Akashic sends one: the
+data-graphics model has no plot record and the engine no plot kind.
+Nothing sends `GROUP` or `POLYLINE` either, and the Desktop does not
+advertise `VECTOR`. Two applications paint their plots by hand:
 
-**Plan.** The rest is plots, vector lines and polyline markers, under the
-same rules: the data-graphics model carries them, the canonical widget draws
-them in CELL too, Akashic captures them with refusal, and the vector bits are
-advertised once complete. Observatory is the second consumer.
+- **Observatory's projection.** One dot a column over a painted baseline,
+  each dot picked by sample index rather than by tick. Observatory is in no
+  Desk profile, and neither is Worlds, whose Analyze hands Observatory its
+  telemetry.
+- **Sound Lab's frequency landmarks.** A painted line from 0 Hz to 4 kHz,
+  with the letters P and C where its pitch and spectral centroid lie.
+
+The contract has one weak point here. `VECTOR` has a limit on the points in
+one line, `max_path_points`, but no budget for points, so a terminal must
+keep room for every object it grants to be a line of the largest size. That
+is reserving the maximum. Text and series samples are budgets an owner
+reserves and grows instead.
+
+**Decisions,** made on 2026-10-18:
+
+- A line's points come out of a budget, like samples. `RET_FORMATS` offers
+  a total and `OWNER_OPEN` reserves a share; each record already has a
+  reserved field at offset 56 to carry it.
+- Sound Lab's landmarks become vector lines: the line itself, and a marker
+  for the pitch and one for the centroid. The letters stay as text in the
+  row above the markers, so CELL still says which is which. Observatory's
+  plot becomes a `PLOT` over its exact series, with its baseline a vector
+  line. No new markers are added, and `GROUP` stays unused, since nothing
+  needs it.
+- Each application keeps one data-graphics graph, as Sound Lab does today:
+  the plot and the lines join its readouts.
+- Observatory is checked on a Desk profile with Worlds beside it, so its
+  plot shows Worlds' own telemetry after Analyze.
+
+**Plan.**
+
+1. **Contract,** in both copies of APT-1-RETAINED-1:
+   - `RET_FORMATS` offset 56 becomes `total_path_points`, positive exactly
+     when `VECTOR` is set and at least `max_path_points`.
+   - `OWNER_OPEN` and `OWNER_RESIZE` offset 56 become `path_point_quota`:
+     the points of the owner's `POLYLINE` objects. Like the sample-slot
+     quota it bounds each scene target, active and hidden alike, never
+     shrinks within an owner generation, is summed against
+     `total_path_points` across live owners, and must be zero without
+     `VECTOR`. A line that would exceed it is a quota failure.
+   - The worst-case rule (`object_quota * max_path_points`) goes.
+   - Section 16.1's list of the reference profile's features, long out of
+     date, is corrected.
+2. **MegaPad.** The guest module's discovery and owner writers, the codec,
+   the scene's quota ledger, the server, the module's documentation, the
+   conformance vectors, and a server test that sends a `POLYLINE` and a
+   `PLOT`, which no test does yet.
+3. **Model.** The data-graphics model gains a `PLOT` record (its series,
+   range, line and fill colours, and fill and points flags) and a
+   `POLYLINE` record (stroke width, colour, closed flag and its points
+   relative to its rectangle), with builders, accessors and validation.
+4. **CELL.** The canonical widget draws a plot as a line through every
+   sample, placed by timestamp as a waveform is, with the fill below it and
+   a mark at each sample when its flags ask, and a vector line as line
+   characters along its segments. Both are clipped as the rest of the
+   widget is.
+5. **Capture, lowering and refusal.** The instrument planner lowers `PLOT`
+   (with the series family) and `POLYLINE` (with the vector family) as two
+   more instrument kinds and counts their frames, points and quota need. A
+   graph is left out whole, to CELL, when its terminal lacks the family, a
+   line has more points than the terminal allows, or a frame cannot fit.
+   The engine checks the new kinds, the APT-1 provider sends them and
+   carries the point budget through discovery and the owner's quotas, and
+   the screen producer asks for the points it needs and keeps an unchanged
+   plot or line in a DELTA.
+6. **Desktop profile.** It advertises `VECTOR`. The point limit and the
+   point budget derive from the data-graphics bank Desk already selects,
+   since every point takes 16 bytes of it, as the profile's other budgets
+   derive from Desk's banks.
+7. **Observatory.** Its series and plot join its graph, with banks sized to
+   the series it holds and grown when a larger one arrives. The painted
+   plot goes.
+8. **Sound Lab.** The landmarks join its graph as three vector lines. The
+   painted line and letters go; the letters return as text above the
+   markers.
+9. **Measure.** Guest steps for frames that carry Observatory's plot and
+   Sound Lab's lines, rich and CELL.
+
+**Checks,** in order:
+
+- Contract and MegaPad: discovery and owner quotas in the guest module's
+  tests, the codec's vectors, the scene's quota refusals, and a `POLYLINE`
+  and a `PLOT` through the server.
+- Model and widget: record extents, references and refusals; CELL byte
+  oracles for plots and lines, including clipping.
+- Lowering: each kind lowered exactly; whole-graph refusal leaving CELL;
+  reuse of an unchanged plot and line.
+- Observatory: its own tests and the Observatory/Worlds slice, then a new
+  Desk profile with Worlds and Observatory through the physical viewer.
+  Observatory's plot of its starting series goes out as a `PLOT` over a
+  series holding exactly those samples. Worlds runs and Analyze hands the
+  run's telemetry over; the plot's series then holds exactly the samples
+  Observatory shows in its table and readouts. A rerun keeps the plot.
+- Sound Lab: a new Desk profile with Sound Lab alone through the physical
+  viewer. A render shows the three lines with the markers at the pitch and
+  centroid it reports; a new frequency and another render move the pitch
+  marker.
+- The full Desktop journey once at the end, with Sound Lab's lines as new
+  milestones.
+
+**Done when** Observatory's plot of Worlds' telemetry goes out as a `PLOT`
+over an exact series in the physical viewer, its baseline a vector line;
+Sound Lab's frequency landmarks go out as vector lines that move when it
+renders new settings; the same widget draws both in CELL; the Desktop
+advertises `VECTOR` with a point budget its owner reserves as it needs; and
+the full Desktop journey passes with the new milestones.
+
+**Status.** Done on 2026-10-18. The closing runs are recorded in
+`local_testing/evidence/part6-desktop-journey-20261018.md`, and the measures
+of step 9 in `local_testing/evidence/part6-plot-line-costs-20261018.md`.
+Both copies of the contract give vector lines a point budget, and MegaPad's
+guest module, codec, scene and server carry it. The data-graphics model
+has `PLOT` and `POLYLINE` records, which the canonical widget draws in CELL;
+the instrument planner, the rich engine, the APT-1 provider and the hybrid
+producer send them within the owner's point quota, and leave a graph to
+CELL whole when its terminal cannot draw it. The Desktop profile advertises
+`VECTOR`, its point limit and budget derived from Desk's data-graphics bank.
+In the physical viewer, Desk with Observatory and Worlds shows Observatory's
+plot of its own series, and after Analyze of Worlds' run, as a `PLOT` over
+the exact series with its baseline a line, its status and CELL panel showing
+the run in the same frame. Desk with Sound Lab shows its frequency landmarks
+as three lines, whose pitch mark moves when Sound Lab renders a new
+frequency, and CELL draws the same landmarks. The full Desktop journey
+checks the landmark lines at Sound Lab's `soundlab-instruments-live` and
+`soundlab-rerendered` milestones. The plots and lines themselves cost
+little: about 0.1 to 0.3 million guest steps a frame to lower and 0.2 to 0.4
+million to draw in CELL. The frames that carry them were STARTs of the
+whole screen, 8.5 to 21.5 million steps in the rich producer: these Desks
+sent no DELTA, because the shell read a DELTA's series from the candidate,
+which numbers them afresh, while its instruments came from the pending bank
+and named the acknowledged series, so the family check refused every one.
+Since f84bad80 the shell reads both from the pending bank, and a frame
+whose plots and lines are unchanged is a DELTA. With that and the field fix
+noted in part 5, the canonical Desktop journey sends 52 of its changed
+frames as DELTAs and 38 as STARTs, where it sent 6 and 85. A frame whose
+plot, waveform or series changed is still a START. Where a rich plot or
+waveform leaves its background clear, CELL's drawing of it shows beneath, as
+since the series work.
+
+**Not in this part.** `GROUP`. Appending to a live series. Labels and axis
+ticks as objects of their own; they stay text. A graph is still left out
+whole when one of its records is unsupported, so a terminal without
+`VECTOR` shows Sound Lab's and Observatory's instruments in CELL; splitting
+a chart into a graph of its own waits for a terminal that needs it. Two
+renderer limits the consumers here do not meet, since their lines are
+opaque and thin: translucent wide strokes blend twice at joins, and
+diagonal strokes draw thinner than asked.
+
+**Found on the way.** A capability handler ran from Desk's request pump
+while another application's UIDL context was live, so the UIDL elements it
+set were that application's. Observatory's handler set its status label and
+marked its body for repaint that way, so after Analyze its CELL panel kept
+the old series under the new plot. Handlers in Daybook (agent run), File
+Explorer (reveal), Grid (set and save), Pad (open), Sound Lab (shape,
+frequency, amplitude, duration, render, play and save) and Streams (drafts,
+refreshes and source enabling) did the same. Desk now gives its request bus
+a scope that runs each handler in its own applet's context, so all of them
+set their own elements, and Observatory's handler shows what it changed
+itself again.
+
+A press can be lost too. The terminal accepts it bound to the frame on
+screen, but when the guest replaces that frame with a START before it reads
+the press, as when a notice ends, the press names a control the new frame
+no longer has, and the guest drops it without a word. One canonical
+Desktop run stalled that way: it pressed File Explorer's task while Sound
+Lab's render notice showed, the notice ended first, and File Explorer never
+took focus. The journey now waits for the notice to end; the dropped press
+stays open.
+
+Three faults found on the way are fixed. Worlds' Analyze had never worked
+inside Desk: Worlds sent it as a component, and the request bus held a
+component's mutating request for an approval Desk never asks for, so Worlds
+now sends it as the user's own. Sound Lab's right-aligned `4 kHz` label
+wiped its landmark caption in CELL, so it is painted first. And a notice
+could end before a rich frame carrying it was revealed: its time started at
+the paint, and on the busy Desktop a START took longer than the notice to
+be taken. A notice's time now starts when the output that shows it has gone
+out.
 
 ## 7. Pictures
 

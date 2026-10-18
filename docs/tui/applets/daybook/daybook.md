@@ -66,9 +66,10 @@ ordinary wide calendar lifecycle, without a parallel applet description.
 
 Quick capture uses the shared non-blocking prompt widget. Creating or changing
 an entry synchronizes its source immediately. A failed save leaves Daybook
-visibly dirty. Closing a dirty Daybook is fail-closed and requires typing
-`DISCARD`; a second close request is issued by the confirmation, so Desk does
-not prompt the child twice.
+visibly dirty. Closing a dirty Daybook is fail-closed: it asks first in a
+confirm dialog whose default is Cancel. Discard issues a second close request
+itself, so Desk does not ask the child twice. A close asked while a Daybook
+prompt or question is open is refused.
 
 ## Automations
 
@@ -102,8 +103,8 @@ action on the details closes them and acts on the schedule.
 
 Enter or Space on a firing or a run marks it reviewed. P pauses or
 resumes the selected schedule, A archives it or brings it back, and H shows
-or hides archived schedules. Delete asks to type `DELETE` first, because a
-deleted schedule is gone for good; an Agent run's items stay as short
+or hides archived schedules. Delete asks first in a confirm dialog, because
+a deleted schedule is gone for good; an Agent run's items stay as short
 records. For an Agent run, R runs it now, through Desk; Y asks Desk's user
 to approve it, and the status line then says where that stands, as Desk
 answers; and X cancels its run in progress. Escape returns to the
@@ -241,7 +242,8 @@ truncating data.
 Load uses an exact read and validates the complete buffer in a non-mutating
 first pass. Only a successful second pass replaces the current model; every
 failure preserves both the entries and dirty state. Reloading a dirty model
-requires typing `RELOAD`, and a failed confirmed reload still preserves it.
+asks first in a confirm dialog whose default is Cancel, and a failed
+confirmed reload still preserves it.
 Any load or recovery failure also blocks subsequent saves, preventing an edit
 from overwriting the unaccepted external source. The status bar reports
 `Source blocked`; saving is enabled again only after a clean reload (or a
@@ -292,7 +294,7 @@ as saved, while ambiguous or corrupt recovery state fails closed.
 | R | Run the selected Agent run now (automations) |
 | Y | Ask Desk to approve the selected Agent run (automations) |
 | X | Cancel the selected Agent run in progress (automations) |
-| Delete | Delete the selected schedule after typing `DELETE` (automations) |
+| Delete | Delete the selected schedule after a confirm dialog (automations) |
 | Escape | Return to the calendar (automations) |
 
 ## Public Words

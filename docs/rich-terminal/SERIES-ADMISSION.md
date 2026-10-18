@@ -64,6 +64,8 @@ COLOR-B for zero line, MINIMUM/MAXIMUM for its signed range, VALUE for the
 zero line, and OPTIONS bit 0 to show it. MODE, SCALE, unit and formatted text
 are zero. Its exact same-candidate series reference consumes no extra object
 or UTF8 quota; the waveform itself consumes one object and one 152-byte frame.
+A PLOT, instrument kind 5, binds its series the same way
+([PLOTS-AND-LINES.md](PLOTS-AND-LINES.md)).
 
 `RTE-F-SERIES` retains its existing capability and INSTRUMENT dependency.
 Absent capability rejects concrete capture and emission and lets the producer

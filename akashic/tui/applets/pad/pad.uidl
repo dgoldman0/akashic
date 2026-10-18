@@ -36,10 +36,10 @@
 <item text=Select_All do=select-all key=Ctrl+A/>
 </menu>
 <menu label=View>
-<item text=Toggle_Sidebar do=toggle-sidebar key=Ctrl+B/>
-<item text=Toggle_Output do=toggle-output key=Ctrl+J/>
+<item id=view-sidebar text=Show_Sidebar do=toggle-sidebar key=Ctrl+B checked=true/>
+<item id=view-output text=Show_Output do=toggle-output key=Ctrl+J checked=true/>
 <separator/>
-<item text=Show_Hidden_Files do=toggle-hidden/>
+<item id=view-hidden text=Show_Hidden_Files do=toggle-hidden/>
 </menu>
 <menu label=Go>
 <item text=Go_to_File do=goto-file key=Ctrl+P/>

@@ -1270,3 +1270,36 @@ _DBAV-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT DBAV-SIZE
         DBAV-S-DOCUMENT OF S" The document's owner cannot say what it is now" ENDOF
         S" The automation could not be changed" ROT
     ENDCASE ;
+
+\ What a status means, as a status field's severity: neutral (0) for
+\ success, error (4) when something failed, and warning (3) for what the
+\ user can put right or wait out.
+: DBAV-SEVERITY  ( status -- severity )
+    CASE
+        DBAO-S-OK OF 0 ENDOF
+        DBAO-S-ENTROPY OF 4 ENDOF
+        DBAO-S-IO OF 4 ENDOF
+        DBAV-S-NOMEM OF 4 ENDOF
+        DBAV-S-DOCUMENT OF 4 ENDOF
+        DBAO-S-CLOCK OF 3 ENDOF
+        DBAV-S-WHEN OF 3 ENDOF
+        DBAV-S-REPEAT OF 3 ENDOF
+        DBAO-S-TITLE OF 3 ENDOF
+        DBAO-S-ZONE OF 3 ENDOF
+        DBAO-S-NEVER OF 3 ENDOF
+        DBAO-S-CONFLICT OF 3 ENDOF
+        DBAV-S-CHANGED OF 3 ENDOF
+        DBAO-S-DELETED OF 3 ENDOF
+        DBAO-S-BLOCKED OF 3 ENDOF
+        DBAO-S-BUSY OF 3 ENDOF
+        DBAO-S-REVIEW OF 3 ENDOF
+        DBAO-S-APPROVAL OF 3 ENDOF
+        DBAO-S-NOT-FOUND OF 3 ENDOF
+        DBSVC-S-UNAVAILABLE OF 3 ENDOF
+        DBSVC-S-PENDING OF 3 ENDOF
+        DBAV-S-NONE OF 3 ENDOF
+        DBAV-S-MODELS OF 3 ENDOF
+        DBAV-S-NUMBER OF 3 ENDOF
+        DBAV-S-PROMPT OF 3 ENDOF
+        4 SWAP
+    ENDCASE ;

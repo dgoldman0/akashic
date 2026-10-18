@@ -18,11 +18,11 @@
 <item text=Paste do=paste key=Ctrl+V/>
 </menu>
 <menu label=View>
-<item text=Show_Hidden do=toggle-hidden key=Ctrl+H/>
+<item id=view-hidden text=Show_Hidden do=toggle-hidden key=Ctrl+H/>
 <separator/>
-<item text=Sort:_Name do=sort-name/>
-<item text=Sort:_Size do=sort-size/>
-<item text=Sort:_Type do=sort-type/>
+<item id=view-sort-name text=Sort:_Name do=sort-name checked=true/>
+<item id=view-sort-size text=Sort:_Size do=sort-size/>
+<item id=view-sort-type text=Sort:_Type do=sort-type/>
 <separator/>
 <item text=Expand_All do=expand-all/>
 <item text=Collapse_All do=collapse-all/>

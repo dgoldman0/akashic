@@ -517,8 +517,8 @@ candidate contract take precedence.
 ### 0.5 Rich Desk producer families
 
 The rich Desktop profile (`desktop-apt1`) also selects `RET_GRID_CELLS`,
-`RET_STATUS_FIELDS`, `RET_FIELDS`, `RET_SERIES`, `RET_PANES` and
-`RET_TASKBARS`. These families publish the semantic state the host's
+`RET_STATUS_FIELDS`, `RET_FIELDS`, `RET_SERIES`, `RET_PANES`,
+`RET_TASKBARS` and `RET_DIALOGS`. These families publish the semantic state the host's
 `flowing` appearance needs, while Desk's pane geometry, application behavior
 and complete CELL drawing stay unchanged. MegaPad supplies the negotiated
 contract for each family. Appearance remains the host's choice: the viewer's
@@ -531,9 +531,12 @@ contract for each family. Appearance remains the host's choice: the viewer's
 | `FIELDS` | Qualified and selected, with ADJUST, clamping, choice wrap, ACTIVATE and prompt fallback. | [Desktop qualification](FIELD-PRODUCER.md#desktop-qualification) |
 | `SERIES` and `WAVEFORM` | Qualified and selected. Complete histories match their source sample by sample, and a selection redraw keeps their identities. | [Desktop qualification](SERIES-PRODUCER.md#desktop-qualification) |
 | `PANE` and `TASKBAR`/`TASK`/`LAUNCHER` | Qualified and selected, with task focus, minimize, restore and launcher activation. A changed draw with the acknowledged shell layout goes out as a retained DELTA. | [Desktop qualification](DESK-SHELL-COMPOSITION.md#desktop-qualification), [shell producer](SHELL-SCREEN-PRODUCER.md) |
+| `DIALOGS` (`DIALOG`, `BUTTON` and modal regions) | Selected. A prompt or a dialog takes a modal region over its pane. A dialog goes out as a `DIALOG` with a `BUTTON` for each answer, and `ACTIVATE` on a button answers it. | [dialog lane](DIALOG-PRODUCER.md), [shell producer](SHELL-SCREEN-PRODUCER.md) |
 
-Each family passed a headless Desk run on 2026-09-30, with in-process
-dispatch and an SDL dummy sink. Those runs predate shell DELTA publication
+Each family but `DIALOGS` passed a headless Desk run on 2026-09-30, with
+in-process dispatch and an SDL dummy sink. `DIALOGS` was checked on
+2026-10-15 through the physical viewer, with Desk and Pad and with Desk and
+File Explorer, each answering its application's confirm question. Those runs predate shell DELTA publication
 and in-place status replacement inside a DELTA. The physical Desktop journey
 has not yet been run with these families; it is part of the final step of
 the [cleanup plan](RICH-DESK-CLEANUP-PLAN.md).
@@ -881,7 +884,10 @@ control record adds a field total, so the record's scalars and the ITM1
 header's column count fix the exact content length, as the item, UTF-8, and
 run totals fix STX1's. A `DOCUMENT` carries one DOC1 document, the blocks a
 document view shows, and needs the neutral `CONTROL-DOCUMENTS` family (APT-1
-`RET_CONTROL_DOCUMENTS`).
+`RET_CONTROL_DOCUMENTS`). A `DIALOG` carries one DLG1 title, message and
+severity, and a `BUTTON` one BTN1 set of roles; both need the neutral
+`DIALOGS` family (APT-1 `RET_DIALOGS`), which modal regions need too
+([DIALOG-ADMISSION.md](DIALOG-ADMISSION.md)).
 `INSTRUMENT` represents renderer-neutral `READOUT`, `METER`, and `STATUS`
 objects frozen from ordinary canonical `DATA_GRAPHICS` models.
 `GLYPH_RUN` represents unclaimed ordinary draw output. One hybrid plan binds

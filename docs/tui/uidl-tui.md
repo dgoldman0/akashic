@@ -45,6 +45,7 @@ REQUIRE tui/uidl-tui.f
 - [Actions & Shortcuts](#actions--shortcuts)
 - [Dynamic DOM Mutation](#dynamic-dom-mutation)
 - [Attribute Mutation](#attribute-mutation)
+- [Checked Menu Items](#checked-menu-items)
 - [Widget Attachment](#widget-attachment)
 - [Element Region Accessor](#element-region-accessor)
 - [Automatic Dirty Propagation](#automatic-dirty-propagation)
@@ -96,7 +97,7 @@ Each sidecar is 96 bytes (12 cells), stored in the parallel array
 | +64 | `offsets` | packed | top(16s), right(16s), bottom(16s), left(16s) |
 | +72 | `margin` | packed | MT(8), MR(8), MB(8), ML(8) in bits 0-31 |
 | +80 | `wowner` | enum | 0 = UIDL-owned allocation, 1 = caller-owned attachment |
-| +88 | `runtime` | bitfield | UIDL-TUI runtime state; bit 0 persistently suppresses paint without changing layout participation |
+| +88 | `runtime` | bitfield | UIDL-TUI runtime state; bit 0 persistently suppresses paint without changing layout participation, and bit 1 is a menu item's checked state |
 
 ### Sidecar Flag Bits
 
@@ -506,7 +507,9 @@ relayout uses this order:
 6. Final open-menu overlay geometry, admitted row placement, and effective
    z-index. Items and separators may occupy rows; only items enter keyboard
    navigation. `when=false`, `display:none`, positioned, and unsupported
-   children gain neither dropdown rows nor visibility.
+   children gain neither dropdown rows nor visibility. Every row keeps a
+   two-cell mark column before its text, so a dropdown is its widest label
+   and six cells wide.
 7. Projection geometry notification
 
 The projection callback therefore never observes a mixture of new flow
@@ -517,6 +520,12 @@ handlers include:
 |---------|---------|-----------|
 | `_UTUI-LAYOUT-TABS` | `<tabs>` | Horizontal tab bar + content pane |
 | `_UTUI-LAYOUT-MBAR` | `<menubar>` | Horizontal layout: each `<menu>` child placed at parent row, advancing column by label-length + 2, height 1 |
+| `_UTUI-LAYOUT-DLG` | `<dialog>` | Keeps the rectangle its parent gives it; inside its frame a leaf child takes a row and a container the rows the children after it leave, a row at least |
+
+The ordinary stack layout reserves a row for every leaf child, so a
+container after a leaf loses that leaf's row a second time: a document of
+a menu bar, a body and a status bar leaves a blank row under its status
+bar. The dialog layout counts only the children after a container.
 
 ---
 
@@ -746,10 +755,21 @@ Called once during `UTUI-LOAD`, after materialization.
 
 ## Dialog Management
 
+A `<dialog>` is a framed container. It keeps the rectangle its parent's
+layout gives it, so a document whose root holds only a dialog is that
+dialog. It paints its background, a single-line frame and its title (the
+`title` attribute) on the frame's top edge, and its children stack inside
+the frame. Its leading `<label>` children, one row each, are its message;
+the children after them are its contents. Like any dialog it paints in the
+overlay pass, at z 255 unless its style says otherwise. Desk's own screens
+are such documents.
+
 | Word | Stack | Description |
 |------|-------|---------|
 | `UTUI-SHOW-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-SHOW` |
 | `UTUI-HIDE-DIALOG` | `( id-a id-l -- )` | Legacy wrapper — delegates to `UTUI-HIDE` |
+| `UTUI-EACH-ELEM` | `( xt -- )` | Run `xt ( elem -- )` on every element, each before its children; `xt` must not change the tree |
+| `UTUI-DIALOG-REVISION` | `( -- n )` | A revision that grows whenever a dialog is laid out or its title or one of its labels is set; a capture of a dialog element takes it |
 
 ---
 
@@ -778,6 +798,20 @@ Hide an overlay element by string ID:
    bounding rect overlaps the overlay as dirty
 4. Clear the overlay's screen area (`DRW-CLEAR-RECT`)
 5. Restore focus to the saved element (if it's still visible)
+
+### A document's overlay, for projection
+
+A document may show one foreground overlay its own paint draws over it:
+the prompt it opened, painted as its overlay field, or the dialog it asked,
+which its host paints after everything the document paints. An optional
+projection reads where that overlay is, so the document beneath it keeps
+its semantics everywhere the overlay does not reach.
+
+| Word | Stack | Description |
+|------|-------|---------|
+| `UTUI-OVERLAY-FIELD-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay field, if it has one |
+| `UTUI-OVERLAY-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay: the dialog it shows, as its last paint laid it out, else its overlay field |
+| `UTUI-CAPTURE-OCCLUDED!` | `( flag -- )` | Set around the capture of a document whose only foreground paint is its overlay: a root that paint meets is clipped away and stays CELL's |
 
 ### How Overlay Paint Works
 
@@ -906,6 +940,36 @@ S" title" UTUI-BY-ID  S" text" S" Hello World"  UTUI-SET-ATTR
 
 This is the Forth equivalent of JavaScript's `element.setAttribute()`
 — it modifies the DOM and the engine notices.
+
+---
+
+## Checked Menu Items
+
+A menu `<item>` can be checked. Its authored `checked` attribute seeds its
+state when `UTUI-LOAD` loads the document: `checked=true` starts checked, and
+any other value or none unchecked. The state itself is the item's runtime
+checked bit. The application owns what an item means, so activating an item
+checks nothing by itself: the item's action sets the state it stands for.
+
+```xml
+<item id="view-hidden" text="Show Hidden Files" do="toggle-hidden" checked="false"/>
+```
+
+Every row of a CELL dropdown keeps a two-cell mark column before its label,
+whichever items are checked, and a checked item's check mark (U+2713) goes
+there. A menu snapshot carries the state as
+`UMSN-F-CHECKED`, and the retained menu item as `RTE-CONTROL-CHECKED`.
+
+### UTUI-CHECKED! — `( flag elem -- )`
+
+Check or uncheck a menu item. The item repaints when its state changes. Any
+other element is left as it is. Checking writes no attribute, so it never
+uses UIDL's string pool.
+
+### UTUI-CHECKED? — `( elem -- flag )`
+
+Whether `elem` is a checked menu item. An item `UTUI-ADD-ELEM` adds after the
+document loads starts unchecked.
 
 ---
 
@@ -1309,14 +1373,17 @@ compare generation for equality rather than inferring ordering from its sign.
 
 ## UIDL Context (UCTX) System
 
-Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of 29 global
-UIDL/UTUI values and 11 copied pool arrays. The complete context is 107,752
+Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of 32 global
+UIDL/UTUI values and 11 copied pool arrays. The complete context is 107,776
 bytes, approximately 105 KiB.
 The scalars include six neutral
 projection-lifecycle values: token, status, visibility, attached, quiescing,
 and quiesced, plus the open-menu pointer, saved focus, and compact rectangle/z
-needed to keep menu state context-local. The final two scalar slots hold the
-mounted-canonical relation head and count. The eleventh pool is the 4,096-byte
+needed to keep menu state context-local, and the prompt the last observed draw
+painted over the document with that prompt's instance, and the dialog its
+application shows. The final two scalar slots hold the mounted-canonical
+relation head and count. A context freed or cleared with a dialog still open
+frees the dialog without answering it. The eleventh pool is the 4,096-byte
 mounted-source generation/next-key table.
 Projection-adapter context and callbacks are composition authority and never
 enter a UCTX. There is no mounted-provider table or callback borrow. The
@@ -1329,12 +1396,12 @@ variable and manage that live alias ownership.
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
 | `UCTX-FREE` | `( ctx -- )` | Release an inactive context, including its saved relation chain, through the platform allocator. A live context or active draw observation is rejected. |
-| `UCTX-SAVE` | `( ctx -- )` | Save the 29 values, 11 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
+| `UCTX-SAVE` | `( ctx -- )` | Save the 32 values, 11 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
 | `UCTX-RESTORE` | `( ctx -- )` | Restore an inactive context only when the live globals are disowned, then make `ctx` their unique owner. |
 | `UCTX-CLEAR` | `( ctx -- )` | Release saved relations and zero-fill an inactive context buffer. A live context or active draw observation is rejected. |
 | `UCTX-LIVE?` | `( ctx -- flag )` | Report whether `ctx` owns the relation aliases exposed through the live UIDL globals. |
 | `UCTX-LIVE-DISOWN` | `( -- )` | After saving, remove the live aliases without freeing the chain now owned by that context. Draw observation must be quiescent. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (107,752). |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (111,872). |
 
 Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`) and by
 `applet-host/host.f`, which allocates and releases the UCTX buffers that Desk
@@ -1447,14 +1514,14 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
-UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (107,752 bytes)
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (107,776 bytes)
 UCTX-FREE              ( ctx -- )                    Free an inactive context and its saved relations
 UCTX-SAVE              ( ctx -- )                    Save globals, pools, and relation aliases to the live owner
 UCTX-RESTORE           ( ctx -- )                    Restore a context into disowned live globals
 UCTX-CLEAR             ( ctx -- )                    Clear an inactive context and its saved relations
 UCTX-LIVE?             ( ctx -- flag )               Test unique ownership of the live aliases
 UCTX-LIVE-DISOWN       ( -- )                        Disown saved live aliases before another restore
-UCTX-TOTAL             ( -- n )                      Context buffer byte size (107752)
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (111872)
 ```
 
 ---

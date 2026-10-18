@@ -11,11 +11,11 @@ and its taskbar button is slot 1.
 
 from __future__ import annotations
 
-from rich_terminal import text_rules
 from rich_terminal.pygame_view import ATTR_REVERSE
-from rich_terminal.retained_scene import ControlKind, ControlState
+from rich_terminal.retained_scene import ControlKind, ControlState, StatusSeverity
 from rich_terminal.retained_wire import RetainedMessageType
 from rich_terminal.semantic_documents import BlockKind
+from rich_terminal.semantic_fields import FieldKind
 from rich_terminal.semantic_items import (
     ItemColumnKind,
     ItemField,
@@ -30,8 +30,14 @@ import agent_transcript
 import mixed_text
 import styled_text
 from rich_terminal_desktop_acceptance import (
+    SOUNDLAB_FREQUENCY_FIELD,
+    SOUNDLAB_FREQUENCY_PROMPT,
+    SOUNDLAB_LANDMARK_CAPTION,
     DAYBOOK_MENU_SIGNATURE,
     DAYBOOK_PROMPT_MARKER,
+    FEXPLORER_DELETE,
+    FEXPLORER_DELETE_QUESTION,
+    FEXPLORER_MENU_SIGNATURE,
     FEXPLORER_PICTURE,
     FEXPLORER_PICTURE_FACTS,
     PAD_MENU_SIGNATURE,
@@ -40,27 +46,60 @@ from rich_terminal_desktop_acceptance import (
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
     _claim_item_runs,
+    _cancel_of_confirm,
     _claim_item_text,
     _collection_claims_in,
     _desk_content_bounds,
+    _desk_prompt_claim,
+    _field_claims_in,
+    _dialog_claim,
     _image_claims_in,
+    _notice_claim,
+    _prompt_claim,
     _require_cell_text_in,
+    _require_desk_launcher_dialog,
+    _require_held_beneath_overlay,
+    _require_notice,
     _require_pad_readout,
     _require_picture_facts_in,
+    _require_soundlab_landmark_cells,
+    _soundlab_landmarks,
+    _visible_draw_rectangle,
     _residual_contains,
     _status_field_claims_in,
     _tab_in,
     _tab_value,
     _taskbar_has_focus,
     _text_area_pointer_state,
-    _text_cell_in,
 )
+from rich_terminal.retained_view import PlotDraw, PolylineDraw, TextGridDraw
 
 PAD_ALONE_FOCUS_MARKER = "[1:Akashic Pa*]"
+# A confirm question offers its verb, destructive, beside Cancel, the
+# default; the journeys answer Cancel.  Ctrl+W on Pad's edited buffer asks
+# before discarding it, and Delete in File Explorer before deleting the
+# selected item, as in the full Desktop journey.
+PAD_CLOSE_QUESTION = "Discard unsaved changes?"
+PAD_CLOSE_DISCARD = "Discard"
+DAYBOOK_DELETE_QUESTION = "Delete the selected automation?"
+DAYBOOK_DELETE = "Delete"
 FEXP_ALONE_FOCUS_MARKER = "[1:File Explo*]"
 # The canonical Desktop image's large sample sits in the root directory,
 # beside its sample picture.
 FEXP_FILE = "large.txt"
+# F2 renames the selected file through a prompt labelled so; the journey
+# selects the name's stem, types over it, and enters the new name, which
+# File Explorer then keeps selected while its notice says it was renamed.
+FEXP_RENAME_LABEL = "Rename:"
+# File Explorer's Go to prompt opens holding the folder shown, the root; the
+# path typed after it names nothing, so File Explorer warns.
+FEXP_GOTO_LABEL = "Go to:"
+FEXP_GOTO_MISSING = "no-such-folder"
+FEXP_GOTO_NOTICE = "Path not found"
+FEXP_RENAME_STEM = "large"
+FEXP_RENAME_TYPED = "notes"
+FEXP_RENAMED = FEXP_RENAME_TYPED + FEXP_FILE[len(FEXP_RENAME_STEM):]
+FEXP_RENAMED_NOTICE = "Renamed"
 # The photo check's picture, a real photograph wider than File Explorer's
 # preview at its largest on the physical viewer (assets/pictures/README.md),
 # and what its CELL view says it is while the rich side shows it.
@@ -113,6 +152,10 @@ DAYBOOK_ALONE_FOCUS_MARKER = "[1:Daybook*]"
 # The notice Desk shows when the reminder the Daybook-alone boot makes
 # fires (akashic_tui.DAYBOOK_REMINDER_TITLE).
 DAYBOOK_REMINDER_NOTICE = "Reminder: Water the plants"
+# The daily reminder that boot makes too (akashic_tui.DAYBOOK_DAILY_TITLE),
+# first due tomorrow, and the section of Daybook's automations it is in.
+DAYBOOK_DAILY_SCHEDULE = "Stretch"
+DAYBOOK_ACTIVE_SECTION = "ACTIVE"
 STREAMS_ALONE_FOCUS_MARKER = "[1:Streams*]"
 # Streams' feed alone on Desk (fixtures/streams/desk-timeline.json), in
 # feed order: a post with a web link, a reply to it, and another post.
@@ -128,15 +171,46 @@ STREAMS_CARDS = (
     ("kai.test  2026-07-14T10:31:00-04:00", STREAMS_OTHER_TEXT, ""),
 )
 STREAMS_CONTEXT_MARKER = "Retained timeline context (partial)"
+# A feed source the journey adds in Streams' Sources view: its card's
+# fields, enabled at revision 1 and then switched off at revision 2.  The
+# fourth says how its last refresh went, which depends on the refreshes
+# Desk composes, not on the card.
+STREAMS_NO_SOURCES = "No sources configured"
+STREAMS_FEED_PROMPT = "HTTPS feed URL:"
+STREAMS_FEED_URL = "https://example.test/streams/feed.xml"
+STREAMS_SOURCE_CARD = (
+    "Syndication feed",
+    "syndication / auto  revision 1",
+    STREAMS_FEED_URL,
+    "last ",
+    "no retained observations",
+)
+
+
+def _source_card_reads(fields: tuple[str, ...], card: tuple[str, ...]) -> bool:
+    return (
+        len(fields) == len(card)
+        and all(f == c for i, (f, c) in enumerate(zip(fields, card)) if i != 3)
+        and fields[3].startswith(card[3])
+    )
 AGENT_ALONE_FOCUS_MARKER = "[1:Agent*]"
 AGENT_PROMPT_MARKER = "Ask:"
+AGENT_MENU_SIGNATURE = ("Agent", "Run", "Connection", "Access", "Review", "Help")
 # The demo provider asks for approval when a request names one.
 AGENT_REQUEST = "approval check"
 AGENT_REVIEW_MARKER = "Provider approval request (no local tool envelope)"
 AGENT_REVIEW_REASON = "Persist the simulated change?"
-AGENT_APPROVE_MARKER = "[F6] Approve once"
+# The Agent's review: a dialog titled Review required whose Approve once,
+# which F6 chooses, waits for the review's last line, beside Deny, which F7
+# chooses, the default and cancel button.  While more of the review lies
+# below, the last line in view says so.
+AGENT_REVIEW_TITLE = "Review required"
+AGENT_REVIEW_BUTTONS = (("Approve once", "F6"), ("Deny", "F7"))
+DIALOG_MORE = "PgDn: more below"
+# The Agent alone runs on the device-flow fixture, whose provider records
+# the approval under its own ID.
 AGENT_AUDIT = (
-    "Approved agent action: provider org.akashic.agent.testing.scripted: "
+    "Approved agent action: provider org.akashic.agent.testing.device-flow: "
     + AGENT_REVIEW_REASON
 )
 # The cards an approved request adds: the request, the reply, the review,
@@ -151,13 +225,68 @@ AGENT_EXCHANGE = (
     ("SYSTEM", AGENT_REVIEW_REASON),
     ("SYSTEM", AGENT_AUDIT),
 )
+# A long request asks for a review whose reason has a line for each of a
+# hundred simulated changes, taller than the review's dialog: the wheel
+# scrolls it, and Approve once waits until its last line has been shown.
+AGENT_LONG_REQUEST = "long approval check"
+AGENT_LONG_CHANGES = 100
+AGENT_LONG_REASON = AGENT_REVIEW_REASON + "".join(
+    f"\nSimulated change {change} of {AGENT_LONG_CHANGES}."
+    for change in range(1, AGENT_LONG_CHANGES + 1)
+)
+AGENT_LONG_LAST = f"Simulated change {AGENT_LONG_CHANGES} of {AGENT_LONG_CHANGES}."
+AGENT_LONG_EXCHANGE = (
+    ("YOU", AGENT_LONG_REQUEST),
+    (
+        "AGENT",
+        "Connected through Akashic's provider-neutral runtime. "
+        f"You asked: {AGENT_LONG_REQUEST} Approved.",
+    ),
+    ("SYSTEM", AGENT_LONG_REASON),
+    ("SYSTEM", "Approved agent action: provider org.akashic.agent.testing.device-flow: "
+     + AGENT_LONG_REASON),
+)
+# Wheel detents a step over the long review sends; a dialog scrolls three
+# rows a detent.
+AGENT_REVIEW_DETENTS = 5
 # One wheel detent scrolls a list three screen rows.
 AGENT_WHEEL_ROWS = 3
+# The Agent alone runs on the device-flow fixture's catalog: Swift, with Low
+# or Medium reasoning and no speed tiers, then Deliberate, with Low or High
+# reasoning and a Fast tier.  Its run settings are four CHOICE fields.
+AGENT_SETTINGS_LABELS = ("Model", "Reasoning", "Speed", "Verbosity")
+AGENT_SETTINGS_SHOWN = {
+    "Model": "Swift", "Reasoning": "Low", "Speed": "Standard", "Verbosity": "Auto",
+}
+AGENT_SETTINGS_CHOSEN = {
+    "Model": "Deliberate", "Reasoning": "High", "Speed": "Standard", "Verbosity": "Auto",
+}
+# Typed into Desk's own Ask prompt, whose second to fourth characters are
+# then selected and typed over before Escape cancels it.
+DESK_PROMPT_TEXT = "hello"
+DESK_PROMPT_OVER = "EL"
 # The canonical image's large sample: 48 lines, too much text for the small
 # terminal once Pad shows it.
 SMALL_TERMINAL_LARGE_PATH = "/large.txt"
 SMALL_TERMINAL_LARGE_LINE = "Large fixture line 001"
 _WHERE = "Desk's single tile"
+# Sound Lab alone sets a new frequency through its prompt, as the Desktop
+# journey does: 880, or 660 if it already shows 880.
+SOUNDLAB_ALONE_FOCUS_MARKER = "[1:Sound Lab*]"
+SOUNDLAB_ALONE_FREQUENCIES = (880, 660)
+# Desk holds Observatory, then Worlds, each in half the screen.  Observatory
+# starts with its own eight-sample series, ticks 0 to 7 falling from 8000 by
+# 500; Worlds steps its run three times and hands the run's telemetry to
+# Observatory through Analyze, which Observatory then profiles again on R.
+# Desk cuts a task's label to ten characters.
+OBSERVATORY_FOCUS_MARKER = "[1:Observator*]"
+WORLDS_FOCUS_MARKER = "[2:Worlds*]"
+OBSERVATORY_DEMO_SERIES = tuple((tick, 8000 - 500 * tick) for tick in range(8))
+OBSERVATORY_PLOT_CAPTION = "Upper amount projection"
+OBSERVATORY_PLOT_LINE = (0x5F, 0xD7, 0xFF, 0xFF)
+OBSERVATORY_BASELINE = (0x4E, 0x4E, 0x4E, 0xFF)
+WORLDS_STEPS = 3
+OBSERVATORY_PROFILED = "Profiled "
 # The frames the terminal counts that show a picture's upload beside the
 # screen's own frames (APT-1-RETAINED-1 section 8).
 _UPLOAD_FRAMES = {
@@ -183,14 +312,20 @@ class _AppletJourney(FrameBoundJourney):
     """A journey through Desk holding the one applet FOCUS_MARKER names."""
 
     focus_marker = ""
-    # The applet's modal prompt withholds its only menu bar; each journey
-    # checks the menu itself.
+    # A painted overlay, such as the Agent's review, withholds the applet's
+    # only menu bar; each journey checks the menu itself.
     requires_menu_bar = False
+
+    def _desk_prompt_expected(self) -> bool:
+        """Whether Desk's own prompt may hold the taskbar row now."""
+
+        return False
 
     def _admit(self, offer, generation, projection, sender) -> bool:
         """Whether the journey may act on this frame: one newer than its last
         input's frame, in the session's lineage, once any pointer gesture the
-        guest owes is complete, with the applet up and focused."""
+        guest owes is complete, with the applet up and focused.  While Desk's
+        own prompt is expected it may hold the taskbar row instead."""
 
         lineage = self._frame_lineage(offer, generation)
         if self._lineage is not None and lineage != self._lineage:
@@ -215,7 +350,9 @@ class _AppletJourney(FrameBoundJourney):
                 self.waiting = f"{self.focus_marker} after Alt+1"
                 self._send("send_key", "alt+1", 0, offer, generation, sender)
                 return False
-        elif not _taskbar_has_focus(projection, self.focus_marker):
+        elif not _taskbar_has_focus(projection, self.focus_marker) and not (
+            self._desk_prompt_expected() and _desk_prompt_claim(projection) is not None
+        ):
             raise PhysicalDesktopAcceptanceError(
                 f"the applet lost focus: {self._taskbar_line(projection).strip()!r}"
             )
@@ -247,14 +384,7 @@ class _AppletJourney(FrameBoundJourney):
             )
         return self._offer_lineage(offer, generation)
 
-    def _wait(self, reason: str) -> JourneyProgress:
-        """Wait for a newer frame, remembering why for timeout diagnostics."""
-
-        self.waiting = reason
-        return JourneyProgress()
-
     def _step(self, milestone, method, value, target, offer, generation, sender):
-        self.waiting = None
         milestone = self._milestone(milestone)
         self._send(method, value, target, offer, generation, sender)
         return JourneyProgress(milestone)
@@ -277,10 +407,17 @@ class PadAloneJourney(_AppletJourney):
     longer than one TEXT event allows, as several events.  Pad's Ln/Col
     readout counts characters in every frame that moves the caret.
 
-    Pad then opens notes.md through its Open prompt.  Its TEXT_AREA carries
-    the heading's, link's, and strong text's style runs, and a FOLLOW on the
-    link, sent where the viewer finds the link as a Ctrl press would, opens
-    example.f, whose keywords its runs mark.
+    Ctrl+W on the edited buffer asks first: Pad's dialog, in a modal region
+    over its tile with Pad's menu bar and every root it does not cover rich
+    and inactive beneath it, offers Discard, destructive, and Cancel, the
+    default.  Pressing Cancel closes the dialog and keeps the buffer.
+
+    Pad then opens notes.md through its Open prompt, a TEXT field in a
+    modal region over Pad's tile while Pad's menu bar and editor stay rich
+    and inactive beneath it.  Its TEXT_AREA carries the heading's, link's,
+    and strong text's style runs, and a FOLLOW on the link, sent where the
+    viewer finds the link as a Ctrl press would, opens example.f, whose
+    keywords its runs mark.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
@@ -293,11 +430,13 @@ class PadAloneJourney(_AppletJourney):
         FAMILY_DELETED,
         RESTORED,
         IN_HEBREW,
+        CLOSE_ASKED,
+        CLOSE_CANCELLED,
         OPEN_PROMPT,
         PATH_TYPED,
         NOTES_OPENED,
         LINK_FOLLOWED,
-    ) = range(12)
+    ) = range(14)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
@@ -335,6 +474,8 @@ class PadAloneJourney(_AppletJourney):
             return JourneyProgress()
         if self.stage >= self.OPEN_PROMPT:
             return self._styled(offer, generation, projection, sender)
+        if self.stage >= self.CLOSE_ASKED:
+            return self._close_question(offer, generation, projection, sender)
         if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
             raise PhysicalDesktopAcceptanceError(
                 f"Desk with Pad shows menus {projection.menu_signatures!r}"
@@ -438,36 +579,70 @@ class PadAloneJourney(_AppletJourney):
                                    "backspace", self.FAMILY_DELETED, offer, generation,
                                    sender)
         return self._send_from(state, "pad-caret-placed-in-hebrew", "send_key",
-                               "ctrl+o", self.OPEN_PROMPT, offer, generation, sender)
+                               "ctrl+w", self.CLOSE_ASKED, offer, generation, sender)
+
+    def _close_question(self, offer, generation, projection, sender) -> JourneyProgress:
+        """Ctrl+W asks before it discards the edited buffer; Cancel keeps it."""
+
+        bounds = _desk_content_bounds(projection)
+        dialog = _dialog_claim(projection, PAD_CLOSE_QUESTION, bounds)
+        if self.stage == self.CLOSE_ASKED:
+            if dialog is None:
+                return self._wait("Pad's question after Ctrl+W")
+            value = _cancel_of_confirm(offer, projection, dialog, bounds, PAD_CLOSE_DISCARD,
+                                       PAD_MENU_SIGNATURE, "Pad", _WHERE)
+            return self._step("pad-close-question-shown", "activate_button", value,
+                              self.CLOSE_CANCELLED, offer, generation, sender)
+        if dialog is not None:
+            return self._wait("Pad's question to close after Cancel")
+        if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
+            return self._wait("Pad's menu bar after its question")
+        claim = self._editor(projection)
+        if claim is None:
+            return self._wait("Pad's editor after its question")
+        if _claim_item_text(claim, 1) != mixed_text.PAD_TEXT:
+            raise PhysicalDesktopAcceptanceError(
+                f"Cancel did not keep Pad's buffer: {_claim_item_text(claim, 1)!r}"
+            )
+        return self._step("pad-close-cancelled", "send_key", "ctrl+o",
+                          self.OPEN_PROMPT, offer, generation, sender)
 
     def _styled(self, offer, generation, projection, sender) -> JourneyProgress:
         """Open notes.md, check its style runs, and follow its link."""
 
         bounds = _desk_content_bounds(projection)
-        prompt = _residual_contains(projection, PAD_OPEN_PROMPT_MARKER, bounds)
-        if prompt and (
-            projection.menu_signatures
-            or _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
-        ):
-            raise PhysicalDesktopAcceptanceError(
-                "Pad's prompt did not withhold its menu and text areas"
-            )
+        prompt = _prompt_claim(projection, PAD_OPEN_PROMPT_MARKER, bounds)
+        if prompt is not None:
+            _require_held_beneath_overlay(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
+            if not _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds):
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad's prompt withheld its editor"
+                )
         if self.stage == self.OPEN_PROMPT:
-            if not prompt:
+            if prompt is None:
                 return self._wait("Pad's Open prompt after Ctrl+O")
+            if prompt.content.text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Pad's Open prompt opened holding {prompt.content.text!r}"
+                )
+            _require_cell_text_in(offer, PAD_OPEN_PROMPT_MARKER, bounds, _WHERE)
             return self._step("pad-open-prompt-shown", "send_text",
                               styled_text.NOTES_PATH, self.PATH_TYPED, offer,
                               generation, sender)
         if self.stage == self.PATH_TYPED:
-            if not prompt:
+            if prompt is None:
                 raise PhysicalDesktopAcceptanceError(
                     "Pad's Open prompt closed before its path was entered"
                 )
-            if not _residual_contains(projection, styled_text.NOTES_PATH, bounds):
+            if prompt.content.text != styled_text.NOTES_PATH:
                 return self._wait("the typed path in Pad's Open prompt")
+            if prompt.content.caret != len(styled_text.NOTES_PATH):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Pad's Open prompt has its caret at {prompt.content.caret}"
+                )
             return self._step("pad-notes-path-typed", "send_key", "enter",
                               self.NOTES_OPENED, offer, generation, sender)
-        if prompt:
+        if prompt is not None:
             return self._wait("Pad's Open prompt to close")
         if projection.menu_signatures != (PAD_MENU_SIGNATURE,):
             return self._wait("Pad's menu bar after its prompt")
@@ -506,18 +681,25 @@ class PadAloneJourney(_AppletJourney):
 
 class DaybookAloneJourney(_AppletJourney):
     """Desk with Daybook: add a task that mixes scripts through its prompt,
-    check it off in the agenda, then see the notice of the reminder the boot
-    made when Desk fires it.
+    check it off in the agenda, ask to delete the daily reminder and keep it,
+    then see the notice of the reminder the boot made when Desk fires it.
 
-    The prompt shows the typed text in visual order.  Backspace after an
-    emoji sequence deletes all of it; a click on a Han character's second
-    cell puts the caret before that character, where one typed character
-    lands; and Enter adds the task.  The agenda is a SECTIONS item view,
-    and the task is an unchecked checkable item under the TASKS heading; a
-    CHECK on it marks it done.  While the prompt is open, Daybook's menu,
-    calendar grid and agenda are withheld, as the document-atomic fallback
-    requires, and its cells stay complete.  Desk's toast of the reminder's
-    notice must then reach the physical frame on the bottom row.
+    The prompt is a TEXT field in a modal region over Daybook's tile: it
+    carries the typed text logically while its CELL cells show it in visual
+    order.  Backspace after an emoji sequence deletes all of it; a PLACE at
+    a Han character, sent where the viewer lays that character out, puts the
+    caret before it, where one typed character lands; and Enter adds the
+    task.  The agenda is a SECTIONS item view, and the task is an unchecked
+    checkable item under the TASKS heading; a CHECK on it marks it done.
+    While the prompt is open, Daybook's menu, calendar grid and agenda stay
+    rich beneath it and inactive, and its cells stay complete.  F4 then
+    shows Daybook's automations, a SECTIONS item view too; a SELECT on the
+    daily reminder and Delete ask first, in a DIALOG whose Delete is
+    destructive and whose Cancel is the default, and an ACTIVATE on Cancel
+    keeps the reminder.  F4 returns to the calendar, and the reminder's
+    notice must then reach the physical frame: the app shell's notice, a
+    neutral DIALOG with the NOTICE flag on the bottom row, in a region of its
+    own over Desk's taskbar, as CELL shows it there too.
     """
 
     focus_marker = DAYBOOK_ALONE_FOCUS_MARKER
@@ -531,14 +713,18 @@ class DaybookAloneJourney(_AppletJourney):
         INSERTED,
         ADDED,
         CHECKED,
+        AUTOMATIONS,
+        SCHEDULE_SELECTED,
+        DELETE_ASKED,
+        DELETE_CANCELLED,
+        CALENDAR,
         NOTICE_WAIT,
         NOTICE,
-    ) = range(11)
+    ) = range(16)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
-        self._field: tuple[int, int] | None = None  # (column, row)
-        self._han_column = 0
+        self._han_cell: tuple[int, int] | None = None  # (row, column) in CELL
 
     @property
     def final_stage(self) -> int:
@@ -587,21 +773,24 @@ class DaybookAloneJourney(_AppletJourney):
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
-        prompt = _residual_contains(projection, DAYBOOK_PROMPT_MARKER, bounds)
+        if self.AUTOMATIONS <= self.stage <= self.CALENDAR:
+            return self._automations(offer, generation, projection, bounds, sender)
+        prompt = _prompt_claim(projection, DAYBOOK_PROMPT_MARKER, bounds)
         collections = tuple(
             claim
             for kind in (ControlKind.TEXT_AREA, ControlKind.TEXT_GRID)
             for claim in _collection_claims_in(projection, kind, bounds)
         )
-        if prompt:
+        if prompt is not None:
+            _require_held_beneath_overlay(
+                projection, prompt, bounds, DAYBOOK_MENU_SIGNATURE, "Daybook"
+            )
             if (
-                projection.menu_signatures
-                or collections
-                or projection.semantic_item_view_claims
+                not any(claim.kind is ControlKind.TEXT_GRID for claim in collections)
+                or self._agenda(projection, bounds) is None
             ):
                 raise PhysicalDesktopAcceptanceError(
-                    "Daybook's prompt did not withhold its menu, collections "
-                    "and agenda"
+                    "Daybook's prompt withheld its calendar or agenda"
                 )
         elif projection.menu_signatures != (DAYBOOK_MENU_SIGNATURE,) or not any(
             claim.kind is ControlKind.TEXT_GRID for claim in collections
@@ -616,13 +805,13 @@ class DaybookAloneJourney(_AppletJourney):
         entry = mixed_text.DAYBOOK_ENTRY
 
         if self.stage == self.READY:
-            if prompt:
+            if prompt is not None:
                 raise PhysicalDesktopAcceptanceError("Daybook's prompt was already open")
             return self._step("daybook-ready", "send_key", "ctrl+n", self.PROMPT,
                               offer, generation, sender)
         if self.stage == self.ADDED:
             # Enter closes the prompt; the agenda then shows the task.
-            if prompt:
+            if prompt is not None:
                 return JourneyProgress()
             return self._added(offer, generation, projection, bounds, entry, sender)
         if self.stage == self.CHECKED:
@@ -631,85 +820,131 @@ class DaybookAloneJourney(_AppletJourney):
             if task is None or not task.state & ItemState.CHECKED:
                 return JourneyProgress()
             _require_cell_text_in(offer, "[x]", bounds, _WHERE)
-            self.stage = self.NOTICE_WAIT
-            self.frame_barrier = offer.offer_id
-            return JourneyProgress(self._milestone("daybook-task-checked"))
+            return self._step("daybook-task-checked", "send_key", "f4",
+                              self.AUTOMATIONS, offer, generation, sender)
         if self.stage == self.NOTICE_WAIT:
-            # The toast is an ordinary overlay on Desk's bottom row: the rich
-            # frame carries it as residual glyphs, and CELL as its cells.
-            bottom = projection.rows - 1
-            if DAYBOOK_REMINDER_NOTICE not in projection.row_text(bottom):
+            notice = _notice_claim(projection, DAYBOOK_REMINDER_NOTICE)
+            if notice is None:
                 return self._wait(f"Desk's notice {DAYBOOK_REMINDER_NOTICE!r}")
-            if not any(
-                row == bottom for row, _ in offer.cell.find(DAYBOOK_REMINDER_NOTICE)
-            ):
-                raise PhysicalDesktopAcceptanceError(
-                    "CELL does not show Desk's notice on its bottom row"
-                )
+            _require_notice(offer, notice, StatusSeverity.NEUTRAL)
             return self._done("daybook-reminder-notice", offer)
-        if not prompt:
+        if prompt is None:
             if self.stage == self.PROMPT:
                 return JourneyProgress()
             raise PhysicalDesktopAcceptanceError("Daybook's prompt closed early")
-        label = _text_cell_in(projection, DAYBOOK_PROMPT_MARKER, bounds, _WHERE)
-        if label is None:
-            return JourneyProgress()
-        _column, row = label
-        left, _top, right, _bottom = bounds
+        text = prompt.content.text
         if self.stage == self.PROMPT:
+            if text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Daybook's prompt opened holding {text!r}"
+                )
             return self._step("daybook-prompt-opened", "send_text", head,
                               self.HEAD_TYPED, offer, generation, sender)
         if self.stage == self.HEAD_TYPED:
-            columns = projection.find_cells(mixed_text.visual(head), row, left, right)
-            if not columns:
+            if text != head:
                 return JourneyProgress()
-            self._field = (columns[0], row)
             return self._step("daybook-prompt-head-typed", "send_key", "backspace",
                               self.EMOJI_DELETED, offer, generation, sender)
-        column, field_row = self._field
-        if field_row != row:
-            raise PhysicalDesktopAcceptanceError("Daybook's prompt moved")
-
-        def shows(line: str) -> bool:
-            return _field_shows(projection, column, row, line, entry)
-
         if self.stage == self.EMOJI_DELETED:
-            if shows(head):
+            if text == head:
                 return JourneyProgress()
-            if not shows(shortened):
+            if text != shortened:
                 raise PhysicalDesktopAcceptanceError(
                     "Backspace in Daybook's prompt did not delete the whole emoji "
-                    f"sequence: {projection.row_text(row, column, right)!r}"
+                    f"sequence: {text!r}"
                 )
             return self._step("daybook-emoji-sequence-deleted", "send_text",
                               task[len(shortened):], self.TASK_TYPED, offer,
                               generation, sender)
         if self.stage == self.TASK_TYPED:
             # The guest may paint between typed characters.
-            if not shows(task):
+            if text != task:
                 return JourneyProgress()
             _require_cell_text_in(offer, mixed_text.visual(task), bounds, _WHERE)
-            columns = projection.find_cells(mixed_text.DAYBOOK_HAN, row, left, right)
-            if len(columns) != 1:
+            cells = [
+                (row, column)
+                for row, column in offer.cell.find(mixed_text.DAYBOOK_HAN)
+                if row == prompt.top
+            ]
+            if len(cells) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "Daybook's prompt does not show its Han character once"
                 )
-            self._han_column = columns[0]
-            # The character's second cell names its start (APT-1-TEXT 9.1).
-            return self._step("daybook-mixed-task-typed", "pointer_click",
-                              f"{columns[0] + 1},{row}", self.CLICKED, offer,
-                              generation, sender)
+            self._han_cell = cells[0]
+            identity = prompt.identity
+            value = (f"{identity.owner_id},{identity.owner_generation},"
+                     f"{identity.control_id},0,{task.index(mixed_text.DAYBOOK_HAN)}")
+            return self._step("daybook-mixed-task-typed", "text_place", value,
+                              self.CLICKED, offer, generation, sender)
         if self.stage == self.CLICKED:
-            # The focused caret now marks the Han character's cells.
-            if not offer.cell.cells[row][self._han_column].attrs & ATTR_REVERSE:
+            # The caret is now before the Han character, and CELL's focused
+            # caret marks its cells.
+            row, column = self._han_cell
+            if prompt.content.caret != task.index(mixed_text.DAYBOOK_HAN):
+                return JourneyProgress()
+            if not offer.cell.cells[row][column].attrs & ATTR_REVERSE:
                 return JourneyProgress()
             return self._step("daybook-prompt-caret-on-han", "send_text",
                               mixed_text.DAYBOOK_INSERT, self.INSERTED, offer,
                               generation, sender)
-        if not shows(entry):
+        if text != entry:
             return JourneyProgress()
         return self._step("daybook-prompt-text-inserted-at-click", "send_key", "enter",
                           self.ADDED, offer, generation, sender)
+
+    def _automations(self, offer, generation, projection, bounds, sender):
+        """Ask to delete the daily reminder from Daybook's automations, keep
+        it through Cancel, and return to the calendar."""
+
+        dialog = _dialog_claim(projection, DAYBOOK_DELETE_QUESTION, bounds)
+        if self.stage == self.DELETE_ASKED:
+            if dialog is None:
+                return self._wait("Daybook's question after Delete")
+            value = _cancel_of_confirm(offer, projection, dialog, bounds, DAYBOOK_DELETE,
+                                       DAYBOOK_MENU_SIGNATURE, "Daybook", _WHERE)
+            return self._step("daybook-delete-question-shown", "activate_button", value,
+                              self.DELETE_CANCELLED, offer, generation, sender)
+        if dialog is not None:
+            return self._wait("Daybook's question to close after Cancel")
+        if self.stage == self.CALENDAR:
+            agenda = self._agenda(projection, bounds)
+            task = None if agenda is None else self._task(agenda, mixed_text.DAYBOOK_ENTRY)
+            if task is None or not _collection_claims_in(
+                projection, ControlKind.TEXT_GRID, bounds
+            ):
+                return self._wait("Daybook's calendar after F4")
+            if not task.state & ItemState.CHECKED:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook's task lost its check in the automations"
+                )
+            self.stage = self.NOTICE_WAIT
+            self.frame_barrier = offer.offer_id
+            return JourneyProgress(self._milestone("daybook-calendar-shown-again"))
+        automations = self._agenda(projection, bounds)
+        schedule = None if automations is None else automations.named(DAYBOOK_DAILY_SCHEDULE)
+        if schedule is None:
+            if (
+                self.stage == self.DELETE_CANCELLED
+                and automations is not None
+                and automations.named(DAYBOOK_ACTIVE_SECTION) is not None
+            ):
+                raise PhysicalDesktopAcceptanceError(
+                    "Cancel did not keep Daybook's daily reminder"
+                )
+            return self._wait(f"Daybook's automations listing {DAYBOOK_DAILY_SCHEDULE!r}")
+        if self.stage == self.AUTOMATIONS:
+            return self._step("daybook-automations-shown", "item_select",
+                              automations.value(schedule.item_key),
+                              self.SCHEDULE_SELECTED, offer, generation, sender)
+        if self.stage == self.SCHEDULE_SELECTED:
+            selected = automations.selected
+            if selected is None or selected.item_key != schedule.item_key:
+                return self._wait(f"{DAYBOOK_DAILY_SCHEDULE!r} selected")
+            return self._step("daybook-daily-reminder-selected", "send_key", "delete",
+                              self.DELETE_ASKED, offer, generation, sender)
+        _require_cell_text_in(offer, DAYBOOK_DAILY_SCHEDULE, bounds, _WHERE)
+        return self._step("daybook-delete-cancelled", "send_key", "f4",
+                          self.CALENDAR, offer, generation, sender)
 
     def _added(self, offer, generation, projection, bounds, entry, sender):
         agenda = self._agenda(projection, bounds)
@@ -731,12 +966,27 @@ class FexpAloneJourney(_AppletJourney):
 
     The detail table is a TABLE item view with Name, Size (a number column),
     and Type columns, and the sidebar a TREE whose root is "/".  A SELECT
-    on large.txt's row selects it and the status bar shows its path.  A
+    on large.txt's row selects it and the status bar shows its path.  F2
+    opens the rename prompt holding the name, a TEXT field in a modal region
+    over the tile with the table and tree rich and inactive beneath it; a
+    PLACE at the name's start and an EXTEND to the end of its stem, as the
+    viewer sends a drag, select the stem, typing replaces it, and Enter
+    renames large.txt to notes.txt, which stays selected while File
+    Explorer says it was renamed in a neutral notice.  Delete then asks
+    before it deletes the file: File Explorer's dialog, in a modal region
+    over the tile with its menu bar and every root it does not cover rich
+    and inactive beneath it, offers Delete, destructive, and Cancel, the
+    default, and pressing Cancel closes it and leaves the file listed and
+    selected.  Ctrl+G opens the Go to prompt holding the folder shown, the
+    root, and a path typed after it names nothing: Enter closes the prompt,
+    and File Explorer warns that the path was not found, in the app shell's
+    notice, a DIALOG with the NOTICE flag and the warning's meaning on the
+    bottom row, as CELL shows it there too.  A
     SELECT on sunset.qoi's row loads its preview, and activating the
     Preview tab shows it: the rich frame shows it as an IMAGE once the
     terminal holds it, while CELL beneath shows what the picture is and
     draws none of it.  Activating the Details tab brings the table back
-    and the picture goes.  The Preview tab shows it again; large.txt's
+    and the picture goes.  The Preview tab shows it again; notes.txt's
     preview is text, with no picture; and guide.md's is a DOCUMENT from its
     first heading, with its figure, the same picture, in view and shown
     rich as an IMAGE in the picture rows the document leaves it.  SCROLL
@@ -759,9 +1009,11 @@ class FexpAloneJourney(_AppletJourney):
     selection back to the root and lists it again.  CELL shows the rows
     throughout.
 
-    Last, Alt+H opens Desk's launcher, an overlay document whose catalog is
-    a two-column item view; while it is open File Explorer's lists fall
-    back beneath it.  An OPEN on its File Explorer row focuses the running
+    Last, Alt+H opens Desk's launcher, an overlay document that is a
+    dialog titled Applets, modal over the whole screen, whose status and
+    hint lines are its message and whose catalog, a two-column item view,
+    lies active inside it; while it is open File Explorer's lists fall back
+    beneath it.  An OPEN on its File Explorer row focuses the running
     applet and closes the launcher, and the lists come back.
 
     On a paced link the first preview's upload takes long enough to check
@@ -777,6 +1029,16 @@ class FexpAloneJourney(_AppletJourney):
     (
         READY,
         FILE_SELECTED,
+        RENAME_PROMPT,
+        RENAME_PLACED,
+        RENAME_SELECTED,
+        RENAME_TYPED,
+        RENAMED,
+        DELETE_ASKED,
+        DELETE_CANCELLED,
+        GOTO_PROMPT,
+        GOTO_TYPED,
+        GOTO_WARNED,
         PICTURE_SELECTED,
         PICTURE_PREVIEWED,
         PICTURE_DETAILS,
@@ -810,7 +1072,7 @@ class FexpAloneJourney(_AppletJourney):
         TREE_COLLAPSED,
         LAUNCHER_OPENED,
         LAUNCHER_CLOSED,
-    ) = range(35)
+    ) = range(45)
     _DOCUMENT_STAGES = (DOCUMENT_PREVIEWED, DOCUMENT_SCROLLED, DOCUMENT_TOP,
                         LINKED_DOCUMENT)
     _PDF_STAGES = (PDF_PREVIEWED, PDF_LAST_PAGE, PDF_CONTENTS, PDF_OUTLINE_CLOSED,
@@ -832,6 +1094,11 @@ class FexpAloneJourney(_AppletJourney):
         # Whether a scroll step has shown the document's figure partly
         # scrolled out.
         self._figure_clipped = False
+        # Whether a frame has shown File Explorer's notices, that the file
+        # was renamed and the warning.  Each lasts a second or two, so the
+        # input after it may be retried once it is gone.
+        self._renamed = False
+        self._warned = False
         # The upload check's step: pending, sent, answered, shown, or None
         # when there is none or it is over.
         self._probe = "pending" if paced_link else None
@@ -942,7 +1209,81 @@ class FexpAloneJourney(_AppletJourney):
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, FEXP_FILE)
+        return (self.focus_marker, FEXP_RENAMED)
+
+    def _goto(self, offer, generation, sender, goto) -> JourneyProgress:
+        """The Go to prompt: it opens holding the root; type a path that
+        names nothing after it, and Enter."""
+
+        if goto is None:
+            if self.stage == self.GOTO_PROMPT:
+                return self._wait("File Explorer's Go to prompt after Ctrl+G")
+            raise PhysicalDesktopAcceptanceError("File Explorer's Go to prompt closed early")
+        text = goto.content.text
+        if self.stage == self.GOTO_PROMPT:
+            if text != "/":
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer's Go to prompt opened holding {text!r}"
+                )
+            return self._step("fexp-goto-opened", "send_text", FEXP_GOTO_MISSING,
+                              self.GOTO_TYPED, offer, generation, sender)
+        typed = "/" + FEXP_GOTO_MISSING
+        if text != typed:
+            if typed.startswith(text):
+                return self._wait("the path typed into the Go to prompt")
+            raise PhysicalDesktopAcceptanceError(
+                f"typing into File Explorer's Go to prompt gave {text!r}"
+            )
+        return self._step("fexp-goto-typed", "send_key", "enter", self.GOTO_WARNED,
+                          offer, generation, sender)
+
+    def _rename(self, offer, generation, projection, sender, rename) -> JourneyProgress:
+        """The rename prompt: select the name's stem, type over it, enter it."""
+
+        if rename is None:
+            if self.stage == self.RENAME_PROMPT:
+                return self._wait("File Explorer's rename prompt after F2")
+            raise PhysicalDesktopAcceptanceError("the rename prompt closed early")
+        content = rename.content
+        identity = rename.identity
+        value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id},0,{{}}"
+        if self.stage == self.RENAME_PROMPT:
+            if content.text != FEXP_FILE:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the rename prompt holds {content.text!r}, not {FEXP_FILE!r}"
+                )
+            _require_cell_text_in(offer, FEXP_RENAME_LABEL, _desk_content_bounds(projection),
+                                  _WHERE)
+            return self._step("fexp-rename-prompt-opened", "text_place", value.format(0),
+                              self.RENAME_PLACED, offer, generation, sender)
+        if content.text != FEXP_FILE and self.stage != self.RENAME_TYPED:
+            raise PhysicalDesktopAcceptanceError(
+                f"selecting in the rename prompt changed its text to {content.text!r}"
+            )
+        if self.stage == self.RENAME_PLACED:
+            if content.caret != 0:
+                return self._wait("the rename prompt's caret at its start")
+            return self._step("fexp-rename-caret-placed", "text_extend",
+                              value.format(len(FEXP_RENAME_STEM)), self.RENAME_SELECTED,
+                              offer, generation, sender)
+        if self.stage == self.RENAME_SELECTED:
+            if (content.anchor, content.caret) != (0, len(FEXP_RENAME_STEM)):
+                return self._wait("the name's stem selected")
+            return self._step("fexp-rename-stem-selected", "send_text", FEXP_RENAME_TYPED,
+                              self.RENAME_TYPED, offer, generation, sender)
+        suffix = FEXP_FILE[len(FEXP_RENAME_STEM):]
+        typed = FEXP_RENAME_TYPED + suffix
+        # The guest may paint after each typed scalar.
+        if content.text == FEXP_FILE or content.text in {
+            FEXP_RENAME_TYPED[:length] + suffix for length in range(1, len(FEXP_RENAME_TYPED))
+        }:
+            return self._wait("the typed name")
+        if content.text != typed:
+            raise PhysicalDesktopAcceptanceError(
+                f"typing over the selected stem gave {content.text!r}, not {typed!r}"
+            )
+        return self._step("fexp-rename-stem-replaced", "send_key", "enter",
+                          self.RENAMED, offer, generation, sender)
 
     @staticmethod
     def _launcher(projection: RichScreenProjection):
@@ -1015,7 +1356,7 @@ class FexpAloneJourney(_AppletJourney):
 
     def _preview(self, offer, generation, projection, sender) -> JourneyProgress:
         """The Preview tab shows the picture rich, over what CELL says it is,
-        or large.txt's text with no picture; then the Details tab brings the
+        or notes.txt's text with no picture; then the Details tab brings the
         table back."""
 
         picture, details_stage = self._PREVIEWS[self.stage]
@@ -1049,7 +1390,7 @@ class FexpAloneJourney(_AppletJourney):
                 for claim in _collection_claims_in(projection, ControlKind.TEXT_AREA, bounds)
                 for line in claim.visible_text
             ):
-                return self._wait(f"{FEXP_FILE}'s text in the preview")
+                return self._wait(f"{FEXP_RENAMED}'s text in the preview")
             milestone = "fexp-text-shown"
         details, _selected = _tab_in(projection, bounds, "Details", _WHERE)
         return self._step(milestone, "activate_tab", _tab_value(details),
@@ -1332,6 +1673,7 @@ class FexpAloneJourney(_AppletJourney):
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer's lists stayed rich beneath the launcher"
                 )
+            _require_desk_launcher_dialog(projection, launcher)
             row = launcher.named("File Explorer")
             if not row.state & ItemState.SELECTED:
                 raise PhysicalDesktopAcceptanceError(
@@ -1348,6 +1690,20 @@ class FexpAloneJourney(_AppletJourney):
             return self._document(offer, generation, projection, sender)
         if self.stage in self._PDF_STAGES:
             return self._pdf(offer, generation, projection, sender)
+        if self.stage in (self.DELETE_ASKED, self.DELETE_CANCELLED):
+            # The question may cover the detail table, which the capture
+            # then withholds until it closes.
+            bounds = _desk_content_bounds(projection)
+            delete = _dialog_claim(projection, FEXPLORER_DELETE_QUESTION, bounds)
+            if self.stage == self.DELETE_ASKED:
+                if delete is None:
+                    return self._wait("File Explorer's question after Delete")
+                value = _cancel_of_confirm(offer, projection, delete, bounds, FEXPLORER_DELETE,
+                                           FEXPLORER_MENU_SIGNATURE, "File Explorer", _WHERE)
+                return self._step("fexp-delete-question-shown", "activate_button", value,
+                                  self.DELETE_CANCELLED, offer, generation, sender)
+            if delete is not None:
+                return self._wait("File Explorer's question to close after Cancel")
         table, tree = self._views(projection)
         if table is None:
             return self._wait("File Explorer's detail table and folder tree")
@@ -1379,16 +1735,61 @@ class FexpAloneJourney(_AppletJourney):
             return self._step("fexp-table-shown", "item_select",
                               table.value(row.item_key), self.FILE_SELECTED, offer,
                               generation, sender)
-        if self.stage == self.FILE_SELECTED:
+        rename = _prompt_claim(projection, FEXP_RENAME_LABEL, bounds)
+        if rename is not None:
+            _require_held_beneath_overlay(
+                projection, rename, bounds, FEXPLORER_MENU_SIGNATURE, "File Explorer"
+            )
+        if self.RENAME_PROMPT <= self.stage <= self.RENAME_TYPED:
+            return self._rename(offer, generation, projection, sender, rename)
+        goto = _prompt_claim(projection, FEXP_GOTO_LABEL, bounds)
+        if goto is not None:
+            _require_held_beneath_overlay(
+                projection, goto, bounds, FEXPLORER_MENU_SIGNATURE, "File Explorer"
+            )
+        if self.stage in (self.GOTO_PROMPT, self.GOTO_TYPED):
+            return self._goto(offer, generation, sender, goto)
+        if self.stage in (self.FILE_SELECTED, self.RENAMED, self.DELETE_CANCELLED,
+                          self.GOTO_WARNED):
+            if rename is not None:
+                return self._wait("the rename prompt closed")
+            if goto is not None:
+                return self._wait("the Go to prompt closed")
+            name = FEXP_FILE if self.stage == self.FILE_SELECTED else FEXP_RENAMED
             selected = table.selected
-            if selected is None or selected.fields[0].text != FEXP_FILE:
-                return self._wait(f"{FEXP_FILE}'s row selected")
-            if not _status_shows(projection, "/" + FEXP_FILE, bounds):
+            if selected is None or selected.fields[0].text != name:
+                return self._wait(f"{name}'s row selected")
+            if not _status_shows(projection, "/" + name, bounds):
                 return self._wait("the selected file's path in the status bar")
             if _image_claims_in(projection, bounds):
                 raise PhysicalDesktopAcceptanceError(
-                    f"File Explorer shows a picture for {FEXP_FILE}"
+                    f"File Explorer shows a picture for {name}"
                 )
+            if self.stage == self.FILE_SELECTED:
+                return self._step("fexp-file-selected", "send_key", "f2",
+                                  self.RENAME_PROMPT, offer, generation, sender)
+            if table.named(FEXP_FILE) is not None:
+                raise PhysicalDesktopAcceptanceError(
+                    f"File Explorer still lists {FEXP_FILE} after renaming it"
+                )
+            if self.stage == self.RENAMED:
+                if not self._renamed:
+                    notice = _notice_claim(projection, FEXP_RENAMED_NOTICE)
+                    if notice is None:
+                        return self._wait(f"File Explorer's notice {FEXP_RENAMED_NOTICE!r}")
+                    _require_notice(offer, notice, StatusSeverity.NEUTRAL)
+                    self._renamed = True
+                return self._step("fexp-renamed", "send_key", "delete",
+                                  self.DELETE_ASKED, offer, generation, sender)
+            if self.stage == self.DELETE_CANCELLED:
+                return self._step("fexp-delete-cancelled", "send_key", "ctrl+g",
+                                  self.GOTO_PROMPT, offer, generation, sender)
+            if not self._warned:
+                notice = _notice_claim(projection, FEXP_GOTO_NOTICE)
+                if notice is None:
+                    return self._wait(f"File Explorer's warning {FEXP_GOTO_NOTICE!r}")
+                _require_notice(offer, notice, StatusSeverity.WARNING)
+                self._warned = True
             row = table.named(FEXPLORER_PICTURE)
             if row is None:
                 raise PhysicalDesktopAcceptanceError(
@@ -1396,14 +1797,14 @@ class FexpAloneJourney(_AppletJourney):
                 )
             if not self._shown(table, row):
                 return self._step("fexp-table-scrolled", "item_scroll", table.value(1),
-                                  self.FILE_SELECTED, offer, generation, sender)
-            return self._step("fexp-file-selected", "item_select",
+                                  self.GOTO_WARNED, offer, generation, sender)
+            return self._step("fexp-goto-warned", "item_select",
                               table.value(row.item_key), self.PICTURE_SELECTED,
                               offer, generation, sender)
         if self.stage in (self.PICTURE_SELECTED, self.TEXT_SELECTED,
                           self.DOCUMENT_SELECTED, self.PDF_SELECTED,
                           self.ENCRYPTED_SELECTED, self.PICTURE_RESELECTED):
-            name = {self.TEXT_SELECTED: FEXP_FILE,
+            name = {self.TEXT_SELECTED: FEXP_RENAMED,
                     self.DOCUMENT_SELECTED: FEXP_DOCUMENT,
                     self.PDF_SELECTED: FEXP_PDF,
                     self.ENCRYPTED_SELECTED: FEXP_PDF_ENCRYPTED}.get(
@@ -1439,7 +1840,7 @@ class FexpAloneJourney(_AppletJourney):
                                   offer, generation, sender)
             # The file each Details stage selects next, and the stage after.
             follows = {
-                self.PICTURE_DETAILS_AGAIN: (FEXP_FILE, self.TEXT_SELECTED),
+                self.PICTURE_DETAILS_AGAIN: (FEXP_RENAMED, self.TEXT_SELECTED),
                 self.TEXT_DETAILS: (FEXP_DOCUMENT, self.DOCUMENT_SELECTED),
                 self.DOCUMENT_DETAILS: (FEXP_PDF, self.PDF_SELECTED),
                 self.PDF_DETAILS: (FEXP_PDF_ENCRYPTED, self.ENCRYPTED_SELECTED),
@@ -1474,7 +1875,7 @@ class FexpAloneJourney(_AppletJourney):
                               table.value(directories[0].item_key),
                               self.DIRECTORY_OPENED, offer, generation, sender)
         if self.stage == self.DIRECTORY_OPENED:
-            if table.named(FEXP_FILE) is not None or not _status_shows(
+            if table.named(FEXP_RENAMED) is not None or not _status_shows(
                 projection, "/" + self._directory, bounds
             ):
                 return self._wait(f"the table listing /{self._directory}")
@@ -1521,7 +1922,7 @@ class FexpAloneJourney(_AppletJourney):
             raise PhysicalDesktopAcceptanceError(
                 "collapsing the root did not move the selection to it"
             )
-        if table.named(FEXP_FILE) is None:
+        if table.named(FEXP_RENAMED) is None:
             return self._wait("the table listing the root again")
         return self._step("fexp-tree-collapsed", "send_key", "alt+h",
                           self.LAUNCHER_OPENED, offer, generation, sender)
@@ -1759,7 +2160,8 @@ class DamagedPictureJourney(_AppletJourney):
 
 class StreamsAloneJourney(_AppletJourney):
     """Desk with Streams and a fixed feed: select a reply and open its
-    context, through item events on Streams' cards.
+    context, through item events on Streams' cards, then add a feed source
+    and switch it off through its card's check box.
 
     The timeline is a CARDS item view of three text fields per post: its
     author and time, its text, and "reply" when it replies.  The web link
@@ -1767,18 +2169,102 @@ class StreamsAloneJourney(_AppletJourney):
     card selects it; an OPEN on it opens its context, a second CARDS view
     holding only the thread's two posts with the reply selected.  CELL shows
     the cards throughout.
+
+    S opens the Sources view, empty at first; F asks for a feed's address
+    in a prompt.  The new source is a checkable card, checked because it
+    is enabled; a CHECK on it disables it, at its next revision.  Escape
+    returns to the timeline.
     """
 
     focus_marker = STREAMS_ALONE_FOCUS_MARKER
-    READY, SELECTED, OPENED = range(3)
+    (READY, SELECTED, OPENED, SOURCES, PROMPT, TYPED, SOURCE, UNCHECKED,
+     BACK) = range(9)
 
     @property
     def final_stage(self) -> int:
-        return self.OPENED
+        return self.BACK
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, STREAMS_CONTEXT_MARKER, STREAMS_REPLY_TEXT)
+        return (self.focus_marker, STREAMS_REPLY_TEXT)
+
+    @staticmethod
+    def _sources(projection, bounds):
+        """The Sources view's cards: one checkable card per source."""
+
+        left, top, right, bottom = bounds
+        views = [
+            claim
+            for claim in projection.semantic_item_view_claims
+            if left <= claim.left < claim.right <= right
+            and top <= claim.top < claim.bottom <= bottom
+            and claim.content.role is ItemViewRole.CARDS
+            and any(item.state & ItemState.CHECKABLE for item in claim.content.items)
+        ]
+        return views[0] if len(views) == 1 else None
+
+    def _source_steps(self, offer, generation, projection, sender, bounds) -> JourneyProgress:
+        if self.stage == self.BACK:
+            cards = self._cards(projection)
+            if cards is None or self._posts(cards) != list(STREAMS_CARDS):
+                return self._wait("the timeline after Escape")
+            _require_cell_text_in(offer, STREAMS_REPLY_TEXT, bounds, _WHERE)
+            return self._done("streams-timeline-again", offer)
+        prompt = _prompt_claim(projection, STREAMS_FEED_PROMPT, bounds)
+        if self.stage == self.SOURCES:
+            if not _residual_contains(projection, STREAMS_NO_SOURCES, bounds):
+                return self._wait("Streams' empty Sources view")
+            return self._step("streams-sources-empty", "send_key", "f",
+                              self.PROMPT, offer, generation, sender)
+        if self.stage == self.PROMPT:
+            if prompt is None:
+                return self._wait("Streams' feed address prompt")
+            return self._step("streams-feed-prompt", "send_text", STREAMS_FEED_URL,
+                              self.TYPED, offer, generation, sender)
+        if self.stage == self.TYPED:
+            if prompt is None:
+                raise PhysicalDesktopAcceptanceError("Streams' feed prompt closed early")
+            if prompt.content.text != STREAMS_FEED_URL:
+                return self._wait("the typed feed address")
+            return self._step("streams-feed-typed", "send_key", "enter",
+                              self.SOURCE, offer, generation, sender)
+        if prompt is not None:
+            return self._wait("Streams' feed prompt closed")
+        sources = self._sources(projection, bounds)
+        if sources is None:
+            return self._wait("Streams' source cards")
+        (item,) = sources.content.items
+        fields = tuple(field.text for field in item.fields)
+        if self.stage == self.SOURCE:
+            # The status bar repaints the row the closed prompt covered.
+            if offer.cell.find(STREAMS_FEED_PROMPT):
+                raise PhysicalDesktopAcceptanceError(
+                    "CELL kept Streams' closed feed prompt"
+                )
+            if not _source_card_reads(fields, STREAMS_SOURCE_CARD):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Streams' new source card reads {fields!r}"
+                )
+            if not item.state & ItemState.CHECKED:
+                raise PhysicalDesktopAcceptanceError(
+                    "Streams' new source did not begin enabled"
+                )
+            _require_cell_text_in(offer, "[x] Syndication feed", bounds, _WHERE)
+            return self._step("streams-source-added", "item_check",
+                              sources.value(item.item_key), self.UNCHECKED, offer,
+                              generation, sender)
+        if item.state & ItemState.CHECKED:
+            return self._wait("the source switched off by its check box")
+        switched = (STREAMS_SOURCE_CARD[0],
+                    STREAMS_SOURCE_CARD[1].replace("revision 1", "revision 2"),
+                    *STREAMS_SOURCE_CARD[2:])
+        if not _source_card_reads(fields, switched):
+            raise PhysicalDesktopAcceptanceError(
+                f"Streams' switched-off source card reads {fields!r}"
+            )
+        _require_cell_text_in(offer, "[ ] Syndication feed", bounds, _WHERE)
+        return self._step("streams-source-switched-off", "send_key", "escape",
+                          self.BACK, offer, generation, sender)
 
     @staticmethod
     def _cards(projection):
@@ -1838,6 +2324,8 @@ class StreamsAloneJourney(_AppletJourney):
         if not self._admit(offer, generation, projection, sender):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
+        if self.stage >= self.SOURCES:
+            return self._source_steps(offer, generation, projection, sender, bounds)
         cards = self._cards(projection)
         if cards is None:
             return self._wait("Streams' cards")
@@ -1883,7 +2371,8 @@ class StreamsAloneJourney(_AppletJourney):
                 "the reply is not selected in its context"
             )
         _require_cell_text_in(offer, STREAMS_REPLY_TEXT, bounds, _WHERE)
-        return self._done("streams-context-opened", offer)
+        return self._step("streams-context-opened", "send_key", "s",
+                          self.SOURCES, offer, generation, sender)
 
 
 class AgentAloneJourney(_AppletJourney):
@@ -1896,29 +2385,59 @@ class AgentAloneJourney(_AppletJourney):
     whose column wraps.  It is a log, so no card is selected and the view
     follows the end.  The stored answer is taller than the view, so the
     transcript starts cut inside it; one wheel detent scrolls three screen
-    rows up, and End returns to the end.  Ctrl+L opens the Ask prompt; the
-    request makes the demo provider ask for approval, in a dialog over the
-    transcript that shows its request and unlocks F6 once it has shown its
-    last row.  While the prompt or the dialog is open, the Agent's menu and
-    transcript are withheld and CELL shows it.  F6 approves, and the
-    transcript then ends with the approved exchange.  CELL shows each end
-    of the transcript on its last row.
+    rows up, and End returns to the end.  Alt+A opens Desk's own Ask
+    prompt, a TEXT field across the taskbar row in a modal region over the
+    whole screen, with the taskbar gone and the Agent's menu and transcript
+    rich and inactive beneath it.  Text typed into it, a PLACE and an EXTEND
+    that select three of its characters, and text typed over them show in
+    the field; Escape cancels it and the taskbar returns.  Ctrl+L opens the
+    Agent's Ask prompt, a TEXT field in a modal region over the Agent's
+    tile, with the Agent's menu and transcript rich and inactive beneath
+    it.  The request makes the
+    demo provider ask for approval in a dialog over the Agent: a DIALOG
+    titled Review required in a modal region over its tile, with the
+    Agent's menu rich and inactive beneath it.  Its message shows the
+    request; Approve once, which F6 chooses, cannot be chosen until the
+    message's last line has been shown, and PgDn moves the message while
+    it says more lies below.  Deny, which F7 chooses, is the default and
+    cancel button.  Its Approve once BUTTON approves, and the transcript
+    then ends with the approved exchange.  CELL shows each end of the
+    transcript on its last row.  F8 then shows the run settings in the
+    transcript's place: Model, Reasoning, Speed and Verbosity are CHOICE
+    fields holding Swift, Low, Standard and Auto.  An ADJUST moves Reasoning
+    to Medium, an ACTIVATE takes Model to Deliberate, whose own reasoning,
+    High, it then holds, and whose speeds are Standard and Fast; Escape
+    returns to the transcript.  Last, Ctrl+L asks a long request, whose
+    review is taller than its dialog: the wheel over the dialog scrolls the
+    message while it says more lies below, Approve once waits until its
+    last line has been shown and then approves, and the transcript ends
+    with the long exchange.
     """
 
     focus_marker = AGENT_ALONE_FOCUS_MARKER
-    READY, SCROLLED, ENDED, PROMPT, TYPED, REVIEW, APPROVED = range(7)
+    (READY, SCROLLED, ENDED, DESK_PROMPT, DESK_TYPED, DESK_PLACED, DESK_SELECTED,
+     DESK_REPLACED, DESK_CLOSED, PROMPT, TYPED, REVIEW, APPROVED, SETTINGS,
+     REASONED, CHOSEN, SETTINGS_CLOSED, LONG_PROMPT, LONG_TYPED, LONG_REVIEW,
+     LONG_APPROVED) = range(21)
+    DESK_STAGES = range(DESK_PROMPT, DESK_CLOSED + 1)
 
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
         self._end_row = 0  # screen rows above the view at the stored end
+        # The long review's first line in view when the wheel last turned,
+        # or None before it has.
+        self._review_top: str | None = None
 
     @property
     def final_stage(self) -> int:
-        return self.APPROVED
+        return self.LONG_APPROVED
 
     @property
     def final_cell_markers(self) -> tuple[str, ...]:
-        return (self.focus_marker, AGENT_AUDIT)
+        return (self.focus_marker, AGENT_LONG_LAST)
+
+    def _desk_prompt_expected(self) -> bool:
+        return self.stage in self.DESK_STAGES
 
     @staticmethod
     def _transcript(projection, bounds):
@@ -1938,6 +2457,58 @@ class AgentAloneJourney(_AppletJourney):
                 "the Agent's tile carries an item view other than its transcript"
             )
         return views[0]
+
+    @staticmethod
+    def _review(projection: RichScreenProjection, bounds):
+        """The Agent's review in its tile, or None."""
+
+        left, top, right, bottom = bounds
+        found = [
+            claim
+            for claim in projection.semantic_dialog_claims
+            if claim.title == AGENT_REVIEW_TITLE
+            and left <= claim.left and claim.right <= right
+            and top <= claim.top and claim.bottom <= bottom
+        ]
+        if not found:
+            return None
+        if len(found) != 1:
+            raise PhysicalDesktopAcceptanceError(f"{len(found)} reviews in the Agent's tile")
+        return found[0]
+
+    @staticmethod
+    def _approve_of_review(projection: RichScreenProjection, review, bounds,
+                           markers=(AGENT_REVIEW_MARKER, AGENT_REVIEW_REASON)):
+        """Approve once on REVIEW: the review is modal and active over the
+        Agent, which stays rich and inactive beneath it; the lines in view
+        say MARKERS, the request and why it asks; and it offers Approve
+        once, which F6 chooses, and Deny, which F7 chooses, the default and
+        cancel button."""
+
+        if not review.modal:
+            raise PhysicalDesktopAcceptanceError("the Agent's review is not modal")
+        if any(part.identity in projection.inactive_controls
+               for part in (review, *review.buttons)):
+            raise PhysicalDesktopAcceptanceError("the Agent's review is inactive")
+        _require_held_beneath_overlay(projection, review, bounds, AGENT_MENU_SIGNATURE,
+                                      "the Agent")
+        message = " ".join(review.content.lines)
+        for marker in markers:
+            if marker not in message:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the Agent's review does not say {marker!r}"
+                )
+        offered = tuple((button.label, button.shortcut) for button in review.buttons)
+        if offered != AGENT_REVIEW_BUTTONS:
+            raise PhysicalDesktopAcceptanceError(f"the Agent's review offers {offered!r}")
+        approve, deny = review.buttons
+        if approve.content.default or approve.content.cancel or approve.content.destructive:
+            raise PhysicalDesktopAcceptanceError("the Agent's Approve once has a role")
+        if not (deny.content.default and deny.content.cancel):
+            raise PhysicalDesktopAcceptanceError(
+                "the Agent's Deny is not the default cancel button"
+            )
+        return approve
 
     @staticmethod
     def _shows(transcript, cards) -> bool:
@@ -2033,15 +2604,27 @@ class AgentAloneJourney(_AppletJourney):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
         transcript = self._transcript(projection, bounds)
-        prompt = _residual_contains(projection, AGENT_PROMPT_MARKER, bounds)
-        review = _residual_contains(projection, AGENT_REVIEW_MARKER, bounds)
-        if (prompt or review) and (transcript is not None or projection.menu_signatures):
-            raise PhysicalDesktopAcceptanceError(
-                "the Agent's prompt or review did not withhold its menu and transcript"
+        prompt = _prompt_claim(projection, AGENT_PROMPT_MARKER, bounds)
+        review = self._review(projection, bounds)
+        if prompt is not None:
+            _require_held_beneath_overlay(
+                projection, prompt, bounds, AGENT_MENU_SIGNATURE, "the Agent"
             )
+            if transcript is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "the Agent's prompt withheld its transcript"
+                )
+        # Admission refuses Desk's prompt outside its stages, since it hides
+        # the taskbar; beneath it the Agent stays rich, and inactive.
+        desk_prompt = _desk_prompt_claim(projection)
+        if desk_prompt is not None:
+            if transcript is None or projection.menu_signatures.count(AGENT_MENU_SIGNATURE) != 1:
+                raise PhysicalDesktopAcceptanceError(
+                    "Desk's Ask prompt withheld the Agent's menu or transcript"
+                )
         stored = agent_transcript.CARDS
-        if self.stage in (self.READY, self.SCROLLED, self.ENDED):
-            if prompt or review:
+        if self.stage in (self.READY, self.SCROLLED, self.ENDED, *self.DESK_STAGES):
+            if prompt is not None or review is not None:
                 raise PhysicalDesktopAcceptanceError(
                     "the Agent opened its prompt or a review unasked"
                 )
@@ -2071,36 +2654,267 @@ class AgentAloneJourney(_AppletJourney):
             if above != self._end_row:
                 return self._wait("the transcript back at its end")
             self._require_last_row(offer, transcript, agent_transcript.LAST)
-            return self._step("agent-transcript-end-again", "send_key", "ctrl+l",
+            return self._step("agent-transcript-end-again", "send_key", "alt+a",
+                              self.DESK_PROMPT, offer, generation, sender)
+        if self.stage == self.DESK_CLOSED:
+            if desk_prompt is not None:
+                return self._wait("Desk's Ask prompt closed by Escape")
+            if self._rows(transcript, stored)[0] != self._end_row:
+                raise PhysicalDesktopAcceptanceError(
+                    "Desk's Ask prompt moved the Agent's transcript"
+                )
+            return self._step("desk-prompt-cancelled", "send_key", "ctrl+l",
                               self.PROMPT, offer, generation, sender)
+        if self.stage in self.DESK_STAGES:
+            return self._desk_prompt(offer, generation, sender, desk_prompt)
         if self.stage == self.PROMPT:
-            if not prompt:
+            if prompt is None:
                 return self._wait("the Agent's Ask prompt")
             return self._step("agent-prompt-opened", "send_text", AGENT_REQUEST,
                               self.TYPED, offer, generation, sender)
         if self.stage == self.TYPED:
-            if not prompt:
+            if prompt is None:
                 raise PhysicalDesktopAcceptanceError("the Agent's Ask prompt closed early")
-            if not _residual_contains(projection, AGENT_REQUEST, bounds):
+            if prompt.content.text != AGENT_REQUEST:
                 return self._wait("the typed request")
             return self._step("agent-request-typed", "send_key", "enter",
                               self.REVIEW, offer, generation, sender)
         if self.stage == self.REVIEW:
-            if not review:
+            if review is None:
                 return self._wait("the Agent's review")
-            for marker in (AGENT_REVIEW_REASON, AGENT_APPROVE_MARKER):
-                if not _residual_contains(projection, marker, bounds):
-                    return self._wait(f"{marker!r} in the review")
+            approve = self._approve_of_review(projection, review, bounds)
             _require_cell_text_in(offer, AGENT_REVIEW_MARKER, bounds, _WHERE)
-            return self._step("agent-review-unlocked", "send_key", "f6",
+            chosen = bool(approve.state & ControlState.ENABLED)
+            if review.content.lines[-1:] == (DIALOG_MORE,):
+                if chosen:
+                    raise PhysicalDesktopAcceptanceError(
+                        "Approve once could be chosen before the review was read"
+                    )
+                return self._step("agent-review-paged", "send_key", "pagedown",
+                                  self.REVIEW, offer, generation, sender)
+            if not chosen:
+                return self._wait("Approve once after the review's last line")
+            identity = approve.identity
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            return self._step("agent-review-unlocked", "activate_button", value,
                               self.APPROVED, offer, generation, sender)
+        if self.SETTINGS <= self.stage <= self.SETTINGS_CLOSED:
+            return self._settings(offer, generation, projection, sender, bounds, transcript)
+        if self.stage >= self.LONG_PROMPT:
+            return self._long(offer, generation, projection, sender, bounds, transcript,
+                              prompt, review)
         cards = stored + AGENT_EXCHANGE
-        if review or transcript is None or not self._shows(transcript, cards):
+        if review is not None or transcript is None or not self._shows(transcript, cards):
             return self._wait("the approved exchange")
         self._check(transcript, cards)
         self._at_end(transcript, cards)
         self._require_last_row(offer, transcript, AGENT_AUDIT)
-        return self._done("agent-review-approved", offer)
+        return self._step("agent-review-approved", "send_key", "f8", self.SETTINGS,
+                          offer, generation, sender)
+
+    @staticmethod
+    def _settings_fields(projection: RichScreenProjection, bounds):
+        """The run settings' fields in the Agent's tile, by label, or none."""
+
+        left, top, right, bottom = bounds
+        found = [
+            claim
+            for claim in projection.semantic_field_claims
+            if left <= claim.left and claim.right <= right
+            and top <= claim.top and claim.bottom <= bottom
+        ]
+        if not found:
+            return {}
+        labels = tuple(claim.label for claim in found)
+        if sorted(labels) != sorted(AGENT_SETTINGS_LABELS):
+            raise PhysicalDesktopAcceptanceError(
+                f"the Agent's tile carries the fields {labels!r}"
+            )
+        for claim in found:
+            if claim.content.kind is not FieldKind.CHOICE or claim.modal:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the Agent's {claim.label} setting is not a plain CHOICE field"
+                )
+        return {claim.label: claim for claim in found}
+
+    @staticmethod
+    def _field_value(claim, count: int | None = None) -> str:
+        identity = claim.identity
+        value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+        return value if count is None else f"{value},{count}"
+
+    def _settings(self, offer, generation, projection, sender, bounds,
+                  transcript) -> JourneyProgress:
+        """The run settings in the transcript's place: an ADJUST moves
+        Reasoning, an ACTIVATE takes Model to its next choice, and Escape
+        returns to the transcript."""
+
+        fields = self._settings_fields(projection, bounds)
+        if self.stage == self.SETTINGS_CLOSED:
+            if fields:
+                return self._wait("the run settings closed by Escape")
+            cards = agent_transcript.CARDS + AGENT_EXCHANGE
+            if transcript is None or not self._shows(transcript, cards):
+                return self._wait("the transcript after the run settings")
+            self._require_last_row(offer, transcript, AGENT_AUDIT)
+            return self._step("agent-settings-closed", "send_key", "ctrl+l",
+                              self.LONG_PROMPT, offer, generation, sender)
+        if not fields:
+            return self._wait("the Agent's run settings after F8")
+        if transcript is not None:
+            raise PhysicalDesktopAcceptanceError(
+                "the Agent's run settings left its transcript shown"
+            )
+        shown = {label: claim.content.display_text for label, claim in fields.items()}
+        if self.stage == self.SETTINGS:
+            choices = tuple(choice.label for choice in fields["Reasoning"].content.choices)
+            if shown != AGENT_SETTINGS_SHOWN or choices != ("Low", "Medium"):
+                raise PhysicalDesktopAcceptanceError(
+                    f"the Agent's run settings show {shown!r}, reasoning {choices!r}"
+                )
+            return self._step("agent-settings-shown", "field_adjust",
+                              self._field_value(fields["Reasoning"], 1), self.REASONED,
+                              offer, generation, sender)
+        if self.stage == self.REASONED:
+            if shown["Reasoning"] == "Low":
+                return self._wait("Reasoning after the adjustment")
+            if shown != {**AGENT_SETTINGS_SHOWN, "Reasoning": "Medium"}:
+                raise PhysicalDesktopAcceptanceError(
+                    f"adjusting Reasoning showed {shown!r}"
+                )
+            return self._step("agent-reasoning-adjusted", "field_activate",
+                              self._field_value(fields["Model"]), self.CHOSEN,
+                              offer, generation, sender)
+        if shown["Model"] == "Swift":
+            return self._wait("the next model after the activation")
+        speeds = tuple(choice.label for choice in fields["Speed"].content.choices)
+        if shown != AGENT_SETTINGS_CHOSEN or speeds != ("Standard", "Fast"):
+            raise PhysicalDesktopAcceptanceError(
+                f"activating Model showed {shown!r}, speeds {speeds!r}"
+            )
+        return self._step("agent-model-chosen", "send_key", "escape",
+                          self.SETTINGS_CLOSED, offer, generation, sender)
+
+    def _long(self, offer, generation, projection, sender, bounds, transcript, prompt,
+              review) -> JourneyProgress:
+        """The long request: its review is taller than its dialog, so the
+        wheel over the dialog scrolls it while it says more lies below, and
+        Approve once waits until its last line has been shown."""
+
+        if self.stage == self.LONG_PROMPT:
+            if prompt is None:
+                return self._wait("the Agent's Ask prompt for the long request")
+            return self._step("agent-long-prompt-opened", "send_text", AGENT_LONG_REQUEST,
+                              self.LONG_TYPED, offer, generation, sender)
+        if self.stage == self.LONG_TYPED:
+            if prompt is None:
+                raise PhysicalDesktopAcceptanceError("the Agent's Ask prompt closed early")
+            if prompt.content.text != AGENT_LONG_REQUEST:
+                return self._wait("the typed long request")
+            return self._step("agent-long-request-typed", "send_key", "enter",
+                              self.LONG_REVIEW, offer, generation, sender)
+        if self.stage == self.LONG_REVIEW:
+            if review is None:
+                return self._wait("the long request's review")
+            approve = self._approve_of_review(projection, review, bounds, markers=())
+            chosen = bool(approve.state & ControlState.ENABLED)
+            lines = review.content.lines
+            if lines[-1:] == (DIALOG_MORE,):
+                if chosen:
+                    raise PhysicalDesktopAcceptanceError(
+                        "Approve once could be chosen before the long review was read"
+                    )
+                if self._review_top is None:
+                    if AGENT_REVIEW_REASON not in lines:
+                        raise PhysicalDesktopAcceptanceError(
+                            "the long review does not open at its reason"
+                        )
+                elif lines[0] == self._review_top:
+                    return self._wait("the long review scrolled by the wheel")
+                self._review_top = lines[0]
+                identity = review.identity
+                value = (f"{identity.owner_id},{identity.owner_generation},"
+                         f"{identity.control_id},{AGENT_REVIEW_DETENTS}")
+                return self._step("agent-long-review-scrolled", "dialog_scroll", value,
+                                  self.LONG_REVIEW, offer, generation, sender)
+            if self._review_top is None:
+                raise PhysicalDesktopAcceptanceError(
+                    "the long review fit its dialog, so the wheel had nothing to scroll"
+                )
+            if lines[-1:] != (AGENT_REVIEW_MARKER,) or AGENT_LONG_LAST not in lines:
+                raise PhysicalDesktopAcceptanceError(
+                    f"the long review's end in view is {lines[-3:]!r}"
+                )
+            if not chosen:
+                return self._wait("Approve once after the long review's last line")
+            _require_cell_text_in(offer, AGENT_REVIEW_MARKER, bounds, _WHERE)
+            identity = approve.identity
+            value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+            return self._step("agent-long-review-unlocked", "activate_button", value,
+                              self.LONG_APPROVED, offer, generation, sender)
+        cards = agent_transcript.CARDS + AGENT_EXCHANGE + AGENT_LONG_EXCHANGE
+        if review is not None or transcript is None or not self._shows(transcript, cards):
+            return self._wait("the approved long exchange")
+        self._check(transcript, cards)
+        self._at_end(transcript, cards)
+        self._require_last_row(offer, transcript, AGENT_LONG_LAST)
+        return self._done("agent-long-review-approved", offer)
+
+    def _desk_prompt(self, offer, generation, sender, prompt) -> JourneyProgress:
+        """Desk's Ask prompt: type, select three characters, type over
+        them, cancel."""
+
+        if prompt is None:
+            if self.stage == self.DESK_PROMPT:
+                return self._wait("Desk's Ask prompt after Alt+A")
+            raise PhysicalDesktopAcceptanceError("Desk's Ask prompt closed early")
+        content = prompt.content
+        identity = prompt.identity
+        value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id},0,{{}}"
+        if self.stage == self.DESK_PROMPT:
+            if content.text:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Desk's Ask prompt opened holding {content.text!r}"
+                )
+            return self._step("desk-prompt-opened", "send_text", DESK_PROMPT_TEXT,
+                              self.DESK_TYPED, offer, generation, sender)
+        if self.stage == self.DESK_TYPED:
+            # The guest may paint after each typed scalar.
+            if content.text != DESK_PROMPT_TEXT:
+                if DESK_PROMPT_TEXT.startswith(content.text):
+                    return self._wait("the text typed into Desk's Ask prompt")
+                raise PhysicalDesktopAcceptanceError(
+                    f"typing into Desk's Ask prompt gave {content.text!r}"
+                )
+            return self._step("desk-prompt-typed", "text_place", value.format(1),
+                              self.DESK_PLACED, offer, generation, sender)
+        if content.text != DESK_PROMPT_TEXT and self.stage != self.DESK_REPLACED:
+            raise PhysicalDesktopAcceptanceError(
+                f"selecting in Desk's Ask prompt changed its text to {content.text!r}"
+            )
+        if self.stage == self.DESK_PLACED:
+            if content.caret != 1:
+                return self._wait("the caret after the first character of Desk's prompt")
+            return self._step("desk-prompt-caret-placed", "text_extend", value.format(4),
+                              self.DESK_SELECTED, offer, generation, sender)
+        if self.stage == self.DESK_SELECTED:
+            if (content.anchor, content.caret) != (1, 4):
+                return self._wait("three characters of Desk's prompt selected")
+            return self._step("desk-prompt-selected", "send_text", DESK_PROMPT_OVER,
+                              self.DESK_REPLACED, offer, generation, sender)
+        head, tail = DESK_PROMPT_TEXT[:1], DESK_PROMPT_TEXT[4:]
+        typed = head + DESK_PROMPT_OVER + tail
+        if content.text == DESK_PROMPT_TEXT or content.text in {
+            head + DESK_PROMPT_OVER[:length] + tail for length in range(1, len(DESK_PROMPT_OVER))
+        }:
+            return self._wait("the text typed over the selection in Desk's prompt")
+        if content.text != typed:
+            raise PhysicalDesktopAcceptanceError(
+                f"typing over the selection in Desk's Ask prompt gave {content.text!r}, "
+                f"not {typed!r}"
+            )
+        return self._step("desk-prompt-replaced", "send_key", "escape",
+                          self.DESK_CLOSED, offer, generation, sender)
 
 
 class SmallTerminalJourney(_AppletJourney):
@@ -2109,14 +2923,15 @@ class SmallTerminalJourney(_AppletJourney):
     rich frame returns once a screen fits again.
 
     Pad's empty editor fits, so the journey starts rich: Pad's menu bar and
-    its editor as a text area.  Ctrl+O opens Pad's Open prompt, which leaves
-    the whole screen to residual glyphs, more text than the terminal holds;
+    its editor as a text area.  Ctrl+O opens Pad's Open prompt, a TEXT field
+    over the editor, which still fits, and the large sample's path is typed
+    into it.  The 48-line large sample is more text than the terminal holds:
     the producer replaces the rich frame with an empty one and the viewer
     shows CELL.  Every frame is either complete rich output or an empty
     retained scene over complete CELL, never older rich output over a newer
-    CELL frame.  The 48-line large sample is too much as well, and stays
-    CELL.  Opening the two-line example.f through the same prompt brings the
-    rich frame back, with example.f in Pad's text area.
+    CELL frame.  The prompt over the large sample is too much as well, and
+    stays CELL.  Opening the two-line example.f through it brings the rich
+    frame back, with example.f in Pad's text area.
     """
 
     focus_marker = PAD_ALONE_FOCUS_MARKER
@@ -2178,10 +2993,8 @@ class SmallTerminalJourney(_AppletJourney):
             return JourneyProgress()
         bounds = _desk_content_bounds(projection)
         empty = self._empty(projection)
-        if not empty and (projection.draw_count == 0 or not projection.menu_signatures
-                          and not _residual_contains(projection, PAD_OPEN_PROMPT_MARKER,
-                                                     bounds)):
-            # A rich frame is complete: Pad's menu, or its prompt as residual.
+        if not empty and (projection.draw_count == 0 or not projection.menu_signatures):
+            # A rich frame is complete: Pad's menu is in every one.
             raise PhysicalDesktopAcceptanceError(
                 "a rich frame on the small terminal was incomplete"
             )
@@ -2196,17 +3009,23 @@ class SmallTerminalJourney(_AppletJourney):
             _require_cell_text_in(offer, "Untitled", bounds, _WHERE)
             return self._step("small-terminal-pad-rich", "send_key", "ctrl+o",
                               self.PROMPT, offer, generation, sender)
-        if self.stage == self.PROMPT:
-            if not self._empty_showing(offer, projection, PAD_OPEN_PROMPT_MARKER,
-                                       bounds, "Pad's Open prompt"):
-                return self._wait("the Open prompt shown as CELL")
-            return self._step("small-terminal-prompt-shown-as-cell", "send_text",
-                              SMALL_TERMINAL_LARGE_PATH, self.TYPED, offer,
-                              generation, sender)
-        if self.stage == self.TYPED:
-            if not self._empty_showing(offer, projection, SMALL_TERMINAL_LARGE_PATH,
-                                       bounds, "the typed path"):
-                return self._wait("the typed path shown as CELL")
+        if self.stage in (self.PROMPT, self.TYPED):
+            if empty:
+                if self._cell_shows(offer, PAD_OPEN_PROMPT_MARKER, bounds):
+                    raise PhysicalDesktopAcceptanceError(
+                        "Pad's Open prompt over its empty editor did not fit"
+                    )
+                return self._wait("Pad's Open prompt")
+            prompt = _prompt_claim(projection, PAD_OPEN_PROMPT_MARKER, bounds)
+            if prompt is None:
+                return self._wait("Pad's Open prompt")
+            _require_held_beneath_overlay(projection, prompt, bounds, PAD_MENU_SIGNATURE, "Pad")
+            if self.stage == self.PROMPT:
+                return self._step("small-terminal-prompt-shown-rich", "send_text",
+                                  SMALL_TERMINAL_LARGE_PATH, self.TYPED, offer,
+                                  generation, sender)
+            if prompt.content.text != SMALL_TERMINAL_LARGE_PATH:
+                return self._wait("the typed path in the Open prompt")
             return self._step("small-terminal-large-path-typed", "send_key", "enter",
                               self.LARGE, offer, generation, sender)
         if self.stage == self.LARGE:
@@ -2233,16 +3052,306 @@ class SmallTerminalJourney(_AppletJourney):
         return self._done("small-terminal-rich-again", offer)
 
 
-def _field_shows(projection, column, row, line: str, longest: str) -> bool:
-    """Whether a field from COLUMN of ROW shows LINE's cells, then only
-    blanks as far as the longest line LONGEST would reach."""
+class SoundLabAloneJourney(_AppletJourney):
+    """Desk with Sound Lab alone: its frequency landmarks go out as three
+    lines that move when it renders new settings.
 
-    width = text_rules.string_width(line)
-    end = column + text_rules.string_width(longest) + 1
-    return (
-        projection.row_text(row, column, column + width) == mixed_text.visual(line)
-        and not projection.row_text(row, column + width, end).strip()
-    )
+    Sound Lab renders its starting settings as it opens.  With room below
+    its analysis, its graph carries a line from 0 Hz to 4 kHz and on it a
+    mark at the pitch and one at the spectral centroid, which CELL draws
+    the same way and names P and C in the row above.  Activating the
+    Frequency field opens its exact-value prompt; a new frequency is typed
+    over the value and Enter sets it, which leaves the analysis stale until
+    F5 renders again.  The new render moves the pitch mark along the same
+    line, in the terminal and in CELL alike.
+    """
+
+    focus_marker = SOUNDLAB_ALONE_FOCUS_MARKER
+    (READY, PROMPT, SELECTED, TYPED, SET, RENDERED) = range(6)
+
+    def __init__(self, ready_markers):
+        super().__init__(ready_markers)
+        self._landmarks_before = None
+        self._frequency_before = None
+        self._frequency = None
+
+    @property
+    def final_stage(self) -> int:
+        return self.RENDERED
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (self.focus_marker, SOUNDLAB_LANDMARK_CAPTION)
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        bounds = _desk_content_bounds(projection)
+        prompt = _prompt_claim(projection, SOUNDLAB_FREQUENCY_PROMPT, bounds)
+        fields = {claim.label: claim for claim in _field_claims_in(projection, bounds)
+                  if prompt is None or claim.identity != prompt.identity}
+        frequency = fields.get(SOUNDLAB_FREQUENCY_FIELD)
+        if self.stage == self.READY:
+            landmarks = _soundlab_landmarks(projection, bounds)
+            if landmarks is None or frequency is None:
+                return self._wait("Sound Lab's landmarks from its first render")
+            _require_soundlab_landmark_cells(offer, landmarks)
+            self._landmarks_before = landmarks
+            self._frequency_before = frequency.content.value
+            self._frequency = next(value for value in SOUNDLAB_ALONE_FREQUENCIES
+                                   if value != self._frequency_before)
+            identity = frequency.identity
+            return self._step(
+                "soundlab-landmarks-shown", "field_activate",
+                f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
+                self.PROMPT, offer, generation, sender)
+        if self.stage == self.PROMPT:
+            if prompt is None:
+                return self._wait("Sound Lab's frequency prompt")
+            if prompt.content.text != str(self._frequency_before):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Sound Lab's prompt opened holding {prompt.content.text!r}")
+            return self._step("soundlab-frequency-prompt", "send_key", "ctrl+a",
+                              self.SELECTED, offer, generation, sender)
+        if self.stage in (self.SELECTED, self.TYPED) and prompt is None:
+            raise PhysicalDesktopAcceptanceError("Sound Lab's prompt closed early")
+        if self.stage == self.SELECTED:
+            content = prompt.content
+            if content.anchor == content.caret or {content.anchor, content.caret} != {
+                    0, len(content.text)}:
+                return self._wait("the prompt's whole value selected")
+            return self._step("soundlab-frequency-selected", "send_text",
+                              str(self._frequency), self.TYPED, offer, generation, sender)
+        if self.stage == self.TYPED:
+            if prompt.content.text != str(self._frequency):
+                return self._wait("the typed frequency")
+            return self._step("soundlab-frequency-typed", "send_key", "enter",
+                              self.SET, offer, generation, sender)
+        if prompt is not None:
+            return self._wait("Sound Lab's prompt closed")
+        if self.stage == self.SET:
+            if frequency is None or frequency.content.value != self._frequency:
+                return self._wait("Sound Lab's new frequency")
+            return self._step("soundlab-frequency-set", "send_key", "f5",
+                              self.RENDERED, offer, generation, sender)
+        if frequency is None or frequency.content.value != self._frequency:
+            raise PhysicalDesktopAcceptanceError("Sound Lab's frequency changed while it rendered")
+        landmarks = _soundlab_landmarks(projection, bounds)
+        before = self._landmarks_before
+        if landmarks is None or landmarks.pitch == before.pitch:
+            return self._wait("the pitch mark moved by the new render")
+        if (landmarks.row, landmarks.left, landmarks.right) != (
+                before.row, before.left, before.right):
+            raise PhysicalDesktopAcceptanceError("Sound Lab's landmark line moved")
+        _require_soundlab_landmark_cells(offer, landmarks)
+        return self._done("soundlab-landmarks-moved", offer)
+
+
+def _desk_halves(projection) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """Desk's two tiles when it holds two applets: the screen above the
+    taskbar split in two columns, one divider cell between them."""
+
+    width = (projection.cols - 1) // 2
+    bottom = max(1, projection.rows - 1)
+    return (0, 0, width, bottom), (width + 1, 0, projection.cols, bottom)
+
+
+def _observatory_plot(offer, bounds):
+    """Observatory's plot inside BOUNDS: the plot's rectangle and its
+    series' samples as (tick, value) pairs, once its baseline lies along
+    the row below it; or None while it shows none."""
+
+    plane = offer.retained
+    if plane is None:
+        return None
+    left, top, right, bottom = bounds
+    plots, lines = [], []
+    for region in plane.regions:
+        for draw in region.draws:
+            if not isinstance(draw, (PlotDraw, PolylineDraw)):
+                continue
+            logical, visible = _visible_draw_rectangle(
+                region, draw, offer.cell.cols, offer.cell.rows)
+            if not (left <= logical.left and logical.right <= right
+                    and top <= logical.top and logical.bottom <= bottom):
+                continue
+            if visible != logical:
+                raise PhysicalDesktopAcceptanceError("Observatory's plot is clipped")
+            (plots if isinstance(draw, PlotDraw) else lines).append((region, logical, draw))
+    if not plots and not lines:
+        return None
+    if len(plots) != 1 or len(lines) != 1:
+        raise PhysicalDesktopAcceptanceError(
+            f"Observatory shows {len(plots)} plots and {len(lines)} lines")
+    (region, plot, draw), (_, baseline, line) = plots[0], lines[0]
+    color = (draw.line.red, draw.line.green, draw.line.blue, draw.line.alpha)
+    if color != OBSERVATORY_PLOT_LINE or draw.fill_to_minimum:
+        raise PhysicalDesktopAcceptanceError("Observatory's plot changed its style")
+    shade = (line.color.red, line.color.green, line.color.blue, line.color.alpha)
+    if (shade != OBSERVATORY_BASELINE or line.closed
+            or (baseline.left, baseline.right, baseline.top) != (plot.left, plot.right, plot.bottom)
+            or baseline.bottom - baseline.top != 1
+            or [(point.x, point.y) for point in line.points]
+            != [(0, 0x7FFFFFFF), (0xFFFFFFFF, 0x7FFFFFFF)]):
+        raise PhysicalDesktopAcceptanceError("Observatory's baseline is not the row below its plot")
+    histories = [history for history in plane.series
+                 if history.key == (region.owner_id, region.owner_generation, draw.series_id)]
+    if len(histories) != 1:
+        raise PhysicalDesktopAcceptanceError("Observatory's plot names no series of its own")
+    samples = tuple((sample.timestamp_us, sample.value) for sample in histories[0].samples)
+    if samples:
+        values = [value for _, value in samples]
+        low, high = min(values), max(values)
+        if low == high:
+            low, high = low - 1, high + 1
+        if (draw.minimum, draw.maximum) != (low, high):
+            raise PhysicalDesktopAcceptanceError("Observatory's plot range is not its series' own")
+        if draw.draw_points != (len(samples) <= plot.right - plot.left):
+            raise PhysicalDesktopAcceptanceError("Observatory's plot marks the wrong samples")
+    return plot, samples
+
+
+def _observatory_table(offer, bounds) -> tuple[tuple[int, int], ...]:
+    """The samples Observatory's table shows inside BOUNDS, as (tick, value)."""
+
+    plane = offer.retained
+    grids = [draw for region in plane.regions for draw in region.draws
+             if isinstance(draw, TextGridDraw)
+             and bounds[0] <= _visible_draw_rectangle(region, draw, offer.cell.cols,
+                                                      offer.cell.rows)[0].left < bounds[2]]
+    if len(grids) != 1:
+        raise PhysicalDesktopAcceptanceError(f"Observatory shows {len(grids)} tables")
+    cells = {(item.row, item.column): item.text for item in grids[0].content.items}
+    rows = sorted({row for row, _ in cells if row > 0})
+    return tuple((int(cells[row, 0]), int(cells[row, 1])) for row in rows)
+
+
+class ObservatoryJourney(_AppletJourney):
+    """Desk with Observatory and Worlds: Observatory's plot goes out as a
+    PLOT over an exact series, its baseline a line along the row below.
+
+    Observatory first plots its own starting series.  Worlds then steps its
+    run and Analyze hands the run's telemetry over: Desk brings Observatory
+    forward, its series is replaced, and the plot's series holds exactly the
+    samples its table shows.  R profiles the series again and the plot
+    stays.
+    """
+
+    focus_marker = OBSERVATORY_FOCUS_MARKER
+    (READY, WORLDS, STEPPED, ANALYZE, ANALYZED, RERUN) = range(6)
+
+    def __init__(self, ready_markers):
+        super().__init__(ready_markers)
+        self._steps = 0
+        self._analyzed = None
+
+    def _send(self, method, value, target_stage, offer, generation, sender):
+        super()._send(method, value, target_stage, offer, generation, sender)
+        # A step counts once its press reaches Worlds.  A backpressured press
+        # is retried on its own frame or dropped for a newer one, which sends
+        # it again.
+        if value == "s" and self._pending is None:
+            self._steps += 1
+
+    @property
+    def final_stage(self) -> int:
+        return self.RERUN
+
+    @property
+    def final_cell_markers(self) -> tuple[str, ...]:
+        return (OBSERVATORY_FOCUS_MARKER, OBSERVATORY_PLOT_CAPTION)
+
+    def _admit(self, offer, generation, projection, sender) -> bool:
+        """As every applet journey admits a frame, except that focus moves
+        to Worlds and back, which each stage checks for itself."""
+
+        if self.stage == self.READY:
+            return super()._admit(offer, generation, projection, sender)
+        if self._frame_lineage(offer, generation) != self._lineage:
+            raise PhysicalDesktopAcceptanceError(
+                "physical acceptance frame left its original session lineage")
+        if offer.offer_id <= self.frame_barrier:
+            return False
+        self._pending = None
+        if not self._deliver_owed_pointer(offer, generation, sender):
+            self.waiting = "the rest of a pointer gesture"
+            return False
+        return True
+
+    def _shown(self, offer, observatory):
+        shown = _observatory_plot(offer, observatory)
+        if shown is None:
+            return None
+        plot, samples = shown
+        table = _observatory_table(offer, observatory)
+        if samples[:len(table)] != table:
+            raise PhysicalDesktopAcceptanceError(
+                "Observatory's plot holds other samples than its table shows")
+        _require_cell_text_in(offer, OBSERVATORY_PLOT_CAPTION, observatory, "Observatory's tile")
+        return samples
+
+    def after_present(self, offer, generation, projection, sender) -> JourneyProgress:
+        if not self._admit(offer, generation, projection, sender):
+            return JourneyProgress()
+        observatory, worlds = _desk_halves(projection)
+        if self.stage == self.READY:
+            samples = self._shown(offer, observatory)
+            if samples is None:
+                return self._wait("Observatory's plot of its starting series")
+            if samples != OBSERVATORY_DEMO_SERIES:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Observatory's starting plot holds {samples!r}")
+            return self._step("observatory-plot-shown", "send_key", "alt+2",
+                              self.WORLDS, offer, generation, sender)
+        if self.stage in (self.WORLDS, self.STEPPED):
+            if not _taskbar_has_focus(projection, WORLDS_FOCUS_MARKER):
+                if self.stage == self.WORLDS:
+                    return self._wait(f"{WORLDS_FOCUS_MARKER} after Alt+2")
+                raise PhysicalDesktopAcceptanceError("Worlds lost focus")
+        if self.stage in (self.WORLDS, self.STEPPED):
+            if self._steps < WORLDS_STEPS:
+                return self._step(f"worlds-step-{self._steps + 1}", "send_key", "s",
+                                  self.STEPPED, offer, generation, sender)
+            return self._step("worlds-analyze", "send_key", "a",
+                              self.ANALYZE, offer, generation, sender)
+        if self.stage == self.ANALYZE:
+            # Worlds' notice that Observatory accepted the run lasts a moment
+            # only; the plot itself shows the handover.
+            samples = self._shown(offer, observatory)
+            if samples is None or samples == OBSERVATORY_DEMO_SERIES:
+                return self._wait("Observatory's plot of Worlds' telemetry")
+            # Worlds' run starts with one sample and adds one a step.
+            if len(samples) != WORLDS_STEPS + 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Worlds handed over {len(samples)} samples after {WORLDS_STEPS} steps")
+            # Observatory takes the run in a request handler, outside its own
+            # UIDL context, and shows it from its own tick before the paint
+            # that publishes the plot, so its status and CELL panel come in
+            # the same frame.
+            profiled = OBSERVATORY_PROFILED + f"{len(samples)} samples"
+            if not _status_shows(projection, profiled, observatory):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Observatory's plot holds Worlds' run but its status lacks {profiled!r}")
+            self._analyzed = samples
+            if not _taskbar_has_focus(projection, OBSERVATORY_FOCUS_MARKER):
+                return self._step("observatory-plots-telemetry", "send_key", "alt+1",
+                                  self.ANALYZED, offer, generation, sender)
+            return self._step("observatory-plots-telemetry", "send_key", "r",
+                              self.RERUN, offer, generation, sender)
+        if not _taskbar_has_focus(projection, OBSERVATORY_FOCUS_MARKER):
+            if self.stage == self.ANALYZED:
+                return self._wait(f"{OBSERVATORY_FOCUS_MARKER} after Alt+1")
+            raise PhysicalDesktopAcceptanceError("Observatory lost focus")
+        samples = self._shown(offer, observatory)
+        if samples != self._analyzed:
+            raise PhysicalDesktopAcceptanceError("Observatory's plot changed before its rerun")
+        if self.stage == self.ANALYZED:
+            return self._step("observatory-rerun", "send_key", "r",
+                              self.RERUN, offer, generation, sender)
+        profiled = OBSERVATORY_PROFILED + f"{len(samples)} samples"
+        if not _status_shows(projection, profiled, observatory):
+            return self._wait(f"Observatory's status {profiled!r}")
+        return self._done("observatory-rerun-kept-plot", offer)
 
 
 def applet_journey(
@@ -2258,6 +3367,8 @@ def applet_journey(
         "daybook": DaybookAloneJourney,
         "streams": StreamsAloneJourney,
         "agent": AgentAloneJourney,
+        "soundlab": SoundLabAloneJourney,
+        "observatory": ObservatoryJourney,
         "small-terminal": SmallTerminalJourney,
         "photo": PhotoJourney,
         "damaged": DamagedPictureJourney,

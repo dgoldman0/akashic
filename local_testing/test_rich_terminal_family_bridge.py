@@ -46,7 +46,7 @@ class Bridge(ProviderHarness):
         # Replace the small inherited owner using real acknowledged lifecycle calls.
         assert self.call("RTE-OWNER-DROP", 1, 1, self.facade)[0] == (0,)
         self.settle()
-        assert self.call("RTE-OWNER-OPEN", 1, 2, 2, 0, 7, 1, 0, 128, 16000,
+        assert self.call("RTE-OWNER-OPEN", 1, 2, 2, 0, 7, 1, 0, 128, 16000, 0,
                          self.facade)[0] == (0,)
         self.settle()
         self.shell = self.allocate(bytes(56))
@@ -126,7 +126,7 @@ class Bridge(ProviderHarness):
             **{"CATALOG-A":catalog,"CATALOG-U":56,
             "FAMILIES-A":self.allocate(b"".join(self.read(e,64) for e in entries)),
             "FAMILIES-U":len(entries)*64,"SOURCE-GENERATION":2,"SURFACE-GENERATION":1}))
-        return batch, self.allocate(b"A"*560), records
+        return batch, self.allocate(b"A"*600), records
 
     def snapshot(self):
         spans = ((self.engine,self.constant("RTAPT-ENGINE-SIZE")),
@@ -176,8 +176,8 @@ def test_real_six_family_preflight_has_exact_scalars_and_no_provider_mutation(br
     assert h.call("RTE-FAMILY-BATCH-VALID?",batch)[0] == (MASK,)
     assert h.call("RTE-FAMILY-BATCH-PREFLIGHT",batch,out,h.shell)[0] == (0,)
     assert h.snapshot() == before
-    q = struct.unpack("<70Q",h.read(out,560))
-    assert q[:6] == (1,2,20,2,1,560)
+    q = struct.unpack("<75Q",h.read(out,600))
+    assert q[:6] == (1,2,20,2,1,600)
     assert q[6:15] == (0,)*9
     assert q[15:23] == (3,6,16,3,3,0,0,6)
     assert q[23:28] == (1,4,8,4,6)
@@ -185,7 +185,7 @@ def test_real_six_family_preflight_has_exact_scalars_and_no_provider_mutation(br
     assert q[38] == 4
     assert q[40:47] == (1,2,8,2,5,STATIC_SIZE+8,1)
     assert q[48:57] == (1,1,16000,16000,0,0,0,0,1)
-    assert q[57:] == (2,2,1,7,1,4,8,4,7,3,1|8|16|64|0x200|0x400|0x800,0,0)
+    assert q[57:] == (2,2,1,7,1,4,8,4,7,3,1|8|16|64|0x200|0x400|0x800,0,0,0,0,0,0,0)
 
 
 
@@ -199,10 +199,10 @@ def test_controls_only_batch_has_global_object_ids_and_exact_quota(bridge):
     before = h.snapshot()
     assert h.call("RTE-FAMILY-BATCH-PREFLIGHT",batch,out,h.shell)[0] == (0,)
     assert h.snapshot() == before
-    q = struct.unpack("<70Q",h.read(out,560))
+    q = struct.unpack("<75Q",h.read(out,600))
     assert q[15:23] == (3,6,16,3,3,0,0,6)
     assert q[23:57] == (0,)*34
-    assert q[57:] == (1,1,1,3,0,0,0,0,0,3,1|64|0x800,0,0)
+    assert q[57:] == (1,1,1,3,0,0,0,0,0,3,1|64|0x800,0,0,0,0,0,0,0)
     # Controls consume the same object namespace even without another object family.
     h.runtime.memory.write64(out+472,0)
     h.runtime.memory.write64(out+480,0)
@@ -235,14 +235,14 @@ def test_bridge_pane_and_taskbar_capture_owns_text_and_maps_minimized(bridge):
 def test_bridge_preflight_refusal_preserves_output_and_provider(bridge):
     h = bridge
     batch,out,_ = h.graph()
-    original = h.read(out,560)
+    original = h.read(out,600)
     caps,_ = h.call("PT-RETAINED-CAPS@",h.field("_RTAPT-E.SESSION"))[0]
     features = h.runtime.memory.read64(caps+8)
     h.runtime.memory.write64(caps+8,features & ~int(RetainedFeature.PANES))
     assert h.call("RTE-LIMITS@",h.limits,h.facade)[0] == (0,)
     before = h.snapshot()
     assert h.call("RTE-FAMILY-BATCH-PREFLIGHT",batch,out,h.shell)[0] == (2,)
-    assert h.read(out,560) == original
+    assert h.read(out,600) == original
     assert h.snapshot() == before
     h.runtime.memory.write64(caps+8,features)
     assert h.call("RTE-LIMITS@",h.limits,h.facade)[0] == (0,)
@@ -251,7 +251,7 @@ def test_bridge_preflight_refusal_preserves_output_and_provider(bridge):
     h.runtime.memory.write64(copy_u,392)
     before = h.snapshot()
     assert h.call("RTE-FAMILY-BATCH-PREFLIGHT",batch,out,h.shell)[0] == (3,)
-    assert h.read(out,560) == original
+    assert h.read(out,600) == original
     assert h.snapshot() == before
     h.runtime.memory.write64(copy_u,capacity)
 
@@ -271,7 +271,7 @@ def test_bridge_aliases_refuse_before_mutation(bridge):
     h.runtime.memory.write64(records["pane"]+160,h.shell)
     assert h.call("RTE-PANE-DEFINE",records["pane"],h.shell)[0] == (5,)
     assert h.snapshot() == before
-    assert h.read(out,560) == b"A"*560
+    assert h.read(out,600) == b"A"*600
 
 
 def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
@@ -315,4 +315,4 @@ def test_complete_bridge_dependency_closure_compiles_in_cold_kdos():
     start = output.find(b"\x1e")
     end = output.find(b"\x1f",start+1)
     assert start >= 0 and end > start
-    assert output[start+1:end].split() == [b"560",b"56",b"328",b"-1"]
+    assert output[start+1:end].split() == [b"600",b"56",b"328",b"-1"]

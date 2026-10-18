@@ -156,8 +156,11 @@ The shared chrome region sorts below every selected content region. The
 planner therefore rejects any selected pane whose chrome intersects another
 selected pane's content; the caller must omit the conflicting pane or use a
 future representation with separate chrome order. This also covers a
-nonempty overlay border placed inside a normal pane. The publisher must
-extend this ordering proof to every other region in the complete candidate.
+nonempty overlay border placed inside a normal pane. The one exception is
+an overlay pane's content over an ordinary pane's chrome: the overlay lies
+above the panes beneath it, chrome and all, as one of Desk's screens lies
+over the divider between two tiles. The publisher must extend this
+ordering proof to every other region in the complete candidate.
 The regression gate includes native planner PANE and TASKBAR descriptors
 published through the actual RTAPT provider and decoded by the retained host,
 including canonical flags, exact child slots and display-only UTF8 charges.

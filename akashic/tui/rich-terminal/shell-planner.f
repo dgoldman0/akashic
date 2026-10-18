@@ -297,9 +297,15 @@ VARIABLE _RSHPL-PROVED
             THEN
         ELSE DROP THEN
     LOOP -1 ;
+\ Every pane's chrome lies in the one chrome region, beneath every content
+\ region, so no pane's content may cover E's chrome but an overlay pane's
+\ over an ordinary E: the overlay lies above the panes beneath it, chrome
+\ and all.
+: _RSHPL-OVERLAY? ( e -- flag ) SHME.FLAGS @ SHM-F-OVERLAY AND 0<> ;
 : _RSHPL-CHROME-UNOBSCURED? ( -- flag )
     _RSHPL-M @ SHM.COUNT @ 0 ?DO
-        I _RSHPL-PANE? IF
+        I _RSHPL-PANE? I _RSHPL-ENTRY _RSHPL-OVERLAY?
+            _RSHPL-E @ _RSHPL-OVERLAY? 0= AND 0= AND IF
             I _RSHPL-ENTRY _RSHPL-OTHER !
             _RSHPL-E @ SHME.COL @ _RSHPL-OTHER @ SHME.CONTENT-COL @ MAX _RSHPL-LEFT !
             _RSHPL-E @ SHME.COL @ _RSHPL-E @ SHME.WIDTH @ +
@@ -333,7 +339,7 @@ VARIABLE _RSHPL-PROVED
                 1 _RSHPL-PANES +!
                 _RSHPL-E @ SHME.TITLE-U @ DUP _RSHPL-TEXT +! _RSHPL-PANE-UTF8 +!
                 _RSHPL-E @ _RSHPL-CHROME-COUNT _RSHPL-CLAIMS +!
-                _RSHPL-E @ SHME.FLAGS @ SHM-F-OVERLAY AND IF
+                _RSHPL-E @ _RSHPL-OVERLAY? IF
                     _RSHPL-Q @ _RSHPL-Q.CONTENT-Z @ 2147483647 = IF 0 UNLOOP EXIT THEN
                 THEN
             THEN
@@ -517,7 +523,7 @@ VARIABLE _RSHPL-GAP-C VARIABLE _RSHPL-GAP-END
     _RSHPL-CLAIM ;
 : _RSHPL-PANE ( -- )
     _RSHPL-Q @ _RSHPL-Q.CONTENT-Z @
-    _RSHPL-E @ SHME.FLAGS @ SHM-F-OVERLAY AND IF 1+ THEN
+    _RSHPL-E @ _RSHPL-OVERLAY? IF 1+ THEN
     _RSHPL-E @ SHME.CONTENT-ROW @ _RSHPL-E @ SHME.CONTENT-COL @
     _RSHPL-E @ SHME.CONTENT-H @ _RSHPL-E @ SHME.CONTENT-W @
     _RSHPL-REGION _RSHPL-CONTENT !

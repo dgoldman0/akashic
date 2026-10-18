@@ -30,7 +30,8 @@ I64_MAX = (1 << 63) - 1
 class SeriesProvider(ProviderHarness):
     """Independent bounded provider fixture; the inherited helpers are transport-only."""
 
-    def __init__(self, backend, *, open_owner=True):
+    def __init__(self, backend, *, open_owner=True, features=FEATURES, path_points=0,
+                 **policy_changes):
         fixture = cf._fixture_source(20).replace(
             b"12 CF-COLS 8 * + 256 MAX CONSTANT CF-MAX-PAY",
             b"2048 CONSTANT CF-MAX-PAY",
@@ -60,18 +61,19 @@ class SeriesProvider(ProviderHarness):
         self.arena = EXTERNAL_BASE
         self.used = 0
         policy = replace(
-            cf._retained_policy(), features=FEATURES, max_objects=4,
+            cf._retained_policy(), features=features, max_objects=4,
             max_series=4, max_operations_per_transaction=512,
             max_samples_per_append=64, max_history_per_series=16000,
             total_sample_slots=32000, total_utf8_bytes=128, max_glyph_run_bytes=128,
             client_to_terminal_max_payload=2048,
             max_retained_transaction_bytes=300000, base_max_transaction_bytes=300000,
+            **policy_changes,
         )
         with patch.object(cf, "_retained_policy", return_value=policy):
             self.attach()
         if open_owner:
             assert self.call("RTAPT-OWNER-OPEN", 1, 1, 2, 0, 4, 4, 0, 128, 32000,
-                             self.engine)[0] == (0,)
+                             path_points, self.engine)[0] == (0,)
             self.settle()
             assert self.call("RTAPT-OWNER-STATE@", 1, 1, self.engine)[0] == (
                 self.constant("RTAPT-OWNER-ST-OPEN"), 0)

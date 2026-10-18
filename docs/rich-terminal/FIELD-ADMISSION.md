@@ -10,7 +10,8 @@ and 376 bytes. These codecs do not enable a product profile by themselves.
 The 200-byte neutral CONTROL record and 160-byte provider copy header retain
 their layouts. LABEL is the optional, identity-stable outer label; SHORTCUT
 is empty. CONTENT is one exact FDC1 value. CONTENT-ITEMS is its choice count,
-CONTENT-UTF8 is the sum of every choice label or the TEXT value, and
+CONTENT-UTF8 is the sum of every choice label, or the TEXT value and its
+placeholder, and
 CONTENT-RUNS and CONTENT-FIELDS are zero. Each FIELD root consumes one control
 and object slot; every choice consumes one additional shared object slot,
 including hidden and read-only choices. Displaying an INTEGER stores no
@@ -18,7 +19,8 @@ additional guest UTF8. The outer label is charged separately.
 
 `FDC1-VALIDATE ( content-a content-u label-a label-u cols rows -- choices
 content-utf8 flag )` derives the content aggregates. Failure returns three
-zeros. The helper validates the exact 96-byte header, scalar UTF8, independent
+zeros. The helper validates the exact 96-byte header, a TEXT field's 16-byte
+edit record with its caret and anchor inside the value, scalar UTF8, independent
 single-line strings, signed integer constraints, unique signed choice values,
 current-choice membership, and canonical unused fields. The label and value
 rectangles stay within the declared root and do not overlap. There is no
@@ -52,6 +54,8 @@ A FIELD target names a cell inside its committed value rectangle. ADJUST
 requires the exact positive FDC1 revision and a nonzero signed count, delivered
 once through `KEY-MOUSE-FIELD-ADJUST` and `KEY-MOUSE-FIELD-ADJUSTMENT`. It does
 not expand into wheel events. ACTIVATE remains an ordinary click; its wire
-message has no content revision. Producer acknowledgement and live-state
+message has no content revision. A writable TEXT field takes PLACE and EXTEND
+instead, with item key zero and a scalar offset into the value its content
+revision names. Producer acknowledgement and live-state
 checks retain authority over that target, while apps own accepted values and
 editing.

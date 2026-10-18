@@ -81,6 +81,20 @@ with U+FFFD for anything but printable ASCII.
 |------|-------|-------------|
 | `INP-CURSOR-POS` | `( widget -- n )` | The characters before the caret |
 
+### Shown state
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `INP-REVISION@` | `( widget -- revision )` | Advances with every shown change |
+| `INP-MASK@` | `( widget -- codepoint )` | The one-cell mask character, or 0 |
+| `INP-PLACEHOLDER@` | `( widget -- addr len )` | The placeholder text |
+| `INP-SHOWN-STATE` | `( widget -- characters caret anchor scroll )` | The value as a renderer shows it |
+
+`INP-SHOWN-STATE` counts as the value counts: characters when the field
+masks, Unicode scalars otherwise. The anchor is the caret when nothing is
+selected. It settles the scroll first, as a draw does, so it holds before
+the next draw as after it; a changed scroll advances the revision.
+
 ### Callback
 
 | Word | Stack | Description |

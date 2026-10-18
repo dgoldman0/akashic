@@ -187,3 +187,15 @@ def test_a_turn_runs_on_the_model_its_designation_names(forth):
         ["2", "0", "-1", "-", "-", "0"],
         ["0", "0", "low", "-", "0", "0", "-1", "-", "-", "0"],
     ]
+
+
+def test_a_long_approval_reason_runs_to_a_line_for_each_change(forth):
+    rows = run(forth, [
+        "_SCRIPTED-LONG-REASON TYPE CR",
+        # It is built once.
+        "_SCRIPTED-LONG-REASON _SCRIPTED-LONG-REASON ROT = . = . CR",
+    ])
+    expected = [["Persist", "the", "simulated", "change?"]] + [
+        ["Simulated", "change", str(n), "of", "100."] for n in range(1, 101)
+    ]
+    assert rows == expected + [["-1", "-1"]]

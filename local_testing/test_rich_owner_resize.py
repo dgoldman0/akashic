@@ -73,13 +73,13 @@ class ResizeHarness(cf._FeedHarness):
         raise AssertionError("retained provider failed to settle")
 
     def open(self, owner, objects, utf8):
-        assert self.call("RTE-OWNER-OPEN", owner, 1, 1, 0, objects, 0, 0, utf8, 0,
+        assert self.call("RTE-OWNER-OPEN", owner, 1, 1, 0, objects, 0, 0, utf8, 0, 0,
                          self.facade)[0] == (0,)
         assert self.settle() == (0,)
         assert self.state(owner) == self.constant("RTE-OWNER-ST-OPEN")
 
     def resize(self, owner, objects, utf8):
-        return self.call("RTE-OWNER-RESIZE", owner, 1, 1, 0, objects, 0, 0, utf8, 0,
+        return self.call("RTE-OWNER-RESIZE", owner, 1, 1, 0, objects, 0, 0, utf8, 0, 0,
                          self.facade)[0]
 
     def state(self, owner):

@@ -81,7 +81,7 @@ def test_public_descriptor_and_vocabulary_are_exact_and_generic() -> None:
 
 def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
     source = _source()
-    assert _constant(source, "RTAPT-HYBRID-ADMISSION-SIZE") == 472
+    assert _constant(source, "RTAPT-HYBRID-ADMISSION-SIZE") == 504
     fields = {
         "CLIP-X": 72,
         "CLIP-Y": 80,
@@ -99,6 +99,10 @@ def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
         "INSTRUMENT-FORMATTED-MAX": 296,
         "INSTRUMENT-LAST": 304,
         "CONTROL-ITEM-VIEWS": 312,
+        "PLOT-COUNT": 472,
+        "POLYLINE-COUNT": 480,
+        "PATH-POINTS": 488,
+        "PATH-POINTS-MAX": 496,
     }
     assert {
         field: _offset(source, f"_RTAPT-HA.{field}") for field in fields
@@ -121,7 +125,13 @@ def test_hybrid_admission_extends_only_the_caller_supplied_summary() -> None:
     utf8_arithmetic = arithmetic.split("_RTAPT-HAF-UTF8 !", 1)[0]
     assert "_RTAPT-HAF-INSTRUMENT-FORMATTED-BYTES @" in utf8_arithmetic
     assert "_RTAPT-HAF-INSTRUMENT-UNIT-BYTES @" not in utf8_arithmetic
-    assert "_RTAPT-HAF-INSTRUMENT-UNIT-BYTES @" in arithmetic
+    # Readouts carry their unit text on the wire, and lines their points,
+    # eight bytes for each sixteen kept where a unit is.
+    wire_arithmetic = arithmetic.split("_RTAPT-HAF-COPY !", 1)[1]
+    assert "_RTAPT-HAF-UNIT-TEXT _RTAPT-UADD?" in " ".join(wire_arithmetic.split())
+    assert "_RTAPT-HAF-PATH-POINTS @ 3 LSHIFT" in " ".join(wire_arithmetic.split())
+    assert " ".join(_word(source, "_RTAPT-HAF-UNIT-TEXT").split()).endswith(
+        "_RTAPT-HAF-INSTRUMENT-UNIT-BYTES @ _RTAPT-HAF-PATH-POINTS @ 4 LSHIFT - ;")
 
 
 def test_authority_precedes_mutation_and_caller_text_dereference() -> None:

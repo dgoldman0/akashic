@@ -153,7 +153,7 @@ def test_source_validation_is_versioned_packed_and_generation_separated() -> Non
 
 def test_control_state_and_geometry_keep_semantics_at_the_right_layer() -> None:
     source = _source()
-    state = _word(source, "_RUCP-STATE>RTE")
+    state = _word(source, "RUCP-STATE>RTE")
     geometry = _word(source, "_RUCP-BAR-GEOMETRY?")
     write = _word(source, "_RUCP-WRITE-CONTROL")
     write_geometry = _word(source, "_RUCP-WRITE-BAR-GEOMETRY")
@@ -164,6 +164,8 @@ def test_control_state_and_geometry_keep_semantics_at_the_right_layer() -> None:
     assert "UMSN-F-ENABLED" in state
     assert "UMSN-F-OPEN" in state
     assert "UMSN-F-SELECTED" in state
+    assert "UMSN-F-CHECKED AND IF" in state
+    assert "RTE-CONTROL-CHECKED" in state
     assert "UMSN-F-FOCUSED" not in state
     assert "UMSN-F-PAINTABLE" not in state
     assert "PAINTABLE remains only in the UMSN source" in source

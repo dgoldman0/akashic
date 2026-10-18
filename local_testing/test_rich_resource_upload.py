@@ -132,7 +132,7 @@ class UploadHarness(cf._FeedHarness):
     def open(self, owner, resources, resource_bytes):
         # Two regions and objects: a rebuild holds its own beside the shown.
         assert self.call("RTE-OWNER-OPEN", owner, 1, 2, resources, 2, 0,
-                         resource_bytes, 0, 0, self.facade)[0] == (0,)
+                         resource_bytes, 0, 0, 0, self.facade)[0] == (0,)
         self.settle()
         assert self.call("RTAPT-OWNER-STATE@", owner, 1, self.engine)[0] == (
             self.constant("RTAPT-OWNER-ST-OPEN"), 0)
@@ -341,7 +341,7 @@ def test_only_an_update_starts_beside_an_upload(harness):
 
     def refused():
         # No owner request, other job or clear starts beside the upload.
-        assert harness.call("RTE-OWNER-OPEN", 2, 1, 1, 0, 2, 0, 0, 0, 0,
+        assert harness.call("RTE-OWNER-OPEN", 2, 1, 1, 0, 2, 0, 0, 0, 0, 0,
                             harness.facade)[0] != (0,)
         assert harness.upload(2, 1, 1)[0] == busy
         assert harness.drop(1, 64) == busy
@@ -508,7 +508,7 @@ def test_the_owner_reservation_bounds_what_it_may_upload(harness):
     harness.clear()
     assert harness.upload(2, 1, 1)[0] == capacity       # one resource only
     # IDs only rise, and a picture must match its bytes and fit the terminal.
-    harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 2, 2, 0, 80, 0, 0, harness.engine)
+    harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 2, 2, 0, 80, 0, 0, 0, harness.engine)
     harness.settle()
     assert harness.upload(1, 1, 1)[0] == invalid
     assert harness.upload(2, 17, 1)[0] == invalid
@@ -650,11 +650,11 @@ def test_a_drop_gives_the_usage_back_and_a_resize_the_reservation(harness):
 
     # The reservation may now drop to what is used, never below it.
     invalid = harness.constant("RTAPT-S-INVALID")
-    assert harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 0, 2, 0, 16, 0, 0,
+    assert harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 0, 2, 0, 16, 0, 0, 0,
                         harness.engine)[0] == (invalid,)
-    assert harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 1, 2, 0, 15, 0, 0,
+    assert harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 1, 2, 0, 15, 0, 0, 0,
                         harness.engine)[0] == (invalid,)
-    assert harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 1, 2, 0, 16, 0, 0,
+    assert harness.call("RTAPT-OWNER-RESIZE", 1, 1, 2, 1, 2, 0, 16, 0, 0, 0,
                         harness.engine)[0] == (0,)
     harness.settle()
     quotas = harness.driver.core.owner_state.records[1].quotas

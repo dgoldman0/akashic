@@ -54,6 +54,7 @@
 PROVIDED akashic-tui-desk
 
 REQUIRE ../../app-shell.f
+REQUIRE ../../status-field-model.f
 REQUIRE ../../applet-host/host.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../uidl-tui.f
@@ -776,8 +777,8 @@ CREATE DESK-LAUNCHER-DESC APP-DESC ALLOT
 : _DESK-LAUNCHER-PAGE  ( -- n )
     SCR-H 8 - 1 MAX 10 MIN ;
 
-\ The centred box holds the title, a page of entries, the status and hint
-\ rows, and one spare row.
+\ The centred box holds the launcher's dialog: its frame, with the title
+\ on the top edge, the status and hint rows, and a page of entries.
 VARIABLE _DLB-W
 VARIABLE _DLB-H
 : _DESK-LAUNCHER-BOX  ( -- row col h w )
@@ -1470,7 +1471,7 @@ VARIABLE _DSBI-STATUS
     DUP 0= IF
         DROP S" Agent request started" 1000 ASHELL-TOAST
     ELSE
-        DROP S" Agent is busy" 1600 ASHELL-TOAST
+        DROP S" Agent is busy" 1600 ASHELL-TOAST-WARNING
     THEN
     ASHELL-DIRTY! ;
 
@@ -1494,19 +1495,19 @@ VARIABLE _DSFA-SLOT
 
 : _DESK-SHOW-AGENT-PROMPT  ( -- )
     DESK-RECOVERY? IF
-        S" Practice recovery: Agent is disabled" 1800 ASHELL-TOAST EXIT
+        S" Practice recovery: Agent is disabled" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _DESK-AGENT-PROMPT @ 0= IF EXIT THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME-AUTH ?DUP IF
         AAUTH-READY? 0= IF
             _DESK-FOCUS-AGENT
-            S" Agent sign-in required" 1600 ASHELL-TOAST EXIT
+            S" Agent sign-in required" 1600 ASHELL-TOAST-WARNING EXIT
         THEN
     THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME-RUN-SETTINGS ?DUP IF
         ARSET.STATE @ ARSET-STATE-READY <> IF
             _DESK-FOCUS-AGENT
-            S" Agent models are not ready" 1600 ASHELL-TOAST EXIT
+            S" Agent models are not ready" 1600 ASHELL-TOAST-WARNING EXIT
         THEN
     THEN
     S" Ask:" 0 0 _DESK-AGENT-PROMPT @ PRM-SHOW
@@ -1578,7 +1579,8 @@ VARIABLE _DMF-EFFECTS
 : _DESK-REMINDERS-TICK  ( -- )
     _DESK-REMINDERS DUP DBSVC-VALID? 0= IF DROP EXIT THEN
     DBSVC-TICK 0= IF EXIT THEN
-    _DESK-REMINDERS DBSVC-NOTICE _DESK-REMINDER-TOAST-MS ASHELL-TOAST
+    _DESK-REMINDERS DBSVC-NOTICE _DESK-REMINDER-TOAST-MS
+        _DESK-REMINDERS DBSVC-NOTICE-SEVERITY ASHELL-NOTICE
     _DESK-MARK-ALL-CHILDREN ASHELL-DIRTY! ;
 
 VARIABLE _DMA-A
@@ -1747,6 +1749,9 @@ VARIABLE _DMC-CANDIDATE
     _DINI-CONTEXT @ CTX.EPOCH @ RANDOM AHT-NEW
     0<> ABORT" desk: authority table allocation failed" _DESK-AUTHORITY !
     _DESK-AUTHORITY @ _DESK-BUS @ CBUS-AUTHORITY!
+    \ Capability handlers run from the request pump, under whichever
+    \ child's UIDL context is live; each runs in its own child's instead.
+    ['] AHOST-CALL-SCOPED _DESK-HOST _DESK-BUS @ CBUS-SCOPE!
     _DESK-AUTHORITY @ _DINI-CONTEXT @ CTX.AUTHORITY !
     _DESK-BUS @ _DINI-CONTEXT @ CTX.QUEUE !
     _DESK-POLICY @ _DINI-CONTEXT @ CTX.POLICY !
@@ -1802,7 +1807,7 @@ VARIABLE _DMC-CANDIDATE
     _DESK-SBOX-INIT SBOX-CAPABILITY-S-OK <>
     ABORT" desk: sandbox capability initialization failed"
 
-    SCR-H 1- 0 1 SCR-W RGN-NEW _DESK-AGENT-PROMPT-RGN !
+    SCR-H 1- 0 1 SCR-W RGN-NEW DUP _DESK-AGENT-PROMPT-RGN !
     _DESK-AGENT-PROMPT-BUF _DESK-AGENT-PROMPT-CAP PRM-NEW
     DUP _DESK-AGENT-PROMPT !
     ['] _DESK-AGENT-PROMPT-SUBMIT OVER PRM-ON-SUBMIT
@@ -1943,44 +1948,60 @@ VARIABLE _DESK-TB-POS
 
 VARIABLE _DTB-COL
 VARIABLE _DTB-ROW
-VARIABLE _DAS-A
-VARIABLE _DAS-U
-VARIABLE _DAS-COL
 
-: _DESK-AGENT-STATE-TEXT  ( -- addr len )
-    DESK-RECOVERY? IF S" [Practice: recovery]" EXIT THEN
-    _DESK-PRACTICE-ACTIVATION PACT-FALLBACK? IF
-        S" [Practice: fallback]" EXIT
+\ Desk's agent state as a status field shows it: what it is about, its
+\ value, its severity and whether it asks for attention, and where it lies.
+\ CELL paints it as [label: value] one cell before the taskbar row's right
+\ end, when that leaves it past the taskbar's entries.
+VARIABLE _DAGS-LA VARIABLE _DAGS-LU VARIABLE _DAGS-VA VARIABLE _DAGS-VU
+VARIABLE _DAGS-SEVERITY VARIABLE _DAGS-FLAGS
+VARIABLE _DAGS-LABEL-W VARIABLE _DAGS-W VARIABLE _DAGS-COL
+: _DAGS! ( value-a value-u severity -- ) _DAGS-SEVERITY ! _DAGS-VU ! _DAGS-VA ! ;
+: _DESK-AGENT-VALUE ( -- )
+    S" Agent" _DAGS-LU ! _DAGS-LA ! USF-F-VISIBLE _DAGS-FLAGS !
+    DESK-RECOVERY? IF
+        S" Practice" _DAGS-LU ! _DAGS-LA !
+        S" recovery" ASHELL-SEVERITY-WARNING _DAGS! EXIT
     THEN
-    _DESK-AGENT-RUNTIME @ 0= IF S" [Agent: unavailable]" EXIT THEN
+    _DESK-PRACTICE-ACTIVATION PACT-FALLBACK? IF
+        S" Practice" _DAGS-LU ! _DAGS-LA !
+        S" fallback" ASHELL-SEVERITY-WARNING _DAGS! EXIT
+    THEN
+    _DESK-AGENT-RUNTIME @ 0= IF
+        S" unavailable" ASHELL-SEVERITY-NEUTRAL _DAGS! EXIT
+    THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME.STORE-STATUS @ ACSTORE-S-OK <> IF
-        S" [Agent: history error]" EXIT
+        S" history error" ASHELL-SEVERITY-ERROR _DAGS! EXIT
     THEN
     _DESK-AGENT-RUNTIME @ ARUNTIME.STATUS @ CASE
-        ARUN-S-IDLE OF S" [Agent: ready]" ENDOF
-        ARUN-S-RUNNING OF S" [Agent: working]" ENDOF
-        ARUN-S-APPROVAL OF S" [Agent: review]" ENDOF
-        ARUN-S-OFFLINE OF S" [Agent: offline]" ENDOF
-        ARUN-S-ERROR OF S" [Agent: error]" ENDOF
-        ARUN-S-CANCELLED OF S" [Agent: cancelled]" ENDOF
-        ARUN-S-EXPIRED OF S" [Agent: expired]" ENDOF
-        S" [Agent: unknown]" ROT
-    ENDCASE ;
+        ARUN-S-IDLE OF S" ready" ASHELL-SEVERITY-NEUTRAL ENDOF
+        ARUN-S-RUNNING OF S" working" ASHELL-SEVERITY-INFO ENDOF
+        ARUN-S-APPROVAL OF
+            USF-F-EMPHASIZED _DAGS-FLAGS +! S" review" ASHELL-SEVERITY-WARNING
+        ENDOF
+        ARUN-S-OFFLINE OF S" offline" ASHELL-SEVERITY-WARNING ENDOF
+        ARUN-S-ERROR OF S" error" ASHELL-SEVERITY-ERROR ENDOF
+        ARUN-S-CANCELLED OF S" cancelled" ASHELL-SEVERITY-NEUTRAL ENDOF
+        ARUN-S-EXPIRED OF S" expired" ASHELL-SEVERITY-WARNING ENDOF
+        >R S" unknown" ASHELL-SEVERITY-WARNING R>
+    ENDCASE _DAGS! ;
+: _DESK-AGENT-STATE ( -- )
+    _DESK-AGENT-VALUE
+    _DAGS-LA @ _DAGS-LU @ GR-SWIDTH 3 + _DAGS-LABEL-W !
+    _DAGS-VA @ _DAGS-VU @ GR-SWIDTH 1+ _DAGS-LABEL-W @ + _DAGS-W !
+    SCR-W _DAGS-W @ - 1- 0 MAX _DAGS-COL ! ;
 
 : _DESK-PAINT-AGENT-STATE  ( -- )
-    _DESK-AGENT-STATE-TEXT _DAS-U ! _DAS-A !
-    SCR-W _DAS-U @ - 1- 0 MAX _DAS-COL !
-    _DAS-COL @ _DTB-COL @ <= IF EXIT THEN
-    _DESK-AGENT-RUNTIME @ ?DUP IF
-        ARUNTIME.STATUS @ ARUN-S-APPROVAL =
-    ELSE
-        0
-    THEN IF
+    _DAGS-COL @ _DTB-COL @ <= IF EXIT THEN
+    _DAGS-FLAGS @ USF-F-EMPHASIZED AND IF
         0 220 1 DRW-STYLE!
     ELSE
         _DTH-CLOCK-FG @ _DTH-CLOCK-BG @ 0 DRW-STYLE!
     THEN
-    _DAS-A @ _DAS-U @ _DTB-ROW @ _DAS-COL @ DRW-TEXT ;
+    0 _DESK-TB-POS !
+    91 _DTB-CH _DAGS-LA @ _DAGS-LU @ _DTB-STR 58 _DTB-CH 32 _DTB-CH
+    _DAGS-VA @ _DAGS-VU @ _DTB-STR 93 _DTB-CH
+    _DESK-TB-BUF _DESK-TB-POS @ _DTB-ROW @ _DAGS-COL @ DRW-TEXT ;
 
 \ =====================================================================
 \ Ordinary immutable shell projection
@@ -2108,6 +2129,50 @@ VARIABLE _DSM-WIDTH
 
 \ Build the model into the bank _DSM-M names.  _DSM-OK says whether it
 \ fit: every refusal is a bank without room for an entry or its text.
+\ Desk's own prompt, while open on the hidden taskbar row, goes in the model
+\ as its field, so a renderer can show it as one.  A bank without
+\ room for it grows like one out of room for anything else; a prompt that
+\ cannot be captured stays the cells it paints.
+: _DESK-SHELL-PROMPT ( -- )
+    _DESK-AGENT-PROMPT @ ?DUP 0= IF EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
+    SCR-H 1- 0 1 SCR-W 4 PICK PRM-SET-BOUNDS >R
+    _DSM-M @ SHM-PROMPT-ROOM 0= IF 2DROP R> DROP FALSE _DSM-OK ! EXIT THEN
+    R> PRM-FIELD-CAPTURE
+    DUP UFLD-S-CAPACITY = IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    UFLD-S-OK <> IF DROP EXIT THEN
+    _DSM-M @ SHM-PROMPT-TAKE 0= IF FALSE _DSM-OK ! THEN ;
+
+\ The app shell's notice, while this paint shows one apart from every pane,
+\ goes in the model as its UDLG notice, so a renderer can show it as one.
+\ A bank without room for it grows; a notice that cannot be captured stays
+\ the cells it paints.
+: _DESK-SHELL-NOTICE ( -- )
+    ASHELL-NOTICE-SHOWN? 0= IF EXIT THEN
+    ASHELL-NOTICE-ROOT _DSM-M @ SHM-APART-FROM-PANES? 0= IF EXIT THEN
+    _DSM-M @ SHM-NOTICE-ROOM 0= IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    ASHELL-NOTICE-CAPTURE
+    DUP UDLG-S-CAPACITY = IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    UDLG-S-OK <> IF DROP EXIT THEN
+    >R ASHELL-NOTICE-ROOT 2DROP R> _DSM-M @ SHM-NOTICE-TAKE
+        0= IF FALSE _DSM-OK ! THEN ;
+
+\ Desk's agent state, while this paint shows it apart from every pane,
+\ goes in the model as a status field, so a renderer can show it as one:
+\ its label's slot is the cells CELL gives "[label: ".  A bank without room
+\ for it grows; a state that cannot be captured stays the cells it paints.
+: _DESK-SHELL-STATUS ( -- )
+    _DSM-M @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND IF EXIT THEN
+    _DAGS-COL @ _DSM-M @ SHM.END-COL @ <= IF EXIT THEN
+    SCR-H 1- _DAGS-COL @ 1 _DAGS-W @ _DSM-M @ SHM-APART-FROM-PANES? 0= IF EXIT THEN
+    _DSM-M @ SHM-STATUS-ROOM 0= IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    >R >R 1 _DAGS-W @ _DAGS-LABEL-W @ _DAGS-SEVERITY @ _DAGS-FLAGS @
+    _DAGS-LA @ _DAGS-LU @ _DAGS-VA @ _DAGS-VU @ R> R> USF-INIT
+    DUP USF-S-CAPACITY = IF 2DROP FALSE _DSM-OK ! EXIT THEN
+    USF-S-OK <> IF DROP EXIT THEN
+    >R SCR-H 1- _DAGS-COL @ R> _DSM-M @ SHM-STATUS-TAKE
+        0= IF FALSE _DSM-OK ! THEN ;
+
 : _DESK-SHELL-BUILD ( -- )
     TRUE _DSM-OK !
     _DSM-M @ SHM-BEGIN 0= IF FALSE _DSM-OK ! EXIT THEN
@@ -2146,6 +2211,10 @@ VARIABLE _DSM-WIDTH
         THEN
     THEN
     _DSM-COL @ SCR-W MIN _DSM-M @ SHM.END-COL !
+    _DSM-OK @ IF _DESK-SHELL-PROMPT THEN
+    _DSM-OK @ IF _DESK-SHELL-NOTICE THEN
+    _DESK-AGENT-STATE
+    _DSM-OK @ IF _DESK-SHELL-STATUS THEN
     _DSM-OK @ IF _DSM-M @ SHM-SEAL THEN ;
 
 VARIABLE _DSG-CELL
@@ -2421,7 +2490,7 @@ CREATE _DESK-EV  24 ALLOT
     _DESK-CATALOG @ ?DUP IF ACAT-COUNT ELSE 0 THEN ;
 
 : _DESK-LAUNCHER-UIDL  ( -- a u )
-    S" <uidl arrange=stack><label id=title text=Applets/><region id=entries/><label id=status/><label id=hint/></uidl>" ;
+    S" <uidl arrange=stack><dialog id=screen title=Applets><label id=status/><label id=hint/><region id=entries/></dialog></uidl>" ;
 
 : _DESK-LAUNCHER-HINT$  ( -- a u )
     S" Up/Down PgUp/PgDn Home/End  Enter open  Esc close" ;
@@ -2481,11 +2550,7 @@ CREATE _DESK-LAUNCHER-COLUMNS  2 LST-COLUMN-SIZE * ALLOT
 \ the status line current.
 : _DESK-LAUNCHER-ACTIVATE  ( instance -- )
     DROP
-    UIDL-ROOT _DESK-LAUNCHER-STYLE
-    UIDL-ROOT ?DUP IF
-        UIDL-FIRST-CHILD
-        BEGIN ?DUP WHILE DUP _DESK-LAUNCHER-STYLE UIDL-NEXT-SIB REPEAT
-    THEN
+    ['] _DESK-LAUNCHER-STYLE UTUI-EACH-ELEM
     _DESK-LAUNCHER-LIST @ ?DUP IF
         _DESK-LAUNCHER-COUNT DUP _DESK-LAUNCHER-ROWS @ <> IF
             DUP _DESK-LAUNCHER-ROWS ! SWAP LST-ROWS!
@@ -2662,7 +2727,7 @@ _DESK-LAUNCHER-DESC-SETUP
     ASHELL-DIRTY! ;
 
 : _DESK-SHOW-SBOX-MODULES  ( -- )
-    _DESK-SBOX-READY? 0= IF S" The sandbox is off" 1600 ASHELL-TOAST EXIT THEN
+    _DESK-SBOX-READY? 0= IF S" The sandbox is off" 1600 ASHELL-TOAST-WARNING EXIT THEN
     _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
     SBXS-INSPECT-DESC _DESK-HOST AHOST-TRY-LAUNCH-OVERLAY IF DROP EXIT THEN
@@ -2683,7 +2748,7 @@ _DESK-LAUNCHER-DESC-SETUP
 \ Daybook's service gives it.
 : _DESK-SHOW-SCHEDULE-PERMISSIONS  ( -- )
     _DESK-BROKER SBRK-VALID? 0= IF
-        S" Scheduled runs are unavailable" 1600 ASHELL-TOAST EXIT
+        S" Scheduled runs are unavailable" 1600 ASHELL-TOAST-WARNING EXIT
     THEN
     _DESK-LAUNCHER-ID @ _DESK-SCREEN-ID @ OR IF EXIT THEN
     _DESK-AGENT-PROMPT @ ?DUP IF PRM-HIDE THEN
@@ -2903,10 +2968,13 @@ VARIABLE _DPC-PAINT-ALL
 \ --- Close negotiation and shutdown ---
 \ A close while a scheduled run is in flight or waiting asks first: Desk
 \ defers and asks whether to shut down anyway.  Shut down arms the next
-\ close, once, and quits again; Desk's teardown then cancels the runs.
+\ close, once, and quits again; Desk's teardown then cancels the runs.  A
+\ shutdown that waited on its applications' questions has passed that
+\ question already, and the host quits again to go on with it.
 : DESK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DESK-USE-STATE
-    _DESK-SHUTDOWN-ARMED @ 0 _DESK-SHUTDOWN-ARMED ! 0= IF
+    _DESK-SHUTDOWN-ARMED @ 0 _DESK-SHUTDOWN-ARMED ! 0=
+    _DESK-HOST AHOST-SHUTDOWN-PENDING? 0= AND IF
         _DESK-BROKER SBRK-ACTIVE? IF
             _DESK-SHOW-SHUTDOWN-QUESTION APP-CLOSE-D-DEFER EXIT
         THEN

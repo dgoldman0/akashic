@@ -50,6 +50,7 @@ class StaticHarness:
             source.append(_clean((ROOT / "akashic/utils" / name).read_text()))
         source.append(_word((ROOT / "akashic/utils/string.f").read_text(), "/STRING"))
         source.append(_clean((RICH / "fdc1.f").read_text()))
+        source.append(_clean((RICH / "dlg1.f").read_text()))
         source.append(_clean(SOURCE))
         source.append("""
 VARIABLE SF-CALLS
@@ -280,7 +281,7 @@ def test_image_static_hybrid_counts_images_apart_from_status_text(static):
 
 @pytest.mark.parametrize("mutation", ("bank-short", "outside", "unaligned-record",
                                       "plan-alias", "bank-alias", "admission-alias",
-                                      "scratch-bank", "bad-text", "bad-root"))
+                                      "scratch-bank", "bad-text", "bad-root", "modal"))
 def test_static_hybrid_refuses_bad_graph_before_provider_and_output(static, mutation):
     item, plan, hybrid, admission = static.graph()
     static.variable("SF-CALLS", 0)
@@ -304,6 +305,9 @@ def test_static_hybrid_refuses_bad_graph_before_provider_and_output(static, muta
         static.write(a, b"\n")
     elif mutation == "bad-root":
         static.cell(item + _offset("_RTE-STATIC.ROOT-WIDTH"), 79)
+    elif mutation == "modal":
+        # Only a family batch's catalog charges a modal region to DIALOGS.
+        static.cell(plan + _offset("_RTE-SP.REGION-FLAGS"), 4)
     assert static.call("RTE-HYBRID-PREFLIGHT", hybrid, admission, static.facade) == (5,)
     assert static.variable("SF-CALLS") == 0
 
@@ -316,8 +320,8 @@ def test_failed_provider_does_not_publish_checked_summary(static):
 
 
 def test_status_only_capability_has_core_dependency_and_no_glyph_dependency(static):
-    limits = [0x401, 1, 1, 1, 0, 1, 0, 2, 296, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 96, 0]
-    record = static.allocate(struct.pack("<22Q", *limits))
+    limits = [0x401, 1, 1, 1, 0, 1, 0, 2, 296, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 96, 0, 0]
+    record = static.allocate(struct.pack("<23Q", *limits))
     assert static.call("RTE-LIMITS-VALID?", record) == (MASK,)
     static.cell(record, 0x400)
     assert static.call("RTE-LIMITS-VALID?", record) == (0,)
@@ -327,7 +331,7 @@ def test_static_abi_is_separate_from_instruments():
     assert "208 CONSTANT RTE-STATIC-SIZE" in SOURCE
     assert "144 CONSTANT RTE-STATIC-PLAN-SIZE" in SOURCE
     assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in SOURCE
-    assert "472 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
+    assert "504 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
     assert "328 CONSTANT RTE-FACADE-SIZE" in SOURCE
     body = _word(SOURCE, "_RTE-HPV-STATIC?")
     assert "INSTRUMENT" not in body

@@ -12,6 +12,7 @@ REQUIRE capabilities.f
 REQUIRE projection-adapter.f
 REQUIRE ../../../interop/endpoint.f
 REQUIRE ../../../interop/qualified-locator.f
+REQUIRE ../../widgets/dialog.f
 
 \ =====================================================================
 \  Scheduling an Agent run
@@ -36,7 +37,7 @@ VARIABLE _LSR-REQ
 
 : _LAPP-SCHEDULE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
-        S" Daybook could not begin the Agent run" 2600 ASHELL-TOAST
+        S" Daybook could not begin the Agent run" 2600 ASHELL-TOAST-ERROR
     THEN
     CBR-FREE ;
 
@@ -44,22 +45,22 @@ VARIABLE _LSR-REQ
     DROP
     _LAPP-VIEW @ _LAPP-V-COLLECTIONS =
     _LAPP-VIEW @ _LAPP-V-HISTORY = OR IF
-        S" Select a document for the Agent run to read" 2200 ASHELL-TOAST EXIT
+        S" Select a document for the Agent run to read" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _LAPP-PREVIEW-READY @ 0= IF _LAPP-SHOW-STATUS-TOAST EXIT THEN
     _LAPP-PREVIEW-LOCATOR IF
-        S" This document cannot be named exactly" 2200 ASHELL-TOAST EXIT
+        S" This document cannot be named exactly" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
-    CBR-NEW IF DROP S" No memory to ask Daybook" 2200 ASHELL-TOAST EXIT THEN
+    CBR-NEW IF DROP S" No memory to ask Daybook" 2200 ASHELL-TOAST-ERROR EXIT THEN
     _LSR-REQ !
     CPRINC-COMPONENT _LSR-REQ @ CBR.PRINCIPAL !
     _LSR-LOCATOR _LSR-REQ @ CBR.ARGS QLOC-VALUE! IF
-        _LSR-REQ @ CBR-FREE S" No memory to ask Daybook" 2200 ASHELL-TOAST EXIT
+        _LSR-REQ @ CBR-FREE S" No memory to ask Daybook" 2200 ASHELL-TOAST-ERROR EXIT
     THEN
     ['] _LAPP-SCHEDULE-COMPLETE _LSR-REQ @ CBR.COMPLETE-XT !
     S" agent-run.schedule" _LSR-REQ @ _LAPP-CURRENT-INSTANCE @ CINST-POST-INTENT
     CBUS-S-OK <> IF
-        _LSR-REQ @ CBR-FREE S" Daybook cannot schedule runs here" 2200 ASHELL-TOAST
+        _LSR-REQ @ CBR-FREE S" Daybook cannot schedule runs here" 2200 ASHELL-TOAST-WARNING
     THEN ;
 
 \ =====================================================================
@@ -166,24 +167,28 @@ VARIABLE _LSR-REQ
     THEN
     _LAPP-PROMPT @ WDG-DRAW ;
 
+: _LAPP-DISCARD-CONFIRMED  ( confirmed? context -- )
+    DROP IF _LAPP-CLEAR-PENDING -1 _LAPP-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ Closing would lose a pending create's retry key, so the close asks
+\ first; discarding the create asks to close again, and that close goes
+\ ahead.
 : LIBRARY-APPLET-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _LAPP-ACTIVATE
     _LAPP-DISCARD-ARMED @ IF
         0 _LAPP-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
     THEN
-    _LAPP-PENDING-CREATE @ IF
-        _LAPP-PROMPT @ 0= IF APP-CLOSE-D-CANCEL EXIT THEN
-        _LAPP-PRM-DISCARD-PENDING
-        S" Type DISCARD to abandon the pending operation:"
-        0 0 _LAPP-SHOW-PROMPT
-        APP-CLOSE-D-DEFER EXIT
-    THEN
     _LAPP-PROMPT @ ?DUP IF
         PRM-ACTIVE? IF
             S" Finish or cancel the current Library prompt" 2200
-                ASHELL-TOAST
+                ASHELL-TOAST-WARNING
             APP-CLOSE-D-CANCEL EXIT
         THEN
+    THEN
+    _LAPP-PENDING-CREATE @ IF
+        S" Close Library and discard the pending create?" S" Discard"
+            ['] _LAPP-DISCARD-CONFIRMED 0 DLG-CONFIRM
+        IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN EXIT
     THEN
     APP-CLOSE-D-ALLOW ;
 

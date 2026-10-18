@@ -49,13 +49,38 @@ live handler. Launch Observatory once before using Analyze. Catalog discovery
 does not yet install a dormant applet's intents, so Worlds reports that
 limitation instead of claiming cold auto-launch.
 
+## Valve
+
+The valve is a canonical INTEGER field (`tui/widgets/field.f`) beside the
+relation line, labelled with its unit, milliunits a tick. Its range is the
+run's own: from closed up to the upper reservoir's capacity, which
+`WRUN-VALVE-SET` enforces, in steps of 250. Left and Right, or the wheel
+over the field, close or open it a step and stop at either end; a press on
+it, `V`, or Run > Set Next Valve opens it a step more and closes it again
+past the capacity. Each change is a journaled `valve.set`. The field is a
+new revision each time it is rebuilt, so an adjustment made against an
+older value is refused rather than applied to a value it never saw. A
+panel too narrow for the label shortens it first, and one with no room for
+a label cell beside the value shows no field.
+
+## Status
+
+The status bar says whether the run is running (`Running fixed-step` or
+`Paused`), how its last action went (`Ready`, or why the run refused it,
+such as `Stale revision refused` or `Create a checkpoint first`), and how
+its last replay went (`Not replayed`, `Replay exact` or `Replay failed`).
+They are UIDL status labels, so a rich terminal shows them as status
+fields. The instrument graph keeps its readouts, the two reservoir meters
+and the checkpoint's lamp.
+
 ## Keys
 
 | Key | Action |
 |---|---|
 | `S` | Commit one fixed semantic step |
 | Space | Run or pause fixed-step requests |
-| `V`, Left, or Right | Select the next valve setting |
+| Left, Right | Close or open the valve a step |
+| `V` | Open the valve a step more, closed again past the capacity |
 | `C` | Record a canonical checkpoint |
 | `B` | Create a new branch from the current revision |
 | `R` | Replay and verify the checkpoint and journal |

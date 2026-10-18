@@ -1249,6 +1249,7 @@ def _ruha_constructor_program() -> list[str]:
     source += _load_forth_lines(AK / "tui" / "uidl-status-field-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-picture-snapshot.f")
     source += _load_forth_lines(AK / "tui" / "uidl-field-snapshot.f")
+    source += _load_forth_lines(AK / "tui" / "uidl-dialog-snapshot.f")
     source += _load_forth_lines(
         AK / "tui" / "rich-terminal" / "uidl-hybrid-adapter.f"
     )
@@ -1307,7 +1308,7 @@ def _ruha_constructor_program() -> list[str]:
         "  _RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
         "  _RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
         "  _RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024 ;",
-        ": _RA-NO-STATUS-FIELD-BANKS 0 0 0 0 0 0 0 0 ;",
+        ": _RA-NO-OPTIONAL-BANKS 0 0 0 0 0 0 0 0 0 0 0 0 ;",
         ": _RA-QUERY ( draw -- )",
         "  SCR-DRAW-COMPLETE",
         "  _RA-ADAPTER RUHA-SNAPSHOT-FOR@ _RA-STATUS ! _RA-SNAP !",
@@ -1322,13 +1323,13 @@ def _ruha_constructor_program() -> list[str]:
         "  _RA-DIR-A @ RUHA-DOCUMENT-COLLECTION-NATIVE-OFFSET@",
         "    _RA-NATIVE-A @ + UCSN-DESCRIPTOR-NATIVE DROP ;",
         "0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !",
-        "_RA-INIT-ARGS _RA-NO-STATUS-FIELD-BANKS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
+        "_RA-INIT-ARGS _RA-NO-OPTIONAL-BANKS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
         "_RA-STACK _RA-ADAPTER RUHA-VALID? _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0= _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0= _RA-ASSERT",
-        "RUHA-DOCUMENT-SIZE 240 = _RA-ASSERT",
-        "RUHA-SNAPSHOT-SIZE 208 = _RA-ASSERT",
-        "RUHA-SIZE 1024 = _RA-ASSERT",
+        "RUHA-DOCUMENT-SIZE 272 = _RA-ASSERT",
+        "RUHA-SNAPSHOT-SIZE 240 = _RA-ASSERT",
+        "RUHA-SIZE 1136 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.COLLECTION-BUILDER _RA-ADAPTER - 296 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-DESCRIPTOR-BANK-U @ UCSN-DESCRIPTOR-SIZE = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U @ 512 = _RA-ASSERT",
@@ -1348,7 +1349,7 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
         "_RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
         "_RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024",
-        "_RA-NO-STATUS-FIELD-BANKS _RA-ADAPTER2 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
+        "_RA-NO-OPTIONAL-BANKS _RA-ADAPTER2 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT _RA-STACK",
         # Exercise the complete generic capture seam with one ordinary UIDL
         # textarea.  The fake host supplies only the normal descriptor fields;
@@ -1371,7 +1372,7 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
         "_RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
         "_RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024",
-        "_RA-NO-STATUS-FIELD-BANKS _RA-ADAPTER3 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
+        "_RA-NO-OPTIONAL-BANKS _RA-ADAPTER3 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
         "_RA-CTX @ UCTX-LIVE? _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT _RA-STACK",
         "80 24 SCR-NEW DUP _RA-SCR ! SCR-USE",

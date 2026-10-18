@@ -1192,6 +1192,35 @@ def test_mutation():
           '1')
 
 
+def test_changing_values_reuse_their_room():
+    """A value no longer than its attribute's room is written in place; a
+    longer one takes new room, twice the old or its own length.  Values
+    that change back and forth stop costing the pool once the room fits
+    the longest, and growing values cost less than four times the
+    longest."""
+
+    setup = tstr(DOC_MUT) + ['TA UIDL-PARSE DROP'] + tstr('l1') + [
+        'VARIABLE _E  TA UIDL-BY-ID _E !',
+        ': _N S" text" ;',
+        ': _SHORT S" Ready" ;',
+        ': _LONG S" Saved notes.txt" ;',
+        'CREATE _XS 64 ALLOT  _XS 64 120 FILL',
+        ': _SET  ( a u -- ) _E @ -ROT _N 2SWAP UIDL-SET-ATTR ;',
+        ': _FLIP  50 0 DO _LONG _SET _SHORT _SET LOOP ;',
+        ': _GROW  40 1 DO _XS I _SET LOOP ;',
+    ]
+    check("attr room: changing back and forth costs nothing more",
+          setup + [
+              '_LONG _SET _UDL-SPOS @ _FLIP _UDL-SPOS @ SWAP - .R',
+              '_E @ _N UIDL-ATTR IF .S ELSE 2DROP THEN'],
+          check_fn=lambda out: "#0\n#Ready" in out)
+    check("attr room: growing costs less than four times the longest",
+          setup + [
+              '_UDL-SPOS @ _GROW _UDL-SPOS @ SWAP - DUP 156 < . 0> . CR',
+              '_E @ _N UIDL-ATTR IF NIP .R ELSE 2DROP THEN'],
+          check_fn=lambda out: "-1 -1" in out and "#39" in out)
+
+
 def test_bind_write():
     """Gap 3.3 — Two-way binding write-back."""
 

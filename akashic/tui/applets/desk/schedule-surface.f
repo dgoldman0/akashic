@@ -488,7 +488,7 @@ _SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
 \ =====================================================================
 
 : _SCHS-UIDL  ( -- a u )
-    S" <uidl arrange=stack><label id=title/><region id=rows/><label id=status/><label id=hint/></uidl>" ;
+    S" <uidl arrange=stack><dialog id=screen><label id=status/><label id=hint/><region id=rows/></dialog></uidl>" ;
 
 : _SCHS-TITLE-TEXT$  ( s -- a u )
     DUP _SCHS-SHUTDOWN? IF DROP S" Shut down Desk?" EXIT THEN
@@ -526,13 +526,7 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
     2DUP _SCHS.ROWS ! _SCHS.LIST @ TUCK LST-ROWS! 0 SWAP LST-SCROLL-SET ;
 
 : _SCHS-STYLE-ALL  ( s -- )
-    _SCHS.STYLE @ ?DUP 0= IF EXIT THEN
-    UIDL-ROOT OVER EXECUTE
-    UIDL-ROOT ?DUP IF
-        UIDL-FIRST-CHILD
-        BEGIN ?DUP WHILE 2DUP SWAP EXECUTE UIDL-NEXT-SIB REPEAT
-    THEN
-    DROP ;
+    _SCHS.STYLE @ ?DUP IF UTUI-EACH-ELEM THEN ;
 
 \ Activation runs with the overlay's UIDL context current, before each of
 \ its events, ticks and paints.  It keeps the request, the style, the
@@ -579,7 +573,7 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
     -1 R@ _SCHS.SHOWN !
     S" status" UTUI-BY-ID R@ _SCHS.E-STATUS !
     S" hint" UTUI-BY-ID R@ _SCHS.E-HINT !
-    S" title" UTUI-BY-ID ?DUP IF S" text" R@ _SCHS-TITLE-TEXT$ UTUI-SET-ATTR THEN
+    S" screen" UTUI-BY-ID ?DUP IF S" title" R@ _SCHS-TITLE-TEXT$ UTUI-SET-ATTR THEN
     S" rows" UTUI-BY-ID DUP R@ _SCHS.E-LIST ! 0= IF R> DROP EXIT THEN
     R@ _SCHS.E-LIST @ UTUI-ELEM-RGN RGN-NEW DUP R@ _SCHS.LIST-RGN !
     R@ _SCHS-SHUTDOWN? IF
@@ -700,8 +694,9 @@ _SCHS-SETUP
     DUP SCHS-APPROVE-DESC = OVER SCHS-PERMS-DESC = OR
     SWAP SCHS-SHUTDOWN-DESC = OR ;
 
-\ The centred box an overlay of DESC takes: the shutdown question's
-\ title, two rows, its question and hint; another as tall as the screen
+\ The centred box an overlay of DESC takes, its dialog's: the shutdown
+\ question's frame, with the title on its top edge, its status and hint
+\ lines, and its two rows and a spare one; another as tall as the screen
 \ allows less the taskbar and a row each side; each as wide as a reading
 \ column.
 : SCHS-BOX  ( desc -- row col h w )

@@ -53,12 +53,12 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "128 CONSTANT RTAPT-F-CONTROL-COLLECTIONS",
         "0x100 CONSTANT _RTAPT-PT-F-CONTROLS",
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
-        "176 CONSTANT RTAPT-LIMITS-SIZE",
+        "184 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "632 CONSTANT RTAPT-OWNER-SIZE",
+        "680 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
-        "720 CONSTANT RTAPT-ENGINE-SIZE",
+        "728 CONSTANT RTAPT-ENGINE-SIZE",
         ": _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;",
         ": _RTAPT-O.ACTIVE-CONTROLS ( o -- a ) 208 + ;",
         ": _RTAPT-O.HIDDEN-CONTROLS ( o -- a ) 216 + ;",
@@ -92,10 +92,10 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
         ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
         ": _RTAPT-E.LIMITS     ( e -- a ) 336 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 512 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 520 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 528 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 536 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 520 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 528 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 536 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 544 + ;",
     ):
         assert declaration in source
 
@@ -601,8 +601,9 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-PANES") == 0x200
     assert _constant(source, "RTE-F-TASKBARS") == 0x800
     assert _constant(source, "RTE-F-CONTROL-DOCUMENTS") == 0x4000
-    assert _constant(source, "_RTE-FEATURE-MASK") == 0x7FFF
-    assert _constant(source, "RTE-LIMITS-SIZE") == 176
+    assert _constant(source, "RTE-F-DIALOGS") == 0x8000
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0xFFFF
+    assert _constant(source, "RTE-LIMITS-SIZE") == 184
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
     control_fields = {
@@ -849,6 +850,10 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
     assert _constant(source, "RTAPT-CONTROL-DOCUMENT") == 14
     assert _constant(source, "RTAPT-F-CONTROL-DOCUMENTS") == 0x4000
     assert _constant(source, "_RTAPT-PT-F-CONTROL-DOCUMENTS") == 0x10000
+    # RET_DIALOGS (bit 17) and the modal region flag it admits.
+    assert _constant(source, "RTAPT-F-DIALOGS") == 0x8000
+    assert _constant(source, "_RTAPT-PT-F-DIALOGS") == 0x20000
+    assert _constant(source, "_RTAPT-REGION-F-MODAL") == 4
     assert "RTAPT-CONTROL-DOCUMENT" in feature_kind
     assert "RTAPT-CONTROL-DOCUMENT" in content_root
     assert "RTAPT-CONTROL-DOCUMENT =" in limits
@@ -875,7 +880,8 @@ def test_apt1_collection_predicates_and_pt_mapping_cover_tabs_explicitly() -> No
             break
         assert int(match.group(1)) == len(kinds) + 1
         kinds.append(match.group(2))
-    assert kinds[-6:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD", "DOCUMENT"]
+    assert kinds[-8:] == ["ITEM-VIEW", "TASKBAR", "TASK", "LAUNCHER", "FIELD", "DOCUMENT",
+                          "DIALOG", "BUTTON"]
     wire_names = {"MENUBAR": "MENU-BAR", "ITEM": "MENU-ITEM",
                   "SEPARATOR": "MENU-SEPARATOR"}
     for kind in kinds:

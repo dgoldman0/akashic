@@ -34,6 +34,8 @@ FIXTURES = {
         0 INPUT-AT !  1 INPUTS +!  TRUE ;""",
     "_ASHELL-DISPATCH-EVENT": ": _ASHELL-DISPATCH-EVENT ( -- ) ASHELL-DIRTY! ;",
     "_ASHELL-CHECK-HW-RESIZE": ": _ASHELL-CHECK-HW-RESIZE ( -- ) 1 RESIZE-POLLS +! ;",
+    # A paint shows the toast the shell raised, and its time starts once
+    # that output has gone out, which a refused flush puts off.
     "_ASHELL-PAINT": """: _ASHELL-PAINT ( -- )
         _UTUI-NEEDS-PAINT @ IF 0 _UTUI-NEEDS-PAINT ! ASHELL-DIRTY! THEN
         _ASHELL-DIRTY @ IF
@@ -42,7 +44,10 @@ FIXTURES = {
             -1 _ASHELL-OUTPUT-PENDING !
         THEN
         _ASHELL-OUTPUT-PENDING @ IF
-            FLUSH-REFUSED @ 0= IF 0 _ASHELL-OUTPUT-PENDING ! THEN
+            FLUSH-REFUSED @ 0= IF
+                0 _ASHELL-OUTPUT-PENDING !
+                ASHELL-TOAST-VISIBLE? IF _ASHELL-TOAST-ARM THEN
+            THEN
         THEN ;""",
     "_ASHELL-ACTIVATE": ": _ASHELL-ACTIVATE ( -- ) ;",
     "_ASHELL-DIRTY-TOAST-RECT": ": _ASHELL-DIRTY-TOAST-RECT ( -- ) ;",
@@ -58,6 +63,9 @@ FIXTURES = {
         MEDIA-WORK @ DUP IF -1 MEDIA-WORK +! THEN 0<> ;""",
     "_ASHELL-POST-Q": "CREATE _ASHELL-POST-Q _ASHELL-POST-MAX CELLS ALLOT",
     "_ASHELL-TOAST-MSG": "CREATE _ASHELL-TOAST-MSG 2 CELLS ALLOT",
+    # The notice's text goes in a fixed buffer instead of the heap.
+    "_ASHELL-ROOM": """: _ASHELL-ROOM ( bytes cap-var buf-var -- ok? )
+        TOAST-ROOM SWAP !  64 SWAP !  64 > 0= ;""",
 }
 
 FIXTURE_STATE = """
@@ -70,6 +78,7 @@ VARIABLE OWNER-PENDING  VARIABLE OWNER-ASKED
 VARIABLE SERVICES  VARIABLE SERVICE-WORK
 VARIABLE MEDIA-SERVICES  VARIABLE MEDIA-WORK
 CREATE DEADLINES 64 CELLS ALLOT
+CREATE TOAST-ROOM 64 ALLOT
 CREATE TEST-DESC 0 , 0 ,
 """
 
@@ -255,13 +264,48 @@ def test_a_quiet_live_owner_without_a_tick_waits_for_input(shell):
 def test_a_toast_without_a_tick_wakes_at_its_expiry(shell):
     shell.start(tick=False, passes=3)
     shell.runtime.evaluate(b'S" saved" 20 ASHELL-TOAST', step_budget=100_000)
-    shell.variable("_ASHELL-DIRTY", 0)
     shell.run()
-    # Expiry at 1020 is earlier than the one-tick resize poll at 1050; the
-    # expiry pass repaints to clear the toast.
+    # The paint's output shows the toast and goes out at once, which
+    # starts its time.  Its expiry at 1020
+    # is earlier than the one-tick resize poll at 1050; the expiry pass
+    # repaints to clear the toast.
     assert shell.deadlines()[0] == 1020
     assert shell.variable("_ASHELL-TOAST-WAS-VIS") == 0
+    assert shell.variable("PAINTS") == 2
+
+
+def test_a_toast_counts_its_time_from_a_late_paint_that_shows_it(shell):
+    shell.start(tick=False, passes=3)
+    shell.runtime.evaluate(b'S" saved" 20 ASHELL-TOAST', step_budget=100_000)
+    # The paint comes 100 ms after the toast was raised, as a slow one
+    # would.  Until output that shows it goes out the toast has not begun
+    # to end, so it sets no deadline: only the resize poll bounds the sleep.
+    shell.variable("FAKE-MS", 1100)
+    assert shell.next_deadline() == 1150
+    shell.run()
+    assert shell.deadlines()[0] == 1120
+    assert shell.variable("_ASHELL-TOAST-WAS-VIS") == 0
+    assert shell.variable("PAINTS") == 2
+
+
+def test_a_toast_counts_its_time_from_when_its_output_goes_out(shell):
+    shell.start(tick=False, passes=2)
+    shell.runtime.evaluate(b'S" saved" 20 ASHELL-TOAST', step_budget=100_000)
+    # The terminal refuses the output that shows the toast, as it does while
+    # a slow frame is still on its way, so the toast has not begun to end.
+    shell.variable("FLUSH-REFUSED", 1)
+    shell.run()
     assert shell.variable("PAINTS") == 1
+    assert shell.variable("_ASHELL-TOAST-ARMED") == 0
+    # The output goes out 300 ms later; the toast's time starts then.
+    shell.variable("FLUSH-REFUSED", 0)
+    shell.variable("FAKE-MS", 1300)
+    shell.variable("YIELDS", 0)
+    shell.variable("PASS-LIMIT", 1)
+    shell.variable("_ASHELL-RUNNING", MASK64)
+    shell.run()
+    assert shell.variable("_ASHELL-TOAST-ARMED") == MASK64
+    assert shell.variable("_ASHELL-TOAST-EXPIRY") == 1320
 
 
 def test_without_an_owner_the_resize_poll_bounds_every_sleep(shell):

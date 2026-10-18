@@ -39,7 +39,6 @@ REQUIRE ../../../interop/service-endpoint.f
 2 CONSTANT _LAPP-PRM-CREATE-TITLE
 3 CONSTANT _LAPP-PRM-CREATE-BODY
 4 CONSTANT _LAPP-PRM-RENAME
-5 CONSTANT _LAPP-PRM-DISCARD-PENDING
 
 1  CONSTANT _LAPP-CREATE-PREPARED
 -1 CONSTANT _LAPP-CREATE-DISPATCHED
@@ -907,8 +906,24 @@ VARIABLE _LPO-CREG  VARIABLE _LPO-RREG  VARIABLE _LPO-BUS
     THEN
     _LAPP-CLEAR-PAGES _LAPP-CLEAR-PREVIEW ;
 
+\ What a status means: neutral when ready, a warning for what passes or the
+\ user can put right, and an error when storage or the service failed.
+: _LAPP-STATUS-SEVERITY  ( status -- severity )
+    CASE
+        LIBRARY-SERVICE-S-OK OF ASHELL-SEVERITY-NEUTRAL ENDOF
+        LIBRARY-SERVICE-S-ABSENT OF ASHELL-SEVERITY-WARNING ENDOF
+        LIBRARY-SERVICE-S-INVALID OF ASHELL-SEVERITY-WARNING ENDOF
+        LIBRARY-SERVICE-S-BUSY OF ASHELL-SEVERITY-WARNING ENDOF
+        LIBRARY-SERVICE-S-CONFLICT OF ASHELL-SEVERITY-WARNING ENDOF
+        LIBRARY-SERVICE-S-NOT-FOUND OF ASHELL-SEVERITY-WARNING ENDOF
+        LIBRARY-SERVICE-S-TOMBSTONED OF ASHELL-SEVERITY-WARNING ENDOF
+        LIBRARY-SERVICE-S-GONE OF ASHELL-SEVERITY-WARNING ENDOF
+        ASHELL-SEVERITY-ERROR SWAP
+    ENDCASE ;
+
 : _LAPP-SHOW-STATUS-TOAST  ( -- )
-    _LAPP-LAST-STATUS @ _LAPP-STATUS$ 2400 ASHELL-TOAST ;
+    _LAPP-LAST-STATUS @ DUP >R _LAPP-STATUS$ 2400 R> _LAPP-STATUS-SEVERITY
+    ASHELL-NOTICE ;
 
 : _LAPP-REFRESH-AFTER-MUTATION  ( -- )
     _LAPP-TOUCH
@@ -1152,7 +1167,7 @@ VARIABLE _LAPP-SHOW-INITIAL-U
 : _LAPP-DO-NEW-MANAGED  ( elem -- )
     DROP
     _LAPP-PENDING-CREATE @ IF
-        S" Resolve or retry the pending create first" 2600 ASHELL-TOAST EXIT
+        S" Resolve or retry the pending create first" 2600 ASHELL-TOAST-WARNING EXIT
     THEN
     _LAPP-CLEAR-PENDING
     _LAPP-PRM-CREATE-TITLE S" New document title:" 0 0
@@ -1162,7 +1177,7 @@ VARIABLE _LAPP-SHOW-INITIAL-U
     DROP
     _LAPP-VIEW @ _LAPP-V-COLLECTIONS =
     _LAPP-VIEW @ _LAPP-V-HISTORY = OR IF
-        S" Select a corpus resource to rename" 2200 ASHELL-TOAST EXIT
+        S" Select a corpus resource to rename" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _LAPP-PREVIEW-READY @ 0= IF _LAPP-SHOW-STATUS-TOAST EXIT THEN
     _LAPP-CAPTURE-CORPUS-TARGET 0= IF EXIT THEN
@@ -1247,21 +1262,15 @@ VARIABLE _LAPP-SHOW-INITIAL-U
 : _LAPP-DO-RETRY-CREATE  ( elem -- )
     DROP
     _LAPP-PENDING-CREATE @ 0= IF
-        S" No create is pending" 1800 ASHELL-TOAST EXIT
+        S" No create is pending" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     _LAPP-DISPATCH-PENDING-CREATE DUP IF
         DROP _LAPP-SHOW-STATUS-TOAST _LAPP-INVALIDATE EXIT
     THEN DROP
     _LAPP-REFRESH-AFTER-MUTATION ;
 
-: _LAPP-DO-QUIT  ( elem -- )
-    DROP
-    _LAPP-PENDING-CREATE @ IF
-        _LAPP-PRM-DISCARD-PENDING
-        S" Type DISCARD to abandon the pending operation:"
-        0 0 _LAPP-SHOW-PROMPT EXIT
-    THEN
-    ASHELL-QUIT ;
+\ A quit is a close request, which asks first when a create is pending.
+: _LAPP-DO-QUIT  ( elem -- )  DROP ASHELL-QUIT ;
 
 : _LAPP-DO-ABOUT  ( elem -- )
     DROP S" Library UX probe - public owner APIs, single instance" 3000
@@ -1280,7 +1289,11 @@ VARIABLE _LAPP-SUB-MODE
         DUP _LAPP-VIEW ! _LAPP-RETURN-VIEW !
     THEN ;
 
+\ The prompt painted over the status bar's row and has just gone inactive.
+\ The status bar repaints that whole row, or its cells would keep the
+\ prompt's paint, in CELL and as foreground over the document.
 : _LAPP-PROMPT-SUBMIT  ( prompt -- )
+    _LAPP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     PRM-GET-TEXT _LAPP-SUB-U ! _LAPP-SUB-A !
     _LAPP-PROMPT-MODE @ _LAPP-SUB-MODE !
     _LAPP-PRM-NONE _LAPP-PROMPT-MODE !
@@ -1289,7 +1302,7 @@ VARIABLE _LAPP-SUB-MODE
             _LAPP-SUB-A @ _LAPP-SUB-U @ _LAPP-QUERY
                 LIBRARY-CORPUS-QUERY-TERM! DUP IF
                 DROP S" Search must be valid UTF-8 and at most 128 bytes"
-                    2600 ASHELL-TOAST
+                    2600 ASHELL-TOAST-WARNING
                 _LAPP-PRM-SEARCH S" Search title, body, and tags:"
                     0 0 _LAPP-SHOW-PROMPT
             ELSE
@@ -1304,7 +1317,7 @@ VARIABLE _LAPP-SUB-MODE
         _LAPP-PRM-CREATE-TITLE OF
             _LAPP-SUB-U @ DUP 0= SWAP LIB-TITLE-MAX > OR
             _LAPP-SUB-A @ _LAPP-SUB-U @ UTF8-VALID? 0= OR IF
-                S" Title must contain 1 to 128 UTF-8 bytes" 2400 ASHELL-TOAST
+                S" Title must contain 1 to 128 UTF-8 bytes" 2400 ASHELL-TOAST-WARNING
                 _LAPP-PRM-CREATE-TITLE S" New document title:"
                     0 0 _LAPP-SHOW-PROMPT
             ELSE
@@ -1318,7 +1331,7 @@ VARIABLE _LAPP-SUB-MODE
             _LAPP-SUB-U @ _LAPP-CREATE-CONTENT-MAX >
             _LAPP-SUB-A @ _LAPP-SUB-U @ UTF8-VALID? 0= OR IF
                 S" Initial text must be valid UTF-8 within 4 KiB"
-                    2400 ASHELL-TOAST
+                    2400 ASHELL-TOAST-WARNING
                 _LAPP-PRM-CREATE-BODY
                     S" Initial text (optional, 4 KiB max):"
                     0 0 _LAPP-SHOW-PROMPT
@@ -1336,7 +1349,7 @@ VARIABLE _LAPP-SUB-MODE
             _LAPP-SUB-U @ DUP 0= SWAP LIB-TITLE-MAX > OR
             _LAPP-SUB-A @ _LAPP-SUB-U @ UTF8-VALID? 0= OR IF
                 S" Title must contain 1 to 128 UTF-8 bytes"
-                    2200 ASHELL-TOAST
+                    2200 ASHELL-TOAST-WARNING
                 _LAPP-PRM-RENAME S" Replace title:"
                     _LAPP-ENTRY LIBE-TITLE$ _LAPP-SHOW-PROMPT
             ELSE
@@ -1347,18 +1360,6 @@ VARIABLE _LAPP-SUB-MODE
                 THEN
             THEN
         ENDOF
-        _LAPP-PRM-DISCARD-PENDING OF
-            _LAPP-SUB-A @ _LAPP-SUB-U @ S" DISCARD" STR-STR= IF
-                _LAPP-CLEAR-PENDING -1 _LAPP-DISCARD-ARMED !
-                ASHELL-QUIT
-            ELSE
-                S" Enter DISCARD exactly to abandon the retry key"
-                    2600 ASHELL-TOAST
-                _LAPP-PRM-DISCARD-PENDING
-                    S" Type DISCARD to abandon the pending operation:"
-                    0 0 _LAPP-SHOW-PROMPT
-            THEN
-        ENDOF
     ENDCASE
     _LAPP-PROMPT @ ?DUP IF
         PRM-ACTIVE? IF _LAPP-INVALIDATE EXIT THEN
@@ -1366,5 +1367,6 @@ VARIABLE _LAPP-SUB-MODE
     _LAPP-FOCUS-BODY _LAPP-INVALIDATE ;
 
 : _LAPP-PROMPT-CANCEL  ( prompt -- )
+    _LAPP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     DROP _LAPP-PRM-NONE _LAPP-PROMPT-MODE !
     _LAPP-FOCUS-BODY _LAPP-INVALIDATE ;

@@ -11,7 +11,7 @@ REQUIRE family-batch.f
 REQUIRE shell-family-emit.f
 
 208 CONSTANT RSHSP-SIZE
-128 CONSTANT RSHSP-BANK-HEADER-SIZE
+136 CONSTANT RSHSP-BANK-HEADER-SIZE
 0x5253485350303031 CONSTANT _RSHSP-MAGIC
 : _RSHSP.MAGIC ( s -- a ) ;
 : _RSHSP.SIZE ( s -- a ) 8 + ;
@@ -55,6 +55,8 @@ REQUIRE shell-family-emit.f
 : RSHSP-BANK.GENERATION ( b -- a ) 104 + ;
 : RSHSP-BANK.NEXT-REGION ( b -- a ) 112 + ;
 : RSHSP-BANK.NEXT-OBJECT ( b -- a ) 120 + ;
+\ The control of Desk's own prompt, or zero.
+: RSHSP-BANK.PROMPT ( b -- a ) 128 + ;
 
 CREATE _RSHSP-OWNED-START VARIABLE _RSHSP-OWNED-LIMIT
 : RSHSP-STORAGE-DISJOINT? ( a u -- flag )
@@ -85,6 +87,7 @@ VARIABLE _RSHSP-REGION VARIABLE _RSHSP-FAMILY VARIABLE _RSHSP-PLAN
 VARIABLE _RSHSP-I VARIABLE _RSHSP-J VARIABLE _RSHSP-RUN VARIABLE _RSHSP-MEMBER
 VARIABLE _RSHSP-TEMP VARIABLE _RSHSP-SAVED VARIABLE _RSHSP-NEW
 VARIABLE _RSHSP-CLAIM-BANK VARIABLE _RSHSP-CLAIM-U VARIABLE _RSHSP-BASE-CLAIM-U
+VARIABLE _RSHSP-UNDER-CLAIM-U VARIABLE _RSHSP-OVERLAY-CLAIM-U
 VARIABLE _RSHSP-HEADS VARIABLE _RSHSP-EVENTS VARIABLE _RSHSP-EVENTS-U
 VARIABLE _RSHSP-DIFF VARIABLE _RSHSP-GQ
 VARIABLE _RSHSP-GITEMS VARIABLE _RSHSP-GREFS VARIABLE _RSHSP-GTEXT
@@ -114,13 +117,16 @@ VARIABLE _RSHSP-STATUS
     _RSHSP-CURSOR @ SWAP DUP _RSHSP-CURSOR +! OVER SWAP 0 FILL ;
 : _RSHSP-COPY ( a u -- dst ) DUP _RSHSP-TAKE DUP >R SWAP MOVE R> ;
 : _RSHSP-ZSPAN ( a u -- a|0 u ) DUP 0= IF NIP 0 SWAP THEN ;
-\ Where the base candidate's controls and instruments are read from: the
-\ producer's own candidate for a START, or for a DELTA its pending target
-\ bank, whose identities the base producer has matched to the acknowledged
-\ ones. The bank keeps unit text references as offsets into its own copy.
+\ Where the base candidate's controls, instruments and series are read
+\ from: the producer's own candidate for a START, or for a DELTA its pending
+\ target bank, whose identities the base producer has matched to the
+\ acknowledged ones. The bank keeps unit text and sample references as
+\ offsets into its own copies.
 VARIABLE _RSHSP-SRC-CONTROLS VARIABLE _RSHSP-SRC-CORR VARIABLE _RSHSP-SRC-REGIONS
 VARIABLE _RSHSP-SRC-INSTRUMENTS VARIABLE _RSHSP-SRC-INSTRUMENT-CORR
 VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-BASE
+VARIABLE _RSHSP-SRC-SERIES VARIABLE _RSHSP-SRC-SAMPLES VARIABLE _RSHSP-SRC-SAMPLES-U
+VARIABLE _RSHSP-SRC-SAMPLE-BASE
 : _RSHSP-SOURCE-CANDIDATE ( -- )
     _RSHSP-P @ _RTHP.CONTROLS-A @ _RSHSP-SRC-CONTROLS !
     _RSHSP-P @ _RTHP.CORR-A @ _RSHSP-SRC-CORR !
@@ -129,7 +135,11 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-P @ _RTHP.INSTRUMENT-CORR-A @ _RSHSP-SRC-INSTRUMENT-CORR !
     _RSHSP-P @ _RTHP.INSTRUMENT-UNITS-A @ _RSHSP-SRC-UNITS !
     _RSHSP-P @ _RTHP.INSTRUMENT-UNITS-USED @ _RSHSP-SRC-UNITS-U !
-    0 _RSHSP-SRC-UNIT-BASE ! ;
+    0 _RSHSP-SRC-UNIT-BASE !
+    _RSHSP-P @ _RTHP.SERIES-A @ _RSHSP-SRC-SERIES !
+    _RSHSP-P @ _RTHP.SERIES-SAMPLES-A @ _RSHSP-SRC-SAMPLES !
+    _RSHSP-P @ _RTHP.SERIES-SAMPLES-USED @ _RSHSP-SRC-SAMPLES-U !
+    0 _RSHSP-SRC-SAMPLE-BASE ! ;
 : _RSHSP-SOURCE-TARGET ( -- )
     _RSHSP-P @ _RTHP.TARGET-PENDING @ >R
     R@ _RTHP-PACK-CONTROLS-A _RSHSP-SRC-CONTROLS !
@@ -138,13 +148,20 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     R@ _RTHP-PACK-INSTRUMENTS-A _RSHSP-SRC-INSTRUMENTS !
     R@ _RTHP-PACK-INSTRUMENT-CORR-A _RSHSP-SRC-INSTRUMENT-CORR !
     R@ _RTHP-PACK-INSTRUMENT-UNITS-A DUP _RSHSP-SRC-UNITS ! _RSHSP-SRC-UNIT-BASE !
-    R> _RTHP-TB.INSTRUMENT-UNIT-BYTES @ _RSHSP-SRC-UNITS-U ! ;
+    R@ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ _RSHSP-SRC-UNITS-U !
+    R@ _RTHP-PACK-SERIES-A _RSHSP-SRC-SERIES !
+    R@ _RTHP-PACK-SERIES-SAMPLES-A DUP _RSHSP-SRC-SAMPLES ! _RSHSP-SRC-SAMPLE-BASE !
+    R> _RTHP-TB.SERIES-SAMPLE-BYTES @ _RSHSP-SRC-SAMPLES-U ! ;
 : _RSHSP-REGION@ ( id -- row ) _RSHSP-CATALOG @ RTE-REGION-CATALOG-FIND DUP _RSHSP-CHECK ;
 : _RSHSP-MEMBER@ ( token -- row ) _RSHSP-MAP @ _RSHSP-MAP-U @ RSHMM-FIND DUP _RSHSP-CHECK ;
 : _RSHSP-CLEAR-RECT ( row col h w -- )
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-RECT-CLEAR?
     SHSN-S-OK = _RSHSP-CHECK _RSHSP-CHECK ;
 : _RSHSP-ENTRY ( i -- e ) _RSHSP-M @ SHM-ENTRY ;
+\ An overlay pane: a slot its host paints above the others, such as one of
+\ Desk's own screens.
+: _RSHSP-OVERLAY-PANE? ( e -- flag )
+    DUP SHME.KIND @ SHM-K-PANE = SWAP SHME.FLAGS @ SHM-F-OVERLAY AND 0<> AND ;
 : _RSHSP-CONTENT-RECT ( e -- row col h w )
     >R R@ SHME.CONTENT-ROW @ R@ SHME.CONTENT-COL @
     R@ SHME.CONTENT-H @ R> SHME.CONTENT-W @ ;
@@ -153,25 +170,253 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     OVER SHME.CONTENT-ROW @ 2 PICK SHME.CONTENT-H @ + R@ SHME.CONTENT-ROW @ > AND
     OVER SHME.CONTENT-COL @ R@ SHME.CONTENT-COL @ R@ SHME.CONTENT-W @ + < AND
     SWAP DUP SHME.CONTENT-COL @ SWAP SHME.CONTENT-W @ + R> SHME.CONTENT-COL @ > AND ;
+\ Panes do not overlap, but an overlay pane lies over the ordinary panes
+\ beneath it.
+: _RSHSP-PANES-APART? ( e e -- flag )
+    OVER _RSHSP-OVERLAY-PANE? OVER _RSHSP-OVERLAY-PANE? <> IF 2DROP -1 EXIT THEN
+    _RSHSP-OVERLAP? 0= ;
+\ The host paints an overlay pane after the panes beneath it, as foreground,
+\ and that paint is the overlay pane's own.  A rectangle of a pane beneath
+\ is clear when every cell no overlay pane covers is: its rows are taken in
+\ bands between the overlay panes' top and bottom edges, and each band in
+\ the spans between the overlay panes it meets.  Overlay panes do not
+\ overlap one another; where they would, the cells of the later one are
+\ checked, which refuses.
+VARIABLE _RSHSP-CX-R0 VARIABLE _RSHSP-CX-C0 VARIABLE _RSHSP-CX-R1 VARIABLE _RSHSP-CX-C1
+VARIABLE _RSHSP-CX-A VARIABLE _RSHSP-CX-B VARIABLE _RSHSP-CX-COL
+VARIABLE _RSHSP-CX-S VARIABLE _RSHSP-CX-E
+: _RSHSP-CX-EDGE ( row -- )
+    DUP _RSHSP-CX-A @ > OVER _RSHSP-CX-B @ < AND IF _RSHSP-CX-B ! ELSE DROP THEN ;
+\ B: the first overlay pane edge below row A, or the rectangle's end.
+: _RSHSP-CX-BAND ( -- )
+    _RSHSP-CX-R1 @ _RSHSP-CX-B !
+    _RSHSP-N @ 0 ?DO
+        I _RSHSP-ENTRY DUP _RSHSP-OVERLAY-PANE? IF
+            DUP SHME.CONTENT-ROW @ _RSHSP-CX-EDGE
+            DUP SHME.CONTENT-ROW @ OVER SHME.CONTENT-H @ + _RSHSP-CX-EDGE
+        THEN DROP
+    LOOP ;
+\ S..E: the first span from COL on that an overlay pane covers in band
+\ A..B, cut to the rectangle; S = E = the rectangle's end when none does.
+: _RSHSP-CX-SPAN ( -- )
+    _RSHSP-CX-C1 @ DUP _RSHSP-CX-S ! _RSHSP-CX-E !
+    _RSHSP-N @ 0 ?DO
+        I _RSHSP-ENTRY DUP _RSHSP-OVERLAY-PANE? IF
+            DUP SHME.CONTENT-ROW @ _RSHSP-CX-A @ > 0=
+            OVER DUP SHME.CONTENT-ROW @ SWAP SHME.CONTENT-H @ + _RSHSP-CX-B @ < 0= AND IF
+                DUP SHME.CONTENT-COL @ _RSHSP-CX-C0 @ MAX
+                OVER DUP SHME.CONTENT-COL @ SWAP SHME.CONTENT-W @ + _RSHSP-CX-C1 @ MIN
+                2DUP <
+                2 PICK _RSHSP-CX-COL @ < 0= AND
+                2 PICK _RSHSP-CX-S @ < AND IF
+                    _RSHSP-CX-E ! _RSHSP-CX-S !
+                ELSE 2DROP THEN
+            THEN
+        THEN DROP
+    LOOP ;
+: _RSHSP-UNCOVERED-CLEAR ( row col h w -- )
+    _RSHSP-CX-C1 ! _RSHSP-CX-R1 ! _RSHSP-CX-C0 ! _RSHSP-CX-R0 !
+    _RSHSP-CX-C0 @ _RSHSP-CX-C1 +! _RSHSP-CX-R0 @ _RSHSP-CX-R1 +!
+    _RSHSP-CX-R0 @ _RSHSP-CX-A !
+    BEGIN _RSHSP-CX-A @ _RSHSP-CX-R1 @ < WHILE
+        _RSHSP-CX-BAND _RSHSP-CX-C0 @ _RSHSP-CX-COL !
+        BEGIN _RSHSP-CX-COL @ _RSHSP-CX-C1 @ < WHILE
+            _RSHSP-CX-SPAN
+            _RSHSP-CX-S @ _RSHSP-CX-COL @ > IF
+                _RSHSP-CX-A @ _RSHSP-CX-COL @
+                _RSHSP-CX-B @ _RSHSP-CX-A @ - _RSHSP-CX-S @ _RSHSP-CX-COL @ -
+                _RSHSP-CLEAR-RECT
+            THEN
+            _RSHSP-CX-E @ _RSHSP-CX-COL !
+        REPEAT
+        _RSHSP-CX-B @ _RSHSP-CX-A !
+    REPEAT ;
+\ A pane's overlay.  The document in a pane may paint one overlay over its
+\ own content: the prompt it shows, captured as the last record of its
+\ field snapshot, or the dialog it shows, a DIALOG with its buttons after
+\ it and inside it.  The overlay's cells are its own; every other cell of
+\ the pane must still be the shell's to project.  With dialogs negotiated
+\ the overlay goes in a modal region over the pane's content, so the
+\ terminal shows the rest of that application inactive while it is open.
+\ Without them a prompt stays in the pane's content region, and there is no
+\ dialog.  A record per overlay: its root's control index, its pane's SHM
+\ entry index, and its modal region (0 while there is none).
+24 CONSTANT _RSHSP-OV-SIZE
+VARIABLE _RSHSP-OVERLAYS VARIABLE _RSHSP-OV-N VARIABLE _RSHSP-MODAL-N
+VARIABLE _RSHSP-OVR VARIABLE _RSHSP-OVC VARIABLE _RSHSP-OVH VARIABLE _RSHSP-OVW
+: _RSHSP-OV ( i -- record ) _RSHSP-OV-SIZE * _RSHSP-OVERLAYS @ + ;
+: _RSHSP-SRC-KIND ( index -- kind )
+    RTE-CONTROL-SIZE * _RSHSP-SRC-CONTROLS @ + _RTE-CONTROL.KIND @ ;
+: _RSHSP-SRC-ATTACHMENT ( index -- token )
+    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-ATTACHMENT@ ;
+: _RSHSP-SRC-SOURCE ( index -- source )
+    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ + RUCP-CORRELATION-SOURCE@ ;
+\ The root of an overlay: a document's prompt field, or the dialog widget
+\ it shows.  A dialog element is the document's own paint, not an overlay.
+: _RSHSP-OVERLAY-CONTROL? ( index -- flag )
+    DUP _RSHSP-SRC-KIND DUP RTE-CONTROL-DIALOG = IF
+        DROP _RSHSP-SRC-SOURCE UDLSN-SOURCE-OVERLAY = EXIT
+    THEN
+    RTE-CONTROL-FIELD <> IF DROP 0 EXIT THEN
+    _RSHSP-SRC-SOURCE UFLSN-SOURCE-OVERLAY = ;
+\ The signed slot of the document a token names; refuses an absent one.
+: _RSHSP-DOCUMENT-SLOT ( token -- slot-id )
+    _RSHSP-P @ _RTHP.SOURCE-DIR-USED @ RUHA-DOCUMENT-SIZE / 0 ?DO
+        _RSHSP-P @ _RTHP.SOURCE-DIR-A @ I RUHA-DOCUMENT-SIZE * +
+        2DUP RUHA-DOCUMENT-TOKEN@ = IF NIP RUHA-DOCUMENT-SLOT-ID@ UNLOOP EXIT THEN
+        DROP
+    LOOP DROP _RSHSP-FAIL ;
+\ The SHM entry index of the pane that shows a slot; refuses none.
+: _RSHSP-SLOT-PANE ( slot-id -- index )
+    _RSHSP-N @ 0 ?DO
+        I _RSHSP-ENTRY DUP SHME.KIND @ SHM-K-PANE =
+        SWAP SHME.IDENTITY @ 2 PICK = AND IF DROP I UNLOOP EXIT THEN
+    LOOP DROP _RSHSP-FAIL ;
+: _RSHSP-OVERLAYS! ( -- )
+    _RSHSP-N @ _RSHSP-OV-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-OVERLAYS !
+    0 _RSHSP-OV-N !
+    _RSHSP-P @ _RTHP.CONTROL-COUNT @ 0 ?DO
+        I _RSHSP-OVERLAY-CONTROL? IF
+            I _RSHSP-SRC-ATTACHMENT _RSHSP-DOCUMENT-SLOT _RSHSP-SLOT-PANE
+            \ One overlay a pane.
+            _RSHSP-OV-N @ 0 ?DO DUP I _RSHSP-OV 8 + @ <> _RSHSP-CHECK LOOP
+            _RSHSP-OV-N @ _RSHSP-N @ U< _RSHSP-CHECK
+            _RSHSP-OV-N @ _RSHSP-OV I OVER ! TUCK 8 + ! 0 SWAP 16 + !
+            1 _RSHSP-OV-N +!
+        THEN
+    LOOP ;
+: _RSHSP-PANE-OVERLAY ( index -- record|0 )
+    _RSHSP-OV-N @ 0 ?DO
+        I _RSHSP-OV DUP 8 + @ 2 PICK = IF NIP UNLOOP EXIT THEN DROP
+    LOOP DROP 0 ;
+: _RSHSP-OV-CONTROL ( record -- control ) @ RTE-CONTROL-SIZE * _RSHSP-SRC-CONTROLS @ + ;
+: _RSHSP-BAND-CLEAR ( row col h w -- )
+    DUP 0> 2 PICK 0> AND IF _RSHSP-UNCOVERED-CLEAR ELSE 2DROP 2DROP THEN ;
+\ The overlay's root lies inside the pane's content, and the four bands of
+\ the pane around it are clear.  The overlay's own cells are taken as its
+\ paint, as the aggregate adapter took them; a dialog's buttons lie inside
+\ its root.
+: _RSHSP-OVERLAY-CLEAR ( entry control -- )
+    DUP _RTE-CONTROL.ROW @ _RSHSP-OVR ! DUP _RTE-CONTROL.COL @ _RSHSP-OVC !
+    DUP _RTE-CONTROL.HEIGHT @ _RSHSP-OVH ! _RTE-CONTROL.WIDTH @ _RSHSP-OVW !
+    _RSHSP-E !
+    _RSHSP-OVH @ 0> _RSHSP-OVW @ 0> AND _RSHSP-CHECK
+    _RSHSP-OVR @ _RSHSP-E @ SHME.CONTENT-ROW @ >= _RSHSP-CHECK
+    _RSHSP-OVC @ _RSHSP-E @ SHME.CONTENT-COL @ >= _RSHSP-CHECK
+    _RSHSP-OVR @ _RSHSP-OVH @ +
+        _RSHSP-E @ SHME.CONTENT-ROW @ _RSHSP-E @ SHME.CONTENT-H @ + > 0= _RSHSP-CHECK
+    _RSHSP-OVC @ _RSHSP-OVW @ +
+        _RSHSP-E @ SHME.CONTENT-COL @ _RSHSP-E @ SHME.CONTENT-W @ + > 0= _RSHSP-CHECK
+    _RSHSP-E @ SHME.ROW @ _RSHSP-E @ SHME.COL @
+        _RSHSP-OVR @ _RSHSP-E @ SHME.ROW @ - _RSHSP-E @ SHME.WIDTH @ _RSHSP-BAND-CLEAR
+    _RSHSP-OVR @ _RSHSP-OVH @ + _RSHSP-E @ SHME.COL @
+        _RSHSP-E @ SHME.ROW @ _RSHSP-E @ SHME.HEIGHT @ + _RSHSP-OVR @ _RSHSP-OVH @ + -
+        _RSHSP-E @ SHME.WIDTH @ _RSHSP-BAND-CLEAR
+    _RSHSP-OVR @ _RSHSP-E @ SHME.COL @ _RSHSP-OVH @
+        _RSHSP-OVC @ _RSHSP-E @ SHME.COL @ - _RSHSP-BAND-CLEAR
+    _RSHSP-OVR @ _RSHSP-OVC @ _RSHSP-OVW @ + _RSHSP-OVH @
+        _RSHSP-E @ SHME.COL @ _RSHSP-E @ SHME.WIDTH @ + _RSHSP-OVC @ _RSHSP-OVW @ + -
+        _RSHSP-BAND-CLEAR ;
+\ Every cell of a pane is the shell's to project but its document's overlay
+\ and the overlay panes above it.  An overlay pane's cells are its own
+\ foreground paint.  Its document shows no overlay of its own, which would
+\ need a modal region above the overlay pane's.
+: _RSHSP-PANE-CLEAR ( index entry -- )
+    DUP _RSHSP-OVERLAY-PANE? IF DROP _RSHSP-PANE-OVERLAY 0= _RSHSP-CHECK EXIT THEN
+    SWAP _RSHSP-PANE-OVERLAY ?DUP IF _RSHSP-OV-CONTROL _RSHSP-OVERLAY-CLEAR EXIT THEN
+    >R R@ SHME.ROW @ R@ SHME.COL @ R@ SHME.HEIGHT @ R> SHME.WIDTH @
+    DUP 0> 2 PICK 0> AND _RSHSP-CHECK _RSHSP-UNCOVERED-CLEAR ;
+\ Desk's own prompt, while it holds the hidden taskbar row: its field's
+\ UFLD model in the copied shell model, its control and its region.
+VARIABLE _RSHSP-PROMPT-A VARIABLE _RSHSP-PROMPT-U VARIABLE _RSHSP-PROMPT-N
+VARIABLE _RSHSP-PROMPT-ID VARIABLE _RSHSP-PROMPT-REGION VARIABLE _RSHSP-ROW-ID
+: _RSHSP-DIALOGS? ( -- flag )
+    _RSHSP-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@ RTE-F-DIALOGS AND 0<> ;
+\ The app shell's notice, with dialogs negotiated: its UDLG model in the
+\ copied shell model, where its root lies, its control and its region.
+\ Without dialogs a notice is paint over the taskbar, as before.
+VARIABLE _RSHSP-NOTICE-A VARIABLE _RSHSP-NOTICE-U VARIABLE _RSHSP-NOTICE-N
+VARIABLE _RSHSP-NOTICE-ID VARIABLE _RSHSP-NOTICE-REGION
+VARIABLE _RSHSP-NR VARIABLE _RSHSP-NC VARIABLE _RSHSP-NH VARIABLE _RSHSP-NW
+: _RSHSP-NOTICE! ( -- )
+    _RSHSP-DIALOGS? IF _RSHSP-M @ SHM-NOTICE@ ELSE 0 0 THEN
+    DUP _RSHSP-NOTICE-U ! SWAP _RSHSP-NOTICE-A ! 0<> 1 AND _RSHSP-NOTICE-N !
+    0 _RSHSP-NR ! 0 _RSHSP-NC ! 0 _RSHSP-NH ! 0 _RSHSP-NW !
+    _RSHSP-NOTICE-N @ 0= IF EXIT THEN
+    _RSHSP-M @ SHM.NOTICE-ROW @ _RSHSP-NR ! _RSHSP-M @ SHM.NOTICE-COL @ _RSHSP-NC !
+    _RSHSP-NOTICE-A @ DUP UDLG-HEIGHT@ _RSHSP-NH ! UDLG-WIDTH@ _RSHSP-NW ! ;
+: _RSHSP-IN-NOTICE? ( row col -- flag )
+    _RSHSP-NC @ - _RSHSP-NW @ U< SWAP _RSHSP-NR @ - _RSHSP-NH @ U< AND ;
+\ The notice's cells are its own paint.  A rectangle of the shell is clear
+\ when every cell of it the notice leaves is: what one rectangle leaves of
+\ another is at most the bands above and below it and the spans beside it.
+VARIABLE _RSHSP-NX-R0 VARIABLE _RSHSP-NX-C0 VARIABLE _RSHSP-NX-R1 VARIABLE _RSHSP-NX-C1
+VARIABLE _RSHSP-PC-R0 VARIABLE _RSHSP-PC-C0 VARIABLE _RSHSP-PC-R1 VARIABLE _RSHSP-PC-C1
+\ Rows R0 to R1 and columns C0 to C1, ends excluded, are clear; an empty
+\ part is.
+: _RSHSP-PART-CLEAR? ( r0 c0 r1 c1 -- flag )
+    _RSHSP-PC-C1 ! _RSHSP-PC-R1 ! _RSHSP-PC-C0 ! _RSHSP-PC-R0 !
+    _RSHSP-PC-R1 @ _RSHSP-PC-R0 @ > 0= _RSHSP-PC-C1 @ _RSHSP-PC-C0 @ > 0= OR
+        IF -1 EXIT THEN
+    _RSHSP-PC-R0 @ _RSHSP-PC-C0 @
+    _RSHSP-PC-R1 @ _RSHSP-PC-R0 @ - _RSHSP-PC-C1 @ _RSHSP-PC-C0 @ -
+    _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-RECT-CLEAR?
+    SHSN-S-OK = AND ;
+: _RSHSP-UNNOTICED-CLEAR? ( row col h w -- flag )
+    DUP 0> 2 PICK 0> AND 0= IF 2DROP 2DROP 0 EXIT THEN
+    2 PICK + _RSHSP-NX-C1 ! 2 PICK + _RSHSP-NX-R1 ! _RSHSP-NX-C0 ! _RSHSP-NX-R0 !
+    _RSHSP-NOTICE-N @ 0<>
+    _RSHSP-NR @ _RSHSP-NX-R1 @ < AND _RSHSP-NR @ _RSHSP-NH @ + _RSHSP-NX-R0 @ > AND
+    _RSHSP-NC @ _RSHSP-NX-C1 @ < AND _RSHSP-NC @ _RSHSP-NW @ + _RSHSP-NX-C0 @ > AND 0= IF
+        _RSHSP-NX-R0 @ _RSHSP-NX-C0 @ _RSHSP-NX-R1 @ _RSHSP-NX-C1 @ _RSHSP-PART-CLEAR? EXIT
+    THEN
+    _RSHSP-NX-R0 @ _RSHSP-NX-C0 @ _RSHSP-NR @ _RSHSP-NX-C1 @
+        _RSHSP-PART-CLEAR? 0= IF 0 EXIT THEN
+    _RSHSP-NR @ _RSHSP-NH @ + _RSHSP-NX-C0 @ _RSHSP-NX-R1 @ _RSHSP-NX-C1 @
+        _RSHSP-PART-CLEAR? 0= IF 0 EXIT THEN
+    _RSHSP-NR @ _RSHSP-NX-R0 @ MAX _RSHSP-NX-C0 @
+        _RSHSP-NR @ _RSHSP-NH @ + _RSHSP-NX-R1 @ MIN _RSHSP-NC @
+        _RSHSP-PART-CLEAR? 0= IF 0 EXIT THEN
+    _RSHSP-NR @ _RSHSP-NX-R0 @ MAX _RSHSP-NC @ _RSHSP-NW @ +
+        _RSHSP-NR @ _RSHSP-NH @ + _RSHSP-NX-R1 @ MIN _RSHSP-NX-C1 @
+        _RSHSP-PART-CLEAR? ;
+\ Desk's status at the taskbar's right end, with status fields negotiated:
+\ its USF model in the copied shell model, where it lies, the identity its
+\ static takes and its region.  Its cells the notice leaves must be the
+\ shell's own paint; otherwise, or without status fields, it is residual
+\ glyphs, as before.
+VARIABLE _RSHSP-STATUS-A VARIABLE _RSHSP-STATUS-N
+VARIABLE _RSHSP-STATUS-ID VARIABLE _RSHSP-STATUS-REGION
+VARIABLE _RSHSP-SR VARIABLE _RSHSP-SC VARIABLE _RSHSP-SW
+: _RSHSP-STATUS! ( -- )
+    0 _RSHSP-STATUS-N ! 0 _RSHSP-SR ! 0 _RSHSP-SC ! 0 _RSHSP-SW !
+    _RSHSP-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@ RTE-F-STATUS-FIELDS AND 0= IF EXIT THEN
+    _RSHSP-M @ SHM-STATUS@ 0= IF DROP EXIT THEN _RSHSP-STATUS-A !
+    _RSHSP-M @ SHM.STATUS-ROW @ _RSHSP-SR ! _RSHSP-M @ SHM.STATUS-COL @ _RSHSP-SC !
+    _RSHSP-STATUS-A @ USF-WIDTH@ _RSHSP-SW !
+    _RSHSP-SR @ _RSHSP-SC @ 1 _RSHSP-SW @ _RSHSP-UNNOTICED-CLEAR?
+        1 AND _RSHSP-STATUS-N ! ;
 : _RSHSP-ELIGIBILITY ( -- )
     _RSHSP-N @ 0 ?DO I _RSHSP-ENTRY DUP SHME.KIND @ SHM-K-PANE = IF
-        DUP _RSHSP-E ! >R R@ SHME.ROW @ R@ SHME.COL @
-        R@ SHME.HEIGHT @ R> SHME.WIDTH @ _RSHSP-CLEAR-RECT
+        DUP _RSHSP-E ! I SWAP _RSHSP-PANE-CLEAR
         I 0 ?DO I _RSHSP-ENTRY DUP SHME.KIND @ SHM-K-PANE = IF
-            _RSHSP-E @ _RSHSP-OVERLAP? 0= _RSHSP-CHECK ELSE DROP THEN LOOP
+            _RSHSP-E @ _RSHSP-PANES-APART? _RSHSP-CHECK ELSE DROP THEN LOOP
         1 _RSHSP-ELIGIBLE @ I 8 * + !
     ELSE DROP THEN LOOP ;
 : _RSHSP-GAP-BLANK? ( row col h w -- flag )
     _RSHSP-BYTES ! DROP _RSHSP-START ! _RSHSP-TEMP !
-    _RSHSP-BYTES @ 0 ?DO _RSHSP-TEMP @ _RSHSP-START @ I + SCR-GET
-        DUP _SCR-C-PAIR AND IF DROP 0 UNLOOP EXIT THEN
-        CELL-CP@ DUP 0= SWAP 32 = OR 0= IF 0 UNLOOP EXIT THEN LOOP -1 ;
+    _RSHSP-BYTES @ 0 ?DO
+        _RSHSP-TEMP @ _RSHSP-START @ I + _RSHSP-IN-NOTICE? 0= IF
+            _RSHSP-TEMP @ _RSHSP-START @ I + SCR-GET
+            DUP _SCR-C-PAIR AND IF DROP 0 UNLOOP EXIT THEN
+            CELL-CP@ DUP 0= SWAP 32 = OR 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
 : _RSHSP-BAND? ( kind -- flag )
     _RSHSP-KIND !
     _RSHSP-KIND @ _RSHSP-M @ _RSHSP-MU @ _RSHPL-BAND-BOUNDS-PROVED
     RSHPL-S-OK <> IF 2DROP 2DROP 0 EXIT THEN
-    _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-RECT-CLEAR?
-    SHSN-S-OK <> IF DROP 0 EXIT THEN 0= IF 0 EXIT THEN
+    _RSHSP-UNNOTICED-CLEAR? 0= IF 0 EXIT THEN
     0 _RSHSP-I ! BEGIN
         _RSHSP-I @ _RSHSP-KIND @ _RSHSP-M @ _RSHSP-MU @ _RSHPL-GAP-BOUNDS-PROVED
         DUP RSHPL-S-END = IF DROP 2DROP 2DROP -1 EXIT THEN
@@ -191,7 +436,10 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-N @ 4 _RSHSP-MUL 2 _RSHSP-ADD RSHPL-CLAIM-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-CLAIMS !
     _RSHSP-MU @ _RSHSP-TAKE _RSHSP-ACTIONS !
     _RSHSP-N @ RSHMM-ENTRY-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-MAP !
-    _RSHSP-ELIGIBILITY
+    _RSHSP-M @ SHM-PROMPT@ DUP _RSHSP-PROMPT-U ! SWAP _RSHSP-PROMPT-A !
+        IF 1 ELSE 0 THEN _RSHSP-PROMPT-N !
+    _RSHSP-NOTICE! _RSHSP-STATUS!
+    _RSHSP-OVERLAYS! _RSHSP-ELIGIBILITY
     0 _RSHSP-BANDS !
     SHM-K-TASK _RSHSP-BAND? IF 1 _RSHSP-BANDS +! THEN
     SHM-K-LAUNCHER _RSHSP-BAND? IF 2 _RSHSP-BANDS +! THEN
@@ -199,18 +447,23 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
         DUP SHM-K-TASK = IF _RSHSP-BANDS @ 1 AND 0= IF 0 _RSHSP-BANDS ! THEN THEN
         SHM-K-LAUNCHER = IF _RSHSP-BANDS @ 2 AND 0= IF 0 _RSHSP-BANDS ! THEN THEN
     LOOP
-    _RSHSP-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @ DUP 2147483644 > IF DROP _RSHSP-FAIL THEN
+    _RSHSP-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @ DUP 2147483643 > IF DROP _RSHSP-FAIL THEN
         _RSHSP-CONTENT-Z !
     _RSHSP-P @ _RTHP.REGION @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ _RSHSP-ADD
         1 _RSHSP-ADD _RSHSP-FIRST-REGION !
+    \ The first identity past the base candidate's objects.  The shell's
+    \ controls take the identities after the applet controls, COPY-RUN moves
+    \ the statics and instruments up past them, and Desk's status, which
+    \ takes this one, with them.  The panes and residual glyphs follow.
+    _RSHSP-P @ _RTHP.FIRST-OBJECT @ _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-ADD
+        _RSHSP-P @ _RTHP.INSTRUMENT-LAST @ 1 _RSHSP-ADD MAX
+        _RSHSP-P @ _RTHP.STATIC-LAST @ 1 _RSHSP-ADD MAX _RSHSP-STATUS-ID !
     _RSHSP-M @ _RSHSP-MU @ _RSHSP-M @ SHM.OWNER-ID @
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-ELIGIBLE @ _RSHSP-N @ 8 *
     _RSHSP-BANDS @ _RSHSP-Q @ RSHPL-REQUEST-SOURCE!
     _RSHSP-P @ _RTHP.OWNER @ _RSHSP-P @ _RTHP.OWNER-GEN @ _RSHSP-FIRST-REGION @
-    _RSHSP-P @ _RTHP.FIRST-OBJECT @ _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-ADD
-        _RSHSP-P @ _RTHP.INSTRUMENT-LAST @ 1 _RSHSP-ADD MAX
-        _RSHSP-P @ _RTHP.STATIC-LAST @ 1 _RSHSP-ADD MAX
-        _RSHSP-N @ _RSHSP-ADD 2 _RSHSP-ADD
+    _RSHSP-STATUS-ID @ _RSHSP-N @ _RSHSP-ADD 2 _RSHSP-ADD _RSHSP-NOTICE-N @ _RSHSP-ADD
+        _RSHSP-STATUS-N @ _RSHSP-ADD
     _RSHSP-P @ _RTHP.FIRST-OBJECT @ _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-ADD
     _RSHSP-Q @ RSHPL-REQUEST-IDENTITY!
     -3 _RSHSP-CONTENT-Z @ _RSHSP-CONTENT-Z @ 1+ _RSHSP-Q @ RSHPL-REQUEST-Z!
@@ -226,6 +479,15 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-RESULT @ RSHPL-RESULT.PANES @
     _RSHSP-RESULT @ RSHPL-RESULT.TASKBARS @ OR _RSHSP-CHECK
     _RSHSP-RESULT @ RSHPL-RESULT.CONTROLS @ _RSHSP-SHELL-CONTROLS !
+    \ Desk's prompt follows the shell's taskbar controls, and the notice it.
+    _RSHSP-PROMPT-N @ IF
+        _RSHSP-P @ _RTHP.FIRST-OBJECT @ _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-ADD
+        _RSHSP-SHELL-CONTROLS @ _RSHSP-ADD
+    ELSE 0 THEN _RSHSP-PROMPT-ID !
+    _RSHSP-NOTICE-N @ IF
+        _RSHSP-P @ _RTHP.FIRST-OBJECT @ _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-ADD
+        _RSHSP-SHELL-CONTROLS @ _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD
+    ELSE 0 THEN _RSHSP-NOTICE-ID !
     _RSHSP-Q @ _RSHPL-Q.FIRST-OBJECT @
         _RSHSP-RESULT @ RSHPL-RESULT.PANES @ _RSHSP-ADD _RSHSP-NEXT-ID !
     _RSHSP-M @ _RSHSP-MU @
@@ -244,14 +506,114 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     DUP _RTE-IR.ROWS @ OVER _RTE-IR.CLIP-ROWS !
     DUP _RTE-IR.FLAGS @ RTE-REGION-CLIPPED OR SWAP _RTE-IR.FLAGS ! ;
 
+\ A modal region for each overlay follows the planner's regions.  Like a
+\ pane's content region it has the surface as its logical bounds and the
+\ pane's content as its clip, and it sits above every region of the shell.
+: _RSHSP-MODAL-ROWS ( first-row -- next-row )
+    _RSHSP-MODAL-N @ 0 ?DO
+        I _RSHSP-OV 8 + @ _RSHSP-ENTRY _RSHSP-E !
+        _RSHSP-ROW-ID @ I _RSHSP-OV 16 + !
+        _RSHSP-ROW-ID @ OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
+        _RSHSP-P @ _RTHP.COLS @ OVER _RTE-IR.COLS !
+        _RSHSP-P @ _RTHP.ROWS @ OVER _RTE-IR.ROWS !
+        _RSHSP-E @ SHME.CONTENT-COL @ OVER _RTE-IR.CLIP-X !
+        _RSHSP-E @ SHME.CONTENT-ROW @ OVER _RTE-IR.CLIP-Y !
+        _RSHSP-E @ SHME.CONTENT-W @ OVER _RTE-IR.CLIP-COLS !
+        _RSHSP-E @ SHME.CONTENT-H @ OVER _RTE-IR.CLIP-ROWS !
+        _RSHSP-CONTENT-Z @ 2 + OVER _RTE-IR.Z !
+        RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR
+            OVER _RTE-IR.FLAGS !
+        96 +
+    LOOP ;
+\ An overlay pane's host gives it every key while it is open and ignores a
+\ press outside it, as Desk does its own screens.  With dialogs the
+\ overlay pane's document therefore goes in a modal region over the whole
+\ screen, surface-sized with the surface as its clip: a modal scope over
+\ everything beneath it.  The regions follow the overlays' modal regions
+\ at the same z, so they lie above them, and Desk's prompt lies above all.
+VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
+: _RSHSP-SCREEN-ROWS ( first-row -- next-row )
+    _RSHSP-ROW-ID @ _RSHSP-SCREEN-FIRST !
+    _RSHSP-SCREEN-N @ 0 ?DO
+        _RSHSP-ROW-ID @ OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
+        _RSHSP-P @ _RTHP.COLS @ 2DUP SWAP _RTE-IR.COLS ! OVER _RTE-IR.CLIP-COLS !
+        _RSHSP-P @ _RTHP.ROWS @ 2DUP SWAP _RTE-IR.ROWS ! OVER _RTE-IR.CLIP-ROWS !
+        _RSHSP-CONTENT-Z @ 2 + OVER _RTE-IR.Z !
+        RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR
+            OVER _RTE-IR.FLAGS !
+        96 +
+    LOOP ;
+\ The modal region of the overlay pane at INDEX, in pane order, or 0.
+: _RSHSP-SCREEN-REGION ( index -- region|0 )
+    _RSHSP-SCREEN-N @ 0= IF DROP 0 EXIT THEN
+    DUP _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? 0= IF DROP 0 EXIT THEN
+    _RSHSP-SCREEN-FIRST @ SWAP 0 ?DO
+        I _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? IF 1+ THEN
+    LOOP ;
+\ Desk's own prompt holds the hidden taskbar row.  With dialogs its region
+\ is a modal scope over the whole screen, since Desk takes no other input
+\ while the prompt is open; without them it is that row alone.  It sits
+\ above every other region of the shell, the panes' modal regions too.
+: _RSHSP-PROMPT-REGION-ROW ( row -- next-row )
+    _RSHSP-PROMPT-N @ 0= IF 0 _RSHSP-PROMPT-REGION ! EXIT THEN
+    _RSHSP-ROW-ID @ DUP _RSHSP-PROMPT-REGION ! OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
+    _RSHSP-P @ _RTHP.COLS @ 2DUP SWAP _RTE-IR.COLS ! OVER _RTE-IR.CLIP-COLS !
+    _RSHSP-P @ _RTHP.ROWS @ OVER _RTE-IR.ROWS !
+    _RSHSP-DIALOGS? IF
+        _RSHSP-P @ _RTHP.ROWS @ OVER _RTE-IR.CLIP-ROWS !
+        RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR
+    ELSE
+        _RSHSP-P @ _RTHP.ROWS @ 1- OVER _RTE-IR.CLIP-Y !
+        1 OVER _RTE-IR.CLIP-ROWS !
+        RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
+    THEN OVER _RTE-IR.FLAGS !
+    _RSHSP-CONTENT-Z @ 3 + OVER _RTE-IR.Z ! 96 + ;
+\ The app shell's notice lies in a region of its own, its rectangle the
+\ clip, above every other region of the shell, Desk's prompt too.  It is no
+\ modal scope: the notice takes no input, and what lies beneath it stays
+\ active.
+: _RSHSP-NOTICE-REGION-ROW ( row -- next-row )
+    _RSHSP-NOTICE-N @ 0= IF 0 _RSHSP-NOTICE-REGION ! EXIT THEN
+    _RSHSP-ROW-ID @ DUP _RSHSP-NOTICE-REGION ! OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
+    _RSHSP-P @ _RTHP.COLS @ OVER _RTE-IR.COLS !
+    _RSHSP-P @ _RTHP.ROWS @ OVER _RTE-IR.ROWS !
+    _RSHSP-NC @ OVER _RTE-IR.CLIP-X ! _RSHSP-NR @ OVER _RTE-IR.CLIP-Y !
+    _RSHSP-NW @ OVER _RTE-IR.CLIP-COLS ! _RSHSP-NH @ OVER _RTE-IR.CLIP-ROWS !
+    _RSHSP-CONTENT-Z @ 4 + OVER _RTE-IR.Z !
+    RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR OVER _RTE-IR.FLAGS !
+    96 + ;
+
+\ Desk's status lies in a region of its own across the taskbar's right end,
+\ past its entries, at the taskbar's z.  It takes no input.
+: _RSHSP-STATUS-REGION-ROW ( row -- next-row )
+    _RSHSP-STATUS-N @ 0= IF 0 _RSHSP-STATUS-REGION ! EXIT THEN
+    _RSHSP-ROW-ID @ DUP _RSHSP-STATUS-REGION ! OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
+    _RSHSP-P @ _RTHP.COLS @ OVER _RTE-IR.COLS !
+    _RSHSP-P @ _RTHP.ROWS @ OVER _RTE-IR.ROWS !
+    _RSHSP-M @ SHM.END-COL @ OVER _RTE-IR.CLIP-X ! _RSHSP-SR @ OVER _RTE-IR.CLIP-Y !
+    _RSHSP-P @ _RTHP.COLS @ _RSHSP-M @ SHM.END-COL @ - OVER _RTE-IR.CLIP-COLS !
+    1 OVER _RTE-IR.CLIP-ROWS !
+    _RSHSP-CONTENT-Z @ 1+ OVER _RTE-IR.Z !
+    RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR OVER _RTE-IR.FLAGS !
+    96 + ;
+
 : _RSHSP-CATALOG! ( -- )
     RTE-REGION-CATALOG-SIZE _RSHSP-TAKE _RSHSP-CATALOG !
     _RSHSP-P @ _RTHP.OWNER @ _RSHSP-CATALOG @ _RTE-RC.OWNER !
     _RSHSP-P @ _RTHP.OWNER-GEN @ _RSHSP-CATALOG @ _RTE-RC.GENERATION !
     _RSHSP-P @ _RTHP.COLS @ _RSHSP-CATALOG @ _RTE-RC.SURFACE-COLS !
     _RSHSP-P @ _RTHP.ROWS @ _RSHSP-CATALOG @ _RTE-RC.SURFACE-ROWS !
+    _RSHSP-DIALOGS? IF _RSHSP-OV-N @ ELSE 0 THEN _RSHSP-MODAL-N !
+    0 _RSHSP-SCREEN-N ! _RSHSP-DIALOGS? IF
+        _RSHSP-N @ 0 ?DO
+            I _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? IF 1 _RSHSP-SCREEN-N +! THEN
+        LOOP
+    THEN
     _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @
-    _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ _RSHSP-ADD 1 _RSHSP-ADD _RSHSP-REGION-N !
+    _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ _RSHSP-ADD 1 _RSHSP-ADD
+    _RSHSP-MODAL-N @ _RSHSP-ADD _RSHSP-SCREEN-N @ _RSHSP-ADD
+    _RSHSP-PROMPT-N @ _RSHSP-ADD _RSHSP-NOTICE-N @ _RSHSP-ADD
+    _RSHSP-STATUS-N @ _RSHSP-ADD _RSHSP-REGION-N !
     _RSHSP-REGION-N @ 96 _RSHSP-MUL _RSHSP-TAKE _RSHSP-OUT !
     _RSHSP-OUT @ _RSHSP-CATALOG @ _RTE-RC.REGIONS-A !
     _RSHSP-REGION-N @ 96 * _RSHSP-CATALOG @ _RTE-RC.REGIONS-U !
@@ -267,9 +629,15 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     LOOP
     _RSHSP-REGIONS @ _RSHSP-OUT @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ 1+ 96 * +
         _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ 96 * MOVE
+    _RSHSP-FIRST-REGION @ _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + _RSHSP-ROW-ID !
+    _RSHSP-OUT @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ 1+
+        _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + 96 * + _RSHSP-MODAL-ROWS
+        _RSHSP-SCREEN-ROWS _RSHSP-PROMPT-REGION-ROW _RSHSP-NOTICE-REGION-ROW
+        _RSHSP-STATUS-REGION-ROW DROP
     _RSHSP-CATALOG @ RTE-REGION-CATALOG-VALID? _RSHSP-CHECK
     _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-P @ _RTHP.STATIC-COUNT @ _RSHSP-ADD
-    _RSHSP-N @ _RSHSP-ADD 6 _RSHSP-ADD _RSHSP-FAMILY-CAP !
+    _RSHSP-N @ _RSHSP-ADD 6 _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD
+    _RSHSP-NOTICE-N @ _RSHSP-ADD _RSHSP-STATUS-N @ _RSHSP-ADD _RSHSP-FAMILY-CAP !
     _RSHSP-FAMILY-CAP @ RTE-FAMILY-ENTRY-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-FAMILIES !
     0 _RSHSP-FAMILY-N !
     RTE-FAMILY-BATCH-SIZE _RSHSP-TAKE _RSHSP-BATCH !
@@ -328,15 +696,78 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
             _RSHSP-ITEM @ _RTE-CONTROL.CONTENT-A _RSHSP-DENSE!
         ELSE
             _RSHSP-REGION @ _RSHSP-ITEM @ _RTE-STATIC.REGION !
-            _RSHSP-SHELL-CONTROLS @ _RSHSP-ITEM @ _RTE-STATIC.ID +!
+            _RSHSP-SHELL-CONTROLS @ _RSHSP-PROMPT-N @ + _RSHSP-NOTICE-N @ +
+                _RSHSP-ITEM @ _RTE-STATIC.ID +!
             _RSHSP-ITEM @ _RTE-STATIC.LABEL-A _RSHSP-DENSE!
             _RSHSP-ITEM @ _RTE-STATIC.VALUE-A _RSHSP-DENSE!
         THEN
     LOOP
     _RSHSP-SAVED @ _RSHSP-CURSOR ! _RSHSP-START @ _RSHSP-BYTES @ _RSHSP-FAMILY-BYTES! ;
+\ An overlay with a modal region goes there, and any other control of an
+\ overlay pane's document to that pane's modal region; any other control
+\ goes to the content region of its document's pane.
+: _RSHSP-ROOT-MEMBER ( index -- region )
+    _RSHSP-MODAL-N @ 0 ?DO
+        I _RSHSP-OV @ OVER = IF DROP I _RSHSP-OV 16 + @ UNLOOP EXIT THEN
+    LOOP
+    _RSHSP-SRC-ATTACHMENT _RSHSP-MEMBER@
+    DUP RSHMM.SOURCE-INDEX @ _RSHSP-SCREEN-REGION ?DUP IF NIP EXIT THEN
+    RSHMM.CONTENT-REGION @ ;
+\ A dialog widget's button goes where its dialog does: the overlay of its
+\ pane.
 : _RSHSP-CONTROL-MEMBER ( index -- region )
-    RUCP-CORRELATION-SIZE * _RSHSP-SRC-CORR @ +
-        RUCP-CORRELATION-ATTACHMENT@ _RSHSP-MEMBER@ RSHMM.CONTENT-REGION @ ;
+    DUP _RSHSP-SRC-KIND RTE-CONTROL-BUTTON =
+    OVER _RSHSP-SRC-SOURCE UDLSN-SOURCE-OVERLAY = AND IF
+        _RSHSP-SRC-ATTACHMENT _RSHSP-DOCUMENT-SLOT _RSHSP-SLOT-PANE
+        _RSHSP-PANE-OVERLAY DUP _RSHSP-CHECK @
+        DUP _RSHSP-SRC-KIND RTE-CONTROL-DIALOG = _RSHSP-CHECK
+    THEN
+    _RSHSP-ROOT-MEMBER ;
+\ Desk's prompt as a FIELD: its field's FDC1 on a root across the hidden
+\ taskbar row.
+: _RSHSP-PROMPT-CONTROL ( -- )
+    _RSHSP-PROMPT-N @ 0= IF EXIT THEN
+    _RSHSP-PROMPT-A @ _RSHSP-PROMPT-U @ UFLDC-BYTES UFLDC-S-OK = _RSHSP-CHECK
+    DUP _RSHSP-TAKE _RSHSP-OUT !
+    _RSHSP-PROMPT-A @ _RSHSP-PROMPT-U @ _RSHSP-OUT @ 3 PICK UFLDC-PACK
+        UFLDC-S-OK = _RSHSP-CHECK OVER = _RSHSP-CHECK
+    RTE-CONTROL-SIZE _RSHSP-TAKE >R
+    _RSHSP-P @ _RTHP.OWNER @ R@ _RTE-CONTROL.OWNER !
+    _RSHSP-P @ _RTHP.OWNER-GEN @ R@ _RTE-CONTROL.GENERATION !
+    _RSHSP-PROMPT-ID @ R@ _RTE-CONTROL.ID !
+    RTE-CONTROL-FIELD R@ _RTE-CONTROL.KIND !
+    _RSHSP-PROMPT-A @ UFLD-STATE@ _RTHP-FF-STATE R@ _RTE-CONTROL.STATE !
+    _RSHSP-P @ _RTHP.ROWS @ DUP R@ _RTE-CONTROL.ROOT-HEIGHT ! 1- R@ _RTE-CONTROL.ROW !
+    1 R@ _RTE-CONTROL.HEIGHT !
+    _RSHSP-P @ _RTHP.COLS @ DUP R@ _RTE-CONTROL.ROOT-WIDTH ! R@ _RTE-CONTROL.WIDTH !
+    _RSHSP-PROMPT-A @ UFLD-LABEL@ R@ _RTE-CONTROL.LABEL-U ! R@ _RTE-CONTROL.LABEL-A !
+    _RSHSP-OUT @ R@ _RTE-CONTROL.CONTENT-A ! R@ _RTE-CONTROL.CONTENT-U !
+    _RSHSP-PROMPT-A @ DUP UFLD-UTF8-BYTES@ SWAP UFLD-LABEL-BYTES@ -
+        R@ _RTE-CONTROL.CONTENT-UTF8 !
+    R> 1 RTE-FAMILY-CONTROL _RSHSP-PROMPT-REGION @ _RSHSP-COPY-RUN ;
+\ The app shell's notice as a DIALOG: its model's DLG1 on a root where the
+\ notice lies, its title the label.
+: _RSHSP-NOTICE-CONTROL ( -- )
+    _RSHSP-NOTICE-N @ 0= IF EXIT THEN
+    _RSHSP-NOTICE-A @ _RSHSP-NOTICE-U @ UDLGC-DIALOG-BYTES 0= _RSHSP-CHECK
+    DUP _RSHSP-TAKE _RSHSP-OUT !
+    _RSHSP-NOTICE-A @ _RSHSP-NOTICE-U @ _RSHSP-OUT @ 3 PICK UDLGC-DIALOG-PACK
+        0= _RSHSP-CHECK OVER = _RSHSP-CHECK
+    RTE-CONTROL-SIZE _RSHSP-TAKE >R
+    _RSHSP-P @ _RTHP.OWNER @ R@ _RTE-CONTROL.OWNER !
+    _RSHSP-P @ _RTHP.OWNER-GEN @ R@ _RTE-CONTROL.GENERATION !
+    _RSHSP-NOTICE-ID @ R@ _RTE-CONTROL.ID !
+    RTE-CONTROL-DIALOG R@ _RTE-CONTROL.KIND !
+    RTE-CONTROL-VISIBLE R@ _RTE-CONTROL.STATE !
+    _RSHSP-NR @ R@ _RTE-CONTROL.ROW ! _RSHSP-NC @ R@ _RTE-CONTROL.COL !
+    _RSHSP-NH @ R@ _RTE-CONTROL.HEIGHT ! _RSHSP-NW @ R@ _RTE-CONTROL.WIDTH !
+    _RSHSP-P @ _RTHP.ROWS @ R@ _RTE-CONTROL.ROOT-HEIGHT !
+    _RSHSP-P @ _RTHP.COLS @ R@ _RTE-CONTROL.ROOT-WIDTH !
+    _RSHSP-NOTICE-A @ UDLG-TITLE@ _RSHSP-ZSPAN
+        R@ _RTE-CONTROL.LABEL-U ! R@ _RTE-CONTROL.LABEL-A !
+    _RSHSP-OUT @ R@ _RTE-CONTROL.CONTENT-A ! R@ _RTE-CONTROL.CONTENT-U !
+    _RSHSP-NOTICE-A @ UDLG-MESSAGE-BYTES@ R@ _RTE-CONTROL.CONTENT-UTF8 !
+    R> 1 RTE-FAMILY-CONTROL _RSHSP-NOTICE-REGION @ _RSHSP-COPY-RUN ;
 : _RSHSP-APP-CONTROLS ( -- )
     0 _RSHSP-I ! BEGIN _RSHSP-I @ _RSHSP-P @ _RTHP.CONTROL-COUNT @ U< WHILE
         _RSHSP-I @ _RSHSP-CONTROL-MEMBER _RSHSP-MEMBER !
@@ -359,7 +790,8 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
         LOOP
         _RSHSP-CONTROLS @ _RSHSP-SHELL-CONTROLS @ RTE-FAMILY-CONTROL
         _RSHSP-CONTROLS @ _RTE-CONTROL.REGION @ _RSHSP-COPY-RUN
-    THEN ;
+    THEN
+    _RSHSP-PROMPT-CONTROL _RSHSP-NOTICE-CONTROL ;
 : _RSHSP-STATICS ( -- )
     _RSHSP-P @ _RTHP.STATIC-COUNT @ 0 ?DO
         _RSHSP-P @ _RTHP.STATIC-CORR-A @ I _RTHP-STATIC-CORR-SIZE * + @
@@ -368,12 +800,44 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
             1 RTE-FAMILY-STATIC _RSHSP-MEMBER @ _RSHSP-COPY-RUN
     LOOP ;
 
+\ Desk's status as a STATUS_FIELD: its model's label, value, severity and
+\ emphasis on a root where it lies.
+: _RSHSP-STATUS-STATIC ( -- )
+    _RSHSP-STATUS-N @ 0= IF EXIT THEN
+    RTE-STATIC-SIZE _RSHSP-TAKE >R
+    _RSHSP-P @ _RTHP.OWNER @ R@ _RTE-STATIC.OWNER !
+    _RSHSP-P @ _RTHP.OWNER-GEN @ R@ _RTE-STATIC.GENERATION !
+    _RSHSP-STATUS-ID @ R@ _RTE-STATIC.ID !
+    RTE-STATIC-STATUS-FIELD R@ _RTE-STATIC.KIND !
+    -1 R@ _RTE-STATIC.VISIBLE !
+    _RSHSP-SR @ R@ _RTE-STATIC.ROW ! _RSHSP-SC @ R@ _RTE-STATIC.COL !
+    1 R@ _RTE-STATIC.HEIGHT ! _RSHSP-SW @ R@ _RTE-STATIC.WIDTH !
+    _RSHSP-P @ _RTHP.ROWS @ R@ _RTE-STATIC.ROOT-HEIGHT !
+    _RSHSP-P @ _RTHP.COLS @ R@ _RTE-STATIC.ROOT-WIDTH !
+    _RSHSP-STATUS-A @ USF-LABEL-COLS@ R@ _RTE-STATIC.LABEL-COLS !
+    _RSHSP-STATUS-A @ USF-SEVERITY@ R@ _RTE-STATIC.SEVERITY !
+    _RSHSP-STATUS-A @ USF-FLAGS@ USF-F-EMPHASIZED AND 0<> R@ _RTE-STATIC.EMPHASIZED !
+    _RSHSP-STATUS-A @ USF-LABEL@ _RSHSP-ZSPAN
+        R@ _RTE-STATIC.LABEL-U ! R@ _RTE-STATIC.LABEL-A !
+    _RSHSP-STATUS-A @ USF-VALUE@ _RSHSP-ZSPAN
+        R@ _RTE-STATIC.VALUE-U ! R@ _RTE-STATIC.VALUE-A !
+    R> 1 RTE-FAMILY-STATIC _RSHSP-STATUS-REGION @ _RSHSP-COPY-RUN ;
+
 : _RSHSP-SERIES ( -- )
     _RSHSP-P @ _RTHP.SERIES-COUNT @ 0= IF EXIT THEN
     RTE-FAMILY-SERIES _RSHSP-FAMILY!
     _RSHSP-P @ _RTHP.SERIES-PLAN _RSHSP-PLAN @ RTE-SERIES-PLAN-SIZE MOVE
-    _RSHSP-P @ _RTHP.SERIES-SAMPLES-A @ _RSHSP-P @ _RTHP.SERIES-SAMPLES-USED @
-        _RSHSP-FAMILY-BYTES! ;
+    \ The records are copied, as the instruments are, so a bank's sample
+    \ offsets can become addresses in its samples.
+    _RSHSP-SRC-SERIES @ _RSHSP-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE *
+        DUP _RSHSP-PLAN @ _RTE-SRP.ITEMS-U !
+        _RSHSP-COPY DUP _RSHSP-PLAN @ _RTE-SRP.ITEMS-A !
+    _RSHSP-P @ _RTHP.SERIES-COUNT @ 0 ?DO
+        DUP I RTE-SERIES-SIZE * + DUP _RTE-SERIES.SAMPLES-U @ IF
+            _RSHSP-SRC-SAMPLE-BASE @ SWAP _RTE-SERIES.SAMPLES-A +!
+        ELSE DROP THEN
+    LOOP DROP
+    _RSHSP-SRC-SAMPLES @ _RSHSP-SRC-SAMPLES-U @ _RSHSP-FAMILY-BYTES! ;
 : _RSHSP-INSTRUMENTS ( -- )
     _RSHSP-P @ _RTHP.INSTRUMENT-COUNT @ 0= IF EXIT THEN
     RTE-FAMILY-INSTRUMENT _RSHSP-FAMILY!
@@ -393,7 +857,8 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
         _RSHSP-ITEM @ _RTE-INSTRUMENT.UNIT-U @ IF
             _RSHSP-SRC-UNIT-BASE @ _RSHSP-ITEM @ _RTE-INSTRUMENT.UNIT-A +!
         THEN
-        _RSHSP-SHELL-CONTROLS @ _RSHSP-ITEM @ _RTE-INSTRUMENT.ID +!
+        _RSHSP-SHELL-CONTROLS @ _RSHSP-PROMPT-N @ + _RSHSP-NOTICE-N @ +
+            _RSHSP-ITEM @ _RTE-INSTRUMENT.ID +!
         _RSHSP-SRC-INSTRUMENT-CORR @ I RUIP-CORRELATION-SIZE * +
             RUIP-CORRELATION-ATTACHMENT@ _RSHSP-MEMBER@ _RSHSP-MEMBER !
         _RSHSP-ITEM @ _RTE-INSTRUMENT.REGION @ _RSHSP-REGION@ _RSHSP-REGION !
@@ -441,17 +906,39 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
     _RSHSP-P @ _RTHP.GLYPH-TEXT-USED @
     _RSHSP-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@
     _RSHSP-GREF @ RGRP-REFERENCE! ;
+\ The planner's claims of one KIND, the panes' chrome or the taskbar's bands.
+: _RSHSP-PLANNER-CLAIMS ( kind -- )
+    _RSHSP-RESULT @ RSHPL-RESULT.CLAIMS @ 0 ?DO
+        _RSHSP-CLAIMS @ I RSHPL-CLAIM-SIZE * + _RSHSP-ITEM !
+        _RSHSP-ITEM @ RSHPL-CLAIM.KIND @ OVER = IF
+            I _RSHSP-ITEM @ RSHPL-CLAIM.ROW @ _RSHSP-ITEM @ RSHPL-CLAIM.COL @
+            _RSHSP-ITEM @ RSHPL-CLAIM.HEIGHT @ _RSHSP-ITEM @ RSHPL-CLAIM.WIDTH @
+                _RSHSP-CLAIM-RECT
+        THEN
+    LOOP DROP ;
+\ The bank holds the producer's claims, then the taskbar's, the prompt's,
+\ the notice's and the status field's, which every plan excludes; then the
+\ panes' chrome, which an overlay pane lies over and the rest exclude; then
+\ every pane's content, which the residue of the whole surface excludes.
 : _RSHSP-GLYPH-WORK ( -- )
     _RSHSP-P @ _RTHP.CLAIMS-USED @
-    _RSHSP-RESULT @ RSHPL-RESULT.CLAIMS @ _RSHSP-N @ _RSHSP-ADD RUCL-CLAIM-SIZE _RSHSP-MUL
+    _RSHSP-RESULT @ RSHPL-RESULT.CLAIMS @ _RSHSP-N @ _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD
+        _RSHSP-NOTICE-N @ _RSHSP-ADD _RSHSP-STATUS-N @ _RSHSP-ADD RUCL-CLAIM-SIZE _RSHSP-MUL
         _RSHSP-ADD DUP _RSHSP-BYTES ! _RSHSP-TAKE _RSHSP-CLAIM-BANK !
     _RSHSP-P @ _RTHP.CLAIMS-A @ _RSHSP-CLAIM-BANK @ _RSHSP-P @ _RTHP.CLAIMS-USED @ MOVE
     _RSHSP-P @ _RTHP.CLAIMS-USED @ _RSHSP-CLAIM-U !
-    _RSHSP-RESULT @ RSHPL-RESULT.CLAIMS @ 0 ?DO
-        _RSHSP-CLAIMS @ I RSHPL-CLAIM-SIZE * + _RSHSP-ITEM !
-        I _RSHSP-ITEM @ RSHPL-CLAIM.ROW @ _RSHSP-ITEM @ RSHPL-CLAIM.COL @
-        _RSHSP-ITEM @ RSHPL-CLAIM.HEIGHT @ _RSHSP-ITEM @ RSHPL-CLAIM.WIDTH @ _RSHSP-CLAIM-RECT
-    LOOP
+    RSHPL-CLAIM-TASKBAR _RSHSP-PLANNER-CLAIMS
+    _RSHSP-PROMPT-N @ IF
+        _RSHSP-N @ _RSHSP-P @ _RTHP.ROWS @ 1- 0 1 _RSHSP-P @ _RTHP.COLS @ _RSHSP-CLAIM-RECT
+    THEN
+    _RSHSP-NOTICE-N @ IF
+        _RSHSP-N @ 1+ _RSHSP-NR @ _RSHSP-NC @ _RSHSP-NH @ _RSHSP-NW @ _RSHSP-CLAIM-RECT
+    THEN
+    _RSHSP-STATUS-N @ IF
+        _RSHSP-N @ 2 + _RSHSP-SR @ _RSHSP-SC @ 1 _RSHSP-SW @ _RSHSP-CLAIM-RECT
+    THEN
+    _RSHSP-CLAIM-U @ _RSHSP-OVERLAY-CLAIM-U !
+    RSHPL-CLAIM-PANE _RSHSP-PLANNER-CLAIMS
     _RSHSP-CLAIM-U @ _RSHSP-BASE-CLAIM-U !
     _RSHSP-N @ 0 ?DO I _RSHSP-ENTRY DUP SHME.KIND @ SHM-K-PANE = IF
         I SWAP _RSHSP-CONTENT-RECT _RSHSP-CLAIM-RECT ELSE DROP THEN LOOP
@@ -675,9 +1162,17 @@ VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U VARIABLE _RSHSP-SRC-UNIT-B
             _RSHSP-CATALOG @ _RTE-RC.REGIONS-U @ 96 - MOVE
         -96 _RSHSP-CATALOG @ _RTE-RC.REGIONS-U +!
     THEN
+    \ An ordinary pane's content leaves out the overlay panes above it,
+    \ whose own content regions hold those cells, chrome beneath included.
     _RSHSP-BASE-CLAIM-U @ _RSHSP-CLAIM-U !
+    _RSHSP-N @ 0 ?DO I _RSHSP-ENTRY DUP _RSHSP-OVERLAY-PANE? IF
+        I SWAP _RSHSP-CONTENT-RECT _RSHSP-CLAIM-RECT ELSE DROP THEN LOOP
+    _RSHSP-CLAIM-U @ _RSHSP-UNDER-CLAIM-U !
     _RSHSP-MAP-U @ RSHMM-ENTRY-SIZE / 0 ?DO
-        _RSHSP-MAP @ I RSHMM-ENTRY-SIZE * + RSHMM.CONTENT-REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
+        _RSHSP-MAP @ I RSHMM-ENTRY-SIZE * +
+        DUP RSHMM.SOURCE-INDEX @ _RSHSP-ENTRY _RSHSP-OVERLAY-PANE? IF
+            _RSHSP-OVERLAY-CLAIM-U ELSE _RSHSP-UNDER-CLAIM-U THEN @ _RSHSP-CLAIM-U !
+        RSHMM.CONTENT-REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
     LOOP ;
 \ Every planner request, claim, work and output span lies in the work arena,
 \ so one proof that the arena is disjoint from screen storage covers every
@@ -783,6 +1278,8 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-V-B @ RSHSP-BANK.MODEL @ _RSHSP-V-B @ +
     _RSHSP-V-B @ RSHSP-BANK.MODEL-U @ SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF 0 EXIT THEN
     _RSHSP-BANK-GRAPH? 0= IF 0 EXIT THEN
+    _RSHSP-V-B @ DUP RSHSP-BANK.MODEL @ + SHM.PROMPT-U @ 0<>
+        _RSHSP-V-B @ RSHSP-BANK.PROMPT @ 0<> <> IF 0 EXIT THEN
     _RSHSP-V-B @ DUP RSHSP-BANK.MODEL @ +
     DUP SHM.WIDTH @ _RSHSP-V-CAT @ _RTE-RC.SURFACE-COLS @ <>
     SWAP SHM.HEIGHT @ _RSHSP-V-CAT @ _RTE-RC.SURFACE-ROWS @ <> OR IF 0 EXIT THEN
@@ -841,6 +1338,7 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-P @ _RTHP.OWNER-GEN @ _RSHSP-BANK @ RSHSP-BANK.GENERATION !
     _RSHSP-NEXT-REGION @ _RSHSP-BANK @ RSHSP-BANK.NEXT-REGION !
     _RSHSP-NEXT-OBJECT @ _RSHSP-BANK @ RSHSP-BANK.NEXT-OBJECT !
+    _RSHSP-PROMPT-ID @ _RSHSP-BANK @ RSHSP-BANK.PROMPT !
     _RSHSP-BANK-USED @ _RSHSP-BANK @ RSHSP-BANK.USED !
     _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID? _RSHSP-CHECK ;
 \ Diagnostics: complete preparations refused, and the last refusal's status
@@ -871,7 +1369,8 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     6 _RSHSP-PSTAGE !
     _RSHSP-ALLOCATE-PLAN _RSHSP-CATALOG!
     7 _RSHSP-PSTAGE !
-    _RSHSP-APP-CONTROLS _RSHSP-SERIES _RSHSP-INSTRUMENTS _RSHSP-STATICS _RSHSP-PANE-FAMILY
+    _RSHSP-APP-CONTROLS _RSHSP-SERIES _RSHSP-INSTRUMENTS _RSHSP-STATICS
+    _RSHSP-STATUS-STATIC _RSHSP-PANE-FAMILY
     8 _RSHSP-PSTAGE !
     _RSHSP-GLYPHS
     9 _RSHSP-PSTAGE !
@@ -1158,6 +1657,14 @@ VARIABLE _RSHSP-DX-E VARIABLE _RSHSP-DX-MAX
 VARIABLE _RSHSP-DIAG-PROBE-REFUSALS VARIABLE _RSHSP-DIAG-REFUSALS
 VARIABLE _RSHSP-DIAG-PREPARED VARIABLE _RSHSP-DIAG-STAGE
 VARIABLE _RSHSP-DIAG-FAMILY VARIABLE _RSHSP-DIAG-STATUS VARIABLE _RSHSP-DSTAGE
+\ How many DELTA preparations each place refused, at DSTAGE * 16 plus the
+\ build's PSTAGE in stage 7 or the family's kind in stages 2 to 5, and how
+\ many probes each difference of the shell models refused (_RSHSP-DM-WHY).
+CREATE _RSHSP-DIAG-DELTA-WHY 128 CELLS ALLOT
+_RSHSP-DIAG-DELTA-WHY 128 CELLS 0 FILL
+CREATE _RSHSP-DIAG-PROBE-WHY 16 CELLS ALLOT
+_RSHSP-DIAG-PROBE-WHY 16 CELLS 0 FILL
+VARIABLE _RSHSP-DM-WHY
 
 \ The acknowledged bank a DELTA starts from: published, and paired with the
 \ producer's acknowledged target and wire owner. It was checked when frozen.
@@ -1168,28 +1675,77 @@ VARIABLE _RSHSP-DIAG-FAMILY VARIABLE _RSHSP-DIAG-STATUS VARIABLE _RSHSP-DSTAGE
     OVER RSHSP-BANK.OWNER @ _RSHSP-P @ _RTHP.OWNER @ <> OR
     SWAP RSHSP-BANK.GENERATION @ _RSHSP-P @ _RTHP.OWNER-GEN @ <> OR 0= ;
 
-\ Two shell models are equal apart from the epoch every paint advances.
+\ Two shell models are equal apart from the epoch every paint advances and
+\ the field of Desk's prompt, which typing changes: the prompt is in both
+\ at the same place, or in neither.  A copy's capacity and used bytes end
+\ where its prompt, or the notice after it, does.  The app shell's notice,
+\ which follows the prompt, is the same in both, wherever the prompt's size
+\ puts it.  Desk's status, which shows only with the taskbar and so never
+\ with the prompt, ends both models at the same place or neither, and its
+\ value, severity and place may change.
+VARIABLE _RSHSP-DM-UA
+: _RSHSP-DM-RANGE= ( start end -- flag )
+    OVER - >R _RSHSP-DM-A @ OVER + R@ ROT _RSHSP-DM-B @ + R> COMPARE 0= ;
+: _RSHSP-D-NOTICES= ( -- flag )
+    _RSHSP-DM-A @ SHM.NOTICE-U @ ?DUP 0= IF -1 EXIT THEN
+    _RSHSP-DM-A @ SHM.NOTICE-OFF @ OVER + _RSHSP-DM-UA @ U> IF DROP 0 EXIT THEN
+    _RSHSP-DM-B @ SHM.NOTICE-OFF @ OVER + _RSHSP-DM-U @ U> IF DROP 0 EXIT THEN
+    >R _RSHSP-DM-A @ DUP SHM.NOTICE-OFF @ + R@
+    _RSHSP-DM-B @ DUP SHM.NOTICE-OFF @ + R> COMPARE 0= ;
 : _RSHSP-D-MODELS= ( a1 u1 a2 u2 -- flag )
-    ROT OVER <> IF DROP 2DROP 0 EXIT THEN
-    DUP SHM-HEADER-SIZE U< IF DROP 2DROP 0 EXIT THEN
-    _RSHSP-DM-U ! _RSHSP-DM-B ! _RSHSP-DM-A !
-    _RSHSP-DM-A @ 0 SHM.EPOCH _RSHSP-DM-B @ 0 SHM.EPOCH COMPARE IF 0 EXIT THEN
-    _RSHSP-DM-A @ 0 SHM.WIDTH + _RSHSP-DM-U @ 0 SHM.WIDTH -
-    _RSHSP-DM-B @ 0 SHM.WIDTH + _RSHSP-DM-U @ 0 SHM.WIDTH - COMPARE 0= ;
+    _RSHSP-DM-U ! _RSHSP-DM-B ! _RSHSP-DM-UA ! _RSHSP-DM-A !
+    1 _RSHSP-DM-WHY !
+    _RSHSP-DM-UA @ SHM-HEADER-SIZE U< _RSHSP-DM-U @ SHM-HEADER-SIZE U< OR IF 0 EXIT THEN
+    2 _RSHSP-DM-WHY !
+    _RSHSP-DM-A @ SHM.PROMPT-OFF @ _RSHSP-DM-B @ SHM.PROMPT-OFF @ <> IF 0 EXIT THEN
+    _RSHSP-DM-A @ SHM.PROMPT-OFF @ ?DUP IF
+        3 _RSHSP-DM-WHY !
+        DUP _RSHSP-DM-UA @ U> OVER _RSHSP-DM-U @ U> OR IF DROP 0 EXIT THEN
+        0 0 SHM.CAPACITY _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        0 SHM.ENTRY-LIMIT 0 SHM.USED _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        0 SHM.OWNER-ID 0 SHM.EPOCH _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        0 SHM.WIDTH 0 SHM.PROMPT-U _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        0 SHM.NOTICE-U SHM-HEADER-SIZE _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        SHM-HEADER-SIZE SWAP _RSHSP-DM-RANGE= 0= IF 0 EXIT THEN
+        4 _RSHSP-DM-WHY !
+        _RSHSP-D-NOTICES= EXIT
+    THEN
+    5 _RSHSP-DM-WHY !
+    _RSHSP-DM-A @ SHM.STATUS-OFF @ _RSHSP-DM-B @ SHM.STATUS-OFF @ <> IF 0 EXIT THEN
+    _RSHSP-DM-A @ SHM.STATUS-OFF @ ?DUP IF
+        6 _RSHSP-DM-WHY !
+        DUP _RSHSP-DM-UA @ U> OVER _RSHSP-DM-U @ U> OR IF DROP 0 EXIT THEN
+        0 0 SHM.CAPACITY _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        0 SHM.ENTRY-LIMIT 0 SHM.USED _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        0 SHM.OWNER-ID 0 SHM.EPOCH _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        0 SHM.WIDTH 0 SHM.STATUS-U _RSHSP-DM-RANGE= 0= IF DROP 0 EXIT THEN
+        SHM-HEADER-SIZE SWAP _RSHSP-DM-RANGE= EXIT
+    THEN
+    7 _RSHSP-DM-WHY !
+    _RSHSP-DM-UA @ _RSHSP-DM-U @ <> IF 0 EXIT THEN
+    8 _RSHSP-DM-WHY !
+    0 0 SHM.EPOCH _RSHSP-DM-RANGE= 0= IF 0 EXIT THEN
+    9 _RSHSP-DM-WHY !
+    0 SHM.WIDTH _RSHSP-DM-U @ _RSHSP-DM-RANGE= ;
 
 \ Before a changed draw is built: only a draw whose shell model matches the
 \ acknowledged one can become a DELTA.  This cheap check is advisory; the
 \ preparation proves the complete shape.
 : _RSHSP-PROBE-MODEL? ( -- flag )
+    10 _RSHSP-DM-WHY !
     _RSHSP-S @ _RSHSP.ACTIVE @ DUP 0= IF DROP 0 EXIT THEN
+    11 _RSHSP-DM-WHY !
     DUP RSHSP-BANK.TARGET @ _RSHSP-P @ _RTHP.TARGET-ACTIVE @ <> IF DROP 0 EXIT THEN
     DUP RSHSP-BANK.MODEL @ OVER + SWAP RSHSP-BANK.MODEL-U @
     SCR-DRAW-GENERATION@ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-SNAPSHOT-FOR@
+    12 _RSHSP-DM-WHY !
     SHSN-S-OK <> IF 2DROP 2DROP 0 EXIT THEN
     _RSHSP-D-MODELS= ;
 : _RSHSP-DELTA-PROBE ( -- status )
     _RSHSP-PROBE-MODEL? IF RTE-S-OK EXIT THEN
-    1 _RSHSP-DIAG-PROBE-REFUSALS +! RTE-S-UNAVAILABLE ;
+    1 _RSHSP-DIAG-PROBE-REFUSALS +!
+    _RSHSP-DM-WHY @ 15 MIN CELLS _RSHSP-DIAG-PROBE-WHY + 1 SWAP +!
+    RTE-S-UNAVAILABLE ;
 
 : _RSHSP-D-ID ( item -- a ) _RSHSP-KIND @ RTE-FAMILY-GLYPH <> IF 16 + THEN ;
 \ An identity in [P0, P0+N) becomes the one in the same place from A0.
@@ -1232,6 +1788,28 @@ VARIABLE _RSHSP-DIAG-FAMILY VARIABLE _RSHSP-DIAG-STATUS VARIABLE _RSHSP-DSTAGE
 : _RSHSP-D-CONTROLS ( -- )
     _RSHSP-DN @ _RSHSP-DAN @ = _RSHSP-CHECK
     _RSHSP-DN @ 0= IF EXIT THEN
+    \ Desk's prompt takes its acknowledged identity; its field may change.
+    _RSHSP-PROMPT-N @ IF
+        _RSHSP-DPE @ _RTE-FE.PLAN-A @ _RTE-CP.REGION-ID @ _RSHSP-PROMPT-REGION @ = IF
+            _RSHSP-DN @ 1 = _RSHSP-CHECK
+            _RSHSP-DAI @ _RTE-CONTROL.KIND @ RTE-CONTROL-FIELD = _RSHSP-CHECK
+            _RSHSP-DAI @ _RTE-CONTROL.ID @
+                DUP _RSHSP-PROMPT-ID ! _RSHSP-DPI @ _RTE-CONTROL.ID !
+            EXIT
+        THEN
+    THEN
+    \ The notice takes its acknowledged identity and is unchanged, as the
+    \ models are equal.
+    _RSHSP-NOTICE-N @ IF
+        _RSHSP-DPE @ _RTE-FE.PLAN-A @ _RTE-CP.REGION-ID @ _RSHSP-NOTICE-REGION @ = IF
+            _RSHSP-DN @ 1 = _RSHSP-CHECK
+            _RSHSP-DAI @ _RTE-CONTROL.KIND @ RTE-CONTROL-DIALOG = _RSHSP-CHECK
+            _RSHSP-DAI @ _RTE-CONTROL.ID @
+                DUP _RSHSP-NOTICE-ID ! _RSHSP-DPI @ _RTE-CONTROL.ID !
+            _RSHSP-DPI @ _RSHSP-DAI @ RTE-FAMILY-CONTROL RTE-FAMILY-ITEM-SAME?
+                _RSHSP-CHECK EXIT
+        THEN
+    THEN
     _RSHSP-DPI @ _RTE-CONTROL.KIND @ _RTE-CONTROL-TASKBAR-KIND? 0= IF
         _RSHSP-DN @ 0 ?DO
             _RSHSP-DPI @ I RTE-CONTROL-SIZE * + _RTE-CONTROL.ID @
@@ -1373,7 +1951,10 @@ VARIABLE _RSHSP-DIAG-FAMILY VARIABLE _RSHSP-DIAG-STATUS VARIABLE _RSHSP-DSTAGE
     ELSE _RSHSP-S @ _RSHSP-ABORT RTE-S-UNAVAILABLE THEN
     DUP RTE-S-OK = IF 1 _RSHSP-DIAG-PREPARED +! EXIT THEN
     1 _RSHSP-DIAG-REFUSALS +! DUP _RSHSP-DIAG-STATUS !
-    _RSHSP-DSTAGE @ _RSHSP-DIAG-STAGE ! ;
+    _RSHSP-DSTAGE @ _RSHSP-DIAG-STAGE !
+    _RSHSP-DSTAGE @ DUP 7 = IF DROP 112 _RSHSP-PSTAGE @ 15 MIN + ELSE
+        DUP 2 6 WITHIN IF 16 * _RSHSP-KIND @ 15 MIN + ELSE 16 * THEN
+    THEN 127 MIN CELLS _RSHSP-DIAG-DELTA-WHY + 1 SWAP +! ;
 \ Inside an open retained DELTA, send what changed since the active bank.
 \ Both banks were checked in full when they were frozen.
 : _RSHSP-DELTA-EMIT ( -- status )
@@ -1516,6 +2097,17 @@ VARIABLE _RSHSP-INPUT-MODEL VARIABLE _RSHSP-INPUT-ENTRY VARIABLE _RSHSP-INPUT-MA
             _RSHSP-INPUT-CORR ! 1 _RSHSP-INPUT-MATCHES +! ELSE DROP THEN
     LOOP
     _RSHSP-INPUT-MATCHES @ 1 = IF _RSHSP-INPUT-CORR @ ELSE 0 THEN ;
+\ Desk's prompt takes positions in its value, at the first cell of its
+\ value slot, against its field's revision.
+: _RSHSP-PROMPT-TARGET ( -- row col revision found? )
+    _RSHSP-INPUT-INTENT @ DUP RTE-INTENT-PLACE <> SWAP RTE-INTENT-EXTEND <> AND IF
+        _RSHSP-INPUT-NONE EXIT
+    THEN
+    _RSHSP-BANK @ DUP RSHSP-BANK.MODEL @ + DUP SHM-PROMPT@ 0= IF
+        2DROP _RSHSP-INPUT-NONE EXIT
+    THEN
+    SWAP SHM.HEIGHT @ 1- OVER UFLD-VALUE-ROW@ +
+    OVER UFLD-VALUE-COLUMN@ ROT UFLD-REVISION@ -1 ;
 VARIABLE _RSHSP-INPUT-ROOT VARIABLE _RSHSP-INPUT-CHILD VARIABLE _RSHSP-INPUT-SAVED-ID
 : _RSHSP-TARGET-GEOMETRY? ( -- flag )
     _RSHSP-INPUT-CONTROL @ _RSHSP-INPUT-CHILD !
@@ -1599,6 +2191,9 @@ VARIABLE _RSHSP-INPUT-ROOT VARIABLE _RSHSP-INPUT-CHILD VARIABLE _RSHSP-INPUT-SAV
     _RSHSP-INPUT-OWNER @ _RSHSP-BANK @ RSHSP-BANK.OWNER @ <>
     _RSHSP-INPUT-GEN @ _RSHSP-BANK @ RSHSP-BANK.GENERATION @ <> OR IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-CONTROL-FIND DUP 0= IF DROP _RSHSP-INPUT-NONE EXIT THEN _RSHSP-INPUT-CONTROL !
+    _RSHSP-BANK @ RSHSP-BANK.PROMPT @ ?DUP IF
+        _RSHSP-INPUT-ID @ = IF _RSHSP-PROMPT-TARGET EXIT THEN
+    THEN
     _RSHSP-INPUT-CONTROL @ _RTE-CONTROL.KIND @ DUP RTE-CONTROL-TASK = SWAP RTE-CONTROL-LAUNCHER = OR IF
         _RSHSP-SHELL-TARGET? 0= IF _RSHSP-INPUT-NONE EXIT THEN
         _RSHSP-INPUT-CORR @ RSHPL-CORRELATION.ROW @

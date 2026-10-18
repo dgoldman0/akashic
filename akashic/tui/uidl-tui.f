@@ -24,6 +24,8 @@
 \    UTUI-FOCUS-NEXT  ( -- )
 \    UTUI-FOCUS-PREV  ( -- )
 \    UTUI-BY-ID       ( id-a id-l -- elem | 0 )
+\    UTUI-EACH-ELEM   ( xt -- )
+\    UTUI-DIALOG-REVISION ( -- n )
 \    UTUI-DO!         ( do-a do-l xt -- )
 \    UTUI-SHOW-DIALOG ( id-a id-l -- )
 \    UTUI-HIDE-DIALOG ( id-a id-l -- )
@@ -80,6 +82,7 @@ REQUIRE keys.f
 REQUIRE ../text/cell-width.f
 REQUIRE widgets/tree.f
 REQUIRE widgets/input.f
+REQUIRE widgets/prompt.f
 REQUIRE widgets/list.f
 REQUIRE widgets/textarea.f
 REQUIRE widgets/media.f
@@ -140,6 +143,7 @@ TSC-F-FOCUSABLE CONSTANT _UTUI-SCF-FOC
 TSC-F-HIDE      CONSTANT _UTUI-SCF-HIDE
 
 1 CONSTANT _UTUI-RUNTIME-F-HIDDEN
+2 CONSTANT _UTUI-RUNTIME-F-CHECKED
 
 \ Layout owns HAS/VIS but must not erase durable style/focus state while it
 \ assigns a child's rectangle.  Runtime show/hide lives in AUX6 and therefore
@@ -1182,9 +1186,20 @@ VARIABLE _UTUI-MENU-SAVED-FOC  \ focus before menu opened
 \  admitted visible descendants without re-deferring nested nodes.
 
 VARIABLE _UMD-COL      \ dropdown left column
-VARIABLE _UMD-MAXW     \ widest item text, in cells
+VARIABLE _UMD-MAXW     \ widest row: mark column and item text, in cells
 VARIABLE _UMD-ICNT     \ item count
 VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
+
+\ Every dropdown row keeps a mark column before its text, where a checked
+\ item shows its check mark.  Labels stay aligned whichever items are
+\ checked, and a menu's width follows from its labels alone.
+2 CONSTANT _UTUI-MENU-MARK-W
+
+\ A menu item's checked state is its runtime CHECKED bit, which its authored
+\ checked=true seeds when its document loads and UTUI-CHECKED! changes, so
+\ checking an item never copies text into UIDL's string pool.
+: _UTUI-CHECKED?  ( elem -- flag )
+    _UTUI-SIDECAR _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-CHECKED AND 0<> ;
 
 \ Menu rows follow the same semantic/layout admission rule as ordinary flow.
 \ Only items and separators are valid rows; when=false, display:none, and
@@ -1221,7 +1236,8 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
     TSC-F-HIDDEN _UTUI-SCF-HIDE OR AND IF DROP 0 EXIT THEN
     _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-HIDDEN AND 0= ;
 
-\ Measure admitted items and find the widest text= label.
+\ Measure admitted items and find the widest text= label.  A row is the
+\ mark column and the label.
 : _UTUI-MENU-MEASURE  ( menu-elem -- )
     0 _UMD-MAXW !   0 _UMD-ICNT !
     UIDL-FIRST-CHILD
@@ -1235,7 +1251,8 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
             THEN
         THEN
         UIDL-NEXT-SIB
-    REPEAT DROP ;
+    REPEAT DROP
+    _UTUI-MENU-MARK-W _UMD-MAXW +! ;
 
 \ Render <menu>: draw border box when this menu is the open dropdown.
 \ Geometry already covers the dropdown area (set by _UTUI-MENU-OPEN!).
@@ -1248,7 +1265,7 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
     \ Draw single-line border
     BOX-SINGLE _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @ BOX-DRAW ;
 
-\ Render <item>: self-rendering — bg fill + text + reverse highlight
+\ Render <item>: self-rendering — bg fill + mark + text + reverse highlight
 : _UTUI-RENDER-ITEM  ( elem -- )
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     \ Highlight if this item is focused
@@ -1256,8 +1273,11 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
         _DRW-ATTRS @ CELL-A-REVERSE OR _DRW-ATTRS !
     THEN
     _UTUI-FILL-BG
+    DUP _UTUI-CHECKED? IF
+        10003 _UR-ROW @ _UR-COL @ 1+ DRW-CHAR      \ U+2713 CHECK MARK
+    THEN
     DUP S" text" UIDL-ATTR IF
-        _UR-ROW @ _UR-COL @ 1+ DRW-TEXT
+        _UR-ROW @ _UR-COL @ 1+ _UTUI-MENU-MARK-W + DRW-TEXT
     ELSE 2DROP THEN
     DROP ;
 
@@ -1275,15 +1295,6 @@ VARIABLE _UST-FIRST
     _UTUI-STASH-SC 0= IF DROP EXIT THEN
     DROP
     32 _UR-ROW @ _UR-COL @ 1 _UR-W @ DRW-FILL-RECT ;
-
-\ --- Dialog ---
-: _UTUI-RENDER-DLG  ( elem -- )
-    _UTUI-STASH-SC 0= IF DROP EXIT THEN
-    DROP
-    \ Fill area
-    _UTUI-FILL-BG
-    \ Border
-    BOX-ROUND _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @ BOX-DRAW ;
 
 \ --- Split: draw vertical divider at ratio= position ---
 : _UTUI-RENDER-SPLIT  ( elem -- )
@@ -2249,27 +2260,82 @@ VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
     THEN
     2DROP ;
 
-\ --- Dialog layout: centered overlay ---
-VARIABLE _UDL-DLG-SC
+\ --- Dialog: a framed container ---
+\ A dialog keeps the rectangle its parent's layout gives it.  A frame
+\ takes its outer rows and columns and its title (the title attribute)
+\ sits on the top edge.  Inside the frame its children stack: a leaf takes
+\ a row, and a container the rows the children after it leave, a row at
+\ least; actions and positioned children take none.  Its leading label
+\ children are its message, and the children after them its contents.
+
+\ Dialogs' revision: newer whenever a dialog is laid out or its title or
+\ one of its labels is set, so a capture of an unchanged dialog keeps its
+\ revision and one that changed takes a newer.  It belongs to no document
+\ and only grows.
+VARIABLE _UTUI-DLG-REVISION
+1 _UTUI-DLG-REVISION !
+: UTUI-DIALOG-REVISION  ( -- n )  _UTUI-DLG-REVISION @ ;
+
+VARIABLE _UDL-DLG-POS
+VARIABLE _UDL-DLG-END
+VARIABLE _UDL-DLG-COL
+VARIABLE _UDL-DLG-W
+
+\ A child the dialog lays out.
+: _UTUI-DLG-PLACED?  ( child -- flag )
+    DUP UIDL-EVAL-WHEN IF _UL-SKIP-LAYOUT? 0= ELSE DROP 0 THEN ;
+
+\ The rows the placed children after CHILD keep: a row each.
+: _UTUI-DLG-AFTER  ( child -- rows )
+    0 SWAP UIDL-NEXT-SIB
+    BEGIN ?DUP WHILE
+        DUP _UTUI-DLG-PLACED? IF SWAP 1+ SWAP THEN UIDL-NEXT-SIB
+    REPEAT ;
+
+: _UTUI-DLG-PLACE  ( child sc -- )
+    _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-LAYOUT-FLAGS!
+    _UDL-DLG-POS @ OVER _UTUI-SC-ROW!
+    _UDL-DLG-COL @ OVER _UTUI-SC-COL!
+    _UDL-DLG-W @ OVER _UTUI-SC-W!
+    SWAP DUP _UL-IS-LEAF? IF
+        DROP 1
+    ELSE
+        _UDL-DLG-END @ _UDL-DLG-POS @ - SWAP _UTUI-DLG-AFTER - 1 MAX
+    THEN
+    DUP _UDL-DLG-POS +! SWAP _UTUI-SC-H! ;
 
 : _UTUI-LAYOUT-DLG  ( elem -- )
-    DUP _UTUI-SIDECAR _UDL-DLG-SC !
-    _UDL-DLG-SC @ _UTUI-SC-VIS? 0= IF DROP EXIT THEN
+    DUP _UTUI-SIDECAR DUP _UTUI-SC-VIS? 0= IF 2DROP EXIT THEN
+    1 _UTUI-DLG-REVISION +!
+    DUP _UTUI-SC-ROW@ 1+ _UDL-DLG-POS !
+    DUP _UTUI-SC-COL@ 1+ _UDL-DLG-COL !
+    DUP _UTUI-SC-W@ 2 - 0 MAX _UDL-DLG-W !
+    DUP _UTUI-SC-ROW@ SWAP _UTUI-SC-H@ + 1- _UDL-DLG-END !
+    UIDL-FIRST-CHILD
+    BEGIN ?DUP WHILE
+        DUP _UTUI-SIDECAR
+        OVER UIDL-EVAL-WHEN 0= IF
+            _UTUI-SCF-HAS SWAP _UTUI-SC-LAYOUT-FLAGS!
+        ELSE OVER _UL-SKIP-LAYOUT? IF
+            _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
+            _UDL-DLG-POS @ OVER _UTUI-SC-ROW!
+            _UDL-DLG-COL @ OVER _UTUI-SC-COL!
+            0 OVER _UTUI-SC-W! 0 SWAP _UTUI-SC-H!
+        ELSE
+            OVER SWAP _UTUI-DLG-PLACE
+        THEN THEN
+        UIDL-NEXT-SIB
+    REPEAT ;
 
-    \ Dialog dimensions: 60% width (min 10), children+4 height (5–20)
-    _UTUI-RGN @ RGN-W 60 * 100 /
-    10 MAX _UDL-DLG-SC @ _UTUI-SC-W!
-    DUP UIDL-NCHILDREN 4 + 5 MAX 20 MIN
-    _UDL-DLG-SC @ _UTUI-SC-H!
-    \ Center in root region
-    _UTUI-RGN @ RGN-H _UDL-DLG-SC @ _UTUI-SC-H@ - 2/ DUP 0< IF DROP 0 THEN
-    _UTUI-RGN @ RGN-ROW +
-    _UDL-DLG-SC @ _UTUI-SC-ROW!
-    _UTUI-RGN @ RGN-W _UDL-DLG-SC @ _UTUI-SC-W@ - 2/ DUP 0< IF DROP 0 THEN
-    _UTUI-RGN @ RGN-COL +
-    _UDL-DLG-SC @ _UTUI-SC-COL!
-    \ Layout children inside dialog (stack)
-    _UTUI-LAYOUT-STACK ;
+\ Its background, and the frame with the title on its top edge; the
+\ children paint over it.
+: _UTUI-RENDER-DLG  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    _UTUI-FILL-BG
+    _UR-H @ 2 < _UR-W @ 2 < OR IF DROP EXIT THEN
+    S" title" UIDL-ATTR 0= IF 2DROP 0 0 THEN
+    >R >R BOX-SINGLE R> R> _UR-ROW @ _UR-COL @ _UR-H @ _UR-W @
+        BOX-DRAW-TITLED ;
 
 \ --- Scroll: reserve 1 col for scrollbar track on child ---
 : _UTUI-LAYOUT-SCROLL  ( elem -- )
@@ -3300,6 +3366,12 @@ VARIABLE _UDR-SC
     _UTUI-DIRTY-RECT ;
 ' _UTUI-DIALOG-DISMISS IS _DLG-DISMISS-HOOK
 
+\ The dialog this context's application shows, or 0.  It is saved with
+\ the context, so each application has its own.
+VARIABLE _UTUI-MODAL
+0 _UTUI-MODAL !
+' _UTUI-MODAL IS _DLG-CELL-HOOK
+
 : _UTUI-DIALOG-BOUNDS  ( -- row col h w )
     _UTUI-RGN @ IF
         _UTUI-RGN @ RGN-ROW
@@ -3982,6 +4054,20 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
 
 : UTUI-BY-ID  ( id-a id-l -- elem | 0 )  UIDL-BY-ID ;
 
+\ UTUI-EACH-ELEM ( xt -- )
+\   Run XT ( elem -- ) on every element of the document, each before its
+\   children.  XT must not change the tree.
+VARIABLE _UEE-XT
+: _UEE-NEXT  ( elem -- next|0 )
+    DUP UIDL-FIRST-CHILD ?DUP IF NIP EXIT THEN
+    BEGIN
+        DUP UIDL-NEXT-SIB ?DUP IF NIP EXIT THEN
+        UIDL-PARENT DUP 0=
+    UNTIL ;
+: UTUI-EACH-ELEM  ( xt -- )
+    _UEE-XT ! UIDL-ROOT
+    BEGIN ?DUP WHILE DUP _UEE-XT @ EXECUTE _UEE-NEXT REPEAT ;
+
 \ UTUI-WIDGET@ ( elem -- wptr | 0 )
 \   Return the widget pointer associated with a UIDL element, or 0.
 : UTUI-WIDGET@  ( elem -- wptr | 0 )
@@ -4065,7 +4151,35 @@ VARIABLE _USA-VL
     THEN
     _USA-ELEM @ _USA-NA @ _USA-NL @ _USA-VA @ _USA-VL @
     UIDL-SET-ATTR
-    _USA-ELEM @ UIDL-DIRTY! ;
+    _USA-ELEM @ UIDL-DIRTY!
+    _USA-ELEM @ UIDL-TYPE UIDL-T-DIALOG =
+    _USA-ELEM @ UIDL-PARENT ?DUP IF UIDL-TYPE UIDL-T-DIALOG = OR THEN
+    IF 1 _UTUI-DLG-REVISION +! THEN ;
+
+\ UTUI-CHECKED? ( elem -- flag )
+\   Whether elem is a checked menu item.
+: UTUI-CHECKED?  ( elem -- flag )
+    DUP UIDL-ELEM-INDEX? NIP 0= IF DROP 0 EXIT THEN
+    _UTUI-CHECKED? ;
+
+\ UTUI-CHECKED! ( flag elem -- )
+\   Check or uncheck a menu item, which repaints when its state changes.
+\   Any other element is left as it is.
+VARIABLE _UCK-ELEM
+
+: UTUI-CHECKED!  ( flag elem -- )
+    DUP UIDL-ELEM-INDEX? NIP 0= IF 2DROP EXIT THEN
+    DUP UIDL-TYPE UIDL-T-ITEM <> IF 2DROP EXIT THEN
+    _UCK-ELEM !
+    _UCK-ELEM @ _UTUI-SIDECAR _UTUI-SC-RUNTIME@      ( flag old )
+    DUP ROT IF
+        _UTUI-RUNTIME-F-CHECKED OR
+    ELSE
+        _UTUI-RUNTIME-F-CHECKED INVERT AND
+    THEN                                             ( old new )
+    TUCK = IF DROP EXIT THEN                         ( new )
+    _UCK-ELEM @ _UTUI-SIDECAR _UTUI-SC-RUNTIME!
+    _UCK-ELEM @ UIDL-DIRTY! ;
 
 \ =====================================================================
 \  §17a — Automatic mounted canonical-widget relations
@@ -4126,6 +4240,21 @@ USCOL-F-TABSET    CONSTANT _UTUI-MC-K-TABSET
 VARIABLE _UTUI-MC-HEAD
 VARIABLE _UTUI-MC-COUNT
 VARIABLE _UTUI-MC-STATUS
+
+\ An application may paint one canonical prompt over its document, after
+\ UIDL, as foreground paint.  The draw observer records the prompt the last
+\ observed draw painted, with its instance, so a projection can publish it
+\ as the document's overlay TEXT field.  Both are context-owned; the next
+\ observed draw of the document replaces them.
+VARIABLE _UTUI-OVERLAY
+VARIABLE _UTUI-OVERLAY-INSTANCE
+0 _UTUI-OVERLAY ! 0 _UTUI-OVERLAY-INSTANCE !
+
+\ While a projection captures a document whose only foreground paint is
+\ its overlay field, a root that paint covers is clipped away and stays
+\ CELL's.  Composition sets this around that one capture.
+VARIABLE _UTUI-CAPTURE-OCCLUDED
+0 _UTUI-CAPTURE-OCCLUDED !
 
 VARIABLE _UTUI-MC-STAGE-ACTIVE
 VARIABLE _UTUI-MC-STAGE-ROOT
@@ -5155,13 +5284,19 @@ VARIABLE _UTUI-MC-U-REL
         _UTUI-MC-STAGE-ROOT @ = IF _UTUI-MC-STAGE-CLEAR THEN
     ELSE DROP THEN ;
 
+: _UTUI-OVERLAY-NOTE  ( widget -- )
+    DUP _PRM-GENUINE? 0= IF DROP EXIT THEN
+    DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
+    DUP PRM-INSTANCE@ _UTUI-OVERLAY-INSTANCE ! _UTUI-OVERLAY ! ;
+
 : _UTUI-MC-DRAW-OBSERVER  ( widget phase context -- status )
     DROP
     DUP WDG-DRAW-PHASE-FULL-BEGIN = IF
         DROP _UTUI-MC-OBS-FULL-BEGIN WDG-DRAW-OBS-S-OK EXIT
     THEN
     DUP WDG-DRAW-PHASE-FULL-END = IF
-        DROP _UTUI-MC-OBS-FULL-END WDG-DRAW-OBS-S-OK EXIT
+        DROP DUP _UTUI-OVERLAY-NOTE
+        _UTUI-MC-OBS-FULL-END WDG-DRAW-OBS-S-OK EXIT
     THEN
     DUP WDG-DRAW-PHASE-FULL-ABORT = IF
         DROP _UTUI-MC-OBS-FULL-ABORT WDG-DRAW-OBS-S-OK EXIT
@@ -5250,6 +5385,7 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
         _UTUI-MC-S-OK _UTUI-MC-STATUS !
     THEN
     _UTUI-MC-OBS-BODY ! 0 _UTUI-MC-OBS-IOR !
+    0 _UTUI-OVERLAY ! 0 _UTUI-OVERLAY-INSTANCE !
     ['] _UTUI-MC-OBS-EXECUTE CATCH _UTUI-MC-OBS-IOR !
     0 _UTUI-MC-OBS-BODY !
     _UTUI-MC-OBS-IOR @ ?DUP IF
@@ -5263,6 +5399,38 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
         _UTUI-MC-STAGE-CLEAR _UTUI-MC-SET-INVALID
     THEN
     _UTUI-MC-STATUS @ _UTUI-MC-SCRATCH-CLEAR ;
+
+\ _UTUI-OVERLAY-FIELD@ ( -- prompt|0 )
+\   The prompt the document's last observed draw painted, while it is still
+\   that live prompt, shown and visible.
+: _UTUI-OVERLAY-FIELD@  ( -- prompt|0 )
+    _UTUI-OVERLAY @ DUP 0= IF EXIT THEN
+    DUP PRM-INSTANCE@ DUP 0= SWAP _UTUI-OVERLAY-INSTANCE @ <> OR IF
+        DROP 0 EXIT
+    THEN
+    DUP PRM-ACTIVE? 0= IF DROP 0 EXIT THEN
+    DUP WDG-VISIBLE? 0= IF DROP 0 EXIT THEN ;
+
+\ UTUI-OVERLAY-FIELD-ROOT@ ( -- row col height width found? )
+\   The screen cells of the document's overlay field, if it has one.
+: UTUI-OVERLAY-FIELD-ROOT@  ( -- row col height width found? )
+    _UTUI-OVERLAY-FIELD@ ?DUP 0= IF 0 0 0 0 0 EXIT THEN
+    PRM-FIELD-ROOT -1 ;
+
+\ UTUI-OVERLAY-ROOT@ ( -- row col height width found? )
+\   The screen cells of the document's overlay: the dialog it shows, as
+\   its last paint laid it out, else its overlay field.  A dialog's host
+\   paints it after the document, over everything the document paints.
+: UTUI-OVERLAY-ROOT@  ( -- row col height width found? )
+    DLG-SHOWN ?DUP IF
+        DLG-ROOT 2DUP * IF -1 EXIT THEN 2DROP 2DROP
+    THEN
+    UTUI-OVERLAY-FIELD-ROOT@ ;
+
+\ UTUI-CAPTURE-OCCLUDED! ( flag -- )
+\   Set for the capture of a document whose only foreground paint is its
+\   overlay field; clear it after.
+: UTUI-CAPTURE-OCCLUDED!  ( flag -- )  0<> _UTUI-CAPTURE-OCCLUDED ! ;
 
 \ UTUI-WIDGET-SET ( wptr elem -- )
 \   Attach a manually created widget to a UIDL element.
@@ -5309,6 +5477,21 @@ VARIABLE _UTUI-WS-OLD-OWNER
     DUP _UTUI-STATE !
     ST-USE ;
 
+\ Seed each menu item's checked state from its authored checked value.
+: _UTUI-SEED-CHECKED  ( -- )
+    _UDL-ECNT @ 0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ UIDL-T-ITEM = IF
+            DUP S" checked" UIDL-ATTR IF
+                S" true" STR-STR= IF
+                    DUP _UTUI-SIDECAR DUP _UTUI-SC-RUNTIME@
+                    _UTUI-RUNTIME-F-CHECKED OR SWAP _UTUI-SC-RUNTIME!
+                THEN
+            ELSE 2DROP THEN
+        THEN
+        DROP
+    LOOP ;
+
 : UTUI-LOAD  ( xml-a xml-u rgn -- flag )
     _UTUI-MENU-STATE-CLEAR
     _UTUI-RGN !
@@ -5324,6 +5507,7 @@ VARIABLE _UTUI-WS-OLD-OWNER
 
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
+    _UTUI-SEED-CHECKED
 
     UTUI-RELAYOUT
     _UTUI-MATERIALIZE
@@ -5359,6 +5543,7 @@ VARIABLE _UTUI-WS-OLD-OWNER
     0 _UTUI-FOCUS-P !
     0 _UTUI-DOC-LOADED !
     0 _UTUI-RGN !
+    0 _UTUI-OVERLAY ! 0 _UTUI-OVERLAY-INSTANCE !
     _UTUI-PROJECTION-CLEAR
     _UTUI-MC-SCRATCH-CLEAR ;
 
@@ -5366,8 +5551,8 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  §18b — UIDL Context Save / Restore  (UCTX)
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 29 scalar variables and 11 copied
-\  pool arrays. Total: 107,752 bytes (approximately 105 KiB).  The mounted
+\  Per sub-app UIDL context buffer holding 32 scalar variables and 11 copied
+\  pool arrays. Total: 107,776 bytes (approximately 105 KiB).  The mounted
 \  canonical relation head is context-owned dynamic state; context buffers
 \  are consequently opaque, non-copyable, and may be cleared/freed only while
 \  inactive.
@@ -5377,12 +5562,12 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  calls only the public API: UCTX-ALLOC, UCTX-FREE, UCTX-SAVE,
 \  UCTX-RESTORE, UCTX-CLEAR, UCTX-LIVE?, UCTX-LIVE-DISOWN, UCTX-TOTAL.
 
-29 CONSTANT _UCTX-NVAR
-232 CONSTANT _UCTX-VAR-SZ       \ 29 × 8
+32 CONSTANT _UCTX-NVAR
+256 CONSTANT _UCTX-VAR-SZ       \ 32 × 8
 
 \ Pool sizes (must match module declarations)
 32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
-20480 CONSTANT _UCTX-ATTRS-SZ   \ 512 × 40
+_UDL-MAX-ATTRS _UDL-ATTRSZ * CONSTANT _UCTX-ATTRS-SZ
 12288 CONSTANT _UCTX-STRS-SZ
  2048 CONSTANT _UCTX-HASH-SZ    \ 256 × 8
  4096 CONSTANT _UCTX-HIDS-SZ    \ 256 × 16
@@ -5407,8 +5592,9 @@ _UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
 _UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-O-MCS
 _UCTX-O-MCS    _UCTX-MCS-SZ    +                   CONSTANT UCTX-TOTAL
 
-27 CELLS CONSTANT _UCTX-O-MC-HEAD
-28 CELLS CONSTANT _UCTX-O-MC-COUNT
+29 CELLS CONSTANT _UCTX-O-MODAL
+30 CELLS CONSTANT _UCTX-O-MC-HEAD
+31 CELLS CONSTANT _UCTX-O-MC-COUNT
 
 \ Non-serialized ownership of the dynamic relation alias currently exposed
 \ through the live UIDL globals.  Exactly one restored UCTX may own it.
@@ -5424,7 +5610,7 @@ VARIABLE _UCTX-LIVE-OWNER
 
 \ --- Variable table: maps index → global VARIABLE address ---
 CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
-27 CONSTANT _UCTX-NPLAIN
+30 CONSTANT _UCTX-NPLAIN
 
 : _UCTX-INIT-VARS  ( -- )
     _UDL-ECNT           _UCTX-VARS  0 CELLS + !
@@ -5454,8 +5640,11 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
     _UTUI-MENU-SAVE-H     _UCTX-VARS 24 CELLS + !
     _UTUI-MENU-SAVE-W     _UCTX-VARS 25 CELLS + !
     _UTUI-MENU-SAVE-Z     _UCTX-VARS 26 CELLS + !
-    _UTUI-MC-HEAD          _UCTX-VARS 27 CELLS + !
-    _UTUI-MC-COUNT         _UCTX-VARS 28 CELLS + ! ;
+    _UTUI-OVERLAY          _UCTX-VARS 27 CELLS + !
+    _UTUI-OVERLAY-INSTANCE _UCTX-VARS 28 CELLS + !
+    _UTUI-MODAL            _UCTX-VARS 29 CELLS + !
+    _UTUI-MC-HEAD          _UCTX-VARS 30 CELLS + !
+    _UTUI-MC-COUNT         _UCTX-VARS 31 CELLS + ! ;
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
@@ -5554,7 +5743,14 @@ VARIABLE _UCTX-R-COUNT
     0 _UTUI-MC-HEAD ! 0 _UTUI-MC-COUNT !
     _UTUI-MC-SOURCES _UTUI-MC-SOURCES-SIZE 0 FILL
     _UTUI-MC-S-OK _UTUI-MC-STATUS !
+    \ The owner's dialog is saved with it; the live cell must not name it,
+    \ or whatever runs next would take that application's dialog as its own.
+    0 _UTUI-MODAL !
     0 _UCTX-LIVE-OWNER ! ;
+
+\ A dialog its application never answered goes with the context.
+: _UCTX-FREE-SAVED-DIALOG  ( ctx -- )
+    _UCTX-O-MODAL + DUP @ ?DUP IF DLG-FREE THEN 0 SWAP ! ;
 
 : UCTX-FREE  ( ctx -- )
     DUP 0= IF DROP EXIT THEN
@@ -5562,6 +5758,7 @@ VARIABLE _UCTX-R-COUNT
         ABORT" UCTX-FREE requires an inactive context"
     _UCTX-STAGE-QUIESCENT? 0=
         ABORT" UCTX-FREE during draw observation"
+    DUP _UCTX-FREE-SAVED-DIALOG
     DUP _UCTX-FREE-SAVED-RELATIONS
     _UTUI-MC-SCRATCH-CLEAR
     FREE ;
@@ -5622,6 +5819,7 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
         ABORT" UCTX-CLEAR requires an inactive context"
     _UCTX-STAGE-QUIESCENT? 0=
         ABORT" UCTX-CLEAR during draw observation"
+    DUP _UCTX-FREE-SAVED-DIALOG
     DUP _UCTX-FREE-SAVED-RELATIONS
     _UTUI-MC-SCRATCH-CLEAR
     UCTX-TOTAL 0 FILL ;
@@ -6262,6 +6460,18 @@ VARIABLE _UTUI-CG-I-RIGHT
         _UTUI-CG-CLIP-RIGHT !
     -1 ;
 
+\ A visible clip that foreground paint meets is clipped away completely.
+: _UTUI-CG-OCCLUDE  ( -- )
+    _UTUI-CG-CLIP-BOTTOM @ _UTUI-CG-CLIP-TOP @ > 0= IF EXIT THEN
+    _UTUI-CG-CLIP-RIGHT @ _UTUI-CG-CLIP-LEFT @ > 0= IF EXIT THEN
+    _UTUI-CG-CLIP-TOP @ _UTUI-CG-CLIP-LEFT @
+    _UTUI-CG-CLIP-BOTTOM @ _UTUI-CG-CLIP-TOP @ -
+    _UTUI-CG-CLIP-RIGHT @ _UTUI-CG-CLIP-LEFT @ -
+    SCR-OCCLUSION-RECT? AND IF
+        _UTUI-CG-CLIP-TOP @ _UTUI-CG-CLIP-BOTTOM !
+        _UTUI-CG-CLIP-LEFT @ _UTUI-CG-CLIP-RIGHT !
+    THEN ;
+
 \ Return the complete canonical widget origin/extent separately from its
 \ exact region-ancestry clip.  The source record contributes semantic UIDL
 \ clipping; no physical screen size, renderer allocation, or reflow enters
@@ -6306,6 +6516,7 @@ VARIABLE _UTUI-CG-I-RIGHT
     _UTUI-CG-SOURCE-A @ 16 + @
     _UTUI-CG-SOURCE-A @ 24 + @
         _UTUI-CG-INTERSECT? 0= IF _UTUI-CG-FAIL EXIT THEN
+    _UTUI-CAPTURE-OCCLUDED @ IF _UTUI-CG-OCCLUDE THEN
 
     _UTUI-CG-ORIGIN-ROW @ _UTUI-CG-ORIGIN-COL @
     _UTUI-CG-EXTENT-H @ _UTUI-CG-EXTENT-W @
@@ -7737,6 +7948,8 @@ GUARD _utui-guard
 ' UTUI-ADD-ELEM       CONSTANT _utui-add-elem-xt
 ' UTUI-REMOVE-ELEM    CONSTANT _utui-remove-elem-xt
 ' UTUI-SET-ATTR       CONSTANT _utui-set-attr-xt
+' UTUI-CHECKED!       CONSTANT _utui-checked-s-xt
+' UTUI-CHECKED?       CONSTANT _utui-checked-q-xt
 ' UTUI-WIDGET-SET     CONSTANT _utui-widget-set-xt
 ' UTUI-ELEM-RGN       CONSTANT _utui-elem-rgn-xt
 ' UTUI-ELEM-RESOLVED-STATE@
@@ -7775,6 +7988,8 @@ GUARD _utui-guard
 : UTUI-ADD-ELEM       _utui-add-elem-xt       _utui-guard WITH-GUARD ;
 : UTUI-REMOVE-ELEM    _utui-remove-elem-xt    _utui-guard WITH-GUARD ;
 : UTUI-SET-ATTR       _utui-set-attr-xt       _utui-guard WITH-GUARD ;
+: UTUI-CHECKED!       _utui-checked-s-xt      _utui-guard WITH-GUARD ;
+: UTUI-CHECKED?       _utui-checked-q-xt      _utui-guard WITH-GUARD ;
 : UTUI-WIDGET-SET     _utui-widget-set-xt     _utui-guard WITH-GUARD ;
 : UTUI-ELEM-RGN       _utui-elem-rgn-xt       _utui-guard WITH-GUARD ;
 

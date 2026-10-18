@@ -58,7 +58,8 @@ REQUIRE ../../utils/fs/vfs.f
 80  CONSTANT _EXPL-O-REN-INP
 88  CONSTANT _EXPL-O-FLAGS2
 96  CONSTANT _EXPL-O-REN-BUF
-104 CONSTANT _EXPL-DESC-SZ
+104 CONSTANT _EXPL-O-DELETE    \ the entry a delete question asks about
+112 CONSTANT _EXPL-DESC-SZ
 
 256 CONSTANT _EXPL-REN-CAP     \ rename buffer capacity
 
@@ -265,19 +266,19 @@ VARIABLE _EXR-IN
     _EXR-W @ WDG-DIRTY ;
 
 \ EXPL-DELETE ( widget -- )
-\   Delete selected entry with confirmation dialog.
+\   Ask before deleting the selected entry; a confirming answer deletes it.
 
 VARIABLE _EXD-W
 VARIABLE _EXD-IN
 
-: EXPL-DELETE  ( widget -- )
+\ The answer comes later, so the entry is deleted only while it is still
+\ the one selected.
+: _EXPL-DELETE-CONFIRMED  ( confirmed? widget -- )
     _EXD-W !
+    0= IF EXIT THEN
     _EXD-W @ _EXPL-O-TREE + @ TREE-SELECTED  _EXD-IN !
     _EXD-IN @ 0= IF EXIT THEN
-
-    \ Confirm with dialog
-    S" Delete?" DLG-CONFIRM               ( flag )
-    0= IF  EXIT  THEN                     \ user said No
+    _EXD-IN @ _EXD-W @ _EXPL-O-DELETE + @ <> IF EXIT THEN
 
     \ Get name and VFS
     _EXD-IN @ IN.NAME @ _VFS-STR-GET      ( name-a name-u )
@@ -295,6 +296,14 @@ VARIABLE _EXD-IN
     _EXD-W @ _EXPL-O-VFS + @ VFS-SYNC DROP
     _EXD-W @ _EXPL-O-TREE + @ TREE-REFRESH
     _EXD-W @ WDG-DIRTY ;
+
+: EXPL-DELETE  ( widget -- )
+    _EXD-W !
+    _EXD-W @ _EXPL-O-TREE + @ TREE-SELECTED  _EXD-IN !
+    _EXD-IN @ 0= IF EXIT THEN
+    _EXD-IN @ _EXD-W @ _EXPL-O-DELETE + !
+    S" Delete the selected entry?" S" Delete"
+        ['] _EXPL-DELETE-CONFIRMED _EXD-W @ DLG-CONFIRM DROP ;
 
 \ EXPL-NEW-FILE ( widget -- )
 \   Create a new file in the directory of the selected entry.
@@ -487,6 +496,7 @@ VARIABLE _EXH-EV   \ current event
     0                  OVER _EXPL-O-ON-SEL   + !
     0                  OVER _EXPL-O-REN-INP  + !
     0                  OVER _EXPL-O-FLAGS2   + !
+    0                  OVER _EXPL-O-DELETE   + !
 
     \ Allocate rename buffer
     _EXPL-REN-CAP ALLOCATE

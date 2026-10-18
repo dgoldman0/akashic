@@ -10,7 +10,8 @@ HEADER = struct.Struct('<IHHQIIiiIIiiIIqqqqII')
 
 
 def content(kind=1, *, value=5, minimum=-10, maximum=10, step=3,
-            choices=(), text=b'', label=True, **changes):
+            choices=(), text=b'', label=True, caret=0, anchor=0, scroll=0,
+            placeholder=b'', placeholder_bytes=None, **changes):
     fields = dict(tag=0x31434446, version=1, kind=kind, revision=7, flags=0,
                   reserved=0, lx=0, ly=0, lw=5 if label else 0, lh=1 if label else 0,
                   vx=6, vy=0, vw=14, vh=1, value=value, minimum=minimum,
@@ -21,6 +22,11 @@ def content(kind=1, *, value=5, minimum=-10, maximum=10, step=3,
         fields['value'] = 0
     fields.update(changes)
     body = b''.join(struct.pack('<qII', v, len(label), 0) + label for v, label in choices)
+    if kind == 3:
+        # A TEXT field's edit record: caret, anchor, scroll, placeholder bytes.
+        held = len(placeholder) if placeholder_bytes is None else placeholder_bytes
+        edit = struct.pack('<IIII', caret, anchor, scroll, held)
+        return HEADER.pack(*fields.values()) + edit + text + placeholder
     return HEADER.pack(*fields.values()) + body + text
 
 
@@ -79,6 +85,12 @@ def fdc(request):
     (content(kind=2, value=-99, choices=((-99,b'same'), (42,b'same'))), b'Field', (2,8,MASK)),
     (content(kind=3,text='État ✓'.encode()), b'Field', (0,9,MASK)),
     (content(kind=3), b'Field', (0,0,MASK)),
+    # The edit record: caret and anchor within the value's six scalars, and a
+    # placeholder charged with the value.
+    (content(kind=3,text='État ✓'.encode(),caret=6,anchor=1,scroll=2,placeholder=b'Name'),
+     b'Field', (0,13,MASK)),
+    (content(kind=3,flags=2,text='••'.encode(),caret=2,anchor=2), b'Field', (0,6,MASK)),
+    (content(kind=3,label=False,placeholder='Nom é'.encode()), b'', (0,6,MASK)),
 ])
 def test_exact_valid_values(fdc,payload,label,expected):
     assert fdc.check(payload,label) == expected
@@ -86,7 +98,7 @@ def test_exact_valid_values(fdc,payload,label,expected):
 
 @pytest.mark.parametrize('changes', [
     {'tag':0}, {'version':2}, {'kind':0}, {'kind':4}, {'revision':0},
-    {'flags':2}, {'reserved':1}, {'lx':-1}, {'lw':0}, {'lh':0},
+    {'flags':2}, {'flags':4}, {'reserved':1}, {'lx':-1}, {'lw':0}, {'lh':0},
     {'vx':-1}, {'vy':-1}, {'vw':0}, {'vh':0}, {'vw':15}, {'vh':2},
     {'vx':4}, {'value':11}, {'minimum':6}, {'maximum':4}, {'step':0}, {'step':-1},
     {'count':1}, {'text_bytes':1},
@@ -105,6 +117,11 @@ def test_noncanonical_header(fdc,changes):
     content(kind=2,value=1,choices=((1,b'A'),),text_bytes=1),
     changed(content(kind=3),56,'<q',1), content(kind=3,count=1), changed(content(kind=3),80,'<q',1),
     content(kind=3,text=b'A',text_bytes=0), content(kind=3,text=b'A',text_bytes=2),
+    content(kind=3)[:-1], content(kind=3)[:100],
+    content(kind=3,text=b'ab',caret=3), content(kind=3,text='é'.encode(),anchor=2),
+    content(kind=3,placeholder=b'ab',placeholder_bytes=1),
+    content(kind=3,placeholder=b'ab',placeholder_bytes=3),
+    content(kind=2,value=1,choices=((1,b'A'),),flags=2),
 ])
 def test_noncanonical_exact_tail(fdc,payload):
     assert fdc.check(payload) == (0,0,0)
@@ -114,6 +131,7 @@ def test_noncanonical_exact_tail(fdc,payload):
 def test_every_text_span_is_clean_scalar_utf8(fdc,bad):
     assert fdc.check(content(),bad) == (0,0,0)
     assert fdc.check(content(kind=3,text=bad)) == (0,0,0)
+    assert fdc.check(content(kind=3,placeholder=bad)) == (0,0,0)
     assert fdc.check(content(kind=2,value=1,choices=((1,bad),))) == (0,0,0)
 
 

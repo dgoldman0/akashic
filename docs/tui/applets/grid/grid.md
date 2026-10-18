@@ -49,8 +49,15 @@ navigation, and editing continues through the existing prompt and actions.
 Quoted line breaks and other source controls are projected as display
 replacement characters without changing the saved cell source.
 
-The formula bar keeps its existing first row. The grid begins one row below
-it, with a four-column row header and data columns ten cells wide below a
+The formula bar is the panel's first row: one read-only TEXT field through
+the shared field widget (`tui/widgets/field.f`), so a rich terminal gets it
+as a field and CELL draws it from the same model. Its label is the selected
+cell's name, from the second column, and its value the cell's source from
+the ninth column to one before the row's end, as a display shows it: a
+quoted line break or other control shows as a replacement character. Each
+change to the sheet or the panel's width binds a new revision of it; a
+panel too narrow for one cell of source shows no bar. The grid begins one
+row below it, with a four-column row header and data columns ten cells wide below a
 60-column panel width, or twelve cells wide otherwise. Logical column spans
 preserve those unequal widths and their hit rectangles. The full selected
 cell, including its trailing spacer, is highlighted; text retains that spacer.
@@ -146,7 +153,8 @@ second time.
 
 `python3 local_testing/akashic_tui.py smoke --profile grid` edits `D2` to
 `=B2*C2+5`, asserts the result `41`, asserts that `SUM(D2:D3)` updates to `91`,
-saves and reloads the sheet, verifies quoted CSV and formula source in live
+checks that the formula bar shows the edited source, saves and reloads the
+sheet, verifies quoted CSV and formula source in live
 MP64FS bytes, reports a self-reference as `#ERR`, recovers after clearing it,
 and checks the results after terminal resize.
 

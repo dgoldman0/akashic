@@ -95,7 +95,8 @@ def main() -> int:
             'S" CATRESULT " TYPE '
             "CT-VFS-NEW DUP _CTV ! VFS-USE "
             "_CTV @ ACAT-NEW _CS ! _CC1 ! _CS @ . "
-            "_CC1 @ ACAT-ACTIVATE . "
+            # Activation returns its status alone.
+            "DEPTH _CU ! _CC1 @ ACAT-ACTIVATE . DEPTH _CU @ - . "
             "CT-DESCS "
             "_CTAPP _DESK-BUILTIN-DEFAULT-FLAGS _CC1 @ "
             "ACAT-BIND-BUILTIN . _CC1 @ ACAT-COUNT . "
@@ -175,7 +176,7 @@ def main() -> int:
         if token not in ("ok", ">")
     )
     expected = (
-        "0 1 0 1 23 "
+        "0 1 0 0 1 23 "
         "0 2 0 Package two 35 "
         "14 Package two 3 Package two -1 0 3 0 -1 0 0 1 2 "
         "0 0 2 0 0 0 1 "

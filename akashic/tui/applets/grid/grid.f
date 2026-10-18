@@ -14,6 +14,7 @@ PROVIDED akashic-tui-grid
 REQUIRE ../../widgets/prompt.f
 REQUIRE ../../widgets/dialog.f
 REQUIRE ../../widgets/text-grid.f
+REQUIRE ../../widgets/field.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
 REQUIRE ../../uidl-tui.f
@@ -54,6 +55,16 @@ _GRID-TGRID-MAX-ITEMS 8 * CONSTANT _GRID-TGRID-WORK-CAP
 2048 CONSTANT _GRID-TGRID-ROW-KEY
 4096 CONSTANT _GRID-TGRID-COLUMN-KEY
 8192 CONSTANT _GRID-TGRID-CORNER-KEY
+
+\ The formula bar is one read-only TEXT field across the panel's first
+\ row: the selected cell's name in its label and the cell's source, as a
+\ display shows it, in its value.  A cell's name is its column's letter
+\ and its row's number.
+1 CONSTANT _GRID-FBAR-NAME-COL
+8 CONSTANT _GRID-FBAR-VALUE-COL
+_GRID-ROWS NUM>STR NIP 1+ CONSTANT _GRID-NAME-MAX
+UFLD-HEADER-SIZE _GRID-NAME-MAX 7 + -8 AND +
+    _GRID-TGRID-TEXT-CAP 7 + -8 AND + CONSTANT _GRID-FBAR-MODEL-CAP
 
  0 CONSTANT _GC-LEN
  8 CONSTANT _GC-VALUE
@@ -99,6 +110,9 @@ _GRID-CURRENT-STATE CMP-CELL: _GRID-SEL-COL
 _GRID-CURRENT-STATE CMP-CELL: _GRID-SCROLL-ROW
 _GRID-CURRENT-STATE CMP-CELL: _GRID-SCROLL-COL
 _GRID-CURRENT-STATE CMP-CELL: _GRID-DIRTY
+\ Set when the user agreed to discard unsaved changes and close, so the
+\ close Grid then asks for goes ahead.
+_GRID-CURRENT-STATE CMP-CELL: _GRID-DISCARD-ARMED
 _GRID-CURRENT-STATE CMP-CELL: _GRID-VFS
 _GRID-CURRENT-STATE VFA-SCOPE-SIZE CMP-FIELD: _GRID-LOAD-SCOPE
 _GRID-CURRENT-STATE VREPL-SIZE CMP-FIELD: _GRID-REPLACE
@@ -730,6 +744,16 @@ _GRID-CURRENT-STATE _GRID-TGRID-WORK-CAP CMP-FIELD: _GRID-TGRID-WORK
 _GRID-CURRENT-STATE USCOL-BUILDER-SIZE CMP-FIELD: _GRID-TGRID-BUILDER
 _GRID-CURRENT-STATE USCOL-SUMMARY-SIZE CMP-FIELD: _GRID-TGRID-SUMMARY
 
+_GRID-CURRENT-STATE CMP-CELL: _GRID-FBAR-WIDGET
+_GRID-CURRENT-STATE CMP-CELL: _GRID-FBAR-RGN
+_GRID-CURRENT-STATE CMP-CELL: _GRID-FBAR-DIRTY
+_GRID-CURRENT-STATE CMP-CELL: _GRID-FBAR-ACTIVE-A
+_GRID-CURRENT-STATE CMP-CELL: _GRID-FBAR-REVISION
+_GRID-CURRENT-STATE CMP-CELL: _GRID-FBAR-BOUND-W
+_GRID-CURRENT-STATE _GRID-FBAR-MODEL-CAP CMP-FIELD: _GRID-FBAR-BANK-A
+_GRID-CURRENT-STATE _GRID-FBAR-MODEL-CAP CMP-FIELD: _GRID-FBAR-BANK-B
+_GRID-CURRENT-STATE UFLD-BUILDER-SIZE CMP-FIELD: _GRID-FBAR-BUILDER
+
 _GRID-CURRENT-STATE CMP-CELL: _GRID-PROMPT
 _GRID-CURRENT-STATE CMP-CELL: _GRID-PROMPT-RGN
 _GRID-CURRENT-STATE CMP-CELL: _GRID-PROMPT-MODE
@@ -790,7 +814,7 @@ VARIABLE _GSA-N
     THEN ;
 
 : _GRID-INVALIDATE  ( -- )
-    -1 _GRID-TGRID-DIRTY !
+    -1 _GRID-TGRID-DIRTY ! -1 _GRID-FBAR-DIRTY !
     _GRID-PANEL WDG-DIRTY
     _GRID-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
     _GRID-UPDATE-STATUS
@@ -1069,19 +1093,70 @@ CREATE _GRID-TG-DISPLAY _GRID-TGRID-TEXT-CAP ALLOT
 : _GRID-TGRID-SCROLLED  ( steps widget -- )
     DROP 0 _GRID-MOVE ;
 
+\ ---------------------------------------------------------------------
+\ Formula bar
+\ ---------------------------------------------------------------------
+
+: _GRID-FBAR-INACTIVE  ( -- address )
+    _GRID-FBAR-ACTIVE-A @ _GRID-FBAR-BANK-A = IF
+        _GRID-FBAR-BANK-B
+    ELSE
+        _GRID-FBAR-BANK-A
+    THEN ;
+
+\ The source keeps the place it had beside the name, and the row's last
+\ cell stays clear.  With no room for one cell of it, there is no bar.
+: _GRID-FBAR-VALUE-W  ( -- cells ) _GRID-PW @ _GRID-FBAR-VALUE-COL - 1- ;
+
+: _GRID-FBAR-BUILD  ( destination -- bytes status )
+    _GRID-FBAR-MODEL-CAP _GRID-FBAR-BUILDER UFLD-BUILDER-INIT
+        ?DUP IF 0 SWAP EXIT THEN
+    1 UFLD-K-TEXT _GRID-FBAR-REVISION @ _GRID-PW @ 1
+        UFLD-STATE-VISIBLE UFLD-STATE-ENABLED OR UFLD-F-READ-ONLY
+        _GRID-FBAR-BUILDER UFLD-BEGIN ?DUP IF 0 SWAP EXIT THEN
+    0 _GRID-FBAR-NAME-COL 1 _GRID-NAME-MAX
+    0 _GRID-FBAR-VALUE-COL 1 _GRID-FBAR-VALUE-W
+        _GRID-FBAR-BUILDER UFLD-SLOTS ?DUP IF 0 SWAP EXIT THEN
+    _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-CELL-NAME
+        _GRID-FBAR-BUILDER UFLD-LABEL ?DUP IF 0 SWAP EXIT THEN
+    _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-CELL
+        DUP _GC-SOURCE + SWAP _GC-LEN + @
+        _GRID-FBAR-BUILDER UFLD-TEXT-DISPLAY ?DUP IF 0 SWAP EXIT THEN
+    _GRID-FBAR-BUILDER UFLD-FINISH ;
+
+: _GRID-FBAR-UNBIND  ( -- )
+    _GRID-FBAR-WIDGET @ ?DUP IF FLD-UNBIND THEN
+    0 _GRID-FBAR-ACTIVE-A ! 0 _GRID-FBAR-BOUND-W ! ;
+
+VARIABLE _GRID-FB-DEST
+
+\ Each model is a new revision, built into the bank the widget does not
+\ show and bound before it becomes the active one.
+: _GRID-FBAR-REBUILD  ( -- ready? )
+    1 _GRID-FBAR-REVISION +!
+    _GRID-FBAR-INACTIVE DUP _GRID-FB-DEST ! _GRID-FBAR-BUILD
+    IF DROP _GRID-FBAR-UNBIND 0 EXIT THEN
+    _GRID-FB-DEST @ SWAP _GRID-FBAR-WIDGET @ FLD-BIND
+    IF _GRID-FBAR-UNBIND 0 EXIT THEN
+    _GRID-FB-DEST @ _GRID-FBAR-ACTIVE-A !
+    _GRID-PW @ _GRID-FBAR-BOUND-W ! 0 _GRID-FBAR-DIRTY ! -1 ;
+
+\ Place the bar across the panel's first row, and bind the selected cell
+\ again when the sheet or the panel's width has changed.
+: _GRID-FBAR-ENSURE  ( -- ready? )
+    _GRID-FBAR-WIDGET @ 0= IF 0 EXIT THEN
+    _GRID-FBAR-VALUE-W 0> 0= IF _GRID-FBAR-UNBIND 0 EXIT THEN
+    _GRID-PANEL-RGN @ DUP RGN-ROW SWAP RGN-COL 1 _GRID-PW @
+        _GRID-FBAR-RGN @ RGN-BOUNDS!
+    _GRID-FBAR-ACTIVE-A @ 0<> _GRID-FBAR-DIRTY @ 0= AND
+    _GRID-FBAR-BOUND-W @ _GRID-PW @ = AND IF -1 EXIT THEN
+    _GRID-FBAR-REBUILD ;
+
 : _GRID-PANEL-DRAW  ( widget -- )
     DROP _GRID-METRICS _GRID-ENSURE-VISIBLE _GRID-TGRID-ENSURE
     253 233 0 DRW-STYLE!
     32 0 0 _GRID-PH @ _GRID-PW @ DRW-FILL-RECT
-
-    253 236 0 DRW-STYLE!
-    32 0 0 1 _GRID-PW @ DRW-FILL-RECT
-    _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-CELL-NAME 0 1 DRW-TEXT
-    244 DRW-FG! [CHAR] = 0 6 DRW-CHAR
-    _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-CELL
-    DUP _GC-SOURCE + SWAP _GC-LEN + @ _GRID-PW @ 9 - 0 MAX MIN
-    0 8 DRW-TEXT
-
+    _GRID-FBAR-ENSURE IF _GRID-FBAR-WIDGET @ _GRID-PANEL-RGN @ WDG-DRAW-IN THEN
     255 60 CELL-A-BOLD DRW-STYLE!
     32 1 0 1 _GRID-PW @ DRW-FILL-RECT
     253 233 0 DRW-STYLE!
@@ -1153,14 +1228,18 @@ VARIABLE _GRID-SUB-A
 VARIABLE _GRID-SUB-U
 VARIABLE _GRID-SUB-MODE
 
+\ The prompt painted over the status bar's row and has just gone inactive.
+\ The status bar repaints that whole row, or its cells would keep the
+\ prompt's paint, in CELL and as foreground over the document.
 : _GRID-PROMPT-SUBMIT  ( prompt -- )
+    _GRID-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     PRM-GET-TEXT _GRID-SUB-U ! _GRID-SUB-A !
     _GRID-PROMPT-MODE @ _GRID-SUB-MODE !
     _GRID-PRM-NONE _GRID-PROMPT-MODE !
     _GRID-SUB-MODE @ CASE
         _GRID-PRM-EDIT OF
             _GRID-SUB-U @ _GRID-SOURCE-CAP > IF
-                S" A Grid cell is limited to 40 bytes" 2200 ASHELL-TOAST
+                S" A Grid cell is limited to 40 bytes" 2200 ASHELL-TOAST-WARNING
             ELSE
                 _GRID-SUB-A @ _GRID-SUB-U @
                 _GRID-SEL-ROW @ _GRID-SEL-COL @ _GRID-SET-CELL
@@ -1173,7 +1252,7 @@ VARIABLE _GRID-SUB-MODE
                 _GRID-SEL-COL ! _GRID-SEL-ROW !
                 _GRID-METRICS _GRID-ENSURE-VISIBLE
             ELSE
-                2DROP S" Invalid cell name" 1800 ASHELL-TOAST
+                2DROP S" Invalid cell name" 1800 ASHELL-TOAST-WARNING
             THEN
         ENDOF
     ENDCASE
@@ -1181,36 +1260,37 @@ VARIABLE _GRID-SUB-MODE
     _GRID-INVALIDATE ;
 
 : _GRID-PROMPT-CANCEL  ( prompt -- )
+    _GRID-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     DROP _GRID-PRM-NONE _GRID-PROMPT-MODE !
     _GRID-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _GRID-INVALIDATE ;
 
 : _GRID-DO-SAVE  ( elem -- )
-    DROP _GRID-SAVE IF S" Grid save failed" ELSE S" Grid saved" THEN
-    1500 ASHELL-TOAST ;
+    DROP _GRID-SAVE IF S" Grid save failed" 1500 ASHELL-TOAST-ERROR
+    ELSE S" Grid saved" 1500 ASHELL-TOAST THEN ;
 
 : _GRID-LOAD-ERROR-TOAST  ( status -- )
     DUP _GRID-L-S-TOO-LARGE = IF
         DROP S" Grid source exceeds 96 KiB; current sheet kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-RECOVERY = IF
         DROP S" Grid recovery failed; current sheet kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-CAPACITY = IF
         DROP S" Grid source exceeds 64 rows or 16 columns"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-FIELD = IF
         DROP S" Grid source has a field over 40 bytes"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
     DUP _GRID-L-S-INVALID = IF
         DROP S" Grid source is malformed; current sheet kept"
-        3000 ASHELL-TOAST EXIT
+        3000 ASHELL-TOAST-ERROR EXIT
     THEN
-    DROP S" Grid read failed; current sheet kept" 2800 ASHELL-TOAST ;
+    DROP S" Grid read failed; current sheet kept" 2800 ASHELL-TOAST-ERROR ;
 
 : _GRID-RELOAD-NOW  ( -- )
     _GRID-LOAD DUP IF
@@ -1220,14 +1300,14 @@ VARIABLE _GRID-SUB-MODE
         _GRID-INVALIDATE S" Grid reloaded" 1400 ASHELL-TOAST
     THEN ;
 
+: _GRID-RELOAD-CONFIRMED  ( confirmed? context -- )
+    DROP IF _GRID-RELOAD-NOW THEN ;
+
 : _GRID-DO-RELOAD  ( elem -- )
     DROP
-    _GRID-DIRTY @ IF
-        S" Reload Grid and discard unsaved changes?" DLG-CONFIRM 0= IF
-            EXIT
-        THEN
-    THEN
-    _GRID-RELOAD-NOW ;
+    _GRID-DIRTY @ 0= IF _GRID-RELOAD-NOW EXIT THEN
+    S" Reload Grid and discard unsaved changes?" S" Discard"
+        ['] _GRID-RELOAD-CONFIRMED 0 DLG-CONFIRM DROP ;
 
 : _GRID-DO-EDIT  ( elem -- ) DROP _GRID-BEGIN-EDIT ;
 : _GRID-DO-CLEAR-CELL  ( elem -- ) DROP _GRID-CLEAR-SELECTED ;
@@ -1250,13 +1330,13 @@ VARIABLE _GRID-INIT-LOAD-STATUS
 
 : _GRID-SOURCE-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
-        S" Could not route the Grid source" 2000 ASHELL-TOAST
+        S" Could not route the Grid source" 2000 ASHELL-TOAST-ERROR
     THEN
     CBR-FREE ;
 
 : _GRID-POST-SOURCE-INTENT  ( intent-a intent-u -- )
     CBR-NEW DUP IF
-        2DROP 2DROP S" Could not allocate source request" 1800 ASHELL-TOAST EXIT
+        2DROP 2DROP S" Could not allocate source request" 1800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP _GRID-SOURCE-REQ !
     CPRINC-COMPONENT _GRID-SOURCE-REQ @ CBR.PRINCIPAL !
@@ -1267,7 +1347,7 @@ VARIABLE _GRID-INIT-LOAD-STATUS
     _GRID-SOURCE-REQ @ _GRID-CURRENT-INSTANCE @ CINST-POST-INTENT
     DUP CBUS-S-OK <> IF
         DROP _GRID-SOURCE-REQ @ CBR-FREE
-        S" Source routing is unavailable outside Desk" 1800 ASHELL-TOAST
+        S" Source routing is unavailable outside Desk" 1800 ASHELL-TOAST-WARNING
     ELSE DROP THEN ;
 
 : _GRID-DO-EDIT-SOURCE  ( elem -- )
@@ -1293,6 +1373,8 @@ VARIABLE _GRID-INIT-LOAD-STATUS
     0 _GRID-TGRID-ACTIVE-A ! 0 _GRID-TGRID-ACTIVE-U !
     0 _GRID-TGRID-BOUND-W ! 0 _GRID-TGRID-BOUND-H !
     0 _GRID-TGRID-BOUND-CELL-W ! -1 _GRID-TGRID-DIRTY !
+    0 _GRID-FBAR-WIDGET ! 0 _GRID-FBAR-RGN ! -1 _GRID-FBAR-DIRTY !
+    0 _GRID-FBAR-ACTIVE-A ! 0 _GRID-FBAR-REVISION ! 0 _GRID-FBAR-BOUND-W !
     _GRID-PRM-NONE _GRID-PROMPT-MODE !
     0 _GRID-SEL-ROW ! 0 _GRID-SEL-COL !
     0 _GRID-SCROLL-ROW ! 0 _GRID-SCROLL-COL ! 0 _GRID-DIRTY !
@@ -1329,6 +1411,8 @@ VARIABLE _GRID-INIT-LOAD-STATUS
         1 OVER TGRID-CELL-INSET!
         -1 SWAP TGRID-FILL-SELECTION!
         _GRID-TGRID-ENSURE
+        _GRID-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _GRID-FBAR-RGN !
+        FLD-NEW DUP _GRID-FBAR-WIDGET ! >R 253 236 0 R> FLD-STYLE!
         _GRID-PANEL _GRID-E-BODY @ UTUI-WIDGET-SET
     THEN
     S" save" ['] _GRID-DO-SAVE UTUI-DO!
@@ -1365,14 +1449,20 @@ VARIABLE _GRID-INIT-LOAD-STATUS
 
 : GRID-TICK-CB  ( instance -- ) _GRID-ACTIVATE ;
 
+: _GRID-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP IF -1 _GRID-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ Unsaved changes defer the close to a question; agreeing to discard them
+\ asks to close again, and that close goes ahead.
 : GRID-REQUEST-CLOSE-CB  ( reason instance -- decision )
     _GRID-ACTIVATE DROP
     _GRID-DIRTY @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
-    S" Close Grid and discard unsaved changes?" DLG-CONFIRM IF
-        APP-CLOSE-D-ALLOW
-    ELSE
-        APP-CLOSE-D-CANCEL
-    THEN ;
+    _GRID-DISCARD-ARMED @ IF
+        0 _GRID-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT
+    THEN
+    S" Close Grid and discard unsaved changes?" S" Discard"
+        ['] _GRID-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : GRID-SHUTDOWN-CB  ( instance -- )
     _GRID-ACTIVATE
@@ -1381,12 +1471,15 @@ VARIABLE _GRID-INIT-LOAD-STATUS
     _GRID-PROMPT-RGN @ ?DUP IF RGN-FREE THEN
     _GRID-TGRID-WIDGET @ ?DUP IF TGRID-FREE THEN
     _GRID-TGRID-RGN @ ?DUP IF RGN-FREE THEN
+    _GRID-FBAR-WIDGET @ ?DUP IF FLD-FREE THEN
+    _GRID-FBAR-RGN @ ?DUP IF RGN-FREE THEN
     _GRID-PANEL-RGN @ ?DUP IF RGN-FREE THEN
     _GRID-CELLS @ ?DUP IF FREE THEN
     _GRID-IO-BUF @ ?DUP IF FREE THEN
     0 _GRID-CELLS ! 0 _GRID-IO-BUF ! 0 _GRID-PROMPT !
     0 _GRID-TGRID-WIDGET ! 0 _GRID-TGRID-RGN !
     0 _GRID-TGRID-ACTIVE-A ! 0 _GRID-TGRID-ACTIVE-U !
+    0 _GRID-FBAR-WIDGET ! 0 _GRID-FBAR-RGN ! 0 _GRID-FBAR-ACTIVE-A !
     0 _GRID-PROMPT-RGN ! 0 _GRID-PANEL-RGN ! ;
 
 CREATE _GRID-CELL-TEXT-SCHEMA CS-SIZE ALLOT

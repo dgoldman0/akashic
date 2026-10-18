@@ -22,6 +22,18 @@ the signature `( prompt -- )`.
 | `PRM-WIPE` | `( prompt -- )` | Zero the full caller-owned input buffer |
 | `PRM-SET-BOUNDS` | `( row col h w prompt -- )` | Follow a relaid-out status element |
 | `PRM-FREE` | `( prompt -- )` | Free prompt-owned allocations |
+| `PRM-INSTANCE@` | `( prompt -- instance\|0 )` | The prompt's lifetime identity |
+| `PRM-FIELD-ROOT` | `( prompt -- row col height width )` | The cells its field takes |
+| `PRM-FIELD-CAPTURE` | `( dst cap prompt -- bytes status )` | Its TEXT field's UFLD model |
+
+While it is shown, the prompt is also one TEXT field
+([field model](../field-model.md)): its label, its input's value (mask
+characters when it masks), caret, selection, scroll and placeholder.
+`PRM-FIELD-CAPTURE` writes that model at an aligned destination apart from
+everything the prompt reads, or with `0 0` only measures it. It lays the
+prompt out as its draw does, settling the input's scroll, so a capture taken
+before the draw is what the draw shows. A rich renderer shows the field and
+names positions in it; the CELL paint stays the complete fallback.
 
 An active prompt consumes all key events routed to it. Enter deactivates it
 and invokes the submit callback; Escape deactivates it and invokes the cancel

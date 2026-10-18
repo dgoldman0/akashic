@@ -23,6 +23,7 @@ from rich_terminal.pygame_view import (
     ControlHitTarget,
     ControlIdentity,
     ControlSurface,
+    DialogHitTarget,
     PixelRect,
     RegionOcclusion,
     TextHitTarget,
@@ -36,6 +37,10 @@ from rich_terminal.retained_scene import (
     ObjectBounds,
     RGBA,
     StatusSeverity,
+)
+from rich_terminal.semantic_dialogs import ButtonContent, ButtonFlag, DialogContent, DialogFlag
+from rich_terminal.semantic_fields import (
+    FieldChoice, FieldContent, FieldFlag, FieldKind, FieldRect,
 )
 from rich_terminal.semantic_content import (
     SemanticContentFlag,
@@ -62,6 +67,8 @@ from rich_terminal.semantic_items import (
     ViewItem,
 )
 from rich_terminal.retained_view import (
+    ButtonDraw,
+    DialogDraw,
     DisplayScope,
     DocumentDraw,
     GlyphRunDraw,
@@ -941,9 +948,9 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "glyph_draw": "GLYPH-DRAW",
         "glyph_runs": "GLYPH-RUNS",
     }
-    # Seven-cell quota sets: each name is one quota within its set.
+    # Eight-cell quota sets: each name is one quota within its set.
     quotas = ("regions", "resources", "objects", "series",
-              "resource_bytes", "utf8_bytes", "sample_slots")
+              "resource_bytes", "utf8_bytes", "sample_slots", "path_points")
     for prefix, accessor in (("need", "NEED"), ("held", "HELD"), ("ask", "ASK"),
                              ("fallback_needed", "FALLBACK-ASKED"),
                              ("fallback_held", "FALLBACK-HELD")):
@@ -1397,6 +1404,10 @@ def _projection(text: str) -> RichScreenProjection:
         sum(map(len, lines)),
         menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES),
         menu_signatures=acceptance_runner.DESKTOP_MENU_SIGNATURES,
+        menu_bar_identities=tuple(
+            ControlIdentity(1, 1, 50_000 + index)
+            for index in range(len(acceptance_runner.DESKTOP_MENU_SIGNATURES))
+        ),
     )
     pad_left, pad_top, pad_right, pad_bottom = (
         acceptance_runner._desktop_tile_bounds(
@@ -1535,45 +1546,156 @@ def _desktop_projection(
     return _projection("\n".join(lines))
 
 
+PROMPT_CONTROL_ID = 59_000
+
+
+def _with_tile_prompt(
+    projection: RichScreenProjection,
+    label: str,
+    tile: int,
+    menu_signature: tuple[str, ...],
+    typed: str = "",
+    *,
+    caret: int | None = None,
+    anchor: int | None = None,
+    row: int | None = None,
+    control: int = PROMPT_CONTROL_ID,
+) -> RichScreenProjection:
+    """PROJECTION with LABEL's prompt open over TILE's status row, or ROW: a
+    TEXT field in a modal region holding TYPED, with the applet's menu bar
+    and every control in the tile inactive beneath it.  CONTROL is its wire
+    identity, which a complete START renumbers."""
+
+    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(projection, tile)
+    row = bottom - 2 if row is None else row
+    start = len(label) + 2
+    caret = len(typed) if caret is None else caret
+    content = FieldContent(
+        1 + len(typed),
+        FieldKind.TEXT,
+        FieldFlag(0),
+        FieldRect(1, 0, len(label), 1),
+        FieldRect(start, 0, right - left - start, 1),
+        text=typed,
+        caret=caret,
+        anchor=caret if anchor is None else anchor,
+    )
+    prompt = acceptance_runner._SemanticFieldClaim(
+        ControlIdentity(1, 1, control), left, row, right, row + 1, label,
+        ControlState.VISIBLE | ControlState.ENABLED | ControlState.SELECTED,
+        content, modal=True,
+    )
+    return replace(
+        projection,
+        semantic_field_claims=projection.semantic_field_claims + (prompt,),
+        inactive_controls=projection.inactive_controls
+        | _tile_held(projection, tile, menu_signature),
+    )
+
+
+def _tile_held(
+    projection: RichScreenProjection,
+    tile: int,
+    menu_signature: tuple[str, ...],
+) -> frozenset[ControlIdentity]:
+    """The applet's menu bar and every control in TILE: what its prompt or
+    dialog holds inactive beneath it."""
+
+    left, top, right, bottom = acceptance_runner._desktop_tile_bounds(projection, tile)
+    inactive = {
+        projection.menu_bar_identities[projection.menu_signatures.index(menu_signature)]
+    }
+    for claims in (
+        projection.semantic_collection_claims,
+        projection.semantic_item_view_claims,
+        projection.semantic_document_claims,
+        projection.semantic_tabset_claims,
+        projection.semantic_field_claims,
+    ):
+        inactive.update(
+            claim.identity
+            for claim in claims
+            if left <= claim.left and claim.right <= right
+            and top <= claim.top and claim.bottom <= bottom
+        )
+    return frozenset(inactive)
+
+
+QUESTION_ID = 59_100
+QUESTION_ROW, QUESTION_COL = 16, 101
+DELETE_BUTTONS = (
+    (acceptance_runner.FEXPLORER_DELETE, ButtonFlag.DESTRUCTIVE),
+    (acceptance_runner.CONFIRM_CANCEL, ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
+)
+
+
+def _with_tile_question(
+    projection: RichScreenProjection,
+    message: str,
+    buttons: tuple[tuple[str, ButtonFlag], ...],
+    tile: int,
+    menu_signature: tuple[str, ...],
+) -> RichScreenProjection:
+    """PROJECTION with an applet's question open in TILE: MESSAGE on one
+    line from QUESTION_ROW, QUESTION_COL, then BUTTONS, each (label, flags),
+    along its last row, in a modal region, with the applet's menu bar and
+    every control in the tile inactive beneath it."""
+
+    col, row = QUESTION_COL, QUESTION_ROW
+    width = max(len(message) + 4, 12 * len(buttons) + 4)
+    content = DialogContent(1, DialogFlag(0), 3, FieldRect(2, 0, 7, 1),
+                            FieldRect(2, 2, len(message), 1), message=message)
+    state = ControlState.VISIBLE | ControlState.ENABLED
+    claims = tuple(
+        acceptance_runner._SemanticButtonClaim(
+            ControlIdentity(1, 1, QUESTION_ID + 1 + index),
+            col + 2 + 12 * index, row + 4, col + 12 + 12 * index, row + 5, label,
+            state | (ControlState.SELECTED if flags & ButtonFlag.DEFAULT else 0),
+            ButtonContent(flags),
+        )
+        for index, (label, flags) in enumerate(buttons)
+    )
+    dialog = acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, QUESTION_ID), col, row, col + width, row + 6, "Confirm",
+        ControlState.VISIBLE, content, modal=True, buttons=claims,
+    )
+    return replace(
+        projection,
+        semantic_dialog_claims=projection.semantic_dialog_claims + (dialog,),
+        inactive_controls=projection.inactive_controls
+        | _tile_held(projection, tile, menu_signature),
+    )
+
+
+def _desk_notice(message: str, severity: StatusSeverity = StatusSeverity.NEUTRAL):
+    """The app shell's notice saying MESSAGE, centred on the bottom row, its
+    bar four cells wider than its text."""
+
+    cols, rows = acceptance_runner.CANONICAL_DESKTOP_COLS, acceptance_runner.CANONICAL_DESKTOP_ROWS
+    width = len(message) + 4
+    left = (cols - width) // 2
+    content = DialogContent(1, DialogFlag.NOTICE, severity, FieldRect(0, 0, 0, 0),
+                            FieldRect(2, 0, len(message), 1), message=message)
+    return acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, 40_000), left, rows - 1, left + width, rows, "",
+        ControlState.VISIBLE, content)
+
+
 def _daybook_prompt_projection(
     *,
     task_visible: bool = False,
     focused: bool = True,
 ) -> RichScreenProjection:
-    """Model RUHA's document-atomic fallback under Daybook's prompt."""
+    """Daybook's prompt open over its tile, Daybook rich and inactive
+    beneath it."""
 
-    seed = _projection("")
-    daybook_left, _, _, daybook_bottom = acceptance_runner._desktop_tile_bounds(
-        seed,
+    placements = [(83, 0, DAYBOOK_FOCUS_MARKER)] if focused else []
+    return _with_tile_prompt(
+        _desktop_projection(*placements),
+        DAYBOOK_PROMPT_MARKER,
         acceptance_runner.DAYBOOK_DESKTOP_TILE,
-    )
-    prompt_text = DAYBOOK_PROMPT_MARKER
-    if task_visible:
-        prompt_text += DAYBOOK_ACCEPTANCE_TASK
-    placements = [(daybook_bottom - 2, daybook_left + 1, prompt_text)]
-    if focused:
-        placements.append((83, 0, DAYBOOK_FOCUS_MARKER))
-    projection = _desktop_projection(*placements)
-    unaffected_menus = tuple(
-        signature
-        for signature in acceptance_runner.DESKTOP_MENU_SIGNATURES
-        if signature != acceptance_runner.DAYBOOK_MENU_SIGNATURE
-    )
-    daybook_grids = acceptance_runner._collection_claims_in_tile(
-        projection,
-        ControlKind.TEXT_GRID,
-        acceptance_runner.DAYBOOK_DESKTOP_TILE,
-    )
-    assert len(daybook_grids) == 1
-    return replace(
-        projection,
-        menu_bar_count=len(unaffected_menus),
-        menu_signatures=unaffected_menus,
-        semantic_collection_claims=tuple(
-            claim
-            for claim in projection.semantic_collection_claims
-            if claim not in daybook_grids
-        ),
+        acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+        DAYBOOK_ACCEPTANCE_TASK if task_visible else "",
     )
 
 
@@ -1708,7 +1830,7 @@ def _activated_pad_tab_projection(
     )
 
 
-LAUNCHER_ID = 50_000
+LAUNCHER_ID = 58_000
 
 
 def _desk_launcher_claim(
@@ -1749,11 +1871,96 @@ def _desk_launcher_claim(
     )
 
 
-def _desk_launcher_projection(selected_title: str) -> RichScreenProjection:
+def _desk_launcher_projection(
+    selected_title: str, *, modal: bool = True,
+) -> RichScreenProjection:
+    """The canonical Desktop with Desk's launcher open across the divider
+    between two tiles: its dialog around its list in an overlay pane, in the
+    shell's frame, with the taskbar and every applet's controls inactive
+    beneath its modal scope.  Without MODAL, the base frame without it."""
+
     assert selected_title in acceptance_runner.DESKTOP_LAUNCHER_TITLES
+    projection = _desktop_projection()
+    view = _desk_launcher_claim(selected_title)
+    if not modal:
+        return replace(projection, semantic_item_view_claims=(view,))
+    box = acceptance_runner._LogicalRectangle(106, 35, 174, 49)
+    message = "\n".join(acceptance_runner.DESK_LAUNCHER_MESSAGE)
+    dialog = acceptance_runner._SemanticDialogClaim(
+        ControlIdentity(1, 1, LAUNCHER_ID + 1), box.left, box.top, box.right, box.bottom,
+        acceptance_runner.DESK_LAUNCHER_TITLE, ControlState.VISIBLE,
+        DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, 7, 1),
+                      FieldRect(1, 1, 60, 2), message=message),
+        modal=True)
+    pane = acceptance_runner._SemanticPaneClaim(1, 1, 40_000, 1, 2, box, box, "", False)
+    rows, cols = projection.rows, projection.cols
+    bar = acceptance_runner._SemanticTaskBarClaim(
+        ControlIdentity(1, 1, 30_200), ControlState.VISIBLE,
+        acceptance_runner._LogicalRectangle(0, rows - 1, cols, rows), ())
+    beneath = {bar.identity, *projection.menu_bar_identities} | {
+        claim.identity
+        for claims in (
+            projection.semantic_collection_claims,
+            projection.semantic_document_claims,
+            projection.semantic_tabset_claims,
+            projection.semantic_field_claims,
+        )
+        for claim in claims
+    }
     return replace(
-        _desktop_projection(),
-        semantic_item_view_claims=(_desk_launcher_claim(selected_title),),
+        projection,
+        semantic_item_view_claims=(view,),
+        semantic_dialog_claims=(dialog,),
+        semantic_pane_claims=(pane,),
+        semantic_taskbar_claims=(bar,),
+        inactive_controls=frozenset(beneath),
+    )
+
+
+SOUNDLAB_FIELD_ID = 45_000
+
+
+def _soundlab_field_claims(frequency: int) -> tuple:
+    """Sound Lab's four setting fields in its tile, Frequency showing
+    FREQUENCY."""
+
+    state = ControlState.VISIBLE | ControlState.ENABLED
+    settings = (
+        ("Waveform", FieldKind.CHOICE, 0, (FieldChoice(0, "sine"), FieldChoice(1, "square"))),
+        ("Frequency (Hz)", FieldKind.INTEGER, frequency, ()),
+        ("Amplitude (%)", FieldKind.INTEGER, 50, ()),
+        ("Duration (ms)", FieldKind.INTEGER, 500, ()),
+    )
+    return tuple(
+        acceptance_runner._SemanticFieldClaim(
+            ControlIdentity(1, 1, SOUNDLAB_FIELD_ID + index), 188, 50 + index, 270,
+            51 + index, label, state,
+            FieldContent(1, kind, FieldFlag(0), FieldRect(1, 0, len(label), 1),
+                         FieldRect(60, 0, 20, 1), value=value, minimum=0,
+                         maximum=2000 if choices == () else 0, step=1 if choices == () else 0,
+                         choices=choices),
+        )
+        for index, (label, kind, value, choices) in enumerate(settings)
+    )
+
+
+def _soundlab_prompt(
+    projection: RichScreenProjection,
+    typed: str,
+    *,
+    anchor: int | None = None,
+) -> RichScreenProjection:
+    """PROJECTION with Sound Lab's frequency prompt open over its tile's
+    status row, holding TYPED with the caret at its end and the anchor at
+    ANCHOR, by default the caret."""
+
+    return _with_tile_prompt(
+        projection,
+        acceptance_runner.SOUNDLAB_FREQUENCY_PROMPT,
+        acceptance_runner.SOUNDLAB_DESKTOP_TILE,
+        acceptance_runner.SOUNDLAB_MENU_SIGNATURE,
+        typed,
+        anchor=anchor,
     )
 
 
@@ -1761,6 +1968,7 @@ def _soundlab_desktop_projection(
     *,
     pad_tab_identity_base: int = 30_000,
     daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
+    frequency: int = 440,
 ) -> RichScreenProjection:
     projection = _desktop_projection(
         (4, 4, PAD_ACCEPTANCE_TEXT),
@@ -1808,7 +2016,7 @@ def _soundlab_desktop_projection(
             45,
         )
         for index, kind in enumerate(kinds)
-    )
+    ) + _soundlab_landmark_claims(frequency)
     return replace(
         projection,
         menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES) + 1,
@@ -1816,10 +2024,41 @@ def _soundlab_desktop_projection(
             acceptance_runner.DESKTOP_MENU_SIGNATURES
             + (acceptance_runner.SOUNDLAB_MENU_SIGNATURE,)
         ),
+        menu_bar_identities=projection.menu_bar_identities + (
+            ControlIdentity(1, 1, 50_000 + len(acceptance_runner.DESKTOP_MENU_SIGNATURES)),
+        ),
         region_count=2,
         instrument_region_count=1,
         instrument_cell_count=len(claims),
         instrument_claims=claims,
+        semantic_field_claims=projection.semantic_field_claims
+        + _soundlab_field_claims(frequency),
+    )
+
+
+# Sound Lab's frequency landmarks in its canonical tile: a line from 0 Hz to
+# 4 kHz across row 73, with the pitch mark at FREQUENCY and the centroid's
+# two columns on.
+SOUNDLAB_LANDMARK_ROW = 73
+SOUNDLAB_LANDMARK_LEFT = 188
+SOUNDLAB_LANDMARK_RIGHT = 276
+
+
+def _soundlab_landmark_claims(frequency: int) -> tuple:
+    half, one = 0x7FFFFFFF, 0xFFFFFFFF
+    row, left, right = (SOUNDLAB_LANDMARK_ROW, SOUNDLAB_LANDMARK_LEFT,
+                        SOUNDLAB_LANDMARK_RIGHT)
+    pitch = left + frequency * (right - left - 1) // 4000
+
+    def line(identity, column, width, color, points):
+        return acceptance_runner._InstrumentClaim(
+            "POLYLINE", 1, 1, identity, column, row, column + width, row + 1,
+            color, points)
+
+    return (
+        line(40_050, left, right - left, (0x80, 0x80, 0x80, 0xFF), ((0, half), (one, half))),
+        line(40_051, pitch, 1, (0x5F, 0xD7, 0xFF, 0xFF), ((half, 0), (half, one))),
+        line(40_052, pitch + 2, 1, (0xFF, 0xD7, 0x00, 0xFF), ((half, 0), (half, one))),
     )
 
 
@@ -1886,8 +2125,10 @@ def _ordinary_menus_offer(
     *,
     focus_marker: str,
     open_key: str | None = None,
+    checked: frozenset[str] | None = None,
 ) -> TerminalDisplayOffer:
-    """Model canonical 280x84 File Explorer and Daybook menu bars in tiles."""
+    """Model canonical 280x84 File Explorer and Daybook menu bars in tiles,
+    the open popup checking CHECKED, by default the capture's own."""
 
     cols = acceptance_runner.CANONICAL_DESKTOP_COLS
     rows = acceptance_runner.CANONICAL_DESKTOP_ROWS
@@ -1918,7 +2159,13 @@ def _ordinary_menus_offer(
                     if entry is None
                     else MenuItemDraw(
                         control_id + 1 + index,
-                        ordinary,
+                        ordinary | (
+                            ControlState.CHECKED
+                            if entry[0] in (
+                                capture.checked if checked is None else checked
+                            )
+                            else 0
+                        ),
                         index,
                         entry[0],
                         entry[1],
@@ -3059,20 +3306,29 @@ def test_pad_caret_uses_exact_status_field_state_only_in_the_status_row() -> Non
         ), bounds)
 
 
-def test_daybook_modal_fallback_withholds_status_fields_as_well_as_collections() -> None:
+def test_a_tile_prompt_leaves_no_status_field_under_its_row() -> None:
     projection = _daybook_prompt_projection(task_visible=False)
-    acceptance_runner._require_daybook_prompt_fallback_semantics(projection)
+    require = lambda frame: acceptance_runner._require_tile_prompt(  # noqa: E731
+        frame,
+        DAYBOOK_PROMPT_MARKER,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+        "Daybook",
+    )
+    require(projection)
     left, _top, right, bottom = acceptance_runner._desktop_tile_bounds(
         projection, acceptance_runner.DAYBOOK_DESKTOP_TILE,
     )
     claim = acceptance_runner._SemanticStatusFieldClaim(
-        1, 1, 90_000, left, bottom - 1, right, bottom, 0, "", "Ready",
+        1, 1, 90_000, left, bottom - 2, right, bottom - 1, 0, "", "Ready",
         StatusSeverity.NEUTRAL, False,
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="retained a STATUS_FIELD"):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(replace(
-            projection, semantic_status_field_claims=(claim,),
-        ))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="status field remains"):
+        require(replace(projection, semantic_status_field_claims=(claim,)))
+    # A status field on another row of the tile is not under the prompt.
+    require(replace(projection, semantic_status_field_claims=(
+        replace(claim, top=bottom - 1, bottom=bottom),
+    )))
 
 
 def test_semantic_tabset_claims_complete_coverage_and_preserve_tab_state() -> None:
@@ -3298,11 +3554,12 @@ def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
         ),
     )
     # UIDL-TUI advances by the five UTF-8 bytes in "Fïle", then two
-    # padding cells.  The two-byte item label makes a six-cell popup.
+    # padding cells.  The two-byte item label and its row's two-cell mark
+    # column make an eight-cell popup.
     expected_gap = {
         (col, row)
         for row in range(1, 5)
-        for col in range(8, 14)
+        for col in range(8, 16)
     }
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]
@@ -3393,12 +3650,12 @@ def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
     first_gap = {
         (col, row)
         for row in range(1, 4)
-        for col in range(1, 8)
+        for col in range(1, 10)
     }
     second_gap = {
         (col, row)
         for row in range(8, 11)
-        for col in range(24, 35)
+        for col in range(24, 37)
     }
     offer = _offer("\n".join("." * cols for _ in range(rows)))
     region = offer.retained.regions[0]
@@ -3642,121 +3899,67 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
         )
 
 
-def test_daybook_prompt_gate_requires_exact_document_atomic_fallback() -> None:
+def test_daybook_prompt_gate_holds_daybook_alone_modal() -> None:
     prompt = _daybook_prompt_projection()
-    acceptance_runner._require_daybook_prompt_fallback_semantics(prompt)
 
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="four unaffected canonical menu forests",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                menu_bar_count=prompt.menu_bar_count + 1,
-                menu_signatures=prompt.menu_signatures
-                + (acceptance_runner.DAYBOOK_MENU_SIGNATURE,),
-            )
-        )
-
-    complete = _projection("READY")
-    daybook_grid = acceptance_runner._collection_claims_in_tile(
-        complete,
-        ControlKind.TEXT_GRID,
-        acceptance_runner.DAYBOOK_DESKTOP_TILE,
-    )
-    assert len(daybook_grid) == 1
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="partial text collection",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                semantic_collection_claims=(
-                    prompt.semantic_collection_claims + daybook_grid
-                ),
-            )
-        )
-
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="TEXT_AREA"):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                semantic_collection_claims=tuple(
-                    claim
-                    for claim in prompt.semantic_collection_claims
-                    if claim.kind is not ControlKind.TEXT_AREA
-                ),
-            )
-        )
-
-    daybook_left, daybook_top, daybook_right, daybook_bottom = (
-        acceptance_runner._desktop_tile_bounds(
-            prompt,
+    def require(frame):
+        return acceptance_runner._require_tile_prompt(
+            frame,
+            DAYBOOK_PROMPT_MARKER,
             acceptance_runner.DAYBOOK_DESKTOP_TILE,
+            acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+            "Daybook",
         )
+
+    acceptance_runner._require_canonical_desktop_semantics(prompt)
+    assert require(prompt).identity.control_id == PROMPT_CONTROL_ID
+
+    field = prompt.semantic_field_claims[-1]
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="is not a field inside"):
+        require(replace(prompt, semantic_field_claims=()))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="modal region"):
+        require(replace(prompt, semantic_field_claims=(replace(field, modal=False),)))
+
+    grid = next(
+        claim
+        for claim in prompt.semantic_collection_claims
+        if claim.kind is ControlKind.TEXT_GRID
     )
-    prompt_row = daybook_bottom - 2
-    without_prompt = list(prompt.lines)
-    without_prompt[prompt_row] = " " * prompt.cols
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="prompt is not visible inside its Desk tile",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(prompt, lines=tuple(without_prompt))
-        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
+        require(replace(
+            prompt, inactive_controls=prompt.inactive_controls - {grid.identity},
+        ))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="withheld its menu bar"):
+        require(replace(
+            prompt,
+            menu_bar_count=prompt.menu_bar_count - 1,
+            menu_signatures=tuple(
+                signature for signature in prompt.menu_signatures
+                if signature != acceptance_runner.DAYBOOK_MENU_SIGNATURE
+            ),
+            menu_bar_identities=tuple(
+                identity for signature, identity in zip(
+                    prompt.menu_signatures, prompt.menu_bar_identities)
+                if signature != acceptance_runner.DAYBOOK_MENU_SIGNATURE
+            ),
+        ))
 
     pad_area = next(
         claim
         for claim in prompt.semantic_collection_claims
         if claim.kind is ControlKind.TEXT_AREA
     )
-    semantic_prompt = replace(
-        pad_area,
-        identity=ControlIdentity(1, 1, 29_999),
-        left=daybook_left,
-        top=daybook_top,
-        right=daybook_right,
-        bottom=daybook_bottom,
-        visible_text=(DAYBOOK_PROMPT_MARKER,),
-    )
-    with pytest.raises(
-        PhysicalDesktopAcceptanceError,
-        match="partial text collection",
-    ):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                lines=tuple(without_prompt),
-                semantic_collection_claims=(
-                    prompt.semantic_collection_claims + (semantic_prompt,)
-                ),
-            )
-        )
-
-    pad_tabset = prompt.semantic_tabset_claims[0]
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="partial TABSET"):
-        acceptance_runner._require_daybook_prompt_fallback_semantics(
-            replace(
-                prompt,
-                semantic_tabset_claims=prompt.semantic_tabset_claims
-                + (
-                    replace(
-                        pad_tabset,
-                        identity=ControlIdentity(1, 1, 39_999),
-                        left=daybook_left,
-                        top=daybook_top,
-                        right=daybook_right,
-                        bottom=daybook_bottom,
-                    ),
-                ),
-            )
-        )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="another applet inactive"):
+        require(replace(
+            prompt, inactive_controls=prompt.inactive_controls | {pad_area.identity},
+        ))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="is inactive"):
+        require(replace(
+            prompt, inactive_controls=prompt.inactive_controls | {field.identity},
+        ))
 
 
-def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None:
+def test_journey_types_the_daybook_task_only_into_its_open_prompt() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = 6
     actions: list[tuple[str, str, int]] = []
@@ -3847,23 +4050,20 @@ def test_journey_selects_prompt_fallback_only_for_visible_modal_frames() -> None
     assert journey.stage == 10
     assert actions[-1] == ("send_key", "ctrl+o", 6)
 
-    outside = _daybook_prompt_projection()
-    _, _, _, daybook_bottom = acceptance_runner._desktop_tile_bounds(
-        outside,
-        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+    # A prompt with Daybook's label in another tile is not Daybook's.
+    outside = _with_tile_prompt(
+        _desktop_projection((83, 0, DAYBOOK_FOCUS_MARKER)),
+        DAYBOOK_PROMPT_MARKER,
+        acceptance_runner.PAD_DESKTOP_TILE,
+        acceptance_runner.PAD_MENU_SIGNATURE,
     )
-    outside_lines = list(outside.lines)
-    outside_lines[daybook_bottom - 2] = " " * outside.cols
-    outside_lines[0] = DAYBOOK_PROMPT_MARKER.ljust(outside.cols)
     wrong_tile = DesktopAcceptanceJourney(("READY",))
     wrong_tile.stage = 6
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="every canonical"):
-        wrong_tile.after_present(
-            _offer("X", offer_id=1, pad_menu=True),
-            9,
-            replace(outside, lines=tuple(outside_lines)),
-            sender,
-        )
+    sent = len(actions)
+    wrong_tile.after_present(
+        _offer("X", offer_id=1, pad_menu=True), 9, outside, sender,
+    )
+    assert wrong_tile.stage == 6 and len(actions) == sent
 
 
 def test_collection_transition_matches_bounds_across_rebased_wire_ids() -> None:
@@ -4043,6 +4243,25 @@ def test_final_cell_markers_require_the_acknowledged_daybook_date() -> None:
         match="no acknowledged pointer selection",
     ):
         _ = journey.final_cell_markers
+
+
+def test_escape_is_a_plain_key_where_no_pad_menu_forest_shows() -> None:
+    # Desk holding another applet alone shows no Pad menu; Escape there, as
+    # in a prompt, is an ordinary key with no menu evidence.
+    offer = _offer("READY", offer_id=3)
+    assert not acceptance_runner._shows_pad_menu_forest(offer)
+    state, display_ack = _acknowledged_hit_state(offer)
+
+    class Client:
+        def request(self, method, **params):
+            assert (method, params["key"]) == ("send_key", "escape")
+            return {"status": "progress", "accepted_events": 1}
+
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(), "send_key", "escape", offer, 9,
+        display_state=state, display_ack=display_ack,
+    )
+    assert status == "progress" and evidence.semantic_target is None
 
 
 def test_open_pad_file_requires_normal_uidl_selection_state() -> None:
@@ -4544,6 +4763,20 @@ def test_manual_pointer_trace_names_offer_supersession_drop_reason(
     assert dropped["offer_id"] == 8
 
 
+def test_an_ordinary_popup_must_check_exactly_its_captures_items() -> None:
+    marker = acceptance_runner.FEXPLORER_FOCUS_MARKER
+    capture = acceptance_runner.ORDINARY_MENU_CAPTURES["fexplorer-view"]
+    assert capture.checked == frozenset({"Sort:_Name"})
+    opened = _ordinary_menus_offer(61, focus_marker=marker, open_key="fexplorer-view")
+    acceptance_runner._require_ordinary_menu_state(opened, capture, True)
+    for checked in (frozenset(), frozenset({"Sort:_Name", "Show_Hidden"})):
+        wrong = _ordinary_menus_offer(
+            61, focus_marker=marker, open_key="fexplorer-view", checked=checked,
+        )
+        with pytest.raises(PhysicalDesktopAcceptanceError, match="popup checks"):
+            acceptance_runner._require_ordinary_menu_state(wrong, capture, True)
+
+
 def test_ordinary_menu_inputs_bind_exact_acknowledged_targets() -> None:
     marker = acceptance_runner.FEXPLORER_FOCUS_MARKER
     requests = []
@@ -4721,6 +4954,86 @@ def test_pad_file_activation_preserves_zero_acceptance_backpressure() -> None:
     )
     assert status == "backpressured"
     assert evidence is None
+
+
+def _offer_with_question(*, offer_id: int, cancel_state: ControlState | None = None):
+    """A question over the screen: its message, then Discard and Cancel."""
+
+    offer = _offer("\n".join("." * 12 for _ in range(7)), offer_id=offer_id, pad_menu=True)
+    region = offer.retained.regions[0]
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    dialog = DialogDraw(31_000, ControlState.VISIBLE, 0, 255, ObjectBounds(0, 2, 12, 4), "",
+                        DialogContent(1, DialogFlag(0), 3, FieldRect(0, 0, 0, 0),
+                                      FieldRect(1, 0, 10, 1), message="Discard?"))
+    discard = ButtonDraw(31_001, ordinary, 0, 255, ObjectBounds(1, 4, 5, 1), "Discard", "",
+                         ButtonContent(ButtonFlag.DESTRUCTIVE))
+    cancel = ButtonDraw(31_002, ordinary | ControlState.SELECTED if cancel_state is None
+                        else cancel_state, 0, 255, ObjectBounds(6, 4, 5, 1), "Cancel", "",
+                        ButtonContent(ButtonFlag.DEFAULT | ButtonFlag.CANCEL))
+    offer = replace(offer, retained=replace(offer.retained, regions=(
+        replace(region, draws=region.draws + (dialog, discard, cancel)),)))
+    target = ControlHitTarget(
+        ControlIdentity(region.owner_id, region.owner_generation, 31_002),
+        ControlKind.BUTTON, PixelRect(60, 80, 110, 100),
+    )
+    return offer, target
+
+
+def test_button_activation_uses_the_exact_acknowledged_button_target() -> None:
+    offer, target = _offer_with_question(offer_id=9)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+    requests = []
+
+    class Client:
+        def request(self, method, **params):
+            requests.append((method, params))
+            return {"status": "progress", "accepted_events": 1}
+
+    identity = target.identity
+    value = f"{identity.owner_id},{identity.owner_generation},{identity.control_id}"
+    status, evidence = acceptance_runner._request_acceptance_input(
+        Client(), "activate_button", value, offer, 11,
+        display_state=display_state, display_ack=display_ack,
+    )
+    assert status == "progress"
+    assert requests == [(
+        "send_control_event",
+        {
+            "generation": 11,
+            "display_offer_id": offer.offer_id,
+            "display_scope": acceptance_runner.display_scope_to_wire(offer.scope),
+            "owner_id": identity.owner_id,
+            "owner_generation": identity.owner_generation,
+            "control_id": identity.control_id,
+            "modifiers": 0,
+        },
+    )]
+    assert evidence is not None and evidence.value == value
+    assert evidence.semantic_target["kind"] == "BUTTON"
+    assert evidence.semantic_target["label"] == "Cancel"
+    other = f"{identity.owner_id},{identity.owner_generation},31001"
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="one acknowledged control target"):
+        acceptance_runner._request_acceptance_input(
+            Client(), "activate_button", other, offer, 11,
+            display_state=display_state, display_ack=display_ack,
+        )
+
+
+def test_button_activation_refuses_a_disabled_button() -> None:
+    offer, target = _offer_with_question(offer_id=9, cancel_state=ControlState.VISIBLE)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+
+    class Client:
+        def request(self, method, **params):
+            raise AssertionError("no input may be sent")
+
+    identity = target.identity
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="not an enabled button"):
+        acceptance_runner._request_acceptance_input(
+            Client(), "activate_button",
+            f"{identity.owner_id},{identity.owner_generation},{identity.control_id}",
+            offer, 11, display_state=display_state, display_ack=display_ack,
+        )
 
 
 def test_pad_tab_activation_uses_exact_acknowledged_generic_tab_target() -> None:
@@ -5889,6 +6202,60 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "soundlab-restored-after-menus"
     assert not progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE
+    # Activating Sound Lab's Frequency field opens its exact-value prompt.
+    frequency = f"1,1,{SOUNDLAB_FIELD_ID + 1}"
+    assert actions.pop() == ("field_activate", frequency, 5000, 9)
+    label = acceptance_runner.SOUNDLAB_FREQUENCY_PROMPT
+    prompted = _cell_offer(5100, ((81, 187, f"{label} 440"),))
+    for offer_id, projection, milestone, action in (
+        # The prompt has not opened yet.
+        (5001, soundlab_projection, None, None),
+        (5100, _soundlab_prompt(soundlab_projection, "440"), "soundlab-prompt-opened",
+         ("send_key", "ctrl+a")),
+        (5101, _soundlab_prompt(soundlab_projection, "440"), None, None),
+        (5102, _soundlab_prompt(soundlab_projection, "440", anchor=0),
+         "soundlab-value-selected", ("send_text", "880")),
+        # The guest may paint between typed digits.
+        (5103, _soundlab_prompt(soundlab_projection, "88"), None, None),
+        (5104, _soundlab_prompt(soundlab_projection, "880"), "soundlab-value-typed",
+         ("send_key", "enter")),
+        # The field has not taken the value yet.
+        (5105, soundlab_projection, None, None),
+    ):
+        offer = (replace(prompted, offer_id=offer_id) if offer_id == 5100
+                 else _offer("X", offer_id=offer_id, pad_menu=True))
+        progress = journey.after_present(offer, 9, projection, sender)
+        assert progress.milestone == milestone, offer_id
+        if action is not None:
+            assert actions.pop() == (*action, offer_id, 9)
+    rendered = replace(
+        soundlab_projection,
+        semantic_field_claims=soundlab_projection.semantic_field_claims[:-4]
+        + _soundlab_field_claims(880),
+        instrument_claims=_soundlab_desktop_projection(frequency=880).instrument_claims,
+    )
+    # The new setting leaves the analysis stale: Sound Lab withdraws its
+    # readouts and meters until F5 renders it again.
+    stale = replace(
+        rendered,
+        instrument_cell_count=3,
+        instrument_claims=tuple(claim for claim in rendered.instrument_claims
+                                if claim.kind == "STATUS"),
+    )
+    progress = journey.after_present(
+        _offer("X", offer_id=5200, pad_menu=True), 9, stale, sender,
+    )
+    assert progress.milestone == "soundlab-frequency-set"
+    assert actions.pop() == ("send_key", "f5", 5200, 9)
+    progress = journey.after_present(
+        _offer("X", offer_id=5201, pad_menu=True), 9, stale, sender,
+    )
+    assert progress == acceptance_runner.JourneyProgress()
+    progress = journey.after_present(
+        _offer("X", offer_id=5300, pad_menu=True), 9, rendered, sender,
+    )
+    assert progress.milestone == "soundlab-rerendered"
     assert (
         journey.stage
         == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
@@ -5896,7 +6263,7 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     # A click inside the taskbar's File Explorer button starts the pointer
     # journey, which its own test follows to completion.
     button = TEST_TASKBAR.index(acceptance_runner.FEXPLORER_TASKBAR_BUTTON)
-    assert actions.pop() == ("pointer_click", f"{button + 1},83", 5000, 9)
+    assert actions.pop() == ("pointer_click", f"{button + 1},83", 5300, 9)
     assert actions[-7:] == [
         ("send_key", "alt+2", 35, 9),
         ("activate_ordinary_menu", "fexplorer-view", 3701, 9),
@@ -5996,14 +6363,15 @@ def _fexplorer_table(
     first: int,
     selected: int | None,
     picture: int = FEXPLORER_PICTURE_ORDINAL,
+    large: str = "large.txt",
 ) -> acceptance_runner._SemanticItemViewClaim:
     """File Explorer's detail table showing rows FIRST onward, with SELECTED
-    the key of the selected row, carried wherever it is, and the sample
-    picture at ordinal PICTURE."""
+    the key of the selected row, carried wherever it is, the sample picture
+    at ordinal PICTURE, and the large fixture named LARGE."""
 
     def name(ordinal: int) -> str:
         if ordinal == FEXPLORER_LARGE_ORDINAL:
-            return "large.txt"
+            return large
         if ordinal == picture:
             return acceptance_runner.FEXPLORER_PICTURE
         if ordinal == FEXPLORER_DOCUMENT_ORDINAL:
@@ -6059,7 +6427,9 @@ def _pointer_frame(
     status: str | None = None,
     semantic_status: bool = False,
     prompt: str | None = None,
-    withhold: bool = True,
+    prompt_caret: int | None = None,
+    prompt_anchor: int | None = None,
+    prompt_control: int = PROMPT_CONTROL_ID,
     readout: tuple[int, int] | None = None,
     daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
     extra: tuple[tuple[int, int, str], ...] = (),
@@ -6067,15 +6437,22 @@ def _pointer_frame(
     pad_revision: int = 10,
     pad_tabs: tuple[str, ...] = ("Untitled*", "/daybook.md"),
     pad_lines: tuple[str, ...] = POINTER_FIXTURE_LINES,
+    large: str = "large.txt",
+    notice: str | None = None,
+    question: bool = False,
 ) -> RichScreenProjection:
     """A launched-Sound-Lab Desktop frame during the pointer journey.
 
     ``table`` is File Explorer's detail table as (first shown row,
-    selected key).  A File Explorer prompt paints over its status row from
-    column 94 and, unless ``withhold`` is false, withholds its menu forest
-    and table as the guest's document-atomic fallback does.  Pad's caret
-    readout uses the ordinary menu/body/status layout's row 39; row 40 is
-    unused content, and row 41 is the horizontal Desk divider.
+    selected key), its large fixture named ``large``.  ``prompt`` is the
+    text of File Explorer's rename prompt, a TEXT field in a modal region
+    over its tile with the caret at ``prompt_caret`` and the anchor at
+    ``prompt_anchor``; ``question`` opens its delete question there instead.
+    File Explorer stays rich and inactive beneath either.  ``notice`` is the
+    app shell's neutral notice on the bottom row.  Pad's caret readout uses
+    the ordinary
+    menu/body/status layout's row 39; row 40 is unused content, and row 41
+    is the horizontal Desk divider.
     """
 
     projection = _soundlab_desktop_projection(daybook_date=daybook_date)
@@ -6100,20 +6477,10 @@ def _pointer_frame(
 
     if status is not None:
         status_value(100, 180, status)
-    if prompt is not None:
-        place(40, 94, prompt)
     if readout is not None:
         status_value(50, 90, "Ln {}, Col {}".format(*readout))
     for row, col, value in extra:
         place(row, col, value)
-    if prompt is not None and withhold:
-        signatures = list(projection.menu_signatures)
-        signatures.remove(acceptance_runner.FEXPLORER_MENU_SIGNATURE)
-        projection = replace(
-            projection,
-            menu_signatures=tuple(signatures),
-            menu_bar_count=projection.menu_bar_count - 1,
-        )
     claims = []
     for claim in projection.semantic_collection_claims:
         if (
@@ -6133,8 +6500,8 @@ def _pointer_frame(
             )
         claims.append(claim)
     item_views = ()
-    if table is not None and not (prompt is not None and withhold):
-        item_views = (_fexplorer_table(*table),)
+    if table is not None:
+        item_views = (_fexplorer_table(*table, large=large),)
     projection = replace(
         projection,
         lines=tuple(lines),
@@ -6142,7 +6509,7 @@ def _pointer_frame(
         semantic_item_view_claims=item_views,
         semantic_status_field_claims=tuple(status_claims),
     )
-    return replace(
+    projection = replace(
         projection,
         semantic_tabset_claims=(
             _pad_tabset_claim(
@@ -6152,9 +6519,34 @@ def _pointer_frame(
             ),
         ),
     )
+    if prompt is not None:
+        projection = _with_tile_prompt(
+            projection,
+            acceptance_runner.RENAME_PROMPT_LABEL,
+            acceptance_runner.FEXPLORER_DESKTOP_TILE,
+            acceptance_runner.FEXPLORER_MENU_SIGNATURE,
+            prompt,
+            caret=prompt_caret,
+            anchor=prompt_anchor,
+            control=prompt_control,
+        )
+    if question:
+        projection = _with_tile_question(
+            projection,
+            acceptance_runner.FEXPLORER_DELETE_QUESTION,
+            DELETE_BUTTONS,
+            acceptance_runner.FEXPLORER_DESKTOP_TILE,
+            acceptance_runner.FEXPLORER_MENU_SIGNATURE,
+        )
+    if notice is not None:
+        projection = replace(
+            projection,
+            semantic_dialog_claims=projection.semantic_dialog_claims + (_desk_notice(notice),),
+        )
+    return projection
 
 
-LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/large.txt")
+LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/notes.txt")
 
 
 @pytest.mark.parametrize("semantic_status", [False, True])
@@ -6175,7 +6567,13 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
 
     fe, pad = FEXPLORER_BUTTON, PAD_BUTTON
     tabs = {"pad_tabs": LARGE_PAD_TABS}
+    renamed = {"table": (3, 11), "status": "/notes.txt", "large": "notes.txt"}
+    noticed = ((83, 136, "Renamed"),)
+    asked = ((QUESTION_ROW + 2, QUESTION_COL + 2,
+              acceptance_runner.FEXPLORER_DELETE_QUESTION),)
     week_later = "2026-09-10"
+    # Each step is a frame, the milestone it reaches and the input it sends,
+    # and, where the journey reads CELL, what CELL shows.
     steps = (
         (
             build_frame(fe, table=(0, None)),
@@ -6199,28 +6597,72 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
             ("send_key", "f2"),
         ),
         (build_frame(fe, table=(3, 11), status="/large.txt"), None, None),
-        # The name follows "Rename: " at column 94, so its stem is 102-106.
+        # The viewer turns a drag across the stem into a PLACE at its start
+        # and an EXTEND to its end, in the prompt's field.
         (
-            build_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, table=(3, 11), prompt="large.txt"),
             "fexplorer-rename-prompt-opened",
-            ("pointer_drag", "102,40,107,40"),
+            ("text_place", f"1,1,{PROMPT_CONTROL_ID},0,0"),
+        ),
+        # The caret has not moved yet.
+        (build_frame(fe, table=(3, 11), prompt="large.txt"), None, None),
+        # A complete START renumbered the prompt; the EXTEND names it anew.
+        (
+            build_frame(fe, table=(3, 11), prompt="large.txt", prompt_caret=0,
+                        prompt_control=PROMPT_CONTROL_ID + 7),
+            "fexplorer-rename-caret-placed",
+            ("text_extend", f"1,1,{PROMPT_CONTROL_ID + 7},0,5"),
         ),
         (
-            build_frame(fe, prompt="Rename: large.txt"),
+            build_frame(fe, table=(3, 11), prompt="large.txt", prompt_caret=5,
+                        prompt_anchor=0),
             "fexplorer-rename-stem-dragged",
             ("send_text", "notes"),
         ),
         # The guest may paint between typed scalars.
-        (build_frame(fe, prompt="Rename: no.txt"), None, None),
+        (build_frame(fe, table=(3, 11), prompt="no.txt"), None, None),
         (
-            build_frame(fe, prompt="Rename: notes.txt"),
+            build_frame(fe, table=(3, 11), prompt="notes.txt"),
             "fexplorer-rename-stem-replaced",
-            ("send_key", "escape"),
+            ("send_key", "enter"),
         ),
-        (build_frame(fe, prompt="Rename: notes.txt"), None, None),
+        (build_frame(fe, table=(3, 11), prompt="notes.txt"), None, None),
+        # The renamed file stays selected; the journey waits for the notice
+        # that says so.
+        (build_frame(fe, **renamed), None, None),
         (
-            build_frame(fe, table=(3, 11), status="/large.txt"),
-            "fexplorer-rename-cancelled",
+            build_frame(fe, notice="Renamed", **renamed),
+            "fexplorer-renamed",
+            ("send_key", "delete"),
+            noticed,
+        ),
+        (build_frame(fe, **renamed), None, None),
+        (
+            build_frame(fe, question=True, **renamed),
+            "fexplorer-delete-asked",
+            ("send_key", "alt+1"),
+            asked,
+        ),
+        # Desk keeps running while the question waits: Pad takes focus, and
+        # File Explorer's question stays open and holds it alone.
+        (build_frame(fe, question=True, **renamed), None, None, asked),
+        (
+            build_frame(pad, question=True, **renamed),
+            "pad-focused-while-asked",
+            ("send_key", "alt+2"),
+            asked,
+        ),
+        (build_frame(pad, question=True, **renamed), None, None, asked),
+        (
+            build_frame(fe, question=True, **renamed),
+            "fexplorer-delete-returned",
+            ("activate_button", f"1,1,{QUESTION_ID + 2}"),
+            asked,
+        ),
+        (build_frame(fe, question=True, **renamed), None, None, asked),
+        (
+            build_frame(fe, **renamed),
+            "fexplorer-delete-cancelled",
             ("item_open", _table_value(11)),
         ),
         # Loaded text puts the caret at its end, so Pad opens at the bottom
@@ -6270,11 +6712,12 @@ def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_stat
             None,
         ),
     )
-    for index, (frame, milestone, action) in enumerate(steps):
+    for index, (frame, milestone, action, *cells) in enumerate(steps):
         offer_id = 101 + index
         sent_before = len(actions)
         progress = journey.after_present(
-            _offer("X", offer_id=offer_id, pad_menu=True),
+            _cell_offer(offer_id, cells[0]) if cells
+            else _offer("X", offer_id=offer_id, pad_menu=True),
             9,
             frame,
             sender,
@@ -6315,29 +6758,6 @@ def test_exact_desk_content_bounds_reserve_dividers_and_assign_remainders() -> N
     assert acceptance_runner._menu_body_status_bounds((93, 0, 185, 41)) == (93, 39, 185, 40)
     assert acceptance_runner._menu_body_status_bounds((0, 0, 280, 83)) == (0, 81, 280, 82)
 
-
-
-def test_prompt_exact_text_excludes_real_desk_divider_but_preserves_content() -> None:
-    prompt = "Rename: large.txt"
-    projection = _pointer_frame(FEXPLORER_BUTTON, extra=(
-        (39, 94, prompt), (39, 185, "│"), (39, 186, "adjacent pane"),
-    ))
-    assert projection.row_text(39, 185, 186) == "│"
-    assert acceptance_runner._prompt_row_text(
-        projection, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ) == prompt
-    wrong = _pointer_frame(FEXPLORER_BUTTON, extra=(
-        (39, 94, prompt), (39, 184, "!"), (39, 185, "│"),
-    ))
-    assert acceptance_runner._prompt_row_text(
-        wrong, (94, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ).endswith("!")
-    assert acceptance_runner._prompt_row_text(
-        projection, (185, 39), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ) == ""
-    assert acceptance_runner._prompt_row_text(
-        projection, (94, 41), acceptance_runner.FEXPLORER_DESKTOP_TILE,
-    ) == ""
 
 
 def test_selected_path_uses_exact_typed_status_in_its_authored_row() -> None:
@@ -6465,7 +6885,7 @@ def _mixed_pad_frame(
 
 
 def _mixed_daybook_frame(
-    prompt: str | None = None, agenda: str | None = None
+    prompt: str | None = None, agenda: str | None = None, caret: int | None = None
 ) -> RichScreenProjection:
     frame = _pointer_frame(
         DAYBOOK_BUTTON,
@@ -6478,22 +6898,15 @@ def _mixed_daybook_frame(
         frame = _place_cells(frame, 10, 196, "[ ] " + mixed_text.visual(agenda))
     if prompt is None:
         return frame
-    # The prompt withholds all of Daybook's slices, as for any modal prompt.
-    signatures = list(frame.menu_signatures)
-    signatures.remove(acceptance_runner.DAYBOOK_MENU_SIGNATURE)
-    frame = replace(
+    # The prompt holds Daybook alone modal, Daybook rich beneath it.
+    return _with_tile_prompt(
         frame,
-        menu_signatures=tuple(signatures),
-        menu_bar_count=frame.menu_bar_count - 1,
-        semantic_collection_claims=tuple(
-            claim
-            for claim in frame.semantic_collection_claims
-            if claim.kind is not ControlKind.TEXT_GRID
-        ),
-    )
-    frame = _place_cells(frame, MIXED_PROMPT_ROW, MIXED_PROMPT_COL, "New task: ")
-    return _place_cells(
-        frame, MIXED_PROMPT_ROW, MIXED_TASK_COL, mixed_text.visual(prompt)
+        DAYBOOK_PROMPT_MARKER,
+        acceptance_runner.DAYBOOK_DESKTOP_TILE,
+        acceptance_runner.DAYBOOK_MENU_SIGNATURE,
+        prompt,
+        caret=caret,
+        row=MIXED_PROMPT_ROW,
     )
 
 
@@ -6602,12 +7015,12 @@ def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
             _mixed_daybook_frame(prompt=task),
             prompt_offer,
             "daybook-mixed-task-typed",
-            ("pointer_click", f"{han_column + 1},{MIXED_PROMPT_ROW}"),
+            ("text_place", f"1,1,{PROMPT_CONTROL_ID},0,{task.index(han)}"),
         ),
         # The caret has not reached the Han character yet.
         (_mixed_daybook_frame(prompt=task), prompt_offer, None, None),
         (
-            _mixed_daybook_frame(prompt=task),
+            _mixed_daybook_frame(prompt=task, caret=task.index(han)),
             _cell_offer(
                 1,
                 ((MIXED_PROMPT_ROW, MIXED_TASK_COL, mixed_text.visual(task)),),
@@ -6936,23 +7349,17 @@ def _styled_pad_frame(lines: tuple[str, ...], runs) -> RichScreenProjection:
 
 
 def _pad_prompt_frame(typed: str) -> RichScreenProjection:
-    """Pad's Open prompt, which withholds Pad's menu, tabs, and text areas."""
+    """Pad's Open prompt over its tile, with Pad's menu, tabs, and text
+    areas rich and inactive beneath it."""
 
-    frame = _styled_pad_frame((styled_text.EXAMPLE_LINE,), ())
-    signatures = list(frame.menu_signatures)
-    signatures.remove(acceptance_runner.PAD_MENU_SIGNATURE)
-    frame = replace(
-        frame,
-        menu_signatures=tuple(signatures),
-        menu_bar_count=frame.menu_bar_count - 1,
-        semantic_collection_claims=tuple(
-            claim
-            for claim in frame.semantic_collection_claims
-            if claim.identity.control_id not in (20_000, 20_002, 20_003)
-        ),
-        semantic_tabset_claims=(),
+    return _with_tile_prompt(
+        _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()),
+        acceptance_runner.PAD_OPEN_PROMPT_MARKER,
+        acceptance_runner.PAD_DESKTOP_TILE,
+        acceptance_runner.PAD_MENU_SIGNATURE,
+        typed,
+        row=39,
     )
-    return _place_cells(frame, 39, 2, f"Open: {typed}")
 
 
 def _keyed(key: int, runs) -> tuple[tuple[int, int, int, int], ...]:
@@ -7066,12 +7473,10 @@ def test_styled_text_journey_refuses_missing_runs_and_leaked_semantics() -> None
     with pytest.raises(PhysicalDesktopAcceptanceError, match="style runs"):
         journey.after_present(_offer("X", offer_id=501, pad_menu=True), 9, unstyled, sender)
 
-    # A prompt that leaves Pad's text areas in place is not the fallback.
+    # A prompt that leaves Pad's editor active beneath it is refused.
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_PATH_STAGE
-    leaky = _place_cells(
-        _styled_pad_frame((styled_text.EXAMPLE_LINE,), ()), 39, 2, "Open: "
-    )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad prompt"):
+    leaky = replace(_pad_prompt_frame(""), inactive_controls=frozenset())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
         journey.after_present(_offer("X", offer_id=502, pad_menu=True), 9, leaky, sender)
 
 
@@ -7116,6 +7521,15 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
         journey.after_present(
             _offer("X", offer_id=301, pad_menu=True), 9, frame(), sender
         )
+
+
+RENAMED_FRAME = {"table": (3, 11), "status": "/notes.txt", "large": "notes.txt"}
+
+
+def _also_inactive(projection: RichScreenProjection, identity: ControlIdentity):
+    """PROJECTION with IDENTITY's control inactive too."""
+
+    return replace(projection, inactive_controls=projection.inactive_controls | {identity})
 
 
 @pytest.mark.parametrize(
@@ -7230,36 +7644,88 @@ def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE,
             {},
-            lambda: _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: large.txt.bak"),
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="large.txt.bak"),
             "exactly the selected file's name",
         ),
-        # While the prompt shows, File Explorer's semantics must be withheld.
+        # While the prompt shows, File Explorer stays rich but inactive.
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE,
             {},
-            lambda: _pointer_frame(
-                FEXPLORER_BUTTON,
-                prompt="Rename: large.txt",
-                withhold=False,
+            lambda: replace(
+                _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="large.txt"),
+                inactive_controls=frozenset(),
             ),
-            "fallback is incomplete",
+            "beneath it active",
         ),
-        # The drag selected more or less than the stem.
+        # The selection held more or less than the stem.
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_TYPED_STAGE,
-            {"_rename_prompt_cell": (94, 40)},
-            lambda: _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: noteslarge.txt"),
-            "typing over the dragged stem",
+            {},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="noteslarge.txt"),
+            "typing over the selected stem",
+        ),
+        # The prompt closed before the rename was typed.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE,
+            {},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), status="/large.txt"),
+            "closed during the rename",
+        ),
+        # The rename lost the file's selection, or its notice means more
+        # than a rename.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAMED_STAGE,
+            {"_renamed": True},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, None),
+                                   status="/notes.txt", large="notes.txt"),
+            "keep the renamed file selected",
         ),
         (
-            acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_CANCELLED_STAGE,
+            acceptance_runner.DESKTOP_ACCEPTANCE_RENAMED_STAGE,
             {},
-            lambda: _pointer_frame(
-                FEXPLORER_BUTTON,
-                status="/large.txt",
-                extra=((12, 100, "notes.txt"),),
+            lambda: replace(
+                _pointer_frame(FEXPLORER_BUTTON, **RENAMED_FRAME),
+                semantic_dialog_claims=(_desk_notice("Renamed", StatusSeverity.WARNING),),
             ),
-            "renamed the file",
+            "means WARNING, not NEUTRAL",
+        ),
+        # Delete must be destructive.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_ASKED_STAGE,
+            {},
+            lambda: _with_tile_question(
+                _pointer_frame(FEXPLORER_BUTTON, **RENAMED_FRAME),
+                acceptance_runner.FEXPLORER_DELETE_QUESTION,
+                ((acceptance_runner.FEXPLORER_DELETE, ButtonFlag(0)),
+                 (acceptance_runner.CONFIRM_CANCEL, ButtonFlag.DEFAULT | ButtonFlag.CANCEL)),
+                acceptance_runner.FEXPLORER_DESKTOP_TILE,
+                acceptance_runner.FEXPLORER_MENU_SIGNATURE,
+            ),
+            "is not destructive, or is the default",
+        ),
+        # While the question waits, it holds File Explorer alone: Pad, with
+        # focus, stays active, and the question stays open.
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE,
+            {},
+            lambda: _also_inactive(
+                _pointer_frame(PAD_BUTTON, question=True, **RENAMED_FRAME),
+                ControlIdentity(1, 1, 20_000),
+            ),
+            "dialog made another applet inactive",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_WAITING_STAGE,
+            {},
+            lambda: _pointer_frame(PAD_BUTTON, **RENAMED_FRAME),
+            "closed while it waited",
+        ),
+        (
+            acceptance_runner.DESKTOP_ACCEPTANCE_DELETE_CANCELLED_STAGE,
+            {},
+            lambda: _pointer_frame(FEXPLORER_BUTTON, table=(3, 11),
+                                   status="/notes.txt", large="other.txt"),
+            "deleted notes.txt",
         ),
         (
             acceptance_runner.DESKTOP_ACCEPTANCE_PAD_PLACE_STAGE,
@@ -7294,9 +7760,53 @@ def test_pointer_journey_refuses_wrong_results(stage, setup, frame, message) -> 
         )
 
 
+@pytest.mark.parametrize("stage,frame,message", (
+    # The prompt must open holding the frequency the field shows.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE,
+     lambda: _soundlab_prompt(_soundlab_desktop_projection(), "441"),
+     "opened holding '441'"),
+    # Sound Lab stays inactive beneath its prompt.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE,
+     lambda: replace(_soundlab_prompt(_soundlab_desktop_projection(), "440"),
+                     inactive_controls=frozenset()),
+     "beneath it active"),
+    # Its fields stay rich beneath it.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_PROMPT_STAGE,
+     lambda: replace(_soundlab_prompt(_soundlab_desktop_projection(), "440"),
+                     semantic_field_claims=_soundlab_prompt(
+                         _soundlab_desktop_projection(), "440").semantic_field_claims[1:]),
+     "left its fields"),
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_SELECTED_STAGE,
+     lambda: _soundlab_desktop_projection(),
+     "closed before its value was set"),
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_VALUE_TYPED_STAGE,
+     lambda: _soundlab_prompt(_soundlab_desktop_projection(), "4408"),
+     "typing over the selected value gave '4408'"),
+    # The set value holds while Sound Lab renders.
+    (acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE,
+     lambda: _soundlab_desktop_projection(frequency=440),
+     "frequency changed while it rendered"),
+))
+def test_soundlab_prompt_refuses_wrong_results(stage, frame, message) -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = stage
+    journey._soundlab_frequency_before = 440
+    journey._soundlab_frequency = 880
+
+    def sender(*_args):
+        raise AssertionError("a refused frame sent input")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(_cell_offer(5, ((81, 187, "Frequency (40-2000 Hz): 440"),)),
+                              9, frame(), sender)
+
+
 def test_owed_click_release_precedes_any_other_input() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
-    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_POINTER_STAGE
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
+    journey._soundlab_frequency = 880
+    journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), (186, 42, 280, 83))
     # The exercised-state proof has its own test; this one follows the click
     # on File Explorer's taskbar button that starts the pointer journey.
     journey._require_exercised_state_survives = lambda _projection: None
@@ -7315,10 +7825,10 @@ def test_owed_click_release_precedes_any_other_input() -> None:
     progress = journey.after_present(
         restored,
         9,
-        _soundlab_desktop_projection(),
+        _soundlab_desktop_projection(frequency=880),
         sender,
     )
-    assert progress.milestone == "soundlab-restored-after-menus"
+    assert progress.milestone == "soundlab-rerendered"
     assert (
         journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     )
@@ -7362,6 +7872,34 @@ def test_owed_click_release_precedes_any_other_input() -> None:
         )
 
 
+def test_file_explorer_task_waits_for_soundlab_notice_to_end() -> None:
+    """The render's notice ends in a frame that gives every control a new
+    identity, and the guest drops a press it reads after that frame, so the
+    press on File Explorer's task waits until no notice shows."""
+
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
+    journey._soundlab_frequency = 880
+    journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), (186, 42, 280, 83))
+    journey._require_exercised_state_survives = lambda _projection: None
+    sent = []
+
+    def sender(method, value, offer, generation):
+        sent.append(method)
+        return "progress"
+
+    rendered = _soundlab_desktop_projection(frequency=880)
+    noticed = replace(rendered, semantic_dialog_claims=rendered.semantic_dialog_claims
+                      + (_desk_notice("Signal rendered and analyzed"),))
+    progress = journey.after_present(_offer("X", offer_id=1, pad_menu=True), 9, noticed, sender)
+    assert progress == acceptance_runner.JourneyProgress()
+    assert sent == [] and "notice" in journey.waiting
+    progress = journey.after_present(_offer("X", offer_id=2, pad_menu=True), 9, rendered, sender)
+    assert progress.milestone == "soundlab-rerendered"
+    assert sent == ["pointer_click"]
+
+
 def test_owed_drag_finishes_its_move_and_release_before_other_input() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE
@@ -7370,38 +7908,39 @@ def test_owed_drag_finishes_its_move_and_release_before_other_input() -> None:
         "pointer_drag": ["drag_owed"],
         "pointer_drag_rest": ["backpressured", "release_owed"],
         "pointer_release": ["progress"],
-        "send_text": ["progress"],
+        "text_place": ["progress"],
     }
 
     def sender(method, value, offer, generation):
         actions.append((method, value, offer.offer_id))
         return statuses[method].pop(0)
 
-    prompt = _pointer_frame(FEXPLORER_BUTTON, prompt="Rename: large.txt")
+    prompt = _pointer_frame(FEXPLORER_BUTTON, table=(3, 11), prompt="large.txt")
     first = _offer("X", offer_id=1, pad_menu=True)
-    progress = journey.after_present(first, 9, prompt, sender)
-    assert progress.milestone == "fexplorer-rename-prompt-opened"
-    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_DRAGGED_STAGE
+    # A raw drag over residual cells whose move and release the terminal
+    # could not take yet.
+    journey._send("pointer_drag", "102,40,107,40", journey.stage, first, 9, sender)
     assert journey.has_pending_input
     # The move and release retry against the same frame; once the move is
     # in, only the release is owed.
     assert journey.retry_pending_current(first, 9, sender)
     assert journey.retry_pending_current(first, 9, sender)
     assert journey.has_pending_input
+    # The next frame finishes the release before the stage sends its own input.
     progress = journey.after_present(
         _offer("X", offer_id=2, pad_menu=True),
         9,
         prompt,
         sender,
     )
-    assert progress.milestone == "fexplorer-rename-stem-dragged"
+    assert progress.milestone == "fexplorer-rename-prompt-opened"
     assert not journey.has_pending_input
     assert actions == [
         ("pointer_drag", "102,40,107,40", 1),
         ("pointer_drag_rest", "107,40", 1),
         ("pointer_drag_rest", "107,40", 1),
         ("pointer_release", "107,40", 2),
-        ("send_text", "notes", 2),
+        ("text_place", f"1,1,{PROMPT_CONTROL_ID},0,0", 2),
     ]
 
 
@@ -7767,6 +8306,30 @@ def test_soundlab_product_gate_requires_exact_ordinary_instrument_family() -> No
         match="outside-tile-5",
     ):
         acceptance_runner._require_soundlab_desktop_semantics(outside_soundlab)
+
+
+@pytest.mark.parametrize("change,message", (
+    ("base", "not one dialog around its list"),
+    ("no-shell", "without the shell"),
+    ("active", "controls beneath it active"),
+))
+def test_canonical_launcher_needs_the_shells_modal_scope(change, message) -> None:
+    """Desk's launcher crosses the divider between two tiles; the journey
+    still requires it in the shell's frame, a modal scope over everything
+    beneath it."""
+
+    def sender(*_args):
+        raise AssertionError("no input may be sent")
+
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE
+    projection = _desk_launcher_projection("Akashic Pad", modal=change != "base")
+    if change == "no-shell":
+        projection = replace(projection, semantic_pane_claims=(), semantic_taskbar_claims=())
+    elif change == "active":
+        projection = replace(projection, inactive_controls=frozenset())
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        journey.after_present(_offer("X", offer_id=20, pad_menu=True), 9, projection, sender)
 
 
 def test_pad_edit_marker_and_revision_must_share_one_matched_text_area_root() -> None:
@@ -8434,7 +8997,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(28)),
-        0x3000: list(range(607)),
+        0x3000: list(range(633)),
         0x6000: list(range(62)),
         0x8000: list(range(133)),
     }
@@ -8486,7 +9049,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 95),
+        (0x4000, 121),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -8518,36 +9081,36 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 301
-    assert producer["target_pending_address"] == 302
-    assert producer["next_region"] == 303
-    assert producer["next_object"] == 304
-    assert producer["active_draw"] == 305
-    assert producer["source_directory_bytes"] == 309
-    assert producer["document_count"] == 310
-    assert producer["row_damage_address"] == 311
-    assert producer["row_damage_bytes"] == 312
-    assert producer["glyph_id_map_address"] == 313
-    assert producer["glyph_id_map_bytes"] == 314
-    assert producer["source_content_epoch"] == 326
-    assert producer["collection_count"] == 339
-    assert producer["collection_items"] == 340
-    assert producer["collection_utf8"] == 341
-    assert producer["instrument_region_count"] == 418
-    assert producer["instrument_count"] == 419
-    assert producer["instrument_claim_count"] == 422
-    assert producer["base_claim_bytes"] == 423
+    assert producer["target_active_address"] == 306
+    assert producer["target_pending_address"] == 307
+    assert producer["next_region"] == 308
+    assert producer["next_object"] == 309
+    assert producer["active_draw"] == 310
+    assert producer["source_directory_bytes"] == 314
+    assert producer["document_count"] == 315
+    assert producer["row_damage_address"] == 316
+    assert producer["row_damage_bytes"] == 317
+    assert producer["glyph_id_map_address"] == 318
+    assert producer["glyph_id_map_bytes"] == 319
+    assert producer["source_content_epoch"] == 331
+    assert producer["collection_count"] == 344
+    assert producer["collection_items"] == 345
+    assert producer["collection_utf8"] == 346
+    assert producer["instrument_region_count"] == 423
+    assert producer["instrument_count"] == 424
+    assert producer["instrument_claim_count"] == 427
+    assert producer["base_claim_bytes"] == 428
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 607
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 633
     assert producer["collection_items"] != producer["collection_utf8"]
-    assert producer["field_count"] == 485
-    assert producer["series_count"] == 500
-    assert producer["series_slots"] == 502
-    assert producer["waveform_count"] == 507
-    assert producer["omitted_graphs_used"] == 512
-    assert producer["extension_address"] == 519
+    assert producer["field_count"] == 490
+    assert producer["series_count"] == 505
+    assert producer["series_slots"] == 507
+    assert producer["waveform_count"] == 512
+    assert producer["omitted_graphs_used"] == 517
+    assert producer["extension_address"] == 524
     session = payload["records"]["pt_session"]
     assert len(session["cells"]) * 8 == 1064
     assert session["fields"]["deadline"] == (1 << 63) + 1230
@@ -8647,7 +9210,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(28)),
-        0x3000: list(range(607)),
+        0x3000: list(range(633)),
         0x6000: list(range(62)),
     }
     requested = set()
@@ -8710,7 +9273,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 95),
+        (0x4000, 121),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -8729,28 +9292,28 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert producer["glyph_text_bytes"] == 54
     assert producer["control_count"] == 55
     assert producer["glyph_count"] == 56
-    assert producer["target_active_address"] == 301
-    assert producer["target_pending_address"] == 302
-    assert producer["source_directory_bytes"] == 309
-    assert producer["active_draw"] == 305
-    assert producer["row_damage_address"] == 311
-    assert producer["row_damage_bytes"] == 312
-    assert producer["glyph_id_map_address"] == 313
-    assert producer["glyph_id_map_bytes"] == 314
-    assert producer["source_content_epoch"] == 326
-    assert producer["collection_count"] == 339
-    assert producer["instrument_region_count"] == 418
-    assert producer["instrument_count"] == 419
-    assert producer["base_claim_bytes"] == 423
+    assert producer["target_active_address"] == 306
+    assert producer["target_pending_address"] == 307
+    assert producer["source_directory_bytes"] == 314
+    assert producer["active_draw"] == 310
+    assert producer["row_damage_address"] == 316
+    assert producer["row_damage_bytes"] == 317
+    assert producer["glyph_id_map_address"] == 318
+    assert producer["glyph_id_map_bytes"] == 319
+    assert producer["source_content_epoch"] == 331
+    assert producer["collection_count"] == 344
+    assert producer["instrument_region_count"] == 423
+    assert producer["instrument_count"] == 424
+    assert producer["base_claim_bytes"] == 428
     assert payload["records"]["engine"]["fields"]["operation_count"] == 24
     assert payload["records"]["engine"]["fields"]["send_index"] == 27
     assert payload["resume_attempted"] is True
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 607
-    assert producer["series_samples_used"] == 497
-    assert producer["series_chunks"] == 503
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 633
+    assert producer["series_samples_used"] == 502
+    assert producer["series_chunks"] == 508
 
 
 def test_timeout_state_message_preserves_timeout_and_resumes_after_failure(
@@ -9147,3 +9710,157 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
             (initial_cell, final_cell),
             manual_input_rpc_count=1,
         )
+
+
+def _offer_with_dialog_contents(view_bounds: ObjectBounds):
+    """A dialog element over rows 1 to 6, titled Applets with one message
+    line, and a list drawn after it, above it, at VIEW_BOUNDS."""
+
+    offer = _offer("\n".join("." * 12 for _ in range(8)), offer_id=3)
+    region = offer.retained.regions[0]
+    dialog = DialogDraw(31_000, ControlState.VISIBLE, 0, 254, ObjectBounds(0, 1, 12, 6),
+                        "Applets",
+                        DialogContent(1, DialogFlag(0), 0, FieldRect(2, 0, 7, 1),
+                                      FieldRect(1, 1, 10, 1), message="ready"))
+    view = ItemViewDraw(
+        31_001, ControlState.VISIBLE | ControlState.ENABLED, 0, 255, view_bounds,
+        ItemViewContent(1, ItemViewRole.LIST, ItemViewFlag(0),
+                        (ItemColumn(ItemColumnKind.TEXT, ""),), 1, 0, 1,
+                        (ViewItem(1, 0, 0, 0, ItemState.SELECTED, ItemRole.ITEM,
+                                  (ItemField("Pad"),)),)),
+    )
+    # The dialog claims its rows, so no residual glyph run covers them.
+    residual = tuple(
+        draw for draw in region.draws
+        if not isinstance(draw, GlyphRunDraw) or not 1 <= draw.bounds.cell_y <= 6
+    )
+    return replace(offer, retained=replace(offer.retained, regions=(
+        replace(region, draws=residual + (dialog, view)),)))
+
+
+def test_a_root_drawn_over_a_dialog_inside_it_is_its_content() -> None:
+    projection = reconstruct_retained_screen(_offer_with_dialog_contents(
+        ObjectBounds(1, 3, 10, 3)))
+    (dialog,) = projection.semantic_dialog_claims
+    (view,) = projection.semantic_item_view_claims
+    assert (dialog.title, dialog.content.lines) == ("Applets", ("ready",))
+    assert (dialog.left, dialog.top, dialog.right, dialog.bottom) == (0, 1, 12, 7)
+    assert (view.left, view.top, view.right, view.bottom) == (1, 3, 11, 6)
+
+
+def test_a_root_reaching_past_its_dialog_still_overlaps_it() -> None:
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="claims overlap"):
+        reconstruct_retained_screen(_offer_with_dialog_contents(ObjectBounds(1, 5, 10, 3)))
+
+
+def test_dialog_scroll_sends_the_wheel_a_dialog_takes_where_the_viewer_would() -> None:
+    """A wheel over a dialog that is not a notice scrolls its message: the
+    sender proves a point of the acknowledged hit map lands on the dialog
+    and sends SCROLL there, as the physical viewer does."""
+
+    offer = _offer("READY", offer_id=7, pad_menu=True)
+    dialog = DialogHitTarget(ControlIdentity(1, 1, 500), PixelRect(100, 40, 600, 300))
+    display_state, display_ack = _acknowledged_hit_state(offer, dialog)
+
+    def send(client, value):
+        return acceptance_runner._request_acceptance_input(
+            client, "dialog_scroll", value, offer, 9, display_state=display_state,
+            display_ack=display_ack, cell_width=10, cell_height=20,
+        )
+
+    client = _PointerClient("progress")
+    status, evidence = send(client, "1,1,500,5")
+    assert status == "progress"
+    (method, request), = client.requests
+    assert method == "send_text_event"
+    assert (request["owner_id"], request["owner_generation"], request["control_id"]) == (1, 1, 500)
+    assert request["event_kind"] == int(acceptance_runner.ControlEventKind.SCROLL)
+    assert (request["wheel_x"], request["wheel_y"]) == (0, 5)
+    assert evidence.semantic_target["kind"] == "DIALOG"
+    assert evidence.semantic_target["wheel_y"] == 5
+
+    assert send(_PointerClient("backpressured"), "1,1,500,5") == ("backpressured", None)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no detent"):
+        send(_PointerClient(), "1,1,500,0")
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="no DIALOG target"):
+        send(_PointerClient(), "1,1,501,5")
+
+
+SOUNDLAB_TILE = (186, 42, 280, 83)
+
+
+def test_soundlab_landmarks_are_found_by_shape_and_color() -> None:
+    landmarks = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), SOUNDLAB_TILE)
+    pitch = SOUNDLAB_LANDMARK_LEFT + 440 * 87 // 4000
+    assert landmarks == acceptance_runner.SoundLabLandmarks(
+        SOUNDLAB_LANDMARK_ROW, SOUNDLAB_LANDMARK_LEFT, SOUNDLAB_LANDMARK_RIGHT,
+        pitch, pitch + 2)
+    # Before a render there are no landmarks to find.
+    bare = replace(_soundlab_desktop_projection(), instrument_claims=())
+    assert acceptance_runner._soundlab_landmarks(bare, SOUNDLAB_TILE) is None
+
+
+@pytest.mark.parametrize("change,message", (
+    (lambda claims: claims[:-1], "shows only its landmarks"),
+    (lambda claims: claims + (claims[-1],), "no landmark"),
+    (lambda claims: claims[:-3] + (replace(claims[-3], bottom=claims[-3].bottom + 1),)
+     + claims[-2:], "not one row across"),
+    (lambda claims: claims[:-2] + (replace(claims[-2], points=((0, 0), (1, 1))),)
+     + claims[-1:], "pitch mark is not a cell"),
+    (lambda claims: claims[:-1] + (replace(claims[-1], top=claims[-1].top - 1,
+                                           bottom=claims[-1].bottom - 1),),
+     "centroid mark is not a cell"),
+))
+def test_soundlab_landmarks_refuse_other_lines(change, message) -> None:
+    projection = _soundlab_desktop_projection()
+    projection = replace(projection, instrument_claims=change(projection.instrument_claims))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+        acceptance_runner._soundlab_landmarks(projection, SOUNDLAB_TILE)
+
+
+def _landmark_cells(landmarks, *, letters=("P", "C"), line="─", mark="│"):
+    row, left, right = landmarks.row, landmarks.left, landmarks.right
+    drawn = [line] * (right - left)
+    for column in (landmarks.pitch, landmarks.centroid):
+        drawn[column - left] = mark
+    placements = [
+        (row - 2, left, acceptance_runner.SOUNDLAB_LANDMARK_CAPTION),
+        (row - 1, landmarks.pitch, letters[0]),
+        (row - 1, landmarks.centroid, letters[1]),
+        (row, left, "".join(drawn)),
+    ]
+    return _cell_offer(7, tuple(placements))
+
+
+def test_soundlab_landmark_cells_match_the_terminal_lines() -> None:
+    landmarks = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), SOUNDLAB_TILE)
+    acceptance_runner._require_soundlab_landmark_cells(_landmark_cells(landmarks), landmarks)
+    for offer, message in (
+        (_landmark_cells(landmarks, letters=("C", "P")), "name Sound Lab's mark 'P'"),
+        (_landmark_cells(landmarks, mark="─"), "draw Sound Lab's mark"),
+        (_landmark_cells(landmarks, line=" "), "landmark line"),
+    ):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+            acceptance_runner._require_soundlab_landmark_cells(offer, landmarks)
+    # Marks in one column are named * there.
+    shared = replace(landmarks, centroid=landmarks.pitch)
+    acceptance_runner._require_soundlab_landmark_cells(
+        _landmark_cells(shared, letters=("*", "*")), shared)
+
+
+def test_soundlab_rerender_refuses_a_pitch_mark_that_did_not_move() -> None:
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
+    journey._soundlab_frequency = 880
+    journey._require_exercised_state_survives = lambda _projection: None
+    journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(frequency=880), SOUNDLAB_TILE)
+
+    def sender(*_args):
+        raise AssertionError("a refused frame sent input")
+
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="pitch mark did not move"):
+        journey.after_present(_offer("X", offer_id=1, pad_menu=True), 9,
+                              _soundlab_desktop_projection(frequency=880), sender)

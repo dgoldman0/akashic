@@ -11,6 +11,7 @@
 PROVIDED akashic-tui-shell-snapshot
 REQUIRE applet-host/host.f
 REQUIRE status-field-model.f
+REQUIRE dialog-model.f
 REQUIRE ../utils/memory-span.f
 REQUIRE ../utils/memory-source.f
 
@@ -64,6 +65,7 @@ VARIABLE _SHSN-PENDING-DRAW VARIABLE _SHSN-PENDING-W VARIABLE _SHSN-PENDING-H
     2DUP USCOL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP UDG-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP UFLD-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP UDLG-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TXTA-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP TGRID-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP DGRAPH-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
@@ -185,12 +187,80 @@ CREATE _SHSN-V-GR GR-CURSOR-SIZE ALLOT
         _SHSN-V-E @ _SHSN-V-M @ SHME-LABEL$ _SHSN-V-GR GR-SWIDTH-WITH
         _SHSN-V-E @ SHME.WIDTH @ <> IF 0 EXIT THEN
     THEN -1 ;
+\ Desk's own prompt, while it holds the hidden taskbar row: a TEXT field's
+\ UFLD model, one row as wide as the screen, after every string at the next
+\ eight-byte boundary, its padding zero.
+VARIABLE _SHSN-V-PO VARIABLE _SHSN-V-PU
+: _SHSN-V-PROMPT? ( -- flag )
+    _SHSN-V-M @ SHM.PROMPT-OFF @ _SHSN-V-PO ! _SHSN-V-M @ SHM.PROMPT-U @ _SHSN-V-PU !
+    _SHSN-V-PU @ 0= IF _SHSN-V-PO @ 0= EXIT THEN
+    _SHSN-V-M @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND 0= IF 0 EXIT THEN
+    _SHSN-V-CURSOR @ 7 + -8 AND _SHSN-V-PO @ <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-CURSOR @ + _SHSN-V-PO @ _SHSN-V-CURSOR @ -
+        _SHSN-ZERO? 0= IF 0 EXIT THEN
+    _SHSN-V-PU @ _SHSN-V-U @ _SHSN-V-PO @ - U> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-PO @ + _SHSN-V-PU @ UFLD-VALIDATE UFLD-S-OK <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-PO @ +
+    DUP UFLD-BYTES@ _SHSN-V-PU @ <> IF DROP 0 EXIT THEN
+    DUP UFLD-KIND@ UFLD-K-TEXT <> IF DROP 0 EXIT THEN
+    DUP UFLD-WIDTH@ _SHSN-V-M @ SHM.WIDTH @ <> IF DROP 0 EXIT THEN
+    UFLD-HEIGHT@ 1 <> IF 0 EXIT THEN
+    _SHSN-V-PO @ _SHSN-V-PU @ + _SHSN-V-CURSOR ! -1 ;
+\ The app shell's notice, while the paint shows one: a UDLG notice whose
+\ root lies inside the screen and apart from every pane, after the prompt
+\ or every string at the next eight-byte boundary, its padding zero.
+VARIABLE _SHSN-V-NO VARIABLE _SHSN-V-NU
+: _SHSN-V-NOTICE? ( -- flag )
+    _SHSN-V-M @ SHM.NOTICE-OFF @ _SHSN-V-NO ! _SHSN-V-M @ SHM.NOTICE-U @ _SHSN-V-NU !
+    _SHSN-V-NU @ 0= IF
+        _SHSN-V-NO @ _SHSN-V-M @ SHM.NOTICE-ROW @ OR
+        _SHSN-V-M @ SHM.NOTICE-COL @ OR 0= EXIT
+    THEN
+    _SHSN-V-CURSOR @ 7 + -8 AND _SHSN-V-NO @ <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-CURSOR @ + _SHSN-V-NO @ _SHSN-V-CURSOR @ -
+        _SHSN-ZERO? 0= IF 0 EXIT THEN
+    _SHSN-V-NU @ _SHSN-V-U @ _SHSN-V-NO @ - U> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-NO @ + _SHSN-V-NU @ UDLG-VALIDATE UDLG-S-OK <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-NO @ + DUP UDLG-FLAGS@ UDLG-F-NOTICE <> IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.NOTICE-ROW @ OVER UDLG-HEIGHT@
+        _SHSN-V-M @ SHM.HEIGHT @ _SHSN-V-AXIS? 0= IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.NOTICE-COL @ OVER UDLG-WIDTH@
+        _SHSN-V-M @ SHM.WIDTH @ _SHSN-V-AXIS? 0= IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.NOTICE-ROW @ _SHSN-V-M @ SHM.NOTICE-COL @
+        ROT DUP UDLG-HEIGHT@ SWAP UDLG-WIDTH@ _SHSN-V-M @ SHM-APART-FROM-PANES?
+        0= IF 0 EXIT THEN
+    _SHSN-V-NO @ _SHSN-V-NU @ + _SHSN-V-CURSOR ! -1 ;
+\ Desk's status at the taskbar's right end, while the paint shows it: a
+\ visible USF one row high on the shown taskbar's row, past its entries and
+\ apart from every pane, after the notice, the prompt or every string at
+\ the next eight-byte boundary, its padding zero.
+VARIABLE _SHSN-V-SO VARIABLE _SHSN-V-SU
+: _SHSN-V-STATUS? ( -- flag )
+    _SHSN-V-M @ SHM.STATUS-OFF @ _SHSN-V-SO ! _SHSN-V-M @ SHM.STATUS-U @ _SHSN-V-SU !
+    _SHSN-V-SU @ 0= IF
+        _SHSN-V-SO @ _SHSN-V-M @ SHM.STATUS-ROW @ OR
+        _SHSN-V-M @ SHM.STATUS-COL @ OR 0= EXIT
+    THEN
+    _SHSN-V-M @ SHM.FLAGS @ SHM-F-TASKBAR-HIDDEN AND IF 0 EXIT THEN
+    _SHSN-V-CURSOR @ 7 + -8 AND _SHSN-V-SO @ <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-CURSOR @ + _SHSN-V-SO @ _SHSN-V-CURSOR @ -
+        _SHSN-ZERO? 0= IF 0 EXIT THEN
+    _SHSN-V-SU @ _SHSN-V-U @ _SHSN-V-SO @ - U> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-SO @ + _SHSN-V-SU @ USF-VALIDATE USF-S-OK <> IF 0 EXIT THEN
+    _SHSN-V-M @ _SHSN-V-SO @ +
+    DUP USF-FLAGS@ USF-F-VISIBLE AND 0= IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-ROW @ _SHSN-V-M @ SHM.HEIGHT @ 1- <> IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-COL @ _SHSN-V-M @ SHM.END-COL @ < IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-COL @ OVER USF-WIDTH@
+        _SHSN-V-M @ SHM.WIDTH @ _SHSN-V-AXIS? 0= IF DROP 0 EXIT THEN
+    _SHSN-V-M @ SHM.STATUS-ROW @ _SHSN-V-M @ SHM.STATUS-COL @ 1
+        ROT USF-WIDTH@ _SHSN-V-M @ SHM-APART-FROM-PANES? 0= IF 0 EXIT THEN
+    _SHSN-V-SO @ _SHSN-V-SU @ + _SHSN-V-CURSOR ! -1 ;
 : _SHSN-FROZEN? ( -- flag )
     _SHSN-V-M @ SHM.ABI @ SHM-ABI <>
     _SHSN-V-M @ SHM.CAPACITY @ _SHSN-V-U @ <> OR
     _SHSN-V-M @ SHM.USED @ _SHSN-V-U @ <> OR
     _SHSN-V-M @ SHM.READY @ -1 <> OR IF 0 EXIT THEN
-    _SHSN-V-M @ 112 + 16 _SHSN-ZERO? 0= IF 0 EXIT THEN
     _SHSN-V-M @ SHM.OWNER-ID @ 0= _SHSN-V-M @ SHM.OWNER-GEN @ 0= OR
     _SHSN-V-M @ SHM.EPOCH @ 0= OR IF 0 EXIT THEN
     _SHSN-V-M @ SHM.WIDTH @ _SHSN-POS? 0=
@@ -217,6 +287,9 @@ CREATE _SHSN-V-GR GR-CURSOR-SIZE ALLOT
         _SHSN-V-ENTRY? 0= IF 0 UNLOOP EXIT THEN
     LOOP
     _SHSN-V-END @ _SHSN-V-M @ SHM.END-COL @ U> IF 0 EXIT THEN
+    _SHSN-V-PROMPT? 0= IF 0 EXIT THEN
+    _SHSN-V-NOTICE? 0= IF 0 EXIT THEN
+    _SHSN-V-STATUS? 0= IF 0 EXIT THEN
     _SHSN-V-CURSOR @ _SHSN-V-U @ = ;
 : SHSN-FROZEN-VALIDATE ( model bytes -- status )
     DUP SHM-HEADER-SIZE U< IF 2DROP SHSN-S-INVALID EXIT THEN

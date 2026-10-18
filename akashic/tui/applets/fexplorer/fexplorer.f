@@ -167,6 +167,10 @@ _FEXP-CURRENT-STATE CMP-CELL: _FEXP-DIR-LEN
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-DIR-PATH
 _FEXP-CURRENT-STATE CMP-CELL: _FEXP-SEL-LEN       \ 0 when nothing is selected
 _FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-SEL-PATH
+\ The item a delete question asks about.  The answer comes later, so the
+\ delete goes ahead only while that item is still the one selected.
+_FEXP-CURRENT-STATE CMP-CELL: _FEXP-DEL-LEN
+_FEXP-CURRENT-STATE _FEXP-PATH-CAP CMP-FIELD: _FEXP-DEL-PATH
 
 \ _FEXP-SELECTED ( -- inode | 0 )
 \   The selected entry as it is now, valid until the next VFS operation.
@@ -666,12 +670,12 @@ VARIABLE _FCP-SYNC-XT
     _FEXP-SELECTED DUP 0= IF DROP FALSE EXIT THEN
     DUP IN.TYPE @ VFS-T-FILE <> IF
         DROP S" Directory clipboard operations are not supported"
-        2500 ASHELL-TOAST FALSE EXIT
+        2500 ASHELL-TOAST-WARNING FALSE EXIT
     THEN
     _FCP-CLIP-SET-IN !
     _FCP-CLIP-SET-IN @ _FEXP-CLIP-PATH _FCP-INODE-PATH?
     0= IF
-        DROP S" Source path is too deep" 2000 ASHELL-TOAST FALSE EXIT
+        DROP S" Source path is too deep" 2000 ASHELL-TOAST-WARNING FALSE EXIT
     THEN
     _FEXP-CLIP-PATH-LEN !
     _FCP-CLIP-SET-OP @ _FEXP-CLIP-OP !
@@ -933,24 +937,30 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 
 : _FCP-REPORT-FAILURE  ( status -- )
     CASE
-        _FCP-S-SOURCE OF S" Paste failed: source unavailable" ENDOF
-        _FCP-S-DESTINATION OF S" Paste failed: invalid destination" ENDOF
-        _FCP-S-SAME OF S" Paste refused: source equals destination" ENDOF
-        _FCP-S-CONFLICT OF S" Paste refused: destination exists" ENDOF
-        _FCP-S-CREATE OF S" Paste failed: cannot create destination" ENDOF
-        _FCP-S-VERIFY OF S" Paste failed: destination did not verify" ENDOF
-        _FCP-S-ROLLBACK OF S" Paste failed: cleanup is uncertain" ENDOF
-        _FCP-S-INTERNAL OF S" Paste failed: internal storage error" ENDOF
-        S" Paste failed: storage I/O"
+        _FCP-S-SOURCE OF S" Paste failed: source unavailable" ASHELL-SEVERITY-ERROR ENDOF
+        _FCP-S-DESTINATION OF S" Paste failed: invalid destination"
+            ASHELL-SEVERITY-ERROR ENDOF
+        _FCP-S-SAME OF S" Paste refused: source equals destination"
+            ASHELL-SEVERITY-WARNING ENDOF
+        _FCP-S-CONFLICT OF S" Paste refused: destination exists"
+            ASHELL-SEVERITY-WARNING ENDOF
+        _FCP-S-CREATE OF S" Paste failed: cannot create destination"
+            ASHELL-SEVERITY-ERROR ENDOF
+        _FCP-S-VERIFY OF S" Paste failed: destination did not verify"
+            ASHELL-SEVERITY-ERROR ENDOF
+        _FCP-S-ROLLBACK OF S" Paste failed: cleanup is uncertain" ASHELL-SEVERITY-ERROR ENDOF
+        _FCP-S-INTERNAL OF S" Paste failed: internal storage error"
+            ASHELL-SEVERITY-ERROR ENDOF
+        >R S" Paste failed: storage I/O" ASHELL-SEVERITY-ERROR R>
     ENDCASE
-    3000 ASHELL-TOAST ;
+    >R 3000 R> ASHELL-NOTICE ;
 
 : FEXP-CLIP-PASTE  ( -- )
     _FEXP-CLIP-OP @ _FEXP-CLIP-NONE = IF
         S" Clipboard empty" 1500 ASHELL-TOAST EXIT
     THEN
     _FEXP-CLIP-PATH-LEN @ 0= IF
-        S" No source" 1500 ASHELL-TOAST EXIT
+        S" No source" 1500 ASHELL-TOAST-WARNING EXIT
     THEN
     _FCP-RUN
     DUP _FCP-S-OK = IF
@@ -962,13 +972,13 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
     DUP _FCP-S-DELETE = IF
         DROP _FEXP-CLIP-CLEAR
         _FEXP-REFRESH-AFTER-MUTATION
-        S" Copied, but source could not be removed" 3500 ASHELL-TOAST EXIT
+        S" Copied, but source could not be removed" 3500 ASHELL-TOAST-WARNING EXIT
     THEN
     DUP _FCP-S-DELETE-SYNC = IF
         DROP _FEXP-CLIP-CLEAR
         _FEXP-REFRESH-AFTER-MUTATION
         S" Copied; source cleanup durability is uncertain"
-        4000 ASHELL-TOAST EXIT
+        4000 ASHELL-TOAST-WARNING EXIT
     THEN
     _FCP-COMMITTED @ _FCP-RESIDUE @ OR IF
         _FEXP-REFRESH-AFTER-MUTATION
@@ -1031,29 +1041,29 @@ VARIABLE _FOP-REQ
     CASE
         CBUS-S-OK OF ENDOF
         CBUS-S-NO-HANDLER OF
-            S" No application can open this resource" 2200 ASHELL-TOAST
+            S" No application can open this resource" 2200 ASHELL-TOAST-WARNING
         ENDOF
         CBUS-S-STALE-INSTANCE OF
-            S" The target application closed" 1800 ASHELL-TOAST
+            S" The target application closed" 1800 ASHELL-TOAST-ERROR
         ENDOF
         CBUS-S-INVALID OF
-            S" The application rejected this resource" 2200 ASHELL-TOAST
+            S" The application rejected this resource" 2200 ASHELL-TOAST-ERROR
         ENDOF
         CBUS-S-NOT-FOUND OF
-            S" The resource could not be found" 2200 ASHELL-TOAST
+            S" The resource could not be found" 2200 ASHELL-TOAST-ERROR
         ENDOF
         CBUS-S-DENIED OF
-            S" Permission denied while opening the resource" 2200 ASHELL-TOAST
+            S" Permission denied while opening the resource" 2200 ASHELL-TOAST-ERROR
         ENDOF
         CBUS-S-FAILED OF
             DUP CBR.ERROR-U @ ?DUP IF
-                >R DUP CBR.ERROR-A @ R> 2600 ASHELL-TOAST
+                >R DUP CBR.ERROR-A @ R> 2600 ASHELL-TOAST-ERROR
             ELSE
                 S" The application failed to open the resource"
-                2200 ASHELL-TOAST
+                2200 ASHELL-TOAST-ERROR
             THEN
         ENDOF
-        S" Could not open the resource" 1800 ASHELL-TOAST
+        S" Could not open the resource" 1800 ASHELL-TOAST-ERROR
     ENDCASE
     CBR-FREE ;
 
@@ -1061,20 +1071,20 @@ VARIABLE _FOP-REQ
 : _FEXP-POST-OPEN  ( -- )
     _FEXP-SEL-LEN @ 0= IF EXIT THEN
     CBR-NEW DUP IF
-        2DROP S" Could not allocate open request" 1800 ASHELL-TOAST EXIT
+        2DROP S" Could not allocate open request" 1800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP _FOP-REQ !
     CPRINC-COMPONENT _FOP-REQ @ CBR.PRINCIPAL !
     _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FOP-REQ @ CBR.ARGS IRES-VFS! IF
         _FOP-REQ @ CBR-FREE
-        S" Resource path is too large" 1800 ASHELL-TOAST EXIT
+        S" Resource path is too large" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     ['] _FEXP-OPEN-COMPLETE _FOP-REQ @ CBR.COMPLETE-XT !
     S" resource.open" _FOP-REQ @ _FEXP-CURRENT-INSTANCE @
     CINST-POST-INTENT
     DUP CBUS-S-OK <> IF
         DROP _FOP-REQ @ CBR-FREE
-        S" Open is unavailable outside Desk" 1800 ASHELL-TOAST
+        S" Open is unavailable outside Desk" 1800 ASHELL-TOAST-WARNING
     ELSE DROP THEN ;
 
 : _FEXP-DO-OPEN  ( elem -- )
@@ -1111,7 +1121,7 @@ VARIABLE _FOP-REQ
     _FEXP-SELECT-ROW IF
         _FEXP-R.TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN
     ELSE
-        DROP S" The path is too long" 2000 ASHELL-TOAST
+        DROP S" The path is too long" 2000 ASHELL-TOAST-WARNING
     THEN
     _FEXP-UPDATE-STATUS ;
 
@@ -1120,7 +1130,7 @@ VARIABLE _FOP-REQ
     DROP
     DUP _FEXP-ROW-INDEX? 0= IF DROP EXIT THEN
     _FEXP-SELECT-ROW 0= IF
-        DROP S" The path is too long" 2000 ASHELL-TOAST
+        DROP S" The path is too long" 2000 ASHELL-TOAST-WARNING
         _FEXP-UPDATE-STATUS EXIT
     THEN
     _FEXP-R.TYPE @ VFS-T-DIR = IF
@@ -1243,13 +1253,26 @@ VARIABLE _FDEL-LISTED
     _FEXP-REFRESH-DETAIL
     TRUE ;
 
-: _FEXP-DELETE-SELECTED  ( -- flag )
-    _FEXP-SEL-LEN @ 0= IF FALSE EXIT THEN
-    _FEXP-SEL-PATH _FEXP-SEL-LEN @ S" /" COMPARE 0= IF FALSE EXIT THEN
-    \ Never hold the VFS guard, or a VFS entry, across the modal
-    \ confirmation/yield loop.
-    S" Delete the selected item?" DLG-CONFIRM 0= IF FALSE EXIT THEN
-    ['] _FEXP-DELETE-BODY VFS-TRANSACTION ;
+: _FEXP-DELETE-CONFIRMED  ( confirmed? context -- )
+    DROP 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DEL-PATH _FEXP-DEL-LEN @ COMPARE IF
+        S" The selection changed; nothing was deleted" 2000 ASHELL-TOAST-WARNING EXIT
+    THEN
+    ['] _FEXP-DELETE-BODY VFS-TRANSACTION 0= IF
+        S" Delete failed" 1800 ASHELL-TOAST-ERROR
+    THEN ;
+
+\ Ask before deleting the selected item.  No VFS guard or entry is held
+\ while the question is open.
+: _FEXP-DELETE-SELECTED  ( -- )
+    _FEXP-SEL-LEN @ 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-SEL-LEN @ S" /" COMPARE 0= IF EXIT THEN
+    _FEXP-SEL-PATH _FEXP-DEL-PATH _FEXP-SEL-LEN @ MOVE
+    _FEXP-SEL-LEN @ _FEXP-DEL-LEN !
+    S" Delete the selected item?" S" Delete"
+        ['] _FEXP-DELETE-CONFIRMED 0 DLG-CONFIRM 0= IF
+        S" Nothing was deleted" 1800 ASHELL-TOAST-WARNING
+    THEN ;
 
 \ =====================================================================
 \  §13 — Action handlers (registered via UTUI-DO!)
@@ -1264,9 +1287,7 @@ VARIABLE _FDEL-LISTED
 : _FEXP-DO-NEW-DIR    ( elem -- )
     DROP _FEXP-PRM-NEW-DIR S" New folder:" 0 0 _FEXP-SHOW-PROMPT ;
 : _FEXP-DO-DELETE     ( elem -- )
-    DROP _FEXP-DELETE-SELECTED 0= IF
-        S" Delete cancelled or failed" 1800 ASHELL-TOAST
-    THEN ;
+    DROP _FEXP-DELETE-SELECTED ;
 : _FEXP-DO-RENAME     ( elem -- )
     DROP
     _FEXP-SEL-LEN @ 0= IF EXIT THEN
@@ -1277,14 +1298,25 @@ VARIABLE _FDEL-LISTED
 : _FEXP-DO-CUT        ( elem -- ) DROP FEXP-CLIP-CUT ;
 : _FEXP-DO-PASTE      ( elem -- ) DROP FEXP-CLIP-PASTE ;
 
+\ The View menu checks Show Hidden while hidden files show, and the sort in
+\ use.
+: _FEXP-VIEW-CHECKS  ( -- )
+    _FEXP-EXPL @ EXPL-SHOW-HIDDEN? S" view-hidden" UTUI-BY-ID UTUI-CHECKED!
+    _FEXP-SORT @ FEXP-SORT-NAME = S" view-sort-name" UTUI-BY-ID UTUI-CHECKED!
+    _FEXP-SORT @ FEXP-SORT-SIZE = S" view-sort-size" UTUI-BY-ID UTUI-CHECKED!
+    _FEXP-SORT @ FEXP-SORT-TYPE = S" view-sort-type" UTUI-BY-ID UTUI-CHECKED! ;
+
 : _FEXP-DO-TOGGLE-HIDDEN  ( elem -- )
     DROP
     _FEXP-EXPL @ DUP EXPL-SHOW-HIDDEN? 0= SWAP EXPL-SHOW-HIDDEN!
+    _FEXP-VIEW-CHECKS
     _FEXP-TREE-REFRESH _FEXP-REFRESH-DETAIL ;
 
-: _FEXP-DO-SORT-NAME  ( elem -- ) DROP FEXP-SORT-NAME _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
-: _FEXP-DO-SORT-SIZE  ( elem -- ) DROP FEXP-SORT-SIZE _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
-: _FEXP-DO-SORT-TYPE  ( elem -- ) DROP FEXP-SORT-TYPE _FEXP-SORT ! _FEXP-REFRESH-DETAIL ;
+: _FEXP-SORT-BY  ( mode -- )
+    _FEXP-SORT ! _FEXP-VIEW-CHECKS _FEXP-REFRESH-DETAIL ;
+: _FEXP-DO-SORT-NAME  ( elem -- ) DROP FEXP-SORT-NAME _FEXP-SORT-BY ;
+: _FEXP-DO-SORT-SIZE  ( elem -- ) DROP FEXP-SORT-SIZE _FEXP-SORT-BY ;
+: _FEXP-DO-SORT-TYPE  ( elem -- ) DROP FEXP-SORT-TYPE _FEXP-SORT-BY ;
 
 : _FEXP-DO-EXPAND-ALL  ( elem -- )
     DROP _FEXP-EXPL @ EXPL-EXPAND-ALL _FEXP-SIDEBAR-DIRTY ASHELL-DIRTY! ;
@@ -1341,28 +1373,28 @@ VARIABLE _FSUB-MODE
     _FSUB-MODE @ CASE
         _FEXP-PRM-GOTO OF
             _FSUB-A @ _FSUB-U @ _FEXP-GOTO-PATH 0= IF
-                S" Path not found" 2000 ASHELL-TOAST
+                S" Path not found" 2000 ASHELL-TOAST-WARNING
             THEN
         ENDOF
         _FEXP-PRM-NEW-FILE OF
             _FSUB-A @ _FSUB-U @ VFS-T-FILE _FEXP-CREATE-NAMED IF
                 S" File created" 1400 ASHELL-TOAST
             ELSE
-                S" Could not create file" 2200 ASHELL-TOAST
+                S" Could not create file" 2200 ASHELL-TOAST-ERROR
             THEN
         ENDOF
         _FEXP-PRM-NEW-DIR OF
             _FSUB-A @ _FSUB-U @ VFS-T-DIR _FEXP-CREATE-NAMED IF
                 S" Folder created" 1400 ASHELL-TOAST
             ELSE
-                S" Could not create folder" 2200 ASHELL-TOAST
+                S" Could not create folder" 2200 ASHELL-TOAST-ERROR
             THEN
         ENDOF
         _FEXP-PRM-RENAME OF
             _FSUB-A @ _FSUB-U @ _FEXP-RENAME-NAMED IF
                 S" Renamed" 1400 ASHELL-TOAST
             ELSE
-                S" Could not rename" 2200 ASHELL-TOAST
+                S" Could not rename" 2200 ASHELL-TOAST-ERROR
             THEN
         ENDOF
     ENDCASE
@@ -1397,7 +1429,7 @@ VARIABLE _FPR-LEN
     DUP IN.TYPE @ VFS-T-DIR = IF S" dir" ELSE S" file" THEN _FPR+
     S"   Size: " _FPR+
     IN.SIZE-LO @ SIZE-FMT _FPR+
-    _FEXP-SCRATCH _FPR-LEN @ DLG-INFO ;
+    _FEXP-SCRATCH _FPR-LEN @ DLG-INFO DROP ;
 
 \ =====================================================================
 \  §14 — INIT callback ("document ready")
@@ -1497,6 +1529,7 @@ VARIABLE _FPR-LEN
     \ Populate initial directory listing
     _FEXP-SHOW-DIR
 
+    _FEXP-VIEW-CHECKS
     _FEXP-UPDATE-STATUS ;
 
 \ =====================================================================
@@ -1587,12 +1620,12 @@ VARIABLE _FRV-TYPE
 : _FEXP-DO-LINK  ( path-a path-u status ctx -- )
     DROP CASE
         LPATH-S-OK OF
-            _FEXP-REVEAL-PATH IF S" Path not found" 2000 ASHELL-TOAST THEN
+            _FEXP-REVEAL-PATH IF S" Path not found" 2000 ASHELL-TOAST-WARNING THEN
         ENDOF
         LPATH-S-SCHEME OF
-            2DROP S" File Explorer opens only links to files" 2200 ASHELL-TOAST
+            2DROP S" File Explorer opens only links to files" 2200 ASHELL-TOAST-WARNING
         ENDOF
-        LPATH-S-ROOM OF 2DROP S" The path is too long" 2000 ASHELL-TOAST ENDOF
+        LPATH-S-ROOM OF 2DROP S" The path is too long" 2000 ASHELL-TOAST-WARNING ENDOF
         >R 2DROP R>
     ENDCASE ;
 ' _FEXP-DO-LINK IS _FEXP-ON-LINK

@@ -95,7 +95,7 @@ class HiddenAckHarness(cf._FeedHarness):
             ("provider-family.f", "engine-apt1.f")) + STAGED + ACK_FIXTURE).encode(),
             source_name="real-shell-ack-fixture", step_budget=20_000_000)
         self.attach()
-        assert self.call("RTAPT-OWNER-OPEN", 88, 99, 16, 0, 128, 0, 0, 8192, 0, self.engine)[0] == (0,)
+        assert self.call("RTAPT-OWNER-OPEN", 88, 99, 16, 0, 128, 0, 0, 8192, 0, 0, self.engine)[0] == (0,)
         self.settle()
         self.call("_AK-INIT")
         self.p, self.s, self.facade = map(self.constant, ("_SX-P", "_SX-S", "_SX-F"))
@@ -255,7 +255,7 @@ def test_hidden_ack_boundaries_abort_and_larger_base_frontiers_never_publish_or_
         # Ordinary source authority may disappear before the old hidden ACK is
         # consumed. The exact immutable pending tuple remains its authority.
         old_draw = h.get("_RSHSP.PENDING-DRAW", h.s)
-        assert h.call("_ASHELL-DRAW-OBSERVE", h.constant("ASHELL-DRAW-MODAL"))[0] == (0,)
+        assert h.call("_ASHELL-DRAW-OBSERVE", h.constant("ASHELL-DRAW-BEGIN"))[0] == (0,)
         assert h.call("SHSN-SNAPSHOT-FOR@", old_draw, h.constant("_SX-C"))[0][2] != 0
         assert h.call("_AK-STEP")[0] == (0, 0, MASK)
         consumed = h.frontiers()

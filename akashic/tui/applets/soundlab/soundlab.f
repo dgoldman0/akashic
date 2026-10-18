@@ -56,12 +56,16 @@ REQUIRE ../../../audio/output.f
 
 \ The base graph has eight READOUTs, two METERs and three STATUS objects.
 \ A visible rendered waveform adds one SERIES containing every PCM frame
-\ and one WAVEFORM.  Two immutable banks and fixed conversion scratch are
-\ caller-owned; graph rebuilding never allocates a new sample buffer.
+\ and one WAVEFORM, and a panel with room for the frequency landmarks adds
+\ their line and its two marks as POLYLINEs.  Two immutable banks and fixed
+\ conversion scratch are caller-owned; graph rebuilding never allocates a
+\ new sample buffer.
 1960 CONSTANT _SL-DGRAPH-BASE-BYTES
+2 UDG-POLYLINE-RECORD-BYTES 3 * CONSTANT _SL-DGRAPH-LANDMARK-BYTES
 _SL-MAX-FRAMES 8 * CONSTANT _SL-DGRAPH-SAMPLE-BYTES
 _SL-DGRAPH-BASE-BYTES UDG-SERIES-HEADER-SIZE + UDG-WAVEFORM-RECORD-SIZE +
-    _SL-DGRAPH-SAMPLE-BYTES + CONSTANT _SL-DGRAPH-CAP
+    _SL-DGRAPH-SAMPLE-BYTES + _SL-DGRAPH-LANDMARK-BYTES +
+    CONSTANT _SL-DGRAPH-CAP
    1 CONSTANT _SL-DGRAPH-ROOT-KEY
   13 CONSTANT _SL-DGRAPH-OBJECT-COUNT
 
@@ -73,6 +77,16 @@ _SL-DGRAPH-BASE-BYTES UDG-SERIES-HEADER-SIZE + UDG-WAVEFORM-RECORD-SIZE +
 0x666666FF CONSTANT _SL-DG-INACTIVE
 0xFFFF00FF CONSTANT _SL-DG-DEVICE
 0x5FD7FFFF CONSTANT _SL-DG-TRACE
+\ The landmark line and its marks: the pitch mark takes the trace's color
+\ and the centroid's the color its letter always had.
+0x808080FF CONSTANT _SL-DG-LANDMARK-LINE
+0x5FD7FFFF CONSTANT _SL-DG-PITCH-MARK
+0xFFD700FF CONSTANT _SL-DG-CENTROID-MARK
+0x20000000 CONSTANT _SL-DG-LANDMARK-STROKE
+\ The landmark points, a line across one row and a mark down one cell,
+\ are the same for every panel.
+CREATE _SL-LANDMARK-SPACE 64 7 + ALLOT
+: _SL-LANDMARK-POINTS  ( -- a ) _SL-LANDMARK-SPACE 7 + -8 AND ;
 0x4E4E4EFF CONSTANT _SL-DG-ZERO
 
 -1 CONSTANT _SL-PLAY-S-NEVER
@@ -125,6 +139,7 @@ _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-BOUND-H
 _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-BOUND-W
 _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-OWNED-ACTIVE
 _SL-CURRENT-STATE CMP-CELL: _SL-DGRAPH-AUDIO-PRESENT
+_SL-CURRENT-STATE CMP-CELL: _SL-STATUS-SINK
 _SL-CURRENT-STATE CMP-CELL: _SL-PROMPT
 _SL-CURRENT-STATE CMP-CELL: _SL-PROMPT-RGN
 _SL-CURRENT-STATE CMP-CELL: _SL-PROMPT-MODE
@@ -150,6 +165,9 @@ _SL-CURRENT-STATE UFLD-BUILDER-SIZE CMP-FIELD: _SL-FIELD-BUILDER
 _SL-CURRENT-STATE CMP-CELL: _SL-PCM
 _SL-CURRENT-STATE CMP-CELL: _SL-RENDER-VALID
 _SL-CURRENT-STATE CMP-CELL: _SL-UNSAVED
+\ Set when the user agreed to discard the unsaved render and close, so the
+\ close Sound Lab then asks for goes ahead.
+_SL-CURRENT-STATE CMP-CELL: _SL-DISCARD-ARMED
 _SL-CURRENT-STATE CMP-CELL: _SL-LAST-ERROR
 _SL-CURRENT-STATE CMP-CELL: _SL-LAST-PLAY-STATUS
 _SL-CURRENT-STATE CMP-CELL: _SL-LAST-PLAY-ERROR
@@ -357,6 +375,7 @@ VARIABLE _SL-TN
         THEN THEN THEN THEN
         S" text" 2SWAP UTUI-SET-ATTR
     THEN
+    AUDIO-OUT-SINK? _SL-STATUS-SINK !
     _SL-E-SBAR-PLAYBACK @ ?DUP IF
         AUDIO-OUT-PRESENT? 0= IF
             S" Audio absent"
@@ -574,23 +593,23 @@ VARIABLE _SL-SHOW-IU
     _SL-PROMPT-MODE @ _SL-SUB-MODE !
     _SL-PM-NONE _SL-PROMPT-MODE !
     _SL-SUB-A @ _SL-SUB-U @ STR>NUM 0= IF
-        DROP S" Enter a whole number" 1800 ASHELL-TOAST
+        DROP S" Enter a whole number" 1800 ASHELL-TOAST-WARNING
     ELSE
         _SL-SUB-N !
         _SL-SUB-MODE @ CASE
             _SL-PM-FREQUENCY OF
                 _SL-SUB-N @ DUP _SL-FREQ-MIN < SWAP _SL-FREQ-MAX > OR IF
-                    S" Frequency must be 40-2000 Hz" 2200 ASHELL-TOAST
+                    S" Frequency must be 40-2000 Hz" 2200 ASHELL-TOAST-WARNING
                 ELSE _SL-SUB-N @ _SL-FREQUENCY ! _SL-PARAM-CHANGED THEN
             ENDOF
             _SL-PM-AMPLITUDE OF
                 _SL-SUB-N @ DUP _SL-AMP-MIN < SWAP _SL-AMP-MAX > OR IF
-                    S" Amplitude must be 0-100 percent" 2200 ASHELL-TOAST
+                    S" Amplitude must be 0-100 percent" 2200 ASHELL-TOAST-WARNING
                 ELSE _SL-SUB-N @ _SL-AMPLITUDE ! _SL-PARAM-CHANGED THEN
             ENDOF
             _SL-PM-DURATION OF
                 _SL-SUB-N @ DUP _SL-DURATION-MIN < SWAP _SL-DURATION-MAX > OR IF
-                    S" Duration must be 100-2000 ms" 2200 ASHELL-TOAST
+                    S" Duration must be 100-2000 ms" 2200 ASHELL-TOAST-WARNING
                 ELSE _SL-SUB-N @ _SL-DURATION ! _SL-PARAM-CHANGED THEN
             ENDOF
         ENDCASE
@@ -650,6 +669,21 @@ VARIABLE _SL-METER-W
         10 _SL-ANALYSIS-ROW !
     THEN
     _SL-DW @ 16 - 4 MAX 52 MIN _SL-METER-W ! ;
+
+\ The frequency landmarks: a caption, then a row of letters naming the
+\ marks, then the line from 0 Hz to 4 kHz with a mark at the pitch and one
+\ at the spectral centroid.  Shown with a valid render when the panel has
+\ the rows.  The marks' columns serve the graph and the letters alike.
+: _SL-LANDMARKS-SHOWN?  ( -- flag )
+    _SL-ANALYSIS-ROW @ 6 + _SL-DH @ < ;
+
+: _SL-LANDMARK-X  ( hz -- column )
+    0 MAX 4000 MIN _SL-LANDMARK-W @ 1- * 4000 / 2 + ;
+
+: _SL-LANDMARKS-LAYOUT  ( -- )
+    _SL-DW @ 6 - 4 MAX _SL-LANDMARK-W !
+    _SL-M-PITCH @ FP16>INT _SL-LANDMARK-X _SL-PITCH-X !
+    _SL-M-CENTROID @ FP16>INT _SL-LANDMARK-X _SL-CENTROID-X ! ;
 
 \ ---------------------------------------------------------------------
 \ Canonical typed parameter fields.  Models contain application meaning;
@@ -817,6 +851,34 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
         _SL-DG-SAMPLE-COUNT @ 8 * + _SL-DG-EXPECTED-BYTES +!
     1 _SL-DG-EXPECTED-OBJECTS +! UDG-S-OK ;
 
+\ A line across one row, and a mark down one cell.
+: _SL-LANDMARK-POINTS!  ( -- )
+    0 _SL-LANDMARK-POINTS ! 0x7FFFFFFF _SL-LANDMARK-POINTS 8 + !
+    UDG-UNORM-ONE _SL-LANDMARK-POINTS 16 + !
+    0x7FFFFFFF _SL-LANDMARK-POINTS 24 + !
+    0x7FFFFFFF _SL-LANDMARK-POINTS 32 + ! 0 _SL-LANDMARK-POINTS 40 + !
+    0x7FFFFFFF _SL-LANDMARK-POINTS 48 + !
+    UDG-UNORM-ONE _SL-LANDMARK-POINTS 56 + ! ;
+
+: _SL-DGRAPH-MARK  ( key column color -- status )
+    >R >R _SL-ANALYSIS-ROW @ 6 + R> 1 1 1 _SL-DG-FLAGS @
+        _SL-DG-LANDMARK-STROKE R> 0 _SL-LANDMARK-POINTS 32 + 2
+        _SL-DGRAPH-BUILDER UDG-POLYLINE ;
+
+: _SL-DGRAPH-LANDMARKS  ( -- status )
+    _SL-LANDMARKS-SHOWN? 0= IF UDG-S-OK EXIT THEN
+    _SL-LANDMARKS-LAYOUT _SL-LANDMARK-POINTS!
+    50 _SL-ANALYSIS-ROW @ 6 + 2 1 _SL-LANDMARK-W @ 0 _SL-DG-FLAGS @
+        _SL-DG-LANDMARK-STROKE _SL-DG-LANDMARK-LINE 0
+        _SL-LANDMARK-POINTS 2 _SL-DGRAPH-BUILDER UDG-POLYLINE
+    DUP IF EXIT THEN DROP
+    51 _SL-PITCH-X @ _SL-DG-PITCH-MARK _SL-DGRAPH-MARK
+    DUP IF EXIT THEN DROP
+    52 _SL-CENTROID-X @ _SL-DG-CENTROID-MARK _SL-DGRAPH-MARK
+    DUP IF EXIT THEN DROP
+    _SL-DGRAPH-LANDMARK-BYTES _SL-DG-EXPECTED-BYTES +!
+    3 _SL-DG-EXPECTED-OBJECTS +! UDG-S-OK ;
+
 : _SL-DGRAPH-REBUILD  ( -- status )
     _SL-DGRAPH-WIDGET @ 0= IF DGRAPH-S-OK EXIT THEN
     _SL-LAYOUT
@@ -892,16 +954,17 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
         _SL-DG-INACTIVE _SL-DG-RMS _SL-RENDER-VALID @
         UDG-STATUS-CIRCLE _SL-DGRAPH-BUILDER UDG-STATUS
     DUP IF EXIT THEN DROP
-    31 9 4 1 1 2 UDG-OBJECT-VISIBLE
+    31 8 30 1 1 2 UDG-OBJECT-VISIBLE
         _SL-DG-INACTIVE _SL-DG-PEAK _SL-OWNED-ACTIVE?
         UDG-STATUS-DIAMOND _SL-DGRAPH-BUILDER UDG-STATUS
     DUP IF EXIT THEN DROP
-    32 9 2 1 1 2 UDG-OBJECT-VISIBLE
+    32 8 14 1 1 2 UDG-OBJECT-VISIBLE
         _SL-DG-INACTIVE _SL-DG-DEVICE AUDIO-OUT-PRESENT?
         UDG-STATUS-SQUARE _SL-DGRAPH-BUILDER UDG-STATUS
     DUP IF EXIT THEN DROP
 
     _SL-DGRAPH-WAVEFORM DUP IF EXIT THEN DROP
+    _SL-DGRAPH-LANDMARKS DUP IF EXIT THEN DROP
     _SL-DGRAPH-BUILDER UDG-END
     DUP IF EXIT THEN DROP
     _SL-DGRAPH-BUILDER UDG-BUILDER-FINISH
@@ -964,21 +1027,19 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
     S" Peak level" _SL-ANALYSIS-ROW @ 2 + 2 DRW-TEXT
     S" RMS level" _SL-ANALYSIS-ROW @ 3 + 2 DRW-TEXT
 
-    _SL-ANALYSIS-ROW @ 6 + _SL-DH @ < IF
-        _SL-DW @ 6 - 4 MAX _SL-LANDMARK-W !
+    \ The line and its marks are the graph's; the caption and the letters
+    \ naming the marks are painted above them.
+    _SL-LANDMARKS-SHOWN? IF
+        _SL-LANDMARKS-LAYOUT
         244 234 CELL-A-DIM DRW-STYLE!
-        S" Frequency landmarks: 0 Hz" _SL-ANALYSIS-ROW @ 5 + 2 DRW-TEXT
-        S" 4 kHz" _SL-ANALYSIS-ROW @ 5 + 2 _SL-LANDMARK-W @ DRW-TEXT-RIGHT
-        9472 _SL-ANALYSIS-ROW @ 6 + 2 _SL-LANDMARK-W @ DRW-HLINE
-        _SL-M-PITCH @ FP16>INT 0 MAX 4000 MIN _SL-LANDMARK-W @ 1- * 4000 /
-        2 + _SL-PITCH-X !
-        _SL-M-CENTROID @ FP16>INT 0 MAX 4000 MIN _SL-LANDMARK-W @ 1- * 4000 /
-        2 + _SL-CENTROID-X !
+        \ The right-aligned label blanks its whole field, so it goes first.
+        S" 4 kHz" _SL-ANALYSIS-ROW @ 4 + 2 _SL-LANDMARK-W @ DRW-TEXT-RIGHT
+        S" Frequency landmarks: 0 Hz" _SL-ANALYSIS-ROW @ 4 + 2 DRW-TEXT
         81 234 CELL-A-BOLD DRW-STYLE!
-        [CHAR] P _SL-ANALYSIS-ROW @ 6 + _SL-PITCH-X @ DRW-CHAR
+        [CHAR] P _SL-ANALYSIS-ROW @ 5 + _SL-PITCH-X @ DRW-CHAR
         220 DRW-FG!
         _SL-CENTROID-X @ _SL-PITCH-X @ = IF [CHAR] * ELSE [CHAR] C THEN
-        _SL-ANALYSIS-ROW @ 6 + _SL-CENTROID-X @ DRW-CHAR
+        _SL-ANALYSIS-ROW @ 5 + _SL-CENTROID-X @ DRW-CHAR
     THEN ;
 
 : _SL-PANEL-DRAW  ( widget -- )
@@ -994,24 +1055,12 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
     _SL-DRAW-SETTINGS
     239 234 0 DRW-STYLE!
     9472 7 1 _SL-DW @ 2 - 0 MAX DRW-HLINE
-    220 234 0 DRW-STYLE!
-    _SL-OUTPUT-BLOCKED @ IF
-        S" Output: recovery blocked"
-    ELSE _SL-RENDER-VALID @ IF
-        _SL-UNSAVED @ IF S" Output: rendered, not saved"
-        ELSE S" Output: /soundlab.wav" THEN
-    ELSE
-        S" Output: render current settings before saving"
-    THEN THEN 8 4 DRW-TEXT
+    \ The lamps' captions.  What the output and playback are now is the
+    \ status bar's to say.
     203 234 CELL-A-DIM DRW-STYLE!
-    AUDIO-OUT-PRESENT? 0= IF
-        S" Playback: audio device absent"
-    ELSE AUDIO-OUT-SINK? IF
-        S" Playback: audible sink ready (P to play)"
-    ELSE
-        S" Playback: deterministic capture only (P captures; no sound)"
-    THEN THEN
-    _SL-DW @ 8 - 0 MAX MIN 9 6 DRW-TEXT
+    S" rendered" 8 4 DRW-TEXT
+    S" audio device" 8 16 DRW-TEXT
+    S" playing" 8 32 DRW-TEXT
     _SL-DRAW-WAVEFORM
     _SL-DRAW-ANALYSIS
     _SL-DGRAPH-WIDGET @ ?DUP IF
@@ -1071,7 +1120,7 @@ VARIABLE _SL-FIELD-EVENT
 
 : _SL-RENDER-ACTION  ( -- )
     _SL-RENDER IF
-        S" Signal render failed; previous PCM was kept" 2800 ASHELL-TOAST
+        S" Signal render failed; previous PCM was kept" 2800 ASHELL-TOAST-ERROR
     ELSE
         S" Signal rendered and analyzed" 1600 ASHELL-TOAST
     THEN ;
@@ -1079,17 +1128,17 @@ VARIABLE _SL-FIELD-EVENT
 : _SL-SAVE-ACTION  ( -- )
     _SL-SAVE IF
         _SL-RENDER-VALID @ IF
-            S" WAV save failed; rendered PCM was kept"
+            S" WAV save failed; rendered PCM was kept" 2600 ASHELL-TOAST-ERROR
         ELSE
-            S" Render current settings before saving"
-        THEN 2600 ASHELL-TOAST
+            S" Render current settings before saving" 2600 ASHELL-TOAST-WARNING
+        THEN
     ELSE
         S" Saved /soundlab.wav" 1600 ASHELL-TOAST
     THEN ;
 
 : _SL-PLAYBACK-ACTION  ( -- )
     _SL-RENDER-VALID @ 0= IF
-        S" Render current settings before playback" 2200 ASHELL-TOAST EXIT
+        S" Render current settings before playback" 2200 ASHELL-TOAST-WARNING EXIT
     THEN
     _SL-PLAY
     DUP AUDIO-OUT-S-OK = IF
@@ -1100,7 +1149,7 @@ VARIABLE _SL-FIELD-EVENT
         THEN
         2800 ASHELL-TOAST EXIT
     THEN
-    _SL-PLAY-ERROR-TEXT 3200 ASHELL-TOAST ;
+    _SL-PLAY-ERROR-TEXT 3200 ASHELL-TOAST-ERROR ;
 
 VARIABLE _SL-H-WIDGET
 
@@ -1161,17 +1210,17 @@ VARIABLE _SL-SOURCE-REQ
 
 : _SL-REVEAL-COMPLETE  ( request -- )
     DUP CBR.STATUS @ CBUS-S-OK <> IF
-        S" Could not reveal the Sound Lab output" 2000 ASHELL-TOAST
+        S" Could not reveal the Sound Lab output" 2000 ASHELL-TOAST-ERROR
     THEN
     CBR-FREE ;
 
 : _SL-DO-REVEAL-OUTPUT  ( elem -- )
     DROP
     _SL-SAVED-ONCE @ 0= IF
-        S" Save a WAV before revealing the output" 1800 ASHELL-TOAST EXIT
+        S" Save a WAV before revealing the output" 1800 ASHELL-TOAST-WARNING EXIT
     THEN
     CBR-NEW DUP IF
-        2DROP S" Could not allocate reveal request" 1800 ASHELL-TOAST EXIT
+        2DROP S" Could not allocate reveal request" 1800 ASHELL-TOAST-ERROR EXIT
     THEN
     DROP _SL-SOURCE-REQ !
     CPRINC-COMPONENT _SL-SOURCE-REQ @ CBR.PRINCIPAL !
@@ -1182,7 +1231,7 @@ VARIABLE _SL-SOURCE-REQ
     _SL-SOURCE-REQ @ _SL-CURRENT-INSTANCE @ CINST-POST-INTENT
     DUP CBUS-S-OK <> IF
         DROP _SL-SOURCE-REQ @ CBR-FREE
-        S" Output reveal is unavailable outside Desk" 1800 ASHELL-TOAST
+        S" Output reveal is unavailable outside Desk" 1800 ASHELL-TOAST-WARNING
     ELSE DROP THEN ;
 
 \ ---------------------------------------------------------------------
@@ -1257,7 +1306,7 @@ VARIABLE _SL-INIT-RENDER-IOR
     _SL-RENDER _SL-INIT-RENDER-IOR !
     _SL-INIT-RENDER-IOR @ IF
         S" Initial signal render failed; controls remain available"
-        3000 ASHELL-TOAST
+        3000 ASHELL-TOAST-ERROR
     THEN ;
 
 : SOUNDLAB-EVENT-CB  ( event instance -- consumed? )
@@ -1282,24 +1331,32 @@ VARIABLE _SL-INIT-RENDER-IOR
     _SL-DGRAPH-WIDGET @ IF
         _SL-OWNED-ACTIVE? _SL-DGRAPH-OWNED-ACTIVE @ <>
         AUDIO-OUT-PRESENT? _SL-DGRAPH-AUDIO-PRESENT @ <> OR IF
-            _SL-DGRAPH-INVALIDATE
+            _SL-DGRAPH-INVALIDATE EXIT
         THEN
+    THEN
+    \ An audible sink that comes or goes changes only the playback label.
+    AUDIO-OUT-SINK? _SL-STATUS-SINK @ <> IF
+        _SL-UPDATE-STATUS ASHELL-DIRTY!
     THEN ;
 
+: _SL-CLOSE-CONFIRMED  ( confirmed? context -- )
+    DROP IF -1 _SL-DISCARD-ARMED ! ASHELL-QUIT THEN ;
+
+\ An unsaved render defers the close to a question; agreeing to discard it
+\ asks to close again, and that close goes ahead.
 : SOUNDLAB-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _SL-ACTIVATE
     _SL-PROMPT @ ?DUP IF
         PRM-ACTIVE? IF
             S" Finish or cancel the Sound Lab prompt before closing"
-            2400 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+            2400 ASHELL-TOAST-WARNING APP-CLOSE-D-CANCEL EXIT
         THEN
     THEN
     _SL-UNSAVED @ 0= IF APP-CLOSE-D-ALLOW EXIT THEN
-    S" Close Sound Lab and discard the unsaved render?" DLG-CONFIRM IF
-        APP-CLOSE-D-ALLOW
-    ELSE
-        APP-CLOSE-D-CANCEL
-    THEN ;
+    _SL-DISCARD-ARMED @ IF 0 _SL-DISCARD-ARMED ! APP-CLOSE-D-ALLOW EXIT THEN
+    S" Close Sound Lab and discard the unsaved render?" S" Discard"
+        ['] _SL-CLOSE-CONFIRMED 0 DLG-CONFIRM
+    IF APP-CLOSE-D-DEFER ELSE APP-CLOSE-D-CANCEL THEN ;
 
 : SOUNDLAB-SHUTDOWN-CB  ( instance -- )
     _SL-ACTIVATE

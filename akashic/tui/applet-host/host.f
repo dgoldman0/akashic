@@ -63,7 +63,8 @@ VARIABLE _AHOST-OWNED-LIMIT
 88 CONSTANT _AHS-O-CLOSE-PHASE
 96 CONSTANT _AHS-O-INIT-STARTED
 104 CONSTANT _AHS-O-OVERLAY
-112 CONSTANT AHS-SIZE
+112 CONSTANT _AHS-O-DEFERRED    \ reason of a close deferred to a question, or 0
+120 CONSTANT AHS-SIZE
 
 0 CONSTANT AHS-S-EMPTY
 1 CONSTANT AHS-S-RUNNING
@@ -90,6 +91,7 @@ VARIABLE _AHOST-OWNED-LIMIT
 : AHS.CLOSE-PHASE ( slot -- a ) _AHS-O-CLOSE-PHASE + ;
 : AHS.INIT-STARTED ( slot -- a ) _AHS-O-INIT-STARTED + ;
 : AHS.OVERLAY   ( slot -- a ) _AHS-O-OVERLAY + ;
+: AHS.DEFERRED  ( slot -- a ) _AHS-O-DEFERRED + ;
 
 : AHS-OVERLAY?  ( slot -- flag )  AHS.OVERLAY @ 0<> ;
 
@@ -143,7 +145,8 @@ VARIABLE _AHOST-OWNED-LIMIT
 112 CONSTANT _AH-O-CAPTURE-COL
 120 CONSTANT _AH-O-NEXT-OVERLAY-ID  \ the next overlay's ID, from -2 down
 128 CONSTANT _AH-O-SHELL-MODEL    \ completed caller-owned immutable shell bank
-136 CONSTANT AHOST-SIZE
+136 CONSTANT _AH-O-SHUTDOWN       \ the host's shutdown waits on children's questions
+144 CONSTANT AHOST-SIZE
 
 : AHOST.HEAD        ( host -- a ) _AH-O-HEAD + ;
 : AHOST.FOCUS       ( host -- a ) _AH-O-FOCUS + ;
@@ -162,6 +165,12 @@ VARIABLE _AHOST-OWNED-LIMIT
 : AHOST.CAPTURE-COL ( host -- a ) _AH-O-CAPTURE-COL + ;
 : AHOST.NEXT-OVERLAY-ID ( host -- a ) _AH-O-NEXT-OVERLAY-ID + ;
 : AHOST.SHELL-MODEL  ( host -- a ) _AH-O-SHELL-MODEL + ;
+: AHOST.SHUTDOWN     ( host -- a ) _AH-O-SHUTDOWN + ;
+
+\ AHOST-SHUTDOWN-PENDING? ( host -- flag )
+\   Whether a close of every child for the host's own shutdown waits on
+\   questions its children asked before they close.
+: AHOST-SHUTDOWN-PENDING?  ( host -- flag )  AHOST.SHUTDOWN @ 0<> ;
 
 : AHOST-SHELL-MODEL! ( model|0 host -- ) AHOST.SHELL-MODEL ! ;
 : AHOST-SHELL-MODEL@ ( host -- model|0 ) AHOST.SHELL-MODEL @ ;
@@ -285,6 +294,38 @@ VARIABLE _AHF-HOST
     REPEAT
     0 ;
 
+\ AHOST-FIND-INSTANCE ( instance host -- slot | 0 )
+\   The live slot holding the instance.
+VARIABLE _AHFI-INST
+: AHOST-FIND-INSTANCE  ( instance host -- slot | 0 )
+    SWAP _AHFI-INST ! AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS-ALIVE? OVER AHS.INST @ _AHFI-INST @ = AND IF EXIT THEN
+        AHS.NEXT @
+    REPEAT
+    0 ;
+
+\ AHOST-CALL-SCOPED ( xt instance host -- )
+\   Run xt as the host runs the instance's own callbacks: activated, in its
+\   slot's UIDL context, where its elements are, with a repaint its UIDL
+\   asks for marking the slot dirty.  A child context live before is live
+\   again after, even when xt throws; with none live before, the slot's
+\   context stays current, as after a paint.  xt runs as it is for an
+\   instance no live slot with UIDL holds, such as the host's own.  A
+\   request bus takes this as its scope (CBUS-SCOPE!), so a capability
+\   handler may use its own UIDL elements whichever context was live.
+: _AHCS-RUN  ( xt slot -- ) AHS-CTX-SWITCH EXECUTE ;
+: AHOST-CALL-SCOPED  ( xt instance host -- )
+    AHOST-FIND-INSTANCE DUP 0= IF DROP EXECUTE EXIT THEN
+    DUP AHS.HAS-UIDL @ 0= IF DROP EXECUTE EXIT THEN
+    ASHELL-ACTIVE-CTX >R _UTUI-NEEDS-PAINT @ >R
+    0 _UTUI-NEEDS-PAINT !
+    DUP >R ['] _AHCS-RUN CATCH DUP IF NIP NIP THEN R>
+    _UTUI-NEEDS-PAINT @ IF -1 SWAP AHS.DIRTY ! ASHELL-DIRTY! ELSE DROP THEN
+    R> _UTUI-NEEDS-PAINT @ OR _UTUI-NEEDS-PAINT !
+    R> ?DUP IF ASHELL-CTX-SWITCH THEN
+    THROW ;
+
 VARIABLE _AHU-SLOT
 VARIABLE _AHU-HOST
 VARIABLE _AHU-PREV
@@ -365,17 +406,35 @@ VARIABLE _AHQ-DECISION
 
 : _AHQ-EXIT  ( -- ) 0 ASHELL-CTX-SWITCH ;
 
+\ A close a child defers is remembered with its reason while the question
+\ it asked is open.  That question answers any later close too, so the
+\ child is not asked again; a shutdown's reason outranks its own.
+VARIABLE _AHQ-HELD
+: _AHQ-HOLD?  ( -- held? )
+    _AHQ-SLOT @ AHS.DEFERRED @ 0= IF 0 EXIT THEN
+    _AHQ-SLOT @ AHS.HAS-UIDL @ 0= IF 0 EXIT THEN
+    DLG-SHOWN 0= IF 0 EXIT THEN
+    _AHQ-REASON @ APP-CLOSE-R-HOST-SHUTDOWN = IF
+        APP-CLOSE-R-HOST-SHUTDOWN _AHQ-SLOT @ AHS.DEFERRED !
+    THEN
+    -1 ;
+
 : _AHOST-REQUEST-CLOSE-SLOT  ( slot reason -- decision )
     _AHQ-REASON ! _AHQ-SLOT !
     APP-CLOSE-D-CANCEL _AHQ-DECISION !
+    0 _AHQ-HELD !
     ['] _AHQ-ENTER CATCH 0= IF
-        ['] _AHQ-CALL CATCH ?DUP IF
-            DROP
+        _AHQ-HOLD? IF
+            -1 _AHQ-HELD ! APP-CLOSE-D-DEFER _AHQ-DECISION !
         ELSE
-            DUP APP-CLOSE-DECISION-VALID? IF
-                _AHQ-DECISION !
-            ELSE
+            ['] _AHQ-CALL CATCH ?DUP IF
                 DROP
+            ELSE
+                DUP APP-CLOSE-DECISION-VALID? IF
+                    _AHQ-DECISION !
+                ELSE
+                    DROP
+                THEN
             THEN
         THEN
     THEN
@@ -385,11 +444,16 @@ VARIABLE _AHQ-DECISION
         \ and the close can be retried without orphaning its dynamic state.
         APP-CLOSE-D-CANCEL _AHQ-DECISION !
     THEN
-    \ A synchronous close callback may have painted a confirmation dialog.
-    \ Dirty every callback-touched slot before returning: even an ALLOW slot
-    \ can survive when a later close-all participant cancels, or when forced
-    \ retirement converts that decision to DEFER.  Immediate removal simply
-    \ discards this harmless repaint request.
+    _AHQ-HELD @ 0= IF
+        _AHQ-DECISION @ APP-CLOSE-D-DEFER = IF _AHQ-REASON @ ELSE 0 THEN
+        _AHQ-SLOT @ AHS.DEFERRED !
+    THEN
+    \ A close callback may have opened a dialog to ask first, which shows at
+    \ the slot's next paint.  Dirty every callback-touched slot before
+    \ returning: even an ALLOW slot can survive when a later close-all
+    \ participant cancels, or when forced retirement converts that decision
+    \ to DEFER.  Immediate removal simply discards this harmless repaint
+    \ request.
     -1 _AHQ-SLOT @ AHS.DIRTY !
     ASHELL-DIRTY!
     _AHQ-DECISION @ ;
@@ -636,6 +700,26 @@ VARIABLE _AHI-CLOSED
     THEN
     _AHI-DECISION @ ;
 
+\ The host's shutdown no longer waits on its children: a question one asked
+\ about it now answers only that child's own close.
+: _AHOST-ABANDON-SHUTDOWN  ( host -- )
+    0 OVER AHOST.SHUTDOWN !
+    AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS.DEFERRED @ APP-CLOSE-R-HOST-SHUTDOWN = IF
+            APP-CLOSE-R-QUIT OVER AHS.DEFERRED !
+        THEN
+        AHS.NEXT @
+    REPEAT ;
+
+\ Whether a child still asks a question about the host's shutdown.
+: _AHOST-SHUTDOWN-HELD?  ( host -- flag )
+    AHOST.HEAD @
+    BEGIN ?DUP WHILE
+        DUP AHS.DEFERRED @ APP-CLOSE-R-HOST-SHUTDOWN = IF DROP -1 EXIT THEN
+        AHS.NEXT @
+    REPEAT 0 ;
+
 VARIABLE _AHALL-DECISION
 VARIABLE _AHALL-HOST
 VARIABLE _AHALL-REASON
@@ -666,6 +750,15 @@ VARIABLE _AHALL-REASON
     ['] _AHQ-EXIT CATCH IF
         \ Preserve the still-live context for a later close retry.
         APP-CLOSE-D-CANCEL _AHALL-DECISION !
+    THEN
+    \ A shutdown its children's questions defer waits for their answers;
+    \ any other outcome ends it.
+    _AHALL-REASON @ APP-CLOSE-R-HOST-SHUTDOWN = IF
+        _AHALL-DECISION @ APP-CLOSE-D-DEFER = IF
+            -1 _AHALL-HOST @ AHOST.SHUTDOWN !
+        ELSE
+            _AHALL-HOST @ _AHOST-ABANDON-SHUTDOWN
+        THEN
     THEN
     _AHALL-DECISION @ ;
 
@@ -995,6 +1088,45 @@ VARIABLE _AHMO-HIT-COL
     _AHMO-HOST @ AHOST.CAPTURE-ROW @ _AHMO-HIT-ROW !
     _AHMO-HOST @ AHOST.CAPTURE-COL @ _AHMO-HIT-COL ! ;
 
+\ A quit a child asks for becomes a close request for its slot.  When the
+\ quit answers a question the child asked about the host's shutdown, the
+\ close is that shutdown's, and once no other child still asks, the host
+\ asks to quit again so its shutdown goes on.
+VARIABLE _AHCQ-HOST
+VARIABLE _AHCQ-SHUTDOWN
+: _AHOST-CHILD-QUIT  ( slot host -- )
+    _AHCQ-HOST !
+    DUP AHS.DEFERRED @ APP-CLOSE-R-HOST-SHUTDOWN = _AHCQ-SHUTDOWN !
+    0 OVER AHS.DEFERRED !
+    AHS.ID @ APP-CLOSE-R-QUIT _AHCQ-HOST @ AHOST-REQUEST-CLOSE-ID
+    APP-CLOSE-D-ALLOW = _AHCQ-SHUTDOWN @ AND
+    _AHCQ-HOST @ AHOST-SHUTDOWN-PENDING? AND
+    _AHCQ-HOST @ _AHOST-SHUTDOWN-HELD? 0= AND IF ASHELL-QUIT THEN ;
+
+\ A child's question about a close it deferred is answered when its dialog
+\ closes.  A quit asked from the answer goes on with the close, as the AFTER
+\ words take it; an answer without one declines the close, and a shutdown
+\ of the host that waited on it is abandoned.  Call it with the child's
+\ context current, after its dialog took an event.
+: _AHOST-SETTLE  ( slot host -- )
+    OVER AHS.DEFERRED @ 0= IF 2DROP EXIT THEN
+    DLG-SHOWN IF 2DROP EXIT THEN
+    ASHELL-QUIT-PENDING? IF 2DROP EXIT THEN
+    OVER AHS.DEFERRED @ APP-CLOSE-R-HOST-SHUTDOWN = IF
+        _AHOST-ABANDON-SHUTDOWN
+    ELSE DROP THEN
+    0 SWAP AHS.DEFERRED ! ;
+
+\ After an application handled a pointer event: a quit it asked for
+\ becomes a close request for its slot, and a handled event repaints it.
+: _AHMO-AFTER  ( consumed? -- handled? )
+    ASHELL-QUIT-PENDING? IF
+        DROP ASHELL-CANCEL-QUIT
+        _AHMO-SLOT @ _AHMO-HOST @ _AHOST-CHILD-QUIT
+        -1 EXIT
+    THEN
+    DUP IF -1 _AHMO-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! THEN ;
+
 : AHOST-DISPATCH-MOUSE  ( event host -- handled? )
     _AHMO-HOST ! _AHMO-EV ! 0 _AHMO-FOCUS-CHANGED !
     _AHMO-EV @ ASHELL-MOUSE-BTN KEY-MOUSE-BUTTON _AHMO-BUTTON !
@@ -1022,7 +1154,14 @@ VARIABLE _AHMO-HIT-COL
         THEN
         _AHMO-SLOT @ AHS.ID @ _AHMO-HOST @ AHOST-FOCUS-ID
     THEN
-    _AHMO-SLOT @ AHS.HAS-UIDL @ IF _AHMO-SLOT @ AHS-CTX-SWITCH THEN
+    _AHMO-SLOT @ AHS.HAS-UIDL @ IF
+        _AHMO-SLOT @ AHS-CTX-SWITCH
+        \ A dialog the application shows takes all its input.
+        _AHMO-EV @ DLG-HOST-EVENT IF
+            _AHMO-SLOT @ _AHMO-HOST @ _AHOST-SETTLE
+            -1 _AHMO-AFTER EXIT
+        THEN
+    THEN
     \ An application paints overlays such as its prompt above its UIDL
     \ elements, so, as with keys, its own handler sees the event first.  It
     \ takes only events for those overlays and returns the rest for UIDL to
@@ -1030,15 +1169,7 @@ VARIABLE _AHMO-HIT-COL
     _AHMO-SLOT @ AHS.DESC @ ?DUP IF
         APP.EVENT-XT @ ?DUP IF
             _AHMO-EV @ _AHMO-SLOT @ AHS.INST @ ROT EXECUTE
-            ASHELL-QUIT-PENDING? IF
-                DROP ASHELL-CANCEL-QUIT
-                _AHMO-SLOT @ AHS.ID @ APP-CLOSE-R-QUIT _AHMO-HOST @
-                    AHOST-REQUEST-CLOSE-ID DROP
-                -1 EXIT
-            THEN
-            IF
-                -1 _AHMO-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! -1 EXIT
-            THEN
+            _AHMO-AFTER IF -1 EXIT THEN
         THEN
     THEN
     _AHMO-SLOT @ AHS.HAS-UIDL @ IF
@@ -1054,21 +1185,30 @@ VARIABLE _AHE-EV
 VARIABLE _AHE-HOST
 VARIABLE _AHE-SLOT
 
+\ After an application handled a key: a quit it asked for becomes a close
+\ request for its slot, and a handled key repaints it.
+: _AHE-AFTER  ( consumed? -- handled? )
+    ASHELL-QUIT-PENDING? IF
+        DROP ASHELL-CANCEL-QUIT
+        _AHE-SLOT @ _AHE-HOST @ _AHOST-CHILD-QUIT
+        -1 EXIT
+    THEN
+    DUP IF -1 _AHE-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! THEN ;
+
 : _AHOST-DISPATCH-KEY-SLOT  ( -- handled? )
     _AHE-SLOT @ AHS-CALLABLE? 0= IF 0 EXIT THEN
-    _AHE-SLOT @ AHS.HAS-UIDL @ IF _AHE-SLOT @ AHS-CTX-SWITCH THEN
+    _AHE-SLOT @ AHS.HAS-UIDL @ IF
+        _AHE-SLOT @ AHS-CTX-SWITCH
+        \ A dialog the application shows takes all its input.
+        _AHE-EV @ DLG-HOST-EVENT IF
+            _AHE-SLOT @ _AHE-HOST @ _AHOST-SETTLE
+            -1 _AHE-AFTER EXIT
+        THEN
+    THEN
     _AHE-SLOT @ AHS.DESC @ ?DUP IF
         APP.EVENT-XT @ ?DUP IF
             _AHE-EV @ _AHE-SLOT @ AHS.INST @ ROT EXECUTE
-            ASHELL-QUIT-PENDING? IF
-                DROP ASHELL-CANCEL-QUIT
-                _AHE-SLOT @ AHS.ID @ APP-CLOSE-R-QUIT _AHE-HOST @
-                    AHOST-REQUEST-CLOSE-ID DROP
-                -1 EXIT
-            THEN
-            IF
-                -1 _AHE-SLOT @ AHS.DIRTY ! ASHELL-DIRTY! -1 EXIT
-            THEN
+            _AHE-AFTER IF -1 EXIT THEN
         THEN
     THEN
     _AHE-SLOT @ AHS.HAS-UIDL @ IF

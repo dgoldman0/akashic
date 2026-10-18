@@ -5,8 +5,9 @@ Labels, menu bars, and tab strips place text by its width in cells, and
 their clicks follow the same widths.  A label or box title too wide for its
 room is clipped by cells, so a wide character the edge cuts shows blanks.
 Text grid items are laid out as paragraphs, a right-to-left item set against
-its rectangle's right edge.  Dialogs size and wrap their message in cells,
-between whole characters.  MegaPad's reference text rules give the cells.
+its rectangle's right edge.  Dialogs size their message in cells and break it
+into lines by the shared line rule.  MegaPad's reference text rules give the
+cells.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ import re
 
 from test_widget_pointer import _run_forth  # also puts MegaPad on the path
 
-from rich_terminal.text_rules import char_width, characters, layout_row
+from rich_terminal.text_rules import (
+    DIRECTION_AUTO, char_width, characters, layout_lines, layout_row,
+)
 
 ROOTS = ("tui/uidl-tui.f",)
 
@@ -205,30 +208,34 @@ def test_text_grid_items_are_laid_out_and_clipped_by_cells() -> None:
     ]
 
 
-def test_dialogs_wrap_between_characters_and_clip_their_title_by_cells() -> None:
+def test_dialogs_break_their_message_by_the_line_rule_and_clip_their_title_by_cells() -> None:
     title = "\u6a19\u984c" * 6           # 24 cells for 18 cells of room
     message = "\u4e2d" * 8 + ACCENT + "\u4e2d" * 2
     width = 22                             # the message gets 22 - 4 cells
     rows, numbers = _run(
         [
             "40 12 SCR-NEW DUP SCR-USE SCR-CLEAR",
-            "CREATE _DBTN 16 ALLOT",
+            "CREATE _DBTN 32 ALLOT _DBTN 32 0 FILL",
             ': _DOK S" OK" ;',
-            "_DOK _DBTN 8 + ! _DBTN !",
-            # The dialog keeps its strings' addresses, so they must last.
+            "_DOK _DBTN 8 + ! _DBTN ! DLG-B-DEFAULT _DBTN 16 + !",
             f': _DT S" {title}" ;',
             f': _DM S" {message}" ;',
-            "_DT _DM _DBTN 1 DLG-NEW",
-            f"1 1 8 {width} RGN-NEW OVER DLG-SET-REGION",
-            "WDG-DRAW",
-            "1 3 18 _WROW 3 3 18 _WROW 4 3 18 _WROW",
-            f'S" {message}" 18 _DLG-MSG-LINES _WN',
+            # Bounds two cells wider than the dialog: it is laid out 22
+            # cells wide, at row 2 and column 1.
+            f": _DBOUNDS 0 0 12 {width + 2} ;",
+            "' _DBOUNDS IS _DLG-BOUNDS-HOOK",
+            "_DT _DM _DBTN 1 0 0 DLG-ASK DROP DLG-HOST-PAINT",
+            "2 3 18 _WROW 4 3 18 _WROW 5 3 18 _WROW",
+            "DLG-SHOWN _DLG-O-ROWS + @ _WN",
         ]
     )
     title_row, *message_rows = rows
     assert title_row == _field(title, 18)
-    wrapped = _wrap(message, width - 4)
-    assert len(wrapped) == 2
+    wrapped = [
+        "".join(placed.text for placed in line.characters)
+        for line in layout_lines(message, DIRECTION_AUTO, width - 4)
+    ]
+    assert wrapped == _wrap(message, width - 4) and len(wrapped) == 2
     # The combined accent stays whole, on the first row.
     assert message_rows == [_field(line, 18) for line in wrapped]
     assert numbers == [2]

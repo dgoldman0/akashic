@@ -199,6 +199,7 @@ def test_a_due_run_is_handed_over_and_followed_to_its_end(machine):
     _schedule(machine)
     assert _tick(machine, 5000) == -1
     assert text(machine, "SV DBSVC-NOTICE TYPE") == "Agent run: Read the news"
+    assert text(machine, "SV DBSVC-NOTICE-SEVERITY .") == "0"
     # Asked for its standing, handed over as an occurrence, started.
     assert run(machine, ["FC. FC-LAST-OK @ . 1 KEY-ASKED. 1 S-ITEM. "
                          "SV DBSVC-IN-FLIGHT? . CR"]) == [
@@ -218,6 +219,7 @@ def test_a_due_run_is_handed_over_and_followed_to_its_end(machine):
     run(machine, [f"S-ENDED FC-STATUS-STATUS ! {O_COMPLETED} FC-OUTCOME ! 13 FC-SUMMARY-U ! CR"])
     assert _tick(machine) == -1
     assert text(machine, "SV DBSVC-NOTICE TYPE") == "Agent run done: Read the news"
+    assert text(machine, "SV DBSVC-NOTICE-SEVERITY .") == "0"
     assert run(machine, ["1 S-ITEM. SV DBSVC-IN-FLIGHT? . CR"]) == [
         [ENDED, CLEAR, O_COMPLETED, 0, ON_TIME, 9, 13, 0]]
     # Nothing in flight: nothing more to ask.
@@ -238,6 +240,7 @@ def test_a_waiting_run_starts_then_fails(machine):
                   f"{R_PROVIDER_ERROR} FC-REASON ! CR"])
     assert _tick(machine) == -1
     assert text(machine, "SV DBSVC-NOTICE TYPE") == "Needs review: Read the news"
+    assert text(machine, "SV DBSVC-NOTICE-SEVERITY .") == "3"
     assert run(machine, ["1 S-ITEM. S-AUTH. CR"]) == [
         [ENDED, DUE, O_FAILED, R_PROVIDER_ERROR, ON_TIME, 9, 0, 1]]
 
@@ -254,6 +257,7 @@ def test_a_run_the_broker_does_not_take(machine, answer, outcome, reason, kept):
     run(machine, [f"{answer} FC-SUBMIT-STATUS ! CR"])
     assert _tick(machine, 5000) == -1
     assert text(machine, "SV DBSVC-NOTICE TYPE") == "Needs review: Read the news"
+    assert text(machine, "SV DBSVC-NOTICE-SEVERITY .") == "3"
     assert run(machine, ["1 S-ITEM. S-AUTH. SV DBSVC-IN-FLIGHT? . CR"]) == [
         [ENDED, DUE, outcome, reason, ON_TIME, 0, 0, kept, 0]]
 
@@ -290,6 +294,7 @@ def test_runs_left_in_flight_are_settled(machine):
     assert run(machine, ["S-REOPEN . FC-RESET S-UNKNOWN FC-STATUS-STATUS ! CR"]) == [[OK]]
     assert _tick(machine) == -1
     assert text(machine, "SV DBSVC-NOTICE TYPE") == "Needs review: Read the news"
+    assert text(machine, "SV DBSVC-NOTICE-SEVERITY .") == "3"
     assert run(machine, ["1 S-ITEM. SV DBSVC-IN-FLIGHT? . CR"]) == [
         [ENDED, DUE, O_NOT_STARTED, R_RESTART, ON_TIME, 0, 0, 0]]
     # A run that had started is indeterminate.

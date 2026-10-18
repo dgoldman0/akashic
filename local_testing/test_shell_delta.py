@@ -1,13 +1,13 @@
 """Shell DELTA: a changed draw with the acknowledged layout republishes only what changed."""
 
-from test_shell_screen_producer import STAGED, staged_run
+from test_shell_screen_producer import INSTRUMENTS, STAGED, staged_run
 
 
 # The staged producer reads its START candidate from its own fields. A DELTA
 # reads the base candidate from the pending target bank, where the base
 # producer has already matched controls to their acknowledged identities, so
 # these fixtures pack the candidate's one control into such a bank.
-DELTA = STAGED + r'''
+DELTA_HELPERS = r'''
 CREATE _SD-TAS 4103 ALLOT CREATE _SD-TBS 4103 ALLOT
 : _SD-TA _SD-TAS 7 + -8 AND ; : _SD-TB _SD-TBS 7 + -8 AND ;
 VARIABLE _SD-PAINT VARIABLE _SD-LAST-OBJECT
@@ -67,6 +67,7 @@ VARIABLE _SD-GREPLACE VARIABLE _SD-GDEFINE VARIABLE _SD-CREPLACE VARIABLE _SD-PR
 : _SD-SPLIT _SD-HELLP DRW-STYLE-SAVE 1 0 0 DRW-STYLE! 88 6 2 DRW-CHAR DRW-STYLE-RESTORE ;
 : _SD-UNSPLIT _SD-HELLP 32 6 2 DRW-CHAR ;
 '''
+DELTA = STAGED + DELTA_HELPERS
 
 
 def test_changed_text_replaces_only_its_run_and_keeps_acknowledged_identities():
@@ -249,3 +250,53 @@ _SX-SETUP _SD-HOOKS
 _RSHSP-BATCH @ _SD-IN-ORDER? _SS-A _SD-GLYPHS @ 0> _SS-A
 _SS-DONE
 ''', minimum=3)
+
+
+def test_a_live_candidate_numbers_its_series_afresh_and_the_delta_reads_the_bank_s():
+    """A live candidate numbers its series afresh, while the base producer's
+    pending bank carries the series and instruments under their acknowledged
+    identities. The DELTA reads both from the bank, so its batch is
+    consistent when it is checked, before the remaining identities are
+    mapped, and the DELTA is prepared rather than refused."""
+    staged_run(INSTRUMENTS + DELTA_HELPERS + r'''
+CREATE _SDI-ACKS RTE-INSTRUMENT-SIZE 2 * 7 + ALLOT : _SDI-ACK _SDI-ACKS 7 + -8 AND ;
+CREATE _SDI-TAS 140007 ALLOT : _SDI-TA _SDI-TAS 7 + -8 AND ;
+\ The base producer's pending bank: its control, instruments and series,
+\ matched to the acknowledged ones, the series' samples as an offset into
+\ the bank's copy.
+: _SDI-PENDING ( bank -- )
+    DUP 140000 0 FILL
+    1 OVER _RTHP-TB.CONTROL-COUNT !
+    1 OVER _RTHP-TB.INSTRUMENT-REGION-COUNT ! 2 OVER _RTHP-TB.INSTRUMENT-COUNT !
+    1 OVER _RTHP-TB.SERIES-COUNT ! 128000 OVER _RTHP-TB.SERIES-SAMPLE-BYTES !
+    _SX-CI OVER _RTHP-PACK-CONTROLS-A RTE-CONTROL-SIZE MOVE
+    _SX-CX OVER _RTHP-PACK-CORR-A RUCP-CORRELATION-SIZE MOVE
+    _SI-IR OVER _RTHP-PACK-INSTRUMENT-REGIONS-A 96 MOVE
+    _SDI-ACK OVER _RTHP-PACK-INSTRUMENTS-A RTE-INSTRUMENT-SIZE 2 * MOVE
+    _SI-C OVER _RTHP-PACK-INSTRUMENT-CORR-A RUIP-CORRELATION-SIZE 2 * MOVE
+    _SI-Y OVER _RTHP-PACK-SERIES-A RTE-SERIES-SIZE MOVE
+    7 OVER _RTHP-PACK-SERIES-A _RTE-SERIES.ID ! 0 OVER _RTHP-PACK-SERIES-A _RTE-SERIES.SAMPLES-A !
+    _SI-SAMPLES OVER _RTHP-PACK-SERIES-SAMPLES-A 128000 MOVE
+    _SX-P _RTHP.TARGET-PENDING ! ;
+: _SDI-FIRST ( kind bank -- item )
+    DUP RSHSP-BANK.BATCH @ + _SI-BATCH ! _SI-FIND DUP 0<> _SS-A RTE-FAMILY-ITEMS@ DROP ;
+_SI-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+_SX-S _RSHSP.ACTIVE @ _SI-A = _SS-A
+_SI-I _SDI-ACK RTE-INSTRUMENT-SIZE 2 * MOVE
+\ The next live candidate's series and waveform name a fresh series.
+8 _SI-Y _RTE-SERIES.ID ! 8 _SI-I _RTE-INSTRUMENT.SERIES-ID !
+' _SD-HELLP _SD-DRAW _SDI-TA _SDI-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SX-S _RSHSP.PENDING @ _SI-B = _SS-A _SI-B _SX-S _RSHSP-BANK-VALID? _SS-A
+\ The DELTA keeps the acknowledged series and instrument identities, and
+\ every sample.
+RTE-FAMILY-SERIES _SI-B _SDI-FIRST DUP _RTE-SERIES.ID @ 7 = _SS-A _SI-FROZEN-Y !
+_SI-SAMPLES-EXACT
+RTE-FAMILY-INSTRUMENT _SI-B _SDI-FIRST DUP _RTE-INSTRUMENT.SERIES-ID @ 7 = _SS-A
+_RTE-INSTRUMENT.ID @ RTE-FAMILY-INSTRUMENT _SI-A _SDI-FIRST _RTE-INSTRUMENT.ID @ = _SS-A
+0 _SI-EMIT-I ! 0 _SI-EMIT-Y !
+_SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
+_SI-EMIT-I @ 0= _SS-A _SI-EMIT-Y @ 0= _SS-A
+_SS-DONE
+''', minimum=16014)

@@ -291,7 +291,7 @@ def test_instrument_measurement_and_hybrid_admission_are_exact_and_bounded() -> 
     # their storage disjointness before traversal, and gives the provider only
     # the fixed admission summary derived by the neutral pass.
     assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in engine
-    assert "472 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in engine
+    assert "504 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in engine
     authority = _word(engine, "_RTE-HPV-FIXED-AUTHORITY?")
     assert authority.index("_RTE-HPV-FIXED-INSTRUMENT?") < authority.index(
         "_RTE-HPV-FIXED-INSTRUMENT-CROSS?"
@@ -474,11 +474,11 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
             rf"(?m)^\s*{re.escape(field)}\s+_UCTX-VARS {slot} CELLS \+ !",
             context_init,
         )
-    assert "29 CONSTANT _UCTX-NVAR" in tui
-    assert "232 CONSTANT _UCTX-VAR-SZ" in tui
+    assert "32 CONSTANT _UCTX-NVAR" in tui
+    assert "256 CONSTANT _UCTX-VAR-SZ" in tui
     assert "11 CONSTANT _UCTX-NPOOL" in tui
-    assert "107,752 bytes" in tui
-    assert "107,752" in _text("docs/tui/uidl-tui.md")
+    assert "107,776 bytes" in tui
+    assert "107,776" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-PAA-BINDING !" in tui
     assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 
@@ -678,7 +678,8 @@ def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
     assert "80 CONSTANT _AH-O-UIDL-READY-XT" in host
     assert "88 CONSTANT _AH-O-UIDL-READY-CONTEXT" in host
     assert "128 CONSTANT _AH-O-SHELL-MODEL" in host
-    assert "136 CONSTANT AHOST-SIZE" in host
+    assert "136 CONSTANT _AH-O-SHUTDOWN" in host
+    assert "144 CONSTANT AHOST-SIZE" in host
     setter = _word(host, "AHOST-UIDL-READY!")
     body = _word(host, "_AHUR-BODY")
     invoke = _word(host, "_AHOST-UIDL-READY")
@@ -829,6 +830,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY",
         "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY",
         "APT1-DESK-FIELDS-NATIVE-CAPACITY",
+        "APT1-DESK-DIALOGS-NATIVE-CAPACITY",
         "APT1-DESK-TX-CAPACITY",
     ]
     assert "_DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS" in code
@@ -860,6 +862,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert (
         "APT1-DESK-COLLECTION-NATIVE-CAPACITY _A1D-UIDL-TEXT-U MAX\n"
         "    APT1-DESK-FIELDS-NATIVE-CAPACITY MAX\n"
+        "    APT1-DESK-DIALOGS-NATIVE-CAPACITY MAX\n"
         "    _A1D-CONTROL-PAYLOAD-FIXED-U _A1D-CAPACITY+\n"
         "    CONSTANT _A1D-MAX-CONTROL-PAYLOAD-U"
     ) in code
@@ -1031,7 +1034,18 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-VALIDATE-DATA-GRAPHICS-BOUND\n"
         "_A1D-VALIDATE-STATUS-FIELDS-BOUND\n"
         "_A1D-VALIDATE-FIELDS-BOUND\n"
+        "_A1D-VALIDATE-DIALOGS-BOUND\n"
         "_A1D-VALIDATE-TRANSPORT-BOUNDS\n"
+    ) in code
+    dialog_guard = _word(composition, "_A1D-VALIDATE-DIALOGS-BOUND")
+    assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY _A1D-U32-POSITIVE?" in dialog_guard
+    assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY UDLG-HEADER-SIZE U<" in dialog_guard
+    assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY 7 AND" in dialog_guard
+    # One dialog descriptor a document, never an application count.
+    assert (
+        "_A1D-UIDL-BINDINGS UDLSN-DESCRIPTOR-SIZE _A1D-CAPACITY*\n"
+        "    2 _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U"
     ) in code
     assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
     assert (
@@ -1144,6 +1158,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "        _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U\n"
         "    _A1D-RUHA-SNAPSHOT-FIELD-NATIVE\n"
         "        _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U\n"
+        "    _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS\n"
+        "        _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U\n"
+        "    _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE\n"
+        "        _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE-U\n"
         "    _A1D-RUHA RUHA-INIT"
     ) in setup
     assert (
@@ -1238,7 +1256,8 @@ def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:
     assert "88 CONSTANT _AHS-O-CLOSE-PHASE" in host
     assert "96 CONSTANT _AHS-O-INIT-STARTED" in host
     assert "104 CONSTANT _AHS-O-OVERLAY" in host
-    assert "112 CONSTANT AHS-SIZE" in host
+    assert "112 CONSTANT _AHS-O-DEFERRED" in host
+    assert "120 CONSTANT AHS-SIZE" in host
     assert "5 U<" in _word(host, "AHS-CLOSE-PHASE-VALID?")
     assert (
         "AHS.CLOSE-PHASE @ AHS-CLOSE-S-LIVE ="
@@ -1738,14 +1757,12 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
     shell = _text("akashic/tui/app-shell.f")
     prompt = _text("akashic/tui/widgets/prompt.f")
     auth = _text("akashic/tui/applets/agent/widgets/agent-auth.f")
-    settings = _text("akashic/tui/applets/agent/widgets/agent-settings.f")
 
     painters = (
         (shell, "_ASHELL-DRAW-TOAST", "_ASHELL-DRAW-TOAST-BODY"),
         (shell, "_ASHELL-DRAW-CURSOR", "_ASHELL-DRAW-CURSOR-BODY"),
         (prompt, "_PRM-DRAW", "_PRM-DRAW-BODY"),
         (auth, "_AAUP-DRAW", "_AAUP-DRAW-BODY"),
-        (settings, "_ARSP-DRAW", "_ARSP-DRAW-BODY"),
     )
     for source, wrapper_name, body_name in painters:
         wrapper = _word(source, wrapper_name)
@@ -1757,7 +1774,6 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
 
     assert "['] _PRM-DRAW ['] _PRM-HANDLE WDG-INIT" in prompt
     assert "['] _AAUP-DRAW ['] _AAUP-HANDLE WDG-INIT" in auth
-    assert "['] _ARSP-DRAW ['] _ARSP-HANDLE WDG-INIT" in settings
 
     paint = _word(shell, "_ASHELL-PAINT")
     app = paint.index("_ASHELL-DESC @ APP.PAINT-XT")
@@ -1767,7 +1783,32 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
     assert app < toast < cursor < complete
 
 
-def test_blocking_dialog_uses_the_complete_rich_presentation_lifecycle() -> None:
+def test_the_agent_run_settings_are_fields_the_mounted_panel_draws() -> None:
+    """The run settings are no foreground overlay: the Agent's mounted panel
+    draws them in its place, and each setting is a canonical field in a
+    region beneath the panel's, so a projection finds it as a FIELD."""
+
+    agent = _text("akashic/tui/applets/agent/agent.f")
+    settings = _text("akashic/tui/applets/agent/widgets/agent-settings.f")
+
+    assert "DRW-OVERLAY" not in settings
+    assert "['] _ARSP-DRAW ['] _ARSP-HANDLE WDG-INIT" in settings
+    new = _word(settings, "ARSP-NEW")
+    assert "RGN-SUB" in new and "FLD-NEW" in new
+    assert "FLD-ON-ACTIVATE" in new and "FLD-ON-ADJUST" in new
+    build = _word(settings, "_ARSP-BUILD")
+    assert "UFLD-K-CHOICE" in build and "FLD-BIND" in build
+    assert "_ARSP-ROOM?" in build
+    assert "_ARSP-P @ WDG-REGION WDG-DRAW-IN" in _word(settings, "_ARSP-DRAW-FIELDS")
+
+    panel = _word(agent, "_AG-PANEL-DRAW")
+    assert panel.index("ARSP-ACTIVE?") < panel.index("_AG-USER-OVERLAY?")
+    assert "_AG-PANEL-RGN @ WDG-DRAW-IN" in panel
+    assert "_AG-PANEL-RGN @ 0 0 1 1 RGN-SUB DUP _AG-SETTINGS-RGN !" in agent
+    assert "ARSP-ACTIVE? IF WDG-DRAW" not in _word(agent, "AGENT-PAINT-CB")
+
+
+def test_dialogs_are_hosted_by_their_application_host_and_never_block() -> None:
     shell = _text("akashic/tui/app-shell.f")
     dialog = _text("akashic/tui/widgets/dialog.f")
     host = _text("akashic/tui/applet-host/host.f")
@@ -1778,29 +1819,39 @@ def test_blocking_dialog_uses_the_complete_rich_presentation_lifecycle() -> None
     assert "_DLG-DRAW-BODY" not in wrapper.replace(expected, "")
     assert dialog.count("_DLG-DRAW-BODY") == 2
 
-    default_present = _word(dialog, "_DLG-PRESENT-DEFAULT")
-    assert default_present.index("SCR-DRAW-COMPLETE") < default_present.index(
-        "SCR-FLUSH"
-    )
-    show = _word(dialog, "DLG-SHOW")
-    assert show.count("_DLG-PRESENT-HOOK") == 2
-    assert "SCR-FLUSH" not in show
+    # No input loop of its own: the host gives a dialog its events.
+    for blocking in ("KEY-READ", "KEY-POLL", "SCR-FLUSH", "_DLG-PRESENT-HOOK"):
+        assert blocking not in dialog, blocking
+    assert "_ASHELL-DIALOG-PRESENT" not in shell
+    assert "ASHELL-DRAW-MODAL" not in shell
 
-    present = _word(shell, "_ASHELL-DIALOG-PRESENT")
-    projection = present.index("UTUI-DRAW-COMPLETE")
-    draw_complete = present.index("SCR-DRAW-COMPLETE", projection)
-    service = present.index("_ASHELL-TERM-SERVICE", draw_complete)
-    flush = present.index("SCR-FLUSH?", service)
-    accepted = present.index("SCB-S-OK", flush)
-    pressure = present.index("SCB-S-WOULD-BLOCK", accepted)
-    retry = present.index("YIELD?", pressure)
-    fatal = present.index("_ASHELL-TERM-THROW", pressure)
-    assert projection < draw_complete < service < flush < accepted < pressure
-    assert retry > pressure
-    assert fatal > pressure
-    assert "-1 _ASHELL-OUTPUT-PENDING !" in present
-    assert "0 _ASHELL-OUTPUT-PENDING ! EXIT" in present
-    assert "' _ASHELL-DIALOG-PRESENT IS _DLG-PRESENT-HOOK" in shell
+    # The app shell: a dialog takes keys and pointer events before the
+    # app's handler, and paints after the app and before the toast.
+    for word in ("_ASHELL-DISPATCH-KEY", "_ASHELL-DISPATCH-MOUSE-IMPL"):
+        body = _word(shell, word)
+        assert body.index("DLG-HOST-EVENT") < body.index("APP.EVENT-XT"), word
+    paint = _word(shell, "_ASHELL-PAINT")
+    assert (paint.index("APP.PAINT-XT") < paint.index("DLG-HOST-PAINT")
+            < paint.index("_ASHELL-DRAW-TOAST"))
+    child = _word(shell, "_ASPC-DRAW-BODY")
+    assert child.index("APP.PAINT-XT") < child.index("DLG-HOST-PAINT")
+    assert "DLG-DISCARD" in _word(shell, "_ASHELL-TD-UIDL")
+    # The shell hosts only its own application's dialog: a child's, which
+    # its context leaves in the globals after it paints, is its host's.
+    for word, call in (("_ASHELL-DISPATCH-KEY", "DLG-HOST-EVENT"),
+                       ("_ASHELL-DISPATCH-MOUSE-IMPL", "DLG-HOST-EVENT"),
+                       ("_ASHELL-PAINT", "DLG-HOST-PAINT"),
+                       ("_ASHELL-TD-UIDL", "DLG-DISCARD")):
+        body = _word(shell, word)
+        assert body.index("_ASHELL-OWN-UIDL? IF") < body.index(call), word
+    assert "_ASHELL-ACTIVE-CTX @ 0=" in _word(shell, "_ASHELL-OWN-UIDL?")
+
+    # Desk's applet host: after the child's context is current and before
+    # its handler, for keys and pointer events alike.
+    for word in ("_AHOST-DISPATCH-KEY-SLOT", "AHOST-DISPATCH-MOUSE"):
+        body = _word(host, word)
+        assert (body.index("AHS-CTX-SWITCH") < body.index("DLG-HOST-EVENT")
+                < body.index("APP.EVENT-XT")), word
 
     close = _word(host, "_AHOST-REQUEST-CLOSE-SLOT")
     deactivate = close.index("['] _AHQ-EXIT CATCH")

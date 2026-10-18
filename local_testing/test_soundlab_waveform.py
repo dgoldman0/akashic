@@ -36,9 +36,9 @@ CREATE _SW-SS 55 ALLOT
         J 12 + I 4 + SCR-GET CELL-CP@ 8226 = IF 1+ THEN
     LOOP LOOP ;
 0 _SW-N ! 0 _SW-FAIL ! DEPTH _SW-D !
-_SL-DGRAPH-CAP 130176 = _SW-A
+_SL-DGRAPH-CAP 130632 = _SW-A
 _SL-DGRAPH-SAMPLE-BYTES 128000 = _SW-A
-_SL-DGRAPH-CAP 2* _SL-DGRAPH-SAMPLE-BYTES + 388352 = _SW-A
+_SL-DGRAPH-CAP 2* _SL-DGRAPH-SAMPLE-BYTES + 389264 = _SW-A
 _SL-STATE-SIZE ALLOCATE 0<> ABORT" sound wave state allocation"
 DUP _SL-CURRENT-STATE ! _SL-STATE-SIZE 0 FILL
 96 36 SCR-NEW SCR-USE
@@ -91,12 +91,13 @@ _SL-DGRAPH-WIDGET @ _DGRAPH-BOUND? _SW-A
 _SL-DGRAPH-REBUILD DGRAPH-S-INVALID = _SW-A
 _SL-DGRAPH-ACTIVE-A @ _SW-G @ = _SW-A
 16000 _SL-PCM @ P.LEN !
-\ A shorter panel contains metrics only, with no invented waveform slot.
+\ A shorter panel contains metrics only, with no invented waveform slot,
+\ and room below them for the frequency landmarks' line and two marks.
 17 _SL-PANEL-RGN @ _RGN-O-H + !
 _SL-DGRAPH-REBUILD _SW-OK
 _SL-DGRAPH-ACTIVE-A @ DUP _SW-OLD ! _SW-G @ <> _SW-A
-_SL-DGRAPH-ACTIVE-U @ 1960 = _SW-A
-_SW-OLD @ UDG-OBJECT-COUNT@ 13 = _SW-A
+_SL-DGRAPH-ACTIVE-U @ 1960 456 + = _SW-A
+_SW-OLD @ UDG-OBJECT-COUNT@ 16 = _SW-A
 _SW-OLD @ UDG-SERIES-COUNT@ 0= _SW-A
 _SW-OLD @ UDG-SAMPLE-SLOTS@ 0= _SW-A
 0 _SW-S @ UDG-SERIES-SAMPLE@ -32768 = _SW-A DROP

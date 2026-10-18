@@ -72,12 +72,6 @@ def run_keys_test(define_line, inject_bytes, max_steps=80_000_000):
     return uart_text(SUITE.run([define_line], max_steps, keys=inject_bytes))
 
 
-def run_forth_with_keys(setup_lines, modal_line, inject_bytes, max_steps=80_000_000):
-    """Run setup lines and then a modal KEY-POLL line, with keys queued."""
-    return uart_text(SUITE.run(list(setup_lines) + [modal_line], max_steps,
-                               keys=inject_bytes))
-
-
 # ── Test framework ──
 
 def _expect(name, output, expected):
@@ -111,11 +105,6 @@ def check_keys(name, inject_bytes, expected, fields="type-code-mods"):
         body = fields  # custom body
     line = f': _KT  BEGIN _EV KEY-POLL UNTIL  {body} ; _KT'
     _expect(name, run_keys_test(line, inject_bytes), expected)
-
-
-def check_modal(name, setup_lines, modal_line, inject_bytes, expected):
-    """Check a modal dialog test with queued keys."""
-    _expect(name, run_forth_with_keys(setup_lines, modal_line, inject_bytes), expected)
 
 
 def check_keys_custom(name, inject_bytes, custom_body, expected):
@@ -311,9 +300,8 @@ def test_blocking_ui_guard_boundaries():
         (KEYS_F, "KEY-READ", "_keys-read-xt"),
         (KEYS_F, "KEY-POLL", "_keys-poll-xt"),
         (KEYS_F, "KEY-WAIT", "_keys-wait-xt"),
-        (DIALOG_F, "DLG-SHOW", "_dlg-show-xt"),
-        (DIALOG_F, "DLG-INFO", "_dlg-info-xt"),
-        (DIALOG_F, "DLG-CONFIRM", "_dlg-confirm-xt"),
+        (DIALOG_F, "DLG-HOST-EVENT", "_dlg-host-event-xt"),
+        (DIALOG_F, "DLG-HOST-PAINT", "_dlg-host-paint-xt"),
         (WIDGET_F, "WDG-DRAW", "_wdg-draw-xt"),
         (WIDGET_F, "WDG-HANDLE", "_wdg-handle-xt"),
         (UIDL_TUI_F, "UTUI-LOAD", "_utui-load-xt"),
@@ -2310,239 +2298,363 @@ def test_mnu_no_consume_when_closed():
 # Dialog tests (Layer 4C)
 # ================================================================
 
+# A dialog over the whole 24x80 screen: [ OK ] (default) and [ Cancel ]
+# (cancel).  _ON-ANSWER records the answer and the asker's context.
 _DLG_SETUP = [
-    '24 80 SCR-NEW DUP SCR-USE SCR-CLEAR',
-    'CREATE _BT 32 ALLOT',
-    'S" OK" _BT 8 + ! _BT !',
-    'S" Cancel" _BT 24 + ! _BT 16 + !',
-    'VARIABLE _RGN',
-    '0 0 10 30 RGN-NEW _RGN !',
-    'S" Title" S" Hello world" _BT 2 DLG-NEW',
-    '_RGN @ OVER DLG-SET-REGION',
+    '80 24 SCR-NEW DUP SCR-USE SCR-CLEAR',
+    # Interpreted strings share one buffer, so the labels come from words.
+    ': _OK S" OK" ; : _CANCEL S" Cancel" ;',
+    'CREATE _BT 64 ALLOT _BT 64 0 FILL',
+    '_OK _BT 8 + ! _BT ! DLG-B-DEFAULT _BT 16 + !',
+    '_CANCEL _BT 40 + ! _BT 32 + ! DLG-B-CANCEL _BT 48 + !',
+    'VARIABLE _ANS -2 _ANS ! VARIABLE _ANS-CTX 0 _ANS-CTX !',
+    ': _ON-ANSWER ( index ctx -- ) _ANS-CTX ! _ANS ! ;',
+    ": _ASK S\" Title\" S\" Hello world\" _BT 2 ['] _ON-ANSWER 77 DLG-ASK ;",
+    ': _KEY ( code -- ) KEY-T-SPECIAL _EV ! _EV 8 + ! 0 _EV 16 + ! _EV DLG-HOST-EVENT DROP ;',
+    ': _PRESS ( row col -- ) KEY-T-MOUSE _EV ! KEY-MOUSE-LEFT _EV 8 + !',
+    '    SWAP 16 LSHIFT OR _EV 16 + ! _EV DLG-HOST-EVENT DROP ;',
 ]
-_DLG_CLEANUP = 'DLG-FREE _RGN @ RGN-FREE SCR-FREE'
+_DLG_CLEANUP = 'DLG-DISCARD SCR-FREE'
 
 
-def test_dlg_create():
-    """DLG-NEW creates a dialog widget."""
-    check("type is WDG-T-DIALOG",
+def test_dlg_ask_opens_one_dialog_for_the_application():
+    """DLG-ASK opens a dialog the host then finds; a second is refused."""
+    check("open, then refuse another",
         _DLG_SETUP + [
-         'DUP WDG-TYPE . 8888 .',
-         _DLG_CLEANUP], "7 8888")
+         '_ASK . DLG-SHOWN 0<> . DLG-SHOWN WDG-TYPE .',
+         'DLG-SHOWN DLG-SELECTED . DLG-SHOWN DLG-BTN-COUNT . DLG-SHOWN DLG-RESULT .',
+         '_ASK . 8888 .',
+         _DLG_CLEANUP], "-1 -1 7 0 2 -1 0 8888")
 
 
-def test_dlg_accessors():
-    """DLG-SELECTED, DLG-BTN-COUNT, DLG-RESULT accessors."""
-    check("selected = 0",
+def test_dlg_refuses_buttons_that_are_not_valid():
+    """No buttons, an empty label, a destructive default, two defaults, two
+    cancels, an unknown role, a key that is not a function key, or two
+    buttons with one key open nothing."""
+    check("invalid buttons",
         _DLG_SETUP + [
-         'DUP DLG-SELECTED . 8888 .',
-         _DLG_CLEANUP], "0 8888")
-    check("btn-count = 2",
-        _DLG_SETUP + [
-         'DUP DLG-BTN-COUNT . 8888 .',
-         _DLG_CLEANUP], "2 8888")
-    check("result = -1 initially",
-        _DLG_SETUP + [
-         'DUP DLG-RESULT . 8888 .',
-         _DLG_CLEANUP], "-1 8888")
+         ": _TRY S\" T\" S\" M\" _BT 2 0 0 DLG-ASK . DLG-SHOWN 0= . ;",
+         "S\" T\" S\" M\" _BT 0 0 0 DLG-ASK . DLG-SHOWN 0= .",
+         '0 _BT 40 + ! _TRY _CANCEL _BT 40 + ! _BT 32 + !',
+         'DLG-B-DEFAULT DLG-B-DESTRUCTIVE OR _BT 16 + ! _TRY',
+         'DLG-B-DEFAULT _BT 16 + ! DLG-B-DEFAULT _BT 48 + ! _TRY',
+         'DLG-B-CANCEL _BT 16 + ! DLG-B-CANCEL _BT 48 + ! _TRY',
+         '16 _BT 16 + ! 0 _BT 48 + ! _TRY 0 _BT 16 + !',
+         'KEY-UP _BT 24 + ! _TRY',
+         'KEY-F6 _BT 24 + ! KEY-F6 _BT 56 + ! _TRY 8888 .',
+         _DLG_CLEANUP], "0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 0 -1 8888")
 
 
-def test_dlg_draw():
-    """Draw does not crash."""
-    check("draw clears dirty",
+def test_dlg_keys_move_choose_and_answer_with_the_context():
+    """Right and Tab move; Enter chooses the selected button, closes the
+    dialog and calls the asker back with its context."""
+    check("right then enter answers 1",
         _DLG_SETUP + [
-         'DUP WDG-DRAW',
-         'DUP WDG-DIRTY? . 8888 .',
-         _DLG_CLEANUP], "0 8888")
+         '_ASK DROP KEY-RIGHT _KEY DLG-SHOWN DLG-SELECTED . _ANS @ .',
+         'KEY-ENTER _KEY DLG-SHOWN . _ANS @ . _ANS-CTX @ . 8888 .',
+         _DLG_CLEANUP], "1 -2 0 1 77 8888")
+    check("left stops at 0, tab wraps",
+        _DLG_SETUP + [
+         '_ASK DROP KEY-LEFT _KEY DLG-SHOWN DLG-SELECTED .',
+         'KEY-TAB _KEY KEY-TAB _KEY DLG-SHOWN DLG-SELECTED .',
+         'KEY-ENTER _KEY _ANS @ . 8888 .',
+         _DLG_CLEANUP], "0 0 0 8888")
 
 
-def test_dlg_draw_marks_the_modal_as_final_writer():
-    """The complete dialog rectangle carries foreground provenance."""
-    check("dialog is an overlay plane",
+def test_dlg_escape_chooses_the_cancel_button():
+    """Escape answers with the cancel button, wherever the selection is."""
+    check("escape answers 1",
         _DLG_SETUP + [
-         'DUP WDG-DRAW RGN-ROOT',
-         '0 0 10 30 SCR-OCCLUSION-RECT? . . 8888 .',
-         _DLG_CLEANUP], "-1 -1 8888")
+         '_ASK DROP KEY-ESC _KEY DLG-SHOWN . _ANS @ . 8888 .',
+         _DLG_CLEANUP], "0 1 8888")
 
 
-def test_dlg_contrast_and_style_restore():
-    """Dialogs use explicit high-contrast chrome without leaking style."""
-    check("explicit modal palette and caller style restored",
+def test_dlg_takes_every_event_of_the_application():
+    """Unknown keys, characters and presses outside its buttons are the
+    dialog's too, and leave it open."""
+    check("swallowed",
         _DLG_SETUP + [
-         '3 42 5 DRW-STYLE! DUP WDG-DRAW RGN-ROOT',
-         ('2 2 SCR-GET DUP CELL-FG@ . CELL-BG@ . '
-          '_DRW-FG @ . _DRW-BG @ . _DRW-ATTRS @ . 8888 .'),
-         _DLG_CLEANUP], "15 24 3 42 5 8888")
+         '_ASK DROP DLG-HOST-PAINT',
+         'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! _EV DLG-HOST-EVENT .',
+         'KEY-T-CHAR _EV ! 65 _EV 8 + ! _EV DLG-HOST-EVENT .',
+         '0 0 _PRESS DLG-SHOWN 0<> . _ANS @ . 8888 .',
+         _DLG_CLEANUP], "-1 -1 -1 -2 8888")
 
 
-def test_dlg_nav_left_right():
-    """Arrow keys navigate buttons."""
-    check("right moves to button 1",
+def test_dlg_paints_centred_as_an_overlay_and_keeps_style_and_region():
+    """The 21x6 dialog is centred on the screen, carries overlay
+    provenance, uses its own palette and leaves the caller's style and
+    drawing region as they were."""
+    check("centred overlay",
         _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-RIGHT _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-SELECTED . 8888 .',
-         _DLG_CLEANUP], "1 8888")
-    check("left clamps at 0",
-        _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-SELECTED . 8888 .',
-         _DLG_CLEANUP], "0 8888")
-    check("right then left → 0",
-        _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-RIGHT _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'KEY-T-SPECIAL _EV ! KEY-LEFT _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-SELECTED . 8888 .',
-         _DLG_CLEANUP], "0 8888")
+         '_ASK DROP 0 0 24 80 RGN-NEW DUP RGN-USE 3 42 5 DRW-STYLE!',
+         'DLG-HOST-PAINT RGN-CURRENT = .',
+         'DLG-SHOWN WDG-REGION DUP RGN-ROW . DUP RGN-COL . DUP RGN-H . RGN-W .',
+         'RGN-ROOT 9 29 6 21 SCR-OCCLUSION-RECT? . .',
+         '11 31 SCR-GET DUP CELL-FG@ . CELL-BG@ .',
+         '_DRW-FG @ . _DRW-BG @ . _DRW-ATTRS @ . 8888 .',
+         _DLG_CLEANUP], "-1 9 29 6 21 -1 -1 15 24 3 42 5 8888")
 
 
-def test_dlg_nav_tab():
-    """Tab cycles buttons."""
-    check("tab → button 1",
+def test_dlg_press_on_a_button_chooses_it():
+    """[ OK ] spans columns 31-36 and [ Cancel ] 38-47 on row 13."""
+    check("press cancel",
         _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-SELECTED . 8888 .',
-         _DLG_CLEANUP], "1 8888")
-    check("tab tab wraps → 0",
+         '_ASK DROP DLG-HOST-PAINT 13 37 _PRESS DLG-SHOWN 0<> .',
+         '13 40 _PRESS DLG-SHOWN . _ANS @ . 8888 .',
+         _DLG_CLEANUP], "-1 0 1 8888")
+    check("press ok",
         _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-SELECTED . 8888 .',
+         '_ASK DROP DLG-HOST-PAINT 13 31 _PRESS _ANS @ . 8888 .',
          _DLG_CLEANUP], "0 8888")
 
 
-def test_dlg_enter():
-    """Enter sets result to selected button."""
-    check("enter sets result to 0",
+def test_dlg_centres_in_host_bounds_and_reports_its_rectangle_on_close():
+    """A host's bounds place the dialog; closing reports the rectangle to
+    repaint."""
+    check("host bounds",
         _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-RESULT . 8888 .',
-         _DLG_CLEANUP], "0 8888")
-    check("tab then enter sets result to 1",
-        _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-TAB _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-RESULT . 8888 .',
-         _DLG_CLEANUP], "1 8888")
-
-
-def test_dlg_escape():
-    """Escape sets result to last button index."""
-    check("escape sets result to last btn (1)",
-        _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-ESC _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE DROP',
-         'DUP DLG-RESULT . 8888 .',
-         _DLG_CLEANUP], "1 8888")
-
-
-def test_dlg_consumed():
-    """Handle returns correct consumed flag."""
-    check("enter consumed",
-        _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-ENTER _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE . 8888 .',
-         _DLG_CLEANUP], "-1 8888")
-    check("unknown key not consumed",
-        _DLG_SETUP + [
-         'KEY-T-SPECIAL _EV ! KEY-UP _EV 8 + ! 0 _EV 16 + !',
-         '_EV OVER WDG-HANDLE . 8888 .',
-         _DLG_CLEANUP], "0 8888")
-
-
-def test_dlg_modal_enter():
-    """DLG-SHOW modal loop — Enter selects button 0."""
-    check_modal("DLG-SHOW enter → btn 0",
-        ['VARIABLE _SCR',
-         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
-         'CREATE _MB 16 ALLOT',
-         'S" OK" _MB 8 + ! _MB !',
-        ],
-        'S" Test" S" Hello" _MB 1 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
-        b'\x0d',   # Enter (CR)
-        "0 8888")
-
-
-def test_dlg_modal_presents_before_each_blocking_read():
-    """DLG-SHOW delegates initial and input-driven frames to its host hook."""
-    check_modal("DLG-SHOW presents both modal frames",
-        ['VARIABLE _SCR',
-         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
-         'CREATE _MB 16 ALLOT',
-         'S" OK" _MB 8 + ! _MB !',
-         'VARIABLE _DP-C',
-         '0 _DP-C !',
-         ': _DP 1 _DP-C +! SCR-DRAW-COMPLETE SCR-FLUSH ;',
-         "' _DP IS _DLG-PRESENT-HOOK",
-        ],
-        ('S" Test" S" Hello" _MB 1 DLG-NEW '
-         'DUP DLG-SHOW . _DP-C @ . 8888 . DLG-FREE _SCR @ SCR-FREE'),
-        b'\x0d',
-        "0 2 8888")
-
-
-def test_dlg_modal_tab_enter():
-    """DLG-SHOW modal loop — Tab + Enter selects button 1."""
-    check_modal("DLG-SHOW tab+enter → btn 1",
-        ['VARIABLE _SCR',
-         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
-         'CREATE _MB 32 ALLOT',
-         'S" Yes" _MB 8 + ! _MB !',
-         'S" No" _MB 24 + ! _MB 16 + !',
-        ],
-        'S" Pick" S" Choose" _MB 2 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
-        b'\x09\x0d',   # Tab then Enter
-        "1 8888")
-
-
-def test_dlg_modal_arrow_enter():
-    """DLG-SHOW modal loop — Right arrow + Enter selects button 1."""
-    check_modal("DLG-SHOW arrow+enter → btn 1",
-        ['VARIABLE _SCR',
-         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
-         'CREATE _MB 32 ALLOT',
-         'S" Yes" _MB 8 + ! _MB !',
-         'S" No" _MB 24 + ! _MB 16 + !',
-        ],
-        'S" Pick" S" Choose" _MB 2 DLG-NEW DUP DLG-SHOW . 8888 . DLG-FREE _SCR @ SCR-FREE',
-        b'\x1b[C\x0d',   # Right arrow then Enter
-        "1 8888")
-
-
-def test_dlg_modal_respects_host_bounds():
-    """DLG-SHOW centres inside host bounds and reports that same dirty rect."""
-    check_modal("DLG-SHOW stays within host bounds",
-        ['VARIABLE _SCR',
-         '24 80 SCR-NEW DUP _SCR ! DUP SCR-USE SCR-CLEAR',
-         'CREATE _MB 16 ALLOT',
-         'S" OK" _MB 8 + ! _MB !',
          'VARIABLE _DB-R VARIABLE _DB-C VARIABLE _DB-H VARIABLE _DB-W',
          ': _DB-BOUNDS 4 10 12 30 ;',
          ': _DB-DISMISS _DB-W ! _DB-H ! _DB-C ! _DB-R ! ;',
          "' _DB-BOUNDS IS _DLG-BOUNDS-HOOK",
          "' _DB-DISMISS IS _DLG-DISMISS-HOOK",
-        ],
-        ('S" Test" S" Hello" _MB 1 DLG-NEW '
-         'DUP DLG-SHOW . '
-         '_DB-R @ . _DB-C @ . _DB-H @ . _DB-W @ . 8888 . '
-         'DLG-FREE _SCR @ SCR-FREE'),
-        b'\x0d',
-        "0 7 15 6 20 8888")
+         '_ASK DROP DLG-HOST-PAINT KEY-ENTER _KEY',
+         '_DB-R @ . _DB-C @ . _DB-H @ . _DB-W @ . 8888 .',
+         "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK",
+         "' _DLG-DISMISS-NOOP IS _DLG-DISMISS-HOOK",
+         _DLG_CLEANUP], "7 14 6 21 8888")
 
 
-def test_dlg_free():
-    """DLG-FREE does not crash."""
-    check("free does not crash",
-        _DLG_SETUP + [_DLG_CLEANUP, '8888 .'], "8888")
+def test_dlg_keeps_its_own_copy_of_the_text():
+    """An asker may reuse the text it passed."""
+    check("copied",
+        _DLG_SETUP + [
+         'CREATE _MSG 5 ALLOT S" Hello" _MSG SWAP MOVE',
+         "S\" T\" _MSG 5 _BT 2 0 0 DLG-ASK DROP _MSG 5 88 FILL",
+         'DLG-HOST-PAINT RGN-ROOT 11 31 SCR-GET CELL-CP@ . 8888 .',
+         _DLG_CLEANUP], "72 8888")
+
+
+def test_dlg_confirm_defaults_to_cancel_and_answers_a_flag():
+    """The destructive verb comes first but Cancel is the default: Enter
+    declines, and the verb confirms."""
+    check("confirm",
+        _DLG_SETUP + [
+         ': _ON-FLAG ( flag ctx -- ) _ANS-CTX ! _ANS ! ;',
+         ": _CONFIRM S\" Delete it?\" S\" Delete\" ['] _ON-FLAG 5 DLG-CONFIRM ;",
+         '_CONFIRM . DLG-SHOWN DLG-SELECTED . KEY-ENTER _KEY _ANS @ . _ANS-CTX @ .',
+         '_CONFIRM DROP KEY-LEFT _KEY KEY-ENTER _KEY _ANS @ .',
+         '_CONFIRM DROP KEY-ESC _KEY _ANS @ . 8888 .',
+         _DLG_CLEANUP], "-1 1 0 5 -1 0 8888")
+
+
+def test_dlg_info_closes_with_ok_or_escape():
+    """An Info dialog has one OK button, which Escape also chooses."""
+    check("info",
+        _DLG_SETUP + [
+         'S" Saved" DLG-INFO . DLG-SHOWN DLG-BTN-COUNT . KEY-ESC _KEY DLG-SHOWN .',
+         'S" Saved" DLG-INFO DROP KEY-ENTER _KEY DLG-SHOWN . 8888 .',
+         _DLG_CLEANUP], "-1 1 0 0 8888")
+
+
+def test_dlg_answer_may_ask_again():
+    """The dialog is gone before its asker is called back, so the callback
+    can open the next question."""
+    check("ask again",
+        _DLG_SETUP + [
+         ': _AGAIN ( index ctx -- ) 2DROP S" Next" DLG-INFO . ;',
+         "S\" T\" S\" M\" _BT 2 ' _AGAIN 0 DLG-ASK DROP",
+         'KEY-ENTER _KEY DLG-SHOWN 0<> . 8888 .',
+         _DLG_CLEANUP], "-1 -1 8888")
+
+
+def test_dlg_discard_never_answers():
+    """A dialog freed with its application calls nobody back."""
+    check("discard",
+        _DLG_SETUP + [
+         '_ASK DROP DLG-DISCARD DLG-SHOWN . _ANS @ . 8888 .',
+         'SCR-FREE'], "0 -2 8888")
+
+
+def test_dlg_capture_describes_what_the_paint_shows():
+    """Once painted, the 21x6 dialog's model holds the title on its top
+    edge, its message row, and [ OK ], the selected default, and
+    [ Cancel ] where the paint put them."""
+    check("capture",
+        _DLG_SETUP + [
+         'CREATE _CAPS 1031 ALLOT : _CAP _CAPS 7 + -8 AND ;',
+         '_ASK DROP 0 0 DLG-SHOWN DLG-MODEL-CAPTURE . .',
+         'DLG-HOST-PAINT 0 0 DLG-SHOWN DLG-MODEL-CAPTURE . .',
+         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . . _CAP 344 UDLG-VALIDATE .',
+         '_CAP UDLG-WIDTH@ . _CAP UDLG-HEIGHT@ . _CAP UDLG-SEVERITY@ .',
+         '_CAP UDLG-KEY@ DLG-SHOWN DLG-INSTANCE@ = .',
+         '_CAP UDLG-TITLE-SLOT@ . . . . _CAP UDLG-MESSAGE-SLOT@ . . . .',
+         '_CAP UDLG-MESSAGE@ S" Hello world" COMPARE .',
+         '_CAP UDLG-BUTTON-FIRST DUP UDLG-BUTTON-SLOT@ . . . . DUP UDLG-BUTTON-STATE@ .',
+         'UDLG-BUTTON-NEXT DUP UDLG-BUTTON-SLOT@ . . . . UDLG-BUTTON-STATE@ .',
+         'DLG-SHOWN DLG-ROOT . . . . 8888 .',
+         _DLG_CLEANUP],
+        "1 0 0 344 0 344 0 21 6 0 -1 5 1 2 0 17 1 2 2 0 6 1 2 4 7 10 1 9 4 3"
+        " 21 6 29 9 8888")
+
+
+def test_dlg_revision_follows_size_and_a_cramped_dialog_stays_painted():
+    """Painting at the same size keeps the revision; another size makes a
+    new one.  A dialog too short to keep its parts apart has no model."""
+    check("revision and size",
+        _DLG_SETUP + [
+         'CREATE _CAPS 1031 ALLOT : _CAP _CAPS 7 + -8 AND ; VARIABLE _R1',
+         '_ASK DROP DLG-HOST-PAINT DLG-SHOWN _DLG-O-REVISION + @ DUP _R1 ! 0<> .',
+         'DLG-HOST-PAINT DLG-SHOWN _DLG-O-REVISION + @ _R1 @ = .',
+         ': _SHORT 0 0 7 80 ; : _CRAMPED 0 0 6 80 ;',
+         "' _SHORT IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT",
+         'DLG-SHOWN _DLG-O-REVISION + @ _R1 @ > . DLG-SHOWN WDG-REGION RGN-H .',
+         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-REVISION@ DLG-SHOWN _DLG-O-REVISION + @ = .',
+         "' _CRAMPED IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT",
+         '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . . 8888 .',
+         "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK",
+         _DLG_CLEANUP], "-1 -1 -1 5 0 -1 1 0 8888")
+
+
+def test_dlg_instances_differ_and_info_and_confirm_carry_meaning():
+    """Every dialog has its own identity; Info is informational and a
+    confirmation a warning."""
+    check("meaning",
+        _DLG_SETUP + [
+         'VARIABLE _I1',
+         '_ASK DROP DLG-SHOWN DLG-INSTANCE@ DUP _I1 ! 0<> .',
+         'DLG-SHOWN _DLG-O-SEVERITY + @ .',
+         'KEY-ENTER _KEY _ASK DROP DLG-SHOWN DLG-INSTANCE@ _I1 @ > .',
+         'KEY-ENTER _KEY S" Saved" DLG-INFO DROP DLG-SHOWN _DLG-O-SEVERITY + @ .',
+         "KEY-ENTER _KEY S\" Delete it?\" S\" Delete\" 0 5 DLG-CONFIRM DROP",
+         'DLG-SHOWN _DLG-O-SEVERITY + @ . 0 DLG-INSTANCE@ . 8888 .',
+         _DLG_CLEANUP], "-1 0 -1 1 3 0 8888")
+
+
+# A message of ten one-word paragraphs, L1 to L10, in bounds of 10 rows by
+# 40 columns: the 21 by 8 dialog at row 1 and column 9 has three message
+# rows, so it shows two and says on the third that more lies below.
+_DLG_LONG = [
+    'CREATE _LONG 64 ALLOT VARIABLE _LONG-U',
+    ': _LC+ ( c -- ) _LONG _LONG-U @ + C! 1 _LONG-U +! ;',
+    ': _LONG-BUILD 0 _LONG-U ! 11 1 DO I 1 > IF 10 _LC+ THEN',
+    '    76 _LC+ I 10 < IF I 48 + _LC+ ELSE 49 _LC+ 48 _LC+ THEN LOOP ;',
+    ': _LBOUNDS 0 0 10 40 ;',
+    "' _LBOUNDS IS _DLG-BOUNDS-HOOK",
+    ": _ASK-LONG S\" Title\" _LONG _LONG-U @ _BT 2 ['] _ON-ANSWER 77 DLG-ASK ;",
+    ': _CP ( row col -- cp ) SCR-GET CELL-CP@ ;',
+    # [ F6 Approve ] waits for the message to be read; [ F7 Deny ] is the
+    # default and cancel button.
+    ': _APPROVE S" Approve" ; : _DENY S" Deny" ;',
+    'CREATE _RB 64 ALLOT _RB 64 0 FILL',
+    '_APPROVE _RB 8 + ! _RB ! DLG-B-READ-FIRST _RB 16 + ! KEY-F6 _RB 24 + !',
+    '_DENY _RB 40 + ! _RB 32 + ! DLG-B-DEFAULT DLG-B-CANCEL OR _RB 48 + !',
+    'KEY-F7 _RB 56 + !',
+    ": _ASK-READ S\" Review\" _LONG _LONG-U @ _RB 2 ['] _ON-ANSWER 77 DLG-ASK ;",
+    'CREATE _CAPS 2055 ALLOT : _CAP _CAPS 7 + -8 AND ;',
+]
+_DLG_LONG_CLEANUP = "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK " + _DLG_CLEANUP
+
+
+def test_dlg_scrolls_a_long_message_and_says_more_lies_below():
+    """Down, End and Home move the message; the row after the view says
+    more lies below until its last line is in view."""
+    check("scroll",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-LONG DROP DLG-HOST-PAINT',
+         'DLG-SHOWN WDG-REGION DUP RGN-ROW . DUP RGN-COL . DUP RGN-H . RGN-W .',
+         '3 12 _CP . 4 12 _CP . 5 11 _CP .',
+         'KEY-DOWN _KEY DLG-HOST-PAINT 3 12 _CP . 4 12 _CP .',
+         'KEY-END _KEY DLG-HOST-PAINT 3 12 _CP . 4 13 _CP . 5 11 _CP .',
+         'KEY-HOME _KEY DLG-HOST-PAINT 3 12 _CP . 5 11 _CP . 8888 .',
+         _DLG_LONG_CLEANUP],
+        "1 9 8 21 49 50 80 50 51 57 48 32 49 80 8888")
+
+
+def test_dlg_read_first_button_waits_for_the_last_line_and_takes_its_key():
+    """F6 cannot choose Approve until a paint has shown the message's last
+    line; then it does."""
+    check("read first",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT',
+         'KEY-F6 _KEY DLG-SHOWN 0<> . _ANS @ .',
+         'DLG-SHOWN 0 _DLG-AVAILABLE? . DLG-SHOWN 1 _DLG-AVAILABLE? .',
+         'KEY-END _KEY KEY-F6 _KEY DLG-SHOWN 0<> .',
+         'DLG-HOST-PAINT KEY-F6 _KEY DLG-SHOWN 0<> . _ANS @ . 8888 .',
+         _DLG_LONG_CLEANUP], "-1 -2 0 -1 -1 0 0 8888")
+    check("f7 and escape",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT KEY-F7 _KEY _ANS @ .',
+         '_ASK-READ DROP DLG-HOST-PAINT KEY-ESC _KEY _ANS @ . 8888 .',
+         _DLG_LONG_CLEANUP], "1 1 8888")
+
+
+def test_dlg_a_box_with_no_message_row_never_reads_its_message():
+    """A dialog shorter than five rows has no row for its message, so
+    scrolling to its end reads nothing and Approve stays unavailable; once
+    a paint shows the last line, it can be chosen."""
+    for rows, height in ((4, 2), (6, 4)):
+        check(f"no message row in {rows} rows",
+            _DLG_SETUP + _DLG_LONG + [
+             f': _TINY 0 0 {rows} 40 ; \' _TINY IS _DLG-BOUNDS-HOOK',
+             '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT DLG-SHOWN WDG-REGION RGN-H .',
+             'KEY-END _KEY DLG-HOST-PAINT DLG-SHOWN 0 _DLG-AVAILABLE? .',
+             'KEY-F6 _KEY DLG-SHOWN 0<> .',
+             "' _LBOUNDS IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT DLG-SHOWN 0 _DLG-AVAILABLE? .",
+             'KEY-F6 _KEY DLG-SHOWN 0<> . _ANS @ . 8888 .',
+             _DLG_LONG_CLEANUP], f"{height} 0 -1 -1 0 0 8888")
+
+
+def test_dlg_capture_shows_the_rows_in_view_and_what_can_be_chosen():
+    """The model holds the two rows in view and the row saying more lies
+    below; Approve is visible but not enabled until the last line has been
+    shown, and each button names its key."""
+    check("capture in view",
+        _DLG_SETUP + _DLG_LONG + [
+         '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT',
+         '_CAP 2048 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-MESSAGE-SLOT@ . . . .',
+         '_CAP UDLG-MESSAGE@ DUP . DROP DUP C@ . 6 + C@ .',
+         '_CAP UDLG-BUTTON-FIRST DUP UDLG-BUTTON-STATE@ .',
+         'DUP UDLG-BUTTON-SHORTCUT@ DROP C@ . UDLG-BUTTON-NEXT DUP UDLG-BUTTON-STATE@ .',
+         'UDLG-BUTTON-SHORTCUT@ NIP .',
+         'KEY-END _KEY DLG-HOST-PAINT _CAP 2048 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-MESSAGE-SLOT@ . . . . _CAP UDLG-BUTTON-FIRST UDLG-BUTTON-STATE@ .',
+         '8888 .',
+         _DLG_LONG_CLEANUP], "0 26 3 2 2 22 76 80 1 70 7 2 0 26 2 2 2 3 8888")
+
+
+def test_dlg_ask_detail_takes_the_host_area_and_shows_each_look():
+    """A detail dialog takes the bounds but a cell at each side; a label,
+    an exact value and a fault each have their own colour."""
+    check("detail",
+        _DLG_SETUP + [
+         'CREATE _PR 72 ALLOT _PR 72 0 FILL',
+         ': _P! ( a u look i -- ) 24 * _PR + >R R@ 16 + ! R@ 8 + ! R> ! ;',
+         ': _PARAS S" Operation:" DLG-LOOK-LABEL 0 _P! S" copy" DLG-LOOK-VALUE 1 _P!',
+         '    S" Denied" DLG-LOOK-FAULT 2 _P! ;',
+         ': _ASK-DETAIL S" Review" _PR 3 _BT 2 0 0 DLG-ASK-DETAIL ;',
+         '_PARAS _ASK-DETAIL . DLG-HOST-PAINT',
+         'DLG-SHOWN WDG-REGION DUP RGN-ROW . DUP RGN-COL . DUP RGN-H . RGN-W .',
+         '3 3 SCR-GET DUP CELL-CP@ . CELL-FG@ .',
+         '4 3 SCR-GET DUP CELL-CP@ . CELL-FG@ .',
+         '5 3 SCR-GET DUP CELL-CP@ . CELL-FG@ . 8888 .',
+         _DLG_CLEANUP], "-1 1 1 22 78 79 229 99 159 68 217 8888")
+
+
+def test_dlg_capture_makes_the_messages_direction_controls_inert():
+    """An override in the message is ignored as the paint ignored it: the
+    model carries an inert stand-in in its place."""
+    check("inert",
+        _DLG_SETUP + [
+         'CREATE _CAPS 1031 ALLOT : _CAP _CAPS 7 + -8 AND ;',
+         ': _RLO S" abc‮def" ;',
+         ': _ASK-RLO S" T" _RLO _BT 2 0 0 DLG-ASK ;',
+         '_ASK-RLO DROP DLG-HOST-PAINT _CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
+         '_CAP UDLG-MESSAGE@ DUP . DROP DUP 3 + C@ . DUP 4 + C@ . 5 + C@ . 8888 .',
+         _DLG_CLEANUP], "0 9 226 128 139 8888")
 
 
 # =====================================================================

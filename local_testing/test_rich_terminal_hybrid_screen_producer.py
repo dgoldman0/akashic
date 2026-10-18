@@ -3691,7 +3691,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert expected == 2392
+    assert expected == 2432
     for name in (
         "_RTHP.TARGET0-A",
         "_RTHP.TARGET1-A",
@@ -3744,7 +3744,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 2744
+    assert expected == 2784
     assert _offset(source, "_RTHP.RUIP-Q") == expected
     expected += 368
     assert _offset(source, "_RTHP.INSTRUMENT-PLAN") == expected
@@ -3780,7 +3780,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3400
+    assert expected == 3440
     # Kept comparison facts for the active and pending banks.
     for name in ("_RTHP.ACTIVE-FACTS", "_RTHP.PENDING-FACTS"):
         assert _offset(source, name) == expected
@@ -3794,7 +3794,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3528
+    assert expected == 3568
     for name in (
         "_RTHP.MAX-STATUS-NATIVE",
         "_RTHP.MAX-STATICS",
@@ -3817,7 +3817,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3672
+    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3712
     expected += 144
     for name in (
         "_RTHP.MAX-FIELD-NATIVE", "_RTHP.MAX-FIELDS",
@@ -3841,24 +3841,24 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4104
+    assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4144
     expected += 48
-    assert _offset(source, "_RTHP.EXTENSION") == expected == 4152
+    assert _offset(source, "_RTHP.EXTENSION") == expected == 4192
     expected += 8
-    assert _offset(source, "_RTHP.OPEN-QUEUED") == expected == 4160
+    assert _offset(source, "_RTHP.OPEN-QUEUED") == expected == 4200
     expected += 8
     for name in ("RESUME-PHASE", "SPACE-REFUSED-DRAW"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
     for name in ("NEED", "HELD", "ASK"):
         assert _offset(source, "_RTHP." + name) == expected
-        expected += 56
+        expected += _constant(engine, "RTE-QUOTA-SIZE")
     for name in ("FALLBACKS", "FALLBACK-DRAW", "FALLBACK-PARTS", "FALLBACK-REASON"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
     for name in ("FALLBACK-ASKED", "FALLBACK-HELD"):
         assert _offset(source, "_RTHP." + name) == expected
-        expected += 56
+        expected += _constant(engine, "RTE-QUOTA-SIZE")
     for name in ("FALLBACK-BYTES-ASKED", "FALLBACK-BYTES-HELD"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
@@ -3874,10 +3874,16 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "LANE-REFUSED", "LANE-BUDGET", "LANE-SHRINK", "LANE-RESIZE",
                  "LANE-FAILED", "GLYPH-DRAW", "GLYPH-CLAIMS-A", "GLYPH-CLAIMS-U",
                  "GLYPH-CLAIMS-USED", "GLYPH-MENUS", "GLYPH-FIRST", "GLYPH-LIMIT",
-                 "GLYPH-COLS", "GLYPH-ROWS", "GLYPH-RUNS", "GLYPH-TEXT"):
+                 "GLYPH-COLS", "GLYPH-ROWS", "GLYPH-RUNS", "GLYPH-TEXT",
+                 "MAX-DIALOG-NATIVE", "MAX-DIALOGS", "MAX-DIALOG-CONTROLS",
+                 "DIALOG-DESCRIPTORS-A", "DIALOG-DESCRIPTORS-U",
+                 "DIALOG-DESCRIPTORS-USED", "DIALOG-NATIVE-A", "DIALOG-NATIVE-U",
+                 "DIALOG-NATIVE-USED", "DIALOG-COUNT", "DIALOG-CONTROLS",
+                 "DIALOG-BASE-CONTROLS", "DIALOG-BASE-TEXT", "DIALOG-BASE-CLAIMS",
+                 "DIALOG-REFUSED", "DIALOG-UTF8"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 4856
+    assert _constant(source, "RTHP-SIZE") == expected == 5064
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -4003,8 +4009,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
 
     assert (
         "max-documents max-records max-source-text max-collection-native "
-        "max-data-graphics-native max-status-native max-field-native max-pictures "
-        "max-cols max-rows"
+        "max-data-graphics-native max-status-native max-field-native "
+        "max-dialog-native max-pictures max-cols max-rows"
     ) in storage
     assert "_RTHP-B-DOCUMENTS" in storage
     assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
@@ -4808,7 +4814,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         "max-collection-native max-data-graphics-native max-cols max-rows"
     )
     status_args = public_args.replace(
-        "max-cols", "max-status-native max-field-native max-pictures max-cols")
+        "max-cols",
+        "max-status-native max-field-native max-dialog-native max-pictures max-cols")
     assert status_args in storage
     assert status_args in " ".join(init.replace("\\", " ").split())
     assert storage.index("_RTHP-B-DGRAPH-NATIVE !") < storage.index(
@@ -4991,7 +4998,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         )
     assert "_RTHP-BUILD-INSTRUMENTS" not in menu_retry
     assert source.count("_RTHP-BUILD-INSTRUMENTS") == 2
-    assert source.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 4
+    assert source.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 5
 
     # Opaque provider CAPACITY/UNAVAILABLE strips status first, then explores
     # collection/instrument combinations. Every reconstruction may reintroduce
@@ -5004,8 +5011,10 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     provider_refusals = candidate[candidate.index("_RTHP-W-ADMIT") :]
     assert provider_refusals.count(
         "DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR"
-    ) == 9
+    ) == 11
     assert "_RTHP-W-REBUILD-WITHOUT-FIELDS" in provider_refusals
+    assert provider_refusals.index("_RTHP-W-REBUILD-WITHOUT-DIALOGS") < (
+        provider_refusals.index("_RTHP-W-REBUILD-WITHOUT-FIELDS"))
     assert "_RTHP-W-STRIP-COLLECTIONS?" in menu_retry
     assert "RTE-CONTROL-PREFLIGHT" not in menu_retry
     menu_retry_order = (
@@ -6312,8 +6321,11 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 344
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 368
     assert _offset(source, "_RTHP-TB.PICTURE-EPOCH") == 336
+    assert _offset(source, "_RTHP-TB.DIALOG-CONTROLS") == 344
+    assert _offset(source, "_RTHP-TB.DIALOG-COUNT") == 352
+    assert _offset(source, "_RTHP-TB.DIALOG-UTF8") == 360
     assert _offset(source, "_RTHP-TB.STATIC-COUNT") == 224
     assert _offset(source, "_RTHP-TB.STATIC-TEXT-BYTES") == 232
     assert _offset(source, "_RTHP-TB.INSTRUMENT-REGION-COUNT") == 176
@@ -7178,18 +7190,31 @@ def test_text_roots_are_positioned_targets_whose_intents_must_suit_the_kind() ->
     assert "_RTHP-CONTENT-CONTROL-KIND?" in target_kind
     assert "DUP _RTHP-TE.KIND @ _RTHP-TL-KIND !" in find
 
-    # ACTIVATE suits menus, items and tabs; EXTEND only text areas; FOLLOW
-    # text areas and documents; PLACE either text kind; SCROLL every root
-    # with content.
+    # ACTIVATE suits menus, items, tabs and fields; EXTEND text areas and
+    # TEXT fields; FOLLOW text areas and documents; PLACE either text kind
+    # and TEXT fields; SCROLL every root with content.  Which of a field's
+    # intents apply follows its FDC1 kind, in its target entry.
     assert "RTE-INTENT-ACTIVATE OF" in suits
-    assert "RTE-INTENT-EXTEND OF RTE-CONTROL-TEXT-AREA = ENDOF" in suits
+    assert (
+        "RTE-INTENT-EXTEND OF\n"
+        "            DUP RTE-CONTROL-TEXT-AREA = SWAP RTE-CONTROL-FIELD = OR\n"
+        "        ENDOF"
+    ) in suits
     assert (
         "RTE-INTENT-FOLLOW OF\n"
         "            DUP RTE-CONTROL-TEXT-AREA = SWAP RTE-CONTROL-DOCUMENT = OR\n"
         "        ENDOF"
     ) in suits
-    assert "RTE-INTENT-PLACE OF _RTHP-TEXT-COLLECTION-CONTROL-KIND? ENDOF" in suits
-    assert "RTE-INTENT-SCROLL OF _RTHP-CONTENT-CONTROL-KIND? ENDOF" in suits
+    assert (
+        "RTE-INTENT-PLACE OF\n"
+        "            DUP _RTHP-TEXT-COLLECTION-CONTROL-KIND? SWAP RTE-CONTROL-FIELD = OR\n"
+        "        ENDOF"
+    ) in suits
+    assert (
+        "RTE-INTENT-SCROLL OF\n"
+        "            DUP _RTHP-CONTENT-CONTROL-KIND? SWAP RTE-CONTROL-DIALOG = OR\n"
+        "        ENDOF"
+    ) in suits
     # The five item intents suit only an item view.
     for intent in ("SELECT", "OPEN", "EXPAND", "COLLAPSE", "CHECK"):
         assert f"RTE-INTENT-{intent} OF RTE-CONTROL-ITEM-VIEW = ENDOF" in suits
@@ -7217,9 +7242,9 @@ def test_target_pack_admits_published_control_families_and_keeps_shell_lane_sepa
             break
         kinds[int(match.group(1))] = match.group(2)
     assert {*range(1, 10), 13} <= set(kinds)
-    # DOCUMENT (14) is an engine kind this producer does not emit yet, so
-    # its target pack does not admit it.
-    assert set(kinds) - {*range(1, 10), 13} <= {10, 11, 12, 14}
+    # DOCUMENT (14), DIALOG (15) and BUTTON (16) are engine kinds this
+    # producer does not emit yet, so its target pack does not admit them.
+    assert set(kinds) - {*range(1, 10), 13} <= {10, 11, 12, 14, 15, 16}
 
     check = _word(_source(), "_RTHP-CT-CONTROL?")
     assert f"{kinds[1]} < IF DROP 0 EXIT THEN" in check

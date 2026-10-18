@@ -81,9 +81,13 @@ separate authenticated transport. The catalog implementation:
 - Refreshes access and replays one catalog request after a 401; a repeated 401
   is terminal.
 
-F8 opens the provider-neutral run-settings panel. Arrow keys select model,
-reasoning, speed, and verbosity; `R` refreshes the catalog. The runtime rejects
-selection changes while a run or approval review is active.
+F8 shows the provider-neutral run settings in the transcript's place. Model,
+reasoning, speed, and verbosity are canonical CHOICE fields: Up and Down move
+between them, Left and Right or the wheel change the chosen one, and Enter or
+a press on its value takes it to its next choice; a setting the model does not
+offer is read-only. `R` refreshes the catalog and Escape returns to the
+transcript. The fields go to a rich terminal as `FIELD` controls. The runtime
+rejects selection changes while a run or approval review is active.
 
 ## Request Behavior
 
