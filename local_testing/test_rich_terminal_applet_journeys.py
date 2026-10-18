@@ -2271,6 +2271,40 @@ def test_observatory_takes_focus_back_when_worlds_keeps_it_after_analyze() -> No
     ]
 
 
+def test_observatory_counts_a_worlds_step_only_once_its_press_is_delivered() -> None:
+    """A press refused for backpressure, then dropped for a newer frame, is
+    sent again under the same milestone, so Worlds steps three times."""
+
+    journey = ObservatoryJourney(OBSERVATORY_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey.stage = ObservatoryJourney.WORLDS
+    statuses = iter(("progress", "backpressured", "progress", "progress", "progress"))
+    sent = []
+
+    def sender(method, value, *_):
+        sent.append((method, value))
+        return next(statuses)
+
+    milestones = [
+        journey.after_present(_observatory_offer(OBSERVATORY_DEMO_SERIES, offer_id=offer_id),
+                              9, _observatory_frame("worlds"), sender).milestone
+        for offer_id in range(1, 6)
+    ]
+    assert milestones == ["worlds-step-1", "worlds-step-2", "worlds-step-2",
+                          "worlds-step-3", "worlds-analyze"]
+    assert sent == [("send_key", "s")] * 4 + [("send_key", "a")]
+    assert journey.stage == ObservatoryJourney.ANALYZE
+
+
+def test_observatory_refuses_a_handover_without_a_sample_for_each_step() -> None:
+    journey = ObservatoryJourney(OBSERVATORY_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey.stage = ObservatoryJourney.ANALYZE
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="3 samples after 3 steps"):
+        _run(journey, ((_observatory_offer(TELEMETRY[:3]),
+                        _observatory_frame("observatory", "Profiled 3 samples")),))
+
+
 def test_observatory_refuses_a_plot_whose_table_lists_other_samples() -> None:
     journey = applet_journey("observatory", OBSERVATORY_READY)
     offer = _observatory_offer(OBSERVATORY_DEMO_SERIES, table=TELEMETRY)

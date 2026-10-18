@@ -3245,6 +3245,14 @@ class ObservatoryJourney(_AppletJourney):
         self._steps = 0
         self._analyzed = None
 
+    def _send(self, method, value, target_stage, offer, generation, sender):
+        super()._send(method, value, target_stage, offer, generation, sender)
+        # A step counts once its press reaches Worlds.  A backpressured press
+        # is retried on its own frame or dropped for a newer one, which sends
+        # it again.
+        if value == "s" and self._pending is None:
+            self._steps += 1
+
     @property
     def final_stage(self) -> int:
         return self.RERUN
@@ -3302,8 +3310,7 @@ class ObservatoryJourney(_AppletJourney):
                 raise PhysicalDesktopAcceptanceError("Worlds lost focus")
         if self.stage in (self.WORLDS, self.STEPPED):
             if self._steps < WORLDS_STEPS:
-                self._steps += 1
-                return self._step(f"worlds-step-{self._steps}", "send_key", "s",
+                return self._step(f"worlds-step-{self._steps + 1}", "send_key", "s",
                                   self.STEPPED, offer, generation, sender)
             return self._step("worlds-analyze", "send_key", "a",
                               self.ANALYZE, offer, generation, sender)
@@ -3313,8 +3320,10 @@ class ObservatoryJourney(_AppletJourney):
             samples = self._shown(offer, observatory)
             if samples is None or samples == OBSERVATORY_DEMO_SERIES:
                 return self._wait("Observatory's plot of Worlds' telemetry")
-            if len(samples) < 2:
-                raise PhysicalDesktopAcceptanceError("Worlds handed over one sample")
+            # Worlds' run starts with one sample and adds one a step.
+            if len(samples) != WORLDS_STEPS + 1:
+                raise PhysicalDesktopAcceptanceError(
+                    f"Worlds handed over {len(samples)} samples after {WORLDS_STEPS} steps")
             self._analyzed = samples
             if not _taskbar_has_focus(projection, OBSERVATORY_FOCUS_MARKER):
                 return self._step("observatory-plots-telemetry", "send_key", "alt+1",
