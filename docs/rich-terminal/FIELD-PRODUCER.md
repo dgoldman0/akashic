@@ -64,7 +64,9 @@ FDC1 bytes are either unchanged or carry a strictly newer revision. A change
 to SELECTED alone keeps the exact FDC1 bytes, revision and content
 accounting, so ordinary selection movement retains an unchanged
 SERIES/WAVEFORM graph; new content, such as the text a prompt's user types,
-replaces the field without replacing anything else. Other state changes,
+replaces the field without replacing anything else. The new text may be
+longer or shorter: each field is compared on its own, and the fields' total
+text may differ from the acknowledged bank's. Other state changes,
 content whose revision is not newer, and changes to the label, membership or
 identity still require complete owner replacement. FIELD semantic content
 does not use the collection content-delta path.

@@ -11299,9 +11299,9 @@ VARIABLE _RTHP-D-WHY
         _RTHP-D-ACTIVE @ _RTHP-TB.FIELD-ITEMS @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.FIELD-UTF8 @
         _RTHP-D-P @ _RTHP.FIELD-UTF8 @ <> IF 0 EXIT THEN
-    17 _RTHP-D-WHY !
-    _RTHP-D-PENDING @ _RTHP-TB.FIELD-UTF8 @
-        _RTHP-D-ACTIVE @ _RTHP-TB.FIELD-UTF8 @ <> IF 0 EXIT THEN
+    \ The fields' text may differ in length from the acknowledged bank's, as
+    \ a prompt's does with every key typed: each field is compared, and
+    \ replaced when its content is newer, on its own.
     14 _RTHP-D-WHY !
     _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @
         _RTHP-D-P @ _RTHP.DIALOG-CONTROLS @ <> IF 0 EXIT THEN
