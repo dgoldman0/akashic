@@ -793,6 +793,31 @@ renders new settings; the same widget draws both in CELL; the Desktop
 advertises `VECTOR` with a point budget its owner reserves as it needs; and
 the full Desktop journey passes with the new milestones.
 
+**Status.** Done on 2026-10-18. The closing runs are recorded in
+`local_testing/evidence/part6-desktop-journey-20261018.md`, and the measures
+of step 9 in `local_testing/evidence/part6-plot-line-costs-20261018.md`.
+Both copies of the contract give vector lines a point budget, and MegaPad's
+guest module, codec, scene and server carry it. The data-graphics model
+has `PLOT` and `POLYLINE` records, which the canonical widget draws in CELL;
+the instrument planner, the rich engine, the APT-1 provider and the hybrid
+producer send them within the owner's point quota, and leave a graph to
+CELL whole when its terminal cannot draw it. The Desktop profile advertises
+`VECTOR`, its point limit and budget derived from Desk's data-graphics bank.
+In the physical viewer, Desk with Observatory and Worlds shows Observatory's
+plot of its own series, and after Analyze of Worlds' run, as a `PLOT` over
+the exact series with its baseline a line, its status and CELL panel showing
+the run in the same frame. Desk with Sound Lab shows its frequency landmarks
+as three lines, whose pitch mark moves when Sound Lab renders a new
+frequency, and CELL draws the same landmarks. The full Desktop journey
+checks the landmark lines at Sound Lab's `soundlab-instruments-live` and
+`soundlab-rerendered` milestones. The plots and lines themselves cost
+little: about 0.1 to 0.3 million guest steps a frame to lower and 0.2 to 0.4
+million to draw in CELL. The frames that carry them are STARTs of the whole
+screen, 8.5 to 21.5 million steps in the rich producer, since these Desks send
+no DELTA, as part 5 found for applications' prompts. Where a rich plot or
+waveform leaves its background clear, CELL's drawing of it shows beneath, as
+since the series work.
+
 **Not in this part.** `GROUP`. Appending to a live series. Labels and axis
 ticks as objects of their own; they stay text. A graph is still left out
 whole when one of its records is unsupported, so a terminal without
@@ -822,6 +847,16 @@ Desktop run stalled that way: it pressed File Explorer's task while Sound
 Lab's render notice showed, the notice ended first, and File Explorer never
 took focus. The journey now waits for the notice to end; the dropped press
 stays open.
+
+Three faults found on the way are fixed. Worlds' Analyze had never worked
+inside Desk: Worlds sent it as a component, and the request bus held a
+component's mutating request for an approval Desk never asks for, so Worlds
+now sends it as the user's own. Sound Lab's right-aligned `4 kHz` label
+wiped its landmark caption in CELL, so it is painted first. And a notice
+could end before a rich frame carrying it was revealed: its time started at
+the paint, and on the busy Desktop a START took longer than the notice to
+be taken. A notice's time now starts when the output that shows it has gone
+out.
 
 ## 7. Pictures
 
