@@ -7872,6 +7872,34 @@ def test_owed_click_release_precedes_any_other_input() -> None:
         )
 
 
+def test_file_explorer_task_waits_for_soundlab_notice_to_end() -> None:
+    """The render's notice ends in a frame that gives every control a new
+    identity, and the guest drops a press it reads after that frame, so the
+    press on File Explorer's task waits until no notice shows."""
+
+    journey = DesktopAcceptanceJourney(("READY",))
+    journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
+    journey._soundlab_frequency = 880
+    journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
+        _soundlab_desktop_projection(), (186, 42, 280, 83))
+    journey._require_exercised_state_survives = lambda _projection: None
+    sent = []
+
+    def sender(method, value, offer, generation):
+        sent.append(method)
+        return "progress"
+
+    rendered = _soundlab_desktop_projection(frequency=880)
+    noticed = replace(rendered, semantic_dialog_claims=rendered.semantic_dialog_claims
+                      + (_desk_notice("Signal rendered and analyzed"),))
+    progress = journey.after_present(_offer("X", offer_id=1, pad_menu=True), 9, noticed, sender)
+    assert progress == acceptance_runner.JourneyProgress()
+    assert sent == [] and "notice" in journey.waiting
+    progress = journey.after_present(_offer("X", offer_id=2, pad_menu=True), 9, rendered, sender)
+    assert progress.milestone == "soundlab-rerendered"
+    assert sent == ["pointer_click"]
+
+
 def test_owed_drag_finishes_its_move_and_release_before_other_input() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE

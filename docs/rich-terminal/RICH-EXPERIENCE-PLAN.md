@@ -813,6 +813,15 @@ run), File Explorer (reveal), Grid (set and save), Pad (open), Sound Lab
 and they stay open: each can do as Observatory does, or Desk can run a
 handler in its instance's context.
 
+A press can be lost too. The terminal accepts it bound to the frame on
+screen, but when the guest replaces that frame with a START before it reads
+the press, as when a notice ends, the press names a control the new frame
+no longer has, and the guest drops it without a word. One canonical
+Desktop run stalled that way: it pressed File Explorer's task while Sound
+Lab's render notice showed, the notice ended first, and File Explorer never
+took focus. The journey now waits for the notice to end; the dropped press
+stays open.
+
 ## 7. Pictures
 
 **Today.** MegaPad's side is complete: immutable raw RGBA8 resources, a

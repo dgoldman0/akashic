@@ -3190,18 +3190,6 @@ def _require_notice(offer, notice: _SemanticDialogClaim, severity: StatusSeverit
         raise PhysicalDesktopAcceptanceError("CELL does not show the notice on its row")
 
 
-def _notice_covers(projection: RichScreenProjection, bounds: _LogicalRectangle) -> bool:
-    """Whether a notice lies over part of BOUNDS, which a press there then
-    reaches instead."""
-
-    return any(
-        claim.content.notice and _rectangle_intersection(
-            bounds, _LogicalRectangle(claim.left, claim.top, claim.right, claim.bottom)
-        ) is not None
-        for claim in projection.semantic_dialog_claims
-    )
-
-
 def _dialog_claim(
     projection: RichScreenProjection,
     message: str,
@@ -9591,11 +9579,12 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 projection,
                 FEXPLORER_TASKBAR_BUTTON,
             )
-            # A notice over the task takes a press there until it ends.
-            if any(_notice_covers(projection, task.bounds)
-                   for bar in projection.semantic_taskbar_claims for task in bar.tasks
-                   if task.bounds.left <= column < task.bounds.right):
-                return JourneyProgress()
+            # The render's notice ends in a frame of its own, which gives
+            # every control a new identity.  The guest drops a press it reads
+            # after that frame, since the press names a control that frame no
+            # longer has, so the press waits until no notice shows.
+            if any(claim.content.notice for claim in projection.semantic_dialog_claims):
+                return self._wait("Sound Lab's notice to end before File Explorer's task")
             milestone = self._milestone("soundlab-rerendered")
             method, value = "pointer_click", f"{column},{row}"
             if projection.semantic_taskbar_claims:
@@ -9873,10 +9862,10 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         taskbar = self._taskbar_line(projection)
         if self.stage == DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE:
             if not _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True):
-                return JourneyProgress()
+                return self._wait(f"{FEXPLORER_FOCUS_MARKER} after its task was pressed")
             table = _fexplorer_table_claim(projection)
             if table is None:
-                return JourneyProgress()
+                return self._wait("File Explorer's detail table")
             content = table.content
             row = table.named(POINTER_LIST_FILE)
             if (
