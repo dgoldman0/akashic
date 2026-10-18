@@ -125,7 +125,7 @@ limit the supported Desk child UCTX scope above.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `ASHELL-NOTICE` | `( addr u ms severity -- )` | Show a notice for *ms* milliseconds from the first paint that shows it, with its meaning: `ASHELL-SEVERITY-NEUTRAL`, `-INFO`, `-SUCCESS`, `-WARNING` or `-ERROR`, 0 to 4, a status field's severities. Another value is neutral. The shell keeps its own copy of the text. |
+| `ASHELL-NOTICE` | `( addr u ms severity -- )` | Show a notice for *ms* milliseconds from when the first output that shows it has gone out, with its meaning: `ASHELL-SEVERITY-NEUTRAL`, `-INFO`, `-SUCCESS`, `-WARNING` or `-ERROR`, 0 to 4, a status field's severities. Another value is neutral. The shell keeps its own copy of the text. |
 | `ASHELL-TOAST` | `( addr u ms -- )` | A neutral notice. |
 | `ASHELL-TOAST-WARNING` | `( addr u ms -- )` | A notice that warns. |
 | `ASHELL-TOAST-ERROR` | `( addr u ms -- )` | A notice that something failed. |
@@ -306,11 +306,14 @@ copy the notice is not shown.  A later notice replaces an earlier one.  The
 first paint after a notice ends gives its memory back, so a notice holds
 memory only while it lasts.
 
-A notice's time counts from the first paint that shows it, not from when
-it was raised.  Until a paint shows it, it has not begun to end and sets
-no deadline of its own; raising it asks for that paint.  So a paint that
-comes late, on a slow device or a busy screen, still shows the notice for
-its whole time instead of letting it end unseen.
+A notice's time counts from when the first output that shows it has gone
+out, not from when it was raised or painted.  Until then it has not begun
+to end and sets no deadline of its own; raising it asks for the paint that
+shows it.  The paint's flush sends that output: at once for CELL, and for
+a rich terminal when the frame carrying the notice is revealed, which on a
+busy screen can come more than a second after the paint.  So a late paint
+or a slow frame still shows the notice for its whole time instead of
+letting it end unseen.
 
 Each paint decides once, as it begins, which notice it shows, and lays it
 out for the screen's width: a bar on the bottom row, centred, four cells

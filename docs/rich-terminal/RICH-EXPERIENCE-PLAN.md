@@ -665,7 +665,8 @@ completes its rename, and the Agent's scrolls its approval review with the
 wheel. The closing runs found one more fault: the app shell started a
 notice's time when the notice was raised, so a paint that came late, as on
 the busy Desktop, could show no notice at all. A notice's time now counts
-from the first paint that shows it.
+from when the first output that shows it has gone out (part 6 moved it
+there from the first paint, for frames slower than the notice).
 
 **Not in this part.** Progress bars and busy indicators. UIDL's input,
 toggle, selector and range elements in documents that use them.

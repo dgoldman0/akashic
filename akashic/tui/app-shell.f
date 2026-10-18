@@ -752,9 +752,10 @@ VARIABLE _ALUF-TOTAL
     THEN ;
 
 \ ASHELL-TOAST-VISIBLE? ( -- flag )
-\   True while the notice raised last has not ended.  A notice no paint
-\   has shown yet has not begun to end: its time counts from the first
-\   paint that shows it, so a paint that comes late still shows it.
+\   True while the notice raised last has not ended.  A notice no output
+\   has shown yet has not begun to end: its time counts from when the first
+\   output that shows it has gone out, so output that comes late, after a
+\   late paint or a slow frame, still shows it.
 : ASHELL-TOAST-VISIBLE?  ( -- flag )
     \ Avoid an eight-byte RTC read on every event-loop and paint pass
     \ when no toast is active.  _ASHELL-TOAST-WAS-VIS is set by
@@ -885,7 +886,8 @@ VARIABLE _ASHELL-LAY-WHOLE
     0 0 _ASHELL-TOAST-MSG 2! ;
 
 \ _ASHELL-TOAST-ARM ( -- )
-\   The paint that first shows the notice raised last starts its time.
+\   The first output that shows the notice raised last starts its time once
+\   it has gone out.
 : _ASHELL-TOAST-ARM  ( -- )
     _ASHELL-TOAST-ARMED @ IF EXIT THEN
     MS@ _ASHELL-TOAST-MS @ + _ASHELL-TOAST-EXPIRY !
@@ -895,8 +897,7 @@ VARIABLE _ASHELL-LAY-WHOLE
 \   Decide the notice this paint shows: the one raised last while it has
 \   not ended, centred on the bottom row.  Its layout is kept while the
 \   notice and the screen's width stay the same.  A screen too narrow for
-\   a bar's four cells of padding and one of text shows none.  The first
-\   paint that shows a notice starts its time.
+\   a bar's four cells of padding and one of text shows none.
 : _ASHELL-TOAST-LATCH  ( -- )
     ASHELL-TOAST-VISIBLE? SCR-W 5 < 0= AND SCR-H 0> AND 0= IF
         _ASHELL-TOAST-HIDE EXIT
@@ -908,7 +909,7 @@ VARIABLE _ASHELL-LAY-WHOLE
     THEN
     SCR-H 1- _ASHELL-SHOWN-ROW !
     SCR-W _ASHELL-SHOWN-W @ - 2/ _ASHELL-SHOWN-COL !
-    -1 _ASHELL-TOAST-SHOWN ! _ASHELL-TOAST-ARM ;
+    -1 _ASHELL-TOAST-SHOWN ! ;
 
 \ _ASHELL-NOTICE-STYLE ( severity -- )
 \   The bar's colours: grey when neutral, then blue, green, amber and red
@@ -1358,8 +1359,11 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
     \ stream owner proves a synchronized ANSI handoff; never emit a raw
     \ fallback transaction from the paint path itself.
     _ASHELL-OUTPUT-PENDING @ SCR-DIRTY? OR 0= IF EXIT THEN
-    SCR-FLUSH?
-    SCB-S-OK = IF 0 _ASHELL-OUTPUT-PENDING ! THEN ;
+    SCR-FLUSH? SCB-S-OK = IF
+        0 _ASHELL-OUTPUT-PENDING !
+        \ The output that shows a notice has gone out: its time starts.
+        _ASHELL-TOAST-SHOWN @ IF _ASHELL-TOAST-ARM THEN
+    THEN ;
 
 \ =====================================================================
 \  §10 — Lifecycle: Init

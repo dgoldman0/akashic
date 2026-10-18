@@ -93,31 +93,36 @@ _NT-SAVED 60000 ASHELL-TOAST-WARNING _ASHELL-TOAST-LATCH _ASHELL-DRAW-TOAST
 \ The layout is kept while the notice and the width stay the same.
 _ASHELL-SHOWN-REVISION @ _NT-U ! _ASHELL-TOAST-LATCH
 _ASHELL-SHOWN-REVISION @ _NT-U @ = _SS-A
-\ A notice that has ended shows no more, and holds no memory.
+\ Its output goes out, which starts its time.  A notice that has ended
+\ shows no more, and holds no memory.
+_ASHELL-TOAST-ARM
 MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH ASHELL-NOTICE-SHOWN? 0= _SS-A
 ASHELL-NOTICE-ROOT OR OR OR 0= _SS-A
 _ASHELL-TOAST-BUF @ 0= _SS-A _ASHELL-SHOWN-BUF @ 0= _SS-A
 ''' + CLEANUP, minimum=25)
 
 
-def test_a_notice_lasts_its_time_from_the_paint_that_shows_it():
+def test_a_notice_lasts_its_time_from_when_its_output_goes_out():
     _run(NOTICE + r'''
 40 12 _NT-SCREEN
 _NT-SAVED 60000 ASHELL-TOAST
-\ Raised, but no paint has shown it yet: it has not begun to end, however
-\ late that paint comes.
+\ Raised, but no output has shown it yet: it has not begun to end, however
+\ late that output comes.
 _ASHELL-TOAST-ARMED @ 0= _SS-A ASHELL-TOAST-VISIBLE? _SS-A
 MS@ 1000 - _ASHELL-TOAST-EXPIRY ! ASHELL-TOAST-VISIBLE? _SS-A
-\ The paint that shows it starts its time.
-_ASHELL-TOAST-LATCH ASHELL-NOTICE-SHOWN? _SS-A _ASHELL-TOAST-ARMED @ _SS-A
+\ A paint that shows it does not start its time: the output carrying it,
+\ a slow rich frame say, may still be on its way.
+_ASHELL-TOAST-LATCH ASHELL-NOTICE-SHOWN? _SS-A _ASHELL-TOAST-ARMED @ 0= _SS-A
+\ Once that output has gone out its time starts, as the paint's flush does.
+_ASHELL-TOAST-ARM _ASHELL-TOAST-ARMED @ _SS-A
 _ASHELL-TOAST-EXPIRY @ MS@ - DUP 0> _SS-A 60000 > 0= _SS-A
-\ A later paint keeps its time; once it ends no paint shows it.
-_ASHELL-TOAST-EXPIRY @ _NT-U ! _ASHELL-TOAST-LATCH
+\ A later paint and output keep its time; once it ends no paint shows it.
+_ASHELL-TOAST-EXPIRY @ _NT-U ! _ASHELL-TOAST-LATCH _ASHELL-TOAST-ARM
 _ASHELL-TOAST-EXPIRY @ _NT-U @ = _SS-A
 MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH ASHELL-NOTICE-SHOWN? 0= _SS-A
 \ A new notice starts afresh.
 _NT-SAVED 60000 ASHELL-TOAST _ASHELL-TOAST-ARMED @ 0= _SS-A ASHELL-TOAST-VISIBLE? _SS-A
-''' + CLEANUP, minimum=11)
+''' + CLEANUP, minimum=12)
 
 
 def test_a_notice_raised_during_a_paint_shows_from_the_next():
@@ -205,6 +210,6 @@ KEY-MOUSE-RELEASE 11 18 _NT-MOUSE _NT-EVENTS @ 4 = _SS-A
 KEY-MOUSE-DRAG 11 18 _NT-MOUSE _NT-EVENTS @ 5 = _SS-A
 KEY-MOUSE-TEXT-PLACE 11 18 _NT-MOUSE _NT-EVENTS @ 6 = _SS-A
 \ Once no paint shows it, a press there reaches the application.
-MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH
+_ASHELL-TOAST-ARM MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH
 KEY-MOUSE-LEFT 11 18 _NT-MOUSE _NT-EVENTS @ 7 = _SS-A
 ''' + CLEANUP, minimum=12)
