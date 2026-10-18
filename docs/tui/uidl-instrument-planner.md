@@ -7,8 +7,8 @@ transaction, consult an application, or choose an applet-specific limit.
 
 The caller owns the request and every source/output span. Frozen descriptors,
 complete native UDG graphs, and optional negotiated limits remain immutable
-through the call. On success the caller owns the copied samples and readout
-units; no output points into the native source bank. Output plans borrow only
+through the call. On success the caller owns the copied samples, readout
+units and line points; no output points into the native source bank. Output plans borrow only
 the caller's output banks and remain valid until those banks are reused.
 
 ## Request and results
@@ -28,7 +28,7 @@ All fields are native 64-bit cells.
 | 88, 96 | Instrument plan address, capacity |
 | 104, 112 | Instrument region bank address, capacity |
 | 120, 128 | Instrument record bank address, capacity |
-| 136, 144 | Copied readout unit bank address, capacity |
+| 136, 144 | Copied unit bank address, capacity: readout units and line points |
 | 152, 160 | Tentative claim bank address, capacity |
 | 168, 176 | Instrument correlation bank address, capacity |
 | 184 | Reserved zero |
@@ -97,12 +97,14 @@ whole if its series are unsupported, a declared history exceeds the negotiated
 history limit, prefix plus admitted series/slots exceeds the corresponding
 quota, the complete initial graph operation/byte lower bound already exceeds
 transaction limits, an output bank cannot hold the complete graph, or an ID range would
-wrap. Missing instrument support also omits the graph. WAVEFORM requires a
-complete 112-byte definition payload; every other instrument's full payload
-must also fit. The planner includes the 160-byte update envelope, 104 bytes per
-region, and each instrument frame (READOUT 144 plus unit bytes, METER 152,
-STATUS 136, WAVEFORM 152), with one operation per region/instrument plus SERIES
-operations. These costs accumulate across admitted graphs in this slice.
+wrap. A graph is also omitted when its terminal lacks a record's family: a
+POLYLINE needs `VECTOR` and no more points than `max_path_points`, a PLOT needs
+`SERIES`, and every other object `INSTRUMENT`. Every instrument's full payload
+must fit, WAVEFORM's 112 bytes and PLOT's 104 among them. The planner includes
+the 160-byte update envelope, 104 bytes per region, and each instrument frame
+(READOUT 144 plus unit bytes, METER 152, STATUS 136, WAVEFORM 152, PLOT 144,
+POLYLINE 120 plus 8 a point), with one operation per region/instrument plus
+SERIES operations. These costs accumulate across admitted graphs in this slice.
 Prior documents and other families remain the producer's final aggregate
 admission responsibility.
 
@@ -132,8 +134,11 @@ sample array unchanged. Explicit histories copy every `(u64 timestamp, i64
 value)` pair unchanged. Capacity, mode, interval, and first timestamp remain
 exact. The UDG validator establishes strictly increasing explicit timestamps,
 non-overflowing uniform end timestamps, exact extents, unique keys, and earlier
-same-graph SERIES references. WAVEFORM references are translated through that
-graph's emitted SERIES correlations.
+same-graph SERIES references. WAVEFORM and PLOT references are translated
+through that graph's emitted SERIES correlations. A POLYLINE's points are copied
+to the unit bank, where a READOUT's unit goes, as the native cell pairs its
+record holds: its UNIT-U is sixteen bytes a point, and the unit-bytes result
+counts them.
 
 For a nonempty history, let `n` be sample count, `s` be stride (8 uniform,
 16 explicit), and `q` be:
@@ -165,8 +170,8 @@ source shape; they are not hidden planner allocation constants.
 ## Storage authority and refusal
 
 Every nonempty span must be nonwrapping; native records, samples, requests,
-plans, correlations, and omissions are aligned to eight bytes. Unit strings
-may be byte aligned. Empty spans have canonical address zero. Record banks
+plans, correlations, and omissions are aligned to eight bytes. Units, and the line points packed after them, may be
+byte aligned. Empty spans have canonical address zero. Record banks
 must have exact stride multiples; sample and omission capacities are multiples
 of eight.
 

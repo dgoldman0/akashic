@@ -331,6 +331,9 @@ def test_ruip_maps_all_current_instruments_and_failure_clears_tentative_claims()
     instrument = _definition(source, "_RUIP-WRITE-INSTRUMENT?")
     readout = _definition(source, "_RUIP-WRITE-READOUT?")
     unit = _definition(source, "_RUIP-WRITE-UNIT?")
+    span = _definition(source, "_RUIP-WRITE-UNIT-SPAN?")
+    polyline = _definition(source, "_RUIP-WRITE-POLYLINE?")
+    plot = _definition(source, "_RUIP-WRITE-PLOT?")
     clear = _definition(source, "_RUIP-CLEAR-OUTPUT")
     measured = _definition(source, "_RUIP-CLEAR-MEASURED-OUTPUT")
     fail = _definition(source, "_RUIP-FAIL-RESULT")
@@ -340,6 +343,9 @@ def test_ruip_maps_all_current_instruments_and_failure_clears_tentative_claims()
         ("UDG-K-READOUT", "RTE-INSTRUMENT-READOUT"),
         ("UDG-K-METER", "RTE-INSTRUMENT-METER"),
         ("UDG-K-STATUS", "RTE-INSTRUMENT-STATUS"),
+        ("UDG-K-WAVEFORM", "RTE-INSTRUMENT-WAVEFORM"),
+        ("UDG-K-PLOT", "RTE-INSTRUMENT-PLOT"),
+        ("UDG-K-POLYLINE", "RTE-INSTRUMENT-POLYLINE"),
     ):
         assert udg in kind and rte in kind
         assert udg in instrument
@@ -363,11 +369,16 @@ def test_ruip_maps_all_current_instruments_and_failure_clears_tentative_claims()
 
     assert "UDG-READOUT-FORMATTED-BYTES?" in readout
     assert "_RTE-INSTRUMENT.FORMATTED-U" in readout
-    assert "UDG-READOUT-UNIT@" in unit
+    # A readout's unit and a line's points are copied the same way.
+    assert "UDG-READOUT-UNIT@ _RUIP-WRITE-UNIT-SPAN?" in " ".join(unit.split())
     assert "UDG-READOUT-UNIT " not in unit
-    assert " MOVE" in unit
-    assert "_RTE-INSTRUMENT.UNIT-A" in unit
-    assert "_RTE-INSTRUMENT.UNIT-U" in unit
+    assert " MOVE" in span
+    assert "_RTE-INSTRUMENT.UNIT-A" in span
+    assert "_RTE-INSTRUMENT.UNIT-U" in span
+    assert "UDG-POLYLINE-POINTS@" in polyline
+    assert "_RUIP-WRITE-UNIT-SPAN?" in polyline
+    # A plot's series reference goes through the graph's series identities.
+    assert "UDG-PLOT-SERIES-KEY@ _RUIP-SERIES-ID" in " ".join(plot.split())
 
     for bank in ("PLAN", "REGIONS", "ITEMS", "UNITS", "CLAIMS", "CORR"):
         assert f"_RUIP-{bank}-U @ ?DUP IF" in clear

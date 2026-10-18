@@ -291,7 +291,7 @@ def test_instrument_measurement_and_hybrid_admission_are_exact_and_bounded() -> 
     # their storage disjointness before traversal, and gives the provider only
     # the fixed admission summary derived by the neutral pass.
     assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in engine
-    assert "472 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in engine
+    assert "504 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in engine
     authority = _word(engine, "_RTE-HPV-FIXED-AUTHORITY?")
     assert authority.index("_RTE-HPV-FIXED-INSTRUMENT?") < authority.index(
         "_RTE-HPV-FIXED-INSTRUMENT-CROSS?"

@@ -770,7 +770,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD-HEIGHT @ DUP 0=" in glyph_run_geometry
     assert "_RTAPT-LD-WIDTH @ DUP 0=" in glyph_run_geometry
     assert glyph_run_geometry.count("_RTAPT-LPF-SADD?") == 2
-    assert "UNORM" not in source
+    # Only a POLYLINE's points are UNORM32; glyph geometry never is.
+    for body in (glyph_run_geometry, glyph_run_body, glyph_run_replace_body):
+        assert "UNORM" not in body
     for body in (glyph_run_body, glyph_run_replace_body):
         for raw_store in (
             "_RTAPT-LD-COL @ _RTAPT-LD-COPY @ _RTAPT-LD.X !",

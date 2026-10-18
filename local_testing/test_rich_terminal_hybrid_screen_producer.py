@@ -3691,7 +3691,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert expected == 2400
+    assert expected == 2432
     for name in (
         "_RTHP.TARGET0-A",
         "_RTHP.TARGET1-A",
@@ -3744,7 +3744,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 2752
+    assert expected == 2784
     assert _offset(source, "_RTHP.RUIP-Q") == expected
     expected += 368
     assert _offset(source, "_RTHP.INSTRUMENT-PLAN") == expected
@@ -3780,7 +3780,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3408
+    assert expected == 3440
     # Kept comparison facts for the active and pending banks.
     for name in ("_RTHP.ACTIVE-FACTS", "_RTHP.PENDING-FACTS"):
         assert _offset(source, name) == expected
@@ -3794,7 +3794,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert expected == 3536
+    assert expected == 3568
     for name in (
         "_RTHP.MAX-STATUS-NATIVE",
         "_RTHP.MAX-STATICS",
@@ -3817,7 +3817,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3680
+    assert _offset(source, "_RTHP.STATIC-PLAN") == expected == 3712
     expected += 144
     for name in (
         "_RTHP.MAX-FIELD-NATIVE", "_RTHP.MAX-FIELDS",
@@ -3841,11 +3841,11 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4112
+    assert _offset(source, "_RTHP.SERIES-PLAN") == expected == 4144
     expected += 48
-    assert _offset(source, "_RTHP.EXTENSION") == expected == 4160
+    assert _offset(source, "_RTHP.EXTENSION") == expected == 4192
     expected += 8
-    assert _offset(source, "_RTHP.OPEN-QUEUED") == expected == 4168
+    assert _offset(source, "_RTHP.OPEN-QUEUED") == expected == 4200
     expected += 8
     for name in ("RESUME-PHASE", "SPACE-REFUSED-DRAW"):
         assert _offset(source, "_RTHP." + name) == expected
@@ -3883,7 +3883,7 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "DIALOG-REFUSED", "DIALOG-UTF8"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 5032
+    assert _constant(source, "RTHP-SIZE") == expected == 5064
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:

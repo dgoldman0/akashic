@@ -91,11 +91,14 @@ class InstrumentHarness(GrowthHarness):
         self.units = units
         self.count = count
         for index, kind in enumerate(kinds):
-            unit = units if kind == 1 else b""
+            # A READOUT keeps its unit in the unit bank, and a POLYLINE its
+            # points; a line has no range and no formatted text.
+            unit = units if kind in (1, 6) else b""
+            line = kind == 6
             fields = (1, 2, 100 + index, kind, MASK64, index, 8, 0,
-                      0, index, 1, 1, 2, 8, 0xFFFFFFFF, 0, 0, 0, 0, 100,
+                      0, index, 1, 1, 2, 8, 0xFFFFFFFF, 0, 0, 0, 0, 0 if line else 100,
                       42, 0, self.instrument_units if unit else 0, len(unit),
-                      2 + len(unit) if unit else 0, 0, 0)
+                      2 + len(unit) if unit and not line else 0, 0, 0)
             self.runtime.memory.write_bytes(self.instruments + index * 216, struct.pack("<27Q", *fields))
         for suffix, value in (("COLS", 8), ("ROWS", 2), ("DOCUMENT-COUNT", 1),
                               ("OWNER", 1), ("GENERATION", 2), ("REGION", 7),
@@ -112,8 +115,8 @@ class InstrumentHarness(GrowthHarness):
         assert self.runtime.memory.read_bytes(self.arena + self.arena_size, 8) == b"RIGHTGUA"
         assert self.runtime.memory.read_bytes(self.other, self.bank_size) == bytes(self.bank_size)
 
-    def pair(self):
-        self.setup()
+    def pair(self, **setup):
+        self.setup(**setup)
         assert self.call("_RTHP-PACK-ADMITTED-CANDIDATE", self.bank, self.producer)
         memory = self.runtime.memory
         self.active_before = memory.read_bytes(self.bank, self.bank_size)
@@ -234,6 +237,25 @@ def test_unchanged_instruments_rebase_only_wire_identity(harness):
         assert h.runtime.memory.read64(h.pending_items + i * 216 + 48) == 8
         assert h.runtime.memory.read64(h.pending_corr + i * 80 + 64) == 100 + i
     assert h.runtime.memory.read_bytes(h.bank, h.bank_size) == h.active_before
+
+
+def test_a_line_is_kept_while_its_points_are_unchanged(harness):
+    h = harness
+    points = struct.pack("<4Q", 0, 0x7FFFFFFF, 0xFFFFFFFF, 0x7FFFFFFF)
+    h.pair(units=points, kinds=(6,))
+    assert h.runtime.memory.read_bytes(h.pending_units, len(points)) == points
+    assert h.reusable()
+    # The line's second point moves: the scene must be replaced.
+    h.runtime.memory.write64(h.pending_units + 24, 0x7FFFFFFE)
+    assert not h.reusable()
+    assert h.runtime.memory.read_bytes(h.bank, h.bank_size) == h.active_before
+
+
+def test_a_plot_binds_its_series_as_a_waveform_does():
+    source = PRODUCER.read_text()
+    series = _definitions(source)["_RTHP-IR-SERIES?"]
+    assert "RTE-INSTRUMENT-WAVEFORM <>" in series
+    assert "RTE-INSTRUMENT-PLOT <> AND IF" in series
 
 
 @pytest.mark.parametrize("offset", (0, 8, 16, 24, 32, 40, 48, 72))
