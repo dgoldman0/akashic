@@ -674,16 +674,132 @@ which are part 6.
 
 ## 6. Plots and waveforms
 
-**Today.** MegaPad supports vector lines, bounded series, plots and
-waveforms from wire to screen. Series and waveforms are done on the Akashic
-side: the data-graphics model carries them, Sound Lab's waveform uses that
-model, the canonical widget draws it in CELL too, and the Desktop advertises
-the series family (see [SERIES-PRODUCER.md](SERIES-PRODUCER.md)).
+**Today.** MegaPad supports `GROUP`, `POLYLINE`, `PLOT` and `WAVEFORM`
+from the guest module's writers to the screen: codec, scene checks,
+reference renderer and shared view. Series and waveforms are done on the
+Akashic side: the data-graphics model carries them, Sound Lab's waveform
+uses that model, the canonical widget draws it in CELL too, and the Desktop
+advertises the series family (see [SERIES-PRODUCER.md](SERIES-PRODUCER.md)).
+That family covers `PLOT` too, but nothing in Akashic sends one: the
+data-graphics model has no plot record and the engine no plot kind.
+Nothing sends `GROUP` or `POLYLINE` either, and the Desktop does not
+advertise `VECTOR`. Two applications paint their plots by hand:
 
-**Plan.** The rest is plots, vector lines and polyline markers, under the
-same rules: the data-graphics model carries them, the canonical widget draws
-them in CELL too, Akashic captures them with refusal, and the vector bits are
-advertised once complete. Observatory is the second consumer.
+- **Observatory's projection.** One dot a column over a painted baseline,
+  each dot picked by sample index rather than by tick. Observatory is in no
+  Desk profile, and neither is Worlds, whose Analyze hands Observatory its
+  telemetry.
+- **Sound Lab's frequency landmarks.** A painted line from 0 Hz to 4 kHz,
+  with the letters P and C where its pitch and spectral centroid lie.
+
+The contract has one weak point here. `VECTOR` has a limit on the points in
+one line, `max_path_points`, but no budget for points, so a terminal must
+keep room for every object it grants to be a line of the largest size. That
+is reserving the maximum. Text and series samples are budgets an owner
+reserves and grows instead.
+
+**Decisions,** made on 2026-10-18:
+
+- A line's points come out of a budget, like samples. `RET_FORMATS` offers
+  a total and `OWNER_OPEN` reserves a share; each record already has a
+  reserved field at offset 56 to carry it.
+- Sound Lab's landmarks become vector lines: the line itself, and a marker
+  for the pitch and one for the centroid. The letters stay as text in the
+  row above the markers, so CELL still says which is which. Observatory's
+  plot becomes a `PLOT` over its exact series, with its baseline a vector
+  line. No new markers are added, and `GROUP` stays unused, since nothing
+  needs it.
+- Each application keeps one data-graphics graph, as Sound Lab does today:
+  the plot and the lines join its readouts.
+- Observatory is checked on a Desk profile with Worlds beside it, so its
+  plot shows Worlds' own telemetry after Analyze.
+
+**Plan.**
+
+1. **Contract,** in both copies of APT-1-RETAINED-1:
+   - `RET_FORMATS` offset 56 becomes `total_path_points`, positive exactly
+     when `VECTOR` is set and at least `max_path_points`.
+   - `OWNER_OPEN` and `OWNER_RESIZE` offset 56 become `path_point_quota`:
+     the points of the owner's `POLYLINE` objects. Like the sample-slot
+     quota it bounds each scene target, active and hidden alike, never
+     shrinks within an owner generation, is summed against
+     `total_path_points` across live owners, and must be zero without
+     `VECTOR`. A line that would exceed it is a quota failure.
+   - The worst-case rule (`object_quota * max_path_points`) goes.
+   - Section 16.1's list of the reference profile's features, long out of
+     date, is corrected.
+2. **MegaPad.** The guest module's discovery and owner writers, the codec,
+   the scene's quota ledger, the server, the module's documentation, the
+   conformance vectors, and a server test that sends a `POLYLINE` and a
+   `PLOT`, which no test does yet.
+3. **Model.** The data-graphics model gains a `PLOT` record (its series,
+   range, line and fill colours, and fill and points flags) and a
+   `POLYLINE` record (stroke width, colour, closed flag and its points
+   relative to its rectangle), with builders, accessors and validation.
+4. **CELL.** The canonical widget draws a plot as a line through every
+   sample, placed by timestamp as a waveform is, with the fill below it and
+   a mark at each sample when its flags ask, and a vector line as line
+   characters along its segments. Both are clipped as the rest of the
+   widget is.
+5. **Capture, lowering and refusal.** The instrument planner lowers `PLOT`
+   (with the series family) and `POLYLINE` (with the vector family) as two
+   more instrument kinds and counts their frames, points and quota need. A
+   graph is left out whole, to CELL, when its terminal lacks the family, a
+   line has more points than the terminal allows, or a frame cannot fit.
+   The engine checks the new kinds, the APT-1 provider sends them and
+   carries the point budget through discovery and the owner's quotas, and
+   the screen producer asks for the points it needs and keeps an unchanged
+   plot or line in a DELTA.
+6. **Desktop profile.** It advertises `VECTOR`. The point limit and the
+   point budget derive from the data-graphics bank Desk already selects,
+   since every point takes 16 bytes of it, as the profile's other budgets
+   derive from Desk's banks.
+7. **Observatory.** Its series and plot join its graph, with banks sized to
+   the series it holds and grown when a larger one arrives. The painted
+   plot goes.
+8. **Sound Lab.** The landmarks join its graph as three vector lines. The
+   painted line and letters go; the letters return as text above the
+   markers.
+9. **Measure.** Guest steps for frames that carry Observatory's plot and
+   Sound Lab's lines, rich and CELL.
+
+**Checks,** in order:
+
+- Contract and MegaPad: discovery and owner quotas in the guest module's
+  tests, the codec's vectors, the scene's quota refusals, and a `POLYLINE`
+  and a `PLOT` through the server.
+- Model and widget: record extents, references and refusals; CELL byte
+  oracles for plots and lines, including clipping.
+- Lowering: each kind lowered exactly; whole-graph refusal leaving CELL;
+  reuse of an unchanged plot and line.
+- Observatory: its own tests and the Observatory/Worlds slice, then a new
+  Desk profile with Worlds and Observatory through the physical viewer.
+  Observatory's plot of its starting series goes out as a `PLOT` over a
+  series holding exactly those samples. Worlds runs and Analyze hands the
+  run's telemetry over; the plot's series then holds exactly the samples
+  Observatory shows in its table and readouts. A rerun keeps the plot.
+- Sound Lab: a new Desk profile with Sound Lab alone through the physical
+  viewer. A render shows the three lines with the markers at the pitch and
+  centroid it reports; a new frequency and another render move the pitch
+  marker.
+- The full Desktop journey once at the end, with Sound Lab's lines as new
+  milestones.
+
+**Done when** Observatory's plot of Worlds' telemetry goes out as a `PLOT`
+over an exact series in the physical viewer, its baseline a vector line;
+Sound Lab's frequency landmarks go out as vector lines that move when it
+renders new settings; the same widget draws both in CELL; the Desktop
+advertises `VECTOR` with a point budget its owner reserves as it needs; and
+the full Desktop journey passes with the new milestones.
+
+**Not in this part.** `GROUP`. Appending to a live series. Labels and axis
+ticks as objects of their own; they stay text. A graph is still left out
+whole when one of its records is unsupported, so a terminal without
+`VECTOR` shows Sound Lab's and Observatory's instruments in CELL; splitting
+a chart into a graph of its own waits for a terminal that needs it. Two
+renderer limits the consumers here do not meet, since their lines are
+opaque and thin: translucent wide strokes blend twice at joins, and
+diagonal strokes draw thinner than asked.
 
 ## 7. Pictures
 
