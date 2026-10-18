@@ -27,7 +27,7 @@ covers a title and DLG1, whose 56-byte header is smaller than the model's,
 and each label with its 8-byte BTN1. With a memory source the arena grows to
 the dialogs a draw shows, half again, as other content does.
 
-The producer record is 4984 bytes. The packed target header is 368 bytes;
+The producer record is 5032 bytes. The packed target header is 368 bytes;
 the dialog lane's controls, dialogs and UTF8 bytes sit at 344, 352 and 360.
 
 ## Lowering

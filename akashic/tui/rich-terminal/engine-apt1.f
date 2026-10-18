@@ -211,7 +211,9 @@ VARIABLE _RTAPTE-LS-STATUS
     _RTAPTE-LS-SRC @ _RTAPT-L.OUTBOUND-PAYLOAD @
         _RTAPTE-LS-DST @ _RTE-L.OUTBOUND-PAYLOAD !
     _RTAPTE-LS-SRC @ _RTAPT-L.IMAGE-FORMATS @ _RTAPTE-PICTURES>RTE
-        _RTAPTE-LS-DST @ _RTE-L.IMAGE-FORMATS ! ;
+        _RTAPTE-LS-DST @ _RTE-L.IMAGE-FORMATS !
+    _RTAPTE-LS-SRC @ _RTAPT-L.TOTAL-PATH-POINTS @
+        _RTAPTE-LS-DST @ _RTE-L.TOTAL-PATH-POINTS ! ;
 
 \ Facade callback.  A provider refusal never writes the caller's neutral
 \ record; a successful call copies every field from the call-borrowed RTAPT
@@ -230,17 +232,17 @@ VARIABLE _RTAPTE-LS-STATUS
     _RTAPTE-LIMITS-COPY
     RTE-S-OK _RTAPTE-LIMITS-SCRUB ;
 
-: _RTAPTE-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots engine -- status )
+: _RTAPTE-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots path-points engine -- status )
     RTAPT-OWNER-OPEN _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-OWNER-STATE@  ( owner generation engine -- owner-state status )
     RTAPT-OWNER-STATE@
     _RTAPTE-STATUS>RTE >R _RTAPTE-OWNER-ST>RTE R> ;
 
-: _RTAPTE-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots engine -- status )
+: _RTAPTE-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots path-points engine -- status )
     RTAPT-OWNER-RESIZE _RTAPTE-STATUS>RTE ;
 
-\ RTE-QUOTA-SIZE and its field order are the engine's seven quota cells.
+\ RTE-QUOTA-SIZE and its field order are the engine's eight quota cells.
 : _RTAPTE-OWNER-QUOTAS@  ( quotas owner generation engine -- status )
     RTAPT-OWNER-QUOTAS@ _RTAPTE-STATUS>RTE ;
 
@@ -822,7 +824,7 @@ VARIABLE _RTAPTE-I-FACADE
     RTE-STATIC-STATUS-FIELD RTAPT-STATIC-STATUS-FIELD <> OR
     RTE-HYBRID-ADMISSION-SIZE RTAPT-HYBRID-ADMISSION-SIZE <> OR
     _RTAPTE-HYBRID-LAYOUT? 0= OR
-    RTE-QUOTA-SIZE 56 <> OR IF
+    RTE-QUOTA-SIZE 64 <> OR IF
         RTE-S-INVALID EXIT
     THEN
     _RTAPTE-I-FACADE @ RTE-FACADE-SIZE _RTE-SPAN? 0= IF

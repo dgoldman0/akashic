@@ -60,7 +60,7 @@ REQUIRE dlg1.f
 
 \ One owner quota set: what an owner holds, asks for, or a candidate needs.
 \ The order matches RTE-OWNER-OPEN's quota arguments.
-56 CONSTANT RTE-QUOTA-SIZE
+64 CONSTANT RTE-QUOTA-SIZE
 : RTE-Q.REGIONS        ( q -- a )       ;
 : RTE-Q.RESOURCES      ( q -- a )   8 + ;
 : RTE-Q.OBJECTS        ( q -- a )  16 + ;
@@ -68,6 +68,7 @@ REQUIRE dlg1.f
 : RTE-Q.RESOURCE-BYTES ( q -- a )  32 + ;
 : RTE-Q.UTF8-BYTES     ( q -- a )  40 + ;
 : RTE-Q.SAMPLE-SLOTS   ( q -- a )  48 + ;
+: RTE-Q.PATH-POINTS    ( q -- a )  56 + ;
 
 \ Neutral retained feature families.  These are Akashic capability bits, not
 \ provider-specific values.  CORE is required; SERIES depends on INSTRUMENT,
@@ -126,8 +127,11 @@ REQUIRE dlg1.f
 : _RTE-L.MIN-INTERVAL-US ( l -- a ) 152 + ;
 : _RTE-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;
 : _RTE-L.IMAGE-FORMATS   ( l -- a ) 168 + ;
+\ The terminal's budget for the points of every owner's lines, from which
+\ an owner reserves its PATH-POINTS quota; PATH-POINTS above bounds one line.
+: _RTE-L.TOTAL-PATH-POINTS ( l -- a ) 176 + ;
 
-176 CONSTANT RTE-LIMITS-SIZE
+184 CONSTANT RTE-LIMITS-SIZE
 
 : RTE-LIMITS-BYTES  ( -- bytes )  RTE-LIMITS-SIZE ;
 
@@ -154,6 +158,7 @@ REQUIRE dlg1.f
 : RTE-LIMITS-OUTBOUND-PAYLOAD@ ( l -- u )
     _RTE-L.OUTBOUND-PAYLOAD @ ;
 : RTE-LIMITS-IMAGE-FORMATS@   ( l -- u )  _RTE-L.IMAGE-FORMATS @ ;
+: RTE-LIMITS-TOTAL-PATH-POINTS@ ( l -- u )  _RTE-L.TOTAL-PATH-POINTS @ ;
 
 \ RTE-LIMITS-PICTURE? ( format limits -- flag )
 \   The terminal takes pictures in FORMAT, one of RTE-PICTURE-.
@@ -2564,6 +2569,12 @@ VARIABLE _RTE-LV-FEATURES
     _RTE-LV-FEATURES @ RTE-F-VECTOR AND 0<> _RTE-POSITIVE-EXACT? 0= IF
         0 EXIT
     THEN
+    _RTE-LV-L @ _RTE-L.TOTAL-PATH-POINTS @
+    _RTE-LV-FEATURES @ RTE-F-VECTOR AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.PATH-POINTS @
+    _RTE-LV-L @ _RTE-L.TOTAL-PATH-POINTS @ U> IF 0 EXIT THEN
     _RTE-LV-L @ _RTE-L.GLYPH-RUN-BYTES @ ?DUP IF
         _RTE-LV-L @ _RTE-L.OBJECTS @ 0= IF DROP 0 EXIT THEN
         DUP _RTE-LV-L @ _RTE-L.UTF8-BYTES @ U> IF DROP 0 EXIT THEN
@@ -3466,8 +3477,8 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     THEN
     R> DROP ;
 
-: RTE-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots facade -- status )
-    DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
+: RTE-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots path-points facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-OPEN-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
@@ -3477,8 +3488,8 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
 \ pictures use.  The owner is RESIZING until the terminal answers, then OPEN
 \ with the new set if it said yes and the old one if it had no room;
 \ RTE-OWNER-QUOTAS@ tells which.
-: RTE-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots facade -- status )
-    DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
+: RTE-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots path-points facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-RESIZE-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 

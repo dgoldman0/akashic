@@ -104,270 +104,270 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.GLYPH-COUNT    ( p -- a )  448 + ;
 : _RTHP.PHYSICAL-GEN   ( p -- a )  456 + ;
 : _RTHP.LIMITS         ( p -- a )  464 + ;
-: _RTHP.RUCP-Q         ( p -- a )  640 + ;
-: _RTHP.RUCL-Q         ( p -- a )  920 + ;
-: _RTHP.RGRP-Q         ( p -- a ) 1032 + ;
-: _RTHP.CONTROL-PLAN   ( p -- a ) 1312 + ;
-: _RTHP.GLYPH-PLAN     ( p -- a ) 1456 + ;
-: _RTHP.HYBRID         ( p -- a ) 1600 + ;
-: _RTHP.ADMISSION      ( p -- a ) 1768 + ;
-: _RTHP.RUN            ( p -- a ) 2240 + ;
-: _RTHP.TARGET0-A      ( p -- a ) 2392 + ;
-: _RTHP.TARGET1-A      ( p -- a ) 2400 + ;
-: _RTHP.TARGET-ACTIVE  ( p -- a ) 2408 + ;
-: _RTHP.TARGET-PENDING ( p -- a ) 2416 + ;
-: _RTHP.NEXT-REGION    ( p -- a ) 2424 + ;
-: _RTHP.NEXT-OBJECT    ( p -- a ) 2432 + ;
-: _RTHP.ACTIVE-DRAW    ( p -- a ) 2440 + ;
-: _RTHP.MAX-DOCUMENTS  ( p -- a ) 2448 + ;
-: _RTHP.SOURCE-DIR-A   ( p -- a ) 2456 + ;
-: _RTHP.SOURCE-DIR-U   ( p -- a ) 2464 + ;
-: _RTHP.SOURCE-DIR-USED ( p -- a ) 2472 + ;
-: _RTHP.DOCUMENT-COUNT ( p -- a ) 2480 + ;
+: _RTHP.RUCP-Q         ( p -- a )  648 + ;
+: _RTHP.RUCL-Q         ( p -- a )  928 + ;
+: _RTHP.RGRP-Q         ( p -- a ) 1040 + ;
+: _RTHP.CONTROL-PLAN   ( p -- a ) 1320 + ;
+: _RTHP.GLYPH-PLAN     ( p -- a ) 1464 + ;
+: _RTHP.HYBRID         ( p -- a ) 1608 + ;
+: _RTHP.ADMISSION      ( p -- a ) 1776 + ;
+: _RTHP.RUN            ( p -- a ) 2248 + ;
+: _RTHP.TARGET0-A      ( p -- a ) 2400 + ;
+: _RTHP.TARGET1-A      ( p -- a ) 2408 + ;
+: _RTHP.TARGET-ACTIVE  ( p -- a ) 2416 + ;
+: _RTHP.TARGET-PENDING ( p -- a ) 2424 + ;
+: _RTHP.NEXT-REGION    ( p -- a ) 2432 + ;
+: _RTHP.NEXT-OBJECT    ( p -- a ) 2440 + ;
+: _RTHP.ACTIVE-DRAW    ( p -- a ) 2448 + ;
+: _RTHP.MAX-DOCUMENTS  ( p -- a ) 2456 + ;
+: _RTHP.SOURCE-DIR-A   ( p -- a ) 2464 + ;
+: _RTHP.SOURCE-DIR-U   ( p -- a ) 2472 + ;
+: _RTHP.SOURCE-DIR-USED ( p -- a ) 2480 + ;
+: _RTHP.DOCUMENT-COUNT ( p -- a ) 2488 + ;
 \ After a candidate's glyphs are built, ROW-DAMAGE names the rows they
 \ rebuilt; every other row was copied from the acknowledged target.
-: _RTHP.ROW-DAMAGE-A   ( p -- a ) 2488 + ;
-: _RTHP.ROW-DAMAGE-U   ( p -- a ) 2496 + ;
-: _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2504 + ;
-: _RTHP.GLYPH-ID-MAP-U ( p -- a ) 2512 + ;
-: _RTHP.DELTA-PLAN-VALID ( p -- a ) 2520 + ;
-: _RTHP.DELTA-PLAN-ACTIVE ( p -- a ) 2528 + ;
-: _RTHP.DELTA-PLAN-PENDING ( p -- a ) 2536 + ;
-: _RTHP.DELTA-PLAN-ACTIVE-DRAW ( p -- a ) 2544 + ;
-: _RTHP.DELTA-PLAN-PENDING-DRAW ( p -- a ) 2552 + ;
-: _RTHP.DELTA-PLAN-CONTROLS ( p -- a ) 2560 + ;
-: _RTHP.DELTA-PLAN-GLYPHS ( p -- a ) 2568 + ;
-: _RTHP.DELTA-PLAN-ATTEMPT ( p -- a ) 2576 + ;
-: _RTHP.DELTA-PLAN-SOURCE-GEN ( p -- a ) 2584 + ;
-: _RTHP.DELTA-PLAN-PENDING-CONTENT ( p -- a ) 2592 + ;
-: _RTHP.DELTA-PLAN-ACTIVE-CONTENT ( p -- a ) 2600 + ;
-: _RTHP.SOURCE-CONTENT-EPOCH ( p -- a ) 2608 + ;
-: _RTHP.MAX-COLLECTION-NATIVE ( p -- a ) 2616 + ;
-: _RTHP.MAX-COLLECTIONS ( p -- a ) 2624 + ;
-: _RTHP.MAX-CONTROLS   ( p -- a ) 2632 + ;
-: _RTHP.SOURCE-MENU-TEXT-USED ( p -- a ) 2640 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-A ( p -- a ) 2648 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-U ( p -- a ) 2656 + ;
-: _RTHP.COLLECTION-DESCRIPTORS-USED ( p -- a ) 2664 + ;
-: _RTHP.COLLECTION-NATIVE-A ( p -- a ) 2672 + ;
-: _RTHP.COLLECTION-NATIVE-U ( p -- a ) 2680 + ;
-: _RTHP.COLLECTION-NATIVE-USED ( p -- a ) 2688 + ;
-: _RTHP.SOURCE-COLLECTION-COUNT ( p -- a ) 2696 + ;
-: _RTHP.MENU-CONTROL-COUNT ( p -- a ) 2704 + ;
-: _RTHP.COLLECTION-COUNT ( p -- a ) 2712 + ;
-: _RTHP.COLLECTION-ITEMS ( p -- a ) 2720 + ;
-: _RTHP.COLLECTION-UTF8 ( p -- a ) 2728 + ;
-: _RTHP.MAX-COLLECTION-DESCRIPTORS ( p -- a ) 2736 + ;
-: _RTHP.RUIP-Q         ( p -- a ) 2744 + ; \ 368 bytes
-: _RTHP.INSTRUMENT-PLAN ( p -- a ) 3112 + ; \ 72 bytes
-: _RTHP.MAX-DGRAPH-NATIVE ( p -- a ) 3184 + ;
-: _RTHP.MAX-DGRAPH-DESCRIPTORS ( p -- a ) 3192 + ;
-: _RTHP.MAX-INSTRUMENT-REGIONS ( p -- a ) 3200 + ;
-: _RTHP.MAX-INSTRUMENTS ( p -- a ) 3208 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-A ( p -- a ) 3216 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-U ( p -- a ) 3224 + ;
-: _RTHP.DGRAPH-DESCRIPTORS-USED ( p -- a ) 3232 + ;
-: _RTHP.DGRAPH-NATIVE-A ( p -- a ) 3240 + ;
-: _RTHP.DGRAPH-NATIVE-U ( p -- a ) 3248 + ;
-: _RTHP.DGRAPH-NATIVE-USED ( p -- a ) 3256 + ;
-: _RTHP.SOURCE-DGRAPH-COUNT ( p -- a ) 3264 + ;
-: _RTHP.INSTRUMENT-REGIONS-A ( p -- a ) 3272 + ;
-: _RTHP.INSTRUMENT-REGIONS-U ( p -- a ) 3280 + ;
-: _RTHP.INSTRUMENTS-A ( p -- a ) 3288 + ;
-: _RTHP.INSTRUMENTS-U ( p -- a ) 3296 + ;
-: _RTHP.INSTRUMENT-UNITS-A ( p -- a ) 3304 + ;
-: _RTHP.INSTRUMENT-UNITS-U ( p -- a ) 3312 + ;
-: _RTHP.INSTRUMENT-UNITS-USED ( p -- a ) 3320 + ;
-: _RTHP.INSTRUMENT-CORR-A ( p -- a ) 3328 + ;
-: _RTHP.INSTRUMENT-CORR-U ( p -- a ) 3336 + ;
-: _RTHP.INSTRUMENT-REGION-COUNT ( p -- a ) 3344 + ;
-: _RTHP.INSTRUMENT-COUNT ( p -- a ) 3352 + ;
-: _RTHP.INSTRUMENT-LAST-REGION ( p -- a ) 3360 + ;
-: _RTHP.INSTRUMENT-LAST ( p -- a ) 3368 + ;
-: _RTHP.INSTRUMENT-CLAIM-COUNT ( p -- a ) 3376 + ;
-: _RTHP.BASE-CLAIMS-USED ( p -- a ) 3384 + ;
-: _RTHP.MENU-CLAIMS     ( p -- a ) 3392 + ;
-: _RTHP.ACTIVE-FACTS   ( p -- a ) 3400 + ; \ 48 bytes
-: _RTHP.PENDING-FACTS  ( p -- a ) 3448 + ; \ 48 bytes
-: _RTHP.FACTS-INDEX0-A ( p -- a ) 3496 + ;
-: _RTHP.FACTS-INDEX1-A ( p -- a ) 3504 + ;
-: _RTHP.FACTS-INDEX-U  ( p -- a ) 3512 + ;
+: _RTHP.ROW-DAMAGE-A   ( p -- a ) 2496 + ;
+: _RTHP.ROW-DAMAGE-U   ( p -- a ) 2504 + ;
+: _RTHP.GLYPH-ID-MAP-A ( p -- a ) 2512 + ;
+: _RTHP.GLYPH-ID-MAP-U ( p -- a ) 2520 + ;
+: _RTHP.DELTA-PLAN-VALID ( p -- a ) 2528 + ;
+: _RTHP.DELTA-PLAN-ACTIVE ( p -- a ) 2536 + ;
+: _RTHP.DELTA-PLAN-PENDING ( p -- a ) 2544 + ;
+: _RTHP.DELTA-PLAN-ACTIVE-DRAW ( p -- a ) 2552 + ;
+: _RTHP.DELTA-PLAN-PENDING-DRAW ( p -- a ) 2560 + ;
+: _RTHP.DELTA-PLAN-CONTROLS ( p -- a ) 2568 + ;
+: _RTHP.DELTA-PLAN-GLYPHS ( p -- a ) 2576 + ;
+: _RTHP.DELTA-PLAN-ATTEMPT ( p -- a ) 2584 + ;
+: _RTHP.DELTA-PLAN-SOURCE-GEN ( p -- a ) 2592 + ;
+: _RTHP.DELTA-PLAN-PENDING-CONTENT ( p -- a ) 2600 + ;
+: _RTHP.DELTA-PLAN-ACTIVE-CONTENT ( p -- a ) 2608 + ;
+: _RTHP.SOURCE-CONTENT-EPOCH ( p -- a ) 2616 + ;
+: _RTHP.MAX-COLLECTION-NATIVE ( p -- a ) 2624 + ;
+: _RTHP.MAX-COLLECTIONS ( p -- a ) 2632 + ;
+: _RTHP.MAX-CONTROLS   ( p -- a ) 2640 + ;
+: _RTHP.SOURCE-MENU-TEXT-USED ( p -- a ) 2648 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-A ( p -- a ) 2656 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-U ( p -- a ) 2664 + ;
+: _RTHP.COLLECTION-DESCRIPTORS-USED ( p -- a ) 2672 + ;
+: _RTHP.COLLECTION-NATIVE-A ( p -- a ) 2680 + ;
+: _RTHP.COLLECTION-NATIVE-U ( p -- a ) 2688 + ;
+: _RTHP.COLLECTION-NATIVE-USED ( p -- a ) 2696 + ;
+: _RTHP.SOURCE-COLLECTION-COUNT ( p -- a ) 2704 + ;
+: _RTHP.MENU-CONTROL-COUNT ( p -- a ) 2712 + ;
+: _RTHP.COLLECTION-COUNT ( p -- a ) 2720 + ;
+: _RTHP.COLLECTION-ITEMS ( p -- a ) 2728 + ;
+: _RTHP.COLLECTION-UTF8 ( p -- a ) 2736 + ;
+: _RTHP.MAX-COLLECTION-DESCRIPTORS ( p -- a ) 2744 + ;
+: _RTHP.RUIP-Q         ( p -- a ) 2752 + ; \ 368 bytes
+: _RTHP.INSTRUMENT-PLAN ( p -- a ) 3120 + ; \ 72 bytes
+: _RTHP.MAX-DGRAPH-NATIVE ( p -- a ) 3192 + ;
+: _RTHP.MAX-DGRAPH-DESCRIPTORS ( p -- a ) 3200 + ;
+: _RTHP.MAX-INSTRUMENT-REGIONS ( p -- a ) 3208 + ;
+: _RTHP.MAX-INSTRUMENTS ( p -- a ) 3216 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-A ( p -- a ) 3224 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-U ( p -- a ) 3232 + ;
+: _RTHP.DGRAPH-DESCRIPTORS-USED ( p -- a ) 3240 + ;
+: _RTHP.DGRAPH-NATIVE-A ( p -- a ) 3248 + ;
+: _RTHP.DGRAPH-NATIVE-U ( p -- a ) 3256 + ;
+: _RTHP.DGRAPH-NATIVE-USED ( p -- a ) 3264 + ;
+: _RTHP.SOURCE-DGRAPH-COUNT ( p -- a ) 3272 + ;
+: _RTHP.INSTRUMENT-REGIONS-A ( p -- a ) 3280 + ;
+: _RTHP.INSTRUMENT-REGIONS-U ( p -- a ) 3288 + ;
+: _RTHP.INSTRUMENTS-A ( p -- a ) 3296 + ;
+: _RTHP.INSTRUMENTS-U ( p -- a ) 3304 + ;
+: _RTHP.INSTRUMENT-UNITS-A ( p -- a ) 3312 + ;
+: _RTHP.INSTRUMENT-UNITS-U ( p -- a ) 3320 + ;
+: _RTHP.INSTRUMENT-UNITS-USED ( p -- a ) 3328 + ;
+: _RTHP.INSTRUMENT-CORR-A ( p -- a ) 3336 + ;
+: _RTHP.INSTRUMENT-CORR-U ( p -- a ) 3344 + ;
+: _RTHP.INSTRUMENT-REGION-COUNT ( p -- a ) 3352 + ;
+: _RTHP.INSTRUMENT-COUNT ( p -- a ) 3360 + ;
+: _RTHP.INSTRUMENT-LAST-REGION ( p -- a ) 3368 + ;
+: _RTHP.INSTRUMENT-LAST ( p -- a ) 3376 + ;
+: _RTHP.INSTRUMENT-CLAIM-COUNT ( p -- a ) 3384 + ;
+: _RTHP.BASE-CLAIMS-USED ( p -- a ) 3392 + ;
+: _RTHP.MENU-CLAIMS     ( p -- a ) 3400 + ;
+: _RTHP.ACTIVE-FACTS   ( p -- a ) 3408 + ; \ 48 bytes
+: _RTHP.PENDING-FACTS  ( p -- a ) 3456 + ; \ 48 bytes
+: _RTHP.FACTS-INDEX0-A ( p -- a ) 3504 + ;
+: _RTHP.FACTS-INDEX1-A ( p -- a ) 3512 + ;
+: _RTHP.FACTS-INDEX-U  ( p -- a ) 3520 + ;
 \ The completed draw last found unable to be shown rich; it is not built
 \ again, and a newer completed draw is tried.
-: _RTHP.REFUSED-DRAW   ( p -- a ) 3520 + ;
+: _RTHP.REFUSED-DRAW   ( p -- a ) 3528 + ;
 
-: _RTHP.MAX-STATUS-NATIVE        ( p -- a ) 3528 + ;
-: _RTHP.MAX-STATICS              ( p -- a ) 3536 + ;
-: _RTHP.STATUS-DESCRIPTORS-A     ( p -- a ) 3544 + ;
-: _RTHP.STATUS-DESCRIPTORS-U     ( p -- a ) 3552 + ;
-: _RTHP.STATUS-DESCRIPTORS-USED  ( p -- a ) 3560 + ;
-: _RTHP.STATUS-NATIVE-A          ( p -- a ) 3568 + ;
-: _RTHP.STATUS-NATIVE-U          ( p -- a ) 3576 + ;
-: _RTHP.STATUS-NATIVE-USED       ( p -- a ) 3584 + ;
-: _RTHP.STATICS-A                ( p -- a ) 3592 + ;
-: _RTHP.STATICS-U                ( p -- a ) 3600 + ;
-: _RTHP.STATIC-TEXT-A            ( p -- a ) 3608 + ;
-: _RTHP.STATIC-TEXT-U            ( p -- a ) 3616 + ;
-: _RTHP.STATIC-TEXT-USED         ( p -- a ) 3624 + ;
-: _RTHP.STATIC-CORR-A            ( p -- a ) 3632 + ;
-: _RTHP.STATIC-CORR-U            ( p -- a ) 3640 + ;
-: _RTHP.STATIC-COUNT             ( p -- a ) 3648 + ;
-: _RTHP.STATIC-LAST              ( p -- a ) 3656 + ;
-: _RTHP.STATIC-BASE-CLAIMS       ( p -- a ) 3664 + ;
-: _RTHP.STATIC-PLAN ( p -- a ) 3672 + ; \ 144 bytes
+: _RTHP.MAX-STATUS-NATIVE        ( p -- a ) 3536 + ;
+: _RTHP.MAX-STATICS              ( p -- a ) 3544 + ;
+: _RTHP.STATUS-DESCRIPTORS-A     ( p -- a ) 3552 + ;
+: _RTHP.STATUS-DESCRIPTORS-U     ( p -- a ) 3560 + ;
+: _RTHP.STATUS-DESCRIPTORS-USED  ( p -- a ) 3568 + ;
+: _RTHP.STATUS-NATIVE-A          ( p -- a ) 3576 + ;
+: _RTHP.STATUS-NATIVE-U          ( p -- a ) 3584 + ;
+: _RTHP.STATUS-NATIVE-USED       ( p -- a ) 3592 + ;
+: _RTHP.STATICS-A                ( p -- a ) 3600 + ;
+: _RTHP.STATICS-U                ( p -- a ) 3608 + ;
+: _RTHP.STATIC-TEXT-A            ( p -- a ) 3616 + ;
+: _RTHP.STATIC-TEXT-U            ( p -- a ) 3624 + ;
+: _RTHP.STATIC-TEXT-USED         ( p -- a ) 3632 + ;
+: _RTHP.STATIC-CORR-A            ( p -- a ) 3640 + ;
+: _RTHP.STATIC-CORR-U            ( p -- a ) 3648 + ;
+: _RTHP.STATIC-COUNT             ( p -- a ) 3656 + ;
+: _RTHP.STATIC-LAST              ( p -- a ) 3664 + ;
+: _RTHP.STATIC-BASE-CLAIMS       ( p -- a ) 3672 + ;
+: _RTHP.STATIC-PLAN ( p -- a ) 3680 + ; \ 144 bytes
 
-: _RTHP.MAX-FIELD-NATIVE         ( p -- a ) 3816 + ;
-: _RTHP.MAX-FIELDS               ( p -- a ) 3824 + ;
-: _RTHP.FIELD-DESCRIPTORS-A      ( p -- a ) 3832 + ;
-: _RTHP.FIELD-DESCRIPTORS-U      ( p -- a ) 3840 + ;
-: _RTHP.FIELD-DESCRIPTORS-USED   ( p -- a ) 3848 + ;
-: _RTHP.FIELD-NATIVE-A           ( p -- a ) 3856 + ;
-: _RTHP.FIELD-NATIVE-U           ( p -- a ) 3864 + ;
-: _RTHP.FIELD-NATIVE-USED        ( p -- a ) 3872 + ;
-: _RTHP.FIELD-COUNT              ( p -- a ) 3880 + ;
-: _RTHP.FIELD-ITEMS              ( p -- a ) 3888 + ;
-: _RTHP.FIELD-UTF8               ( p -- a ) 3896 + ;
-: _RTHP.FIELD-BASE-CONTROLS      ( p -- a ) 3904 + ;
-: _RTHP.FIELD-BASE-TEXT          ( p -- a ) 3912 + ;
-: _RTHP.FIELD-BASE-CLAIMS        ( p -- a ) 3920 + ;
-: _RTHP.FIELD-REFUSED            ( p -- a ) 3928 + ;
+: _RTHP.MAX-FIELD-NATIVE         ( p -- a ) 3824 + ;
+: _RTHP.MAX-FIELDS               ( p -- a ) 3832 + ;
+: _RTHP.FIELD-DESCRIPTORS-A      ( p -- a ) 3840 + ;
+: _RTHP.FIELD-DESCRIPTORS-U      ( p -- a ) 3848 + ;
+: _RTHP.FIELD-DESCRIPTORS-USED   ( p -- a ) 3856 + ;
+: _RTHP.FIELD-NATIVE-A           ( p -- a ) 3864 + ;
+: _RTHP.FIELD-NATIVE-U           ( p -- a ) 3872 + ;
+: _RTHP.FIELD-NATIVE-USED        ( p -- a ) 3880 + ;
+: _RTHP.FIELD-COUNT              ( p -- a ) 3888 + ;
+: _RTHP.FIELD-ITEMS              ( p -- a ) 3896 + ;
+: _RTHP.FIELD-UTF8               ( p -- a ) 3904 + ;
+: _RTHP.FIELD-BASE-CONTROLS      ( p -- a ) 3912 + ;
+: _RTHP.FIELD-BASE-TEXT          ( p -- a ) 3920 + ;
+: _RTHP.FIELD-BASE-CLAIMS        ( p -- a ) 3928 + ;
+: _RTHP.FIELD-REFUSED            ( p -- a ) 3936 + ;
 
 \ Independent SERIES namespace and immutable sample storage.
-: _RTHP.MAX-SERIES                ( p -- a ) 3936 + ;
-: _RTHP.SERIES-A                  ( p -- a ) 3944 + ;
-: _RTHP.SERIES-U                  ( p -- a ) 3952 + ;
-: _RTHP.SERIES-SAMPLES-A          ( p -- a ) 3960 + ;
-: _RTHP.SERIES-SAMPLES-U          ( p -- a ) 3968 + ;
-: _RTHP.SERIES-SAMPLES-USED       ( p -- a ) 3976 + ;
-: _RTHP.SERIES-CORR-A             ( p -- a ) 3984 + ;
-: _RTHP.SERIES-CORR-U             ( p -- a ) 3992 + ;
-: _RTHP.SERIES-COUNT              ( p -- a ) 4000 + ;
-: _RTHP.SERIES-LAST               ( p -- a ) 4008 + ;
-: _RTHP.SERIES-SLOTS              ( p -- a ) 4016 + ;
-: _RTHP.SERIES-CHUNKS             ( p -- a ) 4024 + ;
-: _RTHP.SERIES-HISTORY-MAX        ( p -- a ) 4032 + ;
-: _RTHP.SERIES-CHUNK-MAX          ( p -- a ) 4040 + ;
-: _RTHP.SERIES-CHUNK-BYTES-MAX    ( p -- a ) 4048 + ;
-: _RTHP.WAVEFORM-COUNT            ( p -- a ) 4056 + ;
-: _RTHP.FIRST-SERIES              ( p -- a ) 4064 + ;
-: _RTHP.NEXT-SERIES               ( p -- a ) 4072 + ;
-: _RTHP.OMITTED-GRAPHS-A          ( p -- a ) 4080 + ;
-: _RTHP.OMITTED-GRAPHS-U          ( p -- a ) 4088 + ;
-: _RTHP.OMITTED-GRAPHS-USED       ( p -- a ) 4096 + ;
-: _RTHP.SERIES-PLAN ( p -- a ) 4104 + ; \ 48 bytes
-: _RTHP.EXTENSION ( p -- a ) 4152 + ; \ optional caller-owned extension64
+: _RTHP.MAX-SERIES                ( p -- a ) 3944 + ;
+: _RTHP.SERIES-A                  ( p -- a ) 3952 + ;
+: _RTHP.SERIES-U                  ( p -- a ) 3960 + ;
+: _RTHP.SERIES-SAMPLES-A          ( p -- a ) 3968 + ;
+: _RTHP.SERIES-SAMPLES-U          ( p -- a ) 3976 + ;
+: _RTHP.SERIES-SAMPLES-USED       ( p -- a ) 3984 + ;
+: _RTHP.SERIES-CORR-A             ( p -- a ) 3992 + ;
+: _RTHP.SERIES-CORR-U             ( p -- a ) 4000 + ;
+: _RTHP.SERIES-COUNT              ( p -- a ) 4008 + ;
+: _RTHP.SERIES-LAST               ( p -- a ) 4016 + ;
+: _RTHP.SERIES-SLOTS              ( p -- a ) 4024 + ;
+: _RTHP.SERIES-CHUNKS             ( p -- a ) 4032 + ;
+: _RTHP.SERIES-HISTORY-MAX        ( p -- a ) 4040 + ;
+: _RTHP.SERIES-CHUNK-MAX          ( p -- a ) 4048 + ;
+: _RTHP.SERIES-CHUNK-BYTES-MAX    ( p -- a ) 4056 + ;
+: _RTHP.WAVEFORM-COUNT            ( p -- a ) 4064 + ;
+: _RTHP.FIRST-SERIES              ( p -- a ) 4072 + ;
+: _RTHP.NEXT-SERIES               ( p -- a ) 4080 + ;
+: _RTHP.OMITTED-GRAPHS-A          ( p -- a ) 4088 + ;
+: _RTHP.OMITTED-GRAPHS-U          ( p -- a ) 4096 + ;
+: _RTHP.OMITTED-GRAPHS-USED       ( p -- a ) 4104 + ;
+: _RTHP.SERIES-PLAN ( p -- a ) 4112 + ; \ 48 bytes
+: _RTHP.EXTENSION ( p -- a ) 4160 + ; \ optional caller-owned extension64
 \ True while an owner open this producer queued awaits the terminal's answer.
-: _RTHP.OPEN-QUEUED ( p -- a ) 4160 + ;
+: _RTHP.OPEN-QUEUED ( p -- a ) 4168 + ;
 \ Terminal space.  NEED is what the latest admitted or refused candidate
 \ needs, HELD what the owner holds, ASK what this producer asks the terminal
 \ for; each is one RTE-QUOTA-SIZE set.  ASK and NEED persist while a request
 \ for more space waits, and RESUME-PHASE is the phase to return to when the
 \ terminal answers.  A draw the terminal refused more space for is never
 \ asked for again.
-: _RTHP.RESUME-PHASE ( p -- a ) 4168 + ;
-: _RTHP.SPACE-REFUSED-DRAW ( p -- a ) 4176 + ;
-: _RTHP.NEED ( p -- a ) 4184 + ;
-: _RTHP.HELD ( p -- a ) 4240 + ;
-: _RTHP.ASK ( p -- a ) 4296 + ;
+: _RTHP.RESUME-PHASE ( p -- a ) 4176 + ;
+: _RTHP.SPACE-REFUSED-DRAW ( p -- a ) 4184 + ;
+: _RTHP.NEED ( p -- a ) 4192 + ;
+: _RTHP.HELD ( p -- a ) 4256 + ;
+: _RTHP.ASK ( p -- a ) 4320 + ;
 \ The fallback record read by RTHP-FALLBACK@: how many draws had a part
 \ stay CELL, the latest such draw, which parts, why, and the quotas it
 \ needed against those held (or bytes, when Desk's own memory refused).
-: _RTHP.FALLBACKS ( p -- a ) 4352 + ;
-: _RTHP.FALLBACK-DRAW ( p -- a ) 4360 + ;
-: _RTHP.FALLBACK-PARTS ( p -- a ) 4368 + ;
-: _RTHP.FALLBACK-REASON ( p -- a ) 4376 + ;
-: _RTHP.FALLBACK-ASKED ( p -- a ) 4384 + ;
-: _RTHP.FALLBACK-HELD ( p -- a ) 4440 + ;
-: _RTHP.FALLBACK-BYTES-ASKED ( p -- a ) 4496 + ;
-: _RTHP.FALLBACK-BYTES-HELD ( p -- a ) 4504 + ;
+: _RTHP.FALLBACKS ( p -- a ) 4384 + ;
+: _RTHP.FALLBACK-DRAW ( p -- a ) 4392 + ;
+: _RTHP.FALLBACK-PARTS ( p -- a ) 4400 + ;
+: _RTHP.FALLBACK-REASON ( p -- a ) 4408 + ;
+: _RTHP.FALLBACK-ASKED ( p -- a ) 4416 + ;
+: _RTHP.FALLBACK-HELD ( p -- a ) 4480 + ;
+: _RTHP.FALLBACK-BYTES-ASKED ( p -- a ) 4544 + ;
+: _RTHP.FALLBACK-BYTES-HELD ( p -- a ) 4552 + ;
 \ The memory source the arena grows into (0: the caller's fixed arena), and
 \ an earlier arena kept only while the frame on screen has its bank there.
-: _RTHP.MEMORY ( p -- a ) 4512 + ;
-: _RTHP.KEPT-ARENA-A ( p -- a ) 4520 + ;
-: _RTHP.KEPT-ARENA-U ( p -- a ) 4528 + ;
-: _RTHP.KEPT-BANK-A ( p -- a ) 4536 + ;
-: _RTHP.KEPT-BANK-U ( p -- a ) 4544 + ;
+: _RTHP.MEMORY ( p -- a ) 4560 + ;
+: _RTHP.KEPT-ARENA-A ( p -- a ) 4568 + ;
+: _RTHP.KEPT-ARENA-U ( p -- a ) 4576 + ;
+: _RTHP.KEPT-BANK-A ( p -- a ) 4584 + ;
+: _RTHP.KEPT-BANK-U ( p -- a ) 4592 + ;
 \ Pictures.  The arena's picture bank holds MAX-PICTURES descriptors, of
 \ which the latest capture described PICTURE-COUNT under PICTURE-ASK: the
 \ surface's pixels and the terminal's limits on one picture.
-: _RTHP.MAX-PICTURES ( p -- a ) 4552 + ;
-: _RTHP.PICTURES-A ( p -- a ) 4560 + ;
-: _RTHP.PICTURES-U ( p -- a ) 4568 + ;
-: _RTHP.PICTURE-COUNT ( p -- a ) 4576 + ;
-: _RTHP.PICTURE-ASK ( p -- a ) 4584 + ; \ UPICSN-ASK-SIZE bytes
+: _RTHP.MAX-PICTURES ( p -- a ) 4600 + ;
+: _RTHP.PICTURES-A ( p -- a ) 4608 + ;
+: _RTHP.PICTURES-U ( p -- a ) 4616 + ;
+: _RTHP.PICTURE-COUNT ( p -- a ) 4624 + ;
+: _RTHP.PICTURE-ASK ( p -- a ) 4632 + ; \ UPICSN-ASK-SIZE bytes
 \ The pictures the terminal holds for the owner: a table from the memory
 \ source with an entry for each resource the owner holds room for, and the
 \ next resource ID, above every one the owner generation has used.
-: _RTHP.RESOURCES-A ( p -- a ) 4656 + ;
-: _RTHP.RESOURCES-U ( p -- a ) 4664 + ;
-: _RTHP.NEXT-RESOURCE ( p -- a ) 4672 + ;
+: _RTHP.RESOURCES-A ( p -- a ) 4704 + ;
+: _RTHP.RESOURCES-U ( p -- a ) 4712 + ;
+: _RTHP.NEXT-RESOURCE ( p -- a ) 4720 + ;
 \ The one job the picture lane runs, as RTE-JOB-, the table entry it
 \ uploads or drops, and the block an upload reads each chunk into: from the
 \ memory source at its first chunk, the size of its largest, until it ends.
-: _RTHP.LANE-JOB ( p -- a ) 4680 + ;
-: _RTHP.LANE-ENTRY ( p -- a ) 4688 + ;
-: _RTHP.CHUNK-A ( p -- a ) 4696 + ;
-: _RTHP.CHUNK-U ( p -- a ) 4704 + ;
+: _RTHP.LANE-JOB ( p -- a ) 4728 + ;
+: _RTHP.LANE-ENTRY ( p -- a ) 4736 + ;
+: _RTHP.CHUNK-A ( p -- a ) 4744 + ;
+: _RTHP.CHUNK-U ( p -- a ) 4752 + ;
 \ Counts every change in what a frame can show of its pictures: a pixel
 \ size answered, or a picture newly held.  A frame built before is stale.
-: _RTHP.PICTURE-EPOCH ( p -- a ) 4712 + ;
+: _RTHP.PICTURE-EPOCH ( p -- a ) 4760 + ;
 \ The draw in which the lane last failed; it starts nothing more in it.
-: _RTHP.LANE-HOLD-DRAW ( p -- a ) 4720 + ;
+: _RTHP.LANE-HOLD-DRAW ( p -- a ) 4768 + ;
 \ Room for pictures.  LANE-REFUSED says why the terminal gave the lane no
 \ more room, as RTHP-WHY-, and is zero until it does.  The lane then asks
 \ for none until a build describes no picture, and each copy keeps within
 \ LANE-BUDGET bytes, the room the owner held and no picture used then;
 \ zero while no budget applies.  A picture that goes sets LANE-SHRINK
 \ until the room it held is given back.
-: _RTHP.LANE-REFUSED ( p -- a ) 4728 + ;
-: _RTHP.LANE-BUDGET ( p -- a ) 4736 + ;
-: _RTHP.LANE-SHRINK ( p -- a ) 4744 + ;
+: _RTHP.LANE-REFUSED ( p -- a ) 4776 + ;
+: _RTHP.LANE-BUDGET ( p -- a ) 4784 + ;
+: _RTHP.LANE-SHRINK ( p -- a ) 4792 + ;
 \ The lane's own request for room while the terminal decides: 1 for more,
 \ 2 to give some back.
-: _RTHP.LANE-RESIZE ( p -- a ) 4752 + ;
+: _RTHP.LANE-RESIZE ( p -- a ) 4800 + ;
 \ Nonzero once the lane failed to send a picture a build wanted, until it
 \ starts sending one or a build describes no picture.  The rich side then
 \ takes no picture, so CELL shows each one.
-: _RTHP.LANE-FAILED ( p -- a ) 4760 + ;
+: _RTHP.LANE-FAILED ( p -- a ) 4808 + ;
 \ The draw whose planes the visible runs of the glyph banks were planned
 \ from, with the candidate's claims; zero while they hold no such plan.
 \ An extension planning the same draw may take runs from them.
-: _RTHP.GLYPH-DRAW ( p -- a ) 4768 + ;
+: _RTHP.GLYPH-DRAW ( p -- a ) 4816 + ;
 \ The rest of what that plan was made from: a copy of the claims, the menu
 \ claims among them, the first object ID, the run text limit and the
 \ surface; and what it holds, its runs and text bytes.  A later build of
 \ the same draw from all of these would write the same runs.
-: _RTHP.GLYPH-CLAIMS-A ( p -- a ) 4776 + ;
-: _RTHP.GLYPH-CLAIMS-U ( p -- a ) 4784 + ;
-: _RTHP.GLYPH-CLAIMS-USED ( p -- a ) 4792 + ;
-: _RTHP.GLYPH-MENUS ( p -- a ) 4800 + ;
-: _RTHP.GLYPH-FIRST ( p -- a ) 4808 + ;
-: _RTHP.GLYPH-LIMIT ( p -- a ) 4816 + ;
-: _RTHP.GLYPH-COLS ( p -- a ) 4824 + ;
-: _RTHP.GLYPH-ROWS ( p -- a ) 4832 + ;
-: _RTHP.GLYPH-RUNS ( p -- a ) 4840 + ;
-: _RTHP.GLYPH-TEXT ( p -- a ) 4848 + ;
+: _RTHP.GLYPH-CLAIMS-A ( p -- a ) 4824 + ;
+: _RTHP.GLYPH-CLAIMS-U ( p -- a ) 4832 + ;
+: _RTHP.GLYPH-CLAIMS-USED ( p -- a ) 4840 + ;
+: _RTHP.GLYPH-MENUS ( p -- a ) 4848 + ;
+: _RTHP.GLYPH-FIRST ( p -- a ) 4856 + ;
+: _RTHP.GLYPH-LIMIT ( p -- a ) 4864 + ;
+: _RTHP.GLYPH-COLS ( p -- a ) 4872 + ;
+: _RTHP.GLYPH-ROWS ( p -- a ) 4880 + ;
+: _RTHP.GLYPH-RUNS ( p -- a ) 4888 + ;
+: _RTHP.GLYPH-TEXT ( p -- a ) 4896 + ;
 \ Dialogs.  A document shows at most one; a dialog lowers to a DIALOG and
 \ a BUTTON for each of its buttons, after the fields.  MAX-DIALOGS bounds
 \ the descriptors and MAX-DIALOG-CONTROLS the controls the native bank can
 \ hold: every dialog model holds its header and each button its record.
-: _RTHP.MAX-DIALOG-NATIVE        ( p -- a ) 4856 + ;
-: _RTHP.MAX-DIALOGS              ( p -- a ) 4864 + ;
-: _RTHP.MAX-DIALOG-CONTROLS      ( p -- a ) 4872 + ;
-: _RTHP.DIALOG-DESCRIPTORS-A     ( p -- a ) 4880 + ;
-: _RTHP.DIALOG-DESCRIPTORS-U     ( p -- a ) 4888 + ;
-: _RTHP.DIALOG-DESCRIPTORS-USED  ( p -- a ) 4896 + ;
-: _RTHP.DIALOG-NATIVE-A          ( p -- a ) 4904 + ;
-: _RTHP.DIALOG-NATIVE-U          ( p -- a ) 4912 + ;
-: _RTHP.DIALOG-NATIVE-USED       ( p -- a ) 4920 + ;
-: _RTHP.DIALOG-COUNT             ( p -- a ) 4928 + ;
-: _RTHP.DIALOG-CONTROLS          ( p -- a ) 4936 + ;
-: _RTHP.DIALOG-BASE-CONTROLS     ( p -- a ) 4944 + ;
-: _RTHP.DIALOG-BASE-TEXT         ( p -- a ) 4952 + ;
-: _RTHP.DIALOG-BASE-CLAIMS       ( p -- a ) 4960 + ;
-: _RTHP.DIALOG-REFUSED           ( p -- a ) 4968 + ;
-: _RTHP.DIALOG-UTF8              ( p -- a ) 4976 + ;
-4984 CONSTANT RTHP-SIZE
+: _RTHP.MAX-DIALOG-NATIVE        ( p -- a ) 4904 + ;
+: _RTHP.MAX-DIALOGS              ( p -- a ) 4912 + ;
+: _RTHP.MAX-DIALOG-CONTROLS      ( p -- a ) 4920 + ;
+: _RTHP.DIALOG-DESCRIPTORS-A     ( p -- a ) 4928 + ;
+: _RTHP.DIALOG-DESCRIPTORS-U     ( p -- a ) 4936 + ;
+: _RTHP.DIALOG-DESCRIPTORS-USED  ( p -- a ) 4944 + ;
+: _RTHP.DIALOG-NATIVE-A          ( p -- a ) 4952 + ;
+: _RTHP.DIALOG-NATIVE-U          ( p -- a ) 4960 + ;
+: _RTHP.DIALOG-NATIVE-USED       ( p -- a ) 4968 + ;
+: _RTHP.DIALOG-COUNT             ( p -- a ) 4976 + ;
+: _RTHP.DIALOG-CONTROLS          ( p -- a ) 4984 + ;
+: _RTHP.DIALOG-BASE-CONTROLS     ( p -- a ) 4992 + ;
+: _RTHP.DIALOG-BASE-TEXT         ( p -- a ) 5000 + ;
+: _RTHP.DIALOG-BASE-CLAIMS       ( p -- a ) 5008 + ;
+: _RTHP.DIALOG-REFUSED           ( p -- a ) 5016 + ;
+: _RTHP.DIALOG-UTF8              ( p -- a ) 5024 + ;
+5032 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -8301,6 +8301,7 @@ VARIABLE _RTHP-F-STATUS
         4 OF RTE-LIMITS-RESOURCE-BYTES@ ENDOF
         5 OF RTE-LIMITS-UTF8-BYTES@ ENDOF
         6 OF RTE-LIMITS-SAMPLE-SLOTS@ ENDOF
+        7 OF RTE-LIMITS-TOTAL-PATH-POINTS@ ENDOF
         NIP 0 SWAP
     ENDCASE ;
 
@@ -8318,21 +8319,21 @@ VARIABLE _RTHP-F-STATUS
     3 PICK _RTHP.FACADE @ RTE-OWNER-QUOTAS@ NIP RTE-S-OK = ;
 
 : _RTHP-NEED-BEYOND-LIMITS?  ( producer -- flag )
-    7 0 DO
+    8 0 DO
         I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP-Q-LIMIT U> IF
             DROP -1 UNLOOP EXIT
         THEN
     LOOP DROP 0 ;
 
 : _RTHP-NEED-BEYOND-HELD?  ( producer -- flag )
-    7 0 DO
+    8 0 DO
         I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ U> IF
             DROP -1 UNLOOP EXIT
         THEN
     LOOP DROP 0 ;
 
 : _RTHP-HELD-COVERS-ASK?  ( producer -- flag )
-    7 0 DO
+    8 0 DO
         I OVER _RTHP.HELD _RTHP-Q@ I 2 PICK _RTHP.ASK _RTHP-Q@ U< IF
             DROP 0 UNLOOP EXIT
         THEN
@@ -8344,7 +8345,7 @@ VARIABLE _RTHP-F-STATUS
 \ ASK for every quota the frame needs more of than is held: the need plus
 \ half again, within what the terminal offers.  Others stay as held.
 : _RTHP-ASK-GROWN  ( producer -- )
-    7 0 DO
+    8 0 DO
         I OVER _RTHP.NEED _RTHP-Q@ DUP
         I 3 PICK _RTHP.HELD _RTHP-Q@ U> IF
             DUP 1 RSHIFT + I 2 PICK _RTHP-Q-LIMIT _RTHP-UMIN
@@ -8356,7 +8357,7 @@ VARIABLE _RTHP-F-STATUS
 
 \ ASK for exactly what the frame needs, never less than is held.
 : _RTHP-ASK-EXACT  ( producer -- )
-    7 0 DO
+    8 0 DO
         I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ _RTHP-UMAX
         I 2 PICK _RTHP.ASK _RTHP-Q!
     LOOP DROP ;
@@ -8366,14 +8367,16 @@ VARIABLE _RTHP-F-STATUS
     0 R@ _RTHP.ASK _RTHP-Q@ 1 R@ _RTHP.ASK _RTHP-Q@
     2 R@ _RTHP.ASK _RTHP-Q@ 3 R@ _RTHP.ASK _RTHP-Q@
     4 R@ _RTHP.ASK _RTHP-Q@ 5 R@ _RTHP.ASK _RTHP-Q@
-    6 R@ _RTHP.ASK _RTHP-Q@ R> _RTHP.FACADE @ RTE-OWNER-OPEN ;
+    6 R@ _RTHP.ASK _RTHP-Q@ 7 R@ _RTHP.ASK _RTHP-Q@
+    R> _RTHP.FACADE @ RTE-OWNER-OPEN ;
 
 : _RTHP-RESIZE  ( producer -- rte-status )
     >R R@ _RTHP.OWNER @ R@ _RTHP.OWNER-GEN @
     0 R@ _RTHP.ASK _RTHP-Q@ 1 R@ _RTHP.ASK _RTHP-Q@
     2 R@ _RTHP.ASK _RTHP-Q@ 3 R@ _RTHP.ASK _RTHP-Q@
     4 R@ _RTHP.ASK _RTHP-Q@ 5 R@ _RTHP.ASK _RTHP-Q@
-    6 R@ _RTHP.ASK _RTHP-Q@ R> _RTHP.FACADE @ RTE-OWNER-RESIZE ;
+    6 R@ _RTHP.ASK _RTHP-Q@ 7 R@ _RTHP.ASK _RTHP-Q@
+    R> _RTHP.FACADE @ RTE-OWNER-RESIZE ;
 
 \ Before an owner opens: what the admitted first frame needs, with room to
 \ grow, within what the terminal offers.
@@ -8384,7 +8387,7 @@ VARIABLE _RTHP-F-STATUS
 
 \ ASK was exactly the need: nothing beyond it and nothing below what is held.
 : _RTHP-ASK-WAS-EXACT?  ( producer -- flag )
-    7 0 DO
+    8 0 DO
         I OVER _RTHP.NEED _RTHP-Q@ I 2 PICK _RTHP.HELD _RTHP-Q@ _RTHP-UMAX
         I 2 PICK _RTHP.ASK _RTHP-Q@ <> IF DROP 0 UNLOOP EXIT THEN
     LOOP DROP -1 ;

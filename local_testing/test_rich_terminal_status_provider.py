@@ -42,7 +42,7 @@ class ProviderHarness(cf._FeedHarness):
         )):
             self.attach()
         self.serial = 0
-        assert self.call("RTAPT-OWNER-OPEN", 1, 1, 2, 0, 4, 0, 0, 128, 0, self.engine)[0] == (0,)
+        assert self.call("RTAPT-OWNER-OPEN", 1, 1, 2, 0, 4, 0, 0, 128, 0, 0, self.engine)[0] == (0,)
         self.settle()
         assert self.call("RTAPT-OWNER-STATE@", 1, 1, self.engine)[0][0] == self.constant("RTAPT-OWNER-ST-OPEN")
         self.facade = self.allocate(bytes(self.constant("RTE-FACADE-SIZE")))

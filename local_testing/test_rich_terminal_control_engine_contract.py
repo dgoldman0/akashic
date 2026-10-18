@@ -53,12 +53,12 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "128 CONSTANT RTAPT-F-CONTROL-COLLECTIONS",
         "0x100 CONSTANT _RTAPT-PT-F-CONTROLS",
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
-        "176 CONSTANT RTAPT-LIMITS-SIZE",
+        "184 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "632 CONSTANT RTAPT-OWNER-SIZE",
+        "680 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
-        "720 CONSTANT RTAPT-ENGINE-SIZE",
+        "728 CONSTANT RTAPT-ENGINE-SIZE",
         ": _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;",
         ": _RTAPT-O.ACTIVE-CONTROLS ( o -- a ) 208 + ;",
         ": _RTAPT-O.HIDDEN-CONTROLS ( o -- a ) 216 + ;",
@@ -92,10 +92,10 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
         ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
         ": _RTAPT-E.LIMITS     ( e -- a ) 336 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 512 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 520 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 528 + ;",
-        ": _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 536 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 520 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 528 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 536 + ;",
+        ": _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 544 + ;",
     ):
         assert declaration in source
 
@@ -603,7 +603,7 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert _constant(source, "RTE-F-CONTROL-DOCUMENTS") == 0x4000
     assert _constant(source, "RTE-F-DIALOGS") == 0x8000
     assert _constant(source, "_RTE-FEATURE-MASK") == 0xFFFF
-    assert _constant(source, "RTE-LIMITS-SIZE") == 176
+    assert _constant(source, "RTE-LIMITS-SIZE") == 184
     assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
 
     control_fields = {

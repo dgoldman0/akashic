@@ -70,7 +70,7 @@ class SeriesProvider(ProviderHarness):
         with patch.object(cf, "_retained_policy", return_value=policy):
             self.attach()
         if open_owner:
-            assert self.call("RTAPT-OWNER-OPEN", 1, 1, 2, 0, 4, 4, 0, 128, 32000,
+            assert self.call("RTAPT-OWNER-OPEN", 1, 1, 2, 0, 4, 4, 0, 128, 32000, 0,
                              self.engine)[0] == (0,)
             self.settle()
             assert self.call("RTAPT-OWNER-STATE@", 1, 1, self.engine)[0] == (

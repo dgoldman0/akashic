@@ -144,11 +144,12 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
         "_RTAPT-O.UTF8-BYTES @ _RTAPT-HAF-UTF8 @ U<",
         "_RTAPT-O.SERIES @ _RTAPT-HAF-SERIES-COUNT @ U<",
         "_RTAPT-O.SAMPLES @ _RTAPT-HAF-SERIES-SLOTS @ U<",
+        "_RTAPT-O.PATH-POINTS @ _RTAPT-HAF-PATH-POINTS @ U<",
     ):
         assert comparison in existing
     assert "RTAPT-OWNER-ST-OPEN <>" in existing
     assert "RTAPT-S-BUSY" in existing
-    assert existing.count("RTAPT-S-CAPACITY") == 5
+    assert existing.count("RTAPT-S-CAPACITY") == 6
     assert "RTAPT-S-OK" in existing
     for forbidden in (
         "_RTAPT-LPF-OWNER-ADMISSION",

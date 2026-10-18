@@ -95,7 +95,7 @@ class HiddenAckHarness(cf._FeedHarness):
             ("provider-family.f", "engine-apt1.f")) + STAGED + ACK_FIXTURE).encode(),
             source_name="real-shell-ack-fixture", step_budget=20_000_000)
         self.attach()
-        assert self.call("RTAPT-OWNER-OPEN", 88, 99, 16, 0, 128, 0, 0, 8192, 0, self.engine)[0] == (0,)
+        assert self.call("RTAPT-OWNER-OPEN", 88, 99, 16, 0, 128, 0, 0, 8192, 0, 0, self.engine)[0] == (0,)
         self.settle()
         self.call("_AK-INIT")
         self.p, self.s, self.facade = map(self.constant, ("_SX-P", "_SX-S", "_SX-F"))

@@ -109,7 +109,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         source, "RTE-VALID?"
     )
     assert "328 CONSTANT RTE-FACADE-SIZE" in code
-    assert "176 CONSTANT RTE-LIMITS-SIZE" in code
+    assert "184 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
     for callback in (
@@ -822,7 +822,7 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
     source = FACADE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
 
-    assert "176 CONSTANT RTE-LIMITS-SIZE" in source
+    assert "184 CONSTANT RTE-LIMITS-SIZE" in source
     expected_fields = {
         "FEATURES": 0,
         "OWNER-RECORDS": 8,
@@ -846,6 +846,7 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
         "MIN-INTERVAL-US": 152,
         "OUTBOUND-PAYLOAD": 160,
         "IMAGE-FORMATS": 168,
+        "TOTAL-PATH-POINTS": 176,
     }
     for field, offset in expected_fields.items():
         definition = _definition(source, f"_RTE-L.{field}")

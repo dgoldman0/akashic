@@ -46,7 +46,7 @@ class Bridge(ProviderHarness):
         # Replace the small inherited owner using real acknowledged lifecycle calls.
         assert self.call("RTE-OWNER-DROP", 1, 1, self.facade)[0] == (0,)
         self.settle()
-        assert self.call("RTE-OWNER-OPEN", 1, 2, 2, 0, 7, 1, 0, 128, 16000,
+        assert self.call("RTE-OWNER-OPEN", 1, 2, 2, 0, 7, 1, 0, 128, 16000, 0,
                          self.facade)[0] == (0,)
         self.settle()
         self.shell = self.allocate(bytes(56))

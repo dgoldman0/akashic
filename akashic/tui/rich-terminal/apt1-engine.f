@@ -173,8 +173,9 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : _RTAPT-L.MIN-INTERVAL-US ( l -- a ) 152 + ;
 : _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;
 : _RTAPT-L.IMAGE-FORMATS   ( l -- a ) 168 + ;
+: _RTAPT-L.TOTAL-PATH-POINTS ( l -- a ) 176 + ;
 
-176 CONSTANT RTAPT-LIMITS-SIZE
+184 CONSTANT RTAPT-LIMITS-SIZE
 
 : RTAPT-LIMITS-BYTES  ( -- bytes )  RTAPT-LIMITS-SIZE ;
 
@@ -454,16 +455,18 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 \ Per-target control UTF-8 totals make the durable identity ledger exactly
 \ reconcilable even though the older owner UTF-8 totals also include glyphs
 \ and instruments.  Seven cells hold the quota set an open owner has asked
-\ for while that request is queued or awaiting its answer.  The last three
+\ for while that request is queued or awaiting its answer.  The next three
 \ hold the owner-wide resource store: committed resources, their bytes, and
-\ the highest resource ID this generation has used.
-632 CONSTANT RTAPT-OWNER-SIZE
+\ the highest resource ID this generation has used.  The last six are the
+\ line points the owner holds and asks for, its active, hidden and pending
+\ usage of them, and their audit cell.
+680 CONSTANT RTAPT-OWNER-SIZE
 \ One durable control ledger entry accounts for one CONTROL identity in the
 \ active and/or hidden retained target.
 \ Capacity remains entirely caller-selected.
 64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE
 80 CONSTANT RTAPT-CONFIG-SIZE
-720 CONSTANT RTAPT-ENGINE-SIZE
+728 CONSTANT RTAPT-ENGINE-SIZE
 
 : RTAPT-CONFIG-BYTES  ( -- bytes )  RTAPT-CONFIG-SIZE ;
 : RTAPT-ENGINE-BYTES  ( -- bytes )  RTAPT-ENGINE-SIZE ;
@@ -801,9 +804,18 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 : _RTAPT-O.RES-COUNT ( o -- a ) 608 + ;
 : _RTAPT-O.RES-USED-BYTES ( o -- a ) 616 + ;
 : _RTAPT-O.RES-HIGH ( o -- a ) 624 + ;
+\ Line points: the quota held, the quota a RESIZE asks for, and the points
+\ of the POLYLINEs in each target, counted like series sample slots.
+: _RTAPT-O.PATH-POINTS ( o -- a ) 632 + ;
+: _RTAPT-O.ASK-PATH-POINTS ( o -- a ) 640 + ;
+: _RTAPT-O.ACTIVE-PATH-POINTS ( o -- a ) 648 + ;
+: _RTAPT-O.HIDDEN-PATH-POINTS ( o -- a ) 656 + ;
+: _RTAPT-O.PENDING-PATH-POINTS ( o -- a ) 664 + ;
+: _RTAPT-O.A-PATH-POINTS ( o -- a ) 672 + ;
 : _RTAPT-OWNER-AUDIT-CLEAR ( owner -- )
     DUP _RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL
-    _RTAPT-O.A-SERIES 24 0 FILL ;
+    DUP _RTAPT-O.A-SERIES 24 0 FILL
+    _RTAPT-O.A-PATH-POINTS OFF ;
 
 
 \ Captured operation records contain no borrowed caller pointer.  COPY-OFF is
@@ -937,15 +949,15 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 : _RTAPT-E.LAST-REVISION ( e -- a ) 248 + ;
 : _RTAPT-E.COMPLETION ( e -- a ) 256 + ;
 : _RTAPT-E.LIMITS     ( e -- a ) 336 + ;
-: _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 512 + ;
-: _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 520 + ;
-: _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 528 + ;
-: _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 536 + ;
+: _RTAPT-E.CONTROL-LEDGER-A ( e -- a ) 520 + ;
+: _RTAPT-E.CONTROL-LEDGER-U ( e -- a ) 528 + ;
+: _RTAPT-E.CONTROL-LEDGER-CAP ( e -- a ) 536 + ;
+: _RTAPT-E.CONTROL-LEDGER-USED ( e -- a ) 544 + ;
 \ The caller's memory source the operation, copy and control-ledger banks
 \ came from and grow into (0: fixed banks), and which of the three banks it
 \ owns (bits 1, 2 and 4), so they are given back when replaced.
-: _RTAPT-E.MEMORY ( e -- a ) 544 + ;
-: _RTAPT-E.MEMORY-OWNS ( e -- a ) 552 + ;
+: _RTAPT-E.MEMORY ( e -- a ) 552 + ;
+: _RTAPT-E.MEMORY-OWNS ( e -- a ) 560 + ;
 \ The one job.  RESOURCE is the resource an upload or drop names, or a
 \ pixel question's query ID.  A borrowed upload's bytes are JOB-A/JOB-U, in
 \ FORMAT, of a picture WIDTH by HEIGHT; a drop's JOB-U is the decoded size
@@ -955,29 +967,29 @@ _RTAPT-CL-KIND-MASK _RTAPT-CL-ACTIVE OR _RTAPT-CL-HIDDEN OR
 \ pixel question asks about the rectangle X Y COLS ROWS; once DONE, WIDTH
 \ and HEIGHT hold the pixels it covers and GEOMETRY the terminal's geometry
 \ generation.
-: _RTAPT-E.JOB-STATE ( e -- a ) 560 + ;
-: _RTAPT-E.JOB-KIND ( e -- a ) 568 + ;
-: _RTAPT-E.JOB-PHASE ( e -- a ) 576 + ;
-: _RTAPT-E.JOB-O ( e -- a ) 584 + ;
-: _RTAPT-E.JOB-RESOURCE ( e -- a ) 592 + ;
-: _RTAPT-E.JOB-WIDTH ( e -- a ) 600 + ;
-: _RTAPT-E.JOB-HEIGHT ( e -- a ) 608 + ;
-: _RTAPT-E.JOB-A ( e -- a ) 616 + ;
-: _RTAPT-E.JOB-U ( e -- a ) 624 + ;
-: _RTAPT-E.JOB-OFFSET ( e -- a ) 632 + ;
-: _RTAPT-E.JOB-CHUNK ( e -- a ) 640 + ;
-: _RTAPT-E.JOB-RESULT ( e -- a ) 648 + ;
-: _RTAPT-E.JOB-WIRE ( e -- a ) 656 + ;
-: _RTAPT-E.JOB-FORMAT ( e -- a ) 664 + ;
-: _RTAPT-E.JOB-X ( e -- a ) 672 + ;
-: _RTAPT-E.JOB-Y ( e -- a ) 680 + ;
-: _RTAPT-E.JOB-COLS ( e -- a ) 688 + ;
-: _RTAPT-E.JOB-ROWS ( e -- a ) 696 + ;
-: _RTAPT-E.JOB-GEOMETRY ( e -- a ) 704 + ;
+: _RTAPT-E.JOB-STATE ( e -- a ) 568 + ;
+: _RTAPT-E.JOB-KIND ( e -- a ) 576 + ;
+: _RTAPT-E.JOB-PHASE ( e -- a ) 584 + ;
+: _RTAPT-E.JOB-O ( e -- a ) 592 + ;
+: _RTAPT-E.JOB-RESOURCE ( e -- a ) 600 + ;
+: _RTAPT-E.JOB-WIDTH ( e -- a ) 608 + ;
+: _RTAPT-E.JOB-HEIGHT ( e -- a ) 616 + ;
+: _RTAPT-E.JOB-A ( e -- a ) 624 + ;
+: _RTAPT-E.JOB-U ( e -- a ) 632 + ;
+: _RTAPT-E.JOB-OFFSET ( e -- a ) 640 + ;
+: _RTAPT-E.JOB-CHUNK ( e -- a ) 648 + ;
+: _RTAPT-E.JOB-RESULT ( e -- a ) 656 + ;
+: _RTAPT-E.JOB-WIRE ( e -- a ) 664 + ;
+: _RTAPT-E.JOB-FORMAT ( e -- a ) 672 + ;
+: _RTAPT-E.JOB-X ( e -- a ) 680 + ;
+: _RTAPT-E.JOB-Y ( e -- a ) 688 + ;
+: _RTAPT-E.JOB-COLS ( e -- a ) 696 + ;
+: _RTAPT-E.JOB-ROWS ( e -- a ) 704 + ;
+: _RTAPT-E.JOB-GEOMETRY ( e -- a ) 712 + ;
 \ The job's cells, JOB-STATE through the end of JOB-GEOMETRY.
 152 CONSTANT _RTAPT-JOB-BYTES
 \ The last pixel query ID the engine chose; each question takes the next.
-: _RTAPT-E.PIXELS-QUERY ( e -- a ) 712 + ;
+: _RTAPT-E.PIXELS-QUERY ( e -- a ) 720 + ;
 
 0 CONSTANT _RTAPT-ACTIVE-NONE
 1 CONSTANT _RTAPT-ACTIVE-OWNER-OPEN
@@ -2471,6 +2483,22 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
         _RTAPT-ACTIVE-QUARANTINED = <> IF 0 EXIT THEN
     -1 ;
 
+\ A line's points count in the target that holds it, within the owner's
+\ path-point quota, as series sample slots do.
+: _RTAPT-OWNER-PATH-LEDGER? ( -- flag )
+    _RTAPT-LV-O @ _RTAPT-O.STATE @ RTAPT-OWNER-ST-FREE = IF
+        _RTAPT-LV-O @ _RTAPT-O.PATH-POINTS 48 _RTAPT-ZERO-SPAN? EXIT
+    THEN
+    _RTAPT-LV-O @ _RTAPT-O.ACTIVE-PATH-POINTS @
+    _RTAPT-LV-O @ _RTAPT-O.HIDDEN-PATH-POINTS @
+    _RTAPT-LV-O @ _RTAPT-O.PENDING-PATH-POINTS @
+    _RTAPT-LV-O @ _RTAPT-O.PATH-POINTS @ _RTAPT-LV-E @
+        _RTAPT-TARGET-COUNT? 0= IF 0 EXIT THEN
+    _RTAPT-LV-AUDIT @ IF
+        _RTAPT-LV-O @ _RTAPT-O.A-PATH-POINTS @
+        _RTAPT-LV-O @ _RTAPT-O.PENDING-PATH-POINTS @ <> IF 0 EXIT THEN
+    THEN -1 ;
+
 : _RTAPT-OWNER-SERIES-LEDGER? ( -- flag )
     _RTAPT-LV-O @ _RTAPT-O.STATE @ RTAPT-OWNER-ST-FREE = IF
         _RTAPT-LV-O @ _RTAPT-O.ACTIVE-SERIES 88 _RTAPT-ZERO-SPAN? EXIT
@@ -2529,7 +2557,11 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
     THEN
     DUP _RTAPT-O.STATE @ DUP RTAPT-OWNER-ST-RESIZE-QUEUED =
     SWAP RTAPT-OWNER-ST-RESIZING = OR 0= IF
+        DUP _RTAPT-O.ASK-PATH-POINTS @ IF DROP 0 EXIT THEN
         _RTAPT-O.ASK-REGIONS 56 _RTAPT-ZERO-SPAN? EXIT
+    THEN
+    DUP _RTAPT-O.ASK-PATH-POINTS @ OVER _RTAPT-O.PATH-POINTS @ U< IF
+        DROP 0 EXIT
     THEN
     7 0 DO
         DUP _RTAPT-O.ASK-REGIONS I 8 * + @
@@ -2786,6 +2818,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             THEN _RTAPT-LV-PENDING !
         THEN
         _RTAPT-OWNER-SERIES-LEDGER? 0= IF 0 UNLOOP EXIT THEN
+        _RTAPT-OWNER-PATH-LEDGER? 0= IF 0 UNLOOP EXIT THEN
         _RTAPT-LV-O @ _RTAPT-LV-E @
             _RTAPT-CONTROL-LEDGER-OWNER? 0= IF 0 UNLOOP EXIT THEN
         _RTAPT-LV-AUDIT @ IF
@@ -3214,6 +3247,8 @@ VARIABLE _RTAPT-QA-O
             RTAPT-OWNER-ST-QUARANTINED _RTAPT-QA-O @ _RTAPT-O.STATE !
             0 _RTAPT-QA-O @ _RTAPT-O.NEXT !
             _RTAPT-QA-O @ _RTAPT-O.ASK-REGIONS 56 0 FILL
+            _RTAPT-QA-O @ _RTAPT-O.ASK-PATH-POINTS OFF
+            _RTAPT-QA-O @ _RTAPT-O.PENDING-PATH-POINTS OFF
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-SERIES !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-SERIES-HIGH !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-SAMPLES !
@@ -3361,6 +3396,11 @@ VARIABLE _RTAPT-LV-FEATURES
     _RTAPT-LV-L @ _RTAPT-L.PATH-POINTS @
     _RTAPT-LV-FEATURES @ RTAPT-F-VECTOR AND 0<>
         _RTAPT-POSITIVE-EXACT? 0= IF 0 EXIT THEN
+    _RTAPT-LV-L @ _RTAPT-L.TOTAL-PATH-POINTS @
+    _RTAPT-LV-FEATURES @ RTAPT-F-VECTOR AND 0<>
+        _RTAPT-POSITIVE-EXACT? 0= IF 0 EXIT THEN
+    _RTAPT-LV-L @ _RTAPT-L.PATH-POINTS @
+    _RTAPT-LV-L @ _RTAPT-L.TOTAL-PATH-POINTS @ U> IF 0 EXIT THEN
     _RTAPT-LV-L @ _RTAPT-L.GLYPH-RUN-BYTES @ ?DUP IF
         _RTAPT-LV-L @ _RTAPT-L.OBJECTS @ 0= IF DROP 0 EXIT THEN
         DUP _RTAPT-LV-L @ _RTAPT-L.UTF8-BYTES @ U> IF DROP 0 EXIT THEN
@@ -3539,6 +3579,8 @@ VARIABLE _RTAPT-LS-FORMATS-U
     _RTAPT-LS-FORMATS-A @ 40 + _RTAPT-LE64@
         OVER _RTAPT-L.SAMPLE-SLOTS !
     _RTAPT-LS-FORMATS-A @ 36 + L@ OVER _RTAPT-L.MIN-INTERVAL-US !
+    _RTAPT-LS-FORMATS-A @ 56 + _RTAPT-LE64@
+        OVER _RTAPT-L.TOTAL-PATH-POINTS !
     _RTAPT-LS-E @ _RTAPT-E.SESSION @ PT-OUTBOUND-MAX-PAYLOAD@
         OVER _RTAPT-L.OUTBOUND-PAYLOAD ! ;
 
@@ -3693,11 +3735,12 @@ VARIABLE _RTAPT-OO-SQ
 VARIABLE _RTAPT-OO-RBQ
 VARIABLE _RTAPT-OO-UQ
 VARIABLE _RTAPT-OO-SLQ
+VARIABLE _RTAPT-OO-PPQ
 VARIABLE _RTAPT-OO-REUSED
 VARIABLE _RTAPT-OO-PRIOR-GEN
 
-: RTAPT-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-byte-q utf8-byte-q sample-slot-q engine -- status )
-    _RTAPT-OO-E ! _RTAPT-OO-SLQ ! _RTAPT-OO-UQ ! _RTAPT-OO-RBQ !
+: RTAPT-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-byte-q utf8-byte-q sample-slot-q path-point-q engine -- status )
+    _RTAPT-OO-E ! _RTAPT-OO-PPQ ! _RTAPT-OO-SLQ ! _RTAPT-OO-UQ ! _RTAPT-OO-RBQ !
     _RTAPT-OO-SQ ! _RTAPT-OO-OQ ! _RTAPT-OO-XQ ! _RTAPT-OO-RQ !
     _RTAPT-OO-GEN ! _RTAPT-OO-OWNER !
     _RTAPT-OO-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
@@ -3738,6 +3781,7 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.RES-BYTES !
     _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.UTF8-BYTES !
     _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES !
+    _RTAPT-OO-PPQ @ _RTAPT-OO-O @ _RTAPT-O.PATH-POINTS !
     _RTAPT-OO-PRIOR-GEN @ _RTAPT-OO-O @ _RTAPT-O.PRIOR-GENERATION !
     _RTAPT-OO-REUSED @ IF RTAPT-OWNER-ST-TOMBSTONE-OPEN-QUEUED
         ELSE RTAPT-OWNER-ST-OPEN-QUEUED THEN
@@ -3762,7 +3806,8 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     _RTAPT-OO-SQ @ _RTAPT-OO-O @ _RTAPT-O.SERIES @ U< OR
     _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.RES-USED-BYTES @ U< OR
     _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.UTF8-BYTES @ U< OR
-    _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES @ U< OR ;
+    _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES @ U< OR
+    _RTAPT-OO-PPQ @ _RTAPT-OO-O @ _RTAPT-O.PATH-POINTS @ U< OR ;
 
 : _RTAPT-OO-ASK=HELD?  ( -- flag )
     _RTAPT-OO-RQ @ _RTAPT-OO-O @ _RTAPT-O.REGIONS @ =
@@ -3771,10 +3816,11 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     _RTAPT-OO-SQ @ _RTAPT-OO-O @ _RTAPT-O.SERIES @ = AND
     _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.RES-BYTES @ = AND
     _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.UTF8-BYTES @ = AND
-    _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES @ = AND ;
+    _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.SAMPLES @ = AND
+    _RTAPT-OO-PPQ @ _RTAPT-OO-O @ _RTAPT-O.PATH-POINTS @ = AND ;
 
-: RTAPT-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-byte-q utf8-byte-q sample-slot-q engine -- status )
-    _RTAPT-OO-E ! _RTAPT-OO-SLQ ! _RTAPT-OO-UQ ! _RTAPT-OO-RBQ !
+: RTAPT-OWNER-RESIZE  ( owner generation region-q resource-q object-q series-q resource-byte-q utf8-byte-q sample-slot-q path-point-q engine -- status )
+    _RTAPT-OO-E ! _RTAPT-OO-PPQ ! _RTAPT-OO-SLQ ! _RTAPT-OO-UQ ! _RTAPT-OO-RBQ !
     _RTAPT-OO-SQ ! _RTAPT-OO-OQ ! _RTAPT-OO-XQ ! _RTAPT-OO-RQ !
     _RTAPT-OO-GEN ! _RTAPT-OO-OWNER !
     _RTAPT-OO-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
@@ -3802,14 +3848,15 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     _RTAPT-OO-RBQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-RES-BYTES !
     _RTAPT-OO-UQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-UTF8-BYTES !
     _RTAPT-OO-SLQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-SAMPLES !
+    _RTAPT-OO-PPQ @ _RTAPT-OO-O @ _RTAPT-O.ASK-PATH-POINTS !
     RTAPT-OWNER-ST-RESIZE-QUEUED _RTAPT-OO-O @ _RTAPT-O.STATE !
     _RTAPT-OO-O @ _RTAPT-OO-E @ _RTAPT-QUEUE-PUSH
     RTAPT-S-OK _RTAPT-OO-E @ _RTAPT-E.LAST-STATUS !
     RTAPT-S-OK ;
 
 \ RTAPT-OWNER-QUOTAS@ copies an owner's granted quotas, REGIONS through
-\ SAMPLES, into a caller's seven-cell record.  A RESIZE that is still
-\ waiting is not yet part of them.
+\ SAMPLES and then PATH-POINTS, into a caller's eight-cell record.  A
+\ RESIZE that is still waiting is not yet part of them.
 : RTAPT-OWNER-QUOTAS@  ( quotas owner generation engine -- status )
     DUP _RTAPT-ENGINE-STORAGE? 0= IF 2DROP 2DROP RTAPT-S-INVALID EXIT THEN
     _RTAPT-OWNER-FIND DUP 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
@@ -3818,6 +3865,7 @@ VARIABLE _RTAPT-OO-PRIOR-GEN
     SWAP RTAPT-OWNER-ST-RESIZING = OR 0= IF
         2DROP RTAPT-S-BUSY EXIT
     THEN
+    2DUP _RTAPT-O.PATH-POINTS @ SWAP 56 + !
     _RTAPT-O.REGIONS SWAP 56 MOVE RTAPT-S-OK ;
 
 \ Once admission has counted them, it keeps the owner quotas its candidate
@@ -3830,6 +3878,7 @@ VARIABLE _RTAPT-NEED-OBJECTS
 VARIABLE _RTAPT-NEED-SERIES
 VARIABLE _RTAPT-NEED-UTF8
 VARIABLE _RTAPT-NEED-SAMPLES
+VARIABLE _RTAPT-NEED-PATH-POINTS
 \ The engine working storage the same candidate needs: operation records,
 \ copy bytes and the controls its target adds to the control ledger.
 VARIABLE _RTAPT-NEED-OPS
@@ -3837,18 +3886,19 @@ VARIABLE _RTAPT-NEED-COPY
 VARIABLE _RTAPT-NEED-CONTROLS
 
 \ RTAPT-ADMISSION-NEEDS@ copies the owner quotas the latest admission on
-\ this engine found its candidate needs into a caller's seven-cell record,
+\ this engine found its candidate needs into a caller's eight-cell record,
 \ in the same order.  The candidate never needs resources.  UNSUPPORTED when
 \ that admission stopped before counting them.
 : RTAPT-ADMISSION-NEEDS@  ( quotas engine -- status )
     DUP _RTAPT-ENGINE-STORAGE? 0= IF 2DROP RTAPT-S-INVALID EXIT THEN
     _RTAPT-NEED-E @ <> IF DROP RTAPT-S-UNSUPPORTED EXIT THEN
-    DUP 56 0 FILL
+    DUP 64 0 FILL
     _RTAPT-NEED-REGIONS @ OVER !
     _RTAPT-NEED-OBJECTS @ OVER 16 + !
     _RTAPT-NEED-SERIES @ OVER 24 + !
     _RTAPT-NEED-UTF8 @ OVER 40 + !
-    _RTAPT-NEED-SAMPLES @ SWAP 48 + !
+    _RTAPT-NEED-SAMPLES @ OVER 48 + !
+    _RTAPT-NEED-PATH-POINTS @ SWAP 56 + !
     RTAPT-S-OK ;
 
 \ =====================================================================
@@ -4067,6 +4117,7 @@ VARIABLE _RTAPT-BC-E
         DUP _RTAPT-O.PENDING-SERIES OFF
         DUP _RTAPT-O.PENDING-SERIES-HIGH OFF
         DUP _RTAPT-O.PENDING-SAMPLES OFF
+        DUP _RTAPT-O.PENDING-PATH-POINTS OFF
         DUP _RTAPT-O.PENDING-REGIONS OFF
         DUP _RTAPT-O.PENDING-REGION-HIGH OFF
         DUP _RTAPT-O.PENDING-OBJECTS OFF
@@ -4223,6 +4274,7 @@ VARIABLE _RTAPT-LPF-REGION-Z
 VARIABLE _RTAPT-LPF-REGION-FLAGS
 VARIABLE _RTAPT-LPF-REQUESTED-SERIES
 VARIABLE _RTAPT-LPF-REQUESTED-SAMPLES
+VARIABLE _RTAPT-LPF-REQUESTED-PATH-POINTS
 VARIABLE _RTAPT-LPF-REQUESTED-REGIONS
 VARIABLE _RTAPT-LPF-LAST-OBJECT
 VARIABLE _RTAPT-LPF-OBJECT
@@ -4255,6 +4307,7 @@ VARIABLE _RTAPT-LPF-AGG-SERIES
 VARIABLE _RTAPT-LPF-AGG-RES-BYTES
 VARIABLE _RTAPT-LPF-AGG-UTF8
 VARIABLE _RTAPT-LPF-AGG-SAMPLES
+VARIABLE _RTAPT-LPF-AGG-PATH-POINTS
 
 : _RTAPT-LPF-SCRUB  ( -- )
     0 _RTAPT-LPF-PLAN ! 0 _RTAPT-LPF-E ! 0 _RTAPT-LPF-LIMITS !
@@ -4269,6 +4322,7 @@ VARIABLE _RTAPT-LPF-AGG-SAMPLES
     0 _RTAPT-LPF-CLIP-COLS ! 0 _RTAPT-LPF-CLIP-ROWS !
     0 _RTAPT-LPF-REGION-Z ! 0 _RTAPT-LPF-REGION-FLAGS !
     0 _RTAPT-LPF-REQUESTED-SERIES ! 0 _RTAPT-LPF-REQUESTED-SAMPLES !
+    0 _RTAPT-LPF-REQUESTED-PATH-POINTS ! 0 _RTAPT-LPF-AGG-PATH-POINTS !
     0 _RTAPT-LPF-REQUESTED-REGIONS ! 0 _RTAPT-LPF-LAST-OBJECT !
     0 _RTAPT-LPF-OBJECT ! 0 _RTAPT-LPF-VISIBLE !
     0 _RTAPT-LPF-TEXT-CAP ! 0 _RTAPT-LPF-MAX-TEXT-CAP !
@@ -4585,7 +4639,8 @@ VARIABLE _RTAPT-RGV-CLIP-Y-END
     _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.SERIES @ OR
     _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.RES-BYTES @ OR
     _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.UTF8-BYTES @ OR
-    _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.SAMPLES @ OR 0= ;
+    _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.SAMPLES @ OR
+    _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.PATH-POINTS @ OR 0= ;
 
 : _RTAPT-LPF-ADD-OWNER-QUOTAS  ( -- flag )
     _RTAPT-LPF-LIVE @ 1 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
@@ -4611,6 +4666,9 @@ VARIABLE _RTAPT-RGV-CLIP-Y-END
     _RTAPT-LPF-AGG-SAMPLES @
         _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.SAMPLES @
         _RTAPT-UADD? 0= IF DROP 0 EXIT THEN _RTAPT-LPF-AGG-SAMPLES !
+    _RTAPT-LPF-AGG-PATH-POINTS @
+        _RTAPT-LPF-OWNER-RECORD @ _RTAPT-O.PATH-POINTS @
+        _RTAPT-UADD? 0= IF DROP 0 EXIT THEN _RTAPT-LPF-AGG-PATH-POINTS !
     -1 ;
 
 : _RTAPT-LPF-OWNER-ADMISSION  ( -- status )
@@ -4620,6 +4678,7 @@ VARIABLE _RTAPT-RGV-CLIP-Y-END
     0 _RTAPT-LPF-AGG-RESOURCES ! 0 _RTAPT-LPF-AGG-OBJECTS !
     0 _RTAPT-LPF-AGG-SERIES ! 0 _RTAPT-LPF-AGG-RES-BYTES !
     0 _RTAPT-LPF-AGG-UTF8 ! 0 _RTAPT-LPF-AGG-SAMPLES !
+    0 _RTAPT-LPF-AGG-PATH-POINTS !
     _RTAPT-LPF-E @ _RTAPT-E.OWNER-CAP @ 0 ?DO
         I _RTAPT-LPF-E @ _RTAPT-OWNER-NTH DUP
             _RTAPT-LPF-OWNER-RECORD !
@@ -4731,6 +4790,11 @@ VARIABLE _RTAPT-RGV-CLIP-Y-END
     _RTAPT-LPF-AGG-SAMPLES @ _RTAPT-LPF-REQUESTED-SAMPLES @
         _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
         _RTAPT-LPF-LIMITS @ _RTAPT-L.SAMPLE-SLOTS @ U> IF
+        RTAPT-S-CAPACITY EXIT
+    THEN
+    _RTAPT-LPF-AGG-PATH-POINTS @ _RTAPT-LPF-REQUESTED-PATH-POINTS @
+        _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+        _RTAPT-LPF-LIMITS @ _RTAPT-L.TOTAL-PATH-POINTS @ U> IF
         RTAPT-S-CAPACITY EXIT
     THEN
     RTAPT-S-OK ;
@@ -5056,6 +5120,9 @@ VARIABLE _RTAPT-HAF-STATIC-IMAGES
 VARIABLE _RTAPT-HAF-SERIES-COUNT
 VARIABLE _RTAPT-HAF-SERIES-LAST
 VARIABLE _RTAPT-HAF-SERIES-SLOTS
+\ The points of the candidate's POLYLINEs, which its owner's path-point
+\ quota must hold.
+VARIABLE _RTAPT-HAF-PATH-POINTS
 VARIABLE _RTAPT-HAF-SERIES-HISTORY-MAX
 VARIABLE _RTAPT-HAF-SERIES-SAMPLE-BYTES
 VARIABLE _RTAPT-HAF-SERIES-CHUNKS
@@ -5729,6 +5796,7 @@ CREATE _RTAPT-HAF-OWNED-END
     THEN
     DUP _RTAPT-O.SERIES @ _RTAPT-HAF-SERIES-COUNT @ U< IF DROP RTAPT-S-CAPACITY EXIT THEN
     DUP _RTAPT-O.SAMPLES @ _RTAPT-HAF-SERIES-SLOTS @ U< IF DROP RTAPT-S-CAPACITY EXIT THEN
+    DUP _RTAPT-O.PATH-POINTS @ _RTAPT-HAF-PATH-POINTS @ U< IF DROP RTAPT-S-CAPACITY EXIT THEN
     DROP RTAPT-S-OK ;
 
 \ A complete REPLACE_START consumes one target within quotas already held by
@@ -5755,6 +5823,7 @@ CREATE _RTAPT-HAF-OWNED-END
     _RTAPT-HAF-SERIES-COUNT @ _RTAPT-NEED-SERIES !
     _RTAPT-HAF-UTF8 @ _RTAPT-NEED-UTF8 !
     _RTAPT-HAF-SERIES-SLOTS @ _RTAPT-NEED-SAMPLES !
+    _RTAPT-HAF-PATH-POINTS @ _RTAPT-NEED-PATH-POINTS !
     _RTAPT-HAF-E @ _RTAPT-NEED-E ! ;
 
 : _RTAPT-HYBRID-PREFLIGHT-BODY  ( -- status )
@@ -5906,12 +5975,14 @@ CREATE _RTAPT-HAF-OWNED-END
     _RTAPT-HAF-REGIONS @ _RTAPT-LPF-REQUESTED-REGIONS !
     _RTAPT-HAF-SERIES-COUNT @ _RTAPT-LPF-REQUESTED-SERIES !
     _RTAPT-HAF-SERIES-SLOTS @ _RTAPT-LPF-REQUESTED-SAMPLES !
+    _RTAPT-HAF-PATH-POINTS @ _RTAPT-LPF-REQUESTED-PATH-POINTS !
     _RTAPT-HAF-OWNER-ADMISSION ;
 
 : _RTAPT-HAF-SCRUB  ( status -- status )
     0 _RTAPT-HAF-SERIES-COUNT !
     0 _RTAPT-HAF-SERIES-LAST !
     0 _RTAPT-HAF-SERIES-SLOTS !
+    0 _RTAPT-HAF-PATH-POINTS !
     0 _RTAPT-HAF-SERIES-HISTORY-MAX !
     0 _RTAPT-HAF-SERIES-SAMPLE-BYTES !
     0 _RTAPT-HAF-SERIES-CHUNKS !
@@ -12152,8 +12223,11 @@ VARIABLE _RTAPT-OT-GENERATION
     _RTAPT-ST-PT @ PT-RET-OK = IF
         _RTAPT-ST-O @ _RTAPT-O.ASK-REGIONS _RTAPT-ST-O @ _RTAPT-O.REGIONS
             56 MOVE
+        _RTAPT-ST-O @ _RTAPT-O.ASK-PATH-POINTS @
+            _RTAPT-ST-O @ _RTAPT-O.PATH-POINTS !
     THEN
     _RTAPT-ST-O @ _RTAPT-O.ASK-REGIONS 56 0 FILL
+    _RTAPT-ST-O @ _RTAPT-O.ASK-PATH-POINTS OFF
     RTAPT-OWNER-ST-OPEN _RTAPT-ST-O @ _RTAPT-O.STATE !
     _RTAPT-ST-PT @ PT-RET-OK = IF RTAPT-S-OK ELSE RTAPT-S-REJECTED THEN ;
 
@@ -12214,6 +12288,7 @@ VARIABLE _RTAPT-PR-PENDING
             _RTAPT-PR-MODE @ PT-RET-REPLACE-START = IF
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-SERIES !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-SAMPLES !
+                0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-PATH-POINTS !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS !
             0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS !
             0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-CONTROLS !
@@ -12225,6 +12300,8 @@ VARIABLE _RTAPT-PR-PENDING
                     _RTAPT-PR-O @ _RTAPT-O.HIDDEN-SERIES !
                 _RTAPT-PR-O @ _RTAPT-O.ACTIVE-SAMPLES @
                     _RTAPT-PR-O @ _RTAPT-O.HIDDEN-SAMPLES !
+                _RTAPT-PR-O @ _RTAPT-O.ACTIVE-PATH-POINTS @
+                    _RTAPT-PR-O @ _RTAPT-O.HIDDEN-PATH-POINTS !
                 _RTAPT-PR-O @ _RTAPT-O.ACTIVE-REGIONS @
                     _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS !
                 _RTAPT-PR-O @ _RTAPT-O.ACTIVE-OBJECTS @
@@ -12265,6 +12342,16 @@ VARIABLE _RTAPT-PR-PENDING
                 THEN
                 _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECT-HIGH @
                     _RTAPT-PR-O @ _RTAPT-O.OBJECT-HIGH !
+            THEN
+            _RTAPT-PR-O @ _RTAPT-O.PENDING-PATH-POINTS @
+                DUP _RTAPT-PR-PENDING ! IF
+                _RTAPT-PR-MODE @ PT-RET-DELTA = IF
+                    _RTAPT-PR-PENDING @
+                        _RTAPT-PR-O @ _RTAPT-O.ACTIVE-PATH-POINTS +!
+                ELSE
+                    _RTAPT-PR-PENDING @
+                        _RTAPT-PR-O @ _RTAPT-O.HIDDEN-PATH-POINTS +!
+                THEN
             THEN
             _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTROLS @
                 DUP _RTAPT-PR-PENDING ! IF
@@ -12318,6 +12405,7 @@ VARIABLE _RTAPT-PR-PENDING
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-SERIES !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-SERIES-HIGH !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-SAMPLES !
+            0 _RTAPT-PR-O @ _RTAPT-O.PENDING-PATH-POINTS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGIONS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGION-HIGH !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECTS !
@@ -12341,6 +12429,8 @@ VARIABLE _RTAPT-PR-PENDING
                     _RTAPT-PR-O @ _RTAPT-O.ACTIVE-SERIES !
                 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-SAMPLES @
                     _RTAPT-PR-O @ _RTAPT-O.ACTIVE-SAMPLES !
+                _RTAPT-PR-O @ _RTAPT-O.HIDDEN-PATH-POINTS @
+                    _RTAPT-PR-O @ _RTAPT-O.ACTIVE-PATH-POINTS !
                 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS @
                     _RTAPT-PR-O @ _RTAPT-O.ACTIVE-REGIONS !
                 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS @
@@ -12353,6 +12443,7 @@ VARIABLE _RTAPT-PR-PENDING
                     _RTAPT-PR-O @ _RTAPT-O.ACTIVE-UTF8 !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-SERIES !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-SAMPLES !
+                0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-PATH-POINTS !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-CONTROLS !
@@ -12961,6 +13052,7 @@ VARIABLE _RTAPT-PX-A
         _RTAPT-ST-O @ _RTAPT-O.RES-BYTES @
         _RTAPT-ST-O @ _RTAPT-O.UTF8-BYTES @
         _RTAPT-ST-O @ _RTAPT-O.SAMPLES @
+        _RTAPT-ST-O @ _RTAPT-O.PATH-POINTS @
         _RTAPT-ST-E @ _RTAPT-E.SESSION @ PT-OWNER-OPEN _RTAPT-PT>STATUS
         DUP RTAPT-S-OK = IF
             DROP
@@ -12983,6 +13075,7 @@ VARIABLE _RTAPT-PX-A
         _RTAPT-ST-O @ _RTAPT-O.ASK-RES-BYTES @
         _RTAPT-ST-O @ _RTAPT-O.ASK-UTF8-BYTES @
         _RTAPT-ST-O @ _RTAPT-O.ASK-SAMPLES @
+        _RTAPT-ST-O @ _RTAPT-O.ASK-PATH-POINTS @
         _RTAPT-ST-E @ _RTAPT-E.SESSION @ PT-OWNER-RESIZE _RTAPT-PT>STATUS
         DUP RTAPT-S-OK = IF
             DROP
@@ -13034,6 +13127,7 @@ VARIABLE _RTAPT-PX-A
     \ A resize that could not be sent leaves the granted quotas in force.
     DUP _RTAPT-O.STATE @ RTAPT-OWNER-ST-RESIZE-QUEUED = IF
         DUP _RTAPT-O.ASK-REGIONS 56 0 FILL
+        DUP _RTAPT-O.ASK-PATH-POINTS OFF
         RTAPT-OWNER-ST-OPEN SWAP _RTAPT-O.STATE ! R> DROP -1 EXIT
     THEN
     DROP R> DROP 0 ;
