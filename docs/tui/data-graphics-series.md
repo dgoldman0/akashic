@@ -95,7 +95,8 @@ Every field in the tables has a public `UDG-SERIES-NAME-OFFSET` or
 `SAMPLES@` (returns the payload address). Waveform spellings are `SERIES-KEY@`,
 `MINIMUM@`, `MAXIMUM@`, `TRACE@`, `ZERO-COLOR@`, `ZERO-VALUE@`, and `FLAGS@`.
 Accessors require validated records; SAMPLE@ also requires `index < count`.
-No generic plot record is introduced by this extension.
+A plot of a series is a separate record, described in
+[data-graphics-plots.md](data-graphics-plots.md).
 
 ## CELL projection and capture
 
