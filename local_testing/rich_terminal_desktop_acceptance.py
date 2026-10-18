@@ -11674,6 +11674,38 @@ def _growing_storage_record(client, variables: dict) -> dict:
     return record
 
 
+# Why changed draws went out as complete replacements: each producer counts
+# its DELTA refusals by the check that refused them.  The base producer's
+# codes are those of _RTHP-D-WHY; the shell's prepare codes are its DSTAGE
+# times 16 plus the build stage or family kind, and its probe codes those of
+# _RSHSP-DM-WHY.
+_DELTA_REFUSAL_ARRAYS = {
+    "base": ("_RTHP-DIAG-DELTA-WHY", 64),
+    "shell_prepare": ("_RSHSP-DIAG-DELTA-WHY", 128),
+    "shell_probe": ("_RSHSP-DIAG-PROBE-WHY", 16),
+}
+
+
+def _delta_refusal_record(client) -> dict:
+    """Each producer's DELTA refusals by reason code, nonzero codes only."""
+
+    try:
+        words = client.request(
+            "forth", names=[name for name, _count in _DELTA_REFUSAL_ARRAYS.values()]
+        ).get("words", {})
+        record = {}
+        for key, (name, count) in _DELTA_REFUSAL_ARRAYS.items():
+            word = words.get(name)
+            if not isinstance(word, dict) or "data_address" not in word:
+                record[key] = {"unavailable": True}
+                continue
+            cells = _read_guest_cells(client, address=int(word["data_address"]), count=count)
+            record[key] = {str(code): value for code, value in enumerate(cells) if value}
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    return record
+
+
 def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
     """After a passing journey, keep how the guest published its frames.
 
@@ -11708,6 +11740,7 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
                 client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
             ),
             "growing_storage": _growing_storage_record(client, variables),
+            "delta_refusals": _delta_refusal_record(client),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -306,8 +306,13 @@ from screen storage covers them all, as the base producer does for its rows.
 The producer's unchanged-frame shortcut republishes its own target alone, so
 with the shell installed every changed draw takes the full build. Private
 counters record DELTA-PROBE refusals, DELTA-PREPARE refusals and successes,
-and where the last refusal happened; Desk acceptance runs record them with the
-terminal's count of committed PRESENT modes.
+and where the last refusal happened. They also count each refusal by its
+reason: a probe by the part of the two shell models that differed, a
+preparation by its stage times 16 plus the build's stage or the family's
+kind. The base producer counts its own DELTA refusals the same way, by the
+check of its gate that refused. Desk acceptance runs record all of them in
+`final-guest-diagnostics.json`, with the terminal's count of committed
+PRESENT modes.
 
 A bank is checked in full once, when it is frozen. STAGE freezes into the
 bank that ACTIVE does not name, after dropping PENDING, so a bank that
