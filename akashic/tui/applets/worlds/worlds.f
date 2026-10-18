@@ -397,7 +397,9 @@ CBR-ARGS-CANONICAL-MAX 13 - CONSTANT _WORLD-TS-HEX-MAX
         2DROP _WORLD-ANALYZE-HEX @ FREE _WORLD-ANALYZE-SNAPSHOT @ FREE
         S" Could not allocate analysis request" 2200 ASHELL-TOAST-ERROR EXIT
     THEN DROP _WORLD-ANALYZE-REQ !
-    CPRINC-COMPONENT _WORLD-ANALYZE-REQ @ CBR.PRINCIPAL !
+    \ Only the user's A key or Run > Analyze in Observatory reaches here, so
+    \ the request is the user's own, as a Daybook save is.
+    CPRINC-USER _WORLD-ANALYZE-REQ @ CBR.PRINCIPAL !
     _WORLD-ANALYZE-HEX @ _WORLD-ANALYZE-HEX-U @
         _WORLD-ANALYZE-REQ @ CBR.ARGS CV-STRING!
     _WORLD-ANALYZE-HEX @ FREE
