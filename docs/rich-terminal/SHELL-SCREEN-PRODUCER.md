@@ -258,10 +258,12 @@ keeps the catalog and replaces the status field in a DELTA.
 
 After the base producer has matched its controls, statics, instruments and
 series to their acknowledged identities, DELTA-PREPARE builds the shell
-candidate. It reads the base candidate's controls and instruments from the
-producer's pending target bank, which carries those identities, instead of
-from the candidate fields a START reads. It then gives each item the
-acknowledged identity in the same place:
+candidate. It reads the base candidate's controls, instruments and series
+from the producer's pending target bank, which carries those identities,
+instead of from the candidate fields a START reads. The family check runs
+on this batch as built, so a waveform or plot and the series it names must
+come from the same place: the candidate itself numbers its series afresh.
+The shell then gives each item the acknowledged identity in the same place:
 
 - the catalog must be identical, region identities included;
 - families must match in order, kind and region;
