@@ -2217,7 +2217,7 @@ TELEMETRY = ((0, 9000), (1, 8750), (2, 8500), (3, 8250))
 def _observatory_frame(focus: str, status: str = "Profiled 8 samples"):
     rows = {0: "  OBSERVATORY / SERIES PROFILE".ljust(140) + "  WORLDS / RESERVOIR FACILITY",
             ROWS - 3: "  " + status,
-            ROWS - 1: f"[1:Observatory{'*' if focus == 'observatory' else ''}] "
+            ROWS - 1: f"[1:Observator{'*' if focus == 'observatory' else ''}] "
                       f"[2:Worlds{'*' if focus == 'worlds' else ''}]"}
     return _screen(rows, ())
 
@@ -2235,9 +2235,8 @@ def test_observatory_plots_its_series_then_worlds_telemetry_and_keeps_it_on_reru
         (demo, _observatory_frame("worlds")),
         (demo, _observatory_frame("worlds")),
         (demo, _observatory_frame("worlds")),
-        # Observatory has not taken the run yet.
-        (demo, _observatory_frame("worlds")),
-        (telemetry, _observatory_frame("worlds")),
+        # Desk brings Observatory forward before it has taken the run.
+        (demo, _observatory_frame("observatory")),
         (telemetry, _observatory_frame("observatory", "Profiled 4 samples")),
         (telemetry, _observatory_frame("observatory", "Profiled 4 samples")),
     )
@@ -2250,11 +2249,26 @@ def test_observatory_plots_its_series_then_worlds_telemetry_and_keeps_it_on_reru
         ("worlds-step-3", [("send_key", "s")]),
         ("worlds-analyze", [("send_key", "a")]),
         (None, []),
-        ("observatory-plots-telemetry", [("send_key", "alt+1")]),
-        ("observatory-rerun", [("send_key", "r")]),
+        ("observatory-plots-telemetry", [("send_key", "r")]),
         ("observatory-rerun-kept-plot", []),
     ]
     assert results[-1][0].complete
+
+
+def test_observatory_takes_focus_back_when_worlds_keeps_it_after_analyze() -> None:
+    journey = ObservatoryJourney(OBSERVATORY_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey.stage = ObservatoryJourney.ANALYZE
+    telemetry = _observatory_offer(TELEMETRY)
+    steps = (
+        (telemetry, _observatory_frame("worlds")),
+        (telemetry, _observatory_frame("observatory", "Profiled 4 samples")),
+    )
+    results = _run(journey, steps)
+    assert [(result.milestone, sent) for result, sent in results] == [
+        ("observatory-plots-telemetry", [("send_key", "alt+1")]),
+        ("observatory-rerun", [("send_key", "r")]),
+    ]
 
 
 def test_observatory_refuses_a_plot_whose_table_lists_other_samples() -> None:

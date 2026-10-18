@@ -278,7 +278,8 @@ SOUNDLAB_ALONE_FREQUENCIES = (880, 660)
 # starts with its own eight-sample series, ticks 0 to 7 falling from 8000 by
 # 500; Worlds steps its run three times and hands the run's telemetry to
 # Observatory through Analyze, which Observatory then profiles again on R.
-OBSERVATORY_FOCUS_MARKER = "[1:Observatory*]"
+# Desk cuts a task's label to ten characters.
+OBSERVATORY_FOCUS_MARKER = "[1:Observator*]"
 WORLDS_FOCUS_MARKER = "[2:Worlds*]"
 OBSERVATORY_DEMO_SERIES = tuple((tick, 8000 - 500 * tick) for tick in range(8))
 OBSERVATORY_PLOT_CAPTION = "Upper amount projection"
@@ -3230,9 +3231,10 @@ class ObservatoryJourney(_AppletJourney):
     PLOT over an exact series, its baseline a line along the row below.
 
     Observatory first plots its own starting series.  Worlds then steps its
-    run and Analyze hands the run's telemetry over: Observatory's series is
-    replaced, and the plot's series holds exactly the samples its table
-    shows.  R profiles the series again and the plot stays.
+    run and Analyze hands the run's telemetry over: Desk brings Observatory
+    forward, its series is replaced, and the plot's series holds exactly the
+    samples its table shows.  R profiles the series again and the plot
+    stays.
     """
 
     focus_marker = OBSERVATORY_FOCUS_MARKER
@@ -3293,7 +3295,7 @@ class ObservatoryJourney(_AppletJourney):
                     f"Observatory's starting plot holds {samples!r}")
             return self._step("observatory-plot-shown", "send_key", "alt+2",
                               self.WORLDS, offer, generation, sender)
-        if self.stage in (self.WORLDS, self.STEPPED, self.ANALYZE):
+        if self.stage in (self.WORLDS, self.STEPPED):
             if not _taskbar_has_focus(projection, WORLDS_FOCUS_MARKER):
                 if self.stage == self.WORLDS:
                     return self._wait(f"{WORLDS_FOCUS_MARKER} after Alt+2")
@@ -3314,8 +3316,11 @@ class ObservatoryJourney(_AppletJourney):
             if len(samples) < 2:
                 raise PhysicalDesktopAcceptanceError("Worlds handed over one sample")
             self._analyzed = samples
-            return self._step("observatory-plots-telemetry", "send_key", "alt+1",
-                              self.ANALYZED, offer, generation, sender)
+            if not _taskbar_has_focus(projection, OBSERVATORY_FOCUS_MARKER):
+                return self._step("observatory-plots-telemetry", "send_key", "alt+1",
+                                  self.ANALYZED, offer, generation, sender)
+            return self._step("observatory-plots-telemetry", "send_key", "r",
+                              self.RERUN, offer, generation, sender)
         if not _taskbar_has_focus(projection, OBSERVATORY_FOCUS_MARKER):
             if self.stage == self.ANALYZED:
                 return self._wait(f"{OBSERVATORY_FOCUS_MARKER} after Alt+1")
