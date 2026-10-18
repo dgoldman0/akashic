@@ -88,6 +88,7 @@ VARIABLE _OW-ITEM-N
 VARIABLE _OW-ITEM-P
 VARIABLE _OW-WORLD-BANK-BEFORE
 VARIABLE _OW-OBS-BANK-BEFORE
+VARIABLE _OW-OBS-REV
 
 CREATE _OW-WORLDS-DESC APP-DESC ALLOT
 CREATE _OW-OBS-DESC APP-DESC ALLOT
@@ -425,6 +426,10 @@ VARIABLE _OW-VALVE-N
     _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OBS-ACCEPT-SNAPSHOT
         OBS-S-PRECISION _OW-STATUS
     _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    \ The status label is an element of Observatory's own UIDL context, so
+    \ only its own tick, which Desk runs in that context, shows the refusal.
+    _OBS-E-STATE @ S" Profiled 8 samples" _OW-LBL= _OW-ASSERT
+    _OW-OBS-INSTANCE @ OBSERVATORY-TICK-CB
     _OBS-E-STATE @ S" Profile refused: not exact in FP16" _OW-LBL= _OW-ASSERT
     6500 _OW-WORLDS-SNAPSHOT _OTS.SAMPLES + OBS-TS-SAMPLE-SIZE + 8 +
         OBS-TS-BE64!
@@ -441,6 +446,7 @@ VARIABLE _OW-VALVE-N
     _OW-OBS-REQUEST @ CBR-ARGS-SEAL-MATCH? 0= _OW-ASSERT
     _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ 8 + DUP C@ 1 XOR SWAP C!
     _OW-OBS-REQUEST @ CBR-ARGS-SEAL-MATCH? _OW-ASSERT
+    _OW-OBS-INSTANCE @ CINST.REVISION @ _OW-OBS-REV !
     _OW-OBS-REQUEST @ CBR.ARGS CV.LEN DUP @ 1- SWAP !
     _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
         CBUS-S-INVALID _OW-STATUS
@@ -453,10 +459,16 @@ VARIABLE _OW-VALVE-N
         CBUS-S-INVALID _OW-STATUS
     [CHAR] f _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ 1+ C!
     _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    \ An envelope refused before profiling changes nothing Observatory shows.
+    _OW-OBS-INSTANCE @ CINST.REVISION @ _OW-OBS-REV @ = _OW-ASSERT
     _OW-OBS-REQUEST @ CBR-ERROR-CLEAR
     _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
         CBUS-S-OK _OW-STATUS
     _OBS-COUNT @ 3 = _OW-ASSERT
+    \ The handler runs from Desk's request pump under another application's
+    \ context: the status waits for Observatory's own tick.
+    _OBS-E-STATE @ S" Profile refused: not exact in FP16" _OW-LBL= _OW-ASSERT
+    _OW-OBS-INSTANCE @ OBSERVATORY-TICK-CB
     _OBS-E-STATE @ S" Profiled 3 samples" _OW-LBL= _OW-ASSERT
     _OBS-SOURCE-RUN @ 101 = _OW-ASSERT
     _OBS-SOURCE-BRANCH @ 2 = _OW-ASSERT
@@ -469,6 +481,23 @@ VARIABLE _OW-VALVE-N
         S" 1" _OW-ITEM-TEXT= _OW-ASSERT
     3 _OBS-TABLE-ACTIVE-A @ _OW-ITEM@
         S" 7500" _OW-ITEM-TEXT= _OW-ASSERT
+    \ The bus advances the instance only for an accepted snapshot, so a
+    \ refusal the handler shows advances it there, and Desk ticks it.
+    6750 _OW-WORLDS-SNAPSHOT _OTS.SAMPLES + OBS-TS-SAMPLE-SIZE + 8 +
+        OBS-TS-BE64!
+    _OW-REHASH-SNAPSHOT
+    _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OW-WORLDS-HEX FMT->HEX
+        _OW-SNAPSHOT-U @ 2* = _OW-ASSERT
+    _OW-WORLDS-HEX _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ _OW-SNAPSHOT-U @ 2* CMOVE
+    _OW-OBS-INSTANCE @ CINST.REVISION @ _OW-OBS-REV !
+    _OW-OBS-REQUEST @ CBR-ERROR-CLEAR
+    _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
+        CBUS-S-INVALID _OW-STATUS
+    _OW-OBS-INSTANCE @ CINST.REVISION @ _OW-OBS-REV @ 1+ = _OW-ASSERT
+    _OBS-COUNT @ 3 = _OW-ASSERT
+    _OBS-E-STATE @ S" Profiled 3 samples" _OW-LBL= _OW-ASSERT
+    _OW-OBS-INSTANCE @ OBSERVATORY-TICK-CB
+    _OBS-E-STATE @ S" Profile refused: not exact in FP16" _OW-LBL= _OW-ASSERT
     _OW-OBS-REQUEST @ CBR-FREE
     0 _OW-OBS-REQUEST !
     _OW-OBS-INSTANCE @ OBSERVATORY-SHUTDOWN-CB

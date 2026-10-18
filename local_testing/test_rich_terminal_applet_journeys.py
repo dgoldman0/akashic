@@ -2261,7 +2261,7 @@ def test_observatory_takes_focus_back_when_worlds_keeps_it_after_analyze() -> No
     journey.stage = ObservatoryJourney.ANALYZE
     telemetry = _observatory_offer(TELEMETRY)
     steps = (
-        (telemetry, _observatory_frame("worlds")),
+        (telemetry, _observatory_frame("worlds", "Profiled 4 samples")),
         (telemetry, _observatory_frame("observatory", "Profiled 4 samples")),
     )
     results = _run(journey, steps)
@@ -2294,6 +2294,14 @@ def test_observatory_counts_a_worlds_step_only_once_its_press_is_delivered() -> 
                           "worlds-step-3", "worlds-analyze"]
     assert sent == [("send_key", "s")] * 4 + [("send_key", "a")]
     assert journey.stage == ObservatoryJourney.ANALYZE
+
+
+def test_observatory_refuses_a_handover_whose_status_lags_its_plot() -> None:
+    journey = ObservatoryJourney(OBSERVATORY_READY)
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    journey.stage = ObservatoryJourney.ANALYZE
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="lacks 'Profiled 4 samples'"):
+        _run(journey, ((_observatory_offer(TELEMETRY), _observatory_frame("observatory")),))
 
 
 def test_observatory_refuses_a_handover_without_a_sample_for_each_step() -> None:

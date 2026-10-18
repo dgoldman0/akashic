@@ -164,6 +164,7 @@ _OBS-CURRENT-STATE CMP-CELL: _OBS-RUN-SEQUENCE
 _OBS-CURRENT-STATE CMP-CELL: _OBS-LAST-ATTEMPT
 _OBS-CURRENT-STATE CMP-CELL: _OBS-LAST-PROFILE-STATUS
 _OBS-CURRENT-STATE SHA3-256-LEN CMP-FIELD: _OBS-RESULT-DIGEST
+_OBS-CURRENT-STATE CMP-CELL: _OBS-VIEW-STALE
 CMP-LAYOUT-SIZE CONSTANT _OBS-STATE-SIZE
 
 : _OBS-ACTIVATE  ( instance -- )
@@ -328,11 +329,21 @@ VARIABLE _OBS-STATUS-U
 : _OBS-UPDATE-STATUS  ( -- )
     _OBS-E-STATE @ ?DUP IF S" text" _OBS-PROFILE$ UTUI-SET-ATTR THEN ;
 
+\ The status label and the body are elements of Observatory's own UIDL
+\ context, which is live only in Observatory's own callbacks.  The capability
+\ handler runs from Desk's request pump under whatever context is live then,
+\ so a change only marks the view stale, and _OBS-VIEW-SHOW, called from an
+\ own callback, updates the label and repaints the body.
 : _OBS-VIEW-INVALIDATE  ( -- )
-    _OBS-UPDATE-STATUS
+    -1 _OBS-VIEW-STALE !
     _OBS-PANEL WDG-DIRTY
-    _OBS-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
     ASHELL-DIRTY! ;
+
+: _OBS-VIEW-SHOW  ( -- )
+    _OBS-VIEW-STALE @ 0= IF EXIT THEN
+    0 _OBS-VIEW-STALE !
+    _OBS-UPDATE-STATUS
+    _OBS-E-BODY @ ?DUP IF UIDL-DIRTY! THEN ;
 
 : _OBS-SERIES-INVALIDATE  ( -- )
     _OBS-TABLE-REBUILD-D
@@ -830,7 +841,8 @@ VARIABLE _OBS-RERUN-PREV-PROFILE
         _OBS-PROFILE-INVALIDATE
     ELSE
         _OBS-VIEW-INVALIDATE
-    THEN ;
+    THEN
+    _OBS-VIEW-SHOW ;
 
 : _OBS-PANEL-HANDLE  ( event widget -- consumed? )
     DROP
@@ -906,6 +918,9 @@ CBR-ARGS-CANONICAL-MAX 13 - CONSTANT OBS-TS-HEX-MAX
         _OBS-LAST-PROFILE-STATUS @ _OBS-CAP-PREV-PROFILE @ <> IF
             _OBS-PROFILE-INVALIDATE
         THEN
+        \ The bus advances the instance, which has Desk tick and repaint it,
+        \ only for an accepted snapshot; a refusal shown here advances it.
+        _OBS-VIEW-STALE @ IF _OBS-CURRENT-INSTANCE @ CINST-TOUCH THEN
         S" Worlds telemetry snapshot validation failed"
             CBUS-S-INVALID _OBS-CAP-REQ @ CBR-ERROR!
         CBUS-S-INVALID EXIT
@@ -955,7 +970,7 @@ CREATE OBSERVATORY-INTENT CINT-DESC-SIZE ALLOT
     0 _OBS-TABLE-ACTIVE-A ! 0 _OBS-TABLE-ACTIVE-U !
     0 _OBS-SERIES ! 0 _OBS-COUNT !
     0 _OBS-RUN-SEQUENCE ! OBS-S-OK _OBS-LAST-ATTEMPT !
-    OBS-S-INVALID _OBS-LAST-PROFILE-STATUS !
+    OBS-S-INVALID _OBS-LAST-PROFILE-STATUS ! 0 _OBS-VIEW-STALE !
     _OBS-DEMO-BUILD
     _OBS-DEMO _OBS-DEMO-SIZE _OBS-ACCEPT-SNAPSHOT
         0<> ABORT" observatory: demonstration series failed"
@@ -977,7 +992,7 @@ CREATE OBSERVATORY-INTENT CINT-DESC-SIZE ALLOT
     THEN
     S" rerun" ['] _OBS-DO-RERUN UTUI-DO!
     S" quit" ['] _OBS-DO-QUIT UTUI-DO!
-    _OBS-UPDATE-STATUS ;
+    _OBS-VIEW-SHOW ;
 
 : OBSERVATORY-EVENT-CB  ( event instance -- consumed? )
     _OBS-ACTIVATE
@@ -986,7 +1001,9 @@ CREATE OBSERVATORY-INTENT CINT-DESC-SIZE ALLOT
     _UTUI-MENU-OPEN @ IF DROP 0 EXIT THEN _OBS-PANEL WDG-HANDLE ;
 
 : OBSERVATORY-PAINT-CB  ( instance -- ) _OBS-ACTIVATE ;
-: OBSERVATORY-TICK-CB   ( instance -- ) _OBS-ACTIVATE ;
+\ Desk ticks an instance the request bus advanced in its own context, and
+\ paints it after, so what a handler changed is shown here.
+: OBSERVATORY-TICK-CB   ( instance -- ) _OBS-ACTIVATE _OBS-VIEW-SHOW ;
 
 : OBSERVATORY-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _OBS-ACTIVATE APP-CLOSE-D-ALLOW ;

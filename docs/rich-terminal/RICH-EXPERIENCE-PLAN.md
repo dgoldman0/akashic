@@ -801,6 +801,18 @@ renderer limits the consumers here do not meet, since their lines are
 opaque and thin: translucent wide strokes blend twice at joins, and
 diagonal strokes draw thinner than asked.
 
+**Found on the way.** A capability handler runs from Desk's request pump
+while another application's UIDL context is live, so the UIDL elements it
+sets are that application's. Observatory's handler set its status label and
+marked its body for repaint that way, so after Analyze its CELL panel kept
+the old series under the new plot. It now leaves both to its own tick,
+which Desk runs in its context before painting. Handlers in Daybook (agent
+run), File Explorer (reveal), Grid (set and save), Pad (open), Sound Lab
+(shape, frequency, amplitude, duration, render, play and save) and Streams
+(drafts, refreshes and source enabling) still set UIDL elements from there,
+and they stay open: each can do as Observatory does, or Desk can run a
+handler in its instance's context.
+
 ## 7. Pictures
 
 **Today.** MegaPad's side is complete: immutable raw RGBA8 resources, a

@@ -3324,6 +3324,14 @@ class ObservatoryJourney(_AppletJourney):
             if len(samples) != WORLDS_STEPS + 1:
                 raise PhysicalDesktopAcceptanceError(
                     f"Worlds handed over {len(samples)} samples after {WORLDS_STEPS} steps")
+            # Observatory takes the run in a request handler, outside its own
+            # UIDL context, and shows it from its own tick before the paint
+            # that publishes the plot, so its status and CELL panel come in
+            # the same frame.
+            profiled = OBSERVATORY_PROFILED + f"{len(samples)} samples"
+            if not _status_shows(projection, profiled, observatory):
+                raise PhysicalDesktopAcceptanceError(
+                    f"Observatory's plot holds Worlds' run but its status lacks {profiled!r}")
             self._analyzed = samples
             if not _taskbar_has_focus(projection, OBSERVATORY_FOCUS_MARKER):
                 return self._step("observatory-plots-telemetry", "send_key", "alt+1",
