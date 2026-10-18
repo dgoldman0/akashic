@@ -4387,8 +4387,10 @@ def _require_soundlab_landmark_cells(offer, landmarks: SoundLabLandmarks) -> Non
 
     cell = offer.cell
     row = landmarks.row
-    if not cell.row_text(row - 2, landmarks.left).startswith(SOUNDLAB_LANDMARK_CAPTION):
-        raise PhysicalDesktopAcceptanceError("CELL lacks Sound Lab's landmark caption")
+    shown = cell.row_text(row - 2, landmarks.left, landmarks.left + len(SOUNDLAB_LANDMARK_CAPTION))
+    if shown != SOUNDLAB_LANDMARK_CAPTION:
+        raise PhysicalDesktopAcceptanceError(
+            f"CELL lacks Sound Lab's landmark caption: row {row - 2} reads {shown!r}")
     letters = ((landmarks.pitch, "*"),) if landmarks.pitch == landmarks.centroid else (
         (landmarks.pitch, "P"), (landmarks.centroid, "C"))
     for column, letter in letters:

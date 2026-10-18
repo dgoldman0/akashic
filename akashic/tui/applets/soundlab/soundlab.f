@@ -1032,8 +1032,9 @@ VARIABLE _SL-DG-EXPECTED-OBJECTS
     _SL-LANDMARKS-SHOWN? IF
         _SL-LANDMARKS-LAYOUT
         244 234 CELL-A-DIM DRW-STYLE!
-        S" Frequency landmarks: 0 Hz" _SL-ANALYSIS-ROW @ 4 + 2 DRW-TEXT
+        \ The right-aligned label blanks its whole field, so it goes first.
         S" 4 kHz" _SL-ANALYSIS-ROW @ 4 + 2 _SL-LANDMARK-W @ DRW-TEXT-RIGHT
+        S" Frequency landmarks: 0 Hz" _SL-ANALYSIS-ROW @ 4 + 2 DRW-TEXT
         81 234 CELL-A-BOLD DRW-STYLE!
         [CHAR] P _SL-ANALYSIS-ROW @ 5 + _SL-PITCH-X @ DRW-CHAR
         220 DRW-FG!
