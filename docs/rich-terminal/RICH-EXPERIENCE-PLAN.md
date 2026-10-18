@@ -645,11 +645,13 @@ or going, add or remove a region, so each is a START by design, about 6 to
 27 million steps in the rich producer; a notice shown costs about 12.7
 million there and 0.5 million in Desk's paint. Answering a dialog costs 24
 to 35 million steps outside the producer, since the application paints far
-more after its dialog closes than after its prompt does. Two costs remain
-to cut: typing into an application's prompt should be a DELTA, as typing
-into Desk's is, but the producer does not match those draws, for a cause
-not yet found; and a dialog that closes should not cost its application
-more paint than a prompt that closes.
+more after its dialog closes than after its prompt does. Typing into an
+application's prompt was a START because the producer's DELTA gate also
+required the fields' total text to keep its length, so any key that
+changed the length refused the DELTA before a field was compared; since
+f4890d19 such a key is a DELTA, as typing into Desk's prompt is. One cost
+remains to cut: a dialog that closes should not cost its application more
+paint than a prompt that closes.
 
 The full Desktop journey closed the part. In the physical viewer it renames
 a file in File Explorer through its rename prompt, a semantic field, and
@@ -812,9 +814,16 @@ frequency, and CELL draws the same landmarks. The full Desktop journey
 checks the landmark lines at Sound Lab's `soundlab-instruments-live` and
 `soundlab-rerendered` milestones. The plots and lines themselves cost
 little: about 0.1 to 0.3 million guest steps a frame to lower and 0.2 to 0.4
-million to draw in CELL. The frames that carry them are STARTs of the whole
-screen, 8.5 to 21.5 million steps in the rich producer, since these Desks send
-no DELTA, as part 5 found for applications' prompts. Where a rich plot or
+million to draw in CELL. The frames that carry them were STARTs of the
+whole screen, 8.5 to 21.5 million steps in the rich producer: these Desks
+sent no DELTA, because the shell read a DELTA's series from the candidate,
+which numbers them afresh, while its instruments came from the pending bank
+and named the acknowledged series, so the family check refused every one.
+Since f84bad80 the shell reads both from the pending bank, and a frame
+whose plots and lines are unchanged is a DELTA. With that and the field fix
+noted in part 5, the canonical Desktop journey sends 52 of its changed
+frames as DELTAs and 38 as STARTs, where it sent 6 and 85. A frame whose
+plot, waveform or series changed is still a START. Where a rich plot or
 waveform leaves its background clear, CELL's drawing of it shows beneath, as
 since the series work.
 
