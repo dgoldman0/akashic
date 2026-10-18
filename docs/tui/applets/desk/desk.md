@@ -209,7 +209,8 @@ one cell before the row's edge when the entries leave room for it: `ready`,
 error` when its store failed; and `[Practice: recovery]` or `[Practice:
 fallback]` while the Practice is in recovery or fallback.  Desk's shell
 model carries it as a status field with a severity for each state, so a
-rich terminal shows it as one ([shell model](../../shell-model.md)).
+renderer that draws status fields shows it as one
+([shell model](../../shell-model.md)).
 
 `Alt+H` opens a non-blocking modal over the desktop.  It lists every catalog
 row and its status.  Up/Down, PgUp/PgDn, Home/End select; Enter focuses an
