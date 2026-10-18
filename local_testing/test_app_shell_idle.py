@@ -34,10 +34,12 @@ FIXTURES = {
         0 INPUT-AT !  1 INPUTS +!  TRUE ;""",
     "_ASHELL-DISPATCH-EVENT": ": _ASHELL-DISPATCH-EVENT ( -- ) ASHELL-DIRTY! ;",
     "_ASHELL-CHECK-HW-RESIZE": ": _ASHELL-CHECK-HW-RESIZE ( -- ) 1 RESIZE-POLLS +! ;",
+    # A paint shows the toast the shell raised, which starts its time.
     "_ASHELL-PAINT": """: _ASHELL-PAINT ( -- )
         _UTUI-NEEDS-PAINT @ IF 0 _UTUI-NEEDS-PAINT ! ASHELL-DIRTY! THEN
         _ASHELL-DIRTY @ IF
             0 _ASHELL-DIRTY !  1 PAINTS +!
+            ASHELL-TOAST-VISIBLE? IF _ASHELL-TOAST-ARM THEN
             REDIRTY @ IF ASHELL-DIRTY! THEN
             -1 _ASHELL-OUTPUT-PENDING !
         THEN
@@ -259,13 +261,27 @@ def test_a_quiet_live_owner_without_a_tick_waits_for_input(shell):
 def test_a_toast_without_a_tick_wakes_at_its_expiry(shell):
     shell.start(tick=False, passes=3)
     shell.runtime.evaluate(b'S" saved" 20 ASHELL-TOAST', step_budget=100_000)
-    shell.variable("_ASHELL-DIRTY", 0)
     shell.run()
-    # Expiry at 1020 is earlier than the one-tick resize poll at 1050; the
-    # expiry pass repaints to clear the toast.
+    # The paint that shows the toast starts its time.  Its expiry at 1020
+    # is earlier than the one-tick resize poll at 1050; the expiry pass
+    # repaints to clear the toast.
     assert shell.deadlines()[0] == 1020
     assert shell.variable("_ASHELL-TOAST-WAS-VIS") == 0
-    assert shell.variable("PAINTS") == 1
+    assert shell.variable("PAINTS") == 2
+
+
+def test_a_toast_counts_its_time_from_the_paint_that_shows_it(shell):
+    shell.start(tick=False, passes=3)
+    shell.runtime.evaluate(b'S" saved" 20 ASHELL-TOAST', step_budget=100_000)
+    # The paint comes 100 ms after the toast was raised, as a slow one
+    # would.  Until a paint shows it the toast has not begun to end, so
+    # it sets no deadline: only the resize poll bounds the sleep.
+    shell.variable("FAKE-MS", 1100)
+    assert shell.next_deadline() == 1150
+    shell.run()
+    assert shell.deadlines()[0] == 1120
+    assert shell.variable("_ASHELL-TOAST-WAS-VIS") == 0
+    assert shell.variable("PAINTS") == 2
 
 
 def test_without_an_owner_the_resize_poll_bounds_every_sleep(shell):

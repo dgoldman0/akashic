@@ -384,13 +384,20 @@ VARIABLE _ASHELL-LAST-TICK    \ MS@ snapshot of last tick
 \ --- Notice state ---
 \  The notice ASHELL-NOTICE raised last: its text, copied into a buffer
 \  the shell owns and grows when a longer one is raised, its severity,
-\  its serial number and when it ends.
+\  its serial number, how long it lasts and, once a paint has shown it,
+\  when it ends.
 CREATE _ASHELL-TOAST-MSG  2 CELLS ALLOT   \ addr + len of the owned copy
 0 _ASHELL-TOAST-MSG !
 0 _ASHELL-TOAST-MSG CELL+ !
 
-VARIABLE _ASHELL-TOAST-EXPIRY             \ MS@ deadline
+VARIABLE _ASHELL-TOAST-EXPIRY             \ MS@ deadline, once armed
 0 _ASHELL-TOAST-EXPIRY !
+
+VARIABLE _ASHELL-TOAST-MS                 \ its duration in milliseconds
+0 _ASHELL-TOAST-MS !
+
+VARIABLE _ASHELL-TOAST-ARMED              \ a paint has shown it: it ends
+0 _ASHELL-TOAST-ARMED !
 
 VARIABLE _ASHELL-TOAST-WAS-VIS            \ was-visible flag
 0 _ASHELL-TOAST-WAS-VIS !
@@ -745,12 +752,15 @@ VARIABLE _ALUF-TOTAL
     THEN ;
 
 \ ASHELL-TOAST-VISIBLE? ( -- flag )
-\   True if toast message is currently showing.
+\   True while the notice raised last has not ended.  A notice no paint
+\   has shown yet has not begun to end: its time counts from the first
+\   paint that shows it, so a paint that comes late still shows it.
 : ASHELL-TOAST-VISIBLE?  ( -- flag )
     \ Avoid an eight-byte RTC read on every event-loop and paint pass
-    \ when no toast is active.  _ASHELL-TOAST-WAS-VIS is set together
-    \ with the deadline by ASHELL-TOAST and cleared by the expiry path.
+    \ when no toast is active.  _ASHELL-TOAST-WAS-VIS is set by
+    \ ASHELL-NOTICE and cleared by the expiry path.
     _ASHELL-TOAST-WAS-VIS @ 0= IF 0 EXIT THEN
+    _ASHELL-TOAST-ARMED @ 0= IF -1 EXIT THEN
     _ASHELL-TOAST-EXPIRY @ MS@ > ;
 
 \ Have UIDL repaint the cells the notice on screen covers.
@@ -780,10 +790,10 @@ VARIABLE _ALUF-TOTAL
     R> ! SWAP ! TRUE ;
 
 \ ASHELL-NOTICE ( addr u ms severity -- )
-\   Show a notice for MS milliseconds: the text, with its meaning.  The
-\   shell keeps its own copy of the text, so the caller may reuse its
-\   buffer.  A severity the shell does not know is neutral.  With no
-\   memory for the copy, the notice is not shown.
+\   Show a notice for MS milliseconds from the first paint that shows it:
+\   the text, with its meaning.  The shell keeps its own copy of the text,
+\   so the caller may reuse its buffer.  A severity the shell does not
+\   know is neutral.  With no memory for the copy, the notice is not shown.
 VARIABLE _ASHELL-NT-MS
 VARIABLE _ASHELL-NT-SEVERITY
 : ASHELL-NOTICE  ( addr u ms severity -- )
@@ -795,7 +805,7 @@ VARIABLE _ASHELL-NT-SEVERITY
     _ASHELL-TOAST-BUF @ R> _ASHELL-TOAST-MSG 2!
     _ASHELL-NT-SEVERITY @ _ASHELL-TOAST-SEVERITY !
     1 _ASHELL-TOAST-SERIAL +!
-    MS@ _ASHELL-NT-MS @ + _ASHELL-TOAST-EXPIRY !
+    _ASHELL-NT-MS @ _ASHELL-TOAST-MS ! 0 _ASHELL-TOAST-ARMED !
     -1 _ASHELL-TOAST-WAS-VIS !
     ASHELL-DIRTY! ;
 
@@ -874,11 +884,19 @@ VARIABLE _ASHELL-LAY-WHOLE
     0 _ASHELL-TOAST-BUF ! 0 _ASHELL-TOAST-CAP !
     0 0 _ASHELL-TOAST-MSG 2! ;
 
+\ _ASHELL-TOAST-ARM ( -- )
+\   The paint that first shows the notice raised last starts its time.
+: _ASHELL-TOAST-ARM  ( -- )
+    _ASHELL-TOAST-ARMED @ IF EXIT THEN
+    MS@ _ASHELL-TOAST-MS @ + _ASHELL-TOAST-EXPIRY !
+    -1 _ASHELL-TOAST-ARMED ! ;
+
 \ _ASHELL-TOAST-LATCH ( -- )
 \   Decide the notice this paint shows: the one raised last while it has
 \   not ended, centred on the bottom row.  Its layout is kept while the
 \   notice and the screen's width stay the same.  A screen too narrow for
-\   a bar's four cells of padding and one of text shows none.
+\   a bar's four cells of padding and one of text shows none.  The first
+\   paint that shows a notice starts its time.
 : _ASHELL-TOAST-LATCH  ( -- )
     ASHELL-TOAST-VISIBLE? SCR-W 5 < 0= AND SCR-H 0> AND 0= IF
         _ASHELL-TOAST-HIDE EXIT
@@ -890,7 +908,7 @@ VARIABLE _ASHELL-LAY-WHOLE
     THEN
     SCR-H 1- _ASHELL-SHOWN-ROW !
     SCR-W _ASHELL-SHOWN-W @ - 2/ _ASHELL-SHOWN-COL !
-    -1 _ASHELL-TOAST-SHOWN ! ;
+    -1 _ASHELL-TOAST-SHOWN ! _ASHELL-TOAST-ARM ;
 
 \ _ASHELL-NOTICE-STYLE ( severity -- )
 \   The bar's colours: grey when neutral, then blue, green, amber and red
@@ -1628,12 +1646,16 @@ VARIABLE _ASHELL-TD-IOR
 
 \ _ASHELL-NEXT-DEADLINE ( -- ms|-1 )
 \   The next moment the shell must act without input: the next tick or a
-\   visible toast's expiry.  Nothing wakes a sleeping core when the
-\   terminal is resized, so without an owner, which reports resizes as
-\   input, the hardware flag is still polled once a tick.
+\   shown toast's expiry.  A toast no paint has shown yet has no expiry;
+\   raising it asked for the paint that starts its time.  Nothing wakes a
+\   sleeping core when the terminal is resized, so without an owner,
+\   which reports resizes as input, the hardware flag is still polled
+\   once a tick.
 : _ASHELL-NEXT-DEADLINE  ( -- ms|-1 )
     _ASHELL-TICK-DEADLINE
-    _ASHELL-TOAST-WAS-VIS @ IF _ASHELL-TOAST-EXPIRY @ _ASHELL-UMIN THEN
+    _ASHELL-TOAST-WAS-VIS @ _ASHELL-TOAST-ARMED @ AND IF
+        _ASHELL-TOAST-EXPIRY @ _ASHELL-UMIN
+    THEN
     _ASHELL-TERM-OWNS @ 0= IF MS@ _ASHELL-TICK-MS @ + _ASHELL-UMIN THEN ;
 
 : _ASHELL-DISPATCH-EVENT  ( -- )
