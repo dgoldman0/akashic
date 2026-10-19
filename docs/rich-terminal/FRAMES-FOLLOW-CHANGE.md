@@ -1,7 +1,9 @@
 # A frame's work follows what changed — design, 2026-10-19
 
 Status: proposed on 2026-10-19. Its four decisions were taken the same day
-(see Decisions). Each part is approved on its own. Part 0 is done.
+(see Decisions). Each part is approved on its own. Part 0 is done. After
+it, part 9 and the adapter's growing banks in part 5 were added the same
+day.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -70,6 +72,12 @@ itself.
 part 0's baseline, to about 6 million or fewer. Frames
 that change more, such as an application switch or a dialog opening, gain
 less, because more of their inputs change.
+
+Part 0 found two more things this design takes on. Outside typing, painting
+the CELL screen costs about as much as building the rich frame, and a third
+to over half of that painting fills backgrounds that were just filled; part
+9 stops it. And the adapter's banks are fixed at 19.1 MiB while its
+snapshots use tens of KiB; part 5 makes them grow on demand.
 
 ## Rules
 
@@ -206,10 +214,11 @@ and the shell's batch, freeze, emission and per-dispatch checks 6.75
 million. Desk with one application builds a DELTA interaction's frames in
 7.5 to 10.9 million steps on average and a START's in 18.3 to 23.5 million.
 The adapter's banks are 19.1 MiB, fixed when Desk starts, and its snapshots
-used 12 to 40 KiB. The note also records what this design leaves out: Desk's
-painting, a third to over half of it repeated background fills, costs about
-as much as the frame build outside typing, and the CELL flush outside the
-producer took 51 to 488 million steps over a run.
+used 12 to 40 KiB; part 5 now makes them grow on demand. Outside typing,
+Desk's painting costs about as much as the frame build, and a third to over
+half of it is repeated background fills, which part 9 now removes. The CELL
+flush outside the producer took 51 to 488 million steps over a run, which
+this design leaves out.
 
 ## Part 1. A shadow full build checks every frame — test tool
 
@@ -322,6 +331,10 @@ fixed in full before the parts that make frames cheaper.
   families it recaptured.
 - The producer captures pictures for every visible document on every build
   (`RUHA-PICTURES@`, 3510).
+- Desk gives RUHA fixed banks when it starts, sized from the most documents,
+  UIDL elements and text it could hold (`desk-apt1.f:229-305`): 19.1 MiB,
+  of which part 0's snapshots used 12 to 40 KiB. The producer, the engine
+  and the shell instead grow from Desk's memory source as the screen needs.
 
 **Change.**
 
@@ -334,11 +347,17 @@ fixed in full before the parts that make frames cheaper.
   recaptured whole. Recapturing single elements inside a family, and copying
   the rest, is a later step, taken only if part 0 or this part's measurement
   shows that a family's other elements cost much.
-- RUHA keeps its own copy of what it last captured or copied, in a block from
-  Desk's memory source, as the engine does for what it admitted
-  (KEYSTROKE-FRAME-WORK part 5). Reused slices are copied from that copy,
-  which only RUHA writes. Nothing is read back from the caller's banks, so
-  their deep re-validation stops.
+- RUHA's banks become its own and grow from Desk's memory source, as the
+  shell's do (SHELL-SCREEN-PRODUCER). Each starts small. When a capture runs
+  out of room in a bank, RUHA takes a block for what was needed and half
+  again and captures once more, until the snapshot fits or the memory source
+  says no. Only the inactive bank grows, and nothing reads it, so nothing is
+  relocated. Desk no longer sizes them.
+- RUHA's active bank is then its own copy of what it last captured or
+  copied, from Desk's memory source, as the engine keeps what it admitted
+  (KEYSTROKE-FRAME-WORK part 5): only RUHA writes it, and nothing writes it
+  while it is active. Reused slices are copied from it, and their deep
+  re-validation stops, since no caller holds the banks any more.
 - The snapshot exports a revision for each document's family slice, which
   moves whenever RUHA recaptures it. Part 6 lowers again only the slices whose
   revisions moved.
@@ -348,14 +367,15 @@ fixed in full before the parts that make frames cheaper.
 **Proof.** A capture reads only the element's state, its widget's state, and
 the document's geometry, visibility, focus and occlusion. Each is counted by
 its owner on every change (parts 2 and 3) or compared directly, so equal
-counters give an equal capture. Only RUHA writes its copy, from slices it has
-just captured or from the copy itself, and the storage proofs keep every
-other span apart from it. The shadow check confirms the equality on every
-frame of every test.
+counters give an equal capture. Only RUHA writes its banks: the inactive one
+while it captures, from the active one or from live widgets, and neither
+while it is active. The storage proofs keep every other span apart from
+them. The shadow check confirms the equality on every frame of every test.
 
 **Effect.** Most of the snapshot's 3.78 million steps a typing frame:
 only the families holding the edited text area and the status line are
-captured, and no slice is validated in depth.
+captured, and no slice is validated in depth. RUHA's memory falls from 19.1
+MiB to what its two banks need, tens of KiB in part 0's runs.
 
 ## Part 6. The producer lowers only what changed — repeat
 
@@ -465,6 +485,46 @@ its own proof, and the review approves it once measured. Known now:
   only the shell's batch is sent unless the shell refuses. Whether that
   admission can wait until the base candidate is needed needs its own look.
 
+## Part 9. A repaint fills each cell once — exact speed-up
+
+**Today.**
+
+- When a document repaints, each container element fills its whole
+  rectangle with blanks before its children draw (`_UTUI-FILL-BG`,
+  `uidl-tui.f:1010`), and each child container fills its own rectangle
+  again. Nested containers cover largely the same cells.
+- A fill (`DRW-FILL-RECT`, `draw.f:582`) draws its rectangle a row at a time
+  through `DRW-HLINE`. Each row takes its own borrow of the screen's back
+  plane, and each cell its own store into the plane.
+- In File Explorer's item open in part 0, the root, the split, the region,
+  the tab set and the scroll area filled for 24.1 million of the painting's
+  30.9 million steps; the widgets themselves drew for 6.4 million. Over part
+  0's runs, fills took 15 to 455 million steps a run, a third to over half
+  of Desk's painting, which outside typing costs about as much as the frame
+  build.
+
+**Change.**
+
+- A fill leaves alone every row whose cells, and the residue the draw
+  records for them, already hold byte for byte what the fill would write.
+  Each row is checked with block compares, and only rows that differ are
+  written.
+- A fill takes one borrow of the back plane for all its rows.
+
+**Proof.** A row left alone already holds what writing it would store, in
+its cells and its residue. The CELL damage plan comes out the same: a row
+this fill does not write was either untouched since the last commit, and so
+equal to the front, or written earlier in the frame and still marked as
+touched. The tests compare the screen, the residue and the damage plan of
+whole paints, with and without the check, over seeded documents with nested
+containers, styles, wide characters and clips. The shadow check compares
+the rich frames.
+
+**Effect.** Most of the repeated fills. This is CELL-side work, done on
+every repaint whether the terminal is rich or not, so it helps the
+simulator and the chip alike. Parts 2 to 4 cut how often whole documents
+repaint; this part cuts what each repaint costs.
+
 ## Memory
 
 On the canonical Desktop at 280 × 84 the producer holds about 19 MB from
@@ -477,16 +537,18 @@ the system and Desk have loaded (`akashic_tui.py`). RUHA's banks are fixed
 by Desk when it starts, at 19.1 MiB, and its snapshots used 12 to 40 KiB of
 them in part 0's runs.
 
-This design adds:
+This design changes:
 
-- RUHA's copy: one aggregate's slices, tens of KiB in part 0's runs;
-- the engine's and the family preflight's copies of fields, dialogs,
-  instruments, series, status fields and panes, a small share of what they
-  keep for controls and glyph runs today.
+- RUHA's banks fall from 19.1 MiB, fixed, to what its snapshots need,
+  growing on demand: tens of KiB in part 0's runs. Its active bank serves as
+  its copy, so it keeps no other (part 5);
+- the engine's and the family preflight's copies grow to cover fields,
+  dialogs, instruments, series, status fields and panes, a small share of
+  what they keep for controls and glyph runs today.
 
-The producer and the shell copy from banks they already keep. Each new copy
-grows from Desk's memory source to what the screen needs and half again, as
-the engine's does. Each part reports what it adds.
+The producer and the shell copy from banks they already keep. Every bank
+and copy grows from Desk's memory source to what the screen needs and half
+again, as the engine's does. Each part reports what it adds or frees.
 
 ## Order and checks
 
@@ -497,10 +559,11 @@ the engine's does. Each part reports what it adds.
 | 3 | Part 2 | this review | proposed |
 | 4 | Part 3 | this review | proposed |
 | 5 | Part 4 | this review | proposed |
-| 6 | Part 5 | this review | proposed |
-| 7 | Part 6 | this review | proposed |
-| 8 | Part 7 | this review | proposed |
-| 9 | Part 8 | its own, once the call tree is in | proposed |
+| 6 | Part 9, which changes the same paint pass as parts 3 and 4 | this review | proposed |
+| 7 | Part 5 | this review | proposed |
+| 8 | Part 6 | this review | proposed |
+| 9 | Part 7 | this review | proposed |
+| 10 | Part 8 | its own, once the call tree is in | proposed |
 
 For each slice:
 
@@ -531,7 +594,8 @@ these rows.
 | Frame build | 16.13M | about 5.6M |
 
 Steps a frame also count Desk's painting and the terminal service, about 3
-million together, which this design leaves as they are.
+million together. A typed letter repaints one row, so part 9 changes little
+here; its gain is in frames that repaint whole documents.
 
 ## Not in this design
 
@@ -545,6 +609,8 @@ million together, which this design leaves as they are.
   identities stay whole-screen.
 - **Applications' own work,** such as a Worlds step's repaint, or Sound Lab's
   render and its CELL waveform.
+- **The CELL flush:** the changed cells' path through the CELL layers, 51 to
+  488 million steps over part 0's runs. It needs its own design.
 - **The simulator host's work:** decoding, composition and the viewer.
 - **One candidate instead of two.** The producer's and the shell's stages
   stay separate; this design makes both follow change.
