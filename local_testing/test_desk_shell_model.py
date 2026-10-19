@@ -141,6 +141,9 @@ CREATE _dh-press 24 ALLOT
     _dh-model @ SHM.PROMPT-OFF @ _dh-model @ SHM.PROMPT-U @ + 7 + -8 AND
         _dh-model @ SHM.NOTICE-OFF @ = _dh-assert
     _DESK-AGENT-PROMPT @ PRM-HIDE
+    \ The paints here have no flush, which would start the notice's time
+    \ once its output had gone out; start it as that flush would.
+    _ASHELL-TOAST-ARM
     MS@ 1- _ASHELL-TOAST-EXPIRY ! _ASHELL-TOAST-LATCH
     _dh-desk @ DESK-PAINT-CB
     _dh-model @ SHM.NOTICE-U @ 0= _dh-assert
