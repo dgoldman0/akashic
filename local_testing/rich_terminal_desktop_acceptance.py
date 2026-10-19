@@ -11674,6 +11674,66 @@ def _growing_storage_record(client, variables: dict) -> dict:
     return record
 
 
+# The aggregate adapter (RUHA) keeps its banks in storage Desk gives it when
+# it starts.  The producer's record names the adapter, whose record holds the
+# size of every bank, both halves of each double bank counted, and two
+# snapshots, the active one holding the bytes the last aggregate used.  The
+# cells follow uidl-hybrid-adapter.f's ABI 10 layout; its magic and size
+# guard against reading another layout.
+_ADAPTER_MAGIC = 0x3031485544495552  # "RUIDUH10"
+_ADAPTER_RECORD_CELLS = 142
+_ADAPTER_BANK_CELLS = {
+    "attachment_records": 6, "capture_work": 9, "capture_text": 11,
+    "directory": 13, "menu_records": 16, "menu_text": 19,
+    "collection_validation": 28, "collection_work": 30,
+    "collection_descriptors": 32, "collection_native": 35,
+    "data_graphics_descriptors": 49, "data_graphics_native": 52,
+    "status_field_descriptors": 65, "status_field_native": 68,
+    "field_descriptors": 71, "field_native": 74,
+    "dialog_descriptors": 77, "dialog_native": 80,
+}
+_ADAPTER_ACTIVE_BANK = 21
+_ADAPTER_SNAPSHOT_CELLS = (82, 112)
+_SNAPSHOT_DOCUMENT_COUNT = 8
+_SNAPSHOT_USED_CELLS = {
+    "directory": 3, "menu_records": 5, "menu_text": 7,
+    "collection_descriptors": 11, "collection_native": 13,
+    "data_graphics_descriptors": 15, "data_graphics_native": 17,
+    "status_field_descriptors": 19, "status_field_native": 21,
+    "field_descriptors": 23, "field_native": 25,
+    "dialog_descriptors": 27, "dialog_native": 29,
+}
+
+
+def _adapter_storage_record(client, producer: int) -> dict:
+    """The aggregate adapter's banks, and the bytes its last snapshot used."""
+
+    if not isinstance(producer, int) or producer <= 0:
+        return {"unavailable": True}
+    try:
+        index = _GUEST_FAILURE_RECORDS["hybrid_producer"][2]["adapter"]
+        adapter = _read_guest_cells(
+            client, address=producer + index * GUEST_CELL_BYTES, count=1
+        )[0]
+        if adapter <= 0:
+            return {"unavailable": True}
+        cells = _read_guest_cells(client, address=adapter, count=_ADAPTER_RECORD_CELLS)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    if cells[0] != _ADAPTER_MAGIC or cells[2] != _ADAPTER_RECORD_CELLS * GUEST_CELL_BYTES:
+        return {"unavailable": True, "error": "not an ABI 10 adapter record"}
+    banks = {name: cells[i] for name, i in _ADAPTER_BANK_CELLS.items()}
+    record = {"bank_bytes": sum(banks.values()), "banks": banks}
+    active = cells[_ADAPTER_ACTIVE_BANK]
+    if active in (0, 1):
+        first = _ADAPTER_SNAPSHOT_CELLS[active]
+        used = {name: cells[first + i] for name, i in _SNAPSHOT_USED_CELLS.items()}
+        record["snapshot_used_bytes"] = sum(used.values())
+        record["snapshot_used"] = used
+        record["snapshot_documents"] = cells[first + _SNAPSHOT_DOCUMENT_COUNT]
+    return record
+
+
 # Why changed draws went out as complete replacements: each producer counts
 # its DELTA refusals by the check that refused them.  The base producer's
 # codes are those of _RTHP-D-WHY; the shell's prepare codes are its DSTAGE
@@ -11740,6 +11800,9 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
                 client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
             ),
             "growing_storage": _growing_storage_record(client, variables),
+            "adapter_storage": _adapter_storage_record(
+                client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
+            ),
             "delta_refusals": _delta_refusal_record(client),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"
