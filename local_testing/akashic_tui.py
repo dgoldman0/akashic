@@ -11862,16 +11862,19 @@ CREATE _aw-prompt-buf 32 ALLOT
     80 20 SCR-NEW DUP _aw-screen ! SCR-USE
     0 0 20 80 RGN-NEW _aw-region !
     _aw-test-prompt-overlay
+    \ The run settings are a view the Agent's mounted panel draws in the
+    \ transcript's place, its settings fields beneath the panel's source, so
+    \ unlike the account panel below they are no foreground overlay.
     _aw-runtime _aw-region @ ARSP-NEW DUP _aw-widget ! ARSP-SHOW
     _aw-widget @ ARSP-ACTIVE? _aw-assert
     11111 _aw-widget @ WDG-DRAW
     11111 = _aw-assert
-    0 0 20 80 _aw-assert-overlay
+    0 0 20 80 _aw-assert-no-overlay
     SCR-CLEAR
     _aw-ready-settings
     12345 _aw-widget @ WDG-DRAW
     12345 = _aw-assert
-    0 0 20 80 _aw-assert-overlay
+    0 0 20 80 _aw-assert-no-overlay
     SCR-CLEAR
     _aw-event KEY-T-SPECIAL KEY-ESC 0 _KEY-SET-EV
     _aw-event _aw-widget @ WDG-HANDLE _aw-assert
@@ -11896,6 +11899,7 @@ _aw-run
 """,
         ready_markers=("AGENT WIDGETS PASS",),
         stable_markers=("AGENT WIDGETS PASS",),
+        failure_markers=("AGENT WIDGETS FAIL",),
     ),
     "agent-ui": Profile(
         roots=(
