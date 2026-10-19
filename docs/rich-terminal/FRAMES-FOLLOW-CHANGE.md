@@ -1,7 +1,7 @@
 # A frame's work follows what changed — design, 2026-10-19
 
 Status: proposed on 2026-10-19. Its four decisions were taken the same day
-(see Decisions). Each part is approved on its own.
+(see Decisions). Each part is approved on its own. Part 0 is done.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -12,13 +12,14 @@ snapshot itself to follow change." This design is that step.
 
 ## Summary
 
-A character typed into Pad on the rich Desktop costs the guest about 18
-million steps a frame, and about 15 million of them build the frame
-(`_RTHP-PREPARE-LIVE`). That was measured on 2026-10-14, before the rich
-components work landed. The earlier designs removed work that repeated
-within a frame. What is left follows the number of items on the screen, not
-what changed: at a quarter of the area, a key still cost three quarters as
-much.
+A character typed into Pad on the rich Desktop costs the guest about 19
+million steps a frame, and about 16 million of them build the frame
+(`_RTHP-PREPARE-LIVE`), measured in part 0. The earlier designs removed work
+that repeated within a frame. What is left follows the number of items on
+the screen, not what changed: at a quarter of the area, a key still cost
+three quarters as much in October, and in part 0 the same kind of edit in
+Pad cost half as much on a Desk showing only Pad as on one showing five
+applications.
 
 A typed letter changes one text area, the caret and the status line. Each
 frame still:
@@ -65,8 +66,8 @@ and takes everything else from its own last result. Applications stop
 bridging change: a widget's change reaches UIDL, CELL and the rich path by
 itself.
 
-**Target,** to be confirmed by part 0's baseline: a typed letter's frame
-build falls from about 15 million steps to about 6 million or fewer. Frames
+**Target:** a typed letter's frame build falls from about 16 million steps,
+part 0's baseline, to about 6 million or fewer. Frames
 that change more, such as an application switch or a dialog opening, gain
 less, because more of their inputs change.
 
@@ -195,6 +196,20 @@ status fields and plots landed. Before any change, on main:
   KEYSTROKE-FRAME-WORK, and the memory RUHA, the producer and the shell hold.
 
 These numbers set the targets the later parts are measured against.
+
+**Done** on 2026-10-19
+(`local_testing/evidence/frames-follow-change-part0-20261019.md`), read with
+the new `local_testing/frame_build_stages.py`. A typing burst frame costs
+19.16 million steps, 16.13 million of them its build: the snapshot 3.78
+million, the producer's candidate 3.56 million, the comparison 1.60 million,
+and the shell's batch, freeze, emission and per-dispatch checks 6.75
+million. Desk with one application builds a DELTA interaction's frames in
+7.5 to 10.9 million steps on average and a START's in 18.3 to 23.5 million.
+The adapter's banks are 19.1 MiB, fixed when Desk starts, and its snapshots
+used 12 to 40 KiB. The note also records what this design leaves out: Desk's
+painting, a third to over half of it repeated background fills, costs about
+as much as the frame build outside typing, and the CELL flush outside the
+producer took 51 to 488 million steps over a run.
 
 ## Part 1. A shadow full build checks every frame — test tool
 
@@ -338,7 +353,7 @@ just captured or from the copy itself, and the storage proofs keep every
 other span apart from it. The shadow check confirms the equality on every
 frame of every test.
 
-**Effect.** Most of the snapshot's 3.0 to 3.3 million steps a typing frame:
+**Effect.** Most of the snapshot's 3.78 million steps a typing frame:
 only the families holding the edited text area and the status line are
 captured, and no slice is validated in depth.
 
@@ -382,8 +397,8 @@ copied items come from the producer's own acknowledged bank. The engine's skips
 rest on KEYSTROKE-FRAME-WORK part 5's proof, unchanged: only the engine
 writes its copy, from items it has just checked in full.
 
-**Effect.** Most of the candidate's 3.5 million steps and of the
-comparison's 1.5 million in a typing frame.
+**Effect.** Most of the candidate's 3.56 million steps, the target pack's
+0.42 million and the comparison's 1.60 million in a typing frame.
 
 ## Part 7. The shell builds only what changed — repeat
 
@@ -424,7 +439,7 @@ frozen, and a bank that ACTIVE names is never written again
 the producer for the items it carried, the screen for `ROW-DAMAGE`, and the
 shell's own model comparison.
 
-**Effect.** Most of the shell's preflight, freeze and emission, 3.6 million
+**Effect.** Most of the shell's batch, freeze and emission, 5.51 million
 steps a typing frame.
 
 ## Part 8. What the call tree still shows — repeat, exact speed-up
@@ -436,7 +451,8 @@ its own proof, and the review approves it once measured. Known now:
 - RUHA validates its header and proves its storage, and every document's, at
   each entry: at projection, in the snapshot's preflight, and in each of the
   shell's six dispatches a frame, which also prove the shell's own storage.
-  That was about 0.8 million steps a frame in October. Where nothing can move
+  In part 0 the adapter's checks took 1.62 million steps a typing frame and
+  the shell's checks at each dispatch 1.24 million. Where nothing can move
   storage between two proofs in one frame, the later proof repeats the
   earlier one.
 - The snapshot's preflight runs before its check for a draw already
@@ -445,7 +461,6 @@ its own proof, and the review approves it once measured. Known now:
   frame across both producers; whole rows can be copied at once.
 - The residual planner checks every claim and span once a call, ten to
   fourteen calls a frame; one call a region saves about 0.25 million.
-- The shell model is compared whole twice a frame.
 - With the shell installed, the producer's own candidate is admitted although
   only the shell's batch is sent unless the shell refuses. Whether that
   admission can wait until the base candidate is needed needs its own look.
@@ -455,27 +470,29 @@ its own proof, and the review approves it once measured. Known now:
 On the canonical Desktop at 280 × 84 the producer holds about 19 MB from
 Desk's memory source, 13.5 MB of it its arena, and the shell about 5 MB: two
 237 KB banks and a 4.4 MB work space (`final-guest-diagnostics.json`,
-2026-10-18). The rich Desktop machine has 384 MiB of external memory, and
-about 178 MiB of its general partition is free once the system and Desk have
-loaded (`akashic_tui.py`). RUHA's banks are fixed by Desk when it starts.
+2026-10-18). With one application, in part 0, the producer held 14.3 to
+15.4 MiB and the shell 4.2 to 4.4 MiB. The rich Desktop machine has 384 MiB
+of external memory, and about 178 MiB of its general partition is free once
+the system and Desk have loaded (`akashic_tui.py`). RUHA's banks are fixed
+by Desk when it starts, at 19.1 MiB, and its snapshots used 12 to 40 KiB of
+them in part 0's runs.
 
 This design adds:
 
-- RUHA's copy: one aggregate's slices;
+- RUHA's copy: one aggregate's slices, tens of KiB in part 0's runs;
 - the engine's and the family preflight's copies of fields, dialogs,
   instruments, series, status fields and panes, a small share of what they
   keep for controls and glyph runs today.
 
 The producer and the shell copy from banks they already keep. Each new copy
 grows from Desk's memory source to what the screen needs and half again, as
-the engine's does. Part 0 measures the starting sizes, and each part reports
-what it adds.
+the engine's does. Each part reports what it adds.
 
 ## Order and checks
 
 | Slice | Content | Approval | State |
 | --- | --- | --- | --- |
-| 1 | Part 0 | this review | proposed |
+| 1 | Part 0 | this review | done |
 | 2 | Part 1 | this review | proposed |
 | 3 | Part 2 | this review | proposed |
 | 4 | Part 3 | this review | proposed |
@@ -498,21 +515,22 @@ For each slice:
 
 ## Expected effect
 
-Estimates against KEYSTROKE-FRAME-WORK's last measurement of a burst typing
-frame. Part 0 replaces the left column with today's numbers. RUHA's and the
-shell's per-entry proofs are spread across these rows.
+Estimates against part 0's measurement of a burst typing frame. The
+adapter's checks (1.62M) and the storage-aliasing checks (3.82M) run inside
+these rows.
 
-| Stage | 2026-10-14 | After this design (estimate) |
+| Stage | Part 0, 2026-10-19 | After this design (estimate) |
 | --- | ---: | ---: |
-| Documents' snapshot | 3.0–3.3M | about 1.0M |
-| Producer's candidate, with the engine's admission | 3.5M | about 1.2M |
-| Comparison | 1.5M | about 0.3M |
-| Shell's preflight, freeze and emission | 3.65M | about 1.0M |
-| Shell's storage proof | 0.9M | 0.9M, less after part 8 |
-| Glyph planning and copying unchanged runs | 1.9M | about 1.2M |
-| Frame build | 15.1M | about 5.6M |
+| Documents' snapshot | 3.78M | about 1.0M |
+| Producer's candidate, with the engine's admission and its glyphs | 3.56M | about 1.3M |
+| Target pack | 0.42M | about 0.1M |
+| Comparison | 1.60M | about 0.3M |
+| Shell's batch, with its preflight and glyphs | 3.74M | about 1.3M |
+| Shell's freeze and emission | 1.77M | about 0.4M |
+| Shell's checks at each dispatch | 1.24M | 1.24M, less after part 8 |
+| Frame build | 16.13M | about 5.6M |
 
-Steps a frame also count Desk's painting and the terminal service, about 2
+Steps a frame also count Desk's painting and the terminal service, about 3
 million together, which this design leaves as they are.
 
 ## Not in this design
