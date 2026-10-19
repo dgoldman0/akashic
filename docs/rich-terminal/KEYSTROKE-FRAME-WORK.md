@@ -584,7 +584,8 @@ Going further than that needs the snapshot itself to follow change.
   recaptures the whole edited document. Doing less needs a change signal per
   widget. Today UIDL's dirty marks miss widget state that changes outside
   UIDL; Pad bridges that gap itself (`pad.f:2705-2734`). That needs revisions in
-  the canonical widgets first.
+  the canonical widgets first. [FRAMES-FOLLOW-CHANGE.md](FRAMES-FOLLOW-CHANGE.md)
+  proposes them, and the snapshot and producers that follow change.
 - **Re-validating unchanged documents' slices.** That guards caller-provided
   banks against corruption, and it stays, as PER-KEY-FRAME-REPEATS decided.
 - **An STX1 item patch on the wire.** SEMANTIC-CONTENT-1 names this as the next
