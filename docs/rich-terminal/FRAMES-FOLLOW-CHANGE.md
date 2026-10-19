@@ -1,6 +1,7 @@
 # A frame's work follows what changed — design, 2026-10-19
 
-Status: proposed on 2026-10-19. Each part is approved on its own.
+Status: proposed on 2026-10-19. Its four decisions were taken the same day
+(see Decisions). Each part is approved on its own.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -286,8 +287,8 @@ widget changes to UIDL:
   launcher also shows a change of content at the same count.
 
 Each application is checked with its own tests and Desk with that
-application. This part can follow parts 5 to 7 if that is more useful; the
-bridges are harmless, only needless, once parts 2 and 3 land.
+application. This part follows part 3 directly, so the design violation is
+fixed in full before the parts that make frames cheaper.
 
 ## Part 5. The snapshot recaptures only what changed — repeat, with memory
 
@@ -478,8 +479,8 @@ what it adds.
 | 2 | Part 1 | this review | proposed |
 | 3 | Part 2 | this review | proposed |
 | 4 | Part 3 | this review | proposed |
-| 5 | Part 4 | this review; it may move after slice 8 | proposed |
-| 6 | Part 5 | this review, with its decision on RUHA's copy | proposed |
+| 5 | Part 4 | this review | proposed |
+| 6 | Part 5 | this review | proposed |
 | 7 | Part 6 | this review | proposed |
 | 8 | Part 7 | this review | proposed |
 | 9 | Part 8 | its own, once the call tree is in | proposed |
@@ -534,21 +535,18 @@ million together, which this design leaves as they are.
 - **Bound state marking its elements by itself.** UIDL's contract keeps the
   application's `UIDL-DIRTY!` after it changes bound state.
 
-## Decisions for review
+## Decisions
 
-1. **How fine the snapshot reuses.** Proposed: counters per widget and UIDL
-   element, with reuse per family slice first, and single elements only if
-   measurement shows it pays. The alternative, single elements from the
-   start, saves more on documents with many elements, but needs every
-   family's records rebased inside a slice.
-2. **RUHA's own copy.** Proposed: RUHA keeps a copy from Desk's memory source
-   and stops validating reused slices in depth, as the engine does with what
-   it admitted. The alternative keeps the deep validation and its cost, and
-   needs no memory.
-3. **The shadow check.** Proposed: a committed switch, off by default, that
-   tests and diagnostic runs turn on. The alternative is scratch builds, as
-   PER-KEY-FRAME-REPEATS used, which cannot run under the physical launcher's
-   clean-source rule.
-4. **When applications stop bridging.** Proposed: part 4 right after part 3,
-   so the design violation is fixed in full first. The alternative puts it
-   after part 7, so the speed comes first.
+Taken on 2026-10-19:
+
+1. **How fine the snapshot reuses.** Counters are kept per widget and per
+   UIDL element. The snapshot reuses whole family slices first, and single
+   elements inside a family only if measurement shows it pays (part 5).
+2. **RUHA's own copy.** RUHA keeps its own copy of what it captured, in a
+   block from Desk's memory source, and stops validating reused slices in
+   depth, as the engine does with what it admitted (part 5).
+3. **The shadow check.** It is a committed switch, off by default, that
+   tests and diagnostic runs turn on, so it also runs under the physical
+   launcher, which refuses uncommitted sources (part 1).
+4. **When applications stop bridging.** Part 4 follows part 3 directly, so
+   the design violation is fixed in full first.
