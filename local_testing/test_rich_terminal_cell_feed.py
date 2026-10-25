@@ -152,6 +152,8 @@ class _FeedHarness:
              "tui/rich-terminal/fdc1.f"),
             (b"dlg1.f", b"akashic-tui-dlg1",
              "tui/rich-terminal/dlg1.f"),
+            (b"../check-mode.f", b"akashic-tui-check-mode",
+             "tui/check-mode.f"),
             (b"apt1-engine.f", b"akashic-tui-rtapt",
              "tui/rich-terminal/apt1-engine.f"),
         )

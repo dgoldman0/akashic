@@ -98,14 +98,15 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
     body = _word(source, "_RTAPT-HYBRID-PREFLIGHT-BODY")
     limits = _word(source, "RTAPT-LIMITS@")
     after_valid = _word(source, "_RTAPT-LIMITS-AFTER-VALID@")
-    assert limits.count("_RTAPT-ENGINE-VALID?") == 1
+    assert limits.count("_RTAPT-ENGINE-FRAME?") == 1
     assert limits.count("_RTAPT-LIMITS-AFTER-VALID@") == 1
     assert "_RTAPT-ENGINE-VALID?" not in after_valid
-    assert body.count("_RTAPT-ENGINE-VALID?") == 1
+    assert "_RTAPT-ENGINE-FRAME?" not in after_valid
+    assert body.count("_RTAPT-ENGINE-FRAME?") == 1
     assert body.count("_RTAPT-LIMITS-AFTER-VALID@") == 1
     assert "RTAPT-LIMITS@" not in body
     _ordered(
-        body, "_RTAPT-ENGINE-VALID?", "_RTAPT-HAF-FIELDS?",
+        body, "_RTAPT-ENGINE-FRAME?", "_RTAPT-HAF-FIELDS?",
         "_RTAPT-LIMITS-AFTER-VALID@", "RTAPT-F-CONTROLS AND 0=",
         "_RTAPT-L.GLYPH-RUN-BYTES @ 0=", "_RTAPT-HAF-ARITHMETIC?",
     )

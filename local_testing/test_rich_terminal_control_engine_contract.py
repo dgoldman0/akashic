@@ -262,20 +262,22 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
 
 
 def test_recording_relies_on_the_begin_and_commit_ledger_audits() -> None:
-    # Control recording does not rescan the ledger.  That is safe only while
-    # BEGIN audits it, recording needs a capturing engine with no active or
-    # queued work (the only times the engine writes the ledger), and the
-    # publication audit rescans it and checks every recorded change.
+    # Control recording does not rescan the ledger.  That is safe while
+    # recording needs a capturing engine with no active or queued work (the
+    # only times the engine writes the ledger) and the publication audit
+    # rescans it and checks every recorded change, so that nothing is
+    # published from a ledger that is wrong.  With every-frame checks on,
+    # BEGIN audits it as well.
     source = _text(PROVIDER)
     begin = _word(source, "RTAPT-RICH-BEGIN")
-    engine_valid = _word(source, "_RTAPT-ENGINE-VALID?")
+    engine_ledgers = _word(source, "_RTAPT-ENGINE-LEDGERS?")
     common = _word(source, "_RTAPT-CONTROL-COMMON?")
     ready = _word(source, "_RTAPT-CAPTURE-READY?")
     audit = _word(source, "_RTAPT-PUBLICATION-AUDIT-BODY")
     replace_check = _word(source, "_RTAPT-PUBLICATION-CONTROL-REPLACE?")
 
-    _ordered(begin, "_RTAPT-ENGINE-VALID?", "RTAPT-UPDATE-CAPTURING")
-    assert "_RTAPT-CONTROL-LEDGER-VALID?" in engine_valid
+    _ordered(begin, "_RTAPT-ENGINE-FRAME?", "RTAPT-UPDATE-CAPTURING")
+    assert "_RTAPT-CONTROL-LEDGER-VALID?" in engine_ledgers
     _ordered(common, "RTAPT-UPDATE-CAPTURING <>", "_RTAPT-CAPTURE-READY?")
     assert "_RTAPT-ACTIVE-NONE <>" in ready
     assert "_RTAPT-E.QUEUE-HEAD @ OR" in ready

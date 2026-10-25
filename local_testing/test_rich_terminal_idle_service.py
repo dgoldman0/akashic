@@ -29,8 +29,14 @@ VARIABLE TEST-POLLS
 VARIABLE TEST-POLL-HAS
 VARIABLE TEST-POLL-STATUS
 VARIABLE TEST-ENDED
+VARIABLE TEST-STATES
+VARIABLE TEST-WALKS
+VARIABLE CHK-EVERY-FRAME  -1 CHK-EVERY-FRAME !
+: CHK-EVERY-FRAME? CHK-EVERY-FRAME @ 0<> ;
 : _RTAPT-ENGINE-STORAGE? DROP TEST-STORAGE-OK @ ;
 : _RTAPT-ENGINE-VALID? DROP 1 TEST-AUDITS +! TEST-AUDIT-OK @ ;
+: _RTAPT-ENGINE-STATE? DROP 1 TEST-STATES +! TEST-AUDIT-OK @ ;
+: _RTAPT-ENGINE-LEDGERS? DROP 1 TEST-WALKS +! TEST-AUDIT-OK @ ;
 : _RTAPT-READY-STATUS DROP TEST-READY @ ;
 : _RTAPT-SESSION-ENDED? DROP TEST-ENDED @ ;
 : _RTAPT-POLL-COMPLETION
@@ -132,3 +138,21 @@ def test_active_completion_still_requires_full_audit_on_every_poll(service):
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)
     assert service.variable('TEST-AUDITS') == 2
     assert service.variable('TEST-POLLS') == 1
+
+
+def test_normal_mode_checks_a_waiting_step_s_state_and_walks_ledgers_for_queued_work(service):
+    # In normal mode a step that is not idle checks the engine's state and
+    # walks the ledgers only while lifecycle work is queued.
+    service.variable('CHK-EVERY-FRAME', 0)
+    service.set('ACTIVE-KIND', 1)
+    service.variable('TEST-AUDIT-OK', 0)
+    assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)
+    assert (service.variable('TEST-AUDITS'), service.variable('TEST-STATES'),
+            service.variable('TEST-WALKS')) == (0, 1, 0)
+    service.variable('TEST-AUDIT-OK', (1 << 64) - 1)
+    service.set('QUEUE-HEAD', 1)
+    service.variable('TEST-AUDIT-OK', 0)
+    assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)
+    assert service.variable('TEST-STATES') == 2
+    assert service.variable('TEST-AUDITS') == 0
+

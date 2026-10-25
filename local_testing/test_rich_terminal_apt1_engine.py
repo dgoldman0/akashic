@@ -347,7 +347,21 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     proof = _definition(source, "_RTAPT-LAYOUT-PROOF?")
     same = _definition(source, "_RTAPT-LP-SAME?")
     keep = _definition(source, "_RTAPT-LP-KEEP")
-    validate = _definition(source, "_RTAPT-ENGINE-VALID?")
+    # The exhaustive audit is the engine's state and its two ledgers.  The
+    # calls every frame makes check the state, and walk the ledgers only with
+    # every-frame checks on.
+    audit = _definition(source, "_RTAPT-ENGINE-VALID?")
+    state = _definition(source, "_RTAPT-ENGINE-STATE?")
+    ledgers_audit = _definition(source, "_RTAPT-ENGINE-LEDGERS?")
+    frame = _definition(source, "_RTAPT-ENGINE-FRAME?")
+    assert audit.index("_RTAPT-ENGINE-STATE?") < audit.index("_RTAPT-ENGINE-LEDGERS?")
+    assert "_RTAPT-CONTROL-LEDGER-VALID?" in ledgers_audit
+    assert "_RTAPT-OWNER-LEDGERS?" in ledgers_audit
+    assert "LEDGER" not in state
+    assert "CHK-EVERY-FRAME? IF _RTAPT-ENGINE-VALID? EXIT THEN" in frame
+    assert frame.index("_RTAPT-ENGINE-VALID?") < frame.index(
+        "_RTAPT-ENGINE-STATE?") < frame.index("_RTAPT-E.QUEUE-HEAD @ IF _RTAPT-ENGINE-LEDGERS?")
+    validate = audit + state + ledgers_audit
     quarantine_coherent = _definition(source, "_RTAPT-QUARANTINE-COHERENT?")
     assert storage.index("_RTAPT-ENGINE-MAGIC <>") < storage.index(
         "_RTAPT-LAYOUT?"
@@ -629,10 +643,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
 
     assert "PT-PRESENT-BEGIN" not in rich_begin
     assert "RTAPT-UPDATE-CAPTURING" in rich_begin
-    # One complete audit per capture: the limits refresh reuses it.
-    assert rich_begin.count("_RTAPT-ENGINE-VALID?") == 1
+    # One check of the engine per capture, complete with every-frame checks
+    # on: the limits refresh reuses it.
+    assert rich_begin.count("_RTAPT-ENGINE-FRAME?") == 1
+    assert "_RTAPT-ENGINE-VALID?" not in rich_begin
     assert "RTAPT-LIMITS@" not in rich_begin
-    assert rich_begin.index("_RTAPT-ENGINE-VALID?") < rich_begin.index(
+    assert rich_begin.index("_RTAPT-ENGINE-FRAME?") < rich_begin.index(
         "_RTAPT-READY-STATUS"
     ) < rich_begin.index("_RTAPT-LIMITS-AFTER-VALID@") < rich_begin.index(
         "RTAPT-UPDATE-CAPTURING"
@@ -1104,9 +1120,10 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
 
     limits_public = _definition(source, "RTAPT-LIMITS@")
     limits = _definition(source, "_RTAPT-LIMITS-AFTER-VALID@")
-    assert limits_public.count("_RTAPT-ENGINE-VALID?") == 1
+    assert limits_public.count("_RTAPT-ENGINE-FRAME?") == 1
     assert limits_public.count("_RTAPT-LIMITS-AFTER-VALID@") == 1
     assert "_RTAPT-ENGINE-VALID?" not in limits
+    assert "_RTAPT-ENGINE-FRAME?" not in limits
     ready = limits.index("_RTAPT-READY-STATUS")
     caps = limits.index("PT-RETAINED-CAPS@", ready)
     formats = limits.index("PT-RETAINED-FORMATS@", caps)

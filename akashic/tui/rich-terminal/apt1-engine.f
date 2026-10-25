@@ -18,6 +18,7 @@ REQUIRE phase-profile.f
 REQUIRE stx1-roles.f
 REQUIRE fdc1.f
 REQUIRE dlg1.f
+REQUIRE ../check-mode.f
 
 \ Caller storage stays apart from the private scratch of every content
 \ validator the provider runs on it: FDC1's and DLG1's.
@@ -3137,11 +3138,11 @@ VARIABLE _RTAPT-JV-O
     OVER _RTAPT-E.QUEUE-TAIL @ OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
-: _RTAPT-ENGINE-VALID?  ( e -- flag )
+\ The engine's state apart from its ledgers: its storage and layout, its
+\ update, its quarantine and its job, and its queue and active owner.
+: _RTAPT-ENGINE-STATE?  ( e -- flag )
     DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-UPDATE-COHERENT? 0= IF DROP 0 EXIT THEN
-    DUP _RTAPT-CONTROL-LEDGER-VALID? 0= IF DROP 0 EXIT THEN
-    DUP _RTAPT-OWNER-LEDGERS? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-QUARANTINE-COHERENT? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-JOB-COHERENT? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-E.QUEUE-HEAD @ OVER _RTAPT-OWNER-POINTER-OR-ZERO? 0= IF
@@ -3220,6 +3221,28 @@ VARIABLE _RTAPT-JV-O
             DROP 0 EXIT
         THEN
     THEN
+    DROP -1 ;
+
+\ The control ledger and the owners' ledgers, which only the engine writes.
+: _RTAPT-ENGINE-LEDGERS?  ( e -- flag )
+    DUP _RTAPT-CONTROL-LEDGER-VALID? 0= IF DROP 0 EXIT THEN
+    _RTAPT-OWNER-LEDGERS? ;
+
+\ The exhaustive audit: the engine's state and both ledgers.
+: _RTAPT-ENGINE-VALID?  ( e -- flag )
+    DUP _RTAPT-ENGINE-STATE? 0= IF DROP 0 EXIT THEN
+    _RTAPT-ENGINE-LEDGERS? ;
+
+\ The calls every frame makes -- the limits query, BEGIN, the hybrid and
+\ family preflights and the steps that wait for a frame's answer -- check
+\ the engine's state.  They walk its ledgers too only with every-frame
+\ checks on (check-mode.f), or while lifecycle work is queued: only the
+\ engine writes them, and lifecycle entries, explicit VALID? and final
+\ publication keep their own audits.
+: _RTAPT-ENGINE-FRAME?  ( e -- flag )
+    CHK-EVERY-FRAME? IF _RTAPT-ENGINE-VALID? EXIT THEN
+    DUP _RTAPT-ENGINE-STATE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.QUEUE-HEAD @ IF _RTAPT-ENGINE-LEDGERS? EXIT THEN
     DROP -1 ;
 
 : RTAPT-INIT  ( config engine -- status )
@@ -3647,7 +3670,7 @@ VARIABLE _RTAPT-LS-FORMATS-U
     RTAPT-S-OK _RTAPT-LIMITS-SCRUB ;
 
 : RTAPT-LIMITS@  ( engine -- limits status )
-    DUP _RTAPT-ENGINE-VALID? 0= IF
+    DUP _RTAPT-ENGINE-FRAME? 0= IF
         DROP 0 RTAPT-S-INVALID _RTAPT-LIMITS-SCRUB EXIT
     THEN
     _RTAPT-LIMITS-AFTER-VALID@ ;
@@ -5902,7 +5925,7 @@ CREATE _RTAPT-HAF-OWNED-END
     _RTAPT-HAF-E @ _RTAPT-NEED-E ! ;
 
 : _RTAPT-HYBRID-PREFLIGHT-BODY  ( -- status )
-    _RTAPT-HAF-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-HAF-E @ _RTAPT-ENGINE-FRAME? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-HAF-NEED-CLEAR
     _RTAPT-HAF-FIELDS? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-HAF-E @ _RTAPT-LIMITS-AFTER-VALID@
@@ -6171,7 +6194,7 @@ VARIABLE _RTAPT-RB-MODE
 
 : RTAPT-RICH-BEGIN  ( retained-mode engine -- status )
     _RTAPT-RB-E ! _RTAPT-RB-MODE !
-    _RTAPT-RB-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RB-E @ _RTAPT-ENGINE-FRAME? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-RB-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-RB-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <>
         IF RTAPT-S-BUSY EXIT THEN
@@ -13384,9 +13407,10 @@ VARIABLE _RTAPT-PX-A
 \ An idle service poll reads no owner, control, or captured operation.  Prove
 \ its entire fixed state before skipping those banks: the only remaining
 \ action is readiness/status observation.  This does not certify the retained
-\ ledgers.  BEGIN, queued lifecycle work, completion reconciliation, explicit
-\ VALID?, and final publication retain their exhaustive audits, including
-\ caller mutations made between service turns.
+\ ledgers.  Queued lifecycle work, explicit VALID? and final publication
+\ retain their exhaustive audits, including caller mutations made between
+\ service turns; BEGIN and completion reconciliation walk the ledgers only
+\ with every-frame checks on or lifecycle work queued (_RTAPT-ENGINE-FRAME?).
 : _RTAPT-IDLE-SERVICE?  ( engine -- flag )
     DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <> IF DROP 0 EXIT THEN
@@ -13406,7 +13430,7 @@ VARIABLE _RTAPT-PX-A
 
 : _RTAPT-STEP-VALID?  ( engine -- flag )
     DUP _RTAPT-IDLE-SERVICE? IF DROP -1 EXIT THEN
-    _RTAPT-ENGINE-VALID? ;
+    _RTAPT-ENGINE-FRAME? ;
 
 VARIABLE _RTAPT-ST-KIND
 
