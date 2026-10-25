@@ -36,6 +36,7 @@ REQUIRE residual-glyph-planner.f
 REQUIRE engine.f
 REQUIRE phase-profile.f
 REQUIRE frame-shadow.f
+REQUIRE ../check-mode.f
 REQUIRE ../screen.f
 REQUIRE ../uidl-picture-snapshot.f
 REQUIRE ../../utils/memory-span.f
@@ -4781,10 +4782,19 @@ VARIABLE _RTHP-W-MR-SELECTED-SEEN
         1 _RTHP-W-MR-I +!
     REPEAT ;
 
+\ The controls and correlations a reuse copies are the producer's own,
+\ admitted when they were first sent, and REUSE-DOCUMENT? has matched the
+\ document, its menu epochs and its text, so the preflight that checks them
+\ again runs only with every-frame checks on (check-mode.f).  The patch
+\ preflight, which reads the current records, runs in both modes, and the
+\ shadow check compares each reuse with a fresh plan in the runs that turn
+\ it on.
 : _RTHP-W-MENU-REUSE?  ( -- reused? )
     _RTHP-W-MR-ENABLED @ 0= IF 0 EXIT THEN
     _RTHP-W-MENU-REUSE-DOCUMENT? 0= IF 0 EXIT THEN
-    _RTHP-W-MENU-REUSE-PREFLIGHT? 0= IF 0 EXIT THEN
+    CHK-EVERY-FRAME? IF
+        _RTHP-W-MENU-REUSE-PREFLIGHT? 0= IF 0 EXIT THEN
+    THEN
     _RTHP-W-MENU-PATCH-PREFLIGHT? 0= IF 0 EXIT THEN
     _RTHP-W-MENU-REUSE-COPY
     _RTHP-W-MR-PATCH-STATE @ IF _RTHP-W-MENU-PATCH-STATES THEN
@@ -11933,7 +11943,12 @@ VARIABLE _RTHP-D-RAW-ORDINAL
 VARIABLE _RTHP-D-SPAN-C
 VARIABLE _RTHP-D-SPAN-BANK
 
+\ Whether a control's texts lie inside its bank's source text.  The
+\ comparison reads only banks the producer packed itself, from items the
+\ engine admitted, so this and _RTHP-D-REF-VALID? check them only with
+\ every-frame checks on (check-mode.f).
 : _RTHP-D-CONTROL-TEXT-SPANS?  ( control bank -- flag )
+    CHK-EVERY-FRAME? 0= IF 2DROP -1 EXIT THEN
     _RTHP-D-SPAN-BANK ! _RTHP-D-SPAN-C !
     _RTHP-D-SPAN-C @ _RTE-CONTROL.LABEL-A @
     _RTHP-D-SPAN-C @ _RTE-CONTROL.LABEL-U @
@@ -12207,6 +12222,7 @@ VARIABLE _RTHP-D-REF-REF
 VARIABLE _RTHP-D-REF-BANK
 
 : _RTHP-D-REF-VALID?  ( item ref bank -- flag )
+    CHK-EVERY-FRAME? 0= IF 2DROP DROP -1 EXIT THEN
     _RTHP-D-REF-BANK ! _RTHP-D-REF-REF ! _RTHP-D-REF-ITEM !
     _RTHP-D-REF-REF @ RGRP-TEXT-REF-OFFSET@ _RTHP-D-OFFSET-P !
     _RTHP-D-REF-REF @ RGRP-TEXT-REF-LENGTH@ _RTHP-D-EXPECTED-P !

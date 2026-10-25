@@ -53,6 +53,8 @@ def _definitions(producer_source: str) -> dict[str, str]:
         "utils/uint-range.f",
         # The shadow check's words, which the frame build's shortcuts call.
         "tui/rich-terminal/frame-shadow.f",
+        # The switch for every-frame checks, which the frame build reads.
+        "tui/check-mode.f",
     ):
         texts.append((ROOT / "akashic" / relative).read_text())
     declarations: dict[str, str] = {}
@@ -69,6 +71,8 @@ def _definitions(producer_source: str) -> dict[str, str]:
             text,
         ):
             declarations[match[2]] = match[0]
+    # The switch keeps the value it loads with: every check on, as in tests.
+    declarations["CHK-EVERY-FRAME"] = "VARIABLE CHK-EVERY-FRAME  -1 CHK-EVERY-FRAME !"
     return declarations
 
 

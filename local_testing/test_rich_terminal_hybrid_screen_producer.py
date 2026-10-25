@@ -3096,6 +3096,17 @@ def test_per_document_menu_reuse_is_ack_bound_preflighted_and_rebased() -> None:
 
     assert "_RTHP-W-MENU-REUSE-CONTROLS?" in preflight
     assert "_RTHP-W-MENU-REUSE-CORRELATIONS?" in preflight
+    # The reused controls are the producer's own, so they are checked again
+    # only with every-frame checks on; the document and patch checks run in
+    # both modes.
+    assert reuse.index("_RTHP-W-MENU-REUSE-DOCUMENT?") < reuse.index(
+        "CHK-EVERY-FRAME? IF") < reuse.index("_RTHP-W-MENU-REUSE-PREFLIGHT?")
+    assert reuse.index("_RTHP-W-MENU-REUSE-PREFLIGHT?") < reuse.index(
+        "THEN\n    _RTHP-W-MENU-PATCH-PREFLIGHT?")
+    for check, drop in (("_RTHP-D-CONTROL-TEXT-SPANS?", "2DROP -1 EXIT"),
+                        ("_RTHP-D-REF-VALID?", "2DROP DROP -1 EXIT")):
+        body = _word(source, check)
+        assert f"CHK-EVERY-FRAME? 0= IF {drop} THEN" in body
     proofs = controls + correlations
 
     for proof in (
