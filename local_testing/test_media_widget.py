@@ -1260,3 +1260,20 @@ def test_a_pdfs_outline_starts_open_or_closed_as_it_says() -> None:
         f"{OPEN} Part one", f"  {OPEN} Chapter", "      Section", "  Part two", ""]
     assert "PART=1 PLACE=0 " in output, output[-1500:]
     assert "FREED=0 " in output
+
+
+def test_a_claim_and_a_rich_failure_move_the_picture_revision_on_a_change() -> None:
+    """Claiming the picture changes what CELL shows, and so does a rich
+    failure, which lets the claim go as well; saying the same again changes
+    nothing."""
+    rows = _gradient(30, 20)
+    data = qoi_codec.encode(rows)
+    output = _run(_claim_lines(len(data)) + [
+        ": _PR  MW-W @ WDG-REVISION ;",
+        '_PR -1 MW-W @ PICT-CLAIM! _PR SWAP - ." CLAIM=" .',
+        '_PR -1 MW-W @ PICT-CLAIM! _PR SWAP - ." AGAIN=" .',
+        '_PR PIC-R-DAMAGED MW-W @ PICT-RICH-FAILED! _PR SWAP - ." FAILED=" .',
+        '_PR PIC-R-DAMAGED MW-W @ PICT-RICH-FAILED! _PR SWAP - ." REPEATED=" .',
+    ] + _free_lines(), data)
+    assert "CLAIM=1 " in output and "AGAIN=0 " in output
+    assert "FAILED=2 " in output and "REPEATED=0 " in output

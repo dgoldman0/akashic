@@ -493,45 +493,32 @@ VARIABLE _MNU-SU-ITEMS
 : MNU-ACTIVE-ITEM  ( widget -- index )
     _MNU-O-ITEM + @ ;
 
+VARIABLE _MNU-IF-W
+
+\ _MNU-ITEM-FLAGS! ( widget menu# item# set-bits clear-bits -- )
+\   Change an item's flags.  A change is a change to what the menu shows.
+: _MNU-ITEM-FLAGS!  ( widget menu# item# set clear -- )
+    2>R >R OVER _MNU-IF-W !
+    _MNU-ENTRY _MNU-ENTRY-ITEMS R> _MNU-ITEM-ADDR   ( item )
+    DUP 24 + @ DUP 2R>                             ( item old old set clear )
+    INVERT ROT AND OR                              ( item old new )
+    TUCK <> IF _MNU-IF-W @ WDG-DIRTY THEN          ( item new )
+    SWAP 24 + ! ;
+
 \ MNU-ITEM-ENABLE ( widget menu# item# -- )
 \   Enable a menu item (clear MNU-F-DISABLED).
 : MNU-ITEM-ENABLE  ( widget menu# item# -- )
-    >R                                  \ R: item# ; ( widget menu# )
-    _MNU-ENTRY _MNU-ENTRY-ITEMS        \ ( items-addr )
-    R> _MNU-ITEM-ADDR                  \ ( item-addr )
-    DUP 24 + @                         \ ( item-addr flags )
-    MNU-F-DISABLED INVERT AND
-    SWAP 24 + ! ;
+    0 MNU-F-DISABLED _MNU-ITEM-FLAGS! ;
 
 \ MNU-ITEM-DISABLE ( widget menu# item# -- )
 \   Disable a menu item (set MNU-F-DISABLED).
 : MNU-ITEM-DISABLE  ( widget menu# item# -- )
-    >R                                  \ R: item# ; ( widget menu# )
-    _MNU-ENTRY _MNU-ENTRY-ITEMS        \ ( items-addr )
-    R> _MNU-ITEM-ADDR                  \ ( item-addr )
-    DUP 24 + @
-    MNU-F-DISABLED OR
-    SWAP 24 + ! ;
+    MNU-F-DISABLED 0 _MNU-ITEM-FLAGS! ;
 
 \ MNU-ITEM-CHECK ( widget menu# item# flag -- )
 \   Set or clear MNU-F-CHECKED on a menu item.
-
-VARIABLE _MNU-IC-W
-VARIABLE _MNU-IC-FLAG
-VARIABLE _MNU-IC-ITEM2
-VARIABLE _MNU-IC-MENU
-
 : MNU-ITEM-CHECK  ( widget menu# item# flag -- )
-    _MNU-IC-FLAG !
-    _MNU-IC-ITEM2 !
-    _MNU-IC-MENU !
-    _MNU-IC-W !
-    _MNU-IC-W @ _MNU-IC-MENU @ _MNU-ENTRY _MNU-ENTRY-ITEMS
-    _MNU-IC-ITEM2 @ _MNU-ITEM-ADDR
-    DUP 24 + @
-    MNU-F-CHECKED INVERT AND
-    _MNU-IC-FLAG @ IF MNU-F-CHECKED OR THEN
-    SWAP 24 + ! ;
+    IF MNU-F-CHECKED 0 ELSE 0 MNU-F-CHECKED THEN _MNU-ITEM-FLAGS! ;
 
 \ MNU-FREE ( widget -- )
 \   Free the menu descriptor (does not free menus/items arrays).

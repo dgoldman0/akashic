@@ -143,13 +143,14 @@ VARIABLE _TXTA-NEW-INSTANCE
 \ _TXTA-SEL-CLEAR ( -- )
 \   Deactivate selection.
 : _TXTA-SEL-CLEAR  ( -- )
-    -1 _TXTA-W @ _TXTA-O-SEL-ANCHOR + ! ;
+    _TXTA-HAS-SEL? 0= IF EXIT THEN
+    -1 _TXTA-W @ _TXTA-O-SEL-ANCHOR + !  _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-SEL-START! ( -- )
 \   If no selection is active, set anchor to current cursor position.
 : _TXTA-SEL-START!  ( -- )
     _TXTA-HAS-SEL? IF EXIT THEN
-    _TXTA-CURSOR _TXTA-W @ _TXTA-O-SEL-ANCHOR + ! ;
+    _TXTA-CURSOR _TXTA-W @ _TXTA-O-SEL-ANCHOR + !  _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-SEL-RANGE ( -- start end )
 \   Return the ordered byte range of the selection.
@@ -841,7 +842,7 @@ VARIABLE _TXTA-SA-SX      \ horizontal scroll position
 VARIABLE _TXTA-SA-TW      \ text viewport width
 VARIABLE _TXTA-SA-CCOL    \ cursor column
 
-: _TXTA-SCROLL-ADJ  ( -- )
+: _TXTA-KEEP-CARET  ( -- )
     \ With no cells on screen, as behind another tab, there is nothing to
     \ keep the cursor visible in: the scroll waits for a real viewport.
     _TXTA-W @ WDG-REGION DUP RGN-H 0> SWAP RGN-W 0> AND 0= IF EXIT THEN
@@ -889,6 +890,20 @@ VARIABLE _TXTA-SA-CCOL    \ cursor column
         _TXTA-W @ _TXTA-O-SCROLL-X + !
     THEN
 ;
+
+VARIABLE _TXTA-SA-Y0
+VARIABLE _TXTA-SA-X0
+
+\ _TXTA-SCROLL-ADJ ( -- )
+\   Scroll the caret into view.  A scroll that moves is a shown change.
+: _TXTA-SCROLL-ADJ  ( -- )
+    _TXTA-W @ _TXTA-O-SCROLL-Y + @ _TXTA-SA-Y0 !
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ _TXTA-SA-X0 !
+    _TXTA-KEEP-CARET
+    _TXTA-W @ _TXTA-O-SCROLL-Y + @ _TXTA-SA-Y0 @ <>
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ _TXTA-SA-X0 @ <> OR IF
+        _TXTA-W @ WDG-DIRTY
+    THEN ;
 
 \ =====================================================================
 \  7. Internal draw
@@ -1067,7 +1082,7 @@ VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 \ _TXTA-SELECT-ALL -- select entire buffer
 : _TXTA-SELECT-ALL  ( -- )
     0 _TXTA-W @ _TXTA-O-SEL-ANCHOR + !
-    _TXTA-CONTENT-LEN _TXTA-SYNC-CURSOR! ;
+    _TXTA-CONTENT-LEN _TXTA-SYNC-CURSOR!  _TXTA-W @ WDG-DIRTY ;
 
 \ _TXTA-UNDO ( -- )
 \   Undo the last edit operation via gap-buf + undo state.
@@ -1505,12 +1520,13 @@ VARIABLE _TXTA-PT-CODE
 \   Attach a gap-buf to the textarea (enables GB mode).
 \   The gap-buf is NOT owned — caller manages its lifetime.
 : TXTA-BIND-GB  ( gb widget -- )
-    _TXTA-O-GB + ! ;
+    2DUP _TXTA-O-GB + @ = IF 2DROP EXIT THEN
+    TUCK _TXTA-O-GB + ! WDG-DIRTY ;
 
 \ TXTA-UNBIND-GB ( widget -- )
 \   Detach gap-buf, reverting to flat-buffer mode.
 : TXTA-UNBIND-GB  ( widget -- )
-    0 SWAP _TXTA-O-GB + ! ;
+    0 SWAP TXTA-BIND-GB ;
 
 \ TXTA-BIND-UNDO ( ud widget -- )
 \   Attach an undo state to the textarea.
@@ -1542,8 +1558,12 @@ VARIABLE _TXTA-PT-CODE
 \ TXTA-GUTTER! ( xt width widget -- )
 \   Set gutter callback & width.  xt: ( line# row width widget -- )
 : TXTA-GUTTER!  ( xt width widget -- )
-    >R R@ _TXTA-O-GUTTER-W + !
-    R> _TXTA-O-GUTTER-XT + ! ;
+    >R
+    OVER R@ _TXTA-O-GUTTER-XT + @ =
+    OVER R@ _TXTA-O-GUTTER-W + @ = AND IF 2DROP R> DROP EXIT THEN
+    R@ _TXTA-O-GUTTER-W + !
+    R@ _TXTA-O-GUTTER-XT + !
+    R> WDG-DIRTY ;
 
 \ TXTA-ADJUST-SCROLL ( widget -- )
 \   Apply the same cursor-visibility adjustment used by draw.  Composite

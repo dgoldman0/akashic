@@ -183,10 +183,16 @@ REQUIRE region.f
     WDG-F-DISABLED OR  WDG-F-DIRTY OR
     SWAP _WDG-FLAGS-TO ;
 
+\ _WDG-CHANGED ( widget -- )
+\   WDG-DIRTY without the guard a GUARDED build puts around it.  For a
+\   widget's own words that already hold its module's guard and may mark
+\   once a dot or a glyph.  It touches only the widget's flags cell.
+: _WDG-CHANGED  ( widget -- )
+    DUP WDG-FLAGS WDG-F-DIRTY OR _WDG-REV-ONE + SWAP _WDG-FLAGS! ;
+
 \ WDG-DIRTY ( widget -- )  What the widget shows changed: move its
 \   revision and mark it for redraw.
-: WDG-DIRTY  ( widget -- )
-    DUP WDG-FLAGS WDG-F-DIRTY OR _WDG-REV-ONE + SWAP _WDG-FLAGS! ;
+: WDG-DIRTY  ( widget -- )  _WDG-CHANGED ;
 
 \ WDG-CLEAN ( widget -- )  Clear dirty flag (after redraw).
 : WDG-CLEAN  ( widget -- )

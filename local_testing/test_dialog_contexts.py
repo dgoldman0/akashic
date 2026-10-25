@@ -54,3 +54,14 @@ def test_a_context_freed_or_cleared_frees_its_dialog_unanswered():
         "_DC-B @ UCTX-FREE _DC-A @ UCTX-FREE",
         "_DC-CALLED @ 0= _DC-ASSERT _DC-DONE",
     ]), 8)
+
+
+def test_painting_a_dialog_again_does_not_move_its_revision():
+    """The first paint lays the dialog out in its host, which is a change;
+    painting it again in the same bounds is not."""
+    _passed(_run_forth(PRELUDE + [
+        "_DC-A @ UCTX-RESTORE _DC-ASK _DC-ASSERT",
+        "DLG-SHOWN WDG-REVISION DLG-HOST-PAINT DLG-SHOWN WDG-REVISION <> _DC-ASSERT",
+        "DLG-SHOWN WDG-REVISION DLG-HOST-PAINT DLG-SHOWN WDG-REVISION = _DC-ASSERT",
+        "_DC-A @ _DC-LEAVE _DC-B @ UCTX-FREE _DC-A @ UCTX-FREE _DC-DONE",
+    ]), 5)

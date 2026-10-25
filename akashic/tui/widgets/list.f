@@ -1435,7 +1435,9 @@ VARIABLE _LST-CF-KEEP
     _LST-O-CHECK-XT + ! ;
 
 \ LST-CONTEXT! ( context widget -- ) and LST-CONTEXT@ ( widget -- context )
-: LST-CONTEXT!  ( context widget -- )  _LST-O-CONTEXT + ! ;
+: LST-CONTEXT!  ( context widget -- )
+    2DUP _LST-O-CONTEXT + @ = IF 2DROP EXIT THEN
+    TUCK _LST-O-CONTEXT + ! DUP _LST-SETTLE WDG-DIRTY ;
 : LST-CONTEXT@  ( widget -- context )  _LST-O-CONTEXT + @ ;
 
 \ LST-SCROLL-TO ( index widget -- )   Scroll so a row is shown.

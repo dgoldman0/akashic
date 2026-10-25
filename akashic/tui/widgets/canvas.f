@@ -148,14 +148,19 @@ _CVS-BMAP-INIT
 \  §5 — Public dot operations
 \ =====================================================================
 
-: CVS-SET  ( w x y -- )
+: _CVS-SET  ( w x y -- )
     _CVS-OK? 0= IF 3DROP EXIT THEN
     2 PICK 2 PICK 2 PICK _CVS-STAMP     \ stamp pen colour first
     _CVS-ADR  OVER C@ OR SWAP C! ;
 
+: CVS-SET  ( w x y -- )
+    2 PICK >R _CVS-SET R> _WDG-CHANGED ;
+
 : CVS-CLR  ( w x y -- )
-    _CVS-OK? 0= IF 3DROP EXIT THEN
-    _CVS-ADR  INVERT OVER C@ AND SWAP C! ;
+    2 PICK >R
+    _CVS-OK? 0= IF 3DROP R> DROP EXIT THEN
+    _CVS-ADR  INVERT OVER C@ AND SWAP C!
+    R> _WDG-CHANGED ;
 
 : CVS-GET  ( w x y -- flag )
     _CVS-OK? 0= IF 3DROP 0 EXIT THEN
@@ -173,7 +178,7 @@ _CVS-BMAP-INIT
     >R >R                                 ( w col row   R: bg fg )
     2 PICK -ROT _CVS-CADR                ( w addr   R: bg fg )
     R> OVER C!                            ( w addr   R: bg )
-    1+ R> SWAP C! DROP ;
+    1+ R> SWAP C! _WDG-CHANGED ;
 
 \ =====================================================================
 \  §7 — Draw handler: dot + colour buffers → screen
@@ -303,8 +308,8 @@ VARIABLE _LERR VARIABLE _LWG
     _LY0 @ _LY1 @ < IF 1 ELSE -1 THEN _LSY !
     _LDX @ _LDY @ +                _LERR !
     BEGIN
-        _LWG @ _LX0 @ _LY0 @ CVS-SET
-        _LX0 @ _LX1 @ = _LY0 @ _LY1 @ = AND IF EXIT THEN
+        _LWG @ _LX0 @ _LY0 @ _CVS-SET
+        _LX0 @ _LX1 @ = _LY0 @ _LY1 @ = AND IF _LWG @ _WDG-CHANGED EXIT THEN
         _LERR @ 2 *                      ( e2 )
         DUP _LDY @ >= IF
             _LDY @ _LERR +!
@@ -337,9 +342,9 @@ VARIABLE _RX  VARIABLE _RY  VARIABLE _RW  VARIABLE _RH
     _RH ! _RW ! _RY ! _RX !
     _RH @ DUP 0> IF 0 DO
         _RW @ DUP 0> IF 0 DO
-            DUP _RX @ I + _RY @ J + CVS-SET
+            DUP _RX @ I + _RY @ J + _CVS-SET
         LOOP ELSE DROP THEN
-    LOOP ELSE DROP THEN DROP ;
+    LOOP ELSE DROP THEN _WDG-CHANGED ;
 
 \ =====================================================================
 \  §12 — Midpoint circle
@@ -350,14 +355,14 @@ VARIABLE _CDX  VARIABLE _CDY  VARIABLE _CD
 
 : _CVS-P8  ( w -- )
     \ Plot 8 octant-symmetric points around (_CCX, _CCY).
-    DUP _CCX @ _CDX @ +  _CCY @ _CDY @ +  CVS-SET
-    DUP _CCX @ _CDX @ -  _CCY @ _CDY @ +  CVS-SET
-    DUP _CCX @ _CDX @ +  _CCY @ _CDY @ -  CVS-SET
-    DUP _CCX @ _CDX @ -  _CCY @ _CDY @ -  CVS-SET
-    DUP _CCX @ _CDY @ +  _CCY @ _CDX @ +  CVS-SET
-    DUP _CCX @ _CDY @ -  _CCY @ _CDX @ +  CVS-SET
-    DUP _CCX @ _CDY @ +  _CCY @ _CDX @ -  CVS-SET
-        _CCX @ _CDY @ -  _CCY @ _CDX @ -  CVS-SET ;
+    DUP _CCX @ _CDX @ +  _CCY @ _CDY @ +  _CVS-SET
+    DUP _CCX @ _CDX @ -  _CCY @ _CDY @ +  _CVS-SET
+    DUP _CCX @ _CDX @ +  _CCY @ _CDY @ -  _CVS-SET
+    DUP _CCX @ _CDX @ -  _CCY @ _CDY @ -  _CVS-SET
+    DUP _CCX @ _CDY @ +  _CCY @ _CDX @ +  _CVS-SET
+    DUP _CCX @ _CDY @ -  _CCY @ _CDX @ +  _CVS-SET
+    DUP _CCX @ _CDY @ +  _CCY @ _CDX @ -  _CVS-SET
+        _CCX @ _CDY @ -  _CCY @ _CDX @ -  _CVS-SET ;
 
 : CVS-CIRCLE  ( w cx cy r -- )
     >R _CCY ! _CCX !                     ( w   R: r )
@@ -372,7 +377,7 @@ VARIABLE _CDX  VARIABLE _CDY  VARIABLE _CD
             -1 _CDY +!
         THEN
         1 _CDX +!
-    REPEAT DROP ;
+    REPEAT _WDG-CHANGED ;
 
 \ =====================================================================
 \  §13 — Text placement

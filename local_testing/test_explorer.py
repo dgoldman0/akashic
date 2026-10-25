@@ -393,3 +393,18 @@ def test_expl_free():
         _EXPL_SETUP + [
             'EXPL-FREE 7777 .',
             '_TR @ RGN-FREE SCR-FREE'], "7777")
+
+
+def test_expl_show_hidden_moves_the_explorer_revision_on_a_change():
+    """Showing hidden files moves the explorer's revision once, and asking
+    again moves nothing.  The tree's walker does not read the flag, so the
+    tree's revision stays."""
+    check("revision moves on a change only",
+        _EXPL_SETUP + [
+            '_TW @ WDG-REVISION _TW @ EXPL-TREE WDG-REVISION',
+            '-1 _TW @ EXPL-SHOW-HIDDEN!',
+            '_TW @ EXPL-TREE WDG-REVISION SWAP - . _TW @ WDG-REVISION SWAP - .',
+            '_TW @ WDG-REVISION _TW @ EXPL-TREE WDG-REVISION',
+            '-1 _TW @ EXPL-SHOW-HIDDEN!',
+            '_TW @ EXPL-TREE WDG-REVISION SWAP - . _TW @ WDG-REVISION SWAP - . 8888 .',
+            _EXPL_CLEANUP], "0 1 0 0 8888")

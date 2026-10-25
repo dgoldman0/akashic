@@ -147,6 +147,12 @@ VARIABLE _EXK-H
     ['] _EXPL-ON-TREE-SEL OVER TREE-ON-SELECT
     ['] _EXPL-ON-TREE-OPEN OVER TREE-ON-OPEN ;
 
+\ Show hidden files, or stop.  The tree's walker does not read the flag,
+\ so the tree's rows stay as they were and only the explorer changes.
+: _EXPL-HIDDEN-TOGGLE  ( explorer -- )
+    DUP _EXPL-O-FLAGS2 + DUP @ _EXPL-F2-HIDDEN XOR SWAP !
+    WDG-DIRTY ;
+
 \ The embedded tree takes the explorer's focus and enabled state, which
 \ UIDL maintains on the mounted explorer.
 : _EXPL-SYNC-TREE  ( explorer -- )
@@ -452,9 +458,7 @@ VARIABLE _EXH-EV   \ current event
             \ Ctrl+H = toggle hidden (codepoint 8)
             DUP 8 = IF
                 DROP
-                _EXH-W @ _EXPL-O-FLAGS2 + DUP @
-                _EXPL-F2-HIDDEN XOR SWAP !
-                _EXH-W @ WDG-DIRTY
+                _EXH-W @ _EXPL-HIDDEN-TOGGLE
                 -1 EXIT
             THEN
             \ Ctrl+R = refresh (codepoint 18)
@@ -540,17 +544,15 @@ VARIABLE _EXH-EV   \ current event
 : EXPL-COLLAPSE-ALL  ( widget -- )
     _EXPL-O-TREE + @ TREE-COLLAPSE-ALL ;
 
-\ EXPL-SHOW-HIDDEN! ( flag widget -- )
-\   Show or hide hidden files.
-: EXPL-SHOW-HIDDEN!  ( flag widget -- )
-    _EXPL-O-FLAGS2 + DUP @
-    _EXPL-F2-HIDDEN INVERT AND            \ clear bit
-    ROT IF _EXPL-F2-HIDDEN OR THEN        \ conditionally set
-    SWAP ! ;
-
 \ EXPL-SHOW-HIDDEN? ( widget -- flag )
 : EXPL-SHOW-HIDDEN?  ( widget -- flag )
     _EXPL-O-FLAGS2 + @ _EXPL-F2-HIDDEN AND 0<> ;
+
+\ EXPL-SHOW-HIDDEN! ( flag widget -- )
+\   Show or hide hidden files.
+: EXPL-SHOW-HIDDEN!  ( flag widget -- )
+    SWAP 0<> OVER EXPL-SHOW-HIDDEN? = IF DROP EXIT THEN
+    _EXPL-HIDDEN-TOGGLE ;
 
 \ EXPL-VFS ( widget -- vfs )
 \   Get the VFS instance.

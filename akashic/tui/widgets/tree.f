@@ -755,14 +755,19 @@ VARIABLE _TREE-CF-N
 
 \ TREE-CONTEXT! ( context w -- ) and TREE-CONTEXT@ ( w -- context )
 \   The caller's context cell, which callbacks read with TREE-WALK-CONTEXT.
-: TREE-CONTEXT!  ( context w -- )  _TREE-O-CONTEXT + ! ;
+: TREE-CONTEXT!  ( context w -- )
+    2DUP _TREE-O-CONTEXT + @ = IF 2DROP EXIT THEN
+    TUCK _TREE-O-CONTEXT + ! WDG-DIRTY ;
 : TREE-CONTEXT@  ( w -- context )  _TREE-O-CONTEXT + @ ;
 
 \ TREE-UNTRUSTED! ( flag w -- )
 \   Whether the labels come from outside the application, as a document's
 \   or the network's text does: drawn as DRW-TEXT-UNTRUSTED draws, and
 \   published with their direction controls inert.
-: TREE-UNTRUSTED!  ( flag w -- )  SWAP 0<> SWAP _TREE-O-UNTRUSTED + ! ;
+: TREE-UNTRUSTED!  ( flag w -- )
+    SWAP 0<> SWAP
+    2DUP _TREE-O-UNTRUSTED + @ = IF 2DROP EXIT THEN
+    TUCK _TREE-O-UNTRUSTED + ! WDG-DIRTY ;
 
 : TREE-EXPAND  ( w node -- )
     OVER SWAP _TREE-AT-NODE IF _TREE-EXPAND-FOUND ELSE DROP THEN ;

@@ -93,3 +93,27 @@ def test_the_field_root_is_the_first_row_of_the_prompt_region() -> None:
     values = _numbers(PROMPT + ["_PR @ PRM-FIELD-ROOT"] + _report(4), roots=ROOTS)
 
     assert values[::-1] == [23, 0, 1, 40]
+
+
+def test_drawing_a_prompt_again_moves_no_revision() -> None:
+    """A draw shows what the prompt holds. Drawing it again leaves its
+    input's revision and its field's revision where they were; changing
+    the input's text moves both."""
+    values = _numbers(
+        PROMPT
+        + [
+            ": _REVS  ( -- field input )  _CAP 2DROP _FM UFLD-REVISION@ _INPUT WDG-REVISION ;",
+            # Whether each revision is as it was, field first.
+            ": _SAME  ( field input field' input' -- field? input? )  ROT = >R = R> ;",
+            "_REVS",
+            "_PR @ WDG-DRAW _PR @ WDG-DRAW",
+            "_REVS _SAME",
+            "_REVS",
+            ': _OTHER S" other.md" ; _OTHER _INPUT INP-SET-TEXT _PR @ WDG-DRAW',
+            "_REVS _SAME",
+        ]
+        + _report(4),
+        roots=ROOTS,
+    )
+
+    assert values[::-1] == [-1, -1, 0, 0]

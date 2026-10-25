@@ -779,14 +779,16 @@ VARIABLE _DLG-P-T
     OVER _DLG-O-TOP + @ _DLG-P-T @ <> OR
     OVER _DLG-O-REVISION + @ 0= OR IF
         1 _DLG-REVISIONS +! _DLG-REVISIONS @ OVER _DLG-O-REVISION + !
+        DUP WDG-DIRTY
     THEN DROP ;
 
 \ DLG-HOST-PAINT ( -- )
 \   Paint the dialog the current application shows over it, centred in
-\   the host's bounds, keeping the drawing region the caller had.
+\   the host's bounds, keeping the drawing region the caller had.  Only a
+\   layout the host's bounds changed is a change; painting again is not.
 : DLG-HOST-PAINT  ( -- )
     _DLG-CELL-HOOK @ ?DUP 0= IF EXIT THEN
-    DUP _DLG-RELAYOUT DUP WDG-DIRTY
+    DUP _DLG-RELAYOUT
     RGN-CURRENT >R ['] WDG-DRAW CATCH R> RGN-RESTORE
     ?DUP IF NIP THROW THEN ;
 

@@ -61,6 +61,9 @@ current *pen colour* into the colour map for every cell they touch.
 | `CVS-NEW` | `( rgn -- widget )` | Create canvas; allocates dot-buf and col-buf |
 | `CVS-FREE` | `( widget -- )` | Free both buffers and descriptor |
 
+Each word that changes the canvas, a dot, a colour or a shape, moves its
+revision (`WDG-REVISION`) once; reading a dot and choosing the pen do not.
+
 ### Dot Operations
 
 | Word | Stack | Description |

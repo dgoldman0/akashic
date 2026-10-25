@@ -32,10 +32,25 @@ widgets generically without knowing the concrete type.
 `WDG-REVISION` counts the changes to what a widget shows, so that anything
 holding a copy of what it showed, such as UIDL's paint or a renderer's
 snapshot, can tell whether the copy still holds. `WDG-DIRTY` moves it, and
-so does each base word that changes a flag. The dirty flag keeps its meaning
-for painting: a draw clears it, and a widget may be marked dirty to paint
-again without having changed. A draw, a query or a capture never moves the
-revision.
+so does each base word that changes a flag. Each widget's own words that
+change what it shows move it too. A revision that has not moved means that
+nothing the widget shows has changed. One that has moved may still show the
+same, as when a canvas dot is set again; most setters compare first and
+move nothing when given what the widget already has.
+
+The dirty flag keeps its meaning for painting: a draw clears it, and
+`WDG-FLAG!` can set it alone, to paint again without a change. Drawing,
+querying and capturing move the revision only where they settle the
+widget's view, and a view that moves is a change. The input field and the
+text area scroll to keep the caret in view before they draw, the input
+field also before it reports what it shows, and a dialog lays itself out in
+its host's bounds before it paints. A paint never marks a widget dirty only
+to make it draw, since `WDG-DRAW` draws a visible widget whether or not it
+is dirty.
+
+A widget word that may mark once per dot or glyph, while its module's guard
+is held, uses `_WDG-CHANGED`, which is `WDG-DIRTY` without the guard a
+`GUARDED` build wraps around it.
 
 The revision shares the flags cell, so a flag and the revision change in one
 store. It counts from 0 when the widget is made and wraps after 2^48

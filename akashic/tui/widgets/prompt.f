@@ -88,7 +88,7 @@ VARIABLE _PRM-WIDTH
     DUP _PRM-O-LABEL-A + @
     OVER _PRM-O-LABEL-U + @
     0 1 DRW-TEXT
-    _PRM-O-INPUT + @ DUP WDG-DIRTY WDG-DRAW
+    _PRM-O-INPUT + @ WDG-DRAW
     DRW-STYLE-RESET ;
 
 \ A visible prompt replaces the semantic status row painted immediately

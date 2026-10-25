@@ -262,7 +262,9 @@ DEFER _PICT-DRAW-D
 \   The rich side says whether it shows the picture, or is taking it to
 \   show it.  The CELL view follows at the next service pass or draw.
 : PICT-CLAIM!  ( flag widget -- )
-    SWAP IF _PICT-CLAIM-EPOCH @ ELSE -1 THEN SWAP _PICT-O-CLAIM + ! ;
+    SWAP IF _PICT-CLAIM-EPOCH @ ELSE -1 THEN
+    2DUP SWAP _PICT-O-CLAIM + @ = IF 2DROP EXIT THEN
+    OVER _PICT-O-CLAIM + ! WDG-DIRTY ;
 
 \ PICT-RICH-FAILED! ( reason widget -- )
 \   The rich side could not send the picture, for REASON, a PIC-R- reason:
@@ -271,7 +273,12 @@ DEFER _PICT-DRAW-D
 \   and CELL shows it, with the reason where CELL decodes no such file.  The
 \   CELL view follows at the next service pass or draw.
 : PICT-RICH-FAILED!  ( reason widget -- )
-    TUCK _PICT-O-FAILED + !  0 SWAP PICT-CLAIM! ;
+    2DUP _PICT-O-FAILED + @ <> IF
+        TUCK _PICT-O-FAILED + ! DUP WDG-DIRTY
+    ELSE
+        NIP
+    THEN
+    0 SWAP PICT-CLAIM! ;
 
 \ PICT-RICH-FAILED@ ( widget -- reason )
 \   Why the rich side could not send the picture, or 0 while it may.

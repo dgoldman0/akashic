@@ -352,8 +352,8 @@ VARIABLE _TAB-ADD-KEY
     _TAB-E-CONTENT-RGN + @                 \ reload to return
     \ Increment count
     R@ _TAB-O-COUNT + @ 1+
-    R> _TAB-O-COUNT + !
-    ;
+    R@ _TAB-O-COUNT + !
+    R> WDG-DIRTY ;
 
 \ TAB-SELECT ( index widget -- )
 \   Switch to tab at index.
