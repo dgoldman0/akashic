@@ -1183,6 +1183,13 @@ VARIABLE _RUHA-O-U
     _RUHA-O-U ! _RUHA-O-A !
     _RUHA-O-ADAPTER @ _RUHA-SAFE-ADAPTER !
     ['] _RUHA-O-DISJOINT? _RUHA-STORAGE-SPANS? ;
+\ A slot's owner as a draw needs it: an instance with a valid descriptor and
+\ a live identity.
+: _RUHA-OWNER-NAMED? ( slot -- flag )
+    AHS.INST @ DUP 0= IF EXIT THEN
+    DUP CINST.DESC @ DUP 0= IF NIP EXIT THEN
+    COMP-DESC-VALID? 0= IF DROP 0 EXIT THEN
+    DUP CINST.ID @ 0= SWAP CINST.GENERATION @ 0= OR 0= ;
 : _RUHA-LIVE-OWNER? ( slot adapter -- flag )
     _RUHA-O-ADAPTER ! AHS.INST @
     DUP COMP-INST _RUHA-O-SPAN? 0= IF DROP 0 EXIT THEN
@@ -1270,9 +1277,14 @@ VARIABLE _RUHA-IT-ADAPTER
 : _RUHA-RECORD-EMPTY?  ( record -- flag )
     _RUHA-R.FLAGS @ _RUHA-RF-EMPTY AND 0<> ;
 
+\ A record's document is the current UCTX, and RUHA's banks lie apart from
+\ its storage.  The banks were proved apart from it when the document
+\ attached; the document's storage that came later comes from allocators,
+\ whose live blocks never overlap the banks Desk lent, so the proof is made
+\ again only with every-frame checks on (check-mode.f).
 : _RUHA-RECORD-STORAGE-CURRENT?  ( record adapter -- flag )
     OVER _RUHA-R.UCTX @ ASHELL-ACTIVE-CTX <> IF 2DROP 0 EXIT THEN
-    NIP _RUHA-STORAGE-DISJOINT-CURRENT? ;
+    NIP CHK-EVERY-FRAME? IF _RUHA-STORAGE-DISJOINT-CURRENT? ELSE DROP -1 THEN ;
 
 \ =====================================================================
 \  UCTX projection callbacks
@@ -3100,6 +3112,10 @@ VARIABLE _RUHA-B-PREFLIGHT-RECORD
 VARIABLE _RUHA-B-PREFLIGHT-SLOT
 VARIABLE _RUHA-B-PREFLIGHT-CTX
 
+\ Each record names a live slot of this host that is still its own, with
+\ its own UCTX.  The proofs that RUHA's banks lie apart from the record's
+\ owner and its document's storage were made when it attached, and are made
+\ again on each draw only with every-frame checks on (check-mode.f).
 : _RUHA-B-PREFLIGHT-RECORD?  ( record -- flag )
     _RUHA-B-PREFLIGHT-RECORD !
     _RUHA-B-PREFLIGHT-RECORD @ _RUHA-R.STATE @ DUP
@@ -3112,8 +3128,12 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
         _RUHA-HOST-HAS-SLOT? 0= IF 0 EXIT THEN
     _RUHA-B-PREFLIGHT-SLOT @ AHS.ID @
         _RUHA-B-PREFLIGHT-RECORD @ _RUHA-R.SLOT-ID @ <> IF 0 EXIT THEN
-    _RUHA-B-PREFLIGHT-SLOT @ _RUHA-B-ADAPTER @
-        _RUHA-LIVE-OWNER? 0= IF 0 EXIT THEN
+    CHK-EVERY-FRAME? IF
+        _RUHA-B-PREFLIGHT-SLOT @ _RUHA-B-ADAPTER @
+            _RUHA-LIVE-OWNER? 0= IF 0 EXIT THEN
+    ELSE
+        _RUHA-B-PREFLIGHT-SLOT @ _RUHA-OWNER-NAMED? 0= IF 0 EXIT THEN
+    THEN
     _RUHA-B-PREFLIGHT-SLOT @ AHS.HAS-UIDL @ 0= IF 0 EXIT THEN
     _RUHA-B-PREFLIGHT-SLOT @ AHS.UCTX @ DUP 0= IF DROP 0 EXIT THEN
         _RUHA-B-PREFLIGHT-CTX !
@@ -3121,14 +3141,21 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
         _RUHA-B-PREFLIGHT-RECORD @ _RUHA-R.UCTX @ <> IF 0 EXIT THEN
     _RUHA-B-PREFLIGHT-CTX @ ASHELL-CTX-SWITCH
     ASHELL-ACTIVE-CTX _RUHA-B-PREFLIGHT-CTX @ <> IF 0 EXIT THEN
+    CHK-EVERY-FRAME? 0= IF -1 EXIT THEN
     _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT? ;
 
+\ The screen's storage and the current UCTX's were proved apart from RUHA's
+\ banks when the banks were lent and the documents attached, and what they
+\ allocate later comes from allocators, so a draw proves them again only
+\ with every-frame checks on.
 : _RUHA-B-PREFLIGHT  ( -- status )
-    _RUHA-B-ADAPTER @ _RUHA-SCREEN-STORAGE-DISJOINT? 0= IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT? 0= IF
-        RUHA-S-INVALID EXIT
+    CHK-EVERY-FRAME? IF
+        _RUHA-B-ADAPTER @ _RUHA-SCREEN-STORAGE-DISJOINT? 0= IF
+            RUHA-S-INVALID EXIT
+        THEN
+        _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT? 0= IF
+            RUHA-S-INVALID EXIT
+        THEN
     THEN
     _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
         I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT

@@ -112,6 +112,26 @@ _RP-DONE
 ''', minimum=53, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
 
 
+def test_normal_mode_draws_check_the_owner_not_where_its_storage_lies():
+    run_series(_program() + r'''
+\ An owner whose state lies in RUHA's own native bank.  With every-frame
+\ checks on, a draw proves the owner's storage apart from RUHA's banks again
+\ and refuses it; in normal mode, where that proof is made when the owner
+\ attaches, a draw checks only that the owner is a live one.
+8 _RA-COMP-DESC COMP.STATE-SIZE ! _RA-NATIVE _RA-INSTANCE @ CINST.STATE !
+2 _RA-QUERY _RA-STATUS @ RUHA-S-INVALID = _RA-ASSERT
+0 CHK-EVERY-FRAME !
+3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
+\ The owner's identity is still checked.
+0 _RA-INSTANCE @ CINST.GENERATION !
+4 _RA-QUERY _RA-STATUS @ RUHA-S-INVALID = _RA-ASSERT
+_RP-GEN @ _RA-INSTANCE @ CINST.GENERATION !
+-1 CHK-EVERY-FRAME !
+0 _RA-COMP-DESC COMP.STATE-SIZE ! 0 _RA-INSTANCE @ CINST.STATE !
+_RP-DONE
+''', minimum=50, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
+
+
 def test_shadow_check_matches_reuse_and_catches_a_stale_reused_slice():
     run_series(_program() + r'''
 -1 FSHD-ON ! FSHD-RESET

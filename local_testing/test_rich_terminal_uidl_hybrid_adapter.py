@@ -1137,6 +1137,23 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
             in validate
         )
     assert validate.count("CHK-EVERY-FRAME?") == 5
+    # A draw's proofs that RUHA's banks lie apart from the screen, the owners
+    # and the documents were made when they were lent or attached, and are
+    # made again only with every-frame checks on; the record's state checks
+    # and the owner's identity run in both modes.
+    preflight = _word(source, "_RUHA-B-PREFLIGHT")
+    record = _word(source, "_RUHA-B-PREFLIGHT-RECORD?")
+    current = _word(source, "_RUHA-RECORD-STORAGE-CURRENT?")
+    assert preflight.index("CHK-EVERY-FRAME? IF") < preflight.index(
+        "_RUHA-SCREEN-STORAGE-DISJOINT?")
+    assert record.index("CHK-EVERY-FRAME? IF") < record.index("_RUHA-LIVE-OWNER?")
+    assert record.index("ELSE") < record.index("_RUHA-OWNER-NAMED?")
+    assert record.index("CHK-EVERY-FRAME? 0= IF -1 EXIT THEN") < record.index(
+        "_RUHA-STORAGE-DISJOINT-CURRENT?")
+    assert "CHK-EVERY-FRAME? IF _RUHA-STORAGE-DISJOINT-CURRENT? ELSE DROP -1 THEN" in current
+    attach = _word(source, "_RUHA-ATTACH")
+    assert "CHK-EVERY-FRAME" not in attach
+    assert "_RUHA-STORAGE-DISJOINT-CURRENT?" in attach and "_RUHA-LIVE-OWNER?" in attach
     assert menu_validate.count("CHK-EVERY-FRAME? IF") == 1
     assert menu_validate.index("CHK-EVERY-FRAME? IF") < menu_validate.index(
         "_RUHA-B-PRIOR-RECORD?"
