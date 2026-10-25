@@ -265,6 +265,11 @@ def test_pad_routes_canonical_mouse_hits_without_stealing_editor_keys() -> None:
     for editor_key in ("KEY-LEFT", "KEY-RIGHT", "KEY-T-CHAR"):
         assert editor_key not in handle_panel
     assert "_PAD-TABS @ ?DUP IF WDG-DIRTY? OR THEN" in paint
+    # The editor's focus follows the panel's in one store, so a sync that
+    # changes nothing moves no revision and keeps typing's row record.
+    sync_focus = _word(source, "_PAD-SYNC-TXTA-FOCUS")
+    assert "WDG-FLAG!" in sync_focus
+    assert "WDG-FOCUS-CLR" not in sync_focus
     assert "_PAD-DRAW-TABS" not in _executable(source)
     assert "TAB-CONTENT _PDT-RGN !" in remove
     assert "_PDT-RGN @ ?DUP IF RGN-FREE" in remove

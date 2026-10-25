@@ -601,9 +601,9 @@ VARIABLE _PDT-RGN
     SWAP RGN-W        SWAP 24 + ! ;
 
 : _PAD-SYNC-TXTA-FOCUS  ( -- )
+    \ One store: an editor already in step with the panel does not change.
     _PAD-TXTA @ ?DUP IF
-        DUP WDG-FOCUS-CLR
-        _PAD-PANEL WDG-FOCUSED? IF WDG-FOCUS-SET ELSE DROP THEN
+        _PAD-PANEL WDG-FOCUSED? WDG-F-FOCUSED ROT WDG-FLAG!
     THEN ;
 
 VARIABLE _PDC-W
