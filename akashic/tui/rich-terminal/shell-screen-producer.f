@@ -10,6 +10,7 @@ REQUIRE shell-family-clone.f
 REQUIRE family-batch.f
 REQUIRE shell-family-emit.f
 REQUIRE frame-shadow.f
+REQUIRE ../check-mode.f
 
 208 CONSTANT RSHSP-SIZE
 136 CONSTANT RSHSP-BANK-HEADER-SIZE
@@ -1380,7 +1381,9 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
         _RSHSP-PACK-A @ _RSHSP-BANK @ _RSHSP-BANK-USED @ + _RSHSP-PACK-U @ MOVE
         _RSHSP-PACK-U @ _RSHSP-ALIGN _RSHSP-BANK-USED +!
     ELSE 0 R@ ! THEN R> DROP ;
-\ Freezing is the only write to a bank and checks the finished bank once.
+\ Freezing is the only write to a bank.  The finished bank is a proved copy
+\ of the batch the preflight admitted and of the model the shell snapshot
+\ validated, so it is checked once more only with every-frame checks on.
 \ STAGE freezes into the bank ACTIVE does not name after dropping PENDING,
 \ so a bank that PENDING or ACTIVE names is never written again, and later
 \ uses compare its identities only.
@@ -1422,7 +1425,9 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-NEXT-OBJECT @ _RSHSP-BANK @ RSHSP-BANK.NEXT-OBJECT !
     _RSHSP-PROMPT-ID @ _RSHSP-BANK @ RSHSP-BANK.PROMPT !
     _RSHSP-BANK-USED @ _RSHSP-BANK @ RSHSP-BANK.USED !
-    _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID? _RSHSP-CHECK ;
+    CHK-EVERY-FRAME? IF
+        _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID? _RSHSP-CHECK
+    THEN ;
 \ Diagnostics: complete preparations refused, and the last refusal's status
 \ and where it happened (_RSHSP-PSTAGE: 1 target, 2 snapshot,
 \ 3 model bounds, 4 geometry, 5 model proof, 6 catalog, 7 families, 8 glyph
@@ -1444,10 +1449,14 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     _RSHSP-M @ SHM.WIDTH @ _RSHSP-P @ _RTHP.COLS @ = _RSHSP-CHECK
     _RSHSP-M @ SHM.HEIGHT @ _RSHSP-P @ _RTHP.ROWS @ = _RSHSP-CHECK
     _RSHSP-M @ _RSHSP-MU @ _RSHSP-COPY _RSHSP-M !
-    \ The copy is checked once here; the band helpers, the planner and the
-    \ membership builder below then skip it.  Nothing writes it afterwards.
+    \ The shell snapshot validated these bytes when it published them, so
+    \ the copy is validated again only with every-frame checks on; the band
+    \ helpers, the planner and the membership builder below skip it either
+    \ way.  Nothing writes it afterwards.
     5 _RSHSP-PSTAGE !
-    _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK = _RSHSP-CHECK
+    CHK-EVERY-FRAME? IF
+        _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK = _RSHSP-CHECK
+    THEN
     6 _RSHSP-PSTAGE !
     _RSHSP-ALLOCATE-PLAN _RSHSP-CATALOG!
     7 _RSHSP-PSTAGE !

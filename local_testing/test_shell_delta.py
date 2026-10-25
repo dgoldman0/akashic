@@ -302,6 +302,30 @@ _SS-DONE
 ''', minimum=16014)
 
 
+def test_every_frame_checks_validate_the_model_copy_and_the_frozen_bank():
+    """The shell snapshot validates its model when it publishes it. With
+    every-frame checks on, the producer validates its copy of the model
+    again, and the frozen bank after it; in normal mode it builds and freezes
+    from the copy as published."""
+    staged_run(DELTA + r'''
+\ A nonzero byte in an entry past the published model's count, where the
+\ shell snapshot's validation wants zeros and nothing else reads.
+: _SC-DAMAGE ( -- )
+    _SX-P _RTHP.SOURCE-DRAW @ _SX-C SHSN-SNAPSHOT-FOR@ _SS-OK DROP
+    DUP SHM.COUNT @ SWAP SHM-ENTRY 1 SWAP C! ;
+_SX-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _SC-DAMAGE
+_RSHSP-PREPARE RTE-S-OK <> _SS-A
+\ The producer refused its copy of the model.
+_RSHSP-DIAG-PREPARE-STAGE @ 5 = _SS-A
+0 CHK-EVERY-FRAME !
+' _SD-HELLO _SD-DRAW _SC-DAMAGE
+_RSHSP-PREPARE _SS-OK
+-1 CHK-EVERY-FRAME !
+_SS-DONE
+''', minimum=26)
+
+
 def test_the_shadow_check_plans_reused_regions_whole_and_catches_stale_row_damage():
     """With the shadow check on, a region whose unchanged rows were copied
     is also planned whole. When the producer's row damage misses a changed

@@ -204,7 +204,18 @@ def test_the_freeze_takes_the_graph_the_preflight_checked():
     freeze = word("_RSHSP-FREEZE")
     assert "_RSHSP-BATCH @ _RSHFC-MEASURE-PROVED" in freeze
     assert "RSHFC-MEASURE " not in freeze and "_RSHFC-COPY-PROVED" in freeze
-    assert freeze.rstrip().endswith("_RSHSP-BANK-VALID? _RSHSP-CHECK ;")
+    # The finished bank, a proved copy, is checked again only with
+    # every-frame checks on, as is the producer's copy of the published model.
+    assert freeze.rstrip().endswith(
+        "CHK-EVERY-FRAME? IF\n"
+        "        _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID? _RSHSP-CHECK\n"
+        "    THEN ;"
+    )
+    assert (
+        "CHK-EVERY-FRAME? IF\n"
+        "        _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK = _RSHSP-CHECK\n"
+        "    THEN"
+    ) in build
     # Every freeze follows a preflight, with only the mapping between them.
     start = word("_RSHSP-BUILD")
     assert start.index("_RSHSP-BUILD-BATCH") < start.index("_RSHSP-FREEZE")
