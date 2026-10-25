@@ -329,11 +329,6 @@ _PAD-CURRENT-STATE _PAD-CFG-CAP CMP-FIELD: _PAD-CFG-BUF
 _PAD-CURRENT-STATE CMP-CELL: _PAD-CFG-FD
 
 \ ---- Incremental editor paint state ----
-_PAD-CURRENT-STATE CMP-CELL: _PAD-FAST-ROW
-_PAD-CURRENT-STATE CMP-CELL: _PAD-FAST-COUNT
-_PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-LINE
-_PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL
-_PAD-CURRENT-STATE CMP-CELL: _PAD-EV-OLD-SCROLL-X
 \ True once Ln/Col has been refreshed during the current editor event.
 _PAD-CURRENT-STATE CMP-CELL: _PAD-POS-FRESH
 
@@ -2452,8 +2447,6 @@ VARIABLE _PSW-BYTE
     0 _PAD-OUTPUT-LOG-U !
     _PAD-DIAG-RESET
     0 _PAD-ARENA !
-   -1 _PAD-FAST-ROW !
-    0 _PAD-FAST-COUNT !
 
     \ ---- Create XMEM arena for editor buffers ----
     _PAD-ARENA-SIZE A-XMEM ARENA-NEW
@@ -2599,77 +2592,8 @@ VARIABLE _PSW-BYTE
         S"     " DROP SWAP ROT TXTA-INS-STR
     THEN ;
 
-: _PAD-FAST-CHAR?  ( ev -- flag )
-    DUP @ KEY-T-CHAR <> IF DROP 0 EXIT THEN
-    DUP 16 + @ KEY-MOD-CTRL AND IF DROP 0 EXIT THEN
-    8 + @ 32 < IF 0 EXIT THEN
-    _PAD-TXTA @ TXTA-SELECTION? 0= ;
-
-: _PAD-ENTER-EVENT?  ( ev -- flag )
-    DUP @ KEY-T-SPECIAL = IF
-        8 + @ KEY-ENTER = EXIT
-    THEN
-    DUP @ KEY-T-CHAR = IF
-        8 + @ 13 = EXIT
-    THEN
-    DROP 0 ;
-
-: _PAD-FAST-LAST-ENTER?  ( ev -- flag )
-    _PAD-ENTER-EVENT? 0= IF 0 EXIT THEN
-    _PAD-TXTA @ TXTA-SELECTION? IF 0 EXIT THEN
-    _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE !
-    _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL !
-    _PAD-EV-OLD-LINE @
-    _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-GB + @ GB-LINES 1- =
-    _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
-    DUP 0>= SWAP 1+ _PAD-TXTA @ WDG-REGION RGN-H < AND
-    AND ;
-
-: _PAD-HANDLE-EDITOR  ( ev -- flag )
-    -1 _PAD-FAST-ROW !
-    0 _PAD-FAST-COUNT !
-    DUP _PAD-FAST-CHAR? IF
-        _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE !
-        _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL !
-        _PAD-TXTA @ TXTA-SCROLL-X@ _PAD-EV-OLD-SCROLL-X !
-        DUP _PAD-PANEL WDG-HANDLE       ( ev handled? )
-        DUP IF
-            _PAD-TXTA @ TXTA-ADJUST-SCROLL
-            _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE @ =
-            _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL @ = AND IF
-                _PAD-TXTA @ TXTA-SCROLL-X@
-                _PAD-EV-OLD-SCROLL-X @ = IF
-                    _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
-                    _PAD-FAST-ROW !
-                    1 _PAD-FAST-COUNT !
-                THEN
-            THEN
-        THEN
-        NIP EXIT
-    THEN
-    DUP _PAD-FAST-LAST-ENTER? IF
-        _PAD-TXTA @ TXTA-SCROLL-X@ _PAD-EV-OLD-SCROLL-X !
-        DUP _PAD-PANEL WDG-HANDLE       ( ev handled? )
-        DUP IF
-            _PAD-TXTA @ TXTA-ADJUST-SCROLL
-            _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE @ 1+ =
-            _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL @ = AND IF
-                _PAD-TXTA @ TXTA-SCROLL-X@
-                _PAD-EV-OLD-SCROLL-X @ = IF
-                    _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
-                    _PAD-FAST-ROW !
-                    2 _PAD-FAST-COUNT !
-                THEN
-            THEN
-        THEN
-        NIP EXIT
-    THEN
-    _PAD-PANEL WDG-HANDLE ;
-
 : PAD-EVENT-CB  ( ev instance -- flag )
     _PAD-ACTIVATE
-    -1 _PAD-FAST-ROW !
-    0 _PAD-FAST-COUNT !
     _PAD-PROMPT @ ?DUP IF
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN
         DROP
@@ -2694,7 +2618,7 @@ VARIABLE _PSW-BYTE
     \ editor-area before Pad paints its already-dirty textarea, doubling
     \ the cell work for every character.  Unhandled shortcuts still fall
     \ through to UIDL via the false result.
-    _PAD-HANDLE-EDITOR ;
+    _PAD-PANEL WDG-HANDLE ;
 
 \ Paint the command bar after UIDL so it overlays the status row.
 : PAD-PAINT-CB  ( instance -- )
@@ -2707,23 +2631,22 @@ VARIABLE _PSW-BYTE
         _PAD-TABS @ ?DUP IF WDG-DIRTY? OR THEN
         IF
             DROP
-            _PAD-FAST-ROW @ 0< IF
-                _PAD-PANEL WDG-DRAW
-            ELSE
-                \ A printable edit with unchanged line mapping only needs
-                \ its viewport row.  The canonical tab header is a separate
-                \ ordinary widget and keeps the dirty-star label current.
-                _PAD-PANEL WDG-REGION RGN-USE
-                _PAD-PANEL _PAD-SYNC-TXTA-RGN
-                _PAD-SYNC-TXTA-FOCUS
+            \ UIDL did not paint the editor this frame, since it is still
+            \ marked, so the screen holds its last draw.  When only typing
+            \ changed it, the text area names the rows; the canonical tab
+            \ header is a separate ordinary widget and keeps the dirty-star
+            \ label current.
+            _PAD-PANEL WDG-REGION RGN-USE
+            _PAD-PANEL _PAD-SYNC-TXTA-RGN
+            _PAD-SYNC-TXTA-FOCUS
+            _PAD-TXTA @ TXTA-CHANGED-ROWS ?DUP IF
                 _PAD-DRAW-TAB-WIDGET
                 _PTH-EDITOR-FG @ DRW-FG! _PTH-EDITOR-BG @ DRW-BG!
-                _PAD-FAST-ROW @ _PAD-FAST-COUNT @
                 _PAD-TXTA @ TXTA-DRAW-ROWS
                 _PAD-DRAW-CARET
+            ELSE
+                DROP _PAD-PANEL WDG-DRAW
             THEN
-            -1 _PAD-FAST-ROW !
-            0 _PAD-FAST-COUNT !
         ELSE
             DROP
         THEN

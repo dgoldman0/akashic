@@ -75,7 +75,7 @@ the target and decides what happens; the line stays valid only until it
 calls another textarea word, so it copies what it needs first. A plain press
 on a link places the caret, so the link's text can still be edited.
 
-## Descriptor Layout (168 bytes)
+## Descriptor Layout (224 bytes)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -96,6 +96,13 @@ on a link places the caret, so the link's text can still be edited.
 | +144 | instance | u | Nonzero process-lifetime identity for this widget allocation |
 | +152 | palette | address | CELL look of each meaning, or 0 for `SPAL-DEFAULT` |
 | +160 | follow word | xt | Follows a link, or 0 |
+| +168 | drawn revision | i | The revision its last draw showed, or -1 before the first |
+| +176 | drawn place | u | Its region's row and column at that draw, as one cell |
+| +184 | drawn size | u | Its region's height and width at that draw, as one cell |
+| +192 | typed from | i | The revision the typing since that draw began at |
+| +200 | typed to | i | The revision after the last of that typing |
+| +208 | typed first | u | The first viewport row that typing changed |
+| +216 | typed end | u | The row after its last, equal to the first for none |
 
 ## API Reference
 
@@ -146,6 +153,21 @@ view; each that changes one moves the widget's revision (`WDG-REVISION`).
 | `TXTA-VIEW@` | `( widget -- cursor scroll-y anchor )` | The caret, the first line in view and the selection's anchor or -1, kept while other text is bound |
 | `TXTA-VIEW!` | `( cursor scroll-y anchor widget -- )` | Show a view `TXTA-VIEW@` gave over the text bound now, the caret and anchor kept within it |
 | `TXTA-UNDO` / `TXTA-REDO` | `( widget -- )` | Undo or redo the last edit, as Ctrl+Z and Ctrl+Y do, with a gap buffer and an undo state bound |
+
+### Drawing Only What Changed
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TXTA-CHANGED-ROWS` | `( widget -- first count )` | The viewport rows typing changed since the last draw, when it changed only them; `count` is 0 otherwise |
+| `TXTA-DRAW-ROWS` | `( first count widget -- )` | Draw only those viewport rows over a screen that holds the last draw, and clean the widget |
+| `TXTA-ADJUST-SCROLL` | `( widget -- )` | Scroll to keep the caret in view, as a draw does |
+
+A typed character changes its row, and a line break at the end of the text
+changes its row and the next, when the insert is the widget's only change:
+no selection is replaced, neither scroll moves, and nothing else moves the
+revision before the next draw.  The widget keeps those rows with the
+revision and region of its last draw, and `TXTA-CHANGED-ROWS` names them
+only while all three still hold; anything else asks for a whole draw.
 
 ### Text Sources
 

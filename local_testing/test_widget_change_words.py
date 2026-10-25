@@ -222,3 +222,30 @@ S" x" _WC-T TXTA-INS-STR  _WC-T TXTA-LENGTH 1 = _FM-A
 ' _WC-REDO _WC-T _WC-MOVES? _FM-A  _WC-T TXTA-LENGTH 1 = _FM-A
 _FM-DONE
 ''', minimum=20)
+
+
+def test_typing_names_the_rows_it_changed_until_anything_else_changes():
+    run(TEXTAREA + r'''
+40 10 SCR-NEW SCR-USE
+: _WC-CHAR  ( cp -- )
+    _WC-EV 8 + ! 0 _WC-EV 16 + ! KEY-T-CHAR _WC-EV ! _WC-EV _WC-T WDG-HANDLE DROP ;
+: _WC-ROWS  ( -- first count ) _WC-T TXTA-CHANGED-ROWS ;
+\ Before the first draw nothing is named.
+_WC-ABC  CHAR d _WC-CHAR  _WC-ROWS NIP 0= _FM-A
+\ After a draw, a typed character names its row, and so does a second.
+_WC-T WDG-DRAW  _WC-ROWS NIP 0= _FM-A
+CHAR e _WC-CHAR  _WC-ROWS 1 = _FM-A 0= _FM-A
+CHAR f _WC-CHAR  _WC-ROWS 1 = _FM-A 0= _FM-A
+\ Drawing those rows leaves nothing to name.
+_WC-ROWS _WC-T TXTA-DRAW-ROWS  _WC-ROWS NIP 0= _FM-A
+\ A line break at the end names its row and the next.
+13 _WC-CHAR  _WC-ROWS 2 = _FM-A 0= _FM-A
+\ Anything else since the typing asks for a whole draw: a scroll, a moved
+\ region, a line break before the end, or typing over a selection.
+_WC-T WDG-DRAW  CHAR g _WC-CHAR  1 _WC-T TXTA-SCROLL-X!  _WC-ROWS NIP 0= _FM-A
+_WC-T WDG-DRAW  CHAR h _WC-CHAR  1 0 3 20 _WC-T WDG-REGION RGN-BOUNDS!
+_WC-ROWS NIP 0= _FM-A
+0 _WC-T TXTA-CURSOR!  _WC-T WDG-DRAW  13 _WC-CHAR  _WC-ROWS NIP 0= _FM-A
+_WC-T TXTA-SELECT-ALL  _WC-T WDG-DRAW  CHAR i _WC-CHAR  _WC-ROWS NIP 0= _FM-A
+_FM-DONE
+''', minimum=13)

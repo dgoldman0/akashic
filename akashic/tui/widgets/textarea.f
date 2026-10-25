@@ -15,7 +15,7 @@
 \  The edit buffer is caller-provided — the widget does not allocate
 \  storage for the text.
 \
-\  Descriptor (168 bytes):
+\  Descriptor (224 bytes):
 \    +0..+32  widget header   type=WDG-T-TEXTAREA
 \    +40      buf-a           Address of edit buffer
 \    +48      buf-cap         Buffer capacity (bytes)
@@ -76,8 +76,15 @@ VARIABLE _TXTA-OWNED-LIMIT
 144 CONSTANT _TXTA-O-INSTANCE     \ nonpointer lifetime identity
 152 CONSTANT _TXTA-O-PALETTE      \ style palette or 0 for the default
 160 CONSTANT _TXTA-O-FOLLOW-XT    \ link follower or 0
+168 CONSTANT _TXTA-O-DRAWN-REV    \ revision its last draw showed, or -1
+176 CONSTANT _TXTA-O-DRAWN-PLACE  \ its region's row and column then
+184 CONSTANT _TXTA-O-DRAWN-SIZE   \ its region's height and width then
+192 CONSTANT _TXTA-O-TYPED-FROM   \ revision the typing since began at
+200 CONSTANT _TXTA-O-TYPED-TO     \ revision after the last of it
+208 CONSTANT _TXTA-O-TYPED-FIRST  \ first viewport row it changed
+216 CONSTANT _TXTA-O-TYPED-END    \ the row after its last, FIRST for none
 
-168 CONSTANT _TXTA-DESC-SIZE
+224 CONSTANT _TXTA-DESC-SIZE
 
 \ =====================================================================
 \  2. Module variables (KDOS single-threaded pattern)
@@ -1023,6 +1030,24 @@ CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB selection extraction
         ELSE DROP THEN
     THEN ;
 
+\ _TXTA-RGN-PLACE ( widget -- key )  _TXTA-RGN-SIZE ( widget -- key )
+\   The region's row and column, and its height and width, each pair as
+\   one cell.
+: _TXTA-PAIR  ( a b -- key )  SWAP 32 LSHIFT SWAP 4294967295 AND OR ;
+: _TXTA-RGN-PLACE  ( widget -- key )
+    WDG-REGION DUP RGN-ROW SWAP RGN-COL _TXTA-PAIR ;
+: _TXTA-RGN-SIZE  ( widget -- key )
+    WDG-REGION DUP RGN-H SWAP RGN-W _TXTA-PAIR ;
+
+\ _TXTA-DRAWN! ( widget -- )
+\   The screen shows the widget as it is now: keep its revision and its
+\   region's place and size, and forget the rows typing changed.
+: _TXTA-DRAWN!  ( widget -- )
+    DUP WDG-REVISION OVER _TXTA-O-DRAWN-REV + !
+    DUP _TXTA-RGN-PLACE OVER _TXTA-O-DRAWN-PLACE + !
+    DUP _TXTA-RGN-SIZE OVER _TXTA-O-DRAWN-SIZE + !
+    DUP _TXTA-O-TYPED-FIRST + @ SWAP _TXTA-O-TYPED-END + ! ;
+
 \ _TXTA-DRAW-RANGE ( widget first count -- )
 \   Scroll-adjust, set up state, and draw a range of viewport rows.
 \   In GB mode with draw-line hook: per-line extraction from gap-buf.
@@ -1056,7 +1081,8 @@ CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB selection extraction
         I _TXTA-DRW-GUTTER
         DRW-STYLE-RESTORE
         1 _TXTA-DRW-LINE# +!
-    LOOP ;
+    LOOP
+    _TXTA-W @ _TXTA-DRAWN! ;
 
 \ _TXTA-DRAW ( widget -- )
 \   Standard widget draw repaints the complete viewport.
@@ -1067,6 +1093,57 @@ CREATE _TXTA-FLAT-BUF 1024 ALLOT   \ temp for GB selection extraction
 \ =====================================================================
 \  8. Internal handle
 \ =====================================================================
+
+VARIABLE _TXTA-TY-REV
+VARIABLE _TXTA-TY-LINE
+VARIABLE _TXTA-TY-SY
+VARIABLE _TXTA-TY-SX
+VARIABLE _TXTA-TY-ROWS
+
+\ _TXTA-TYPED ( first end -- )
+\   Typing changed the viewport rows from FIRST up to END, and nothing
+\   else.  Join them to the rows typed since the last draw when that typing
+\   is all that has happened since; else they begin a new record.
+: _TXTA-TYPED  ( first end -- )
+    _TXTA-W @ _TXTA-O-TYPED-TO + @ _TXTA-TY-REV @ =
+    _TXTA-W @ _TXTA-O-TYPED-FIRST + @ _TXTA-W @ _TXTA-O-TYPED-END + @ <
+    AND IF
+        _TXTA-W @ _TXTA-O-TYPED-END + @ MAX SWAP
+        _TXTA-W @ _TXTA-O-TYPED-FIRST + @ MIN SWAP
+    ELSE
+        _TXTA-TY-REV @ _TXTA-W @ _TXTA-O-TYPED-FROM + !
+    THEN
+    _TXTA-W @ _TXTA-O-TYPED-END + !  _TXTA-W @ _TXTA-O-TYPED-FIRST + !
+    _TXTA-W @ WDG-REVISION _TXTA-W @ _TXTA-O-TYPED-TO + ! ;
+
+\ _TXTA-TYPE ( cp -- )
+\   Insert a typed character or line break, and keep the viewport rows it
+\   changed when it changed only them: the caret's row for a character, or
+\   that row and the next for a line break at the end of the text.  The
+\   insert must be the only change, so the revision moves once, neither
+\   scroll moves, and no selection is replaced.
+: _TXTA-TYPE  ( cp -- )
+    _TXTA-W @ WDG-REVISION _TXTA-TY-REV !
+    _TXTA-CURSOR-LINE _TXTA-TY-LINE !
+    _TXTA-SCROLL _TXTA-TY-SY !
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ _TXTA-TY-SX !
+    DUP 10 = IF
+        _TXTA-TY-LINE @ 1+ _TXTA-LINE-COUNT = IF 2 ELSE 0 THEN
+    ELSE 1 THEN _TXTA-TY-ROWS !
+    _TXTA-HAS-SEL? IF 0 _TXTA-TY-ROWS ! THEN
+    _TXTA-INSERT
+    _TXTA-SCROLL-ADJ
+    _TXTA-TY-ROWS @ 0= IF EXIT THEN
+    _TXTA-W @ WDG-REVISION _TXTA-TY-REV @ 1+ <> IF EXIT THEN
+    _TXTA-SCROLL _TXTA-TY-SY @ <> IF EXIT THEN
+    _TXTA-W @ _TXTA-O-SCROLL-X + @ _TXTA-TY-SX @ <> IF EXIT THEN
+    _TXTA-CURSOR-LINE _TXTA-TY-LINE @ _TXTA-TY-ROWS @ 1- + <> IF EXIT THEN
+    _TXTA-TY-LINE @ _TXTA-TY-SY @ -                     ( row )
+    DUP 0< IF DROP EXIT THEN
+    DUP _TXTA-TY-ROWS @ + DUP _TXTA-W @ WDG-REGION RGN-H > IF
+        2DROP EXIT
+    THEN
+    _TXTA-TYPED ;
 
 VARIABLE _TXTA-HND-MODS   \ cached modifier flags for current event
 
@@ -1269,7 +1346,7 @@ VARIABLE _TXTA-PT-CODE
             KEY-PGDN      OF _TXTA-MOV-PRE _TXTA-PGDN      -1 ENDOF
             KEY-DEL       OF _TXTA-DELETE    -1 ENDOF
             KEY-BACKSPACE OF _TXTA-BACKSPACE -1 ENDOF
-            KEY-ENTER     OF 10 _TXTA-INSERT -1 ENDOF
+            KEY-ENTER     OF 10 _TXTA-TYPE   -1 ENDOF
             0 SWAP
         ENDCASE
         EXIT
@@ -1297,13 +1374,13 @@ VARIABLE _TXTA-PT-CODE
         THEN
         8 + @                           ( codepoint )
         DUP 32 >= IF
-            _TXTA-INSERT -1 EXIT
+            _TXTA-TYPE -1 EXIT
         THEN
         DUP 8 = IF
             DROP _TXTA-BACKSPACE -1 EXIT
         THEN
         DUP 13 = IF
-            DROP 10 _TXTA-INSERT -1 EXIT
+            DROP 10 _TXTA-TYPE -1 EXIT
         THEN
         DROP 0 EXIT
     THEN
@@ -1344,6 +1421,13 @@ VARIABLE _TXTA-PT-CODE
     _TXTA-NEW-INSTANCE @ OVER _TXTA-O-INSTANCE + !
     0              OVER _TXTA-O-PALETTE   + !
     0              OVER _TXTA-O-FOLLOW-XT + !
+    -1             OVER _TXTA-O-DRAWN-REV + !
+    0              OVER _TXTA-O-DRAWN-PLACE + !
+    0              OVER _TXTA-O-DRAWN-SIZE + !
+    -1             OVER _TXTA-O-TYPED-FROM + !
+    -1             OVER _TXTA-O-TYPED-TO + !
+    0              OVER _TXTA-O-TYPED-FIRST + !
+    0              OVER _TXTA-O-TYPED-END + !
     0 _TXTA-NEW-INSTANCE ! ;
 
 \ TXTA-SET-TEXT ( text-a text-u widget -- )
@@ -1626,6 +1710,23 @@ VARIABLE _TXTA-PT-CODE
 \   owners use this before deciding whether a row-local repaint is safe.
 : TXTA-ADJUST-SCROLL  ( widget -- )
     _TXTA-W ! _TXTA-SCROLL-ADJ ;
+
+\ TXTA-CHANGED-ROWS ( widget -- first count )
+\   The viewport rows that changed since the widget was last drawn, when
+\   only typing in them changed it: a character's row, or the two rows a
+\   line break at the end of the text changed.  COUNT is 0 when anything
+\   else changed, or nothing did; a draw then shows the widget whole.  For
+\   an owner whose screen still holds that last draw, to pass to
+\   TXTA-DRAW-ROWS.
+: TXTA-CHANGED-ROWS  ( widget -- first count )
+    >R
+    R@ _TXTA-O-TYPED-FIRST + @  R@ _TXTA-O-TYPED-END + @ OVER -
+    DUP 0> 0= IF 2DROP R> DROP 0 0 EXIT THEN
+    R@ _TXTA-O-TYPED-FROM + @ R@ _TXTA-O-DRAWN-REV + @ =
+    R@ _TXTA-O-TYPED-TO + @ R@ WDG-REVISION = AND
+    R@ _TXTA-RGN-PLACE R@ _TXTA-O-DRAWN-PLACE + @ = AND
+    R@ _TXTA-RGN-SIZE R@ _TXTA-O-DRAWN-SIZE + @ = AND
+    R> DROP 0= IF 2DROP 0 0 THEN ;
 
 \ TXTA-DRAW-ROWS ( first count widget -- )
 \   Repaint only a caller-verified range of viewport rows and clean the
@@ -2257,6 +2358,7 @@ GUARD _txta-guard
 ' TXTA-GUTTER!    CONSTANT _txta-gutter-xt
 ' TXTA-ADJUST-SCROLL CONSTANT _txta-adjustscroll-xt
 ' TXTA-DRAW-ROWS  CONSTANT _txta-drawrows-xt
+' TXTA-CHANGED-ROWS CONSTANT _txta-changedrows-xt
 ' TXTA-SCROLL-X@  CONSTANT _txta-scrollxrd-xt
 ' TXTA-SCROLL-X!  CONSTANT _txta-scrollxwr-xt
 ' TXTA-INSTANCE@  CONSTANT _txta-instance-at-xt
@@ -2299,6 +2401,7 @@ GUARD _txta-guard
 : TXTA-GUTTER!    _txta-gutter-xt  _txta-guard WITH-GUARD ;
 : TXTA-ADJUST-SCROLL _txta-adjustscroll-xt _txta-guard WITH-GUARD ;
 : TXTA-DRAW-ROWS  _txta-drawrows-xt _txta-guard WITH-GUARD ;
+: TXTA-CHANGED-ROWS _txta-changedrows-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X@  _txta-scrollxrd-xt _txta-guard WITH-GUARD ;
 : TXTA-SCROLL-X!  _txta-scrollxwr-xt _txta-guard WITH-GUARD ;
 : TXTA-INSTANCE@  _txta-instance-at-xt _txta-guard WITH-GUARD ;
