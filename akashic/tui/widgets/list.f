@@ -496,12 +496,13 @@ VARIABLE _LST-SV-R
 VARIABLE _LST-SV-LI
 VARIABLE _LST-SV-LR
 
-\ _LST-SETTLE-VIEW ( widget -- )
-\   Keep the view within the rows: at one of a row's screen rows, and no
-\   later than its latest place, where a log that follows its end stays.
-: _LST-SETTLE-VIEW  ( widget -- )
+\ _LST-SCAN-VIEW ( widget -- )
+\   Work out where the rows leave the view, as _LST-SV-I and _LST-SV-R,
+\   without moving it: at one of a row's screen rows, and no later than
+\   its latest place, where a log that follows its end stays.
+: _LST-SCAN-VIEW  ( widget -- )
     _LST-SV-W !
-    _LST-SV-W @ _LST-O-COUNT + @ 0= IF 0 0 _LST-SV-W @ _LST-TOP! EXIT THEN
+    _LST-SV-W @ _LST-O-COUNT + @ 0= IF 0 _LST-SV-I ! 0 _LST-SV-R ! EXIT THEN
     _LST-SV-W @ _LST-O-SCROLL + @ 0 MAX
         _LST-SV-W @ _LST-O-COUNT + @ 1- MIN _LST-SV-I !
     _LST-SV-W @ _LST-O-SCROLL-ROW + @ 0 MAX
@@ -514,8 +515,11 @@ VARIABLE _LST-SV-LR
     \ With no screen rows in the body, the latest place is past the last.
     _LST-SV-I @ _LST-SV-W @ _LST-O-COUNT + @ < 0= IF
         _LST-SV-W @ _LST-O-COUNT + @ 1- _LST-SV-I !  0 _LST-SV-R !
-    THEN
-    _LST-SV-I @ _LST-SV-R @ _LST-SV-W @ _LST-TOP! ;
+    THEN ;
+
+\ _LST-SETTLE-VIEW ( widget -- )   Keep the view where the rows leave it.
+: _LST-SETTLE-VIEW  ( widget -- )
+    DUP _LST-SCAN-VIEW _LST-SV-I @ _LST-SV-R @ ROT _LST-TOP! ;
 
 \ _LST-TRACK-END ( widget -- )   After the view moves, a log follows its
 \   end exactly when the view is at its latest place.
@@ -537,22 +541,26 @@ VARIABLE _LST-SV-LR
     2DROP DROP R> DROP ;
 
 VARIABLE _LST-SN-W
+VARIABLE _LST-SN-I
 
-\ _LST-SHOWN ( widget -- n )   How many rows the view shows, from its
-\   first: the body's screen rows in item mode, and in card mode the cards
-\   with a screen row in the body.
-: _LST-SHOWN  ( widget -- n )
-    DUP _LST-CARDS? 0= IF _LST-BODY-H EXIT THEN
-    DUP _LST-SN-W ! _LST-BODY-H 0> 0= IF 0 EXIT THEN
-    _LST-SN-W @ _LST-O-SCROLL-ROW + @ NEGATE
-    _LST-SN-W @ _LST-O-SCROLL + @                     ( used index )
+\ _LST-SHOWN-AT ( index row widget -- n )   How many rows a view that
+\   starts at screen row ROW of row INDEX shows, from its first: the body's
+\   screen rows in item mode, and in card mode the cards with a screen row
+\   in the body.
+: _LST-SHOWN-AT  ( index row widget -- n )
+    DUP _LST-CARDS? 0= IF NIP NIP _LST-BODY-H EXIT THEN
+    DUP _LST-SN-W ! _LST-BODY-H 0> 0= IF 2DROP 0 EXIT THEN
+    NEGATE SWAP DUP _LST-SN-I !                       ( used index )
     BEGIN
         DUP _LST-SN-W @ _LST-O-COUNT + @ <
         2 PICK _LST-SN-W @ _LST-BODY-H < AND
     WHILE
         DUP _LST-SN-W @ _LST-ROWS ROT + SWAP 1+
     REPEAT
-    NIP _LST-SN-W @ _LST-O-SCROLL + @ - ;
+    NIP _LST-SN-I @ - ;
+
+\ _LST-SHOWN ( widget -- n )   How many rows the view shows, from its first.
+: _LST-SHOWN  ( widget -- n )  DUP _LST-TOP ROT _LST-SHOWN-AT ;
 
 \ _LST-ITEM-AT ( y widget -- index )   The row on the body's screen row Y,
 \   or the count below the last.  _LST-AT-LINE keeps which of the row's
@@ -591,21 +599,26 @@ VARIABLE _LST-SK-DIR
     >R 2DUP R@ _LST-SEEK DUP 0< 0= IF NIP NIP R> DROP EXIT THEN
     DROP NEGATE R> _LST-SEEK ;
 
+VARIABLE _LST-S-SEL
+
+\ _LST-SCAN-SEL ( widget -- )
+\   Work out the selection the rows leave, as _LST-S-SEL, without moving
+\   it: none in a log or with no rows, else the selected row within the
+\   rows and off a heading.
+: _LST-SCAN-SEL  ( widget -- )
+    DUP _LST-O-COUNT + @ 0 MAX 0= OVER _LST-LOG? OR IF
+        DROP -1 _LST-S-SEL ! EXIT
+    THEN
+    DUP _LST-O-SEL + @ OVER _LST-O-COUNT + @ 1- MIN 0 MAX   ( w sel )
+    2DUP SWAP _LST-SECTION? IF 1 2 PICK _LST-SEEK-NEAR THEN
+    _LST-S-SEL ! DROP ;
+
 \ _LST-SETTLE ( widget -- )
-\   Keep the selection on a row that is not a heading, or none in a log,
-\   and the view within the rows.
+\   Keep the selection and the view where the rows leave them, as the
+\   draw and the words that change the list do.
 : _LST-SETTLE  ( widget -- )
     DUP _LST-O-COUNT + @ 0 MAX OVER _LST-O-COUNT + !
-    DUP _LST-O-COUNT + @ 0= OVER _LST-LOG? OR IF
-        -1 OVER _LST-O-SEL + !
-    ELSE
-        DUP _LST-O-SEL + @ OVER _LST-O-COUNT + @ 1- MIN 0 MAX
-            OVER _LST-O-SEL + !
-        DUP _LST-O-SEL + @ OVER _LST-SECTION? IF
-            DUP _LST-O-SEL + @ 1 2 PICK _LST-SEEK-NEAR
-                OVER _LST-O-SEL + !
-        THEN
-    THEN
+    DUP _LST-SCAN-SEL _LST-S-SEL @ OVER _LST-O-SEL + !
     _LST-SETTLE-VIEW ;
 
 \ _LST-SELECT-ROW! ( index widget -- )
@@ -1155,6 +1168,7 @@ VARIABLE _LST-C-W
 VARIABLE _LST-C-H
 VARIABLE _LST-C-WIDTH
 VARIABLE _LST-C-FIRST
+VARIABLE _LST-C-ROW0
 VARIABLE _LST-C-COUNT
 VARIABLE _LST-C-SEL
 
@@ -1287,18 +1301,20 @@ VARIABLE _LST-CF-KEEP
         DROP 0 USCOL-S-UNAVAILABLE EXIT
     THEN _LST-C-WIDTH !
     0 _LST-TLN-FAILED !
-    _LST-C-W @ _LST-SETTLE
-    _LST-C-W @ _LST-SHOWN 0= IF 0 USCOL-S-UNAVAILABLE EXIT THEN
-    _LST-C-W @ _LST-O-SCROLL + @ _LST-C-FIRST !
-    _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ -
-        _LST-C-W @ _LST-SHOWN MIN 0 MAX _LST-C-COUNT !
-    _LST-C-W @ _LST-O-SEL + @ _LST-C-SEL !
+    \ The selection and the view as the rows leave them; the capture moves
+    \ neither.
+    _LST-C-W @ _LST-SCAN-SEL  _LST-S-SEL @ _LST-C-SEL !
+    _LST-C-W @ _LST-SCAN-VIEW
+    _LST-SV-I @ _LST-C-FIRST !  _LST-SV-R @ _LST-C-ROW0 !
+    _LST-C-FIRST @ _LST-C-ROW0 @ _LST-C-W @ _LST-SHOWN-AT
+    DUP 0= IF DROP 0 USCOL-S-UNAVAILABLE EXIT THEN
+    _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ - MIN 0 MAX _LST-C-COUNT !
     _LST-C-W @ _LST-SECTIONED? _LST-C-SECTIONED !
     _LST-C-ROOT @ 0 0 _LST-C-H @ _LST-C-WIDTH @ _LST-C-ROOT-STATE
         _LST-C-BUILDER @ USCOL-ITEMS-BEGIN
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
     _LST-C-ROLE 0 _LST-C-W @ _LST-O-COUNT + @ _LST-C-FIRST @ _LST-C-COUNT @
-        _LST-C-W @ _LST-O-SCROLL-ROW + @
+        _LST-C-ROW0 @
         _LST-C-BUILDER @ USCOL-ITEMS-SHAPE
     DUP USCOL-S-OK <> IF 0 SWAP EXIT THEN DROP
     _LST-C-W @ _LST-NCOLS 0 DO
@@ -1399,8 +1415,7 @@ VARIABLE _LST-CF-KEEP
     _LST-SELECT! ;
 
 \ LST-SELECTED ( widget -- index )   The selected row, or -1.
-: LST-SELECTED  ( widget -- index )
-    DUP _LST-SETTLE _LST-O-SEL + @ ;
+: LST-SELECTED  ( widget -- index )  _LST-SCAN-SEL _LST-S-SEL @ ;
 
 \ LST-ON-SELECT ( xt widget -- )   Callback ( index widget -- ).
 : LST-ON-SELECT  ( xt widget -- )
@@ -1454,9 +1469,9 @@ VARIABLE _LST-CF-KEEP
 \   Scroll parameters for a scroll container, in screen rows: all of them,
 \   those above the view, and the body's.
 : LST-SCROLL-INFO  ( widget -- content-h offset visible-h )
-    >R R@ _LST-SETTLE
+    >R R@ _LST-SCAN-VIEW
     R@ _LST-O-COUNT + @ 0 R@ _LST-ROWS-BEFORE
-    R@ _LST-TOP R@ _LST-ROWS-BEFORE
+    _LST-SV-I @ _LST-SV-R @ R@ _LST-ROWS-BEFORE
     R> _LST-BODY-H ;
 
 \ LST-SCROLL-SET ( offset widget -- )

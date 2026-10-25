@@ -164,6 +164,11 @@ the widths and take the card field widths above.
 In a log, each word that moves the view leaves the log following its end
 exactly when the view ends at the last screen row.
 
+`LST-SELECTED`, `LST-SCROLL-INFO` and the item-view capture report the
+selection and the view that the rows allow, and move neither.  The words
+that change the rows, the selection or the view, and the draw, keep them
+there.
+
 A card list with wrapping columns counts a card's screen rows from its
 fields' lines, so `LST-SCROLL-INFO` lays out every card, and the other
 words lay out the cards they pass.  The list keeps each wrapping field's

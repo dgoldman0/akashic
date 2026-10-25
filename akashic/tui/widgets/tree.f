@@ -292,20 +292,34 @@ VARIABLE _TREE-ROW0-KEY
     2 PICK _TW-W @ _TREE-O-CURSOR + @ = IF DUP _TREE-CUR-ROW ! THEN
     _TREE-SKIP ;
 
-\ _TREE-SETTLE ( w -- )
-\   Scan the rows, keep the selection on a shown row (the first row when
-\   its node is gone or hidden), and clamp the scroll to the rows.
-: _TREE-SETTLE  ( w -- )
+\ The selection and the scroll as the rows leave them.
+VARIABLE _TREE-S-CURSOR
+VARIABLE _TREE-S-SCROLL
+
+\ _TREE-SCAN ( w -- )
+\   Scan the rows, and work out the selection and the scroll they leave,
+\   as _TREE-S-CURSOR and _TREE-S-SCROLL: the selection on a shown row (the
+\   first row when its node is gone or hidden), and the scroll within the
+\   rows.  It changes nothing, so the queries and the capture use it.
+: _TREE-SCAN  ( w -- )
     -1 _TREE-CUR-ROW ! 0 _TREE-ROW0-KEY !
     DUP ['] _TREE-SCAN-CB _TREE-WALK
     _TW-ROW @ _TREE-TOTAL !
+    DUP _TREE-O-CURSOR + @ _TREE-S-CURSOR !
     _TREE-CUR-ROW @ 0< _TREE-TOTAL @ 0> AND IF
-        _TREE-ROW0-KEY @ OVER _TREE-O-CURSOR + !
+        _TREE-ROW0-KEY @ _TREE-S-CURSOR !
         0 _TREE-CUR-ROW !
     THEN
     _TREE-TOTAL @ OVER WDG-REGION RGN-H - 0 MAX
-    OVER _TREE-O-SCROLL + @ MIN 0 MAX
-    SWAP _TREE-O-SCROLL + ! ;
+    SWAP _TREE-O-SCROLL + @ MIN 0 MAX _TREE-S-SCROLL ! ;
+
+\ _TREE-SETTLE ( w -- )
+\   Keep the selection and the scroll where the rows leave them, as the
+\   draw and the words that change the tree do.
+: _TREE-SETTLE  ( w -- )
+    DUP _TREE-SCAN
+    _TREE-S-CURSOR @ OVER _TREE-O-CURSOR + !
+    _TREE-S-SCROLL @ SWAP _TREE-O-SCROLL + ! ;
 
 : _TREE-VIS-COUNT  ( w -- n )  _TREE-SETTLE _TREE-TOTAL @ ;
 
@@ -681,8 +695,8 @@ VARIABLE _TREE-CF-N
     _TREE-C-W @ WDG-REGION RGN-W DUP 0> 0= IF
         DROP 0 USCOL-S-UNAVAILABLE EXIT
     THEN _TREE-C-WIDTH !
-    _TREE-C-W @ _TREE-SETTLE
-    _TREE-C-W @ _TREE-O-SCROLL + @ _TREE-C-FIRST !
+    _TREE-C-W @ _TREE-SCAN
+    _TREE-S-SCROLL @ _TREE-C-FIRST !
     _TREE-TOTAL @ _TREE-C-FIRST @ - _TREE-C-H @ MIN 0 MAX _TREE-C-COUNT !
     _TREE-C-FIRST @ _TREE-C-COUNT @ + _TREE-CUR-ROW @ 1+ MAX _TREE-C-END !
     _TREE-C-ROOT-STATE _TREE-C-STATE !
@@ -731,14 +745,14 @@ VARIABLE _TREE-CF-N
 
 \ TREE-SELECTED ( w -- node|0 )   The selected node.
 : TREE-SELECTED  ( w -- node|0 )
-    DUP _TREE-SETTLE
+    DUP _TREE-SCAN
     _TREE-TOTAL @ 0= IF DROP 0 EXIT THEN
     _TREE-CUR-ROW @ _TREE-AT-ROW IF _TREE-F-NODE @ ELSE 0 THEN ;
 
 \ TREE-SELECTED-KEY ( w -- key|0 )   The selected node's key.
 : TREE-SELECTED-KEY  ( w -- key|0 )
-    DUP _TREE-SETTLE
-    _TREE-TOTAL @ IF _TREE-O-CURSOR + @ ELSE DROP 0 THEN ;
+    _TREE-SCAN
+    _TREE-TOTAL @ IF _TREE-S-CURSOR @ ELSE 0 THEN ;
 
 \ TREE-SELECT ( w node -- )   Select a shown node.
 : TREE-SELECT  ( w node -- )
@@ -816,9 +830,8 @@ VARIABLE _TREE-CF-N
 \ TREE-SCROLL-INFO ( widget -- content-h offset visible-h )
 \   Return scroll parameters for the scroll container.
 : TREE-SCROLL-INFO  ( widget -- content-h offset visible-h )
-    DUP _TREE-SETTLE
-    _TREE-TOTAL @
-    OVER _TREE-O-SCROLL + @
+    DUP _TREE-SCAN
+    _TREE-TOTAL @ _TREE-S-SCROLL @
     ROT WDG-REGION RGN-H ;
 
 \ TREE-SCROLL-SET ( offset widget -- )

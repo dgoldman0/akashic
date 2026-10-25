@@ -141,6 +141,11 @@ nothing otherwise.
 | `TREE-SCROLL-SET` | `( offset widget -- )` | Set the first shown row (clamped); the selection does not move |
 | `TREE-REFRESH` | `( widget -- )` | Mark dirty after the backing data changed |
 
+`TREE-SELECTED`, `TREE-SELECTED-KEY`, `TREE-SCROLL-INFO` and the item-view
+capture report the selection and the first shown row that the rows allow,
+and move neither.  The words that change the tree, and the draw, keep them
+there.
+
 ### Item View
 
 | Word | Stack | Description |
