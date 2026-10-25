@@ -185,3 +185,40 @@ _LR LST-SELECTED 3 = _FM-A
 _LR _LST-O-SEL + @ 3 <> _FM-A
 _FM-DONE
 ''', minimum=3)
+
+
+def test_text_area_owner_words_move_the_revision_on_a_change():
+    run(TEXTAREA + r'''
+_WC-ABC
+\ The caret: elsewhere moves the revision, where it is does not, and it
+\ is kept within the text.
+: _WC-C0  0 _WC-T TXTA-CURSOR! ;
+' _WC-C0 _WC-T _WC-MOVES? _FM-A  ' _WC-C0 _WC-T _WC-MOVES? 0= _FM-A
+_WC-T TXTA-CURSOR@ 0= _FM-A
+99 _WC-T TXTA-CURSOR!  _WC-T TXTA-CURSOR@ 3 = _FM-A
+\ A range is selected with the caret at its end; placing the caret drops
+\ it.
+: _WC-SEL  1 2 _WC-T TXTA-SELECT ;
+' _WC-SEL _WC-T _WC-MOVES? _FM-A
+_WC-T TXTA-SELECTION? _FM-A  _WC-T TXTA-CURSOR@ 2 = _FM-A
+\ A view kept, left, and shown again.
+VARIABLE _WC-VC  VARIABLE _WC-VS  VARIABLE _WC-VA
+_WC-T TXTA-VIEW@ _WC-VA ! _WC-VS ! _WC-VC !
+_WC-VC @ 2 = _FM-A  _WC-VA @ 1 = _FM-A  _WC-T TXTA-SCROLL-Y@ _WC-VS @ = _FM-A
+0 _WC-T TXTA-CURSOR!  _WC-T TXTA-SELECTION? 0= _FM-A
+: _WC-RESTORE  _WC-VC @ _WC-VS @ _WC-VA @ _WC-T TXTA-VIEW! ;
+' _WC-RESTORE _WC-T _WC-MOVES? _FM-A
+_WC-T TXTA-CURSOR@ 2 = _FM-A  _WC-T TXTA-SELECTION? _FM-A
+\ Undo and redo, with a gap buffer and an undo state bound.
+262144 A-XMEM ARENA-NEW DROP CONSTANT _WC-AR
+32 _WC-AR GB-NEW CONSTANT _WC-GB
+UNDO-NEW CONSTANT _WC-UD
+_WC-GB _WC-T TXTA-BIND-GB  _WC-UD _WC-T TXTA-BIND-UNDO  0 _WC-T TXTA-CURSOR!
+_WC-T TXTA-GB@ _WC-GB = _FM-A
+S" x" _WC-T TXTA-INS-STR  _WC-T TXTA-LENGTH 1 = _FM-A
+: _WC-UNDO  _WC-T TXTA-UNDO ;
+: _WC-REDO  _WC-T TXTA-REDO ;
+' _WC-UNDO _WC-T _WC-MOVES? _FM-A  _WC-T TXTA-LENGTH 0= _FM-A
+' _WC-REDO _WC-T _WC-MOVES? _FM-A  _WC-T TXTA-LENGTH 1 = _FM-A
+_FM-DONE
+''', minimum=20)

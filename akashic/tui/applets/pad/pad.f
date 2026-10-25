@@ -126,15 +126,6 @@ _PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP \ filename + dirty marker
 80 CONSTANT _PBE-RESERVED
 88 CONSTANT _PAD-BUF-ENTRY-SIZE
 
-\ Textarea internal field offsets (from textarea.f)
-\ Used for save/restore of cursor state during buffer switches.
-64 CONSTANT _PTO-CURSOR
-72 CONSTANT _PTO-SCROLL-Y
-88 CONSTANT _PTO-SEL-ANC
- 96 CONSTANT _PTO-GB
-104 CONSTANT _PTO-UNDO
-136 CONSTANT _PTO-SCROLL-X
-
 \ =====================================================================
 \  S3 -- UIDL File Path
 \ =====================================================================
@@ -630,7 +621,7 @@ VARIABLE _PDC-ACOL
 : _PAD-DRAW-CARET  ( -- )
     _PAD-TXTA @ ?DUP 0= IF EXIT THEN _PDC-W !
     _PDC-W @ TXTA-CURSOR-LINE
-    _PDC-W @ _PTO-SCROLL-Y + @ - _PDC-ROW !
+    _PDC-W @ TXTA-SCROLL-Y@ - _PDC-ROW !
     \ The caret marks its character's lead cell, or the cell just past
     \ the line's content on its end side.
     _PDC-W @ TXTA-CURSOR-X _PAD-GUTTER-W + _PDC-COL !
@@ -755,17 +746,15 @@ VARIABLE _PDC-ACOL
     _PAD-ACTIVE @ 0< IF EXIT THEN
     _PAD-TXTA @ ?DUP 0= IF EXIT THEN
     _PAD-ACTIVE @ _PAD-BUF-ENTRY >R
-    DUP _PTO-CURSOR + @   R@ _PBE-CURSOR + !
-    DUP _PTO-SCROLL-Y + @ R@ _PBE-SCROLL-Y + !
-        _PTO-SEL-ANC + @  R> _PBE-SEL-ANC + ! ;
+    TXTA-VIEW@                      ( cursor scroll-y anchor )
+    R@ _PBE-SEL-ANC + !  R@ _PBE-SCROLL-Y + !  R> _PBE-CURSOR + ! ;
 
 \ Restore textarea state from a buffer slot.
 : _PAD-RESTORE-STATE  ( index -- )
     _PAD-BUF-ENTRY >R
     _PAD-TXTA @ ?DUP 0= IF R> DROP EXIT THEN
-    R@ _PBE-CURSOR + @   OVER _PTO-CURSOR + !
-    R@ _PBE-SCROLL-Y + @ OVER _PTO-SCROLL-Y + !
-    R> _PBE-SEL-ANC + @  SWAP _PTO-SEL-ANC + ! ;
+    R@ _PBE-CURSOR + @  R@ _PBE-SCROLL-Y + @  R> _PBE-SEL-ANC + @
+    3 PICK TXTA-VIEW! DROP ;
 
 \ Unbind GB + undo from the textarea.
 : _PAD-UNBIND  ( -- )
@@ -1884,11 +1873,7 @@ VARIABLE _PSR-END
 : _PAD-SELECT-RANGE  ( start end -- )
     _PSR-END ! _PSR-START !
     _PAD-TXTA @ 0= IF EXIT THEN
-    _PSR-START @ _PAD-TXTA @ _PTO-SEL-ANC + !
-    _PSR-END @ DUP
-    _PAD-TXTA @ _PTO-GB + @ GB-MOVE!
-    _PAD-TXTA @ _PTO-CURSOR + !
-    _PAD-TXTA @ WDG-DIRTY
+    _PSR-START @ _PSR-END @ _PAD-TXTA @ TXTA-SELECT
     ASHELL-DIRTY! ;
 
 VARIABLE _PLR-GB
@@ -1897,7 +1882,7 @@ VARIABLE _PLR-START
 VARIABLE _PLR-END
 
 : _PAD-CURRENT-LINE-RANGE  ( -- start end )
-    _PAD-TXTA @ _PTO-GB + @ _PLR-GB !
+    _PAD-TXTA @ TXTA-GB@ _PLR-GB !
     _PLR-GB @ GB-CURSOR-LINE _PLR-LINE !
     _PLR-LINE @ _PLR-GB @ GB-LINE-OFF DUP _PLR-START !
     _PLR-LINE @ _PLR-GB @ GB-LINE-LEN + _PLR-END !
@@ -1920,30 +1905,19 @@ VARIABLE _PLR-END
 \  S15 -- Actions: Undo / Redo
 \ =====================================================================
 \
-\  When invoked from the menu, we call the textarea's internal undo
-\  mechanism via its private fields.  Ctrl+Z/Y is handled directly
-\  by the textarea's key handler (which fires on-change).
+\  The menu's Undo and Redo do what Ctrl+Z and Ctrl+Y do in the editor;
+\  the text area fires its change callback when an edit is undone.
 
 : _PAD-DO-UNDO  ( elem -- )
     DROP
     _PAD-TXTA @ ?DUP 0= IF EXIT THEN
-    DUP _PTO-UNDO + @ ?DUP 0= IF DROP EXIT THEN
-    OVER _PTO-GB + @ SWAP UNDO-UNDO IF
-        DUP _PTO-GB + @ GB-CURSOR OVER _PTO-CURSOR + !
-        DUP WDG-DIRTY
-        _PAD-ON-CHANGE
-    ELSE DROP THEN
+    TXTA-UNDO
     ASHELL-DIRTY! ;
 
 : _PAD-DO-REDO  ( elem -- )
     DROP
     _PAD-TXTA @ ?DUP 0= IF EXIT THEN
-    DUP _PTO-UNDO + @ ?DUP 0= IF DROP EXIT THEN
-    OVER _PTO-GB + @ SWAP UNDO-REDO IF
-        DUP _PTO-GB + @ GB-CURSOR OVER _PTO-CURSOR + !
-        DUP WDG-DIRTY
-        _PAD-ON-CHANGE
-    ELSE DROP THEN
+    TXTA-REDO
     ASHELL-DIRTY! ;
 
 \ =====================================================================
@@ -1991,7 +1965,7 @@ VARIABLE _PSOL-TAKE
     _PSQ-SCOPE @ _PAD-SEARCH-SCOPE !
     _PAD-ACTIVE @ _PAD-SEARCH-BUF !
     _PSQ-SCOPE @ _PAD-SEARCH-CURRENT = _PAD-TXTA @ 0<> AND IF
-        _PAD-TXTA @ _PTO-CURSOR + @
+        _PAD-TXTA @ TXTA-CURSOR@
     ELSE
         0
     THEN _PAD-SEARCH-POS ! ;
@@ -2119,8 +2093,8 @@ VARIABLE _PSOL-TAKE
     _PFT-U ! _PFT-A !
     _PFT-U @ 0= IF 0 EXIT THEN
     _PAD-TXTA @ 0= IF 0 EXIT THEN
-    _PAD-TXTA @ _PTO-GB + @ DUP 0= IF DROP 0 EXIT THEN _PFT-GB !
-    _PAD-TXTA @ _PTO-CURSOR + @ _PFT-START !
+    _PAD-TXTA @ TXTA-GB@ DUP 0= IF DROP 0 EXIT THEN _PFT-GB !
+    _PAD-TXTA @ TXTA-CURSOR@ _PFT-START !
     _PFT-START @ _PFT-A @ _PFT-U @ _PFT-GB @ SRCH-FIND
     DUP 0< IF
         DROP 0 _PFT-A @ _PFT-U @ _PFT-GB @ SRCH-FIND
@@ -2173,12 +2147,7 @@ VARIABLE _PSOL-TAKE
 
 : _PAD-CURSOR!  ( pos -- )
     _PAD-TXTA @ 0= IF DROP EXIT THEN
-    0 MAX
-    _PAD-TXTA @ _PTO-GB + @ GB-LEN MIN
-    DUP _PAD-TXTA @ _PTO-GB + @ GB-MOVE!
-    _PAD-TXTA @ _PTO-CURSOR + !
-    -1 _PAD-TXTA @ _PTO-SEL-ANC + !
-    _PAD-TXTA @ WDG-DIRTY
+    _PAD-TXTA @ TXTA-CURSOR!
     ASHELL-DIRTY! ;
 
 VARIABLE _PGLC-LINE
@@ -2189,7 +2158,7 @@ VARIABLE _PGLC-OFF
 : _PAD-GOTO-LINE-COLUMN  ( line column -- flag )
     _PGLC-COLUMN ! _PGLC-LINE !
     _PAD-TXTA @ 0= IF 0 EXIT THEN
-    _PAD-TXTA @ _PTO-GB + @ DUP 0= IF DROP 0 EXIT THEN _PGLC-GB !
+    _PAD-TXTA @ TXTA-GB@ DUP 0= IF DROP 0 EXIT THEN _PGLC-GB !
     _PGLC-LINE @ 1 < _PGLC-LINE @ _PGLC-GB @ GB-LINES > OR IF
         0 EXIT
     THEN
@@ -2421,9 +2390,9 @@ VARIABLE _PSW-BYTE
 : _PAD-DO-SELECT-WORD  ( elem -- )
     DROP
     _PAD-TXTA @ 0= IF EXIT THEN
-    _PAD-TXTA @ _PTO-GB + @ DUP 0= IF DROP EXIT THEN _PSW-GB !
+    _PAD-TXTA @ TXTA-GB@ DUP 0= IF DROP EXIT THEN _PSW-GB !
     _PSW-GB @ GB-LEN DUP 0= IF DROP EXIT THEN _PSW-LEN !
-    _PAD-TXTA @ _PTO-CURSOR + @ _PSW-POS !
+    _PAD-TXTA @ TXTA-CURSOR@ _PSW-POS !
     _PSW-POS @ _PSW-LEN @ >= IF _PSW-LEN @ 1- _PSW-POS ! THEN
     _PSW-POS @ _PSW-GB @ GB-BYTE@ _PAD-WORD-BYTE? 0= IF
         _PSW-POS @ 0= IF EXIT THEN
@@ -2634,7 +2603,7 @@ VARIABLE _PSW-BYTE
     DUP @ KEY-T-CHAR <> IF DROP 0 EXIT THEN
     DUP 16 + @ KEY-MOD-CTRL AND IF DROP 0 EXIT THEN
     8 + @ 32 < IF 0 EXIT THEN
-    _PAD-TXTA @ _PTO-SEL-ANC + @ -1 = ;
+    _PAD-TXTA @ TXTA-SELECTION? 0= ;
 
 : _PAD-ENTER-EVENT?  ( ev -- flag )
     DUP @ KEY-T-SPECIAL = IF
@@ -2647,9 +2616,9 @@ VARIABLE _PSW-BYTE
 
 : _PAD-FAST-LAST-ENTER?  ( ev -- flag )
     _PAD-ENTER-EVENT? 0= IF 0 EXIT THEN
-    _PAD-TXTA @ _PTO-SEL-ANC + @ -1 <> IF 0 EXIT THEN
+    _PAD-TXTA @ TXTA-SELECTION? IF 0 EXIT THEN
     _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE !
-    _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL !
+    _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL !
     _PAD-EV-OLD-LINE @
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-GB + @ GB-LINES 1- =
     _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
@@ -2661,14 +2630,14 @@ VARIABLE _PSW-BYTE
     0 _PAD-FAST-COUNT !
     DUP _PAD-FAST-CHAR? IF
         _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE !
-        _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL !
-        _PAD-TXTA @ _PTO-SCROLL-X + @ _PAD-EV-OLD-SCROLL-X !
+        _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL !
+        _PAD-TXTA @ TXTA-SCROLL-X@ _PAD-EV-OLD-SCROLL-X !
         DUP _PAD-PANEL WDG-HANDLE       ( ev handled? )
         DUP IF
             _PAD-TXTA @ TXTA-ADJUST-SCROLL
             _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE @ =
-            _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL @ = AND IF
-                _PAD-TXTA @ _PTO-SCROLL-X + @
+            _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL @ = AND IF
+                _PAD-TXTA @ TXTA-SCROLL-X@
                 _PAD-EV-OLD-SCROLL-X @ = IF
                     _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
                     _PAD-FAST-ROW !
@@ -2679,13 +2648,13 @@ VARIABLE _PSW-BYTE
         NIP EXIT
     THEN
     DUP _PAD-FAST-LAST-ENTER? IF
-        _PAD-TXTA @ _PTO-SCROLL-X + @ _PAD-EV-OLD-SCROLL-X !
+        _PAD-TXTA @ TXTA-SCROLL-X@ _PAD-EV-OLD-SCROLL-X !
         DUP _PAD-PANEL WDG-HANDLE       ( ev handled? )
         DUP IF
             _PAD-TXTA @ TXTA-ADJUST-SCROLL
             _PAD-TXTA @ TXTA-CURSOR-LINE _PAD-EV-OLD-LINE @ 1+ =
-            _PAD-TXTA @ _PTO-SCROLL-Y + @ _PAD-EV-OLD-SCROLL @ = AND IF
-                _PAD-TXTA @ _PTO-SCROLL-X + @
+            _PAD-TXTA @ TXTA-SCROLL-Y@ _PAD-EV-OLD-SCROLL @ = AND IF
+                _PAD-TXTA @ TXTA-SCROLL-X@
                 _PAD-EV-OLD-SCROLL-X @ = IF
                     _PAD-EV-OLD-LINE @ _PAD-EV-OLD-SCROLL @ -
                     _PAD-FAST-ROW !

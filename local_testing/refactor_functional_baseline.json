@@ -395,7 +395,7 @@
         {
           "path": "akashic/tui/applets/pad/pad.f",
           "word": "_PAD-HANDLE-EDITOR",
-          "sha256": "2cff7e88589b0e18e2e1bdc6a886a5eac97c956ef5de2549fe694cfc982af2be",
+          "sha256": "120410be538f6c4e7b23f7b85d9861e9899872c6a205b138363f22fe0a3b63f3",
           "bindings": ["unmodified printable input without selection -> textarea plus single-row fast repaint", "Enter at the last visible line -> textarea plus two-row fast repaint", "all other ordinary editor input -> textarea widget handling"]
         }
       ],

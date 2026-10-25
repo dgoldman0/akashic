@@ -126,6 +126,37 @@ on a link places the caret, so the link's text can still be edited.
 | `TXTA-CURSOR-X` | `( widget -- x )` | The caret's column in the text viewport after the gutter, scrolled |
 | `TXTA-INSTANCE@` | `( widget -- token )` | Stable, nonpointer identity for this allocation's lifetime; not a document or renderer key |
 
+### Caret, Selection, and View
+
+These are the words an owner uses for the caret, the selection and the
+view; each that changes one moves the widget's revision (`WDG-REVISION`).
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TXTA-CURSOR@` | `( widget -- offset )` | The caret's byte offset in the text |
+| `TXTA-CURSOR!` | `( offset widget -- )` | Put the caret at `offset`, kept within the text, and drop any selection |
+| `TXTA-SELECT` | `( start end widget -- )` | Select from `start` to `end`, kept within the text, with the caret at `end` |
+| `TXTA-SELECT-ALL` | `( widget -- )` | Select the whole text |
+| `TXTA-SELECTION?` | `( widget -- flag )` | A selection is active |
+| `TXTA-GET-SEL` | `( widget -- addr len \| 0 0 )` | The selected text; in GB mode a copy of at most 1,024 bytes |
+| `TXTA-DEL-SEL` | `( widget -- flag )` | Delete the selected text; true when there was one |
+| `TXTA-SCROLL-Y@` | `( widget -- line )` | The first text line in view |
+| `TXTA-SCROLL-X@` | `( widget -- n )` | The horizontal scroll in cells |
+| `TXTA-SCROLL-X!` | `( n widget -- )` | Set the horizontal scroll |
+| `TXTA-VIEW@` | `( widget -- cursor scroll-y anchor )` | The caret, the first line in view and the selection's anchor or -1, kept while other text is bound |
+| `TXTA-VIEW!` | `( cursor scroll-y anchor widget -- )` | Show a view `TXTA-VIEW@` gave over the text bound now, the caret and anchor kept within it |
+| `TXTA-UNDO` / `TXTA-REDO` | `( widget -- )` | Undo or redo the last edit, as Ctrl+Z and Ctrl+Y do, with a gap buffer and an undo state bound |
+
+### Text Sources
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `TXTA-BIND-GB` | `( gb widget -- )` | Show a gap buffer's text (GB mode); the caller keeps it |
+| `TXTA-UNBIND-GB` | `( widget -- )` | Go back to the flat buffer |
+| `TXTA-GB@` | `( widget -- gb \| 0 )` | The gap buffer bound, or 0 in flat mode |
+| `TXTA-BIND-UNDO` | `( ud widget -- )` | Record edits in an undo state; the caller keeps it |
+| `TXTA-UNBIND-UNDO` | `( widget -- )` | Stop recording edits |
+
 ### Callbacks, Styles, and Links
 
 | Word | Stack | Description |

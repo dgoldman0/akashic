@@ -1514,6 +1514,59 @@ VARIABLE _TXTA-PT-CODE
 : TXTA-SELECT-ALL  ( widget -- )
     _TXTA-W ! _TXTA-SELECT-ALL ;
 
+\ --- The caret, the selection and the view, for owners ---
+
+\ TXTA-CURSOR@ ( widget -- offset )   The caret's byte offset in the text.
+: TXTA-CURSOR@  ( widget -- offset )  _TXTA-O-CURSOR + @ ;
+
+\ TXTA-CURSOR! ( offset widget -- )
+\   Put the caret at OFFSET, kept within the text, and drop any selection.
+: TXTA-CURSOR!  ( offset widget -- )
+    _TXTA-W !  0 MAX _TXTA-CONTENT-LEN MIN
+    _TXTA-SEL-CLEAR
+    DUP _TXTA-CURSOR = IF DROP EXIT THEN
+    _TXTA-SYNC-CURSOR!  _TXTA-W @ WDG-DIRTY ;
+
+\ TXTA-SELECT ( start end widget -- )
+\   Select the text from START to END, each kept within the text, with the
+\   caret at END.
+: TXTA-SELECT  ( start end widget -- )
+    _TXTA-W !
+    0 MAX _TXTA-CONTENT-LEN MIN  SWAP 0 MAX _TXTA-CONTENT-LEN MIN
+    _TXTA-W @ _TXTA-O-SEL-ANCHOR + !
+    _TXTA-SYNC-CURSOR!  _TXTA-W @ WDG-DIRTY ;
+
+\ TXTA-SELECTION? ( widget -- flag )   A selection is active.
+: TXTA-SELECTION?  ( widget -- flag )  _TXTA-O-SEL-ANCHOR + @ -1 <> ;
+
+\ TXTA-SCROLL-Y@ ( widget -- line )   The first text line in view.
+: TXTA-SCROLL-Y@  ( widget -- line )  _TXTA-O-SCROLL-Y + @ ;
+
+\ TXTA-VIEW@ ( widget -- cursor scroll-y anchor )
+\   The caret, the first line in view and the selection's anchor, or -1
+\   for none: what an owner keeps of the view while it binds other text.
+: TXTA-VIEW@  ( widget -- cursor scroll-y anchor )
+    DUP _TXTA-O-CURSOR + @  OVER _TXTA-O-SCROLL-Y + @
+    ROT _TXTA-O-SEL-ANCHOR + @ ;
+
+\ TXTA-VIEW! ( cursor scroll-y anchor widget -- )
+\   Show a view TXTA-VIEW@ gave, over the text bound now.  The caret and
+\   the anchor are kept within the text, and the next draw keeps the caret
+\   in view.
+: TXTA-VIEW!  ( cursor scroll-y anchor widget -- )
+    _TXTA-W !
+    DUP 0< IF DROP -1 ELSE _TXTA-CONTENT-LEN MIN THEN
+    _TXTA-W @ _TXTA-O-SEL-ANCHOR + !
+    0 MAX _TXTA-W @ _TXTA-O-SCROLL-Y + !
+    0 MAX _TXTA-CONTENT-LEN MIN _TXTA-SYNC-CURSOR!
+    _TXTA-W @ WDG-DIRTY ;
+
+\ TXTA-UNDO ( widget -- )  TXTA-REDO ( widget -- )
+\   Undo or redo the last edit, as Ctrl+Z and Ctrl+Y do, when a gap buffer
+\   and an undo state are bound.
+: TXTA-UNDO  ( widget -- )  _TXTA-W ! _TXTA-UNDO ;
+: TXTA-REDO  ( widget -- )  _TXTA-W ! _TXTA-REDO ;
+
 \ --- Phase-0 API: gap-buf / undo binding & hooks ---
 
 \ TXTA-BIND-GB ( gb widget -- )
@@ -1527,6 +1580,9 @@ VARIABLE _TXTA-PT-CODE
 \   Detach gap-buf, reverting to flat-buffer mode.
 : TXTA-UNBIND-GB  ( widget -- )
     0 SWAP TXTA-BIND-GB ;
+
+\ TXTA-GB@ ( widget -- gb | 0 )   The gap buffer bound, or 0 in flat mode.
+: TXTA-GB@  ( widget -- gb )  _TXTA-O-GB + @ ;
 
 \ TXTA-BIND-UNDO ( ud widget -- )
 \   Attach an undo state to the textarea.
@@ -2181,6 +2237,16 @@ GUARD _txta-guard
 ' TXTA-DEL-SEL   CONSTANT _txta-delsel-xt
 ' TXTA-INS-STR   CONSTANT _txta-insstr-xt
 ' TXTA-SELECT-ALL CONSTANT _txta-selall-xt
+' TXTA-CURSOR@   CONSTANT _txta-cursor-rd-xt
+' TXTA-CURSOR!   CONSTANT _txta-cursor-wr-xt
+' TXTA-SELECT    CONSTANT _txta-select-xt
+' TXTA-SELECTION? CONSTANT _txta-selection-q-xt
+' TXTA-SCROLL-Y@ CONSTANT _txta-scrollyrd-xt
+' TXTA-VIEW@     CONSTANT _txta-view-rd-xt
+' TXTA-VIEW!     CONSTANT _txta-view-wr-xt
+' TXTA-UNDO      CONSTANT _txta-undo-xt
+' TXTA-REDO      CONSTANT _txta-redo-xt
+' TXTA-GB@       CONSTANT _txta-gb-rd-xt
 ' TXTA-BIND-GB   CONSTANT _txta-bindgb-xt
 ' TXTA-UNBIND-GB CONSTANT _txta-unbindgb-xt
 ' TXTA-BIND-UNDO CONSTANT _txta-bindundo-xt
@@ -2213,6 +2279,16 @@ GUARD _txta-guard
 : TXTA-DEL-SEL   _txta-delsel-xt  _txta-guard WITH-GUARD ;
 : TXTA-INS-STR   _txta-insstr-xt  _txta-guard WITH-GUARD ;
 : TXTA-SELECT-ALL _txta-selall-xt _txta-guard WITH-GUARD ;
+: TXTA-CURSOR@   _txta-cursor-rd-xt _txta-guard WITH-GUARD ;
+: TXTA-CURSOR!   _txta-cursor-wr-xt _txta-guard WITH-GUARD ;
+: TXTA-SELECT    _txta-select-xt  _txta-guard WITH-GUARD ;
+: TXTA-SELECTION? _txta-selection-q-xt _txta-guard WITH-GUARD ;
+: TXTA-SCROLL-Y@ _txta-scrollyrd-xt _txta-guard WITH-GUARD ;
+: TXTA-VIEW@     _txta-view-rd-xt _txta-guard WITH-GUARD ;
+: TXTA-VIEW!     _txta-view-wr-xt _txta-guard WITH-GUARD ;
+: TXTA-UNDO      _txta-undo-xt    _txta-guard WITH-GUARD ;
+: TXTA-REDO      _txta-redo-xt    _txta-guard WITH-GUARD ;
+: TXTA-GB@       _txta-gb-rd-xt   _txta-guard WITH-GUARD ;
 : TXTA-BIND-GB   _txta-bindgb-xt  _txta-guard WITH-GUARD ;
 : TXTA-UNBIND-GB _txta-unbindgb-xt _txta-guard WITH-GUARD ;
 : TXTA-BIND-UNDO _txta-bindundo-xt _txta-guard WITH-GUARD ;
