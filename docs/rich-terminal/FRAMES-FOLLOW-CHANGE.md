@@ -3,9 +3,8 @@
 Status: proposed on 2026-10-19, and extended on 2026-10-25 with a thin
 rich path: checks that run when they can find something (part 3), a safe
 mode (part 4), an occasional full refresh (part 8), and one projection with
-two drivers (parts 9 and 10). Each part is approved on its own. Parts 0 and
-1 are done, and part 2 is in progress. Decisions lists what is settled and
-what is still open.
+two drivers (parts 9 and 10). Each part is approved on its own. Parts 0 to
+2 are done. Decisions lists what is settled and what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -167,6 +166,11 @@ New:
 
 ## Where change is known today
 
+This section describes the code on 2026-10-19. Part 2 has since fixed the
+silent widget words, the reads that change state and Pad's reads of the
+text area's fields, and applications bridge change as described here until
+part 6.
+
 | Signal | Owner | Meaning | Read by |
 | --- | --- | --- | --- |
 | Widget dirty bit | `widget.f` | needs redraw; cleared by the draw | the old event loop (`event.f:158`) and Pad |
@@ -323,6 +327,9 @@ difference. See the [evidence](../../local_testing/evidence/frames-follow-change
   loads, are left as they are.
 - Input's revision already means this, so it becomes the base revision. The
   other existing revisions keep their narrower meanings.
+- A widget that shows others, such as a prompt's input or an explorer's
+  tree, counts their changes in its own revision. A reader of any widget's
+  revision then needs no knowledge of which widgets hold others.
 - A query or a capture changes nothing. List and tree settle their selection
   and scroll in the words that change rows, selection or size.
 - A widget that shows borrowed data has one ordinary word that says the data
@@ -343,11 +350,27 @@ difference. See the [evidence](../../local_testing/evidence/frames-follow-change
 
 - For every canonical widget that something uses (list, tree, tabs, text
   area, input, prompt, dialog, picture, text grid, field, data graphics,
-  explorer and canvas): each public word that changes it moves the revision,
-  and the widget then draws exactly what a fresh widget in the same state
-  draws; each query and capture moves nothing.
+  explorer, canvas, media and the document view): each public word that
+  changes it moves the revision, including a change that reaches a widget it
+  holds, and the widget then draws exactly what a fresh widget in the same
+  state draws; each query and capture moves nothing.
 - A structural test fails when a module outside a widget's file reads or
   writes that widget's fields by offset.
+
+**Done** on 2026-10-25 (73147730 to 944630df). Each word that changes what
+one of the fifteen kinds shows moves its revision, and the per-widget test
+checks every such word. The text area now judges which rows Pad's typing
+changed, and UIDL reads widgets through their public words, which the
+structural test enforces. Testing found and removed two kinds of false
+change: paints that marked a change, which sent a shown prompt's field
+again on every frame, and a focus sync in Pad that redrew its whole editor
+on every typed frame. With the shadow check on, Desk with the applications
+each slice touched, the typing run and the canonical Desktop journey found
+no difference. A typed letter's burst frame took 1.3 million more steps to
+build at the end than at the start, 16.69 million against 15.37, most of
+it in span-set proofs that split their query because other storage now
+lies between the spans they prove; part 2 changed none of them. See the
+[evidence](../../local_testing/evidence/frames-follow-change-part2-20261025.md).
 
 ## Part 3. Checks run when they can find something — a trade
 
@@ -363,7 +386,11 @@ can find something new:
   when an item changes.
 - **handover proofs,** 2.95 million: headers, and spans proved apart from
   other storage, at every entry, several times a frame. Their answer can
-  change only when memory is lent, allocated or grows.
+  change only when memory is lent, allocated or grows. Their cost also
+  follows memory layout: a proof splits its query wherever other storage
+  lies between the spans it proves, and in part 2's typing runs the
+  span-set proofs took 0.7 to 2.2 million steps a burst frame as
+  allocations moved.
 - **repeats,** 5.08 million: checks of data that nothing has written since
   it was last checked, or that the frame has just built from parts it
   checked. These can find only a bug that wrote where it should not.
@@ -678,7 +705,7 @@ pass.
 | --- | --- | --- |
 | 0 | Measure the changed frames now | done |
 | 1 | A shadow check of every shortcut | done |
-| 2 | Widgets count their changes | in progress |
+| 2 | Widgets count their changes | done |
 | 3 | Checks run when they can find something | proposed |
 | 4 | Safe mode | proposed |
 | 5 | UIDL sees its widgets' changes and counts its own | proposed |
@@ -705,7 +732,8 @@ path also runs the journey once in safe mode.
 
 Millions of steps in a typed letter's burst frame, from the check
 measurement, whose frame build of 16.16 million matches part 0's 16.13
-million. The figures after parts 3 and 9 are estimates.
+million. During part 2 the same frame build took 15.4 to 16.7 million,
+most of the difference in handover proofs that memory layout made split. The figures after parts 3 and 9 are estimates.
 
 | | Today | After part 3 | After part 9 |
 | --- | ---: | ---: | ---: |
@@ -761,11 +789,15 @@ Taken on 2026-10-25:
    boundary check stays at every boundary. Normal sessions then stop
    noticing a bug that writes into the rich path's memory between handovers,
    and safe mode and tests keep that.
-5. **Part 2's tests.** The per-widget tests cover the widgets something
-   uses: list, tree, tabs, text area, input, prompt, dialog, picture, text
-   grid, field, data graphics, explorer and canvas. UIDL moves its reads of
-   widget fields behind the widgets' own words within part 2, so that the
-   structural test covers UIDL too.
+5. **Part 2's tests and containers.** The per-widget tests cover the
+   widgets something uses: list, tree, tabs, text area, input, prompt,
+   dialog, picture, text grid, field, data graphics, explorer and canvas,
+   and the media widget and document view, which File Explorer's preview
+   and Pad's file sidebar use. UIDL moves its reads of widget fields behind
+   the widgets' own words within part 2, so that the structural test covers
+   UIDL too. A widget that shows others counts their changes in its own
+   revision, rather than UIDL reading the inner widgets' revisions beside
+   it.
 
 Open, each to be taken before the part that needs it:
 
