@@ -3906,7 +3906,7 @@ def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
         ) in code
         assert "RTE-REGION-CLIPPED" not in body
 
-    menu = " ".join(_word(source, "_RTHP-BUILD-MENU-CONTROLS?").split())
+    menu = " ".join(_word(source, "_RTHP-W-RUCP-REQUEST").split())
     assert (
         "_RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @ "
         "_RTHP-W-P @ _RTHP.REGION @ 0 0 _RTHP-W-P @ _RTHP.COLS @ "
@@ -3999,7 +3999,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     document_shape = _word(source, "_RTHP-W-DOCUMENT-SHAPE?")
     copied_complete = _word(source, "_RTHP-W-COPIED-COMPLETE?")
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
-    controls = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    controls = (_word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+                + _word(source, "_RTHP-W-RUCP-REQUEST"))
     control_pipeline = _word(source, "_RTHP-BUILD-CONTROLS")
     strip_collections = _word(source, "_RTHP-W-STRIP-COLLECTIONS?")
     claims = _word(source, "_RTHP-BUILD-CLAIMS?")
@@ -5148,6 +5149,8 @@ def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
     work = _word(source, "_RTHP-W-RUCP-WORK-SPANS?")
     output = _word(source, "_RTHP-W-CONTROL-OUTPUT?")
     build = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    request = _word(source, "_RTHP-W-RUCP-REQUEST")
+    shadow = _word(source, "_RTHP-SH-MENU")
 
     # Work banks follow sparse UMSN source indices.  The last canonical
     # record supplies high-water; record count alone is not sufficient.
@@ -5162,21 +5165,25 @@ def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
     for return_stack_word in (">R", "R@", "R>"):
         assert return_stack_word not in work
 
-    assert build.index("_RTHP-W-RUCP-WORK-SPANS?") < build.index(
-        "RUCP-REQUEST-CLEAR"
+    for caller in (build, shadow):
+        assert caller.index("_RTHP-W-RUCP-WORK-SPANS?") < caller.index(
+            "_RTHP-W-RUCP-REQUEST"
+        )
+    assert request.index("RUCP-REQUEST-CLEAR") < request.index(
+        "RUCP-REQUEST-WORK!"
     )
     for exact in (
         "_RTHP.LOOKUP-A @ _RTHP-W-RUCP-LOOKUP-U @",
         "_RTHP.ORDER-A @ _RTHP-W-RUCP-ORDER-U @",
         "_RTHP.ORDER2-A @ _RTHP-W-RUCP-ORDER-U @",
     ):
-        assert exact in build
+        assert exact in request
     for broad in (
         "_RTHP.LOOKUP-A @ _RTHP-W-P @ _RTHP.LOOKUP-U @",
         "_RTHP.ORDER-A @ _RTHP-W-P @ _RTHP.ORDER-U @",
         "_RTHP.ORDER2-A @ _RTHP-W-P @ _RTHP.ORDER2-U @",
     ):
-        assert broad not in build
+        assert broad not in request
 
     assert (
         "_RTHP-W-DOC-RECORD-COUNT @ RTE-CONTROL-SIZE _RTHP-U32*?"

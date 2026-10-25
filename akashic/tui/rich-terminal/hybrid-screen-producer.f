@@ -35,6 +35,7 @@ REQUIRE ../uidl-dialog-snapshot.f
 REQUIRE residual-glyph-planner.f
 REQUIRE engine.f
 REQUIRE phase-profile.f
+REQUIRE frame-shadow.f
 REQUIRE ../screen.f
 REQUIRE ../uidl-picture-snapshot.f
 REQUIRE ../../utils/memory-span.f
@@ -4797,6 +4798,84 @@ VARIABLE _RTHP-W-MR-SELECTED-SEEN
     _RTHP-W-P @ _RTHP.CLAIMS-U @ SWAP - _RTHP-W-OUT-CLAIMS-U !
     -1 ;
 
+\ Ask the planner for the current document's menu controls, numbered from
+\ NEXT-ID.  The caller names where the output goes.
+: _RTHP-W-RUCP-REQUEST  ( next-id -- )
+    >R
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-CLEAR
+    _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-TOKEN@
+    _RTHP-W-P @ _RTHP.OWNER @ _RTHP-W-P @ _RTHP.OWNER-GEN @
+    _RTHP-W-P @ _RTHP.SOURCE-GEN @ R>
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-IDENTITY!
+    _RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @
+    _RTHP-W-P @ _RTHP.REGION @ 0 0
+    _RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @
+    0 0 0 0 0 RTE-REGION-VISIBLE
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-REGION!
+    _RTHP-W-P @ _RTHP.SOURCE-RECS-A @
+        _RTHP-W-DOC-RECORD-O @ +
+    _RTHP-W-DOC-RECORD-U @
+    _RTHP-W-DOC-TEXT-U @ IF
+        _RTHP-W-P @ _RTHP.SOURCE-TEXT-A @
+            _RTHP-W-DOC-TEXT-O @ +
+        _RTHP-W-DOC-TEXT-U @
+    ELSE
+        0 0
+    THEN
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-SOURCE!
+    _RTHP-W-P @ _RTHP.LOOKUP-A @ _RTHP-W-RUCP-LOOKUP-U @
+    _RTHP-W-P @ _RTHP.ORDER-A @ _RTHP-W-RUCP-ORDER-U @
+    _RTHP-W-P @ _RTHP.ORDER2-A @ _RTHP-W-RUCP-ORDER-U @
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-WORK! ;
+
+\ Shadow check of menu reuse (frame-shadow.f).  A document whose menu
+\ controls reuse copied from the acknowledged bank is also planned afresh,
+\ into a scratch block, as a document whose menu changed would be: the
+\ planner's status, count, text and last identity must be what reuse
+\ implies, and its controls and correlations must equal the copied ones.
+\ The items are 3N, 3N+1 and 3N+2 for the Nth document.
+VARIABLE _RTHP-SM-A
+VARIABLE _RTHP-SM-U
+VARIABLE _RTHP-SM-HEAD
+VARIABLE _RTHP-SM-CONTROLS
+VARIABLE _RTHP-SM-CORR
+
+: _RTHP-SH-MENU  ( -- )
+    _RTHP-W-DRAW @ FSHD-DRAW !
+    _RTHP-W-RUCP-CONTROL-U @ _RTHP-W-RUCP-CORR-U @ +
+        RTE-CONTROL-PLAN-SIZE + 8 CELLS +
+        _RTHP-SM-A _RTHP-SM-U FSHD-GROW
+    DUP 0= IF DROP FSHD-SKIP EXIT THEN
+    DUP _RTHP-SM-HEAD ! 8 CELLS +
+    DUP _RTHP-SM-CONTROLS ! _RTHP-W-RUCP-CONTROL-U @ +
+    DUP _RTHP-SM-CORR ! _RTHP-W-RUCP-CORR-U @ +
+    _RTHP-W-RUCP-WORK-SPANS? 0= IF DROP FSHD-SKIP EXIT THEN
+    _RTHP-W-MR-NEW-FIRST @ _RTHP-W-RUCP-REQUEST
+    RTE-CONTROL-PLAN-SIZE
+    _RTHP-SM-CONTROLS @ _RTHP-W-RUCP-CONTROL-U @
+    _RTHP-SM-CORR @ _RTHP-W-RUCP-CORR-U @
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-OUTPUT!
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-BUILD
+    \ ( count text aligned max last status )
+    _RTHP-SM-HEAD @ !
+    _RTHP-SM-HEAD @ 3 CELLS + !
+    2DROP
+    _RTHP-SM-HEAD @ 2 CELLS + !
+    _RTHP-SM-HEAD @ CELL+ !
+    RUCP-S-OK _RTHP-SM-HEAD @ 4 CELLS + !
+    _RTHP-W-DOC-RECORD-COUNT @ _RTHP-SM-HEAD @ 5 CELLS + !
+    _RTHP-W-DOC-TEXT-U @ _RTHP-SM-HEAD @ 6 CELLS + !
+    _RTHP-W-MR-NEW-NEXT @ 1- _RTHP-SM-HEAD @ 7 CELLS + !
+    _RTHP-SM-HEAD @ 4 CELLS + 4 CELLS _RTHP-SM-HEAD @ 4 CELLS
+        _RTHP-W-DOCUMENT-I @ 3 * FSHD-STAGE-PRODUCER-MENUS FSHD-SAME?
+        0= IF EXIT THEN
+    _RTHP-W-OUT-CONTROLS-A @ _RTHP-W-RUCP-CONTROL-U @
+    _RTHP-SM-CONTROLS @ _RTHP-W-RUCP-CONTROL-U @
+        _RTHP-W-DOCUMENT-I @ 3 * 1+ FSHD-STAGE-PRODUCER-MENUS FSHD-SAME? DROP
+    _RTHP-W-OUT-CORR-A @ _RTHP-W-RUCP-CORR-U @
+    _RTHP-SM-CORR @ _RTHP-W-RUCP-CORR-U @
+        _RTHP-W-DOCUMENT-I @ 3 * 2 + FSHD-STAGE-PRODUCER-MENUS FSHD-SAME? DROP ;
+
 : _RTHP-BUILD-MENU-CONTROLS?  ( producer -- flag )
     _RTHP-W-P !
     0 _RTHP-W-TOTAL !
@@ -4807,33 +4886,11 @@ VARIABLE _RTHP-W-MR-SELECTED-SEEN
         _RTHP-W-P @ _RTHP.DOCUMENT-COUNT @ U< WHILE
         _RTHP-W-COPIED-DOCUMENT? 0= IF 0 EXIT THEN
         _RTHP-W-DOC-RECORD-COUNT @ IF
-          _RTHP-W-MENU-REUSE? 0= IF
+          _RTHP-W-MENU-REUSE? IF
+            FSHD? IF _RTHP-SH-MENU THEN
+          ELSE
             _RTHP-W-RUCP-WORK-SPANS? 0= IF 0 EXIT THEN
-            _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-CLEAR
-            _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-TOKEN@
-            _RTHP-W-P @ _RTHP.OWNER @ _RTHP-W-P @ _RTHP.OWNER-GEN @
-            _RTHP-W-P @ _RTHP.SOURCE-GEN @ _RTHP-W-NEXT-ID @
-            _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-IDENTITY!
-            _RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @
-            _RTHP-W-P @ _RTHP.REGION @ 0 0
-            _RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @
-            0 0 0 0 0 RTE-REGION-VISIBLE
-            _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-REGION!
-            _RTHP-W-P @ _RTHP.SOURCE-RECS-A @
-                _RTHP-W-DOC-RECORD-O @ +
-            _RTHP-W-DOC-RECORD-U @
-            _RTHP-W-DOC-TEXT-U @ IF
-                _RTHP-W-P @ _RTHP.SOURCE-TEXT-A @
-                    _RTHP-W-DOC-TEXT-O @ +
-                _RTHP-W-DOC-TEXT-U @
-            ELSE
-                0 0
-            THEN
-            _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-SOURCE!
-            _RTHP-W-P @ _RTHP.LOOKUP-A @ _RTHP-W-RUCP-LOOKUP-U @
-            _RTHP-W-P @ _RTHP.ORDER-A @ _RTHP-W-RUCP-ORDER-U @
-            _RTHP-W-P @ _RTHP.ORDER2-A @ _RTHP-W-RUCP-ORDER-U @
-            _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-WORK!
+            _RTHP-W-NEXT-ID @ _RTHP-W-RUCP-REQUEST
             _RTHP-W-CONTROL-OUTPUT? 0= IF 0 EXIT THEN
             _RTHP-W-P @ _RTHP.CONTROL-PLAN RTE-CONTROL-PLAN-SIZE
             _RTHP-W-OUT-CONTROLS-A @ _RTHP-W-OUT-CONTROLS-U @
@@ -7794,6 +7851,126 @@ VARIABLE _RTHP-GK-P
     _RTHP-GK-P @ _RTHP.GLYPH-TEXT-USED @ _RTHP-GK-P @ _RTHP.GLYPH-TEXT !
     _RTHP-W-DRAW @ _RTHP-GK-P @ _RTHP.GLYPH-DRAW ! ;
 
+\ Shadow check of the glyph shortcuts (frame-shadow.f).  A held plan and a
+\ plan of only the damaged rows are shortcuts: planning every row must give
+\ the same runs.  After either, the full planner runs over the same banks;
+\ its counts, plan header, runs, references and text are compared with the
+\ shortcut's, which a scratch block kept, as items 0 to 4.  The shortcut's
+\ result and its row damage are then put back, so the frame goes on as it
+\ would with the check off.
+VARIABLE _RTHP-SG-A
+VARIABLE _RTHP-SG-U
+VARIABLE _RTHP-SG-P
+VARIABLE _RTHP-SG-COUNT
+VARIABLE _RTHP-SG-TEXT
+VARIABLE _RTHP-SG-ROWS
+VARIABLE _RTHP-SG-HEAD
+VARIABLE _RTHP-SG-PLAN
+VARIABLE _RTHP-SG-ITEMS
+VARIABLE _RTHP-SG-REFS
+VARIABLE _RTHP-SG-GLYPH-TEXT
+VARIABLE _RTHP-SG-DAMAGE
+VARIABLE _RTHP-SG-W-COUNT
+VARIABLE _RTHP-SG-W-TEXT
+VARIABLE _RTHP-SG-W-ALIGNED
+VARIABLE _RTHP-SG-W-MAX
+VARIABLE _RTHP-SG-W-LAST
+VARIABLE _RTHP-SG-W-STATUS
+
+: _RTHP-SG-ITEMS-U  ( count -- bytes )  RTE-GLYPH-RUN-PLAN-ITEM-SIZE * ;
+: _RTHP-SG-REFS-U   ( count -- bytes )  RGRP-TEXT-REF-SIZE * ;
+
+\ Scratch for the shortcut's result: two cells of its counts and two of the
+\ full plan's, its plan header, runs, references, text and row damage.
+: _RTHP-SG-LAYOUT?  ( -- flag )
+    _RTHP-SG-P @ _RTHP.GLYPH-COUNT @ _RTHP-SG-COUNT !
+    _RTHP-SG-P @ _RTHP.GLYPH-TEXT-USED @ _RTHP-SG-TEXT !
+    _RTHP-SG-P @ _RTHP.ROW-DAMAGE-A @ IF
+        _RTHP-SG-P @ _RTHP.ROWS @ _RTHP-SG-P @ _RTHP.ROW-DAMAGE-U @ MIN
+    ELSE
+        0
+    THEN _RTHP-SG-ROWS !
+    4 CELLS RTE-GLYPH-RUN-PLAN-SIZE +
+    _RTHP-SG-COUNT @ _RTHP-SG-ITEMS-U +
+    _RTHP-SG-COUNT @ _RTHP-SG-REFS-U +
+    _RTHP-SG-TEXT @ 7 + -8 AND + _RTHP-SG-ROWS @ +
+        _RTHP-SG-A _RTHP-SG-U FSHD-GROW
+    DUP 0= IF EXIT THEN
+    DUP _RTHP-SG-HEAD ! 4 CELLS +
+    DUP _RTHP-SG-PLAN ! RTE-GLYPH-RUN-PLAN-SIZE +
+    DUP _RTHP-SG-ITEMS ! _RTHP-SG-COUNT @ _RTHP-SG-ITEMS-U +
+    DUP _RTHP-SG-REFS ! _RTHP-SG-COUNT @ _RTHP-SG-REFS-U +
+    DUP _RTHP-SG-GLYPH-TEXT ! _RTHP-SG-TEXT @ 7 + -8 AND +
+    _RTHP-SG-DAMAGE ! -1 ;
+
+: _RTHP-SG-SAVE  ( -- )
+    _RTHP-SG-COUNT @ _RTHP-SG-HEAD @ !
+    _RTHP-SG-TEXT @ _RTHP-SG-HEAD @ CELL+ !
+    _RTHP-SG-P @ _RTHP.GLYPH-PLAN _RTHP-SG-PLAN @ RTE-GLYPH-RUN-PLAN-SIZE MOVE
+    _RTHP-SG-P @ _RTHP.GLYPH-ITEMS-A @ _RTHP-SG-ITEMS @
+        _RTHP-SG-COUNT @ _RTHP-SG-ITEMS-U MOVE
+    _RTHP-SG-P @ _RTHP.GLYPH-REFS-A @ _RTHP-SG-REFS @
+        _RTHP-SG-COUNT @ _RTHP-SG-REFS-U MOVE
+    _RTHP-SG-P @ _RTHP.GLYPH-TEXT-A @ _RTHP-SG-GLYPH-TEXT @
+        _RTHP-SG-TEXT @ MOVE
+    _RTHP-SG-P @ _RTHP.ROW-DAMAGE-A @ _RTHP-SG-DAMAGE @
+        _RTHP-SG-ROWS @ MOVE ;
+
+: _RTHP-SG-RESTORE  ( -- )
+    _RTHP-SG-COUNT @ _RTHP-SG-P @ _RTHP.GLYPH-COUNT !
+    _RTHP-SG-TEXT @ _RTHP-SG-P @ _RTHP.GLYPH-TEXT-USED !
+    _RTHP-SG-PLAN @ _RTHP-SG-P @ _RTHP.GLYPH-PLAN RTE-GLYPH-RUN-PLAN-SIZE MOVE
+    _RTHP-SG-ITEMS @ _RTHP-SG-P @ _RTHP.GLYPH-ITEMS-A @
+        _RTHP-SG-COUNT @ _RTHP-SG-ITEMS-U MOVE
+    _RTHP-SG-REFS @ _RTHP-SG-P @ _RTHP.GLYPH-REFS-A @
+        _RTHP-SG-COUNT @ _RTHP-SG-REFS-U MOVE
+    _RTHP-SG-GLYPH-TEXT @ _RTHP-SG-P @ _RTHP.GLYPH-TEXT-A @
+        _RTHP-SG-TEXT @ MOVE
+    _RTHP-SG-DAMAGE @ _RTHP-SG-P @ _RTHP.ROW-DAMAGE-A @
+        _RTHP-SG-ROWS @ MOVE ;
+
+\ The full plan, keeping the build's own results as they were.  A plan the
+\ full planner refuses counts as a plan of no length, which differs.
+: _RTHP-SG-FULL  ( -- )
+    _RTHP-W-COUNT @ _RTHP-SG-W-COUNT ! _RTHP-W-TEXT @ _RTHP-SG-W-TEXT !
+    _RTHP-W-ALIGNED @ _RTHP-SG-W-ALIGNED ! _RTHP-W-MAX @ _RTHP-SG-W-MAX !
+    _RTHP-W-LAST @ _RTHP-SG-W-LAST ! _RTHP-W-STATUS @ _RTHP-SG-W-STATUS !
+    _RTHP-SG-P @ _RTHP-BUILD-GLYPHS-FULL? IF
+        _RTHP-SG-P @ _RTHP.GLYPH-COUNT @
+        _RTHP-SG-P @ _RTHP.GLYPH-TEXT-USED @
+    ELSE
+        -1 -1
+    THEN
+    _RTHP-SG-HEAD @ 3 CELLS + ! _RTHP-SG-HEAD @ 2 CELLS + !
+    _RTHP-SG-W-COUNT @ _RTHP-W-COUNT ! _RTHP-SG-W-TEXT @ _RTHP-W-TEXT !
+    _RTHP-SG-W-ALIGNED @ _RTHP-W-ALIGNED ! _RTHP-SG-W-MAX @ _RTHP-W-MAX !
+    _RTHP-SG-W-LAST @ _RTHP-W-LAST ! _RTHP-SG-W-STATUS @ _RTHP-W-STATUS ! ;
+
+: _RTHP-SG-COMPARE  ( -- )
+    _RTHP-SG-HEAD @ 2 CELLS _RTHP-SG-HEAD @ 2 CELLS + 2 CELLS
+        0 FSHD-STAGE-PRODUCER-GLYPHS FSHD-SAME? 0= IF EXIT THEN
+    _RTHP-SG-PLAN @ RTE-GLYPH-RUN-PLAN-SIZE
+    _RTHP-SG-P @ _RTHP.GLYPH-PLAN RTE-GLYPH-RUN-PLAN-SIZE
+        1 FSHD-STAGE-PRODUCER-GLYPHS FSHD-SAME? DROP
+    _RTHP-SG-ITEMS @ _RTHP-SG-COUNT @ _RTHP-SG-ITEMS-U
+    _RTHP-SG-P @ _RTHP.GLYPH-ITEMS-A @ _RTHP-SG-COUNT @ _RTHP-SG-ITEMS-U
+        2 FSHD-STAGE-PRODUCER-GLYPHS FSHD-SAME? DROP
+    _RTHP-SG-REFS @ _RTHP-SG-COUNT @ _RTHP-SG-REFS-U
+    _RTHP-SG-P @ _RTHP.GLYPH-REFS-A @ _RTHP-SG-COUNT @ _RTHP-SG-REFS-U
+        3 FSHD-STAGE-PRODUCER-GLYPHS FSHD-SAME? DROP
+    _RTHP-SG-GLYPH-TEXT @ _RTHP-SG-TEXT @
+    _RTHP-SG-P @ _RTHP.GLYPH-TEXT-A @ _RTHP-SG-TEXT @
+        4 FSHD-STAGE-PRODUCER-GLYPHS FSHD-SAME? DROP ;
+
+: _RTHP-SH-GLYPHS  ( producer -- )
+    _RTHP-SG-P !
+    _RTHP-W-DRAW @ FSHD-DRAW !
+    _RTHP-SG-LAYOUT? 0= IF FSHD-SKIP EXIT THEN
+    _RTHP-SG-SAVE
+    _RTHP-SG-FULL
+    _RTHP-SG-COMPARE
+    _RTHP-SG-RESTORE ;
+
 \ Either way the visible runs are those of the planes of the draw being
 \ built, with the candidate's claims, which GLYPH-DRAW then records.  A
 \ plan the banks hold already is kept as a complete build leaves it.
@@ -7805,10 +7982,15 @@ VARIABLE _RTHP-GK-P
         DUP _RTHP.GLYPH-RUNS @ OVER _RTHP.GLYPH-COUNT !
         DUP _RTHP.GLYPH-TEXT @ OVER _RTHP.GLYPH-TEXT-USED !
         DUP _RTHP-ROWS-ALL-REBUILT
-        DUP _RTHP.GLYPH-RUNS @ OVER _RTHP-WRAP-GLYPH-PLAN? IF DROP -1 EXIT THEN
+        DUP _RTHP.GLYPH-RUNS @ OVER _RTHP-WRAP-GLYPH-PLAN? IF
+            FSHD? IF DUP _RTHP-SH-GLYPHS THEN
+            DROP -1 EXIT
+        THEN
     THEN
     0 OVER _RTHP.GLYPH-DRAW !
-    DUP _RTHP-BUILD-GLYPHS-DAMAGE? 0= IF
+    DUP _RTHP-BUILD-GLYPHS-DAMAGE? IF
+        FSHD? IF DUP _RTHP-SH-GLYPHS THEN
+    ELSE
         DUP _RTHP-ROWS-ALL-REBUILT
         DUP _RTHP-BUILD-GLYPHS-FULL? 0= IF DROP 0 EXIT THEN
     THEN
