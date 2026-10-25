@@ -168,6 +168,21 @@ def test_claim_ledger_is_single_pass_caller_bounded_and_byte_exact() -> None:
     assert "_RUCL-RECORDS-U @ 0= IF 0 EXIT THEN" in shape
     assert "DUP _RUCL-INDEX !" not in validate
     assert "_RUCL-R.INDEX @ DUP 0< IF DROP 0 EXIT THEN\n    _RUCL-INDEX !" in validate
+    # Each record's identity and generation are checked in both modes; its
+    # structure and resolved geometry, which the menu capture checked when
+    # it wrote the record, only with every-frame checks on (check-mode.f).
+    assert "REQUIRE ../check-mode.f" in source
+    normal = validate.index("CHK-EVERY-FRAME? 0= IF")
+    for identity in ("_UMSN-RECORD-MAGIC <>", "_UMSN-RECORD-ABI <>",
+                     "UMSN-RECORD-SIZE <>", "_RUCL-SOURCE-GEN @ <>",
+                     "UMSN-SOURCE-UIDL <>", "_RUCL-R.SUBKEY @ IF"):
+        assert validate.index(identity) < normal
+    loads = validate[normal:validate.index("-1 EXIT", normal)]
+    assert "_RUCL-R.INDEX @ _RUCL-INDEX !" in loads
+    assert "_RUCL-R.STATE @ _RUCL-STATE !" in loads
+    for structure in ("_RUCL-PRIOR-INDEX", "UMSN-K-MENUBAR",
+                      "UMSN-STATE-VALID?", "_RUCL-R.ORDINAL", "UTUI-RESOLVED-VALID?"):
+        assert normal < validate.index(structure)
 
     assert traversal_code.count("0 ?DO") == 1
     assert traversal_code.count("_RUCL-VALIDATE-ONE?") == 1

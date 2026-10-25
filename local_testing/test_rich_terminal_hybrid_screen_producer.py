@@ -7340,3 +7340,30 @@ def test_an_idle_live_step_checks_identity_and_every_acting_step_the_producer() 
                    "_RTHP-L-START-UPLOAD"):
         line = next(i for i, text in enumerate(lane) if action in text)
         assert "_RTHP-L-P @ RTHP-VALID? 0= IF" in lane[line - 1], action
+
+
+def test_bank_headers_walk_the_packing_again_only_with_every_frame_checks() -> None:
+    source = _source()
+    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    body = _word(source, "_RTHP-TARGET-BANK-BODY?")
+    named = _word(source, "_RTHP-TARGET-PACKED-NAMED?")
+    # The bank is one of the two target banks in both modes; the proof that
+    # it lies in the arena, made when the layout placed it, waits for
+    # every-frame checks.
+    assert header.index("_RTHP.TARGET1-A @ =") < header.index(
+        "CHK-EVERY-FRAME? IF") < header.index("_RTHP-TARGET-BANK-BYTES?") < header.index(
+        "_RTHP-ARENA-SPAN?") < header.index("THEN\n    _RTHP-TARGET-BANK-BODY?")
+    # The header's fields are read in both modes; in normal mode the valid
+    # mark and the directory's document count stand for walking the packing
+    # and the directory.
+    assert body.index("_RTHP-TB.OWNER @ 0=") < body.index(
+        "_RTHP-TB.GLYPH-RUN-LIMIT @") < body.index(
+        "CHK-EVERY-FRAME? 0= IF _RTHP-TARGET-PACKED-NAMED? EXIT THEN") < body.index(
+        "_RTHP-PACKED-BANK?") < body.index("_RTHP-TARGET-MENU-DIRECTORY?")
+    assert "_RTHP-TB.VALID @ _RTHP-TARGET-VALID-MAGIC <>" in named
+    assert "_RTHP-TB.DOCUMENT-COUNT @ DUP 0>" in named
+    assert "_RTHP.MAX-DOCUMENTS @ U> 0= AND" in named
+    # The deep checks themselves are unchanged wherever else they run.
+    for deep in ("_RTHP-PACKED-BANK?", "_RTHP-TARGET-MENU-DIRECTORY?",
+                 "_RTHP-ACTIVE-BANK-HEADER?"):
+        assert "CHK-EVERY-FRAME" not in _word(source, deep)

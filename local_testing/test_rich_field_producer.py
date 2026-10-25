@@ -318,6 +318,35 @@ def test_packed_field_owns_label_content_and_target_revision(h):
     assert h.results("RTHP-CONTROL-TARGET@",1,2,100,11,h.producer)==(4,9,17,MASK64)
 
 
+def test_normal_mode_bank_headers_keep_the_valid_mark_and_skip_the_packing_walk(h):
+    """With every-frame checks a bank's header check also walks its packing
+    and menu directory again; in normal mode it reads the header's fields,
+    the valid mark and the bank's identity."""
+    h.setup(kind=2);assert h.build()==(0,)
+    bank=h.pack();memory=h.runtime.memory
+    def header(at=bank):
+        return h.call("_RTHP-TARGET-BANK-HEADER?",at,h.producer)
+    def changed(name,value):
+        at=bank+h.offset("_RTHP-TB."+name);saved=memory.read64(at)
+        memory.write64(at,value&MASK64)
+        try:
+            return header()
+        finally:
+            memory.write64(at,saved)
+    # A packing whose recorded size no longer matches its layout.
+    packed=memory.read64(bank+h.offset("_RTHP-TB.PACKED-BYTES"))
+    assert not changed("PACKED-BYTES",packed+8)
+    h.variable("CHK-EVERY-FRAME",0)
+    try:
+        assert header() and changed("PACKED-BYTES",packed+8)
+        for name,value in (("VALID",0),("OWNER",0),("DOCUMENT-COUNT",2),("GLYPH-RUN-LIMIT",0)):
+            assert not changed(name,value),name
+        assert not header(bank+8)
+    finally:
+        h.variable("CHK-EVERY-FRAME",MASK64)
+    assert header()
+
+
 # A DELTA keeps a field's label, geometry and state but for SELECTED.  Its
 # FDC1 content may change only with a strictly newer revision (17 to 18),
 # and then one CONTROL-REPLACE carries it.

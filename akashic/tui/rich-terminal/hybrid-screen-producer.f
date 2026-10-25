@@ -2984,7 +2984,20 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
     _RTHP-TV-TEXT-CURSOR @
         _RTHP-TV-BANK @ _RTHP-TB.MENU-TEXT-USED @ = AND ;
 
-\ What a bank at TV-BANK holds, once where it lives has been proved.
+\ The bank at TV-BANK holds a packed frame, and its directory names at least
+\ one document and no more than the producer allows.  With every-frame checks
+\ off this stands for walking the packing and the menu directory again: the
+\ producer packed both itself, and the engine admitted what it built from
+\ them.  In runs with the shadow check on, each comparison that reads them is
+\ also held against a fresh plan.
+: _RTHP-TARGET-PACKED-NAMED?  ( -- flag )
+    _RTHP-TV-BANK @ _RTHP-TB.VALID @ _RTHP-TARGET-VALID-MAGIC <> IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.DOCUMENT-COUNT @ DUP 0>
+    SWAP _RTHP-TV-P @ _RTHP.MAX-DOCUMENTS @ U> 0= AND ;
+
+\ What a bank at TV-BANK holds, once where it lives has been proved.  The
+\ header's fields are checked in both modes; the packing and the menu
+\ directory are walked again only with every-frame checks on (check-mode.f).
 : _RTHP-TARGET-BANK-BODY?  ( -- flag )
     _RTHP-TV-BANK @ _RTHP-TB.OWNER @ 0=
     _RTHP-TV-BANK @ _RTHP-TB.GENERATION @ 0= OR IF 0 EXIT THEN
@@ -3074,20 +3087,27 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
         _RTHP-TV-TEXT-CAP @ U> IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.GLYPH-RUN-LIMIT @
         _RTHP-POS-U32? 0= IF 0 EXIT THEN
+    CHK-EVERY-FRAME? 0= IF _RTHP-TARGET-PACKED-NAMED? EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP-PACKED-BANK?
         0= IF 0 EXIT THEN
     _RTHP-TARGET-MENU-DIRECTORY? ;
 
+\ BANK is one of the producer's two target banks, and holds a frame.  The
+\ layout placed both banks in the arena when the producer was set up and
+\ each time it grew; the proof that the bank lies in it is made again only
+\ with every-frame checks on (check-mode.f).
 : _RTHP-TARGET-BANK-HEADER?  ( bank producer -- flag )
     _RTHP-TV-P ! _RTHP-TV-BANK !
     _RTHP-TV-BANK @ DUP 0= SWAP 7 AND OR IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET0-A @ =
     _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET1-A @ = OR
         0= IF 0 EXIT THEN
-    _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES?
-        0= IF DROP 0 EXIT THEN _RTHP-TV-BYTES !
-    _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @
-        _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    CHK-EVERY-FRAME? IF
+        _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES?
+            0= IF DROP 0 EXIT THEN _RTHP-TV-BYTES !
+        _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @
+            _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+    THEN
     _RTHP-TARGET-BANK-BODY? ;
 
 \ ( address bytes base total -- flag ) the span lies inside [base, base+total).

@@ -27,6 +27,7 @@ PROVIDED akashic-tui-rterm-rucl
 
 REQUIRE ../uidl-menu-snapshot.f
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../check-mode.f
 
 0 CONSTANT RUCL-S-OK
 1 CONSTANT RUCL-S-CAPACITY
@@ -334,6 +335,14 @@ VARIABLE _RUCL-AR-CLAIM
     _RUCL-RANGES-VALID @ 0= IF EXIT THEN
     _RUCL-CLAIMS-U @ ?DUP IF _RUCL-CLAIMS-A @ SWAP 0 FILL THEN ;
 
+\ Each record is a UMSN record of the source's generation, from UIDL and
+\ without a subkey, and the build loads the index and state it uses.  With
+\ every-frame checks on (check-mode.f) the record's structure is checked
+\ again as well: ascending indices, a parent that fits its kind, its state
+\ flags, its ordinal and its resolved geometry.  The menu capture checked
+\ all of these when it wrote the record, the clip below still checks the
+\ geometry's arithmetic, and the glyph planner checks every claim it is
+\ given.
 : _RUCL-VALIDATE-ONE?  ( -- flag )
     _RUCL-RECORD @ _RUCL-R.MAGIC @ _UMSN-RECORD-MAGIC <> IF 0 EXIT THEN
     _RUCL-RECORD @ _RUCL-R.ABI @ _UMSN-RECORD-ABI <> IF 0 EXIT THEN
@@ -342,6 +351,11 @@ VARIABLE _RUCL-AR-CLAIM
         _RUCL-SOURCE-GEN @ <> IF 0 EXIT THEN
     _RUCL-RECORD @ _RUCL-R.SOURCE @ UMSN-SOURCE-UIDL <> IF 0 EXIT THEN
     _RUCL-RECORD @ _RUCL-R.SUBKEY @ IF 0 EXIT THEN
+    CHK-EVERY-FRAME? 0= IF
+        _RUCL-RECORD @ _RUCL-R.INDEX @ _RUCL-INDEX !
+        _RUCL-RECORD @ _RUCL-R.STATE @ _RUCL-STATE !
+        -1 EXIT
+    THEN
     _RUCL-RECORD @ _RUCL-R.INDEX @ DUP 0< IF DROP 0 EXIT THEN
     _RUCL-INDEX !
     _RUCL-HAVE-PRIOR @ IF
@@ -404,7 +418,8 @@ VARIABLE _RUCL-AR-CLAIM
     -1 ;
 
 \ This is the only UMSN traversal.  Validation and possible emission happen
-\ together, so canonicality is established without a second source pass.
+\ together, so with every-frame checks canonicality is established without a
+\ second source pass; in normal mode it is the capture's.
 : _RUCL-BUILD-CLAIMS?  ( -- flag )
     0 _RUCL-CLAIM-COUNT !
     0 _RUCL-PRIOR-INDEX ! 0 _RUCL-HAVE-PRIOR !

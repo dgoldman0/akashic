@@ -55,6 +55,7 @@ REQUIRE engine.f
 REQUIRE ../screen.f
 REQUIRE ../color.f
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../check-mode.f
 
 0 CONSTANT RGRP-S-OK
 1 CONSTANT RGRP-S-CAPACITY
@@ -524,16 +525,24 @@ VARIABLE _RGRP-CHECK-U
     2DUP _RGRP-OWNED-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     _RGRP-DISJOINT-MUTABLE? ;
 
+\ The reference's banks are loaded on every build, and its run text limit
+\ must be the build's.  With every-frame checks on (check-mode.f) the
+\ reference and its banks are also proved well formed and apart from the
+\ planner's own storage and from everything the build writes; they are the
+\ producer's held plan, in its arena.
 : _RGRP-REFERENCE-AUTHORITY?  ( -- flag )
     _RGRP-REFERENCE @ ?DUP 0= IF -1 EXIT THEN
-    DUP RGRP-REFERENCE-SIZE _RGRP-SPAN? 0= IF DROP 0 EXIT THEN
-    DUP RGRP-REFERENCE-SIZE _RGRP-OWNED-DISJOINT? 0= IF DROP 0 EXIT THEN
+    CHK-EVERY-FRAME? IF
+        DUP RGRP-REFERENCE-SIZE _RGRP-SPAN? 0= IF DROP 0 EXIT THEN
+        DUP RGRP-REFERENCE-SIZE _RGRP-OWNED-DISJOINT? 0= IF DROP 0 EXIT THEN
+    THEN
     DUP _RGRP-RF.ITEMS-A @ _RGRP-RP-ITEMS-A !
     DUP _RGRP-RF.COUNT @ _RGRP-RP-COUNT !
     DUP _RGRP-RF.REFS-A @ _RGRP-RP-REFS-A !
     DUP _RGRP-RF.TEXT-A @ _RGRP-RP-TEXT-A !
     DUP _RGRP-RF.TEXT-U @ _RGRP-RP-TEXT-U !
     _RGRP-RF.MAX-RUN-U @ _RGRP-MAX-RUN-U @ <> IF 0 EXIT THEN
+    CHK-EVERY-FRAME? 0= IF -1 EXIT THEN
     _RGRP-RP-COUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RGRP-UMUL?
         0= IF DROP 0 EXIT THEN
     _RGRP-RP-ITEMS-A @ SWAP -1 _RGRP-REFERENCE-BANK? 0= IF 0 EXIT THEN
@@ -559,9 +568,13 @@ VARIABLE _RGRP-CHECK-U
     THEN
     _RGRP-PLANE-CHECK-A @ _RGRP-PLANE-U @ _RGRP-DISJOINT-MUTABLE? ;
 
-: _RGRP-PAIRED-PLANES?  ( -- flag )
+\ Both planes are well formed, the residue plane of the back plane's size.
+: _RGRP-PAIRED-SHAPED?  ( -- flag )
     _RGRP-PLANE-SPAN? 0= IF 0 EXIT THEN
-    _RGRP-RESIDUE-A @ _RGRP-PLANE-U @ _RGRP-SPAN? 0= IF 0 EXIT THEN
+    _RGRP-RESIDUE-A @ _RGRP-PLANE-U @ _RGRP-SPAN? ;
+
+: _RGRP-PAIRED-PLANES?  ( -- flag )
+    _RGRP-PAIRED-SHAPED? 0= IF 0 EXIT THEN
     _RGRP-PLANE-A @ _RGRP-PLANE-U @
         _RGRP-RESIDUE-A @ _RGRP-PLANE-U @ _RGRP-PAIR-DISJOINT? 0= IF
         0 EXIT
@@ -569,24 +582,36 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-PLANE-A @ _RGRP-PLANE-DISJOINT? 0= IF 0 EXIT THEN
     _RGRP-RESIDUE-A @ _RGRP-PLANE-DISJOINT? ;
 
+\ Every build checks the shapes of its spans and planes, which its
+\ arithmetic relies on.  The proofs that they lie apart from one another,
+\ from the planner's storage, from the planes and from the screen run only
+\ with every-frame checks on (check-mode.f): the producers that call the
+\ planner lay its spans out in their arenas once, the same way for each of
+\ a frame's calls.
 : _RGRP-RANGE-AUTHORITY?  ( -- flag )
     _RGRP-SPANS-SHAPED? 0= IF 0 EXIT THEN
-    _RGRP-Q @ RGRP-REQUEST-SIZE
-        _RGRP-CLAIMS-A @ _RGRP-CLAIMS-U @ _RGRP-PAIR-DISJOINT? 0= IF
-        0 EXIT
-    THEN
-    _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-DISJOINT-MUTABLE? 0= IF
-        0 EXIT
-    THEN
-    _RGRP-CLAIMS-A @ _RGRP-CLAIMS-U @
-        _RGRP-DISJOINT-MUTABLE? 0= IF 0 EXIT THEN
-    _RGRP-MUTABLE-DISJOINT? 0= IF 0 EXIT THEN
-    _RGRP-OWNED-SPANS-DISJOINT? 0= IF 0 EXIT THEN
-    _RGRP-PAIRED @ IF
-        _RGRP-PAIRED-PLANES? 0= IF 0 EXIT THEN
-    THEN
-    _RGRP-SCREEN-AUTHORIZED @ 0= IF
-        _RGRP-SCREEN-DISJOINT? 0= IF 0 EXIT THEN
+    CHK-EVERY-FRAME? IF
+        _RGRP-Q @ RGRP-REQUEST-SIZE
+            _RGRP-CLAIMS-A @ _RGRP-CLAIMS-U @ _RGRP-PAIR-DISJOINT? 0= IF
+            0 EXIT
+        THEN
+        _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-DISJOINT-MUTABLE? 0= IF
+            0 EXIT
+        THEN
+        _RGRP-CLAIMS-A @ _RGRP-CLAIMS-U @
+            _RGRP-DISJOINT-MUTABLE? 0= IF 0 EXIT THEN
+        _RGRP-MUTABLE-DISJOINT? 0= IF 0 EXIT THEN
+        _RGRP-OWNED-SPANS-DISJOINT? 0= IF 0 EXIT THEN
+        _RGRP-PAIRED @ IF
+            _RGRP-PAIRED-PLANES? 0= IF 0 EXIT THEN
+        THEN
+        _RGRP-SCREEN-AUTHORIZED @ 0= IF
+            _RGRP-SCREEN-DISJOINT? 0= IF 0 EXIT THEN
+        THEN
+    ELSE
+        _RGRP-PAIRED @ IF
+            _RGRP-PAIRED-SHAPED? 0= IF 0 EXIT THEN
+        THEN
     THEN
     _RGRP-REFERENCE-AUTHORITY? 0= IF 0 EXIT THEN
     -1 _RGRP-RANGES-VALID !

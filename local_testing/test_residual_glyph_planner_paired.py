@@ -47,7 +47,7 @@ def _dependency_source(planner: str) -> str:
     declarations = {}
     for relative in (
         "tui/rich-terminal/engine.f", "tui/rich-terminal/uidl-claim-ledger.f",
-        "utils/memory-span.f", "utils/uint-range.f",
+        "utils/memory-span.f", "utils/uint-range.f", "tui/check-mode.f",
     ):
         source = _source(relative)
         for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;\s*$", source):
@@ -58,6 +58,8 @@ def _dependency_source(planner: str) -> str:
             r"(?m)^\s*(-?(?:0x[0-9A-Fa-f]+|[0-9]+))\s+CONSTANT\s+(\S+)", source
         ):
             declarations[match[2]] = match[0]
+    # Every-frame checks are on, as check-mode.f leaves them when it loads.
+    declarations["CHK-EVERY-FRAME"] = "VARIABLE CHK-EVERY-FRAME  -1 CHK-EVERY-FRAME !"
     chunks, emitted = [], set()
 
     def include(name):
@@ -467,6 +469,28 @@ def test_paired_plane_authority_rejects_aliases_before_any_mutation(harness, def
     assert result[-1] == 3
     assert before_outputs == {name: harness.runtime.memory.read_bytes(address, length)
                               for name, (address, length) in case.buffers.items()}
+
+
+@pytest.mark.parametrize("defect,status", [("overlap-plane", 0), ("zero-residue", 3),
+                                           ("unaligned-residue", 3), ("wrapped-residue", 3)])
+def test_normal_mode_builds_check_the_planes_shapes_not_where_they_lie(harness, defect, status):
+    case = harness.make_case(cells("ABCDE"), cells("abcde"), [(0, 0, 1, 1)], menu_count=1)
+    residue = {"overlap-plane": case.back + 8, "zero-residue": 0,
+               "unaligned-residue": case.residue + 1, "wrapped-residue": MASK64 - 7}[defect]
+    result, _ = harness.run(case, api="authorized", residue=residue)
+    assert result[-1] == 3
+    # In normal mode the planes' shapes are still checked; only the proofs
+    # that the planes lie apart from each other and from the request's
+    # storage wait for every-frame checks.  The menu cell then reads the
+    # back plane's second cell through the overlapping residue plane.
+    harness.set_variable("CHK-EVERY-FRAME", 0)
+    try:
+        result, runs = harness.run(case, api="authorized", residue=residue)
+    finally:
+        harness.set_variable("CHK-EVERY-FRAME", -1)
+    assert result[-1] == status
+    if status == 0:
+        assert projection(runs) == [(0, 0, 5, b"BBCDE")]
 
 
 def test_paired_authorized_peer_skips_only_prevalidated_screen_checks(harness):

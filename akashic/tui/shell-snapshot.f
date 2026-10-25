@@ -14,6 +14,7 @@ REQUIRE status-field-model.f
 REQUIRE dialog-model.f
 REQUIRE ../utils/memory-span.f
 REQUIRE ../utils/memory-source.f
+REQUIRE check-mode.f
 
 0 CONSTANT SHSN-S-OK
 1 CONSTANT SHSN-S-CAPACITY
@@ -390,6 +391,22 @@ VARIABLE _SHSN-VS-S VARIABLE _SHSN-VS-CAP
     DUP SHSN-SIZE 2 PICK _SHSN.B @ 3 PICK _SHSN.B-U @ MSPAN-OVERLAP? IF DROP 0 EXIT THEN
     DUP _SHSN.A @ OVER _SHSN.A-U @ 2 PICK _SHSN.B @ 3 PICK _SHSN.B-U @
         MSPAN-OVERLAP? IF DROP 0 EXIT THEN _SHSN-SLOTS? ;
+\ Whether SOURCE is the record it says it is: on a cell, with its own
+\ magic, size and address.
+: _SHSN-NAMED? ( source -- flag )
+    DUP 0= OVER 7 AND OR IF DROP 0 EXIT THEN
+    DUP _SHSN.MAGIC @ _SHSN-MAGIC <>
+    OVER _SHSN.SIZE @ SHSN-SIZE <> OR
+    OVER _SHSN.SELF @ 2 PICK <> OR 0= NIP ;
+\ The check a query makes, which only reads the record and its banks.  The
+\ record's identity and its slots are checked in both modes.  The proofs
+\ that the record and both banks are spans lying apart run here only with
+\ every-frame checks on (check-mode.f): INIT proved what it was lent, a
+\ grown bank comes from the memory source, and the callbacks, which write
+\ the banks, keep the full SHSN-VALID?.
+: _SHSN-QUERY-VALID? ( source -- flag )
+    CHK-EVERY-FRAME? IF SHSN-VALID? EXIT THEN
+    DUP _SHSN-NAMED? IF _SHSN-SLOTS? ELSE DROP 0 THEN ;
 : _SHSN-INVALIDATE ( source -- )
     _SHSN.USED 96 0 FILL ;
 
@@ -688,7 +705,7 @@ VARIABLE _SHSN-D-S VARIABLE _SHSN-D-I VARIABLE _SHSN-D-P
     SHSN-SIZE 0 FILL ;
 
 : SHSN-SNAPSHOT-FOR@ ( draw source -- model bytes status )
-    DUP SHSN-VALID? 0= IF 2DROP 0 0 SHSN-S-INVALID EXIT THEN
+    DUP _SHSN-QUERY-VALID? 0= IF 2DROP 0 0 SHSN-S-INVALID EXIT THEN
     DUP _SHSN-OWNS-HOOKS? 0= IF 2DROP 0 0 SHSN-S-UNAVAILABLE EXIT THEN
     _SHSN-REFUSED @ IF 2DROP 0 0 SHSN-S-UNAVAILABLE EXIT THEN
     OVER 0= OVER _SHSN.DRAW @ 3 PICK <> OR
@@ -730,7 +747,7 @@ VARIABLE _SHSN-SD-S
 VARIABLE _SHSN-OR-S VARIABLE _SHSN-OR-D
 VARIABLE _SHSN-OR-R VARIABLE _SHSN-OR-C VARIABLE _SHSN-OR-H VARIABLE _SHSN-OR-W
 : SHSN-RECT-CLEAR? ( row col height width draw source -- clear? status )
-    DUP SHSN-VALID? 0= IF 2DROP 2DROP 2DROP 0 SHSN-S-INVALID EXIT THEN
+    DUP _SHSN-QUERY-VALID? 0= IF 2DROP 2DROP 2DROP 0 SHSN-S-INVALID EXIT THEN
     _SHSN-OR-S ! _SHSN-OR-D !
     _SHSN-OR-W ! _SHSN-OR-H ! _SHSN-OR-C ! _SHSN-OR-R !
     _SHSN-OR-D @ _SHSN-OR-S @ SHSN-SNAPSHOT-FOR@ DUP SHSN-S-OK <> IF

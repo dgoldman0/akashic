@@ -131,6 +131,34 @@ _SS-DONE
     _run(program, minimum=60)
 
 
+def test_queries_prove_the_spans_only_with_every_frame_checks():
+    """A query checks the record's identity and slots in both modes, and
+    proves the record's and banks' spans only with every-frame checks.  The
+    callbacks, which write the banks, keep the full check."""
+    source = (ROOT / "akashic/tui/shell-snapshot.f").read_text()
+
+    def word(name):
+        match = re.search(rf"(?ms)^: {re.escape(name)}(?=\s).*?;\s*$", source)
+        assert match is not None, name
+        return match.group(0)
+
+    assert "REQUIRE check-mode.f" in source
+    query = word("_SHSN-QUERY-VALID?")
+    assert "CHK-EVERY-FRAME? IF SHSN-VALID? EXIT THEN" in query
+    assert query.index("_SHSN-NAMED?") < query.index("_SHSN-SLOTS?")
+    named = word("_SHSN-NAMED?")
+    for identity in ("_SHSN.MAGIC @ _SHSN-MAGIC <>", "_SHSN.SIZE @ SHSN-SIZE <>",
+                     "_SHSN.SELF @ 2 PICK <>"):
+        assert identity in named
+    assert "MSPAN" not in named and "_SHSN-SPAN?" not in named
+    for name in ("SHSN-SNAPSHOT-FOR@", "SHSN-RECT-CLEAR?"):
+        body = word(name)
+        assert "DUP _SHSN-QUERY-VALID? 0= IF" in body
+        assert " SHSN-VALID?" not in body
+    for name in ("_SHSN-HOST-CALL", "_SHSN-DRAW-CALL"):
+        assert "DUP SHSN-VALID? 0= IF DROP 2DROP EXIT THEN" in word(name)
+
+
 def test_shell_snapshot_completed_draw_lifecycle_and_owned_banks():
     program = PRELUDE + r'''
 CREATE _ST-AS 4103 ALLOT CREATE _ST-BS 4103 ALLOT CREATE _ST-CS 167 ALLOT
@@ -279,6 +307,26 @@ _ST-G @ _ST-C SHSN-SNAPSHOT-FOR@ SHSN-S-UNAVAILABLE = _SS-A 2DROP
 0 0 1 1 SCR-DRAW-GENERATION@ _ST-C SHSN-RECT-CLEAR? _SS-OK 0= _SS-A
 0 2 1 1 SCR-DRAW-GENERATION@ _ST-C SHSN-RECT-CLEAR? _SS-OK _SS-A
 11 31 2 2 SCR-DRAW-GENERATION@ _ST-C SHSN-RECT-CLEAR? SHSN-S-INVALID = _SS-A 0= _SS-A
+\ A query proves the record and its banks are spans lying apart only with
+\ every-frame checks on; in normal mode it checks the record's identity and
+\ its slots.  The bank the completed draw does not use grows over the other.
+: _ST-SPARE-U ( -- a )
+    _ST-C _SHSN.ACTIVE @ _ST-A = IF _ST-C _SHSN.B-U ELSE _ST-C _SHSN.A-U THEN ;
+8192 _ST-SPARE-U !
+0 2 1 1 SCR-DRAW-GENERATION@ _ST-C SHSN-RECT-CLEAR? SHSN-S-INVALID = _SS-A 0= _SS-A
+_ST-GET SHSN-S-INVALID = _SS-A 0= _SS-A 0= _SS-A
+0 CHK-EVERY-FRAME !
+0 2 1 1 SCR-DRAW-GENERATION@ _ST-C SHSN-RECT-CLEAR? _SS-OK _SS-A
+0 0 1 1 SCR-DRAW-GENERATION@ _ST-C SHSN-RECT-CLEAR? _SS-OK 0= _SS-A
+_ST-GOOD
+0 _ST-C _SHSN.MAGIC _ST-BAD-SOURCE
+0 _ST-C _SHSN.SIZE _ST-BAD-SOURCE
+_ST-C 8 + _ST-C _SHSN.SELF _ST-BAD-SOURCE
+4097 _ST-C _SHSN.USED _ST-BAD-SOURCE
+0 _ST-C _SHSN.DRAW _ST-BAD-SOURCE
+-1 CHK-EVERY-FRAME !
+4096 _ST-SPARE-U !
+_ST-GOOD
 \ A resize or different screen cannot reuse the same numeric generation.
 31 _ST-SCREEN @ _SCR-O-W + ! _ST-UNAVAILABLE
 32 _ST-SCREEN @ _SCR-O-W + !
