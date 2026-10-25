@@ -159,17 +159,16 @@ snapshot used 16 KiB of them.
 ## Findings
 
 1. **Typing.** The frame build is 16.1 million of a burst frame's 19.2
-   million steps. The design's target, a frame build of about 6 million or
-   fewer, stands.
+   million steps. This is the baseline the design's target is set against.
 2. **Painting.** Outside typing, Desk's painting costs about as much as the
    frame build, and more in File Explorer, and background fills are a third
-   to over half of it. Parts 2 to 4 cut how often whole documents repaint;
-   the repeated fills of one repaint are not in the design.
+   to over half of it. Parts 2, 5 and 6 cut how often whole documents
+   repaint, and part 7 cuts the repeated fills of one repaint.
 3. **The CELL flush.** The changed cells' path through the CELL layers took
    51 to 488 million steps over these runs. It is not in the design.
 4. **The adapter's memory.** Its 19.1 MiB of banks are reserved for the most
-   it could hold, while its snapshots used 12 to 40 KiB. Part 5's copy would
-   hold one snapshot's slices: tens of KiB in these runs.
+   it could hold, while its snapshots used 12 to 40 KiB. Part 9 removes the
+   banks.
 5. **Observatory** sends every changed frame as a START.
-6. **The shell model compares** cost 0.01 million steps a frame, so the
-   design no longer lists them among the repeats for part 8.
+6. **The shell model compares** cost 0.01 million steps a frame, too little
+   to be worth removing.

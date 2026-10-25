@@ -107,7 +107,7 @@ costs.
 
 | Check | Steps | What it checks | Why it finds nothing new |
 | --- | ---: | --- | --- |
-| `UCSN-FROZEN-VALIDATE` | 1.06 | Before RUHA reuses another document's stored collection slice, it validates the slice in depth. | RUHA captured and checked the slice in an earlier frame. It checks again because Desk lends it the banks; part 5 of FRAMES-FOLLOW-CHANGE makes them RUHA's own and ends this. |
+| `UCSN-FROZEN-VALIDATE` | 1.06 | Before RUHA reuses another document's stored collection slice, it validates the slice in depth. | RUHA captured and checked the slice in an earlier frame. It checks again because Desk lends it the banks, which part 9 of FRAMES-FOLLOW-CHANGE removes. |
 | `_RSHSP-BANK-VALID?` | 0.80 | After freezing, the shell checks the whole frozen bank: its layout, the shell model again, the graph, the batch's measure and its identity frontiers. | The bank is a proved copy of the batch the family preflight admitted earlier in the frame. |
 | `_RTHP-W-MENU-REUSE-PREFLIGHT?` | 0.58 | Menus the producer copies from its acknowledged bank are checked again, control by control, with their texts and correlations. | Each was admitted when it was first sent, and the acknowledged bank is the producer's own. |
 | `_RTAPT-ENGINE-VALID?` | 0.56 | The APT-1 engine audits its whole state, from its storage to its control and owner ledgers and its queue, at each backend call: the limits query and both preflights. | Only the engine writes that state. |
@@ -181,13 +181,11 @@ built change.
 The other 6.28 million steps of the frame build are building, copying and
 comparing the whole screen. FRAMES-FOLLOW-CHANGE takes those on.
 
-FRAMES-FOLLOW-CHANGE keeps every boundary check at every boundary. Its parts
-5 to 8 remove some repeats with proofs: part 5 the reused slices'
-re-validation, parts 6 and 7 the checks of unchanged items through kept
-copies, and part 8 the proofs repeated within one frame. Under its rules a
-handover proof still runs on every frame, and the engine audit is not among
-its parts. Running them only at handover, or behind a test switch, needs a
-decision on those rules.
+Running the handover proofs only at handover, and the repeats behind a test
+switch, is a trade rather than a removal of repeated work: a normal session
+would stop noticing a bug that writes where it should not. Part 3 of
+FRAMES-FOLLOW-CHANGE makes that trade, and its safe mode (part 4) keeps
+every check on every frame.
 
 ## Limits
 

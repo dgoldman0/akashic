@@ -1,16 +1,20 @@
 # A frame's work follows what changed — design, 2026-10-19
 
-Status: proposed on 2026-10-19. Its four decisions were taken the same day
-(see Decisions). Each part is approved on its own. Part 0 is done. After
-it, part 9 and the adapter's growing banks in part 5 were added the same
-day. Part 1 was done on 2026-10-24.
+Status: proposed on 2026-10-19, and extended on 2026-10-25 with a thin
+rich path: checks that run when they can find something (part 3), a safe
+mode (part 4), an occasional full refresh (part 8), and one projection with
+two drivers (parts 9 and 10). Each part is approved on its own. Parts 0 and
+1 are done, and part 2 is in progress. Decisions lists what is settled and
+what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
 [PER-KEY-FRAME-REPEATS.md](PER-KEY-FRAME-REPEATS.md) (2026-09-28) and
 part 10 of the [rich experience plan](RICH-EXPERIENCE-PLAN.md)
 (2026-10-11). KEYSTROKE-FRAME-WORK ends: "Going further than that needs the
-snapshot itself to follow change." This design is that step.
+snapshot itself to follow change." This design is that step. Parts 3, 4 and
+8 to 10 rest on [the check measurement](../../local_testing/evidence/rich-path-checks-20261025.md)
+of 2026-10-25.
 
 ## Summary
 
@@ -44,6 +48,14 @@ acknowledged bank, and the aggregate passes through five whole copies on the
 way: RUHA's bank, the producer's arena, its target bank, the shell's work
 space and the shell's frozen bank.
 
+Checks take 9.85 million of those 16 million steps, by the check
+measurement. Only about 0.1 million of that can find something on any
+frame: whether a draw, owner or acknowledgement is still current, and
+whether the items fit what the terminal accepted. The rest checks items
+that have not changed, proves again a memory layout that has not moved, or
+checks what the same frame or an earlier one already checked. About half of
+all the checking can find only a bug that wrote where it should not.
+
 Only one signal finer than "this document drew" exists: the CELL rows a draw
 changed. Part 10 of the rich experience plan uses it, so residual glyphs are
 planned again only on changed rows.
@@ -61,52 +73,91 @@ the text area's private fields through offsets copied from `textarea.f`.
 That is a design violation in its own right. Canonical widgets are meant to
 carry their meaning below the applet layer.
 
-This design adds change counters where change happens, in the canonical
-widgets and in UIDL's elements, and carries them through each stage of the
-frame build. Each stage rebuilds only what its inputs' counters say changed
-and takes everything else from its own last result. Applications stop
-bridging change: a widget's change reaches UIDL, CELL and the rich path by
-itself.
+This design does three things.
+
+- **Change is counted where it happens,** in the canonical widgets (part 2)
+  and in UIDL's elements (part 5). Applications stop bridging change, since
+  a widget's change then reaches UIDL, CELL and the rich path by itself
+  (part 6).
+- **Each check runs when it can find something** (part 3). State and fit
+  are checked on every frame. New data is checked once, when an item
+  changes. Memory layout is proved when memory is lent, allocated or grows.
+  The checks that can find only a bug that wrote where it should not run in
+  tests and in safe mode.
+- **The frame follows change** (part 9). One projection, fed by the change
+  counts, lowers only the elements that changed into one candidate, with
+  Desk's chrome in the same projection. The renderer keeps one acknowledged
+  frame, and the changes themselves are the DELTA.
+
+The full path stays, as one of two drivers over the same capture, check and
+lowering code. The change driver visits the elements that changed. The full
+driver visits every element, as today's path does. It builds complete frames
+(STARTs), and three more things use it:
+
+- **safe mode** (part 4) runs the full driver, with every check, on every
+  frame of an ordinary session, and sends its result. The screen then
+  always shows the live state, whether or not a change was reported, and
+  the rich path's own records are checked again on every frame.
+- **the occasional full refresh** (part 8) runs the full driver in normal
+  mode at a bounded interval. It sends any difference it finds and reports
+  it as a missed change, so a missed change can stay on screen for one
+  interval at most.
+- **the shadow check** (part 1) runs it beside the change driver in tests,
+  as it runs today's full path beside today's shortcuts, and compares the
+  two byte for byte.
 
 **Target:** a typed letter's frame build falls from about 16 million steps,
-part 0's baseline, to about 6 million or fewer. Frames
-that change more, such as an application switch or a dialog opening, gain
-less, because more of their inputs change.
+part 0's baseline, to about 2 million. This is an estimate, and each part
+replaces it with measurement. Frames that change more, such as an
+application switch or a dialog opening, gain less, because more of their
+inputs change. Safe mode costs about what today's path costs.
 
 Part 0 found two more things this design takes on. Outside typing, painting
 the CELL screen costs about as much as building the rich frame, and a third
 to over half of that painting fills backgrounds that were just filled; part
-9 stops it. And the adapter's banks are fixed at 19.1 MiB while its
-snapshots use tens of KiB; part 5 makes them grow on demand.
+7 stops it. And the adapter's banks are fixed at 19.1 MiB while its
+snapshots use tens of KiB; part 9 removes them.
 
 ## Rules
 
 Kept from earlier work:
 
-- Remove only work that is provably repeated. The proof comes from the module
-  that owns the data. A check is never skipped on another module's word, and
-  a digest is not a proof.
-- The terminal receives exactly the frames and operations the full path would
-  send.
-- Every boundary check stays. Each item that crosses a boundary is checked
-  there, directly or because it is byte for byte what that boundary already
-  checked and kept.
+- The rich-terminal rules in the workspace AGENTS.md. The same applet
+  sources, UIDL documents, mounted widgets and draw lifecycle serve CELL and
+  rich output. One renderer-neutral projection comes from the ordinary draw
+  lifecycle and covers Desk's chrome, UIDL renderers, mounted widgets and
+  applet painting. The renderer owns representation, allocation within the
+  caller's bounds, clipping and presentation. CELL stays the complete
+  fallback. No applet gains a terminal API or scene.
+- Remove only work that is provably repeated. The proof comes from the
+  module that owns the data, and a digest is not a proof. Checks follow
+  their own rule, below.
 - Storage is sized from what the screen and content need now, and grows on
-  demand. Nothing reserves a guessed maximum.
-- Everything stays renderer-neutral and below the applet layer. CELL stays
-  complete.
+  demand, by negotiation with the terminal where the terminal's space is
+  concerned. Nothing reserves a guessed maximum.
 
 New:
 
-- **Rebuilding and checking are separate.** A stage may skip rebuilding an
-  item when the counters of all its inputs are unchanged. Each counter
-  belongs to its input's owner: a widget's to the widget, an element's to
-  UIDL, a row's to the screen. Skipping a rebuild never skips a check. The
-  item still crosses every boundary, and every boundary still checks it.
-- **A missed change gives a stale screen, not an unsafe one.** If an owner
-  fails to move a counter, the screen shows old content, but every frame is
-  still checked in full at every boundary. The shadow check (part 1) exists to
-  find such misses, and it is on in every test of this work.
+- **Each check runs at the moment it can find something new** (part 3).
+  This replaces the rule that every boundary check stays at every boundary.
+  Normal sessions give up one thing: the per-frame checks that notice a bug
+  writing where it should not. Safe mode and tests keep them.
+- **Storage the rich path takes from a memory source** needs no proof that
+  it lies apart from other live storage. That rests on the allocator's
+  contract that live blocks do not overlap. Storage a caller lends is proved
+  apart when it is lent.
+- **Change is counted by its owner.** A stage skips rebuilding an item only
+  when the counters of all its inputs are unchanged. Each counter belongs to
+  its input's owner: a widget's to the widget, an element's to UIDL, a row's
+  to the screen.
+- **When every change is counted, the terminal receives exactly the frames
+  and operations the full path would send.** The shadow check tests this on
+  every frame of every test run.
+- **A missed change gives a stale screen, never an unsafe one.** If an owner
+  fails to move a counter, the screen shows old content, but every item a
+  frame sends has passed its first check. The shadow check finds such misses
+  in tests, and it is on in every test of this work. The occasional full
+  refresh finds them in ordinary sessions, sends the change and reports it.
 - **Applications do not report change to the rich path.** The counters live
   in canonical widgets and UIDL. Applications go on changing their state
   through the ordinary widget and UIDL words. Where a widget shows data it
@@ -214,11 +265,11 @@ and the shell's batch, freeze, emission and per-dispatch checks 6.75
 million. Desk with one application builds a DELTA interaction's frames in
 7.5 to 10.9 million steps on average and a START's in 18.3 to 23.5 million.
 The adapter's banks are 19.1 MiB, fixed when Desk starts, and its snapshots
-used 12 to 40 KiB; part 5 now makes them grow on demand. Outside typing,
-Desk's painting costs about as much as the frame build, and a third to over
-half of it is repeated background fills, which part 9 now removes. The CELL
-flush outside the producer took 51 to 488 million steps over a run, which
-this design leaves out.
+used 12 to 40 KiB; part 9 removes the banks. Outside typing, Desk's painting
+costs about as much as the frame build, and a third to over half of it is
+repeated background fills, which part 7 removes. The CELL flush outside the
+producer took 51 to 488 million steps over a run, which this design leaves
+out.
 
 ## Part 1. A shadow check of every shortcut — test tool
 
@@ -268,7 +319,8 @@ difference. See the [evidence](../../local_testing/evidence/frames-follow-change
   and setting or clearing focus. The dirty bit keeps its meaning for painting.
 - Every word that changes what a canonical widget shows moves its revision.
   The silent words listed above are fixed, and UIDL's and explorer's focus
-  syncs go through the base words.
+  syncs go through the base words. `scroll.f` and `split.f`, which nothing
+  loads, are left as they are.
 - Input's revision already means this, so it becomes the base revision. The
   other existing revisions keep their narrower meanings.
 - A query or a capture changes nothing. List and tree settle their selection
@@ -282,16 +334,134 @@ difference. See the [evidence](../../local_testing/evidence/frames-follow-change
   It also paints only the rows its last change touched when nothing else
   changed, as Pad's fast path does today through `TXTA-DRAW-ROWS`, so that
   saving stays in the widget.
+- UIDL reads widgets only through their public words. Each widget that UIDL
+  mounts gains a word that says whether a widget is a genuine one of its
+  kind, for UIDL's checks of mounted widgets, and UIDL reads regions,
+  buffers and sizes through the widgets' own words.
 
 **Tests.**
 
-- For every canonical widget: each public word that changes it moves the
-  revision, and the widget then draws exactly what a fresh widget in the same
-  state draws; each query and capture moves nothing.
+- For every canonical widget that something uses (list, tree, tabs, text
+  area, input, prompt, dialog, picture, text grid, field, data graphics,
+  explorer and canvas): each public word that changes it moves the revision,
+  and the widget then draws exactly what a fresh widget in the same state
+  draws; each query and capture moves nothing.
 - A structural test fails when a module outside a widget's file reads or
   writes that widget's fields by offset.
 
-## Part 3. UIDL sees its widgets' changes and counts its own — design, fixes a violation
+## Part 3. Checks run when they can find something — a trade
+
+**Today.** Every check runs at every boundary on every frame. The check
+measurement sorts the checks of a typed letter's frame build by when they
+can find something new:
+
+- **state and fit,** 0.10 million steps a burst frame: whether a draw, owner
+  or acknowledgement is still current, and whether the items fit what the
+  terminal accepted. These can find something on every frame.
+- **item checks,** 1.74 million: the items a frame sends, checked when a
+  capture reads them or the engine admits them. These can find something
+  when an item changes.
+- **handover proofs,** 2.95 million: headers, and spans proved apart from
+  other storage, at every entry, several times a frame. Their answer can
+  change only when memory is lent, allocated or grows.
+- **repeats,** 5.08 million: checks of data that nothing has written since
+  it was last checked, or that the frame has just built from parts it
+  checked. These can find only a bug that wrote where it should not.
+
+**Where each check runs**, once this design is done:
+
+| Group | Today | Normal mode | Safe mode | Tests |
+| --- | --- | --- | --- | --- |
+| State and fit | every frame | every frame | every frame | every frame |
+| Item checks | every item, every frame | each changed item, once | every item, every frame | each changed item, and every item through the shadow check |
+| Handover proofs | at every entry, several times a frame | when memory is lent, allocated or grows | every frame | every frame |
+| Repeats | every frame | off | every frame | every frame |
+| Full rebuild | every frame, with some reuse | at each full refresh | every frame | every frame, beside the change driver |
+
+This part moves the handover proofs and the repeats. The item checks follow
+change once part 9 builds only what changed; until then they visit every
+item on every frame, because the build does.
+
+The item checks a thin frame keeps are the record and text checks of the
+items that changed, about 0.07 million steps for a typed letter's controls
+in the measurement, and the captures' checks of the elements that changed.
+Text that reaches the wire is still read once for valid UTF-8 and for the
+characters the wire refuses.
+
+Input that comes back from the terminal is checked as it is today, in every
+mode: the owner, generation and frame a click or key names, and the control
+it names in that frame.
+
+**Change.** The repeats go behind a switch that tests and safe mode turn on.
+The handover proofs run when storage is lent, allocated or grows, instead of
+at every entry. Storage taken from a memory source is no longer proved apart
+from other live storage.
+
+**Kind.** A trade, not a removal of repeated work. Normal sessions stop
+noticing a bug that writes into the rich path's memory between handovers.
+Safe mode and tests keep those checks (decision 4).
+
+**Effect.** The check measurement's rows put the saving at about 8 million
+steps of a typed letter's 16 million. This part needs no change counts, so
+it comes straight after part 2.
+
+## Part 4. Safe mode — safety
+
+**What it does.** Every frame goes through the full path with every check
+on, and the full path's result is what the terminal receives. The screen
+shows the live state of every element, whether or not anything reported a
+change, and every check of the rich path's memory runs on every frame. Until
+part 9 builds the two drivers, the full path is today's build with its reuse
+shortcuts off, which is what the shadow check already runs beside them.
+
+**What it costs.** About what today's path costs, or somewhat more, since
+it reuses nothing. In the measurement today's path took 16 million steps for
+a burst frame and 26 million for an isolated character, against the target
+of about 2 million for a thin frame.
+
+**How it is turned on** (decision 6):
+
+- a Desk setting, kept across sessions, which an administrator can fix;
+- a boot option;
+- by itself, when the thin path meets an anomaly: a full refresh that finds a
+  missed change (part 8), or a handover proof that fails. Desk then says
+  that it is in safe mode, and records why. A first check that refuses
+  outside data, such as a file's broken text, is not an anomaly.
+
+**What it cannot do.** Safe mode makes the screen match what the
+applications hold. It cannot make an application's own data right, and it
+cannot stop a native application that means harm, since such an application
+shares Desk's memory.
+
+**Why keep it.** A missed change is silent. The old picture is valid, so
+every check passes and nothing looks wrong. Suppose an approval application
+shows a payment of 1,200 with an Approve button. An update from the server
+changes the held amount to 120,000, through a path that, by a bug, does not
+move the list's revision. In normal mode the screen keeps showing 1,200 until
+that row changes again or the next refresh, and an approver who clicks
+Approve approves 120,000. In safe mode the next frame is built from the held
+record, so the screen shows 120,000 before anyone can act on the old figure.
+Where a wrong screen costs more than the steps, such as approvals,
+operations consoles or audits, safe mode is worth its cost.
+
+A second danger is memory damage. A bug in a native application can
+overwrite part of the rich path's memory, such as its record of the frame
+the terminal holds, which later frames build on and which tells a click
+which control it reached. In normal mode nothing checks that record again,
+so the damage can spread into what the screen shows or where a click goes.
+In safe mode the rich path's records are checked on every frame and every
+frame is rebuilt from the live state. A check that catches the damage
+refuses the frame, falls back to plain text and names the damaged structure.
+
+**Change.** The switch, and the ways to turn it on.
+
+**Effect.** None in normal mode. In safe mode, about today's cost.
+
+**Tests.** A unit test damages a record of the acknowledged frame, and
+expects safe mode to catch it on the next frame, refuse that frame and name
+the structure.
+
+## Part 5. UIDL sees its widgets' changes and counts its own — design, fixes a violation
 
 **Change.**
 
@@ -316,13 +486,13 @@ difference. See the [evidence](../../local_testing/evidence/frames-follow-change
 callback, a tick or another widget's callback, repaints it with no
 application code; a paint-only mark moves no element revision.
 
-## Part 4. Applications stop bridging change — cleanup
+## Part 6. Applications stop bridging change — cleanup
 
-After parts 2 and 3, each application loses the code that only carries
+After parts 2 and 5, each application loses the code that only carries
 widget changes to UIDL:
 
-- Pad: the paint-time dirty check and row redraw, the key routing around
-  UIDL, and the copied text area offsets.
+- Pad: the paint-time dirty check and row redraw, and the key routing around
+  UIDL. Its copied text area offsets went in part 2.
 - File Explorer: its dirty helpers.
 - Grid, Sound Lab, Worlds, Observatory, Daybook, the Agent, Library and
   Streams: each invalidate helper shrinks to what the application's own
@@ -332,181 +502,11 @@ widget changes to UIDL:
   launcher also shows a change of content at the same count.
 
 Each application is checked with its own tests and Desk with that
-application. This part follows part 3 directly, so the design violation is
-fixed in full before the parts that make frames cheaper.
+application. This part follows part 5 directly, so the design violation is
+fixed in full before parts 7 to 10 change the paint pass and the frame
+build.
 
-## Part 5. The snapshot recaptures only what changed — repeat, with memory
-
-**Today.**
-
-- Projection marks a document's record dirty whenever its application
-  finishes a draw (`_RUHA-PROJECT`, `uidl-hybrid-adapter.f:1392-1407`),
-  whether or not anything changed.
-- A dirty record is recaptured whole, all six families
-  (`_RUHA-B-CAPTURE-CURRENT`, 2668).
-- A clean record's prior slices are validated in depth, every family
-  (`_RUHA-B-PRIOR-ENTRY?`, 2017), then moved into the inactive bank and
-  rebased.
-- The snapshot exports one aggregate content epoch, which moves on every key,
-  and each document's menu epochs. It does not say which documents or
-  families it recaptured.
-- The producer captures pictures for every visible document on every build
-  (`RUHA-PICTURES@`, 3510).
-- Desk gives RUHA fixed banks when it starts, sized from the most documents,
-  UIDL elements and text it could hold (`desk-apt1.f:229-305`): 19.1 MiB,
-  of which part 0's snapshots used 12 to 40 KiB. The producer, the engine
-  and the shell instead grow from Desk's memory source as the screen needs.
-
-**Change.**
-
-- For every element it captures, RUHA keeps the counters of everything the
-  capture reads: the element's revision, its widget's revision, the mounted
-  source's generation, and the document's geometry, visibility, focus and
-  occlusion.
-- A family slice none of whose elements' counters moved is copied, with its
-  offsets rebased into the new banks. A family with a changed element is
-  recaptured whole. Recapturing single elements inside a family, and copying
-  the rest, is a later step, taken only if part 0 or this part's measurement
-  shows that a family's other elements cost much.
-- RUHA's banks become its own and grow from Desk's memory source, as the
-  shell's do (SHELL-SCREEN-PRODUCER). Each starts small. When a capture runs
-  out of room in a bank, RUHA takes a block for what was needed and half
-  again and captures once more, until the snapshot fits or the memory source
-  says no. Only the inactive bank grows, and nothing reads it, so nothing is
-  relocated. Desk no longer sizes them.
-- RUHA's active bank is then its own copy of what it last captured or
-  copied, from Desk's memory source, as the engine keeps what it admitted
-  (KEYSTROKE-FRAME-WORK part 5): only RUHA writes it, and nothing writes it
-  while it is active. Reused slices are copied from it, and their deep
-  re-validation stops, since no caller holds the banks any more.
-- The snapshot exports a revision for each document's family slice, which
-  moves whenever RUHA recaptures it. Part 6 lowers again only the slices whose
-  revisions moved.
-- Pictures are captured again only when a picture widget's revision or place
-  moved.
-
-**Proof.** A capture reads only the element's state, its widget's state, and
-the document's geometry, visibility, focus and occlusion. Each is counted by
-its owner on every change (parts 2 and 3) or compared directly, so equal
-counters give an equal capture. Only RUHA writes its banks: the inactive one
-while it captures, from the active one or from live widgets, and neither
-while it is active. The storage proofs keep every other span apart from
-them. The shadow check confirms the equality on every frame of every test.
-
-**Effect.** Most of the snapshot's 3.78 million steps a typing frame:
-only the families holding the edited text area and the status line are
-captured, and no slice is validated in depth. RUHA's memory falls from 19.1
-MiB to what its two banks need, tens of KiB in part 0's runs.
-
-## Part 6. The producer lowers only what changed — repeat
-
-**Today.** On every frame the producer:
-
-- copies the whole aggregate into its arena;
-- lowers every text area, text grid, item view, document and tab set again,
-  with the aggregate epoch as its revision, and builds every field, dialog,
-  instrument, series and status field again. Only menus are copied from the
-  acknowledged bank, when their epochs match;
-- has the engine admit every item. Controls and glyph runs equal to the
-  engine's kept copy skip their record and text checks; fields, dialogs,
-  instruments, series and status fields are checked in full every frame;
-- counts everything again and builds an input target for every control;
-- compares every control and every glyph slot with the acknowledged bank,
-  including the runs of rows that `ROW-DAMAGE` leaves unmarked, which it
-  copied from that same bank.
-
-**Change.**
-
-- A family slice whose revision did not move is not lowered again. Its
-  controls, instruments, series and status fields, with their input targets,
-  are copied from the producer's acknowledged bank. Menus do this today with
-  their epochs; every family does it now.
-- The engine's kept copy extends to fields, dialogs, instruments, series and
-  status fields. An item equal to what the engine last admitted skips the
-  checks that read only what was compared, as controls and glyph runs do
-  today.
-- The comparison takes as equal every item the producer copied from the
-  acknowledged bank, and every run of a row `ROW-DAMAGE` leaves unmarked. It
-  compares the rest as today.
-
-**Proof.** Lowering reads only the slice, the region geometry, the claims and
-the features the terminal negotiated, apart from the content revision, which
-the comparison already sets to the acknowledged one for an unchanged body
-(KEYSTROKE-FRAME-WORK part 1). The producer compares geometry, claims and
-features itself, and takes the slice's revision from its owner, RUHA. The
-copied items come from the producer's own acknowledged bank. The engine's skips
-rest on KEYSTROKE-FRAME-WORK part 5's proof, unchanged: only the engine
-writes its copy, from items it has just checked in full.
-
-**Effect.** Most of the candidate's 3.56 million steps, the target pack's
-0.42 million and the comparison's 1.60 million in a typing frame.
-
-## Part 7. The shell builds only what changed — repeat
-
-**Today.** On every DELTA frame, after the producer, the shell:
-
-- compares the whole shell model with the acknowledged one twice, at
-  CURRENT and at DELTA-PROBE;
-- copies and validates the shell model, plans the catalog and the panes'
-  membership, and builds every family again: the applications' controls,
-  copied from the producer's pending bank, then series, instruments, status
-  fields, panes and residual glyphs, reusing unchanged rows' runs one at a
-  time;
-- admits the whole batch (`RTE-FAMILY-BATCH-PREFLIGHT`). Controls and glyph
-  runs use the kept copy; instruments, status fields, series and panes are
-  checked in full;
-- freezes it: measures it, copies it deep into a bank and checks the bank in
-  full;
-- emits the difference, skipping glyph families equal to the acknowledged
-  ones.
-
-**Change.**
-
-- When DELTA-PROBE has passed and a region's catalog row equals the
-  acknowledged one, each of that region's families whose inputs are
-  unchanged is copied from the shell's active bank: applications'
-  controls the producer carried unchanged (part 6), and glyph families whose
-  rows `ROW-DAMAGE` leaves unmarked. Only the other families are built.
-- The family preflight's kept copy extends to instruments, status fields,
-  series and panes.
-- The freeze checks in full only the families it built. A copied family is
-  byte for byte one the shell checked when it froze its active bank.
-- The emitter skips every family the shell copied, as it already skips equal
-  glyph families.
-
-**Proof.** The shell's active bank is its own, checked in full when it was
-frozen, and a bank that ACTIVE names is never written again
-(SHELL-SCREEN-PRODUCER). Which inputs are unchanged comes from their owners:
-the producer for the items it carried, the screen for `ROW-DAMAGE`, and the
-shell's own model comparison.
-
-**Effect.** Most of the shell's batch, freeze and emission, 5.51 million
-steps a typing frame.
-
-## Part 8. What the call tree still shows — repeat, exact speed-up
-
-After parts 5 to 7, a call tree of the typing run and the applications' runs,
-as in KEYSTROKE-FRAME-WORK part 6, decides this part. Each item is taken with
-its own proof, and the review approves it once measured. Known now:
-
-- RUHA validates its header and proves its storage, and every document's, at
-  each entry: at projection, in the snapshot's preflight, and in each of the
-  shell's six dispatches a frame, which also prove the shell's own storage.
-  In part 0 the adapter's checks took 1.62 million steps a typing frame and
-  the shell's checks at each dispatch 1.24 million. Where nothing can move
-  storage between two proofs in one frame, the later proof repeats the
-  earlier one.
-- The snapshot's preflight runs before its check for a draw already
-  captured, so a repeated call for the same draw proves everything again.
-- Unchanged rows' runs are copied one at a time, about 0.7 million steps a
-  frame across both producers; whole rows can be copied at once.
-- The residual planner checks every claim and span once a call, ten to
-  fourteen calls a frame; one call a region saves about 0.25 million.
-- With the shell installed, the producer's own candidate is admitted although
-  only the shell's batch is sent unless the shell refuses. Whether that
-  admission can wait until the base candidate is needed needs its own look.
-
-## Part 9. A repaint fills each cell once — exact speed-up
+## Part 7. A repaint fills each cell once — exact speed-up
 
 **Today.**
 
@@ -543,8 +543,109 @@ the rich frames.
 
 **Effect.** Most of the repeated fills. This is CELL-side work, done on
 every repaint whether the terminal is rich or not, so it helps the
-simulator and the chip alike. Parts 2 to 4 cut how often whole documents
-repaint; this part cuts what each repaint costs.
+simulator and the chip alike. Parts 2, 5 and 6 cut how often whole
+documents repaint; this part cuts what each repaint costs. It comes after
+parts 5 and 6 because it changes the same paint pass.
+
+## Part 8. The occasional full refresh — safety
+
+**When.** In normal mode, once input has settled, and at least once per
+refresh interval while the screen is shown (decision 7). Each is one full
+build. Like every frame, it runs at the end of an ordinary draw: when
+nothing has drawn, the refresh asks for one.
+
+**What it does.** It runs the full path into scratch and compares the result
+with the acknowledged frame. Any difference is a missed change. The refresh
+sends it like any other change, records a report that names the element,
+its family and the revisions that did not move, and turns safe mode on if
+the setting asks for that (decision 6).
+
+**What it bounds.** A missed change stays on screen for one interval at
+most, and every missed change leaves a report that points at the code that
+failed to count it.
+
+**What it costs.** One full build per interval, run while input is idle
+where it can be. With the repeats off it costs less than today's frame
+build, which took 16 to 26 million steps in the measurement.
+
+**Change.** The refresh, its missed-change report, and the setting that lets
+a report turn on safe mode.
+
+**Tests.** A unit test changes a widget's borrowed data without its change
+word, and expects the next refresh to find the change, send it and report
+it.
+
+## Part 9. One projection, two drivers — repeat, with memory
+
+This is the part that makes the frame follow change. It needs the change
+counts of parts 2 and 5. Both drivers use the same capture, check and
+lowering code. They differ in which elements they visit and in where their
+result goes.
+
+### The change driver
+
+- **What changed.** The change driver reads the revisions that parts 2 and
+  5 add: each canonical widget's, and each UIDL element's. It also reads the
+  shell model's revision, each document's geometry, visibility, focus and
+  occlusion, and the CELL rows a draw changed (`ROW-DAMAGE`).
+- **What the projection keeps.** For each element that projects, the
+  projection keeps the revisions it last projected and the wire items they
+  became (decision 8).
+- **A frame.** The driver visits only the elements whose revisions moved.
+  It captures each into scratch, checks what it captured, lowers it, checks
+  that the items fit what the terminal accepted, and compares them with the
+  items that element sent before. The items that differ, and their
+  operations, go into the pending change set. Residual glyphs are planned
+  once, for damaged rows only.
+- **One candidate.** Desk's chrome (panes, taskbar bands and status) comes
+  from the shell model through the same projection. The shell's second
+  candidate, its work space and its frozen banks go. How application items
+  are placed in their pane regions within one candidate needs its own look
+  (9b).
+- **The renderer.** The renderer keeps the acknowledged frame, with its items
+  and input targets. The DELTA is the pending change set, so no comparison of
+  the whole screen is needed. On ACK the change set is applied to the
+  acknowledged frame. When a change cannot go out as a DELTA, for the reasons
+  that send a START today (a refocused task, storage growth, moving pictures,
+  changed instruments, changed membership), the full driver builds a START.
+
+### The full driver
+
+The full driver visits every element. It captures, checks and lowers each,
+builds a complete candidate, and compares it with the acknowledged frame
+through today's comparison, which then decides between a DELTA and a START.
+STARTs, safe mode, the full refresh and the shadow check use it.
+
+### Slices
+
+- **9a.** The change driver for application documents: the projection's
+  record of revisions and items, capture of changed elements into scratch,
+  and the pending change set. RUHA's banks go.
+- **9b.** Desk's chrome through the same projection, as one candidate. The
+  shell's second candidate, its work space and its frozen banks go.
+- **9c.** The renderer sends the pending change set as the DELTA and applies
+  it on ACK. The whole-screen comparison remains for the full driver alone.
+
+**Proof.** The change driver passes over an element only when none of the
+counters it keeps for that element has moved. A capture reads only the
+element's state, its widget's state, and the document's geometry,
+visibility, focus and occlusion. Each is counted by its owner on every
+change (parts 2 and 5) or compared directly, so equal counters give an
+equal capture. Lowering an equal capture with the same region geometry,
+claims and negotiated features gives equal items, and the projection
+compares geometry, claims and features itself. The shadow check compares
+the two drivers on every frame of every test, and the full refresh finds in
+ordinary sessions what a missed count left stale.
+
+**Effect.** Most of the 6.28 million steps of building, copying and
+comparing in a typed letter's frame, and the copies' memory.
+
+## Part 10. Today's structure retires — cleanup
+
+Once the change driver passes the typing run, Desk with every application
+and the full Desktop journey with the shadow check, and safe mode passes the
+same journeys, the structures part 9 replaced are removed. Nothing is kept
+for compatibility. The full driver remains the one full path.
 
 ## Memory
 
@@ -558,33 +659,34 @@ the system and Desk have loaded (`akashic_tui.py`). RUHA's banks are fixed
 by Desk when it starts, at 19.1 MiB, and its snapshots used 12 to 40 KiB of
 them in part 0's runs.
 
-This design changes:
-
-- RUHA's banks fall from 19.1 MiB, fixed, to what its snapshots need,
-  growing on demand: tens of KiB in part 0's runs. Its active bank serves as
-  its copy, so it keeps no other (part 5);
-- the engine's and the family preflight's copies grow to cover fields,
-  dialogs, instruments, series, status fields and panes, a small share of
-  what they keep for controls and glyph runs today.
-
-The producer and the shell copy from banks they already keep. Every bank
-and copy grows from Desk's memory source to what the screen needs and half
+Part 9 frees RUHA's banks (9a) and the shell's banks and work space (9b).
+It adds the projection's record of what each element last projected, sized
+from the elements on the screen, and the pending change set, sized from one
+frame's changes. Captures go into scratch, which grows to what one build
+needs; a full build's captures came to 12 to 40 KiB in part 0's runs. Every
+block grows from Desk's memory source to what the screen needs and half
 again, as the engine's does. Each part reports what it adds or frees.
 
 ## Order and checks
 
-| Slice | Content | Approval | State |
-| --- | --- | --- | --- |
-| 1 | Part 0 | this review | done |
-| 2 | Part 1 | this review | done |
-| 3 | Part 2 | this review | proposed |
-| 4 | Part 3 | this review | proposed |
-| 5 | Part 4 | this review | proposed |
-| 6 | Part 9, which changes the same paint pass as parts 3 and 4 | this review | proposed |
-| 7 | Part 5 | this review | proposed |
-| 8 | Part 6 | this review | proposed |
-| 9 | Part 7 | this review | proposed |
-| 10 | Part 8 | its own, once the call tree is in | proposed |
+The parts run in their numbered order. Parts 3 and 4 need no change counts,
+so they come straight after part 2. Part 6 follows part 5 directly
+(decision 2), and part 7 follows both because it changes the same paint
+pass.
+
+| Part | Content | State |
+| --- | --- | --- |
+| 0 | Measure the changed frames now | done |
+| 1 | A shadow check of every shortcut | done |
+| 2 | Widgets count their changes | in progress |
+| 3 | Checks run when they can find something | proposed |
+| 4 | Safe mode | proposed |
+| 5 | UIDL sees its widgets' changes and counts its own | proposed |
+| 6 | Applications stop bridging change | proposed |
+| 7 | A repaint fills each cell once | proposed |
+| 8 | The occasional full refresh | proposed |
+| 9 | One projection, two drivers, in slices 9a to 9c | proposed |
+| 10 | Today's structure retires | proposed |
 
 For each slice:
 
@@ -592,30 +694,31 @@ For each slice:
 - guest steps a key and wire operations a key from the typing run, before
   and after;
 - Desk with Pad, and with each application the slice touches;
-- the refactor ratchet, since every slice changes Forth state;
-- at the end, the full Desktop journey once with the shadow check on and
-  once without it, as regression, one run at a time under the existing
-  guards.
+- the refactor ratchet, since every slice changes Forth state.
+
+At the end of each part, the full Desktop journey runs once with the shadow
+check on and once without it, as regression, one run at a time under the
+existing guards. From part 4 on, a part that changes safe mode or the full
+path also runs the journey once in safe mode.
 
 ## Expected effect
 
-Estimates against part 0's measurement of a burst typing frame. The
-adapter's checks (1.62M) and the storage-aliasing checks (3.82M) run inside
-these rows.
+Millions of steps in a typed letter's burst frame, from the check
+measurement, whose frame build of 16.16 million matches part 0's 16.13
+million. The figures after parts 3 and 9 are estimates.
 
-| Stage | Part 0, 2026-10-19 | After this design (estimate) |
-| --- | ---: | ---: |
-| Documents' snapshot | 3.78M | about 1.0M |
-| Producer's candidate, with the engine's admission and its glyphs | 3.56M | about 1.3M |
-| Target pack | 0.42M | about 0.1M |
-| Comparison | 1.60M | about 0.3M |
-| Shell's batch, with its preflight and glyphs | 3.74M | about 1.3M |
-| Shell's freeze and emission | 1.77M | about 0.4M |
-| Shell's checks at each dispatch | 1.24M | 1.24M, less after part 8 |
-| Frame build | 16.13M | about 5.6M |
+| | Today | After part 3 | After part 9 |
+| --- | ---: | ---: | ---: |
+| Checks | 9.85 | about 1.9 | about 0.2 |
+| Building, copying and comparing | 6.28 | 6.28 | about 2 |
+| Fit | 0.03 | 0.03 | 0.03 |
+| Frame build | 16.16 | about 8 | about 2 |
+
+After part 3, the item checks still visit every item on every frame. Part 9
+makes them follow change.
 
 Steps a frame also count Desk's painting and the terminal service, about 3
-million together. A typed letter repaints one row, so part 9 changes little
+million together. A typed letter repaints one row, so part 7 changes little
 here; its gain is in frames that repaint whole documents.
 
 ## Not in this design
@@ -625,16 +728,13 @@ here; its gain is in frames that repaint whole documents.
   appearing, the first frame after storage grows, pictures that move or clip
   while scrolling, changed instruments, and changes in control or dialog
   membership. Most need the terminal to accept more kinds of change in a
-  DELTA. A START can still gain from parts 5 and 6, since its unchanged
-  documents are neither recaptured nor lowered again, but its emission and
-  identities stay whole-screen.
+  DELTA. The full driver builds each START, so a START gains from part 3
+  but keeps a whole-screen build, emission and identities.
 - **Applications' own work,** such as a Worlds step's repaint, or Sound Lab's
   render and its CELL waveform.
 - **The CELL flush:** the changed cells' path through the CELL layers, 51 to
   488 million steps over part 0's runs. It needs its own design.
 - **The simulator host's work:** decoding, composition and the viewer.
-- **One candidate instead of two.** The producer's and the shell's stages
-  stay separate; this design makes both follow change.
 - **A text area capturing only its changed lines,** and the STX1 item patch
   on the wire that would carry them.
 - **Bound state marking its elements by itself.** UIDL's contract keeps the
@@ -644,14 +744,38 @@ here; its gain is in frames that repaint whole documents.
 
 Taken on 2026-10-19:
 
-1. **How fine the snapshot reuses.** Counters are kept per widget and per
-   UIDL element. The snapshot reuses whole family slices first, and single
-   elements inside a family only if measurement shows it pays (part 5).
-2. **RUHA's own copy.** RUHA keeps its own copy of what it captured, in a
-   block from Desk's memory source, and stops validating reused slices in
-   depth, as the engine does with what it admitted (part 5).
-3. **The shadow check.** It is a committed switch, off by default, that
+1. **The shadow check.** It is a committed switch, off by default, that
    tests and diagnostic runs turn on, so it also runs under the physical
    launcher, which refuses uncommitted sources (part 1).
-4. **When applications stop bridging.** Part 4 follows part 3 directly, so
-   the design violation is fixed in full first.
+2. **When applications stop bridging.** Part 6 follows part 5 directly, so
+   the design violation is fixed in full before parts 7 to 10 change the
+   paint pass and the frame build.
+
+Taken on 2026-10-25:
+
+3. **How the frame follows change.** Through one projection with a change
+   driver and a full driver, and one candidate (part 9). Safe mode, the
+   full refresh and the shadow check use the full driver. Parts 3 and 4
+   come straight after part 2.
+4. **Where checks run.** The table in part 3 replaces the rule that every
+   boundary check stays at every boundary. Normal sessions then stop
+   noticing a bug that writes into the rich path's memory between handovers,
+   and safe mode and tests keep that.
+5. **Part 2's tests.** The per-widget tests cover the widgets something
+   uses: list, tree, tabs, text area, input, prompt, dialog, picture, text
+   grid, field, data graphics, explorer and canvas. UIDL moves its reads of
+   widget fields behind the widgets' own words within part 2, so that the
+   structural test covers UIDL too.
+
+Open, each to be taken before the part that needs it:
+
+6. **How safe mode turns on** (part 4). Proposed: a Desk setting that an
+   administrator can fix, a boot option, and an anomaly, by itself.
+7. **The refresh interval** (part 8). Proposed: once input settles, and at
+   least every few seconds while the screen is shown. The exact default is
+   to be chosen, and it is a setting.
+8. **What the projection keeps** (part 9). Proposed: only the revisions each
+   element last projected and the wire items they became, with content
+   captured into scratch when it changes. The alternative keeps a
+   renderer-neutral copy of each element's content, which costs memory and
+   buys nothing a current renderer reads.
