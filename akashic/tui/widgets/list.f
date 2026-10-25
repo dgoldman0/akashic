@@ -38,7 +38,7 @@
 \  Home/End to the first and last rows.  While its view shows the last
 \  screen row it follows the end as rows and lines are added.
 \  LST-RECOUNT tells any list that rows were added or removed at the end
-\  without moving its view.
+\  without moving its view, and LST-REFRESH that rows it has changed.
 \
 \  In LST-CARDS mode each row is a card: its first field one cell in, and
 \  each other field on lines of its own, three cells in, each at most the
@@ -1395,6 +1395,13 @@ VARIABLE _LST-CF-KEEP
     DUP R@ _LST-NCOLS * R@ _LST-RC-DROP
     R@ _LST-O-COUNT + ! R@ _LST-SETTLE R> WDG-DIRTY ;
 
+\ LST-REFRESH ( widget -- )
+\   The rows changed in place: the callbacks now give other text or flags
+\   for rows the list has.  The selection and the view keep their places as
+\   far as the rows allow, and the list shows the rows again.  A kept line
+\   count is used again only for the same text, so none is dropped.
+: LST-REFRESH  ( widget -- )  DUP _LST-SETTLE WDG-DIRTY ;
+
 \ LST-COUNT ( widget -- count )
 : LST-COUNT  ( widget -- count )  _LST-O-COUNT + @ ;
 
@@ -1500,6 +1507,7 @@ GUARD _lst-guard
 ' LST-NEW         CONSTANT _lst-new-xt
 ' LST-ROWS!       CONSTANT _lst-rows-xt
 ' LST-RECOUNT     CONSTANT _lst-recount-xt
+' LST-REFRESH     CONSTANT _lst-refresh-xt
 ' LST-COUNT       CONSTANT _lst-count-xt
 ' LST-COLUMNS!    CONSTANT _lst-columns-xt
 ' LST-SELECT      CONSTANT _lst-select-xt
@@ -1523,6 +1531,7 @@ GUARD _lst-guard
 : LST-NEW         _lst-new-xt       _lst-guard WITH-GUARD ;
 : LST-ROWS!       _lst-rows-xt      _lst-guard WITH-GUARD ;
 : LST-RECOUNT     _lst-recount-xt   _lst-guard WITH-GUARD ;
+: LST-REFRESH     _lst-refresh-xt   _lst-guard WITH-GUARD ;
 : LST-COUNT       _lst-count-xt     _lst-guard WITH-GUARD ;
 : LST-COLUMNS!    _lst-columns-xt   _lst-guard WITH-GUARD ;
 : LST-SELECT      _lst-select-xt    _lst-guard WITH-GUARD ;

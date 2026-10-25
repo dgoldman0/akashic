@@ -166,3 +166,22 @@ def test_a_list_context_change_moves_the_revision():
 _WC-L LST-CONTEXT@ 7 = _FM-A
 _FM-DONE
 ''', minimum=3)
+
+
+def test_a_list_refresh_settles_on_the_rows_as_they_are_and_moves_the_revision():
+    run(r'''
+: _LR-KEY  ( index widget -- key ) DROP 1+ ;
+: _LR-FIELD  ( index column widget -- addr len ) 2DROP DROP S" row" ;
+VARIABLE _LR-HEADING  -1 _LR-HEADING !
+: _LR-FLAGS  ( index widget -- flags ) DROP _LR-HEADING @ = IF LST-ROW-SECTION ELSE 0 THEN ;
+0 0 5 20 RGN-NEW ' _LR-KEY ' _LR-FIELD LST-NEW CONSTANT _LR
+' _LR-FLAGS _LR LST-ROW-FLAGS!  6 _LR LST-RECOUNT  3 _LR LST-SELECT
+_LR LST-SELECTED 3 = _FM-A
+\ Row 3 becomes a heading in the application's data.  The refresh moves
+\ the selection off it, and it is a change.
+3 _LR-HEADING !
+: _LR-REFRESH  _LR LST-REFRESH ;
+' _LR-REFRESH _LR _WC-MOVES? _FM-A
+_LR _LST-O-SEL + @ 3 <> _FM-A
+_FM-DONE
+''', minimum=3)

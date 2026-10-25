@@ -134,6 +134,7 @@ the widths and take the card field widths above.
 |------|-------|-------------|
 | `LST-ROWS!` | `( count widget -- )` | The rows changed: there are now `count`, the first row that is not a heading is selected, and the view is at the top; a log selects nothing and follows its end |
 | `LST-RECOUNT` | `( count widget -- )` | Rows were added or removed at the end: there are now `count`, and the selection and the view keep their places as far as the rows allow |
+| `LST-REFRESH` | `( widget -- )` | Rows the list has changed in place, in text or flags: the selection and the view keep their places as far as the rows allow, and the list shows the rows again |
 | `LST-COUNT` | `( widget -- count )` | Number of rows |
 | `LST-COLUMNS!` | `( columns-a count widget -- )` | Use `count` caller-owned column records; `0 0` for one text column |
 | `LST-ROW-FLAGS!` | `( xt widget -- )` | Row callback `( index widget -- flags )`, or 0 for plain rows |
