@@ -186,6 +186,7 @@ same, so a caller may change a field's text in place.  `LST-ROWS!`,
 | `LST-ITEM-VIEW-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Build the list's item view with the caller's builder; `dst cap` of `0 0` measures |
 | `LST-ITEM-VIEW-MEASURE` | `( root-key builder widget -- bytes status )` | Exact bytes the capture needs |
 | `LST-INSTANCE@` | `( widget -- token )` | The instance token, or 0 for anything that is not a live list |
+| `LST-GENUINE?` | `( widget -- flag )` | A live list this module made, by its type, draw and handle words, identity and region. Pure and unguarded, for UIDL's checks of a mounted widget |
 | `LST-STORAGE-DISJOINT?` | `( address bytes -- flag )` | A caller span misses the module's own storage |
 | `LST-ITEM-VIEW-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | A caller span also misses the list's descriptor, region and column records |
 

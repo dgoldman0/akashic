@@ -92,20 +92,20 @@ REQUIRE ../../utils/memory-span.f
 \ such host one cell serves the one application.
 VARIABLE _DLG-ONLY-CELL
 0 _DLG-ONLY-CELL !
-DEFER _DLG-CELL-HOOK  ( -- a )
-' _DLG-ONLY-CELL IS _DLG-CELL-HOOK
+DEFER DLG-CELL-HOOK  ( -- a )
+' _DLG-ONLY-CELL IS DLG-CELL-HOOK
 
 \ The host repaints the rectangle a closing dialog leaves.
-DEFER _DLG-DISMISS-HOOK  ( row col h w -- )
+DEFER DLG-DISMISS-HOOK  ( row col h w -- )
 : _DLG-DISMISS-NOOP  ( row col h w -- )  2DROP 2DROP ;
-' _DLG-DISMISS-NOOP IS _DLG-DISMISS-HOOK
+' _DLG-DISMISS-NOOP IS DLG-DISMISS-HOOK
 
 \ The area a dialog is centred in.  Standalone dialogs use the whole
 \ screen; UIDL hosts narrow this to the application's document region, so
 \ a dialog never covers another application.
-DEFER _DLG-BOUNDS-HOOK  ( -- row col h w )
+DEFER DLG-BOUNDS-HOOK  ( -- row col h w )
 : _DLG-BOUNDS-SCREEN  ( -- row col h w )  0 0 SCR-H SCR-W ;
-' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK
+' _DLG-BOUNDS-SCREEN IS DLG-BOUNDS-HOOK
 
 \ =====================================================================
 \ 2. Descriptor layout, button roles and looks
@@ -341,7 +341,7 @@ VARIABLE _DLG-L-VIEW
 
 : _DLG-LAYOUT  ( widget -- )
     _DLG-L-W !
-    _DLG-BOUNDS-HOOK _DLG-L-BW ! _DLG-L-BH ! _DLG-L-BC ! _DLG-L-BR !
+    DLG-BOUNDS-HOOK _DLG-L-BW ! _DLG-L-BH ! _DLG-L-BC ! _DLG-L-BR !
     _DLG-L-W @ _DLG-O-DETAIL + @ IF _DLG-SIZE-DETAIL ELSE _DLG-SIZE-PLAIN THEN
     _DLG-MESSAGE-LAYOUT
     _DLG-L-BH @ _DLG-L-HT @ - 2 / _DLG-FLOOR0 _DLG-L-BR @ +
@@ -666,14 +666,14 @@ VARIABLE _DLG-A-DETAIL
 \ Open the dialog over the application that asks.
 : _DLG-OPEN  ( title-a title-u paras pcount buttons bcount detail? -- ok? )
     _DLG-A-DETAIL !
-    _DLG-CELL-HOOK @ IF 2DROP 2DROP 2DROP FALSE EXIT THEN
+    DLG-CELL-HOOK @ IF 2DROP 2DROP 2DROP FALSE EXIT THEN
     _DLG-NEW ?DUP 0= IF FALSE EXIT THEN
     0 0 0 0 ['] RGN-NEW CATCH IF 2DROP 2DROP DLG-FREE FALSE EXIT THEN
     OVER _WDG-O-REGION + !
     _DLG-A-XT @ OVER _DLG-O-XT + !
     _DLG-A-CTX @ OVER _DLG-O-CTX + !
     _DLG-A-DETAIL @ OVER _DLG-O-DETAIL + !
-    _DLG-CELL-HOOK ! TRUE ;
+    DLG-CELL-HOOK ! TRUE ;
 
 CREATE _DLG-ONE-PARA _DLG-PARA-SIZE ALLOT
 
@@ -711,8 +711,8 @@ CREATE _DLG-CONFIRM-BTNS 2 _DLG-BTN-SIZE * ALLOT
     DLG-B-DEFAULT DLG-B-CANCEL OR _DLG-CONFIRM-BTNS _DLG-BTN-SIZE + 16 + !
     S" Confirm" 2SWAP _DLG-CONFIRM-BTNS 2 _DLG-A-XT @ _DLG-A-CTX @ DLG-ASK
     DUP IF
-        -1 _DLG-CELL-HOOK @ _DLG-O-CONFIRM + !
-        3 _DLG-CELL-HOOK @ _DLG-O-SEVERITY + !
+        -1 DLG-CELL-HOOK @ _DLG-O-CONFIRM + !
+        3 DLG-CELL-HOOK @ _DLG-O-SEVERITY + !
     THEN ;
 
 CREATE _DLG-OK-BTN _DLG-BTN-SIZE ALLOT
@@ -724,7 +724,7 @@ CREATE _DLG-OK-BTN _DLG-BTN-SIZE ALLOT
     S" OK" _DLG-OK-BTN 8 + ! _DLG-OK-BTN !
     DLG-B-DEFAULT DLG-B-CANCEL OR _DLG-OK-BTN 16 + !
     S" Info" 2SWAP _DLG-OK-BTN 1 0 0 DLG-ASK
-    DUP IF 1 _DLG-CELL-HOOK @ _DLG-O-SEVERITY + ! THEN ;
+    DUP IF 1 DLG-CELL-HOOK @ _DLG-O-SEVERITY + ! THEN ;
 
 \ =====================================================================
 \ 11. Hosting
@@ -736,12 +736,12 @@ CREATE _DLG-OK-BTN _DLG-BTN-SIZE ALLOT
 
 \ DLG-SHOWN ( -- widget|0 )
 \   The dialog the current application shows.
-: DLG-SHOWN  ( -- widget|0 )  _DLG-CELL-HOOK @ ;
+: DLG-SHOWN  ( -- widget|0 )  DLG-CELL-HOOK @ ;
 
 \ The host repaints what a closing dialog covered.
 : _DLG-DISMISS  ( widget -- )
     WDG-REGION >R R@ RGN-ROW R@ RGN-COL R@ RGN-H R> RGN-W
-    2DUP * IF _DLG-DISMISS-HOOK ELSE 2DROP 2DROP THEN ;
+    2DUP * IF DLG-DISMISS-HOOK ELSE 2DROP 2DROP THEN ;
 
 \ Close an answered dialog: the host repaints what it covered, and the
 \ asker is called back.  The dialog is freed first, so a callback that
@@ -761,10 +761,10 @@ VARIABLE _DLG-ANS-W
 \   button is chosen close it and call its asker back.  False when the
 \   application shows no dialog.
 : DLG-HOST-EVENT  ( event -- handled? )
-    _DLG-CELL-HOOK @ ?DUP 0= IF DROP FALSE EXIT THEN
+    DLG-CELL-HOOK @ ?DUP 0= IF DROP FALSE EXIT THEN
     TUCK WDG-HANDLE DROP
     DUP DLG-RESULT 0< IF DROP TRUE EXIT THEN
-    0 _DLG-CELL-HOOK ! _DLG-ANSWER TRUE ;
+    0 DLG-CELL-HOOK ! _DLG-ANSWER TRUE ;
 
 \ A dialog laid out at another size, or showing other rows of its
 \ message, shows new content.
@@ -787,7 +787,7 @@ VARIABLE _DLG-P-T
 \   the host's bounds, keeping the drawing region the caller had.  Only a
 \   layout the host's bounds changed is a change; painting again is not.
 : DLG-HOST-PAINT  ( -- )
-    _DLG-CELL-HOOK @ ?DUP 0= IF EXIT THEN
+    DLG-CELL-HOOK @ ?DUP 0= IF EXIT THEN
     DUP _DLG-RELAYOUT
     RGN-CURRENT >R ['] WDG-DRAW CATCH R> RGN-RESTORE
     ?DUP IF NIP THROW THEN ;
@@ -796,14 +796,14 @@ VARIABLE _DLG-P-T
 \   Free the dialog the current application shows, unanswered: the
 \   application is going away.
 : DLG-DISCARD  ( -- )
-    _DLG-CELL-HOOK @ ?DUP IF DLG-FREE 0 _DLG-CELL-HOOK ! THEN ;
+    DLG-CELL-HOOK @ ?DUP IF DLG-FREE 0 DLG-CELL-HOOK ! THEN ;
 
 \ DLG-WITHDRAW ( -- )
 \   Close the dialog the current application shows, unanswered, and have
 \   the host repaint what it covered: the application no longer asks.
 : DLG-WITHDRAW  ( -- )
-    _DLG-CELL-HOOK @ ?DUP 0= IF EXIT THEN
-    0 _DLG-CELL-HOOK ! DUP _DLG-DISMISS DLG-FREE ;
+    DLG-CELL-HOOK @ ?DUP 0= IF EXIT THEN
+    0 DLG-CELL-HOOK ! DUP _DLG-DISMISS DLG-FREE ;
 
 \ =====================================================================
 \ 12. Capture

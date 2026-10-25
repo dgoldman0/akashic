@@ -1107,7 +1107,11 @@ VARIABLE _LST-HND-COL    \ column of a press, relative to the region
 \ 6. Storage authority
 \ =====================================================================
 
-: _LST-GENUINE?  ( widget -- flag )
+\ LST-GENUINE? ( widget -- flag )
+\   A live list this module made: its type, draw and handle words,
+\   identity and region.  Pure and deliberately unguarded, so that UIDL and
+\   the snapshots can check a mounted widget before they read it.
+: LST-GENUINE?  ( widget -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
     DUP _LST-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
@@ -1143,7 +1147,7 @@ VARIABLE _LST-SD-W
     >R
     2DUP LST-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
     _LST-SD-U ! _LST-SD-A ! R> _LST-SD-W !
-    _LST-SD-W @ _LST-GENUINE? 0= IF 0 EXIT THEN
+    _LST-SD-W @ LST-GENUINE? 0= IF 0 EXIT THEN
     _LST-SD-U @ 0= IF -1 EXIT THEN
     _LST-SD-A @ _LST-SD-U @
         _LST-SD-W @ _LST-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
@@ -1256,7 +1260,7 @@ VARIABLE _LST-CF-KEEP
     _LST-C-BUILDER @ USCOL-ITEMS-ITEM-END DROP ;
 
 : _LST-CAPTURE-PREFLIGHT?  ( root destination capacity builder widget -- flag )
-    DUP _LST-GENUINE? 0= IF 0 EXIT THEN
+    DUP LST-GENUINE? 0= IF 0 EXIT THEN
     4 PICK 0= IF 0 EXIT THEN
     3 PICK 3 PICK 2 PICK LST-ITEM-VIEW-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
     1 PICK USCOL-BUILDER-SIZE 2 PICK
@@ -1489,7 +1493,7 @@ VARIABLE _LST-CF-KEEP
     R@ _LST-TRACK-END R@ _LST-SETTLE-VIEW R> WDG-DIRTY ;
 
 : LST-INSTANCE@  ( widget -- token )
-    DUP _LST-GENUINE? 0= IF DROP 0 EXIT THEN
+    DUP LST-GENUINE? 0= IF DROP 0 EXIT THEN
     _LST-O-INSTANCE + @ ;
 
 \ LST-FREE ( widget -- )

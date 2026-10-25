@@ -26,6 +26,13 @@ class AssociationHarness(GrowthHarness):
         texts = [SOURCE.read_text() if source is None else source, uidl]
         for name in ("region", "widget", "tui-sidecar"):
             texts.append((ROOT / f"akashic/tui/{name}.f").read_text())
+        # A GUARDED build's wrappers would replace the words these tests run
+        # without their guard, such as WDG-REGION.
+        texts = [
+            re.sub(r"(?s)\[DEFINED\] GUARDED \[IF\] GUARDED \[IF\].*?"
+                   r"\[THEN\] \[THEN\]", "", text)
+            for text in texts
+        ]
         text = re.sub(r"(?m)\\[^\n]*$", "", "\n".join(texts))
         self.definitions = _definitions(text)
         # Include the production constant aliases as well as numeric constants.
@@ -73,7 +80,7 @@ class AssociationHarness(GrowthHarness):
         self.runtime.memory.write64(address + self.constant(offset), value & MASK64)
 
     def widget(self, region):
-        address = self.allocate(bytes(self.constant("_WDG-HDR-SIZE")))
+        address = self.allocate(bytes(self.constant("WDG-HEADER-SIZE")))
         self.write(address, "_WDG-O-REGION", region)
         return address
 

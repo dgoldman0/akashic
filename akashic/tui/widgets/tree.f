@@ -543,7 +543,11 @@ VARIABLE _TPT-COL
 \  §8 — Storage authority
 \ =====================================================================
 
-: _TREE-GENUINE?  ( widget -- flag )
+\ TREE-GENUINE? ( widget -- flag )
+\   A live tree this module made: its type, draw and handle words,
+\   identity and region.  Pure and deliberately unguarded, so that UIDL and
+\   the snapshots can check a mounted widget before they read it.
+: TREE-GENUINE?  ( widget -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
     DUP _TREE-DESC-SZ MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
@@ -579,7 +583,7 @@ VARIABLE _TREE-SD-W
     >R
     2DUP TREE-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
     _TREE-SD-U ! _TREE-SD-A ! R> _TREE-SD-W !
-    _TREE-SD-W @ _TREE-GENUINE? 0= IF 0 EXIT THEN
+    _TREE-SD-W @ TREE-GENUINE? 0= IF 0 EXIT THEN
     _TREE-SD-U @ 0= IF -1 EXIT THEN
     _TREE-SD-A @ _TREE-SD-U @
         _TREE-SD-W @ _TREE-DESC-SZ MSPAN-OVERLAP? IF 0 EXIT THEN
@@ -659,7 +663,7 @@ VARIABLE _TREE-CF-N
     _TREE-C-BUILDER @ USCOL-ITEMS-ITEM-END DROP ;
 
 : _TREE-CAPTURE-PREFLIGHT?  ( root destination capacity builder widget -- flag )
-    DUP _TREE-GENUINE? 0= IF 0 EXIT THEN
+    DUP TREE-GENUINE? 0= IF 0 EXIT THEN
     4 PICK 0= IF 0 EXIT THEN
     3 PICK 3 PICK 2 PICK TREE-ITEM-VIEW-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
     1 PICK USCOL-BUILDER-SIZE 2 PICK
@@ -845,7 +849,7 @@ VARIABLE _TREE-CF-N
     R> WDG-DIRTY ;
 
 : TREE-INSTANCE@  ( widget -- token )
-    DUP _TREE-GENUINE? 0= IF DROP 0 EXIT THEN
+    DUP TREE-GENUINE? 0= IF DROP 0 EXIT THEN
     _TREE-O-INSTANCE + @ ;
 
 : TREE-FREE  ( w -- )

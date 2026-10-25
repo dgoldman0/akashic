@@ -153,6 +153,7 @@ there.
 | `TREE-ITEM-VIEW-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Build the tree's item view with the caller's builder; `dst cap` of `0 0` measures |
 | `TREE-ITEM-VIEW-MEASURE` | `( root-key builder widget -- bytes status )` | Exact bytes the capture needs |
 | `TREE-INSTANCE@` | `( widget -- token )` | The instance token, or 0 for anything that is not a live tree |
+| `TREE-GENUINE?` | `( widget -- flag )` | A live tree this module made, by its type, draw and handle words, identity and region. Pure and unguarded, for UIDL's checks of a mounted widget |
 | `TREE-STORAGE-DISJOINT?` | `( address bytes -- flag )` | A caller span misses the module's own storage |
 | `TREE-ITEM-VIEW-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | A caller span also misses the tree's descriptor, region and expanded-key set |
 

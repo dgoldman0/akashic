@@ -224,10 +224,11 @@ VARIABLE _PRM-S-LU
 \  The prompt as a TEXT field
 \ =====================================================================
 
-\ _PRM-GENUINE? ( widget -- flag )
+\ PRM-GENUINE? ( widget -- flag )
 \   A live prompt this module made: its type, draw and handle words,
-\   identity, region and input.
-: _PRM-GENUINE?  ( widget -- flag )
+\   identity, region and input.  Pure and deliberately unguarded, so that
+\   UIDL can check a widget before it reads it.
+: PRM-GENUINE?  ( widget -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
     DUP _PRM-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
@@ -241,7 +242,7 @@ VARIABLE _PRM-S-LU
 \ PRM-INSTANCE@ ( prompt -- instance|0 )
 \   The prompt's identity for as long as it lives; 0 for anything else.
 : PRM-INSTANCE@  ( prompt -- instance|0 )
-    DUP _PRM-GENUINE? 0= IF DROP 0 EXIT THEN _PRM-O-INSTANCE + @ ;
+    DUP PRM-GENUINE? 0= IF DROP 0 EXIT THEN _PRM-O-INSTANCE + @ ;
 
 \ PRM-FIELD-ROOT ( prompt -- row col height width )
 \   The screen cells the prompt's field takes: the first row of its region,
@@ -281,11 +282,10 @@ _PRM-F-BUILDER-S 7 + -8 AND CONSTANT _PRM-F-BUILDER
 : _PRM-F-APART?  ( -- flag )
     _PRM-F-DST @ _PRM-F-CAP @
     2DUP _PRM-F-W @ _PRM-DESC-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
-    2DUP _PRM-F-INPUT @ _INP-DESC-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _PRM-F-INPUT @ INP-DESCRIPTOR-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP _PRM-F-W @ WDG-REGION RGN-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP _PRM-F-INPUT @ WDG-REGION RGN-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
-    2DUP _PRM-F-INPUT @ _INP-O-BUF-A + @ _PRM-F-INPUT @ _INP-O-BUF-CAP + @
-        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _PRM-F-INPUT @ INP-BUFFER@ MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP _PRM-F-W @ _PRM-O-LABEL-A + @ _PRM-F-W @ _PRM-O-LABEL-U + @
         MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     _PRM-F-INPUT @ INP-PLACEHOLDER@ MSPAN-OVERLAP? 0= ;
@@ -325,7 +325,7 @@ _PRM-F-BUILDER-S 7 + -8 AND CONSTANT _PRM-F-BUILDER
 \   CAP 0 only measure it.  The status is a UFLD-S- value.  It lays the
 \   prompt out as its draw does, so it holds before that draw as after it.
 : PRM-FIELD-CAPTURE  ( dst cap prompt -- bytes status )
-    DUP _PRM-GENUINE? 0= IF 2DROP DROP 0 UFLD-S-INVALID EXIT THEN
+    DUP PRM-GENUINE? 0= IF 2DROP DROP 0 UFLD-S-INVALID EXIT THEN
     DUP _PRM-O-ACTIVE + @ 0= IF 2DROP DROP 0 UFLD-S-INVALID EXIT THEN
     _PRM-F-PREPARE _PRM-F-CAP ! _PRM-F-DST !
     _PRM-F-BYTES _PRM-F-NEED !

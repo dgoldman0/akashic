@@ -11,6 +11,7 @@ FLD-BIND         ( model bytes widget -- status )
 FLD-UNBIND       ( widget -- )
 FLD-MODEL@       ( widget -- model bytes )
 FLD-INSTANCE@    ( widget -- token|0 )
+FLD-GENUINE?     ( widget -- flag )      \ a live field this module made
 FLD-FREE         ( widget -- )
 FLD-ON-ACTIVATE  ( xt widget -- )        \ callback: ( widget -- )
 FLD-ON-ADJUST    ( xt widget -- )        \ callback: ( signed-count widget -- )

@@ -2417,12 +2417,12 @@ def test_dlg_centres_in_host_bounds_and_reports_its_rectangle_on_close():
          'VARIABLE _DB-R VARIABLE _DB-C VARIABLE _DB-H VARIABLE _DB-W',
          ': _DB-BOUNDS 4 10 12 30 ;',
          ': _DB-DISMISS _DB-W ! _DB-H ! _DB-C ! _DB-R ! ;',
-         "' _DB-BOUNDS IS _DLG-BOUNDS-HOOK",
-         "' _DB-DISMISS IS _DLG-DISMISS-HOOK",
+         "' _DB-BOUNDS IS DLG-BOUNDS-HOOK",
+         "' _DB-DISMISS IS DLG-DISMISS-HOOK",
          '_ASK DROP DLG-HOST-PAINT KEY-ENTER _KEY',
          '_DB-R @ . _DB-C @ . _DB-H @ . _DB-W @ . 8888 .',
-         "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK",
-         "' _DLG-DISMISS-NOOP IS _DLG-DISMISS-HOOK",
+         "' _DLG-BOUNDS-SCREEN IS DLG-BOUNDS-HOOK",
+         "' _DLG-DISMISS-NOOP IS DLG-DISMISS-HOOK",
          _DLG_CLEANUP], "7 14 6 21 8888")
 
 
@@ -2508,13 +2508,13 @@ def test_dlg_revision_follows_size_and_a_cramped_dialog_stays_painted():
          '_ASK DROP DLG-HOST-PAINT DLG-SHOWN _DLG-O-REVISION + @ DUP _R1 ! 0<> .',
          'DLG-HOST-PAINT DLG-SHOWN _DLG-O-REVISION + @ _R1 @ = .',
          ': _SHORT 0 0 7 80 ; : _CRAMPED 0 0 6 80 ;',
-         "' _SHORT IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT",
+         "' _SHORT IS DLG-BOUNDS-HOOK DLG-HOST-PAINT",
          'DLG-SHOWN _DLG-O-REVISION + @ _R1 @ > . DLG-SHOWN WDG-REGION RGN-H .',
          '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . DROP',
          '_CAP UDLG-REVISION@ DLG-SHOWN _DLG-O-REVISION + @ = .',
-         "' _CRAMPED IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT",
+         "' _CRAMPED IS DLG-BOUNDS-HOOK DLG-HOST-PAINT",
          '_CAP 1024 DLG-SHOWN DLG-MODEL-CAPTURE . . 8888 .',
-         "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK",
+         "' _DLG-BOUNDS-SCREEN IS DLG-BOUNDS-HOOK",
          _DLG_CLEANUP], "-1 -1 -1 5 0 -1 1 0 8888")
 
 
@@ -2542,7 +2542,7 @@ _DLG_LONG = [
     ': _LONG-BUILD 0 _LONG-U ! 11 1 DO I 1 > IF 10 _LC+ THEN',
     '    76 _LC+ I 10 < IF I 48 + _LC+ ELSE 49 _LC+ 48 _LC+ THEN LOOP ;',
     ': _LBOUNDS 0 0 10 40 ;',
-    "' _LBOUNDS IS _DLG-BOUNDS-HOOK",
+    "' _LBOUNDS IS DLG-BOUNDS-HOOK",
     ": _ASK-LONG S\" Title\" _LONG _LONG-U @ _BT 2 ['] _ON-ANSWER 77 DLG-ASK ;",
     ': _CP ( row col -- cp ) SCR-GET CELL-CP@ ;',
     # [ F6 Approve ] waits for the message to be read; [ F7 Deny ] is the
@@ -2555,7 +2555,7 @@ _DLG_LONG = [
     ": _ASK-READ S\" Review\" _LONG _LONG-U @ _RB 2 ['] _ON-ANSWER 77 DLG-ASK ;",
     'CREATE _CAPS 2055 ALLOT : _CAP _CAPS 7 + -8 AND ;',
 ]
-_DLG_LONG_CLEANUP = "' _DLG-BOUNDS-SCREEN IS _DLG-BOUNDS-HOOK " + _DLG_CLEANUP
+_DLG_LONG_CLEANUP = "' _DLG-BOUNDS-SCREEN IS DLG-BOUNDS-HOOK " + _DLG_CLEANUP
 
 
 def test_dlg_scrolls_a_long_message_and_says_more_lies_below():
@@ -2598,11 +2598,11 @@ def test_dlg_a_box_with_no_message_row_never_reads_its_message():
     for rows, height in ((4, 2), (6, 4)):
         check(f"no message row in {rows} rows",
             _DLG_SETUP + _DLG_LONG + [
-             f': _TINY 0 0 {rows} 40 ; \' _TINY IS _DLG-BOUNDS-HOOK',
+             f': _TINY 0 0 {rows} 40 ; \' _TINY IS DLG-BOUNDS-HOOK',
              '_LONG-BUILD _ASK-READ DROP DLG-HOST-PAINT DLG-SHOWN WDG-REGION RGN-H .',
              'KEY-END _KEY DLG-HOST-PAINT DLG-SHOWN 0 _DLG-AVAILABLE? .',
              'KEY-F6 _KEY DLG-SHOWN 0<> .',
-             "' _LBOUNDS IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT DLG-SHOWN 0 _DLG-AVAILABLE? .",
+             "' _LBOUNDS IS DLG-BOUNDS-HOOK DLG-HOST-PAINT DLG-SHOWN 0 _DLG-AVAILABLE? .",
              'KEY-F6 _KEY DLG-SHOWN 0<> . _ANS @ . 8888 .',
              _DLG_LONG_CLEANUP], f"{height} 0 -1 -1 0 0 8888")
 

@@ -79,6 +79,7 @@ bar, row 1 for an underline, and rows 2..h-1 for tab content regions
 | `TAB-CAPACITY` | `( widget -- n )` | Get allocated entry capacity |
 | `TAB-KEY@` | `( index widget -- key )` | Get the stable lifetime key for an entry |
 | `TAB-INSTANCE@` | `( widget -- token )` | Get the widget allocation-lifetime identity |
+| `TAB-GENUINE?` | `( widget -- flag )` | A live tab set this module made, by its type, draw and handle words, identity and region. Pure and unguarded, for UIDL's checks of a mounted widget |
 
 ### Callback
 

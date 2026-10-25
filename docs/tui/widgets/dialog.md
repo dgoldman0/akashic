@@ -94,10 +94,10 @@ A host calls these with an application's state current.
 | `DLG-WITHDRAW` | `( -- )` | Close that dialog unanswered and have the host repaint what it covered: the application no longer asks |
 
 The host decides which cell holds the current application's dialog through
-`_DLG-CELL-HOOK`. UIDL-TUI keeps it in each UIDL context, so each
+`DLG-CELL-HOOK`. UIDL-TUI keeps it in each UIDL context, so each
 application has its own and a context freed with an open dialog frees the
-dialog too. `_DLG-BOUNDS-HOOK` gives the area to centre in, and
-`_DLG-DISMISS-HOOK` marks the rectangle a closing dialog leaves for
+dialog too. `DLG-BOUNDS-HOOK` gives the area to centre in, and
+`DLG-DISMISS-HOOK` marks the rectangle a closing dialog leaves for
 repainting.
 
 ### Capture

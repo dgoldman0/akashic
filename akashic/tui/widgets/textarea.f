@@ -1485,6 +1485,12 @@ VARIABLE _TXTA-PT-CODE
     TUCK _TXTA-O-BUF-CAP + !
     _TXTA-O-BUF-A + ! -1 ;
 
+\ TXTA-BUFFER@ ( widget -- buf cap )
+\   The flat buffer TXTA-NEW or TXTA-BUFFER! gave the widget, so that the
+\   caller that owns it can free it.
+: TXTA-BUFFER@  ( widget -- buf cap )
+    DUP _TXTA-O-BUF-A + @ SWAP _TXTA-O-BUF-CAP + @ ;
+
 \ TXTA-ON-CHANGE ( xt widget -- )
 : TXTA-ON-CHANGE  ( xt widget -- )
     _TXTA-O-ON-CHANGE + ! ;
@@ -1756,6 +1762,22 @@ VARIABLE _TXTA-PT-CODE
 \   document/root key and carries no renderer or attachment authority.
 : TXTA-INSTANCE@  ( widget -- token )
     _TXTA-O-INSTANCE + @ ;
+
+\ TXTA-GENUINE? ( widget -- flag )
+\   A live text area this module made: its type, draw and handle words,
+\   identity and region.  Pure and deliberately unguarded, so that UIDL and
+\   the snapshots can check a mounted widget before they read it.
+: TXTA-GENUINE?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _TXTA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-TEXTAREA <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _TXTA-DRAW <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-HANDLE-XT + @ ['] _TXTA-HANDLE <> IF DROP 0 EXIT THEN
+    DUP _TXTA-O-INSTANCE + @ 0= IF DROP 0 EXIT THEN
+    WDG-REGION DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    RGN-SIZE MSPAN-NONWRAPPING? ;
 
 \ =====================================================================
 \  10. Renderer-neutral TEXT_AREA observation
@@ -2348,6 +2370,7 @@ GUARD _txta-guard
 ' TXTA-UNDO      CONSTANT _txta-undo-xt
 ' TXTA-REDO      CONSTANT _txta-redo-xt
 ' TXTA-GB@       CONSTANT _txta-gb-rd-xt
+' TXTA-BUFFER@   CONSTANT _txta-buffer-rd-xt
 ' TXTA-BIND-GB   CONSTANT _txta-bindgb-xt
 ' TXTA-UNBIND-GB CONSTANT _txta-unbindgb-xt
 ' TXTA-BIND-UNDO CONSTANT _txta-bindundo-xt
@@ -2391,6 +2414,7 @@ GUARD _txta-guard
 : TXTA-UNDO      _txta-undo-xt    _txta-guard WITH-GUARD ;
 : TXTA-REDO      _txta-redo-xt    _txta-guard WITH-GUARD ;
 : TXTA-GB@       _txta-gb-rd-xt   _txta-guard WITH-GUARD ;
+: TXTA-BUFFER@   _txta-buffer-rd-xt _txta-guard WITH-GUARD ;
 : TXTA-BIND-GB   _txta-bindgb-xt  _txta-guard WITH-GUARD ;
 : TXTA-UNBIND-GB _txta-unbindgb-xt _txta-guard WITH-GUARD ;
 : TXTA-BIND-UNDO _txta-bindundo-xt _txta-guard WITH-GUARD ;

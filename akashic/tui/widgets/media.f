@@ -538,6 +538,27 @@ DEFER _MEDIA-HANDLE-D
 : _MEDIA-DRAW  ( widget -- )  _MEDIA-DRAW-D ;
 : _MEDIA-HANDLE  ( event widget -- consumed? )  _MEDIA-HANDLE-D ;
 
+\ MEDIA-GENUINE? ( widget -- flag )
+\   A live media widget this module made: its type, draw and handle words
+\   and its region.  Pure and deliberately unguarded, so that UIDL can
+\   check a widget before it reads it.
+: MEDIA-GENUINE?  ( widget -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _MEDIA-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP _WDG-O-TYPE + @ WDG-T-MEDIA <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-DRAW-XT + @ ['] _MEDIA-DRAW <> IF DROP 0 EXIT THEN
+    DUP _WDG-O-HANDLE-XT + @ ['] _MEDIA-HANDLE <> IF DROP 0 EXIT THEN
+    WDG-REGION DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    RGN-SIZE MSPAN-NONWRAPPING? ;
+
+\ MEDIA-DESCRIPTOR-DISJOINT? ( address bytes widget -- flag )
+\   Whether a span lies clear of a media widget's own descriptor; an empty
+\   span always does.  Pure and deliberately unguarded.
+: MEDIA-DESCRIPTOR-DISJOINT?  ( address bytes widget -- flag )
+    _MEDIA-DESC-SIZE MSPAN-OVERLAP? 0= ;
+
 \ MEDIA-NEW ( rgn msrc -- widget )   A media widget showing nothing yet.
 : MEDIA-NEW  ( rgn msrc -- widget )
     _MEDIA-DESC-SIZE ALLOCATE 0<> ABORT" MEDIA-NEW: alloc"

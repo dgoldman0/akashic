@@ -120,6 +120,7 @@ on a link places the caret, so the link's text can still be edited.
 | `TXTA-SET-TEXT` | `( text-a text-u widget -- )` | Set text; clamps to capacity; cursor at end |
 | `TXTA-GET-TEXT` | `( widget -- addr len )` | Allocate a contiguous text snapshot; caller must `FREE` `addr` |
 | `TXTA-LENGTH` | `( widget -- u )` | Bytes of text held, in either mode |
+| `TXTA-BUFFER@` | `( widget -- buf cap )` | The flat buffer `TXTA-NEW` or `TXTA-BUFFER!` gave the widget, so that the caller that owns it can free it |
 | `TXTA-BUFFER!` | `( buf cap widget -- flag )` | Move a flat-mode widget to `cap` bytes at `buf` that already hold its text; false, changing nothing, in GB mode or when `cap` is less than the text |
 | `TXTA-CLEAR` | `( widget -- )` | Clear buffer, reset cursor and scroll |
 
@@ -132,6 +133,7 @@ on a link places the caret, so the link's text can still be edited.
 | `TXTA-CURSOR-CELL` | `( widget -- n )` | Cells from the caret line's start edge to the caret |
 | `TXTA-CURSOR-X` | `( widget -- x )` | The caret's column in the text viewport after the gutter, scrolled |
 | `TXTA-INSTANCE@` | `( widget -- token )` | Stable, nonpointer identity for this allocation's lifetime; not a document or renderer key |
+| `TXTA-GENUINE?` | `( widget -- flag )` | A live text area this module made, by its type, draw and handle words, identity and region. Pure and unguarded, for UIDL's checks of a mounted widget |
 
 ### Caret, Selection, and View
 

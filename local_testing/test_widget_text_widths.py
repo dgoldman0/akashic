@@ -223,7 +223,7 @@ def test_dialogs_break_their_message_by_the_line_rule_and_clip_their_title_by_ce
             # Bounds two cells wider than the dialog: it is laid out 22
             # cells wide, at row 2 and column 1.
             f": _DBOUNDS 0 0 12 {width + 2} ;",
-            "' _DBOUNDS IS _DLG-BOUNDS-HOOK",
+            "' _DBOUNDS IS DLG-BOUNDS-HOOK",
             "_DT _DM _DBTN 1 0 0 DLG-ASK DROP DLG-HOST-PAINT",
             "2 3 18 _WROW 4 3 18 _WROW 5 3 18 _WROW",
             "DLG-SHOWN _DLG-O-ROWS + @ _WN",

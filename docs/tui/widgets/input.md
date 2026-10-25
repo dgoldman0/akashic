@@ -63,6 +63,8 @@ with U+FFFD for anything but printable ASCII.
 |------|-------|-------------|
 | `INP-NEW` | `( rgn buf-a buf-cap -- widget )` | Allocate + init; empty, cursor at 0 |
 | `INP-FREE` | `( widget -- )` | Free the descriptor (not the buffer) |
+| `INP-BUFFER@` | `( widget -- buf cap )` | The buffer `INP-NEW` was given, so that the caller that owns it can free it |
+| `INP-DESCRIPTOR-DISJOINT?` | `( address bytes widget -- flag )` | Whether a span lies clear of the input's own descriptor; an empty span always does |
 
 ### Content
 

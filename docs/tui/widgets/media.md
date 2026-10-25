@@ -126,6 +126,8 @@ only once the picture has been drawn.
 | `MEDIA-VIEW@` | `( widget -- view )` | `MEDIA-V-NONE`, `-PICTURE`, `-TEXT`, `-FACTS`, `-DOCUMENT` or `-CONTENTS`. |
 | `MEDIA-NOTE@` | `( widget -- note )` | Why the facts show: `MEDIA-N-*`. |
 | `MEDIA-VIEW-WIDGET@` | `( widget -- view-widget \| 0 )` | The picture widget, text area, document view or contents' tree the current view draws. |
+| `MEDIA-GENUINE?` | `( widget -- flag )` | A live media widget this module made, by its type, draw and handle words and region. Pure and unguarded, for UIDL's checks of its media elements. |
+| `MEDIA-DESCRIPTOR-DISJOINT?` | `( address bytes widget -- flag )` | Whether a span lies clear of the media widget's own descriptor; an empty span always does. |
 | `MEDIA-CONTENTS-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | Whether a span lies clear of the media descriptor, the entries' next siblings, the document's record and contents, and the contents' tree's descriptor, region and open entries. |
 | `MEDIA-PICTURE@`, `MEDIA-TEXT@`, `MEDIA-DOCUMENT@`, `MEDIA-CONTENTS@` | `( widget -- widget \| 0 )` | The picture widget, the document view and the contents' tree, each made on first use, and the current text area. |
 

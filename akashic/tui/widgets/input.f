@@ -43,7 +43,8 @@
 \  Prefix: INP- (public), _INP- (internal)
 \  Provider: akashic-tui-input
 \  Dependencies: widget.f, draw.f, ../text/utf8.f, ../text/grapheme.f,
-\                ../text/text-row.f, ../text/cell-width.f, keys.f
+\                ../text/text-row.f, ../text/cell-width.f, keys.f,
+\                ../utils/memory-span.f
 
 PROVIDED akashic-tui-input
 
@@ -54,6 +55,7 @@ REQUIRE ../../text/grapheme.f
 REQUIRE ../../text/text-row.f
 REQUIRE ../../text/cell-width.f
 REQUIRE ../keys.f
+REQUIRE ../../utils/memory-span.f
 
 \ =====================================================================
 \ 1. Descriptor layout
@@ -758,8 +760,21 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     3 ROLL _INP-O-SCROLL + @ 0 MAX ;
 
 \ INP-FREE ( widget -- )
+\   Free the widget; the buffer INP-NEW was given stays its caller's.
 : INP-FREE  ( widget -- )
     FREE ;
+
+\ INP-BUFFER@ ( widget -- buf cap )
+\   The buffer INP-NEW was given, so that the caller that owns it can free
+\   it.
+: INP-BUFFER@  ( widget -- buf cap )
+    DUP _INP-O-BUF-A + @ SWAP _INP-O-BUF-CAP + @ ;
+
+\ INP-DESCRIPTOR-DISJOINT? ( address bytes widget -- flag )
+\   Whether a span lies clear of an input widget's own descriptor; an empty
+\   span always does.  Pure and deliberately unguarded.
+: INP-DESCRIPTOR-DISJOINT?  ( address bytes widget -- flag )
+    _INP-DESC-SIZE MSPAN-OVERLAP? 0= ;
 
 \ =====================================================================
 \ 9. Guard
@@ -779,6 +794,7 @@ GUARD _inp-guard
 ' INP-MASK!           CONSTANT _inp-mask-xt
 ' INP-CURSOR-POS      CONSTANT _inp-curpos-xt
 ' INP-FREE            CONSTANT _inp-free-xt
+' INP-BUFFER@         CONSTANT _inp-buffer-xt
 ' INP-MASK@           CONSTANT _inp-mask-at-xt
 ' INP-PLACEHOLDER@    CONSTANT _inp-placeholder-xt
 ' INP-SHOWN-STATE     CONSTANT _inp-shown-xt
@@ -793,6 +809,7 @@ GUARD _inp-guard
 : INP-MASK!           _inp-mask-xt     _inp-guard WITH-GUARD ;
 : INP-CURSOR-POS      _inp-curpos-xt   _inp-guard WITH-GUARD ;
 : INP-FREE            _inp-free-xt     _inp-guard WITH-GUARD ;
+: INP-BUFFER@         _inp-buffer-xt   _inp-guard WITH-GUARD ;
 : INP-MASK@           _inp-mask-at-xt  _inp-guard WITH-GUARD ;
 : INP-PLACEHOLDER@    _inp-placeholder-xt _inp-guard WITH-GUARD ;
 : INP-SHOWN-STATE     _inp-shown-xt    _inp-guard WITH-GUARD ;

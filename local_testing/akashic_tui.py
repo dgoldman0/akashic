@@ -12001,9 +12001,9 @@ CREATE _aui-evs 31 ALLOT
     _aui-screen @ SCR-FREE
     0 _AG-CURRENT-STATE ! ;
 
-' _aui-bounds IS _DLG-BOUNDS-HOOK
+' _aui-bounds IS DLG-BOUNDS-HOOK
 _aui-review-dialog-contract
-' _UTUI-DIALOG-BOUNDS IS _DLG-BOUNDS-HOOK
+' _UTUI-DIALOG-BOUNDS IS DLG-BOUNDS-HOOK
 
 : _boot-agent-source  ( -- )
     SCRIPTED-SOURCE-NEW 0<> ABORT" scripted source allocation failed"

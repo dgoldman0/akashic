@@ -43,7 +43,7 @@ CREATE _dg-graph-s 8199 ALLOT
 CREATE _dg-builder-s UDG-BUILDER-SIZE 7 + ALLOT
 CREATE _dg-summary-s UDG-SUMMARY-SIZE 7 + ALLOT
 CREATE _dg-output-s 8199 ALLOT
-CREATE _dg-throw-widget _WDG-HDR-SIZE ALLOT
+CREATE _dg-throw-widget WDG-HEADER-SIZE ALLOT
 
 : _dg-graph _dg-graph-s 7 + -8 AND ;
 : _dg-builder _dg-builder-s 7 + -8 AND ;

@@ -23,6 +23,7 @@ the signature `( prompt -- )`.
 | `PRM-SET-BOUNDS` | `( row col h w prompt -- )` | Follow a relaid-out status element |
 | `PRM-FREE` | `( prompt -- )` | Free prompt-owned allocations |
 | `PRM-INSTANCE@` | `( prompt -- instance\|0 )` | The prompt's lifetime identity |
+| `PRM-GENUINE?` | `( widget -- flag )` | A live prompt this module made, by its type, draw and handle words, identity, region and input. Pure and unguarded, for UIDL's checks of an overlay |
 | `PRM-FIELD-ROOT` | `( prompt -- row col height width )` | The cells its field takes |
 | `PRM-FIELD-CAPTURE` | `( dst cap prompt -- bytes status )` | Its TEXT field's UFLD model |
 

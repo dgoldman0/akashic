@@ -108,9 +108,9 @@ def test_capture_refuses_short_or_aliased_banks_and_leaves_cramped_dialogs():
         "_DS-D 80 DLG-SHOWN 1024 UDLSN-CAPTURE UDLSN-S-INVALID = _DS-A 2DROP",
         "DLG-SHOWN WDG-REGION RGN-H 6 = _DS-A",
         ": _DS-CRAMPED 0 0 6 80 ;",
-        "' _DS-CRAMPED IS _DLG-BOUNDS-HOOK DLG-HOST-PAINT",
+        "' _DS-CRAMPED IS DLG-BOUNDS-HOOK DLG-HOST-PAINT",
         "1024 _DS-CAPTURE 0= _DS-A 0= _DS-A 0= _DS-A",
-        "' _UTUI-DIALOG-BOUNDS IS _DLG-BOUNDS-HOOK",
+        "' _UTUI-DIALOG-BOUNDS IS DLG-BOUNDS-HOOK",
         "DLG-DISCARD",
     ], 11)
 

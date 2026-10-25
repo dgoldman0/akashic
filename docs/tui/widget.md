@@ -27,6 +27,15 @@ widgets generically without knowing the concrete type.
 | +24 | handle-xt | xt | `( event widget -- consumed? )` — handle input |
 | +32 | flags | bitmask and count | Bits 0-15: visibility, focus, dirty, disabled. Bits 16-63: the revision |
 
+Only a widget's own module reads or writes its fields by offset, the
+header's included. A module that implements a widget kind fills its header,
+with `WDG-INIT` or by offset, and reads it. Everything else, UIDL and
+applications included, uses the words below and each widget's own words. A
+module that checks a widget it did not make proves the header's span,
+`WDG-HEADER-SIZE` bytes, before reading the header through them, and a
+widget of a canonical kind is checked by that kind's own word, such as
+`TXTA-GENUINE?`.
+
 ## The revision
 
 `WDG-REVISION` counts the changes to what a widget shows, so that anything
@@ -90,6 +99,7 @@ changes. Only `widget.f` writes the flags cell after a widget is made.
 
 | Word | Stack | Description |
 |------|-------|-------------|
+| `WDG-HEADER-SIZE` | `( -- 40 )` | The header's size in bytes, for proving a header's span |
 | `WDG-INIT` | `( addr type rgn draw-xt handle-xt -- )` | Fill a caller-owned header; sets flags to VISIBLE \| DIRTY |
 | `WDG-TYPE` | `( widget -- type )` | Get type constant |
 | `WDG-REGION` | `( widget -- rgn )` | Get region |

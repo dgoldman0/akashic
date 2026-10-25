@@ -37,6 +37,7 @@ scroll callback, a right text inset, and a full-rectangle selection flag.
 | `TGRID-CELL-INSET!` | `( right-inset widget -- )` | Reserve trailing cells in each data item's CELL text area; initially zero |
 | `TGRID-FILL-SELECTION!` | `( flag widget -- )` | Reverse the selected item's full CELL rectangle; initially false |
 | `TGRID-INSTANCE@` | `( widget -- token )` | Read the allocation-lifetime identity |
+| `TGRID-GENUINE?` | `( widget -- flag )` | A live text grid this module made, by its type, draw and handle words, identity and region. Pure and unguarded, for UIDL's checks of a mounted widget |
 | `TGRID-TEXT-GRID-MEASURE` | `( root-key builder widget -- bytes status )` | Measure the exact native entry |
 | `TGRID-TEXT-GRID-CAPTURE` | `( root-key dst cap builder widget -- bytes status )` | Copy the entry and patch only the copied root identity, geometry, and state |
 | `TGRID-TEXT-GRID-STORAGE-DISJOINT?` | `( address bytes widget -- flag )` | Reject aliases of live widget, region, model, or module storage |

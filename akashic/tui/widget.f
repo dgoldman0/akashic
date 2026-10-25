@@ -33,6 +33,12 @@
 \  a flag and the revision change in one store; it counts from 0 when the
 \  widget is made and wraps after 2^48 changes.
 \
+\  Only a widget's own module reads or writes its fields by offset, the
+\  header's included: a module that implements a widget kind fills and
+\  reads its header, and everything else uses the words below.  A module
+\  that checks a widget it did not make proves the header's span, of
+\  WDG-HEADER-SIZE bytes, before it reads the header through them.
+\
 \  Prefix: WDG- (public), _WDG- (internal)
 \  Provider: akashic-tui-widget
 \  Dependencies: region.f
@@ -51,7 +57,7 @@ REQUIRE region.f
 24 CONSTANT _WDG-O-HANDLE-XT
 32 CONSTANT _WDG-O-FLAGS
 
-40 CONSTANT _WDG-HDR-SIZE   \ size of header; widget data starts here
+40 CONSTANT WDG-HEADER-SIZE   \ size of header; widget data starts here
 
 \ =====================================================================
 \ 2. Widget type constants

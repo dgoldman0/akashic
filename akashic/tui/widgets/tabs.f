@@ -496,19 +496,28 @@ VARIABLE _TAB-G-BYTES
 VARIABLE _TAB-G-COUNT
 VARIABLE _TAB-G-ACTIVE
 
-: _TAB-GENUINE?  ( widget -- flag )
+\ TAB-GENUINE? ( widget -- flag )
+\   A live tab set this module made: its type, draw and handle words,
+\   identity and region.  Pure and deliberately unguarded, so that UIDL can
+\   check a mounted widget before it reads it.
+: TAB-GENUINE?  ( widget -- flag )
     DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
     DUP _TAB-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
-    DUP _TAB-G-WIDGET !
     DUP _WDG-O-TYPE + @ WDG-T-TABS <> IF DROP 0 EXIT THEN
     DUP _WDG-O-DRAW-XT + @ ['] _TAB-DRAW <> IF DROP 0 EXIT THEN
     DUP _WDG-O-HANDLE-XT + @ ['] _TAB-HANDLE <> IF DROP 0 EXIT THEN
     DUP _TAB-O-INSTANCE + @ 0= IF DROP 0 EXIT THEN
-    DUP WDG-REGION DUP 0= IF 2DROP 0 EXIT THEN
-    DUP 7 AND IF 2DROP 0 EXIT THEN
-    RGN-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
-    DROP
+    WDG-REGION DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    RGN-SIZE MSPAN-NONWRAPPING? ;
+
+\ _TAB-CONSISTENT? ( widget -- flag )
+\   A genuine tab set whose entry array, count and active tab agree, as
+\   its capture and storage checks need.
+: _TAB-CONSISTENT?  ( widget -- flag )
+    DUP TAB-GENUINE? 0= IF DROP 0 EXIT THEN
+    _TAB-G-WIDGET !
     _TAB-G-WIDGET @ _TAB-O-MAX + @ DUP _TAB-G-CAP !
         _TAB-CAPACITY-BYTES? 0= IF DROP 0 EXIT THEN
         _TAB-G-BYTES !
@@ -550,7 +559,7 @@ VARIABLE _TAB-SD-CONTENT
     >R
     2DUP TAB-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
     _TAB-SD-U ! _TAB-SD-A ! R> _TAB-SD-WIDGET !
-    _TAB-SD-WIDGET @ _TAB-GENUINE? 0= IF 0 EXIT THEN
+    _TAB-SD-WIDGET @ _TAB-CONSISTENT? 0= IF 0 EXIT THEN
     _TAB-SD-WIDGET @ _TAB-DESC-SIZE _TAB-SD-OVERLAP? IF 0 EXIT THEN
     _TAB-SD-WIDGET @ WDG-REGION RGN-SIZE _TAB-SD-OVERLAP? IF 0 EXIT THEN
     _TAB-SD-WIDGET @ _TAB-O-ENTRY-BYTES + @ IF
@@ -588,7 +597,7 @@ VARIABLE _TAB-C-TAB-STATE
 VARIABLE _TAB-C-ENTRY
 
 : _TAB-CAPTURE-PREFLIGHT?  ( root destination capacity builder widget -- flag )
-    DUP _TAB-GENUINE? 0= IF 0 EXIT THEN
+    DUP _TAB-CONSISTENT? 0= IF 0 EXIT THEN
     4 PICK 0= IF 0 EXIT THEN
     3 PICK 3 PICK 2 PICK TAB-TABSET-STORAGE-DISJOINT? 0= IF
         0 EXIT

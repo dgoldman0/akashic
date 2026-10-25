@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UIDL_TUI = ROOT / "akashic" / "tui" / "uidl-tui.f"
+WIDGETS = ROOT / "akashic" / "tui" / "widgets"
 CELL = ROOT / "akashic" / "tui" / "cell.f"
 DRAW = ROOT / "akashic" / "tui" / "draw.f"
 REGION = ROOT / "akashic" / "tui" / "region.f"
@@ -414,9 +415,15 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
     span = _definition(source, "_UTUI-CS-SPAN?")
     one = _definition(source, "_UTUI-CS-ONE")
     query = _definition(source, "_UTUI-CS-QUERY-WIDGET")
-    genuine_area = _definition(source, "_UTUI-MC-GENUINE-TEXTAREA?")
-    genuine_grid = _definition(source, "_UTUI-MC-GENUINE-TEXTGRID?")
-    genuine_tabs = _definition(source, "_UTUI-MC-GENUINE-TABS?")
+    genuine_area = _definition(
+        (WIDGETS / "textarea.f").read_text(encoding="utf-8"), "TXTA-GENUINE?"
+    )
+    genuine_grid = _definition(
+        (WIDGETS / "text-grid.f").read_text(encoding="utf-8"), "TGRID-GENUINE?"
+    )
+    genuine_tabs = _definition(
+        (WIDGETS / "tabs.f").read_text(encoding="utf-8"), "TAB-GENUINE?"
+    )
     genuine = _definition(source, "_UTUI-MC-GENUINE-COLLECTION?")
     direct_family = _definition(source, "_UTUI-VC-DIRECT-FAMILY@")
     tab_children = _definition(source, "_UTUI-VC-TAB-CHILDREN?")
@@ -453,9 +460,14 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
         "TAB-TABSET-STORAGE-DISJOINT?",
     ):
         assert check in query
-    assert "WDG-T-TEXTAREA" in genuine_area
-    assert "['] _TXTA-DRAW" in genuine_area
-    assert "['] _TXTA-HANDLE" in genuine_area
+    for exact_area_field in (
+        "_TXTA-DESC-SIZE",
+        "WDG-T-TEXTAREA",
+        "['] _TXTA-DRAW",
+        "['] _TXTA-HANDLE",
+        "_TXTA-O-INSTANCE",
+    ):
+        assert exact_area_field in genuine_area
     for exact_grid_field in (
         "_TGRID-DESC-SIZE",
         "_WDG-O-TYPE + @",
@@ -471,9 +483,15 @@ def test_collection_observation_is_exact_visitor_scoped_and_alias_safe() -> None
         "_TAB-O-INSTANCE",
     ):
         assert exact_tabs_field in genuine_tabs
-    assert "_UTUI-MC-GENUINE-TEXTAREA?" in genuine
-    assert "_UTUI-MC-GENUINE-TEXTGRID?" in genuine
-    assert "_UTUI-MC-GENUINE-TABS?" in genuine
+    for kind_check in (
+        "TXTA-GENUINE?",
+        "TGRID-GENUINE?",
+        "LST-GENUINE?",
+        "TREE-GENUINE?",
+        "TAB-GENUINE?",
+    ):
+        assert kind_check in genuine
+    assert "TXTA-GENUINE?" in prepare_area
     assert "_UTUI-MC-GENUINE-COLLECTION?" in query
 
     assert "_UTUI-RST-ACTIVE @ 0=" in prepare
@@ -858,17 +876,17 @@ def test_mounted_identity_is_kind_qualified_before_root_reuse() -> None:
     for widget_type, genuine_name, semantic_kind in (
         (
             "WDG-T-TEXTAREA",
-            "_UTUI-MC-GENUINE-TEXTAREA?",
+            "TXTA-GENUINE?",
             "_UTUI-MC-K-TEXT-AREA",
         ),
         (
             "WDG-T-TEXTGRID",
-            "_UTUI-MC-GENUINE-TEXTGRID?",
+            "TGRID-GENUINE?",
             "_UTUI-MC-K-TEXT-GRID",
         ),
         (
             "WDG-T-TABS",
-            "_UTUI-MC-GENUINE-TABS?",
+            "TAB-GENUINE?",
             "_UTUI-MC-K-TABSET",
         ),
         (
@@ -880,17 +898,21 @@ def test_mounted_identity_is_kind_qualified_before_root_reuse() -> None:
         type_at = kind.index(widget_type)
         assert type_at < kind.index(genuine_name, type_at)
         assert type_at < kind.index(semantic_kind, type_at)
-    assert kind.index("_WDG-HDR-SIZE MSPAN-NONWRAPPING?") < kind.index(
-        "_WDG-O-TYPE + @"
+    assert kind.index("WDG-HEADER-SIZE MSPAN-NONWRAPPING?") < kind.index(
+        "DUP WDG-TYPE"
     )
-    for genuine_name, descriptor_size in (
-        ("_UTUI-MC-GENUINE-TEXTAREA?", "_TXTA-DESC-SIZE"),
-        ("_UTUI-MC-GENUINE-TEXTGRID?", "_TGRID-DESC-SIZE"),
-        ("_UTUI-MC-GENUINE-TABS?", "_TAB-DESC-SIZE"),
+    # Each kind's own check proves its descriptor's span before it reads a
+    # field of it.
+    for module, genuine_name, descriptor_size in (
+        ("textarea.f", "TXTA-GENUINE?", "_TXTA-DESC-SIZE"),
+        ("text-grid.f", "TGRID-GENUINE?", "_TGRID-DESC-SIZE"),
+        ("tabs.f", "TAB-GENUINE?", "_TAB-DESC-SIZE"),
     ):
-        genuine_body = _definition(source, genuine_name)
-        assert genuine_body.index("_WDG-O-TYPE + @") < genuine_body.index(
-            descriptor_size
+        genuine_body = _definition(
+            (WIDGETS / module).read_text(encoding="utf-8"), genuine_name
+        )
+        assert genuine_body.index(descriptor_size) < genuine_body.index(
+            "_WDG-O-TYPE + @"
         )
     assert "_UTUI-MC-WIDGET-KIND@ 0<>" in semantic
     assert "DGRAPH-INSTANCE@" in generic_instance
@@ -1083,10 +1105,10 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
         source, "_UTUI-CS-CLEAR"
     )
     assert "_UTUI-WOWNER-CALLER <>" in one
-    assert "_WDG-HDR-SIZE MSPAN-NONWRAPPING? 0=" in one
-    assert "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?" in one
+    assert "WDG-HEADER-SIZE MSPAN-NONWRAPPING? 0=" in one
+    assert "WDG-HEADER-SIZE _UTUI-CS-RANGE-DISJOINT?" in one
     assert one.index(
-        "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?"
+        "WDG-HEADER-SIZE _UTUI-CS-RANGE-DISJOINT?"
     ) < one.rindex("_UTUI-CS-QUERY-WIDGET")
     graph_at = query.index("_UTUI-MC-GENUINE-DATA-GRAPHICS?")
     graph_disjoint_at = query.index(
@@ -1103,7 +1125,7 @@ def test_collection_storage_preflight_covers_mounted_private_authorities() -> No
         "_UTUI-MC-REL-SIZE _UTUI-CS-RANGE-DISJOINT?",
         "_UTUI-CS-REGION-CHAIN?",
         "_UTUI-CS-QUERY-WIDGET",
-        "_WDG-HDR-SIZE _UTUI-CS-RANGE-DISJOINT?",
+        "WDG-HEADER-SIZE _UTUI-CS-RANGE-DISJOINT?",
         "_UTUI-CS-REL-SEEN @ _UTUI-MC-COUNT @ <>",
     ):
         assert required in relations
