@@ -42,6 +42,11 @@ The facts view says the file's name, its kind and size (for example
 
 A file that could not be opened shows only its name and the note.
 
+What the widget shows is its view's, so its revision moves when the view
+changes, as well as when it changes itself: it compares the view's revision
+with the one it last counted after it passes on an event and after it draws,
+and its service pass counts what the view's decoding changed.
+
 ### Files and memory
 
 The widget owns the file it shows: `MEDIA-OPEN-VFS` opens it, and the next

@@ -11,12 +11,12 @@ left behind changes what the first one shows.  Then every word that only
 reads the widget, captures it, checks it or sets what it calls is called on
 the first widget, and moves nothing.
 
-The kinds are the thirteen something uses: list, tree, tabs, text area,
-input, prompt, dialog, picture, text grid, field, data graphics, explorer
-and canvas.  A prompt and an explorer are made of other widgets, and their
-words that change an inner widget move only its revision, so what they show
-changed when their own revision or an inner widget's moved; their scenarios
-check the two added.
+The kinds are the fifteen something uses: list, tree, tabs, text area,
+input, prompt, dialog, picture, text grid, field, data graphics, explorer,
+canvas, media and the document view.  A widget that shows others counts
+their changes in its own revision, so the scenarios of the prompt, the
+explorer and the media widget also pass keys through them to the widgets
+they hold.
 
 test_every_public_word_is_placed holds each module's public words against
 these lists, so a word added later is placed here: among the changes when it
@@ -426,13 +426,14 @@ KINDS["prompt"] = Kind(
         "PRM-FIELD-CAPTURE",
     ),
     other=("PRM-NEW", "PRM-FREE"),
-    minimum=16,
+    minimum=18,
     scenario=r'''
-\ A prompt shows its label and its input, so what it shows changed when
-\ either revision moved.
-: _PR-REV  ( prompt -- n )  DUP WDG-REVISION SWAP _PRM-O-INPUT + @ WDG-REVISION + ;
-' _PR-REV IS _WR-REV
 CREATE _PR-BUF-A 64 ALLOT  CREATE _PR-BUF-B 64 ALLOT
+CREATE _PR-EV 24 ALLOT
+\ A character typed reaches the prompt's input through the prompt.
+: _PR-CHAR  ( cp -- )
+    _PR-EV 8 + ! 0 _PR-EV 16 + ! KEY-T-CHAR _PR-EV !
+    _PR-EV _WR-W @ WDG-HANDLE DROP ;
 : _PS1  S" Name:" S" abc" _WR-W @ PRM-SHOW ;     ' _PS1 _WR-STEP
 : _PS2  200 17 _WR-W @ PRM-COLORS! ;             ' _PS2 _WR-STEP
 : _PS3  42 _WR-W @ PRM-MASK! ;                   ' _PS3 _WR-STEP
@@ -440,10 +441,13 @@ CREATE _PR-BUF-A 64 ALLOT  CREATE _PR-BUF-B 64 ALLOT
 : _PS5  0 0 1 25 _WR-W @ PRM-SET-BOUNDS ;        ' _PS5 _WR-STEP
 : _PS6  _WR-W @ PRM-HIDE ;                       ' _PS6 _WR-STEP
 : _PS7  S" Again:" S" xy" _WR-W @ PRM-SHOW ;     ' _PS7 _WR-STEP
+: _PS8  122 _PR-CHAR ;                           ' _PS8 _WR-STEP
 0 0 1 30 RGN-NEW _PR-BUF-A 64 PRM-NEW CONSTANT _PR-A
 0 0 1 30 RGN-NEW _PR-BUF-B 64 PRM-NEW CONSTANT _PR-B
 _PR-A _PR-B _WR-RUN
 _PR-A _WR-W !
+\ Bounds it already has change nothing.
+' _PS5 _WR-STILL
 : _PQ1  _WR-W @ PRM-ACTIVE? DROP ;               ' _PQ1 _WR-STILL
 : _PQ2  _WR-W @ PRM-GET-TEXT 2DROP ;             ' _PQ2 _WR-STILL
 : _PQ3  ['] _WR-NOP1 _WR-W @ PRM-ON-SUBMIT ;     ' _PQ3 _WR-STILL
@@ -789,14 +793,15 @@ KINDS["explorer"] = Kind(
         "EXPL-SHOW-HIDDEN?", "EXPL-VFS", "EXPL-TREE", "EXPL-DELETE",
     ),
     other=("EXPL-NEW", "EXPL-FREE", "EXPL-ENTRY-KEY"),
-    minimum=16,
+    minimum=20,
     scenario=r'''
-\ An explorer shows its tree, and its rename input while it renames, so
-\ what it shows changed when any of their revisions moved.
-: _EX-REV  ( explorer -- n )
-    DUP WDG-REVISION  OVER EXPL-TREE WDG-REVISION +
-    SWAP _EXPL-O-REN-INP + @ ?DUP IF WDG-REVISION + THEN ;
-' _EX-REV IS _WR-REV
+\ Keys reach the explorer's tree, and its rename input while it renames,
+\ through the explorer.
+CREATE _EX-EV 24 ALLOT
+: _EX-EVENT  ( code type -- )
+    _EX-EV ! _EX-EV 8 + ! 0 _EX-EV 16 + !  _EX-EV _WR-W @ WDG-HANDLE DROP ;
+: _EX-KEY  ( code -- )  KEY-T-SPECIAL _EX-EVENT ;
+: _EX-CHAR  ( cp -- )  KEY-T-CHAR _EX-EVENT ;
 \ Each explorer has its own file system, made the same: a directory with
 \ a file in it, a file and a hidden file.
 : _EX-VFS  ( -- vfs )
@@ -817,7 +822,11 @@ KINDS["explorer"] = Kind(
 : _ES6  _WR-W @ EXPL-NEW-DIR ;                ' _ES6 _WR-STEP
 ' _ES1 _WR-STEP
 : _ES8  _WR-W @ EXPL-VFS V.ROOT @ _WR-W @ EXPL-ROOT! ;    ' _ES8 _WR-STEP
+: _ES10  KEY-RIGHT _EX-KEY ;                  ' _ES10 _WR-STEP
+: _ES11  KEY-DOWN _EX-KEY ;                   ' _ES11 _WR-STEP
 : _ES9  _WR-W @ EXPL-RENAME ;                 ' _ES9 _WR-STEP
+: _ES12  120 _EX-CHAR ;                       ' _ES12 _WR-STEP
+: _ES13  KEY-ESC _EX-KEY ;                    ' _ES13 _WR-STEP
 _EX-MAKE CONSTANT _EX-A  _EX-MAKE CONSTANT _EX-B
 _EX-A _EX-B _WR-RUN
 _EX-A _WR-W !
@@ -829,6 +838,194 @@ _EX-A _WR-W !
 : _EQ6  _WR-W @ EXPL-TREE DROP ;              ' _EQ6 _WR-STILL
 \ Deleting asks first, in a dialog of its own; the explorer is as it was.
 : _EQ7  _WR-W @ EXPL-DELETE ;                 ' _EQ7 _WR-STILL
+''',
+)
+
+
+_MARKDOWN = (
+    "# One\n\nThe first paragraph, with a few words in it.\n\n"
+    "## Two\n\nThe second paragraph, long enough that it takes more than "
+    "one row of the view to show it all.\n\n"
+    "## Three\n\nThe third paragraph.\n\nThe last words.\n"
+)
+
+# A memory source that allocates from the heap.
+MEMORY_SOURCE = r'''
+CREATE _FS-MS-M MSRC-SIZE 7 + ALLOT  : _FS-MS  _FS-MS-M 7 + -8 AND ;
+: _FS-ALLOC  ( bytes ctx -- addr|0 )  DROP ALLOCATE IF DROP 0 THEN ;
+: _FS-FREE  ( addr bytes ctx -- )  2DROP FREE ;
+' _FS-ALLOC ' _FS-FREE 0 0 _FS-MS MSRC-INIT
+'''
+
+# A file system per widget, which _FS-PUT writes files into.
+FILES = MEMORY_SOURCE + r'''
+VARIABLE _FS-V
+: _FS-NEW  ( -- vfs )
+    524288 A-XMEM ARENA-NEW IF -1 THROW THEN
+    VFS-RAM-BINDING 0 VFS-NEW ?DUP IF THROW THEN ;
+: _FS-PUT  ( src u path-a path-u -- )
+    2DUP _FS-V @ VFS-CREATE 0= IF -101 THROW THEN
+    VFS-FF-WRITE _FS-V @ VFS-OPEN? ?DUP IF THROW THEN
+    DUP >R VFS-WRITE-EXACT IF -102 THROW THEN  R> VFS-CLOSE ;
+'''
+
+
+KINDS["media"] = Kind(
+    modules=("tui/semantic-collections.f", "tui/widgets/media.f"),
+    change=(
+        "MEDIA-OPEN-VFS", "MEDIA-ALT!", "MEDIA-CLEAR", "MEDIA-SERVICE",
+    ),
+    same=(
+        "MEDIA-PATH@", "MEDIA-NAME@", "MEDIA-KIND@", "MEDIA-SIZE@",
+        "MEDIA-VIEW@", "MEDIA-NOTE@", "MEDIA-PICTURE@", "MEDIA-TEXT@",
+        "MEDIA-DOCUMENT@", "MEDIA-CONTENTS@", "MEDIA-VIEW-WIDGET@",
+        "MEDIA-CONTENTS-STORAGE-DISJOINT?", "MEDIA-GENUINE?",
+        "MEDIA-DESCRIPTOR-DISJOINT?", "MEDIA-PENDING?", "MEDIA-READER!",
+        "MEDIA-FOLLOW!",
+    ),
+    other=("MEDIA-NEW", "MEDIA-FREE"),
+    minimum=28,
+    scenario=FILES + _bytes("_MD-TEXT", b"first\nsecond\nthird\nfourth\n")
+    + _bytes("_MD-PICTURE", _PICTURE) + _string("_MD-DOC", _MARKDOWN) + r'''
+\ Each widget has its own file system holding a text file, a picture and a
+\ Markdown document, and what it shows is its view's.  Keys reach the view
+\ through the widget.
+VARIABLE _MD-V-A  VARIABLE _MD-V-B
+: _MD-FILES  ( vfs -- )
+    _FS-V !
+    _MD-TEXT$ S" /a.txt" _FS-PUT  _MD-PICTURE$ S" /p.qoi" _FS-PUT
+    _MD-DOC$ S" /d.md" _FS-PUT ;
+_FS-NEW DUP _MD-V-A ! _MD-FILES  _FS-NEW DUP _MD-V-B ! _MD-FILES
+0 0 6 36 RGN-NEW _FS-MS MEDIA-NEW CONSTANT _MD-A
+0 0 6 36 RGN-NEW _FS-MS MEDIA-NEW CONSTANT _MD-B
+: _MD-VFS  ( -- vfs )  _WR-W @ _MD-A = IF _MD-V-A ELSE _MD-V-B THEN @ ;
+: _MD-OPEN  ( path-a path-u -- )  _MD-VFS _WR-W @ MEDIA-OPEN-VFS DROP ;
+CREATE _MD-EV 24 ALLOT
+: _MD-EVENT  ( code type -- )
+    _MD-EV ! _MD-EV 8 + ! 0 _MD-EV 16 + !  _MD-EV _WR-W @ WDG-HANDLE DROP ;
+: _MS1  S" /a.txt" _MD-OPEN ;                    ' _MS1 _WR-STEP
+: _MS2  KEY-UP KEY-T-SPECIAL _MD-EVENT ;         ' _MS2 _WR-STEP
+: _MS3  S" dusk" _WR-W @ MEDIA-ALT! ;            ' _MS3 _WR-STEP
+: _MS4  _WR-W @ MEDIA-CLEAR ;                    ' _MS4 _WR-STEP
+: _MS5  S" /p.qoi" _MD-OPEN ;                    ' _MS5 _WR-STEP
+\ A draw asks for the picture's copy, which a service pass decodes.
+: _MS-DRAW  _WR-W @ WDG-DRAW ;                   ' _MS-DRAW _WR-PREP
+: _MS6  _WR-W @ MEDIA-SERVICE DROP ;             ' _MS6 _WR-STEP
+: _MS7  S" /d.md" _MD-OPEN ;                     ' _MS7 _WR-STEP
+: _MS8  99 KEY-T-CHAR _MD-EVENT ;                ' _MS8 _WR-STEP
+: _MS9  KEY-ESC KEY-T-SPECIAL _MD-EVENT ;        ' _MS9 _WR-STEP
+: _MS10  KEY-DOWN KEY-T-SPECIAL _MD-EVENT ;     ' _MS10 _WR-STEP
+_MD-A _MD-B _WR-RUN
+_MD-A _WR-W !
+: _MQ1  _WR-W @ MEDIA-PATH@ 2DROP ;              ' _MQ1 _WR-STILL
+: _MQ2  _WR-W @ MEDIA-NAME@ 2DROP ;              ' _MQ2 _WR-STILL
+: _MQ3  _WR-W @ MEDIA-KIND@ DROP ;               ' _MQ3 _WR-STILL
+: _MQ4  _WR-W @ MEDIA-SIZE@ DROP ;               ' _MQ4 _WR-STILL
+: _MQ5  _WR-W @ MEDIA-VIEW@ DROP ;               ' _MQ5 _WR-STILL
+: _MQ6  _WR-W @ MEDIA-NOTE@ DROP ;               ' _MQ6 _WR-STILL
+: _MQ7  _WR-W @ MEDIA-PICTURE@ DROP ;            ' _MQ7 _WR-STILL
+: _MQ8  _WR-W @ MEDIA-TEXT@ DROP ;               ' _MQ8 _WR-STILL
+: _MQ9  _WR-W @ MEDIA-DOCUMENT@ DROP ;           ' _MQ9 _WR-STILL
+: _MQ10  _WR-W @ MEDIA-CONTENTS@ DROP ;          ' _MQ10 _WR-STILL
+: _MQ11  _WR-W @ MEDIA-VIEW-WIDGET@ DROP ;       ' _MQ11 _WR-STILL
+: _MQ12  _WR-OUT 4096 _WR-W @ MEDIA-CONTENTS-STORAGE-DISJOINT? DROP ;
+' _MQ12 _WR-STILL
+: _MQ13  _WR-W @ MEDIA-GENUINE? DROP ;           ' _MQ13 _WR-STILL
+: _MQ14  _WR-OUT 4096 _WR-W @ MEDIA-DESCRIPTOR-DISJOINT? DROP ;
+' _MQ14 _WR-STILL
+: _MQ15  _WR-W @ MEDIA-PENDING? DROP ;           ' _MQ15 _WR-STILL
+\ The reader it has already for Markdown, and no link follower.
+: _MQ16  MD-READER MEDIA-K-MARKDOWN _WR-W @ MEDIA-READER! ;   ' _MQ16 _WR-STILL
+: _MQ17  0 0 _WR-W @ MEDIA-FOLLOW! ;             ' _MQ17 _WR-STILL
+''',
+)
+
+
+def _pages_pdf() -> bytes:
+    from test_pdf_document import pages_pdf
+    return pages_pdf()
+
+
+_FIGURED = _MARKDOWN.replace(
+    "## Two\n", "![A sunset](p.qoi)\n\n## Two\n"
+)
+
+
+KINDS["document view"] = Kind(
+    modules=(
+        "tui/semantic-collections.f", "markup/markdown.f", "pdf/document.f",
+        "tui/widgets/document.f",
+    ),
+    change=(
+        "DOCV-OWNER!", "DOCV-DOCUMENT!", "DOCV-SERVICE", "DOCV-SCROLL",
+        "DOCV-GO", "DOCV-GO-ENTRY", "DOCV-FOLLOW", "DOCV-GO-PART",
+    ),
+    same=(
+        "DOCV-DOCUMENT@", "DOCV-REVISION@", "DOCV-TOP@", "DOCV-SHOWN",
+        "DOCV-ROWS", "DOCV-PENDING?", "DOCV-GENUINE?", "DOCV-FIGURE-COUNT",
+        "DOCV-FIGURE@", "DOCV-FIGURE-PICTURE",
+        "DOCV-DOCUMENT-STORAGE-DISJOINT?", "DOCV-DOCUMENT-MEASURE",
+        "DOCV-DOCUMENT-CAPTURE",
+    ),
+    other=("DOCV-NEW", "DOCV-FREE", "DOCV-WORK?", "DOCV-STORAGE-DISJOINT?"),
+    minimum=24,
+    scenario=MEMORY_SOURCE + _string("_DV-TEXT", _FIGURED)
+    + _bytes("_DV-PICTURE", _PICTURE) + _bytes("_DV-PDF", _pages_pdf()) + r'''
+\ Each view shows its own copies of a Markdown document with a figure,
+\ whose picture its owner gives from memory, and of a PDF in pages.
+: _DV-RESOLVE  ( name-a name-u ctx -- source|0 )
+    DROP 2DROP  MEDSRC-SIZE _FS-MS MSRC-ALLOC DUP 0= IF EXIT THEN
+    >R _DV-PICTURE$ R@ MEDSRC-MEMORY R> ;
+: _DV-RELEASE  ( source ctx -- )
+    DROP DUP MEDSRC-RELEASE MEDSRC-SIZE _FS-MS MSRC-FREE ;
+: _DV-OPEN  ( a u reader -- doc )
+    >R MEDSRC-SIZE _FS-MS MSRC-ALLOC DUP 0= ABORT" no source"
+    DUP >R MEDSRC-MEMORY R> R>
+    DOC-SIZE _FS-MS MSRC-ALLOC DUP 0= ABORT" no document"
+    >R _FS-MS R@ DOC-OPEN ABORT" not read" R> ;
+_DV-TEXT$ MD-READER _DV-OPEN CONSTANT _DV-MD-A
+_DV-TEXT$ MD-READER _DV-OPEN CONSTANT _DV-MD-B
+_DV-PDF$ PDF-DOC-READER _DV-OPEN CONSTANT _DV-PDF-A
+_DV-PDF$ PDF-DOC-READER _DV-OPEN CONSTANT _DV-PDF-B
+0 0 6 30 RGN-NEW _FS-MS DOCV-NEW CONSTANT _DV-A
+0 0 6 30 RGN-NEW _FS-MS DOCV-NEW CONSTANT _DV-B
+: _DV-MD  ( -- doc )  _WR-W @ _DV-A = IF _DV-MD-A ELSE _DV-MD-B THEN ;
+: _DV-PAGES  ( -- doc )  _WR-W @ _DV-A = IF _DV-PDF-A ELSE _DV-PDF-B THEN ;
+: _VS1  ['] _DV-RESOLVE ['] _DV-RELEASE 0 0 _WR-W @ DOCV-OWNER! ;
+' _VS1 _WR-STEP
+: _VS2  _DV-MD _WR-W @ DOCV-DOCUMENT! ;           ' _VS2 _WR-STEP
+\ A draw gives the figure in view its picture, which asks for its copy;
+\ the service pass decodes it.
+: _VS-DRAW  _WR-W @ WDG-DRAW ;                    ' _VS-DRAW _WR-PREP
+' _VS-DRAW _WR-PREP
+: _VS3  _WR-W @ DOCV-SERVICE DROP ;               ' _VS3 _WR-STEP
+: _VS4  3 _WR-W @ DOCV-SCROLL ;                   ' _VS4 _WR-STEP
+: _VS5  0 _WR-W @ DOCV-GO ;                       ' _VS5 _WR-STEP
+\ An entry is one of the contents, which are made when first asked for.
+: _VS-CONTENTS  _DV-MD DOC-CONTENTS 2DROP ;       ' _VS-CONTENTS _WR-PREP
+: _VS6  1 _WR-W @ DOCV-GO-ENTRY ;                 ' _VS6 _WR-STEP
+: _VS7  S" #three" _WR-W @ DOCV-FOLLOW ;          ' _VS7 _WR-STEP
+: _VS8  _DV-PAGES _WR-W @ DOCV-DOCUMENT! ;        ' _VS8 _WR-STEP
+' _VS-DRAW _WR-PREP
+' _VS3 _WR-STEP
+: _VS9  1 _WR-W @ DOCV-GO-PART ;                  ' _VS9 _WR-STEP
+_DV-A _DV-B _WR-RUN
+_DV-A _WR-W !
+: _VQ1  _WR-W @ DOCV-DOCUMENT@ DROP ;             ' _VQ1 _WR-STILL
+: _VQ2  _WR-W @ DOCV-REVISION@ DROP ;             ' _VQ2 _WR-STILL
+: _VQ3  _WR-W @ DOCV-TOP@ 2DROP ;                 ' _VQ3 _WR-STILL
+: _VQ4  _WR-W @ DOCV-SHOWN 2DROP ;                ' _VQ4 _WR-STILL
+: _VQ5  0 _WR-W @ DOCV-ROWS DROP ;                ' _VQ5 _WR-STILL
+: _VQ6  _WR-W @ DOCV-PENDING? DROP ;              ' _VQ6 _WR-STILL
+: _VQ7  _WR-W @ DOCV-GENUINE? DROP ;              ' _VQ7 _WR-STILL
+: _VQ8  _WR-W @ DOCV-FIGURE-COUNT DROP ;          ' _VQ8 _WR-STILL
+: _VQ9  0 _WR-W @ DOCV-FIGURE@ 2DROP ;            ' _VQ9 _WR-STILL
+: _VQ10  5 _WR-W @ DOCV-FIGURE-PICTURE DROP ;     ' _VQ10 _WR-STILL
+: _VQ11  _WR-OUT 4096 _WR-W @ DOCV-DOCUMENT-STORAGE-DISJOINT? DROP ;
+' _VQ11 _WR-STILL
+: _VQ12  5 _WR-BLD _WR-W @ DOCV-DOCUMENT-MEASURE 2DROP ;   ' _VQ12 _WR-STILL
+: _VQ13  5 _WR-OUT 4096 _WR-BLD _WR-W @ DOCV-DOCUMENT-CAPTURE 2DROP ;
+' _VQ13 _WR-STILL
 ''',
 )
 

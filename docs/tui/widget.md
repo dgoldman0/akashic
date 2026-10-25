@@ -57,6 +57,14 @@ its host's bounds before it paints. A paint never marks a widget dirty only
 to make it draw, since `WDG-DRAW` draws a visible widget whether or not it
 is dirty.
 
+A widget that shows other widgets counts their changes in its own revision,
+so a reader never needs to know what a widget holds. The prompt shows its
+input, the explorer its tree and its rename input, and the media widget its
+view. Each keeps the inner revisions it last counted, and moves its own when
+one of them has moved: after it passes on a key, after it draws, and in its
+own words that change an inner widget. A word that gives it another inner
+widget marks it itself.
+
 A widget word that may mark once per dot or glyph, while its module's guard
 is held, uses `_WDG-CHANGED`, which is `WDG-DIRTY` without the guard a
 `GUARDED` build wraps around it.

@@ -88,7 +88,7 @@ the VFS may evict an entry and later load it into a new inode.  The tree keeps i
 expansion and selection by these keys, and a rich renderer names entries
 by them in item events.
 
-## Descriptor Layout (104 bytes)
+## Descriptor Layout (120 bytes)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -101,6 +101,13 @@ by them in item events.
 | +80 | rename-input | address or 0 | `INP-*` widget for inline rename (0 when inactive) |
 | +88 | flags2 | u | Bit 0: show-hidden, Bit 1: rename-active |
 | +96 | rename-buf | address | 256-byte rename buffer (allocated at construction) |
+| +104 | delete | address or 0 | The entry a delete question asks about |
+| +112 | seen | u | The tree's and the rename input's revisions it last counted |
+
+The explorer's revision moves when its tree or rename input changes, as well
+as when it changes itself: it compares their revisions with those it last
+counted after it passes on an event and after it draws, and its own words
+that change the tree count the change.
 
 ### Flags2 Bits
 

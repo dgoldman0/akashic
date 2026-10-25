@@ -52,7 +52,8 @@ REQUIRE ../../utils/memory-span.f
 104 CONSTANT _PRM-O-BG
 112 CONSTANT _PRM-O-INSTANCE    \ process-lifetime identity, never 0
 120 CONSTANT _PRM-O-REVISION    \ advances with the label and the bounds
-128 CONSTANT _PRM-DESC-SIZE
+128 CONSTANT _PRM-O-INPUT-SEEN  \ the input's revision it has counted
+136 CONSTANT _PRM-DESC-SIZE
 
 VARIABLE _PRM-NEXT-INSTANCE
 0 _PRM-NEXT-INSTANCE !
@@ -60,6 +61,17 @@ VARIABLE _PRM-NEXT-INSTANCE
 VARIABLE _PRM-W
 VARIABLE _PRM-START
 VARIABLE _PRM-WIDTH
+
+\ What a prompt shows includes its input, so a change of the input moves
+\ the prompt's revision too.  _PRM-FOLLOW counts a change the input has
+\ made since the prompt last looked; _PRM-SEEN! takes the input as it is,
+\ for a word that marks the prompt itself.
+: _PRM-SEEN!  ( prompt -- )
+    DUP _PRM-O-INPUT + @ WDG-REVISION SWAP _PRM-O-INPUT-SEEN + ! ;
+: _PRM-FOLLOW  ( prompt -- )
+    DUP _PRM-O-INPUT + @ WDG-REVISION
+    2DUP SWAP _PRM-O-INPUT-SEEN + @ = IF 2DROP EXIT THEN
+    OVER _PRM-O-INPUT-SEEN + !  _WDG-CHANGED ;
 
 : _PRM-SYNC-INPUT-RGN  ( prompt -- )
     _PRM-W !
@@ -88,8 +100,9 @@ VARIABLE _PRM-WIDTH
     DUP _PRM-O-LABEL-A + @
     OVER _PRM-O-LABEL-U + @
     0 1 DRW-TEXT
-    _PRM-O-INPUT + @ WDG-DRAW
-    DRW-STYLE-RESET ;
+    DUP _PRM-O-INPUT + @ WDG-DRAW
+    DRW-STYLE-RESET
+    _PRM-FOLLOW ;
 
 \ A visible prompt replaces the semantic status row painted immediately
 \ before the applet callback.  Keep that ordinary painter order explicit so
@@ -122,7 +135,8 @@ VARIABLE _PRM-HND-W
             -1 EXIT
         THEN
     THEN
-    _PRM-HND-W @ _PRM-O-INPUT + @ WDG-HANDLE ;
+    _PRM-HND-W @ _PRM-O-INPUT + @ WDG-HANDLE
+    _PRM-HND-W @ _PRM-FOLLOW ;
 
 VARIABLE _PRM-N-RGN
 VARIABLE _PRM-N-BUF
@@ -143,6 +157,7 @@ VARIABLE _PRM-N-INP
     DUP WDG-T-PROMPT _PRM-N-RGN @
         ['] _PRM-DRAW ['] _PRM-HANDLE WDG-INIT
     _PRM-N-INP @  OVER _PRM-O-INPUT + !
+    DUP _PRM-SEEN!
     _PRM-N-IRGN @ OVER _PRM-O-INPUT-RGN + !
     0 OVER _PRM-O-LABEL-A + !
     0 OVER _PRM-O-LABEL-U + !
@@ -169,6 +184,7 @@ VARIABLE _PRM-S-LU
         _PRM-S-W @ _PRM-O-INPUT + @ INP-SET-TEXT
     -1 _PRM-S-W @ _PRM-O-ACTIVE + !
     1 _PRM-S-W @ _PRM-O-REVISION + +!
+    _PRM-S-W @ _PRM-SEEN!
     _PRM-S-W @ WDG-DIRTY ;
 
 : PRM-HIDE  ( prompt -- )
@@ -194,18 +210,18 @@ VARIABLE _PRM-S-LU
     R> WDG-DIRTY ;
 
 : PRM-MASK!  ( codepoint prompt -- )
-    _PRM-O-INPUT + @ INP-MASK! ;
+    DUP >R _PRM-O-INPUT + @ INP-MASK!  R> _PRM-FOLLOW ;
 
 : PRM-WIPE  ( prompt -- )
-    _PRM-O-INPUT + @ INP-WIPE ;
+    DUP _PRM-O-INPUT + @ INP-WIPE  _PRM-FOLLOW ;
 
 : PRM-SET-BOUNDS  ( row col h w prompt -- )
     >R
     R@ WDG-REGION >R
-    \ Unchanged bounds leave the published field as it was.
+    \ Unchanged bounds change nothing; its callers draw it themselves.
     3 PICK R@ _RGN-O-ROW + @ = 3 PICK R@ _RGN-O-COL + @ = AND
     2 PICK R@ _RGN-O-H + @ = AND OVER R@ _RGN-O-W + @ = AND IF
-        2DROP 2DROP R> DROP R> WDG-DIRTY EXIT
+        2DROP 2DROP R> DROP R> DROP EXIT
     THEN
     R@ _RGN-O-W + !
     R@ _RGN-O-H + !
@@ -274,7 +290,8 @@ _PRM-F-BUILDER-S 7 + -8 AND CONSTANT _PRM-F-BUILDER
         _PRM-F-CHARS @ _PRM-F-MASK @ _UFLD-CP-BYTES *
     ELSE
         _PRM-F-INPUT @ INP-GET-TEXT NIP
-    THEN _PRM-F-VALUE-U ! ;
+    THEN _PRM-F-VALUE-U !
+    _PRM-F-W @ _PRM-FOLLOW ;
 
 \ The destination lies apart from everything the field is read from: the
 \ prompt, its input and their regions, the input's buffer, the label and

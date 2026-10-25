@@ -119,7 +119,9 @@ REQUIRE ../../utils/string.f
 184 CONSTANT _MEDIA-O-CONTENTS
 192 CONSTANT _MEDIA-O-NEXT-A
 200 CONSTANT _MEDIA-O-NEXT-N
-208 CONSTANT _MEDIA-O-READERS
+208 CONSTANT _MEDIA-O-SEEN-W     \ the view widget it last counted
+216 CONSTANT _MEDIA-O-SEEN-REV   \ that widget's revision then
+224 CONSTANT _MEDIA-O-READERS
 _MEDIA-O-READERS MEDIA-KINDS CELLS + CONSTANT _MEDIA-O-SOURCE
 _MEDIA-O-SOURCE MEDSRC-VFS-SIZE + CONSTANT _MEDIA-DESC-SIZE
 
@@ -649,6 +651,19 @@ DEFER _MEDIA-HANDLE-D
         >R DROP 0 R>
     ENDCASE ;
 
+\ What the widget shows is its view's, so the view's changes move its
+\ revision too.  _MEDIA-FOLLOW counts a change the view has made since the
+\ widget last looked.  Each word that shows another view marks the widget
+\ itself, so a view first seen is taken as it is.
+: _MEDIA-SEEN!  ( widget -- )
+    DUP MEDIA-VIEW-WIDGET@ DUP 2 PICK _MEDIA-O-SEEN-W + !
+    ?DUP IF WDG-REVISION ELSE 0 THEN SWAP _MEDIA-O-SEEN-REV + ! ;
+: _MEDIA-FOLLOW  ( widget -- )
+    DUP MEDIA-VIEW-WIDGET@ DUP 0= IF 2DROP EXIT THEN    ( w view )
+    OVER _MEDIA-O-SEEN-W _MEDIA@ OVER <> IF DROP _MEDIA-SEEN! EXIT THEN
+    WDG-REVISION 2DUP SWAP _MEDIA-O-SEEN-REV _MEDIA@ = IF 2DROP EXIT THEN
+    OVER _MEDIA-O-SEEN-REV + !  _WDG-CHANGED ;
+
 \ MEDIA-SERVICE ( widget -- changed? )
 \   Decode some more of a picture being shown.  True when what the widget
 \   shows changed.
@@ -659,7 +674,7 @@ DEFER _MEDIA-HANDLE-D
     ELSE
         PICT-STEP-PIXELS OVER MEDIA-PICTURE@ PICT-SERVICE
     THEN
-    DUP IF SWAP WDG-DIRTY ELSE NIP THEN ;
+    DUP IF OVER _MEDIA-SEEN! SWAP WDG-DIRTY ELSE NIP THEN ;
 
 \ =====================================================================
 \  5. Drawing and input
@@ -713,7 +728,8 @@ VARIABLE _MDW-LINE-U
     WDG-REGION DUP RGN-W _MDW-COLS ! RGN-H _MDW-ROWS !
     _MDW-W @ MEDIA-VIEW-WIDGET@ ?DUP IF
         DUP _MDW-W @ _MEDIA-FOCUS-TO
-        _MDW-W @ WDG-REGION WDG-DRAW-IN EXIT
+        _MDW-W @ WDG-REGION WDG-DRAW-IN
+        _MDW-W @ _MEDIA-FOLLOW EXIT
     THEN
     32 0 0 _MDW-ROWS @ _MDW-COLS @ DRW-FILL-RECT
     _MDW-W @ MEDIA-VIEW@ MEDIA-V-FACTS = IF _MDW-FACTS THEN ;
@@ -730,7 +746,7 @@ VARIABLE _MDW-LINE-U
         THEN
     THEN
     DUP MEDIA-VIEW-WIDGET@ ?DUP 0= IF 2DROP 0 EXIT THEN
-    TUCK SWAP _MEDIA-FOCUS-TO WDG-HANDLE ;
+    OVER >R  TUCK SWAP _MEDIA-FOCUS-TO WDG-HANDLE  R> _MEDIA-FOLLOW ;
 
 ' _MEDIA-DO-DRAW IS _MEDIA-DRAW-D
 ' _MEDIA-DO-HANDLE IS _MEDIA-HANDLE-D

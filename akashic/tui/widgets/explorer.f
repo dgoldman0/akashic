@@ -59,7 +59,8 @@ REQUIRE ../../utils/fs/vfs.f
 88  CONSTANT _EXPL-O-FLAGS2
 96  CONSTANT _EXPL-O-REN-BUF
 104 CONSTANT _EXPL-O-DELETE    \ the entry a delete question asks about
-112 CONSTANT _EXPL-DESC-SZ
+112 CONSTANT _EXPL-O-SEEN      \ its tree's and input's revisions, counted
+120 CONSTANT _EXPL-DESC-SZ
 
 256 CONSTANT _EXPL-REN-CAP     \ rename buffer capacity
 
@@ -153,6 +154,21 @@ VARIABLE _EXK-H
     DUP _EXPL-O-FLAGS2 + DUP @ _EXPL-F2-HIDDEN XOR SWAP !
     WDG-DIRTY ;
 
+\ What the explorer shows includes its tree and, while it renames, its
+\ input, so their changes move the explorer's revision too.  _EXPL-FOLLOW
+\ counts a change they have made since the explorer last looked.  A word
+\ that gives the explorer another tree or input marks it itself, since the
+\ new widget's count starts again, and takes the counts with _EXPL-SEEN!.
+: _EXPL-INNER-REV  ( explorer -- n )
+    DUP _EXPL-O-TREE + @ WDG-REVISION
+    SWAP _EXPL-O-REN-INP + @ ?DUP IF WDG-REVISION + THEN ;
+: _EXPL-SEEN!  ( explorer -- )
+    DUP _EXPL-INNER-REV SWAP _EXPL-O-SEEN + ! ;
+: _EXPL-FOLLOW  ( explorer -- )
+    DUP _EXPL-INNER-REV
+    2DUP SWAP _EXPL-O-SEEN + @ = IF 2DROP EXIT THEN
+    OVER _EXPL-O-SEEN + !  _WDG-CHANGED ;
+
 \ The embedded tree takes the explorer's focus and enabled state, which
 \ UIDL maintains on the mounted explorer.
 : _EXPL-SYNC-TREE  ( explorer -- )
@@ -170,7 +186,7 @@ VARIABLE _EXK-H
     DUP _EXPL-O-FLAGS2 + @ _EXPL-F2-RENAME AND IF
         DUP _EXPL-O-REN-INP + @ ?DUP IF WDG-DRAW THEN
     THEN
-    DROP ;
+    _EXPL-FOLLOW ;
 
 \ =====================================================================
 \  §6 — Rename helpers
@@ -198,6 +214,17 @@ VARIABLE _EXRC-NU   \ rename-commit: new name len
     LOOP
     2DROP TRUE ;
 
+\ _EXPL-RENAME-CANCEL ( widget -- )
+\   End inline rename and dismiss the input widget.  The input goes, so
+\   the explorer marks itself.
+: _EXPL-RENAME-CANCEL  ( widget -- )
+    DUP _EXPL-O-FLAGS2 + DUP @
+    _EXPL-F2-RENAME INVERT AND SWAP !
+    DUP _EXPL-O-REN-INP + @ ?DUP IF INP-FREE THEN
+    0 OVER _EXPL-O-REN-INP + !
+    DUP _EXPL-O-TREE + @ TREE-REFRESH
+    DUP _EXPL-SEEN!  _WDG-CHANGED ;
+
 \ _EXPL-RENAME-COMMIT ( input-widget -- )
 \   Called when user presses Enter in rename input.
 : _EXPL-RENAME-COMMIT  ( input-widget -- )
@@ -218,21 +245,7 @@ VARIABLE _EXRC-NU   \ rename-commit: new name len
     \ Sync VFS
     _EXRN-W @ _EXPL-O-VFS + @ VFS-SYNC DROP
 
-    \ End rename mode
-    _EXRN-W @ _EXPL-O-FLAGS2 + DUP @
-    _EXPL-F2-RENAME INVERT AND SWAP !
-    _EXRN-W @ _EXPL-O-REN-INP + @ ?DUP IF INP-FREE THEN
-    0 _EXRN-W @ _EXPL-O-REN-INP + !
-    _EXRN-W @ _EXPL-O-TREE + @ TREE-REFRESH ;
-
-\ _EXPL-RENAME-CANCEL ( widget -- )
-\   Cancel inline rename, dismiss input widget.
-: _EXPL-RENAME-CANCEL  ( widget -- )
-    DUP _EXPL-O-FLAGS2 + DUP @
-    _EXPL-F2-RENAME INVERT AND SWAP !
-    DUP _EXPL-O-REN-INP + @ ?DUP IF INP-FREE THEN
-    0 OVER _EXPL-O-REN-INP + !
-    _EXPL-O-TREE + @ TREE-REFRESH ;
+    _EXRN-W @ _EXPL-RENAME-CANCEL ;
 
 \ =====================================================================
 \  §7 — Public: rename / delete / new file / new dir / refresh
@@ -266,6 +279,7 @@ VARIABLE _EXR-IN
     \ Set rename-active flag
     _EXR-W @ _EXPL-O-FLAGS2 + DUP @
     _EXPL-F2-RENAME OR SWAP !
+    _EXR-W @ _EXPL-SEEN!
     _EXR-W @ WDG-DIRTY ;
 
 \ EXPL-DELETE ( widget -- )
@@ -298,7 +312,7 @@ VARIABLE _EXD-IN
     \ Sync and refresh
     _EXD-W @ _EXPL-O-VFS + @ VFS-SYNC DROP
     _EXD-W @ _EXPL-O-TREE + @ TREE-REFRESH
-    _EXD-W @ WDG-DIRTY ;
+    _EXD-W @ _EXPL-FOLLOW ;
 
 : EXPL-DELETE  ( widget -- )
     _EXD-W !
@@ -338,7 +352,7 @@ VARIABLE _EXNF-OCWD
     \ Sync and refresh
     _EXNF-VFS @  VFS-SYNC DROP
     _EXNF-W @ _EXPL-O-TREE + @ TREE-REFRESH
-    _EXNF-W @ WDG-DIRTY ;
+    _EXNF-W @ _EXPL-FOLLOW ;
 
 \ EXPL-NEW-DIR ( widget -- )
 \   Create a new subdirectory under the selected directory.
@@ -370,13 +384,13 @@ VARIABLE _EXND-OCWD
     \ Sync and refresh
     _EXND-VFS @  VFS-SYNC DROP
     _EXND-W @ _EXPL-O-TREE + @ TREE-REFRESH
-    _EXND-W @ WDG-DIRTY ;
+    _EXND-W @ _EXPL-FOLLOW ;
 
 \ EXPL-REFRESH ( widget -- )
 \   Re-trigger VFS lazy loading and redraw.
 : EXPL-REFRESH  ( widget -- )
     DUP _EXPL-O-TREE + @ TREE-REFRESH
-    WDG-DIRTY ;
+    _EXPL-FOLLOW ;
 
 \ =====================================================================
 \  §8 — Event handler
@@ -395,12 +409,12 @@ VARIABLE _EXH-EV   \ current event
         _EXH-EV @ KEY-IS-SPECIAL? IF
             _EXH-EV @ KEY-CODE@ KEY-ESC = IF
                 _EXH-W @ _EXPL-RENAME-CANCEL
-                _EXH-W @ WDG-DIRTY
                 -1 EXIT
             THEN
         THEN
         \ Forward everything else to the input widget
         _EXH-EV @ _EXH-W @ _EXPL-O-REN-INP + @ WDG-HANDLE
+        _EXH-W @ _EXPL-FOLLOW
         EXIT
     THEN
 
@@ -408,7 +422,7 @@ VARIABLE _EXH-EV   \ current event
     \    and reports through its callbacks ──
     _EXH-EV @ @ KEY-T-MOUSE = IF
         _EXH-EV @ _EXH-W @ _EXPL-O-TREE + @ WDG-HANDLE
-        DUP IF _EXH-W @ WDG-DIRTY THEN
+        _EXH-W @ _EXPL-FOLLOW
         EXIT
     THEN
 
@@ -437,7 +451,7 @@ VARIABLE _EXH-EV   \ current event
         \ Navigation and Enter go to the tree, which reports through its
         \ callbacks.
         _EXH-EV @ _EXH-W @ _EXPL-O-TREE + @ WDG-HANDLE
-        DUP IF _EXH-W @ WDG-DIRTY THEN
+        _EXH-W @ _EXPL-FOLLOW
         EXIT
     THEN
 
@@ -505,7 +519,8 @@ VARIABLE _EXH-EV   \ current event
     OVER _EXPL-O-REN-BUF + !
 
     \ Create the embedded tree over the VFS
-    DUP _EXPL-NEW-TREE OVER _EXPL-O-TREE + ! ;   ( desc )
+    DUP _EXPL-NEW-TREE OVER _EXPL-O-TREE + !    ( desc )
+    DUP _EXPL-SEEN! ;
 
 \ =====================================================================
 \  §10 — Public API
@@ -532,17 +547,17 @@ VARIABLE _EXH-EV   \ current event
     TUCK _EXPL-O-ROOT + !
     DUP _EXPL-O-TREE + @ TREE-FREE
     DUP _EXPL-NEW-TREE OVER _EXPL-O-TREE + !
-    WDG-DIRTY ;
+    DUP _EXPL-SEEN!  WDG-DIRTY ;
 
 \ EXPL-EXPAND-ALL ( widget -- )
 \   Expand entire tree.
 : EXPL-EXPAND-ALL  ( widget -- )
-    _EXPL-O-TREE + @ TREE-EXPAND-ALL ;
+    DUP _EXPL-O-TREE + @ TREE-EXPAND-ALL  _EXPL-FOLLOW ;
 
 \ EXPL-COLLAPSE-ALL ( widget -- )
 \   Collapse every directory.
 : EXPL-COLLAPSE-ALL  ( widget -- )
-    _EXPL-O-TREE + @ TREE-COLLAPSE-ALL ;
+    DUP _EXPL-O-TREE + @ TREE-COLLAPSE-ALL  _EXPL-FOLLOW ;
 
 \ EXPL-SHOW-HIDDEN? ( widget -- flag )
 : EXPL-SHOW-HIDDEN?  ( widget -- flag )

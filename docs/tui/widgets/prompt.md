@@ -40,6 +40,13 @@ An active prompt consumes all key events routed to it. Enter deactivates it
 and invokes the submit callback; Escape deactivates it and invokes the cancel
 callback. Other events are delegated to the embedded input widget.
 
+The prompt's revision moves when its input changes, as well as when it
+changes itself: it compares the input's revision with the one it last
+counted after it passes on an event, after it draws and after its field is
+laid out. `PRM-SET-BOUNDS` with the bounds the prompt already has changes
+nothing; the applications that call it before each paint draw the prompt
+themselves.
+
 For credentials, enable masking before `PRM-SHOW`, synchronously copy the
 borrowed text into a credential owner, and call `PRM-WIPE` on submit and cancel.
 Masking prevents display disclosure; wiping removes bytes retained by the
