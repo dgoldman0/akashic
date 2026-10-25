@@ -21,8 +21,10 @@ VARIABLE PR-A VARIABLE PR-U VARIABLE PR-QUERIES
 class SpanProofs(Families):
     def __init__(self, backend):
         super().__init__(backend)
+        # The emission reads the switch for every-frame checks.
         self.runtime.evaluate(
-            (_clean((RICH / "shell-family-emit.f").read_text()) + PROVIDER).encode(),
+            (_clean((RICH.parent / "check-mode.f").read_text()) + "\n"
+             + _clean((RICH / "shell-family-emit.f").read_text()) + PROVIDER).encode(),
             source_name="production-family-emit.f", step_budget=8_000_000)
         # The facade's storage-disjoint callback (offset 40) becomes PR-DISJOINT.
         self.cell(self.facade + 40, self.runtime.find("PR-DISJOINT").xt)

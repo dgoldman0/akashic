@@ -7,6 +7,7 @@
 \ Every source/output/module proof and size check precedes the first write.
 PROVIDED akashic-tui-rshfc
 REQUIRE region-catalog.f
+REQUIRE ../check-mode.f
 0 CONSTANT RSHFC-S-OK
 1 CONSTANT RSHFC-S-CAPACITY
 3 CONSTANT RSHFC-S-INVALID
@@ -62,9 +63,15 @@ VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
     _RSHFC-B @ RTE-FAMILY-BATCH-VALID? 0= IF _RSHFC-CLEAR RSHFC-S-INVALID EXIT THEN
     _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
 \ The same preparation for a batch the caller proved with
-\ RTE-FAMILY-BATCH-VALID? and has not written since.
+\ RTE-FAMILY-BATCH-VALID? and has not written since.  Its one caller, the
+\ shell producer, keeps the batch and the destination in storage from a
+\ memory source, whose live blocks never overlap one another or a module's
+\ storage, so in normal mode their spans are not proved apart again
+\ (check-mode.f).  The capacity check still precedes the first write.
 : _RSHFC-PREPARE-PROVED ( batch destination capacity -- status )
-    _RSHFC-PREPARE-SPANS 0= IF RSHFC-S-INVALID EXIT THEN
+    CHK-EVERY-FRAME? IF
+        _RSHFC-PREPARE-SPANS 0= IF RSHFC-S-INVALID EXIT THEN
+    ELSE _RSHFC-CAP ! _RSHFC-D ! _RSHFC-B ! THEN
     _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
 : _RSHFC-MEASURED ( status -- bytes status )
     DUP IF 0 SWAP EXIT THEN DROP _RSHFC-U @ RSHFC-S-OK _RSHFC-CLEAR ;

@@ -6,6 +6,7 @@
 \ Any non-OK result requires cancelling the entire caller-owned capture.
 PROVIDED akashic-tui-rte-shell-family-emit
 REQUIRE family-batch.f
+REQUIRE ../check-mode.f
 
 CREATE _RTE-FEM-OWNED-START
 VARIABLE _RTE-FEM-OWNED-LIMIT 0 _RTE-FEM-OWNED-LIMIT !
@@ -346,8 +347,10 @@ VARIABLE _RTE-FDE-PROVED
     _RTE-FDE-PTRS 24 0 FILL ;
 : _RTE-FDE-EMIT ( pending-batch active-batch shell -- status )
     2 PICK 2 PICK = IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
-    2 PICK OVER _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
-    2DUP _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+    _RTE-FDE-PROVED @ 0= CHK-EVERY-FRAME? OR IF
+        2 PICK OVER _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+        2DUP _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+    THEN
     DUP _RTE-SH.BASE @ _RTE-FEM-BASE ! _RTE-FEM-SHELL !
     _RTE-FDE-ACTIVE ! _RTE-FEM-BATCH !
     0 _RTE-FDE-OPS ! 0 _RTE-FDE-FENCE-E !
@@ -357,7 +360,12 @@ VARIABLE _RTE-FDE-PROVED
     0 _RTE-FDE-PROVED ! _RTE-FDE-EMIT ;
 \ Internal peer for a caller that proved both batches with
 \ RTE-FAMILY-BATCH-VALID? and has not written them since, such as the shell
-\ sidecar's frozen banks. It omits only those two graph checks.
+\ sidecar's frozen banks, which hold proved copies of batches the family
+\ preflight admitted. It omits those two graph checks, and in normal mode
+\ the proofs that the batches and the shell facade lie apart from the
+\ engine's and the module's storage: the banks come from a memory source,
+\ whose live blocks never overlap, and the facade was proved when it was
+\ lent (check-mode.f).
 : _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ( pending-batch active-batch shell -- status )
     -1 _RTE-FDE-PROVED ! _RTE-FDE-EMIT ;
 

@@ -326,6 +326,40 @@ _SS-DONE
 ''', minimum=26)
 
 
+def test_normal_mode_freezes_and_sends_a_delta_through_the_proved_emission():
+    """The shell sends its frozen banks through the proved emission. With
+    every-frame checks on it still proves the banks and the shell facade
+    before it writes; in normal mode the freeze and the emission take the
+    banks as proved copies of admitted batches, and send the same change."""
+    staged_run(DELTA + r'''
+: _SN-EMIT ( -- status )
+    _SD-CLEAR _SX-S _RSHSP.PENDING @ _SD-BATCH _SX-S _RSHSP.ACTIVE @ _SD-BATCH
+    _SX-FX _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
+_SX-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+\ Every-frame checks: the changed run, through the proved emission.
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SN-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A _SD-ACK
+\ Normal mode: the next change freezes into a bank the test still finds
+\ valid, and is sent the same way.
+0 CHK-EVERY-FRAME !
+' _SD-HELLO _SD-DRAW _SD-TB _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SX-S _RSHSP.PENDING @ _SX-S _RSHSP-BANK-VALID? _SS-A
+_SN-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
+\ A shell facade that does not name itself: in normal mode the frozen
+\ banks are sent without proving it again; every-frame checks refuse it.
+_SX-FX _RTE-SH.SELF DUP @ 1+ SWAP !
+_SN-EMIT _SS-OK
+-1 CHK-EVERY-FRAME !
+_SN-EMIT RTE-S-INVALID = _SS-A
+_SX-FX _RTE-SH.SELF DUP @ 1- SWAP !
+_SN-EMIT _SS-OK
+_SS-DONE
+''', minimum=39)
+
+
 def test_the_shadow_check_plans_reused_regions_whole_and_catches_stale_row_damage():
     """With the shadow check on, a region whose unchanged rows were copied
     is also planned whole. When the producer's row damage misses a changed

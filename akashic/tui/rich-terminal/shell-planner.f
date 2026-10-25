@@ -12,6 +12,7 @@ PROVIDED akashic-tui-rterm-shplan
 REQUIRE ../shell-snapshot.f
 REQUIRE engine.f
 REQUIRE ../../utils/memory-span.f
+REQUIRE ../check-mode.f
 
 0 CONSTANT RSHPL-S-OK
 1 CONSTANT RSHPL-S-CAPACITY
@@ -223,10 +224,13 @@ CREATE _RSHPL-SPANS 11 16 * ALLOT
     DUP SHME.COL @ SWAP SHME.WIDTH @ + _RSHPL-BAND-C @ _RSHPL-BAND-W @ + <= ;
 
 \ The public bound helpers validate the frozen model on every call. Their
-\ internal -PROVED peers skip only SHSN-FROZEN-VALIDATE, for a caller that
-\ validated the model and has not written it since.
+\ internal -PROVED peers skip SHSN-FROZEN-VALIDATE, for a caller that
+\ validated the model and has not written it since; in normal mode they
+\ also skip the model's storage proof, since that caller, the shell
+\ producer, keeps its copy in storage from a memory source (check-mode.f).
 VARIABLE _RSHPL-PROVED
 : _RSHPL-MODEL-OK? ( model bytes -- flag )
+    _RSHPL-PROVED @ CHK-EVERY-FRAME? 0= AND IF 2DROP -1 EXIT THEN
     2DUP RSHPL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     _RSHPL-PROVED @ IF 2DROP -1 EXIT THEN
     SHSN-FROZEN-VALIDATE SHSN-S-OK = ;
