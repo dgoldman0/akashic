@@ -3,7 +3,7 @@
 Status: proposed on 2026-10-19. Its four decisions were taken the same day
 (see Decisions). Each part is approved on its own. Part 0 is done. After
 it, part 9 and the adapter's growing banks in part 5 were added the same
-day.
+day. Part 1 was done on 2026-10-24.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -220,23 +220,44 @@ half of it is repeated background fills, which part 9 now removes. The CELL
 flush outside the producer took 51 to 488 million steps over a run, which
 this design leaves out.
 
-## Part 1. A shadow full build checks every frame — test tool
+## Part 1. A shadow check of every shortcut — test tool
 
-**Change.** A switch, off by default. While it is on, each frame the
-change-following path builds is also built by the full path: every document
-recaptured, every item lowered, the shell's whole batch built. The two
-results must be byte for byte equal: RUHA's snapshot, the producer's pending
-bank, the shell's pending bank and the operations each would send. Only the
-change-following result is sent. A difference stops the run and names the
-first item that differs.
+**Change.** A switch, off by default (`tui/rich-terminal/frame-shadow.f`).
+While it is on, each shortcut the frame build takes also runs its full path,
+into storage that does not feed the frame, and the two results must be byte
+for byte equal:
 
-**Where it runs.** In the unit tests of every part, over seeded edit streams
-through real widgets, UIDL documents and producers; in the typing run and the
-affected applications' runs of each part; and in one full Desktop journey at
-the end. It never runs in an ordinary session, and it adds nothing to a frame
-while it is off but one test of the switch.
+- the snapshot adapter captures every visible document live, before its
+  ordinary capture reuses unchanged documents' slices and passes over
+  documents known to be empty;
+- the screen producer plans every row after a plan that kept a held plan
+  or copied the runs of unchanged rows, and plans a document's menu
+  controls afresh after copying them from the acknowledged bank;
+- the shell plans a whole region after copying its unchanged rows' runs.
 
-**Why first.** Every later part is checked by it from its first commit.
+The shortcut's result is the one the frame goes on with, so a run sends
+exactly the frames it would send with the check off. Each difference is
+counted, and the first one kept: its stage, its item, the first byte that
+differs and the draw. Each later part puts its own shortcuts under the check
+as it adds them.
+
+**Where it runs.** `--shadow-check` on `physical_desktop_acceptance.py`,
+`physical_typing_cadence.py` and `akashic_tui.py` turns it on at boot. Such
+a run fails when it ends if the check found a difference, skipped a
+comparison for want of memory, or was asked for and not on. Unit tests turn
+it on directly. It never runs in an ordinary session, and while it is off
+each shortcut costs one test of the switch.
+
+**Why first.** Every later part is checked by it from its first commit. It
+also checks today's shortcuts on real frames: the adapter's reuse of
+unchanged documents, the producer's held plans, row damage and menu reuse,
+and the shell's row reuse.
+
+**Done** on 2026-10-24 (06c0532d, d59b8e3a, 8c615beb, with the counts by
+stage in a1c5d5fb). With the check on, the typing run, Desk with each of ten
+applications and the canonical Desktop journey made 9,709 comparisons, with
+every stage taking and checking its shortcut in every run, and found no
+difference. See the [evidence](../../local_testing/evidence/frames-follow-change-part1-20261024.md).
 
 ## Part 2. Widgets count their changes — design, fixes a violation
 
@@ -555,7 +576,7 @@ again, as the engine's does. Each part reports what it adds or frees.
 | Slice | Content | Approval | State |
 | --- | --- | --- | --- |
 | 1 | Part 0 | this review | done |
-| 2 | Part 1 | this review | proposed |
+| 2 | Part 1 | this review | done |
 | 3 | Part 2 | this review | proposed |
 | 4 | Part 3 | this review | proposed |
 | 5 | Part 4 | this review | proposed |
