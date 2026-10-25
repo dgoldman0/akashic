@@ -2006,6 +2006,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/shell-snapshot.f",
         "tui/rich-terminal/phase-profile.f",
         "tui/rich-terminal/frame-shadow.f",
+        "tui/check-mode.f",
         "tui/rich-terminal/stx1-roles.f",
         "tui/rich-terminal/residual-glyph-planner.f",
         "tui/rich-terminal/uidl-claim-ledger.f",

@@ -419,10 +419,13 @@ Input that comes back from the terminal is checked as it is today, in every
 mode: the owner, generation and frame a click or key names, and the control
 it names in that frame.
 
-**Change.** The repeats go behind a switch that tests and safe mode turn on.
-The handover proofs run when storage is lent, allocated or grows, instead of
-at every entry. Storage taken from a memory source is no longer proved apart
-from other live storage.
+**Change.** The repeats go behind a switch, every-frame checks
+(`tui/check-mode.f`). It is on unless a composition chooses normal mode, so
+tests keep every check without asking for it; Desk chooses normal mode when
+it loads, and safe mode and diagnostic runs (`--every-frame-checks`) turn
+it back on. The handover proofs run when storage is lent, allocated or
+grows, instead of at every entry. Storage taken from a memory source is no
+longer proved apart from other live storage.
 
 **Kind.** A trade, not a removal of repeated work. Normal sessions stop
 noticing a bug that writes into the rich path's memory between handovers.

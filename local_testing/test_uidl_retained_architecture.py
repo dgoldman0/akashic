@@ -808,8 +808,14 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "rich-terminal/engine-apt1.f",
         "rich-terminal/hybrid-screen-producer.f",
         "applets/desk/desk.f",
+        "check-mode.f",
     ):
         assert required in requirements
+    # Desk chooses normal mode once everything it needs has loaded, so that a
+    # diagnostic boot can turn every-frame checks back on after it.
+    assert code.count("CHK-EVERY-FRAME !") == 1
+    assert code.index("REQUIRE check-mode.f") < code.index("0 CHK-EVERY-FRAME !")
+    assert code.rindex("REQUIRE ") < code.index("0 CHK-EVERY-FRAME !")
     for retired in (
         "rich-terminal/uidl-projector.f",
         "rich-terminal/uidl-driver.f",

@@ -7,7 +7,9 @@
 \  canonical widget-collection, DATA_GRAPHICS, and STATUS_FIELD models into
 \  caller-owned A/B banks at a completed draw boundary.  Documents dirtied by
 \  their own lifecycle are recaptured; every unchanged document slice is
-\  independently validated and copied from the prior published bank.  Each
+\  copied from the prior published bank once its bounds are checked, and with
+\  every-frame checks on (check-mode.f) its snapshot module first validates
+\  it in full.  Each
 \  directory entry carries exact and topology-only menu lineage so a downstream
 \  renderer may reuse an unchanged CONTROL projection and patch state without
 \  treating a state transition as structural identity.  It does not open a
@@ -41,6 +43,7 @@ REQUIRE ../uidl-field-snapshot.f
 REQUIRE ../uidl-dialog-snapshot.f
 REQUIRE ../../utils/memory-span.f
 REQUIRE frame-shadow.f
+REQUIRE ../check-mode.f
 
 0 CONSTANT RUHA-S-OK
 1 CONSTANT RUHA-S-CAPACITY
@@ -2006,15 +2009,23 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-REUSE-MENU-TOPOLOGY-EPOCH @
         _RUHA-B-REUSE-MENU-EPOCH @ U> IF 0 EXIT THEN
 
-    0 _RUHA-B-REUSE-I !
-    BEGIN _RUHA-B-REUSE-I @ _RUHA-B-REUSE-COUNT @ < WHILE
-        _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +
-        _RUHA-B-REUSE-I @ UMSN-RECORD-SIZE * +
-        _RUHA-B-PRIOR-RECORD? 0= IF 0 EXIT THEN
-        1 _RUHA-B-REUSE-I +!
-    REPEAT
+    CHK-EVERY-FRAME? IF
+        0 _RUHA-B-REUSE-I !
+        BEGIN _RUHA-B-REUSE-I @ _RUHA-B-REUSE-COUNT @ < WHILE
+            _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +
+            _RUHA-B-REUSE-I @ UMSN-RECORD-SIZE * +
+            _RUHA-B-PRIOR-RECORD? 0= IF 0 EXIT THEN
+            1 _RUHA-B-REUSE-I +!
+        REPEAT
+    THEN
     -1 ;
 
+\ Whether a document's stored slices can be copied into this draw.  Their
+\ offsets and lengths are checked against the prior bank on every reuse,
+\ since the copy relies on them.  The slices themselves were validated when
+\ they were captured, and only RUHA writes its banks, so the snapshot
+\ modules' full validation of each slice, and of each stored menu record,
+\ runs only with every-frame checks on.
 : _RUHA-B-PRIOR-ENTRY?  ( entry -- flag )
     _RUHA-B-REUSE-ENTRY !
     _RUHA-B-REUSE-ENTRY @
@@ -2043,7 +2054,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-REUSE-NATIVE-O @ _RUHA-B-REUSE-NATIVE-U @
         _RUHA-UADD? 0= IF DROP 0 EXIT THEN
     _RUHA-B-PRIOR-NATIVE-U @ U> IF 0 EXIT THEN
-    _RUHA-B-REUSE-DESCRIPTOR-U @ IF
+    _RUHA-B-REUSE-DESCRIPTOR-U @ CHK-EVERY-FRAME? AND IF
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-A @
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-U @
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-WORK-A @
@@ -2083,7 +2094,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-REUSE-DGRAPH-NATIVE-O @ _RUHA-B-REUSE-DGRAPH-NATIVE-U @
         _RUHA-UADD? 0= IF DROP 0 EXIT THEN
     _RUHA-B-PRIOR-DGRAPH-NATIVE-U @ U> IF 0 EXIT THEN
-    _RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @ IF
+    _RUHA-B-REUSE-DGRAPH-DESCRIPTOR-U @ CHK-EVERY-FRAME? AND IF
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-WORK-A @
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-WORK-U @
         _RUHA-B-PRIOR-DGRAPH-DESCRIPTORS-A @
@@ -2122,7 +2133,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-REUSE-SFIELD-NATIVE-O @ _RUHA-B-REUSE-SFIELD-NATIVE-U @
         _RUHA-UADD? 0= IF DROP 0 EXIT THEN
     _RUHA-B-PRIOR-SFIELD-NATIVE-U @ U> IF 0 EXIT THEN
-    _RUHA-B-REUSE-SFIELD-DESCRIPTOR-U @ IF
+    _RUHA-B-REUSE-SFIELD-DESCRIPTOR-U @ CHK-EVERY-FRAME? AND IF
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-WORK-A @
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-WORK-U @
         _RUHA-B-PRIOR-SFIELD-DESCRIPTORS-A @
@@ -2161,7 +2172,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-REUSE-FIELD-NATIVE-O @ _RUHA-B-REUSE-FIELD-NATIVE-U @
         _RUHA-UADD? 0= IF DROP 0 EXIT THEN
     _RUHA-B-PRIOR-FIELD-NATIVE-U @ U> IF 0 EXIT THEN
-    _RUHA-B-REUSE-FIELD-DESCRIPTOR-U @ IF
+    _RUHA-B-REUSE-FIELD-DESCRIPTOR-U @ CHK-EVERY-FRAME? AND IF
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-WORK-A @
         _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-WORK-U @
         _RUHA-B-PRIOR-FIELD-DESCRIPTORS-A @
@@ -2200,7 +2211,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
     _RUHA-B-REUSE-DIALOG-NATIVE-O @ _RUHA-B-REUSE-DIALOG-NATIVE-U @
         _RUHA-UADD? 0= IF DROP 0 EXIT THEN
     _RUHA-B-PRIOR-DIALOG-NATIVE-U @ U> IF 0 EXIT THEN
-    _RUHA-B-REUSE-DIALOG-DESCRIPTOR-U @ IF
+    _RUHA-B-REUSE-DIALOG-DESCRIPTOR-U @ CHK-EVERY-FRAME? AND IF
         _RUHA-B-PRIOR-DIALOG-DESCRIPTORS-A @
             _RUHA-B-REUSE-DIALOG-DESCRIPTOR-O @ +
         _RUHA-B-REUSE-DIALOG-DESCRIPTOR-U @

@@ -34,6 +34,12 @@ REQUIRE rich-terminal/engine-apt1.f
 REQUIRE rich-terminal/hybrid-screen-producer.f
 REQUIRE rich-terminal/shell-screen-producer.f
 REQUIRE applets/desk/desk.f
+REQUIRE check-mode.f
+
+\ Desk runs in normal mode: the checks that can find only a bug run when
+\ their data or memory is handed over, not at every entry (check-mode.f).
+\ A diagnostic boot turns every-frame checks back on once Desk has loaded.
+0 CHK-EVERY-FRAME !
 
 [UNDEFINED] APT1-DESK-RX-CAPACITY [IF]
 8192 CONSTANT APT1-DESK-RX-CAPACITY

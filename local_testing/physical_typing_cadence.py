@@ -11,7 +11,10 @@ runs under, in the artifact's screen-profile directory, and the trace records
 its origin on the host's monotonic clock, so local_testing/screen_change_profile.py
 can charge the typed characters their guest steps. With --shadow-check the image
 turns on the shadow check of the rich frame's shortcuts at boot, and the run
-fails on any difference it finds (tui/rich-terminal/frame-shadow.f).
+fails on any difference it finds (tui/rich-terminal/frame-shadow.f). With
+--every-frame-checks the image runs every check on every frame instead of
+Desk's normal mode (tui/check-mode.f), and the run fails when they were not
+on after all.
 """
 from __future__ import annotations
 
@@ -107,7 +110,8 @@ def supervise(args):
                "--megapad-root", str(args.megapad_root), "--font", str(args.font),
                "--artifact", str(artifact),
                *(["--screen-profile"] if args.screen_profile else []),
-               *(["--shadow-check"] if args.shadow_check else [])]
+               *(["--shadow-check"] if args.shadow_check else []),
+               *(["--every-frame-checks"] if args.every_frame_checks else [])]
     environment = dict(os.environ, SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy",
                        MEGAFORTH_EXECUTOR="native", MEGAFORTH_NATIVE_PROFILE="0",
                        MEGAPAD_ROOT=str(args.megapad_root))
@@ -180,6 +184,7 @@ def worker(args):
         "phase_names": journey_api.GUEST_PHASE_NAMES,
         "font_size": 18, "action_delay_seconds": 0.75, "typing_hz": 5, "hold_seconds": 0,
         "screen_profile": args.screen_profile, "shadow_check": args.shadow_check,
+        "every_frame_checks": args.every_frame_checks,
     })
     start = time.monotonic_ns()
     trace_file = (artifact / "typing-trace.jsonl").open("w")
@@ -194,7 +199,8 @@ def worker(args):
     # No checkpoint profile, source patch, compiled cache, or budget override.
     mark("source_build_started")
     image = tui.build_image("desktop-apt1", artifact / "desktop.img", None,
-                            backend="simulator", shadow_check=args.shadow_check)
+                            backend="simulator", shadow_check=args.shadow_check,
+                            every_frame_checks=args.every_frame_checks)
     mark("source_build_complete", image_sha256=sha256(image))
     socket_path = str(Path(tempfile.mkdtemp(prefix="rich-diag-")) / "session.sock")
     ordinary = tui._session_server_command(
@@ -391,6 +397,14 @@ def worker(args):
             if failure is not None:
                 outcome = "shadow_check_failed"
                 raise RuntimeError(failure)
+        # Which checks ran: Desk's normal mode, or every check on every frame.
+        check_mode = journey_api.check_mode_record(client)
+        write_json(artifact / "check-mode.json", check_mode)
+        if args.every_frame_checks and not check_mode.get("every_frame"):
+            outcome = "every_frame_checks_off"
+            raise RuntimeError(
+                "every-frame checks were asked for, but the guest did not report them on"
+            )
     except BaseException as exc:
         mark("diagnostic_error", error=f"{type(exc).__name__}: {exc}")
         raise
@@ -443,6 +457,9 @@ def main():
         item.add_argument("--shadow-check", action="store_true",
                           help="turn on the shadow check of the rich frame's "
                                "shortcuts at boot, and fail on any difference")
+        item.add_argument("--every-frame-checks", action="store_true",
+                          help="run every check on every frame, as tests do, "
+                               "instead of Desk's normal mode")
     for item in (driver, server):
         item.add_argument("--artifact", type=lambda p: Path(p).resolve(), required=True)
     server.add_argument("server_args", nargs=argparse.REMAINDER)

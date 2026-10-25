@@ -11819,6 +11819,31 @@ def shadow_check_record(client) -> dict:
     return record
 
 
+# Where the checks that can find only a bug run (tui/check-mode.f).
+CHECK_MODE_VARIABLE = "CHK-EVERY-FRAME"
+
+
+def check_mode_record(client) -> dict:
+    """Whether every-frame checks were on, or Desk's normal mode ran."""
+
+    try:
+        words = client.request("forth", names=[CHECK_MODE_VARIABLE]).get("words", {})
+        word = words.get(CHECK_MODE_VARIABLE)
+        if not isinstance(word, dict):
+            return {"unavailable": True, "error": f"{CHECK_MODE_VARIABLE} not found"}
+        if "value" in word:
+            value = int(word["value"])
+        elif "data_address" in word:
+            value = _read_guest_cells(
+                client, address=int(word["data_address"]), count=1
+            )[0]
+        else:
+            return {"unavailable": True, "error": f"{CHECK_MODE_VARIABLE} has no cell"}
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    return {"every_frame": value != 0}
+
+
 def shadow_check_failure(record: dict) -> str | None:
     """Why a run whose shadow check was on fails, or None when it passes."""
 
@@ -11874,6 +11899,7 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> dict:
             ),
             "delta_refusals": _delta_refusal_record(client),
             "shadow_check": shadow_check_record(client),
+            "check_mode": check_mode_record(client),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

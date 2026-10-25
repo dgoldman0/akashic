@@ -28186,25 +28186,43 @@ def _with_codex_auth_checkpoint(autoexec: str, checkpoint: Path) -> str:
 
 
 FRAME_SHADOW_MODULE = "tui/rich-terminal/frame-shadow.f"
+CHECK_MODE_MODULE = "tui/check-mode.f"
+
+
+def _after_last_require(autoexec: str, line: str, option: str) -> str:
+    """Put LINE after the profile autoexec's last REQUIRE.
+
+    Every module has loaded there, a composition has made its own choices,
+    and no frame has been built.  A linked image keeps the line in place
+    after the chunks that replace those REQUIREs.
+    """
+    lines = autoexec.splitlines()
+    requires = [index for index, entry in enumerate(lines) if REQUIRE_RE.match(entry)]
+    if not requires:
+        raise RuntimeError(f"{option} needs a profile autoexec with REQUIREs")
+    lines.insert(requires[-1] + 1, line)
+    return "\n".join(lines) + "\n"
 
 
 def _with_frame_shadow(autoexec: str, modules: tuple[str, ...]) -> str:
-    """Turn on the shadow check of the rich frame's shortcuts at boot.
-
-    The switch follows the profile's last REQUIRE: frame-shadow.f has loaded
-    by then, and no frame has been built.  A linked image keeps the line in
-    place after the chunks that replace those REQUIREs.
-    """
+    """Turn on the shadow check of the rich frame's shortcuts at boot."""
     if FRAME_SHADOW_MODULE not in modules:
         raise RuntimeError(
             "--shadow-check needs a profile that loads the rich frame producers"
         )
-    lines = autoexec.splitlines()
-    requires = [index for index, line in enumerate(lines) if REQUIRE_RE.match(line)]
-    if not requires:
-        raise RuntimeError("--shadow-check needs a profile autoexec with REQUIREs")
-    lines.insert(requires[-1] + 1, "-1 FSHD-ON !")
-    return "\n".join(lines) + "\n"
+    return _after_last_require(autoexec, "-1 FSHD-ON !", "--shadow-check")
+
+
+def _with_every_frame_checks(autoexec: str, modules: tuple[str, ...]) -> str:
+    """Turn every-frame checks back on at boot, once Desk has chosen normal
+    mode (tui/check-mode.f)."""
+    if CHECK_MODE_MODULE not in modules:
+        raise RuntimeError(
+            "--every-frame-checks needs a profile that loads tui/check-mode.f"
+        )
+    return _after_last_require(
+        autoexec, "-1 CHK-EVERY-FRAME !", "--every-frame-checks"
+    )
 
 
 def build_image(
@@ -28214,6 +28232,7 @@ def build_image(
     *,
     backend: str = "emulator",
     shadow_check: bool = False,
+    every_frame_checks: bool = False,
 ) -> Path:
     profile, backend = _profile_backend(profile_name, backend)
     autoexec = profile.autoexec
@@ -28241,6 +28260,8 @@ def build_image(
     akashic_modules = modules
     if shadow_check:
         autoexec = _with_frame_shadow(autoexec, modules)
+    if every_frame_checks:
+        autoexec = _with_every_frame_checks(autoexec, modules)
     samples = _sample_files(modules)
     requires_networking = (
         profile.megapad_networking or _requires_megapad_networking(modules)
@@ -37184,6 +37205,14 @@ def _parser() -> argparse.ArgumentParser:
                 "(tui/rich-terminal/frame-shadow.f) at boot"
             ),
         )
+        command.add_argument(
+            "--every-frame-checks",
+            action="store_true",
+            help=(
+                "run every check on every frame, as tests do, instead of "
+                "Desk's normal mode (tui/check-mode.f)"
+            ),
+        )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--cols", type=int, default=100
@@ -37339,6 +37368,7 @@ def main() -> int:
         args.codex_auth_checkpoint,
         backend=args.backend,
         shadow_check=args.shadow_check,
+        every_frame_checks=args.every_frame_checks,
     )
     if args.command == "build":
         return 0

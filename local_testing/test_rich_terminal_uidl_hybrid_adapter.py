@@ -1127,8 +1127,20 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     ) in validate
     assert "UMSN-RECORD-GENERATION@" in record_validate
     assert record_validate.count("_RUHA-B-LOCAL-TEXT?") == 2
-    # The owning snapshot modules authenticate every enriched slice before
-    # RUHA relocates all twelve document-local banks verbatim.
+    # Each slice's bounds are checked on every reuse.  With every-frame
+    # checks on, the owning snapshot modules also authenticate every enriched
+    # slice, and RUHA each stored menu record, before RUHA relocates all
+    # twelve document-local banks verbatim.
+    for family in ("", "DGRAPH-", "SFIELD-", "FIELD-", "DIALOG-"):
+        assert (
+            f"_RUHA-B-REUSE-{family}DESCRIPTOR-U @ CHK-EVERY-FRAME? AND IF"
+            in validate
+        )
+    assert validate.count("CHK-EVERY-FRAME?") == 5
+    assert menu_validate.count("CHK-EVERY-FRAME? IF") == 1
+    assert menu_validate.index("CHK-EVERY-FRAME? IF") < menu_validate.index(
+        "_RUHA-B-PRIOR-RECORD?"
+    )
     assert reuse.count(" MOVE") == 12
     for target in (
         "_RUHA-B-REUSE-DESCRIPTOR-TARGET",

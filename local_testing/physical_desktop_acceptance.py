@@ -26,7 +26,9 @@ directory, which local_testing/screen_change_profile.py reads.  With --shadow-ch
 the image turns on the shadow check of the rich frame's shortcuts at boot
 (tui/rich-terminal/frame-shadow.f): each shortcut also runs its full path
 and compares, and the run fails on any difference, or when the check was
-not on after all.
+not on after all.  With --every-frame-checks the image turns every check
+back on at boot, once Desk has chosen normal mode (tui/check-mode.f), and
+the run fails when they were not on after all.
 """
 from __future__ import annotations
 
@@ -154,6 +156,7 @@ def child(args) -> int:
         "terminal_link_pace": args.terminal_link_pace,
         "screen_profile": args.screen_profile,
         "shadow_check": args.shadow_check,
+        "every_frame_checks": args.every_frame_checks,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -169,6 +172,8 @@ def child(args) -> int:
         sys.argv.append("--screen-profile")
     if args.shadow_check:
         sys.argv.append("--shadow-check")
+    if args.every_frame_checks:
+        sys.argv.append("--every-frame-checks")
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -199,6 +204,8 @@ def supervise(args) -> int:
         command.append("--screen-profile")
     if args.shadow_check:
         command.append("--shadow-check")
+    if args.every_frame_checks:
+        command.append("--every-frame-checks")
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
@@ -208,6 +215,8 @@ def supervise(args) -> int:
         kind += ", screen profile"
     if args.shadow_check:
         kind += ", shadow check"
+    if args.every_frame_checks:
+        kind += ", every-frame checks"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -241,6 +250,10 @@ def supervise(args) -> int:
     if passed and args.shadow_check and not shadow_check_was_on(artifact):
         print("Shadow check: asked for, but the guest did not report it on", flush=True)
         passed = False
+    if passed and args.every_frame_checks and not every_frame_checks_were_on(artifact):
+        print("Every-frame checks: asked for, but the guest did not report them on",
+              flush=True)
+        passed = False
     return 0 if passed else 1
 
 
@@ -255,6 +268,19 @@ def shadow_check_was_on(artifact: Path) -> bool:
         return False
     record = diagnostics.get("shadow_check") or {}
     return bool(record.get("on")) and not record.get("unavailable")
+
+
+def every_frame_checks_were_on(artifact: Path) -> bool:
+    """Whether the run's final guest diagnostics show every-frame checks on."""
+
+    try:
+        diagnostics = json.loads(
+            (artifact / "evidence" / "final-guest-diagnostics.json").read_text()
+        )
+    except (OSError, ValueError):
+        return False
+    record = diagnostics.get("check_mode") or {}
+    return bool(record.get("every_frame")) and not record.get("unavailable")
 
 
 def main() -> int:
@@ -274,6 +300,9 @@ def main() -> int:
     parser.add_argument("--shadow-check", action="store_true",
                         help="turn on the shadow check of the rich frame's "
                              "shortcuts at boot, and fail on any difference")
+    parser.add_argument("--every-frame-checks", action="store_true",
+                        help="run every check on every frame, as tests do, "
+                             "instead of Desk's normal mode")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

@@ -52,6 +52,8 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
         assert runtime.main_context.returns.snapshot() == ()
         return result
 
+    # Desk has chosen normal mode.
+    assert values("CHK-EVERY-FRAME @") == (0,)
     before = values("XMEM-HERE @ XMEM-LIMIT @")
     assert before[1] > before[0]
     assert values("_A1D-SETUP") == (0,)

@@ -89,6 +89,29 @@ _RP-DONE
 ''', minimum=87, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
 
 
+def test_every_frame_checks_validate_a_stored_slice_before_reuse():
+    run_series(_program() + r'''
+\ A byte that is not UTF-8 in the stored collection slice, written after
+\ its capture.  With every-frame checks on, the snapshot module's full
+\ validation refuses the slice before reuse, and the document is captured
+\ afresh from its widget.
+_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP 255 SWAP C!
+2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
+_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 2 = _RA-ASSERT
+_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@
+    S" aggregate alpha" STR-STR= _RA-ASSERT
+\ In normal mode only the slice's bounds are checked, and it is reused as
+\ stored: the trade normal mode makes, which tests and safe mode do not.
+0 CHK-EVERY-FRAME !
+_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP 255 SWAP C!
+3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
+_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 2 = _RA-ASSERT
+_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP C@ 255 = _RA-ASSERT
+-1 CHK-EVERY-FRAME !
+_RP-DONE
+''', minimum=53, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
+
+
 def test_shadow_check_matches_reuse_and_catches_a_stale_reused_slice():
     run_series(_program() + r'''
 -1 FSHD-ON ! FSHD-RESET
