@@ -93,7 +93,7 @@ revision (`WDG-REVISION`) once; reading a dot and choosing the pen do not.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `CVS-TEXT` | `( widget x y addr len -- )` | Place text at dot coords (snapped to cell grid) |
+| `CVS-TEXT` | `( widget x y addr len -- )` | Draw text over the canvas now, at the cell that holds dot x y of the region in use. The canvas does not keep it and its revision does not move, so a draw callback calls it after the canvas has drawn |
 | `CVS-PLOT` | `( widget data count x-scale y-scale -- )` | Connected line graph from integer array |
 
 ### Key Handling (via `WDG-HANDLE`)

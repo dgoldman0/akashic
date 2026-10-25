@@ -54,7 +54,7 @@
 \   CVS-RECT       ( widget x y w h -- )
 \   CVS-FILL-RECT  ( widget x y w h -- )
 \   CVS-CIRCLE     ( widget cx cy r -- )
-\   CVS-TEXT       ( widget x y addr len -- )
+\   CVS-TEXT       ( widget x y addr len -- )  Draw text over it now
 \   CVS-PLOT       ( widget data count x-scale y-scale -- )
 \   CVS-FREE       ( widget -- )
 \ =================================================================
@@ -208,7 +208,7 @@ _CVS-BMAP-INIT
     DUP WDG-REGION RGN-H DUP 0> IF 0 DO  \ row = J
         DUP WDG-REGION RGN-W DUP 0> IF 0 DO  \ col = I
             \ Set per-cell colour from colour map
-            DUP I J 2 PICK -ROT _CVS-CADR  ( w addr )
+            I J 2 PICK -ROT _CVS-CADR      ( w addr )
             DUP C@ DRW-FG!               ( w addr )
             1+ C@ DRW-BG!                ( w )
             0 DRW-ATTR!
@@ -383,11 +383,14 @@ VARIABLE _CDX  VARIABLE _CDY  VARIABLE _CD
 \  §13 — Text placement
 \ =====================================================================
 
+\ CVS-TEXT ( w x y addr len -- )
+\   Draw text over the canvas now, at the cell that holds dot X Y of the
+\   region in use.  The canvas does not keep it, and its revision does not
+\   move: a draw callback calls this after the canvas has drawn.
 : CVS-TEXT  ( w x y addr len -- )
-    \ Place text at dot coords, snapped to cell grid.
     >R >R                                 ( w x y   R: len addr )
     4 / >R 2 / R>                         ( w cc cr   R: len addr )
-    R> R> 2OVER                           ( w cc cr addr len cr cc )
+    R> R> 2OVER SWAP                      ( w cc cr addr len cr cc )
     DRW-TEXT  2DROP DROP ;
 
 \ =====================================================================
