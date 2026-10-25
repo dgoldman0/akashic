@@ -11778,6 +11778,10 @@ _SHADOW_CHECK_VARIABLES = {
     "first_item": "FSHD-FIRST-ITEM",
     "first_offset": "FSHD-FIRST-OFFSET",
     "first_draw": "FSHD-FIRST-DRAW",
+    "checks_snapshot": "FSHD-CHECKS-SNAPSHOT",
+    "checks_producer_glyphs": "FSHD-CHECKS-PRODUCER-GLYPHS",
+    "checks_producer_menus": "FSHD-CHECKS-PRODUCER-MENUS",
+    "checks_shell_glyphs": "FSHD-CHECKS-SHELL-GLYPHS",
 }
 SHADOW_CHECK_STAGES = {
     1: "the snapshot",

@@ -11,9 +11,10 @@
 \
 \  While the shadow check is on, a step that takes a shortcut also runs its
 \  full path, into storage that does not feed the frame, and compares the
-\  two results here.  A difference is counted, and the first one is kept:
-\  its stage, its item, the first byte that differs and the draw, which the
-\  stage names in FSHD-DRAW before it compares.  The frame goes on with the
+\  two results here.  Comparisons are counted in all and by stage, so a run
+\  shows which shortcuts its frames took.  A difference is counted, and the
+\  first one is kept: its stage, its item, the first byte that differs and
+\  the draw, which the stage names in FSHD-DRAW before it compares.  The frame goes on with the
 \  shortcut's result, as it does with the check off, so the run sends
 \  exactly the frames it would send without it; the run that turned the
 \  check on fails when it reads the count.
@@ -50,6 +51,13 @@ VARIABLE FSHD-FIRST-ITEM
 VARIABLE FSHD-FIRST-OFFSET
 VARIABLE FSHD-FIRST-DRAW
 
+\ The comparisons each stage made, so that a run shows which shortcuts its
+\ frames took.
+VARIABLE FSHD-CHECKS-SNAPSHOT
+VARIABLE FSHD-CHECKS-PRODUCER-GLYPHS
+VARIABLE FSHD-CHECKS-PRODUCER-MENUS
+VARIABLE FSHD-CHECKS-SHELL-GLYPHS
+
 \ FSHD? ( -- flag )  Whether the shadow check is on.
 : FSHD?  ( -- flag )  FSHD-ON @ 0<> ;
 
@@ -57,7 +65,9 @@ VARIABLE FSHD-FIRST-DRAW
 : FSHD-RESET  ( -- )
     0 FSHD-CHECKS ! 0 FSHD-MISMATCHES ! 0 FSHD-SKIPPED !
     0 FSHD-FIRST-STAGE ! 0 FSHD-FIRST-ITEM !
-    0 FSHD-FIRST-OFFSET ! 0 FSHD-FIRST-DRAW ! ;
+    0 FSHD-FIRST-OFFSET ! 0 FSHD-FIRST-DRAW !
+    0 FSHD-CHECKS-SNAPSHOT ! 0 FSHD-CHECKS-PRODUCER-GLYPHS !
+    0 FSHD-CHECKS-PRODUCER-MENUS ! 0 FSHD-CHECKS-SHELL-GLYPHS ! ;
 
 0 FSHD-ON ! 0 FSHD-DRAW ! FSHD-RESET
 
@@ -119,13 +129,20 @@ VARIABLE _FSHD-STAGE
     THEN
     1 FSHD-MISMATCHES +! ;
 
+\ The count of STAGE's comparisons, STAGE being one of the stages above.
+: _FSHD-STAGE-CHECKS  ( stage -- a )
+    DUP FSHD-STAGE-SNAPSHOT = IF DROP FSHD-CHECKS-SNAPSHOT EXIT THEN
+    DUP FSHD-STAGE-PRODUCER-GLYPHS = IF DROP FSHD-CHECKS-PRODUCER-GLYPHS EXIT THEN
+    FSHD-STAGE-PRODUCER-MENUS = IF FSHD-CHECKS-PRODUCER-MENUS EXIT THEN
+    FSHD-CHECKS-SHELL-GLYPHS ;
+
 \ FSHD-SAME? ( a1 u1 a2 u2 item stage -- flag )
 \   Count one comparison of STAGE's ITEM: the shortcut's U1 bytes at A1
 \   against the full path's U2 bytes at A2.  A difference in length or in
 \   any byte is counted, and kept when it is the first.
 : FSHD-SAME?  ( a1 u1 a2 u2 item stage -- flag )
     _FSHD-STAGE ! _FSHD-ITEM ! _FSHD-U2 ! _FSHD-A2 ! _FSHD-U1 ! _FSHD-A1 !
-    1 FSHD-CHECKS +!
+    1 FSHD-CHECKS +! 1 _FSHD-STAGE @ _FSHD-STAGE-CHECKS +!
     _FSHD-U1 @ _FSHD-U2 @ = IF
         _FSHD-U1 @ 0= IF -1 EXIT THEN
         _FSHD-A1 @ _FSHD-U1 @ _FSHD-A2 @ _FSHD-U2 @ COMPARE 0= IF -1 EXIT THEN
