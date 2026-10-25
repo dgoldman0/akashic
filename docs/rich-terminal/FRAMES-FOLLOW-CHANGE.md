@@ -435,6 +435,32 @@ Safe mode and tests keep those checks (decision 4).
 steps of a typed letter's 16 million. This part needs no change counts, so
 it comes straight after part 2.
 
+**Done** on 2026-10-25 (fc62e45f to 5baf027d). The switch is
+`tui/check-mode.f`; Desk turns it off when it loads, and
+`--every-frame-checks` turns it on for a run. The first slice made RUHA's
+record and banks one block, so that no other storage can lie between them;
+the span-set proofs that memory layout had split fell from 2.15 million
+steps a burst frame to 0.55. Eight slices then moved the repeats and the
+per-frame handover proofs behind the switch. Each keeps, in both modes, the
+state and fit checks, the identity of each record a step reads, the shapes
+of the spans its arithmetic uses, the bounds of the writes it makes, and
+the engine's admission of each item the frame sends. A typed letter's burst
+frame build fell from 16.69 million steps at the end of part 2 to 9.62, and
+all its steps from 19.59 million to 11.36. Cheaper frames let the guest
+answer every key with a frame of its own, 18 rather than 15, so the burst's
+total fell less, from 294 million steps to 205. With every-frame checks on,
+the frame build took 15.41 million, about its cost before the switch. The
+shadow check found no difference in any run in either mode, and the
+canonical Desktop journey passed with it, without it, and with it and
+every-frame checks. Checks still take 3.48 million of the frame build: the
+item checks, 1.78 million, which follow change once part 9 builds only what
+changed; the engine's admission of the shell's batch and the planner's
+bounds on its writes, 0.76 million; UIDL-TUI's rechecks of its cached
+relations, about 0.2 million, which part 5 replaces; and handover proofs,
+0.54 million, most of them the public admissions' and the captures' proofs
+of the spans they are given. See the
+[evidence](../../local_testing/evidence/frames-follow-change-part3-20261025.md).
+
 ## Part 4. Safe mode — safety
 
 **What it does.** Every frame goes through the full path with every check
@@ -709,7 +735,7 @@ pass.
 | 0 | Measure the changed frames now | done |
 | 1 | A shadow check of every shortcut | done |
 | 2 | Widgets count their changes | done |
-| 3 | Checks run when they can find something | proposed |
+| 3 | Checks run when they can find something | done |
 | 4 | Safe mode | proposed |
 | 5 | UIDL sees its widgets' changes and counts its own | proposed |
 | 6 | Applications stop bridging change | proposed |
@@ -736,17 +762,23 @@ path also runs the journey once in safe mode.
 Millions of steps in a typed letter's burst frame, from the check
 measurement, whose frame build of 16.16 million matches part 0's 16.13
 million. During part 2 the same frame build took 15.4 to 16.7 million,
-most of the difference in handover proofs that memory layout made split. The figures after parts 3 and 9 are estimates.
+most of the difference in handover proofs that memory layout made split.
+The figures after part 3 were measured at 5baf027d; those after part 9 are
+estimates.
 
 | | Today | After part 3 | After part 9 |
 | --- | ---: | ---: | ---: |
-| Checks | 9.85 | about 1.9 | about 0.2 |
-| Building, copying and comparing | 6.28 | 6.28 | about 2 |
-| Fit | 0.03 | 0.03 | 0.03 |
-| Frame build | 16.16 | about 8 | about 2 |
+| Checks | 9.85 | 3.48 | about 0.2 |
+| Building, copying and comparing | 6.28 | 6.08 | about 2 |
+| Fit | 0.03 | 0.05 | 0.03 |
+| Frame build | 16.16 | 9.62 | about 2 |
 
-After part 3, the item checks still visit every item on every frame. Part 9
-makes them follow change.
+Part 3 was estimated to leave 1.9 million of checks and left 3.48. The
+engine's admission of the shell's batch, the glyph planner's bounds on its
+writes, UIDL-TUI's rechecks of its relations, and the public admissions'
+and captures' proofs of the spans they are given stayed, for the reasons in
+its evidence. After part 3, the item checks still visit every item on every
+frame. Part 9 makes them follow change.
 
 Steps a frame also count Desk's painting and the terminal service, about 3
 million together. A typed letter repaints one row, so part 7 changes little
