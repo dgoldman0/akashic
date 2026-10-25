@@ -1546,14 +1546,31 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU
     OVER _RSHSP.PENDING @ 0= 2 PICK _RSHSP.PENDING-TARGET @ 0= <> OR
     OVER _RSHSP.PENDING @ 0= 2 PICK _RSHSP.PENDING-DRAW @ 0= <> OR IF DROP 0 EXIT THEN
     DROP -1 ;
+\ The sidecar, and the producer, source and shell it names, for one
+\ dispatch.
+: _RSHSP-BIND ( sidecar -- )
+    DUP _RSHSP-S !
+    DUP _RSHSP.PRODUCER @ _RSHSP-P !
+    DUP _RSHSP.SOURCE @ _RSHSP-ISOURCE !
+    _RSHSP.SHELL @ _RSHSP-ISHELL ! ;
+\ Whether SIDECAR, and the producer it names, are the records they say they
+\ are: on a cell, with their own magic, size and address.
+: _RSHSP-NAMED? ( sidecar -- flag )
+    DUP 0= OVER 7 AND OR IF DROP 0 EXIT THEN
+    DUP _RSHSP.MAGIC @ _RSHSP-MAGIC <>
+    OVER _RSHSP.SIZE @ RSHSP-SIZE <> OR
+    OVER _RSHSP.SELF @ 2 PICK <> OR IF DROP 0 EXIT THEN
+    _RSHSP.PRODUCER @
+    DUP 0= OVER 7 AND OR IF DROP 0 EXIT THEN
+    DUP _RTHP.MAGIC @ _RTHP-MAGIC <>
+    OVER _RTHP.SIZE @ RTHP-SIZE <> OR
+    OVER _RTHP.SELF @ 2 PICK <> OR IF DROP 0 EXIT THEN
+    DROP -1 ;
 \ The caller has checked the header before its first store.  The header
 \ proves the sidecar, producer, source, shell, work and bank spans with
 \ _RSHSP-SPAN?, a pure function of each span, so they are not checked again.
 : _RSHSP-AUTHORITY? ( sidecar -- flag )
-    _RSHSP-S !
-    _RSHSP-S @ _RSHSP.PRODUCER @ _RSHSP-P !
-    _RSHSP-S @ _RSHSP.SOURCE @ _RSHSP-ISOURCE !
-    _RSHSP-S @ _RSHSP.SHELL @ _RSHSP-ISHELL !
+    _RSHSP-BIND
     _RSHSP-P @ DUP _RTHP.MAGIC @ _RTHP-MAGIC <>
     OVER _RTHP.SIZE @ RTHP-SIZE <> OR
     OVER _RTHP.SELF @ 2 PICK <> OR IF DROP 0 EXIT THEN DROP
@@ -2055,10 +2072,21 @@ VARIABLE _RSHSP-DM-UA
     _RSHSP-BANK @ DUP RSHSP-BANK.BATCH @ +
     _RSHSP-S @ _RSHSP.ACTIVE @ DUP RSHSP-BANK.BATCH @ +
     _RSHSP-S @ _RSHSP.SHELL @ _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
+\ With every-frame checks on, each dispatch checks the sidecar's header and
+\ proves its storage apart from the records it names, the engine's storage,
+\ the source's live storage and RUHA's banks.  In normal mode it checks only
+\ that the sidecar and its producer are the records they say they are:
+\ RSHSP-INIT proved the storage it was lent, and the work space and banks
+\ that grow come from Desk's memory source, whose live blocks never overlap.
 : _RSHSP-DISPATCH ( event producer sidecar -- rte-status )
-    DUP _RSHSP-HEADER? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
-    2 PICK RTHPX-PREPARE = 3 PICK RTHPX-DELTA-PREPARE = OR _RSHSP-LIVE-PROOF !
-    DUP _RSHSP-AUTHORITY? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+    CHK-EVERY-FRAME? IF
+        DUP _RSHSP-HEADER? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+        2 PICK RTHPX-PREPARE = 3 PICK RTHPX-DELTA-PREPARE = OR _RSHSP-LIVE-PROOF !
+        DUP _RSHSP-AUTHORITY? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+    ELSE
+        DUP _RSHSP-NAMED? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+        DUP _RSHSP-BIND
+    THEN
     DROP _RSHSP-P @ <> IF DROP RTE-S-INVALID EXIT THEN
     _RSHSP-S @ _RSHSP.EXTENSION _RSHSP-P @ _RTHP.EXTENSION @ <> IF DROP RTE-S-INVALID EXIT THEN
     DUP RTHPX-PREPARE = IF DROP _RSHSP-PREPARE EXIT THEN

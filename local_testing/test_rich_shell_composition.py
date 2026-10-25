@@ -216,6 +216,22 @@ VARIABLE _SHT-REFUSE-INSTALL
     assert values("_A1D-OWNER _APTAS.CONTROL-CONTEXT @ _A1D-SHELL-PRODUCER =") == (true,)
     assert values("_A1D-OWNER _APTAS.CONTROL-XT @ ' RSHSP-CONTROL-TARGET@ =") == (true,)
     assert values("_A1D-SCREEN _RTHP.EXTENSION @ 0<>") == (true,)
+    # Each dispatch checks that the sidecar and its producer are the records
+    # they say they are, and that the producer is the one it was given.  With
+    # every-frame checks on it also checks the sidecar's header and proves its
+    # storage, so a work space knocked off its cell is refused; Desk chose
+    # normal mode, where that proof was made when the storage was lent.
+    dispatch = "RTHPX-ABORT _A1D-SCREEN _A1D-SHELL-PRODUCER _RSHSP-DISPATCH RTE-S-OK ="
+    assert values("CHK-EVERY-FRAME @") == (0,)
+    assert values(dispatch) == (true,)
+    values("1 _A1D-SHELL-PRODUCER _RSHSP.WORK +!")
+    assert values(dispatch) == (true,)
+    assert values("RTHPX-ABORT 0 _A1D-SHELL-PRODUCER _RSHSP-DISPATCH RTE-S-INVALID =") == (true,)
+    values("-1 CHK-EVERY-FRAME !")
+    assert values(dispatch) == (0,)
+    values("-1 _A1D-SHELL-PRODUCER _RSHSP.WORK +!")
+    assert values(dispatch) == (true,)
+    values("0 CHK-EVERY-FRAME !")
     assert values("_A1D-UNINSTALL") == (0,)
     assert values("_A1D-SHELL-PHASE @ _SHSN-INSTALLED @ _A1D-SCREEN _RTHP.EXTENSION @") == (0, 0, 0)
     assert values("_A1D-MEMORY MSRC-HELD@") == (0,)

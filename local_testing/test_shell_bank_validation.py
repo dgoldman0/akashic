@@ -161,7 +161,10 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
     assert "_RTHP.ARENA-U @ _RSHSP-SPAN?" in authority
     # Every caller checks the header, or each span, first.
     for caller, first, then in (("RSHSP-VALID?", "_RSHSP-HEADER?", "_RSHSP-AUTHORITY?"),
+                                ("_RSHSP-DISPATCH", "CHK-EVERY-FRAME? IF", "_RSHSP-HEADER?"),
                                 ("_RSHSP-DISPATCH", "_RSHSP-HEADER?", "_RSHSP-AUTHORITY?"),
+                                ("_RSHSP-DISPATCH", "_RSHSP-AUTHORITY?", "_RSHSP-NAMED?"),
+                                ("_RSHSP-DISPATCH", "_RSHSP-NAMED?", "_RSHSP-BIND"),
                                 ("RSHSP-INIT", "_RSHSP-SPAN?", "_RSHSP-SPANS?")):
         body = word(caller)
         assert body.index(first) < body.index(then), caller
