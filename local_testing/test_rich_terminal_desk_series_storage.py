@@ -55,6 +55,21 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
     before = values("XMEM-HERE @ XMEM-LIMIT @")
     assert before[1] > before[0]
     assert values("_A1D-SETUP") == (0,)
+    # RUHA's storage proofs first query the range from its lowest span to the
+    # end of its highest.  Desk carves RUHA's record and banks from one block,
+    # so that range starts at the block and ends at its last bank, and holds
+    # nothing that is not RUHA's.  The probe accepts every query, so one is
+    # asked.
+    assert values(
+        "VARIABLE _RBLK-A  VARIABLE _RBLK-U  VARIABLE _RBLK-N  0 _RBLK-N ! "
+        ": _RBLK-FIRST ( a u -- flag ) "
+        "_RBLK-N @ 0= IF _RBLK-U ! _RBLK-A ! ELSE 2DROP THEN 1 _RBLK-N +! -1 ; "
+        "_A1D-RUHA ' _RBLK-FIRST _RUHA-SAFE-PROVE? "
+        "_RBLK-A @ _A1D-RUHA = "
+        "_RBLK-A @ _RBLK-U @ + _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE "
+        "_A1D-RUHA-SNAPSHOT-DIALOG-NATIVE-U + = "
+        "_RBLK-U @ _A1D-RUHA-BLOCK-U U> 0= _RBLK-N @"
+    ) == ((1 << 64) - 1,) * 4 + (1,)
     after = values("XMEM-HERE @ XMEM-LIMIT @")
     assert after[1] > after[0]
     assert values("_A1D-PHASE @ _A1D-PHASE-INSTALLED =") == ((1 << 64) - 1,)

@@ -1003,14 +1003,6 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
         "    CONSTANT _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY"
     ) in code
-    assert (
-        "_A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-MEM"
-    ) in code
-    assert (
-        "_A1D-RUHA-SNAPSHOT-STATUS-NATIVE-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-SNAPSHOT-STATUS-NATIVE-MEM"
-    ) in code
     arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
     assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
     derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
@@ -1047,33 +1039,54 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "    2 _A1D-CAPACITY*\n"
         "    CONSTANT _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U"
     ) in code
-    assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
+    # RUHA's record and its banks are carved from one block, so that its
+    # storage proofs query one range with nothing else inside it.  Each span
+    # takes its own capacity, in the order RUHA-INIT receives them.
+    assert re.findall(r"XBUF (_A1D-RUHA\S*)", code) == ["_A1D-RUHA-BLOCK-MEM"]
     assert (
-        "_A1D-RUHA-COLLECTION-VALIDATION-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-COLLECTION-VALIDATION-MEM"
+        "RUHA-SIZE _A1D-ALIGNMENT-SLOP+ -8 AND\n"
+        "    CONSTANT _A1D-RUHA-O-RECORDS"
     ) in code
+    ruha_banks = (
+        ("RECORDS", "_A1D-RUHA-RECORDS-U"),
+        ("WORK", "_A1D-RUHA-WORK-U"),
+        ("WORK-TEXT", "_A1D-UIDL-TEXT-U"),
+        ("COLLECTION-VALIDATION", "_A1D-RUHA-COLLECTION-VALIDATION-U"),
+        ("COLLECTION-WORK", "_A1D-RUHA-COLLECTION-WORK-U"),
+        ("DIRECTORY", "_A1D-RUHA-DIRECTORY-U"),
+        ("SNAPSHOT-RECORDS", "_A1D-RUHA-SNAPSHOT-RECORDS-U"),
+        ("SNAPSHOT-TEXT", "_A1D-RUHA-SNAPSHOT-TEXT-U"),
+        ("SNAPSHOT-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-DESCRIPTORS-U"),
+        ("SNAPSHOT-NATIVE", "_A1D-RUHA-SNAPSHOT-NATIVE-U"),
+        ("SNAPSHOT-DGRAPH-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U"),
+        ("SNAPSHOT-DGRAPH-NATIVE", "_A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U"),
+        ("SNAPSHOT-STATUS-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U"),
+        ("SNAPSHOT-STATUS-NATIVE", "_A1D-RUHA-SNAPSHOT-STATUS-NATIVE-U"),
+        ("SNAPSHOT-FIELD-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U"),
+        ("SNAPSHOT-FIELD-NATIVE", "_A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U"),
+        ("SNAPSHOT-DIALOG-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U"),
+        ("SNAPSHOT-DIALOG-NATIVE", "_A1D-RUHA-SNAPSHOT-DIALOG-NATIVE-U"),
+    )
+    layout = re.findall(
+        r"_A1D-RUHA-O-(\S+) (\S+) _A1D-SPAN-END CONSTANT (\S+)",
+        " ".join(code.split()),
+    )
+    following = [f"_A1D-RUHA-O-{name}" for name, _ in ruha_banks[1:]]
+    assert layout == [
+        (name, size, after)
+        for (name, size), after in zip(ruha_banks, following + ["_A1D-RUHA-BLOCK-U"])
+    ]
     assert (
-        "_A1D-RUHA-COLLECTION-WORK-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-COLLECTION-WORK-MEM"
+        "_A1D-RUHA-BLOCK-U _A1D-ALIGNMENT-SLOP+ XBUF _A1D-RUHA-BLOCK-MEM\n"
+        "_A1D-RUHA-BLOCK-MEM 7 + -8 AND CONSTANT _A1D-RUHA\n"
     ) in code
-    assert "_A1D-RUHA-DIRECTORY-U _A1D-ALIGNMENT-SLOP+" in code
-    assert (
-        "_A1D-RUHA-SNAPSHOT-DESCRIPTORS-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-SNAPSHOT-DESCRIPTORS-MEM"
-    ) in code
-    assert (
-        "_A1D-RUHA-SNAPSHOT-NATIVE-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-SNAPSHOT-NATIVE-MEM"
-    ) in code
-    assert (
-        "_A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U "
-        "_A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-MEM"
-    ) in code
-    assert (
-        "_A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U _A1D-ALIGNMENT-SLOP+\n"
-        "    XBUF _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-MEM"
-    ) in code
+    for name, _ in ruha_banks:
+        assert (
+            f"_A1D-RUHA _A1D-RUHA-O-{name} + CONSTANT _A1D-RUHA-{name}"
+            in " ".join(code.split())
+        )
+    span_end = _word(composition, "_A1D-SPAN-END")
+    assert "_A1D-ALIGNMENT-SLOP+ -8 AND _A1D-CAPACITY+" in span_end
     for applet_specific_capacity in (
         "PAD-DATA-GRAPHICS",
         "DAYBOOK-DATA-GRAPHICS",
