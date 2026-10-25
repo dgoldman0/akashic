@@ -22,7 +22,11 @@ run can see frames keep going while a picture uploads.
 
 With --screen-profile the simulator also records what each PRESENT carries
 and the guest words each step runs under, in the evidence's screen-profile
-directory, which local_testing/screen_change_profile.py reads.
+directory, which local_testing/screen_change_profile.py reads.  With --shadow-check
+the image turns on the shadow check of the rich frame's shortcuts at boot
+(tui/rich-terminal/frame-shadow.f): each shortcut also runs its full path
+and compares, and the run fails on any difference, or when the check was
+not on after all.
 """
 from __future__ import annotations
 
@@ -149,6 +153,7 @@ def child(args) -> int:
         "hold_seconds": 10, "watchdog_seconds": WATCHDOG_SECONDS,
         "terminal_link_pace": args.terminal_link_pace,
         "screen_profile": args.screen_profile,
+        "shadow_check": args.shadow_check,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -162,6 +167,8 @@ def child(args) -> int:
         sys.argv += ["--terminal-link-pace", args.terminal_link_pace]
     if args.screen_profile:
         sys.argv.append("--screen-profile")
+    if args.shadow_check:
+        sys.argv.append("--shadow-check")
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -190,6 +197,8 @@ def supervise(args) -> int:
         command += ["--terminal-link-pace", args.terminal_link_pace]
     if args.screen_profile:
         command.append("--screen-profile")
+    if args.shadow_check:
+        command.append("--shadow-check")
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
@@ -197,6 +206,8 @@ def supervise(args) -> int:
         kind += f", paced link {args.terminal_link_pace}"
     if args.screen_profile:
         kind += ", screen profile"
+    if args.shadow_check:
+        kind += ", shadow check"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -226,7 +237,24 @@ def supervise(args) -> int:
         "socket_directory": str(socket_root),
         "note": "One canonical client/server process group, no test workers; outer budget includes image build.",
     })
-    return 0 if process.returncode == 0 and stop_reason is None else 1
+    passed = process.returncode == 0 and stop_reason is None
+    if passed and args.shadow_check and not shadow_check_was_on(artifact):
+        print("Shadow check: asked for, but the guest did not report it on", flush=True)
+        passed = False
+    return 0 if passed else 1
+
+
+def shadow_check_was_on(artifact: Path) -> bool:
+    """Whether the run's final guest diagnostics show the shadow check on."""
+
+    try:
+        diagnostics = json.loads(
+            (artifact / "evidence" / "final-guest-diagnostics.json").read_text()
+        )
+    except (OSError, ValueError):
+        return False
+    record = diagnostics.get("shadow_check") or {}
+    return bool(record.get("on")) and not record.get("unavailable")
 
 
 def main() -> int:
@@ -243,6 +271,9 @@ def main() -> int:
                         help="semantic backend: the simulator, or MegaPad's hybrid mode")
     parser.add_argument("--terminal-link-pace", metavar="BYTES_PER_SECOND:FRAME_US",
                         help="pace the link to the hosted terminal, for testing")
+    parser.add_argument("--shadow-check", action="store_true",
+                        help="turn on the shadow check of the rich frame's "
+                             "shortcuts at boot, and fail on any difference")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

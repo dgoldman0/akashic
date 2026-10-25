@@ -175,9 +175,10 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-B-CAPTURE",
         "_RUHA-B-PUBLISH",
     )
-    capture_at = query.index("['] _RUHA-B-CAPTURE")
-    capture_restore_at = query.index("['] _RUHA-B-RESTORE", capture_at)
-    assert capture_at < capture_restore_at < query.index("_RUHA-B-PUBLISH")
+    capture_all = _word(source, "_RUHA-B-CAPTURE-ALL")
+    capture_at = capture_all.index("['] _RUHA-B-CAPTURE CATCH")
+    assert capture_at < capture_all.index("['] _RUHA-B-RESTORE CATCH", capture_at)
+    assert query.index("_RUHA-B-CAPTURE-ALL") < query.index("_RUHA-B-PUBLISH")
     _ordered(
         publish,
         "_RUHA-S.GENERATION !",
@@ -954,8 +955,10 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     # one-past-end address with zero bytes.
     assert capture.count("_RUHA-B-TAIL-SPAN") == 12
     assert "ASHELL-ACTIVE-CTX _RUHA-B-ORIGINAL-CTX !" in query
-    assert "['] _RUHA-B-CAPTURE CATCH" in query
-    assert "['] _RUHA-B-RESTORE CATCH" in query
+    capture_all = _word(source, "_RUHA-B-CAPTURE-ALL")
+    assert "_RUHA-B-CAPTURE-ALL" in query
+    assert "['] _RUHA-B-CAPTURE CATCH" in capture_all
+    assert "['] _RUHA-B-RESTORE CATCH" in capture_all
     assert "_RUHA-R.UCTX @ ASHELL-CTX-SWITCH" in capture
     assert capture.count("ASHELL-CTX-SWITCH") == 1
     switch = capture.index("ASHELL-CTX-SWITCH")
@@ -1167,7 +1170,11 @@ def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     finalize = _word(source, "_RUHA-B-FINALIZE-STAGED")
     publish = _word(source, "_RUHA-B-PUBLISH")
 
-    assert dispatch.count("_RUHA-B-CAPTURE-CURRENT") == 2
+    # Dirty records, and clean ones the shadow check's full capture takes
+    # live, are captured; so are clean empty ones in the full capture.
+    assert dispatch.count("_RUHA-B-CAPTURE-CURRENT") == 3
+    assert "_RUHA-B-FULL @ IF _RUHA-B-CAPTURE-CURRENT EXIT THEN" in dispatch
+    assert "_RUHA-RECORD-DIRTY? _RUHA-B-FULL @ OR IF" in dispatch
     assert "_RUHA-RECORD-DIRTY?" in dispatch
     assert "_RUHA-RECORD-EMPTY?" in dispatch
     assert "_RUHA-B-FIND-PRIOR" in dispatch
@@ -1192,6 +1199,41 @@ def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     query = _word(source, "RUHA-SNAPSHOT-FOR@")
     assert "_RUHA-B-FINALIZE-STAGED" not in query
     assert query.count("_RUHA-B-CLEAR-STAGED") == 2
+
+
+def test_shadow_check_captures_in_full_first_and_publishes_the_ordinary_capture() -> None:
+    source = _source()
+    query = _word(source, "RUHA-SNAPSHOT-FOR@")
+    full = _word(source, "_RUHA-SH-FULL")
+    check = _word(source, "_RUHA-SH-CHECK")
+    # The full capture runs only with the check on, before the ordinary
+    # capture, which is the one compared and then published.
+    _ordered(
+        query,
+        "FSHD? IF _RUHA-SH-FULL THEN",
+        "_RUHA-B-START",
+        "_RUHA-B-CAPTURE-ALL",
+        "FSHD? IF _RUHA-SH-CHECK THEN",
+        "_RUHA-B-PUBLISH",
+    )
+    assert query.count("_RUHA-B-CAPTURE-ALL") == 1
+    # The full capture puts back the records' flags it staged or dirtied,
+    # and keeps its result before they are restored.
+    _ordered(
+        full,
+        "_RUHA-SH-SAVE-FLAGS?",
+        "_RUHA-B-START",
+        "-1 _RUHA-B-FULL !",
+        "_RUHA-B-CAPTURE-ALL",
+        "0 _RUHA-B-FULL !",
+        "_RUHA-SH-KEEP?",
+        "_RUHA-SH-RESTORE-FLAGS",
+    )
+    assert "FSHD-SKIP" in full
+    # The header carries the status, the document count and every length,
+    # so a different length is a difference before any bytes are read.
+    _ordered(check, "_RUHA-SH-HEADER!", "FSHD-SAME? 0= IF EXIT THEN",
+             "_RUHA-SH-SPAN-COUNT 0 ?DO", "FSHD-SAME? DROP")
 
 
 def test_final_writer_occlusion_falls_back_the_complete_document_atomically() -> None:

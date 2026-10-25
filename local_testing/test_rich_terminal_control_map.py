@@ -51,6 +51,8 @@ def _definitions(producer_source: str) -> dict[str, str]:
         "utils/memory-span.f",
         "utils/memory-source.f",
         "utils/uint-range.f",
+        # The shadow check's words, which the frame build's shortcuts call.
+        "tui/rich-terminal/frame-shadow.f",
     ):
         texts.append((ROOT / "akashic" / relative).read_text())
     declarations: dict[str, str] = {}

@@ -87,3 +87,26 @@ _RA-COMP-DESC _RA-INSTANCE @ CINST.DESC !
 _RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 1 = _RA-ASSERT
 _RP-DONE
 ''', minimum=87, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
+
+
+def test_shadow_check_matches_reuse_and_catches_a_stale_reused_slice():
+    run_series(_program() + r'''
+-1 FSHD-ON ! FSHD-RESET
+\ An unchanged draw reuses the document, which the full capture takes live:
+\ the header and all thirteen spans agree.
+2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
+_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 1 = _RA-ASSERT
+FSHD-CHECKS @ 14 = _RA-ASSERT FSHD-MISMATCHES @ 0= _RA-ASSERT
+FSHD-SKIPPED @ 0= _RA-ASSERT
+\ A reused slice that no longer matches its widget is a difference, in the
+\ collection values, the fifth span.
+_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP 98 SWAP C!
+3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
+FSHD-MISMATCHES @ 1 = _RA-ASSERT
+FSHD-FIRST-STAGE @ FSHD-STAGE-SNAPSHOT = _RA-ASSERT
+FSHD-FIRST-ITEM @ 5 = _RA-ASSERT
+\ The published snapshot is the reused one, as it is with the check off.
+_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP C@ 98 = _RA-ASSERT
+0 FSHD-ON !
+_RP-DONE
+''', minimum=57, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")

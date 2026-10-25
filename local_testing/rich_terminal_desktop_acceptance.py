@@ -11766,7 +11766,72 @@ def _delta_refusal_record(client) -> dict:
     return record
 
 
-def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
+# The shadow check of the rich frame's shortcuts (tui/rich-terminal/
+# frame-shadow.f): whether the run turned it on, how many comparisons it
+# made, and the first difference.
+_SHADOW_CHECK_VARIABLES = {
+    "on": "FSHD-ON",
+    "checks": "FSHD-CHECKS",
+    "mismatches": "FSHD-MISMATCHES",
+    "skipped": "FSHD-SKIPPED",
+    "first_stage": "FSHD-FIRST-STAGE",
+    "first_item": "FSHD-FIRST-ITEM",
+    "first_offset": "FSHD-FIRST-OFFSET",
+    "first_draw": "FSHD-FIRST-DRAW",
+}
+SHADOW_CHECK_STAGES = {
+    1: "the snapshot",
+    2: "the screen producer's runs",
+    3: "the screen producer's menu controls",
+    4: "the shell's runs of a region",
+}
+
+
+def shadow_check_record(client) -> dict:
+    """What the shadow check of the frame's shortcuts found."""
+
+    try:
+        words = client.request(
+            "forth", names=list(_SHADOW_CHECK_VARIABLES.values())
+        ).get("words", {})
+        record = {}
+        for key, name in _SHADOW_CHECK_VARIABLES.items():
+            word = words.get(name)
+            if not isinstance(word, dict):
+                return {"unavailable": True, "error": f"{name} not found"}
+            if "value" in word:
+                value = int(word["value"])
+            elif "data_address" in word:
+                value = _read_guest_cells(
+                    client, address=int(word["data_address"]), count=1
+                )[0]
+            else:
+                return {"unavailable": True, "error": f"{name} has no cell"}
+            record[key] = value
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    record["on"] = record["on"] != 0
+    record["first_stage_name"] = SHADOW_CHECK_STAGES.get(record["first_stage"])
+    return record
+
+
+def shadow_check_failure(record: dict) -> str | None:
+    """Why a run whose shadow check was on fails, or None when it passes."""
+
+    if record.get("unavailable") or not record.get("on"):
+        return None
+    if not record["mismatches"] and not record["skipped"]:
+        return None
+    return (
+        f"the shadow check found {record['mismatches']} difference(s) and "
+        f"skipped {record['skipped']} of {record['checks']} comparisons; the "
+        f"first differs in {record['first_stage_name']}, item "
+        f"{record['first_item']}, at byte {record['first_offset']}, in draw "
+        f"{record['first_draw']}"
+    )
+
+
+def _write_final_guest_diagnostics(artifact_root: Path, client) -> dict:
     """After a passing journey, keep how the guest published its frames.
 
     The guest's DELTA counters and the terminal's committed PRESENT modes say
@@ -11804,9 +11869,11 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> None:
                 client, variables.get(_GUEST_LIVE_RECORD_POINTERS["hybrid_producer"], 0)
             ),
             "delta_refusals": _delta_refusal_record(client),
+            "shadow_check": shadow_check_record(client),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return payload
 
 
 def write_acceptance_manifest(
@@ -12869,7 +12936,12 @@ def run_physical_desktop_acceptance(
                     offer_id=frame_offer.offer_id,
                     journey_stage=journey.stage,
                 )
-                _write_final_guest_diagnostics(artifact_root, client)
+                diagnostics = _write_final_guest_diagnostics(artifact_root, client)
+                shadow_failure = shadow_check_failure(
+                    diagnostics.get("shadow_check") or {}
+                )
+                if shadow_failure is not None:
+                    raise PhysicalDesktopAcceptanceError(shadow_failure)
                 # The evidence boundary is complete.  Keep the post-pass window
                 # visible for inspection, but make it view-only so late host
                 # events cannot mutate the guest outside the recorded journey.

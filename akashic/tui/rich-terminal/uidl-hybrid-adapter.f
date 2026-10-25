@@ -40,6 +40,7 @@ REQUIRE ../uidl-picture-snapshot.f
 REQUIRE ../uidl-field-snapshot.f
 REQUIRE ../uidl-dialog-snapshot.f
 REQUIRE ../../utils/memory-span.f
+REQUIRE frame-shadow.f
 
 0 CONSTANT RUHA-S-OK
 1 CONSTANT RUHA-S-CAPACITY
@@ -3028,6 +3029,11 @@ VARIABLE _RUHA-OV-R
     _RUHA-OV-R @ _RUHA-DOC-RIGHT _RUHA-OV-R @ _RUHA-OV-RIGHT -
         _RUHA-OV-BAND-CLEAR? ;
 
+\ While the shadow check's full capture runs, every visible document is
+\ captured live: none is reused, and none is passed over as known empty.
+VARIABLE _RUHA-B-FULL
+0 _RUHA-B-FULL !
+
 : _RUHA-B-CAPTURE-RECORD ( record -- status )
     _RUHA-B-RECORD !
     _RUHA-B-RECORD @ _RUHA-B-ADAPTER @ _RUHA-RECORD-VISIBLE? 0= IF
@@ -3039,6 +3045,9 @@ VARIABLE _RUHA-OV-R
     \ its geometry; a dirty record must still take the conservative path.
     _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY? 0= IF
         _RUHA-B-RECORD @ _RUHA-RECORD-EMPTY? IF
+            \ The shadow check's full capture looks again, wherever the
+            \ document lies: a document still empty stages empty there too.
+            _RUHA-B-FULL @ IF _RUHA-B-CAPTURE-CURRENT EXIT THEN
             -1 _RUHA-B-RECORD @ _RUHA-B-STAGE RUHA-S-OK EXIT
         THEN
     THEN
@@ -3066,7 +3075,7 @@ VARIABLE _RUHA-OV-R
         THEN
         -1 UTUI-CAPTURE-OCCLUDED!
     THEN
-    _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY? IF
+    _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY? _RUHA-B-FULL @ OR IF
         _RUHA-B-CAPTURE-CURRENT EXIT
     THEN
     _RUHA-B-RECORD @ _RUHA-B-FIND-PRIOR IF
@@ -3221,6 +3230,157 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
     _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-A.ACTIVE-BANK !
     RUHA-S-OK ;
 
+\ Start a capture into the inactive bank: no document yet, and the
+\ prior's content epoch kept until a live capture changes provenance.
+: _RUHA-B-START  ( -- )
+    0 _RUHA-B-DIRECTORY-U ! 0 _RUHA-B-RECORDS-U !
+    0 _RUHA-B-TEXT-U ! 0 _RUHA-B-DESCRIPTORS-U !
+    0 _RUHA-B-NATIVE-U !
+    0 _RUHA-B-DGRAPH-DESCRIPTORS-U !
+    0 _RUHA-B-DGRAPH-NATIVE-U !
+    0 _RUHA-B-SFIELD-DESCRIPTORS-U !
+    0 _RUHA-B-SFIELD-NATIVE-U !
+    0 _RUHA-B-FIELD-DESCRIPTORS-U !
+    0 _RUHA-B-FIELD-NATIVE-U !
+    0 _RUHA-B-DIALOG-DESCRIPTORS-U !
+    0 _RUHA-B-DIALOG-NATIVE-U ! 0 _RUHA-B-DOCUMENTS !
+    _RUHA-B-GENERATION @ _RUHA-B-CONTENT-EPOCH !
+    0 _RUHA-B-EXACT-REUSE !
+    _RUHA-B-HAS-PRIOR @ IF
+        _RUHA-B-PRIOR-CONTENT-EPOCH @ _RUHA-B-CONTENT-EPOCH !
+        -1 _RUHA-B-EXACT-REUSE !
+    THEN ;
+
+\ Capture every record into the inactive bank, then return to the caller's
+\ context.
+: _RUHA-B-CAPTURE-ALL  ( -- )
+    ['] _RUHA-B-CAPTURE CATCH DUP IF
+        DROP RUHA-S-INVALID _RUHA-B-STATUS !
+        0 UTUI-CAPTURE-OCCLUDED!
+    ELSE
+        DROP _RUHA-B-STATUS !
+    THEN
+    ['] _RUHA-B-RESTORE CATCH IF
+        RUHA-S-INVALID _RUHA-B-STATUS !
+    THEN ;
+
+\ ---------------------------------------------------------------------
+\ Shadow check (frame-shadow.f)
+\ ---------------------------------------------------------------------
+\
+\ While the shadow check is on, a draw's snapshot is captured twice into the
+\ inactive bank.  The full capture comes first and captures every visible
+\ document live; its result goes to a scratch block, and the records' flags,
+\ which a capture stages and may mark dirty, are put back.  The ordinary
+\ capture then runs as it always does, and is the one published.  Its
+\ status, document count, every span's length and every span's bytes must
+\ equal the full capture's.
+
+13 CONSTANT _RUHA-SH-SPAN-COUNT
+
+\ The capture's INDEX-th output span.
+: _RUHA-SH-SPAN  ( index -- a u )
+    DUP 0 = IF DROP _RUHA-B-DIRECTORY-A @ _RUHA-B-DIRECTORY-U @ EXIT THEN
+    DUP 1 = IF DROP _RUHA-B-RECORDS-A @ _RUHA-B-RECORDS-U @ EXIT THEN
+    DUP 2 = IF DROP _RUHA-B-TEXT-A @ _RUHA-B-TEXT-U @ EXIT THEN
+    DUP 3 = IF DROP _RUHA-B-DESCRIPTORS-A @ _RUHA-B-DESCRIPTORS-U @ EXIT THEN
+    DUP 4 = IF DROP _RUHA-B-NATIVE-A @ _RUHA-B-NATIVE-U @ EXIT THEN
+    DUP 5 = IF
+        DROP _RUHA-B-DGRAPH-DESCRIPTORS-A @ _RUHA-B-DGRAPH-DESCRIPTORS-U @ EXIT
+    THEN
+    DUP 6 = IF DROP _RUHA-B-DGRAPH-NATIVE-A @ _RUHA-B-DGRAPH-NATIVE-U @ EXIT THEN
+    DUP 7 = IF
+        DROP _RUHA-B-SFIELD-DESCRIPTORS-A @ _RUHA-B-SFIELD-DESCRIPTORS-U @ EXIT
+    THEN
+    DUP 8 = IF DROP _RUHA-B-SFIELD-NATIVE-A @ _RUHA-B-SFIELD-NATIVE-U @ EXIT THEN
+    DUP 9 = IF
+        DROP _RUHA-B-FIELD-DESCRIPTORS-A @ _RUHA-B-FIELD-DESCRIPTORS-U @ EXIT
+    THEN
+    DUP 10 = IF DROP _RUHA-B-FIELD-NATIVE-A @ _RUHA-B-FIELD-NATIVE-U @ EXIT THEN
+    DUP 11 = IF
+        DROP _RUHA-B-DIALOG-DESCRIPTORS-A @ _RUHA-B-DIALOG-DESCRIPTORS-U @ EXIT
+    THEN
+    DROP _RUHA-B-DIALOG-NATIVE-A @ _RUHA-B-DIALOG-NATIVE-U @ ;
+
+\ A result's header: its status, its document count and each span's length.
+_RUHA-SH-SPAN-COUNT 2 + CELLS CONSTANT _RUHA-SH-HEADER-BYTES
+
+VARIABLE _RUHA-SH-KEPT
+VARIABLE _RUHA-SH-RESULT-A
+VARIABLE _RUHA-SH-RESULT-U
+VARIABLE _RUHA-SH-FLAGS-A
+VARIABLE _RUHA-SH-FLAGS-U
+VARIABLE _RUHA-SH-HEADER-A
+VARIABLE _RUHA-SH-HEADER-U
+VARIABLE _RUHA-SH-AT
+VARIABLE _RUHA-SH-SPAN-U
+
+: _RUHA-SH-HEADER!  ( dest -- )
+    _RUHA-B-STATUS @ OVER !
+    _RUHA-B-DOCUMENTS @ OVER CELL+ !
+    _RUHA-SH-SPAN-COUNT 0 ?DO
+        I _RUHA-SH-SPAN NIP OVER I 2 + CELLS + !
+    LOOP DROP ;
+
+: _RUHA-SH-RESULT-BYTES  ( -- u )
+    _RUHA-SH-HEADER-BYTES
+    _RUHA-SH-SPAN-COUNT 0 ?DO I _RUHA-SH-SPAN NIP + LOOP ;
+
+\ Keep the full capture's result: its header, then every span.
+: _RUHA-SH-KEEP?  ( -- flag )
+    _RUHA-SH-RESULT-BYTES _RUHA-SH-RESULT-A _RUHA-SH-RESULT-U FSHD-GROW
+    DUP 0= IF EXIT THEN
+    DUP _RUHA-SH-HEADER!
+    _RUHA-SH-HEADER-BYTES + _RUHA-SH-AT !
+    _RUHA-SH-SPAN-COUNT 0 ?DO
+        I _RUHA-SH-SPAN DUP _RUHA-SH-SPAN-U !
+        _RUHA-SH-AT @ SWAP MOVE
+        _RUHA-SH-SPAN-U @ _RUHA-SH-AT +!
+    LOOP -1 ;
+
+: _RUHA-SH-SAVE-FLAGS?  ( -- flag )
+    _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ CELLS
+        _RUHA-SH-FLAGS-A _RUHA-SH-FLAGS-U FSHD-GROW
+    0= IF 0 EXIT THEN
+    _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT _RUHA-R.FLAGS @
+        _RUHA-SH-FLAGS-A @ I CELLS + !
+    LOOP -1 ;
+
+: _RUHA-SH-RESTORE-FLAGS  ( -- )
+    _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        _RUHA-SH-FLAGS-A @ I CELLS + @
+        I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT _RUHA-R.FLAGS !
+    LOOP ;
+
+: _RUHA-SH-FULL  ( -- )
+    0 _RUHA-SH-KEPT !
+    _RUHA-SH-SAVE-FLAGS? 0= IF FSHD-SKIP EXIT THEN
+    _RUHA-B-START
+    -1 _RUHA-B-FULL !
+    _RUHA-B-CAPTURE-ALL
+    0 _RUHA-B-FULL !
+    _RUHA-SH-KEEP? IF -1 _RUHA-SH-KEPT ! ELSE FSHD-SKIP THEN
+    _RUHA-SH-RESTORE-FLAGS ;
+
+\ Compare the ordinary capture with the full one: the headers as item 0,
+\ then, when they agree, each span as item 1 to 13.
+: _RUHA-SH-CHECK  ( -- )
+    _RUHA-SH-KEPT @ 0= IF EXIT THEN
+    _RUHA-B-DRAW @ FSHD-DRAW !
+    _RUHA-SH-HEADER-BYTES _RUHA-SH-HEADER-A _RUHA-SH-HEADER-U FSHD-GROW
+    DUP 0= IF DROP FSHD-SKIP EXIT THEN
+    DUP _RUHA-SH-HEADER!
+    _RUHA-SH-HEADER-BYTES _RUHA-SH-RESULT-A @ _RUHA-SH-HEADER-BYTES
+    0 FSHD-STAGE-SNAPSHOT FSHD-SAME? 0= IF EXIT THEN
+    _RUHA-SH-RESULT-A @ _RUHA-SH-HEADER-BYTES + _RUHA-SH-AT !
+    _RUHA-SH-SPAN-COUNT 0 ?DO
+        I _RUHA-SH-SPAN DUP _RUHA-SH-SPAN-U !
+        _RUHA-SH-AT @ _RUHA-SH-SPAN-U @
+        I 1+ FSHD-STAGE-SNAPSHOT FSHD-SAME? DROP
+        _RUHA-SH-SPAN-U @ _RUHA-SH-AT +!
+    LOOP ;
+
 : RUHA-SNAPSHOT-FOR@ ( draw-generation adapter -- snapshot status )
     _RUHA-B-ADAPTER ! _RUHA-B-DRAW !
     _RUHA-B-ADAPTER @ RUHA-VALID? 0= IF 0 RUHA-S-INVALID EXIT THEN
@@ -3265,12 +3425,6 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
         DUP _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
         0 SWAP EXIT
     THEN _RUHA-B-GENERATION !
-    _RUHA-B-GENERATION @ _RUHA-B-CONTENT-EPOCH !
-    0 _RUHA-B-EXACT-REUSE !
-    _RUHA-B-HAS-PRIOR @ IF
-        _RUHA-B-PRIOR-CONTENT-EPOCH @ _RUHA-B-CONTENT-EPOCH !
-        -1 _RUHA-B-EXACT-REUSE !
-    THEN
     _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIRECTORY-A
         _RUHA-B-DIRECTORY-A !
     _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-RECORD-A
@@ -3302,26 +3456,10 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
         _RUHA-B-DIALOG-DESCRIPTORS-A !
     _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIALOG-NATIVE-A
         _RUHA-B-DIALOG-NATIVE-A !
-    0 _RUHA-B-DIRECTORY-U ! 0 _RUHA-B-RECORDS-U !
-    0 _RUHA-B-TEXT-U ! 0 _RUHA-B-DESCRIPTORS-U !
-    0 _RUHA-B-NATIVE-U !
-    0 _RUHA-B-DGRAPH-DESCRIPTORS-U !
-    0 _RUHA-B-DGRAPH-NATIVE-U !
-    0 _RUHA-B-SFIELD-DESCRIPTORS-U !
-    0 _RUHA-B-SFIELD-NATIVE-U !
-    0 _RUHA-B-FIELD-DESCRIPTORS-U !
-    0 _RUHA-B-FIELD-NATIVE-U !
-    0 _RUHA-B-DIALOG-DESCRIPTORS-U !
-    0 _RUHA-B-DIALOG-NATIVE-U ! 0 _RUHA-B-DOCUMENTS !
-    ['] _RUHA-B-CAPTURE CATCH DUP IF
-        DROP RUHA-S-INVALID _RUHA-B-STATUS !
-        0 UTUI-CAPTURE-OCCLUDED!
-    ELSE
-        DROP _RUHA-B-STATUS !
-    THEN
-    ['] _RUHA-B-RESTORE CATCH IF
-        RUHA-S-INVALID _RUHA-B-STATUS !
-    THEN
+    FSHD? IF _RUHA-SH-FULL THEN
+    _RUHA-B-START
+    _RUHA-B-CAPTURE-ALL
+    FSHD? IF _RUHA-SH-CHECK THEN
     _RUHA-B-STATUS @ RUHA-S-OK <> IF
         _RUHA-B-CLEAR-STAGED
         _RUHA-B-STATUS @ DUP _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !

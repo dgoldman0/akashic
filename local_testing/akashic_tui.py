@@ -28185,12 +28185,35 @@ def _with_codex_auth_checkpoint(autoexec: str, checkpoint: Path) -> str:
     return autoexec.replace(constructor_marker, restore, 1)
 
 
+FRAME_SHADOW_MODULE = "tui/rich-terminal/frame-shadow.f"
+
+
+def _with_frame_shadow(autoexec: str, modules: tuple[str, ...]) -> str:
+    """Turn on the shadow check of the rich frame's shortcuts at boot.
+
+    The switch follows the profile's last REQUIRE: frame-shadow.f has loaded
+    by then, and no frame has been built.  A linked image keeps the line in
+    place after the chunks that replace those REQUIREs.
+    """
+    if FRAME_SHADOW_MODULE not in modules:
+        raise RuntimeError(
+            "--shadow-check needs a profile that loads the rich frame producers"
+        )
+    lines = autoexec.splitlines()
+    requires = [index for index, line in enumerate(lines) if REQUIRE_RE.match(line)]
+    if not requires:
+        raise RuntimeError("--shadow-check needs a profile autoexec with REQUIREs")
+    lines.insert(requires[-1] + 1, "-1 FSHD-ON !")
+    return "\n".join(lines) + "\n"
+
+
 def build_image(
     profile_name: str,
     output: Path | None = None,
     codex_auth_checkpoint: Path | None = None,
     *,
     backend: str = "emulator",
+    shadow_check: bool = False,
 ) -> Path:
     profile, backend = _profile_backend(profile_name, backend)
     autoexec = profile.autoexec
@@ -28216,6 +28239,8 @@ def build_image(
         else dependency_closure(composition_roots)
     )
     akashic_modules = modules
+    if shadow_check:
+        autoexec = _with_frame_shadow(autoexec, modules)
     samples = _sample_files(modules)
     requires_networking = (
         profile.megapad_networking or _requires_megapad_networking(modules)
@@ -37151,6 +37176,14 @@ def _parser() -> argparse.ArgumentParser:
             type=Path,
             help="seed a private local Codex Desk image from a mode-0600 checkpoint",
         )
+        command.add_argument(
+            "--shadow-check",
+            action="store_true",
+            help=(
+                "turn on the shadow check of the rich frame's shortcuts "
+                "(tui/rich-terminal/frame-shadow.f) at boot"
+            ),
+        )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--cols", type=int, default=100
@@ -37305,6 +37338,7 @@ def main() -> int:
         args.output,
         args.codex_auth_checkpoint,
         backend=args.backend,
+        shadow_check=args.shadow_check,
     )
     if args.command == "build":
         return 0
