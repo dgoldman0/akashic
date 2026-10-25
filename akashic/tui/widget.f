@@ -7,6 +7,7 @@
 \    - Header layout constants and accessors
 \    - Widget type constants (WDG-T-*)
 \    - Flag constants and flag manipulation words
+\    - The revision, which counts changes to what a widget shows
 \    - Polymorphic dispatch words (WDG-DRAW, WDG-HANDLE)
 \
 \  Widget-specific data lives at +40 onwards in each widget type.
@@ -19,7 +20,18 @@
 \    +8   region     Region this widget occupies
 \   +16   draw-xt    Execution token: ( widget -- )
 \   +24   handle-xt  Execution token: ( event widget -- consumed? )
-\   +32   flags      WDG-F-VISIBLE | WDG-F-FOCUSED | WDG-F-DIRTY | ...
+\   +32   flags      Bits 0-15: WDG-F-VISIBLE | WDG-F-FOCUSED | WDG-F-DIRTY | ...
+\                    Bits 16-63: the revision (WDG-REVISION)
+\
+\  The revision moves whenever what the widget shows changes, so that
+\  anything holding a copy of what it showed (UIDL's paint, a renderer's
+\  snapshot) can tell whether the copy still holds.  WDG-DIRTY moves it,
+\  and so does each base word below that changes a flag.  The dirty flag
+\  keeps its meaning for painting: a draw clears it, and a widget may be
+\  marked dirty to paint again without having changed.  A draw, a query or
+\  a capture never moves the revision.  It sits in the flags cell, so that
+\  a flag and the revision change in one store; it counts from 0 when the
+\  widget is made and wraps after 2^48 changes.
 \
 \  Prefix: WDG- (public), _WDG- (internal)
 \  Provider: akashic-tui-widget
@@ -81,6 +93,10 @@ REQUIRE region.f
 4 CONSTANT WDG-F-DIRTY
 8 CONSTANT WDG-F-DISABLED
 
+\ The revision's place in the flags cell.
+16 CONSTANT _WDG-REV-SHIFT
+1 _WDG-REV-SHIFT LSHIFT CONSTANT _WDG-REV-ONE
+
 \ =====================================================================
 \ 4. Header accessors
 \ =====================================================================
@@ -121,33 +137,56 @@ REQUIRE region.f
 : WDG-DISABLED?  ( widget -- flag )
     WDG-FLAGS WDG-F-DISABLED AND 0<> ;
 
+\ WDG-REVISION ( widget -- n )  How many times what it shows has changed.
+: WDG-REVISION  ( widget -- n )
+    WDG-FLAGS _WDG-REV-SHIFT RSHIFT ;
+
+\ _WDG-FLAGS-TO ( flags widget -- )
+\   Store FLAGS, the widget's flags with some changed.  When a flag other
+\   than DIRTY changed, what the widget shows changed: move the revision
+\   and mark it for redraw.
+: _WDG-FLAGS-TO  ( flags widget -- )
+    >R DUP R@ WDG-FLAGS XOR WDG-F-DIRTY INVERT AND IF
+        WDG-F-DIRTY OR _WDG-REV-ONE +
+    THEN R> _WDG-FLAGS! ;
+
+\ WDG-FLAG! ( on? flag widget -- )
+\   Set or clear one flag.  A change moves the revision and marks the
+\   widget for redraw; setting a flag the widget has already changes
+\   nothing.  For owners that keep a widget's state in step with their own,
+\   such as a document's focus.
+: WDG-FLAG!  ( on? flag widget -- )
+    >R SWAP IF R@ WDG-FLAGS OR ELSE INVERT R@ WDG-FLAGS AND THEN
+    R> _WDG-FLAGS-TO ;
+
 \ WDG-SHOW ( widget -- )  Set VISIBLE flag, mark dirty.
 : WDG-SHOW  ( widget -- )
     DUP WDG-FLAGS
     WDG-F-VISIBLE OR  WDG-F-DIRTY OR
-    SWAP _WDG-FLAGS! ;
+    SWAP _WDG-FLAGS-TO ;
 
 \ WDG-HIDE ( widget -- )  Clear VISIBLE flag.
 : WDG-HIDE  ( widget -- )
     DUP WDG-FLAGS
     WDG-F-VISIBLE INVERT AND
-    SWAP _WDG-FLAGS! ;
+    SWAP _WDG-FLAGS-TO ;
 
 \ WDG-ENABLE ( widget -- )  Clear DISABLED flag.
 : WDG-ENABLE  ( widget -- )
     DUP WDG-FLAGS
     WDG-F-DISABLED INVERT AND
-    SWAP _WDG-FLAGS! ;
+    SWAP _WDG-FLAGS-TO ;
 
 \ WDG-DISABLE ( widget -- )  Set DISABLED flag, mark dirty.
 : WDG-DISABLE  ( widget -- )
     DUP WDG-FLAGS
     WDG-F-DISABLED OR  WDG-F-DIRTY OR
-    SWAP _WDG-FLAGS! ;
+    SWAP _WDG-FLAGS-TO ;
 
-\ WDG-DIRTY ( widget -- )  Mark widget as needing redraw.
+\ WDG-DIRTY ( widget -- )  What the widget shows changed: move its
+\   revision and mark it for redraw.
 : WDG-DIRTY  ( widget -- )
-    DUP WDG-FLAGS WDG-F-DIRTY OR SWAP _WDG-FLAGS! ;
+    DUP WDG-FLAGS WDG-F-DIRTY OR _WDG-REV-ONE + SWAP _WDG-FLAGS! ;
 
 \ WDG-CLEAN ( widget -- )  Clear dirty flag (after redraw).
 : WDG-CLEAN  ( widget -- )
@@ -157,12 +196,12 @@ REQUIRE region.f
 \ Public for focus managers and composed widgets that forward focus to a
 \ mounted child; it does not alter any focus-chain membership.
 : WDG-FOCUS-SET  ( widget -- )
-    DUP WDG-FLAGS WDG-F-FOCUSED OR WDG-F-DIRTY OR SWAP _WDG-FLAGS! ;
+    DUP WDG-FLAGS WDG-F-FOCUSED OR WDG-F-DIRTY OR SWAP _WDG-FLAGS-TO ;
 
 \ WDG-FOCUS-CLR ( widget -- )  Clear FOCUSED flag, mark dirty.
 : WDG-FOCUS-CLR  ( widget -- )
     DUP WDG-FLAGS WDG-F-FOCUSED INVERT AND WDG-F-DIRTY OR
-    SWAP _WDG-FLAGS! ;
+    SWAP _WDG-FLAGS-TO ;
 
 \ =====================================================================
 \ 6. Polymorphic dispatch and draw observation
@@ -343,6 +382,8 @@ GUARD _wdg-guard
 ' WDG-FOCUSED?    CONSTANT _wdg-focused-xt
 ' WDG-DIRTY?      CONSTANT _wdg-dirty-xt
 ' WDG-DISABLED?   CONSTANT _wdg-disabled-xt
+' WDG-REVISION    CONSTANT _wdg-revision-xt
+' WDG-FLAG!       CONSTANT _wdg-flag-store-xt
 ' WDG-SHOW        CONSTANT _wdg-show-xt
 ' WDG-HIDE        CONSTANT _wdg-hide-xt
 ' WDG-ENABLE      CONSTANT _wdg-enable-xt
@@ -366,6 +407,8 @@ GUARD _wdg-guard
 : WDG-FOCUSED?    _wdg-focused-xt   _wdg-guard WITH-GUARD ;
 : WDG-DIRTY?      _wdg-dirty-xt     _wdg-guard WITH-GUARD ;
 : WDG-DISABLED?   _wdg-disabled-xt  _wdg-guard WITH-GUARD ;
+: WDG-REVISION    _wdg-revision-xt  _wdg-guard WITH-GUARD ;
+: WDG-FLAG!       _wdg-flag-store-xt _wdg-guard WITH-GUARD ;
 : WDG-SHOW        _wdg-show-xt      _wdg-guard WITH-GUARD ;
 : WDG-HIDE        _wdg-hide-xt      _wdg-guard WITH-GUARD ;
 : WDG-ENABLE      _wdg-enable-xt    _wdg-guard WITH-GUARD ;

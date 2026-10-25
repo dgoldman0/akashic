@@ -149,12 +149,9 @@ VARIABLE _EXK-H
 
 \ The embedded tree takes the explorer's focus and enabled state, which
 \ UIDL maintains on the mounted explorer.
-WDG-F-FOCUSED WDG-F-DISABLED OR CONSTANT _EXPL-SHARED-FLAGS
-
 : _EXPL-SYNC-TREE  ( explorer -- )
-    DUP WDG-FLAGS _EXPL-SHARED-FLAGS AND
-    SWAP _EXPL-O-TREE + @ DUP WDG-FLAGS
-    _EXPL-SHARED-FLAGS INVERT AND ROT OR SWAP _WDG-FLAGS! ;
+    DUP WDG-FOCUSED? WDG-F-FOCUSED 2 PICK _EXPL-O-TREE + @ WDG-FLAG!
+    DUP WDG-DISABLED? WDG-F-DISABLED ROT _EXPL-O-TREE + @ WDG-FLAG! ;
 
 \ =====================================================================
 \  §5 — Draw handler

@@ -85,7 +85,6 @@ with U+FFFD for anything but printable ASCII.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `INP-REVISION@` | `( widget -- revision )` | Advances with every shown change |
 | `INP-MASK@` | `( widget -- codepoint )` | The one-cell mask character, or 0 |
 | `INP-PLACEHOLDER@` | `( widget -- addr len )` | The placeholder text |
 | `INP-SHOWN-STATE` | `( widget -- characters caret anchor scroll )` | The value as a renderer shows it |
@@ -93,7 +92,9 @@ with U+FFFD for anything but printable ASCII.
 `INP-SHOWN-STATE` counts as the value counts: characters when the field
 masks, Unicode scalars otherwise. The anchor is the caret when nothing is
 selected. It settles the scroll first, as a draw does, so it holds before
-the next draw as after it; a changed scroll advances the revision.
+the next draw as after it; a changed scroll moves the widget's revision
+(`WDG-REVISION`) and marks it for redraw. Every change to what the field
+shows moves that revision.
 
 ### Callback
 

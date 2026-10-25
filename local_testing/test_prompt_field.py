@@ -39,7 +39,7 @@ def test_a_shown_prompt_is_one_text_field_in_its_paint_slots() -> None:
             '_FM UFLD-TEXT@ S" notes.md" COMPARE 0=',
             '_FM UFLD-LABEL@ S" Open:" COMPARE 0=',
             # The revision follows both the prompt and its input.
-            "_FM UFLD-REVISION@ _PR @ _PRM-O-REVISION + @ _INPUT INP-REVISION@ + =",
+            "_FM UFLD-REVISION@ _PR @ _PRM-O-REVISION + @ _INPUT WDG-REVISION + =",
         ]
         + _report(19),
         roots=ROOTS,

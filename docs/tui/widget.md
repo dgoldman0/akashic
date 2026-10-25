@@ -10,8 +10,8 @@
 
 Every TUI widget shares a uniform 5-cell header at offset +0.
 This file defines the header layout, type constants, flag constants,
-flag manipulation words, and polymorphic dispatch (`WDG-DRAW`,
-`WDG-HANDLE`).
+flag manipulation words, the revision that counts a widget's changes, and
+polymorphic dispatch (`WDG-DRAW`, `WDG-HANDLE`).
 
 Widget-specific data starts at offset +40 in each widget type.
 The common header lets the event loop and focus manager iterate
@@ -25,7 +25,21 @@ widgets generically without knowing the concrete type.
 | +8 | region | address | Region this widget occupies |
 | +16 | draw-xt | xt | `( widget -- )` — draw into region |
 | +24 | handle-xt | xt | `( event widget -- consumed? )` — handle input |
-| +32 | flags | bitmask | Visibility, focus, dirty, disabled |
+| +32 | flags | bitmask and count | Bits 0-15: visibility, focus, dirty, disabled. Bits 16-63: the revision |
+
+## The revision
+
+`WDG-REVISION` counts the changes to what a widget shows, so that anything
+holding a copy of what it showed, such as UIDL's paint or a renderer's
+snapshot, can tell whether the copy still holds. `WDG-DIRTY` moves it, and
+so does each base word that changes a flag. The dirty flag keeps its meaning
+for painting: a draw clears it, and a widget may be marked dirty to paint
+again without having changed. A draw, a query or a capture never moves the
+revision.
+
+The revision shares the flags cell, so a flag and the revision change in one
+store. It counts from 0 when the widget is made and wraps after 2^48
+changes. Only `widget.f` writes the flags cell after a widget is made.
 
 ## Type Constants
 
@@ -64,7 +78,8 @@ widgets generically without knowing the concrete type.
 | `WDG-INIT` | `( addr type rgn draw-xt handle-xt -- )` | Fill a caller-owned header; sets flags to VISIBLE \| DIRTY |
 | `WDG-TYPE` | `( widget -- type )` | Get type constant |
 | `WDG-REGION` | `( widget -- rgn )` | Get region |
-| `WDG-FLAGS` | `( widget -- flags )` | Get raw flags bitmask |
+| `WDG-FLAGS` | `( widget -- flags )` | Get the raw flags cell, revision included |
+| `WDG-REVISION` | `( widget -- n )` | How many times what the widget shows has changed |
 
 ### Flag Queries
 
@@ -83,10 +98,14 @@ widgets generically without knowing the concrete type.
 | `WDG-HIDE` | `( widget -- )` | Clear VISIBLE |
 | `WDG-ENABLE` | `( widget -- )` | Clear DISABLED |
 | `WDG-DISABLE` | `( widget -- )` | Set DISABLED + DIRTY |
-| `WDG-DIRTY` | `( widget -- )` | Set DIRTY flag |
+| `WDG-FLAG!` | `( on? flag widget -- )` | Set or clear one flag, for owners that keep a widget's state in step with their own |
+| `WDG-DIRTY` | `( widget -- )` | What the widget shows changed: move the revision and set DIRTY |
 | `WDG-CLEAN` | `( widget -- )` | Clear DIRTY flag |
 | `WDG-FOCUS-SET` | `( widget -- )` | Set FOCUSED + DIRTY without changing focus-chain membership |
 | `WDG-FOCUS-CLR` | `( widget -- )` | Clear FOCUSED and set DIRTY without changing focus-chain membership |
+
+Each of these words that changes a flag other than DIRTY moves the revision
+and sets DIRTY. Setting a flag a widget already has moves nothing.
 
 ### Polymorphic Dispatch
 

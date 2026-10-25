@@ -391,12 +391,7 @@ VARIABLE _UR-EV    \ saved event pointer
 
 \ Sync sidecar focus state into a widget's WDG-F-FOCUSED flag.
 : _UTUI-SYNC-WFOCUS  ( sc wptr -- )
-    >R
-    _UTUI-SC-FLAGS@ _UTUI-SCF-FOC AND
-    R@ _WDG-O-FLAGS + @
-    WDG-F-FOCUSED INVERT AND
-    SWAP IF WDG-F-FOCUSED OR THEN
-    R> _WDG-O-FLAGS + ! ;
+    >R _UTUI-SC-FLAGS@ _UTUI-SCF-FOC AND WDG-F-FOCUSED R> WDG-FLAG! ;
 
 \ Temp var for materialization.
 VARIABLE _UTUI-MAT-W

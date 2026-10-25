@@ -1018,8 +1018,8 @@ def test_input_revision_advances_with_every_shown_change() -> None:
         _field()
         + _KEYS
         + [
-            ": _REV  _IW @ INP-REVISION@ ;",
-            # One at creation and one for the text it was given.
+            ": _REV  _IW @ WDG-REVISION ;",
+            # Made at 0, and moved once by the text it was given.
             "_REV",
             "_REV 120 0 _CH DROP _REV SWAP -",
             "_REV KEY-UP 0 _SP DROP _REV SWAP -",
@@ -1031,14 +1031,14 @@ def test_input_revision_advances_with_every_shown_change() -> None:
             "CREATE _NBUF 64 ALLOT VARIABLE _NW",
             "4 5 1 4 RGN-NEW _NBUF 64 INP-NEW _NW !",
             'S" abcdefgh" _NW @ INP-SET-TEXT',
-            ": _NREV  _NW @ INP-REVISION@ ;",
+            ": _NREV  _NW @ WDG-REVISION ;",
             "_NREV _NW @ WDG-DRAW _NREV SWAP -",
             "_NREV _NW @ WDG-DRAW _NREV SWAP -",
         ]
         + _report(11)
     )
 
-    assert values[::-1] == [2, 1, 0, 1, 0, 5, 4, 4, 0, 1, 0]
+    assert values[::-1] == [1, 1, 0, 1, 0, 5, 4, 4, 0, 1, 0]
 
 
 def test_input_shown_state_before_a_draw_is_what_the_draw_shows() -> None:
@@ -1049,7 +1049,7 @@ def test_input_shown_state_before_a_draw_is_what_the_draw_shows() -> None:
             "CREATE _NBUF 64 ALLOT VARIABLE _NW",
             "4 5 1 4 RGN-NEW _NBUF 64 INP-NEW _NW !",
             'S" abcdefgh" _NW @ INP-SET-TEXT',
-            ": _NREV  _NW @ INP-REVISION@ ;",
+            ": _NREV  _NW @ WDG-REVISION ;",
             # Before any draw, the caret past the eighth character scrolls
             # five cells into view, a shown change.
             "_NREV _NW @ INP-SHOWN-STATE _NREV 5 ROLL -",

@@ -16,7 +16,8 @@
 \    - Programmatic get/set of content
 \    - A position a rich renderer names in the text it laid out: the
 \      caret moves there, or the selection extends to it
-\    - A revision that changes whenever anything the field shows does
+\    - Its widget revision (WDG-REVISION) moves whenever anything the
+\      field shows changes
 \
 \  Ctrl and Alt combinations other than Ctrl+A are not consumed, so they
 \  reach the application's shortcuts instead of inserting their letter.
@@ -25,7 +26,7 @@
 \  storage for the text.  The caller decides where the memory lives
 \  (stack, dictionary, XMEM).
 \
-\  Input Descriptor (header + 12 cells = 136 bytes):
+\  Input Descriptor (header + 11 cells = 128 bytes):
 \    +0..+32  widget header   type=WDG-T-INPUT
 \    +40      buf-addr        Address of edit buffer
 \    +48      buf-cap         Buffer capacity (bytes)
@@ -38,7 +39,6 @@
 \    +104     mask-cp         Draw this codepoint instead of input (0 = plain)
 \    +112     anchor          Selection anchor byte offset (-1 = none)
 \    +120     pressed         True while a primary press made here is held
-\    +128     revision        Positive; advances with every visible change
 \
 \  Prefix: INP- (public), _INP- (internal)
 \  Provider: akashic-tui-input
@@ -70,13 +70,8 @@ REQUIRE ../keys.f
 104 CONSTANT _INP-O-MASK-CP      \ replacement codepoint (0 = unmasked)
 112 CONSTANT _INP-O-ANCHOR       \ selection anchor byte offset (-1 = none)
 120 CONSTANT _INP-O-PRESSED      \ primary press made here is held
-128 CONSTANT _INP-O-REVISION     \ advances with every visible change
 
-136 CONSTANT _INP-DESC-SIZE       \ total descriptor size
-
-\ _INP-CHANGED ( widget -- )   Something the field shows changed.
-: _INP-CHANGED  ( widget -- )
-    1 OVER _INP-O-REVISION + +! WDG-DIRTY ;
+128 CONSTANT _INP-DESC-SIZE       \ total descriptor size
 
 \ =====================================================================
 \ 2. Characters and cells
@@ -281,13 +276,13 @@ VARIABLE _INP-CHARS      \ its characters, for _INP-K-UNITS
     DUP _INP-SEL-RANGE 2 PICK _INP-DEL-BYTES
     DUP _INP-UNSELECT
     0 _INP-FIX
-    _INP-CHANGED -1 ;
+    WDG-DIRTY -1 ;
 
 \ _INP-SELECT-ALL ( widget -- )
 : _INP-SELECT-ALL  ( widget -- )
     0 OVER _INP-O-ANCHOR + !
     DUP _INP-O-BUF-LEN + @ OVER _INP-O-CURSOR + !
-    DUP _INP-SETTLE _INP-CHANGED ;
+    DUP _INP-SETTLE WDG-DIRTY ;
 
 \ =====================================================================
 \ 3a. Edit operations
@@ -335,7 +330,7 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     _INP-INS-TMP @
     R@ _INP-O-CURSOR + @ + R@ _INP-O-CURSOR + !
     R@ _INP-W ! -1 _INP-FIX
-    R> _INP-CHANGED ;
+    R> WDG-DIRTY ;
 
 \ _INP-DELETE ( widget -- )
 \   Delete the selection, or the character at the cursor.
@@ -344,7 +339,7 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     _INP-PREP
     _INP-CUR _INP-NEXT-CHAR _INP-W @ _INP-DEL-BYTES
     0 _INP-FIX
-    _INP-W @ _INP-CHANGED ;
+    _INP-W @ WDG-DIRTY ;
 
 \ _INP-BACKSPACE ( widget -- )
 \   Delete the selection, or the character before the cursor.
@@ -353,7 +348,7 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
     _INP-PREP
     _INP-PREV-CHAR _INP-CUR _INP-W @ _INP-DEL-BYTES
     0 _INP-FIX
-    _INP-W @ _INP-CHANGED ;
+    _INP-W @ WDG-DIRTY ;
 
 \ Caret moves.  Each only moves the caret; _INP-MOVE applies the selection
 \ rule and marks the field dirty.  Left and Right move over whole
@@ -383,7 +378,7 @@ CREATE _INP-INS-BUF 4 ALLOT               \ temp encode buffer (max 4 bytes)
         DUP _INP-UNSELECT
     THEN
     DUP R> EXECUTE
-    DUP _INP-SETTLE _INP-CHANGED ;
+    DUP _INP-SETTLE WDG-DIRTY ;
 
 \ =====================================================================
 \ 4. Scroll adjustment
@@ -413,7 +408,7 @@ VARIABLE _INP-SA-N      \ its cells
 : _INP-SETTLE-VIEW  ( widget -- )
     _INP-PREP
     _INP-SX _INP-SCROLL-ADJ
-    _INP-SX <> IF 1 _INP-W @ _INP-O-REVISION + +! THEN ;
+    _INP-SX <> IF _INP-W @ WDG-DIRTY THEN ;
 
 \ =====================================================================
 \ 5. Internal draw
@@ -537,7 +532,7 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     OVER WDG-REGION RGN-COL -               ( widget col' )
     OVER _INP-PT-CURSOR                     ( widget off )
     OVER _INP-O-CURSOR + !
-    DUP _INP-SETTLE _INP-CHANGED ;
+    DUP _INP-SETTLE WDG-DIRTY ;
 
 : _INP-PRESS  ( event widget -- consumed? )
     2DUP _INP-PT-INSIDE? 0= IF 2DROP 0 EXIT THEN
@@ -578,13 +573,13 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     NIP KEY-MOUSE-TEXT-KEY @ IF DROP 0 EXIT THEN
     DUP _INP-UNSELECT
     DUP _INP-NAMED OVER _INP-O-CURSOR + !
-    DUP _INP-SETTLE _INP-CHANGED -1 ;
+    DUP _INP-SETTLE WDG-DIRTY -1 ;
 
 : _INP-TEXT-EXTEND  ( event widget -- consumed? )
     NIP KEY-MOUSE-TEXT-KEY @ IF DROP 0 EXIT THEN
     DUP _INP-ANCHOR
     DUP _INP-NAMED OVER _INP-O-CURSOR + !
-    DUP _INP-SETTLE _INP-CHANGED -1 ;
+    DUP _INP-SETTLE WDG-DIRTY -1 ;
 
 \ _INP-POINTER ( event widget -- consumed? )
 : _INP-POINTER  ( event widget -- consumed? )
@@ -671,8 +666,7 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     0              OVER _INP-O-SUBMIT-XT + !
     0              OVER _INP-O-MASK-CP   + !   \ unmasked
     -1             OVER _INP-O-ANCHOR    + !   \ no selection
-    0              OVER _INP-O-PRESSED   + !
-    1              OVER _INP-O-REVISION  + ! ;
+    0              OVER _INP-O-PRESSED   + ! ;
 
 \ =====================================================================
 \ 8. Public API
@@ -689,7 +683,7 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     R@ _INP-O-BUF-LEN + @
     R@ _INP-O-CURSOR + !                   \ cursor at end
     R@ _INP-UNSELECT
-    R> _INP-CHANGED ;
+    R> WDG-DIRTY ;
 
 \ INP-GET-TEXT ( widget -- addr len )
 : INP-GET-TEXT  ( widget -- addr len )
@@ -705,7 +699,7 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     >R
     R@ _INP-O-PH-U + !
     R@ _INP-O-PH-A + !
-    R> _INP-CHANGED ;
+    R> WDG-DIRTY ;
 
 \ INP-CLEAR ( widget -- )
 \   Clear content, reset cursor.
@@ -714,7 +708,7 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     0 OVER _INP-O-CURSOR + !
     0 OVER _INP-O-SCROLL + !
     DUP _INP-UNSELECT
-    _INP-CHANGED ;
+    WDG-DIRTY ;
 
 \ INP-WIPE ( widget -- )
 \   Zero the caller-owned edit buffer and reset all edit state.
@@ -728,16 +722,12 @@ VARIABLE _INP-DRW-EOC    \ the caret shows just past the content
     >R DUP 0< IF DROP 0 THEN
     R@ _INP-O-MASK-CP + !
     0 R@ _INP-O-SCROLL + !
-    R> _INP-CHANGED ;
+    R> WDG-DIRTY ;
 
 \ INP-CURSOR-POS ( widget -- n )
 \   The characters before the caret.
 : INP-CURSOR-POS  ( widget -- n )
     _INP-W ! _INP-CUR _INP-CHARS-IN ;
-
-\ INP-REVISION@ ( widget -- revision )
-\   Positive, and advanced by every change to what the field shows.
-: INP-REVISION@  ( widget -- revision )  _INP-O-REVISION + @ ;
 
 \ INP-MASK@ ( widget -- codepoint )
 \   The one-cell character a masked field shows for each character, as it
@@ -789,7 +779,6 @@ GUARD _inp-guard
 ' INP-MASK!           CONSTANT _inp-mask-xt
 ' INP-CURSOR-POS      CONSTANT _inp-curpos-xt
 ' INP-FREE            CONSTANT _inp-free-xt
-' INP-REVISION@       CONSTANT _inp-revision-xt
 ' INP-MASK@           CONSTANT _inp-mask-at-xt
 ' INP-PLACEHOLDER@    CONSTANT _inp-placeholder-xt
 ' INP-SHOWN-STATE     CONSTANT _inp-shown-xt
@@ -804,7 +793,6 @@ GUARD _inp-guard
 : INP-MASK!           _inp-mask-xt     _inp-guard WITH-GUARD ;
 : INP-CURSOR-POS      _inp-curpos-xt   _inp-guard WITH-GUARD ;
 : INP-FREE            _inp-free-xt     _inp-guard WITH-GUARD ;
-: INP-REVISION@       _inp-revision-xt _inp-guard WITH-GUARD ;
 : INP-MASK@           _inp-mask-at-xt  _inp-guard WITH-GUARD ;
 : INP-PLACEHOLDER@    _inp-placeholder-xt _inp-guard WITH-GUARD ;
 : INP-SHOWN-STATE     _inp-shown-xt    _inp-guard WITH-GUARD ;
