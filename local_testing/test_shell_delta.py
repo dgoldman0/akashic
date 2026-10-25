@@ -300,3 +300,32 @@ _SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
 _SI-EMIT-I @ 0= _SS-A _SI-EMIT-Y @ 0= _SS-A
 _SS-DONE
 ''', minimum=16014)
+
+
+def test_the_shadow_check_plans_reused_regions_whole_and_catches_stale_row_damage():
+    """With the shadow check on, a region whose unchanged rows were copied
+    is also planned whole. When the producer's row damage misses a changed
+    row, the copied row differs from the screen, and the check says so."""
+    staged_run(DELTA + r'''
+CREATE _SD-ROWS 64 ALLOT
+: _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
+_SX-SETUP _SD-HOOKS
+_SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+-1 FSHD-ON ! FSHD-RESET
+\ Row 5 changed and is marked: each reused region matches its whole plan.
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+0 _SD-MAP -1 _SD-ROWS 5 + C!
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+FSHD-CHECKS @ 0> _SS-A FSHD-MISMATCHES @ 0= _SS-A FSHD-SKIPPED @ 0= _SS-A
+\ Row 5 changed but is not marked: its copied runs are the acknowledged
+\ ones, which the screen no longer shows.
+_SX-S _RSHSP-ABORT 0 _SD-MAP FSHD-RESET
+_RSHSP-DELTA-PREPARE _SS-OK
+FSHD-MISMATCHES @ 1 = _SS-A
+FSHD-FIRST-STAGE @ FSHD-STAGE-SHELL-GLYPHS = _SS-A
+\ Item 4R+2 of region R: the runs and references agree, the text does not.
+FSHD-FIRST-ITEM @ 3 AND 2 = _SS-A
+0 FSHD-ON !
+_SS-DONE
+''', minimum=31)
