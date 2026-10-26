@@ -357,6 +357,84 @@ def test_normal_mode_bank_headers_keep_the_valid_mark_and_skip_the_packing_walk(
     assert damage()[0]==1
 
 
+def crc64_we(data):
+    """CRC-64/WE, the CRC engine's mode 2: polynomial 0x42F0E1EBA9EA3693,
+    not reflected, all ones in and out."""
+    crc=MASK64
+    for byte in data:
+        crc^=byte<<56
+        for _ in range(8):
+            crc=((crc<<1)^0x42F0E1EBA9EA3693 if crc>>63 else crc<<1)&MASK64
+    return crc^MASK64
+
+
+def test_the_seal_is_the_crc_engine_s_crc_64_and_none_while_the_engine_is_busy(h):
+    """The seal's CRC is the engine's CRC-64/WE.  While the task already
+    holds a CRC transaction the engine cannot be had, and the seal is 0,
+    which means none was taken."""
+    assert crc64_we(b"123456789")==0x62EC59E3F1A4F00A
+    data=h.allocate(b"123456789")
+    assert h.results("_RTHP-SEAL-OF",data,9)==(0x62EC59E3F1A4F00A,)
+    assert h.results("CRC-MODE!",2)==(0,)
+    try:
+        assert h.results("_RTHP-SEAL-OF",data,9)==(0,)
+    finally:
+        h.results("CRC-FINAL@")
+    assert h.results("_RTHP-SEAL-OF",data,9)==(0x62EC59E3F1A4F00A,)
+
+
+def test_with_every_check_the_bank_on_screen_is_used_only_while_it_matches_its_seal(h):
+    """Decision 9.  With every check on, a click is routed through the bank of
+    the frame on screen only while the bank matches the seal it took when
+    its frame was sent.  A change to one byte breaks the seal and names the
+    producer's banks; a bank sent before every check was on has no seal, so
+    it is not used either, but names nothing.  Normal mode reads neither."""
+    h.setup(kind=2);assert h.build()==(0,)
+    bank=h.pack();h.activate(bank);memory=h.runtime.memory
+    found=(4,9,17,MASK64)
+    def click():
+        return h.results("RTHP-CONTROL-TARGET@",1,2,100,11,h.producer)
+    for name in ("CHK-DAMAGE-A","CHK-DAMAGE-U","CHK-DAMAGE-COUNT"):
+        h.variable(name,0)
+    h.variable("CHK-EVERY-FRAME",MASK64)
+    try:
+        # Unsealed: refused, and nothing is named.
+        assert click()!=found and h.variable("CHK-DAMAGE-COUNT")==0
+        # Sealed as the frame was sent: the CRC-64 of the bank's header,
+        # entries and packed bytes.
+        seal,=h.results("_RTHP-BANK-SEAL",bank)
+        count=memory.read64(bank+h.offset("_RTHP-TB.COUNT"))
+        packed_bytes=memory.read64(bank+h.offset("_RTHP-TB.PACKED-BYTES"))
+        span=(h.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
+              +count*h.constant("_RTHP-TARGET-ENTRY-SIZE")+packed_bytes)
+        assert seal==crc64_we(memory.read_bytes(bank,span))!=0
+        h.field(h.producer,"_RTHP.ACTIVE-SEAL",seal)
+        assert click()==found
+        # While the task holds the CRC engine for something else, the bank
+        # cannot be sealed again to compare: no click is routed through it,
+        # and nothing is named.
+        assert h.results("CRC-MODE!",2)==(0,)
+        try:
+            assert click()!=found and h.variable("CHK-DAMAGE-COUNT")==0
+        finally:
+            h.results("CRC-FINAL@")
+        assert click()==found
+        # One byte of a label the frame shows, changed after it was sent.
+        packed=bank+h.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
+        size,flag=h.results("_RTHP-TARGET-BANK-BYTES?",h.producer)
+        image=memory.read_bytes(bank,size)
+        at=image.index(b"Rate",packed-bank)
+        memory.write_bytes(bank+at,b"Ratf")
+        assert click()!=found
+        assert h.variable("CHK-DAMAGE-COUNT")==1
+        assert memory.read_bytes(h.variable("CHK-DAMAGE-A"),h.variable("CHK-DAMAGE-U"))==(
+            b"the screen producer's frame banks")
+    finally:
+        h.variable("CHK-EVERY-FRAME",0)
+    # Normal mode routes the click through the bank as it is.
+    assert click()==found
+
+
 # A DELTA keeps a field's label, geometry and state but for SELECTED.  Its
 # FDC1 content may change only with a strictly newer revision (17 to 18),
 # and then one CONTROL-REPLACE carries it.
@@ -453,7 +531,7 @@ def test_full_producer_dependency_closure_compiles_in_native_runtime():
     from test_field_model import field_runtime
     runtime=field_runtime(("tui/rich-terminal/hybrid-screen-producer.f",))
     runtime.evaluate(b"RTHP-SIZE _RTHP-TARGET-BANK-HEADER-SIZE _RTHP-TARGET-ENTRY-SIZE",source_name="field-producer-abi")
-    assert runtime.main_context.data.snapshot()==(5064,368,48)
+    assert runtime.main_context.data.snapshot()==(5080,368,48)
     assert runtime.main_context.returns.snapshot()==()
 
 

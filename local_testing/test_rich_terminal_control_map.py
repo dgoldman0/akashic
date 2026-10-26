@@ -55,8 +55,14 @@ def _definitions(producer_source: str) -> dict[str, str]:
         "tui/rich-terminal/frame-shadow.f",
         # The switch for every-frame checks, which the frame build reads.
         "tui/check-mode.f",
+        # The CRC the producers seal their banks with in safe mode.
+        "math/crc.f",
     ):
-        texts.append((ROOT / "akashic" / relative).read_text())
+        # These harnesses build without GUARDED, so a module's guarded forms
+        # are left out, as such a build leaves them.
+        texts.append(
+            (ROOT / "akashic" / relative).read_text().split("[DEFINED] GUARDED")[0]
+        )
     declarations: dict[str, str] = {}
     for text in texts:
         # A prose semicolon at the end of a line comment is not a definition

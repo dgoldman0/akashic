@@ -3891,10 +3891,10 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "DIALOG-DESCRIPTORS-USED", "DIALOG-NATIVE-A", "DIALOG-NATIVE-U",
                  "DIALOG-NATIVE-USED", "DIALOG-COUNT", "DIALOG-CONTROLS",
                  "DIALOG-BASE-CONTROLS", "DIALOG-BASE-TEXT", "DIALOG-BASE-CLAIMS",
-                 "DIALOG-REFUSED", "DIALOG-UTF8"):
+                 "DIALOG-REFUSED", "DIALOG-UTF8", "PENDING-SEAL", "ACTIVE-SEAL"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 5064
+    assert _constant(source, "RTHP-SIZE") == expected == 5080
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:

@@ -38,6 +38,10 @@ REQUIRE ../check-mode.f
 \ The memory source the work space and banks grow into (0: fixed storage).
 : _RSHSP.MEMORY ( s -- a ) 160 + ;
 : _RSHSP.EXTENSION ( s -- a ) 168 + ;
+\ The seals of the pending and the acknowledged banks, with every check on
+\ (check-mode.f): 0, or the seal _RSHSP-SEAL took when the bank was frozen.
+: _RSHSP.PENDING-SEAL ( s -- a ) 176 + ;
+: _RSHSP.ACTIVE-SEAL ( s -- a ) 184 + ;
 : RSHSP-BYTES ( -- n ) RSHSP-SIZE ;
 : RSHSP-WORK-USED@ ( s -- n ) _RSHSP.WORK-USED @ ;
 : RSHSP-BANK-BYTES@ ( s -- n ) _RSHSP.BANK-BYTES @ ;
@@ -1602,10 +1606,13 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU
     0 _RSHSP-LIVE-PROOF ! _RSHSP-AUTHORITY? ;
 
 : _RSHSP-ABORT ( sidecar -- )
+    0 OVER _RSHSP.PENDING-SEAL !
     0 OVER _RSHSP.PENDING ! 0 OVER _RSHSP.PENDING-TARGET ! 0 SWAP _RSHSP.PENDING-DRAW ! ;
 : _RSHSP-RETIRE ( sidecar -- )
-    DUP _RSHSP-ABORT 0 OVER _RSHSP.ACTIVE !
+    DUP _RSHSP-ABORT 0 OVER _RSHSP.ACTIVE ! 0 OVER _RSHSP.ACTIVE-SEAL !
     0 OVER _RSHSP.ACTIVE-TARGET ! 0 SWAP _RSHSP.ACTIVE-DRAW ! ;
+\ A frozen bank's seal covers the bytes it uses, which freezing alone wrote.
+: _RSHSP-SEAL ( bank -- seal ) DUP RSHSP-BANK.USED @ _RTHP-SEAL-OF ;
 : _RSHSP-PENDING? ( -- flag )
     _RSHSP-S @ _RSHSP.PENDING @ DUP 0= IF DROP -1 EXIT THEN _RSHSP-BANK !
     _RSHSP-S @ _RSHSP.PENDING-TARGET @ _RSHSP-P @ _RTHP.TARGET-PENDING @ <>
@@ -1642,6 +1649,7 @@ VARIABLE _RSHSP-IBB VARIABLE _RSHSP-IBBU
     _RSHSP-S @ _RSHSP.PENDING-TARGET @ _RSHSP-P @ _RTHP.TARGET-ACTIVE @ <> IF
         _RSHSP-S @ _RSHSP-RETIRE EXIT THEN
     _RSHSP-BANK @ _RSHSP-S @ _RSHSP.ACTIVE !
+    _RSHSP-S @ _RSHSP.PENDING-SEAL @ _RSHSP-S @ _RSHSP.ACTIVE-SEAL !
     _RSHSP-S @ _RSHSP.PENDING-TARGET @ _RSHSP-S @ _RSHSP.ACTIVE-TARGET !
     _RSHSP-S @ _RSHSP.PENDING-DRAW @ _RSHSP-S @ _RSHSP.ACTIVE-DRAW !
     _RSHSP-FRONTIERS!
@@ -1739,6 +1747,8 @@ VARIABLE _RSHSP-G-BYTES
     DUP IF
         _RSHSP-S @ _RSHSP-ABORT EXIT THEN DROP
     _RSHSP-BANK @ _RSHSP-S @ _RSHSP.PENDING !
+    _RSHSP-BANK @ DUP RSHSP-BANK.USED @ _RTHP-SEAL-TAKE
+        _RSHSP-S @ _RSHSP.PENDING-SEAL !
     _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-S @ _RSHSP.PENDING-TARGET !
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.PENDING-DRAW ! RTE-S-OK ;
 : _RSHSP-PREPARE ( -- status )
@@ -1789,13 +1799,18 @@ VARIABLE _RSHSP-DM-WHY
 \ The acknowledged bank was checked in full when it was frozen.  With
 \ every-frame checks on (check-mode.f) it is checked again before a DELTA
 \ builds on it or a click is routed through it, since a bug may have
-\ written it since.  A damaged bank names the shell's banks; the draw then
-\ goes out as a START, which reads nothing from it, and the click goes
-\ nowhere.
+\ written it since: its structure, and then its seal, which damage that
+\ keeps the structure breaks.  A damaged bank names the shell's banks; the
+\ draw then goes out as a START, which reads nothing from it, and the click
+\ goes nowhere.  A bank frozen before every check was on has no seal, so it
+\ is not trusted either, though nothing shows it damaged.
 : _RSHSP-ACTIVE-INTACT? ( -- flag )
     CHK-EVERY-FRAME? 0= IF -1 EXIT THEN
     _RSHSP-S @ _RSHSP.ACTIVE @ _RSHSP-S @ _RSHSP-BANK-VALID?
-    _RSHSP-BANKS-DAMAGED CHK-NAME ;
+        _RSHSP-BANKS-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
+    _RSHSP-S @ _RSHSP.ACTIVE-SEAL @ DUP 0= IF EXIT THEN
+    _RSHSP-S @ _RSHSP.ACTIVE @ _RSHSP-SEAL
+    _RSHSP-BANKS-DAMAGED _RTHP-SEAL-HOLDS? ;
 \ The acknowledged bank a DELTA starts from: published, and paired with the
 \ producer's acknowledged target and wire owner.
 : _RSHSP-DELTA-BASE? ( -- flag )

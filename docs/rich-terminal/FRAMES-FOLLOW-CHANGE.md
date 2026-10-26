@@ -532,8 +532,15 @@ since nothing can be sent safely without them.
 These checks prove each record's structure: its sizes, offsets, spans and
 links. Damage that leaves a record well formed but changes what it holds,
 such as the text of one run in the record of the frame on screen, passes
-them, and a DELTA built on that record can then leave the old text on the
-screen. Decision 9 closes this by sealing that record.
+them, and a DELTA built on that record could then leave the old text on the
+screen. So that record is sealed (decision 9). In safe mode the record of a
+frame takes the CRC-64 of what it holds, from the CRC engine, when the
+frame is sent, and a DELTA or a click uses the record only while it still
+matches. A CRC-64 finds every run of damage up to 64 bits long, and other
+damage all but once in about 2^63 times. A record without a seal is not
+used either, and nothing is named: one sent before safe mode was on, or
+one sealed while the task held the CRC engine for something else. The
+next frame then goes out whole.
 
 **Change.** The switch, and the ways to turn it on.
 

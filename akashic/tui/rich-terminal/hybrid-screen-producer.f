@@ -37,6 +37,7 @@ REQUIRE engine.f
 REQUIRE phase-profile.f
 REQUIRE frame-shadow.f
 REQUIRE ../check-mode.f
+REQUIRE ../../math/crc.f
 REQUIRE ../screen.f
 REQUIRE ../uidl-picture-snapshot.f
 REQUIRE ../../utils/memory-span.f
@@ -369,7 +370,12 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.DIALOG-BASE-CLAIMS       ( p -- a ) 5040 + ;
 : _RTHP.DIALOG-REFUSED           ( p -- a ) 5048 + ;
 : _RTHP.DIALOG-UTF8              ( p -- a ) 5056 + ;
-5064 CONSTANT RTHP-SIZE
+\ The seals of the pending and the acknowledged target banks, with every
+\ check on (check-mode.f): 0, or the seal _RTHP-BANK-SEAL took of the bank
+\ when its frame was sent.
+: _RTHP.PENDING-SEAL             ( p -- a ) 5064 + ;
+: _RTHP.ACTIVE-SEAL              ( p -- a ) 5072 + ;
+5080 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
@@ -1972,6 +1978,7 @@ VARIABLE _RTHP-FT-INTENTS
     DUP _RTHP.TARGET-PENDING @ ?DUP IF
         0 SWAP _RTHP-TB.VALID !
     THEN
+    0 OVER _RTHP.PENDING-SEAL !
     0 SWAP _RTHP.TARGET-PENDING ! _RTHP-TG-CLEAR ;
 
 : _RTHP-TG-FAIL  ( -- false )
@@ -2991,6 +2998,58 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
 \ the producer's target banks fails it (check-mode.f).
 : _RTHP-BANKS-DAMAGED  ( -- c-addr u )  S" the screen producer's frame banks" ;
 
+\ _RTHP-SEAL-OF ( a u -- seal )
+\   A seal of the U bytes at A: their CRC-64, from the CRC engine
+\   (math/crc.f).  It finds damage that leaves a record well formed: every
+\   run of damage up to 64 bits long, and other damage all but once in
+\   about 2^63 times.  A seal of 0 means none was taken, so when the engine
+\   cannot be had the record is left without one, as it is in the rare case
+\   that its CRC is 0.  The shell's banks use it too.
+: _RTHP-SEAL-OF  ( a u -- seal )
+    ['] CRC64 CATCH IF 2DROP 0 THEN ;
+
+\ _RTHP-SEAL-TAKE ( a u -- seal )
+\   The seal a record takes when it is sent: with every check on
+\   (check-mode.f) the seal of its U bytes at A, and in normal mode, which
+\   reads no seal, 0.  Taking a seal checks nothing, so it names nothing; a
+\   later check compares it.  The shell's banks take theirs here too.
+: _RTHP-SEAL-TAKE  ( a u -- seal )
+    CHK-EVERY-FRAME? IF _RTHP-SEAL-OF ELSE 2DROP 0 THEN ;
+
+\ A packed bank's seal covers its header, its entries and what it packed:
+\ everything a later frame or a click reads of it.
+: _RTHP-BANK-SPAN  ( bank -- a u )
+    DUP _RTHP-TB.COUNT @ _RTHP-TARGET-ENTRY-SIZE *
+    _RTHP-TARGET-BANK-HEADER-SIZE + OVER _RTHP-TB.PACKED-BYTES @ + ;
+: _RTHP-BANK-SEAL  ( bank -- seal )  _RTHP-BANK-SPAN _RTHP-SEAL-OF ;
+
+\ _RTHP-SEAL-HOLDS? ( seal now c-addr u -- flag )
+\   Whether a record still holds what it held when it took SEAL, now that
+\   its seal is NOW.  A record that took no seal, or one the engine cannot
+\   seal now, is not vouched for, and nothing is named.  Otherwise the two
+\   must match, and when they do not, the check names the structure C-ADDR
+\   U as damaged.  The shell's banks use it too.
+: _RTHP-SEAL-HOLDS?  ( seal now c-addr u -- flag )
+    2OVER 0= SWAP 0= OR IF 2DROP 2DROP 0 EXIT THEN
+    2SWAP = -ROT CHK-NAME ;
+
+\ With every check on (check-mode.f) the pending bank is sealed once its
+\ frame is sealed for sending, and the seal passes to the acknowledged bank
+\ at publication.  The bank of the frame on screen is a base for a DELTA,
+\ and routes a click, only while it holds what it held when it was sealed;
+\ one that does not names the producer's banks as damaged.  A bank without
+\ a seal, sent before every check was on, is not damaged as far as anything
+\ shows, but nothing vouches for it either: the next frame goes out whole,
+\ and no click is routed through it.
+: _RTHP-SEAL-PENDING  ( producer -- )
+    DUP _RTHP.TARGET-PENDING @ _RTHP-BANK-SPAN _RTHP-SEAL-TAKE
+    SWAP _RTHP.PENDING-SEAL ! ;
+: _RTHP-ACTIVE-SEALED?  ( producer -- flag )
+    CHK-EVERY-FRAME? 0= IF DROP -1 EXIT THEN
+    DUP _RTHP.ACTIVE-SEAL @ DUP 0= IF NIP EXIT THEN
+    SWAP _RTHP.TARGET-ACTIVE @ _RTHP-BANK-SEAL
+    _RTHP-BANKS-DAMAGED _RTHP-SEAL-HOLDS? ;
+
 \ The bank at TV-BANK holds a packed frame, and its directory names at least
 \ one document and no more than the producer allows.  With every-frame checks
 \ off this stands for walking the packing and the menu directory again: the
@@ -3333,6 +3392,8 @@ VARIABLE _RTHP-TP-NEXT-SERIES
     _RTHP-TP-BANK @ _RTHP-TB.DRAW @
         _RTHP-TP-P @ _RTHP.ACTIVE-DRAW !
     _RTHP-TP-BANK @ _RTHP-TP-P @ _RTHP.TARGET-ACTIVE !
+    _RTHP-TP-P @ _RTHP.PENDING-SEAL @ _RTHP-TP-P @ _RTHP.ACTIVE-SEAL !
+    0 _RTHP-TP-P @ _RTHP.PENDING-SEAL !
     _RTHP-TP-P @ _RTHP-KEPT-ARENA-RELEASE
     _RTHP-FACTS-PUBLISH
     RTHPX-PUBLISH _RTHP-TP-P @ _RTHP-EXTENSION-NOTIFY
@@ -3348,6 +3409,7 @@ VARIABLE _RTHP-TP-NEXT-SERIES
     DUP _RTHP-TARGET-ABORT
     DUP _RTHP.TARGET-ACTIVE @ ?DUP IF 0 SWAP _RTHP-TB.VALID ! THEN
     0 OVER _RTHP.TARGET-ACTIVE !
+    0 OVER _RTHP.ACTIVE-SEAL !
     0 OVER _RTHP.ACTIVE-DRAW !
     DUP _RTHP-KEPT-ARENA-RELEASE
     0 SWAP _RTHP.ACTIVE-FACTS _RTHP-KF.BANK ! ;
@@ -3423,6 +3485,7 @@ VARIABLE _RTHP-TL-INTENT
     THEN _RTHP-TL-BANK !
     _RTHP-TL-BANK @ _RTHP-TL-P @ _RTHP-ACTIVE-BANK-HEADER?
         0= IF _RTHP-TL-FAIL EXIT THEN
+    _RTHP-TL-P @ _RTHP-ACTIVE-SEALED? 0= IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TL-OWNER @ _RTHP-TL-BANK @ _RTHP-TB.OWNER @ <>
     _RTHP-TL-GENERATION @
         _RTHP-TL-BANK @ _RTHP-TB.GENERATION @ <> OR
@@ -11436,6 +11499,7 @@ VARIABLE _RTHP-D-WHY
     2 _RTHP-D-WHY !
     _RTHP-D-ACTIVE @ _RTHP-D-P @ _RTHP-TARGET-BANK-HEADER?
         0= IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP-ACTIVE-SEALED? 0= IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-D-P @ _RTHP-TARGET-BANK-HEADER?
         0= IF 0 EXIT THEN
     3 _RTHP-D-WHY !
@@ -14281,6 +14345,7 @@ VARIABLE _RTHP-P-STATE
         _RTHP-P-P @ _RTHP-TARGET-ABORT
         _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
     THEN DROP
+    _RTHP-P-P @ _RTHP-SEAL-PENDING
     _RTHP-PH-START-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 
 : _RTHP-ACTIVE-DRAW-CURRENT?  ( producer -- flag )
@@ -14393,6 +14458,7 @@ VARIABLE _RTHP-P-STATE
     RTE-COMMIT _RTHP-P-P @ _RTHP.FACADE @ RTE-RETAINED-SEAL
     _RTPROF-PH-OTHER _RTPROF-MARK
     DUP RTE-S-OK <> IF _RTHP-P-P @ _RTHP-D-ABANDON EXIT THEN DROP
+    _RTHP-P-P @ _RTHP-SEAL-PENDING
     _RTHP-PH-DELTA-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 
 \ _RTHP-PREPARE-REVEAL ( sealed-phase producer -- scb-status )

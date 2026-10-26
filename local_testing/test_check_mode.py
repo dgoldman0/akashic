@@ -96,8 +96,14 @@ def test_every_check_that_runs_only_with_every_check_on_names_its_structure():
                 words.append((path.name, match[1], match[0]))
     assert len(words) >= 20
     for name, word, body in words:
-        # The shell's proved emission names through one helper of its own.
-        assert "CHK-NAME" in body or "_RTE-FDE-NAMED" in body, (name, word)
+        # Taking a seal is not a check: it records what a later check
+        # compares, and that check names what it finds.
+        if word == "_RTHP-SEAL-TAKE":
+            continue
+        # The shell's proved emission names through one helper of its own,
+        # and the checks of a seal through the one that compares seals.
+        assert ("CHK-NAME" in body or "_RTE-FDE-NAMED" in body
+                or "_RTHP-SEAL-HOLDS?" in body), (name, word)
 
 
 def test_a_failed_handover_proof_names_its_structure_and_turns_safe_mode_on():

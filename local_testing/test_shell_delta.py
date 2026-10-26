@@ -408,6 +408,56 @@ _SS-DONE
             "    _RSHSP-ACTIVE-INTACT? 0= IF _RSHSP-INPUT-NONE EXIT THEN") in target
 
 
+def test_safe_mode_seals_the_acknowledged_bank_and_finds_its_text_changed():
+    """Decision 9.  Damage that keeps the acknowledged bank well formed but
+    changes what it holds passes the bank's structure checks.  Here a bug
+    writes the next draw's letter over a run of the frame on screen.  In
+    normal mode the next DELTA then sends nothing for that run, and the
+    screen keeps the old text.  In safe mode the bank took a seal when it
+    was frozen: the seal no longer matches, the check names the shell's
+    banks, and the draw goes out as a START.  A bank frozen before safe mode
+    was on has no seal, so its DELTA is refused too, though nothing is
+    named."""
+    staged_run(DELTA + r'''
+\ Where the bank's used bytes first hold the text.
+VARIABLE _SE-A VARIABLE _SE-U
+: _SE-RUN ( bank c-addr u -- a )
+    _SE-U ! _SE-A !
+    DUP RSHSP-BANK.USED @ _SE-U @ - 1+ 0 DO
+        DUP I + _SE-U @ _SE-A @ _SE-U @ COMPARE 0= IF I + UNLOOP EXIT THEN
+    LOOP TRUE ABORT" no run" ;
+_SX-SETUP _SD-HOOKS
+\ Normal mode: HELLO is on screen, and its run is overwritten with the
+\ next draw's text, HELLP.
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+_SX-S _RSHSP.ACTIVE-SEAL @ 0= _SS-A
+80 _SX-S _RSHSP.ACTIVE @ S" HELLO" _SE-RUN 4 + C!
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+\ The DELTA sends no run: the screen keeps HELLO.
+_SD-EMIT _SS-OK _SD-GREPLACE @ 0= _SS-A _SD-GDEFINE @ 0= _SS-A
+_SX-S _RSHSP-ABORT
+\ Safe mode from here: the bank on screen has no seal, so the DELTA is
+\ refused for a START, and nothing is named.
+CHK-WHY-BOOT CHK-SAFE-ON
+_RSHSP-DELTA-PREPARE RTE-S-UNAVAILABLE = _SS-A CHK-DAMAGE-COUNT @ 0= _SS-A
+_RSHSP-PREPARE _SS-OK _SD-ACK
+_SX-S _RSHSP.ACTIVE @ _SX-KB = _SS-A _SX-S _RSHSP.ACTIVE-SEAL @ 0<> _SS-A
+_RSHSP-ACTIVE-INTACT? _SS-A
+\ The same damage to the sealed bank: HELLP on screen becomes HELLO, the
+\ next draw's text.
+79 _SX-S _RSHSP.ACTIVE @ S" HELLP" _SE-RUN 4 + C!
+' _SD-HELLO _SD-DRAW _SD-TB _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK
+_RSHSP-DELTA-PREPARE RTE-S-UNAVAILABLE = _SS-A
+_SX-S _RSHSP.PENDING @ 0= _SS-A
+CHK-DAMAGE-COUNT @ 1 = _SS-A CHK-DAMAGE S" the shell's banks" COMPARE 0= _SS-A
+\ The START that follows sends HELLO whole, from the live draw.
+_RSHSP-PREPARE _SS-OK _SX-S _RSHSP.PENDING @ _SX-KA = _SS-A
+_SS-DONE
+''', minimum=17)
+
+
 def test_normal_mode_freezes_and_sends_a_delta_through_the_proved_emission():
     """The shell sends its frozen banks through the proved emission. With
     every-frame checks on it still proves the banks and the shell facade
