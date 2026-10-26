@@ -328,8 +328,12 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
 
     assert body.index("_RGRP-RANGE-AUTHORITY?") < body.index("_RGRP-SCALARS?")
     assert body.index("_RGRP-SCAN?") < body.index("_RGRP-PUBLISH-PLAN?")
-    assert authority.count("_RGRP-SCREEN-DISJOINT?") == 1
-    assert "_RGRP-SCREEN-AUTHORIZED @ 0= IF" in authority
+    # The proofs that the spans lie apart are one word, which the authority
+    # calls with every-frame checks on.
+    apart = _word(source, "_RGRP-RANGES-APART?")
+    assert "_RGRP-RANGES-APART?" in authority
+    assert apart.count("_RGRP-SCREEN-DISJOINT?") == 1
+    assert "_RGRP-SCREEN-AUTHORIZED @ 0= IF" in apart
     assert _word(source, "_RGRP-SCREEN-DISJOINT?").count(
         "SCR-STORAGE-DISJOINT?"
     ) == 9
@@ -422,7 +426,9 @@ def test_paired_projection_preserves_request_and_independent_claim_channels() ->
     assert scan.index("_RGRP-ACTIVE @ IF") < scan.index("_RGRP-RESIDUAL-CELL?")
 
     authority = _word(source, "_RGRP-RANGE-AUTHORITY?")
-    assert authority.index("_RGRP-PAIRED-PLANES?") < authority.index(
+    apart = _word(source, "_RGRP-RANGES-APART?")
+    assert "_RGRP-PAIRED-PLANES?" in apart
+    assert authority.index("_RGRP-RANGES-APART?") < authority.index(
         "-1 _RGRP-RANGES-VALID !"
     )
     planes = _word(source, "_RGRP-PAIRED-PLANES?")
@@ -432,22 +438,26 @@ def test_paired_projection_preserves_request_and_independent_claim_channels() ->
     assert planes.index("_RGRP-PAIRED-SHAPED?") < planes.index("_RGRP-PAIR-DISJOINT?")
     assert planes.count("_RGRP-PLANE-DISJOINT?") == 2
     # Every build checks its spans' and planes' shapes; the proofs that they
-    # lie apart, and the reference's bank proofs, run with every-frame checks
-    # on (check-mode.f).
+    # lie apart, and the reference's proofs, run with every-frame checks on
+    # (check-mode.f), and a failed proof names what it found damaged.
     assert "REQUIRE ../check-mode.f" in source
-    every, normal = authority.split("ELSE", 1)
-    assert every.index("_RGRP-SPANS-SHAPED?") < every.index("CHK-EVERY-FRAME? IF")
+    assert (authority.index("_RGRP-SPANS-SHAPED?") < authority.index("_RGRP-PAIRED-SHAPED?")
+            < authority.index("CHK-EVERY-FRAME? IF")
+            < authority.index("_RGRP-RANGES-APART? _RGRP-STORAGE-DAMAGED CHK-NAME"))
     for proof in ("_RGRP-PAIR-DISJOINT?", "_RGRP-MUTABLE-DISJOINT?",
                   "_RGRP-OWNED-SPANS-DISJOINT?", "_RGRP-PAIRED-PLANES?",
                   "_RGRP-SCREEN-DISJOINT?"):
-        assert every.index("CHK-EVERY-FRAME? IF") < every.index(proof)
-    assert normal.index("_RGRP-PAIRED-SHAPED?") < normal.index("THEN")
-    assert normal.index("_RGRP-REFERENCE-AUTHORITY?") < normal.index(
+        assert proof in apart, proof
+    assert authority.index("_RGRP-REFERENCE-AUTHORITY?") < authority.index(
         "-1 _RGRP-RANGES-VALID !")
     reference = _word(source, "_RGRP-REFERENCE-AUTHORITY?")
     assert reference.index("_RGRP-RF.MAX-RUN-U @ _RGRP-MAX-RUN-U @ <>") < reference.index(
-        "CHK-EVERY-FRAME? 0= IF -1 EXIT THEN") < reference.index("_RGRP-REFERENCE-BANK?")
-    assert reference.index("CHK-EVERY-FRAME? IF") < reference.index("_RGRP-OWNED-DISJOINT?")
+        "CHK-EVERY-FRAME? 0= IF -1 EXIT THEN") < reference.index(
+        "_RGRP-REFERENCE-BANKS? _RGRP-REFERENCE-DAMAGED CHK-NAME")
+    assert reference.index("CHK-EVERY-FRAME? IF") < reference.index(
+        "_RGRP-REFERENCE-APART? _RGRP-REFERENCE-DAMAGED CHK-NAME")
+    assert "_RGRP-OWNED-DISJOINT?" in _word(source, "_RGRP-REFERENCE-APART?")
+    assert _word(source, "_RGRP-REFERENCE-BANKS?").count("_RGRP-REFERENCE-BANK?") == 3
     assert "SCR-WITH-PROJECTION-PLANES" in _word(source, "_RGRP-BUILD-PAIRED-SCOPED")
     for name in (
         "RGRP-BUILD-PAIRED-FROM-PLANES",

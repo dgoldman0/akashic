@@ -4312,7 +4312,7 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         "_RTHP-CT-CANDIDATE-SHAPE?"
     ) < target.index("_RTHP-CT-DOCUMENT-SHAPE?")
     assert target_header.rstrip().endswith(
-        "_RTHP-TARGET-MENU-DIRECTORY? ;"
+        "_RTHP-TARGET-MENU-DIRECTORY? _RTHP-BANKS-DAMAGED CHK-NAME ;"
     )
     target_directory_flat = " ".join(target_directory.split())
     assert (
@@ -7353,13 +7353,16 @@ def test_bank_headers_walk_the_packing_again_only_with_every_frame_checks() -> N
     assert header.index("_RTHP.TARGET1-A @ =") < header.index(
         "CHK-EVERY-FRAME? IF") < header.index("_RTHP-TARGET-BANK-BYTES?") < header.index(
         "_RTHP-ARENA-SPAN?") < header.index("THEN\n    _RTHP-TARGET-BANK-BODY?")
-    # The header's fields are read in both modes; in normal mode the valid
-    # mark and the directory's document count stand for walking the packing
-    # and the directory.
+    # The header's fields, the valid mark and the directory's document count
+    # are read in both modes; in normal mode they stand for walking the
+    # packing and the directory, and a walk that fails names the banks.
     assert body.index("_RTHP-TB.OWNER @ 0=") < body.index(
         "_RTHP-TB.GLYPH-RUN-LIMIT @") < body.index(
-        "CHK-EVERY-FRAME? 0= IF _RTHP-TARGET-PACKED-NAMED? EXIT THEN") < body.index(
+        "_RTHP-TARGET-PACKED-NAMED? 0= IF 0 EXIT THEN") < body.index(
+        "CHK-EVERY-FRAME? 0= IF -1 EXIT THEN") < body.index(
         "_RTHP-PACKED-BANK?") < body.index("_RTHP-TARGET-MENU-DIRECTORY?")
+    assert body.count("_RTHP-BANKS-DAMAGED CHK-NAME") == 2
+    assert header.count("_RTHP-BANKS-DAMAGED CHK-NAME") == 2
     assert "_RTHP-TB.VALID @ _RTHP-TARGET-VALID-MAGIC <>" in named
     assert "_RTHP-TB.DOCUMENT-COUNT @ DUP 0>" in named
     assert "_RTHP.MAX-DOCUMENTS @ U> 0= AND" in named

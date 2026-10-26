@@ -70,10 +70,15 @@ def test_normal_mode_claims_check_each_records_identity_not_its_structure() -> N
         '." FG-NORMAL " T-CLAIMS T-SHOW',
         "-1 CHK-EVERY-FRAME !",
         '." FG-EVERY " T-CLAIMS T-SHOW',
+        # The structure check names the records it found damaged.
+        '." NAMED " CHK-DAMAGE S" the menu capture\'s records" COMPARE 0= .'
+        ' CHK-DAMAGE-COUNT @ . CR',
         "_CSAVE @ T-FG !",
-        # A record of another generation is refused in both modes.
+        # A record of another generation is refused in both modes, and names
+        # nothing.
         "_MR _RUCL-R.GENERATION @ _CSAVE !  10 _MR _RUCL-R.GENERATION !",
         '." GEN-EVERY " T-CLAIMS T-SHOW',
+        '." COUNT-AFTER " CHK-DAMAGE-COUNT @ . CR',
         "0 CHK-EVERY-FRAME !",
         '." GEN-NORMAL " T-CLAIMS T-SHOW',
         "_CSAVE @ _MR _RUCL-R.GENERATION !",
@@ -86,7 +91,8 @@ def test_normal_mode_claims_check_each_records_identity_not_its_structure() -> N
     for line in text.splitlines():
         words = line.split()
         if words and words[0] in ("COUNT", "BASE", "FG-EVERY", "FG-NORMAL",
-                                  "GEN-NORMAL", "GEN-EVERY", "AFTER"):
+                                  "GEN-NORMAL", "GEN-EVERY", "AFTER", "NAMED",
+                                  "COUNT-AFTER"):
             results[words[0]] = [int(word) for word in words[1:]]
     assert results["COUNT"][0] >= 6, text[-600:]
     ok, invalid = 0, 2
@@ -97,3 +103,5 @@ def test_normal_mode_claims_check_each_records_identity_not_its_structure() -> N
     assert results["GEN-NORMAL"][0] == invalid
     assert results["GEN-EVERY"][0] == invalid
     assert results["AFTER"] == [ok, claims]
+    assert results["NAMED"] == [-1, 1]
+    assert results["COUNT-AFTER"] == [1]

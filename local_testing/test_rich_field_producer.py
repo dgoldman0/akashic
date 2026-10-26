@@ -333,17 +333,28 @@ def test_normal_mode_bank_headers_keep_the_valid_mark_and_skip_the_packing_walk(
             return header()
         finally:
             memory.write64(at,saved)
-    # A packing whose recorded size no longer matches its layout.
+    def damage():
+        address,length=h.variable("CHK-DAMAGE-A"),h.variable("CHK-DAMAGE-U")
+        return h.variable("CHK-DAMAGE-COUNT"),memory.read_bytes(address,length) if address else b""
+    for name in ("CHK-DAMAGE-A","CHK-DAMAGE-U","CHK-DAMAGE-COUNT"):
+        h.variable(name,0)
+    # A packing whose recorded size no longer matches its layout.  The walk
+    # that finds it names the producer's banks as damaged (check-mode.f); a
+    # cleared valid mark, which normal mode checks too, says only that the
+    # bank holds no frame, and names nothing.
     packed=memory.read64(bank+h.offset("_RTHP-TB.PACKED-BYTES"))
     h.variable("CHK-EVERY-FRAME",MASK64)
     try:
         assert not changed("PACKED-BYTES",packed+8)
+        assert damage()==(1,b"the screen producer's frame banks")
+        assert not changed("VALID",0) and damage()[0]==1
     finally:
         h.variable("CHK-EVERY-FRAME",0)
     assert header() and changed("PACKED-BYTES",packed+8)
     for name,value in (("VALID",0),("OWNER",0),("DOCUMENT-COUNT",2),("GLYPH-RUN-LIMIT",0)):
         assert not changed(name,value),name
     assert not header(bank+8)
+    assert damage()[0]==1
 
 
 # A DELTA keeps a field's label, geometry and state but for SELECTED.  Its

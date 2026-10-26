@@ -1139,18 +1139,22 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
     assert validate.count("CHK-EVERY-FRAME?") == 5
     # A draw's proofs that RUHA's banks lie apart from the screen, the owners
     # and the documents were made when they were lent or attached, and are
-    # made again only with every-frame checks on; the record's state checks
-    # and the owner's identity run in both modes.
+    # made again only with every-frame checks on, where a failed proof names
+    # the banks; the record's state checks and the owner's identity run in
+    # both modes, the identity before the proofs.
     preflight = _word(source, "_RUHA-B-PREFLIGHT")
     record = _word(source, "_RUHA-B-PREFLIGHT-RECORD?")
     current = _word(source, "_RUHA-RECORD-STORAGE-CURRENT?")
     assert preflight.index("CHK-EVERY-FRAME? IF") < preflight.index(
         "_RUHA-SCREEN-STORAGE-DISJOINT?")
-    assert record.index("CHK-EVERY-FRAME? IF") < record.index("_RUHA-LIVE-OWNER?")
-    assert record.index("ELSE") < record.index("_RUHA-OWNER-NAMED?")
+    assert preflight.count("_RUHA-BANKS-DAMAGED CHK-NAME") == 2
+    assert (record.index("_RUHA-OWNER-NAMED?") < record.index("CHK-EVERY-FRAME? IF")
+            < record.index("_RUHA-LIVE-OWNER?\n            _RUHA-BANKS-DAMAGED CHK-NAME"))
     assert record.index("CHK-EVERY-FRAME? 0= IF -1 EXIT THEN") < record.index(
-        "_RUHA-STORAGE-DISJOINT-CURRENT?")
-    assert "CHK-EVERY-FRAME? IF _RUHA-STORAGE-DISJOINT-CURRENT? ELSE DROP -1 THEN" in current
+        "_RUHA-STORAGE-DISJOINT-CURRENT?\n        _RUHA-BANKS-DAMAGED CHK-NAME")
+    assert ("CHK-EVERY-FRAME? IF\n"
+            "        _RUHA-STORAGE-DISJOINT-CURRENT? _RUHA-BANKS-DAMAGED CHK-NAME\n"
+            "    ELSE DROP -1 THEN") in current
     attach = _word(source, "_RUHA-ATTACH")
     assert "CHK-EVERY-FRAME" not in attach
     assert "_RUHA-STORAGE-DISJOINT-CURRENT?" in attach and "_RUHA-LIVE-OWNER?" in attach

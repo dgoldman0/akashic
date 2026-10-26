@@ -11819,22 +11819,37 @@ def shadow_check_record(client) -> dict:
     return record
 
 
-# Where the checks that can find only a bug run, and whether safe mode is on
-# and why (tui/check-mode.f).
+# Where the checks that can find only a bug run, whether safe mode is on and
+# why, and what the checks found damaged (tui/check-mode.f).
 CHECK_MODE_VARIABLE = "CHK-EVERY-FRAME"
 SAFE_MODE_VARIABLE = "CHK-SAFE-MODE"
 SAFE_MODE_REASONS = {1: "config", 2: "boot", 3: "anomaly"}
+DAMAGE_VARIABLES = ("CHK-DAMAGE-A", "CHK-DAMAGE-U", "CHK-DAMAGE-COUNT")
+# A structure's name is a short phrase; a longer one is not read.
+DAMAGE_NAME_MAX = 256
+
+
+def _guest_text(client, address: int, length: int) -> str:
+    """LENGTH bytes at ADDRESS, read in the cells that cover them."""
+
+    start = address & ~(GUEST_CELL_BYTES - 1)
+    end = (address + length + GUEST_CELL_BYTES - 1) & ~(GUEST_CELL_BYTES - 1)
+    cells = _read_guest_cells(
+        client, address=start, count=(end - start) // GUEST_CELL_BYTES
+    )
+    data = struct.pack(f"<{len(cells)}Q", *cells)
+    return data[address - start:address - start + length].decode("utf-8", "replace")
 
 
 def check_mode_record(client) -> dict:
-    """Whether every check ran, and whether safe mode was on and why."""
+    """Whether every check ran, whether safe mode was on and why, and the
+    first structure a check found damaged, with how many checks found any."""
 
+    names = (CHECK_MODE_VARIABLE, SAFE_MODE_VARIABLE, *DAMAGE_VARIABLES)
     values = {}
     try:
-        words = client.request(
-            "forth", names=[CHECK_MODE_VARIABLE, SAFE_MODE_VARIABLE]
-        ).get("words", {})
-        for name in (CHECK_MODE_VARIABLE, SAFE_MODE_VARIABLE):
+        words = client.request("forth", names=list(names)).get("words", {})
+        for name in names:
             word = words.get(name)
             if not isinstance(word, dict):
                 return {"unavailable": True, "error": f"{name} not found"}
@@ -11846,12 +11861,18 @@ def check_mode_record(client) -> dict:
                 )[0]
             else:
                 return {"unavailable": True, "error": f"{name} has no cell"}
+        damage = None
+        address, length = values["CHK-DAMAGE-A"], values["CHK-DAMAGE-U"]
+        if address and 0 < length <= DAMAGE_NAME_MAX:
+            damage = _guest_text(client, address, length)
     except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
         return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
     safe = values[SAFE_MODE_VARIABLE]
     return {
         "every_frame": values[CHECK_MODE_VARIABLE] != 0 or safe != 0,
         "safe_mode": SAFE_MODE_REASONS.get(safe, safe) if safe else None,
+        "damage": damage,
+        "damage_count": values["CHK-DAMAGE-COUNT"],
     }
 
 

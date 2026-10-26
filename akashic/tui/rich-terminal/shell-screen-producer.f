@@ -108,6 +108,11 @@ VARIABLE _RSHSP-STATUS
 
 : _RSHSP-FAIL ( -- ) RTE-S-UNAVAILABLE THROW ;
 : _RSHSP-CHECK ( flag -- ) 0= IF _RSHSP-FAIL THEN ;
+\ What a check that runs only with every-frame checks on names when it
+\ fails (check-mode.f).
+: _RSHSP-BANKS-DAMAGED ( -- c-addr u ) S" the shell's banks" ;
+: _RSHSP-MODEL-DAMAGED ( -- c-addr u ) S" the shell's model copy" ;
+: _RSHSP-RECORDS-DAMAGED ( -- c-addr u ) S" the shell producer's records" ;
 : _RSHSP-ADD ( n n -- n ) _RTHP-U32+? 0= IF DROP RTE-S-CAPACITY THROW THEN ;
 : _RSHSP-MUL ( n n -- n ) _RTHP-U32*? 0= IF DROP RTE-S-CAPACITY THROW THEN ;
 : _RSHSP-ALIGN ( n -- n ) 7 _RSHSP-ADD -8 AND ;
@@ -1407,7 +1412,8 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     \ The batch, in the work space, and the bank are both from Desk's memory
     \ source, so only every-frame checks prove them apart again.
     CHK-EVERY-FRAME? IF
-        _RSHSP-BATCH @ _RSHSP-BANK @ _RSHSP-BANK-CAP @ _RSHFC-BATCH-OUTSIDE? _RSHSP-CHECK
+        _RSHSP-BATCH @ _RSHSP-BANK @ _RSHSP-BANK-CAP @ _RSHFC-BATCH-OUTSIDE?
+            _RSHSP-BANKS-DAMAGED CHK-NAME _RSHSP-CHECK
     THEN
     _RSHSP-BANK @ SWAP 0 FILL
     RSHSP-BANK-HEADER-SIZE _RSHSP-BANK-USED !
@@ -1430,7 +1436,8 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-PROMPT-ID @ _RSHSP-BANK @ RSHSP-BANK.PROMPT !
     _RSHSP-BANK-USED @ _RSHSP-BANK @ RSHSP-BANK.USED !
     CHK-EVERY-FRAME? IF
-        _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID? _RSHSP-CHECK
+        _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID?
+            _RSHSP-BANKS-DAMAGED CHK-NAME _RSHSP-CHECK
     THEN ;
 \ Diagnostics: complete preparations refused, and the last refusal's status
 \ and where it happened (_RSHSP-PSTAGE: 1 target, 2 snapshot,
@@ -1459,7 +1466,8 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     \ way.  Nothing writes it afterwards.
     5 _RSHSP-PSTAGE !
     CHK-EVERY-FRAME? IF
-        _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK = _RSHSP-CHECK
+        _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK =
+            _RSHSP-MODEL-DAMAGED CHK-NAME _RSHSP-CHECK
     THEN
     6 _RSHSP-PSTAGE !
     _RSHSP-ALLOCATE-PLAN _RSHSP-CATALOG!
@@ -1778,8 +1786,18 @@ CREATE _RSHSP-DIAG-PROBE-WHY 16 CELLS ALLOT
 _RSHSP-DIAG-PROBE-WHY 16 CELLS 0 FILL
 VARIABLE _RSHSP-DM-WHY
 
+\ The acknowledged bank was checked in full when it was frozen.  With
+\ every-frame checks on (check-mode.f) it is checked again before a DELTA
+\ builds on it or a click is routed through it, since a bug may have
+\ written it since.  A damaged bank names the shell's banks; the draw then
+\ goes out as a START, which reads nothing from it, and the click goes
+\ nowhere.
+: _RSHSP-ACTIVE-INTACT? ( -- flag )
+    CHK-EVERY-FRAME? 0= IF -1 EXIT THEN
+    _RSHSP-S @ _RSHSP.ACTIVE @ _RSHSP-S @ _RSHSP-BANK-VALID?
+    _RSHSP-BANKS-DAMAGED CHK-NAME ;
 \ The acknowledged bank a DELTA starts from: published, and paired with the
-\ producer's acknowledged target and wire owner. It was checked when frozen.
+\ producer's acknowledged target and wire owner.
 : _RSHSP-DELTA-BASE? ( -- flag )
     _RSHSP-S @ _RSHSP.ACTIVE @ DUP 0= IF DROP 0 EXIT THEN
     DUP RSHSP-BANK.TARGET @ _RSHSP-P @ _RTHP.TARGET-ACTIVE @ <>
@@ -2061,7 +2079,8 @@ VARIABLE _RSHSP-DM-UA
     _RSHSP-FREEZE ;
 : _RSHSP-DELTA-PREPARE ( -- status )
     0 _RSHSP-DSTAGE !
-    _RSHSP-DELTA-BASE? IF ['] _RSHSP-BUILD-DELTA _RSHSP-STAGE
+    _RSHSP-DELTA-BASE? IF _RSHSP-ACTIVE-INTACT? ELSE 0 THEN
+    IF ['] _RSHSP-BUILD-DELTA _RSHSP-STAGE
     ELSE _RSHSP-S @ _RSHSP-ABORT RTE-S-UNAVAILABLE THEN
     DUP RTE-S-OK = IF 1 _RSHSP-DIAG-PREPARED +! EXIT THEN
     1 _RSHSP-DIAG-REFUSALS +! DUP _RSHSP-DIAG-STATUS !
@@ -2070,7 +2089,8 @@ VARIABLE _RSHSP-DM-UA
         DUP 2 6 WITHIN IF 16 * _RSHSP-KIND @ 15 MIN + ELSE 16 * THEN
     THEN 127 MIN CELLS _RSHSP-DIAG-DELTA-WHY + 1 SWAP +! ;
 \ Inside an open retained DELTA, send what changed since the active bank.
-\ Both banks were checked in full when they were frozen.
+\ Both banks were checked in full when they were frozen, and the active one
+\ again, with every-frame checks on, when the DELTA was prepared.
 : _RSHSP-DELTA-EMIT ( -- status )
     _RSHSP-S @ _RSHSP.PENDING @ 0= IF RTE-S-UNAVAILABLE EXIT THEN
     _RSHSP-DELTA-BASE? 0= IF RTE-S-INVALID EXIT THEN
@@ -2078,19 +2098,23 @@ VARIABLE _RSHSP-DM-UA
     _RSHSP-BANK @ DUP RSHSP-BANK.BATCH @ +
     _RSHSP-S @ _RSHSP.ACTIVE @ DUP RSHSP-BANK.BATCH @ +
     _RSHSP-S @ _RSHSP.SHELL @ _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
-\ With every-frame checks on, each dispatch checks the sidecar's header and
-\ proves its storage apart from the records it names, the engine's storage,
-\ the source's live storage and RUHA's banks.  In normal mode it checks only
-\ that the sidecar and its producer are the records they say they are:
-\ RSHSP-INIT proved the storage it was lent, and the work space and banks
-\ that grow come from Desk's memory source, whose live blocks never overlap.
+\ Each dispatch checks that the sidecar and its producer are the records
+\ they say they are.  With every-frame checks on it also checks the
+\ sidecar's header and proves its storage apart from the records it names,
+\ the engine's storage, the source's live storage and RUHA's banks, and a
+\ failure names the shell producer's records (check-mode.f).  Normal mode
+\ skips these: RSHSP-INIT proved the storage it was lent, and the work
+\ space and banks that grow come from Desk's memory source, whose live
+\ blocks never overlap.
 : _RSHSP-DISPATCH ( event producer sidecar -- rte-status )
+    DUP _RSHSP-NAMED? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
     CHK-EVERY-FRAME? IF
-        DUP _RSHSP-HEADER? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+        DUP _RSHSP-HEADER? _RSHSP-RECORDS-DAMAGED CHK-NAME
+            0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
         2 PICK RTHPX-PREPARE = 3 PICK RTHPX-DELTA-PREPARE = OR _RSHSP-LIVE-PROOF !
-        DUP _RSHSP-AUTHORITY? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
+        DUP _RSHSP-AUTHORITY? _RSHSP-RECORDS-DAMAGED CHK-NAME
+            0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
     ELSE
-        DUP _RSHSP-NAMED? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
         DUP _RSHSP-BIND
     THEN
     DROP _RSHSP-P @ <> IF DROP RTE-S-INVALID EXIT THEN
@@ -2317,6 +2341,7 @@ VARIABLE _RSHSP-INPUT-ROOT VARIABLE _RSHSP-INPUT-CHILD VARIABLE _RSHSP-INPUT-SAV
         _RSHSP-INPUT-OWNER @ _RSHSP-INPUT-GEN @ _RSHSP-INPUT-ID @ _RSHSP-INPUT-INTENT @
         _RSHSP-P @ RTHP-CONTROL-TARGET@ EXIT THEN
     _RSHSP-CURRENT? 0= IF _RSHSP-INPUT-NONE EXIT THEN
+    _RSHSP-ACTIVE-INTACT? 0= IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-INPUT-OWNER @ _RSHSP-BANK @ RSHSP-BANK.OWNER @ <>
     _RSHSP-INPUT-GEN @ _RSHSP-BANK @ RSHSP-BANK.GENERATION @ <> OR IF _RSHSP-INPUT-NONE EXIT THEN
     _RSHSP-CONTROL-FIND DUP 0= IF DROP _RSHSP-INPUT-NONE EXIT THEN _RSHSP-INPUT-CONTROL !

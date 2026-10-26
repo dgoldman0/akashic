@@ -3236,12 +3236,14 @@ VARIABLE _RTAPT-JV-O
 \ The calls every frame makes -- the limits query, BEGIN, the hybrid and
 \ family preflights and the steps that wait for a frame's answer -- check
 \ the engine's state.  They walk its ledgers too only with every-frame
-\ checks on (check-mode.f), or while lifecycle work is queued: only the
-\ engine writes them, and lifecycle entries, explicit VALID? and final
-\ publication keep their own audits.
+\ checks on (check-mode.f), where a failed walk names the ledgers, or while
+\ lifecycle work is queued: only the engine writes them, and lifecycle
+\ entries, explicit VALID? and final publication keep their own audits.
 : _RTAPT-ENGINE-FRAME?  ( e -- flag )
-    CHK-EVERY-FRAME? IF _RTAPT-ENGINE-VALID? EXIT THEN
     DUP _RTAPT-ENGINE-STATE? 0= IF DROP 0 EXIT THEN
+    CHK-EVERY-FRAME? IF
+        _RTAPT-ENGINE-LEDGERS? S" the APT-1 engine's ledgers" CHK-NAME EXIT
+    THEN
     DUP _RTAPT-E.QUEUE-HEAD @ IF _RTAPT-ENGINE-LEDGERS? EXIT THEN
     DROP -1 ;
 

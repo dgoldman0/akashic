@@ -478,8 +478,8 @@ of about 2 million for a thin frame.
 
 **How it is turned on** (decision 6):
 
-- a key in Desk's configuration file, kept across sessions, which nothing
-  inside Desk can change;
+- a key in Desk's system settings, kept across sessions on a read-only
+  volume that nothing inside Desk can change (decision 10);
 - a boot option;
 - by itself, when the thin path meets an anomaly: a handover proof that
   fails, or, from part 8, a full refresh that finds a missed change. Desk
@@ -508,16 +508,30 @@ the terminal holds, which later frames build on and which tells a click
 which control it reached. In normal mode nothing checks that record again,
 so the damage can spread into what the screen shows or where a click goes.
 In safe mode the rich path's records are checked on every frame and every
-frame is rebuilt from the live state. A check that catches the damage
-refuses the frame, falls back to plain text and names the damaged structure.
+frame is rebuilt from the live state. A check that catches the damage names
+the damaged structure and refuses what would have been built on it. A frame
+whose build finds damage is shown as plain text, and the next draw tries
+rich again with every check. When the damage is in the record of the frame
+on screen, the DELTA that would start from it is refused, and the frame goes
+out whole, built from the live state, which reads nothing from the damaged
+record; until then no click is routed through it. Damage to the terminal
+engine's own records stops the session, as any broken engine record does,
+since nothing can be sent safely without them.
+
+These checks prove each record's structure: its sizes, offsets, spans and
+links. Damage that leaves a record well formed but changes what it holds,
+such as the text of one run in the record of the frame on screen, passes
+them, and a DELTA built on that record can then leave the old text on the
+screen. Decision 9 closes this by sealing that record.
 
 **Change.** The switch, and the ways to turn it on.
 
 **Effect.** None in normal mode. In safe mode, about today's cost.
 
 **Tests.** A unit test damages a record of the acknowledged frame, and
-expects safe mode to catch it on the next frame, refuse that frame and name
-the structure.
+expects safe mode to catch it on the next frame, refuse the DELTA built on
+it, send the frame whole and name the structure, and to route no click
+through it.
 
 ## Part 5. UIDL sees its widgets' changes and counts its own — design, fixes a violation
 
@@ -854,3 +868,13 @@ Taken on 2026-10-26:
    each element's content would cost memory and give no current renderer
    anything it reads; safe mode builds every frame from live state, so it
    would not read one either.
+9. **What safe mode trusts of the frame on screen** (part 4). Its record is
+   sealed. In safe mode the record of a frame takes a hardware CRC when the
+   frame is sent, and the CRC is checked before the next DELTA or click uses
+   the record. A record that no longer matches is damage: the frame goes
+   out whole. When safe mode turns on during a session, the record of the
+   frame on screen has no seal, so the next frame goes out whole as well.
+10. **Where the configuration key lives** (part 4). On a small volume of
+    Desk's system settings, which KDOS mounts read-only and only the host
+    changes, by rebuilding or editing the image. MegaPad takes a second,
+    write-protected disk for it.

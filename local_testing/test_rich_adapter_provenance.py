@@ -123,6 +123,9 @@ _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP 255 SWAP C!
 _RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 2 = _RA-ASSERT
 _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@
     S" aggregate alpha" STR-STR= _RA-ASSERT
+\ The refused slice is named as damaged (check-mode.f).
+CHK-DAMAGE S" the snapshot adapter's stored slices" STR-STR= _RA-ASSERT
+CHK-DAMAGE-COUNT @ 1 = _RA-ASSERT
 \ In normal mode only the slice's bounds are checked, and it is reused as
 \ stored: the trade normal mode makes, which safe mode does not.
 0 CHK-EVERY-FRAME !
@@ -130,8 +133,9 @@ _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP 255 SWAP C!
 3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
 _RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 2 = _RA-ASSERT
 _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP C@ 255 = _RA-ASSERT
+CHK-DAMAGE-COUNT @ 1 = _RA-ASSERT
 _RP-DONE
-''', minimum=53, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
+''', minimum=56, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
 
 
 def test_normal_mode_draws_check_the_owner_not_where_its_storage_lies():
@@ -143,15 +147,23 @@ def test_normal_mode_draws_check_the_owner_not_where_its_storage_lies():
 8 _RA-COMP-DESC COMP.STATE-SIZE ! _RA-NATIVE _RA-INSTANCE @ CINST.STATE !
 -1 CHK-EVERY-FRAME !
 2 _RA-QUERY _RA-STATUS @ RUHA-S-INVALID = _RA-ASSERT
+\ The failed proof names RUHA's banks as damaged (check-mode.f).
+CHK-DAMAGE S" the snapshot adapter's banks" STR-STR= _RA-ASSERT
+CHK-DAMAGE-COUNT @ 1 = _RA-ASSERT
 0 CHK-EVERY-FRAME !
 3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
-\ The owner's identity is still checked.
+\ The owner's identity is still checked, in both modes, and a stale
+\ identity names nothing.
 0 _RA-INSTANCE @ CINST.GENERATION !
 4 _RA-QUERY _RA-STATUS @ RUHA-S-INVALID = _RA-ASSERT
+-1 CHK-EVERY-FRAME !
+5 _RA-QUERY _RA-STATUS @ RUHA-S-INVALID = _RA-ASSERT
+0 CHK-EVERY-FRAME !
+CHK-DAMAGE-COUNT @ 1 = _RA-ASSERT
 _RP-GEN @ _RA-INSTANCE @ CINST.GENERATION !
 0 _RA-COMP-DESC COMP.STATE-SIZE ! 0 _RA-INSTANCE @ CINST.STATE !
 _RP-DONE
-''', minimum=50, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
+''', minimum=54, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
 
 
 def test_shadow_check_matches_reuse_and_catches_a_stale_reused_slice():

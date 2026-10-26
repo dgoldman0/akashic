@@ -70,7 +70,8 @@ VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
 \ (check-mode.f).  The capacity check still precedes the first write.
 : _RSHFC-PREPARE-PROVED ( batch destination capacity -- status )
     CHK-EVERY-FRAME? IF
-        _RSHFC-PREPARE-SPANS 0= IF RSHFC-S-INVALID EXIT THEN
+        _RSHFC-PREPARE-SPANS S" the shell's banks" CHK-NAME
+            0= IF RSHFC-S-INVALID EXIT THEN
     ELSE _RSHFC-CAP ! _RSHFC-D ! _RSHFC-B ! THEN
     _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
 : _RSHFC-MEASURED ( status -- bytes status )

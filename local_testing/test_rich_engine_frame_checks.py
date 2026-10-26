@@ -40,5 +40,13 @@ def test_frame_calls_walk_the_ledgers_only_with_every_frame_checks():
     assert _top(h, "RTAPT-LIMITS@", h.engine) == invalid
     assert _top(h, "RTAPT-VALID?", h.engine) == 0
     memory.write64(switch, 0)
+    # The frame's walk names the ledgers it found damaged (check-mode.f);
+    # explicit VALID? is an audit of its own and names nothing.
+    damage = h.runtime.find("CHK-DAMAGE-A").body_address
+    length = h.runtime.find("CHK-DAMAGE-U").body_address
+    count = h.runtime.find("CHK-DAMAGE-COUNT").body_address
+    assert memory.read64(count) == 1
+    assert memory.read_bytes(memory.read64(damage), memory.read64(length)) == (
+        b"the APT-1 engine's ledgers")
     memory.write64(used, held)
     assert _top(h, "RTAPT-LIMITS@", h.engine) == sound

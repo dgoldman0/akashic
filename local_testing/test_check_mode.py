@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """check-mode.f: every-frame checks are off until something turns them on."""
 
+import re
+from pathlib import Path
+
 import pytest
 
 import akashic_tui as packaging
 from test_field_model import PRELUDE, run_field
+
+SOURCE = Path(__file__).resolve().parents[1] / "akashic"
 
 
 def test_every_frame_checks_are_off_until_turned_on():
@@ -57,3 +62,39 @@ def test_the_safe_mode_boot_option_follows_the_last_require():
     )
     with pytest.raises(RuntimeError, match="tui/check-mode.f"):
         packaging._with_safe_mode(autoexec, ())
+
+
+def test_a_failed_check_names_the_structure_it_found_damaged():
+    run_field(PRELUDE + r'''
+: T-FIRST  S" the first structure" ;
+: T-SECOND  S" the second structure" ;
+CHK-DAMAGE NIP 0= _FM-A CHK-DAMAGE-COUNT @ 0= _FM-A
+\ A check that passes names nothing and keeps its flag.
+-1 T-FIRST CHK-NAME -1 = _FM-A CHK-DAMAGE-COUNT @ 0= _FM-A
+\ A check that fails names its structure and keeps its flag.
+0 T-FIRST CHK-NAME 0= _FM-A CHK-DAMAGE-COUNT @ 1 = _FM-A
+CHK-DAMAGE T-FIRST COMPARE 0= _FM-A
+\ The first name stays, and the count grows with every check that names one.
+0 T-SECOND CHK-NAME 0= _FM-A CHK-DAMAGE-COUNT @ 2 = _FM-A
+CHK-DAMAGE T-FIRST COMPARE 0= _FM-A
+T-SECOND CHK-DAMAGED CHK-DAMAGE-COUNT @ 3 = _FM-A
+_FM-DONE
+''', minimum=11, extra_sources=("tui/check-mode.f",))
+
+
+def test_every_check_that_runs_only_with_every_check_on_names_its_structure():
+    """A check that only every-frame checks or safe mode run can fail only
+    after a bug wrote where it should not, so each one names what it found
+    damaged."""
+    words = []
+    for path in sorted(SOURCE.rglob("*.f")):
+        if path.name == "check-mode.f":
+            continue
+        text = re.sub(r"(?m)\\[^\n]*$", "", path.read_text())
+        for match in re.finditer(r"(?ms)^: (\S+)(?=\s).*?;[ \t]*$", text):
+            if "CHK-EVERY-FRAME?" in match[0]:
+                words.append((path.name, match[1], match[0]))
+    assert len(words) >= 20
+    for name, word, body in words:
+        # The shell's proved emission names through one helper of its own.
+        assert "CHK-NAME" in body or "_RTE-FDE-NAMED" in body, (name, word)

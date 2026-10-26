@@ -159,12 +159,14 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
     assert "_RSHSP-HEADER?" not in authority
     assert authority.count("_RSHSP-SPAN?") == 1
     assert "_RTHP.ARENA-U @ _RSHSP-SPAN?" in authority
-    # Every caller checks the header, or each span, first.
+    # Every caller checks the header, or each span, first.  The dispatch
+    # checks the records' names in both modes, then, with every-frame checks
+    # on, the header and the storage, and otherwise binds them.
     for caller, first, then in (("RSHSP-VALID?", "_RSHSP-HEADER?", "_RSHSP-AUTHORITY?"),
+                                ("_RSHSP-DISPATCH", "_RSHSP-NAMED?", "CHK-EVERY-FRAME? IF"),
                                 ("_RSHSP-DISPATCH", "CHK-EVERY-FRAME? IF", "_RSHSP-HEADER?"),
                                 ("_RSHSP-DISPATCH", "_RSHSP-HEADER?", "_RSHSP-AUTHORITY?"),
-                                ("_RSHSP-DISPATCH", "_RSHSP-AUTHORITY?", "_RSHSP-NAMED?"),
-                                ("_RSHSP-DISPATCH", "_RSHSP-NAMED?", "_RSHSP-BIND"),
+                                ("_RSHSP-DISPATCH", "_RSHSP-AUTHORITY?", "_RSHSP-BIND"),
                                 ("RSHSP-INIT", "_RSHSP-SPAN?", "_RSHSP-SPANS?")):
         body = word(caller)
         assert body.index(first) < body.index(then), caller
@@ -208,15 +210,18 @@ def test_the_freeze_takes_the_graph_the_preflight_checked():
     assert "_RSHSP-BATCH @ _RSHFC-MEASURE-PROVED" in freeze
     assert "RSHFC-MEASURE " not in freeze and "_RSHFC-COPY-PROVED" in freeze
     # The finished bank, a proved copy, is checked again only with
-    # every-frame checks on, as is the producer's copy of the published model.
+    # every-frame checks on, as is the producer's copy of the published model;
+    # a failure names what it found damaged (check-mode.f).
     assert freeze.rstrip().endswith(
         "CHK-EVERY-FRAME? IF\n"
-        "        _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID? _RSHSP-CHECK\n"
+        "        _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID?\n"
+        "            _RSHSP-BANKS-DAMAGED CHK-NAME _RSHSP-CHECK\n"
         "    THEN ;"
     )
     assert (
         "CHK-EVERY-FRAME? IF\n"
-        "        _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK = _RSHSP-CHECK\n"
+        "        _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK =\n"
+        "            _RSHSP-MODEL-DAMAGED CHK-NAME _RSHSP-CHECK\n"
         "    THEN"
     ) in build
     # Every freeze follows a preflight, with only the mapping between them.

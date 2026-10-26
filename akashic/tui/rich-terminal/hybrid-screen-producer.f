@@ -417,6 +417,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ Desk's own memory had no room.
 3 CONSTANT RTHP-WHY-MEMORY
 4 CONSTANT RTHP-WHY-OTHER
+\ A check found the rich path's memory damaged; CHK-DAMAGE names what
+\ (check-mode.f).
+5 CONSTANT RTHP-WHY-DAMAGE
 
 \ A table entry of the pictures the terminal holds: its resource ID, zero
 \ when free, the copy's size in pixels and the bytes the owner holds for
@@ -2984,6 +2987,10 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
     _RTHP-TV-TEXT-CURSOR @
         _RTHP-TV-BANK @ _RTHP-TB.MENU-TEXT-USED @ = AND ;
 
+\ What a check that runs only with every-frame checks on names when one of
+\ the producer's target banks fails it (check-mode.f).
+: _RTHP-BANKS-DAMAGED  ( -- c-addr u )  S" the screen producer's frame banks" ;
+
 \ The bank at TV-BANK holds a packed frame, and its directory names at least
 \ one document and no more than the producer allows.  With every-frame checks
 \ off this stands for walking the packing and the menu directory again: the
@@ -3087,10 +3094,11 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
         _RTHP-TV-TEXT-CAP @ U> IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.GLYPH-RUN-LIMIT @
         _RTHP-POS-U32? 0= IF 0 EXIT THEN
-    CHK-EVERY-FRAME? 0= IF _RTHP-TARGET-PACKED-NAMED? EXIT THEN
+    _RTHP-TARGET-PACKED-NAMED? 0= IF 0 EXIT THEN
+    CHK-EVERY-FRAME? 0= IF -1 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP-PACKED-BANK?
-        0= IF 0 EXIT THEN
-    _RTHP-TARGET-MENU-DIRECTORY? ;
+        _RTHP-BANKS-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
+    _RTHP-TARGET-MENU-DIRECTORY? _RTHP-BANKS-DAMAGED CHK-NAME ;
 
 \ BANK is one of the producer's two target banks, and holds a frame.  The
 \ layout placed both banks in the arena when the producer was set up and
@@ -3103,10 +3111,10 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
     _RTHP-TV-BANK @ _RTHP-TV-P @ _RTHP.TARGET1-A @ = OR
         0= IF 0 EXIT THEN
     CHK-EVERY-FRAME? IF
-        _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES?
+        _RTHP-TV-P @ _RTHP-TARGET-BANK-BYTES? _RTHP-BANKS-DAMAGED CHK-NAME
             0= IF DROP 0 EXIT THEN _RTHP-TV-BYTES !
-        _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @
-            _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
+        _RTHP-TV-BANK @ _RTHP-TV-BYTES @ _RTHP-TV-P @ _RTHP-ARENA-SPAN?
+            _RTHP-BANKS-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
     THEN
     _RTHP-TARGET-BANK-BODY? ;
 
@@ -4813,7 +4821,8 @@ VARIABLE _RTHP-W-MR-SELECTED-SEEN
     _RTHP-W-MR-ENABLED @ 0= IF 0 EXIT THEN
     _RTHP-W-MENU-REUSE-DOCUMENT? 0= IF 0 EXIT THEN
     CHK-EVERY-FRAME? IF
-        _RTHP-W-MENU-REUSE-PREFLIGHT? 0= IF 0 EXIT THEN
+        _RTHP-W-MENU-REUSE-PREFLIGHT? _RTHP-BANKS-DAMAGED CHK-NAME
+            0= IF 0 EXIT THEN
     THEN
     _RTHP-W-MENU-PATCH-PREFLIGHT? 0= IF 0 EXIT THEN
     _RTHP-W-MENU-REUSE-COPY
@@ -8658,9 +8667,17 @@ VARIABLE _RTHP-F-STATUS
         _RTHP-W-MEMORY-HELD @ OVER _RTHP.FALLBACK-BYTES-HELD !
     THEN DROP ;
 
-\ Why a refused frame stays CELL: the terminal's answers first, then Desk's
-\ memory when the provider could not grow and nothing else explains it.
+\ How many checks had named damage when the current draw's build began
+\ (check-mode.f), so that a refusal can tell whether damage caused it.
+VARIABLE _RTHP-W-DAMAGE-MARK
+0 _RTHP-W-DAMAGE-MARK !
+: _RTHP-W-DAMAGED?  ( -- flag )  CHK-DAMAGE-COUNT @ _RTHP-W-DAMAGE-MARK @ <> ;
+
+\ Why a refused frame stays CELL: damage a check found while the draw was
+\ built, then the terminal's answers, then Desk's memory when the provider
+\ could not grow and nothing else explains it.
 : _RTHP-REFUSAL-REASON  ( producer -- reason )
+    _RTHP-W-DAMAGED? IF DROP RTHP-WHY-DAMAGE EXIT THEN
     _RTHP-REFUSAL-WHY
     DUP RTHP-WHY-OTHER = _RTHP-W-MEMORY-ASKED @ 0<> AND IF
         DROP RTHP-WHY-MEMORY
@@ -9078,16 +9095,29 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     _RTHP-W-P @ _RTHP.SOURCE-DRAW @ _RTHP-W-P @ _RTHP.SURFACE-GEN !
     RTE-S-OK -1 ;
 
+\ In safe mode (check-mode.f) a draw whose build a check refused for damage
+\ cannot be shown rich: CELL shows it, the fallback record gives damage as
+\ the reason, and CHK-DAMAGE names what was damaged.  Rich is tried again
+\ once a newer draw completes, with every check run again.  Otherwise a
+\ refusal for damage stays INVALID, as any broken record is.
+: _RTHP-DAMAGE-REFUSAL  ( rte-status built? -- rte-status built? )
+    DUP IF EXIT THEN
+    OVER RTE-S-INVALID = CHK-SAFE? AND _RTHP-W-DAMAGED? AND IF
+        2DROP RTHP-WHY-DAMAGE _RTHP-W-WHY ! RTE-S-UNAVAILABLE 0
+    THEN ;
+
 : _RTHP-BUILD-CANDIDATE  ( producer -- rte-status built? )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-W-P !
+    CHK-DAMAGE-COUNT @ _RTHP-W-DAMAGE-MARK !
     SCR-DRAW-GENERATION@ DUP 0= IF
         DROP RTE-S-WOULD-BLOCK 0 EXIT
     THEN _RTHP-W-DRAW !
     _RTPROF-PH-UIDL-AGGREGATE _RTPROF-MARK
     _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-FOR@
     _RTPROF-PH-OTHER _RTPROF-MARK
-    _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-BUILD-OBSERVED-CANDIDATE ;
+    _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-BUILD-OBSERVED-CANDIDATE
+    _RTHP-DAMAGE-REFUSAL ;
 
 \ _RTHP-REFUSE-DRAW ( producer -- )
 \   The completed draw just built cannot be shown rich.  CELL shows it, the
@@ -11969,9 +11999,7 @@ VARIABLE _RTHP-D-SPAN-BANK
 \ comparison reads only banks the producer packed itself, from items the
 \ engine admitted, so this and _RTHP-D-REF-VALID? check them only with
 \ every-frame checks on (check-mode.f).
-: _RTHP-D-CONTROL-TEXT-SPANS?  ( control bank -- flag )
-    CHK-EVERY-FRAME? 0= IF 2DROP -1 EXIT THEN
-    _RTHP-D-SPAN-BANK ! _RTHP-D-SPAN-C !
+: _RTHP-D-CONTROL-TEXTS-WITHIN?  ( -- flag )
     _RTHP-D-SPAN-C @ _RTE-CONTROL.LABEL-A @
     _RTHP-D-SPAN-C @ _RTE-CONTROL.LABEL-U @
     _RTHP-D-SPAN-BANK @ _RTHP-D-SOURCE-A
@@ -11987,6 +12015,10 @@ VARIABLE _RTHP-D-SPAN-BANK
     _RTHP-D-SPAN-BANK @ _RTHP-D-SOURCE-A
     _RTHP-D-SPAN-BANK @ _RTHP-TB.SOURCE-TEXT-USED @
         _RTHP-TEXT-WITHIN? ;
+: _RTHP-D-CONTROL-TEXT-SPANS?  ( control bank -- flag )
+    CHK-EVERY-FRAME? 0= IF 2DROP -1 EXIT THEN
+    _RTHP-D-SPAN-BANK ! _RTHP-D-SPAN-C !
+    _RTHP-D-CONTROL-TEXTS-WITHIN? _RTHP-BANKS-DAMAGED CHK-NAME ;
 
 \ STX1 is canonical little-endian and may begin at a merely byte-aligned
 \ address.  Never use native @ to recover its monotonic content revision.
@@ -12243,9 +12275,7 @@ VARIABLE _RTHP-D-REF-ITEM
 VARIABLE _RTHP-D-REF-REF
 VARIABLE _RTHP-D-REF-BANK
 
-: _RTHP-D-REF-VALID?  ( item ref bank -- flag )
-    CHK-EVERY-FRAME? 0= IF 2DROP DROP -1 EXIT THEN
-    _RTHP-D-REF-BANK ! _RTHP-D-REF-REF ! _RTHP-D-REF-ITEM !
+: _RTHP-D-REF-WITHIN?  ( -- flag )
     _RTHP-D-REF-REF @ RGRP-TEXT-REF-OFFSET@ _RTHP-D-OFFSET-P !
     _RTHP-D-REF-REF @ RGRP-TEXT-REF-LENGTH@ _RTHP-D-EXPECTED-P !
     _RTHP-D-OFFSET-P @
@@ -12255,6 +12285,10 @@ VARIABLE _RTHP-D-REF-BANK
         _RTHP-D-OFFSET-P @ - U> IF 0 EXIT THEN
     _RTHP-D-REF-ITEM @ _RTE-LPI.TEXT-CAPACITY @
         _RTHP-D-EXPECTED-P @ = ;
+: _RTHP-D-REF-VALID?  ( item ref bank -- flag )
+    CHK-EVERY-FRAME? 0= IF 2DROP DROP -1 EXIT THEN
+    _RTHP-D-REF-BANK ! _RTHP-D-REF-REF ! _RTHP-D-REF-ITEM !
+    _RTHP-D-REF-WITHIN? _RTHP-BANKS-DAMAGED CHK-NAME ;
 
 \ A spatially normalized ACK bank keeps records in row-major presentation
 \ order while object IDs become a permutation of the original contiguous
@@ -14278,6 +14312,7 @@ VARIABLE _RTHP-P-STATE
 
 : _RTHP-STAGE-LIVE-CANDIDATE  ( producer -- scb-status stage-route )
     _RTPROF-PH-OTHER _RTPROF-MARK
+    CHK-DAMAGE-COUNT @ _RTHP-W-DAMAGE-MARK !
     _RTHP-PROBE-CLEAR
     DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT
     DUP SCB-S-OK <> IF _RTHP-STAGE-NONE EXIT THEN DROP

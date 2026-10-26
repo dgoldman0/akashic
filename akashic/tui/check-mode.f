@@ -21,6 +21,11 @@
 \  configuration, a boot option or an anomaly turns it on, and then it
 \  stays on for the session, keeping the first reason it was given.
 \
+\  A check that runs only with every check on names the structure it found
+\  damaged when it fails.  The first name stays for the session, and a
+\  count grows with every check that names one, so a caller can tell that
+\  a refusal came from damage.
+\
 \  CHK-EVERY-FRAME   ( -- addr )  the switch: nonzero runs every check
 \  CHK-EVERY-FRAME?  ( -- flag )  whether every check runs: the switch is
 \                                 on, or safe mode is
@@ -28,6 +33,13 @@
 \                                 CHK-WHY-BOOT or CHK-WHY-ANOMALY
 \  CHK-SAFE?         ( -- flag )  whether safe mode is on
 \  CHK-SAFE-ON       ( why -- )   turn safe mode on, unless it is already
+\  CHK-DAMAGE        ( -- c-addr u )  the first structure a check found
+\                                     damaged, or 0 0
+\  CHK-DAMAGE-COUNT  ( -- addr )  how many checks have named a structure
+\  CHK-DAMAGED       ( c-addr u -- )  a check found the structure named
+\                                     c-addr u damaged
+\  CHK-NAME          ( flag c-addr u -- flag )  name the structure c-addr u
+\                                     as damaged when flag is false
 \
 \  Prefix: CHK- (public)
 
@@ -46,3 +58,20 @@ VARIABLE CHK-SAFE-MODE
 : CHK-EVERY-FRAME?  ( -- flag )  CHK-EVERY-FRAME @ CHK-SAFE-MODE @ OR 0<> ;
 : CHK-SAFE-ON  ( why -- )
     DUP 0= CHK-SAFE? OR IF DROP EXIT THEN  CHK-SAFE-MODE ! ;
+
+\ The name is a string the checking module compiled, so it outlives the
+\ check.  CHK-DAMAGE-A and CHK-DAMAGE-U hold it for diagnostics to read.
+VARIABLE CHK-DAMAGE-A
+0 CHK-DAMAGE-A !
+VARIABLE CHK-DAMAGE-U
+0 CHK-DAMAGE-U !
+VARIABLE CHK-DAMAGE-COUNT
+0 CHK-DAMAGE-COUNT !
+
+: CHK-DAMAGE  ( -- c-addr u )  CHK-DAMAGE-A @ CHK-DAMAGE-U @ ;
+: CHK-DAMAGED  ( c-addr u -- )
+    1 CHK-DAMAGE-COUNT +!
+    CHK-DAMAGE-A @ IF 2DROP EXIT THEN
+    CHK-DAMAGE-U ! CHK-DAMAGE-A ! ;
+: CHK-NAME  ( flag c-addr u -- flag )
+    2 PICK IF 2DROP EXIT THEN CHK-DAMAGED ;

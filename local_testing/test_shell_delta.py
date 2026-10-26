@@ -1,5 +1,7 @@
 """Shell DELTA: a changed draw with the acknowledged layout republishes only what changed."""
 
+from pathlib import Path
+
 from test_shell_screen_producer import INSTRUMENTS, STAGED, staged_run
 
 
@@ -339,13 +341,71 @@ _SX-SETUP _SD-HOOKS
 -1 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SC-DAMAGE
 _RSHSP-PREPARE RTE-S-OK <> _SS-A
-\ The producer refused its copy of the model.
+\ The producer refused its copy of the model, and named it.
 _RSHSP-DIAG-PREPARE-STAGE @ 5 = _SS-A
+CHK-DAMAGE S" the shell's model copy" COMPARE 0= _SS-A CHK-DAMAGE-COUNT @ 1 = _SS-A
 0 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SC-DAMAGE
-_RSHSP-PREPARE _SS-OK
+_RSHSP-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 1 = _SS-A
 _SS-DONE
-''', minimum=26)
+''', minimum=29)
+
+
+def test_safe_mode_checks_the_acknowledged_bank_again_before_using_it():
+    """Part 4's damage test.  A bug writes into the shell's record of the
+    frame the terminal holds after the record was frozen and checked; here,
+    into the bank's used size, which only its full check reads.  Normal mode
+    does not look at the record again, so a click still routes through it
+    and the next changed draw becomes a DELTA built on it.  Safe mode checks
+    the record again first: the click goes nowhere, the DELTA is refused,
+    which leaves the draw to a START that reads nothing from the record, and
+    the check names the shell's banks."""
+    staged_run(DELTA + r'''
+: _SB-DAMAGE ( -- ) _SX-S _RSHSP.ACTIVE @ RSHSP-BANK.USED DUP @ 8 + SWAP ! ;
+: _SB-NAMED? ( -- flag ) CHK-DAMAGE S" the shell's banks" COMPARE 0= ;
+\ A click on the taskbar's task, routed through the acknowledged bank as
+\ RSHSP-CONTROL-TARGET@ routes it once the sidecar is proved.
+: _SB-CLICK ( -- found? )
+    _RSHSP-CURRENT? 0= IF 0 EXIT THEN
+    _RSHSP-ACTIVE-INTACT? 0= IF 0 EXIT THEN
+    11 _SX-S _RSHSP.ACTIVE @ _SD-FIND _RTE-CONTROL.ID @ _RSHSP-INPUT-ID !
+    RTE-INTENT-ACTIVATE _RSHSP-INPUT-INTENT !
+    _RSHSP-CONTROL-FIND DUP 0= IF EXIT THEN _RSHSP-INPUT-CONTROL !
+    _RSHSP-SHELL-TARGET? ;
+_SX-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+_SB-CLICK _SS-A
+\ Normal mode: the damage goes unseen.
+_SB-DAMAGE _SB-CLICK _SS-A CHK-DAMAGE-COUNT @ 0= _SS-A
+\ Safe mode: the click goes nowhere, and the check names the bank.
+CHK-WHY-BOOT CHK-SAFE-ON
+_SB-CLICK 0= _SS-A CHK-DAMAGE-COUNT @ 1 = _SS-A _SB-NAMED? _SS-A
+\ Back in normal mode, as the test compares them: the next changed draw
+\ becomes a DELTA on the damaged record.
+0 CHK-SAFE-MODE !
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+CHK-DAMAGE-COUNT @ 1 = _SS-A
+_SX-S _RSHSP-ABORT
+\ Safe mode: the draw checks the record again and refuses the DELTA.
+CHK-WHY-BOOT CHK-SAFE-ON
+_RSHSP-DELTA-PREPARE RTE-S-UNAVAILABLE = _SS-A
+_SX-S _RSHSP.PENDING @ 0= _SS-A
+CHK-DAMAGE-COUNT @ 2 = _SS-A _SB-NAMED? _SS-A
+\ The START freezes into the other bank, with every check, and replaces
+\ the damaged record once the terminal has it.
+_RSHSP-PREPARE _SS-OK _SX-S _RSHSP.PENDING @ _SX-KB = _SS-A
+_SD-ACK _SX-S _RSHSP.ACTIVE @ _SX-KB = _SS-A
+_RSHSP-ACTIVE-INTACT? _SS-A _SB-CLICK _SS-A CHK-DAMAGE-COUNT @ 2 = _SS-A
+_SS-DONE
+''', minimum=22)
+    # The public entry checks the bank right after it finds it current.
+    source = (Path(__file__).resolve().parents[1]
+              / "akashic/tui/rich-terminal/shell-screen-producer.f").read_text()
+    target = source[source.index(": RSHSP-CONTROL-TARGET@"):]
+    target = target[:target.index("\n;") if "\n;" in target else len(target)]
+    assert ("_RSHSP-CURRENT? 0= IF _RSHSP-INPUT-NONE EXIT THEN\n"
+            "    _RSHSP-ACTIVE-INTACT? 0= IF _RSHSP-INPUT-NONE EXIT THEN") in target
 
 
 def test_normal_mode_freezes_and_sends_a_delta_through_the_proved_emission():

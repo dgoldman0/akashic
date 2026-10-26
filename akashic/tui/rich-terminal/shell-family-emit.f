@@ -345,11 +345,18 @@ VARIABLE _RTE-FDE-PROVED
     0 _RTE-FDE-OPS ! 0 _RTE-FDE-FENCE-E ! 0 _RTE-FDE-FENCE-I !
     0 _RTE-FDE-FROM ! 0 _RTE-FDE-SIZE ! 0 _RTE-FDE-NPTR ! 0 _RTE-FDE-PROVED !
     _RTE-FDE-PTRS 24 0 FILL ;
+\ A proof the proved peer makes only with every-frame checks on names the
+\ shell's banks, which hold its batches, when it fails (check-mode.f).  The
+\ public entry's proofs check what a caller hands it and name nothing.
+: _RTE-FDE-NAMED ( flag -- flag )
+    _RTE-FDE-PROVED @ IF S" the shell's banks" CHK-NAME THEN ;
 : _RTE-FDE-EMIT ( pending-batch active-batch shell -- status )
     2 PICK 2 PICK = IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
     _RTE-FDE-PROVED @ 0= CHK-EVERY-FRAME? OR IF
-        2 PICK OVER _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
-        2DUP _RTE-FEM-AUTHORITY? 0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+        2 PICK OVER _RTE-FEM-AUTHORITY? _RTE-FDE-NAMED
+            0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+        2DUP _RTE-FEM-AUTHORITY? _RTE-FDE-NAMED
+            0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
     THEN
     DUP _RTE-SH.BASE @ _RTE-FEM-BASE ! _RTE-FEM-SHELL !
     _RTE-FDE-ACTIVE ! _RTE-FEM-BATCH !

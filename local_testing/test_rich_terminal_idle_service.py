@@ -91,9 +91,10 @@ def service(request):
 
 
 def _mode(service, mode):
-    """Set the check mode; return the stub that counts the frame check it runs."""
+    """Set the check mode; return the stub that counts the frame check's
+    first part, the engine's state check, which runs in both modes."""
     service.variable('CHK-EVERY-FRAME', 0 if mode == 'normal' else (1 << 64) - 1)
-    return 'TEST-STATES' if mode == 'normal' else 'TEST-AUDITS'
+    return 'TEST-STATES'
 
 
 def test_idle_poll_does_not_touch_unneeded_ledgers_or_completion(service):
@@ -108,8 +109,8 @@ def test_idle_poll_does_not_touch_unneeded_ledgers_or_completion(service):
 
 
 # A step that is not an idle poll reaches the frame check before any effect:
-# the engine's state check in normal mode, and the full audit with
-# every-frame checks on.
+# the engine's state check in both modes, which a failing state stops before
+# the walk of the ledgers that every-frame checks add.
 @pytest.mark.parametrize('mode', ['normal', 'every-frame'])
 @pytest.mark.parametrize('field', [
     'UPDATE-STATE', 'ACTIVE-KIND', 'ACTIVE-O', 'QUEUE-HEAD', 'QUEUE-TAIL',
@@ -149,6 +150,9 @@ def test_active_completion_is_checked_on_every_poll(service, mode):
     service.set('UPDATE-STATE', service.constant('RTAPT-UPDATE-AWAITING'))
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-WOULD-BLOCK'),)
     assert service.variable(checks) == service.variable('TEST-POLLS') == 1
+    # With every-frame checks on, a state that passes is followed by the
+    # walk of the ledgers; normal mode walks them only for queued work.
+    assert service.variable('TEST-WALKS') == (0 if mode == 'normal' else 1)
     service.variable('TEST-AUDIT-OK', 0)
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)
     assert service.variable(checks) == 2

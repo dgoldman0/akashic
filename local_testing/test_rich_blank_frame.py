@@ -75,7 +75,8 @@ class BlankHarness:
             chunks.append(declaration)
 
         for name in (*_FIXTURE_VARIABLES, "_RTHP-REBUILD-RESULT", "_RTHP-BLANK-BEGIN",
-                     "_RTHP-PREPARE-REVEAL", "_RTHP-PREPARE-BLANK", "_RTHP-STEP-SEALED"):
+                     "_RTHP-PREPARE-REVEAL", "_RTHP-PREPARE-BLANK", "_RTHP-STEP-SEALED",
+                     "_RTHP-DAMAGE-REFUSAL"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -178,6 +179,45 @@ def test_a_refused_draw_asks_for_the_empty_frame_and_holds_cell(blank):
         blank.constant("SCB-S-INVALID"), 0)
     assert blank.phase() == blank.constant("_RTHP-PH-READY-START")
 
+
+
+def test_safe_mode_shows_a_draw_whose_build_found_damage_as_plain_text(blank):
+    """In safe mode a build that a check refused for damage (check-mode.f)
+    is a draw that cannot be shown rich: the empty frame replaces the rich
+    one, CELL shows the draw, and the fallback record gives damage as the
+    reason.  Outside safe mode, or with no damage named, the refusal stays
+    INVALID, as any broken record is."""
+    invalid = blank.constant("RTE-S-INVALID")
+    unavailable = blank.constant("RTE-S-UNAVAILABLE")
+    damage = blank.constant("RTHP-WHY-DAMAGE")
+
+    def refusal(status=invalid, built=0):
+        return blank.results("_RTHP-DAMAGE-REFUSAL", status, built)
+
+    blank.variable("_RTHP-W-WHY", blank.constant("RTHP-WHY-OTHER"))
+    blank.variable("CHK-SAFE-MODE", blank.constant("CHK-WHY-BOOT"))
+    # No check named damage while the draw was built.
+    assert refusal() == (invalid, 0)
+    # One did.
+    blank.variable("CHK-DAMAGE-COUNT", blank.value("_RTHP-W-DAMAGE-MARK") + 1)
+    assert refusal() == (unavailable, 0)
+    assert blank.value("_RTHP-W-WHY") == damage
+    # A built candidate and any other refusal are left as they are.
+    ok = blank.constant("RTE-S-OK")
+    assert refusal(ok, MASK64) == (ok, MASK64)
+    capacity = blank.constant("RTE-S-CAPACITY")
+    assert refusal(capacity) == (capacity, 0)
+    # The refused draw takes the empty frame and records why.
+    blank.variable("_RTHP-W-P", blank.producer)
+    blank.variable("_RTHP-W-DRAW", 12)
+    blank.phase("READY-START")
+    assert blank.results("_RTHP-REBUILD-RESULT", unavailable, 0) == (
+        blank.constant("SCB-S-WOULD-BLOCK"), 0)
+    assert blank.phase() == blank.constant("_RTHP-PH-READY-BLANK")
+    assert blank.read("_RTHP.FALLBACK-REASON") == damage
+    # Outside safe mode the refusal stays INVALID.
+    blank.variable("CHK-SAFE-MODE", 0)
+    assert refusal() == (invalid, 0)
 
 def test_the_empty_frame_is_sealed_revealed_and_retires_the_rich_targets(blank):
     ok = blank.constant("SCB-S-OK")

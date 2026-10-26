@@ -157,6 +157,7 @@ def test_claim_ledger_is_single_pass_caller_bounded_and_byte_exact() -> None:
     emit = _word(source, "_RUCL-EMIT?")
     shape = _word(source, "_RUCL-SOURCE-SHAPE?")
     validate = _word(source, "_RUCL-VALIDATE-ONE?")
+    structure_word = _word(source, "_RUCL-RECORD-STRUCTURE?")
 
     assert body.index("_RUCL-RANGE-AUTHORITY?") < body.index("_RUCL-SCALARS?")
     assert body.index("_RUCL-SOURCE-SHAPE?") < body.index("_RUCL-ADMITTED @ 0=")
@@ -166,11 +167,12 @@ def test_claim_ledger_is_single_pass_caller_bounded_and_byte_exact() -> None:
     assert "_RUCL-RECORD-AT" not in body
     assert "_RUCL-ADMITTED @ _RUCL-RECORD-COUNT @ =" in shape
     assert "_RUCL-RECORDS-U @ 0= IF 0 EXIT THEN" in shape
-    assert "DUP _RUCL-INDEX !" not in validate
-    assert "_RUCL-R.INDEX @ DUP 0< IF DROP 0 EXIT THEN\n    _RUCL-INDEX !" in validate
+    assert "DUP _RUCL-INDEX !" not in validate + structure_word
+    assert "_RUCL-R.INDEX @ DUP 0< IF DROP 0 EXIT THEN\n    _RUCL-INDEX !" in structure_word
     # Each record's identity and generation are checked in both modes; its
     # structure and resolved geometry, which the menu capture checked when
-    # it wrote the record, only with every-frame checks on (check-mode.f).
+    # it wrote the record, only with every-frame checks on (check-mode.f),
+    # where a failure names the menu capture's records.
     assert "REQUIRE ../check-mode.f" in source
     normal = validate.index("CHK-EVERY-FRAME? 0= IF")
     for identity in ("_UMSN-RECORD-MAGIC <>", "_UMSN-RECORD-ABI <>",
@@ -180,9 +182,11 @@ def test_claim_ledger_is_single_pass_caller_bounded_and_byte_exact() -> None:
     loads = validate[normal:validate.index("-1 EXIT", normal)]
     assert "_RUCL-R.INDEX @ _RUCL-INDEX !" in loads
     assert "_RUCL-R.STATE @ _RUCL-STATE !" in loads
+    assert normal < validate.index(
+        "_RUCL-RECORD-STRUCTURE? S\" the menu capture's records\" CHK-NAME ;")
     for structure in ("_RUCL-PRIOR-INDEX", "UMSN-K-MENUBAR",
                       "UMSN-STATE-VALID?", "_RUCL-R.ORDINAL", "UTUI-RESOLVED-VALID?"):
-        assert normal < validate.index(structure)
+        assert structure in structure_word, structure
 
     assert traversal_code.count("0 ?DO") == 1
     assert traversal_code.count("_RUCL-VALIDATE-ONE?") == 1

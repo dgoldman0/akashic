@@ -71,7 +71,7 @@ def _definitions(producer_source: str) -> dict[str, str]:
             text,
         ):
             declarations[match[2]] = match[0]
-    # The switch keeps the value it loads with: every check on, as in tests.
+    # Every-frame checks are off, as check-mode.f leaves them when it loads.
     declarations["CHK-EVERY-FRAME"] = "VARIABLE CHK-EVERY-FRAME  0 CHK-EVERY-FRAME !"
     return declarations
 

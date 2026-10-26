@@ -484,9 +484,20 @@ def test_normal_mode_builds_check_the_planes_shapes_not_where_they_lie(harness, 
     case = harness.make_case(cells("ABCDE"), cells("abcde"), [(0, 0, 1, 1)], menu_count=1)
     residue = {"overlap-plane": case.back + 8, "zero-residue": 0,
                "unaligned-residue": case.residue + 1, "wrapped-residue": MASK64 - 7}[defect]
+    for name in ("CHK-DAMAGE-A", "CHK-DAMAGE-U", "CHK-DAMAGE-COUNT"):
+        harness.set_variable(name, 0)
     harness.strict()
     result, _ = harness.run(case, api="authorized", residue=residue)
     assert result[-1] == 3
+    # The proof that the planes lie apart names the planner's storage as
+    # damaged (check-mode.f); a wrong shape, checked in both modes, names
+    # nothing.
+    named = harness.variable("CHK-DAMAGE-COUNT")
+    assert named == (1 if defect == "overlap-plane" else 0)
+    if named:
+        assert harness.runtime.memory.read_bytes(
+            harness.variable("CHK-DAMAGE-A"), harness.variable("CHK-DAMAGE-U")
+        ) == b"the glyph planner's storage"
     # In normal mode the planes' shapes are still checked; only the proofs
     # that the planes lie apart from each other and from the request's
     # storage wait for every-frame checks.  The menu cell then reads the

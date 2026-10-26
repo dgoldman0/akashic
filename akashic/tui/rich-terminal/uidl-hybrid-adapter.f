@@ -722,6 +722,14 @@ CREATE _RUHA-SAFE-SPANS _RUHA-SAFE-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT
 : _RUHA-SCREEN-STORAGE-DISJOINT?  ( adapter -- flag )
     ['] SCR-STORAGE-DISJOINT? _RUHA-SAFE-PROVE? ;
 
+\ What a check that runs only with every-frame checks on names when it
+\ fails (check-mode.f): RUHA's banks, when a proof that they lie apart from
+\ the storage a draw reads fails, and the slices stored in them, when a
+\ stored slice or menu record fails its validation before reuse.
+: _RUHA-BANKS-DAMAGED  ( -- c-addr u )  S" the snapshot adapter's banks" ;
+: _RUHA-SLICES-DAMAGED  ( -- c-addr u )
+    S" the snapshot adapter's stored slices" ;
+
 \ =====================================================================
 \  Construction
 \ =====================================================================
@@ -1285,7 +1293,9 @@ VARIABLE _RUHA-IT-ADAPTER
 \ again only with every-frame checks on (check-mode.f).
 : _RUHA-RECORD-STORAGE-CURRENT?  ( record adapter -- flag )
     OVER _RUHA-R.UCTX @ ASHELL-ACTIVE-CTX <> IF 2DROP 0 EXIT THEN
-    NIP CHK-EVERY-FRAME? IF _RUHA-STORAGE-DISJOINT-CURRENT? ELSE DROP -1 THEN ;
+    NIP CHK-EVERY-FRAME? IF
+        _RUHA-STORAGE-DISJOINT-CURRENT? _RUHA-BANKS-DAMAGED CHK-NAME
+    ELSE DROP -1 THEN ;
 
 \ =====================================================================
 \  UCTX projection callbacks
@@ -2027,7 +2037,8 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         BEGIN _RUHA-B-REUSE-I @ _RUHA-B-REUSE-COUNT @ < WHILE
             _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +
             _RUHA-B-REUSE-I @ UMSN-RECORD-SIZE * +
-            _RUHA-B-PRIOR-RECORD? 0= IF 0 EXIT THEN
+            _RUHA-B-PRIOR-RECORD? _RUHA-SLICES-DAMAGED CHK-NAME
+                0= IF 0 EXIT THEN
             1 _RUHA-B-REUSE-I +!
         REPEAT
     THEN
@@ -2077,7 +2088,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         _RUHA-B-REUSE-DESCRIPTOR-U @
         _RUHA-B-PRIOR-NATIVE-A @ _RUHA-B-REUSE-NATIVE-O @ +
         _RUHA-B-REUSE-NATIVE-U @ UCSN-FROZEN-VALIDATE
-        UCSN-S-OK <> IF 0 EXIT THEN
+        UCSN-S-OK = _RUHA-SLICES-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
     THEN
 
     _RUHA-B-REUSE-ENTRY @
@@ -2116,7 +2127,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         _RUHA-B-PRIOR-DGRAPH-NATIVE-A @
             _RUHA-B-REUSE-DGRAPH-NATIVE-O @ +
         _RUHA-B-REUSE-DGRAPH-NATIVE-U @ UDGSN-FROZEN-VALIDATE
-        UDGSN-S-OK <> IF 0 EXIT THEN
+        UDGSN-S-OK = _RUHA-SLICES-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
     THEN
 
     _RUHA-B-REUSE-ENTRY @
@@ -2155,7 +2166,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         _RUHA-B-PRIOR-SFIELD-NATIVE-A @
             _RUHA-B-REUSE-SFIELD-NATIVE-O @ +
         _RUHA-B-REUSE-SFIELD-NATIVE-U @ USFSN-FROZEN-VALIDATE
-        USFSN-S-OK <> IF 0 EXIT THEN
+        USFSN-S-OK = _RUHA-SLICES-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
     THEN
 
     _RUHA-B-REUSE-ENTRY @
@@ -2194,7 +2205,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         _RUHA-B-PRIOR-FIELD-NATIVE-A @
             _RUHA-B-REUSE-FIELD-NATIVE-O @ +
         _RUHA-B-REUSE-FIELD-NATIVE-U @ UFLSN-FROZEN-VALIDATE
-        UFLSN-S-OK <> IF 0 EXIT THEN
+        UFLSN-S-OK = _RUHA-SLICES-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
     THEN
 
     _RUHA-B-REUSE-ENTRY @
@@ -2231,7 +2242,7 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         _RUHA-B-PRIOR-DIALOG-NATIVE-A @
             _RUHA-B-REUSE-DIALOG-NATIVE-O @ +
         _RUHA-B-REUSE-DIALOG-NATIVE-U @ UDLSN-FROZEN-VALIDATE
-        UDLSN-S-OK <> IF 0 EXIT THEN
+        UDLSN-S-OK = _RUHA-SLICES-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
     THEN
 
     _RUHA-B-PRIOR-MENU? ;
@@ -3114,9 +3125,10 @@ VARIABLE _RUHA-B-PREFLIGHT-SLOT
 VARIABLE _RUHA-B-PREFLIGHT-CTX
 
 \ Each record names a live slot of this host that is still its own, with
-\ its own UCTX.  The proofs that RUHA's banks lie apart from the record's
-\ owner and its document's storage were made when it attached, and are made
-\ again on each draw only with every-frame checks on (check-mode.f).
+\ its own UCTX, and an owner that names itself.  The proofs that RUHA's
+\ banks lie apart from the record's owner and its document's storage were
+\ made when it attached, and are made again on each draw only with
+\ every-frame checks on (check-mode.f).
 : _RUHA-B-PREFLIGHT-RECORD?  ( record -- flag )
     _RUHA-B-PREFLIGHT-RECORD !
     _RUHA-B-PREFLIGHT-RECORD @ _RUHA-R.STATE @ DUP
@@ -3129,11 +3141,10 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
         _RUHA-HOST-HAS-SLOT? 0= IF 0 EXIT THEN
     _RUHA-B-PREFLIGHT-SLOT @ AHS.ID @
         _RUHA-B-PREFLIGHT-RECORD @ _RUHA-R.SLOT-ID @ <> IF 0 EXIT THEN
+    _RUHA-B-PREFLIGHT-SLOT @ _RUHA-OWNER-NAMED? 0= IF 0 EXIT THEN
     CHK-EVERY-FRAME? IF
-        _RUHA-B-PREFLIGHT-SLOT @ _RUHA-B-ADAPTER @
-            _RUHA-LIVE-OWNER? 0= IF 0 EXIT THEN
-    ELSE
-        _RUHA-B-PREFLIGHT-SLOT @ _RUHA-OWNER-NAMED? 0= IF 0 EXIT THEN
+        _RUHA-B-PREFLIGHT-SLOT @ _RUHA-B-ADAPTER @ _RUHA-LIVE-OWNER?
+            _RUHA-BANKS-DAMAGED CHK-NAME 0= IF 0 EXIT THEN
     THEN
     _RUHA-B-PREFLIGHT-SLOT @ AHS.HAS-UIDL @ 0= IF 0 EXIT THEN
     _RUHA-B-PREFLIGHT-SLOT @ AHS.UCTX @ DUP 0= IF DROP 0 EXIT THEN
@@ -3143,7 +3154,8 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
     _RUHA-B-PREFLIGHT-CTX @ ASHELL-CTX-SWITCH
     ASHELL-ACTIVE-CTX _RUHA-B-PREFLIGHT-CTX @ <> IF 0 EXIT THEN
     CHK-EVERY-FRAME? 0= IF -1 EXIT THEN
-    _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT? ;
+    _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT?
+        _RUHA-BANKS-DAMAGED CHK-NAME ;
 
 \ The screen's storage and the current UCTX's were proved apart from RUHA's
 \ banks when the banks were lent and the documents attached, and what they
@@ -3151,12 +3163,10 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
 \ with every-frame checks on.
 : _RUHA-B-PREFLIGHT  ( -- status )
     CHK-EVERY-FRAME? IF
-        _RUHA-B-ADAPTER @ _RUHA-SCREEN-STORAGE-DISJOINT? 0= IF
-            RUHA-S-INVALID EXIT
-        THEN
-        _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT? 0= IF
-            RUHA-S-INVALID EXIT
-        THEN
+        _RUHA-B-ADAPTER @ _RUHA-SCREEN-STORAGE-DISJOINT?
+            _RUHA-BANKS-DAMAGED CHK-NAME 0= IF RUHA-S-INVALID EXIT THEN
+        _RUHA-B-ADAPTER @ _RUHA-STORAGE-DISJOINT-CURRENT?
+            _RUHA-BANKS-DAMAGED CHK-NAME 0= IF RUHA-S-INVALID EXIT THEN
     THEN
     _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
         I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT

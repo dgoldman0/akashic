@@ -401,12 +401,15 @@ VARIABLE _SHSN-VS-S VARIABLE _SHSN-VS-CAP
 \ The check a query makes, which only reads the record and its banks.  The
 \ record's identity and its slots are checked in both modes.  The proofs
 \ that the record and both banks are spans lying apart run here only with
-\ every-frame checks on (check-mode.f): INIT proved what it was lent, a
-\ grown bank comes from the memory source, and the callbacks, which write
-\ the banks, keep the full SHSN-VALID?.
+\ every-frame checks on (check-mode.f), and a failed proof names the
+\ snapshot's banks: INIT proved what it was lent, a grown bank comes from
+\ the memory source, and the callbacks, which write the banks, keep the
+\ full SHSN-VALID?.
 : _SHSN-QUERY-VALID? ( source -- flag )
-    CHK-EVERY-FRAME? IF SHSN-VALID? EXIT THEN
-    DUP _SHSN-NAMED? IF _SHSN-SLOTS? ELSE DROP 0 THEN ;
+    DUP _SHSN-NAMED? 0= IF DROP 0 EXIT THEN
+    DUP _SHSN-SLOTS? 0= IF DROP 0 EXIT THEN
+    CHK-EVERY-FRAME? 0= IF DROP -1 EXIT THEN
+    SHSN-VALID? S" the shell snapshot's banks" CHK-NAME ;
 : _SHSN-INVALIDATE ( source -- )
     _SHSN.USED 96 0 FILL ;
 

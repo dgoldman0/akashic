@@ -133,8 +133,9 @@ _SS-DONE
 
 def test_queries_prove_the_spans_only_with_every_frame_checks():
     """A query checks the record's identity and slots in both modes, and
-    proves the record's and banks' spans only with every-frame checks.  The
-    callbacks, which write the banks, keep the full check."""
+    proves the record's and banks' spans only with every-frame checks, where
+    a failed proof names the banks as damaged.  The callbacks, which write
+    the banks, keep the full check."""
     source = (ROOT / "akashic/tui/shell-snapshot.f").read_text()
 
     def word(name):
@@ -144,8 +145,9 @@ def test_queries_prove_the_spans_only_with_every_frame_checks():
 
     assert "REQUIRE check-mode.f" in source
     query = word("_SHSN-QUERY-VALID?")
-    assert "CHK-EVERY-FRAME? IF SHSN-VALID? EXIT THEN" in query
-    assert query.index("_SHSN-NAMED?") < query.index("_SHSN-SLOTS?")
+    assert (query.index("_SHSN-NAMED?") < query.index("_SHSN-SLOTS?")
+            < query.index("CHK-EVERY-FRAME? 0= IF DROP -1 EXIT THEN"))
+    assert "SHSN-VALID? S\" the shell snapshot's banks\" CHK-NAME ;" in query
     named = word("_SHSN-NAMED?")
     for identity in ("_SHSN.MAGIC @ _SHSN-MAGIC <>", "_SHSN.SIZE @ SHSN-SIZE <>",
                      "_SHSN.SELF @ 2 PICK <>"):

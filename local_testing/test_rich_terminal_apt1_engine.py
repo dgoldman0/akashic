@@ -349,7 +349,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     keep = _definition(source, "_RTAPT-LP-KEEP")
     # The exhaustive audit is the engine's state and its two ledgers.  The
     # calls every frame makes check the state, and walk the ledgers only with
-    # every-frame checks on.
+    # every-frame checks on, where a failed walk names them (check-mode.f).
     audit = _definition(source, "_RTAPT-ENGINE-VALID?")
     state = _definition(source, "_RTAPT-ENGINE-STATE?")
     ledgers_audit = _definition(source, "_RTAPT-ENGINE-LEDGERS?")
@@ -358,9 +358,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-CONTROL-LEDGER-VALID?" in ledgers_audit
     assert "_RTAPT-OWNER-LEDGERS?" in ledgers_audit
     assert "LEDGER" not in state
-    assert "CHK-EVERY-FRAME? IF _RTAPT-ENGINE-VALID? EXIT THEN" in frame
-    assert frame.index("_RTAPT-ENGINE-VALID?") < frame.index(
-        "_RTAPT-ENGINE-STATE?") < frame.index("_RTAPT-E.QUEUE-HEAD @ IF _RTAPT-ENGINE-LEDGERS?")
+    assert (frame.index("_RTAPT-ENGINE-STATE? 0= IF DROP 0 EXIT THEN")
+            < frame.index("CHK-EVERY-FRAME? IF")
+            < frame.index("_RTAPT-ENGINE-LEDGERS? S\" the APT-1 engine's ledgers\" CHK-NAME EXIT")
+            < frame.index("_RTAPT-E.QUEUE-HEAD @ IF _RTAPT-ENGINE-LEDGERS?"))
     validate = audit + state + ledgers_audit
     quarantine_coherent = _definition(source, "_RTAPT-QUARANTINE-COHERENT?")
     assert storage.index("_RTAPT-ENGINE-MAGIC <>") < storage.index(
