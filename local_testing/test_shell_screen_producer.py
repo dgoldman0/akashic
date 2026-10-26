@@ -2,18 +2,42 @@
 
 import re
 
-from test_field_model import PRELUDE, field_runtime, run_field
+from test_field_model import PRELUDE, ROOT, field_runtime, run_field
 
 MODULES = ("tui/rich-terminal/shell-screen-producer.f",)
+MODULES_ROOT = ROOT / "akashic"
 
 
 def run(program, minimum=1):
     run_field(program, minimum=minimum, extra_sources=MODULES)
 
 
+def test_the_shell_record_s_fields_lie_apart_and_inside_it():
+    """Every field of the shell's record is a cell of its own, except the
+    extension record the screen producer calls, which lies whole inside the
+    record at its own offset; no field overlaps another, and the record ends
+    where its last field does."""
+    root = MODULES_ROOT / "tui/rich-terminal"
+    source = (root / "shell-screen-producer.f").read_text()
+    producer = (root / "hybrid-screen-producer.f").read_text()
+    size = int(re.search(r"(?m)^(\d+) CONSTANT RSHSP-SIZE$", source)[1])
+    extension = int(re.search(r"(?m)^(\d+) CONSTANT RTHP-EXTENSION-SIZE$", producer)[1])
+    spans = []
+    for name, offset in re.findall(
+        r"(?m)^: _RSHSP\.([A-Z-]+) \( s -- a \)\s*(?:(\d+) \+ )?;", source
+    ):
+        start = int(offset or 0)
+        spans.append((start, start + (extension if name == "EXTENSION" else 8), name))
+    spans.sort()
+    assert len(spans) >= 24
+    for (_start, end, name), (next_start, _end, next_name) in zip(spans, spans[1:]):
+        assert end <= next_start, (name, next_name)
+    assert spans[-1][1] == size
+
+
 def test_shell_producer_actual_dependency_closure_and_header_contract():
     run(PRELUDE + r'''
-RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 208 = _FM-A
+RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 224 = _FM-A
 RSHSP-BANK-HEADER-SIZE 136 = _FM-A
 0 RSHSP-BANK.PROMPT 128 = _FM-A
 0 _RSHSP.PRODUCER 24 = _FM-A 0 _RSHSP.SOURCE 32 = _FM-A

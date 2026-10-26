@@ -12,7 +12,7 @@ REQUIRE shell-family-emit.f
 REQUIRE frame-shadow.f
 REQUIRE ../check-mode.f
 
-208 CONSTANT RSHSP-SIZE
+224 CONSTANT RSHSP-SIZE
 136 CONSTANT RSHSP-BANK-HEADER-SIZE
 0x5253485350303031 CONSTANT _RSHSP-MAGIC
 : _RSHSP.MAGIC ( s -- a ) ;
@@ -38,10 +38,12 @@ REQUIRE ../check-mode.f
 \ The memory source the work space and banks grow into (0: fixed storage).
 : _RSHSP.MEMORY ( s -- a ) 160 + ;
 : _RSHSP.EXTENSION ( s -- a ) 168 + ;
+\ The extension record the screen producer calls lies here, whole:
+\ RTHP-EXTENSION-SIZE bytes.
 \ The seals of the pending and the acknowledged banks, with every check on
 \ (check-mode.f): 0, or the seal _RSHSP-SEAL took when the bank was frozen.
-: _RSHSP.PENDING-SEAL ( s -- a ) 176 + ;
-: _RSHSP.ACTIVE-SEAL ( s -- a ) 184 + ;
+: _RSHSP.PENDING-SEAL ( s -- a ) 208 + ;
+: _RSHSP.ACTIVE-SEAL ( s -- a ) 216 + ;
 : RSHSP-BYTES ( -- n ) RSHSP-SIZE ;
 : RSHSP-WORK-USED@ ( s -- n ) _RSHSP.WORK-USED @ ;
 : RSHSP-BANK-BYTES@ ( s -- n ) _RSHSP.BANK-BYTES @ ;
