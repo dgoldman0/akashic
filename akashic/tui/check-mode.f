@@ -10,10 +10,10 @@
 \  frame.  With them off, which is normal mode, the repeats are skipped
 \  and the proofs run when memory is lent, allocated or grows.
 \
-\  Every-frame checks are on unless a composition turns them off, so a
-\  test runs every check.  Desk chooses normal mode when it loads, and a
-\  diagnostic boot turns every-frame checks back on after it.  Checks of
-\  new data, of state and of fit run in both modes.
+\  Every-frame checks are off, so compositions and tests run in normal
+\  mode, unless something turns them on: a test of the checks they hold,
+\  safe mode, or a diagnostic boot.  Checks of new data, of state and of
+\  fit run in both modes.
 \
 \  CHK-EVERY-FRAME   ( -- addr )  the switch: nonzero runs every check
 \  CHK-EVERY-FRAME?  ( -- flag )  whether every-frame checks are on
@@ -23,6 +23,6 @@
 PROVIDED akashic-tui-check-mode
 
 VARIABLE CHK-EVERY-FRAME
--1 CHK-EVERY-FRAME !
+0 CHK-EVERY-FRAME !
 
 : CHK-EVERY-FRAME?  ( -- flag )  CHK-EVERY-FRAME @ 0<> ;

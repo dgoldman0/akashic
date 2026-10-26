@@ -70,12 +70,15 @@ SCR-DRAW-COMPLETE
     2 _RA-ADAPTER RUHA-SNAPSHOT-FOR@ RUHA-S-INVALID = _RA-ASSERT 0= _RA-ASSERT
     _RA-ADAPTER RUHA-SIZE _RP-AS RUHA-SIZE COMPARE 0= _RA-ASSERT
     _RP-DIR @ RUHA-DOCUMENT-SIZE _RP-SAVED RUHA-DOCUMENT-SIZE COMPARE 0= _RA-ASSERT ;
+\ The owner's identity is checked on every draw, in normal mode too.
 0 _RA-INSTANCE @ CINST.ID ! _RP-REFUSE _RP-ID @ _RA-INSTANCE @ CINST.ID !
 0 _RA-INSTANCE @ CINST.GENERATION ! _RP-REFUSE _RP-GEN @ _RA-INSTANCE @ CINST.GENERATION !
 0 _RA-COMP-DESC COMP.MAGIC ! _RP-REFUSE COMP-MAGIC _RA-COMP-DESC COMP.MAGIC !
 -1 _RA-COMP-DESC COMP.STATE-SIZE ! _RP-REFUSE 0 _RA-COMP-DESC COMP.STATE-SIZE !
 0 _RA-SLOT AHS.INST ! _RP-REFUSE _RA-INSTANCE @ _RA-SLOT AHS.INST !
-\ Every mutable bank, including both snapshot halves, is protected from live ownership.
+\ Every mutable bank, including both snapshot halves, is protected from live
+\ ownership: a draw proves it again with every-frame checks on.
+-1 CHK-EVERY-FRAME !
 _RA-NATIVE _RA-SLOT AHS.INST ! _RP-REFUSE _RA-INSTANCE @ _RA-SLOT AHS.INST !
 _RA-DIRECTORY _RA-INSTANCE @ CINST.DESC ! _RP-REFUSE
 _RA-COMP-DESC _RA-INSTANCE @ CINST.DESC !
@@ -83,6 +86,7 @@ _RA-COMP-DESC _RA-INSTANCE @ CINST.DESC !
 0 _RA-COMP-DESC COMP.STATE-SIZE ! 0 _RA-INSTANCE @ CINST.STATE !
 _RUHA-O-INSTANCE _RA-INSTANCE @ CINST.DESC ! _RP-REFUSE
 _RA-COMP-DESC _RA-INSTANCE @ CINST.DESC !
+0 CHK-EVERY-FRAME !
 3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT _RP-OWNER
 _RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 1 = _RA-ASSERT
 _RP-DONE
@@ -95,19 +99,19 @@ def test_every_frame_checks_validate_a_stored_slice_before_reuse():
 \ its capture.  With every-frame checks on, the snapshot module's full
 \ validation refuses the slice before reuse, and the document is captured
 \ afresh from its widget.
+-1 CHK-EVERY-FRAME !
 _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP 255 SWAP C!
 2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
 _RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 2 = _RA-ASSERT
 _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@
     S" aggregate alpha" STR-STR= _RA-ASSERT
 \ In normal mode only the slice's bounds are checked, and it is reused as
-\ stored: the trade normal mode makes, which tests and safe mode do not.
+\ stored: the trade normal mode makes, which safe mode does not.
 0 CHK-EVERY-FRAME !
 _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP 255 SWAP C!
 3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
 _RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 2 = _RA-ASSERT
 _RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@ DROP C@ 255 = _RA-ASSERT
--1 CHK-EVERY-FRAME !
 _RP-DONE
 ''', minimum=53, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
 
@@ -119,6 +123,7 @@ def test_normal_mode_draws_check_the_owner_not_where_its_storage_lies():
 \ and refuses it; in normal mode, where that proof is made when the owner
 \ attaches, a draw checks only that the owner is a live one.
 8 _RA-COMP-DESC COMP.STATE-SIZE ! _RA-NATIVE _RA-INSTANCE @ CINST.STATE !
+-1 CHK-EVERY-FRAME !
 2 _RA-QUERY _RA-STATUS @ RUHA-S-INVALID = _RA-ASSERT
 0 CHK-EVERY-FRAME !
 3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT
@@ -126,7 +131,6 @@ def test_normal_mode_draws_check_the_owner_not_where_its_storage_lies():
 0 _RA-INSTANCE @ CINST.GENERATION !
 4 _RA-QUERY _RA-STATUS @ RUHA-S-INVALID = _RA-ASSERT
 _RP-GEN @ _RA-INSTANCE @ CINST.GENERATION !
--1 CHK-EVERY-FRAME !
 0 _RA-COMP-DESC COMP.STATE-SIZE ! 0 _RA-INSTANCE @ CINST.STATE !
 _RP-DONE
 ''', minimum=50, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")

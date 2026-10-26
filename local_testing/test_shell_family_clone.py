@@ -135,10 +135,13 @@ _RC-BATCH _FC-D _FC-WHOLE RSHFC-COPY 0= _RC-A _FC-WHOLE = _RC-A
 _RC-BATCH _FC-E _FC-WHOLE _RSHFC-COPY-PROVED 0= _RC-A _FC-WHOLE = _RC-A
 _FC-E RTE-FAMILY-BATCH-VALID? _RC-A
 0 _FC-BYTES DROP _FC-D - _FC-E + C@ 67 = _RC-A
-\ Capacity and source/output aliases are still refused before any write.
+\ Capacity is still refused before any write, and with every-frame checks
+\ on so are source/output aliases.
 _FC-E _FC-S 32768 MOVE
 _RC-BATCH _FC-E _FC-WHOLE 1- _RSHFC-COPY-PROVED RSHFC-S-CAPACITY = _RC-A 0= _RC-A
+-1 CHK-EVERY-FRAME !
 _RC-BATCH _RC-GT 8 _RSHFC-COPY-PROVED RSHFC-S-INVALID = _RC-A 0= _RC-A
+0 CHK-EVERY-FRAME !
 _FC-E 32768 _FC-S 32768 COMPARE 0= _RC-A
 \ A range is outside the batch only when it misses every span.
 _RC-BATCH _FC-E 32768 _RSHFC-BATCH-OUTSIDE? _RC-A

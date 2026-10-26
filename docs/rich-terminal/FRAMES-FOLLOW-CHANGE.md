@@ -4,7 +4,7 @@ Status: proposed on 2026-10-19, and extended on 2026-10-25 with a thin
 rich path: checks that run when they can find something (part 3), a safe
 mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). Each part is approved on its own. Parts 0 to
-2 are done. Decisions lists what is settled and what is still open.
+3 are done. Decisions lists what is settled and what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -401,8 +401,8 @@ can find something new:
 | --- | --- | --- | --- | --- |
 | State and fit | every frame | every frame | every frame | every frame |
 | Item checks | every item, every frame | each changed item, once | every item, every frame | each changed item, and every item through the shadow check |
-| Handover proofs | at every entry, several times a frame | when memory is lent, allocated or grows | every frame | every frame |
-| Repeats | every frame | off | every frame | every frame |
+| Handover proofs | at every entry, several times a frame | when memory is lent, allocated or grows | every frame | as in normal mode, and every frame in the tests of the proofs |
+| Repeats | every frame | off | every frame | off, and every frame in the tests of the checks |
 | Full rebuild | every frame, with some reuse | at each full refresh | every frame | every frame, beside the change driver |
 
 This part moves the handover proofs and the repeats. The item checks follow
@@ -420,24 +420,25 @@ mode: the owner, generation and frame a click or key names, and the control
 it names in that frame.
 
 **Change.** The repeats go behind a switch, every-frame checks
-(`tui/check-mode.f`). It is on unless a composition chooses normal mode, so
-tests keep every check without asking for it; Desk chooses normal mode when
-it loads, and safe mode and diagnostic runs (`--every-frame-checks`) turn
-it back on. The handover proofs run when storage is lent, allocated or
-grows, instead of at every entry. Storage taken from a memory source is no
-longer proved apart from other live storage.
+(`tui/check-mode.f`). It is off, so compositions and tests run in normal
+mode, unless something turns it on: a test of the checks it holds, safe
+mode, or a diagnostic run (`--every-frame-checks`). The handover proofs run
+when storage is lent, allocated or grows, instead of at every entry.
+Storage taken from a memory source is no longer proved apart from other
+live storage.
 
 **Kind.** A trade, not a removal of repeated work. Normal sessions stop
 noticing a bug that writes into the rich path's memory between handovers.
-Safe mode and tests keep those checks (decision 4).
+Safe mode keeps those checks, and the tests of them turn them on
+(decision 4).
 
 **Effect.** The check measurement's rows put the saving at about 8 million
 steps of a typed letter's 16 million. This part needs no change counts, so
 it comes straight after part 2.
 
 **Done** on 2026-10-25 (fc62e45f to 5baf027d). The switch is
-`tui/check-mode.f`; Desk turns it off when it loads, and
-`--every-frame-checks` turns it on for a run. The first slice made RUHA's
+`tui/check-mode.f`, off unless a test of its checks, safe mode or
+`--every-frame-checks` turns it on. The first slice made RUHA's
 record and banks one block, so that no other storage can lie between them;
 the span-set proofs that memory layout had split fell from 2.15 million
 steps a burst frame to 0.55. Eight slices then moved the repeats and the
@@ -477,12 +478,13 @@ of about 2 million for a thin frame.
 
 **How it is turned on** (decision 6):
 
-- a Desk setting, kept across sessions, which an administrator can fix;
+- a key in Desk's configuration file, kept across sessions, which nothing
+  inside Desk can change;
 - a boot option;
-- by itself, when the thin path meets an anomaly: a full refresh that finds a
-  missed change (part 8), or a handover proof that fails. Desk then says
-  that it is in safe mode, and records why. A first check that refuses
-  outside data, such as a file's broken text, is not an anomaly.
+- by itself, when the thin path meets an anomaly: a handover proof that
+  fails, or, from part 8, a full refresh that finds a missed change. Desk
+  then says that it is in safe mode, and records why. A first check that
+  refuses outside data, such as a file's broken text, is not an anomaly.
 
 **What it cannot do.** Safe mode makes the screen match what the
 applications hold. It cannot make an application's own data right, and it
@@ -613,8 +615,8 @@ nothing has drawn, the refresh asks for one.
 **What it does.** It runs the full path into scratch and compares the result
 with the acknowledged frame. Any difference is a missed change. The refresh
 sends it like any other change, records a report that names the element,
-its family and the revisions that did not move, and turns safe mode on if
-the setting asks for that (decision 6).
+its family and the revisions that did not move, and turns safe mode on
+(decision 6).
 
 **What it bounds.** A missed change stays on screen for one interval at
 most, and every missed change leaves a report that points at the code that
@@ -624,8 +626,8 @@ failed to count it.
 where it can be. With the repeats off it costs less than today's frame
 build, which took 16 to 26 million steps in the measurement.
 
-**Change.** The refresh, its missed-change report, and the setting that lets
-a report turn on safe mode.
+**Change.** The refresh and its missed-change report, which turns safe mode
+on.
 
 **Tests.** A unit test changes a widget's borrowed data without its change
 word, and expects the next refresh to find the change, send it and report
@@ -823,7 +825,9 @@ Taken on 2026-10-25:
 4. **Where checks run.** The table in part 3 replaces the rule that every
    boundary check stays at every boundary. Normal sessions then stop
    noticing a bug that writes into the rich path's memory between handovers,
-   and safe mode and tests keep that.
+   and safe mode keeps those checks. Tests run in normal mode too, except
+   the tests of the checks normal mode skips, which turn every-frame checks
+   on.
 5. **Part 2's tests and containers.** The per-widget tests cover the
    widgets something uses: list, tree, tabs, text area, input, prompt,
    dialog, picture, text grid, field, data graphics, explorer and canvas,
@@ -834,13 +838,16 @@ Taken on 2026-10-25:
    revision, rather than UIDL reading the inner widgets' revisions beside
    it.
 
-Open, each to be taken before the part that needs it:
+6. **How safe mode turns on** (part 4). All three ways: a key in Desk's
+   configuration file that nothing inside Desk can change, a boot option,
+   and an anomaly, by itself. Desk then says that it is in safe mode, and
+   records why.
+7. **The refresh interval** (part 8). A full refresh once input has been
+   quiet for one second, and at least one every five seconds while the
+   screen is shown. Both are settings.
 
-6. **How safe mode turns on** (part 4). Proposed: a Desk setting that an
-   administrator can fix, a boot option, and an anomaly, by itself.
-7. **The refresh interval** (part 8). Proposed: once input settles, and at
-   least every few seconds while the screen is shown. The exact default is
-   to be chosen, and it is a setting.
+Open, to be taken before the part that needs it:
+
 8. **What the projection keeps** (part 9). Proposed: only the revisions each
    element last projected and the wire items they became, with content
    captured into scratch when it changes. The alternative keeps a

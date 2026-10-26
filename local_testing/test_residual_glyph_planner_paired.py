@@ -58,8 +58,8 @@ def _dependency_source(planner: str) -> str:
             r"(?m)^\s*(-?(?:0x[0-9A-Fa-f]+|[0-9]+))\s+CONSTANT\s+(\S+)", source
         ):
             declarations[match[2]] = match[0]
-    # Every-frame checks are on, as check-mode.f leaves them when it loads.
-    declarations["CHK-EVERY-FRAME"] = "VARIABLE CHK-EVERY-FRAME  -1 CHK-EVERY-FRAME !"
+    # Every-frame checks are off, as check-mode.f leaves them when it loads.
+    declarations["CHK-EVERY-FRAME"] = "VARIABLE CHK-EVERY-FRAME  0 CHK-EVERY-FRAME !"
     chunks, emitted = [], set()
 
     def include(name):
@@ -180,6 +180,10 @@ class PairedPlannerHarness:
 
     def set_variable(self, name, value):
         self.runtime.memory.write64(self.address(name), value & MASK64)
+
+    def strict(self, on=True):
+        """Turn every-frame checks on, for a test of the proofs they hold."""
+        self.set_variable("CHK-EVERY-FRAME", -1 if on else 0)
 
     def variable(self, name):
         return self.runtime.memory.read64(self.address(name))
@@ -328,7 +332,9 @@ def test_paired_reads_residue_for_menu_prefix_and_opaque_claims_win(harness, api
     assert result == (3, 9, 24, 5, 103, 0)
     assert projection(runs) == [(0, 0, 2, b"Ab"), (0, 3, 2, b"dE"), (1, 0, 5, b"FghiJ")]
     assert harness.variable("TP-BORROWS") == (1 if api == "paired" else 0)
-    assert (harness.variable("TP-CHECKS") == 0) == (api == "authorized")
+    # In normal mode no build proves its spans apart from the screen's
+    # storage; with every-frame checks only the authorized peer skips it.
+    assert harness.variable("TP-CHECKS") == 0
 
 
 def test_paired_overlapping_menu_union_ends_at_correct_row_and_column(harness):
@@ -448,6 +454,7 @@ def test_paired_requires_two_full_difference_channels(harness, api):
                                     "wrapped-residue", "output-alias", "request-alias", "claims-alias"])
 @pytest.mark.parametrize("api", ["from", "authorized"])
 def test_paired_plane_authority_rejects_aliases_before_any_mutation(harness, defect, api):
+    harness.strict()
     case = harness.make_case(cells("ABCDE"), cells("abcde"), [(0, 0, 1, 1)], menu_count=1)
     options = {}
     if defect == "same-plane": options["residue"] = case.back
@@ -477,23 +484,22 @@ def test_normal_mode_builds_check_the_planes_shapes_not_where_they_lie(harness, 
     case = harness.make_case(cells("ABCDE"), cells("abcde"), [(0, 0, 1, 1)], menu_count=1)
     residue = {"overlap-plane": case.back + 8, "zero-residue": 0,
                "unaligned-residue": case.residue + 1, "wrapped-residue": MASK64 - 7}[defect]
+    harness.strict()
     result, _ = harness.run(case, api="authorized", residue=residue)
     assert result[-1] == 3
     # In normal mode the planes' shapes are still checked; only the proofs
     # that the planes lie apart from each other and from the request's
     # storage wait for every-frame checks.  The menu cell then reads the
     # back plane's second cell through the overlapping residue plane.
-    harness.set_variable("CHK-EVERY-FRAME", 0)
-    try:
-        result, runs = harness.run(case, api="authorized", residue=residue)
-    finally:
-        harness.set_variable("CHK-EVERY-FRAME", -1)
+    harness.strict(False)
+    result, runs = harness.run(case, api="authorized", residue=residue)
     assert result[-1] == status
     if status == 0:
         assert projection(runs) == [(0, 0, 5, b"BBCDE")]
 
 
 def test_paired_authorized_peer_skips_only_prevalidated_screen_checks(harness):
+    harness.strict()
     case = harness.make_case(cells("AB"), cells("ab"), [(0, 0, 1, 1)], menu_count=1)
     harness.set_variable("TP-REJECT", 1)
     result, _ = harness.run(case, api="from")
@@ -505,6 +511,9 @@ def test_paired_authorized_peer_skips_only_prevalidated_screen_checks(harness):
 
 
 def test_paired_throw_releases_borrow_and_clears_mode_before_single_build(harness):
+    # The throw comes from the screen-storage proof, which runs with
+    # every-frame checks on.
+    harness.strict()
     case = harness.make_case(cells("ABCD"), cells("abcd"), [(0, 0, 1, 2)], menu_count=1)
     harness.set_variable("TP-THROW", 1)
     result, _ = harness.run(case)
@@ -528,6 +537,7 @@ def test_paired_no_claims_reads_back_and_keeps_two_channel_bound(harness):
 
 @pytest.mark.parametrize("api", ["from", "authorized"])
 def test_paired_rejects_planner_owned_plane(harness, api):
+    harness.strict()
     case = harness.make_case(cells("ABC"), cells("abc"))
     result, _ = harness.run(case, api=api, residue=harness.address("_RGRP-UTF8"))
     assert result[-1] == 3
@@ -677,6 +687,10 @@ def test_a_pane_takes_the_surface_plans_runs_instead_of_reading_its_cells(harnes
 @pytest.mark.parametrize("defect", ["limit", "items-alias", "refs-alias", "text-alias",
                                     "unaligned-items", "wrapped-text"])
 def test_a_malformed_reference_is_refused_before_any_write(harness, defect):
+    # The run text limit is checked in both modes; the reference's banks are
+    # proved well formed and apart with every-frame checks on.
+    if defect != "limit":
+        harness.strict()
     back = _pane_screen(12, 3)
     base, reference = _base_and_reference(harness, back, back, [], 0, 64)
     case = harness.make_case(back, back, [(1, 2, 2, 5)], planes_of=base, max_run=64)

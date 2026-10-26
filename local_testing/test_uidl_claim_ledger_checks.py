@@ -67,15 +67,15 @@ def test_normal_mode_claims_check_each_records_identity_not_its_structure() -> N
         '." BASE " T-CLAIMS T-SHOW',
         # The first record's resolved foreground is out of range.
         "T-FG @ _CSAVE !  300 T-FG !",
-        '." FG-EVERY " T-CLAIMS T-SHOW',
-        "0 CHK-EVERY-FRAME !",
         '." FG-NORMAL " T-CLAIMS T-SHOW',
+        "-1 CHK-EVERY-FRAME !",
+        '." FG-EVERY " T-CLAIMS T-SHOW',
         "_CSAVE @ T-FG !",
         # A record of another generation is refused in both modes.
         "_MR _RUCL-R.GENERATION @ _CSAVE !  10 _MR _RUCL-R.GENERATION !",
-        '." GEN-NORMAL " T-CLAIMS T-SHOW',
-        "-1 CHK-EVERY-FRAME !",
         '." GEN-EVERY " T-CLAIMS T-SHOW',
+        "0 CHK-EVERY-FRAME !",
+        '." GEN-NORMAL " T-CLAIMS T-SHOW',
         "_CSAVE @ _MR _RUCL-R.GENERATION !",
         '." AFTER " T-CLAIMS T-SHOW',
     ))

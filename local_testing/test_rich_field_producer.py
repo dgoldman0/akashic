@@ -335,16 +335,15 @@ def test_normal_mode_bank_headers_keep_the_valid_mark_and_skip_the_packing_walk(
             memory.write64(at,saved)
     # A packing whose recorded size no longer matches its layout.
     packed=memory.read64(bank+h.offset("_RTHP-TB.PACKED-BYTES"))
-    assert not changed("PACKED-BYTES",packed+8)
-    h.variable("CHK-EVERY-FRAME",0)
+    h.variable("CHK-EVERY-FRAME",MASK64)
     try:
-        assert header() and changed("PACKED-BYTES",packed+8)
-        for name,value in (("VALID",0),("OWNER",0),("DOCUMENT-COUNT",2),("GLYPH-RUN-LIMIT",0)):
-            assert not changed(name,value),name
-        assert not header(bank+8)
+        assert not changed("PACKED-BYTES",packed+8)
     finally:
-        h.variable("CHK-EVERY-FRAME",MASK64)
-    assert header()
+        h.variable("CHK-EVERY-FRAME",0)
+    assert header() and changed("PACKED-BYTES",packed+8)
+    for name,value in (("VALID",0),("OWNER",0),("DOCUMENT-COUNT",2),("GLYPH-RUN-LIMIT",0)):
+        assert not changed(name,value),name
+    assert not header(bank+8)
 
 
 # A DELTA keeps a field's label, geometry and state but for SELECTED.  Its

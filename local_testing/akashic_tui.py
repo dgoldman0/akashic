@@ -28214,8 +28214,8 @@ def _with_frame_shadow(autoexec: str, modules: tuple[str, ...]) -> str:
 
 
 def _with_every_frame_checks(autoexec: str, modules: tuple[str, ...]) -> str:
-    """Turn every-frame checks back on at boot, once Desk has chosen normal
-    mode (tui/check-mode.f)."""
+    """Turn every-frame checks on at boot, once the profile's modules have
+    loaded (tui/check-mode.f)."""
     if CHECK_MODE_MODULE not in modules:
         raise RuntimeError(
             "--every-frame-checks needs a profile that loads tui/check-mode.f"
@@ -37209,8 +37209,8 @@ def _parser() -> argparse.ArgumentParser:
             "--every-frame-checks",
             action="store_true",
             help=(
-                "run every check on every frame, as tests do, instead of "
-                "Desk's normal mode (tui/check-mode.f)"
+                "run every check on every frame instead of normal mode "
+                "(tui/check-mode.f)"
             ),
         )
         if name in ("smoke", "serve"):

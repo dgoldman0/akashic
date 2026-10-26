@@ -27,8 +27,8 @@ the image turns on the shadow check of the rich frame's shortcuts at boot
 (tui/rich-terminal/frame-shadow.f): each shortcut also runs its full path
 and compares, and the run fails on any difference, or when the check was
 not on after all.  With --every-frame-checks the image turns every check
-back on at boot, once Desk has chosen normal mode (tui/check-mode.f), and
-the run fails when they were not on after all.
+on at boot, once Desk has loaded (tui/check-mode.f), and the run fails when
+they were not on after all.
 """
 from __future__ import annotations
 
@@ -301,8 +301,8 @@ def main() -> int:
                         help="turn on the shadow check of the rich frame's "
                              "shortcuts at boot, and fail on any difference")
     parser.add_argument("--every-frame-checks", action="store_true",
-                        help="run every check on every frame, as tests do, "
-                             "instead of Desk's normal mode")
+                        help="run every check on every frame instead of "
+                             "normal mode")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

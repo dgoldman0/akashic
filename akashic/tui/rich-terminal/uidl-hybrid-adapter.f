@@ -1183,12 +1183,13 @@ VARIABLE _RUHA-O-U
     _RUHA-O-U ! _RUHA-O-A !
     _RUHA-O-ADAPTER @ _RUHA-SAFE-ADAPTER !
     ['] _RUHA-O-DISJOINT? _RUHA-STORAGE-SPANS? ;
-\ A slot's owner as a draw needs it: an instance with a valid descriptor and
-\ a live identity.
+\ A slot's owner as a draw needs it: an instance with a valid descriptor,
+\ whose state size is not negative, and a live identity.
 : _RUHA-OWNER-NAMED? ( slot -- flag )
     AHS.INST @ DUP 0= IF EXIT THEN
     DUP CINST.DESC @ DUP 0= IF NIP EXIT THEN
-    COMP-DESC-VALID? 0= IF DROP 0 EXIT THEN
+    DUP COMP-DESC-VALID? 0= IF 2DROP 0 EXIT THEN
+    COMP.STATE-SIZE @ 0< IF DROP 0 EXIT THEN
     DUP CINST.ID @ 0= SWAP CINST.GENERATION @ 0= OR 0= ;
 : _RUHA-LIVE-OWNER? ( slot adapter -- flag )
     _RUHA-O-ADAPTER ! AHS.INST @

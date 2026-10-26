@@ -31,13 +31,14 @@ def test_frame_calls_walk_the_ledgers_only_with_every_frame_checks():
     # the engine writes is wrong, and nothing in the engine's state shows it.
     memory.write64(used, granted + 1)
     assert _top(h, "RTAPT-VALID?", h.engine) == 0
-    # A frame's limits query walks the ledgers with every-frame checks on...
-    assert _top(h, "RTAPT-LIMITS@", h.engine) == invalid
-    # ...and in normal mode checks the engine's state only.  Explicit VALID?
-    # walks them in both modes.
-    memory.write64(switch, 0)
+    # In normal mode, the switch's default, a frame's limits query checks the
+    # engine's state only...
     assert _top(h, "RTAPT-LIMITS@", h.engine) == sound
-    assert _top(h, "RTAPT-VALID?", h.engine) == 0
+    # ...and with every-frame checks on it walks the ledgers too.  Explicit
+    # VALID? walks them in both modes.
     memory.write64(switch, MASK64)
+    assert _top(h, "RTAPT-LIMITS@", h.engine) == invalid
+    assert _top(h, "RTAPT-VALID?", h.engine) == 0
+    memory.write64(switch, 0)
     memory.write64(used, held)
     assert _top(h, "RTAPT-LIMITS@", h.engine) == sound

@@ -129,6 +129,9 @@ def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_
     lines = lines[:at]
     lines += [
         # Invalidating frozen constraints cannot contaminate the live model.
+        # With every-frame checks on, the stored slice is validated again
+        # before reuse, and the document is captured afresh.
+        "-1 CHK-EVERY-FRAME !",
         "-201 _FA-FIRST UFLD-MAXIMUM-OFFSET + !",
         "_FA-MODEL UFLD-MAXIMUM@ 200 = _RA-ASSERT",
         "2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
@@ -136,6 +139,7 @@ def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
         "_FA-FIRST UFLD-MAXIMUM@ 200 = _RA-ASSERT",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
+        "0 CHK-EVERY-FRAME !",
         # The constructor's full nineteen-span proof protects old ownership.
         "_RA-INIT-ARGS _RA-SF-DESCRIPTORS 256 _RA-SF-NATIVE 256",
         "_RA-SF-DESCRIPTORS 256 _FA-NATIVE 1024 0 0 0 0 _RA-ADAPTER RUHA-INIT",

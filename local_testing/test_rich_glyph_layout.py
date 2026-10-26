@@ -90,6 +90,10 @@ def test_layout_rejects_invalid_references_map_geometry_and_namespace_without_wr
         harness.field(harness.pending, "_RTHP-TB." + field, 9)
     else:
         harness.variable("_RTHP-D-PENDING-FIRST", MASK64)
+    if mutation in ("offset", "length"):
+        # The producer's packed references are checked against their bank
+        # again only with every-frame checks on.
+        harness.variable("CHK-EVERY-FRAME", MASK64)
     before = harness.observe()
     assert not harness.call("_RTHP-D-TRY-GLYPH-LAYOUT?")
     assert harness.observe() == before

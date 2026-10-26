@@ -13,8 +13,8 @@ can charge the typed characters their guest steps. With --shadow-check the image
 turns on the shadow check of the rich frame's shortcuts at boot, and the run
 fails on any difference it finds (tui/rich-terminal/frame-shadow.f). With
 --every-frame-checks the image runs every check on every frame instead of
-Desk's normal mode (tui/check-mode.f), and the run fails when they were not
-on after all.
+normal mode (tui/check-mode.f), and the run fails when they were not on
+after all.
 """
 from __future__ import annotations
 
@@ -397,7 +397,7 @@ def worker(args):
             if failure is not None:
                 outcome = "shadow_check_failed"
                 raise RuntimeError(failure)
-        # Which checks ran: Desk's normal mode, or every check on every frame.
+        # Which checks ran: normal mode, or every check on every frame.
         check_mode = journey_api.check_mode_record(client)
         write_json(artifact / "check-mode.json", check_mode)
         if args.every_frame_checks and not check_mode.get("every_frame"):
@@ -458,8 +458,8 @@ def main():
                           help="turn on the shadow check of the rich frame's "
                                "shortcuts at boot, and fail on any difference")
         item.add_argument("--every-frame-checks", action="store_true",
-                          help="run every check on every frame, as tests do, "
-                               "instead of Desk's normal mode")
+                          help="run every check on every frame instead of "
+                               "normal mode")
     for item in (driver, server):
         item.add_argument("--artifact", type=lambda p: Path(p).resolve(), required=True)
     server.add_argument("server_args", nargs=argparse.REMAINDER)

@@ -31,7 +31,7 @@ VARIABLE TEST-POLL-STATUS
 VARIABLE TEST-ENDED
 VARIABLE TEST-STATES
 VARIABLE TEST-WALKS
-VARIABLE CHK-EVERY-FRAME  -1 CHK-EVERY-FRAME !
+VARIABLE CHK-EVERY-FRAME  0 CHK-EVERY-FRAME !
 : CHK-EVERY-FRAME? CHK-EVERY-FRAME @ 0<> ;
 : _RTAPT-ENGINE-STORAGE? DROP TEST-STORAGE-OK @ ;
 : _RTAPT-ENGINE-VALID? DROP 1 TEST-AUDITS +! TEST-AUDIT-OK @ ;
@@ -90,6 +90,12 @@ def service(request):
     return ServiceHarness(request.param)
 
 
+def _mode(service, mode):
+    """Set the check mode; return the stub that counts the frame check it runs."""
+    service.variable('CHK-EVERY-FRAME', 0 if mode == 'normal' else (1 << 64) - 1)
+    return 'TEST-STATES' if mode == 'normal' else 'TEST-AUDITS'
+
+
 def test_idle_poll_does_not_touch_unneeded_ledgers_or_completion(service):
     # No bank contents or pointers are consulted beyond the existing storage
     # boundary. Even a failing deep audit cannot affect a pure status poll.
@@ -101,24 +107,31 @@ def test_idle_poll_does_not_touch_unneeded_ledgers_or_completion(service):
     assert service.runtime.memory.read64(service.engine + service.offset('_RTAPT-E.LAST-STATUS')) == 0
 
 
+# A step that is not an idle poll reaches the frame check before any effect:
+# the engine's state check in normal mode, and the full audit with
+# every-frame checks on.
+@pytest.mark.parametrize('mode', ['normal', 'every-frame'])
 @pytest.mark.parametrize('field', [
     'UPDATE-STATE', 'ACTIVE-KIND', 'ACTIVE-O', 'QUEUE-HEAD', 'QUEUE-TAIL',
     'COUPLING', 'OP-COUNT', 'COPY-USED', 'RET-BYTES', 'SEND-INDEX',
     'RET-MODE', 'DISPOSITION', 'COLS', 'ROWS', 'CELL-SPANS', 'CELLS', 'CELL-MODE',
 ])
-def test_nonidle_or_incoherent_state_reaches_full_audit_before_any_effect(service, field):
+def test_nonidle_or_incoherent_state_reaches_the_frame_check_before_any_effect(service, field, mode):
+    checks = _mode(service, mode)
     service.set(field, 1)
     service.variable('TEST-AUDIT-OK', 0)
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)
-    assert service.variable('TEST-AUDITS') == 1
+    assert service.variable(checks) == 1
     assert service.variable('TEST-POLLS') == 0
 
 
-def test_bad_storage_cannot_enter_no_work_branch(service):
+@pytest.mark.parametrize('mode', ['normal', 'every-frame'])
+def test_bad_storage_cannot_enter_no_work_branch(service, mode):
+    checks = _mode(service, mode)
     service.variable('TEST-STORAGE-OK', 0)
     service.variable('TEST-AUDIT-OK', 0)
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)
-    assert service.variable('TEST-AUDITS') == 1
+    assert service.variable(checks) == 1
 
 
 @pytest.mark.parametrize('ready', [0, 1, 2, 3, 4])
@@ -129,21 +142,22 @@ def test_idle_service_preserves_readiness_and_sticky_status(service, ready):
     assert service.runtime.memory.read64(service.engine + service.offset('_RTAPT-E.LAST-STATUS')) == ready
 
 
-def test_active_completion_still_requires_full_audit_on_every_poll(service):
+@pytest.mark.parametrize('mode', ['normal', 'every-frame'])
+def test_active_completion_is_checked_on_every_poll(service, mode):
+    checks = _mode(service, mode)
     service.set('ACTIVE-KIND', service.constant('_RTAPT-ACTIVE-OUTPUT'))
     service.set('UPDATE-STATE', service.constant('RTAPT-UPDATE-AWAITING'))
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-WOULD-BLOCK'),)
-    assert service.variable('TEST-AUDITS') == service.variable('TEST-POLLS') == 1
+    assert service.variable(checks) == service.variable('TEST-POLLS') == 1
     service.variable('TEST-AUDIT-OK', 0)
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)
-    assert service.variable('TEST-AUDITS') == 2
+    assert service.variable(checks) == 2
     assert service.variable('TEST-POLLS') == 1
 
 
 def test_normal_mode_checks_a_waiting_step_s_state_and_walks_ledgers_for_queued_work(service):
-    # In normal mode a step that is not idle checks the engine's state and
-    # walks the ledgers only while lifecycle work is queued.
-    service.variable('CHK-EVERY-FRAME', 0)
+    # In normal mode, the switch's default, a step that is not idle checks the
+    # engine's state and walks the ledgers only while lifecycle work is queued.
     service.set('ACTIVE-KIND', 1)
     service.variable('TEST-AUDIT-OK', 0)
     assert service.call('RTAPT-STEP') == (service.constant('RTAPT-S-INVALID'),)

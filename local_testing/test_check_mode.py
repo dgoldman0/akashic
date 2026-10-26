@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check-mode.f: every-frame checks are on until a composition turns them off."""
+"""check-mode.f: every-frame checks are off until something turns them on."""
 
 import pytest
 
@@ -7,11 +7,11 @@ import akashic_tui as packaging
 from test_field_model import PRELUDE, run_field
 
 
-def test_every_frame_checks_are_on_until_turned_off():
+def test_every_frame_checks_are_off_until_turned_on():
     run_field(PRELUDE + r'''
-CHK-EVERY-FRAME? _FM-A
-0 CHK-EVERY-FRAME ! CHK-EVERY-FRAME? 0= _FM-A
+CHK-EVERY-FRAME? 0= _FM-A
 -1 CHK-EVERY-FRAME ! CHK-EVERY-FRAME? _FM-A
+0 CHK-EVERY-FRAME ! CHK-EVERY-FRAME? 0= _FM-A
 \ Any nonzero cell is on.
 5 CHK-EVERY-FRAME ! CHK-EVERY-FRAME? -1 = _FM-A
 _FM-DONE

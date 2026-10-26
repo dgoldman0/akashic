@@ -11824,7 +11824,7 @@ CHECK_MODE_VARIABLE = "CHK-EVERY-FRAME"
 
 
 def check_mode_record(client) -> dict:
-    """Whether every-frame checks were on, or Desk's normal mode ran."""
+    """Whether every-frame checks were on, or normal mode ran."""
 
     try:
         words = client.request("forth", names=[CHECK_MODE_VARIABLE]).get("words", {})

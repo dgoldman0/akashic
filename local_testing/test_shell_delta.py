@@ -314,6 +314,7 @@ def test_every_frame_checks_validate_the_model_copy_and_the_frozen_bank():
     _SX-P _RTHP.SOURCE-DRAW @ _SX-C SHSN-SNAPSHOT-FOR@ _SS-OK DROP
     DUP SHM.COUNT @ SWAP SHM-ENTRY 1 SWAP C! ;
 _SX-SETUP _SD-HOOKS
+-1 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SC-DAMAGE
 _RSHSP-PREPARE RTE-S-OK <> _SS-A
 \ The producer refused its copy of the model.
@@ -321,7 +322,6 @@ _RSHSP-DIAG-PREPARE-STAGE @ 5 = _SS-A
 0 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SC-DAMAGE
 _RSHSP-PREPARE _SS-OK
--1 CHK-EVERY-FRAME !
 _SS-DONE
 ''', minimum=26)
 
@@ -336,6 +336,7 @@ def test_normal_mode_freezes_and_sends_a_delta_through_the_proved_emission():
     _SD-CLEAR _SX-S _RSHSP.PENDING @ _SD-BATCH _SX-S _RSHSP.ACTIVE @ _SD-BATCH
     _SX-FX _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
 _SX-SETUP _SD-HOOKS
+-1 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
 \ Every-frame checks: the changed run, through the proved emission.
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
@@ -356,6 +357,7 @@ _SN-EMIT _SS-OK
 _SN-EMIT RTE-S-INVALID = _SS-A
 _SX-FX _RTE-SH.SELF DUP @ 1- SWAP !
 _SN-EMIT _SS-OK
+0 CHK-EVERY-FRAME !
 _SS-DONE
 ''', minimum=39)
 

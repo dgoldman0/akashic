@@ -219,7 +219,7 @@ VARIABLE _SHT-REFUSE-INSTALL
     # Each dispatch checks that the sidecar and its producer are the records
     # they say they are, and that the producer is the one it was given.  With
     # every-frame checks on it also checks the sidecar's header and proves its
-    # storage, so a work space knocked off its cell is refused; Desk chose
+    # storage, so a work space knocked off its cell is refused; Desk runs in
     # normal mode, where that proof was made when the storage was lent.
     dispatch = "RTHPX-ABORT _A1D-SCREEN _A1D-SHELL-PRODUCER _RSHSP-DISPATCH RTE-S-OK ="
     assert values("CHK-EVERY-FRAME @") == (0,)
