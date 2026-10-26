@@ -275,7 +275,9 @@ def supervise(args) -> int:
     expected_reason = (
         "boot" if args.safe_mode else "config" if args.settings_safe_mode else None
     )
-    mismatch = safe_mode_mismatch(artifact, expected_reason) if passed else None
+    mismatch = (
+        safe_mode_mismatch(safe_mode_reason(artifact), expected_reason) if passed else None
+    )
     if mismatch is not None:
         print(f"Safe mode: {mismatch}", flush=True)
         passed = False
@@ -320,14 +322,13 @@ def safe_mode_reason(artifact: Path) -> str | None:
     return (diagnostics.get("check_mode") or {}).get("safe_mode")
 
 
-def safe_mode_mismatch(artifact: Path, expected: str | None) -> str | None:
-    """How the run's safe mode differs from what it asked for, or None.
-    The guest must report safe mode for the EXPECTED reason, "boot" or
-    "config", or report it off when none was asked for: a run in normal
-    mode that ends in safe mode met an anomaly, or settings that ask for
-    it."""
+def safe_mode_mismatch(reason: str | None, expected: str | None) -> str | None:
+    """How the guest's safe mode, REASON as its diagnostics name it, differs
+    from what the run asked for, or None.  The guest must report safe mode
+    for the EXPECTED reason, "boot" or "config", or report it off when none
+    was asked for: a run in normal mode that ends in safe mode met an
+    anomaly, or settings that ask for it, and measured safe mode."""
 
-    reason = safe_mode_reason(artifact)
     if reason == expected:
         return None
     if expected is None:

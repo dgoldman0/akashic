@@ -15,7 +15,8 @@ fails on any difference it finds (tui/rich-terminal/frame-shadow.f). With
 --every-frame-checks the image runs every check on every frame instead of
 normal mode (tui/check-mode.f), and the run fails when they were not on
 after all. With --safe-mode it boots in safe mode, and fails when the guest
-did not report it.
+did not report it. Without it, the run fails when the guest reports safe
+mode on, since its numbers would then be safe mode's.
 """
 from __future__ import annotations
 
@@ -165,6 +166,7 @@ def worker(args):
     os.environ["MEGAPAD_ROOT"] = str(args.megapad_root)
     import akashic_tui as tui
     import rich_terminal_desktop_acceptance as journey_api
+    from physical_desktop_acceptance import safe_mode_mismatch
     import _megaforth_native as native_extension
     import pygame
     from session_viewer import (_GuestKeyboardForwarder, _RetainedDisplayState,
@@ -409,11 +411,12 @@ def worker(args):
             raise RuntimeError(
                 "every-frame checks were asked for, but the guest did not report them on"
             )
-        if args.safe_mode and check_mode.get("safe_mode") != "boot":
-            outcome = "safe_mode_off"
-            raise RuntimeError(
-                "safe mode was asked for at boot, but the guest did not report it"
-            )
+        mismatch = safe_mode_mismatch(
+            check_mode.get("safe_mode"), "boot" if args.safe_mode else None
+        )
+        if mismatch is not None:
+            outcome = "safe_mode_mismatch"
+            raise RuntimeError(f"safe mode: {mismatch}")
     except BaseException as exc:
         mark("diagnostic_error", error=f"{type(exc).__name__}: {exc}")
         raise

@@ -1706,31 +1706,29 @@ def test_a_run_in_safe_mode_finds_its_notice_as_a_warning_in_rich_and_cell() -> 
 
 
 def test_a_physical_run_ends_in_the_safe_mode_it_asked_for(tmp_path) -> None:
-    """The launcher requires the guest to report safe mode for the reason
+    """The launchers require the guest to report safe mode for the reason
     the run asked, or off when it asked for none: a normal run that ends in
     safe mode met an anomaly, or settings that ask for it."""
 
-    def reported(reason):
-        evidence = tmp_path / "evidence"
-        evidence.mkdir(exist_ok=True)
-        (evidence / "final-guest-diagnostics.json").write_text(
-            json.dumps({"check_mode": {"safe_mode": reason}})
-        )
-        return tmp_path
-
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "final-guest-diagnostics.json").write_text(
+        json.dumps({"check_mode": {"safe_mode": "config"}})
+    )
+    assert physical_desktop_acceptance.safe_mode_reason(tmp_path) == "config"
     mismatch = physical_desktop_acceptance.safe_mode_mismatch
     for reason in (None, "boot", "config"):
-        assert mismatch(reported(reason), reason) is None
-    assert mismatch(reported("anomaly"), None) == (
+        assert mismatch(reason, reason) is None
+    assert mismatch("anomaly", None) == (
         "not asked for, but the guest reported it on (anomaly)"
     )
-    assert mismatch(reported("config"), None) == (
+    assert mismatch("config", None) == (
         "not asked for, but the guest reported it on (config)"
     )
-    assert mismatch(reported(None), "config") == (
+    assert mismatch(None, "config") == (
         "asked for (config), but the guest did not report it"
     )
-    assert mismatch(reported("boot"), "config") == (
+    assert mismatch("boot", "config") == (
         "asked for (config), but the guest reported it for boot"
     )
 
