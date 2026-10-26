@@ -95,6 +95,28 @@ _SS-DONE
 ''', minimum=20)
 
 
+def test_a_click_reads_the_batch_of_the_bank_it_routes_through():
+    """A click finds its control in the bank the terminal acknowledged, which
+    it found current, not in whichever bank a check read last.  Normal mode
+    checks a frozen bank only when a START is acknowledged, so a click after
+    later frames read a batch whose bank a newer frame might have rewritten
+    in another layout.  Here no check reads either bank."""
+    staged_run(DELTA + r'''
+: _SR-FIND ( -- control|0 )
+    _RSHSP-CURRENT? 0= IF 0 EXIT THEN
+    11 _SX-S _RSHSP.ACTIVE @ _SD-FIND _RTE-CONTROL.ID @ _RSHSP-INPUT-ID !
+    _RSHSP-CONTROL-FIND ;
+: _SR-IN? ( control bank -- flag ) 2DUP U< 0= >R 131072 + U< R> AND ;
+_SX-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+_SR-FIND DUP 0<> _SS-A _SX-KA _SR-IN? _SS-A
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK _SD-ACK
+_SX-S _RSHSP.ACTIVE @ _SX-KB = _SS-A
+_SR-FIND DUP 0<> _SS-A _SX-KB _SR-IN? _SS-A
+_SS-DONE
+''', minimum=8)
+
 def test_more_and_fewer_runs_define_new_slots_and_hide_unused_ones():
     staged_run(DELTA + r'''
 VARIABLE _SD-FRONTIER
