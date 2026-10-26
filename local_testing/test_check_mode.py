@@ -98,3 +98,27 @@ def test_every_check_that_runs_only_with_every_check_on_names_its_structure():
     for name, word, body in words:
         # The shell's proved emission names through one helper of its own.
         assert "CHK-NAME" in body or "_RTE-FDE-NAMED" in body, (name, word)
+
+
+def test_a_failed_handover_proof_names_its_structure_and_turns_safe_mode_on():
+    run_field(PRELUDE + r'''
+: T-BANKS  S" the banks" ;
+\ A proof that holds changes nothing.
+-1 T-BANKS CHK-HANDOVER -1 = _FM-A CHK-SAFE? 0= _FM-A CHK-DAMAGE-COUNT @ 0= _FM-A
+\ One that fails names the structure and turns safe mode on for an anomaly,
+\ with every check.
+0 T-BANKS CHK-HANDOVER 0= _FM-A CHK-SAFE? _FM-A CHK-EVERY-FRAME? _FM-A
+CHK-SAFE-MODE @ CHK-WHY-ANOMALY = _FM-A
+CHK-DAMAGE T-BANKS COMPARE 0= _FM-A CHK-DAMAGE-COUNT @ 1 = _FM-A
+_FM-DONE
+''', minimum=9, extra_sources=("tui/check-mode.f",))
+
+
+def test_an_anomaly_keeps_the_reason_safe_mode_was_turned_on_for():
+    run_field(PRELUDE + r'''
+: T-BANKS  S" the banks" ;
+CHK-WHY-BOOT CHK-SAFE-ON
+T-BANKS CHK-ANOMALY
+CHK-SAFE-MODE @ CHK-WHY-BOOT = _FM-A CHK-DAMAGE T-BANKS COMPARE 0= _FM-A
+_FM-DONE
+''', minimum=2, extra_sources=("tui/check-mode.f",))

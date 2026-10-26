@@ -51,6 +51,8 @@ class StaticHarness:
         source.append(_word((ROOT / "akashic/utils/string.f").read_text(), "/STRING"))
         source.append(_clean((RICH / "fdc1.f").read_text()))
         source.append(_clean((RICH / "dlg1.f").read_text()))
+        # The engine names what a failed handover proof found (check-mode.f).
+        source.append(_clean((RICH.parent / "check-mode.f").read_text()))
         source.append(_clean(SOURCE))
         source.append("""
 VARIABLE SF-CALLS

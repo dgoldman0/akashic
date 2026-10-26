@@ -367,6 +367,27 @@ _SS-DONE
 """, minimum=9)
 
 
+def test_a_grown_block_that_overlaps_the_shell_s_storage_is_an_anomaly():
+    """A block from the memory source that overlaps the shell's own storage
+    means the source's records are wrong, which only a bug causes.  The
+    shell gives it back unused, the preparation refuses, and safe mode turns
+    on for the rest of the session, naming the source (check-mode.f)."""
+    staged_run(GROWING + r"""
+\ A source that hands out the shell's own bank A, and takes it back
+\ without freeing it.
+: _SG-BAD-ALLOC ( bytes ctx -- addr|0 ) 2DROP 1 _SG-ALLOCS +! _SX-S _RSHSP.A @ ;
+: _SG-BAD-FREE ( addr bytes ctx -- ) DROP 2DROP 1 _SG-FREES +! ;
+_SG-SETUP
+' _SG-BAD-ALLOC _SG-SRC MSRC.ALLOC-XT ! ' _SG-BAD-FREE _SG-SRC MSRC.FREE-XT !
+CHK-SAFE? 0= _SS-A
+_RSHSP-PREPARE RTE-S-INVALID = _SS-A
+_SG-ALLOCS @ 1 = _SS-A _SG-FREES @ 1 = _SS-A
+CHK-SAFE-MODE @ CHK-WHY-ANOMALY = _SS-A
+CHK-DAMAGE S" Desk's memory source" COMPARE 0= _SS-A
+_SS-DONE
+""", minimum=6)
+
+
 def test_unmodeled_final_writer_omits_both_bands_and_preserves_pane_membership():
     staged_run(STAGED + r'''
 : _SX-LATER 88 11 9 DRW-CHAR ;

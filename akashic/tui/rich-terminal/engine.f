@@ -22,6 +22,7 @@ PROVIDED akashic-tui-rte
 
 REQUIRE ../../utils/memory-span.f
 REQUIRE ../../utils/memory-source.f
+REQUIRE ../check-mode.f
 REQUIRE ../../utils/string.f
 REQUIRE fdc1.f
 REQUIRE dlg1.f
@@ -3777,7 +3778,8 @@ CREATE _RTE-HPV-OWNED-END
     0 OVER _RTE-AM.A ! 0 OVER _RTE-AM.U ! 0 OVER _RTE-AM.USED !
     DUP _RTE-AM.NEED @ DUP 1 RSHIFT + 7 + -8 AND
     DUP _RTE-AM-MEMORY @ MSRC-ALLOC ?DUP 0= IF 2DROP EXIT THEN
-    2DUP SWAP 2DUP _RTE-HPV-OWNED-DISJOINT? >R _RTE-AM-OUTSIDE? R> AND 0= IF
+    2DUP SWAP 2DUP _RTE-HPV-OWNED-DISJOINT? >R _RTE-AM-OUTSIDE? R> AND
+        S" Desk's memory source" CHK-HANDOVER 0= IF
         SWAP _RTE-AM-MEMORY @ MSRC-FREE DROP EXIT
     THEN
     ROT TUCK _RTE-AM.A ! _RTE-AM.U ! ;

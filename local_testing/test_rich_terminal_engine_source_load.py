@@ -87,6 +87,7 @@ def test_neutral_engine_dependency_closure_source_loads_in_definition_order() ->
         "utils/uint-range.f",
         "utils/memory-span.f",
         "utils/memory-source.f",
+        "tui/check-mode.f",
         "concurrency/event.f",
         "concurrency/semaphore.f",
         "concurrency/guard.f",

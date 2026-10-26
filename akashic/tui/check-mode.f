@@ -26,6 +26,12 @@
 \  count grows with every check that names one, so a caller can tell that
 \  a refusal came from damage.
 \
+\  The proofs normal mode keeps about memory layout run when memory is
+\  handed over: when storage is lent, a document attaches, or a block from
+\  a memory source grows a producer.  One that fails is an anomaly, since
+\  only a bug lays memory out that way: it names the structure and turns
+\  safe mode on for the rest of the session.
+\
 \  CHK-EVERY-FRAME   ( -- addr )  the switch: nonzero runs every check
 \  CHK-EVERY-FRAME?  ( -- flag )  whether every check runs: the switch is
 \                                 on, or safe mode is
@@ -40,6 +46,11 @@
 \                                     c-addr u damaged
 \  CHK-NAME          ( flag c-addr u -- flag )  name the structure c-addr u
 \                                     as damaged when flag is false
+\  CHK-ANOMALY       ( c-addr u -- )  a handover proof found the structure
+\                                     named c-addr u damaged: name it and
+\                                     turn safe mode on
+\  CHK-HANDOVER      ( flag c-addr u -- flag )  CHK-ANOMALY when flag is
+\                                     false
 \
 \  Prefix: CHK- (public)
 
@@ -75,3 +86,6 @@ VARIABLE CHK-DAMAGE-COUNT
     CHK-DAMAGE-U ! CHK-DAMAGE-A ! ;
 : CHK-NAME  ( flag c-addr u -- flag )
     2 PICK IF 2DROP EXIT THEN CHK-DAMAGED ;
+: CHK-ANOMALY  ( c-addr u -- )  CHK-DAMAGED CHK-WHY-ANOMALY CHK-SAFE-ON ;
+: CHK-HANDOVER  ( flag c-addr u -- flag )
+    2 PICK IF 2DROP EXIT THEN CHK-ANOMALY ;

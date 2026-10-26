@@ -320,11 +320,18 @@ def test_a_fixed_arena_or_a_pending_bank_never_grows(harness):
 
 
 def test_a_block_that_is_not_separate_is_given_back(harness):
+    """A block the memory source hands over that overlaps the producer's
+    storage means the source's records are wrong: it goes back unused, and
+    as an anomaly it turns safe mode on and names the source
+    (check-mode.f)."""
     harness.set_cell("GT-DISJOINT", 0)
     harness.snap(records=10, text=100)
     assert harness.grow() == harness.constant("RTE-S-INVALID")
     assert (harness.cell("TM-ALLOCS"), harness.cell("TM-FREES")) == (1, 1)
     assert harness.capacities()[:2] == (1, 8)
+    assert harness.cell("CHK-SAFE-MODE") == harness.constant("CHK-WHY-ANOMALY")
+    assert harness.runtime.memory.read_bytes(
+        harness.cell("CHK-DAMAGE-A"), harness.cell("CHK-DAMAGE-U")) == b"Desk's memory source"
 
 
 def test_teardown_gives_back_every_arena(harness):

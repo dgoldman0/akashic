@@ -8926,7 +8926,8 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
         THEN
         RTHP-WHY-MEMORY _RTHP-W-WHY ! RTE-S-CAPACITY EXIT
     THEN _RTHP-G-ARENA !
-    _RTHP-G-ARENA @ _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP-G-SEPARATE? 0= IF
+    _RTHP-G-ARENA @ _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP-G-SEPARATE?
+        S" Desk's memory source" CHK-HANDOVER 0= IF
         _RTHP-G-ARENA @ _RTHP-G-BYTES @ _RTHP-W-P @ _RTHP.MEMORY @ MSRC-FREE
         RTE-S-INVALID EXIT
     THEN
@@ -9434,7 +9435,8 @@ VARIABLE _RTHP-L-CHUNK
 \ the producer touches; 0 when the source has no room.
 : _RTHP-L-ALLOC  ( bytes -- a|0 )
     DUP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-ALLOC DUP 0= IF NIP EXIT THEN
-    2DUP SWAP _RTHP-L-P @ _RTHP-G-SEPARATE? IF NIP EXIT THEN
+    2DUP SWAP _RTHP-L-P @ _RTHP-G-SEPARATE? S" Desk's memory source" CHK-HANDOVER
+        IF NIP EXIT THEN
     SWAP _RTHP-L-P @ _RTHP.MEMORY @ MSRC-FREE 0 ;
 
 \ Start nothing more in this draw; HOLD also notes why pictures stay CELL.

@@ -486,6 +486,17 @@ of about 2 million for a thin frame.
   then says that it is in safe mode, and records why. A first check that
   refuses outside data, such as a file's broken text, is not an anomaly.
 
+The handover proofs are the snapshot adapter's, that its banks lie apart
+from a document's storage and an owner's, when it installs, when its host
+starts and when a document attaches; and the screen producer's, the
+shell's and the engine's, that a block Desk's memory source hands them as
+they grow lies apart from what they hold. One that fails names what it
+found damaged. Desk's owner of the rich terminal says in a notice that
+safe mode is on and why, once, and says once more the first time a check
+names damage while safe mode is on; the guest's diagnostics record the
+reason and the first damaged structure. Desk without a rich terminal has
+no safe mode to speak of, and loads none of it.
+
 **What it cannot do.** Safe mode makes the screen match what the
 applications hold. It cannot make an application's own data right, and it
 cannot stop a native application that means harm, since such an application

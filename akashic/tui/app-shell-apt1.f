@@ -13,6 +13,7 @@ PROVIDED akashic-tui-app-shell-apt1
 
 REQUIRE app-shell.f
 REQUIRE screen-backend-apt1.f
+REQUIRE check-mode.f
 REQUIRE ../text/utf8.f
 REQUIRE ../utils/memory-span.f
 
@@ -38,7 +39,12 @@ ASHELL-TERMINAL-DESC-SIZE 176 + CONSTANT _APTAS-O-CONTROL-XT
 ASHELL-TERMINAL-DESC-SIZE 184 + CONSTANT _APTAS-O-PTR-BUTTONS
 ASHELL-TERMINAL-DESC-SIZE 192 + CONSTANT _APTAS-O-PTR-MODS
 ASHELL-TERMINAL-DESC-SIZE 200 + CONSTANT _APTAS-O-PTR-DRAG
-ASHELL-TERMINAL-DESC-SIZE 208 + CONSTANT APTAS-SIZE
+\ What the owner has said of safe mode (check-mode.f): the reason it said,
+\ 0 before it has said one, and whether it has said that a check found
+\ something damaged.
+ASHELL-TERMINAL-DESC-SIZE 208 + CONSTANT _APTAS-O-SAFE-SAID
+ASHELL-TERMINAL-DESC-SIZE 216 + CONSTANT _APTAS-O-DAMAGE-SAID
+ASHELL-TERMINAL-DESC-SIZE 224 + CONSTANT APTAS-SIZE
 
 HEX 4150544153000001 CONSTANT _APTAS-MAGIC DECIMAL
 
@@ -61,6 +67,8 @@ HEX 4150544153000001 CONSTANT _APTAS-MAGIC DECIMAL
 : _APTAS.PTR-BUTTONS  ( owner -- field ) _APTAS-O-PTR-BUTTONS + ;
 : _APTAS.PTR-MODS     ( owner -- field ) _APTAS-O-PTR-MODS + ;
 : _APTAS.PTR-DRAG     ( owner -- field ) _APTAS-O-PTR-DRAG + ;
+: _APTAS.SAFE-SAID    ( owner -- field ) _APTAS-O-SAFE-SAID + ;
+: _APTAS.DAMAGE-SAID  ( owner -- field ) _APTAS-O-DAMAGE-SAID + ;
 
 : APTAS-VALID?  ( owner -- flag )
     DUP 0= IF DROP FALSE EXIT THEN
@@ -455,6 +463,51 @@ DEFER _APTAS-KEY-POLL
         YIELD?
     AGAIN ;
 
+\ Safe mode is a mode of the rich terminal's screen, so its owner says it:
+\ once, on the first service that finds safe mode on, that it is on and
+\ why, and once that a check found something damaged, naming it.  The
+\ record is check-mode.f's: CHK-SAFE-MODE holds the reason and CHK-DAMAGE
+\ the first structure a check found damaged.  The app shell keeps its own
+\ copy of a notice's text.
+10000 CONSTANT _APTAS-SAFE-NOTICE-MS
+256 CONSTANT _APTAS-SAFE-TEXT-CAP
+CREATE _APTAS-SAFE-TEXT _APTAS-SAFE-TEXT-CAP ALLOT
+VARIABLE _APTAS-SAFE-TEXT-U
+: _APTAS-ST+  ( a u -- )
+    _APTAS-SAFE-TEXT-CAP _APTAS-SAFE-TEXT-U @ - MIN 0 MAX >R
+    _APTAS-SAFE-TEXT _APTAS-SAFE-TEXT-U @ + R@ MOVE R> _APTAS-SAFE-TEXT-U +! ;
+: _APTAS-ST-SAY  ( -- )
+    _APTAS-SAFE-TEXT _APTAS-SAFE-TEXT-U @ _APTAS-SAFE-NOTICE-MS
+    ASHELL-TOAST-WARNING ;
+: _APTAS-SAY-SAFE  ( reason -- )
+    0 _APTAS-SAFE-TEXT-U !
+    DUP CHK-WHY-CONFIG = IF DROP
+        S" Safe mode is on, as the system settings ask: every frame is built in full and checked."
+        _APTAS-ST+ _APTAS-ST-SAY EXIT
+    THEN
+    CHK-WHY-BOOT = IF
+        S" Safe mode is on, as asked at boot: every frame is built in full and checked."
+        _APTAS-ST+ _APTAS-ST-SAY EXIT
+    THEN
+    S" Safe mode is on: a check found " _APTAS-ST+ CHK-DAMAGE _APTAS-ST+
+    S"  damaged. Every frame is now built in full and checked." _APTAS-ST+
+    _APTAS-ST-SAY ;
+: _APTAS-SAY-DAMAGE  ( -- )
+    0 _APTAS-SAFE-TEXT-U !
+    S" A check found " _APTAS-ST+ CHK-DAMAGE _APTAS-ST+
+    S"  damaged, and the screen did not use it." _APTAS-ST+ _APTAS-ST-SAY ;
+: _APTAS-SAFE-TICK  ( owner -- )
+    CHK-SAFE-MODE @ ?DUP IF
+        OVER _APTAS.SAFE-SAID @ 0= IF
+            2DUP SWAP _APTAS.SAFE-SAID !
+            \ An anomaly's notice names what was damaged already.
+            DUP CHK-WHY-ANOMALY = IF -1 2 PICK _APTAS.DAMAGE-SAID ! THEN
+            _APTAS-SAY-SAFE DROP EXIT
+        THEN DROP
+    THEN
+    CHK-DAMAGE-COUNT @ 0= OVER _APTAS.DAMAGE-SAID @ OR IF DROP EXIT THEN
+    -1 SWAP _APTAS.DAMAGE-SAID ! _APTAS-SAY-DAMAGE ;
+
 : _APTAS-SERVICE  ( owner -- status owns-stream )
     DUP APTAS-VALID? 0= IF DROP SCB-S-INVALID FALSE EXIT THEN
     DUP _APTAS-C !
@@ -475,6 +528,7 @@ DEFER _APTAS-KEY-POLL
         SCB-S-OK FALSE EXIT
     THEN
     _APTAS-STATE @ PT-ST-LOST = IF SCB-S-SESSION-LOST TRUE EXIT THEN
+    _APTAS-C @ _APTAS-SAFE-TICK
     _APTAS-STATUS @ TRUE ;
 
 : _APTAS-POLL  ( event owner -- status has-event )

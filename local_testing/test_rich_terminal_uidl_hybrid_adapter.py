@@ -376,7 +376,10 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
     authority = _word(source, "_RUHA-SNAPSHOT-FOR-IN-DRAW")
 
     assert "AHS.UCTX @ ASHELL-ACTIVE-CTX <>" in attach
-    assert "_RUHA-STORAGE-DISJOINT-CURRENT? 0=" in attach
+    # A proof made when a document attaches that fails is an anomaly, which
+    # names RUHA's banks and turns safe mode on (check-mode.f).
+    assert ("_RUHA-STORAGE-DISJOINT-CURRENT?\n"
+            "        _RUHA-BANKS-DAMAGED CHK-HANDOVER 0= IF") in attach
     assert "_RUHA-B-PREFLIGHT" not in capture
     _ordered(
         query,

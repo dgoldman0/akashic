@@ -166,6 +166,27 @@ _RP-DONE
 ''', minimum=54, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
 
 
+def test_a_failed_proof_at_attach_turns_safe_mode_on():
+    run_series(_program() + r'''
+_RA-SLOT AHS.UCTX @ ASHELL-CTX-SWITCH
+\ An owner that does not name itself is refused at attach, and that is
+\ state: safe mode stays off.
+0 _RA-INSTANCE @ CINST.GENERATION !
+_RA-SLOT _RA-ADAPTER _RUHA-ATTACH RUHA-S-INVALID = _RA-ASSERT DROP
+CHK-SAFE? 0= _RA-ASSERT CHK-DAMAGE-COUNT @ 0= _RA-ASSERT
+_RP-GEN @ _RA-INSTANCE @ CINST.GENERATION !
+\ An owner whose state lies in RUHA's own bank fails the proof made when it
+\ attaches, which only a bug can cause: safe mode turns on for the rest of
+\ the session and names RUHA's banks (check-mode.f).
+8 _RA-COMP-DESC COMP.STATE-SIZE ! _RA-NATIVE _RA-INSTANCE @ CINST.STATE !
+_RA-SLOT _RA-ADAPTER _RUHA-ATTACH RUHA-S-INVALID = _RA-ASSERT DROP
+CHK-SAFE-MODE @ CHK-WHY-ANOMALY = _RA-ASSERT
+CHK-DAMAGE S" the snapshot adapter's banks" STR-STR= _RA-ASSERT
+0 _RA-COMP-DESC COMP.STATE-SIZE ! 0 _RA-INSTANCE @ CINST.STATE !
+_RP-DONE
+''', minimum=48, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
+
+
 def test_shadow_check_matches_reuse_and_catches_a_stale_reused_slice():
     run_series(_program() + r'''
 -1 FSHD-ON ! FSHD-RESET
