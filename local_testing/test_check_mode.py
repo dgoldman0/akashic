@@ -33,3 +33,27 @@ def test_the_boot_option_follows_the_last_require():
 def test_the_rich_desktop_loads_the_switch():
     profile = packaging.PROFILES["desktop-apt1"]
     assert packaging.CHECK_MODE_MODULE in packaging.dependency_order(profile.roots)
+
+
+def test_safe_mode_turns_on_once_and_runs_every_check():
+    run_field(PRELUDE + r'''
+CHK-SAFE? 0= _FM-A CHK-SAFE-MODE @ 0= _FM-A CHK-EVERY-FRAME? 0= _FM-A
+\ No reason, no safe mode.
+0 CHK-SAFE-ON CHK-SAFE? 0= _FM-A
+CHK-WHY-BOOT CHK-SAFE-ON CHK-SAFE? _FM-A CHK-SAFE-MODE @ CHK-WHY-BOOT = _FM-A
+\ Every check runs in safe mode, whatever the every-frame switch says.
+CHK-EVERY-FRAME @ 0= _FM-A CHK-EVERY-FRAME? _FM-A
+\ The first reason stays.
+CHK-WHY-ANOMALY CHK-SAFE-ON CHK-SAFE-MODE @ CHK-WHY-BOOT = _FM-A
+_FM-DONE
+''', minimum=9, extra_sources=("tui/check-mode.f",))
+
+
+def test_the_safe_mode_boot_option_follows_the_last_require():
+    modules = (packaging.CHECK_MODE_MODULE,)
+    autoexec = "ENTER-USERLAND\nREQUIRE a.f\nREQUIRE b.f\nDESK-RUN\n"
+    assert packaging._with_safe_mode(autoexec, modules) == (
+        "ENTER-USERLAND\nREQUIRE a.f\nREQUIRE b.f\nCHK-WHY-BOOT CHK-SAFE-ON\nDESK-RUN\n"
+    )
+    with pytest.raises(RuntimeError, match="tui/check-mode.f"):
+        packaging._with_safe_mode(autoexec, ())

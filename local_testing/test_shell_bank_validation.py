@@ -228,3 +228,8 @@ def test_the_freeze_takes_the_graph_the_preflight_checked():
     assert writers == {"_RSHSP-D-CATALOG", "_RSHSP-D-FAMILIES", "_RSHSP-D-METADATA",
                        "_RSHSP-D-NEXT-OBJECT"}
     assert code.count("_RSHSP-FREEZE") == 3
+    # A DELTA copies the runs of rows no draw touched, except in safe mode,
+    # where every row is planned.
+    assert delta.index("CHK-SAFE? 0= _RSHSP-REUSE !") < delta.index(
+        "_RSHSP-BUILD-BATCH") < delta.index("0 _RSHSP-REUSE !")
+    assert code.count("_RSHSP-REUSE !") == 3

@@ -4910,7 +4910,8 @@ VARIABLE _RTHP-SM-CORR
     _RTHP-W-P !
     0 _RTHP-W-TOTAL !
     _RTHP-W-P @ _RTHP.FIRST-OBJECT @ _RTHP-W-NEXT-ID !
-    _RTHP-W-MENU-REUSE-BASELINE? _RTHP-W-MR-ENABLED !
+    \ Safe mode plans every menu afresh.
+    CHK-SAFE? IF 0 ELSE _RTHP-W-MENU-REUSE-BASELINE? THEN _RTHP-W-MR-ENABLED !
     _RTHP-W-COPIED-BEGIN
     BEGIN _RTHP-W-DOCUMENT-I @
         _RTHP-W-P @ _RTHP.DOCUMENT-COUNT @ U< WHILE
@@ -8003,12 +8004,13 @@ VARIABLE _RTHP-SG-W-STATUS
 
 \ Either way the visible runs are those of the planes of the draw being
 \ built, with the candidate's claims, which GLYPH-DRAW then records.  A
-\ plan the banks hold already is kept as a complete build leaves it.
+\ plan the banks hold already is kept as a complete build leaves it.  In
+\ safe mode (check-mode.f) every draw's plan is built whole.
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
         DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
     THEN
-    DUP _RTHP-GLYPHS-HELD? IF
+    CHK-SAFE? IF 0 ELSE DUP _RTHP-GLYPHS-HELD? THEN IF
         DUP _RTHP.GLYPH-RUNS @ OVER _RTHP.GLYPH-COUNT !
         DUP _RTHP.GLYPH-TEXT @ OVER _RTHP.GLYPH-TEXT-USED !
         DUP _RTHP-ROWS-ALL-REBUILT
@@ -8018,7 +8020,7 @@ VARIABLE _RTHP-SG-W-STATUS
         THEN
     THEN
     0 OVER _RTHP.GLYPH-DRAW !
-    DUP _RTHP-BUILD-GLYPHS-DAMAGE? IF
+    CHK-SAFE? IF 0 ELSE DUP _RTHP-BUILD-GLYPHS-DAMAGE? THEN IF
         FSHD? IF DUP _RTHP-SH-GLYPHS THEN
     ELSE
         DUP _RTHP-ROWS-ALL-REBUILT
@@ -14281,8 +14283,9 @@ VARIABLE _RTHP-P-STATE
     DUP SCB-S-OK <> IF _RTHP-STAGE-NONE EXIT THEN DROP
     _RTHP-P-P @ _RTHP-TARGET-ABORT
     \ The unchanged route republishes the base target alone, so an installed
-    \ extension, which owns the published scene, always takes the full build.
-    _RTHP-P-P @ _RTHP.EXTENSION @ 0= IF
+    \ extension, which owns the published scene, always takes the full build,
+    \ as does every frame in safe mode.
+    _RTHP-P-P @ _RTHP.EXTENSION @ 0= CHK-SAFE? 0= AND IF
         _RTHP-P-P @ _RTHP-UNCHANGED-CANDIDATE? IF
             _RTHP-PROBE-CLEAR
             SCB-S-OK _RTHP-STAGE-UNCHANGED EXIT

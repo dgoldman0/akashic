@@ -1236,13 +1236,16 @@ def test_shadow_check_captures_in_full_first_and_publishes_the_ordinary_capture(
     full = _word(source, "_RUHA-SH-FULL")
     check = _word(source, "_RUHA-SH-CHECK")
     # The full capture runs only with the check on, before the ordinary
-    # capture, which is the one compared and then published.
+    # capture, which is the one compared and then published.  In safe mode
+    # the ordinary capture is itself the full one, and the check stands aside.
     _ordered(
         query,
-        "FSHD? IF _RUHA-SH-FULL THEN",
+        "CHK-SAFE? 0= FSHD? AND IF _RUHA-SH-FULL THEN",
         "_RUHA-B-START",
+        "CHK-SAFE? _RUHA-B-FULL !",
         "_RUHA-B-CAPTURE-ALL",
-        "FSHD? IF _RUHA-SH-CHECK THEN",
+        "0 _RUHA-B-FULL !",
+        "CHK-SAFE? 0= FSHD? AND IF _RUHA-SH-CHECK THEN",
         "_RUHA-B-PUBLISH",
     )
     assert query.count("_RUHA-B-CAPTURE-ALL") == 1
@@ -1849,3 +1852,4 @@ def test_pictures_are_described_per_document_in_the_completed_draw():
              "2DROP 2DROP DROP RUHA-S-STALE", "UPICSN-FAIL",
              "UPICSN-S-STALE = IF RUHA-S-STALE")
     assert body.rstrip().endswith("2DROP 2DROP DROP RUHA-S-STALE ;")
+

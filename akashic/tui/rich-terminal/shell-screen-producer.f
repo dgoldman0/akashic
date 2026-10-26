@@ -2046,7 +2046,9 @@ VARIABLE _RSHSP-DM-UA
 : _RSHSP-BUILD-DELTA ( -- )
     _RSHSP-S @ _RSHSP.ACTIVE @ DUP RSHSP-BANK.BATCH @ + _RSHSP-DBATCH !
     7 _RSHSP-DSTAGE ! 0 _RSHSP-DIAG-FAMILY !
-    -1 _RSHSP-REUSE ! _RSHSP-SOURCE-TARGET _RSHSP-BUILD-BATCH 0 _RSHSP-REUSE !
+    \ A DELTA copies the runs of rows no draw touched, except in safe mode.
+    CHK-SAFE? 0= _RSHSP-REUSE ! _RSHSP-SOURCE-TARGET _RSHSP-BUILD-BATCH
+    0 _RSHSP-REUSE !
     0 _RSHSP-DTASK-N ! 0 _RSHSP-DPANE-N ! 0 _RSHSP-DSER-N !
     \ New runs take identities above every one published or consumed by an
     \ acknowledged hidden START, which the producer's frontier covers.

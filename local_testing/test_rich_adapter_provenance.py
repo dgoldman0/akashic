@@ -93,6 +93,24 @@ _RP-DONE
 ''', minimum=87, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
 
 
+def test_safe_mode_captures_an_unchanged_document_afresh():
+    run_series(_program() + r'''
+\ In normal mode an unchanged document's slices are reused, and the content
+\ epoch stays.
+2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT _RP-OWNER
+_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 1 = _RA-ASSERT
+\ Safe mode captures every document afresh on every draw, so the epoch
+\ moves with each one although nothing changed.
+CHK-WHY-BOOT CHK-SAFE-ON
+3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT _RP-OWNER
+_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 3 = _RA-ASSERT
+_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT
+4 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT _RP-OWNER
+_RA-SNAP @ RUHA-SNAPSHOT-CONTENT-EPOCH@ 4 = _RA-ASSERT
+_RP-DONE
+''', minimum=50, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",), marker="PROVENANCE")
+
+
 def test_every_frame_checks_validate_a_stored_slice_before_reuse():
     run_series(_program() + r'''
 \ A byte that is not UTF-8 in the stored collection slice, written after

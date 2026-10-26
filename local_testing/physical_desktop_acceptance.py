@@ -28,7 +28,8 @@ the image turns on the shadow check of the rich frame's shortcuts at boot
 and compares, and the run fails on any difference, or when the check was
 not on after all.  With --every-frame-checks the image turns every check
 on at boot, once Desk has loaded (tui/check-mode.f), and the run fails when
-they were not on after all.
+they were not on after all.  With --safe-mode it boots in safe mode, and
+fails when the guest did not report it.
 """
 from __future__ import annotations
 
@@ -157,6 +158,7 @@ def child(args) -> int:
         "screen_profile": args.screen_profile,
         "shadow_check": args.shadow_check,
         "every_frame_checks": args.every_frame_checks,
+        "safe_mode": args.safe_mode,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -174,6 +176,8 @@ def child(args) -> int:
         sys.argv.append("--shadow-check")
     if args.every_frame_checks:
         sys.argv.append("--every-frame-checks")
+    if args.safe_mode:
+        sys.argv.append("--safe-mode")
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -206,6 +210,8 @@ def supervise(args) -> int:
         command.append("--shadow-check")
     if args.every_frame_checks:
         command.append("--every-frame-checks")
+    if args.safe_mode:
+        command.append("--safe-mode")
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
@@ -217,6 +223,8 @@ def supervise(args) -> int:
         kind += ", shadow check"
     if args.every_frame_checks:
         kind += ", every-frame checks"
+    if args.safe_mode:
+        kind += ", safe mode"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -254,6 +262,10 @@ def supervise(args) -> int:
         print("Every-frame checks: asked for, but the guest did not report them on",
               flush=True)
         passed = False
+    if passed and args.safe_mode and safe_mode_reason(artifact) != "boot":
+        print("Safe mode: asked for at boot, but the guest did not report it",
+              flush=True)
+        passed = False
     return 0 if passed else 1
 
 
@@ -283,6 +295,18 @@ def every_frame_checks_were_on(artifact: Path) -> bool:
     return bool(record.get("every_frame")) and not record.get("unavailable")
 
 
+def safe_mode_reason(artifact: Path) -> str | None:
+    """Why the run's final guest diagnostics show safe mode on, or None."""
+
+    try:
+        diagnostics = json.loads(
+            (artifact / "evidence" / "final-guest-diagnostics.json").read_text()
+        )
+    except (OSError, ValueError):
+        return None
+    return (diagnostics.get("check_mode") or {}).get("safe_mode")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--akashic-root", required=True, type=Path)
@@ -303,6 +327,9 @@ def main() -> int:
     parser.add_argument("--every-frame-checks", action="store_true",
                         help="run every check on every frame instead of "
                              "normal mode")
+    parser.add_argument("--safe-mode", action="store_true",
+                        help="boot in safe mode: every frame takes the full "
+                             "path, with every check")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

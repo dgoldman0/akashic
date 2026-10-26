@@ -319,13 +319,14 @@ def test_each_check_runs_only_after_its_shortcut_was_taken():
     source = PRODUCER.read_text()
     glyphs = _word(source, "_RTHP-BUILD-GLYPHS?")
     held = glyphs[glyphs.index("_RTHP-GLYPHS-HELD?"):glyphs.index("0 OVER _RTHP.GLYPH-DRAW !")]
-    damage, full = glyphs[glyphs.index("0 OVER _RTHP.GLYPH-DRAW !"):].split("ELSE", 1)
+    after = glyphs[glyphs.index("_RTHP-BUILD-GLYPHS-DAMAGE?"):]
+    damage, full = after.split("ELSE", 1)
     hook = "FSHD? IF DUP _RTHP-SH-GLYPHS THEN"
     # A held plan is checked once it is wrapped and a plan of damaged rows
     # once it is made. A full plan is the path the check runs, so it is not
     # checked.
     assert held.index("_RTHP-WRAP-GLYPH-PLAN? IF") < held.index(hook)
-    assert "_RTHP-BUILD-GLYPHS-DAMAGE? IF" in damage and hook in damage
+    assert "_RTHP-BUILD-GLYPHS-DAMAGE? THEN IF" in damage and hook in damage
     assert "_RTHP-SH-GLYPHS" not in full
     # Menu controls are checked only when reuse copied them.
     menus = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")

@@ -7367,3 +7367,19 @@ def test_bank_headers_walk_the_packing_again_only_with_every_frame_checks() -> N
     for deep in ("_RTHP-PACKED-BANK?", "_RTHP-TARGET-MENU-DIRECTORY?",
                  "_RTHP-ACTIVE-BANK-HEADER?"):
         assert "CHK-EVERY-FRAME" not in _word(source, deep)
+
+
+def test_safe_mode_takes_the_producer_s_full_paths() -> None:
+    source = _source()
+    # The held plan and the damaged-rows path are shortcuts; safe mode builds
+    # every draw's glyph plan whole.
+    glyphs = _word(source, "_RTHP-BUILD-GLYPHS?")
+    assert "CHK-SAFE? IF 0 ELSE DUP _RTHP-GLYPHS-HELD? THEN IF" in glyphs
+    assert "CHK-SAFE? IF 0 ELSE DUP _RTHP-BUILD-GLYPHS-DAMAGE? THEN IF" in glyphs
+    # Menus are planned afresh, and the unchanged route is never taken.
+    menus = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    assert ("CHK-SAFE? IF 0 ELSE _RTHP-W-MENU-REUSE-BASELINE? THEN _RTHP-W-MR-ENABLED !"
+            in menus)
+    stage = _word(source, "_RTHP-STAGE-LIVE-CANDIDATE")
+    assert stage.index("_RTHP.EXTENSION @ 0= CHK-SAFE? 0= AND IF") < stage.index(
+        "_RTHP-UNCHANGED-CANDIDATE?")

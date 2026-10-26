@@ -14,7 +14,8 @@ turns on the shadow check of the rich frame's shortcuts at boot, and the run
 fails on any difference it finds (tui/rich-terminal/frame-shadow.f). With
 --every-frame-checks the image runs every check on every frame instead of
 normal mode (tui/check-mode.f), and the run fails when they were not on
-after all.
+after all. With --safe-mode it boots in safe mode, and fails when the guest
+did not report it.
 """
 from __future__ import annotations
 
@@ -111,7 +112,8 @@ def supervise(args):
                "--artifact", str(artifact),
                *(["--screen-profile"] if args.screen_profile else []),
                *(["--shadow-check"] if args.shadow_check else []),
-               *(["--every-frame-checks"] if args.every_frame_checks else [])]
+               *(["--every-frame-checks"] if args.every_frame_checks else []),
+               *(["--safe-mode"] if args.safe_mode else [])]
     environment = dict(os.environ, SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy",
                        MEGAFORTH_EXECUTOR="native", MEGAFORTH_NATIVE_PROFILE="0",
                        MEGAPAD_ROOT=str(args.megapad_root))
@@ -185,6 +187,7 @@ def worker(args):
         "font_size": 18, "action_delay_seconds": 0.75, "typing_hz": 5, "hold_seconds": 0,
         "screen_profile": args.screen_profile, "shadow_check": args.shadow_check,
         "every_frame_checks": args.every_frame_checks,
+        "safe_mode": args.safe_mode,
     })
     start = time.monotonic_ns()
     trace_file = (artifact / "typing-trace.jsonl").open("w")
@@ -200,7 +203,8 @@ def worker(args):
     mark("source_build_started")
     image = tui.build_image("desktop-apt1", artifact / "desktop.img", None,
                             backend="simulator", shadow_check=args.shadow_check,
-                            every_frame_checks=args.every_frame_checks)
+                            every_frame_checks=args.every_frame_checks,
+                            safe_mode=args.safe_mode)
     mark("source_build_complete", image_sha256=sha256(image))
     socket_path = str(Path(tempfile.mkdtemp(prefix="rich-diag-")) / "session.sock")
     ordinary = tui._session_server_command(
@@ -405,6 +409,11 @@ def worker(args):
             raise RuntimeError(
                 "every-frame checks were asked for, but the guest did not report them on"
             )
+        if args.safe_mode and check_mode.get("safe_mode") != "boot":
+            outcome = "safe_mode_off"
+            raise RuntimeError(
+                "safe mode was asked for at boot, but the guest did not report it"
+            )
     except BaseException as exc:
         mark("diagnostic_error", error=f"{type(exc).__name__}: {exc}")
         raise
@@ -460,6 +469,9 @@ def main():
         item.add_argument("--every-frame-checks", action="store_true",
                           help="run every check on every frame instead of "
                                "normal mode")
+        item.add_argument("--safe-mode", action="store_true",
+                          help="boot in safe mode: every frame takes the full "
+                               "path, with every check")
     for item in (driver, server):
         item.add_argument("--artifact", type=lambda p: Path(p).resolve(), required=True)
     server.add_argument("server_args", nargs=argparse.REMAINDER)

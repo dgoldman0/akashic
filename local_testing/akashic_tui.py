@@ -28225,6 +28225,14 @@ def _with_every_frame_checks(autoexec: str, modules: tuple[str, ...]) -> str:
     )
 
 
+def _with_safe_mode(autoexec: str, modules: tuple[str, ...]) -> str:
+    """Turn safe mode on at boot, once the profile's modules have loaded
+    (tui/check-mode.f): every frame takes the full path, with every check."""
+    if CHECK_MODE_MODULE not in modules:
+        raise RuntimeError("--safe-mode needs a profile that loads tui/check-mode.f")
+    return _after_last_require(autoexec, "CHK-WHY-BOOT CHK-SAFE-ON", "--safe-mode")
+
+
 def build_image(
     profile_name: str,
     output: Path | None = None,
@@ -28233,6 +28241,7 @@ def build_image(
     backend: str = "emulator",
     shadow_check: bool = False,
     every_frame_checks: bool = False,
+    safe_mode: bool = False,
 ) -> Path:
     profile, backend = _profile_backend(profile_name, backend)
     autoexec = profile.autoexec
@@ -28262,6 +28271,8 @@ def build_image(
         autoexec = _with_frame_shadow(autoexec, modules)
     if every_frame_checks:
         autoexec = _with_every_frame_checks(autoexec, modules)
+    if safe_mode:
+        autoexec = _with_safe_mode(autoexec, modules)
     samples = _sample_files(modules)
     requires_networking = (
         profile.megapad_networking or _requires_megapad_networking(modules)
@@ -37213,6 +37224,14 @@ def _parser() -> argparse.ArgumentParser:
                 "(tui/check-mode.f)"
             ),
         )
+        command.add_argument(
+            "--safe-mode",
+            action="store_true",
+            help=(
+                "boot in safe mode: every frame takes the full path, with "
+                "every check (tui/check-mode.f)"
+            ),
+        )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--cols", type=int, default=100
@@ -37369,6 +37388,7 @@ def main() -> int:
         backend=args.backend,
         shadow_check=args.shadow_check,
         every_frame_checks=args.every_frame_checks,
+        safe_mode=args.safe_mode,
     )
     if args.command == "build":
         return 0

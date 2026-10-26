@@ -846,10 +846,11 @@ Taken on 2026-10-25:
    quiet for one second, and at least one every five seconds while the
    screen is shown. Both are settings.
 
-Open, to be taken before the part that needs it:
+Taken on 2026-10-26:
 
-8. **What the projection keeps** (part 9). Proposed: only the revisions each
-   element last projected and the wire items they became, with content
-   captured into scratch when it changes. The alternative keeps a
-   renderer-neutral copy of each element's content, which costs memory and
-   buys nothing a current renderer reads.
+8. **What the projection keeps** (part 9). Only the revisions each element
+   last projected and the wire items they became, with content captured
+   into scratch when it changes, in every mode. A renderer-neutral copy of
+   each element's content would cost memory and give no current renderer
+   anything it reads; safe mode builds every frame from live state, so it
+   would not read one either.

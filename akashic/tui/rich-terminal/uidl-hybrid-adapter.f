@@ -3495,10 +3495,14 @@ VARIABLE _RUHA-SH-SPAN-U
         _RUHA-B-DIALOG-DESCRIPTORS-A !
     _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIALOG-NATIVE-A
         _RUHA-B-DIALOG-NATIVE-A !
-    FSHD? IF _RUHA-SH-FULL THEN
+    \ Safe mode (check-mode.f) captures every document afresh, as the
+    \ shadow check's full capture does, so there is no reuse to compare.
+    CHK-SAFE? 0= FSHD? AND IF _RUHA-SH-FULL THEN
     _RUHA-B-START
+    CHK-SAFE? _RUHA-B-FULL !
     _RUHA-B-CAPTURE-ALL
-    FSHD? IF _RUHA-SH-CHECK THEN
+    0 _RUHA-B-FULL !
+    CHK-SAFE? 0= FSHD? AND IF _RUHA-SH-CHECK THEN
     _RUHA-B-STATUS @ RUHA-S-OK <> IF
         _RUHA-B-CLEAR-STAGED
         _RUHA-B-STATUS @ DUP _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
