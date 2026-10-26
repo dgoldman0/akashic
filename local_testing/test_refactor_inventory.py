@@ -124,9 +124,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 699,
-        "resolved_require_occurrence_count": 2575,
-        "unique_resolved_edge_count": 2575,
+        "module_count": 701,
+        "resolved_require_occurrence_count": 2580,
+        "unique_resolved_edge_count": 2580,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -524,7 +524,13 @@ def test_l9_host_and_platform_dependency_boundaries_are_ratchets() -> None:
         (
             "tui/platform/mp64fs-vfs.f",
             "utils/fs/drivers/vfs-mp64fs.f",
-        )
+        ),
+        # The settings disk's one-read mount, which Desk's system settings
+        # use, is the platform's too.
+        (
+            "tui/platform/settings-disk.f",
+            "utils/fs/drivers/vfs-mp64fs.f",
+        ),
     ]
 
 

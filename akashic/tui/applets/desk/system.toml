@@ -1,0 +1,15 @@
+# =========================================================
+#  system.toml — Desk's system settings
+# =========================================================
+#  This file lives on the settings disk, which the machine
+#  reads and never writes: only the host changes it, by
+#  rebuilding or editing the settings image.
+
+# ---------------------------------------------------------
+#  Rich terminal
+# ---------------------------------------------------------
+[desk.rich-terminal]
+# Safe mode builds every frame in full from live state and
+# runs every check, at a cost in speed; Desk says so on
+# screen while it is on.
+safe-mode = false

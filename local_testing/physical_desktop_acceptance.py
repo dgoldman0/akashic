@@ -29,7 +29,10 @@ and compares, and the run fails on any difference, or when the check was
 not on after all.  With --every-frame-checks the image turns every check
 on at boot, once Desk has loaded (tui/check-mode.f), and the run fails when
 they were not on after all.  With --safe-mode it boots in safe mode, and
-fails when the guest did not report it.
+with --settings-safe-mode the settings disk's system settings ask for it;
+either way the run fails when the guest did not report safe mode for that
+reason, or no frame showed the notice that says so.  Without either, it
+fails when the guest reports safe mode on.
 """
 from __future__ import annotations
 
@@ -159,6 +162,7 @@ def child(args) -> int:
         "shadow_check": args.shadow_check,
         "every_frame_checks": args.every_frame_checks,
         "safe_mode": args.safe_mode,
+        "settings_safe_mode": args.settings_safe_mode,
     })
     sys.argv = [str(args.akashic_root / "local_testing/akashic_tui.py"),
                 "accept", "--profile", profile, "--backend", args.backend,
@@ -178,6 +182,8 @@ def child(args) -> int:
         sys.argv.append("--every-frame-checks")
     if args.safe_mode:
         sys.argv.append("--safe-mode")
+    if args.settings_safe_mode:
+        sys.argv.append("--settings-safe-mode")
     result = tui.main()
     after = {"akashic": git_binding(args.akashic_root, clean=clean),
              "megapad": git_binding(args.megapad_root, clean=clean)}
@@ -212,6 +218,8 @@ def supervise(args) -> int:
         command.append("--every-frame-checks")
     if args.safe_mode:
         command.append("--safe-mode")
+    if args.settings_safe_mode:
+        command.append("--settings-safe-mode")
     kind = KIND if args.applet is None else f"{APPLET_KIND}: {args.applet}"
     if args.backend != "simulator":
         kind += f" ({args.backend})"
@@ -225,6 +233,8 @@ def supervise(args) -> int:
         kind += ", every-frame checks"
     if args.safe_mode:
         kind += ", safe mode"
+    if args.settings_safe_mode:
+        kind += ", safe mode from the system settings"
     environment = dict(os.environ, MEGAPAD_ROOT=str(args.megapad_root),
                        MEGAFORTH_EXECUTOR="native")
     environment.pop("MEGAFORTH_NATIVE_PROFILE", None)
@@ -262,9 +272,12 @@ def supervise(args) -> int:
         print("Every-frame checks: asked for, but the guest did not report them on",
               flush=True)
         passed = False
-    if passed and args.safe_mode and safe_mode_reason(artifact) != "boot":
-        print("Safe mode: asked for at boot, but the guest did not report it",
-              flush=True)
+    expected_reason = (
+        "boot" if args.safe_mode else "config" if args.settings_safe_mode else None
+    )
+    mismatch = safe_mode_mismatch(artifact, expected_reason) if passed else None
+    if mismatch is not None:
+        print(f"Safe mode: {mismatch}", flush=True)
         passed = False
     return 0 if passed else 1
 
@@ -307,6 +320,23 @@ def safe_mode_reason(artifact: Path) -> str | None:
     return (diagnostics.get("check_mode") or {}).get("safe_mode")
 
 
+def safe_mode_mismatch(artifact: Path, expected: str | None) -> str | None:
+    """How the run's safe mode differs from what it asked for, or None.
+    The guest must report safe mode for the EXPECTED reason, "boot" or
+    "config", or report it off when none was asked for: a run in normal
+    mode that ends in safe mode met an anomaly, or settings that ask for
+    it."""
+
+    reason = safe_mode_reason(artifact)
+    if reason == expected:
+        return None
+    if expected is None:
+        return f"not asked for, but the guest reported it on ({reason})"
+    if reason is None:
+        return f"asked for ({expected}), but the guest did not report it"
+    return f"asked for ({expected}), but the guest reported it for {reason}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--akashic-root", required=True, type=Path)
@@ -330,6 +360,9 @@ def main() -> int:
     parser.add_argument("--safe-mode", action="store_true",
                         help="boot in safe mode: every frame takes the full "
                              "path, with every check")
+    parser.add_argument("--settings-safe-mode", action="store_true",
+                        help="build the settings disk with Desk's system "
+                             "settings asking for safe mode")
     parser.add_argument("--screen-profile", action="store_true",
                         help="record what each PRESENT carries and the guest words each "
                              "step runs under, in the evidence's screen-profile "

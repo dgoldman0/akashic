@@ -2022,6 +2022,8 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/uidl-menu-snapshot.f",
         "tui/uidl-picture-snapshot.f",
         "tui/uidl-dialog-snapshot.f",
+        "tui/desk-system-settings.f",
+        "tui/platform/settings-disk.f",
     }
     retired_prototypes = {
         "tui/rich-terminal/uidl-projector.f",
@@ -2030,8 +2032,11 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     }
     for module in retired_prototypes:
         assert not (SOURCE_ROOT / module).exists(), module
-    baseline_closure = set(dependency_order(baseline.roots))
-    rich_closure = set(dependency_order(profile.roots))
+    # Both images mount the boot disk through the platform module, which
+    # their composition loads first.
+    platform = (MP64FS_VFS_PLATFORM_MODULE,)
+    baseline_closure = set(dependency_order(platform + baseline.roots))
+    rich_closure = set(dependency_order(platform + profile.roots))
     assert rich_modules.isdisjoint(baseline_closure)
     assert rich_modules <= rich_closure
     assert rich_closure - baseline_closure == rich_modules
@@ -2186,6 +2191,9 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
         str(MEGAPAD_ROOT / "bios.asm"),
         "--storage",
         str(image),
+        # The Desktop's settings disk, built beside its image.
+        "--settings-storage",
+        "desktop-apt1-settings.img",
         "--socket",
         socket_path,
         "--cols",
@@ -2272,6 +2280,8 @@ def test_simulator_server_command_uses_only_semantic_machine_arguments() -> None
         "simulator",
         "--storage",
         str(image),
+        "--settings-storage",
+        str(image.with_name(f"{image.stem}-settings{image.suffix}")),
         "--socket",
         "/tmp/desktop-simulator.sock",
         "--ram-kib",
@@ -3183,7 +3193,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         backend="simulator",
         phase_profile=True,
         phase_profile_max_events=1234,
-        safe_mode=True,
+        safe_mode="boot",
     )
 
     assert accepted is not runner_fails
@@ -3222,7 +3232,7 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 # The canonical journey, not one for Desk with one applet.
                 "journey": None,
                 # The image boots in safe mode, so the run requires its notice.
-                "safe_mode": True,
+                "safe_mode": "boot",
             },
         )
     ]

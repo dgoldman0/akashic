@@ -34,6 +34,7 @@ REQUIRE rich-terminal/engine-apt1.f
 REQUIRE rich-terminal/hybrid-screen-producer.f
 REQUIRE rich-terminal/shell-screen-producer.f
 REQUIRE applets/desk/desk.f
+REQUIRE desk-system-settings.f
 
 [UNDEFINED] APT1-DESK-RX-CAPACITY [IF]
 8192 CONSTANT APT1-DESK-RX-CAPACITY
@@ -828,7 +829,10 @@ _A1D-PHASE-COLD _A1D-PHASE !
 : _A1D-STATUS-THROW  ( status -- )
     -3400 SWAP - THROW ;
 
+\ Desk's system settings may ask for safe mode, so they are read before
+\ the first frame is built.
 : _A1D-RUN-BODY  ( -- )
+    DSET-APPLY
     _A1D-SETUP
     DUP SCB-S-OK <> IF _A1D-STATUS-THROW THEN DROP
     DESK-RUN ;

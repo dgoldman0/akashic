@@ -5397,7 +5397,7 @@ def test_physical_runner_in_safe_mode_requires_its_notice_before_it_passes() -> 
     source = inspect.getsource(acceptance_runner.run_physical_desktop_acceptance)
     ack_index = source.index("keyboard.acknowledge_display_offer(")
     notice_index = source.index(
-        "_shows_safe_mode_notice(frame_offer, frame_projection)", ack_index
+        "_shows_safe_mode_notice(frame_offer, frame_projection, safe_mode)", ack_index
     )
     journey_index = source.index("progress = journey.after_present(", notice_index)
     required_index = source.index("no frame showed its notice", journey_index)

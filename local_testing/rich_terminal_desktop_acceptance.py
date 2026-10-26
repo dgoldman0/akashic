@@ -3192,11 +3192,14 @@ def _require_notice(offer, notice: _SemanticDialogClaim, severity: StatusSeverit
         raise PhysicalDesktopAcceptanceError("CELL does not show the notice on its row")
 
 
-def _shows_safe_mode_notice(offer, projection: RichScreenProjection) -> bool:
-    """Whether the frame shows the notice that safe mode is on as asked at
-    boot.  It must be a warning, and CELL must show it on its row."""
+def _shows_safe_mode_notice(
+    offer, projection: RichScreenProjection, reason: str = "boot",
+) -> bool:
+    """Whether the frame shows the notice that safe mode is on for REASON,
+    "boot" or "config".  It must be a warning, and CELL must show it on its
+    row."""
 
-    notice = _notice_claim(projection, SAFE_MODE_BOOT_NOTICE)
+    notice = _notice_claim(projection, SAFE_MODE_NOTICES[reason])
     if notice is None:
         return False
     _require_notice(offer, notice, StatusSeverity.WARNING)
@@ -11837,11 +11840,18 @@ def shadow_check_record(client) -> dict:
 CHECK_MODE_VARIABLE = "CHK-EVERY-FRAME"
 SAFE_MODE_VARIABLE = "CHK-SAFE-MODE"
 SAFE_MODE_REASONS = {1: "config", 2: "boot", 3: "anomaly"}
-# The rich terminal's owner says so when safe mode is on as asked at boot
-# (tui/app-shell-apt1.f), in a warning notice.
-SAFE_MODE_BOOT_NOTICE = (
-    "Safe mode is on, as asked at boot: every frame is built in full and checked."
-)
+# The rich terminal's owner says so when safe mode is on (tui/app-shell-apt1.f),
+# in a warning notice that names why: as asked at boot, or as the system
+# settings ask.
+SAFE_MODE_NOTICES = {
+    "boot": (
+        "Safe mode is on, as asked at boot: every frame is built in full and checked."
+    ),
+    "config": (
+        "Safe mode is on, as the system settings ask: every frame is built in "
+        "full and checked."
+    ),
+}
 DAMAGE_VARIABLES = ("CHK-DAMAGE-A", "CHK-DAMAGE-U", "CHK-DAMAGE-COUNT")
 # A structure's name is a short phrase; a longer one is not read.
 DAMAGE_NAME_MAX = 256
@@ -12111,13 +12121,14 @@ def run_physical_desktop_acceptance(
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
     journey: FrameBoundJourney | None = None,
-    safe_mode: bool = False,
+    safe_mode: str | None = None,
 ) -> PhysicalDesktopAcceptanceEvidence:
     """Run and record a reference-sink journey: the canonical one across Desk,
     Pad, and Daybook, or JOURNEY, such as one for Desk with a single applet.
-    SAFE_MODE says the guest was asked to boot in safe mode: some frame
-    before the journey ends must then show the warning notice that says so,
-    in its rich frame and its CELL."""
+    SAFE_MODE is why the guest was asked to be in safe mode, "boot" or
+    "config" (its system settings), or None: some frame before the journey
+    ends must then show the warning notice that says so for that reason, in
+    its rich frame and its CELL."""
 
     if timeout <= 0:
         raise ValueError("timeout must be positive")
@@ -12865,7 +12876,7 @@ def run_physical_desktop_acceptance(
             if (
                 safe_mode
                 and safe_notice_offer is None
-                and _shows_safe_mode_notice(frame_offer, frame_projection)
+                and _shows_safe_mode_notice(frame_offer, frame_projection, safe_mode)
             ):
                 safe_notice_offer = frame_offer.offer_id
                 trace.mark(
@@ -12896,7 +12907,8 @@ def run_physical_desktop_acceptance(
             if progress.complete:
                 if safe_mode and safe_notice_offer is None:
                     raise PhysicalDesktopAcceptanceError(
-                        "safe mode was asked for at boot, but no frame showed its notice"
+                        f"safe mode was asked for ({safe_mode}), "
+                        "but no frame showed its notice"
                     )
                 final_cell = _require_cell_fallback_evidence(
                     "final",

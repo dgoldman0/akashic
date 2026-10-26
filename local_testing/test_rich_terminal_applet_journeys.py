@@ -7,6 +7,7 @@ the physical runner would present and checks the one input each sends.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -95,7 +96,7 @@ from rich_terminal_applet_journeys import (
     applet_journey,
 )
 from rich_terminal_desktop_acceptance import (
-    SAFE_MODE_BOOT_NOTICE,
+    SAFE_MODE_NOTICES,
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
@@ -1683,15 +1684,55 @@ def test_daybook_alone_requires_the_notice_in_rich_and_cell() -> None:
 
 def test_a_run_in_safe_mode_finds_its_notice_as_a_warning_in_rich_and_cell() -> None:
     frame = _pad_frame("", (1, 0))
-    offer = _notice_offer(SAFE_MODE_BOOT_NOTICE)
+    boot = SAFE_MODE_NOTICES["boot"]
+    offer = _notice_offer(boot)
     assert not _shows_safe_mode_notice(offer, frame)
-    shown = _noticed(frame, _notice(SAFE_MODE_BOOT_NOTICE, StatusSeverity.WARNING))
+    shown = _noticed(frame, _notice(boot, StatusSeverity.WARNING))
     assert _shows_safe_mode_notice(offer, shown)
     with pytest.raises(PhysicalDesktopAcceptanceError, match="CELL does not show"):
         _shows_safe_mode_notice(_cell_offer(1, ()), shown)
-    neutral = _noticed(frame, _notice(SAFE_MODE_BOOT_NOTICE))
+    neutral = _noticed(frame, _notice(boot))
     with pytest.raises(PhysicalDesktopAcceptanceError, match="NEUTRAL, not WARNING"):
         _shows_safe_mode_notice(offer, neutral)
+    # Safe mode the system settings ask for has its own notice; the boot
+    # option's does not stand for it.
+    config = SAFE_MODE_NOTICES["config"]
+    assert not _shows_safe_mode_notice(offer, shown, "config")
+    assert _shows_safe_mode_notice(
+        _notice_offer(config),
+        _noticed(frame, _notice(config, StatusSeverity.WARNING)),
+        "config",
+    )
+
+
+def test_a_physical_run_ends_in_the_safe_mode_it_asked_for(tmp_path) -> None:
+    """The launcher requires the guest to report safe mode for the reason
+    the run asked, or off when it asked for none: a normal run that ends in
+    safe mode met an anomaly, or settings that ask for it."""
+
+    def reported(reason):
+        evidence = tmp_path / "evidence"
+        evidence.mkdir(exist_ok=True)
+        (evidence / "final-guest-diagnostics.json").write_text(
+            json.dumps({"check_mode": {"safe_mode": reason}})
+        )
+        return tmp_path
+
+    mismatch = physical_desktop_acceptance.safe_mode_mismatch
+    for reason in (None, "boot", "config"):
+        assert mismatch(reported(reason), reason) is None
+    assert mismatch(reported("anomaly"), None) == (
+        "not asked for, but the guest reported it on (anomaly)"
+    )
+    assert mismatch(reported("config"), None) == (
+        "not asked for, but the guest reported it on (config)"
+    )
+    assert mismatch(reported(None), "config") == (
+        "asked for (config), but the guest did not report it"
+    )
+    assert mismatch(reported("boot"), "config") == (
+        "asked for (config), but the guest reported it for boot"
+    )
 
 
 FEXP_READY = ("Details", "Tools")

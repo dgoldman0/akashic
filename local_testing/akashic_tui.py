@@ -514,6 +514,10 @@ class Profile:
     session_entry: str | None = None
     # Zero preserves KDOS's default dictionary/general-XMEM partition.
     general_xmem_reserve_bytes: int = 0
+    # The system settings, Akashic paths that go on the settings disk: the
+    # second storage unit, whose medium the machine reads and never writes.
+    # A profile with none gets no settings disk.
+    settings_files: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -871,6 +875,13 @@ def desktop_roots(applets, *, rich: bool = False) -> tuple[str, ...]:
         *(applet.module for applet in applets),
         *((_DESK_AGENT_PROVIDER,) if agent else ()),
     )
+
+
+# Desk's system settings, which the settings disk holds.  Desk with a rich
+# terminal reads them as it starts (tui/desk-system-settings.f).
+DESK_SYSTEM_SETTINGS = "tui/applets/desk/system.toml"
+# The settings disk's sectors: the RTL settings slot's default window.
+SETTINGS_DISK_SECTORS = 2048
 
 
 def desktop_resources(applets) -> tuple[str, ...]:
@@ -11739,6 +11750,7 @@ _ct-run
         smoke_timeout=DESKTOP_SMOKE_TIMEOUT,
         total_sectors=65536,
         minimum_free_bytes=1 << 20,
+        settings_files=(DESK_SYSTEM_SETTINGS,),
     ),
     "agent-widgets": Profile(
         roots=(
@@ -28103,6 +28115,38 @@ def _simulator_session_autoexec(autoexec: str, session_entry: str) -> str:
     return "".join(lines)
 
 
+def settings_image_path(image_path: Path) -> Path:
+    """The settings disk's image built beside the system disk's IMAGE_PATH."""
+
+    return image_path.with_name(f"{image_path.stem}-settings{image_path.suffix}")
+
+
+def _settings_image_for(profile: Profile, image_path: Path) -> Path | None:
+    """The settings image a launch of PROFILE's IMAGE_PATH attaches, or None
+    for a profile with no system settings."""
+
+    return settings_image_path(image_path) if profile.settings_files else None
+
+
+def _build_settings_image(profile: Profile, target: Path, *, safe_mode: bool) -> Path:
+    """Write PROFILE's settings disk beside TARGET: its system settings
+    files on an MP64FS volume.  SAFE_MODE writes Desk's settings asking for
+    safe mode."""
+
+    fs = MP64FS(total_sectors=SETTINGS_DISK_SECTORS)
+    fs.format()
+    for relative in profile.settings_files:
+        text = (AKASHIC_ROOT / "akashic" / relative).read_text(encoding="utf-8")
+        if safe_mode and relative == DESK_SYSTEM_SETTINGS:
+            if text.count("safe-mode = false\n") != 1:
+                raise RuntimeError(f"{relative} must hold one safe-mode = false line")
+            text = text.replace("safe-mode = false\n", "safe-mode = true\n")
+        fs.inject_file(Path(relative).name, text.encode("utf-8"), ftype=FTYPE_TEXT)
+    settings = settings_image_path(target)
+    fs.save(settings)
+    return settings
+
+
 def default_image_path(profile: str, *, backend: str = "emulator") -> Path:
     selected = _machine_backend(backend)
     suffix = f"-{selected}" if selected in SEMANTIC_BACKENDS else ""
@@ -28242,8 +28286,14 @@ def build_image(
     shadow_check: bool = False,
     every_frame_checks: bool = False,
     safe_mode: bool = False,
+    settings_safe_mode: bool = False,
 ) -> Path:
     profile, backend = _profile_backend(profile_name, backend)
+    if settings_safe_mode and DESK_SYSTEM_SETTINGS not in profile.settings_files:
+        raise RuntimeError(
+            "--settings-safe-mode needs a profile whose settings disk holds "
+            f"{DESK_SYSTEM_SETTINGS}"
+        )
     autoexec = profile.autoexec
     if codex_auth_checkpoint is not None:
         autoexec = _with_codex_auth_checkpoint(autoexec, codex_auth_checkpoint)
@@ -28570,6 +28620,11 @@ def build_image(
     fs.save(target)
     if codex_auth_checkpoint is not None:
         target.chmod(0o600)
+    settings = (
+        _build_settings_image(profile, target, safe_mode=settings_safe_mode)
+        if profile.settings_files
+        else None
+    )
 
     info = fs.info()
     if info["free_sectors"] * 512 < profile.minimum_free_bytes:
@@ -28606,6 +28661,12 @@ def build_image(
         +
         f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes, "
         f"{info['free_sectors']} free sectors"
+        + (
+            f"\n  settings disk: {settings}"
+            f"{' (asks for safe mode)' if settings_safe_mode else ''}"
+            if settings is not None
+            else ""
+        )
     )
     return target
 
@@ -29259,6 +29320,7 @@ def smoke(
     with MachineSession.from_bios(
         MEGAPAD_ROOT / "bios.asm",
         storage_image=image_path,
+        settings_image=_settings_image_for(profile, image_path),
         cols=cols,
         rows=rows,
         batch_steps=500_000,
@@ -35061,6 +35123,11 @@ def _megapad_launcher(mode: str) -> list[str]:
     return [sys.executable, str(MEGAPAD_ROOT / "megapad.py"), "--mode", mode]
 
 
+def _settings_storage_arguments(profile: Profile, image_path: Path) -> tuple[str, ...]:
+    settings = _settings_image_for(profile, image_path)
+    return () if settings is None else ("--settings-storage", str(settings))
+
+
 def _session_server_command(
     profile_name: str,
     image_path: Path,
@@ -35114,6 +35181,7 @@ def _session_server_command(
             *_megapad_launcher(backend),
             "--storage",
             str(image_path),
+            *_settings_storage_arguments(profile, image_path),
             "--socket",
             socket_path,
             "--ram-kib",
@@ -35150,6 +35218,7 @@ def _session_server_command(
         str(MEGAPAD_ROOT / "bios.asm"),
         "--storage",
         str(image_path),
+        *_settings_storage_arguments(profile, image_path),
         "--socket",
         socket_path,
         "--cols",
@@ -35230,13 +35299,14 @@ def accept_physical_desktop(
     clusters: int | None = None,
     terminal_link_pace=None,
     screen_profile: bool = False,
-    safe_mode: bool = False,
+    safe_mode: str | None = None,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey.  SCREEN_PROFILE
     has the simulator record what each PRESENT carries and the guest words
     each step runs under, in ARTIFACT_ROOT/screen-profile.  SAFE_MODE says
-    the image boots in safe mode, so the journey must see its notice."""
+    why the guest is in safe mode, "boot" or "config", so the journey must
+    see the notice that says so."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -37235,6 +37305,14 @@ def _parser() -> argparse.ArgumentParser:
                 "every check (tui/check-mode.f)"
             ),
         )
+        command.add_argument(
+            "--settings-safe-mode",
+            action="store_true",
+            help=(
+                "build the settings disk with Desk's system settings asking "
+                "for safe mode"
+            ),
+        )
         if name in ("smoke", "serve"):
             command.add_argument(
                 "--cols", type=int, default=100
@@ -37392,6 +37470,7 @@ def main() -> int:
         shadow_check=args.shadow_check,
         every_frame_checks=args.every_frame_checks,
         safe_mode=args.safe_mode,
+        settings_safe_mode=args.settings_safe_mode,
     )
     if args.command == "build":
         return 0
@@ -37434,7 +37513,13 @@ def main() -> int:
             clusters=args.clusters,
             terminal_link_pace=args.terminal_link_pace,
             screen_profile=args.screen_profile,
-            safe_mode=args.safe_mode,
+            # The boot option is set before Desk reads its system settings,
+            # and safe mode keeps the first reason it is given.
+            safe_mode=(
+                "boot" if args.safe_mode
+                else "config" if args.settings_safe_mode
+                else None
+            ),
         ) else 1
     serve(
         args.profile,

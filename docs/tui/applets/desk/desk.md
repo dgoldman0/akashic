@@ -564,6 +564,20 @@ in `_DESK-CFG-A` / `_DESK-CFG-L`.  `DESK-INIT-CB` will call
 A sample config template is provided in
 [desk.toml](../../../../akashic/tui/applets/desk/desk.toml).
 
+## System Settings
+
+Desk's system settings live in
+[system.toml](../../../../akashic/tui/applets/desk/system.toml) on the
+settings disk: MegaPad's second storage unit, whose medium is
+write-protected, so that only the host changes it, by rebuilding or editing
+the settings image (`akashic_tui.py build --settings-safe-mode` writes it
+asking for safe mode).  Desk with a rich terminal reads them as it starts
+(`DSET-APPLY` in `tui/desk-system-settings.f`, which mounts the disk for
+one read through `tui/platform/settings-disk.f`).  Today they hold one key:
+`[desk.rich-terminal] safe-mode`, which turns safe mode on
+(`tui/check-mode.f`) with the system settings as its reason.  Settings
+that are absent, unreadable or malformed ask for nothing.
+
 ## API Reference
 
 ### Sub-App Management
