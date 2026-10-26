@@ -3190,6 +3190,17 @@ def _require_notice(offer, notice: _SemanticDialogClaim, severity: StatusSeverit
         raise PhysicalDesktopAcceptanceError("CELL does not show the notice on its row")
 
 
+def _shows_safe_mode_notice(offer, projection: RichScreenProjection) -> bool:
+    """Whether the frame shows the notice that safe mode is on as asked at
+    boot.  It must be a warning, and CELL must show it on its row."""
+
+    notice = _notice_claim(projection, SAFE_MODE_BOOT_NOTICE)
+    if notice is None:
+        return False
+    _require_notice(offer, notice, StatusSeverity.WARNING)
+    return True
+
+
 def _dialog_claim(
     projection: RichScreenProjection,
     message: str,
@@ -11824,6 +11835,11 @@ def shadow_check_record(client) -> dict:
 CHECK_MODE_VARIABLE = "CHK-EVERY-FRAME"
 SAFE_MODE_VARIABLE = "CHK-SAFE-MODE"
 SAFE_MODE_REASONS = {1: "config", 2: "boot", 3: "anomaly"}
+# The rich terminal's owner says so when safe mode is on as asked at boot
+# (tui/app-shell-apt1.f), in a warning notice.
+SAFE_MODE_BOOT_NOTICE = (
+    "Safe mode is on, as asked at boot: every frame is built in full and checked."
+)
 DAMAGE_VARIABLES = ("CHK-DAMAGE-A", "CHK-DAMAGE-U", "CHK-DAMAGE-COUNT")
 # A structure's name is a short phrase; a longer one is not read.
 DAMAGE_NAME_MAX = 256
@@ -12093,9 +12109,13 @@ def run_physical_desktop_acceptance(
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
     journey: FrameBoundJourney | None = None,
+    safe_mode: bool = False,
 ) -> PhysicalDesktopAcceptanceEvidence:
     """Run and record a reference-sink journey: the canonical one across Desk,
-    Pad, and Daybook, or JOURNEY, such as one for Desk with a single applet."""
+    Pad, and Daybook, or JOURNEY, such as one for Desk with a single applet.
+    SAFE_MODE says the guest was asked to boot in safe mode: some frame
+    before the journey ends must then show the warning notice that says so,
+    in its rich frame and its CELL."""
 
     if timeout <= 0:
         raise ValueError("timeout must be positive")
@@ -12130,6 +12150,7 @@ def run_physical_desktop_acceptance(
         hold_seconds=hold_seconds,
         guest_phase_profile_requested=phase_profile,
         guest_phase_profile_max_events=phase_profile_max_events,
+        safe_mode=safe_mode,
     )
     trace_outcome = "failure"
     last_status = None
@@ -12139,6 +12160,8 @@ def run_physical_desktop_acceptance(
     phase_profile_attempted = False
     phase_profile_active = False
     phase_capture: dict[str, object] | None = None
+    # The first frame that showed the safe-mode notice.
+    safe_notice_offer: int | None = None
     connect_started_ns = trace.now()
     try:
         client = _connect(socket_path, deadline, expected_server_pid)
@@ -12837,6 +12860,18 @@ def run_physical_desktop_acceptance(
                         cell_text_sha256=initial_cell.cell_text_sha256,
                         cell_utf8_bytes=initial_cell.cell_utf8_bytes,
                     )
+            if (
+                safe_mode
+                and safe_notice_offer is None
+                and _shows_safe_mode_notice(frame_offer, frame_projection)
+            ):
+                safe_notice_offer = frame_offer.offer_id
+                trace.mark(
+                    "safe_mode_notice",
+                    offer_id=frame_offer.offer_id,
+                    generation=frame_generation,
+                    journey_stage=journey.stage,
+                )
             waited = journey.waiting
             try:
                 progress = journey.after_present(
@@ -12857,6 +12892,10 @@ def run_physical_desktop_acceptance(
                     flush=True,
                 )
             if progress.complete:
+                if safe_mode and safe_notice_offer is None:
+                    raise PhysicalDesktopAcceptanceError(
+                        "safe mode was asked for at boot, but no frame showed its notice"
+                    )
                 final_cell = _require_cell_fallback_evidence(
                     "final",
                     frame_offer,

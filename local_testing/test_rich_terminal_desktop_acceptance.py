@@ -5387,6 +5387,24 @@ def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
     )
 
 
+def test_physical_runner_in_safe_mode_requires_its_notice_before_it_passes() -> None:
+    """Each acknowledged frame is looked at for the safe-mode notice before
+    the journey sees it, and a run that never saw it fails before its final
+    CELL evidence is taken."""
+
+    source = inspect.getsource(acceptance_runner.run_physical_desktop_acceptance)
+    ack_index = source.index("keyboard.acknowledge_display_offer(")
+    notice_index = source.index(
+        "_shows_safe_mode_notice(frame_offer, frame_projection)", ack_index
+    )
+    journey_index = source.index("progress = journey.after_present(", notice_index)
+    required_index = source.index("no frame showed its notice", journey_index)
+    final_cell_index = source.index(
+        "final_cell = _require_cell_fallback_evidence(", required_index
+    )
+    assert ack_index < notice_index < journey_index < required_index < final_cell_index
+
+
 def test_physical_runner_profiles_only_inside_exact_offer_backpressure() -> None:
     source = inspect.getsource(acceptance_runner.run_physical_desktop_acceptance)
     projection_index = source.index("_require_canonical_desktop_geometry(")

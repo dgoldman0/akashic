@@ -441,7 +441,12 @@ class PadAloneJourney(_AppletJourney):
     def __init__(self, ready_markers: tuple[str, ...]):
         super().__init__(ready_markers)
         self._editor_bounds: tuple[int, int, int, int] | None = None
-        self._before: tuple[int, int] | None = None
+        # The caret each input was sent from, by the stage the input leads
+        # to.  A stage a caret move leads to waits for the caret to leave
+        # it.  An input the terminal held back, which a newer frame then
+        # discarded, is decided again from that frame and sent again; its
+        # caret must not stand for the stage it was sent from.
+        self._before: dict[int, tuple[int, int]] = {}
 
     @property
     def final_stage(self) -> int:
@@ -559,8 +564,9 @@ class PadAloneJourney(_AppletJourney):
             self.AFTER_FAMILY: (1, family_end),
             self.IN_HEBREW: (1, lamed),
         }[self.stage]
-        if state.primary == self._before:
-            return self._wait(f"the caret to move from {self._before!r}")
+        before = self._before.get(self.stage)
+        if state.primary == before:
+            return self._wait(f"the caret to move from {before!r}")
         if state.primary != expected:
             raise PhysicalDesktopAcceptanceError(
                 f"Pad's caret is at {state.primary!r}, not {expected!r}, after "
@@ -673,9 +679,10 @@ class PadAloneJourney(_AppletJourney):
 
     def _send_from(self, state, milestone, method, value, target, offer, generation,
                    sender) -> JourneyProgress:
-        """Send one input, remembering the caret it starts from."""
+        """Send one input, remembering the caret it starts from for the stage
+        it leads to."""
 
-        self._before = state.primary
+        self._before[target] = state.primary
         return self._step(milestone, method, value, target, offer, generation, sender)
 
 

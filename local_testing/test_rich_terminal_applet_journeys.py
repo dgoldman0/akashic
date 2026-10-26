@@ -95,10 +95,12 @@ from rich_terminal_applet_journeys import (
     applet_journey,
 )
 from rich_terminal_desktop_acceptance import (
+    SAFE_MODE_BOOT_NOTICE,
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
     _require_desk_launcher_dialog,
+    _shows_safe_mode_notice,
 )
 from test_rich_terminal_desktop_acceptance import (
     SOUNDLAB_FIELD_ID,
@@ -465,6 +467,53 @@ def test_pad_alone_types_mixed_text_and_moves_by_whole_characters() -> None:
     assert journey.final_cell_markers == ("[1:Akashic Pa*]", styled_text.EXAMPLE_LINE)
 
 
+def test_pad_alone_sends_again_a_key_held_back_until_a_newer_frame() -> None:
+    """The terminal holds a key back while a newer frame is on its way, such
+    as the one a notice's end sends.  The journey then decides again from
+    that frame and sends the key again, bound to it, rather than wait for
+    the caret to move as though the key had gone."""
+
+    full = mixed_text.PAD_TEXT
+    cluster = full.index(mixed_text.PAD_CLUSTER)
+    family = full.index(mixed_text.PAD_FAMILY)
+    family_end = family + len(mixed_text.PAD_FAMILY)
+    shortened = full[:family] + full[family_end:]
+    journey = PadAloneJourney(PAD_READY)
+    blank = _cell_offer(1, ())
+    frames = (
+        (blank, _pad_frame("", (1, 0))),
+        (_pad_offer(full), _pad_frame(full, (1, len(full)))),
+        (blank, _pad_frame(full, (1, cluster))),
+        (blank, _pad_frame(full, (1, cluster + 2))),
+        (blank, _pad_frame(full, (1, family_end))),
+        # The newer frame, with the caret where it was.
+        (blank, _pad_frame(full, (1, family_end))),
+        (_pad_offer(shortened), _pad_frame(shortened, (1, family))),
+    )
+    held = ["backpressured"]
+    sent = []
+
+    def sender(method, value, offer, frame_generation):
+        sent.append((method, value, offer.offer_id))
+        return held.pop() if value == "backspace" and held else "progress"
+
+    milestones = []
+    for index, (offer, frame) in enumerate(frames):
+        offer = replace(offer, offer_id=index + 1)
+        milestones.append(journey.after_present(offer, 9, frame, sender).milestone)
+    assert sent[-3:] == [
+        ("send_key", "backspace", 5),
+        ("send_key", "backspace", 6),
+        ("send_key", "ctrl+z", 7),
+    ]
+    assert milestones[-3:] == [
+        "pad-caret-after-emoji-sequence",
+        "pad-caret-after-emoji-sequence",
+        "pad-emoji-sequence-deleted",
+    ]
+    assert journey.stage == PadAloneJourney.RESTORED
+
+
 @pytest.mark.parametrize(
     ("buttons", "held", "message"),
     (
@@ -548,7 +597,7 @@ def test_pad_alone_refuses_missing_style_runs() -> None:
 def test_pad_alone_refuses_wrong_results(stage, text, primary, message) -> None:
     journey = PadAloneJourney(PAD_READY)
     journey.stage = stage
-    journey._before = (1, 0)
+    journey._before = {stage: (1, 0)}
     journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
 
     def sender(*_args):
@@ -1630,6 +1679,19 @@ def test_daybook_alone_requires_the_notice_in_rich_and_cell() -> None:
         frame = _noticed(_daybook_frame(agenda=entry, checked=True), notice)
         with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
             journey.after_present(offer, 9, frame, sender)
+
+
+def test_a_run_in_safe_mode_finds_its_notice_as_a_warning_in_rich_and_cell() -> None:
+    frame = _pad_frame("", (1, 0))
+    offer = _notice_offer(SAFE_MODE_BOOT_NOTICE)
+    assert not _shows_safe_mode_notice(offer, frame)
+    shown = _noticed(frame, _notice(SAFE_MODE_BOOT_NOTICE, StatusSeverity.WARNING))
+    assert _shows_safe_mode_notice(offer, shown)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="CELL does not show"):
+        _shows_safe_mode_notice(_cell_offer(1, ()), shown)
+    neutral = _noticed(frame, _notice(SAFE_MODE_BOOT_NOTICE))
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="NEUTRAL, not WARNING"):
+        _shows_safe_mode_notice(offer, neutral)
 
 
 FEXP_READY = ("Details", "Tools")

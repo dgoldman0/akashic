@@ -35230,11 +35230,13 @@ def accept_physical_desktop(
     clusters: int | None = None,
     terminal_link_pace=None,
     screen_profile: bool = False,
+    safe_mode: bool = False,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey, or,
     for Desk with a single applet, that applet's journey.  SCREEN_PROFILE
     has the simulator record what each PRESENT carries and the guest words
-    each step runs under, in ARTIFACT_ROOT/screen-profile."""
+    each step runs under, in ARTIFACT_ROOT/screen-profile.  SAFE_MODE says
+    the image boots in safe mode, so the journey must see its notice."""
 
     if (cols, rows) != (DESKTOP_ACCEPTANCE_COLS, DESKTOP_ACCEPTANCE_ROWS):
         raise ValueError(
@@ -35297,6 +35299,7 @@ def accept_physical_desktop(
             phase_profile=phase_profile,
             phase_profile_max_events=phase_profile_max_events,
             journey=journey,
+            safe_mode=safe_mode,
         )
     except PhysicalDesktopAcceptanceError as exc:
         print(f"Physical desktop acceptance: FAIL\n  {exc}")
@@ -37431,6 +37434,7 @@ def main() -> int:
             clusters=args.clusters,
             terminal_link_pace=args.terminal_link_pace,
             screen_profile=args.screen_profile,
+            safe_mode=args.safe_mode,
         ) else 1
     serve(
         args.profile,

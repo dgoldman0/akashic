@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from rich_terminal_desktop_acceptance import SAFE_MODE_BOOT_NOTICE
 from test_rich_glyph_growth import GrowthHarness
 from test_rich_terminal_control_map import (
     MEGAPAD_ROOT, MegaForthRuntime, ROOT, _definitions,
@@ -98,7 +99,7 @@ def test_the_owner_says_once_that_safe_mode_is_on_and_why(notice):
     h.variable("CHK-SAFE-MODE", h.constant("CHK-WHY-BOOT"))
     h.tick(owner)
     assert h.toasts() == 1
-    assert h.toast() == f"Safe mode is on, as asked at boot: {EVERY}"
+    assert h.toast() == f"Safe mode is on, as asked at boot: {EVERY}" == SAFE_MODE_BOOT_NOTICE
     assert h.variable("TEST-TOAST-MS") == h.constant("_APTAS-SAFE-NOTICE-MS")
     h.tick(owner)
     assert h.toasts() == 1
