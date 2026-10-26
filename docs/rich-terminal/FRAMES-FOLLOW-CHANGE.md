@@ -471,10 +471,11 @@ change, and every check of the rich path's memory runs on every frame. Until
 part 9 builds the two drivers, the full path is today's build with its reuse
 shortcuts off, which is what the shadow check already runs beside them.
 
-**What it costs.** About what today's path costs, or somewhat more, since
-it reuses nothing. In the measurement today's path took 16 million steps for
-a burst frame and 26 million for an isolated character, against the target
-of about 2 million for a thin frame.
+**What it costs.** About twice normal mode's cost, since it reuses nothing
+and runs every check. At the end of the part an isolated character took
+41.96 million steps in safe mode against 20.31 in normal mode, more than the
+26 million the path took before part 3, against the target of about 2
+million for a thin frame.
 
 **How it is turned on** (decision 6):
 
@@ -550,6 +551,33 @@ next frame then goes out whole.
 expects safe mode to catch it on the next frame, refuse the DELTA built on
 it, send the frame whole and name the structure, and to route no click
 through it.
+
+**Done** on 2026-10-26 (Akashic be9a8c80 to 75a5c9e5, MegaPad e5b4ae34 to
+1833d16f). Safe mode is `CHK-SAFE-MODE` in `tui/check-mode.f`, which keeps
+the first reason it is given for the session. Desk's system settings ask
+for it in `system.toml` on the settings disk, MegaPad's second storage unit,
+whose medium is write-protected. KDOS opens that disk's volume read-only,
+and Desk mounts its filesystem for one read before it builds its first frame
+(`tui/desk-system-settings.f`). MegaPad gained the second controller in the
+emulator, the simulator, the BIOS, KDOS and the RTL, and the two
+controllers share the disk's one DMA port. `--safe-mode` asks for safe
+mode at boot, and a handover proof that fails turns it on by itself. The
+rich terminal's owner then says in a warning notice that safe mode is on
+and why. In safe mode the five reuse shortcuts are off, every
+check runs and names the structure it finds damaged, a damaged build is
+shown as plain text, and the bank of the frame on screen is sealed with the
+CRC engine's CRC-64. The physical runs found two defects the unit tests
+could not: the shell's seals overwrote the extension record its record
+embeds, and the settings read left Desk without a current filesystem. Two
+more were found on the way: a shell click that had read the wrong bank
+since part 3, and a test journey that dropped a key the terminal held back.
+The canonical Desktop journey passed with the shadow check, making 4,692
+comparisons and finding no difference, without it, and with the settings
+asking for safe mode, where it compared nothing, since nothing was reused.
+Normal mode costs what it did at part 3's end, a burst frame build of 9.63
+million steps. In safe mode an isolated character costs 41.96 million, about
+twice normal mode's 20.31, of which the seal takes 2.23 million. See the
+[evidence](../../local_testing/evidence/frames-follow-change-part4-20261026.md).
 
 ## Part 5. UIDL sees its widgets' changes and counts its own — design, fixes a violation
 
@@ -770,7 +798,7 @@ pass.
 | 1 | A shadow check of every shortcut | done |
 | 2 | Widgets count their changes | done |
 | 3 | Checks run when they can find something | done |
-| 4 | Safe mode | proposed |
+| 4 | Safe mode | done |
 | 5 | UIDL sees its widgets' changes and counts its own | proposed |
 | 6 | Applications stop bridging change | proposed |
 | 7 | A repaint fills each cell once | proposed |
@@ -807,7 +835,8 @@ estimates.
 | Fit | 0.03 | 0.05 | 0.03 |
 | Frame build | 16.16 | 9.62 | about 2 |
 
-Part 3 was estimated to leave 1.9 million of checks and left 3.48. The
+Part 4 left normal mode as it was: at its end the frame build took 9.63
+million. Part 3 was estimated to leave 1.9 million of checks and left 3.48. The
 engine's admission of the shell's batch, the glyph planner's bounds on its
 writes, UIDL-TUI's rechecks of its relations, and the public admissions'
 and captures' proofs of the spans they are given stayed, for the reasons in
