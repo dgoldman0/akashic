@@ -859,7 +859,7 @@ VARIABLE _GRID-SHOW-IU
     DUP _GC-SOURCE + SWAP _GC-LEN + @ _GRID-SHOW-PROMPT ;
 
 : _GRID-BEGIN-REPLACE  ( addr len -- )
-    _GRID-PRM-EDIT S" Edit cell:" 2SWAP _GRID-SHOW-PROMPT ;
+    >R >R _GRID-PRM-EDIT S" Edit cell:" R> R> _GRID-SHOW-PROMPT ;
 
 : _GRID-BEGIN-GOTO  ( -- )
     _GRID-PRM-GOTO S" Go to cell:"

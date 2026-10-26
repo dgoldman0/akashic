@@ -355,3 +355,45 @@ _GF-CHECKS @ . _GF-FAILS @ . CR
         output, runtime.main_context.data.snapshot())
     assert runtime.main_context.data.snapshot() == ()
     assert runtime.main_context.returns.snapshot() == ()
+
+
+def test_typing_on_a_cell_opens_its_editor_with_that_character() -> None:
+    """A printable key on a selected cell opens the cell editor holding that
+    character, and submitting the editor stores the cell."""
+    runtime = _grid_runtime()
+    runtime.drain_uart_output()
+    runtime.evaluate(r'''
+VARIABLE _GT-FAILS VARIABLE _GT-CHECKS
+CREATE _GT-EVENT 24 ALLOT
+: _GT-ASSERT
+    1 _GT-CHECKS +! 0= IF
+        1 _GT-FAILS +! ." GRID TYPE ASSERT " _GT-CHECKS @ . CR
+    THEN ;
+_GRID-STATE-SIZE ALLOCATE DROP DUP _GRID-CURRENT-STATE !
+_GRID-STATE-SIZE 0 FILL
+240 84 SCR-NEW SCR-USE
+_GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * ALLOCATE DROP
+DUP _GRID-CELLS ! _GRID-ROWS _GRID-COLS * _GRID-CELL-SZ * 0 FILL
+43 0 38 88 RGN-NEW _GRID-PANEL-INIT
+82 0 1 88 RGN-NEW DUP _GRID-PROMPT-RGN !
+_GRID-PROMPT-BUF _GRID-PROMPT-CAP PRM-NEW DUP _GRID-PROMPT !
+' _GRID-PROMPT-SUBMIT SWAP PRM-ON-SUBMIT
+2 _GRID-SEL-ROW ! 1 _GRID-SEL-COL !
+\ The key 7, with no modifier.
+KEY-T-CHAR _GT-EVENT ! 55 _GT-EVENT 8 + ! 0 _GT-EVENT 16 + !
+_GT-EVENT _GRID-PANEL WDG-HANDLE _GT-ASSERT
+_GRID-PROMPT @ PRM-ACTIVE? _GT-ASSERT
+_GRID-PROMPT-MODE @ _GRID-PRM-EDIT = _GT-ASSERT
+_GRID-PROMPT @ PRM-GET-TEXT S" 7" COMPARE 0= _GT-ASSERT
+_GRID-PROMPT @ _GRID-PROMPT-SUBMIT
+_GRID-PROMPT-MODE @ _GRID-PRM-NONE = _GT-ASSERT
+2 1 _GRID-CELL DUP _GC-SOURCE + SWAP _GC-LEN + @ S" 7" COMPARE 0= _GT-ASSERT
+DEPTH 0= _GT-ASSERT
+_GT-FAILS @ 0= IF ." GRID TYPE PASS " ELSE ." GRID TYPE FAIL " THEN
+_GT-CHECKS @ . _GT-FAILS @ . CR
+'''.encode(), source_name="grid-typing-checks", step_budget=40_000_000)
+    output = runtime.drain_uart_output().decode(errors="replace")
+    assert re.search(r"GRID TYPE PASS\s+7\s+0", output), (
+        output, runtime.main_context.data.snapshot())
+    assert runtime.main_context.data.snapshot() == ()
+    assert runtime.main_context.returns.snapshot() == ()
