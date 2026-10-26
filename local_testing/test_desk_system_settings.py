@@ -32,10 +32,16 @@ def _settings_image(files: dict[str, bytes], sectors: int = 64) -> bytes:
     return bytes(fs.img)
 
 
-def _runtime(settings: bytes | None) -> MegaForthRuntime:
+def _runtime(settings: bytes | None, *, boot_disk: bytes | None = None) -> MegaForthRuntime:
+    """KDOS and Desk's system settings, with SETTINGS as the settings disk.
+    With BOOT_DISK as the system disk, the boot disk's platform module
+    mounts it first and makes it the current filesystem, as Desk's
+    composition does."""
+
     runtime = MegaForthRuntime(
         memory=create_one_core_address_space(external_size=128 << 20),
         execution_backend="native",
+        storage=None if boot_disk is None else HostedStorageService(boot_disk),
         settings_storage=(
             None if settings is None
             else HostedStorageService(settings, write_protected=True)
@@ -43,7 +49,10 @@ def _runtime(settings: bytes | None) -> MegaForthRuntime:
     )
     runtime.evaluate((MEGAPAD_ROOT / "kdos.f").read_bytes(), source_name="kdos.f")
     runtime.evaluate(b"ENTER-USERLAND", source_name="settings-init")
-    for module in dependency_order(ROOT / "akashic", ("tui/desk-system-settings.f",)):
+    roots = ("tui/desk-system-settings.f",)
+    if boot_disk is not None:
+        roots = ("tui/platform/mp64fs-vfs.f",) + roots
+    for module in dependency_order(ROOT / "akashic", roots):
         text = (ROOT / "akashic" / module).read_text()
         text = "\n".join(line for line in text.splitlines()
                          if not line.strip().startswith(("REQUIRE ", "PROVIDED ")))
@@ -90,6 +99,8 @@ def test_settings_that_do_not_ask_leave_normal_mode(files) -> None:
     runtime = _runtime(_settings_image(files))
     assert _safe_mode(runtime) == 0
     assert _results(runtime, "CHK-DAMAGE-COUNT @")[0] == 0
+    # A missing key or broken text leaves no TOML error for the next parse.
+    assert _results(runtime, "TOML-ERR @ TOML-ABORT-ON-ERROR @") == (0, 0)
 
 
 def test_without_a_settings_disk_desk_reads_nothing() -> None:
@@ -120,3 +131,25 @@ def test_a_read_returns_the_file_whole_and_gives_back_what_it_took() -> None:
     assert _results(runtime, f"{buffer} FREE") == ()
     assert _results(runtime, "XMEM-HERE @") == extended
     assert _results(runtime, "HERE") == here
+
+
+def test_an_empty_file_reads_as_no_bytes() -> None:
+    runtime = _runtime(_settings_image({"system.toml": b""}))
+    assert _results(runtime, "S\" system.toml\" SETDISK-READ") == (0, 0, 0)
+    assert _results(runtime, "0 FREE") == ()
+
+
+def test_the_boot_disk_s_filesystem_stays_current() -> None:
+    """Mounting the settings disk makes its filesystem current, and
+    destroying the mount leaves none; Desk, which mounted the boot disk
+    first, must find that one current after reading its settings."""
+    runtime = _runtime(
+        _settings_image({"system.toml": SYSTEM_TOML.encode()}),
+        boot_disk=_settings_image({}, sectors=2048),
+    )
+    (boot,) = _results(runtime, "VFS-CUR")
+    assert boot != 0 and _results(runtime, "_MP64VFS-VFS @") == (boot,)
+    assert _safe_mode(runtime) == 0
+    assert _results(runtime, "VFS-CUR") == (boot,)
+    # The boot disk's filesystem still works.
+    assert _results(runtime, "S\" /\" VFS-CUR VFS-RESOLVE? NIP") == (0,)

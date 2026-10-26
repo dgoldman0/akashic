@@ -7,7 +7,9 @@
 \  write-protected, so only the host changes it, by rebuilding or editing
 \  the settings image.  KDOS opens its raw volume read-only
 \  (SETTINGS-OPEN).  This module mounts that volume for one read, and
-\  gives back the mount, its arena and the volume after it.
+\  gives back the mount, its arena and the volume after it.  The
+\  filesystem current before the read, such as the boot disk's, stays
+\  current.
 \ =====================================================================
 
 PROVIDED akashic-tui-settings-disk
@@ -25,9 +27,12 @@ VARIABLE _SDK-VFS
 VARIABLE _SDK-FD
 VARIABLE _SDK-BUF
 VARIABLE _SDK-LEN
+VARIABLE _SDK-OLD-VFS   \ the filesystem current before the read
 
 \ Give back what a read took, in reverse: the file, the mount with its
 \ arena (or the arena alone, when the mount failed), and the volume.
+\ Mounting made the settings filesystem current (VFS-NEW), and destroying
+\ it left none, so the one current before the read is current again.
 : _SDK-RELEASE  ( -- )
     _SDK-FD @ ?DUP IF VFS-CLOSE? DROP THEN  0 _SDK-FD !
     _SDK-VFS @ ?DUP IF
@@ -36,6 +41,7 @@ VARIABLE _SDK-LEN
         _SDK-ARENA @ ?DUP IF ARENA-DESTROY THEN
     THEN
     0 _SDK-VFS !  0 _SDK-ARENA !
+    _SDK-OLD-VFS @ VFS-USE
     SETTINGS-VOLUME VOL-CLOSE DROP
     SETTINGS-BD BD-CLOSE DROP ;
 
@@ -48,6 +54,8 @@ VARIABLE _SDK-LEN
     VFS-FF-READ _SDK-VFS @ VFS-OPEN? ?DUP IF NIP EXIT THEN
     _SDK-FD !
     _SDK-FD @ VFS-SIZE DUP _SDK-LEN !
+    \ An empty file is no bytes in no buffer: KDOS cannot ALLOCATE none.
+    DUP 0= IF EXIT THEN
     ALLOCATE ?DUP IF NIP EXIT THEN _SDK-BUF !
     _SDK-BUF @ _SDK-LEN @ _SDK-FD @ VFS-READ-EXACT ?DUP IF
         _SDK-BUF @ FREE  0 _SDK-BUF !
@@ -57,10 +65,12 @@ VARIABLE _SDK-LEN
 
 \ SETDISK-READ ( name-a name-u -- buf len ior )
 \   Read the whole named file from the settings disk into a buffer
-\   ALLOCATEd to its size, which the caller FREEs.  A nonzero ior, for no
-\   settings disk, no such file or a failed read, leaves no buffer.
+\   ALLOCATEd to its size, which the caller FREEs.  An empty file reads
+\   as 0 0, which FREE takes too.  A nonzero ior, for no settings disk,
+\   no such file or a failed read, leaves no buffer.
 : SETDISK-READ  ( name-a name-u -- buf len ior )
     0 _SDK-ARENA !  0 _SDK-VFS !  0 _SDK-FD !  0 _SDK-BUF !  0 _SDK-LEN !
+    VFS-CUR _SDK-OLD-VFS !
     _SDK-READ _SDK-RELEASE
     ?DUP IF 0 0 ROT EXIT THEN
     _SDK-BUF @ _SDK-LEN @ 0 ;

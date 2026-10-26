@@ -17,15 +17,16 @@ REQUIRE check-mode.f
 \ DSET-SAFE-MODE? ( a u -- flag )
 \   Whether the system settings text at A U asks for safe mode:
 \   [desk.rich-terminal] safe-mode = true.  A setting that is missing, or
-\   is not a boolean, asks for nothing.
+\   is not a boolean, asks for nothing.  The TOML layer's error state and
+\   abort switch are left as they were, for whoever parses next.
 : DSET-SAFE-MODE?  ( a u -- flag )
-    TOML-ABORT-ON-ERROR @ >R  0 TOML-ABORT-ON-ERROR !
+    TOML-ERR @ >R  TOML-ABORT-ON-ERROR @ >R  0 TOML-ABORT-ON-ERROR !
     S" desk.rich-terminal.safe-mode" TOML-PATH? IF
         2DUP TOML-BOOL? IF TOML-GET-BOOL TOML-OK? AND ELSE 2DROP 0 THEN
     ELSE
         2DROP 0
     THEN
-    R> TOML-ABORT-ON-ERROR ! ;
+    R> TOML-ABORT-ON-ERROR !  R> TOML-ERR ! ;
 
 \ DSET-APPLY ( -- )
 \   Read the system settings and act on them: turn safe mode on, with the
