@@ -120,3 +120,16 @@ def test_shells_and_hosts_paint_under_the_scope_and_turn_tick_requests_into_slot
     assert tick.index("0 _UTUI-NEEDS-PAINT !") < tick.index("APP.TICK-XT @")
     assert "CINST.REVISION @ <> _UTUI-NEEDS-PAINT @ OR IF" in tick
     assert "_UTUI-NEEDS-PAINT @ _AHTI-PAINT !" in tick
+
+
+def test_the_rich_side_s_picture_claims_ask_for_no_paint():
+    """The rich side claims a picture, or notes its failure, while it builds
+    a frame, in its own context; the picture's CELL view follows at its next
+    service pass or draw, so those changes ask for no paint of their own."""
+    tui = (ROOT / "akashic/tui/uidl-tui.f").read_text()
+    claim = tui[tui.index(": _UTUI-PICTURE-CLAIM!"):]
+    assert "['] PICT-CLAIM! UTUI-PAINTING ;" in claim[:claim.index(";") + 1]
+    assert tui.count("['] PICT-RICH-FAILED! UTUI-PAINTING") == 2
+    assert tui.count("PICT-RICH-FAILED!") == 2
+    assert tui.count("PICT-CLAIM!") == 1
+

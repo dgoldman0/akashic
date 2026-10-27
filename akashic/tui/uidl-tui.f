@@ -7799,10 +7799,14 @@ _UTUI-PCI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-PCI-RESOLVED
     _UTUI-PCI-PICT @ PICT-REVISION@ ;
 
 \ Say whether the rich side shows the visited picture, or is taking it to
-\ show it, so its CELL view need decode nothing.
+\ show it, so its CELL view need decode nothing.  The CELL view follows at
+\ the picture's next service pass or draw, as its words say, so the claim,
+\ made while the rich side builds a frame, asks for no paint of its own:
+\ one asked from the rich side's context would repaint nothing of the
+\ picture's slot and send a frame for nothing.
 : _UTUI-PICTURE-CLAIM!  ( flag -- )
     _UTUI-PCI-CURRENT? 0= IF DROP EXIT THEN
-    _UTUI-PCI-PICT @ PICT-CLAIM! ;
+    _UTUI-PCI-PICT @ ['] PICT-CLAIM! UTUI-PAINTING ;
 
 \ Why the rich side could not send the visited picture, or 0.
 : _UTUI-PICTURE-FAILED@  ( -- reason )
@@ -7900,7 +7904,8 @@ VARIABLE _UTUI-PP-U
     _UTUI-PP-H @ = SWAP _UTUI-PP-W @ = AND SWAP _UTUI-PP-FORMAT @ = AND
     R@ PICT-FILE-BYTES@ _UTUI-PP-LENGTH @ = AND 0= IF R> DROP 0 EXIT THEN
     _UTUI-PP-DST @ _UTUI-PP-U @ _UTUI-PP-OFFSET @ R@ PICT-FILE-READ IF
-        PIC-R-READ R> PICT-RICH-FAILED! 0 EXIT
+        \ Like a claim, the failure's CELL view follows at the next pass.
+        PIC-R-READ R> ['] PICT-RICH-FAILED! UTUI-PAINTING 0 EXIT
     THEN
     R> DROP -1 ;
 
@@ -7955,7 +7960,7 @@ VARIABLE _UTUI-PF-REASON
         DUP UE.TYPE @ 0= IF DROP 0 EXIT THEN
     _UTUI-PF-KEY @ _UTUI-ELEM-KEYED-PICTURE DUP 0= IF EXIT THEN
     DUP PICT-REVISION@ _UTUI-PF-REVISION @ <> IF DROP 0 EXIT THEN
-    _UTUI-PF-REASON @ SWAP PICT-RICH-FAILED! -1 ;
+    _UTUI-PF-REASON @ SWAP ['] PICT-RICH-FAILED! UTUI-PAINTING -1 ;
 
 : _UTUI-PF-OBSERVED  ( -- flag )
     ['] _UTUI-PF-BODY UIDL-SEMANTIC-OBSERVE ;
