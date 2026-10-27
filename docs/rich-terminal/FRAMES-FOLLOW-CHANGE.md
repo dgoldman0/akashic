@@ -5,7 +5,7 @@ rich path: checks that run when they can find something (part 3), a safe
 mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
 a frame Desk sends but never shows when a document is handed to Pad. Each
-part is approved on its own. Parts 0 to 6 are done. Decisions lists what is
+part is approved on its own. Parts 0 to 6 and 6b are done. Decisions lists what is
 settled and what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
@@ -731,6 +731,21 @@ Other requests an input queues are delivered before its paint in the same
 way. A terminal without the rich path no longer shows the frame in between,
 Pad focused with its old document, either.
 
+**Done** on 2026-10-27 (411a8d67). Desk's per-pass service pumps its bus as
+well as its tick, and reports work when the pump delivered a request. A
+check in Desk's suite has the service deliver a queued request and fails
+without the pump. The canonical journey sent 37 STARTs in each of three
+runs, with the shadow check, without it and profiled with a pinned hash
+seed, where part 6's runs each sent 39. Against part 6's profiled run, 77
+of 79 input windows committed the same presents; at the two handoffs the
+START never shown is gone, and the frame shown, the same to the byte, is on
+screen 0.64 seconds sooner at Daybook's and 0.86 at File Explorer's. The
+two windows took 43.7 and 53.9 million guest steps fewer, and the journey
+sent 288,150 bytes fewer. In the interval after the key, Desk's service ran
+Pad's open handler before the pass painted. Desk with Daybook, the Agent,
+File Explorer and Pad passed with the shadow check. See the
+[evidence](../../local_testing/evidence/frames-follow-change-part6b-20261027.md).
+
 ## Part 7. A repaint fills each cell once — exact speed-up
 
 **Today.**
@@ -908,7 +923,7 @@ pass. Part 6b follows part 6 (decision 11).
 | 4 | Safe mode | done |
 | 5 | UIDL sees its widgets' changes and counts its own | done |
 | 6 | Applications stop bridging change | done |
-| 6b | A document handed to Pad opens before Desk paints | proposed |
+| 6b | A document handed to Pad opens before Desk paints | done |
 | 7 | A repaint fills each cell once | proposed |
 | 8 | The occasional full refresh | proposed |
 | 9 | One projection, two drivers, in slices 9a to 9c | proposed |
