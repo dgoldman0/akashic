@@ -156,3 +156,26 @@ def test_descriptor(desk):
         '_DESK-FILL-DESC',
         'DESK-DESC APP.TITLE-A @ DESK-DESC APP.TITLE-U @ TYPE',
     ], 'DESK')
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  §6 — The launcher's rows
+# ═══════════════════════════════════════════════════════════════════
+
+def test_opening_a_catalog_entry_refreshes_the_launchers_rows(desk):
+    """A launcher row shows its entry's state, which an open may change, so
+    an open refreshes the rows; with no launcher there are none to refresh."""
+    check(desk, "launcher-rows", [
+        'T-DESK',
+        'CREATE _T-ENTRY ACAT-ENTRY-SIZE ALLOT  _T-ENTRY ACAT-ENTRY-SIZE 0 FILL',
+        'VARIABLE _T-RGN  VARIABLE _T-REV',
+        '0 0 4 30 RGN-NEW DUP _T-RGN !',
+        "' _DESK-LAUNCHER-KEY ' _DESK-LAUNCHER-FIELD LST-NEW _DESK-LAUNCHER-LIST !",
+        '_DESK-LAUNCHER-LIST @ WDG-REVISION _T-REV !',
+        # A fresh Desk has no catalog to resolve the entry, so the open
+        # fails, as a failed launch would, and the rows are refreshed.
+        '_T-ENTRY _DESK-OPEN-CATALOG-ENTRY ACAT-S-INVALID = .',
+        '_DESK-LAUNCHER-LIST @ WDG-REVISION _T-REV @ <> .',
+        '_DESK-LAUNCHER-LIST @ LST-FREE  0 _DESK-LAUNCHER-LIST !  _T-RGN @ RGN-FREE',
+        '_T-ENTRY _DESK-OPEN-CATALOG-ENTRY ACAT-S-INVALID = .',
+    ], '-1 -1 -1')

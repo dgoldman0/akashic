@@ -154,21 +154,19 @@ _SCHT-STAMP DT-RFC3339-UTC-S-LENGTH + 7 + -8 AND CONSTANT _SCHT-SIZE
  40 CONSTANT _SCHS-E-LIST
  48 CONSTANT _SCHS-E-STATUS
  56 CONSTANT _SCHS-E-HINT
- 64 CONSTANT _SCHS-ROWS
- 72 CONSTANT _SCHS-ASK-ID
- 80 CONSTANT _SCHS-REQUEST
- 88 CONSTANT _SCHS-REASON
- 96 CONSTANT _SCHS-READ
-104 CONSTANT _SCHS-CHOICE
-112 CONSTANT _SCHS-ROW
-120 CONSTANT _SCHS-DONE
-128 CONSTANT _SCHS-REFRESH
-136 CONSTANT _SCHS-SHOWN
-144 CONSTANT _SCHS-LABEL-XT
-152 CONSTANT _SCHS-LABEL-CTX
-160 CONSTANT _SCHS-CONFIRM-XT
-168 CONSTANT _SCHS-RID       \ 32 bytes: a permission's RID, as it is revoked
-200 CONSTANT _SCHS-TEXT      \ a row's text
+ 64 CONSTANT _SCHS-ASK-ID
+ 72 CONSTANT _SCHS-REQUEST
+ 80 CONSTANT _SCHS-REASON
+ 88 CONSTANT _SCHS-READ
+ 96 CONSTANT _SCHS-CHOICE
+104 CONSTANT _SCHS-ROW
+112 CONSTANT _SCHS-DONE
+120 CONSTANT _SCHS-SHOWN
+128 CONSTANT _SCHS-LABEL-XT
+136 CONSTANT _SCHS-LABEL-CTX
+144 CONSTANT _SCHS-CONFIRM-XT
+152 CONSTANT _SCHS-RID       \ 32 bytes: a permission's RID, as it is revoked
+184 CONSTANT _SCHS-TEXT      \ a row's text
 _SCHS-TEXT _SCHT-SIZE + CONSTANT _SCHS-STATUS     \ the status line
 _SCHS-STATUS _SCHT-SIZE + CONSTANT _SCHS-FACTS    \ what the document's owner said
 _SCHS-FACTS SDSP-FACTS-SIZE + CONSTANT _SCHS-DOC  \ and the status it said it with
@@ -184,7 +182,6 @@ _SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
 : _SCHS.E-LIST     ( s -- a ) _SCHS-E-LIST + ;
 : _SCHS.E-STATUS   ( s -- a ) _SCHS-E-STATUS + ;
 : _SCHS.E-HINT     ( s -- a ) _SCHS-E-HINT + ;
-: _SCHS.ROWS       ( s -- a ) _SCHS-ROWS + ;
 \ The approval shown: its id, its request as the broker last gave it (0
 \ once it no longer waits), why the Agent could not run it, and whether
 \ its last line has been shown.
@@ -197,8 +194,7 @@ _SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
 : _SCHS.CHOICE     ( s -- a ) _SCHS-CHOICE + ;
 : _SCHS.ROW        ( s -- a ) _SCHS-ROW + ;
 : _SCHS.DONE       ( s -- a ) _SCHS-DONE + ;
-\ Whether the rows changed, and whether the status line is on screen.
-: _SCHS.REFRESH    ( s -- a ) _SCHS-REFRESH + ;
+\ Whether the status line is on screen.
 : _SCHS.SHOWN      ( s -- a ) _SCHS-SHOWN + ;
 \ What names a permission's schedule: ( rid context -- address length ).
 : _SCHS.LABEL-XT   ( s -- a ) _SCHS-LABEL-XT + ;
@@ -375,6 +371,16 @@ _SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
     DUP _SCHS.READ @ 0= IF S" Read it to the end to allow it" ROT _SCHS-SAY EXIT THEN
     S" A allows it to run when it is due" ROT _SCHS-SAY ;
 
+\ The approval's rows; none once it no longer waits.
+: _SCHS-APPROVE-N  ( s -- n )
+    DUP _SCHS.REQUEST @ 0= IF DROP 0 EXIT THEN
+    6 OVER _SCHS-NOTE? IF 1+ THEN SWAP _SCHS-LOCATOR IF 1+ THEN ;
+
+\ Gives the list N rows, its view at the top: a log's rows would show its
+\ end, and an approval would seem read before its top was shown.
+: _SCHS-ROWS!  ( n s -- )
+    _SCHS.LIST @ ?DUP IF TUCK LST-ROWS! 0 SWAP LST-SCROLL-SET ELSE DROP THEN ;
+
 : _SCHS-APPROVE-SERVICE  ( now s -- close? )
     DUP _SCHS-ASKING? 0= IF 2DROP -1 EXIT THEN
     DUP _SCHS.CHOICE @ ?DUP 0= IF 2DROP 0 EXIT THEN
@@ -387,7 +393,7 @@ _SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
     \ The Agent may have changed since the approval opened.
     DUP _SCHS.REQUEST @ OVER _SCHS.BROKER @ SBRK-VET OVER _SCHS.REASON !
     DUP _SCHS-ALLOWABLE? 0= IF
-        -1 OVER _SCHS.REFRESH ! 0 OVER _SCHS.READ !
+        DUP _SCHS-APPROVE-N OVER _SCHS-ROWS! 0 OVER _SCHS.READ !
         NIP _SCHS-APPROVE-STATUS 0 EXIT
     THEN
     DUP _SCHS.ASK-ID @ -1 3 PICK 3 PICK _SCHS.BROKER @ SBRK-ANSWER
@@ -445,6 +451,12 @@ _SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
 
 \ Revokes the permission the user chose, by a copy of its RID: revoking
 \ removes the record.
+\ A revoke removed a row or changed what one shows; the list keeps its
+\ place as far as its rows allow.
+: _SCHS-PERMS-CHANGED  ( s -- )
+    DUP _SCHS.LIST @ ?DUP 0= IF DROP EXIT THEN
+    >R _SCHS-PERMS-N R@ LST-RECOUNT R> LST-REFRESH ;
+
 : _SCHS-PERMS-SERVICE  ( now s -- close? )
     NIP
     DUP _SCHS.DONE @ IF DROP -1 EXIT THEN
@@ -457,7 +469,7 @@ _SCHS-DOC-TITLE RCON-TITLE-MAX + 7 + -8 AND CONSTANT _SCHS-SIZE
     ELSE
         S" Revoked; any run under it is cancelled" 2 PICK _SCHS-SAY
     THEN
-    -1 SWAP _SCHS.REFRESH ! 0 ;
+    _SCHS-PERMS-CHANGED 0 ;
 
 \ =====================================================================
 \  The shutdown question
@@ -514,16 +526,8 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
 
 : _SCHS-ROW-N  ( s -- n )
     DUP _SCHS-SHUTDOWN? IF DROP 2 EXIT THEN
-    DUP _SCHS-APPROVE? IF
-        DUP _SCHS.REQUEST @ 0= IF DROP 0 EXIT THEN
-        6 OVER _SCHS-NOTE? IF 1+ THEN SWAP _SCHS-LOCATOR IF 1+ THEN EXIT
-    THEN
+    DUP _SCHS-APPROVE? IF _SCHS-APPROVE-N EXIT THEN
     _SCHS-PERMS-N ;
-
-\ Gives the list N rows, its view at the top: a log's rows would show its
-\ end, and an approval would seem read before its top was shown.
-: _SCHS-ROWS!  ( n s -- )
-    2DUP _SCHS.ROWS ! _SCHS.LIST @ TUCK LST-ROWS! 0 SWAP LST-SCROLL-SET ;
 
 : _SCHS-STYLE-ALL  ( s -- )
     _SCHS.STYLE @ ?DUP IF UTUI-EACH-ELEM THEN ;
@@ -536,15 +540,9 @@ CREATE _SCHS-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
     R@ _SCHS-APPROVE? IF R@ _SCHS-ASKING? DROP THEN
     R@ _SCHS-STYLE-ALL
     R@ _SCHS.LIST @ ?DUP IF
-        R@ _SCHS-ROW-N DUP R@ _SCHS.ROWS @ <> R@ _SCHS.REFRESH @ OR IF
-            NIP R@ _SCHS-ROWS!
-            0 R@ _SCHS.REFRESH !
-            R@ _SCHS.E-LIST @ ?DUP IF UIDL-DIRTY! THEN
-            R@ _SCHS.E-HINT @ ?DUP IF S" text" R@ _SCHS-HINT$ UTUI-SET-ATTR THEN
-        ELSE
-            2DROP
-        THEN
+        R@ _SCHS-ROW-N SWAP LST-COUNT OVER <> IF R@ _SCHS-ROWS! ELSE DROP THEN
     THEN
+    R@ _SCHS.E-HINT @ ?DUP IF S" text" R@ _SCHS-HINT$ UTUI-SET-ATTR THEN
     R@ _SCHS.SHOWN @ 0= IF
         -1 R@ _SCHS.SHOWN !
         R@ _SCHS.E-STATUS @ ?DUP IF
@@ -717,7 +715,7 @@ _SCHS-SETUP
         R@ _SCHS.REQUEST @ R@ _SCHS.BROKER @ SBRK-VET R@ _SCHS.REASON !
     THEN
     R@ _SCHS-DESCRIBE
-    -1 R@ _SCHS.REFRESH !
+    R@ _SCHS-ROW-N R@ _SCHS-ROWS!
     R> _SCHS-APPROVE-STATUS ;
 
 \ Binds a launched permissions list to the broker.  LABEL-XT ( rid
@@ -726,7 +724,7 @@ _SCHS-SETUP
 : SCHS-PERMS-BIND  ( broker label-xt label-context style-xt instance -- )
     CINST-STATE >R
     R@ _SCHS.STYLE ! R@ _SCHS.LABEL-CTX ! R@ _SCHS.LABEL-XT ! R@ _SCHS.BROKER !
-    -1 R@ _SCHS.REFRESH !
+    R@ _SCHS-ROW-N R@ _SCHS-ROWS!
     R> _SCHS-PERMS-STATUS ;
 
 \ Binds a launched shutdown question.  CONFIRM-XT ( -- ) runs when the
@@ -734,7 +732,7 @@ _SCHS-SETUP
 : SCHS-SHUTDOWN-BIND  ( confirm-xt style-xt instance -- )
     CINST-STATE >R
     R@ _SCHS.STYLE ! R@ _SCHS.CONFIRM-XT !
-    -1 R@ _SCHS.REFRESH !
+    R@ _SCHS-ROW-N R@ _SCHS-ROWS!
     S" A scheduled Agent run is in progress or waiting. Shut down anyway? It will be cancelled."
     R> _SCHS-SAY ;
 

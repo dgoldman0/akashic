@@ -56,17 +56,15 @@ REQUIRE ../../../utils/string.f
  40 CONSTANT _SXS-E-LIST
  48 CONSTANT _SXS-E-ASK
  56 CONSTANT _SXS-E-STATUS
- 64 CONSTANT _SXS-ROWS
- 72 CONSTANT _SXS-ASK
- 80 CONSTANT _SXS-ASK-ID
- 88 CONSTANT _SXS-CHOICE
- 96 CONSTANT _SXS-ROW
-104 CONSTANT _SXS-DONE
-112 CONSTANT _SXS-REFRESH
-120 CONSTANT _SXS-ASKED
-128 CONSTANT _SXS-SHOWN
-136 CONSTANT _SXS-STATUS-U
-144 CONSTANT _SXS-STATUS
+ 64 CONSTANT _SXS-ASK
+ 72 CONSTANT _SXS-ASK-ID
+ 80 CONSTANT _SXS-CHOICE
+ 88 CONSTANT _SXS-ROW
+ 96 CONSTANT _SXS-DONE
+104 CONSTANT _SXS-ASKED
+112 CONSTANT _SXS-SHOWN
+120 CONSTANT _SXS-STATUS-U
+128 CONSTANT _SXS-STATUS
 _SXS-STATUS _SXS-LINE + CONSTANT _SXS-TEXT
 _SXS-TEXT _SXS-ASK-MAX + CONSTANT _SXS-COL0
 _SXS-COL0 _SXS-LINE + CONSTANT _SXS-COL1
@@ -81,7 +79,6 @@ _SXS-COL1 _SXS-STATE-MAX + CONSTANT _SXS-SIZE
 : _SXS.E-LIST    ( s -- a ) _SXS-E-LIST + ;
 : _SXS.E-ASK     ( s -- a ) _SXS-E-ASK + ;
 : _SXS.E-STATUS  ( s -- a ) _SXS-E-STATUS + ;
-: _SXS.ROWS      ( s -- a ) _SXS-ROWS + ;
 \ The request an access prompt shows, and its identity.
 : _SXS.ASK       ( s -- a ) _SXS-ASK + ;
 : _SXS.ASK-ID    ( s -- a ) _SXS-ASK-ID + ;
@@ -90,9 +87,7 @@ _SXS-COL1 _SXS-STATE-MAX + CONSTANT _SXS-SIZE
 : _SXS.CHOICE    ( s -- a ) _SXS-CHOICE + ;
 : _SXS.ROW       ( s -- a ) _SXS-ROW + ;
 : _SXS.DONE      ( s -- a ) _SXS-DONE + ;
-\ Whether the rows changed, the question is on screen, and the status
-\ line is current.
-: _SXS.REFRESH   ( s -- a ) _SXS-REFRESH + ;
+\ Whether the question is on screen, and the status line is current.
 : _SXS.ASKED     ( s -- a ) _SXS-ASKED + ;
 : _SXS.SHOWN     ( s -- a ) _SXS-SHOWN + ;
 : _SXS.STATUS-U  ( s -- a ) _SXS-STATUS-U + ;
@@ -311,13 +306,22 @@ _SXS-COL1 _SXS-STATE-MAX + CONSTANT _SXS-SIZE
     R@ _SXS-STORE SBOX-STORE-GRANT@ R@ _SXS-STORE SBOX-STORE-UNGRANT
     >R S" grant withdrawn" R> R> _SXS-OUTCOME! ;
 
+: _SXS-ROW-N  ( s -- n )
+    DUP _SXS-ACCESS? IF DROP 2 EXIT THEN
+    DUP _SXS-MODULE-N SWAP _SXS-GRANT-N + ;
+
+\ An action removed a row or changed what one shows; the list keeps its
+\ place as far as its rows allow.
+: _SXS-ROWS-CHANGED  ( s -- )
+    DUP _SXS.LIST @ ?DUP 0= IF DROP EXIT THEN
+    >R _SXS-ROW-N R@ LST-RECOUNT R> LST-REFRESH ;
+
 : _SXS-INSPECT-SERVICE  ( s -- close? )
     DUP _SXS.DONE @ IF DROP -1 EXIT THEN
     DUP _SXS.CHOICE @ ?DUP 0= IF DROP 0 EXIT THEN
     0 2 PICK _SXS.CHOICE !
     OVER _SXS.ROW @ 2 PICK _SXS-ACT
-    -1 SWAP _SXS.REFRESH !
-    0 ;
+    _SXS-ROWS-CHANGED 0 ;
 
 \ The status line an inspector opens with.
 : _SXS-INSPECT-STATUS  ( s -- )
@@ -360,10 +364,6 @@ CREATE _SXS-INSPECT-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
         LST-TEXT-COLUMN OVER LST-COLUMN-KIND + !
         _SXS-STATE-W SWAP LST-COLUMN-WIDTH + ! ;
 
-: _SXS-ROW-N  ( s -- n )
-    DUP _SXS-ACCESS? IF DROP 2 EXIT THEN
-    DUP _SXS-MODULE-N SWAP _SXS-GRANT-N + ;
-
 : _SXS-STYLE-ALL  ( s -- )
     _SXS.STYLE @ ?DUP IF UTUI-EACH-ELEM THEN ;
 
@@ -373,15 +373,8 @@ CREATE _SXS-INSPECT-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
 : _SXS-ACTIVATE  ( instance -- )
     CINST-STATE >R
     R@ _SXS-STYLE-ALL
-    R@ _SXS.LIST @ ?DUP IF
-        R@ _SXS-ROW-N DUP R@ _SXS.ROWS @ <> R@ _SXS.REFRESH @ OR IF
-            DUP R@ _SXS.ROWS ! SWAP LST-ROWS!
-            0 R@ _SXS.REFRESH !
-            R@ _SXS.E-LIST @ ?DUP IF UIDL-DIRTY! THEN
-        ELSE
-            2DROP
-        THEN
-    THEN
+    \ Rows the capability gains or loses while shown keep the list's place.
+    R@ _SXS.LIST @ ?DUP IF R@ _SXS-ROW-N SWAP LST-RECOUNT THEN
     \ The question reads the request, so only while it still waits.
     R@ _SXS-ACCESS? R@ _SXS.ASKED @ 0= AND IF
         R@ _SXS.ASK @ R@ _SXS.ASK-ID @ R@ _SXS.CAP @
@@ -422,7 +415,7 @@ CREATE _SXS-INSPECT-COLUMNS 2 LST-COLUMN-SIZE * ALLOT
         _SXS-INSPECT-COLUMNS 2 ROT LST-COLUMNS!
     THEN
     R@ R@ _SXS.LIST @ LST-CONTEXT!
-    R@ _SXS-ROW-N DUP R@ _SXS.ROWS ! R@ _SXS.LIST @ LST-ROWS!
+    R@ _SXS-ROW-N R@ _SXS.LIST @ LST-ROWS!
     R@ _SXS.LIST @ R@ _SXS.E-LIST @ UTUI-WIDGET-SET
     R@ _SXS.E-LIST @ UTUI-FOCUS!
     R> DROP ;
@@ -536,7 +529,8 @@ _SXS-SETUP
 : SBXS-INSPECT-BIND  ( cap style-xt instance -- )
     CINST-STATE >R
     R@ _SXS.STYLE ! R@ _SXS.CAP !
-    -1 R@ _SXS.REFRESH !
+    \ Its rows come from the capability just bound.
+    R@ _SXS.LIST @ ?DUP IF R@ _SXS-ROW-N SWAP LST-ROWS! THEN
     R> _SXS-INSPECT-STATUS ;
 
 \ Carries out what the user chose and says whether Desk should close the

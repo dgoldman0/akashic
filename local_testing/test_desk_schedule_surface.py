@@ -231,8 +231,8 @@ def test_answering_an_approval(forth):
         # The Agent changed since it opened: Allow does not grant, and the
         # note and Read come back.
         "S-FRESH 1 R-ASK RQ BC SDSP-ASK DROP ASK-ID ! AS-APPROVAL -1 SS _SCHS.READ ! "
-        f"{R_MODEL_UNAVAILABLE} VET-ANS ! _SCHS-C-ALLOW CHOOSE . SS _SCHS.READ @ . "
-        "SS _SCHS.REFRESH @ . SS _SCHS-ROW-N . BS SPERM-COUNT@ . STATUS. CR",
+        f"10 LIST-ON {R_MODEL_UNAVAILABLE} VET-ANS ! _SCHS-C-ALLOW CHOOSE . SS _SCHS.READ @ . "
+        "SS _SCHS.LIST @ LST-COUNT . SS _SCHS-ROW-N . BS SPERM-COUNT@ . STATUS. LIST-OFF CR",
         # A grant the store refuses keeps it open and says why.
         "S-FRESH 1 R-ASK RQ BC SDSP-ASK DROP ASK-ID ! AS-APPROVAL -1 SS _SCHS.READ ! "
         "1 T-SYNC-N ! _SCHS-C-ALLOW CHOOSE . 0 T-SYNC-N ! R0 ASK-ID @ RSP BC SDSP-ASKED . "
@@ -243,7 +243,7 @@ def test_answering_an_approval(forth):
     assert rows[0].split() == ["0", "-1", str(S_REFUSED)]
     assert rows[1] == "0 0 0 Read it to the end to allow it"
     assert rows[2].split() == ["-1", str(S_ALLOWED), "1"]
-    assert rows[3] == "0 0 -1 7 0 This cannot be allowed"
+    assert rows[3] == "0 0 7 7 0 This cannot be allowed"
     assert rows[4] == f"0 {S_PENDING} Not allowed: the permissions could not be written"
     assert rows[5].split() == ["-1", str(S_REFUSED)]
 
@@ -268,9 +268,9 @@ def test_the_permissions(forth):
 
 def test_revoking_a_permission(forth):
     rows = run(forth, [
-        "S-FRESH 1 APPROVE 2 APPROVE AS-PERMS "
+        "S-FRESH 1 APPROVE 2 APPROVE AS-PERMS 10 LIST-ON "
         "2 ROW-OF SS _SCHS.ROW ! _SCHS-C-REVOKE CHOOSE . SS _SCHS-PERMS-N . "
-        "SS _SCHS.REFRESH @ . STATUS. CR",
+        "SS _SCHS.LIST @ LST-COUNT . STATUS. LIST-OFF CR",
         "0 PERM.",
         # A revoke the store refuses says why; the permission stays.
         "0 SS _SCHS.ROW ! 1 T-SYNC-N ! _SCHS-C-REVOKE CHOOSE . 0 T-SYNC-N ! "
@@ -281,7 +281,7 @@ def test_revoking_a_permission(forth):
         "5 SS _SCHS.ROW ! _SCHS-C-REVOKE CHOOSE . SS _SCHS-PERMS-N . "
         "-1 SS _SCHS.DONE ! 0 CHOOSE . CR",
     ])
-    assert rows[0] == "0 1 -1 Revoked; any run under it is cancelled"
+    assert rows[0] == "0 1 1 Revoked; any run under it is cancelled"
     assert rows[1].startswith("Morning news|")
     assert rows[2] == "0 1 Not revoked: the permissions could not be written"
     assert rows[3].split() == ["0", "1"]
