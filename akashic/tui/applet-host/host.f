@@ -1235,9 +1235,11 @@ VARIABLE _AHE-SLOT
     BEGIN ?DUP WHILE -1 OVER AHS.DIRTY ! AHS.NEXT @ REPEAT ;
 
 VARIABLE _AHTI-HOST
+VARIABLE _AHTI-PAINT
 
 : AHOST-TICK  ( host -- )
-    _AHTI-HOST ! _AHTI-HOST @ AHOST.HEAD @
+    _AHTI-HOST ! _UTUI-NEEDS-PAINT @ _AHTI-PAINT !
+    _AHTI-HOST @ AHOST.HEAD @
     BEGIN ?DUP WHILE
         DUP AHS-ALIVE? OVER AHS-CALLABLE? AND IF
             DUP >R
@@ -1248,20 +1250,23 @@ VARIABLE _AHTI-HOST
             R@ AHS.DESC @ APP.FLAGS @ APP-F-TICK-WHEN-CLEAN AND OR IF
                 R@ AHS.HAS-UIDL @ IF R@ AHS-CTX-SWITCH THEN
                 R@ AHS-ACTIVATE
+                0 _UTUI-NEEDS-PAINT !
                 R@ AHS.INST @ CINST.REVISION @              ( revision )
                 R@ AHS.DESC @ APP.TICK-XT @ ?DUP IF
                     R@ AHS.INST @ SWAP EXECUTE
                 THEN
-                \ A child its own tick touched is drawn in this pass, whose
-                \ paint follows the tick.
-                R@ AHS.INST @ CINST.REVISION @ <> IF
+                \ A child its own tick touched, or whose UIDL or widgets
+                \ its tick changed, is drawn in this pass, whose paint
+                \ follows the tick.
+                R@ AHS.INST @ CINST.REVISION @ <> _UTUI-NEEDS-PAINT @ OR IF
                     -1 R@ AHS.DIRTY ! ASHELL-DIRTY!
                 THEN
             THEN
             R> DROP
         THEN
         AHS.NEXT @
-    REPEAT ;
+    REPEAT
+    _AHTI-PAINT @ _UTUI-NEEDS-PAINT ! ;
 
 \ AHOST-SERVICE ( host -- worked? )
 \   Give each live applet's UIDL document its pending media work, one

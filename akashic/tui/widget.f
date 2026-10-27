@@ -31,7 +31,9 @@
 \  marked dirty to paint again without having changed.  A draw, a query or
 \  a capture never moves the revision.  It sits in the flags cell, so that
 \  a flag and the revision change in one store; it counts from 0 when the
-\  widget is made and wraps after 2^48 changes.
+\  widget is made and wraps after 2^48 changes.  Each move calls the change
+\  hook, which the owner that paints widgets sets to ask for a paint, so a
+\  widget changed anywhere is painted again with no word from its user.
 \
 \  Only a widget's own module reads or writes its fields by offset, the
 \  header's included: a module that implements a widget kind fills and
@@ -147,13 +149,23 @@ REQUIRE region.f
 : WDG-REVISION  ( widget -- n )
     WDG-FLAGS _WDG-REV-SHIFT RSHIFT ;
 
+\ The change hook ( -- ), called each time a widget's revision moves, or 0.
+\ UIDL's backend sets it to ask for a paint pass.
+VARIABLE _WDG-CHANGE-HOOK
+0 _WDG-CHANGE-HOOK !
+
+: _WDG-ON-CHANGE  ( -- )  _WDG-CHANGE-HOOK @ ?DUP IF EXECUTE THEN ;
+
+\ WDG-CHANGE-HOOK! ( xt -- )  Set the change hook, or clear it with 0.
+: WDG-CHANGE-HOOK!  ( xt -- )  _WDG-CHANGE-HOOK ! ;
+
 \ _WDG-FLAGS-TO ( flags widget -- )
 \   Store FLAGS, the widget's flags with some changed.  When a flag other
 \   than DIRTY changed, what the widget shows changed: move the revision
 \   and mark it for redraw.
 : _WDG-FLAGS-TO  ( flags widget -- )
     >R DUP R@ WDG-FLAGS XOR WDG-F-DIRTY INVERT AND IF
-        WDG-F-DIRTY OR _WDG-REV-ONE +
+        WDG-F-DIRTY OR _WDG-REV-ONE + R> _WDG-FLAGS! _WDG-ON-CHANGE EXIT
     THEN R> _WDG-FLAGS! ;
 
 \ WDG-FLAG! ( on? flag widget -- )
@@ -194,7 +206,8 @@ REQUIRE region.f
 \   widget's own words that already hold its module's guard and may mark
 \   once a dot or a glyph.  It touches only the widget's flags cell.
 : _WDG-CHANGED  ( widget -- )
-    DUP WDG-FLAGS WDG-F-DIRTY OR _WDG-REV-ONE + SWAP _WDG-FLAGS! ;
+    DUP WDG-FLAGS WDG-F-DIRTY OR _WDG-REV-ONE + SWAP _WDG-FLAGS!
+    _WDG-ON-CHANGE ;
 
 \ WDG-DIRTY ( widget -- )  What the widget shows changed: move its
 \   revision and mark it for redraw.
@@ -411,6 +424,7 @@ GUARD _wdg-guard
 ' WDG-FOCUS-SET   CONSTANT _wdg-focus-set-xt
 ' WDG-FOCUS-CLR   CONSTANT _wdg-focus-clr-xt
 ' WDG-INIT        CONSTANT _wdg-init-xt
+' WDG-CHANGE-HOOK! CONSTANT _wdg-change-hook-store-xt
 
 : WDG-TYPE        _wdg-type-xt      _wdg-guard WITH-GUARD ;
 : WDG-REGION      _wdg-region-xt    _wdg-guard WITH-GUARD ;
@@ -439,4 +453,5 @@ GUARD _wdg-guard
 : WDG-DRAW-IN     _wdg-draw-in-xt EXECUTE ;
 : WDG-HANDLE      _wdg-handle-xt EXECUTE ;
 : WDG-INIT        _wdg-init-xt      _wdg-guard WITH-GUARD ;
+: WDG-CHANGE-HOOK! _wdg-change-hook-store-xt _wdg-guard WITH-GUARD ;
 [THEN] [THEN]

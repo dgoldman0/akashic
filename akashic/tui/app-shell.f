@@ -199,17 +199,20 @@ VARIABLE _ASPC-INVALIDATE
     \ A dialog the child shows is its context's, over everything it paints.
     _ASPC-HAS-UIDL @ IF DLG-HOST-PAINT THEN ;
 
+\ The widgets a paint changes ask for no paint pass of their own.
+: _ASPC-PAINT  ( -- )  ['] _ASPC-DRAW-BODY UTUI-PAINTING ;
+
 : _ASHELL-PAINT-CHILD  ( uctx rgn has-uidl desc instance invalidate? -- )
     _ASPC-INVALIDATE !
     _ASPC-INST ! _ASPC-DESC ! _ASPC-HAS-UIDL !
     SWAP ASHELL-CTX-SWITCH
     ?DUP IF RGN-USE THEN
     _ASPC-HAS-UIDL @ IF
-        ['] _ASPC-DRAW-BODY UTUI-DRAW-OBSERVE 0= IF
+        ['] _ASPC-PAINT UTUI-DRAW-OBSERVE 0= IF
             UTUI-DRAW-COMPLETE
         THEN
     ELSE
-        _ASPC-DRAW-BODY
+        _ASPC-PAINT
     THEN
     0 _ASPC-INVALIDATE ! ;
 
@@ -1312,6 +1315,35 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
     THEN ;
 : ASHELL-DRAW-OBSERVER-IOR@ ( -- ior ) _ASHELL-DRAW-OBSERVER-IOR @ ;
 
+: _ASHELL-PAINT-BODY  ( -- )
+    \ The notice this paint shows, for the app's paint to read
+    _ASHELL-TOAST-LATCH
+    \ Restore the cell that the cursor glyph overwrote last frame
+    _ASHELL-CUR-RESTORE
+    _ASHELL-ACTIVATE
+    RGN-ROOT
+    \ UIDL elements first (they own the background/structure)
+    _ASHELL-HAS-UIDL @ IF
+        UTUI-PAINT
+    THEN
+    \ App's custom widget painting (on top of UIDL)
+    _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
+        _ASHELL-INST @ SWAP EXECUTE
+    THEN
+    \ A dialog the app shows, over everything the app paints
+    _ASHELL-OWN-UIDL? IF DLG-HOST-PAINT THEN
+    \ The notice (drawn last, on top of everything)
+    _ASHELL-TOAST-SHOWN @ IF
+        _ASHELL-DRAW-TOAST
+    THEN
+    \ Shell cursor (drawn above toast)
+    _ASHELL-CUR-VIS @ IF
+        _ASHELL-DRAW-CURSOR
+    THEN
+    \ Publish only after the complete top-level draw.  Projection failure
+    \ remains diagnostic; CELL is still the universal output.
+    _ASHELL-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN ;
+
 : _ASHELL-PAINT  ( -- )
     \ Check UIDL needs-paint flag (set by UIDL-DIRTY! hook)
     _UTUI-NEEDS-PAINT @ IF
@@ -1321,33 +1353,8 @@ VARIABLE _ASHELL-DRAW-OBSERVER-IOR
     _ASHELL-DIRTY @ IF
         0 _ASHELL-DIRTY !
         ASHELL-DRAW-BEGIN _ASHELL-DRAW-OBSERVE DROP
-        \ The notice this paint shows, for the app's paint to read
-        _ASHELL-TOAST-LATCH
-        \ Restore the cell that the cursor glyph overwrote last frame
-        _ASHELL-CUR-RESTORE
-        _ASHELL-ACTIVATE
-        RGN-ROOT
-        \ UIDL elements first (they own the background/structure)
-        _ASHELL-HAS-UIDL @ IF
-            UTUI-PAINT
-        THEN
-        \ App's custom widget painting (on top of UIDL)
-        _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
-            _ASHELL-INST @ SWAP EXECUTE
-        THEN
-        \ A dialog the app shows, over everything the app paints
-        _ASHELL-OWN-UIDL? IF DLG-HOST-PAINT THEN
-        \ The notice (drawn last, on top of everything)
-        _ASHELL-TOAST-SHOWN @ IF
-            _ASHELL-DRAW-TOAST
-        THEN
-        \ Shell cursor (drawn above toast)
-        _ASHELL-CUR-VIS @ IF
-            _ASHELL-DRAW-CURSOR
-        THEN
-        \ Publish only after the complete top-level draw.  Projection failure
-        \ remains diagnostic; CELL is still the universal output.
-        _ASHELL-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN
+        \ The widgets this paint changes ask for no paint pass of their own.
+        ['] _ASHELL-PAINT-BODY UTUI-PAINTING
         SCR-DRAW-COMPLETE
         ASHELL-DRAW-COMPLETE _ASHELL-DRAW-OBSERVE DROP
         RGN-ROOT

@@ -1173,7 +1173,7 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     assert "32 CONSTANT _UCTX-NVAR" in source
     assert "256 CONSTANT _UCTX-VAR-SZ" in source
     assert "30 CONSTANT _UCTX-NPLAIN" in source
-    assert "12 CONSTANT _UCTX-NPOOL" in source
+    assert "13 CONSTANT _UCTX-NPOOL" in source
     assert "16 CONSTANT _UTUI-MC-SOURCE-SIZE" in source
     assert (
         "_UTUI-MAX-ELEMS _UTUI-MC-SOURCE-SIZE * "
@@ -1190,10 +1190,14 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
     ) in source
     assert (
         "_UCTX-O-REVS   _UCTX-REVS-SZ   +                   "
+        "CONSTANT _UCTX-O-WREVS"
+    ) in source
+    assert (
+        "_UCTX-O-WREVS  _UCTX-WREVS-SZ  +                   "
         "CONSTANT UCTX-TOTAL"
     ) in source
-    assert "113,920 bytes" in source
-    assert 113_920 == (
+    assert "115,968 bytes" in source
+    assert 115_968 == (
         256
         + 32_768
         + 24_576
@@ -1206,6 +1210,7 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
         + 2_048
         + 512
         + 4_096
+        + 2_048
         + 2_048
     )
 

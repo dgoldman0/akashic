@@ -1037,7 +1037,24 @@ effective visibility, and effective z under one observation.
 
 `_UTUI-NEEDS-PAINT` is a global flag in `uidl-tui.f`.  It is set
 whenever any UIDL element is dirtied, via a hook variable
-(`_UDL-DIRTY-HOOK`) installed in `UIDL-DIRTY!`.
+(`_UDL-DIRTY-HOOK`) installed in `UIDL-DIRTY!` and `UIDL-MARK!`, and
+whenever a widget's revision moves outside a paint, via the widget change
+hook (`WDG-CHANGE-HOOK!`).
+
+For each element that hosts a widget, a materialized input, text area, tree
+or media widget, or one mounted on a region or group, UIDL keeps the
+widget's revision as it last painted it.  The paint pass paints an element
+whose widget's revision has moved as if it were marked, counting no change
+to the element, and a `<scroll>` around it first, since its thumb shows the
+widget's offset and its fill covers the widget.  A widget changed outside
+UIDL's dispatch therefore repaints with no application code.  A `<tabs>`
+keeps its state in the same sidecar cell, which is no widget.
+
+`UTUI-PAINTING ( i*x xt -- j*x )` runs a paint so that the widgets it
+changes ask for no paint pass of their own: a paint shows what it changes,
+such as a canvas it draws on, and asking again would paint for ever.  The
+shell runs its whole paint under it, UIDL's, the application's and the
+dialog's, for the root and for each child it paints.
 
 The flag is also set explicitly by:
 - `UTUI-ADD-ELEM`
@@ -1049,8 +1066,10 @@ attribute to the value it already has is a no-op and does not request a
 repaint or consume additional UIDL string-pool space.
 
 The shell checks `_UTUI-NEEDS-PAINT` after `TICK-XT` and at the
-start of `_ASHELL-PAINT`, converting it to `ASHELL-DIRTY!`.  Apps
-never need to call `ASHELL-DIRTY!` themselves.
+start of `_ASHELL-PAINT`, converting it to `ASHELL-DIRTY!`.  The applet
+host checks it around each child's tick, service pass and scoped call, and
+marks that child's slot for repaint.  Apps never need to call
+`ASHELL-DIRTY!` themselves.
 
 ### Internal Helpers (Sidecar Management)
 
@@ -1374,8 +1393,8 @@ compare generation for equality rather than inferring ordering from its sign.
 ## UIDL Context (UCTX) System
 
 Defined in §18b of `uidl-tui.f`. Provides per-app serialisation of 32 global
-UIDL/UTUI values and 12 copied pool arrays. The complete context is 113,920
-bytes, approximately 111 KiB.
+UIDL/UTUI values and 13 copied pool arrays. The complete context is 115,968
+bytes, approximately 113 KiB.
 The scalars include six neutral
 projection-lifecycle values: token, status, visibility, attached, quiescing,
 and quiesced, plus the open-menu pointer, saved focus, and compact rectangle/z
@@ -1384,9 +1403,11 @@ painted over the document with that prompt's instance, and the dialog its
 application shows. The final two scalar slots hold the mounted-canonical
 relation head and count. A context freed or cleared with a dialog still open
 frees the dialog without answering it. The eleventh pool is the 4,096-byte
-mounted-source generation/next-key table, and the twelfth the 2,048-byte table
-of element revisions (`UIDL-REVISION`); the count the revisions are stamped
-from is shared by every context and is not saved.
+mounted-source generation/next-key table, the twelfth the 2,048-byte table
+of element revisions (`UIDL-REVISION`), and the thirteenth the 2,048-byte
+table of the revision each hosted widget had when UIDL last painted it. The
+count the element revisions are stamped from is shared by every context and
+is not saved.
 Projection-adapter context and callbacks are composition authority and never
 enter a UCTX. There is no mounted-provider table or callback borrow. The
 dynamic relation chain belongs to exactly one UCTX through its saved head/count,
@@ -1398,12 +1419,12 @@ variable and manage that live alias ownership.
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
 | `UCTX-FREE` | `( ctx -- )` | Release an inactive context, including its saved relation chain, through the platform allocator. A live context or active draw observation is rejected. |
-| `UCTX-SAVE` | `( ctx -- )` | Save the 32 values, 12 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
+| `UCTX-SAVE` | `( ctx -- )` | Save the 32 values, 13 pools, and dynamic relation aliases to the exact live owner. Draw observation must be quiescent. |
 | `UCTX-RESTORE` | `( ctx -- )` | Restore an inactive context only when the live globals are disowned, then make `ctx` their unique owner. |
 | `UCTX-CLEAR` | `( ctx -- )` | Release saved relations and zero-fill an inactive context buffer. A live context or active draw observation is rejected. |
 | `UCTX-LIVE?` | `( ctx -- flag )` | Report whether `ctx` owns the relation aliases exposed through the live UIDL globals. |
 | `UCTX-LIVE-DISOWN` | `( -- )` | After saving, remove the live aliases without freeing the chain now owned by that context. Draw observation must be quiescent. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (113,920). |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (115,968). |
 
 Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`) and by
 `applet-host/host.f`, which allocates and releases the UCTX buffers that Desk
@@ -1516,14 +1537,14 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
-UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (113,920 bytes)
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (115,968 bytes)
 UCTX-FREE              ( ctx -- )                    Free an inactive context and its saved relations
 UCTX-SAVE              ( ctx -- )                    Save globals, pools, and relation aliases to the live owner
 UCTX-RESTORE           ( ctx -- )                    Restore a context into disowned live globals
 UCTX-CLEAR             ( ctx -- )                    Clear an inactive context and its saved relations
 UCTX-LIVE?             ( ctx -- flag )               Test unique ownership of the live aliases
 UCTX-LIVE-DISOWN       ( -- )                        Disown saved live aliases before another restore
-UCTX-TOTAL             ( -- n )                      Context buffer byte size (113920)
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (115968)
 ```
 
 ---

@@ -143,8 +143,9 @@ must succeed before unlink, notification, or any owned-resource release.
 while clean (`APP-F-TICK-WHEN-CLEAN`). A child whose instance a caller
 touched (`CINST-TOUCH`) since it was last painted is dirty. A child that
 touches its own instance while it ticks, to have a change of its own drawn,
-is marked dirty at once and asks the shell to paint, so the paint that
-follows the tick in the same pass draws it.
+or whose tick marks a UIDL element or changes a widget, which asks for a
+paint, is marked dirty at once and asks the shell to paint, so the paint
+that follows the tick in the same pass draws it.
 
 Code that runs for a child from outside its callbacks, such as a capability
 handler the request bus calls from its owner's tick, would otherwise run in

@@ -73,6 +73,13 @@ The revision shares the flags cell, so a flag and the revision change in one
 store. It counts from 0 when the widget is made and wraps after 2^48
 changes. Only `widget.f` writes the flags cell after a widget is made.
 
+Each move of a revision calls the change hook, which `WDG-CHANGE-HOOK!`
+sets. UIDL's backend sets it to ask for a paint pass, so a widget changed
+anywhere, in a callback, a tick or another widget's callback, is painted
+again with no word from the application. UIDL keeps the revision of each
+widget an element hosts as it last painted it, and repaints the element
+when the revision has moved.
+
 ## Type Constants
 
 | Constant | Value | Widget |

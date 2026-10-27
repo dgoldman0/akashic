@@ -934,6 +934,7 @@ def test_completed_top_level_draw_has_a_renderer_neutral_generation() -> None:
     complete = _definition(screen, "SCR-DRAW-COMPLETE")
     generation = _definition(screen, "SCR-DRAW-GENERATION@")
     paint = _definition(shell, "_ASHELL-PAINT")
+    body = _definition(shell, "_ASHELL-PAINT-BODY")
 
     assert "_SCR-O-DRAW-GENERATION" in complete
     assert "1+" in complete
@@ -943,7 +944,10 @@ def test_completed_top_level_draw_has_a_renderer_neutral_generation() -> None:
     assert ": SCR-DRAW-COMPLETE   _scr-draw-complete-xt" in screen
     assert "' SCR-DRAW-GENERATION@" in screen
     assert ": SCR-DRAW-GENERATION@" in screen
-    assert paint.index("UTUI-DRAW-COMPLETE") < paint.index(
+    # The paint body publishes the projection last; the screen's draw
+    # completes after the body.
+    assert body.rstrip().endswith("_ASHELL-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN ;")
+    assert paint.index("['] _ASHELL-PAINT-BODY UTUI-PAINTING") < paint.index(
         "SCR-DRAW-COMPLETE"
     )
     assert paint.index("SCR-DRAW-COMPLETE") < paint.index(

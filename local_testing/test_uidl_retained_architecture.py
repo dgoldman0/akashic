@@ -476,9 +476,9 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
         )
     assert "32 CONSTANT _UCTX-NVAR" in tui
     assert "256 CONSTANT _UCTX-VAR-SZ" in tui
-    assert "12 CONSTANT _UCTX-NPOOL" in tui
-    assert "113,920 bytes" in tui
-    assert "113,920" in _text("docs/tui/uidl-tui.md")
+    assert "13 CONSTANT _UCTX-NPOOL" in tui
+    assert "115,968 bytes" in tui
+    assert "115,968" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-PAA-BINDING !" in tui
     assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 
@@ -518,8 +518,12 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
     ) < child_paint.index("UTUI-DRAW-OBSERVE") < child_paint.index(
         "UTUI-DRAW-COMPLETE"
     )
-    assert "['] _ASPC-DRAW-BODY UTUI-DRAW-OBSERVE 0= IF" in child_paint
-    top_paint = _word(shell, "_ASHELL-PAINT")
+    assert "['] _ASPC-PAINT UTUI-DRAW-OBSERVE 0= IF" in child_paint
+    # Both paints run under UTUI-PAINTING, so the widgets they change ask
+    # for no paint pass of their own.
+    assert "['] _ASPC-DRAW-BODY UTUI-PAINTING" in _word(shell, "_ASPC-PAINT")
+    assert "['] _ASHELL-PAINT-BODY UTUI-PAINTING" in _word(shell, "_ASHELL-PAINT")
+    top_paint = _word(shell, "_ASHELL-PAINT-BODY")
     assert top_paint.index("UTUI-PAINT") < top_paint.index(
         "APP.PAINT-XT"
     ) < top_paint.index(
@@ -1791,7 +1795,7 @@ def test_direct_foreground_painters_declare_final_writer_provenance() -> None:
     assert "['] _PRM-DRAW ['] _PRM-HANDLE WDG-INIT" in prompt
     assert "['] _AAUP-DRAW ['] _AAUP-HANDLE WDG-INIT" in auth
 
-    paint = _word(shell, "_ASHELL-PAINT")
+    paint = _word(shell, "_ASHELL-PAINT-BODY")
     app = paint.index("_ASHELL-DESC @ APP.PAINT-XT")
     toast = paint.index("_ASHELL-DRAW-TOAST", app)
     cursor = paint.index("_ASHELL-DRAW-CURSOR", toast)
@@ -1846,7 +1850,7 @@ def test_dialogs_are_hosted_by_their_application_host_and_never_block() -> None:
     for word in ("_ASHELL-DISPATCH-KEY", "_ASHELL-DISPATCH-MOUSE-IMPL"):
         body = _word(shell, word)
         assert body.index("DLG-HOST-EVENT") < body.index("APP.EVENT-XT"), word
-    paint = _word(shell, "_ASHELL-PAINT")
+    paint = _word(shell, "_ASHELL-PAINT-BODY")
     assert (paint.index("APP.PAINT-XT") < paint.index("DLG-HOST-PAINT")
             < paint.index("_ASHELL-DRAW-TOAST"))
     child = _word(shell, "_ASPC-DRAW-BODY")
@@ -1856,7 +1860,7 @@ def test_dialogs_are_hosted_by_their_application_host_and_never_block() -> None:
     # its context leaves in the globals after it paints, is its host's.
     for word, call in (("_ASHELL-DISPATCH-KEY", "DLG-HOST-EVENT"),
                        ("_ASHELL-DISPATCH-MOUSE-IMPL", "DLG-HOST-EVENT"),
-                       ("_ASHELL-PAINT", "DLG-HOST-PAINT"),
+                       ("_ASHELL-PAINT-BODY", "DLG-HOST-PAINT"),
                        ("_ASHELL-TD-UIDL", "DLG-DISCARD")):
         body = _word(shell, word)
         assert body.index("_ASHELL-OWN-UIDL? IF") < body.index(call), word

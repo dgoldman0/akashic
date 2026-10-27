@@ -119,6 +119,10 @@ TSC-SIZE CONSTANT _UTUI-SC-SZ
 256 CONSTANT _UTUI-MAX-ELEMS
 CREATE _UTUI-SIDECARS  _UTUI-MAX-ELEMS _UTUI-SC-SZ * ALLOT
 
+\ For each element that hosts a widget, the widget's revision when UIDL
+\ last painted it (§13).
+CREATE _UTUI-WREVS  _UTUI-MAX-ELEMS CELLS ALLOT
+
 \ Sidecar field offset aliases (all delegate to TSC-O-*)
 TSC-O-ROW   CONSTANT _UTUI-SC-O-ROW
 TSC-O-COL   CONSTANT _UTUI-SC-O-COL
@@ -238,7 +242,8 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 
 \ Clear all sidecars
 : _UTUI-SC-CLEAR-ALL  ( -- )
-    _UTUI-SIDECARS _UTUI-MAX-ELEMS _UTUI-SC-SZ * 0 FILL ;
+    _UTUI-SIDECARS _UTUI-MAX-ELEMS _UTUI-SC-SZ * 0 FILL
+    _UTUI-WREVS _UTUI-MAX-ELEMS CELLS 0 FILL ;
 
 \ Public style readers — extract fg/bg/attrs from an element's resolved
 \ sidecar style.  These are available after UTUI-LOAD returns.
@@ -730,6 +735,24 @@ VARIABLE _UTUI-PAA-STATUS
 \ Wire UIDL-DIRTY! hook so any element dirtying auto-signals repaint
 : _UTUI-DIRTY-HOOK  ( -- ) _UTUI-NEEDS-PAINT ON ;
 ' _UTUI-DIRTY-HOOK  _UDL-DIRTY-HOOK !
+
+\ A widget changed anywhere asks for a paint the same way, unless a paint
+\ changed it: a paint shows what it changes, such as a canvas it draws on,
+\ and asking again would paint for ever.
+VARIABLE _UTUI-PAINTING
+0 _UTUI-PAINTING !
+
+: _UTUI-WIDGET-CHANGED  ( -- )
+    _UTUI-PAINTING @ 0= IF _UTUI-NEEDS-PAINT ON THEN ;
+' _UTUI-WIDGET-CHANGED WDG-CHANGE-HOOK!
+
+\ UTUI-PAINTING ( i*x xt -- j*x )
+\   Run XT, a paint, so that the widgets it changes ask for no paint pass.
+\   Hosts run their whole paint under it: UIDL's, the application's and the
+\   dialog's.
+: UTUI-PAINTING  ( i*x xt -- j*x )
+    _UTUI-PAINTING @ >R -1 _UTUI-PAINTING !
+    CATCH R> _UTUI-PAINTING ! THROW ;
 
 \ =====================================================================
 \  §3 — Action Dispatch Table
@@ -2816,6 +2839,33 @@ VARIABLE _UTUI-OVERLAY-CNT
     !                                  \ store elem at +0
     1 _UTUI-OVERLAY-CNT +! ;
 
+\ The widget an element hosts and UIDL draws when it paints the element: a
+\ materialized input, text area, tree or media widget, or one mounted on a
+\ region or group.  UIDL keeps the widget's revision as it painted it, so that a
+\ widget changed anywhere, in a callback, a tick or another widget's
+\ callback, paints again with no word from the application.  A <tabs>
+\ keeps its state in the same cell, which is no widget.
+: _UTUI-WREV  ( elem -- addr )  _UTUI-SC-IDX CELLS _UTUI-WREVS + ;
+
+: _UTUI-HOSTED-WIDGET  ( elem -- widget | 0 )
+    DUP _UTUI-SIDECAR _UTUI-SC-WPTR@ DUP 0= IF NIP EXIT THEN
+    SWAP UIDL-TYPE
+    DUP UIDL-T-REGION = OVER UIDL-T-GROUP = OR OVER UIDL-T-INPUT = OR
+    OVER UIDL-T-TEXTAREA = OR OVER UIDL-T-TREE = OR SWAP UIDL-T-MEDIA = OR
+    0= IF DROP 0 THEN ;
+
+: _UTUI-NOTE-PAINTED  ( elem -- )
+    DUP _UTUI-HOSTED-WIDGET ?DUP IF
+        WDG-REVISION SWAP _UTUI-WREV !
+    ELSE DROP THEN ;
+
+\ _UTUI-WIDGET-MOVED? ( elem -- flag )
+\   Whether the widget elem hosts changed since UIDL last painted it.
+: _UTUI-WIDGET-MOVED?  ( elem -- flag )
+    DUP _UTUI-HOSTED-WIDGET ?DUP IF
+        WDG-REVISION SWAP _UTUI-WREV @ <>
+    ELSE DROP 0 THEN ;
+
 \ Paint a single element (calls its render-xt).  Neutral UIDL, LEL, and state
 \ observations stay held until the hook has consumed every borrowed span and
 \ the same element has been marked clean.  Semantic scratch writers enter
@@ -2826,6 +2876,7 @@ VARIABLE _UTUI-OVERLAY-CNT
             OVER SWAP EXECUTE
         ELSE DROP THEN
     THEN
+    DUP _UTUI-NOTE-PAINTED
     UIDL-CLEAN! ;
 
 : _UTUI-RENDER-ONE-IN-STATE  ( elem -- )
@@ -2906,7 +2957,17 @@ VARIABLE _UTUI-SKIP-CHILDREN
         -1 _UTUI-SKIP-CHILDREN !
         UIDL-CLEAN! EXIT
     THEN
-    DUP UIDL-DIRTY? 0= IF DROP EXIT THEN
+    \ A clean element whose widget changed since it was painted paints as
+    \ if it were marked; the paint counts no change to the element.  A
+    \ <scroll> around it shows the widget's offset in its thumb, and its fill
+    \ covers the widget, so it paints first.
+    DUP UIDL-DIRTY? 0= IF
+        DUP _UTUI-WIDGET-MOVED? 0= IF DROP EXIT THEN
+        DUP UIDL-PARENT ?DUP IF
+            DUP UIDL-TYPE UIDL-T-SCROLL = IF _UTUI-RENDER-ONE ELSE DROP THEN
+        THEN
+        DUP UE.FLAGS DUP @ UIDL-F-DIRTY OR SWAP !
+    THEN
     \ Defer dialogs (always painted on top)
     DUP UIDL-TYPE UIDL-T-DIALOG = IF
         DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@
@@ -3019,8 +3080,8 @@ VARIABLE _UTUI-SKIP-CHILDREN
 \ UTUI-SERVICE ( -- worked? )
 \   Work that no input announces.  Each <media> element whose picture is
 \   still decoding, or whose document needs a part read or a picture's
-\   file made, advances one bounded slice, and one whose view changed is
-\   marked for repaint.  True when any slice ran, so the caller's loop
+\   file made, advances one bounded slice; a widget whose view changed
+\   asks for its own repaint.  True when any slice ran, so the caller's loop
 \   does not sleep while work remains.  Hosts call it each pass with the
 \   document's context active; it returns at once when no picture
 \   anywhere is decoding and no document view has work.
@@ -3037,7 +3098,7 @@ VARIABLE _USV-WORKED
                 _UTUI-SC-WPTR@ ?DUP IF
                     DUP MEDIA-PENDING? IF
                         -1 _USV-WORKED !
-                        MEDIA-SERVICE IF DUP UIDL-MARK! THEN
+                        MEDIA-SERVICE DROP
                     ELSE DROP THEN
                 THEN
             ELSE DROP THEN
@@ -5519,8 +5580,8 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  §18b — UIDL Context Save / Restore  (UCTX)
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 32 scalar variables and 12 copied
-\  pool arrays. Total: 113,920 bytes (approximately 111 KiB).  The mounted
+\  Per sub-app UIDL context buffer holding 32 scalar variables and 13 copied
+\  pool arrays. Total: 115,968 bytes (approximately 113 KiB).  The mounted
 \  canonical relation head is context-owned dynamic state; context buffers
 \  are consequently opaque, non-copyable, and may be cleared/freed only while
 \  inactive.
@@ -5546,6 +5607,7 @@ _UTUI-ACTS-SZ CONSTANT _UCTX-ACTS-SZ  \ exact action arena
    512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
 _UTUI-MC-SOURCES-SIZE CONSTANT _UCTX-MCS-SZ
 _UDL-MAX-ELEMS CELLS CONSTANT _UCTX-REVS-SZ    \ 256 × 8
+_UTUI-MAX-ELEMS CELLS CONSTANT _UCTX-WREVS-SZ  \ 256 × 8
 
 \ Offsets into context buffer
 _UCTX-VAR-SZ                                       CONSTANT _UCTX-O-ELEMS
@@ -5560,7 +5622,8 @@ _UCTX-O-ACTS   _UCTX-ACTS-SZ   +                   CONSTANT _UCTX-O-SHORTS
 _UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
 _UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-O-MCS
 _UCTX-O-MCS    _UCTX-MCS-SZ    +                   CONSTANT _UCTX-O-REVS
-_UCTX-O-REVS   _UCTX-REVS-SZ   +                   CONSTANT UCTX-TOTAL
+_UCTX-O-REVS   _UCTX-REVS-SZ   +                   CONSTANT _UCTX-O-WREVS
+_UCTX-O-WREVS  _UCTX-WREVS-SZ  +                   CONSTANT UCTX-TOTAL
 
 29 CELLS CONSTANT _UCTX-O-MODAL
 30 CELLS CONSTANT _UCTX-O-MC-HEAD
@@ -5618,7 +5681,7 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
-12 CONSTANT _UCTX-NPOOL
+13 CONSTANT _UCTX-NPOOL
 CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
 
 : _UCTX-INIT-POOLS  ( -- )
@@ -5657,7 +5720,10 @@ CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
     _UCTX-MCS-SZ      _UCTX-POOLS 256 + !
     _UDL-REVS         _UCTX-POOLS 264 + !
     _UCTX-O-REVS      _UCTX-POOLS 272 + !
-    _UCTX-REVS-SZ     _UCTX-POOLS 280 + ! ;
+    _UCTX-REVS-SZ     _UCTX-POOLS 280 + !
+    _UTUI-WREVS       _UCTX-POOLS 288 + !
+    _UCTX-O-WREVS     _UCTX-POOLS 296 + !
+    _UCTX-WREVS-SZ    _UCTX-POOLS 304 + ! ;
 _UCTX-INIT-POOLS
 
 \ --- Public API ---

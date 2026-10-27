@@ -194,10 +194,12 @@ def test_each_context_keeps_its_revisions_and_shares_the_count():
 
 def test_the_context_buffer_holds_the_revisions():
     output = SUITE.run([
-        "UCTX-TOTAL . _UCTX-O-REVS . _UCTX-REVS-SZ . CR",
+        "UCTX-TOTAL . _UCTX-O-REVS . _UCTX-REVS-SZ . _UCTX-O-WREVS . CR",
         "_UDL-REVS 8 UIDL-STORAGE-DISJOINT? . _UDL-STAMP 8 UIDL-STORAGE-DISJOINT? . CR",
     ], 100_000_000).decode(errors="replace")
-    total, offset, size = map(int, output.strip().splitlines()[-2].split())
-    assert size == 256 * 8 and offset + size == total == 113_920
+    total, offset, size, painted = map(int, output.strip().splitlines()[-2].split())
+    # The element revisions, then the painted widget revisions, end it.
+    assert size == 256 * 8 and offset + size == painted
+    assert painted + 256 * 8 == total == 115_968
     # The revisions and their count are UIDL's own storage.
     assert re.fullmatch(r"\s*0\s+0\s*", output.strip().splitlines()[-1])

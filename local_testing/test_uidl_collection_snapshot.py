@@ -1190,8 +1190,9 @@ def _media_collection_program() -> list[str]:
         "UTUI-PAINT _UM-NATIVE 2048 _UM-CAPTURE",
         "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT _UM-COUNT @ 1 = _UM-ASSERT",
         "_UM-D0 UCSN-DESCRIPTOR-SOURCE-INDEX@ _UM-ET @ _UM-INDEX = _UM-ASSERT",
-        # A picture decodes from the per-pass service once painted, and the
-        # element that changed is marked for repaint.
+        # A picture decodes from the per-pass service once painted.  The
+        # media widget counts the change and asks for a paint, and the paint
+        # pass repaints its element, which nothing marks.
         'S" /logo.qoi" _UM-OPEN 0= _UM-ASSERT',
         # The authored logo has decoded since the first paint; this one
         # waits for its own.
@@ -1200,11 +1201,13 @@ def _media_collection_program() -> list[str]:
         "UTUI-PAINT",
         "PICT-WORK? _UM-ASSERT",
         "_UM-EM @ UIDL-DIRTY? 0= _UM-ASSERT",
-        "_UM-SERVICE 0> _UM-ASSERT",
+        "0 _UTUI-NEEDS-PAINT ! _UM-SERVICE 0> _UM-ASSERT",
         "PICT-WORK? 0= _UM-ASSERT",
-        "_UM-EM @ UIDL-DIRTY? _UM-ASSERT",
+        "_UM-EM @ UIDL-DIRTY? 0= _UM-ASSERT",
+        "_UTUI-NEEDS-PAINT @ _UM-ASSERT _UM-EM @ _UTUI-WIDGET-MOVED? _UM-ASSERT",
         "_UM-WM @ MEDIA-PICTURE@ PICT-CELL-COPY@ PIC-STATE@ PIC-ST-READY = _UM-ASSERT",
-        "UTUI-PAINT _UM-NATIVE 2048 _UM-CAPTURE",
+        "UTUI-PAINT _UM-EM @ _UTUI-WIDGET-MOVED? 0= _UM-ASSERT",
+        "_UM-NATIVE 2048 _UM-CAPTURE",
         "_UM-STATUS @ UCSN-S-OK = _UM-ASSERT _UM-COUNT @ 1 = _UM-ASSERT",
         "_UM-STACK",
         "UTUI-DETACH",
