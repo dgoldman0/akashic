@@ -2870,7 +2870,33 @@ VARIABLE _UTUI-OVERLAY-CNT
 \ observations stay held until the hook has consumed every borrowed span and
 \ the same element has been marked clean.  Semantic scratch writers enter
 \ through UIDL first, so the outer UIDL observation also pins that scratch.
+\ A clean element whose widget changed draws, when it can, only what
+\ changed: the screen still holds the widget's last draw, since nothing
+\ marked the element.  The widget's region and focus are synced first, as
+\ for a whole draw, but nothing is filled.
+VARIABLE _UTUI-PARTIAL     \ set while a paint tries the partial draw
+VARIABLE _UTUI-PARTIAL-DREW
+
+: _UTUI-DRAW-CHANGED  ( elem -- )
+    _UTUI-STASH-SC 0= IF DROP EXIT THEN
+    DUP _UTUI-SIDECAR DUP _UTUI-SC-WPTR@     ( elem sc wptr )
+    TUCK _UTUI-SYNC-WFOCUS                   ( elem wptr )
+    OVER UIDL-TYPE DUP UIDL-T-REGION = SWAP UIDL-T-GROUP = OR IF
+        \ A mounted widget keeps its own region, synced as a whole draw does.
+        DUP WDG-REGION
+        _UR-ABS-ROW @ OVER _RGN-O-ROW + !
+        _UR-ABS-COL @ OVER _RGN-O-COL + !
+        _UR-H @   OVER _RGN-O-H   + !
+        _UR-W @   OVER _RGN-O-W   + !
+        _UTUI-RGN @ SWAP _RGN-O-PARENT + !
+    ELSE
+        _UTUI-PROXY-FROM-UR
+    THEN
+    WDG-DRAW-CHANGED? _UTUI-RESTORE-DOC-RGN
+    IF -1 _UTUI-PARTIAL-DREW ! _UTUI-NOTE-PAINTED ELSE DROP THEN ;
+
 : _UTUI-RENDER-ONE-BODY  ( elem -- )
+    _UTUI-PARTIAL @ IF _UTUI-DRAW-CHANGED EXIT THEN
     DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
         ED.RENDER-XT @ DUP ['] NOOP <> IF
             OVER SWAP EXECUTE
@@ -2895,6 +2921,14 @@ VARIABLE _UTUI-OVERLAY-CNT
 
 : _UTUI-RENDER-ONE  ( elem -- )
     ['] _UTUI-RENDER-ONE-IN-UIDL UIDL-OBSERVE ;
+
+\ _UTUI-PAINT-CHANGED ( elem -- drew? )  Try the partial draw.
+: _UTUI-PAINT-CHANGED  ( elem -- drew? )
+    -1 _UTUI-PARTIAL !  0 _UTUI-PARTIAL-DREW !
+    ['] _UTUI-RENDER-ONE CATCH
+    0 _UTUI-PARTIAL !
+    ?DUP IF NIP THROW THEN
+    _UTUI-PARTIAL-DREW @ ;
 
 \ Parent renderers own and clear their full rectangles.  Ensure their
 \ direct children repaint later in the same DFS pass so clean child
@@ -2964,7 +2998,15 @@ VARIABLE _UTUI-SKIP-CHILDREN
     DUP UIDL-DIRTY? 0= IF
         DUP _UTUI-WIDGET-MOVED? 0= IF DROP EXIT THEN
         DUP UIDL-PARENT ?DUP IF
-            DUP UIDL-TYPE UIDL-T-SCROLL = IF _UTUI-RENDER-ONE ELSE DROP THEN
+            DUP UIDL-TYPE UIDL-T-SCROLL = IF _UTUI-RENDER-ONE 0 ELSE DROP -1 THEN
+        ELSE -1 THEN
+        \ An element in the normal flow, under no <scroll>, first tries the
+        \ widget's partial draw.
+        IF
+            DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@ 0=
+            OVER UIDL-TYPE UIDL-T-DIALOG <> AND IF
+                DUP _UTUI-PAINT-CHANGED IF DROP EXIT THEN
+            THEN
         THEN
         DUP UE.FLAGS DUP @ UIDL-F-DIRTY OR SWAP !
     THEN
@@ -3111,6 +3153,24 @@ VARIABLE _USV-WORKED
 \  §14 — Key Dispatch
 \ =====================================================================
 
+\ A key the focused element's widget consumed changed what the widget's
+\ revision counts, and the paint pass paints the widget for it, so the
+\ element is marked for repaint only when its widget did not count a
+\ change: an element with no widget, or a widget that counts nothing.
+VARIABLE _UDK-ELEM
+VARIABLE _UDK-WREV
+
+: _UTUI-HOSTED-REVISION  ( elem -- revision | -1 )
+    _UTUI-HOSTED-WIDGET ?DUP IF WDG-REVISION ELSE -1 THEN ;
+
+: _UTUI-KEY-MARK  ( -- )
+    UTUI-FOCUS ?DUP 0= IF EXIT THEN
+    DUP _UDK-ELEM @ = IF
+        DUP _UTUI-HOSTED-REVISION
+        DUP -1 <> SWAP _UDK-WREV @ <> AND IF DROP EXIT THEN
+    THEN
+    UIDL-DIRTY! ;
+
 : UTUI-DISPATCH-KEY  ( ev -- handled? )
     DUP _UR-EV !                       \ save original event pointer
     DUP KEY-CODE@ SWAP KEY-MODS@       ( code mods )
@@ -3151,13 +3211,14 @@ VARIABLE _USV-WORKED
     \ Focused element's event-xt
     UTUI-FOCUS ?DUP IF                ( code mods elem )
         >R 2DROP R>                    ( elem )
+        DUP _UDK-ELEM !  DUP _UTUI-HOSTED-REVISION _UDK-WREV !
         DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
             ED.EVENT-XT @ DUP ['] NOOP <> IF
                 >R                     ( elem   R: xt )
                 _UR-EV @               ( elem ev   R: xt )
                 R>                     ( elem ev xt )
                 EXECUTE                ( handled? )
-                DUP IF UTUI-FOCUS ?DUP IF UIDL-DIRTY! THEN THEN
+                DUP IF _UTUI-KEY-MARK THEN
                 EXIT
             ELSE DROP THEN
         THEN
@@ -3224,8 +3285,14 @@ VARIABLE _UDP-CODE
     KEY-T-MOUSE _UDM-EV !
     _UDP-CODE @ _UDM-EV 8 + !
     _UDP-ROW @ 16 LSHIFT _UDP-COL @ OR _UDM-EV 16 + !
+    DUP _UTUI-HOSTED-REVISION _UDK-WREV !
     _UDM-EV R> WDG-HANDLE                  ( elem handled? )
     DUP 0= IF NIP EXIT THEN
+    \ A widget that counted the change is painted for it, with the <scroll>
+    \ around it; one that counted nothing is marked, as before.
+    OVER _UTUI-HOSTED-REVISION DUP -1 <> SWAP _UDK-WREV @ <> AND IF
+        NIP EXIT
+    THEN
     OVER UIDL-MARK!
     SWAP UIDL-PARENT ?DUP IF
         DUP UIDL-TYPE UIDL-T-SCROLL = IF UIDL-MARK! ELSE DROP THEN

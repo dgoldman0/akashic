@@ -1288,11 +1288,13 @@ def test_input_scrolls_a_wide_character_fully_into_view() -> None:
 
 
 def test_uidl_repaints_a_widget_and_its_scroll_after_consumed_pointer_input() -> None:
-    """UIDL paints only dirty elements, so forwarding must mark them.
+    """A widget that counts the change a pointer event made needs no mark.
 
-    A list mounted inside <scroll> scrolls on a wheel step; its element and
-    the scroll container (whose thumb follows the list) must both repaint.
-    An event the widget refuses repaints nothing.
+    A list mounted inside <scroll> scrolls on a wheel step.  The list counts
+    the change in its revision, so neither its element nor the scroll is
+    marked; the paint pass paints the element for the moved revision, and
+    the scroll (whose thumb follows the list) first.  An event the widget
+    refuses repaints nothing.
     """
 
     values = _numbers(
@@ -1318,11 +1320,14 @@ def test_uidl_repaints_a_widget_and_its_scroll_after_consumed_pointer_input() ->
             "_UCELL 2DUP KEY-MOUSE-SCROLL-DN UTUI-DISPATCH-POINTER",
             "_UL @ _LST-O-SCROLL + @",
             "_UE UIDL-DIRTY? _US UIDL-DIRTY?",
+            "_UE _UTUI-WIDGET-MOVED?",
+            "UTUI-PAINT _UE _UTUI-WIDGET-MOVED?",
         ]
-        + _report(9),
+        + _report(11),
         roots=UIDL_ROOTS,
     )
 
-    # Printed top first: the wheel scrolled three rows and dirtied both
-    # elements; before it, the refused press left both clean.
-    assert values == [-1, -1, 3, -1, 0, 0, 0, 0, 0]
+    # Printed top first: the paint caught up with the list; the wheel
+    # scrolled three rows, marked neither element and left the list's
+    # revision moved; before it, the refused press left both clean.
+    assert values == [0, -1, 0, 0, 3, -1, 0, 0, 0, 0, 0]

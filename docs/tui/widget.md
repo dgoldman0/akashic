@@ -152,7 +152,16 @@ and sets DIRTY. Setting a flag a widget already has moves nothing.
 | Word | Stack | Description |
 |------|-------|-------------|
 | `WDG-DRAW` | `( widget -- )` | If visible: activate region, call draw-xt, clear dirty |
+| `WDG-DRAW-CHANGED?` | `( widget -- drew? )` | For an owner whose screen still holds the widget's last draw: draw only what changed, through its kind's partial drawer, and return true; return false, having drawn nothing, when it is hidden, its kind has none or the change is not one it covers |
+| `WDG-PARTIAL!` | `( xt type -- )` | Register a canonical kind's partial drawer, `( widget -- drew? )` |
 | `WDG-HANDLE` | `( event widget -- consumed? )` | If not disabled: call handle-xt |
+
+A canonical kind that can draw only what changed since its last draw
+registers a partial drawer for its type. The drawer draws just that, onto a
+screen that still holds the widget's last draw, and reports it through
+`WDG-DRAW-PARTIAL-COMPLETE`, or draws nothing and returns false; the owner
+then draws the widget whole. The table follows the canonical kinds, up to
+`WDG-T-DOCUMENT`. The text area registers one for typing.
 
 ## Design Notes
 

@@ -2440,3 +2440,9 @@ GUARD _txta-guard
 
 CREATE _TXTA-OWNED-END
 _TXTA-OWNED-END _TXTA-OWNED-LIMIT !
+
+\ The text area's partial drawer: the rows typing changed, when only typing
+\ changed it since its last draw (TXTA-CHANGED-ROWS).
+: _TXTA-DRAW-CHANGED  ( widget -- drew? )
+    DUP TXTA-CHANGED-ROWS ?DUP IF ROT TXTA-DRAW-ROWS -1 ELSE 2DROP 0 THEN ;
+' _TXTA-DRAW-CHANGED WDG-T-TEXTAREA WDG-PARTIAL!

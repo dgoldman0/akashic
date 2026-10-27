@@ -170,6 +170,10 @@ no selection is replaced, neither scroll moves, and nothing else moves the
 revision before the next draw.  The widget keeps those rows with the
 revision and region of its last draw, and `TXTA-CHANGED-ROWS` names them
 only while all three still hold; anything else asks for a whole draw.
+The text area registers these two as its kind's partial drawer
+(`WDG-PARTIAL!`), so an owner that knows its screen holds the last draw,
+such as UIDL painting a clean `<textarea>` whose widget changed, redraws a
+typed character's row through `WDG-DRAW-CHANGED?`.
 
 ### Text Sources
 

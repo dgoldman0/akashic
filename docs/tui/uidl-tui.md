@@ -1050,6 +1050,15 @@ widget's offset and its fill covers the widget.  A widget changed outside
 UIDL's dispatch therefore repaints with no application code.  A `<tabs>`
 keeps its state in the same sidecar cell, which is no widget.
 
+Such an element in the normal flow, under no `<scroll>`, first tries the
+widget's partial draw (`WDG-DRAW-CHANGED?`): nothing marked it, so the screen
+still holds the widget's last draw, and a typed character redraws only the
+text area's row.  A widget whose kind has no partial drawer, or a change the
+drawer does not cover, paints as if marked.  A key, or a pointer event, the
+focused element's widget consumed marks the element only when the widget
+counted no change: an element with no widget, or a widget that counts
+nothing, is marked as before.
+
 `UTUI-PAINTING ( i*x xt -- j*x )` runs a paint so that the widgets it
 changes ask for no paint pass of their own: a paint shows what it changes,
 such as a canvas it draws on, and asking again would paint for ever.  The

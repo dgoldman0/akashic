@@ -367,6 +367,32 @@ VARIABLE _WDG-OBS-PHASE
     R> RGN-USE
     ?DUP IF NIP THROW THEN ;
 
+\ A canonical widget kind that can draw only what changed since its last
+\ draw registers its partial drawer, ( widget -- drew? ): it draws just
+\ that, onto a screen that still holds the widget's last draw, and returns
+\ true; or it draws nothing and returns false.  The table follows the
+\ canonical kinds above.
+WDG-T-DOCUMENT 1+ CONSTANT _WDG-T-LIMIT
+CREATE _WDG-PARTIALS  _WDG-T-LIMIT CELLS ALLOT
+_WDG-PARTIALS _WDG-T-LIMIT CELLS 0 FILL
+
+\ WDG-PARTIAL! ( xt type -- )  Register a kind's partial drawer.
+: WDG-PARTIAL!  ( xt type -- )
+    DUP _WDG-T-LIMIT U< IF CELLS _WDG-PARTIALS + ! ELSE 2DROP THEN ;
+
+\ WDG-DRAW-CHANGED? ( widget -- drew? )
+\   For an owner whose screen still holds the widget's last draw: draw only
+\   what changed since, through its kind's partial drawer, and return true;
+\   or return false, having drawn nothing, when the widget is hidden, its
+\   kind has no partial drawer or this change is not one it covers.  The
+\   owner then draws it whole.
+: WDG-DRAW-CHANGED?  ( widget -- drew? )
+    DUP WDG-VISIBLE? 0= IF DROP 0 EXIT THEN
+    DUP WDG-TYPE DUP _WDG-T-LIMIT U< IF
+        CELLS _WDG-PARTIALS + @
+    ELSE DROP 0 THEN
+    ?DUP IF EXECUTE ELSE DROP 0 THEN ;
+
 \ WDG-HANDLE ( event widget -- consumed? )
 \   Call the widget's handle-xt if not disabled.
 \   Returns TRUE if the event was consumed, FALSE otherwise.
@@ -415,6 +441,8 @@ GUARD _wdg-guard
 ' WDG-DISABLE     CONSTANT _wdg-disable-xt
 ' WDG-DIRTY       CONSTANT _wdg-dirty2-xt
 ' WDG-CLEAN       CONSTANT _wdg-clean-xt
+' WDG-PARTIAL!    CONSTANT _wdg-partial-store-xt
+' WDG-DRAW-CHANGED? CONSTANT _wdg-draw-changed-q-xt
 ' WDG-DRAW-OBSERVE CONSTANT _wdg-draw-observe-xt
 ' WDG-DRAW-PARTIAL-COMPLETE
                   CONSTANT _wdg-draw-partial-complete-xt
@@ -450,8 +478,10 @@ GUARD _wdg-guard
 : WDG-DRAW-PARTIAL-COMPLETE
                   _wdg-draw-partial-complete-xt EXECUTE ;
 : WDG-DRAW        _wdg-draw-xt EXECUTE ;
+: WDG-DRAW-CHANGED? _wdg-draw-changed-q-xt EXECUTE ;
 : WDG-DRAW-IN     _wdg-draw-in-xt EXECUTE ;
 : WDG-HANDLE      _wdg-handle-xt EXECUTE ;
 : WDG-INIT        _wdg-init-xt      _wdg-guard WITH-GUARD ;
+: WDG-PARTIAL!    _wdg-partial-store-xt _wdg-guard WITH-GUARD ;
 : WDG-CHANGE-HOOK! _wdg-change-hook-store-xt _wdg-guard WITH-GUARD ;
 [THEN] [THEN]
