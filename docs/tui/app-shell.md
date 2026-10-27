@@ -470,6 +470,17 @@ showing, or reads the next part or makes more of a picture's file for a
 document one shows. A slice counts as work, so the loop keeps taking passes until the
 pictures are ready, and no app needs a service of its own for them.
 
+### Events Given in Steps
+
+A terminal owner may give one input event as several ordinary events, a
+poll each: a scroll of three detents as three wheel steps, or a text as a
+paste of its characters.  While the owner's `held` callback reports that it
+holds the rest of such an event, a pass takes the next step and runs its
+posted actions, service and tick as usual, but does not paint; the pass that
+takes the last step paints.  So a paint shows the event whole.  A frame of
+the steps between would be overtaken by the next step before a terminal
+could show it.
+
 ### Deferred Action Queue
 
 `ASHELL-POST` enqueues an xt into a 16-slot FIFO.  All queued

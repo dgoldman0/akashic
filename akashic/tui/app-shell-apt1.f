@@ -407,6 +407,15 @@ VARIABLE _APTAS-SYMBOL
     PT-STREAM-OWNED? IF SCB-S-WOULD-BLOCK TRUE EXIT THEN
     SCB-S-OK TRUE ;
 
+\ _APTAS-HOLDS? ( owner -- flag )
+\   True while the owner holds the rest of a text or pointer event it has
+\   received, which its next polls give: a text's further characters, a
+\   press's further buttons, a scroll's further detents or a drag's motion.
+: _APTAS-HOLDS?  ( owner -- flag )
+    DUP _APTAS-TEXT-PENDING? IF DROP TRUE EXIT THEN
+    DUP _APTAS.PTR-CHANGED @ OVER _APTAS.PTR-WHEEL-Y @ OR
+    SWAP _APTAS.PTR-DRAG @ OR 0<> ;
+
 \ _APTAS-PENDING ( owner -- flag )
 \   True while this owner holds work for its next service or poll that no
 \   input interrupt announces: the rest of a text or pointer event, bytes
@@ -415,11 +424,15 @@ VARIABLE _APTAS-SYMBOL
 \   The shell asks it before idling, and a modal key read between polls.
 : _APTAS-PENDING  ( owner -- flag )
     DUP APTAS-VALID? 0= IF DROP TRUE EXIT THEN
-    DUP _APTAS-TEXT-PENDING? IF DROP TRUE EXIT THEN
-    DUP _APTAS.PTR-CHANGED @ OVER _APTAS.PTR-WHEEL-Y @ OR
-    OVER _APTAS.PTR-DRAG @ OR IF DROP TRUE EXIT THEN
+    DUP _APTAS-HOLDS? IF DROP TRUE EXIT THEN
     DUP _APTAS.SESSION @ PT-LEGACY-PENDING? IF DROP TRUE EXIT THEN
     _APTAS.ADAPTER @ APTSCB-PENDING? ;
+
+\ _APTAS-HELD ( owner -- flag )
+\   The shell's held callback.  A malformed owner holds nothing, so the
+\   shell's paint never waits on it.
+: _APTAS-HELD  ( owner -- flag )
+    DUP APTAS-VALID? IF _APTAS-HOLDS? ELSE DROP FALSE THEN ;
 
 DEFER _APTAS-KEY-POLL
 
@@ -666,7 +679,7 @@ VARIABLE _APTASI-SESSION
     _APTASI-SESSION @ _APTASI-OWNER @ _APTAS.SESSION !
     _APTASI-OWNER @
     ['] _APTAS-PREFLIGHT ['] _APTAS-ACQUIRE ['] _APTAS-SERVICE
-    ['] _APTAS-POLL ['] _APTAS-CLOSE ['] _APTAS-PENDING
+    ['] _APTAS-POLL ['] _APTAS-CLOSE ['] _APTAS-PENDING ['] _APTAS-HELD
     _APTASI-OWNER @ ASHELL-TERMINAL-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
     _APTAS-MAGIC _APTASI-OWNER @ _APTAS.MAGIC !

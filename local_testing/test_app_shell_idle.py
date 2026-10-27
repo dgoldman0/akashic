@@ -28,7 +28,9 @@ FIXTURES = {
     "YIELD?": """: YIELD? ( -- )
         1 YIELDS +!  YIELDS @ PASS-LIMIT @ U< 0= IF ASHELL-QUIT THEN ;""",
     "_ASHELL-TERM-SERVICE": ": _ASHELL-TERM-SERVICE ( -- ) ;",
+    # An event of several steps the owner holds gives one step a poll.
     "_ASHELL-POLL-INPUT": """: _ASHELL-POLL-INPUT ( -- has-event )
+        HELD-STEPS @ IF -1 HELD-STEPS +!  1 INPUTS +!  TRUE EXIT THEN
         INPUT-AT @ 0= IF FALSE EXIT THEN
         INPUT-AT @ FAKE-MS @ U> IF FALSE EXIT THEN
         0 INPUT-AT !  1 INPUTS +!  TRUE ;""",
@@ -74,7 +76,7 @@ VARIABLE INPUT-AT  VARIABLE INPUT-ON-WAKE  VARIABLE INPUTS
 VARIABLE PAINTS    VARIABLE REDIRTY  VARIABLE FLUSH-REFUSED
 VARIABLE RESIZE-POLLS  VARIABLE TICKS  VARIABLE ACTIONS
 VARIABLE TICK-POSTS  VARIABLE TICK-QUITS
-VARIABLE OWNER-PENDING  VARIABLE OWNER-ASKED
+VARIABLE OWNER-PENDING  VARIABLE OWNER-ASKED  VARIABLE HELD-STEPS
 VARIABLE SERVICES  VARIABLE SERVICE-WORK
 VARIABLE MEDIA-SERVICES  VARIABLE MEDIA-WORK
 CREATE DEADLINES 64 CELLS ALLOT
@@ -91,10 +93,12 @@ TEST_WORDS = b"""
     TICK-QUITS @ IF ASHELL-QUIT THEN ;
 : TEST-OWNER-PENDING ( context -- flag )
     OWNER-ASKED !  OWNER-PENDING @ ;
+: TEST-OWNER-HELD ( context -- flag ) DROP HELD-STEPS @ 0<> ;
 CREATE TEST-OWNER ASHELL-TERMINAL-DESC-SIZE ALLOT
 TEST-OWNER ASHELL-TERMINAL-DESC-SIZE 0 FILL
 4242 TEST-OWNER _ASHT.CONTEXT !
 ' TEST-OWNER-PENDING TEST-OWNER _ASHT.PENDING-XT !
+' TEST-OWNER-HELD TEST-OWNER _ASHT.HELD-XT !
 TEST-OWNER _ASHELL-TERM-OWNER !
 : TEST-SERVICE ( instance -- worked? )
     DROP 1 SERVICES +!
@@ -107,7 +111,7 @@ class IdleLoopHarness:
     ROOTS = (
         "_ASHELL-LOOP", "ASHELL-POST", "ASHELL-QUIT", "ASHELL-DIRTY!",
         "ASHELL-TOAST", "_ASHELL-NEXT-DEADLINE", "ASHELL-TERMINAL-DESC-SIZE",
-        "_ASHT.CONTEXT", "_ASHT.PENDING-XT",
+        "_ASHT.CONTEXT", "_ASHT.PENDING-XT", "_ASHT.HELD-XT",
     )
 
     def __init__(self, backend):
@@ -240,6 +244,19 @@ def test_a_live_owner_with_pending_work_keeps_the_loop_awake(shell):
     assert shell.variable("SLEEPS") == 0
     assert shell.variable("OWNER-ASKED") == 4242
     assert shell.variable("RESIZE-POLLS") == 0
+
+
+def test_a_pass_paints_an_event_the_owner_gives_in_steps_once_whole(shell):
+    """A scroll's detents or a text's characters come one a poll.  While
+    the owner holds the rest of the event, each pass takes a step and does
+    not paint, and does not sleep; the pass that takes the last paints."""
+    shell.start(passes=4)
+    shell.variable("_ASHELL-TERM-OWNS", MASK64)
+    shell.variable("HELD-STEPS", 3)
+    shell.run()
+    assert shell.variable("INPUTS") == 3
+    assert shell.variable("PAINTS") == 1
+    assert shell.variable("SLEEPS") == 1
 
 
 def test_a_quiet_live_owner_lets_the_loop_sleep_until_the_tick(shell):

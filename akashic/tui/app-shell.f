@@ -63,7 +63,8 @@
 \    ASHELL-FREE-UIDL-BUF ( buf -- )   Release ASHELL-LOAD-UIDL storage
 \    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
 \    ASHELL-TERMINAL-INIT ( context preflight-xt acquire-xt service-xt
-\                            poll-xt close-xt pending-xt owner -- status )
+\                            poll-xt close-xt pending-xt held-xt owner
+\                            -- status )
 \    ASHELL-TERMINAL! ( owner -- status )  Configure optional ownership
 \    ASHELL-TERMINAL-RELEASE-CHECK ( owner -- status )
 \                                             Read-only release eligibility
@@ -238,6 +239,7 @@ VARIABLE _ASPC-INVALIDATE
 \    poll      ( event context -- status has-event )
 \    close     ( reason context -- status owns-stream )
 \    pending   ( context -- flag )
+\    held      ( context -- flag )
 \
 \  Acquire and close are bounded synchronous ownership boundaries.  Acquire
 \  does not return while a negotiation byte could race application output;
@@ -245,7 +247,10 @@ VARIABLE _ASPC-INVALIDATE
 \  SESSION-LOST/TRUE and retains binary ownership until an external reset.
 \  Pending is read-only and true while the owner holds work for its next
 \  service or poll that no input interrupt announces; the event loop sleeps
-\  only while it is false.
+\  only while it is false.  Held is read-only and true while the owner holds
+\  the rest of an input event it has received, which its next polls give,
+\  such as a scroll's further detents or a text's further characters; the
+\  event loop paints only while it is false, so a paint shows the event whole.
 
  0 CONSTANT _ASHT-O-CONTEXT
  8 CONSTANT _ASHT-O-PREFLIGHT-XT
@@ -254,8 +259,9 @@ VARIABLE _ASPC-INVALIDATE
 32 CONSTANT _ASHT-O-POLL-XT
 40 CONSTANT _ASHT-O-CLOSE-XT
 48 CONSTANT _ASHT-O-PENDING-XT
-56 CONSTANT _ASHT-O-MAGIC
-64 CONSTANT ASHELL-TERMINAL-DESC-SIZE
+56 CONSTANT _ASHT-O-HELD-XT
+64 CONSTANT _ASHT-O-MAGIC
+72 CONSTANT ASHELL-TERMINAL-DESC-SIZE
 
 HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 
@@ -266,6 +272,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 : _ASHT.POLL-XT      ( owner -- field ) _ASHT-O-POLL-XT + ;
 : _ASHT.CLOSE-XT     ( owner -- field ) _ASHT-O-CLOSE-XT + ;
 : _ASHT.PENDING-XT   ( owner -- field ) _ASHT-O-PENDING-XT + ;
+: _ASHT.HELD-XT      ( owner -- field ) _ASHT-O-HELD-XT + ;
 : _ASHT.MAGIC        ( owner -- field ) _ASHT-O-MAGIC + ;
 
 : ASHELL-TERMINAL-VALID?  ( owner -- flag )
@@ -276,6 +283,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
     OVER _ASHT.POLL-XT @ 0<> AND
     OVER _ASHT.CLOSE-XT @ 0<> AND
     OVER _ASHT.PENDING-XT @ 0<> AND
+    OVER _ASHT.HELD-XT @ 0<> AND
     SWAP _ASHT.MAGIC @ _ASHT-MAGIC = AND ;
 
 VARIABLE _ASHTI-OWNER
@@ -286,18 +294,20 @@ VARIABLE _ASHTI-SERVICE
 VARIABLE _ASHTI-POLL
 VARIABLE _ASHTI-CLOSE
 VARIABLE _ASHTI-PENDING
+VARIABLE _ASHTI-HELD
 
 \ ASHELL-TERMINAL-INIT
 \   ( context preflight-xt acquire-xt service-xt poll-xt close-xt
-\     pending-xt owner -- status )
+\     pending-xt held-xt owner -- status )
 : ASHELL-TERMINAL-INIT
-    _ASHTI-OWNER ! _ASHTI-PENDING !
+    _ASHTI-OWNER ! _ASHTI-HELD ! _ASHTI-PENDING !
     _ASHTI-CLOSE ! _ASHTI-POLL ! _ASHTI-SERVICE !
     _ASHTI-ACQUIRE ! _ASHTI-PREFLIGHT ! _ASHTI-CONTEXT !
     _ASHTI-OWNER @ 0=
     _ASHTI-PREFLIGHT @ 0= OR _ASHTI-ACQUIRE @ 0= OR
     _ASHTI-SERVICE @ 0= OR _ASHTI-POLL @ 0= OR
-    _ASHTI-CLOSE @ 0= OR _ASHTI-PENDING @ 0= OR IF SCB-S-INVALID EXIT THEN
+    _ASHTI-CLOSE @ 0= OR _ASHTI-PENDING @ 0= OR
+    _ASHTI-HELD @ 0= OR IF SCB-S-INVALID EXIT THEN
     _ASHTI-CONTEXT @   _ASHTI-OWNER @ _ASHT.CONTEXT !
     _ASHTI-PREFLIGHT @ _ASHTI-OWNER @ _ASHT.PREFLIGHT-XT !
     _ASHTI-ACQUIRE @   _ASHTI-OWNER @ _ASHT.ACQUIRE-XT !
@@ -305,6 +315,7 @@ VARIABLE _ASHTI-PENDING
     _ASHTI-POLL @      _ASHTI-OWNER @ _ASHT.POLL-XT !
     _ASHTI-CLOSE @     _ASHTI-OWNER @ _ASHT.CLOSE-XT !
     _ASHTI-PENDING @   _ASHTI-OWNER @ _ASHT.PENDING-XT !
+    _ASHTI-HELD @      _ASHTI-OWNER @ _ASHT.HELD-XT !
     _ASHT-MAGIC        _ASHTI-OWNER @ _ASHT.MAGIC !
     SCB-S-OK ;
 
@@ -1644,6 +1655,14 @@ VARIABLE _ASHELL-TD-IOR
     _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
     SWAP _ASHT.PENDING-XT @ EXECUTE 0<> ;
 
+\ _ASHELL-TERM-HELD? ( -- flag )
+\   True while a live optional owner holds the rest of an input event it
+\   has received, which its next polls give.
+: _ASHELL-TERM-HELD?  ( -- flag )
+    _ASHELL-TERM-OWNS @ 0= IF FALSE EXIT THEN
+    _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
+    SWAP _ASHT.HELD-XT @ EXECUTE 0<> ;
+
 : _ASHELL-WORK-PENDING?  ( -- flag )
     _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ < IF TRUE EXIT THEN
     _ASHELL-PAINT-DUE? IF TRUE EXIT THEN
@@ -1702,8 +1721,12 @@ VARIABLE _ASHELL-TD-IOR
     \ A tick may request close.  Treat that as another hard
     \ lifecycle boundary before paint or a scheduler hop.
     _ASHELL-RUNNING @ 0= IF EXIT THEN
-    \ 6. Paint (only if dirty)
+    \ 6. Paint (only if dirty).  While the owner holds the rest of an input
+    \    event, such as a scroll's further detents, the passes that take it
+    \    come first, so the paint shows the event whole: a frame of the steps
+    \    between would be overtaken before it could be shown.
     _ASHELL-PAINT-DUE? OR
+    _ASHELL-TERM-HELD? IF EXIT THEN
     _ASHELL-PAINT ;
 
 : _ASHELL-LOOP  ( -- )

@@ -48,7 +48,8 @@ class FieldInputHarness(GrowthHarness):
                     include(token)
             chunks.append(declaration)
 
-        for name in ("APTAS-SIZE", "_APTAS-MAP-CONTROL", "_APTAS-POLL-POINTER"):
+        for name in ("APTAS-SIZE", "_APTAS-MAP-CONTROL", "_APTAS-POLL-POINTER",
+                     "_APTAS-HOLDS?"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -81,10 +82,12 @@ class FieldInputHarness(GrowthHarness):
             struct.pack("<QQQQ", row & MASK64, col & MASK64, revision, found),
         )
 
-    def event(self, count=1, revision=19, kind=11, tail_length=16, event_type=0x205):
+    def event(self, count=1, revision=19, kind=11, tail_length=16, event_type=0x205,
+              tail_bytes=None):
         # PT normalizes the wire header into eight cells and borrows the exact
         # little-endian Qq adjustment tail from its admitted event storage.
-        tail = self.allocate(struct.pack("<Qq", revision, count))
+        tail = self.allocate(struct.pack("<Qq", revision, count)
+                             if tail_bytes is None else tail_bytes)
         values = (event_type, 0, 41, 43, 47, kind, tail, tail_length)
         self.runtime.memory.write_bytes(
             self.owner + self.offset("_APTAS.EVENT"), struct.pack("<8Q", *values),
@@ -177,6 +180,26 @@ def test_activate_still_uses_the_resolved_cell_without_an_adjustment_tail(field_
     assert h.variable("KEY-MOUSE-FIELD-ADJUSTMENT") == 117
     assert h.variable("KEY-MOUSE-FIELD-REVISION") == 116
     assert h.runtime.memory.read64(h.context + 24) == 1
+
+
+def test_a_scroll_is_held_until_its_last_detent_is_given(field_input):
+    """Each detent of one scroll is one ordinary wheel step, a poll each.
+    The owner holds the rest of the scroll until the last, so the shell
+    paints it whole."""
+    h = field_input
+    scroll = h.constant("PT-CONTROL-SCROLL")
+    # The SCROLL tail: wheel x and wheel y as signed 16-bit counts.
+    h.event(kind=scroll, tail_length=8, tail_bytes=struct.pack("<hhI", 0, 3, 0))
+    assert not h.call("_APTAS-HOLDS?", h.owner)
+    assert h.call("_APTAS-MAP-CONTROL")
+    down = h.constant("KEY-MOUSE-SCROLL-DN")
+    assert h.output_values()[1] == down
+    assert h.call("_APTAS-HOLDS?", h.owner)
+    assert h.call("_APTAS-POLL-POINTER") and h.output_values()[1] == down
+    assert h.call("_APTAS-HOLDS?", h.owner)
+    assert h.call("_APTAS-POLL-POINTER") and h.output_values()[1] == down
+    assert not h.call("_APTAS-HOLDS?", h.owner)
+    assert not h.call("_APTAS-POLL-POINTER")
 
 
 def test_adjust_does_not_repurpose_pending_pointer_state(field_input):
