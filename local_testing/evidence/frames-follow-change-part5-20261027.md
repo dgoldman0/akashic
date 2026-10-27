@@ -11,8 +11,9 @@ the widget's own revision and, where its kind has one, its partial draw
 cover it. A typed character in a UIDL text area now redraws its row alone.
 
 This note records the commits, the rules the revisions follow, the three
-defects found on the way, what is left for parts 6 and 9, the tests, and the
-physical runs after slice 2 and at the end of the part. All of it is
+defects found on the way, what is left for parts 6 and 9, the tests, the
+physical runs after slice 2 and at the end of the part, and two diagnostic
+runs that traced the STARTs the end runs left out. All of it is
 simulator evidence. None of it is UART, panel or touch evidence. Steps are
 the simulator's semantic steps.
 
@@ -66,7 +67,7 @@ relayout marks every element it lays out, the mark is counted.
   AKASHIC-RICH-TERMINAL.md as 9.1.
 - **The rich side's picture claims asked for a paint from its own context**
   (7607b145). The canonical journey at 51e2fadf committed 41 STARTs where
-  every run from part 1 to part 4 committed 39. A run of part 4's end
+  the normal-mode runs of parts 3 and 4 committed 39. A run of part 4's end
   (4c7cd482) from a RAM copy of the tree, compared stage by stage, put the
   two extra ones in File Explorer's document and picture previews. While it
   builds a frame, the rich side claims a picture it will show
@@ -213,18 +214,72 @@ committed:
 
 Every run passed, the shadow check found no difference, and each run also
 committed one empty present. Part 4's end ran from a RAM copy of its tree,
-to compare stage by stage; every run from part 1 to part 4 had committed 39
-STARTs. At 51e2fadf the two extra STARTs were the claim defect above. On
-the final code, stage 10, where Daybook hands its task to Pad, sent one
+to compare stage by stage. The normal-mode runs that parts 3 and 4
+recorded committed 39 STARTs; part 3's run with every-frame checks
+committed 38, and part 4's run in safe mode 40, one of its DELTAs going out
+whole. At 51e2fadf the two extra STARTs were the claim defect above.
+On the final code, stage 10, where Daybook hands its task to Pad, sent one
 START fewer in both runs, and stage 40, where File Explorer opens the
-renamed file in Pad, one fewer in one of them: in part 4 each sent a small
-START before the full one. Both are stages where Pad opens a document and
-takes focus, and the journey's checks of the new tab and its text pass in
-every run. What makes the small START go is not traced.
+renamed file in Pad, one fewer in one of them. The journey's checks of the
+new tab and its text passed in every run.
+
+## The STARTs left out where Pad opens a document
+
+Both stages hand a document to Pad through Desk's intent route, which runs
+inside the sending applet's key handling: it focuses Pad at once and queues
+the request, and Pad's handler opens the document when Desk's next tick
+pumps the bus. When the key's own paint comes first, it builds Pad focused
+with its old document and sends that as a START, since a refocused task
+cannot go out as a DELTA. A START only stages a hidden replacement. Once the
+terminal has answered it, the screen producer checks that the frame is still
+the latest Desk drew and reveals it with a CONTINUE, which also carries the
+CELL change; a frame overtaken by a newer draw is staged again from that
+draw instead. While the answer is awaited, Desk's tick runs, Pad opens the
+document and the next paint draws it, so the first START is overtaken: it is
+sent but never shown. When Desk's tick has fallen due before the key's pass
+reaches its paint, the tick opens the document first, and one START and its
+CONTINUE carry both changes. Which comes first depends on where the key
+lands in Desk's 50-millisecond tick and on how long the guest takes, after
+the key arrives, to reach the tick check.
+
+Two diagnostic runs show the first order on both commits. The canonical
+journey ran without the shadow check, with `--screen-profile`,
+`PYTHONHASHSEED=0` and 100 call chains of 16 words kept an interval, at
+part 4's end (4c7cd482, tree `eef5f432b60d50da19d5aa3a8fd40c46623fd24a`,
+from a RAM clone) and at this part's record (6a61cec5, tree
+`4390038d1ac20f51fa5882c2957c10944962af97`), with MegaPad 1833d16f, one
+after the other. Both passed in about 180 seconds and committed the same
+128 presents, 52 DELTAs, 39 STARTs, 36 continuations and one empty present,
+the same in every window between two inputs, with the same DELTA refusals.
+At both handoffs each run sent the START that was not shown. Times are
+after the input, over the two runs:
+
+| Stage | START not shown | Desk's tick opens the document | START shown | Its CONTINUE |
+| --- | --- | --- | --- | --- |
+| 10, Daybook to Pad | 0.33–0.36 s; 759 operations, 121,952 bytes | by 0.73–0.76 s | 1.11–1.18 s; 760 operations, 122,530 bytes | 1.43–1.56 s; 233 cells |
+| 40, File Explorer to Pad | 0.51–0.52 s; 865 operations, 166,198 bytes | by 0.92–0.99 s | 1.54–1.55 s; 866 operations, 169,723 bytes | 1.98–2.08 s; 1,755 cells |
+
+The first START carried no CELL change, and the CELL text the journey read
+stayed that of the stage before until the second START's CONTINUE. Neither
+profiled run left a START out, so the second order was not observed
+directly. The runs that left STARTs out made fewer shadow comparisons than
+those that sent them all: 37 fewer for the one of part 3's every-frame run,
+and 71 fewer for the two of this part's shadow run. That fits the frame of
+each left-out START never having been built, as in the second order, rather
+than built and held back. So the final code sends the frames part 4's code
+sends under the same conditions, and the STARTs it left out are ones that
+would not have been shown.
+
+In the usual order the unshown START costs each handoff the key's whole
+paint: from the key to the tick, about 37 million guest steps at stage 10
+and 50 million at stage 40, most of them that frame's build, and 122 and
+166 kilobytes on the link. Avoiding it would change the order in which
+Desk's intent route focuses the target and hands it the request; no part
+of this plan does that.
 
 ## Files
 
 The runs' output stayed in `/dev/shm` and was deleted after this note was
-written, with the RAM copy of part 4's tree. By their shells' `write_bytes`,
-the 30 physical runs wrote 237,568 bytes to the drive in all; 28 wrote
-nothing.
+written, with the RAM copies of part 4's tree. By their shells'
+`write_bytes`, the 32 physical runs wrote 237,568 bytes to the drive in
+all; 30, the two diagnostic runs among them, wrote nothing.

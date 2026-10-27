@@ -626,7 +626,11 @@ nothing in the canonical journey. A typed letter costs what it did at part
 4's end, a burst frame build of 9.64 million steps, since Pad still bridges
 its editor until part 6. The canonical journey passed with the shadow check,
 making 4,621 comparisons and finding no difference, and without it, with 37
-and 38 STARTs against part 4's 39. The UIDL-TUI rechecks of cached
+and 38 STARTs against part 4's 39. The STARTs those runs left out are ones
+Desk sends but never shows where Pad opens a document, which go out only
+when the key's paint comes before the tick that opens the document; under
+the same conditions part 4's code and the final code sent the same 128
+presents. The UIDL-TUI rechecks of cached
 relations, about 0.2 million steps, stay for part 9, which stops the
 captures they run in. See the
 [evidence](../../local_testing/evidence/frames-follow-change-part5-20261027.md).
