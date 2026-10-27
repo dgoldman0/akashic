@@ -2,7 +2,8 @@
 
 DRW-FILL-RECT checks each row of its rectangle with block compares and
 writes only the rows whose cells, residue or provenance differ from what it
-puts there; a row it leaves alone still counts as touched.  These units run
+puts there, with block stores unless a cell it replaces is half of a wide
+pair; a row it leaves alone still counts as touched.  These units run
 the real screen and draw sources on small guest screens.  From the same
 seeded state each case runs the fill and the fill it replaced, kept here as
 the reference, which drew every row with DRW-HLINE in a borrow of its own.
@@ -284,10 +285,14 @@ def _scribble(fills: FillHarness, rng: random.Random, cp: int, style, clip,
             memory.write8(fills._plane(120) + rng.randrange(CELLS), rng.choice((0, 255, 7)))
 
 
+PAIR = 0x0180000000000000
+
+
 def _rows(fills: FillHarness, cp: int, rect, scope: int) -> Counter:
     """What the fill finds in each row of its rectangle, read from the
     planes as they are now: whether it checks the rows at all, and for each
-    checked row the first plane that differs from what it writes."""
+    checked row the first plane that differs from what it writes and
+    whether it can store the row whole, with no half of a pair to replace."""
 
     fills.fill("T-CHECKABLE-RUN", cp, *rect, scope)
     if not fills.get("_DRW-FR-CHECK"):
@@ -300,13 +305,18 @@ def _rows(fills: FillHarness, cp: int, rect, scope: int) -> Counter:
     rows: Counter = Counter()
     for row in range(top, top + height):
         indices = range(row * W + left, row * W + left + width)
-        if any(memory.read64(back + 8 * i) != cell for i in indices):
-            rows["cells differ"] += 1
-        elif any(memory.read64(residue + 8 * i) != cell for i in indices):
-            # Inside a replacement layer the fill leaves the residue alone.
-            rows["left alone over another residue" if scope == 2 else "residue differs"] += 1
+        cells = [memory.read64(back + 8 * i) for i in indices]
+        under = [memory.read64(residue + 8 * i) for i in indices]
+        # Inside a replacement layer the fill leaves the residue alone.
+        paired = any(c & PAIR for c in cells + ([] if scope == 2 else under))
+        how = "cell by cell" if paired else "stored"
+        if any(c != cell for c in cells):
+            rows["cells differ, " + how] += 1
+        elif any(c != cell for c in under):
+            rows["left alone over another residue" if scope == 2
+                 else "residue differs, " + how] += 1
         elif any(memory.read8(occlusion + i) != overlay for i in indices):
-            rows["provenance differs"] += 1
+            rows["provenance differs, " + how] += 1
         else:
             rows["left alone"] += 1
     return rows
@@ -336,11 +346,13 @@ def test_a_fill_leaves_the_state_the_fill_it_replaced_leaves(fills):
         context = f"case {case}: cp {cp:#x} style {style} clip {clip} rect {rect} scope {scope}"
         assert new_state == ref_state, context
         assert new_plan == ref_plan, context
-    # The seeds reach every kind of row the check can meet.
-    assert set(found) == {"not checked", "cells differ", "residue differs",
-                          "provenance differs", "left alone",
-                          "left alone over another residue"}, found
-    assert min(found.values()) >= 5 and found["left alone"] >= 40, found
+    # The seeds reach every kind of row the check can meet, rows stored
+    # whole among them and rows written cell by cell over half of a pair.
+    kinds = {"not checked", "cells differ, stored", "cells differ, cell by cell",
+             "residue differs, stored", "provenance differs, stored", "left alone",
+             "left alone over another residue"}
+    assert kinds <= set(found), found
+    assert min(found[kind] for kind in kinds) >= 3 and found["left alone"] >= 40, found
 
 
 def test_a_row_that_holds_the_fill_is_not_written_again(fills):
@@ -349,6 +361,12 @@ def test_a_row_that_holds_the_fill_is_not_written_again(fills):
     again = fills.fill("T-FILL-NEW", 32, 0, 0, H, W)
     reference = fills.fill("T-FILL-REF", 32, 0, 0, H, W)
     assert again * 4 < reference, (first, again, reference)
+    # Rows that all differ, over no half of a pair, are stored whole.
+    fills.style((2, 0, 0))
+    stored = fills.fill("T-FILL-NEW", 32, 0, 0, H, W)
+    fills.style((7, 4, 0))
+    written = fills.fill("T-FILL-REF", 32, 0, 0, H, W)
+    assert stored * 3 < written, (stored, written)
     # One changed cell rewrites its row and leaves the others alone.
     fills.text("x", 3, 5)
     one_row = fills.fill("T-FILL-NEW", 32, 0, 0, H, W)

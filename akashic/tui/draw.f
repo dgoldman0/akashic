@@ -542,9 +542,12 @@ VARIABLE _DRW-VLINE-LOW
 \   the same cell in the residue outside a replacement layer and the
 \   writer's provenance byte.  A row whose cells, residue and provenance
 \   already hold those bytes is left alone, since writing it would store
-\   what is there; block compares check each row.  A row left alone still
-\   counts as touched, as a written row does, so the flush compares the
-\   same rows either way.  A wide character fills as DRW-HLINE draws it.
+\   what is there; block compares check each row.  A row that differs is
+\   written with block stores when no cell it replaces is half of a wide
+\   pair, which is how the plane writer would write it cell by cell, and
+\   otherwise through DRW-HLINE.  Every row counts as touched, one left
+\   alone too, so the flush compares the same rows either way.  A wide
+\   character fills row by row as DRW-HLINE draws it.
 VARIABLE _DRW-FR-COL
 VARIABLE _DRW-FR-W
 VARIABLE _DRW-FR-CP
@@ -555,6 +558,10 @@ VARIABLE _DRW-FR-CELL     \ the narrow cell every column takes
 VARIABLE _DRW-FR-CHECK    \ rows are checked before they are written
 VARIABLE _DRW-FR-AROW     \ the first row in the borrowed plane
 VARIABLE _DRW-FR-ACOL     \ the first column in the borrowed plane
+VARIABLE _DRW-FR-IDX      \ the cell a row's span starts at
+VARIABLE _DRW-FR-T-WROTE  \ the touched rows before a row DRW-HLINE writes
+VARIABLE _DRW-FR-T-LOW
+VARIABLE _DRW-FR-T-HIGH
 VARIABLE _DRW-CA-START
 VARIABLE _DRW-CA-LEN
 VARIABLE _DRW-CA-LOW
@@ -605,6 +612,26 @@ VARIABLE _DRW-CA-HIGH
     1- ?DUP 0= IF DROP -1 EXIT THEN
     OVER 1+ OVER COMPARE 0= ;
 
+\ _DRW-CELLS-PAIRED? ( a n -- flag )
+\   True when any of the N cells at A, N >= 1, is half of a wide pair.
+: _DRW-CELLS-PAIRED?  ( a n -- flag )
+    0 -ROT 8 * OVER + SWAP DO I @ OR 8 +LOOP _DRW-C-PAIR AND 0<> ;
+
+\ _DRW-CELLS-FILL ( a n cell -- )
+\   Store CELL in the N cells at A, N >= 1: the first, then copies of the
+\   cells already stored, twice as many each time.
+VARIABLE _DRW-CF-A
+VARIABLE _DRW-CF-N
+VARIABLE _DRW-CF-DONE
+
+: _DRW-CELLS-FILL  ( a n cell -- )
+    2 PICK ! _DRW-CF-N ! _DRW-CF-A ! 1 _DRW-CF-DONE !
+    BEGIN _DRW-CF-DONE @ _DRW-CF-N @ < WHILE
+        _DRW-CF-A @ DUP _DRW-CF-DONE @ 8 * +
+        _DRW-CF-DONE @ _DRW-CF-N @ _DRW-CF-DONE @ - MIN
+        DUP _DRW-CF-DONE +! 8 * MOVE
+    REPEAT ;
+
 \ Rows are checked when DRW-HLINE would put one narrow cell in every
 \ column and the rectangle lies in the borrowed plane.
 : _DRW-FR-CHECKABLE  ( -- )
@@ -635,26 +662,72 @@ VARIABLE _DRW-CA-HIGH
     _DRW-PLANE-OCCLUSION-A @ + _DRW-FR-W @
     _DRW-PLANE-OVERLAY @ 255 AND _DRW-BYTES-HOLD? ;
 
-\ _DRW-FR-LEAVE? ( -- flag )
-\   True when the fill leaves row I alone, which then counts as touched.
-: _DRW-FR-LEAVE?  ( -- flag )
-    _DRW-FR-CHECK @ 0= IF 0 EXIT THEN
-    _DRW-FR-AROW @ _DRW-FR-I @ + DUP _DRW-FR-ROW-HOLDS? IF
-        _DRW-PLANE-TOUCH -1
-    ELSE
-        DROP 0
-    THEN ;
+\ _DRW-FR-STORABLE? ( row -- flag )
+\   True when no cell the fill replaces in plane row ROW is half of a wide
+\   pair, in the cells and, outside a replacement layer, in the residue:
+\   the plane writer then takes its direct path in every column.
+: _DRW-FR-STORABLE?  ( row -- flag )
+    _DRW-PLANE-COLS @ * _DRW-FR-ACOL @ +
+    DUP 8 * _DRW-PLANE-A @ + _DRW-FR-W @ _DRW-CELLS-PAIRED? IF DROP 0 EXIT THEN
+    _DRW-PLANE-REPLACEMENT @ IF DROP -1 EXIT THEN
+    8 * _DRW-PLANE-RESIDUE-A @ + _DRW-FR-W @ _DRW-CELLS-PAIRED? 0= ;
+
+\ _DRW-FR-STORE ( row -- )
+\   Write plane row ROW with block stores, as the plane writer's direct
+\   path writes each cell: the cell, outside a replacement layer the
+\   residue, marked changed when it held anything else, and the writer's
+\   provenance.
+: _DRW-FR-STORE  ( row -- )
+    DUP _DRW-PLANE-TOUCH
+    DUP _DRW-PLANE-COLS @ * _DRW-FR-ACOL @ + _DRW-FR-IDX !
+    _DRW-PLANE-REPLACEMENT @ 0= IF
+        _DRW-FR-IDX @ 8 * _DRW-PLANE-RESIDUE-A @ +
+        DUP _DRW-FR-W @ _DRW-FR-CELL @ _DRW-CELLS-HOLD? 0= IF
+            -1 _DRW-PLANE-RESIDUE-DIRTY-A @ !
+            OVER _DRW-PLANE-RESIDUE-DAMAGE-A @ + -1 SWAP C!
+        THEN
+        _DRW-FR-W @ _DRW-FR-CELL @ _DRW-CELLS-FILL
+    THEN
+    DROP
+    _DRW-FR-IDX @ 8 * _DRW-PLANE-A @ + _DRW-FR-W @ _DRW-FR-CELL @ _DRW-CELLS-FILL
+    _DRW-PLANE-OCCLUSION-A @ _DRW-FR-IDX @ + _DRW-FR-W @
+    _DRW-PLANE-OVERLAY @ FILL ;
+
+\ _DRW-FR-HLINE ( -- )
+\   Write row I through DRW-HLINE.  The row starts a touched interval of its
+\   own, as its own borrow of the plane did, so each cell's touch finds its
+\   row at once; the row's interval then joins the one before it.
+: _DRW-FR-HLINE  ( -- )
+    _DRW-PLANE-WROTE @ _DRW-FR-T-WROTE !
+    _DRW-PLANE-TOUCH-LOW @ _DRW-FR-T-LOW !
+    _DRW-PLANE-TOUCH-HIGH @ _DRW-FR-T-HIGH !
+    0 _DRW-PLANE-WROTE !
+    _DRW-FR-CP @ _DRW-FR-ROW @ _DRW-FR-I @ + _DRW-FR-COL @ _DRW-FR-W @
+    DRW-HLINE
+    _DRW-FR-T-WROTE @ 0= IF EXIT THEN
+    _DRW-PLANE-WROTE @ 0= IF
+        -1 _DRW-PLANE-WROTE !
+        _DRW-FR-T-LOW @ _DRW-PLANE-TOUCH-LOW !
+        _DRW-FR-T-HIGH @ _DRW-PLANE-TOUCH-HIGH ! EXIT
+    THEN
+    _DRW-FR-T-LOW @ _DRW-PLANE-TOUCH-LOW @ MIN _DRW-PLANE-TOUCH-LOW !
+    _DRW-FR-T-HIGH @ _DRW-PLANE-TOUCH-HIGH @ MAX _DRW-PLANE-TOUCH-HIGH ! ;
 
 : _DRW-FR-BODY  ( -- )
     _DRW-FR-CHECKABLE
     0 _DRW-FR-I !
     BEGIN _DRW-FR-I @ _DRW-FR-H @ < WHILE
-        _DRW-FR-LEAVE? 0= IF
-            _DRW-FR-CP @
-            _DRW-FR-ROW @ _DRW-FR-I @ +
-            _DRW-FR-COL @
-            _DRW-FR-W @
-            DRW-HLINE
+        _DRW-FR-CHECK @ IF
+            _DRW-FR-AROW @ _DRW-FR-I @ +
+            DUP _DRW-FR-ROW-HOLDS? IF
+                _DRW-PLANE-TOUCH
+            ELSE DUP _DRW-FR-STORABLE? IF
+                _DRW-FR-STORE
+            ELSE
+                DROP _DRW-FR-HLINE
+            THEN THEN
+        ELSE
+            _DRW-FR-HLINE
         THEN
         1 _DRW-FR-I +!
     REPEAT ;

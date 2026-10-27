@@ -223,10 +223,13 @@ the current style, clipped as `DRW-HLINE` clips.  The whole rectangle
 takes one borrow of the back plane.  A narrow character puts the same
 cell in every column, so a row whose cells, residue and provenance
 already hold what the fill writes is left alone: block compares check
-each row, and only rows that differ are written.  Containers fill the
-cells their parents just filled, so a repaint mostly skips them.  A row
-left alone still counts as touched, so the flush compares the same rows
-as before.  A wide character fills row by row as `DRW-HLINE` draws it.
+each row, and only rows that differ are written.  A row that differs is
+stored whole with block stores when no cell it replaces is half of a wide
+pair, as the plane writer would write it cell by cell; over half of a pair
+it is written through `DRW-HLINE`.  Containers fill the cells their
+parents just filled, so a repaint mostly skips them.  Every row counts as
+touched, one left alone too, so the flush compares the same rows as
+before.  A wide character fills row by row as `DRW-HLINE` draws it.
 
 ```forth
 HEX 2588 DECIMAL  5 10 8 20 DRW-FILL-RECT   \ solid block 8×20 at (5,10)
