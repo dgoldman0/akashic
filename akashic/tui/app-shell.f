@@ -63,13 +63,14 @@
 \    ASHELL-FREE-UIDL-BUF ( buf -- )   Release ASHELL-LOAD-UIDL storage
 \    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
 \    ASHELL-TERMINAL-INIT ( context preflight-xt acquire-xt service-xt
-\                            poll-xt close-xt pending-xt held-xt owner
-\                            -- status )
+\                            poll-xt close-xt pending-xt held-xt
+\                            deadline-xt owner -- status )
 \    ASHELL-TERMINAL! ( owner -- status )  Configure optional ownership
 \    ASHELL-TERMINAL-RELEASE-CHECK ( owner -- status )
 \                                             Read-only release eligibility
 \    ASHELL-TERMINAL-RELEASE ( owner -- status )  Exact idle release
 \    ASHELL-TERMINAL-QUARANTINED? ( -- flag )  Live shell quarantined
+\    ASHELL-PAINT-PENDING? ( -- flag )  A paint is due or still going out
 \
 \  Hard-gate failure preserves the whole live shell for an externally proven
 \  attachment hard-reset/drain plus fresh module/image initialization.  No
@@ -240,6 +241,7 @@ VARIABLE _ASPC-INVALIDATE
 \    close     ( reason context -- status owns-stream )
 \    pending   ( context -- flag )
 \    held      ( context -- flag )
+\    deadline  ( context -- ms|-1 )
 \
 \  Acquire and close are bounded synchronous ownership boundaries.  Acquire
 \  does not return while a negotiation byte could race application output;
@@ -251,6 +253,9 @@ VARIABLE _ASPC-INVALIDATE
 \  the rest of an input event it has received, which its next polls give,
 \  such as a scroll's further detents or a text's further characters; the
 \  event loop paints only while it is false, so a paint shows the event whole.
+\  Deadline is read-only: the next moment the owner must act without input,
+\  such as a check that falls due while the screen is shown, or -1.  The
+\  event loop wakes for it, as it does for the next tick.
 
  0 CONSTANT _ASHT-O-CONTEXT
  8 CONSTANT _ASHT-O-PREFLIGHT-XT
@@ -260,8 +265,9 @@ VARIABLE _ASPC-INVALIDATE
 40 CONSTANT _ASHT-O-CLOSE-XT
 48 CONSTANT _ASHT-O-PENDING-XT
 56 CONSTANT _ASHT-O-HELD-XT
-64 CONSTANT _ASHT-O-MAGIC
-72 CONSTANT ASHELL-TERMINAL-DESC-SIZE
+64 CONSTANT _ASHT-O-DEADLINE-XT
+72 CONSTANT _ASHT-O-MAGIC
+80 CONSTANT ASHELL-TERMINAL-DESC-SIZE
 
 HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 
@@ -273,6 +279,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
 : _ASHT.CLOSE-XT     ( owner -- field ) _ASHT-O-CLOSE-XT + ;
 : _ASHT.PENDING-XT   ( owner -- field ) _ASHT-O-PENDING-XT + ;
 : _ASHT.HELD-XT      ( owner -- field ) _ASHT-O-HELD-XT + ;
+: _ASHT.DEADLINE-XT  ( owner -- field ) _ASHT-O-DEADLINE-XT + ;
 : _ASHT.MAGIC        ( owner -- field ) _ASHT-O-MAGIC + ;
 
 : ASHELL-TERMINAL-VALID?  ( owner -- flag )
@@ -284,6 +291,7 @@ HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
     OVER _ASHT.CLOSE-XT @ 0<> AND
     OVER _ASHT.PENDING-XT @ 0<> AND
     OVER _ASHT.HELD-XT @ 0<> AND
+    OVER _ASHT.DEADLINE-XT @ 0<> AND
     SWAP _ASHT.MAGIC @ _ASHT-MAGIC = AND ;
 
 VARIABLE _ASHTI-OWNER
@@ -295,19 +303,20 @@ VARIABLE _ASHTI-POLL
 VARIABLE _ASHTI-CLOSE
 VARIABLE _ASHTI-PENDING
 VARIABLE _ASHTI-HELD
+VARIABLE _ASHTI-DEADLINE
 
 \ ASHELL-TERMINAL-INIT
 \   ( context preflight-xt acquire-xt service-xt poll-xt close-xt
-\     pending-xt held-xt owner -- status )
+\     pending-xt held-xt deadline-xt owner -- status )
 : ASHELL-TERMINAL-INIT
-    _ASHTI-OWNER ! _ASHTI-HELD ! _ASHTI-PENDING !
+    _ASHTI-OWNER ! _ASHTI-DEADLINE ! _ASHTI-HELD ! _ASHTI-PENDING !
     _ASHTI-CLOSE ! _ASHTI-POLL ! _ASHTI-SERVICE !
     _ASHTI-ACQUIRE ! _ASHTI-PREFLIGHT ! _ASHTI-CONTEXT !
     _ASHTI-OWNER @ 0=
     _ASHTI-PREFLIGHT @ 0= OR _ASHTI-ACQUIRE @ 0= OR
     _ASHTI-SERVICE @ 0= OR _ASHTI-POLL @ 0= OR
     _ASHTI-CLOSE @ 0= OR _ASHTI-PENDING @ 0= OR
-    _ASHTI-HELD @ 0= OR IF SCB-S-INVALID EXIT THEN
+    _ASHTI-HELD @ 0= OR _ASHTI-DEADLINE @ 0= OR IF SCB-S-INVALID EXIT THEN
     _ASHTI-CONTEXT @   _ASHTI-OWNER @ _ASHT.CONTEXT !
     _ASHTI-PREFLIGHT @ _ASHTI-OWNER @ _ASHT.PREFLIGHT-XT !
     _ASHTI-ACQUIRE @   _ASHTI-OWNER @ _ASHT.ACQUIRE-XT !
@@ -316,6 +325,7 @@ VARIABLE _ASHTI-HELD
     _ASHTI-CLOSE @     _ASHTI-OWNER @ _ASHT.CLOSE-XT !
     _ASHTI-PENDING @   _ASHTI-OWNER @ _ASHT.PENDING-XT !
     _ASHTI-HELD @      _ASHTI-OWNER @ _ASHT.HELD-XT !
+    _ASHTI-DEADLINE @  _ASHTI-OWNER @ _ASHT.DEADLINE-XT !
     _ASHT-MAGIC        _ASHTI-OWNER @ _ASHT.MAGIC !
     SCB-S-OK ;
 
@@ -1647,6 +1657,13 @@ VARIABLE _ASHELL-TD-IOR
     _ASHELL-DIRTY @ _UTUI-NEEDS-PAINT @ OR _ASHELL-OUTPUT-PENDING @ OR
     0<> SCR-DIRTY? OR ;
 
+\ ASHELL-PAINT-PENDING? ( -- flag )
+\   True while a paint is due or its output has not gone out: a change has
+\   asked for a paint that has not run, or the last paint's frame is still
+\   being published.  A terminal owner asks it before work that must find
+\   every counted change drawn.
+: ASHELL-PAINT-PENDING?  ( -- flag )  _ASHELL-PAINT-DUE? ;
+
 \ _ASHELL-TERM-PENDING? ( -- flag )
 \   True while a live optional owner holds work for its next service or
 \   poll that no input interrupt announces.
@@ -1663,6 +1680,13 @@ VARIABLE _ASHELL-TD-IOR
     _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
     SWAP _ASHT.HELD-XT @ EXECUTE 0<> ;
 
+\ _ASHELL-TERM-DEADLINE ( -- ms|-1 )
+\   The next moment a live optional owner must act without input, or -1.
+: _ASHELL-TERM-DEADLINE  ( -- ms|-1 )
+    _ASHELL-TERM-OWNS @ 0= IF -1 EXIT THEN
+    _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
+    SWAP _ASHT.DEADLINE-XT @ EXECUTE ;
+
 : _ASHELL-WORK-PENDING?  ( -- flag )
     _ASHELL-POST-TAIL @ _ASHELL-POST-HEAD @ < IF TRUE EXIT THEN
     _ASHELL-PAINT-DUE? IF TRUE EXIT THEN
@@ -1675,8 +1699,9 @@ VARIABLE _ASHELL-TD-IOR
     _ASHELL-LAST-TICK @ _ASHELL-TICK-MS @ + ;
 
 \ _ASHELL-NEXT-DEADLINE ( -- ms|-1 )
-\   The next moment the shell must act without input: the next tick or a
-\   shown toast's expiry.  A toast no paint has shown yet has no expiry;
+\   The next moment the shell must act without input: the next tick, a
+\   shown toast's expiry, or the terminal owner's deadline.  A toast no
+\   paint has shown yet has no expiry;
 \   raising it asked for the paint that starts its time.  Nothing wakes a
 \   sleeping core when the terminal is resized, so without an owner,
 \   which reports resizes as input, the hardware flag is still polled
@@ -1686,6 +1711,7 @@ VARIABLE _ASHELL-TD-IOR
     _ASHELL-TOAST-WAS-VIS @ _ASHELL-TOAST-ARMED @ AND IF
         _ASHELL-TOAST-EXPIRY @ _ASHELL-UMIN
     THEN
+    _ASHELL-TERM-DEADLINE _ASHELL-UMIN
     _ASHELL-TERM-OWNS @ 0= IF MS@ _ASHELL-TICK-MS @ + _ASHELL-UMIN THEN ;
 
 : _ASHELL-DISPATCH-EVENT  ( -- )
@@ -1807,6 +1833,7 @@ GUARD _ashell-guard
 ' ASHELL-TOAST-ERROR CONSTANT _ashell-toast-error-xt
 ' ASHELL-NOTICE  CONSTANT _ashell-notice-xt
 ' ASHELL-TOAST-VISIBLE? CONSTANT _ashell-toast-vis-xt
+' ASHELL-PAINT-PENDING? CONSTANT _ashell-paint-pending-xt
 
 \ ASHELL-RUN is an owner-core lifecycle driver and deliberately does not
 \ hold WITH-GUARD across its yielding event loop.  CATCH is task-aware and
@@ -1834,5 +1861,6 @@ GUARD _ashell-guard
 : ASHELL-TOAST-ERROR _ashell-toast-error-xt _ashell-guard WITH-GUARD ;
 : ASHELL-NOTICE   _ashell-notice-xt   _ashell-guard WITH-GUARD ;
 : ASHELL-TOAST-VISIBLE? _ashell-toast-vis-xt _ashell-guard WITH-GUARD ;
+: ASHELL-PAINT-PENDING? _ashell-paint-pending-xt _ashell-guard WITH-GUARD ;
 [THEN] [THEN]
 HERE _ASHELL-OWNED-LIMIT !

@@ -1213,6 +1213,18 @@ for private reuse; it cannot be borrowed as the requested newer draw. The
 hybrid producer synchronously copies the exact draw-keyed snapshot into its own
 attempt before asynchronous owner work begins.
 
+Between draws, `RUHA-REFRESH-CHECK` checks the snapshot for the occasional
+full refresh (§9.2). When the screen has not drawn since the snapshot was
+taken, it captures every visible document live into the inactive bank, under
+the snapshot's own generation, as the shadow check's full capture does, and
+compares the capture with the snapshot document by document and family by
+family. It publishes nothing: the active bank, the generation, the last draw
+and its status stay as they were, and the records' flags, which a capture
+stages, are put back. A difference is a change nothing reported, and
+`RUHA-RC-*` name the first: its family, its document's owner and slot, and,
+where the family says which element a record came from, the element's index,
+id and revision.
+
 The producer then plans menu controls, generically lowers `TEXT_AREA`,
 `TEXT_GRID`, `TABSET`, and `TAB` to their exact neutral control kinds, lowers
 `ITEM_VIEW` to the `ITEM_VIEW` control kind with its ITM1 body when the
@@ -1615,11 +1627,35 @@ disk, through the one-read mount of `tui/platform/settings-disk.f`. The
 settings disk is MegaPad's second storage unit, whose medium is
 write-protected, so only the host changes it, by rebuilding or editing the
 settings image; `akashic_tui.py build --settings-safe-mode` writes it asking
-for safe mode. Today the settings hold one key, `[desk.rich-terminal]
-safe-mode`, which turns safe mode on (`tui/check-mode.f`) with the system
-settings as its reason. Settings that are absent, unreadable or malformed
-ask for nothing: they are outside data, not an anomaly. The baseline Desk
-reads none of this.
+for safe mode. The settings hold three keys under `[desk.rich-terminal]`:
+`safe-mode`, which turns safe mode on (`tui/check-mode.f`) with the system
+settings as its reason, and `full-refresh-quiet-ms` and
+`full-refresh-interval-ms`, the times of the occasional full refresh (§9.2),
+1,000 and 5,000 ms when absent. Settings that are absent, unreadable or
+malformed ask for nothing: they are outside data, not an anomaly. The
+baseline Desk reads none of this.
+
+### 9.2 The occasional full refresh
+
+A change whose owner fails to count it leaves the rich screen showing old
+content, since the frame build reuses what an earlier draw captured. The
+occasional full refresh (`tui/rich-terminal/frame-refresh.f`) bounds how long
+that lasts. Once input has been quiet for `full-refresh-quiet-ms`, and at
+least once every `full-refresh-interval-ms` while a rich screen is shown, the
+rich terminal's owner runs a check at a moment when no paint is pending and
+no part of an input event is held back: its pass service asks the shell's
+`ASHELL-PAINT-PENDING?`, and its `deadline` callback wakes the shell's loop
+when the next check falls due. Desk registers its snapshot adapter's
+`RUHA-REFRESH-CHECK` (§6.2). Every change counted since the snapshot asked
+for a paint, so with none pending the snapshot and a live capture agree, and
+nothing is sent. When they differ, the refresh keeps a report of the first
+difference, naming the application, the family and the element with its
+revision, and turns safe mode on with a missed change as its reason. The
+next frame is then built in full from live state and goes out whole, and the
+owner's notice says where the change was missed. The check compares what the
+documents hold; the producers' reuse of screen rows, which they build from
+the screen's own cells, is checked by the shadow check in tests. In safe mode
+every frame is built in full already, so no check runs.
 
 ## 10. Reset, replay, and loss
 

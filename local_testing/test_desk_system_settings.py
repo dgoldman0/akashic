@@ -3,8 +3,10 @@
 The settings disk is MegaPad's second storage unit, whose medium is
 write-protected.  tui/platform/settings-disk.f mounts it for one read, and
 tui/desk-system-settings.f turns safe mode on, with the system settings as
-its reason, when system.toml asks for it.  These tests run KDOS and both
-modules in the native simulator against real MP64FS settings images.
+its reason, when system.toml asks for it, and sets the times of the
+occasional full refresh (tui/rich-terminal/frame-refresh.f).  These tests
+run KDOS and the modules in the native simulator against real MP64FS
+settings images.
 """
 from __future__ import annotations
 
@@ -100,6 +102,39 @@ def test_settings_that_do_not_ask_leave_normal_mode(files) -> None:
     assert _safe_mode(runtime) == 0
     assert _results(runtime, "CHK-DAMAGE-COUNT @")[0] == 0
     # A missing key or broken text leaves no TOML error for the next parse.
+    assert _results(runtime, "TOML-ERR @ TOML-ABORT-ON-ERROR @") == (0, 0)
+
+
+def _refresh_times(runtime: MegaForthRuntime) -> tuple[int, int]:
+    return _results(runtime, "DSET-APPLY RFSH-QUIET-MS @ RFSH-INTERVAL-MS @")
+
+
+def test_the_settings_set_the_full_refresh_s_times() -> None:
+    # The template holds the defaults the module starts with.
+    runtime = _runtime(_settings_image({"system.toml": SYSTEM_TOML.encode()}))
+    assert _refresh_times(runtime) == (1000, 5000)
+    changed = (SYSTEM_TOML.replace("full-refresh-quiet-ms = 1000", "full-refresh-quiet-ms = 250")
+               .replace("full-refresh-interval-ms = 5000", "full-refresh-interval-ms = 30000"))
+    assert changed != SYSTEM_TOML
+    runtime = _runtime(_settings_image({"system.toml": changed.encode()}))
+    assert _refresh_times(runtime) == (250, 30000)
+    assert _safe_mode(runtime) == 0
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        b"[desk.rich-terminal]\nsafe-mode = false\n",
+        b"[desk.rich-terminal]\nfull-refresh-quiet-ms = 0\nfull-refresh-interval-ms = -5\n",
+        b"[desk.rich-terminal]\nfull-refresh-quiet-ms = \"soon\"\nfull-refresh-interval-ms = true\n",
+        b"[desk.rich-terminal\nfull-refresh-quiet-ms = 250\n",
+    ),
+    ids=("absent", "not-above-zero", "not-a-number", "malformed"),
+)
+def test_refresh_times_that_are_not_whole_milliseconds_keep_their_defaults(text) -> None:
+    runtime = _runtime(_settings_image({"system.toml": text}))
+    assert _refresh_times(runtime) == (1000, 5000)
+    assert _results(runtime, "CHK-DAMAGE-COUNT @")[0] == 0
     assert _results(runtime, "TOML-ERR @ TOML-ABORT-ON-ERROR @") == (0, 0)
 
 

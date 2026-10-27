@@ -14,6 +14,7 @@ PROVIDED akashic-tui-app-shell-apt1
 REQUIRE app-shell.f
 REQUIRE screen-backend-apt1.f
 REQUIRE check-mode.f
+REQUIRE rich-terminal/frame-refresh.f
 REQUIRE ../text/utf8.f
 REQUIRE ../utils/memory-span.f
 
@@ -492,12 +493,31 @@ VARIABLE _APTAS-SAFE-TEXT-U
 : _APTAS-ST-SAY  ( -- )
     _APTAS-SAFE-TEXT _APTAS-SAFE-TEXT-U @ _APTAS-SAFE-NOTICE-MS
     ASHELL-TOAST-WARNING ;
+\ What a full refresh found (rich-terminal/frame-refresh.f): the
+\ application, the family and the element where a change nothing reported
+\ was on screen.
+: _APTAS-SAY-MISSED  ( -- )
+    S" Safe mode is on: a full refresh found a change nothing reported, in "
+    _APTAS-ST+
+    RFSH-TITLE-U @ IF
+        RFSH-TITLE RFSH-TITLE-U @ _APTAS-ST+ S"  (" _APTAS-ST+
+        RFSH-WHAT-A @ RFSH-WHAT-U @ _APTAS-ST+
+        RFSH-ID-U @ IF S" , " _APTAS-ST+ RFSH-ID RFSH-ID-U @ _APTAS-ST+ THEN
+        S" )" _APTAS-ST+
+    ELSE
+        RFSH-WHAT-A @ RFSH-WHAT-U @ _APTAS-ST+
+        RFSH-ID-U @ IF
+            S"  (" _APTAS-ST+ RFSH-ID RFSH-ID-U @ _APTAS-ST+ S" )" _APTAS-ST+
+        THEN
+    THEN
+    S" . Every frame is now built in full and checked." _APTAS-ST+ ;
 : _APTAS-SAY-SAFE  ( reason -- )
     0 _APTAS-SAFE-TEXT-U !
     DUP CHK-WHY-CONFIG = IF DROP
         S" Safe mode is on, as the system settings ask: every frame is built in full and checked."
         _APTAS-ST+ _APTAS-ST-SAY EXIT
     THEN
+    DUP CHK-WHY-MISSED = IF DROP _APTAS-SAY-MISSED _APTAS-ST-SAY EXIT THEN
     CHK-WHY-BOOT = IF
         S" Safe mode is on, as asked at boot: every frame is built in full and checked."
         _APTAS-ST+ _APTAS-ST-SAY EXIT
@@ -544,7 +564,7 @@ VARIABLE _APTAS-SAFE-TEXT-U
     _APTAS-C @ _APTAS-SAFE-TICK
     _APTAS-STATUS @ TRUE ;
 
-: _APTAS-POLL  ( event owner -- status has-event )
+: _APTAS-POLL-EVENT  ( event owner -- status has-event )
     DUP APTAS-VALID? 0= IF 2DROP SCB-S-INVALID FALSE EXIT THEN
     _APTAS-C ! _APTAS-EV !
     \ Bytes captured before the enhanced switch precede every framed event.
@@ -589,6 +609,35 @@ VARIABLE _APTAS-SAFE-TEXT-U
     THEN
     PT-EVENT-FOCUS = IF SCB-S-OK FALSE EXIT THEN
     SCB-S-INVALID FALSE ;
+
+\ Every event the owner gives is input, after which a full refresh is
+\ owed once input is quiet (rich-terminal/frame-refresh.f).
+: _APTAS-POLL  ( event owner -- status has-event )
+    _APTAS-POLL-EVENT DUP IF RFSH-INPUT THEN ;
+
+\ The shell's service: the owner's, then a full refresh's check when one
+\ falls due on a live rich screen with no paint pending and no event part
+\ given (rich-terminal/frame-refresh.f).  A modal key read between polls
+\ runs the owner's service alone: the application waiting for the key is
+\ in the middle of its own work, and its documents may be half changed.
+VARIABLE _APTAS-PS-OWNER
+: _APTAS-PASS-SERVICE  ( owner -- status owns-stream )
+    DUP _APTAS-PS-OWNER ! _APTAS-SERVICE
+    OVER SCB-S-OK = OVER AND IF
+        _APTAS-PS-OWNER @ _APTAS.SESSION @ PT-STATE@ PT-ST-ACTIVE = IF
+            _APTAS-PS-OWNER @ _APTAS-HOLDS? 0= IF
+                ASHELL-PAINT-PENDING? 0= RFSH-SERVICE
+            THEN
+        THEN
+    THEN ;
+
+\ _APTAS-DEADLINE ( owner -- ms|-1 )
+\   The shell's deadline callback: when the next full refresh falls due on
+\   a live rich screen, or -1.
+: _APTAS-DEADLINE  ( owner -- ms|-1 )
+    DUP APTAS-VALID? 0= IF DROP -1 EXIT THEN
+    _APTAS.SESSION @ PT-STATE@ PT-ST-ACTIVE <> IF -1 EXIT THEN
+    RFSH-DEADLINE ;
 
 : _APTAS-STATUS-THROW  ( status -- )
     -3300 SWAP - THROW ;
@@ -678,8 +727,9 @@ VARIABLE _APTASI-SESSION
     _APTASI-ADAPTER @ _APTASI-OWNER @ _APTAS.ADAPTER !
     _APTASI-SESSION @ _APTASI-OWNER @ _APTAS.SESSION !
     _APTASI-OWNER @
-    ['] _APTAS-PREFLIGHT ['] _APTAS-ACQUIRE ['] _APTAS-SERVICE
+    ['] _APTAS-PREFLIGHT ['] _APTAS-ACQUIRE ['] _APTAS-PASS-SERVICE
     ['] _APTAS-POLL ['] _APTAS-CLOSE ['] _APTAS-PENDING ['] _APTAS-HELD
+    ['] _APTAS-DEADLINE
     _APTASI-OWNER @ ASHELL-TERMINAL-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
     _APTAS-MAGIC _APTASI-OWNER @ _APTAS.MAGIC !

@@ -100,6 +100,15 @@ Consumers do not depend on private pool addresses, record sizes, or arithmetic.
 Guarded builds validate the pointer and read its record under the recursive UIDL
 document guard, including when called from `UIDL-OBSERVE`.
 
+#### UIDL-ELEM-AT?
+```forth
+UIDL-ELEM-AT? ( index -- elem flag )
+```
+Return the live element at a zero-based pool index and true, the inverse of
+`UIDL-ELEM-INDEX?`. An index outside the used pool, or one whose element was
+removed, returns `0 0`. A report that holds an element's index reads the
+element's id and revision through it.
+
 #### UIDL-ERR
 ```forth
 UIDL-ERR ( -- code )

@@ -442,6 +442,16 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
     DUP _UDL-ELEMS + UE.TYPE @ 0= IF DROP 0 0 EXIT THEN
     _UDL-ELEMSZ / -1 ;
 
+\ Return the live element at a zero-based pool index, the inverse of
+\ UIDL-ELEM-INDEX?.  An index outside the used pool, or one whose element
+\ was removed, returns 0 0.
+: UIDL-ELEM-AT?  ( index -- elem flag )
+    DUP 0< IF DROP 0 0 EXIT THEN
+    DUP _UDL-ECNT @ < 0= IF DROP 0 0 EXIT THEN
+    _UDL-ELEMSZ * _UDL-ELEMS +
+    DUP UE.TYPE @ 0= IF DROP 0 0 EXIT THEN
+    -1 ;
+
 \ UIDL-REVISION ( elem -- n )
 \   The stamp of the element's last change, or 0 for no live element.
 : UIDL-REVISION  ( elem -- n )
@@ -1361,6 +1371,7 @@ GUARD _uidl-guard
 ' UIDL-ROOT       CONSTANT _uidl-root-xt
 ' UIDL-ELEM-COUNT CONSTANT _uidl-elem-count-xt
 ' UIDL-ELEM-INDEX? CONSTANT _uidl-elem-index-q-xt
+' UIDL-ELEM-AT?   CONSTANT _uidl-elem-at-q-xt
 ' UIDL-TYPE       CONSTANT _uidl-type-xt
 ' UIDL-ID         CONSTANT _uidl-id-xt
 ' UIDL-ROLE       CONSTANT _uidl-role-xt
@@ -1460,6 +1471,7 @@ GUARD _uidl-guard
 : UIDL-ROOT       _uidl-root-xt _uidl-guard WITH-GUARD ;
 : UIDL-ELEM-COUNT _uidl-elem-count-xt _uidl-guard WITH-GUARD ;
 : UIDL-ELEM-INDEX? _uidl-elem-index-q-xt _uidl-guard WITH-GUARD ;
+: UIDL-ELEM-AT?   _uidl-elem-at-q-xt _uidl-guard WITH-GUARD ;
 : UIDL-TYPE       _uidl-type-xt _uidl-guard WITH-GUARD ;
 : UIDL-ID         _uidl-id-xt _uidl-guard WITH-GUARD ;
 : UIDL-ROLE       _uidl-role-xt _uidl-guard WITH-GUARD ;

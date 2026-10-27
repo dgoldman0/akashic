@@ -100,10 +100,11 @@ driver visits every element, as today's path does. It builds complete frames
   frame of an ordinary session, and sends its result. The screen then
   always shows the live state, whether or not a change was reported, and
   the rich path's own records are checked again on every frame.
-- **the occasional full refresh** (part 8) runs the full driver in normal
-  mode at a bounded interval. It sends any difference it finds and reports
-  it as a missed change, so a missed change can stay on screen for one
-  interval at most.
+- **the occasional full refresh** (part 8) captures every visible document
+  in full in normal mode at a bounded interval, as the full driver's
+  capture does, and compares the capture with what the screen was built
+  from. A difference is a missed change: it is reported, and safe mode
+  sends it, so a missed change can stay on screen for one interval at most.
 - **the shadow check** (part 1) runs it beside the change driver in tests,
   as it runs today's full path beside today's shortcuts, and compares the
   two byte for byte.
@@ -159,7 +160,8 @@ New:
   fails to move a counter, the screen shows old content, but every item a
   frame sends has passed its first check. The shadow check finds such misses
   in tests, and it is on in every test of this work. The occasional full
-  refresh finds them in ordinary sessions, sends the change and reports it.
+  refresh finds those in what applications show in ordinary sessions,
+  reports them and turns safe mode on, which sends the change.
 - **Applications do not report change to the rich path.** The counters live
   in canonical widgets and UIDL. Applications go on changing their state
   through the ordinary widget and UIDL words. Where a widget shows data it
@@ -406,7 +408,7 @@ can find something new:
 | Item checks | every item, every frame | each changed item, once | every item, every frame | each changed item, and every item through the shadow check |
 | Handover proofs | at every entry, several times a frame | when memory is lent, allocated or grows | every frame | as in normal mode, and every frame in the tests of the proofs |
 | Repeats | every frame | off | every frame | off, and every frame in the tests of the checks |
-| Full rebuild | every frame, with some reuse | at each full refresh | every frame | every frame, beside the change driver |
+| Full rebuild | every frame, with some reuse | never; a full capture at each full refresh | every frame | every frame, beside the change driver |
 
 This part moves the handover proofs and the repeats. The item checks follow
 change once part 9 builds only what changed; until then they visit every
@@ -874,31 +876,38 @@ files, which differ between commits. See the
 
 ## Part 8. The occasional full refresh — safety
 
-**When.** In normal mode, once input has settled, and at least once per
-refresh interval while the screen is shown (decision 7). Each is one full
-build. Like every frame, it runs at the end of an ordinary draw: when
-nothing has drawn, the refresh asks for one.
+**When.** In normal mode, once input has been quiet for a second, and at
+least once every five seconds while a rich screen is shown (decision 7), at
+a moment when no paint is pending. It draws nothing (decision 14): every
+draw sends a frame, since the wire forbids an empty DELTA, so a refresh
+that drew would send one each time, even when it found nothing.
 
-**What it does.** It runs the full path into scratch and compares the result
-with the acknowledged frame. Any difference is a missed change. The refresh
-sends it like any other change, records a report that names the element,
-its family and the revisions that did not move, and turns safe mode on
-(decision 6).
+**What it does.** It captures every visible document in full, as the full
+path does, into the snapshot adapter's spare bank, and compares the capture
+with the snapshot the screen was built from. Every change counted since
+that snapshot has asked for a paint, so with none pending the two agree;
+any difference is a missed change. The refresh then records a report that
+names the application, the family and the element, with the element's
+revision, which did not move, and turns safe mode on (decision 6). The next
+frame is built in full from live state and goes out whole, which sends the
+change.
 
-**What it bounds.** A missed change stays on screen for one interval at
-most, and every missed change leaves a report that points at the code that
-failed to count it.
+**What it bounds.** A missed change in what an application shows stays on
+screen for one interval at most, and every such change leaves a report that
+points at the code that failed to count it. The producers' reuse of screen
+rows builds from the screen's own cells, which the check does not capture
+again; the shadow check keeps covering that reuse in tests.
 
-**What it costs.** One full build per interval, run while input is idle
-where it can be. With the repeats off it costs less than today's frame
-build, which took 16 to 26 million steps in the measurement.
+**What it costs.** One full capture of the visible documents per check,
+about 3 to 4 million steps by the frame build's profile, and nothing on the
+wire unless it finds a missed change.
 
-**Change.** The refresh and its missed-change report, which turns safe mode
-on.
+**Change.** The check, its timing in the rich terminal's owner, its report,
+and a missed change as a reason for safe mode.
 
 **Tests.** A unit test changes a widget's borrowed data without its change
-word, and expects the next refresh to find the change, send it and report
-it.
+word, and expects the next check to find the change and report it, safe
+mode to turn on, and the next capture to hold the change.
 
 ## Part 9. One projection, two drivers — repeat, with memory
 
@@ -939,7 +948,8 @@ result goes.
 The full driver visits every element. It captures, checks and lowers each,
 builds a complete candidate, and compares it with the acknowledged frame
 through today's comparison, which then decides between a DELTA and a START.
-STARTs, safe mode, the full refresh and the shadow check use it.
+STARTs, safe mode and the shadow check use it, and the full refresh uses
+its capture (decision 14).
 
 ### Slices
 
@@ -1160,3 +1170,15 @@ Taken on 2026-10-27:
     progress on every link. Each costs a whole START only because a change
     that brings a picture goes out whole, which more kinds of DELTA,
     outside this design, would change.
+14. **How the full refresh checks** (part 8). It checks without drawing:
+    at a moment when no paint is pending, it captures every visible
+    document in full and compares the capture with the snapshot the screen
+    was built from, and sends nothing unless they differ. Riding a draw, as
+    part 8 first planned, would have sent a frame at every refresh, since
+    every draw sends one. Comparing a full build with the frame on screen
+    also cannot tell a missed change from a counted one not yet sent, so
+    such a refresh would have run the shadow check's comparisons beside an
+    ordinary build, about two builds a refresh. The check costs one capture.
+    It does not check the producers' reuse of screen rows again, which the
+    shadow check covers in tests. Of decision 3, the refresh keeps the full
+    driver's capture alone.

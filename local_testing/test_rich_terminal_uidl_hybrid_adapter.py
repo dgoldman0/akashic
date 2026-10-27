@@ -165,6 +165,14 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         query,
         "_RUHA-B-LOAD-PRIOR",
         "_RUHA-A.ACTIVE-BANK @ 0= IF 1 ELSE 0 THEN",
+        "_RUHA-B-BANK-SPANS",
+        "_RUHA-B-CAPTURE",
+        "_RUHA-B-PUBLISH",
+    )
+    # The capture points at every span of the inactive bank it selected.
+    spans = _word(source, "_RUHA-B-BANK-SPANS")
+    _ordered(
+        spans,
         "_RUHA-SNAPSHOT-DIRECTORY-A",
         "_RUHA-SNAPSHOT-RECORD-A",
         "_RUHA-SNAPSHOT-TEXT-A",
@@ -172,9 +180,8 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-SNAPSHOT-NATIVE-A",
         "_RUHA-SNAPSHOT-DGRAPH-DESCRIPTOR-A",
         "_RUHA-SNAPSHOT-DGRAPH-NATIVE-A",
-        "_RUHA-B-CAPTURE",
-        "_RUHA-B-PUBLISH",
     )
+    assert spans.count("_RUHA-B-BANK @ _RUHA-B-ADAPTER @") == 13
     capture_all = _word(source, "_RUHA-B-CAPTURE-ALL")
     capture_at = capture_all.index("['] _RUHA-B-CAPTURE CATCH")
     assert capture_at < capture_all.index("['] _RUHA-B-RESTORE CATCH", capture_at)

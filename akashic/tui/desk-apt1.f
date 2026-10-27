@@ -829,12 +829,32 @@ _A1D-PHASE-COLD _A1D-PHASE !
 : _A1D-STATUS-THROW  ( status -- )
     -3400 SWAP - THROW ;
 
+\ Desk's check for the occasional full refresh (rich-terminal/
+\ frame-refresh.f): its snapshot adapter compares a full capture of every
+\ visible document with the snapshot of the screen's last draw, and the
+\ first difference found is reported.
+: _A1D-RC-TITLE  ( -- a u )
+    RUHA-RC-SLOT @ ?DUP 0= IF 0 0 EXIT THEN
+    AHS.DESC @ ?DUP 0= IF 0 0 EXIT THEN
+    DUP APP.TITLE-A @ SWAP APP.TITLE-U @ ;
+
+: _A1D-REFRESH-CHECK  ( context -- compared? differs? )
+    DROP _A1D-RUHA RUHA-REFRESH-CHECK
+    SWAP RUHA-S-OK <> IF DROP 0 0 EXIT THEN
+    DUP IF
+        RUHA-RC-FAMILY @ RUHA-RC-FAMILY-NAME _A1D-RC-TITLE
+        RUHA-RC-ID RUHA-RC-ID-U @
+        RUHA-RC-ELEMENT @ RUHA-RC-REVISION @ RFSH-REPORT!
+    THEN
+    -1 SWAP ;
+
 \ Desk's system settings may ask for safe mode, so they are read before
-\ the first frame is built.
+\ the first frame is built; they also set the full refresh's times.
 : _A1D-RUN-BODY  ( -- )
     DSET-APPLY
     _A1D-SETUP
     DUP SCB-S-OK <> IF _A1D-STATUS-THROW THEN DROP
+    ['] _A1D-REFRESH-CHECK 0 RFSH-CHECK!
     DESK-RUN ;
 
 : _A1D-CAPTURE-FAILURE  ( -- )
@@ -857,6 +877,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
 \   suppress terminal diagnostics while PT-STREAM-OWNED? remains true.
 : APT1-DESK-RUN  ( -- )
     ['] _A1D-RUN-BODY CATCH _A1D-RUN-IOR !
+    0 0 RFSH-CHECK!
     0 0 0 DESK-HOST-LIFECYCLE!
     _A1D-CAPTURE-FAILURE
     _A1D-UNINSTALL _A1D-UNINSTALL-S !

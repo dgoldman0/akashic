@@ -868,7 +868,9 @@ def test_normal_service_and_close_settlement_have_disjoint_schedulers() -> None:
 
 def test_native_control_input_is_optional_exact_and_normalized_to_mouse() -> None:
     shell = SHELL.read_text(encoding="utf-8")
-    poll = _definition(shell, "_APTAS-POLL")
+    # The owner's poll gives the event its PT session polled; _APTAS-POLL
+    # wraps it to count that event as input.
+    poll = _definition(shell, "_APTAS-POLL-EVENT")
     control = _definition(shell, "_APTAS-MAP-CONTROL")
     cell = _definition(shell, "_APTAS-CONTROL-CELL?")
     text = _definition(shell, "_APTAS-TEXT-EVENT")
@@ -913,7 +915,7 @@ def test_native_pointer_reports_drags_and_modifiers_like_an_sgr_terminal() -> No
     load = _definition(shell, "_APTAS-LOAD-POINTER")
     pointer = _definition(shell, "_APTAS-POLL-POINTER")
     modified = _definition(shell, "_APTAS-MODIFIED")
-    poll = _definition(shell, "_APTAS-POLL")
+    poll = _definition(shell, "_APTAS-POLL-EVENT")
 
     # Motion is an event only while the primary button is held.
     assert "_APTAS.PTR-KIND @ 1 =" in load

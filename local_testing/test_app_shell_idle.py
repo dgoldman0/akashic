@@ -77,6 +77,7 @@ VARIABLE PAINTS    VARIABLE REDIRTY  VARIABLE FLUSH-REFUSED
 VARIABLE RESIZE-POLLS  VARIABLE TICKS  VARIABLE ACTIONS
 VARIABLE TICK-POSTS  VARIABLE TICK-QUITS
 VARIABLE OWNER-PENDING  VARIABLE OWNER-ASKED  VARIABLE HELD-STEPS
+VARIABLE OWNER-DEADLINE  -1 OWNER-DEADLINE !
 VARIABLE SERVICES  VARIABLE SERVICE-WORK
 VARIABLE MEDIA-SERVICES  VARIABLE MEDIA-WORK
 CREATE DEADLINES 64 CELLS ALLOT
@@ -94,11 +95,13 @@ TEST_WORDS = b"""
 : TEST-OWNER-PENDING ( context -- flag )
     OWNER-ASKED !  OWNER-PENDING @ ;
 : TEST-OWNER-HELD ( context -- flag ) DROP HELD-STEPS @ 0<> ;
+: TEST-OWNER-DEADLINE ( context -- ms|-1 ) DROP OWNER-DEADLINE @ ;
 CREATE TEST-OWNER ASHELL-TERMINAL-DESC-SIZE ALLOT
 TEST-OWNER ASHELL-TERMINAL-DESC-SIZE 0 FILL
 4242 TEST-OWNER _ASHT.CONTEXT !
 ' TEST-OWNER-PENDING TEST-OWNER _ASHT.PENDING-XT !
 ' TEST-OWNER-HELD TEST-OWNER _ASHT.HELD-XT !
+' TEST-OWNER-DEADLINE TEST-OWNER _ASHT.DEADLINE-XT !
 TEST-OWNER _ASHELL-TERM-OWNER !
 : TEST-SERVICE ( instance -- worked? )
     DROP 1 SERVICES +!
@@ -112,6 +115,7 @@ class IdleLoopHarness:
         "_ASHELL-LOOP", "ASHELL-POST", "ASHELL-QUIT", "ASHELL-DIRTY!",
         "ASHELL-TOAST", "_ASHELL-NEXT-DEADLINE", "ASHELL-TERMINAL-DESC-SIZE",
         "_ASHT.CONTEXT", "_ASHT.PENDING-XT", "_ASHT.HELD-XT",
+        "_ASHT.DEADLINE-XT",
     )
 
     def __init__(self, backend):
@@ -276,6 +280,25 @@ def test_a_quiet_live_owner_without_a_tick_waits_for_input(shell):
     shell.run()
     assert shell.deadlines()[0] == MASK64
     assert shell.variable("INPUTS") == 1
+
+
+def test_a_quiet_live_owner_wakes_the_loop_at_its_deadline(shell):
+    # A rich terminal's owner names when its next full refresh falls due;
+    # without a tick, the loop would otherwise wait for input alone.
+    shell.start(tick=False, passes=3)
+    shell.variable("_ASHELL-TERM-OWNS", MASK64)
+    shell.variable("OWNER-DEADLINE", 1700)
+    shell.run()
+    assert shell.deadlines()[0] == 1700
+    assert shell.variable("FAKE-MS") >= 1700
+    # With a tick, the earlier of the two wakes the loop.
+    shell.variable("SLEEPS", 0)
+    shell.variable("YIELDS", 0)
+    shell.start(passes=2)
+    shell.variable("_ASHELL-TERM-OWNS", MASK64)
+    shell.variable("OWNER-DEADLINE", 1020)
+    shell.run()
+    assert shell.deadlines()[0] == 1020
 
 
 def test_a_toast_without_a_tick_wakes_at_its_expiry(shell):

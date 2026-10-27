@@ -13,3 +13,10 @@
 # runs every check, at a cost in speed; Desk says so on
 # screen while it is on.
 safe-mode = false
+# The full refresh compares a full capture of every visible
+# document with what the screen was built from, once input
+# has been quiet this long and at least once in each
+# interval; a change nothing reported turns safe mode on.
+# Times are in milliseconds.
+full-refresh-quiet-ms = 1000
+full-refresh-interval-ms = 5000

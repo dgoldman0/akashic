@@ -11839,7 +11839,7 @@ def shadow_check_record(client) -> dict:
 # why, and what the checks found damaged (tui/check-mode.f).
 CHECK_MODE_VARIABLE = "CHK-EVERY-FRAME"
 SAFE_MODE_VARIABLE = "CHK-SAFE-MODE"
-SAFE_MODE_REASONS = {1: "config", 2: "boot", 3: "anomaly"}
+SAFE_MODE_REASONS = {1: "config", 2: "boot", 3: "anomaly", 4: "missed change"}
 # The rich terminal's owner says so when safe mode is on (tui/app-shell-apt1.f),
 # in a warning notice that names why: as asked at boot, or as the system
 # settings ask.
@@ -11904,6 +11904,70 @@ def check_mode_record(client) -> dict:
     }
 
 
+# The occasional full refresh: its times, how many of its checks compared,
+# found a change nothing reported, or could not compare, and the first such
+# change, by family, application and element (tui/rich-terminal/
+# frame-refresh.f).
+_FULL_REFRESH_VARIABLES = {
+    "quiet_ms": "RFSH-QUIET-MS",
+    "interval_ms": "RFSH-INTERVAL-MS",
+    "checks": "RFSH-CHECKS",
+    "missed": "RFSH-MISSED",
+    "skipped": "RFSH-SKIPPED",
+    "what_a": "RFSH-WHAT-A",
+    "what_u": "RFSH-WHAT-U",
+    "title_u": "RFSH-TITLE-U",
+    "id_u": "RFSH-ID-U",
+    "element": "RFSH-ELEMENT",
+    "revision": "RFSH-REVISION",
+}
+_FULL_REFRESH_BUFFERS = ("RFSH-TITLE", "RFSH-ID")
+# A report's names are cut at 64 bytes by the guest.
+FULL_REFRESH_NAME_MAX = 64
+
+
+def full_refresh_record(client) -> dict:
+    """What the occasional full refresh checked and the first change it
+    found that nothing had reported."""
+
+    names = (*_FULL_REFRESH_VARIABLES.values(), *_FULL_REFRESH_BUFFERS)
+    try:
+        words = client.request("forth", names=list(names)).get("words", {})
+        values = {}
+        for key, name in _FULL_REFRESH_VARIABLES.items():
+            word = words.get(name)
+            if not isinstance(word, dict) or "data_address" not in word:
+                return {"unavailable": True, "error": f"{name} not found"}
+            values[key] = _read_guest_cells(
+                client, address=int(word["data_address"]), count=1
+            )[0]
+        buffers = {}
+        for name in _FULL_REFRESH_BUFFERS:
+            word = words.get(name)
+            if not isinstance(word, dict) or "data_address" not in word:
+                return {"unavailable": True, "error": f"{name} not found"}
+            buffers[name] = int(word["data_address"])
+        record = {key: values[key] for key in
+                  ("quiet_ms", "interval_ms", "checks", "missed", "skipped")}
+        record["first"] = None
+        if values["what_a"] and 0 < values["what_u"] <= DAMAGE_NAME_MAX:
+            title_u = min(values["title_u"], FULL_REFRESH_NAME_MAX)
+            id_u = min(values["id_u"], FULL_REFRESH_NAME_MAX)
+            element = values["element"]
+            record["first"] = {
+                "family": _guest_text(client, values["what_a"], values["what_u"]),
+                "application": (
+                    _guest_text(client, buffers["RFSH-TITLE"], title_u) if title_u else None
+                ),
+                "element": None if element >= 1 << 63 else element,
+                "element_id": _guest_text(client, buffers["RFSH-ID"], id_u) if id_u else None,
+                "revision": values["revision"],
+            }
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
+        return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
+    return record
+
+
 def shadow_check_failure(record: dict) -> str | None:
     """Why a run whose shadow check was on fails, or None when it passes."""
 
@@ -11960,6 +12024,7 @@ def _write_final_guest_diagnostics(artifact_root: Path, client) -> dict:
             "delta_refusals": _delta_refusal_record(client),
             "shadow_check": shadow_check_record(client),
             "check_mode": check_mode_record(client),
+            "full_refresh": full_refresh_record(client),
         }
     path = Path(artifact_root) / "final-guest-diagnostics.json"
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

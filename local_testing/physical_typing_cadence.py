@@ -406,6 +406,8 @@ def worker(args):
         # Which checks ran: normal mode, or every check on every frame.
         check_mode = journey_api.check_mode_record(client)
         write_json(artifact / "check-mode.json", check_mode)
+        # What the occasional full refresh checked while the run typed.
+        write_json(artifact / "full-refresh.json", journey_api.full_refresh_record(client))
         if args.every_frame_checks and not check_mode.get("every_frame"):
             outcome = "every_frame_checks_off"
             raise RuntimeError(

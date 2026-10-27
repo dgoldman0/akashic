@@ -130,6 +130,7 @@ limit the supported Desk child UCTX scope above.
 | `ASHELL-TOAST-WARNING` | `( addr u ms -- )` | A notice that warns. |
 | `ASHELL-TOAST-ERROR` | `( addr u ms -- )` | A notice that something failed. |
 | `ASHELL-TOAST-VISIBLE?` | `( -- flag )` | True while the notice raised last has not ended. |
+| `ASHELL-PAINT-PENDING?` | `( -- flag )` | True while a paint is due or the last paint's frame is still going out. A terminal owner asks it before work that must find every counted change drawn. |
 | `ASHELL-NOTICE-SHOWN?` | `( -- flag )` | Whether the paint shows a notice. |
 | `ASHELL-NOTICE-ROOT` | `( -- row col height width )` | The cells the paint's notice lies in; all zero when it shows none. |
 | `ASHELL-NOTICE-CAPTURE` | `( dst cap -- bytes status )` | The notice the paint shows, as a [UDLG model](dialog-model.md) at DST; with DST 0 and CAP 0 only measure it. |
@@ -438,7 +439,9 @@ get regular time slices.
 A pass that consumed no input, ran no posted action or tick, and had nothing
 to paint or flush ends with `IDLE-UNTIL`, so an idle shell sleeps instead of
 holding a core.  The deadline is the next tick (when the app has a tick
-callback) or a visible toast's expiry, whichever comes first.  Input, a
+callback), a visible toast's expiry, or the moment a live terminal owner's
+`deadline` callback names, whichever comes first: an owner that runs a
+check at intervals names when the next falls due.  Input, a
 network frame, or any requested interrupt ends the sleep at once, and
 `IDLE-UNTIL` may return early, so the loop always re-checks its sources.
 

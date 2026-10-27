@@ -3310,6 +3310,41 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
         RUHA-S-INVALID _RUHA-B-STATUS !
     THEN ;
 
+\ Point the capture at bank _RUHA-B-BANK's spans.
+: _RUHA-B-BANK-SPANS  ( -- )
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIRECTORY-A
+        _RUHA-B-DIRECTORY-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-RECORD-A
+        _RUHA-B-RECORDS-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-TEXT-A
+        _RUHA-B-TEXT-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DESCRIPTOR-A
+        _RUHA-B-DESCRIPTORS-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-NATIVE-A
+        _RUHA-B-NATIVE-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
+        _RUHA-SNAPSHOT-DGRAPH-DESCRIPTOR-A
+        _RUHA-B-DGRAPH-DESCRIPTORS-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DGRAPH-NATIVE-A
+        _RUHA-B-DGRAPH-NATIVE-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
+        _RUHA-SNAPSHOT-SFIELD-DESCRIPTOR-A
+        _RUHA-B-SFIELD-DESCRIPTORS-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-SFIELD-NATIVE-A
+        _RUHA-B-SFIELD-NATIVE-A !
+
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
+        _RUHA-SNAPSHOT-FIELD-DESCRIPTOR-A
+        _RUHA-B-FIELD-DESCRIPTORS-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-FIELD-NATIVE-A
+        _RUHA-B-FIELD-NATIVE-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
+        _RUHA-SNAPSHOT-DIALOG-DESCRIPTOR-A
+        _RUHA-B-DIALOG-DESCRIPTORS-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIALOG-NATIVE-A
+        _RUHA-B-DIALOG-NATIVE-A !
+    ;
+
 \ ---------------------------------------------------------------------
 \ Shadow check (frame-shadow.f)
 \ ---------------------------------------------------------------------
@@ -3471,37 +3506,7 @@ VARIABLE _RUHA-SH-SPAN-U
         DUP _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
         0 SWAP EXIT
     THEN _RUHA-B-GENERATION !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIRECTORY-A
-        _RUHA-B-DIRECTORY-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-RECORD-A
-        _RUHA-B-RECORDS-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-TEXT-A
-        _RUHA-B-TEXT-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DESCRIPTOR-A
-        _RUHA-B-DESCRIPTORS-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-NATIVE-A
-        _RUHA-B-NATIVE-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
-        _RUHA-SNAPSHOT-DGRAPH-DESCRIPTOR-A
-        _RUHA-B-DGRAPH-DESCRIPTORS-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DGRAPH-NATIVE-A
-        _RUHA-B-DGRAPH-NATIVE-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
-        _RUHA-SNAPSHOT-SFIELD-DESCRIPTOR-A
-        _RUHA-B-SFIELD-DESCRIPTORS-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-SFIELD-NATIVE-A
-        _RUHA-B-SFIELD-NATIVE-A !
-
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
-        _RUHA-SNAPSHOT-FIELD-DESCRIPTOR-A
-        _RUHA-B-FIELD-DESCRIPTORS-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-FIELD-NATIVE-A
-        _RUHA-B-FIELD-NATIVE-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @
-        _RUHA-SNAPSHOT-DIALOG-DESCRIPTOR-A
-        _RUHA-B-DIALOG-DESCRIPTORS-A !
-    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIALOG-NATIVE-A
-        _RUHA-B-DIALOG-NATIVE-A !
+    _RUHA-B-BANK-SPANS
     \ Safe mode (check-mode.f) captures every document afresh, as the
     \ shadow check's full capture does, so there is no reuse to compare.
     CHK-SAFE? 0= FSHD? AND IF _RUHA-SH-FULL THEN
@@ -3593,6 +3598,398 @@ VARIABLE _RUHA-ID-DRAW
 : RUHA-SNAPSHOT-IDENTITY@
   ( draw-generation adapter -- generation content-epoch documents status )
     ['] _RUHA-SNAPSHOT-IDENTITY-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
+
+\ =====================================================================
+\  Refresh check (frame-refresh.f)
+\ =====================================================================
+\
+\ Between draws, once no paint is pending, the snapshot of the screen's
+\ last draw holds what a full capture of every visible document would
+\ hold now: every change counted since asked for a paint, and that
+\ paint's draw would have been captured again.  RUHA-REFRESH-CHECK makes
+\ that full capture into the inactive bank, under the snapshot's own
+\ generation, as the shadow check's full capture does, and compares it
+\ with the snapshot document by document.  It publishes nothing: the
+\ active bank, the generation, the last draw and its status stay as they
+\ were, and the records' flags, which a capture stages and may mark
+\ dirty, are put back.
+\
+\ A difference is a change nothing reported.  RUHA-RC-* name the first:
+\ its family, its document's owner and slot, and, where the family says
+\ which element a record came from, the element's index, id and
+\ revision.  That revision did not move since the snapshot, or the paint
+\ it asks for would have drawn the element again.
+
+1 CONSTANT RUHA-RC-DOCUMENTS
+2 CONSTANT RUHA-RC-MENUS
+3 CONSTANT RUHA-RC-COLLECTIONS
+4 CONSTANT RUHA-RC-DATA-GRAPHICS
+5 CONSTANT RUHA-RC-STATUS-FIELDS
+6 CONSTANT RUHA-RC-FIELDS
+7 CONSTANT RUHA-RC-DIALOGS
+
+\ RUHA-RC-FAMILY-NAME ( family -- a u )  The family's name, for a report.
+: RUHA-RC-FAMILY-NAME  ( family -- a u )
+    CASE
+        RUHA-RC-DOCUMENTS OF S" the documents shown" ENDOF
+        RUHA-RC-MENUS OF S" menus" ENDOF
+        RUHA-RC-COLLECTIONS OF S" collections" ENDOF
+        RUHA-RC-DATA-GRAPHICS OF S" data graphics" ENDOF
+        RUHA-RC-STATUS-FIELDS OF S" status fields" ENDOF
+        RUHA-RC-FIELDS OF S" fields" ENDOF
+        RUHA-RC-DIALOGS OF S" dialogs" ENDOF
+        >R S" nothing" R>
+    ENDCASE ;
+
+\ The first difference: its family, or 0; its document's owner, a
+\ component instance's ID, and the host slot that shows it, or 0; and the
+\ element's index, or -1, with its revision and id.  UIDL ids are at most
+\ 64 bytes (liraq/uidl.f).
+64 CONSTANT _RUHA-RC-ID-CAP
+VARIABLE RUHA-RC-FAMILY
+VARIABLE RUHA-RC-OWNER
+VARIABLE RUHA-RC-SLOT
+VARIABLE RUHA-RC-ELEMENT
+VARIABLE RUHA-RC-REVISION
+CREATE RUHA-RC-ID _RUHA-RC-ID-CAP ALLOT
+VARIABLE RUHA-RC-ID-U
+
+: _RUHA-RC-CLEAR  ( -- )
+    0 RUHA-RC-FAMILY ! 0 RUHA-RC-OWNER ! 0 RUHA-RC-SLOT !
+    -1 RUHA-RC-ELEMENT ! 0 RUHA-RC-REVISION ! 0 RUHA-RC-ID-U ! ;
+_RUHA-RC-CLEAR
+
+VARIABLE _RUHA-RC-OLD      \ the snapshot of the screen's last draw
+VARIABLE _RUHA-RC-I        \ the document compared
+VARIABLE _RUHA-RC-OE       \ its entry in that snapshot's directory, or 0
+VARIABLE _RUHA-RC-NE       \ its entry in the full capture's, or 0
+VARIABLE _RUHA-RC-F        \ the family compared
+
+\ The family's descriptors (a menu's records) and native bytes (a menu's
+\ text), in the snapshot (O) and in the full capture (N).
+VARIABLE _RUHA-RC-DOA  VARIABLE _RUHA-RC-DOU
+VARIABLE _RUHA-RC-DNA  VARIABLE _RUHA-RC-DNU
+VARIABLE _RUHA-RC-NOA  VARIABLE _RUHA-RC-NOU
+VARIABLE _RUHA-RC-NNA  VARIABLE _RUHA-RC-NNU
+\ A descriptor's size, and its words for the element it came from and for
+\ its native bytes' offset in the document's slice and length; 0 where the
+\ family has none.
+VARIABLE _RUHA-RC-STRIDE
+VARIABLE _RUHA-RC-SOURCE-XT
+VARIABLE _RUHA-RC-NOFF-XT
+VARIABLE _RUHA-RC-NBYTES-XT
+
+VARIABLE _RUHA-RC-A1  VARIABLE _RUHA-RC-U1
+VARIABLE _RUHA-RC-A2  VARIABLE _RUHA-RC-U2
+
+\ The first offset at which two slices differ, or -1 when they are equal.
+: _RUHA-RC-DIFF  ( a1 u1 a2 u2 -- offset|-1 )
+    _RUHA-RC-U2 ! _RUHA-RC-A2 ! _RUHA-RC-U1 ! _RUHA-RC-A1 !
+    _RUHA-RC-U1 @ _RUHA-RC-U2 @ = IF
+        _RUHA-RC-U1 @ 0= IF -1 EXIT THEN
+        _RUHA-RC-A1 @ _RUHA-RC-U1 @ _RUHA-RC-A2 @ _RUHA-RC-U2 @ COMPARE
+        0= IF -1 EXIT THEN
+    THEN
+    _RUHA-RC-U1 @ _RUHA-RC-U2 @ MIN DUP 0 ?DO
+        _RUHA-RC-A1 @ I + C@ _RUHA-RC-A2 @ I + C@ <> IF
+            DROP I UNLOOP EXIT
+        THEN
+    LOOP ;
+
+\ Document I's entries; an index beyond a directory has none.
+: _RUHA-RC-ENTRIES  ( i -- )
+    DUP _RUHA-RC-I !
+    DUP _RUHA-RC-OLD @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ < IF
+        DUP RUHA-DOCUMENT-SIZE * _RUHA-RC-OLD @ RUHA-SNAPSHOT-DIRECTORY@ DROP +
+    ELSE 0 THEN _RUHA-RC-OE !
+    DUP _RUHA-B-DOCUMENTS @ < IF
+        RUHA-DOCUMENT-SIZE * _RUHA-B-DIRECTORY-A @ +
+    ELSE DROP 0 THEN _RUHA-RC-NE ! ;
+
+\ Whether the document shows elsewhere, or is another document.
+: _RUHA-RC-PLACE-DIFFERS?  ( -- flag )
+    _RUHA-RC-OE @ RUHA-DOCUMENT-OWNER-ID@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-OWNER-ID@ <>
+    _RUHA-RC-OE @ RUHA-DOCUMENT-OWNER-GENERATION@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-OWNER-GENERATION@ <> OR
+    _RUHA-RC-OE @ RUHA-DOCUMENT-TOKEN@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-TOKEN@ <> OR
+    _RUHA-RC-OE @ RUHA-DOCUMENT-SLOT-ID@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-SLOT-ID@ <> OR
+    _RUHA-RC-OE @ RUHA-DOCUMENT-ROW@ _RUHA-RC-NE @ RUHA-DOCUMENT-ROW@ <> OR
+    _RUHA-RC-OE @ RUHA-DOCUMENT-COL@ _RUHA-RC-NE @ RUHA-DOCUMENT-COL@ <> OR
+    _RUHA-RC-OE @ RUHA-DOCUMENT-HEIGHT@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-HEIGHT@ <> OR
+    _RUHA-RC-OE @ RUHA-DOCUMENT-WIDTH@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-WIDTH@ <> OR ;
+
+: _RUHA-RC-MENU-EPOCHS-DIFFER?  ( -- flag )
+    _RUHA-RC-OE @ RUHA-DOCUMENT-MENU-EPOCH@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-MENU-EPOCH@ <>
+    _RUHA-RC-OE @ RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@
+        _RUHA-RC-NE @ RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ <> OR ;
+
+\ One span's slices of the document, from each directory's offset and
+\ length: the snapshot's at OLD-BASE, the full capture's at NEW-BASE.
+VARIABLE _RUHA-RC-OFF-XT
+VARIABLE _RUHA-RC-BYTES-XT
+: _RUHA-RC-SLICE  ( old-base new-base offset-xt bytes-xt -- oa ou na nu )
+    _RUHA-RC-BYTES-XT ! _RUHA-RC-OFF-XT !
+    _RUHA-RC-NE @ _RUHA-RC-OFF-XT @ EXECUTE +
+    _RUHA-RC-NE @ _RUHA-RC-BYTES-XT @ EXECUTE
+    ROT _RUHA-RC-OE @ _RUHA-RC-OFF-XT @ EXECUTE +
+    _RUHA-RC-OE @ _RUHA-RC-BYTES-XT @ EXECUTE
+    2SWAP ;
+
+: _RUHA-RC-DESCRIPTORS!  ( oa ou na nu -- )
+    _RUHA-RC-DNU ! _RUHA-RC-DNA ! _RUHA-RC-DOU ! _RUHA-RC-DOA ! ;
+: _RUHA-RC-NATIVE!  ( oa ou na nu -- )
+    _RUHA-RC-NNU ! _RUHA-RC-NNA ! _RUHA-RC-NOU ! _RUHA-RC-NOA ! ;
+: _RUHA-RC-WORDS!  ( stride source-xt noff-xt nbytes-xt -- )
+    _RUHA-RC-NBYTES-XT ! _RUHA-RC-NOFF-XT !
+    _RUHA-RC-SOURCE-XT ! _RUHA-RC-STRIDE ! ;
+
+\ The family's slices of the document and its descriptors' words.
+: _RUHA-RC-FAMILY-SLICES  ( family -- )
+    CASE
+        RUHA-RC-MENUS OF
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-RECORDS@ DROP _RUHA-B-RECORDS-A @
+            ['] RUHA-DOCUMENT-RECORD-OFFSET@ ['] RUHA-DOCUMENT-RECORD-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-DESCRIPTORS!
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-TEXT@ DROP _RUHA-B-TEXT-A @
+            ['] RUHA-DOCUMENT-TEXT-OFFSET@ ['] RUHA-DOCUMENT-TEXT-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-NATIVE!
+            UMSN-RECORD-SIZE ['] UMSN-RECORD-SOURCE-INDEX@ 0 0
+        ENDOF
+        RUHA-RC-COLLECTIONS OF
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@ DROP
+            _RUHA-B-DESCRIPTORS-A @
+            ['] RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-OFFSET@
+            ['] RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-DESCRIPTORS!
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-COLLECTION-NATIVE@ DROP
+            _RUHA-B-NATIVE-A @
+            ['] RUHA-DOCUMENT-COLLECTION-NATIVE-OFFSET@
+            ['] RUHA-DOCUMENT-COLLECTION-NATIVE-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-NATIVE!
+            UCSN-DESCRIPTOR-SIZE ['] UCSN-DESCRIPTOR-SOURCE-INDEX@
+            ['] UCSN-DESCRIPTOR-NATIVE-OFFSET@ ['] UCSN-DESCRIPTOR-ENTRY-BYTES@
+        ENDOF
+        RUHA-RC-DATA-GRAPHICS OF
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-DATA-GRAPHICS-DESCRIPTORS@ DROP
+            _RUHA-B-DGRAPH-DESCRIPTORS-A @
+            ['] RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-OFFSET@
+            ['] RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-DESCRIPTORS!
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-DATA-GRAPHICS-NATIVE@ DROP
+            _RUHA-B-DGRAPH-NATIVE-A @
+            ['] RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-OFFSET@
+            ['] RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-NATIVE!
+            \ The adapter carries a data-graphics descriptor opaquely and
+            \ reads none of its native bounds, so a difference in their
+            \ native bytes names no element.
+            UDGSN-DESCRIPTOR-SIZE ['] UDGSN-DESCRIPTOR-SOURCE-INDEX@ 0 0
+        ENDOF
+        RUHA-RC-STATUS-FIELDS OF
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-STATUS-FIELDS-DESCRIPTORS@ DROP
+            _RUHA-B-SFIELD-DESCRIPTORS-A @
+            ['] RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@
+            ['] RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-DESCRIPTORS!
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-STATUS-FIELDS-NATIVE@ DROP
+            _RUHA-B-SFIELD-NATIVE-A @
+            ['] RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@
+            ['] RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-NATIVE!
+            USFSN-DESCRIPTOR-SIZE ['] USFSN-DESCRIPTOR-SOURCE-INDEX@
+            ['] USFSN-DESCRIPTOR-NATIVE-OFFSET@
+            ['] USFSN-DESCRIPTOR-ENTRY-BYTES@
+        ENDOF
+        RUHA-RC-FIELDS OF
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-FIELDS-DESCRIPTORS@ DROP
+            _RUHA-B-FIELD-DESCRIPTORS-A @
+            ['] RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@
+            ['] RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-DESCRIPTORS!
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-FIELDS-NATIVE@ DROP
+            _RUHA-B-FIELD-NATIVE-A @
+            ['] RUHA-DOCUMENT-FIELDS-NATIVE-OFFSET@
+            ['] RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-NATIVE!
+            UFLSN-DESCRIPTOR-SIZE ['] UFLSN-DESCRIPTOR-SOURCE-INDEX@
+            ['] UFLSN-DESCRIPTOR-NATIVE-OFFSET@
+            ['] UFLSN-DESCRIPTOR-ENTRY-BYTES@
+        ENDOF
+        \ Dialogs: a dialog is a widget, not an element of its document.
+        >R
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-DIALOGS-DESCRIPTORS@ DROP
+            _RUHA-B-DIALOG-DESCRIPTORS-A @
+            ['] RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-OFFSET@
+            ['] RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-DESCRIPTORS!
+            _RUHA-RC-OLD @ RUHA-SNAPSHOT-DIALOGS-NATIVE@ DROP
+            _RUHA-B-DIALOG-NATIVE-A @
+            ['] RUHA-DOCUMENT-DIALOGS-NATIVE-OFFSET@
+            ['] RUHA-DOCUMENT-DIALOGS-NATIVE-BYTES@
+            _RUHA-RC-SLICE _RUHA-RC-NATIVE!
+            UDLSN-DESCRIPTOR-SIZE 0
+            ['] UDLSN-DESCRIPTOR-NATIVE-OFFSET@
+            ['] UDLSN-DESCRIPTOR-ENTRY-BYTES@
+        R>
+    ENDCASE
+    _RUHA-RC-WORDS! ;
+
+\ The element the INDEX-th descriptor came from, read from the full
+\ capture, or from the snapshot when the capture has fewer; -1 for none.
+: _RUHA-RC-DESCRIPTOR-ELEMENT  ( index -- element|-1 )
+    _RUHA-RC-SOURCE-XT @ 0= IF DROP -1 EXIT THEN
+    _RUHA-RC-STRIDE @ *
+    DUP _RUHA-RC-STRIDE @ + _RUHA-RC-DNU @ U> 0= IF
+        _RUHA-RC-DNA @ + _RUHA-RC-SOURCE-XT @ EXECUTE EXIT
+    THEN
+    DUP _RUHA-RC-STRIDE @ + _RUHA-RC-DOU @ U> 0= IF
+        _RUHA-RC-DOA @ + _RUHA-RC-SOURCE-XT @ EXECUTE EXIT
+    THEN
+    DROP -1 ;
+
+\ The element whose native bytes, among the descriptors at A U, hold
+\ offset AT of the document's native slice; -1 for none.
+VARIABLE _RUHA-RC-AT
+: _RUHA-RC-NATIVE-OWNER  ( at a u -- element|-1 )
+    ROT _RUHA-RC-AT !
+    _RUHA-RC-NOFF-XT @ 0= _RUHA-RC-SOURCE-XT @ 0= OR IF 2DROP -1 EXIT THEN
+    _RUHA-RC-STRIDE @ / 0 ?DO
+        DUP I _RUHA-RC-STRIDE @ * +
+        _RUHA-RC-AT @ OVER _RUHA-RC-NOFF-XT @ EXECUTE - DUP 0< IF
+            2DROP
+        ELSE
+            OVER _RUHA-RC-NBYTES-XT @ EXECUTE U< IF
+                _RUHA-RC-SOURCE-XT @ EXECUTE NIP UNLOOP EXIT
+            THEN DROP
+        THEN
+    LOOP DROP -1 ;
+
+: _RUHA-RC-NATIVE-ELEMENT  ( at -- element|-1 )
+    DUP _RUHA-RC-DNA @ _RUHA-RC-DNU @ _RUHA-RC-NATIVE-OWNER
+    DUP 0< 0= IF NIP EXIT THEN DROP
+    _RUHA-RC-DOA @ _RUHA-RC-DOU @ _RUHA-RC-NATIVE-OWNER ;
+
+\ The record of the document whose owner is component instance OWNER.
+: _RUHA-RC-RECORD  ( owner -- record|0 )
+    _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT
+        DUP _RUHA-R.SLOT @ ?DUP IF
+            AHS.INST @ ?DUP IF
+                CINST.ID @ 2 PICK = IF NIP UNLOOP EXIT THEN
+            THEN
+        THEN DROP
+    LOOP DROP 0 ;
+
+\ The element's id and revision, read in its document's context.
+VARIABLE _RUHA-RC-RECORD-A
+: _RUHA-RC-ELEMENT-BODY  ( -- )
+    _RUHA-RC-RECORD-A @ _RUHA-R.UCTX @ ASHELL-CTX-SWITCH
+    RUHA-RC-ELEMENT @ UIDL-ELEM-AT? 0= IF DROP EXIT THEN
+    DUP UIDL-REVISION RUHA-RC-REVISION !
+    UIDL-ID _RUHA-RC-ID-CAP MIN DUP RUHA-RC-ID-U !
+    RUHA-RC-ID SWAP MOVE ;
+
+\ Name the first difference: FAMILY, and ELEMENT or -1.
+: _RUHA-RC-NAME  ( family element -- )
+    RUHA-RC-ELEMENT ! RUHA-RC-FAMILY !
+    _RUHA-RC-NE @ ?DUP 0= IF _RUHA-RC-OE @ THEN
+    RUHA-DOCUMENT-OWNER-ID@ DUP RUHA-RC-OWNER !
+    _RUHA-RC-RECORD DUP _RUHA-RC-RECORD-A ! ?DUP 0= IF EXIT THEN
+    _RUHA-R.SLOT @ RUHA-RC-SLOT !
+    RUHA-RC-ELEMENT @ 0< IF EXIT THEN
+    ['] _RUHA-RC-ELEMENT-BODY CATCH DROP
+    _RUHA-B-ORIGINAL-CTX @ ['] ASHELL-CTX-SWITCH CATCH IF DROP THEN ;
+
+\ Whether the family's slices of the document differ; the first difference
+\ is named.
+: _RUHA-RC-FAMILY?  ( family -- differs? )
+    DUP _RUHA-RC-F ! _RUHA-RC-FAMILY-SLICES
+    _RUHA-RC-DOA @ _RUHA-RC-DOU @ _RUHA-RC-DNA @ _RUHA-RC-DNU @ _RUHA-RC-DIFF
+    DUP 0< 0= IF
+        _RUHA-RC-STRIDE @ / _RUHA-RC-DESCRIPTOR-ELEMENT
+        _RUHA-RC-F @ SWAP _RUHA-RC-NAME -1 EXIT
+    THEN DROP
+    _RUHA-RC-NOA @ _RUHA-RC-NOU @ _RUHA-RC-NNA @ _RUHA-RC-NNU @ _RUHA-RC-DIFF
+    DUP 0< 0= IF
+        _RUHA-RC-NATIVE-ELEMENT _RUHA-RC-F @ SWAP _RUHA-RC-NAME -1 EXIT
+    THEN DROP 0 ;
+
+\ Whether document _RUHA-RC-I differs between the snapshot and the full
+\ capture; the first difference is named.
+: _RUHA-RC-DOCUMENT?  ( -- differs? )
+    _RUHA-RC-PLACE-DIFFERS? IF RUHA-RC-DOCUMENTS -1 _RUHA-RC-NAME -1 EXIT THEN
+    RUHA-RC-DIALOGS 1+ RUHA-RC-MENUS ?DO
+        I _RUHA-RC-FAMILY? IF UNLOOP -1 EXIT THEN
+    LOOP
+    _RUHA-RC-MENU-EPOCHS-DIFFER? IF RUHA-RC-MENUS -1 _RUHA-RC-NAME -1 EXIT THEN
+    0 ;
+
+: _RUHA-RC-COMPARE  ( -- differs? )
+    _RUHA-RC-CLEAR
+    _RUHA-RC-OLD @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ _RUHA-B-DOCUMENTS @ MIN
+    DUP 0 ?DO
+        I _RUHA-RC-ENTRIES
+        _RUHA-RC-DOCUMENT? IF DROP UNLOOP -1 EXIT THEN
+    LOOP
+    \ A document shown in one and not the other.
+    _RUHA-RC-OLD @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ _RUHA-B-DOCUMENTS @ = IF
+        DROP 0 EXIT
+    THEN
+    _RUHA-RC-ENTRIES RUHA-RC-DOCUMENTS -1 _RUHA-RC-NAME -1 ;
+
+VARIABLE _RUHA-RC-FLAGS-SAVED
+
+: _RUHA-RC-IN-DRAW  ( adapter actual-draw -- status differs? )
+    _RUHA-B-DRAW ! _RUHA-B-ADAPTER !
+    _RUHA-B-ADAPTER @ RUHA-VALID? 0= IF RUHA-S-INVALID 0 EXIT THEN
+    \ The snapshot is the screen's last draw's, and still the one held.
+    _RUHA-B-DRAW @ 0= IF RUHA-S-STALE 0 EXIT THEN
+    _RUHA-B-DRAW @ _RUHA-B-ADAPTER @ _RUHA-A.LAST-DRAW @ <> IF
+        RUHA-S-STALE 0 EXIT
+    THEN
+    _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS @ DUP RUHA-S-OK <> IF 0 EXIT THEN
+    DROP
+    _RUHA-B-ADAPTER @ _RUHA-A.ACTIVE-BANK @ DUP 0< IF
+        DROP RUHA-S-STALE 0 EXIT
+    THEN
+    _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-AT _RUHA-RC-OLD !
+    _RUHA-RC-OLD @ _RUHA-S.DRAW-GENERATION @ _RUHA-B-DRAW @ <>
+    _RUHA-RC-OLD @ _RUHA-S.GENERATION @
+        _RUHA-B-ADAPTER @ _RUHA-A.GENERATION @ <> OR IF
+        RUHA-S-STALE 0 EXIT
+    THEN
+    ASHELL-ACTIVE-CTX _RUHA-B-ORIGINAL-CTX !
+    _RUHA-B-PREFLIGHT-GUARDED _RUHA-B-STATUS !
+    ['] _RUHA-B-RESTORE CATCH IF RUHA-S-INVALID _RUHA-B-STATUS ! THEN
+    _RUHA-B-STATUS @ RUHA-S-OK <> IF _RUHA-B-STATUS @ 0 EXIT THEN
+    _RUHA-B-LOAD-PRIOR
+    _RUHA-B-ADAPTER @ _RUHA-A.ACTIVE-BANK @ 0= IF 1 ELSE 0 THEN
+        _RUHA-B-BANK !
+    _RUHA-RC-OLD @ _RUHA-S.GENERATION @ _RUHA-B-GENERATION !
+    _RUHA-B-BANK-SPANS
+    _RUHA-SH-SAVE-FLAGS? 0= IF RUHA-S-UNAVAILABLE 0 EXIT THEN
+    _RUHA-B-START
+    -1 _RUHA-B-FULL !
+    _RUHA-B-CAPTURE-ALL
+    0 _RUHA-B-FULL !
+    _RUHA-SH-RESTORE-FLAGS
+    _RUHA-B-STATUS @ RUHA-S-OK <> IF _RUHA-B-STATUS @ 0 EXIT THEN
+    RUHA-S-OK _RUHA-RC-COMPARE ;
+
+\ RUHA-REFRESH-CHECK ( adapter -- status differs? )
+\   Compare a full capture of every visible document with the snapshot of
+\   the screen's last draw.  STATUS is RUHA-S-OK when they were compared,
+\   RUHA-S-STALE when the screen has drawn since that snapshot or holds
+\   none, and otherwise why the capture could not be made.  DIFFERS? is
+\   true when they differ, and RUHA-RC-* then name the first difference.
+: RUHA-REFRESH-CHECK  ( adapter -- status differs? )
+    ['] _RUHA-RC-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
 
 \ =====================================================================
 \  Pictures
