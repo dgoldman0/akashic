@@ -6,7 +6,7 @@ mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
 a frame Desk sends but never shows when a document is handed to Pad, and
 part 7 took on three faults part 6 found. Each part is approved on its
-own. Parts 0 to 6 and 6b are done. Decisions lists what is settled and
+own. Parts 0 to 7 and 6b are done. Decisions lists what is settled and
 what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
@@ -830,6 +830,48 @@ tests and Desk runs (decision 12).
   follow the cause; Desk with File Explorer then sends no START the
   terminal never shows.
 
+**Done** on 2026-10-27 (cb62b4a8, 919dcb7d, 41b03497, 76435b62 and
+95a4b849). A fill takes one borrow of the back plane for its rectangle. For
+a narrow character it checks each row's cells, residue and provenance with
+block compares and leaves alone a row that already holds what it would
+write. A row that differs is stored whole with block stores when no cell
+it replaces is half of a wide pair, and one over half of a pair goes
+through `DRW-HLINE`, which repairs the pair. Every row still counts as
+touched. The first version, which only left rows alone, made fills a fifth
+cheaper at best and Sound Lab's dearer, since the rows a fill must write
+are most of its cost: a region repaints over what its widget drew, a root
+over the previous frame. With the stores, fills fell by 90 to 95% in Desk
+with Pad, Daybook, Sound Lab, Observatory and File Explorer, and Desk's
+painting by 56 to 87%; the typing run's fills fell from 29.6 to 2.7
+million steps, and a typed letter's Desk painting from 0.92 to 0.79
+million. Each pair committed the same presents in every window, except
+File Explorer's, whose five differing windows end on the same presents and
+differ in frames stepped work overtook. A test compares the fill with the
+one it replaced from 96 seeded states and over seeded documents, plane by
+plane and flush by flush.
+
+Then the three faults part 6 found. Opening a dialog moves its revision,
+so it asks for its paint wherever it opens, and the Agent's call after its
+review dialog went. Hiding the Agent's account panel or run settings
+counts a change to its panel, so the body repaints under the prompt. File
+Explorer's STARTs never shown had three causes. A scroll's detents were
+painted one at a time: the shell now paints an input event the terminal
+owner gives in steps once it is whole, through a new `held` callback in
+the owner interface, so each scroll sends one START, on screen 0.3 to 0.4
+seconds sooner, and a text sent as one event paints once. A document's
+loading in slices after a tab switch sends a START for each stage the view
+shows, and the next stage often overtakes it; those frames stay (decision
+13), five to nine a run. A notice's expiry just as the next key arrives is
+a race between two changes, which nothing removes. The canonical journey
+passed with the shadow check, 4,361 comparisons and no difference, and
+without it. Profiled against part 6b's end with a pinned hash seed, it
+took 3,479 million steps instead of 3,762: Desk's painting fell from 337
+to 126 million and fills from 174 to 12.5 million. Sixty of its 79 windows
+committed the same presents; four texts went out in one DELTA instead of
+two, and the other differences are the sizes of the disk image's source
+files, which differ between commits. See the
+[evidence](../../local_testing/evidence/frames-follow-change-part7-20261027.md).
+
 ## Part 8. The occasional full refresh — safety
 
 **When.** In normal mode, once input has settled, and at least once per
@@ -968,7 +1010,7 @@ fixes part 6 found (decision 12).
 | 5 | UIDL sees its widgets' changes and counts its own | done |
 | 6 | Applications stop bridging change | done |
 | 6b | A document handed to Pad opens before Desk paints | done |
-| 7 | A repaint fills each cell once, then three faults part 6 found | proposed |
+| 7 | A repaint fills each cell once, then three faults part 6 found | done |
 | 8 | The occasional full refresh | proposed |
 | 9 | One projection, two drivers, in slices 9a to 9c | proposed |
 | 10 | Today's structure retires | proposed |
@@ -1018,11 +1060,12 @@ here; its gain is in frames that repaint whole documents.
 
 - **More kinds of DELTA.** About 40% of the canonical journey's changed
   frames still go out as STARTs: a refocused task or Desk's status
-  appearing, the first frame after storage grows, pictures that move or clip
-  while scrolling, changed instruments, and changes in control or dialog
-  membership. Most need the terminal to accept more kinds of change in a
-  DELTA. The full driver builds each START, so a START gains from part 3
-  but keeps a whole-screen build, emission and identities.
+  appearing, the first frame after storage grows, pictures that appear,
+  and pictures that move or clip while scrolling, changed instruments, and
+  changes in control or dialog membership. Most need the terminal to accept
+  more kinds of change in a DELTA. The full driver builds each START, so a
+  START gains from part 3 but keeps a whole-screen build, emission and
+  identities.
 - **Applications' own work,** such as a Worlds step's repaint, or Sound Lab's
   render and its CELL waveform.
 - **The CELL flush:** the changed cells' path through the CELL layers, 51 to
@@ -1104,3 +1147,16 @@ Taken on 2026-10-27:
     part 7: opening a dialog asks for no paint, the Agent's account panel
     stays on screen under its prompt, and File Explorer sends STARTs the
     terminal never shows.
+13. **A document's loading frames** (part 7). They stay. After a tab
+    switch, File Explorer's document view reads the document, makes each
+    figure's picture file and decodes it, a bounded slice a service pass,
+    and each slice that changes the view paints. Each such frame goes out
+    as a START, since a change that brings a picture goes out whole, and
+    the next slice's frame often overtakes it before the terminal's answer
+    is read: five, five and nine STARTs in part 7's three runs of Desk
+    with File Explorer. They are the document's real stages, text before
+    pictures, and a quicker answer from the terminal shows more of them.
+    Holding a document's frames until its slices finish would hide that
+    progress on every link. Each costs a whole START only because a change
+    that brings a picture goes out whole, which more kinds of DELTA,
+    outside this design, would change.
