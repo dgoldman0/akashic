@@ -717,11 +717,15 @@ non-copyable. It may be cleared or freed only while inactive; context switching
 saves and disowns the old live aliases before restoring a unique new owner.
 
 Desk's request bus runs each capability handler in its own child's
-context. The request pump runs in Desk's tick, while the context of the
-child painted last is live, so Desk gives the bus the host's
-`AHOST-CALL-SCOPED` as its scope (`CBUS-SCOPE!`): a handler for a child runs
-activated in that child's context, may set its own UIDL elements, and a
-repaint it asks for marks its tile.
+context. The request pump runs in Desk's per-pass service, so a request an
+applet's input queued reaches its handler before that pass paints: a
+document Daybook or File Explorer hands to Pad opens in the frame that
+shows Pad focused. It runs again in Desk's tick, for the requests the
+tick's own work queues. Either may run while another child's context is
+live, so Desk gives the bus the host's `AHOST-CALL-SCOPED` as its scope
+(`CBUS-SCOPE!`): a handler for a child runs activated in that child's
+context, may set its own UIDL elements, and a repaint it asks for marks its
+tile.
 
 Context switch (`_DESK-CTX-SWITCH`) is a compatibility view of the embedded
 host operation. Only one sub-app's context is live at a time. The host uses

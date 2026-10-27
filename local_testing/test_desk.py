@@ -179,3 +179,26 @@ def test_opening_a_catalog_entry_refreshes_the_launchers_rows(desk):
         '_DESK-LAUNCHER-LIST @ LST-FREE  0 _DESK-LAUNCHER-LIST !  _T-RGN @ RGN-FREE',
         '_T-ENTRY _DESK-OPEN-CATALOG-ENTRY ACAT-S-INVALID = .',
     ], '-1 -1 -1')
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  §7 — Requests reach their handlers before the pass paints
+# ═══════════════════════════════════════════════════════════════════
+
+def test_desks_per_pass_service_delivers_the_requests_queued(desk):
+    """The shell runs Desk's service after input and before the paint, so a
+    request an input queued is delivered before that pass paints: here one
+    no capability takes, which the pump completes.  An empty bus is no
+    work."""
+    check(desk, "service-pumps", [
+        'T-DESK',
+        'CREATE _T-INST 64 ALLOT  _T-INST 64 0 FILL  _T-DS _T-INST CINST.STATE !',
+        'VARIABLE _T-POL  CPOLICY-SIZE ALLOCATE THROW DUP _T-POL ! CPOLICY-INIT',
+        'CREG-NEW THROW _T-POL @ CBUS-NEW THROW _DESK-BUS !',
+        'VARIABLE _T-DONE  0 _T-DONE !',
+        ': _T-COMPLETE  ( request -- ) 1 _T-DONE +! CBR-FREE ;',
+        "CBR-NEW THROW ' _T-COMPLETE OVER CBR.COMPLETE-XT !",
+        '_DESK-BUS @ CBUS-POST CBUS-S-OK = .  _T-DONE @ 0= .',
+        '_T-INST DESK-SERVICE-CB .  _T-DONE @ 1 = .',
+        '_T-INST DESK-SERVICE-CB 0= .  _T-DONE @ 1 = .',
+    ], '-1 -1 -1 -1 -1 -1')

@@ -2922,11 +2922,15 @@ VARIABLE _DDT-M
     _DESK-HOST AHOST-TICK ;
 
 \ --- Service ---
-\ Work due between ticks: pictures the applets are still decoding, and
-\ sandbox jobs a worker core finished.
+\ Work due between ticks: the requests applets queued, so that one an
+\ input queued reaches its handler before this pass paints, as when
+\ Daybook or File Explorer hands Pad a document; pictures the applets are
+\ still decoding; and sandbox jobs a worker core finished.  The tick pumps
+\ the bus as well, for the requests its own work queues.
 : DESK-SERVICE-CB  ( instance -- worked? )
     _DESK-USE-STATE
-    _DESK-HOST AHOST-SERVICE
+    _DESK-BUS @ ?DUP IF 8 SWAP CBUS-PUMP 0<> ELSE 0 THEN
+    _DESK-HOST AHOST-SERVICE OR
     _DESK-SBOX-READY? IF _DESK-SANDBOX @ SBOX-CAPABILITY-POLL OR THEN ;
 
 \ --- Paint ---
