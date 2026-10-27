@@ -4,9 +4,10 @@ Status: proposed on 2026-10-19. On 2026-10-25 it was extended with a thin
 rich path: checks that run when they can find something (part 3), a safe
 mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
-a frame Desk sends but never shows when a document is handed to Pad. Each
-part is approved on its own. Parts 0 to 6 and 6b are done. Decisions lists what is
-settled and what is still open.
+a frame Desk sends but never shows when a document is handed to Pad, and
+part 7 took on three faults part 6 found. Each part is approved on its
+own. Parts 0 to 6 and 6b are done. Decisions lists what is settled and
+what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -787,6 +788,48 @@ simulator and the chip alike. Parts 2, 5 and 6 cut how often whole
 documents repaint; this part cuts what each repaint costs. It comes after
 parts 5 and 6 because it changes the same paint pass.
 
+### Then three faults part 6 found
+
+Part 6 found three faults that its own work did not need fixed. They are
+fixed at the end of this part, after the fill change, each with its own
+tests and Desk runs (decision 12).
+
+- **Opening a dialog asks for no paint.** `_DLG-OPEN` makes a dialog the
+  one its application shows, and the host paints it over the application,
+  but nothing asks for that paint. A dialog opened from a key shows
+  because the host marks the slot of any key an application handled. One
+  opened from a tick, a request or a service pass shows only if something
+  else in that pass asks for a paint. The Agent works around this with an
+  `ASHELL-DIRTY!` after it opens its review dialog from its tick. Inside
+  Desk that call marks no slot. The dialog shows only because the runtime
+  revision that brought the review also counts a change to the Agent's
+  panel in the same tick. **Change:** opening a dialog moves the dialog's
+  revision, so it asks for a paint as any widget's change has done since
+  part 5, and the Agent's call goes. **Tests:** a dialog an application
+  opens from its tick, with nothing else changed, paints in that pass.
+- **The Agent's account panel stays on screen under its prompt.** The
+  Agent draws its account panel over its body from its paint callback. Its
+  own panel draws only its background while the account panel or the run
+  settings show. Opening the prompt hides them without counting a change
+  to the Agent's panel, so nothing repaints the body. The account panel's
+  cells then stay until something else repaints. This was found by reading
+  the code, and it predates part 6. **Change:** hiding an overlay that
+  shows counts a change to the Agent's panel, since its drawing changes.
+  **Tests:** with the account panel or the run settings showing, opening
+  the prompt repaints the body.
+- **File Explorer sends STARTs the terminal never shows.** In part 6's
+  runs Desk with File Explorer sent ten such STARTs, 222,683 bytes, and part
+  5's code did the same. They came after one key, three document scrolls
+  and two tab switches that show pictures. Each was staged, and a newer
+  draw completed before it was revealed. The producer then built and sent
+  a START from the newer draw instead (`_RTHP-REVEAL-STALE`).
+  **Change:** this part's profiled runs of Desk with File Explorer show
+  which draws overtake each START and what work lies behind them. The fix
+  removes that cause, as part 6b did for the handoff to Pad. If the cause
+  cannot be removed, the choice comes back for a decision. **Tests:** they
+  follow the cause; Desk with File Explorer then sends no START the
+  terminal never shows.
+
 ## Part 8. The occasional full refresh — safety
 
 **When.** In normal mode, once input has settled, and at least once per
@@ -912,7 +955,8 @@ again, as the engine's does. Each part reports what it adds or frees.
 The parts run in their numbered order. Parts 3 and 4 need no change counts,
 so they come straight after part 2. Part 6 follows part 5 directly
 (decision 2), and part 7 follows both because it changes the same paint
-pass. Part 6b follows part 6 (decision 11).
+pass. Part 6b follows part 6 (decision 11), and part 7 ends with three
+fixes part 6 found (decision 12).
 
 | Part | Content | State |
 | --- | --- | --- |
@@ -924,7 +968,7 @@ pass. Part 6b follows part 6 (decision 11).
 | 5 | UIDL sees its widgets' changes and counts its own | done |
 | 6 | Applications stop bridging change | done |
 | 6b | A document handed to Pad opens before Desk paints | done |
-| 7 | A repaint fills each cell once | proposed |
+| 7 | A repaint fills each cell once, then three faults part 6 found | proposed |
 | 8 | The occasional full refresh | proposed |
 | 9 | One projection, two drivers, in slices 9a to 9c | proposed |
 | 10 | Today's structure retires | proposed |
@@ -1056,3 +1100,7 @@ Taken on 2026-10-27:
     sender's input and opens the document at its next tick, so the input's
     paint usually sends a START that the next draw overtakes before it is
     shown.
+12. **Three faults part 6 found** (part 7). They are fixed at the end of
+    part 7: opening a dialog asks for no paint, the Agent's account panel
+    stays on screen under its prompt, and File Explorer sends STARTs the
+    terminal never shows.
