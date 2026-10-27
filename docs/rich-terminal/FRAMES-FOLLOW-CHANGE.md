@@ -604,13 +604,44 @@ twice normal mode's 20.31, of which the seal takes 2.23 million. See the
 callback, a tick or another widget's callback, repaints it with no
 application code; a paint-only mark moves no element revision.
 
+**Done** on 2026-10-27 (d852aa27 to 7607b145). Each UIDL element has a
+revision, `UIDL-REVISION`: the stamp of its last change, from one count that
+every document and context shares, so a revision is never taken twice.
+uidl.f counts the changes it makes and UIDL-TUI those it owns;
+`UIDL-TOUCH` counts a change, `UIDL-MARK!` only repaints, and `UIDL-DIRTY!`
+does both. For each element that hosts a widget, UIDL keeps the widget's
+revision as it last painted it. The paint pass paints an element whose
+widget moved, with a `<scroll>` around it first, and every revision move asks
+for a paint through widget.f's change hook, except under `UTUI-PAINTING`,
+which the shell's paints and the rich side's picture claims run under. The
+applet host turns a request a child's tick raises into that child's slot. A
+key or pointer event a widget consumed and counted marks nothing, and a
+clean element first tries its widget's partial draw: canonical kinds
+register drawers, and the text area's draws a typed character's row. Three
+defects were found on the way: `UIDL-MOVE-ELEM` passed its arguments to the
+link the wrong way round; part 4's settings documentation used renderer
+words in a neutral document; and until 7607b145 the rich side's picture
+claims asked for a paint from their own context, which sent two STARTs for
+nothing in the canonical journey. A typed letter costs what it did at part
+4's end, a burst frame build of 9.64 million steps, since Pad still bridges
+its editor until part 6. The canonical journey passed with the shadow check,
+making 4,621 comparisons and finding no difference, and without it, with 37
+and 38 STARTs against part 4's 39. The UIDL-TUI rechecks of cached
+relations, about 0.2 million steps, stay for part 9, which stops the
+captures they run in. See the
+[evidence](../../local_testing/evidence/frames-follow-change-part5-20261027.md).
+
 ## Part 6. Applications stop bridging change — cleanup
 
 After parts 2 and 5, each application loses the code that only carries
 widget changes to UIDL:
 
 - Pad: the paint-time dirty check and row redraw, and the key routing around
-  UIDL. Its copied text area offsets went in part 2.
+  UIDL. Its copied text area offsets went in part 2. Its editor is its own
+  composite panel, whose revision does not follow the text area inside it,
+  so the panel must count the text area's changes and draw typed rows
+  alone, or the text area must be mounted itself, for UIDL to see and
+  paint typing.
 - File Explorer: its dirty helpers.
 - Grid, Sound Lab, Worlds, Observatory, Daybook, the Agent, Library and
   Streams: each invalidate helper shrinks to what the application's own
@@ -799,7 +830,7 @@ pass.
 | 2 | Widgets count their changes | done |
 | 3 | Checks run when they can find something | done |
 | 4 | Safe mode | done |
-| 5 | UIDL sees its widgets' changes and counts its own | proposed |
+| 5 | UIDL sees its widgets' changes and counts its own | done |
 | 6 | Applications stop bridging change | proposed |
 | 7 | A repaint fills each cell once | proposed |
 | 8 | The occasional full refresh | proposed |
