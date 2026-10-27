@@ -1,4 +1,5 @@
-"""Prompt dismissal must invalidate the ordinary status row it covered."""
+"""Prompt dismissal repaints the ordinary status row it covered, and counts
+no change in it."""
 import pytest
 from test_soundlab_fields import _soundlab_runtime
 
@@ -20,12 +21,14 @@ _SL-PROMPT-RGN @ _SL-PROMPT-BUF _SL-PROMPT-CAP PRM-NEW _SL-PROMPT !
 S" Frequency (40-2000 Hz):" S" TEXT" _SL-PROMPT @ PRM-SHOW
 _SL-E-SBAR @ UIDL-CLEAN!
 _SL-E-SBAR @ UIDL-DIRTY? ABORT" status should start clean"
+VARIABLE _SB-REV  _SL-E-SBAR @ UIDL-REVISION _SB-REV !
 CREATE _PROMPT-EVENT KEY-T-SPECIAL , EVENTKEY , 0 ,
 _PROMPT-EVENT _SL-PROMPT @ WDG-HANDLE 0= ABORT" dismiss not handled"
 _SL-PROMPT @ PRM-ACTIVE? ABORT" prompt stayed active"
 _SL-PROMPT-MODE @ _SL-PM-NONE <> ABORT" prompt mode stayed active"
 _SL-FREQUENCY @ 440 <> ABORT" dismissal changed frequency"
 _SL-E-SBAR @ UIDL-DIRTY? 0= ABORT" status underlay not invalidated"
+_SL-E-SBAR @ UIDL-REVISION _SB-REV @ <> ABORT" status counted a change"
 _SL-PROMPT @ PRM-FREE _SL-PROMPT-RGN @ RGN-FREE _SL-CURRENT-STATE @ FREE
 ." PROMPT RESTORE PASS" CR
 '''.replace('TEXT',text).replace('EVENTKEY',key)

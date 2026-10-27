@@ -27,8 +27,8 @@ def _soundlab_runtime(extra_sources=(), extra_targets=(), external=b"",
     end += len("CMP-LAYOUT-SIZE CONSTANT _SL-STATE-SIZE")
     runtime.evaluate(source[start:end].encode(), source_name="production-soundlab-state")
     runtime.evaluate(b'''
-: _SL-BUILD-SUMMARY ; : _SL-UPDATE-STATUS ; : ASHELL-DIRTY! ;
-[UNDEFINED] UIDL-DIRTY! [IF] : UIDL-DIRTY! DROP ; [THEN]
+: _SL-BUILD-SUMMARY ; : _SL-UPDATE-STATUS ;
+[UNDEFINED] UIDL-MARK! [IF] : UIDL-MARK! DROP ; [THEN]
 : UTUI-FOCUS! DROP ;
 : ASHELL-TOAST DROP 2DROP ;
 : ASHELL-TOAST-WARNING DROP 2DROP ;

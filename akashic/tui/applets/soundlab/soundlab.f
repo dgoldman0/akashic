@@ -394,9 +394,7 @@ DEFER _SL-DGRAPH-REBUILD-D
     -1 _SL-FIELD-DIRTY !
     _SL-BUILD-SUMMARY
     _SL-PANEL WDG-DIRTY
-    _SL-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
-    _SL-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _SL-UPDATE-STATUS ;
 
 : _SL-DGRAPH-INVALIDATE  ( -- )
     _SL-DGRAPH-REBUILD-D
@@ -561,8 +559,7 @@ VARIABLE _SL-SHOW-IU
     _SL-PROMPT @ 0= IF EXIT THEN
     _SL-SHOW-MODE @ _SL-PROMPT-MODE !
     _SL-SHOW-LA @ _SL-SHOW-LU @
-    _SL-SHOW-IA @ _SL-SHOW-IU @ _SL-PROMPT @ PRM-SHOW
-    ASHELL-DIRTY! ;
+    _SL-SHOW-IA @ _SL-SHOW-IU @ _SL-PROMPT @ PRM-SHOW ;
 
 : _SL-CYCLE-SHAPE  ( delta -- )
     \ OSC-SINE..OSC-PULSE is the application's five-value enum.  Reduce
@@ -589,7 +586,7 @@ VARIABLE _SL-SHOW-IU
 : _SL-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT STR-TRIM _SL-SUB-U ! _SL-SUB-A !
     \ The prompt overwrote this row even when its status values did not change.
-    _SL-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _SL-E-SBAR @ ?DUP IF UIDL-MARK! THEN
     _SL-PROMPT-MODE @ _SL-SUB-MODE !
     _SL-PM-NONE _SL-PROMPT-MODE !
     _SL-SUB-A @ _SL-SUB-U @ STR>NUM 0= IF
@@ -619,7 +616,7 @@ VARIABLE _SL-SHOW-IU
 
 : _SL-PROMPT-CANCEL  ( prompt -- )
     DROP _SL-PM-NONE _SL-PROMPT-MODE !
-    _SL-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _SL-E-SBAR @ ?DUP IF UIDL-MARK! THEN
     _SL-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _SL-INVALIDATE ;
 
@@ -1330,9 +1327,7 @@ VARIABLE _SL-INIT-RENDER-IOR
         THEN
     THEN
     \ An audible sink that comes or goes changes only the playback label.
-    AUDIO-OUT-SINK? _SL-STATUS-SINK @ <> IF
-        _SL-UPDATE-STATUS ASHELL-DIRTY!
-    THEN ;
+    AUDIO-OUT-SINK? _SL-STATUS-SINK @ <> IF _SL-UPDATE-STATUS THEN ;
 
 : _SL-CLOSE-CONFIRMED  ( confirmed? context -- )
     DROP IF -1 _SL-DISCARD-ARMED ! ASHELL-QUIT THEN ;

@@ -140,7 +140,7 @@ def test_daybook_releases_embedded_session_before_ui_teardown() -> None:
 def test_daybook_prompt_dismissal_repaints_the_status_owner() -> None:
     text = DAYBOOK_APPLET.read_text(encoding="utf-8")
     forth_code = re.sub(r"\\[^\n]*", "", text)
-    status_repaint = "_DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN"
+    status_repaint = "_DB-E-SBAR @ ?DUP IF UIDL-MARK! THEN"
 
     for callback in ("_DB-PROMPT-SUBMIT", "_DB-PROMPT-CANCEL"):
         callback_match = re.search(

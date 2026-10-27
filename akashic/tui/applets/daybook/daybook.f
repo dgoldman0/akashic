@@ -812,9 +812,7 @@ DEFER _DB-AGENDA-SYNC-D
     _DB-GRID-REBUILD-D
     _DB-AGENDA-SYNC-D
     _DB-PANEL WDG-DIRTY
-    _DB-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
-    _DB-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _DB-UPDATE-STATUS ;
 
 : _DB-SAVE  ( -- ior )
     _DB-SERIALIZE _DB-WRITE DUP _DB-SAVE-IOR !
@@ -1128,10 +1126,7 @@ CREATE _DB-TIME-BUF 5 ALLOT
     5 _DB-AGENDA-COLUMNS LST-COLUMN-SIZE + LST-COLUMN-WIDTH + ! ;
 
 \ A change the panel shows, without rebuilding the calendar or the rows.
-: _DB-VIEW-CHANGED  ( -- )
-    _DB-PANEL WDG-DIRTY
-    _DB-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
-    ASHELL-DIRTY! ;
+: _DB-VIEW-CHANGED  ( -- )  _DB-PANEL WDG-DIRTY ;
 
 : _DB-AGENDA-SELECTED  ( index widget -- )
     LST-CONTEXT@ _DB-ACTIVATE
@@ -1505,8 +1500,7 @@ VARIABLE _DB-SHOW-LU
     _DB-SHOW-LU ! _DB-SHOW-LA ! _DB-SHOW-MODE !
     _DB-PROMPT @ 0= IF EXIT THEN
     _DB-SHOW-MODE @ _DB-PROMPT-MODE !
-    _DB-SHOW-LA @ _DB-SHOW-LU @ 0 0 _DB-PROMPT @ PRM-SHOW
-    ASHELL-DIRTY! ;
+    _DB-SHOW-LA @ _DB-SHOW-LU @ 0 0 _DB-PROMPT @ PRM-SHOW ;
 
 : _DB-DO-NEW-EVENT ( elem -- ) DROP _DB-PRM-EVENT S" Event (HH:MM title):" _DB-SHOW-PROMPT ;
 : _DB-DO-NEW-NOTE  ( elem -- ) DROP _DB-PRM-NOTE S" New note:" _DB-SHOW-PROMPT ;
@@ -1973,7 +1967,7 @@ VARIABLE _DB-SUB-MINUTE
     PRM-GET-TEXT _DB-SUB-U ! _DB-SUB-A !
     \ The direct-paint prompt has just gone inactive.  Repaint the UIDL
     \ status owner so it clears the whole overlaid row before any early exit.
-    _DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _DB-E-SBAR @ ?DUP IF UIDL-MARK! THEN
     _DB-PROMPT-MODE @ _DB-SUB-MODE !
     _DB-PRM-NONE _DB-PROMPT-MODE !
     _DB-SUB-MODE @ _DB-RN-MODE? IF
@@ -2024,7 +2018,7 @@ VARIABLE _DB-SUB-MINUTE
 
 : _DB-PROMPT-CANCEL  ( prompt -- )
     DROP _DB-PRM-NONE _DB-PROMPT-MODE !
-    _DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _DB-E-SBAR @ ?DUP IF UIDL-MARK! THEN
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _DB-INVALIDATE ;
 
