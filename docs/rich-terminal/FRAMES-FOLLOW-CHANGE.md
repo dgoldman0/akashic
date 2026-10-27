@@ -5,7 +5,7 @@ rich path: checks that run when they can find something (part 3), a safe
 mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
 a frame Desk sends but never shows when a document is handed to Pad. Each
-part is approved on its own. Parts 0 to 5 are done. Decisions lists what is
+part is approved on its own. Parts 0 to 6 are done. Decisions lists what is
 settled and what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
@@ -170,8 +170,8 @@ New:
 
 This section describes the code on 2026-10-19. Part 2 has since fixed the
 silent widget words, the reads that change state and Pad's reads of the
-text area's fields, and applications bridge change as described here until
-part 6.
+text area's fields, and part 6 removed the bridges applications kept,
+described below.
 
 | Signal | Owner | Meaning | Read by |
 | --- | --- | --- | --- |
@@ -220,7 +220,7 @@ nothing calls them, so a `bind=` never marks its element. That is UIDL's
 documented contract: the application calls `UIDL-DIRTY!` after changing bound
 state. This design keeps that contract.
 
-How applications bridge today:
+How applications bridged change until part 6:
 
 - Pad checks its editor's dirty bit in its paint callback and redraws the
   panel or one row itself (`pad.f:2731-2768`): "Its model may change from
@@ -661,6 +661,37 @@ application. This part follows part 5 directly, so the design violation is
 fixed in full before parts 7 to 10 change the paint pass and the frame
 build.
 
+**Done** on 2026-10-27 (2ece3986 to b330a58e). Pad's editor is now the
+canonical tab strip and text area, each mounted on its own region of the
+editor area, so UIDL lays them out, focuses the text area, gives it its
+keys and paints each as it changes, and a typed character redraws its row
+through the text area's partial draw. Mounting them was chosen over a panel
+that counts its children's changes, which could not draw a typed row alone.
+Two general capabilities came with it: an element authored
+`focusable=false` takes no focus while a press still reaches its widget,
+and `TXTA-ON-CARET!` tells a text area's owner when an event moves its
+caret. File Explorer's element helpers and shell calls went, and the eight
+panel applets' invalidate helpers kept only the panel's own count, its
+rebuilds and its status. Where an applet draws its prompt over the status
+bar, the status bar is marked with `UIDL-MARK!` once the prompt closes,
+which repaints without counting a change. Desk's launcher, sandbox and
+schedule screens tell their lists when rows change, so the launcher now
+shows an entry's new state at the same count. A partial drawer declines a
+widget that only carries its kind's number, since applets' panels reuse the
+media and document numbers. Two calls stay for reasons of their own: the
+Agent's after it opens a review dialog from its tick, since opening a
+dialog counts no change, and Daybook's instance touches, which drawing no
+longer needs but resource references read. A typed letter's Desk painting
+fell from 1.04 to 0.80 million steps a frame; its frame build is unchanged,
+and Desk's own frame is now most of Desk's painting, which part 9b takes
+up. Desk with each applet committed part 5's frames, or differed by timing,
+which two pairs of runs comparing the code before and after a slice showed
+window by window. The canonical journey passed with the shadow check,
+making 4,692 comparisons and finding no difference, and without it, each
+run with 39 STARTs, the START never shown at both handoffs to Pad included,
+which part 6b removes. See the
+[evidence](../../local_testing/evidence/frames-follow-change-part6-20261027.md).
+
 ## Part 6b. A document handed to Pad opens before Desk paints — speed-up
 
 **Today.** Daybook's Ctrl+O and File Explorer's open hand a document to Pad
@@ -876,7 +907,7 @@ pass. Part 6b follows part 6 (decision 11).
 | 3 | Checks run when they can find something | done |
 | 4 | Safe mode | done |
 | 5 | UIDL sees its widgets' changes and counts its own | done |
-| 6 | Applications stop bridging change | proposed |
+| 6 | Applications stop bridging change | done |
 | 6b | A document handed to Pad opens before Desk paints | proposed |
 | 7 | A repaint fills each cell once | proposed |
 | 8 | The occasional full refresh | proposed |
