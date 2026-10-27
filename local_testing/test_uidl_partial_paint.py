@@ -124,4 +124,14 @@ def test_partial_drawers_follow_the_canonical_kinds():
         # A hidden widget, or one whose kind has no drawer, draws nothing.
         "_PP-W1 WDG-DRAW-CHANGED? 0= _PP-ASSERT",
         "_PP-W1 WDG-HIDE _PP-W1 WDG-DRAW-CHANGED? 0= _PP-ASSERT",
-    ]), 4)
+        # An application's widget may carry the text area's number, and its
+        # own bytes may read to the text area's words as a typed row.  The
+        # text area's drawer still leaves it, since it draws as itself.
+        "CREATE _PP-W2 WDG-HEADER-SIZE 256 + ALLOT _PP-W2 WDG-HEADER-SIZE 256 + 0 FILL",
+        "_PP-W2 WDG-T-TEXTAREA 0 0 1 1 RGN-NEW ' _PP-W1-DRAW ' _PP-W1-HANDLE WDG-INIT",
+        "1 _PP-W2 _TXTA-O-TYPED-END + ! _PP-W2 WDG-REVISION _PP-W2 _TXTA-O-TYPED-TO + !",
+        "_PP-W2 _TXTA-RGN-PLACE _PP-W2 _TXTA-O-DRAWN-PLACE + !",
+        "_PP-W2 _TXTA-RGN-SIZE _PP-W2 _TXTA-O-DRAWN-SIZE + !",
+        "_PP-W2 TXTA-CHANGED-ROWS 1 = _PP-ASSERT 0= _PP-ASSERT",
+        "_PP-W2 WDG-DRAW-CHANGED? 0= _PP-ASSERT",
+    ]), 7)

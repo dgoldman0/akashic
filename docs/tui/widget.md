@@ -161,7 +161,10 @@ registers a partial drawer for its type. The drawer draws just that, onto a
 screen that still holds the widget's last draw, and reports it through
 `WDG-DRAW-PARTIAL-COMPLETE`, or draws nothing and returns false; the owner
 then draws the widget whole. The table follows the canonical kinds, up to
-`WDG-T-DOCUMENT`. The text area registers one for typing.
+`WDG-T-DOCUMENT`. A type number is not a kind's alone: an application's own
+widget may carry one, as several applets' panels carry the media and
+document numbers, so a drawer declines a widget that does not draw as its
+kind does. The text area registers one for typing.
 
 ## Design Notes
 

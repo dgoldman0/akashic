@@ -371,7 +371,9 @@ VARIABLE _WDG-OBS-PHASE
 \ draw registers its partial drawer, ( widget -- drew? ): it draws just
 \ that, onto a screen that still holds the widget's last draw, and returns
 \ true; or it draws nothing and returns false.  The table follows the
-\ canonical kinds above.
+\ canonical kinds above.  A type number is not a kind's alone, since an
+\ application's own widget may carry one, so a drawer declines a widget
+\ that does not draw as its kind does.
 WDG-T-DOCUMENT 1+ CONSTANT _WDG-T-LIMIT
 CREATE _WDG-PARTIALS  _WDG-T-LIMIT CELLS ALLOT
 _WDG-PARTIALS _WDG-T-LIMIT CELLS 0 FILL

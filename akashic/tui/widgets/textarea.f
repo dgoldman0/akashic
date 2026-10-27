@@ -2465,7 +2465,10 @@ CREATE _TXTA-OWNED-END
 _TXTA-OWNED-END _TXTA-OWNED-LIMIT !
 
 \ The text area's partial drawer: the rows typing changed, when only typing
-\ changed it since its last draw (TXTA-CHANGED-ROWS).
+\ changed it since its last draw (TXTA-CHANGED-ROWS).  An application's own
+\ widget may carry the text area's type number, so the drawer takes only a
+\ widget that draws as a text area.
 : _TXTA-DRAW-CHANGED  ( widget -- drew? )
+    DUP _WDG-O-DRAW-XT + @ ['] _TXTA-DRAW <> IF DROP 0 EXIT THEN
     DUP TXTA-CHANGED-ROWS ?DUP IF ROT TXTA-DRAW-ROWS -1 ELSE 2DROP 0 THEN ;
 ' _TXTA-DRAW-CHANGED WDG-T-TEXTAREA WDG-PARTIAL!
