@@ -334,9 +334,19 @@ VARIABLE _AGL-START
     _AG-COMPACT-STATUS !
     _AG-UPDATE-STATUS ;
 
+\ An account or run-settings panel the user opened covers the body.
+: _AG-USER-OVERLAY?  ( -- flag )
+    _AG-AUTH-PANEL @ ?DUP IF AAUTHP-ACTIVE? IF -1 EXIT THEN THEN
+    _AG-SETTINGS-PANEL @ ?DUP IF ARSP-ACTIVE? IF -1 EXIT THEN THEN
+    0 ;
+
+\ The panel draws only its background beneath an overlay that shows, so
+\ hiding one changes what the panel draws, and the body repaints.
 : _AG-HIDE-OVERLAYS  ( -- )
+    _AG-USER-OVERLAY? 0= IF EXIT THEN
     _AG-AUTH-PANEL @ ?DUP IF WDG-HIDE THEN
-    _AG-SETTINGS-PANEL @ ?DUP IF WDG-HIDE THEN ;
+    _AG-SETTINGS-PANEL @ ?DUP IF WDG-HIDE THEN
+    _AG-PANEL WDG-DIRTY ;
 
 \ The prompt paints over the status bar, so once it closes the status bar
 \ repaints, although nothing in it changed.
@@ -798,12 +808,6 @@ VARIABLE _AGSR-RREV
     ELSE
         _AG-REVIEW-IDENTITY 0<> _AG-REVIEW-INSPECTED? AND
     THEN ;
-
-\ An account or run-settings panel the user opened covers the body.
-: _AG-USER-OVERLAY?  ( -- flag )
-    _AG-AUTH-PANEL @ ?DUP IF AAUTHP-ACTIVE? IF -1 EXIT THEN THEN
-    _AG-SETTINGS-PANEL @ ?DUP IF ARSP-ACTIVE? IF -1 EXIT THEN THEN
-    0 ;
 
 : _AG-CAP-LABEL  ( cap -- addr len )
     DUP CAP.TITLE-U @ IF
