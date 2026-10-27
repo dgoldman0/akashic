@@ -1,10 +1,12 @@
 # A frame's work follows what changed — design, 2026-10-19
 
-Status: proposed on 2026-10-19, and extended on 2026-10-25 with a thin
+Status: proposed on 2026-10-19. On 2026-10-25 it was extended with a thin
 rich path: checks that run when they can find something (part 3), a safe
 mode (part 4), an occasional full refresh (part 8), and one projection with
-two drivers (parts 9 and 10). Each part is approved on its own. Parts 0 to
-3 are done. Decisions lists what is settled and what is still open.
+two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
+a frame Desk sends but never shows when a document is handed to Pad. Each
+part is approved on its own. Parts 0 to 5 are done. Decisions lists what is
+settled and what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -628,9 +630,9 @@ its editor until part 6. The canonical journey passed with the shadow check,
 making 4,621 comparisons and finding no difference, and without it, with 37
 and 38 STARTs against part 4's 39. The STARTs those runs left out are ones
 Desk sends but never shows where Pad opens a document, which go out only
-when the key's paint comes before the tick that opens the document; under
-the same conditions part 4's code and the final code sent the same 128
-presents. The UIDL-TUI rechecks of cached
+when the key's paint comes before the tick that opens the document; part
+6b removes them. Under the same conditions part 4's code and the final code
+sent the same 128 presents. The UIDL-TUI rechecks of cached
 relations, about 0.2 million steps, stay for part 9, which stops the
 captures they run in. See the
 [evidence](../../local_testing/evidence/frames-follow-change-part5-20261027.md).
@@ -658,6 +660,45 @@ Each application is checked with its own tests and Desk with that
 application. This part follows part 5 directly, so the design violation is
 fixed in full before parts 7 to 10 change the paint pass and the frame
 build.
+
+## Part 6b. A document handed to Pad opens before Desk paints — speed-up
+
+**Today.** Daybook's Ctrl+O and File Explorer's open hand a document to Pad
+through Desk's intent route. The route runs inside the sending applet's
+input handling: it focuses Pad at once and queues the request on Desk's bus,
+and Pad's handler opens the document only when Desk's next tick pumps the
+bus. The pass that handled the input usually paints first, so Desk builds
+Pad focused with its old document and sends it as a START, since a refocused
+task cannot go out as a DELTA. By the time the terminal has answered that
+START, Desk's tick has opened the document and painted again, and the screen
+producer stages a replacement from the newer draw instead of revealing the
+first. That first START is built and sent but never shown: in part 5's runs
+it cost about 37 million guest steps and 122 KB at the Daybook handoff, and
+50 million steps and 166 KB at File Explorer's. Only when Desk's
+50-millisecond tick has already fallen due by the time the input's pass
+reaches it does the document open first, under one START, so the canonical
+journey sends 37 to 39 STARTs as the timing falls.
+
+**Change.** Desk delivers the requests an input queued in the same pass,
+before that pass paints. Each pass runs the shell's service step, for work
+due now, after input and before the tick and the paint; Desk pumps its bus
+there as well as in its tick, so a handoff's request reaches Pad's handler
+before the first paint after the input. The route still focuses Pad at once,
+and that paint shows Pad focused with the document. Requests queued during a
+tick keep the tick's own pump.
+
+**Tests.** A key that queues `resource.open` from Daybook has Pad's handler
+run before the pass that handled it paints, and that pass paints once. The
+canonical journey then sends one START at each handoff to Pad, whatever the
+timing, with its checks of the new tab and its text passing, and Desk with
+Daybook and with File Explorer pass.
+
+**Effect.** At each handoff to Pad, one frame build and one START fewer
+where the input's paint used to come first: about 37 million guest steps and
+122 KB at Daybook's, and 50 million steps and 166 KB at File Explorer's.
+Other requests an input queues are delivered before its paint in the same
+way. A terminal without the rich path no longer shows the frame in between,
+Pad focused with its old document, either.
 
 ## Part 7. A repaint fills each cell once — exact speed-up
 
@@ -825,7 +866,7 @@ again, as the engine's does. Each part reports what it adds or frees.
 The parts run in their numbered order. Parts 3 and 4 need no change counts,
 so they come straight after part 2. Part 6 follows part 5 directly
 (decision 2), and part 7 follows both because it changes the same paint
-pass.
+pass. Part 6b follows part 6 (decision 11).
 
 | Part | Content | State |
 | --- | --- | --- |
@@ -836,6 +877,7 @@ pass.
 | 4 | Safe mode | done |
 | 5 | UIDL sees its widgets' changes and counts its own | done |
 | 6 | Applications stop bridging change | proposed |
+| 6b | A document handed to Pad opens before Desk paints | proposed |
 | 7 | A repaint fills each cell once | proposed |
 | 8 | The occasional full refresh | proposed |
 | 9 | One projection, two drivers, in slices 9a to 9c | proposed |
@@ -960,3 +1002,11 @@ Taken on 2026-10-26:
     Desk's system settings, which KDOS mounts read-only and only the host
     changes, by rebuilding or editing the image. MegaPad takes a second,
     write-protected disk for it.
+
+Taken on 2026-10-27:
+
+11. **The frame a handoff to Pad never shows** (part 6b). It goes, after
+    part 6. Part 5's runs found it: Desk focuses Pad while handling the
+    sender's input and opens the document at its next tick, so the input's
+    paint usually sends a START that the next draw overtakes before it is
+    shown.

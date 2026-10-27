@@ -273,9 +273,8 @@ would not have been shown.
 In the usual order the unshown START costs each handoff the key's whole
 paint: from the key to the tick, about 37 million guest steps at stage 10
 and 50 million at stage 40, most of them that frame's build, and 122 and
-166 kilobytes on the link. Avoiding it would change the order in which
-Desk's intent route focuses the target and hands it the request; no part
-of this plan does that.
+166 kilobytes on the link. Avoiding it means delivering the request
+before Desk paints, which the plan takes up as part 6b.
 
 ## Files
 
