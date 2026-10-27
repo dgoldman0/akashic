@@ -14,7 +14,7 @@
 \                   create explorer/list widgets, populate data
 \    EVENT-XT     — intercept Backspace (parent dir); return 0 for rest
 \    SHUTDOWN-XT  — free explorer + list widgets
-\    PAINT-XT     — not needed (0); UTUI-PAINT handles everything
+\    PAINT-XT     — draw the command prompt over the status bar
 \
 \  Features:
 \   - Tree sidebar (EXPL-* widget mounted on <region id="sidebar">)
@@ -534,13 +534,8 @@ CREATE _FEXP-ROW-TMP _FEXP-ROW-SIZE ALLOT
     LST-NUMBER-COLUMN _FEXP-SIZE$ 8 1 _FEXP-COLUMN!
     LST-TEXT-COLUMN _FEXP-TYPE$ 4 2 _FEXP-COLUMN! ;
 
-\ The table and the sidebar are caller-mounted widgets.  UIDL repaints an
-\ element only when it is marked dirty, so a change made here, rather than
-\ through the element's own input, marks its element.
-: _FEXP-DETAIL-DIRTY   ( -- )  _FEXP-E-DETAIL @ ?DUP IF UIDL-DIRTY! THEN ;
-: _FEXP-SIDEBAR-DIRTY  ( -- )  _FEXP-E-SIDEBAR @ ?DUP IF UIDL-DIRTY! THEN ;
 : _FEXP-TREE-REFRESH  ( -- )
-    _FEXP-EXPL @ ?DUP IF EXPL-REFRESH THEN _FEXP-SIDEBAR-DIRTY ;
+    _FEXP-EXPL @ ?DUP IF EXPL-REFRESH THEN ;
 
 \ _FEXP-SEL-IN-DIR? ( -- flag )   Is the selection an entry of the listed
 \   directory?
@@ -574,8 +569,7 @@ VARIABLE _FST-U
     THEN
     _FEXP-SORT-LIST
     _FEXP-LIST @ ?DUP IF _FEXP-CNT @ SWAP LST-ROWS! THEN
-    _FEXP-SYNC-TABLE
-    _FEXP-DETAIL-DIRTY ;
+    _FEXP-SYNC-TABLE ;
 
 \ =====================================================================
 \  §8 — Preview: show the selected file
@@ -598,8 +592,7 @@ DEFER _FEXP-ON-LINK  ( path-a path-u status ctx -- )
         ['] _FEXP-ON-LINK 0 2 PICK MEDIA-FOLLOW!
         >R _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-VFS @ R> MEDIA-OPEN-VFS DROP
     THEN
-    UIDL-DIRTY!
-    ASHELL-DIRTY! ;
+    DROP ;
 
 \ =====================================================================
 \  §9 — Clipboard (copy / cut / paste)
@@ -932,8 +925,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 
 : _FEXP-REFRESH-AFTER-MUTATION  ( -- )
     _FEXP-TREE-REFRESH
-    _FEXP-SHOW-DIR
-    ASHELL-DIRTY! ;
+    _FEXP-SHOW-DIR ;
 
 : _FCP-REPORT-FAILURE  ( status -- )
     CASE
@@ -1015,8 +1007,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
 
 : _FEXP-REFRESH-DETAIL  ( -- )
     _FEXP-SHOW-DIR
-    _FEXP-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _FEXP-UPDATE-STATUS ;
 
 \ =====================================================================
 \  §12 — Explorer callbacks (on-select / on-open)
@@ -1031,8 +1022,7 @@ VARIABLE _FCP-DIR-LEN VARIABLE _FCP-TARGET-LEN
         _FEXP-SEL-PATH _FEXP-SEL-LEN @ _FEXP-DIR-PATH! DROP
         _FEXP-SHOW-DIR
     THEN
-    _FEXP-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _FEXP-UPDATE-STATUS ;
 
 VARIABLE _FOP-REQ
 
@@ -1102,8 +1092,7 @@ VARIABLE _FOP-REQ
         _FEXP-POST-OPEN
         _FEXP-E-TABS @ ?DUP IF 1 SWAP UTUI-TAB-SELECT THEN
     THEN
-    _FEXP-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _FEXP-UPDATE-STATUS ;
 
 \ _FEXP-SELECT-ROW ( index -- row flag )
 \   Make a row the selection; FALSE when its path does not fit.
@@ -1139,8 +1128,7 @@ VARIABLE _FOP-REQ
     ELSE
         _FEXP-POST-OPEN
     THEN
-    _FEXP-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _FEXP-UPDATE-STATUS ;
 
 VARIABLE _FPS-MODE
 VARIABLE _FPS-LA
@@ -1153,8 +1141,7 @@ VARIABLE _FPS-IU
     _FEXP-PROMPT @ 0= IF EXIT THEN
     _FPS-MODE @ _FEXP-PROMPT-MODE !
     _FPS-LA @ _FPS-LU @ _FPS-IA @ _FPS-IU @
-        _FEXP-PROMPT @ PRM-SHOW
-    ASHELL-DIRTY! ;
+        _FEXP-PROMPT @ PRM-SHOW ;
 
 : _FEXP-TARGET-DIR  ( -- inode | 0 )
     _FEXP-SELECTED
@@ -1319,9 +1306,9 @@ VARIABLE _FDEL-LISTED
 : _FEXP-DO-SORT-TYPE  ( elem -- ) DROP FEXP-SORT-TYPE _FEXP-SORT-BY ;
 
 : _FEXP-DO-EXPAND-ALL  ( elem -- )
-    DROP _FEXP-EXPL @ EXPL-EXPAND-ALL _FEXP-SIDEBAR-DIRTY ASHELL-DIRTY! ;
+    DROP _FEXP-EXPL @ EXPL-EXPAND-ALL ;
 : _FEXP-DO-COLLAPSE-ALL  ( elem -- )
-    DROP _FEXP-EXPL @ EXPL-COLLAPSE-ALL _FEXP-SIDEBAR-DIRTY ASHELL-DIRTY! ;
+    DROP _FEXP-EXPL @ EXPL-COLLAPSE-ALL ;
 
 : _FEXP-DO-DETAILS  ( elem -- )
     DROP _FEXP-E-TABS @ ?DUP IF 0 SWAP UTUI-TAB-SELECT THEN ;
@@ -1337,7 +1324,6 @@ VARIABLE _FDEL-LISTED
         _FEXP-DIR-LEN !
         _FEXP-SHOW-DIR
         _FEXP-UPDATE-STATUS
-        ASHELL-DIRTY!
     THEN ;
 
 VARIABLE _FGP-TYPE
@@ -1357,7 +1343,6 @@ VARIABLE _FGP-TYPE
         THEN
     THEN
     _FEXP-UPDATE-STATUS
-    ASHELL-DIRTY!
     -1 ;
 
 VARIABLE _FSUB-A
@@ -1366,7 +1351,7 @@ VARIABLE _FSUB-MODE
 
 : _FEXP-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT _FSUB-U ! _FSUB-A !
-    _FEXP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _FEXP-E-SBAR @ ?DUP IF UIDL-MARK! THEN
     _FEXP-PROMPT-MODE @ _FSUB-MODE !
     _FEXP-PRM-NONE _FEXP-PROMPT-MODE !
     _FSUB-U @ 0= IF EXIT THEN
@@ -1397,14 +1382,12 @@ VARIABLE _FSUB-MODE
                 S" Could not rename" 2200 ASHELL-TOAST-ERROR
             THEN
         ENDOF
-    ENDCASE
-    ASHELL-DIRTY! ;
+    ENDCASE ;
 
 : _FEXP-PROMPT-CANCEL  ( prompt -- )
     DROP
     _FEXP-PRM-NONE _FEXP-PROMPT-MODE !
-    _FEXP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
-    ASHELL-DIRTY! ;
+    _FEXP-E-SBAR @ ?DUP IF UIDL-MARK! THEN ;
 
 : _FEXP-DO-GOTO  ( elem -- )
     DROP
@@ -1612,7 +1595,7 @@ VARIABLE _FRV-TYPE
     _FEXP-DIR-PATH! DROP
     _FEXP-SHOW-DIR
     _FRV-TYPE @ VFS-T-FILE = IF _FEXP-LOAD-PREVIEW THEN
-    _FEXP-UPDATE-STATUS ASHELL-DIRTY!
+    _FEXP-UPDATE-STATUS
     0 ;
 
 \ A link in a previewed document selects the file it names, in its
