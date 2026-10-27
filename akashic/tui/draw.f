@@ -537,13 +537,24 @@ VARIABLE _DRW-VLINE-LOW
     THEN ;
 
 \ DRW-FILL-RECT ( cp row col h w -- )
-\   Fill a rectangle with character cp.
+\   Fill a rectangle with character cp, in one borrow of the back plane.
+\   A narrow character puts the same cell in every column of a row, with
+\   the same cell in the residue outside a replacement layer and the
+\   writer's provenance byte.  A row whose cells, residue and provenance
+\   already hold those bytes is left alone, since writing it would store
+\   what is there; block compares check each row.  A row left alone still
+\   counts as touched, as a written row does, so the flush compares the
+\   same rows either way.  A wide character fills as DRW-HLINE draws it.
 VARIABLE _DRW-FR-COL
 VARIABLE _DRW-FR-W
 VARIABLE _DRW-FR-CP
 VARIABLE _DRW-FR-ROW
 VARIABLE _DRW-FR-H
 VARIABLE _DRW-FR-I
+VARIABLE _DRW-FR-CELL     \ the narrow cell every column takes
+VARIABLE _DRW-FR-CHECK    \ rows are checked before they are written
+VARIABLE _DRW-FR-AROW     \ the first row in the borrowed plane
+VARIABLE _DRW-FR-ACOL     \ the first column in the borrowed plane
 VARIABLE _DRW-CA-START
 VARIABLE _DRW-CA-LEN
 VARIABLE _DRW-CA-LOW
@@ -579,6 +590,75 @@ VARIABLE _DRW-CA-HIGH
     _DRW-LOCAL-COL-HIGH
     _DRW-SCREEN-COLS _DRW-ORIGIN-COL @ - MIN ;
 
+\ _DRW-CELLS-HOLD? ( a n cell -- flag )
+\   True when the N cells at A, N >= 1, all equal CELL: the first does, and
+\   COMPARE of the span against itself one cell on proves that every cell
+\   equals its successor.
+: _DRW-CELLS-HOLD?  ( a n cell -- flag )
+    2 PICK @ <> IF 2DROP 0 EXIT THEN
+    1- ?DUP 0= IF DROP -1 EXIT THEN
+    8 * OVER 8 + OVER COMPARE 0= ;
+
+\ _DRW-BYTES-HOLD? ( a n byte -- flag )  The same for N bytes.
+: _DRW-BYTES-HOLD?  ( a n byte -- flag )
+    2 PICK C@ <> IF 2DROP 0 EXIT THEN
+    1- ?DUP 0= IF DROP -1 EXIT THEN
+    OVER 1+ OVER COMPARE 0= ;
+
+\ Rows are checked when DRW-HLINE would put one narrow cell in every
+\ column and the rectangle lies in the borrowed plane.
+: _DRW-FR-CHECKABLE  ( -- )
+    0 _DRW-FR-CHECK !
+    _DRW-FR-CP @ DUP 0x7F U< IF DROP ELSE CW-CHAR-WIDTH 2 = IF EXIT THEN THEN
+    _DRW-FR-CP @ _DRW-MAKE-CELL SCR-CELL-NORMALIZE
+    DUP SCR-CELL-PAIR? IF DROP EXIT THEN _DRW-FR-CELL !
+    _DRW-FR-ROW @ _DRW-FR-COL @
+    _DRW-CLIP-ON @ IF
+        SWAP _DRW-ORIGIN-ROW @ + SWAP _DRW-ORIGIN-COL @ +
+    THEN
+    _DRW-FR-ACOL ! _DRW-FR-AROW !
+    _DRW-FR-AROW @ 0< _DRW-FR-ACOL @ 0< OR IF EXIT THEN
+    _DRW-FR-AROW @ _DRW-FR-H @ + _DRW-PLANE-ROWS @ > IF EXIT THEN
+    _DRW-FR-ACOL @ _DRW-FR-W @ + _DRW-PLANE-COLS @ > IF EXIT THEN
+    -1 _DRW-FR-CHECK ! ;
+
+\ _DRW-FR-ROW-HOLDS? ( row -- flag )
+\   True when plane row ROW already holds what the fill would write there.
+: _DRW-FR-ROW-HOLDS?  ( row -- flag )
+    _DRW-PLANE-COLS @ * _DRW-FR-ACOL @ +
+    DUP 8 * _DRW-PLANE-A @ + _DRW-FR-W @ _DRW-FR-CELL @
+        _DRW-CELLS-HOLD? 0= IF DROP 0 EXIT THEN
+    _DRW-PLANE-REPLACEMENT @ 0= IF
+        DUP 8 * _DRW-PLANE-RESIDUE-A @ + _DRW-FR-W @ _DRW-FR-CELL @
+            _DRW-CELLS-HOLD? 0= IF DROP 0 EXIT THEN
+    THEN
+    _DRW-PLANE-OCCLUSION-A @ + _DRW-FR-W @
+    _DRW-PLANE-OVERLAY @ 255 AND _DRW-BYTES-HOLD? ;
+
+\ _DRW-FR-LEAVE? ( -- flag )
+\   True when the fill leaves row I alone, which then counts as touched.
+: _DRW-FR-LEAVE?  ( -- flag )
+    _DRW-FR-CHECK @ 0= IF 0 EXIT THEN
+    _DRW-FR-AROW @ _DRW-FR-I @ + DUP _DRW-FR-ROW-HOLDS? IF
+        _DRW-PLANE-TOUCH -1
+    ELSE
+        DROP 0
+    THEN ;
+
+: _DRW-FR-BODY  ( -- )
+    _DRW-FR-CHECKABLE
+    0 _DRW-FR-I !
+    BEGIN _DRW-FR-I @ _DRW-FR-H @ < WHILE
+        _DRW-FR-LEAVE? 0= IF
+            _DRW-FR-CP @
+            _DRW-FR-ROW @ _DRW-FR-I @ +
+            _DRW-FR-COL @
+            _DRW-FR-W @
+            DRW-HLINE
+        THEN
+        1 _DRW-FR-I +!
+    REPEAT ;
+
 : DRW-FILL-RECT  ( cp row col h w -- )
     _DRW-FR-W ! _DRW-FR-H ! _DRW-FR-COL !
     _DRW-FR-ROW ! _DRW-FR-CP !
@@ -591,15 +671,7 @@ VARIABLE _DRW-CA-HIGH
         _DRW-PHYSICAL-COL-LOW _DRW-PHYSICAL-COL-HIGH _DRW-CLIP-AXIS
     0= IF 2DROP EXIT THEN
     _DRW-FR-W ! _DRW-FR-COL !
-    0 _DRW-FR-I !
-    BEGIN _DRW-FR-I @ _DRW-FR-H @ < WHILE
-        _DRW-FR-CP @
-        _DRW-FR-ROW @ _DRW-FR-I @ +
-        _DRW-FR-COL @
-        _DRW-FR-W @
-        DRW-HLINE
-        1 _DRW-FR-I +!
-    REPEAT ;
+    ['] _DRW-FR-BODY _DRW-WITH-BACK-MUTATION ;
 
 \ DRW-CLEAR-RECT ( row col h w -- )
 \   Clear a rectangle to CELL-BLANK (space, default colors, no attrs).

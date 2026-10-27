@@ -218,9 +218,15 @@ HEX 2502 DECIMAL  1 0 10 DRW-VLINE   \ '│' down 10 rows at col 0
 ( cp row col h w -- )
 ```
 
-Fill an h×w rectangle with character `cp`, starting at (row, col).
-Each row is drawn with `DRW-HLINE`, so the current style applies and
-clipping is automatic.
+Fill an h×w rectangle with character `cp`, starting at (row, col), in
+the current style, clipped as `DRW-HLINE` clips.  The whole rectangle
+takes one borrow of the back plane.  A narrow character puts the same
+cell in every column, so a row whose cells, residue and provenance
+already hold what the fill writes is left alone: block compares check
+each row, and only rows that differ are written.  Containers fill the
+cells their parents just filled, so a repaint mostly skips them.  A row
+left alone still counts as touched, so the flush compares the same rows
+as before.  A wide character fills row by row as `DRW-HLINE` draws it.
 
 ```forth
 HEX 2588 DECIMAL  5 10 8 20 DRW-FILL-RECT   \ solid block 8×20 at (5,10)
