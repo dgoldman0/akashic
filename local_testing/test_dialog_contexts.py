@@ -65,3 +65,17 @@ def test_painting_a_dialog_again_does_not_move_its_revision():
         "DLG-SHOWN WDG-REVISION DLG-HOST-PAINT DLG-SHOWN WDG-REVISION = _DC-ASSERT",
         "_DC-A @ _DC-LEAVE _DC-B @ UCTX-FREE _DC-A @ UCTX-FREE _DC-DONE",
     ]), 5)
+
+
+def test_a_dialog_asks_for_the_paint_that_shows_it():
+    """Opening a dialog is a change to it, so it asks for a paint pass
+    wherever it opens, as a widget's change does: from a tick or a request
+    as well as a key.  One opened while a paint runs is shown by that paint
+    and asks for none."""
+    _passed(_run_forth(PRELUDE + [
+        "_DC-A @ UCTX-RESTORE 0 _UTUI-NEEDS-PAINT ! _DC-ASK _DC-ASSERT",
+        "_UTUI-NEEDS-PAINT @ 0<> _DC-ASSERT DLG-WITHDRAW DLG-SHOWN 0= _DC-ASSERT",
+        "0 _UTUI-NEEDS-PAINT ! ' _DC-ASK UTUI-PAINTING _DC-ASSERT",
+        "_UTUI-NEEDS-PAINT @ 0= _DC-ASSERT DLG-SHOWN 0<> _DC-ASSERT",
+        "_DC-A @ _DC-LEAVE _DC-B @ UCTX-FREE _DC-A @ UCTX-FREE _DC-DONE",
+    ]), 7)

@@ -9,12 +9,14 @@
 
 A dialog asks the application that opens it a question: a titled box with
 a message and a row of buttons. It never blocks. `DLG-ASK` opens it over
-the asking application, and that application's host — the app shell, or
-Desk's applet host — gives the dialog the application's input and paints
-it over the application until a button is chosen. Then the dialog closes,
-the host repaints what it covered, and the asker is called back with the
-button. Everything else runs on meanwhile; in Desk, the other applications
-and Desk itself stay usable.
+the asking application. Opening it moves the dialog's revision, so the
+dialog asks for the paint that shows it, as any widget's change does,
+whether it opens from a key, a tick or a request. That application's host
+— the app shell, or Desk's applet host — gives the dialog the
+application's input and paints it over the application until a button is
+chosen. Then the dialog closes, the host repaints what it covered, and the
+asker is called back with the button. Everything else runs on meanwhile;
+in Desk, the other applications and Desk itself stay usable.
 
 The dialog sizes itself from its title, message and buttons, all measured
 in cells, and centres itself in the host's bounds: the whole screen, or for

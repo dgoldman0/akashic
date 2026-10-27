@@ -663,7 +663,9 @@ VARIABLE _DLG-A-XT
 VARIABLE _DLG-A-CTX
 VARIABLE _DLG-A-DETAIL
 
-\ Open the dialog over the application that asks.
+\ Open the dialog over the application that asks.  The dialog now shows,
+\ which is a change to it: its revision moves, so it asks for the paint
+\ that shows it wherever it opens, in a key, a tick or a request.
 : _DLG-OPEN  ( title-a title-u paras pcount buttons bcount detail? -- ok? )
     _DLG-A-DETAIL !
     DLG-CELL-HOOK @ IF 2DROP 2DROP 2DROP FALSE EXIT THEN
@@ -673,7 +675,7 @@ VARIABLE _DLG-A-DETAIL
     _DLG-A-XT @ OVER _DLG-O-XT + !
     _DLG-A-CTX @ OVER _DLG-O-CTX + !
     _DLG-A-DETAIL @ OVER _DLG-O-DETAIL + !
-    DLG-CELL-HOOK ! TRUE ;
+    DUP DLG-CELL-HOOK ! WDG-DIRTY TRUE ;
 
 CREATE _DLG-ONE-PARA _DLG-PARA-SIZE ALLOT
 
