@@ -75,7 +75,7 @@ the target and decides what happens; the line stays valid only until it
 calls another textarea word, so it copies what it needs first. A plain press
 on a link places the caret, so the link's text can still be edited.
 
-## Descriptor Layout (224 bytes)
+## Descriptor Layout (232 bytes)
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -103,6 +103,7 @@ on a link places the caret, so the link's text can still be edited.
 | +200 | typed to | i | The revision after the last of that typing |
 | +208 | typed first | u | The first viewport row that typing changed |
 | +216 | typed end | u | The row after its last, equal to the first for none |
+| +224 | caret word | xt | Told when an event moves the caret or the selection, or 0 |
 
 ## API Reference
 
@@ -193,6 +194,13 @@ typed character's row through `WDG-DRAW-CHANGED?`.
 | `TXTA-STYLE!` | `( xt widget -- )` | Set the style source `( line-a line-u map -- )`, or 0 |
 | `TXTA-PALETTE!` | `( palette widget -- )` | Set the CELL palette, or 0 for the default |
 | `TXTA-ON-FOLLOW!` | `( xt widget -- )` | Set the follow word `( line-a line-u pos widget -- )`, or 0 |
+| `TXTA-ON-CARET!` | `( xt widget -- )` | Set the caret word `( widget -- )`, or 0 |
+
+The caret word runs after an event the text area takes moves its caret or
+its selection, so an owner's status line showing the caret's place can
+change in the same frame as the caret. An edit also moves the caret, and
+calls the change word first, from inside the event; a word the owner calls
+itself, such as `TXTA-CURSOR!`, tells nothing, since the owner knows.
 
 ### Renderer-neutral text-area observation
 
@@ -310,7 +318,8 @@ offset inside a character names that character's start.
 | `_TXTA-LINK?` | `( off -- flag )` | Whether a link covers the character at an offset |
 | `_TXTA-FOLLOW` | `( off -- followed? )` | Follow the link at an offset through the follow word |
 | `_TXTA-DRAW` | `( widget -- )` | Full draw: scroll-adjust, draw all visible rows |
-| `_TXTA-HANDLE` | `( event widget -- consumed? )` | Key dispatch |
+| `_TXTA-HANDLE` | `( event widget -- consumed? )` | The handler: takes an event, then tells the caret word if it moved the caret or the selection |
+| `_TXTA-HANDLE-EVENT` | `( event widget -- consumed? )` | Key and pointer dispatch |
 
 ## UIDL-TUI Integration
 

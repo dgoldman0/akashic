@@ -160,6 +160,8 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-E-SIDEBAR-SCROLL
 _PAD-CURRENT-STATE CMP-CELL: _PAD-E-SIDEBAR
 _PAD-CURRENT-STATE CMP-CELL: _PAD-E-EO-SPLIT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-E-EDITOR-AREA
+_PAD-CURRENT-STATE CMP-CELL: _PAD-E-EDITOR-TABS
+_PAD-CURRENT-STATE CMP-CELL: _PAD-E-EDITOR-TEXT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-E-OUTPUT-SCROLL
 _PAD-CURRENT-STATE CMP-CELL: _PAD-E-OUTPUT
 _PAD-CURRENT-STATE CMP-CELL: _PAD-E-SBAR
@@ -209,9 +211,6 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-BUF-CNT
 \ close Pad then asks for goes ahead.
 _PAD-CURRENT-STATE CMP-CELL: _PAD-DISCARD-ARMED
 _PAD-CURRENT-STATE CMP-CELL: _PAD-ARENA
-
-\ ---- Composite panel widget (mounted on editor-area) ----
-_PAD-CURRENT-STATE 40 CMP-FIELD: _PAD-PANEL
 
 \ ---- Textarea allocation buffer (GB is always bound, so minimal) ----
 _PAD-CURRENT-STATE _PAD-DUMMY-CAP CMP-FIELD: _PAD-DUMMY-BUF
@@ -328,10 +327,6 @@ _PAD-CURRENT-STATE CMP-CELL: _PAD-CFG-L
 _PAD-CURRENT-STATE _PAD-CFG-CAP CMP-FIELD: _PAD-CFG-BUF
 _PAD-CURRENT-STATE CMP-CELL: _PAD-CFG-FD
 
-\ ---- Incremental editor paint state ----
-\ True once Ln/Col has been refreshed during the current editor event.
-_PAD-CURRENT-STATE CMP-CELL: _PAD-POS-FRESH
-
 CMP-LAYOUT-SIZE CONSTANT _PAD-STATE-SIZE
 
 \ Private compatibility accessors leave Pad's editor-specific paths legible;
@@ -411,7 +406,9 @@ VARIABLE _PAD-SHARED-COMMIT-XT
     _PTH-SIDEBAR-FG @ _PTH-SIDEBAR-BG @ _PAD-E-SIDEBAR         @ _PAD-THEME-ELEM
     _PTH-SCROLL-FG  @ _PTH-SCROLL-BG  @ _PAD-E-OUTPUT-SCROLL   @ _PAD-THEME-ELEM
     _PTH-OUTPUT-FG  @ _PTH-OUTPUT-BG  @ _PAD-E-OUTPUT           @ _PAD-THEME-ELEM
-    _PTH-EDITOR-FG  @ _PTH-EDITOR-BG  @ _PAD-E-EDITOR-AREA     @ _PAD-THEME-ELEM ;
+    _PTH-EDITOR-FG  @ _PTH-EDITOR-BG  @ _PAD-E-EDITOR-AREA     @ _PAD-THEME-ELEM
+    _PTH-TABS-FG    @ _PTH-TABS-BG    @ _PAD-E-EDITOR-TABS     @ _PAD-THEME-ELEM
+    _PTH-EDITOR-FG  @ _PTH-EDITOR-BG  @ _PAD-E-EDITOR-TEXT     @ _PAD-THEME-ELEM ;
 
 \ =====================================================================
 \  S5 -- Buffer Table Helpers
@@ -539,29 +536,28 @@ VARIABLE _PDT-RGN
     DUP TAB-COUNT 0 ?DO
         I OVER TAB-CONTENT ?DUP IF RGN-FREE THEN
     LOOP
-    TAB-FREE
+    DUP WDG-REGION >R TAB-FREE R> RGN-FREE
     0 _PAD-TABS ! ;
 
 \ =====================================================================
-\  S6 -- Composite Panel Widget
+\  S6 -- Editor
 \ =====================================================================
 \
-\  Mounted on <region id=editor-area> via UTUI-WIDGET-SET.
-\  Rows 0-1:  tab bar header + underline
-\  Rows 2+:   textarea content (one shared textarea, buffer-swapped)
-\
-\  Draw: delegates both semantic tabs and editor content through WDG-DRAW.
-\  Handle: canonical TAB owns header mouse hits; textarea owns all keyboard
-\  input (including arrows) and every non-tab mouse event.
+\  The editor is two canonical widgets, each mounted on its own region of
+\  <region id=editor-area>: the tab strip on editor-tabs, its header and
+\  underline rows, and one shared text area, swapped from buffer to
+\  buffer, on editor-text below it.  UIDL lays them out, gives the text
+\  area focus and its keys and pointer events, and paints each widget as
+\  it changes.  The strip takes no focus, so a click on a tab leaves the
+\  keys with the text.
 \
 \  The status bar's Ln/Col follows the caret.  An edit refreshes it through
-\  the change callback, but a caret or selection move edits nothing, so the
-\  handler refreshes it after any other event the editor takes.  Either way
-\  the readout changes in the same frame as the caret.
+\  the change callback, and a caret or selection move, which edits
+\  nothing, through the caret callback, so the readout changes in the
+\  same frame as the caret.
 
 \ _PAD-UPDATE-POS ( -- )   Show the caret's "Ln N, Col M".
 : _PAD-UPDATE-POS  ( -- )
-    -1 _PAD-POS-FRESH !
     _PAD-TXTA @ ?DUP IF
         DUP TXTA-CURSOR-LINE 1+            ( w line1 )
         SWAP TXTA-CURSOR-COL 1+            ( line1 col1 )
@@ -581,81 +577,7 @@ VARIABLE _PDT-RGN
         DROP
     THEN ;
 
-: _PAD-DRAW-TAB-WIDGET  ( -- )
-    \ Reconcile every visible label at the ordinary draw boundary.  This
-    \ covers inactive buffers changed by bulk actions such as Save All and
-    \ gives CELL paint and semantic observation the same current labels.
-    _PAD-TAB-LABELS-SYNC
-    _PTH-TABS-FG @ DRW-FG! _PTH-TABS-BG @ DRW-BG!
-    _PAD-TABS @ ?DUP IF WDG-DRAW THEN
-    0 DRW-ATTR! ;
-
-\ Sync textarea sub-region from panel region (call before drawing)
-: _PAD-SYNC-TXTA-RGN  ( panel-widget -- )
-    WDG-REGION                          ( panel-rgn )
-    _PAD-TXTA @ ?DUP 0= IF DROP EXIT THEN
-    WDG-REGION                          ( panel-rgn txta-rgn )
-    OVER RGN-ROW 2 + OVER  0 + !
-    OVER RGN-COL     OVER  8 + !
-    OVER RGN-H 2 -   0 MAX OVER 16 + !
-    SWAP RGN-W        SWAP 24 + ! ;
-
-: _PAD-SYNC-TXTA-FOCUS  ( -- )
-    \ One store: an editor already in step with the panel does not change.
-    _PAD-TXTA @ ?DUP IF
-        _PAD-PANEL WDG-FOCUSED? WDG-F-FOCUSED ROT WDG-FLAG!
-    THEN ;
-
-VARIABLE _PDC-W
-VARIABLE _PDC-RGN
-VARIABLE _PDC-ROW
-VARIABLE _PDC-COL
-VARIABLE _PDC-AROW
-VARIABLE _PDC-ACOL
-
-: _PAD-DRAW-CARET  ( -- )
-    _PAD-TXTA @ ?DUP 0= IF EXIT THEN _PDC-W !
-    _PDC-W @ TXTA-CURSOR-LINE
-    _PDC-W @ TXTA-SCROLL-Y@ - _PDC-ROW !
-    \ The caret marks its character's lead cell, or the cell just past
-    \ the line's content on its end side.
-    _PDC-W @ TXTA-CURSOR-X _PAD-GUTTER-W + _PDC-COL !
-    _PDC-W @ WDG-REGION _PDC-RGN !
-    _PDC-ROW @ 0< _PDC-COL @ 0< OR IF EXIT THEN
-    _PDC-ROW @ _PDC-RGN @ RGN-H >= IF EXIT THEN
-    _PDC-COL @ _PDC-RGN @ RGN-W >= IF EXIT THEN
-    _PDC-RGN @ RGN-ROW _PDC-ROW @ + _PDC-AROW !
-    _PDC-RGN @ RGN-COL _PDC-COL @ + _PDC-ACOL !
-    _PDC-AROW @ _PDC-ACOL @ SCR-GET
-    DUP CELL-ATTRS@ CELL-A-REVERSE OR SWAP CELL-ATTRS!
-    _PDC-AROW @ _PDC-ACOL @ SCR-SET ;
-
-: _PAD-PANEL-DRAW  ( widget -- )
-    DUP _PAD-SYNC-TXTA-RGN
-    DROP
-    _PAD-SYNC-TXTA-FOCUS
-    _PAD-DRAW-TAB-WIDGET
-    _PTH-EDITOR-FG @ DRW-FG!  _PTH-EDITOR-BG @ DRW-BG!
-    _PAD-TXTA @ ?DUP IF WDG-DRAW THEN
-    _PAD-DRAW-CARET ;
-
-: _PAD-PANEL-HANDLE  ( event widget -- consumed? )
-    \ Reaching this handler proves the mounted editor region owns focus.
-    DUP WDG-FOCUS-SET
-    DROP
-    _PAD-SYNC-TXTA-FOCUS
-    DUP @ KEY-T-MOUSE = _PAD-TABS @ 0<> AND IF
-        DUP _PAD-TABS @ WDG-HANDLE IF DROP -1 EXIT THEN
-    THEN
-    _PAD-TXTA @ ?DUP IF
-        0 _PAD-POS-FRESH !
-        WDG-HANDLE
-        DUP IF _PAD-POS-FRESH @ 0= IF _PAD-UPDATE-POS THEN THEN
-    ELSE DROP 0 THEN ;
-
-: _PAD-PANEL-INIT  ( rgn -- )
-    _PAD-PANEL 20 ROT
-    ['] _PAD-PANEL-DRAW ['] _PAD-PANEL-HANDLE WDG-INIT ;
+: _PAD-ON-CARET  ( widget -- )  DROP _PAD-UPDATE-POS ;
 
 \ =====================================================================
 \  S7 -- Gutter (Line Numbers)
@@ -679,9 +601,10 @@ VARIABLE _PDC-ACOL
 \ =====================================================================
 
 : _PAD-UPDATE-STATUS  ( -- )
-    \ Keep the canonical borrowed label synchronized without dirtying the
-    \ tab widget on unchanged ticks.
-    _PAD-ACTIVE @ DUP 0>= IF _PAD-TAB-LABEL-SYNC ELSE DROP THEN
+    \ Keep every tab's label in step with its buffer, since a bulk action
+    \ such as Save All changes inactive buffers too.  A label that already
+    \ matches is left alone, so an unchanged tick moves no revision.
+    _PAD-TAB-LABELS-SYNC
     \ ---- sbar-file: filename + dirty ----
     _PAD-ACTIVE @ 0< IF
         _PAD-E-SBAR-FILE @ ?DUP IF
@@ -729,8 +652,7 @@ VARIABLE _PDC-ACOL
     _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + @ 0= IF
         -1 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     THEN
-    _PAD-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _PAD-UPDATE-STATUS ;
 
 \ =====================================================================
 \  S10 -- Buffer Management
@@ -814,9 +736,7 @@ VARIABLE _PDC-ACOL
     R@ _PAD-TAB-SELECT-SLOT
     R@ _PAD-BIND
     R@ _PAD-RESTORE-STATE
-    _PAD-TXTA @ WDG-DIRTY
     _PAD-UPDATE-STATUS
-    ASHELL-DIRTY!
     R> ;
 
 \ After TAB-REMOVE, the canonical widget already owns the surviving visual
@@ -868,9 +788,7 @@ VARIABLE _PDC-ACOL
         THEN
     THEN
     _PAD-ACTIVE @ DUP 0>= IF _PAD-TAB-SELECT-SLOT ELSE DROP THEN
-    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
-    _PAD-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _PAD-UPDATE-STATUS ;
 
 \ Switch to buffer at index.
 : _PAD-BUF-SWITCH  ( index -- )
@@ -882,9 +800,7 @@ VARIABLE _PDC-ACOL
     DUP _PAD-TAB-SELECT-SLOT
     DUP _PAD-BIND
     _PAD-RESTORE-STATE
-    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
-    _PAD-UPDATE-STATUS
-    ASHELL-DIRTY! ;
+    _PAD-UPDATE-STATUS ;
 
 \ Canonical TAB selection is the header-mouse authority.  Pad maps the
 \ widget's dense visual ordinal back to the independently managed buffer
@@ -1127,7 +1043,7 @@ VARIABLE _PSHO-NEW
         _PSHO-IDX @ _PAD-BUF-ENTRY _PBE-DIRTY + @ IF
             -1 _PAD-SHARED-STALE !
             _PSHO-IDX @ _PAD-BUF-SWITCH
-            _PAD-UPDATE-STATUS ASHELL-DIRTY!
+            _PAD-UPDATE-STATUS
             _PAD-E-STALE EXIT
         THEN
     THEN
@@ -1136,7 +1052,7 @@ VARIABLE _PSHO-NEW
         DUP _PAD-E-STALE = _PSHO-IDX @ 0>= AND IF
             -1 _PAD-SHARED-STALE !
             _PSHO-IDX @ _PAD-BUF-SWITCH
-            _PAD-UPDATE-STATUS ASHELL-DIRTY!
+            _PAD-UPDATE-STATUS
         THEN
         EXIT
     THEN DROP
@@ -1164,8 +1080,7 @@ VARIABLE _PSHO-NEW
     -1 R@ _PBE-SEL-ANC + !
     -1 R> _PBE-RESERVED + !
     0 _PAD-SHARED-STALE !
-    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
-    _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    _PAD-UPDATE-STATUS
     0 ;
 
 : _PAD-OPEN-RREF  ( reference -- ior )
@@ -1215,7 +1130,7 @@ VARIABLE _PSHO-NEW
     _PAD-RESOURCE-SESSION RSES-DISPATCH
     DUP CBUS-S-STALE-REVISION = IF
         DROP -1 _PAD-SHARED-STALE !
-        _PAD-UPDATE-STATUS ASHELL-DIRTY!
+        _PAD-UPDATE-STATUS
         _PAD-E-STALE EXIT
     THEN
     DUP IF DROP _PAD-E-SHARED-FAILED EXIT THEN DROP
@@ -1229,14 +1144,12 @@ VARIABLE _PSHO-NEW
         DROP
         -1 _PAD-SHARED-STALE !
         0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
-        _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
-        _PAD-UPDATE-STATUS ASHELL-DIRTY!
+        _PAD-UPDATE-STATUS
         0 EXIT
     THEN DROP
     0 _PAD-SHARED-STALE !
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
-    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
-    _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    _PAD-UPDATE-STATUS
     0 ;
 
 : _PAD-DO-SAVE-TO  ( fname-a fname-u -- ior )
@@ -1281,10 +1194,8 @@ VARIABLE _PSHO-NEW
         _PAD-REPL VREPL-TARGET$ _PAD-ACTIVE @ _PAD-FILENAME!
     THEN
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
-    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
     _PAD-UPDATE-STATUS
-    ASHELL-DIRTY!
     0 ;
 
 \ Unexpected THROWs at the applet/storage boundary are normalized to -7.
@@ -1315,7 +1226,6 @@ VARIABLE _PSHO-NEW
     _PIO-ACT @ _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-INODE + !
     0 _PAD-ACTIVE @ _PAD-BUF-ENTRY _PBE-DIRTY + !
     _PAD-UPDATE-STATUS
-    ASHELL-DIRTY!
     0 ;
 
 : _PAD-LOAD-FREE-BUF  ( -- )
@@ -1513,7 +1423,7 @@ VARIABLE _POP-ORIG
         DROP S" Max buffers reached" 2000 ASHELL-TOAST-WARNING EXIT
     THEN DROP
     _PAD-TXTA @ ?DUP IF TXTA-CLEAR THEN
-    _PAD-UPDATE-STATUS ASHELL-DIRTY! ;
+    _PAD-UPDATE-STATUS ;
 
 VARIABLE _PPS-MODE
 VARIABLE _PPS-LA
@@ -1526,8 +1436,7 @@ VARIABLE _PPS-IU
     _PAD-PROMPT @ 0= IF EXIT THEN
     _PPS-MODE @ _PAD-PROMPT-MODE !
     _PPS-LA @ _PPS-LU @ _PPS-IA @ _PPS-IU @
-        _PAD-PROMPT @ PRM-SHOW
-    ASHELL-DIRTY! ;
+        _PAD-PROMPT @ PRM-SHOW ;
 
 : _PAD-SHOW-SAVE-AS  ( -- )
     _PAD-ACTIVE @ 0< IF EXIT THEN
@@ -1550,7 +1459,7 @@ VARIABLE _PPS-IU
     _PAD-SAVE-CURRENT-AS
     DUP IF _PAD-REPORT-SAVE-ERROR EXIT THEN DROP
     S" Saved" 1500 ASHELL-TOAST
-    _PAD-UPDATE-STATUS ASHELL-DIRTY! ;
+    _PAD-UPDATE-STATUS ;
 
 : _PAD-DO-SAVE-AS  ( elem -- )
     DROP _PAD-SHOW-SAVE-AS ;
@@ -1594,9 +1503,8 @@ VARIABLE _PSA-STALE
             _PAD-BUF-SWITCH
         ELSE DROP THEN
     ELSE DROP THEN
-    _PAD-TXTA @ ?DUP IF WDG-DIRTY THEN
     _PAD-EXPL @ ?DUP IF EXPL-REFRESH THEN
-    _PAD-UPDATE-STATUS ASHELL-DIRTY!
+    _PAD-UPDATE-STATUS
     _PSA-STALE @ IF
         S" changed elsewhere; reload before saving"
         2800 ASHELL-TOAST-WARNING EXIT
@@ -1660,9 +1568,7 @@ VARIABLE _PBUILD-DIAG-U
     _PAD-OUT-TXTA @ ?DUP IF
         >R _PAD-OUTPUT-LOG _PAD-OUTPUT-LOG-U @ R> TXTA-SET-TEXT
     THEN
-    _PAD-E-OUTPUT @ ?DUP IF UIDL-DIRTY! THEN
-    _PAD-VIEW-CHECKS
-    ASHELL-DIRTY! ;
+    _PAD-VIEW-CHECKS ;
 
 : _PAD-DIAG-RESET  ( -- )
     0 _PAD-DIAG-PATH-U !
@@ -1843,24 +1749,18 @@ VARIABLE _PBUILD-DIAG-U
     DUP TXTA-GET-SEL
     DUP 0= IF 2DROP DROP EXIT THEN
     CLIP-COPY DROP
-    TXTA-DEL-SEL DROP
-    ASHELL-DIRTY! ;
+    TXTA-DEL-SEL DROP ;
 
 : _PAD-DO-PASTE  ( elem -- )
     DROP
     CLIP-PASTE
     DUP 0= IF 2DROP EXIT THEN
     _PAD-TXTA @ DUP 0= IF DROP 2DROP EXIT THEN
-    TXTA-INS-STR
-    ASHELL-DIRTY! ;
+    TXTA-INS-STR ;
 
 : _PAD-DO-SELECT-ALL  ( elem -- )
     DROP
-    _PAD-TXTA @ ?DUP IF
-        DUP TXTA-SELECT-ALL
-        WDG-DIRTY
-        ASHELL-DIRTY!
-    THEN ;
+    _PAD-TXTA @ ?DUP IF TXTA-SELECT-ALL _PAD-UPDATE-POS THEN ;
 
 VARIABLE _PSR-START
 VARIABLE _PSR-END
@@ -1869,7 +1769,7 @@ VARIABLE _PSR-END
     _PSR-END ! _PSR-START !
     _PAD-TXTA @ 0= IF EXIT THEN
     _PSR-START @ _PSR-END @ _PAD-TXTA @ TXTA-SELECT
-    ASHELL-DIRTY! ;
+    _PAD-UPDATE-POS ;
 
 VARIABLE _PLR-GB
 VARIABLE _PLR-LINE
@@ -1893,8 +1793,7 @@ VARIABLE _PLR-END
     _PAD-TXTA @ 0= IF EXIT THEN
     _PAD-CURRENT-LINE-RANGE 2DUP = IF 2DROP EXIT THEN
     _PAD-SELECT-RANGE
-    _PAD-TXTA @ TXTA-DEL-SEL DROP
-    ASHELL-DIRTY! ;
+    _PAD-TXTA @ TXTA-DEL-SEL DROP ;
 
 \ =====================================================================
 \  S15 -- Actions: Undo / Redo
@@ -1906,14 +1805,12 @@ VARIABLE _PLR-END
 : _PAD-DO-UNDO  ( elem -- )
     DROP
     _PAD-TXTA @ ?DUP 0= IF EXIT THEN
-    TXTA-UNDO
-    ASHELL-DIRTY! ;
+    TXTA-UNDO ;
 
 : _PAD-DO-REDO  ( elem -- )
     DROP
     _PAD-TXTA @ ?DUP 0= IF EXIT THEN
-    TXTA-REDO
-    ASHELL-DIRTY! ;
+    TXTA-REDO ;
 
 \ =====================================================================
 \  S16 -- Actions: Find / Replace / Goto
@@ -2143,7 +2040,7 @@ VARIABLE _PSOL-TAKE
 : _PAD-CURSOR!  ( pos -- )
     _PAD-TXTA @ 0= IF DROP EXIT THEN
     _PAD-TXTA @ TXTA-CURSOR!
-    ASHELL-DIRTY! ;
+    _PAD-UPDATE-POS ;
 
 VARIABLE _PGLC-LINE
 VARIABLE _PGLC-COLUMN
@@ -2213,7 +2110,7 @@ VARIABLE _PPSUB-MODE
 
 : _PAD-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT _PPSUB-U ! _PPSUB-A !
-    _PAD-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
+    _PAD-E-SBAR @ ?DUP IF UIDL-MARK! THEN
     _PAD-PROMPT-MODE @ _PPSUB-MODE !
     _PAD-PRM-NONE _PAD-PROMPT-MODE !
     _PPSUB-U @ 0= _PPSUB-MODE @ _PAD-PRM-REPLACE-WITH <> AND IF EXIT THEN
@@ -2260,13 +2157,11 @@ VARIABLE _PPSUB-MODE
                 S" Text not found" 1800 ASHELL-TOAST
             THEN
         ENDOF
-    ENDCASE
-    ASHELL-DIRTY! ;
+    ENDCASE ;
 
 : _PAD-PROMPT-CANCEL  ( prompt -- )
     DROP _PAD-PRM-NONE _PAD-PROMPT-MODE !
-    _PAD-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
-    ASHELL-DIRTY! ;
+    _PAD-E-SBAR @ ?DUP IF UIDL-MARK! THEN ;
 
 \ =====================================================================
 \  S17 -- Actions: Toggle Sidebar / Output
@@ -2281,8 +2176,7 @@ VARIABLE _PPSUB-MODE
         -1 _PAD-SIDEBAR-VIS !
         _PAD-E-MAIN-SPLIT @ S" ratio" S" 20" UTUI-SET-ATTR
     THEN
-    _PAD-VIEW-CHECKS
-    ASHELL-DIRTY! ;
+    _PAD-VIEW-CHECKS ;
 
 : _PAD-DO-TOGGLE-OUTPUT  ( elem -- )
     DROP
@@ -2293,8 +2187,7 @@ VARIABLE _PPSUB-MODE
         -1 _PAD-OUTPUT-VIS !
         _PAD-E-EO-SPLIT @ S" ratio" S" 80" UTUI-SET-ATTR
     THEN
-    _PAD-VIEW-CHECKS
-    ASHELL-DIRTY! ;
+    _PAD-VIEW-CHECKS ;
 
 : _PAD-DO-TOGGLE-HIDDEN  ( elem -- )
     DROP
@@ -2303,8 +2196,7 @@ VARIABLE _PPSUB-MODE
         _PAD-SHOW-HIDDEN @ SWAP EXPL-SHOW-HIDDEN!
         _PAD-EXPL @ EXPL-REFRESH
     THEN
-    _PAD-VIEW-CHECKS
-    ASHELL-DIRTY! ;
+    _PAD-VIEW-CHECKS ;
 
 \ =====================================================================
 \  S18 -- Actions: Tab Navigation
@@ -2466,6 +2358,8 @@ VARIABLE _PSW-BYTE
     S" sidebar"        UTUI-BY-ID _PAD-E-SIDEBAR !
     S" eo-split"       UTUI-BY-ID _PAD-E-EO-SPLIT !
     S" editor-area"    UTUI-BY-ID _PAD-E-EDITOR-AREA !
+    S" editor-tabs"    UTUI-BY-ID _PAD-E-EDITOR-TABS !
+    S" editor-text"    UTUI-BY-ID _PAD-E-EDITOR-TEXT !
     S" output-scroll"  UTUI-BY-ID _PAD-E-OUTPUT-SCROLL !
     S" output"         UTUI-BY-ID _PAD-E-OUTPUT !
     S" sbar"           UTUI-BY-ID _PAD-E-SBAR !
@@ -2505,36 +2399,31 @@ VARIABLE _PSW-BYTE
         _PAD-EXPL @ _PAD-E-SIDEBAR @ UTUI-WIDGET-SET
     THEN
 
-    \ ---- Create composite panel on editor-area ----
-    _PAD-E-EDITOR-AREA @ ?DUP IF
-        UTUI-ELEM-RGN RGN-NEW
-        _PAD-PANEL-INIT
-
+    \ ---- The editor: the tab strip over the shared text area ----
+    _PAD-E-EDITOR-TABS @ ?DUP IF
         \ The capacity is exactly Pad's buffer-domain capacity.  Canonical
         \ TAB remains a generic caller-bounded widget and owns visual order,
         \ selection, header drawing, and header mouse hit testing.
-        _PAD-PANEL WDG-REGION _PAD-MAX-BUFS TAB-NEW-CAP _PAD-TABS !
+        DUP UTUI-ELEM-RGN RGN-NEW _PAD-MAX-BUFS TAB-NEW-CAP _PAD-TABS !
         ['] _PAD-ON-TAB-SWITCH _PAD-TABS @ TAB-ON-SWITCH
-
-        \ Create the shared textarea (sub-region of panel, row 2+)
-        _PAD-PANEL WDG-REGION DUP >R      ( panel-rgn  R: panel-rgn )
-        2 0  R@ RGN-H 2 - 0 MAX  R> RGN-W
-        RGN-SUB                            ( content-rgn )
-        _PAD-DUMMY-BUF _PAD-DUMMY-CAP
-        TXTA-NEW _PAD-TXTA !
+        _PAD-TABS @ SWAP UTUI-WIDGET-SET
+    THEN
+    _PAD-E-EDITOR-TEXT @ ?DUP IF
+        DUP UTUI-ELEM-RGN RGN-NEW
+        _PAD-DUMMY-BUF _PAD-DUMMY-CAP TXTA-NEW _PAD-TXTA !
 
         \ Line number gutter
         ['] _PAD-GUTTER-DRAW _PAD-GUTTER-W _PAD-TXTA @ TXTA-GUTTER!
 
-        \ On-change callback
+        \ Edits and caret moves keep the status bar current
         ['] _PAD-ON-CHANGE _PAD-TXTA @ TXTA-ON-CHANGE
+        ['] _PAD-ON-CARET _PAD-TXTA @ TXTA-ON-CARET!
 
         \ Highlighting colours, and links followed with Ctrl and a click
         _PAD-PALETTE _PAD-TXTA @ TXTA-PALETTE!
         ['] _PAD-FOLLOW _PAD-TXTA @ TXTA-ON-FOLLOW!
 
-        \ Mount panel on editor-area
-        _PAD-PANEL _PAD-E-EDITOR-AREA @ UTUI-WIDGET-SET
+        _PAD-TXTA @ SWAP UTUI-WIDGET-SET
     THEN
 
     \ ---- Open initial untitled buffer ----
@@ -2574,8 +2463,8 @@ VARIABLE _PSW-BYTE
     S" select-word"     ['] _PAD-DO-SELECT-WORD    UTUI-DO!
     S" select-line"     ['] _PAD-DO-SELECT-LINE    UTUI-DO!
 
-    \ ---- Focus editor-area ----
-    _PAD-E-EDITOR-AREA @ ?DUP IF UTUI-FOCUS! THEN
+    \ ---- Focus the editor's text ----
+    _PAD-E-EDITOR-TEXT @ ?DUP IF UTUI-FOCUS! THEN
 
     \ ---- Initial status ----
     _PAD-VIEW-CHECKS
@@ -2598,59 +2487,17 @@ VARIABLE _PSW-BYTE
         DUP PRM-ACTIVE? IF WDG-HANDLE EXIT THEN
         DROP
     THEN
-    \ Pointer input is the prompt's or UIDL's; the editor gets it through UIDL.
-    DUP @ KEY-T-MOUSE = IF DROP 0 EXIT THEN
-    \ Only bypass UIDL's region repaint while the mounted editor owns focus.
-    \ Sidebar/menu events must continue through normal focused dispatch.
-    UTUI-FOCUS _PAD-E-EDITOR-AREA @ <> IF DROP 0 EXIT THEN
-    \ Modified keys may be registered UIDL/menu shortcuts.  Preserve that
-    \ priority; UIDL will forward an unmatched key back to the textarea.
-    DUP 16 + @ KEY-MOD-CTRL KEY-MOD-ALT OR AND IF DROP 0 EXIT THEN
-    DUP @ KEY-T-SPECIAL = IF
-        DUP 8 + @ KEY-TAB = IF
-            DUP 16 + @ KEY-MOD-SHIFT AND 0= IF
-                DROP _PAD-INSERT-TAB -1 EXIT
-            THEN
-        THEN
-    THEN
-    \ Route ordinary editor input directly to the mounted panel.  Letting
-    \ UIDL redispatch the same event dirties and refills the entire
-    \ editor-area before Pad paints its already-dirty textarea, doubling
-    \ the cell work for every character.  Unhandled shortcuts still fall
-    \ through to UIDL via the false result.
-    _PAD-PANEL WDG-HANDLE ;
+    \ The editor takes its keys through UIDL.  Tab, which UIDL spends on
+    \ moving focus, indents instead while the editor's text has focus.
+    UTUI-FOCUS _PAD-E-EDITOR-TEXT @ <> IF DROP 0 EXIT THEN
+    DUP @ KEY-T-SPECIAL <> IF DROP 0 EXIT THEN
+    DUP 8 + @ KEY-TAB <> IF DROP 0 EXIT THEN
+    16 + @ KEY-MOD-SHIFT KEY-MOD-CTRL OR KEY-MOD-ALT OR AND IF 0 EXIT THEN
+    _PAD-INSERT-TAB -1 ;
 
 \ Paint the command bar after UIDL so it overlays the status row.
 : PAD-PAINT-CB  ( instance -- )
     _PAD-ACTIVATE
-    \ The editor is a custom widget mounted inside a UIDL region.  Its
-    \ model may change from app-level prompt actions that bypass UIDL's
-    \ normal focused-element invalidation, so bridge widget dirtiness here.
-    _PAD-TXTA @ ?DUP IF
-        DUP WDG-DIRTY?
-        _PAD-TABS @ ?DUP IF WDG-DIRTY? OR THEN
-        IF
-            DROP
-            \ UIDL did not paint the editor this frame, since it is still
-            \ marked, so the screen holds its last draw.  When only typing
-            \ changed it, the text area names the rows; the canonical tab
-            \ header is a separate ordinary widget and keeps the dirty-star
-            \ label current.
-            _PAD-PANEL WDG-REGION RGN-USE
-            _PAD-PANEL _PAD-SYNC-TXTA-RGN
-            _PAD-SYNC-TXTA-FOCUS
-            _PAD-TXTA @ TXTA-CHANGED-ROWS ?DUP IF
-                _PAD-DRAW-TAB-WIDGET
-                _PTH-EDITOR-FG @ DRW-FG! _PTH-EDITOR-BG @ DRW-BG!
-                _PAD-TXTA @ TXTA-DRAW-ROWS
-                _PAD-DRAW-CARET
-            ELSE
-                DROP _PAD-PANEL WDG-DRAW
-            THEN
-        ELSE
-            DROP
-        THEN
-    THEN
     _PAD-PROMPT @ ?DUP 0= IF EXIT THEN
     DUP PRM-ACTIVE? 0= IF DROP EXIT THEN
     DROP
@@ -2709,15 +2556,13 @@ VARIABLE _PSW-BYTE
     _PAD-ARENA @ ?DUP IF ARENA-DESTROY THEN
     0 _PAD-ARENA !
 
-    \ Free textarea widget
-    _PAD-TXTA @ ?DUP IF TXTA-FREE THEN
-
-    \ Free the canonical tab widget and every content-region descriptor
-    \ allocated by TAB-ADD.  The editor remains independently owned.
+    \ Free the text area and the tab strip, each with the region Pad gave
+    \ it, and every content-region descriptor TAB-ADD allocated.
+    _PAD-TXTA @ ?DUP IF DUP WDG-REGION >R TXTA-FREE R> RGN-FREE THEN
     _PAD-TABS-FREE
 
-    \ Free explorer widget
-    _PAD-EXPL @ ?DUP IF EXPL-FREE THEN
+    \ Free the explorer widget and its region
+    _PAD-EXPL @ ?DUP IF DUP WDG-REGION >R EXPL-FREE R> RGN-FREE THEN
 
     \ Free command-bar allocations (outer region is caller-owned)
     _PAD-PROMPT @ ?DUP IF PRM-FREE THEN

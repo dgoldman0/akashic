@@ -438,8 +438,12 @@ a textarea's cursor position via `TXTA-CURSOR-LINE`).
 | `UTUI-FOCUS-PREV` | `( -- )` | Move focus to previous focusable element |
 
 Focusability is determined by the `EL-F-FOCUS` bit in the element's
-registry definition.  `UTUI-FOCUS!` clears the old element's FOC
-flag and sets the new one's.
+registry definition, and an element with a mounted widget is focusable as
+well. An element authored `focusable=false` is never focusable: neither a
+press nor Tab moves focus to it, and a press still goes to its mounted
+widget. Pad's tab strip is one, so a click on a tab leaves the keys with
+the editor. `UTUI-FOCUS!` clears the old element's FOC flag and sets the
+new one's.
 
 ---
 

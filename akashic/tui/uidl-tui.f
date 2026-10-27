@@ -2599,7 +2599,14 @@ UTUI-INSTALL-XTS
     THEN
     UIDL-PARENT ;
 
+\ An element authored focusable=false never takes focus, by a press or by
+\ Tab, while a press still goes to the widget mounted on it: an editor's
+\ tab strip, which switches what the editor beside it shows and leaves the
+\ keys with the editor.
 : _UTUI-FOCUSABLE?  ( elem -- flag )
+    DUP S" focusable" UIDL-ATTR IF
+        S" false" STR-STR= IF DROP 0 EXIT THEN
+    ELSE 2DROP THEN
     DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
         ED.FLAGS @ EL-FOCUSABLE? IF
             _UTUI-SIDECAR _UTUI-SC-VIS?

@@ -83,8 +83,9 @@ VARIABLE _TXTA-OWNED-LIMIT
 200 CONSTANT _TXTA-O-TYPED-TO     \ revision after the last of it
 208 CONSTANT _TXTA-O-TYPED-FIRST  \ first viewport row it changed
 216 CONSTANT _TXTA-O-TYPED-END    \ the row after its last, FIRST for none
+224 CONSTANT _TXTA-O-ON-CARET     \ told when an event moves the caret, or 0
 
-224 CONSTANT _TXTA-DESC-SIZE
+232 CONSTANT _TXTA-DESC-SIZE
 
 \ =====================================================================
 \  2. Module variables (KDOS single-threaded pattern)
@@ -1319,7 +1320,7 @@ VARIABLE _TXTA-PT-CODE
         >R 2DROP 0 R>
     ENDCASE ;
 
-: _TXTA-HANDLE  ( event widget -- consumed? )
+: _TXTA-HANDLE-EVENT  ( event widget -- consumed? )
     _TXTA-W !                           ( event )
     DUP 16 + @ _TXTA-HND-MODS !        \ cache modifiers
     DUP @ KEY-T-SPECIAL = IF
@@ -1386,6 +1387,19 @@ VARIABLE _TXTA-PT-CODE
     THEN
     DROP 0 ;
 
+\ _TXTA-HANDLE ( event widget -- consumed? )
+\   Take an event, and tell the owner's caret word when the event moved the
+\   caret or the selection, as a status line showing the caret's place
+\   needs.  An edit calls the change word first, from inside the event.
+: _TXTA-HANDLE  ( event widget -- consumed? )
+    DUP _TXTA-O-ON-CARET + @ 0= IF _TXTA-HANDLE-EVENT EXIT THEN
+    DUP >R
+    R@ _TXTA-O-CURSOR + @ R@ _TXTA-O-SEL-ANCHOR + @ 2>R
+    _TXTA-HANDLE-EVENT                  ( consumed? )
+    2R> R@ _TXTA-O-SEL-ANCHOR + @ <>
+    SWAP R@ _TXTA-O-CURSOR + @ <> OR
+    R> SWAP IF DUP _TXTA-O-ON-CARET + @ EXECUTE ELSE DROP THEN ;
+
 \ =====================================================================
 \  9. Constructor / Public API
 \ =====================================================================
@@ -1428,6 +1442,7 @@ VARIABLE _TXTA-PT-CODE
     -1             OVER _TXTA-O-TYPED-TO + !
     0              OVER _TXTA-O-TYPED-FIRST + !
     0              OVER _TXTA-O-TYPED-END + !
+    0              OVER _TXTA-O-ON-CARET + !
     0 _TXTA-NEW-INSTANCE ! ;
 
 \ TXTA-SET-TEXT ( text-a text-u widget -- )
@@ -1700,6 +1715,12 @@ VARIABLE _TXTA-PT-CODE
 \   xt: ( line-a line-u pos widget -- ), POS the byte offset in the line.
 : TXTA-ON-FOLLOW!  ( xt widget -- )
     _TXTA-O-FOLLOW-XT + ! ;
+
+\ TXTA-ON-CARET! ( xt widget -- )
+\   Set the word told after an event the text area takes moves its caret
+\   or its selection, or 0.  xt: ( widget -- ).
+: TXTA-ON-CARET!  ( xt widget -- )
+    _TXTA-O-ON-CARET + ! ;
 
 \ TXTA-GUTTER! ( xt width widget -- )
 \   Set gutter callback & width.  xt: ( line# row width widget -- )
@@ -2378,6 +2399,7 @@ GUARD _txta-guard
 ' TXTA-STYLE!    CONSTANT _txta-style-xt
 ' TXTA-PALETTE!  CONSTANT _txta-palette-xt
 ' TXTA-ON-FOLLOW! CONSTANT _txta-onfollow-xt
+' TXTA-ON-CARET!  CONSTANT _txta-oncaret-xt
 ' TXTA-GUTTER!    CONSTANT _txta-gutter-xt
 ' TXTA-ADJUST-SCROLL CONSTANT _txta-adjustscroll-xt
 ' TXTA-DRAW-ROWS  CONSTANT _txta-drawrows-xt
@@ -2422,6 +2444,7 @@ GUARD _txta-guard
 : TXTA-STYLE!    _txta-style-xt   _txta-guard WITH-GUARD ;
 : TXTA-PALETTE!  _txta-palette-xt _txta-guard WITH-GUARD ;
 : TXTA-ON-FOLLOW! _txta-onfollow-xt _txta-guard WITH-GUARD ;
+: TXTA-ON-CARET!  _txta-oncaret-xt  _txta-guard WITH-GUARD ;
 : TXTA-GUTTER!    _txta-gutter-xt  _txta-guard WITH-GUARD ;
 : TXTA-ADJUST-SCROLL _txta-adjustscroll-xt _txta-guard WITH-GUARD ;
 : TXTA-DRAW-ROWS  _txta-drawrows-xt _txta-guard WITH-GUARD ;

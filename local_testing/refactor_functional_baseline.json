@@ -377,14 +377,14 @@
         "menus": ["File", "Build", "Edit", "Selection", "View", "Go", "Help"],
         "actions": ["about", "build-install", "close-all", "close-tab", "copy", "cut", "delete-line", "find", "find-next", "find-open", "goto-build-error", "goto-file", "goto-line", "new", "next-tab", "open", "paste", "prev-tab", "quit", "redo", "replace", "save", "save-all", "save-as", "select-all", "select-line", "select-word", "shortcuts", "toggle-hidden", "toggle-output", "toggle-sidebar", "undo"],
         "shortcuts": {"build-install": "Ctrl+Shift+B", "close-tab": "Ctrl+W", "copy": "Ctrl+C", "cut": "Ctrl+X", "delete-line": "Ctrl+Shift+K", "find": "Ctrl+F", "find-next": "F3", "find-open": "Ctrl+Shift+F", "goto-build-error": "F4", "goto-file": "Ctrl+P", "goto-line": "Ctrl+G", "new": "Ctrl+N", "next-tab": "Ctrl+PageDown", "open": "Ctrl+O", "paste": "Ctrl+V", "prev-tab": "Ctrl+PageUp", "quit": "Ctrl+Q", "redo": "Ctrl+Y", "replace": "Ctrl+H", "save": "Ctrl+S", "save-as": "Ctrl+Shift+S", "select-all": "Ctrl+A", "select-line": "Ctrl+L", "select-word": "Ctrl+D", "toggle-output": "Ctrl+J", "toggle-sidebar": "Ctrl+B", "undo": "Ctrl+Z"},
-        "element_ids": ["editor-area", "eo-split", "main-split", "mbar", "output", "output-scroll", "sbar", "sbar-enc", "sbar-file", "sbar-pos", "sbar-tabs", "sidebar", "sidebar-scroll", "view-hidden", "view-output", "view-sidebar"]
+        "element_ids": ["editor-area", "editor-tabs", "editor-text", "eo-split", "main-split", "mbar", "output", "output-scroll", "sbar", "sbar-enc", "sbar-file", "sbar-pos", "sbar-tabs", "sidebar", "sidebar-scroll", "view-hidden", "view-output", "view-sidebar"]
       },
       "direct_input_contracts": [
         {
           "path": "akashic/tui/applets/pad/pad.f",
           "word": "PAD-EVENT-CB",
-          "sha256": "a5cacb384cf49dbe8579e8f65c0f71095df0be05b4d5658b3acf09180315a235",
-          "bindings": ["active prompt -> prompt owns input", "focus outside editor -> UIDL owns input", "Ctrl/Alt-modified input -> UIDL shortcut priority", "unshifted Tab in editor -> insert tab-stop spaces", "ordinary editor input -> direct textarea fast path", "unhandled direct input -> fall through to UIDL"]
+          "sha256": "a1b01bf1fe8cca989ca71efe656379198c840d17a43ec44632cc7aae713c68a6",
+          "bindings": ["active prompt -> prompt owns input", "focus outside the editor's text -> UIDL owns input", "unmodified Tab in the editor's text -> insert tab-stop spaces", "all other input -> UIDL, which gives shortcuts priority and sends the editor's keys and pointer events to the mounted text area"]
         },
         {
           "path": "akashic/tui/applets/pad/pad.f",
@@ -396,7 +396,7 @@
           "path": "akashic/tui/widgets/textarea.f",
           "word": "_TXTA-TYPE",
           "sha256": "14cad8b6495490d6a97eef9adf2bdc70cdf08ac0471bcf70e4cf950da3d21c23",
-          "bindings": ["printable input without a selection that leaves the caret on its line -> the text area names its row for a single-row repaint", "Enter at the end of the text with the next row in view -> the text area names its row and the next for a two-row repaint", "all other ordinary editor input -> no rows named, so Pad repaints the whole panel"]
+          "bindings": ["printable input without a selection that leaves the caret on its line -> the text area names its row for a single-row repaint", "Enter at the end of the text with the next row in view -> the text area names its row and the next for a two-row repaint", "all other ordinary editor input -> no rows named, so UIDL repaints the whole text area"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/pad/pad.f", "literal_prefix": "pad.", "ignored_literals": ["pad.theme"], "ids": ["pad.document.active", "pad.document.open", "pad.document.text"]},

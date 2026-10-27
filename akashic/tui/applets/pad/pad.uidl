@@ -70,8 +70,11 @@
 <!-- Right: editor tabs (top) + output panel (bottom) -->
 <split id=eo-split ratio=80>
 
-<!-- Top: editor tab bar + content area -->
-<region id=editor-area/>
+<!-- Top: the editor's tab strip over its text; the strip takes no focus -->
+<region id=editor-area>
+<region id=editor-tabs focusable=false style="position:absolute; height:2"/>
+<region id=editor-text style="position:absolute; top:2"/>
+</region>
 
 <!-- Bottom: output panel (console, build log, etc.) -->
 <scroll id=output-scroll>

@@ -178,7 +178,7 @@ def test_pad_uses_one_caller_bounded_canonical_tab_widget() -> None:
     assert "_PAD-FNAME-CAP 1+ CONSTANT _PAD-TAB-LABEL-CAP" in source
     assert "_PAD-MAX-BUFS CELLS CMP-FIELD: _PAD-TAB-SLOTS" in source
     assert "CMP-FIELD: _PAD-TAB-LABELS" in source
-    assert "_PAD-PANEL WDG-REGION _PAD-MAX-BUFS TAB-NEW-CAP" in init
+    assert "DUP UTUI-ELEM-RGN RGN-NEW _PAD-MAX-BUFS TAB-NEW-CAP _PAD-TABS !" in init
     assert "TAB-NEW" not in init.replace("TAB-NEW-CAP", "")
 
     for forbidden in (
@@ -233,7 +233,7 @@ def test_pad_labels_are_stable_current_and_owned_by_pad() -> None:
     desired = _word(source, "_PAD-TAB-WANTED")
     sync_one = _word(source, "_PAD-TAB-LABEL-SYNC")
     sync_all = _word(source, "_PAD-TAB-LABELS-SYNC")
-    draw_tabs = _word(source, "_PAD-DRAW-TAB-WIDGET")
+    status = _word(source, "_PAD-UPDATE-STATUS")
 
     assert "_PAD-TAB-LABELS +" in _word(source, "_PAD-TAB-LABEL")
     assert "_PBE-DIRTY" in desired
@@ -243,37 +243,44 @@ def test_pad_labels_are_stable_current_and_owned_by_pad() -> None:
     assert "TAB-LABEL!" in sync_one
     assert "TAB-COUNT 0 ?DO" in sync_all
     assert "_PAD-TAB-SLOT@ _PAD-TAB-LABEL-SYNC" in sync_all
-    assert draw_tabs.index("_PAD-TAB-LABELS-SYNC") < draw_tabs.index("WDG-DRAW")
+    # Every label follows its buffer where Pad updates its status, which
+    # each buffer change and each tick reach, and no longer at the draw.
+    assert "_PAD-TAB-LABELS-SYNC" in status
 
 
-def test_pad_routes_canonical_mouse_hits_without_stealing_editor_keys() -> None:
+def test_pad_mounts_its_tab_strip_and_text_area_on_their_own_regions() -> None:
+    """UIDL lays out, focuses, dispatches to and paints each canonical
+    widget itself, so Pad keeps no composite panel, no paint-time dirty
+    check and no key routing around UIDL."""
+
     source = PAD.read_text(encoding="utf-8")
-    draw_panel = _word(source, "_PAD-PANEL-DRAW")
-    handle_panel = _word(source, "_PAD-PANEL-HANDLE")
+    uidl = (PAD.parent / "pad.uidl").read_text(encoding="utf-8")
+    executable = _executable(source)
+    init = _word(source, "PAD-INIT-CB")
+    event = _word(source, "PAD-EVENT-CB")
     paint = _word(source, "PAD-PAINT-CB")
     remove = _word(source, "_PAD-TAB-REMOVE-SLOT")
     free_tabs = _word(source, "_PAD-TABS-FREE")
 
-    assert "_PAD-DRAW-TAB-WIDGET" in draw_panel
-    assert "_PAD-TXTA @ ?DUP IF WDG-DRAW" in draw_panel
-    assert handle_panel.index("KEY-T-MOUSE") < handle_panel.index(
-        "_PAD-TABS @ WDG-HANDLE"
-    )
-    assert handle_panel.index("_PAD-TABS @ WDG-HANDLE") < handle_panel.index(
-        "_PAD-TXTA @ ?DUP"
-    )
-    for editor_key in ("KEY-LEFT", "KEY-RIGHT", "KEY-T-CHAR"):
-        assert editor_key not in handle_panel
-    assert "_PAD-TABS @ ?DUP IF WDG-DIRTY? OR THEN" in paint
-    # The editor's focus follows the panel's in one store, so a sync that
-    # changes nothing moves no revision and keeps typing's row record.
-    sync_focus = _word(source, "_PAD-SYNC-TXTA-FOCUS")
-    assert "WDG-FLAG!" in sync_focus
-    assert "WDG-FOCUS-CLR" not in sync_focus
-    assert "_PAD-DRAW-TABS" not in _executable(source)
+    assert '<region id=editor-tabs focusable=false style="position:absolute; height:2"/>' in uidl
+    assert '<region id=editor-text style="position:absolute; top:2"/>' in uidl
+    assert "_PAD-TABS @ SWAP UTUI-WIDGET-SET" in init
+    assert "_PAD-TXTA @ SWAP UTUI-WIDGET-SET" in init
+    assert "['] _PAD-ON-CARET _PAD-TXTA @ TXTA-ON-CARET!" in init
+    assert "_PAD-E-EDITOR-TEXT @ ?DUP IF UTUI-FOCUS! THEN" in init
+    for gone in ("_PAD-PANEL", "_PAD-DRAW-CARET", "_PAD-SYNC-TXTA",
+                 "_PAD-POS-FRESH", "WDG-DIRTY", "ASHELL-DIRTY!"):
+        assert gone not in executable
+    # Pad's event word keeps only its own prompt and Tab's indent.
+    assert "WDG-HANDLE" in event and "PRM-ACTIVE?" in event
+    assert "_PAD-INSERT-TAB -1" in event
+    assert "_PAD-TXTA @ WDG-HANDLE" not in event
+    # Its paint word draws only the command bar over the status row.
+    assert "WDG-DIRTY?" not in paint and "TXTA-DRAW-ROWS" not in paint
+    assert "_PAD-PROMPT @ WDG-DRAW" in paint
     assert "TAB-CONTENT _PDT-RGN !" in remove
     assert "_PDT-RGN @ ?DUP IF RGN-FREE" in remove
     assert "TAB-COUNT 0 ?DO" in free_tabs
     assert "TAB-CONTENT ?DUP IF RGN-FREE" in free_tabs
-    assert "TAB-FREE" in free_tabs
+    assert "DUP WDG-REGION >R TAB-FREE R> RGN-FREE" in free_tabs
     assert "_PAD-TABS-FREE" in _word(source, "PAD-SHUTDOWN-CB")

@@ -137,17 +137,24 @@ pad.f / pad.uidl
   +-- clipboard.f + search.f         app-level editing operations
 ```
 
-Pad mounts a custom panel widget into the UIDL `editor-area` region. The panel
-delegates the header to the ordinary canonical `TAB` widget and the content
-rows to one shared textarea. Pad chooses the tab widget's allocation capacity
-from its own open-buffer capacity; the widget does not impose a separate
-terminal or capture limit. A buffer switch saves the current textarea state,
-rebinds that textarea to the new buffer's gap buffer and undo object, restores
-cursor and selection state, and dirties the panel for repaint. Header mouse
-events go through the canonical tab handler, while all keyboard and non-header
-mouse events continue to the textarea. The panel then overlays the caret from
-the textarea's logical line, column, and scroll state, so its position is part
-of the captured cell grid rather than host-terminal state.
+Pad's editor is two canonical widgets inside the UIDL `editor-area` region,
+each mounted on its own region: the ordinary `TAB` widget on `editor-tabs`, its
+header and underline rows, and one shared textarea on `editor-text` below it,
+both placed by absolute positioning. UIDL lays them out, gives the textarea
+focus and its keys and pointer events, and paints each widget as its revision
+moves, so a typed character redraws its row alone and Pad keeps no paint-time
+check or key routing of its own. Only Tab is Pad's: while the textarea has
+focus it indents rather than moving focus. The tab strip is authored
+`focusable=false`, so a click on a tab switches the buffer and leaves the keys
+with the textarea. Pad chooses the tab widget's allocation capacity from its
+own open-buffer capacity; the widget does not impose a separate terminal or
+capture limit. A buffer switch saves the current textarea state, rebinds that
+textarea to the new buffer's gap buffer and undo object, and restores cursor
+and selection state; each of those changes counts in the textarea's own
+revision. The textarea draws its own caret, so its position is part of the
+captured cell grid rather than host-terminal state, and it tells Pad when an
+event moves the caret, so the status row's line and column change in the same
+frame.
 
 The canonical tab widget also exposes a read-only, renderer-neutral
 `TABSET`/`TAB` snapshot from the same labels, selection, geometry, and stable
