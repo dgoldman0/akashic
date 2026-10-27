@@ -164,6 +164,15 @@ the whole run's frame build differs by 65,572 steps, 0.03%: the profile
 charges steps in tenths of a second, and the after runs painted sooner, so
 the burst's window took in a different part of the frame after it.
 
+After the three fixes, at 95a4b849, the same typing run sent the same
+presents, 322,912 bytes, and took 428.0 million steps against 919dcb7d's
+429.1. The held check runs on every shell pass, and typing does not show
+its cost. The isolated character's frame build stayed at 18.35 million and
+its Desk painting at 0.79 million. Its window counted 20.40 million steps
+against 20.27, about one idle tenth of a second's steps (0.14 million),
+which the longer window, 0.41 seconds against 0.38, takes in. A burst frame
+took 11.31 million against 11.34, with its build at 9.67 million.
+
 ## Frames compared window by window
 
 Each pair's presents compared window by window, from one input to the
@@ -370,4 +379,4 @@ ran.
 
 The runs' output stayed in `/dev/shm` and was deleted once its numbers were
 read, with the RAM clones of the trees they ran. By their shells'
-`write_bytes`, none of the part's 29 physical runs wrote to the drive.
+`write_bytes`, none of the part's 30 physical runs wrote to the drive.
