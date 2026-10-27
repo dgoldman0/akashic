@@ -596,8 +596,8 @@ subscription table is full (128 entries).
 ```forth
 UIDL-NOTIFY ( path-a path-l -- )
 ```
-Hash the path and scan all subscriptions.  For each match, set the
-`UIDL-F-DIRTY` flag on the subscribed element.
+Hash the path and scan all subscriptions.  Each subscribed element has
+changed: `UIDL-DIRTY!` counts the change and asks for it to repaint.
 
 #### UIDL-RESET-SUBS
 ```forth
@@ -605,7 +605,34 @@ UIDL-RESET-SUBS ( -- )
 ```
 Clear all subscriptions and zero the table.
 
-### Dirty Flag Helpers
+### Revisions and Repaint Marks
+
+Each element has a revision, the stamp of its last change.  The stamps come
+from one count that every document and UIDL context shares and nothing
+resets, so a revision is never taken twice: an element of a reloaded
+document, or of another context, never has a revision something saw before.
+UIDL counts the changes it makes itself: an element's allocation, a child
+linked into it or unlinked from it (`UIDL-ADD-ELEM`, `UIDL-REMOVE-ELEM`,
+`UIDL-MOVE-ELEM`), an attribute set or removed, and a value written back
+through its binding.  A backend counts the changes it owns, such as layout,
+visibility and focus, with `UIDL-TOUCH`.  A repaint mark is separate: an
+element that did not change may still need to paint again, over cells
+something else drew, and such a mark leaves its revision as it was.
+
+#### UIDL-REVISION
+```forth
+UIDL-REVISION ( elem -- n )
+```
+The stamp of the element's last change, or 0 for anything but a live
+element.
+
+#### UIDL-TOUCH
+```forth
+UIDL-TOUCH ( elem -- )
+```
+Count a change to the element without asking for a repaint, for a change
+whose repaint is asked for apart.  Anything but a live element is left
+alone.
 
 #### UIDL-DIRTY?
 ```forth
@@ -617,15 +644,24 @@ Test the `UIDL-F-DIRTY` bit on an element's flags.
 ```forth
 UIDL-DIRTY! ( elem -- )
 ```
-Set the `UIDL-F-DIRTY` bit on an element.  After setting the flag,
-calls the notification hook `_UDL-DIRTY-HOOK` (if non-zero).  The
-TUI backend uses this hook to set `_UTUI-NEEDS-PAINT`, enabling
-automatic repaint without apps calling `ASHELL-DIRTY!`.
+The element changed: count the change (`UIDL-TOUCH`) and ask for it to
+repaint (`UIDL-MARK!`).  An application calls it after it changes the
+state the element shows.
+
+#### UIDL-MARK!
+```forth
+UIDL-MARK! ( elem -- )
+```
+Ask for the element to repaint though it did not change: set the
+`UIDL-F-DIRTY` bit and call the notification hook `_UDL-DIRTY-HOOK` (if
+non-zero), leaving the revision as it was.  The TUI backend uses this hook
+to set `_UTUI-NEEDS-PAINT`, enabling automatic repaint without apps calling
+`ASHELL-DIRTY!`.
 
 #### `_UDL-DIRTY-HOOK`
 
 ```forth
-VARIABLE _UDL-DIRTY-HOOK   \ xt called by UIDL-DIRTY! (0 = none)
+VARIABLE _UDL-DIRTY-HOOK   \ xt called by a repaint mark (0 = none)
 ```
 
 Backends install a notification callback here.  The xt receives no

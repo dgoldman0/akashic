@@ -101,6 +101,7 @@ def test_uidl_storage_disjoint_covers_every_persistent_document_store() -> None:
         "_UDL-HASH _UDL-HASH-SZ CELLS",
         "_UDL-HIDS _UDL-HASH-SZ 2 * CELLS",
         "_UDL-SUBS _UDL-MAX-SUBS 24 *",
+        "_UDL-REVS _UDL-MAX-ELEMS CELLS",
         "_UDL-VERR 256",
     )
     persistent_scalars = (
@@ -114,6 +115,7 @@ def test_uidl_storage_disjoint_covers_every_persistent_document_store() -> None:
         "_UDL-SUB-CNT",
         "_UDL-VCNT",
         "_UDL-DIRTY-HOOK",
+        "_UDL-STAMP",
     )
     for table in persistent_tables:
         assert f"2DUP {table}" in disjoint

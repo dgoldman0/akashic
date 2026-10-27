@@ -1606,6 +1606,21 @@ projection cannot depend on unsaved global UIDL pools belonging to some other
 active child. It either runs while the exact UCTX is active or reads a validated
 saved snapshot through UCTX-owned accessors.
 
+### 9.1 Desk's system settings
+
+The rich Desk composition reads Desk's system settings as it starts, before
+it builds its first frame: `DSET-APPLY` in `tui/desk-system-settings.f` reads
+[system.toml](../../akashic/tui/applets/desk/system.toml) from the settings
+disk, through the one-read mount of `tui/platform/settings-disk.f`. The
+settings disk is MegaPad's second storage unit, whose medium is
+write-protected, so only the host changes it, by rebuilding or editing the
+settings image; `akashic_tui.py build --settings-safe-mode` writes it asking
+for safe mode. Today the settings hold one key, `[desk.rich-terminal]
+safe-mode`, which turns safe mode on (`tui/check-mode.f`) with the system
+settings as its reason. Settings that are absent, unreadable or malformed
+ask for nothing: they are outside data, not an anomaly. The baseline Desk
+reads none of this.
+
 ## 10. Reset, replay, and loss
 
 The backend privately tracks session identity and the frozen wire field

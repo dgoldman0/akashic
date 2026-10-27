@@ -68,9 +68,9 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (107,776 bytes,
-approximately 105 KiB, each), which save/restore 29 UIDL scalar values and
-11 pool arrays. That state now includes the context-owned mounted-canonical
+Sub-apps are isolated via per-app **UIDL context** buffers (113,920 bytes,
+approximately 111 KiB, each), which save/restore 29 UIDL scalar values and
+12 pool arrays. That state now includes the context-owned mounted-canonical
 relation head/count and source generation/next-key pool. Semantic
 type-definition authority remains in core UIDL modules, not per-applet context
 or Desk state.
@@ -564,20 +564,6 @@ in `_DESK-CFG-A` / `_DESK-CFG-L`.  `DESK-INIT-CB` will call
 A sample config template is provided in
 [desk.toml](../../../../akashic/tui/applets/desk/desk.toml).
 
-## System Settings
-
-Desk's system settings live in
-[system.toml](../../../../akashic/tui/applets/desk/system.toml) on the
-settings disk: MegaPad's second storage unit, whose medium is
-write-protected, so that only the host changes it, by rebuilding or editing
-the settings image (`akashic_tui.py build --settings-safe-mode` writes it
-asking for safe mode).  Desk with a rich terminal reads them as it starts
-(`DSET-APPLY` in `tui/desk-system-settings.f`, which mounts the disk for
-one read through `tui/platform/settings-disk.f`).  Today they hold one key:
-`[desk.rich-terminal] safe-mode`, which turns safe mode on
-(`tui/check-mode.f`) with the system settings as its reason.  Settings
-that are absent, unreadable or malformed ask for nothing.
-
 ## API Reference
 
 ### Sub-App Management
@@ -708,7 +694,7 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 107,776-byte (approximately 105 KiB)
+Each sub-app with a UIDL document gets a 113,920-byte (approximately 111 KiB)
 context buffer that captures:
 
 - **29 scalar values**: element count, attribute count, string position,

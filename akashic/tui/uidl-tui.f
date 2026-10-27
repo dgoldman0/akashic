@@ -1597,11 +1597,19 @@ VARIABLE _UTUI-MENU-SAVE-Z
     0 _UTUI-MENU-SAVE-Z ! ;
 
 \ Close the currently-open menu dropdown.
+\ _UTUI-TOUCH-CHILDREN ( elem -- )
+\   Count a change to each child of elem, such as a dropdown's items, which
+\   it lays out and shows or hides.
+: _UTUI-TOUCH-CHILDREN  ( elem -- )
+    UIDL-FIRST-CHILD
+    BEGIN ?DUP WHILE DUP UIDL-TOUCH UIDL-NEXT-SIB REPEAT ;
+
 : _UTUI-MENU-CLOSE  ( -- )
     _UTUI-MENU-OPEN @ DUP 0= IF DROP EXIT THEN
     \ Hide item sidecars (clear VIS before dirty-rect walk)
     DUP UIDL-FIRST-CHILD
     BEGIN DUP 0<> WHILE
+        DUP UIDL-TOUCH
         DUP _UTUI-SIDECAR
         DUP _UTUI-SC-FLAGS@ _UTUI-SCF-VIS INVERT AND SWAP _UTUI-SC-FLAGS!
         UIDL-NEXT-SIB
@@ -1621,6 +1629,7 @@ VARIABLE _UTUI-MENU-SAVE-Z
     _UTUI-MENU-SAVE-H @   OVER _UTUI-SC-H!
     _UTUI-MENU-SAVE-W @   OVER _UTUI-SC-W!
     _UTUI-MENU-SAVE-Z @ SWAP TSC-SET-ZIDX!
+    DUP UIDL-TOUCH
     \ Dirty the menubar so the highlight updates
     UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
     0 _UTUI-MENU-OPEN !
@@ -1639,6 +1648,7 @@ VARIABLE _UTUI-MENU-SAVE-Z
     \ Finalization is separate from the installed flow-layout XT.  At event
     \ time the menu still has its fully resolved compact label rectangle.
     DUP _UTUI-FINALIZE-MENU-D
+    DUP _UTUI-TOUCH-CHILDREN
     \ Dirty everything so the dropdown paints
     DUP _UTUI-DIRTY-SUBTREE-D
     DUP UIDL-DIRTY!
@@ -3027,7 +3037,7 @@ VARIABLE _USV-WORKED
                 _UTUI-SC-WPTR@ ?DUP IF
                     DUP MEDIA-PENDING? IF
                         -1 _USV-WORKED !
-                        MEDIA-SERVICE IF DUP UIDL-DIRTY! THEN
+                        MEDIA-SERVICE IF DUP UIDL-MARK! THEN
                     ELSE DROP THEN
                 THEN
             ELSE DROP THEN
@@ -3155,9 +3165,9 @@ VARIABLE _UDP-CODE
     _UDP-ROW @ 16 LSHIFT _UDP-COL @ OR _UDM-EV 16 + !
     _UDM-EV R> WDG-HANDLE                  ( elem handled? )
     DUP 0= IF NIP EXIT THEN
-    OVER UIDL-DIRTY!
+    OVER UIDL-MARK!
     SWAP UIDL-PARENT ?DUP IF
-        DUP UIDL-TYPE UIDL-T-SCROLL = IF UIDL-DIRTY! ELSE DROP THEN
+        DUP UIDL-TYPE UIDL-T-SCROLL = IF UIDL-MARK! ELSE DROP THEN
     THEN ;
 
 \ A primary press keeps the established click behavior: menus, tabs, scroll
@@ -3286,13 +3296,14 @@ VARIABLE _UDP-CODE
 
 \ --- Dirty helpers ---
 
-\ Mark element and all descendants dirty.
+\ Mark element and all descendants for repaint.  This counts no change:
+\ a change of visibility is counted where it is made.
 VARIABLE _UDST-ROOT
 
 : _UTUI-DIRTY-SUBTREE  ( elem -- )
     DUP _UDST-ROOT !
     BEGIN
-        DUP UIDL-DIRTY!
+        DUP UIDL-MARK!
         DUP UIDL-FIRST-CHILD ?DUP IF NIP
         ELSE
             BEGIN
@@ -3390,6 +3401,7 @@ VARIABLE _UTUI-SAVED-FOCUS     \ stashed focus elem for overlay hide
     SWAP >R
     DUP _UDST-ROOT !
     BEGIN
+        DUP UIDL-TOUCH
         DUP _UTUI-SIDECAR
         DUP _UTUI-SC-FLAGS@
         R@ IF _UTUI-SCF-VIS OR ELSE _UTUI-SCF-VIS INVERT AND THEN
@@ -5507,8 +5519,8 @@ VARIABLE _UTUI-WS-OLD-OWNER
 \  §18b — UIDL Context Save / Restore  (UCTX)
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 32 scalar variables and 11 copied
-\  pool arrays. Total: 107,776 bytes (approximately 105 KiB).  The mounted
+\  Per sub-app UIDL context buffer holding 32 scalar variables and 12 copied
+\  pool arrays. Total: 113,920 bytes (approximately 111 KiB).  The mounted
 \  canonical relation head is context-owned dynamic state; context buffers
 \  are consequently opaque, non-copyable, and may be cleared/freed only while
 \  inactive.
@@ -5533,6 +5545,7 @@ _UTUI-ACTS-SZ CONSTANT _UCTX-ACTS-SZ  \ exact action arena
   2048 CONSTANT _UCTX-SHORTS-SZ  \ 64 × 32
    512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
 _UTUI-MC-SOURCES-SIZE CONSTANT _UCTX-MCS-SZ
+_UDL-MAX-ELEMS CELLS CONSTANT _UCTX-REVS-SZ    \ 256 × 8
 
 \ Offsets into context buffer
 _UCTX-VAR-SZ                                       CONSTANT _UCTX-O-ELEMS
@@ -5546,7 +5559,8 @@ _UCTX-O-SC     _UCTX-SC-SZ     +                   CONSTANT _UCTX-O-ACTS
 _UCTX-O-ACTS   _UCTX-ACTS-SZ   +                   CONSTANT _UCTX-O-SHORTS
 _UCTX-O-SHORTS _UCTX-SHORTS-SZ +                   CONSTANT _UCTX-O-OVBUF
 _UCTX-O-OVBUF  _UCTX-OVBUF-SZ  +                   CONSTANT _UCTX-O-MCS
-_UCTX-O-MCS    _UCTX-MCS-SZ    +                   CONSTANT UCTX-TOTAL
+_UCTX-O-MCS    _UCTX-MCS-SZ    +                   CONSTANT _UCTX-O-REVS
+_UCTX-O-REVS   _UCTX-REVS-SZ   +                   CONSTANT UCTX-TOTAL
 
 29 CELLS CONSTANT _UCTX-O-MODAL
 30 CELLS CONSTANT _UCTX-O-MC-HEAD
@@ -5604,7 +5618,7 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
-11 CONSTANT _UCTX-NPOOL
+12 CONSTANT _UCTX-NPOOL
 CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
 
 : _UCTX-INIT-POOLS  ( -- )
@@ -5640,7 +5654,10 @@ CREATE _UCTX-POOLS  _UCTX-NPOOL 3 * CELLS ALLOT
     _UCTX-OVBUF-SZ    _UCTX-POOLS 232 + !
     _UTUI-MC-SOURCES  _UCTX-POOLS 240 + !
     _UCTX-O-MCS       _UCTX-POOLS 248 + !
-    _UCTX-MCS-SZ      _UCTX-POOLS 256 + ! ;
+    _UCTX-MCS-SZ      _UCTX-POOLS 256 + !
+    _UDL-REVS         _UCTX-POOLS 264 + !
+    _UCTX-O-REVS      _UCTX-POOLS 272 + !
+    _UCTX-REVS-SZ     _UCTX-POOLS 280 + ! ;
 _UCTX-INIT-POOLS
 
 \ --- Public API ---

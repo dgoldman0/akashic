@@ -48,6 +48,19 @@
 \   UIDL-OBSERVE      ( i*x xt -- j*x )
 \   UIDL-STORAGE-DISJOINT? ( a u -- flag )
 \
+\   UIDL-REVISION      ( elem -- n )
+\   UIDL-TOUCH         ( elem -- )
+\   UIDL-DIRTY!        ( elem -- )
+\   UIDL-MARK!         ( elem -- )
+\   UIDL-DIRTY?        ( elem -- flag )
+\   UIDL-CLEAN!        ( elem -- )
+\
+\ An element's revision counts the changes to it: its attributes, its
+\ children, its bound value, and whatever a backend counts with UIDL-TOUCH,
+\ such as its layout, visibility and focus.  UIDL-DIRTY! is that change
+\ and a request to repaint the element; UIDL-MARK! is the request alone,
+\ for an element that did not change but must paint again.
+\
 \ Prefix: UIDL-  (public)   _UDL-  (internal)
 \
 \ Load with:   REQUIRE uidl.f
@@ -347,6 +360,15 @@ VARIABLE _UDL-ACNT
 VARIABLE _UDL-SPOS
 VARIABLE _UDL-ROOT
 
+\ Each element's revision is the stamp of its last change, from one count
+\ that every document and context shares and nothing resets.  A revision
+\ is therefore never taken twice: an element of a reloaded document, or of
+\ another context, never has a revision something saw before.  The
+\ revisions are kept with the context (UCTX); the count is not.
+CREATE _UDL-REVS  _UDL-MAX-ELEMS CELLS ALLOT
+VARIABLE _UDL-STAMP
+0 _UDL-STAMP !
+
 \ Subscription table storage (code in subscription section below)
 128 CONSTANT _UDL-MAX-SUBS
 CREATE _UDL-SUBS  _UDL-MAX-SUBS 24 * ALLOT  \ 128 × 24 = 3,072 bytes
@@ -367,6 +389,7 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
     _UDL-ATTRS _UDL-MAX-ATTRS _UDL-ATTRSZ * 0 FILL
     _UDL-HASH  _UDL-HASH-SZ CELLS 0 FILL
     _UDL-HIDS  _UDL-HASH-SZ 2 * CELLS 0 FILL
+    _UDL-REVS  _UDL-MAX-ELEMS CELLS 0 FILL
     0 _UDL-SUB-CNT !
     _UDL-SUBS _UDL-MAX-SUBS 24 * 0 FILL ;
 
@@ -398,12 +421,46 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
 \  Element Allocation
 \ =====================================================================
 
+: _UDL-REV-AT  ( index -- addr )  CELLS _UDL-REVS + ;
+
+\ _UDL-TOUCH-INDEX ( index -- )  Give the element at INDEX a new revision.
+: _UDL-TOUCH-INDEX  ( index -- )
+    1 _UDL-STAMP +!  _UDL-STAMP @ SWAP _UDL-REV-AT ! ;
+
+\ Return the stable zero-based pool index of a live element record.  Prove
+\ the complete pointer geometry before reading the record, then reject the
+\ zero type left by removal.  Allocation is append-only within a document,
+\ so later mutations cannot renumber an admitted element.
+: UIDL-ELEM-INDEX?  ( elem -- index flag )
+    DUP 0= IF DROP 0 0 EXIT THEN
+    DUP _UDL-ELEMS U< IF DROP 0 0 EXIT THEN
+    _UDL-ELEMS -
+    DUP _UDL-ECNT @ _UDL-ELEMSZ * U< 0= IF
+        DROP 0 0 EXIT
+    THEN
+    DUP _UDL-ELEMSZ MOD 0<> IF DROP 0 0 EXIT THEN
+    DUP _UDL-ELEMS + UE.TYPE @ 0= IF DROP 0 0 EXIT THEN
+    _UDL-ELEMSZ / -1 ;
+
+\ UIDL-REVISION ( elem -- n )
+\   The stamp of the element's last change, or 0 for no live element.
+: UIDL-REVISION  ( elem -- n )
+    UIDL-ELEM-INDEX? IF _UDL-REV-AT @ ELSE DROP 0 THEN ;
+
+\ UIDL-TOUCH ( elem -- )
+\   Count a change to the element without asking for a repaint, for a
+\   change whose repaint is asked for apart.  Anything but a live element
+\   is left alone.
+: UIDL-TOUCH  ( elem -- )
+    UIDL-ELEM-INDEX? IF _UDL-TOUCH-INDEX ELSE DROP THEN ;
+
 : _UDL-ALLOC-ELEM  ( -- elem | 0 )
     _UDL-ECNT @ _UDL-MAX-ELEMS >= IF
         UIDL-E-FULL _UDL-ERR ! 0 EXIT
     THEN
     _UDL-ECNT @ _UDL-ELEMSZ * _UDL-ELEMS +
     DUP _UDL-ELEMSZ 0 FILL
+    _UDL-ECNT @ _UDL-TOUCH-INDEX
     1 _UDL-ECNT +! ;
 
 \ =====================================================================
@@ -511,6 +568,7 @@ VARIABLE _UDL-RMA  VARIABLE _UDL-RML
 \ =====================================================================
 
 : _UDL-LINK-CHILD  ( parent child -- )
+    OVER UIDL-TOUCH
     OVER UE.LCHILD @ ?DUP IF
         \ has existing children — append after last
         2DUP SWAP UE.PREV !          \ child.prev = old-last
@@ -700,20 +758,6 @@ VARIABLE _UPA-VA  VARIABLE _UPA-VL
 : UIDL-ROOT        ( -- elem | 0 )  _UDL-ROOT @ ;
 : UIDL-ELEM-COUNT  ( -- n )         _UDL-ECNT @ ;
 
-\ Return the stable zero-based pool index of a live element record.  Prove
-\ the complete pointer geometry before reading the record, then reject the
-\ zero type left by removal.  Allocation is append-only within a document,
-\ so later mutations cannot renumber an admitted element.
-: UIDL-ELEM-INDEX?  ( elem -- index flag )
-    DUP 0= IF DROP 0 0 EXIT THEN
-    DUP _UDL-ELEMS U< IF DROP 0 0 EXIT THEN
-    _UDL-ELEMS -
-    DUP _UDL-ECNT @ _UDL-ELEMSZ * U< 0= IF
-        DROP 0 0 EXIT
-    THEN
-    DUP _UDL-ELEMSZ MOD 0<> IF DROP 0 0 EXIT THEN
-    DUP _UDL-ELEMS + UE.TYPE @ 0= IF DROP 0 0 EXIT THEN
-    _UDL-ELEMSZ / -1 ;
 
 : UIDL-TYPE        ( elem -- type )    UE.TYPE @ ;
 : UIDL-ID          ( elem -- a l )     DUP UE.ID-A @ SWAP UE.ID-L @ ;
@@ -1009,6 +1053,7 @@ VARIABLE _UDL-MUT-P   \ parent temp for mutations
 
 \ Unlink elem from its parent's child chain
 : _UDL-UNLINK  ( elem -- )
+    DUP UE.PARENT @ UIDL-TOUCH
     DUP UE.PREV @ ?DUP IF
         OVER UE.NEXT @ SWAP UE.NEXT !    \ prev.next = elem.next
     ELSE
@@ -1043,7 +1088,7 @@ VARIABLE _UDL-MUT-P   \ parent temp for mutations
     \ Zero out the element
     _UDL-ELEMSZ 0 FILL ;
 
-: UIDL-SET-ATTR  ( elem name-a name-l val-a val-l -- )
+: _UDL-SET-ATTR  ( elem name-a name-l val-a val-l -- )
     \ Check if attr already exists
     4 PICK UE.ATTR @
     BEGIN
@@ -1077,7 +1122,10 @@ VARIABLE _UDL-MUT-P   \ parent temp for mutations
     \ Not found — store new attr (existing _UDL-STORE-ATTR)
     _UDL-STORE-ATTR ;
 
-: UIDL-REMOVE-ATTR  ( elem name-a name-l -- )
+: UIDL-SET-ATTR  ( elem name-a name-l val-a val-l -- )
+    4 PICK >R _UDL-SET-ATTR R> UIDL-TOUCH ;
+
+: _UDL-REMOVE-ATTR  ( elem name-a name-l -- )
     _UDL-SL ! _UDL-SA !
     DUP UE.ATTR @        \ prev-ptr = 0, cur = first attr
     0 SWAP                \ ( elem 0 cur )
@@ -1101,10 +1149,13 @@ VARIABLE _UDL-MUT-P   \ parent temp for mutations
     REPEAT
     2DROP DROP ;                       \ not found — clean up
 
+: UIDL-REMOVE-ATTR  ( elem name-a name-l -- )
+    2 PICK >R _UDL-REMOVE-ATTR R> UIDL-TOUCH ;
+
 : UIDL-MOVE-ELEM  ( elem new-parent -- )
     OVER _UDL-UNLINK
     2DUP SWAP UE.PARENT !
-    _UDL-LINK-CHILD ;
+    SWAP _UDL-LINK-CHILD ;
 
 \ =====================================================================
 \  Phase 3 — Gap 3.3: Two-Way Binding Write-Back
@@ -1117,6 +1168,7 @@ VARIABLE _UDL-BWE   \ bind-write element
     _UDL-BWE @ UIDL-BIND              \ ( val-a val-l bind-a bind-l flag )
     0= IF 2DROP 2DROP EXIT THEN        \ no bind → drop 4 remaining items
     \ stack: ( val-a val-l bind-a bind-l )
+    _UDL-BWE @ UIDL-TOUCH
     _UDL-BWE @ UE.TYPE @
     DUP UIDL-T-TOGGLE = IF
         DROP
@@ -1169,6 +1221,26 @@ VARIABLE _UDL-BWE   \ bind-write element
     THEN 2DROP
     DROP 0 0 0 ;
 
+\ --- Repaint marks ---
+: UIDL-DIRTY?  ( elem -- flag )  UE.FLAGS @ UIDL-F-DIRTY AND 0<> ;
+
+VARIABLE _UDL-DIRTY-HOOK   \ ( -- ) optional hook called after a mark
+0 _UDL-DIRTY-HOOK !
+
+\ UIDL-MARK! ( elem -- )
+\   Ask for the element to paint again, though it did not change: its
+\   revision stays.  For a repaint over cells something else drew.
+: UIDL-MARK!  ( elem -- )
+    DUP UE.FLAGS @ UIDL-F-DIRTY OR SWAP UE.FLAGS !
+    _UDL-DIRTY-HOOK @ ?DUP IF EXECUTE THEN ;
+
+\ UIDL-DIRTY! ( elem -- )
+\   The element changed: count the change and ask for it to paint again.
+\   An application calls it after it changes the state the element shows.
+: UIDL-DIRTY!  ( elem -- )  DUP UIDL-TOUCH UIDL-MARK! ;
+
+: UIDL-CLEAN!  ( elem -- )  DUP UE.FLAGS @ UIDL-F-DIRTY INVERT AND SWAP UE.FLAGS ! ;
+
 \ =====================================================================
 \  Subscription Table — Reactive Binding
 \ =====================================================================
@@ -1204,25 +1276,13 @@ VARIABLE _UDL-BWE   \ bind-write element
     _UDL-SUB-CNT @ 0 ?DO
         I 24 * _UDL-SUBS +                ( hash entry )
         DUP @ 2 PICK = IF
-            8 + @                          ( hash elem )
-            DUP UE.FLAGS @ UIDL-F-DIRTY OR SWAP UE.FLAGS !
+            8 + @ UIDL-DIRTY!              ( hash )
         ELSE
             DROP
         THEN
     LOOP
     DROP ;
 
-\ --- Dirty Flag Helpers ---
-: UIDL-DIRTY?  ( elem -- flag )  UE.FLAGS @ UIDL-F-DIRTY AND 0<> ;
-
-VARIABLE _UDL-DIRTY-HOOK   \ ( -- ) optional hook called after UIDL-DIRTY!
-0 _UDL-DIRTY-HOOK !
-
-: UIDL-DIRTY!  ( elem -- )
-    DUP UE.FLAGS @ UIDL-F-DIRTY OR SWAP UE.FLAGS !
-    _UDL-DIRTY-HOOK @ ?DUP IF EXECUTE THEN ;
-
-: UIDL-CLEAN!  ( elem -- )  DUP UE.FLAGS @ UIDL-F-DIRTY INVERT AND SWAP UE.FLAGS ! ;
 
 \ =====================================================================
 \  Compound observation and owned-storage boundary
@@ -1252,6 +1312,9 @@ VARIABLE _UDL-DIRTY-HOOK   \ ( -- ) optional hook called after UIDL-DIRTY!
         MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP _UDL-SUBS _UDL-MAX-SUBS 24 *
         MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-REVS _UDL-MAX-ELEMS CELLS
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-STAMP 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP _UDL-VERR 256 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP _UDL-ERR 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP _EL-REG-CNT 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
@@ -1364,7 +1427,10 @@ GUARD _uidl-guard
 ' UIDL-RESET-SUBS  CONSTANT _uidl-reset-subs-xt
 ' UIDL-DIRTY?      CONSTANT _uidl-dirty-q-xt
 ' UIDL-DIRTY!      CONSTANT _uidl-dirty-s-xt
+' UIDL-MARK!       CONSTANT _uidl-mark-s-xt
 ' UIDL-CLEAN!      CONSTANT _uidl-clean-s-xt
+' UIDL-REVISION    CONSTANT _uidl-revision-xt
+' UIDL-TOUCH       CONSTANT _uidl-touch-xt
 
 : UIDL-ERR        _uidl-err-xt _uidl-guard WITH-GUARD ;
 : UE.TYPE         _ue-dottype-xt _uidl-guard WITH-GUARD ;
@@ -1461,5 +1527,8 @@ GUARD _uidl-guard
 : UIDL-RESET-SUBS  _uidl-reset-subs-xt _uidl-guard WITH-GUARD ;
 : UIDL-DIRTY?      _uidl-dirty-q-xt _uidl-guard WITH-GUARD ;
 : UIDL-DIRTY!      _uidl-dirty-s-xt _uidl-guard WITH-GUARD ;
+: UIDL-MARK!       _uidl-mark-s-xt _uidl-guard WITH-GUARD ;
 : UIDL-CLEAN!      _uidl-clean-s-xt _uidl-guard WITH-GUARD ;
+: UIDL-REVISION    _uidl-revision-xt _uidl-guard WITH-GUARD ;
+: UIDL-TOUCH       _uidl-touch-xt _uidl-guard WITH-GUARD ;
 [THEN] [THEN]
