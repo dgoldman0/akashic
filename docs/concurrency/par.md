@@ -50,8 +50,9 @@ Megapad-64 has two core flavors:
 
 | Property | Full Cores (0..N-FULL−1) | Micro-Cores (N-FULL..NCORES−1) |
 |----------|--------------------------|-------------------------------|
-| Tile engine | Yes | No |
-| Stack depth | Full | Limited |
+| Tile engine | Yes | Shared, one per cluster |
+| Stacks | Set up by boot | None set up by boot |
+| Runs today's BIOS Forth | Yes | No |
 | Local memory | Normal RAM | Cluster scratchpad (SPAD) |
 | Heap / ALLOT | Yes (core 0 only) | No |
 | Barrier | Software (`BARRIER`) | Hardware (`HW-BARRIER-WAIT`) |
@@ -76,9 +77,15 @@ PAR-USE-ALL  ( -- )
 ```
 
 Include micro-cores in parallel dispatch (IDs 0..NCORES−1).
-**Only safe when xt uses purely scalar operations** — no tile
-engine words, no heap allocation, no `ALLOT`.  Micro-cores have
-limited stack depth and no tile engine.
+
+**Known issue (2026-10-27): do not use this option.** Micro-cores
+cannot run code compiled by today's BIOS Forth: by design they trap
+instructions the BIOS uses, the RTL gives them 16 registers where the
+BIOS needs more, and boot sets up no stacks for them.  Dispatching an
+xt to a micro-core would therefore fault on the chip, and `par.f` has
+been tested only on one core.  Micro-core work should use the kernel
+words described in [microcore-kernels.md](microcore-kernels.md) once
+they exist.
 
 ### PAR-CORES
 
@@ -345,10 +352,13 @@ Per the KDOS §8.1 concurrency contract, workers dispatched via
 - Direct memory access (`@`, `!`, `C@`, `C!`, `MOVE`, `FILL`)
 - Arena bump-allocation (`ARENA-ALLOT`)
 - Stack operations, arithmetic, logic
-- **Full cores only:** tile engine operations
+- Tile engine operations
 
 They must **not** use: `ALLOCATE`, `FREE`, `RESIZE`, `ARENA-NEW`,
 `ARENA-DESTROY`, dictionary words, or I/O.
+
+These rules describe full-core workers.  Micro-cores cannot run Forth
+xts today; see [PAR-USE-ALL](#par-use-all).
 
 ### DO vs ?DO
 
