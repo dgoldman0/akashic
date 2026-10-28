@@ -45,6 +45,7 @@ from rich_terminal_desktop_acceptance import (
     JourneyProgress,
     PhysicalDesktopAcceptanceError,
     RichScreenProjection,
+    _SemanticItemViewClaim,
     _claim_item_runs,
     _cancel_of_confirm,
     _claim_item_text,
@@ -1306,11 +1307,17 @@ class FexpAloneJourney(_AppletJourney):
         return views[0] if len(views) == 1 else None
 
     @staticmethod
-    def _content_views(projection: RichScreenProjection, role):
+    def _content_views(projection: RichScreenProjection, role, *, covered: bool = False):
+        # With COVERED, the views a later region covers count too, such as
+        # the table beneath File Explorer's question.
         left, top, right, bottom = _desk_content_bounds(projection)
+        claims = projection.semantic_item_view_claims
+        if covered:
+            claims += tuple(claim for claim in projection.covered_root_claims
+                            if isinstance(claim, _SemanticItemViewClaim))
         return [
             claim
-            for claim in projection.semantic_item_view_claims
+            for claim in claims
             if left <= claim.left < claim.right <= right
             and top <= claim.top < claim.bottom <= bottom
             and claim.content.role is role
@@ -1705,8 +1712,7 @@ class FexpAloneJourney(_AppletJourney):
             if self.stage == self.DELETE_ASKED:
                 if delete is None:
                     return self._wait("File Explorer's question after Delete")
-                table, tree = self._views(projection)
-                if table is None:
+                if len(self._content_views(projection, ItemViewRole.TABLE, covered=True)) != 1:
                     raise PhysicalDesktopAcceptanceError(
                         "File Explorer's detail table fell back beneath its question"
                     )

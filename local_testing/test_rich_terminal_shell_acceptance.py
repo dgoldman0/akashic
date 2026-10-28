@@ -706,6 +706,35 @@ def test_a_dialog_region_must_hold_exactly_its_pane_content_above_it():
         _project(_replace_region(_scene(tabs=True,dialog=True),20,z_order=2))
 
 
+def test_a_root_beneath_its_panes_dialog_is_held_there_but_is_no_evidence():
+    """A tabset on the dialog's first row lies beneath it, in pane 0's
+    content region: the modal region is the layer above, so the two may
+    meet, and the tabset is held inactive there, apart from the evidence of
+    what shows."""
+    offer=_scene(tabs=True,dialog=True)
+    beneath=TabSetDraw(220,ACTIVE,0,1,ObjectBounds(1,3,4,1),
+                       (TabDraw(221,ACTIVE|ControlState.SELECTED,0,'Under',''),))
+    region=next(r for r in offer.retained.regions if r.region_id==3)
+    offer=_replace_region(offer,3,draws=retained_draw_order((*region.draws,beneath)),
+                          inactive_controls=frozenset((200,201,220,221)))
+    projection=_project(offer)
+    dialog,=projection.semantic_dialog_claims
+    assert (dialog.left,dialog.top,dialog.right,dialog.bottom)==(1,3,5,6)
+    assert [claim.identity.control_id for claim in projection.semantic_tabset_claims]==[200,210]
+    covered,=projection.covered_root_claims
+    assert covered.identity==ControlIdentity(7,9,220)
+    assert (covered.left,covered.top,covered.right,covered.bottom)==(1,3,5,4)
+    assert covered.identity in projection.inactive_controls
+
+
+def test_two_roots_in_one_modal_region_may_not_meet():
+    offer=_scene(tabs=True,prompt=True)
+    prompt,=next(r for r in offer.retained.regions if r.region_id==20).draws
+    twin=replace(prompt,control_id=610)
+    with pytest.raises(ERROR,match='semantic root claims overlap'):
+        _project(_replace_region(offer,20,draws=retained_draw_order((prompt,twin))))
+
+
 def _notice(x, y, w, *, severity=3, message='Saved'):
     """The app shell's notice: one row as wide as its bar, its message two
     cells in."""

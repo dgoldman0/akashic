@@ -104,8 +104,18 @@ their document's overlay keep their places, and a graph beneath another
 document's prompt does not. The field adapter keeps a status field under a
 prompt rich; the field snapshot no longer has a clipped capture to test,
 and the adapter's structure test checks that the capture word clips
-nothing. File Explorer's journey requires its detail table to stay rich
-beneath its delete question, and inactive while the question is open.
+nothing.
+
+The physical acceptance observer reads the layers the same way. A root in a
+visible modal region may lie over the roots of the regions beneath it, and
+two roots that meet within one region are still refused. A root that a
+later region covers is kept apart from the evidence of what shows, since
+the observer cannot tell which of its pixels show, but the checks that
+every control beneath an overlay is inactive include it. Its shell-scene
+tests hold a tabset beneath a pane's dialog and refuse two prompts that
+meet in one modal region. File Explorer's journey requires its detail table
+to stay rich beneath its delete question, and inactive while the question
+is open.
 
 ## Status
 

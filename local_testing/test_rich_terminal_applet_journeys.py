@@ -203,6 +203,7 @@ def _held(frame: RichScreenProjection, prompt) -> RichScreenProjection:
         frame.semantic_document_claims,
         frame.semantic_tabset_claims,
         frame.semantic_field_claims,
+        frame.covered_root_claims,
     ):
         inactive.update(claim.identity for claim in claims)
     return replace(
@@ -1970,7 +1971,9 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
         frame = _noticed(frame, _notice("Renamed", StatusSeverity.NEUTRAL))
     if delete:
         # The question covers part of the detail table, which stays rich in
-        # the layer beneath it.
+        # the layer beneath it, held there with none of its strings evidence
+        # of what shows.
+        frame = replace(frame, semantic_item_view_claims=(tree,), covered_root_claims=(table,))
         frame = _asked(frame, _question("Delete the selected item?", (
             ("Delete", ButtonFlag.DESTRUCTIVE),
             ("Cancel", ButtonFlag.DEFAULT | ButtonFlag.CANCEL),
@@ -2080,11 +2083,18 @@ def test_fexp_alone_refuses_a_rename_that_held_the_wrong_span_or_left_the_table_
     with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
         journey_at(FexpAloneJourney.RENAME_PROMPT).after_present(
             _cell_offer(1, ((81, 1, "Rename: large.txt"),)), 9, active, sender)
-    # The delete question, likewise, holds the table and tree beneath it.
-    asked = replace(_fexp_frame(delete=True), inactive_controls=frozenset())
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="beneath it active"):
-        journey_at(FexpAloneJourney.DELETE_ASKED).after_present(
-            _cell_offer(1, ((32, 62, "Delete the selected item?"),)), 9, asked, sender)
+    # The delete question, likewise, holds the table and tree beneath it,
+    # the table it covers too, which must not fall back.
+    question = _cell_offer(1, ((32, 62, "Delete the selected item?"),))
+    asked = _fexp_frame(delete=True)
+    for frame, message in (
+        (replace(asked, inactive_controls=frozenset()), "beneath it active"),
+        (replace(asked, inactive_controls=asked.inactive_controls
+                 - {ControlIdentity(1, 1, TABLE_ID)}), "left 1 controls beneath it active"),
+        (replace(asked, covered_root_claims=()), "detail table fell back"),
+    ):
+        with pytest.raises(PhysicalDesktopAcceptanceError, match=message):
+            journey_at(FexpAloneJourney.DELETE_ASKED).after_present(question, 9, frame, sender)
 
 
 def _launcher(*, modal=True, lines=None, inactive=False, beneath=True, shell=True):

@@ -2260,6 +2260,14 @@ class RichScreenProjection:
     # Every control a visible MODAL region above it makes inactive: it takes
     # no input while the prompt or dialog is open, and may show dimmed.
     inactive_controls: frozenset[ControlIdentity] = frozenset()
+    # Every collection, item view, document, tabset and field root that a
+    # later region's draw covers in part or whole, such as a pane's roots
+    # beneath its prompt or dialog: retained there, though none of its
+    # source strings is evidence of what shows.
+    covered_root_claims: tuple[
+        _SemanticCollectionClaim | _SemanticItemViewClaim | _SemanticDocumentClaim
+        | _SemanticTabSetClaim | _SemanticFieldClaim, ...
+    ] = ()
     # The root identity of each menu bar in menu_signatures, in its order.
     menu_bar_identities: tuple[ControlIdentity, ...] = ()
 
@@ -3122,6 +3130,22 @@ def _prompt_claim(
     return claim
 
 
+def _control_root_claims(projection: RichScreenProjection):
+    """Every collection, item view, document, tabset and field root in
+    PROJECTION: those that are evidence of what shows, and those a later
+    region covers, such as the roots beneath a prompt or dialog."""
+
+    for claims in (
+        projection.semantic_collection_claims,
+        projection.semantic_item_view_claims,
+        projection.semantic_document_claims,
+        projection.semantic_tabset_claims,
+        projection.semantic_field_claims,
+        projection.covered_root_claims,
+    ):
+        yield from claims
+
+
 def _require_held_beneath_overlay(
     projection: RichScreenProjection,
     overlay: _SemanticFieldClaim | _SemanticDialogClaim,
@@ -3130,8 +3154,8 @@ def _require_held_beneath_overlay(
     owner: str,
 ) -> None:
     """While OVERLAY, a prompt or a dialog, is open, OWNER stays rich beneath
-    it and inactive: its menu bar and every other control root inside BOUNDS
-    take no input."""
+    it and inactive: its menu bar and every other control root inside BOUNDS,
+    those the overlay covers too, take no input."""
 
     if projection.menu_signatures.count(menu_signature) != 1:
         raise PhysicalDesktopAcceptanceError(f"{owner}'s overlay withheld its menu bar")
@@ -3139,14 +3163,7 @@ def _require_held_beneath_overlay(
     left, top, right, bottom = bounds
     roots = [menu] + [
         claim.identity
-        for claims in (
-            projection.semantic_collection_claims,
-            projection.semantic_item_view_claims,
-            projection.semantic_document_claims,
-            projection.semantic_tabset_claims,
-            projection.semantic_field_claims,
-        )
-        for claim in claims
+        for claim in _control_root_claims(projection)
         if left <= claim.left and claim.right <= right
         and top <= claim.top and claim.bottom <= bottom
         and claim.identity != overlay.identity
@@ -3263,14 +3280,7 @@ def _desk_prompt_claim(projection: RichScreenProjection) -> _SemanticFieldClaim 
         raise PhysicalDesktopAcceptanceError("Desk's prompt left the taskbar beside it")
     roots = list(projection.menu_bar_identities) + [
         claim.identity
-        for claims in (
-            projection.semantic_collection_claims,
-            projection.semantic_item_view_claims,
-            projection.semantic_document_claims,
-            projection.semantic_tabset_claims,
-            projection.semantic_field_claims,
-        )
-        for claim in claims
+        for claim in _control_root_claims(projection)
         if claim.identity != prompt.identity
     ]
     active = [identity for identity in roots if identity not in projection.inactive_controls]
@@ -3341,14 +3351,7 @@ def _require_others_active(
         if signature != menu_signature
     ] + [
         claim.identity
-        for claims in (
-            projection.semantic_collection_claims,
-            projection.semantic_item_view_claims,
-            projection.semantic_document_claims,
-            projection.semantic_tabset_claims,
-            projection.semantic_field_claims,
-        )
-        for claim in claims
+        for claim in _control_root_claims(projection)
         if not (left <= claim.left and claim.right <= right
                 and top <= claim.top and claim.bottom <= bottom)
     ]
@@ -5288,6 +5291,7 @@ def reconstruct_retained_screen(
     semantic_status_field_claims: list[_SemanticStatusFieldClaim] = []
     semantic_field_claims: list[_SemanticFieldClaim] = []
     semantic_image_claims: list[_SemanticImageClaim] = []
+    covered_root_claims: list = []
     # Each dialog's claim and its buttons, by region, as the draws give them:
     # a dialog's buttons follow it and lie inside it.
     dialogs: dict[int, list[tuple[_SemanticDialogClaim, list[_SemanticButtonClaim]]]] = {}
@@ -5325,23 +5329,39 @@ def reconstruct_retained_screen(
     ) -> None:
         claim_semantic_cells(_rectangle_cells(_LogicalRectangle(left, top, right, bottom)))
 
+    region_semantic_cells: dict[int, set[tuple[int, int]]] = {}
+
     def claim_semantic_cells(claimed: set[tuple[int, int]]) -> None:
         # A root drawn after the last dialog of its region and wholly inside
         # it is one of that dialog's contents: it lies on the dialog and must
-        # meet no other root.
+        # meet no other root.  A visible MODAL region is the layer above the
+        # regions before it, so its roots may lie over theirs, which its
+        # barrier holds inactive (RETAINED-1 section 9); they must meet no
+        # other root of their own region.
+        own = region_semantic_cells.setdefault(region.region_id, set())
+        others = own if region.modal else semantic_cells
         extent = dialog_extents.get(region.region_id)
         if extent is not None and claimed <= extent:
             contents = dialog_contents[region.region_id]
-            overlap = claimed & ((semantic_cells - extent) | contents)
+            overlap = claimed & ((others - extent) | contents)
             contents.update(claimed)
         else:
-            overlap = claimed & semantic_cells
+            overlap = claimed & others
         if overlap:
             raise PhysicalDesktopAcceptanceError(
                 "retained semantic root claims overlap: "
                 f"cells={len(overlap)}"
             )
         semantic_cells.update(claimed)
+        own.update(claimed)
+
+    def record_root(claims: list, visible: _LogicalRectangle, claim) -> None:
+        # A root a later region's draw covers lies beneath it, retained, but
+        # this cell-level observer cannot prove which of its pixels show.
+        if _rectangle_cells(visible) & foreground_instrument_cells:
+            covered_root_claims.append(claim)
+        else:
+            claims.append(claim)
 
     for region, draw in (
         (candidate_region, candidate_draw)
@@ -5481,8 +5501,8 @@ def reconstruct_retained_screen(
             # The complete root is opaque; independently clipped label/value
             # slots preserve exact semantic state without making their source
             # strings evidence of readable pixels.
-            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
-                semantic_field_claims.append(_SemanticFieldClaim(
+            if visible == logical:
+                record_root(semantic_field_claims, visible, _SemanticFieldClaim(
                     identity=ControlIdentity(
                         region.owner_id, region.owner_generation, draw.control_id,
                     ),
@@ -5611,8 +5631,9 @@ def reconstruct_retained_screen(
                 if isinstance(draw, TextAreaDraw)
                 else ControlKind.TEXT_GRID
             )
-            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
-                semantic_collection_claims.append(
+            if visible == logical:
+                record_root(
+                    semantic_collection_claims, visible,
                     _SemanticCollectionClaim(
                         kind=kind,
                         identity=ControlIdentity(
@@ -5648,8 +5669,9 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, ItemViewDraw):
-            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
-                semantic_item_view_claims.append(
+            if visible == logical:
+                record_root(
+                    semantic_item_view_claims, visible,
                     _SemanticItemViewClaim(
                         identity=ControlIdentity(
                             region.owner_id,
@@ -5669,8 +5691,9 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, DocumentDraw):
-            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
-                semantic_document_claims.append(
+            if visible == logical:
+                record_root(
+                    semantic_document_claims, visible,
                     _SemanticDocumentClaim(
                         identity=ControlIdentity(
                             region.owner_id,
@@ -5690,8 +5713,9 @@ def reconstruct_retained_screen(
             continue
 
         if isinstance(draw, TabSetDraw):
-            if visible == logical and not _rectangle_cells(visible) & foreground_instrument_cells:
-                semantic_tabset_claims.append(
+            if visible == logical:
+                record_root(
+                    semantic_tabset_claims, visible,
                     _SemanticTabSetClaim(
                         identity=ControlIdentity(
                             region.owner_id,
@@ -5867,6 +5891,7 @@ def reconstruct_retained_screen(
         semantic_image_claims=tuple(semantic_image_claims),
         cells=cells,
         inactive_controls=inactive_controls,
+        covered_root_claims=tuple(covered_root_claims),
         menu_bar_identities=tuple(menu_bar_identities),
     )
 
@@ -6052,14 +6077,7 @@ def _require_desk_launcher_dialog(
     beneath += projection.menu_bar_identities
     beneath += [
         claim.identity
-        for claims in (
-            projection.semantic_collection_claims,
-            projection.semantic_item_view_claims,
-            projection.semantic_document_claims,
-            projection.semantic_tabset_claims,
-            projection.semantic_field_claims,
-        )
-        for claim in claims
+        for claim in _control_root_claims(projection)
         if claim.identity != launcher.identity
     ]
     active = [identity for identity in beneath if identity not in projection.inactive_controls]
