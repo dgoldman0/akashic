@@ -1063,14 +1063,15 @@ frame before the change driver.
   path calls it yet.
 - **9b. One record of the frame.** Desk's chrome comes from the shell model
   through the same projection, as one candidate. The shell's second
-  candidate, its work space and its frozen banks go. Today the producer
-  plans runs for its own one-region candidate and admits it, and in Desk
-  that candidate is never sent: the shell plans the runs again for each
-  region and admits its batch, which is. Yet about ten things in Desk's
-  paths read the producer's runs or admission: the family strips, the
-  request for terminal space, the owner's sizing, the candidate's currency
-  and identity frontier, the comparison's fence, and the next frame's reuse
-  of runs. In three steps, each sending what it sent before:
+  candidate, its work space and its frozen banks go. Before 9b the
+  producer planned runs for its own one-region candidate and admitted it,
+  and in Desk that candidate was never sent: the shell planned the runs
+  again for each region and admitted its batch, which was. Yet about ten
+  things in Desk's paths read the producer's runs or admission: the family
+  strips, the request for terminal space, the owner's sizing, the
+  candidate's currency and identity frontier, the comparison's fence, and
+  the next frame's reuse of runs. In three steps, each sending what it sent
+  before:
   - **9b.1. One admission and one set of runs.** With the shell installed,
     the producer no longer plans runs for its own candidate or admits it.
     Each reader moves to the batch or to the candidate itself: the request
@@ -1086,6 +1087,19 @@ frame before the change driver.
     The family strips thus still follow the producer's own admission until
     the producer builds the batch itself (9b.3).
     Estimated saving: about 1.6 million steps of a typed letter's frame.
+    **Done** on 2026-10-28 (4cdfcbd3, d423d746, e840181f). The first runs
+    found that the producer's admission had also grown the engine's working
+    storage, refused a control the shell's DELTA cannot carry, asked the
+    terminal for space inside a DELTA, and refused draws while nothing was
+    shown; the DELTA path now does the first three itself, and the
+    empty-frame state builds alone. A typed letter's burst frame builds in
+    7.78 million steps against 9.63, sending the same 18 DELTAs and bytes.
+    Desk with each of the ten applications and the canonical journey passed
+    with the shadow check. Against the same runs before 9b.1, with the hash
+    seed pinned for the two whose frames vary between runs, they sent the
+    same presents but for one START that File Explorer overtook before
+    showing it, which reads as timing. See the
+    [evidence](../../local_testing/evidence/frames-follow-change-part9b1-20261028.md).
   - **9b.2. One bank.** The batch freezes into the producer's bank, beside
     the controls, keys and input targets the producer keeps, and the
     shell's own banks go.
