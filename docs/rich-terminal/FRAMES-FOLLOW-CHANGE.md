@@ -6,8 +6,8 @@ mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
 a frame Desk sends but never shows when a document is handed to Pad, and
 part 7 took on three faults part 6 found. Each part is approved on its
-own. Parts 0 to 8 and 6b are done. Decisions lists what is settled and
-what is still open.
+own. Parts 0 to 8 and 6b are done, and part 9 is under way. Decisions lists
+what is settled and what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -938,12 +938,63 @@ counts of parts 2 and 5. Both drivers use the same capture, check and
 lowering code. They differ in which elements they visit and in where their
 result goes.
 
+### What a frame build does now
+
+A typed letter's burst frame took 9.63 million steps to build at 4f4c935a,
+measured with the typing run at the start of this part. Three layers each
+rebuild the whole screen and then compare it with the frame on screen:
+
+- The snapshot adapter captures a document whole, every family of it,
+  whenever the document painted, and copies the others: 1.59 million.
+- The screen producer copies the snapshot, lowers every root again,
+  numbering identities by position (control *i* is the first object plus
+  *i*), admits every item, packs a target bank, and joins that bank's
+  controls to the acknowledged bank's by their keys, renumbering them to
+  the acknowledged identities: 4.22 million.
+- Desk's shell copies every one of those items into its regions, plans the
+  glyph runs of every region again, copying those of rows no draw changed,
+  admits the whole batch again, freezes it into a bank, and compares the
+  bank with its acknowledged one: 3.58 million. Its comparison is what goes
+  on the wire. The producer's only decides whether the frame can be a DELTA
+  and lends the shell its identities.
+
+Block moves cost almost nothing in this profile; the steps go to visiting
+every item, to check it, copy it with its pointers rebased, or compare it.
+Two more facts shape the change driver. No root can be lowered alone
+today: identities, text cursors and claims run across roots, and each lane
+checks a root against every claim placed before it. And the counters of
+parts 2 and 5 do not yet cover everything a capture reads (below).
+
+### What a root's capture reads
+
+The change driver's unit is a root: the menus of a document, a collection
+root (a text area, text grid, tab set or item view), a data-graphics root, a
+status field, a field, or the dialog a document shows. Its key is the one
+the comparison already joins controls by: the document, source, index,
+subkey, lifecycle and scope.
+
+Element revisions come from one count every document shares, so a root
+whose element, ancestors and the descendants it reads carry no revision
+newer than the frame's has not changed in UIDL. Widgets count their own
+changes. A capture also reads what nothing counts yet, and each must be
+counted by its owner or compared directly:
+
+- the regions of mounted widgets, which carry no counter;
+- which widgets a document mounts, and their keys, which change only when a
+  draw observes them;
+- data-graphics and field models an application edits in place;
+- which prompt is a document's overlay, and the screen's size;
+- whether a dialog is shown, and the count of dialog-element changes that
+  element dialogs embed, which every document shares;
+- Desk's shell model, whose epoch counts paints rather than changes.
+
 ### The change driver
 
 - **What changed.** The change driver reads the revisions that parts 2 and
-  5 add: each canonical widget's, and each UIDL element's. It also reads the
-  shell model's revision, each document's geometry, visibility, focus and
-  occlusion, and the CELL rows a draw changed (`ROW-DAMAGE`).
+  5 add: each canonical widget's, and each UIDL element's. It compares
+  directly what is not counted (above), the shell model included, and reads
+  each document's geometry, visibility, focus and occlusion, and the CELL
+  rows a draw changed (`ROW-DAMAGE`).
 - **What the projection keeps.** For each element that projects, the
   projection keeps the revisions it last projected and the wire items they
   became (decision 8).
@@ -975,27 +1026,60 @@ its capture (decision 14).
 
 ### Slices
 
-- **9a.** The change driver for application documents: the projection's
-  record of revisions and items, capture of changed elements into scratch,
-  and the pending change set. RUHA's banks go.
-- **9b.** Desk's chrome through the same projection, as one candidate. The
-  shell's second candidate, its work space and its frozen banks go.
-- **9c.** The renderer sends the pending change set as the DELTA and applies
-  it on ACK. The whole-screen comparison remains for the full driver alone.
+Laid out on 2026-10-28, once the snapshot, the producer and the shell had
+been read for this part. Their order is decision 15, still open; 9a.1 comes
+first in either order.
+
+- **9a.1. Change detection.** Each snapshot records, for each root, what
+  its capture read: the newest revision among the elements it reads, its
+  widget's and its model's revisions, and the facts compared directly. The
+  producer keeps these facts with each target bank, so the frame on screen
+  keeps the facts it was built from, and a pass over the visible documents
+  finds the roots that changed since. Nothing acts on the pass's answer
+  yet. With the shadow check on, every control, status field or instrument
+  the comparison finds changed must belong to a root the pass found
+  changed, or the run fails; each frame also counts the roots found changed
+  and those whose items changed. The gaps listed above are closed here, so
+  the change driver starts from detection the journeys have checked.
+- **9a.2. Each root captured and lowered alone.** The capture families and
+  the producer's lanes gain a word for one root, which the whole-screen
+  build calls in order, so both drivers share it. The build's output stays
+  the same to the byte.
+- **9a.3. The change driver.** When only roots' contents changed, and
+  nothing about the documents' places or the shell model did, the driver
+  captures and lowers the changed roots into scratch, takes each item's
+  identity from the frame on screen, checks the changed items, plans glyph
+  runs for the damaged rows once, and sends the changes as the DELTA. The
+  pending record is a copy of the acknowledged one with the changes written
+  in, so the next frame and every click read it as they read a built one.
+  Any other frame goes to the full driver.
+- **9a.4. RUHA's banks go.** The full driver captures into scratch too,
+  sized to one build. The full refresh lowers what it captures and compares
+  the items with those on screen.
+- **9b. One record of the frame.** Desk's chrome comes from the shell model
+  through the same projection, as one candidate. The shell's second
+  candidate, its work space and its frozen banks go.
+- **9c. The rest of the DELTA.** The other changes the terminal accepts in
+  a DELTA go through the change driver as well, such as controls that come
+  or go within what a DELTA may carry. The whole-screen comparison remains
+  for the full driver alone.
 
 **Proof.** The change driver passes over an element only when none of the
 counters it keeps for that element has moved. A capture reads only the
 element's state, its widget's state, and the document's geometry,
 visibility, focus and occlusion. Each is counted by its owner on every
-change (parts 2 and 5) or compared directly, so equal counters give an
-equal capture. Lowering an equal capture with the same region geometry,
-claims and negotiated features gives equal items, and the projection
-compares geometry, claims and features itself. The shadow check compares
-the two drivers on every frame of every test, and the full refresh finds in
-ordinary sessions what a missed count left stale.
+change (parts 2 and 5) or compared directly, once 9a.1 has closed the gaps
+listed above, so equal counters give an equal capture. Lowering an equal
+capture with the same region geometry, claims and negotiated features gives
+equal items, and the projection compares geometry, claims and features
+itself. The shadow check compares the two drivers on every frame of every
+test, and the full refresh finds in ordinary sessions what a missed count
+left stale.
 
-**Effect.** Most of the 6.28 million steps of building, copying and
-comparing in a typed letter's frame, and the copies' memory.
+**Effect.** A typed letter's frame build, 9.63 million steps at the start
+of this part, falls toward the target of about 2 million, an estimate each
+slice replaces with measurement. RUHA's banks, 19.1 MiB, and the shell's
+work space and banks are freed.
 
 ## Part 10. Today's structure retires — cleanup
 
@@ -1044,7 +1128,7 @@ fixes part 6 found (decision 12).
 | 6b | A document handed to Pad opens before Desk paints | done |
 | 7 | A repaint fills each cell once, then three faults part 6 found | done |
 | 8 | The occasional full refresh | done |
-| 9 | One projection, two drivers, in slices 9a to 9c | proposed |
+| 9 | One projection, two drivers, in slices 9a.1 to 9c | under way |
 | 10 | Today's structure retires | proposed |
 
 For each slice:
@@ -1204,3 +1288,18 @@ Taken on 2026-10-27:
     It does not check the producers' reuse of screen rows again, which the
     shadow check covers in tests. Of decision 3, the refresh keeps the full
     driver's capture alone.
+
+Open on 2026-10-28:
+
+15. **The order of part 9's slices.** In Desk the frame on the wire is the
+    shell's batch, while the producer's bank is the record that clicks on
+    an application's controls, and the next DELTA, read. A change driver
+    built before 9b must write both records and send its changes in the
+    shell's identities; 9b then leaves one record, and that half of the
+    driver goes. Built after 9b, the driver writes one record. 9b also
+    removes the second admission, the second glyph planning and the second
+    copy and comparison of every item, an estimated 2 to 3 million of a
+    typed letter's 9.63 million steps, on STARTs as well as DELTAs. The
+    choice is between the order listed, which keeps 9a's slices together,
+    and 9a.1, 9a.2, 9b, 9a.3, 9a.4, 9c, which is recommended. 9a.1 and
+    9a.2 come first either way.
