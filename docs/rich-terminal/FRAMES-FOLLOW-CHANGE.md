@@ -6,7 +6,7 @@ mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
 a frame Desk sends but never shows when a document is handed to Pad, and
 part 7 took on three faults part 6 found. Each part is approved on its
-own. Parts 0 to 7 and 6b are done. Decisions lists what is settled and
+own. Parts 0 to 8 and 6b are done. Decisions lists what is settled and
 what is still open.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
@@ -903,8 +903,9 @@ rows builds from the screen's own cells, which the check does not capture
 again; the shadow check keeps covering that reuse in tests.
 
 **What it costs.** One full capture of the visible documents per check,
-about 3 to 4 million steps by the frame build's profile, and nothing on the
-wire unless it finds a missed change.
+6.2 million steps in the typing run and about 8.0 million in the Desktop
+journey, where more documents show, and nothing on the wire unless it finds
+a missed change.
 
 **Change.** The check, its timing in the rich terminal's owner, its report,
 and a missed change as a reason for safe mode.
@@ -912,6 +913,23 @@ and a missed change as a reason for safe mode.
 **Tests.** A unit test changes a widget's borrowed data without its change
 word, and expects the next check to find the change and report it, safe
 mode to turn on, and the next capture to hold the change.
+
+**Done** on 2026-10-27 (ab0e4429 and 19b4b765). The check runs as above;
+it found no missed change in Desk with any application or in the Desktop
+journey, which made 79 or 80 checks a run. Its cost is twice the plan's
+estimate: a check is one capture of every visible document, without the
+reuse the frame build has. In the typing run the one check added 6.2
+million steps to 429.7 million; in the profiled journey 80 checks added
+634 million to 3,479 million, while the frame build and every present but
+a few cells of File Explorer's size column stayed the same. Desk with
+Streams found a fault: a check, about 8 million steps, could be running
+when a click arrived, and a tick and paint later in the same pass then drew
+a frame in which nothing changed, which sent nothing but made the click
+stale, so Streams never got it. The owner now reads the terminal again
+after a check, so such input comes before the rest of the pass. That a
+draw which changes and sends nothing makes the frame on screen stale for
+input stays an open defect, older than this part. The record is
+`local_testing/evidence/frames-follow-change-part8-20261027.md`.
 
 ## Part 9. One projection, two drivers — repeat, with memory
 
@@ -1025,7 +1043,7 @@ fixes part 6 found (decision 12).
 | 6 | Applications stop bridging change | done |
 | 6b | A document handed to Pad opens before Desk paints | done |
 | 7 | A repaint fills each cell once, then three faults part 6 found | done |
-| 8 | The occasional full refresh | proposed |
+| 8 | The occasional full refresh | done |
 | 9 | One projection, two drivers, in slices 9a to 9c | proposed |
 | 10 | Today's structure retires | proposed |
 
