@@ -1063,7 +1063,30 @@ frame before the change driver.
   path calls it yet.
 - **9b. One record of the frame.** Desk's chrome comes from the shell model
   through the same projection, as one candidate. The shell's second
-  candidate, its work space and its frozen banks go.
+  candidate, its work space and its frozen banks go. Today the producer
+  plans runs for its own one-region candidate and admits it, and in Desk
+  that candidate is never sent: the shell plans the runs again for each
+  region and admits its batch, which is. Yet about ten things in Desk's
+  paths read the producer's runs or admission: the family strips, the
+  request for terminal space, the owner's sizing, the candidate's currency
+  and identity frontier, the comparison's fence, and the next frame's reuse
+  of runs. In three steps, each sending what it sent before:
+  - **9b.1. One admission and one set of runs.** With the shell installed,
+    the producer no longer plans runs for its own candidate or admits it.
+    Each reader moves to the batch or to the candidate itself: the family
+    strips and the request for space follow the batch's admission, and the
+    producer's comparison matches the applications' controls without
+    pairing runs or needing a fence of its own. The producer plans and
+    admits its own candidate only before the owner opens, and when the
+    shell cannot build and that candidate goes out alone. Estimated saving:
+    about 1.6 million steps of a typed letter's frame.
+  - **9b.2. One bank.** The batch freezes into the producer's bank, beside
+    the controls, keys and input targets the producer keeps, and the
+    shell's own banks go.
+  - **9b.3. One build.** The producer builds the batch itself, calling the
+    shell's model, region and chrome words; the shell's work space, its
+    second copy of every item and its own comparison go, and the
+    producer's comparison covers the whole batch.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
