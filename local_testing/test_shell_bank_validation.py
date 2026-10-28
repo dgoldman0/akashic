@@ -1,41 +1,42 @@
-"""Owned bank parsing refuses escaped pointers and corrupt ACK frontiers."""
+"""Owned part parsing refuses escaped pointers and corrupt ACK frontiers."""
 from test_field_model import run_field
 from test_shell_family_clone import CLONE
 from test_shell_snapshot import PRELUDE as SOURCE
 
 FIXTURE = CLONE + SOURCE + r'''
-CREATE _SB-SS 247 ALLOT CREATE _SB-BS 32775 ALLOT CREATE _SB-CS 32775 ALLOT
+CREATE _SB-SS 247 ALLOT CREATE _SB-BS 32775 ALLOT
 CREATE _SB-PS RTHP-SIZE 7 + ALLOT CREATE _SB-HS SHSN-SIZE 7 + ALLOT
 CREATE _SB-XS RTE-SHELL-FACADE-SIZE 7 + ALLOT CREATE _SB-WS 4103 ALLOT
-: _SB-S _SB-SS 7 + -8 AND ; : _SB-B _SB-BS 7 + -8 AND ; : _SB-C _SB-CS 7 + -8 AND ;
+CREATE _SB-TS _RTHP-TARGET-BANK-HEADER-SIZE 7 + ALLOT
+: _SB-S _SB-SS 7 + -8 AND ; : _SB-B _SB-BS 7 + -8 AND ;
 : _SB-P _SB-PS 7 + -8 AND ; : _SB-H _SB-HS 7 + -8 AND ; : _SB-X _SB-XS 7 + -8 AND ;
-: _SB-W _SB-WS 7 + -8 AND ;
+: _SB-W _SB-WS 7 + -8 AND ; : _SB-T _SB-TS 7 + -8 AND ;
 VARIABLE _SB-BO VARIABLE _SB-U VARIABLE _SB-OLD
 : _SB-BUILD
     _SS-BUILD
     80 _SS-M SHM.WIDTH ! 24 _SS-M SHM.HEIGHT !
     23 1 _SS-M SHM-ENTRY SHME.ROW ! 23 2 _SS-M SHM-ENTRY SHME.ROW !
     _SS-FREEZE _SS-VALID 0= _RC-A
-    _SB-S 240 0 FILL _SB-B 32768 0 FILL
-    _SB-B _SB-S _RSHSP.A ! 32768 _SB-S _RSHSP.A-U !
-    RSHSP-BANK-HEADER-SIZE _SB-B RSHSP-BANK.MODEL ! _SS-U @ _SB-B RSHSP-BANK.MODEL-U !
-    _SS-F _SB-B RSHSP-BANK-HEADER-SIZE + _SS-U @ MOVE
-    _SS-U @ 7 + -8 AND RSHSP-BANK-HEADER-SIZE + DUP _SB-BO ! _SB-B RSHSP-BANK.BATCH !
+    _SB-B 32768 0 FILL _SB-T _RTHP-TARGET-BANK-HEADER-SIZE 0 FILL
+    \ The producer's first extension block holds the part its bank names.
+    _SB-P RTHP-SIZE 0 FILL _SB-P _RSHSP-P !
+    _SB-B _SB-P _RTHP.XBLOCK0-A ! 32768 _SB-P _RTHP.XBLOCK0-U !
+    RSHSP-PART-HEADER-SIZE _SB-B RSHSP-PART.MODEL ! _SS-U @ _SB-B RSHSP-PART.MODEL-U !
+    _SS-F _SB-B RSHSP-PART-HEADER-SIZE + _SS-U @ MOVE
+    _SS-U @ 7 + -8 AND RSHSP-PART-HEADER-SIZE + DUP _SB-BO ! _SB-B RSHSP-PART.BATCH !
     _RC-BATCH _SB-B _SB-BO @ + 32768 _SB-BO @ - RSHFC-COPY 0= _RC-A
-    _SB-BO @ + DUP _SB-U ! _SB-B RSHSP-BANK.USED !
-    1234 _SB-B RSHSP-BANK.TARGET ! 3 _SB-B RSHSP-BANK.DRAW !
-    7 _SB-B RSHSP-BANK.OWNER ! 9 _SB-B RSHSP-BANK.GENERATION !
-    21 _SB-B RSHSP-BANK.NEXT-REGION ! 106 _SB-B RSHSP-BANK.NEXT-OBJECT ! ;
-: _SB-VALID _SB-B _SB-S _RSHSP-BANK-VALID? ;
+    _SB-BO @ + DUP _SB-U ! _SB-T _RTHP-TB.XBLOCK-BYTES !
+    _SB-B _SB-T _RTHP-TB.XBLOCK ! 3 _SB-T _RTHP-TB.DRAW !
+    7 _SB-T _RTHP-TB.OWNER ! 9 _SB-T _RTHP-TB.GENERATION !
+    21 _SB-B RSHSP-PART.NEXT-REGION ! 106 _SB-B RSHSP-PART.NEXT-OBJECT ! ;
+: _SB-VALID _SB-T _RSHSP-PART-VALID? ;
 : _SB-BAD ( value field -- ) DUP @ >R DUP >R ! _SB-VALID 0= _RC-A R> R> SWAP ! ;
 : _SB-BATCH _SB-B _SB-BO @ + ;
 : _SB-HEADER
     _SB-S 240 0 FILL
-    _RSHSP-MAGIC _SB-S _RSHSP.MAGIC ! 208 _SB-S _RSHSP.SIZE ! _SB-S _SB-S _RSHSP.SELF !
+    _RSHSP-MAGIC _SB-S _RSHSP.MAGIC ! RSHSP-SIZE _SB-S _RSHSP.SIZE ! _SB-S _SB-S _RSHSP.SELF !
     _SB-P _SB-S _RSHSP.PRODUCER ! _SB-H _SB-S _RSHSP.SOURCE ! _SB-X _SB-S _RSHSP.SHELL !
-    _SB-W _SB-S _RSHSP.WORK ! 4096 _SB-S _RSHSP.WORK-U !
-    _SB-B _SB-S _RSHSP.A ! 32768 _SB-S _RSHSP.A-U !
-    _SB-C _SB-S _RSHSP.B ! 32768 _SB-S _RSHSP.B-U ! ;
+    _SB-W _SB-S _RSHSP.WORK ! 4096 _SB-S _RSHSP.WORK-U ! ;
 '''
 
 
@@ -44,21 +45,27 @@ def run(program, minimum=1):
               extra_sources=("tui/rich-terminal/shell-screen-producer.f",))
 
 
-def test_owned_bank_graph_offsets_frontiers_and_whole_clone_extent():
+def test_owned_part_graph_offsets_frontiers_and_whole_clone_extent():
     run(FIXTURE + r'''
 _SB-BUILD _SB-VALID _RC-A
-0 _SB-B RSHSP-BANK.NEXT-REGION _SB-BAD
-22 _SB-B RSHSP-BANK.NEXT-REGION _SB-BAD
-0 _SB-B RSHSP-BANK.NEXT-OBJECT _SB-BAD
-107 _SB-B RSHSP-BANK.NEXT-OBJECT _SB-BAD
+0 _SB-B RSHSP-PART.NEXT-REGION _SB-BAD
+22 _SB-B RSHSP-PART.NEXT-REGION _SB-BAD
+0 _SB-B RSHSP-PART.NEXT-OBJECT _SB-BAD
+107 _SB-B RSHSP-PART.NEXT-OBJECT _SB-BAD
 \ A prompt identity for a model without Desk's prompt.
-101 _SB-B RSHSP-BANK.PROMPT _SB-BAD
-_SB-U @ 8 + _SB-B RSHSP-BANK.USED _SB-BAD
-_SB-BO @ 8 + _SB-B RSHSP-BANK.BATCH _SB-BAD
-RSHSP-BANK-HEADER-SIZE 8 + _SB-B RSHSP-BANK.MODEL _SB-BAD
-81 _SB-B RSHSP-BANK-HEADER-SIZE + SHM.WIDTH _SB-BAD
+101 _SB-B RSHSP-PART.PROMPT _SB-BAD
+_SB-U @ 8 + _SB-T _RTHP-TB.XBLOCK-BYTES _SB-BAD
+_SB-BO @ 8 + _SB-B RSHSP-PART.BATCH _SB-BAD
+RSHSP-PART-HEADER-SIZE 8 + _SB-B RSHSP-PART.MODEL _SB-BAD
+81 _SB-B RSHSP-PART-HEADER-SIZE + SHM.WIDTH _SB-BAD
+\ The bank names the part at the start of an extension block, and records
+\ the frame the part's catalog and batch describe.
+_SB-B 8 + _SB-T _RTHP-TB.XBLOCK _SB-BAD
+4 _SB-T _RTHP-TB.DRAW _SB-BAD
+8 _SB-T _RTHP-TB.OWNER _SB-BAD
+10 _SB-T _RTHP-TB.GENERATION _SB-BAD
 _RC-CAT _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
-_SB-B RSHSP-BANK-HEADER-SIZE + _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
+_SB-B RSHSP-PART-HEADER-SIZE + _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
 _RC-FAM _SB-BATCH _RTE-FB.FAMILIES-A _SB-BAD
 _SB-BATCH _RTE-FB.FAMILIES-A @ _RTE-FE.PLAN-A DUP @ _SB-OLD !
 _RC-CP SWAP ! _SB-VALID 0= _RC-A
@@ -74,7 +81,7 @@ _RC-FAM 256 + _RC-FAM 64 MOVE 64 _RC-BATCH _RTE-FB.FAMILIES-U !
 0 _RC-FAM _RTE-FE.BYTES-A ! 0 _RC-FAM _RTE-FE.BYTES-U !
 _SB-BUILD _SB-VALID 0= _RC-A
 _RC-DONE
-''', minimum=21)
+''', minimum=25)
 
 
 def test_nested_descriptor_alias_refuses_before_private_scratch_store():
@@ -116,9 +123,10 @@ _RC-DONE
 
 
 def test_ruha_storage_is_proved_apart_from_all_four_sidecar_spans():
-    """One proof of RUHA's spans covers the descriptor, work space and both
-    banks: a range touching any of them is refused, a range between them
-    is not."""
+    """One proof of RUHA's spans covers the shell's record, its work space
+    and the screen producer's two extension blocks, which the shell freezes
+    into: a range touching any of them is refused, a range between them is
+    not."""
     run(FIXTURE + r'''
 4096 64 0 _RSHSP-SPAN! 8192 128 1 _RSHSP-SPAN!
 16384 256 2 _RSHSP-SPAN! 32768 512 3 _RSHSP-SPAN!
@@ -155,10 +163,13 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
     external = word("_RSHSP-EXTERNAL?")
     assert "SHSN-LIVE-STORAGE-DISJOINT?" in external and "_SHSN-" not in external
     authority = word("_RSHSP-AUTHORITY?")
-    # Only the producer's arena, which the header does not cover, is checked.
+    # Only the producer's arena and extension blocks, which the header does
+    # not cover, are checked.
     assert "_RSHSP-HEADER?" not in authority
     assert authority.count("_RSHSP-SPAN?") == 1
     assert "_RTHP.ARENA-U @ _RSHSP-SPAN?" in authority
+    assert authority.index("_RSHSP-XBLOCK-SPANS?") < authority.index("_RSHSP-SPANS? ;")
+    assert word("_RSHSP-XBLOCK-SPANS?").count("_RSHSP-SPAN?") == 2
     # Every caller checks the header, or each span, first.  The dispatch
     # checks the records' names in both modes, then, with every-frame checks
     # on, the header and the storage, and otherwise binds them.
@@ -190,8 +201,8 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
 def test_the_freeze_takes_the_graph_the_preflight_checked():
     """The batch's graph is checked by the preflight at the end of
     BUILD-BATCH; the freeze measures and copies it as proved. Between the two
-    only the DELTA's identity mapping writes the batch, and the frozen bank
-    is still checked in full."""
+    only the DELTA's identity mapping writes the batch, and the frozen part
+    is still checked in full once the pending bank names it."""
     import re
     from pathlib import Path
 
@@ -209,13 +220,15 @@ def test_the_freeze_takes_the_graph_the_preflight_checked():
     freeze = word("_RSHSP-FREEZE")
     assert "_RSHSP-BATCH @ _RSHFC-MEASURE-PROVED" in freeze
     assert "RSHFC-MEASURE " not in freeze and "_RSHFC-COPY-PROVED" in freeze
-    # The finished bank, a proved copy, is checked again only with
-    # every-frame checks on, as is the producer's copy of the published model;
-    # a failure names what it found damaged (check-mode.f).
+    # The finished part, a proved copy, becomes the pending bank's, and is
+    # checked again only with every-frame checks on, as is the producer's
+    # copy of the published model; a failure names what it found damaged
+    # (check-mode.f).
     assert freeze.rstrip().endswith(
-        "CHK-EVERY-FRAME? IF\n"
-        "        _RSHSP-BANK @ _RSHSP-S @ _RSHSP-BANK-VALID?\n"
-        "            _RSHSP-BANKS-DAMAGED CHK-NAME _RSHSP-CHECK\n"
+        "    _RSHSP-PART @ _RSHSP-PART-USED @ _RSHSP-P @ _RTHP-XBLOCK!\n"
+        "    CHK-EVERY-FRAME? IF\n"
+        "        _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-PART-VALID?\n"
+        "            _RSHSP-PARTS-DAMAGED CHK-NAME _RSHSP-CHECK\n"
         "    THEN ;"
     )
     assert (

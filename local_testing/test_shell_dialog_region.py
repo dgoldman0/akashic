@@ -62,9 +62,9 @@ VARIABLE _SG-DU VARIABLE _SG-REV
     LOOP
     _SG-CX _SX-P _RTHP.CORR-A !
     104 _SX-SI _RTE-STATIC.ID ! 104 _SX-P _RTHP.STATIC-LAST ! ;
-\ Every BUTTON of a bank's control families, in order.
+\ Every BUTTON of a part's control families, in order.
 VARIABLE _SG-SEEN
-: _SG-BUTTONS-IN ( region bank -- n )
+: _SG-BUTTONS-IN ( region part -- n )
     0 _SG-SEEN ! _SP-BATCH DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 ?DO
         DUP I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-CONTROL = IF
             RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE / 0 ?DO
@@ -83,10 +83,10 @@ def test_a_pane_dialog_and_its_buttons_take_a_modal_region_over_the_pane():
     staged_run(STAGED_DIALOG + r'''
 _SX-SETUP _SG-CANDIDATE ' _SG-PAINT DRW-OVERLAY _SP-DIALOGS
 _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One modal region, the catalog's last, over the pane's content and above it.
 _SX-KA _SP-MODALS 1 = _SS-A
-_SP-MODAL @ _RTE-IR.ID @ _SX-KA RSHSP-BANK.NEXT-REGION @ 1- = _SS-A
+_SP-MODAL @ _RTE-IR.ID @ _SX-KA RSHSP-PART.NEXT-REGION @ 1- = _SS-A
 _SP-MODAL @ _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR = _SS-A
 _SP-MODAL @ _RTE-IR.CLIP-X @ 0= _SS-A _SP-MODAL @ _RTE-IR.CLIP-Y @ 0= _SS-A
 _SP-MODAL @ _RTE-IR.CLIP-COLS @ 19 = _SS-A _SP-MODAL @ _RTE-IR.CLIP-ROWS @ 9 = _SS-A
@@ -125,7 +125,7 @@ REFUSALS = {
 def test_other_paint_or_a_misplaced_dialog_refuses_the_shell_candidate(case):
     staged_run(STAGED_DIALOG + REFUSALS[case] + r'''
 _SP-DIALOGS _RSHSP-PREPARE RTE-S-UNAVAILABLE = _SS-A
-_SX-S _RSHSP.PENDING @ 0= _SS-A
+_RSHSP-PENDING-PART 0= _SS-A
 _SS-DONE
 ''', minimum=2)
 
@@ -133,7 +133,7 @@ _SS-DONE
 DELTA_DIALOG = DELTA_PROMPT + DIALOG + r'''
 \ The pending target bank carries the four controls with their identities.
 : _SG-PENDING ( bank -- )
-    DUP 4096 0 FILL
+    DUP 4096 0 FILL DUP _SX-BANK
     4 OVER _RTHP-TB.CONTROL-COUNT !
     _SG-CI OVER _RTHP-PACK-CONTROLS-A RTE-CONTROL-SIZE 4 * MOVE
     _SG-CX OVER _RTHP-PACK-CORR-A RUCP-CORRELATION-SIZE 4 * MOVE
@@ -149,23 +149,23 @@ def test_a_delta_keeps_the_dialogs_modal_region_and_a_closed_dialog_restarts():
     staged_run(DELTA_DIALOG + r'''
 _SX-SETUP _SD-HOOKS _SG-CANDIDATE _SP-DIALOGS
 ' _SG-HELLO-DIALOG _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
-_SX-S _RSHSP.ACTIVE @ _SX-KA = _SS-A _SX-KA _SP-MODALS 1 = _SS-A
+_RSHSP-ACTIVE-PART _SX-KA = _SS-A _SX-KA _SP-MODALS 1 = _SS-A
 \ A changed letter in the pane while the dialog stays open is a DELTA.
 ' _SG-HELLP-DIALOG _SD-DRAW _SD-TA _SG-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
-_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A _SD-CATALOGS= _SS-A
+_SX-KB _SX-PART-VALID? _SS-A _SD-CATALOGS= _SS-A
 _SX-KB _SP-MODALS 1 = _SS-A
 RTE-CONTROL-DIALOG _SX-KB _SP-CONTROL _RTE-CONTROL.REGION @ _SP-MODAL @ _RTE-IR.ID @ = _SS-A
 _SP-MODAL @ _RTE-IR.ID @ _SX-KB _SG-BUTTONS-IN 2 = _SS-A
 _SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-CREPLACE @ 0= _SS-A
-_SD-ACK _SX-S _RSHSP.ACTIVE @ _SX-KB = _SS-A
+_SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A
 \ With the dialog closed the catalog loses its modal region: a START.
 _SX-CI _SX-P _RTHP.CONTROLS-A ! 1 _SX-P _RTHP.CONTROL-COUNT ! _SX-CX _SX-P _RTHP.CORR-A !
 101 _SX-SI _RTE-STATIC.ID ! 101 _SX-P _RTHP.STATIC-LAST !
-' _SG-CLOSED _SD-DRAW _SD-TA _SD-PENDING
+' _SG-CLOSED _SD-DRAW _SD-TB _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE RTE-S-OK <> _SS-A
-_SX-S _RSHSP.PENDING @ 0= _SS-A
-_RSHSP-PREPARE _SS-OK _SX-S _RSHSP.PENDING @ _SX-KA = _SS-A _SX-KA _SP-MODALS 0= _SS-A
+_RSHSP-PENDING-PART 0= _SS-A
+_RSHSP-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KA = _SS-A _SX-KA _SP-MODALS 0= _SS-A
 _SS-DONE
 ''', minimum=18)
 

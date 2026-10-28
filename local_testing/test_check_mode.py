@@ -98,7 +98,7 @@ def test_every_check_that_runs_only_with_every_check_on_names_its_structure():
     for name, word, body in words:
         # Taking a seal is not a check: it records what a later check
         # compares, and that check names what it finds.
-        if word == "_RTHP-SEAL-TAKE":
+        if word == "_RTHP-BANK-SEAL-TAKE":
             continue
         # The shell's proved emission names through one helper of its own,
         # and the checks of a seal through the one that compares seals.

@@ -546,7 +546,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        637,
+        641,
         {
             "magic": 0,
             "size": 1,
@@ -694,6 +694,10 @@ _GUEST_FAILURE_RECORDS = {
             "active_seal": 634,
             "shell_built": 635,
             "base_z": 636,
+            "xblock0_address": 637,
+            "xblock0_bytes": 638,
+            "xblock1_address": 639,
+            "xblock1_bytes": 640,
         },
     ),
     "engine": (
@@ -11785,18 +11789,19 @@ def _producer_fallback_record(client, producer: int) -> dict:
 
 # The shell producer's storage, found from the extension it installed in the
 # hybrid producer: its descriptor sits at this offset in the shell record.
-_SHELL_EXTENSION_OFFSET = 168
+# The shell's part of each frame lies in the hybrid producer's extension
+# blocks, which the growing storage record reports.
+_SHELL_EXTENSION_OFFSET = 88
 _SHELL_STORAGE_FIELDS = {
     "work_bytes": 7,
-    "bank_a_bytes": 9,
-    "bank_b_bytes": 11,
-    "bank_bytes_used": 18,
-    "work_bytes_used": 19,
+    "part_bytes_needed": 8,
+    "work_bytes_used": 9,
 }
 
 
 def _shell_storage_record(client, producer: int) -> dict:
-    """How much of its work arena and banks the shell producer has used."""
+    """How much of its work arena the shell producer has used, and the bytes
+    its last part of a frame needed."""
 
     if not isinstance(producer, int) or producer <= 0:
         return {"unavailable": True}
@@ -11818,8 +11823,9 @@ def _shell_storage_record(client, producer: int) -> dict:
 
 # Storage that grows from Desk's memory source: the screen producer's arena
 # and its capacities, the engine's working banks, and what the source holds.
-_PRODUCER_STORAGE_FIELDS = ("arena_bytes", "kept_arena_bytes", "max_records",
-                            "max_text", "max_cols", "max_rows")
+_PRODUCER_STORAGE_FIELDS = ("arena_bytes", "kept_arena_bytes", "xblock0_bytes",
+                            "xblock1_bytes", "max_records", "max_text", "max_cols",
+                            "max_rows")
 _ENGINE_STORAGE_FIELDS = {"operation_capacity": 8, "copy_bytes": 10,
                           "control_ledger_capacity": 65}
 _MEMORY_SOURCE_HELD = 5

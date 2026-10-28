@@ -514,24 +514,17 @@ VARIABLE _A1D-SHELL-SOURCE-B
     _A1D-SHELL-SOURCE-A @ 0<> _A1D-SHELL-SOURCE-B @ 0<> AND
     DUP 0= IF _A1D-SOURCE-FIRST-FREE THEN ;
 
-\ The shell producer's first work space and banks, until it takes them over.
+\ The shell producer's first work space, until it takes it over.  The shell's
+\ part of each frame lies in the screen producer's extension blocks, which
+\ the producer takes from the memory source itself.
 VARIABLE _A1D-SHELL-WORK
-VARIABLE _A1D-SHELL-A
-VARIABLE _A1D-SHELL-B
 
-\ Given back in the reverse of the order they are taken.
 : _A1D-SHELL-FIRST-FREE ( -- )
-    _A1D-SHELL-B @ ?DUP IF RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-FREE THEN
-    _A1D-SHELL-A @ ?DUP IF RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-FREE THEN
     _A1D-SHELL-WORK @ ?DUP IF RSHSP-FIRST-WORK-BYTES _A1D-MEMORY MSRC-FREE THEN
-    0 _A1D-SHELL-WORK ! 0 _A1D-SHELL-A ! 0 _A1D-SHELL-B ! ;
+    0 _A1D-SHELL-WORK ! ;
 
 : _A1D-SHELL-FIRST? ( -- flag )
-    RSHSP-FIRST-WORK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-WORK !
-    RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-A !
-    RSHSP-FIRST-BANK-BYTES _A1D-MEMORY MSRC-ALLOC _A1D-SHELL-B !
-    _A1D-SHELL-WORK @ 0<> _A1D-SHELL-A @ 0<> AND _A1D-SHELL-B @ 0<> AND
-    DUP 0= IF _A1D-SHELL-FIRST-FREE THEN ;
+    RSHSP-FIRST-WORK-BYTES _A1D-MEMORY MSRC-ALLOC DUP _A1D-SHELL-WORK ! 0<> ;
 
 \ This separate phase also covers failures before the terminal owner exists.
 \ It advances only after an individual constructor or installation succeeds.
@@ -560,13 +553,12 @@ VARIABLE _A1D-SHELL-PHASE
     _A1D-SHELL-FIRST? 0= IF SCB-S-INVALID EXIT THEN
     _A1D-SHELL-SOURCE _A1D-SHELL-FACADE _A1D-SCREEN
     _A1D-SHELL-WORK @ RSHSP-FIRST-WORK-BYTES
-    _A1D-SHELL-A @ RSHSP-FIRST-BANK-BYTES _A1D-SHELL-B @ RSHSP-FIRST-BANK-BYTES
     _A1D-SHELL-PRODUCER RSHSP-INIT
     RTE-S-OK <> IF _A1D-SHELL-FIRST-FREE SCB-S-INVALID EXIT THEN
     \ From here the shell producer owns its storage and grows it.
     _A1D-MEMORY _A1D-SHELL-PRODUCER RSHSP-MEMORY!
     RTE-S-OK <> IF _A1D-SHELL-FIRST-FREE SCB-S-INVALID EXIT THEN
-    0 _A1D-SHELL-WORK ! 0 _A1D-SHELL-A ! 0 _A1D-SHELL-B !
+    0 _A1D-SHELL-WORK !
     4 _A1D-SHELL-PHASE !
     _A1D-SHELL-PRODUCER RSHSP-INSTALL
     RTE-S-OK <> IF SCB-S-INVALID EXIT THEN

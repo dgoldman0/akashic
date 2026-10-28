@@ -89,7 +89,7 @@ def test_a_chain_goes_to_its_outermost_check_and_wrappers_are_looked_through(tmp
 
 
 def test_the_command_reports_both_windows(tmp_path, capsys) -> None:
-    records = [_interval(1_000_300, {_chain(*BUILD, "_RSHSP-BANK-VALID?"): 4}),
+    records = [_interval(1_000_300, {_chain(*BUILD, "_RSHSP-PART-VALID?"): 4}),
                _interval(1_001_500, {_chain(*BUILD, "_RTHP-BUILD-CONTROLS"): 6})]
     _write_run(tmp_path, records, [_present(1_000_350, "DELTA"), _present(1_001_600, "DELTA")])
     out = tmp_path / "checks.json"

@@ -49,7 +49,7 @@ VARIABLE _SF-VA VARIABLE _SF-VU VARIABLE _SF-SREPLACE
 \ The catalog's status region: VISIBLE and CLIPPED, not modal, its clip the
 \ taskbar row past its entries.
 VARIABLE _SF-REGION
-: _SF-REGIONS ( bank -- n )
+: _SF-REGIONS ( part -- n )
     0 _SF-REGION ! 0 SWAP _SP-BATCH _RTE-FB.CATALOG-A @
     DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @ 96 / 0 ?DO
         DUP I 96 * + DUP _RTE-IR.CLIP-Y @ 11 = OVER _RTE-IR.CLIP-ROWS @ 1 = AND
@@ -57,7 +57,7 @@ VARIABLE _SF-REGION
             _SF-REGION ! SWAP 1+ SWAP ELSE DROP THEN
     LOOP DROP ;
 \ The first STATUS_FIELD static on ROW, or 0.
-: _SF-STATIC-ON ( row bank -- static|0 )
+: _SF-STATIC-ON ( row part -- static|0 )
     _SP-BATCH DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 ?DO
         DUP I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-STATIC = IF
             RTE-FAMILY-ITEMS@ RTE-STATIC-SIZE / 0 ?DO
@@ -67,15 +67,15 @@ VARIABLE _SF-REGION
             LOOP DROP
         ELSE DROP THEN
     LOOP 2DROP 0 ;
-: _SF-STATIC ( bank -- static|0 ) 11 SWAP _SF-STATIC-ON ;
-: _SF-APP-STATIC ( bank -- static|0 ) 2 SWAP _SF-STATIC-ON ;
-: _SF-PANE-ID ( bank -- id )
+: _SF-STATIC ( part -- static|0 ) 11 SWAP _SF-STATIC-ON ;
+: _SF-APP-STATIC ( part -- static|0 ) 2 SWAP _SF-STATIC-ON ;
+: _SF-PANE-ID ( part -- id )
     _SP-BATCH DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 ?DO
         DUP I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-PANE = IF
             RTE-FAMILY-ITEMS@ DROP _RTE-PANE.ID @ NIP UNLOOP EXIT
         THEN DROP
     LOOP DROP 0 ;
-: _SF-PEND ( -- bank ) _SX-S _RSHSP.PENDING @ ;
+: _SF-PEND ( -- part ) _RSHSP-PENDING-PART ;
 : _SF-TEXT= ( a u static -- flag )
     DUP _RTE-STATIC.VALUE-A @ SWAP _RTE-STATIC.VALUE-U @ COMPARE 0= ;
 '''
@@ -85,11 +85,11 @@ def test_desks_status_lies_in_a_region_of_its_own_across_the_taskbars_right_end(
     staged_run(STATUS + r'''
 _SF-SETUP _SF-FIELDS
 _SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One region across the taskbar row past its entries, the catalog's last,
 \ at the taskbar's z and no modal scope.
 _SX-KA _SF-REGIONS 1 = _SS-A
-_SF-REGION @ _RTE-IR.ID @ _SX-KA RSHSP-BANK.NEXT-REGION @ 1- = _SS-A
+_SF-REGION @ _RTE-IR.ID @ _SX-KA RSHSP-PART.NEXT-REGION @ 1- = _SS-A
 _SF-REGION @ _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR = _SS-A
 _SF-REGION @ _RTE-IR.COLS @ 32 = _SS-A _SF-REGION @ _RTE-IR.ROWS @ 12 = _SS-A
 _SF-REGION @ _RTE-IR.Z @ 1 = _SS-A _SX-KA _SP-MODALS 0= _SS-A
@@ -119,7 +119,7 @@ def test_without_status_fields_or_with_paint_over_it_the_status_is_residual():
     staged_run(STATUS + r'''
 _SF-SETUP
 _SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A
 _SX-KA _SF-REGIONS 0= _SS-A _SX-KA _SF-STATIC 0= _SS-A
 _SX-KA _SN-TASK 0<> _SS-A
 \ A foreground cell over the status leaves it residual, and the taskbar
@@ -128,7 +128,7 @@ _SF-FIELDS
 : _SF-STRAY-CELL 88 11 20 DRW-CHAR ;
 : _SF-STRAY _SF-PAINT ['] _SF-STRAY-CELL DRW-OVERLAY ;
 ' _SF-STRAY _SD-DRAW _RSHSP-PREPARE _SS-OK
-_SF-PEND _SX-S _RSHSP-BANK-VALID? _SS-A
+_SF-PEND _SX-PART-VALID? _SS-A
 _SF-PEND _SF-REGIONS 0= _SS-A _SF-PEND _SF-STATIC 0= _SS-A
 _SF-PEND _SN-TASK 0<> _SS-A _SF-PEND _SN-LAUNCHER 0<> _SS-A
 _SS-DONE
@@ -139,18 +139,18 @@ def test_a_changed_status_is_a_delta_and_one_that_comes_or_goes_restarts():
     staged_run(STATUS + r'''
 _SF-SETUP _SF-FIELDS
 _SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
-_SX-S _RSHSP.ACTIVE @ _SX-KA = _SS-A
+_RSHSP-ACTIVE-PART _SX-KA = _SS-A
 \ Working, a wider value in another severity, moves the status left: a
 \ DELTA that keeps the catalog and the status's identity and replaces it.
 : _SF-WORKING S" working" ; _SF-WORKING 1 _SF-SHOW
 ' _SF-PAINT _SD-DRAW _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
-_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A _SD-CATALOGS= _SS-A
+_SX-KB _SX-PART-VALID? _SS-A _SD-CATALOGS= _SS-A
 _SX-KB _SF-STATIC DUP _RTE-STATIC.ID @ _SX-KA _SF-STATIC _RTE-STATIC.ID @ = _SS-A
 DUP _RTE-STATIC.COL @ 15 = _SS-A DUP _RTE-STATIC.WIDTH @ 16 = _SS-A
 DUP _RTE-STATIC.SEVERITY @ 1 = _SS-A _SF-WORKING ROT _SF-TEXT= _SS-A
 _SD-EMIT _SS-OK _SF-SREPLACE @ 1 = _SS-A _SD-CREPLACE @ 0= _SS-A _SD-PREPLACE @ 0= _SS-A
-_SD-ACK _SX-S _RSHSP.ACTIVE @ _SX-KB = _SS-A
+_SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A
 \ A status that goes is a START with no status region.
 _SF-HIDE ' _SF-PAINT _SD-DRAW _SD-TB _SD-PENDING
 _RSHSP-DELTA-PROBE RTE-S-OK <> _SS-A
@@ -174,7 +174,7 @@ _SF-SETUP _SP-DIALOGS _SF-FIELDS 15 _SN-COL !
     _SN-PUT _SF-PUT _SF-CELLS ['] _SN-BAR DRW-OVERLAY _SS-M SHM-SEAL ;
 _SN-SAVED 3 _SN-SHOW _SF-READY 0 _SF-SHOW
 ' _SF-UNDER _SD-DRAW _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 _SX-KA _SF-STATIC 0<> _SS-A _SX-KA _SN-DIALOG 0<> _SS-A
 \ The notice's region lies above the status's.
 _SX-KA _SF-REGIONS 1 = _SS-A _SF-REGION @ _RTE-IR.Z @ 1 = _SS-A

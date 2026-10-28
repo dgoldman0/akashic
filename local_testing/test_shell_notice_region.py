@@ -40,16 +40,16 @@ VARIABLE _SN-TA VARIABLE _SN-TU
 \ The catalog's notice region: VISIBLE and CLIPPED, not modal, its clip the
 \ notice.
 VARIABLE _SN-REGION
-: _SN-REGIONS ( bank -- n )
+: _SN-REGIONS ( part -- n )
     0 _SN-REGION ! 0 SWAP _SP-BATCH _RTE-FB.CATALOG-A @
     DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @ 96 / 0 ?DO
         DUP I 96 * + DUP _RTE-IR.CLIP-Y @ 11 = OVER _RTE-IR.CLIP-ROWS @ 1 = AND
         OVER _RTE-IR.CLIP-COLS @ 9 = AND IF
             _SN-REGION ! SWAP 1+ SWAP ELSE DROP THEN
     LOOP DROP ;
-: _SN-DIALOG ( bank -- control|0 ) RTE-CONTROL-DIALOG SWAP _SP-CONTROL ;
-: _SN-TASK ( bank -- control|0 ) RTE-CONTROL-TASK SWAP _SP-CONTROL ;
-: _SN-LAUNCHER ( bank -- control|0 ) RTE-CONTROL-LAUNCHER SWAP _SP-CONTROL ;
+: _SN-DIALOG ( part -- control|0 ) RTE-CONTROL-DIALOG SWAP _SP-CONTROL ;
+: _SN-TASK ( part -- control|0 ) RTE-CONTROL-TASK SWAP _SP-CONTROL ;
+: _SN-LAUNCHER ( part -- control|0 ) RTE-CONTROL-LAUNCHER SWAP _SP-CONTROL ;
 '''
 
 
@@ -57,11 +57,11 @@ def test_a_notice_lies_in_a_region_of_its_own_above_the_taskbar_it_covers():
     staged_run(NOTICE + r'''
 _SN-SETUP _SP-DIALOGS
 _SN-SAVED 3 _SN-SHOW ' _SN-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One region of the notice's cells, the catalog's last, above the rest and
 \ no modal scope.
 _SX-KA _SN-REGIONS 1 = _SS-A
-_SN-REGION @ _RTE-IR.ID @ _SX-KA RSHSP-BANK.NEXT-REGION @ 1- = _SS-A
+_SN-REGION @ _RTE-IR.ID @ _SX-KA RSHSP-PART.NEXT-REGION @ 1- = _SS-A
 _SN-REGION @ _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR = _SS-A
 _SN-REGION @ _RTE-IR.COLS @ 32 = _SS-A _SN-REGION @ _RTE-IR.ROWS @ 12 = _SS-A
 _SN-REGION @ _RTE-IR.CLIP-X @ 2 = _SS-A _SN-REGION @ _RTE-IR.Z @ 4 = _SS-A
@@ -91,7 +91,7 @@ def test_without_dialogs_a_notice_is_paint_and_the_taskbar_under_it_residual():
     staged_run(NOTICE + r'''
 _SN-SETUP
 _SN-SAVED 3 _SN-SHOW ' _SN-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A
 _SX-KA _SN-REGIONS 0= _SS-A _SX-KA _SN-DIALOG 0= _SS-A
 _SX-KA _SN-TASK 0= _SS-A _SX-KA _SN-LAUNCHER 0= _SS-A
 _SS-DONE
@@ -113,21 +113,21 @@ def test_a_notice_stays_a_delta_and_one_that_comes_or_goes_restarts():
     staged_run(NOTICE + r'''
 _SN-SETUP _SP-DIALOGS
 _SN-SAVED 3 _SN-SHOW ' _SN-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
-_SX-S _RSHSP.ACTIVE @ _SX-KA = _SS-A
+_RSHSP-ACTIVE-PART _SX-KA = _SS-A
 \ A changed letter in the pane with the same notice is a DELTA that keeps
 \ the notice's region and identity and sends nothing for it.
 : _SN-HELLP _SN-PAINT 80 5 6 DRW-CHAR ;
 ' _SN-HELLP _SD-DRAW _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
-_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A _SD-CATALOGS= _SS-A
+_SX-KB _SX-PART-VALID? _SS-A _SD-CATALOGS= _SS-A
 _SX-KB _SN-DIALOG _RTE-CONTROL.ID @ _SX-KA _SN-DIALOG _RTE-CONTROL.ID @ = _SS-A
 _SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-CREPLACE @ 0= _SS-A
-_SD-ACK _SX-S _RSHSP.ACTIVE @ _SX-KB = _SS-A
+_SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A
 \ Another notice in its place is a START.
 : _SN-FAILED S" Fail!" ; _SN-FAILED 4 _SN-SHOW
 ' _SN-HELLP _SD-DRAW _SD-TB _SD-PENDING
 _RSHSP-DELTA-PROBE RTE-S-OK <> _SS-A
-_RSHSP-PREPARE _SS-OK _SX-S _RSHSP.PENDING @ _SX-KA = _SS-A
+_RSHSP-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KA = _SS-A
 _SX-KA _SN-DIALOG _RTE-CONTROL.CONTENT-A @ 16 + C@ 4 = _SS-A _SD-ACK
 \ A notice that ends is a START with no notice region.
 _SN-HIDE ' _SN-HELLP _SD-DRAW _SD-TA _SD-PENDING
@@ -149,7 +149,7 @@ _SX-SETUP _SD-HOOKS _SP-DIALOGS 2 _SN-COL !
 _SN-SAVED 0 _SN-SHOW
 _SQ-VALUE _SQ-VU ! _SQ-VA ! 1 _SQ-REV ! -1 _SQ-ON !
 ' _SN-PROMPT-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A
 \ The prompt's whole-screen modal region, and the notice's above it.
 _SX-KA _SP-MODALS 1 = _SS-A _SP-MODAL @ _RTE-IR.Z @ 3 = _SS-A
 _SX-KA _SN-REGIONS 1 = _SS-A _SN-REGION @ _RTE-IR.Z @ 4 = _SS-A
@@ -160,9 +160,9 @@ _SX-KA _SN-DIALOG _RTE-CONTROL.ID @ _SX-KA _SQ-PROMPT _RTE-CONTROL.ID @ 1+ = _SS
 : _SN-NEXT S" hello there" ; _SN-NEXT _SQ-VU ! _SQ-VA ! 2 _SQ-REV !
 ' _SN-PROMPT-PAINT _SD-DRAW _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
-_SX-KB _SX-S _RSHSP-BANK-VALID? _SS-A _SD-CATALOGS= _SS-A
-_SX-KB DUP RSHSP-BANK.MODEL @ + SHM.NOTICE-OFF @
-    _SX-KA DUP RSHSP-BANK.MODEL @ + SHM.NOTICE-OFF @ <> _SS-A
+_SX-KB _SX-PART-VALID? _SS-A _SD-CATALOGS= _SS-A
+_SX-KB DUP RSHSP-PART.MODEL @ + SHM.NOTICE-OFF @
+    _SX-KA DUP RSHSP-PART.MODEL @ + SHM.NOTICE-OFF @ <> _SS-A
 _SD-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A _SD-GREPLACE @ 0= _SS-A _SD-GDEFINE @ 0= _SS-A
 _SS-DONE
 ''', minimum=53)

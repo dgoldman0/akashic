@@ -1102,7 +1102,15 @@ frame before the change driver.
     [evidence](../../local_testing/evidence/frames-follow-change-part9b1-20261028.md).
   - **9b.2. One bank.** The batch freezes into the producer's bank, beside
     the controls, keys and input targets the producer keeps, and the
-    shell's own banks go.
+    shell's own banks go. The shell's part of the frame, its batch with the
+    model copy, taskbar correlations and actions and pane membership a
+    click on the chrome reads, goes into one of two extension blocks the
+    producer owns, and the pending bank names it; from then on it is
+    published, sealed, kept and retired with the bank, so pairing the two
+    records, the shell's roles for its banks and its seals go. The blocks
+    lie outside the arena, whose layout fixes the banks' size, and grow to
+    what a part needs and half again, as the shell's banks did. The shell
+    keeps its work space until 9b.3.
   - **9b.3. One build.** The producer builds the batch itself, calling the
     shell's model, region and chrome words; the shell's work space, its
     second copy of every item and its own comparison go, and the
@@ -1138,7 +1146,8 @@ left stale.
 **Effect.** A typed letter's frame build, 9.63 million steps at the start
 of this part, falls toward the target of about 2 million, an estimate each
 slice replaces with measurement. RUHA's banks, 19.1 MiB, and the shell's
-work space and banks are freed.
+work space are freed. The shell's banks become the screen producer's
+extension blocks, the same size, since the frame on screen needs its record.
 
 ## Part 10. Today's structure retires — cleanup
 
@@ -1159,7 +1168,9 @@ the system and Desk have loaded (`akashic_tui.py`). RUHA's banks are fixed
 by Desk when it starts, at 19.1 MiB, and its snapshots used 12 to 40 KiB of
 them in part 0's runs.
 
-Part 9 frees RUHA's banks (9a) and the shell's banks and work space (9b).
+Part 9 frees RUHA's banks (9a) and the shell's work space (9b.3); 9b.2 moves
+the shell's two banks, unchanged in size, into the screen producer's
+extension blocks.
 It adds the projection's record of what each element last projected, sized
 from the elements on the screen, and the pending change set, sized from one
 frame's changes. Captures go into scratch, which grows to what one build

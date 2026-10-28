@@ -3892,10 +3892,11 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "DIALOG-NATIVE-USED", "DIALOG-COUNT", "DIALOG-CONTROLS",
                  "DIALOG-BASE-CONTROLS", "DIALOG-BASE-TEXT", "DIALOG-BASE-CLAIMS",
                  "DIALOG-REFUSED", "DIALOG-UTF8", "PENDING-SEAL", "ACTIVE-SEAL",
-                 "SHELL-BUILT", "BASE-Z"):
+                 "SHELL-BUILT", "BASE-Z", "XBLOCK0-A", "XBLOCK0-U", "XBLOCK1-A",
+                 "XBLOCK1-U"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 5096
+    assert _constant(source, "RTHP-SIZE") == expected == 5128
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -5286,7 +5287,7 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
     assert live.index("_RTHP-DELTA-CANDIDATE?") < live.index("_RTHP-EXTENSION-DELTA")
     assert prepared.count("RTHPX-DELTA-PREPARE") == 2
     assert prepared.index("RTE-S-CAPACITY =") < prepared.index(
-        "_RTHP-GROW-STORAGE?") < prepared.index("RTHPX-ABORT")
+        "_RTHP-GROW-STORAGE?") < prepared.index("_RTHP-EXTENSION-ABORT")
     asked = live[live.index("_RTHP-EXTENSION-DELTA"):]
     assert asked.index("RTE-S-CAPACITY = IF") < asked.index(
         "_RTHP-ASK-FOR-SPACE?") < asked.index("_RTHP-RECAPTURE-START")
@@ -6405,7 +6406,9 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 368
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 384
+    assert _offset(source, "_RTHP-TB.XBLOCK") == 368
+    assert _offset(source, "_RTHP-TB.XBLOCK-BYTES") == 376
     assert _offset(source, "_RTHP-TB.PICTURE-EPOCH") == 336
     assert _offset(source, "_RTHP-TB.DIALOG-CONTROLS") == 344
     assert _offset(source, "_RTHP-TB.DIALOG-COUNT") == 352

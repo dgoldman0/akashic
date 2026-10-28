@@ -66,7 +66,8 @@ VARIABLE _SO-ROW VARIABLE _SO-COL VARIABLE _SO-H VARIABLE _SO-W
     5 3 _SS-M SHM-ENTRY SHME.ACTION-U !
     2 _SS-M SHM.EPOCH ! _SS-M SHM-SEAL
     _SX-OBSERVE
-    SCR-DRAW-GENERATION@ DUP _SX-P _RTHP.SOURCE-DRAW ! _SX-P _RTHP.SURFACE-GEN ! ;
+    SCR-DRAW-GENERATION@ DUP _SX-P _RTHP.SOURCE-DRAW ! _SX-P _RTHP.SURFACE-GEN !
+    _SX-TARGET _SX-BANK ;
 \ Both documents, and the overlay document's control after the pane's.
 : _SO-CANDIDATE ( -- )
     _SX-DIR _SO-DIR RUHA-DOCUMENT-SIZE MOVE
@@ -90,7 +91,7 @@ VARIABLE _SO-ROW VARIABLE _SO-COL VARIABLE _SO-H VARIABLE _SO-W
 : _SO-SETUP ( row col h w -- )
     _SO-W ! _SO-H ! _SO-COL ! _SO-ROW !
     _SX-SETUP _SO-MODEL _SO-CANDIDATE _SO-BACK ['] _SO-PAINT DRW-OVERLAY ;
-: _SO-CONTROL ( id bank -- control|0 )
+: _SO-CONTROL ( id part -- control|0 )
     _SP-BATCH DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 ?DO
         DUP I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-CONTROL = IF
             RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE / 0 ?DO
@@ -99,12 +100,12 @@ VARIABLE _SO-ROW VARIABLE _SO-COL VARIABLE _SO-H VARIABLE _SO-W
             LOOP DROP
         ELSE DROP THEN
     LOOP 2DROP 0 ;
-: _SO-MEMBER ( token bank -- member )
-    DUP RSHSP-BANK.MEMBERSHIP @ OVER + SWAP RSHSP-BANK.MEMBERSHIP-U @ RSHMM-FIND ;
+: _SO-MEMBER ( token part -- member )
+    DUP RSHSP-PART.MEMBERSHIP @ OVER + SWAP RSHSP-PART.MEMBERSHIP-U @ RSHMM-FIND ;
 \ The content region of a document's pane.
-: _SO-CONTENT ( token bank -- row ) TUCK _SO-MEMBER RSHMM.CONTENT-REGION @ SWAP _SP-REGION ;
+: _SO-CONTENT ( token part -- row ) TUCK _SO-MEMBER RSHMM.CONTENT-REGION @ SWAP _SP-REGION ;
 \ The text of the glyph family planned for a region, or nothing.
-: _SO-GLYPHS ( region bank -- a u )
+: _SO-GLYPHS ( region part -- a u )
     _SP-BATCH DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 ?DO
         DUP I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH =
         OVER _RTE-FE.PLAN-A @ 32 + @ 4 PICK = AND IF
@@ -123,10 +124,10 @@ def test_an_overlay_pane_takes_a_modal_region_over_the_whole_screen():
     staged_run(STAGED_OVERLAY + r'''
 2 4 4 10 _SO-SETUP _SP-DIALOGS
 _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One modal region, the catalog's last: the whole surface, above the panes.
 _SX-KA _SP-MODALS 1 = _SS-A
-_SP-MODAL @ _RTE-IR.ID @ _SX-KA RSHSP-BANK.NEXT-REGION @ 1- = _SS-A
+_SP-MODAL @ _RTE-IR.ID @ _SX-KA RSHSP-PART.NEXT-REGION @ 1- = _SS-A
 _SP-MODAL @ _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR = _SS-A
 _SP-MODAL @ _RTE-IR.X @ 0= _SS-A _SP-MODAL @ _RTE-IR.Y @ 0= _SS-A
 _SP-MODAL @ _RTE-IR.COLS @ 32 = _SS-A _SP-MODAL @ _RTE-IR.ROWS @ 12 = _SS-A
@@ -162,7 +163,7 @@ def test_a_root_beneath_an_overlay_pane_stays_in_its_panes_content():
     staged_run(STAGED_OVERLAY + r'''
 1 4 4 10 _SO-SETUP _SP-DIALOGS
 _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 100 _SX-KA _SO-CONTROL DUP 0<> _SS-A
 _RTE-CONTROL.REGION @ 77 _SX-KA _SO-CONTENT _RTE-IR.ID @ = _SS-A
 _SX-KA _SP-MODALS 1 = _SS-A
@@ -179,7 +180,7 @@ def test_an_overlay_pane_lies_over_the_chrome_beneath_it():
     staged_run(STAGED_OVERLAY + r'''
 6 4 4 10 _SO-SETUP _SP-DIALOGS
 _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 79 _SX-KA _SO-CONTENT DUP _RTE-IR.CLIP-Y @ 6 = _SS-A _RTE-IR.CLIP-ROWS @ 4 = _SS-A
 \ The overlay's glyphs fill all four of its rows, the border row included.
 79 _SX-KA _SO-CONTENT _RTE-IR.ID @ _SX-KA _SO-GLYPHS
@@ -195,7 +196,7 @@ def test_without_dialogs_the_overlay_documents_controls_stay_in_its_content():
     staged_run(STAGED_OVERLAY + r'''
 2 4 4 10 _SO-SETUP
 _RSHSP-PREPARE _SS-OK
-_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A
+_SX-KA _SX-PART-VALID? _SS-A
 _SX-KA _SP-MODALS 0= _SS-A
 101 _SX-KA _SO-CONTROL _RTE-CONTROL.REGION @ 79 _SX-KA _SO-CONTENT _RTE-IR.ID @ = _SS-A
 77 _SX-KA _SO-CONTENT _RTE-IR.ID @ _SX-KA _SO-GLYPHS 66 _SO-COUNT 0= _SS-A
@@ -221,6 +222,6 @@ REFUSALS = {
 def test_unexplained_paint_or_a_nested_overlay_refuses_the_candidate(case):
     staged_run(STAGED_OVERLAY + REFUSALS[case] + r'''
 _SP-DIALOGS _RSHSP-PREPARE RTE-S-UNAVAILABLE = _SS-A
-_SX-S _RSHSP.PENDING @ 0= _SS-A
+_RSHSP-PENDING-PART 0= _SS-A
 _SS-DONE
 ''', minimum=2)

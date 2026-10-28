@@ -204,15 +204,18 @@ VARIABLE _SHT-REFUSE-INSTALL
         "_A1D-SHELL-PRODUCER _RSHSP.EXTENSION _A1D-SCREEN _RTHP-EXTENSION?"))
     assert values("_A1D-SHELL-PHASE @") == (5,)
     # The shell source and producer own their first, smallest storage from
-    # Desk's memory source and grow it as models and candidates need.
+    # Desk's memory source and grow it as models and candidates need.  The
+    # shell's part of each frame goes into the screen producer's extension
+    # blocks, which the producer takes from the same source when a part first
+    # needs one.
     assert values("_A1D-SHELL-SOURCE _SHSN.MEMORY @ _A1D-MEMORY = "
                   "_A1D-SHELL-SOURCE _SHSN.A-U @ SHM-HEADER-SIZE = "
                   "_A1D-SHELL-SOURCE-A @ _A1D-SHELL-SOURCE-B @") == (true, true, 0, 0)
     assert values("_A1D-SHELL-PRODUCER _RSHSP.MEMORY @ _A1D-MEMORY = "
                   "_A1D-SHELL-PRODUCER _RSHSP.WORK-U @ RSHSP-FIRST-WORK-BYTES = "
-                  "_A1D-SHELL-PRODUCER _RSHSP.A-U @ RSHSP-FIRST-BANK-BYTES = "
-                  "_A1D-SHELL-WORK @ _A1D-SHELL-A @ _A1D-SHELL-B @") == (
-        true, true, true, 0, 0, 0)
+                  "_A1D-SHELL-WORK @") == (true, true, 0)
+    assert values("_A1D-SCREEN _RTHP.MEMORY @ _A1D-MEMORY = "
+                  "_A1D-SCREEN _RTHP.XBLOCK0-A @ _A1D-SCREEN _RTHP.XBLOCK1-A @") == (true, 0, 0)
     assert values("_A1D-OWNER _APTAS.CONTROL-CONTEXT @ _A1D-SHELL-PRODUCER =") == (true,)
     assert values("_A1D-OWNER _APTAS.CONTROL-XT @ ' RSHSP-CONTROL-TARGET@ =") == (true,)
     assert values("_A1D-SCREEN _RTHP.EXTENSION @ 0<>") == (true,)

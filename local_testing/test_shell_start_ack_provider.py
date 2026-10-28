@@ -31,7 +31,6 @@ VARIABLE _AK-SUPPRESS VARIABLE _AK-CALLS
         DROP 1 _AK-CALLS +!
         _AK-SUPPRESS @ IF RTE-S-OK ELSE _RSHSP-START-ACK THEN EXIT
     THEN
-    DUP RTHPX-ABORT = IF DROP _SX-S _RSHSP-ABORT RTE-S-OK EXIT THEN
     DROP RTE-S-OK ;
 : _AK-INIT
     _SX-SETUP
@@ -58,11 +57,9 @@ VARIABLE _AK-SUPPRESS VARIABLE _AK-CALLS
     _SX-P _RTHP.ADMISSION _RTE-HA.STATIC-LAST !
     1 _SX-P _RTHP.ATTEMPT +! 1 _SX-P _RTHP.SOURCE-GEN +!
     SCR-DRAW-GENERATION@ DUP _SX-P _RTHP.SOURCE-DRAW ! _SX-P _RTHP.SURFACE-GEN !
-    _SX-TARGET 8 + _SX-P _RTHP.TARGET-PENDING ! ;
-: _AK-PUBLISH
-    _SX-P _RTHP.TARGET-PENDING @ _SX-P _RTHP.TARGET-ACTIVE !
-    _SX-P _RTHP.SOURCE-DRAW @ _SX-P _RTHP.ACTIVE-DRAW ! _RSHSP-PUBLISH ;
-: _AK-EMIT _SX-S _RSHSP.PENDING @ DUP RSHSP-BANK.BATCH @ + _SX-FX RTE-FAMILY-BATCH-EMIT ;
+    _SX-TARGET2 _SX-BANK _SX-TARGET2 _SX-P _RTHP.TARGET-PENDING ! ;
+: _AK-PUBLISH _SX-PUBLISH ;
+: _AK-EMIT _RSHSP-PENDING-PART DUP RSHSP-PART.BATCH @ + _SX-FX RTE-FAMILY-BATCH-EMIT ;
 '''
 
 
@@ -149,11 +146,20 @@ class HiddenAckHarness(cf._FeedHarness):
     def put(self, word, value, base=None):
         self.runtime.memory.write64(self.constant(word) if base is None else self.call(word, base)[0][0], value)
 
+    def part_of(self, bank):
+        return self.get("_RTHP-TB.XBLOCK", bank) if bank else 0
+
+    def pending_part(self):
+        return self.part_of(self.get("_RTHP.TARGET-PENDING", self.p))
+
+    def active_part(self):
+        return self.part_of(self.get("_RTHP.TARGET-ACTIVE", self.p))
+
     def prepare(self):
         assert self.call("_RSHSP-PREPARE")[0] == (0,)
-        bank = self.get("_RSHSP.PENDING", self.s)
-        assert bank
-        return bank
+        part = self.pending_part()
+        assert part
+        return part
 
     def begin_emit(self):
         assert self.call("RTE-RETAINED-BEGIN", self.constant("RTE-RETAINED-REPLACE-START"), self.facade)[0] == (0,)
@@ -175,23 +181,23 @@ def test_hidden_start_ack_then_new_draw_uses_real_provider_highwaters(suppress_f
     try:
         h.put("_AK-SUPPRESS", int(suppress_fix))
         bank = h.prepare()
-        target = h.get("_RSHSP.PENDING-TARGET", h.s)
-        next_ids = (h.get("RSHSP-BANK.NEXT-REGION", bank), h.get("RSHSP-BANK.NEXT-OBJECT", bank))
+        target = h.get("_RTHP.TARGET-PENDING", h.p)
+        next_ids = (h.get("RSHSP-PART.NEXT-REGION", bank), h.get("RSHSP-PART.NEXT-OBJECT", bank))
         assert next_ids[0] > 11 and next_ids[1] > 102  # Shell consumes beyond legacy.
         assert h.frontiers() == (10, 100)
         assert h.begin_emit() == (0,)
         h.seal()
         # An emitted, unacknowledged capture has no ID or input authority.
         assert h.frontiers() == (10, 100)
-        assert h.get("_RSHSP.ACTIVE", h.s) == 0
+        assert h.active_part() == 0
         h.settle()
         high = (h.owner_field("_RTAPT-O.REGION-HIGH"), h.owner_field("_RTAPT-O.OBJECT-HIGH"))
         assert high == (next_ids[0]-1, next_ids[1]-1)
         assert h.call("_AK-STEP")[0] == (0, 0, MASK)
         assert h.get("_AK-CALLS") == 1
-        assert h.get("_RSHSP.ACTIVE", h.s) == 0
-        assert h.get("_RSHSP.PENDING", h.s) == bank
-        assert h.get("_RSHSP.PENDING-TARGET", h.s) == target
+        assert h.active_part() == 0
+        assert h.pending_part() == bank
+        assert h.get("_RTHP.TARGET-PENDING", h.p) == target
         assert h.frontiers() == ((11, 102) if suppress_fix else next_ids)
         h.call("_AK-NEW-DRAW")
         h.prepare()
@@ -200,30 +206,30 @@ def test_hidden_start_ack_then_new_draw_uses_real_provider_highwaters(suppress_f
             # Exact historical failure: a real hidden ACK consumed the first
             # shell range, but legacy advancement reused a provider region ID.
             assert result == (h.constant("RTE-S-INVALID"),)
-            assert h.get("_RSHSP.ACTIVE", h.s) == 0
+            assert h.active_part() == 0
             assert h.owner_field("_RTAPT-O.REGION-HIGH") == high[0]
             assert h.call("RTAPT-RICH-CANCEL", h.engine)[0] == (0,)
             return
         assert result == (0,)
         assert h.get("_RTHP.REGION", h.p) > high[0]
         assert h.get("_RTHP.FIRST-OBJECT", h.p) > high[1]
-        second = h.get("_RSHSP.PENDING", h.s)
-        second_ids = (h.get("RSHSP-BANK.NEXT-REGION", second), h.get("RSHSP-BANK.NEXT-OBJECT", second))
+        second = h.pending_part()
+        second_ids = (h.get("RSHSP-PART.NEXT-REGION", second), h.get("RSHSP-PART.NEXT-OBJECT", second))
         h.seal()
         h.settle()
         assert h.call("_AK-STEP")[0] == (0, 0, MASK)
         assert h.frontiers() == second_ids
-        assert h.get("_RSHSP.ACTIVE", h.s) == 0
+        assert h.active_part() == 0
         assert h.call("_RSHSP-START-ACK")[0] == (0,)  # Idempotent, still hidden.
         assert h.frontiers() == second_ids
-        assert h.get("_RSHSP.PENDING", h.s) == second
+        assert h.pending_part() == second
         assert h.call("RTE-RETAINED-BEGIN", h.constant("RTE-RETAINED-REPLACE-CONTINUE"), h.facade)[0] == (0,)
         h.seal(reveal=True)
         h.settle()
-        assert h.get("_RSHSP.ACTIVE", h.s) == 0  # Provider reveal alone is not input authority.
+        assert h.active_part() == 0  # Provider reveal alone is not input authority.
         h.call("_AK-PUBLISH")
-        assert h.get("_RSHSP.ACTIVE", h.s) == second
-        assert h.get("_RSHSP.PENDING", h.s) == 0
+        assert h.active_part() == second
+        assert h.pending_part() == 0
         assert h.frontiers() == second_ids
         assert h.driver.core.retained_state.active.owners[88].objects
         assert h.call("_RSHSP-CURRENT?")[0] == (MASK,)
@@ -238,9 +244,9 @@ def test_hidden_ack_boundaries_abort_and_larger_base_frontiers_never_publish_or_
         before = h.frontiers()
         assert h.begin_emit() == (0,)
         assert h.call("RTAPT-RICH-CANCEL", h.engine)[0] == (0,)
-        h.call("_RSHSP-ABORT", h.s)
+        h.call("_RTHP-XBLOCK-DROP", h.p)
         assert h.frontiers() == before
-        assert h.get("_RSHSP.ACTIVE", h.s) == h.get("_RSHSP.PENDING", h.s) == 0
+        assert h.active_part() == h.pending_part() == 0
         assert h.owner_field("_RTAPT-O.REGION-HIGH") == 0
         assert h.owner_field("_RTAPT-O.OBJECT-HIGH") == 0
         bank = h.prepare()
@@ -254,36 +260,34 @@ def test_hidden_ack_boundaries_abort_and_larger_base_frontiers_never_publish_or_
         h.settle()
         # Ordinary source authority may disappear before the old hidden ACK is
         # consumed. The exact immutable pending tuple remains its authority.
-        old_draw = h.get("_RSHSP.PENDING-DRAW", h.s)
+        old_draw = h.get("_RTHP-TB.DRAW", h.get("_RTHP.TARGET-PENDING", h.p))
         assert h.call("_ASHELL-DRAW-OBSERVE", h.constant("ASHELL-DRAW-BEGIN"))[0] == (0,)
         assert h.call("SHSN-SNAPSHOT-FOR@", old_draw, h.constant("_SX-C"))[0][2] != 0
         assert h.call("_AK-STEP")[0] == (0, 0, MASK)
         consumed = h.frontiers()
         assert consumed[0] > before[0] and consumed[1] > before[1]
-        h.call("_RSHSP-ABORT", h.s)
+        h.call("_RTHP-XBLOCK-DROP", h.p)
         assert h.frontiers() == consumed  # Aborting after ACK cannot unconsume IDs.
-        assert h.get("_RSHSP.ACTIVE", h.s) == h.get("_RSHSP.PENDING", h.s) == 0
+        assert h.active_part() == h.pending_part() == 0
         h.call("_AK-NEW-DRAW")
         bank = h.prepare()
-        target = h.get("_RSHSP.PENDING-TARGET", h.s)
-        draw = h.get("_RSHSP.PENDING-DRAW", h.s)
-        bank_bytes = h.runtime.memory.read_bytes(bank, h.get("RSHSP-BANK.USED", bank))
+        target = h.get("_RTHP.TARGET-PENDING", h.p)
+        draw = h.get("_RTHP-TB.DRAW", target)
+        bank_bytes = h.runtime.memory.read_bytes(bank, h.get("_RTHP-TB.XBLOCK-BYTES", target))
         # These are unit boundaries for the exact helper called by the real ACK
-        # branch above. Both valid-but-wrong lifecycle links and malformed frozen
-        # metadata must refuse before advancing either producer frontier.
-        for word, base, changed in (("_RSHSP.PENDING-TARGET", h.s, target+8),
-                                    ("_RSHSP.PENDING-DRAW", h.s, draw+1),
-                                    ("RSHSP-BANK.NEXT-REGION", bank, 0),
-                                    ("RSHSP-BANK.NEXT-OBJECT", bank, 0)):
+        # branch above. Malformed frozen frontiers must refuse before
+        # advancing either producer frontier.
+        for word, base, changed in (("RSHSP-PART.NEXT-REGION", bank, 0),
+                                    ("RSHSP-PART.NEXT-OBJECT", bank, 0)):
             original = h.get(word, base)
             h.put(word, changed, base)
             assert h.call("_RSHSP-START-ACK")[0] == (h.constant("RTE-S-INVALID"),)
             assert h.frontiers() == consumed
-            assert h.get("_RSHSP.ACTIVE", h.s) == 0
-            assert h.get("_RSHSP.PENDING", h.s) == bank
+            assert h.active_part() == 0
+            assert h.pending_part() == bank
             h.put(word, original, base)
         assert h.runtime.memory.read_bytes(bank, len(bank_bytes)) == bank_bytes
-        expected = (h.get("RSHSP-BANK.NEXT-REGION", bank), h.get("RSHSP-BANK.NEXT-OBJECT", bank))
+        expected = (h.get("RSHSP-PART.NEXT-REGION", bank), h.get("RSHSP-PART.NEXT-OBJECT", bank))
         # Independent MAX behavior, including mixed ordering, not just both up.
         for base_ids in ((expected[0]+50, expected[1]-1),
                          (expected[0]-1, expected[1]+50),
@@ -295,18 +299,18 @@ def test_hidden_ack_boundaries_abort_and_larger_base_frontiers_never_publish_or_
             assert h.frontiers() == maximum
             assert h.call("_RSHSP-START-ACK")[0] == (0,)
             assert h.frontiers() == maximum
-            assert h.get("_RSHSP.ACTIVE", h.s) == 0
-            assert h.get("_RSHSP.PENDING", h.s) == bank
-            assert h.get("_RSHSP.PENDING-TARGET", h.s) == target
-            assert h.get("_RSHSP.PENDING-DRAW", h.s) == draw
+            assert h.active_part() == 0
+            assert h.pending_part() == bank
+            assert h.get("_RTHP.TARGET-PENDING", h.p) == target
+            assert h.get("_RTHP-TB.DRAW", target) == draw
         h.call("_AK-PUBLISH")
         assert h.frontiers() == maximum  # Visible publication is also monotonic.
-        assert h.get("_RSHSP.ACTIVE", h.s) == bank
-        assert h.get("_RSHSP.PENDING", h.s) == 0
+        assert h.active_part() == bank
+        assert h.pending_part() == 0
         active = h.runtime.memory.read_bytes(bank, len(bank_bytes))
         assert active == bank_bytes
         assert h.call("_RSHSP-START-ACK")[0] == (0,)  # No pending candidate is a no-op.
         assert h.frontiers() == maximum
-        assert h.get("_RSHSP.ACTIVE", h.s) == bank
+        assert h.active_part() == bank
     finally:
         h.close()

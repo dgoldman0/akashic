@@ -9,75 +9,86 @@ names, labels, or the last active UIDL context. The capability remains opt-in.
 
 | Word | Stack |
 |---|---|
-| `RSHSP-INIT` | `( source shell-facade producer work-a work-u bank-a bank-a-u bank-b bank-b-u sidecar -- rte-status )` |
+| `RSHSP-INIT` | `( source shell-facade producer work-a work-u sidecar -- rte-status )` |
 | `RSHSP-MEMORY!` | `( memory sidecar -- rte-status )` |
 | `RSHSP-INSTALL` | `( sidecar -- rte-status )` |
 | `RSHSP-VALID?` | `( sidecar -- flag )` |
 | `RSHSP-WORK-USED@` | `( sidecar -- bytes )` |
-| `RSHSP-BANK-BYTES@` | `( sidecar -- bytes )` |
+| `RSHSP-PART-BYTES@` | `( sidecar -- bytes )` |
 | `RSHSP-UNINSTALL-AFTER-STOP` | `( sidecar -- rte-status )` |
 | `RSHSP-FINI` | `( sidecar -- )` |
 | `RSHSP-CONTROL-TARGET@` | `( owner generation control-id intent sidecar -- row col revision found? )` |
 
 The descriptor is `RSHSP-SIZE` bytes and embeds the RTHP extension descriptor.
-`RSHSP-BANK-BYTES@` reports the last measured packed requirement and
-`RSHSP-WORK-USED@` the scratch high-water.
+`RSHSP-PART-BYTES@` reports the bytes the last freeze measured for the shell's
+part of the frame and `RSHSP-WORK-USED@` the scratch high-water.
 
-The caller gives the shell producer a work space and two banks, and may then
-attach a memory source with `RSHSP-MEMORY!` (see `utils/memory-source.f`).
-From then on the shell producer owns them. They can start as small as
-`RSHSP-FIRST-WORK-BYTES` and `RSHSP-FIRST-BANK-BYTES`: when a build is refused
-for CAPACITY because it ran out of work space, or of room in the bank it
-freezes into, the producer takes a block for what was needed and half again
-and builds once more, until the candidate fits or the memory says no. Neither
-block holds anything another step reads, so nothing is relocated. A new block
-must be separate from the shell's and the screen producer's storage, and every
-dispatch proves the rest of the storage again. `RSHSP-FINI` gives everything
-back. Without a memory source the storage is the caller's fixed bound.
+The caller gives the shell producer a work space, and may then attach a memory
+source with `RSHSP-MEMORY!` (see `utils/memory-source.f`). From then on the
+shell producer owns it. It can start as small as `RSHSP-FIRST-WORK-BYTES`:
+when a build is refused for CAPACITY because it ran out of work space, the
+producer takes a block for what was needed and half again and builds once
+more, until the candidate fits or the memory says no. `RSHSP-FINI` gives it
+back. Without a memory source the work space is the caller's fixed bound.
+
+The shell's part of each frame is frozen into the screen producer's storage,
+not the shell's. RTHP owns two extension blocks beside its target banks
+(`_RTHP.XBLOCK0-A`, `_RTHP.XBLOCK1-A`); the shell freezes its part into the
+block the frame on screen does not name, and the pending bank then names it
+with the bytes it uses (`_RTHP-TB.XBLOCK`, `_RTHP-TB.XBLOCK-BYTES`). From then
+on the part is the bank's own: the producer publishes, seals, keeps and
+retires it with the bank, and drops it from the pending bank whenever it
+abandons the shell's preparation, so the bank is the one record of the frame.
+The blocks lie outside the producer's arena, whose layout fixes the banks'
+size, and start empty. A freeze refused for room in its block has the producer
+take a block from its memory source for what the part needs and half again,
+and builds once more; nothing reads the free block, so nothing is relocated.
+A new block must be separate from the producer's storage, and the shell's
+dispatch, with every check on, proves both blocks apart from the rest of the
+storage again. `RTHP-FINI` gives the blocks back. Without a memory source a
+producer has no blocks, and the shell's part stays CELL.
 
 Construction proves the storage pairwise disjoint from each other,
-producer/arena, provider, SHSN/frozen banks, ordinary live root/host/children,
-UIDL, screen and module scratch. A preparation repeats live authority before
-writing work or the inactive bank. Storage that cannot be had refuses the
-entire optional shell candidate, and the screen producer's fallback record
-keeps the bytes asked for and held; the shell never truncates an object,
-string, action or sample history. The model's size is its source's to bound;
-the shell producer carries no entry or text limit of its own.
+producer/arena and extension blocks, provider, SHSN/frozen banks, ordinary
+live root/host/children, UIDL, screen and module scratch. A preparation
+repeats live authority before writing work or the free extension block.
+Storage that cannot be had refuses the entire optional shell candidate, and
+the screen producer's fallback record keeps the bytes asked for and held; the
+shell never truncates an object, string, action or sample history. The
+model's size is its source's to bound; the shell producer carries no entry or
+text limit of its own.
 
-Each immutable bank starts with this 136-byte header:
+Each immutable part starts with this 96-byte header; the bank that names it
+records its bytes, its draw and its wire owner and generation:
 
 | Offset | Value |
 |---:|---|
-|0|Exact used bytes, aligned8|
-|8|Copied family-batch offset|
-|16/24|Copied SHM offset/bytes|
-|32/40|Correlation192 offset/bytes|
-|48/56|Action-byte offset/bytes|
-|64/72|Membership112 offset/bytes|
-|80|Exact core target-bank pointer|
-|88|Completed draw|
-|96/104|Wire owner/generation|
-|112/120|Next region/object identity|
-|128|Control identity of Desk's prompt, or 0|
+|0|Copied family-batch offset|
+|8/16|Copied SHM offset/bytes|
+|24/32|Correlation192 offset/bytes|
+|40/48|Action-byte offset/bytes|
+|56/64|Membership112 offset/bytes|
+|72/80|Next region/object identity|
+|88|Control identity of Desk's prompt, or 0|
 
 The metadata spans use canonical consecutive aligned offsets. The deep-copied
 family graph follows them. Every graph pointer is bounded within that suffix
 before nested parsing. Catalog/object maxima must equal the stored next IDs
 minus one. The exact packed requirement is:
 
-`136 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
+`96 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
 
 The work space uses checked aligned bump allocation. Glyph projection reserves
 bounded temporary slots per clip, then compacts actual runs before the next
 clip. `WORK-USED@` records the peak reservation, including these transient
 slots. On capacity failure it reports the first required prefix that did not
-fit, which is what the work space grows to; `BANK-BYTES@` is set once the full
-candidate can be measured, and is what a bank grows to.
+fit, which is what the work space grows to; `PART-BYTES@` is set once the full
+candidate can be measured, and is what an extension block grows to.
 
 The native 32×12 candidate fixture, with one pane, both taskbar bands, one
-ordinary MENUBAR and one STATUS_FIELD, uses 66,296 peak scratch bytes and 8,528
-packed bytes. It exercises actual aggregate admission and family emission,
-then overwrites the complete work arena before validating the copied bank and
+ordinary MENUBAR and one STATUS_FIELD, uses 66,696 peak scratch bytes and an
+8,592-byte part. It exercises actual aggregate admission and family emission,
+then overwrites the complete work arena before validating the copied part and
 publishing its input authority. These are fixture measurements, not Desk
 capacity limits; product qualification must measure the complete desktop.
 
@@ -180,7 +191,7 @@ model](../tui/shell-model.md)). The shell makes that field a `FIELD`
 control after its taskbar controls, packed from the model's UFLD record, on
 a root across the last row, with a claim on the row so no residual glyph
 covers it. Statics and instruments move up one identity to follow it, and
-the bank records its identity. With dialogs its region is a modal scope over
+the part records its identity. With dialogs its region is a modal scope over
 the whole screen, surface-sized with the surface as its clip, since Desk
 takes no other input while the prompt is open; without them it is the last
 row alone. Either way it sits three above the content z, above the panes'
@@ -227,10 +238,9 @@ it too, the candidate goes out alone, with no shell claims leaking into it.
 
 ## START, ACK and teardown
 
-RTHP appends one optional extension pointer at 4128, followed by the
-open-request flag at 4136; its descriptor is 4144 bytes. Existing target-bank336 and target-entry48 ABIs stay unchanged. The
-64-byte extension descriptor supplies one dispatcher and explicit checked
-region/object/UTF8 reservation additions. It installs only before OWNER_OPEN.
+RTHP keeps one optional extension pointer (`_RTHP.EXTENSION`); the
+`RTHP-EXTENSION-SIZE` descriptor supplies one dispatcher and its context. It
+installs only before OWNER_OPEN, while the producer holds no target bank.
 
 The dispatcher events are PREPARE=0, EMIT=1, PUBLISH-CHECK=2, PUBLISH=3,
 ABORT=4, RETIRE=5, CURRENT=6, START-ACK=7, DELTA-PROBE=8, DELTA-PREPARE=9 and
@@ -252,11 +262,12 @@ the owner opens, which that admission sizes, after the shell refuses a
 batch, and while no rich frame is shown after a draw that could not be,
 where its own admission says whether a newer draw can be.
 
-The shell candidate is prepared only after RTHP freezes its ordinary target
-bank, before retained BEGIN. Only successful PREPARE selects shell EMIT. Any
-failure before BEGIN aborts staged shell state; the candidate is then built
-alone and offered again, as above, and a second failure selects legacy
-emission.
+The shell candidate is prepared only after RTHP packs its ordinary target
+bank, before retained BEGIN, and its part is frozen into the free extension
+block and named by that pending bank. Only successful PREPARE selects shell
+EMIT. Any failure before BEGIN drops the part from the pending bank; the
+candidate is then built alone and offered again, as above, and a second
+failure selects legacy emission.
 Any error after shell emission starts cancels the complete capture. A START
 defines every object and history with fresh wire identities; an unchanged
 current draw is reused. Every SERIES sample and authored history value
@@ -266,7 +277,7 @@ acknowledged one is published as a DELTA instead, described next.
 ## DELTA publication
 
 A changed draw after an acknowledged one becomes a retained DELTA when its
-shell layout matches the acknowledged bank, so typing, caret moves and other
+shell layout matches the acknowledged part, so typing, caret moves and other
 changes inside panes send only what changed and keep every unchanged pane,
 control and waveform history under its acknowledged identity.
 
@@ -310,11 +321,11 @@ The shell then gives each item the acknowledged identity in the same place:
 Taskbar correlations and pane memberships are renumbered with them. Any other
 difference refuses the DELTA, and the producer rebuilds the draw with fresh
 identities for a complete START. DELTA-EMIT sends the difference between the
-pending and active banks through `RTE-FAMILY-BATCH-DELTA-EMIT` inside the open
-retained DELTA. After the physical acknowledgement, PUBLISH-CHECK and PUBLISH
-promote the pending bank exactly as after a reveal. A DELTA consumes no region
-identities, and the published bank's frontier covers its new object
-identities.
+pending and acknowledged parts through `RTE-FAMILY-BATCH-DELTA-EMIT` inside the
+open retained DELTA. After the physical acknowledgement the producer publishes
+the pending bank, its part with it, exactly as after a reveal. A DELTA
+consumes no region identities, and the published part's frontier covers its
+new object identities.
 
 A DELTA plans residual runs only on rows that changed. Once a candidate is
 built, the producer's ROW-DAMAGE names the rows a plan must build again:
@@ -323,12 +334,12 @@ and those of claims that came or went. Every other row's cells, residue,
 menus and claims are unchanged since the acknowledged frame, and safe mode,
 or a frame on screen that cannot vouch for them, marks every row. A DELTA
 also keeps the shell's own claims and regions, so the
-shell's runs on an unmarked row equal the acknowledged bank's. For each
+shell's runs on an unmarked row equal the acknowledged part's. For each
 region whose catalog row equals the acknowledged one, the shell copies those
-rows' runs and text from the acknowledged bank and plans each band of marked
+rows' runs and text from the acknowledged part and plans each band of marked
 rows through the residual planner with a clip of just that band. Runs never
 span rows, so the region gets exactly the runs a whole-region plan would
-give; a test checks that the two banks are identical byte for byte. While
+give; a test checks that the two parts are identical byte for byte. While
 typing, that is the edited line and the status line instead of every cell of
 every pane. Every planner call of one build runs under a single
 borrow of the projection planes: every request, claim, work and output span
@@ -346,26 +357,31 @@ check of its gate that refused. Desk acceptance runs record all of them in
 `final-guest-diagnostics.json`, with the terminal's count of committed
 PRESENT modes.
 
-A bank is checked in full once, when it is frozen. STAGE freezes into the
-bank that ACTIVE does not name, after dropping PENDING, so a bank that
-PENDING or ACTIVE names is never written again. The checks below therefore
-compare its identities and do not check its contents again.
+A part is checked in full once, when it is frozen. STAGE freezes into the
+extension block the frame on screen does not name, after the pending bank
+dropped its part, so a part a bank names is never written again. The checks
+below therefore compare its identities and do not check its contents again.
+With every check on, the structure is checked again before a DELTA builds on
+the part or a click is routed through it, and the seal of the frame's bank,
+taken when the frame is sent, covers the part: the producer checks it before
+the comparison every DELTA starts with, and the shell before it routes a
+click on its chrome.
 
-After a successful hidden START acknowledgement, START-ACK validates the
-immutable pending bank against the exact core pending target, owner, generation
-and draw. It advances each region/object frontier to the maximum of the base
-frontier and the copied shell frontier. These IDs have been consumed even when
-a newer ordinary draw replaces the hidden candidate before reveal. This event
-does not publish a bank or change input authority. Unacknowledged or rejected
-STARTs do not advance shell frontiers.
+After a successful hidden START acknowledgement, START-ACK checks the pending
+part's frontiers against its regions and objects again. It advances each
+region/object frontier to the maximum of the base frontier and the copied
+shell frontier. These IDs have been consumed even when a newer ordinary draw
+replaces the hidden candidate before reveal. This event does not publish a
+part or change input authority. Unacknowledged or rejected STARTs do not
+advance shell frontiers.
 
-PUBLISH-CHECK validates the same immutable pending tuple. Neither ACK check
-requires the old draw to remain current while its physical ACK is awaited.
-After visible core ACK publication, bounded scalar stores publish the paired
-shell bank, preserving the already consumed ID frontiers. Abort discards only
-pending authority; retirement clears both banks' authority. Neither operation
-rewinds consumed IDs. Repeating START-ACK or publishing after a larger base
-reservation cannot move a frontier backwards.
+Neither ACK requires the old draw to remain current while its physical ACK is
+awaited. After visible core ACK publication, PUBLISH raises the frontiers from
+the published part, preserving the already consumed ones. PUBLISH-CHECK,
+ABORT and RETIRE leave the shell nothing to do: the part is the bank's, so
+there is nothing to pair, and the producer drops or retires it with the bank.
+Neither rewinds consumed IDs. Repeating START-ACK or publishing after a larger
+base reservation cannot move a frontier backwards.
 
 The real Desk regression exposed this timing when ordinary typing completed a
 new draw before reveal: the next catalog began at region 54, but the provider
@@ -374,9 +390,9 @@ first region before emitting any text. Advancing only the base candidate's
 frontiers at hidden ACK caused that reuse; START-ACK reserves the complete
 shell range at the same acknowledgement boundary.
 
-CURRENT and input additionally require exact core active target/draw and the
-current SHSN model to equal the copied model. Unacknowledged banks never route
-input.
+CURRENT and input additionally require the frame on screen's draw to be the
+screen's last and its owner the producer's, and the current SHSN model to
+equal the part's copied model. Unacknowledged parts never route input.
 
 A shell ACTIVATE must match a unique retained CONTROL and correlation, the
 canonical parent band and translated slot, source lifecycle tuple, copied label
@@ -387,6 +403,7 @@ acknowledged IDs and FIELD revisions through `RTHP-CONTROL-TARGET@`.
 
 `UNINSTALL-AFTER-STOP` requires the composition to revoke draw/input callbacks
 and drain/stop transport first. It verifies the facade is idle, clears only its
-own extension and local authority, and emits nothing. Desk calls it after
+own extension, and emits nothing; the frame's banks keep their parts in the
+producer's extension blocks until the producer is finished. Desk calls it after
 `APTAS-UNINSTALL`, then detaches SHSN and finalizes the shell facade. A refused
 teardown retains state for a later retry.

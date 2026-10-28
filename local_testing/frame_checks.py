@@ -51,7 +51,7 @@ REPEAT = {
     "_RTHP-W-MENU-REUSE-PREFLIGHT?", "RTE-CONTROL-VALID?", "_RTHP-W-MENU-REUSE-TEXT?",
     # The shell checks its batch, freezes a proved copy and checks the copy,
     # then emission proves the batch's storage again.
-    "RTE-FAMILY-BATCH-VALID?", "_RSHSP-BANK-VALID?", "_RSHFC-BATCH-OUTSIDE?",
+    "RTE-FAMILY-BATCH-VALID?", "_RSHSP-PART-VALID?", "_RSHFC-BATCH-OUTSIDE?",
     "_RTE-FEM-AUTHORITY?", "SHSN-FROZEN-VALIDATE", "_RSHPL-MODEL-OK?",
     "_RTE-RC-POS-SPAN?", "_RTE-RC-SPAN?",
     # The APT-1 engine audits its whole state at each backend call.

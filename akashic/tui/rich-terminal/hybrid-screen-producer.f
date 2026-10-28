@@ -381,7 +381,16 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ region, above its instrument regions (_RTHP-BASE-LAYER!).
 : _RTHP.SHELL-BUILT              ( p -- a ) 5080 + ;
 : _RTHP.BASE-Z                   ( p -- a ) 5088 + ;
-5096 CONSTANT RTHP-SIZE
+\ The two extension blocks, beside the target banks: each 0 0, or a block
+\ and its bytes.  The extension freezes its part of a frame into one, and
+\ the frame's bank names it (_RTHP-TB.XBLOCK); the next part goes into the
+\ other.  Each grows from the memory source to what a part needs and half
+\ again.
+: _RTHP.XBLOCK0-A                ( p -- a ) 5096 + ;
+: _RTHP.XBLOCK0-U                ( p -- a ) 5104 + ;
+: _RTHP.XBLOCK1-A                ( p -- a ) 5112 + ;
+: _RTHP.XBLOCK1-U                ( p -- a ) 5120 + ;
+5128 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 \ An omitted graph: the cells it paints, row col row1 col1, and the token
@@ -514,8 +523,13 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-TB.DIALOG-CONTROLS         ( bank -- a ) 344 + ;
 : _RTHP-TB.DIALOG-COUNT            ( bank -- a ) 352 + ;
 : _RTHP-TB.DIALOG-UTF8             ( bank -- a ) 360 + ;
+\ The extension's part of the frame (RTHPX-PREPARE): the extension block
+\ it lies at the start of, and the bytes it uses there, or 0 0.  Packing a
+\ bank names none; only the extension's freeze names one.
+: _RTHP-TB.XBLOCK                  ( bank -- a ) 368 + ;
+: _RTHP-TB.XBLOCK-BYTES            ( bank -- a ) 376 + ;
 
-368 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
+384 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
 32 CONSTANT _RTHP-PROJECTION-RECT-SIZE
 
 : _RTHP-TE.ID          ( entry -- a )      ;
@@ -1220,6 +1234,12 @@ VARIABLE _RTHP-L-BYTES
 
 VARIABLE _RTHP-V-P
 
+\ ( a u -- flag ) an extension block: none, or a whole block on a cell.
+: _RTHP-XBLOCK-SHAPE?  ( a u -- flag )
+    OVER 0= IF NIP 0= EXIT THEN
+    OVER 7 AND OVER 0= OR IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
 : _RTHP-VALID-BODY?  ( -- flag )
     _RTHP-V-P @ DUP 0= IF DROP 0 EXIT THEN
     DUP 7 AND IF DROP 0 EXIT THEN
@@ -1317,6 +1337,12 @@ VARIABLE _RTHP-V-P
         DUP _RTHP.TARGET-ACTIVE @ OVER _RTHP.KEPT-BANK-A @ <> IF
             DROP 0 EXIT
         THEN
+    THEN
+    DUP _RTHP.XBLOCK0-A @ OVER _RTHP.XBLOCK0-U @ _RTHP-XBLOCK-SHAPE? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _RTHP.XBLOCK1-A @ OVER _RTHP.XBLOCK1-U @ _RTHP-XBLOCK-SHAPE? 0= IF
+        DROP 0 EXIT
     THEN
     DUP _RTHP.EXTENSION @ OVER _RTHP-EXTENSION? 0= IF DROP 0 EXIT THEN
     DROP -1 ;
@@ -1979,8 +2005,58 @@ VARIABLE _RTHP-FT-INTENTS
 : _RTHP-DELTA-PLAN-CLEAR  ( producer -- )
     _RTHP.DELTA-PLAN-VALID 88 0 FILL ;
 
+\ ---------------------------------------------------------------------
+\  The extension's part of a frame
+\ ---------------------------------------------------------------------
+\ An installed extension freezes its part of each frame into one of the
+\ producer's two extension blocks and names it in the pending bank: for
+\ Desk's shell, its batch and what a click on its chrome reads.  The part
+\ is then the bank's own, published, sealed, kept and retired with it, so
+\ the bank is the one record of the frame.  The blocks lie outside the
+\ arena, at the size the part needs, which the arena's layout does not fix.
+
+\ ( bank -- a u ) the part BANK names, or 0 0.
+: _RTHP-XBLOCK@  ( bank -- a u )
+    DUP _RTHP-TB.XBLOCK @ SWAP _RTHP-TB.XBLOCK-BYTES @ ;
+
+\ ( producer -- field ) the field of the extension block the frame on
+\ screen does not name, which the next part is frozen into.  Every
+\ preparation drops the pending bank's part first, so no bank names it.
+: _RTHP-XBLOCK-FREE-FIELD  ( producer -- field )
+    DUP _RTHP.TARGET-ACTIVE @ DUP IF _RTHP-TB.XBLOCK @ THEN
+    OVER _RTHP.XBLOCK0-A @ DUP 0<> -ROT = AND IF
+        _RTHP.XBLOCK1-A
+    ELSE _RTHP.XBLOCK0-A THEN ;
+
+\ ( producer -- a u ) the block the next part is frozen into, or 0 0.
+: _RTHP-XBLOCK-FREE  ( producer -- a u )
+    _RTHP-XBLOCK-FREE-FIELD DUP @ SWAP 8 + @ ;
+
+\ ( part producer -- capacity|0 ) the bytes of the extension block PART
+\ lies at the start of, or 0 when it is neither.
+: _RTHP-XBLOCK-CAPACITY  ( part producer -- capacity|0 )
+    OVER 0= IF 2DROP 0 EXIT THEN
+    2DUP _RTHP.XBLOCK0-A @ = IF NIP _RTHP.XBLOCK0-U @ EXIT THEN
+    TUCK _RTHP.XBLOCK1-A @ = IF _RTHP.XBLOCK1-U @ ELSE DROP 0 THEN ;
+
+\ ( a u producer -- ) the pending bank's part is the U bytes the extension
+\ froze at A, the start of the free extension block.
+: _RTHP-XBLOCK!  ( a u producer -- )
+    _RTHP.TARGET-PENDING @ TUCK _RTHP-TB.XBLOCK-BYTES ! _RTHP-TB.XBLOCK ! ;
+
+\ ( producer -- ) the pending bank names no part.
+: _RTHP-XBLOCK-DROP  ( producer -- )
+    _RTHP.TARGET-PENDING @ ?DUP IF
+        0 OVER _RTHP-TB.XBLOCK ! 0 SWAP _RTHP-TB.XBLOCK-BYTES !
+    THEN ;
+
+\ The extension abandons what it prepared for the pending bank, and the
+\ bank its part.
+: _RTHP-EXTENSION-ABORT  ( producer -- )
+    DUP _RTHP-XBLOCK-DROP RTHPX-ABORT SWAP _RTHP-EXTENSION-NOTIFY ;
+
 : _RTHP-TARGET-ABORT  ( producer -- )
-    DUP RTHPX-ABORT SWAP _RTHP-EXTENSION-NOTIFY
+    DUP _RTHP-EXTENSION-ABORT
     DUP _RTHP-DELTA-PLAN-CLEAR
     0 OVER _RTHP.PENDING-FACTS _RTHP-KF.BANK !
     DUP _RTHP.TARGET-PENDING @ ?DUP IF
@@ -2800,6 +2876,7 @@ VARIABLE _RTHP-PR-ROWS
     _RTHP-TG-P @ _RTHP.GLYPH-TEXT-USED @
         _RTHP-TG-BANK @ _RTHP-TB.GLYPH-TEXT-USED !
     0 _RTHP-TG-BANK @ _RTHP-TB.PACKED-BYTES !
+    0 _RTHP-TG-BANK @ _RTHP-TB.XBLOCK ! 0 _RTHP-TG-BANK @ _RTHP-TB.XBLOCK-BYTES !
     _RTHP-TG-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@
         _RTHP-TG-BANK @ _RTHP-TB.GLYPH-RUN-LIMIT !
     _RTHP-TG-P @ _RTHP.SOURCE-CONTENT-EPOCH @
@@ -3012,31 +3089,42 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
 \   run of damage up to 64 bits long, and other damage all but once in
 \   about 2^63 times.  A seal of 0 means none was taken, so when the engine
 \   cannot be had the record is left without one, as it is in the rare case
-\   that its CRC is 0.  The shell's banks use it too.
+\   that its CRC is 0.
 : _RTHP-SEAL-OF  ( a u -- seal )
     ['] CRC64 CATCH IF 2DROP 0 THEN ;
 
-\ _RTHP-SEAL-TAKE ( a u -- seal )
-\   The seal a record takes when it is sent: with every check on
-\   (check-mode.f) the seal of its U bytes at A, and in normal mode, which
-\   reads no seal, 0.  Taking a seal checks nothing, so it names nothing; a
-\   later check compares it.  The shell's banks take theirs here too.
-: _RTHP-SEAL-TAKE  ( a u -- seal )
-    CHK-EVERY-FRAME? IF _RTHP-SEAL-OF ELSE 2DROP 0 THEN ;
+\ _RTHP-SEAL-MORE ( seal a u -- seal' )
+\   SEAL carried on over the U bytes at A, as the seal of what it sealed
+\   with those bytes after it: 0 when SEAL is none or the engine cannot be
+\   had.
+: _RTHP-SEAL-MORE  ( seal a u -- seal' )
+    2 PICK 0= IF 2DROP EXIT THEN
+    ['] CRC64-UPDATE CATCH IF 2DROP DROP 0 THEN ;
 
-\ A packed bank's seal covers its header, its entries and what it packed:
-\ everything a later frame or a click reads of it.
+\ A packed bank's seal covers its header, its entries and what it packed,
+\ and then the extension's part it names: everything a later frame or a
+\ click reads of it.
 : _RTHP-BANK-SPAN  ( bank -- a u )
     DUP _RTHP-TB.COUNT @ _RTHP-TARGET-ENTRY-SIZE *
     _RTHP-TARGET-BANK-HEADER-SIZE + OVER _RTHP-TB.PACKED-BYTES @ + ;
-: _RTHP-BANK-SEAL  ( bank -- seal )  _RTHP-BANK-SPAN _RTHP-SEAL-OF ;
+: _RTHP-BANK-SEAL  ( bank -- seal )
+    DUP _RTHP-BANK-SPAN _RTHP-SEAL-OF
+    SWAP _RTHP-XBLOCK@ ?DUP IF _RTHP-SEAL-MORE ELSE DROP THEN ;
+
+\ _RTHP-BANK-SEAL-TAKE ( bank -- seal )
+\   The seal a bank takes when its frame is sent: with every check on
+\   (check-mode.f) its seal, and in normal mode, which reads no seal, 0.
+\   Taking a seal checks nothing, so it names nothing; a later check
+\   compares it.
+: _RTHP-BANK-SEAL-TAKE  ( bank -- seal )
+    CHK-EVERY-FRAME? IF _RTHP-BANK-SEAL ELSE DROP 0 THEN ;
 
 \ _RTHP-SEAL-HOLDS? ( seal now c-addr u -- flag )
 \   Whether a record still holds what it held when it took SEAL, now that
 \   its seal is NOW.  A record that took no seal, or one the engine cannot
 \   seal now, is not vouched for, and nothing is named.  Otherwise the two
 \   must match, and when they do not, the check names the structure C-ADDR
-\   U as damaged.  The shell's banks use it too.
+\   U as damaged.
 : _RTHP-SEAL-HOLDS?  ( seal now c-addr u -- flag )
     2OVER 0= SWAP 0= OR IF 2DROP 2DROP 0 EXIT THEN
     2SWAP = -ROT CHK-NAME ;
@@ -3050,7 +3138,7 @@ VARIABLE _RTHP-TV-EXPECTED-RECORD-U
 \ shows, but nothing vouches for it either: the next frame goes out whole,
 \ and no click is routed through it.
 : _RTHP-SEAL-PENDING  ( producer -- )
-    DUP _RTHP.TARGET-PENDING @ _RTHP-BANK-SPAN _RTHP-SEAL-TAKE
+    DUP _RTHP.TARGET-PENDING @ _RTHP-BANK-SEAL-TAKE
     SWAP _RTHP.PENDING-SEAL ! ;
 : _RTHP-ACTIVE-SEALED?  ( producer -- flag )
     CHK-EVERY-FRAME? 0= IF DROP -1 EXIT THEN
@@ -3662,12 +3750,15 @@ VARIABLE _RTHP-TL-INTENT
     DUP _RTHP.PHASE @ _RTHP-PH-WAIT <>
     OVER _RTHP.TARGET-ACTIVE @ 0<> OR
     OVER _RTHP.TARGET-PENDING @ 0<> OR IF 2DROP SCB-S-INVALID EXIT THEN
+    \ The extension blocks come from MEMORY alone, so it gives back each one.
+    DUP _RTHP.XBLOCK0-A @ OVER _RTHP.XBLOCK1-A @ OR IF 2DROP SCB-S-INVALID EXIT THEN
     _RTHP.MEMORY ! SCB-S-OK ;
 
 \ RTHP-FINI ( producer -- )
-\   Give back the arenas the producer owns and clear it.  Call it once the
-\   terminal holds nothing of this producer's and nothing will step it.
-\   Every picture claim goes, so CELL shows each picture.
+\   Give back the arenas and extension blocks the producer owns and clear
+\   it.  Call it once the terminal holds nothing of this producer's and
+\   nothing will step it.  Every picture claim goes, so CELL shows each
+\   picture.
 : RTHP-FINI  ( producer -- )
     UPICSN-RELEASE-ALL
     DUP _RTHP.MAGIC @ _RTHP-MAGIC = OVER _RTHP.SELF @ 2 PICK = AND
@@ -3682,6 +3773,12 @@ VARIABLE _RTHP-TL-INTENT
         THEN
         DUP _RTHP.RESOURCES-A @ ?DUP IF
             OVER _RTHP.RESOURCES-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        THEN
+        DUP _RTHP.XBLOCK1-A @ ?DUP IF
+            OVER _RTHP.XBLOCK1-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        THEN
+        DUP _RTHP.XBLOCK0-A @ ?DUP IF
+            OVER _RTHP.XBLOCK0-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
         THEN
     THEN
     RTHP-SIZE 0 FILL ;
@@ -9309,6 +9406,48 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     0 _RTHP-W-P @ _RTHP.GLYPH-DRAW !
     RTE-S-OK ;
 
+\ _RTHP-XBLOCK-GROW ( need producer -- rte-status )
+\   The free extension block, replaced by one from the memory source that
+\   holds NEED bytes and half again.  No bank names the free block
+\   (_RTHP-XBLOCK-FREE-FIELD), so nothing reads what it held.  Without a
+\   memory source, or when the source has no such block, nothing changes:
+\   CAPACITY, with the bytes asked for and held kept for the fallback
+\   record.  A block that is not apart from the producer's own storage is
+\   an anomaly; the extension proves it apart from its own.
+VARIABLE _RTHP-XG-P VARIABLE _RTHP-XG-A VARIABLE _RTHP-XG-BYTES
+: _RTHP-XG-APART?  ( -- flag )
+    _RTHP-XG-A @ _RTHP-XG-BYTES @ _RTHP-XG-P @ _RTHP-G-SEPARATE? 0= IF 0 EXIT THEN
+    _RTHP-XG-A @ _RTHP-XG-BYTES @
+        _RTHP-XG-P @ DUP _RTHP.ARENA-A @ SWAP _RTHP.ARENA-U @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTHP-XG-A @ _RTHP-XG-BYTES @
+        _RTHP-XG-P @ DUP _RTHP.XBLOCK0-A @ SWAP _RTHP.XBLOCK0-U @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTHP-XG-A @ _RTHP-XG-BYTES @
+        _RTHP-XG-P @ DUP _RTHP.XBLOCK1-A @ SWAP _RTHP.XBLOCK1-U @
+        MSPAN-OVERLAP? 0= ;
+: _RTHP-XBLOCK-GROW  ( need producer -- rte-status )
+    _RTHP-XG-P !
+    _RTHP-XG-P @ _RTHP.MEMORY @ 0= IF DROP RTE-S-CAPACITY EXIT THEN
+    DUP 1 RSHIFT + 7 + -8 AND _RTHP-XG-BYTES !
+    _RTHP-XG-BYTES @ _RTHP-XG-P @ _RTHP.MEMORY @ MSRC-ALLOC
+    DUP 0= IF
+        DROP
+        _RTHP-W-MEMORY-ASKED @ 0= IF
+            _RTHP-XG-BYTES @ _RTHP-W-MEMORY-ASKED !
+            _RTHP-XG-P @ _RTHP.MEMORY @ MSRC-HELD@ _RTHP-W-MEMORY-HELD !
+        THEN
+        RTE-S-CAPACITY EXIT
+    THEN _RTHP-XG-A !
+    _RTHP-XG-APART? S" Desk's memory source" CHK-HANDOVER 0= IF
+        _RTHP-XG-A @ _RTHP-XG-BYTES @ _RTHP-XG-P @ _RTHP.MEMORY @ MSRC-FREE
+        RTE-S-INVALID EXIT
+    THEN
+    _RTHP-XG-P @ _RTHP-XBLOCK-FREE-FIELD >R
+    R@ @ ?DUP IF R@ 8 + @ _RTHP-XG-P @ _RTHP.MEMORY @ MSRC-FREE THEN
+    _RTHP-XG-A @ R@ ! _RTHP-XG-BYTES @ R> 8 + !
+    RTE-S-OK ;
+
 \ The optional parts a candidate carries now.
 : _RTHP-PRESENT-PARTS  ( producer -- parts )
     0 OVER _RTHP.STATIC-COUNT @ IF RTHP-PART-STATICS OR THEN
@@ -14295,6 +14434,7 @@ VARIABLE _RTHP-U-RESULT
     _RTHP-U-PENDING @ _RTHP-U-BANK-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
     _RTHP-U-ACTIVE @ _RTHP-U-PENDING @ _RTHP-U-COPY-U @ MOVE
     0 _RTHP-U-PENDING @ _RTHP-TB.VALID !
+    0 _RTHP-U-PENDING @ _RTHP-TB.XBLOCK ! 0 _RTHP-U-PENDING @ _RTHP-TB.XBLOCK-BYTES !
     _RTHP-U-DRAW @ _RTHP-U-PENDING @ _RTHP-TB.DRAW !
     _RTHP-U-SOURCE-GEN @ _RTHP-U-PENDING @ _RTHP-TB.SOURCE-GEN !
     _RTHP-U-CONTENT-EPOCH @
@@ -14958,13 +15098,13 @@ VARIABLE _RTHP-DIAG-ALONE-REBUILDS
     \ working storage; try once more after it grew.
     _RTHP-P-EXTENSION @ 0= _RTHP-P-P @ _RTHP.EXTENSION @ 0<> AND IF
         _RTHP-P-P @ _RTHP-GROW-STORAGE? IF
-            RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+            _RTHP-P-P @ _RTHP-EXTENSION-ABORT
             RTHPX-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
                 DUP _RTHP-P-XSTATUS ! RTE-S-OK = _RTHP-P-EXTENSION !
         THEN
     THEN
     _RTHP-P-EXTENSION @ 0= IF
-        RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+        _RTHP-P-P @ _RTHP-EXTENSION-ABORT
         \ An installed extension that could not build may only need more
         \ terminal space; otherwise its part stays CELL under the base START.
         _RTHP-P-P @ _RTHP.EXTENSION @ IF
@@ -15215,7 +15355,7 @@ _RTHP-DIAG-DELTA-WHY 64 CELLS 0 FILL
     RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
     DUP RTE-S-CAPACITY = IF
         _RTHP-P-P @ _RTHP-GROW-STORAGE? IF
-            DROP RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+            DROP _RTHP-P-P @ _RTHP-EXTENSION-ABORT
             RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
         THEN
     THEN ;
