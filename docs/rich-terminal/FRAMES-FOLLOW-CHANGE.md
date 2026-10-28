@@ -1111,6 +1111,22 @@ frame before the change driver.
     lie outside the arena, whose layout fixes the banks' size, and grow to
     what a part needs and half again, as the shell's banks did. The shell
     keeps its work space until 9b.3.
+    **Done** on 2026-10-28 (9852b10a, ceabef49). The shell freezes its part
+    into the extension block the frame on screen does not name, and the
+    pending bank names it; the shell's roles, banks, seals and pairing
+    checks are gone, and with every check on the bank's seal covers the
+    part. A typed letter's frame builds in the same 7.78 million steps and
+    sends the same 18 DELTAs and bytes. Desk with each of the ten
+    applications and the canonical journey passed with the shadow check,
+    sending the presents 9b.1's runs sent. The blocks came to the banks'
+    size less the smaller header's share; in File Explorer, Desk's memory
+    source held 88 bytes less. The journey in safe mode found that since
+    9b.1 the shell had handed the planner an empty glyph plan that still
+    named the producer's old banks, which every check refuses, so the shell
+    refused each frame of Desk's until the producer had built it alone, and
+    Desk stopped a minute in. ceabef49 gives the planner no banks then, and
+    the journey passed in safe mode with no damage named. See the
+    [evidence](../../local_testing/evidence/frames-follow-change-part9b2-20261028.md).
   - **9b.3. One build.** The producer builds the batch itself, calling the
     shell's model, region and chrome words; the shell's work space, its
     second copy of every item and its own comparison go, and the
@@ -1147,7 +1163,8 @@ left stale.
 of this part, falls toward the target of about 2 million, an estimate each
 slice replaces with measurement. RUHA's banks, 19.1 MiB, and the shell's
 work space are freed. The shell's banks become the screen producer's
-extension blocks, the same size, since the frame on screen needs its record.
+extension blocks, of about the same size, since the frame on screen needs its
+record.
 
 ## Part 10. Today's structure retires — cleanup
 
@@ -1168,15 +1185,16 @@ the system and Desk have loaded (`akashic_tui.py`). RUHA's banks are fixed
 by Desk when it starts, at 19.1 MiB, and its snapshots used 12 to 40 KiB of
 them in part 0's runs.
 
-Part 9 frees RUHA's banks (9a) and the shell's work space (9b.3); 9b.2 moves
-the shell's two banks, unchanged in size, into the screen producer's
-extension blocks.
-It adds the projection's record of what each element last projected, sized
-from the elements on the screen, and the pending change set, sized from one
-frame's changes. Captures go into scratch, which grows to what one build
-needs; a full build's captures came to 12 to 40 KiB in part 0's runs. Every
-block grows from Desk's memory source to what the screen needs and half
-again, as the engine's does. Each part reports what it adds or frees.
+Part 9 frees RUHA's banks (9a) and the shell's work space (9b.3). 9b.2
+moved the shell's two banks into the screen producer's extension blocks,
+which grow by the banks' rule from a part 40 bytes smaller; in the canonical
+journey each came to 236,536 bytes. Part 9 also adds the projection's record
+of what each element last projected, sized from the elements on the screen,
+and the pending change set, sized from one frame's changes. Captures go into
+scratch, which grows to what one build needs; a full build's captures came
+to 12 to 40 KiB in part 0's runs. Every block grows from Desk's memory
+source to what the screen needs and half again, as the engine's does. Each
+part reports what it adds or frees.
 
 ## Order and checks
 
