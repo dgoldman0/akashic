@@ -5272,6 +5272,20 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
         assert absent not in for_shell
     assert for_shell.index("_RTHP-SHELL-RESIDUE?") < for_shell.index(
         "_RTHP-BASE-LAYER!") < for_shell.index("_RTHP-WRAP-HYBRID")
+    # The shell keeps every applet control under its acknowledged identity in
+    # a DELTA, so a comparison of shell-built candidates refuses a control the
+    # frame on screen lacks before anything renumbers the candidate.
+    compatible = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
+    unmatched = compatible[compatible.index("_RTHP-D-MATCHED @ 0= IF"):]
+    assert unmatched.index("_RTHP.SHELL-BUILT @ IF 0 EXIT THEN") < unmatched.index(
+        "-1 _RTHP-D-CHANGED !")
+    # A DELTA short of engine working storage is prepared again once it grew.
+    live = _word(source, "_RTHP-PREPARE-LIVE")
+    prepared = _word(source, "_RTHP-DELTA-PREPARED?")
+    assert live.index("_RTHP-DELTA-CANDIDATE?") < live.index("_RTHP-DELTA-PREPARED?")
+    assert prepared.count("RTHPX-DELTA-PREPARE") == 2
+    assert prepared.index("RTE-S-CAPACITY =") < prepared.index(
+        "_RTHP-GROW-STORAGE?") < prepared.index("RTHPX-ABORT")
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
     assert "RTE-CONTROL-PREFLIGHT" not in source
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source

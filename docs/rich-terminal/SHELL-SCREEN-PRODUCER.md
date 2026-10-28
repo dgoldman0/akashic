@@ -241,9 +241,13 @@ shell: it plans no residual runs of its own and admits nothing. The shell
 plans the runs of its regions and admits its whole batch, the candidate's
 items among them; the producer's fixed check reads the candidate's own
 plans, its identity frontier counts the candidate's objects, and its DELTA
-comparison matches the applications' items alone. The producer builds its
-candidate alone, with its runs and admission, only before the owner opens,
-which that admission sizes, and after the shell refuses a batch.
+comparison matches the applications' items alone. That comparison refuses
+a control the frame on screen lacks, since the shell's DELTA keeps every
+applet control under its acknowledged identity, and a DELTA the shell
+cannot prepare for want of engine working storage is prepared once more
+after the storage grew, as a START is. The producer builds its candidate
+alone, with its runs and admission, only before the owner opens, which
+that admission sizes, and after the shell refuses a batch.
 
 The shell candidate is prepared only after RTHP freezes its ordinary target
 bank, before retained BEGIN. Only successful PREPARE selects shell EMIT. Any

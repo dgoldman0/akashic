@@ -12824,6 +12824,10 @@ VARIABLE _RTHP-D-REV-PENDING
 : _RTHP-D-CONTROL-COMPATIBLE?  ( index -- flag )
     _RTHP-D-CONTROL-PAIR 0= IF 0 EXIT THEN
     _RTHP-D-MATCHED @ 0= IF
+        \ Desk's shell keeps every applet control under its acknowledged
+        \ identity in a DELTA, so a control the frame on screen lacks
+        \ needs a complete candidate replacement.
+        _RTHP-D-P @ _RTHP.SHELL-BUILT @ IF 0 EXIT THEN
         _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ DUP RTE-CONTROL-FIELD =
             SWAP _RTHP-DIALOG-KIND? OR IF 0 EXIT THEN
         _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION @
@@ -15200,6 +15204,20 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
 CREATE _RTHP-DIAG-DELTA-WHY 64 CELLS ALLOT
 _RTHP-DIAG-DELTA-WHY 64 CELLS 0 FILL
 : _RTHP-DIAG-WHY+  ( code -- )  63 MIN CELLS _RTHP-DIAG-DELTA-WHY + 1 SWAP +! ;
+\ The extension's DELTA candidate, when one is installed.  One that needs
+\ more engine working storage than the engine holds is prepared once more
+\ after the storage grew, as a START's is.
+: _RTHP-DELTA-PREPARED?  ( -- flag )
+    _RTHP-P-P @ _RTHP.EXTENSION @ 0= IF -1 EXIT THEN
+    RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
+    DUP RTE-S-CAPACITY = IF
+        _RTHP-P-P @ _RTHP-GROW-STORAGE? IF
+            DROP RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
+            RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
+        THEN
+    THEN
+    RTE-S-OK = ;
+
 : _RTHP-PREPARE-LIVE  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-P-P !
@@ -15222,7 +15240,7 @@ _RTHP-DIAG-DELTA-WHY 64 CELLS 0 FILL
         IF
             \ The base candidate now carries acknowledged identities, so an
             \ extension refusing the DELTA needs a fresh build for its START.
-            RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CHECK 0= IF
+            _RTHP-DELTA-PREPARED? 0= IF
                 _RTHP-P-P @ _RTHP-RECAPTURE-START EXIT
             THEN
             _RTHP-PH-READY-DELTA _RTHP-P-P @ _RTHP.PHASE !

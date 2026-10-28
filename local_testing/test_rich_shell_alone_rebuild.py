@@ -1,12 +1,14 @@
-"""Execute a START's preparation with Desk's shell installed.
+"""Execute a START's and a DELTA's preparation with Desk's shell installed.
 
 With the shell installed, the producer builds its candidate for the shell:
 no runs and no admission of its own, since the shell plans the runs of its
 regions and admits its whole batch.  When the shell cannot build the batch,
 the candidate is built again alone, with its own runs, admission and family
 strips, and offered to the shell once more; if the shell still cannot
-build, the candidate goes out on its own.  The real PREPARE-START, alone
-build and rebuild result run on both executors.  The shell, the candidate
+build, the candidate goes out on its own.  A DELTA the shell cannot
+prepare for want of engine working storage is prepared once more after the
+storage grew, as a START is.  The real PREPARE-START, alone build, rebuild
+result and DELTA preparation run on both executors.  The shell, the candidate
 build, capture, packing and the engine are scripted seams, each recording
 what the producer asked of it.
 """
@@ -28,13 +30,13 @@ _SEAMS = {
     # The shell: each PREPARE answers with the next scripted status.
     "_RTHP-EXTENSION-CALL": (
         ": _RTHP-EXTENSION-CALL DROP "
-        "DUP RTHPX-PREPARE = IF DROP AR-PREPARES @ CELLS AR-ANSWERS + @ "
-        "1 AR-PREPARES +! EXIT THEN "
+        "DUP RTHPX-PREPARE = OVER RTHPX-DELTA-PREPARE = OR IF "
+        "DROP AR-PREPARES @ CELLS AR-ANSWERS + @ 1 AR-PREPARES +! EXIT THEN "
         "DUP RTHPX-ABORT = IF DROP 1 AR-XABORTS +! RTE-S-OK EXIT THEN "
         "DUP RTHPX-EMIT = IF DROP 1 AR-XEMITS +! RTE-S-OK EXIT THEN "
         "DROP RTE-S-OK ;"
     ),
-    "_RTHP-GROW-STORAGE?": ": _RTHP-GROW-STORAGE? DROP 0 ;",
+    "_RTHP-GROW-STORAGE?": ": _RTHP-GROW-STORAGE? DROP 1 AR-GROWS +! AR-GROW @ ;",
     "_RTHP-ASK-FOR-SPACE?": ": _RTHP-ASK-FOR-SPACE? DROP 0 ;",
     "_RTHP-CROSS-LAYERED?": ": _RTHP-CROSS-LAYERED? DROP 0 ;",
     "_RTHP-REFUSAL-REASON": ": _RTHP-REFUSAL-REASON DROP RTHP-WHY-OTHER ;",
@@ -57,7 +59,7 @@ _SEAMS = {
 _FIXTURE_VARIABLES = (
     "AR-ABORTS", "AR-PACKS", "AR-PREPARES", "AR-XABORTS", "AR-XEMITS", "AR-FALLBACKS",
     "AR-BUILDS", "AR-ALONE", "AR-BUILD-STATUS", "AR-BUILT", "AR-SEALS",
-    "AR-BASE-STARTS",
+    "AR-BASE-STARTS", "AR-GROWS", "AR-GROW",
 )
 
 
@@ -90,7 +92,7 @@ class AloneHarness:
             chunks.append(declaration)
 
         for name in (*_FIXTURE_VARIABLES, "AR-ANSWERS", "_RTHP-PREPARE-START",
-                     "_RTHP-DIAG-ALONE-REBUILDS"):
+                     "_RTHP-DELTA-PREPARED?", "_RTHP-DIAG-ALONE-REBUILDS"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -139,6 +141,16 @@ class AloneHarness:
         answers = self.runtime.dictionary.find(b"AR-ANSWERS").body_address
         for index, status in enumerate(statuses):
             self.runtime.memory.write64(answers + 8 * index, self.constant(status))
+
+    def delta_prepared(self):
+        self.variable("_RTHP-P-P", self.producer)
+        self.runtime.execute("_RTHP-DELTA-PREPARED?", step_budget=3_000_000)
+        result = self.runtime.main_context.data.snapshot()
+        while self.runtime.main_context.data.depth():
+            self.runtime.main_context.data.pop()
+        assert self.runtime.main_context.returns.snapshot() == ()
+        assert len(result) == 1
+        return result[0] == MASK64
 
     def prepare_start(self):
         self.runtime.main_context.data.push(self.producer)
@@ -224,3 +236,28 @@ def test_a_draw_that_does_not_fit_even_alone_is_refused(harness):
     assert h.variable("_RTHP-W-ALONE") == 0
     assert h.field("_RTHP.REFUSED-DRAW") == 12
     assert h.phase() == h.constant("_RTHP-PH-READY-BLANK")
+
+
+@pytest.mark.parametrize("answers,grow,prepared,prepares,grows", [
+    (("RTE-S-OK",), 0, True, 1, 0),
+    (("RTE-S-CAPACITY", "RTE-S-OK"), MASK64, True, 2, 1),
+    (("RTE-S-CAPACITY",), 0, False, 1, 1),
+    (("RTE-S-CAPACITY", "RTE-S-CAPACITY"), MASK64, False, 2, 1),
+    (("RTE-S-UNAVAILABLE",), MASK64, False, 1, 0),
+])
+def test_a_delta_short_of_engine_storage_is_prepared_again_once_it_grew(
+        harness, answers, grow, prepared, prepares, grows):
+    h = harness
+    h.shell_answers(*answers)
+    h.variable("AR-GROW", grow)
+    assert h.delta_prepared() is prepared
+    assert (h.variable("AR-PREPARES"), h.variable("AR-GROWS")) == (prepares, grows)
+    # The staged DELTA is abandoned before the shell prepares it again.
+    assert h.variable("AR-XABORTS") == prepares - 1
+
+
+def test_without_the_shell_the_producer_s_own_delta_needs_no_preparation(harness):
+    h = harness
+    h.field("_RTHP.EXTENSION", 0)
+    assert h.delta_prepared()
+    assert (h.variable("AR-PREPARES"), h.variable("AR-GROWS")) == (0, 0)
