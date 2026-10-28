@@ -236,6 +236,9 @@ def worker(args):
         status = client.request("status", detailed=False)
         if status["semantic_execution"]["backend"] != "native":
             raise RuntimeError("diagnostic session did not select native execution")
+        # SDL keeps the screen awake while a window is open unless this is
+        # set; a run needs no lit screen, so the host may dim and lock it.
+        os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "1")
         pygame.display.init()
         pygame.font.init()
         if pygame.display.get_driver() in {"dummy", "offscreen"}:
@@ -244,9 +247,9 @@ def worker(args):
         font, cell_w, cell_h, fitted = journey_api._fit_viewer_font(
             pygame, args.font, 18, tui.DESKTOP_ACCEPTANCE_COLS, tui.DESKTOP_ACCEPTANCE_ROWS,
             fallbacks)
-        window = pygame.display.set_mode((tui.DESKTOP_ACCEPTANCE_COLS * cell_w,
-                                          tui.DESKTOP_ACCEPTANCE_ROWS * cell_h))
-        pygame.display.set_caption("Akashic typing cadence — 5 characters/second")
+        window = journey_api.open_viewer_window(
+            pygame, (tui.DESKTOP_ACCEPTANCE_COLS * cell_w, tui.DESKTOP_ACCEPTANCE_ROWS * cell_h),
+            "Akashic typing cadence — 5 characters/second")
         mark("physical_display", driver=pygame.display.get_driver(), font_size=fitted)
         control_font = journey_api.FontSet(pygame, args.font, 16, fallbacks, cells=False)
         control_font.set_bold(True)

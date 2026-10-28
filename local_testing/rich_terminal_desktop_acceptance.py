@@ -11392,6 +11392,141 @@ def _pointer_event_types(pygame_module) -> tuple[int, ...]:
     )
 
 
+def open_viewer_window(pygame_module, size: tuple[int, int], caption: str):
+    """Open the viewer's window on the real display, out of the way.
+
+    On X11 the window is created hidden and marked before it is shown: a
+    zero _NET_WM_USER_TIME, so the window manager gives it no focus; the
+    below state, so it opens beneath every other window; and the
+    skip-taskbar state, so GNOME shows no "is ready" notice for it.  Once
+    shown it goes back in the task list, is minimized and loses the below
+    state: it waits in the dock, takes no key typed elsewhere, and comes
+    forward like any window when opened.  Frames reach it all the while,
+    through the same display path as a window in view.  Any other driver
+    shows the window as SDL does."""
+
+    window = pygame_module.display.set_mode(size, pygame_module.HIDDEN)
+    pygame_module.display.set_caption(caption)
+    from pygame._sdl2.video import Window
+
+    x11 = None
+    if pygame_module.display.get_driver() == "x11":
+        x11 = _X11ViewerWindow.open(pygame_module.display.get_wm_info().get("window"))
+    if x11 is None:
+        Window.from_display_module().show()
+        return window
+    try:
+        x11.before_map()
+        Window.from_display_module().show()
+        # GNOME minimizes no window that is out of the task list.
+        x11.remove_states("_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_DEMANDS_ATTENTION")
+        pygame_module.display.iconify()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            pygame_module.event.pump()
+            if pygame_module.event.get(pygame_module.WINDOWMINIMIZED):
+                break
+            time.sleep(0.01)
+        x11.remove_states("_NET_WM_STATE_BELOW", "_NET_WM_STATE_DEMANDS_ATTENTION")
+    finally:
+        x11.close()
+    return window
+
+
+class _X11ViewerWindow:
+    """The few EWMH requests open_viewer_window makes, through an X
+    connection of its own, which syncs each request before it returns."""
+
+    _CLIENT_MESSAGE = 33
+    _CARDINAL = 6
+    _ATOM = 4
+    _PROP_APPEND = 2
+    _PROP_REPLACE = 0
+    _REMOVE = 0
+    # SubstructureNotifyMask | SubstructureRedirectMask
+    _ROOT_MASK = (1 << 19) | (1 << 20)
+
+    @classmethod
+    def open(cls, window_id):
+        import ctypes
+        import ctypes.util
+
+        if not window_id:
+            return None
+        library = ctypes.util.find_library("X11")
+        if library is None:
+            return None
+        x11 = ctypes.CDLL(library)
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        display = x11.XOpenDisplay(None)
+        if not display:
+            return None
+        return cls(ctypes, x11, display, window_id)
+
+    def __init__(self, ctypes, x11, display, window_id):
+        self.ctypes, self.x11, self.display, self.window = ctypes, x11, display, window_id
+        c = ctypes
+        x11.XInternAtom.restype = c.c_ulong
+        x11.XInternAtom.argtypes = [c.c_void_p, c.c_char_p, c.c_int]
+        x11.XChangeProperty.argtypes = [
+            c.c_void_p, c.c_ulong, c.c_ulong, c.c_ulong,
+            c.c_int, c.c_int, c.c_void_p, c.c_int,
+        ]
+        x11.XDefaultRootWindow.restype = c.c_ulong
+        x11.XDefaultRootWindow.argtypes = [c.c_void_p]
+        x11.XSendEvent.argtypes = [c.c_void_p, c.c_ulong, c.c_int, c.c_long, c.c_void_p]
+        x11.XSync.argtypes = [c.c_void_p, c.c_int]
+        x11.XCloseDisplay.argtypes = [c.c_void_p]
+
+        class ClientMessage(c.Structure):
+            _fields_ = [
+                ("type", c.c_int), ("serial", c.c_ulong), ("send_event", c.c_int),
+                ("display", c.c_void_p), ("window", c.c_ulong),
+                ("message_type", c.c_ulong), ("format", c.c_int),
+                ("data", c.c_long * 5),
+            ]
+
+        class Event(c.Union):
+            _fields_ = [("xclient", ClientMessage), ("pad", c.c_long * 24)]
+
+        self.Event = Event
+
+    def atom(self, name: str) -> int:
+        return self.x11.XInternAtom(self.display, name.encode(), 0)
+
+    def before_map(self) -> None:
+        c = self.ctypes
+        # Format-32 property data is passed as C longs.
+        zero = c.c_long(0)
+        self.x11.XChangeProperty(self.display, self.window, self.atom("_NET_WM_USER_TIME"),
+                                 self._CARDINAL, 32, self._PROP_REPLACE, c.byref(zero), 1)
+        states = (c.c_long * 2)(self.atom("_NET_WM_STATE_BELOW"),
+                                self.atom("_NET_WM_STATE_SKIP_TASKBAR"))
+        self.x11.XChangeProperty(self.display, self.window, self.atom("_NET_WM_STATE"),
+                                 self._ATOM, 32, self._PROP_APPEND, states, 2)
+        self.x11.XSync(self.display, 0)
+
+    def remove_states(self, first: str, second: str) -> None:
+        event = self.Event()
+        message = event.xclient
+        message.type = self._CLIENT_MESSAGE
+        message.window = self.window
+        message.message_type = self.atom("_NET_WM_STATE")
+        message.format = 32
+        # Remove both states, asked for as an ordinary application (1).
+        message.data[0] = self._REMOVE
+        message.data[1] = self.atom(first)
+        message.data[2] = self.atom(second)
+        message.data[3] = 1
+        self.x11.XSendEvent(self.display, self.x11.XDefaultRootWindow(self.display), 0,
+                            self._ROOT_MASK, self.ctypes.byref(event))
+        self.x11.XSync(self.display, 0)
+
+    def close(self) -> None:
+        self.x11.XCloseDisplay(self.display)
+
+
 def _isolate_scripted_pointer_input(pygame_module) -> None:
     """Keep host pointer traffic outside the scripted evidence journey."""
 
@@ -11427,6 +11562,10 @@ def _pump_physical_viewer_events(
             raise PhysicalDesktopAcceptanceError(
                 "scripted physical acceptance refuses manual pointer input"
             )
+        if event.type == getattr(pygame_module, "WINDOWEXPOSED", -1):
+            # A window opened from the dock shows its surface whole again.
+            pygame_module.display.flip()
+            continue
         _dispatch_physical_pointer_event(
             pygame_module,
             pointer,
@@ -12281,6 +12420,9 @@ def run_physical_desktop_acceptance(
         )
 
         os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
+        # SDL keeps the screen awake while a window is open unless this is
+        # set; a run needs no lit screen, so the host may dim and lock it.
+        os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "1")
         pygame.display.init()
         pygame_initialized = True
         pygame.font.init()
@@ -12315,11 +12457,13 @@ def run_physical_desktop_acceptance(
             cells=False,
         )
         chrome_height = chrome_font.get_linesize() + 6
-        window = pygame.display.set_mode(
+        window = open_viewer_window(
+            pygame,
             (
                 terminal.cols * cell_width,
                 terminal.rows * cell_height + chrome_height,
-            )
+            ),
+            f"Akashic rich-terminal acceptance — starting ({fitted_font_size}px)",
         )
         _isolate_scripted_pointer_input(pygame)
         print(
@@ -12330,10 +12474,6 @@ def run_physical_desktop_acceptance(
             f"{terminal.cols * cell_width}x"
             f"{terminal.rows * cell_height + chrome_height} window pixels, "
             f"{fitted_font_size}px font, {driver} driver"
-        )
-        pygame.display.set_caption(
-            "Akashic rich-terminal acceptance — starting "
-            f"({fitted_font_size}px)"
         )
         glyph_cache: dict = {}
         # The frame the viewer last composed: the next one repaints only what

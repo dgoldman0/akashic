@@ -4567,9 +4567,13 @@ def test_scripted_pointer_input_is_blocked_and_startup_motion_is_cleared() -> No
     source = inspect.getsource(
         acceptance_runner.run_physical_desktop_acceptance
     )
+    # The viewer opens its window through open_viewer_window and resizes it
+    # with set_mode.
     set_modes = [
         match.start()
-        for match in re.finditer("pygame.display.set_mode\\(", source)
+        for match in re.finditer(
+            "open_viewer_window\\(\\s*pygame|pygame.display.set_mode\\(", source
+        )
     ]
     isolates = [
         match.start()
