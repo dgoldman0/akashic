@@ -1195,7 +1195,11 @@ The ordinary screen's final-writer plane is checked before semantic capture. A
 document touched by later foreground paint contributes a directory-only
 identity with all semantic slices zero and remains dirty, so residual output
 owns its pixels and hit area for that draw and exposure forces a fresh capture.
-This is conservative document-level occlusion, not a terminal overlay scene.
+A document's own overlay, the prompt it opens or the dialog it shows, is the
+exception: when it is all the foreground paint over the document, the
+document keeps every root, those it meets too, and the producer puts the
+overlay in the layer above them ([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)).
+Other foreground paint keeps the document-level rule.
 
 An aggregate content epoch is collision-free provenance, not a hash. A new
 snapshot inherits the prior epoch only when every visible nonempty document

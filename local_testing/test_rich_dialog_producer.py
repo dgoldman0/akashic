@@ -255,9 +255,29 @@ def test_a_dialog_off_its_document_or_the_screen_stays_cell(h, kwargs):
     assert h.fixed()
 
 
-def test_a_dialog_over_an_earlier_family_leaves_the_draw_cell(h):
+def test_a_dialog_widget_lies_above_its_own_documents_roots(h):
+    # A root of the dialog's own document, at depth 3, beneath the dialog at
+    # 254: the dialog widget is the document's overlay, in the layer above.
     h.setup()
     prefix = struct.pack("<10Q", 11, 9, 1, 4, 23, 3, 3, 2, 4, 22)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"), prefix)
+    h.field(h.producer, "_RTHP.CLAIMS-USED", 80)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (0,)
+    assert h.get("DIALOG-COUNT") == 1
+    assert h.get("DIALOG-CONTROLS") == h.get("CONTROL-COUNT") == 3
+    assert h.get("CLAIMS-USED") == 160
+    assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"), 80) == prefix
+    assert h.get("DIALOG-REFUSED") == 0
+
+
+@pytest.mark.parametrize("claim", (
+    (12, 9, 1, 4, 23, 3, 3, 2, 4, 22),    # another document's root
+    (11, 9, 1, 4, 23, 254, 3, 2, 4, 22),  # its own document's root, as high as the dialog
+    (11, 9, 2, 0, 23, 3, 3, 2, 4, 22),    # its own document's prompt, another overlay
+))
+def test_a_dialog_over_anything_else_leaves_the_draw_cell(h, claim):
+    h.setup()
+    prefix = struct.pack("<10Q", *claim)
     h.runtime.memory.write_bytes(h.get("CLAIMS-A"), prefix)
     h.field(h.producer, "_RTHP.CLAIMS-USED", 80)
     assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (h.constant("RTE-S-UNAVAILABLE"),)

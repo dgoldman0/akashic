@@ -1927,7 +1927,7 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
     sample picture with SELECTED selected, its folder tree, its menu bar,
     and the selected path in its status bar; with RENAME, the rename prompt
     holding it over the tile, with GOTO, the Go to prompt holding it, with
-    DELETE, its delete question, with WARNED, its warning that the path
+    DELETE, its delete question over the table, with WARNED, its warning that the path
     was not found, and with RENAMED, its notice that the file was
     renamed."""
 
@@ -1969,8 +1969,8 @@ def _fexp_frame(selected: str = "large.txt", *, status: bool = True, rename: str
     if renamed:
         frame = _noticed(frame, _notice("Renamed", StatusSeverity.NEUTRAL))
     if delete:
-        # The question covers the detail table, which the capture withholds.
-        frame = replace(frame, semantic_item_view_claims=(tree,))
+        # The question covers part of the detail table, which stays rich in
+        # the layer beneath it.
         frame = _asked(frame, _question("Delete the selected item?", (
             ("Delete", ButtonFlag.DESTRUCTIVE),
             ("Cancel", ButtonFlag.DEFAULT | ButtonFlag.CANCEL),

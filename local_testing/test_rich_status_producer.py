@@ -334,6 +334,20 @@ def test_status_overlapping_an_existing_claim_refuses_rich_and_preserves_prefix(
     h.guards()
 
 
+def test_status_beneath_its_own_documents_overlay_stays_rich(h):
+    # The same rectangle claimed by the document's own prompt, at 255 above
+    # the status field's 3: the prompt lies in the layer above it.
+    h.setup()
+    prefix = struct.pack("<10Q", 11, 9, 2, 0, 23, 255, 3, 2, 4, 22)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"), prefix)
+    h.field(h.producer, "_RTHP.CLAIMS-USED", len(prefix))
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-STATICS") == (0,)
+    assert h.get("STATIC-COUNT") == 1
+    assert h.get("CLAIMS-USED") == 2 * len(prefix)
+    assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"), len(prefix)) == prefix
+    h.guards()
+
+
 def test_static_empty_text_requires_null_pointer_at_fixed_boundary(h):
     h.setup(label=b"", label_cols=0)
     assert h.build() == (0,)

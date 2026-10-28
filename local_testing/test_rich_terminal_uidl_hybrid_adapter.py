@@ -1308,6 +1308,11 @@ def test_final_writer_occlusion_falls_back_the_complete_document_atomically() ->
         < normal_dirty_at
     )
     assert dispatch.count("SCR-OCCLUSION-RECT?") == 1
+    # A document whose only foreground paint is its own overlay is captured
+    # whole: the overlay lies in the layer above its roots, so none is
+    # clipped away.
+    assert "_RUHA-OVERLAY-ONLY?" in hit_branch
+    assert "OCCLUDED" not in dispatch
     # Directory/totals comparison invalidates the first masked transition;
     # leaving this latch alone lets identical masked frames retain content
     # provenance until exposure triggers the deliberately dirty recapture.

@@ -25,7 +25,10 @@ class InstrumentHarness(GrowthHarness):
                          "tui/rich-terminal/uidl-semantic-items-itm1.f",
                          "tui/rich-terminal/uidl-semantic-documents-doc1.f",
                          "tui/uidl-menu-snapshot.f", "tui/field-content.f",
-                         "tui/rich-terminal/dlg1.f"):
+                         "tui/rich-terminal/dlg1.f",
+                         # An instrument may lie beneath its document's overlay,
+                         # whose sources these name.
+                         "tui/uidl-field-snapshot.f", "tui/uidl-dialog-snapshot.f"):
             sources.append((ROOT / "akashic" / relative).read_text())
         self.definitions = _definitions("\n".join(sources))
         chunks, seen = [], set()

@@ -3096,7 +3096,7 @@ def _prompt_claim(
 
     An application's shared prompt goes out as a TEXT field in a MODAL
     region over its pane.  The rest of the application stays rich beneath it
-    and inactive, except the roots the prompt's row covers."""
+    and inactive, the roots the prompt's row covers too."""
 
     left, top, right, bottom = bounds
     claims = [

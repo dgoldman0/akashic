@@ -210,13 +210,6 @@ _FO-VALIDATE _FO-OK
 \ Only the last record may be the overlay.
 UFLSN-SOURCE-OVERLAY 0 _FO-DESC _UFLSN-D.SOURCE ! _FO-VALIDATE UFLSN-S-INVALID = _FO-ASSERT
 UFLSN-SOURCE-UIDL 0 _FO-DESC _UFLSN-D.SOURCE !
-\ While the capture clips covered roots away, the field under the prompt's
-\ row stays CELL's and the other field and the prompt remain.
--1 UTUI-CAPTURE-OCCLUDED! _FO-CAPTURE 0 UTUI-CAPTURE-OCCLUDED!
-_FO-STATUS @ _FO-OK _FO-COUNT @ 2 = _FO-ASSERT
-0 _FO-DESC UFLSN-DESCRIPTOR-ROW@ 5 = _FO-ASSERT
-1 _FO-DESC UFLSN-DESCRIPTOR-SOURCE@ UFLSN-SOURCE-OVERLAY = _FO-ASSERT
-_FO-VALIDATE _FO-OK
 \ A hidden prompt, or a draw that did not paint it, has no overlay field.
 _FO-PR @ PRM-HIDE _FO-FULL _FO-CAPTURE _FO-COUNT @ 2 = _FO-ASSERT
 1 _FO-DESC UFLSN-DESCRIPTOR-SOURCE@ UFLSN-SOURCE-UIDL = _FO-ASSERT

@@ -408,8 +408,8 @@ class PadAloneJourney(_AppletJourney):
     readout counts characters in every frame that moves the caret.
 
     Ctrl+W on the edited buffer asks first: Pad's dialog, in a modal region
-    over its tile with Pad's menu bar and every root it does not cover rich
-    and inactive beneath it, offers Discard, destructive, and Cancel, the
+    over its tile with Pad's menu bar and every root, those it covers too,
+    rich and inactive beneath it, offers Discard, destructive, and Cancel, the
     default.  Pressing Cancel closes the dialog and keeps the buffer.
 
     Pad then opens notes.md through its Open prompt, a TEXT field in a
@@ -981,8 +981,8 @@ class FexpAloneJourney(_AppletJourney):
     renames large.txt to notes.txt, which stays selected while File
     Explorer says it was renamed in a neutral notice.  Delete then asks
     before it deletes the file: File Explorer's dialog, in a modal region
-    over the tile with its menu bar and every root it does not cover rich
-    and inactive beneath it, offers Delete, destructive, and Cancel, the
+    over the tile with its menu bar and every root, those it covers too,
+    rich and inactive beneath it, offers Delete, destructive, and Cancel, the
     default, and pressing Cancel closes it and leaves the file listed and
     selected.  Ctrl+G opens the Go to prompt holding the folder shown, the
     root, and a path typed after it names nothing: Enter closes the prompt,
@@ -1698,13 +1698,18 @@ class FexpAloneJourney(_AppletJourney):
         if self.stage in self._PDF_STAGES:
             return self._pdf(offer, generation, projection, sender)
         if self.stage in (self.DELETE_ASKED, self.DELETE_CANCELLED):
-            # The question may cover the detail table, which the capture
-            # then withholds until it closes.
+            # The question covers part of the detail table, which stays rich
+            # in the layer beneath it, and inactive while it is open.
             bounds = _desk_content_bounds(projection)
             delete = _dialog_claim(projection, FEXPLORER_DELETE_QUESTION, bounds)
             if self.stage == self.DELETE_ASKED:
                 if delete is None:
                     return self._wait("File Explorer's question after Delete")
+                table, tree = self._views(projection)
+                if table is None:
+                    raise PhysicalDesktopAcceptanceError(
+                        "File Explorer's detail table fell back beneath its question"
+                    )
                 value = _cancel_of_confirm(offer, projection, delete, bounds, FEXPLORER_DELETE,
                                            FEXPLORER_MENU_SIGNATURE, "File Explorer", _WHERE)
                 return self._step("fexp-delete-question-shown", "activate_button", value,

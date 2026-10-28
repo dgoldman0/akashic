@@ -65,7 +65,11 @@ paint lie inside that claim. A dialog off the screen or outside its
 document's rectangle stays CELL. One that meets another dialog's claim
 removes the whole lane; one that meets an earlier family's claim refuses the
 rich candidate, as a field does, since that family's projection would then be
-wrong under it. A dialog element's contents are the exception: the claims
+wrong under it. A dialog widget is its document's overlay, in the layer
+above that document's roots ([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)): it may
+meet the claims of its own document's roots beneath its depth, and later
+lanes' claims of that document may meet it. A dialog element's contents are
+the other exception: the claims
 of its own document's roots that lie wholly inside it and above it. Their
 number must be the one its descriptor gives, or the dialog stays painted
 text and nothing is refused, since a content left out of the candidate

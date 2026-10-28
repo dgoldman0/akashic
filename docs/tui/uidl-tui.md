@@ -815,7 +815,6 @@ its semantics everywhere the overlay does not reach.
 |------|-------|---------|
 | `UTUI-OVERLAY-FIELD-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay field, if it has one |
 | `UTUI-OVERLAY-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay: the dialog it shows, as its last paint laid it out, else its overlay field |
-| `UTUI-CAPTURE-OCCLUDED!` | `( flag -- )` | Set around the capture of a document whose only foreground paint is its overlay: a root that paint meets is clipped away and stays CELL's |
 
 ### How Overlay Paint Works
 

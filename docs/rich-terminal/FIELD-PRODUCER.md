@@ -52,7 +52,11 @@ There is no final-writer proof for overlapping semantic roots. Overlap
 between FIELD roots removes the whole optional FIELD lane. Overlap with a
 previously admitted family, or with a later instrument claim, refuses the
 rich candidate; the existing blank/reveal protocol retires any old rich
-owner before exposing CELL content. Local capacity and provider quota
+owner before exposing CELL content. A document's overlay prompt, the last
+FIELD of its document, is the exception: it lies in the layer above that
+document's roots ([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)), so it may meet
+their claims beneath its depth, and their later instrument, status and
+picture claims may meet it. Local capacity and provider quota
 fallback restore the exact control, text, and claim prefixes. A refused
 FIELD lane stays refused throughout that candidate's later family retries.
 
@@ -94,7 +98,8 @@ instruments occupy disjoint cells. A region's pointer barrier follows painter
 order, so the shared CONTROL/STATIC/GLYPH region now uses
 `max(0, max(instrument-region Z) + 1)`. Instrument regions keep their authored
 relative order. Every instrument claim must be disjoint from the earlier
-control claim prefix; static claims already check all prior families and
+control claim prefix but its own document's overlay, which paints above it
+in either order; static claims already check all prior families and
 residual glyphs exclude all claimed cells. An overlap or exhausted signed
 32-bit Z range refuses the rich candidate through the ordinary fallback.
 This derived base Z is shared by all three plans, checked admission and

@@ -306,6 +306,31 @@ def test_field_overlap_with_other_semantic_family_refuses_rich(h):
     assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"),80)==prefix
 
 
+def test_a_prompt_lies_above_its_own_documents_roots(h):
+    # The document's overlay prompt, at 3, over a root of its own document
+    # at 1: the prompt is in the layer above it.
+    h.setup(kind=3, source=2)
+    prefix=struct.pack("<10Q",11,9,1,4,23,1,3,2,4,22)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"),prefix)
+    h.field(h.producer,"_RTHP.CLAIMS-USED",80)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-FIELDS")== (0,)
+    assert h.get("FIELD-COUNT")==1
+    assert h.get("CLAIMS-USED")==160
+    assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"),80)==prefix
+
+
+# An ordinary field over that root, or the prompt over another document's
+# root, still refuses.
+@pytest.mark.parametrize("source, attachment", ((1, 11), (2, 12)))
+def test_a_field_over_anything_else_refuses_rich(h, source, attachment):
+    h.setup(kind=3, source=source)
+    prefix=struct.pack("<10Q",attachment,9,1,4,23,1,3,2,4,22)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"),prefix)
+    h.field(h.producer,"_RTHP.CLAIMS-USED",80)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-FIELDS")== (h.constant("RTE-S-UNAVAILABLE"),)
+    assert h.get("FIELD-COUNT")==0
+
+
 def test_packed_field_owns_label_content_and_target_revision(h):
     h.setup(kind=2);assert h.build()==(0,)
     bank=h.pack();h.activate(bank)

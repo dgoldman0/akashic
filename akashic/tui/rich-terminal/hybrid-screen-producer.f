@@ -5673,6 +5673,32 @@ VARIABLE _RTHP-W-COPY-END
     -1 ;
 
 \ ---------------------------------------------------------------------
+\  The layer above a document: its own overlay
+\ ---------------------------------------------------------------------
+\ A document's overlay, the prompt it opens or the dialog widget it shows,
+\ lies in the layer above the document's roots: the shell candidate puts
+\ it in a modal region over the pane, and this producer's one region paints
+\ it after them by its depth.  So an overlay's claim may meet the claims of
+\ its own document's roots beneath it, and theirs may meet it; the residual
+\ plan excludes the union of both.  Every other meeting of claims is
+\ refused as before.
+: _RTHP-OVERLAY-SOURCE? ( source-kind -- flag )
+    DUP UFLSN-SOURCE-OVERLAY = SWAP UDLSN-SOURCE-OVERLAY = OR ;
+
+\ CLAIM is a root of the document TOKEN beneath an overlay at depth Z: no
+\ overlay itself, and lower.
+: _RTHP-BENEATH? ( claim token z -- flag )
+    >R OVER RUCL-CLAIM-ATTACHMENT@ <> IF R> 2DROP 0 EXIT THEN
+    DUP RUCL-CLAIM-SOURCE@ _RTHP-OVERLAY-SOURCE? IF R> 2DROP 0 EXIT THEN
+    RUCL-CLAIM-Z@ R> < ;
+
+\ CLAIM is the overlay of the document TOKEN, above a root at depth Z.
+: _RTHP-OVERLAY-ABOVE? ( claim token z -- flag )
+    >R OVER RUCL-CLAIM-ATTACHMENT@ <> IF R> 2DROP 0 EXIT THEN
+    DUP RUCL-CLAIM-SOURCE@ _RTHP-OVERLAY-SOURCE? 0= IF R> 2DROP 0 EXIT THEN
+    RUCL-CLAIM-Z@ R> > ;
+
+\ ---------------------------------------------------------------------
 \  Canonical UFLD -> genuine FIELD controls, with an independent source lane
 \ ---------------------------------------------------------------------
 VARIABLE _RTHP-FF-P
@@ -5725,6 +5751,13 @@ VARIABLE _RTHP-FF-UTF8
     DUP _RTHP-W-P ! _RTHP-FIELD-NEXT? 0= IF 0 EXIT THEN
     _RTHP-W-WRAP-CONTROL-PLAN? ;
 
+\ The claim just met is a root of the prompt's own document beneath it,
+\ when the field placed is the document's overlay prompt.
+: _RTHP-FF-CLAIM-BENEATH? ( -- flag )
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE@ UFLSN-SOURCE-OVERLAY <> IF 0 EXIT THEN
+    _RTHP-FF-CLAIM @ _RTHP-FF-DOC @ RUHA-DOCUMENT-TOKEN@
+    _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-Z@ _RTHP-BENEATH? ;
+
 : _RTHP-FF-GEOMETRY? ( -- flag )
     0 _RTHP-FF-OVERLAP !
     _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ROW@ DUP _RTHP-FF-ROW !
@@ -5755,7 +5788,8 @@ VARIABLE _RTHP-FF-UTF8
         _RTHP-FF-ROW @ _RTHP-FF-CLAIM @ RUCL-CLAIM-ROW1@ <
         _RTHP-FF-ROW1 @ _RTHP-FF-CLAIM @ RUCL-CLAIM-ROW0@ > AND
         _RTHP-FF-COL @ _RTHP-FF-CLAIM @ RUCL-CLAIM-COL1@ < AND
-        _RTHP-FF-COL1 @ _RTHP-FF-CLAIM @ RUCL-CLAIM-COL0@ > AND IF
+        _RTHP-FF-COL1 @ _RTHP-FF-CLAIM @ RUCL-CLAIM-COL0@ > AND
+        _RTHP-FF-CLAIM-BENEATH? 0= AND IF
             1 _RTHP-FF-OVERLAP !
             I RUCL-CLAIM-SIZE * _RTHP-FF-P @ _RTHP.FIELD-BASE-CLAIMS @ U< IF
                 2 _RTHP-FF-OVERLAP !
@@ -5978,8 +6012,16 @@ VARIABLE _RTHP-DD-CONTENTS
     _RTHP-DD-CLAIM @ RUCL-CLAIM-COL0@ _RTHP-DD-COL @ < 0= AND
     _RTHP-DD-CLAIM @ RUCL-CLAIM-COL1@ _RTHP-DD-COL1 @ > 0= AND ;
 
+\ The claim just met is a root of the dialog widget's own document beneath
+\ it: the dialog is the document's overlay.
+: _RTHP-DD-BENEATH? ( -- flag )
+    _RTHP-DD-DESC @ UDLSN-DESCRIPTOR-SOURCE@ UDLSN-SOURCE-OVERLAY <> IF 0 EXIT THEN
+    _RTHP-DD-CLAIM @ _RTHP-DD-DOC @ RUHA-DOCUMENT-TOKEN@
+    _RTHP-DD-DIALOG-Z _RTHP-BENEATH? ;
+
 \ The dialog lies on the screen and inside its document, and meets no
-\ earlier claim but its contents'.  OVERLAP is 2 for a claim before the
+\ earlier claim but its contents', or, for a dialog widget, its document's
+\ roots beneath it.  OVERLAP is 2 for a claim before the
 \ dialog lane, 1 for an earlier dialog's.  A dialog element whose contents
 \ are not all there would hide the painted text of those left out, so it
 \ stays painted text too.
@@ -6008,7 +6050,8 @@ VARIABLE _RTHP-DD-CONTENTS
         _RTHP-DD-ROW @ _RTHP-DD-CLAIM @ RUCL-CLAIM-ROW1@ <
         _RTHP-DD-ROW1 @ _RTHP-DD-CLAIM @ RUCL-CLAIM-ROW0@ > AND
         _RTHP-DD-COL @ _RTHP-DD-CLAIM @ RUCL-CLAIM-COL1@ < AND
-        _RTHP-DD-COL1 @ _RTHP-DD-CLAIM @ RUCL-CLAIM-COL0@ > AND IF
+        _RTHP-DD-COL1 @ _RTHP-DD-CLAIM @ RUCL-CLAIM-COL0@ > AND
+        _RTHP-DD-BENEATH? 0= AND IF
             _RTHP-DD-CONTENT? IF
                 1 _RTHP-DD-CONTENTS +!
             ELSE
@@ -6773,8 +6816,10 @@ VARIABLE _RTHP-BZ-LAST
     IF R> = ELSE DROP R> DROP 0 THEN ;
 
 \ Reordering is safe only when graph objects do not overlap any previously
-\ admitted control claim. Static claims are separately checked against all
-\ earlier families; the residual planner excludes every admitted claim.
+\ admitted control claim but their own document's overlay, which paints
+\ above them in either order.  Static claims are separately checked
+\ against all earlier families; the residual planner excludes every
+\ admitted claim.
 : _RTHP-BASE-CLAIMS-DISJOINT? ( producer -- flag )
     _RTHP-BZ-P !
     _RTHP-BZ-P @ _RTHP.BASE-CLAIMS-USED @ DUP RUCL-CLAIM-SIZE MOD IF
@@ -6794,7 +6839,9 @@ VARIABLE _RTHP-BZ-LAST
             _RTHP-BZ-A @ RUCL-CLAIM-ROW0@ _RTHP-BZ-B @ RUCL-CLAIM-ROW1@ <
             _RTHP-BZ-A @ RUCL-CLAIM-ROW1@ _RTHP-BZ-B @ RUCL-CLAIM-ROW0@ > AND
             _RTHP-BZ-A @ RUCL-CLAIM-COL0@ _RTHP-BZ-B @ RUCL-CLAIM-COL1@ < AND
-            _RTHP-BZ-A @ RUCL-CLAIM-COL1@ _RTHP-BZ-B @ RUCL-CLAIM-COL0@ > AND IF
+            _RTHP-BZ-A @ RUCL-CLAIM-COL1@ _RTHP-BZ-B @ RUCL-CLAIM-COL0@ > AND
+            _RTHP-BZ-A @ _RTHP-BZ-B @ RUCL-CLAIM-ATTACHMENT@
+                _RTHP-BZ-B @ RUCL-CLAIM-Z@ _RTHP-OVERLAY-ABOVE? 0= AND IF
                 0 UNLOOP UNLOOP EXIT
             THEN
         LOOP
@@ -6905,6 +6952,8 @@ VARIABLE _RTHP-SS-INDEX
         _RTHP-SS-ROW @ 1+ _RTHP-SS-CLAIM @ RUCL-CLAIM-ROW0@ > AND
         _RTHP-SS-COL @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ < AND
         _RTHP-SS-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ > AND
+        _RTHP-SS-CLAIM @ _RTHP-SS-DOC @ RUHA-DOCUMENT-TOKEN@
+            _RTHP-SS-DESC @ USFSN-DESCRIPTOR-Z@ _RTHP-OVERLAY-ABOVE? 0= AND
             IF
                 1 _RTHP-SS-OVERLAP !
                 I RUCL-CLAIM-SIZE *
@@ -7147,7 +7196,10 @@ VARIABLE _RTHP-SI-COL-END
         LOOP 0 EXIT
     THEN
     _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
-        I _RTHP-SI-CLAIM-MEETS? IF 0 UNLOOP EXIT THEN
+        I _RTHP-SI-CLAIM-MEETS?
+        _RTHP-SS-CLAIM @ _RTHP-SI-DESC @ UPICSN-DOCUMENT@
+            _RTHP-SI-DESC @ UPICSN-Z@ _RTHP-OVERLAY-ABOVE? 0= AND
+            IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
 : _RTHP-SI-WRITE  ( -- rte-status )

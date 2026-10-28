@@ -4395,8 +4395,6 @@ VARIABLE _UTUI-OVERLAY-INSTANCE
 \ While a projection captures a document whose only foreground paint is
 \ its overlay field, a root that paint covers is clipped away and stays
 \ CELL's.  Composition sets this around that one capture.
-VARIABLE _UTUI-CAPTURE-OCCLUDED
-0 _UTUI-CAPTURE-OCCLUDED !
 
 VARIABLE _UTUI-MC-STAGE-ACTIVE
 VARIABLE _UTUI-MC-STAGE-ROOT
@@ -5530,11 +5528,6 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
     THEN
     UTUI-OVERLAY-FIELD-ROOT@ ;
 
-\ UTUI-CAPTURE-OCCLUDED! ( flag -- )
-\   Set for the capture of a document whose only foreground paint is its
-\   overlay field; clear it after.
-: UTUI-CAPTURE-OCCLUDED!  ( flag -- )  0<> _UTUI-CAPTURE-OCCLUDED ! ;
-
 \ UTUI-WIDGET-SET ( wptr elem -- )
 \   Attach a manually created widget to a UIDL element.
 \   The widget is drawn automatically by UTUI-PAINT when it
@@ -6573,18 +6566,6 @@ VARIABLE _UTUI-CG-I-RIGHT
         _UTUI-CG-CLIP-RIGHT !
     -1 ;
 
-\ A visible clip that foreground paint meets is clipped away completely.
-: _UTUI-CG-OCCLUDE  ( -- )
-    _UTUI-CG-CLIP-BOTTOM @ _UTUI-CG-CLIP-TOP @ > 0= IF EXIT THEN
-    _UTUI-CG-CLIP-RIGHT @ _UTUI-CG-CLIP-LEFT @ > 0= IF EXIT THEN
-    _UTUI-CG-CLIP-TOP @ _UTUI-CG-CLIP-LEFT @
-    _UTUI-CG-CLIP-BOTTOM @ _UTUI-CG-CLIP-TOP @ -
-    _UTUI-CG-CLIP-RIGHT @ _UTUI-CG-CLIP-LEFT @ -
-    SCR-OCCLUSION-RECT? AND IF
-        _UTUI-CG-CLIP-TOP @ _UTUI-CG-CLIP-BOTTOM !
-        _UTUI-CG-CLIP-LEFT @ _UTUI-CG-CLIP-RIGHT !
-    THEN ;
-
 \ Return the complete canonical widget origin/extent separately from its
 \ exact region-ancestry clip.  The source record contributes semantic UIDL
 \ clipping; no physical screen size, renderer allocation, or reflow enters
@@ -6629,7 +6610,6 @@ VARIABLE _UTUI-CG-I-RIGHT
     _UTUI-CG-SOURCE-A @ 16 + @
     _UTUI-CG-SOURCE-A @ 24 + @
         _UTUI-CG-INTERSECT? 0= IF _UTUI-CG-FAIL EXIT THEN
-    _UTUI-CAPTURE-OCCLUDED @ IF _UTUI-CG-OCCLUDE THEN
 
     _UTUI-CG-ORIGIN-ROW @ _UTUI-CG-ORIGIN-COL @
     _UTUI-CG-EXTENT-H @ _UTUI-CG-EXTENT-W @

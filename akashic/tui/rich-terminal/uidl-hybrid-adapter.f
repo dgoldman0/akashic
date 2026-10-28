@@ -3091,9 +3091,9 @@ VARIABLE _RUHA-B-FULL
     \ An overlay slot's document is itself foreground paint, the final writer
     \ of its own cells, so it is the one document the test passes over.
     \ When all the paint over a document is its own overlay, the prompt it
-    \ drew or the dialog it shows, the document keeps every root that paint
-    \ does not meet: the capture clips the others away, and the prompt
-    \ joins its fields or the dialog its dialogs.
+    \ drew or the dialog it shows, the document keeps every root, those the
+    \ overlay meets too: the producer puts the overlay in the layer above
+    \ them, and the prompt joins its fields or the dialog its dialogs.
     _RUHA-B-RECORD @ _RUHA-R.ROW @
     _RUHA-B-RECORD @ _RUHA-R.COL @
     _RUHA-B-RECORD @ _RUHA-R.HEIGHT @
@@ -3105,7 +3105,6 @@ VARIABLE _RUHA-B-FULL
             _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
             0 0 0 0 0 0 0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT EXIT
         THEN
-        -1 UTUI-CAPTURE-OCCLUDED!
     THEN
     _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY? _RUHA-B-FULL @ OR IF
         _RUHA-B-CAPTURE-CURRENT EXIT
@@ -3183,7 +3182,6 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
     RUHA-S-OK _RUHA-B-STATUS !
     _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
         I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT _RUHA-B-CAPTURE-RECORD
-        0 UTUI-CAPTURE-OCCLUDED!
         DUP RUHA-S-OK <> IF _RUHA-B-STATUS ! LEAVE THEN DROP
     LOOP
     _RUHA-B-STATUS @ ;
@@ -3302,7 +3300,6 @@ VARIABLE _RUHA-B-PREFLIGHT-CTX
 : _RUHA-B-CAPTURE-ALL  ( -- )
     ['] _RUHA-B-CAPTURE CATCH DUP IF
         DROP RUHA-S-INVALID _RUHA-B-STATUS !
-        0 UTUI-CAPTURE-OCCLUDED!
     ELSE
         DROP _RUHA-B-STATUS !
     THEN
@@ -4011,25 +4008,21 @@ VARIABLE _RUHA-P-STATUS
 VARIABLE _RUHA-P-RECORD
 VARIABLE _RUHA-P-ASK
 VARIABLE _RUHA-P-ORIGINAL
-VARIABLE _RUHA-P-OCCLUDED
 
 : _RUHA-P-CLEAR  ( -- )
     0 _RUHA-P-ADAPTER ! 0 _RUHA-P-A ! 0 _RUHA-P-U ! 0 _RUHA-P-USED !
-    0 _RUHA-P-COUNT ! 0 _RUHA-P-RECORD ! 0 _RUHA-P-ASK !
-    0 _RUHA-P-OCCLUDED ! ;
+    0 _RUHA-P-COUNT ! 0 _RUHA-P-RECORD ! 0 _RUHA-P-ASK ! ;
 
 \ The UCTX of a visible document whose cells no foreground paint covers,
-\ or that only its own overlay field covers, or 0.  _RUHA-P-OCCLUDED says
-\ which, so a description clips away the pictures that field meets.
+\ or that only its own overlay covers, or 0.  The overlay lies in the
+\ layer above the document's pictures, which keep their place.
 : _RUHA-P-DOCUMENT-CTX  ( record -- uctx|0 )
-    0 _RUHA-P-OCCLUDED !
     DUP _RUHA-P-ADAPTER @ _RUHA-RECORD-VISIBLE? 0= IF DROP 0 EXIT THEN
     DUP _RUHA-R.ROW @ OVER _RUHA-R.COL @
     2 PICK _RUHA-R.HEIGHT @ 3 PICK _RUHA-R.WIDTH @
         SCR-OCCLUSION-RECT? 0= IF 2DROP 0 EXIT THEN
     OVER _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND IF
         DUP _RUHA-OVERLAY-ONLY? 0= IF DROP 0 EXIT THEN
-        -1 _RUHA-P-OCCLUDED !
     THEN
     _RUHA-R.UCTX @ ;
 
@@ -4042,8 +4035,7 @@ VARIABLE _RUHA-P-OCCLUDED
     _RUHA-P-STATUS @ RUHA-S-CAPACITY = IF 0 0 ELSE
         _RUHA-P-A @ _RUHA-P-USED @ + _RUHA-P-U @ _RUHA-P-USED @ -
     THEN
-    _RUHA-P-ASK @ _RUHA-P-OCCLUDED @ UTUI-CAPTURE-OCCLUDED!
-    ['] UPICSN-CAPTURE CATCH 0 UTUI-CAPTURE-OCCLUDED! THROW
+    _RUHA-P-ASK @ UPICSN-CAPTURE
     DUP UPICSN-S-UNAVAILABLE = IF 2DROP EXIT THEN
     DUP UPICSN-S-CAPACITY = IF
         DROP _RUHA-P-COUNT +! RUHA-S-CAPACITY _RUHA-P-STATUS ! EXIT

@@ -40,6 +40,24 @@ def test_sparse_graph_moves_base_above_barrier_with_authored_field_slots_unchang
     assert h.runtime.memory.read64(plan + h.offset("_RTE-CP.REGION-Z")) == 1
 
 
+def test_a_graph_beneath_its_own_documents_overlay_keeps_the_base_above_it(field_graph):
+    h = field_graph
+    base = h.get("CLAIMS-A")
+    graph = base + 80
+    # The base claim is document 11's prompt, at 255 above the graph, and the
+    # graph lies under it: the prompt paints above it in either order.
+    h.runtime.memory.write64(base, 11)
+    h.runtime.memory.write64(base + 16, h.constant("UFLSN-SOURCE-OVERLAY"))
+    h.runtime.memory.write64(base + 40, 255)
+    for offset in (48, 56, 64, 72):
+        h.runtime.memory.write64(graph + offset, h.runtime.memory.read64(base + offset))
+    assert h.call("_RTHP-BASE-CLAIMS-DISJOINT?", h.producer)
+    assert h.call("_RTHP-BASE-LAYER!", h.producer)
+    # Another document's prompt is no layer above this graph.
+    h.runtime.memory.write64(base, 12)
+    assert not h.call("_RTHP-BASE-CLAIMS-DISJOINT?", h.producer)
+
+
 @pytest.mark.parametrize("reason", ("overlap", "no-headroom", "short-region-bank"))
 def test_ambiguous_overlap_or_z_exhaustion_refuses_base_reordering_before_plan_writes(field_graph, reason):
     h = field_graph

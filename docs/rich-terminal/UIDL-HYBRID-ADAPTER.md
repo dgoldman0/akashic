@@ -244,10 +244,10 @@ own context. The other is the dialog the document shows
 document paints. When that draw completes, RUHA copies the overlay's screen
 cells into the attachment record (`UTUI-OVERLAY-ROOT@`): the dialog's, as its
 last paint laid it out, else the prompt's. When all the foreground paint over a document lies
-inside that overlay's cells, the document is captured as usual except that
-UIDL-TUI clips away every root whose visible cells the paint meets, through
-the canonical geometry every family shares, so those roots stay CELL's and
-the rest stay semantic. The prompt itself becomes the document's overlay
+inside that overlay's cells, the document is captured as usual, every root
+included, those the overlay meets too: the producer puts the overlay in the
+layer above them ([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)), so they stay
+semantic beneath it. The prompt itself becomes the document's overlay
 TEXT field: UFLSN appends it after the mounted fields as the bank's last
 record, from source `UFLSN-SOURCE-OVERLAY`, index 0, generation 1, the
 prompt's instance as root key and paint order 255, and the prompt builds its

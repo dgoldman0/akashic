@@ -167,12 +167,13 @@ PROMPT_OVERLAY = [
     "  _FA-PBUF 64 PRM-NEW _FA-PR !",
     "_FA-PLABEL _FA-PVALUE _FA-PR @ PRM-SHOW _FA-PROMPT-DRAW",
     "6 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
-    # The document keeps every root the prompt does not cover, the prompt
-    # joins its fields, and only the status field it covers stays CELL's.
+    # The document keeps every root, the status field the prompt covers
+    # too, which lies in the layer beneath it, and the prompt joins its
+    # fields.
     "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 2 = _RA-ASSERT",
-    "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 0= _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 1 = _RA-ASSERT",
     "_FA-SECOND-FIELD UFLSN-DESCRIPTOR-SOURCE@ UFLSN-SOURCE-OVERLAY = _RA-ASSERT",
     "_FA-SECOND-FIELD UFLSN-DESCRIPTOR-WIDTH@ 20 = _RA-ASSERT",
     "_RA-RECORDS _RUHA-R.OV-WIDTH @ 20 = _RA-ASSERT",
@@ -197,7 +198,7 @@ PROMPT_OVERLAY = [
 ]
 
 
-def test_a_prompt_keeps_its_document_rich_except_what_it_covers():
+def test_a_prompt_keeps_its_document_rich_beneath_it():
     # Room for the mounted field's descriptor and the prompt's in each half.
     lines = [line.replace("CREATE _FA-DESCRIPTORS-S 256 7 + ALLOT", "CREATE _FA-DESCRIPTORS-S 512 7 + ALLOT")
              .replace("_FA-DESCRIPTORS 256 _FA-NATIVE 1024", "_FA-DESCRIPTORS 512 _FA-NATIVE 1024")
