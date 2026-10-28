@@ -1041,6 +1041,16 @@ first in either order.
   changed, or the run fails; each frame also counts the roots found changed
   and those whose items changed. The gaps listed above are closed here, so
   the change driver starts from detection the journeys have checked.
+  **Done** on 2026-10-28 (cce2ade3). The facts are `tui/uidl-root-facts.f`
+  and `RUHA-ROOT-FACTS@`; the judge sits in the comparison. With the shadow
+  check on, the typing run, Desk with each of the ten applications and the
+  canonical journey passed, and the judge found every changed item's root
+  moved: 90 items in the journey, whose comparisons held 2,554 roots of
+  which 132 changed. A typed frame changed about two of its 32 roots. Three
+  gaps remain: a data-graphics model edited in place, which applications
+  rebind instead; Desk's shell model, for 9b; and pictures, which carry no
+  facts yet. Normal mode is unchanged. See the
+  [evidence](../../local_testing/evidence/frames-follow-change-part9a1-20261028.md).
 - **9a.2. Each root captured and lowered alone.** The capture families and
   the producer's lanes gain a word for one root, which the whole-screen
   build calls in order, so both drivers share it. The build's output stays
