@@ -1130,7 +1130,39 @@ frame before the change driver.
   - **9b.3. One build.** The producer builds the batch itself, calling the
     shell's model, region and chrome words; the shell's work space, its
     second copy of every item and its own comparison go, and the
-    producer's comparison covers the whole batch.
+    producer's comparison covers the whole batch. The two number items in
+    different orders today: the producer numbers its instruments, statics
+    and runs straight after the applications' controls, and the shell,
+    whose own controls must follow those, moves the statics and
+    instruments up past them as it copies them, while its regions and
+    panes are numbered after the producer's instrument regions and
+    statics. Building once needs one order, so 9b.3 goes in four steps
+    (decision 16), each showing the frames it showed before:
+    - **9b.3.1. The shell plans first.** Once the producer has lowered the
+      applications' controls, the shell takes its model and plans Desk's
+      layout: panes, taskbar, prompt, notice and status, and which pane
+      each document lies in. The producer numbers its instruments,
+      statics and runs after the shell's controls, so every item carries
+      the identity the batch sends, and the shell numbers its regions and
+      panes once the producer's instrument regions and statics are known.
+      The shell stops moving identities.
+    - **9b.3.2. The applications' items once.** The producer packs the
+      applications' controls, statics, instruments and series in the
+      batch's shape, each in its pane's content region with its text
+      dense in item order, and the batch's families for them name the
+      pending bank's arrays; the shell's copies go. The producer's
+      comparison and a click read the same arrays.
+    - **9b.3.3. The producer builds the batch.** The producer writes the
+      catalog and the shell's chrome families into the extension block
+      through the shell's region and chrome words, plans each region's
+      runs in its own glyph banks, which sit unused while the shell is
+      installed, and admits the batch. The shell's build, its freeze and
+      its work space go.
+    - **9b.3.4. One comparison.** The producer's comparison covers the
+      whole batch: the catalog, the shell's controls, panes and status,
+      and the runs slot by slot. The shell's mapping of a DELTA onto the
+      acknowledged part goes, and the DELTA goes out from the producer's
+      comparison.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
@@ -1389,3 +1421,10 @@ Taken on 2026-10-28:
     second glyph planning and the second copy and comparison of every item,
     an estimated 2 to 3 million of a typed letter's 9.63 million steps, on
     STARTs as well as DELTAs.
+16. **How 9b.3 goes.** In full, before the change driver, in the four steps
+    above. A smaller 9b.3 would only have moved the shell's glyph slots
+    into the producer's unused glyph banks, freeing about 4 MB, and left
+    one copy of each item and one comparison to part 10. It would have
+    reached the change driver sooner, but the driver would then have
+    written each change into both copies, and part 10 would have removed
+    that half of it.
