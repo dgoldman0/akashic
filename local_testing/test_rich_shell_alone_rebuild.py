@@ -92,7 +92,7 @@ class AloneHarness:
             chunks.append(declaration)
 
         for name in (*_FIXTURE_VARIABLES, "AR-ANSWERS", "_RTHP-PREPARE-START",
-                     "_RTHP-DELTA-PREPARED?", "_RTHP-DIAG-ALONE-REBUILDS"):
+                     "_RTHP-EXTENSION-DELTA", "_RTHP-DIAG-ALONE-REBUILDS"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -142,15 +142,15 @@ class AloneHarness:
         for index, status in enumerate(statuses):
             self.runtime.memory.write64(answers + 8 * index, self.constant(status))
 
-    def delta_prepared(self):
+    def delta_status(self):
         self.variable("_RTHP-P-P", self.producer)
-        self.runtime.execute("_RTHP-DELTA-PREPARED?", step_budget=3_000_000)
+        self.runtime.execute("_RTHP-EXTENSION-DELTA", step_budget=3_000_000)
         result = self.runtime.main_context.data.snapshot()
         while self.runtime.main_context.data.depth():
             self.runtime.main_context.data.pop()
         assert self.runtime.main_context.returns.snapshot() == ()
         assert len(result) == 1
-        return result[0] == MASK64
+        return result[0]
 
     def prepare_start(self):
         self.runtime.main_context.data.push(self.producer)
@@ -238,19 +238,19 @@ def test_a_draw_that_does_not_fit_even_alone_is_refused(harness):
     assert h.phase() == h.constant("_RTHP-PH-READY-BLANK")
 
 
-@pytest.mark.parametrize("answers,grow,prepared,prepares,grows", [
-    (("RTE-S-OK",), 0, True, 1, 0),
-    (("RTE-S-CAPACITY", "RTE-S-OK"), MASK64, True, 2, 1),
-    (("RTE-S-CAPACITY",), 0, False, 1, 1),
-    (("RTE-S-CAPACITY", "RTE-S-CAPACITY"), MASK64, False, 2, 1),
-    (("RTE-S-UNAVAILABLE",), MASK64, False, 1, 0),
+@pytest.mark.parametrize("answers,grow,status,prepares,grows", [
+    (("RTE-S-OK",), 0, "RTE-S-OK", 1, 0),
+    (("RTE-S-CAPACITY", "RTE-S-OK"), MASK64, "RTE-S-OK", 2, 1),
+    (("RTE-S-CAPACITY",), 0, "RTE-S-CAPACITY", 1, 1),
+    (("RTE-S-CAPACITY", "RTE-S-CAPACITY"), MASK64, "RTE-S-CAPACITY", 2, 1),
+    (("RTE-S-UNAVAILABLE",), MASK64, "RTE-S-UNAVAILABLE", 1, 0),
 ])
 def test_a_delta_short_of_engine_storage_is_prepared_again_once_it_grew(
-        harness, answers, grow, prepared, prepares, grows):
+        harness, answers, grow, status, prepares, grows):
     h = harness
     h.shell_answers(*answers)
     h.variable("AR-GROW", grow)
-    assert h.delta_prepared() is prepared
+    assert h.delta_status() == h.constant(status)
     assert (h.variable("AR-PREPARES"), h.variable("AR-GROWS")) == (prepares, grows)
     # The staged DELTA is abandoned before the shell prepares it again.
     assert h.variable("AR-XABORTS") == prepares - 1
@@ -259,5 +259,5 @@ def test_a_delta_short_of_engine_storage_is_prepared_again_once_it_grew(
 def test_without_the_shell_the_producer_s_own_delta_needs_no_preparation(harness):
     h = harness
     h.field("_RTHP.EXTENSION", 0)
-    assert h.delta_prepared()
+    assert h.delta_status() == h.constant("RTE-S-OK")
     assert (h.variable("AR-PREPARES"), h.variable("AR-GROWS")) == (0, 0)

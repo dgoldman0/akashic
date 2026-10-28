@@ -5279,13 +5279,20 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
     unmatched = compatible[compatible.index("_RTHP-D-MATCHED @ 0= IF"):]
     assert unmatched.index("_RTHP.SHELL-BUILT @ IF 0 EXIT THEN") < unmatched.index(
         "-1 _RTHP-D-CHANGED !")
-    # A DELTA short of engine working storage is prepared again once it grew.
+    # A DELTA short of engine working storage is prepared again once it grew,
+    # and one short of terminal space asks for more before any START.
     live = _word(source, "_RTHP-PREPARE-LIVE")
-    prepared = _word(source, "_RTHP-DELTA-PREPARED?")
-    assert live.index("_RTHP-DELTA-CANDIDATE?") < live.index("_RTHP-DELTA-PREPARED?")
+    prepared = _word(source, "_RTHP-EXTENSION-DELTA")
+    assert live.index("_RTHP-DELTA-CANDIDATE?") < live.index("_RTHP-EXTENSION-DELTA")
     assert prepared.count("RTHPX-DELTA-PREPARE") == 2
     assert prepared.index("RTE-S-CAPACITY =") < prepared.index(
         "_RTHP-GROW-STORAGE?") < prepared.index("RTHPX-ABORT")
+    asked = live[live.index("_RTHP-EXTENSION-DELTA"):]
+    assert asked.index("RTE-S-CAPACITY = IF") < asked.index(
+        "_RTHP-ASK-FOR-SPACE?") < asked.index("_RTHP-RECAPTURE-START")
+    # While nothing is retained, the candidate's own admission says whether a
+    # draw can be shown rich again.
+    assert "_RTHP-BUILD-ALONE" in _word(source, "_RTHP-PREPARE-BLANK")
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
     assert "RTE-CONTROL-PREFLIGHT" not in source
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source
@@ -6973,7 +6980,7 @@ def test_a_draw_that_cannot_be_shown_rich_shows_as_cell_and_the_next_retries() -
     # again, and a newer one that fits goes back through a full replacement.
     _positions = [blank.index(item) for item in (
         "SCR-DRAW-GENERATION@ SWAP _RTHP.REFUSED-DRAW @ = IF SCB-S-OK EXIT THEN",
-        "_RTHP-CAPTURE-SLOT", "_RTHP-BUILD-CANDIDATE",
+        "_RTHP-CAPTURE-SLOT", "_RTHP-BUILD-ALONE",
         "_RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !", "_RTHP-PREPARE-START")]
     assert _positions == sorted(_positions)
     refusal = blank[blank.index(refused) :]

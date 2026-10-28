@@ -15180,13 +15180,16 @@ VARIABLE _RTHP-P-SEALED
 \ _RTHP-PREPARE-BLANK ( producer -- scb-status )
 \   Nothing is retained, so CELL shows any draw as it is.  A newer completed
 \   draw is tried again, and one that can be shown rich goes back through a
-\   full hidden replacement.
+\   full hidden replacement.  The candidate's own admission says whether it
+\   can, so it is built alone even with Desk's shell installed, and a draw
+\   that cannot leaves CELL showing it rather than replacing one empty
+\   frame with another.
 : _RTHP-PREPARE-BLANK  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     DUP _RTHP-P-P !
     SCR-DRAW-GENERATION@ SWAP _RTHP.REFUSED-DRAW @ = IF SCB-S-OK EXIT THEN
     _RTHP-P-P @ _RTHP-CAPTURE-SLOT DUP SCB-S-OK <> IF EXIT THEN DROP
-    _RTHP-P-P @ _RTHP-BUILD-CANDIDATE IF
+    _RTHP-P-P @ _RTHP-BUILD-ALONE IF
         RTE-S-OK <> IF SCB-S-INVALID EXIT THEN
         _RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !
         _RTHP-P-P @ _RTHP-PREPARE-START EXIT
@@ -15204,19 +15207,18 @@ VARIABLE _RTHP-DIAG-DELTA-REFUSALS
 CREATE _RTHP-DIAG-DELTA-WHY 64 CELLS ALLOT
 _RTHP-DIAG-DELTA-WHY 64 CELLS 0 FILL
 : _RTHP-DIAG-WHY+  ( code -- )  63 MIN CELLS _RTHP-DIAG-DELTA-WHY + 1 SWAP +! ;
-\ The extension's DELTA candidate, when one is installed.  One that needs
-\ more engine working storage than the engine holds is prepared once more
-\ after the storage grew, as a START's is.
-: _RTHP-DELTA-PREPARED?  ( -- flag )
-    _RTHP-P-P @ _RTHP.EXTENSION @ 0= IF -1 EXIT THEN
+\ The status of the extension's DELTA candidate, OK when none is
+\ installed.  One that needs more engine working storage than the engine
+\ holds is prepared once more after the storage grew, as a START's is.
+: _RTHP-EXTENSION-DELTA  ( -- rte-status )
+    _RTHP-P-P @ _RTHP.EXTENSION @ 0= IF RTE-S-OK EXIT THEN
     RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
     DUP RTE-S-CAPACITY = IF
         _RTHP-P-P @ _RTHP-GROW-STORAGE? IF
             DROP RTHPX-ABORT _RTHP-P-P @ _RTHP-EXTENSION-NOTIFY
             RTHPX-DELTA-PREPARE _RTHP-P-P @ _RTHP-EXTENSION-CALL
         THEN
-    THEN
-    RTE-S-OK = ;
+    THEN ;
 
 : _RTHP-PREPARE-LIVE  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
@@ -15240,9 +15242,18 @@ _RTHP-DIAG-DELTA-WHY 64 CELLS 0 FILL
         IF
             \ The base candidate now carries acknowledged identities, so an
             \ extension refusing the DELTA needs a fresh build for its START.
-            _RTHP-DELTA-PREPARED? 0= IF
+            \ A DELTA the owner holds too little terminal space for asks for
+            \ more first, and the draw is built again once the terminal
+            \ answers.
+            _RTHP-EXTENSION-DELTA DUP RTE-S-OK <> IF
+                RTE-S-CAPACITY = IF
+                    _RTHP-P-P @ _RTHP-ASK-FOR-SPACE? IF
+                        _RTHP-P-P @ _RTHP-TARGET-ABORT
+                        SCB-S-WOULD-BLOCK EXIT
+                    THEN
+                THEN
                 _RTHP-P-P @ _RTHP-RECAPTURE-START EXIT
-            THEN
+            THEN DROP
             _RTHP-PH-READY-DELTA _RTHP-P-P @ _RTHP.PHASE !
             _RTHP-P-P @ _RTHP-PREPARE-DELTA
         ELSE
