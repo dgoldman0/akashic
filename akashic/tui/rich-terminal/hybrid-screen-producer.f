@@ -375,7 +375,13 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ when its frame was sent.
 : _RTHP.PENDING-SEAL             ( p -- a ) 5064 + ;
 : _RTHP.ACTIVE-SEAL              ( p -- a ) 5072 + ;
-5080 CONSTANT RTHP-SIZE
+\ Whether the candidate was built for Desk's shell, which plans the runs of
+\ its own regions and admits its batch (RTHPX-PREPARE): such a candidate has
+\ no runs or admission of its own.  BASE-Z is the Z of the candidate's one
+\ region, above its instrument regions (_RTHP-BASE-LAYER!).
+: _RTHP.SHELL-BUILT              ( p -- a ) 5080 + ;
+: _RTHP.BASE-Z                   ( p -- a ) 5088 + ;
+5096 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 \ An omitted graph: the cells it paints, row col row1 col1, and the token
@@ -3696,6 +3702,16 @@ VARIABLE _RTHP-W-LAST
 VARIABLE _RTHP-W-GLYPH-FIRST
 VARIABLE _RTHP-W-CLAIMS
 VARIABLE _RTHP-W-DRAW
+\ With Desk's shell installed, a build leaves the residual runs and the
+\ admission to the shell's batch, which plans the runs of its own regions
+\ and admits everything it sends.  ALONE asks for the candidate's own runs
+\ and admission all the same: before the owner opens, since the owner is
+\ sized from that admission, and when the shell cannot build its batch, so
+\ the candidate is cut down to fit or goes out on its own.
+VARIABLE _RTHP-W-ALONE
+0 _RTHP-W-ALONE !
+: _RTHP-W-SHELL-MODE?  ( -- flag )
+    _RTHP-W-P @ _RTHP.EXTENSION @ 0<> _RTHP-W-ALONE @ 0= AND ;
 VARIABLE _RTHP-W-DIRECTORY-A
 VARIABLE _RTHP-W-DIRECTORY-U
 VARIABLE _RTHP-W-RECORDS-A
@@ -6895,6 +6911,7 @@ VARIABLE _RTHP-BZ-LAST
 : _RTHP-BASE-LAYER! ( producer -- flag )
     DUP _RTHP-BASE-CLAIMS-DISJOINT? 0= IF DROP 0 EXIT THEN
     _RTHP-BASE-REGION-Z? 0= IF DROP 0 EXIT THEN DROP
+    _RTHP-BZ-Z @ _RTHP-BZ-P @ _RTHP.BASE-Z !
     _RTHP-BZ-P @ _RTHP.CONTROL-COUNT @ IF
         _RTHP-BZ-Z @ _RTHP-BZ-P @ _RTHP.CONTROL-PLAN _RTE-CP.REGION-Z !
     THEN
@@ -7959,14 +7976,21 @@ VARIABLE _RTHP-RD-FIND
     _RTHP-RD-OUT-TEXT @ _RTHP-RD-P @ _RTHP.GLYPH-TEXT-USED !
     -1 ;
 
-: _RTHP-RD-BUILD-BODY?  ( -- flag )
+\ Mark the rows a plan of this draw must build again: those of CELL and
+\ residue damage, the acknowledged and current menus' rows, and the rows of
+\ claims that came or went.  Every other row keeps the acknowledged frame's
+\ cells, residue, menus and claims, so its runs are the acknowledged ones.
+: _RTHP-RD-MARK-BODY?  ( -- flag )
     _RTHP-RD-ELIGIBLE? 0= IF 0 EXIT THEN
     _RTHP-RD-SCREEN-AUTHORITY? 0= IF 0 EXIT THEN
-    _RTHP-RD-WORK-BOUNDS? 0= IF 0 EXIT THEN
     _RTHP-RD-MARK-CELL-DAMAGE? 0= IF 0 EXIT THEN
     _RTHP-RD-MARK-PROJECTION-DAMAGE? 0= IF 0 EXIT THEN
     _RTHP-RD-MARK-ACKED-MENUS? 0= IF 0 EXIT THEN
-    _RTHP-RD-MARK-CURRENT-CLAIMS? 0= IF 0 EXIT THEN
+    _RTHP-RD-MARK-CURRENT-CLAIMS? ;
+
+: _RTHP-RD-BUILD-BODY?  ( -- flag )
+    _RTHP-RD-MARK-BODY? 0= IF 0 EXIT THEN
+    _RTHP-RD-WORK-BOUNDS? 0= IF 0 EXIT THEN
     _RTHP-RD-BANK @ _RTHP-PACK-ITEMS-A _RTHP-RD-ACTIVE-ITEMS !
     _RTHP-RD-BANK @ _RTHP-PACK-REFS-A _RTHP-RD-ACTIVE-REFS !
     _RTHP-RD-BANK @ _RTHP-PACK-GLYPH-A _RTHP-RD-ACTIVE-TEXT !
@@ -7992,21 +8016,38 @@ VARIABLE _RTHP-RD-FIND
     0 _RTHP-RD-PROJECTION-DAMAGE-A ! 0 _RTHP-RD-PROJECTION-DAMAGE-U !
     0 _RTHP-RD-CELL-DAMAGE-A ! 0 _RTHP-RD-CELL-DAMAGE-U ! ;
 
-: _RTHP-RD-BUILD-IN-PLANES
-  ( front-a back-a cols rows front-draw draw force? damage-a damage-u residue-a projection-damage-a projection-damage-u -- flag )
+: _RTHP-RD-PLANES!
+  ( front-a back-a cols rows front-draw draw force? damage-a damage-u residue-a projection-damage-a projection-damage-u -- )
     _RTHP-RD-PROJECTION-DAMAGE-U ! _RTHP-RD-PROJECTION-DAMAGE-A !
     _RTHP-RD-RESIDUE !
     _RTHP-RD-CELL-DAMAGE-U ! _RTHP-RD-CELL-DAMAGE-A !
     _RTHP-RD-FORCE ! _RTHP-RD-DRAW ! _RTHP-RD-FRONT-DRAW !
-    _RTHP-RD-ROWS ! _RTHP-RD-COLS ! _RTHP-RD-BACK ! _RTHP-RD-FRONT !
-    ['] _RTHP-RD-BUILD-BODY? CATCH DUP IF
+    _RTHP-RD-ROWS ! _RTHP-RD-COLS ! _RTHP-RD-BACK ! _RTHP-RD-FRONT ! ;
+
+\ Run XT on the borrowed planes; whatever it does, no plane stays borrowed.
+: _RTHP-RD-IN-PLANES  ( xt -- flag )
+    CATCH DUP IF
         0 _RTHP-RD-CLEAR-PLANE-BORROW DROP THROW
     THEN
     DROP _RTHP-RD-CLEAR-PLANE-BORROW ;
 
+: _RTHP-RD-BUILD-IN-PLANES
+  ( front-a back-a cols rows front-draw draw force? damage-a damage-u residue-a projection-damage-a projection-damage-u -- flag )
+    _RTHP-RD-PLANES! ['] _RTHP-RD-BUILD-BODY? _RTHP-RD-IN-PLANES ;
+
+: _RTHP-RD-MARK-IN-PLANES
+  ( front-a back-a cols rows front-draw draw force? damage-a damage-u residue-a projection-damage-a projection-damage-u -- flag )
+    _RTHP-RD-PLANES! ['] _RTHP-RD-MARK-BODY? _RTHP-RD-IN-PLANES ;
+
 : _RTHP-BUILD-GLYPHS-DAMAGE?  ( producer -- flag )
     _RTHP-RD-P !
     ['] _RTHP-RD-BUILD-IN-PLANES SCR-WITH-PROJECTION-FRAME-PLANES ;
+
+\ Only the rows to build again, for Desk's shell, which copies the runs of
+\ its regions' other rows from its own acknowledged bank.
+: _RTHP-MARK-GLYPHS-DAMAGE?  ( producer -- flag )
+    _RTHP-RD-P !
+    ['] _RTHP-RD-MARK-IN-PLANES SCR-WITH-PROJECTION-FRAME-PLANES ;
 
 \ A complete build rebuilds every row.
 : _RTHP-ROWS-ALL-REBUILT  ( producer -- )
@@ -8286,13 +8327,21 @@ VARIABLE _RTHP-LC-LOWER VARIABLE _RTHP-LC-UPPER
         THEN
     LOOP 0 ;
 
-: _RTHP-BUILD-GLYPHS?  ( producer -- flag )
+\ What the residue of any plan of this draw needs: no omitted graph meets
+\ a claim, and every root beneath an overlay lies under claims of it.
+: _RTHP-RESIDUE-GATES?  ( producer -- flag )
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
         DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
     THEN
-    DUP _RTHP-LAYERS-COVERED? 0= IF
-        DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
-    THEN
+    _RTHP-LAYERS-COVERED? 0= IF
+        RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
+    THEN -1 ;
+
+\ With Desk's shell installed, a build of the candidate's own runs is a
+\ build alone, from a frame on screen whose runs are the shell's, which no
+\ bank of this producer holds, so it plans every row.
+: _RTHP-BUILD-GLYPHS?  ( producer -- flag )
+    DUP _RTHP-RESIDUE-GATES? 0= IF DROP 0 EXIT THEN
     CHK-SAFE? IF 0 ELSE DUP _RTHP-GLYPHS-HELD? THEN IF
         DUP _RTHP.GLYPH-RUNS @ OVER _RTHP.GLYPH-COUNT !
         DUP _RTHP.GLYPH-TEXT @ OVER _RTHP.GLYPH-TEXT-USED !
@@ -8303,13 +8352,26 @@ VARIABLE _RTHP-LC-LOWER VARIABLE _RTHP-LC-UPPER
         THEN
     THEN
     0 OVER _RTHP.GLYPH-DRAW !
-    CHK-SAFE? IF 0 ELSE DUP _RTHP-BUILD-GLYPHS-DAMAGE? THEN IF
+    CHK-SAFE? OVER _RTHP.EXTENSION @ 0<> OR IF 0 ELSE DUP _RTHP-BUILD-GLYPHS-DAMAGE? THEN IF
         FSHD? IF DUP _RTHP-SH-GLYPHS THEN
     ELSE
         DUP _RTHP-ROWS-ALL-REBUILT
         DUP _RTHP-BUILD-GLYPHS-FULL? 0= IF DROP 0 EXIT THEN
     THEN
     _RTHP-GLYPHS-KEEP -1 ;
+
+\ For Desk's shell, which plans the runs of its own regions from the same
+\ planes and claims: the residue passes the same gates, the candidate holds
+\ no runs, and ROW-DAMAGE names the rows the shell's plans must build again
+\ (every row in safe mode, or when the frame on screen cannot vouch for
+\ the others).  The glyph banks then hold no plan of any draw.
+: _RTHP-SHELL-RESIDUE?  ( producer -- flag )
+    DUP _RTHP-RESIDUE-GATES? 0= IF DROP 0 EXIT THEN
+    0 OVER _RTHP.GLYPH-DRAW !
+    CHK-SAFE? IF 0 ELSE DUP _RTHP-MARK-GLYPHS-DAMAGE? THEN
+        0= IF DUP _RTHP-ROWS-ALL-REBUILT THEN
+    0 OVER _RTHP.GLYPH-COUNT ! 0 OVER _RTHP.GLYPH-TEXT-USED !
+    0 SWAP _RTHP-WRAP-GLYPH-PLAN? ;
 
 \ _RTHP-W-GLYPH-REFUSAL ( -- rte-status )
 \   Why the glyph plan that _RTHP-BUILD-GLYPHS? just refused was refused.
@@ -8635,6 +8697,21 @@ VARIABLE _RTHP-W-MEMORY-HELD
         _RTHP-W-P @ _RTHP-GROW-STORAGE? IF DROP _RTHP-W-PREFLIGHT-HYBRID THEN
     THEN ;
 
+\ A candidate for Desk's shell holds no runs and is not admitted on its
+\ own: the shell plans the runs of its regions and admits its whole batch,
+\ this candidate's items among them (RTHPX-PREPARE).  Its layers are set as
+\ the admission would check them.
+: _RTHP-W-FOR-SHELL  ( -- rte-status )
+    _RTPROF-PH-RESIDUAL-PLAN _RTPROF-MARK
+    _RTHP-W-P @ _RTHP-SHELL-RESIDUE?
+    _RTPROF-PH-OTHER _RTPROF-MARK
+        0= IF _RTHP-W-GLYPH-REFUSAL EXIT THEN
+    _RTHP-W-P @ _RTHP-BASE-LAYER! 0= IF RTE-S-UNAVAILABLE EXIT THEN
+    _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
+    _RTHP-W-P @ _RTHP-WRAP-HYBRID
+    _RTPROF-PH-OTHER _RTPROF-MARK
+    RTE-S-OK ;
+
 \ An opaque combined refusal of a candidate containing collections triggers
 \ this family-isolation retry.  Rebuild the exact same ordinary frame without
 \ collection claims so every refused cell returns to residual GLYPH_RUN
@@ -8721,7 +8798,16 @@ VARIABLE _RTHP-N-SERIES
     _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID _RTHP-W-ADMIT ;
 
+\ The last object the candidate numbers, or 0 when it numbers none.  A
+\ candidate built for Desk's shell has no admission to say: it numbers its
+\ controls, then its instruments, then its status fields, from its first
+\ object, and no runs.
 : _RTHP-CANDIDATE-LAST-OBJECT  ( producer -- object )
+    DUP _RTHP.SHELL-BUILT @ IF
+        DUP _RTHP.CONTROL-COUNT @ OVER _RTHP.INSTRUMENT-COUNT @ +
+        OVER _RTHP.STATIC-COUNT @ + ?DUP 0= IF DROP 0 EXIT THEN
+        SWAP _RTHP.FIRST-OBJECT @ + 1- EXIT
+    THEN
     DUP _RTHP.ADMISSION _RTE-HA.GLYPH-COUNT @ IF
         _RTHP.ADMISSION _RTE-HA.GLYPH-LAST @
     ELSE
@@ -8751,7 +8837,10 @@ VARIABLE _RTHP-N-SERIES
     _RTHP-N-P @ _RTHP.NEXT-OBJECT @ <> IF 0 0 0 EXIT THEN
     _RTHP-N-P @ _RTHP-CANDIDATE-LAST-OBJECT DUP 0= IF
         DROP
-        _RTHP-N-P @ _RTHP.SERIES-COUNT @ 0= IF 0 0 0 EXIT THEN
+        \ A candidate of no objects is a frame with series in it, or as
+        \ part of the batch of Desk's shell, which has objects of its own.
+        _RTHP-N-P @ _RTHP.SERIES-COUNT @ 0=
+        _RTHP-N-P @ _RTHP.SHELL-BUILT @ 0= AND IF 0 0 0 EXIT THEN
         _RTHP-N-REGION @ _RTHP-N-P @ _RTHP.NEXT-OBJECT @ -1 EXIT
     THEN
     DUP _RTHP-N-P @ _RTHP.FIRST-OBJECT @ U< IF DROP 0 0 0 EXIT THEN
@@ -9358,73 +9447,79 @@ VARIABLE _RTHP-ROOT-B
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTHP-W-BUILD-OPTIONAL-STATICS
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
-    _RTPROF-PH-RESIDUAL-PLAN _RTPROF-MARK
-    _RTHP-W-P @ _RTHP-BUILD-GLYPHS?
-    _RTPROF-PH-OTHER _RTPROF-MARK
-        0= IF _RTHP-W-GLYPH-REFUSAL 0 EXIT THEN
-    _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
-    _RTHP-W-P @ _RTHP-RESERVE-GLYPHS?
-    _RTPROF-PH-OTHER _RTPROF-MARK
-        0= IF RTE-S-INVALID 0 EXIT THEN
-    _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
-    _RTHP-W-P @ _RTHP-WRAP-HYBRID
-    _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-W-P @ _RTHP-PRESENT-PARTS _RTHP-W-HAD !
-    _RTHP-W-ADMIT
-    \ A frame that still does not fit asks the terminal for more space.
-    DUP RTE-S-CAPACITY = IF
-        _RTHP-W-P @ _RTHP-ASK-FOR-SPACE? IF DROP RTE-S-WOULD-BLOCK 0 EXIT THEN
-    THEN
-    DUP RTE-S-OK <> IF _RTHP-W-P @ _RTHP-REFUSAL-REASON _RTHP-W-WHY ! THEN
-    \ An opaque refusal cannot identify its optional family.  Strip status
-    \ before each older-family retry.  Rebuilding menu/instrument choices may
-    \ admit status again, so the final attempt also gets a status-free retry.
-    \ No refused family leaves claims in the residual projection.
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.DIALOG-CONTROLS @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-DIALOGS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.FIELD-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-FIELDS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @
-    _RTHP-W-P @ _RTHP.SERIES-COUNT @ OR 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.COLLECTION-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-MENU-ONLY
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @
-    _RTHP-W-P @ _RTHP.SERIES-COUNT @ OR 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS
-    THEN
-    DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
-    _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
-        DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+    \ A request to build alone holds for one build.
+    _RTHP-W-SHELL-MODE? 0 _RTHP-W-ALONE !
+    DUP _RTHP-W-P @ _RTHP.SHELL-BUILT ! IF
+        _RTHP-W-FOR-SHELL
+    ELSE
+        _RTPROF-PH-RESIDUAL-PLAN _RTPROF-MARK
+        _RTHP-W-P @ _RTHP-BUILD-GLYPHS?
+        _RTPROF-PH-OTHER _RTPROF-MARK
+            0= IF _RTHP-W-GLYPH-REFUSAL 0 EXIT THEN
+        _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
+        _RTHP-W-P @ _RTHP-RESERVE-GLYPHS?
+        _RTPROF-PH-OTHER _RTPROF-MARK
+            0= IF RTE-S-INVALID 0 EXIT THEN
+        _RTPROF-PH-RESERVE-WRAP _RTPROF-MARK
+        _RTHP-W-P @ _RTHP-WRAP-HYBRID
+        _RTPROF-PH-OTHER _RTPROF-MARK
+        _RTHP-W-ADMIT
+        \ A frame that still does not fit asks the terminal for more space.
+        DUP RTE-S-CAPACITY = IF
+            _RTHP-W-P @ _RTHP-ASK-FOR-SPACE? IF DROP RTE-S-WOULD-BLOCK 0 EXIT THEN
+        THEN
+        DUP RTE-S-OK <> IF _RTHP-W-P @ _RTHP-REFUSAL-REASON _RTHP-W-WHY ! THEN
+        \ An opaque refusal cannot identify its optional family.  Strip status
+        \ before each older-family retry.  Rebuilding menu/instrument choices may
+        \ admit status again, so the final attempt also gets a status-free retry.
+        \ No refused family leaves claims in the residual projection.
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.DIALOG-CONTROLS @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-DIALOGS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.FIELD-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-FIELDS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @
+        _RTHP-W-P @ _RTHP.SERIES-COUNT @ OR 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.COLLECTION-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-MENU-ONLY
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.INSTRUMENT-COUNT @
+        _RTHP-W-P @ _RTHP.SERIES-COUNT @ OR 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-INSTRUMENTS
+        THEN
+        DUP RTE-S-CAPACITY = OVER RTE-S-UNAVAILABLE = OR
+        _RTHP-W-P @ _RTHP.STATIC-COUNT @ 0<> AND IF
+            DROP _RTHP-W-REBUILD-WITHOUT-STATICS
+        THEN
     THEN
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     \ Graphs the terminal's series limits cannot take stay CELL, as do the
@@ -9484,6 +9579,12 @@ VARIABLE _RTHP-ROOT-B
     _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-BUILD-OBSERVED-CANDIDATE
     _RTHP-DAMAGE-REFUSAL ;
 
+\ Build the candidate with its own runs and admission, even with Desk's
+\ shell installed (_RTHP-W-ALONE).  The build takes the request at its
+\ mode decision, and one that stopped before it leaves none behind.
+: _RTHP-BUILD-ALONE  ( producer -- rte-status built? )
+    -1 _RTHP-W-ALONE ! _RTHP-BUILD-CANDIDATE 0 _RTHP-W-ALONE ! ;
+
 \ _RTHP-REFUSE-DRAW ( producer -- )
 \   The completed draw just built cannot be shown rich.  CELL shows it, the
 \   fallback record says so, and rich is tried again once a newer draw
@@ -9493,10 +9594,11 @@ VARIABLE _RTHP-ROOT-B
     _RTHP-W-DRAW @ SWAP _RTHP.REFUSED-DRAW ! ;
 
 \ Before an owner opens, a draw that cannot be shown rich leaves CELL output
-\ as it is and keeps waiting for a newer draw.
+\ as it is and keeps waiting for a newer draw.  The owner is sized from the
+\ candidate's own admission, so the candidate is built alone.
 : _RTHP-TRY-CANDIDATE  ( producer -- scb-status started? )
     _RTHP-W-P !
-    _RTHP-W-P @ _RTHP-BUILD-CANDIDATE IF
+    _RTHP-W-P @ _RTHP-BUILD-ALONE IF
         DUP RTE-S-OK <> IF DROP SCB-S-INVALID 0 EXIT THEN DROP
     ELSE
         DUP RTE-S-UNAVAILABLE = OVER RTE-S-CAPACITY = OR IF
@@ -10404,6 +10506,11 @@ VARIABLE _RTHP-X-I-PATH-MAX
 VARIABLE _RTHP-X-I-LAST
 VARIABLE _RTHP-X-I-REGION-LAST
 
+\ The candidate was admitted on its own, so its admission summary describes
+\ it.  A candidate built for Desk's shell has no admission of its own: the
+\ shell's batch, which holds its items, is admitted before anything is sent.
+: _RTHP-X-ADMITTED?  ( -- flag )  _RTHP-X-P @ _RTHP.SHELL-BUILT @ 0= ;
+
 : _RTHP-X-I-CLEAR  ( -- )
     0 _RTHP-X-I-ITEM ! 0 _RTHP-X-I-REGION !
     0 _RTHP-X-I-A ! 0 _RTHP-X-I-U ! 0 _RTHP-X-I-NEXT !
@@ -10514,6 +10621,8 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-X-I-ITEMS? 0= IF 0 EXIT THEN
     _RTHP-X-I-UNIT-BYTES @
         _RTHP-X-P @ _RTHP.INSTRUMENT-UNITS-USED @ =
+    _RTHP-X-I-LAST @ _RTHP-X-P @ _RTHP.INSTRUMENT-LAST @ = AND
+    _RTHP-X-ADMITTED? 0= IF EXIT THEN
     _RTHP-X-I-UNIT-BYTES @ _RTHP-X-P @ _RTHP.ADMISSION
         _RTE-HA.INSTRUMENT-UNIT-BYTES @ = AND
     _RTHP-X-I-UNIT-ALIGNED @ _RTHP-X-P @ _RTHP.ADMISSION
@@ -10538,7 +10647,6 @@ VARIABLE _RTHP-X-I-REGION-LAST
         _RTE-HA.PATH-POINTS @ = AND
     _RTHP-X-I-PATH-MAX @ _RTHP-X-P @ _RTHP.ADMISSION
         _RTE-HA.PATH-POINTS-MAX @ = AND
-    _RTHP-X-I-LAST @ _RTHP-X-P @ _RTHP.INSTRUMENT-LAST @ = AND
     _RTHP-X-I-LAST @ _RTHP-X-P @ _RTHP.ADMISSION
         _RTE-HA.INSTRUMENT-LAST @ = AND ;
 
@@ -10568,14 +10676,16 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-U32+? 0= IF DROP 0 EXIT THEN
     _RTHP-X-P @ _RTHP.STATIC-BASE-CLAIMS @ <> IF 0 EXIT THEN
 
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-REGION-COUNT @
-        _RTHP-X-P @ _RTHP.INSTRUMENT-REGION-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-COUNT @
-        _RTHP-X-P @ _RTHP.INSTRUMENT-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-UNIT-BYTES @
-        _RTHP-X-P @ _RTHP.INSTRUMENT-UNITS-USED @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-LAST @
-        _RTHP-X-P @ _RTHP.INSTRUMENT-LAST @ <> IF 0 EXIT THEN
+    _RTHP-X-ADMITTED? IF
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-REGION-COUNT @
+            _RTHP-X-P @ _RTHP.INSTRUMENT-REGION-COUNT @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-COUNT @
+            _RTHP-X-P @ _RTHP.INSTRUMENT-COUNT @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-UNIT-BYTES @
+            _RTHP-X-P @ _RTHP.INSTRUMENT-UNITS-USED @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-LAST @
+            _RTHP-X-P @ _RTHP.INSTRUMENT-LAST @ <> IF 0 EXIT THEN
+    THEN
 
     _RTHP-X-P @ _RTHP.INSTRUMENT-COUNT @ 0= IF
         _RTHP-X-P @ _RTHP.INSTRUMENT-REGION-COUNT @
@@ -10583,20 +10693,22 @@ VARIABLE _RTHP-X-I-REGION-LAST
         _RTHP-X-P @ _RTHP.INSTRUMENT-LAST-REGION @ OR
         _RTHP-X-P @ _RTHP.INSTRUMENT-LAST @ OR
         _RTHP-X-P @ _RTHP.INSTRUMENT-CLAIM-COUNT @ OR IF 0 EXIT THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.READOUT-COUNT @
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.METER-COUNT @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.STATUS-COUNT @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION
-            _RTE-HA.INSTRUMENT-UNIT-ALIGNED @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-UNIT-MAX @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION
-            _RTE-HA.INSTRUMENT-FORMATTED-BYTES @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION
-            _RTE-HA.INSTRUMENT-FORMATTED-MAX @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.PLOT-COUNT @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.POLYLINE-COUNT @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.PATH-POINTS @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.PATH-POINTS-MAX @ OR IF 0 EXIT THEN
+        _RTHP-X-ADMITTED? IF
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.READOUT-COUNT @
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.METER-COUNT @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.STATUS-COUNT @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION
+                _RTE-HA.INSTRUMENT-UNIT-ALIGNED @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.INSTRUMENT-UNIT-MAX @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION
+                _RTE-HA.INSTRUMENT-FORMATTED-BYTES @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION
+                _RTE-HA.INSTRUMENT-FORMATTED-MAX @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.PLOT-COUNT @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.POLYLINE-COUNT @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.PATH-POINTS @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.PATH-POINTS-MAX @ OR IF 0 EXIT THEN
+        THEN
         _RTHP-X-P @ _RTHP.INSTRUMENT-PLAN _RTE-IP.OWNER @
         _RTHP-X-P @ _RTHP.INSTRUMENT-PLAN _RTE-IP.GENERATION @ OR
         _RTHP-X-P @ _RTHP.INSTRUMENT-PLAN _RTE-IP.SURFACE-COLS @ OR
@@ -10793,21 +10905,23 @@ VARIABLE _RTHP-SX-COL-END
     _RTHP-SX-NEXT @ _RTHP-SX-P @ _RTHP.CLAIMS-USED @ <> IF 0 EXIT THEN
     _RTHP-SX-TEXT @ _RTHP-SX-P @ _RTHP.STATIC-TEXT-USED @ <>
     _RTHP-SX-LAST @ _RTHP-SX-P @ _RTHP.STATIC-LAST @ <> OR IF 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COUNT @
-        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <>
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-TEXT @ _RTHP-SX-TEXT @ <> OR
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-ALIGNED @ _RTHP-SX-ALIGNED @ <> OR
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-MAX @ _RTHP-SX-MAX @ <> OR
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-LAST @ _RTHP-SX-LAST @ <> OR
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-OPS @
-        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <> OR
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-IMAGES @
-        _RTHP-SX-IMAGES @ <> OR IF 0 EXIT THEN
-    \ The neutral copy holds each status field's record and text; the
-    \ provider counts what a picture takes.
-    _RTHP-SX-P @ _RTHP.STATIC-COUNT @ _RTHP-SX-IMAGES @ - RTE-STATIC-SIZE *
-        _RTHP-SX-ALIGNED @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
-    _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COPY @ <> IF 0 EXIT THEN
+    _RTHP-SX-P @ _RTHP.SHELL-BUILT @ 0= IF
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COUNT @
+            _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <>
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-TEXT @ _RTHP-SX-TEXT @ <> OR
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-ALIGNED @ _RTHP-SX-ALIGNED @ <> OR
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-MAX @ _RTHP-SX-MAX @ <> OR
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-LAST @ _RTHP-SX-LAST @ <> OR
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-OPS @
+            _RTHP-SX-P @ _RTHP.STATIC-COUNT @ <> OR
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-IMAGES @
+            _RTHP-SX-IMAGES @ <> OR IF 0 EXIT THEN
+        \ The neutral copy holds each status field's record and text; the
+        \ provider counts what a picture takes.
+        _RTHP-SX-P @ _RTHP.STATIC-COUNT @ _RTHP-SX-IMAGES @ - RTE-STATIC-SIZE *
+            _RTHP-SX-ALIGNED @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+        _RTHP-SX-P @ _RTHP.ADMISSION _RTE-HA.STATIC-COPY @ <> IF 0 EXIT THEN
+    THEN
     _RTHP-SX-P @ _RTHP.STATIC-COUNT @ 0= IF
         RTE-STATIC-PLAN-SIZE 8 / 0 ?DO
             _RTHP-SX-P @ _RTHP.STATIC-PLAN I 8 * + @ IF 0 UNLOOP EXIT THEN
@@ -11103,24 +11217,26 @@ VARIABLE _RTHP-DX-UTF8
 \ counters and neutral admission before the first captured operation.
 : _RTHP-SERIES-FIXED? ( producer -- flag )
     DUP _RTHP-SERIES-SUMMARY? 0= IF DROP 0 EXIT THEN _RTHP-SQ-P !
-    _RTHP-SQ-P @ _RTHP.SERIES-COUNT @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.SERIES-LAST @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-LAST @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.SERIES-SLOTS @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-SLOTS @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.SERIES-HISTORY-MAX @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-HISTORY-MAX @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-SAMPLE-BYTES @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.SERIES-CHUNKS @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNKS @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-MAX @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNK-SAMPLES-MAX @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-BYTES-MAX @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNK-BYTES-MAX @ <> IF 0 EXIT THEN
-    _RTHP-SQ-P @ _RTHP.WAVEFORM-COUNT @
-    _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.WAVEFORM-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-SQ-P @ _RTHP.SHELL-BUILT @ 0= IF
+        _RTHP-SQ-P @ _RTHP.SERIES-COUNT @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-COUNT @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.SERIES-LAST @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-LAST @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.SERIES-SLOTS @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-SLOTS @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.SERIES-HISTORY-MAX @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-HISTORY-MAX @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.SERIES-SAMPLES-USED @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-SAMPLE-BYTES @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.SERIES-CHUNKS @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNKS @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-MAX @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNK-SAMPLES-MAX @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.SERIES-CHUNK-BYTES-MAX @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.SERIES-CHUNK-BYTES-MAX @ <> IF 0 EXIT THEN
+        _RTHP-SQ-P @ _RTHP.WAVEFORM-COUNT @
+        _RTHP-SQ-P @ _RTHP.ADMISSION _RTE-HA.WAVEFORM-COUNT @ <> IF 0 EXIT THEN
+    THEN
     _RTHP-SQ-SLOTS @ _RTHP-SQ-P @ _RTHP.SERIES-SLOTS @ <> IF 0 EXIT THEN
     _RTHP-SQ-HISTORY @ _RTHP-SQ-P @ _RTHP.SERIES-HISTORY-MAX @ <> IF 0 EXIT THEN
     _RTHP-SQ-CHUNKS @ _RTHP-SQ-P @ _RTHP.SERIES-CHUNKS @ <> IF 0 EXIT THEN
@@ -11179,85 +11295,89 @@ VARIABLE _RTHP-DX-UTF8
     0= _RTHP-X-P @ _RTHP.SOURCE-DGRAPH-COUNT @ 0= <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.CLAIMS-USED @
         _RTHP-X-P @ _RTHP.CLAIMS-U @ U> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.OWNER @
-        _RTHP-X-P @ _RTHP.OWNER @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GENERATION @
-        _RTHP-X-P @ _RTHP.OWNER-GEN @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.SURFACE-COLS @
-        _RTHP-X-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.SURFACE-ROWS @
-        _RTHP-X-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.CONTROL-COUNT @
-    _RTHP-X-P @ _RTHP.GLYPH-COUNT @ OR
-    _RTHP-X-P @ _RTHP.STATIC-COUNT @ OR IF
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ID @
-            _RTHP-X-P @ _RTHP.REGION @ <> IF 0 EXIT THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-X @
-            0<> IF 0 EXIT THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Y @
-            0<> IF 0 EXIT THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-COLS @
+    _RTHP-X-ADMITTED? IF
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.OWNER @
+            _RTHP-X-P @ _RTHP.OWNER @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GENERATION @
+            _RTHP-X-P @ _RTHP.OWNER-GEN @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.SURFACE-COLS @
             _RTHP-X-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ROWS @
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.SURFACE-ROWS @
             _RTHP-X-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-X @
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-Y @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-COLS @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-ROWS @ OR IF
-            0 EXIT
+        _RTHP-X-P @ _RTHP.CONTROL-COUNT @
+        _RTHP-X-P @ _RTHP.GLYPH-COUNT @ OR
+        _RTHP-X-P @ _RTHP.STATIC-COUNT @ OR IF
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ID @
+                _RTHP-X-P @ _RTHP.REGION @ <> IF 0 EXIT THEN
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-X @
+                0<> IF 0 EXIT THEN
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Y @
+                0<> IF 0 EXIT THEN
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-COLS @
+                _RTHP-X-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ROWS @
+                _RTHP-X-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-X @
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-Y @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-COLS @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-ROWS @ OR IF
+                0 EXIT
+            THEN
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @
+                _RTHP-X-P @ _RTHP-BASE-Z-FIXED? 0= IF 0 EXIT THEN
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-FLAGS @
+                RTE-REGION-VISIBLE <> IF 0 EXIT THEN
+        ELSE
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ID @
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-X @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Y @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-COLS @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ROWS @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-X @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-Y @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-COLS @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-ROWS @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @ OR
+            _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-FLAGS @ OR IF
+                0 EXIT
+            THEN
         THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @
-            _RTHP-X-P @ _RTHP-BASE-Z-FIXED? 0= IF 0 EXIT THEN
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-FLAGS @
-            RTE-REGION-VISIBLE <> IF 0 EXIT THEN
-    ELSE
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ID @
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-X @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Y @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-COLS @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-ROWS @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-X @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-Y @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-COLS @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CLIP-ROWS @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-Z @ OR
-        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.REGION-FLAGS @ OR IF
-            0 EXIT
-        THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-COUNT @
+            _RTHP-X-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-BYTES @
+            _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-COLLECTIONS @
+            _RTHP-X-P @ _RTHP.COLLECTION-COUNT @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.COLLECTION-ITEMS @ _RTHP-X-P @ _RTHP.FIELD-ITEMS @
+            _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEMS @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.FIELD-CONTROLS @
+            _RTHP-X-P @ _RTHP.FIELD-COUNT @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.SOURCE-MENU-TEXT-USED @
+        _RTHP-X-P @ _RTHP.COLLECTION-UTF8 @ _RTHP-U32+?
+            0= IF DROP 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.FIELD-UTF8 @ _RTHP-U32+?
+            0= IF DROP 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.DIALOG-UTF8 @ _RTHP-U32+?
+            0= IF DROP 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-UTF8 @
+            <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-COUNT @
+            _RTHP-X-P @ _RTHP.GLYPH-COUNT @ <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-TEXT @
+            _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <> IF 0 EXIT THEN
     THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-COUNT @
-        _RTHP-X-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-BYTES @
-        _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-COLLECTIONS @
-        _RTHP-X-P @ _RTHP.COLLECTION-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.COLLECTION-ITEMS @ _RTHP-X-P @ _RTHP.FIELD-ITEMS @
-        _RTHP-U32+? 0= IF DROP 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEMS @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.FIELD-CONTROLS @
-        _RTHP-X-P @ _RTHP.FIELD-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.SOURCE-MENU-TEXT-USED @
-    _RTHP-X-P @ _RTHP.COLLECTION-UTF8 @ _RTHP-U32+?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.FIELD-UTF8 @ _RTHP-U32+?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.DIALOG-UTF8 @ _RTHP-U32+?
-        0= IF DROP 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-UTF8 @
-        <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-COUNT @
-        _RTHP-X-P @ _RTHP.GLYPH-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-TEXT @
-        _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP-FIELDS-FIXED? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP-DIALOGS-FIXED? 0= IF 0 EXIT THEN
     _RTHP-INSTRUMENT-FIXED? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP-BASE-CLAIMS-DISJOINT? 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP-STATICS-FIXED? 0= IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEM-VIEWS @
-        RTE-CONTROL-ITEM-VIEW _RTHP-X-KIND-COUNT <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.DOCUMENT-CONTROLS @
-        RTE-CONTROL-DOCUMENT _RTHP-X-KIND-COUNT <> IF 0 EXIT THEN
+    _RTHP-X-ADMITTED? IF
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.CONTROL-ITEM-VIEWS @
+            RTE-CONTROL-ITEM-VIEW _RTHP-X-KIND-COUNT <> IF 0 EXIT THEN
+        _RTHP-X-P @ _RTHP.ADMISSION _RTE-HA.DOCUMENT-CONTROLS @
+            RTE-CONTROL-DOCUMENT _RTHP-X-KIND-COUNT <> IF 0 EXIT THEN
+    THEN
 
     _RTHP-X-P @ _RTHP.CONTROL-COUNT @ IF
     _RTHP-X-P @ _RTHP.CONTROL-PLAN _RTE-CP.OWNER @
@@ -13766,6 +13886,14 @@ VARIABLE _RTHP-D-TARGET-E
 \ and INDEX-B is its identity-sorted control index with unique IDs up to
 \ LAST-ID.  Keep them beside the bank.  A bank without kept facts is simply
 \ audited in full by the next comparison.
+\ A comparison of candidates built for Desk's shell holds no runs: the
+\ pending bank has none, the acknowledged bank's are not on screen, and
+\ none is planned, kept or restored.
+: _RTHP-D-NO-GLYPHS  ( -- )
+    0 _RTHP-D-CANDIDATE-GLYPHS ! 0 _RTHP-D-SLOTS ! 0 _RTHP-D-ACTIVE-SLOTS !
+    0 _RTHP-D-ACTIVE-VISIBLE ! 0 _RTHP-D-PENDING-VISIBLE !
+    0 _RTHP-D-GLYPH-BASE ! 0 _RTHP-D-PLAN-GLYPHS ! ;
+
 : _RTHP-D-KEEP-FACTS  ( -- )
     _RTHP-D-P @ _RTHP.PENDING-FACTS 0 OVER _RTHP-KF.BANK !
     _RTHP-D-INDEX-BYTES @ _RTHP-D-P @ _RTHP.FACTS-INDEX-U @ U> IF
@@ -13860,30 +13988,37 @@ CREATE _RTHP-DS-RECORD-S RTE-STATIC-SIZE 7 + ALLOT
         THEN
     LOOP
     _RTHP-ROOT-STATIC-CHANGES _RTHP-D-OPS +!
-    26 _RTHP-D-WHY !
-    _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
-    27 _RTHP-D-WHY !
-    _RTHP-D-EXTEND-TOMBSTONES? 0= IF 0 EXIT THEN
-    28 _RTHP-D-WHY !
-    _RTHP-D-TRY-GLYPH-LAYOUT? 0= IF
-        _RTHP-D-NORMALIZE-GLYPH-IDS? 0= IF
-            _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
-        THEN
-        _RTHP-D-SLOTS @ 0 ?DO
-            I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF
-                _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
+    _RTHP-D-P @ _RTHP.SHELL-BUILT @ IF
+        \ Desk's shell sends the runs of its own regions, and fences a frame
+        \ in which nothing changed, from its own banks: the applications'
+        \ items are all this comparison matches.
+        _RTHP-D-NO-GLYPHS
+    ELSE
+        26 _RTHP-D-WHY !
+        _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
+        27 _RTHP-D-WHY !
+        _RTHP-D-EXTEND-TOMBSTONES? 0= IF 0 EXIT THEN
+        28 _RTHP-D-WHY !
+        _RTHP-D-TRY-GLYPH-LAYOUT? 0= IF
+            _RTHP-D-NORMALIZE-GLYPH-IDS? 0= IF
+                _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
             THEN
-        LOOP
-    THEN
-    29 _RTHP-D-WHY !
-    _RTHP-D-OPS @ 0= IF
-        _RTHP-D-PLAN-REVISION-FENCE? 0= IF
+            _RTHP-D-SLOTS @ 0 ?DO
+                I _RTHP-D-GLYPH-COMPATIBLE-AND-MARK? 0= IF
+                    _RTHP-D-RESTORE-FRESH-CANDIDATE 0 UNLOOP EXIT
+                THEN
+            LOOP
+        THEN
+        29 _RTHP-D-WHY !
+        _RTHP-D-OPS @ 0= IF
+            _RTHP-D-PLAN-REVISION-FENCE? 0= IF
+                _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
+            THEN
+        THEN
+        30 _RTHP-D-WHY !
+        _RTHP-D-PLAN-COMPACT-GLYPHS 0= IF
             _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
         THEN
-    THEN
-    30 _RTHP-D-WHY !
-    _RTHP-D-PLAN-COMPACT-GLYPHS 0= IF
-        _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
     31 _RTHP-D-WHY !
     _RTHP-D-NORMALIZE 0= IF
@@ -14795,6 +14930,10 @@ VARIABLE _RTHP-P-STATE
     THEN DROP
     RTE-S-OK ;
 
+\ Diagnostics: candidates built for Desk's shell that were built again
+\ alone because the shell could not build its batch.
+VARIABLE _RTHP-DIAG-ALONE-REBUILDS
+
 : _RTHP-PREPARE-START  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-P-P !
@@ -14830,6 +14969,17 @@ VARIABLE _RTHP-P-STATE
                 _RTHP-P-P @ _RTHP.TARGET-ACTIVE @ IF
                     SCB-S-WOULD-BLOCK
                 ELSE SCB-S-OK THEN EXIT
+            THEN
+            \ A candidate built for the shell has no runs or admission of
+            \ its own.  Built alone, it is cut down to fit as a candidate
+            \ going out on its own is, and offered to the shell again; if
+            \ the shell still cannot build, it goes out alone.
+            _RTHP-P-P @ _RTHP.SHELL-BUILT @ IF
+                1 _RTHP-DIAG-ALONE-REBUILDS +!
+                _RTHP-P-P @ _RTHP-TARGET-ABORT
+                _RTHP-P-P @ _RTHP-BUILD-ALONE _RTHP-REBUILD-RESULT
+                0= IF EXIT THEN DROP
+                _RTHP-P-P @ RECURSE EXIT
             THEN
             RTHP-PART-SHELL _RTHP-P-XSTATUS @ _RTHP-P-P @
                 _RTHP-EXTENSION-FALLBACK!

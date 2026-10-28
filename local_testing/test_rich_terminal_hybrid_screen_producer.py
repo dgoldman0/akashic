@@ -3891,10 +3891,11 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "DIALOG-DESCRIPTORS-USED", "DIALOG-NATIVE-A", "DIALOG-NATIVE-U",
                  "DIALOG-NATIVE-USED", "DIALOG-COUNT", "DIALOG-CONTROLS",
                  "DIALOG-BASE-CONTROLS", "DIALOG-BASE-TEXT", "DIALOG-BASE-CLAIMS",
-                 "DIALOG-REFUSED", "DIALOG-UTF8", "PENDING-SEAL", "ACTIVE-SEAL"):
+                 "DIALOG-REFUSED", "DIALOG-UTF8", "PENDING-SEAL", "ACTIVE-SEAL",
+                 "SHELL-BUILT", "BASE-Z"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 5080
+    assert _constant(source, "RTHP-SIZE") == expected == 5096
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -5250,7 +5251,27 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
     assert preflight.count("RTE-HYBRID-PREFLIGHT") == 1
     assert "_RTHP-OPEN" not in build
     assert "_RTHP.PHASE !" not in build
-    assert attempt.index("_RTHP-BUILD-CANDIDATE") < attempt.index("_RTHP-OPEN")
+    # Before the owner opens the candidate is built alone, so its own
+    # admission sizes the owner even with Desk's shell installed.
+    alone = _word(source, "_RTHP-BUILD-ALONE")
+    assert attempt.index("_RTHP-BUILD-ALONE") < attempt.index("_RTHP-OPEN")
+    assert alone.index("-1 _RTHP-W-ALONE !") < alone.index(
+        "_RTHP-BUILD-CANDIDATE") < alone.index("0 _RTHP-W-ALONE !")
+    # The build takes the request at its mode decision, so it holds for one
+    # build whatever stops a build early.
+    assert build.index("_RTHP-W-SHELL-MODE? 0 _RTHP-W-ALONE !") < build.index(
+        "_RTHP.SHELL-BUILT !")
+    assert "CATCH" not in alone
+    # With the shell installed, a build plans no runs and admits nothing: the
+    # shell plans the runs of its regions and admits its whole batch.
+    for_shell = _word(source, "_RTHP-W-FOR-SHELL")
+    assert build.index("_RTHP-W-SHELL-MODE?") < build.index(
+        "_RTHP-W-FOR-SHELL") < build.index("_RTHP-BUILD-GLYPHS?")
+    for absent in ("_RTHP-W-ADMIT", "_RTHP-BUILD-GLYPHS?", "_RTHP-RESERVE-GLYPHS?",
+                   "_RTHP-ASK-FOR-SPACE?", "RTE-HYBRID-PREFLIGHT"):
+        assert absent not in for_shell
+    assert for_shell.index("_RTHP-SHELL-RESIDUE?") < for_shell.index(
+        "_RTHP-BASE-LAYER!") < for_shell.index("_RTHP-WRAP-HYBRID")
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
     assert "RTE-CONTROL-PREFLIGHT" not in source
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source
@@ -5408,12 +5429,16 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert "_RTHP.NEXT-OBJECT" in fixed
     assert (
         "_RTE-HA.CONTROL-BYTES @\n"
-        "        _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <>"
+        "            _RTHP-X-P @ _RTHP.SOURCE-TEXT-USED @ <>"
     ) in fixed
     assert (
         "_RTE-HA.GLYPH-TEXT @\n"
-        "        _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <>"
+        "            _RTHP-X-P @ _RTHP.GLYPH-TEXT-USED @ <>"
     ) in fixed
+    # A candidate built for Desk's shell has no admission of its own: the
+    # summary is compared only for a candidate admitted alone.
+    assert fixed.index("_RTHP-X-ADMITTED? IF") < fixed.index("_RTE-HA.OWNER @")
+    assert "_RTHP.SHELL-BUILT @ 0=" in _word(source, "_RTHP-X-ADMITTED?")
     assert successors.count("_RTHP-U+?") == 4
     assert "_RTHP-U32+?" not in successors
 
@@ -5423,6 +5448,14 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert "_RTE-HA.GLYPH-LAST" in candidate_last
     assert "_RTE-HA.INSTRUMENT-LAST" in candidate_last
     assert "_RTE-HA.CONTROL-LAST" in candidate_last
+    # Without an admission, the candidate's controls, instruments and status
+    # fields are numbered from its first object, and it numbers no runs.
+    shell_last = candidate_last[: candidate_last.index("_RTHP.ADMISSION")]
+    assert "_RTHP.SHELL-BUILT @ IF" in shell_last
+    for count in ("_RTHP.CONTROL-COUNT", "_RTHP.INSTRUMENT-COUNT",
+                  "_RTHP.STATIC-COUNT", "_RTHP.FIRST-OBJECT"):
+        assert count in shell_last
+    assert "_RTHP.GLYPH-COUNT" not in shell_last
     assert "_RTHP.NEXT-REGION !" in advance
     assert "_RTHP.NEXT-OBJECT !" in advance
     exact_ack = (
@@ -6261,23 +6294,35 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     assert authority.count("SCR-STORAGE-DISJOINT?") == 2
     assert "MSPAN-OVERLAP?" in authority
     assert authority.count("_RTHP-ARENA-SPAN?") == 4
-    assert "_RTHP-RD-SCREEN-AUTHORITY?" in body
-    assert "_RTHP-RD-WORK-BOUNDS?" in body
-    assert body.index("_RTHP-RD-SCREEN-AUTHORITY?") < body.index(
-        "_RTHP-RD-MARK-CELL-DAMAGE?"
-    ) < body.index("_RTHP-RD-MARK-CURRENT-CLAIMS?")
+    # The rows to build again are marked first, under the screen authority
+    # proved once; Desk's shell takes only the marks, the producer's own
+    # build plans those rows within its work bounds and copies the rest.
+    marks = _word(source, "_RTHP-RD-MARK-BODY?")
+    assert marks.index("_RTHP-RD-ELIGIBLE?") < marks.index(
+        "_RTHP-RD-SCREEN-AUTHORITY?") < marks.index(
+        "_RTHP-RD-MARK-CELL-DAMAGE?") < marks.index("_RTHP-RD-MARK-CURRENT-CLAIMS?")
+    assert body.index("_RTHP-RD-MARK-BODY?") < body.index("_RTHP-RD-WORK-BOUNDS?")
     assert "_RTHP-RD-COPY-ACTIVE-ROW?" in body
     assert "_RTHP-RD-BUILD-ROW?" in body
+    for row_work in ("_RTHP-RD-WORK-BOUNDS?", "_RTHP-RD-BUILD-ROW?",
+                     "_RTHP-RD-COPY-ACTIVE-ROW?", "RGRP"):
+        assert row_work not in marks
+    planes = _word(source, "_RTHP-RD-PLANES!")
+    in_planes = _word(source, "_RTHP-RD-IN-PLANES")
+    mark_callback = _word(source, "_RTHP-RD-MARK-IN-PLANES")
+    for each in (callback, mark_callback):
+        assert each.index("_RTHP-RD-PLANES!") < each.index("_RTHP-RD-IN-PLANES")
+        assert "residue-a projection-damage-a projection-damage-u -- flag" in each
     assert "_RTHP-RD-BUILD-BODY?" in callback
-    assert "CATCH" in callback
-    assert "THROW" in callback
-    assert callback.index("_RTHP-RD-BUILD-BODY?") < callback.index(
-        "_RTHP-RD-CLEAR-PLANE-BORROW"
-    )
-    assert "residue-a projection-damage-a projection-damage-u -- flag" in callback
-    assert callback.index("_RTHP-RD-CELL-DAMAGE-U !") < callback.index(
+    assert "_RTHP-RD-MARK-BODY?" in mark_callback
+    assert "CATCH" in in_planes
+    assert "THROW" in in_planes
+    assert in_planes.index("CATCH") < in_planes.index("_RTHP-RD-CLEAR-PLANE-BORROW")
+    assert planes.index("_RTHP-RD-CELL-DAMAGE-U !") < planes.index(
         "_RTHP-RD-FORCE !"
     )
+    assert _word(source, "_RTHP-MARK-GLYPHS-DAMAGE?").count(
+        "SCR-WITH-PROJECTION-FRAME-PLANES") == 1
     for borrowed in (
         "_RTHP-RD-FRONT",
         "_RTHP-RD-BACK",
@@ -7378,7 +7423,15 @@ def test_safe_mode_takes_the_producer_s_full_paths() -> None:
     # every draw's glyph plan whole.
     glyphs = _word(source, "_RTHP-BUILD-GLYPHS?")
     assert "CHK-SAFE? IF 0 ELSE DUP _RTHP-GLYPHS-HELD? THEN IF" in glyphs
-    assert "CHK-SAFE? IF 0 ELSE DUP _RTHP-BUILD-GLYPHS-DAMAGE? THEN IF" in glyphs
+    # A build of the candidate's own runs with Desk's shell installed plans
+    # every row too: the frame on screen holds the shell's runs, which no
+    # bank of the producer has.
+    assert ("CHK-SAFE? OVER _RTHP.EXTENSION @ 0<> OR IF 0 ELSE "
+            "DUP _RTHP-BUILD-GLYPHS-DAMAGE? THEN IF") in glyphs
+    # For the shell, safe mode marks every row for its plans to build again.
+    shell = _word(source, "_RTHP-SHELL-RESIDUE?")
+    assert "CHK-SAFE? IF 0 ELSE DUP _RTHP-MARK-GLYPHS-DAMAGE? THEN" in shell
+    assert "_RTHP-ROWS-ALL-REBUILT" in shell
     # Menus are planned afresh, and the unchanged route is never taken.
     menus = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
     assert ("CHK-SAFE? IF 0 ELSE _RTHP-W-MENU-REUSE-BASELINE? THEN _RTHP-W-MR-ENABLED !"

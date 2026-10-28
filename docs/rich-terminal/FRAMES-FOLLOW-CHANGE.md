@@ -1073,13 +1073,19 @@ frame before the change driver.
   of runs. In three steps, each sending what it sent before:
   - **9b.1. One admission and one set of runs.** With the shell installed,
     the producer no longer plans runs for its own candidate or admits it.
-    Each reader moves to the batch or to the candidate itself: the family
-    strips and the request for space follow the batch's admission, and the
-    producer's comparison matches the applications' controls without
-    pairing runs or needing a fence of its own. The producer plans and
-    admits its own candidate only before the owner opens, and when the
-    shell cannot build and that candidate goes out alone. Estimated saving:
-    about 1.6 million steps of a typed letter's frame.
+    Each reader moves to the batch or to the candidate itself: the request
+    for space follows the batch's admission; the fixed check and the
+    identity frontier read the candidate; the shell takes the rows to plan
+    again and the Z of the candidate's region from the producer; and the
+    producer's comparison matches the applications' items without pairing
+    runs or needing a fence of its own. The producer plans and admits its
+    own candidate only before the owner opens, which that admission sizes,
+    and when the shell cannot build its batch: the candidate built alone is
+    cut down family by family, as one going out alone is, and offered to
+    the shell again, and goes out alone if the shell still cannot build.
+    The family strips thus still follow the producer's own admission until
+    the producer builds the batch itself (9b.3).
+    Estimated saving: about 1.6 million steps of a typed letter's frame.
   - **9b.2. One bank.** The batch freezes into the producer's bank, beside
     the controls, keys and input targets the producer keeps, and the
     shell's own banks go.

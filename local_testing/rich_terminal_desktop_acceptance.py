@@ -433,6 +433,7 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTHP-DIAG-DELTA-REFUSALS",
     "_RTHP-DIAG-ARENA-GROWTHS",
     "_RTHP-DIAG-ARENA-KEPT",
+    "_RTHP-DIAG-ALONE-REBUILDS",
     "_RSHSP-DIAG-PROBE-REFUSALS",
     "_RSHSP-DIAG-REFUSALS",
     "_RSHSP-DIAG-PREPARED",
@@ -545,7 +546,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        635,
+        637,
         {
             "magic": 0,
             "size": 1,
@@ -691,6 +692,8 @@ _GUEST_FAILURE_RECORDS = {
             "glyph_runs": 615,
             "pending_seal": 633,
             "active_seal": 634,
+            "shell_built": 635,
+            "base_z": 636,
         },
     ),
     "engine": (

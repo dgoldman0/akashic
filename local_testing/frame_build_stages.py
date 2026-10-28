@@ -43,6 +43,8 @@ STAGES: list[tuple[str, list[str] | re.Pattern]] = [
      ["_RTHP-BUILD-OBSERVED-CANDIDATE"]),
     ("    engine admission (RTE-HYBRID-PREFLIGHT)", ["RTE-HYBRID-PREFLIGHT"]),
     ("    producer glyphs (_RTHP-BUILD-GLYPHS?)", ["_RTHP-BUILD-GLYPHS?"]),
+    ("    producer rows for the shell (_RTHP-SHELL-RESIDUE?)",
+     ["_RTHP-SHELL-RESIDUE?"]),
     ("  target pack (_RTHP-TARGET-CANDIDATE?)", ["_RTHP-TARGET-CANDIDATE?"]),
     ("  comparison (_RTHP-DELTA-CANDIDATE?)", ["_RTHP-DELTA-CANDIDATE?"]),
     ("  shell batch (_RSHSP-BUILD-BATCH)", ["_RSHSP-BUILD-BATCH"]),

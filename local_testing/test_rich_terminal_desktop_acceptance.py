@@ -949,6 +949,8 @@ def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
         "glyph_runs": "GLYPH-RUNS",
         "pending_seal": "PENDING-SEAL",
         "active_seal": "ACTIVE-SEAL",
+        "shell_built": "SHELL-BUILT",
+        "base_z": "BASE-Z",
     }
     # Eight-cell quota sets: each name is one quota within its set.
     quotas = ("regions", "resources", "objects", "series",
@@ -9021,7 +9023,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     }
     record_cells = {
         0x2000: list(range(28)),
-        0x3000: list(range(635)),
+        0x3000: list(range(637)),
         0x6000: list(range(62)),
         0x8000: list(range(133)),
     }
@@ -9073,7 +9075,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 123),
+        (0x4000, 125),
         (0x6000, 62),
     ]
     assert payload["records"]["publisher"]["fields"] == {
@@ -9127,7 +9129,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     assert payload["records"]["engine"]["fields"]["last_status"] == 28
 
     assert max(count for _address, count in peek_calls) <= 256
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 635
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 637
     assert producer["collection_items"] != producer["collection_utf8"]
     assert producer["field_count"] == 490
     assert producer["series_count"] == 505
@@ -9234,7 +9236,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     }
     record_cells = {
         0x2000: list(range(28)),
-        0x3000: list(range(635)),
+        0x3000: list(range(637)),
         0x6000: list(range(62)),
     }
     requested = set()
@@ -9297,7 +9299,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
         (0x2000, 28),
         (0x3000, 256),
         (0x3800, 256),
-        (0x4000, 123),
+        (0x4000, 125),
         (0x6000, 62),
     ]
     assert payload["timeout"] == "stage=0 offers-seen=0"
@@ -9335,7 +9337,7 @@ def test_timeout_state_pauses_reads_live_records_and_resumes(
     assert "resume_error" not in payload
 
     assert payload["records"]["pt_session"] == {"address": 0, "unavailable": True}
-    assert len(payload["records"]["hybrid_producer"]["cells"]) == 635
+    assert len(payload["records"]["hybrid_producer"]["cells"]) == 637
     assert producer["series_samples_used"] == 502
     assert producer["series_chunks"] == 508
 

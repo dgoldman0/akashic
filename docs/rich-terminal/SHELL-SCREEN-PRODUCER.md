@@ -218,9 +218,12 @@ takes the first identity past the base candidate's objects, which COPY-RUN
 moves up past the shell's controls with the statics and instruments, and
 the identity reservation grows by one more for it.
 
-Modal/unavailable SHSN authority also refuses the candidate. Every refusal uses
-the unchanged, already admitted legacy RTHP candidate, with no shell claims
-leaking into that candidate.
+Modal/unavailable SHSN authority also refuses the candidate. A refused
+batch that more engine storage or more terminal space would not let fit
+makes the base producer build its candidate again on its own, with its own
+runs and admission, cut down family by family to fit as a candidate going
+out alone is, and offer that to the shell once more. If the shell refuses
+it too, the candidate goes out alone, with no shell claims leaking into it.
 
 ## START, ACK and teardown
 
@@ -233,9 +236,20 @@ The dispatcher events are PREPARE=0, EMIT=1, PUBLISH-CHECK=2, PUBLISH=3,
 ABORT=4, RETIRE=5, CURRENT=6, START-ACK=7, DELTA-PROBE=8, DELTA-PREPARE=9 and
 DELTA-EMIT=10.
 
+With the shell installed, the base producer builds its candidate for the
+shell: it plans no residual runs of its own and admits nothing. The shell
+plans the runs of its regions and admits its whole batch, the candidate's
+items among them; the producer's fixed check reads the candidate's own
+plans, its identity frontier counts the candidate's objects, and its DELTA
+comparison matches the applications' items alone. The producer builds its
+candidate alone, with its runs and admission, only before the owner opens,
+which that admission sizes, and after the shell refuses a batch.
+
 The shell candidate is prepared only after RTHP freezes its ordinary target
 bank, before retained BEGIN. Only successful PREPARE selects shell EMIT. Any
-failure before BEGIN aborts staged shell state and selects legacy emission.
+failure before BEGIN aborts staged shell state; the candidate is then built
+alone and offered again, as above, and a second failure selects legacy
+emission.
 Any error after shell emission starts cancels the complete capture. A START
 defines every object and history with fresh wire identities; an unchanged
 current draw is reused. Every SERIES sample and authored history value
@@ -295,11 +309,13 @@ promote the pending bank exactly as after a reveal. A DELTA consumes no region
 identities, and the published bank's frontier covers its new object
 identities.
 
-A DELTA plans residual runs only on rows that changed. After a candidate's
-glyphs are built, the producer's ROW-DAMAGE names the rows it rebuilt; it
-copied every other row from the acknowledged target because that row's
-cells, residue, menus and claims are unchanged, and a complete build marks
-every row. A DELTA also keeps the shell's own claims and regions, so the
+A DELTA plans residual runs only on rows that changed. Once a candidate is
+built, the producer's ROW-DAMAGE names the rows a plan must build again:
+those of CELL and residue damage, the acknowledged and current menus' rows,
+and those of claims that came or went. Every other row's cells, residue,
+menus and claims are unchanged since the acknowledged frame, and safe mode,
+or a frame on screen that cannot vouch for them, marks every row. A DELTA
+also keeps the shell's own claims and regions, so the
 shell's runs on an unmarked row equal the acknowledged bank's. For each
 region whose catalog row equals the acknowledged one, the shell copies those
 rows' runs and text from the acknowledged bank and plans each band of marked
