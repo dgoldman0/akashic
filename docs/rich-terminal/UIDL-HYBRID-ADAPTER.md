@@ -141,6 +141,29 @@ the facts beside each bank it builds and judges them in its DELTA comparison:
 an item the comparison finds new or changed must belong to a root whose facts
 moved (FRAMES-FOLLOW-CHANGE, part 9a.1).
 
+## Capture into scratch
+
+`RUHA-CAPTURE-FAMILIES ( families token scratch draw-generation adapter --
+status )` captures some families of one shown document into the caller's
+scratch record, `RUHA-SCRATCH-SIZE` bytes, through the capture words and work
+spans the snapshot uses, in the document's own context, and records the
+facts of every root it captured. `FAMILIES` is a mask of `RUHA-F-MENUS`,
+`RUHA-F-COLLECTIONS`, `RUHA-F-DATA-GRAPHICS`, `RUHA-F-STATUS-FIELDS`,
+`RUHA-F-FIELDS` and `RUHA-F-DIALOGS`; a family the adapter was built without
+captures nothing, as in the snapshot. The record holds the generation the
+menu records take (`RUHA-SC.GENERATION`), one slot a family in bit order
+(`RUHA-SC.SLOT`), each naming its descriptor and native spans, or menu
+records and text, and receiving the count and bytes used, and the facts
+span, which receives the count of records (`RUHA-SC.FACTS`). Nothing is
+published: the snapshot, its banks and the documents' records stay as they
+are. A family's short span answers CAPACITY with its bit in `RUHA-SC.SHORT`;
+a short facts span answers CAPACITY with the records it must hold. A document
+not shown, or covered so that the snapshot would leave it to CELL, and a
+family that refuses its content, as the snapshot then falls the document
+back, answer UNAVAILABLE; another draw answers STALE. The change driver
+captures the families of the roots that changed this way
+(FRAMES-FOLLOW-CHANGE, part 9a.2).
+
 
 ## One authoritative observation
 

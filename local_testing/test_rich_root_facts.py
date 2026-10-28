@@ -300,3 +300,83 @@ def test_items_that_came_with_their_family_are_not_misses(harness):
     harness.begin(active, pending)
     harness.judge(0)
     assert harness.counts() == (1, 1, 0)
+
+
+# ---------------------------------------------------------------------------
+# Capture into scratch
+
+SCRATCH = r'''
+CREATE _RC-SC-MEM RUHA-SCRATCH-SIZE 7 + ALLOT
+: _RC-SC _RC-SC-MEM 7 + -8 AND ;
+CREATE _RC-DESC-MEM 2 UCSN-DESCRIPTOR-SIZE * 7 + ALLOT
+: _RC-DESC _RC-DESC-MEM 7 + -8 AND ;
+CREATE _RC-NATIVE-MEM 1024 7 + ALLOT
+: _RC-NATIVE _RC-NATIVE-MEM 7 + -8 AND ;
+CREATE _RC-FACTS-MEM 4 URF-SIZE * 7 + ALLOT
+: _RC-FACTS _RC-FACTS-MEM 7 + -8 AND ;
+VARIABLE _RC-S
+: _RC-SLOT ( index -- slot ) _RC-SC RUHA-SC.SLOT ;
+\ Room for one collection root and its native value, and four facts.
+: _RC-ROOM ( descriptor-bytes native-bytes facts-bytes -- )
+    _RC-SC RUHA-SCRATCH-SIZE 0 FILL
+    7 _RC-SC RUHA-SC.GENERATION !
+    _RC-FACTS _RC-SC RUHA-SC.FACTS-A ! _RC-SC RUHA-SC.FACTS-U !
+    _RC-NATIVE 1 _RC-SLOT RUHA-SC.NATIVE-A ! 1 _RC-SLOT RUHA-SC.NATIVE-U !
+    \ An empty span is 0 0, as the snapshot gives one with no room left.
+    DUP IF _RC-DESC ELSE 0 THEN 1 _RC-SLOT RUHA-SC.A ! 1 _RC-SLOT RUHA-SC.U ! ;
+: _RC-CAPTURE ( families draw -- )
+    >R _RA-DIR-A @ RUHA-DOCUMENT-TOKEN@ _RC-SC R> _RA-ADAPTER
+        RUHA-CAPTURE-FAMILIES _RC-S ! ;
+'''
+
+
+def test_a_family_captured_into_scratch_is_the_snapshots_slice():
+    run_series(_program() + FACTS + SCRATCH + r'''
+_RA-ADAPTER _RUHA-A.GENERATION @ _RF-N !
+UCSN-DESCRIPTOR-SIZE 1024 4 URF-SIZE * _RC-ROOM
+RUHA-F-COLLECTIONS 1 _RC-CAPTURE _RC-S @ RUHA-S-OK = _RA-ASSERT
+1 _RC-SLOT RUHA-SC.COUNT @ 1 = _RA-ASSERT
+\ The descriptor and the native value are the snapshot's, byte for byte.
+_RC-DESC UCSN-DESCRIPTOR-SIZE _RA-DESC-A @ UCSN-DESCRIPTOR-SIZE COMPARE 0= _RA-ASSERT
+1 _RC-SLOT RUHA-SC.USED @ _RA-NATIVE-U @ = _RA-ASSERT
+_RC-NATIVE _RA-NATIVE-U @ _RA-NATIVE-A @ _RA-NATIVE-U @ COMPARE 0= _RA-ASSERT
+\ Its facts are those the facts pass records from the snapshot.
+_RC-SC RUHA-SC.FACTS @ 1 = _RA-ASSERT
+1 _RF-FACTS _RF-S @ RUHA-S-OK = _RA-ASSERT
+_RC-FACTS _RF-A URF-SAME? _RA-ASSERT
+\ Families not asked for capture nothing; the snapshot and its banks stay.
+0 _RC-SLOT RUHA-SC.COUNT @ 0= _RA-ASSERT
+_RA-ADAPTER _RUHA-A.GENERATION @ _RF-N @ = _RA-ASSERT
+_RA-SNAP @ RUHA-SNAPSHOT-GENERATION@ 1 = _RA-ASSERT
+\ Every family: the document has one collection root and nothing else.
+UCSN-DESCRIPTOR-SIZE 1024 4 URF-SIZE * _RC-ROOM
+63 1 _RC-CAPTURE _RC-S @ RUHA-S-OK = _RA-ASSERT
+1 _RC-SLOT RUHA-SC.COUNT @ 1 = _RA-ASSERT
+0 _RC-SLOT RUHA-SC.COUNT @ 0= _RA-ASSERT 2 _RC-SLOT RUHA-SC.COUNT @ 0= _RA-ASSERT
+_RC-SC RUHA-SC.FACTS @ 1 = _RA-ASSERT
+_RF-DONE
+''', minimum=14, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",),
+        marker="FACTS")
+
+
+def test_a_short_span_stale_draw_or_unknown_document_answers_without_capturing():
+    run_series(_program() + FACTS + SCRATCH + r'''
+\ No room for the descriptor names the collections.
+0 1024 4 URF-SIZE * _RC-ROOM
+RUHA-F-COLLECTIONS 1 _RC-CAPTURE _RC-S @ RUHA-S-CAPACITY = _RA-ASSERT
+_RC-SC RUHA-SC.SHORT @ RUHA-F-COLLECTIONS = _RA-ASSERT
+1 _RC-SLOT RUHA-SC.COUNT @ 0= _RA-ASSERT
+\ No room for the facts says how many records it would take.
+UCSN-DESCRIPTOR-SIZE 1024 0 _RC-ROOM
+RUHA-F-COLLECTIONS 1 _RC-CAPTURE _RC-S @ RUHA-S-CAPACITY = _RA-ASSERT
+_RC-SC RUHA-SC.SHORT @ 0= _RA-ASSERT _RC-SC RUHA-SC.FACTS @ 1 = _RA-ASSERT
+\ Another draw is stale; an unknown document is not shown.
+UCSN-DESCRIPTOR-SIZE 1024 4 URF-SIZE * _RC-ROOM
+RUHA-F-COLLECTIONS 9 _RC-CAPTURE _RC-S @ RUHA-S-STALE = _RA-ASSERT
+RUHA-F-COLLECTIONS 12345 _RC-SC 1 _RA-ADAPTER RUHA-CAPTURE-FAMILIES
+    RUHA-S-UNAVAILABLE = _RA-ASSERT
+\ A family outside the mask is refused.
+64 1 _RC-CAPTURE _RC-S @ RUHA-S-INVALID = _RA-ASSERT
+_RF-DONE
+''', minimum=10, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",),
+        marker="FACTS")

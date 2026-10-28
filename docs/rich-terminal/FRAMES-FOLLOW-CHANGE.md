@@ -1051,10 +1051,16 @@ frame before the change driver.
   rebind instead; Desk's shell model, for 9b; and pictures, which carry no
   facts yet. Normal mode is unchanged. See the
   [evidence](../../local_testing/evidence/frames-follow-change-part9a1-20261028.md).
-- **9a.2. Each root captured and lowered alone.** The capture families and
-  the producer's lanes gain a word for one root, which the whole-screen
-  build calls in order, so both drivers share it. The build's output stays
-  the same to the byte.
+- **9a.2. A document's families captured into scratch.** The snapshot
+  adapter captures chosen families of one shown document into a caller's
+  scratch, through the capture words and work spans the snapshot uses, and
+  records the facts of the roots it captured, without publishing anything.
+  Lowering one root alone comes with the change driver (9a.3), since 9b
+  changes where the items go. **Done** on 2026-10-28: `RUHA-CAPTURE-FAMILIES`.
+  A family captured into scratch is the snapshot's slice byte for byte, and
+  its facts are the facts pass's. Within a family every root is captured;
+  capturing one root of several is left for later. Nothing on the frame's
+  path calls it yet.
 - **9b. One record of the frame.** Desk's chrome comes from the shell model
   through the same projection, as one candidate. The shell's second
   candidate, its work space and its frozen banks go.
