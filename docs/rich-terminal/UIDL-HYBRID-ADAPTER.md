@@ -17,7 +17,7 @@ of the completed draw. CELL remains the complete fallback.
 
 ## Published ABI 10
 
-Each 304-byte document directory entry identifies one ordinary visible
+Each 312-byte document directory entry identifies one ordinary visible
 document. It carries the attachment token, slot identity, absolute surface
 geometry, menu exact/topology lineage, and offset/byte pairs into twelve
 aggregate payload banks:
@@ -72,10 +72,12 @@ A/B to 656/896.
 
 `OWNER-ID` is at directory offset 224 and `OWNER-GEN` at 232. `RUHA-DOCUMENT-OWNER-ID@` and
 `RUHA-DOCUMENT-OWNER-GENERATION@` expose the nonzero identity tuple read
-from the slot's actual `AHS.INST` component instance. The entry's last four
-cells, at 272 to 296, hold the screen cells of the document's own overlay
-when its roots may lie beneath it, described below, and are zero otherwise
-(`RUHA-DOCUMENT-OVERLAY@`). The attachment record is 128 bytes, the snapshot
+from the slot's actual `AHS.INST` component instance. Four cells at 272 to
+296 hold the screen cells of the document's own overlay when its roots may
+lie beneath it, described below, and are zero otherwise
+(`RUHA-DOCUMENT-OVERLAY@`). The last cell, at 304, is the document's layer:
+1 for an overlay slot's document, which its host paints above every other,
+else 0 (`RUHA-DOCUMENT-LAYER@`). The attachment record is 128 bytes, the snapshot
 240 bytes, and the adapter 1144 bytes. The record's last four cells hold the
 screen cells of the overlay the document's last draw painted, or zero, and
 its flags say whether that overlay is a dialog or a prompt's field.
@@ -247,16 +249,20 @@ own context. The other is the dialog the document shows
 document paints. When that draw completes, RUHA copies the overlay's screen
 cells into the attachment record (`UTUI-OVERLAY-ROOT@`): the dialog's, as its
 last paint laid it out, else the prompt's, and which of the two it is
-(`UTUI-OVERLAY-KIND@`). The producer says which kinds the renderer can show
-above a document (`RUHA-LAYERS! ( flags adapter -- status )`, with
-`RUHA-LAYER-FIELDS` and `RUHA-LAYER-DIALOGS`); the adapter starts with
-neither. When all the foreground paint over a document lies inside its own
-overlay's cells, the overlay lies inside the document, and the renderer can
-show that kind of overlay, the document is captured as usual, every root
-included, those the overlay meets too: the producer puts the overlay in the
-layer above them ([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)), so they stay
-semantic beneath it, and the directory entry names the overlay's cells,
-which the producer checks the overlay's claim covers. A change of setting
+(`UTUI-OVERLAY-KIND@`). The producer says which layers the renderer can
+show above a document (`RUHA-LAYERS! ( flags adapter -- status )`, with
+`RUHA-LAYER-FIELDS`, `RUHA-LAYER-DIALOGS` and `RUHA-LAYER-PANES`); the
+adapter starts with none. A layer above a document is its own overlay, when
+the overlay lies inside the document and the renderer can show its kind, or
+a visible overlay slot's document, whose host paints the whole of its
+rectangle, when the renderer can show overlay panes. When all the
+foreground paint over a document lies inside the layers above it, the
+document is captured as usual, every root included, those the layers meet
+too: the producer puts those layers above them
+([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)), so they stay semantic beneath,
+and the directory entry names the own overlay's cells and the document's
+layer, from which the producer checks that the claims above cover them. A
+change of setting
 closes the borrow gate, so a snapshot captured under the other setting is
 not handed out again. The prompt itself becomes the document's overlay
 TEXT field: UFLSN appends it after the mounted fields as the bank's last
@@ -284,7 +290,7 @@ refuse the whole aggregate.
 The content epoch is a provenance certificate, not a revision guess, digest,
 or byte-equality shortcut. It carries only when every nonempty emitted document
 arrived through validated prior whole-document reuse, the document count and
-complete 304-byte directory are identical, and all twelve aggregate payload
+complete 312-byte directory are identical, and all twelve aggregate payload
 byte totals match. Any live recapture takes the ordinary new-epoch path even if the
 resulting bytes happen to be equal.
 

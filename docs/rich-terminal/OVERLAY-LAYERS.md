@@ -3,7 +3,7 @@
 An application that opens a dialog or a prompt over part of its window lost
 the rich rendering of whatever the overlay covered, and Desk's own overlay
 boxes, the launcher and the Access, Inspect, Approve, Permissions and
-Shutdown screens, still turn every tile they touch to CELL. The terminal can
+Shutdown screens, turned every tile they touched to CELL. The terminal could
 already draw one layer over another; the producer did not give it the
 layers. This plan has the producer keep the content beneath an overlay and
 place the overlay above it, in two steps: an application's own overlay
@@ -93,19 +93,43 @@ overlay.
 
 ## Step 2: Desk's overlay boxes
 
-A tile beneath an overlay pane would keep its rich content when the only
-foreground paint over it is that pane's. The shell candidate already puts
-the overlay pane's document above the tiles. The aggregate producer would
-have to order the claims of different documents by layer for that: every
-claim in its one region competes, so a launcher list over a Pad text area
-is refused. RUHA's directory would carry each document's layer, and the
-producer would apply its overlap rules within a layer and order layers by
-z in its own region. File Explorer's journey checks today that its lists
-fall back beneath the launcher; step 2 would reverse that check.
+A tile beneath an overlay pane keeps its rich content when the only
+foreground paint over it is the overlay pane's and its own overlay's. The
+host paints an overlay slot's document over the whole of its rectangle,
+and each of Desk's screens is a dialog element filling it, so the overlay
+pane's DIALOG claims all of those cells.
 
-Each step keeps CELL the complete fallback: a family that refuses still
-leaves its cells to CELL, and the terminal's barrier and painter order, not
-the producer, decide what shows where layers meet.
+Documents lie in layers. An overlay slot's document is the layer above the
+others, and its directory entry says so (`RUHA-DOCUMENT-LAYER@`). The
+capture's test of what lies above a document walks the visible overlay
+slots' rectangles beside the document's own overlay, so a tile keeps every
+root when all the foreground paint over it lies inside them. The producer
+allows this only when the terminal negotiated dialogs and an extension,
+Desk's shell, gives the overlay pane a region of its own
+(`RUHA-LAYER-PANES`). In the aggregate producer the claims of documents in
+different layers may meet; claims of one layer still may not. The field,
+dialog, instrument, status-field and picture lanes accept such meetings,
+and so does the check of omitted graphs, which now names each graph's
+document and passes over a claim of a layer above it.
+
+The shell candidate already paints the layers in order. A tile's controls
+stay in its pane's content region, the overlay pane's content region lies
+above it, and with dialogs the overlay pane's document goes in a modal
+region over the whole screen, where the tiles' controls beneath are
+inactive. The tile's residual glyphs leave out the overlay pane's cells,
+which the overlay pane's region holds. The aggregate candidate's one
+region cannot order two documents, so when the shell cannot build a draw
+whose candidate holds a tile's claim under an overlay pane, CELL shows that
+draw.
+
+The check before residual planning covers this layer too: wherever a claim
+of a document meets an overlay pane's rectangle above it, one claim of the
+overlay pane's document must hold that part, or the draw goes out as CELL.
+
+Each step keeps CELL the complete fallback. Where an overlay cannot be
+shown above what it covers, the content beneath falls back with it, and
+the terminal's barrier and painter order, not the producer, decide what
+shows where layers meet.
 
 ## Tests
 
@@ -130,6 +154,20 @@ dialog with no root beneath it, or no overlay named in the directory, leaves
 the draw rich. UIDL-TUI's dialog tests check which kind of overlay
 `UTUI-OVERLAY-KIND@` reports.
 
+Step 2's tests run the same lanes across documents. A dialog of an overlay
+pane's document lies over a root of the document beneath it, which the
+check finds covered, and the candidate is marked as needing the shell's
+regions; two documents of one layer still may not meet, and the roots
+beneath a refused overlay pane's dialog fail the check. A field of an
+overlay pane's document lies over another document's root, a status field
+stays rich beneath an overlay pane's root but not beneath a root of its own
+layer, and a graph keeps the base region above it beneath an overlay
+pane's root. Omitted graphs name their documents. The shell candidate keeps
+a pane's control beneath an overlay pane in the pane's content region,
+below the modal region that holds the overlay's control. File Explorer's
+journey requires its table and tree to stay rich beneath Desk's launcher,
+and inactive while it is open.
+
 The physical acceptance observer reads the layers the same way. A root in a
 visible modal region may lie over the roots of the regions beneath it, and
 two roots that meet within one region are still refused. A root that a
@@ -143,6 +181,7 @@ is open.
 
 ## Status
 
-Step 1 is done; its record is in
-`local_testing/evidence/overlay-layers-step1-20261027.md`. Step 2 is
-proposed.
+Both steps are done. Step 1's record is in
+`local_testing/evidence/overlay-layers-step1-20261027.md`, and step 2's,
+with the check that keeps roots beneath an overlay only while the overlay
+is shown, in `local_testing/evidence/overlay-layers-step2-20261028.md`.

@@ -378,7 +378,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 5080 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
-32 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
+\ An omitted graph: the cells it paints, row col row1 col1, and the token
+\ of its document.
+40 CONSTANT _RTHP-OMITTED-GRAPH-SIZE
 
 : RTHP-BYTES  ( -- bytes )  RTHP-SIZE ;
 
@@ -5698,6 +5700,25 @@ VARIABLE _RTHP-W-COPY-END
     DUP RUCL-CLAIM-SOURCE@ _RTHP-OVERLAY-SOURCE? 0= IF R> 2DROP 0 EXIT THEN
     RUCL-CLAIM-Z@ R> > ;
 
+\ Documents lie in layers too.  An overlay slot's document, such as one of
+\ Desk's screens, is the layer above the others (RUHA-DOCUMENT-LAYER@): the
+\ shell's candidate puts it in a region above the panes beneath it, so the
+\ claims of documents in different layers may meet, while those of one
+\ layer may not.  This producer's own region cannot order two documents,
+\ so its candidate holding such a meeting goes out only through the
+\ shell's (_RTHP-CROSS-LAYERED?).
+: _RTHP-LAYER-OF  ( token producer -- layer )
+    DUP _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I OVER _RTHP-DOCUMENT-AT DUP RUHA-DOCUMENT-TOKEN@ 3 PICK = IF
+            RUHA-DOCUMENT-LAYER@ NIP NIP UNLOOP EXIT
+        THEN DROP
+    LOOP 2DROP 0 ;
+
+\ CLAIM's document and the document TOKEN names lie in different layers.
+: _RTHP-OTHER-LAYER?  ( claim token producer -- flag )
+    >R SWAP RUCL-CLAIM-ATTACHMENT@ R@ _RTHP-LAYER-OF
+    SWAP R> _RTHP-LAYER-OF <> ;
+
 \ ---------------------------------------------------------------------
 \  Canonical UFLD -> genuine FIELD controls, with an independent source lane
 \ ---------------------------------------------------------------------
@@ -5758,6 +5779,13 @@ VARIABLE _RTHP-FF-UTF8
     _RTHP-FF-CLAIM @ _RTHP-FF-DOC @ RUHA-DOCUMENT-TOKEN@
     _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-Z@ _RTHP-BENEATH? ;
 
+\ The claim just met lies in another layer than the field: a root of its
+\ document beneath its overlay prompt, or a claim of a document in another
+\ layer.
+: _RTHP-FF-CLAIM-LAYERED? ( -- flag )
+    _RTHP-FF-CLAIM-BENEATH? IF -1 EXIT THEN
+    _RTHP-FF-CLAIM @ _RTHP-FF-DOC @ RUHA-DOCUMENT-TOKEN@ _RTHP-FF-P @ _RTHP-OTHER-LAYER? ;
+
 : _RTHP-FF-GEOMETRY? ( -- flag )
     0 _RTHP-FF-OVERLAP !
     _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ROW@ DUP _RTHP-FF-ROW !
@@ -5789,7 +5817,7 @@ VARIABLE _RTHP-FF-UTF8
         _RTHP-FF-ROW1 @ _RTHP-FF-CLAIM @ RUCL-CLAIM-ROW0@ > AND
         _RTHP-FF-COL @ _RTHP-FF-CLAIM @ RUCL-CLAIM-COL1@ < AND
         _RTHP-FF-COL1 @ _RTHP-FF-CLAIM @ RUCL-CLAIM-COL0@ > AND
-        _RTHP-FF-CLAIM-BENEATH? 0= AND IF
+        _RTHP-FF-CLAIM-LAYERED? 0= AND IF
             1 _RTHP-FF-OVERLAP !
             I RUCL-CLAIM-SIZE * _RTHP-FF-P @ _RTHP.FIELD-BASE-CLAIMS @ U< IF
                 2 _RTHP-FF-OVERLAP !
@@ -6019,6 +6047,13 @@ VARIABLE _RTHP-DD-CONTENTS
     _RTHP-DD-CLAIM @ _RTHP-DD-DOC @ RUHA-DOCUMENT-TOKEN@
     _RTHP-DD-DIALOG-Z _RTHP-BENEATH? ;
 
+\ The claim just met lies in another layer than the dialog: a root of its
+\ document beneath its dialog widget, or a claim of a document in another
+\ layer.
+: _RTHP-DD-LAYERED? ( -- flag )
+    _RTHP-DD-BENEATH? IF -1 EXIT THEN
+    _RTHP-DD-CLAIM @ _RTHP-DD-DOC @ RUHA-DOCUMENT-TOKEN@ _RTHP-DD-P @ _RTHP-OTHER-LAYER? ;
+
 \ The dialog lies on the screen and inside its document, and meets no
 \ earlier claim but its contents', or, for a dialog widget, its document's
 \ roots beneath it.  OVERLAP is 2 for a claim before the
@@ -6051,7 +6086,7 @@ VARIABLE _RTHP-DD-CONTENTS
         _RTHP-DD-ROW1 @ _RTHP-DD-CLAIM @ RUCL-CLAIM-ROW0@ > AND
         _RTHP-DD-COL @ _RTHP-DD-CLAIM @ RUCL-CLAIM-COL1@ < AND
         _RTHP-DD-COL1 @ _RTHP-DD-CLAIM @ RUCL-CLAIM-COL0@ > AND
-        _RTHP-DD-BENEATH? 0= AND IF
+        _RTHP-DD-LAYERED? 0= AND IF
             _RTHP-DD-CONTENT? IF
                 1 _RTHP-DD-CONTENTS +!
             ELSE
@@ -6510,7 +6545,8 @@ VARIABLE _RTHP-OG-CLAIM
             _RTHP-W-P @ _RTHP.COLS @ MIN 0 MAX _RTHP-OG-X1 !
         _RTHP-OG-A @ _RTHP-OG-N @ _RTHP-OMITTED-GRAPH-SIZE * + DUP
         _RTHP-OG-R @ OVER ! _RTHP-OG-C @ OVER 8 + !
-        _RTHP-OG-Y1 @ OVER 16 + ! _RTHP-OG-X1 @ SWAP 24 + ! DROP
+        _RTHP-OG-Y1 @ OVER 16 + ! _RTHP-OG-X1 @ OVER 24 + !
+        _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-TOKEN@ SWAP 32 + ! DROP
     REPEAT R> _RTHP-W-P @ _RTHP.OMITTED-GRAPHS-USED ! -1 ;
 
 : _RTHP-W-SERIES-ACCUMULATE? ( -- flag )
@@ -6544,6 +6580,12 @@ VARIABLE _RTHP-OG-CLAIM
     _RTHP-W-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE *
         _RTHP-W-P @ _RTHP.SERIES-PLAN _RTE-SRP.ITEMS-U ! -1 ;
 
+\ The claim just met lies in a layer above the omitted graph's document,
+\ which paints over the graph in CELL too.
+: _RTHP-OG-ABOVE? ( -- flag )
+    _RTHP-OG-CLAIM @ RUCL-CLAIM-ATTACHMENT@ _RTHP-OG-P @ _RTHP-LAYER-OF
+    _RTHP-OG-A @ 32 + @ _RTHP-OG-P @ _RTHP-LAYER-OF > ;
+
 : _RTHP-OMITTED-DISJOINT? ( producer -- flag )
     _RTHP-OG-P !
     _RTHP-OG-P @ _RTHP.OMITTED-GRAPHS-USED @ _RTHP-OMITTED-GRAPH-SIZE / 0 ?DO
@@ -6555,7 +6597,8 @@ VARIABLE _RTHP-OG-CLAIM
                 _RTHP-OG-A @ @ _RTHP-OG-CLAIM @ RUCL-CLAIM-ROW1@ <
                 _RTHP-OG-A @ 16 + @ _RTHP-OG-CLAIM @ RUCL-CLAIM-ROW0@ > AND
                 _RTHP-OG-A @ 8 + @ _RTHP-OG-CLAIM @ RUCL-CLAIM-COL1@ < AND
-                _RTHP-OG-A @ 24 + @ _RTHP-OG-CLAIM @ RUCL-CLAIM-COL0@ > AND IF
+                _RTHP-OG-A @ 24 + @ _RTHP-OG-CLAIM @ RUCL-CLAIM-COL0@ > AND
+                _RTHP-OG-ABOVE? 0= AND IF
                     0 UNLOOP UNLOOP EXIT
                 THEN
             LOOP
@@ -6841,7 +6884,9 @@ VARIABLE _RTHP-BZ-LAST
             _RTHP-BZ-A @ RUCL-CLAIM-COL0@ _RTHP-BZ-B @ RUCL-CLAIM-COL1@ < AND
             _RTHP-BZ-A @ RUCL-CLAIM-COL1@ _RTHP-BZ-B @ RUCL-CLAIM-COL0@ > AND
             _RTHP-BZ-A @ _RTHP-BZ-B @ RUCL-CLAIM-ATTACHMENT@
-                _RTHP-BZ-B @ RUCL-CLAIM-Z@ _RTHP-OVERLAY-ABOVE? 0= AND IF
+                _RTHP-BZ-B @ RUCL-CLAIM-Z@ _RTHP-OVERLAY-ABOVE?
+            _RTHP-BZ-A @ _RTHP-BZ-B @ RUCL-CLAIM-ATTACHMENT@
+                _RTHP-BZ-P @ _RTHP-OTHER-LAYER? OR 0= AND IF
                 0 UNLOOP UNLOOP EXIT
             THEN
         LOOP
@@ -6953,7 +6998,9 @@ VARIABLE _RTHP-SS-INDEX
         _RTHP-SS-COL @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL1@ < AND
         _RTHP-SS-END @ _RTHP-SS-CLAIM @ RUCL-CLAIM-COL0@ > AND
         _RTHP-SS-CLAIM @ _RTHP-SS-DOC @ RUHA-DOCUMENT-TOKEN@
-            _RTHP-SS-DESC @ USFSN-DESCRIPTOR-Z@ _RTHP-OVERLAY-ABOVE? 0= AND
+            _RTHP-SS-DESC @ USFSN-DESCRIPTOR-Z@ _RTHP-OVERLAY-ABOVE?
+        _RTHP-SS-CLAIM @ _RTHP-SS-DOC @ RUHA-DOCUMENT-TOKEN@
+            _RTHP-SS-P @ _RTHP-OTHER-LAYER? OR 0= AND
             IF
                 1 _RTHP-SS-OVERLAP !
                 I RUCL-CLAIM-SIZE *
@@ -7165,8 +7212,8 @@ VARIABLE _RTHP-SI-COL-END
 \ The part of the picture shown lies on the surface at a paint order a
 \ claim takes, inside the picture's whole rectangle, which may reach off
 \ the surface.  An element's own picture claims that part, which no other
-\ root claims.  A figure leaves its part to the claim of its document's
-\ root, which must hold all of it.
+\ root of its layer claims.  A figure leaves its part to the claim of its
+\ document's root, which must hold all of it.
 : _RTHP-SI-GEOMETRY?  ( -- flag )
     _RTHP-SI-DESC @ UPICSN-HEIGHT@ DUP 0> 0= SWAP _RTHP-I32? 0= OR IF 0 EXIT THEN
     _RTHP-SI-DESC @ UPICSN-WIDTH@ DUP 0> 0= SWAP _RTHP-I32? 0= OR IF 0 EXIT THEN
@@ -7192,13 +7239,20 @@ VARIABLE _RTHP-SI-COL-END
     _RTHP-SI-DESC @ UPICSN-Z@ DUP 0< SWAP 255 > OR IF 0 EXIT THEN
     _RTHP-SI-DESC @ UPICSN-FIGURE? IF
         _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
-            I _RTHP-SI-CLAIM-MEETS? IF _RTHP-SI-OWN-CLAIM? UNLOOP EXIT THEN
+            I _RTHP-SI-CLAIM-MEETS? IF
+                _RTHP-SS-CLAIM @ _RTHP-SI-DESC @ UPICSN-DOCUMENT@
+                    _RTHP-SS-P @ _RTHP-OTHER-LAYER? 0= IF
+                    _RTHP-SI-OWN-CLAIM? UNLOOP EXIT
+                THEN
+            THEN
         LOOP 0 EXIT
     THEN
     _RTHP-SS-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
         I _RTHP-SI-CLAIM-MEETS?
         _RTHP-SS-CLAIM @ _RTHP-SI-DESC @ UPICSN-DOCUMENT@
-            _RTHP-SI-DESC @ UPICSN-Z@ _RTHP-OVERLAY-ABOVE? 0= AND
+            _RTHP-SI-DESC @ UPICSN-Z@ _RTHP-OVERLAY-ABOVE?
+        _RTHP-SS-CLAIM @ _RTHP-SI-DESC @ UPICSN-DOCUMENT@
+            _RTHP-SS-P @ _RTHP-OTHER-LAYER? OR 0= AND
             IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
@@ -8130,9 +8184,10 @@ VARIABLE _RTHP-SG-W-STATUS
 \ built, with the candidate's claims, which GLYPH-DRAW then records.  A
 \ plan the banks hold already is kept as a complete build leaves it.  In
 \ safe mode (check-mode.f) every draw's plan is built whole.
-\ A document's roots may lie beneath its own overlay (RUHA-LAYERS!) only
-\ while that overlay is in the candidate, with a claim over all its cells,
-\ since the overlay is what shows there.  A family refused after the roots
+\ A document's roots may lie beneath its own overlay, or an overlay pane's
+\ document (RUHA-LAYERS!), only while what lies above them is in the
+\ candidate, with claims over all the cells they share, since that is what
+\ shows there.  A family refused after the roots
 \ beneath it were admitted, for space or by the terminal, would leave them
 \ claiming cells where CELL shows the overlay, so such a draw cannot be
 \ shown rich.
@@ -8168,12 +8223,68 @@ VARIABLE _RTHP-LC-R0 VARIABLE _RTHP-LC-C0 VARIABLE _RTHP-LC-R1 VARIABLE _RTHP-LC
         THEN
     LOOP
     _RTHP-LC-MET @ 0= _RTHP-LC-HELD @ OR ;
+\ An overlay pane's document paints all of its cells, so wherever a claim
+\ of a document beneath it meets them, one claim of the pane's document
+\ must hold that part.
+VARIABLE _RTHP-LC-LOWER VARIABLE _RTHP-LC-UPPER
+: _RTHP-LC-HOLDS-PART?  ( -- flag )
+    _RTHP-LC-UPPER @ RUCL-CLAIM-ROW0@
+        _RTHP-LC-LOWER @ RUCL-CLAIM-ROW0@ _RTHP-LC-R0 @ MAX > 0=
+    _RTHP-LC-UPPER @ RUCL-CLAIM-ROW1@
+        _RTHP-LC-LOWER @ RUCL-CLAIM-ROW1@ _RTHP-LC-R1 @ MIN < 0= AND
+    _RTHP-LC-UPPER @ RUCL-CLAIM-COL0@
+        _RTHP-LC-LOWER @ RUCL-CLAIM-COL0@ _RTHP-LC-C0 @ MAX > 0= AND
+    _RTHP-LC-UPPER @ RUCL-CLAIM-COL1@
+        _RTHP-LC-LOWER @ RUCL-CLAIM-COL1@ _RTHP-LC-C1 @ MIN < 0= AND ;
+: _RTHP-LC-HELD-BENEATH?  ( -- flag )
+    _RTHP-LC-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+        _RTHP-LC-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-LC-UPPER !
+        _RTHP-LC-UPPER @ RUCL-CLAIM-ATTACHMENT@ _RTHP-LC-DOC @ RUHA-DOCUMENT-TOKEN@ =
+        _RTHP-LC-HOLDS-PART? AND IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+: _RTHP-LC-PANE?  ( -- flag )
+    _RTHP-LC-DOC @ RUHA-DOCUMENT-ROW@ _RTHP-LC-DOC @ RUHA-DOCUMENT-COL@
+    _RTHP-LC-DOC @ RUHA-DOCUMENT-HEIGHT@ _RTHP-LC-DOC @ RUHA-DOCUMENT-WIDTH@
+        _RTHP-LC-AREA!
+    _RTHP-LC-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+        _RTHP-LC-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-LC-LOWER !
+        _RTHP-LC-LOWER @ _RTHP-LC-MEETS?
+        _RTHP-LC-LOWER @ RUCL-CLAIM-ATTACHMENT@ _RTHP-LC-P @ _RTHP-LAYER-OF
+            _RTHP-LC-DOC @ RUHA-DOCUMENT-LAYER@ < AND IF
+            _RTHP-LC-HELD-BENEATH? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
 : _RTHP-LAYERS-COVERED?  ( producer -- flag )
     _RTHP-LC-P !
     _RTHP-LC-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
         I _RTHP-LC-P @ _RTHP-DOCUMENT-AT _RTHP-LC-DOC !
         _RTHP-LC-DOCUMENT? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-LC-DOC @ RUHA-DOCUMENT-LAYER@ IF
+            _RTHP-LC-PANE? 0= IF 0 UNLOOP EXIT THEN
+        THEN
     LOOP -1 ;
+
+\ _RTHP-CROSS-LAYERED? ( producer -- flag )
+\   A claim of a document meets the cells of an overlay pane's document
+\   above it.
+: _RTHP-CROSS-LAYERED?  ( producer -- flag )
+    _RTHP-LC-P !
+    _RTHP-LC-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I _RTHP-LC-P @ _RTHP-DOCUMENT-AT _RTHP-LC-DOC !
+        _RTHP-LC-DOC @ RUHA-DOCUMENT-LAYER@ IF
+            _RTHP-LC-DOC @ RUHA-DOCUMENT-ROW@ _RTHP-LC-DOC @ RUHA-DOCUMENT-COL@
+            _RTHP-LC-DOC @ RUHA-DOCUMENT-HEIGHT@ _RTHP-LC-DOC @ RUHA-DOCUMENT-WIDTH@
+                _RTHP-LC-AREA!
+            _RTHP-LC-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+                _RTHP-LC-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-LC-LOWER !
+                _RTHP-LC-LOWER @ _RTHP-LC-MEETS?
+                _RTHP-LC-LOWER @ RUCL-CLAIM-ATTACHMENT@ _RTHP-LC-P @ _RTHP-LAYER-OF
+                    _RTHP-LC-DOC @ RUHA-DOCUMENT-LAYER@ < AND IF
+                    -1 UNLOOP UNLOOP EXIT
+                THEN
+            LOOP
+        THEN
+    LOOP 0 ;
 
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
@@ -9271,11 +9382,17 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     THEN ;
 
 \ The layers the terminal can show above a document's roots: a prompt's
-\ field with fields, a dialog with dialogs (RUHA-LAYERS!).
+\ field with fields, a dialog with dialogs, and an overlay pane with dialogs
+\ when an extension, Desk's shell, gives the pane a region of its own above
+\ the panes beneath it (RUHA-LAYERS!).  An overlay pane's document is a
+\ dialog, as each of Desk's screens is.
 : _RTHP-RUHA-LAYERS  ( producer -- flags )
-    _RTHP.LIMITS RTE-LIMITS-FEATURES@
+    DUP _RTHP.LIMITS RTE-LIMITS-FEATURES@
     DUP RTE-F-FIELDS AND IF RUHA-LAYER-FIELDS ELSE 0 THEN
-    SWAP RTE-F-DIALOGS AND IF RUHA-LAYER-DIALOGS OR THEN ;
+    SWAP RTE-F-DIALOGS AND IF
+        RUHA-LAYER-DIALOGS OR
+        SWAP _RTHP.EXTENSION @ IF RUHA-LAYER-PANES OR THEN
+    ELSE NIP THEN ;
 
 : _RTHP-BUILD-CANDIDATE  ( producer -- rte-status built? )
     _RTPROF-PH-OTHER _RTPROF-MARK
@@ -14431,6 +14548,17 @@ VARIABLE _RTHP-P-STATE
             THEN
             RTHP-PART-SHELL _RTHP-P-XSTATUS @ _RTHP-P-P @
                 _RTHP-EXTENSION-FALLBACK!
+            \ This projection's one region cannot order a document beneath
+            \ an overlay pane's, which only the shell's regions paint in
+            \ order, so CELL shows this draw.
+            _RTHP-P-P @ _RTHP-CROSS-LAYERED? IF
+                _RTHP-P-P @ _RTHP-TARGET-ABORT
+                _RTHP-P-P @ _RTHP.SOURCE-DRAW @ _RTHP-W-DRAW !
+                _RTHP-P-P @ _RTHP-REFUSAL-REASON _RTHP-W-WHY !
+                _RTHP-P-P @ _RTHP-REFUSE-DRAW UPICSN-RELEASE-ALL
+                _RTHP-PH-READY-BLANK _RTHP-P-P @ _RTHP.PHASE !
+                SCB-S-WOULD-BLOCK EXIT
+            THEN
         THEN
     THEN
     _RTPROF-PH-RTAPT-CAPTURE _RTPROF-MARK

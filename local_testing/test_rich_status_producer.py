@@ -100,15 +100,16 @@ class StatusHarness(GrowthHarness):
                               self.runtime.find(marker + "-OWNED-START").body_address + 8)
 
     def setup(self, *, label=b"Mode", value=b"Ready", width=20, label_cols=6,
-              row=3, col=2, clip=None, flags=3, status_native=512, pictures=0):
+              row=3, col=2, clip=None, flags=3, status_native=512, pictures=0,
+              documents=1):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        caps = (1, 1, 64, 256, 256, status_native, 0, 0, pictures, 32, 8)
+        caps = (documents, 1, 64, 256, 256, status_native, 0, 0, pictures, 32, 8)
         size, = self.results("RTHP-STORAGE-BYTES", *caps)
         assert size > 0
         self.arena_size = size
         self.arena = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
         for name, value_ in (("ARENA-A", self.arena), ("ARENA-U", size),
-                             ("MAX-DOCUMENTS", 1), ("MAX-RECORDS", 1),
+                             ("MAX-DOCUMENTS", documents), ("MAX-RECORDS", 1),
                              ("MAX-TEXT", 64), ("MAX-COLLECTION-NATIVE", 256),
                              ("MAX-COLLECTION-DESCRIPTORS", 8), ("MAX-COLLECTIONS", 4),
                              ("MAX-CONTROLS", 5), ("MAX-DGRAPH-NATIVE", 256),
@@ -145,6 +146,20 @@ class StatusHarness(GrowthHarness):
 
     def get(self, suffix):
         return self.runtime.memory.read64(self.producer + self.offset("_RTHP." + suffix))
+
+    def document(self, index, *, token, rect=(0, 0, 8, 32), layer=0):
+        """Directory entry INDEX names the document TOKEN over RECT, in LAYER,
+        with no slices; the directory holds at least INDEX + 1 entries."""
+
+        size = self.constant("RUHA-DOCUMENT-SIZE")
+        entry = self.dir + index * size
+        if index:
+            self.runtime.memory.write_bytes(entry, bytes(size))
+        self.runtime.memory.write_bytes(entry, struct.pack("<6Q", token, 5 + index, *rect))
+        self.runtime.memory.write64(entry + self.offset("_RUHA-D.LAYER"), layer)
+        count = max(index + 1, self.get("DOCUMENT-COUNT"))
+        self.field(self.producer, "_RTHP.DOCUMENT-COUNT", count)
+        self.field(self.producer, "_RTHP.SOURCE-DIR-USED", count * size)
 
     def guards(self):
         assert self.runtime.memory.read_bytes(self.arena - 8, 8) == b"LEFTGUAR"
@@ -345,6 +360,22 @@ def test_status_beneath_its_own_documents_overlay_stays_rich(h):
     assert h.get("STATIC-COUNT") == 1
     assert h.get("CLAIMS-USED") == 2 * len(prefix)
     assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"), len(prefix)) == prefix
+    h.guards()
+
+
+@pytest.mark.parametrize("layer, refused", ((1, False), (0, True)))
+def test_status_beneath_an_overlay_panes_document_stays_rich(h, layer, refused):
+    # The same rectangle claimed by a root of another document, token 12:
+    # an overlay pane's, the layer above, may lie over the status field,
+    # while a document of its own layer may not.
+    h.setup(documents=2)
+    h.document(1, token=12, layer=layer)
+    prefix = struct.pack("<10Q", 12, 9, 1, 4, 23, 3, 3, 2, 4, 22)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"), prefix)
+    h.field(h.producer, "_RTHP.CLAIMS-USED", len(prefix))
+    status = h.constant("RTE-S-UNAVAILABLE") if refused else 0
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-STATICS") == (status,)
+    assert h.get("STATIC-COUNT") == (0 if refused else 1)
     h.guards()
 
 

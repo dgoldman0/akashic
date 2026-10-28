@@ -84,6 +84,7 @@ from rich_terminal_applet_journeys import (
     FEXP_PHOTO_SIZE,
     AgentAloneJourney,
     DaybookAloneJourney,
+    FEXP_ALONE_FOCUS_MARKER,
     FexpAloneJourney,
     PadAloneJourney,
     PhotoJourney,
@@ -2134,6 +2135,37 @@ def _launcher(*, modal=True, lines=None, inactive=False, beneath=True, shell=Tru
         inactive_controls=frozenset(held | ({view.identity} if inactive else set())),
     )
     return projection, view
+
+
+def test_fexp_lists_stay_rich_beneath_the_launcher() -> None:
+    """File Explorer's table and tree lie in the layer beneath Desk's
+    launcher, covered and inactive; a frame without them fell back."""
+
+    projection, view = _launcher()
+    # File Explorer's task keeps its selection beneath the launcher, inactive.
+    task = acceptance_runner._SemanticTaskClaim(
+        ControlIdentity(1, 1, 30_201), ControlKind.TASK,
+        ControlState.VISIBLE | ControlState.SELECTED, 0,
+        acceptance_runner._LogicalRectangle(0, ROWS - 1, 15, ROWS),
+        FEXP_ALONE_FOCUS_MARKER, "")
+    bar, = projection.semantic_taskbar_claims
+    projection = replace(projection, semantic_taskbar_claims=(replace(bar, tasks=(task,)),),
+                         inactive_controls=projection.inactive_controls | {task.identity})
+    table, tree = _fexp_frame().semantic_item_view_claims
+    beneath = replace(projection, covered_root_claims=(table, tree),
+                      inactive_controls=projection.inactive_controls
+                      | {table.identity, tree.identity})
+    journey = FexpAloneJourney(FEXP_READY)
+    journey.stage = FexpAloneJourney.LAUNCHER_OPENED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    (result, sent), = _run(journey, ((_cell_offer(1, ()), beneath),))
+    assert result.milestone == "desk-launcher-opened"
+    assert sent == [("item_open", view.value(view.named("File Explorer").item_key))]
+    journey = FexpAloneJourney(FEXP_READY)
+    journey.stage = FexpAloneJourney.LAUNCHER_OPENED
+    journey._lineage = journey._offer_lineage(_cell_offer(1, ()), 9)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="fell back beneath the launcher"):
+        _run(journey, ((_cell_offer(1, ()), projection),))
 
 
 def test_the_launcher_is_a_modal_dialog_around_its_list() -> None:

@@ -56,7 +56,8 @@ owner before exposing CELL content. A document's overlay prompt, the last
 FIELD of its document, is the exception: it lies in the layer above that
 document's roots ([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)), so it may meet
 their claims beneath its depth, and their later instrument, status and
-picture claims may meet it. Local capacity and provider quota
+picture claims may meet it. So may the claims of a document in another
+layer: an overlay pane's document lies above the documents beneath it. Local capacity and provider quota
 fallback restore the exact control, text, and claim prefixes. A refused
 FIELD lane stays refused throughout that candidate's later family retries.
 A lane removed while roots of a document lie beneath that document's prompt

@@ -48,14 +48,14 @@ class FieldHarness(StatusHarness):
                                       "_RTHP-U-CLONE?", "_RTHP-TARGET-BANK-ENTRIES?",
                                       "RTE-CONTROL-PLAN-VALID?", "_RTHP-W-TOTAL"))
 
-    def setup(self, *, field_native=1024, row=3, col=2, clip=None, source=1, **kwargs):
+    def setup(self, *, field_native=1024, row=3, col=2, clip=None, source=1, documents=1, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        size, = self.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512,
+        size, = self.results("RTHP-STORAGE-BYTES", documents, 1, 64, 256, 256, 512,
                              field_native, 0, 0, 32, 8)
         assert size
         self.arena_size = size
         self.arena = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
-        for name, n in {"ARENA-A": self.arena, "ARENA-U": size, "MAX-DOCUMENTS": 1,
+        for name, n in {"ARENA-A": self.arena, "ARENA-U": size, "MAX-DOCUMENTS": documents,
                         "MAX-RECORDS": 1, "MAX-TEXT": 64, "MAX-COLLECTION-NATIVE": 256,
                         "MAX-COLLECTION-DESCRIPTORS": 8, "MAX-COLLECTIONS": 4,
                         "MAX-CONTROLS": 5 + field_native//224, "MAX-DGRAPH-NATIVE": 256,
@@ -329,6 +329,20 @@ def test_a_field_over_anything_else_refuses_rich(h, source, attachment):
     h.field(h.producer,"_RTHP.CLAIMS-USED",80)
     assert h.results("_RTHP-W-BUILD-OPTIONAL-FIELDS")== (h.constant("RTE-S-UNAVAILABLE"),)
     assert h.get("FIELD-COUNT")==0
+
+
+def test_a_field_of_an_overlay_pane_lies_above_another_documents_roots(h):
+    # The field's document, token 11, is an overlay pane's, the layer above
+    # the document whose root, token 12, lies beneath it.
+    h.setup(kind=3, documents=2)
+    h.document(0, token=11, layer=1)
+    h.document(1, token=12)
+    prefix=struct.pack("<10Q",12,9,1,4,23,1,3,2,4,22)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"),prefix)
+    h.field(h.producer,"_RTHP.CLAIMS-USED",80)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-FIELDS")== (0,)
+    assert h.get("FIELD-COUNT")==1
+    assert h.get("CLAIMS-USED")==160
 
 
 def test_packed_field_owns_label_content_and_target_revision(h):

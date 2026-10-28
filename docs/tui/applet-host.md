@@ -175,8 +175,9 @@ owner places above the others, such as Desk's catalog launcher. The owner's
 relayout gives it a region like any child. `AHOST-PAINT` paints overlays after
 every other slot, even in full-frame presentation, inside `DRW-OVERLAY`, so
 any document beneath falls back to residual output wherever the overlay
-covers it; the rich adapter passes over the overlay's own document, the final
-writer of its cells. An overlay repaints completely (`ASHELL-REPAINT-CHILD`)
+covers it, unless the renderer puts the overlay in a layer above it; the
+rich adapter passes over the overlay's own document, the final writer of
+its cells. An overlay repaints completely (`ASHELL-REPAINT-CHILD`)
 whenever it is dirty or a slot below it painted in the same pass. Pointer
 hit-testing tries overlays first, the later one on top. An overlay never takes
 focus: `AHOST-FOCUS-ID` and `AHOST-MINIMIZE-ID` refuse it, a press on it does

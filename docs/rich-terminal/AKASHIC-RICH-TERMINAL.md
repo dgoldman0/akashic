@@ -1200,9 +1200,12 @@ exception: when it is all the foreground paint over the document and the
 terminal negotiated the feature that shows it, fields for a prompt or
 dialogs for a dialog, the document keeps every root, those it meets too,
 and the producer puts the overlay in the layer above them
-([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)). A draw whose candidate lost that
-overlay, while roots of its document still lie beneath the overlay's cells,
-goes out as CELL. Other foreground paint keeps the document-level rule.
+([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)). An overlay pane, such as Desk's
+launcher or one of its screens, is the other: with dialogs negotiated and
+Desk's shell to give it a region of its own, a tile beneath it keeps every
+root, and the overlay pane's document lies in the layer above. A draw whose
+candidate lost the overlay above roots kept beneath it goes out as CELL.
+Other foreground paint keeps the document-level rule.
 
 An aggregate content epoch is collision-free provenance, not a hash. A new
 snapshot inherits the prior epoch only when every visible nonempty document

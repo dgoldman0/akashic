@@ -155,6 +155,23 @@ _SS-DONE
 ''', minimum=33)
 
 
+def test_a_root_beneath_an_overlay_pane_stays_in_its_panes_content():
+    """The overlay over rows 1 to 4 covers most of the pane's control 100, on
+    row 1: the control keeps its place in the pane's content region, in the
+    layer beneath the modal region that holds the overlay's control."""
+    staged_run(STAGED_OVERLAY + r'''
+1 4 4 10 _SO-SETUP _SP-DIALOGS
+_RSHSP-PREPARE _SS-OK
+_SX-KA _SX-S _RSHSP-BANK-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
+100 _SX-KA _SO-CONTROL DUP 0<> _SS-A
+_RTE-CONTROL.REGION @ 77 _SX-KA _SO-CONTENT _RTE-IR.ID @ = _SS-A
+_SX-KA _SP-MODALS 1 = _SS-A
+101 _SX-KA _SO-CONTROL _RTE-CONTROL.REGION @ _SP-MODAL @ _RTE-IR.ID @ = _SS-A
+77 _SX-KA _SO-CONTENT _RTE-IR.Z @ 79 _SX-KA _SO-CONTENT _RTE-IR.Z @ < _SS-A
+_SS-DONE
+''', minimum=7)
+
+
 def test_an_overlay_pane_lies_over_the_chrome_beneath_it():
     """An overlay over the pane's bottom border row, as one of Desk's
     screens lies over the divider between two tiles: its own glyphs cover

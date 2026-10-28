@@ -68,7 +68,10 @@ rich candidate, as a field does, since that family's projection would then be
 wrong under it. A dialog widget is its document's overlay, in the layer
 above that document's roots ([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)): it may
 meet the claims of its own document's roots beneath its depth, and later
-lanes' claims of that document may meet it. A dialog element's contents are
+lanes' claims of that document may meet it. Documents lie in layers too: an
+overlay pane's document lies above the others, and the claims of two
+documents in different layers may meet, as the dialog that fills one of
+Desk's screens meets the roots of the tile beneath it. A dialog element's contents are
 the other exception: the claims
 of its own document's roots that lie wholly inside it and above it. Their
 number must be the one its descriptor gives, or the dialog stays painted

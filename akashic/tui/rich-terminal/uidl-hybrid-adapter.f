@@ -130,8 +130,11 @@ REQUIRE ../check-mode.f
 : _RUHA-D.OV-COL      ( entry -- a ) 280 + ;
 : _RUHA-D.OV-HEIGHT   ( entry -- a ) 288 + ;
 : _RUHA-D.OV-WIDTH    ( entry -- a ) 296 + ;
+\ 1 for an overlay slot's document, which its host paints above the others,
+\ else 0.
+: _RUHA-D.LAYER       ( entry -- a ) 304 + ;
 
-304 CONSTANT RUHA-DOCUMENT-SIZE
+312 CONSTANT RUHA-DOCUMENT-SIZE
 : RUHA-DOCUMENT-BYTES ( -- bytes ) RUHA-DOCUMENT-SIZE ;
 : RUHA-DOCUMENT-OWNER-ID@ ( entry -- owner-id ) _RUHA-D.OWNER-ID @ ;
 : RUHA-DOCUMENT-OWNER-GENERATION@ ( entry -- generation ) _RUHA-D.OWNER-GEN @ ;
@@ -147,6 +150,10 @@ REQUIRE ../check-mode.f
 : RUHA-DOCUMENT-OVERLAY@ ( entry -- row col height width )
     >R R@ _RUHA-D.OV-ROW @ R@ _RUHA-D.OV-COL @
     R@ _RUHA-D.OV-HEIGHT @ R> _RUHA-D.OV-WIDTH @ ;
+\ RUHA-DOCUMENT-LAYER@ ( entry -- layer )
+\   1 for an overlay slot's document, which its host paints above every
+\   other, else 0.
+: RUHA-DOCUMENT-LAYER@ ( entry -- layer ) _RUHA-D.LAYER @ ;
 : RUHA-DOCUMENT-RECORD-OFFSET@ ( entry -- u ) _RUHA-D.RECORD-OFF @ ;
 : RUHA-DOCUMENT-RECORD-BYTES@ ( entry -- u ) _RUHA-D.RECORD-U @ ;
 : RUHA-DOCUMENT-TEXT-OFFSET@ ( entry -- u ) _RUHA-D.TEXT-OFF @ ;
@@ -1306,16 +1313,21 @@ VARIABLE _RUHA-IT-ADAPTER
     _RUHA-R.FLAGS @ _RUHA-RF-EMPTY AND 0<> ;
 
 \ Layers a document's roots may lie beneath.  A renderer shows a prompt's
-\ field only with fields, and a dialog only with dialogs; the producer
-\ says which it can show.
+\ field only with fields, and a dialog only with dialogs; an overlay pane
+\ needs a candidate that puts it in a region of its own.  The producer says
+\ which it can show.
 1 CONSTANT RUHA-LAYER-FIELDS
 2 CONSTANT RUHA-LAYER-DIALOGS
-3 CONSTANT _RUHA-LAYER-MASK
+\ The overlay panes above a document: overlay slots, such as Desk's screens,
+\ which the producer can put in a layer above the panes beneath them.
+4 CONSTANT RUHA-LAYER-PANES
+7 CONSTANT _RUHA-LAYER-MASK
 
 \ RUHA-LAYERS! ( flags adapter -- status )
-\   Let a document keep its roots beneath its own overlay only where FLAGS
-\   says the renderer can show that overlay above them; anywhere else
-\   foreground paint over a document falls the document back whole.  A
+\   Let a document keep its roots beneath its own overlay, or beneath the
+\   overlay panes above it, only where FLAGS says the renderer can show
+\   that layer above them; anywhere else foreground paint over a document
+\   falls the document back whole.  A
 \   change closes the borrow gate, so no snapshot captured under the other
 \   setting is handed out again.  The adapter is proved valid when the
 \   setting changes; the producer passes its own on every build.
@@ -2428,22 +2440,40 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
 \ _RUHA-LAYERED? ( record adapter -- flag )
 \   Every cell of the document that foreground paint covers lies under a
 \   layer the producer puts above the document: its own overlay, when
-\   _RUHA-OWN-LAYER? allows it.  The document's rows are taken in bands
-\   between the edges of those layers, and each band in the spans they
-\   leave, which must hold no foreground paint.
+\   _RUHA-OWN-LAYER? allows it, and each visible overlay slot's document,
+\   which its host paints over the whole of its rectangle, when the policy
+\   allows overlay panes.  The document's rows are taken in bands between
+\   the edges of those layers, and each band in the spans they leave, which
+\   must hold no foreground paint.
 VARIABLE _RUHA-LY-R VARIABLE _RUHA-LY-OWN VARIABLE _RUHA-LY-XT
+VARIABLE _RUHA-LY-ADAPTER VARIABLE _RUHA-LY-PANES
 VARIABLE _RUHA-LY-ROW VARIABLE _RUHA-LY-BOTTOM VARIABLE _RUHA-LY-BAND-END
 VARIABLE _RUHA-LY-COL VARIABLE _RUHA-LY-END VARIABLE _RUHA-LY-TO
 VARIABLE _RUHA-LY-NEXT VARIABLE _RUHA-LY-A0 VARIABLE _RUHA-LY-A1
 
 \ XT ( row col height width -- ) for each layer above the document.
+\ A visible overlay slot's document other than the document itself.
+: _RUHA-LY-PANE?  ( record -- flag )
+    DUP _RUHA-LY-R @ = IF DROP 0 EXIT THEN
+    DUP _RUHA-R.STATE @ _RUHA-RECORD-ATTACHED <> IF DROP 0 EXIT THEN
+    DUP _RUHA-R.SLOT @ AHS-OVERLAY? 0= IF DROP 0 EXIT THEN
+    _RUHA-LY-ADAPTER @ _RUHA-RECORD-VISIBLE? ;
+
 : _RUHA-LY-EACH  ( xt -- )
     _RUHA-LY-XT !
     _RUHA-LY-OWN @ IF
         _RUHA-LY-R @ _RUHA-R.OV-ROW @ _RUHA-LY-R @ _RUHA-R.OV-COL @
         _RUHA-LY-R @ _RUHA-R.OV-HEIGHT @ _RUHA-LY-R @ _RUHA-R.OV-WIDTH @
         _RUHA-LY-XT @ EXECUTE
-    THEN ;
+    THEN
+    _RUHA-LY-PANES @ 0= IF EXIT THEN
+    _RUHA-LY-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-LY-ADAPTER @ _RUHA-RECORD-AT DUP _RUHA-LY-PANE? IF
+            DUP _RUHA-R.ROW @ OVER _RUHA-R.COL @
+            2 PICK _RUHA-R.HEIGHT @ 3 PICK _RUHA-R.WIDTH @
+            _RUHA-LY-XT @ EXECUTE
+        THEN DROP
+    LOOP ;
 
 \ A layer's top or bottom edge inside the band from ROW ends the band.
 : _RUHA-LY-EDGE  ( row -- )
@@ -2468,9 +2498,10 @@ VARIABLE _RUHA-LY-NEXT VARIABLE _RUHA-LY-A0 VARIABLE _RUHA-LY-A1
     THEN ;
 
 : _RUHA-LAYERED?  ( record adapter -- flag )
-    OVER _RUHA-LY-R !
+    OVER _RUHA-LY-R ! DUP _RUHA-LY-ADAPTER !
+    DUP _RUHA-A.LAYERS @ RUHA-LAYER-PANES AND 0<> _RUHA-LY-PANES !
     _RUHA-OWN-LAYER? _RUHA-LY-OWN !
-    _RUHA-LY-OWN @ 0= IF 0 EXIT THEN
+    _RUHA-LY-OWN @ _RUHA-LY-PANES @ OR 0= IF 0 EXIT THEN
     _RUHA-LY-R @ _RUHA-R.ROW @ _RUHA-LY-ROW !
     _RUHA-LY-R @ _RUHA-R.ROW @ _RUHA-LY-R @ _RUHA-R.HEIGHT @ + _RUHA-LY-BOTTOM !
     BEGIN _RUHA-LY-ROW @ _RUHA-LY-BOTTOM @ < WHILE
@@ -2660,6 +2691,8 @@ VARIABLE _RUHA-LY-NEXT VARIABLE _RUHA-LY-A0 VARIABLE _RUHA-LY-A1
         _RUHA-D.MENU-TOPOLOGY-EPOCH !
     _RUHA-B-APPEND-OWNER-ID @ _RUHA-B-ENTRY @ _RUHA-D.OWNER-ID !
     _RUHA-B-APPEND-OWNER-GEN @ _RUHA-B-ENTRY @ _RUHA-D.OWNER-GEN !
+    _RUHA-B-RECORD @ _RUHA-R.SLOT @ AHS-OVERLAY? IF 1 ELSE 0 THEN
+        _RUHA-B-ENTRY @ _RUHA-D.LAYER !
     _RUHA-B-RECORD @ _RUHA-B-ADAPTER @ _RUHA-OWN-LAYER? IF
         _RUHA-B-RECORD @ _RUHA-R.OV-ROW @ _RUHA-B-ENTRY @ _RUHA-D.OV-ROW !
         _RUHA-B-RECORD @ _RUHA-R.OV-COL @ _RUHA-B-ENTRY @ _RUHA-D.OV-COL !

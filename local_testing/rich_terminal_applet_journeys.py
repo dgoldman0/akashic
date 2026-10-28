@@ -1020,9 +1020,9 @@ class FexpAloneJourney(_AppletJourney):
     Last, Alt+H opens Desk's launcher, an overlay document that is a
     dialog titled Applets, modal over the whole screen, whose status and
     hint lines are its message and whose catalog, a two-column item view,
-    lies active inside it; while it is open File Explorer's lists fall back
-    beneath it.  An OPEN on its File Explorer row focuses the running
-    applet and closes the launcher, and the lists come back.
+    lies active inside it; while it is open File Explorer's lists stay rich
+    beneath it, inactive.  An OPEN on its File Explorer row focuses the
+    running applet and closes the launcher.
 
     On a paced link the first preview's upload takes long enough to check
     that the screen keeps answering input while a picture uploads.  Once
@@ -1683,9 +1683,12 @@ class FexpAloneJourney(_AppletJourney):
         if self.stage == self.LAUNCHER_OPENED:
             if launcher is None:
                 return self._wait("Desk's launcher listing File Explorer")
-            if len(projection.semantic_item_view_claims) != 1:
+            # File Explorer's table and tree stay rich in the layer beneath
+            # the launcher, which the launcher's check holds inactive.
+            if (len(self._content_views(projection, ItemViewRole.TABLE, covered=True)) != 1
+                    or len(self._content_views(projection, ItemViewRole.TREE, covered=True)) != 1):
                 raise PhysicalDesktopAcceptanceError(
-                    "File Explorer's lists stayed rich beneath the launcher"
+                    "File Explorer's lists fell back beneath the launcher"
                 )
             _require_desk_launcher_dialog(projection, launcher)
             row = launcher.named("File Explorer")

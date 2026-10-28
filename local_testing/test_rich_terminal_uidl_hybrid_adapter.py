@@ -488,13 +488,15 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
 
 def test_abi10_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
     source = _source()
-    assert "304 CONSTANT RUHA-DOCUMENT-SIZE" in source
+    assert "312 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert _offset_for_snapshot_field(source, "_RUHA-D.OWNER-ID") == 224
     assert _offset_for_snapshot_field(source, "_RUHA-D.OWNER-GEN") == 232
     # The cells of the document's own overlay, when its roots may lie
     # beneath it, end the entry.
     assert _offset_for_snapshot_field(source, "_RUHA-D.OV-ROW") == 272
     assert _offset_for_snapshot_field(source, "_RUHA-D.OV-WIDTH") == 296
+    # Then the document's layer: 1 for an overlay slot's document.
+    assert _offset_for_snapshot_field(source, "_RUHA-D.LAYER") == 304
     assert "240 CONSTANT RUHA-SNAPSHOT-SIZE" in source
     assert _constant(source, "RUHA-SIZE") == 1144
     assert "10 CONSTANT _RUHA-ABI" in source
@@ -571,7 +573,7 @@ def test_abi10_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> Non
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "304 CONSTANT RUHA-DOCUMENT-SIZE",
+        "312 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -1316,6 +1318,14 @@ def test_final_writer_occlusion_falls_back_the_complete_document_atomically() ->
     # whole: the overlay lies in the layer above its roots, so none is
     # clipped away.
     assert "_RUHA-LAYERED?" in hit_branch
+    # The layers above a document are its own overlay and the visible
+    # overlay slots' documents, each allowed by the producer's policy.
+    layered = _word(source, "_RUHA-LAYERED?")
+    assert "RUHA-LAYER-PANES AND" in layered
+    pane = _word(source, "_RUHA-LY-PANE?")
+    assert "AHS-OVERLAY?" in pane and "_RUHA-RECORD-VISIBLE?" in pane
+    assert "_RUHA-LY-PANE?" in _word(source, "_RUHA-LY-EACH")
+    assert "_RUHA-D.LAYER !" in _word(source, "_RUHA-B-APPEND-DOCUMENT")
     assert "OCCLUDED" not in dispatch
     # Directory/totals comparison invalidates the first masked transition;
     # leaving this latch alone lets identical masked frames retain content

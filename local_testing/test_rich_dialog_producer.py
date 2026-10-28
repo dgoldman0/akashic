@@ -53,16 +53,17 @@ class DialogHarness(StatusHarness):
                                       "_RTHP-TG-DIALOG-TARGETS?", "RTHP-CONTROL-TARGET@",
                                       "_RTHP-D-CONTROL-COMPATIBLE?", "_RTHP-U-CLONE?",
                                       "_RTHP-TARGET-BANK-ENTRIES?", "RTE-CONTROL-PLAN-VALID?",
-                                      "_RTHP-W-TOTAL", "_RTHP-LAYERS-COVERED?"))
+                                      "_RTHP-W-TOTAL", "_RTHP-LAYERS-COVERED?",
+                                      "_RTHP-CROSS-LAYERED?"))
 
-    def setup(self, *, dialog_native=1024, row=0, col=1, document=(0, 0, 8, 32), **kwargs):
+    def setup(self, *, dialog_native=1024, row=0, col=1, document=(0, 0, 8, 32), documents=1, **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
-        size, = self.results("RTHP-STORAGE-BYTES", 1, 1, 64, 256, 256, 512,
+        size, = self.results("RTHP-STORAGE-BYTES", documents, 1, 64, 256, 256, 512,
                              0, dialog_native, 0, 32, 8)
         assert size
         self.arena_size = size
         self.arena = self.allocate(b"LEFTGUAR" + bytes(size) + b"RIGHTGUA") + 8
-        for name, n in {"ARENA-A": self.arena, "ARENA-U": size, "MAX-DOCUMENTS": 1,
+        for name, n in {"ARENA-A": self.arena, "ARENA-U": size, "MAX-DOCUMENTS": documents,
                         "MAX-RECORDS": 1, "MAX-TEXT": 64, "MAX-COLLECTION-NATIVE": 256,
                         "MAX-COLLECTION-DESCRIPTORS": 8, "MAX-COLLECTIONS": 4,
                         "MAX-CONTROLS": 5 + dialog_native // 72, "MAX-DGRAPH-NATIVE": 256,
@@ -327,6 +328,46 @@ def test_a_refused_dialog_with_nothing_beneath_it_leaves_the_draw_rich(h, kwargs
     h.field(h.producer, "_RTHP.SOURCE-TEXT-U", 40)
     assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (0,)
     assert h.results("_RTHP-LAYERS-COVERED?", h.producer) == (MASK64,)
+
+
+def _beneath_an_overlay_pane(h, *, layer=1):
+    """The dialog's document, token 11, lies in LAYER, 1 for an overlay
+    pane's, and a root of a document in layer 0, token 12, lies beneath the
+    dialog."""
+
+    h.document(0, token=11, layer=layer)
+    h.document(1, token=12)
+    prefix = struct.pack("<10Q", 12, 9, 1, 4, 23, 3, 3, 2, 4, 22)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"), prefix)
+    h.field(h.producer, "_RTHP.CLAIMS-USED", 80)
+
+
+def test_an_overlay_panes_dialog_lies_above_another_documents_roots(h):
+    h.setup(documents=2)
+    _beneath_an_overlay_pane(h)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (0,)
+    assert h.get("DIALOG-COUNT") == 1
+    assert h.get("CLAIMS-USED") == 160
+    # The dialog holds the root's cells, and only the shell's regions paint
+    # the two documents in order.
+    assert h.results("_RTHP-LAYERS-COVERED?", h.producer) == (MASK64,)
+    assert h.results("_RTHP-CROSS-LAYERED?", h.producer) == (MASK64,)
+
+
+def test_documents_of_one_layer_still_may_not_meet(h):
+    h.setup(documents=2)
+    _beneath_an_overlay_pane(h, layer=0)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (h.constant("RTE-S-UNAVAILABLE"),)
+    assert h.results("_RTHP-CROSS-LAYERED?", h.producer) == (0,)
+
+
+def test_roots_beneath_a_refused_overlay_pane_cannot_be_shown_rich(h):
+    h.setup(documents=2)
+    _beneath_an_overlay_pane(h)
+    h.field(h.producer, "_RTHP.SOURCE-TEXT-U", 40)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (0,)
+    assert h.get("DIALOG-REFUSED") == MASK64
+    assert h.results("_RTHP-LAYERS-COVERED?", h.producer) == (0,)
 
 
 def test_local_dialog_capacity_rolls_back_only_the_owned_suffix(h):

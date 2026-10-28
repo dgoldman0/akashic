@@ -156,6 +156,13 @@ pane's content region holds. The overlay pane's own residual glyphs leave
 out every claim but the panes' chrome: where it lies over a divider its
 glyphs cover it.
 
+A pane beneath an overlay pane may keep its document's roots beneath it
+([OVERLAY-LAYERS.md](OVERLAY-LAYERS.md)): they stay in that pane's content
+region, beneath the overlay pane's content and modal regions, and the
+aggregate producer has checked that the overlay pane's claims cover them.
+The base projection's one region cannot paint the two documents in order,
+so when this candidate cannot be built for such a draw, CELL shows it.
+
 Desk gives an open screen every key and ignores a press outside it. With
 dialogs each overlay pane's document therefore goes in a modal region over
 the whole screen, after the overlays' modal regions and at the same z, so

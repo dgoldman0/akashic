@@ -7,10 +7,9 @@ from test_rich_field_producer import FieldHarness
 from test_rich_series_producer import PRELUDE, PRODUCER, run_series
 
 
-@pytest.fixture(params=("python", "native"))
-def field_graph(request):
-    h = FieldHarness(request.param)
-    h.setup()
+def _field_graph(backend, documents=1):
+    h = FieldHarness(backend)
+    h.setup(documents=documents)
     assert h.build() == (0,)
     h.field(h.producer, "_RTHP.BASE-CLAIMS-USED", 80)
     h.field(h.producer, "_RTHP.INSTRUMENT-CLAIM-COUNT", 1)
@@ -21,6 +20,16 @@ def field_graph(request):
     r = h.get("INSTRUMENT-REGIONS-A")
     h.runtime.memory.write_bytes(r, struct.pack("<12Q", 8, 0, 0, 32, 8, 0, 0, 0, 0, 0, 1, 0))
     return h
+
+
+@pytest.fixture(params=("python", "native"))
+def field_graph(request):
+    return _field_graph(request.param)
+
+
+@pytest.fixture(params=("python", "native"))
+def two_documents(request):
+    return _field_graph(request.param, documents=2)
 
 
 def test_sparse_graph_moves_base_above_barrier_with_authored_field_slots_unchanged(field_graph):
@@ -55,6 +64,23 @@ def test_a_graph_beneath_its_own_documents_overlay_keeps_the_base_above_it(field
     assert h.call("_RTHP-BASE-LAYER!", h.producer)
     # Another document's prompt is no layer above this graph.
     h.runtime.memory.write64(base, 12)
+    assert not h.call("_RTHP-BASE-CLAIMS-DISJOINT?", h.producer)
+
+
+def test_a_graph_beneath_an_overlay_panes_document_keeps_the_base_above_it(two_documents):
+    h = two_documents
+    base = h.get("CLAIMS-A")
+    graph = base + 80
+    # The base claim is a root of another document, token 12, and the graph
+    # of document 11 lies under it.  An overlay pane's document is the layer
+    # above, which the shell's regions paint after the graph's.
+    h.document(1, token=12, layer=1)
+    h.runtime.memory.write64(base, 12)
+    for offset in (48, 56, 64, 72):
+        h.runtime.memory.write64(graph + offset, h.runtime.memory.read64(base + offset))
+    assert h.call("_RTHP-BASE-CLAIMS-DISJOINT?", h.producer)
+    # A document of the graph's own layer is no layer above it.
+    h.document(1, token=12, layer=0)
     assert not h.call("_RTHP-BASE-CLAIMS-DISJOINT?", h.producer)
 
 
