@@ -897,16 +897,22 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
 \ The producer planned the residual runs of the whole surface for the draw
 \ these planes hold, with the claims the shell's claim bank begins with, so
 \ the shell's plans may take its runs where the shell's own claims and
-\ regions leave them whole.  Its glyph banks are a reference of no runs
-\ when they hold another draw's plan.
-: _RSHSP-GLYPH-REFERENCE ( -- )
-    _RSHSP-P @ _RTHP.GLYPH-ITEMS-A @
+\ regions leave them whole.  When its glyph banks hold another draw's plan,
+\ or a plan of no runs, the reference has no runs and names none of them,
+\ since the planner, with every check on, refuses a bank of no bytes that
+\ names storage.  For Desk the producer plans no runs of its own, so in a
+\ session its banks hold an older draw's plan.
+: _RSHSP-GLYPH-RUNS ( -- count )
     _RSHSP-PDRAW @ DUP 0<> SWAP _RSHSP-P @ _RTHP.GLYPH-DRAW @ = AND
     _RSHSP-PCOLS @ _RSHSP-P @ _RTHP.COLS @ = AND
     _RSHSP-PROWS @ _RSHSP-P @ _RTHP.ROWS @ = AND
-        IF _RSHSP-P @ _RTHP.GLYPH-COUNT @ ELSE 0 THEN
-    _RSHSP-P @ _RTHP.GLYPH-REFS-A @ _RSHSP-P @ _RTHP.GLYPH-TEXT-A @
-    _RSHSP-P @ _RTHP.GLYPH-TEXT-USED @
+    _RSHSP-P @ _RTHP.GLYPH-COUNT @ AND ;
+: _RSHSP-GLYPH-REFERENCE ( -- )
+    _RSHSP-GLYPH-RUNS ?DUP IF
+        _RSHSP-P @ _RTHP.GLYPH-ITEMS-A @ SWAP _RSHSP-P @ _RTHP.GLYPH-REFS-A @
+        _RSHSP-P @ _RTHP.GLYPH-TEXT-A @ _RSHSP-P @ _RTHP.GLYPH-TEXT-USED @
+            _RSHSP-ZSPAN
+    ELSE 0 0 0 0 0 THEN
     _RSHSP-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@
     _RSHSP-GREF @ RGRP-REFERENCE! ;
 \ The planner's claims of one KIND, the panes' chrome or the taskbar's bands.

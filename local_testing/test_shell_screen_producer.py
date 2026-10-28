@@ -475,6 +475,35 @@ _SS-DONE
 ''', minimum=21)
 
 
+def test_with_every_check_on_a_held_plan_of_no_runs_names_no_banks():
+    """The screen producer keeps the glyph plan of the last candidate it
+    planned itself. For Desk's shell it plans none, so in a session the plan
+    it holds is an older draw's, and the shell plans with a reference of no
+    runs. With every check on, the planner proves the reference's banks
+    well formed, and a bank of no bytes must name no storage, so the shell's
+    reference of no runs names none of the old plan's banks; the same holds
+    for a plan of this draw that has no runs."""
+    staged_run(STAGED + r'''
+CREATE _SX-GPS 263 ALLOT : _SX-GP _SX-GPS 7 + -8 AND ;
+: _SX-HELD ( draw count -- )
+    _SX-P _RTHP.GLYPH-COUNT ! _SX-P _RTHP.GLYPH-DRAW !
+    _SX-GP _SX-P _RTHP.GLYPH-ITEMS-A ! _SX-GP 128 + _SX-P _RTHP.GLYPH-REFS-A !
+    _SX-GP 192 + _SX-P _RTHP.GLYPH-TEXT-A ! 40 _SX-P _RTHP.GLYPH-TEXT-USED ! ;
+_SX-SETUP
+-1 CHK-EVERY-FRAME !
+\ The plan of an older draw, three runs long.
+_SX-P _RTHP.SOURCE-DRAW @ 1000 + 3 _SX-HELD
+_RSHSP-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 0= _SS-A
+_SX-TARGET _RSHSP-PART-VALID? _SS-A
+\ A plan of this draw with no runs.
+_SX-P _RTHP.SOURCE-DRAW @ 0 _SX-HELD
+_RSHSP-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 0= _SS-A
+_RSHSP-DIAG-PREPARE-REFUSALS @ 0= _SS-A
+0 CHK-EVERY-FRAME !
+_SS-DONE
+''', minimum=21)
+
+
 def test_nonzero_menu_claim_keeps_residue_underlay_and_excludes_opaque_status():
     staged_run(STAGED + r'''
 CREATE _SM-CLAIMS-S RUCL-CLAIM-SIZE 2 * 7 + ALLOT
