@@ -617,16 +617,22 @@ VARIABLE _APTAS-SAFE-TEXT-U
 
 \ The shell's service: the owner's, then a full refresh's check when one
 \ falls due on a live rich screen with no paint pending and no event part
-\ given (rich-terminal/frame-refresh.f).  A modal key read between polls
-\ runs the owner's service alone: the application waiting for the key is
-\ in the middle of its own work, and its documents may be half changed.
+\ given (rich-terminal/frame-refresh.f).  A check takes a while, and input
+\ that came during it is bound to the frame on screen; the owner's service
+\ runs again after it, so this pass's poll gives that input before a tick
+\ or paint later in the pass can draw past that frame.  A modal key read
+\ between polls runs the owner's service alone: the application waiting
+\ for the key is in the middle of its own work, and its documents may be
+\ half changed.
 VARIABLE _APTAS-PS-OWNER
 : _APTAS-PASS-SERVICE  ( owner -- status owns-stream )
     DUP _APTAS-PS-OWNER ! _APTAS-SERVICE
     OVER SCB-S-OK = OVER AND IF
         _APTAS-PS-OWNER @ _APTAS.SESSION @ PT-STATE@ PT-ST-ACTIVE = IF
             _APTAS-PS-OWNER @ _APTAS-HOLDS? 0= IF
-                ASHELL-PAINT-PENDING? 0= RFSH-SERVICE
+                ASHELL-PAINT-PENDING? 0= RFSH-SERVICE IF
+                    2DROP _APTAS-PS-OWNER @ _APTAS-SERVICE
+                THEN
             THEN
         THEN
     THEN ;

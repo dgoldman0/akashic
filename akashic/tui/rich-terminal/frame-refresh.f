@@ -34,7 +34,8 @@
 \  RFSH-CHECK!       ( xt context -- )  register the check; 0 0 removes it
 \  RFSH-INPUT        ( -- )       input has arrived
 \  RFSH-DEADLINE     ( -- ms|-1 ) when the next check falls due, or -1
-\  RFSH-SERVICE      ( quiet? -- )  run the check when it is due, if QUIET?
+\  RFSH-SERVICE      ( quiet? -- ran? )  run the check when it is due, if
+\                      QUIET?; true when a check ran
 \  RFSH-REPORT!      ( what-a what-u title-a title-u id-a id-u element
 \                      revision -- )  keep the first difference's report
 \  RFSH-CHECKS, RFSH-MISSED, RFSH-SKIPPED  ( -- addr )  the checks that
@@ -155,11 +156,13 @@ VARIABLE RFSH-REVISION
     1 RFSH-CHECKS +!
     IF 1 RFSH-MISSED +! CHK-WHY-MISSED CHK-SAFE-ON THEN ;
 
-\ RFSH-SERVICE ( quiet? -- )
+\ RFSH-SERVICE ( quiet? -- ran? )
 \   Run the check when one is due, provided QUIET?: no paint is pending,
 \   so every change counted since the last draw has been drawn.  A check
-\   that is due waits for the next quiet service.
-: RFSH-SERVICE  ( quiet? -- )
-    0= IF EXIT THEN
-    _RFSH-DUE? 0= IF EXIT THEN
-    _RFSH-RUN ;
+\   that is due waits for the next quiet service.  RAN? is true when a
+\   check ran, whether or not it could compare: a check takes a while, and
+\   its caller reads the input that came meanwhile before going on.
+: RFSH-SERVICE  ( quiet? -- ran? )
+    0= IF 0 EXIT THEN
+    _RFSH-DUE? 0= IF 0 EXIT THEN
+    _RFSH-RUN -1 ;

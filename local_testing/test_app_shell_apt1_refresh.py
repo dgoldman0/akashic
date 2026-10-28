@@ -120,11 +120,32 @@ def test_the_pass_service_runs_a_due_check_on_a_quiet_live_screen(owner):
     h.at(4999)
     h.serve()
     assert h.calls() == 0
+    # The owner's own service ran first.
+    assert h.variable("SERVICES") == 1
     h.at(5000)
     h.serve()
     assert h.calls() == 1
     assert h.variable("RFSH-CHECKS") == 1
-    # The owner's own service ran each time, first.
+    # After the check the owner's service runs again, so the poll gives
+    # the input that came during it before the pass goes on.
+    assert h.variable("SERVICES") == 3
+
+
+def test_after_a_check_the_pass_service_gives_the_second_services_results(owner):
+    h = owner
+    h.live()
+    # A check during which the session goes: the service after it says so.
+    h.runtime.evaluate(
+        b": T-LOSING-CHECK ( context -- compared? differs? )"
+        b" DROP 1 T-CALLS +! 7 SVC-STATUS ! 0 SVC-OWNS ! -1 0 ;",
+        step_budget=200_000,
+    )
+    h.at(0)
+    check = h.runtime.find("T-LOSING-CHECK")
+    assert h.results("RFSH-CHECK!", check.xt, 0) == ()
+    h.at(5000)
+    assert h.results("_APTAS-PASS-SERVICE", h.owner) == (7, 0)
+    assert h.calls() == 1
     assert h.variable("SERVICES") == 2
 
 

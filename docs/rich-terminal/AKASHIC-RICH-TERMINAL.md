@@ -1645,7 +1645,10 @@ least once every `full-refresh-interval-ms` while a rich screen is shown, the
 rich terminal's owner runs a check at a moment when no paint is pending and
 no part of an input event is held back: its pass service asks the shell's
 `ASHELL-PAINT-PENDING?`, and its `deadline` callback wakes the shell's loop
-when the next check falls due. Desk registers its snapshot adapter's
+when the next check falls due. A check takes a while, and input that came
+during it is bound to the frame on screen, so the owner's service runs
+again after a check and the pass's poll gives that input before a tick or
+paint later in the pass can draw past that frame. Desk registers its snapshot adapter's
 `RUHA-REFRESH-CHECK` (§6.2). Every change counted since the snapshot asked
 for a paint, so with none pending the snapshot and a live capture agree, and
 nothing is sent. When they differ, the refresh keeps a report of the first

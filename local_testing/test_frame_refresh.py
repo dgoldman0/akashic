@@ -30,9 +30,11 @@ PRELUDE = (
     # A scripted check: whether it compares, whether it finds a difference,
     # and how often it ran, with the context it was given.
     "VARIABLE T-COMPARED -1 T-COMPARED ! VARIABLE T-DIFFERS VARIABLE T-CALLS VARIABLE T-CTX",
+    # Whether the last service ran a check.
+    "VARIABLE T-RAN",
     ": T-CHECK ( ctx -- compared? differs? ) T-CTX ! 1 T-CALLS +! T-COMPARED @ T-DIFFERS @ ;",
     ": T-AT ( ms -- ) FAKE-MS ! ;",
-    ": T-SERVE ( quiet? -- ) RFSH-SERVICE ;",
+    ": T-SERVE ( quiet? -- ) RFSH-SERVICE T-RAN ! ;",
     # Names a report is given, compiled so that each keeps its own storage.
     ': T-COLLECTIONS S" collections" ; : T-MENUS S" menus" ; : T-FIELDS S" fields" ;',
     ': T-NOTES S" Notes" ; : T-OTHER S" Other" ; : T-NOTE S" note" ; : T-X S" x" ;',
@@ -69,15 +71,17 @@ def test_a_check_falls_due_an_interval_after_the_last():
         "1000 T-AT ' T-CHECK 77 RFSH-CHECK!",
         # The first interval runs from the registration.
         "RFSH-DEADLINE 6000 = _FR-ASSERT",
-        "5999 T-AT -1 T-SERVE T-CALLS @ 0= _FR-ASSERT",
-        "6000 T-AT -1 T-SERVE T-CALLS @ 1 = _FR-ASSERT T-CTX @ 77 = _FR-ASSERT",
+        "5999 T-AT -1 T-SERVE T-CALLS @ 0= _FR-ASSERT T-RAN @ 0= _FR-ASSERT",
+        # The service says when it ran a check, for its caller to read the
+        # input that came meanwhile.
+        "6000 T-AT -1 T-SERVE T-CALLS @ 1 = _FR-ASSERT T-CTX @ 77 = _FR-ASSERT T-RAN @ _FR-ASSERT",
         "RFSH-CHECKS @ 1 = _FR-ASSERT RFSH-MISSED @ 0= _FR-ASSERT",
         # The next falls due an interval after that check.
         "RFSH-DEADLINE 11000 = _FR-ASSERT",
         "10999 T-AT -1 T-SERVE T-CALLS @ 1 = _FR-ASSERT",
         "11500 T-AT -1 T-SERVE T-CALLS @ 2 = _FR-ASSERT",
         "RFSH-DEADLINE 16500 = _FR-ASSERT",
-    ]), 10)
+    ]), 12)
 
 
 def test_a_check_is_owed_once_input_has_been_quiet():
@@ -99,20 +103,20 @@ def test_a_check_is_owed_once_input_has_been_quiet():
 def test_a_due_check_waits_for_a_moment_with_no_paint_pending():
     _passed(_run([
         "0 T-AT ' T-CHECK 0 RFSH-CHECK!",
-        "9000 T-AT 0 T-SERVE T-CALLS @ 0= _FR-ASSERT",
+        "9000 T-AT 0 T-SERVE T-CALLS @ 0= _FR-ASSERT T-RAN @ 0= _FR-ASSERT",
         "9050 T-AT 0 T-SERVE T-CALLS @ 0= _FR-ASSERT RFSH-DEADLINE 5000 = _FR-ASSERT",
-        "9100 T-AT -1 T-SERVE T-CALLS @ 1 = _FR-ASSERT",
-    ]), 4)
+        "9100 T-AT -1 T-SERVE T-CALLS @ 1 = _FR-ASSERT T-RAN @ _FR-ASSERT",
+    ]), 6)
 
 
 def test_a_check_that_could_not_compare_is_skipped_and_waits_an_interval():
     _passed(_run([
         "0 T-AT ' T-CHECK 0 RFSH-CHECK! 0 T-COMPARED ! -1 T-DIFFERS !",
-        "5000 T-AT -1 T-SERVE",
+        "5000 T-AT -1 T-SERVE T-RAN @ _FR-ASSERT",
         "RFSH-SKIPPED @ 1 = _FR-ASSERT RFSH-CHECKS @ 0= _FR-ASSERT",
         "RFSH-MISSED @ 0= _FR-ASSERT CHK-SAFE? 0= _FR-ASSERT",
         "RFSH-DEADLINE 10000 = _FR-ASSERT",
-    ]), 5)
+    ]), 6)
 
 
 def test_a_difference_is_a_missed_change_that_turns_safe_mode_on():

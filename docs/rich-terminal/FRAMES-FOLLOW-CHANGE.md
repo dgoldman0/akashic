@@ -878,9 +878,13 @@ files, which differ between commits. See the
 
 **When.** In normal mode, once input has been quiet for a second, and at
 least once every five seconds while a rich screen is shown (decision 7), at
-a moment when no paint is pending. It draws nothing (decision 14): every
-draw sends a frame, since the wire forbids an empty DELTA, so a refresh
-that drew would send one each time, even when it found nothing.
+a moment when no paint is pending. It draws nothing (decision 14): a draw
+that changed nothing still sends a frame in the ordinary case, a
+one-operation revision fence, since the wire forbids an empty DELTA, so a
+refresh that drew would send one each time, even when it found nothing. A check
+takes a while, and input that came during it is bound to the frame on
+screen: the owner reads the terminal again after a check, so that input
+reaches the application before anything later in the pass draws.
 
 **What it does.** It captures every visible document in full, as the full
 path does, into the snapshot adapter's spare bank, and compares the capture
