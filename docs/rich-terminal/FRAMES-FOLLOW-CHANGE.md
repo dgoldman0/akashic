@@ -1027,8 +1027,8 @@ its capture (decision 14).
 ### Slices
 
 Laid out on 2026-10-28, once the snapshot, the producer and the shell had
-been read for this part. Their order is decision 15, still open; 9a.1 comes
-first in either order.
+been read for this part, in the order decision 15 chose: one record of the
+frame before the change driver.
 
 - **9a.1. Change detection.** Each snapshot records, for each root, what
   its capture read: the newest revision among the elements it reads, its
@@ -1055,6 +1055,9 @@ first in either order.
   the producer's lanes gain a word for one root, which the whole-screen
   build calls in order, so both drivers share it. The build's output stays
   the same to the byte.
+- **9b. One record of the frame.** Desk's chrome comes from the shell model
+  through the same projection, as one candidate. The shell's second
+  candidate, its work space and its frozen banks go.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
@@ -1066,9 +1069,6 @@ first in either order.
 - **9a.4. RUHA's banks go.** The full driver captures into scratch too,
   sized to one build. The full refresh lowers what it captures and compares
   the items with those on screen.
-- **9b. One record of the frame.** Desk's chrome comes from the shell model
-  through the same projection, as one candidate. The shell's second
-  candidate, its work space and its frozen banks go.
 - **9c. The rest of the DELTA.** The other changes the terminal accepts in
   a DELTA go through the change driver as well, such as controls that come
   or go within what a DELTA may carry. The whole-screen comparison remains
@@ -1299,17 +1299,15 @@ Taken on 2026-10-27:
     shadow check covers in tests. Of decision 3, the refresh keeps the full
     driver's capture alone.
 
-Open on 2026-10-28:
+Taken on 2026-10-28:
 
-15. **The order of part 9's slices.** In Desk the frame on the wire is the
-    shell's batch, while the producer's bank is the record that clicks on
-    an application's controls, and the next DELTA, read. A change driver
-    built before 9b must write both records and send its changes in the
-    shell's identities; 9b then leaves one record, and that half of the
-    driver goes. Built after 9b, the driver writes one record. 9b also
-    removes the second admission, the second glyph planning and the second
-    copy and comparison of every item, an estimated 2 to 3 million of a
-    typed letter's 9.63 million steps, on STARTs as well as DELTAs. The
-    choice is between the order listed, which keeps 9a's slices together,
-    and 9a.1, 9a.2, 9b, 9a.3, 9a.4, 9c, which is recommended. 9a.1 and
-    9a.2 come first either way.
+15. **The order of part 9's slices.** One record of the frame comes before
+    the change driver: 9a.1, 9a.2, 9b, 9a.3, 9a.4, 9c. In Desk the frame on
+    the wire is the shell's batch, while the producer's bank is the record
+    that clicks on an application's controls, and the next DELTA, read. A
+    change driver built before 9b would have had to write both records and
+    send its changes in the shell's identities, and 9b would then have
+    removed that half of it. 9b also removes the second admission, the
+    second glyph planning and the second copy and comparison of every item,
+    an estimated 2 to 3 million of a typed letter's 9.63 million steps, on
+    STARTs as well as DELTAs.
