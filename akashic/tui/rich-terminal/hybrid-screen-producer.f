@@ -8130,8 +8130,56 @@ VARIABLE _RTHP-SG-W-STATUS
 \ built, with the candidate's claims, which GLYPH-DRAW then records.  A
 \ plan the banks hold already is kept as a complete build leaves it.  In
 \ safe mode (check-mode.f) every draw's plan is built whole.
+\ A document's roots may lie beneath its own overlay (RUHA-LAYERS!) only
+\ while that overlay is in the candidate, with a claim over all its cells,
+\ since the overlay is what shows there.  A family refused after the roots
+\ beneath it were admitted, for space or by the terminal, would leave them
+\ claiming cells where CELL shows the overlay, so such a draw cannot be
+\ shown rich.
+VARIABLE _RTHP-LC-P VARIABLE _RTHP-LC-DOC VARIABLE _RTHP-LC-CLAIM
+VARIABLE _RTHP-LC-MET VARIABLE _RTHP-LC-HELD
+VARIABLE _RTHP-LC-R0 VARIABLE _RTHP-LC-C0 VARIABLE _RTHP-LC-R1 VARIABLE _RTHP-LC-C1
+: _RTHP-LC-AREA!  ( row col height width -- )
+    2 PICK + _RTHP-LC-C1 ! 2 PICK + _RTHP-LC-R1 !
+    _RTHP-LC-C0 ! _RTHP-LC-R0 ! ;
+: _RTHP-LC-MEETS?  ( claim -- flag )
+    DUP RUCL-CLAIM-ROW0@ _RTHP-LC-R1 @ <
+    OVER RUCL-CLAIM-ROW1@ _RTHP-LC-R0 @ > AND
+    OVER RUCL-CLAIM-COL0@ _RTHP-LC-C1 @ < AND
+    SWAP RUCL-CLAIM-COL1@ _RTHP-LC-C0 @ > AND ;
+: _RTHP-LC-HOLDS?  ( claim -- flag )
+    DUP RUCL-CLAIM-ROW0@ _RTHP-LC-R0 @ > 0=
+    OVER RUCL-CLAIM-ROW1@ _RTHP-LC-R1 @ < 0= AND
+    OVER RUCL-CLAIM-COL0@ _RTHP-LC-C0 @ > 0= AND
+    SWAP RUCL-CLAIM-COL1@ _RTHP-LC-C1 @ < 0= AND ;
+: _RTHP-LC-DOCUMENT?  ( -- flag )
+    _RTHP-LC-DOC @ RUHA-DOCUMENT-OVERLAY@
+    DUP 0> 2 PICK 0> AND 0= IF 2DROP 2DROP -1 EXIT THEN
+    _RTHP-LC-AREA! 0 _RTHP-LC-MET ! 0 _RTHP-LC-HELD !
+    _RTHP-LC-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE / 0 ?DO
+        _RTHP-LC-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RTHP-LC-CLAIM !
+        _RTHP-LC-CLAIM @ RUCL-CLAIM-ATTACHMENT@
+            _RTHP-LC-DOC @ RUHA-DOCUMENT-TOKEN@ = IF
+            _RTHP-LC-CLAIM @ RUCL-CLAIM-SOURCE@ _RTHP-OVERLAY-SOURCE? IF
+                _RTHP-LC-CLAIM @ _RTHP-LC-HOLDS? IF -1 _RTHP-LC-HELD ! THEN
+            ELSE
+                _RTHP-LC-CLAIM @ _RTHP-LC-MEETS? IF -1 _RTHP-LC-MET ! THEN
+            THEN
+        THEN
+    LOOP
+    _RTHP-LC-MET @ 0= _RTHP-LC-HELD @ OR ;
+: _RTHP-LAYERS-COVERED?  ( producer -- flag )
+    _RTHP-LC-P !
+    _RTHP-LC-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I _RTHP-LC-P @ _RTHP-DOCUMENT-AT _RTHP-LC-DOC !
+        _RTHP-LC-DOCUMENT? 0= IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
 : _RTHP-BUILD-GLYPHS?  ( producer -- flag )
     DUP _RTHP-OMITTED-DISJOINT? 0= IF
+        DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
+    THEN
+    DUP _RTHP-LAYERS-COVERED? 0= IF
         DROP RGRP-S-UNREPRESENTABLE _RTHP-W-STATUS ! 0 EXIT
     THEN
     CHK-SAFE? IF 0 ELSE DUP _RTHP-GLYPHS-HELD? THEN IF
@@ -9222,6 +9270,13 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
         2DROP RTHP-WHY-DAMAGE _RTHP-W-WHY ! RTE-S-UNAVAILABLE 0
     THEN ;
 
+\ The layers the terminal can show above a document's roots: a prompt's
+\ field with fields, a dialog with dialogs (RUHA-LAYERS!).
+: _RTHP-RUHA-LAYERS  ( producer -- flags )
+    _RTHP.LIMITS RTE-LIMITS-FEATURES@
+    DUP RTE-F-FIELDS AND IF RUHA-LAYER-FIELDS ELSE 0 THEN
+    SWAP RTE-F-DIALOGS AND IF RUHA-LAYER-DIALOGS OR THEN ;
+
 : _RTHP-BUILD-CANDIDATE  ( producer -- rte-status built? )
     _RTPROF-PH-OTHER _RTPROF-MARK
     _RTHP-W-P !
@@ -9229,6 +9284,8 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     SCR-DRAW-GENERATION@ DUP 0= IF
         DROP RTE-S-WOULD-BLOCK 0 EXIT
     THEN _RTHP-W-DRAW !
+    _RTHP-W-P @ _RTHP-RUHA-LAYERS _RTHP-W-P @ _RTHP.ADAPTER @ RUHA-LAYERS!
+        RUHA-S-OK <> IF RTE-S-INVALID 0 EXIT THEN
     _RTPROF-PH-UIDL-AGGREGATE _RTPROF-MARK
     _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT-FOR@
     _RTPROF-PH-OTHER _RTPROF-MARK

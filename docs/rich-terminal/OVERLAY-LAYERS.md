@@ -76,6 +76,21 @@ candidate's one region the overlay paints after the roots by its depth, 255
 for a prompt and a dialog's buttons and 254 for the DIALOG, and instrument
 regions lie below that region.
 
+Roots stay beneath an overlay only where the overlay is shown above them.
+A renderer shows a prompt's field only when the terminal negotiated fields,
+and a dialog only with dialogs, so the producer tells the capture from the
+terminal's features which of the two it can show (`RUHA-LAYERS!`). Where it
+cannot, the overlay's paint falls its document back whole, as any other
+foreground paint does, since no claim would cover the overlay's cells. A
+document that keeps its roots beneath its overlay names the overlay's cells
+in its directory entry (`RUHA-DOCUMENT-OVERLAY@`). Before it plans residual
+glyphs, the producer checks each such document: when one of its roots meets
+those cells, the candidate must hold the overlay's own claim over all of
+them. A family refused after the roots beneath it were admitted, for space
+or because the terminal refused it, fails the check, and the draw goes out
+as CELL, since those roots would otherwise claim cells where CELL shows the
+overlay.
+
 ## Step 2: Desk's overlay boxes
 
 A tile beneath an overlay pane would keep its rich content when the only
@@ -105,6 +120,15 @@ document's prompt does not. The field adapter keeps a status field under a
 prompt rich; the field snapshot no longer has a clipped capture to test,
 and the adapter's structure test checks that the capture word clips
 nothing.
+
+The field adapter keeps the document's roots beneath its prompt only while
+the capture may layer fields, names the prompt's cells in the directory
+then, and falls the document back whole otherwise. The dialog producer's
+tests find the roots beneath a dialog covered while the dialog is in the
+candidate and uncovered once its lane refuses it for space; a refused
+dialog with no root beneath it, or no overlay named in the directory, leaves
+the draw rich. UIDL-TUI's dialog tests check which kind of overlay
+`UTUI-OVERLAY-KIND@` reports.
 
 The physical acceptance observer reads the layers the same way. A root in a
 visible modal region may lie over the roots of the regions beneath it, and

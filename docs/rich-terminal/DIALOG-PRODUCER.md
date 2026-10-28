@@ -77,7 +77,10 @@ would be painted text beneath the dialog's claim. Local capacity removes the lan
 control, text and claim prefixes. An opaque provider refusal is retried
 without dialogs after statics and before fields, and a lane refused once
 stays refused through that candidate's later retries. Removing the fields
-removes the dialog lane after them, which is then built again.
+removes the dialog lane after them, which is then built again. A lane
+removed while roots of a document lie beneath that document's dialog
+widget leaves them claiming cells where CELL shows the dialog, so the draw
+goes out as CELL (OVERLAY-LAYERS.md).
 
 ## Input, packing and DELTA
 

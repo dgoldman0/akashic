@@ -53,7 +53,7 @@ class DialogHarness(StatusHarness):
                                       "_RTHP-TG-DIALOG-TARGETS?", "RTHP-CONTROL-TARGET@",
                                       "_RTHP-D-CONTROL-COMPATIBLE?", "_RTHP-U-CLONE?",
                                       "_RTHP-TARGET-BANK-ENTRIES?", "RTE-CONTROL-PLAN-VALID?",
-                                      "_RTHP-W-TOTAL"))
+                                      "_RTHP-W-TOTAL", "_RTHP-LAYERS-COVERED?"))
 
     def setup(self, *, dialog_native=1024, row=0, col=1, document=(0, 0, 8, 32), **kwargs):
         self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
@@ -285,6 +285,48 @@ def test_a_dialog_over_anything_else_leaves_the_draw_cell(h, claim):
     assert h.get("CLAIMS-USED") == 80
     assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"), 80) == prefix
     assert h.get("DIALOG-REFUSED") == MASK64
+
+
+def _beneath_the_dialog(h, *, overlay=(0, 1, 8, 30), root=(3, 2, 4, 22)):
+    """A root of the dialog's own document at depth 3, and the directory's
+    word that the document's roots may lie beneath its overlay's cells."""
+
+    for name, n in zip(("ROW", "COL", "HEIGHT", "WIDTH"), overlay):
+        h.runtime.memory.write64(h.dir + h.offset("_RUHA-D.OV-" + name), n)
+    prefix = struct.pack("<10Q", 11, 9, 1, 4, 23, 3, *root)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"), prefix)
+    h.field(h.producer, "_RTHP.CLAIMS-USED", 80)
+
+
+def test_roots_beneath_a_dialog_are_covered_while_the_dialog_is_in_the_candidate(h):
+    h.setup()
+    _beneath_the_dialog(h)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (0,)
+    assert h.get("DIALOG-COUNT") == 1
+    assert h.results("_RTHP-LAYERS-COVERED?", h.producer) == (MASK64,)
+
+
+def test_roots_beneath_a_refused_dialog_cannot_be_shown_rich(h):
+    # The lane refuses the dialog for space after the root beneath it was
+    # admitted, so the root would claim cells where CELL shows the dialog.
+    h.setup()
+    _beneath_the_dialog(h)
+    h.field(h.producer, "_RTHP.SOURCE-TEXT-U", 40)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (0,)
+    assert h.get("DIALOG-REFUSED") == MASK64
+    assert h.results("_RTHP-LAYERS-COVERED?", h.producer) == (0,)
+
+
+@pytest.mark.parametrize("kwargs", (
+    {"overlay": (0, 0, 0, 0)},          # no overlay the roots may lie beneath
+    {"root": (0, 0, 0, 0)},             # no root beneath it
+))
+def test_a_refused_dialog_with_nothing_beneath_it_leaves_the_draw_rich(h, kwargs):
+    h.setup()
+    _beneath_the_dialog(h, **kwargs)
+    h.field(h.producer, "_RTHP.SOURCE-TEXT-U", 40)
+    assert h.results("_RTHP-W-BUILD-OPTIONAL-DIALOGS") == (0,)
+    assert h.results("_RTHP-LAYERS-COVERED?", h.producer) == (MASK64,)
 
 
 def test_local_dialog_capacity_rolls_back_only_the_owned_suffix(h):

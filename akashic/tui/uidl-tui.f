@@ -5528,6 +5528,21 @@ VARIABLE _UTUI-MC-OBS-WDG-STATUS
     THEN
     UTUI-OVERLAY-FIELD-ROOT@ ;
 
+0 CONSTANT UTUI-OVERLAY-NONE
+1 CONSTANT UTUI-OVERLAY-FIELD
+2 CONSTANT UTUI-OVERLAY-DIALOG
+
+\ UTUI-OVERLAY-KIND@ ( -- kind )
+\   Which overlay UTUI-OVERLAY-ROOT@ gives: UTUI-OVERLAY-DIALOG for the
+\   dialog the document shows, UTUI-OVERLAY-FIELD for its overlay field, or
+\   UTUI-OVERLAY-NONE.  A renderer can show the two only with different
+\   features.
+: UTUI-OVERLAY-KIND@  ( -- kind )
+    DLG-SHOWN ?DUP IF
+        DLG-ROOT * NIP NIP IF UTUI-OVERLAY-DIALOG EXIT THEN
+    THEN
+    _UTUI-OVERLAY-FIELD@ IF UTUI-OVERLAY-FIELD ELSE UTUI-OVERLAY-NONE THEN ;
+
 \ UTUI-WIDGET-SET ( wptr elem -- )
 \   Attach a manually created widget to a UIDL element.
 \   The widget is drawn automatically by UTUI-PAINT when it

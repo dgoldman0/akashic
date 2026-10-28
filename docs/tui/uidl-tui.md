@@ -815,6 +815,7 @@ its semantics everywhere the overlay does not reach.
 |------|-------|---------|
 | `UTUI-OVERLAY-FIELD-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay field, if it has one |
 | `UTUI-OVERLAY-ROOT@` | `( -- row col height width found? )` | The screen cells of the document's overlay: the dialog it shows, as its last paint laid it out, else its overlay field |
+| `UTUI-OVERLAY-KIND@` | `( -- kind )` | Which overlay `UTUI-OVERLAY-ROOT@` gives: `UTUI-OVERLAY-DIALOG`, `UTUI-OVERLAY-FIELD`, or `UTUI-OVERLAY-NONE` |
 
 ### How Overlay Paint Works
 

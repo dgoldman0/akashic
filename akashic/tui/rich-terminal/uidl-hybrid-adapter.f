@@ -67,8 +67,9 @@ REQUIRE ../check-mode.f
 : _RUHA-R.HEIGHT   ( record -- a )  72 + ;
 : _RUHA-R.WIDTH    ( record -- a )  80 + ;
 : _RUHA-R.FLAGS    ( record -- a )  88 + ;
-\ The screen cells of the overlay field the document's last draw painted,
-\ a prompt, or all zero: its own foreground paint.
+\ The screen cells of the overlay the document's last draw painted, the
+\ dialog it shows or its prompt's field, or all zero: its own foreground
+\ paint.  Its kind is in FLAGS.
 : _RUHA-R.OV-ROW     ( record -- a )  96 + ;
 : _RUHA-R.OV-COL     ( record -- a ) 104 + ;
 : _RUHA-R.OV-HEIGHT  ( record -- a ) 112 + ;
@@ -78,7 +79,9 @@ REQUIRE ../check-mode.f
 2 CONSTANT _RUHA-RF-EMPTY
 4 CONSTANT _RUHA-RF-STAGED
 8 CONSTANT _RUHA-RF-STAGED-EMPTY
-15 CONSTANT _RUHA-RF-MASK
+16 CONSTANT _RUHA-RF-OV-FIELD
+32 CONSTANT _RUHA-RF-OV-DIALOG
+63 CONSTANT _RUHA-RF-MASK
 
 128 CONSTANT RUHA-RECORD-SIZE
 
@@ -121,8 +124,14 @@ REQUIRE ../check-mode.f
 : _RUHA-D.DIALOG-DESCRIPTOR-U   ( entry -- a ) 248 + ;
 : _RUHA-D.DIALOG-NATIVE-OFF     ( entry -- a ) 256 + ;
 : _RUHA-D.DIALOG-NATIVE-U       ( entry -- a ) 264 + ;
+\ The cells of the document's own overlay when its roots may lie beneath it
+\ (RUHA-LAYERS!), else all zero.
+: _RUHA-D.OV-ROW      ( entry -- a ) 272 + ;
+: _RUHA-D.OV-COL      ( entry -- a ) 280 + ;
+: _RUHA-D.OV-HEIGHT   ( entry -- a ) 288 + ;
+: _RUHA-D.OV-WIDTH    ( entry -- a ) 296 + ;
 
-272 CONSTANT RUHA-DOCUMENT-SIZE
+304 CONSTANT RUHA-DOCUMENT-SIZE
 : RUHA-DOCUMENT-BYTES ( -- bytes ) RUHA-DOCUMENT-SIZE ;
 : RUHA-DOCUMENT-OWNER-ID@ ( entry -- owner-id ) _RUHA-D.OWNER-ID @ ;
 : RUHA-DOCUMENT-OWNER-GENERATION@ ( entry -- generation ) _RUHA-D.OWNER-GEN @ ;
@@ -132,6 +141,12 @@ REQUIRE ../check-mode.f
 : RUHA-DOCUMENT-COL@ ( entry -- u ) _RUHA-D.COL @ ;
 : RUHA-DOCUMENT-HEIGHT@ ( entry -- u ) _RUHA-D.HEIGHT @ ;
 : RUHA-DOCUMENT-WIDTH@ ( entry -- u ) _RUHA-D.WIDTH @ ;
+\ RUHA-DOCUMENT-OVERLAY@ ( entry -- row col height width )
+\   The cells of the document's own overlay, a dialog or a prompt's field,
+\   when its roots may lie beneath it; a zero height and width otherwise.
+: RUHA-DOCUMENT-OVERLAY@ ( entry -- row col height width )
+    >R R@ _RUHA-D.OV-ROW @ R@ _RUHA-D.OV-COL @
+    R@ _RUHA-D.OV-HEIGHT @ R> _RUHA-D.OV-WIDTH @ ;
 : RUHA-DOCUMENT-RECORD-OFFSET@ ( entry -- u ) _RUHA-D.RECORD-OFF @ ;
 : RUHA-DOCUMENT-RECORD-BYTES@ ( entry -- u ) _RUHA-D.RECORD-U @ ;
 : RUHA-DOCUMENT-TEXT-OFFSET@ ( entry -- u ) _RUHA-D.TEXT-OFF @ ;
@@ -355,7 +370,11 @@ _RUHA-O.DIALOG 48 + CONSTANT _RUHA-O.SNAPSHOT-A
 _RUHA-O.SNAPSHOT-A RUHA-SNAPSHOT-SIZE + CONSTANT _RUHA-O.SNAPSHOT-B
 : _RUHA-A.SNAPSHOT-B     ( adapter -- a ) _RUHA-O.SNAPSHOT-B + ;
 
-_RUHA-O.SNAPSHOT-B RUHA-SNAPSHOT-SIZE + CONSTANT RUHA-SIZE
+_RUHA-O.SNAPSHOT-B RUHA-SNAPSHOT-SIZE + CONSTANT _RUHA-O.LAYERS
+\ Which layers a document's roots may lie beneath (RUHA-LAYERS!).
+: _RUHA-A.LAYERS         ( adapter -- a ) _RUHA-O.LAYERS + ;
+
+_RUHA-O.LAYERS 8 + CONSTANT RUHA-SIZE
 
 : RUHA-BYTES  ( -- bytes )  RUHA-SIZE ;
 
@@ -1286,6 +1305,27 @@ VARIABLE _RUHA-IT-ADAPTER
 : _RUHA-RECORD-EMPTY?  ( record -- flag )
     _RUHA-R.FLAGS @ _RUHA-RF-EMPTY AND 0<> ;
 
+\ Layers a document's roots may lie beneath.  A renderer shows a prompt's
+\ field only with fields, and a dialog only with dialogs; the producer
+\ says which it can show.
+1 CONSTANT RUHA-LAYER-FIELDS
+2 CONSTANT RUHA-LAYER-DIALOGS
+3 CONSTANT _RUHA-LAYER-MASK
+
+\ RUHA-LAYERS! ( flags adapter -- status )
+\   Let a document keep its roots beneath its own overlay only where FLAGS
+\   says the renderer can show that overlay above them; anywhere else
+\   foreground paint over a document falls the document back whole.  A
+\   change closes the borrow gate, so no snapshot captured under the other
+\   setting is handed out again.  The adapter is proved valid when the
+\   setting changes; the producer passes its own on every build.
+: RUHA-LAYERS!  ( flags adapter -- status )
+    OVER _RUHA-LAYER-MASK INVERT AND IF 2DROP RUHA-S-INVALID EXIT THEN
+    DUP 0= IF 2DROP RUHA-S-INVALID EXIT THEN
+    2DUP _RUHA-A.LAYERS @ = IF 2DROP RUHA-S-OK EXIT THEN
+    DUP RUHA-VALID? 0= IF 2DROP RUHA-S-INVALID EXIT THEN
+    TUCK _RUHA-A.LAYERS ! _RUHA-INVALIDATE RUHA-S-OK ;
+
 \ A record's document is the current UCTX, and RUHA's banks lie apart from
 \ its storage.  The banks were proved apart from it when the document
 \ attached; the document's storage that came later comes from allocators,
@@ -1430,6 +1470,14 @@ VARIABLE _RUHA-P-RECORD
     _RUHA-P-RECORD @ _RUHA-R.OV-HEIGHT !
     _RUHA-P-RECORD @ _RUHA-R.OV-COL !
     _RUHA-P-RECORD @ _RUHA-R.OV-ROW !
+    _RUHA-P-RECORD @ _RUHA-R.FLAGS @
+        _RUHA-RF-OV-FIELD _RUHA-RF-OV-DIALOG OR INVERT AND
+    UTUI-OVERLAY-KIND@ DUP UTUI-OVERLAY-FIELD = IF
+        DROP _RUHA-RF-OV-FIELD OR
+    ELSE
+        UTUI-OVERLAY-DIALOG = IF _RUHA-RF-OV-DIALOG OR THEN
+    THEN
+    _RUHA-P-RECORD @ _RUHA-R.FLAGS !
     RUHA-S-OK ;
 
 VARIABLE _RUHA-Q-TOKEN
@@ -2353,6 +2401,100 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         SWAP _RUHA-R.FLAGS !
     LOOP ;
 
+\ The document has an overlay, and it lies inside the document, where the
+\ overlay's own lane places it.
+: _RUHA-OWN-INSIDE?  ( record -- flag )
+    >R
+    R@ _RUHA-R.OV-HEIGHT @ 0> R@ _RUHA-R.OV-WIDTH @ 0> AND
+    R@ _RUHA-R.OV-ROW @ R@ _RUHA-R.ROW @ < 0= AND
+    R@ _RUHA-R.OV-COL @ R@ _RUHA-R.COL @ < 0= AND
+    R@ _RUHA-R.OV-ROW @ R@ _RUHA-R.OV-HEIGHT @ +
+        R@ _RUHA-R.ROW @ R@ _RUHA-R.HEIGHT @ + > 0= AND
+    R@ _RUHA-R.OV-COL @ R@ _RUHA-R.OV-WIDTH @ +
+        R> DUP _RUHA-R.COL @ SWAP _RUHA-R.WIDTH @ + > 0= AND ;
+
+\ _RUHA-OWN-LAYER? ( record adapter -- flag )
+\   The document's roots may lie beneath its own overlay: it has one inside
+\   it, and the renderer can show that kind of overlay above them.
+: _RUHA-OWN-LAYER?  ( record adapter -- flag )
+    _RUHA-A.LAYERS @ SWAP
+    DUP _RUHA-OWN-INSIDE? 0= IF 2DROP 0 EXIT THEN
+    _RUHA-R.FLAGS @ DUP _RUHA-RF-OV-FIELD AND IF
+        DROP RUHA-LAYER-FIELDS AND 0<> EXIT
+    THEN
+    _RUHA-RF-OV-DIALOG AND IF RUHA-LAYER-DIALOGS AND 0<> EXIT THEN
+    DROP 0 ;
+
+\ _RUHA-LAYERED? ( record adapter -- flag )
+\   Every cell of the document that foreground paint covers lies under a
+\   layer the producer puts above the document: its own overlay, when
+\   _RUHA-OWN-LAYER? allows it.  The document's rows are taken in bands
+\   between the edges of those layers, and each band in the spans they
+\   leave, which must hold no foreground paint.
+VARIABLE _RUHA-LY-R VARIABLE _RUHA-LY-OWN VARIABLE _RUHA-LY-XT
+VARIABLE _RUHA-LY-ROW VARIABLE _RUHA-LY-BOTTOM VARIABLE _RUHA-LY-BAND-END
+VARIABLE _RUHA-LY-COL VARIABLE _RUHA-LY-END VARIABLE _RUHA-LY-TO
+VARIABLE _RUHA-LY-NEXT VARIABLE _RUHA-LY-A0 VARIABLE _RUHA-LY-A1
+
+\ XT ( row col height width -- ) for each layer above the document.
+: _RUHA-LY-EACH  ( xt -- )
+    _RUHA-LY-XT !
+    _RUHA-LY-OWN @ IF
+        _RUHA-LY-R @ _RUHA-R.OV-ROW @ _RUHA-LY-R @ _RUHA-R.OV-COL @
+        _RUHA-LY-R @ _RUHA-R.OV-HEIGHT @ _RUHA-LY-R @ _RUHA-R.OV-WIDTH @
+        _RUHA-LY-XT @ EXECUTE
+    THEN ;
+
+\ A layer's top or bottom edge inside the band from ROW ends the band.
+: _RUHA-LY-EDGE  ( row -- )
+    DUP _RUHA-LY-ROW @ > OVER _RUHA-LY-BAND-END @ < AND IF
+        _RUHA-LY-BAND-END !
+    ELSE DROP THEN ;
+: _RUHA-LY-EDGES  ( row col height width -- )
+    DROP NIP OVER + _RUHA-LY-EDGE _RUHA-LY-EDGE ;
+
+\ In the band, a layer covering COL extends TO, and one starting after it
+\ bounds NEXT.
+: _RUHA-LY-SPAN  ( row col height width -- )
+    ROT DUP _RUHA-LY-A0 ! + _RUHA-LY-A1 !
+    OVER _RUHA-LY-ROW @ > IF 2DROP EXIT THEN
+    + _RUHA-LY-ROW @ > 0= IF EXIT THEN
+    _RUHA-LY-A1 @ _RUHA-LY-A0 @ > 0= IF EXIT THEN
+    _RUHA-LY-A0 @ _RUHA-LY-COL @ > IF
+        _RUHA-LY-A0 @ _RUHA-LY-NEXT @ MIN _RUHA-LY-NEXT ! EXIT
+    THEN
+    _RUHA-LY-A1 @ _RUHA-LY-COL @ > IF
+        _RUHA-LY-A1 @ _RUHA-LY-TO @ MAX _RUHA-LY-TO !
+    THEN ;
+
+: _RUHA-LAYERED?  ( record adapter -- flag )
+    OVER _RUHA-LY-R !
+    _RUHA-OWN-LAYER? _RUHA-LY-OWN !
+    _RUHA-LY-OWN @ 0= IF 0 EXIT THEN
+    _RUHA-LY-R @ _RUHA-R.ROW @ _RUHA-LY-ROW !
+    _RUHA-LY-R @ _RUHA-R.ROW @ _RUHA-LY-R @ _RUHA-R.HEIGHT @ + _RUHA-LY-BOTTOM !
+    BEGIN _RUHA-LY-ROW @ _RUHA-LY-BOTTOM @ < WHILE
+        _RUHA-LY-BOTTOM @ _RUHA-LY-BAND-END !
+        ['] _RUHA-LY-EDGES _RUHA-LY-EACH
+        _RUHA-LY-R @ _RUHA-R.COL @ _RUHA-LY-COL !
+        _RUHA-LY-R @ _RUHA-R.COL @ _RUHA-LY-R @ _RUHA-R.WIDTH @ + _RUHA-LY-END !
+        BEGIN _RUHA-LY-COL @ _RUHA-LY-END @ < WHILE
+            _RUHA-LY-COL @ _RUHA-LY-TO ! _RUHA-LY-END @ _RUHA-LY-NEXT !
+            ['] _RUHA-LY-SPAN _RUHA-LY-EACH
+            _RUHA-LY-TO @ _RUHA-LY-COL @ > IF
+                _RUHA-LY-TO @ _RUHA-LY-COL !
+            ELSE
+                _RUHA-LY-ROW @ _RUHA-LY-COL @
+                _RUHA-LY-BAND-END @ _RUHA-LY-ROW @ -
+                _RUHA-LY-NEXT @ _RUHA-LY-COL @ -
+                SCR-OCCLUSION-RECT? 0= IF DROP 0 EXIT THEN
+                IF 0 EXIT THEN
+                _RUHA-LY-NEXT @ _RUHA-LY-COL !
+            THEN
+        REPEAT
+        _RUHA-LY-BAND-END @ _RUHA-LY-ROW !
+    REPEAT -1 ;
+
 : _RUHA-B-APPEND-DOCUMENT
     ( menu-epoch topology-epoch record-u text-u descriptor-u native-u dgraph-descriptor-u dgraph-native-u sfield-descriptor-u sfield-native-u field-descriptor-u field-native-u dialog-descriptor-u dialog-native-u -- status )
     _RUHA-B-APPEND-DIALOG-NATIVE-U !
@@ -2518,6 +2660,12 @@ VARIABLE _RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH
         _RUHA-D.MENU-TOPOLOGY-EPOCH !
     _RUHA-B-APPEND-OWNER-ID @ _RUHA-B-ENTRY @ _RUHA-D.OWNER-ID !
     _RUHA-B-APPEND-OWNER-GEN @ _RUHA-B-ENTRY @ _RUHA-D.OWNER-GEN !
+    _RUHA-B-RECORD @ _RUHA-B-ADAPTER @ _RUHA-OWN-LAYER? IF
+        _RUHA-B-RECORD @ _RUHA-R.OV-ROW @ _RUHA-B-ENTRY @ _RUHA-D.OV-ROW !
+        _RUHA-B-RECORD @ _RUHA-R.OV-COL @ _RUHA-B-ENTRY @ _RUHA-D.OV-COL !
+        _RUHA-B-RECORD @ _RUHA-R.OV-HEIGHT @ _RUHA-B-ENTRY @ _RUHA-D.OV-HEIGHT !
+        _RUHA-B-RECORD @ _RUHA-R.OV-WIDTH @ _RUHA-B-ENTRY @ _RUHA-D.OV-WIDTH !
+    THEN
     _RUHA-B-NEXT @ _RUHA-B-DIRECTORY-U !
     _RUHA-B-COUNT @ _RUHA-B-RECORDS-U !
     _RUHA-B-CAPTURE-TEXT-U @ _RUHA-B-TEXT-U !
@@ -3026,41 +3174,6 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
         DROP 0 _RUHA-B-RECORD @ _RUHA-B-STAGE RUHA-S-OK
     THEN ;
 
-\ _RUHA-OVERLAY-ONLY? ( record -- flag )
-\   All the foreground paint over the document is its own overlay's: the
-\   overlay lies inside the document, and no foreground paint meets the
-\   document above, below, left or right of it.
-VARIABLE _RUHA-OV-R
-: _RUHA-OV-BAND-CLEAR?  ( row col height width -- flag )
-    DUP 0> 2 PICK 0> AND 0= IF 2DROP 2DROP -1 EXIT THEN
-    SCR-OCCLUSION-RECT? IF 0= ELSE DROP 0 THEN ;
-: _RUHA-OV-BOTTOM  ( record -- row )  DUP _RUHA-R.OV-ROW @ SWAP _RUHA-R.OV-HEIGHT @ + ;
-: _RUHA-OV-RIGHT   ( record -- col )  DUP _RUHA-R.OV-COL @ SWAP _RUHA-R.OV-WIDTH @ + ;
-: _RUHA-DOC-BOTTOM ( record -- row )  DUP _RUHA-R.ROW @ SWAP _RUHA-R.HEIGHT @ + ;
-: _RUHA-DOC-RIGHT  ( record -- col )  DUP _RUHA-R.COL @ SWAP _RUHA-R.WIDTH @ + ;
-: _RUHA-OVERLAY-ONLY?  ( record -- flag )
-    _RUHA-OV-R !
-    _RUHA-OV-R @ _RUHA-R.OV-HEIGHT @ 0> _RUHA-OV-R @ _RUHA-R.OV-WIDTH @ 0> AND
-        0= IF 0 EXIT THEN
-    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-R.ROW @ <
-    _RUHA-OV-R @ _RUHA-R.OV-COL @ _RUHA-OV-R @ _RUHA-R.COL @ < OR
-    _RUHA-OV-R @ _RUHA-OV-BOTTOM _RUHA-OV-R @ _RUHA-DOC-BOTTOM > OR
-    _RUHA-OV-R @ _RUHA-OV-RIGHT _RUHA-OV-R @ _RUHA-DOC-RIGHT > OR IF 0 EXIT THEN
-    _RUHA-OV-R @ _RUHA-R.ROW @ _RUHA-OV-R @ _RUHA-R.COL @
-    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-R.ROW @ -
-    _RUHA-OV-R @ _RUHA-R.WIDTH @ _RUHA-OV-BAND-CLEAR? 0= IF 0 EXIT THEN
-    _RUHA-OV-R @ _RUHA-OV-BOTTOM _RUHA-OV-R @ _RUHA-R.COL @
-    _RUHA-OV-R @ _RUHA-DOC-BOTTOM _RUHA-OV-R @ _RUHA-OV-BOTTOM -
-    _RUHA-OV-R @ _RUHA-R.WIDTH @ _RUHA-OV-BAND-CLEAR? 0= IF 0 EXIT THEN
-    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-R.COL @
-    _RUHA-OV-R @ _RUHA-R.OV-HEIGHT @
-    _RUHA-OV-R @ _RUHA-R.OV-COL @ _RUHA-OV-R @ _RUHA-R.COL @ -
-        _RUHA-OV-BAND-CLEAR? 0= IF 0 EXIT THEN
-    _RUHA-OV-R @ _RUHA-R.OV-ROW @ _RUHA-OV-R @ _RUHA-OV-RIGHT
-    _RUHA-OV-R @ _RUHA-R.OV-HEIGHT @
-    _RUHA-OV-R @ _RUHA-DOC-RIGHT _RUHA-OV-R @ _RUHA-OV-RIGHT -
-        _RUHA-OV-BAND-CLEAR? ;
-
 \ While the shadow check's full capture runs, every visible document is
 \ captured live: none is reused, and none is passed over as known empty.
 VARIABLE _RUHA-B-FULL
@@ -3101,7 +3214,7 @@ VARIABLE _RUHA-B-FULL
         SCR-OCCLUSION-RECT? 0= IF DROP RUHA-S-INVALID EXIT THEN
     _RUHA-B-RECORD @ _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND
     IF
-        _RUHA-B-RECORD @ _RUHA-OVERLAY-ONLY? 0= IF
+        _RUHA-B-RECORD @ _RUHA-B-ADAPTER @ _RUHA-LAYERED? 0= IF
             _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
             0 0 0 0 0 0 0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT EXIT
         THEN
@@ -4022,7 +4135,7 @@ VARIABLE _RUHA-P-ORIGINAL
     2 PICK _RUHA-R.HEIGHT @ 3 PICK _RUHA-R.WIDTH @
         SCR-OCCLUSION-RECT? 0= IF 2DROP 0 EXIT THEN
     OVER _RUHA-R.SLOT @ AHS-OVERLAY? 0= AND IF
-        DUP _RUHA-OVERLAY-ONLY? 0= IF DROP 0 EXIT THEN
+        DUP _RUHA-P-ADAPTER @ _RUHA-LAYERED? 0= IF DROP 0 EXIT THEN
     THEN
     _RUHA-R.UCTX @ ;
 

@@ -59,6 +59,9 @@ their claims beneath its depth, and their later instrument, status and
 picture claims may meet it. Local capacity and provider quota
 fallback restore the exact control, text, and claim prefixes. A refused
 FIELD lane stays refused throughout that candidate's later family retries.
+A lane removed while roots of a document lie beneath that document's prompt
+leaves them claiming cells where CELL shows the prompt, so the draw goes
+out as CELL (OVERLAY-LAYERS.md).
 
 Packed acknowledgement banks own both the outer label and complete FDC1
 bytes. Packing and unchanged cloning rebase all pointers into their own

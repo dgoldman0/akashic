@@ -488,11 +488,15 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
 
 def test_abi10_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
     source = _source()
-    assert "272 CONSTANT RUHA-DOCUMENT-SIZE" in source
+    assert "304 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert _offset_for_snapshot_field(source, "_RUHA-D.OWNER-ID") == 224
     assert _offset_for_snapshot_field(source, "_RUHA-D.OWNER-GEN") == 232
+    # The cells of the document's own overlay, when its roots may lie
+    # beneath it, end the entry.
+    assert _offset_for_snapshot_field(source, "_RUHA-D.OV-ROW") == 272
+    assert _offset_for_snapshot_field(source, "_RUHA-D.OV-WIDTH") == 296
     assert "240 CONSTANT RUHA-SNAPSHOT-SIZE" in source
-    assert _constant(source, "RUHA-SIZE") == 1136
+    assert _constant(source, "RUHA-SIZE") == 1144
     assert "10 CONSTANT _RUHA-ABI" in source
     assert '0x3031485544495552 CONSTANT _RUHA-MAGIC' in source
     assert _offset_for_snapshot_field(
@@ -567,7 +571,7 @@ def test_abi10_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> Non
 def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
     source = _source()
     for required in (
-        "272 CONSTANT RUHA-DOCUMENT-SIZE",
+        "304 CONSTANT RUHA-DOCUMENT-SIZE",
         "RUHA-DOCUMENT-BYTES",
         "RUHA-DOCUMENT-TOKEN@",
         "RUHA-DOCUMENT-SLOT-ID@",
@@ -1311,7 +1315,7 @@ def test_final_writer_occlusion_falls_back_the_complete_document_atomically() ->
     # A document whose only foreground paint is its own overlay is captured
     # whole: the overlay lies in the layer above its roots, so none is
     # clipped away.
-    assert "_RUHA-OVERLAY-ONLY?" in hit_branch
+    assert "_RUHA-LAYERED?" in hit_branch
     assert "OCCLUDED" not in dispatch
     # Directory/totals comparison invalidates the first masked transition;
     # leaving this latch alone lets identical masked frames retain content
@@ -1407,6 +1411,10 @@ def test_projection_dirties_only_its_document_and_failure_keeps_retry_state() ->
     )
 
 
+# One directory entry's bytes, as the adapter's source declares them.
+_DOCUMENT_BYTES = _constant(_source(), "RUHA-DOCUMENT-SIZE")
+
+
 # The reuse shortcut, executed.  Only the real reuse word, the real append it
 # makes, and their source dependencies are compiled.  The prior slice's
 # validation and the staging bookkeeping are fixture seams, and the adapter's
@@ -1429,6 +1437,7 @@ def _reuse_definitions() -> dict[str, str]:
         "_RUHA-O.SFIELD": "368 CONSTANT _RUHA-O.SFIELD",
         "_RUHA-O.FIELD": "416 CONSTANT _RUHA-O.FIELD",
         "_RUHA-O.DIALOG": "464 CONSTANT _RUHA-O.DIALOG",
+        "_RUHA-O.LAYERS": "512 CONSTANT _RUHA-O.LAYERS",
         "UFLD-HEADER-SIZE": "224 CONSTANT UFLD-HEADER-SIZE",
         "UDLG-HEADER-SIZE": "160 CONSTANT UDLG-HEADER-SIZE",
         "UDLSN-DESCRIPTOR-SIZE": "64 CONSTANT UDLSN-DESCRIPTOR-SIZE",
@@ -1514,7 +1523,7 @@ def _reuse_fixture(harness: _ReuseHarness, native_bank: int) -> dict:
     """One collection-bearing document is already in this draw's aggregate;
     the next, unchanged document reuses 168 descriptor and 256 native bytes."""
 
-    adapter = harness.allocate(512)
+    adapter = harness.allocate(520)
     for bank, field in _BANK_FIELD.items():
         harness.runtime.memory.write64(adapter + harness.offset(field), harness.BANK)
     harness.runtime.memory.write64(adapter + harness.offset("_RUHA-A.SNAP-NATIVE-BANK-U"),
@@ -1547,7 +1556,7 @@ def _reuse_fixture(harness: _ReuseHarness, native_bank: int) -> dict:
     harness.set("_RUHA-B-GENERATION", 7)
     harness.set("_RUHA-B-DOCUMENTS", 1)
     harness.set("RS-STAGED", 0)
-    used = {"DIRECTORY": 272, "RECORDS": 0, "TEXT": 0, "DESCRIPTORS": 168,
+    used = {"DIRECTORY": _DOCUMENT_BYTES, "RECORDS": 0, "TEXT": 0, "DESCRIPTORS": 168,
             "NATIVE": 400, "DGRAPH-DESCRIPTORS": 0, "DGRAPH-NATIVE": 0,
             "SFIELD-DESCRIPTORS": 0, "SFIELD-NATIVE": 0,
             "FIELD-DESCRIPTORS": 0, "FIELD-NATIVE": 0,
@@ -1609,12 +1618,12 @@ def test_a_reused_slice_that_no_longer_fits_is_captured_afresh(reuse) -> None:
     assert reuse.results("_RUHA-B-REUSE?", 0) == (0, MASK64)
     assert reuse.get("_RUHA-B-DOCUMENTS") == 2
     assert reuse.get("_RUHA-B-NATIVE-U") == 656
-    assert reuse.get("_RUHA-B-DIRECTORY-U") == 544
+    assert reuse.get("_RUHA-B-DIRECTORY-U") == 2 * _DOCUMENT_BYTES
     assert reuse.get("RS-STAGED") == 1
     assert reuse.runtime.memory.read_bytes(fixture["banks"]["NATIVE"] + 400, 256) == (
         fixture["prior_native"]
     )
-    entry = fixture["banks"]["DIRECTORY"] + 272
+    entry = fixture["banks"]["DIRECTORY"] + _DOCUMENT_BYTES
     assert reuse.runtime.memory.read64(entry + reuse.offset("_RUHA-D.TOKEN")) == 11
     assert reuse.runtime.memory.read64(
         entry + reuse.offset("_RUHA-D.COLLECTION-NATIVE-OFF")) == 400
@@ -1650,7 +1659,7 @@ def test_field_family_reuse_copies_independent_slices_and_checks_capacity_first(
         reuse.set(f"_RUHA-B-REUSE-{family}-{field}-U", len(payload))
         reuse.set(f"_RUHA-B-{family}-{bank}-U", prefix)
     assert reuse.results("_RUHA-B-REUSE?", 0) == (0, MASK64)
-    entry = fixture["banks"]["DIRECTORY"] + 272
+    entry = fixture["banks"]["DIRECTORY"] + _DOCUMENT_BYTES
     for bank, payload, field, prefix in (("DESCRIPTORS", descriptor, "DESCRIPTOR", 128),
                                         ("NATIVE", native, "NATIVE", native_bytes)):
         assert reuse.get(f"_RUHA-B-{family}-{bank}-U") == prefix + len(payload)

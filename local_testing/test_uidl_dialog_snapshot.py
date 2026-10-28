@@ -116,12 +116,17 @@ def test_capture_refuses_short_or_aliased_banks_and_leaves_cramped_dialogs():
 
 
 def test_the_overlay_root_is_the_painted_dialog_before_the_overlay_field():
+    # Its kind says which: a renderer shows a dialog only with dialogs.
     _run([
         "UTUI-OVERLAY-ROOT@ 0= _DS-A 2DROP 2DROP",
+        "UTUI-OVERLAY-KIND@ UTUI-OVERLAY-NONE = _DS-A",
         "_DS-ASK DROP UTUI-OVERLAY-ROOT@ 0= _DS-A 2DROP 2DROP",
+        "UTUI-OVERLAY-KIND@ UTUI-OVERLAY-NONE = _DS-A",
         "DLG-HOST-PAINT UTUI-OVERLAY-ROOT@ _DS-A 21 = _DS-A 6 = _DS-A 29 = _DS-A 9 = _DS-A",
+        "UTUI-OVERLAY-KIND@ UTUI-OVERLAY-DIALOG = _DS-A",
         "DLG-DISCARD UTUI-OVERLAY-ROOT@ 0= _DS-A 2DROP 2DROP",
-    ], 8)
+        "UTUI-OVERLAY-KIND@ UTUI-OVERLAY-NONE = _DS-A",
+    ], 12)
 
 
 # A document whose dialog element holds two labels and a list mounted on a

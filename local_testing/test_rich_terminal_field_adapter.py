@@ -162,14 +162,18 @@ PROMPT_OVERLAY = [
     ": _FA-SECOND-FIELD ( -- descriptor )",
     "  _RA-SNAP @ RUHA-SNAPSHOT-FIELDS-DESCRIPTORS@ DROP",
     "  _RA-DIR-A @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@ + UFLSN-DESCRIPTOR-SIZE + ;",
-    # A prompt over the status row, as applications paint theirs.
+    # A prompt over the status row, as applications paint theirs, with a
+    # renderer that shows fields.
+    "RUHA-LAYER-FIELDS _RA-ADAPTER RUHA-LAYERS! RUHA-S-OK = _RA-ASSERT",
+    "64 _RA-ADAPTER RUHA-LAYERS! RUHA-S-INVALID = _RA-ASSERT",
     'S" state" UTUI-BY-ID _UTUI-SIDECAR _UTUI-SC-ROW@ 0 1 20 RGN-NEW',
     "  _FA-PBUF 64 PRM-NEW _FA-PR !",
     "_FA-PLABEL _FA-PVALUE _FA-PR @ PRM-SHOW _FA-PROMPT-DRAW",
     "6 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
     # The document keeps every root, the status field the prompt covers
     # too, which lies in the layer beneath it, and the prompt joins its
-    # fields.
+    # fields.  The directory names the prompt's cells, which the producer
+    # must cover.
     "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 2 = _RA-ASSERT",
@@ -178,9 +182,24 @@ PROMPT_OVERLAY = [
     "_FA-SECOND-FIELD UFLSN-DESCRIPTOR-WIDTH@ 20 = _RA-ASSERT",
     "_RA-RECORDS _RUHA-R.OV-WIDTH @ 20 = _RA-ASSERT",
     "_RA-RECORDS _RUHA-R.OV-HEIGHT @ 1 = _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.FLAGS @ _RUHA-RF-OV-FIELD AND _RA-ASSERT",
+    "_RA-DIR-A @ RUHA-DOCUMENT-OVERLAY@ 20 = _RA-ASSERT 1 = _RA-ASSERT 2DROP",
+    # A renderer without fields could not show the prompt above them, so the
+    # prompt's paint falls the document back whole, and the directory names
+    # no overlay.
+    "0 _RA-ADAPTER RUHA-LAYERS! RUHA-S-OK = _RA-ASSERT",
+    "7 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 0= _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 0= _RA-ASSERT",
+    "_RA-DIR-A @ RUHA-DOCUMENT-OVERLAY@ OR OR OR 0= _RA-ASSERT",
+    "RUHA-LAYER-FIELDS _RA-ADAPTER RUHA-LAYERS! RUHA-S-OK = _RA-ASSERT",
+    "8 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
+    "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 2 = _RA-ASSERT",
     # Foreground paint that is not the prompt keeps today's rule.
     ": _FA-ELSEWHERE RGN-ROOT 35 0 0 DRW-CHAR ; ' _FA-ELSEWHERE DRW-OVERLAY",
-    "7 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "9 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 0= _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",
@@ -189,8 +208,9 @@ PROMPT_OVERLAY = [
     "_FA-PR @ PRM-HIDE",
     'S" note" UTUI-BY-ID UIDL-DIRTY! S" state" UTUI-BY-ID UIDL-PARENT UIDL-DIRTY!',
     "_FA-PROMPT-DRAW",
-    "8 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+    "10 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
     "_RA-RECORDS _RUHA-R.OV-WIDTH @ 0= _RA-ASSERT",
+    "_RA-RECORDS _RUHA-R.FLAGS @ _RUHA-RF-OV-FIELD AND 0= _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 1 = _RA-ASSERT",
     "_RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@ 1 = _RA-ASSERT",
