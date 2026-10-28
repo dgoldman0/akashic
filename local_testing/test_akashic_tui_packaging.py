@@ -2023,6 +2023,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/uidl-menu-snapshot.f",
         "tui/uidl-picture-snapshot.f",
         "tui/uidl-dialog-snapshot.f",
+        "tui/uidl-root-facts.f",
         "tui/desk-system-settings.f",
         "tui/platform/settings-disk.f",
     }

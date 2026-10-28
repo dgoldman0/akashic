@@ -53,6 +53,10 @@ def _definitions(producer_source: str) -> dict[str, str]:
         "utils/uint-range.f",
         # The shadow check's words, which the frame build's shortcuts call.
         "tui/rich-terminal/frame-shadow.f",
+        # What each root's capture read, which the shadow check's judge of
+        # the comparison holds the root facts to.
+        "tui/uidl-root-facts.f",
+        "tui/uidl-status-field-snapshot.f",
         # The switch for every-frame checks, which the frame build reads.
         "tui/check-mode.f",
         # The CRC the producers seal their banks with in safe mode.

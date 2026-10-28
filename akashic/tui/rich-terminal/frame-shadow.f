@@ -9,6 +9,11 @@
 \  producer copies the runs of rows no draw touched.  Each shortcut must
 \  give, byte for byte, what the full path gives.
 \
+\  The facts of what each root's capture read must change whenever its
+\  items do, so that a frame can follow change by them: the screen
+\  producer judges each item the full path finds changed, and a root whose
+\  facts did not move counts as a difference of the root-facts stage.
+\
 \  While the shadow check is on, a step that takes a shortcut also runs its
 \  full path, into storage that does not feed the frame, and compares the
 \  two results here.  Comparisons are counted in all and by stage, so a run
@@ -40,6 +45,7 @@ PROVIDED akashic-tui-rterm-frame-shadow
 2 CONSTANT FSHD-STAGE-PRODUCER-GLYPHS
 3 CONSTANT FSHD-STAGE-PRODUCER-MENUS
 4 CONSTANT FSHD-STAGE-SHELL-GLYPHS
+5 CONSTANT FSHD-STAGE-ROOT-FACTS
 
 VARIABLE FSHD-ON
 VARIABLE FSHD-DRAW
@@ -57,6 +63,7 @@ VARIABLE FSHD-CHECKS-SNAPSHOT
 VARIABLE FSHD-CHECKS-PRODUCER-GLYPHS
 VARIABLE FSHD-CHECKS-PRODUCER-MENUS
 VARIABLE FSHD-CHECKS-SHELL-GLYPHS
+VARIABLE FSHD-CHECKS-ROOT-FACTS
 
 \ FSHD? ( -- flag )  Whether the shadow check is on.
 : FSHD?  ( -- flag )  FSHD-ON @ 0<> ;
@@ -67,7 +74,8 @@ VARIABLE FSHD-CHECKS-SHELL-GLYPHS
     0 FSHD-FIRST-STAGE ! 0 FSHD-FIRST-ITEM !
     0 FSHD-FIRST-OFFSET ! 0 FSHD-FIRST-DRAW !
     0 FSHD-CHECKS-SNAPSHOT ! 0 FSHD-CHECKS-PRODUCER-GLYPHS !
-    0 FSHD-CHECKS-PRODUCER-MENUS ! 0 FSHD-CHECKS-SHELL-GLYPHS ! ;
+    0 FSHD-CHECKS-PRODUCER-MENUS ! 0 FSHD-CHECKS-SHELL-GLYPHS !
+    0 FSHD-CHECKS-ROOT-FACTS ! ;
 
 0 FSHD-ON ! 0 FSHD-DRAW ! FSHD-RESET
 
@@ -133,8 +141,9 @@ VARIABLE _FSHD-STAGE
 : _FSHD-STAGE-CHECKS  ( stage -- a )
     DUP FSHD-STAGE-SNAPSHOT = IF DROP FSHD-CHECKS-SNAPSHOT EXIT THEN
     DUP FSHD-STAGE-PRODUCER-GLYPHS = IF DROP FSHD-CHECKS-PRODUCER-GLYPHS EXIT THEN
-    FSHD-STAGE-PRODUCER-MENUS = IF FSHD-CHECKS-PRODUCER-MENUS EXIT THEN
-    FSHD-CHECKS-SHELL-GLYPHS ;
+    DUP FSHD-STAGE-PRODUCER-MENUS = IF DROP FSHD-CHECKS-PRODUCER-MENUS EXIT THEN
+    FSHD-STAGE-SHELL-GLYPHS = IF FSHD-CHECKS-SHELL-GLYPHS EXIT THEN
+    FSHD-CHECKS-ROOT-FACTS ;
 
 \ FSHD-SAME? ( a1 u1 a2 u2 item stage -- flag )
 \   Count one comparison of STAGE's ITEM: the shortcut's U1 bytes at A1
@@ -152,3 +161,11 @@ VARIABLE _FSHD-STAGE
 
 \ FSHD-SKIP ( -- )  A comparison that could not run, for want of scratch.
 : FSHD-SKIP  ( -- )  1 FSHD-SKIPPED +! ;
+
+\ FSHD-HELD ( held? item stage -- )
+\   Count one comparison of STAGE's ITEM that the stage judged itself:
+\   HELD? false is a difference, kept when it is the first.
+: FSHD-HELD  ( held? item stage -- )
+    _FSHD-STAGE ! _FSHD-ITEM !
+    1 FSHD-CHECKS +! 1 _FSHD-STAGE @ _FSHD-STAGE-CHECKS +!
+    IF EXIT THEN 0 _FSHD-MISMATCH ;

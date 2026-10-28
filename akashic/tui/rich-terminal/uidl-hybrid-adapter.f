@@ -41,6 +41,7 @@ REQUIRE ../uidl-status-field-snapshot.f
 REQUIRE ../uidl-picture-snapshot.f
 REQUIRE ../uidl-field-snapshot.f
 REQUIRE ../uidl-dialog-snapshot.f
+REQUIRE ../uidl-root-facts.f
 REQUIRE ../../utils/memory-span.f
 REQUIRE frame-shadow.f
 REQUIRE ../check-mode.f
@@ -4299,6 +4300,151 @@ VARIABLE _RUHA-P-ORIGINAL
     ['] _RUHA-PF-BODY CATCH IF 2DROP 2DROP DROP RUHA-S-INVALID THEN
     _RUHA-P-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF DROP DROP RUHA-S-INVALID THEN
     _RUHA-P-CLEAR ;
+
+\ =====================================================================
+\  Root facts
+\ =====================================================================
+\
+\  RUHA-ROOT-FACTS@ ( facts-a facts-u draw-generation adapter -- count status )
+\    Record, for every root the snapshot this completed draw published
+\    holds, what its capture read (uidl-root-facts.f): one URF record per
+\    root, in directory order and, within a document, menus, collections,
+\    data graphics, status fields, fields and the dialog.  Each record
+\    names its document's token, and each is filled in that document's own
+\    context, as the snapshot was.  CAPACITY, with how many records it
+\    would take and none written, when the bank is short; STALE when
+\    DRAW-GENERATION is not the completed draw or the draw published no
+\    snapshot.
+
+VARIABLE _RUHA-F-ADAPTER
+VARIABLE _RUHA-F-A
+VARIABLE _RUHA-F-U
+VARIABLE _RUHA-F-USED
+VARIABLE _RUHA-F-COUNT
+VARIABLE _RUHA-F-STATUS
+VARIABLE _RUHA-F-SNAP
+VARIABLE _RUHA-F-ENTRY
+VARIABLE _RUHA-F-XT
+VARIABLE _RUHA-F-SIZE
+VARIABLE _RUHA-F-ORIGINAL
+
+\ The next record, or 0 once the bank is short, when only the count grows.
+: _RUHA-F-NEXT  ( -- record|0 )
+    1 _RUHA-F-COUNT +!
+    _RUHA-F-STATUS @ RUHA-S-OK <> IF 0 EXIT THEN
+    _RUHA-F-USED @ URF-SIZE + _RUHA-F-U @ U> IF
+        RUHA-S-CAPACITY _RUHA-F-STATUS ! 0 EXIT
+    THEN
+    _RUHA-F-A @ _RUHA-F-USED @ + URF-SIZE _RUHA-F-USED +! ;
+
+: _RUHA-F-TOKEN!  ( record -- )
+    _RUHA-F-ENTRY @ RUHA-DOCUMENT-TOKEN@ SWAP URF.TOKEN ! ;
+
+\ One root's record, filled by XT ( descriptor record -- ).
+: _RUHA-F-ROOT  ( descriptor xt -- )
+    _RUHA-F-NEXT ?DUP 0= IF 2DROP EXIT THEN
+    DUP >R SWAP EXECUTE R> _RUHA-F-TOKEN! ;
+
+\ The records of the BYTES of SIZE-byte descriptors at A, filled by XT.
+: _RUHA-F-EACH  ( a bytes size xt -- )
+    _RUHA-F-XT ! DUP _RUHA-F-SIZE ! / 0 ?DO
+        DUP I _RUHA-F-SIZE @ * + _RUHA-F-XT @ _RUHA-F-ROOT
+    LOOP DROP ;
+
+\ The context of the attached document TOKEN names, or 0.
+: _RUHA-F-CTX  ( token -- uctx|0 )
+    _RUHA-F-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-F-ADAPTER @ _RUHA-RECORD-AT
+        DUP _RUHA-R.TOKEN @ 2 PICK = IF
+            NIP _RUHA-R.UCTX @ UNLOOP EXIT
+        THEN DROP
+    LOOP DROP 0 ;
+
+\ An entry with no slice, covered or empty, has no roots.
+: _RUHA-F-SLICES?  ( entry -- flag )
+    DUP RUHA-DOCUMENT-RECORD-BYTES@
+    OVER RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@ OR
+    OVER RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@ OR
+    OVER RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@ OR
+    OVER RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@ OR
+    SWAP RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-BYTES@ OR 0<> ;
+
+: _RUHA-F-DOCUMENT  ( entry -- )
+    DUP _RUHA-F-ENTRY ! DUP _RUHA-F-SLICES? 0= IF DROP EXIT THEN
+    RUHA-DOCUMENT-TOKEN@ _RUHA-F-CTX ?DUP 0= IF
+        RUHA-S-INVALID _RUHA-F-STATUS ! EXIT
+    THEN
+    DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
+        RUHA-S-INVALID _RUHA-F-STATUS ! EXIT
+    THEN
+    _RUHA-F-ENTRY @ RUHA-DOCUMENT-RECORD-BYTES@ ?DUP IF
+        _RUHA-F-NEXT ?DUP IF
+            >R UMSN-RECORD-SIZE /
+            _RUHA-F-SNAP @ RUHA-SNAPSHOT-RECORDS@ DROP
+                _RUHA-F-ENTRY @ RUHA-DOCUMENT-RECORD-OFFSET@ +
+            SWAP R@ URF-MENUS R> _RUHA-F-TOKEN!
+        ELSE DROP THEN
+    THEN
+    _RUHA-F-SNAP @ RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@ DROP
+        _RUHA-F-ENTRY @ RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-OFFSET@ +
+    _RUHA-F-ENTRY @ RUHA-DOCUMENT-COLLECTION-DESCRIPTOR-BYTES@
+    UCSN-DESCRIPTOR-SIZE ['] URF-COLLECTION _RUHA-F-EACH
+    _RUHA-F-SNAP @ RUHA-SNAPSHOT-DATA-GRAPHICS-DESCRIPTORS@ DROP
+        _RUHA-F-ENTRY @ RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-OFFSET@ +
+    _RUHA-F-ENTRY @ RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@
+    UDGSN-DESCRIPTOR-SIZE ['] URF-DATA-GRAPHICS _RUHA-F-EACH
+    _RUHA-F-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-DESCRIPTORS@ DROP
+        _RUHA-F-ENTRY @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@ +
+    _RUHA-F-ENTRY @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@
+    USFSN-DESCRIPTOR-SIZE ['] URF-STATUS-FIELD _RUHA-F-EACH
+    _RUHA-F-SNAP @ RUHA-SNAPSHOT-FIELDS-DESCRIPTORS@ DROP
+        _RUHA-F-ENTRY @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@ +
+    _RUHA-F-ENTRY @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@
+    UFLSN-DESCRIPTOR-SIZE ['] URF-FIELD _RUHA-F-EACH
+    _RUHA-F-SNAP @ RUHA-SNAPSHOT-DIALOGS-DESCRIPTORS@ DROP
+        _RUHA-F-ENTRY @ RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-OFFSET@ +
+    _RUHA-F-ENTRY @ RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-BYTES@
+    UDLSN-DESCRIPTOR-SIZE ['] URF-DIALOG _RUHA-F-EACH ;
+
+: _RUHA-F-BODY  ( -- )
+    _RUHA-F-SNAP @ RUHA-SNAPSHOT-DIRECTORY@ DROP
+    _RUHA-F-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 0 ?DO
+        DUP I RUHA-DOCUMENT-SIZE * + _RUHA-F-DOCUMENT
+        _RUHA-F-STATUS @ RUHA-S-INVALID = IF LEAVE THEN
+    LOOP DROP ;
+
+: _RUHA-FACTS-IN-DRAW
+  ( a u requested-draw adapter actual-draw -- count status )
+    >R _RUHA-F-ADAPTER !
+    DUP R> <> IF DROP 2DROP 0 RUHA-S-STALE EXIT THEN
+    >R _RUHA-F-U ! _RUHA-F-A !
+    _RUHA-F-ADAPTER @ RUHA-VALID? 0= IF R> DROP 0 RUHA-S-INVALID EXIT THEN
+    \ The facts describe the snapshot this draw published.
+    _RUHA-F-ADAPTER @ _RUHA-A.LAST-STATUS @ RUHA-S-OK <>
+    _RUHA-F-ADAPTER @ _RUHA-A.LAST-DRAW @ R@ <> OR IF
+        R> DROP 0 RUHA-S-STALE EXIT
+    THEN
+    _RUHA-F-ADAPTER @ _RUHA-A.ACTIVE-BANK @ _RUHA-F-ADAPTER @
+        _RUHA-SNAPSHOT-AT DUP _RUHA-F-SNAP !
+    RUHA-SNAPSHOT-DRAW-GENERATION@ R> <> IF 0 RUHA-S-STALE EXIT THEN
+    _RUHA-F-U @ IF
+        _RUHA-F-A @ _RUHA-F-U @ _RUHA-F-ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? IF
+            0 RUHA-S-INVALID EXIT
+        THEN
+    THEN
+    0 _RUHA-F-USED ! 0 _RUHA-F-COUNT ! RUHA-S-OK _RUHA-F-STATUS !
+    ASHELL-ACTIVE-CTX _RUHA-F-ORIGINAL !
+    ['] _RUHA-F-BODY CATCH IF RUHA-S-INVALID _RUHA-F-STATUS ! THEN
+    _RUHA-F-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF
+        DROP RUHA-S-INVALID _RUHA-F-STATUS !
+    THEN
+    \ Only a complete set of records is left in the bank.
+    _RUHA-F-STATUS @ RUHA-S-OK <> IF _RUHA-F-A @ _RUHA-F-USED @ 0 FILL THEN
+    _RUHA-F-STATUS @ RUHA-S-INVALID = IF 0 ELSE _RUHA-F-COUNT @ THEN
+    _RUHA-F-STATUS @ ;
+
+: RUHA-ROOT-FACTS@  ( facts-a facts-u draw-generation adapter -- count status )
+    ['] _RUHA-FACTS-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
 
 CREATE _RUHA-OWNED-END
 _RUHA-OWNED-END _RUHA-OWNED-LIMIT !

@@ -9230,6 +9230,79 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     THEN
     SWAP _RTHP.COLLECTION-COUNT @ IF RTHP-PART-COLLECTIONS OR THEN ;
 
+\ ---------------------------------------------------------------------
+\  Root facts, for the shadow check's judge
+\ ---------------------------------------------------------------------
+\
+\  With the shadow check on, each candidate's roots carry the facts of
+\  what their captures read (RUHA-ROOT-FACTS@, uidl-root-facts.f).  Two
+\  blocks from the heap hold them, each tagged with the generation of the
+\  snapshot its records describe, so that the bank on screen keeps the
+\  facts it was built from while the next candidate's are recorded in the
+\  other.  The comparison judges them (_RTHP-ROOT-BEGIN).
+
+\ Block 1 and block 2: each an address and size from the heap, a count of
+\ records, and the snapshot generation they describe.  0 names no block.
+VARIABLE _RTHP-ROOT-A1
+VARIABLE _RTHP-ROOT-U1
+VARIABLE _RTHP-ROOT-N1
+VARIABLE _RTHP-ROOT-GEN1
+VARIABLE _RTHP-ROOT-A2
+VARIABLE _RTHP-ROOT-U2
+VARIABLE _RTHP-ROOT-N2
+VARIABLE _RTHP-ROOT-GEN2
+VARIABLE _RTHP-ROOT-PARTS1
+VARIABLE _RTHP-ROOT-PARTS2
+0 _RTHP-ROOT-A1 ! 0 _RTHP-ROOT-U1 ! 0 _RTHP-ROOT-N1 ! 0 _RTHP-ROOT-GEN1 !
+0 _RTHP-ROOT-A2 ! 0 _RTHP-ROOT-U2 ! 0 _RTHP-ROOT-N2 ! 0 _RTHP-ROOT-GEN2 !
+0 _RTHP-ROOT-PARTS1 ! 0 _RTHP-ROOT-PARTS2 !
+: _RTHP-ROOT.A    ( block -- a )  1 = IF _RTHP-ROOT-A1 ELSE _RTHP-ROOT-A2 THEN ;
+: _RTHP-ROOT.U    ( block -- a )  1 = IF _RTHP-ROOT-U1 ELSE _RTHP-ROOT-U2 THEN ;
+: _RTHP-ROOT.N    ( block -- a )  1 = IF _RTHP-ROOT-N1 ELSE _RTHP-ROOT-N2 THEN ;
+: _RTHP-ROOT.GEN  ( block -- a )
+    1 = IF _RTHP-ROOT-GEN1 ELSE _RTHP-ROOT-GEN2 THEN ;
+\ The optional parts the block's candidate carried once built
+\ (_RTHP-PRESENT-PARTS).
+: _RTHP-ROOT.PARTS  ( block -- a )
+    1 = IF _RTHP-ROOT-PARTS1 ELSE _RTHP-ROOT-PARTS2 THEN ;
+
+VARIABLE _RTHP-ROOT-P
+VARIABLE _RTHP-ROOT-B
+
+\ The block for the next candidate's facts: one that does not hold those
+\ of the bank on screen.
+: _RTHP-ROOT-PENDING-BLOCK  ( producer -- block )
+    _RTHP.TARGET-ACTIVE @ ?DUP IF _RTHP-TB.SOURCE-GEN @ ELSE 0 THEN
+    1 _RTHP-ROOT.GEN @ = IF 2 ELSE 1 THEN ;
+
+: _RTHP-ROOT-CAPTURE  ( -- count status )
+    _RTHP-ROOT-B @ _RTHP-ROOT.A @ _RTHP-ROOT-B @ _RTHP-ROOT.U @
+    _RTHP-W-DRAW @ _RTHP-ROOT-P @ _RTHP.ADAPTER @ RUHA-ROOT-FACTS@ ;
+
+\ Record the facts of the snapshot this candidate copied, tagged with its
+\ generation.  A block too small grows once to what the snapshot needs; a
+\ heap that cannot give it leaves the candidate without facts, which the
+\ comparison then does not judge, and counts a skipped comparison.
+: _RTHP-ROOT-RECORD  ( producer -- )
+    FSHD? 0= IF DROP EXIT THEN
+    DUP _RTHP-ROOT-P ! _RTHP-ROOT-PENDING-BLOCK _RTHP-ROOT-B !
+    0 _RTHP-ROOT-B @ _RTHP-ROOT.GEN ! 0 _RTHP-ROOT-B @ _RTHP-ROOT.N !
+    _RTHP-ROOT-CAPTURE
+    DUP RUHA-S-CAPACITY = IF
+        DROP URF-SIZE * _RTHP-ROOT-B @ _RTHP-ROOT.A _RTHP-ROOT-B @ _RTHP-ROOT.U
+            FSHD-GROW 0= IF FSHD-SKIP EXIT THEN
+        _RTHP-ROOT-CAPTURE
+    THEN
+    RUHA-S-OK <> IF DROP EXIT THEN
+    _RTHP-ROOT-B @ _RTHP-ROOT.N !
+    0 _RTHP-ROOT-B @ _RTHP-ROOT.PARTS !
+    _RTHP-ROOT-P @ _RTHP.SOURCE-GEN @ _RTHP-ROOT-B @ _RTHP-ROOT.GEN ! ;
+
+\ The candidate whose facts were recorded is built: keep the parts it carries.
+: _RTHP-ROOT-PARTS!  ( producer -- )
+    FSHD? 0= IF DROP EXIT THEN
+    _RTHP-PRESENT-PARTS _RTHP-ROOT-B @ _RTHP-ROOT.PARTS ! ;
+
 : _RTHP-BUILD-OBSERVED-CANDIDATE
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
@@ -9263,6 +9336,7 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     _RTHP-W-SNAP @ _RTHP-W-P @ _RTHP-COPY-SNAPSHOT?
     _RTPROF-PH-OTHER _RTPROF-MARK
         0= IF RTE-S-INVALID 0 EXIT THEN
+    _RTHP-W-P @ _RTHP-ROOT-RECORD
     _RTPROF-PH-SNAPSHOT-IMPORT _RTPROF-MARK
     _RTHP-W-P @ _RTHP-SELECT-NEXT-IDS?
     _RTPROF-PH-OTHER _RTPROF-MARK
@@ -9368,6 +9442,7 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
         RTE-S-WOULD-BLOCK 0 EXIT
     THEN
     _RTHP-W-P @ _RTHP.SOURCE-DRAW @ _RTHP-W-P @ _RTHP.SURFACE-GEN !
+    _RTHP-W-P @ _RTHP-ROOT-PARTS!
     RTE-S-OK -1 ;
 
 \ In safe mode (check-mode.f) a draw whose build a check refused for damage
@@ -11713,6 +11788,205 @@ VARIABLE _RTHP-D-KEPT
 \ which check refused it (_RTHP-DIAG-DELTA-WHY counts them).
 VARIABLE _RTHP-D-WHY
 
+\ ---------------------------------------------------------------------
+\  The root facts' judge
+\ ---------------------------------------------------------------------
+\
+\  With the shadow check on, a comparison whose two banks both keep root
+\  facts judges them.  Every control and status field the comparison finds
+\  new or changed belongs to a root whose facts moved since the bank on
+\  screen, and instruments that differ belong to data-graphics roots of
+\  which one moved; otherwise the facts missed a change, and the shadow
+\  check counts a difference of its root-facts stage.  A comparison of two
+\  banks built from one snapshot, or of a bank without facts, is not
+\  judged.  The counts say how many comparisons were judged, how many
+\  roots their pending banks held, how many of those changed or went, and
+\  how many items were judged.  Pictures carry no facts yet, so the
+\  statics that show them are not judged.
+
+VARIABLE _RTHP-ROOT-OLD          \ block of the bank on screen, or 0
+VARIABLE _RTHP-ROOT-NEW          \ block of the pending bank, or 0
+
+VARIABLE _RTHP-DIAG-ROOT-FRAMES
+VARIABLE _RTHP-DIAG-ROOT-ROOTS
+VARIABLE _RTHP-DIAG-ROOT-CHANGED
+VARIABLE _RTHP-DIAG-ROOT-ITEMS
+
+\ The identity sought.
+VARIABLE _RTHP-ROOT-K-TOKEN
+VARIABLE _RTHP-ROOT-K-FAMILY
+VARIABLE _RTHP-ROOT-K-SOURCE
+VARIABLE _RTHP-ROOT-K-INDEX
+VARIABLE _RTHP-ROOT-K-GEN
+VARIABLE _RTHP-ROOT-K-KEY
+
+: _RTHP-ROOT-FIND-BLOCK  ( generation -- block|0 )
+    DUP 0= IF EXIT THEN
+    DUP 1 _RTHP-ROOT.GEN @ = IF DROP 1 EXIT THEN
+    2 _RTHP-ROOT.GEN @ = IF 2 ELSE 0 THEN ;
+
+: _RTHP-ROOT-RECORD-AT  ( index block -- record )
+    _RTHP-ROOT.A @ SWAP URF-SIZE * + ;
+
+: _RTHP-ROOT-IS?  ( record -- flag )
+    DUP URF.TOKEN @ _RTHP-ROOT-K-TOKEN @ <> IF DROP 0 EXIT THEN
+    _RTHP-ROOT-K-FAMILY @ _RTHP-ROOT-K-SOURCE @ _RTHP-ROOT-K-INDEX @
+    _RTHP-ROOT-K-GEN @ _RTHP-ROOT-K-KEY @ URF-ROOT? ;
+
+\ The record in BLOCK naming the identity sought, trying index HINT first,
+\ since the roots of two banks mostly lie in the same order.
+: _RTHP-ROOT-FIND  ( hint block -- record|0 )
+    OVER 0 MAX OVER _RTHP-ROOT.N @ < IF
+        2DUP _RTHP-ROOT-RECORD-AT DUP _RTHP-ROOT-IS? IF NIP NIP EXIT THEN DROP
+    THEN NIP
+    DUP _RTHP-ROOT.N @ 0 ?DO
+        I OVER _RTHP-ROOT-RECORD-AT DUP _RTHP-ROOT-IS? IF NIP UNLOOP EXIT THEN
+        DROP
+    LOOP DROP 0 ;
+
+: _RTHP-ROOT-SEEK!  ( record -- )
+    DUP URF.TOKEN @ _RTHP-ROOT-K-TOKEN !
+    DUP URF.FAMILY @ _RTHP-ROOT-K-FAMILY !
+    DUP URF.SOURCE @ _RTHP-ROOT-K-SOURCE !
+    DUP URF.INDEX @ _RTHP-ROOT-K-INDEX !
+    DUP URF.GENERATION @ _RTHP-ROOT-K-GEN !
+    URF.KEY @ _RTHP-ROOT-K-KEY ! ;
+
+\ Whether the root at INDEX of block FROM is not in block TO with the same
+\ facts: it is new, it went, or its facts moved.
+: _RTHP-ROOT-MOVED?  ( index from to -- flag )
+    >R 2DUP _RTHP-ROOT-RECORD-AT DUP _RTHP-ROOT-SEEK!   ( index from record )
+    NIP SWAP R> _RTHP-ROOT-FIND ?DUP 0= IF DROP -1 EXIT THEN
+    URF-SAME? 0= ;
+
+\ The roots of block FROM not in block TO with the same facts, of FAMILY,
+\ or of every family when FAMILY is 0.
+VARIABLE _RTHP-ROOT-FROM
+VARIABLE _RTHP-ROOT-TO
+VARIABLE _RTHP-ROOT-ONLY
+: _RTHP-ROOT-MOVES  ( family from to -- count )
+    _RTHP-ROOT-TO ! _RTHP-ROOT-FROM ! _RTHP-ROOT-ONLY !
+    0 _RTHP-ROOT-FROM @ _RTHP-ROOT.N @ 0 ?DO
+        _RTHP-ROOT-ONLY @ IF
+            I _RTHP-ROOT-FROM @ _RTHP-ROOT-RECORD-AT URF.FAMILY @
+                _RTHP-ROOT-ONLY @ =
+        ELSE -1 THEN
+        IF I _RTHP-ROOT-FROM @ _RTHP-ROOT-TO @ _RTHP-ROOT-MOVED? IF 1+ THEN THEN
+    LOOP ;
+
+\ Begin judging the comparison of PRODUCER's banks: find their facts, and
+\ count the roots that changed or went.
+: _RTHP-ROOT-BEGIN  ( producer -- )
+    0 _RTHP-ROOT-OLD ! 0 _RTHP-ROOT-NEW !
+    FSHD? 0= IF DROP EXIT THEN
+    DUP _RTHP.TARGET-ACTIVE @ SWAP _RTHP.TARGET-PENDING @
+    2DUP 0= SWAP 0= OR IF 2DROP EXIT THEN
+    _RTHP-TB.SOURCE-GEN @ SWAP _RTHP-TB.SOURCE-GEN @     ( new-gen old-gen )
+    2DUP = IF 2DROP EXIT THEN
+    _RTHP-ROOT-FIND-BLOCK SWAP _RTHP-ROOT-FIND-BLOCK         ( old new )
+    2DUP 0= SWAP 0= OR IF 2DROP EXIT THEN
+    _RTHP-ROOT-NEW ! _RTHP-ROOT-OLD !
+    1 _RTHP-DIAG-ROOT-FRAMES +!
+    _RTHP-ROOT-NEW @ _RTHP-ROOT.N @ _RTHP-DIAG-ROOT-ROOTS +!
+    \ The roots that are new or moved, and those that went.
+    0 _RTHP-ROOT-NEW @ _RTHP-ROOT-OLD @ _RTHP-ROOT-MOVES
+    0 _RTHP-ROOT-OLD @ _RTHP-ROOT.N @ 0 ?DO
+        I _RTHP-ROOT-OLD @ _RTHP-ROOT-RECORD-AT _RTHP-ROOT-SEEK!
+        I _RTHP-ROOT-NEW @ _RTHP-ROOT-FIND 0= IF 1+ THEN
+    LOOP + _RTHP-DIAG-ROOT-CHANGED +! ;
+
+\ The optional part a family's items make up, or 0 for menus.
+: _RTHP-ROOT-PART  ( family -- part|0 )
+    DUP URF-F-COLLECTION = IF DROP RTHP-PART-COLLECTIONS EXIT THEN
+    DUP URF-F-FIELD = IF DROP RTHP-PART-FIELDS EXIT THEN
+    DUP URF-F-DIALOG = IF DROP RTHP-PART-DIALOGS EXIT THEN
+    DUP URF-F-STATUS-FIELD = IF DROP RTHP-PART-STATICS EXIT THEN
+    URF-F-DATA-GRAPHICS = IF RTHP-PART-INSTRUMENTS ELSE 0 THEN ;
+
+\ Whether the two banks differ in carrying the sought root's family: its
+\ items then came or went with the family, which lowering, not the root,
+\ decided, as when the terminal had no room for it before.
+: _RTHP-ROOT-PART-MOVED?  ( -- flag )
+    _RTHP-ROOT-K-FAMILY @ _RTHP-ROOT-PART
+    _RTHP-ROOT-OLD @ _RTHP-ROOT.PARTS @ _RTHP-ROOT-NEW @ _RTHP-ROOT.PARTS @ XOR
+    AND 0<> ;
+
+\ Judge one item the comparison found new or changed, whose root is the
+\ identity sought: held when that root is new, its facts moved, or its
+\ family came with this bank.  ITEM numbers it, should it be the first
+\ difference.
+: _RTHP-ROOT-JUDGE  ( item -- )
+    1 _RTHP-DIAG-ROOT-ITEMS +!
+    0 _RTHP-ROOT-NEW @ _RTHP-ROOT-FIND ?DUP 0= IF
+        0 SWAP FSHD-STAGE-ROOT-FACTS FSHD-HELD EXIT
+    THEN
+    0 _RTHP-ROOT-OLD @ _RTHP-ROOT-FIND ?DUP 0= IF
+        DROP -1 SWAP FSHD-STAGE-ROOT-FACTS FSHD-HELD EXIT
+    THEN
+    URF-SAME? 0= _RTHP-ROOT-PART-MOVED? OR
+    SWAP FSHD-STAGE-ROOT-FACTS FSHD-HELD ;
+
+\ Seek the root of the pending bank's control INDEX, from its correlation
+\ and kind; false for a control no document root projects.
+: _RTHP-ROOT-CONTROL-ROOT?  ( index -- flag )
+    _RTHP-D-PENDING @ _RTHP-PACK-CORR-A OVER RUCP-CORRELATION-SIZE * +
+    DUP RUCP-CORRELATION-ATTACHMENT@ _RTHP-ROOT-K-TOKEN !
+    DUP RUCP-CORRELATION-SOURCE@ _RTHP-ROOT-K-SOURCE !
+    DUP RUCP-CORRELATION-INDEX@ _RTHP-ROOT-K-INDEX !
+    DUP RUCP-CORRELATION-LIFECYCLE-GENERATION@ _RTHP-ROOT-K-GEN !
+    DUP RUCP-CORRELATION-SUBKEY@ _RTHP-ROOT-K-KEY !
+    SWAP _RTHP-D-PENDING @ _RTHP-PACK-CONTROLS-A SWAP RTE-CONTROL-SIZE * +
+        _RTE-CONTROL.KIND @                           ( correlation kind )
+    DUP RTE-CONTROL-MENU-BAR RTE-CONTROL-MENU-SEPARATOR 1+ WITHIN IF
+        2DROP URF-F-MENUS _RTHP-ROOT-K-FAMILY !
+        0 _RTHP-ROOT-K-SOURCE ! 0 _RTHP-ROOT-K-INDEX !
+        0 _RTHP-ROOT-K-GEN ! 0 _RTHP-ROOT-K-KEY ! -1 EXIT
+    THEN
+    DUP RTE-CONTROL-TAB = IF
+        DROP RUCP-CORRELATION-SCOPE@ _RTHP-ROOT-K-KEY !
+        URF-F-COLLECTION _RTHP-ROOT-K-FAMILY ! -1 EXIT
+    THEN
+    NIP
+    DUP RTE-CONTROL-TEXT-AREA = OVER RTE-CONTROL-TEXT-GRID = OR
+    OVER RTE-CONTROL-TABSET = OR OVER RTE-CONTROL-ITEM-VIEW = OR
+    OVER RTE-CONTROL-DOCUMENT = OR IF
+        DROP URF-F-COLLECTION _RTHP-ROOT-K-FAMILY ! -1 EXIT
+    THEN
+    DUP RTE-CONTROL-FIELD = IF
+        DROP URF-F-FIELD _RTHP-ROOT-K-FAMILY ! -1 EXIT
+    THEN
+    DUP RTE-CONTROL-DIALOG = SWAP RTE-CONTROL-BUTTON = OR IF
+        URF-F-DIALOG _RTHP-ROOT-K-FAMILY !
+        0 _RTHP-ROOT-K-INDEX ! 0 _RTHP-ROOT-K-GEN ! -1 EXIT
+    THEN
+    0 ;
+
+: _RTHP-ROOT-JUDGE-CONTROL  ( index -- )
+    _RTHP-ROOT-NEW @ 0= IF DROP EXIT THEN
+    DUP _RTHP-ROOT-CONTROL-ROOT? IF _RTHP-ROOT-JUDGE ELSE DROP THEN ;
+
+\ Seek the root of the pending bank's static INDEX: a status field's;
+\ false for a picture's.
+: _RTHP-ROOT-STATIC-ROOT?  ( index -- flag )
+    _RTHP-D-PENDING @ _RTHP-PACK-STATICS-A OVER RTE-STATIC-SIZE * +
+        _RTE-STATIC.KIND @ RTE-STATIC-STATUS-FIELD <> IF DROP 0 EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-PACK-STATIC-CORR-A SWAP _RTHP-STATIC-CORR-SIZE * +
+    DUP @ _RTHP-ROOT-K-TOKEN !
+    URF-F-STATUS-FIELD _RTHP-ROOT-K-FAMILY !
+    USFSN-SOURCE-UIDL _RTHP-ROOT-K-SOURCE !
+    DUP 8 + @ _RTHP-ROOT-K-INDEX !
+    DUP 16 + @ _RTHP-ROOT-K-GEN !
+    24 + @ _RTHP-ROOT-K-KEY ! -1 ;
+
+\ The comparison found instruments it cannot keep, which a DELTA never
+\ carries: they must belong to a data-graphics root that changed or went.
+: _RTHP-ROOT-INSTRUMENTS  ( -- )
+    _RTHP-ROOT-NEW @ 0= IF EXIT THEN
+    1 _RTHP-DIAG-ROOT-ITEMS +!
+    URF-F-DATA-GRAPHICS _RTHP-ROOT-NEW @ _RTHP-ROOT-OLD @ _RTHP-ROOT-MOVES
+    URF-F-DATA-GRAPHICS _RTHP-ROOT-OLD @ _RTHP-ROOT-NEW @ _RTHP-ROOT-MOVES OR
+    0<> 131072 FSHD-STAGE-ROOT-FACTS FSHD-HELD ;
+
 : _RTHP-D-BIND?  ( producer -- flag )
     0 _RTHP-D-KEPT !
     _RTHP-D-P !
@@ -11758,7 +12032,7 @@ VARIABLE _RTHP-D-WHY
     5 _RTHP-D-WHY !
     _RTHP-D-ACTIVE @ _RTHP-D-PENDING @
         _RTHP-D-P @ _RTHP.DELTA-PLAN-VALID @
-        _RTHP-INSTRUMENTS-REUSABLE? 0= IF 0 EXIT THEN
+        _RTHP-INSTRUMENTS-REUSABLE? 0= IF _RTHP-ROOT-INSTRUMENTS 0 EXIT THEN
     6 _RTHP-D-WHY !
     _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @
         _RTHP-D-P @ _RTHP.STATIC-COUNT @ <>
@@ -13545,12 +13819,22 @@ CREATE _RTHP-DS-RECORD-S RTE-STATIC-SIZE 7 + ALLOT
     _RTHP-DS-RECORD _RTE-STATIC.LABEL-A _RTHP-D-STATIC-REBASE
     _RTHP-DS-RECORD _RTE-STATIC.VALUE-A _RTHP-D-STATIC-REBASE
     _RTHP-DS-RECORD ;
-: _RTHP-D-STATIC-CHANGES  ( -- count )
+
+\ The pending bank's statics that changed, each judged.
+: _RTHP-ROOT-STATIC-CHANGES  ( -- count )
     0 _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
-        I _RTHP-D-STATIC-CHANGED? IF 1+ THEN
+        I _RTHP-D-STATIC-CHANGED? IF
+            1+
+            _RTHP-ROOT-NEW @ IF
+                I _RTHP-ROOT-STATIC-ROOT? IF
+                    I 65536 + _RTHP-ROOT-JUDGE
+                THEN
+            THEN
+        THEN
     LOOP ;
 
 : _RTHP-DELTA-CANDIDATE?  ( producer -- flag )
+    DUP _RTHP-ROOT-BEGIN
     0 _RTHP-D-WHY !
     DUP _RTHP-DELTA-PLAN-CLEAR
     DUP _RTHP.TARGET-ACTIVE @ 0=
@@ -13568,13 +13852,14 @@ CREATE _RTHP-DS-RECORD-S RTE-STATIC-SIZE 7 + ALLOT
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         24 _RTHP-D-WHY !
         I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-CHANGED @ IF I _RTHP-ROOT-JUDGE-CONTROL THEN
         _RTHP-D-CHANGED @ _RTHP-D-MATCHED @ AND IF
             25 _RTHP-D-WHY !
             _RTHP-D-CONTROL-MARK-CHANGED?
                 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP
-    _RTHP-D-STATIC-CHANGES _RTHP-D-OPS +!
+    _RTHP-ROOT-STATIC-CHANGES _RTHP-D-OPS +!
     26 _RTHP-D-WHY !
     _RTHP-D-BUILD-SLOT-MAP? 0= IF 0 EXIT THEN
     27 _RTHP-D-WHY !

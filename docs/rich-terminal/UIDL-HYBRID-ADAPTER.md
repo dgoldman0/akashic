@@ -124,6 +124,23 @@ remember the reason, so later captures describe it as failed. It answers
 STALE once the document is no longer shown that way or the element shows
 another picture.
 
+## Root facts
+
+`RUHA-ROOT-FACTS@ ( facts-a facts-u draw-generation adapter -- count
+status )` records what the capture of each root in the snapshot a completed
+draw published read, one `URF` record a root
+([uidl-root-facts.md](../tui/uidl-root-facts.md)): the newest UIDL revision
+among the elements it read, the revisions of its widget and model, and the
+geometry it was captured at. Records follow directory order and, within a
+document, menus, collections, data graphics, status fields, fields and the
+dialog. Each names its document's token and is filled in that document's own
+context, as the snapshot was. A bank too small answers CAPACITY with how many
+records it would take and holds none; another draw, or one that published no
+snapshot, answers STALE. With the shadow check on, the screen producer keeps
+the facts beside each bank it builds and judges them in its DELTA comparison:
+an item the comparison finds new or changed must belong to a root whose facts
+moved (FRAMES-FOLLOW-CHANGE, part 9a.1).
+
 
 ## One authoritative observation
 

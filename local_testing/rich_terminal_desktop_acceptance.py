@@ -11955,12 +11955,21 @@ _SHADOW_CHECK_VARIABLES = {
     "checks_producer_glyphs": "FSHD-CHECKS-PRODUCER-GLYPHS",
     "checks_producer_menus": "FSHD-CHECKS-PRODUCER-MENUS",
     "checks_shell_glyphs": "FSHD-CHECKS-SHELL-GLYPHS",
+    "checks_root_facts": "FSHD-CHECKS-ROOT-FACTS",
+    # The judge of the root facts (hybrid-screen-producer.f): comparisons
+    # judged, the roots their pending banks held, how many of those changed
+    # or went, and the items judged.
+    "root_facts_frames": "_RTHP-DIAG-ROOT-FRAMES",
+    "root_facts_roots": "_RTHP-DIAG-ROOT-ROOTS",
+    "root_facts_changed": "_RTHP-DIAG-ROOT-CHANGED",
+    "root_facts_items": "_RTHP-DIAG-ROOT-ITEMS",
 }
 SHADOW_CHECK_STAGES = {
     1: "the snapshot",
     2: "the screen producer's runs",
     3: "the screen producer's menu controls",
     4: "the shell's runs of a region",
+    5: "the root facts",
 }
 
 
