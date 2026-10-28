@@ -1684,9 +1684,13 @@ class FexpAloneJourney(_AppletJourney):
             if launcher is None:
                 return self._wait("Desk's launcher listing File Explorer")
             # File Explorer's table and tree stay rich in the layer beneath
-            # the launcher, which the launcher's check holds inactive.
-            if (len(self._content_views(projection, ItemViewRole.TABLE, covered=True)) != 1
-                    or len(self._content_views(projection, ItemViewRole.TREE, covered=True)) != 1):
+            # the launcher, which the launcher's check holds inactive.  The
+            # launcher's own list, of two columns, is a table too.
+            tables = [view for view in
+                      self._content_views(projection, ItemViewRole.TABLE, covered=True)
+                      if view.identity != launcher.identity]
+            trees = self._content_views(projection, ItemViewRole.TREE, covered=True)
+            if len(tables) != 1 or len(trees) != 1:
                 raise PhysicalDesktopAcceptanceError(
                     "File Explorer's lists fell back beneath the launcher"
                 )

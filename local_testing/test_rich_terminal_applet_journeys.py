@@ -2113,9 +2113,10 @@ def _launcher(*, modal=True, lines=None, inactive=False, beneath=True, shell=Tru
         ControlState.VISIBLE, content, modal=modal)
     items = (ViewItem(1, 0, 0, 0, ItemState.SELECTED, ItemRole.ITEM,
                       (ItemField("File Explorer"), ItemField("running"))),)
+    # A list of two columns is a table.
     view = acceptance_runner._SemanticItemViewClaim(
         ControlIdentity(1, 1, 50_001), 21, 13, 87, 23,
-        ItemViewContent(1, ItemViewRole.LIST, ItemViewFlag(0),
+        ItemViewContent(1, ItemViewRole.TABLE, ItemViewFlag(0),
                         (ItemColumn(ItemColumnKind.TEXT), ItemColumn(ItemColumnKind.TEXT)),
                         len(items), 0, len(items), items))
     pane = acceptance_runner._SemanticPaneClaim(
