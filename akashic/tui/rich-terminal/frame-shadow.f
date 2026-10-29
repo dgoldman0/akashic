@@ -14,6 +14,13 @@
 \  producer judges each item the full path finds changed, and a root whose
 \  facts did not move counts as a difference of the root-facts stage.
 \
+\  A DELTA of Desk's shell replaces the applications' controls the screen
+\  producer's comparison found changed, without comparing them again, and
+\  keeps their instruments and series, which that comparison found
+\  unchanged.  The batch DELTA emitter compares every such item as well,
+\  and an item whose comparison disagrees with the producer's counts as a
+\  difference of the shell-delta stage.
+\
 \  While the shadow check is on, a step that takes a shortcut also runs its
 \  full path, into storage that does not feed the frame, and compares the
 \  two results here.  Comparisons are counted in all and by stage, so a run
@@ -46,6 +53,7 @@ PROVIDED akashic-tui-rterm-frame-shadow
 3 CONSTANT FSHD-STAGE-PRODUCER-MENUS
 4 CONSTANT FSHD-STAGE-SHELL-GLYPHS
 5 CONSTANT FSHD-STAGE-ROOT-FACTS
+6 CONSTANT FSHD-STAGE-SHELL-DELTA
 
 VARIABLE FSHD-ON
 VARIABLE FSHD-DRAW
@@ -64,6 +72,7 @@ VARIABLE FSHD-CHECKS-PRODUCER-GLYPHS
 VARIABLE FSHD-CHECKS-PRODUCER-MENUS
 VARIABLE FSHD-CHECKS-SHELL-GLYPHS
 VARIABLE FSHD-CHECKS-ROOT-FACTS
+VARIABLE FSHD-CHECKS-SHELL-DELTA
 
 \ FSHD? ( -- flag )  Whether the shadow check is on.
 : FSHD?  ( -- flag )  FSHD-ON @ 0<> ;
@@ -75,7 +84,7 @@ VARIABLE FSHD-CHECKS-ROOT-FACTS
     0 FSHD-FIRST-OFFSET ! 0 FSHD-FIRST-DRAW !
     0 FSHD-CHECKS-SNAPSHOT ! 0 FSHD-CHECKS-PRODUCER-GLYPHS !
     0 FSHD-CHECKS-PRODUCER-MENUS ! 0 FSHD-CHECKS-SHELL-GLYPHS !
-    0 FSHD-CHECKS-ROOT-FACTS ! ;
+    0 FSHD-CHECKS-ROOT-FACTS ! 0 FSHD-CHECKS-SHELL-DELTA ! ;
 
 0 FSHD-ON ! 0 FSHD-DRAW ! FSHD-RESET
 
@@ -142,8 +151,9 @@ VARIABLE _FSHD-STAGE
     DUP FSHD-STAGE-SNAPSHOT = IF DROP FSHD-CHECKS-SNAPSHOT EXIT THEN
     DUP FSHD-STAGE-PRODUCER-GLYPHS = IF DROP FSHD-CHECKS-PRODUCER-GLYPHS EXIT THEN
     DUP FSHD-STAGE-PRODUCER-MENUS = IF DROP FSHD-CHECKS-PRODUCER-MENUS EXIT THEN
-    FSHD-STAGE-SHELL-GLYPHS = IF FSHD-CHECKS-SHELL-GLYPHS EXIT THEN
-    FSHD-CHECKS-ROOT-FACTS ;
+    DUP FSHD-STAGE-SHELL-GLYPHS = IF DROP FSHD-CHECKS-SHELL-GLYPHS EXIT THEN
+    FSHD-STAGE-ROOT-FACTS = IF FSHD-CHECKS-ROOT-FACTS EXIT THEN
+    FSHD-CHECKS-SHELL-DELTA ;
 
 \ FSHD-SAME? ( a1 u1 a2 u2 item stage -- flag )
 \   Count one comparison of STAGE's ITEM: the shortcut's U1 bytes at A1

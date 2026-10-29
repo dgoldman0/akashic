@@ -13857,6 +13857,44 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
         _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE-CONTENT !
     -1 _RTHP-D-P @ _RTHP.DELTA-PLAN-VALID ! ;
 
+\ ( producer -- flag ) The DELTA plan is the one the producer sealed when it
+\ compared the banks now pending and on screen, in this attempt, for these
+\ draws, this source and these contents.
+: _RTHP-DELTA-PLAN-SEALED?  ( producer -- flag )
+    DUP _RTHP.DELTA-PLAN-VALID @ 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.TARGET-ACTIVE @ 0= OVER _RTHP.TARGET-PENDING @ 0= OR IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-ACTIVE @
+        OVER _RTHP.TARGET-ACTIVE @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-PENDING @
+        OVER _RTHP.TARGET-PENDING @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-ACTIVE-DRAW @
+        OVER _RTHP.TARGET-ACTIVE @ _RTHP-TB.DRAW @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-PENDING-DRAW @
+        OVER _RTHP.TARGET-PENDING @ _RTHP-TB.DRAW @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-ATTEMPT @
+        OVER _RTHP.ATTEMPT @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-SOURCE-GEN @
+        OVER _RTHP.TARGET-PENDING @ _RTHP-TB.SOURCE-GEN @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-PENDING-CONTENT @
+        OVER _RTHP.TARGET-PENDING @ _RTHP-TB.CONTENT-EPOCH @ <> IF DROP 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-ACTIVE-CONTENT @
+        SWAP _RTHP.TARGET-ACTIVE @ _RTHP-TB.CONTENT-EPOCH @ = ;
+
+\ ( producer -- a n flag ) The controls the sealed DELTA plan found changed,
+\ which Desk's shell replaces without comparing them again: N cells at A,
+\ each a control's place in the pending bank, doubled, with the low bit set
+\ for a control to define.  The places ascend.  FLAG is false when no plan
+\ is sealed for the banks now pending and on screen.
+: _RTHP-DELTA-PLAN-CONTROLS@  ( producer -- a n flag )
+    DUP _RTHP-DELTA-PLAN-SEALED? 0= IF DROP 0 0 0 EXIT THEN
+    DUP _RTHP.DELTA-PLAN-CONTROLS @
+    DUP 2 PICK _RTHP.TARGET-PENDING @ _RTHP-TB.CONTROL-COUNT @ U> IF
+        2DROP 0 0 0 EXIT
+    THEN
+    DUP 8 _RTHP-U32*? 0= IF DROP 2DROP 0 0 0 EXIT THEN
+    2 PICK _RTHP.ORDER2-U @ U> IF 2DROP 0 0 0 EXIT THEN
+    SWAP _RTHP.ORDER2-A @ SWAP -1 ;
+
 \ The compact glyph plan uses the same low DEFINE bit as the control plan.
 : _RTHP-D-PLAN-GLYPH-AT  ( plan-index -- glyph-index definition? )
     8 * _RTHP-D-P @ _RTHP.GLYPH-ID-MAP-A @ + @
@@ -13905,23 +13943,7 @@ VARIABLE _RTHP-D-PLAN-NEW-GLYPHS
 
 : _RTHP-D-PLAN-BIND?  ( producer -- flag )
     _RTHP-D-BIND? 0= IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-VALID @ 0= IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE @
-        _RTHP-D-ACTIVE @ <> IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-PENDING @
-        _RTHP-D-PENDING @ <> IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE-DRAW @
-        _RTHP-D-ACTIVE @ _RTHP-TB.DRAW @ <> IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-PENDING-DRAW @
-        _RTHP-D-PENDING @ _RTHP-TB.DRAW @ <> IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-ATTEMPT @
-        _RTHP-D-P @ _RTHP.ATTEMPT @ <> IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-SOURCE-GEN @
-        _RTHP-D-PENDING @ _RTHP-TB.SOURCE-GEN @ <> IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-PENDING-CONTENT @
-        _RTHP-D-PENDING @ _RTHP-TB.CONTENT-EPOCH @ <> IF 0 EXIT THEN
-    _RTHP-D-P @ _RTHP.DELTA-PLAN-ACTIVE-CONTENT @
-        _RTHP-D-ACTIVE @ _RTHP-TB.CONTENT-EPOCH @ <> IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP-DELTA-PLAN-SEALED? 0= IF 0 EXIT THEN
     _RTHP-D-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @
         _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ U> IF 0 EXIT THEN
     _RTHP-D-P @ _RTHP.DELTA-PLAN-CONTROLS @
@@ -14229,7 +14251,11 @@ VARIABLE _RTHP-DS-NEW
                 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP
-    _RTHP-ROOT-STATIC-CHANGES _RTHP-D-OPS +!
+    \ Desk's shell compares the statics as it sends them, so a comparison
+    \ built for it looks for their changes only to judge them.
+    _RTHP-D-P @ _RTHP.SHELL-BUILT @ 0= _RTHP-ROOT-NEW @ OR IF
+        _RTHP-ROOT-STATIC-CHANGES _RTHP-D-OPS +!
+    THEN
     _RTHP-D-P @ _RTHP.SHELL-BUILT @ IF
         \ Desk's shell sends the runs of its own regions, and fences a frame
         \ in which nothing changed, from its own banks: the applications'

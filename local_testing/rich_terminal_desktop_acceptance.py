@@ -11968,6 +11968,7 @@ _SHADOW_CHECK_VARIABLES = {
     "checks_producer_menus": "FSHD-CHECKS-PRODUCER-MENUS",
     "checks_shell_glyphs": "FSHD-CHECKS-SHELL-GLYPHS",
     "checks_root_facts": "FSHD-CHECKS-ROOT-FACTS",
+    "checks_shell_delta": "FSHD-CHECKS-SHELL-DELTA",
     # The judge of the root facts (hybrid-screen-producer.f): comparisons
     # judged, the roots their pending banks held, how many of those changed
     # or went, and the items judged.
@@ -11982,6 +11983,7 @@ SHADOW_CHECK_STAGES = {
     3: "the screen producer's menu controls",
     4: "the shell's runs of a region",
     5: "the root facts",
+    6: "the shell's DELTA of the applications' items",
 }
 
 

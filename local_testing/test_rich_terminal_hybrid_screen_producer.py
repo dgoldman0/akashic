@@ -5823,7 +5823,10 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
         source, "_RTHP-D-PLAN-COMPACT-CONTROLS?"
     )
     plan_seal = _word(source, "_RTHP-D-PLAN-SEAL")
+    # The binding checks the plan was sealed for the banks it compares.
     plan_bind = _word(source, "_RTHP-D-PLAN-BIND?")
+    assert "_RTHP-DELTA-PLAN-SEALED?" in plan_bind
+    plan_bind += _word(source, "_RTHP-DELTA-PLAN-SEALED?")
     plan_control = _word(source, "_RTHP-D-PLAN-CONTROL!")
     plan_control_store = _word(source, "_RTHP-D-PLAN-CONTROL-STORE?")
     control_pair = _word(source, "_RTHP-D-CONTROL-PAIR")
@@ -6998,7 +7001,10 @@ def test_content_epoch_is_carried_by_candidates_ack_targets_and_retry_plans() ->
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     bind = _word(source, "_RTHP-D-BIND?")
     seal = _word(source, "_RTHP-D-PLAN-SEAL")
+    # The binding checks the plan was sealed for the banks it compares.
     plan_bind = _word(source, "_RTHP-D-PLAN-BIND?")
+    assert "_RTHP-DELTA-PLAN-SEALED?" in plan_bind
+    plan_bind += _word(source, "_RTHP-DELTA-PLAN-SEALED?")
     clear = _word(source, "_RTHP-DELTA-PLAN-CLEAR")
 
     assert "RUHA-SNAPSHOT-CONTENT-EPOCH@" in copy

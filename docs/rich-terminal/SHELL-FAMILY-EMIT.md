@@ -54,6 +54,20 @@ cancelling the whole capture.
 comparison for one item.
 
 Both batches are checked with `RTE-FAMILY-BATCH-VALID?` first. The internal
-peer `_RTE-FAMILY-BATCH-DELTA-EMIT-PROVED` leaves out only those two checks,
-for a caller that proved both batches and has not written them since; the
-shell sidecar uses it for its frozen banks, each checked once when frozen.
+peer `_RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ( pending-batch active-batch shell
+known-xt -- status )` leaves out only those two checks, for a caller that
+proved both batches and has not written them since; the shell sidecar uses
+it for its frozen banks, each checked once when frozen.
+
+Its `known-xt ( entry -- list-a n known? )`, or 0, says what the caller's
+own comparison already found. The emitter calls it once for each family of
+the pending batch, in order. For a family it knows, it gives the indexes of
+the items that changed, in ascending order, and the emitter replaces those
+items without comparing any; for an instrument or series family, which has
+no DELTA replacement, it gives none. A glyph family is never known, an index
+out of order or past the family refuses the DELTA, and `known-xt` may throw,
+which refuses it too. `known? = false` leaves the family to be compared.
+With the shadow check on (`frame-shadow.f`), a known family is compared as
+well, and each item counts as a comparison of the shell-delta stage, an item
+whose comparison disagrees with the list as a difference named by its
+identity.

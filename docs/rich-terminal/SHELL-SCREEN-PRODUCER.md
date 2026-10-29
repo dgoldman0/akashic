@@ -346,8 +346,9 @@ The shell then gives each item the acknowledged identity in the same place:
 - the notice takes its acknowledged identity and is unchanged;
 - the taskbar takes the acknowledged identities and must otherwise be
   unchanged, because a DELTA cannot replace taskbar controls;
-- instruments and series take the identities in place and must be unchanged;
-  status fields and panes take them and may change;
+- instruments and series take the identities in place; the base producer's
+  comparison has found them unchanged, since a DELTA cannot replace them.
+  Status fields and panes take them and may change;
 - residual glyph runs take the acknowledged runs' identities slot by slot in
   each region. Unused acknowledged slots become invisible empty runs, and
   extra runs get identities above the producer's object frontier.
@@ -355,8 +356,25 @@ The shell then gives each item the acknowledged identity in the same place:
 Taskbar correlations and pane memberships are renumbered with them. Any other
 difference refuses the DELTA, and the producer rebuilds the draw with fresh
 identities for a complete START. DELTA-EMIT sends the difference between the
-pending and acknowledged parts through `RTE-FAMILY-BATCH-DELTA-EMIT` inside the
-open retained DELTA. After the physical acknowledgement the producer publishes
+pending and acknowledged parts through `_RTE-FAMILY-BATCH-DELTA-EMIT-PROVED`
+inside the open retained DELTA, and the base producer's comparison is the one
+comparison of the applications' controls, instruments and series. That
+comparison seals a plan of the controls it found changed, each a place in
+the pending bank, and `_RTHP-DELTA-PLAN-CONTROLS@ ( producer -- a n flag )`
+gives it while it is the plan sealed for the banks now pending and on
+screen. The applications' families of controls take the bank's records in
+order, so the plan's places, which ascend, fall to them in turn: the shell
+hands the emitter each family's places as indexes in the family, written in
+the scratch block, which nothing reads once the part is frozen, and the
+emitter replaces those controls without comparing them. The instruments and
+series are known unchanged. The shell's own items and the applications'
+statics are compared as before, and the base producer, which counts the
+statics' changes for its own DELTA, looks for them in a comparison built for
+the shell only to judge them for the root facts. A plan control to define,
+or one no family holds, refuses the DELTA, and without a plan sealed for
+these banks every item is compared. With the shadow check on, the emitter
+compares the known families too, and the journey counts each item as a
+comparison of the shell-delta stage. After the physical acknowledgement the producer publishes
 the pending bank, its part with it, exactly as after a reveal. A DELTA
 consumes no region identities, and the published part's frontier covers its
 new object identities.

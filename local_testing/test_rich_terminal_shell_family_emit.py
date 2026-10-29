@@ -9,7 +9,9 @@ from test_rich_terminal_status_static import RICH, _clean
 class Emitter(Bridge):
     def __init__(self,backend):
         bridge_source = (RICH / "engine-apt1.f").read_text()
-        emitter_source = _clean((RICH / "shell-family-emit.f").read_text())
+        # The emitter counts its shadow check's comparisons in frame-shadow.f.
+        emitter_source = (_clean((RICH / "frame-shadow.f").read_text()) + "\n" +
+                          _clean((RICH / "shell-family-emit.f").read_text()))
         def closure(source):
             result = _clean(source)
             if source == bridge_source:

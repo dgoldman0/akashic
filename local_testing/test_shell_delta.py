@@ -70,6 +70,21 @@ VARIABLE _SD-GREPLACE VARIABLE _SD-GDEFINE VARIABLE _SD-CREPLACE VARIABLE _SD-PR
             LOOP DROP
         ELSE DROP THEN
     LOOP 2DROP 0 ;
+\ The plan the screen producer's comparison seals for the banks now pending
+\ and on screen, listing the N controls at _SD-PLAN that changed.
+CREATE _SD-PLANS 71 ALLOT : _SD-PLAN _SD-PLANS 7 + -8 AND ;
+: _SD-SEAL ( n -- )
+    _SD-PLAN _SX-P _RTHP.ORDER2-A ! 64 _SX-P _RTHP.ORDER2-U !
+    _SX-P _RTHP.DELTA-PLAN-CONTROLS !
+    _SX-P _RTHP.TARGET-ACTIVE @ DUP _SX-P _RTHP.DELTA-PLAN-ACTIVE !
+        DUP _RTHP-TB.DRAW @ _SX-P _RTHP.DELTA-PLAN-ACTIVE-DRAW !
+        _RTHP-TB.CONTENT-EPOCH @ _SX-P _RTHP.DELTA-PLAN-ACTIVE-CONTENT !
+    _SX-P _RTHP.TARGET-PENDING @ DUP _SX-P _RTHP.DELTA-PLAN-PENDING !
+        DUP _RTHP-TB.DRAW @ _SX-P _RTHP.DELTA-PLAN-PENDING-DRAW !
+        DUP _RTHP-TB.SOURCE-GEN @ _SX-P _RTHP.DELTA-PLAN-SOURCE-GEN !
+        _RTHP-TB.CONTENT-EPOCH @ _SX-P _RTHP.DELTA-PLAN-PENDING-CONTENT !
+    _SX-P _RTHP.ATTEMPT @ _SX-P _RTHP.DELTA-PLAN-ATTEMPT !
+    -1 _SX-P _RTHP.DELTA-PLAN-VALID ! ;
 : _SD-HELLO 72 5 2 DRW-CHAR 69 5 3 DRW-CHAR 76 5 4 DRW-CHAR 76 5 5 DRW-CHAR 79 5 6 DRW-CHAR ;
 : _SD-HELLP _SD-HELLO 80 5 6 DRW-CHAR ;
 \ A differently styled cell splits its row into three runs.
@@ -317,8 +332,61 @@ _RTE-INSTRUMENT.ID @ RTE-FAMILY-INSTRUMENT _SI-A _SDI-FIRST _RTE-INSTRUMENT.ID @
 0 _SI-EMIT-I ! 0 _SI-EMIT-Y !
 _SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
 _SI-EMIT-I @ 0= _SS-A _SI-EMIT-Y @ 0= _SS-A
+\ The shell's own emission takes the instruments and series as the screen
+\ producer's comparison found them, unchanged; the shadow check compares
+\ them and agrees.
+-1 FSHD-ON ! FSHD-RESET 0 _SD-SEAL
+_SD-CLEAR _RSHSP-DELTA-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A
+_SI-EMIT-I @ 0= _SS-A _SI-EMIT-Y @ 0= _SS-A
+FSHD-CHECKS-SHELL-DELTA @ 2 > _SS-A FSHD-MISMATCHES @ 0= _SS-A
+0 FSHD-ON !
 _SS-DONE
-''', minimum=16014)
+''', minimum=16020)
+
+
+def test_the_delta_replaces_the_controls_the_producer_found_changed_without_comparing():
+    """The screen producer's comparison already found which of the
+    applications' controls changed, and seals that plan.  The shell's DELTA
+    replaces the controls the plan lists and compares none of them again, so
+    a control the plan lists is replaced even when nothing about it changed,
+    and one it leaves out is not sent even when it did.  The shadow check
+    compares them as well and counts the difference.  A plan that would
+    define a control, or that lists one no family holds, refuses the DELTA,
+    and without a plan sealed for these banks every control is compared."""
+    staged_run(DELTA + r'''
+: _SK-CONTROL ( -- control ) _SD-TA _RTHP-PACK-CONTROLS-A ;
+: _SK-EMIT ( -- status ) _SD-CLEAR _RSHSP-DELTA-EMIT ;
+_SX-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+\ Listed, the applet's control is replaced, beside the changed run.
+0 _SD-PLAN ! 1 _SD-SEAL
+_SK-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A _SD-GREPLACE @ 1 = _SS-A
+\ Not listed, it is neither compared nor replaced.
+0 _SD-SEAL _SK-EMIT _SS-OK _SD-CREPLACE @ 0= _SS-A _SD-GREPLACE @ 1 = _SS-A
+\ It changes, and the plan misses it: it is not sent, and the shadow check
+\ names it.
+_SK-CONTROL _RTE-CONTROL.STATE DUP @ 1 XOR SWAP !
+-1 FSHD-ON ! FSHD-RESET
+_SK-EMIT _SS-OK _SD-CREPLACE @ 0= _SS-A
+FSHD-CHECKS-SHELL-DELTA @ 0> _SS-A FSHD-MISMATCHES @ 1 = _SS-A
+FSHD-FIRST-STAGE @ FSHD-STAGE-SHELL-DELTA = _SS-A
+FSHD-FIRST-ITEM @ _SK-CONTROL _RTE-CONTROL.ID @ = _SS-A
+\ Listed, it is sent, and the shadow check agrees.
+FSHD-RESET 1 _SD-SEAL
+_SK-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A FSHD-MISMATCHES @ 0= _SS-A
+0 FSHD-ON !
+\ A control to define, or past every family's, refuses the DELTA.
+1 _SD-PLAN ! 1 _SD-SEAL _SK-EMIT RTE-S-INVALID = _SS-A
+2 _SD-PLAN ! 1 _SD-SEAL _SK-EMIT RTE-S-INVALID = _SS-A
+\ A plan sealed for other banks, or none, leaves every control compared.
+0 _SD-SEAL _SD-TB _SX-P _RTHP.DELTA-PLAN-PENDING !
+_SK-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A
+0 _SX-P _RTHP.DELTA-PLAN-VALID !
+_SK-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A
+_SS-DONE
+''', minimum=22)
 
 
 def test_every_frame_checks_validate_the_model_copy_and_the_frozen_bank():
@@ -466,7 +534,7 @@ def test_normal_mode_freezes_and_sends_a_delta_through_the_proved_emission():
     staged_run(DELTA + r'''
 : _SN-EMIT ( -- status )
     _SD-CLEAR _RSHSP-PENDING-PART _SD-BATCH _RSHSP-ACTIVE-PART _SD-BATCH
-    _SX-FX _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
+    _SX-FX 0 _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
 _SX-SETUP _SD-HOOKS
 -1 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK

@@ -6,6 +6,7 @@
 \ Any non-OK result requires cancelling the entire caller-owned capture.
 PROVIDED akashic-tui-rte-shell-family-emit
 REQUIRE family-batch.f
+REQUIRE frame-shadow.f
 REQUIRE ../check-mode.f
 
 CREATE _RTE-FEM-OWNED-START
@@ -145,6 +146,13 @@ CREATE _RTE-FEM-RUN-MEM RTE-GLYPH-RUN-SIZE 7 + ALLOT
 \ first glyph run or pane is replaced with itself so the commit still
 \ carries one operation.  Like RTE-FAMILY-BATCH-EMIT, any non-OK result
 \ requires cancelling the whole capture.
+\
+\ A caller whose own comparison already found which items of a family
+\ changed can say so, and those items are replaced without comparing any
+\ (_RTE-FAMILY-BATCH-DELTA-EMIT-PROVED).  With the shadow check on, such a
+\ family is compared as well, and an item whose comparison disagrees with
+\ the caller's counts as a difference of the shell-delta stage
+\ (frame-shadow.f).
 
 VARIABLE _RTE-FDE-ACTIVE VARIABLE _RTE-FDE-AE VARIABLE _RTE-FDE-AITEM
 VARIABLE _RTE-FDE-AREF VARIABLE _RTE-FDE-ABYTES VARIABLE _RTE-FDE-ACOUNT
@@ -231,6 +239,38 @@ CREATE _RTE-FDE-PTRS 24 ALLOT
     THEN
     RTE-S-INVALID ;
 
+\ A family whose changed items the caller found: N indexes at LIST-A, in
+\ ascending order.  A glyph family, which a DELTA may extend, is never
+\ known.  Every kind but a glyph run keeps its identity where a control
+\ does, and the shadow check names an item by it.
+VARIABLE _RTE-FDE-KNOWN-XT VARIABLE _RTE-FDE-LIST VARIABLE _RTE-FDE-LEFT
+VARIABLE _RTE-FDE-NEXT VARIABLE _RTE-FDE-ITEMS
+: _RTE-FDE-JUDGE ( list-a n -- )
+    _RTE-FDE-LEFT ! _RTE-FDE-LIST !
+    _RTE-FEM-ITEM @ _RTE-FDE-AITEM @
+    _RTE-FEM-COUNT @ 0 ?DO
+        _RTE-FDE-SAME? 0=
+        _RTE-FDE-LEFT @ IF _RTE-FDE-LIST @ @ I = ELSE 0 THEN
+        DUP IF 8 _RTE-FDE-LIST +! -1 _RTE-FDE-LEFT +! THEN
+        = _RTE-FEM-ITEM @ _RTE-CONTROL.ID @ FSHD-STAGE-SHELL-DELTA FSHD-HELD
+        _RTE-FEM-STRIDE @ DUP _RTE-FEM-ITEM +! _RTE-FDE-AITEM +!
+    LOOP
+    _RTE-FDE-AITEM ! _RTE-FEM-ITEM ! ;
+: _RTE-FDE-KNOWN ( list-a n -- status )
+    _RTE-FEM-KIND @ RTE-FAMILY-GLYPH = IF 2DROP RTE-S-INVALID EXIT THEN
+    FSHD? IF 2DUP _RTE-FDE-JUDGE THEN
+    _RTE-FEM-ITEM @ _RTE-FDE-ITEMS ! 0 _RTE-FDE-NEXT !
+    0 ?DO
+        DUP I 8 * + @
+        DUP _RTE-FDE-NEXT @ U< OVER _RTE-FEM-COUNT @ U< 0= OR IF
+            2DROP RTE-S-INVALID UNLOOP EXIT
+        THEN
+        DUP 1+ _RTE-FDE-NEXT !
+        _RTE-FEM-STRIDE @ * _RTE-FDE-ITEMS @ + _RTE-FEM-ITEM !
+        _RTE-FDE-REPLACE DUP RTE-S-OK <> IF NIP UNLOOP EXIT THEN DROP
+        1 _RTE-FDE-OPS +!
+    LOOP DROP RTE-S-OK ;
+
 \ Both catalogs name the same surface and the same regions.
 : _RTE-FDE-CATALOGS? ( -- flag )
     _RTE-FEM-CATALOG @ _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ 0 32 _RTE-FDE-BYTES= 0= IF
@@ -291,6 +331,9 @@ CREATE _RTE-FDE-PTRS 24 ALLOT
     _RTE-FDE-FENCE-E @ 0= AND IF
         _RTE-FEM-ENTRY @ _RTE-FDE-FENCE-E ! 0 _RTE-FDE-FENCE-I !
     THEN
+    _RTE-FDE-KNOWN-XT @ ?DUP IF
+        _RTE-FEM-ENTRY @ SWAP EXECUTE IF _RTE-FDE-KNOWN EXIT THEN 2DROP
+    THEN
     _RTE-FDE-GLYPHS-SAME? IF RTE-S-OK EXIT THEN
     _RTE-FEM-COUNT @ 0 ?DO
         I _RTE-FDE-ACOUNT @ U< IF
@@ -344,6 +387,7 @@ VARIABLE _RTE-FDE-PROVED
     0 _RTE-FDE-AREF ! 0 _RTE-FDE-ABYTES ! 0 _RTE-FDE-ACOUNT !
     0 _RTE-FDE-OPS ! 0 _RTE-FDE-FENCE-E ! 0 _RTE-FDE-FENCE-I !
     0 _RTE-FDE-FROM ! 0 _RTE-FDE-SIZE ! 0 _RTE-FDE-NPTR ! 0 _RTE-FDE-PROVED !
+    0 _RTE-FDE-LIST ! 0 _RTE-FDE-LEFT ! 0 _RTE-FDE-NEXT ! 0 _RTE-FDE-ITEMS !
     _RTE-FDE-PTRS 24 0 FILL ;
 \ A proof the proved peer makes only with every-frame checks on names the
 \ shell's banks, which hold its batches, when it fails (check-mode.f).  The
@@ -364,7 +408,7 @@ VARIABLE _RTE-FDE-PROVED
     ['] _RTE-FDE-BODY CATCH ?DUP IF DROP RTE-S-INVALID THEN
     _RTE-FDE-FINISH ;
 : RTE-FAMILY-BATCH-DELTA-EMIT ( pending-batch active-batch shell -- status )
-    0 _RTE-FDE-PROVED ! _RTE-FDE-EMIT ;
+    0 _RTE-FDE-KNOWN-XT ! 0 _RTE-FDE-PROVED ! _RTE-FDE-EMIT ;
 \ Internal peer for a caller that proved both batches with
 \ RTE-FAMILY-BATCH-VALID? and has not written them since, such as the shell
 \ sidecar's frozen banks, which hold proved copies of batches the family
@@ -373,8 +417,15 @@ VARIABLE _RTE-FDE-PROVED
 \ engine's and the module's storage: the banks come from a memory source,
 \ whose live blocks never overlap, and the facade was proved when it was
 \ lent (check-mode.f).
-: _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ( pending-batch active-batch shell -- status )
-    -1 _RTE-FDE-PROVED ! _RTE-FDE-EMIT ;
+\ KNOWN-XT ( entry -- list-a n known? ), or 0, says what the caller's own
+\ comparison found.  It is called once for each family of PENDING, in
+\ order.  For a family it knows, it gives the indexes of the items that
+\ changed, in ascending order, and those are replaced; for an instrument
+\ or series family, which a DELTA cannot replace, it gives none.  KNOWN?
+\ false leaves the family to be compared.  KNOWN-XT may throw, which
+\ refuses the DELTA.
+: _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ( pending-batch active-batch shell known-xt -- status )
+    _RTE-FDE-KNOWN-XT ! -1 _RTE-FDE-PROVED ! _RTE-FDE-EMIT 0 _RTE-FDE-KNOWN-XT ! ;
 
 \ Two records of family KIND are equal apart from where their text lives.
 : RTE-FAMILY-ITEM-SAME? ( pending active kind -- flag )

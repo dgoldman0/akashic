@@ -1941,11 +1941,12 @@ VARIABLE _RSHSP-DM-UA
             RTE-FAMILY-ITEM-SAME? _RSHSP-CHECK
     LOOP ;
 
-\ Statics, instruments, series and panes take the identity in place.
-\ Instruments and series must be unchanged; a status field or pane may be
-\ replaced.  The applications' items lie in the pending bank, where the base
-\ producer gave them their acknowledged identities, so for those the place
-\ is checked; the shell's own take theirs.
+\ Statics, instruments, series and panes take the identity in place, and a
+\ status field or pane may be replaced.  The applications' items lie in the
+\ pending bank, where the base producer gave them their acknowledged
+\ identities, so for those the place is checked; the shell's own take
+\ theirs.  Instruments and series are the bank's, which the base producer's
+\ comparison found unchanged.
 VARIABLE _RSHSP-DBANK
 : _RSHSP-D-PLACE ( -- )
     _RSHSP-DN @ _RSHSP-DAN @ = _RSHSP-CHECK
@@ -1969,10 +1970,6 @@ VARIABLE _RSHSP-DBANK
             _RSHSP-ITEM @ _RTE-INSTRUMENT.SERIES-ID @ DUP
                 _RSHSP-DSER-P0 @ _RSHSP-DSER-A0 @ _RSHSP-DSER-N @ _RSHSP-D-MAP
                 = _RSHSP-CHECK
-        THEN
-        _RSHSP-KIND @ DUP RTE-FAMILY-PANE <> SWAP RTE-FAMILY-STATIC <> AND IF
-            _RSHSP-ITEM @ _RSHSP-DAI @ I _RSHSP-STRIDE @ * + _RSHSP-KIND @
-                RTE-FAMILY-ITEM-SAME? _RSHSP-CHECK
         THEN
     LOOP ;
 
@@ -2076,16 +2073,62 @@ VARIABLE _RSHSP-DBANK
     _RSHSP-DSTAGE @ DUP 7 = IF DROP 112 _RSHSP-PSTAGE @ 15 MIN + ELSE
         DUP 2 6 WITHIN IF 16 * _RSHSP-KIND @ 15 MIN + ELSE 16 * THEN
     THEN 127 MIN CELLS _RSHSP-DIAG-DELTA-WHY + 1 SWAP +! ;
+\ What the screen producer's comparison found, which the emission takes
+\ rather than comparing those items again: the applications' controls that
+\ changed, from the plan it sealed for the banks now pending and on screen,
+\ and their instruments and series, which a DELTA keeps unchanged.  The
+\ shell's own items and the applications' statics are compared there.  The
+\ applications' families of controls take the bank's records in order, so
+\ the plan's places, which ascend, fall to them in turn, and once every
+\ family has been asked the whole plan has been used.  A family's places
+\ become its indexes in the scratch block, which nothing reads once the
+\ part is frozen; the build that froze it took a family entry for each
+\ application control there, more than an index takes.
+VARIABLE _RSHSP-K-PLAN VARIABLE _RSHSP-K-LEFT VARIABLE _RSHSP-K-LIST
+VARIABLE _RSHSP-K-FIRST VARIABLE _RSHSP-K-END
+VARIABLE _RSHSP-K-A VARIABLE _RSHSP-K-U
+\ The plan's controls in the bank's places FIRST to END, as indexes from
+\ FIRST.  None lies before FIRST, past the families already asked, and none
+\ is to be defined, since each family keeps its count.
+: _RSHSP-K-CONTROLS ( -- list-a n )
+    _RSHSP-P @ _RTHP.XSCRATCH-A @ DUP _RSHSP-K-LIST ! 0
+    BEGIN
+        _RSHSP-K-LEFT @ IF _RSHSP-K-PLAN @ @ 2/ _RSHSP-K-END @ U< ELSE 0 THEN
+    WHILE
+        _RSHSP-K-PLAN @ @ DUP 1 AND 0= _RSHSP-CHECK
+        2/ DUP _RSHSP-K-FIRST @ U< 0= _RSHSP-CHECK _RSHSP-K-FIRST @ -
+        OVER 1+ 8 * _RSHSP-P @ _RTHP.XSCRATCH-U @ U> 0= _RSHSP-CHECK
+        OVER 8 * _RSHSP-K-LIST @ + ! 1+
+        8 _RSHSP-K-PLAN +! -1 _RSHSP-K-LEFT +!
+    REPEAT ;
+: _RSHSP-KNOWN ( entry -- list-a n known? )
+    DUP RTE-FAMILY-ITEMS@ _RSHSP-K-U ! _RSHSP-K-A !
+    _RSHSP-K-A @ _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@ OVER + WITHIN
+        0= IF DROP 0 0 0 EXIT THEN
+    _RTE-FE.KIND @
+    DUP RTE-FAMILY-INSTRUMENT = OVER RTE-FAMILY-SERIES = OR IF DROP 0 0 -1 EXIT THEN
+    RTE-FAMILY-CONTROL <> IF 0 0 0 EXIT THEN
+    _RSHSP-K-A @ _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACK-CONTROLS-A -
+        RTE-CONTROL-SIZE / DUP _RSHSP-K-FIRST !
+    _RSHSP-K-U @ RTE-CONTROL-SIZE / + _RSHSP-K-END !
+    _RSHSP-K-CONTROLS -1 ;
 \ Inside an open retained DELTA, send what changed since the frame on
 \ screen.  Both parts were checked in full when they were frozen, and the
 \ acknowledged one again, with every-frame checks on, when the DELTA was
-\ prepared.
+\ prepared.  Without a plan sealed for these banks every item is compared.
 : _RSHSP-DELTA-EMIT ( -- status )
     _RSHSP-PENDING-PART DUP 0= IF DROP RTE-S-UNAVAILABLE EXIT THEN
     _RSHSP-DELTA-BASE? 0= IF DROP RTE-S-INVALID EXIT THEN
     DUP RSHSP-PART.BATCH @ +
     _RSHSP-ACTIVE-PART DUP RSHSP-PART.BATCH @ +
-    _RSHSP-S @ _RSHSP.SHELL @ _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
+    _RSHSP-S @ _RSHSP.SHELL @
+    _RSHSP-P @ _RTHP-DELTA-PLAN-CONTROLS@ IF
+        _RSHSP-K-LEFT ! _RSHSP-K-PLAN ! ['] _RSHSP-KNOWN
+    ELSE 2DROP 0 _RSHSP-K-LEFT ! 0 THEN
+    FSHD? IF _RSHSP-P @ _RTHP.SOURCE-DRAW @ FSHD-DRAW ! THEN
+    _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED
+    \ Every control the plan found changed lies in a family and was replaced.
+    DUP RTE-S-OK = _RSHSP-K-LEFT @ 0<> AND IF DROP RTE-S-INVALID THEN ;
 \ Each dispatch checks that the sidecar and its producer are the records
 \ they say they are.  With every-frame checks on it also checks the
 \ sidecar's header and proves its storage apart from the records it names,
