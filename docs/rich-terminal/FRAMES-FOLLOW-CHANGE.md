@@ -1136,33 +1136,42 @@ frame before the change driver.
     whose own controls must follow those, moves the statics and
     instruments up past them as it copies them, while its regions and
     panes are numbered after the producer's instrument regions and
-    statics. Building once needs one order, so 9b.3 goes in four steps
+    statics. Building once needs one order, so 9b.3 goes in three steps
     (decision 16), each showing the frames it showed before:
-    - **9b.3.1. The shell plans first.** Once the producer has lowered the
-      applications' controls, the shell takes its model and plans Desk's
-      layout: panes, taskbar, prompt, notice and status, and which pane
-      each document lies in. The producer numbers its instruments,
-      statics and runs after the shell's controls, so every item carries
-      the identity the batch sends, and the shell numbers its regions and
-      panes once the producer's instrument regions and statics are known.
-      The shell stops moving identities.
-    - **9b.3.2. The applications' items once.** The producer packs the
-      applications' controls, statics, instruments and series in the
-      batch's shape, each in its pane's content region with its text
-      dense in item order, and the batch's families for them name the
-      pending bank's arrays; the shell's copies go. The producer's
-      comparison and a click read the same arrays.
-    - **9b.3.3. The producer builds the batch.** The producer writes the
-      catalog and the shell's chrome families into the extension block
-      through the shell's region and chrome words, plans each region's
-      runs in its own glyph banks, which sit unused while the shell is
-      installed, and admits the batch. The shell's build, its freeze and
-      its work space go.
-    - **9b.3.4. One comparison.** The producer's comparison covers the
-      whole batch: the catalog, the shell's controls, panes and status,
-      and the runs slot by slot. The shell's mapping of a DELTA onto the
-      acknowledged part goes, and the DELTA goes out from the producer's
-      comparison.
+    - **9b.3.1. Numbering in the batch's order.** Once the producer has
+      lowered the applications' controls, the shell counts the controls it
+      adds after them, the taskbar's, Desk's prompt and the notice, and the
+      producer numbers its instruments, statics and runs past them, so
+      every item carries the identity the batch sends. The shell stops
+      moving identities and numbers its status and panes straight after
+      the producer's objects.
+      **Done** on 2026-10-28 (5a8a514b). A new extension event, PLAN, comes
+      in every build; the planner counts its controls before it numbers
+      anything, so the count needs neither outputs nor pane eligibility.
+      Statics and instruments carry the identities they carried on the
+      wire before; the panes and the shell's runs take smaller ones. A
+      typed letter's burst frame builds in 7.82 million steps against 7.78,
+      the count's cost, and sends the same 18 DELTAs and bytes; the
+      canonical journey passed with the shadow check, sending the same
+      presents, and in safe mode.
+    - **9b.3.2. The shell builds in the producer's storage.** The shell
+      writes its batch straight into the free extension block, with its
+      passing work at the block's far end and each region's glyph slots in
+      the producer's glyph banks, which sit unused while the shell is
+      installed, so its freeze and its work space go. A candidate built
+      alone sends the runs packed in its bank, which the shell's planning
+      leaves alone.
+    - **9b.3.3. One copy and one comparison.** The producer calls the
+      shell's model, region and chrome words to build the batch before it
+      compares, and its comparison covers the whole batch: the
+      applications' items, the catalog, the shell's controls, panes and
+      status, and the runs slot by slot. The target bank stops packing the
+      applications' items, which the batch holds, and the shell's mapping
+      of a DELTA onto the acknowledged part goes; the DELTA goes out from
+      the producer's comparison. The comparison reads the items the
+      target banks hold, which keep their text and samples as offsets
+      where the batch needs addresses, so the copy and the comparison go
+      together, once the batch is built in the producer's storage.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
@@ -1421,7 +1430,7 @@ Taken on 2026-10-28:
     second glyph planning and the second copy and comparison of every item,
     an estimated 2 to 3 million of a typed letter's 9.63 million steps, on
     STARTs as well as DELTAs.
-16. **How 9b.3 goes.** In full, before the change driver, in the four steps
+16. **How 9b.3 goes.** In full, before the change driver, in the steps
     above. A smaller 9b.3 would only have moved the shell's glyph slots
     into the producer's unused glyph banks, freeing about 4 MB, and left
     one copy of each item and one comparison to part 10. It would have
