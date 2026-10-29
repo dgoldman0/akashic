@@ -3893,10 +3893,10 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "DIALOG-BASE-CONTROLS", "DIALOG-BASE-TEXT", "DIALOG-BASE-CLAIMS",
                  "DIALOG-REFUSED", "DIALOG-UTF8", "PENDING-SEAL", "ACTIVE-SEAL",
                  "SHELL-BUILT", "BASE-Z", "XBLOCK0-A", "XBLOCK0-U", "XBLOCK1-A",
-                 "XBLOCK1-U", "SHELL-CONTROLS"):
+                 "XBLOCK1-U", "SHELL-CONTROLS", "XSCRATCH-A", "XSCRATCH-U"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 5136
+    assert _constant(source, "RTHP-SIZE") == expected == 5152
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:

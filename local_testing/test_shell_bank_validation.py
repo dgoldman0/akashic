@@ -6,11 +6,11 @@ from test_shell_snapshot import PRELUDE as SOURCE
 FIXTURE = CLONE + SOURCE + r'''
 CREATE _SB-SS 247 ALLOT CREATE _SB-BS 32775 ALLOT
 CREATE _SB-PS RTHP-SIZE 7 + ALLOT CREATE _SB-HS SHSN-SIZE 7 + ALLOT
-CREATE _SB-XS RTE-SHELL-FACADE-SIZE 7 + ALLOT CREATE _SB-WS 4103 ALLOT
+CREATE _SB-XS RTE-SHELL-FACADE-SIZE 7 + ALLOT
 CREATE _SB-TS _RTHP-TARGET-BANK-HEADER-SIZE 7 + ALLOT
 : _SB-S _SB-SS 7 + -8 AND ; : _SB-B _SB-BS 7 + -8 AND ;
 : _SB-P _SB-PS 7 + -8 AND ; : _SB-H _SB-HS 7 + -8 AND ; : _SB-X _SB-XS 7 + -8 AND ;
-: _SB-W _SB-WS 7 + -8 AND ; : _SB-T _SB-TS 7 + -8 AND ;
+: _SB-T _SB-TS 7 + -8 AND ;
 VARIABLE _SB-BO VARIABLE _SB-U VARIABLE _SB-OLD
 : _SB-BUILD
     _SS-BUILD
@@ -35,8 +35,7 @@ VARIABLE _SB-BO VARIABLE _SB-U VARIABLE _SB-OLD
 : _SB-HEADER
     _SB-S 240 0 FILL
     _RSHSP-MAGIC _SB-S _RSHSP.MAGIC ! RSHSP-SIZE _SB-S _RSHSP.SIZE ! _SB-S _SB-S _RSHSP.SELF !
-    _SB-P _SB-S _RSHSP.PRODUCER ! _SB-H _SB-S _RSHSP.SOURCE ! _SB-X _SB-S _RSHSP.SHELL !
-    _SB-W _SB-S _RSHSP.WORK ! 4096 _SB-S _RSHSP.WORK-U ! ;
+    _SB-P _SB-S _RSHSP.PRODUCER ! _SB-H _SB-S _RSHSP.SOURCE ! _SB-X _SB-S _RSHSP.SHELL ! ;
 '''
 
 
@@ -163,13 +162,13 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
     external = word("_RSHSP-EXTERNAL?")
     assert "SHSN-LIVE-STORAGE-DISJOINT?" in external and "_SHSN-" not in external
     authority = word("_RSHSP-AUTHORITY?")
-    # Only the producer's arena and extension blocks, which the header does
-    # not cover, are checked.
+    # Only the producer's arena, scratch block and extension blocks, which
+    # the header does not cover, are checked.
     assert "_RSHSP-HEADER?" not in authority
     assert authority.count("_RSHSP-SPAN?") == 1
     assert "_RTHP.ARENA-U @ _RSHSP-SPAN?" in authority
-    assert authority.index("_RSHSP-XBLOCK-SPANS?") < authority.index("_RSHSP-SPANS? ;")
-    assert word("_RSHSP-XBLOCK-SPANS?").count("_RSHSP-SPAN?") == 2
+    assert authority.index("_RSHSP-BLOCK-SPANS?") < authority.index("_RSHSP-SPANS? ;")
+    assert word("_RSHSP-BLOCK-SPANS?").count("_RSHSP-SPAN?") == 3
     # Every caller checks the header, or each span, first.  The dispatch
     # checks the records' names in both modes, then, with every-frame checks
     # on, the header and the storage, and otherwise binds them.

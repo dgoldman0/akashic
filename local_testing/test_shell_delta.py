@@ -226,10 +226,10 @@ def test_a_reused_region_reserves_slots_for_its_rows_not_its_cells():
     """A DELTA reserves glyph slots for the acknowledged runs it copies and
     one per cell of each changed row, not one per cell of the region. The
     pane is the last glyph region built, so its figures are the ones left in
-    the producer's variables."""
+    the producer's variables.  The slots lie in the screen producer's glyph
+    banks, so they take nothing of its scratch block."""
     staged_run(DELTA + r'''
 CREATE _SD-ROWS 64 ALLOT CREATE _SD-SAVE 131072 ALLOT VARIABLE _SD-USED
-VARIABLE _SD-START-WORK VARIABLE _SD-ROW-WORK
 : _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
 \ Every cell of row 5 differs in style from its neighbours: one run a cell,
 \ the most a changed row can take.
@@ -239,7 +239,6 @@ VARIABLE _SD-START-WORK VARIABLE _SD-ROW-WORK
 _SX-SETUP _SD-HOOKS
 _SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
 ' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
-_SX-S RSHSP-WORK-USED@ _SD-START-WORK !
 ' _SD-STRIPES _SD-DRAW _SD-TA _SD-PENDING
 0 _SD-MAP -1 _SD-ROWS 5 + C!
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
@@ -249,19 +248,16 @@ _SD-PENDING-VALID? _SS-A
 _RSHSP-GCELLS @ 171 = _SS-A
 _RSHSP-GSLOTS @ _RSHSP-GA-N @ 19 + = _SS-A
 _RSHSP-GCOUNT @ 1+ _RSHSP-GSLOTS @ = _SS-A
-_SX-S RSHSP-WORK-USED@ DUP _SD-ROW-WORK ! _SD-START-WORK @ U< _SS-A
 _SD-PENDING-BYTES DUP _SD-USED ! _SX-KB _SD-SAVE ROT MOVE
 \ With every row changed the reservation is a START's, one slot a cell,
 \ and the part is the same.
 _SX-P _RTHP-XBLOCK-DROP -1 _SD-MAP
 _RSHSP-DELTA-PREPARE _SS-OK
 _RSHSP-GSLOTS @ 171 = _SS-A
-_SX-S RSHSP-WORK-USED@ _SD-START-WORK @ = _SS-A
 _SD-PENDING-BYTES _SD-USED @ = _SS-A
 _SX-KB _SD-USED @ _SD-SAVE _SD-USED @ COMPARE 0= _SS-A
-." SHELL GLYPH WORK " _SD-START-WORK @ . _SD-ROW-WORK @ . CR
 _SS-DONE
-''', minimum=11)
+''', minimum=9)
 
 
 def test_a_glyph_family_lays_out_its_spans_in_the_order_the_batch_lists_them():

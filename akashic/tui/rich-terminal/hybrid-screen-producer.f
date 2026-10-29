@@ -395,7 +395,13 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ and runs are numbered after them, so each carries the identity the
 \ extension's batch sends.  0 without an extension.
 : _RTHP.SHELL-CONTROLS           ( p -- a ) 5128 + ;
-5136 CONSTANT RTHP-SIZE
+\ The extension's scratch block, beside the extension blocks: 0 0, or a
+\ block and its bytes.  The extension builds its part of a frame there
+\ before it freezes it into an extension block; nothing kept lies in it.
+\ It grows from the memory source to what a build needs and half again.
+: _RTHP.XSCRATCH-A               ( p -- a ) 5136 + ;
+: _RTHP.XSCRATCH-U               ( p -- a ) 5144 + ;
+5152 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 \ An omitted graph: the cells it paints, row col row1 col1, and the token
@@ -1359,6 +1365,9 @@ VARIABLE _RTHP-V-P
         DROP 0 EXIT
     THEN
     DUP _RTHP.XBLOCK1-A @ OVER _RTHP.XBLOCK1-U @ _RTHP-XBLOCK-SHAPE? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _RTHP.XSCRATCH-A @ OVER _RTHP.XSCRATCH-U @ _RTHP-XBLOCK-SHAPE? 0= IF
         DROP 0 EXIT
     THEN
     DUP _RTHP.EXTENSION @ OVER _RTHP-EXTENSION? 0= IF DROP 0 EXIT THEN
@@ -3767,13 +3776,15 @@ VARIABLE _RTHP-TL-INTENT
     DUP _RTHP.PHASE @ _RTHP-PH-WAIT <>
     OVER _RTHP.TARGET-ACTIVE @ 0<> OR
     OVER _RTHP.TARGET-PENDING @ 0<> OR IF 2DROP SCB-S-INVALID EXIT THEN
-    \ The extension blocks come from MEMORY alone, so it gives back each one.
-    DUP _RTHP.XBLOCK0-A @ OVER _RTHP.XBLOCK1-A @ OR IF 2DROP SCB-S-INVALID EXIT THEN
+    \ The extension and scratch blocks come from MEMORY alone, so it gives
+    \ back each one.
+    DUP _RTHP.XBLOCK0-A @ OVER _RTHP.XBLOCK1-A @ OR
+    OVER _RTHP.XSCRATCH-A @ OR IF 2DROP SCB-S-INVALID EXIT THEN
     _RTHP.MEMORY ! SCB-S-OK ;
 
 \ RTHP-FINI ( producer -- )
-\   Give back the arenas and extension blocks the producer owns and clear
-\   it.  Call it once the terminal holds nothing of this producer's and
+\   Give back the arenas, extension blocks and scratch block the producer
+\   owns and clear it.  Call it once the terminal holds nothing of this producer's and
 \   nothing will step it.  Every picture claim goes, so CELL shows each
 \   picture.
 : RTHP-FINI  ( producer -- )
@@ -3790,6 +3801,9 @@ VARIABLE _RTHP-TL-INTENT
         THEN
         DUP _RTHP.RESOURCES-A @ ?DUP IF
             OVER _RTHP.RESOURCES-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+        THEN
+        DUP _RTHP.XSCRATCH-A @ ?DUP IF
+            OVER _RTHP.XSCRATCH-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
         THEN
         DUP _RTHP.XBLOCK1-A @ ?DUP IF
             OVER _RTHP.XBLOCK1-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
@@ -9422,15 +9436,21 @@ VARIABLE _RTHP-DIAG-ARENA-KEPT
     0 _RTHP-W-P @ _RTHP.GLYPH-DRAW !
     RTE-S-OK ;
 
+\ _RTHP-XG-GROW ( need field producer -- rte-status )
+\   The block FIELD names, an address and its bytes or 0 0, replaced by
+\   one from the memory source that holds NEED bytes and half again;
+\   nothing reads what it held.  Without a memory source, or when the
+\   source has no such block, nothing changes: CAPACITY, with the bytes
+\   asked for and held kept for the fallback record.  A block that is not
+\   apart from the producer's own storage is an anomaly; the extension
+\   proves it apart from its own.
 \ _RTHP-XBLOCK-GROW ( need producer -- rte-status )
-\   The free extension block, replaced by one from the memory source that
-\   holds NEED bytes and half again.  No bank names the free block
-\   (_RTHP-XBLOCK-FREE-FIELD), so nothing reads what it held.  Without a
-\   memory source, or when the source has no such block, nothing changes:
-\   CAPACITY, with the bytes asked for and held kept for the fallback
-\   record.  A block that is not apart from the producer's own storage is
-\   an anomaly; the extension proves it apart from its own.
+\   Grows the free extension block, which no bank names
+\   (_RTHP-XBLOCK-FREE-FIELD).
+\ _RTHP-XSCRATCH-GROW ( need producer -- rte-status )
+\   Grows the extension's scratch block.
 VARIABLE _RTHP-XG-P VARIABLE _RTHP-XG-A VARIABLE _RTHP-XG-BYTES
+VARIABLE _RTHP-XG-FIELD
 : _RTHP-XG-APART?  ( -- flag )
     _RTHP-XG-A @ _RTHP-XG-BYTES @ _RTHP-XG-P @ _RTHP-G-SEPARATE? 0= IF 0 EXIT THEN
     _RTHP-XG-A @ _RTHP-XG-BYTES @
@@ -9441,9 +9461,12 @@ VARIABLE _RTHP-XG-P VARIABLE _RTHP-XG-A VARIABLE _RTHP-XG-BYTES
         MSPAN-OVERLAP? IF 0 EXIT THEN
     _RTHP-XG-A @ _RTHP-XG-BYTES @
         _RTHP-XG-P @ DUP _RTHP.XBLOCK1-A @ SWAP _RTHP.XBLOCK1-U @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTHP-XG-A @ _RTHP-XG-BYTES @
+        _RTHP-XG-P @ DUP _RTHP.XSCRATCH-A @ SWAP _RTHP.XSCRATCH-U @
         MSPAN-OVERLAP? 0= ;
-: _RTHP-XBLOCK-GROW  ( need producer -- rte-status )
-    _RTHP-XG-P !
+: _RTHP-XG-GROW  ( need field producer -- rte-status )
+    _RTHP-XG-P ! _RTHP-XG-FIELD !
     _RTHP-XG-P @ _RTHP.MEMORY @ 0= IF DROP RTE-S-CAPACITY EXIT THEN
     DUP 1 RSHIFT + 7 + -8 AND _RTHP-XG-BYTES !
     _RTHP-XG-BYTES @ _RTHP-XG-P @ _RTHP.MEMORY @ MSRC-ALLOC
@@ -9459,10 +9482,14 @@ VARIABLE _RTHP-XG-P VARIABLE _RTHP-XG-A VARIABLE _RTHP-XG-BYTES
         _RTHP-XG-A @ _RTHP-XG-BYTES @ _RTHP-XG-P @ _RTHP.MEMORY @ MSRC-FREE
         RTE-S-INVALID EXIT
     THEN
-    _RTHP-XG-P @ _RTHP-XBLOCK-FREE-FIELD >R
+    _RTHP-XG-FIELD @ >R
     R@ @ ?DUP IF R@ 8 + @ _RTHP-XG-P @ _RTHP.MEMORY @ MSRC-FREE THEN
     _RTHP-XG-A @ R@ ! _RTHP-XG-BYTES @ R> 8 + !
     RTE-S-OK ;
+: _RTHP-XBLOCK-GROW  ( need producer -- rte-status )
+    DUP _RTHP-XBLOCK-FREE-FIELD SWAP _RTHP-XG-GROW ;
+: _RTHP-XSCRATCH-GROW  ( need producer -- rte-status )
+    DUP _RTHP.XSCRATCH-A SWAP _RTHP-XG-GROW ;
 
 \ The optional parts a candidate carries now.
 : _RTHP-PRESENT-PARTS  ( producer -- parts )
@@ -11664,6 +11691,7 @@ VARIABLE _RTHP-E-ALIGNED
 VARIABLE _RTHP-E-MAX
 VARIABLE _RTHP-E-LAST
 VARIABLE _RTHP-E-NEXT
+VARIABLE _RTHP-E-BANK
 VARIABLE _RTHP-E-FIELDS
 VARIABLE _RTHP-E-COLLECTIONS
 VARIABLE _RTHP-E-CONTENT-ITEMS
@@ -14972,14 +15000,15 @@ VARIABLE _RTHP-ES-P
         _RTE-HA.INSTRUMENT-LAST @ = AND
     IF RTE-S-OK ELSE RTE-S-INVALID THEN ;
 
+\ A run of the pending bank _RTHP-E-BANK into the run record.
 : _RTHP-GLYPH-RUN!  ( item ref producer -- flag )
     _RTHP-E-P ! _RTHP-E-REF ! _RTHP-E-ITEM !
     _RTHP-E-REF @ RGRP-TEXT-REF-OFFSET@
         _RTHP-E-TEXT @ <> IF 0 EXIT THEN
     _RTHP-E-REF @ RGRP-TEXT-REF-LENGTH@ DUP _RTHP-E-NEXT !
         _RTHP-E-ITEM @ _RTE-LPI.TEXT-CAPACITY @ <> IF 0 EXIT THEN
-    _RTHP-E-TEXT @ _RTHP-E-P @ _RTHP.GLYPH-TEXT-USED @ U> IF 0 EXIT THEN
-    _RTHP-E-NEXT @ _RTHP-E-P @ _RTHP.GLYPH-TEXT-USED @
+    _RTHP-E-TEXT @ _RTHP-E-BANK @ _RTHP-TB.GLYPH-TEXT-USED @ U> IF 0 EXIT THEN
+    _RTHP-E-NEXT @ _RTHP-E-BANK @ _RTHP-TB.GLYPH-TEXT-USED @
         _RTHP-E-TEXT @ - U> IF 0 EXIT THEN
     _RTHP-E-P @ _RTHP.RUN DUP RTE-GLYPH-RUN-SIZE 0 FILL
     _RTHP-E-P @ _RTHP.OWNER @ OVER _RTE-GLYPH-RUN.OWNER !
@@ -14989,7 +15018,7 @@ VARIABLE _RTHP-ES-P
     _RTHP-E-ITEM @ 8 + OVER 32 + 96 MOVE
     DROP
     _RTHP-E-NEXT @ IF
-        _RTHP-E-P @ _RTHP.GLYPH-TEXT-A @ _RTHP-E-TEXT @ +
+        _RTHP-E-BANK @ _RTHP-PACK-GLYPH-A _RTHP-E-TEXT @ +
             _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-A !
     ELSE
         0 _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-A !
@@ -14997,14 +15026,21 @@ VARIABLE _RTHP-ES-P
     _RTHP-E-NEXT @ _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-U !
     -1 ;
 
+\ The runs go out as the pending bank packed them: an extension may plan
+\ its own runs in the producer's glyph banks once the bank is packed.
 : _RTHP-EMIT-GLYPHS  ( producer -- rte-status )
     _RTHP-E-P !
+    _RTHP-E-P @ _RTHP.TARGET-PENDING @ DUP _RTHP-E-BANK ! 0= IF
+        RTE-S-INVALID EXIT
+    THEN
+    _RTHP-E-BANK @ _RTHP-TB.GLYPH-SLOT-COUNT @
+        _RTHP-E-P @ _RTHP.GLYPH-COUNT @ <> IF RTE-S-INVALID EXIT THEN
     0 _RTHP-E-TEXT ! 0 _RTHP-E-ALIGNED ! 0 _RTHP-E-MAX !
     0 _RTHP-E-LAST !
     _RTHP-E-P @ _RTHP.GLYPH-COUNT @ 0 ?DO
-        _RTHP-E-P @ _RTHP.GLYPH-ITEMS-A @
+        _RTHP-E-BANK @ _RTHP-PACK-ITEMS-A
             I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RTHP-E-ITEM !
-        _RTHP-E-P @ _RTHP.GLYPH-REFS-A @
+        _RTHP-E-BANK @ _RTHP-PACK-REFS-A
             I RGRP-TEXT-REF-SIZE * + _RTHP-E-REF !
         _RTHP-E-ITEM @ _RTHP-E-REF @ _RTHP-E-P @
             _RTHP-GLYPH-RUN! 0= IF RTE-S-INVALID UNLOOP EXIT THEN
@@ -15016,7 +15052,7 @@ VARIABLE _RTHP-ES-P
         _RTHP-E-P @ _RTHP.RUN _RTHP-E-P @ _RTHP.FACADE @
             RTE-GLYPH-RUN-DEFINE DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
     LOOP
-    _RTHP-E-TEXT @ _RTHP-E-P @ _RTHP.GLYPH-TEXT-USED @ =
+    _RTHP-E-TEXT @ _RTHP-E-BANK @ _RTHP-TB.GLYPH-TEXT-USED @ =
     _RTHP-E-TEXT @ _RTHP-E-P @ _RTHP.ADMISSION _RTE-HA.GLYPH-TEXT @ = AND
     _RTHP-E-ALIGNED @ _RTHP-E-P @ _RTHP.ADMISSION
         _RTE-HA.GLYPH-ALIGNED @ = AND

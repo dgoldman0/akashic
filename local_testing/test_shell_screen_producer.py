@@ -29,7 +29,7 @@ def test_the_shell_record_s_fields_lie_apart_and_inside_it():
         start = int(offset or 0)
         spans.append((start, start + (extension if name == "EXTENSION" else 8), name))
     spans.sort()
-    assert len(spans) >= 12
+    assert len(spans) >= 9
     for (_start, end, name), (next_start, _end, next_name) in zip(spans, spans[1:]):
         assert end <= next_start, (name, next_name)
     assert spans[-1][1] == size
@@ -37,12 +37,12 @@ def test_the_shell_record_s_fields_lie_apart_and_inside_it():
 
 def test_shell_producer_actual_dependency_closure_and_header_contract():
     run(PRELUDE + r'''
-RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 128 = _FM-A
+RSHSP-BYTES RSHSP-SIZE = _FM-A RSHSP-SIZE 104 = _FM-A
 RSHSP-PART-HEADER-SIZE 96 = _FM-A
 0 RSHSP-PART.PROMPT 88 = _FM-A
 0 _RSHSP.PRODUCER 24 = _FM-A 0 _RSHSP.SOURCE 32 = _FM-A
-0 _RSHSP.WORK 48 = _FM-A 0 _RSHSP.PART-BYTES 64 = _FM-A
-0 _RSHSP.MEMORY 80 = _FM-A 0 _RSHSP.EXTENSION 88 = _FM-A
+0 _RSHSP.PART-BYTES 48 = _FM-A 0 _RSHSP.SCRATCH-USED 56 = _FM-A
+0 _RSHSP.EXTENSION 64 = _FM-A
 0 RSHSP-PART.BATCH 0= _FM-A 0 RSHSP-PART.MODEL 8 = _FM-A
 0 RSHSP-PART.CORRELATIONS 24 = _FM-A 0 RSHSP-PART.ACTIONS 40 = _FM-A
 0 RSHSP-PART.MEMBERSHIP 56 = _FM-A 0 RSHSP-PART.NEXT-REGION 72 = _FM-A
@@ -51,7 +51,7 @@ RSHSP-PART-HEADER-SIZE 96 = _FM-A
 0 _RTHP-TB.XBLOCK 368 = _FM-A 0 _RTHP-TB.XBLOCK-BYTES 376 = _FM-A
 _RTHP-TARGET-BANK-HEADER-SIZE 384 = _FM-A
 _FM-DONE
-''', minimum=20)
+''', minimum=19)
 
 
 from test_shell_snapshot import PRELUDE as SHELL_MODEL
@@ -69,6 +69,8 @@ CREATE _SX-CIS 207 ALLOT CREATE _SX-SIS 183 ALLOT CREATE _SX-DIRS 247 ALLOT
 CREATE _SX-CXS 63 ALLOT CREATE _SX-SXS 47 ALLOT CREATE _SX-CTS 15 ALLOT
 CREATE _SX-TARGETS _RTHP-TARGET-BANK-HEADER-SIZE 7 + ALLOT
 CREATE _SX-TARGET2S _RTHP-TARGET-BANK-HEADER-SIZE 7 + ALLOT
+\ The screen producer's glyph banks, for every cell of the 32 by 12 surface.
+CREATE _SX-GIS 46087 ALLOT CREATE _SX-GRS 6151 ALLOT CREATE _SX-GTS 4103 ALLOT
 : _SX-C _SX-CS 7 + -8 AND ; : _SX-A _SX-AS 7 + -8 AND ; : _SX-B _SX-BS 7 + -8 AND ;
 : _SX-H _SX-HS 7 + -8 AND ; : _SX-D _SX-DS 7 + -8 AND ;
 : _SX-SLOT _SX-SLOTS 7 + -8 AND ; : _SX-P _SX-PS 7 + -8 AND ;
@@ -77,6 +79,7 @@ CREATE _SX-TARGET2S _RTHP-TARGET-BANK-HEADER-SIZE 7 + ALLOT
 : _SX-CI _SX-CIS 7 + -8 AND ; : _SX-SI _SX-SIS 7 + -8 AND ; : _SX-DIR _SX-DIRS 7 + -8 AND ;
 : _SX-CX _SX-CXS 7 + -8 AND ; : _SX-SX _SX-SXS 7 + -8 AND ; : _SX-CT _SX-CTS 7 + -8 AND ;
 : _SX-TARGET _SX-TARGETS 7 + -8 AND ; : _SX-TARGET2 _SX-TARGET2S 7 + -8 AND ;
+: _SX-GI _SX-GIS 7 + -8 AND ; : _SX-GR _SX-GRS 7 + -8 AND ; : _SX-GT _SX-GTS 7 + -8 AND ;
 VARIABLE _SX-I VARIABLE _SX-CHILD VARIABLE _SX-RGN VARIABLE _SX-SCREEN
 VARIABLE _SX-M VARIABLE _SX-MU VARIABLE _SX-STATUS VARIABLE _SX-ADMISSIONS
 VARIABLE _SX-EMITS VARIABLE _SX-REGIONS VARIABLE _SX-TASK-ID VARIABLE _SX-LAUNCH-ID
@@ -197,7 +200,10 @@ VARIABLE _SX-SAVED-U VARIABLE _SX-TASK-CORR VARIABLE _SX-LAUNCH-CORR
 : _SX-SETUP
     _SX-SOURCE _SX-CANDIDATE _SX-S RSHSP-SIZE 0 FILL
     _SX-C _SX-S _RSHSP.SOURCE ! _SX-FX _SX-S _RSHSP.SHELL ! _SX-P _SX-S _RSHSP.PRODUCER !
-    _SX-W _SX-S _RSHSP.WORK ! 262144 _SX-S _RSHSP.WORK-U !
+    _SX-W _SX-P _RTHP.XSCRATCH-A ! 262144 _SX-P _RTHP.XSCRATCH-U !
+    _SX-GI _SX-P _RTHP.GLYPH-ITEMS-A ! 46080 _SX-P _RTHP.GLYPH-ITEMS-U !
+    _SX-GR _SX-P _RTHP.GLYPH-REFS-A ! 6144 _SX-P _RTHP.GLYPH-REFS-U !
+    _SX-GT _SX-P _RTHP.GLYPH-TEXT-A !
     _SX-KA _SX-P _RTHP.XBLOCK0-A ! 131072 _SX-P _RTHP.XBLOCK0-U !
     _SX-KB _SX-P _RTHP.XBLOCK1-A ! 131072 _SX-P _RTHP.XBLOCK1-U !
     _SX-P _RSHSP-P ! _SX-S _RSHSP-S ! _SX-NUMBER ;
@@ -246,8 +252,8 @@ _SX-TARGET _RTHP-TB.XBLOCK @ _SX-KA = _SS-A _RSHSP-PENDING-PART _SX-KA = _SS-A
 _SX-P _RTHP.TARGET-ACTIVE @ 0= _SS-A
 _SX-TARGET _RSHSP-PART-VALID? _SS-A
 _SX-ADMISSIONS @ 1 = _SS-A _SX-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
-." SHELL METRICS " _SX-S RSHSP-WORK-USED@ . _SX-S RSHSP-PART-BYTES@ . CR
-_SX-S RSHSP-WORK-USED@ 262144 U< _SS-A
+." SHELL METRICS " _SX-S RSHSP-SCRATCH-USED@ . _SX-S RSHSP-PART-BYTES@ . CR
+_SX-S RSHSP-SCRATCH-USED@ 262144 U< _SS-A
 _SX-S RSHSP-PART-BYTES@ _SX-TARGET _RTHP-TB.XBLOCK-BYTES @ = _SS-A
 _SX-KA RSHSP-PART.CORRELATIONS-U @ 960 = _SS-A
 _SX-KA RSHSP-PART.MEMBERSHIP-U @ 112 = _SS-A
@@ -333,9 +339,9 @@ _SX-KA _SX-BACKA 131072 MOVE _SX-KB _SX-BACKB 131072 MOVE
 SCR-DRAW-GENERATION@ DUP _SX-P _RTHP.SOURCE-DRAW ! _SX-P _RTHP.SURFACE-GEN !
 2 _SX-P _RTHP.SOURCE-GEN !
 _SX-TARGET2 _SX-BANK _SX-TARGET2 _SX-P _RTHP.TARGET-PENDING !
-1024 _SX-S _RSHSP.WORK-U !
+1024 _SX-P _RTHP.XSCRATCH-U !
 _RSHSP-PREPARE RTE-S-CAPACITY = _SS-A _SX-UNCHANGED
-262144 _SX-S _RSHSP.WORK-U !
+262144 _SX-P _RTHP.XSCRATCH-U !
 128 _SX-P _RTHP.XBLOCK1-U !
 _RSHSP-PREPARE RTE-S-CAPACITY = _SS-A _SX-UNCHANGED
 _SX-S RSHSP-PART-BYTES@ 128 U> _SS-A
@@ -359,17 +365,16 @@ VARIABLE _SG-ALLOCS VARIABLE _SG-FREES VARIABLE _SG-FREED
 : _SG-FREE ( addr bytes ctx -- ) DROP 1 _SG-FREES +! _SG-FREED +! FREE ;
 CREATE _SG-SRCS MSRC-SIZE 7 + ALLOT : _SG-SRC _SG-SRCS 7 + -8 AND ;
 : _SG-HELD ( -- u )
-    _SX-S _RSHSP.WORK-U @ _SX-P _RTHP.XBLOCK0-U @ + _SX-P _RTHP.XBLOCK1-U @ + ;
-\ The smallest storage, from one memory source, as Desk sets it up: the
-\ shell's first work space, and no extension block of the producer's yet.
+    _SX-P _RTHP.XSCRATCH-U @ _SX-P _RTHP.XBLOCK0-U @ + _SX-P _RTHP.XBLOCK1-U @ + ;
+\ The smallest storage, from one memory source, as Desk sets it up: no
+\ scratch or extension block of the producer's yet.
 : _SG-SETUP
     _SX-SETUP
     ['] _SG-ALLOC ['] _SG-FREE 0 0 _SG-SRC MSRC-INIT
-    RSHSP-FIRST-WORK-BYTES _SG-SRC MSRC-ALLOC _SX-S _RSHSP.WORK !
-    RSHSP-FIRST-WORK-BYTES _SX-S _RSHSP.WORK-U !
+    0 _SX-P _RTHP.XSCRATCH-A ! 0 _SX-P _RTHP.XSCRATCH-U !
     0 _SX-P _RTHP.XBLOCK0-A ! 0 _SX-P _RTHP.XBLOCK0-U !
     0 _SX-P _RTHP.XBLOCK1-A ! 0 _SX-P _RTHP.XBLOCK1-U !
-    _SG-SRC _SX-S _RSHSP.MEMORY ! _SG-SRC _SX-P _RTHP.MEMORY !
+    _SG-SRC _SX-P _RTHP.MEMORY !
     \ As the constructor leaves it.
     _RSHSP-MAGIC _SX-S _RSHSP.MAGIC ! RSHSP-SIZE _SX-S _RSHSP.SIZE !
     _SX-S _SX-S _RSHSP.SELF !
@@ -381,18 +386,18 @@ def test_storage_grows_from_its_memory_source_until_the_candidate_fits():
     staged_run(GROWING + r"""
 VARIABLE _SG-GROWTHS
 _SG-SETUP _RSHSP-PREPARE _SS-OK
-\ The work space and the extension block the part froze into grew until
+\ The scratch block and the extension block the part froze into grew until
 \ the candidate fit.
 _RSHSP-DIAG-GROWTHS @ 2 < 0= _SS-A
-_SX-S _RSHSP.WORK-U @ _SX-S RSHSP-WORK-USED@ U< 0= _SS-A
+_SX-P _RTHP.XSCRATCH-U @ _SX-S RSHSP-SCRATCH-USED@ U< 0= _SS-A
 _SX-P _RTHP.XBLOCK0-U @ _SX-S RSHSP-PART-BYTES@ U< 0= _SS-A
 _RSHSP-PENDING-PART _SX-P _RTHP.XBLOCK0-A @ = _SS-A
 _SX-TARGET _RSHSP-PART-VALID? _SS-A
 _SX-P _RTHP.XBLOCK1-U @ 0= _SS-A
-\ Each block it replaced went back, all but the first work space taken
-\ from the source: the source holds what the shell and producer hold.
+\ Each block it replaced went back, all but the first scratch and
+\ extension blocks: the source holds what the producer holds.
 _SG-SRC MSRC-HELD@ _SG-HELD = _SS-A
-_SG-ALLOCS @ _RSHSP-DIAG-GROWTHS @ = _SS-A _SG-FREES @ 1+ _SG-ALLOCS @ = _SS-A
+_SG-ALLOCS @ _RSHSP-DIAG-GROWTHS @ = _SS-A _SG-FREES @ 2 + _SG-ALLOCS @ = _SS-A
 \ Preparing again into the same block takes nothing more.
 _RSHSP-DIAG-GROWTHS @ _SG-GROWTHS !
 _RSHSP-PREPARE _SS-OK _RSHSP-DIAG-GROWTHS @ _SG-GROWTHS @ = _SS-A
@@ -407,9 +412,9 @@ _SX-P _RTHP.XBLOCK1-U @ _SX-S RSHSP-PART-BYTES@ U< 0= _SS-A
 _SX-TARGET2 _RSHSP-PART-VALID? _SS-A
 _SX-TARGET _RSHSP-PART-VALID? _SS-A
 _SG-SRC MSRC-HELD@ _SG-HELD = _SS-A
-\ The shell gives back its work space; the producer keeps its blocks.
+\ The shell holds nothing to give back; the producer keeps its blocks.
 _SX-S RSHSP-FINI _SX-S _RSHSP.MAGIC @ 0= _SS-A
-_SG-SRC MSRC-HELD@ _SX-P _RTHP.XBLOCK0-U @ _SX-P _RTHP.XBLOCK1-U @ + = _SS-A
+_SG-SRC MSRC-HELD@ _SG-HELD = _SS-A
 _SS-DONE
 """, minimum=20)
 
@@ -417,41 +422,42 @@ _SS-DONE
 def test_a_refused_growth_leaves_the_blocks_and_records_the_bytes():
     staged_run(GROWING + r"""
 _SG-SETUP
-\ Room for the first work block only.
+\ Room for no block.
 _SG-SRC MSRC-HELD@ 64 + _SG-SRC MSRC.BUDGET !
 0 _RTHP-W-MEMORY-ASKED ! 0 _RTHP-W-MEMORY-HELD !
 _RSHSP-PREPARE RTE-S-CAPACITY = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
+_SX-P _RTHP.XSCRATCH-U @ 0= _SS-A
 _SX-P _RTHP.XBLOCK0-U @ 0= _SS-A
 _SX-P _RTHP.XBLOCK1-U @ 0= _SS-A
 _RTHP-W-MEMORY-ASKED @ 0<> _SS-A
 _RTHP-W-MEMORY-HELD @ _SG-SRC MSRC-HELD@ = _SS-A
 _SG-SRC MSRC-HELD@ _SG-HELD = _SS-A
-\ A block that overlaps the shell's own storage is given back, not used.
-0 _SG-SRC MSRC.BUDGET ! _SX-S _RSHSP.WORK @ _SX-S _RSHSP.WORK-U @ _RSHSP-G-SEPARATE? 0= _SS-A
 _SS-DONE
 """, minimum=9)
 
 
-def test_a_grown_block_that_overlaps_the_shell_s_storage_is_an_anomaly():
-    """A block from the memory source that overlaps the shell's own storage
+def test_a_grown_scratch_block_that_overlaps_the_producer_s_storage_is_an_anomaly():
+    """The screen producer grows the scratch block the shell builds in.  A
+    block from the memory source that overlaps the producer's own record
     means the source's records are wrong, which only a bug causes.  The
-    shell gives it back unused, the preparation refuses, and safe mode turns
-    on for the rest of the session, naming the source (check-mode.f)."""
+    producer gives it back unused, the preparation refuses, and safe mode
+    turns on for the rest of the session, naming the source (check-mode.f)."""
     staged_run(GROWING + r"""
-\ A source that hands out the shell's own work space, and takes it back
+\ A source that hands out the producer's own record, and takes it back
 \ without freeing it.
-: _SG-BAD-ALLOC ( bytes ctx -- addr|0 ) 2DROP 1 _SG-ALLOCS +! _SX-S _RSHSP.WORK @ ;
+: _SG-BAD-ALLOC ( bytes ctx -- addr|0 ) 2DROP 1 _SG-ALLOCS +! _SX-P ;
 : _SG-BAD-FREE ( addr bytes ctx -- ) DROP 2DROP 1 _SG-FREES +! ;
 _SG-SETUP
 ' _SG-BAD-ALLOC _SG-SRC MSRC.ALLOC-XT ! ' _SG-BAD-FREE _SG-SRC MSRC.FREE-XT !
 CHK-SAFE? 0= _SS-A
 _RSHSP-PREPARE RTE-S-INVALID = _SS-A
 _SG-ALLOCS @ 1 = _SS-A _SG-FREES @ 1 = _SS-A
+_SX-P _RTHP.XSCRATCH-A @ 0= _SS-A
 CHK-SAFE-MODE @ CHK-WHY-ANOMALY = _SS-A
 CHK-DAMAGE S" Desk's memory source" COMPARE 0= _SS-A
 _SS-DONE
-""", minimum=6)
+""", minimum=7)
 
 
 def test_a_grown_extension_block_that_overlaps_the_producer_s_storage_is_an_anomaly():
@@ -464,9 +470,9 @@ def test_a_grown_extension_block_that_overlaps_the_producer_s_storage_is_an_anom
 : _SG-BAD-ALLOC ( bytes ctx -- addr|0 ) 2DROP 1 _SG-ALLOCS +! _SX-P ;
 : _SG-BAD-FREE ( addr bytes ctx -- ) DROP 2DROP 1 _SG-FREES +! ;
 _SG-SETUP
-\ A work space that already holds the build, so the extension block is the
-\ first block to grow.
-_SX-W _SX-S _RSHSP.WORK ! 262144 _SX-S _RSHSP.WORK-U !
+\ A scratch block that already holds the build, so the extension block is
+\ the first block to grow.
+_SX-W _SX-P _RTHP.XSCRATCH-A ! 262144 _SX-P _RTHP.XSCRATCH-U !
 ' _SG-BAD-ALLOC _SG-SRC MSRC.ALLOC-XT ! ' _SG-BAD-FREE _SG-SRC MSRC.FREE-XT !
 CHK-SAFE? 0= _SS-A
 _RSHSP-PREPARE RTE-S-INVALID = _SS-A
@@ -493,33 +499,27 @@ _SS-DONE
 ''', minimum=21)
 
 
-def test_with_every_check_on_a_held_plan_of_no_runs_names_no_banks():
-    """The screen producer keeps the glyph plan of the last candidate it
-    planned itself. For Desk's shell it plans none, so in a session the plan
-    it holds is an older draw's, and the shell plans with a reference of no
-    runs. With every check on, the planner proves the reference's banks
-    well formed, and a bank of no bytes must name no storage, so the shell's
-    reference of no runs names none of the old plan's banks; the same holds
-    for a plan of this draw that has no runs."""
+def test_the_shell_plans_its_runs_in_the_producer_s_glyph_banks():
+    """While the shell is installed the screen producer plans no runs of its
+    own, and the shell plans each region's runs in the producer's glyph
+    banks, which are sized for every cell of the surface, then copies only
+    the runs planned into its batch.  The producer then holds no plan of
+    its own for any draw, so it takes none of what the banks hold for one;
+    the shell plans with no reference to it, with every check on as well."""
     staged_run(STAGED + r'''
-CREATE _SX-GPS 263 ALLOT : _SX-GP _SX-GPS 7 + -8 AND ;
-: _SX-HELD ( draw count -- )
-    _SX-P _RTHP.GLYPH-COUNT ! _SX-P _RTHP.GLYPH-DRAW !
-    _SX-GP _SX-P _RTHP.GLYPH-ITEMS-A ! _SX-GP 128 + _SX-P _RTHP.GLYPH-REFS-A !
-    _SX-GP 192 + _SX-P _RTHP.GLYPH-TEXT-A ! 40 _SX-P _RTHP.GLYPH-TEXT-USED ! ;
 _SX-SETUP
+\ A plan the producer held for this draw, before the shell's.
+_SX-P _RTHP.SOURCE-DRAW @ _SX-P _RTHP.GLYPH-DRAW !
+_SX-GI 46080 165 FILL
 -1 CHK-EVERY-FRAME !
-\ The plan of an older draw, three runs long.
-_SX-P _RTHP.SOURCE-DRAW @ 1000 + 3 _SX-HELD
-_RSHSP-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 0= _SS-A
-_SX-TARGET _RSHSP-PART-VALID? _SS-A
-\ A plan of this draw with no runs.
-_SX-P _RTHP.SOURCE-DRAW @ 0 _SX-HELD
-_RSHSP-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 0= _SS-A
-_RSHSP-DIAG-PREPARE-REFUSALS @ 0= _SS-A
+_SX-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 0= _SS-A
 0 CHK-EVERY-FRAME !
+_SX-P _RTHP.GLYPH-DRAW @ 0= _SS-A
+_SX-TARGET _RSHSP-PART-VALID? _SS-A
+\ The banks held the slots: the runs the batch keeps are copies.
+_SX-GI C@ 165 <> _SS-A
 _SS-DONE
-''', minimum=21)
+''', minimum=4)
 
 
 def test_nonzero_menu_claim_keeps_residue_underlay_and_excludes_opaque_status():
@@ -712,7 +712,7 @@ VARIABLE _SI-FROZEN-IR VARIABLE _SI-MEMBER VARIABLE _SI-EMIT-I VARIABLE _SI-EMIT
     _SI-Y _SI-PLAN @ _RTE-SRP.ITEMS-A ! 88 _SI-PLAN @ _RTE-SRP.ITEMS-U ! ;
 : _SI-SETUP
     _SX-SETUP _SI-SECOND-PANE _SI-LEGACY
-    _SI-W _SX-S _RSHSP.WORK ! 524288 _SX-S _RSHSP.WORK-U !
+    _SI-W _SX-P _RTHP.XSCRATCH-A ! 524288 _SX-P _RTHP.XSCRATCH-U !
     _SI-A _SX-P _RTHP.XBLOCK0-A ! 524288 _SX-P _RTHP.XBLOCK0-U !
     _SI-B _SX-P _RTHP.XBLOCK1-A ! 524288 _SX-P _RTHP.XBLOCK1-U !
     ['] _SI-INSTRUMENT-CALLBACK _SX-F _RTE-F.INSTRUMENT-DEF-XT !
@@ -762,7 +762,7 @@ RTE-PANE-SIZE + _RTE-PANE.CONTENT-REGION @ _SI-MEMBER @ RSHMM.CONTENT-REGION @ =
 _SI-SAMPLES-EXACT
 _SI-BATCH @ _SX-FX RTE-FAMILY-BATCH-EMIT _SS-OK
 _SI-EMIT-I @ 2 = _SS-A _SI-EMIT-Y @ 1 = _SS-A _SX-REGIONS @ 6 = _SS-A
-." SHELL INSTRUMENT METRICS " _SX-S RSHSP-WORK-USED@ . _SX-S RSHSP-PART-BYTES@ . CR
+." SHELL INSTRUMENT METRICS " _SX-S RSHSP-SCRATCH-USED@ . _SX-S RSHSP-PART-BYTES@ . CR
 _SI-W 524288 165 FILL _SI-SAMPLES 128000 0 FILL
 _SI-SAMPLES-EXACT _SX-TARGET _RSHSP-PART-VALID? _SS-A
 _SS-DONE

@@ -9,11 +9,10 @@ names, labels, or the last active UIDL context. The capability remains opt-in.
 
 | Word | Stack |
 |---|---|
-| `RSHSP-INIT` | `( source shell-facade producer work-a work-u sidecar -- rte-status )` |
-| `RSHSP-MEMORY!` | `( memory sidecar -- rte-status )` |
+| `RSHSP-INIT` | `( source shell-facade producer sidecar -- rte-status )` |
 | `RSHSP-INSTALL` | `( sidecar -- rte-status )` |
 | `RSHSP-VALID?` | `( sidecar -- flag )` |
-| `RSHSP-WORK-USED@` | `( sidecar -- bytes )` |
+| `RSHSP-SCRATCH-USED@` | `( sidecar -- bytes )` |
 | `RSHSP-PART-BYTES@` | `( sidecar -- bytes )` |
 | `RSHSP-UNINSTALL-AFTER-STOP` | `( sidecar -- rte-status )` |
 | `RSHSP-FINI` | `( sidecar -- )` |
@@ -21,15 +20,19 @@ names, labels, or the last active UIDL context. The capability remains opt-in.
 
 The descriptor is `RSHSP-SIZE` bytes and embeds the RTHP extension descriptor.
 `RSHSP-PART-BYTES@` reports the bytes the last freeze measured for the shell's
-part of the frame and `RSHSP-WORK-USED@` the scratch high-water.
+part of the frame and `RSHSP-SCRATCH-USED@` the most of the scratch block
+the last build used.
 
-The caller gives the shell producer a work space, and may then attach a memory
-source with `RSHSP-MEMORY!` (see `utils/memory-source.f`). From then on the
-shell producer owns it. It can start as small as `RSHSP-FIRST-WORK-BYTES`:
-when a build is refused for CAPACITY because it ran out of work space, the
-producer takes a block for what was needed and half again and builds once
-more, until the candidate fits or the memory says no. `RSHSP-FINI` gives it
-back. Without a memory source the work space is the caller's fixed bound.
+The shell producer owns no storage. It builds each candidate in a scratch
+block the screen producer owns beside its extension blocks
+(`_RTHP.XSCRATCH-A`, `_RTHP.XSCRATCH-U`), and plans its glyph runs in the
+producer's glyph banks, which are sized for every cell of the surface and
+hold no plan of the producer's own while the shell is installed. The scratch
+block holds nothing kept and starts empty. When a build is refused for
+CAPACITY because the scratch block is too small, the producer replaces it
+with a block from its memory source (see `utils/memory-source.f`) for what
+the build needed and half again, and the shell builds once more, until the
+candidate fits or the memory says no.
 
 The shell's part of each frame is frozen into the screen producer's storage,
 not the shell's. RTHP owns two extension blocks beside its target banks
@@ -43,15 +46,18 @@ The blocks lie outside the producer's arena, whose layout fixes the banks'
 size, and start empty. A freeze refused for room in its block has the producer
 take a block from its memory source for what the part needs and half again,
 and builds once more; nothing reads the free block, so nothing is relocated.
-A new block must be separate from the producer's storage, and the shell's
-dispatch, with every check on, proves both blocks apart from the rest of the
-storage again. `RTHP-FINI` gives the blocks back. Without a memory source a
-producer has no blocks, and the shell's part stays CELL.
+A new block, scratch or extension, must be separate from the producer's
+storage, and the shell's dispatch, with every check on, proves the three
+blocks apart from the rest of the storage again. `RTHP-FINI` gives the blocks
+back, and `RTHP-MEMORY!` refuses a new memory source while the producer holds
+any. Without a memory source a producer has no blocks, and the shell's part
+stays CELL.
 
 Construction proves the storage pairwise disjoint from each other,
-producer/arena and extension blocks, provider, SHSN/frozen banks, ordinary
-live root/host/children, UIDL, screen and module scratch. A preparation
-repeats live authority before writing work or the free extension block.
+producer/arena, scratch and extension blocks, provider, SHSN/frozen banks,
+ordinary live root/host/children, UIDL, screen and module scratch. With every
+check on, a preparation repeats live authority before writing the scratch
+block or the free extension block.
 Storage that cannot be had refuses the entire optional shell candidate, and
 the screen producer's fallback record keeps the bytes asked for and held; the
 shell never truncates an object, string, action or sample history. The
@@ -78,17 +84,18 @@ minus one. The exact packed requirement is:
 
 `96 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
 
-The work space uses checked aligned bump allocation. Glyph projection reserves
-bounded temporary slots per clip, then compacts actual runs before the next
-clip. `WORK-USED@` records the peak reservation, including these transient
-slots. On capacity failure it reports the first required prefix that did not
-fit, which is what the work space grows to; `PART-BYTES@` is set once the full
-candidate can be measured, and is what an extension block grows to.
+The scratch block uses checked aligned bump allocation. Glyph projection
+plans each clip in slots in the producer's glyph banks, then copies the runs
+it planned into the batch before the next clip. `SCRATCH-USED@` records the
+peak reservation. On capacity failure it reports the first required prefix
+that did not fit, which is what the scratch block grows to; `PART-BYTES@` is
+set once the full candidate can be measured, and is what an extension block
+grows to.
 
 The native 32×12 candidate fixture, with one pane, both taskbar bands, one
-ordinary MENUBAR and one STATUS_FIELD, uses 66,696 peak scratch bytes and an
+ordinary MENUBAR and one STATUS_FIELD, uses 16,376 peak scratch bytes and an
 8,592-byte part. It exercises actual aggregate admission and family emission,
-then overwrites the complete work arena before validating the copied part and
+then overwrites the whole scratch block before validating the frozen part and
 publishing its input authority. These are fixture measurements, not Desk
 capacity limits; product qualification must measure the complete desktop.
 
@@ -258,7 +265,8 @@ shell's batch sends. PREPARE refuses a batch whose plan adds a different
 number of controls. Without an extension the count is 0.
 
 With the shell installed, the base producer builds its candidate for the
-shell: it plans no residual runs of its own and admits nothing. The shell
+shell: it plans no residual runs of its own, leaving its glyph banks to the
+shell, and admits nothing. The shell
 plans the runs of its regions and admits its whole batch, the candidate's
 items among them; the producer's fixed check reads the candidate's own
 plans, its identity frontier counts the candidate's objects, and its DELTA
@@ -278,7 +286,9 @@ bank, before retained BEGIN, and its part is frozen into the free extension
 block and named by that pending bank. Only successful PREPARE selects shell
 EMIT. Any failure before BEGIN drops the part from the pending bank; the
 candidate is then built alone and offered again, as above, and a second
-failure selects legacy emission.
+failure selects legacy emission. A candidate that goes out alone emits its
+runs from the pending bank's packed copy, which the shell's preparation does
+not touch, rather than from the glyph banks the shell planned in.
 Any error after shell emission starts cancels the complete capture. A START
 defines every object and history with fresh wire identities; an unchanged
 current draw is reused. Every SERIES sample and authored history value
@@ -354,8 +364,9 @@ give; a test checks that the two parts are identical byte for byte. While
 typing, that is the edited line and the status line instead of every cell of
 every pane. Every planner call of one build runs under a single
 borrow of the projection planes: every request, claim, work and output span
-lies in the sidecar's work arena, so one proof that the arena is disjoint
-from screen storage covers them all, as the base producer does for its rows.
+lies in the producer's scratch block or in its arena, which holds the glyph
+banks, so one proof each that the two are disjoint from screen storage covers
+them all, as the base producer does for its rows.
 
 The producer's unchanged-frame shortcut republishes its own target alone, so
 with the shell installed every changed draw takes the full build. Private

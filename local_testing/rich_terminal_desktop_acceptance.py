@@ -546,7 +546,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        642,
+        644,
         {
             "magic": 0,
             "size": 1,
@@ -699,6 +699,8 @@ _GUEST_FAILURE_RECORDS = {
             "xblock1_address": 639,
             "xblock1_bytes": 640,
             "shell_controls": 641,
+            "xscratch_address": 642,
+            "xscratch_bytes": 643,
         },
     ),
     "engine": (
@@ -11788,15 +11790,15 @@ def _producer_fallback_record(client, producer: int) -> dict:
     return {name: cells[index - first] for name, index in _FALLBACK_FIELDS.items()}
 
 
-# The shell producer's storage, found from the extension it installed in the
+# The shell producer's record, found from the extension it installed in the
 # hybrid producer: its descriptor sits at this offset in the shell record.
-# The shell's part of each frame lies in the hybrid producer's extension
-# blocks, which the growing storage record reports.
-_SHELL_EXTENSION_OFFSET = 88
+# The shell owns no storage: it builds in the hybrid producer's scratch block
+# and freezes its part of each frame into the producer's extension blocks,
+# which the growing storage record reports.
+_SHELL_EXTENSION_OFFSET = 64
 _SHELL_STORAGE_FIELDS = {
-    "work_bytes": 7,
-    "part_bytes_needed": 8,
-    "work_bytes_used": 9,
+    "part_bytes_needed": 6,
+    "scratch_bytes_used": 7,
 }
 
 
@@ -11825,8 +11827,8 @@ def _shell_storage_record(client, producer: int) -> dict:
 # Storage that grows from Desk's memory source: the screen producer's arena
 # and its capacities, the engine's working banks, and what the source holds.
 _PRODUCER_STORAGE_FIELDS = ("arena_bytes", "kept_arena_bytes", "xblock0_bytes",
-                            "xblock1_bytes", "max_records", "max_text", "max_cols",
-                            "max_rows")
+                            "xblock1_bytes", "xscratch_bytes", "max_records",
+                            "max_text", "max_cols", "max_rows")
 _ENGINE_STORAGE_FIELDS = {"operation_capacity": 8, "copy_bytes": 10,
                           "control_ledger_capacity": 65}
 _MEMORY_SOURCE_HELD = 5

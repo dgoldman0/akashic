@@ -2,11 +2,11 @@
 \ Complete immutable copies only.  Refusal never changes the legacy candidate.
 \ The shell's part of each frame is frozen into one of the screen producer's
 \ extension blocks and named by the frame's bank (_RTHP-TB.XBLOCK), so that
-\ bank is the one record of the frame.  With a memory source attached, the
-\ work space starts small and grows to what each candidate needs.
+\ bank is the one record of the frame.  The shell owns no storage: it builds
+\ each candidate in the screen producer's scratch block and plans its runs
+\ in the producer's glyph banks, and the producer grows both on demand.
 PROVIDED akashic-tui-rshsp
 REQUIRE hybrid-screen-producer.f
-REQUIRE ../../utils/memory-source.f
 REQUIRE shell-membership.f
 REQUIRE shell-family-clone.f
 REQUIRE family-batch.f
@@ -14,7 +14,7 @@ REQUIRE shell-family-emit.f
 REQUIRE frame-shadow.f
 REQUIRE ../check-mode.f
 
-128 CONSTANT RSHSP-SIZE
+104 CONSTANT RSHSP-SIZE
 96 CONSTANT RSHSP-PART-HEADER-SIZE
 0x5253485350303031 CONSTANT _RSHSP-MAGIC
 : _RSHSP.MAGIC ( s -- a ) ;
@@ -23,18 +23,15 @@ REQUIRE ../check-mode.f
 : _RSHSP.PRODUCER ( s -- a ) 24 + ;
 : _RSHSP.SOURCE ( s -- a ) 32 + ;
 : _RSHSP.SHELL ( s -- a ) 40 + ;
-: _RSHSP.WORK ( s -- a ) 48 + ;
-: _RSHSP.WORK-U ( s -- a ) 56 + ;
-\ The bytes the last freeze needed for the shell's part of the frame.
-: _RSHSP.PART-BYTES ( s -- a ) 64 + ;
-: _RSHSP.WORK-USED ( s -- a ) 72 + ;
-\ The memory source the work space grows into (0: fixed storage).
-: _RSHSP.MEMORY ( s -- a ) 80 + ;
-: _RSHSP.EXTENSION ( s -- a ) 88 + ;
+\ The bytes the last freeze needed for the shell's part of the frame, and
+\ the most of the producer's scratch block the last build used.
+: _RSHSP.PART-BYTES ( s -- a ) 48 + ;
+: _RSHSP.SCRATCH-USED ( s -- a ) 56 + ;
+: _RSHSP.EXTENSION ( s -- a ) 64 + ;
 \ The extension record the screen producer calls lies here, whole:
 \ RTHP-EXTENSION-SIZE bytes.
 : RSHSP-BYTES ( -- n ) RSHSP-SIZE ;
-: RSHSP-WORK-USED@ ( s -- n ) _RSHSP.WORK-USED @ ;
+: RSHSP-SCRATCH-USED@ ( s -- n ) _RSHSP.SCRATCH-USED @ ;
 : RSHSP-PART-BYTES@ ( s -- n ) _RSHSP.PART-BYTES @ ;
 \ The shell's part of a frame, at the start of an extension block: offsets
 \ into the part of the shell model, the taskbar's correlations and
@@ -68,6 +65,7 @@ CREATE _RSHSP-OWNED-START VARIABLE _RSHSP-OWNED-LIMIT
     OVER 7 AND IF 2DROP 0 EXIT THEN RSHSP-STORAGE-DISJOINT? ;
 
 VARIABLE _RSHSP-S VARIABLE _RSHSP-P VARIABLE _RSHSP-CURSOR VARIABLE _RSHSP-END
+VARIABLE _RSHSP-BASE
 VARIABLE _RSHSP-M VARIABLE _RSHSP-MU VARIABLE _RSHSP-N VARIABLE _RSHSP-E
 VARIABLE _RSHSP-Q VARIABLE _RSHSP-RESULT VARIABLE _RSHSP-ELIGIBLE
 VARIABLE _RSHSP-REGIONS VARIABLE _RSHSP-PANES VARIABLE _RSHSP-CONTROLS
@@ -96,7 +94,6 @@ VARIABLE _RSHSP-GA-ITEMS VARIABLE _RSHSP-GA-REFS VARIABLE _RSHSP-GA-TEXT VARIABL
 VARIABLE _RSHSP-GA-N VARIABLE _RSHSP-GA-I VARIABLE _RSHSP-GA-ITEM VARIABLE _RSHSP-GA-REF
 VARIABLE _RSHSP-DBATCH
 VARIABLE _RSHSP-PBACK VARIABLE _RSHSP-PRESIDUE VARIABLE _RSHSP-PCOLS VARIABLE _RSHSP-PROWS
-VARIABLE _RSHSP-PDRAW VARIABLE _RSHSP-GREF
 VARIABLE _RSHSP-PART VARIABLE _RSHSP-PART-CAP
 VARIABLE _RSHSP-STATUS
 
@@ -112,11 +109,17 @@ VARIABLE _RSHSP-STATUS
 : _RSHSP-ALIGN ( n -- n ) 7 _RSHSP-ADD -8 AND ;
 : _RSHSP-TAKE ( n -- a )
     _RSHSP-ALIGN
-    DUP _RSHSP-CURSOR @ _RSHSP-S @ _RSHSP.WORK @ - _RSHSP-ADD
-        _RSHSP-S @ _RSHSP.WORK-USED @ MAX _RSHSP-S @ _RSHSP.WORK-USED !
+    DUP _RSHSP-CURSOR @ _RSHSP-BASE @ - _RSHSP-ADD
+        _RSHSP-S @ _RSHSP.SCRATCH-USED @ MAX _RSHSP-S @ _RSHSP.SCRATCH-USED !
     DUP _RSHSP-END @ _RSHSP-CURSOR @ - U> IF DROP RTE-S-CAPACITY THROW THEN
     _RSHSP-CURSOR @ SWAP DUP _RSHSP-CURSOR +! OVER SWAP 0 FILL ;
 : _RSHSP-COPY ( a u -- dst ) DUP _RSHSP-TAKE DUP >R SWAP MOVE R> ;
+\ A build's passing work starts at the screen producer's scratch block,
+\ which holds nothing kept: 0 0 until the producer first grows it.
+: _RSHSP-SCRATCH! ( -- )
+    0 _RSHSP-S @ _RSHSP.SCRATCH-USED !
+    _RSHSP-P @ _RTHP.XSCRATCH-A @ DUP _RSHSP-BASE ! DUP _RSHSP-CURSOR !
+    _RSHSP-P @ _RTHP.XSCRATCH-U @ + _RSHSP-END ! ;
 : _RSHSP-ZSPAN ( a u -- a|0 u ) DUP 0= IF NIP 0 SWAP THEN ;
 \ Where the base candidate's controls, instruments and series are read
 \ from: the producer's own candidate for a START, or for a DELTA its pending
@@ -895,27 +898,6 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-CLAIM-BANK @ _RSHSP-CLAIM-U @ + RUCL-ADMITTED-RECTANGLE!
         RUCL-S-OK = _RSHSP-CHECK
     RUCL-CLAIM-SIZE _RSHSP-CLAIM-U +! ;
-\ The producer planned the residual runs of the whole surface for the draw
-\ these planes hold, with the claims the shell's claim bank begins with, so
-\ the shell's plans may take its runs where the shell's own claims and
-\ regions leave them whole.  When its glyph banks hold another draw's plan,
-\ or a plan of no runs, the reference has no runs and names none of them,
-\ since the planner, with every check on, refuses a bank of no bytes that
-\ names storage.  For Desk the producer plans no runs of its own, so in a
-\ session its banks hold an older draw's plan.
-: _RSHSP-GLYPH-RUNS ( -- count )
-    _RSHSP-PDRAW @ DUP 0<> SWAP _RSHSP-P @ _RTHP.GLYPH-DRAW @ = AND
-    _RSHSP-PCOLS @ _RSHSP-P @ _RTHP.COLS @ = AND
-    _RSHSP-PROWS @ _RSHSP-P @ _RTHP.ROWS @ = AND
-    _RSHSP-P @ _RTHP.GLYPH-COUNT @ AND ;
-: _RSHSP-GLYPH-REFERENCE ( -- )
-    _RSHSP-GLYPH-RUNS ?DUP IF
-        _RSHSP-P @ _RTHP.GLYPH-ITEMS-A @ SWAP _RSHSP-P @ _RTHP.GLYPH-REFS-A @
-        _RSHSP-P @ _RTHP.GLYPH-TEXT-A @ _RSHSP-P @ _RTHP.GLYPH-TEXT-USED @
-            _RSHSP-ZSPAN
-    ELSE 0 0 0 0 0 THEN
-    _RSHSP-P @ _RTHP.LIMITS RTE-LIMITS-GLYPH-RUN-BYTES@
-    _RSHSP-GREF @ RGRP-REFERENCE! ;
 \ The planner's claims of one KIND, the panes' chrome or the taskbar's bands.
 : _RSHSP-PLANNER-CLAIMS ( kind -- )
     _RSHSP-RESULT @ RSHPL-RESULT.CLAIMS @ 0 ?DO
@@ -956,9 +938,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-CLAIM-U @ RUCL-CLAIM-SIZE / 2 _RSHSP-MUL RGRP-EVENT-SIZE _RSHSP-MUL
         DUP _RSHSP-EVENTS-U ! _RSHSP-TAKE _RSHSP-EVENTS !
     _RSHSP-P @ _RTHP.COLS @ 1+ 16 _RSHSP-MUL _RSHSP-TAKE _RSHSP-DIFF !
-    RGRP-REQUEST-SIZE _RSHSP-TAKE _RSHSP-GQ !
-    RGRP-REFERENCE-SIZE _RSHSP-TAKE _RSHSP-GREF !
-    _RSHSP-GLYPH-REFERENCE ;
+    RGRP-REQUEST-SIZE _RSHSP-TAKE _RSHSP-GQ ! ;
 
 : _RSHSP-GLYPH-SCAN-RECT ( -- )
     _RSHSP-REGION @ _RTE-IR.FLAGS @ RTE-REGION-CLIPPED AND IF
@@ -1003,7 +983,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-GQ @ RGRP-REQUEST-OUTPUT!
     \ MENU-CLAIMS already counts records; CLAIMS-USED is the byte extent.
     _RSHSP-PBACK @ _RSHSP-PRESIDUE @ _RSHSP-PCOLS @ _RSHSP-PROWS @
-    _RSHSP-P @ _RTHP.MENU-CLAIMS @ _RSHSP-GREF @
+    _RSHSP-P @ _RTHP.MENU-CLAIMS @ 0
     _RSHSP-GQ @ _RGRP-BUILD-PAIRED-WITH-REFERENCE RGRP-S-OK = _RSHSP-CHECK
     DROP 2DROP
     \ The planner's text offsets start at its own output; rebase them.
@@ -1210,11 +1190,17 @@ VARIABLE _RSHSP-SG-ITEM
     _RSHSP-GLYPH-ACTIVE? DUP IF
         _RSHSP-GLYPH-SCAN-RECT _RSHSP-GLYPH-SLOTS _RSHSP-GSLOTS !
     THEN
-    _RSHSP-GSLOTS @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-GITEMS !
+    \ The slots lie in the screen producer's glyph banks, sized for every
+    \ cell of the surface, which hold no plan of its own while the shell is
+    \ installed; only the runs planned come into the batch.
+    _RSHSP-GSLOTS @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RSHSP-MUL
+        _RSHSP-P @ _RTHP.GLYPH-ITEMS-U @ U> 0= _RSHSP-CHECK
+    _RSHSP-GSLOTS @ 16 _RSHSP-MUL _RSHSP-P @ _RTHP.GLYPH-REFS-U @ U> 0= _RSHSP-CHECK
+    _RSHSP-P @ _RTHP.GLYPH-ITEMS-A @ _RSHSP-GITEMS !
     _RSHSP-GCELLS @ 4 _RSHSP-MUL
         _RSHSP-P @ _RTHP.GLYPH-TEXT-U @ MIN _RSHSP-GLIMIT !
-    _RSHSP-GLIMIT @ _RSHSP-TAKE _RSHSP-GTEXT !
-    _RSHSP-GSLOTS @ 16 _RSHSP-MUL _RSHSP-TAKE _RSHSP-GREFS !
+    _RSHSP-P @ _RTHP.GLYPH-TEXT-A @ _RSHSP-GTEXT !
+    _RSHSP-P @ _RTHP.GLYPH-REFS-A @ _RSHSP-GREFS !
     0 _RSHSP-GCOUNT ! 0 _RSHSP-GUSED ! _RSHSP-NEXT-ID @ _RSHSP-GBASE !
     IF
         _RSHSP-GLYPH-ROWS
@@ -1231,20 +1217,15 @@ VARIABLE _RSHSP-SG-ITEM
         -1 _RSHSP-FAMILY-N +! _RSHSP-SAVED @ RTE-GLYPH-RUN-PLAN-SIZE - _RSHSP-CURSOR ! EXIT
     THEN
     _RSHSP-GBASE @ _RSHSP-GCOUNT @ _RSHSP-ADD _RSHSP-NEXT-ID !
+    \ The runs planned come into the batch from the glyph banks: items,
+    \ text, then references, the order the batch lists a family's spans
+    \ in, so the admission's pairwise span check takes one pass.
+    _RSHSP-GITEMS @ _RSHSP-GCOUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RSHSP-COPY
+        _RSHSP-GITEMS !
     _RSHSP-GLYPH-HEADER
-    \ Compact the reserved slots in place, items, text, then references,
-    \ the order the batch lists a family's spans in, so the admission's
-    \ pairwise span check takes one pass. MOVE is overlap-safe; every
-    \ destination is at or before its corresponding source, and the text
-    \ ends before the references' source begins.
-    _RSHSP-GITEMS @ _RSHSP-GCOUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RSHSP-NEW !
-    _RSHSP-GTEXT @ _RSHSP-NEW @ _RSHSP-GUSED @ MOVE
-    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
-    _RSHSP-NEW @ _RSHSP-GUSED @ _RSHSP-ALIGN + _RSHSP-NEW !
-    _RSHSP-GREFS @ _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * MOVE
-    _RSHSP-NEW @ _RSHSP-FAMILY @ _RTE-FE.REFS-A !
-    _RSHSP-GCOUNT @ 16 * _RSHSP-FAMILY @ _RTE-FE.REFS-U !
-    _RSHSP-NEW @ _RSHSP-GCOUNT @ 16 * + _RSHSP-CURSOR ! ;
+    _RSHSP-GTEXT @ _RSHSP-GUSED @ _RSHSP-COPY _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
+    _RSHSP-GREFS @ _RSHSP-GCOUNT @ 16 * _RSHSP-COPY _RSHSP-FAMILY @ _RTE-FE.REFS-A !
+    _RSHSP-GCOUNT @ 16 * _RSHSP-FAMILY @ _RTE-FE.REFS-U ! ;
 : _RSHSP-GLYPHS-BODY ( -- )
     _RSHSP-GLYPH-WORK
     _RSHSP-P @ _RTHP.REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
@@ -1265,14 +1246,18 @@ VARIABLE _RSHSP-SG-ITEM
             _RSHSP-OVERLAY-CLAIM-U ELSE _RSHSP-UNDER-CLAIM-U THEN @ _RSHSP-CLAIM-U !
         RSHMM.CONTENT-REGION @ _RSHSP-REGION@ _RSHSP-GLYPH
     LOOP ;
-\ Every planner request, claim, work and output span lies in the work arena,
-\ so one proof that the arena is disjoint from screen storage covers every
-\ planner call made under this one borrow of the projection planes.
+\ Every planner request, claim, work and output span lies in the screen
+\ producer's scratch block or in its glyph banks, in its arena, so one proof
+\ that each is disjoint from screen storage covers every planner call made
+\ under this one borrow of the projection planes.  The banks then hold the
+\ shell's slots, so the producer holds no plan of its own for any draw.
 : _RSHSP-GLYPHS-IN-PLANES ( back-a residue-a cols rows draw-generation residue-dirty? -- )
-    DROP _RSHSP-PDRAW ! _RSHSP-PROWS ! _RSHSP-PCOLS ! _RSHSP-PRESIDUE ! _RSHSP-PBACK !
-    _RSHSP-S @ _RSHSP.WORK @ _RSHSP-S @ _RSHSP.WORK-U @ SCR-STORAGE-DISJOINT?
+    2DROP _RSHSP-PROWS ! _RSHSP-PCOLS ! _RSHSP-PRESIDUE ! _RSHSP-PBACK !
+    0 _RSHSP-P @ _RTHP.GLYPH-DRAW !
+    _RSHSP-P @ DUP _RTHP.XSCRATCH-A @ SWAP _RTHP.XSCRATCH-U @ SCR-STORAGE-DISJOINT?
+    _RSHSP-P @ DUP _RTHP.ARENA-A @ SWAP _RTHP.ARENA-U @ SCR-STORAGE-DISJOINT? AND
     IF ['] _RSHSP-GLYPHS-BODY CATCH ELSE RTE-S-UNAVAILABLE THEN
-    0 _RSHSP-PBACK ! 0 _RSHSP-PRESIDUE ! 0 _RSHSP-PDRAW ! 0 _RSHSP-GREF !
+    0 _RSHSP-PBACK ! 0 _RSHSP-PRESIDUE !
     ?DUP IF THROW THEN ;
 : _RSHSP-GLYPHS ( -- ) ['] _RSHSP-GLYPHS-IN-PLANES SCR-WITH-PROJECTION-PLANES ;
 
@@ -1399,7 +1384,7 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
 \ A START freezes right after it.  A DELTA's identity mapping rewrites
 \ identities, which the graph check reads only as a pane's, nonzero before
 \ and after; and it gives a glyph family new item and reference arrays,
-\ fresh from the work space and so apart from every other span, holding the
+\ fresh from the scratch block and so apart from every other span, holding the
 \ admitted runs in order and then canonical tombstones with no text, whose
 \ references continue the family's text at its end.  So the measure and the
 \ copy take the batch as proved; the measure still checks every span.
@@ -1412,7 +1397,7 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-MAP-U @ _RSHSP-ALIGN _RSHSP-ADD DUP _RSHSP-META-U !
     _RSHSP-CLONE-U @ _RSHSP-ADD DUP _RSHSP-S @ _RSHSP.PART-BYTES !
     DUP _RSHSP-PART-CAP @ U> IF DROP RTE-S-CAPACITY THROW THEN
-    \ The batch, in the work space, and the extension block are both from
+    \ The batch, in the scratch block, and the extension block are both from
     \ Desk's memory source, so only every-frame checks prove them apart again.
     CHK-EVERY-FRAME? IF
         _RSHSP-BATCH @ _RSHSP-PART @ _RSHSP-PART-CAP @ _RSHFC-BATCH-OUTSIDE?
@@ -1447,9 +1432,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
 : _RSHSP-BUILD-BATCH ( -- )
     1 _RSHSP-PSTAGE !
     _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-CHECK
-    0 _RSHSP-S @ _RSHSP.WORK-USED ! 0 _RSHSP-S @ _RSHSP.PART-BYTES !
-    _RSHSP-S @ _RSHSP.WORK @ _RSHSP-CURSOR !
-    _RSHSP-S @ _RSHSP.WORK @ _RSHSP-S @ _RSHSP.WORK-U @ + _RSHSP-END !
+    _RSHSP-SCRATCH! 0 _RSHSP-S @ _RSHSP.PART-BYTES !
     2 _RSHSP-PSTAGE !
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-SNAPSHOT-FOR@
         SHSN-S-OK = _RSHSP-CHECK _RSHSP-MU ! _RSHSP-M !
@@ -1500,8 +1483,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
 CREATE _RSHSP-SPANS 64 ALLOT
 VARIABLE _RSHSP-LIVE-PROOF
 VARIABLE _RSHSP-IA VARIABLE _RSHSP-IU VARIABLE _RSHSP-ISOURCE VARIABLE _RSHSP-ISHELL
-VARIABLE _RSHSP-IWORK VARIABLE _RSHSP-IWORKU
-: _RSHSP-6DROP ( x x x x x x -- ) 2DROP 2DROP 2DROP ;
+: _RSHSP-4DROP ( x x x x -- ) 2DROP 2DROP ;
 : _RSHSP-SPAN! ( a u i -- ) 16 * _RSHSP-SPANS + >R R@ 8 + ! R> ! ;
 : _RSHSP-SPAN@ ( i -- a u ) 16 * _RSHSP-SPANS + DUP @ SWAP 8 + @ ;
 \ RUHA's storage proof: a RUHA span lies apart from all four sidecar spans.
@@ -1523,9 +1505,12 @@ VARIABLE _RSHSP-IWORK VARIABLE _RSHSP-IWORKU
     ELSE
         _RSHSP-IA @ _RSHSP-IU @ _RSHSP-ISOURCE @ SHSN-SOURCE-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
     THEN -1 ;
-\ The screen producer's extension blocks as spans 2 and 3: each none, while
-\ the producer has not grown it, or a span of its own.
-: _RSHSP-XBLOCK-SPANS? ( -- flag )
+\ The screen producer's scratch block as span 1 and its extension blocks as
+\ spans 2 and 3: each none, while the producer has not grown it, or a span
+\ of its own.
+: _RSHSP-BLOCK-SPANS? ( -- flag )
+    _RSHSP-P @ DUP _RTHP.XSCRATCH-A @ SWAP _RTHP.XSCRATCH-U @
+        DUP IF 2DUP _RSHSP-SPAN? 0= IF 2DROP 0 EXIT THEN THEN 1 _RSHSP-SPAN!
     _RSHSP-P @ DUP _RTHP.XBLOCK0-A @ SWAP _RTHP.XBLOCK0-U @
         DUP IF 2DUP _RSHSP-SPAN? 0= IF 2DROP 0 EXIT THEN THEN 2 _RSHSP-SPAN!
     _RSHSP-P @ DUP _RTHP.XBLOCK1-A @ SWAP _RTHP.XBLOCK1-U @
@@ -1551,8 +1536,6 @@ VARIABLE _RSHSP-IWORK VARIABLE _RSHSP-IWORKU
     DUP _RSHSP.PRODUCER @ RTHP-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RSHSP.SOURCE @ SHSN-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RSHSP.SHELL @ RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
-    DUP _RSHSP.MEMORY @ ?DUP IF MSRC-VALID? 0= IF DROP 0 EXIT THEN THEN
-    DUP _RSHSP.WORK @ OVER _RSHSP.WORK-U @ _RSHSP-SPAN? 0= IF DROP 0 EXIT THEN
     DROP -1 ;
 \ The sidecar, and the producer, source and shell it names, for one
 \ dispatch.
@@ -1575,8 +1558,8 @@ VARIABLE _RSHSP-IWORK VARIABLE _RSHSP-IWORKU
     OVER _RTHP.SELF @ 2 PICK <> OR IF DROP 0 EXIT THEN
     DROP -1 ;
 \ The caller has checked the header before its first store.  The header
-\ proves the sidecar, producer, source, shell and work spans with
-\ _RSHSP-SPAN?, a pure function of each span, so they are not checked again.
+\ proves the sidecar, producer, source and shell spans with _RSHSP-SPAN?, a
+\ pure function of each span, so they are not checked again.
 : _RSHSP-AUTHORITY? ( sidecar -- flag )
     _RSHSP-BIND
     _RSHSP-P @ DUP _RTHP.MAGIC @ _RTHP-MAGIC <>
@@ -1589,8 +1572,7 @@ VARIABLE _RSHSP-IWORK VARIABLE _RSHSP-IWORKU
     _RSHSP-ISHELL @ RTE-SHELL-VALID? 0= IF 0 EXIT THEN
     _RSHSP-ISHELL @ _RTE-SH.BASE @ _RSHSP-P @ _RTHP.FACADE @ <> IF 0 EXIT THEN
     _RSHSP-S @ RSHSP-SIZE 0 _RSHSP-SPAN!
-    _RSHSP-S @ DUP _RSHSP.WORK @ SWAP _RSHSP.WORK-U @ 1 _RSHSP-SPAN!
-    _RSHSP-XBLOCK-SPANS? 0= IF 0 EXIT THEN
+    _RSHSP-BLOCK-SPANS? 0= IF 0 EXIT THEN
     _RSHSP-SPANS? ;
 : RSHSP-VALID? ( sidecar -- flag )
     DUP _RSHSP-HEADER? 0= IF DROP 0 EXIT THEN
@@ -1641,61 +1623,28 @@ VARIABLE _RSHSP-IWORK VARIABLE _RSHSP-IWORKU
 \ ---------------------------------------------------------------------
 \  Storage that follows the candidate
 \ ---------------------------------------------------------------------
-\ A build that ran out of work space, or of room in the extension block it
-\ freezes into, takes a larger block from the memory source and runs again:
-\ what it needed and half again.  Neither block holds anything another step
-\ reads: the work space is rebuilt by every candidate, and STAGE freezes
-\ only into the extension block no bank names.  The screen producer grows
-\ its extension blocks.  A new work space must be separate from the
-\ shell's and the screen producer's storage; every dispatch proves the rest
-\ again.  A refusal leaves the shell's part CELL, and the screen producer's
-\ fallback record keeps the bytes asked for and held.
+\ A build that ran out of the screen producer's scratch block, or of room in
+\ the extension block it freezes into, has the producer take a larger block
+\ from its memory source and runs again: what it needed and half again.
+\ Neither block holds anything another step reads: the scratch block is
+\ rebuilt by every candidate, and STAGE freezes only into the extension
+\ block no bank names.  The producer proves a new block apart from its own
+\ storage; every dispatch proves the rest again.  A refusal leaves the
+\ shell's part CELL, and the producer's fallback record keeps the bytes
+\ asked for and held.
 \ Diagnostics: blocks grown.
 VARIABLE _RSHSP-DIAG-GROWTHS
-VARIABLE _RSHSP-G-BYTES
-
-\ ( need -- addr|0 ) a block for what the build needed and half again.
-: _RSHSP-G-TAKE ( need -- addr|0 )
-    DUP 1 RSHIFT + 7 + -8 AND DUP _RSHSP-G-BYTES !
-    _RSHSP-S @ _RSHSP.MEMORY @ MSRC-ALLOC DUP IF EXIT THEN
-    _RTHP-W-MEMORY-ASKED @ 0= IF
-        _RSHSP-G-BYTES @ _RTHP-W-MEMORY-ASKED !
-        _RSHSP-S @ _RSHSP.MEMORY @ MSRC-HELD@ _RTHP-W-MEMORY-HELD !
-    THEN ;
-
-: _RSHSP-G-FREE ( a u -- ) _RSHSP-S @ _RSHSP.MEMORY @ MSRC-FREE ;
-
-: _RSHSP-G-SEPARATE? ( a u -- flag )
-    2DUP _RSHSP-SPAN? 0= IF 2DROP 0 EXIT THEN
-    2DUP _RSHSP-S @ RSHSP-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
-    2DUP _RSHSP-S @ DUP _RSHSP.WORK @ SWAP _RSHSP.WORK-U @ MSPAN-OVERLAP?
-        IF 2DROP 0 EXIT THEN
-    2DUP _RSHSP-P @ DUP _RTHP.XBLOCK0-A @ SWAP _RTHP.XBLOCK0-U @ MSPAN-OVERLAP?
-        IF 2DROP 0 EXIT THEN
-    2DUP _RSHSP-P @ DUP _RTHP.XBLOCK1-A @ SWAP _RTHP.XBLOCK1-U @ MSPAN-OVERLAP?
-        IF 2DROP 0 EXIT THEN
-    2DUP _RSHSP-P @ RTHP-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
-    _RSHSP-P @ DUP _RTHP.ARENA-A @ SWAP _RTHP.ARENA-U @ MSPAN-OVERLAP? 0= ;
-
-: _RSHSP-WORK! ( addr -- )
-    _RSHSP-S @ DUP _RSHSP.WORK @ SWAP _RSHSP.WORK-U @ _RSHSP-G-FREE
-    _RSHSP-S @ _RSHSP.WORK ! _RSHSP-G-BYTES @ _RSHSP-S @ _RSHSP.WORK-U ! ;
 
 \ After a build: a CAPACITY refusal whose storage grew is built again.
 : _RSHSP-GROW ( status -- status' again? )
     DUP RTE-S-CAPACITY <> IF 0 EXIT THEN
-    _RSHSP-S @ _RSHSP.WORK-USED @ _RSHSP-S @ _RSHSP.WORK-U @ U> IF
-        _RSHSP-S @ _RSHSP.MEMORY @ 0= IF 0 EXIT THEN
-        _RSHSP-S @ _RSHSP.WORK-USED @ _RSHSP-G-TAKE ?DUP 0= IF 0 EXIT THEN
-        DUP _RSHSP-G-BYTES @ _RSHSP-G-SEPARATE? S" Desk's memory source" CHK-HANDOVER 0= IF
-            _RSHSP-G-BYTES @ _RSHSP-G-FREE DROP RTE-S-INVALID 0 EXIT
-        THEN
-        _RSHSP-WORK!
+    _RSHSP-S @ _RSHSP.SCRATCH-USED @ _RSHSP-P @ _RTHP.XSCRATCH-U @ U> IF
+        _RSHSP-S @ _RSHSP.SCRATCH-USED @ _RSHSP-P @ _RTHP-XSCRATCH-GROW
     ELSE
         _RSHSP-S @ _RSHSP.PART-BYTES @ _RSHSP-PART-CAP @ U> 0= IF 0 EXIT THEN
         _RSHSP-S @ _RSHSP.PART-BYTES @ _RSHSP-P @ _RTHP-XBLOCK-GROW
-        DUP RTE-S-OK <> IF NIP 0 EXIT THEN DROP
     THEN
+    DUP RTE-S-OK <> IF NIP 0 EXIT THEN DROP
     1 _RSHSP-DIAG-GROWTHS +! -1 ;
 
 \ The pending bank drops any part it named, and BUILD-XT runs, again each
@@ -1726,9 +1675,7 @@ VARIABLE _RSHSP-G-BYTES
 \ does, and the planner counts them before it numbers anything.  Panes add
 \ no control, so no pane's eligibility is asked.
 : _RSHSP-COUNT-CONTROLS-BODY ( -- )
-    0 _RSHSP-S @ _RSHSP.WORK-USED ! 0 _RSHSP-S @ _RSHSP.PART-BYTES !
-    _RSHSP-S @ _RSHSP.WORK @ _RSHSP-CURSOR !
-    _RSHSP-S @ _RSHSP.WORK @ _RSHSP-S @ _RSHSP.WORK-U @ + _RSHSP-END !
+    _RSHSP-SCRATCH! 0 _RSHSP-S @ _RSHSP.PART-BYTES !
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-SNAPSHOT-FOR@
         SHSN-S-OK = _RSHSP-CHECK _RSHSP-MU ! _RSHSP-M !
     _RSHSP-M @ SHM.WIDTH @ _RSHSP-P @ _RTHP.COLS @ = _RSHSP-CHECK
@@ -2103,8 +2050,8 @@ VARIABLE _RSHSP-DM-UA
 \ sidecar's header and proves its storage apart from the records it names,
 \ the engine's storage, the source's live storage and RUHA's banks, and a
 \ failure names the shell producer's records (check-mode.f).  Normal mode
-\ skips these: RSHSP-INIT proved the storage it was lent, and the work
-\ space and extension blocks that grow come from Desk's memory source,
+\ skips these: RSHSP-INIT proved the producer's blocks apart, and the
+\ scratch and extension blocks that grow come from Desk's memory source,
 \ whose live blocks never overlap.
 : _RSHSP-DISPATCH ( event producer sidecar -- rte-status )
     DUP _RSHSP-NAMED? 0= IF DROP 2DROP RTE-S-INVALID EXIT THEN
@@ -2141,14 +2088,12 @@ VARIABLE _RSHSP-DM-UA
     RTE-S-INVALID ;
 
 : RSHSP-INIT
-\ source shell-facade producer work-a/u sidecar -- status
-    DUP RSHSP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-6DROP RTE-S-INVALID EXIT THEN
-    2 PICK 2 PICK _RSHSP-SPAN? 0= IF _RSHSP-6DROP RTE-S-INVALID EXIT THEN
-    3 PICK RTHP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-6DROP RTE-S-INVALID EXIT THEN
-    4 PICK RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF _RSHSP-6DROP RTE-S-INVALID EXIT THEN
-    5 PICK SHSN-SIZE _RSHSP-SPAN? 0= IF _RSHSP-6DROP RTE-S-INVALID EXIT THEN
-    _RSHSP-S ! _RSHSP-IWORKU ! _RSHSP-IWORK !
-    _RSHSP-P ! _RSHSP-ISHELL ! _RSHSP-ISOURCE !
+\ source shell-facade producer sidecar -- status
+    DUP RSHSP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-4DROP RTE-S-INVALID EXIT THEN
+    OVER RTHP-SIZE _RSHSP-SPAN? 0= IF _RSHSP-4DROP RTE-S-INVALID EXIT THEN
+    2 PICK RTE-SHELL-FACADE-SIZE _RSHSP-SPAN? 0= IF _RSHSP-4DROP RTE-S-INVALID EXIT THEN
+    3 PICK SHSN-SIZE _RSHSP-SPAN? 0= IF _RSHSP-4DROP RTE-S-INVALID EXIT THEN
+    _RSHSP-S ! _RSHSP-P ! _RSHSP-ISHELL ! _RSHSP-ISOURCE !
     _RSHSP-P @ RTHP-VALID? 0= IF RTE-S-INVALID EXIT THEN
     _RSHSP-P @ _RTHP.PHASE @ _RTHP-PH-WAIT <> IF RTE-S-UNAVAILABLE EXIT THEN
     _RSHSP-P @ _RTHP.EXTENSION @ IF RTE-S-UNAVAILABLE EXIT THEN
@@ -2156,8 +2101,7 @@ VARIABLE _RSHSP-DM-UA
     _RSHSP-ISHELL @ _RTE-SH.BASE @ _RSHSP-P @ _RTHP.FACADE @ <> IF RTE-S-INVALID EXIT THEN
     _RSHSP-ISOURCE @ SHSN-VALID? 0= IF RTE-S-INVALID EXIT THEN
     _RSHSP-S @ RSHSP-SIZE 0 _RSHSP-SPAN!
-    _RSHSP-IWORK @ _RSHSP-IWORKU @ 1 _RSHSP-SPAN!
-    _RSHSP-XBLOCK-SPANS? 0= IF RTE-S-INVALID EXIT THEN
+    _RSHSP-BLOCK-SPANS? 0= IF RTE-S-INVALID EXIT THEN
     -1 _RSHSP-LIVE-PROOF ! _RSHSP-SPANS? 0= IF RTE-S-INVALID EXIT THEN
     _RSHSP-S @ RSHSP-SIZE 0 FILL
     _RSHSP-MAGIC _RSHSP-S @ _RSHSP.MAGIC ! RSHSP-SIZE _RSHSP-S @ _RSHSP.SIZE !
@@ -2165,38 +2109,16 @@ VARIABLE _RSHSP-DM-UA
     _RSHSP-P @ _RSHSP-S @ _RSHSP.PRODUCER !
     _RSHSP-ISOURCE @ _RSHSP-S @ _RSHSP.SOURCE !
     _RSHSP-ISHELL @ _RSHSP-S @ _RSHSP.SHELL !
-    _RSHSP-IWORK @ _RSHSP-S @ _RSHSP.WORK ! _RSHSP-IWORKU @ _RSHSP-S @ _RSHSP.WORK-U !
     _RSHSP-S @ _RSHSP.EXTENSION DUP _RSHSP-OUT !
     _RTHP-EXTENSION-MAGIC OVER RTHPX.MAGIC ! RTHP-EXTENSION-SIZE OVER RTHPX.SIZE !
     DUP DUP RTHPX.SELF !
     _RSHSP-S @ OVER RTHPX.CONTEXT ! ['] _RSHSP-DISPATCH SWAP RTHPX.DISPATCH !
     RTE-S-OK ;
-\ The smallest work space RSHSP-INIT accepts.  A shell producer that grows
-\ from a memory source starts here.
-8 CONSTANT RSHSP-FIRST-WORK-BYTES
-
-\ RSHSP-MEMORY! ( memory sidecar -- rte-status )
-\   From now on the shell producer owns its work space, which the caller
-\   took from MEMORY with exactly the size it was initialized with, and
-\   grows it into MEMORY.  Attach it before the first candidate.
-: RSHSP-MEMORY! ( memory sidecar -- rte-status )
-    DUP RSHSP-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
-    OVER MSRC-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
-    DUP _RSHSP.MEMORY @ IF 2DROP RTE-S-INVALID EXIT THEN
-    DUP _RSHSP.PRODUCER @ DUP _RTHP.TARGET-ACTIVE @ SWAP _RTHP.TARGET-PENDING @ OR
-        IF 2DROP RTE-S-INVALID EXIT THEN
-    _RSHSP.MEMORY ! RTE-S-OK ;
-
 \ RSHSP-FINI ( sidecar -- )
-\   Give back the work space the shell producer owns and clear it.  Call it
-\   once it is uninstalled and nothing will dispatch to it.  The screen
-\   producer keeps the parts it was given, in its own extension blocks.
-: RSHSP-FINI ( sidecar -- )
-    DUP _RSHSP.MAGIC @ _RSHSP-MAGIC = OVER _RSHSP.SELF @ 2 PICK = AND
-    OVER _RSHSP.MEMORY @ 0<> AND IF
-        DUP _RSHSP.WORK @ OVER _RSHSP.WORK-U @ 2 PICK _RSHSP.MEMORY @ MSRC-FREE
-    THEN
-    RSHSP-SIZE 0 FILL ;
+\   Clear the shell producer.  Call it once it is uninstalled and nothing
+\   will dispatch to it.  It owns no storage: the screen producer keeps the
+\   parts it was given, in its own extension blocks, and its scratch block.
+: RSHSP-FINI ( sidecar -- ) RSHSP-SIZE 0 FILL ;
 
 : RSHSP-INSTALL ( sidecar -- rte-status )
     DUP RSHSP-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN

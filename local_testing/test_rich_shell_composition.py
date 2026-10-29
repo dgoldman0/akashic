@@ -203,36 +203,34 @@ VARIABLE _SHT-REFUSE-INSTALL
         "_SHT-REFUSE-INSTALL @ _A1D-SCREEN _RTHP.PHASE @ "
         "_A1D-SHELL-PRODUCER _RSHSP.EXTENSION _A1D-SCREEN _RTHP-EXTENSION?"))
     assert values("_A1D-SHELL-PHASE @") == (5,)
-    # The shell source and producer own their first, smallest storage from
-    # Desk's memory source and grow it as models and candidates need.  The
-    # shell's part of each frame goes into the screen producer's extension
-    # blocks, which the producer takes from the same source when a part first
-    # needs one.
+    # The shell source owns its first, smallest storage from Desk's memory
+    # source and grows it as models need.  The shell producer owns none: it
+    # builds in the screen producer's scratch block and freezes the shell's
+    # part of each frame into the producer's extension blocks, which the
+    # producer takes from the same source when a build first needs them.
     assert values("_A1D-SHELL-SOURCE _SHSN.MEMORY @ _A1D-MEMORY = "
                   "_A1D-SHELL-SOURCE _SHSN.A-U @ SHM-HEADER-SIZE = "
                   "_A1D-SHELL-SOURCE-A @ _A1D-SHELL-SOURCE-B @") == (true, true, 0, 0)
-    assert values("_A1D-SHELL-PRODUCER _RSHSP.MEMORY @ _A1D-MEMORY = "
-                  "_A1D-SHELL-PRODUCER _RSHSP.WORK-U @ RSHSP-FIRST-WORK-BYTES = "
-                  "_A1D-SHELL-WORK @") == (true, true, 0)
     assert values("_A1D-SCREEN _RTHP.MEMORY @ _A1D-MEMORY = "
-                  "_A1D-SCREEN _RTHP.XBLOCK0-A @ _A1D-SCREEN _RTHP.XBLOCK1-A @") == (true, 0, 0)
+                  "_A1D-SCREEN _RTHP.XBLOCK0-A @ _A1D-SCREEN _RTHP.XBLOCK1-A @ "
+                  "_A1D-SCREEN _RTHP.XSCRATCH-A @") == (true, 0, 0, 0)
     assert values("_A1D-OWNER _APTAS.CONTROL-CONTEXT @ _A1D-SHELL-PRODUCER =") == (true,)
     assert values("_A1D-OWNER _APTAS.CONTROL-XT @ ' RSHSP-CONTROL-TARGET@ =") == (true,)
     assert values("_A1D-SCREEN _RTHP.EXTENSION @ 0<>") == (true,)
     # Each dispatch checks that the sidecar and its producer are the records
     # they say they are, and that the producer is the one it was given.  With
     # every-frame checks on it also checks the sidecar's header and proves its
-    # storage, so a work space knocked off its cell is refused; Desk runs in
-    # normal mode, where that proof was made when the storage was lent.
+    # storage, so a shell facade knocked off its cell is refused; Desk runs in
+    # normal mode, where that proof was made when the shell was set up.
     dispatch = "RTHPX-ABORT _A1D-SCREEN _A1D-SHELL-PRODUCER _RSHSP-DISPATCH RTE-S-OK ="
     assert values("CHK-EVERY-FRAME @") == (0,)
     assert values(dispatch) == (true,)
-    values("1 _A1D-SHELL-PRODUCER _RSHSP.WORK +!")
+    values("1 _A1D-SHELL-PRODUCER _RSHSP.SHELL +!")
     assert values(dispatch) == (true,)
     assert values("RTHPX-ABORT 0 _A1D-SHELL-PRODUCER _RSHSP-DISPATCH RTE-S-INVALID =") == (true,)
     values("-1 CHK-EVERY-FRAME !")
     assert values(dispatch) == (0,)
-    values("-1 _A1D-SHELL-PRODUCER _RSHSP.WORK +!")
+    values("-1 _A1D-SHELL-PRODUCER _RSHSP.SHELL +!")
     assert values(dispatch) == (true,)
     values("0 CHK-EVERY-FRAME !")
     assert values("_A1D-UNINSTALL") == (0,)
@@ -253,7 +251,7 @@ VARIABLE _SHT-REFUSE-INSTALL
     assert values("_A1D-SETUP SCB-S-INVALID = _A1D-SHELL-PHASE @") == (true, 4)
     assert values("_A1D-SCREEN _RTHP.EXTENSION @") == (0,)
     assert values("_SHSN-INSTALLED @ _A1D-SHELL-SOURCE =") == (true,)
-    assert values("_A1D-SHELL-PRODUCER _RSHSP.MEMORY @ _A1D-MEMORY =") == (true,)
+    assert values("_A1D-SHELL-PRODUCER _RSHSP.MAGIC @ _RSHSP-MAGIC =") == (true,)
     assert values("_A1D-UNINSTALL") == (0,)
     assert values("_A1D-MEMORY MSRC-HELD@") == (0,)
     assert values("ASHELL-DRAW-OBSERVER@ AHOST-SHELL-OBSERVER@") == (0, 0, 0, 0)

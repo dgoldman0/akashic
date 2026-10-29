@@ -1154,24 +1154,28 @@ frame before the change driver.
       the count's cost, and sends the same 18 DELTAs and bytes; the
       canonical journey passed with the shadow check, sending the same
       presents, and in safe mode.
-    - **9b.3.2. The shell builds in the producer's storage.** The shell
-      writes its batch straight into the free extension block, with its
-      passing work at the block's far end and each region's glyph slots in
-      the producer's glyph banks, which sit unused while the shell is
-      installed, so its freeze and its work space go. A candidate built
-      alone sends the runs packed in its bank, which the shell's planning
-      leaves alone.
+    - **9b.3.2. The shell builds in the producer's storage.** The shell's
+      work space goes, and the shell owns no storage. It builds each
+      candidate in a scratch block the producer owns beside its extension
+      blocks, which grows from Desk's memory source as they do, and plans
+      each region's glyph runs in the producer's glyph banks, which sit
+      unused while the shell is installed. The producer forgets its held
+      plan once the shell plans there, and the shell no longer hands the
+      planner that plan as a reference. A candidate built alone sends the
+      runs packed in its bank, which the shell's planning leaves alone.
+      The freeze stays until 9b.3.3 builds the batch where it is kept.
     - **9b.3.3. One copy and one comparison.** The producer calls the
       shell's model, region and chrome words to build the batch before it
       compares, and its comparison covers the whole batch: the
       applications' items, the catalog, the shell's controls, panes and
-      status, and the runs slot by slot. The target bank stops packing the
-      applications' items, which the batch holds, and the shell's mapping
-      of a DELTA onto the acknowledged part goes; the DELTA goes out from
-      the producer's comparison. The comparison reads the items the
-      target banks hold, which keep their text and samples as offsets
-      where the batch needs addresses, so the copy and the comparison go
-      together, once the batch is built in the producer's storage.
+      status, and the runs slot by slot. The batch is built in the free
+      extension block, where it is kept, so the shell's freeze goes. The
+      target bank stops packing the applications' items, which the batch
+      holds, and the shell's mapping of a DELTA onto the acknowledged part
+      goes; the DELTA goes out from the producer's comparison. The
+      comparison reads the items the target banks hold, which keep their
+      text and samples as offsets where the batch needs addresses, so the
+      copy and the comparison go together.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
