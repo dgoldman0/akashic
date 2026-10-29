@@ -1164,6 +1164,15 @@ frame before the change driver.
       planner that plan as a reference. A candidate built alone sends the
       runs packed in its bank, which the shell's planning leaves alone.
       The freeze stays until 9b.3.3 builds the batch where it is kept.
+      **Done** on 2026-10-28 (038b1dbf). The scratch block and the
+      extension blocks grow through one word, and a candidate going out
+      alone sends the runs its bank packed. A typed letter's burst frame
+      builds in 7.83 million steps against 7.82 and sends the same 18
+      DELTAs and bytes. The canonical journey passed with the shadow
+      check, 4,111 comparisons without a difference, sending the same
+      presents, and in safe mode with no damage named. In that journey
+      the scratch block grew to 389,208 bytes, of which a build used at
+      most 230,464; the shell's work space had held 4.4 MB on 2026-10-18.
     - **9b.3.3. One copy and one comparison.** The producer calls the
       shell's model, region and chrome words to build the batch before it
       compares, and its comparison covers the whole batch: the
@@ -1233,7 +1242,10 @@ them in part 0's runs.
 Part 9 frees RUHA's banks (9a) and the shell's work space (9b.3). 9b.2
 moved the shell's two banks into the screen producer's extension blocks,
 which grow by the banks' rule from a part 40 bytes smaller; in the canonical
-journey each came to 236,536 bytes. Part 9 also adds the projection's record
+journey each came to 236,536 bytes. 9b.3.2 replaced the work space with a
+scratch block the producer owns, which grew to 389,208 bytes in that
+journey, and moved the glyph slots that made up most of the work space
+into the producer's glyph banks, which shell mode had left unused. Part 9 also adds the projection's record
 of what each element last projected, sized from the elements on the screen,
 and the pending change set, sized from one frame's changes. Captures go into
 scratch, which grows to what one build needs; a full build's captures came
