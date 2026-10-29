@@ -391,10 +391,14 @@ new object identities.
 
 A DELTA plans residual runs only on rows that changed. Once a candidate is
 built, the producer's ROW-DAMAGE names the rows a plan must build again:
-those of CELL and residue damage, the acknowledged and current menus' rows,
-and those of claims that came or went. Every other row's cells, residue,
-menus and claims are unchanged since the acknowledged frame, and safe mode,
-or a frame on screen that cannot vouch for them, marks every row. A DELTA
+those of CELL and residue damage, and those of claims that came, went or
+moved. The acknowledged bank keeps its projection's rectangles, the menus'
+first, and how many are the menus', so a menu's claim is compared with the
+acknowledged menus' and any other claim with the acknowledged others'; a
+menu that opens, closes or moves marks its rows, and one that stays where it
+was marks none. Every other row's cells, residue and claims, menus'
+included, are unchanged since the acknowledged frame, and safe mode, or a
+frame on screen that cannot vouch for them, marks every row. A DELTA
 also keeps the shell's own claims and regions, so the
 shell's runs on an unmarked row equal the acknowledged part's. For each
 region whose catalog row equals the acknowledged one, the shell copies those

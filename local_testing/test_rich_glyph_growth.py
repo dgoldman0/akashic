@@ -267,7 +267,9 @@ def test_delayed_plan_rejects_changed_definition_authority(harness, mutation):
     assert not harness.call("_RTHP-D-PLAN-GLYPHS-VALID?")
 
 
-def test_slot_ceiling_accounts_for_aligned_packed_menu_rows(harness):
+def test_slot_ceiling_uses_every_byte_the_bank_leaves(harness):
+    """The ceiling of glyph slots is what the bank's other sections leave,
+    each at its aligned size: here exactly one slot a cell."""
     producer = harness.allocate(bytes(harness.constant("RTHP-SIZE")))
     for name, value in (("_RTHP.MAX-COLS", 1), ("_RTHP.MAX-ROWS", 137),
                         ("_RTHP.MAX-DOCUMENTS", 1), ("_RTHP.MAX-TEXT", 8),
@@ -277,6 +279,4 @@ def test_slot_ceiling_accounts_for_aligned_packed_menu_rows(harness):
         harness.field(producer, name, value)
     harness.variable("_RTHP-R-P", producer)
     assert harness.call("_RTHP-R-BANK-CEILING?")
-    # The 144-byte aligned bitmap otherwise incorrectly admits one extra
-    # 136-byte item/reference slot despite every caller byte being occupied.
     assert harness.variable("_RTHP-R-CEILING") == 137

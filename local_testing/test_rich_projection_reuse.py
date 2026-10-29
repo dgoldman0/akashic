@@ -94,14 +94,15 @@ def test_geometry_changes_cover_both_old_and_new_rows(projection, old, new, expe
 
 
 def test_menu_and_nonmenu_coverage_have_distinct_authority(projection):
+    """An unchanged menu, like any unchanged claim, plans nothing again.  A
+    semantic root replaced by a menu with the same bounds still rebuilds the
+    pixels its claim suppressed, since a menu's claim shows the underlay."""
     h = projection
     before = capture(h, [(0, 0, 1, 8), (1, 0, 2, 8)], menus=1)
-    assert damage(h, before) == bytes((255, 0))
-    # Removing a semantic root in favor of a menu may leave identical bounds
-    # but must still rebuild the formerly suppressed residual pixels.
+    assert damage(h, before) == bytes((0, 0))
     h.runtime.memory.write_bytes(h.damage, bytes(2))
     claims(h, [(0, 0, 1, 8), (1, 0, 2, 8)], menus=2)
-    assert damage(h, before) == bytes((255, 255))
+    assert damage(h, before) == bytes((0, 255))
 
 
 @pytest.mark.parametrize('rect', [(-1, 0, 1, 8), (0, -1, 1, 8), (1, 0, 1, 8),

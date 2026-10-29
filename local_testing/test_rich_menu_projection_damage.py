@@ -1,4 +1,4 @@
-"""Execute production menu-row capture and ACK-based projection damage words."""
+"""Execute production claim-rectangle capture and ACK-based projection damage words."""
 
 import re
 import struct
@@ -41,8 +41,8 @@ class DamageHarness:
                     include(token)
             chunks.append(declaration)
 
-        for name in ("_RTHP-MENU-ROWS!", "_RTHP-RD-MARK-CELL-DAMAGE?",
-                     "_RTHP-RD-MARK-PROJECTION-DAMAGE?", "_RTHP-RD-MARK-ACKED-MENUS?",
+        for name in ("_RTHP-RD-MARK-CELL-DAMAGE?",
+                     "_RTHP-RD-MARK-PROJECTION-DAMAGE?",
                      "_RTHP-RD-MARK-CURRENT-CLAIMS?", "_RTHP-PK-LAYOUT?",
                      "_RTHP-PACKED-BANK?", "_RTHP-U-CLONE?",
                      "_RTHP-RD-SCAN-ACTIVE-ROW?", "_RTHP-RD-COPY-ACTIVE-ROW?",
@@ -103,55 +103,39 @@ def harness(request):
     return DamageHarness(request.param)
 
 
-def test_menu_bitmap_captures_only_prefix_and_preserves_caller_bounds(harness):
-    claims = harness.claims(((1, 3), (2, 4), (5, 7)))
-    storage = harness.allocate(b"LEFTGUAR" + b"?" * 8 + b"RIGHTGUA")
-    assert harness.call("_RTHP-MENU-ROWS!", claims, 240, 2, storage + 8, 8)
-    assert harness.runtime.memory.read_bytes(storage, 24) == b"LEFTGUAR\x00\x01\x01\x01\x00\x00\x00\x00RIGHTGUA"
-    assert harness.call("_RTHP-MENU-ROWS!", 0, 0, 0, storage + 8, 8)
-    assert harness.runtime.memory.read_bytes(storage + 8, 8) == bytes(8)
-
-
-@pytest.mark.parametrize("ranges,count,used", [(((1, 9),), 1, 80),
-                                            (((-1, 2),), 1, 80),
-                                            (((3, 3),), 1, 80),
-                                            (((1, 3),), 2, 80),
-                                            (((1, 3),), 1, 79)])
-def test_invalid_claim_geometry_or_prefix_cannot_overrun_rows(harness, ranges, count, used):
-    claims = harness.claims(ranges)
-    storage = harness.allocate(b"LEFTGUAR" + b"?" * 8 + b"RIGHTGUA")
-    assert not harness.call("_RTHP-MENU-ROWS!", claims, used, count, storage + 8, 8)
-    assert harness.runtime.memory.read_bytes(storage, 8) == b"LEFTGUAR"
-    assert harness.runtime.memory.read_bytes(storage + 16, 8) == b"RIGHTGUA"
-
-
 def test_closed_menu_and_residue_only_changes_survive_clean_cell_damage(harness):
+    """A menu the frame on screen showed and the current claims lack plans
+    its rows again, as residue-only damage does, though CELL is clean."""
     memory = harness.runtime.memory
     rows = 8
-    producer = harness.allocate(bytes(3016))
-    # No controls or glyphs: the existing packed address words place the
-    # directory at the header and the row map after one real directory slot.
+    producer = harness.allocate(bytes(harness.constant("RTHP-SIZE")))
     adapter = (ROOT / "akashic/tui/rich-terminal/uidl-hybrid-adapter.f").read_text()
     match = re.search(r"(?m)^(\d+) CONSTANT RUHA-DOCUMENT-SIZE", adapter)
     assert match
     directory_size = int(match[1])
-    header = int(harness.definitions["_RTHP-TARGET-BANK-HEADER-SIZE"].split()[0])
-    bank = harness.allocate(bytes(header + directory_size) + bytes((0, 1, 1, 0, 0, 0, 0, 0)))
+    header = harness.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
+    # No controls or glyphs: the projection's rectangles follow the one
+    # directory slot, and the one there is a menu's.
+    bank = harness.allocate(bytes(header + directory_size)
+                            + struct.pack("<4Q", 1, 0, 3, 4))
     harness.field(bank, "_RTHP-TB.DOCUMENT-COUNT", 1)
+    harness.field(bank, "_RTHP-TB.PROJECTION-RECTS", 1)
+    harness.field(bank, "_RTHP-TB.MENU-RECTS", 1)
     damage = harness.allocate(bytes(rows))
     cell_damage = harness.allocate(bytes(rows))
     residue_damage = harness.allocate(bytes((0, 0, 0, 0, 0, 1, 0, 0)))
     harness.field(producer, "_RTHP.ARENA-A", bank)
-    harness.field(producer, "_RTHP.ARENA-U", header + directory_size + rows)
+    harness.field(producer, "_RTHP.ARENA-U", header + directory_size + 32)
     harness.field(producer, "_RTHP.ROW-DAMAGE-A", damage)
     for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-BANK", bank),
-                        ("_RTHP-RD-ROWS", rows), ("_RTHP-RD-CELL-DAMAGE-A", cell_damage),
+                        ("_RTHP-RD-ROWS", rows), ("_RTHP-RD-COLS", 4),
+                        ("_RTHP-RD-CELL-DAMAGE-A", cell_damage),
                         ("_RTHP-RD-CELL-DAMAGE-U", rows),
                         ("_RTHP-RD-PROJECTION-DAMAGE-A", residue_damage),
                         ("_RTHP-RD-PROJECTION-DAMAGE-U", rows)):
         harness.variable(name, value)
     for name in ("_RTHP-RD-MARK-CELL-DAMAGE?", "_RTHP-RD-MARK-PROJECTION-DAMAGE?",
-                 "_RTHP-RD-MARK-ACKED-MENUS?", "_RTHP-RD-MARK-CURRENT-CLAIMS?"):
+                 "_RTHP-RD-MARK-CURRENT-CLAIMS?"):
         assert harness.call(name)
     assert memory.read_bytes(damage, rows) == bytes((0, 255, 255, 0, 0, 255, 0, 0))
 
@@ -168,7 +152,7 @@ def _bounded_target_producer(harness):
     return producer, bank_bytes
 
 
-def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness):
+def test_full_packed_target_fills_its_exact_capacity(harness):
     memory = harness.runtime.memory
     producer, bank_bytes = _bounded_target_producer(harness)
     header = harness.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
@@ -177,7 +161,7 @@ def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness
                 + 2 * harness.constant("RUCP-CORRELATION-SIZE") + 16
                 + 27 * harness.constant("RTE-GLYPH-RUN-PLAN-ITEM-SIZE")
                 + 27 * harness.constant("RGRP-TEXT-REF-SIZE") + 112
-                + 2 * harness.constant("RUHA-DOCUMENT-SIZE") + 16 + 2 * 32)
+                + 2 * harness.constant("RUHA-DOCUMENT-SIZE") + 2 * 32)
     assert bank_bytes == expected
     storage = harness.allocate(b"LEFTGUAR" + bytes(bank_bytes) + b"RIGHTGUA")
     bank = storage + 8
@@ -188,6 +172,7 @@ def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness
                         ("_RTHP-TB.MENU-CONTROL-COUNT", 2),
                         ("_RTHP-TB.DOCUMENT-COUNT", 2),
                         ("_RTHP-TB.PROJECTION-RECTS", 2),
+                        ("_RTHP-TB.MENU-RECTS", 1),
                         ("_RTHP-TB.GLYPH-SLOT-COUNT", 27),
                         ("_RTHP-TB.SOURCE-TEXT-USED", 13),
                         ("_RTHP-TB.MENU-TEXT-USED", 13),
@@ -196,8 +181,8 @@ def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness
     harness.variable("_RTHP-PK-P", producer)
     harness.variable("_RTHP-PK-BANK", bank)
     assert harness.call("_RTHP-PK-LAYOUT?")
-    assert harness.value("_RTHP-PK-MENU-ROWS-A") == bank + bank_bytes - 16 - 64
-    assert harness.value("_RTHP-PK-MENU-ROWS-U") == 16
+    assert harness.value("_RTHP-PK-PROJECTION-RECTS-A") == bank + bank_bytes - 64
+    assert harness.value("_RTHP-PK-PROJECTION-RECTS-U") == 64
     assert harness.value("_RTHP-PK-CURSOR") == bank + bank_bytes
     packed_bytes = harness.value("_RTHP-PK-TOTAL")
     assert packed_bytes == bank_bytes - header - 2 * entry
@@ -205,23 +190,27 @@ def test_full_packed_target_reserves_aligned_menu_rows_at_exact_capacity(harness
     harness.field(bank, "_RTHP-TB.PACKED-BYTES", packed_bytes)
     assert harness.call("_RTHP-PACKED-BANK?", bank, producer)
 
-    # A former layout that omitted the row map cannot be admitted; neither
-    # can an otherwise full target whose caller arena is one byte short.
+    # A packed size the layout does not give cannot be admitted, nor more
+    # menus than rectangles, nor an otherwise full target whose caller arena
+    # is one byte short.
     harness.field(bank, "_RTHP-TB.PACKED-BYTES", packed_bytes - 16)
     assert not harness.call("_RTHP-PACKED-BANK?", bank, producer)
     harness.field(bank, "_RTHP-TB.PACKED-BYTES", packed_bytes)
+    harness.field(bank, "_RTHP-TB.MENU-RECTS", 3)
+    assert not harness.call("_RTHP-PACKED-BANK?", bank, producer)
+    harness.field(bank, "_RTHP-TB.MENU-RECTS", 1)
     harness.field(producer, "_RTHP.ARENA-U", bank_bytes - 1)
     assert not harness.call("_RTHP-PACKED-BANK?", bank, producer)
     assert memory.read_bytes(storage, 8) == b"LEFTGUAR"
     assert memory.read_bytes(bank + bank_bytes, 8) == b"RIGHTGUA"
 
 
-def test_unchanged_clone_preserves_menu_bitmap_and_its_packed_extent(harness):
+def test_unchanged_clone_preserves_projection_rectangles_and_their_packed_extent(harness):
     memory = harness.runtime.memory
     producer, bank_bytes = _bounded_target_producer(harness)
     header = harness.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
     directory = harness.constant("RUHA-DOCUMENT-SIZE")
-    packed_bytes = directory + 16  # Nine rows plus alignment padding.
+    packed_bytes = directory + 2 * 32  # A menu's rectangle, then another.
     copy_bytes = header + packed_bytes
     storage = harness.allocate(b"LEFTGUAR" + bytes(bank_bytes)
                                + b"MIDGUARD" + b"?" * bank_bytes + b"RIGHTGUA")
@@ -233,14 +222,16 @@ def test_unchanged_clone_preserves_menu_bitmap_and_its_packed_extent(harness):
         harness.field(producer, name, value)
     for name, value in (("_RTHP-TB.COLS", 3), ("_RTHP-TB.ROWS", 9),
                         ("_RTHP-TB.DOCUMENT-COUNT", 1),
+                        ("_RTHP-TB.PROJECTION-RECTS", 2),
+                        ("_RTHP-TB.MENU-RECTS", 1),
                         ("_RTHP-TB.PACKED-BYTES", packed_bytes),
                         ("_RTHP-TB.VALID", harness.constant("_RTHP-TARGET-VALID-MAGIC")),
                         ("_RTHP-TB.DRAW", 7), ("_RTHP-TB.SOURCE-GEN", 9),
                         ("_RTHP-TB.CONTENT-EPOCH", 11)):
         harness.field(active, name, value)
     memory.write_bytes(active + header, b"D" * directory)
-    bitmap = bytes((0, 1, 1, 0, 0, 1, 0, 0, 1)) + bytes(7)
-    memory.write_bytes(active + header + directory, bitmap)
+    rects = struct.pack("<8Q", 0, 0, 1, 3, 2, 1, 5, 2)
+    memory.write_bytes(active + header + directory, rects)
     assert harness.call("_RTHP-PACKED-BANK?", active, producer)
     original = memory.read_bytes(active, bank_bytes)
     for name, value in (("_RTHP-U-P", producer), ("_RTHP-U-ACTIVE", active),
@@ -253,7 +244,7 @@ def test_unchanged_clone_preserves_menu_bitmap_and_its_packed_extent(harness):
                         ("_RTHP-TB.SOURCE-GEN", 10), ("_RTHP-TB.CONTENT-EPOCH", 12)):
         struct.pack_into("<Q", expected, harness.offset(name), value)
     assert memory.read_bytes(pending, copy_bytes) == expected
-    assert memory.read_bytes(pending + header + directory, 16) == bitmap
+    assert memory.read_bytes(pending + header + directory, 64) == rects
     assert memory.read_bytes(pending + copy_bytes, bank_bytes - copy_bytes) == b"?" * (bank_bytes - copy_bytes)
     assert memory.read_bytes(active, bank_bytes) == original
     assert memory.read_bytes(storage, 8) == b"LEFTGUAR"
@@ -313,7 +304,7 @@ def test_acknowledged_claim_gaps_are_reused_with_their_row(harness, spans, same)
 
 
 @pytest.mark.parametrize("dirty", (1, 255))
-def test_identical_coverage_keeps_cell_residue_and_menu_damage(harness, dirty):
+def test_identical_coverage_keeps_cell_and_residue_damage(harness, dirty):
     h = harness
     _producer, _bank, damage, *_ = _residual_row(h, ((0, 2), (8, 4)), dirty=dirty)
     assert h.call("_RTHP-RD-SCAN-ACTIVE-ROW?")
@@ -371,8 +362,9 @@ def _rect_claims(h, rects):
                                for i, (row0, col0, row1, col1) in enumerate(rects)))
 
 
-def _claim_damage(h, menus, current, acked, rows=8, cols=12):
-    """Mark the rows the current claims damage against acknowledged rects."""
+def _claim_damage(h, menus, current, acked_menus, acked, rows=8, cols=12):
+    """Mark the rows the current claims, menus first, damage against the
+    acknowledged rectangles, menus' first."""
     memory = h.runtime.memory
     claims = list(menus) + list(current)
     claims_a = _rect_claims(h, claims)
@@ -385,9 +377,11 @@ def _claim_damage(h, menus, current, acked, rows=8, cols=12):
                         ("_RTHP.ROW-DAMAGE-A", damage)):
         h.field(producer, name, value)
     bank = h.allocate(bytes(h.constant("_RTHP-TARGET-BANK-HEADER-SIZE") + 4096))
-    h.field(bank, "_RTHP-TB.PROJECTION-RECTS", len(acked))
+    h.field(bank, "_RTHP-TB.PROJECTION-RECTS", len(acked_menus) + len(acked))
+    h.field(bank, "_RTHP-TB.MENU-RECTS", len(acked_menus))
     rects_a, = h.results("_RTHP-PACK-PROJECTION-RECTS-A", bank)
-    memory.write_bytes(rects_a, b"".join(struct.pack("<4Q", *rect) for rect in acked))
+    memory.write_bytes(rects_a, b"".join(struct.pack("<4Q", *rect)
+                                         for rect in list(acked_menus) + list(acked)))
     for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-BANK", bank),
                         ("_RTHP-RD-ROWS", rows), ("_RTHP-RD-COLS", cols)):
         h.variable(name, value)
@@ -404,13 +398,33 @@ WENT, CAME = (4, 0, 5, 3), (6, 1, 7, 3)
 
 def test_only_rows_whose_claim_rectangles_came_or_went_are_damaged(harness):
     """Rectangles both projections have, even in another order, cover the same
-    cells in both, so their rows keep the acknowledged runs.  Menus' rows and
-    those of rectangles that came or went are planned again."""
+    cells in both, so their rows keep the acknowledged runs, a menu's as any
+    other's.  Only the rows of rectangles that came or went are planned
+    again."""
     damaged = _claim_damage(harness, [MENU], [STAYS_B, STAYS_A, CAME],
-                            [STAYS_A, STAYS_B, WENT])
-    assert damaged == [True, False, False, False, True, False, True, False]
+                            [MENU], [STAYS_A, STAYS_B, WENT])
+    assert damaged == [False, False, False, False, True, False, True, False]
 
 
-def test_an_identical_projection_damages_only_menu_rows(harness):
-    damaged = _claim_damage(harness, [MENU], [STAYS_A, STAYS_B], [STAYS_A, STAYS_B])
-    assert damaged == [True] + [False] * 7
+def test_an_identical_projection_damages_no_rows(harness):
+    damaged = _claim_damage(harness, [MENU], [STAYS_A, STAYS_B],
+                            [MENU], [STAYS_A, STAYS_B])
+    assert damaged == [False] * 8
+
+
+def test_a_menu_that_opens_closes_or_moves_damages_its_rows(harness):
+    """A menu's rows are planned again when it opens, closes or moves along
+    its row, and when a claim of the same bounds becomes, or stops being,
+    a menu's, since a menu's claim shows the underlay."""
+    dropdown = (1, 2, 4, 6)
+    # A dropdown opens under the menubar.
+    assert _claim_damage(harness, [MENU, dropdown], [], [MENU], []) == \
+        [False, True, True, True, False, False, False, False]
+    # It closes again.
+    assert _claim_damage(harness, [MENU], [], [MENU, dropdown], []) == \
+        [False, True, True, True, False, False, False, False]
+    # The menubar moves along its row.
+    assert _claim_damage(harness, [(0, 2, 1, 12)], [], [MENU], []) == \
+        [True] + [False] * 7
+    # A semantic root with the menubar's bounds replaces it.
+    assert _claim_damage(harness, [], [MENU], [MENU], []) == [True] + [False] * 7

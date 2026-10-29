@@ -47,11 +47,13 @@ RSHSP-PART-HEADER-SIZE 96 = _FM-A
 0 RSHSP-PART.CORRELATIONS 24 = _FM-A 0 RSHSP-PART.ACTIONS 40 = _FM-A
 0 RSHSP-PART.MEMBERSHIP 56 = _FM-A 0 RSHSP-PART.NEXT-REGION 72 = _FM-A
 0 RSHSP-PART.NEXT-OBJECT 80 = _FM-A
-\ The bank of the frame names the part and the bytes it uses.
+\ The bank of the frame names the part and the bytes it uses, and counts
+\ the menus' rectangles among its projection's.
 0 _RTHP-TB.XBLOCK 368 = _FM-A 0 _RTHP-TB.XBLOCK-BYTES 376 = _FM-A
-_RTHP-TARGET-BANK-HEADER-SIZE 384 = _FM-A
+0 _RTHP-TB.MENU-RECTS 384 = _FM-A
+_RTHP-TARGET-BANK-HEADER-SIZE 392 = _FM-A
 _FM-DONE
-''', minimum=19)
+''', minimum=20)
 
 
 from test_shell_snapshot import PRELUDE as SHELL_MODEL

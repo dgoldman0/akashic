@@ -539,8 +539,11 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ bank names none; only the extension names one, once it has built it.
 : _RTHP-TB.XBLOCK                  ( bank -- a ) 368 + ;
 : _RTHP-TB.XBLOCK-BYTES            ( bank -- a ) 376 + ;
+\ How many of the projection's rectangles (_RTHP-TB.PROJECTION-RECTS),
+\ which come first, are the menus' claims.
+: _RTHP-TB.MENU-RECTS              ( bank -- a ) 384 + ;
 
-384 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
+392 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
 32 CONSTANT _RTHP-PROJECTION-RECT-SIZE
 
 : _RTHP-TE.ID          ( entry -- a )      ;
@@ -732,7 +735,6 @@ VARIABLE _RTHP-TBS-TARGETS
 VARIABLE _RTHP-TBS-DOCUMENTS
 VARIABLE _RTHP-TBS-CONTROLS
 VARIABLE _RTHP-TBS-CONTROL-BYTES
-VARIABLE _RTHP-TBS-ROWS
 VARIABLE _RTHP-TBS-CELLS
 VARIABLE _RTHP-TBS-TOTAL
 
@@ -744,8 +746,8 @@ VARIABLE _RTHP-TBS-TOTAL
     _RTHP-U32*? 0= IF DROP 0 EXIT THEN _RTHP-TBS-ADD ;
 
 : _RTHP-TARGET-BYTES-CALC
-  ( document-capacity target-capacity control-capacity control-byte-capacity cells rows -- bytes flag )
-    _RTHP-TBS-ROWS ! _RTHP-TBS-CELLS ! _RTHP-TBS-CONTROL-BYTES !
+  ( document-capacity target-capacity control-capacity control-byte-capacity cells -- bytes flag )
+    _RTHP-TBS-CELLS ! _RTHP-TBS-CONTROL-BYTES !
     _RTHP-TBS-CONTROLS ! _RTHP-TBS-TARGETS ! _RTHP-TBS-DOCUMENTS !
     _RTHP-TARGET-BANK-HEADER-SIZE _RTHP-TBS-TOTAL !
     _RTHP-TBS-TARGETS @ _RTHP-TARGET-ENTRY-SIZE _RTHP-TBS-MUL-ADD
@@ -765,8 +767,6 @@ VARIABLE _RTHP-TBS-TOTAL
         _RTHP-TBS-ADD 0= IF 0 0 EXIT THEN
     _RTHP-TBS-DOCUMENTS @ RUHA-DOCUMENT-SIZE _RTHP-TBS-MUL-ADD
         0= IF 0 0 EXIT THEN
-    _RTHP-TBS-ROWS @ _RTHP-ALIGN8?
-        0= IF DROP 0 0 EXIT THEN _RTHP-TBS-ADD 0= IF 0 0 EXIT THEN
     _RTHP-TBS-CONTROLS @ _RTHP-PROJECTION-RECT-SIZE _RTHP-TBS-MUL-ADD
         0= IF 0 0 EXIT THEN
     _RTHP-TBS-TOTAL @ -1 ;
@@ -818,7 +818,7 @@ VARIABLE _RTHP-TBC-P
         0= IF DROP 2DROP DROP R> DROP 0 0 EXIT THEN
     _RTHP-TBC-P @ _RTHP.MAX-DIALOG-NATIVE @ _RTHP-U32+?
         0= IF DROP 2DROP DROP R> DROP 0 0 EXIT THEN
-    R> _RTHP-TBC-P @ _RTHP.MAX-ROWS @ _RTHP-TARGET-BYTES-CALC
+    R> _RTHP-TARGET-BYTES-CALC
         0= IF DROP 0 0 EXIT THEN >R
     _RTHP-TBC-P @ _RTHP.MAX-INSTRUMENT-REGIONS @
     _RTHP-TBC-P @ _RTHP.MAX-INSTRUMENTS @
@@ -964,7 +964,7 @@ VARIABLE _RTHP-TBC-P
     _RTHP-B-CELLS @ 8 _RTHP-B-MUL-ADD 0= IF 0 EXIT THEN
     _RTHP-B-DOCUMENTS @
     _RTHP-B-CONTROLS @ _RTHP-B-CONTROLS @
-        _RTHP-B-CONTROL-BYTES @ _RTHP-B-CELLS @ _RTHP-B-ROWS @
+        _RTHP-B-CONTROL-BYTES @ _RTHP-B-CELLS @
         _RTHP-TARGET-BYTES-CALC 0= IF DROP 0 EXIT THEN
     >R _RTHP-B-INSTRUMENT-REGIONS @ _RTHP-B-INSTRUMENTS @
         _RTHP-B-DGRAPH-NATIVE @ _RTHP-INSTRUMENT-BANK-BYTES?
@@ -2126,7 +2126,6 @@ VARIABLE _RTHP-PK-ITEM-U
 VARIABLE _RTHP-PK-REF-U
 VARIABLE _RTHP-PK-GLYPH-U
 VARIABLE _RTHP-PK-DIRECTORY-U
-VARIABLE _RTHP-PK-MENU-ROWS-U
 VARIABLE _RTHP-PK-INSTRUMENT-REGIONS-U
 VARIABLE _RTHP-PK-INSTRUMENTS-U
 VARIABLE _RTHP-PK-INSTRUMENT-CORR-U
@@ -2141,7 +2140,6 @@ VARIABLE _RTHP-PK-ITEMS-A
 VARIABLE _RTHP-PK-REFS-A
 VARIABLE _RTHP-PK-GLYPH-A
 VARIABLE _RTHP-PK-DIRECTORY-A
-VARIABLE _RTHP-PK-MENU-ROWS-A
 VARIABLE _RTHP-PK-INSTRUMENT-REGIONS-A
 VARIABLE _RTHP-PK-INSTRUMENTS-A
 VARIABLE _RTHP-PK-INSTRUMENT-CORR-A
@@ -2188,7 +2186,7 @@ VARIABLE _RTHP-PK-SERIES
     0 _RTHP-PK-CONTROL-U ! 0 _RTHP-PK-CORR-U !
     0 _RTHP-PK-SOURCE-U ! 0 _RTHP-PK-ITEM-U !
     0 _RTHP-PK-REF-U ! 0 _RTHP-PK-GLYPH-U !
-    0 _RTHP-PK-DIRECTORY-U ! 0 _RTHP-PK-MENU-ROWS-U !
+    0 _RTHP-PK-DIRECTORY-U !
     0 _RTHP-PK-INSTRUMENT-REGIONS-U ! 0 _RTHP-PK-INSTRUMENTS-U !
     0 _RTHP-PK-INSTRUMENT-CORR-U ! 0 _RTHP-PK-INSTRUMENT-UNITS-U !
     0 _RTHP-PK-PROJECTION-RECTS-U !
@@ -2196,7 +2194,7 @@ VARIABLE _RTHP-PK-SERIES
     0 _RTHP-PK-CONTROLS-A ! 0 _RTHP-PK-CORR-A !
     0 _RTHP-PK-SOURCE-A ! 0 _RTHP-PK-ITEMS-A !
     0 _RTHP-PK-REFS-A ! 0 _RTHP-PK-GLYPH-A !
-    0 _RTHP-PK-DIRECTORY-A ! 0 _RTHP-PK-MENU-ROWS-A !
+    0 _RTHP-PK-DIRECTORY-A !
     0 _RTHP-PK-INSTRUMENT-REGIONS-A ! 0 _RTHP-PK-INSTRUMENTS-A !
     0 _RTHP-PK-INSTRUMENT-CORR-A ! 0 _RTHP-PK-INSTRUMENT-UNITS-A !
     0 _RTHP-PK-PROJECTION-RECTS-A !
@@ -2386,9 +2384,7 @@ VARIABLE _RTHP-SH-P
     _RTHP-PK-BANK @ _RTHP-TB.ROWS @ DUP _RTHP-POS-U32? 0= IF
         DROP 0 EXIT
     THEN
-    DUP _RTHP-PK-P @ _RTHP.MAX-ROWS @ U> IF DROP 0 EXIT THEN
-    _RTHP-ALIGN8? 0= IF DROP 0 EXIT THEN
-        DUP _RTHP-PK-MENU-ROWS-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.MAX-ROWS @ U> IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.INSTRUMENT-REGION-COUNT @
         RTE-INSTRUMENT-REGION-SIZE _RTHP-U32*?
         0= IF DROP 0 EXIT THEN
@@ -2417,6 +2413,8 @@ VARIABLE _RTHP-SH-P
     _RTHP-PK-P @ _RTHP.MAX-STATICS @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @ SWAP U> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.MENU-RECTS @
+        _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @ U> IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @
         _RTHP-PROJECTION-RECT-SIZE _RTHP-U32*? 0= IF DROP 0 EXIT THEN
         DUP _RTHP-PK-PROJECTION-RECTS-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
@@ -2438,7 +2436,6 @@ VARIABLE _RTHP-SH-P
     _RTHP-PK-REF-U @ _RTHP-PK-TAKE _RTHP-PK-REFS-A !
     _RTHP-PK-GLYPH-U @ _RTHP-PK-TAKE _RTHP-PK-GLYPH-A !
     _RTHP-PK-DIRECTORY-U @ _RTHP-PK-TAKE _RTHP-PK-DIRECTORY-A !
-    _RTHP-PK-MENU-ROWS-U @ _RTHP-PK-TAKE _RTHP-PK-MENU-ROWS-A !
     _RTHP-PK-INSTRUMENT-REGIONS-U @ _RTHP-PK-TAKE
         _RTHP-PK-INSTRUMENT-REGIONS-A !
     _RTHP-PK-INSTRUMENTS-U @ _RTHP-PK-TAKE _RTHP-PK-INSTRUMENTS-A !
@@ -2589,60 +2586,18 @@ VARIABLE _RTHP-SH-P
     RUCL-CLAIM-SIZE / DUP _RTHP-PK-P @ _RTHP.MENU-CLAIMS @ U< IF
         DROP 0 EXIT
     THEN
-    _RTHP-PK-P @ _RTHP.MENU-CLAIMS @ -
-        _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS !
+    _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS !
+    _RTHP-PK-P @ _RTHP.MENU-CLAIMS @ _RTHP-PK-BANK @ _RTHP-TB.MENU-RECTS !
     _RTHP-PK-LAYOUT? 0= IF 0 EXIT THEN
     _RTHP-PK-SOURCE-SPANS? ;
 
-\ Preserve the rows covered by menu replacements in each immutable target.
-\ CONTROL children deliberately have no CELL rectangle; their host geometry
-\ cannot recover this authority after the next source snapshot replaces it.
-VARIABLE _RTHP-MR-CLAIMS
-VARIABLE _RTHP-MR-COUNT
-VARIABLE _RTHP-MR-ROWS
-VARIABLE _RTHP-MR-HEIGHT
-VARIABLE _RTHP-MR-CLAIM
-VARIABLE _RTHP-MR-ROW0
-VARIABLE _RTHP-MR-ROW1
-
-: _RTHP-MENU-ROWS!  ( claims-a claims-u menu-count rows-a rows-u -- flag )
-    _RTHP-MR-HEIGHT ! _RTHP-MR-ROWS ! _RTHP-MR-COUNT !
-    DUP RUCL-CLAIM-SIZE MOD IF 2DROP 0 EXIT THEN
-    DUP RUCL-CLAIM-SIZE / _RTHP-MR-COUNT @ U< IF 2DROP 0 EXIT THEN
-    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
-    DROP _RTHP-MR-CLAIMS !
-    _RTHP-MR-ROWS @ 0= _RTHP-MR-HEIGHT @ 0= OR IF 0 EXIT THEN
-    _RTHP-MR-ROWS @ _RTHP-MR-HEIGHT @ MSPAN-NONWRAPPING? 0= IF
-        0 EXIT
-    THEN
-    _RTHP-MR-ROWS @ _RTHP-MR-HEIGHT @ 0 FILL
-    _RTHP-MR-COUNT @ 0 ?DO
-        _RTHP-MR-CLAIMS @ I RUCL-CLAIM-SIZE * + DUP _RTHP-MR-CLAIM !
-        RUCL-CLAIM-ROW0@ DUP _RTHP-MR-ROW0 ! 0< IF 0 UNLOOP EXIT THEN
-        _RTHP-MR-CLAIM @ RUCL-CLAIM-ROW1@ DUP _RTHP-MR-ROW1 !
-        _RTHP-MR-HEIGHT @ U> IF 0 UNLOOP EXIT THEN
-        _RTHP-MR-ROW0 @ _RTHP-MR-ROW1 @ U< 0= IF 0 UNLOOP EXIT THEN
-        _RTHP-MR-ROWS @ _RTHP-MR-ROW0 @ +
-        _RTHP-MR-ROW1 @ _RTHP-MR-ROW0 @ - 1 FILL
-    LOOP
-    -1 ;
-
-: _RTHP-PK-MENU-ROWS?  ( -- flag )
-    _RTHP-PK-P @ _RTHP.CLAIMS-USED @ DUP
-        _RTHP-PK-P @ _RTHP.CLAIMS-U @ U> IF DROP 0 EXIT THEN
-    DUP IF
-        _RTHP-PK-P @ _RTHP.CLAIMS-A @ OVER _RTHP-PK-P @
-            _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
-    THEN
-    _RTHP-PK-P @ _RTHP.CLAIMS-A @ SWAP
-    _RTHP-PK-P @ _RTHP.MENU-CLAIMS @
-    _RTHP-PK-MENU-ROWS-A @ _RTHP-PK-BANK @ _RTHP-TB.ROWS @
-    _RTHP-MENU-ROWS! ;
-
-\ Keep the exact non-menu coverage geometry in each acknowledged bank.
-\ Source generations and text revisions are intentionally absent: only these
-\ rectangles determine which CELL pixels the residual planner suppresses.
-\ Menu replacement rows retain their separate BACK/residue authority above.
+\ Keep the exact coverage geometry of every claim in each acknowledged bank,
+\ the menus' first, so the next frame plans again only the rows of claims
+\ that came, went or moved.  The bank must keep the menus' too: a menu's
+\ controls have no CELL rectangle, so its host geometry cannot recover them
+\ after the next source snapshot replaces it.  Source generations and text
+\ revisions are intentionally absent: only these rectangles, and which are
+\ menus', determine which CELL pixels the residual planner suppresses.
 VARIABLE _RTHP-PR-RECT
 VARIABLE _RTHP-PR-COLS
 VARIABLE _RTHP-PR-ROWS
@@ -2658,8 +2613,7 @@ VARIABLE _RTHP-PR-ROWS
 
 : _RTHP-PK-PROJECTION-RECTS?  ( -- flag )
     _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
-        _RTHP-PK-P @ _RTHP.CLAIMS-A @
-        I _RTHP-PK-P @ _RTHP.MENU-CLAIMS @ + RUCL-CLAIM-SIZE * +
+        _RTHP-PK-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
             _RUCL-C.ROW0 DUP
         _RTHP-PK-BANK @ _RTHP-TB.COLS @
         _RTHP-PK-BANK @ _RTHP-TB.ROWS @ _RTHP-PROJECTION-RECT? 0= IF
@@ -2764,7 +2718,6 @@ VARIABLE _RTHP-PR-ROWS
         _RTHP-PK-STATICS-A @ I RTE-STATIC-SIZE * +
             _RTHP-PK-STATIC-REBASE? 0= IF 0 UNLOOP EXIT THEN
     LOOP
-    _RTHP-PK-MENU-ROWS? 0= IF 0 EXIT THEN
     _RTHP-PK-PROJECTION-RECTS? 0= IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         _RTHP-PK-CONTROLS-A @ I RTE-CONTROL-SIZE * +
@@ -2837,12 +2790,9 @@ VARIABLE _RTHP-PR-ROWS
     DUP _RTHP-PACK-GLYPH-A SWAP _RTHP-TB.GLYPH-TEXT-USED @
         _RTHP-ALIGN8? DROP + ;
 
-: _RTHP-PACK-MENU-ROWS-A  ( bank -- a )
+: _RTHP-PACK-INSTRUMENT-REGIONS-A  ( bank -- a )
     DUP _RTHP-PACK-DIRECTORY-A SWAP _RTHP-TB.DOCUMENT-COUNT @
         RUHA-DOCUMENT-SIZE * + ;
-
-: _RTHP-PACK-INSTRUMENT-REGIONS-A  ( bank -- a )
-    DUP _RTHP-PACK-MENU-ROWS-A SWAP _RTHP-TB.ROWS @ _RTHP-ALIGN8? DROP + ;
 
 : _RTHP-PACK-INSTRUMENTS-A  ( bank -- a )
     DUP _RTHP-PACK-INSTRUMENT-REGIONS-A SWAP _RTHP-TB.INSTRUMENT-REGION-COUNT @
@@ -7763,27 +7713,19 @@ VARIABLE _RTHP-RD-ROW-CAP
     LOOP
     -1 ;
 
-: _RTHP-RD-MARK-ACKED-MENUS?  ( -- flag )
-    _RTHP-RD-BANK @ _RTHP-PACK-MENU-ROWS-A
-    _RTHP-RD-ROWS @ _RTHP-RD-P @ _RTHP-ARENA-SPAN? 0= IF 0 EXIT THEN
-    _RTHP-RD-ROWS @ 0 ?DO
-        _RTHP-RD-BANK @ _RTHP-PACK-MENU-ROWS-A I + C@ IF
-            I _RTHP-RD-DAMAGE!
-        THEN
-    LOOP
-    -1 ;
-
 VARIABLE _RTHP-RD-PROJECTION-SAME
 VARIABLE _RTHP-RD-RECTS
 VARIABLE _RTHP-RD-RECT
 
+\ The current claims are the acknowledged bank's rectangles: as many, as
+\ many of them menus', and each in its place.
 : _RTHP-RD-PROJECTION-SAME?  ( -- flag )
     _RTHP-RD-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
-    _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ -
         _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ <> IF 0 EXIT THEN
+    _RTHP-RD-P @ _RTHP.MENU-CLAIMS @
+        _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @ <> IF 0 EXIT THEN
     _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
-        _RTHP-RD-P @ _RTHP.CLAIMS-A @
-        I _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ + RUCL-CLAIM-SIZE * +
+        _RTHP-RD-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
             _RUCL-C.ROW0 _RTHP-PROJECTION-RECT-SIZE
         _RTHP-RD-RECTS @ I _RTHP-PROJECTION-RECT-SIZE * +
             _RTHP-PROJECTION-RECT-SIZE COMPARE IF 0 UNLOOP EXIT THEN
@@ -7791,28 +7733,42 @@ VARIABLE _RTHP-RD-RECT
 
 VARIABLE _RTHP-RD-FIND
 
-\ Whether the rectangle at RECT is among the acknowledged non-menu ones.
-: _RTHP-RD-ACKED-RECT?  ( rect -- flag )
-    _RTHP-RD-FIND !
-    _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
+\ The places of the acknowledged rectangles, and of the current claims, of
+\ one kind: the menus' when MENU, the others' otherwise.
+: _RTHP-RD-ACKED-RANGE  ( menu -- end start )
+    IF _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @ 0 ELSE
+        _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @
+        _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @
+    THEN ;
+: _RTHP-RD-CURRENT-RANGE  ( menu -- end start )
+    IF _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ 0 ELSE
+        _RTHP-RD-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
+        _RTHP-RD-P @ _RTHP.MENU-CLAIMS @
+    THEN ;
+
+\ Whether the rectangle at RECT, a menu's when MENU, is among the
+\ acknowledged ones of its kind.
+: _RTHP-RD-ACKED-RECT?  ( rect menu -- flag )
+    SWAP _RTHP-RD-FIND !
+    _RTHP-RD-ACKED-RANGE ?DO
         _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
         _RTHP-RD-RECTS @ I _RTHP-PROJECTION-RECT-SIZE * +
             _RTHP-PROJECTION-RECT-SIZE
         COMPARE 0= IF -1 UNLOOP EXIT THEN
     LOOP 0 ;
 
-\ Whether the rectangle at RECT is among the current non-menu claims'.
-: _RTHP-RD-CURRENT-RECT?  ( rect -- flag )
-    _RTHP-RD-FIND !
-    _RTHP-RD-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
-    _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ ?DO
+\ Whether the rectangle at RECT, a menu's when MENU, is among the current
+\ claims of its kind.
+: _RTHP-RD-CURRENT-RECT?  ( rect menu -- flag )
+    SWAP _RTHP-RD-FIND !
+    _RTHP-RD-CURRENT-RANGE ?DO
         _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
         _RTHP-RD-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
             _RUCL-C.ROW0 _RTHP-PROJECTION-RECT-SIZE
         COMPARE 0= IF -1 UNLOOP EXIT THEN
     LOOP 0 ;
 
-\ The rows of each acknowledged rectangle the current projection lacks.
+\ The rows of each acknowledged rectangle the current claims lack.
 : _RTHP-RD-MARK-OLD-PROJECTION?  ( -- flag )
     _RTHP-RD-PROJECTION-SAME @ IF -1 EXIT THEN
     _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
@@ -7820,7 +7776,8 @@ VARIABLE _RTHP-RD-FIND
         _RTHP-RD-COLS @ _RTHP-RD-ROWS @ _RTHP-PROJECTION-RECT? 0= IF
             0 UNLOOP EXIT
         THEN
-        _RTHP-RD-RECT @ _RTHP-RD-CURRENT-RECT? 0= IF
+        _RTHP-RD-RECT @ I _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @ U<
+            _RTHP-RD-CURRENT-RECT? 0= IF
             _RTHP-RD-RECT @ 16 + @ _RTHP-RD-RECT @ @ ?DO
                 I _RTHP-RD-DAMAGE!
             LOOP
@@ -7841,10 +7798,8 @@ VARIABLE _RTHP-RD-FIND
     _RTHP-RD-BANK @ _RTHP-PACK-PROJECTION-RECTS-A _RTHP-RD-RECTS !
     _RTHP-RD-PROJECTION-SAME? _RTHP-RD-PROJECTION-SAME !
     _RTHP-RD-MARK-OLD-PROJECTION? 0= IF DROP 0 EXIT THEN
-    _RTHP-RD-PROJECTION-SAME @ IF
-        DROP _RTHP-RD-P @ _RTHP.MENU-CLAIMS @
-    ELSE RUCL-CLAIM-SIZE / THEN
-    0 ?DO
+    _RTHP-RD-PROJECTION-SAME @ IF DROP -1 EXIT THEN
+    RUCL-CLAIM-SIZE / 0 ?DO
         _RTHP-RD-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
             DUP _RTHP-RD-CLAIM !
         RUCL-CLAIM-ROW0@ DUP _RTHP-RD-ROW0 ! 0< IF
@@ -7854,10 +7809,9 @@ VARIABLE _RTHP-RD-FIND
             DUP _RTHP-RD-ROW1 ! 0< IF 0 UNLOOP EXIT THEN
         _RTHP-RD-ROW0 @ _RTHP-RD-ROW1 @ U< 0= IF 0 UNLOOP EXIT THEN
         _RTHP-RD-ROW1 @ _RTHP-RD-ROWS @ U> IF 0 UNLOOP EXIT THEN
-        \ Every menu's rows, and those of each other claim new to them.
-        I _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ U< IF -1 ELSE
-            _RTHP-RD-CLAIM @ _RUCL-C.ROW0 _RTHP-RD-ACKED-RECT? 0=
-        THEN IF
+        \ The rows of each claim new to the acknowledged ones of its kind.
+        _RTHP-RD-CLAIM @ _RUCL-C.ROW0 I _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ U<
+            _RTHP-RD-ACKED-RECT? 0= IF
             _RTHP-RD-ROW1 @ _RTHP-RD-ROW0 @ ?DO
                 I _RTHP-RD-DAMAGE!
             LOOP
@@ -7927,8 +7881,8 @@ VARIABLE _RTHP-RD-FIND
     RGRP-TEXT-REF-SIZE * _RTHP-RD-ACTIVE-REFS @ + ;
 
 \ Establish the exact acknowledged residual interval stream for one row.
-\ Its gaps are reused with it: rectangles that came or went, old and current
-\ menu rows, and exact CELL/residue damage have already marked their rows.
+\ Its gaps are reused with it: claims that came, went or moved, menus'
+\ included, and exact CELL/residue damage have already marked their rows.
 : _RTHP-RD-SCAN-ACTIVE-ROW?  ( -- flag )
     _RTHP-RD-ACTIVE-I @ _RTHP-RD-ROW-FIRST !
     0 _RTHP-RD-COVER ! -1 _RTHP-RD-MORE !
@@ -8133,15 +8087,15 @@ VARIABLE _RTHP-RD-FIND
     -1 ;
 
 \ Mark the rows a plan of this draw must build again: those of CELL and
-\ residue damage, the acknowledged and current menus' rows, and the rows of
-\ claims that came or went.  Every other row keeps the acknowledged frame's
-\ cells, residue, menus and claims, so its runs are the acknowledged ones.
+\ residue damage, and the rows of claims that came, went or moved, a menu's
+\ among the acknowledged menus' and any other among the acknowledged
+\ others'.  Every other row keeps the acknowledged frame's cells, residue
+\ and claims, menus' included, so its runs are the acknowledged ones.
 : _RTHP-RD-MARK-BODY?  ( -- flag )
     _RTHP-RD-ELIGIBLE? 0= IF 0 EXIT THEN
     _RTHP-RD-SCREEN-AUTHORITY? 0= IF 0 EXIT THEN
     _RTHP-RD-MARK-CELL-DAMAGE? 0= IF 0 EXIT THEN
     _RTHP-RD-MARK-PROJECTION-DAMAGE? 0= IF 0 EXIT THEN
-    _RTHP-RD-MARK-ACKED-MENUS? 0= IF 0 EXIT THEN
     _RTHP-RD-MARK-CURRENT-CLAIMS? ;
 
 : _RTHP-RD-BUILD-BODY?  ( -- flag )
@@ -8590,8 +8544,6 @@ VARIABLE _RTHP-R-REF
         0= IF DROP 0 EXIT THEN _RTHP-R-ADD? 0= IF 0 EXIT THEN
     _RTHP-R-P @ _RTHP.DOCUMENT-COUNT @ RUHA-DOCUMENT-SIZE
         _RTHP-R-MUL-ADD? 0= IF 0 EXIT THEN
-    _RTHP-R-P @ _RTHP.ROWS @ _RTHP-ALIGN8?
-        0= IF DROP 0 EXIT THEN _RTHP-R-ADD? 0= IF 0 EXIT THEN
     _RTHP-R-P @ _RTHP.INSTRUMENT-REGION-COUNT @
     _RTHP-R-P @ _RTHP.INSTRUMENT-COUNT @
     _RTHP-R-P @ _RTHP.INSTRUMENT-UNITS-USED @
