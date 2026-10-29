@@ -1349,6 +1349,42 @@ frame before the change driver.
     seals the plan from the items that differ. Its full lowering, packing
     and comparison go for such frames. A shadow stage builds the bank in
     full as well and compares the two byte for byte.
+    Read on 2026-10-29, once 9a.3a's first two pieces were done. Of a typed
+    letter's 2.32 million steps in the producer, the comparison takes 1.03
+    million: 0.33 million sorting the two banks' controls by identity and
+    joining them, 0.35 million checking every control against its partner,
+    and 0.10 million moving the pending bank to the identities, regions
+    and content revisions on screen. Packing takes 0.27 million, and
+    lowering 1.02 million: 0.49 million packing collections' content, 0.40
+    million of it the text areas', and 0.17 million the status fields. The
+    root facts of a typed frame's 32 roots cost 0.10 million, and about two
+    roots move: the text area and the status field. In two steps, each
+    sending what it sent before:
+    - **9a.3b.1. The bank is a copy.** The producer keeps each bank's root
+      facts in normal mode too, in storage it grows from its memory source.
+      When the snapshot's roots are those of the bank on screen, in the same
+      order, and each moved root is a text collection or a status field
+      whose count of items, claim and input targets stay those on screen,
+      the pending bank is a copy of the bank on screen with the moved
+      roots' items written in from the candidate. Each item takes the
+      identity and region of the item in its place, a body that did not
+      change keeps the revision on screen, and every text after one that
+      changed length moves, with the sections that follow it. The plan
+      lists the moved roots' controls that differ from those on screen,
+      each checked as the comparison checks a pair. The candidate is still
+      lowered whole; its packing and comparison go for such frames. With
+      the shadow check on, the full packing and comparison run first, and
+      the copy must equal their bank byte for byte and their plan.
+    - **9a.3b.2. Only the moved roots are lowered.** A root whose facts
+      did not move keeps the items of the bank on screen, and only the
+      moved roots are lowered from the snapshot, each into the places its
+      items hold. The claims and counts the shell reads come
+      from the bank on screen, which then keeps its claims whole rather
+      than their rectangles alone. A shadow stage lowers the candidate
+      whole as well and compares the two banks.
+    Other kinds of root, such as menus, tab sets and dialogs, take the copy
+    once an ordinary use needs it; until then a frame that moves one takes
+    the full driver.
   - **9a.3c. Capture follows change.** For such a frame the snapshot is not
     built: the documents that painted are captured into scratch, family by
     family as 9a.2 does, the others keep what the frame on screen was built
