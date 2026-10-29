@@ -48,7 +48,7 @@ class InstrumentHarness(GrowthHarness):
                      "_RTHP-PACK-INSTRUMENT-REGIONS-A", "_RTHP-PACK-INSTRUMENTS-A",
                      "_RTHP-PACK-INSTRUMENT-CORR-A", "_RTHP-PACK-INSTRUMENT-UNITS-A",
                      "_RTHP-INSTRUMENTS-REUSABLE?", "_RTHP-INSTRUMENTS-NORMALIZE",
-                     *extra_words):
+                     "_RTHP-BANK-REBASE?", *extra_words):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -124,6 +124,7 @@ class InstrumentHarness(GrowthHarness):
         memory = self.runtime.memory
         self.active_before = memory.read_bytes(self.bank, self.bank_size)
         memory.write_bytes(self.other, self.active_before)
+        assert self.call("_RTHP-BANK-REBASE?", self.bank, self.other)
         self.field(self.other, "_RTHP-TB.REGION", 17)
         self.field(self.other, "_RTHP-TB.FIRST-OBJECT", 200)
         displacement = self.other - self.bank
@@ -148,14 +149,14 @@ def harness(request):
     return InstrumentHarness(request.param)
 
 
-def test_packed_instruments_own_exact_payload_and_offset_text(harness):
+def test_packed_instruments_own_exact_payload_and_point_at_their_units(harness):
     h = harness
     h.setup()
     source = h.runtime.memory.read_bytes(h.instruments, h.count * 216)
     assert h.call("_RTHP-PACK-ADMITTED-CANDIDATE", h.bank, h.producer)
     assert h.call("_RTHP-PACKED-BANK?", h.bank, h.producer)
     expected = bytearray(source)
-    struct.pack_into("<Q", expected, 176, 0)
+    struct.pack_into("<Q", expected, 176, h.packed("INSTRUMENT-UNITS"))
     assert h.runtime.memory.read_bytes(h.packed("INSTRUMENTS"), len(source)) == expected
     assert h.runtime.memory.read_bytes(h.packed("INSTRUMENT-UNITS"), len(h.units)) == h.units
     assert h.runtime.memory.read_bytes(h.packed("INSTRUMENT-REGIONS"), 96) == h.runtime.memory.read_bytes(h.instrument_regions, 96)
@@ -167,15 +168,16 @@ def test_packed_instruments_own_exact_payload_and_offset_text(harness):
     h.guards()
 
 
-def test_distinct_unit_slices_keep_their_offsets(harness):
+def test_distinct_unit_slices_keep_their_places(harness):
     h = harness
     h.setup(kinds=(1, 1))
     h.runtime.memory.write64(h.instruments + 184, 2)
     h.runtime.memory.write64(h.instruments + 216 + 176, h.instrument_units + 2)
     h.runtime.memory.write64(h.instruments + 216 + 184, len(h.units) - 2)
     assert h.call("_RTHP-PACK-ADMITTED-CANDIDATE", h.bank, h.producer)
-    assert h.runtime.memory.read64(h.packed("INSTRUMENTS") + 176) == 0
-    assert h.runtime.memory.read64(h.packed("INSTRUMENTS") + 216 + 176) == 2
+    units = h.packed("INSTRUMENT-UNITS")
+    assert h.runtime.memory.read64(h.packed("INSTRUMENTS") + 176) == units
+    assert h.runtime.memory.read64(h.packed("INSTRUMENTS") + 216 + 176) == units + 2
     h.guards()
 
 

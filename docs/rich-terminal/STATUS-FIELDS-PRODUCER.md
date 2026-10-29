@@ -68,14 +68,14 @@ support narrower overlap handling; this implementation does not infer it.
 
 ## Lifetime and reuse
 
-Packed static strings contain offsets into their own immutable text section,
-not borrowed pointers. Each correlation preserves document attachment, source
+Packed static strings are addresses into their bank's own immutable text
+section, not borrowed pointers. Each correlation preserves document attachment, source
 index, mounted generation, relation root key and native field key. An unchanged
-clone needs no status pointer rebasing. A retained DELTA keeps the status lane
+clone moves each string to the clone's own text section. A retained DELTA keeps the status lane
 when its identities, geometry and roles match; normalization then preserves
 the acknowledged IDs and base region, and each field whose severity, emphasis,
-label or value changed is replaced in place with STATIC-REPLACE, its text
-offsets turned back into addresses. Pad's line and column readout therefore no
+label or value changed is replaced in place with STATIC-REPLACE, which reads
+its text from the bank. Pad's line and column readout therefore no
 longer forces a complete replacement on every caret move. A changed identity,
 geometry or role still uses a complete retained replacement.
 

@@ -87,7 +87,8 @@ class StatusHarness(GrowthHarness):
             "_RTHP-WRAP-HYBRID", "_RTHP-PACK-ADMITTED-CANDIDATE",
             "_RTHP-PACKED-BANK?", "_RTHP-PACK-STATICS-A",
             "_RTHP-PACK-STATIC-CORR-A", "_RTHP-PACK-STATIC-TEXT-A",
-            "_RTHP-STATICS-REUSABLE?", "_RTHP-STATICS-NORMALIZE", *extra_words,
+            "_RTHP-STATICS-REUSABLE?", "_RTHP-STATICS-NORMALIZE",
+            "_RTHP-BANK-REBASE?", *extra_words,
         ):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
@@ -242,14 +243,14 @@ def test_optional_capacity_refusal_restores_exact_prefix(h):
     h.guards()
 
 
-def test_packed_status_owns_text_and_uses_offsets(h):
+def test_packed_status_owns_text_and_points_at_its_copy(h):
     h.setup()
     assert h.build() == (0,)
     h.pack()
     items, = h.results("_RTHP-PACK-STATICS-A", h.bank)
     text, = h.results("_RTHP-PACK-STATIC-TEXT-A", h.bank)
-    assert h.runtime.memory.read64(items + 136) == 0
-    assert h.runtime.memory.read64(items + 152) == len(h.label)
+    assert h.runtime.memory.read64(items + 136) == text
+    assert h.runtime.memory.read64(items + 152) == text + len(h.label)
     assert h.runtime.memory.read_bytes(text, len(h.expected_text)) == h.expected_text
     before = h.runtime.memory.read_bytes(h.bank, h.bank_size)
     h.runtime.memory.write_bytes(h.get("STATIC-TEXT-A"), b"x" * len(h.expected_text))
@@ -268,6 +269,7 @@ def test_static_lane_reuse_allows_new_values_and_normalizes(h, mutation):
     other = h.get("TARGET1-A")
     original = h.runtime.memory.read_bytes(h.bank, h.bank_size)
     h.runtime.memory.write_bytes(other, original)
+    assert h.call("_RTHP-BANK-REBASE?", h.bank, other)
     h.field(other, "_RTHP-TB.REGION", 17)
     h.field(other, "_RTHP-TB.FIRST-OBJECT", 200)
     item, = h.results("_RTHP-PACK-STATICS-A", other)

@@ -6,11 +6,14 @@ Both bank capacities include these sections, using the caller's existing
 instrument and data-graphics bounds with checked arithmetic. No applet or UIDL
 capacity annotation is introduced.
 
-The packed instrument `UNIT-A` field holds an offset into that bank's unit
-bytes, including zero for an empty unit. Source spans and unit slices must fit
-before the target's validity marker can be published. Source scratch can then
-be overwritten without changing the acknowledged payload, and moving a packed
-bank requires no instrument pointer rebasing. Promotion still occurs only when
+The packed instrument `UNIT-A` field holds the address of its unit in that
+bank's own unit bytes, or zero for an empty unit, so a family batch can take
+the bank's records as they are. Source spans and unit slices must fit before
+the target's validity marker can be published. Source scratch can then be
+overwritten without changing the acknowledged payload. A bank copied into
+another has each unit moved to the copy's own unit bytes
+(`_RTHP-BANK-REBASE?`), as the unchanged shortcut's clone does, and reuse
+compares each unit as its offset into its own bank's bytes. Promotion still occurs only when
 the terminal accepts the exact transaction (`TX_RESULT`); physical display
 acknowledgement separately gates input on the host.
 

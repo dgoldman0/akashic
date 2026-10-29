@@ -294,8 +294,8 @@ def test_a_live_candidate_numbers_its_series_afresh_and_the_delta_reads_the_bank
 CREATE _SDI-ACKS RTE-INSTRUMENT-SIZE 2 * 7 + ALLOT : _SDI-ACK _SDI-ACKS 7 + -8 AND ;
 CREATE _SDI-TAS 140007 ALLOT : _SDI-TA _SDI-TAS 7 + -8 AND ;
 \ The base producer's pending bank: its control, instruments and series,
-\ matched to the acknowledged ones, the series' samples as an offset into
-\ the bank's copy.
+\ matched to the acknowledged ones, the series' samples in the bank's
+\ copy.
 : _SDI-PENDING ( bank -- )
     DUP 140000 0 FILL DUP _SX-BANK
     1 OVER _RTHP-TB.CONTROL-COUNT !
@@ -307,7 +307,8 @@ CREATE _SDI-TAS 140007 ALLOT : _SDI-TA _SDI-TAS 7 + -8 AND ;
     _SDI-ACK OVER _RTHP-PACK-INSTRUMENTS-A RTE-INSTRUMENT-SIZE 2 * MOVE
     _SI-C OVER _RTHP-PACK-INSTRUMENT-CORR-A RUIP-CORRELATION-SIZE 2 * MOVE
     _SI-Y OVER _RTHP-PACK-SERIES-A RTE-SERIES-SIZE MOVE
-    7 OVER _RTHP-PACK-SERIES-A _RTE-SERIES.ID ! 0 OVER _RTHP-PACK-SERIES-A _RTE-SERIES.SAMPLES-A !
+    7 OVER _RTHP-PACK-SERIES-A _RTE-SERIES.ID !
+    DUP _RTHP-PACK-SERIES-SAMPLES-A OVER _RTHP-PACK-SERIES-A _RTE-SERIES.SAMPLES-A !
     _SI-SAMPLES OVER _RTHP-PACK-SERIES-SAMPLES-A 128000 MOVE
     _SX-P _RTHP.TARGET-PENDING ! ;
 : _SDI-FIRST ( kind bank -- item )

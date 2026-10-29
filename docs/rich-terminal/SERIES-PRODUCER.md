@@ -78,8 +78,8 @@ an optional capability refusal.
 ## Lifetimes and acknowledgements
 
 Packed histories own their records, provenance correlations and samples.
-Sample addresses become dense offsets within their packed bank, and empty
-histories retain canonical zero spans. Reuse checks exact sample bytes,
+Sample addresses become dense addresses into their packed bank's own
+samples, and empty histories retain canonical zero spans. Reuse checks exact sample bytes,
 record shape, interval, capacity, source attachment, lifecycle and native
 relation identity. Reusable records normalize both SERIES identities and
 WAVEFORM references to the acknowledged namespace. Changed samples or

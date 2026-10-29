@@ -5096,7 +5096,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert "_RTE-HP.INSTRUMENT-BYTES-U @" in zero_family
 
     # Target banks own instrument regions, payload, source identities and
-    # offset-based text. DELTA must prove exact reuse before normalizing IDs.
+    # unit text, which records address in the bank's own copy. DELTA must
+    # prove exact reuse before normalizing IDs.
     for metadata in (
         "_RTHP-TB.INSTRUMENT-REGION-COUNT",
         "_RTHP-TB.INSTRUMENT-COUNT",
@@ -5107,7 +5108,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
         assert metadata in target_publish
     for field in ("INSTRUMENT-REGIONS", "INSTRUMENTS", "INSTRUMENT-CORR", "INSTRUMENT-UNITS"):
         assert f"_RTHP.{field}-A" in pack_copy
-    assert "_RTHP-PK-INSTRUMENT-OFFSET?" in pack_copy
+    assert "_RTHP-PK-INSTRUMENT-REBASE?" in pack_copy
     assert "_RTHP-INSTRUMENTS-REUSABLE?" in delta_bind
     assert "_RTHP.DELTA-PLAN-VALID" in delta_bind
     assert "_RTHP-D-BIND?" in delta_candidate
@@ -6765,7 +6766,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     assert "?DUP IF 0 SWAP _RTHP-TB.VALID ! THEN" in unchanged_finish
     assert unchanged_clone.index(" MOVE") < unchanged_clone.index(
         "0 _RTHP-U-PENDING @ _RTHP-TB.VALID !"
-    ) < unchanged_clone.index("_RTHP-U-REBASE-CONTROLS?")
+    ) < unchanged_clone.index("_RTHP-BANK-REBASE?")
     assert unchanged_commit.index(
         "_RTHP-TARGET-VALID-MAGIC _RTHP-U-PENDING @ _RTHP-TB.VALID !"
     ) < unchanged_commit.index("_RTHP.TARGET-PENDING !")
@@ -6798,7 +6799,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     # deterministic padding clear, exact payload length, and validity magic.
     assert pack_copy.count(" FILL") == 1
     assert pack_copy.count(" MOVE") == 17
-    assert "_RTHP-PK-STATIC-OFFSETS?" in pack_copy
+    assert "_RTHP-PK-STATIC-REBASE?" in pack_copy
     assert "_RTHP-PK-CONTROL-REBASE?" in pack_copy
     assert "_RTHP-TB.PACKED-BYTES !" in pack_copy
     assert "_RTHP-TB.VALID !" in pack_copy
@@ -7087,8 +7088,9 @@ def test_exact_reuse_fast_path_is_ack_bound_zero_damage_and_fail_closed() -> Non
     ):
         assert proof in snapshot
 
-    # Only the checked used prefix is cloned; pointer-bearing packed controls
-    # are rebased from the active source-text span into the inactive one.
+    # Only the checked used prefix is cloned; every packed reference, the
+    # controls' text and the statics', units and samples, moves from the
+    # active bank's copies into the inactive one's.
     assert "_RTHP-TARGET-BANK-BYTES?" in clone
     assert "_RTHP-U32*?" in clone and clone.count("_RTHP-U32+?") == 2
     assert "_RTHP-ARENA-SPAN?" in clone
@@ -7096,7 +7098,9 @@ def test_exact_reuse_fast_path_is_ack_bound_zero_damage_and_fail_closed() -> Non
     assert clone.index(" MOVE") < clone.index("_RTHP-TB.DRAW !")
     assert "_RTHP-TB.SOURCE-GEN !" in clone
     assert "_RTHP-TB.CONTENT-EPOCH !" in clone
-    assert "_RTHP-U-REBASE-CONTROLS?" in clone
+    assert "_RTHP-BANK-REBASE?" in clone
+    assert "_RTHP-U-REBASE-CONTROLS?" in _word(source, "_RTHP-BANK-REBASE?")
+    assert "_RTHP-U-REBASE-ITEMS?" in _word(source, "_RTHP-BANK-REBASE?")
     assert rebase.count("_RTHP-U-TEXT-REBASE?") == 3
     assert "_RTE-CONTROL.LABEL-A !" in rebase
     assert "_RTE-CONTROL.SHORTCUT-A !" in rebase
