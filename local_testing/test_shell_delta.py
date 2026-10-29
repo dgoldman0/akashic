@@ -37,7 +37,7 @@ VARIABLE _SD-GREPLACE VARIABLE _SD-GDEFINE VARIABLE _SD-CREPLACE VARIABLE _SD-PR
     \ A bank already pending is the one the producer packs for this draw.
     _SX-P _RTHP.TARGET-PENDING @ ?DUP IF
         _SX-P _RTHP.SOURCE-DRAW @ SWAP _RTHP-TB.DRAW !
-    THEN ;
+    THEN _SX-NUMBER ;
 \ The producer's pending target bank for the next draw.
 : _SD-PENDING ( bank -- )
     DUP 4096 0 FILL DUP _SX-BANK

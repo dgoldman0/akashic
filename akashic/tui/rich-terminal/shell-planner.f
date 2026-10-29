@@ -262,7 +262,8 @@ VARIABLE _RSHPL-PROVED
 \ Deep source validation precedes every count or record dereference.  A
 \ -PROVED build skips only the frozen model's validation, as the band helpers'
 \ peers do, for a caller that validated its model and has not written it since.
-: _RSHPL-SOURCE? ( -- flag )
+\ The request's source, identities and Z, as a plan or a count reads them.
+: _RSHPL-INPUT? ( -- flag )
     _RSHPL-PROVED @ 0= IF
         _RSHPL-Q @ _RSHPL-Q.MODEL-A @ _RSHPL-Q @ _RSHPL-Q.MODEL-U @
             SHSN-FROZEN-VALIDATE SHSN-S-OK <> IF 0 EXIT THEN
@@ -277,7 +278,6 @@ VARIABLE _RSHPL-PROVED
     _RSHPL-Q @ _RSHPL-Q.CONTENT-Z @ _RSHPL-I32? 0= OR
     _RSHPL-Q @ _RSHPL-Q.TASKBAR-Z @ _RSHPL-I32? 0= OR IF 0 EXIT THEN
     _RSHPL-Q @ _RSHPL-Q.CONTENT-Z @ _RSHPL-Q @ _RSHPL-Q.CHROME-Z @ < IF 0 EXIT THEN
-    _RSHPL-Q @ _RSHPL-Q.RESULT-U @ RSHPL-RESULT-SIZE < IF 0 EXIT THEN
     _RSHPL-Q @ _RSHPL-Q.ELIGIBLE-U @ ?DUP IF
         _RSHPL-M @ SHM.COUNT @ 8 * <> IF 0 EXIT THEN
         _RSHPL-M @ SHM.COUNT @ 0 ?DO
@@ -285,6 +285,9 @@ VARIABLE _RSHPL-PROVED
             I _RSHPL-ENTRY SHME.KIND @ SHM-K-PANE <> AND IF 0 UNLOOP EXIT THEN
         LOOP
     THEN -1 ;
+: _RSHPL-SOURCE? ( -- flag )
+    _RSHPL-INPUT? 0= IF 0 EXIT THEN
+    _RSHPL-Q @ _RSHPL-Q.RESULT-U @ RSHPL-RESULT-SIZE < 0= ;
 
 : _RSHPL-CHROME-COUNT ( e -- count )
     DUP SHME.CONTENT-ROW @ OVER SHME.ROW @ > IF 1 ELSE 0 THEN
@@ -684,4 +687,20 @@ VARIABLE _RSHPL-GAP-C VARIABLE _RSHPL-GAP-END
 : RSHPL-BUILD ( q -- status ) 0 _RSHPL-PROVED ! _RSHPL-BUILD-OF ;
 : _RSHPL-BUILD-PROVED ( q -- status )
     -1 _RSHPL-PROVED ! _RSHPL-BUILD-OF 0 _RSHPL-PROVED ! ;
+\ The controls a plan of request Q adds, the taskbars' and their tasks' and
+\ launchers', counted from its source alone before its outputs are set, so
+\ a caller can number what follows them past them.  Panes add none.  The
+\ caller has proved the model, as for _RSHPL-BUILD-PROVED.
+: _RSHPL-CONTROLS-OF ( q -- controls status )
+    DUP RSHPL-REQUEST-SIZE _RSHPL-ALIGNED? 0= IF DROP 0 RSHPL-S-INVALID EXIT THEN
+    _RSHPL-Q !
+    _RSHPL-Q @ _RSHPL-Q.MODEL-A @ _RSHPL-Q @ _RSHPL-Q.MODEL-U @
+        _RSHPL-ALIGNED? 0= IF 0 RSHPL-S-INVALID EXIT THEN
+    _RSHPL-INPUT? 0= IF 0 RSHPL-S-INVALID EXIT THEN
+    _RSHPL-COUNT? 0= IF 0 RSHPL-S-INVALID EXIT THEN
+    _RSHPL-CONTROLS @ RSHPL-S-OK ;
+: _RSHPL-CONTROLS-PROVED ( q -- controls status )
+    -1 _RSHPL-PROVED !
+    ['] _RSHPL-CONTROLS-OF CATCH ?DUP IF 2DROP 0 RSHPL-S-INVALID THEN
+    0 _RSHPL-PROVED ! ;
 HERE _RSHPL-OWNED-LIMIT !

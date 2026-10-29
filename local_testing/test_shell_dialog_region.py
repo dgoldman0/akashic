@@ -60,8 +60,7 @@ VARIABLE _SG-DU VARIABLE _SG-REV
         UDLSN-SOURCE-OVERLAY I _SG-X 8 + ! I 1- I _SG-X 16 + !
         9 I _SG-X 24 + ! 100 I + I _SG-X 32 + ! 1 I _SG-X 40 + ! 9 I _SG-X 48 + !
     LOOP
-    _SG-CX _SX-P _RTHP.CORR-A !
-    104 _SX-SI _RTE-STATIC.ID ! 104 _SX-P _RTHP.STATIC-LAST ! ;
+    _SG-CX _SX-P _RTHP.CORR-A ! ;
 \ Every BUTTON of a part's control families, in order.
 VARIABLE _SG-SEEN
 : _SG-BUTTONS-IN ( region part -- n )
@@ -82,7 +81,7 @@ STAGED_DIALOG = STAGED + PROMPT + DIALOG
 def test_a_pane_dialog_and_its_buttons_take_a_modal_region_over_the_pane():
     staged_run(STAGED_DIALOG + r'''
 _SX-SETUP _SG-CANDIDATE ' _SG-PAINT DRW-OVERLAY _SP-DIALOGS
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One modal region, the catalog's last, over the pane's content and above it.
 _SX-KA _SP-MODALS 1 = _SS-A
@@ -124,7 +123,7 @@ REFUSALS = {
 @pytest.mark.parametrize("case", sorted(REFUSALS))
 def test_other_paint_or_a_misplaced_dialog_refuses_the_shell_candidate(case):
     staged_run(STAGED_DIALOG + REFUSALS[case] + r'''
-_SP-DIALOGS _RSHSP-PREPARE RTE-S-UNAVAILABLE = _SS-A
+_SP-DIALOGS _SX-PREPARE RTE-S-UNAVAILABLE = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
 _SS-DONE
 ''', minimum=2)
@@ -148,7 +147,7 @@ DELTA_DIALOG = DELTA_PROMPT + DIALOG + r'''
 def test_a_delta_keeps_the_dialogs_modal_region_and_a_closed_dialog_restarts():
     staged_run(DELTA_DIALOG + r'''
 _SX-SETUP _SD-HOOKS _SG-CANDIDATE _SP-DIALOGS
-' _SG-HELLO-DIALOG _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SG-HELLO-DIALOG _SD-DRAW _SX-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SX-KA = _SS-A _SX-KA _SP-MODALS 1 = _SS-A
 \ A changed letter in the pane while the dialog stays open is a DELTA.
 ' _SG-HELLP-DIALOG _SD-DRAW _SD-TA _SG-PENDING
@@ -161,11 +160,10 @@ _SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-CREPLACE @ 0= _SS-A
 _SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A
 \ With the dialog closed the catalog loses its modal region: a START.
 _SX-CI _SX-P _RTHP.CONTROLS-A ! 1 _SX-P _RTHP.CONTROL-COUNT ! _SX-CX _SX-P _RTHP.CORR-A !
-101 _SX-SI _RTE-STATIC.ID ! 101 _SX-P _RTHP.STATIC-LAST !
 ' _SG-CLOSED _SD-DRAW _SD-TB _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE RTE-S-OK <> _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
-_RSHSP-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KA = _SS-A _SX-KA _SP-MODALS 0= _SS-A
+_SX-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KA = _SS-A _SX-KA _SP-MODALS 0= _SS-A
 _SS-DONE
 ''', minimum=18)
 
@@ -176,7 +174,7 @@ def test_a_dialog_element_and_its_buttons_stay_in_the_panes_content():
     staged_run(STAGED_DIALOG + r'''
 : _SG-ELEMENT ( -- ) 4 1 DO UDLSN-SOURCE-ELEMENT I _SG-X 8 + ! LOOP ;
 _SX-SETUP _SG-CANDIDATE _SP-DIALOGS _SG-ELEMENT
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SP-MODALS 0= _SS-A
 RTE-CONTROL-DIALOG _SX-KA _SP-CONTROL DUP 0<> _SS-A
 _RTE-CONTROL.REGION @ _SX-KA _SP-CONTENT _RTE-IR.ID @ = _SS-A

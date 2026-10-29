@@ -177,13 +177,30 @@ VARIABLE _SX-SAVED-U VARIABLE _SX-TASK-CORR VARIABLE _SX-LAUNCH-CORR
     79 _SX-CT C! 75 _SX-CT 1+ C! _SX-CT _SX-SI _RTE-STATIC.VALUE-A ! 2 _SX-SI _RTE-STATIC.VALUE-U !
     _SX-SI _SX-P _RTHP.STATICS-A ! 1 _SX-P _RTHP.STATIC-COUNT ! 101 _SX-P _RTHP.STATIC-LAST !
     _SX-SX 40 0 FILL 77 _SX-SX ! _SX-SX _SX-P _RTHP.STATIC-CORR-A ! ;
+\ What the screen producer does once it has lowered the applications'
+\ controls: the shell counts the controls it adds after them
+\ (RTHPX-PLAN), and the instruments and statics are numbered past those.
+: _SX-NUMBER ( -- )
+    _RSHSP-COUNT-CONTROLS _SS-OK
+    _SX-P _RTHP-OBJECTS-FIRST? _SS-A
+    _SX-P _RTHP.INSTRUMENT-COUNT @ 0 ?DO
+        DUP _SX-P _RTHP.INSTRUMENTS-A @ I RTE-INSTRUMENT-SIZE * + _RTE-INSTRUMENT.ID !
+        DUP _SX-P _RTHP.INSTRUMENT-LAST ! 1+
+    LOOP
+    _SX-P _RTHP.STATIC-COUNT @ 0 ?DO
+        DUP _SX-P _RTHP.STATICS-A @ I RTE-STATIC-SIZE * + _RTE-STATIC.ID !
+        DUP _SX-P _RTHP.STATIC-LAST ! 1+
+    LOOP DROP ;
+\ A complete preparation as the producer runs it: the count comes in the
+\ build, after the draw and the features it read.
+: _SX-PREPARE ( -- status ) _SX-NUMBER _RSHSP-PREPARE ;
 : _SX-SETUP
     _SX-SOURCE _SX-CANDIDATE _SX-S RSHSP-SIZE 0 FILL
     _SX-C _SX-S _RSHSP.SOURCE ! _SX-FX _SX-S _RSHSP.SHELL ! _SX-P _SX-S _RSHSP.PRODUCER !
     _SX-W _SX-S _RSHSP.WORK ! 262144 _SX-S _RSHSP.WORK-U !
     _SX-KA _SX-P _RTHP.XBLOCK0-A ! 131072 _SX-P _RTHP.XBLOCK0-U !
     _SX-KB _SX-P _RTHP.XBLOCK1-A ! 131072 _SX-P _RTHP.XBLOCK1-U !
-    _SX-P _RSHSP-P ! _SX-S _RSHSP-S ! ;
+    _SX-P _RSHSP-P ! _SX-S _RSHSP-S ! _SX-NUMBER ;
 '''
 
 
@@ -464,7 +481,8 @@ _SS-DONE
 def test_unmodeled_final_writer_omits_both_bands_and_preserves_pane_membership():
     staged_run(STAGED + r'''
 : _SX-LATER 88 11 9 DRW-CHAR ;
-_SX-SETUP ' _SX-LATER DRW-OVERLAY
+\ The producer builds after the overlay, which covers the taskbar.
+_SX-SETUP ' _SX-LATER DRW-OVERLAY _SX-NUMBER
 _RSHSP-PREPARE _SS-OK
 _SX-TARGET _RSHSP-PART-VALID? _SS-A
 _SX-KA RSHSP-PART.CORRELATIONS-U @ RSHPL-CORRELATION-SIZE = _SS-A
@@ -698,7 +716,7 @@ VARIABLE _SI-FROZEN-IR VARIABLE _SI-MEMBER VARIABLE _SI-EMIT-I VARIABLE _SI-EMIT
     _SI-A _SX-P _RTHP.XBLOCK0-A ! 524288 _SX-P _RTHP.XBLOCK0-U !
     _SI-B _SX-P _RTHP.XBLOCK1-A ! 524288 _SX-P _RTHP.XBLOCK1-U !
     ['] _SI-INSTRUMENT-CALLBACK _SX-F _RTE-F.INSTRUMENT-DEF-XT !
-    ['] _SI-SERIES-CALLBACK _SX-F _RTE-F.SERIES-DEFINE-XT ! ;
+    ['] _SI-SERIES-CALLBACK _SX-F _RTE-F.SERIES-DEFINE-XT ! _SX-NUMBER ;
 : _SI-FIND ( kind -- family )
     _SI-BATCH @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
         _SI-BATCH @ _RTE-FB.FAMILIES-A @ I RTE-FAMILY-ENTRY-SIZE * +

@@ -54,8 +54,7 @@ VARIABLE _SP-MU VARIABLE _SP-OU VARIABLE _SP-REV VARIABLE _SP-VA VARIABLE _SP-VU
     _SP-CX RUCP-CORRELATION-SIZE 2 * 0 FILL
     77 _SP-CX ! 77 _SP-CX RUCP-CORRELATION-SIZE + !
     UFLSN-SOURCE-OVERLAY _SP-CX RUCP-CORRELATION-SIZE + 8 + !
-    _SP-CX _SX-P _RTHP.CORR-A !
-    102 _SX-SI _RTE-STATIC.ID ! 102 _SX-P _RTHP.STATIC-LAST ! ;
+    _SP-CX _SX-P _RTHP.CORR-A ! ;
 : _SP-DIALOGS RTE-F-DIALOGS _SX-P _RTHP.LIMITS _RTE-L.FEATURES ! ;
 : _SP-BATCH ( part -- batch ) DUP RSHSP-PART.BATCH @ + ;
 : _SP-CONTROL ( kind part -- control|0 )
@@ -86,7 +85,7 @@ STAGED_PROMPT = STAGED + PROMPT
 def test_a_pane_prompt_takes_a_modal_region_over_the_pane_content():
     staged_run(STAGED_PROMPT + r'''
 _SX-SETUP 8 _SP-CANDIDATE ' _SP-PAINT DRW-OVERLAY _SP-DIALOGS
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One modal region, the catalog's last, over the pane's content and above it.
 _SX-KA _SP-MODALS 1 = _SS-A
@@ -114,7 +113,7 @@ _SS-DONE
 def test_without_dialogs_the_prompt_stays_in_its_pane_content():
     staged_run(STAGED_PROMPT + r'''
 _SX-SETUP 8 _SP-CANDIDATE ' _SP-PAINT DRW-OVERLAY
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A
 _SX-KA _SP-MODALS 0= _SS-A
 RTE-CONTROL-FIELD _SX-KA _SP-CONTROL _RTE-CONTROL.REGION @
@@ -141,7 +140,7 @@ REFUSALS = {
 @pytest.mark.parametrize("case", sorted(REFUSALS))
 def test_other_paint_or_a_misplaced_prompt_refuses_the_shell_candidate(case):
     staged_run(STAGED_PROMPT + REFUSALS[case] + r'''
-_SP-DIALOGS _RSHSP-PREPARE RTE-S-UNAVAILABLE = _SS-A
+_SP-DIALOGS _SX-PREPARE RTE-S-UNAVAILABLE = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
 _SS-DONE
 ''', minimum=2)
@@ -167,7 +166,7 @@ def test_a_delta_keeps_the_prompts_modal_region_and_a_closed_prompt_restarts():
     only its field; closing it restarts."""
     staged_run(DELTA_PROMPT + r'''
 _SX-SETUP _SD-HOOKS 8 _SP-CANDIDATE _SP-DIALOGS
-' _SP-HELLO-PROMPT _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SP-HELLO-PROMPT _SD-DRAW _SX-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SX-KA = _SS-A _SX-KA _SP-MODALS 1 = _SS-A
 \ A changed letter in the pane while the prompt stays open is a DELTA.
 ' _SP-HELLP-PROMPT _SD-DRAW _SD-TA _SP-PENDING
@@ -191,7 +190,7 @@ _SX-CI _SX-P _RTHP.CONTROLS-A ! 1 _SX-P _RTHP.CONTROL-COUNT ! _SX-CX _SX-P _RTHP
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE RTE-S-OK <> _SS-A
 _RSHSP-DIAG-STAGE @ 1 = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
-_RSHSP-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A _SX-KB _SP-MODALS 0= _SS-A
+_SX-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A _SX-KB _SP-MODALS 0= _SS-A
 _SS-DONE
 ''', minimum=20)
 
@@ -247,7 +246,7 @@ VARIABLE _SQ-ON VARIABLE _SQ-REV VARIABLE _SQ-VA VARIABLE _SQ-VU
 def test_desks_prompt_is_a_field_on_the_taskbar_row_in_a_whole_screen_modal_scope():
     staged_run(DESK_PROMPT + r'''
 _SX-SETUP _SD-HOOKS _SP-DIALOGS
-_SQ-VALUE 1 _SQ-OPEN _RSHSP-PREPARE _SS-OK
+_SQ-VALUE 1 _SQ-OPEN _SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One modal region, the catalog's last, over the whole screen above the rest.
 _SX-KA _SP-MODALS 1 = _SS-A
@@ -278,7 +277,7 @@ _SS-DONE
 def test_without_dialogs_desks_prompt_holds_only_the_taskbar_row():
     staged_run(DESK_PROMPT + r'''
 _SX-SETUP _SD-HOOKS
-_SQ-VALUE 1 _SQ-OPEN _RSHSP-PREPARE _SS-OK
+_SQ-VALUE 1 _SQ-OPEN _SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-MODALS 0= _SS-A
 _SX-KA _SQ-PROMPT DUP 0<> _SS-A
 _RTE-CONTROL.REGION @ _SX-KA _SP-REGION DUP 0<> _SS-A
@@ -296,7 +295,7 @@ def test_typing_in_desks_prompt_replaces_its_field_and_closing_it_restarts():
     prompt gives the taskbar row back with a START."""
     staged_run(DESK_PROMPT + r'''
 _SX-SETUP _SD-HOOKS _SP-DIALOGS
-_SQ-VALUE 1 _SQ-OPEN _RSHSP-PREPARE _SS-OK _SD-ACK
+_SQ-VALUE 1 _SQ-OPEN _SX-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SX-KA = _SS-A _RSHSP-CURRENT? _SS-A
 _SX-KA _SX-PART-VALID? _SS-A
 \ PLACE and EXTEND name positions in the value, from its first cell on the
@@ -325,7 +324,7 @@ _SD-ACK _RSHSP-ACTIVE-PART _SX-KA = _SS-A
 \ region and no prompt.
 _SQ-CLOSE _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE RTE-S-OK <> _SS-A
-_RSHSP-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A
+_SX-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A
 _SX-KB _SP-MODALS 0= _SS-A _SX-KB RSHSP-PART.PROMPT @ 0= _SS-A
 _SX-KB _SQ-PROMPT 0= _SS-A
 _SS-DONE

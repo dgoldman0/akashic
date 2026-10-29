@@ -417,3 +417,25 @@ _RSHPL-PROVED @ 0= _SS-A
 _RSHPL-PROVED @ 0= _SS-A
     _SS-DONE
 ''', 20)
+
+
+def test_shell_planner_counts_its_controls_from_the_source_alone():
+    """A caller numbering what follows the shell's controls asks how many
+    there are before it can give the plan its identities or outputs.  The
+    count is the plan's, needs neither outputs nor pane eligibility, writes
+    nothing, and a request the plan refuses gives none."""
+    run(PLAN + r'''
+_SP-INIT _SP-BUILD _SP-O RSHPL-RESULT.CONTROLS @ 4 = _SS-A
+_SP-R 1024 0 FILL _SP-P 1024 0 FILL _SP-C 1600 0 FILL _SP-T 256 0 FILL
+_SP-X 1536 0 FILL _SP-L 1024 0 FILL _SP-ACT 256 0 FILL _SP-O 152 0 FILL
+_SP-Q 120 + 128 0 FILL 0 0 _SP-Q _RSHPL-Q.ELIGIBLE-U ! _SP-Q _RSHPL-Q.ELIGIBLE-A !
+_SP-Q _RSHPL-CONTROLS-PROVED _SS-OK 4 = _SS-A _SP-CLEARED
+_RSHPL-PROVED @ 0= _SS-A
+\ Without the taskbar's bands the plan adds no control.
+0 _SP-Q _RSHPL-Q.BANDS ! _SP-Q _RSHPL-CONTROLS-PROVED _SS-OK 0= _SS-A
+\ A request the plan refuses gives no count.
+4 _SP-Q _RSHPL-Q.BANDS !
+_SP-Q _RSHPL-CONTROLS-PROVED RSHPL-S-INVALID = _SS-A 0= _SS-A
+_RSHPL-PROVED @ 0= _SS-A
+_SS-DONE
+''', 19)

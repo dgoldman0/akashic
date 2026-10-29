@@ -3893,10 +3893,10 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "DIALOG-BASE-CONTROLS", "DIALOG-BASE-TEXT", "DIALOG-BASE-CLAIMS",
                  "DIALOG-REFUSED", "DIALOG-UTF8", "PENDING-SEAL", "ACTIVE-SEAL",
                  "SHELL-BUILT", "BASE-Z", "XBLOCK0-A", "XBLOCK0-U", "XBLOCK1-A",
-                 "XBLOCK1-U"):
+                 "XBLOCK1-U", "SHELL-CONTROLS"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 5128
+    assert _constant(source, "RTHP-SIZE") == expected == 5136
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -4963,11 +4963,15 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert " FILL" not in restore_base_claims
     assert " MOVE" not in restore_base_claims
 
-    # Stable retained IDs are controls, instruments, status, then residual glyphs;
-    # base region is reserved first and instrument regions follow it.
+    # Stable retained IDs are controls, then the controls an extension adds
+    # after them, which it counts once the controls are lowered, then
+    # instruments, status, then residual glyphs; base region is reserved
+    # first and instrument regions follow it.
     initial_order = (
         "_RTHP-BUILD-CONTROLS",
         "_RTHP-BUILD-CLAIMS?",
+        "_RTHP-W-BUILD-OPTIONAL-DIALOGS",
+        "_RTHP-W-SHELL-CONTROLS!",
         "_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS",
         "_RTHP-W-BUILD-OPTIONAL-STATICS",
         "_RTHP-BUILD-GLYPHS?",
@@ -4975,15 +4979,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert [candidate.index(word) for word in initial_order] == sorted(
         candidate.index(word) for word in initial_order
     )
-    assert (
-        "_RTHP.FIRST-OBJECT @\n"
-        "    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?" in firsts
-    )
-    assert (
-        "_RTHP.FIRST-OBJECT @\n"
-        "    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?"
-        in build_instruments
-    )
+    assert "_RTHP-W-P @ _RTHP-OBJECTS-FIRST?" in firsts
+    assert "_RTHP-W-P @ _RTHP-OBJECTS-FIRST?" in build_instruments
     assert "_RTE-HA.GLYPH-COUNT @ IF" in last_object
     assert "_RTE-HA.INSTRUMENT-COUNT @ IF" in last_object
     assert "_RTHP.INSTRUMENT-REGION-COUNT @ _RTHP-U+?" in next_ids

@@ -40,7 +40,7 @@ VARIABLE _AK-SUPPRESS VARIABLE _AK-CALLS
     10 _SX-P _RTHP.NEXT-REGION ! 100 _SX-P _RTHP.NEXT-OBJECT !
     1 _SX-P _RTHP.FIRST-SERIES ! 1 _SX-P _RTHP.NEXT-SERIES !
     1 _SX-P _RTHP.ADMISSION _RTE-HA.STATIC-COUNT !
-    101 _SX-P _RTHP.ADMISSION _RTE-HA.STATIC-LAST !
+    _SX-P _RTHP.STATIC-LAST @ _SX-P _RTHP.ADMISSION _RTE-HA.STATIC-LAST !
     _AK-X RTHP-EXTENSION-SIZE 0 FILL
     _RTHP-EXTENSION-MAGIC _AK-X RTHPX.MAGIC !
     RTHP-EXTENSION-SIZE _AK-X RTHPX.SIZE ! _AK-X _AK-X RTHPX.SELF !
@@ -52,11 +52,10 @@ VARIABLE _AK-SUPPRESS VARIABLE _AK-CALLS
     1 _SS-M SHM.EPOCH +! _SX-OBSERVE
     _SX-P _RTHP-SELECT-NEXT-IDS? 0= IF -777 THROW THEN
     _SX-P _RTHP.REGION @ DUP _SX-CI _RTE-CONTROL.REGION ! _SX-SI _RTE-STATIC.REGION !
-    _SX-P _RTHP.FIRST-OBJECT @ DUP _SX-CI _RTE-CONTROL.ID !
-    1+ DUP _SX-SI _RTE-STATIC.ID ! DUP _SX-P _RTHP.STATIC-LAST !
-    _SX-P _RTHP.ADMISSION _RTE-HA.STATIC-LAST !
+    _SX-P _RTHP.FIRST-OBJECT @ _SX-CI _RTE-CONTROL.ID !
     1 _SX-P _RTHP.ATTEMPT +! 1 _SX-P _RTHP.SOURCE-GEN +!
     SCR-DRAW-GENERATION@ DUP _SX-P _RTHP.SOURCE-DRAW ! _SX-P _RTHP.SURFACE-GEN !
+    _SX-NUMBER _SX-P _RTHP.STATIC-LAST @ _SX-P _RTHP.ADMISSION _RTE-HA.STATIC-LAST !
     _SX-TARGET2 _SX-BANK _SX-TARGET2 _SX-P _RTHP.TARGET-PENDING ! ;
 : _AK-PUBLISH _SX-PUBLISH ;
 : _AK-EMIT _RSHSP-PENDING-PART DUP RSHSP-PART.BATCH @ + _SX-FX RTE-FAMILY-BATCH-EMIT ;
@@ -198,7 +197,10 @@ def test_hidden_start_ack_then_new_draw_uses_real_provider_highwaters(suppress_f
         assert h.active_part() == 0
         assert h.pending_part() == bank
         assert h.get("_RTHP.TARGET-PENDING", h.p) == target
-        assert h.frontiers() == ((11, 102) if suppress_fix else next_ids)
+        # The producer's own frontier ends at its static, which it numbered
+        # past the shell's controls.
+        own = (11, h.get("_RTHP.STATIC-LAST", h.p) + 1)
+        assert h.frontiers() == (own if suppress_fix else next_ids)
         h.call("_AK-NEW-DRAW")
         h.prepare()
         result = h.begin_emit()

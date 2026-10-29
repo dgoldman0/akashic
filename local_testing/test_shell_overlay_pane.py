@@ -86,8 +86,7 @@ VARIABLE _SO-ROW VARIABLE _SO-COL VARIABLE _SO-H VARIABLE _SO-W
     _SO-CI _SX-P _RTHP.CONTROLS-A ! 2 _SX-P _RTHP.CONTROL-COUNT !
     _SO-CX RUCP-CORRELATION-SIZE 2 * 0 FILL
     77 _SO-CX ! 79 _SO-CX RUCP-CORRELATION-SIZE + !
-    _SO-CX _SX-P _RTHP.CORR-A !
-    102 _SX-SI _RTE-STATIC.ID ! 102 _SX-P _RTHP.STATIC-LAST ! ;
+    _SO-CX _SX-P _RTHP.CORR-A ! ;
 : _SO-SETUP ( row col h w -- )
     _SO-W ! _SO-H ! _SO-COL ! _SO-ROW !
     _SX-SETUP _SO-MODEL _SO-CANDIDATE _SO-BACK ['] _SO-PAINT DRW-OVERLAY ;
@@ -123,7 +122,7 @@ STAGED_OVERLAY = STAGED + PROMPT + OVERLAY
 def test_an_overlay_pane_takes_a_modal_region_over_the_whole_screen():
     staged_run(STAGED_OVERLAY + r'''
 2 4 4 10 _SO-SETUP _SP-DIALOGS
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One modal region, the catalog's last: the whole surface, above the panes.
 _SX-KA _SP-MODALS 1 = _SS-A
@@ -162,7 +161,7 @@ def test_a_root_beneath_an_overlay_pane_stays_in_its_panes_content():
     layer beneath the modal region that holds the overlay's control."""
     staged_run(STAGED_OVERLAY + r'''
 1 4 4 10 _SO-SETUP _SP-DIALOGS
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 100 _SX-KA _SO-CONTROL DUP 0<> _SS-A
 _RTE-CONTROL.REGION @ 77 _SX-KA _SO-CONTENT _RTE-IR.ID @ = _SS-A
@@ -179,7 +178,7 @@ def test_an_overlay_pane_lies_over_the_chrome_beneath_it():
     that row, and the pane beneath leaves them to it."""
     staged_run(STAGED_OVERLAY + r'''
 6 4 4 10 _SO-SETUP _SP-DIALOGS
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 79 _SX-KA _SO-CONTENT DUP _RTE-IR.CLIP-Y @ 6 = _SS-A _RTE-IR.CLIP-ROWS @ 4 = _SS-A
 \ The overlay's glyphs fill all four of its rows, the border row included.
@@ -195,7 +194,7 @@ _SS-DONE
 def test_without_dialogs_the_overlay_documents_controls_stay_in_its_content():
     staged_run(STAGED_OVERLAY + r'''
 2 4 4 10 _SO-SETUP
-_RSHSP-PREPARE _SS-OK
+_SX-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A
 _SX-KA _SP-MODALS 0= _SS-A
 101 _SX-KA _SO-CONTROL _RTE-CONTROL.REGION @ 79 _SX-KA _SO-CONTENT _RTE-IR.ID @ = _SS-A
@@ -221,7 +220,7 @@ REFUSALS = {
 @pytest.mark.parametrize("case", sorted(REFUSALS))
 def test_unexplained_paint_or_a_nested_overlay_refuses_the_candidate(case):
     staged_run(STAGED_OVERLAY + REFUSALS[case] + r'''
-_SP-DIALOGS _RSHSP-PREPARE RTE-S-UNAVAILABLE = _SS-A
+_SP-DIALOGS _SX-PREPARE RTE-S-UNAVAILABLE = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
 _SS-DONE
 ''', minimum=2)

@@ -390,7 +390,12 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.XBLOCK0-U                ( p -- a ) 5104 + ;
 : _RTHP.XBLOCK1-A                ( p -- a ) 5112 + ;
 : _RTHP.XBLOCK1-U                ( p -- a ) 5120 + ;
-5128 CONSTANT RTHP-SIZE
+\ The controls the extension adds after the applications' controls, which
+\ it counts once they are lowered (RTHPX-PLAN): the instruments, statics
+\ and runs are numbered after them, so each carries the identity the
+\ extension's batch sends.  0 without an extension.
+: _RTHP.SHELL-CONTROLS           ( p -- a ) 5128 + ;
+5136 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 \ An omitted graph: the cells it paints, row col row1 col1, and the token
@@ -591,6 +596,14 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-ALIGN8?  ( u -- aligned flag )
     7 _RTHP-U32+? 0= IF DROP 0 0 EXIT THEN
     7 INVERT AND -1 ;
+
+\ The first identity past the applications' controls and the controls the
+\ extension adds after them (_RTHP.SHELL-CONTROLS), where the instruments,
+\ statics and runs begin.
+: _RTHP-OBJECTS-FIRST?  ( producer -- id flag )
+    DUP _RTHP.FIRST-OBJECT @ OVER _RTHP.CONTROL-COUNT @ _RTHP-U+?
+        0= IF NIP 0 EXIT THEN
+    SWAP _RTHP.SHELL-CONTROLS @ _RTHP-U+? ;
 
 : _RTHP-POS-U32?  ( u -- flag )
     DUP 0> SWAP 0xFFFFFFFF U> 0= AND ;
@@ -1190,8 +1203,12 @@ VARIABLE _RTHP-L-BYTES
 8 CONSTANT RTHPX-DELTA-PROBE
 9 CONSTANT RTHPX-DELTA-PREPARE
 10 CONSTANT RTHPX-DELTA-EMIT
+11 CONSTANT RTHPX-PLAN
 \ Dispatch: ( event producer context -- rte-status ).  No unacknowledged
 \ candidate may become input-visible during PREPARE, EMIT or PUBLISH-CHECK.
+\ PLAN comes in every build, once the applications' controls are lowered:
+\ the extension counts the controls it adds after them into
+\ _RTHP.SHELL-CONTROLS, past which the producer numbers the rest.
 \ START-ACK follows a successful hidden START acknowledgement and base ID
 \ advancement. It consumes extension IDs without publishing input authority.
 \ A changed draw after an acknowledged one may become a DELTA: DELTA-PROBE
@@ -6474,8 +6491,7 @@ VARIABLE _RTHP-W-OUT-INSTRUMENT-CORR-U
     _RTHP-W-INSTRUMENT-REGIONS @ _RTHP-U+?
         0= IF DROP 0 EXIT THEN DUP 0= IF DROP 0 EXIT THEN
         _RTHP-W-FIRST-INSTRUMENT-REGION !
-    _RTHP-W-P @ _RTHP.FIRST-OBJECT @
-    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+    _RTHP-W-P @ _RTHP-OBJECTS-FIRST?
         0= IF DROP 0 EXIT THEN
     _RTHP-W-INSTRUMENTS @ _RTHP-U+?
         0= IF DROP 0 EXIT THEN DUP 0= IF DROP 0 EXIT THEN
@@ -6874,8 +6890,7 @@ VARIABLE _RTHP-OG-CLAIM
         _RTHP-W-P @ _RTHP.CLAIMS-USED !
     _RTHP-W-WRAP-INSTRUMENT-PLAN? 0= IF RTE-S-INVALID EXIT THEN
     _RTHP-W-WRAP-SERIES? 0= IF RTE-S-INVALID EXIT THEN
-    _RTHP-W-P @ _RTHP.FIRST-OBJECT @
-    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+    _RTHP-W-P @ _RTHP-OBJECTS-FIRST?
         0= IF DROP RTE-S-INVALID EXIT THEN
     _RTHP-W-INSTRUMENTS @ _RTHP-U+?
         0= IF DROP RTE-S-INVALID EXIT THEN
@@ -6892,8 +6907,7 @@ VARIABLE _RTHP-OG-CLAIM
     0 _RTHP-W-P @ _RTHP.INSTRUMENT-CLAIM-COUNT !
     0 _RTHP-W-P @ _RTHP.INSTRUMENT-LAST-REGION !
     0 _RTHP-W-P @ _RTHP.INSTRUMENT-LAST !
-    _RTHP-W-P @ _RTHP.FIRST-OBJECT @
-    _RTHP-W-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+    _RTHP-W-P @ _RTHP-OBJECTS-FIRST?
         0= IF DROP 0 EXIT THEN DUP 0= IF DROP 0 EXIT THEN
         _RTHP-W-GLYPH-FIRST !
     -1 ;
@@ -7065,7 +7079,7 @@ VARIABLE _RTHP-SS-INDEX
     0 SWAP _RTHP.STATIC-LAST ! ;
 
 : _RTHP-STATIC-GLYPH-FIRST? ( producer -- flag )
-    DUP _RTHP.FIRST-OBJECT @ OVER _RTHP.CONTROL-COUNT @ _RTHP-U+?
+    DUP _RTHP-OBJECTS-FIRST?
         0= IF 2DROP 0 EXIT THEN
     OVER _RTHP.INSTRUMENT-COUNT @ _RTHP-U+?
         0= IF 2DROP 0 EXIT THEN
@@ -8897,12 +8911,14 @@ VARIABLE _RTHP-N-SERIES
 
 \ The last object the candidate numbers, or 0 when it numbers none.  A
 \ candidate built for Desk's shell has no admission to say: it numbers its
-\ controls, then its instruments, then its status fields, from its first
-\ object, and no runs.
+\ controls from its first object, then its instruments and status fields
+\ past the controls the shell adds, and no runs.
 : _RTHP-CANDIDATE-LAST-OBJECT  ( producer -- object )
     DUP _RTHP.SHELL-BUILT @ IF
-        DUP _RTHP.CONTROL-COUNT @ OVER _RTHP.INSTRUMENT-COUNT @ +
-        OVER _RTHP.STATIC-COUNT @ + ?DUP 0= IF DROP 0 EXIT THEN
+        DUP _RTHP.INSTRUMENT-COUNT @ OVER _RTHP.STATIC-COUNT @ + ?DUP IF
+            OVER _RTHP-OBJECTS-FIRST? DROP + 1- NIP EXIT
+        THEN
+        DUP _RTHP.CONTROL-COUNT @ ?DUP 0= IF DROP 0 EXIT THEN
         SWAP _RTHP.FIRST-OBJECT @ + 1- EXIT
     THEN
     DUP _RTHP.ADMISSION _RTE-HA.GLYPH-COUNT @ IF
@@ -9531,6 +9547,17 @@ VARIABLE _RTHP-ROOT-B
     FSHD? 0= IF DROP EXIT THEN
     _RTHP-PRESENT-PARTS _RTHP-ROOT-B @ _RTHP-ROOT.PARTS ! ;
 
+\ The controls the extension adds after the applications' controls, which
+\ it counts once they are lowered, before the instruments, statics and runs
+\ are numbered past them; none without an extension or when it cannot say.
+\ The count needs no more than the extension's model, so a build cut down
+\ to fit later keeps it.
+: _RTHP-W-SHELL-CONTROLS! ( -- )
+    0 _RTHP-W-P @ _RTHP.SHELL-CONTROLS !
+    _RTHP-W-P @ _RTHP.EXTENSION @ IF
+        RTHPX-PLAN _RTHP-W-P @ _RTHP-EXTENSION-NOTIFY
+    THEN ;
+
 : _RTHP-BUILD-OBSERVED-CANDIDATE
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
@@ -9582,6 +9609,7 @@ VARIABLE _RTHP-ROOT-B
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTHP-W-BUILD-OPTIONAL-DIALOGS
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    _RTHP-W-SHELL-CONTROLS!
     _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTHP-W-BUILD-OPTIONAL-STATICS
@@ -10745,8 +10773,7 @@ VARIABLE _RTHP-X-I-REGION-LAST
         _RTHP-X-I-ADD-UNIT? 0= IF 0 UNLOOP EXIT THEN
         _RTHP-X-I-ADD-FORMATTED? 0= IF 0 UNLOOP EXIT THEN
         _RTHP-X-I-KIND? 0= IF 0 UNLOOP EXIT THEN
-        _RTHP-X-P @ _RTHP.FIRST-OBJECT @
-        _RTHP-X-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+        _RTHP-X-P @ _RTHP-OBJECTS-FIRST?
             0= IF DROP 0 UNLOOP EXIT THEN
         I _RTHP-U+? 0= IF DROP 0 UNLOOP EXIT THEN
         _RTHP-X-I-ITEM @ _RTE-INSTRUMENT.ID @ <> IF 0 UNLOOP EXIT THEN
@@ -10870,8 +10897,7 @@ VARIABLE _RTHP-X-I-REGION-LAST
     _RTHP-X-P @ _RTHP.INSTRUMENT-REGION-COUNT @ _RTHP-U+?
         0= IF DROP 0 EXIT THEN
     _RTHP-X-P @ _RTHP.INSTRUMENT-LAST-REGION @ <> IF 0 EXIT THEN
-    _RTHP-X-P @ _RTHP.FIRST-OBJECT @
-    _RTHP-X-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+    _RTHP-X-P @ _RTHP-OBJECTS-FIRST?
         0= IF DROP 0 EXIT THEN
     _RTHP-X-P @ _RTHP.INSTRUMENT-COUNT @ 1- _RTHP-U+?
         0= IF DROP 0 EXIT THEN
@@ -11007,8 +11033,7 @@ VARIABLE _RTHP-SX-COL-END
         _RTHP-SX-ITEM @ _RTE-STATIC.ROOT-HEIGHT @ _RTHP-SX-P @ _RTHP.ROWS @ <> OR
         _RTHP-SX-ITEM @ _RTE-STATIC.ROOT-WIDTH @ _RTHP-SX-P @ _RTHP.COLS @ <> OR
             IF 0 UNLOOP EXIT THEN
-        _RTHP-SX-P @ _RTHP.FIRST-OBJECT @
-        _RTHP-SX-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+        _RTHP-SX-P @ _RTHP-OBJECTS-FIRST?
             0= IF DROP 0 UNLOOP EXIT THEN
         _RTHP-SX-P @ _RTHP.INSTRUMENT-COUNT @ _RTHP-U+?
             0= IF DROP 0 UNLOOP EXIT THEN
@@ -14909,8 +14934,7 @@ VARIABLE _RTHP-ES-P
         DUP _RTE-INSTRUMENT.ID @ DUP _RTHP-E-LAST @ U> 0= IF
             2DROP RTE-S-INVALID UNLOOP EXIT
         THEN
-        _RTHP-E-P @ _RTHP.FIRST-OBJECT @
-        _RTHP-E-P @ _RTHP.CONTROL-COUNT @ _RTHP-U+?
+        _RTHP-E-P @ _RTHP-OBJECTS-FIRST?
             0= IF 2DROP DROP RTE-S-INVALID UNLOOP EXIT THEN
         I _RTHP-U+? 0= IF 2DROP DROP RTE-S-INVALID UNLOOP EXIT THEN
         <> IF DROP RTE-S-INVALID UNLOOP EXIT THEN

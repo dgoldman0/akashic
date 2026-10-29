@@ -546,7 +546,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        641,
+        642,
         {
             "magic": 0,
             "size": 1,
@@ -698,6 +698,7 @@ _GUEST_FAILURE_RECORDS = {
             "xblock0_bytes": 638,
             "xblock1_address": 639,
             "xblock1_bytes": 640,
+            "shell_controls": 641,
         },
     ),
     "engine": (

@@ -27,9 +27,12 @@ _SEAMS = {
     "_RTHP-TARGET-ABORT": ": _RTHP-TARGET-ABORT DROP 1 AR-ABORTS +! ;",
     "_RTHP-FIXED?": ": _RTHP-FIXED? DROP -1 ;",
     "_RTHP-TARGET-CANDIDATE?": ": _RTHP-TARGET-CANDIDATE? DROP 1 AR-PACKS +! -1 ;",
-    # The shell: each PREPARE answers with the next scripted status.
+    # The shell: PLAN reports the controls it adds, and each PREPARE
+    # answers with the next scripted status.
     "_RTHP-EXTENSION-CALL": (
-        ": _RTHP-EXTENSION-CALL DROP "
+        ": _RTHP-EXTENSION-CALL "
+        "OVER RTHPX-PLAN = IF AR-PLANNED @ SWAP _RTHP.SHELL-CONTROLS ! "
+        "DROP RTE-S-OK EXIT THEN DROP "
         "DUP RTHPX-PREPARE = OVER RTHPX-DELTA-PREPARE = OR IF "
         "DROP AR-PREPARES @ CELLS AR-ANSWERS + @ 1 AR-PREPARES +! EXIT THEN "
         "DUP RTHPX-ABORT = IF DROP 1 AR-XABORTS +! RTE-S-OK EXIT THEN "
@@ -59,7 +62,7 @@ _SEAMS = {
 _FIXTURE_VARIABLES = (
     "AR-ABORTS", "AR-PACKS", "AR-PREPARES", "AR-XABORTS", "AR-XEMITS", "AR-FALLBACKS",
     "AR-BUILDS", "AR-ALONE", "AR-BUILD-STATUS", "AR-BUILT", "AR-SEALS",
-    "AR-BASE-STARTS", "AR-GROWS", "AR-GROW",
+    "AR-BASE-STARTS", "AR-GROWS", "AR-GROW", "AR-PLANNED",
 )
 
 
@@ -92,7 +95,9 @@ class AloneHarness:
             chunks.append(declaration)
 
         for name in (*_FIXTURE_VARIABLES, "AR-ANSWERS", "_RTHP-PREPARE-START",
-                     "_RTHP-EXTENSION-DELTA", "_RTHP-DIAG-ALONE-REBUILDS"):
+                     "_RTHP-EXTENSION-DELTA", "_RTHP-DIAG-ALONE-REBUILDS",
+                     "_RTHP-W-SHELL-CONTROLS!", "_RTHP-OBJECTS-FIRST?",
+                     "_RTHP-CANDIDATE-LAST-OBJECT"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -151,6 +156,16 @@ class AloneHarness:
         assert self.runtime.main_context.returns.snapshot() == ()
         assert len(result) == 1
         return result[0]
+
+    def word(self, name, *arguments):
+        for argument in arguments:
+            self.runtime.main_context.data.push(argument & MASK64)
+        self.runtime.execute(name, step_budget=3_000_000)
+        result = self.runtime.main_context.data.snapshot()
+        while self.runtime.main_context.data.depth():
+            self.runtime.main_context.data.pop()
+        assert self.runtime.main_context.returns.snapshot() == ()
+        return result
 
     def prepare_start(self):
         self.runtime.main_context.data.push(self.producer)
@@ -261,3 +276,30 @@ def test_without_the_shell_the_producer_s_own_delta_needs_no_preparation(harness
     h.field("_RTHP.EXTENSION", 0)
     assert h.delta_status() == h.constant("RTE-S-OK")
     assert (h.variable("AR-PREPARES"), h.variable("AR-GROWS")) == (0, 0)
+
+
+def test_the_producer_numbers_its_objects_past_the_shell_s_controls(harness):
+    """Once the applications' controls are lowered the shell counts the
+    controls it adds after them, and the producer numbers its instruments,
+    statics and runs past those, so each carries the identity the shell's
+    batch sends; without an extension nothing is asked and nothing skipped."""
+    h = harness
+    h.variable("AR-PLANNED", 3)
+    for name, value in (("FIRST-OBJECT", 100), ("CONTROL-COUNT", 4),
+                        ("INSTRUMENT-COUNT", 2), ("STATIC-COUNT", 1),
+                        ("SHELL-BUILT", MASK64)):
+        h.field("_RTHP." + name, value)
+    h.variable("_RTHP-W-P", h.producer)
+    assert h.word("_RTHP-W-SHELL-CONTROLS!") == ()
+    assert h.field("_RTHP.SHELL-CONTROLS") == 3
+    assert h.word("_RTHP-OBJECTS-FIRST?", h.producer) == (107, MASK64)
+    # Two instruments and a static past the shell's three controls.
+    assert h.word("_RTHP-CANDIDATE-LAST-OBJECT", h.producer) == (109,)
+    # With none past them, the last object is the applications' last control.
+    h.field("_RTHP.INSTRUMENT-COUNT", 0)
+    h.field("_RTHP.STATIC-COUNT", 0)
+    assert h.word("_RTHP-CANDIDATE-LAST-OBJECT", h.producer) == (103,)
+    h.field("_RTHP.EXTENSION", 0)
+    assert h.word("_RTHP-W-SHELL-CONTROLS!") == ()
+    assert h.field("_RTHP.SHELL-CONTROLS") == 0
+    assert h.word("_RTHP-OBJECTS-FIRST?", h.producer) == (104, MASK64)

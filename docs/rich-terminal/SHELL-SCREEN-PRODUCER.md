@@ -101,8 +101,9 @@ surface. Each pane content region has the exact explicit SHM content clip.
 Instrument regions retain their independent explicit clips and must fit their
 associated pane, above chrome and below interactive content. SERIES is copied
 intact, including every waveform sample. New shell controls follow the applet
-CONTROL prefix; non-input instrument/static IDs move above that prefix, with
-PANE and newly projected glyph IDs following them.
+CONTROL prefix. The screen producer numbers its instruments and statics past
+them, having asked the shell how many there are (PLAN, below), and Desk's
+status, PANE and newly projected glyph IDs follow those.
 
 A fully visible instrument root may omit its clip flag in the ordinary RUIP
 plan. The sidecar copies its logical rectangle into explicit physical clip
@@ -190,8 +191,8 @@ and its shell model carries the prompt's TEXT field (see the [shell
 model](../tui/shell-model.md)). The shell makes that field a `FIELD`
 control after its taskbar controls, packed from the model's UFLD record, on
 a root across the last row, with a claim on the row so no residual glyph
-covers it. Statics and instruments move up one identity to follow it, and
-the part records its identity. With dialogs its region is a modal scope over
+covers it. It is one of the controls the producer numbers its statics and
+instruments past, and the part records its identity. With dialogs its region is a modal scope over
 the whole screen, surface-sized with the surface as its clip, since Desk
 takes no other input while the prompt is open; without them it is the last
 row alone. Either way it sits three above the content z, above the panes'
@@ -209,8 +210,8 @@ region, Desk's prompt too. It is no modal scope: the notice takes no input,
 and what lies beneath it stays active. A claim on its root keeps residual
 glyphs off it. Its cells are its own paint, so the taskbar bands and their
 blank gaps are proved clear only outside it, and the taskbar it covers
-stays semantic beneath it; the identity reservation, and the statics and
-instruments after it, move up one more to make room for it. Without dialogs
+stays semantic beneath it; it too is one of the controls the producer
+numbers its statics and instruments past. Without dialogs
 the notice is paint over the taskbar, which then stays ordinary while it
 shows.
 
@@ -225,9 +226,8 @@ It takes no input. A claim on its root keeps residual glyphs off it. Its
 cells the notice leaves must be the shell's own paint; a notice over part
 of it hides that part, and the status stays semantic beneath. Otherwise,
 or without status fields, it is residual glyphs, as before. Its static
-takes the first identity past the base candidate's objects, which COPY-RUN
-moves up past the shell's controls with the statics and instruments, and
-the identity reservation grows by one more for it.
+takes the first identity past the base candidate's objects, which the
+producer numbered past the shell's controls, and the panes follow it.
 
 Modal/unavailable SHSN authority also refuses the candidate. A refused
 batch that more engine storage or more terminal space would not let fit
@@ -243,8 +243,19 @@ RTHP keeps one optional extension pointer (`_RTHP.EXTENSION`); the
 installs only before OWNER_OPEN, while the producer holds no target bank.
 
 The dispatcher events are PREPARE=0, EMIT=1, PUBLISH-CHECK=2, PUBLISH=3,
-ABORT=4, RETIRE=5, CURRENT=6, START-ACK=7, DELTA-PROBE=8, DELTA-PREPARE=9 and
-DELTA-EMIT=10.
+ABORT=4, RETIRE=5, CURRENT=6, START-ACK=7, DELTA-PROBE=8, DELTA-PREPARE=9,
+DELTA-EMIT=10 and PLAN=11.
+
+PLAN comes in every build, once the producer has lowered the applications'
+controls. The shell counts the controls it adds after them, the taskbar's
+with their tasks and launchers, Desk's prompt and the notice, from the model
+for the draw, the notice and the taskbar's bands, as the plan PREPARE builds
+does: the planner counts its controls before it numbers anything
+(`_RSHPL-CONTROLS-PROVED`), and panes add none, so no pane's eligibility is
+asked. The count goes to `_RTHP.SHELL-CONTROLS`, and the producer numbers its
+instruments, statics and runs past it, so each carries the identity the
+shell's batch sends. PREPARE refuses a batch whose plan adds a different
+number of controls. Without an extension the count is 0.
 
 With the shell installed, the base producer builds its candidate for the
 shell: it plans no residual runs of its own and admits nothing. The shell
