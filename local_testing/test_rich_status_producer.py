@@ -296,6 +296,36 @@ def test_static_lane_reuse_allows_new_values_and_normalizes(h, mutation):
     h.guards()
 
 
+def test_a_shell_frame_keeps_its_static_lane_in_its_panes_regions(h):
+    """The bank of a frame Desk's shell sent names the shell's part, and its
+    statics lie in the regions of the shell's panes rather than the
+    producer's own.  The lane is still reusable, and normalization gives the
+    pending statics the bank's own region, as the producer packs them."""
+    h.setup()
+    assert h.build() == (0,)
+    h.pack()
+    other = h.get("TARGET1-A")
+    original = h.runtime.memory.read_bytes(h.bank, h.bank_size)
+    h.runtime.memory.write_bytes(other, original)
+    assert h.call("_RTHP-BANK-REBASE?", h.bank, other)
+    h.field(other, "_RTHP-TB.REGION", 17)
+    h.field(other, "_RTHP-TB.FIRST-OBJECT", 200)
+    item, = h.results("_RTHP-PACK-STATICS-A", other)
+    h.runtime.memory.write64(item + 16, 200)
+    h.runtime.memory.write64(item + 48, 17)
+    active, = h.results("_RTHP-PACK-STATICS-A", h.bank)
+    h.runtime.memory.write64(active + 48, 41)
+    assert not h.call("_RTHP-STATICS-REUSABLE?", h.bank, other, 0)
+    h.field(h.bank, "_RTHP-TB.XBLOCK", 4096)
+    assert h.call("_RTHP-STATICS-REUSABLE?", h.bank, other, 0)
+    h.results("_RTHP-STATICS-NORMALIZE", h.bank, other)
+    own = h.runtime.memory.read64(h.bank + h.offset("_RTHP-TB.REGION"))
+    assert own != 41 and h.runtime.memory.read64(item + 48) == own
+    assert h.runtime.memory.read64(item + 16) == 100
+    h.runtime.memory.write_bytes(h.bank, original)
+    h.guards()
+
+
 @pytest.mark.parametrize("feature,short", ((False, False), (True, False), (True, True)))
 def test_optional_source_copy_uses_negotiation_and_independent_capacity(h, feature, short):
     h.setup()

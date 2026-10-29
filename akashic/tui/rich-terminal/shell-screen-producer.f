@@ -1359,6 +1359,46 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
         _RSHSP-PACK-A @ _RSHSP-PART @ _RSHSP-PART-USED @ + _RSHSP-PACK-U @ MOVE
         _RSHSP-PACK-U @ _RSHSP-ALIGN _RSHSP-PART-USED +!
     ELSE 0 R@ ! THEN R> DROP ;
+\ The pending bank's application controls and statics take the regions the
+\ batch placed them in, so the bank records the frame its part holds.  They
+\ come first among the batch's controls and statics, in the bank's order:
+\ each run of controls in its pane's content, overlay or modal region, and
+\ each static in its pane's content region.  The part is named and the
+\ regions written only once the preparation has succeeded, and a bank
+\ whose part is dropped after that is abandoned with it.
+VARIABLE _RSHSP-SR-BANK VARIABLE _RSHSP-SR-ENTRY
+VARIABLE _RSHSP-SR-CONTROLS VARIABLE _RSHSP-SR-STATICS
+\ Each item of ENTRY, STRIDE bytes apart, gives its region to the bank's
+\ next record, whose region field _RSHSP-SR-BANK names.  Controls and
+\ statics keep their region at the same place.
+: _RSHSP-SR-ITEMS ( entry stride -- )
+    _RSHSP-STRIDE ! RTE-FAMILY-ITEMS@ _RSHSP-STRIDE @ / 0 ?DO
+        DUP I _RSHSP-STRIDE @ * + _RTE-CONTROL.REGION @ _RSHSP-SR-BANK @ !
+        _RSHSP-STRIDE @ _RSHSP-SR-BANK +!
+    LOOP DROP ;
+: _RSHSP-STAMP-REGIONS ( -- )
+    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RSHSP-SR-CONTROLS !
+    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-TB.STATIC-COUNT @ _RSHSP-SR-STATICS !
+    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACK-CONTROLS-A _RTE-CONTROL.REGION _RSHSP-SR-BANK !
+    _RSHSP-FAMILY-N @ 0 ?DO
+        _RSHSP-FAMILIES @ I RTE-FAMILY-ENTRY-SIZE * + _RSHSP-SR-ENTRY !
+        _RSHSP-SR-ENTRY @ _RTE-FE.KIND @ RTE-FAMILY-CONTROL = _RSHSP-SR-CONTROLS @ 0<> AND IF
+            _RSHSP-SR-ENTRY @ RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE / NIP
+                DUP _RSHSP-SR-CONTROLS @ U> 0= _RSHSP-CHECK NEGATE _RSHSP-SR-CONTROLS +!
+            _RSHSP-SR-ENTRY @ RTE-CONTROL-SIZE _RSHSP-SR-ITEMS
+        THEN
+    LOOP
+    _RSHSP-SR-CONTROLS @ 0= _RSHSP-CHECK
+    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACK-STATICS-A _RTE-STATIC.REGION _RSHSP-SR-BANK !
+    _RSHSP-FAMILY-N @ 0 ?DO
+        _RSHSP-FAMILIES @ I RTE-FAMILY-ENTRY-SIZE * + _RSHSP-SR-ENTRY !
+        _RSHSP-SR-ENTRY @ _RTE-FE.KIND @ RTE-FAMILY-STATIC = _RSHSP-SR-STATICS @ 0<> AND IF
+            _RSHSP-SR-ENTRY @ RTE-FAMILY-ITEMS@ RTE-STATIC-SIZE / NIP
+                DUP _RSHSP-SR-STATICS @ U> 0= _RSHSP-CHECK NEGATE _RSHSP-SR-STATICS +!
+            _RSHSP-SR-ENTRY @ RTE-STATIC-SIZE _RSHSP-SR-ITEMS
+        THEN
+    LOOP
+    _RSHSP-SR-STATICS @ 0= _RSHSP-CHECK ;
 \ Freezing is the only write to a part.  The finished part is a proved copy
 \ of the batch the preflight admitted and of the model the shell snapshot
 \ validated, so it is checked once more only with every-frame checks on.
@@ -1405,6 +1445,7 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-NEXT-OBJECT @ _RSHSP-PART @ RSHSP-PART.NEXT-OBJECT !
     _RSHSP-PROMPT-ID @ _RSHSP-PART @ RSHSP-PART.PROMPT !
     _RSHSP-PART @ _RSHSP-PART-USED @ _RSHSP-P @ _RTHP-XBLOCK!
+    _RSHSP-STAMP-REGIONS
     CHK-EVERY-FRAME? IF
         _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-PART-VALID?
             _RSHSP-PARTS-DAMAGED CHK-NAME _RSHSP-CHECK

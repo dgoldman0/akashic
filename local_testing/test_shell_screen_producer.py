@@ -522,6 +522,41 @@ _SS-DONE
 ''', minimum=4)
 
 
+def test_the_frozen_part_gives_the_bank_s_items_the_regions_of_its_panes():
+    """Once the shell's part is frozen and named by the pending bank, the
+    bank's application controls and statics carry the regions the batch
+    placed them in, the panes' regions, so the bank records the frame its
+    part holds.  The screen producer packed them in its own region."""
+    staged_run(STAGED + r'''
+CREATE _SX-WIDES 4103 ALLOT : _SX-WIDE _SX-WIDES 7 + -8 AND ;
+\ The first item of the part's first family of KIND.
+VARIABLE _SX-FI
+: _SX-FIRST ( kind -- item )
+    _SX-FI ! _SX-KA DUP RSHSP-PART.BATCH @ + DUP _RTE-FB.FAMILIES-A @
+    SWAP _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
+        DUP I RTE-FAMILY-ENTRY-SIZE * + DUP _RTE-FE.KIND @ _SX-FI @ = IF
+            NIP RTE-FAMILY-ITEMS@ DROP UNLOOP EXIT
+        THEN DROP
+    LOOP DROP 0 ;
+_SX-SETUP
+\ A pending bank packed as the producer packs it, its control and static
+\ in the producer's own region.
+_SX-WIDE 4096 0 FILL _SX-WIDE _SX-BANK 10 _SX-WIDE _RTHP-TB.REGION !
+1 _SX-WIDE _RTHP-TB.CONTROL-COUNT ! 1 _SX-WIDE _RTHP-TB.STATIC-COUNT !
+_SX-CI _SX-WIDE _RTHP-PACK-CONTROLS-A RTE-CONTROL-SIZE MOVE
+_SX-SI _SX-WIDE _RTHP-PACK-STATICS-A RTE-STATIC-SIZE MOVE
+_SX-WIDE _SX-P _RTHP.TARGET-PENDING !
+_SX-PREPARE _SS-OK _SX-WIDE _RTHP-TB.XBLOCK @ _SX-KA = _SS-A
+_SX-WIDE _RTHP-PACK-CONTROLS-A _RTE-CONTROL.REGION @
+    DUP 10 <> _SS-A RTE-FAMILY-CONTROL _SX-FIRST _RTE-CONTROL.REGION @ = _SS-A
+_SX-WIDE _RTHP-PACK-STATICS-A _RTE-STATIC.REGION @
+    DUP 10 <> _SS-A RTE-FAMILY-STATIC _SX-FIRST _RTE-STATIC.REGION @ = _SS-A
+\ The producer's own candidate keeps its region.
+_SX-CI _RTE-CONTROL.REGION @ 10 = _SS-A _SX-SI _RTE-STATIC.REGION @ 10 = _SS-A
+_SS-DONE
+''', minimum=7)
+
+
 def test_nonzero_menu_claim_keeps_residue_underlay_and_excludes_opaque_status():
     staged_run(STAGED + r'''
 CREATE _SM-CLAIMS-S RUCL-CLAIM-SIZE 2 * 7 + ALLOT

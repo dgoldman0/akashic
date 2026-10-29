@@ -2070,6 +2070,11 @@ VARIABLE _RTHP-FT-INTENTS
 : _RTHP-XBLOCK!  ( a u producer -- )
     _RTHP.TARGET-PENDING @ TUCK _RTHP-TB.XBLOCK-BYTES ! _RTHP-TB.XBLOCK ! ;
 
+\ ( bank -- flag ) the bank's frame is the shell's: the bank names the
+\ shell's part, and the shell gave the bank's application controls and
+\ statics the regions its batch placed them in.
+: _RTHP-SHELL-BANK?  ( bank -- flag )  _RTHP-TB.XBLOCK @ 0<> ;
+
 \ ( producer -- ) the pending bank names no part.
 : _RTHP-XBLOCK-DROP  ( producer -- )
     _RTHP.TARGET-PENDING @ ?DUP IF
@@ -4836,8 +4841,11 @@ VARIABLE _RTHP-W-MR-SELECTED-SEEN
             _RTHP-W-MR-CONTROL @ _RTE-CONTROL.KIND @
                 RTE-CONTROL-MENU-BAR = IF 0 EXIT THEN
         THEN
-        _RTHP-W-MR-CONTROL @ _RTE-CONTROL.REGION @
-            _RTHP-W-MR-ACTIVE @ _RTHP-TB.REGION @ <> IF 0 EXIT THEN
+        \ A shell frame's menu controls lie in the regions of its panes.
+        _RTHP-W-MR-ACTIVE @ _RTHP-SHELL-BANK? 0= IF
+            _RTHP-W-MR-CONTROL @ _RTE-CONTROL.REGION @
+                _RTHP-W-MR-ACTIVE @ _RTHP-TB.REGION @ <> IF 0 EXIT THEN
+        THEN
         _RTHP-W-MR-CONTROL @ _RTE-CONTROL.ROOT-HEIGHT @
             _RTHP-W-MR-ACTIVE @ _RTHP-TB.ROWS @ <> IF 0 EXIT THEN
         _RTHP-W-MR-CONTROL @ _RTE-CONTROL.ROOT-WIDTH @
@@ -12090,7 +12098,10 @@ VARIABLE _RTHP-SR-NORMALIZED
         THEN
         _RTHP-SR-OLD @ _RTE-STATIC.ID @ 0=
         _RTHP-SR-NEW @ _RTE-STATIC.ID @ 0= OR IF 0 UNLOOP EXIT THEN
-        _RTHP-SR-OLD @ _RTE-STATIC.REGION @ _RTHP-SR-A @ _RTHP-TB.REGION @ <>
+        \ A shell frame's statics lie in the regions of its panes.
+        _RTHP-SR-A @ _RTHP-SHELL-BANK? IF 0 ELSE
+            _RTHP-SR-OLD @ _RTE-STATIC.REGION @ _RTHP-SR-A @ _RTHP-TB.REGION @ <>
+        THEN
         _RTHP-SR-NEW @ _RTE-STATIC.REGION @ _RTHP-SR-P @ _RTHP-TB.REGION @ <> OR
             IF 0 UNLOOP EXIT THEN
         _RTHP-SR-NORMALIZED @ IF
@@ -12105,7 +12116,7 @@ VARIABLE _RTHP-SR-NORMALIZED
         _RTHP-SR-A @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTHP-SR-OLD !
         _RTHP-SR-P @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTHP-SR-NEW !
         _RTHP-SR-OLD @ _RTE-STATIC.ID @ _RTHP-SR-NEW @ _RTE-STATIC.ID !
-        _RTHP-SR-OLD @ _RTE-STATIC.REGION @ _RTHP-SR-NEW @ _RTE-STATIC.REGION !
+        _RTHP-SR-A @ _RTHP-TB.REGION @ _RTHP-SR-NEW @ _RTE-STATIC.REGION !
     LOOP ;
 
 VARIABLE _RTHP-D-KEPT
@@ -13055,8 +13066,12 @@ VARIABLE _RTHP-D-REV-PENDING
         _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ <> IF 0 EXIT THEN
     _RTHP-D-ACTIVE-C @ _RTE-CONTROL.Z @
         _RTHP-D-PENDING-C @ _RTE-CONTROL.Z @ <> IF 0 EXIT THEN
-    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.REGION @
-        _RTHP-D-ACTIVE @ _RTHP-TB.REGION @ <> IF 0 EXIT THEN
+    \ A shell frame's controls lie in the regions of its panes, and the
+    \ shell compares where its batch places each one.
+    _RTHP-D-ACTIVE @ _RTHP-SHELL-BANK? 0= IF
+        _RTHP-D-ACTIVE-C @ _RTE-CONTROL.REGION @
+            _RTHP-D-ACTIVE @ _RTHP-TB.REGION @ <> IF 0 EXIT THEN
+    THEN
     _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION @
         _RTHP-D-PENDING @ _RTHP-TB.REGION @ <> IF 0 EXIT THEN
     _RTHP-D-PARENT-TOPOLOGY? 0= IF 0 EXIT THEN
