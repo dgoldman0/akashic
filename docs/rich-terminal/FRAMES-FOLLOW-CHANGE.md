@@ -1231,6 +1231,21 @@ frame before the change driver.
       - **9b.3.3d. One comparison.** A DELTA replaces the application items
         the producer's comparison found changed, and compares only the
         shell's own items.
+        **Done** on 2026-10-29 (66b1eff6). The shell hands the batch DELTA
+        emitter what the producer's comparison found: the controls its
+        sealed plan lists, as indexes in each family, and the instruments
+        and series as unchanged. The emitter replaces those controls
+        without comparing any, and compares the shell's own items and the
+        applications' statics; the producer looks for the statics' changes
+        in a comparison built for the shell only when the root facts' judge
+        needs them. Safe mode takes the plan too, since the plan reuses
+        nothing an earlier frame built. A new shadow stage compares every
+        item the plan settles. A typed letter's burst frame builds in 7.54
+        million steps against 7.66, the shell's emission taking 0.07
+        million against 0.19, and sends the same 18 DELTAs and bytes. The
+        canonical journey passed with the shadow check, 14,237 comparisons
+        without a difference, 10,126 of them the new stage's, sending the
+        same presents, and in safe mode with no damage named.
       - **9b.3.3e. The part built where it is kept.** The shell writes its
         part straight into the free extension block, so the freeze goes.
 - **9a.3. The change driver.** When only roots' contents changed, and
