@@ -1321,6 +1321,25 @@ frame before the change driver.
     admits the whole batch, and the emitter is told which of the shell's
     own items changed, as it is told the applications' controls. A shadow
     stage builds the part in full as well and compares the two batches.
+    Two of its pieces are **done** (2026-10-29). A DELTA's batch is
+    admitted again only with every-frame checks on (51ffe491), since its
+    emission sends only the items that differ from the frame on screen and
+    the engine checks each in full as it is sent: a typed letter's frame
+    built in 5.34 million steps against 7.34. Each bank now keeps the
+    rectangle of every claim, the menus' first, so a menu's rows are
+    planned again only where a menu's claim changed (029f9109). Measured
+    beside a second run of 51ffe491, which built in 5.55 million, the frame
+    builds in 5.18 million and the shell's glyph plans take 0.35 million
+    against 0.71; runs of one commit differ by about 0.2 million, so steps
+    are compared in pairs run together. Each step sent the same 18 DELTAs
+    and bytes, and the canonical journey passed after each with the shadow
+    check, 14,193 comparisons without a difference, sending the same
+    presents, and in safe mode. The copy of the part waits. The shell's
+    DELTA now costs 1.07 million, 0.35 million of it planning the rows
+    that changed, which the copy plans too, while the producer's lowering,
+    packing and comparison cost 2.32 million and the snapshot 1.61. By the
+    rule above, 9a.3b comes next, and the copy returns when the shell's
+    layer again costs most.
   - **9a.3b. The producer follows change.** The producer keeps each bank's
     root facts in normal mode too. When the facts show that only some
     roots' contents moved, with every document in its place, the same roots
