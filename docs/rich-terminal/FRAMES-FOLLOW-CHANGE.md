@@ -1360,28 +1360,32 @@ frame before the change driver.
     root facts of a typed frame's 32 roots cost 0.10 million, and about two
     roots move: the text area and the status field. In two steps, each
     sending what it sent before:
-    - **9a.3b.1. The bank is a copy.** The producer keeps each bank's root
-      facts in normal mode too, in storage it grows from its memory source.
-      When the snapshot's roots are those of the bank on screen, in the same
-      order, and each moved root is a text collection or a status field
-      whose count of items, claim and input targets stay those on screen,
-      the pending bank is a copy of the bank on screen with the moved
-      roots' items written in from the candidate. Each item takes the
-      identity and region of the item in its place, a body that did not
-      change keeps the revision on screen, and every text after one that
-      changed length moves, with the sections that follow it. The plan
-      lists the moved roots' controls that differ from those on screen,
-      each checked as the comparison checks a pair. The candidate is still
-      lowered whole; its packing and comparison go for such frames. With
-      the shadow check on, the full packing and comparison run first, and
-      the copy must equal their bank byte for byte and their plan.
-    - **9a.3b.2. Only the moved roots are lowered.** A root whose facts
-      did not move keeps the items of the bank on screen, and only the
-      moved roots are lowered from the snapshot, each into the places its
-      items hold. The claims and counts the shell reads come
-      from the bank on screen, which then keeps its claims whole rather
-      than their rectangles alone. A shadow stage lowers the candidate
-      whole as well and compares the two banks.
+    - **9a.3b.1. The comparison follows the facts.** The producer keeps
+      each bank's root facts in normal mode too, in storage it grows from
+      its memory source. When the bank on screen kept the facts its own
+      comparison proved, and the candidate's controls carry the identities
+      of that bank's controls in the same places, each control takes the
+      identity of the control in its place, as sorting and joining the two
+      banks would give, and the pending bank keeps the sorted index of the
+      bank on screen. Only the controls of roots whose facts moved are
+      checked against their partners, since the controls of a root whose
+      facts did not move are those on screen. The bank is still packed from the
+      candidate and moved to the identities, regions and revisions on
+      screen as before. Safe mode and every other frame take the full
+      comparison, and with the shadow check on both run, on copies of one
+      packed bank, and must give the same bank byte for byte and the same
+      plan.
+    - **9a.3b.2. Only the moved roots are lowered, into a copy.** A root
+      whose facts did not move keeps the items of the bank on screen, and
+      only the moved roots are lowered from the snapshot. The pending bank
+      is a copy of the bank on screen with the moved roots' items written
+      in, each in the identity and region of the item it replaces, every
+      text after one that changed length moved with the sections that
+      follow it, and each input target given the revision the full path
+      gives it. Its packing and moving go for such frames. The claims and
+      counts the shell reads come from the bank on screen, which then keeps
+      its claims whole rather than their rectangles alone. A shadow stage
+      builds the bank in full as well and compares the two byte for byte.
     Other kinds of root, such as menus, tab sets and dialogs, take the copy
     once an ordinary use needs it; until then a frame that moves one takes
     the full driver.
