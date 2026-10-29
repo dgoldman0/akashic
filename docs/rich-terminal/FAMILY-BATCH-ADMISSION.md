@@ -50,7 +50,16 @@ scalar preflight callback, PANE DEFINE callback, PANE REPLACE callback.
 `RTAPTE-SHELL-INIT ( base-rte shell -- status )` binds the APT1 implementation;
 `RTAPTE-SHELL-FINI` clears it. `RTE-FAMILY-BATCH-PREFLIGHT ( batch admission
 shell -- status )` produces the checked admission only on exact provider
-success. `RTE-PANE-DEFINE` and `RTE-PANE-REPLACE` take `( pane shell -- status )`.
+success. Its internal peer `_RTE-FAMILY-BATCH-PREFLIGHT-PROVED` serves the
+shell producer, whose batch lies in the screen producer's scratch block and
+pending bank, both from Desk's memory source and proved apart from the
+engine's storage when they were lent. The shell lays the bank's spans out
+apart and takes its own spans and the admission record from the scratch block
+one after another. In normal mode the peer leaves out the proofs that the
+spans lie apart from the engine's storage, from the admission record and from
+one another, which such a batch would make span by span, since its spans
+interleave between the two blocks; with every-frame checks on it makes them,
+and a failure names the shell's batch. Every other check runs. `RTE-PANE-DEFINE` and `RTE-PANE-REPLACE` take `( pane shell -- status )`.
 All other family emission uses the existing base facade APIs.
 
 ## Checked summary

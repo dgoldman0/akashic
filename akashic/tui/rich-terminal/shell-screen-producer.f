@@ -1492,8 +1492,12 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     _RSHSP-P @ _RTHP.ATTEMPT @ _RSHSP-BATCH @ _RTE-FB.ATTEMPT !
     _RSHSP-P @ _RTHP.SOURCE-GEN @ _RSHSP-BATCH @ _RTE-FB.SOURCE-GENERATION !
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-BATCH @ _RTE-FB.SURFACE-GENERATION !
+    \ The batch lies in the producer's scratch block and pending bank,
+    \ proved apart from the engine's storage when they were lent, and its
+    \ spans are laid out apart, so the proved preflight proves them so again
+    \ only with every-frame checks on.
     _RSHSP-BATCH @ _RSHSP-ADMISSION @ _RSHSP-S @ _RSHSP.SHELL @
-        RTE-FAMILY-BATCH-PREFLIGHT DUP IF THROW ELSE DROP THEN ;
+        _RTE-FAMILY-BATCH-PREFLIGHT-PROVED DUP IF THROW ELSE DROP THEN ;
 \ A complete START candidate defines every region and object with the
 \ fresh identities its admission reserved.
 : _RSHSP-BUILD ( -- )

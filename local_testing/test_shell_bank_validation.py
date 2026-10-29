@@ -215,7 +215,8 @@ def test_the_freeze_takes_the_graph_the_preflight_checked():
         return match.group(0)
 
     build = word("_RSHSP-BUILD-BATCH")
-    assert build.rstrip().endswith("RTE-FAMILY-BATCH-PREFLIGHT DUP IF THROW ELSE DROP THEN ;")
+    assert build.rstrip().endswith(
+        "_RTE-FAMILY-BATCH-PREFLIGHT-PROVED DUP IF THROW ELSE DROP THEN ;")
     freeze = word("_RSHSP-FREEZE")
     # It leaves the applications' items where they lie, in the pending
     # bank's packed records, which the part points at.

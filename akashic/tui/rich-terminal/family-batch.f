@@ -167,14 +167,9 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
     >R >R 2DUP R> RTE-FAMILY-ADMISSION-SIZE MSPAN-OVERLAP? IF
         2DROP R> DROP 0 EXIT
     THEN R> RTE-SHELL-FACADE-SIZE MSPAN-OVERLAP? 0= ;
-: _RTE-FA-AUTHORITY? ( batch out shell -- flag )
-    DUP RTE-SHELL-VALID? 0= IF DROP 2DROP 0 EXIT THEN
-    2 PICK RTE-FAMILY-BATCH-FIXED? 0= IF DROP 2DROP 0 EXIT THEN
-    OVER RTE-FAMILY-ADMISSION-SIZE _RTE-SPAN? 0= IF DROP 2DROP 0 EXIT THEN
-    OVER RTE-FAMILY-ADMISSION-SIZE RTE-FAMILY-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
-    OVER RTE-FAMILY-ADMISSION-SIZE _RTE-AM-OUTSIDE? 0= IF DROP 2DROP 0 EXIT THEN
-    OVER RTE-FAMILY-ADMISSION-SIZE 2 PICK RTE-SHELL-FACADE-SIZE MSPAN-OVERLAP? IF DROP 2DROP 0 EXIT THEN
-    OVER RTE-FAMILY-ADMISSION-SIZE 2 PICK _RTE-SH.BASE @ RTE-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
+\ The spans of BATCH apart from the storage the admission protects, the
+\ admission record OUT and the shell facade among them.
+: _RTE-FA-SPANS-APART? ( batch out shell -- flag )
     2 PICK _RTE-FAMILY-ENCLOSURE OVER -1 = IF 2DROP -1 ELSE
         OVER - 2 PICK _RTE-FA-STORAGE?
     THEN
@@ -190,6 +185,35 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
             THEN
         ELSE 2DROP THEN
     LOOP 2DROP 2DROP -1 ;
+\ A batch the shell producer builds lies in the screen producer's scratch
+\ block and pending bank, both from Desk's memory source and proved apart
+\ from the engine's storage when they were lent.  The shell lays the
+\ bank's spans out apart and takes its own spans and the admission record
+\ from the scratch block one after another.  Its proved preflight
+\ therefore leaves out the proofs that the spans lie apart from the
+\ engine's storage, from the admission record and from one another, which
+\ a batch drawn from two such blocks would make span by span, unless
+\ every-frame checks are on; a failure then names the shell's batch
+\ (check-mode.f).  Every other check runs.
+VARIABLE _RTE-FA-PROVED
+: _RTE-FA-AUTHORITY? ( batch out shell -- flag )
+    DUP RTE-SHELL-VALID? 0= IF DROP 2DROP 0 EXIT THEN
+    2 PICK RTE-FAMILY-BATCH-FIXED? 0= IF DROP 2DROP 0 EXIT THEN
+    OVER RTE-FAMILY-ADMISSION-SIZE _RTE-SPAN? 0= IF DROP 2DROP 0 EXIT THEN
+    OVER RTE-FAMILY-ADMISSION-SIZE RTE-FAMILY-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
+    OVER RTE-FAMILY-ADMISSION-SIZE _RTE-AM-OUTSIDE? 0= IF DROP 2DROP 0 EXIT THEN
+    OVER RTE-FAMILY-ADMISSION-SIZE 2 PICK RTE-SHELL-FACADE-SIZE MSPAN-OVERLAP? IF DROP 2DROP 0 EXIT THEN
+    OVER RTE-FAMILY-ADMISSION-SIZE 2 PICK _RTE-SH.BASE @ RTE-STORAGE-DISJOINT? 0= IF DROP 2DROP 0 EXIT THEN
+    _RTE-FA-PROVED @ IF
+        CHK-EVERY-FRAME? 0= IF DROP 2DROP -1 EXIT THEN
+        _RTE-FA-SPANS-APART? S" the shell's batch" CHK-NAME EXIT
+    THEN
+    _RTE-FA-SPANS-APART? ;
+: _RTE-FA-VALID? ( batch -- flag )
+    _RTE-FA-PROVED @ 0= IF RTE-FAMILY-BATCH-VALID? EXIT THEN
+    DUP _RTE-FAMILY-BATCH-GRAPH? 0= IF DROP 0 EXIT THEN
+    CHK-EVERY-FRAME? IF _RTE-FAMILY-BATCH-APART? S" the shell's batch" CHK-NAME EXIT THEN
+    DROP -1 ;
 
 : _RTE-FA-ADD! ( n address -- flag )
     DUP >R @ SWAP _RTE-UADD? 0= IF DROP R> DROP 0 EXIT THEN R> ! -1 ;
@@ -437,7 +461,7 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
     LOOP
     _RTE-AM-WRITE-END ;
 : _RTE-FA-PREFLIGHT-BODY ( -- status )
-    _RTE-FA-BATCH @ RTE-FAMILY-BATCH-VALID? 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-FA-BATCH @ _RTE-FA-VALID? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-FA-BUILD? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-FA-SUMMARY _RTE-FA-BASE @ _RTE-F.CONTEXT @
     _RTE-FA-SHELL @ _RTE-SH.PREFLIGHT-XT @ EXECUTE
@@ -480,6 +504,8 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
     ['] _RTE-FA-PREFLIGHT-BODY CATCH ?DUP IF DROP RTE-S-INVALID THEN
     0 _RTE-AM-S !
     _RTE-FA-FINISH ;
+: _RTE-FAMILY-BATCH-PREFLIGHT-PROVED ( batch admission shell -- status )
+    -1 _RTE-FA-PROVED ! RTE-FAMILY-BATCH-PREFLIGHT 0 _RTE-FA-PROVED ! ;
 
 : _RTE-PANE-SHELL-AUTHORITY? ( pane shell -- flag )
     DUP RTE-SHELL-VALID? 0= IF 2DROP 0 EXIT THEN

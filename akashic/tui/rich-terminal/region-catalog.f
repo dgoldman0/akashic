@@ -471,17 +471,28 @@ VARIABLE _RTE-RC-MATCHES
         _RTE-RC-CATALOG @ _RTE-RC.REGIONS-A @ I 96 * + @
             _RTE-RC-USED? 0= IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
-: RTE-FAMILY-BATCH-VALID? ( batch -- flag )
+: _RTE-RC-BIND? ( batch -- flag )
     DUP _RTE-RC-BATCH-FIXED? 0= IF DROP 0 EXIT THEN
     DUP _RTE-RC-BATCH !
     DUP _RTE-FB.CATALOG-A @ _RTE-RC-CATALOG !
     DUP _RTE-FB.FAMILIES-A @ _RTE-RC-FAMILIES !
-    _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / _RTE-RC-COUNT !
-    _RTE-RC-PAIRWISE? 0= IF 0 EXIT THEN
+    _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / _RTE-RC-COUNT ! -1 ;
+: _RTE-RC-GRAPH? ( -- flag )
     _RTE-RC-CATALOG @ RTE-REGION-CATALOG-VALID? 0= IF 0 EXIT THEN
     _RTE-RC-COUNT @ 0 ?DO
         _RTE-RC-FAMILIES @ I RTE-FAMILY-ENTRY-SIZE * + _RTE-RC-FAMILY? 0= IF 0 UNLOOP EXIT THEN
     LOOP _RTE-RC-NO-ORPHANS? ;
+: RTE-FAMILY-BATCH-VALID? ( batch -- flag )
+    _RTE-RC-BIND? 0= IF 0 EXIT THEN
+    _RTE-RC-PAIRWISE? 0= IF 0 EXIT THEN
+    _RTE-RC-GRAPH? ;
+\ The same checks but the one that proves the batch's spans pairwise
+\ apart, for a builder that lays them out apart in storage known apart.
+: _RTE-FAMILY-BATCH-GRAPH? ( batch -- flag )
+    _RTE-RC-BIND? 0= IF 0 EXIT THEN _RTE-RC-GRAPH? ;
+\ The proof the graph check leaves out.
+: _RTE-FAMILY-BATCH-APART? ( batch -- flag )
+    _RTE-RC-BIND? 0= IF 0 EXIT THEN _RTE-RC-PAIRWISE? ;
 
 CREATE _RTE-RC-OWNED-END
 _RTE-RC-OWNED-END _RTE-RC-OWNED-LIMIT !

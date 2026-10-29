@@ -29,8 +29,9 @@ the kept range `keep-a keep-u` where it lies: such a span takes no bytes of
 the destination and the copied graph points at it. A kept range must hold a
 family's items and text together, or its items alone when it has no text,
 and never a plan, glyph references, region copies, the catalog or the
-family vector; a span that straddles the range is invalid. `0 0` keeps
-nothing. `_RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )` tells such a caller
+family vector; a span that straddles the range is invalid. The caller lays
+its kept families out, so these rules are checked with every-frame checks
+on. `0 0` keeps nothing. `_RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )` tells such a caller
 that no span of a valid batch overlaps a range it is about to write. The
 shell producer uses them to freeze its part of a frame: it measures the
 batch, proves the extension block lies outside it, copies it and then checks
