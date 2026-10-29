@@ -401,7 +401,15 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ It grows from the memory source to what a build needs and half again.
 : _RTHP.XSCRATCH-A               ( p -- a ) 5136 + ;
 : _RTHP.XSCRATCH-U               ( p -- a ) 5144 + ;
-5152 CONSTANT RTHP-SIZE
+\ The root facts (uidl-root-facts.f) of the snapshots two candidates were
+\ built from, so that the bank on screen keeps the facts it was built from
+\ while the next candidate's are recorded in the other.  Blocks 1 and 2
+\ each hold an address and its bytes, or 0 0; the count of records; the
+\ snapshot generation they describe, or 0; and the optional parts the
+\ candidate carried once built (_RTHP-PRESENT-PARTS).  Each grows from the
+\ memory source to what a snapshot needs and half again.
+: _RTHP.ROOT-BLOCK               ( block p -- a ) SWAP 1- 40 * + 5152 + ;
+5232 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 \ An omitted graph: the cells it paints, row col row1 col1, and the token
@@ -1368,6 +1376,12 @@ VARIABLE _RTHP-V-P
         DROP 0 EXIT
     THEN
     DUP _RTHP.XSCRATCH-A @ OVER _RTHP.XSCRATCH-U @ _RTHP-XBLOCK-SHAPE? 0= IF
+        DROP 0 EXIT
+    THEN
+    1 OVER _RTHP.ROOT-BLOCK DUP @ SWAP 8 + @ _RTHP-XBLOCK-SHAPE? 0= IF
+        DROP 0 EXIT
+    THEN
+    2 OVER _RTHP.ROOT-BLOCK DUP @ SWAP 8 + @ _RTHP-XBLOCK-SHAPE? 0= IF
         DROP 0 EXIT
     THEN
     DUP _RTHP.EXTENSION @ OVER _RTHP-EXTENSION? 0= IF DROP 0 EXIT THEN
@@ -3754,15 +3768,17 @@ VARIABLE _RTHP-TL-INTENT
     DUP _RTHP.PHASE @ _RTHP-PH-WAIT <>
     OVER _RTHP.TARGET-ACTIVE @ 0<> OR
     OVER _RTHP.TARGET-PENDING @ 0<> OR IF 2DROP SCB-S-INVALID EXIT THEN
-    \ The extension and scratch blocks come from MEMORY alone, so it gives
-    \ back each one.
+    \ The extension, scratch and root facts blocks come from MEMORY alone,
+    \ so it gives back each one.
     DUP _RTHP.XBLOCK0-A @ OVER _RTHP.XBLOCK1-A @ OR
-    OVER _RTHP.XSCRATCH-A @ OR IF 2DROP SCB-S-INVALID EXIT THEN
+    OVER _RTHP.XSCRATCH-A @ OR
+    1 2 PICK _RTHP.ROOT-BLOCK @ OR 2 2 PICK _RTHP.ROOT-BLOCK @ OR
+        IF 2DROP SCB-S-INVALID EXIT THEN
     _RTHP.MEMORY ! SCB-S-OK ;
 
 \ RTHP-FINI ( producer -- )
-\   Give back the arenas, extension blocks and scratch block the producer
-\   owns and clear it.  Call it once the terminal holds nothing of this producer's and
+\   Give back the arenas, extension blocks, scratch block and root facts
+\   blocks the producer owns and clear it.  Call it once the terminal holds nothing of this producer's and
 \   nothing will step it.  Every picture claim goes, so CELL shows each
 \   picture.
 : RTHP-FINI  ( producer -- )
@@ -3789,6 +3805,11 @@ VARIABLE _RTHP-TL-INTENT
         DUP _RTHP.XBLOCK0-A @ ?DUP IF
             OVER _RTHP.XBLOCK0-U @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
         THEN
+        3 1 DO
+            I OVER _RTHP.ROOT-BLOCK DUP @ ?DUP IF
+                SWAP 8 + @ 2 PICK _RTHP.MEMORY @ MSRC-FREE
+            ELSE DROP THEN
+        LOOP
     THEN
     RTHP-SIZE 0 FILL ;
 
@@ -9447,6 +9468,12 @@ VARIABLE _RTHP-XG-FIELD
         MSPAN-OVERLAP? IF 0 EXIT THEN
     _RTHP-XG-A @ _RTHP-XG-BYTES @
         _RTHP-XG-P @ DUP _RTHP.XSCRATCH-A @ SWAP _RTHP.XSCRATCH-U @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTHP-XG-A @ _RTHP-XG-BYTES @
+        1 _RTHP-XG-P @ _RTHP.ROOT-BLOCK DUP @ SWAP 8 + @
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTHP-XG-A @ _RTHP-XG-BYTES @
+        2 _RTHP-XG-P @ _RTHP.ROOT-BLOCK DUP @ SWAP 8 + @
         MSPAN-OVERLAP? 0= ;
 : _RTHP-XG-GROW  ( need field producer -- rte-status )
     _RTHP-XG-P ! _RTHP-XG-FIELD !
@@ -9485,43 +9512,27 @@ VARIABLE _RTHP-XG-FIELD
     SWAP _RTHP.COLLECTION-COUNT @ IF RTHP-PART-COLLECTIONS OR THEN ;
 
 \ ---------------------------------------------------------------------
-\  Root facts, for the shadow check's judge
+\  Root facts
 \ ---------------------------------------------------------------------
 \
-\  With the shadow check on, each candidate's roots carry the facts of
-\  what their captures read (RUHA-ROOT-FACTS@, uidl-root-facts.f).  Two
-\  blocks from the heap hold them, each tagged with the generation of the
+\  Each candidate's roots carry the facts of what their captures read
+\  (RUHA-ROOT-FACTS@, uidl-root-facts.f), in the producer's two root facts
+\  blocks (_RTHP.ROOT-BLOCK), each tagged with the generation of the
 \  snapshot its records describe, so that the bank on screen keeps the
 \  facts it was built from while the next candidate's are recorded in the
-\  other.  The comparison judges them (_RTHP-ROOT-BEGIN).
-
-\ Block 1 and block 2: each an address and size from the heap, a count of
-\ records, and the snapshot generation they describe.  0 names no block.
-VARIABLE _RTHP-ROOT-A1
-VARIABLE _RTHP-ROOT-U1
-VARIABLE _RTHP-ROOT-N1
-VARIABLE _RTHP-ROOT-GEN1
-VARIABLE _RTHP-ROOT-A2
-VARIABLE _RTHP-ROOT-U2
-VARIABLE _RTHP-ROOT-N2
-VARIABLE _RTHP-ROOT-GEN2
-VARIABLE _RTHP-ROOT-PARTS1
-VARIABLE _RTHP-ROOT-PARTS2
-0 _RTHP-ROOT-A1 ! 0 _RTHP-ROOT-U1 ! 0 _RTHP-ROOT-N1 ! 0 _RTHP-ROOT-GEN1 !
-0 _RTHP-ROOT-A2 ! 0 _RTHP-ROOT-U2 ! 0 _RTHP-ROOT-N2 ! 0 _RTHP-ROOT-GEN2 !
-0 _RTHP-ROOT-PARTS1 ! 0 _RTHP-ROOT-PARTS2 !
-: _RTHP-ROOT.A    ( block -- a )  1 = IF _RTHP-ROOT-A1 ELSE _RTHP-ROOT-A2 THEN ;
-: _RTHP-ROOT.U    ( block -- a )  1 = IF _RTHP-ROOT-U1 ELSE _RTHP-ROOT-U2 THEN ;
-: _RTHP-ROOT.N    ( block -- a )  1 = IF _RTHP-ROOT-N1 ELSE _RTHP-ROOT-N2 THEN ;
-: _RTHP-ROOT.GEN  ( block -- a )
-    1 = IF _RTHP-ROOT-GEN1 ELSE _RTHP-ROOT-GEN2 THEN ;
-\ The optional parts the block's candidate carried once built
-\ (_RTHP-PRESENT-PARTS).
-: _RTHP-ROOT.PARTS  ( block -- a )
-    1 = IF _RTHP-ROOT-PARTS1 ELSE _RTHP-ROOT-PARTS2 THEN ;
+\  other.  The comparison checks against its partner only a control whose
+\  root's facts moved (_RTHP-D-CONTROL-MOVED?), and with the shadow check
+\  on it judges the facts (_RTHP-ROOT-BEGIN).
 
 VARIABLE _RTHP-ROOT-P
 VARIABLE _RTHP-ROOT-B
+
+\ The fields of _RTHP-ROOT-P's block 1 or 2.
+: _RTHP-ROOT.A      ( block -- a )  _RTHP-ROOT-P @ _RTHP.ROOT-BLOCK ;
+: _RTHP-ROOT.U      ( block -- a )  _RTHP-ROOT.A 8 + ;
+: _RTHP-ROOT.N      ( block -- a )  _RTHP-ROOT.A 16 + ;
+: _RTHP-ROOT.GEN    ( block -- a )  _RTHP-ROOT.A 24 + ;
+: _RTHP-ROOT.PARTS  ( block -- a )  _RTHP-ROOT.A 32 + ;
 
 \ The block for the next candidate's facts: one that does not hold those
 \ of the bank on screen.
@@ -9533,18 +9544,39 @@ VARIABLE _RTHP-ROOT-B
     _RTHP-ROOT-B @ _RTHP-ROOT.A @ _RTHP-ROOT-B @ _RTHP-ROOT.U @
     _RTHP-W-DRAW @ _RTHP-ROOT-P @ _RTHP.ADAPTER @ RUHA-ROOT-FACTS@ ;
 
+\ The block being recorded, replaced by one from the memory source that
+\ holds BYTES and half again; nothing reads what it held.  False without a
+\ memory source or when the source has no such block.  The new block is
+\ proved apart from the producer's storage, as an extension block is.
+VARIABLE _RTHP-ROOT-BYTES
+: _RTHP-ROOT-GROW  ( bytes -- flag )
+    _RTHP-ROOT-P @ _RTHP.MEMORY @ 0= IF DROP 0 EXIT THEN
+    DUP 1 RSHIFT + 7 + -8 AND _RTHP-ROOT-BYTES !
+    _RTHP-ROOT-BYTES @ _RTHP-ROOT-P @ _RTHP.MEMORY @ MSRC-ALLOC
+    DUP 0= IF EXIT THEN
+    _RTHP-ROOT-P @ _RTHP-XG-P ! DUP _RTHP-XG-A !
+        _RTHP-ROOT-BYTES @ _RTHP-XG-BYTES !
+    _RTHP-XG-APART? S" Desk's memory source" CHK-HANDOVER 0= IF
+        _RTHP-ROOT-BYTES @ _RTHP-ROOT-P @ _RTHP.MEMORY @ MSRC-FREE 0 EXIT
+    THEN
+    _RTHP-ROOT-B @ _RTHP-ROOT.A @ ?DUP IF
+        _RTHP-ROOT-B @ _RTHP-ROOT.U @ _RTHP-ROOT-P @ _RTHP.MEMORY @ MSRC-FREE
+    THEN
+    _RTHP-ROOT-B @ _RTHP-ROOT.A ! _RTHP-ROOT-BYTES @ _RTHP-ROOT-B @ _RTHP-ROOT.U !
+    -1 ;
+
 \ Record the facts of the snapshot this candidate copied, tagged with its
-\ generation.  A block too small grows once to what the snapshot needs; a
-\ heap that cannot give it leaves the candidate without facts, which the
-\ comparison then does not judge, and counts a skipped comparison.
+\ generation.  A block too small grows once to what the snapshot needs.
+\ Without a memory source, or when it cannot give the block, the candidate
+\ has no facts: its comparison then checks every control, the judge does
+\ not judge it, and with the shadow check on that counts as a skipped
+\ comparison.
 : _RTHP-ROOT-RECORD  ( producer -- )
-    FSHD? 0= IF DROP EXIT THEN
     DUP _RTHP-ROOT-P ! _RTHP-ROOT-PENDING-BLOCK _RTHP-ROOT-B !
     0 _RTHP-ROOT-B @ _RTHP-ROOT.GEN ! 0 _RTHP-ROOT-B @ _RTHP-ROOT.N !
     _RTHP-ROOT-CAPTURE
     DUP RUHA-S-CAPACITY = IF
-        DROP URF-SIZE * _RTHP-ROOT-B @ _RTHP-ROOT.A _RTHP-ROOT-B @ _RTHP-ROOT.U
-            FSHD-GROW 0= IF FSHD-SKIP EXIT THEN
+        DROP URF-SIZE * _RTHP-ROOT-GROW 0= IF FSHD? IF FSHD-SKIP THEN EXIT THEN
         _RTHP-ROOT-CAPTURE
     THEN
     RUHA-S-OK <> IF DROP EXIT THEN
@@ -9554,8 +9586,7 @@ VARIABLE _RTHP-ROOT-B
 
 \ The candidate whose facts were recorded is built: keep the parts it carries.
 : _RTHP-ROOT-PARTS!  ( producer -- )
-    FSHD? 0= IF DROP EXIT THEN
-    _RTHP-PRESENT-PARTS _RTHP-ROOT-B @ _RTHP-ROOT.PARTS ! ;
+    DUP _RTHP-ROOT-P ! _RTHP-PRESENT-PARTS _RTHP-ROOT-B @ _RTHP-ROOT.PARTS ! ;
 
 \ The controls the extension adds after the applications' controls, which
 \ it counts once they are lowered, before the instruments, statics and runs
@@ -12195,6 +12226,7 @@ VARIABLE _RTHP-ROOT-ONLY
 : _RTHP-ROOT-BEGIN  ( producer -- )
     0 _RTHP-ROOT-OLD ! 0 _RTHP-ROOT-NEW !
     FSHD? 0= IF DROP EXIT THEN
+    DUP _RTHP-ROOT-P !
     DUP _RTHP.TARGET-ACTIVE @ SWAP _RTHP.TARGET-PENDING @
     2DUP 0= SWAP 0= OR IF 2DROP EXIT THEN
     _RTHP-TB.SOURCE-GEN @ SWAP _RTHP-TB.SOURCE-GEN @     ( new-gen old-gen )
@@ -14177,8 +14209,123 @@ VARIABLE _RTHP-DS-NEW
         THEN
     LOOP ;
 
-: _RTHP-DELTA-CANDIDATE?  ( producer -- flag )
-    DUP _RTHP-ROOT-BEGIN
+\ ---------------------------------------------------------------------
+\  The comparison that follows the facts
+\ ---------------------------------------------------------------------
+\
+\  When the bank on screen kept the facts its own comparison proved, each
+\  control of both banks has its own correlation in its place, and each
+\  pending correlation carries the identity of the one in its place on
+\  screen, then sorting both banks' identities and joining them would pair
+\  each control with the control in its place: the kept facts proved the
+\  identities on screen unique, and the pending bank's are the same ones.
+\  The comparison takes that pairing directly, and the pending bank keeps
+\  the sorted index of the bank on screen, which is its own.  When the root
+\  facts of both banks' snapshots name the same roots in the same order,
+\  and the two candidates carried the same optional parts, the controls of
+\  a root whose facts did not move are those on screen, so only the
+\  controls of roots that moved, and any no root projects, are checked
+\  against their partners.  Only a candidate built for Desk's shell, whose
+\  comparison holds no runs, takes this path, and safe mode, which reuses
+\  nothing an earlier frame built, never does.  With the shadow check on,
+\  the full comparison runs first on the same packed bank, and the two must
+\  give the same bank, plan and kept facts (_RTHP-D-SHADOW?).
+
+VARIABLE _RTHP-D-FULL            \ true: the full comparison alone
+VARIABLE _RTHP-D-JUDGE           \ true: the root facts' judge runs
+VARIABLE _RTHP-D-PLACED          \ the controls were paired by place
+VARIABLE _RTHP-D-FACTS           \ unmoved roots' controls are not checked
+VARIABLE _RTHP-D-ROOTS-OLD       \ the root facts block of the bank on screen
+VARIABLE _RTHP-D-ROOTS-NEW       \ the pending bank's
+VARIABLE _RTHP-D-ROOT-LAST       \ the last control's root record, or 0
+VARIABLE _RTHP-D-ROOT-MOVED      \ whether that root's facts moved
+VARIABLE _RTHP-D-ROOT-HINT
+0 _RTHP-D-FULL ! 0 _RTHP-D-JUDGE !
+\ Diagnostics: comparisons that paired the controls by place, those that
+\ followed the facts too, and the controls those checked against partners.
+VARIABLE _RTHP-DIAG-PLACED
+VARIABLE _RTHP-DIAG-FOLLOWED
+VARIABLE _RTHP-DIAG-CHECKED
+
+: _RTHP-D-FOLLOW?  ( -- flag )
+    _RTHP-D-FULL @ IF 0 EXIT THEN
+    CHK-SAFE? IF 0 EXIT THEN
+    _RTHP-D-P @ _RTHP.SHELL-BUILT @ 0= IF 0 EXIT THEN
+    _RTHP-D-KEPT @ ;
+
+\ Pair each pending control with the one in its place, or false.
+: _RTHP-D-PLACE-MAP?  ( -- flag )
+    _RTHP-D-INDEX-WORK? 0= IF 0 EXIT THEN
+    _RTHP-D-INDEX-N @ _RTHP-D-INDEX-A-N @ <> IF 0 EXIT THEN
+    _RTHP-D-KEPT-CONTROL-INDEX? 0= IF 0 EXIT THEN
+    _RTHP-D-INDEX-N @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+            _RTHP-D-PENDING-FIRST @ I + <> IF 0 UNLOOP EXIT THEN
+        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT DUP RUCP-CORRELATION-CONTROL-ID@
+            _RTHP-D-PENDING-FIRST @ I + <> IF DROP 0 UNLOOP EXIT THEN
+        I _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT DUP RUCP-CORRELATION-CONTROL-ID@
+            I _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ <> IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+        _RTHP-D-CORRELATION-COMPARE IF 0 UNLOOP EXIT THEN
+        I 1+ I _RTHP-D-CONTROL-MAP-AT !
+    LOOP
+    _RTHP-D-INDEX-A @ _RTHP-D-INDEX-B ! -1 ;
+
+\ The root facts blocks of both banks' snapshots, when they name the same
+\ roots in the same order and the candidates carried the same parts.
+: _RTHP-D-ROOTS?  ( -- flag )
+    0 _RTHP-D-ROOTS-OLD ! 0 _RTHP-D-ROOTS-NEW !
+    0 _RTHP-D-ROOT-LAST ! 0 _RTHP-D-ROOT-HINT !
+    _RTHP-D-P @ _RTHP-ROOT-P !
+    _RTHP-D-ACTIVE @ _RTHP-TB.SOURCE-GEN @
+    _RTHP-D-PENDING @ _RTHP-TB.SOURCE-GEN @
+    2DUP = IF 2DROP 0 EXIT THEN
+    _RTHP-ROOT-FIND-BLOCK SWAP _RTHP-ROOT-FIND-BLOCK          ( new old )
+    2DUP 0= SWAP 0= OR IF 2DROP 0 EXIT THEN
+    _RTHP-D-ROOTS-OLD ! _RTHP-D-ROOTS-NEW !
+    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.N @
+        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ <> IF 0 EXIT THEN
+    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @
+        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ <> IF 0 EXIT THEN
+    _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ 0 ?DO
+        I _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-RECORD-AT URF-IDENTITY-SIZE
+        I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT URF-IDENTITY-SIZE
+        COMPARE IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ Whether pending control INDEX may differ from its partner: no root
+\ projects it, its root is not among the pending bank's, or that root's
+\ facts moved.  A root's controls lie together, so the last root found is
+\ tried first.
+: _RTHP-D-CONTROL-MOVED?  ( index -- flag )
+    _RTHP-ROOT-CONTROL-ROOT? 0= IF -1 EXIT THEN
+    _RTHP-D-ROOT-LAST @ ?DUP IF
+        _RTHP-ROOT-IS? IF _RTHP-D-ROOT-MOVED @ EXIT THEN
+    THEN
+    _RTHP-D-ROOT-HINT @ _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-FIND
+    DUP _RTHP-D-ROOT-LAST ! DUP 0= IF DROP -1 EXIT THEN
+    DUP _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.A @ - URF-SIZE /
+    DUP 1+ _RTHP-D-ROOT-HINT !
+    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0=
+    DUP _RTHP-D-ROOT-MOVED ! ;
+
+\ With every-frame checks on, a control not checked against its partner,
+\ which lies in its place, still has its texts, and its partner's, checked
+\ within their banks.
+: _RTHP-D-UNMOVED-SPANS?  ( index -- flag )
+    CHK-EVERY-FRAME? 0= IF DROP -1 EXIT THEN
+    DUP _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTHP-D-SPAN-C !
+    _RTHP-D-ACTIVE @ _RTHP-D-SPAN-BANK ! _RTHP-D-CONTROL-TEXTS-WITHIN?
+    SWAP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTHP-D-SPAN-C !
+    _RTHP-D-PENDING @ _RTHP-D-SPAN-BANK ! _RTHP-D-CONTROL-TEXTS-WITHIN? AND
+    _RTHP-BANKS-DAMAGED CHK-NAME ;
+
+: _RTHP-D-COMPARE?  ( producer -- flag )
+    _RTHP-D-JUDGE @ IF DUP _RTHP-ROOT-BEGIN ELSE
+        0 _RTHP-ROOT-OLD ! 0 _RTHP-ROOT-NEW !
+    THEN
+    0 _RTHP-D-PLACED ! 0 _RTHP-D-FACTS !
     0 _RTHP-D-WHY !
     DUP _RTHP-DELTA-PLAN-CLEAR
     DUP _RTHP.TARGET-ACTIVE @ 0=
@@ -14191,16 +14338,27 @@ VARIABLE _RTHP-DS-NEW
     22 _RTHP-D-WHY !
     _RTHP-D-TARGETS-NORMALIZABLE? 0= IF 0 EXIT THEN
     23 _RTHP-D-WHY !
-    _RTHP-D-BUILD-CONTROL-MAP? 0= IF 0 EXIT THEN
+    _RTHP-D-FOLLOW? IF _RTHP-D-PLACE-MAP? ELSE 0 THEN
+    DUP _RTHP-D-PLACED ! IF
+        _RTHP-D-ROOTS? _RTHP-D-FACTS !
+        1 _RTHP-DIAG-PLACED +!
+    ELSE
+        _RTHP-D-BUILD-CONTROL-MAP? 0= IF 0 EXIT THEN
+    THEN
     0 _RTHP-D-OPS !
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         24 _RTHP-D-WHY !
-        I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
-        _RTHP-D-CHANGED @ IF I _RTHP-ROOT-JUDGE-CONTROL THEN
-        _RTHP-D-CHANGED @ _RTHP-D-MATCHED @ AND IF
-            25 _RTHP-D-WHY !
-            _RTHP-D-CONTROL-MARK-CHANGED?
-                0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-FACTS @ IF I _RTHP-D-CONTROL-MOVED? ELSE -1 THEN IF
+            _RTHP-D-FACTS @ IF 1 _RTHP-DIAG-CHECKED +! THEN
+            I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
+            _RTHP-D-CHANGED @ IF I _RTHP-ROOT-JUDGE-CONTROL THEN
+            _RTHP-D-CHANGED @ _RTHP-D-MATCHED @ AND IF
+                25 _RTHP-D-WHY !
+                _RTHP-D-CONTROL-MARK-CHANGED?
+                    0= IF 0 UNLOOP EXIT THEN
+            THEN
+        ELSE
+            I _RTHP-D-UNMOVED-SPANS? 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP
     \ Desk's shell compares the statics as it sends them, so a comparison
@@ -14249,7 +14407,124 @@ VARIABLE _RTHP-DS-NEW
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
     _RTHP-D-KEEP-FACTS
+    _RTHP-D-FACTS @ IF 1 _RTHP-DIAG-FOLLOWED +! THEN
     _RTHP-D-PLAN-SEAL -1 ;
+
+\ The shadow check of the comparison that follows the facts.  A copy of the
+\ packed pending bank is taken, the full comparison runs on the bank with
+\ the root facts' judge, and its result is kept: whether it made a DELTA,
+\ the plan's counts, the bank, the plan and the kept facts with their
+\ index.  The copy is then put back, with the fields the comparison sets,
+\ and the comparison runs again as it does with the check off.  When that
+\ run paired the controls by place, its result must be the full one: the
+\ flag and counts, the bank, the plan, the kept facts and their index, as
+\ items 0 to 4 of the comparison stage; otherwise it was the full
+\ comparison again.  The second run's result is the one the frame keeps.
+VARIABLE _RTHP-D-SH-P
+VARIABLE _RTHP-D-SH-BANK
+VARIABLE _RTHP-D-SH-BYTES
+VARIABLE _RTHP-D-SH-N
+VARIABLE _RTHP-D-SH-A
+VARIABLE _RTHP-D-SH-U
+VARIABLE _RTHP-D-SH-REGION
+VARIABLE _RTHP-D-SH-FIRST
+VARIABLE _RTHP-D-SH-SERIES
+
+\ The bytes of BANK that hold its header, targets and packed records.
+: _RTHP-D-SH-BANK-BYTES  ( bank -- u )
+    DUP _RTHP-PACK-A OVER - SWAP _RTHP-TB.PACKED-BYTES @ + ;
+\ The block: the packed copy, then the full result's bank and head of
+\ three cells, the second run's head, and the full result's plan, kept
+\ facts record and their index.
+: _RTHP-D-SH-COPY      ( -- a )  _RTHP-D-SH-A @ ;
+: _RTHP-D-SH-BANK2     ( -- a )  _RTHP-D-SH-A @ _RTHP-D-SH-BYTES @ + ;
+: _RTHP-D-SH-HEAD2     ( -- a )  _RTHP-D-SH-BANK2 _RTHP-D-SH-BYTES @ + ;
+: _RTHP-D-SH-HEAD      ( -- a )  _RTHP-D-SH-HEAD2 24 + ;
+: _RTHP-D-SH-PLAN2     ( -- a )  _RTHP-D-SH-HEAD 24 + ;
+: _RTHP-D-SH-FACTS2    ( -- a )  _RTHP-D-SH-PLAN2 _RTHP-D-SH-N @ 8 * + ;
+: _RTHP-D-SH-INDEX2    ( -- a )  _RTHP-D-SH-FACTS2 _RTHP-KF-SIZE + ;
+: _RTHP-D-SH-NEED      ( -- u )
+    _RTHP-D-SH-BYTES @ 2* 48 + _RTHP-D-SH-N @ 16 * + _RTHP-KF-SIZE + ;
+
+\ FLAG and the plan's counts, as three cells at A.
+: _RTHP-D-SH-HEAD!  ( flag a -- )
+    TUCK !
+    _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-CONTROLS @ OVER 8 + !
+    _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-GLYPHS @ SWAP 16 + ! ;
+
+\ The plan's control cells, valid while a plan is sealed.
+: _RTHP-D-SH-PLAN  ( -- a u )
+    _RTHP-D-SH-P @ _RTHP.ORDER2-A @
+    _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-CONTROLS @ _RTHP-D-SH-N @ MIN 8 * ;
+
+: _RTHP-D-SH-INDEX  ( -- a )
+    _RTHP-D-SH-BANK @ _RTHP-D-SH-P @ _RTHP-FACTS-INDEX ;
+
+: _RTHP-D-SH-KEEP  ( flag -- )
+    DUP _RTHP-D-SH-HEAD2 _RTHP-D-SH-HEAD!
+    0= IF EXIT THEN
+    _RTHP-D-SH-BANK @ _RTHP-D-SH-BANK2 _RTHP-D-SH-BYTES @ MOVE
+    _RTHP-D-SH-PLAN _RTHP-D-SH-PLAN2 SWAP MOVE
+    _RTHP-D-SH-P @ _RTHP.PENDING-FACTS _RTHP-D-SH-FACTS2 _RTHP-KF-SIZE MOVE
+    _RTHP-D-SH-INDEX _RTHP-D-SH-INDEX2 _RTHP-D-SH-N @ 8 * MOVE ;
+
+: _RTHP-D-SH-RESTORE  ( -- )
+    _RTHP-D-SH-COPY _RTHP-D-SH-BANK @ _RTHP-D-SH-BYTES @ MOVE
+    _RTHP-D-SH-BANK @ _RTHP-D-SH-P @ _RTHP.TARGET-PENDING !
+    0 _RTHP-D-SH-P @ _RTHP.PENDING-FACTS _RTHP-KF.BANK !
+    _RTHP-D-SH-P @ _RTHP-DELTA-PLAN-CLEAR
+    _RTHP-D-SH-REGION @ _RTHP-D-SH-P @ _RTHP.REGION !
+    _RTHP-D-SH-FIRST @ _RTHP-D-SH-P @ _RTHP.FIRST-OBJECT !
+    _RTHP-D-SH-SERIES @ _RTHP-D-SH-P @ _RTHP.FIRST-SERIES ! ;
+
+: _RTHP-D-SH-COMPARE  ( flag -- )
+    _RTHP-D-SH-P @ _RTHP.SOURCE-DRAW @ FSHD-DRAW !
+    DUP _RTHP-D-SH-HEAD _RTHP-D-SH-HEAD!
+    _RTHP-D-SH-HEAD2 24 _RTHP-D-SH-HEAD 24 0 FSHD-STAGE-COMPARISON FSHD-SAME?
+        0= IF DROP EXIT THEN
+    0= IF EXIT THEN
+    _RTHP-D-SH-BANK2 _RTHP-D-SH-BYTES @ _RTHP-D-SH-BANK @ _RTHP-D-SH-BYTES @
+        1 FSHD-STAGE-COMPARISON FSHD-SAME? DROP
+    _RTHP-D-SH-PLAN2 _RTHP-D-SH-PLAN NIP _RTHP-D-SH-PLAN
+        2 FSHD-STAGE-COMPARISON FSHD-SAME? DROP
+    _RTHP-D-SH-FACTS2 _RTHP-KF-SIZE
+    _RTHP-D-SH-P @ _RTHP.PENDING-FACTS _RTHP-KF-SIZE
+        3 FSHD-STAGE-COMPARISON FSHD-SAME? DROP
+    _RTHP-D-SH-INDEX2 _RTHP-D-SH-N @ 8 * _RTHP-D-SH-INDEX _RTHP-D-SH-N @ 8 *
+        4 FSHD-STAGE-COMPARISON FSHD-SAME? DROP ;
+
+: _RTHP-D-SHADOW?  ( producer -- flag )
+    DUP _RTHP-D-SH-P !
+    _RTHP.TARGET-PENDING @ DUP _RTHP-D-SH-BANK ! 0= IF
+        -1 _RTHP-D-FULL ! -1 _RTHP-D-JUDGE !
+        _RTHP-D-SH-P @ _RTHP-D-COMPARE?
+        0 _RTHP-D-FULL ! 0 _RTHP-D-JUDGE ! EXIT
+    THEN
+    _RTHP-D-SH-BANK @ _RTHP-D-SH-BANK-BYTES _RTHP-D-SH-BYTES !
+    _RTHP-D-SH-BANK @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-SH-N !
+    _RTHP-D-SH-NEED _RTHP-D-SH-A _RTHP-D-SH-U FSHD-GROW 0= IF
+        FSHD-SKIP
+        -1 _RTHP-D-FULL ! -1 _RTHP-D-JUDGE !
+        _RTHP-D-SH-P @ _RTHP-D-COMPARE?
+        0 _RTHP-D-FULL ! 0 _RTHP-D-JUDGE ! EXIT
+    THEN
+    _RTHP-D-SH-BANK @ _RTHP-D-SH-COPY _RTHP-D-SH-BYTES @ MOVE
+    _RTHP-D-SH-P @ _RTHP.REGION @ _RTHP-D-SH-REGION !
+    _RTHP-D-SH-P @ _RTHP.FIRST-OBJECT @ _RTHP-D-SH-FIRST !
+    _RTHP-D-SH-P @ _RTHP.FIRST-SERIES @ _RTHP-D-SH-SERIES !
+    -1 _RTHP-D-FULL ! -1 _RTHP-D-JUDGE !
+    _RTHP-D-SH-P @ _RTHP-D-COMPARE? _RTHP-D-SH-KEEP
+    0 _RTHP-D-FULL ! 0 _RTHP-D-JUDGE !
+    _RTHP-D-SH-RESTORE
+    _RTHP-D-SH-P @ _RTHP-D-COMPARE?
+    _RTHP-D-PLACED @ IF DUP _RTHP-D-SH-COMPARE THEN ;
+
+\ ( producer -- flag ) Whether the pending bank goes out as a DELTA of the
+\ bank on screen; when it does, the bank carries the identities on screen
+\ and the plan is sealed.
+: _RTHP-DELTA-CANDIDATE?  ( producer -- flag )
+    FSHD? IF _RTHP-D-SHADOW? EXIT THEN
+    0 _RTHP-D-FULL ! 0 _RTHP-D-JUDGE ! _RTHP-D-COMPARE? ;
 
 \ ---------------------------------------------------------------------
 \  Exact unchanged-content shortcut

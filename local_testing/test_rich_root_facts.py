@@ -16,6 +16,7 @@ production words.
 
 from __future__ import annotations
 
+import re
 import struct
 
 import pytest
@@ -155,10 +156,14 @@ class JudgeHarness(GrowthHarness):
             cells += [0] * (self.urf // 8 - len(cells))
             self.runtime.memory.write_bytes(memory + position * self.urf,
                                             struct.pack(f"<{len(cells)}Q", *cells))
-        self.variable(f"_RTHP-ROOT-A{number}", memory)
-        self.variable(f"_RTHP-ROOT-N{number}", len(records))
-        self.variable(f"_RTHP-ROOT-GEN{number}", generation)
-        self.variable(f"_RTHP-ROOT-PARTS{number}", parts)
+        # The producer's root facts block NUMBER (_RTHP.ROOT-BLOCK): address,
+        # bytes, count of records, generation, parts.
+        stride, base = map(int, re.search(r"SWAP 1- (\d+) \* \+ (\d+) \+",
+                                          self.definitions["_RTHP.ROOT-BLOCK"]).groups())
+        self.runtime.memory.write_bytes(
+            self.producer + base + (number - 1) * stride,
+            struct.pack("<5Q", memory, max(1, len(records)) * self.urf, len(records),
+                        generation, parts))
 
     def begin(self, active, pending):
         self.field(self.producer, "_RTHP.TARGET-ACTIVE", active)

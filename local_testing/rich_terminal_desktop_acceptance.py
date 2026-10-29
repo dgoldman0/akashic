@@ -431,6 +431,11 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTAPTSCBOP-CONTEXT",
     "_RTAPTSCBI-ENGINE",
     "_RTHP-DIAG-DELTA-REFUSALS",
+    # Comparisons that paired the controls by place, those that followed
+    # the root facts too, and the controls those checked against partners.
+    "_RTHP-DIAG-PLACED",
+    "_RTHP-DIAG-FOLLOWED",
+    "_RTHP-DIAG-CHECKED",
     "_RTHP-DIAG-ARENA-GROWTHS",
     "_RTHP-DIAG-ARENA-KEPT",
     "_RTHP-DIAG-ALONE-REBUILDS",
@@ -546,7 +551,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        644,
+        654,
         {
             "magic": 0,
             "size": 1,
@@ -11969,6 +11974,7 @@ _SHADOW_CHECK_VARIABLES = {
     "checks_shell_glyphs": "FSHD-CHECKS-SHELL-GLYPHS",
     "checks_root_facts": "FSHD-CHECKS-ROOT-FACTS",
     "checks_shell_delta": "FSHD-CHECKS-SHELL-DELTA",
+    "checks_comparison": "FSHD-CHECKS-COMPARISON",
     # The judge of the root facts (hybrid-screen-producer.f): comparisons
     # judged, the roots their pending banks held, how many of those changed
     # or went, and the items judged.
@@ -11984,6 +11990,7 @@ SHADOW_CHECK_STAGES = {
     4: "the shell's runs of a region",
     5: "the root facts",
     6: "the shell's DELTA of the applications' items",
+    7: "the screen producer's comparison",
 }
 
 

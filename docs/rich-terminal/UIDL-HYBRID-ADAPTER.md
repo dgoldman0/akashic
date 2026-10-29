@@ -136,10 +136,11 @@ document, menus, collections, data graphics, status fields, fields and the
 dialog. Each names its document's token and is filled in that document's own
 context, as the snapshot was. A bank too small answers CAPACITY with how many
 records it would take and holds none; another draw, or one that published no
-snapshot, answers STALE. With the shadow check on, the screen producer keeps
-the facts beside each bank it builds and judges them in its DELTA comparison:
-an item the comparison finds new or changed must belong to a root whose facts
-moved (FRAMES-FOLLOW-CHANGE, part 9a.1).
+snapshot, answers STALE. The screen producer keeps the facts beside each bank
+it builds, and its DELTA comparison checks against its partner only a control
+whose root's facts moved (FRAMES-FOLLOW-CHANGE, part 9a.3b). With the shadow
+check on it also judges them: an item the comparison finds new or changed
+must belong to a root whose facts moved (part 9a.1).
 
 ## Capture into scratch
 

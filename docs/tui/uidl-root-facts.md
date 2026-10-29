@@ -93,9 +93,10 @@ Pictures are not snapshot roots; they are described afresh for each draw
 ## Users
 
 `RUHA-ROOT-FACTS@` in `tui/rich-terminal/uidl-hybrid-adapter.f` records the
-facts of every root of a published snapshot. With the shadow check on, the
-screen producer keeps them beside each bank it builds and judges them in its
-DELTA comparison (FRAMES-FOLLOW-CHANGE, part 9a.1).
+facts of every root of a published snapshot. The screen producer keeps them
+beside each bank it builds, and its DELTA comparison checks against its
+partner only a control whose root's facts moved (FRAMES-FOLLOW-CHANGE, part
+9a.3b). With the shadow check on it also judges them (part 9a.1).
 
 ## Tests
 

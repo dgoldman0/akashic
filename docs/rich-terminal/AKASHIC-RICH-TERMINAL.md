@@ -976,6 +976,20 @@ and its control IDs below the new namespace. This rests on two facts the
 producer maintains: normalization after the audit writes only object IDs and
 canonical tombstones, and no producer word writes a bank while it is active.
 
+A comparison of a candidate built for Desk's shell whose bank on screen kept
+those facts, and whose controls each carry, with their own correlation in
+their place, the identity of the control in the same place on screen, pairs
+each control with that control. Sorting and joining the two banks would give
+the same pairing, since the kept index proved the identities on screen
+unique, and the pending bank keeps that index as its own. The producer also
+keeps the root facts of each bank's snapshot (`RUHA-ROOT-FACTS@`). When those
+of both banks name the same roots in the same order, and the two candidates
+carried the same optional parts, the comparison checks against its partner
+only a control whose root's facts moved: the controls of the others are
+those on screen. Safe mode always takes the full comparison. With the shadow
+check on, both run on copies of one packed bank and must give the same bank,
+plan and kept facts.
+
 The former LABEL plan, per-binding materializer, and per-cell producer layouts
 were development prototypes and are not part of this contract. Their copied
 offset inventories have been removed rather than retained as a second,

@@ -3896,7 +3896,12 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "XBLOCK1-U", "SHELL-CONTROLS", "XSCRATCH-A", "XSCRATCH-U"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 5152
+    # Two root facts blocks of five cells each close the record.
+    assert expected == 5152
+    assert " ".join(_word(source, "_RTHP.ROOT-BLOCK").split()).endswith(
+        "SWAP 1- 40 * + 5152 + ;")
+    expected += 2 * 40
+    assert _constant(source, "RTHP-SIZE") == expected == 5232
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -4814,7 +4819,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     target_publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     pack_copy = _word(source, "_RTHP-PK-COPY?")
     delta_bind = _word(source, "_RTHP-D-BIND?")
-    delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
+    delta_candidate = _word(source, "_RTHP-D-COMPARE?")
     unchanged = _word(source, "_RTHP-U-ACTIVE?")
     prepare_start = _word(source, "_RTHP-PREPARE-START").replace(
         "_RTHP-EMIT-BASE-START", _word(source, "_RTHP-EMIT-BASE-START")
@@ -5514,7 +5519,7 @@ def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     step = _word(source, "RTHP-STEP")
     prepare = _word(source, "RTHP-PREPARE")
     reveal = _word(source, "_RTHP-PREPARE-REVEAL")
-    delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
+    delta_candidate = _word(source, "_RTHP-D-COMPARE?")
     emit_delta = _word(source, "_RTHP-EMIT-DELTA")
     build_slot_map = _word(source, "_RTHP-D-BUILD-SLOT-MAP?")
     glyph_bounds = _word(source, "_RTHP-D-GLYPH-BOUNDS?")
@@ -5672,7 +5677,7 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
     source = _source()
     code = re.sub(r"\\[^\n]*", "", source)
     code = re.sub(r"\( [^)]*\)", "", code)
-    candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
+    candidate = _word(source, "_RTHP-D-COMPARE?")
     abort = _word(source, "_RTHP-TARGET-ABORT")
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     facts_publish = _word(source, "_RTHP-FACTS-PUBLISH")
@@ -5689,7 +5694,9 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
     # active role only by that exact bank's publication.
     assert source.count("_RTHP-D-KEEP-FACTS") == 2
     candidate_code = " ".join(candidate.split())
-    assert candidate_code.endswith("_RTHP-D-KEEP-FACTS _RTHP-D-PLAN-SEAL -1 ;")
+    assert candidate_code.endswith(
+        "_RTHP-D-KEEP-FACTS _RTHP-D-FACTS @ IF 1 _RTHP-DIAG-FOLLOWED +! THEN"
+        " _RTHP-D-PLAN-SEAL -1 ;")
     assert candidate.rindex("_RTHP-D-RESTORE-FRESH-CANDIDATE") < candidate.index(
         "_RTHP-D-KEEP-FACTS"
     )
@@ -5707,8 +5714,11 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
         "_RTHP-D-PENDING @ SWAP _RTHP-KF.BANK !"
     )
     writers = {
+        # The comparison's shadow stage keeps the full comparison's facts,
+        # compares them with its own and clears them before its own runs.
         "_RTHP.PENDING-FACTS": {"_RTHP-TARGET-ABORT", "_RTHP-FACTS-PUBLISH",
-                                "_RTHP-D-KEEP-FACTS"},
+                                "_RTHP-D-KEEP-FACTS", "_RTHP-D-SH-KEEP",
+                                "_RTHP-D-SH-RESTORE", "_RTHP-D-SH-COMPARE"},
         # The acknowledged empty frame retires the active bank and its facts.
         "_RTHP.ACTIVE-FACTS": {"_RTHP-FACTS-PUBLISH", "_RTHP-D-KEPT?",
                                "_RTHP-D-GLYPH-BOUNDS?", "_RTHP-D-KEPT-SLOT-MAP?",
@@ -5801,7 +5811,7 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     pair = _word(source, "_RTHP-D-GLYPH-PAIR?")
     ref_valid = _word(source, "_RTHP-D-REF-VALID?")
     glyph_text_equal = _word(source, "_RTHP-D-GLYPH-TEXT-EQUAL?")
-    candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
+    candidate = _word(source, "_RTHP-D-COMPARE?")
     restore = _word(source, "_RTHP-D-RESTORE-FRESH-CANDIDATE")
     match = _word(source, "_RTHP-D-MATCH-ANCHORS?")
     normalize_ids = _word(source, "_RTHP-D-NORMALIZE-GLYPH-IDS?")
