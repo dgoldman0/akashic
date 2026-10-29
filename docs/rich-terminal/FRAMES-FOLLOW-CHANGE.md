@@ -1210,6 +1210,24 @@ frame before the change driver.
         DELTA. The freeze copies only the shell's own spans, and the
         part's checks accept application spans in the bank that names the
         part.
+        **Done** on 2026-10-29 (fe547a74, 0bf837c1, 024a97e6). A
+        document's menu text lies in the bank in its snapshot's record
+        order, while the control planner places the menu controls parents
+        first, so a family batch now takes its text in any order inside its
+        span, and with every-frame checks on it proves that no two texts
+        share a byte. Once the batch's spans alternated between the scratch
+        block and the bank, proving them apart turned quadratic, so the
+        shell's preflight leaves that proof, and the kept range's shape, to
+        every-frame checks. A typed letter's burst frame builds in 7.66
+        million steps against 7.80 and sends the same 18 DELTAs and bytes.
+        The canonical journey passed with the shadow check, 4,111
+        comparisons without a difference, sending the same presents, and in
+        safe mode with no damage named. In that journey the shell's part
+        needs 106,104 bytes against 201,400 and each extension block holds
+        152,896 bytes against 236,536; the scratch block grew to 291,888
+        bytes, of which a build used at most 167,280, against 389,208 and
+        230,464 in 9b.3.2's journey; the memory source holds 264,600 bytes
+        less.
       - **9b.3.3d. One comparison.** A DELTA replaces the application items
         the producer's comparison found changed, and compares only the
         shell's own items.
