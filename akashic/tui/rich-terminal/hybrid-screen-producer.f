@@ -14253,22 +14253,43 @@ VARIABLE _RTHP-DIAG-CHECKED
     _RTHP-D-P @ _RTHP.SHELL-BUILT @ 0= IF 0 EXIT THEN
     _RTHP-D-KEPT @ ;
 
-\ Pair each pending control with the one in its place, or false.
+\ Pair each pending control with the one in its place, or false.  The
+\ pending controls are numbered by place.  Correlations keep their source
+\ order, which a menu's graph order need not follow, so each pending
+\ correlation must carry the identity of the correlation in its place on
+\ screen, and name the control in the place that one's control holds, which
+\ the kept index gives: (correlation ordinal << 32) | graph ordinal for each
+\ correlation.  The index proved those places one permutation when it was
+\ kept, so every pending control is paired once.
+VARIABLE _RTHP-D-PLACE-ORD
 : _RTHP-D-PLACE-MAP?  ( -- flag )
     _RTHP-D-INDEX-WORK? 0= IF 0 EXIT THEN
     _RTHP-D-INDEX-N @ _RTHP-D-INDEX-A-N @ <> IF 0 EXIT THEN
+    _RTHP-D-INDEX-B @ _RTHP-D-PLACE-ORD !
     _RTHP-D-KEPT-CONTROL-INDEX? 0= IF 0 EXIT THEN
     _RTHP-D-INDEX-N @ 0 ?DO
         I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
             _RTHP-D-PENDING-FIRST @ I + <> IF 0 UNLOOP EXIT THEN
-        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT DUP RUCP-CORRELATION-CONTROL-ID@
-            _RTHP-D-PENDING-FIRST @ I + <> IF DROP 0 UNLOOP EXIT THEN
-        I _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT DUP RUCP-CORRELATION-CONTROL-ID@
-            I _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ <> IF
-            2DROP 0 UNLOOP EXIT
-        THEN
-        _RTHP-D-CORRELATION-COMPARE IF 0 UNLOOP EXIT THEN
-        I 1+ I _RTHP-D-CONTROL-MAP-AT !
+    LOOP
+    \ The place on screen of each correlation's control.
+    _RTHP-D-INDEX-N @ 0 ?DO
+        I _RTHP-D-INDEX-A @ _RTHP-D-INDEX-AT @
+        DUP 32 RSHIFT DUP _RTHP-D-INDEX-N @ U< 0= IF 2DROP 0 UNLOOP EXIT THEN
+        SWAP 0xFFFFFFFF AND DUP _RTHP-D-INDEX-N @ U< 0= IF 2DROP 0 UNLOOP EXIT THEN
+        SWAP _RTHP-D-PLACE-ORD @ _RTHP-D-INDEX-AT !
+    LOOP
+    _RTHP-D-INDEX-N @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT
+            DUP RUCP-CORRELATION-CONTROL-ID@ _RTHP-D-PENDING-FIRST @ -
+            I _RTHP-D-PLACE-ORD @ _RTHP-D-INDEX-AT @
+            OVER <> IF 2DROP 0 UNLOOP EXIT THEN          ( pc place )
+        I _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT
+            DUP RUCP-CORRELATION-CONTROL-ID@
+            2 PICK _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ <> IF
+            DROP 2DROP 0 UNLOOP EXIT
+        THEN                                             ( pc place ac )
+        ROT SWAP _RTHP-D-CORRELATION-COMPARE IF DROP 0 UNLOOP EXIT THEN
+        DUP 1+ SWAP _RTHP-D-CONTROL-MAP-AT !
     LOOP
     _RTHP-D-INDEX-A @ _RTHP-D-INDEX-B ! -1 ;
 

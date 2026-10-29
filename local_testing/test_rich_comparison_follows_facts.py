@@ -22,7 +22,7 @@ import struct
 
 import pytest
 
-from test_rich_glyph_growth import MASK64
+from test_rich_glyph_growth import GrowthHarness, MASK64
 from test_rich_instrument_reuse import DeltaHarness
 
 # The heap the shadow check takes its blocks from: a bump allocator over a
@@ -179,3 +179,102 @@ def test_the_shadow_check_catches_a_change_the_facts_missed(follow):
     assert h.variable("FSHD-FIRST-STAGE") == h.constant("FSHD-STAGE-ROOT-FACTS")
     assert h.variable("FSHD-CHECKS-COMPARISON") == 1
     assert h.read("DELTA-PLAN-CONTROLS") == 0
+
+
+# ---------------------------------------------------------------------------
+# Pairing by place
+
+PENDING_FIRST = 200
+X = [(1, 1, index, 0, 0, 0) for index in (10, 11, 12)]
+
+
+class PlaceHarness(GrowthHarness):
+    """Two packed banks of three menu controls each, whose correlations keep
+    their source order while the controls lie in graph order, and the index
+    the bank on screen's comparison kept."""
+
+    def __init__(self, backend):
+        super().__init__(backend, extra_words=("_RTHP-D-PLACE-MAP?",))
+        self.control = self.constant("RTE-CONTROL-SIZE")
+        self.correlation = self.constant("RUCP-CORRELATION-SIZE")
+        self.header = self.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
+        self.producer = self.allocate(bytes(self.constant("RTHP-SIZE")))
+        self.variable("_RTHP-D-P", self.producer)
+        arena = self.allocate(bytes(3 * 3 * 8 + 3 * 8))
+        self.field(self.producer, "_RTHP.ARENA-A", arena)
+        self.field(self.producer, "_RTHP.ARENA-U", 3 * 3 * 8 + 3 * 8)
+        self.field(self.producer, "_RTHP.ORDER2-A", arena)
+        self.field(self.producer, "_RTHP.ORDER2-U", 3 * 3 * 8)
+        self.annex = arena + 3 * 3 * 8
+        self.field(self.producer, "_RTHP.FACTS-INDEX0-A", self.annex)
+        self.field(self.producer, "_RTHP.FACTS-INDEX-U", 3 * 8)
+
+    def bank(self, ids, correlations):
+        """A bank whose controls carry IDS in graph order and whose
+        correlations, in source order, are (identity, control id)."""
+        count = len(ids)
+        bank = self.allocate(bytes(self.header + count * (self.control + self.correlation)))
+        self.field(bank, "_RTHP-TB.CONTROL-COUNT", count)
+        controls = bank + self.header
+        for place, identity in enumerate(ids):
+            self.field(controls + place * self.control, "_RTE-CONTROL.ID", identity)
+        base = controls + count * self.control
+        for ordinal, ((attachment, source, index, subkey, lifecycle, scope), control) in (
+                enumerate(correlations)):
+            self.runtime.memory.write_bytes(
+                base + ordinal * self.correlation,
+                struct.pack("<7Q", attachment, source, index, subkey, control, lifecycle,
+                            scope))
+        return bank
+
+    def pair(self, *, pending_ids=None, pending_places=(0, 2, 1), identities=X,
+             active_ids=(100, 102, 101), kept_places=(0, 2, 1), active_places=None):
+        """Correlation j names identity X[j] and, on screen, the control in
+        place ACTIVE_PLACES[j], which the kept index gives as KEPT_PLACES[j];
+        in the pending bank, the control in place PENDING_PLACES[j]."""
+        pending_ids = pending_ids or [PENDING_FIRST + place for place in range(3)]
+        active_places = active_places or kept_places
+        active = self.bank(active_ids, [(X[j], active_ids[active_places[j]])
+                                        for j in range(3)])
+        pending = self.bank(pending_ids, [(identities[j], PENDING_FIRST + pending_places[j])
+                                          for j in range(3)])
+        self.runtime.memory.write_bytes(self.annex, struct.pack(
+            "<3Q", *[(j << 32) | kept_places[j] for j in range(3)]))
+        self.field(self.producer, "_RTHP.TARGET0-A", active)
+        self.field(self.producer + self.offset("_RTHP.ACTIVE-FACTS"), "_RTHP-KF.LAST-ID",
+                   max(active_ids))
+        self.variable("_RTHP-D-ACTIVE", active)
+        self.variable("_RTHP-D-PENDING", pending)
+        self.variable("_RTHP-D-PENDING-FIRST", PENDING_FIRST)
+
+    def map(self):
+        order2 = self.runtime.memory.read64(self.producer + self.offset("_RTHP.ORDER2-A"))
+        return [self.runtime.memory.read64(order2 + 8 * place) for place in range(3)]
+
+
+@pytest.fixture(params=("python", "native"))
+def place(request):
+    return PlaceHarness(request.param)
+
+
+def test_controls_pair_by_place_though_their_correlations_keep_source_order(place):
+    place.pair()
+    assert place.call("_RTHP-D-PLACE-MAP?")
+    assert place.map() == [1, 2, 3]
+    # The pending bank keeps the index the bank on screen kept.
+    assert place.variable("_RTHP-D-INDEX-B") == place.annex
+
+
+@pytest.mark.parametrize("case", ("place", "identity", "numbering", "stale"))
+def test_controls_that_moved_or_changed_identity_need_the_join(place, case):
+    if case == "place":
+        # A correlation names a control in another place than on screen.
+        place.pair(pending_places=(1, 2, 0))
+    elif case == "identity":
+        place.pair(identities=[X[0], X[1], (1, 1, 99, 0, 0, 0)])
+    elif case == "numbering":
+        place.pair(pending_ids=[PENDING_FIRST, PENDING_FIRST + 2, PENDING_FIRST + 1])
+    else:
+        # The kept index no longer names the control its correlation names.
+        place.pair(active_places=(0, 1, 2))
+    assert not place.call("_RTHP-D-PLACE-MAP?")
