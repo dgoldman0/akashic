@@ -1127,10 +1127,9 @@ frame before the change driver.
     Desk stopped a minute in. ceabef49 gives the planner no banks then, and
     the journey passed in safe mode with no damage named. See the
     [evidence](../../local_testing/evidence/frames-follow-change-part9b2-20261028.md).
-  - **9b.3. One build.** The producer builds the batch itself, calling the
-    shell's model, region and chrome words; the shell's work space, its
-    second copy of every item and its own comparison go, and the
-    producer's comparison covers the whole batch. The two number items in
+  - **9b.3. One build.** Desk's batch is built once, from one copy of each
+    item: the shell's work space, its second copy of every application
+    item and its second comparison of them go. The two number items in
     different orders today: the producer numbers its instruments, statics
     and runs straight after the applications' controls, and the shell,
     whose own controls must follow those, moves the statics and
@@ -1173,18 +1172,35 @@ frame before the change driver.
       presents, and in safe mode with no damage named. In that journey
       the scratch block grew to 389,208 bytes, of which a build used at
       most 230,464; the shell's work space had held 4.4 MB on 2026-10-18.
-    - **9b.3.3. One copy and one comparison.** The producer calls the
-      shell's model, region and chrome words to build the batch before it
-      compares, and its comparison covers the whole batch: the
-      applications' items, the catalog, the shell's controls, panes and
-      status, and the runs slot by slot. The batch is built in the free
-      extension block, where it is kept, so the shell's freeze goes. The
-      target bank stops packing the applications' items, which the batch
-      holds, and the shell's mapping of a DELTA onto the acknowledged part
-      goes; the DELTA goes out from the producer's comparison. The
-      comparison reads the items the target banks hold, which keep their
-      text and samples as offsets where the batch needs addresses, so the
-      copy and the comparison go together.
+    - **9b.3.3. One copy and one comparison.** The producer's bank keeps
+      the one copy of each application item, laid out as the batch needs
+      it, and the shell's part keeps Desk's chrome and points at the
+      bank's items (decision 17). The producer's comparison of the
+      applications' items stays the one comparison of them, and the shell
+      compares only its own. In five steps, each showing the frames it
+      showed before:
+      - **9b.3.3a. Real addresses in the bank.** The bank keeps statics'
+        text, instruments' units and series' samples as addresses into its
+        own copies, as it already keeps controls' text, where it now keeps
+        offsets.
+      - **9b.3.3b. Regions in the bank.** The shell writes into the pending
+        bank the region its batch gives each application control and
+        static, and the producer's comparison and its reuse of menus and
+        statics stop requiring the frame on screen's items to lie in the
+        producer's own region. A bank the shell's preparation did not
+        finish keeps the producer's region.
+      - **9b.3.3c. The part points at the bank.** The shell's batch takes
+        the applications' controls, statics, instruments and series from
+        the pending bank, each pane's controls with the span of the bank's
+        text they use, instead of copying them, for a START as for a
+        DELTA. The freeze copies only the shell's own spans, and the
+        part's checks accept application spans in the bank that names the
+        part.
+      - **9b.3.3d. One comparison.** A DELTA replaces the application items
+        the producer's comparison found changed, and compares only the
+        shell's own items.
+      - **9b.3.3e. The part built where it is kept.** The shell writes its
+        part straight into the free extension block, so the freeze goes.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
@@ -1453,3 +1469,14 @@ Taken on 2026-10-28:
     reached the change driver sooner, but the driver would then have
     written each change into both copies, and part 10 would have removed
     that half of it.
+17. **Which record keeps the one copy** (9b.3.3). The producer's bank,
+    laid out as the batch needs it, with the shell's part pointing at its
+    items. The part could have kept every item instead, with the bank
+    keeping only keys and input targets once the shell is installed, as
+    this plan first said. The producer's comparison, about 3,600 lines,
+    would then have read items from the bank without the shell and from
+    the part with it, and the two modes would have stored application
+    items differently. With the bank, the comparison of application items
+    stays as it is, and with or without the shell a change to an
+    application item is written in one place, which the change driver
+    needs.
