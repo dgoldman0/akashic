@@ -155,7 +155,7 @@ class HiddenAckHarness(cf._FeedHarness):
         return self.part_of(self.get("_RTHP.TARGET-ACTIVE", self.p))
 
     def prepare(self):
-        assert self.call("_RSHSP-PREPARE")[0] == (0,)
+        assert self.call("_SX-PACK-PREPARE")[0] == (0,)
         part = self.pending_part()
         assert part
         return part

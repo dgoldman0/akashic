@@ -21,12 +21,21 @@ Neither measurement nor copying changes the source graph.
 
 Two internal peers serve a caller that proved the batch with
 `RTE-FAMILY-BATCH-VALID?` and has not written it since.
-`_RSHFC-MEASURE-PROVED` and `_RSHFC-COPY-PROVED` leave out only that repeated
-graph check; every span, alias and capacity check still comes before the
-first write. `_RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )` tells such a caller
+`_RSHFC-MEASURE-PROVED ( batch keep-a keep-u -- bytes status )` and
+`_RSHFC-COPY-PROVED ( batch destination capacity keep-a keep-u -- used status )`
+leave out only that repeated graph check; every span, alias and capacity
+check still comes before the first write. They also leave every span inside
+the kept range `keep-a keep-u` where it lies: such a span takes no bytes of
+the destination and the copied graph points at it. A kept range must hold a
+family's items and text together, or its items alone when it has no text,
+and never a plan, glyph references, region copies, the catalog or the
+family vector; a span that straddles the range is invalid. `0 0` keeps
+nothing. `_RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )` tells such a caller
 that no span of a valid batch overlaps a range it is about to write. The
-shell sidecar uses them to freeze a bank: it measures the batch, proves the
-bank lies outside it, copies it and then checks the finished bank once.
+shell producer uses them to freeze its part of a frame: it measures the
+batch, proves the extension block lies outside it, copies it and then checks
+the finished part once. Its kept range is the screen producer's pending
+bank, which holds the applications' items the part points at.
 
 Statuses are `RSHFC-S-OK` = 0, `RSHFC-S-CAPACITY` = 1 and
 `RSHFC-S-INVALID` = 3. Unrepresentable aligned totals are capacity failures.
@@ -79,8 +88,9 @@ It also rewrites instrument region-bank pointers and these item fields:
 | SERIES | Complete sample bank |
 | PANE | Title |
 
-Scalar identity, geometry, provenance, semantic order, region references,
-SERIES timestamps/values and all original used lengths are preserved. The
+Kept items keep their pointers, which name kept text. Scalar identity,
+geometry, provenance, semantic order, region references, SERIES
+timestamps/values and all original used lengths are preserved. The
 copied graph passes the same catalog validator and can itself be copied.
 After success, source storage may be reused or destroyed. The destination
 must remain at its address and immutable while borrowed by subsequent

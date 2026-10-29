@@ -33,17 +33,51 @@ VARIABLE _RSHFC-FAMILY VARIABLE _RSHFC-KIND VARIABLE _RSHFC-PLAN
 VARIABLE _RSHFC-ITEM VARIABLE _RSHFC-ITEM-U VARIABLE _RSHFC-STRIDE
 VARIABLE _RSHFC-OLD VARIABLE _RSHFC-NEW
 VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
+\ The range whose spans the copy leaves where they lie, or 0 0: records and
+\ text the caller keeps alive as long as the copy, as the screen producer's
+\ bank holds the applications' items the shell's part points at.
+VARIABLE _RSHFC-KEEP-A VARIABLE _RSHFC-KEEP-U
 : _RSHFC-CLEAR ( -- )
     0 _RSHFC-B ! 0 _RSHFC-D ! 0 _RSHFC-CAP ! 0 _RSHFC-U !
     0 _RSHFC-N ! 0 _RSHFC-I ! 0 _RSHFC-BASE ! 0 _RSHFC-FAMILY !
     0 _RSHFC-KIND ! 0 _RSHFC-PLAN ! 0 _RSHFC-ITEM ! 0 _RSHFC-ITEM-U !
     0 _RSHFC-STRIDE ! 0 _RSHFC-OLD ! 0 _RSHFC-NEW !
     0 _RSHFC-SI ! 0 _RSHFC-OFF ! 0 _RSHFC-REGIONS !
+    0 _RSHFC-KEEP-A ! 0 _RSHFC-KEEP-U !
 ;
+\ A span the copy leaves in place: one inside the kept range.
+: _RSHFC-KEPT? ( a u -- flag )
+    DUP 0= _RSHFC-KEEP-U @ 0= OR IF 2DROP 0 EXIT THEN
+    OVER _RSHFC-KEEP-A @ U< IF 2DROP 0 EXIT THEN
+    + _RSHFC-KEEP-A @ _RSHFC-KEEP-U @ + U> 0= ;
+\ Every span lies inside the kept range or apart from it, and a family
+\ whose items are kept keeps its text with them, or has none, and has no
+\ references; a plan, the catalog and the family list are always copied.
+: _RSHFC-KEPT-SPAN? ( index -- flag ) _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ _RSHFC-KEPT? ;
+: _RSHFC-KEPT-SHAPE? ( -- flag )
+    _RSHFC-KEEP-U @ 0= IF -1 EXIT THEN
+    _RSHFC-B @ RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+        I _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ DUP IF
+            2DUP _RSHFC-KEPT? 0= IF
+                _RSHFC-KEEP-A @ _RSHFC-KEEP-U @ MSPAN-OVERLAP? IF 0 UNLOOP EXIT THEN
+            ELSE 2DROP THEN
+        ELSE 2DROP THEN
+    LOOP
+    4 0 DO I _RSHFC-KEPT-SPAN? IF 0 UNLOOP EXIT THEN LOOP
+    _RSHFC-B @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
+        I 5 * 4 + DUP _RSHFC-KEPT-SPAN? IF DROP 0 UNLOOP EXIT THEN
+        DUP 3 + _RSHFC-KEPT-SPAN? OVER 4 + _RSHFC-KEPT-SPAN? OR IF DROP 0 UNLOOP EXIT THEN
+        DUP 1+ _RSHFC-KEPT-SPAN? IF
+            2 + DUP _RSHFC-KEPT-SPAN? SWAP _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ NIP 0= OR
+            0= IF 0 UNLOOP EXIT THEN
+        ELSE
+            2 + _RSHFC-KEPT-SPAN? IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
 : _RSHFC-MEASURE ( -- status )
     0 _RSHFC-U !
     _RSHFC-B @ RTE-FAMILY-BATCH-SPAN-COUNT DUP _RSHFC-N ! 0 ?DO
-        I _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ NIP
+        I _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ 2DUP _RSHFC-KEPT? IF 2DROP 0 ELSE NIP THEN
         7 _RTE-UADD? 0= IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN
         -8 AND DUP 0< IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN
         _RSHFC-U @ SWAP _RTE-UADD? 0= IF DROP RSHFC-S-CAPACITY UNLOOP EXIT THEN
@@ -63,26 +97,31 @@ VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
     _RSHFC-B @ RTE-FAMILY-BATCH-VALID? 0= IF _RSHFC-CLEAR RSHFC-S-INVALID EXIT THEN
     _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
 \ The same preparation for a batch the caller proved with
-\ RTE-FAMILY-BATCH-VALID? and has not written since.  Its one caller, the
-\ shell producer, keeps the batch and the destination in storage from a
-\ memory source, whose live blocks never overlap one another or a module's
-\ storage, so in normal mode their spans are not proved apart again
-\ (check-mode.f).  The capacity check still precedes the first write.
-: _RSHFC-PREPARE-PROVED ( batch destination capacity -- status )
+\ RTE-FAMILY-BATCH-VALID? and has not written since, leaving the spans
+\ inside KEEP-A KEEP-U where they lie.  Its one caller, the shell producer,
+\ keeps the batch and the destination in storage from a memory source,
+\ whose live blocks never overlap one another or a module's storage, so in
+\ normal mode their spans are not proved apart again (check-mode.f).  The
+\ kept range's shape and the capacity check still precede the first write.
+: _RSHFC-PREPARE-PROVED ( batch destination capacity keep-a keep-u -- status )
+    _RSHFC-KEEP-U ! _RSHFC-KEEP-A !
     CHK-EVERY-FRAME? IF
         _RSHFC-PREPARE-SPANS S" the shell's banks" CHK-NAME
-            0= IF RSHFC-S-INVALID EXIT THEN
+            0= IF _RSHFC-CLEAR RSHFC-S-INVALID EXIT THEN
     ELSE _RSHFC-CAP ! _RSHFC-D ! _RSHFC-B ! THEN
+    _RSHFC-KEPT-SHAPE? 0= IF _RSHFC-CLEAR RSHFC-S-INVALID EXIT THEN
     _RSHFC-MEASURE DUP IF _RSHFC-CLEAR THEN ;
 : _RSHFC-MEASURED ( status -- bytes status )
     DUP IF 0 SWAP EXIT THEN DROP _RSHFC-U @ RSHFC-S-OK _RSHFC-CLEAR ;
 : RSHFC-MEASURE ( batch -- bytes status ) 0 0 _RSHFC-PREPARE _RSHFC-MEASURED ;
 \ Size arithmetic was proved by PREPARE. Empty positions consume no bytes.
 \ Copying and pointer rewriting each walk the spans once in order, keeping a
-\ running offset; _RSHFC-SI is the next span and _RSHFC-OFF its offset.
+\ running offset; _RSHFC-SI is the next span and _RSHFC-OFF its offset.  A
+\ kept span stays where it lies and takes no bytes.
 : _RSHFC-DEST-NEXT ( -- a u )
-    _RSHFC-SI @ _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ NIP 1 _RSHFC-SI +!
-    DUP 0= IF DROP 0 0 EXIT THEN
+    _RSHFC-SI @ _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ 1 _RSHFC-SI +!
+    DUP 0= IF 2DROP 0 0 EXIT THEN
+    2DUP _RSHFC-KEPT? IF EXIT THEN NIP
     _RSHFC-OFF @ _RSHFC-D @ + SWAP DUP 7 + -8 AND _RSHFC-OFF +! ;
 : _RSHFC-REBASE ( pointer-field -- )
     DUP @ ?DUP IF _RSHFC-OLD @ - _RSHFC-NEW @ + SWAP ! ELSE DROP THEN ;
@@ -126,6 +165,8 @@ VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
     THEN
     _RSHFC-BASE @ 2 + _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ DROP _RSHFC-OLD !
     _RSHFC-FAMILY @ _RTE-FE.BYTES-A @ _RSHFC-NEW !
+    \ Kept items keep their text with them, so they are not rewritten.
+    _RSHFC-ITEM @ _RSHFC-ITEM-U @ _RSHFC-KEPT? IF EXIT THEN
     _RSHFC-ITEM-U @ _RSHFC-STRIDE @ / 0 ?DO
         _RSHFC-ITEM-POINTERS _RSHFC-STRIDE @ _RSHFC-ITEM +!
     LOOP ;
@@ -136,7 +177,9 @@ VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
     0 _RSHFC-SI ! 0 _RSHFC-OFF !
     _RSHFC-N @ 0 ?DO
         I _RSHFC-B @ RTE-FAMILY-BATCH-SPAN@ DROP _RSHFC-DEST-NEXT
-        DUP IF MOVE ELSE 2DROP DROP THEN
+        DUP IF
+            >R 2DUP = IF 2DROP R> DROP ELSE R> MOVE THEN
+        ELSE 2DROP DROP THEN
     LOOP
     0 _RSHFC-SI ! 0 _RSHFC-OFF !
     _RSHFC-DEST-NEXT 2DROP
@@ -152,11 +195,13 @@ VARIABLE _RSHFC-SI VARIABLE _RSHFC-OFF VARIABLE _RSHFC-REGIONS
 \ Internal peers for a caller that proved the batch with
 \ RTE-FAMILY-BATCH-VALID? and has not written it since, such as a caller
 \ that measured it with RSHFC-MEASURE or validated the graph just before.
-\ They omit only that repeated graph check. The span, source, overlap and
-\ capacity checks still precede the first write.
-: _RSHFC-MEASURE-PROVED ( batch -- bytes status )
-    0 0 _RSHFC-PREPARE-PROVED _RSHFC-MEASURED ;
-: _RSHFC-COPY-PROVED ( batch destination capacity -- used status )
+\ They omit only that repeated graph check, and leave the spans inside
+\ KEEP-A KEEP-U where they lie, out of the bytes measured and copied. The
+\ span, source, overlap, kept-range and capacity checks still precede the
+\ first write.
+: _RSHFC-MEASURE-PROVED ( batch keep-a keep-u -- bytes status )
+    0 0 2SWAP _RSHFC-PREPARE-PROVED _RSHFC-MEASURED ;
+: _RSHFC-COPY-PROVED ( batch destination capacity keep-a keep-u -- used status )
     _RSHFC-PREPARE-PROVED _RSHFC-COPY-PREPARED ;
 \ True when no span of a valid batch overlaps the u bytes at a.
 : _RSHFC-BATCH-OUTSIDE? ( batch a u -- flag )

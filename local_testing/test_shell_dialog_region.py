@@ -132,11 +132,7 @@ _SS-DONE
 DELTA_DIALOG = DELTA_PROMPT + DIALOG + r'''
 \ The pending target bank carries the four controls with their identities.
 : _SG-PENDING ( bank -- )
-    DUP 4096 0 FILL DUP _SX-BANK
-    4 OVER _RTHP-TB.CONTROL-COUNT !
-    _SG-CI OVER _RTHP-PACK-CONTROLS-A RTE-CONTROL-SIZE 4 * MOVE
-    _SG-CX OVER _RTHP-PACK-CORR-A RUCP-CORRELATION-SIZE 4 * MOVE
-    _SX-P _RTHP.TARGET-PENDING ! ;
+    DUP 4096 0 FILL DUP _SX-BANK _SX-P _RTHP.TARGET-PENDING ! ;
 : _SG-HELLO-DIALOG _SD-HELLO ['] _SG-PAINT DRW-OVERLAY ;
 : _SG-HELLP-DIALOG _SD-HELLP ['] _SG-PAINT DRW-OVERLAY ;
 \ The application repaints the cells the dialog held once it closes.

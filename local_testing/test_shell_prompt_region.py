@@ -149,11 +149,7 @@ _SS-DONE
 DELTA_PROMPT = DELTA + PROMPT + r'''
 \ The pending target bank carries both controls with their identities.
 : _SP-PENDING ( bank -- )
-    DUP 4096 0 FILL DUP _SX-BANK
-    2 OVER _RTHP-TB.CONTROL-COUNT !
-    _SP-CI OVER _RTHP-PACK-CONTROLS-A RTE-CONTROL-SIZE 2 * MOVE
-    _SP-CX OVER _RTHP-PACK-CORR-A RUCP-CORRELATION-SIZE 2 * MOVE
-    _SX-P _RTHP.TARGET-PENDING ! ;
+    DUP 4096 0 FILL DUP _SX-BANK _SX-P _RTHP.TARGET-PENDING ! ;
 : _SP-HELLO-PROMPT _SD-HELLO ['] _SP-PAINT DRW-OVERLAY ;
 : _SP-HELLP-PROMPT _SD-HELLP ['] _SP-PAINT DRW-OVERLAY ;
 \ The application repaints the row the prompt held once it closes.

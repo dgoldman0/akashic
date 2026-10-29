@@ -2879,6 +2879,25 @@ VARIABLE _RTHP-PR-ROWS
 : _RTHP-PACK-SERIES-SAMPLES-A ( bank -- a )
     DUP _RTHP-PACK-SERIES-CORR-A SWAP _RTHP-TB.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE * + ;
 
+\ ( bank -- a u ) the bank's packed records and their copies.  The shell's
+\ part takes the applications' items from these where they lie.
+: _RTHP-PACKED@  ( bank -- a u )  DUP _RTHP-PACK-A SWAP _RTHP-TB.PACKED-BYTES @ ;
+
+\ ( bank -- ) the bank's application controls and statics lie in its own
+\ region again, as the producer packed them, after the shell gave them its
+\ panes' regions for a batch it then could not finish.
+VARIABLE _RTHP-OR-REGION
+: _RTHP-BANK-OWN-REGIONS  ( bank -- )
+    DUP _RTHP-TB.REGION @ _RTHP-OR-REGION !
+    DUP _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        _RTHP-OR-REGION @
+            OVER _RTHP-PACK-CONTROLS-A I RTE-CONTROL-SIZE * + _RTE-CONTROL.REGION !
+    LOOP
+    DUP _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-OR-REGION @
+            OVER _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * + _RTE-STATIC.REGION !
+    LOOP DROP ;
+
 : _RTHP-TARGET-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-TARGET-ABORT _RTHP-TG-P !
     _RTHP-TG-P @ _RTHP-TARGET-INACTIVE _RTHP-TG-BANK !

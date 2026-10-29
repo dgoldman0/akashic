@@ -84,7 +84,7 @@ VARIABLE _SF-REGION
 def test_desks_status_lies_in_a_region_of_its_own_across_the_taskbars_right_end():
     staged_run(STATUS + r'''
 _SF-SETUP _SF-FIELDS
-_SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK
+_SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _SX-PACK-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 \ One region across the taskbar row past its entries, the catalog's last,
 \ at the taskbar's z and no modal scope.
@@ -118,7 +118,7 @@ _SS-DONE
 def test_without_status_fields_or_with_paint_over_it_the_status_is_residual():
     staged_run(STATUS + r'''
 _SF-SETUP
-_SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK
+_SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _SX-PACK-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A
 _SX-KA _SF-REGIONS 0= _SS-A _SX-KA _SF-STATIC 0= _SS-A
 _SX-KA _SN-TASK 0<> _SS-A
@@ -127,7 +127,7 @@ _SX-KA _SN-TASK 0<> _SS-A
 _SF-FIELDS
 : _SF-STRAY-CELL 88 11 20 DRW-CHAR ;
 : _SF-STRAY _SF-PAINT ['] _SF-STRAY-CELL DRW-OVERLAY ;
-' _SF-STRAY _SD-DRAW _RSHSP-PREPARE _SS-OK
+' _SF-STRAY _SD-DRAW _SX-PACK-PREPARE _SS-OK
 _SF-PEND _SX-PART-VALID? _SS-A
 _SF-PEND _SF-REGIONS 0= _SS-A _SF-PEND _SF-STATIC 0= _SS-A
 _SF-PEND _SN-TASK 0<> _SS-A _SF-PEND _SN-LAUNCHER 0<> _SS-A
@@ -138,7 +138,7 @@ _SS-DONE
 def test_a_changed_status_is_a_delta_and_one_that_comes_or_goes_restarts():
     staged_run(STATUS + r'''
 _SF-SETUP _SF-FIELDS
-_SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+_SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SX-KA = _SS-A
 \ Working, a wider value in another severity, moves the status left: a
 \ DELTA that keeps the catalog and the status's identity and replaces it.
@@ -154,11 +154,11 @@ _SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A
 \ A status that goes is a START with no status region.
 _SF-HIDE ' _SF-PAINT _SD-DRAW _SD-TB _SD-PENDING
 _RSHSP-DELTA-PROBE RTE-S-OK <> _SS-A
-_RSHSP-PREPARE _SS-OK _SX-KA _SF-REGIONS 0= _SS-A _SX-KA _SF-STATIC 0= _SS-A _SD-ACK
+_SX-PACK-PREPARE _SS-OK _SX-KA _SF-REGIONS 0= _SS-A _SX-KA _SF-STATIC 0= _SS-A _SD-ACK
 \ And one that comes back.
 _SF-READY 0 _SF-SHOW ' _SF-PAINT _SD-DRAW _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE RTE-S-OK <> _SS-A
-_RSHSP-PREPARE _SS-OK _SX-KB _SF-REGIONS 1 = _SS-A _SX-KB _SF-STATIC 0<> _SS-A
+_SX-PACK-PREPARE _SS-OK _SX-KB _SF-REGIONS 1 = _SS-A _SX-KB _SF-STATIC 0<> _SS-A
 _SS-DONE
 ''', minimum=28)
 
@@ -173,7 +173,7 @@ _SF-SETUP _SP-DIALOGS _SF-FIELDS 15 _SN-COL !
     _SD-HELLO 32 0 DO 32 11 I DRW-CHAR LOOP _SF-STRIP _SN-STRIP
     _SN-PUT _SF-PUT _SF-CELLS ['] _SN-BAR DRW-OVERLAY _SS-M SHM-SEAL ;
 _SN-SAVED 3 _SN-SHOW _SF-READY 0 _SF-SHOW
-' _SF-UNDER _SD-DRAW _RSHSP-PREPARE _SS-OK
+' _SF-UNDER _SD-DRAW _SX-PACK-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 _SX-KA _SF-STATIC 0<> _SS-A _SX-KA _SN-DIALOG 0<> _SS-A
 \ The notice's region lies above the status's.
@@ -182,7 +182,7 @@ _SX-KA _SN-DIALOG _RTE-CONTROL.REGION @ _SX-KA _SP-REGION _RTE-IR.Z @ 4 = _SS-A
 \ Paint over the status's cells the notice leaves still leaves it residual.
 : _SF-STRAY-CELL 88 11 26 DRW-CHAR ;
 : _SF-STRAY _SF-UNDER ['] _SF-STRAY-CELL DRW-OVERLAY ;
-' _SF-STRAY _SD-DRAW _RSHSP-PREPARE _SS-OK
+' _SF-STRAY _SD-DRAW _SX-PACK-PREPARE _SS-OK
 _SF-PEND _SF-STATIC 0= _SS-A _SF-PEND _SN-DIALOG 0<> _SS-A
 _SS-DONE
 ''', minimum=14)

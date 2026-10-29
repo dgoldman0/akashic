@@ -38,13 +38,10 @@ VARIABLE _SD-GREPLACE VARIABLE _SD-GDEFINE VARIABLE _SD-CREPLACE VARIABLE _SD-PR
     _SX-P _RTHP.TARGET-PENDING @ ?DUP IF
         _SX-P _RTHP.SOURCE-DRAW @ SWAP _RTHP-TB.DRAW !
     THEN _SX-NUMBER ;
-\ The producer's pending target bank for the next draw.
+\ The producer's pending target bank for the next draw, packed from the
+\ candidate, whose fixed identities are the acknowledged ones.
 : _SD-PENDING ( bank -- )
-    DUP 4096 0 FILL DUP _SX-BANK
-    1 OVER _RTHP-TB.CONTROL-COUNT !
-    _SX-CI OVER _RTHP-PACK-CONTROLS-A RTE-CONTROL-SIZE MOVE
-    _SX-CX OVER _RTHP-PACK-CORR-A RUCP-CORRELATION-SIZE MOVE
-    _SX-P _RTHP.TARGET-PENDING ! ;
+    DUP 4096 0 FILL DUP _SX-BANK _SX-P _RTHP.TARGET-PENDING ! ;
 \ The frame is sent and the terminal acknowledges it: the screen producer
 \ seals its pending bank, part and all, with every check on, and publishes
 \ it as the active one.
@@ -85,7 +82,7 @@ DELTA = STAGED + DELTA_HELPERS
 def test_changed_text_replaces_only_its_run_and_keeps_acknowledged_identities():
     staged_run(DELTA + r'''
 _SX-SETUP _SD-HOOKS
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SX-KA = _SS-A
 \ The next draw changes one letter in the pane.
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
@@ -121,7 +118,7 @@ def test_a_click_reads_the_batch_of_the_part_it_routes_through():
     _RSHSP-CONTROL-FIND ;
 : _SR-IN? ( control block -- flag ) 2DUP U< 0= >R 131072 + U< R> AND ;
 _SX-SETUP _SD-HOOKS
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 _SR-FIND DUP 0<> _SS-A _SX-KA _SR-IN? _SS-A
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK _SD-ACK
@@ -134,7 +131,7 @@ def test_more_and_fewer_runs_define_new_slots_and_hide_unused_ones():
     staged_run(DELTA + r'''
 VARIABLE _SD-FRONTIER
 _SX-SETUP _SD-HOOKS
-' _SD-HELLP _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLP _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 \ Two more runs in one row: they get identities above every published one.
 ' _SD-SPLIT _SD-DRAW _SD-TA _SD-PENDING
 _SX-P _RTHP.NEXT-OBJECT @ _SD-FRONTIER !
@@ -170,7 +167,7 @@ def test_taskbar_or_layout_changes_and_start_candidates_stay_on_start():
     staged_run(DELTA + r'''
 VARIABLE _SD-SAVED
 _SX-SETUP _SD-HOOKS
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 \ A frame on screen with no part of the shell's, as one sent alone has:
 \ no DELTA.
 _SX-P _RTHP.TARGET-ACTIVE @ _RTHP-TB.XBLOCK DUP @ _SD-SAVED ! 0 SWAP !
@@ -190,7 +187,7 @@ _SD-SAVED @ _SD-LABEL C!
 _SX-P _RTHP.REGION @ 100 + _SX-P _RTHP.REGION !
 _RSHSP-DELTA-PREPARE RTE-S-UNAVAILABLE = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
-_RSHSP-PREPARE _SS-OK _SD-EMIT RTE-S-INVALID = _SS-A
+_SX-PACK-PREPARE _SS-OK _SD-EMIT RTE-S-INVALID = _SS-A
 _SS-DONE
 ''', minimum=8)
 
@@ -201,7 +198,7 @@ CREATE _SD-ROWS 64 ALLOT CREATE _SD-SAVE 131072 ALLOT VARIABLE _SD-USED
 : _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
 _SX-SETUP _SD-HOOKS
 _SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 \ The producer rebuilt only row 5, so only row 5 is planned again.
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
 0 _SD-MAP -1 _SD-ROWS 5 + C!
@@ -238,7 +235,7 @@ CREATE _SD-ROWS 64 ALLOT CREATE _SD-SAVE 131072 ALLOT VARIABLE _SD-USED
     DRW-STYLE-RESTORE ;
 _SX-SETUP _SD-HOOKS
 _SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 ' _SD-STRIPES _SD-DRAW _SD-TA _SD-PENDING
 0 _SD-MAP -1 _SD-ROWS 5 + C!
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
@@ -278,7 +275,7 @@ VARIABLE _SD-GLYPHS
         THEN DROP
     LOOP DROP -1 ;
 _SX-SETUP _SD-HOOKS
-' _SD-SPLIT _SD-DRAW _RSHSP-PREPARE _SS-OK
+' _SD-SPLIT _SD-DRAW _SX-PACK-PREPARE _SS-OK
 _RSHSP-BATCH @ _SD-IN-ORDER? _SS-A _SD-GLYPHS @ 0> _SS-A
 _SS-DONE
 ''', minimum=3)
@@ -293,28 +290,17 @@ def test_a_live_candidate_numbers_its_series_afresh_and_the_delta_reads_the_bank
     staged_run(INSTRUMENTS + DELTA_HELPERS + r'''
 CREATE _SDI-ACKS RTE-INSTRUMENT-SIZE 2 * 7 + ALLOT : _SDI-ACK _SDI-ACKS 7 + -8 AND ;
 CREATE _SDI-TAS 140007 ALLOT : _SDI-TA _SDI-TAS 7 + -8 AND ;
-\ The base producer's pending bank: its control, instruments and series,
-\ matched to the acknowledged ones, the series' samples in the bank's
-\ copy.
+\ The base producer's pending bank: the candidate packed, with its series
+\ and instruments matched to the acknowledged ones.
 : _SDI-PENDING ( bank -- )
     DUP 140000 0 FILL DUP _SX-BANK
-    1 OVER _RTHP-TB.CONTROL-COUNT !
-    1 OVER _RTHP-TB.INSTRUMENT-REGION-COUNT ! 2 OVER _RTHP-TB.INSTRUMENT-COUNT !
-    1 OVER _RTHP-TB.SERIES-COUNT ! 128000 OVER _RTHP-TB.SERIES-SAMPLE-BYTES !
-    _SX-CI OVER _RTHP-PACK-CONTROLS-A RTE-CONTROL-SIZE MOVE
-    _SX-CX OVER _RTHP-PACK-CORR-A RUCP-CORRELATION-SIZE MOVE
-    _SI-IR OVER _RTHP-PACK-INSTRUMENT-REGIONS-A 96 MOVE
     _SDI-ACK OVER _RTHP-PACK-INSTRUMENTS-A RTE-INSTRUMENT-SIZE 2 * MOVE
-    _SI-C OVER _RTHP-PACK-INSTRUMENT-CORR-A RUIP-CORRELATION-SIZE 2 * MOVE
-    _SI-Y OVER _RTHP-PACK-SERIES-A RTE-SERIES-SIZE MOVE
     7 OVER _RTHP-PACK-SERIES-A _RTE-SERIES.ID !
-    DUP _RTHP-PACK-SERIES-SAMPLES-A OVER _RTHP-PACK-SERIES-A _RTE-SERIES.SAMPLES-A !
-    _SI-SAMPLES OVER _RTHP-PACK-SERIES-SAMPLES-A 128000 MOVE
     _SX-P _RTHP.TARGET-PENDING ! ;
 : _SDI-FIRST ( kind bank -- item )
     DUP RSHSP-PART.BATCH @ + _SI-BATCH ! _SI-FIND DUP 0<> _SS-A RTE-FAMILY-ITEMS@ DROP ;
 _SI-SETUP _SD-HOOKS
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SI-A = _SS-A
 _SI-I _SDI-ACK RTE-INSTRUMENT-SIZE 2 * MOVE
 \ The next live candidate's series and waveform name a fresh series.
@@ -349,13 +335,13 @@ def test_every_frame_checks_validate_the_model_copy_and_the_frozen_bank():
 _SX-SETUP _SD-HOOKS
 -1 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SC-DAMAGE
-_RSHSP-PREPARE RTE-S-OK <> _SS-A
+_SX-PACK-PREPARE RTE-S-OK <> _SS-A
 \ The producer refused its copy of the model, and named it.
 _RSHSP-DIAG-PREPARE-STAGE @ 5 = _SS-A
 CHK-DAMAGE S" the shell's model copy" COMPARE 0= _SS-A CHK-DAMAGE-COUNT @ 1 = _SS-A
 0 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SC-DAMAGE
-_RSHSP-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 1 = _SS-A
+_SX-PACK-PREPARE _SS-OK CHK-DAMAGE-COUNT @ 1 = _SS-A
 _SS-DONE
 ''', minimum=29)
 
@@ -383,7 +369,7 @@ def test_safe_mode_checks_the_acknowledged_part_again_before_using_it():
     _RSHSP-CONTROL-FIND DUP 0= IF EXIT THEN _RSHSP-INPUT-CONTROL !
     _RSHSP-SHELL-TARGET? ;
 _SX-SETUP _SD-HOOKS
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 _SB-CLICK _SS-A
 \ Normal mode: the damage goes unseen.
 _SB-DAMAGE _SB-CLICK _SS-A CHK-DAMAGE-COUNT @ 0= _SS-A
@@ -404,7 +390,7 @@ _RSHSP-PENDING-PART 0= _SS-A
 CHK-DAMAGE-COUNT @ 2 = _SS-A _SB-NAMED? _SS-A
 \ The START freezes into the other block, with every check, and replaces
 \ the damaged record once the terminal has it.
-_RSHSP-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A
+_SX-PACK-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A
 _SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A
 _RSHSP-ACTIVE-INTACT? _SS-A _SB-CLICK _SS-A CHK-DAMAGE-COUNT @ 2 = _SS-A
 _SS-DONE
@@ -443,7 +429,7 @@ VARIABLE _SE-A VARIABLE _SE-U
 _SX-SETUP _SD-HOOKS
 \ Normal mode: HELLO is on screen, and its run is overwritten with the
 \ next draw's text, HELLP.
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 _SX-P _RTHP.ACTIVE-SEAL @ 0= _SS-A
 80 S" HELLO" _SE-RUN 4 + C!
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
@@ -455,7 +441,7 @@ _SX-P _RTHP-XBLOCK-DROP
 \ for a DELTA, and nothing is named.
 CHK-WHY-BOOT CHK-SAFE-ON
 _SX-P _RTHP-ACTIVE-SEALED? 0= _SS-A CHK-DAMAGE-COUNT @ 0= _SS-A
-_RSHSP-PREPARE _SS-OK _SD-ACK
+_SX-PACK-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SX-KB = _SS-A _SX-P _RTHP.ACTIVE-SEAL @ 0<> _SS-A
 _RSHSP-ACTIVE-INTACT? _SS-A _SX-P _RTHP-ACTIVE-SEALED? _SS-A
 \ The same damage to the sealed frame: HELLP on screen becomes HELLO, the
@@ -467,7 +453,7 @@ CHK-DAMAGE-COUNT @ 1 = _SS-A
 CHK-DAMAGE S" the screen producer's frame banks" COMPARE 0= _SS-A
 \ The START that follows sends HELLO whole, from the live draw.
 ' _SD-HELLO _SD-DRAW _SD-TB _SD-PENDING
-_RSHSP-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KA = _SS-A
+_SX-PACK-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KA = _SS-A
 _SS-DONE
 ''', minimum=17)
 
@@ -483,7 +469,7 @@ def test_normal_mode_freezes_and_sends_a_delta_through_the_proved_emission():
     _SX-FX _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ;
 _SX-SETUP _SD-HOOKS
 -1 CHK-EVERY-FRAME !
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 \ Every-frame checks: the changed run, through the proved emission.
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
@@ -517,7 +503,7 @@ CREATE _SD-ROWS 64 ALLOT
 : _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
 _SX-SETUP _SD-HOOKS
 _SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
-' _SD-HELLO _SD-DRAW _RSHSP-PREPARE _SS-OK _SD-ACK
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 -1 FSHD-ON ! FSHD-RESET
 \ Row 5 changed and is marked: each reused region matches its whole plan.
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING

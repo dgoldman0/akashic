@@ -217,16 +217,18 @@ def test_the_freeze_takes_the_graph_the_preflight_checked():
     build = word("_RSHSP-BUILD-BATCH")
     assert build.rstrip().endswith("RTE-FAMILY-BATCH-PREFLIGHT DUP IF THROW ELSE DROP THEN ;")
     freeze = word("_RSHSP-FREEZE")
-    assert "_RSHSP-BATCH @ _RSHFC-MEASURE-PROVED" in freeze
-    assert "RSHFC-MEASURE " not in freeze and "_RSHFC-COPY-PROVED" in freeze
-    # The finished part, a proved copy, becomes the pending bank's, which
-    # then records the regions the part gives its items, and is checked
-    # again only with every-frame checks on, as is the producer's copy of
-    # the published model; a failure names what it found damaged
+    # It leaves the applications' items where they lie, in the pending
+    # bank's packed records, which the part points at.
+    kept = "_RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@"
+    assert f"_RSHSP-BATCH @ {kept}\n        _RSHFC-MEASURE-PROVED" in freeze
+    assert f"{kept} _RSHFC-COPY-PROVED" in freeze
+    assert "RSHFC-MEASURE " not in freeze
+    # The finished part, a proved copy, becomes the pending bank's, and is
+    # checked again only with every-frame checks on, as is the producer's
+    # copy of the published model; a failure names what it found damaged
     # (check-mode.f).
     assert freeze.rstrip().endswith(
         "    _RSHSP-PART @ _RSHSP-PART-USED @ _RSHSP-P @ _RTHP-XBLOCK!\n"
-        "    _RSHSP-STAMP-REGIONS\n"
         "    CHK-EVERY-FRAME? IF\n"
         "        _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-PART-VALID?\n"
         "            _RSHSP-PARTS-DAMAGED CHK-NAME _RSHSP-CHECK\n"

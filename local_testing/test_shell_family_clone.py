@@ -129,18 +129,18 @@ def test_proved_peers_match_public_words_and_keep_alias_checks():
     run(CLONE + r'''
 \ After the caller's own graph check, the proved peers give the same result.
 _RC-BATCH RTE-FAMILY-BATCH-VALID? _RC-A
-_RC-BATCH _RSHFC-MEASURE-PROVED 0= _RC-A _FC-WHOLE = _RC-A
+_RC-BATCH 0 0 _RSHFC-MEASURE-PROVED 0= _RC-A _FC-WHOLE = _RC-A
 _FC-D 32768 165 FILL _FC-E 32768 165 FILL
 _RC-BATCH _FC-D _FC-WHOLE RSHFC-COPY 0= _RC-A _FC-WHOLE = _RC-A
-_RC-BATCH _FC-E _FC-WHOLE _RSHFC-COPY-PROVED 0= _RC-A _FC-WHOLE = _RC-A
+_RC-BATCH _FC-E _FC-WHOLE 0 0 _RSHFC-COPY-PROVED 0= _RC-A _FC-WHOLE = _RC-A
 _FC-E RTE-FAMILY-BATCH-VALID? _RC-A
 0 _FC-BYTES DROP _FC-D - _FC-E + C@ 67 = _RC-A
 \ Capacity is still refused before any write, and with every-frame checks
 \ on so are source/output aliases.
 _FC-E _FC-S 32768 MOVE
-_RC-BATCH _FC-E _FC-WHOLE 1- _RSHFC-COPY-PROVED RSHFC-S-CAPACITY = _RC-A 0= _RC-A
+_RC-BATCH _FC-E _FC-WHOLE 1- 0 0 _RSHFC-COPY-PROVED RSHFC-S-CAPACITY = _RC-A 0= _RC-A
 -1 CHK-EVERY-FRAME !
-_RC-BATCH _RC-GT 8 _RSHFC-COPY-PROVED RSHFC-S-INVALID = _RC-A 0= _RC-A
+_RC-BATCH _RC-GT 8 0 0 _RSHFC-COPY-PROVED RSHFC-S-INVALID = _RC-A 0= _RC-A
 0 CHK-EVERY-FRAME !
 _FC-E 32768 _FC-S 32768 COMPARE 0= _RC-A
 \ A range is outside the batch only when it misses every span.
@@ -150,3 +150,38 @@ _RC-BATCH _RC-BATCH 8 _RSHFC-BATCH-OUTSIDE? 0= _RC-A
 _FC-CLEARED
 _RC-DONE
 ''', minimum=18)
+
+
+def test_proved_peers_leave_a_kept_range_where_it_lies():
+    """A copy may leave a family's items and text where they lie: the
+    destination takes no bytes for them and the copied graph points at
+    them.  A range holding a family's items without their text, a plan, or
+    part of a span is refused before any write."""
+    run(CLONE + r'''
+VARIABLE _FC-KA VARIABLE _FC-KU
+: _FC-SPAN ( index -- a u ) _FC-D RTE-FAMILY-BATCH-SPAN@ ;
+\ A canonical copy lays family 0's items and text side by side.
+_RC-BATCH _FC-D 32768 RSHFC-COPY 0= _RC-A DROP
+_FC-D RTE-FAMILY-BATCH-VALID? _RC-A
+5 _FC-SPAN DROP _FC-KA ! 6 _FC-SPAN + _FC-KA @ - _FC-KU !
+5 _FC-SPAN + 6 _FC-SPAN DROP = _RC-A
+_FC-D _FC-KA @ _FC-KU @ _RSHFC-MEASURE-PROVED 0= _RC-A
+    _FC-WHOLE RTE-CONTROL-SIZE - 8 - = _RC-A
+_FC-E 32768 165 FILL
+_FC-D _FC-E 32768 _FC-KA @ _FC-KU @ _RSHFC-COPY-PROVED 0= _RC-A
+    _FC-WHOLE RTE-CONTROL-SIZE - 8 - = _RC-A
+_FC-E RTE-FAMILY-BATCH-VALID? _RC-A
+_FC-E _RTE-FB.FAMILIES-A @ RTE-FAMILY-ITEMS@ DROP _FC-KA @ = _RC-A
+_FC-E _RTE-FB.FAMILIES-A @ _RTE-FE.BYTES-A @ 6 _FC-SPAN DROP = _RC-A
+\ The kept items still point at their kept text.
+_FC-KA @ _RTE-CONTROL.LABEL-A @ 6 _FC-SPAN DROP = _RC-A
+\ Refused: items without their text, a plan, and a span cut in two.
+_FC-E 32768 165 FILL
+_FC-D _FC-E 32768 5 _FC-SPAN _RSHFC-COPY-PROVED RSHFC-S-INVALID = _RC-A 0= _RC-A
+_FC-D _FC-E 32768 4 _FC-SPAN _RSHFC-COPY-PROVED RSHFC-S-INVALID = _RC-A 0= _RC-A
+_FC-D _FC-E 32768 _FC-KA @ 8 + _FC-KU @ _RSHFC-COPY-PROVED
+    RSHFC-S-INVALID = _RC-A 0= _RC-A
+_FC-E C@ 165 = _RC-A
+_FC-CLEARED
+_RC-DONE
+''', minimum=19)

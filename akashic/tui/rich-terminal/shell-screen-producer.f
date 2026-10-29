@@ -121,27 +121,25 @@ VARIABLE _RSHSP-STATUS
     _RSHSP-P @ _RTHP.XSCRATCH-A @ DUP _RSHSP-BASE ! DUP _RSHSP-CURSOR !
     _RSHSP-P @ _RTHP.XSCRATCH-U @ + _RSHSP-END ! ;
 : _RSHSP-ZSPAN ( a u -- a|0 u ) DUP 0= IF NIP 0 SWAP THEN ;
-\ Where the base candidate's controls, instruments and series are read
-\ from: the producer's own candidate for a START, or for a DELTA its pending
-\ target bank, whose identities the base producer has matched to the
-\ acknowledged ones.
+\ Where the base candidate's items are read from: the producer's pending
+\ target bank, which keeps the one copy of each, its references addresses
+\ into the bank's own copies.  For a DELTA the base producer has matched
+\ their identities to the acknowledged ones.  The batch takes them where
+\ they lie, so the bank must hold the candidate whole.
 VARIABLE _RSHSP-SRC-CONTROLS VARIABLE _RSHSP-SRC-CORR VARIABLE _RSHSP-SRC-REGIONS
 VARIABLE _RSHSP-SRC-INSTRUMENTS VARIABLE _RSHSP-SRC-INSTRUMENT-CORR
 VARIABLE _RSHSP-SRC-UNITS VARIABLE _RSHSP-SRC-UNITS-U
 VARIABLE _RSHSP-SRC-SERIES VARIABLE _RSHSP-SRC-SAMPLES VARIABLE _RSHSP-SRC-SAMPLES-U
-: _RSHSP-SOURCE-CANDIDATE ( -- )
-    _RSHSP-P @ _RTHP.CONTROLS-A @ _RSHSP-SRC-CONTROLS !
-    _RSHSP-P @ _RTHP.CORR-A @ _RSHSP-SRC-CORR !
-    _RSHSP-P @ _RTHP.INSTRUMENT-REGIONS-A @ _RSHSP-SRC-REGIONS !
-    _RSHSP-P @ _RTHP.INSTRUMENTS-A @ _RSHSP-SRC-INSTRUMENTS !
-    _RSHSP-P @ _RTHP.INSTRUMENT-CORR-A @ _RSHSP-SRC-INSTRUMENT-CORR !
-    _RSHSP-P @ _RTHP.INSTRUMENT-UNITS-A @ _RSHSP-SRC-UNITS !
-    _RSHSP-P @ _RTHP.INSTRUMENT-UNITS-USED @ _RSHSP-SRC-UNITS-U !
-    _RSHSP-P @ _RTHP.SERIES-A @ _RSHSP-SRC-SERIES !
-    _RSHSP-P @ _RTHP.SERIES-SAMPLES-A @ _RSHSP-SRC-SAMPLES !
-    _RSHSP-P @ _RTHP.SERIES-SAMPLES-USED @ _RSHSP-SRC-SAMPLES-U ! ;
+VARIABLE _RSHSP-SRC-STATICS VARIABLE _RSHSP-SRC-STATIC-CORR
 : _RSHSP-SOURCE-TARGET ( -- )
     _RSHSP-P @ _RTHP.TARGET-PENDING @ >R
+    R@ _RTHP-TB.CONTROL-COUNT @ _RSHSP-P @ _RTHP.CONTROL-COUNT @ =
+    R@ _RTHP-TB.STATIC-COUNT @ _RSHSP-P @ _RTHP.STATIC-COUNT @ = AND
+    R@ _RTHP-TB.INSTRUMENT-COUNT @ _RSHSP-P @ _RTHP.INSTRUMENT-COUNT @ = AND
+    R@ _RTHP-TB.INSTRUMENT-REGION-COUNT @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ = AND
+    R@ _RTHP-TB.SERIES-COUNT @ _RSHSP-P @ _RTHP.SERIES-COUNT @ = AND _RSHSP-CHECK
+    R@ _RTHP-PACK-STATICS-A _RSHSP-SRC-STATICS !
+    R@ _RTHP-PACK-STATIC-CORR-A _RSHSP-SRC-STATIC-CORR !
     R@ _RTHP-PACK-CONTROLS-A _RSHSP-SRC-CONTROLS !
     R@ _RTHP-PACK-CORR-A _RSHSP-SRC-CORR !
     R@ _RTHP-PACK-INSTRUMENT-REGIONS-A _RSHSP-SRC-REGIONS !
@@ -684,6 +682,36 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
             _RSHSP-ITEM @ _RTE-STATIC.VALUE-U @ _RSHSP-ADD
         THEN _RSHSP-STRIDE @ _RSHSP-ITEM +!
     LOOP ;
+\ A run of the pending bank's controls or statics becomes a family in REGION
+\ as the records lie: each takes the region, and the family's text is the
+\ span of the bank's copy their texts fill item by item, as a batch needs.
+\ Text the bank does not hold in that order refuses the batch.
+VARIABLE _RSHSP-BR-AT VARIABLE _RSHSP-BR-USED
+: _RSHSP-BR-TEXT ( field -- )
+    DUP 8 + @ DUP 0= IF 2DROP EXIT THEN
+    _RSHSP-BR-AT @ 0= IF OVER @ _RSHSP-BR-AT ! THEN
+    SWAP @ _RSHSP-BR-AT @ _RSHSP-BR-USED @ + = _RSHSP-CHECK
+    _RSHSP-BR-USED +! ;
+: _RSHSP-BANK-RUN ( a n kind region -- )
+    _RSHSP-REGION ! _RSHSP-FAMILY! _RSHSP-COUNT ! _RSHSP-START !
+    _RSHSP-REGION @ _RSHSP-PLAN-REGION!
+    _RSHSP-KIND @ RTE-FAMILY-ITEM-SIZE _RSHSP-STRIDE !
+    _RSHSP-START @ _RSHSP-COUNT @ _RSHSP-STRIDE @ _RSHSP-MUL _RSHSP-PLAN-ITEMS!
+    0 _RSHSP-BR-AT ! 0 _RSHSP-BR-USED !
+    _RSHSP-COUNT @ 0 ?DO
+        _RSHSP-START @ I _RSHSP-STRIDE @ * + _RSHSP-ITEM !
+        _RSHSP-KIND @ RTE-FAMILY-CONTROL = IF
+            _RSHSP-REGION @ _RSHSP-ITEM @ _RTE-CONTROL.REGION !
+            _RSHSP-ITEM @ _RTE-CONTROL.LABEL-A _RSHSP-BR-TEXT
+            _RSHSP-ITEM @ _RTE-CONTROL.SHORTCUT-A _RSHSP-BR-TEXT
+            _RSHSP-ITEM @ _RTE-CONTROL.CONTENT-A _RSHSP-BR-TEXT
+        ELSE
+            _RSHSP-REGION @ _RSHSP-ITEM @ _RTE-STATIC.REGION !
+            _RSHSP-ITEM @ _RTE-STATIC.LABEL-A _RSHSP-BR-TEXT
+            _RSHSP-ITEM @ _RTE-STATIC.VALUE-A _RSHSP-BR-TEXT
+        THEN
+    LOOP
+    _RSHSP-BR-AT @ _RSHSP-BR-USED @ _RSHSP-FAMILY-BYTES! ;
 : _RSHSP-COPY-RUN ( a n kind region -- )
     _RSHSP-REGION ! _RSHSP-FAMILY! _RSHSP-COUNT ! _RSHSP-START !
     _RSHSP-REGION @ _RSHSP-PLAN-REGION!
@@ -783,7 +811,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
             ELSE 1 _RSHSP-J +! THEN
         REPEAT
         _RSHSP-SRC-CONTROLS @ _RSHSP-I @ RTE-CONTROL-SIZE * +
-        _RSHSP-J @ _RSHSP-I @ - RTE-FAMILY-CONTROL _RSHSP-MEMBER @ _RSHSP-COPY-RUN
+        _RSHSP-J @ _RSHSP-I @ - RTE-FAMILY-CONTROL _RSHSP-MEMBER @ _RSHSP-BANK-RUN
         _RSHSP-J @ _RSHSP-I !
     REPEAT
     _RSHSP-SHELL-CONTROLS @ IF
@@ -799,10 +827,10 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-PROMPT-CONTROL _RSHSP-NOTICE-CONTROL ;
 : _RSHSP-STATICS ( -- )
     _RSHSP-P @ _RTHP.STATIC-COUNT @ 0 ?DO
-        _RSHSP-P @ _RTHP.STATIC-CORR-A @ I _RTHP-STATIC-CORR-SIZE * + @
+        _RSHSP-SRC-STATIC-CORR @ I _RTHP-STATIC-CORR-SIZE * + @
             _RSHSP-MEMBER@ RSHMM.CONTENT-REGION @ _RSHSP-MEMBER !
-        _RSHSP-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * +
-            1 RTE-FAMILY-STATIC _RSHSP-MEMBER @ _RSHSP-COPY-RUN
+        _RSHSP-SRC-STATICS @ I RTE-STATIC-SIZE * +
+            1 RTE-FAMILY-STATIC _RSHSP-MEMBER @ _RSHSP-BANK-RUN
     LOOP ;
 
 \ Desk's status as a STATUS_FIELD: its model's label, value, severity and
@@ -832,9 +860,8 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-P @ _RTHP.SERIES-COUNT @ 0= IF EXIT THEN
     RTE-FAMILY-SERIES _RSHSP-FAMILY!
     _RSHSP-P @ _RTHP.SERIES-PLAN _RSHSP-PLAN @ RTE-SERIES-PLAN-SIZE MOVE
-    _RSHSP-SRC-SERIES @ _RSHSP-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE *
-        DUP _RSHSP-PLAN @ _RTE-SRP.ITEMS-U !
-        _RSHSP-COPY _RSHSP-PLAN @ _RTE-SRP.ITEMS-A !
+    _RSHSP-SRC-SERIES @ _RSHSP-PLAN @ _RTE-SRP.ITEMS-A !
+    _RSHSP-P @ _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE * _RSHSP-PLAN @ _RTE-SRP.ITEMS-U !
     _RSHSP-SRC-SAMPLES @ _RSHSP-SRC-SAMPLES-U @ _RSHSP-FAMILY-BYTES! ;
 : _RSHSP-INSTRUMENTS ( -- )
     _RSHSP-P @ _RTHP.INSTRUMENT-COUNT @ 0= IF EXIT THEN
@@ -846,9 +873,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
         DUP _RSHSP-PLAN @ _RTE-IP.REGIONS-U !
     _RSHSP-CATALOG @ _RTE-RC.REGIONS-A @ 96 + SWAP
         _RSHSP-COPY _RSHSP-PLAN @ _RTE-IP.REGIONS-A !
-    _RSHSP-SRC-INSTRUMENTS @
-        _RSHSP-P @ _RTHP.INSTRUMENT-COUNT @ RTE-INSTRUMENT-SIZE *
-        _RSHSP-COPY _RSHSP-OUT !
+    _RSHSP-SRC-INSTRUMENTS @ _RSHSP-OUT !
     _RSHSP-OUT @ _RSHSP-PLAN @ _RTE-IP.ITEMS-A !
     _RSHSP-P @ _RTHP.INSTRUMENT-COUNT @ 0 ?DO
         _RSHSP-OUT @ I RTE-INSTRUMENT-SIZE * + _RSHSP-ITEM !
@@ -1257,6 +1282,10 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
 : _RSHSP-IN-PART? ( a u -- flag )
     DUP 0= IF DROP 0= EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    \ The applications' items lie in the bank that names the part.
+    OVER _RSHSP-V-T @ _RTHP-PACKED@ >R U< 0= IF
+        2DUP + R@ _RSHSP-V-T @ _RTHP-PACK-A + U> 0= IF R> DROP 2DROP -1 EXIT THEN
+    THEN R> DROP
     OVER _RSHSP-V-B @ DUP RSHSP-PART.BATCH @ + U< IF 2DROP 0 EXIT THEN
     + _RSHSP-V-B @ _RSHSP-V-U @ + U> 0= ;
 : _RSHSP-OFFSET-SPAN? ( offset bytes -- flag )
@@ -1344,7 +1373,8 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-V-B @ DUP RSHSP-PART.MODEL @ +
     DUP SHM.WIDTH @ _RSHSP-V-CAT @ _RTE-RC.SURFACE-COLS @ <>
     SWAP SHM.HEIGHT @ _RSHSP-V-CAT @ _RTE-RC.SURFACE-ROWS @ <> OR IF 0 EXIT THEN
-    _RSHSP-V-BATCH @ _RSHFC-MEASURE-PROVED RSHFC-S-OK <> IF DROP 0 EXIT THEN
+    _RSHSP-V-BATCH @ _RSHSP-V-T @ _RTHP-PACKED@
+        _RSHFC-MEASURE-PROVED RSHFC-S-OK <> IF DROP 0 EXIT THEN
         _RSHSP-V-NEXT @ + _RSHSP-V-U @ <> IF 0 EXIT THEN
     _RSHSP-PART-FRONTIERS? 0= IF 0 EXIT THEN
     _RSHSP-V-CAT @ _RTE-RC.OWNER @ _RSHSP-V-T @ _RTHP-TB.OWNER @ <>
@@ -1359,46 +1389,6 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
         _RSHSP-PACK-A @ _RSHSP-PART @ _RSHSP-PART-USED @ + _RSHSP-PACK-U @ MOVE
         _RSHSP-PACK-U @ _RSHSP-ALIGN _RSHSP-PART-USED +!
     ELSE 0 R@ ! THEN R> DROP ;
-\ The pending bank's application controls and statics take the regions the
-\ batch placed them in, so the bank records the frame its part holds.  They
-\ come first among the batch's controls and statics, in the bank's order:
-\ each run of controls in its pane's content, overlay or modal region, and
-\ each static in its pane's content region.  The part is named and the
-\ regions written only once the preparation has succeeded, and a bank
-\ whose part is dropped after that is abandoned with it.
-VARIABLE _RSHSP-SR-BANK VARIABLE _RSHSP-SR-ENTRY
-VARIABLE _RSHSP-SR-CONTROLS VARIABLE _RSHSP-SR-STATICS
-\ Each item of ENTRY, STRIDE bytes apart, gives its region to the bank's
-\ next record, whose region field _RSHSP-SR-BANK names.  Controls and
-\ statics keep their region at the same place.
-: _RSHSP-SR-ITEMS ( entry stride -- )
-    _RSHSP-STRIDE ! RTE-FAMILY-ITEMS@ _RSHSP-STRIDE @ / 0 ?DO
-        DUP I _RSHSP-STRIDE @ * + _RTE-CONTROL.REGION @ _RSHSP-SR-BANK @ !
-        _RSHSP-STRIDE @ _RSHSP-SR-BANK +!
-    LOOP DROP ;
-: _RSHSP-STAMP-REGIONS ( -- )
-    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RSHSP-SR-CONTROLS !
-    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-TB.STATIC-COUNT @ _RSHSP-SR-STATICS !
-    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACK-CONTROLS-A _RTE-CONTROL.REGION _RSHSP-SR-BANK !
-    _RSHSP-FAMILY-N @ 0 ?DO
-        _RSHSP-FAMILIES @ I RTE-FAMILY-ENTRY-SIZE * + _RSHSP-SR-ENTRY !
-        _RSHSP-SR-ENTRY @ _RTE-FE.KIND @ RTE-FAMILY-CONTROL = _RSHSP-SR-CONTROLS @ 0<> AND IF
-            _RSHSP-SR-ENTRY @ RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE / NIP
-                DUP _RSHSP-SR-CONTROLS @ U> 0= _RSHSP-CHECK NEGATE _RSHSP-SR-CONTROLS +!
-            _RSHSP-SR-ENTRY @ RTE-CONTROL-SIZE _RSHSP-SR-ITEMS
-        THEN
-    LOOP
-    _RSHSP-SR-CONTROLS @ 0= _RSHSP-CHECK
-    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACK-STATICS-A _RTE-STATIC.REGION _RSHSP-SR-BANK !
-    _RSHSP-FAMILY-N @ 0 ?DO
-        _RSHSP-FAMILIES @ I RTE-FAMILY-ENTRY-SIZE * + _RSHSP-SR-ENTRY !
-        _RSHSP-SR-ENTRY @ _RTE-FE.KIND @ RTE-FAMILY-STATIC = _RSHSP-SR-STATICS @ 0<> AND IF
-            _RSHSP-SR-ENTRY @ RTE-FAMILY-ITEMS@ RTE-STATIC-SIZE / NIP
-                DUP _RSHSP-SR-STATICS @ U> 0= _RSHSP-CHECK NEGATE _RSHSP-SR-STATICS +!
-            _RSHSP-SR-ENTRY @ RTE-STATIC-SIZE _RSHSP-SR-ITEMS
-        THEN
-    LOOP
-    _RSHSP-SR-STATICS @ 0= _RSHSP-CHECK ;
 \ Freezing is the only write to a part.  The finished part is a proved copy
 \ of the batch the preflight admitted and of the model the shell snapshot
 \ validated, so it is checked once more only with every-frame checks on.
@@ -1407,16 +1397,20 @@ VARIABLE _RSHSP-SR-CONTROLS VARIABLE _RSHSP-SR-STATICS
 \ written again, and later uses compare its identities only.
 \ The batch's graph was checked by the preflight that admitted it, at the
 \ end of BUILD-BATCH, and nothing since has changed what that check reads.
-\ A START freezes right after it.  A DELTA's identity mapping rewrites
-\ identities, which the graph check reads only as a pane's, nonzero before
-\ and after; and it gives a glyph family new item and reference arrays,
-\ fresh from the scratch block and so apart from every other span, holding the
-\ admitted runs in order and then canonical tombstones with no text, whose
-\ references continue the family's text at its end.  So the measure and the
-\ copy take the batch as proved; the measure still checks every span.
+\ A START freezes right after it.  A DELTA's identity mapping rewrites the
+\ shell's own identities, which the graph check reads only as a pane's,
+\ nonzero before and after; and it gives a glyph family new item and
+\ reference arrays, fresh from the scratch block and so apart from every
+\ other span, holding the admitted runs in order and then canonical
+\ tombstones with no text, whose references continue the family's text at
+\ its end.  So the measure and the copy take the batch as proved; the
+\ measure still checks every span.  The applications' items and their text
+\ stay in the pending bank, which the part points at and which is kept,
+\ sealed and retired with it.
 \ The pending bank then names the part, which makes it the frame's.
 : _RSHSP-FREEZE ( -- )
-    _RSHSP-BATCH @ _RSHFC-MEASURE-PROVED RSHFC-S-OK = _RSHSP-CHECK _RSHSP-CLONE-U !
+    _RSHSP-BATCH @ _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@
+        _RSHFC-MEASURE-PROVED RSHFC-S-OK = _RSHSP-CHECK _RSHSP-CLONE-U !
     RSHSP-PART-HEADER-SIZE _RSHSP-MU @ _RSHSP-ALIGN _RSHSP-ADD
     _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ RSHPL-CORRELATION-SIZE _RSHSP-MUL _RSHSP-ADD
     _RSHSP-RESULT @ RSHPL-RESULT.ACTION-BYTES @ _RSHSP-ALIGN _RSHSP-ADD
@@ -1439,13 +1433,13 @@ VARIABLE _RSHSP-SR-CONTROLS VARIABLE _RSHSP-SR-STATICS
     _RSHSP-MAP @ _RSHSP-MAP-U @ _RSHSP-PART @ RSHSP-PART.MEMBERSHIP _RSHSP-PACK
     _RSHSP-PART-USED @ _RSHSP-PART @ RSHSP-PART.BATCH !
     _RSHSP-BATCH @ _RSHSP-PART @ _RSHSP-PART-USED @ +
-        _RSHSP-PART-CAP @ _RSHSP-PART-USED @ - _RSHFC-COPY-PROVED
+        _RSHSP-PART-CAP @ _RSHSP-PART-USED @ -
+        _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@ _RSHFC-COPY-PROVED
         RSHFC-S-OK = _RSHSP-CHECK _RSHSP-PART-USED +!
     _RSHSP-NEXT-REGION @ _RSHSP-PART @ RSHSP-PART.NEXT-REGION !
     _RSHSP-NEXT-OBJECT @ _RSHSP-PART @ RSHSP-PART.NEXT-OBJECT !
     _RSHSP-PROMPT-ID @ _RSHSP-PART @ RSHSP-PART.PROMPT !
     _RSHSP-PART @ _RSHSP-PART-USED @ _RSHSP-P @ _RTHP-XBLOCK!
-    _RSHSP-STAMP-REGIONS
     CHK-EVERY-FRAME? IF
         _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-PART-VALID?
             _RSHSP-PARTS-DAMAGED CHK-NAME _RSHSP-CHECK
@@ -1499,7 +1493,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
 \ A complete START candidate defines every region and object with the
 \ fresh identities its admission reserved.
 : _RSHSP-BUILD ( -- )
-    0 _RSHSP-REUSE ! _RSHSP-SOURCE-CANDIDATE _RSHSP-BUILD-BATCH
+    0 _RSHSP-REUSE ! _RSHSP-SOURCE-TARGET _RSHSP-BUILD-BATCH
     _RSHSP-ADMISSION @ _RTE-FA.LAST-REGION @ 1 _RSHSP-ADD _RSHSP-NEXT-REGION !
     _RSHSP-ADMISSION @ _RTE-FA.OBJECT-LAST @ 1 _RSHSP-ADD _RSHSP-NEXT-OBJECT !
     _RSHSP-FREEZE ;
@@ -1686,7 +1680,12 @@ VARIABLE _RSHSP-DIAG-GROWTHS
         R@ CATCH _RSHSP-GROW
     WHILE DROP REPEAT
     R> DROP
-    DUP IF _RSHSP-P @ _RTHP-XBLOCK-DROP EXIT THEN DROP RTE-S-OK ;
+    \ A batch that could not be finished gave the pending bank's items the
+    \ regions of its panes; the bank is the producer's own again.
+    DUP IF
+        _RSHSP-P @ _RTHP-XBLOCK-DROP
+        _RSHSP-P @ _RTHP.TARGET-PENDING @ ?DUP IF _RTHP-BANK-OWN-REGIONS THEN EXIT
+    THEN DROP RTE-S-OK ;
 : _RSHSP-PREPARE ( -- status )
     0 _RSHSP-PSTAGE !
     ['] _RSHSP-BUILD _RSHSP-STAGE
@@ -1936,7 +1935,10 @@ VARIABLE _RSHSP-DM-UA
 
 \ Statics, instruments, series and panes take the identity in place.
 \ Instruments and series must be unchanged; a status field or pane may be
-\ replaced.
+\ replaced.  The applications' items lie in the pending bank, where the base
+\ producer gave them their acknowledged identities, so for those the place
+\ is checked; the shell's own take theirs.
+VARIABLE _RSHSP-DBANK
 : _RSHSP-D-PLACE ( -- )
     _RSHSP-DN @ _RSHSP-DAN @ = _RSHSP-CHECK
     _RSHSP-DN @ 0= IF EXIT THEN
@@ -1952,11 +1954,13 @@ VARIABLE _RSHSP-DM-UA
     THEN
     _RSHSP-DN @ 0 ?DO
         _RSHSP-DPI @ I _RSHSP-STRIDE @ * + _RSHSP-ITEM !
-        _RSHSP-DA0 @ I + _RSHSP-ITEM @ _RSHSP-D-ID !
+        _RSHSP-DBANK @ IF
+            _RSHSP-DA0 @ I + _RSHSP-ITEM @ _RSHSP-D-ID @ = _RSHSP-CHECK
+        ELSE _RSHSP-DA0 @ I + _RSHSP-ITEM @ _RSHSP-D-ID ! THEN
         _RSHSP-KIND @ RTE-FAMILY-INSTRUMENT = IF
-            _RSHSP-ITEM @ _RTE-INSTRUMENT.SERIES-ID @
+            _RSHSP-ITEM @ _RTE-INSTRUMENT.SERIES-ID @ DUP
                 _RSHSP-DSER-P0 @ _RSHSP-DSER-A0 @ _RSHSP-DSER-N @ _RSHSP-D-MAP
-                _RSHSP-ITEM @ _RTE-INSTRUMENT.SERIES-ID !
+                = _RSHSP-CHECK
         THEN
         _RSHSP-KIND @ DUP RTE-FAMILY-PANE <> SWAP RTE-FAMILY-STATIC <> AND IF
             _RSHSP-ITEM @ _RSHSP-DAI @ I _RSHSP-STRIDE @ * + _RSHSP-KIND @
@@ -2018,6 +2022,8 @@ VARIABLE _RSHSP-DM-UA
         _RSHSP-D-REGION? _RSHSP-CHECK
         _RSHSP-KIND @ RTE-FAMILY-ITEM-SIZE _RSHSP-STRIDE !
         _RSHSP-DPE @ RTE-FAMILY-ITEMS@ _RSHSP-STRIDE @ / _RSHSP-DN ! _RSHSP-DPI !
+        _RSHSP-DPI @ _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@ OVER + WITHIN
+            _RSHSP-DBANK !
         _RSHSP-DAE @ RTE-FAMILY-ITEMS@ _RSHSP-STRIDE @ / _RSHSP-DAN ! _RSHSP-DAI !
         _RSHSP-KIND @ RTE-FAMILY-CONTROL = IF 3 _RSHSP-DSTAGE ! _RSHSP-D-CONTROLS ELSE
         _RSHSP-KIND @ RTE-FAMILY-GLYPH = IF 5 _RSHSP-DSTAGE ! _RSHSP-D-GLYPHS ELSE

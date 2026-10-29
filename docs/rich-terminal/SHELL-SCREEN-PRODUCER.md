@@ -77,12 +77,23 @@ records its bytes, its draw and its wire owner and generation:
 |72/80|Next region/object identity|
 |88|Control identity of Desk's prompt, or 0|
 
-The metadata spans use canonical consecutive aligned offsets. The deep-copied
-family graph follows them. Every graph pointer is bounded within that suffix
-before nested parsing. Catalog/object maxima must equal the stored next IDs
-minus one. The exact packed requirement is:
+The metadata spans use canonical consecutive aligned offsets. The copied
+family graph follows them. The applications' controls, statics, instruments
+and series are not copied: they stay in the screen producer's pending bank,
+the one copy of each, and the graph points at them there, each pane's run of
+controls with the span of the bank's text they fill in order, as a family
+batch requires. The shell writes the region of its pane into each record it
+takes, and a preparation that fails gives the bank its own region back. The
+part is kept, sealed and retired with the bank that names it, so the records
+it points at live as long as it does. Every graph pointer is bounded within
+that suffix, or within the bank's packed records, before nested parsing.
+Catalog/object maxima must equal the stored next IDs minus one. The exact
+packed requirement is:
 
-`96 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + RSHFC-MEASURE(batch)`.
+`96 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + measure(batch)`,
+
+where the measure counts every span of the batch outside the bank's packed
+records (`_RSHFC-MEASURE-PROVED` with the bank's `_RTHP-PACKED@`).
 
 The scratch block uses checked aligned bump allocation. Glyph projection
 plans each clip in slots in the producer's glyph banks, then copies the runs
@@ -93,8 +104,9 @@ set once the full candidate can be measured, and is what an extension block
 grows to.
 
 The native 32×12 candidate fixture, with one pane, both taskbar bands, one
-ordinary MENUBAR and one STATUS_FIELD, uses 16,376 peak scratch bytes and an
-8,592-byte part. It exercises actual aggregate admission and family emission,
+ordinary MENUBAR and one STATUS_FIELD, uses 15,960 peak scratch bytes and an
+8,176-byte part, its application control and status field left in the
+pending bank. It exercises actual aggregate admission and family emission,
 then overwrites the whole scratch block before validating the frozen part and
 publishing its input authority. These are fixture measurements, not Desk
 capacity limits; product qualification must measure the complete desktop.
@@ -102,12 +114,13 @@ capacity limits; product qualification must measure the complete desktop.
 ## Geometry and fallback
 
 Ordinary applet CONTROL IDs, hierarchy and FIELD revision bytes stay unchanged.
-Each CONTROL run and each STATIC references its actual pane content region;
+Each CONTROL run and each STATIC, the bank's own records, references its
+actual pane content region;
 its logical origin remains0,0 and its logical dimensions remain the full
 surface. Each pane content region has the exact explicit SHM content clip.
 Instrument regions retain their independent explicit clips and must fit their
-associated pane, above chrome and below interactive content. SERIES is copied
-intact, including every waveform sample. New shell controls follow the applet
+associated pane, above chrome and below interactive content. SERIES is taken
+intact from the bank, including every waveform sample. New shell controls follow the applet
 CONTROL prefix. The screen producer numbers its instruments and statics past
 them, having asked the shell how many there are (PLAN, below), and Desk's
 status, PANE and newly projected glyph IDs follow those.
