@@ -1248,6 +1248,18 @@ frame before the change driver.
         same presents, and in safe mode with no damage named.
       - **9b.3.3e. The part built where it is kept.** The shell writes its
         part straight into the free extension block, so the freeze goes.
+        The model copy, the catalog and its regions, the batch record, each
+        family's plan, the shell's own items and text, and the glyph runs
+        are taken from that block as the build makes them, and the scratch
+        block keeps only work no frame reads afterwards. Two things learn
+        their size only as the build ends, and each is written into the
+        part once then: the family vector, which the build grows in the
+        scratch block family by family, and the planner's correlations,
+        actions and membership. A DELTA's build leaves room after a glyph
+        family's runs for the tombstones its mapping adds, so the mapping
+        writes them in place. A part need not be dense: its check asks that
+        each span lie inside the part, or in the bank that names it, apart
+        from every other. The family clone goes.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
