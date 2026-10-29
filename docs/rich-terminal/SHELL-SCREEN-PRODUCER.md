@@ -81,8 +81,8 @@ The metadata spans use canonical consecutive aligned offsets. The copied
 family graph follows them. The applications' controls, statics, instruments
 and series are not copied: they stay in the screen producer's pending bank,
 the one copy of each, and the graph points at them there, each pane's run of
-controls with the span of the bank's text they fill in order, as a family
-batch requires. The shell writes the region of its pane into each record it
+controls with the span of the bank's text they fill, every byte of it one of
+theirs, as a family batch requires. The shell writes the region of its pane into each record it
 takes, and a preparation that fails gives the bank its own region back. The
 part is kept, sealed and retired with the bank that names it, so the records
 it points at live as long as it does. Every graph pointer is bounded within

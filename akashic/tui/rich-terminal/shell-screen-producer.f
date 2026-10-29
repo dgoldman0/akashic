@@ -684,20 +684,22 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     LOOP ;
 \ A run of the pending bank's controls or statics becomes a family in REGION
 \ as the records lie: each takes the region, and the family's text is the
-\ span of the bank's copy their texts fill item by item, as a batch needs.
-\ Text the bank does not hold in that order refuses the batch.
-VARIABLE _RSHSP-BR-AT VARIABLE _RSHSP-BR-USED
+\ span of the bank's copy their texts fill, every byte of it one of theirs,
+\ as a batch needs.  The bank keeps a document's menu text in its
+\ snapshot's record order, so the texts need not lie in item order.  Text
+\ the run's texts do not fill refuses the batch.
+VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
 : _RSHSP-BR-TEXT ( field -- )
     DUP 8 + @ DUP 0= IF 2DROP EXIT THEN
-    _RSHSP-BR-AT @ 0= IF OVER @ _RSHSP-BR-AT ! THEN
-    SWAP @ _RSHSP-BR-AT @ _RSHSP-BR-USED @ + = _RSHSP-CHECK
-    _RSHSP-BR-USED +! ;
+    DUP _RSHSP-BR-USED +!
+    SWAP @ DUP _RSHSP-BR-LOW @ U< IF DUP _RSHSP-BR-LOW ! THEN
+    + DUP _RSHSP-BR-HIGH @ U> IF _RSHSP-BR-HIGH ! ELSE DROP THEN ;
 : _RSHSP-BANK-RUN ( a n kind region -- )
     _RSHSP-REGION ! _RSHSP-FAMILY! _RSHSP-COUNT ! _RSHSP-START !
     _RSHSP-REGION @ _RSHSP-PLAN-REGION!
     _RSHSP-KIND @ RTE-FAMILY-ITEM-SIZE _RSHSP-STRIDE !
     _RSHSP-START @ _RSHSP-COUNT @ _RSHSP-STRIDE @ _RSHSP-MUL _RSHSP-PLAN-ITEMS!
-    0 _RSHSP-BR-AT ! 0 _RSHSP-BR-USED !
+    -1 _RSHSP-BR-LOW ! 0 _RSHSP-BR-HIGH ! 0 _RSHSP-BR-USED !
     _RSHSP-COUNT @ 0 ?DO
         _RSHSP-START @ I _RSHSP-STRIDE @ * + _RSHSP-ITEM !
         _RSHSP-KIND @ RTE-FAMILY-CONTROL = IF
@@ -711,7 +713,9 @@ VARIABLE _RSHSP-BR-AT VARIABLE _RSHSP-BR-USED
             _RSHSP-ITEM @ _RTE-STATIC.VALUE-A _RSHSP-BR-TEXT
         THEN
     LOOP
-    _RSHSP-BR-AT @ _RSHSP-BR-USED @ _RSHSP-FAMILY-BYTES! ;
+    _RSHSP-BR-USED @ 0= IF 0 0 _RSHSP-FAMILY-BYTES! EXIT THEN
+    _RSHSP-BR-HIGH @ _RSHSP-BR-LOW @ - _RSHSP-BR-USED @ = _RSHSP-CHECK
+    _RSHSP-BR-LOW @ _RSHSP-BR-USED @ _RSHSP-FAMILY-BYTES! ;
 : _RSHSP-COPY-RUN ( a n kind region -- )
     _RSHSP-REGION ! _RSHSP-FAMILY! _RSHSP-COUNT ! _RSHSP-START !
     _RSHSP-REGION @ _RSHSP-PLAN-REGION!

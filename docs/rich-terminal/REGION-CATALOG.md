@@ -51,7 +51,7 @@ Each 64-byte `RTE-FAMILY-ENTRY-SIZE` record uses `_RTE-FE.*`:
 |---:|---|
 | 0 | KIND |
 | 8, 16 | PLAN-A, PLAN-U; exact fixed header extent |
-| 24, 32 | BYTES-A, BYTES-U; exact dense display/content or sample bytes |
+| 24, 32 | BYTES-A, BYTES-U; exact display/content or sample bytes |
 | 40, 48 | REFS-A, REFS-U; GLYPH only, otherwise `(0,0)` |
 | 56 | RESERVED; zero |
 
@@ -74,10 +74,15 @@ plan's authenticated region subset.
 
 ## Payload and source authority
 
-Each family's positive item bank is independently bounded. CONTROL bytes are
-label, shortcut and canonical content in item order. STATIC bytes are label
-then value. PANE bytes are titles; INSTRUMENT bytes are units. GLYPH references
-are exact dense offset/length pairs matching each item's text capacity.
+Each family's positive item bank is independently bounded. A family's bytes
+hold exactly its items' texts: CONTROL labels, shortcuts and canonical
+content, STATIC labels and values, PANE titles and INSTRUMENT units. Each text
+lies inside the bytes and their lengths add up to the bytes, in any order: the
+screen producer keeps a document's menu text in its snapshot's record order,
+while the engine defines the menus' controls parents first. With every-frame
+checks on, no two texts may share a byte. GLYPH references are exact dense
+offset/length pairs matching each item's text capacity, so glyph text lies in
+item order.
 SERIES bytes are complete uniform i64 values or explicit `(u64 time,i64 value)`
 pairs; `SAMPLES-U` is a byte length, and its mode alignment and exact dense
 extent are checked directly. Empty borrowed

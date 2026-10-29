@@ -19,12 +19,12 @@ generation, and a zero reserved cell.
 
 | Family kind | Plan bytes | Item bytes | Extra source |
 | --- | ---: | ---: | --- |
-| CONTROL1 | 144 | 200 | Dense label, shortcut, content bytes |
+| CONTROL1 | 144 | 200 | Exact label, shortcut, content bytes |
 | GLYPH2 | 144 | 120 | Dense display bytes and one 16-byte ref per item |
-| INSTRUMENT3 | 72 | 216 | Separate exact region copies and dense units |
-| STATIC4 | 144 | 176 | Dense label/value bytes |
+| INSTRUMENT3 | 72 | 216 | Separate exact region copies and exact units |
+| STATIC4 | 144 | 176 | Exact label/value bytes |
 | SERIES5 | 48 | 88 | Dense sample bytes; `SAMPLES-U` is bytes |
-| PANE6 | 144 | 184 | Dense title bytes |
+| PANE6 | 144 | 184 | Exact title bytes |
 
 Used spans may be adjacent slices of one backing allocation, but must not
 overlap. Catalog rows are separate from embedded family region copies.

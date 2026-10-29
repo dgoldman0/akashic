@@ -136,6 +136,31 @@ _RC-VALID _RC-DONE
 ''', minimum=32, extra_sources=MODULES, marker="CATALOG")
 
 
+def test_family_text_lies_inside_in_any_order_and_strict_checks_prove_it_unshared():
+    """A family's bytes hold its items' texts in any order, each inside them
+    and their lengths adding up to them, as the screen producer keeps a
+    document's menu text in its snapshot's record order.  A text reaching
+    past them, or bytes no text fills, refuses the batch; with every-frame
+    checks on, so do two texts that share a byte."""
+    run_series(PRELUDE + r'''
+\ The control's label and shortcut lie in its family's bytes the other way
+\ round.
+75 _RC-CT 1+ C!
+_RC-CT 1+ _RC-CI _RTE-CONTROL.LABEL-A ! 1 _RC-CI _RTE-CONTROL.LABEL-U !
+_RC-CT _RC-CI _RTE-CONTROL.SHORTCUT-A ! 1 _RC-CI _RTE-CONTROL.SHORTCUT-U !
+2 _RC-FAM _RTE-FE.BYTES-U !
+_RC-VALID -1 CHK-EVERY-FRAME ! _RC-VALID 0 CHK-EVERY-FRAME !
+\ Bytes no text fills, and a text reaching past them.
+3 _RC-FAM _RTE-FE.BYTES-U _RC-MUTATE
+2 _RC-CI _RTE-CONTROL.LABEL-U _RC-MUTATE
+\ Two texts on one byte, with a byte neither fills: the lengths still add
+\ up, so only the strict check sees them share it.
+_RC-CT _RC-CI _RTE-CONTROL.LABEL-A !
+_RC-VALID -1 CHK-EVERY-FRAME ! _RC-INVALID 0 CHK-EVERY-FRAME !
+_RC-DONE
+''', minimum=6, extra_sources=MODULES, marker="CATALOG")
+
+
 def test_pane_empty_content_geometry_order_title_and_alias_refusal():
     run_series(PRELUDE + r'''
 _RC-VALID

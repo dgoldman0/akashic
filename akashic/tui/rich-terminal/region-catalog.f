@@ -281,45 +281,88 @@ VARIABLE _RTE-RC-MAX-END
     _RTE-RC-PLAN @ _RTE-CP.REGION-ID @
         _RTE-RC-CATALOG @ RTE-REGION-CATALOG-FIND DUP 0= IF DROP 0 EXIT THEN
     88 _RTE-RC-PLAN @ 32 + 88 COMPARE 0= ;
-: _RTE-RC-DENSE? ( a u -- flag )
+\ A family's bytes hold its items' texts, each inside them, their lengths
+\ adding up to the bytes exactly (_RTE-RC-FAMILY?), and with every-frame
+\ checks on no two of them share a byte (_RTE-RC-TEXTS-APART?).  The texts
+\ may lie in any order: the screen producer keeps a document's menu text in
+\ its snapshot's record order, while the engine defines the menus' controls
+\ parents first.  A glyph's text is placed by its reference, in item order.
+: _RTE-RC-INSIDE? ( a u -- flag )
     DUP 0= IF DROP 0= EXIT THEN
-    OVER _RTE-RC-FAMILY @ _RTE-FE.BYTES-A @ _RTE-RC-TEXT-O @ + <> IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    OVER _RTE-RC-FAMILY @ _RTE-FE.BYTES-A @ U< IF 2DROP 0 EXIT THEN
+    2DUP + _RTE-RC-FAMILY @ DUP _RTE-FE.BYTES-A @ SWAP _RTE-FE.BYTES-U @ +
+        U> IF 2DROP 0 EXIT THEN
     _RTE-RC-TEXT-O @ OVER _RTE-UADD? 0= IF DROP 2DROP 0 EXIT THEN
     DUP _RTE-RC-FAMILY @ _RTE-FE.BYTES-U @ U> IF DROP 2DROP 0 EXIT THEN
     _RTE-RC-TEXT-O ! 2DROP -1 ;
+VARIABLE _RTE-RC-F VARIABLE _RTE-RC-M
+\ The text fields of an item of the family's kind, and where field INDEX is.
+: _RTE-RC-FIELDS ( -- n )
+    _RTE-RC-KIND @ DUP RTE-FAMILY-CONTROL = IF DROP 3 EXIT THEN
+    RTE-FAMILY-STATIC = IF 2 ELSE 1 THEN ;
+: _RTE-RC-FIELD ( index -- offset )
+    _RTE-RC-KIND @ RTE-FAMILY-CONTROL = IF
+        DUP 0= IF DROP 0 _RTE-CONTROL.LABEL-A EXIT THEN
+        1 = IF 0 _RTE-CONTROL.SHORTCUT-A ELSE 0 _RTE-CONTROL.CONTENT-A THEN EXIT
+    THEN
+    _RTE-RC-KIND @ RTE-FAMILY-STATIC = IF
+        0= IF 0 _RTE-STATIC.LABEL-A ELSE 0 _RTE-STATIC.VALUE-A THEN EXIT
+    THEN
+    DROP _RTE-RC-KIND @ DUP RTE-FAMILY-INSTRUMENT = IF DROP 0 _RTE-INSTRUMENT.UNIT-A EXIT THEN
+    RTE-FAMILY-SERIES = IF 0 _RTE-SERIES.SAMPLES-A ELSE 0 _RTE-PANE.TITLE-A THEN ;
+\ The family's text K: item K / fields, field K mod fields.
+: _RTE-RC-TEXT@ ( k -- a u )
+    _RTE-RC-F @ /MOD _RTE-RC-STRIDE @ * _RTE-RC-FAMILY @ RTE-FAMILY-ITEMS@ DROP +
+    SWAP _RTE-RC-FIELD + DUP @ SWAP 8 + @ ;
+\ No two of the family's texts share a byte.  A glyph family's references
+\ place its texts one after another, so only the other kinds are compared,
+\ each pair once.
+: _RTE-RC-TEXTS-APART? ( -- flag )
+    _RTE-RC-KIND @ RTE-FAMILY-GLYPH = IF -1 EXIT THEN
+    _RTE-RC-FIELDS _RTE-RC-F !
+    _RTE-RC-NITEMS @ _RTE-RC-F @ * _RTE-RC-M !
+    _RTE-RC-M @ 0 ?DO
+        I _RTE-RC-TEXT@ DUP IF
+            _RTE-RC-M @ I 1+ ?DO
+                2DUP I _RTE-RC-TEXT@ DUP IF MSPAN-OVERLAP? ELSE 2DROP 2DROP 0 THEN
+                IF 2DROP 0 UNLOOP UNLOOP EXIT THEN
+            LOOP
+        THEN 2DROP
+    LOOP -1 ;
 : _RTE-RC-PAYLOAD? ( -- flag )
     _RTE-RC-KIND @ RTE-FAMILY-CONTROL = IF
         _RTE-RC-ITEM @ _RTE-CONTROL.LABEL-A @ _RTE-RC-ITEM @ _RTE-CONTROL.LABEL-U @
-            _RTE-RC-DENSE? 0= IF 0 EXIT THEN
+            _RTE-RC-INSIDE? 0= IF 0 EXIT THEN
         _RTE-RC-ITEM @ _RTE-CONTROL.SHORTCUT-A @ _RTE-RC-ITEM @ _RTE-CONTROL.SHORTCUT-U @
-            _RTE-RC-DENSE? 0= IF 0 EXIT THEN
+            _RTE-RC-INSIDE? 0= IF 0 EXIT THEN
         _RTE-RC-ITEM @ _RTE-CONTROL.CONTENT-A @ _RTE-RC-ITEM @ _RTE-CONTROL.CONTENT-U @
-            _RTE-RC-DENSE? EXIT
+            _RTE-RC-INSIDE? EXIT
     THEN
     _RTE-RC-KIND @ RTE-FAMILY-GLYPH = IF
         _RTE-RC-REF @ @ _RTE-RC-TEXT-O @ <> IF 0 EXIT THEN
         _RTE-RC-REF @ 8 + @ DUP _RTE-RC-ITEM @ _RTE-LPI.TEXT-CAPACITY @ <> IF DROP 0 EXIT THEN
         DUP IF _RTE-RC-FAMILY @ _RTE-FE.BYTES-A @ _RTE-RC-TEXT-O @ + SWAP
-        ELSE 0 SWAP THEN _RTE-RC-DENSE? EXIT
+        ELSE 0 SWAP THEN _RTE-RC-INSIDE? EXIT
     THEN
     _RTE-RC-KIND @ RTE-FAMILY-INSTRUMENT = IF
         _RTE-RC-ITEM @ _RTE-INSTRUMENT.UNIT-A @ _RTE-RC-ITEM @ _RTE-INSTRUMENT.UNIT-U @
-            _RTE-RC-DENSE? EXIT
+            _RTE-RC-INSIDE? EXIT
     THEN
     _RTE-RC-KIND @ RTE-FAMILY-STATIC = IF
         _RTE-RC-ITEM @ _RTE-STATIC.LABEL-A @ _RTE-RC-ITEM @ _RTE-STATIC.LABEL-U @
-            _RTE-RC-DENSE? 0= IF 0 EXIT THEN
+            _RTE-RC-INSIDE? 0= IF 0 EXIT THEN
         _RTE-RC-ITEM @ _RTE-STATIC.VALUE-A @ _RTE-RC-ITEM @ _RTE-STATIC.VALUE-U @
-            _RTE-RC-DENSE? EXIT
+            _RTE-RC-INSIDE? EXIT
     THEN
     _RTE-RC-KIND @ RTE-FAMILY-SERIES = IF
         _RTE-RC-ITEM @ _RTE-SERIES.MODE @ DUP 1 U> IF DROP 0 EXIT THEN
         IF 8 ELSE 16 THEN
         _RTE-RC-ITEM @ _RTE-SERIES.SAMPLES-U @ OVER MOD IF DROP 0 EXIT THEN DROP
         _RTE-RC-ITEM @ _RTE-SERIES.SAMPLES-A @
-        _RTE-RC-ITEM @ _RTE-SERIES.SAMPLES-U @ _RTE-RC-DENSE? EXIT
+        _RTE-RC-ITEM @ _RTE-SERIES.SAMPLES-U @ _RTE-RC-INSIDE? EXIT
     THEN
-    _RTE-RC-ITEM @ _RTE-PANE.TITLE-A @ _RTE-RC-ITEM @ _RTE-PANE.TITLE-U @ _RTE-RC-DENSE? ;
+    _RTE-RC-ITEM @ _RTE-PANE.TITLE-A @ _RTE-RC-ITEM @ _RTE-PANE.TITLE-U @ _RTE-RC-INSIDE? ;
 VARIABLE _RTE-RC-MATCHES
 : _RTE-RC-PANE-UNIQUE? ( -- flag )
     0 _RTE-RC-MATCHES !
@@ -394,7 +437,10 @@ VARIABLE _RTE-RC-MATCHES
         _RTE-RC-MEMBERSHIP? 0= IF 0 UNLOOP EXIT THEN
         _RTE-RC-STRIDE @ _RTE-RC-ITEM +! 16 _RTE-RC-REF +!
     LOOP
-    _RTE-RC-TEXT-O @ _RTE-RC-FAMILY @ _RTE-FE.BYTES-U @ = ;
+    _RTE-RC-TEXT-O @ _RTE-RC-FAMILY @ _RTE-FE.BYTES-U @ <> IF 0 EXIT THEN
+    CHK-EVERY-FRAME? IF
+        _RTE-RC-TEXTS-APART? S" a family batch's text" CHK-NAME EXIT
+    THEN -1 ;
 : _RTE-RC-USED? ( region-id -- flag )
     _RTE-RC-SEARCH !
     _RTE-RC-COUNT @ 0 ?DO
