@@ -228,8 +228,16 @@ def test_the_part_is_built_where_it_is_kept_and_finished_after_the_preflight():
         return match.group(0)
 
     build = word("_RSHSP-BUILD-BATCH")
+    # A START's batch is admitted; a DELTA's only with every-frame checks
+    # on, which then name a malformed batch.
     assert build.rstrip().endswith(
-        "_RTE-FAMILY-BATCH-PREFLIGHT-PROVED DUP IF THROW ELSE DROP THEN ;")
+        "    _RSHSP-DBATCH @ IF CHK-EVERY-FRAME? 0= IF EXIT THEN THEN\n"
+        "    _RSHSP-BATCH @ _RSHSP-ADMISSION @ _RSHSP-S @ _RSHSP.SHELL @\n"
+        "        _RTE-FAMILY-BATCH-PREFLIGHT-PROVED\n"
+        "    DUP RTE-S-INVALID = _RSHSP-DBATCH @ 0<> AND IF\n"
+        "        S\" the shell's batch\" CHK-DAMAGED\n"
+        "    THEN\n"
+        "    DUP IF THROW ELSE DROP THEN ;")
     assert build.index("_RSHSP-SCRATCH! _RSHSP-PART-START") < build.index(
         "_RSHSP-PCOPY _RSHSP-M !")
     vector = ("_RSHSP-FAMILIES @ _RSHSP-FAMILY-N @ RTE-FAMILY-ENTRY-SIZE * "

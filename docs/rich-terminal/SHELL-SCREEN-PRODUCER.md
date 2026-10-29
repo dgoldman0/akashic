@@ -336,9 +336,16 @@ After the base producer has matched its controls, statics, instruments and
 series to their acknowledged identities, DELTA-PREPARE builds the shell
 candidate. It reads the base candidate's controls, instruments and series
 from the producer's pending target bank, which carries those identities,
-instead of from the candidate fields a START reads. The family check runs
-on this batch as built, so a waveform or plot and the series it names must
-come from the same place: the candidate itself numbers its series afresh.
+instead of from the candidate fields a START reads, so a waveform or plot
+and the series it names come from the same place: the candidate itself
+numbers its series afresh. A DELTA's batch keeps the catalog and families of
+the frame on screen, which the terminal admitted, and its emission sends
+only the items that differ from that frame's, each checked in full by the
+engine as it is sent, so in normal mode the batch is not admitted again.
+With every-frame checks on it is, which checks how the shell built it, and
+a batch found malformed names the shell's batch. A DELTA too large for the
+terminal's space fails as it is sent and goes out as a START, whose
+admission asks for the space.
 The shell then gives each item the acknowledged identity in the same place:
 
 - the catalog must be identical, region identities included;

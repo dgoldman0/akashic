@@ -1534,8 +1534,21 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     \ proved apart from the engine's storage when they were lent, and its
     \ spans are laid out apart, so the proved preflight proves them so again
     \ only with every-frame checks on.
+    \ A START's batch is admitted.  A DELTA's keeps the catalog and families
+    \ of the frame on screen, which the terminal admitted, and its emission
+    \ sends only the items that differ from that frame's, each checked in
+    \ full by the engine as it is sent, so in normal mode it is not admitted
+    \ again.  With every-frame checks on it is, which checks how the shell
+    \ built it, and a batch found malformed names the shell's batch
+    \ (check-mode.f).  A DELTA too large for the terminal's space fails as it
+    \ is sent and goes out as a START, whose admission asks for the space.
+    _RSHSP-DBATCH @ IF CHK-EVERY-FRAME? 0= IF EXIT THEN THEN
     _RSHSP-BATCH @ _RSHSP-ADMISSION @ _RSHSP-S @ _RSHSP.SHELL @
-        _RTE-FAMILY-BATCH-PREFLIGHT-PROVED DUP IF THROW ELSE DROP THEN ;
+        _RTE-FAMILY-BATCH-PREFLIGHT-PROVED
+    DUP RTE-S-INVALID = _RSHSP-DBATCH @ 0<> AND IF
+        S" the shell's batch" CHK-DAMAGED
+    THEN
+    DUP IF THROW ELSE DROP THEN ;
 \ A complete START candidate defines every region and object with the
 \ fresh identities its admission reserved.
 : _RSHSP-BUILD ( -- )

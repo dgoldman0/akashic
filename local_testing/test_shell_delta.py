@@ -389,6 +389,27 @@ _SS-DONE
 ''', minimum=22)
 
 
+def test_a_delta_s_batch_is_admitted_only_with_every_frame_checks_on():
+    """A DELTA's batch keeps the frame on screen's catalog and families,
+    which the terminal admitted, and the engine checks in full every item the
+    DELTA sends, so in normal mode the batch is not admitted again.  With
+    every-frame checks on it is, which checks how the shell built it."""
+    staged_run(DELTA + r'''
+_SX-SETUP _SD-HOOKS
+' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
+_SX-ADMISSIONS @ 1 = _SS-A
+' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SX-ADMISSIONS @ 1 = _SS-A _SD-PENDING-VALID? _SS-A
+_SD-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
+_SX-P _RTHP-XBLOCK-DROP
+-1 CHK-EVERY-FRAME !
+_RSHSP-DELTA-PREPARE _SS-OK _SX-ADMISSIONS @ 2 = _SS-A
+0 CHK-EVERY-FRAME !
+_SS-DONE
+''', minimum=12)
+
+
 def test_every_frame_checks_validate_the_model_copy_and_the_built_part():
     """The shell snapshot validates its model when it publishes it. With
     every-frame checks on, the producer validates its copy of the model
