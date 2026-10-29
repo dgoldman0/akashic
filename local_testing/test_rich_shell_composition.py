@@ -205,9 +205,10 @@ VARIABLE _SHT-REFUSE-INSTALL
     assert values("_A1D-SHELL-PHASE @") == (5,)
     # The shell source owns its first, smallest storage from Desk's memory
     # source and grows it as models need.  The shell producer owns none: it
-    # builds in the screen producer's scratch block and freezes the shell's
-    # part of each frame into the producer's extension blocks, which the
-    # producer takes from the same source when a build first needs them.
+    # builds the shell's part of each frame in one of the producer's
+    # extension blocks, with its passing work in the producer's scratch
+    # block, which the producer takes from the same source when a build
+    # first needs them.
     assert values("_A1D-SHELL-SOURCE _SHSN.MEMORY @ _A1D-MEMORY = "
                   "_A1D-SHELL-SOURCE _SHSN.A-U @ SHM-HEADER-SIZE = "
                   "_A1D-SHELL-SOURCE-A @ _A1D-SHELL-SOURCE-B @") == (true, true, 0, 0)

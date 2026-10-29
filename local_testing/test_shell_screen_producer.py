@@ -329,7 +329,7 @@ def test_staged_complete_shell_candidate_owns_graph_and_is_the_pending_bank_s_pa
     _RSHSP-CONTROL-FIND DUP 0<> _SS-A _RSHSP-INPUT-CONTROL !
     _RSHSP-SHELL-TARGET? 0= _SS-A ;
 _SX-SETUP _SX-PACK-PREPARE _SS-OK
-\ The pending bank names the part, frozen into the first extension block.
+\ The pending bank names the part, built in the first extension block.
 _SX-TARGET _RTHP-TB.XBLOCK @ _SX-KA = _SS-A _RSHSP-PENDING-PART _SX-KA = _SS-A
 _SX-P _RTHP.TARGET-ACTIVE @ 0= _SS-A
 _SX-TARGET _RSHSP-PART-VALID? _SS-A
@@ -405,18 +405,20 @@ _SS-DONE
 
 
 def test_final_block_capacity_and_stale_membership_preserve_the_prior_parts():
+    """A build that cannot finish leaves the part of the frame on screen as
+    it was and names no part.  It writes the free extension block as it
+    goes, which no bank names until a build there succeeds."""
     staged_run(STAGED + r'''
-CREATE _SX-BACKAS 131079 ALLOT CREATE _SX-BACKBS 131079 ALLOT
-: _SX-BACKA _SX-BACKAS 7 + -8 AND ; : _SX-BACKB _SX-BACKBS 7 + -8 AND ;
+CREATE _SX-BACKAS 131079 ALLOT
+: _SX-BACKA _SX-BACKAS 7 + -8 AND ;
 : _SX-UNCHANGED
     _SX-KA 131072 _SX-BACKA 131072 COMPARE 0= _SS-A
-    _SX-KB 131072 _SX-BACKB 131072 COMPARE 0= _SS-A
     _RSHSP-ACTIVE-PART _SX-KA = _SS-A
     _RSHSP-PENDING-PART 0= _SS-A ;
 _SX-SETUP _SX-PACK-PREPARE _SS-OK
 _SX-PUBLISH
 _SX-KB 131072 165 FILL
-_SX-KA _SX-BACKA 131072 MOVE _SX-KB _SX-BACKB 131072 MOVE
+_SX-KA _SX-BACKA 131072 MOVE
 2 _SS-M SHM.EPOCH ! _SX-OBSERVE
 SCR-DRAW-GENERATION@ DUP _SX-P _RTHP.SOURCE-DRAW ! _SX-P _RTHP.SURFACE-GEN !
 2 _SX-P _RTHP.SOURCE-GEN !
@@ -427,7 +429,7 @@ _SX-PACK-PREPARE RTE-S-CAPACITY = _SS-A _SX-UNCHANGED
 128 _SX-P _RTHP.XBLOCK1-U !
 _SX-PACK-PREPARE RTE-S-CAPACITY = _SS-A _SX-UNCHANGED
 _SX-S RSHSP-PART-BYTES@ 128 U> _SS-A
-\ The batch it could not freeze had given the bank's control and static
+\ The batch it could not finish had given the bank's control and static
 \ the regions of its pane; the bank holds the producer's region again.
 _SX-TARGET2 _RTHP-PACK-CONTROLS-A _RTE-CONTROL.REGION @ 10 = _SS-A
 _SX-TARGET2 _RTHP-PACK-STATICS-A _RTE-STATIC.REGION @ 10 = _SS-A
@@ -442,7 +444,7 @@ _SX-KA 131072 _SX-BACKA 131072 COMPARE 0= _SS-A
 _SX-P _RTHP-XBLOCK-DROP
 _RSHSP-PENDING-PART 0= _SS-A _RSHSP-ACTIVE-PART _SX-KA = _SS-A
 _SS-DONE
-''', minimum=45)
+''', minimum=44)
 
 
 # The system heap behind a memory source that counts what it hands out.
@@ -609,8 +611,8 @@ _SS-DONE
 ''', minimum=4)
 
 
-def test_the_frozen_part_gives_the_bank_s_items_the_regions_of_its_panes():
-    """Once the shell's part is frozen and named by the pending bank, the
+def test_the_built_part_gives_the_bank_s_items_the_regions_of_its_panes():
+    """Once the shell's part is built and named by the pending bank, the
     bank's application controls and statics carry the regions the batch
     placed them in, the panes' regions, so the bank records the frame its
     part holds.  The screen producer packed them in its own region."""

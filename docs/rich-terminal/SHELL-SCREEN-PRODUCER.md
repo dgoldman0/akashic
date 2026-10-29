@@ -19,33 +19,34 @@ names, labels, or the last active UIDL context. The capability remains opt-in.
 | `RSHSP-CONTROL-TARGET@` | `( owner generation control-id intent sidecar -- row col revision found? )` |
 
 The descriptor is `RSHSP-SIZE` bytes and embeds the RTHP extension descriptor.
-`RSHSP-PART-BYTES@` reports the bytes the last freeze measured for the shell's
-part of the frame and `RSHSP-SCRATCH-USED@` the most of the scratch block
-the last build used.
+`RSHSP-PART-BYTES@` reports the most of the extension block the last build
+needed for the shell's part of the frame and `RSHSP-SCRATCH-USED@` the most
+of the scratch block it used.
 
-The shell producer owns no storage. It builds each candidate in a scratch
-block the screen producer owns beside its extension blocks
-(`_RTHP.XSCRATCH-A`, `_RTHP.XSCRATCH-U`), and plans its glyph runs in the
-producer's glyph banks, which are sized for every cell of the surface and
-hold no plan of the producer's own while the shell is installed. The scratch
-block holds nothing kept and starts empty. When a build is refused for
-CAPACITY because the scratch block is too small, the producer replaces it
-with a block from its memory source (see `utils/memory-source.f`) for what
-the build needed and half again, and the shell builds once more, until the
-candidate fits or the memory says no.
+The shell producer owns no storage. It builds the shell's part of each
+frame where the part is kept, in the screen producer's storage, does the
+build's passing work in a scratch block the producer owns beside its
+extension blocks (`_RTHP.XSCRATCH-A`, `_RTHP.XSCRATCH-U`), and plans its
+glyph runs in the producer's glyph banks, which are sized for every cell of
+the surface and hold no plan of the producer's own while the shell is
+installed. The scratch block holds nothing kept and starts empty. When a
+build is refused for CAPACITY because the scratch block is too small, the
+producer replaces it with a block from its memory source (see
+`utils/memory-source.f`) for what the build needed and half again, and the
+shell builds once more, until the candidate fits or the memory says no.
 
-The shell's part of each frame is frozen into the screen producer's storage,
-not the shell's. RTHP owns two extension blocks beside its target banks
-(`_RTHP.XBLOCK0-A`, `_RTHP.XBLOCK1-A`); the shell freezes its part into the
-block the frame on screen does not name, and the pending bank then names it
-with the bytes it uses (`_RTHP-TB.XBLOCK`, `_RTHP-TB.XBLOCK-BYTES`). From then
-on the part is the bank's own: the producer publishes, seals, keeps and
-retires it with the bank, and drops it from the pending bank whenever it
-abandons the shell's preparation, so the bank is the one record of the frame.
-The blocks lie outside the producer's arena, whose layout fixes the banks'
-size, and start empty. A freeze refused for room in its block has the producer
-take a block from its memory source for what the part needs and half again,
-and builds once more; nothing reads the free block, so nothing is relocated.
+RTHP owns two extension blocks beside its target banks (`_RTHP.XBLOCK0-A`,
+`_RTHP.XBLOCK1-A`); the shell builds its part in the block the frame on
+screen does not name, and the pending bank then names it with the bytes it
+uses (`_RTHP-TB.XBLOCK`, `_RTHP-TB.XBLOCK-BYTES`). From then on the part is
+the bank's own: the producer publishes, seals, keeps and retires it with the
+bank, and drops it from the pending bank whenever it abandons the shell's
+preparation, so the bank is the one record of the frame. The blocks lie
+outside the producer's arena, whose layout fixes the banks' size, and start
+empty. A build refused for room in its block has the producer take a block
+from its memory source for what the part needs and half again, and builds
+once more. No bank names the free block, so nothing is relocated, and what a
+build that cannot finish wrote there is never read.
 A new block, scratch or extension, must be separate from the producer's
 storage, and the shell's dispatch, with every check on, proves the three
 blocks apart from the rest of the storage again. `RTHP-FINI` gives the blocks
@@ -69,16 +70,21 @@ records its bytes, its draw and its wire owner and generation:
 
 | Offset | Value |
 |---:|---|
-|0|Copied family-batch offset|
-|8/16|Copied SHM offset/bytes|
+|0|Family-batch offset|
+|8/16|SHM copy offset/bytes|
 |24/32|Correlation192 offset/bytes|
 |40/48|Action-byte offset/bytes|
 |56/64|Membership112 offset/bytes|
 |72/80|Next region/object identity|
 |88|Control identity of Desk's prompt, or 0|
 
-The metadata spans use canonical consecutive aligned offsets. The copied
-family graph follows them. The applications' controls, statics, instruments
+Every span of the part starts on a cell boundary past the header and lies
+apart from every other; the part need not be dense. The build takes the
+model copy first, then the batch's own spans as it makes them, and writes
+the correlations, actions and membership last, at their used sizes. The
+family vector grows in the scratch block, since only the build's end knows
+how many families there are, and is written into the part before the
+preflight. The applications' controls, statics, instruments
 and series are not copied: they stay in the screen producer's pending bank,
 the one copy of each, and the graph points at them there, each pane's run of
 controls with the span of the bank's text they fill, every byte of it one of
@@ -86,28 +92,25 @@ theirs, as a family batch requires. The shell writes the region of its pane into
 takes, and a preparation that fails gives the bank its own region back. The
 part is kept, sealed and retired with the bank that names it, so the records
 it points at live as long as it does. Every graph pointer is bounded within
-that suffix, or within the bank's packed records, before nested parsing.
-Catalog/object maxima must equal the stored next IDs minus one. The exact
-packed requirement is:
+the part, past its header, or within the bank's packed records, before
+nested parsing, and the model, correlations, actions and membership are
+proved apart from one another and from every span of the batch.
+Catalog/object maxima must equal the stored next IDs minus one.
 
-`96 + align8(SHM bytes) + 192*correlations + align8(action bytes) + 112*panes + measure(batch)`,
-
-where the measure counts every span of the batch outside the bank's packed
-records (`_RSHFC-MEASURE-PROVED` with the bank's `_RTHP-PACKED@`).
-
-The scratch block uses checked aligned bump allocation. Glyph projection
-plans each clip in slots in the producer's glyph banks, then copies the runs
-it planned into the batch before the next clip. `SCRATCH-USED@` records the
-peak reservation. On capacity failure it reports the first required prefix
-that did not fit, which is what the scratch block grows to; `PART-BYTES@` is
-set once the full candidate can be measured, and is what an extension block
-grows to.
+Both blocks use checked aligned bump allocation. Glyph projection plans each
+clip in slots in the producer's glyph banks, then copies the runs it planned
+into the part before the next clip. In a DELTA's build a glyph family's
+items and references leave room for as many runs as the frame on screen's
+family in the same place holds, and the identity mapping writes the
+tombstones it adds there. `SCRATCH-USED@` and `PART-BYTES@` record each
+block's peak reservation. On capacity failure each reports the first
+required prefix that did not fit, which is what its block grows to.
 
 The native 32×12 candidate fixture, with one pane, both taskbar bands, one
-ordinary MENUBAR and one STATUS_FIELD, uses 15,960 peak scratch bytes and an
+ordinary MENUBAR and one STATUS_FIELD, uses 9,536 peak scratch bytes and an
 8,176-byte part, its application control and status field left in the
 pending bank. It exercises actual aggregate admission and family emission,
-then overwrites the whole scratch block before validating the frozen part and
+then overwrites the whole scratch block before validating the part and
 publishing its input authority. These are fixture measurements, not Desk
 capacity limits; product qualification must measure the complete desktop.
 
@@ -295,7 +298,7 @@ batch, and while no rich frame is shown after a draw that could not be,
 where its own admission says whether a newer draw can be.
 
 The shell candidate is prepared only after RTHP packs its ordinary target
-bank, before retained BEGIN, and its part is frozen into the free extension
+bank, before retained BEGIN, and its part is built in the free extension
 block and named by that pending bank. Only successful PREPARE selects shell
 EMIT. Any failure before BEGIN drops the part from the pending bank; the
 candidate is then built alone and offered again, as above, and a second
@@ -365,7 +368,7 @@ gives it while it is the plan sealed for the banks now pending and on
 screen. The applications' families of controls take the bank's records in
 order, so the plan's places, which ascend, fall to them in turn: the shell
 hands the emitter each family's places as indexes in the family, written in
-the scratch block, which nothing reads once the part is frozen, and the
+the scratch block, which nothing reads once the part is built, and the
 emitter replaces those controls without comparing them. The instruments and
 series are known unchanged. The shell's own items and the applications'
 statics are compared as before, and the base producer, which counts the
@@ -410,7 +413,7 @@ check of its gate that refused. Desk acceptance runs record all of them in
 `final-guest-diagnostics.json`, with the terminal's count of committed
 PRESENT modes.
 
-A part is checked in full once, when it is frozen. STAGE freezes into the
+A part is checked in full once, when it is finished. STAGE builds in the
 extension block the frame on screen does not name, after the pending bank
 dropped its part, so a part a bank names is never written again. The checks
 below therefore compare its identities and do not check its contents again.

@@ -8,7 +8,6 @@
 PROVIDED akashic-tui-rshsp
 REQUIRE hybrid-screen-producer.f
 REQUIRE shell-membership.f
-REQUIRE shell-family-clone.f
 REQUIRE family-batch.f
 REQUIRE shell-family-emit.f
 REQUIRE frame-shadow.f
@@ -23,8 +22,9 @@ REQUIRE ../check-mode.f
 : _RSHSP.PRODUCER ( s -- a ) 24 + ;
 : _RSHSP.SOURCE ( s -- a ) 32 + ;
 : _RSHSP.SHELL ( s -- a ) 40 + ;
-\ The bytes the last freeze needed for the shell's part of the frame, and
-\ the most of the producer's scratch block the last build used.
+\ The most bytes of the extension block the last build needed for the
+\ shell's part of the frame, and the most of the producer's scratch block
+\ it used.
 : _RSHSP.PART-BYTES ( s -- a ) 48 + ;
 : _RSHSP.SCRATCH-USED ( s -- a ) 56 + ;
 : _RSHSP.EXTENSION ( s -- a ) 64 + ;
@@ -58,7 +58,6 @@ CREATE _RSHSP-OWNED-START VARIABLE _RSHSP-OWNED-LIMIT
         MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
     2DUP RTHP-MODULE-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP RSHMM-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
-    2DUP RSHFC-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     RTE-FAMILY-EMIT-STORAGE-DISJOINT? ;
 : _RSHSP-SPAN? ( a u -- flag )
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
@@ -95,6 +94,7 @@ VARIABLE _RSHSP-GA-N VARIABLE _RSHSP-GA-I VARIABLE _RSHSP-GA-ITEM VARIABLE _RSHS
 VARIABLE _RSHSP-DBATCH
 VARIABLE _RSHSP-PBACK VARIABLE _RSHSP-PRESIDUE VARIABLE _RSHSP-PCOLS VARIABLE _RSHSP-PROWS
 VARIABLE _RSHSP-PART VARIABLE _RSHSP-PART-CAP
+VARIABLE _RSHSP-PCURSOR VARIABLE _RSHSP-PEND VARIABLE _RSHSP-DENSE-AT
 VARIABLE _RSHSP-STATUS
 
 : _RSHSP-FAIL ( -- ) RTE-S-UNAVAILABLE THROW ;
@@ -114,12 +114,34 @@ VARIABLE _RSHSP-STATUS
     DUP _RSHSP-END @ _RSHSP-CURSOR @ - U> IF DROP RTE-S-CAPACITY THROW THEN
     _RSHSP-CURSOR @ SWAP DUP _RSHSP-CURSOR +! OVER SWAP 0 FILL ;
 : _RSHSP-COPY ( a u -- dst ) DUP _RSHSP-TAKE DUP >R SWAP MOVE R> ;
+\ The shell's part of the frame is written where it is kept, in the
+\ extension block STAGE names in _RSHSP-PART: what a frame reads after the
+\ build is taken from there, past the part's header, as the build makes
+\ it, and everything else from the scratch block.  A take past the block's
+\ end records what the part needed so far, as the scratch block's does,
+\ and STAGE grows the block and builds again.
+: _RSHSP-PTAKE ( n -- a )
+    _RSHSP-ALIGN
+    DUP _RSHSP-PCURSOR @ _RSHSP-PART @ - _RSHSP-ADD
+        _RSHSP-S @ _RSHSP.PART-BYTES @ MAX _RSHSP-S @ _RSHSP.PART-BYTES !
+    DUP _RSHSP-PEND @ _RSHSP-PCURSOR @ - U> IF DROP RTE-S-CAPACITY THROW THEN
+    _RSHSP-PCURSOR @ SWAP DUP _RSHSP-PCURSOR +! OVER SWAP 0 FILL ;
+: _RSHSP-PCOPY ( a u -- dst ) DUP _RSHSP-PTAKE DUP >R SWAP MOVE R> ;
+\ ( a -- offset ) Where in the part an address of it lies.
+: _RSHSP-PART-OFFSET ( a -- offset ) _RSHSP-PART @ - ;
 \ A build's passing work starts at the screen producer's scratch block,
 \ which holds nothing kept: 0 0 until the producer first grows it.
 : _RSHSP-SCRATCH! ( -- )
     0 _RSHSP-S @ _RSHSP.SCRATCH-USED !
     _RSHSP-P @ _RTHP.XSCRATCH-A @ DUP _RSHSP-BASE ! DUP _RSHSP-CURSOR !
     _RSHSP-P @ _RTHP.XSCRATCH-U @ + _RSHSP-END ! ;
+\ A build's part starts at the free extension block with its header, which
+\ FINISH fills in.
+: _RSHSP-PART-START ( -- )
+    0 _RSHSP-S @ _RSHSP.PART-BYTES !
+    _RSHSP-PART @ _RSHSP-PCURSOR !
+    _RSHSP-PART @ _RSHSP-PART-CAP @ + _RSHSP-PEND !
+    RSHSP-PART-HEADER-SIZE _RSHSP-PTAKE DROP ;
 : _RSHSP-ZSPAN ( a u -- a|0 u ) DUP 0= IF NIP 0 SWAP THEN ;
 \ Where the base candidate's items are read from: the producer's pending
 \ target bank, which keeps the one copy of each, its references addresses
@@ -603,7 +625,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     96 + ;
 
 : _RSHSP-CATALOG! ( -- )
-    RTE-REGION-CATALOG-SIZE _RSHSP-TAKE _RSHSP-CATALOG !
+    RTE-REGION-CATALOG-SIZE _RSHSP-PTAKE _RSHSP-CATALOG !
     _RSHSP-P @ _RTHP.OWNER @ _RSHSP-CATALOG @ _RTE-RC.OWNER !
     _RSHSP-P @ _RTHP.OWNER-GEN @ _RSHSP-CATALOG @ _RTE-RC.GENERATION !
     _RSHSP-P @ _RTHP.COLS @ _RSHSP-CATALOG @ _RTE-RC.SURFACE-COLS !
@@ -619,7 +641,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-MODAL-N @ _RSHSP-ADD _RSHSP-SCREEN-N @ _RSHSP-ADD
     _RSHSP-PROMPT-N @ _RSHSP-ADD _RSHSP-NOTICE-N @ _RSHSP-ADD
     _RSHSP-STATUS-N @ _RSHSP-ADD _RSHSP-REGION-N !
-    _RSHSP-REGION-N @ 96 _RSHSP-MUL _RSHSP-TAKE _RSHSP-OUT !
+    _RSHSP-REGION-N @ 96 _RSHSP-MUL _RSHSP-PTAKE _RSHSP-OUT !
     _RSHSP-OUT @ _RSHSP-CATALOG @ _RTE-RC.REGIONS-A !
     _RSHSP-REGION-N @ 96 * _RSHSP-CATALOG @ _RTE-RC.REGIONS-U !
     _RSHSP-P @ _RTHP.REGION @ _RSHSP-OUT @ _RTE-IR.ID !
@@ -643,13 +665,16 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-P @ _RTHP.STATIC-COUNT @ _RSHSP-ADD
     _RSHSP-N @ _RSHSP-ADD 6 _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD
     _RSHSP-NOTICE-N @ _RSHSP-ADD _RSHSP-STATUS-N @ _RSHSP-ADD _RSHSP-FAMILY-CAP !
+    \ The family vector grows in the scratch block, since only the end of
+    \ the build knows how many families there are; the batch takes it then.
     _RSHSP-FAMILY-CAP @ RTE-FAMILY-ENTRY-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-FAMILIES !
     0 _RSHSP-FAMILY-N !
-    RTE-FAMILY-BATCH-SIZE _RSHSP-TAKE _RSHSP-BATCH !
+    RTE-FAMILY-BATCH-SIZE _RSHSP-PTAKE _RSHSP-BATCH !
     RTE-FAMILY-ADMISSION-SIZE _RSHSP-TAKE _RSHSP-ADMISSION ! ;
 
-\ A new family starts with a copied catalog row.  Text is compacted in item
-\ order so the immutable clone never retains a containing source arena.
+\ A new family starts with a copied catalog row.  The shell's own items and
+\ their text are copied into the part, the text in item order, so the part
+\ holds no source's storage.
 : _RSHSP-FAMILY! ( kind -- )
     _RSHSP-KIND !
     _RSHSP-FAMILY-N @ _RSHSP-FAMILY-CAP @ U< _RSHSP-CHECK
@@ -657,7 +682,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     1 _RSHSP-FAMILY-N +!
     _RSHSP-KIND @ _RSHSP-FAMILY @ _RTE-FE.KIND !
     _RSHSP-KIND @ RTE-FAMILY-PLAN-SIZE DUP _RSHSP-FAMILY @ _RTE-FE.PLAN-U !
-        _RSHSP-TAKE DUP _RSHSP-PLAN ! _RSHSP-FAMILY @ _RTE-FE.PLAN-A !
+        _RSHSP-PTAKE DUP _RSHSP-PLAN ! _RSHSP-FAMILY @ _RTE-FE.PLAN-A !
     _RSHSP-CATALOG @ _RSHSP-PLAN @ 32 MOVE ;
 : _RSHSP-PLAN-REGION! ( id -- )
     _RSHSP-REGION@ _RSHSP-PLAN @ 32 + 88 MOVE ;
@@ -667,8 +692,8 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-ZSPAN _RSHSP-FAMILY @ _RTE-FE.BYTES-U ! _RSHSP-FAMILY @ _RTE-FE.BYTES-A ! ;
 : _RSHSP-DENSE! ( pointer-field -- )
     DUP 8 + @ DUP IF
-        _RSHSP-TEMP ! DUP @ _RSHSP-CURSOR @ _RSHSP-TEMP @ MOVE
-        _RSHSP-CURSOR @ SWAP ! _RSHSP-TEMP @ _RSHSP-CURSOR +!
+        _RSHSP-TEMP ! DUP @ _RSHSP-DENSE-AT @ _RSHSP-TEMP @ MOVE
+        _RSHSP-DENSE-AT @ SWAP ! _RSHSP-TEMP @ _RSHSP-DENSE-AT +!
     ELSE 2DROP THEN ;
 : _RSHSP-TEXT-MEASURE ( items n stride -- bytes )
     _RSHSP-STRIDE ! _RSHSP-COUNT ! _RSHSP-ITEM ! 0
@@ -721,11 +746,11 @@ VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
     _RSHSP-REGION @ _RSHSP-PLAN-REGION!
     _RSHSP-KIND @ RTE-FAMILY-ITEM-SIZE _RSHSP-STRIDE !
     _RSHSP-START @ _RSHSP-COUNT @ _RSHSP-STRIDE @ _RSHSP-MUL
-        DUP _RSHSP-BYTES ! _RSHSP-COPY _RSHSP-OUT !
+        DUP _RSHSP-BYTES ! _RSHSP-PCOPY _RSHSP-OUT !
     _RSHSP-OUT @ _RSHSP-BYTES @ _RSHSP-PLAN-ITEMS!
     _RSHSP-OUT @ _RSHSP-COUNT @ _RSHSP-STRIDE @ _RSHSP-TEXT-MEASURE
-        DUP _RSHSP-BYTES ! _RSHSP-TAKE _RSHSP-START !
-    _RSHSP-CURSOR @ _RSHSP-SAVED ! _RSHSP-START @ _RSHSP-CURSOR !
+        DUP _RSHSP-BYTES ! _RSHSP-PTAKE _RSHSP-START !
+    _RSHSP-START @ _RSHSP-DENSE-AT !
     _RSHSP-COUNT @ 0 ?DO
         _RSHSP-OUT @ I _RSHSP-STRIDE @ * + _RSHSP-ITEM !
         _RSHSP-KIND @ RTE-FAMILY-CONTROL = IF
@@ -739,7 +764,7 @@ VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
             _RSHSP-ITEM @ _RTE-STATIC.VALUE-A _RSHSP-DENSE!
         THEN
     LOOP
-    _RSHSP-SAVED @ _RSHSP-CURSOR ! _RSHSP-START @ _RSHSP-BYTES @ _RSHSP-FAMILY-BYTES! ;
+    _RSHSP-START @ _RSHSP-BYTES @ _RSHSP-FAMILY-BYTES! ;
 \ An overlay with a modal region goes there, and any other control of an
 \ overlay pane's document to that pane's modal region; any other control
 \ goes to the content region of its document's pane.
@@ -876,7 +901,7 @@ VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
     _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ 96 *
         DUP _RSHSP-PLAN @ _RTE-IP.REGIONS-U !
     _RSHSP-CATALOG @ _RTE-RC.REGIONS-A @ 96 + SWAP
-        _RSHSP-COPY _RSHSP-PLAN @ _RTE-IP.REGIONS-A !
+        _RSHSP-PCOPY _RSHSP-PLAN @ _RTE-IP.REGIONS-A !
     _RSHSP-SRC-INSTRUMENTS @ _RSHSP-OUT !
     _RSHSP-OUT @ _RSHSP-PLAN @ _RTE-IP.ITEMS-A !
     _RSHSP-P @ _RTHP.INSTRUMENT-COUNT @ 0 ?DO
@@ -895,12 +920,21 @@ VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
             _RSHSP-MEMBER @ RSHMM.COL @ _RSHSP-MEMBER @ RSHMM.WIDTH @ + <= _RSHSP-CHECK
     LOOP
     _RSHSP-SRC-UNITS @ _RSHSP-SRC-UNITS-U @ _RSHSP-FAMILY-BYTES! ;
+\ The planner's panes, and their titles, which fill the first bytes of its
+\ text, come into the part, each title at the same place in the copy.
 : _RSHSP-PANE-FAMILY ( -- )
     _RSHSP-RESULT @ RSHPL-RESULT.PANES @ 0= IF EXIT THEN
     RTE-FAMILY-PANE _RSHSP-FAMILY!
     _RSHSP-PANES @ _RTE-PANE.REGION @ _RSHSP-PLAN-REGION!
-    _RSHSP-PANES @ _RSHSP-RESULT @ RSHPL-RESULT.PANES @ RTE-PANE-SIZE * _RSHSP-PLAN-ITEMS!
-    _RSHSP-TEXT @ _RSHSP-RESULT @ RSHPL-RESULT.PANE-UTF8 @ _RSHSP-FAMILY-BYTES! ;
+    _RSHSP-PANES @ _RSHSP-RESULT @ RSHPL-RESULT.PANES @ RTE-PANE-SIZE *
+        DUP _RSHSP-BYTES ! _RSHSP-PCOPY _RSHSP-OUT !
+    _RSHSP-OUT @ _RSHSP-BYTES @ _RSHSP-PLAN-ITEMS!
+    _RSHSP-TEXT @ _RSHSP-RESULT @ RSHPL-RESULT.PANE-UTF8 @ _RSHSP-PCOPY _RSHSP-START !
+    _RSHSP-RESULT @ RSHPL-RESULT.PANES @ 0 ?DO
+        _RSHSP-OUT @ I RTE-PANE-SIZE * + _RTE-PANE.TITLE-A
+        DUP 8 + @ IF DUP @ _RSHSP-TEXT @ - _RSHSP-START @ + SWAP ! ELSE DROP THEN
+    LOOP
+    _RSHSP-START @ _RSHSP-RESULT @ RSHPL-RESULT.PANE-UTF8 @ _RSHSP-FAMILY-BYTES! ;
 
 \ Existing menu claims remain a nonopaque prefix. Shell claims and the pane
 \ exclusion rectangles appended after them are opaque, exact source geometry.
@@ -1190,10 +1224,20 @@ VARIABLE _RSHSP-SG-ITEM
     _RSHSP-SG-PLAN
     _RSHSP-SG-PUT-BACK ;
 
+\ How many runs a glyph family's arrays hold: its own, and in a DELTA's
+\ build as many as the frame on screen's family in the same place, so that
+\ the identity mapping writes the tombstones it adds where the runs lie.
+: _RSHSP-GLYPH-ROOM ( -- n )
+    _RSHSP-GCOUNT @ _RSHSP-DBATCH @ ?DUP 0= IF EXIT THEN
+    _RSHSP-FAMILY-N @ 1- OVER _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / U<
+        0= IF DROP EXIT THEN
+    _RTE-FB.FAMILIES-A @ _RSHSP-FAMILY-N @ 1- RTE-FAMILY-ENTRY-SIZE * +
+    DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH <> IF DROP EXIT THEN
+    RTE-FAMILY-ITEMS@ NIP RTE-GLYPH-RUN-PLAN-ITEM-SIZE / MAX ;
 : _RSHSP-GLYPH ( region -- )
     _RSHSP-REGION !
+    _RSHSP-PCURSOR @ _RSHSP-SAVED !
     RTE-FAMILY-GLYPH _RSHSP-FAMILY!
-    _RSHSP-CURSOR @ _RSHSP-SAVED !
     _RSHSP-REGION @ _RTE-IR.FLAGS @ RTE-REGION-CLIPPED AND IF
         _RSHSP-REGION @ _RTE-IR.CLIP-COLS @ _RSHSP-REGION @ _RTE-IR.CLIP-ROWS @
     ELSE _RSHSP-P @ _RTHP.COLS @ _RSHSP-P @ _RTHP.ROWS @ THEN
@@ -1229,17 +1273,21 @@ VARIABLE _RSHSP-SG-ITEM
         _RSHSP-GLYPH-PLAN
     THEN
     _RSHSP-GCOUNT @ 0= IF
-        -1 _RSHSP-FAMILY-N +! _RSHSP-SAVED @ RTE-GLYPH-RUN-PLAN-SIZE - _RSHSP-CURSOR ! EXIT
+        -1 _RSHSP-FAMILY-N +! _RSHSP-SAVED @ _RSHSP-PCURSOR ! EXIT
     THEN
     _RSHSP-GBASE @ _RSHSP-GCOUNT @ _RSHSP-ADD _RSHSP-NEXT-ID !
-    \ The runs planned come into the batch from the glyph banks: items,
+    \ The runs planned come into the part from the glyph banks: items,
     \ text, then references, the order the batch lists a family's spans
     \ in, so the admission's pairwise span check takes one pass.
-    _RSHSP-GITEMS @ _RSHSP-GCOUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RSHSP-COPY
+    _RSHSP-GLYPH-ROOM _RSHSP-COUNT !
+    _RSHSP-COUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RSHSP-MUL _RSHSP-PTAKE
+        _RSHSP-GITEMS @ OVER _RSHSP-GCOUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * MOVE
         _RSHSP-GITEMS !
     _RSHSP-GLYPH-HEADER
-    _RSHSP-GTEXT @ _RSHSP-GUSED @ _RSHSP-COPY _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
-    _RSHSP-GREFS @ _RSHSP-GCOUNT @ 16 * _RSHSP-COPY _RSHSP-FAMILY @ _RTE-FE.REFS-A !
+    _RSHSP-GTEXT @ _RSHSP-GUSED @ _RSHSP-PCOPY _RSHSP-GUSED @ _RSHSP-FAMILY-BYTES!
+    _RSHSP-COUNT @ 16 _RSHSP-MUL _RSHSP-PTAKE
+        _RSHSP-GREFS @ OVER _RSHSP-GCOUNT @ 16 * MOVE
+        _RSHSP-FAMILY @ _RTE-FE.REFS-A !
     _RSHSP-GCOUNT @ 16 * _RSHSP-FAMILY @ _RTE-FE.REFS-U ! ;
 : _RSHSP-GLYPHS-BODY ( -- )
     _RSHSP-GLYPH-WORK
@@ -1276,13 +1324,11 @@ VARIABLE _RSHSP-SG-ITEM
     ?DUP IF THROW THEN ;
 : _RSHSP-GLYPHS ( -- ) ['] _RSHSP-GLYPHS-IN-PLANES SCR-WITH-PROJECTION-PLANES ;
 
-VARIABLE _RSHSP-PART-USED VARIABLE _RSHSP-CLONE-U
 VARIABLE _RSHSP-NEXT-REGION VARIABLE _RSHSP-NEXT-OBJECT
-VARIABLE _RSHSP-META-U VARIABLE _RSHSP-PACK-A VARIABLE _RSHSP-PACK-U
 VARIABLE _RSHSP-V-T VARIABLE _RSHSP-V-B VARIABLE _RSHSP-V-CAP
 VARIABLE _RSHSP-V-U VARIABLE _RSHSP-V-BATCH VARIABLE _RSHSP-V-CAT
 VARIABLE _RSHSP-V-ENTRY VARIABLE _RSHSP-V-PLAN
-VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
+VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
 : _RSHSP-IN-PART? ( a u -- flag )
     DUP 0= IF DROP 0= EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
@@ -1290,7 +1336,7 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     OVER _RSHSP-V-T @ _RTHP-PACKED@ >R U< 0= IF
         2DUP + R@ _RSHSP-V-T @ _RTHP-PACK-A + U> 0= IF R> DROP 2DROP -1 EXIT THEN
     THEN R> DROP
-    OVER _RSHSP-V-B @ DUP RSHSP-PART.BATCH @ + U< IF 2DROP 0 EXIT THEN
+    OVER _RSHSP-V-B @ RSHSP-PART-HEADER-SIZE + U< IF 2DROP 0 EXIT THEN
     + _RSHSP-V-B @ _RSHSP-V-U @ + U> 0= ;
 : _RSHSP-OFFSET-SPAN? ( offset bytes -- flag )
     DUP 0= IF DROP 0= EXIT THEN
@@ -1344,10 +1390,31 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-V-OBJECT @ 1 _RTHP-U32+? 0= IF DROP 0 EXIT THEN
     _RSHSP-V-B @ RSHSP-PART.NEXT-OBJECT @ = ;
 
+\ The model, correlations, actions and membership the part names lie apart
+\ from one another and from every span of its batch.
+VARIABLE _RSHSP-V-MA VARIABLE _RSHSP-V-MU
+: _RSHSP-META@ ( index -- a u )
+    16 * 8 + _RSHSP-V-B @ + DUP @ _RSHSP-V-B @ + SWAP 8 + @ ;
+: _RSHSP-META-APART? ( -- flag )
+    4 0 DO
+        I _RSHSP-META@ DUP 0= IF 2DROP ELSE
+            _RSHSP-V-MU ! _RSHSP-V-MA !
+            I 0 ?DO
+                _RSHSP-V-MA @ _RSHSP-V-MU @ I _RSHSP-META@ MSPAN-OVERLAP? IF
+                    0 UNLOOP UNLOOP EXIT
+                THEN
+            LOOP
+            _RSHSP-V-BATCH @ RTE-FAMILY-BATCH-SPAN-COUNT 0 ?DO
+                _RSHSP-V-MA @ _RSHSP-V-MU @ I _RSHSP-V-BATCH @ RTE-FAMILY-BATCH-SPAN@
+                    MSPAN-OVERLAP? IF 0 UNLOOP UNLOOP EXIT THEN
+            LOOP
+        THEN
+    LOOP -1 ;
 \ BANK, one of the screen producer's target banks, names a whole part of the
-\ shell's: one at the start of an extension block, its spans in order and
-\ inside it, its model and batch whole, and its catalog, batch and
-\ frontiers those of the frame the bank records.
+\ shell's: one at the start of an extension block, each of its spans inside
+\ it, past its header, or in the bank, apart from every other, its model
+\ and batch whole, and its catalog, batch and frontiers those of the frame
+\ the bank records.  The part need not be dense.
 : _RSHSP-PART-VALID? ( bank -- flag )
     DUP _RSHSP-V-T ! _RTHP-XBLOCK@ _RSHSP-V-U ! _RSHSP-V-B !
     _RSHSP-V-B @ _RSHSP-P @ _RTHP-XBLOCK-CAPACITY
@@ -1357,16 +1424,11 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-V-T @ _RTHP-TB.DRAW @ 0=
     _RSHSP-V-T @ _RTHP-TB.OWNER @ 0= OR
     _RSHSP-V-T @ _RTHP-TB.GENERATION @ 0= OR IF 0 EXIT THEN
-    RSHSP-PART-HEADER-SIZE _RSHSP-V-NEXT !
     72 8 DO
         _RSHSP-V-B @ I + DUP @ SWAP 8 + @
         2DUP _RSHSP-OFFSET-SPAN? 0= IF 2DROP 0 UNLOOP EXIT THEN
-        DUP IF
-            SWAP _RSHSP-V-NEXT @ <> IF DROP 0 UNLOOP EXIT THEN
-            7 + -8 AND _RSHSP-V-NEXT +!
-        ELSE 2DROP THEN
+        DROP 7 AND IF 0 UNLOOP EXIT THEN
     16 +LOOP
-    _RSHSP-V-B @ RSHSP-PART.BATCH @ _RSHSP-V-NEXT @ <> IF 0 EXIT THEN
     _RSHSP-V-B @ RSHSP-PART.CORRELATIONS-U @ RSHPL-CORRELATION-SIZE MOD
     _RSHSP-V-B @ RSHSP-PART.MEMBERSHIP-U @ RSHMM-ENTRY-SIZE MOD OR IF 0 EXIT THEN
     _RSHSP-V-B @ RSHSP-PART.MODEL @ _RSHSP-V-B @ +
@@ -1377,73 +1439,48 @@ VARIABLE _RSHSP-V-NEXT VARIABLE _RSHSP-V-OBJECT VARIABLE _RSHSP-V-STRIDE
     _RSHSP-V-B @ DUP RSHSP-PART.MODEL @ +
     DUP SHM.WIDTH @ _RSHSP-V-CAT @ _RTE-RC.SURFACE-COLS @ <>
     SWAP SHM.HEIGHT @ _RSHSP-V-CAT @ _RTE-RC.SURFACE-ROWS @ <> OR IF 0 EXIT THEN
-    _RSHSP-V-BATCH @ _RSHSP-V-T @ _RTHP-PACKED@
-        _RSHFC-MEASURE-PROVED RSHFC-S-OK <> IF DROP 0 EXIT THEN
-        _RSHSP-V-NEXT @ + _RSHSP-V-U @ <> IF 0 EXIT THEN
+    _RSHSP-META-APART? 0= IF 0 EXIT THEN
     _RSHSP-PART-FRONTIERS? 0= IF 0 EXIT THEN
     _RSHSP-V-CAT @ _RTE-RC.OWNER @ _RSHSP-V-T @ _RTHP-TB.OWNER @ <>
     _RSHSP-V-CAT @ _RTE-RC.GENERATION @ _RSHSP-V-T @ _RTHP-TB.GENERATION @ <> OR
     _RSHSP-V-BATCH @ _RTE-FB.SURFACE-GENERATION @ _RSHSP-V-T @ _RTHP-TB.DRAW @ <> OR 0= ;
 
+\ SOURCE's BYTES, written into the part, which OFFSET-FIELD then names.
 : _RSHSP-PACK ( source bytes offset-field -- )
-    >R _RSHSP-PACK-U ! _RSHSP-PACK-A !
-    _RSHSP-PACK-U @ R@ 8 + !
-    _RSHSP-PACK-U @ IF
-        _RSHSP-PART-USED @ R@ !
-        _RSHSP-PACK-A @ _RSHSP-PART @ _RSHSP-PART-USED @ + _RSHSP-PACK-U @ MOVE
-        _RSHSP-PACK-U @ _RSHSP-ALIGN _RSHSP-PART-USED +!
-    ELSE 0 R@ ! THEN R> DROP ;
-\ Freezing is the only write to a part.  The finished part is a proved copy
-\ of the batch the preflight admitted and of the model the shell snapshot
-\ validated, so it is checked once more only with every-frame checks on.
-\ STAGE freezes into the extension block the frame on screen does not name,
-\ after the pending bank dropped its part, so a part a bank names is never
-\ written again, and later uses compare its identities only.
-\ The batch's graph was checked by the preflight that admitted it, at the
-\ end of BUILD-BATCH, and nothing since has changed what that check reads.
-\ A START freezes right after it.  A DELTA's identity mapping rewrites the
-\ shell's own identities, which the graph check reads only as a pane's,
-\ nonzero before and after; and it gives a glyph family new item and
-\ reference arrays, fresh from the scratch block and so apart from every
-\ other span, holding the admitted runs in order and then canonical
-\ tombstones with no text, whose references continue the family's text at
-\ its end.  So the measure and the copy take the batch as proved; the
-\ measure still checks every span.  The applications' items and their text
-\ stay in the pending bank, which the part points at and which is kept,
-\ sealed and retired with it.
-\ The pending bank then names the part, which makes it the frame's.
-: _RSHSP-FREEZE ( -- )
-    _RSHSP-BATCH @ _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@
-        _RSHFC-MEASURE-PROVED RSHFC-S-OK = _RSHSP-CHECK _RSHSP-CLONE-U !
-    RSHSP-PART-HEADER-SIZE _RSHSP-MU @ _RSHSP-ALIGN _RSHSP-ADD
-    _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ RSHPL-CORRELATION-SIZE _RSHSP-MUL _RSHSP-ADD
-    _RSHSP-RESULT @ RSHPL-RESULT.ACTION-BYTES @ _RSHSP-ALIGN _RSHSP-ADD
-    _RSHSP-MAP-U @ _RSHSP-ALIGN _RSHSP-ADD DUP _RSHSP-META-U !
-    _RSHSP-CLONE-U @ _RSHSP-ADD DUP _RSHSP-S @ _RSHSP.PART-BYTES !
-    DUP _RSHSP-PART-CAP @ U> IF DROP RTE-S-CAPACITY THROW THEN
-    \ The batch, in the scratch block, and the extension block are both from
-    \ Desk's memory source, so only every-frame checks prove them apart again.
-    CHK-EVERY-FRAME? IF
-        _RSHSP-BATCH @ _RSHSP-PART @ _RSHSP-PART-CAP @ _RSHFC-BATCH-OUTSIDE?
-            _RSHSP-PARTS-DAMAGED CHK-NAME _RSHSP-CHECK
-    THEN
-    _RSHSP-PART @ SWAP 0 FILL
-    RSHSP-PART-HEADER-SIZE _RSHSP-PART-USED !
-    _RSHSP-M @ _RSHSP-MU @ _RSHSP-PART @ RSHSP-PART.MODEL _RSHSP-PACK
+    >R DUP R@ 8 + !
+    DUP IF _RSHSP-PCOPY _RSHSP-PART-OFFSET R> ! ELSE 2DROP 0 R> ! THEN ;
+\ A build writes the shell's part where it is kept, in the extension block
+\ the frame on screen does not name, after the pending bank dropped its
+\ part, so a part a bank names is never written again, and later uses
+\ compare its identities only.  The part holds the batch the preflight
+\ admitted and the model the shell snapshot validated, so it is checked
+\ once more only with every-frame checks on.  The batch's graph was checked
+\ by the preflight at the end of BUILD-BATCH, and nothing since has changed
+\ what that check reads.  A START finishes right after it.  A DELTA's
+\ identity mapping rewrites the shell's own identities, which the graph
+\ check reads only as a pane's, nonzero before and after, and extends a
+\ glyph family's items and references into the room the build left after
+\ them, which no other span holds, with canonical tombstones that have no
+\ text and whose references continue the family's text at its end.  The
+\ applications' items and their text stay in the pending bank, which the
+\ part points at and which is kept, sealed and retired with it.
+\ FINISH writes the planner's correlations, actions and membership into the
+\ part at their used sizes, after the identity mapping renumbered them, and
+\ fills in the header; the pending bank then names the part, which makes
+\ it the frame's.
+: _RSHSP-FINISH ( -- )
+    _RSHSP-M @ _RSHSP-PART-OFFSET _RSHSP-PART @ RSHSP-PART.MODEL !
+    _RSHSP-MU @ _RSHSP-PART @ RSHSP-PART.MODEL-U !
     _RSHSP-CORR @ _RSHSP-RESULT @ RSHPL-RESULT.CORRELATIONS @ RSHPL-CORRELATION-SIZE *
         _RSHSP-PART @ RSHSP-PART.CORRELATIONS _RSHSP-PACK
     _RSHSP-ACTIONS @ _RSHSP-RESULT @ RSHPL-RESULT.ACTION-BYTES @
         _RSHSP-PART @ RSHSP-PART.ACTIONS _RSHSP-PACK
     _RSHSP-MAP @ _RSHSP-MAP-U @ _RSHSP-PART @ RSHSP-PART.MEMBERSHIP _RSHSP-PACK
-    _RSHSP-PART-USED @ _RSHSP-PART @ RSHSP-PART.BATCH !
-    _RSHSP-BATCH @ _RSHSP-PART @ _RSHSP-PART-USED @ +
-        _RSHSP-PART-CAP @ _RSHSP-PART-USED @ -
-        _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@ _RSHFC-COPY-PROVED
-        RSHFC-S-OK = _RSHSP-CHECK _RSHSP-PART-USED +!
+    _RSHSP-BATCH @ _RSHSP-PART-OFFSET _RSHSP-PART @ RSHSP-PART.BATCH !
     _RSHSP-NEXT-REGION @ _RSHSP-PART @ RSHSP-PART.NEXT-REGION !
     _RSHSP-NEXT-OBJECT @ _RSHSP-PART @ RSHSP-PART.NEXT-OBJECT !
     _RSHSP-PROMPT-ID @ _RSHSP-PART @ RSHSP-PART.PROMPT !
-    _RSHSP-PART @ _RSHSP-PART-USED @ _RSHSP-P @ _RTHP-XBLOCK!
+    _RSHSP-PART @ _RSHSP-PCURSOR @ _RSHSP-PART-OFFSET _RSHSP-P @ _RTHP-XBLOCK!
     CHK-EVERY-FRAME? IF
         _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-PART-VALID?
             _RSHSP-PARTS-DAMAGED CHK-NAME _RSHSP-CHECK
@@ -1457,7 +1494,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
 : _RSHSP-BUILD-BATCH ( -- )
     1 _RSHSP-PSTAGE !
     _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-CHECK
-    _RSHSP-SCRATCH! 0 _RSHSP-S @ _RSHSP.PART-BYTES !
+    _RSHSP-SCRATCH! _RSHSP-PART-START
     2 _RSHSP-PSTAGE !
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-S @ _RSHSP.SOURCE @ SHSN-SNAPSHOT-FOR@
         SHSN-S-OK = _RSHSP-CHECK _RSHSP-MU ! _RSHSP-M !
@@ -1466,7 +1503,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     4 _RSHSP-PSTAGE !
     _RSHSP-M @ SHM.WIDTH @ _RSHSP-P @ _RTHP.COLS @ = _RSHSP-CHECK
     _RSHSP-M @ SHM.HEIGHT @ _RSHSP-P @ _RTHP.ROWS @ = _RSHSP-CHECK
-    _RSHSP-M @ _RSHSP-MU @ _RSHSP-COPY _RSHSP-M !
+    _RSHSP-M @ _RSHSP-MU @ _RSHSP-PCOPY _RSHSP-M !
     \ The shell snapshot validated these bytes when it published them, so
     \ the copy is validated again only with every-frame checks on; the band
     \ helpers, the planner and the membership builder below skip it either
@@ -1484,6 +1521,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     8 _RSHSP-PSTAGE !
     _RSHSP-GLYPHS
     9 _RSHSP-PSTAGE !
+    _RSHSP-FAMILIES @ _RSHSP-FAMILY-N @ RTE-FAMILY-ENTRY-SIZE * _RSHSP-PCOPY _RSHSP-FAMILIES !
     1 _RSHSP-BATCH @ _RTE-FB.ABI !
     _RSHSP-CATALOG @ _RSHSP-BATCH @ _RTE-FB.CATALOG-A !
     RTE-REGION-CATALOG-SIZE _RSHSP-BATCH @ _RTE-FB.CATALOG-U !
@@ -1492,7 +1530,7 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     _RSHSP-P @ _RTHP.ATTEMPT @ _RSHSP-BATCH @ _RTE-FB.ATTEMPT !
     _RSHSP-P @ _RTHP.SOURCE-GEN @ _RSHSP-BATCH @ _RTE-FB.SOURCE-GENERATION !
     _RSHSP-P @ _RTHP.SOURCE-DRAW @ _RSHSP-BATCH @ _RTE-FB.SURFACE-GENERATION !
-    \ The batch lies in the producer's scratch block and pending bank,
+    \ The batch lies in the free extension block and the pending bank,
     \ proved apart from the engine's storage when they were lent, and its
     \ spans are laid out apart, so the proved preflight proves them so again
     \ only with every-frame checks on.
@@ -1501,13 +1539,13 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
 \ A complete START candidate defines every region and object with the
 \ fresh identities its admission reserved.
 : _RSHSP-BUILD ( -- )
-    0 _RSHSP-REUSE ! _RSHSP-SOURCE-TARGET _RSHSP-BUILD-BATCH
+    0 _RSHSP-REUSE ! 0 _RSHSP-DBATCH ! _RSHSP-SOURCE-TARGET _RSHSP-BUILD-BATCH
     _RSHSP-ADMISSION @ _RTE-FA.LAST-REGION @ 1 _RSHSP-ADD _RSHSP-NEXT-REGION !
     _RSHSP-ADMISSION @ _RTE-FA.OBJECT-LAST @ 1 _RSHSP-ADD _RSHSP-NEXT-OBJECT !
-    _RSHSP-FREEZE ;
+    _RSHSP-FINISH ;
 
 \ Full caller capacities are protected, including the screen producer's
-\ extension blocks, which the shell freezes into.  Guards precede every
+\ extension blocks, which the shell builds its parts in.  Guards precede every
 \ constructor store and are repeated before a new preparation.
 CREATE _RSHSP-SPANS 64 ALLOT
 VARIABLE _RSHSP-LIVE-PROOF
@@ -1653,11 +1691,11 @@ VARIABLE _RSHSP-IA VARIABLE _RSHSP-IU VARIABLE _RSHSP-ISOURCE VARIABLE _RSHSP-IS
 \  Storage that follows the candidate
 \ ---------------------------------------------------------------------
 \ A build that ran out of the screen producer's scratch block, or of room in
-\ the extension block it freezes into, has the producer take a larger block
-\ from its memory source and runs again: what it needed and half again.
-\ Neither block holds anything another step reads: the scratch block is
-\ rebuilt by every candidate, and STAGE freezes only into the extension
-\ block no bank names.  The producer proves a new block apart from its own
+\ the extension block it builds the part in, has the producer take a larger
+\ block from its memory source and runs again: what it needed and half
+\ again.  Neither block holds anything another step reads: the scratch
+\ block is rebuilt by every candidate, and STAGE builds only in the
+\ extension block no bank names.  The producer proves a new block apart from its own
 \ storage; every dispatch proves the rest again.  A refusal leaves the
 \ shell's part CELL, and the producer's fallback record keeps the bytes
 \ asked for and held.
@@ -1677,7 +1715,7 @@ VARIABLE _RSHSP-DIAG-GROWTHS
     1 _RSHSP-DIAG-GROWTHS +! -1 ;
 
 \ The pending bank drops any part it named, and BUILD-XT runs, again each
-\ time a block it ran out of grew; it freezes the shell's part into the
+\ time a block it ran out of grew; it builds the shell's part in the
 \ extension block the frame on screen does not name, and the pending bank
 \ names it.  A build that fails leaves the pending bank naming none.
 : _RSHSP-STAGE ( build-xt -- status )
@@ -1755,7 +1793,7 @@ VARIABLE _RSHSP-DX-E VARIABLE _RSHSP-DX-MAX
 \ Diagnostics: changed draws refused by the probe, preparations refused and
 \ prepared, and where the last refusal happened: its stage (1 catalog,
 \ 2 family shape, 3 controls, 4 statics/instruments/series/panes, 5 glyph
-\ runs, 6 frontiers and freeze, 7 candidate build), family index and status.
+\ runs, 6 frontiers and finish, 7 candidate build), family index and status.
 VARIABLE _RSHSP-DIAG-PROBE-REFUSALS VARIABLE _RSHSP-DIAG-REFUSALS
 VARIABLE _RSHSP-DIAG-PREPARED VARIABLE _RSHSP-DIAG-STAGE
 VARIABLE _RSHSP-DIAG-FAMILY VARIABLE _RSHSP-DIAG-STATUS VARIABLE _RSHSP-DSTAGE
@@ -1979,18 +2017,18 @@ VARIABLE _RSHSP-DBANK
     1 OVER _RTE-LPI.HEIGHT ! 1 OVER _RTE-LPI.WIDTH !
     _RSHSP-PLAN @ _RTE-LP.REGION-ROWS @ OVER _RTE-LPI.ROOT-HEIGHT !
     _RSHSP-PLAN @ _RTE-LP.REGION-COLS @ SWAP _RTE-LPI.ROOT-WIDTH ! ;
+\ A glyph family's runs stay where its build laid them and take the
+\ acknowledged identities slot by slot.  Past its runs, in the room the
+\ build left for as many as the frame on screen's family holds, each
+\ acknowledged run it no longer has becomes a tombstone.
 : _RSHSP-D-GLYPHS ( -- )
     _RSHSP-DN @ _RSHSP-DAN @ MAX _RSHSP-COUNT !
-    _RSHSP-COUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RSHSP-MUL _RSHSP-TAKE _RSHSP-NEW !
-    _RSHSP-COUNT @ 16 _RSHSP-MUL _RSHSP-TAKE _RSHSP-OUT !
     _RSHSP-DPE @ _RTE-FE.PLAN-A @ _RSHSP-PLAN !
+    _RSHSP-DPE @ _RTE-FE.REFS-A @ _RSHSP-OUT !
     _RSHSP-COUNT @ 0 ?DO
-        _RSHSP-NEW @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RSHSP-ITEM !
+        _RSHSP-DPI @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RSHSP-ITEM !
         _RSHSP-OUT @ I 16 * + _RSHSP-TEMP !
         I _RSHSP-DN @ U< IF
-            _RSHSP-DPI @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RSHSP-ITEM @
-                RTE-GLYPH-RUN-PLAN-ITEM-SIZE MOVE
-            _RSHSP-DPE @ _RTE-FE.REFS-A @ I 16 * + _RSHSP-TEMP @ 16 MOVE
             I _RSHSP-DAN @ U< IF
                 _RSHSP-DAI @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RTE-LPI.OBJECT @
             ELSE
@@ -2003,9 +2041,7 @@ VARIABLE _RSHSP-DBANK
             _RSHSP-DPE @ _RTE-FE.BYTES-U @ _RSHSP-TEMP @ !
         THEN
     LOOP
-    _RSHSP-NEW @ _RSHSP-PLAN @ _RTE-LP.ITEMS-A !
     _RSHSP-COUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RSHSP-PLAN @ _RTE-LP.ITEMS-U !
-    _RSHSP-OUT @ _RSHSP-DPE @ _RTE-FE.REFS-A !
     _RSHSP-COUNT @ 16 * _RSHSP-DPE @ _RTE-FE.REFS-U ! ;
 
 : _RSHSP-D-REGION? ( -- flag )
@@ -2061,7 +2097,7 @@ VARIABLE _RSHSP-DBANK
     6 _RSHSP-DSTAGE !
     _RSHSP-ACTIVE-PART RSHSP-PART.NEXT-REGION @ _RSHSP-NEXT-REGION !
     _RSHSP-BATCH @ _RSHSP-D-NEXT-OBJECT _RSHSP-NEXT-OBJECT !
-    _RSHSP-FREEZE ;
+    _RSHSP-FINISH ;
 : _RSHSP-DELTA-PREPARE ( -- status )
     0 _RSHSP-DSTAGE !
     _RSHSP-DELTA-BASE? IF _RSHSP-ACTIVE-INTACT? ELSE 0 THEN

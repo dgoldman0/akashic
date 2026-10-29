@@ -185,11 +185,12 @@ _RTE-FA-SUMMARY-MEM 7 + -8 AND CONSTANT _RTE-FA-SUMMARY
             THEN
         ELSE 2DROP THEN
     LOOP 2DROP 2DROP -1 ;
-\ A batch the shell producer builds lies in the screen producer's scratch
-\ block and pending bank, both from Desk's memory source and proved apart
-\ from the engine's storage when they were lent.  The shell lays the
-\ bank's spans out apart and takes its own spans and the admission record
-\ from the scratch block one after another.  Its proved preflight
+\ A batch the shell producer builds lies in the screen producer's free
+\ extension block and pending bank, which with its scratch block come from
+\ Desk's memory source and were proved apart from the engine's storage
+\ when they were lent.  The shell lays the bank's spans out apart, takes
+\ its own spans from the extension block one after another, and the
+\ admission record from the scratch block.  Its proved preflight
 \ therefore leaves out the proofs that the spans lie apart from the
 \ engine's storage, from the admission record and from one another, which
 \ a batch drawn from two such blocks would make span by span, unless

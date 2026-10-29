@@ -122,7 +122,7 @@ _SS-DONE
 def test_a_click_reads_the_batch_of_the_part_it_routes_through():
     """A click finds its control in the part of the frame the terminal
     acknowledged, which it found current, not in whichever part a check read
-    last.  Normal mode checks a frozen part only when a START is
+    last.  Normal mode checks a built part only when a START is
     acknowledged, so a click after later frames read a batch whose block a
     newer frame might have rewritten in another layout.  Here no check
     reads either part."""
@@ -152,7 +152,7 @@ _SX-SETUP _SD-HOOKS
 _SX-P _RTHP.NEXT-OBJECT @ _SD-FRONTIER !
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
 _SD-PENDING-VALID? _SS-A
-\ The mapped batch still passes the graph check the freeze takes as proved.
+\ The mapped batch still passes the graph check FINISH takes as proved.
 _RSHSP-BATCH @ RTE-FAMILY-BATCH-VALID? _SS-A
 _SD-EMIT _SS-OK
 _SD-GDEFINE @ 2 = _SS-A _SD-GREPLACE @ 0> _SS-A
@@ -389,10 +389,10 @@ _SS-DONE
 ''', minimum=22)
 
 
-def test_every_frame_checks_validate_the_model_copy_and_the_frozen_bank():
+def test_every_frame_checks_validate_the_model_copy_and_the_built_part():
     """The shell snapshot validates its model when it publishes it. With
     every-frame checks on, the producer validates its copy of the model
-    again, and the frozen bank after it; in normal mode it builds and freezes
+    again, and the part it built after it; in normal mode it builds the part
     from the copy as published."""
     staged_run(DELTA + r'''
 \ A nonzero byte in an entry past the published model's count, where the
@@ -416,15 +416,15 @@ _SS-DONE
 
 def test_safe_mode_checks_the_acknowledged_part_again_before_using_it():
     """Part 4's damage test.  A bug writes into the record of the frame the
-    terminal holds after the record was frozen and checked; here, into the
+    terminal holds after the record was built and checked; here, into the
     bytes of the shell's part its bank names, which only the part's full
-    check reads.  Normal mode does not look at the record again, so a click
+    check reads: the part's length, cut so that its last span ends past it.  Normal mode does not look at the record again, so a click
     still routes through it and the next changed draw becomes a DELTA built
     on it.  Safe mode checks the record again first: the click goes nowhere,
     the DELTA is refused, which leaves the draw to a START that reads
     nothing from the record, and the check names the shell's part."""
     staged_run(DELTA + r'''
-: _SB-DAMAGE ( -- ) _SX-P _RTHP.TARGET-ACTIVE @ _RTHP-TB.XBLOCK-BYTES DUP @ 8 + SWAP ! ;
+: _SB-DAMAGE ( -- ) _SX-P _RTHP.TARGET-ACTIVE @ _RTHP-TB.XBLOCK-BYTES DUP @ 8 - SWAP ! ;
 : _SB-NAMED? ( -- flag ) CHK-DAMAGE S" the shell's part of the frame" COMPARE 0= ;
 \ A click on the taskbar's task, routed through the acknowledged part as
 \ RSHSP-CONTROL-TARGET@ routes it once the sidecar is proved.
@@ -456,7 +456,7 @@ CHK-WHY-BOOT CHK-SAFE-ON
 _RSHSP-DELTA-PREPARE RTE-S-UNAVAILABLE = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
 CHK-DAMAGE-COUNT @ 2 = _SS-A _SB-NAMED? _SS-A
-\ The START freezes into the other block, with every check, and replaces
+\ The START builds in the other block, with every check, and replaces
 \ the damaged record once the terminal has it.
 _SX-PACK-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A
 _SD-ACK _RSHSP-ACTIVE-PART _SX-KB = _SS-A
@@ -526,11 +526,11 @@ _SS-DONE
 ''', minimum=17)
 
 
-def test_normal_mode_freezes_and_sends_a_delta_through_the_proved_emission():
-    """The shell sends its frozen parts through the proved emission. With
+def test_normal_mode_builds_and_sends_a_delta_through_the_proved_emission():
+    """The shell sends its parts through the proved emission. With
     every-frame checks on it still proves the parts and the shell facade
-    before it writes; in normal mode the freeze and the emission take the
-    parts as proved copies of admitted batches, and send the same change."""
+    before it writes; in normal mode the finish and the emission take the
+    parts as holding admitted batches, and send the same change."""
     staged_run(DELTA + r'''
 : _SN-EMIT ( -- status )
     _SD-CLEAR _RSHSP-PENDING-PART _SD-BATCH _RSHSP-ACTIVE-PART _SD-BATCH
@@ -542,14 +542,14 @@ _SX-SETUP _SD-HOOKS
 ' _SD-HELLP _SD-DRAW _SD-TA _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
 _SN-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A _SD-ACK
-\ Normal mode: the next change freezes into a part the test still finds
+\ Normal mode: the next change builds a part the test still finds
 \ valid, and is sent the same way.
 0 CHK-EVERY-FRAME !
 ' _SD-HELLO _SD-DRAW _SD-TB _SD-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
 _SD-PENDING-VALID? _SS-A
 _SN-EMIT _SS-OK _SD-GREPLACE @ 1 = _SS-A _SD-GDEFINE @ 0= _SS-A
-\ A shell facade that does not name itself: in normal mode the frozen
+\ A shell facade that does not name itself: in normal mode the built
 \ parts are sent without proving it again; every-frame checks refuse it.
 _SX-FX _RTE-SH.SELF DUP @ 1+ SWAP !
 _SN-EMIT _SS-OK

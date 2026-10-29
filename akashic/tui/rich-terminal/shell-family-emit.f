@@ -411,12 +411,12 @@ VARIABLE _RTE-FDE-PROVED
     0 _RTE-FDE-KNOWN-XT ! 0 _RTE-FDE-PROVED ! _RTE-FDE-EMIT ;
 \ Internal peer for a caller that proved both batches with
 \ RTE-FAMILY-BATCH-VALID? and has not written them since, such as the shell
-\ sidecar's frozen banks, which hold proved copies of batches the family
-\ preflight admitted. It omits those two graph checks, and in normal mode
-\ the proofs that the batches and the shell facade lie apart from the
-\ engine's and the module's storage: the banks come from a memory source,
-\ whose live blocks never overlap, and the facade was proved when it was
-\ lent (check-mode.f).
+\ sidecar's parts, which hold batches the family preflight admitted. It
+\ omits those two graph checks, and in normal mode the proofs that the
+\ batches and the shell facade lie apart from the engine's and the
+\ module's storage: the parts and banks come from a memory source, whose
+\ live blocks never overlap, and the facade was proved when it was lent
+\ (check-mode.f).
 \ KNOWN-XT ( entry -- list-a n known? ), or 0, says what the caller's own
 \ comparison found.  It is called once for each family of PENDING, in
 \ order.  For a family it knows, it gives the indexes of the items that

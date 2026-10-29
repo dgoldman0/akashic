@@ -382,8 +382,8 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP.SHELL-BUILT              ( p -- a ) 5080 + ;
 : _RTHP.BASE-Z                   ( p -- a ) 5088 + ;
 \ The two extension blocks, beside the target banks: each 0 0, or a block
-\ and its bytes.  The extension freezes its part of a frame into one, and
-\ the frame's bank names it (_RTHP-TB.XBLOCK); the next part goes into the
+\ and its bytes.  The extension builds its part of a frame in one, and the
+\ frame's bank names it (_RTHP-TB.XBLOCK); the next part goes into the
 \ other.  Each grows from the memory source to what a part needs and half
 \ again.
 : _RTHP.XBLOCK0-A                ( p -- a ) 5096 + ;
@@ -396,8 +396,8 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ extension's batch sends.  0 without an extension.
 : _RTHP.SHELL-CONTROLS           ( p -- a ) 5128 + ;
 \ The extension's scratch block, beside the extension blocks: 0 0, or a
-\ block and its bytes.  The extension builds its part of a frame there
-\ before it freezes it into an extension block; nothing kept lies in it.
+\ block and its bytes.  The extension does there the work of building its
+\ part of a frame that the part does not keep; nothing kept lies in it.
 \ It grows from the memory source to what a build needs and half again.
 : _RTHP.XSCRATCH-A               ( p -- a ) 5136 + ;
 : _RTHP.XSCRATCH-U               ( p -- a ) 5144 + ;
@@ -536,7 +536,7 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-TB.DIALOG-UTF8             ( bank -- a ) 360 + ;
 \ The extension's part of the frame (RTHPX-PREPARE): the extension block
 \ it lies at the start of, and the bytes it uses there, or 0 0.  Packing a
-\ bank names none; only the extension's freeze names one.
+\ bank names none; only the extension names one, once it has built it.
 : _RTHP-TB.XBLOCK                  ( bank -- a ) 368 + ;
 : _RTHP-TB.XBLOCK-BYTES            ( bank -- a ) 376 + ;
 
@@ -2034,7 +2034,7 @@ VARIABLE _RTHP-FT-INTENTS
 \ ---------------------------------------------------------------------
 \  The extension's part of a frame
 \ ---------------------------------------------------------------------
-\ An installed extension freezes its part of each frame into one of the
+\ An installed extension builds its part of each frame in one of the
 \ producer's two extension blocks and names it in the pending bank: for
 \ Desk's shell, its batch and what a click on its chrome reads.  The part
 \ is then the bank's own, published, sealed, kept and retired with it, so
@@ -2046,7 +2046,7 @@ VARIABLE _RTHP-FT-INTENTS
     DUP _RTHP-TB.XBLOCK @ SWAP _RTHP-TB.XBLOCK-BYTES @ ;
 
 \ ( producer -- field ) the field of the extension block the frame on
-\ screen does not name, which the next part is frozen into.  Every
+\ screen does not name, which the next part is built in.  Every
 \ preparation drops the pending bank's part first, so no bank names it.
 : _RTHP-XBLOCK-FREE-FIELD  ( producer -- field )
     DUP _RTHP.TARGET-ACTIVE @ DUP IF _RTHP-TB.XBLOCK @ THEN
@@ -2054,7 +2054,7 @@ VARIABLE _RTHP-FT-INTENTS
         _RTHP.XBLOCK1-A
     ELSE _RTHP.XBLOCK0-A THEN ;
 
-\ ( producer -- a u ) the block the next part is frozen into, or 0 0.
+\ ( producer -- a u ) the block the next part is built in, or 0 0.
 : _RTHP-XBLOCK-FREE  ( producer -- a u )
     _RTHP-XBLOCK-FREE-FIELD DUP @ SWAP 8 + @ ;
 

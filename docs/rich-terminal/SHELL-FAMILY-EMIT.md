@@ -57,7 +57,7 @@ Both batches are checked with `RTE-FAMILY-BATCH-VALID?` first. The internal
 peer `_RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ( pending-batch active-batch shell
 known-xt -- status )` leaves out only those two checks, for a caller that
 proved both batches and has not written them since; the shell sidecar uses
-it for its frozen banks, each checked once when frozen.
+it for its parts, each checked once when built.
 
 Its `known-xt ( entry -- list-a n known? )`, or 0, says what the caller's
 own comparison already found. The emitter calls it once for each family of

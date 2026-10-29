@@ -1998,7 +1998,6 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/rich-terminal/family-batch.f",
         "tui/rich-terminal/provider-family.f",
         "tui/rich-terminal/region-catalog.f",
-        "tui/rich-terminal/shell-family-clone.f",
         "tui/rich-terminal/shell-family-emit.f",
         "tui/rich-terminal/shell-membership.f",
         "tui/rich-terminal/shell-planner.f",

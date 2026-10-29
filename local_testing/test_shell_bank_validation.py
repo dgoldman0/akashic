@@ -1,37 +1,15 @@
 """Owned part parsing refuses escaped pointers and corrupt ACK frontiers."""
 from test_field_model import run_field
-from test_shell_family_clone import CLONE
+from test_rich_region_catalog import PRELUDE as CATALOG
+from test_shell_screen_producer import STAGED, staged_run
 from test_shell_snapshot import PRELUDE as SOURCE
 
-FIXTURE = CLONE + SOURCE + r'''
-CREATE _SB-SS 247 ALLOT CREATE _SB-BS 32775 ALLOT
+FIXTURE = CATALOG + SOURCE + r'''
+CREATE _SB-SS 247 ALLOT
 CREATE _SB-PS RTHP-SIZE 7 + ALLOT CREATE _SB-HS SHSN-SIZE 7 + ALLOT
 CREATE _SB-XS RTE-SHELL-FACADE-SIZE 7 + ALLOT
-CREATE _SB-TS _RTHP-TARGET-BANK-HEADER-SIZE 7 + ALLOT
-: _SB-S _SB-SS 7 + -8 AND ; : _SB-B _SB-BS 7 + -8 AND ;
+: _SB-S _SB-SS 7 + -8 AND ;
 : _SB-P _SB-PS 7 + -8 AND ; : _SB-H _SB-HS 7 + -8 AND ; : _SB-X _SB-XS 7 + -8 AND ;
-: _SB-T _SB-TS 7 + -8 AND ;
-VARIABLE _SB-BO VARIABLE _SB-U VARIABLE _SB-OLD
-: _SB-BUILD
-    _SS-BUILD
-    80 _SS-M SHM.WIDTH ! 24 _SS-M SHM.HEIGHT !
-    23 1 _SS-M SHM-ENTRY SHME.ROW ! 23 2 _SS-M SHM-ENTRY SHME.ROW !
-    _SS-FREEZE _SS-VALID 0= _RC-A
-    _SB-B 32768 0 FILL _SB-T _RTHP-TARGET-BANK-HEADER-SIZE 0 FILL
-    \ The producer's first extension block holds the part its bank names.
-    _SB-P RTHP-SIZE 0 FILL _SB-P _RSHSP-P !
-    _SB-B _SB-P _RTHP.XBLOCK0-A ! 32768 _SB-P _RTHP.XBLOCK0-U !
-    RSHSP-PART-HEADER-SIZE _SB-B RSHSP-PART.MODEL ! _SS-U @ _SB-B RSHSP-PART.MODEL-U !
-    _SS-F _SB-B RSHSP-PART-HEADER-SIZE + _SS-U @ MOVE
-    _SS-U @ 7 + -8 AND RSHSP-PART-HEADER-SIZE + DUP _SB-BO ! _SB-B RSHSP-PART.BATCH !
-    _RC-BATCH _SB-B _SB-BO @ + 32768 _SB-BO @ - RSHFC-COPY 0= _RC-A
-    _SB-BO @ + DUP _SB-U ! _SB-T _RTHP-TB.XBLOCK-BYTES !
-    _SB-B _SB-T _RTHP-TB.XBLOCK ! 3 _SB-T _RTHP-TB.DRAW !
-    7 _SB-T _RTHP-TB.OWNER ! 9 _SB-T _RTHP-TB.GENERATION !
-    21 _SB-B RSHSP-PART.NEXT-REGION ! 106 _SB-B RSHSP-PART.NEXT-OBJECT ! ;
-: _SB-VALID _SB-T _RSHSP-PART-VALID? ;
-: _SB-BAD ( value field -- ) DUP @ >R DUP >R ! _SB-VALID 0= _RC-A R> R> SWAP ! ;
-: _SB-BATCH _SB-B _SB-BO @ + ;
 : _SB-HEADER
     _SB-S 240 0 FILL
     _RSHSP-MAGIC _SB-S _RSHSP.MAGIC ! RSHSP-SIZE _SB-S _RSHSP.SIZE ! _SB-S _SB-S _RSHSP.SELF !
@@ -44,43 +22,74 @@ def run(program, minimum=1):
               extra_sources=("tui/rich-terminal/shell-screen-producer.f",))
 
 
-def test_owned_part_graph_offsets_frontiers_and_whole_clone_extent():
-    run(FIXTURE + r'''
-_SB-BUILD _SB-VALID _RC-A
+def test_a_built_part_is_whole_and_its_corruptions_are_refused():
+    """The shell builds its part where it is kept.  The part is whole: each
+    span inside it, past its header, or in the bank that names it, apart from
+    every other, its model and batch whole, and its catalog, batch and
+    frontiers those of the frame the bank records.  It need not be dense.
+    Each corruption below breaks one of those, and the check refuses it."""
+    staged_run(STAGED + r'''
+: _SB-T ( -- bank ) _SX-P _RTHP.TARGET-PENDING @ ;
+: _SB-B ( -- part ) _SB-T _RTHP-XBLOCK@ DROP ;
+: _SB-U ( -- u ) _SB-T _RTHP-XBLOCK@ NIP ;
+: _SB-VALID ( -- flag ) _SB-T _RSHSP-PART-VALID? ;
+: _SB-BAD ( value field -- ) DUP @ >R DUP >R ! _SB-VALID 0= _SS-A R> R> SWAP ! ;
+: _SB-BATCH ( -- batch ) _SB-B DUP RSHSP-PART.BATCH @ + ;
+: _SB-FIRST ( -- family ) _SB-BATCH _RTE-FB.FAMILIES-A @ ;
+_SX-SETUP _SX-PACK-PREPARE _SS-OK
+_SB-VALID _SS-A
+\ The frontiers.
 0 _SB-B RSHSP-PART.NEXT-REGION _SB-BAD
-22 _SB-B RSHSP-PART.NEXT-REGION _SB-BAD
+_SB-B RSHSP-PART.NEXT-REGION @ 1+ _SB-B RSHSP-PART.NEXT-REGION _SB-BAD
 0 _SB-B RSHSP-PART.NEXT-OBJECT _SB-BAD
-107 _SB-B RSHSP-PART.NEXT-OBJECT _SB-BAD
+_SB-B RSHSP-PART.NEXT-OBJECT @ 1+ _SB-B RSHSP-PART.NEXT-OBJECT _SB-BAD
 \ A prompt identity for a model without Desk's prompt.
+_SB-B DUP RSHSP-PART.MODEL @ + SHM.PROMPT-U @ 0= _SS-A
 101 _SB-B RSHSP-PART.PROMPT _SB-BAD
-_SB-U @ 8 + _SB-T _RTHP-TB.XBLOCK-BYTES _SB-BAD
-_SB-BO @ 8 + _SB-B RSHSP-PART.BATCH _SB-BAD
-RSHSP-PART-HEADER-SIZE 8 + _SB-B RSHSP-PART.MODEL _SB-BAD
-81 _SB-B RSHSP-PART-HEADER-SIZE + SHM.WIDTH _SB-BAD
+\ A part that ends before its last span is refused; one with bytes past
+\ its last span is whole.
+_SB-U 8 - _SB-T _RTHP-TB.XBLOCK-BYTES _SB-BAD
+_SB-U 8 + _SB-T _RTHP-TB.XBLOCK-BYTES ! _SB-VALID _SS-A
+_SB-U 8 - _SB-T _RTHP-TB.XBLOCK-BYTES !
+_SB-B RSHSP-PART.BATCH @ 8 + _SB-B RSHSP-PART.BATCH _SB-BAD
+_SB-B RSHSP-PART.MODEL @ 8 + _SB-B RSHSP-PART.MODEL _SB-BAD
+_SB-B DUP RSHSP-PART.MODEL @ + SHM.WIDTH @ 1+
+    _SB-B DUP RSHSP-PART.MODEL @ + SHM.WIDTH _SB-BAD
+\ The part's model, correlations, actions and membership lie apart from
+\ one another and from the batch: correlations on the batch record, or a
+\ membership on the model, are refused.
+VARIABLE _SB-SAVE VARIABLE _SB-SAVE-U
+: _SB-META-SAVE ( field -- ) DUP @ _SB-SAVE ! 8 + @ _SB-SAVE-U ! ;
+: _SB-META-BACK ( field -- ) _SB-SAVE @ OVER ! _SB-SAVE-U @ SWAP 8 + ! ;
+: _SB-META-ON ( offset bytes field -- ) TUCK 8 + ! ! _SB-VALID 0= _SS-A ;
+_SB-B RSHSP-PART.CORRELATIONS _SB-META-SAVE
+_SB-B RSHSP-PART.BATCH @ RSHPL-CORRELATION-SIZE _SB-B RSHSP-PART.CORRELATIONS _SB-META-ON
+_SB-B RSHSP-PART.CORRELATIONS _SB-META-BACK
+_SB-B RSHSP-PART.MEMBERSHIP _SB-META-SAVE
+_SB-B RSHSP-PART.MODEL @ RSHMM-ENTRY-SIZE _SB-B RSHSP-PART.MEMBERSHIP _SB-META-ON
+_SB-B RSHSP-PART.MEMBERSHIP _SB-META-BACK
+_SB-VALID _SS-A
 \ The bank names the part at the start of an extension block, and records
 \ the frame the part's catalog and batch describe.
 _SB-B 8 + _SB-T _RTHP-TB.XBLOCK _SB-BAD
-4 _SB-T _RTHP-TB.DRAW _SB-BAD
-8 _SB-T _RTHP-TB.OWNER _SB-BAD
-10 _SB-T _RTHP-TB.GENERATION _SB-BAD
-_RC-CAT _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
+_SB-T _RTHP-TB.DRAW @ 1+ _SB-T _RTHP-TB.DRAW _SB-BAD
+_SB-T _RTHP-TB.OWNER @ 1+ _SB-T _RTHP-TB.OWNER _SB-BAD
+_SB-T _RTHP-TB.GENERATION @ 1+ _SB-T _RTHP-TB.GENERATION _SB-BAD
+\ The batch's spans lie in the part, past its header, or in the bank.
+_SX-CI _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
 _SB-B RSHSP-PART-HEADER-SIZE + _SB-BATCH _RTE-FB.CATALOG-A _SB-BAD
-_RC-FAM _SB-BATCH _RTE-FB.FAMILIES-A _SB-BAD
-_SB-BATCH _RTE-FB.FAMILIES-A @ _RTE-FE.PLAN-A DUP @ _SB-OLD !
-_RC-CP SWAP ! _SB-VALID 0= _RC-A
-_SB-OLD @ _SB-BATCH _RTE-FB.FAMILIES-A @ _RTE-FE.PLAN-A !
-_SB-BATCH _RTE-FB.FAMILIES-A @ RTE-FAMILY-ITEMS@ DROP _RTE-CONTROL.ID
-0x8000000000000000 SWAP _SB-BAD
-_SB-VALID _RC-A
-\ A generic valid SERIES-only clone has no regions; shell bank refuses it
-\ before computing a last-region pointer below its owned array.
-_RC-FAM 256 + _RC-FAM 64 MOVE 64 _RC-BATCH _RTE-FB.FAMILIES-U !
-0 _RC-CAT _RTE-RC.REGIONS-A ! 0 _RC-CAT _RTE-RC.REGIONS-U !
-0 _RC-YI _RTE-SERIES.SAMPLES-A ! 0 _RC-YI _RTE-SERIES.SAMPLES-U !
-0 _RC-FAM _RTE-FE.BYTES-A ! 0 _RC-FAM _RTE-FE.BYTES-U !
-_SB-BUILD _SB-VALID 0= _RC-A
-_RC-DONE
-''', minimum=25)
+_SX-CI _SB-BATCH _RTE-FB.FAMILIES-A _SB-BAD
+_SB-B _SB-BATCH _RTE-FB.FAMILIES-A _SB-BAD
+_SX-CI _SB-FIRST _RTE-FE.PLAN-A _SB-BAD
+_SB-FIRST RTE-FAMILY-ITEMS@ DROP _RTE-CONTROL.ID
+    0x8000000000000000 SWAP _SB-BAD
+_SB-VALID _SS-A
+\ A part whose catalog holds no region is refused before a last-region
+\ pointer is computed below its regions.
+0 _SB-BATCH _RTE-FB.CATALOG-A @ _RTE-RC.REGIONS-U _SB-BAD
+_SB-VALID _SS-A
+_SS-DONE
+''', minimum=30)
 
 
 def test_nested_descriptor_alias_refuses_before_private_scratch_store():
@@ -123,9 +132,9 @@ _RC-DONE
 
 def test_ruha_storage_is_proved_apart_from_all_four_sidecar_spans():
     """One proof of RUHA's spans covers the shell's record, its work space
-    and the screen producer's two extension blocks, which the shell freezes
-    into: a range touching any of them is refused, a range between them is
-    not."""
+    and the screen producer's two extension blocks, which the shell builds
+    its parts in: a range touching any of them is refused, a range between
+    them is not."""
     run(FIXTURE + r'''
 4096 64 0 _RSHSP-SPAN! 8192 128 1 _RSHSP-SPAN!
 16384 256 2 _RSHSP-SPAN! 32768 512 3 _RSHSP-SPAN!
@@ -181,27 +190,31 @@ def test_sidecar_checks_run_once_per_call_and_the_model_copy_once():
         body = word(caller)
         assert body.index(first) < body.index(then), caller
     build = word("_RSHSP-BUILD-BATCH")
-    assert (build.index("_RSHSP-COPY _RSHSP-M !") < build.index("SHSN-FROZEN-VALIDATE")
+    assert (build.index("_RSHSP-PCOPY _RSHSP-M !") < build.index("SHSN-FROZEN-VALIDATE")
             < build.index("_RSHSP-ALLOCATE-PLAN"))
     plan = word("_RSHSP-ALLOCATE-PLAN")
     for name in ("_RSHPL-BUILD-PROVED", "_RSHMM-BUILD-PROVED"):
         assert source.count(name) == 1 and name in plan, name
-    # The copy is only read: passed on as a span, entered, or a field fetched.
+    # The copy is only read: passed on as a span, entered, a field fetched,
+    # or its place in the part taken.
     for match in re.finditer(r"_RSHSP-M @ (\S+) (\S+)", source):
         follower, after = match.groups()
         if follower.startswith("SHM."):
             assert after == "@", match.group(0)
         else:
             assert follower in ("_RSHSP-MU", "SHM-ENTRY", "SHM-PROMPT@", "SHM-NOTICE@",
-                                "SHM-STATUS@"), match.group(0)
+                                "SHM-STATUS@", "_RSHSP-PART-OFFSET"), match.group(0)
     assert not re.search(r"\bSHME?\.[A-Z-]+ \+?!", source)
 
 
-def test_the_freeze_takes_the_graph_the_preflight_checked():
-    """The batch's graph is checked by the preflight at the end of
-    BUILD-BATCH; the freeze measures and copies it as proved. Between the two
-    only the DELTA's identity mapping writes the batch, and the frozen part
-    is still checked in full once the pending bank names it."""
+def test_the_part_is_built_where_it_is_kept_and_finished_after_the_preflight():
+    """The shell takes the frame's record from the free extension block as
+    it builds it, so nothing copies the batch afterwards.  The batch's graph
+    is checked by the preflight at the end of BUILD-BATCH, once the family
+    vector, which grows in the scratch block, lies in the part.  Between the
+    preflight and FINISH only the DELTA's identity mapping writes the batch,
+    and its glyph mapping writes where the runs lie; the finished part is
+    still checked in full once the pending bank names it."""
     import re
     from pathlib import Path
 
@@ -217,39 +230,43 @@ def test_the_freeze_takes_the_graph_the_preflight_checked():
     build = word("_RSHSP-BUILD-BATCH")
     assert build.rstrip().endswith(
         "_RTE-FAMILY-BATCH-PREFLIGHT-PROVED DUP IF THROW ELSE DROP THEN ;")
-    freeze = word("_RSHSP-FREEZE")
-    # It leaves the applications' items where they lie, in the pending
-    # bank's packed records, which the part points at.
-    kept = "_RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-PACKED@"
-    assert f"_RSHSP-BATCH @ {kept}\n        _RSHFC-MEASURE-PROVED" in freeze
-    assert f"{kept} _RSHFC-COPY-PROVED" in freeze
-    assert "RSHFC-MEASURE " not in freeze
-    # The finished part, a proved copy, becomes the pending bank's, and is
-    # checked again only with every-frame checks on, as is the producer's
-    # copy of the published model; a failure names what it found damaged
-    # (check-mode.f).
-    assert freeze.rstrip().endswith(
-        "    _RSHSP-PART @ _RSHSP-PART-USED @ _RSHSP-P @ _RTHP-XBLOCK!\n"
+    assert build.index("_RSHSP-SCRATCH! _RSHSP-PART-START") < build.index(
+        "_RSHSP-PCOPY _RSHSP-M !")
+    vector = ("_RSHSP-FAMILIES @ _RSHSP-FAMILY-N @ RTE-FAMILY-ENTRY-SIZE * "
+              "_RSHSP-PCOPY _RSHSP-FAMILIES !")
+    assert build.index(vector) < build.index("_RSHSP-FAMILIES @ _RSHSP-BATCH @ _RTE-FB.FAMILIES-A !")
+    assert "RSHFC" not in code and "_RSHSP-FREEZE" not in code
+    # The DELTA's glyph mapping takes no storage.
+    glyphs = word("_RSHSP-D-GLYPHS")
+    assert "TAKE" not in glyphs and "COPY" not in glyphs
+    finish = word("_RSHSP-FINISH")
+    # The finished part becomes the pending bank's, and is checked again only
+    # with every-frame checks on, as is the producer's copy of the published
+    # model; a failure names what it found damaged (check-mode.f).
+    assert finish.rstrip().endswith(
+        "    _RSHSP-PART @ _RSHSP-PCURSOR @ _RSHSP-PART-OFFSET _RSHSP-P @ _RTHP-XBLOCK!\n"
         "    CHK-EVERY-FRAME? IF\n"
         "        _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-PART-VALID?\n"
         "            _RSHSP-PARTS-DAMAGED CHK-NAME _RSHSP-CHECK\n"
         "    THEN ;"
     )
+    assert "_RSHSP-BATCH @ _RSHSP-PART-OFFSET _RSHSP-PART @ RSHSP-PART.BATCH !" in finish
     assert (
         "CHK-EVERY-FRAME? IF\n"
         "        _RSHSP-M @ _RSHSP-MU @ SHSN-FROZEN-VALIDATE SHSN-S-OK =\n"
         "            _RSHSP-MODEL-DAMAGED CHK-NAME _RSHSP-CHECK\n"
         "    THEN"
     ) in build
-    # Every freeze follows a preflight, with only the mapping between them.
+    # Every finish follows a preflight, with only the mapping between them.
     start = word("_RSHSP-BUILD")
-    assert start.index("_RSHSP-BUILD-BATCH") < start.index("_RSHSP-FREEZE")
+    assert start.index("_RSHSP-BUILD-BATCH") < start.index("_RSHSP-FINISH")
+    assert "0 _RSHSP-DBATCH !" in start
     delta = word("_RSHSP-BUILD-DELTA")
-    between = delta[delta.index("_RSHSP-BUILD-BATCH"):delta.index("_RSHSP-FREEZE")]
+    between = delta[delta.index("_RSHSP-BUILD-BATCH"):delta.index("_RSHSP-FINISH")]
     writers = {w for w in re.findall(r"_RSHSP-D-[A-Z-]+", between)}
     assert writers == {"_RSHSP-D-CATALOG", "_RSHSP-D-FAMILIES", "_RSHSP-D-METADATA",
                        "_RSHSP-D-NEXT-OBJECT"}
-    assert code.count("_RSHSP-FREEZE") == 3
+    assert code.count("_RSHSP-FINISH") == 3
     # A DELTA copies the runs of rows no draw touched, except in safe mode,
     # where every row is planned.
     assert delta.index("CHK-SAFE? 0= _RSHSP-REUSE !") < delta.index(

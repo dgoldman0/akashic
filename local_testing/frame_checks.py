@@ -49,9 +49,9 @@ REPEAT = {
     "UDLSN-FROZEN-VALIDATE",
     # Menus copied from the producer's acknowledged bank are checked again.
     "_RTHP-W-MENU-REUSE-PREFLIGHT?", "RTE-CONTROL-VALID?", "_RTHP-W-MENU-REUSE-TEXT?",
-    # The shell checks its batch, freezes a proved copy and checks the copy,
-    # then emission proves the batch's storage again.
-    "RTE-FAMILY-BATCH-VALID?", "_RSHSP-PART-VALID?", "_RSHFC-BATCH-OUTSIDE?",
+    # The shell checks its batch and the part it built, then emission proves
+    # the batch's storage again.
+    "RTE-FAMILY-BATCH-VALID?", "_RSHSP-PART-VALID?",
     "_RTE-FEM-AUTHORITY?", "SHSN-FROZEN-VALIDATE", "_RSHPL-MODEL-OK?",
     "_RTE-RC-POS-SPAN?", "_RTE-RC-SPAN?",
     # The APT-1 engine audits its whole state at each backend call.
@@ -76,7 +76,7 @@ HANDOVER = {
     "_UDLSN-AUTHORITY?", "_UCSN-AUTHORITY-DISJOINT?", "_RTE-FA-AUTHORITY?",
     "_RTE-HPV-FIXED-AUTHORITY?", "_RTE-HPV-ADMISSION-AUTHORITY?",
     "_RTE-CONTENT-SCRATCH-DISJOINT?", "_RTE-SPV-SPAN?", "MSPAN-SET-PROVE-DISJOINT?",
-    "_RSHFC-SOURCE?", "RSHFC-STORAGE-DISJOINT?", "_RSHPL-SPANS?",
+    "_RSHPL-SPANS?",
     # Headers of the producer's banks, the shell snapshot, the engine facade
     # and the screen.
     "_RTHP-TARGET-BANK-HEADER?", "_RTHP-W-DOCUMENT-SHAPE?", "SHSN-VALID?",

@@ -51,7 +51,7 @@ STAGES: list[tuple[str, list[str] | re.Pattern]] = [
     ("    shell preflight (RTE-FAMILY-BATCH-PREFLIGHT)",
      ["RTE-FAMILY-BATCH-PREFLIGHT"]),
     ("    shell glyphs (_RSHSP-GLYPHS)", ["_RSHSP-GLYPHS"]),
-    ("  shell freeze (_RSHSP-FREEZE)", ["_RSHSP-FREEZE"]),
+    ("  shell part finish (_RSHSP-FINISH)", ["_RSHSP-FINISH"]),
     ("  shell emission (_RSHSP-DELTA-EMIT)", ["_RSHSP-DELTA-EMIT"]),
     ("  shell START emission (RTE-FAMILY-BATCH-EMIT)", ["RTE-FAMILY-BATCH-EMIT"]),
     ("  shell checks at each dispatch (_RSHSP-HEADER?, _RSHSP-AUTHORITY?)",
