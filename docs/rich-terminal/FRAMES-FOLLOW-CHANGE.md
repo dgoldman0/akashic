@@ -1071,7 +1071,11 @@ frame before the change driver.
   strips, the request for terminal space, the owner's sizing, the
   candidate's currency and identity frontier, the comparison's fence, and
   the next frame's reuse of runs. In three steps, each sending what it sent
-  before:
+  before. **Done** on 2026-10-29 with 9b.3.3e: a typed letter's burst frame
+  builds in 7.34 million steps against 9.63 at the start of this part,
+  sending the same 18 DELTAs and bytes, and the shell's work space and
+  banks are gone; in the canonical journey the producer's two extension
+  blocks hold 120,072 bytes each and its scratch block 104,032.
   - **9b.1. One admission and one set of runs.** With the shell installed,
     the producer no longer plans runs for its own candidate or admits it.
     Each reader moves to the batch or to the candidate itself: the request
@@ -1136,7 +1140,8 @@ frame before the change driver.
     instruments up past them as it copies them, while its regions and
     panes are numbered after the producer's instrument regions and
     statics. Building once needs one order, so 9b.3 goes in three steps
-    (decision 16), each showing the frames it showed before:
+    (decision 16), each showing the frames it showed before. **Done** on
+    2026-10-29 with 9b.3.3e:
     - **9b.3.1. Numbering in the batch's order.** Once the producer has
       lowered the applications' controls, the shell counts the controls it
       adds after them, the taskbar's, Desk's prompt and the notice, and the
@@ -1178,7 +1183,7 @@ frame before the change driver.
       bank's items (decision 17). The producer's comparison of the
       applications' items stays the one comparison of them, and the shell
       compares only its own. In five steps, each showing the frames it
-      showed before:
+      showed before. **Done** on 2026-10-29 with 9b.3.3e:
       - **9b.3.3a. Real addresses in the bank.** The bank keeps statics'
         text, instruments' units and series' samples as addresses into its
         own copies, as it already keeps controls' text, where it now keeps
@@ -1260,6 +1265,19 @@ frame before the change driver.
         writes them in place. A part need not be dense: its check asks that
         each span lie inside the part, or in the bank that names it, apart
         from every other. The family clone goes.
+        **Done** on 2026-10-29 (a1609c80). A build that cannot finish leaves
+        bytes in the free block, which no bank names, so only the part of
+        the frame on screen must stay as it was. A typed letter's burst
+        frame builds in 7.34 million steps against 7.54, the part's finish
+        costing nothing the profile shows where the freeze took 0.20
+        million, and sends the same 18 DELTAs and bytes. The canonical
+        journey passed with the shadow check, 14,217 comparisons without a
+        difference, sending the same presents, and in safe mode with no
+        damage named. In that journey the part still needs 106,104 bytes;
+        each extension block holds 120,072 bytes against 152,896, and the
+        scratch block grew to 104,032 bytes, of which a build used at most
+        70,016, against 291,888 and 167,280; the memory source holds 253,504
+        bytes less.
 - **9a.3. The change driver.** When only roots' contents changed, and
   nothing about the documents' places or the shell model did, the driver
   captures and lowers the changed roots into scratch, takes each item's
