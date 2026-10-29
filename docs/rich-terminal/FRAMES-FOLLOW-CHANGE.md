@@ -1374,7 +1374,18 @@ frame before the change driver.
       screen as before. Safe mode and every other frame take the full
       comparison, and with the shadow check on both run, on copies of one
       packed bank, and must give the same bank byte for byte and the same
-      plan.
+      plan. **Done** on 2026-10-29 (0c89280e, ddd92813). A menu's
+      correlations keep their source order while its controls lie in graph
+      order, so the pairing compares correlations place by place and takes
+      each one's control place on screen from the kept index. A typed
+      letter's frame builds in 4.72 million steps against 5.18 for
+      029f9109, run beside it, the comparison in 0.47 million against
+      1.03, and it sends the same 18 DELTAs and bytes. The canonical
+      journey passed with the shadow check, 14,368 comparisons without a
+      difference, 175 of them the comparison stage's: 35 comparisons
+      followed the facts and checked 189 controls between them. It sent the
+      same presents and bytes, and passed in safe mode. The root facts
+      blocks hold 14,592 bytes of the memory source in that journey.
     - **9a.3b.2. Only the moved roots are lowered, into a copy.** A root
       whose facts did not move keeps the items of the bank on screen, and
       only the moved roots are lowered from the snapshot. The pending bank
