@@ -1286,6 +1286,55 @@ frame before the change driver.
   pending record is a copy of the acknowledged one with the changes written
   in, so the next frame and every click read it as they read a built one.
   Any other frame goes to the full driver.
+  Read on 2026-10-29, once 9b was done, the three layers set what the
+  driver has to work with. A typed letter's frame of 7.34 million steps
+  spends 1.60 million on the snapshot, mostly in capturing the painted
+  document again, 2.33 million in the producer's lowering, packing and
+  comparison, and 3.09 million in Desk's shell, 1.78 million of it in
+  admitting its whole batch again and 0.98 million in glyph runs. Root
+  facts come only from a published snapshot, and a family's capture visits
+  its whole document. Identities are positional, one text cursor runs
+  across roots, and every lane checks a root against the claims placed
+  before it, so a changed root can be lowered alone only where its control
+  count, claim and family presence stay those of the frame on screen. A
+  copied record must keep each family's text dense and its bank's layout
+  exact, so a text that changes length moves what follows it. A part that
+  went out as a DELTA no longer satisfies the batch admission's order of
+  identities, so a copied part is checked item by item where it changed.
+  And the producer marks the menu rows of the frame on screen damaged on
+  every frame, so every pane with a menubar plans glyph runs again.
+  The driver builds on what the frame on screen keeps, so safe mode, which
+  reuses nothing an earlier frame built, always takes the full driver, and
+  with the shadow check on both drivers run and the records they build are
+  compared. In three steps, each sending what it sent before, the layer
+  that costs most first:
+  - **9a.3a. Desk's part follows change.** When the shell model equals the
+    acknowledged one but for the fields a DELTA may change, and the
+    producer's comparison makes the frame a DELTA, the shell copies its
+    part from the frame on screen instead of building it. The copy keeps
+    every family of the shell's own that did not change, points the
+    applications' families at the pending bank's records, builds again only
+    the prompt, notice or status whose model bytes changed, and plans glyph
+    runs again only in regions with damaged rows; the producer marks a menu
+    row damaged only where the menus' claims changed. The shell checks
+    what it built again, item by item and family by family, where today it
+    admits the whole batch, and the emitter is told which of the shell's
+    own items changed, as it is told the applications' controls. A shadow
+    stage builds the part in full as well and compares the two batches.
+  - **9a.3b. The producer follows change.** The producer keeps each bank's
+    root facts in normal mode too. When the facts show that only some
+    roots' contents moved, with every document in its place, the same roots
+    and families and unchanged claims, it lowers only the moved roots, takes
+    their identities from the bank on screen, writes their items into a
+    copy of that bank, moving what follows a text that changed length, and
+    seals the plan from the items that differ. Its full lowering, packing
+    and comparison go for such frames. A shadow stage builds the bank in
+    full as well and compares the two byte for byte.
+  - **9a.3c. Capture follows change.** For such a frame the snapshot is not
+    built: the documents that painted are captured into scratch, family by
+    family as 9a.2 does, the others keep what the frame on screen was built
+    from, and each document's place is read from its record. A shadow stage
+    builds the snapshot as well and compares the captures with its slices.
 - **9a.4. RUHA's banks go.** The full driver captures into scratch too,
   sized to one build. The full refresh lowers what it captures and compares
   the items with those on screen.
