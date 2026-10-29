@@ -1183,12 +1183,26 @@ frame before the change driver.
         text, instruments' units and series' samples as addresses into its
         own copies, as it already keeps controls' text, where it now keeps
         offsets.
+        **Done** on 2026-10-29 (6e2829ee). The comparison now compares each
+        of those references as its offset into its own bank, and the
+        unchanged shortcut's clone moves them with the controls' text. A
+        typed letter's burst frame builds in 7.80 million steps against
+        7.83 and sends the same 18 DELTAs and bytes; the canonical journey
+        passed with the shadow check, 4,111 comparisons without a
+        difference, sending the same presents, and in safe mode.
       - **9b.3.3b. Regions in the bank.** The shell writes into the pending
         bank the region its batch gives each application control and
         static, and the producer's comparison and its reuse of menus and
         statics stop requiring the frame on screen's items to lie in the
         producer's own region. A bank the shell's preparation did not
         finish keeps the producer's region.
+        **Done** on 2026-10-29 (39729da2). The shell writes the regions once
+        its part is frozen and named. The frame build is unchanged at 7.80
+        million steps a typed letter; the typing run, made while other work
+        loaded the machine, merged two keystrokes into one frame, so its
+        burst sent 17 DELTAs. The canonical journey passed with the shadow
+        check, 4,111 comparisons without a difference, sending the same
+        presents, and in safe mode.
       - **9b.3.3c. The part points at the bank.** The shell's batch takes
         the applications' controls, statics, instruments and series from
         the pending bank, each pane's controls with the span of the bank's
