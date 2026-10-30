@@ -9876,25 +9876,32 @@ VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
     _RTHP-UB-A @ _RTHP-TB.STATIC-TEXT-BYTES @
         _RTHP-UB-P @ _RTHP.STATIC-TEXT-U @ U> 0= ;
 
+\ ( id -- id' flag ) The identity ID of the bank on screen, which numbers
+\ its controls by place from its first object, as the candidate numbers
+\ the control in that place.
+: _RTHP-UB-RENUMBER  ( id -- id' flag )
+    _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ -
+    DUP _RTHP-UB-N @ U< 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + -1 ;
+
 \ Control INDEX as a full lowering numbers it: from the candidate's first
-\ object, its parent with it, in the candidate's region, its texts in the
-\ candidate's copy, and a text root's content stamped with this snapshot's
-\ content epoch.  The bank on screen numbers its controls by place too,
-\ each from that bank's first object, which shows the parent's place.
+\ object, with its parent and its correlation's control, in the
+\ candidate's region, its texts in the candidate's copy, and a text
+\ root's content stamped with this snapshot's content epoch.  The bank on
+\ screen numbers its controls by place too, each from that bank's first
+\ object.  A correlation names its control by identity, not by place: a
+\ menu's keep their source order while its controls lie in graph order.
 : _RTHP-UB-CONTROL?  ( index -- flag )
     DUP RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ + _RTHP-UB-ITEM !
     DUP _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ +
         _RTHP-UB-ITEM @ _RTE-CONTROL.ID @ <> IF DROP 0 EXIT THEN
-    DUP RUCP-CORRELATION-SIZE * _RTHP-UB-P @ _RTHP.CORR-A @ +
-        DUP RUCP-CORRELATION-CONTROL-ID@
-        _RTHP-UB-ITEM @ _RTE-CONTROL.ID @ <> IF 2DROP 0 EXIT THEN
-    OVER _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + DUP ROT _RUCP-X.CONTROL-ID !
-        _RTHP-UB-ITEM @ _RTE-CONTROL.ID !
-    DROP
+    DUP _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + _RTHP-UB-ITEM @ _RTE-CONTROL.ID !
+    RUCP-CORRELATION-SIZE * _RTHP-UB-P @ _RTHP.CORR-A @ +
+        DUP RUCP-CORRELATION-CONTROL-ID@ _RTHP-UB-RENUMBER 0= IF 2DROP 0 EXIT THEN
+        SWAP _RUCP-X.CONTROL-ID !
     _RTHP-UB-ITEM @ _RTE-CONTROL.PARENT @ ?DUP IF
-        _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ -
-        DUP _RTHP-UB-N @ U< 0= IF DROP 0 EXIT THEN
-        _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + _RTHP-UB-ITEM @ _RTE-CONTROL.PARENT !
+        _RTHP-UB-RENUMBER 0= IF DROP 0 EXIT THEN
+        _RTHP-UB-ITEM @ _RTE-CONTROL.PARENT !
     THEN
     _RTHP-UB-P @ _RTHP.REGION @ _RTHP-UB-ITEM @ _RTE-CONTROL.REGION !
     _RTHP-UB-ITEM @ _RTE-CONTROL.LABEL-A DUP @ _RTHP-UB-REBASE SWAP !
@@ -10044,7 +10051,8 @@ VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
     LOOP DROP 0 ;
 
 \ The place among the collections' controls of the control whose
-\ correlation names ROOT, or -1.
+\ correlation names ROOT, or -1.  A collection's controls and their
+\ correlations lie in the same places.
 : _RTHP-UB-ROOT-CONTROL  ( root -- index|-1 )
     _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ _RTHP-UB-P @ _RTHP.FIELD-COUNT @ -
     _RTHP-UB-P @ _RTHP.DIALOG-CONTROLS @ -

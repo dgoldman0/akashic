@@ -191,6 +191,22 @@ def test_the_unpack_numbers_each_item_as_a_full_lowering_would(h):
     assert h.spans()["claims"] == before["claims"]
 
 
+def test_a_correlation_keeps_naming_its_control_by_identity(h):
+    """A menu's correlations keep their source order while its controls lie
+    in graph order, so a correlation names its control by identity, which
+    the unpack moves with the control's own."""
+    h.candidate()
+    corr = h.get("CORR-A")
+    memory = h.runtime.memory
+    memory.write64(corr + 32, 101)
+    memory.write64(corr + 56 + 32, 100)
+    h.bank_on_screen()
+    h.forget()
+    h.field(h.producer, "_RTHP.FIRST-OBJECT", 300)
+    h.unpack()
+    assert (memory.read64(corr + 32), memory.read64(corr + 56 + 32)) == (301, 300)
+
+
 def test_a_bank_numbered_otherwise_is_not_taken(h):
     """The bank on screen numbers its controls by place from its first
     object, which shows where each parent lies; one that does not cannot
@@ -199,6 +215,13 @@ def test_a_bank_numbered_otherwise_is_not_taken(h):
     bank = h.bank_on_screen()
     controls, = h.results("_RTHP-PACK-CONTROLS-A", bank)
     h.runtime.memory.write64(controls + h.offset("_RTE-CONTROL.ID"), 105)
+    h.forget()
+    assert h.call("_RTHP-UB-ROOM?")
+    assert not h.call("_RTHP-UB-CONTROLS?")
+    # Nor one whose correlation names a control it does not hold.
+    h.runtime.memory.write64(controls + h.offset("_RTE-CONTROL.ID"), 100)
+    correlations, = h.results("_RTHP-PACK-CORR-A", bank)
+    h.runtime.memory.write64(correlations + 32, 102)
     h.forget()
     assert h.call("_RTHP-UB-ROOM?")
     assert not h.call("_RTHP-UB-CONTROLS?")
