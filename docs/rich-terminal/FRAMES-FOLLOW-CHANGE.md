@@ -1703,7 +1703,17 @@ frame before the change driver.
     tool records the counts.
   - **9c.1. Every bank keeps its facts.** A START's bank keeps the root
     facts and the pairing index of its controls, as a DELTA's bank does, so
-    the frame after a START can take the change driver.
+    the frame after a START can take the change driver. **Done** on
+    2026-10-30 (b87932c1 counts, a98d543c facts). In the canonical journey
+    with the shadow check, a bank on screen without facts now turns away 1
+    candidate and 1 copy, against 35 and 25; the copy is taken 26 times
+    against 22, and the candidate from the bank twice. Those frames now stop
+    at the later checks: instruments or series turn away 70 candidates, a
+    moved root of another family 17 copies and 3 candidates, and a changed
+    control count 12 copies. The journey made 14,589 comparisons without a
+    difference and sent the same presents, and passed in safe mode; the
+    typing run made 4,771, against 3,271, and a typed letter still builds
+    in 2.02 million steps.
   - **9c.2. Controls that come or go.** The copy of the bank on screen
     takes controls that came or went, within what a DELTA may carry.
   - **9c.3. The other families' roots.** A moved menu, tab set, dialog,
