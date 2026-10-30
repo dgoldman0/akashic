@@ -1354,7 +1354,20 @@ frame before the change driver.
     a comparison of those cells shows. Where the candidate's claims differ
     from the acknowledged ones, every row a claim of either covers is
     marked as before. The shadow check's glyph stages compare the plans
-    with plans built whole.
+    with plans built whole. The runs read the residue only under the
+    menus' claims, so a row whose residue changed is marked only where a
+    menu's claim covers it. **Done** on 2026-10-30 (f9f7386c, 801f46cb).
+    A changed row finds its changed span by halving, and one claim
+    covering it settles the row; the first version swept each row's
+    unclaimed spans against every claim and cost 0.13 million. A typed
+    letter's frame builds in 2.49 million steps against 2.81 for ca6decf5,
+    each run apart; the shell's batch takes 0.64 million against 0.94, its
+    glyph work 0.33 million, most of it copying the runs of the rows on
+    screen, and the producer's marking 0.02 million. It sends the same 18
+    DELTAs and bytes. With the shadow check, the typing run made 3,771
+    comparisons without a difference and the canonical journey 14,491,
+    1,380 of them the shell's glyph stage's, sending the same presents;
+    the journey passed in safe mode.
   - **9a.3b. The producer follows change.** The producer keeps each bank's
     root facts in normal mode too. When the facts show that only some
     roots' contents moved, with every document in its place, the same roots
