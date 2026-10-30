@@ -32,6 +32,7 @@ SPANS = (
     "SNAP-SFIELD-DESCRIPTORS", "SNAP-SFIELD-NATIVE",
     "SNAP-FIELD-DESCRIPTORS", "SNAP-FIELD-NATIVE",
 )
+# The copy of the records a build saves, which has the records' length.
 # Shared MSPAN-PROVE-DISJOINT? state, idle between proofs.
 PROVER_STATE = ("_MSP-SET", "_MSP-PROOF", "_MSP-LOW", "_MSP-END", "_MSP-HIGH",
                 "_MSP-FIRST", "_MSP-LAST", "_MSP-ACTIVE")
@@ -109,14 +110,25 @@ VARIABLE PROOF-THROW
         self.adapter = self.storage + 8
         self.arena = self.allocate(b"untouched" * 1024)
         self.buffers = [(self.arena + i * 256, 64) for i in range(len(SPANS))]
+        self.save = self.arena + len(SPANS) * 256
         self.protected = (0, 0)
         self.extra_protected = []
         self.authority_valid = True
 
-    def check(self, *, loop=False):
+    def spans(self):
+        """Every span the proof covers: the buffers, the records' copy and
+        the adapter."""
+        return self.buffers + [(self.save, self.buffers[0][1]),
+                               (self.adapter, self.constant("RUHA-SIZE"))]
+
+    def write_fields(self):
         for name, (address, length) in zip(SPANS, self.buffers):
             self.field(self.adapter, f"_RUHA-A.{name}-A", address & MASK64)
             self.field(self.adapter, f"_RUHA-A.{name}-U", length & MASK64)
+        self.field(self.adapter, "_RUHA-A.SAVE-A", self.save & MASK64)
+
+    def check(self, *, loop=False):
+        self.write_fields()
         self.variable("PROOF-QUERIES", 0)
         self.variable("PROOF-AUTHORITY-VALID", MASK64 if self.authority_valid else 0)
         self.variable("PROOF-PROTECTED-A", self.protected[0])
@@ -130,7 +142,7 @@ VARIABLE PROOF-THROW
         assert len(result) == (2 if loop else 1)
         if loop:
             assert result[1] == 3  # R@ still observes the enclosing DO counter.
-        spans = self.buffers + [(self.adapter, self.constant("RUHA-SIZE"))]
+        spans = self.spans()
         expected = self.authority_valid and all(
             a != 0 and 0 < u < 1 << 63 and a + u <= MASK64
             and all(not (pu and a < pa + pu and pa < a + u)
@@ -162,7 +174,7 @@ def harness(request):
 def test_clustered_storage_uses_one_complete_query(harness):
     assert harness.check() == (True, 1)
     assert harness.variable("PROOF-QUERY-A") == harness.adapter
-    assert harness.variable("PROOF-QUERY-U") == harness.buffers[-1][0] + 64 - harness.adapter
+    assert harness.variable("PROOF-QUERY-U") == harness.save + 64 - harness.adapter
 
 
 def test_interleaved_authority_splits_without_owning_gap(harness):
@@ -171,9 +183,9 @@ def test_interleaved_authority_splits_without_owning_gap(harness):
     assert accepted and 1 < queries < 16
 
 
-@pytest.mark.parametrize("index", range(len(SPANS) + 1))
+@pytest.mark.parametrize("index", range(len(SPANS) + 2))
 def test_every_buffer_and_descriptor_rejects_actual_overlap(harness, index):
-    spans = harness.buffers + [(harness.adapter, harness.constant("RUHA-SIZE"))]
+    spans = harness.spans()
     harness.protected = (spans[index][0] + 1, 1)
     assert not harness.check()[0]
 
@@ -239,6 +251,7 @@ def test_two_distant_allocations_need_three_queries_regardless_of_field_order(ha
 
 def test_equal_starts_query_the_longest_actual_span_and_terminate(harness):
     harness.buffers = [(harness.adapter, 8 * (i + 1)) for i in range(len(SPANS))]
+    harness.save = harness.adapter
     assert harness.check() == (True, 1)
     harness.protected = (harness.adapter + harness.constant("RUHA-SIZE") - 1, 1)
     assert harness.check() == (False, 1)
@@ -263,7 +276,7 @@ def test_adjacent_high_bit_starts_split_without_midpoint_wrap(harness):
 
 
 def test_every_gap_protected_visits_both_children_and_reaches_query_bound(harness):
-    spans = sorted(harness.buffers + [(harness.adapter, harness.constant("RUHA-SIZE"))])
+    spans = sorted(harness.spans())
     harness.extra_protected = [(a + u, b - a - u)
                                for (a, u), (b, _) in zip(spans, spans[1:])]
     assert all(u > 0 for _, u in harness.extra_protected)
@@ -290,9 +303,7 @@ def test_throwing_proof_clears_prover_state_and_propagates(harness):
         step_budget=100_000,
     )
     harness.variable("PROOF-THROW", 17)
-    for name, (address, length) in zip(SPANS, harness.buffers):
-        harness.field(harness.adapter, f"_RUHA-A.{name}-A", address & MASK64)
-        harness.field(harness.adapter, f"_RUHA-A.{name}-U", length & MASK64)
+    harness.write_fields()
     assert harness.results("PROOF-CAUGHT", harness.adapter) == (17,)
     harness.assert_prover_idle()
     harness.variable("PROOF-THROW", 0)

@@ -1224,7 +1224,7 @@ def test_a_media_element_is_captured_as_the_view_it_shows():
 
 
 def _ruha_constructor_program() -> list[str]:
-    """Compile ABI 7 over the generic snapshots and exercise its bank proof."""
+    """Compile RUHA over the generic snapshots and exercise its construction."""
 
     # The constructor does not call host lifecycle machinery.  Minimal ABI
     # stubs keep this focused oracle below a full app-shell/Desk source load.
@@ -1256,6 +1256,7 @@ def _ruha_constructor_program() -> list[str]:
     source += _load_forth_lines(AK / "tui" / "uidl-root-facts.f")
     source += _load_forth_lines(AK / "tui" / "rich-terminal" / "frame-shadow.f")
     source += _load_forth_lines(AK / "tui" / "check-mode.f")
+    source += _load_forth_lines(AK / "utils" / "memory-source.f")
     source += _load_forth_lines(
         AK / "tui" / "rich-terminal" / "uidl-hybrid-adapter.f"
     )
@@ -1275,46 +1276,35 @@ def _ruha_constructor_program() -> list[str]:
         "CREATE _RA-HOST 16 ALLOT",
         "CREATE _RA-SLOT 48 ALLOT",
         "CREATE _RA-RECORDS-MEM RUHA-RECORD-SIZE 7 + ALLOT",
-        "CREATE _RA-WORK-MEM 8 UMSN-WORK-ENTRY-SIZE * 7 + ALLOT",
-        "CREATE _RA-WORK-TEXT-MEM 64 7 + ALLOT",
-        "CREATE _RA-VALIDATION-MEM 256 7 + ALLOT",
-        "CREATE _RA-CWORK-MEM 1024 7 + ALLOT",
-        "CREATE _RA-DIRECTORY-MEM 2 RUHA-DOCUMENT-SIZE * 7 + ALLOT",
-        "CREATE _RA-MENU-RECORDS-MEM 2 UMSN-RECORD-SIZE * 7 + ALLOT",
-        "CREATE _RA-MENU-TEXT-MEM 128 7 + ALLOT",
-        "CREATE _RA-DESCRIPTORS-MEM 2 UCSN-DESCRIPTOR-SIZE * 7 + ALLOT",
-        "CREATE _RA-NATIVE-MEM 1024 7 + ALLOT",
-        "CREATE _RA-DG-DESCRIPTORS-MEM 2 UDGSN-DESCRIPTOR-SIZE * 7 + ALLOT",
-        "CREATE _RA-DG-NATIVE-MEM 1024 7 + ALLOT",
+        "CREATE _RA-CAPS-MEM RUHA-CAPACITY-COUNT CELLS 7 + ALLOT",
+        "CREATE _RA-MEMORY-MEM MSRC-SIZE 7 + ALLOT",
         "CREATE _RA-ADAPTER-MEM RUHA-SIZE 7 + ALLOT",
         "CREATE _RA-ADAPTER2-MEM RUHA-SIZE 7 + ALLOT",
         "CREATE _RA-ADAPTER3-MEM RUHA-SIZE 7 + ALLOT",
         ": _RA-RECORDS _RA-RECORDS-MEM 7 + -8 AND ;",
-        ": _RA-WORK _RA-WORK-MEM 7 + -8 AND ;",
-        ": _RA-WORK-TEXT _RA-WORK-TEXT-MEM 7 + -8 AND ;",
-        ": _RA-VALIDATION _RA-VALIDATION-MEM 7 + -8 AND ;",
-        ": _RA-CWORK _RA-CWORK-MEM 7 + -8 AND ;",
-        ": _RA-DIRECTORY _RA-DIRECTORY-MEM 7 + -8 AND ;",
-        ": _RA-MENU-RECORDS _RA-MENU-RECORDS-MEM 7 + -8 AND ;",
-        ": _RA-MENU-TEXT _RA-MENU-TEXT-MEM 7 + -8 AND ;",
-        ": _RA-DESCRIPTORS _RA-DESCRIPTORS-MEM 7 + -8 AND ;",
-        ": _RA-NATIVE _RA-NATIVE-MEM 7 + -8 AND ;",
-        ": _RA-DG-DESCRIPTORS _RA-DG-DESCRIPTORS-MEM 7 + -8 AND ;",
-        ": _RA-DG-NATIVE _RA-DG-NATIVE-MEM 7 + -8 AND ;",
+        ": _RA-CAPS _RA-CAPS-MEM 7 + -8 AND ;",
+        ": _RA-MEMORY _RA-MEMORY-MEM 7 + -8 AND ;",
+        # Each bank takes the capacities the halves of the caller banks this
+        # fixture once lent held, and every family has its bank.
+        ": _RA-CAP! ( u index -- ) CELLS _RA-CAPS + ! ;",
+        "UMSN-RECORD-SIZE 0 _RA-CAP! 64 1 _RA-CAP!",
+        "UCSN-DESCRIPTOR-SIZE 2 _RA-CAP! 512 3 _RA-CAP!",
+        "UDGSN-DESCRIPTOR-SIZE 4 _RA-CAP! 512 5 _RA-CAP!",
+        "USFSN-DESCRIPTOR-SIZE 6 _RA-CAP! USF-HEADER-SIZE 7 _RA-CAP!",
+        "UFLSN-DESCRIPTOR-SIZE 8 _RA-CAP! UFLD-HEADER-SIZE 9 _RA-CAP!",
+        "UDLG-HEADER-SIZE 10 _RA-CAP!",
+        # The memory source takes its blocks from the system heap; a budget of
+        # what it holds now refuses any more.
+        ": _RA-ALLOC ( bytes context -- addr|0 ) DROP ALLOCATE IF DROP 0 THEN ;",
+        ": _RA-FREE ( addr bytes context -- ) 2DROP FREE ;",
+        "' _RA-ALLOC ' _RA-FREE 0 0 _RA-MEMORY MSRC-INIT",
+        ": _RA-NO-GROWTH ( -- ) _RA-MEMORY MSRC-HELD@ _RA-MEMORY MSRC.BUDGET ! ;",
         ": _RA-ADAPTER _RA-ADAPTER-MEM 7 + -8 AND ;",
         ": _RA-ADAPTER2 _RA-ADAPTER2-MEM 7 + -8 AND ;",
         ": _RA-ADAPTER3 _RA-ADAPTER3-MEM 7 + -8 AND ;",
         ': _RA-ASSERT 1 _RA-CHECKS +! 0= IF 1 _RA-FAILS +! ." RUHA ASSERT " _RA-CHECKS @ . CR THEN ;',
         ": _RA-STACK DEPTH _RA-DEPTH @ = _RA-ASSERT ;",
-        ": _RA-INIT-ARGS",
-        "  _RA-RECORDS RUHA-RECORD-SIZE",
-        "  _RA-WORK 8 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
-        "  _RA-VALIDATION 256 _RA-CWORK 1024",
-        "  _RA-DIRECTORY 2 RUHA-DOCUMENT-SIZE *",
-        "  _RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
-        "  _RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
-        "  _RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024 ;",
-        ": _RA-NO-OPTIONAL-BANKS 0 0 0 0 0 0 0 0 0 0 0 0 ;",
+        ": _RA-INIT-ARGS _RA-RECORDS RUHA-RECORD-SIZE _RA-CAPS _RA-MEMORY ;",
         ": _RA-QUERY ( draw -- )",
         "  SCR-DRAW-COMPLETE",
         "  _RA-ADAPTER RUHA-SNAPSHOT-FOR@ _RA-STATUS ! _RA-SNAP !",
@@ -1329,13 +1319,13 @@ def _ruha_constructor_program() -> list[str]:
         "  _RA-DIR-A @ RUHA-DOCUMENT-COLLECTION-NATIVE-OFFSET@",
         "    _RA-NATIVE-A @ + UCSN-DESCRIPTOR-NATIVE DROP ;",
         "0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !",
-        "_RA-INIT-ARGS _RA-NO-OPTIONAL-BANKS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
+        "_RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
         "_RA-STACK _RA-ADAPTER RUHA-VALID? _RA-ASSERT",
-        "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0= _RA-ASSERT",
-        "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0= _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0<> _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0<> _RA-ASSERT",
         "RUHA-DOCUMENT-SIZE 312 = _RA-ASSERT",
         "RUHA-SNAPSHOT-SIZE 240 = _RA-ASSERT",
-        "RUHA-SIZE 1144 = _RA-ASSERT",
+        "RUHA-SIZE 1176 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.COLLECTION-BUILDER _RA-ADAPTER - 296 = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-DESCRIPTOR-BANK-U @ UCSN-DESCRIPTOR-SIZE = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U @ 512 = _RA-ASSERT",
@@ -1346,16 +1336,13 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-ADAPTER RUHA-VALID? 0= _RA-ASSERT",
         "512 _RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U !",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT",
-        # Replacing one external range with RUHA's own module span must fail
-        # before any caller bank or the already valid adapter is cleared.
-        "_RA-RECORDS RUHA-RECORD-SIZE",
-        "_RA-WORK 8 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
-        "_RUHA-OWNED-START 8 _RA-CWORK 1024",
-        "_RA-DIRECTORY 2 RUHA-DOCUMENT-SIZE *",
-        "_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
-        "_RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
-        "_RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024",
-        "_RA-NO-OPTIONAL-BANKS _RA-ADAPTER2 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
+        # Records that lie in RUHA's own module storage must fail before the
+        # already valid adapter is cleared, and take nothing from the memory
+        # source.
+        "_RA-MEMORY MSRC-HELD@",
+        "_RUHA-OWNED-START RUHA-RECORD-SIZE _RA-CAPS _RA-MEMORY",
+        "_RA-ADAPTER2 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
+        "_RA-MEMORY MSRC-HELD@ = _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT _RA-STACK",
         # Exercise the complete generic capture seam with one ordinary UIDL
         # textarea.  The fake host supplies only the normal descriptor fields;
@@ -1369,16 +1356,10 @@ def _ruha_constructor_program() -> list[str]:
         "UCTX-ALLOC DUP _RA-CTX ! 0<> _RA-ASSERT",
         "_RA-CTX @ UCTX-CLEAR _RA-CTX @ UCTX-RESTORE",
         "_RA-CTX @ ASHELL-CTX-SWITCH",
-        # Construction while a UCTX is live must reject an aliased caller bank
+        # Construction while a UCTX is live must reject records lent over it
         # before clearing either that authority or the already valid adapter.
-        "_RA-RECORDS RUHA-RECORD-SIZE",
-        "_RA-WORK 8 UMSN-WORK-ENTRY-SIZE * _RA-WORK-TEXT 64",
-        "_RA-CTX @ 256 _RA-CWORK 1024",
-        "_RA-DIRECTORY 2 RUHA-DOCUMENT-SIZE *",
-        "_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE * _RA-MENU-TEXT 128",
-        "_RA-DESCRIPTORS 2 UCSN-DESCRIPTOR-SIZE * _RA-NATIVE 1024",
-        "_RA-DG-DESCRIPTORS 2 UDGSN-DESCRIPTOR-SIZE * _RA-DG-NATIVE 1024",
-        "_RA-NO-OPTIONAL-BANKS _RA-ADAPTER3 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
+        "_RA-CTX @ RUHA-RECORD-SIZE _RA-CAPS _RA-MEMORY",
+        "_RA-ADAPTER3 RUHA-INIT RUHA-S-INVALID = _RA-ASSERT",
         "_RA-CTX @ UCTX-LIVE? _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT _RA-STACK",
         "80 24 SCR-NEW DUP _RA-SCR ! SCR-USE",
@@ -1441,8 +1422,93 @@ def _ruha_constructor_program() -> list[str]:
     return source
 
 
-def test_ruha_abi8_legacy_constructor_accepts_only_disjoint_caller_banks():
+def test_ruha_constructor_takes_disjoint_records_and_its_own_storage():
     output = _run_forth(_ruha_constructor_program())
     summary = re.search(r"RUHA CONSTRUCTOR PASS\s+(\d+)\s+0", output)
     assert summary, output[-10000:]
     assert int(summary.group(1)) >= 35
+
+
+def _ruha_growth_program() -> list[str]:
+    """The constructor fixture with collection banks too small for its text
+    area, so that the first build runs short of room."""
+
+    lines = _ruha_constructor_program()
+    start = lines.index("0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !")
+    return lines[:start] + [
+        "VARIABLE _RA-GROWTHS",
+        "CREATE _RA-LONG 1000 ALLOT _RA-LONG 1000 65 FILL",
+        ": _RA-ACTIVE ( -- snapshot )",
+        "  _RA-ADAPTER _RUHA-A.ACTIVE-BANK @ _RA-ADAPTER _RUHA-SNAPSHOT-AT ;",
+        ": _RA-IN-BLOCK? ( a -- flag )",
+        "  _RA-ADAPTER _RUHA-A.BLOCK-A @ DUP _RA-ADAPTER _RUHA-A.BLOCK-U @ + WITHIN ;",
+        "0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !",
+        "8 3 _RA-CAP!",
+        "_RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U @ 8 = _RA-ASSERT",
+        "_RA-ADAPTER RUHA-INSTALL RUHA-S-OK = _RA-ASSERT",
+        "_RA-HOST 16 0 FILL _RA-SLOT 48 0 FILL",
+        "_RA-SLOT _RA-HOST ! 77 _RA-SLOT AHS.ID !",
+        "_RA-COMP-DESC COMP-DESC-INIT",
+        "_RA-COMP-DESC CINST-NEW 0= _RA-ASSERT DUP _RA-INSTANCE ! _RA-SLOT AHS.INST !",
+        "_RA-HOST _RA-ADAPTER RUHA-HOST-INIT RUHA-S-OK = _RA-ASSERT",
+        "UCTX-ALLOC DUP _RA-CTX ! 0<> _RA-ASSERT",
+        "_RA-CTX @ UCTX-CLEAR _RA-CTX @ UCTX-RESTORE",
+        "_RA-CTX @ ASHELL-CTX-SWITCH",
+        "80 24 SCR-NEW DUP _RA-SCR ! SCR-USE",
+        "0 0 24 80 RGN-NEW _RA-RGN !",
+        "_RA-CTX @ _RA-SLOT AHS.UCTX !",
+        "-1 _RA-SLOT AHS.HAS-UIDL !",
+        "_RA-RGN @ _RA-SLOT AHS.RGN !",
+        'S" <uidl><textarea id=note/></uidl>" _RA-RGN @ UTUI-LOAD _RA-ASSERT',
+        'S" note" UTUI-BY-ID UTUI-WIDGET@ DUP _RA-TEXTAREA ! 0<> _RA-ASSERT',
+        'S" aggregate alpha" _RA-TEXTAREA @ TXTA-SET-TEXT',
+        "_RA-HOST _RA-SLOT _RA-ADAPTER RUHA-AHOST-UIDL-READY",
+        "  RUHA-S-OK = _RA-ASSERT",
+        "UTUI-PAINT UTUI-DRAW-COMPLETE _RA-STACK",
+        "_RUHA-DIAG-GROWTHS @ _RA-GROWTHS !",
+        # The build runs short of collection room, grows and builds again.
+        "1 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+        "_RUHA-DIAG-GROWTHS @ _RA-GROWTHS @ > _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U @ 8 > _RA-ASSERT",
+        "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 1 = _RA-ASSERT",
+        "_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@",
+        '  S" aggregate alpha" STR-STR= _RA-ASSERT',
+        "_RA-RECORDS _RUHA-RECORD-DIRTY? 0= _RA-ASSERT",
+        # The clean document crosses into the other bank, which holds it.
+        "2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+        "_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@",
+        '  S" aggregate alpha" STR-STR= _RA-ASSERT',
+        # Growing again moves the snapshot on screen into the new block,
+        # where it names its spans and reads as before.
+        "RUHA-F-COLLECTIONS _RUHA-B-SHORT ! _RA-ADAPTER _RUHA-B-ADAPTER !",
+        "_RA-ADAPTER _RUHA-A.BLOCK-A @ _RUHA-G-GROW? _RA-ASSERT",
+        "  _RA-ADAPTER _RUHA-A.BLOCK-A @ <> _RA-ASSERT",
+        "_RA-ACTIVE _RA-SNAP !",
+        "_RA-SNAP @ RUHA-SNAPSHOT-DIRECTORY@ _RA-DIR-U ! _RA-DIR-A !",
+        "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-DESCRIPTORS@ _RA-DESC-U ! _RA-DESC-A !",
+        "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-NATIVE@ _RA-NATIVE-U ! _RA-NATIVE-A !",
+        "_RA-DIR-A @ _RA-IN-BLOCK? _RA-ASSERT _RA-NATIVE-A @ _RA-IN-BLOCK? _RA-ASSERT",
+        "_RA-FIRST-ENTRY USCOL-TEXT-FIRST USCOL-ITEM-TEXT@",
+        '  S" aggregate alpha" STR-STR= _RA-ASSERT',
+        # A memory source that refuses more leaves a document that no longer
+        # fits to CELL, dirty for the next draw.
+        "_RA-NO-GROWTH _RUHA-DIAG-GROWTHS @ _RA-GROWTHS !",
+        "_RA-LONG 1000 _RA-TEXTAREA @ TXTA-SET-TEXT",
+        "UTUI-PAINT UTUI-DRAW-COMPLETE",
+        "3 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT",
+        "_RUHA-DIAG-GROWTHS @ _RA-GROWTHS @ = _RA-ASSERT",
+        "_RA-SNAP @ RUHA-SNAPSHOT-COLLECTION-COUNT@ 0= _RA-ASSERT",
+        "_RA-RECORDS _RUHA-RECORD-DIRTY? _RA-ASSERT _RA-STACK",
+        '_RA-FAILS @ 0= IF ." RUHA GROWTH PASS " ELSE ." RUHA GROWTH FAIL " THEN _RA-CHECKS @ . _RA-FAILS @ . CR',
+    ]
+
+
+def test_ruha_storage_grows_to_what_a_build_needs():
+    """A build that runs short of room grows RUHA's block from its memory
+    source and builds again; growing moves the snapshot on screen with it;
+    a memory source that refuses leaves the document to CELL."""
+    output = _run_forth(_ruha_growth_program())
+    summary = re.search(r"RUHA GROWTH PASS\s+(\d+)\s+0", output)
+    assert summary, output[-10000:]
+    assert int(summary.group(1)) >= 25

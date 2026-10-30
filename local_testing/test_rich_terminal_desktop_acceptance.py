@@ -9897,3 +9897,64 @@ def test_soundlab_rerender_refuses_a_pitch_mark_that_did_not_move() -> None:
     with pytest.raises(PhysicalDesktopAcceptanceError, match="pitch mark did not move"):
         journey.after_present(_offer("X", offer_id=1, pad_menu=True), 9,
                               _soundlab_desktop_projection(frequency=880), sender)
+
+
+def test_the_adapter_storage_record_reads_the_cells_of_the_adapters_abi() -> None:
+    """The run's record of the snapshot adapter's storage reads cells by
+    index; each index is the offset of the field it names in
+    uidl-hybrid-adapter.f."""
+    from test_rich_terminal_uidl_hybrid_adapter import (
+        _constant, _offset_for_snapshot_field, _source)
+
+    source = _source()
+    assert acceptance_runner._ADAPTER_RECORD_CELLS * 8 == _constant(source, "RUHA-SIZE")
+    fields = {
+        "capture_work": "_RUHA-A.WORK-U", "capture_text": "_RUHA-A.WORK-TEXT-U",
+        "directory": "_RUHA-A.SNAP-DIRECTORY-U", "menu_records": "_RUHA-A.SNAP-RECORDS-U",
+        "menu_text": "_RUHA-A.SNAP-TEXT-U",
+        "collection_validation": "_RUHA-A.COLLECTION-VALIDATION-U",
+        "collection_work": "_RUHA-A.COLLECTION-WORK-U",
+        "collection_descriptors": "_RUHA-A.SNAP-DESCRIPTORS-U",
+        "collection_native": "_RUHA-A.SNAP-NATIVE-U",
+        "data_graphics_descriptors": "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U",
+        "data_graphics_native": "_RUHA-A.SNAP-DGRAPH-NATIVE-U",
+        "status_field_descriptors": "_RUHA-A.SNAP-SFIELD-DESCRIPTORS-U",
+        "status_field_native": "_RUHA-A.SNAP-SFIELD-NATIVE-U",
+        "field_descriptors": "_RUHA-A.SNAP-FIELD-DESCRIPTORS-U",
+        "field_native": "_RUHA-A.SNAP-FIELD-NATIVE-U",
+        "dialog_descriptors": "_RUHA-A.SNAP-DIALOG-DESCRIPTORS-U",
+        "dialog_native": "_RUHA-A.SNAP-DIALOG-NATIVE-U",
+    }
+    assert set(fields) == set(acceptance_runner._ADAPTER_SPAN_CELLS)
+    for name, field in fields.items():
+        assert acceptance_runner._ADAPTER_SPAN_CELLS[name] * 8 == (
+            _offset_for_snapshot_field(source, field)), name
+    for cell, field in ((acceptance_runner._ADAPTER_ATTACHMENT_RECORDS, "_RUHA-A.RECORDS-U"),
+                        (acceptance_runner._ADAPTER_ACTIVE_BANK, "_RUHA-A.ACTIVE-BANK"),
+                        (acceptance_runner._ADAPTER_BLOCK_BYTES, "_RUHA-A.BLOCK-U"),
+                        (acceptance_runner._ADAPTER_SNAPSHOT_CELLS[0], "_RUHA-A.SNAPSHOT-A"),
+                        (acceptance_runner._ADAPTER_SNAPSHOT_CELLS[1], "_RUHA-A.SNAPSHOT-B")):
+        assert cell * 8 == _offset_for_snapshot_field(source, field), field
+    snapshot = {
+        "directory": "_RUHA-S.DIRECTORY-U", "menu_records": "_RUHA-S.RECORDS-U",
+        "menu_text": "_RUHA-S.TEXT-U",
+        "collection_descriptors": "_RUHA-S.COLLECTION-DESCRIPTORS-U",
+        "collection_native": "_RUHA-S.COLLECTION-NATIVE-U",
+        "data_graphics_descriptors": "_RUHA-S.DGRAPH-DESCRIPTORS-U",
+        "data_graphics_native": "_RUHA-S.DGRAPH-NATIVE-U",
+        "status_field_descriptors": "_RUHA-S.SFIELD-DESCRIPTORS-U",
+        "status_field_native": "_RUHA-S.SFIELD-NATIVE-U",
+        "field_descriptors": "_RUHA-S.FIELD-DESCRIPTORS-U",
+        "field_native": "_RUHA-S.FIELD-NATIVE-U",
+        "dialog_descriptors": "_RUHA-S.DIALOG-DESCRIPTORS-U",
+        "dialog_native": "_RUHA-S.DIALOG-NATIVE-U",
+    }
+    assert set(snapshot) == set(acceptance_runner._SNAPSHOT_USED_CELLS)
+    for name, field in snapshot.items():
+        assert acceptance_runner._SNAPSHOT_USED_CELLS[name] * 8 == (
+            _offset_for_snapshot_field(source, field)), name
+    assert acceptance_runner._SNAPSHOT_DOCUMENT_COUNT * 8 == (
+        _offset_for_snapshot_field(source, "_RUHA-S.DOCUMENT-COUNT"))
+    magic = acceptance_runner._ADAPTER_MAGIC
+    assert f"0x{magic:016X} CONSTANT _RUHA-MAGIC" in source
+    assert "_RUHA-DIAG-GROWTHS" in acceptance_runner._GUEST_DIAGNOSTIC_WORDS

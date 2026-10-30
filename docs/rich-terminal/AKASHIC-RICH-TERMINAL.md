@@ -1202,10 +1202,11 @@ document binding for the synchronous call and stores only a private opaque
 token in the active UCTX.
 
 The selected implementation of that seam is
-`tui/rich-terminal/uidl-hybrid-adapter.f` (`RUHA`). It owns a
-caller-bounded local record for each attached document and double-buffered
-aggregate directory, menu-record/text, collection descriptor/native, and
-`DATA_GRAPHICS` descriptor/native banks. It does not open a terminal owner,
+`tui/rich-terminal/uidl-hybrid-adapter.f` (`RUHA`). It keeps a local record
+for each attached document in storage its caller lends it, and double-buffered
+banks of the aggregate's directory and of each family's descriptors and
+native values in one block it takes from its caller's memory source and
+grows as captures need. It does not open a terminal owner,
 inspect CELL values, call the `RTE` facade, or publish retained objects. Those
 responsibilities belong to the one screen-level hybrid producer.
 

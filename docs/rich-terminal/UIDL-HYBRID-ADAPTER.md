@@ -15,7 +15,7 @@ Custom widgets and panels require no adapter. Anything not represented by an
 ordinary core UIDL semantic type remains eligible for the residual projection
 of the completed draw. CELL remains the complete fallback.
 
-## Published ABI 10
+## Published ABI 11
 
 Each 312-byte document directory entry identifies one ordinary visible
 document. It carries the attachment token, slot identity, absolute surface
@@ -47,7 +47,7 @@ bytes cannot appear without their corresponding descriptors.
 
 The borrowed aggregate snapshot is 240 bytes. In addition to generation,
 draw-generation, document count, content epoch, directory, menu-record, and
-menu-text fields, ABI 10 publishes the used spans of UCSN, UDGSN, USFSN, UFLSN
+menu-text fields, ABI 11 publishes the used spans of UCSN, UDGSN, USFSN, UFLSN
 and UDLSN descriptor/native bank pairs. `RUHA-SNAPSHOT-COLLECTION-COUNT@`,
 `RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@`, `RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@`,
 `RUHA-SNAPSHOT-FIELDS-COUNT@` and `RUHA-SNAPSHOT-DIALOGS-COUNT@` derive family
@@ -56,7 +56,7 @@ invalidation or the next successful aggregate publication; a downstream
 producer must copy them into its own immutable attempt before asynchronous
 owner work begins.
 
-The checked adapter ABI is 10 and the adapter is 1136 bytes. It embeds the
+The checked adapter ABI is 11 and the adapter is 1176 bytes. It embeds the
 collection and data-graphics builders and two snapshots; following offsets
 are derived from each embedded size. Existing directory offsets through menu
 topology epoch at 152 stay fixed. Status descriptor offset/bytes are at
@@ -77,10 +77,15 @@ from the slot's actual `AHS.INST` component instance. Four cells at 272 to
 lie beneath it, described below, and are zero otherwise
 (`RUHA-DOCUMENT-OVERLAY@`). The last cell, at 304, is the document's layer:
 1 for an overlay slot's document, which its host paints above every other,
-else 0 (`RUHA-DOCUMENT-LAYER@`). The attachment record is 128 bytes, the snapshot
-240 bytes, and the adapter 1144 bytes. The record's last four cells hold the
-screen cells of the overlay the document's last draw painted, or zero, and
-its flags say whether that overlay is a dialog or a prompt's field.
+else 0 (`RUHA-DOCUMENT-LAYER@`). The attachment record is 144 bytes and the
+snapshot 240 bytes. After the two snapshots the adapter holds the layers the
+producer allows, at 1136, the memory source at 1144, the address and bytes of
+the block it took from it at 1152 and 1160, and where the copy of the
+records lies in that block at 1168. The record's four cells at 96 to 120
+hold the screen cells of the overlay the document's last draw painted, or
+zero, and its flags say whether that overlay is a dialog or a prompt's
+field; its last two hold the count at which its menus were last captured
+and the generation of the snapshot whose slice holds them.
 The owner tuple describes the source component; it is separate from a
 downstream terminal owner's identity and from the signed slot identity.
 
@@ -173,8 +178,8 @@ once and invokes `UMSN-CAPTURE`, `UCSN-CAPTURE`, `UDGSN-CAPTURE`, and enabled `U
 synchronously before switching away. All enabled generic captures therefore
 observe the same ordinary document context at the same completed-draw boundary.
 None publishes independently. RUHA appends the document directory entry only
-after all enabled calls succeed and every returned count and byte extent fits its
-remaining caller-provided bank.
+after all enabled calls succeed and every returned count and byte extent fits
+what remains of its bank.
 
 This is generic UIDL/widget observation, not applet integration. UCSN discovers
 direct core textareas and authored tab graphs plus canonical widgets mounted
@@ -192,72 +197,90 @@ complete rectangle. RUHA neither knows that a
 textarea belongs to Pad nor that an instrument belongs to Sound Lab, and it
 offers no applet a registration callback or terminal-facing provider API.
 
-## Explicit caller bounds
+## Storage
 
-`RUHA-INIT` receives all storage explicitly, in caller-bank order:
+`RUHA-INIT ( records-a records-u capacities memory adapter -- status )`
+makes the adapter in the caller's 1176 bytes at `adapter`, with `records-u`
+bytes of attachment records at `records-a`, one 144-byte record for each
+document it can hold. The rest of its storage it takes from the memory
+source `memory` (`utils/memory-source.f`) in one block:
+both halves, A then B, of each of its thirteen bank spans, its four work
+spans, and a copy of the records. The bank spans that grow start from the
+`RUHA-CAPACITY-COUNT` capacities at `capacities`, in this order:
 
-- lifecycle records;
-- UMSN capture work and text work;
-- UCSN validation work and capture work;
-- A/B document-directory storage;
-- A/B UMSN record and text storage;
-- A/B UCSN descriptor and native-value storage; and
-- A/B UDGSN descriptor and native-value storage; and
-- the adapter record.
+- menu records and menu text;
+- collection descriptors and native values;
+- data-graphics descriptors and native values;
+- status-field descriptors and native values;
+- field descriptors and native values; and
+- dialog native models.
 
-`RUHA-INIT` then takes USFSN descriptor address/bytes and native address/bytes
-for STATUS_FIELDS. Absence is exactly four zero arguments; enabled
-descriptor storage is a positive multiple of `2 * 128`, native storage is a
-positive multiple of 16, and each native half holds at least the 72-byte USF
-header. The reusable frozen validation work needs at least eight bytes per
-status descriptor in addition to satisfying existing collection work bounds.
-A model with label length L and value length V consumes
-`align8(72 + L + V)` native bytes; display projection may expand each source byte
-to at most three bytes. All text belongs to the independent native USF bank.
+`RUHA-FIRST-CAPACITIES` holds the ones a caller starts from. Each capacity
+is whole in its family's record or descriptor size, or in cells for native
+bytes and text, and holds at least one record, descriptor or native header.
+The other spans follow from these and from the records' count:
 
-`RUHA-INIT` then takes UFLSN descriptor address/bytes and native address/bytes
-for FIELDS, following the STATUS arguments and before the adapter. The
-all-zero quartet is canonical absence; enabled descriptor storage is a positive multiple of 256,
-native storage a positive multiple of 16, with each half at least 224 bytes.
-The shared validation ledger must hold eight bytes per FIELD descriptor, or
-more if another family's existing bound is larger. A native FIELD uses
-`224 + align8(label-bytes)` plus `align8(text-bytes) + align8(placeholder-bytes)`
-for TEXT, or
-`sum(24 + align8(choice-label-bytes))` for CHOICE; INTEGER adds nothing.
-Its descriptor UTF8 total includes the outer label, TEXT value and placeholder,
-and every choice label. Formatted INTEGER digits consume no UTF8 quota. Root and choice object
-ceilings remain independent of native storage bounds.
+- the document directory and the dialog descriptors hold an entry for every
+  attachment record, since a document shows at most one dialog;
+- the menu capture's work and text work hold one document's elements and
+  strings at UIDL's limits;
+- the collections' validation ledger, a key cell for each variable child,
+  takes as many bytes as their native span, since every child takes at
+  least a cell of it; and
+- the collections' capture work holds the largest of the collection
+  descriptors' work and the status fields' or fields' frozen validation
+  work.
 
-`RUHA-INIT` then takes UDLSN descriptor address/bytes and native address/bytes
-for dialogs, following the FIELD arguments and before the adapter. The
-all-zero quartet is canonical absence, and a document's dialog then stays
-painted text. Enabled descriptor storage is a positive multiple of `2 * 64`,
-native storage a positive multiple of 16, with each half at least the
-160-byte UDLG header. A document shows at most one dialog, so one descriptor
-a document suffices; its native model takes `160 + align8(title) +
-align8(message)` and `64 + align8(label)` a button.
+The constructor answers INVALID when a span is malformed, the records and
+the adapter overlap, either lies over RUHA's own storage or the current
+UIDL and widget authority, or a capacity does not fit, and CAPACITY when the
+memory source refuses the block. It proves the block apart from that
+authority and from the records and the adapter before writing anything; a
+proof that fails gives the block back and is a handover anomaly
+(`check-mode.f`). `RUHA-FINI ( adapter -- )` gives the block back and clears
+the adapter, once nothing will query it or read its snapshots.
 
-The constructor validates nonwrapping spans, required alignment and record-size
-multiples, exact A/B division, directory capacity against lifecycle-record
-capacity, pairwise disjointness of every borrowed range, and disjointness from
-the currently active UIDL/widget authority. Each attach must run in the
-descriptor's authoritative UCTX and repeats that complete storage proof before
-RUHA records the document.
+A native span holds, for each model: `align8(72 + L + V)` bytes for a
+status field with label length L and value length V, display projection
+expanding each source byte to at most three; `224 + align8(label-bytes)`
+for a FIELD, plus `align8(text-bytes) + align8(placeholder-bytes)` for TEXT
+or `sum(24 + align8(choice-label-bytes))` for CHOICE, and nothing more for
+INTEGER; and `160 + align8(title) + align8(message)` for a dialog, with
+`64 + align8(label)` a button. A FIELD descriptor's UTF8 total includes the
+outer label, TEXT value and placeholder, and every choice label; formatted
+INTEGER digits take no UTF8 quota.
 
-Before any completed-draw bank or lifecycle-record write, RUHA switches through
-every attached or quiesced document and proves every caller span—including the
-directory, used and inactive payload banks, work banks, lifecycle records, and
-adapter—disjoint from that UCTX and its mounted canonical widget storage. The
-outer capture restores the original UCTX on success, refusal, or exception.
-This prevents capture of one document from corrupting a later document whose
-authority happens to alias caller storage.
+Each attach must run in the descriptor's authoritative UCTX and repeats the
+complete storage proof before RUHA records the document. Before any
+completed-draw bank or lifecycle-record write, RUHA switches through every
+attached or quiesced document and proves every span, the directory, used
+and inactive payload banks, work spans, the records' copy, the attachment
+records and the adapter, disjoint from that UCTX and its mounted canonical
+widget storage. The outer capture restores the original UCTX on success,
+refusal, or exception. This prevents capture of one document from corrupting
+a later document whose authority happens to alias RUHA's storage.
 
-Each aggregate payload is bounded independently by its caller-provided
-half-bank. The Desk product leaf derives descriptor and capture-work capacity
-from the native-byte bound and the universal collection-entry header minimum,
-so multiple mounted roots under one UIDL source do not encounter a separate
-UIDL-element-count ceiling. RUHA does not derive a hidden terminal reservation
-from UIDL content and does not add an applet-specific collection-count limit.
+### Growth
+
+A family answers CAPACITY only when the room RUHA lends it is too small.
+That document falls back for the build, as a refused one does (below), and
+its family is marked short. Once every document has been captured, a build
+that ran short takes a new block whose growable spans of the short families
+are twice their size, with the work spans their capacities require. It
+copies the snapshot on screen and the records' copy into the new block and
+gives the old one back. The snapshot on screen then names its spans where
+they now lie, so it stays readable; the producer copies a snapshot when it
+takes one, so nothing else names them. The new block is proved apart from
+the screen's storage and each attached document's, as the banks are on
+every draw; a proof that fails is a handover anomaly, and the old block
+stays. The build then starts again from the records as they were before it.
+
+A bank therefore grows to what its snapshots need and up to as much again,
+and a document stays on CELL for want of room only when the memory source
+refuses. The shadow check's full capture and the full refresh's capture
+build the same way. Banks do not shrink. RUHA derives no terminal
+reservation from UIDL content and sets no applet-specific collection-count
+limit.
 
 ## Exact clean reuse, overlay refusal, and content epoch
 
@@ -319,7 +342,8 @@ menu, collection, data-graphics, status-field, typed FIELD, or dialog capture of
 `UNAVAILABLE`, or `INVALID`, that document contributes the directory-only
 zero-slice identity, its record stays dirty so the next draw captures it
 again, and nothing of it is staged. Its ordinary cells take the residual path
-while every other document keeps its rich content. The family failure status is cleared after choosing this document fallback;
+while every other document keeps its rich content. A family short of room
+then has its spans grown and the build made again (Growth, above). The family failure status is cleared after choosing this document fallback;
 a failed directory append still rejects the aggregate. The refused capture
 published nothing, so it does not count as a live recapture: the content
 epoch compares its zero-slice entry exactly as it compares a covered one.
@@ -337,7 +361,7 @@ resulting bytes happen to be equal.
 
 ## Downstream status
 
-ABI 10 makes the frozen UCSN, UDGSN, USFSN, UFLSN, and UDLSN descriptor/native banks available at the
+ABI 11 makes the frozen UCSN, UDGSN, USFSN, UFLSN, and UDLSN descriptor/native banks available at the
 generic aggregate boundary. The selected producer lowers native text roots plus
 TABSET/TAB root/descendant graphs through one generic collection boundary and
 lowers canonical `DATA_GRAPHICS` values through the distinct instrument
@@ -357,7 +381,7 @@ That is software/reference-view evidence, not physical UART or panel proof.
 ## Bounded selector
 
 `local_testing/test_rich_terminal_uidl_hybrid_adapter.py` is the seconds-scale
-structural and executed reuse selector for ABI 10.
+structural and executed reuse selector for ABI 11.
 `local_testing/test_rich_adapter_provenance.py` loads the actual full AHOST,
 CINST, app-shell and UIDL dependency closure. It verifies replacement-instance
 and generation-only recapture, frozen tuple corruption, directory-only fallback,
@@ -379,7 +403,7 @@ Every caller span is proved against the status model, widget, snapshot scratch,
 and mounted authority as well as the older families. Snapshot publication still
 selects the inactive bank only after all families and context restoration succeed.
 The executed selector covers canonical absent banks, complete A/B shape, copied
-status slices, last-bank exhaustion without mutation, and all 19 protected spans.
+status slices, last-bank exhaustion without mutation, and all 20 protected spans.
 
 `local_testing/test_uidl_field_snapshot.py` executes all three FIELD types,
 exact multirow slots and revisions, copy independence, corrupt frozen metadata,

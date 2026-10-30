@@ -1,4 +1,4 @@
-"""FIELD owns independent RUHA banks through capture, reuse and fallback."""
+"""FIELD has RUHA banks of its own through capture, reuse and fallback."""
 
 import re
 
@@ -7,11 +7,8 @@ from test_rich_terminal_status_adapter import _status_adapter_program
 
 
 FIELD_FIXTURE = r'''
-CREATE _FA-DESCRIPTORS-S 256 7 + ALLOT CREATE _FA-NATIVE-S 1024 7 + ALLOT
 CREATE _FA-MODEL-S 512 7 + ALLOT CREATE _FA-B-S UFLD-BUILDER-SIZE 7 + ALLOT
 CREATE _FA-PANEL-S WDG-HEADER-SIZE 7 + ALLOT
-_FA-DESCRIPTORS-S 7 + -8 AND CONSTANT _FA-DESCRIPTORS
-_FA-NATIVE-S 7 + -8 AND CONSTANT _FA-NATIVE
 _FA-MODEL-S 7 + -8 AND CONSTANT _FA-MODEL
 _FA-B-S 7 + -8 AND CONSTANT _FA-B
 _FA-PANEL-S 7 + -8 AND CONSTANT _FA-PANEL
@@ -56,7 +53,8 @@ def _field_adapter_program():
     lines = _status_adapter_program()
     at = lines.index("0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !")
     lines[at:at] = FIELD_FIXTURE
-    lines = [line.replace("0 0 0 0 0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK", "_FA-DESCRIPTORS 256 _FA-NATIVE 1024 0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK")
+    # Each field bank holds one descriptor and 512 native bytes.
+    lines = [line.replace("128 7 _RA-CAP! _RA-INIT-ARGS", "128 7 _RA-CAP! 512 9 _RA-CAP! _RA-INIT-ARGS")
              .replace("</status></uidl>", "</status><region id=field/></uidl>") for line in lines]
     at = lines.index("UTUI-PAINT UTUI-DRAW-COMPLETE _RA-STACK")
     lines.insert(at, "_FA-INSTALL")
@@ -98,8 +96,11 @@ def test_field_separate_banks_reuse_revision_and_overlay_fallback():
 def test_field_short_bank_falls_back_all_families_and_retries():
     lines = _field_adapter_program()
     at = lines.index("1 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT")
-    # Each half holds one model header but not the 232-byte labelled model.
-    lines = [line.replace("_FA-NATIVE 1024 0 0 0 0 _RA-ADAPTER RUHA-INIT", "_FA-NATIVE 448 0 0 0 0 _RA-ADAPTER RUHA-INIT") for line in lines[:at+1]]
+    # Each bank holds one model header but not the 232-byte labelled model,
+    # and the memory source refuses RUHA any more storage.
+    lines = [line.replace("512 9 _RA-CAP! _RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
+                          "224 9 _RA-CAP! _RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT"
+                          " _RA-NO-GROWTH") for line in lines[:at+1]]
     lines += [
         "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",
         "_RA-SNAP @ RUHA-SNAPSHOT-FIELDS-COUNT@ 0= _RA-ASSERT",
@@ -123,7 +124,7 @@ def test_field_short_bank_falls_back_all_families_and_retries():
     assert re.search(r"FIELD CAPACITY PASS\s+\d+\s+0", output), output[-18000:]
 
 
-def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_writes():
+def test_field_prior_corruption_recaptures_and_a_refused_constructor_keeps_the_adapter():
     lines = _field_adapter_program()
     at = lines.index("2 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT")
     lines = lines[:at]
@@ -140,12 +141,13 @@ def test_field_prior_corruption_recaptures_and_constructor_alias_refuses_before_
         "_FA-FIRST UFLD-MAXIMUM@ 200 = _RA-ASSERT",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT",
         "0 CHK-EVERY-FRAME !",
-        # The constructor's full nineteen-span proof protects old ownership.
-        "_RA-INIT-ARGS _RA-SF-DESCRIPTORS 256 _RA-SF-NATIVE 256",
-        "_RA-SF-DESCRIPTORS 256 _FA-NATIVE 1024 0 0 0 0 _RA-ADAPTER RUHA-INIT",
+        # A constructor that refuses its arguments, here records lent over
+        # the adapter itself, leaves the adapter and its storage as they were.
+        "_RA-ADAPTER _RUHA-A.SNAP-FIELD-DESCRIPTORS-A @",
+        "_RA-ADAPTER RUHA-RECORD-SIZE _RA-CAPS _RA-MEMORY _RA-ADAPTER RUHA-INIT",
         "RUHA-S-INVALID = _RA-ASSERT",
         "_RA-ADAPTER RUHA-VALID? _RA-ASSERT",
-        "_RA-ADAPTER _RUHA-A.SNAP-FIELD-DESCRIPTORS-A @ _FA-DESCRIPTORS = _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.SNAP-FIELD-DESCRIPTORS-A @ = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.GENERATION @ 2 = _RA-ASSERT",
         "_FA-FIRST UFLD-VALUE@ 105 = _RA-ASSERT _RA-STACK",
         '_RA-FAILS @ 0= IF ." FIELD PRIOR PASS " ELSE ." FIELD PRIOR FAIL " THEN _RA-CHECKS @ . _RA-FAILS @ . CR',
@@ -219,9 +221,8 @@ PROMPT_OVERLAY = [
 
 
 def test_a_prompt_keeps_its_document_rich_beneath_it():
-    # Room for the mounted field's descriptor and the prompt's in each half.
-    lines = [line.replace("CREATE _FA-DESCRIPTORS-S 256 7 + ALLOT", "CREATE _FA-DESCRIPTORS-S 512 7 + ALLOT")
-             .replace("_FA-DESCRIPTORS 256 _FA-NATIVE 1024", "_FA-DESCRIPTORS 512 _FA-NATIVE 1024")
+    # Room for the mounted field's descriptor and the prompt's in each bank.
+    lines = [line.replace("512 9 _RA-CAP! _RA-INIT-ARGS", "2 UFLSN-DESCRIPTOR-SIZE * 8 _RA-CAP! 512 9 _RA-CAP! _RA-INIT-ARGS")
              for line in _field_adapter_program()]
     at = next(i for i, line in enumerate(lines) if 'RUHA CONSTRUCTOR PASS' in line)
     lines[at:at] = PROMPT_OVERLAY

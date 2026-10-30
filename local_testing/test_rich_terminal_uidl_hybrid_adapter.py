@@ -174,8 +174,23 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-B-LOAD-PRIOR",
         "_RUHA-A.ACTIVE-BANK @ 0= IF 1 ELSE 0 THEN",
         "_RUHA-B-BANK-SPANS",
-        "_RUHA-B-CAPTURE",
+        "_RUHA-B-BUILD",
         "_RUHA-B-PUBLISH",
+    )
+    # A build that runs short of room grows the block and starts again from
+    # the records as they were, reading the snapshot on screen where it now
+    # lies and pointing at the inactive bank in the new block.
+    build = _word(source, "_RUHA-B-BUILD")
+    _ordered(
+        build,
+        "_RUHA-B-SAVE-RECORDS",
+        "BEGIN",
+        "0 _RUHA-B-SHORT !",
+        "_RUHA-B-START _RUHA-B-CAPTURE-ALL",
+        "_RUHA-B-SHORT @ IF _RUHA-G-GROW? ELSE 0 THEN",
+        "WHILE",
+        "_RUHA-B-RESTORE-RECORDS _RUHA-B-LOAD-PRIOR _RUHA-B-BANK-SPANS",
+        "REPEAT",
     )
     # The capture points at every span of the inactive bank it selected.
     spans = _word(source, "_RUHA-B-BANK-SPANS")
@@ -193,7 +208,7 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
     capture_all = _word(source, "_RUHA-B-CAPTURE-ALL")
     capture_at = capture_all.index("['] _RUHA-B-CAPTURE CATCH")
     assert capture_at < capture_all.index("['] _RUHA-B-RESTORE CATCH", capture_at)
-    assert query.index("_RUHA-B-CAPTURE-ALL") < query.index("_RUHA-B-PUBLISH")
+    assert query.count("_RUHA-B-BUILD") == 1
     _ordered(
         publish,
         "_RUHA-S.GENERATION !",
@@ -294,81 +309,80 @@ def test_aggregate_selects_every_normal_visible_host_slot_without_focus() -> Non
         assert forbidden not in selected + ready
 
 
-def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
+def _table(source: str, name: str) -> list[str]:
+    """The entries a CREATE table compiles, each up to its comma."""
+    match = re.search(rf"(?m)^CREATE {re.escape(name)}\s", source)
+    assert match is not None, name
+    lines = [source[match.end():].split("\n", 1)[0]]
+    for line in source[match.end():].split("\n")[1:]:
+        if not line.strip() or line.lstrip().startswith(("\\", ":", "CREATE", "VARIABLE")):
+            break
+        lines.append(line)
+    entries = [entry.strip() for entry in " ".join(lines).split(",")]
+    assert entries[-1] == "", name
+    return entries[:-1]
+
+
+def test_constructor_takes_one_proved_block_from_the_memory_source() -> None:
+    """RUHA-INIT checks what it is lent before it writes anything, takes its
+    banks and work spans in one block from the caller's memory source, and
+    proves the block apart as it proves what it is lent.  A block that
+    fails the proof goes back to the memory source."""
     source = _source()
     init = _word(source, "RUHA-INIT")
     header = _word(source, "_RUHA-HEADER?")
-    ranges = _word(source, "_RUHA-I-RANGES?")
-    pairwise = _word(source, "_RUHA-I-PAIRWISE?")
-    add_span = _word(source, "_RUHA-I-ADD-SPAN?")
-    module_disjoint = _word(source, "_RUHA-I-MODULE-DISJOINT?")
+    arguments = _word(source, "_RUHA-I-ARGUMENTS?")
+    apart = _word(source, "_RUHA-I-APART?")
     owned_disjoint = _word(source, "_RUHA-I-OWNED-DISJOINT?")
-    authority = _word(source, "_RUHA-I-AUTHORITY?")
     current_authority = _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
     assert "XBUF" not in source
     assert "ALLOCATE" not in source
-    assert "_RUHA-I-RANGES? 0=" in init
-    assert init.index("_RUHA-I-RANGES? 0=") < init.index(
-        "_RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @ 0 FILL"
+    assert "( records-a records-u capacities memory adapter -- status )" in init
+    _ordered(
+        init,
+        "_RUHA-I-ARGUMENTS? 0= IF _RUHA-I-SCRUB RUHA-S-INVALID EXIT THEN",
+        "_RUHA-I-LAYOUT",
+        "_RUHA-I-MEMORY @ MSRC-ALLOC",
+        "0= IF _RUHA-I-SCRUB RUHA-S-CAPACITY EXIT THEN",
+        "_RUHA-I-BLOCK @ _RUHA-I-BYTES @ _RUHA-I-APART?",
+        "_RUHA-BANKS-DAMAGED CHK-HANDOVER 0= IF",
+        "_RUHA-I-MEMORY @ MSRC-FREE",
+        "_RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @ 0 FILL",
+        "_RUHA-I-ADAPTER @ RUHA-SIZE 0 FILL",
+        "_RUHA-I-BLOCK @ _RUHA-I-ADAPTER @ _RUHA-G-PLACE",
+        "_RUHA-MAGIC _RUHA-I-ADAPTER @ _RUHA-A.MAGIC !",
     )
-    assert "_RUHA-I-ADAPTER @ RUHA-SIZE 0 FILL" in init
-    for tail in (
-        "WORK",
-        "WORK-TEXT",
-        "COLLECTION-VALIDATION",
-        "COLLECTION-WORK",
-        "SNAP-DIRECTORY",
-        "SNAP-RECORDS",
-        "SNAP-TEXT",
-        "SNAP-DESCRIPTORS",
-        "SNAP-NATIVE",
-        "SNAP-DGRAPH-DESCRIPTORS",
-        "SNAP-DGRAPH-NATIVE",
-    ):
-        assert not re.search(
-            rf"_RUHA-I-{tail}-A @\s+_RUHA-I-{tail}-U @ 0 FILL", init
-        )
+    # The block lies apart from the records and the adapter as well.
+    assert ("_RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @ MSPAN-OVERLAP? 0= AND"
+            in init)
+    assert "_RUHA-I-ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? 0= AND" in init
+    # Only the records and the adapter are cleared: a bank is published
+    # only through its used lengths, and work through its dirty prefixes.
+    assert init.count("0 FILL") == 2
+    for field in ("_RUHA-A.MEMORY !", "_RUHA-A.BLOCK-A !", "_RUHA-A.BLOCK-U !"):
+        assert field in init
+    _ordered(
+        arguments,
+        "_RUHA-I-ADAPTER @ RUHA-SIZE _RUHA-SPAN?",
+        "_RUHA-I-RECORDS-U @ RUHA-RECORD-SIZE MOD",
+        "_RUHA-I-MEMORY @ MSRC-VALID?",
+        "RUHA-CAPACITY-COUNT 0 ?DO",
+        "_RUHA-G-FIT?",
+        "_RUHA-I-ADAPTER @ RUHA-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN",
+        "_RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @ _RUHA-I-APART?",
+        "_RUHA-I-ADAPTER @ RUHA-SIZE _RUHA-I-APART?",
+    )
+    _ordered(apart, "_RUHA-I-OWNED-DISJOINT?", "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
     assert "_RUHA-A.SELF @ 2 PICK = AND" in header
     assert "_RUHA-A.COLLECTION-BUILDER USCOL-BUILDER-SIZE" in header
     assert "_RUHA-A.DATA-GRAPHICS-BUILDER UDG-BUILDER-SIZE" in header
-    assert "UMSN-WORK-ENTRY-SIZE MOD" in ranges
-    assert "UMSN-RECORD-SIZE MOD" in ranges
-    assert "UCSN-DESCRIPTOR-SIZE MOD" in ranges
-    assert "UDGSN-DESCRIPTOR-SIZE MOD" in ranges
-    assert "_RUHA-I-COLLECTION-VALIDATION-A" in ranges
-    assert "_RUHA-I-COLLECTION-WORK-A" in ranges
-    assert "_RUHA-I-SNAP-DESCRIPTORS-A" in ranges
-    assert "_RUHA-I-SNAP-NATIVE-A" in ranges
-    assert "_RUHA-I-SNAP-DGRAPH-DESCRIPTORS-A" in ranges
-    assert "_RUHA-I-SNAP-DGRAPH-NATIVE-A" in ranges
-    assert "snapshot-directory-a snapshot-directory-u" in init
-    assert "collection-validation-a collection-validation-u" in init
-    assert "collection-work-a collection-work-u" in init
-    assert "snapshot-descriptors-a snapshot-descriptors-u" in init
-    assert "snapshot-native-a snapshot-native-u" in init
-    assert "snapshot-data-graphics-descriptors-a" in init
-    assert "snapshot-data-graphics-descriptors-u" in init
-    assert "snapshot-data-graphics-native-a" in init
-    assert "snapshot-data-graphics-native-u" in init
-    assert "RUHA-DOCUMENT-SIZE MOD" in ranges
-    assert "19 CONSTANT _RUHA-I-SPAN-CAPACITY" in source
-    assert "_RUHA-I-SPANS" in pairwise
-    assert "MSPAN-SET-INIT" in pairwise
-    assert "MSPAN-SET-ADD" in add_span
-    assert "MSPAN-SET-S-OK" in pairwise + add_span
-    assert "MSPAN-SET-COUNT@" in pairwise
-    assert "_RUHA-I-SPAN-CAPACITY =" in pairwise
-    assert "_RUHA-I-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT" in source
     assert "_RUHA-OWNED-START" in owned_disjoint
-    assert "_RUHA-I-OWNED-DISJOINT?" in module_disjoint
     assert "_RUHA-OWNED-LIMIT @" in owned_disjoint
     assert "MSPAN-OVERLAP? 0=" in owned_disjoint
     assert "_RUHA-OWNED-END _RUHA-OWNED-LIMIT !" in source
     assert source.index("CREATE _RUHA-OWNED-START") < source.index(
         "VARIABLE _RUHA-SAFE-ADAPTER"
     )
-    assert "_RUHA-I-MODULE-DISJOINT?" in ranges
-    assert "_RUHA-I-AUTHORITY? 0=" in ranges
     for authority_check in (
         "USCOL-STORAGE-DISJOINT?",
         "TXTA-STORAGE-DISJOINT?",
@@ -381,22 +395,101 @@ def test_constructor_owns_only_caller_bounded_disjoint_banks() -> None:
         "USCOL-S-OK <>",
     ):
         assert authority_check in current_authority
-    for caller_span in (
-        "_RUHA-I-RECORDS-A",
-        "_RUHA-I-WORK-A",
-        "_RUHA-I-WORK-TEXT-A",
-        "_RUHA-I-COLLECTION-VALIDATION-A",
-        "_RUHA-I-COLLECTION-WORK-A",
-        "_RUHA-I-SNAP-DIRECTORY-A",
-        "_RUHA-I-SNAP-RECORDS-A",
-        "_RUHA-I-SNAP-TEXT-A",
-        "_RUHA-I-SNAP-DESCRIPTORS-A",
-        "_RUHA-I-SNAP-NATIVE-A",
-        "_RUHA-I-SNAP-DGRAPH-DESCRIPTORS-A",
-        "_RUHA-I-SNAP-DGRAPH-NATIVE-A",
-        "_RUHA-I-ADAPTER",
-    ):
-        assert caller_span in authority
+
+
+def test_the_block_holds_two_banks_of_each_bank_span_and_one_of_each_work_span() -> None:
+    """The layout follows from the capacities and the records' count alone:
+    each bank span holds bank A then bank B, and the copy of the records
+    follows the spans."""
+    source = _source()
+    assert "17 CONSTANT _RUHA-G-SPANS" in source
+    assert "13 CONSTANT _RUHA-G-BANKED" in source
+    assert "11 CONSTANT RUHA-CAPACITY-COUNT" in source
+    banked = ["DIRECTORY", "RECORDS", "TEXT", "DESCRIPTORS", "NATIVE",
+              "DGRAPH-DESCRIPTORS", "DGRAPH-NATIVE", "SFIELD-DESCRIPTORS",
+              "SFIELD-NATIVE", "FIELD-DESCRIPTORS", "FIELD-NATIVE",
+              "DIALOG-DESCRIPTORS", "DIALOG-NATIVE"]
+    assert _table(source, "_RUHA-G-FIELDS") == (
+        [f"0 _RUHA-A.SNAP-{span}-A" for span in banked]
+        + ["0 _RUHA-A.WORK-A", "0 _RUHA-A.WORK-TEXT-A",
+           "0 _RUHA-A.COLLECTION-VALIDATION-A", "0 _RUHA-A.COLLECTION-WORK-A"])
+    snapshot = ["DIRECTORY", "RECORDS", "TEXT", "COLLECTION-DESCRIPTORS",
+                "COLLECTION-NATIVE"] + banked[5:]
+    assert _table(source, "_RUHA-G-SNAP-FIELDS") == [
+        f"0 _RUHA-S.{span}-A" for span in snapshot]
+    # Every bank span but the directory and the dialog descriptors grows;
+    # those two hold one entry for each document record.
+    assert _table(source, "_RUHA-G-GROWABLE") == [
+        str(span) for span in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12)]
+    assert len(_table(source, "RUHA-FIRST-CAPACITIES")) == 11
+    assert len(_table(source, "_RUHA-G-UNITS")) == 22
+    derive = _word(source, "_RUHA-G-DERIVE")
+    for derived in ("RUHA-DOCUMENT-SIZE _RUHA-UMUL?",
+                    "UDLSN-DESCRIPTOR-SIZE _RUHA-UMUL?",
+                    "_UTUI-MAX-ELEMS UMSN-WORK-ENTRY-SIZE * 13 _RUHA-G-CAP!",
+                    "_UCTX-STRS-SZ 14 _RUHA-G-CAP!",
+                    "4 _RUHA-G-CAP@ 15 _RUHA-G-CAP!", "UCSN-WORK-BYTES",
+                    "USFSN-FROZEN-WORK-BYTES MAX", "UFLSN-FROZEN-WORK-BYTES MAX"):
+        assert derived in derive, derived
+    place = _word(source, "_RUHA-G-PLACE")
+    assert "I _RUHA-G-BANKED < IF DUP _RUHA-G-F @ 16 + ! 2* THEN" in place
+    assert "_RUHA-G-AT @ _RUHA-G-ADAPTER @ _RUHA-A.SAVE-A !" in place
+    assert "I _RUHA-G-BANKED < IF DUP _RUHA-UADD?" in _word(source, "_RUHA-G-BYTES")
+
+
+def test_a_short_build_doubles_its_families_spans_and_moves_the_snapshot_on_screen() -> None:
+    source = _source()
+    fall_back = _word(source, "_RUHA-B-FALL-BACK")
+    grow = _word(source, "_RUHA-G-GROW?")
+    widen = _word(source, "_RUHA-G-WIDEN?")
+    move = _word(source, "_RUHA-G-MOVE-ACTIVE")
+    proved = _word(source, "_RUHA-G-PROVED?")
+    # Only a family that ran out of room marks the build short.
+    assert ("RUHA-S-CAPACITY = IF _RUHA-B-SHORT @ _RUHA-B-FAMILY @ OR "
+            "_RUHA-B-SHORT ! THEN") in fall_back
+    for family, spans in (("MENUS", "1 _RUHA-G-DOUBLE? 2 _RUHA-G-DOUBLE?"),
+                          ("COLLECTIONS", "3 _RUHA-G-DOUBLE? 4 _RUHA-G-DOUBLE?"),
+                          ("DATA-GRAPHICS", "5 _RUHA-G-DOUBLE? 6 _RUHA-G-DOUBLE?"),
+                          ("STATUS-FIELDS", "7 _RUHA-G-DOUBLE? 8 _RUHA-G-DOUBLE?"),
+                          ("FIELDS", "9 _RUHA-G-DOUBLE? 10 _RUHA-G-DOUBLE?"),
+                          ("DIALOGS", "12 _RUHA-G-DOUBLE?")):
+        _ordered(widen, f"RUHA-F-{family} AND IF", spans)
+    # The new block is laid out, proved and only then filled: the snapshot
+    # on screen and the records' copy move into it, and the old block goes
+    # back.  A proof that fails gives the new block back and keeps the old.
+    _ordered(
+        grow,
+        "_RUHA-A.MEMORY @ 0= IF 0 EXIT THEN",
+        "_RUHA-G-READ",
+        "_RUHA-G-CAP _RUHA-G-OLD _RUHA-G-SPANS CELLS MOVE",
+        "_RUHA-B-SHORT @ _RUHA-G-WIDEN? 0= IF 0 EXIT THEN",
+        "_RUHA-A.CAPACITY @ _RUHA-G-DERIVE 0= IF 0 EXIT THEN",
+        "_RUHA-A.RECORDS-U @ _RUHA-G-BYTES",
+        "_RUHA-A.MEMORY @ MSRC-ALLOC",
+        "_RUHA-G-KEEP-OLD",
+        "_RUHA-G-NEW @ _RUHA-B-ADAPTER @ _RUHA-G-PLACE",
+        "_RUHA-G-PROVED? _RUHA-BANKS-DAMAGED CHK-HANDOVER 0= IF",
+        "_RUHA-G-OLD _RUHA-G-CAP _RUHA-G-SPANS CELLS MOVE",
+        "_RUHA-A.BLOCK-A @ _RUHA-B-ADAPTER @ _RUHA-G-PLACE",
+        "_RUHA-G-NEW @ _RUHA-G-NEW-U @ _RUHA-B-ADAPTER @ _RUHA-A.MEMORY @",
+        "_RUHA-G-MOVE-ACTIVE",
+        "_RUHA-G-OLD-SAVE @ _RUHA-B-ADAPTER @ _RUHA-A.SAVE-A @",
+        "_RUHA-B-ADAPTER @ DUP _RUHA-A.BLOCK-A @ SWAP _RUHA-A.BLOCK-U @",
+        "_RUHA-G-NEW @ _RUHA-B-ADAPTER @ _RUHA-A.BLOCK-A !",
+        "_RUHA-G-NEW-U @ _RUHA-B-ADAPTER @ _RUHA-A.BLOCK-U !",
+        "1 _RUHA-DIAG-GROWTHS +!",
+    )
+    # The snapshot on screen names its spans where they now lie; the other
+    # bank's snapshot is cleared, since nothing was published from it.
+    _ordered(move, "DUP 0< IF DROP EXIT THEN", "RUHA-SNAPSHOT-SIZE 0 FILL",
+             "_RUHA-G-BANKED 0 ?DO", "_RUHA-G-SNAP-FIELD !",
+             "I CELLS _RUHA-G-OLD + @ MOVE")
+    _ordered(proved, "_RUHA-SCREEN-STORAGE-DISJOINT?",
+             "['] _RUHA-G-DOCUMENTS-APART? CATCH", "['] _RUHA-B-RESTORE CATCH")
+    documents = _word(source, "_RUHA-G-DOCUMENTS-APART?")
+    _ordered(documents, "_RUHA-RECORD-FREE = IF DROP ELSE",
+             "_RUHA-R.UCTX @ ?DUP IF", "ASHELL-CTX-SWITCH",
+             "_RUHA-STORAGE-DISJOINT-CURRENT?")
 
 
 def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
@@ -421,7 +514,7 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         query,
         "_RUHA-B-PREFLIGHT-GUARDED",
         "_RUHA-A.LAST-DRAW !",
-        "_RUHA-B-CAPTURE",
+        "_RUHA-B-BUILD",
     )
     assert "' RUHA-SNAPSHOT-FOR@ CONSTANT _ruha-snapshot-for-body-xt" in source
     assert "OVER R@ <> IF" in authority
@@ -464,6 +557,7 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         "_RUHA-A.SNAP-NATIVE-A",
         "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A",
         "_RUHA-A.SNAP-DGRAPH-NATIVE-A",
+        "_RUHA-A.SAVE-A",
         "RUHA-SIZE",
     ):
         assert adapter_span in storage
@@ -483,7 +577,7 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
     # RUHA's policy: no address zero and no empty or negative span.
     assert "OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN" in admit
     assert "_RUHA-SAFE-SPANS MSPAN-SET-PUSH MSPAN-SET-S-OK =" in admit
-    assert "19 CONSTANT _RUHA-SAFE-SPAN-CAPACITY" in source
+    assert "20 CONSTANT _RUHA-SAFE-SPAN-CAPACITY" in source
     for lifecycle in (
         "_RUHA-RELAYOUT",
         "_RUHA-PROJECT",
@@ -515,7 +609,7 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
     assert "BANK-U @ 2 *" not in shape
 
 
-def test_abi10_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> None:
+def test_abi11_layout_embeds_both_fixed_model_builders_and_its_block() -> None:
     source = _source()
     assert "312 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert _offset_for_snapshot_field(source, "_RUHA-D.OWNER-ID") == 224
@@ -527,9 +621,16 @@ def test_abi10_layout_embeds_both_fixed_model_builders_and_menu_lineage() -> Non
     # Then the document's layer: 1 for an overlay slot's document.
     assert _offset_for_snapshot_field(source, "_RUHA-D.LAYER") == 304
     assert "240 CONSTANT RUHA-SNAPSHOT-SIZE" in source
-    assert _constant(source, "RUHA-SIZE") == 1144
-    assert "10 CONSTANT _RUHA-ABI" in source
-    assert '0x3031485544495552 CONSTANT _RUHA-MAGIC' in source
+    assert _constant(source, "RUHA-SIZE") == 1176
+    assert "11 CONSTANT _RUHA-ABI" in source
+    assert '0x3131485544495552 CONSTANT _RUHA-MAGIC' in source
+    # The memory source and the block taken from it, then the records' copy
+    # in that block, end the adapter.
+    assert _offset_for_snapshot_field(source, "_RUHA-A.LAYERS") == 1136
+    assert _offset_for_snapshot_field(source, "_RUHA-A.MEMORY") == 1144
+    assert _offset_for_snapshot_field(source, "_RUHA-A.BLOCK-A") == 1152
+    assert _offset_for_snapshot_field(source, "_RUHA-A.BLOCK-U") == 1160
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SAVE-A") == 1168
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.COLLECTION-VALIDATION-A"
     ) == 216
@@ -637,8 +738,10 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@",
         "RUHA-SNAPSHOT-FOR@",
         "1 CONSTANT RUHA-S-CAPACITY",
-        "10 CONSTANT _RUHA-ABI",
-        '0x3031485544495552 CONSTANT _RUHA-MAGIC',
+        "RUHA-CAPACITY-COUNT",
+        "RUHA-FIRST-CAPACITIES",
+        "11 CONSTANT _RUHA-ABI",
+        '0x3131485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
@@ -1001,7 +1104,7 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     assert capture.count("_RUHA-B-TAIL-SPAN") == 12
     assert "ASHELL-ACTIVE-CTX _RUHA-B-ORIGINAL-CTX !" in query
     capture_all = _word(source, "_RUHA-B-CAPTURE-ALL")
-    assert "_RUHA-B-CAPTURE-ALL" in query
+    assert "_RUHA-B-CAPTURE-ALL" in _word(source, "_RUHA-B-BUILD")
     assert "['] _RUHA-B-CAPTURE CATCH" in capture_all
     assert "['] _RUHA-B-RESTORE CATCH" in capture_all
     assert "_RUHA-R.UCTX @ ASHELL-CTX-SWITCH" in capture
@@ -1062,7 +1165,7 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
         "_RUHA-A.LAST-DRAW @ = IF",
         "_RUHA-A.LAST-STATUS @",
         "_RUHA-A.LAST-DRAW !",
-        "_RUHA-B-CAPTURE",
+        "_RUHA-B-BUILD",
     )
 
 
@@ -1290,22 +1393,22 @@ def test_shadow_check_captures_in_full_first_and_publishes_the_ordinary_capture(
     _ordered(
         query,
         "CHK-SAFE? 0= FSHD? AND IF _RUHA-SH-FULL THEN",
-        "_RUHA-B-START",
         "CHK-SAFE? _RUHA-B-FULL !",
-        "_RUHA-B-CAPTURE-ALL",
+        "_RUHA-B-BUILD",
         "0 _RUHA-B-FULL !",
         "CHK-SAFE? 0= FSHD? AND IF _RUHA-SH-CHECK THEN",
         "_RUHA-B-PUBLISH",
     )
-    assert query.count("_RUHA-B-CAPTURE-ALL") == 1
+    assert query.count("_RUHA-B-BUILD") == 1
     # The full capture puts back the records' flags it staged or dirtied,
     # and keeps its result before they are restored.
+    # Each builds as the ordinary capture does, growing the block when it
+    # runs short.
     _ordered(
         full,
         "_RUHA-SH-SAVE-FLAGS?",
-        "_RUHA-B-START",
         "-1 _RUHA-B-FULL !",
-        "_RUHA-B-CAPTURE-ALL",
+        "_RUHA-B-BUILD",
         "0 _RUHA-B-FULL !",
         "_RUHA-SH-KEEP?",
         "_RUHA-SH-RESTORE-FLAGS",
@@ -1385,7 +1488,7 @@ def test_a_family_refusal_falls_back_only_its_own_document() -> None:
     # and unstaged so no refused state can be reused.
     _ordered(
         fall_back,
-        "DROP",
+        "RUHA-S-CAPACITY = IF",
         "_RUHA-B-FALL-BACK-REUSE @ _RUHA-B-EXACT-REUSE !",
         "_RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!",
         "0 0 0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT",
@@ -1402,6 +1505,16 @@ def test_a_family_refusal_falls_back_only_its_own_document() -> None:
         "ASHELL-CTX-SWITCH",
     )
     assert capture.count("_RUHA-B-FALL-BACK EXIT") == 6
+    # Each family names itself before it captures, so a shortfall marks it.
+    _ordered(
+        capture,
+        "RUHA-F-MENUS _RUHA-B-FAMILY ! _RUHA-B-MENUS",
+        "RUHA-F-COLLECTIONS _RUHA-B-FAMILY ! UCSN-CAPTURE",
+        "RUHA-F-DATA-GRAPHICS _RUHA-B-FAMILY ! UDGSN-CAPTURE",
+        "RUHA-F-STATUS-FIELDS _RUHA-B-FAMILY ! USFSN-CAPTURE",
+        "RUHA-F-FIELDS _RUHA-B-FAMILY ! UFLSN-CAPTURE",
+        "RUHA-F-DIALOGS _RUHA-B-FAMILY ! UDLSN-CAPTURE",
+    )
     _ordered(
         capture,
         "_RUHA-B-MENUS",
@@ -1788,11 +1901,13 @@ def test_status_family_survives_every_snapshot_and_storage_boundary():
     source = _source()
     assert "RUHA-INIT-STATUS" not in source and "RUHA-INIT-FIELDS" not in source
     assert "USFSN-STORAGE-DISJOINT?" in _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
-    for word in ("_RUHA-I-PAIRWISE?", "_RUHA-I-MODULE-DISJOINT?", "_RUHA-I-AUTHORITY?",
-                 "_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
+    for word in ("_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
                  "_RUHA-B-APPEND-DOCUMENT", "_RUHA-B-REUSE?", "_RUHA-B-PUBLISH",
                  "_RUHA-B-CONTENT-UNCHANGED?"):
         assert "SFIELD" in _word(source, word), word
+    for table in ("_RUHA-G-FIELDS", "_RUHA-G-SNAP-FIELDS"):
+        assert sum("SFIELD" in entry for entry in _table(source, table)) == 2, table
+    assert "RUHA-F-STATUS-FIELDS AND" in _word(source, "_RUHA-G-WIDEN?")
     prior = _word(source, "_RUHA-B-PRIOR-ENTRY?")
     assert "USFSN-FROZEN-VALIDATE" in prior
     assert "_RUHA-B-REUSE-SFIELD-DESCRIPTOR-U @ 0=" in prior
@@ -1813,11 +1928,14 @@ def test_status_family_survives_every_snapshot_and_storage_boundary():
 def test_field_family_survives_every_snapshot_and_storage_boundary():
     source = _source()
     assert "UFLSN-STORAGE-DISJOINT?" in _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
-    for word in ("_RUHA-I-PAIRWISE?", "_RUHA-I-MODULE-DISJOINT?", "_RUHA-I-AUTHORITY?",
-                 "_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
+    for word in ("_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
                  "_RUHA-B-APPEND-DOCUMENT", "_RUHA-B-REUSE?", "_RUHA-B-PUBLISH",
                  "_RUHA-B-CONTENT-UNCHANGED?"):
         assert re.search(r"(?<!S)FIELD", _word(source, word)), word
+    for table in ("_RUHA-G-FIELDS", "_RUHA-G-SNAP-FIELDS"):
+        assert sum(bool(re.search(r"(?<!S)FIELD-", entry))
+                   for entry in _table(source, table)) == 2, table
+    assert "RUHA-F-FIELDS AND" in _word(source, "_RUHA-G-WIDEN?")
     prior = _word(source, "_RUHA-B-PRIOR-ENTRY?")
     assert "UFLSN-FROZEN-VALIDATE" in prior
     assert re.search(r"_RUHA-B-REUSE-FIELD-DESCRIPTOR-U @ 0=\s+"
@@ -1838,11 +1956,16 @@ def test_dialog_family_survives_every_snapshot_and_storage_boundary():
     authority = _word(source, "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
     assert "UDLSN-STORAGE-DISJOINT?" in authority
     assert "UDLG-STORAGE-DISJOINT?" in authority
-    for word in ("_RUHA-I-PAIRWISE?", "_RUHA-I-MODULE-DISJOINT?", "_RUHA-I-AUTHORITY?",
-                 "_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
+    for word in ("_RUHA-STORAGE-SPANS?", "_RUHA-B-LOAD-PRIOR", "_RUHA-B-PRIOR-ENTRY?",
                  "_RUHA-B-APPEND-DOCUMENT", "_RUHA-B-REUSE?", "_RUHA-B-PUBLISH",
                  "_RUHA-B-CONTENT-UNCHANGED?", "_RUHA-B-CAPTURE-CURRENT"):
         assert "DIALOG" in _word(source, word), word
+    for table in ("_RUHA-G-FIELDS", "_RUHA-G-SNAP-FIELDS"):
+        assert sum("DIALOG" in entry for entry in _table(source, table)) == 2, table
+    # The dialog descriptors hold one for each document record, so only the
+    # native span grows.
+    assert "RUHA-F-DIALOGS AND IF 12 _RUHA-G-DOUBLE? EXIT THEN" in _word(
+        source, "_RUHA-G-WIDEN?")
     prior = _word(source, "_RUHA-B-PRIOR-ENTRY?")
     assert "UDLSN-FROZEN-VALIDATE" in prior
     assert re.search(r"_RUHA-B-REUSE-DIALOG-DESCRIPTOR-U @ 0=\s+"

@@ -1651,18 +1651,17 @@ frame before the change driver.
   clean document's next snapshot copies, and its fixed storage goes. RUHA
   takes Desk's memory source and keeps both banks and its work spans in
   one block of its own, each span with a capacity of its own, and Desk
-  carves only RUHA's record and its document records. Before a build, the
-  bank about to be built grows to what the snapshot on screen used and
-  half again. A build that still runs short in a family is dropped: that
-  family's spans double, with the work spans their capacities require, and
-  the snapshot is built again, so a document falls back only when the
-  memory source refuses. Growing copies the snapshot on screen into the
-  new block and moves its spans there, so it stays readable, and the new
-  block is proved apart from other storage as the producer's blocks are.
-  Every family keeps storage, so the families a caller could leave without
-  banks go, and so does 9a.2's capture into scratch, which nothing on the
-  frame's path calls. The shadow check's full capture and the full refresh
-  grow the same way. It sends what it sent before.
+  carves only RUHA's record and its document records. A build that runs
+  short in a family is made again once that family's spans have doubled,
+  with the work spans their capacities require, so a document falls back
+  only when the memory source refuses. Growing copies the snapshot on
+  screen into the new block and moves its spans there, so it stays
+  readable, and the new block is proved apart from other storage as the
+  producer's blocks are. Every family keeps storage, so the families a
+  caller could leave without banks go, and so does 9a.2's capture into
+  scratch, which nothing on the frame's path calls. The shadow check's full
+  capture and the full refresh grow the same way. It sends what it sent
+  before.
 - **9c. The rest of the DELTA.** The other changes the terminal accepts in
   a DELTA go through the change driver as well, such as controls that come
   or go within what a DELTA may carry. The whole-screen comparison remains

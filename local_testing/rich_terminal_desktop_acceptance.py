@@ -444,6 +444,8 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTHP-DIAG-UNPACKED",
     "_RTHP-DIAG-UNPACKED-ROOTS",
     "_RUHA-DIAG-MENUS-KEPT",
+    # Times the snapshot adapter's block grew because a build ran short.
+    "_RUHA-DIAG-GROWTHS",
     "_RTHP-DIAG-ARENA-GROWTHS",
     "_RTHP-DIAG-ARENA-KEPT",
     "_RTHP-DIAG-ALONE-REBUILDS",
@@ -11874,16 +11876,19 @@ def _growing_storage_record(client, variables: dict) -> dict:
     return record
 
 
-# The aggregate adapter (RUHA) keeps its banks in storage Desk gives it when
-# it starts.  The producer's record names the adapter, whose record holds the
-# size of every bank, both halves of each double bank counted, and two
-# snapshots, the active one holding the bytes the last aggregate used.  The
-# cells follow uidl-hybrid-adapter.f's ABI 10 layout; its magic and size
-# guard against reading another layout.
-_ADAPTER_MAGIC = 0x3031485544495552  # "RUIDUH10"
-_ADAPTER_RECORD_CELLS = 142
-_ADAPTER_BANK_CELLS = {
-    "attachment_records": 6, "capture_work": 9, "capture_text": 11,
+# The aggregate adapter (RUHA) keeps its banks and work spans in one block
+# it takes from Desk's memory source and grows as captures need.  The
+# producer's record names the adapter, whose record holds the block's size,
+# the bytes of each span in it, both halves of each bank span counted, and
+# two snapshots, the active one holding the bytes the last aggregate used.
+# The attachment records lie in Desk's own storage.  The cells follow
+# uidl-hybrid-adapter.f's ABI 11 layout; its magic and size guard against
+# reading another layout.
+_ADAPTER_MAGIC = 0x3131485544495552  # "RUIDUH11"
+_ADAPTER_RECORD_CELLS = 147
+_ADAPTER_ATTACHMENT_RECORDS = 6
+_ADAPTER_SPAN_CELLS = {
+    "capture_work": 9, "capture_text": 11,
     "directory": 13, "menu_records": 16, "menu_text": 19,
     "collection_validation": 28, "collection_work": 30,
     "collection_descriptors": 32, "collection_native": 35,
@@ -11894,6 +11899,7 @@ _ADAPTER_BANK_CELLS = {
 }
 _ADAPTER_ACTIVE_BANK = 21
 _ADAPTER_SNAPSHOT_CELLS = (82, 112)
+_ADAPTER_BLOCK_BYTES = 145
 _SNAPSHOT_DOCUMENT_COUNT = 8
 _SNAPSHOT_USED_CELLS = {
     "directory": 3, "menu_records": 5, "menu_text": 7,
@@ -11906,7 +11912,8 @@ _SNAPSHOT_USED_CELLS = {
 
 
 def _adapter_storage_record(client, producer: int) -> dict:
-    """The aggregate adapter's banks, and the bytes its last snapshot used."""
+    """The aggregate adapter's block and spans, and the bytes its last
+    snapshot used."""
 
     if not isinstance(producer, int) or producer <= 0:
         return {"unavailable": True}
@@ -11921,9 +11928,12 @@ def _adapter_storage_record(client, producer: int) -> dict:
     except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
         return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
     if cells[0] != _ADAPTER_MAGIC or cells[2] != _ADAPTER_RECORD_CELLS * GUEST_CELL_BYTES:
-        return {"unavailable": True, "error": "not an ABI 10 adapter record"}
-    banks = {name: cells[i] for name, i in _ADAPTER_BANK_CELLS.items()}
-    record = {"bank_bytes": sum(banks.values()), "banks": banks}
+        return {"unavailable": True, "error": "not an ABI 11 adapter record"}
+    record = {
+        "block_bytes": cells[_ADAPTER_BLOCK_BYTES],
+        "attachment_record_bytes": cells[_ADAPTER_ATTACHMENT_RECORDS],
+        "spans": {name: cells[i] for name, i in _ADAPTER_SPAN_CELLS.items()},
+    }
     active = cells[_ADAPTER_ACTIVE_BANK]
     if active in (0, 1):
         first = _ADAPTER_SNAPSHOT_CELLS[active]

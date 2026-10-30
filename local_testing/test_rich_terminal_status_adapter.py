@@ -1,4 +1,5 @@
-"""Execute independent status banks through the actual RUHA capture/reuse path."""
+"""Status fields through the actual RUHA capture and reuse path, in banks of
+their own."""
 
 import re
 
@@ -10,10 +11,6 @@ def _status_adapter_program():
     lines = _ruha_constructor_program()
     at = lines.index("0 _RA-FAILS ! 0 _RA-CHECKS ! DEPTH _RA-DEPTH !")
     lines[at:at] = [
-        "CREATE _RA-SF-DESCRIPTORS-MEM 2 USFSN-DESCRIPTOR-SIZE * 7 + ALLOT",
-        "CREATE _RA-SF-NATIVE-MEM 256 7 + ALLOT",
-        ": _RA-SF-DESCRIPTORS _RA-SF-DESCRIPTORS-MEM 7 + -8 AND ;",
-        ": _RA-SF-NATIVE _RA-SF-NATIVE-MEM 7 + -8 AND ;",
         "VARIABLE _RA-SF-A VARIABLE _RA-SF-U VARIABLE _RA-SF-PREV-A",
         ": _RA-SF-FIRST ( -- model )",
         "  _RA-SNAP @ RUHA-SNAPSHOT-STATUS-FIELDS-DESCRIPTORS@ DROP",
@@ -23,15 +20,14 @@ def _status_adapter_program():
         "  USFSN-DESCRIPTOR-NATIVE DROP ;",
     ]
     for index, line in enumerate(lines):
-        if line == "_RA-INIT-ARGS _RA-NO-OPTIONAL-BANKS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT":
-            lines[index] = (
-                "_RA-INIT-ARGS _RA-SF-DESCRIPTORS 2 USFSN-DESCRIPTOR-SIZE * "
-                "_RA-SF-NATIVE 256 0 0 0 0 0 0 0 0 _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT"
-            )
-        elif line == "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0= _RA-ASSERT":
-            lines[index] = "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ _RA-SF-DESCRIPTORS = _RA-ASSERT"
-        elif line == "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0= _RA-ASSERT":
-            lines[index] = "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ _RA-SF-NATIVE = _RA-ASSERT"
+        if line == "_RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT":
+            # Each status bank holds one descriptor and 128 native bytes.
+            lines[index] = "128 7 _RA-CAP! " + line
+        elif line == "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0<> _RA-ASSERT":
+            lines[index] = ("_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ "
+                            "USFSN-DESCRIPTOR-SIZE = _RA-ASSERT")
+        elif line == "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0<> _RA-ASSERT":
+            lines[index] = "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-BANK-U @ 128 = _RA-ASSERT"
         elif '<uidl><textarea id=note/>' in line:
             lines[index] = line.replace(
                 "<textarea id=note/>",
@@ -82,7 +78,7 @@ def test_status_banks_capture_reuse_and_recapture_without_collection_aliasing():
     assert int(summary.group(1)) >= 65
 
 
-def test_legacy_constructor_status_absence_and_full_source_load():
+def test_constructor_program_runs_over_the_full_source_load():
     output = _run_forth(_ruha_constructor_program())
     summary = re.search(r"RUHA CONSTRUCTOR PASS\s+(\d+)\s+0", output)
     assert summary, output[-18000:]
@@ -92,8 +88,12 @@ def test_legacy_constructor_status_absence_and_full_source_load():
 def test_status_capacity_falls_back_atomically_and_retries_the_dirty_document():
     lines = _status_adapter_program()
     first_query = lines.index("1 _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT")
-    lines = [line.replace("_RA-SF-NATIVE 256 0 0 0 0 0 0 0 0 _RA-ADAPTER RUHA-INIT",
-                          "_RA-SF-NATIVE 144 0 0 0 0 0 0 0 0 _RA-ADAPTER RUHA-INIT")
+    # Each status bank holds one header but not the 80-byte labelled field,
+    # and the memory source refuses RUHA any more storage.
+    lines = [line.replace("128 7 _RA-CAP! _RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT",
+                          "72 7 _RA-CAP! _RA-INIT-ARGS _RA-ADAPTER RUHA-INIT RUHA-S-OK = _RA-ASSERT"
+                          " _RA-NO-GROWTH")
+             .replace("_RUHA-A.SNAP-SFIELD-NATIVE-BANK-U @ 128 =", "_RUHA-A.SNAP-SFIELD-NATIVE-BANK-U @ 72 =")
              for line in lines[:first_query + 1]]
     lines += [
         "_RA-SNAP @ RUHA-SNAPSHOT-DOCUMENT-COUNT@ 1 = _RA-ASSERT",

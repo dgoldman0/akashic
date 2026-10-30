@@ -18,6 +18,9 @@ def _program():
              for line in lines]
     return "\n".join(lines) + r'''
 VARIABLE _RP-ID VARIABLE _RP-GEN VARIABLE _RP-DIR VARIABLE _RP-OTHER
+\ RUHA's own banks, in the block it took from its memory source.
+: _RA-NATIVE ( -- a ) _RA-ADAPTER _RUHA-A.SNAP-NATIVE-A @ ;
+: _RA-DIRECTORY ( -- a ) _RA-ADAPTER _RUHA-A.SNAP-DIRECTORY-A @ ;
 CREATE _RP-COPY 247 ALLOT
 : _RP-SAVED _RP-COPY 7 + -8 AND ;
 : _RP-OWNER

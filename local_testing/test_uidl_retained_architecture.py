@@ -893,53 +893,21 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "_A1D-MIN-TX-CAPACITY CONSTANT APT1-DESK-TX-CAPACITY\n"
         "[THEN]"
     ) in code
+    # The snapshot adapter's banks and work spans are not sized here
+    # either: RUHA takes them from Desk's memory source and grows them as
+    # captures need.  Desk lends it one record for each document it binds.
+    for retired in ("_A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY",
+                    "_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY",
+                    "_A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY",
+                    "_A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY",
+                    "_A1D-RUHA-SNAPSHOT-", "_A1D-RUHA-DIRECTORY",
+                    "_A1D-RUHA-WORK", "_A1D-RUHA-COLLECTION-VALIDATION",
+                    "_A1D-RUHA-COLLECTION-WORK", "_A1D-UMIN",
+                    "_A1D-REQUIRE-POSITIVE-CAPACITY"):
+        assert retired not in code, retired
     assert (
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY USCOL-ENTRY-HEADER-SIZE /\n"
-        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
-        "    CONSTANT _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY"
-    ) in code
-    assert (
-        "_A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY\n"
-        "    UCSN-DESCRIPTOR-SIZE _A1D-CAPACITY*\n"
-        "    2 _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U"
-    ) in code
-    assert (
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY 2 _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-RUHA-SNAPSHOT-NATIVE-U"
-    ) in code
-    assert (
-        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY UDG-HEADER-SIZE /\n"
-        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UMIN\n"
-        "    CONSTANT _A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY"
-    ) in code
-    assert (
-        "_A1D-RUHA-DGRAPH-DESCRIPTOR-CAPACITY\n"
-        "    UDGSN-DESCRIPTOR-BANK-BYTES\n"
-        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
-        "    2 _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U"
-    ) in code
-    assert (
-        "APT1-DESK-DATA-GRAPHICS-NATIVE-CAPACITY 2 _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U"
-    ) in code
-    assert (
-        "APT1-DESK-COLLECTION-NATIVE-CAPACITY\n"
-        "    CONSTANT _A1D-RUHA-COLLECTION-VALIDATION-U"
-    ) in code
-    assert (
-        "_A1D-UIDL-RECORDS _A1D-RUHA-COLLECTION-DESCRIPTOR-CAPACITY\n"
-        "    UCSN-WORK-BYTES\n"
-        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
-        "    _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY 8 _A1D-CAPACITY* MAX\n"
-        "    _A1D-RUHA-FIELD-DESCRIPTOR-CAPACITY 8 _A1D-CAPACITY* MAX\n"
-        "    CONSTANT _A1D-RUHA-COLLECTION-WORK-U"
-    ) in code
-    assert "_A1D-UIDL-RECORDS _A1D-UIDL-RECORDS UCSN-WORK-BYTES" not in code
-    assert (
-        "_A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*\n"
-        "    2 _A1D-CAPACITY*"
+        "_A1D-UIDL-BINDINGS RUHA-RECORD-SIZE _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-RUHA-RECORDS-U"
     ) in code
     # The engine's operation, copy and control-ledger banks are not sized
     # here: they start with one record each from Desk's memory source, the
@@ -1005,19 +973,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY _A1D-U32-POSITIVE?" in status_guard
     assert "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY USF-HEADER-SIZE U<" in status_guard
     assert "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY 7 AND" in status_guard
-    assert (
-        "APT1-DESK-STATUS-FIELDS-NATIVE-CAPACITY USF-HEADER-SIZE /\n"
-        "    _A1D-REQUIRE-POSITIVE-CAPACITY\n"
-        "    CONSTANT _A1D-RUHA-STATUS-DESCRIPTOR-CAPACITY"
-    ) in code
     arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
     assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
-    derived_guard = _word(composition, "_A1D-REQUIRE-POSITIVE-CAPACITY")
-    assert "DUP _A1D-U32-POSITIVE? 0=" in derived_guard
-    assert 'ABORT" desk-apt1: invalid derived capacity"' in derived_guard
-    # Its definition and five base derivations.  The shell's model, source
-    # and producer storage are not bounded here: they grow.
-    assert code.count("_A1D-REQUIRE-POSITIVE-CAPACITY") == 6
+    # The shell's model, source and producer storage are not bounded here:
+    # they grow.
     assert "_A1D-SHELL-MAX-TEXT" not in code and "_A1D-SHELL-SOURCE-U" not in code
     assert "_A1D-SHELL-CAPACITY" not in code
     for stale_interpretation_guard in (
@@ -1040,58 +999,20 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY _A1D-U32-POSITIVE?" in dialog_guard
     assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY UDLG-HEADER-SIZE U<" in dialog_guard
     assert "APT1-DESK-DIALOGS-NATIVE-CAPACITY 7 AND" in dialog_guard
-    # One dialog descriptor a document, never an application count.
-    assert (
-        "_A1D-UIDL-BINDINGS UDLSN-DESCRIPTOR-SIZE _A1D-CAPACITY*\n"
-        "    2 _A1D-CAPACITY*\n"
-        "    CONSTANT _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U"
-    ) in code
-    # RUHA's record and its banks are carved from one block, so that its
-    # storage proofs query one range with nothing else inside it.  Each span
-    # takes its own capacity, in the order RUHA-INIT receives them.
+    # RUHA's record and its document records lie in one block, so that a
+    # proof of RUHA's storage queries them once.
     assert re.findall(r"XBUF (_A1D-RUHA\S*)", code) == ["_A1D-RUHA-BLOCK-MEM"]
     assert (
         "RUHA-SIZE _A1D-ALIGNMENT-SLOP+ -8 AND\n"
-        "    CONSTANT _A1D-RUHA-O-RECORDS"
+        "    CONSTANT _A1D-RUHA-O-RECORDS\n"
+        "_A1D-RUHA-O-RECORDS _A1D-RUHA-RECORDS-U _A1D-SPAN-END\n"
+        "    CONSTANT _A1D-RUHA-BLOCK-U\n"
     ) in code
-    ruha_banks = (
-        ("RECORDS", "_A1D-RUHA-RECORDS-U"),
-        ("WORK", "_A1D-RUHA-WORK-U"),
-        ("WORK-TEXT", "_A1D-UIDL-TEXT-U"),
-        ("COLLECTION-VALIDATION", "_A1D-RUHA-COLLECTION-VALIDATION-U"),
-        ("COLLECTION-WORK", "_A1D-RUHA-COLLECTION-WORK-U"),
-        ("DIRECTORY", "_A1D-RUHA-DIRECTORY-U"),
-        ("SNAPSHOT-RECORDS", "_A1D-RUHA-SNAPSHOT-RECORDS-U"),
-        ("SNAPSHOT-TEXT", "_A1D-RUHA-SNAPSHOT-TEXT-U"),
-        ("SNAPSHOT-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-DESCRIPTORS-U"),
-        ("SNAPSHOT-NATIVE", "_A1D-RUHA-SNAPSHOT-NATIVE-U"),
-        ("SNAPSHOT-DGRAPH-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U"),
-        ("SNAPSHOT-DGRAPH-NATIVE", "_A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U"),
-        ("SNAPSHOT-STATUS-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U"),
-        ("SNAPSHOT-STATUS-NATIVE", "_A1D-RUHA-SNAPSHOT-STATUS-NATIVE-U"),
-        ("SNAPSHOT-FIELD-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U"),
-        ("SNAPSHOT-FIELD-NATIVE", "_A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U"),
-        ("SNAPSHOT-DIALOG-DESCRIPTORS", "_A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U"),
-        ("SNAPSHOT-DIALOG-NATIVE", "_A1D-RUHA-SNAPSHOT-DIALOG-NATIVE-U"),
-    )
-    layout = re.findall(
-        r"_A1D-RUHA-O-(\S+) (\S+) _A1D-SPAN-END CONSTANT (\S+)",
-        " ".join(code.split()),
-    )
-    following = [f"_A1D-RUHA-O-{name}" for name, _ in ruha_banks[1:]]
-    assert layout == [
-        (name, size, after)
-        for (name, size), after in zip(ruha_banks, following + ["_A1D-RUHA-BLOCK-U"])
-    ]
     assert (
         "_A1D-RUHA-BLOCK-U _A1D-ALIGNMENT-SLOP+ XBUF _A1D-RUHA-BLOCK-MEM\n"
         "_A1D-RUHA-BLOCK-MEM 7 + -8 AND CONSTANT _A1D-RUHA\n"
+        "_A1D-RUHA _A1D-RUHA-O-RECORDS + CONSTANT _A1D-RUHA-RECORDS\n"
     ) in code
-    for name, _ in ruha_banks:
-        assert (
-            f"_A1D-RUHA _A1D-RUHA-O-{name} + CONSTANT _A1D-RUHA-{name}"
-            in " ".join(code.split())
-        )
     span_end = _word(composition, "_A1D-SPAN-END")
     assert "_A1D-ALIGNMENT-SLOP+ -8 AND _A1D-CAPACITY+" in span_end
     for applet_specific_capacity in (
@@ -1154,36 +1075,11 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         assert f"1 CONSTANT {identity}" in code
     producer_bind = setup[setup.index("RTHP-INIT") :]
     assert (
-        "_A1D-RUHA-RECORDS _A1D-RUHA-RECORDS-U\n"
-        "    _A1D-RUHA-WORK _A1D-RUHA-WORK-U\n"
-        "    _A1D-RUHA-WORK-TEXT _A1D-UIDL-TEXT-U\n"
-        "    _A1D-RUHA-COLLECTION-VALIDATION\n"
-        "        _A1D-RUHA-COLLECTION-VALIDATION-U\n"
-        "    _A1D-RUHA-COLLECTION-WORK _A1D-RUHA-COLLECTION-WORK-U\n"
-        "    _A1D-RUHA-DIRECTORY _A1D-RUHA-DIRECTORY-U\n"
-        "    _A1D-RUHA-SNAPSHOT-RECORDS _A1D-RUHA-SNAPSHOT-RECORDS-U\n"
-        "    _A1D-RUHA-SNAPSHOT-TEXT _A1D-RUHA-SNAPSHOT-TEXT-U\n"
-        "    _A1D-RUHA-SNAPSHOT-DESCRIPTORS\n"
-        "        _A1D-RUHA-SNAPSHOT-DESCRIPTORS-U\n"
-        "    _A1D-RUHA-SNAPSHOT-NATIVE _A1D-RUHA-SNAPSHOT-NATIVE-U\n"
-        "    _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS\n"
-        "        _A1D-RUHA-SNAPSHOT-DGRAPH-DESCRIPTORS-U\n"
-        "    _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE\n"
-        "        _A1D-RUHA-SNAPSHOT-DGRAPH-NATIVE-U\n"
-        "    _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS\n"
-        "        _A1D-RUHA-SNAPSHOT-STATUS-DESCRIPTORS-U\n"
-        "    _A1D-RUHA-SNAPSHOT-STATUS-NATIVE\n"
-        "        _A1D-RUHA-SNAPSHOT-STATUS-NATIVE-U\n"
-        "    _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS\n"
-        "        _A1D-RUHA-SNAPSHOT-FIELD-DESCRIPTORS-U\n"
-        "    _A1D-RUHA-SNAPSHOT-FIELD-NATIVE\n"
-        "        _A1D-RUHA-SNAPSHOT-FIELD-NATIVE-U\n"
-        "    _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS\n"
-        "        _A1D-RUHA-SNAPSHOT-DIALOG-DESCRIPTORS-U\n"
-        "    _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE\n"
-        "        _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE-U\n"
+        "_A1D-RUHA-RECORDS _A1D-RUHA-RECORDS-U RUHA-FIRST-CAPACITIES _A1D-MEMORY\n"
         "    _A1D-RUHA RUHA-INIT"
     ) in setup
+    # The memory source exists before RUHA takes its block from it.
+    assert setup.index("MSRC-INIT") < setup.index("RUHA-INIT")
     assert (
         "_A1D-SCREEN-FIRST @ _A1D-SCREEN-FIRST-U\n"
         "    _A1D-UIDL-BINDINGS RTHP-FIRST-CAPACITIES\n"
@@ -1225,10 +1121,11 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         assert constructor_owned_bank not in clear_inert
 
     uninstall = _word(composition, "_A1D-UNINSTALL")
-    # The producer's arenas go back before the engine's banks: the reverse
-    # of the order they were taken.
-    teardown_order = ("APTAS-UNINSTALL", "_A1D-SCREEN RTHP-FINI", "RTAPTE-FINI",
-                      "RTAPT-FINI", "_A1D-ENGINE-BANKS-FREE")
+    # The producer's arenas go back, then the snapshot adapter's block,
+    # before the engine's banks: the reverse of the order they were taken.
+    teardown_order = ("APTAS-UNINSTALL", "_A1D-SCREEN RTHP-FINI",
+                      "_A1D-SCREEN-FIRST-FREE", "_A1D-RUHA RUHA-FINI",
+                      "RTAPTE-FINI", "RTAPT-FINI", "_A1D-ENGINE-BANKS-FREE")
     assert [uninstall.index(token) for token in teardown_order] == sorted(
         uninstall.index(token) for token in teardown_order
     )

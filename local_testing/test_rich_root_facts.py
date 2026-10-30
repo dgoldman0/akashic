@@ -142,11 +142,9 @@ def _menus_program():
     first draw: a menu with a row, a child that is no row, and a textarea."""
     text = _program()
     text = text[:text.index("1 _RA-QUERY")]
+    # Each bank holds four menu records, so that the first build fits.
     for old, new in (('S" <uidl><textarea id=note/></uidl>"', f'S" {MENU_DOCUMENT}"'),
-                     ("_RA-MENU-RECORDS-MEM 2 UMSN-RECORD-SIZE *",
-                      "_RA-MENU-RECORDS-MEM 8 UMSN-RECORD-SIZE *"),
-                     ("_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE *",
-                      "_RA-MENU-RECORDS 8 UMSN-RECORD-SIZE *")):
+                     ("UMSN-RECORD-SIZE 0 _RA-CAP!", "4 UMSN-RECORD-SIZE * 0 _RA-CAP!")):
         assert old in text, old
         text = text.replace(old, new)
     return text + FACTS + MENU_WORDS

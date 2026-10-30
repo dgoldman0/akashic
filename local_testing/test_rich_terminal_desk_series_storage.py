@@ -57,21 +57,21 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
     before = values("XMEM-HERE @ XMEM-LIMIT @")
     assert before[1] > before[0]
     assert values("_A1D-SETUP") == (0,)
-    # RUHA's storage proofs first query the range from its lowest span to the
-    # end of its highest.  Desk carves RUHA's record and banks from one block,
-    # so that range starts at the block and ends at its last bank, and holds
-    # nothing that is not RUHA's.  The probe accepts every query, so one is
-    # asked.
+    # RUHA's record and its document records lie in Desk's block, and its
+    # banks and work spans in one block it took from Desk's memory source.
+    # A proof that accepts only ranges inside one of those two blocks
+    # therefore proves every span RUHA proves: the range from its lowest
+    # span to the end of its highest first, then each block.
+    assert values("_A1D-RUHA _RUHA-A.MEMORY @ _A1D-MEMORY =") == ((1 << 64) - 1,)
     assert values(
-        "VARIABLE _RBLK-A  VARIABLE _RBLK-U  VARIABLE _RBLK-N  0 _RBLK-N ! "
-        ": _RBLK-FIRST ( a u -- flag ) "
-        "_RBLK-N @ 0= IF _RBLK-U ! _RBLK-A ! ELSE 2DROP THEN 1 _RBLK-N +! -1 ; "
-        "_A1D-RUHA ' _RBLK-FIRST _RUHA-SAFE-PROVE? "
-        "_RBLK-A @ _A1D-RUHA = "
-        "_RBLK-A @ _RBLK-U @ + _A1D-RUHA-SNAPSHOT-DIALOG-NATIVE "
-        "_A1D-RUHA-SNAPSHOT-DIALOG-NATIVE-U + = "
-        "_RBLK-U @ _A1D-RUHA-BLOCK-U U> 0= _RBLK-N @"
-    ) == ((1 << 64) - 1,) * 4 + (1,)
+        "VARIABLE _RBLK-N  0 _RBLK-N ! "
+        ": _RBLK-WITHIN? ( a u base bytes -- flag ) >R >R "
+        "OVER R@ U< IF R> R> 2DROP 2DROP 0 EXIT THEN + R> R> + U> 0= ; "
+        ": _RBLK-PROOF ( a u -- flag ) 1 _RBLK-N +! "
+        "2DUP _A1D-RUHA _A1D-RUHA-BLOCK-U _RBLK-WITHIN? IF 2DROP -1 EXIT THEN "
+        "_A1D-RUHA _RUHA-A.BLOCK-A @ _A1D-RUHA _RUHA-A.BLOCK-U @ _RBLK-WITHIN? ; "
+        "_A1D-RUHA ' _RBLK-PROOF _RUHA-SAFE-PROVE? _RBLK-N @ 3 U> 0="
+    ) == ((1 << 64) - 1,) * 2
     after = values("XMEM-HERE @ XMEM-LIMIT @")
     assert after[1] > after[0]
     assert values("_A1D-PHASE @ _A1D-PHASE-INSTALLED =") == ((1 << 64) - 1,)
@@ -87,8 +87,9 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
                   "_A1D-SCREEN _RTHP.ARENA-U @ _A1D-SCREEN-FIRST-U = "
                   "_A1D-SCREEN-FIRST @") == ((1 << 64) - 1, (1 << 64) - 1, 0)
     capacities = values("_A1D-MEMORY MSRC-HELD@ _A1D-SCREEN-FIRST-U "
-                        "RTAPT-OP-SIZE 8 + RTAPT-CONTROL-LEDGER-SIZE +")
-    assert capacities[0] == capacities[1] + capacities[2]
+                        "RTAPT-OP-SIZE 8 + RTAPT-CONTROL-LEDGER-SIZE + "
+                        "_A1D-RUHA _RUHA-A.BLOCK-U @")
+    assert capacities[0] == capacities[1] + capacities[2] + capacities[3]
     assert values("_A1D-UNINSTALL") == (0,)
     # Everything taken from the memory source is given back.
     assert values("_A1D-MEMORY MSRC-HELD@") == (0,)
@@ -102,4 +103,5 @@ def test_complete_desk_cold_source_setup_fits_selected_external_memory():
         "after_setup": {"here": after[0], "limit": after[1], "remaining": after[1] - after[0]},
         "memory_source_held": capacities[0],
         "producer_first_arena_bytes": capacities[1],
+        "snapshot_adapter_block_bytes": capacities[3],
     }), flush=True)
