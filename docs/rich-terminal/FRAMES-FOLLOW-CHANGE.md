@@ -1478,14 +1478,47 @@ frame before the change driver.
     Other kinds of root, such as menus, tab sets and dialogs, take the copy
     once an ordinary use needs it; until then a frame that moves one takes
     the full driver.
-  - **9a.3c. Capture follows change.** For such a frame the snapshot is not
-    built: the documents that painted are captured into scratch, family by
-    family as 9a.2 does, the others keep what the frame on screen was built
-    from, and each document's place is read from its record. A shadow stage
-    builds the snapshot as well and compares the captures with its slices.
-- **9a.4. RUHA's banks go.** The full driver captures into scratch too,
-  sized to one build. The full refresh lowers what it captures and compares
-  the items with those on screen.
+  - **9a.3c. Capture follows change.** A document that painted is captured
+    only where it changed: a family whose roots did not change keeps the
+    slices of its last capture, and a pass over the whole document is made
+    once rather than by each family in turn. A shadow stage captures the
+    document whole as well and compares the slices.
+    Read once 9a.3b was done. Of a typed letter's 3.33 million steps, the
+    snapshot takes 1.56 million, the most of any layer; Desk's shell takes
+    0.92 million and the producer's candidate and bank 0.59 million. Nearly
+    all of the snapshot, 1.51 million, captures the one document that
+    painted, Pad's: 0.46 million for its collections, 0.39 million its
+    menus, 0.36 million its status fields, 0.17 million its dialogs, though
+    it shows none, 0.08 million its fields and 0.03 million its data
+    graphics. Only a collection and a status field changed. Building the
+    snapshot around the capture costs about 0.1 million, so capturing into
+    scratch without it, as this step first planned, would save little on
+    its own; that moves to 9a.4, where it lets RUHA's banks go. Much of the
+    capture is passes over the whole document that one family makes after
+    another: the menus, the collections and the dialogs each walk the
+    resolved tree, about 0.15 million a walk, and the status fields resolve
+    every element, 0.18 million, to find their few labels. In steps, each
+    sending what it sent before:
+    - **9a.3c.1. The status fields resolve only their labels.** The status
+      fields test each element's shape first and resolve only their labels.
+      Their capture reads only the labels and the labels' ancestors, so
+      resolving every other element added nothing to it.
+    - **9a.3c.2. One walk.** The menus, the collections and the dialogs
+      take their roots from one walk of the resolved tree, which calls each
+      family's visitor in turn at each node, where each family walked the
+      tree alone.
+    - **9a.3c.3. A family that did not change keeps its slices.** A painted
+      document's family whose roots kept their facts since its last
+      capture, and to which no root can have come or from which none can
+      have gone, keeps that capture's slices. Nothing counts roots coming
+      or going yet, so the evidence for it is read once 9a.3c.2 is done.
+- **9a.4. RUHA's banks go.** The snapshot is no longer built: the documents
+  that painted are captured into scratch, family by family as 9a.2 does,
+  the others keep what the frame on screen was built from, and each
+  document's place is read from its record. The full driver captures into
+  scratch too, sized to one build. A shadow stage builds the snapshot as
+  well and compares the captures with its slices. The full refresh lowers
+  what it captures and compares the items with those on screen.
 - **9c. The rest of the DELTA.** The other changes the terminal accepts in
   a DELTA go through the change driver as well, such as controls that come
   or go within what a DELTA may carry. The whole-screen comparison remains
