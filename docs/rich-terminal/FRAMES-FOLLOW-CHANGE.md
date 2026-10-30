@@ -1617,7 +1617,18 @@ frame before the change driver.
       once, under UIDL-TUI's guard, and its families' passes find them
       checked. Every-frame checks, the shadow check's full capture, the
       full refresh and safe mode check them in every pass, and the shadow
-      check compares the two captures. A family whose roots did not change
+      check compares the two captures. **Done** on 2026-10-30 (1be26e64).
+      UIDL-TUI's `UTUI-HOLD` runs the families' captures under its guard
+      with the relations checked once. A typed letter's frame builds in
+      2.02 million steps against 2.27 for 8a55bbb5, each run apart; the
+      snapshot takes 0.66 million against 0.91, and its relation checks
+      too few steps for the profile to show. It sends the same 18 DELTAs
+      and bytes. With the shadow check, the typing run made 3,521
+      comparisons without a difference, 210 of them the snapshot stage's,
+      and the canonical journey 14,491, 1,176 of them the snapshot
+      stage's, sending the same presents; the journey passed in safe mode.
+      The snapshot and the producer's candidate and copy now cost about
+      the same, 0.66 and 0.65 million. A family whose roots did not change
       keeps its slice, and the menus and the collections share one walk
       when both are captured, once an ordinary frame needs it; the other
       families' roots read widget and model revisions, which count apart
