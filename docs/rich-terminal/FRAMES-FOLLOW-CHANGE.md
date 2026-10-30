@@ -1516,15 +1516,31 @@ frame before the change driver.
       journey passed after each piece with the shadow check, 14,491
       comparisons without a difference, sending the same presents, and in
       safe mode.
-    - **9a.3c.2. One walk.** The menus and the collections, whose roots
-      keep the tree's order, take them from one walk of the resolved tree,
-      which calls each family's visitor in turn at each node, where each
-      family walked the tree alone.
-    - **9a.3c.3. A family that did not change keeps its slices.** A painted
-      document's family whose roots kept their facts since its last
-      capture, and to which no root can have come or from which none can
-      have gone, keeps that capture's slices. Nothing counts roots coming
-      or going yet, so the evidence for it is read once 9a.3c.2 is done.
+    - **9a.3c.2. The menus keep their slice.** Read once 9a.3c.1 was done:
+      the menus and the collections still walk the resolved tree, 0.52
+      million steps between them, of which their visitors take 0.25
+      million, so one walk for both would save about 0.13 million, while a
+      typed letter's menus, 0.39 million, do not change at all. Their
+      capture reads only element revisions' worth of state: UIDL and
+      UIDL-TUI count every change to the menus' texts, structure, layout,
+      visibility, focus and opening on the elements they touch, as the
+      menus' root facts already rely on, and the revisions come from one
+      count that every document shares and nothing resets. So a painted
+      document's menus take the slice of the snapshot before when that
+      slice was captured, or so kept, at a count no element it records,
+      nor any ancestor of one, nor any child of one of its menus, has
+      passed since, and every menubar the document holds has a record. A
+      row comes or goes only among a menu's children, and a menubar can
+      appear anywhere. The check reads those revisions and the element
+      types, and the count is kept with the generation of the snapshot
+      whose slice it describes. Safe mode and the shadow check's full
+      capture capture the menus as before, and the shadow check compares
+      the two snapshots.
+    - **9a.3c.3. The other families keep their slices.** The other
+      families' roots also read widget and model revisions, which count
+      apart from the elements' count, so keeping their slices needs each
+      root's facts from its last capture. Read once 9a.3c.2 is done, with
+      a single walk for the collections and the menus that are captured.
 - **9a.4. RUHA's banks go.** The snapshot is no longer built: the documents
   that painted are captured into scratch, family by family as 9a.2 does,
   the others keep what the frame on screen was built from, and each

@@ -75,6 +75,12 @@ REQUIRE ../check-mode.f
 : _RUHA-R.OV-COL     ( record -- a ) 104 + ;
 : _RUHA-R.OV-HEIGHT  ( record -- a ) 112 + ;
 : _RUHA-R.OV-WIDTH   ( record -- a ) 120 + ;
+\ The count of element changes when the document's menus were last captured,
+\ or found unchanged, and the generation of the snapshot whose menu slice
+\ that capture is, or zero: a later draw takes that slice while nothing the
+\ menus read has changed since (URF-MENUS-SINCE?).
+: _RUHA-R.MENU-STAMP ( record -- a ) 128 + ;
+: _RUHA-R.MENU-GEN   ( record -- a ) 136 + ;
 
 1 CONSTANT _RUHA-RF-DIRTY
 2 CONSTANT _RUHA-RF-EMPTY
@@ -84,7 +90,7 @@ REQUIRE ../check-mode.f
 32 CONSTANT _RUHA-RF-OV-DIALOG
 63 CONSTANT _RUHA-RF-MASK
 
-128 CONSTANT RUHA-RECORD-SIZE
+144 CONSTANT RUHA-RECORD-SIZE
 
 : RUHA-RECORD-BYTES  ( -- bytes )  RUHA-RECORD-SIZE ;
 
@@ -2862,6 +2868,10 @@ VARIABLE _RUHA-LY-NEXT VARIABLE _RUHA-LY-A0 VARIABLE _RUHA-LY-A1
         _RUHA-B-REUSE-RECORD-TARGET @ I UMSN-RECORD-SIZE * +
             _RUHA-UMSN.GENERATION !
     LOOP
+    \ The menu slice copied is the capture the menus' count describes.
+    _RUHA-B-RECORD @ _RUHA-R.MENU-GEN @ _RUHA-B-PRIOR-GENERATION @ = IF
+        _RUHA-B-GENERATION @ _RUHA-B-RECORD @ _RUHA-R.MENU-GEN !
+    THEN
     0 _RUHA-B-RECORD @ _RUHA-B-STAGE
     RUHA-S-OK -1 ;
 
@@ -2879,6 +2889,56 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
     _RUHA-B-FALL-BACK-REUSE @ _RUHA-B-EXACT-REUSE !
     _RUHA-B-RECORD @ _RUHA-RECORD-DIRTY!
     0 0 0 0 0 0 0 0 0 0 0 0 0 0 _RUHA-B-APPEND-DOCUMENT ;
+
+\ While a full capture runs, in safe mode, for the shadow check or for the
+\ full refresh, every visible document is captured live: none is reused,
+\ and none is passed over as known empty.
+VARIABLE _RUHA-B-FULL
+0 _RUHA-B-FULL !
+
+\ A painted document's menus take the slice of the snapshot before when
+\ that slice was captured, or found unchanged, at a count that nothing the
+\ menus read has passed since (URF-MENUS-SINCE?); each record then takes
+\ this snapshot's generation.  Otherwise they are captured.  Safe mode, the
+\ shadow check's full capture and the full refresh capture them always.
+VARIABLE _RUHA-B-MK-GEN
+VARIABLE _RUHA-B-MK-RECORDS-A
+VARIABLE _RUHA-B-MK-RECORDS-U
+VARIABLE _RUHA-B-MK-TEXT-A
+VARIABLE _RUHA-B-MK-TEXT-U
+VARIABLE _RUHA-DIAG-MENUS-KEPT
+0 _RUHA-DIAG-MENUS-KEPT !
+
+: _RUHA-B-MENUS-KEPT?  ( -- flag )
+    _RUHA-B-FULL @ IF 0 EXIT THEN
+    _RUHA-B-RECORD @ _RUHA-R.MENU-GEN @ DUP 0= IF DROP 0 EXIT THEN
+        _RUHA-B-PRIOR-GENERATION @ <> IF 0 EXIT THEN
+    _RUHA-B-RECORD @ _RUHA-B-FIND-PRIOR 0= IF DROP 0 EXIT THEN
+    _RUHA-B-REUSE-ENTRY ! _RUHA-B-PRIOR-MENU? 0= IF 0 EXIT THEN
+    _RUHA-B-REUSE-RECORD-U @ _RUHA-B-MK-RECORDS-U @ U> IF 0 EXIT THEN
+    _RUHA-B-REUSE-TEXT-U @ _RUHA-B-MK-TEXT-U @ U> IF 0 EXIT THEN
+    _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +
+    _RUHA-B-REUSE-COUNT @
+    _RUHA-B-RECORD @ _RUHA-R.MENU-STAMP @ URF-MENUS-SINCE? ;
+
+: _RUHA-B-MENUS  ( UMSN-CAPTURE's arguments -- record-count text-used status )
+    _RUHA-B-MK-TEXT-U ! _RUHA-B-MK-TEXT-A !
+    _RUHA-B-MK-RECORDS-U ! _RUHA-B-MK-RECORDS-A !
+    _RUHA-B-MENUS-KEPT? 0= IF
+        _RUHA-B-MK-RECORDS-A @ _RUHA-B-MK-RECORDS-U @
+        _RUHA-B-MK-TEXT-A @ _RUHA-B-MK-TEXT-U @ UMSN-CAPTURE EXIT
+    THEN
+    2DROP 2DROP _RUHA-B-MK-GEN !
+    _RUHA-B-PRIOR-RECORDS-A @ _RUHA-B-REUSE-RECORD-O @ +
+        _RUHA-B-MK-RECORDS-A @ _RUHA-B-REUSE-RECORD-U @ MOVE
+    _RUHA-B-PRIOR-TEXT-A @ _RUHA-B-REUSE-TEXT-O @ +
+        _RUHA-B-MK-TEXT-A @ _RUHA-B-REUSE-TEXT-U @ MOVE
+    _RUHA-B-REUSE-COUNT @ 0 ?DO
+        _RUHA-B-MK-GEN @
+        _RUHA-B-MK-RECORDS-A @ I UMSN-RECORD-SIZE * + _RUHA-UMSN.GENERATION !
+    LOOP
+    1 _RUHA-DIAG-MENUS-KEPT +!
+    _RUHA-B-REUSE-COUNT @ _RUHA-B-REUSE-TEXT-U @ UMSN-S-OK ;
 
 : _RUHA-B-CAPTURE-CURRENT  ( -- status )
     \ A live capture always changes whole-document provenance.  Its menu
@@ -2962,7 +3022,7 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
     _RUHA-B-TEXT-A @ _RUHA-B-TEXT-U @
     _RUHA-B-ADAPTER @ _RUHA-A.SNAP-TEXT-BANK-U @
         _RUHA-B-TAIL-SPAN
-    UMSN-CAPTURE
+    _RUHA-B-MENUS
     _RUHA-B-STATUS ! _RUHA-B-CAPTURE-TEXT-U ! _RUHA-B-COUNT !
     _RUHA-B-STATUS @ UMSN-S-OK <> IF
         _RUHA-B-STATUS @ _RUHA-B-MAP-STATUS _RUHA-B-FALL-BACK EXIT
@@ -2981,6 +3041,10 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
     _RUHA-B-COUNT @ UMSN-RECORD-SIZE _RUHA-UMUL?
         0= IF DROP RUHA-S-INVALID EXIT THEN
         _RUHA-B-CAPTURE-RECORD-U !
+    _RUHA-B-FULL @ 0= IF
+        URF-NOW _RUHA-B-RECORD @ _RUHA-R.MENU-STAMP !
+        _RUHA-B-GENERATION @ _RUHA-B-RECORD @ _RUHA-R.MENU-GEN !
+    THEN
 
     _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-BUILDER
     _RUHA-B-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-A @
@@ -3207,11 +3271,6 @@ VARIABLE _RUHA-B-FALL-BACK-REUSE
     DUP RUHA-S-OK = IF
         DROP 0 _RUHA-B-RECORD @ _RUHA-B-STAGE RUHA-S-OK
     THEN ;
-
-\ While the shadow check's full capture runs, every visible document is
-\ captured live: none is reused, and none is passed over as known empty.
-VARIABLE _RUHA-B-FULL
-0 _RUHA-B-FULL !
 
 : _RUHA-B-CAPTURE-RECORD ( record -- status )
     _RUHA-B-RECORD !

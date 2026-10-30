@@ -207,7 +207,11 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
     )
     capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
     dispatch = _word(source, "_RUHA-B-CAPTURE-RECORD")
-    assert capture.count("UMSN-CAPTURE") == 1
+    # The menus are captured, or kept from the snapshot before, in one place.
+    menus = _word(source, "_RUHA-B-MENUS")
+    assert capture.count("_RUHA-B-MENUS") == 1
+    assert re.sub(r"\([^)]*\)", "", menus).count("UMSN-CAPTURE") == 1
+    assert "UMSN-CAPTURE" not in capture
     assert capture.count("UCSN-CAPTURE") == 1
     assert capture.count("UDGSN-CAPTURE") == 1
     assert "UMSN-CAPTURE" not in dispatch
@@ -729,7 +733,7 @@ def test_document_menu_epochs_certify_exact_and_control_topology_lineage() -> No
     assert "_RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH !" in select
     _ordered(
         capture,
-        "UMSN-CAPTURE",
+        "_RUHA-B-MENUS",
         "_RUHA-B-CAPTURE-MENU-EPOCHS",
         "_RUHA-B-CAPTURE-MENU-EPOCH @",
         "_RUHA-B-CAPTURE-MENU-TOPOLOGY-EPOCH @",
@@ -978,10 +982,10 @@ def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     assert "_RUHA-R.UCTX @ ASHELL-CTX-SWITCH" in capture
     assert capture.count("ASHELL-CTX-SWITCH") == 1
     switch = capture.index("ASHELL-CTX-SWITCH")
-    assert switch < capture.index("UMSN-CAPTURE")
+    assert switch < capture.index("_RUHA-B-MENUS")
     assert switch < capture.index("UCSN-CAPTURE")
     assert switch < capture.index("UDGSN-CAPTURE")
-    _ordered(capture, "UMSN-CAPTURE", "UCSN-CAPTURE", "UDGSN-CAPTURE",
+    _ordered(capture, "_RUHA-B-MENUS", "UCSN-CAPTURE", "UDGSN-CAPTURE",
              "USFSN-CAPTURE", "UFLSN-CAPTURE")
     for storage in (
         "_RUHA-A.COLLECTION-BUILDER",
@@ -1375,7 +1379,7 @@ def test_a_family_refusal_falls_back_only_its_own_document() -> None:
     assert capture.count("_RUHA-B-FALL-BACK EXIT") == 6
     _ordered(
         capture,
-        "UMSN-CAPTURE",
+        "_RUHA-B-MENUS",
         "_RUHA-B-MAP-STATUS _RUHA-B-FALL-BACK EXIT",
         "UCSN-CAPTURE",
         "_RUHA-B-MAP-COLLECTION-STATUS _RUHA-B-FALL-BACK EXIT",

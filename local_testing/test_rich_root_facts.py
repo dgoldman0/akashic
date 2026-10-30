@@ -109,6 +109,96 @@ _RF-DONE
 
 
 # ---------------------------------------------------------------------------
+# The menus kept
+
+MENU_DOCUMENT = ("<uidl><menubar id=bar><menu id=file label=File>"
+                 "<item id=open text=Open/><item id=hid text=Hid style=display:none/>"
+                 "</menu></menubar><textarea id=note/></uidl>")
+
+MENU_WORDS = r"""
+VARIABLE _RM-RA VARIABLE _RM-N VARIABLE _RM-STAMP VARIABLE _RM-GEN
+CREATE _RM-SAVE-MEM 8 UMSN-RECORD-SIZE * 7 + ALLOT
+: _RM-SAVE _RM-SAVE-MEM 7 + -8 AND ;
+CREATE _RM-TEXT 128 ALLOT VARIABLE _RM-TEXT-U
+: _RM-RECORDS ( -- ) _RA-SNAP @ RUHA-SNAPSHOT-RECORDS@
+    UMSN-RECORD-SIZE / _RM-N ! _RM-RA ! ;
+: _RM-SINCE? ( -- flag ) _RM-RA @ _RM-N @ _RM-STAMP @ URF-MENUS-SINCE? ;
+: _RM-DRAW ( draw -- ) UTUI-PAINT UTUI-DRAW-COMPLETE
+    _RA-QUERY _RA-STATUS @ RUHA-S-OK = _RA-ASSERT _RM-RECORDS ;
+: _RM-KEEP ( -- ) _RM-RA @ _RM-SAVE _RM-N @ UMSN-RECORD-SIZE * MOVE
+    _RA-SNAP @ RUHA-SNAPSHOT-TEXT@ DUP _RM-TEXT-U ! _RM-TEXT SWAP MOVE ;
+\ The records and text the snapshot holds are those kept, but each record
+\ takes this snapshot's generation.
+: _RM-SAME? ( -- flag )
+    _RA-SNAP @ RUHA-SNAPSHOT-GENERATION@ _RM-GEN !
+    _RM-N @ 0 ?DO _RM-GEN @ _RM-SAVE I UMSN-RECORD-SIZE * + _RUHA-UMSN.GENERATION ! LOOP
+    _RM-SAVE _RM-N @ UMSN-RECORD-SIZE * _RM-RA @ OVER COMPARE 0=
+    _RA-SNAP @ RUHA-SNAPSHOT-TEXT@ _RM-TEXT _RM-TEXT-U @ COMPARE 0= AND ;
+"""
+
+
+def _menus_program():
+    """The adapter's program over a document with a menubar, before its
+    first draw: a menu with a row, a child that is no row, and a textarea."""
+    text = _program()
+    text = text[:text.index("1 _RA-QUERY")]
+    for old, new in (('S" <uidl><textarea id=note/></uidl>"', f'S" {MENU_DOCUMENT}"'),
+                     ("_RA-MENU-RECORDS-MEM 2 UMSN-RECORD-SIZE *",
+                      "_RA-MENU-RECORDS-MEM 8 UMSN-RECORD-SIZE *"),
+                     ("_RA-MENU-RECORDS 2 UMSN-RECORD-SIZE *",
+                      "_RA-MENU-RECORDS 8 UMSN-RECORD-SIZE *")):
+        assert old in text, old
+        text = text.replace(old, new)
+    return text + FACTS + MENU_WORDS
+
+
+def test_the_menus_are_unchanged_until_something_they_read_changes():
+    """URF-MENUS-SINCE? holds while no recorded menu element, ancestor or
+    child of a menu carries a revision past the count of the capture, and
+    the document holds no menubar without a record."""
+    run_series(_menus_program() + r"""
+1 _RM-DRAW _RM-N @ 3 = _RA-ASSERT
+URF-NOW _RM-STAMP ! _RM-SINCE? _RA-ASSERT
+\ A recorded row changes.
+S" open" UTUI-BY-ID UIDL-TOUCH _RM-SINCE? 0= _RA-ASSERT
+URF-NOW _RM-STAMP ! _RM-SINCE? _RA-ASSERT
+\ A child of the menu that is no row, and so has no record, changes.
+S" hid" UTUI-BY-ID UIDL-TOUCH _RM-SINCE? 0= _RA-ASSERT
+URF-NOW _RM-STAMP ! _RM-SINCE? _RA-ASSERT
+\ An ancestor changes.
+UIDL-ROOT UIDL-TOUCH _RM-SINCE? 0= _RA-ASSERT
+URF-NOW _RM-STAMP ! _RM-SINCE? _RA-ASSERT
+\ An element the menus do not read changes.
+S" note" UTUI-BY-ID UIDL-TOUCH _RM-SINCE? _RA-ASSERT
+\ A menubar appears, under no element the menus read.
+0 UIDL-T-MENUBAR UIDL-ADD-ELEM 0<> _RA-ASSERT _RM-SINCE? 0= _RA-ASSERT
+_RF-DONE
+""", minimum=12, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",),
+        marker="FACTS")
+
+
+def test_a_painted_document_keeps_its_unchanged_menus():
+    """A draw whose document painted but whose menus did not change takes
+    their slice from the snapshot before, with this snapshot's generation;
+    a draw that changed a menu element captures them again."""
+    run_series(_menus_program() + r"""
+1 _RM-DRAW _RM-N @ 3 = _RA-ASSERT _RUHA-DIAG-MENUS-KEPT @ 0= _RA-ASSERT
+_RM-KEEP
+S" aggregate beta" _RA-TEXTAREA @ TXTA-SET-TEXT
+2 _RM-DRAW _RUHA-DIAG-MENUS-KEPT @ 1 = _RA-ASSERT _RM-N @ 3 = _RA-ASSERT
+_RM-SAME? _RA-ASSERT
+\ A menu element changes: the menus are captured again.
+S" open" UTUI-BY-ID UIDL-DIRTY!
+3 _RM-DRAW _RUHA-DIAG-MENUS-KEPT @ 1 = _RA-ASSERT _RM-N @ 3 = _RA-ASSERT
+\ And kept again by the draw after.
+_RM-KEEP S" aggregate gamma" _RA-TEXTAREA @ TXTA-SET-TEXT
+4 _RM-DRAW _RUHA-DIAG-MENUS-KEPT @ 2 = _RA-ASSERT _RM-SAME? _RA-ASSERT
+_RF-DONE
+""", minimum=12, extra_sources=("tui/rich-terminal/uidl-hybrid-adapter.f",),
+        marker="FACTS")
+
+
+# ---------------------------------------------------------------------------
 # The judge
 
 TOKEN = 0x51

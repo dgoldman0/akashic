@@ -202,6 +202,53 @@ VARIABLE _URF-R
     LOOP
     NIP _URF-R @ URF.STAMP ! ;
 
+\ URF-NOW ( -- stamp )
+\   The count of element changes now.  Every element changed later carries
+\   a newer revision, since every document and context takes its revisions
+\   from one count that nothing resets.
+: URF-NOW  ( -- stamp )  _UDL-STAMP @ ;
+
+\ URF-MENUS-SINCE? ( records-a count stamp -- flag )
+\   Whether a capture of the document's menus now would give its COUNT UMSN
+\   records at RECORDS-A, captured when the count stood at STAMP: each
+\   record's element is still there, and none of them, nor any ancestor,
+\   nor any child of one of its menus, carries a newer revision; and every
+\   menubar the document holds has a record.  A menu's row comes or goes
+\   only among its children, and a menubar can appear anywhere; every other
+\   change the menus read counts a change to the elements URF-MENUS reads.
+VARIABLE _URF-S-STAMP
+VARIABLE _URF-S-RECORD
+VARIABLE _URF-S-BARS
+
+\ No child of ELEM is newer than the stamp.
+: _URF-CHILDREN-SINCE?  ( elem -- flag )
+    UE.FCHILD @
+    BEGIN ?DUP WHILE
+        DUP _URF-REV _URF-S-STAMP @ U> IF DROP 0 EXIT THEN
+        UE.NEXT @
+    REPEAT -1 ;
+
+\ The count of menubars the document holds.
+: _URF-MENUBARS  ( -- n )
+    0 _UDL-ECNT @ 0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS + UE.TYPE @ UIDL-T-MENUBAR = IF 1+ THEN
+    LOOP ;
+
+: URF-MENUS-SINCE?  ( records-a count stamp -- flag )
+    _URF-S-STAMP ! 0 _URF-S-BARS !
+    0 ?DO
+        DUP I UMSN-RECORD-SIZE * + _URF-S-RECORD !
+        _URF-S-RECORD @ UMSN-RECORD-SOURCE-INDEX@ _URF-ELEM
+        ?DUP 0= IF DROP 0 UNLOOP EXIT THEN
+        0 OVER _URF-UP _URF-S-STAMP @ U> IF 2DROP 0 UNLOOP EXIT THEN
+        _URF-S-RECORD @ UMSN-RECORD-KIND@ DUP UMSN-K-MENU = IF
+            DROP _URF-CHILDREN-SINCE? 0= IF DROP 0 UNLOOP EXIT THEN
+        ELSE
+            UMSN-K-MENUBAR = IF 1 _URF-S-BARS +! THEN DROP
+        THEN
+    LOOP DROP
+    _URF-MENUBARS _URF-S-BARS @ = ;
+
 \ URF-COLLECTION ( descriptor record -- )
 \   A collection root: a direct one reads its element, its ancestors, a
 \   tab set's tabs, and the widget the element hosts, or a media element's

@@ -1229,9 +1229,15 @@ caller-derived instrument regions.
 Project and relayout mark only the corresponding document record dirty. At one
 completed ordinary draw boundary, `RUHA-SNAPSHOT-FOR@` assembles every visible
 attached document with a nonempty menu, collection, or `DATA_GRAPHICS` forest
-into the inactive aggregate bank. Dirty documents are recaptured through all
-three normal UIDL/canonical-widget snapshot paths; known-empty documents add
-nothing. An unchanged document slice may be reused only after complete UMSN,
+into the inactive aggregate bank. Dirty documents are recaptured through the
+normal UIDL/canonical-widget snapshot paths, but for their menus: a dirty
+document's menus keep the slice of the snapshot before while no element the
+menus read, nor an ancestor, nor a child of one of its menus, has changed
+since the count of element changes kept with that slice, and every menubar
+the document holds has a record (`URF-MENUS-SINCE?`). Safe mode, the shadow
+check's full capture and the full refresh capture the menus always.
+Known-empty documents add nothing. An unchanged document slice may be reused
+only after complete UMSN,
 UCSN, and UDGSN validation of its prior directory and six payload spans. A
 slice that no longer fits behind the documents captured earlier in the same
 draw is not reused; that document is captured afresh and falls back within the
