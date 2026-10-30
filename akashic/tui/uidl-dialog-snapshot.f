@@ -202,20 +202,20 @@ VARIABLE _UDLSN-OWNED-LIMIT
 
 \ The dialog elements the document shows, and the last one's key and
 \ resolved state.
-: _UDLSN-E-VISIT  ( elem index ordinal local effective resolved available -- )
-    _UDLSN-V-AV ! _UDLSN-V-RES ! _UDLSN-V-EFF ! 2DROP _UDLSN-V-IX !
-    DUP UIDL-TYPE UIDL-T-DIALOG <>
-    _UDLSN-V-EFF @ 0= OR
+: _UDLSN-E-VISIT  ( elem index effective resolved available -- )
+    _UDLSN-V-AV ! _UDLSN-V-RES ! _UDLSN-V-EFF ! _UDLSN-V-IX !
+    _UDLSN-V-EFF @ 0=
     _UDLSN-V-AV @ UTUI-RESOLVED-BYTES <> OR IF DROP EXIT THEN
     _UDLSN-E ! 1 _UDLSN-E-N +!
     _UDLSN-V-IX @ 1+ _UDLSN-KEY !
     _UDLSN-V-RES @ _UDLSN-RES UTUI-RESOLVED-BYTES MOVE ;
 
 \ The one dialog element the document shows, wholly on the screen and
-\ with room for its frame and title.
+\ with room for its frame and title.  Only the dialog elements are
+\ resolved, in any order, since the one shown is the one found.
 : _UDLSN-ELEMENT?  ( -- flag )
     0 _UDLSN-E ! 0 _UDLSN-E-N !
-    ['] _UDLSN-E-VISIT UTUI-RESOLVED-TREE-EACH
+    UIDL-T-DIALOG ['] _UDLSN-E-VISIT UTUI-RESOLVED-TYPE-EACH
         UTUI-RESOLVED-S-OK <> IF 0 EXIT THEN
     _UDLSN-E-N @ 1 <> IF 0 EXIT THEN
     _UDLSN-RES @ _UDLSN-ROW !

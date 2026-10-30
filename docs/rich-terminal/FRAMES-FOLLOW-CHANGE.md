@@ -1499,14 +1499,18 @@ frame before the change driver.
     resolved tree, about 0.15 million a walk, and the status fields resolve
     every element, 0.18 million, to find their few labels. In steps, each
     sending what it sent before:
-    - **9a.3c.1. The status fields resolve only their labels.** The status
-      fields test each element's shape first and resolve only their labels.
-      Their capture reads only the labels and the labels' ancestors, so
-      resolving every other element added nothing to it.
-    - **9a.3c.2. One walk.** The menus, the collections and the dialogs
-      take their roots from one walk of the resolved tree, which calls each
-      family's visitor in turn at each node, where each family walked the
-      tree alone.
+    - **9a.3c.1. Two families resolve only their own elements.** The
+      status fields test each element's shape first and resolve only their
+      labels. The dialogs, which show at most one dialog element, take it
+      from a pass over the dialog elements alone, each resolved from itself
+      to the root as the tree walk would resolve it, where they walked the
+      whole tree. Each family's capture reads only its own elements and
+      their ancestors, so resolving every other element added nothing to
+      it.
+    - **9a.3c.2. One walk.** The menus and the collections, whose roots
+      keep the tree's order, take them from one walk of the resolved tree,
+      which calls each family's visitor in turn at each node, where each
+      family walked the tree alone.
     - **9a.3c.3. A family that did not change keeps its slices.** A painted
       document's family whose roots kept their facts since its last
       capture, and to which no root can have come or from which none can

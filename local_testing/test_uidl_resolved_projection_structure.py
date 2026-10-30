@@ -56,6 +56,7 @@ def test_public_abi_is_fixed_explicit_and_renderer_neutral() -> None:
         ),
         "UTUI-RESOLVED-VALID?": "( record available -- flag )",
         "UTUI-RESOLVED-OBSERVE": "( i*x xt -- j*x )",
+        "UTUI-RESOLVED-TYPE-EACH": "( type visitor-xt -- status )",
         "UTUI-STORAGE-DISJOINT?": "( address length -- flag )",
         "UTUI-VISITED-COLLECTION-CAPTURE": (
             "( root-key destination capacity builder elem -- bytes status )"

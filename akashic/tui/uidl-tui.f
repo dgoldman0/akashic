@@ -42,6 +42,9 @@
 \    UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )
 \      visitor-xt ( elem source-index sibling-ordinal local-visible
 \                   effective-visible resolved available -- )
+\    UTUI-RESOLVED-TYPE-EACH ( type visitor-xt -- status )
+\      visitor-xt ( elem source-index effective-visible resolved
+\                   available -- )
 \    UTUI-VISITED-COLLECTION-CAPTURE
 \      ( root-key destination capacity builder elem -- bytes status )
 \    UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
@@ -6527,6 +6530,81 @@ CREATE _UTUI-RST-SEEN _UTUI-MAX-ELEMS ALLOT
     _UTUI-RST-CLEAR ;
 
 \ =====================================================================
+\  Resolved elements of one type
+\ =====================================================================
+\
+\ The visitor receives each live element of one type once, in pool order,
+\ each resolved alone from itself up to the root: the resolved record and
+\ effective visibility the tree walk gives that element, without resolving
+\ any element of another type.  An element whose lineage is unavailable is
+\ reported with AVAILABLE zero, as the tree walk reports it; one that cannot
+\ be resolved ends the pass INVALID.  A family whose roots are elements of
+\ one type, found in any order, finds them so.  The visitor takes what the
+\ tree walk's takes but the sibling ordinal and local visibility, and is
+\ bound as that visitor is: it copies what it keeps, and must not yield,
+\ mutate UIDL or application state, or start another observation.
+
+VARIABLE _UTUI-RTY-TYPE
+VARIABLE _UTUI-RTY-INDEX
+VARIABLE _UTUI-RTY-ELEM
+VARIABLE _UTUI-RTY-EFFECTIVE
+VARIABLE _UTUI-RTY-AVAILABLE
+
+: _UTUI-RTY-CLEAR  ( -- )
+    0 _UTUI-RTY-TYPE ! 0 _UTUI-RTY-INDEX ! 0 _UTUI-RTY-ELEM !
+    0 _UTUI-RTY-EFFECTIVE ! 0 _UTUI-RTY-AVAILABLE !
+    _UTUI-RST-CLEAR ;
+
+\ Visit the element at _UTUI-RTY-ELEM.
+: _UTUI-RTY-ONE  ( -- status )
+    _UTUI-RST-RESOLVED UTUI-RESOLVED-SIZE 0 FILL
+    0 _UTUI-RTY-EFFECTIVE ! 0 _UTUI-RTY-AVAILABLE !
+    _UTUI-RTY-ELEM @ _UTUI-RS-RESOLVE
+    DUP UTUI-RESOLVED-S-INVALID = IF _UTUI-RS-CLEAR EXIT THEN
+    UTUI-RESOLVED-S-OK = IF
+        _UTUI-RST-RESOLVED _UTUI-RS-DST ! _UTUI-RS-WRITE 0 _UTUI-RS-DST !
+        _UTUI-RS-VISIBLE @ 0<> _UTUI-RTY-EFFECTIVE !
+        UTUI-RESOLVED-SIZE _UTUI-RTY-AVAILABLE !
+    THEN
+    _UTUI-RS-CLEAR
+    _UTUI-RTY-ELEM @ _UTUI-RTY-INDEX @ _UTUI-RTY-EFFECTIVE @
+    _UTUI-RST-RESOLVED _UTUI-RTY-AVAILABLE @
+    _UTUI-RST-VISITOR @ EXECUTE
+    UTUI-RESOLVED-S-OK ;
+
+: _UTUI-RTY-BODY  ( -- status )
+    _UTUI-DOC-LOADED @ 0= IF UTUI-RESOLVED-S-UNAVAILABLE EXIT THEN
+    _UTUI-ELEM-BASE @ _UDL-ELEMS <> IF UTUI-RESOLVED-S-INVALID EXIT THEN
+    UIDL-ELEM-COUNT DUP 0> 0= IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DUP _UTUI-MAX-ELEMS U> IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS +
+        DUP UE.TYPE @ _UTUI-RTY-TYPE @ = IF
+            _UTUI-RTY-ELEM ! I _UTUI-RTY-INDEX !
+            _UTUI-RTY-ONE ?DUP IF UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP
+    UTUI-RESOLVED-S-OK ;
+
+: _UTUI-RTY-SEMANTIC  ( -- status )
+    ['] _UTUI-RTY-BODY UIDL-SEMANTIC-OBSERVE ;
+
+: UTUI-RESOLVED-TYPE-EACH  ( type visitor-xt -- status )
+    _UTUI-RST-ACTIVE @ IF 2DROP UTUI-RESOLVED-S-INVALID EXIT THEN
+    DUP 0= OVER 0= OR IF 2DROP UTUI-RESOLVED-S-INVALID EXIT THEN
+    _UTUI-RTY-CLEAR
+    _UTUI-RST-VISITOR ! _UTUI-RTY-TYPE !
+    -1 _UTUI-RST-ACTIVE !
+    ['] _UTUI-RTY-SEMANTIC CATCH ?DUP IF
+        >R _UTUI-RTY-CLEAR R> THROW
+    THEN
+    _UTUI-RTY-CLEAR ;
+
+\ =====================================================================
 \  Canonical widget region geometry and mounted semantic observation
 \ =====================================================================
 
@@ -8061,6 +8139,8 @@ GUARD _utui-guard
     CONSTANT _utui-elem-resolved-capture-xt
 ' UTUI-RESOLVED-TREE-EACH
     CONSTANT _utui-resolved-tree-each-xt
+' UTUI-RESOLVED-TYPE-EACH
+    CONSTANT _utui-resolved-type-each-xt
 ' UTUI-STORAGE-DISJOINT? CONSTANT _utui-storage-disjoint-q-xt
 ' UTUI-VISITED-COLLECTION-CAPTURE
     CONSTANT _utui-visited-collection-capture-xt
@@ -8116,6 +8196,9 @@ GUARD _utui-guard
 \ this wrapper adds UIDL-TUI as the outermost authority.
 : UTUI-RESOLVED-TREE-EACH  ( visitor-xt -- status )
     _utui-resolved-tree-each-xt _utui-guard WITH-GUARD ;
+
+: UTUI-RESOLVED-TYPE-EACH  ( type visitor-xt -- status )
+    _utui-resolved-type-each-xt _utui-guard WITH-GUARD ;
 
 : UTUI-STORAGE-DISJOINT?  ( address length -- flag )
     _utui-storage-disjoint-q-xt UTUI-RESOLVED-OBSERVE ;
