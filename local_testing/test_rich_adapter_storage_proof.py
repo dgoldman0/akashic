@@ -31,6 +31,7 @@ SPANS = (
     "SNAP-NATIVE", "SNAP-DGRAPH-DESCRIPTORS", "SNAP-DGRAPH-NATIVE",
     "SNAP-SFIELD-DESCRIPTORS", "SNAP-SFIELD-NATIVE",
     "SNAP-FIELD-DESCRIPTORS", "SNAP-FIELD-NATIVE",
+    "SNAP-DIALOG-DESCRIPTORS", "SNAP-DIALOG-NATIVE",
 )
 # The copy of the records a build saves, which has the records' length.
 # Shared MSPAN-PROVE-DISJOINT? state, idle between proofs.
@@ -267,7 +268,8 @@ def test_split_never_clips_a_span_crossing_the_start_partition(harness):
 
 
 def test_adjacent_high_bit_starts_split_without_midpoint_wrap(harness):
-    first = MASK64 - 32
+    # The highest span ends one byte below the top of the address space.
+    first = MASK64 - 2 * len(SPANS)
     harness.buffers = [(first + i * 2, 1) for i in range(len(SPANS))]
     harness.protected = (first + 1, 1)
     assert harness.check()[0]

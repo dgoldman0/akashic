@@ -38,7 +38,7 @@ aggregate payload banks:
 A document contributes an ordinary semantic entry when any menu, collection,
 data-graphics forest, status-field list, or typed FIELD list is nonempty, or
 it shows a dialog. A document intrinsically empty in all
-enabled families contributes no entry. A visible document occluded by later
+families contributes no entry. A visible document occluded by later
 foreground paint, or one whose content a family refuses, instead contributes a
 directory-only identity with all twelve semantic slices zero for that draw. The
 paired payload of an empty family is
@@ -147,38 +147,15 @@ whose root's facts moved (FRAMES-FOLLOW-CHANGE, part 9a.3b). With the shadow
 check on it also judges them: an item the comparison finds new or changed
 must belong to a root whose facts moved (part 9a.1).
 
-## Capture into scratch
-
-`RUHA-CAPTURE-FAMILIES ( families token scratch draw-generation adapter --
-status )` captures some families of one shown document into the caller's
-scratch record, `RUHA-SCRATCH-SIZE` bytes, through the capture words and work
-spans the snapshot uses, in the document's own context, and records the
-facts of every root it captured. `FAMILIES` is a mask of `RUHA-F-MENUS`,
-`RUHA-F-COLLECTIONS`, `RUHA-F-DATA-GRAPHICS`, `RUHA-F-STATUS-FIELDS`,
-`RUHA-F-FIELDS` and `RUHA-F-DIALOGS`; a family the adapter was built without
-captures nothing, as in the snapshot. The record holds the generation the
-menu records take (`RUHA-SC.GENERATION`), one slot a family in bit order
-(`RUHA-SC.SLOT`), each naming its descriptor and native spans, or menu
-records and text, and receiving the count and bytes used, and the facts
-span, which receives the count of records (`RUHA-SC.FACTS`). Nothing is
-published: the snapshot, its banks and the documents' records stay as they
-are. A family's short span answers CAPACITY with its bit in `RUHA-SC.SHORT`;
-a short facts span answers CAPACITY with the records it must hold. A document
-not shown, or covered so that the snapshot would leave it to CELL, and a
-family that refuses its content, as the snapshot then falls the document
-back, answer UNAVAILABLE; another draw answers STALE. The change driver
-captures the families of the roots that changed this way
-(FRAMES-FOLLOW-CHANGE, part 9a.2).
-
-
 ## One authoritative observation
 
 For a live document capture, RUHA restores that document's authoritative UCTX
-once and invokes `UMSN-CAPTURE`, `UCSN-CAPTURE`, `UDGSN-CAPTURE`, and enabled `USFSN-CAPTURE`/`UFLSN-CAPTURE`
-synchronously before switching away. All enabled generic captures therefore
+once and invokes `UMSN-CAPTURE`, `UCSN-CAPTURE`, `UDGSN-CAPTURE`, `USFSN-CAPTURE`,
+`UFLSN-CAPTURE` and `UDLSN-CAPTURE` synchronously before switching away. All
+the generic captures therefore
 observe the same ordinary document context at the same completed-draw boundary.
 None publishes independently. RUHA appends the document directory entry only
-after all enabled calls succeed and every returned count and byte extent fits
+after all the calls succeed and every returned count and byte extent fits
 what remains of its bank.
 
 This is generic UIDL/widget observation, not applet integration. UCSN discovers
@@ -402,7 +379,7 @@ descriptors, one-row geometry, and fully represented clips before prior reuse.
 Every caller span is proved against the status model, widget, snapshot scratch,
 and mounted authority as well as the older families. Snapshot publication still
 selects the inactive bank only after all families and context restoration succeed.
-The executed selector covers canonical absent banks, complete A/B shape, copied
+The executed selector covers complete A/B shape, copied
 status slices, last-bank exhaustion without mutation, and all 20 protected spans.
 
 `local_testing/test_uidl_field_snapshot.py` executes all three FIELD types,

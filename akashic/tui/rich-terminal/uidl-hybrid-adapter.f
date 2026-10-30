@@ -420,12 +420,9 @@ _RUHA-O.LAYERS 40 + CONSTANT RUHA-SIZE
     SWAP _RUHA-A.DATA-GRAPHICS-BUILDER UDG-BUILDER-SIZE
         MSPAN-NONWRAPPING? AND ;
 
-\ Optional status banks are either the canonical absent pair or complete A/B banks.
-\ This check is pure: constructor alias proofs precede all scratch writes.
+\ The status, field and dialog families' banks are complete A/B banks, each
+\ native half holding at least one model's header.
 : _RUHA-STATUS-STORAGE?  ( descriptors-a descriptors-u native-a native-u -- flag )
-    3 PICK 3 PICK OR 2 PICK OR OVER OR 0= IF
-        2DROP 2DROP -1 EXIT
-    THEN
     2DUP _RUHA-SPAN? 0= IF 2DROP 2DROP 0 EXIT THEN
     DUP 16 MOD IF 2DROP 2DROP 0 EXIT THEN
     DUP 2 / USF-HEADER-SIZE U< IF 2DROP 2DROP 0 EXIT THEN
@@ -433,12 +430,7 @@ _RUHA-O.LAYERS 40 + CONSTANT RUHA-SIZE
     2DUP _RUHA-SPAN? 0= IF 2DROP 0 EXIT THEN
     NIP 2 USFSN-DESCRIPTOR-SIZE * MOD 0= ;
 
-\ Optional status banks are either the canonical absent pair or complete A/B banks.
-\ This check is pure: constructor alias proofs precede all scratch writes.
 : _RUHA-FIELD-STORAGE?  ( descriptors-a descriptors-u native-a native-u -- flag )
-    3 PICK 3 PICK OR 2 PICK OR OVER OR 0= IF
-        2DROP 2DROP -1 EXIT
-    THEN
     2DUP _RUHA-SPAN? 0= IF 2DROP 2DROP 0 EXIT THEN
     DUP 16 MOD IF 2DROP 2DROP 0 EXIT THEN
     DUP 2 / UFLD-HEADER-SIZE U< IF 2DROP 2DROP 0 EXIT THEN
@@ -447,9 +439,6 @@ _RUHA-O.LAYERS 40 + CONSTANT RUHA-SIZE
     NIP 2 UFLSN-DESCRIPTOR-SIZE * MOD 0= ;
 
 : _RUHA-DIALOG-STORAGE?  ( descriptors-a descriptors-u native-a native-u -- flag )
-    3 PICK 3 PICK OR 2 PICK OR OVER OR 0= IF
-        2DROP 2DROP -1 EXIT
-    THEN
     2DUP _RUHA-SPAN? 0= IF 2DROP 2DROP 0 EXIT THEN
     DUP 16 MOD IF 2DROP 2DROP 0 EXIT THEN
     DUP 2 / UDLG-HEADER-SIZE U< IF 2DROP 2DROP 0 EXIT THEN
@@ -698,35 +687,22 @@ VARIABLE _RUHA-SAFE-ADAPTER
         R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-SFIELD-DESCRIPTORS-U @
-        2DUP OR IF
-            R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
-        ELSE 2DROP THEN
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-SFIELD-NATIVE-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-SFIELD-NATIVE-U @
-        2DUP OR IF
-            R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
-        ELSE 2DROP THEN
-
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-FIELD-DESCRIPTORS-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-FIELD-DESCRIPTORS-U @
-        2DUP OR IF
-            R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
-        ELSE 2DROP THEN
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-FIELD-NATIVE-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-FIELD-NATIVE-U @
-        2DUP OR IF
-            R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
-        ELSE 2DROP THEN
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-DIALOG-DESCRIPTORS-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-DIALOG-DESCRIPTORS-U @
-        2DUP OR IF
-            R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
-        ELSE 2DROP THEN
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-DIALOG-NATIVE-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-DIALOG-NATIVE-U @
-        2DUP OR IF
-            R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
-        ELSE 2DROP THEN
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SAVE-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.RECORDS-U @
         R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
@@ -814,7 +790,6 @@ CREATE _RUHA-SAFE-SPANS _RUHA-SAFE-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT
 8  CONSTANT RUHA-F-STATUS-FIELDS
 16 CONSTANT RUHA-F-FIELDS
 32 CONSTANT RUHA-F-DIALOGS
-63 CONSTANT _RUHA-F-ALL
 
 \ The capacities a bank's growable spans take, in this order: menu records,
 \ menu text, collection descriptors and native, data-graphics descriptors
@@ -2899,10 +2874,6 @@ VARIABLE _RUHA-DIAG-MENUS-KEPT
         RUHA-S-INVALID EXIT
     THEN
 
-    0 _RUHA-B-SFIELD-COUNT !
-    0 _RUHA-B-CAPTURE-SFIELD-DESCRIPTOR-U !
-    0 _RUHA-B-CAPTURE-SFIELD-NATIVE-U !
-    _RUHA-B-ADAPTER @ _RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ IF
     _RUHA-B-SFIELD-DESCRIPTORS-A @
         _RUHA-B-SFIELD-DESCRIPTORS-U @
     _RUHA-B-ADAPTER @ _RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @
@@ -2938,12 +2909,6 @@ VARIABLE _RUHA-DIAG-MENUS-KEPT
         RUHA-S-INVALID EXIT
     THEN
 
-    THEN
-
-    0 _RUHA-B-FIELD-COUNT !
-    0 _RUHA-B-CAPTURE-FIELD-DESCRIPTOR-U !
-    0 _RUHA-B-CAPTURE-FIELD-NATIVE-U !
-    _RUHA-B-ADAPTER @ _RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @ IF
     _RUHA-B-FIELD-DESCRIPTORS-A @
         _RUHA-B-FIELD-DESCRIPTORS-U @
     _RUHA-B-ADAPTER @ _RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @
@@ -2979,12 +2944,6 @@ VARIABLE _RUHA-DIAG-MENUS-KEPT
         RUHA-S-INVALID EXIT
     THEN
 
-    THEN
-
-    0 _RUHA-B-DIALOG-COUNT !
-    0 _RUHA-B-CAPTURE-DIALOG-DESCRIPTOR-U !
-    0 _RUHA-B-CAPTURE-DIALOG-NATIVE-U !
-    _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @ IF
     _RUHA-B-DIALOG-DESCRIPTORS-A @
         _RUHA-B-DIALOG-DESCRIPTORS-U @
     _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @
@@ -3018,8 +2977,6 @@ VARIABLE _RUHA-DIAG-MENUS-KEPT
         _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIALOG-NATIVE-BANK-U @
             _RUHA-B-DIALOG-NATIVE-U @ - U> IF
         RUHA-S-INVALID EXIT
-    THEN
-
     THEN
 
     _RUHA-B-COUNT @ 0=
@@ -4501,229 +4458,6 @@ VARIABLE _RUHA-F-ORIGINAL
 
 : RUHA-ROOT-FACTS@  ( facts-a facts-u draw-generation adapter -- count status )
     ['] _RUHA-FACTS-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
-
-\ =====================================================================
-\  Capture into scratch
-\ =====================================================================
-\
-\  RUHA-CAPTURE-FAMILIES
-\    ( families token scratch draw-generation adapter -- status )
-\    Capture FAMILIES of the shown document TOKEN names into the caller's
-\    SCRATCH record, in that document's own context, through the capture
-\    words and work spans the snapshot uses, and record the facts of every
-\    root captured, in the facts pass's order.  FAMILIES is a mask of
-\    RUHA-F-MENUS, RUHA-F-COLLECTIONS, RUHA-F-DATA-GRAPHICS,
-\    RUHA-F-STATUS-FIELDS, RUHA-F-FIELDS and RUHA-F-DIALOGS; a family the
-\    adapter was built without captures nothing, as in the snapshot.  For
-\    each family the record names the spans to capture into and receives
-\    the count and the bytes used.  Nothing is published: the snapshot, its
-\    banks and the documents' records stay as they are.
-\    OK; CAPACITY when a family's span is short, with its bit in
-\    RUHA-SC.SHORT, or when the facts span is, with RUHA-SC.FACTS the
-\    records it must hold; UNAVAILABLE when the document is not
-\    shown, or not shown semantically, so the snapshot would leave it to
-\    CELL, or a family refuses its content, as the snapshot then falls the
-\    document back; STALE when DRAW-GENERATION is not the completed draw;
-\    INVALID otherwise.
-
-
-\ The scratch record: the generation its menu records take, the short
-\ family's bit, one slot a family in bit order, and the facts span.
-: RUHA-SC.GENERATION  ( scratch -- a )  ;
-: RUHA-SC.SHORT       ( scratch -- a )  8 + ;
-: RUHA-SC.SLOT        ( index scratch -- slot )  SWAP 48 * + 16 + ;
-: RUHA-SC.A           ( slot -- a )  ;       \ descriptors, or menu records
-: RUHA-SC.U           ( slot -- a )  8 + ;
-: RUHA-SC.NATIVE-A    ( slot -- a )  16 + ;  \ native values, or menu text
-: RUHA-SC.NATIVE-U    ( slot -- a )  24 + ;
-: RUHA-SC.COUNT       ( slot -- a )  32 + ;
-: RUHA-SC.USED        ( slot -- a )  40 + ;
-: RUHA-SC.FACTS-A     ( scratch -- a )  304 + ;
-: RUHA-SC.FACTS-U     ( scratch -- a )  312 + ;
-: RUHA-SC.FACTS       ( scratch -- a )  320 + ;  \ records written
-328 CONSTANT RUHA-SCRATCH-SIZE
-
-VARIABLE _RUHA-C-ADAPTER
-VARIABLE _RUHA-C-SC
-VARIABLE _RUHA-C-FAMILIES
-VARIABLE _RUHA-C-RECORD
-VARIABLE _RUHA-C-SLOT
-VARIABLE _RUHA-C-BIT
-VARIABLE _RUHA-C-SIZE
-VARIABLE _RUHA-C-STATUS
-VARIABLE _RUHA-C-ORIGINAL
-
-\ Whether family INDEX was asked for and the adapter was built with it;
-\ either way its slot starts with nothing captured.
-: _RUHA-C-ASKED?  ( index -- flag )
-    DUP _RUHA-C-SC @ RUHA-SC.SLOT DUP _RUHA-C-SLOT !
-    0 OVER RUHA-SC.COUNT ! 0 SWAP RUHA-SC.USED !
-    1 SWAP LSHIFT DUP _RUHA-C-BIT !
-    _RUHA-C-FAMILIES @ AND 0<> ;
-
-: _RUHA-C-SPANS  ( -- a u native-a native-u )
-    _RUHA-C-SLOT @ RUHA-SC.A @ _RUHA-C-SLOT @ RUHA-SC.U @
-    _RUHA-C-SLOT @ RUHA-SC.NATIVE-A @ _RUHA-C-SLOT @ RUHA-SC.NATIVE-U @ ;
-
-\ Keep a family's COUNT records of _RUHA-C-SIZE bytes and USED native
-\ bytes, given its status already in RUHA's terms.  A short span answers
-\ CAPACITY and names the family; any other refusal is the document's
-\ content, which the snapshot falls back to CELL; a result outside its
-\ spans breaks the family's contract.
-: _RUHA-C-KEEP  ( count used ruha-status -- )
-    DUP RUHA-S-OK <> IF
-        DUP RUHA-S-CAPACITY = IF
-            _RUHA-C-BIT @ _RUHA-C-SC @ RUHA-SC.SHORT !
-        ELSE DROP RUHA-S-UNAVAILABLE THEN
-        _RUHA-C-STATUS ! 2DROP EXIT
-    THEN DROP
-    OVER 0< OVER 0< OR IF 2DROP RUHA-S-INVALID _RUHA-C-STATUS ! EXIT THEN
-    _RUHA-C-BIT @ RUHA-F-MENUS = IF
-        OVER 0= OVER 0<> AND
-    ELSE OVER 0= OVER 0= <> THEN
-        IF 2DROP RUHA-S-INVALID _RUHA-C-STATUS ! EXIT THEN
-    OVER _RUHA-C-SIZE @ _RUHA-UMUL? 0= IF
-        DROP 2DROP RUHA-S-INVALID _RUHA-C-STATUS ! EXIT
-    THEN
-    _RUHA-C-SLOT @ RUHA-SC.U @ U>
-    OVER _RUHA-C-SLOT @ RUHA-SC.NATIVE-U @ U> OR IF
-        2DROP RUHA-S-INVALID _RUHA-C-STATUS ! EXIT
-    THEN
-    _RUHA-C-SLOT @ RUHA-SC.USED ! _RUHA-C-SLOT @ RUHA-SC.COUNT ! ;
-
-: _RUHA-C-MENUS  ( -- )
-    0 _RUHA-C-ASKED? 0= IF EXIT THEN
-    UMSN-RECORD-SIZE _RUHA-C-SIZE !
-    _RUHA-C-SC @ RUHA-SC.GENERATION @
-    _RUHA-C-ADAPTER @ _RUHA-A.WORK-A @ _RUHA-C-ADAPTER @ _RUHA-A.WORK-U @
-    _RUHA-C-ADAPTER @ _RUHA-A.WORK-TEXT-A @
-    _RUHA-C-ADAPTER @ _RUHA-A.WORK-TEXT-U @
-    _RUHA-C-SPANS UMSN-CAPTURE
-    DUP UMSN-S-OK = IF DROP RUHA-S-OK ELSE _RUHA-B-MAP-STATUS THEN
-    _RUHA-C-KEEP ;
-
-: _RUHA-C-COLLECTIONS  ( -- )
-    1 _RUHA-C-ASKED? 0= IF EXIT THEN
-    UCSN-DESCRIPTOR-SIZE _RUHA-C-SIZE !
-    _RUHA-C-ADAPTER @ _RUHA-A.COLLECTION-BUILDER
-    _RUHA-C-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-A @
-    _RUHA-C-ADAPTER @ _RUHA-A.COLLECTION-VALIDATION-U @
-    _RUHA-C-ADAPTER @ _RUHA-A.COLLECTION-WORK-A @
-    _RUHA-C-ADAPTER @ _RUHA-A.COLLECTION-WORK-U @
-    _RUHA-C-SPANS UCSN-CAPTURE
-    DUP UCSN-S-OK = IF DROP RUHA-S-OK ELSE _RUHA-B-MAP-COLLECTION-STATUS THEN
-    _RUHA-C-KEEP ;
-
-: _RUHA-C-DATA-GRAPHICS  ( -- )
-    2 _RUHA-C-ASKED? 0= IF EXIT THEN
-    UDGSN-DESCRIPTOR-SIZE _RUHA-C-SIZE !
-    _RUHA-C-ADAPTER @ _RUHA-A.DATA-GRAPHICS-BUILDER
-    _RUHA-C-SPANS UDGSN-CAPTURE
-    DUP UDGSN-S-OK = IF DROP RUHA-S-OK ELSE _RUHA-B-MAP-DATA-GRAPHICS-STATUS THEN
-    _RUHA-C-KEEP ;
-
-: _RUHA-C-STATUS-FIELDS  ( -- )
-    3 _RUHA-C-ASKED? 0= IF EXIT THEN
-    _RUHA-C-ADAPTER @ _RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ 0= IF EXIT THEN
-    USFSN-DESCRIPTOR-SIZE _RUHA-C-SIZE !
-    _RUHA-C-SPANS USFSN-CAPTURE
-    DUP USFSN-S-OK = IF DROP RUHA-S-OK ELSE _RUHA-B-MAP-STATUS-FIELDS-STATUS THEN
-    _RUHA-C-KEEP ;
-
-: _RUHA-C-FIELDS  ( -- )
-    4 _RUHA-C-ASKED? 0= IF EXIT THEN
-    _RUHA-C-ADAPTER @ _RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @ 0= IF EXIT THEN
-    UFLSN-DESCRIPTOR-SIZE _RUHA-C-SIZE !
-    _RUHA-C-SPANS UFLSN-CAPTURE
-    DUP UFLSN-S-OK = IF DROP RUHA-S-OK ELSE _RUHA-B-MAP-FIELDS-STATUS THEN
-    _RUHA-C-KEEP ;
-
-: _RUHA-C-DIALOGS  ( -- )
-    5 _RUHA-C-ASKED? 0= IF EXIT THEN
-    _RUHA-C-ADAPTER @ _RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @ 0= IF EXIT THEN
-    UDLSN-DESCRIPTOR-SIZE _RUHA-C-SIZE !
-    _RUHA-C-SPANS UDLSN-CAPTURE
-    DUP UDLSN-S-OK = IF DROP RUHA-S-OK ELSE _RUHA-B-MAP-DIALOGS-STATUS THEN
-    _RUHA-C-KEEP ;
-
-\ The facts of the roots each family captured, as the facts pass records
-\ them, into the scratch record's facts span.
-: _RUHA-C-FACTS  ( -- )
-    _RUHA-C-SC @ RUHA-SC.FACTS-A @ _RUHA-F-A !
-    _RUHA-C-SC @ RUHA-SC.FACTS-U @ _RUHA-F-U !
-    0 _RUHA-F-USED ! 0 _RUHA-F-COUNT ! RUHA-S-OK _RUHA-F-STATUS !
-    0 _RUHA-C-SC @ RUHA-SC.SLOT DUP RUHA-SC.COUNT @ ?DUP IF
-        _RUHA-F-NEXT ?DUP IF
-            >R SWAP RUHA-SC.A @ SWAP R@ URF-MENUS R> _RUHA-F-TOKEN!
-        ELSE 2DROP THEN
-    ELSE DROP THEN
-    1 _RUHA-C-SC @ RUHA-SC.SLOT DUP RUHA-SC.A @
-        SWAP RUHA-SC.COUNT @ UCSN-DESCRIPTOR-SIZE *
-        UCSN-DESCRIPTOR-SIZE ['] URF-COLLECTION _RUHA-F-EACH
-    2 _RUHA-C-SC @ RUHA-SC.SLOT DUP RUHA-SC.A @
-        SWAP RUHA-SC.COUNT @ UDGSN-DESCRIPTOR-SIZE *
-        UDGSN-DESCRIPTOR-SIZE ['] URF-DATA-GRAPHICS _RUHA-F-EACH
-    3 _RUHA-C-SC @ RUHA-SC.SLOT DUP RUHA-SC.A @
-        SWAP RUHA-SC.COUNT @ USFSN-DESCRIPTOR-SIZE *
-        USFSN-DESCRIPTOR-SIZE ['] URF-STATUS-FIELD _RUHA-F-EACH
-    4 _RUHA-C-SC @ RUHA-SC.SLOT DUP RUHA-SC.A @
-        SWAP RUHA-SC.COUNT @ UFLSN-DESCRIPTOR-SIZE *
-        UFLSN-DESCRIPTOR-SIZE ['] URF-FIELD _RUHA-F-EACH
-    5 _RUHA-C-SC @ RUHA-SC.SLOT DUP RUHA-SC.A @
-        SWAP RUHA-SC.COUNT @ UDLSN-DESCRIPTOR-SIZE *
-        UDLSN-DESCRIPTOR-SIZE ['] URF-DIALOG _RUHA-F-EACH
-    \ Short of room, the count says how many records the span must hold.
-    _RUHA-F-COUNT @ _RUHA-C-SC @ RUHA-SC.FACTS !
-    _RUHA-F-STATUS @ RUHA-S-OK <> IF _RUHA-F-STATUS @ _RUHA-C-STATUS ! THEN ;
-
-: _RUHA-C-BODY  ( -- )
-    _RUHA-C-RECORD @ _RUHA-P-DOCUMENT-CTX ?DUP 0= IF
-        RUHA-S-UNAVAILABLE _RUHA-C-STATUS ! EXIT
-    THEN
-    DUP ASHELL-CTX-SWITCH ASHELL-ACTIVE-CTX <> IF
-        RUHA-S-INVALID _RUHA-C-STATUS ! EXIT
-    THEN
-    _RUHA-C-MENUS _RUHA-C-STATUS @ RUHA-S-OK <> IF EXIT THEN
-    _RUHA-C-COLLECTIONS _RUHA-C-STATUS @ RUHA-S-OK <> IF EXIT THEN
-    _RUHA-C-DATA-GRAPHICS _RUHA-C-STATUS @ RUHA-S-OK <> IF EXIT THEN
-    _RUHA-C-STATUS-FIELDS _RUHA-C-STATUS @ RUHA-S-OK <> IF EXIT THEN
-    _RUHA-C-FIELDS _RUHA-C-STATUS @ RUHA-S-OK <> IF EXIT THEN
-    _RUHA-C-DIALOGS _RUHA-C-STATUS @ RUHA-S-OK <> IF EXIT THEN
-    _RUHA-C-FACTS ;
-
-\ The attached record TOKEN names, or 0.
-: _RUHA-C-FIND  ( token -- record|0 )
-    _RUHA-C-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
-        I _RUHA-C-ADAPTER @ _RUHA-RECORD-AT
-        DUP _RUHA-R.TOKEN @ 2 PICK = IF NIP UNLOOP EXIT THEN DROP
-    LOOP DROP 0 ;
-
-: _RUHA-CAPTURE-IN-DRAW
-  ( families token scratch requested-draw adapter actual-draw -- status )
-    >R _RUHA-C-ADAPTER !
-    R> <> IF DROP 2DROP RUHA-S-STALE EXIT THEN
-    _RUHA-C-SC ! _RUHA-F-TOKEN ! _RUHA-C-FAMILIES !
-    _RUHA-C-ADAPTER @ RUHA-VALID? 0= IF RUHA-S-INVALID EXIT THEN
-    _RUHA-C-FAMILIES @ _RUHA-F-ALL INVERT AND IF RUHA-S-INVALID EXIT THEN
-    _RUHA-C-SC @ RUHA-SCRATCH-SIZE _RUHA-C-ADAPTER @ RUHA-SIZE
-        MSPAN-OVERLAP? IF RUHA-S-INVALID EXIT THEN
-    0 _RUHA-C-SC @ RUHA-SC.SHORT ! 0 _RUHA-C-SC @ RUHA-SC.FACTS !
-    _RUHA-F-TOKEN @ _RUHA-C-FIND DUP _RUHA-C-RECORD ! 0= IF
-        RUHA-S-UNAVAILABLE EXIT
-    THEN
-    _RUHA-C-ADAPTER @ _RUHA-P-ADAPTER !
-    RUHA-S-OK _RUHA-C-STATUS !
-    ASHELL-ACTIVE-CTX _RUHA-C-ORIGINAL !
-    ['] _RUHA-C-BODY CATCH IF RUHA-S-INVALID _RUHA-C-STATUS ! THEN
-    _RUHA-C-ORIGINAL @ ['] ASHELL-CTX-SWITCH CATCH IF
-        DROP RUHA-S-INVALID _RUHA-C-STATUS !
-    THEN
-    _RUHA-P-CLEAR
-    _RUHA-C-STATUS @ ;
-
-: RUHA-CAPTURE-FAMILIES
-  ( families token scratch draw-generation adapter -- status )
-    ['] _RUHA-CAPTURE-IN-DRAW _SCR-WITH-DRAW-AUTHORITY ;
 
 CREATE _RUHA-OWNED-END
 _RUHA-OWNED-END _RUHA-OWNED-LIMIT !

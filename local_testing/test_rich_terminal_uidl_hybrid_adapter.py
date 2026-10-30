@@ -1880,12 +1880,11 @@ def test_last_dialog_native_capacity_failure_preserves_every_prior_bank(reuse):
 
 
 @pytest.mark.parametrize("family,native_bytes", (("STATUS", 144), ("FIELD", 448)))
-def test_optional_field_banks_require_canonical_absence_or_complete_banks(reuse, family, native_bytes):
+def test_field_banks_are_complete_ab_banks(reuse, family, native_bytes):
     word = f"_RUHA-{family}-STORAGE?"
-    assert reuse.results(word, 0, 0, 0, 0) == (MASK64,)
     assert reuse.results(word, 4096, 256, 8192, native_bytes) == (MASK64,)
     assert reuse.results(word, 4096, 512, 8192, native_bytes + 16) == (MASK64,)
-    for spans in ((4096, 0, 0, 0), (0, 0, 8192, native_bytes), (4096, 256, 0, 0),
+    for spans in ((0, 0, 0, 0), (4096, 0, 0, 0), (0, 0, 8192, native_bytes), (4096, 256, 0, 0),
                   (4096, 128, 8192, native_bytes), (4096, 256, 8192, native_bytes - 16),
                   (4097, 256, 8192, native_bytes), (4096, 256, MASK64 - 7, native_bytes),
                   (0, 256, 8192, native_bytes), (4096, 256, 0, native_bytes),
@@ -1913,7 +1912,6 @@ def test_status_family_survives_every_snapshot_and_storage_boundary():
     assert "_RUHA-B-REUSE-SFIELD-DESCRIPTOR-U @ 0=" in prior
     assert "_RUHA-B-REUSE-SFIELD-NATIVE-U @ 0= <>" in prior
     capture = _capture(source)
-    assert "_RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ IF" in capture
     assert "USFSN-CAPTURE" in capture
     assert re.search(r"_RUHA-B-SFIELD-COUNT @ 0= AND\s+_RUHA-B-FIELD-COUNT @ 0= AND\s+"
                      r"_RUHA-B-DIALOG-COUNT @ 0= AND IF", capture)
@@ -1941,7 +1939,6 @@ def test_field_family_survives_every_snapshot_and_storage_boundary():
     assert re.search(r"_RUHA-B-REUSE-FIELD-DESCRIPTOR-U @ 0=\s+"
                      r"_RUHA-B-REUSE-FIELD-NATIVE-U @ 0= <> IF 0 EXIT THEN", prior)
     capture = _capture(source)
-    assert "_RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @ IF" in capture
     assert "UFLSN-CAPTURE" in capture
     assert "_RUHA-B-FIELD-COUNT @ 0= AND" in capture
     assert "_RUHA-B-MAP-FIELDS-STATUS _RUHA-B-FALL-BACK EXIT" in capture
@@ -1971,10 +1968,11 @@ def test_dialog_family_survives_every_snapshot_and_storage_boundary():
     assert re.search(r"_RUHA-B-REUSE-DIALOG-DESCRIPTOR-U @ 0=\s+"
                      r"_RUHA-B-REUSE-DIALOG-NATIVE-U @ 0= <> IF 0 EXIT THEN", prior)
     capture = _capture(source)
-    # The dialog is captured last, after the document's fields, and only
-    # when the composition gave the adapter dialog banks.
-    _ordered(capture, "UFLSN-CAPTURE", "_RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @ IF",
+    # The dialog is captured last, after the document's fields.
+    _ordered(capture, "UFLSN-CAPTURE",
              "UDLSN-CAPTURE", "_RUHA-B-MAP-DIALOGS-STATUS _RUHA-B-FALL-BACK EXIT")
+    # Every family has banks, so every family is captured.
+    assert "BANK-U @ IF" not in capture
     # A document's overlay is its dialog when it shows one.
     assert "UTUI-OVERLAY-ROOT@ DROP" in _word(source, "_RUHA-PROJECT")
     assert _offset_for_snapshot_field(source, "_RUHA-D.DIALOG-DESCRIPTOR-OFF") == 240
@@ -1983,12 +1981,11 @@ def test_dialog_family_survives_every_snapshot_and_storage_boundary():
     assert _offset_for_snapshot_field(source, "_RUHA-S.DIALOG-NATIVE-U") == 232
 
 
-def test_optional_dialog_banks_require_canonical_absence_or_complete_banks(reuse):
+def test_dialog_banks_are_complete_ab_banks(reuse):
     word = "_RUHA-DIALOG-STORAGE?"
-    assert reuse.results(word, 0, 0, 0, 0) == (MASK64,)
     assert reuse.results(word, 4096, 128, 8192, 320) == (MASK64,)
     assert reuse.results(word, 4096, 256, 8192, 336) == (MASK64,)
-    for spans in ((4096, 0, 0, 0), (0, 0, 8192, 320), (4096, 128, 0, 0),
+    for spans in ((0, 0, 0, 0), (4096, 0, 0, 0), (0, 0, 8192, 320), (4096, 128, 0, 0),
                   (4096, 64, 8192, 320), (4096, 128, 8192, 304),
                   (4097, 128, 8192, 320), (0, 128, 8192, 320),
                   (4096, 128, 0, 320), (4096, 192, 8192, 320),
