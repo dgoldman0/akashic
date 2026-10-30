@@ -1359,7 +1359,10 @@ frame before the change driver.
     million of it the text areas', and 0.17 million the status fields. The
     root facts of a typed frame's 32 roots cost 0.10 million, and about two
     roots move: the text area and the status field. In steps, each sending
-    what it sent before:
+    what it sent before. **Done** on 2026-10-29 with 9a.3b.3b: a typed
+    letter's frame builds in 3.33 million steps against 5.18 when 9a.3b
+    began, the producer's candidate and bank taking 0.59 million against
+    2.32.
     - **9a.3b.1. The comparison follows the facts.** The producer keeps
       each bank's root facts in normal mode too, in storage it grows from
       its memory source. When the bank on screen kept the facts its own
@@ -1429,13 +1432,19 @@ frame before the change driver.
       itself is taken from the bank on screen, each item numbered and
       stamped as a full lowering numbers and stamps it, and the moved roots
       are lowered into it in place. In two steps, each sending what it sent
-      before:
+      before. **Done** on 2026-10-29 with 9a.3b.3b:
       - **9a.3b.3a. The bank keeps whole claims.** Each bank keeps every
         claim whole, the menus' first, where it kept their rectangles. It
         also records where its fields' and dialogs' text and claims began,
         where its claims before the instruments and before the status fields
         ended, and the features the terminal had negotiated. The rows
         planned again are still found from the claims' rectangles.
+        **Done** on 2026-10-29 (9bb1785b). The bank header grows to 448
+        bytes, and each control, instrument and status field reserves an
+        80-byte claim where it reserved a 32-byte rectangle, so the
+        canonical journey's arena holds 162,736 bytes more. The journey
+        passed with the shadow check, 14,478 comparisons without a
+        difference, sending the same presents, and in safe mode.
       - **9a.3b.3b. The candidate from the bank on screen.** The candidate
         is unpacked from the bank on screen when a comparison would follow
         the facts, only text roots and status fields moved, every document
@@ -1451,6 +1460,21 @@ frame before the change driver.
         copy then builds the pending bank as before. With the shadow check
         on, the candidate is lowered in full as well, and the two
         candidates must be the same byte for byte.
+        **Done** on 2026-10-29 (f8b1e5bf, 552660a5, da32dc95). Since a
+        menu's correlations keep their source order while its controls lie
+        in graph order, the unpack renumbers each correlation by the
+        identity of the control it names. A typed letter's frame builds in
+        3.33 million steps against 4.19 for 9bb1785b, run beside it, the
+        candidate taking 0.40 million where the full lowering took 1.09,
+        and it sends the same 18 DELTAs and bytes. With the shadow check,
+        the typing run made 3,771 comparisons without a difference, 182 of
+        them the new stage's, from 14 candidates taken from the bank. The
+        canonical journey passed with the shadow check, 14,491 comparisons
+        without a difference, sending the same presents, and in safe mode.
+        Only one of its frames took its candidate from the bank: from
+        Sound Lab's first frame on, 55 of the journey's 65 checked
+        frames, the bank on screen holds instruments, which the unpack
+        leaves to the full lowering.
     Other kinds of root, such as menus, tab sets and dialogs, take the copy
     once an ordinary use needs it; until then a frame that moves one takes
     the full driver.
