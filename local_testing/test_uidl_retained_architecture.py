@@ -2056,9 +2056,11 @@ def test_rich_phase_profile_is_private_and_brackets_generic_work() -> None:
     }
     assert "_RTPROF-EVENT" not in producer + engine
 
-    # The build entry observes the aggregate, then runs the observed build.
+    # The build entry observes the aggregate, then runs the observed build,
+    # whose full lowering plans the controls and their claims.
     build = (_word(producer, "_RTHP-BUILD-CANDIDATE")
-             + _word(producer, "_RTHP-BUILD-OBSERVED-CANDIDATE"))
+             + _word(producer, "_RTHP-BUILD-OBSERVED-CANDIDATE")
+             + _word(producer, "_RTHP-W-LOWER"))
     for phase, call in (
         ("_RTPROF-PH-UIDL-AGGREGATE", "RUHA-SNAPSHOT-FOR@"),
         ("_RTPROF-PH-SNAPSHOT-IMPORT", "RTE-LIMITS@"),
@@ -2087,9 +2089,12 @@ def test_rich_phase_profile_is_private_and_brackets_generic_work() -> None:
         _assert_phase_marked(
             body, "_RTPROF-PH-CANDIDATE-VALIDATE", "_RTHP-FIXED?"
         )
-        _assert_phase_marked(
-            body, "_RTPROF-PH-TARGET-PACK", "_RTHP-TARGET-CANDIDATE?"
-        )
+    # A live frame's bank is a copy of the bank on screen or a fresh pack.
+    _assert_phase_marked(
+        start, "_RTPROF-PH-TARGET-PACK", "_RTHP-TARGET-CANDIDATE?"
+    )
+    _assert_phase_marked(staged, "_RTPROF-PH-TARGET-PACK", "_RTHP-STAGE-BANK")
+    assert "_RTHP-TARGET-CANDIDATE?" in _word(producer, "_RTHP-STAGE-BANK")
     _assert_phase_marked(
         live,
         "_RTPROF-PH-DELTA-COMPARE-NORMALIZE",

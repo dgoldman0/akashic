@@ -21,7 +21,7 @@ import struct
 
 import pytest
 
-from test_rich_glyph_growth import MASK64
+from test_rich_glyph_growth import MASK64, PRODUCER
 from test_rich_status_producer import StatusHarness
 
 LABEL = b"File"
@@ -38,7 +38,8 @@ class BankHarness(StatusHarness):
         super().__init__(backend, extra_words=(
             "_RTHP-TG-HEADER!", "_RTHP-UB-ROOM?", "_RTHP-UB-CONTROLS?",
             "_RTHP-UB-STATICS?", "_RTHP-UB-TEXT-ROOM?", "_RTHP-UB-STATIC-ROOM?",
-            "_RTHP-UB-STATUS?", "_RTHP-UB-DOCUMENTS?"))
+            "_RTHP-UB-STATUS?", "_RTHP-UB-DOCUMENTS?", "_RTHP-W-LOWER-BEGIN",
+            "_RTHP-W-APPEND-COLLECTION-CLAIMS?"))
 
     def candidate(self):
         """One menu bar labelled LABEL, one text area, and a status field."""
@@ -296,3 +297,34 @@ def test_every_document_must_lie_where_it_lay(h):
     entry = h.get("SOURCE-DIR-A")
     h.runtime.memory.write64(entry + h.offset("_RUHA-D.ROW"), 1)
     assert not h.call("_RTHP-UB-DOCUMENTS?")
+
+
+def test_the_full_lowering_claims_every_collection_after_a_refused_unpack(h):
+    """A candidate taken from a bank with fields and a dialog takes their
+    counts, and one refused afterwards leaves them.  The full lowering
+    starts with no field or dialog lowered or refused, so the collections'
+    claims, which end where the fields begin, reach the last collection."""
+    h.candidate()
+    memory = h.runtime.memory
+    text_area = h.get("CONTROLS-A") + h.constant("RTE-CONTROL-SIZE")
+    for name, value_ in (("ROW", 4), ("HEIGHT", 4), ("WIDTH", 32)):
+        h.field(text_area, "_RTE-CONTROL." + name, value_)
+    claim = h.get("CLAIMS-A") + h.constant("RUCL-CLAIM-SIZE")
+    expected = memory.read_bytes(claim, h.constant("RUCL-CLAIM-SIZE"))
+    left = (("FIELD-COUNT", 1), ("FIELD-ITEMS", 2), ("FIELD-UTF8", 3),
+            ("FIELD-REFUSED", MASK64), ("DIALOG-COUNT", 1), ("DIALOG-CONTROLS", 1),
+            ("DIALOG-UTF8", 4), ("DIALOG-REFUSED", MASK64))
+    for name, value_ in left:
+        h.field(h.producer, "_RTHP." + name, value_)
+    h.results("_RTHP-W-LOWER-BEGIN", h.producer)
+    assert [h.get(name) for name, _ in left] == [0] * len(left)
+    # The collections lowered, their claims follow the menu bar's.
+    memory.write_bytes(claim, bytes(h.constant("RUCL-CLAIM-SIZE")))
+    h.variable("_RTHP-W-CLAIMS", 1)
+    assert h.call("_RTHP-W-APPEND-COLLECTION-CLAIMS?")
+    assert h.variable("_RTHP-W-CLAIMS") == 2
+    assert memory.read_bytes(claim, h.constant("RUCL-CLAIM-SIZE")) == expected
+    source = PRODUCER.read_text()
+    lower = source[source.index(": _RTHP-W-LOWER  "):]
+    lower = lower[:lower.index(" ;")]
+    assert lower.index("_RTHP-W-LOWER-BEGIN") < lower.index("_RTHP-BUILD-CONTROLS")

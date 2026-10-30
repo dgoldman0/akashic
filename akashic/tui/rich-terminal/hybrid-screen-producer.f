@@ -4442,14 +4442,7 @@ VARIABLE _RTHP-DI-COPY
     _RTHP-W-DIRECTORY-U @ _RTHP-W-P @ _RTHP.SOURCE-DIR-USED !
     _RTHP-COPY-STATUS-SOURCE? 0= IF 0 EXIT THEN
     _RTHP-COPY-FIELD-SOURCE? 0= IF 0 EXIT THEN
-    0 _RTHP-W-P @ _RTHP.FIELD-REFUSED !
-    0 _RTHP-W-P @ _RTHP.FIELD-COUNT !
-    0 _RTHP-W-P @ _RTHP.FIELD-ITEMS !
-    0 _RTHP-W-P @ _RTHP.FIELD-UTF8 !
     _RTHP-COPY-DIALOG-SOURCE? 0= IF 0 EXIT THEN
-    0 _RTHP-W-P @ _RTHP.DIALOG-REFUSED !
-    0 _RTHP-W-P @ _RTHP.DIALOG-COUNT !
-    0 _RTHP-W-P @ _RTHP.DIALOG-CONTROLS !
     _RTHP-W-RECORDS-A @ _RTHP-W-P @ _RTHP.SOURCE-RECS-A @
         _RTHP-W-RECORDS-U @ MOVE
     _RTHP-W-RECORDS-U @ _RTHP-W-P @ _RTHP.SOURCE-USED !
@@ -9678,7 +9671,16 @@ VARIABLE _RTHP-ROOT-BYTES
         RTHPX-PLAN _RTHP-W-P @ _RTHP-EXTENSION-NOTIFY
     THEN ;
 
+\ The full lowering starts with no field or dialog lowered or refused,
+\ whatever a candidate taken from the bank on screen, and then refused,
+\ left there: the collections' claims end where the fields begin, so a
+\ field count left over would leave the last collections unclaimed.
+: _RTHP-W-LOWER-BEGIN  ( producer -- )
+    0 OVER _RTHP.FIELD-REFUSED ! DUP _RTHP-FIELD-CLEAR
+    0 OVER _RTHP.DIALOG-REFUSED ! _RTHP-DIALOG-CLEAR ;
+
 : _RTHP-W-LOWER  ( -- rte-status )
+    _RTHP-W-P @ _RTHP-W-LOWER-BEGIN
     _RTPROF-PH-CONTROL-PLAN _RTPROF-MARK
     _RTHP-W-P @ _RTHP-BUILD-CONTROLS
     _RTPROF-PH-OTHER _RTPROF-MARK
