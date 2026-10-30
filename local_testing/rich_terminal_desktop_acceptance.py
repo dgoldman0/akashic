@@ -457,6 +457,8 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RSHSP-DIAG-PREPARE-STATUS",
     "_RSHSP-DIAG-PREPARE-STAGE",
     "_RSHSP-DIAG-GROWTHS",
+    # Glyph regions of a DELTA whose acknowledged runs were copied whole.
+    "_RSHSP-DIAG-REGIONS-KEPT",
     # The latest control intent the terminal sent: whether its resolver found
     # a target, and the cell and revision it gave.
     "_APTAS-CONTROL-HAS",

@@ -91,6 +91,7 @@ VARIABLE _RSHSP-GX0 VARIABLE _RSHSP-GW VARIABLE _RSHSP-GY0 VARIABLE _RSHSP-GY1
 VARIABLE _RSHSP-GCX VARIABLE _RSHSP-GCY VARIABLE _RSHSP-GCW VARIABLE _RSHSP-GCH VARIABLE _RSHSP-GCF
 VARIABLE _RSHSP-GA-ITEMS VARIABLE _RSHSP-GA-REFS VARIABLE _RSHSP-GA-TEXT VARIABLE _RSHSP-GA-TEXT-U
 VARIABLE _RSHSP-GA-N VARIABLE _RSHSP-GA-I VARIABLE _RSHSP-GA-ITEM VARIABLE _RSHSP-GA-REF
+VARIABLE _RSHSP-GA-REFS-U VARIABLE _RSHSP-GA-DAMAGED
 VARIABLE _RSHSP-DBATCH
 VARIABLE _RSHSP-PBACK VARIABLE _RSHSP-PRESIDUE VARIABLE _RSHSP-PCOLS VARIABLE _RSHSP-PROWS
 VARIABLE _RSHSP-PART VARIABLE _RSHSP-PART-CAP
@@ -1049,7 +1050,7 @@ VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
 \ planning only the changed bands builds the same runs as planning the
 \ whole region.
 : _RSHSP-GLYPH-ACTIVE? ( -- flag )
-    0 _RSHSP-GA-N ! 0 _RSHSP-GA-I !
+    0 _RSHSP-GA-N ! 0 _RSHSP-GA-I ! 0 _RSHSP-GA-TEXT-U ! 0 _RSHSP-GA-REFS-U !
     _RSHSP-REUSE @ 0= IF 0 EXIT THEN
     _RSHSP-P @ _RTHP.ROW-DAMAGE-A @ 0= IF 0 EXIT THEN
     _RSHSP-P @ _RTHP.ROW-DAMAGE-U @ _RSHSP-P @ _RTHP.ROWS @ U< IF 0 EXIT THEN
@@ -1061,6 +1062,7 @@ VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
         DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH =
         OVER _RTE-FE.PLAN-A @ _RTE-LP.REGION-ID @ _RSHSP-REGION @ _RTE-IR.ID @ = AND IF
             DUP _RTE-FE.REFS-A @ _RSHSP-GA-REFS !
+            DUP _RTE-FE.REFS-U @ _RSHSP-GA-REFS-U !
             DUP _RTE-FE.BYTES-A @ _RSHSP-GA-TEXT !
             DUP _RTE-FE.BYTES-U @ _RSHSP-GA-TEXT-U !
             RTE-FAMILY-ITEMS@ RTE-GLYPH-RUN-PLAN-ITEM-SIZE / SWAP _RSHSP-GA-ITEMS !
@@ -1111,17 +1113,42 @@ VARIABLE _RSHSP-BR-LOW VARIABLE _RSHSP-BR-HIGH VARIABLE _RSHSP-BR-USED
             _RSHSP-GR @ _RSHSP-GCY @ - _RSHSP-GCH ! _RSHSP-GLYPH-PLAN
         ELSE _RSHSP-GLYPH-ROW-COPY 1 _RSHSP-GR +! THEN
     REPEAT ;
+\ A reused region none of whose rows is damaged keeps the acknowledged
+\ runs whole.  Copied row by row, every one of them would come, in its
+\ order, since a family's visible runs lie in the rows its region scans,
+\ in row order.  Their text would come whole at the same offsets: every
+\ family lays its text down in run order from its start, each reference
+\ following the one before with its run's bytes, which the batch check
+\ requires, and its tombstones hold none.  So the runs, their references
+\ and the text are each copied in one block, and each run takes the
+\ region's next identity, as a copy row by row numbers it.  With
+\ every-frame checks on, the acknowledged part was checked whole before
+\ the DELTA began (_RSHSP-ACTIVE-INTACT?).
+VARIABLE _RSHSP-DIAG-REGIONS-KEPT
+: _RSHSP-GLYPH-KEEP ( -- )
+    _RSHSP-GA-N @ _RSHSP-GSLOTS @ U> IF RTE-S-CAPACITY THROW THEN
+    _RSHSP-GA-TEXT-U @ _RSHSP-GLIMIT @ U> IF RTE-S-CAPACITY THROW THEN
+    _RSHSP-GA-N @ 16 * _RSHSP-GA-REFS-U @ U> 0= _RSHSP-CHECK
+    _RSHSP-GA-ITEMS @ _RSHSP-GITEMS @ _RSHSP-GA-N @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * MOVE
+    _RSHSP-GA-N @ 0 ?DO
+        _RSHSP-GBASE @ I + _RSHSP-GITEMS @ I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + _RTE-LPI.OBJECT !
+    LOOP
+    _RSHSP-GA-REFS @ _RSHSP-GREFS @ _RSHSP-GA-N @ 16 * MOVE
+    _RSHSP-GA-TEXT @ _RSHSP-GTEXT @ _RSHSP-GA-TEXT-U @ MOVE
+    _RSHSP-GA-N @ _RSHSP-GCOUNT ! _RSHSP-GA-TEXT-U @ _RSHSP-GUSED !
+    1 _RSHSP-DIAG-REGIONS-KEPT +! ;
 \ The slots a reused region's runs can take: the acknowledged visible runs
 \ its unchanged rows copy, and on each changed row one for every scanned
 \ cell, the most the planner makes there. The acknowledged runs of changed
 \ rows are counted too, as slack. The count never exceeds one slot a cell,
 \ the reservation of a region planned whole, so the build runs out of room
-\ exactly where it did with that reservation.
+\ exactly where it did with that reservation.  GA-DAMAGED records whether
+\ any scanned row is damaged.
 : _RSHSP-GLYPH-SLOTS ( -- slots )
-    _RSHSP-GA-N @
+    0 _RSHSP-GA-DAMAGED ! _RSHSP-GA-N @
     _RSHSP-GY0 @ _RSHSP-GR !
     BEGIN _RSHSP-GR @ _RSHSP-GY1 @ < WHILE
-        _RSHSP-ROW-DAMAGED? IF _RSHSP-GW @ + THEN
+        _RSHSP-ROW-DAMAGED? IF _RSHSP-GW @ + -1 _RSHSP-GA-DAMAGED ! THEN
         1 _RSHSP-GR +!
     REPEAT
     _RSHSP-GCELLS @ MIN ;
@@ -1262,7 +1289,7 @@ VARIABLE _RSHSP-SG-ITEM
     _RSHSP-P @ _RTHP.GLYPH-REFS-A @ _RSHSP-GREFS !
     0 _RSHSP-GCOUNT ! 0 _RSHSP-GUSED ! _RSHSP-NEXT-ID @ _RSHSP-GBASE !
     IF
-        _RSHSP-GLYPH-ROWS
+        _RSHSP-GA-DAMAGED @ IF _RSHSP-GLYPH-ROWS ELSE _RSHSP-GLYPH-KEEP THEN
         FSHD? IF _RSHSP-SH-GLYPH THEN
     ELSE
         _RSHSP-REGION @ _RTE-IR.CLIP-X @ _RSHSP-GCX !

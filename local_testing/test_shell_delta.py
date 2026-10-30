@@ -272,6 +272,54 @@ _SS-DONE
 ''', minimum=9)
 
 
+def test_a_region_with_no_damaged_row_keeps_its_runs_whole():
+    """A reused region none of whose rows is damaged copies the acknowledged
+    runs, their references and its text each in one block.  With the screen
+    unchanged, that is the part planning every row gives, also when the
+    acknowledged family ends in the tombstones of runs it no longer has."""
+    staged_run(DELTA + r'''
+CREATE _SD-ROWS 64 ALLOT CREATE _SD-SAVE 131072 ALLOT
+VARIABLE _SD-USED VARIABLE _SD-KEPT
+: _SD-MAP ( flag -- ) _SD-ROWS 64 ROT FILL ;
+\ The items of the part's last glyph family, the pane's.
+: _SD-LAST-GLYPHS ( part -- n )
+    _SD-BATCH DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ 64 / 0 SWAP 0 ?DO
+        OVER I 64 * + DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH = IF
+            RTE-FAMILY-ITEMS@ NIP RTE-GLYPH-RUN-PLAN-ITEM-SIZE / NIP
+        ELSE DROP THEN
+    LOOP NIP ;
+_SX-SETUP _SD-HOOKS
+_SD-ROWS _SX-P _RTHP.ROW-DAMAGE-A ! 64 _SX-P _RTHP.ROW-DAMAGE-U !
+' _SD-SPLIT _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
+\ Two runs fewer, every row planned: the family on screen ends in two
+\ tombstones.
+' _SD-UNSPLIT _SD-DRAW _SD-TA _SD-PENDING -1 _SD-MAP
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_SD-EMIT _SS-OK _SD-GREPLACE @ 2 > _SS-A _SD-ACK
+\ The same draw with no row damaged keeps the regions' runs whole.
+' _SD-UNSPLIT _SD-DRAW _SD-TB _SD-PENDING 0 _SD-MAP
+_RSHSP-DIAG-REGIONS-KEPT @ _SD-KEPT !
+_RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
+_RSHSP-DIAG-REGIONS-KEPT @ _SD-KEPT @ - 0> _SS-A
+\ The pane is the last glyph region built: every run copied, none planned,
+\ and the two tombstones after them.
+_RSHSP-GA-DAMAGED @ 0= _SS-A
+_RSHSP-GCOUNT @ DUP 0> _SS-A _RSHSP-GA-N @ = _SS-A
+_RSHSP-PENDING-PART _SD-LAST-GLYPHS _RSHSP-GA-N @ 2 + = _SS-A
+_SD-PENDING-VALID? _SS-A
+_SD-PENDING-BYTES DUP _SD-USED ! _RSHSP-PENDING-PART _SD-SAVE ROT MOVE
+_SD-EMIT _SS-OK _SD-GREPLACE @ 0= _SS-A _SD-GDEFINE @ 0= _SS-A
+\ Planning every row gives exactly the same part.
+_SX-P _RTHP-XBLOCK-DROP -1 _SD-MAP
+_RSHSP-DIAG-REGIONS-KEPT @ _SD-KEPT !
+_RSHSP-DELTA-PREPARE _SS-OK
+_RSHSP-DIAG-REGIONS-KEPT @ _SD-KEPT @ = _SS-A
+_SD-PENDING-BYTES _SD-USED @ = _SS-A
+_RSHSP-PENDING-PART _SD-USED @ _SD-SAVE _SD-USED @ COMPARE 0= _SS-A
+_SS-DONE
+''', minimum=20)
+
+
 def test_a_glyph_family_lays_out_its_spans_in_the_order_the_batch_lists_them():
     """The batch lists a family's spans as plan, items, text and references.
     A glyph family lays them out in that order, so the family preflight's

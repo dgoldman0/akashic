@@ -1368,6 +1368,19 @@ frame before the change driver.
     comparisons without a difference and the canonical journey 14,491,
     1,380 of them the shell's glyph stage's, sending the same presents;
     the journey passed in safe mode.
+    Read once the third piece was done: of the shell's 0.64 million steps,
+    its glyph work takes 0.33 million, 0.19 million of it copying the runs
+    of the frame on screen one at a time, about 375 steps for each of
+    Desk's 506, though in a typed letter's frame no row is damaged. A region
+    none of whose rows is damaged keeps every run of the family on screen.
+    Copied row by row they all come, in their order, and their text comes
+    whole at the same offsets, since every family lays its text down in run
+    order from its start, each reference following the one before, as the
+    batch check requires. So the fourth piece: such a region copies the
+    runs, their references and the text each in one block, and numbers the
+    runs as a copy row by row numbers them. The shadow check's glyph stage
+    compares each such region with its whole plan, as it compares a region
+    copied row by row.
   - **9a.3b. The producer follows change.** The producer keeps each bank's
     root facts in normal mode too. When the facts show that only some
     roots' contents moved, with every document in its place, the same roots
