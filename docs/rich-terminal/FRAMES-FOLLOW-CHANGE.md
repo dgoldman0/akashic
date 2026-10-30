@@ -1682,6 +1682,36 @@ frame before the change driver.
   a DELTA go through the change driver as well, such as controls that come
   or go within what a DELTA may carry. The whole-screen comparison remains
   for the full driver alone.
+  Read once 9a.4 was done, in a plain canonical journey made with a copy of
+  the producer that counted why the change driver's two steps passed over
+  each frame. The candidate was taken from the bank on screen in one frame
+  of 86, and the bank on screen was copied in 22 frames of 67. The rest
+  went to the full driver because:
+  - the frame on screen had gone out as a START, whose bank keeps no root
+    facts: 35 candidates and 25 copies;
+  - the bank on screen held instruments or series, which the candidate
+    from the bank leaves to the full lowering: 41 candidates;
+  - a root of a family other than the collections and the status fields
+    moved, a menu, tab set, dialog, field or data graphic: 2 candidates and
+    10 copies;
+  - controls came or went: 4 copies;
+  - and for 13 frames, a bank on screen that was not this screen's, a
+    document that moved, or pairing that failed.
+  9c takes them in this order, each piece sending what it sent before:
+  - **9c.0.** The producer counts why each step of the change driver passes
+    over a frame, as it counts why a DELTA is refused, and the acceptance
+    tool records the counts.
+  - **9c.1. Every bank keeps its facts.** A START's bank keeps the root
+    facts and the pairing index of its controls, as a DELTA's bank does, so
+    the frame after a START can take the change driver.
+  - **9c.2. Controls that come or go.** The copy of the bank on screen
+    takes controls that came or went, within what a DELTA may carry.
+  - **9c.3. The other families' roots.** A moved menu, tab set, dialog,
+    field or data-graphics root is lowered alone, as a moved collection or
+    status field is.
+  - **9c.4. Instruments and series.** The candidate from the bank carries
+    the instruments and series of the bank on screen, lowering again only
+    those whose roots moved.
 
 **Proof.** The change driver passes over an element only when none of the
 counters it keeps for that element has moved. A capture reads only the
