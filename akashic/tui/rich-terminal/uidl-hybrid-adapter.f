@@ -2940,77 +2940,8 @@ VARIABLE _RUHA-DIAG-MENUS-KEPT
     1 _RUHA-DIAG-MENUS-KEPT +!
     _RUHA-B-REUSE-COUNT @ _RUHA-B-REUSE-TEXT-U @ UMSN-S-OK ;
 
-: _RUHA-B-CAPTURE-CURRENT  ( -- status )
-    \ A live capture always changes whole-document provenance.  Its menu
-    \ family may independently retain lineage only after exact normalized
-    \ comparison with an authenticated prior menu slice.
-    _RUHA-B-EXACT-REUSE @ _RUHA-B-FALL-BACK-REUSE !
-    0 _RUHA-B-EXACT-REUSE !
-    _RUHA-B-DIRECTORY-U @ RUHA-DOCUMENT-SIZE _RUHA-UADD?
-        0= IF DROP RUHA-S-CAPACITY EXIT THEN
-    _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-BANK-U @ U> IF
-        RUHA-S-CAPACITY EXIT
-    THEN
-    _RUHA-B-RECORDS-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-RECORD-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-TEXT-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-TEXT-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-DESCRIPTORS-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DESCRIPTOR-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-NATIVE-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-NATIVE-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-DGRAPH-DESCRIPTORS-U @
-        _RUHA-B-ADAPTER @
-            _RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-DGRAPH-NATIVE-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-
-    _RUHA-B-SFIELD-DESCRIPTORS-U @
-        _RUHA-B-ADAPTER @
-            _RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-SFIELD-NATIVE-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-SFIELD-NATIVE-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-
-    _RUHA-B-FIELD-DESCRIPTORS-U @
-        _RUHA-B-ADAPTER @
-            _RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-FIELD-NATIVE-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-FIELD-NATIVE-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-
-    _RUHA-B-DIALOG-DESCRIPTORS-U @
-        _RUHA-B-ADAPTER @
-            _RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-    _RUHA-B-DIALOG-NATIVE-U @
-        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIALOG-NATIVE-BANK-U @ U> IF
-        RUHA-S-INVALID EXIT
-    THEN
-
-    \ All enabled generic captures observe the exact document UCTX
-    \ synchronously.  None publishes; the directory is appended only after
-    \ every family has completed and its returned extents are proven.
-    _RUHA-B-RECORD @ _RUHA-R.UCTX @ ASHELL-CTX-SWITCH
+\ The families of the document now current, captured in turn.
+: _RUHA-B-CAPTURE-FAMILIES  ( -- status )
     _RUHA-B-GENERATION @
     _RUHA-B-ADAPTER @ _RUHA-A.WORK-A @
     _RUHA-B-ADAPTER @ _RUHA-A.WORK-U @
@@ -3271,6 +3202,87 @@ VARIABLE _RUHA-DIAG-MENUS-KEPT
     DUP RUHA-S-OK = IF
         DROP 0 _RUHA-B-RECORD @ _RUHA-B-STAGE RUHA-S-OK
     THEN ;
+
+\ A capture holds the relations it checks for all the families it makes
+\ (UTUI-HOLD): between their passes nothing runs but the captures, which
+\ run no application code and write only the storage each proves apart
+\ from UIDL's.  Every-frame checks, the shadow check's full capture, the
+\ full refresh and safe mode check them in every pass.
+: _RUHA-B-HOLD?  ( -- flag )  _RUHA-B-FULL @ 0= CHK-EVERY-FRAME? 0= AND ;
+
+: _RUHA-B-CAPTURE-CURRENT  ( -- status )
+    \ A live capture always changes whole-document provenance.  Its menu
+    \ family may independently retain lineage only after exact normalized
+    \ comparison with an authenticated prior menu slice.
+    _RUHA-B-EXACT-REUSE @ _RUHA-B-FALL-BACK-REUSE !
+    0 _RUHA-B-EXACT-REUSE !
+    _RUHA-B-DIRECTORY-U @ RUHA-DOCUMENT-SIZE _RUHA-UADD?
+        0= IF DROP RUHA-S-CAPACITY EXIT THEN
+    _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-BANK-U @ U> IF
+        RUHA-S-CAPACITY EXIT
+    THEN
+    _RUHA-B-RECORDS-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-RECORD-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-TEXT-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-TEXT-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-DESCRIPTORS-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DESCRIPTOR-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-NATIVE-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-NATIVE-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-DGRAPH-DESCRIPTORS-U @
+        _RUHA-B-ADAPTER @
+            _RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-DGRAPH-NATIVE-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+
+    _RUHA-B-SFIELD-DESCRIPTORS-U @
+        _RUHA-B-ADAPTER @
+            _RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-SFIELD-NATIVE-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-SFIELD-NATIVE-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+
+    _RUHA-B-FIELD-DESCRIPTORS-U @
+        _RUHA-B-ADAPTER @
+            _RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-FIELD-NATIVE-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-FIELD-NATIVE-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+
+    _RUHA-B-DIALOG-DESCRIPTORS-U @
+        _RUHA-B-ADAPTER @
+            _RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-DIALOG-NATIVE-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIALOG-NATIVE-BANK-U @ U> IF
+        RUHA-S-INVALID EXIT
+    THEN
+
+    \ All enabled generic captures observe the exact document UCTX
+    \ synchronously.  None publishes; the directory is appended only after
+    \ every family has completed and its returned extents are proven.
+    _RUHA-B-RECORD @ _RUHA-R.UCTX @ ASHELL-CTX-SWITCH
+    _RUHA-B-HOLD? IF ['] _RUHA-B-CAPTURE-FAMILIES UTUI-HOLD EXIT THEN
+    _RUHA-B-CAPTURE-FAMILIES ;
 
 : _RUHA-B-CAPTURE-RECORD ( record -- status )
     _RUHA-B-RECORD !

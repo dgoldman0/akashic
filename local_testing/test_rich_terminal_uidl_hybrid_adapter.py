@@ -29,6 +29,14 @@ def _ordered(source: str, *needles: str) -> None:
     assert positions == sorted(positions)
 
 
+def _capture(source: str) -> str:
+    """One document's capture, in the order it runs: the bounds checks and
+    the switch to the document's context, then its families, which a word
+    of their own captures, under the hold of the relations in normal mode."""
+    return (_word(source, "_RUHA-B-CAPTURE-CURRENT") + "\n"
+            + _word(source, "_RUHA-B-CAPTURE-FAMILIES"))
+
+
 def _content_epoch_oracle(
     *,
     generation: int,
@@ -205,7 +213,7 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
         "_RUHA-B-FINALIZE-STAGED",
         "_RUHA-A.ACTIVE-BANK !",
     )
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     dispatch = _word(source, "_RUHA-B-CAPTURE-RECORD")
     # The menus are captured, or kept from the snapshot before, in one place.
     menus = _word(source, "_RUHA-B-MENUS")
@@ -219,9 +227,26 @@ def test_capture_uses_inactive_banks_and_publishes_selector_last() -> None:
     assert "UDGSN-CAPTURE" not in dispatch
 
 
+def test_a_capture_holds_the_relations_it_checks_for_all_its_families() -> None:
+    """In normal mode a painted document's families are captured under one
+    check of its relations (UTUI-HOLD), made in the document's context.
+    Every-frame checks, the shadow check's full capture, the full refresh
+    and safe mode check the relations in every pass."""
+    source = _source()
+    current = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    _ordered(current, "ASHELL-CTX-SWITCH",
+             "_RUHA-B-HOLD? IF ['] _RUHA-B-CAPTURE-FAMILIES UTUI-HOLD EXIT THEN",
+             "_RUHA-B-CAPTURE-FAMILIES ;")
+    assert "_RUHA-B-FULL @ 0= CHK-EVERY-FRAME? 0= AND" in _word(source, "_RUHA-B-HOLD?")
+    families = _word(source, "_RUHA-B-CAPTURE-FAMILIES")
+    assert "ASHELL-CTX-SWITCH" not in families
+    _ordered(families, "_RUHA-B-MENUS", "UCSN-CAPTURE", "UDGSN-CAPTURE",
+             "USFSN-CAPTURE", "UFLSN-CAPTURE", "UDLSN-CAPTURE", "_RUHA-B-APPEND-DOCUMENT")
+
+
 def test_data_graphics_capture_appends_opaque_document_slices() -> None:
     source = _source()
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     append = _word(source, "_RUHA-B-APPEND-DOCUMENT")
 
     _ordered(
@@ -621,7 +646,7 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
 def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess() -> None:
     source = _source()
     load = _word(source, "_RUHA-B-LOAD-PRIOR")
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     unchanged = _word(source, "_RUHA-B-CONTENT-UNCHANGED?")
     finalize = _word(source, "_RUHA-B-FINALIZE-CONTENT")
     publish = _word(source, "_RUHA-B-PUBLISH")
@@ -683,7 +708,7 @@ def test_content_epoch_is_exact_reuse_provenance_not_a_digest_or_revision_guess(
 def test_document_menu_epochs_certify_exact_and_control_topology_lineage() -> None:
     source = _source()
     append = _word(source, "_RUHA-B-APPEND-DOCUMENT")
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     validate = _word(source, "_RUHA-B-PRIOR-MENU?")
     compare_record = _word(source, "_RUHA-B-MENU-RECORD=?")
     compare_topology = _word(source, "_RUHA-B-MENU-TOPOLOGY-RECORD=?")
@@ -965,7 +990,7 @@ def test_content_epoch_byte_oracle_preserves_only_exact_complete_reuse() -> None
 def test_capture_restores_uctx_and_caches_success_or_failure_by_draw() -> None:
     source = _source()
     query = _word(source, "RUHA-SNAPSHOT-FOR@")
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     tail_span = _word(source, "_RUHA-B-TAIL-SPAN")
     assert "( base used capacity -- tail-a tail-u )" in tail_span
     assert "OVER - DUP 0= IF DROP 2DROP 0 0 EXIT THEN" in tail_span
@@ -1217,7 +1242,7 @@ def test_clean_documents_reuse_only_exact_valid_prior_slices() -> None:
 def test_dirty_empty_and_reuse_decisions_commit_only_with_publication() -> None:
     source = _source()
     dispatch = _word(source, "_RUHA-B-CAPTURE-RECORD")
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     aggregate = _word(source, "_RUHA-B-CAPTURE")
     stage = _word(source, "_RUHA-B-STAGE")
     finalize = _word(source, "_RUHA-B-FINALIZE-STAGED")
@@ -1353,7 +1378,7 @@ def test_final_writer_occlusion_falls_back_the_complete_document_atomically() ->
 def test_a_family_refusal_falls_back_only_its_own_document() -> None:
     source = _source()
     fall_back = _word(source, "_RUHA-B-FALL-BACK")
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
 
     # The refused document leaves as a covered one does: a directory-only
     # identity whose residual CELL shows it, dirty so the next draw retries,
@@ -1772,7 +1797,7 @@ def test_status_family_survives_every_snapshot_and_storage_boundary():
     assert "USFSN-FROZEN-VALIDATE" in prior
     assert "_RUHA-B-REUSE-SFIELD-DESCRIPTOR-U @ 0=" in prior
     assert "_RUHA-B-REUSE-SFIELD-NATIVE-U @ 0= <>" in prior
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     assert "_RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U @ IF" in capture
     assert "USFSN-CAPTURE" in capture
     assert re.search(r"_RUHA-B-SFIELD-COUNT @ 0= AND\s+_RUHA-B-FIELD-COUNT @ 0= AND\s+"
@@ -1797,7 +1822,7 @@ def test_field_family_survives_every_snapshot_and_storage_boundary():
     assert "UFLSN-FROZEN-VALIDATE" in prior
     assert re.search(r"_RUHA-B-REUSE-FIELD-DESCRIPTOR-U @ 0=\s+"
                      r"_RUHA-B-REUSE-FIELD-NATIVE-U @ 0= <> IF 0 EXIT THEN", prior)
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     assert "_RUHA-A.SNAP-FIELD-DESCRIPTOR-BANK-U @ IF" in capture
     assert "UFLSN-CAPTURE" in capture
     assert "_RUHA-B-FIELD-COUNT @ 0= AND" in capture
@@ -1822,7 +1847,7 @@ def test_dialog_family_survives_every_snapshot_and_storage_boundary():
     assert "UDLSN-FROZEN-VALIDATE" in prior
     assert re.search(r"_RUHA-B-REUSE-DIALOG-DESCRIPTOR-U @ 0=\s+"
                      r"_RUHA-B-REUSE-DIALOG-NATIVE-U @ 0= <> IF 0 EXIT THEN", prior)
-    capture = _word(source, "_RUHA-B-CAPTURE-CURRENT")
+    capture = _capture(source)
     # The dialog is captured last, after the document's fields, and only
     # when the composition gave the adapter dialog banks.
     _ordered(capture, "UFLSN-CAPTURE", "_RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @ IF",

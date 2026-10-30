@@ -1597,11 +1597,32 @@ frame before the change driver.
       1,176 of them the snapshot stage's, keeping the menus 64 times and
       sending the same presents; the journey passed in safe mode. Desk's
       shell, at 0.94 million, now costs as much as the snapshot.
-    - **9a.3c.3. The other families keep their slices.** The other
-      families' roots also read widget and model revisions, which count
-      apart from the elements' count, so keeping their slices needs each
-      root's facts from its last capture. Read once 9a.3c.2 is done, with
-      a single walk for the collections and the menus that are captured.
+    - **9a.3c.3. The relations are checked once a capture.** Read once
+      9a.3c.2 and 9a.3a's fourth piece were done: of a typed letter's 2.27
+      million steps the snapshot takes 0.91 million, and 0.30 million of
+      that checks the document's relations, the records that mount widgets
+      on its elements. Each family's capture, and each proof that a
+      family's storage lies apart from the document's, first checks every
+      relation by a pass over the whole element pool, 0.24 million steps in
+      all, and the collections' pass checks each relation again as it
+      reaches it, 0.06 million. The proofs take 0.10 million beside the
+      checks they make. The families a typed letter does not change, the
+      fields, the data graphics and the dialogs, cost 0.13 million between
+      them, nearly all of it these checks and proofs, so keeping their
+      slices would save little that checking once does not. Between the
+      families' passes nothing runs but the captures, which call no
+      application code and write only RUHA's banks and work spans, each
+      proved apart from UIDL's storage, so nothing the check reads changes
+      between them. So a painted document's capture checks its relations
+      once, under UIDL-TUI's guard, and its families' passes find them
+      checked. Every-frame checks, the shadow check's full capture, the
+      full refresh and safe mode check them in every pass, and the shadow
+      check compares the two captures. A family whose roots did not change
+      keeps its slice, and the menus and the collections share one walk
+      when both are captured, once an ordinary frame needs it; the other
+      families' roots read widget and model revisions, which count apart
+      from the elements' count, so keeping their slices needs each root's
+      facts from its last capture.
 - **9a.4. RUHA's banks go.** The snapshot is no longer built: the documents
   that painted are captured into scratch, family by family as 9a.2 does,
   the others keep what the frame on screen was built from, and each

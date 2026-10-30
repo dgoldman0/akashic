@@ -631,6 +631,8 @@ or zero-height element retains its truthful geometry whenever capture returns
 | `UTUI-RESOLVED-VALID?` | `( record available -- flag )` | Validate a copied record and its available byte count. |
 | `UTUI-RESOLVED-OBSERVE` | `( i*x xt -- j*x )` | Run a compound reader under one UIDL-TUI observation. |
 | `UTUI-RESOLVED-TREE-EACH` | `( visitor-xt -- status )` | Visit the complete live tree once in authored preorder under one coherent resolved-state observation. |
+| `UTUI-RESOLVED-TYPE-EACH` | `( type visitor-xt -- status )` | Visit the live elements of one type in pool order, each resolved alone from itself to the root as the tree walk resolves it. |
+| `UTUI-HOLD` | `( i*x xt -- j*x )` | Run a reader that makes several observations of one document with the document's relations checked once for all of them. |
 | `UTUI-STORAGE-DISJOINT?` | `( a u -- flag )` | Validate that a caller span is nonempty, nonwrapping, and disjoint from UIDL-TUI, UIDL, state-tree, and active root-region storage. |
 
 The destination passed to capture must provide at least
@@ -1475,6 +1477,14 @@ callers must not yield or invoke mutating lifecycle operations from that XT.
 observation for the complete walk. Its visitor has the same no-yield and
 no-mutation restriction and must not recursively enter another resolved or
 semantic observation.
+`UTUI-HOLD` runs an XT that makes several such observations of one document,
+as the rich side's capture of a document does family by family. It holds the
+guard until the XT returns and checks the document's mounted relations once;
+while the hold lasts, in the context it checked them in, each observation's
+own check finds them checked. The XT must not run application code or write
+storage other than what it proves apart from UIDL-TUI's. When the relations
+do not hold as the hold begins, nothing is held and each observation checks
+them itself.
 `UTUI-VISITED-COLLECTION-CAPTURE` and
 `UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?` are valid only inside that exact
 visitor for its exact element. `UTUI-COLLECTION-STORAGE-DISJOINT?` starts one
@@ -1537,6 +1547,8 @@ UTUI-ELEM-RESOLVED-CAPTURE ( elem dst avail -- visible status ) Copy a resolved 
 UTUI-RESOLVED-VALID? ( record avail -- flag )       Validate a copied resolved record
 UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )            Run compound resolved reads in one observation
 UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )   Visit one coherent resolved tree in authored order
+UTUI-RESOLVED-TYPE-EACH ( type visitor-xt -- status ) Visit one type's live elements, each resolved alone
+UTUI-HOLD ( i*x xt -- j*x )                       Check the relations once for several observations
 UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
 UTUI-VISITED-COLLECTION-CAPTURE ( key dst cap builder elem -- bytes status ) Capture the current canonical visitor value
 UTUI-VISITED-COLLECTION-STORAGE-DISJOINT? ( a u elem -- flag status ) Check one current visitor source

@@ -45,6 +45,7 @@
 \    UTUI-RESOLVED-TYPE-EACH ( type visitor-xt -- status )
 \      visitor-xt ( elem source-index effective-visible resolved
 \                   available -- )
+\    UTUI-HOLD        ( i*x xt -- j*x )
 \    UTUI-VISITED-COLLECTION-CAPTURE
 \      ( root-key destination capacity builder elem -- bytes status )
 \    UTUI-VISITED-COLLECTION-STORAGE-DISJOINT?
@@ -5842,7 +5843,18 @@ VARIABLE _UCTX-R-COUNT
     _UTUI-MC-NEW-HEAD @ 0= AND
     _UTUI-MC-NEW-COUNT @ 0= AND ;
 
+\ While an observation holds the relations it checked (UTUI-HOLD), in the
+\ context it checked them in, a check finds them as that one did.
+VARIABLE _UTUI-MC-HELD
+VARIABLE _UTUI-MC-HELD-OWNER
+0 _UTUI-MC-HELD ! 0 _UTUI-MC-HELD-OWNER !
+: _UTUI-MC-HELD?  ( -- flag )
+    _UTUI-MC-HELD @ 0= IF 0 EXIT THEN
+    _UTUI-MC-HELD-OWNER @ _UCTX-LIVE-OWNER @ =
+    _UTUI-MC-STATUS @ _UTUI-MC-S-OK = AND ;
+
 : _UTUI-MC-RELATIONS-READY?  ( -- flag )
+    _UTUI-MC-HELD? IF -1 EXIT THEN
     _UTUI-MC-STATUS @ _UTUI-MC-S-OK <> IF 0 EXIT THEN
     _UCTX-STAGE-QUIESCENT? 0= IF 0 EXIT THEN
     _UTUI-MC-RELATIONS-CANONICAL? 0= IF 0 EXIT THEN
@@ -5855,6 +5867,22 @@ VARIABLE _UCTX-R-COUNT
         _UTUI-MC-V-SEEN @ _UTUI-MC-COUNT @ U> IF 0 EXIT THEN
     REPEAT DROP
     _UTUI-MC-V-SEEN @ _UTUI-MC-COUNT @ = ;
+
+\ UTUI-HOLD ( i*x xt -- j*x )
+\   Run XT, an observation of the current document made in several passes,
+\   with the document's relations checked once for all of them.  XT must
+\   run no application code and write only storage it proves apart from
+\   UIDL's, as the rich side's capture of a document does, so nothing in it
+\   changes what the check reads; the guarded entry keeps every other core
+\   out until XT returns.  Each pass then finds the relations checked.
+\   When they do not hold, XT runs with nothing held and each pass checks
+\   them itself.  A hold inside a hold keeps the outer one.
+: _UTUI-HOLD-BODY  ( i*x xt -- j*x )
+    _UTUI-MC-HELD @ IF EXECUTE EXIT THEN
+    _UTUI-MC-RELATIONS-READY? _UTUI-MC-HELD !
+    _UCTX-LIVE-OWNER @ _UTUI-MC-HELD-OWNER !
+    CATCH 0 _UTUI-MC-HELD ! 0 _UTUI-MC-HELD-OWNER ! THROW ;
+: UTUI-HOLD  ( i*x xt -- j*x )  _UTUI-HOLD-BODY ;
 
 \ UCTX-LIVE-DISOWN ( -- )
 \   After saving the active context during deactivation, remove the live
@@ -6758,10 +6786,13 @@ CREATE _UTUI-MI-RESOLVED-MEM UTUI-RESOLVED-SIZE 7 + ALLOT
         =
     THEN ;
 
+\ The relation the pass is at lies in the ledger, which a hold checked whole.
 : _UTUI-MI-CURRENT-VALID?  ( -- flag )
     _UTUI-MI-ACTIVE @ 0= IF 0 EXIT THEN
     _UTUI-MI-CURRENT @ DUP 0= IF DROP 0 EXIT THEN
-    DUP _UTUI-MC-RELATION-VALID? 0= IF DROP 0 EXIT THEN
+    _UTUI-MC-HELD? 0= IF
+        DUP _UTUI-MC-RELATION-VALID? 0= IF DROP 0 EXIT THEN
+    THEN
     DUP _UTUI-MCR-WIDGET@ _UTUI-MI-WIDGET @ =
     OVER _UTUI-MCR-SOURCE@ _UTUI-MI-SOURCE @ = AND
     OVER _UTUI-MCR-GENERATION@ _UTUI-MI-GENERATION @ = AND
@@ -8148,6 +8179,7 @@ GUARD _utui-guard
     CONSTANT _utui-visited-collection-storage-disjoint-q-xt
 ' UTUI-COLLECTION-STORAGE-DISJOINT?
     CONSTANT _utui-collection-storage-disjoint-q-xt
+' UTUI-HOLD CONSTANT _utui-hold-xt
 
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS          _utui-focus-xt          _utui-guard WITH-GUARD ;
@@ -8199,6 +8231,11 @@ GUARD _utui-guard
 
 : UTUI-RESOLVED-TYPE-EACH  ( type visitor-xt -- status )
     _utui-resolved-type-each-xt _utui-guard WITH-GUARD ;
+
+\ The guard is held until XT returns, so no other core's entry changes the
+\ document between the observations XT makes, each of which takes the
+\ guard again as the same owner.
+: UTUI-HOLD  ( i*x xt -- j*x )  _utui-hold-xt _utui-guard WITH-GUARD ;
 
 : UTUI-STORAGE-DISJOINT?  ( address length -- flag )
     _utui-storage-disjoint-q-xt UTUI-RESOLVED-OBSERVE ;

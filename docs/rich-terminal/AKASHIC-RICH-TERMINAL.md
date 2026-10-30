@@ -1236,6 +1236,10 @@ menus read, nor an ancestor, nor a child of one of its menus, has changed
 since the count of element changes kept with that slice, and every menubar
 the document holds has a record (`URF-MENUS-SINCE?`). Safe mode, the shadow
 check's full capture and the full refresh capture the menus always.
+A dirty document's families are captured under one check of its relations
+(`UTUI-HOLD`), since nothing but the captures runs between their passes;
+with every-frame checks on, and in those full captures, each family's passes
+check the relations themselves.
 Known-empty documents add nothing. An unchanged document slice may be reused
 only after complete UMSN,
 UCSN, and UDGSN validation of its prior directory and six payload spans. A
