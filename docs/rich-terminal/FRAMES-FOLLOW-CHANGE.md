@@ -1380,7 +1380,18 @@ frame before the change driver.
     runs, their references and the text each in one block, and numbers the
     runs as a copy row by row numbers them. The shadow check's glyph stage
     compares each such region with its whole plan, as it compares a region
-    copied row by row.
+    copied row by row. **Done** on 2026-10-30 (3cf5ff42). A typed letter's
+    frame builds in 2.27 million steps against 2.49 for 801f46cb, each run
+    apart; the shell's batch takes 0.39 million against 0.64, its glyph
+    work 0.09 million against 0.33. It sends the same 18 DELTAs and bytes.
+    With the shadow check, the typing run made 3,521 comparisons without a
+    difference, 364 of them the shell's glyph stage's, and the canonical
+    journey 14,491, 1,380 of them the glyph stage's, keeping 250 regions
+    whole and sending the same presents; the journey passed in safe mode.
+    The snapshot, at 0.91 million, again costs most, then the producer's
+    candidate and copy at 0.65 million. Of the shell's 0.39 million, 0.20
+    million plans the shell model again, which the copy of the part would
+    take from the frame on screen.
   - **9a.3b. The producer follows change.** The producer keeps each bank's
     root facts in normal mode too. When the facts show that only some
     roots' contents moved, with every document in its place, the same roots
