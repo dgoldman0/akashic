@@ -7653,19 +7653,21 @@ _UTUI-SFI-RESOLVED-MEM 7 + -8 AND CONSTANT _UTUI-SFI-RESOLVED
     _UTUI-SFI-INDEX @ 0 1
     _UTUI-SFI-RESOLVED UTUI-RESOLVED-SIZE _UTUI-SFI-VISITOR @ EXECUTE ;
 
+\ Only a canonical status label is resolved: a status field's capture reads
+\ the label and its ancestors alone, so resolving every other element would
+\ add nothing to it.
 : _UTUI-SFI-SOURCE  ( -- status )
     _UTUI-SFI-ELEM @ UE.TYPE @ 0= IF _UTUI-MC-S-OK EXIT THEN
+    _UTUI-SFI-ELEM @ _UTUI-STATUS-LABEL-CANONICAL? 0= IF
+        _UTUI-MC-S-OK EXIT
+    THEN
     _UTUI-SFI-ELEM @ _UTUI-RS-RESOLVE
     DUP UTUI-RESOLVED-S-INVALID = IF DROP _UTUI-MC-S-INVALID EXIT THEN
     UTUI-RESOLVED-S-OK = IF
         _UTUI-RS-VISIBLE @ _UTUI-SFI-VISIBLE !
         _UTUI-SFI-RESOLVED _UTUI-RS-DST ! _UTUI-RS-WRITE
         0 _UTUI-RS-DST !
-        _UTUI-SFI-VISIBLE @ IF
-            _UTUI-SFI-ELEM @ _UTUI-STATUS-LABEL-CANONICAL? IF
-                _UTUI-SFI-VISIT
-            THEN
-        THEN
+        _UTUI-SFI-VISIBLE @ IF _UTUI-SFI-VISIT THEN
     THEN
     _UTUI-RS-CLEAR _UTUI-MC-S-OK ;
 

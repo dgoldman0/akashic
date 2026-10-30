@@ -1313,3 +1313,12 @@ def test_generic_mounted_relation_uctx_has_no_provider_path() -> None:
 
     for word in ("UCTX-SAVE", "UCTX-RESTORE", "UTUI-WIDGET-SET", "UTUI-QUIESCE"):
         assert "SEMANTIC" not in _definition(source, word)
+
+
+def test_status_field_iterator_resolves_only_canonical_labels() -> None:
+    # A status field's capture reads its label and the label's ancestors, so
+    # the iterator tests an element's shape before it resolves the element.
+    source = UIDL_TUI.read_text()
+    body = _definition(source, "_UTUI-SFI-SOURCE")
+    assert body.index("_UTUI-STATUS-LABEL-CANONICAL?") < body.index("_UTUI-RS-RESOLVE")
+    assert body.count("_UTUI-RS-RESOLVE") == 1
