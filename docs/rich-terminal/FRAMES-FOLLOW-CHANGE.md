@@ -1634,13 +1634,35 @@ frame before the change driver.
       families' roots read widget and model revisions, which count apart
       from the elements' count, so keeping their slices needs each root's
       facts from its last capture.
-- **9a.4. RUHA's banks go.** The snapshot is no longer built: the documents
-  that painted are captured into scratch, family by family as 9a.2 does,
-  the others keep what the frame on screen was built from, and each
-  document's place is read from its record. The full driver captures into
-  scratch too, sized to one build. A shadow stage builds the snapshot as
-  well and compares the captures with its slices. The full refresh lowers
-  what it captures and compares the items with those on screen.
+- **9a.4. RUHA's storage grows to need.** Read once 9a.3 was done: Desk
+  carves RUHA's storage as it loads, 20.0 million bytes in one block. The
+  two snapshot banks take 17.5 million of it, each family's span sized for
+  every document at every UIDL limit. The work spans take 2.5 million, the
+  collections' work sized for every collection descriptor a bank could
+  hold. The journeys' snapshots used 12 to 40 KiB (part 0). This step was
+  first to drop the snapshot and capture into scratch. But most frames
+  still go through the full lowering, which lowers every document's
+  capture: in the canonical journey, 55 of the 65 checked frames hold
+  instruments, which keep them off the change driver. Without the snapshot
+  the full driver would capture every visible document again, and a
+  capture of every visible document cost 6.2 million steps in the typing
+  run and about 8 million in the journey (part 8). So the snapshot stays
+  the record of the captures the frame on screen was built from, which a
+  clean document's next snapshot copies, and its fixed storage goes. RUHA
+  takes Desk's memory source and keeps both banks and its work spans in
+  one block of its own, each span with a capacity of its own, and Desk
+  carves only RUHA's record and its document records. Before a build, the
+  bank about to be built grows to what the snapshot on screen used and
+  half again. A build that still runs short in a family is dropped: that
+  family's spans double, with the work spans their capacities require, and
+  the snapshot is built again, so a document falls back only when the
+  memory source refuses. Growing copies the snapshot on screen into the
+  new block and moves its spans there, so it stays readable, and the new
+  block is proved apart from other storage as the producer's blocks are.
+  Every family keeps storage, so the families a caller could leave without
+  banks go, and so does 9a.2's capture into scratch, which nothing on the
+  frame's path calls. The shadow check's full capture and the full refresh
+  grow the same way. It sends what it sent before.
 - **9c. The rest of the DELTA.** The other changes the terminal accepts in
   a DELTA go through the change driver as well, such as controls that come
   or go within what a DELTA may carry. The whole-screen comparison remains
@@ -1830,7 +1852,11 @@ Taken on 2026-10-26:
    into scratch when it changes, in every mode. A renderer-neutral copy of
    each element's content would cost memory and give no current renderer
    anything it reads; safe mode builds every frame from live state, so it
-   would not read one either.
+   would not read one either. The snapshot adapter's record of the captures
+   the frame on screen was built from is not the projection's, and it stays
+   (9a.4, 2026-10-30): the full driver lowers every document's capture, and
+   a document that did not change has its capture copied from it rather
+   than taken again. Its storage grows to what the snapshots need.
 9. **What safe mode trusts of the frame on screen** (part 4). Its record is
    sealed. In safe mode the record of a frame takes a hardware CRC when the
    frame is sent, and the CRC is checked before the next DELTA or click uses
