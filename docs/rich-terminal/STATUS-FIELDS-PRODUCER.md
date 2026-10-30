@@ -34,7 +34,7 @@ There is no independent hardcoded field-count limit.
 The producer reserves separate status descriptor and native source banks,
 208-byte static records, a dense label/value text bank, and 40-byte source
 correlations. Each possible object adds one claim, the corresponding residual
-planner events, and one frozen projection rectangle. Both immutable target
+planner events, and that claim kept whole in each target bank. Both immutable target
 banks reserve used static records, correlations and text. All capacities enter
 the same checked storage calculation and owner/preflight accounting as the
 older families. The embedded hybrid/admission records and target headers grow

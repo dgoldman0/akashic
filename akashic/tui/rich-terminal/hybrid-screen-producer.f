@@ -520,7 +520,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-TB.INSTRUMENT-UNIT-BYTES ( bank -- a ) 192 + ;
 : _RTHP-TB.VALID       ( bank -- a ) 200 + ;
 : _RTHP-TB.DOCUMENT-COUNT ( bank -- a ) 208 + ;
-: _RTHP-TB.PROJECTION-RECTS ( bank -- a ) 216 + ;
+\ How many claims the bank keeps whole (_RTHP-PACK-CLAIMS-A), the
+\ candidate's claims in their order.
+: _RTHP-TB.CLAIMS      ( bank -- a ) 216 + ;
 
 0x3354475450485452 CONSTANT _RTHP-TARGET-VALID-MAGIC  \ "RTHPTGT3"
 
@@ -551,12 +553,25 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ bank names none; only the extension names one, once it has built it.
 : _RTHP-TB.XBLOCK                  ( bank -- a ) 368 + ;
 : _RTHP-TB.XBLOCK-BYTES            ( bank -- a ) 376 + ;
-\ How many of the projection's rectangles (_RTHP-TB.PROJECTION-RECTS),
-\ which come first, are the menus' claims.
-: _RTHP-TB.MENU-RECTS              ( bank -- a ) 384 + ;
+\ How many of the claims, which come first, are the menus'.
+: _RTHP-TB.MENU-CLAIMS             ( bank -- a ) 384 + ;
+\ Where the candidate's lanes began, as its own fields record them
+\ (_RTHP.FIELD-BASE-TEXT and the rest): the text and claim bytes before
+\ its fields and before its dialogs, and the claim bytes before its
+\ instruments and before its status fields.
+: _RTHP-TB.FIELD-BASE-TEXT         ( bank -- a ) 392 + ;
+: _RTHP-TB.FIELD-BASE-CLAIMS       ( bank -- a ) 400 + ;
+: _RTHP-TB.DIALOG-BASE-TEXT        ( bank -- a ) 408 + ;
+: _RTHP-TB.DIALOG-BASE-CLAIMS      ( bank -- a ) 416 + ;
+: _RTHP-TB.BASE-CLAIMS             ( bank -- a ) 424 + ;
+: _RTHP-TB.STATIC-BASE-CLAIMS      ( bank -- a ) 432 + ;
+\ The features the terminal had negotiated when the candidate was built.
+: _RTHP-TB.FEATURES                ( bank -- a ) 440 + ;
 
-392 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
-32 CONSTANT _RTHP-PROJECTION-RECT-SIZE
+448 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
+\ A claim's rectangle: its four cells from _RUCL-C.ROW0, which decide
+\ which rows a frame plans again.
+32 CONSTANT _RTHP-CLAIM-RECT-SIZE
 
 : _RTHP-TE.ID          ( entry -- a )      ;
 : _RTHP-TE.ROW         ( entry -- a )  8 + ;
@@ -779,7 +794,7 @@ VARIABLE _RTHP-TBS-TOTAL
         _RTHP-TBS-ADD 0= IF 0 0 EXIT THEN
     _RTHP-TBS-DOCUMENTS @ RUHA-DOCUMENT-SIZE _RTHP-TBS-MUL-ADD
         0= IF 0 0 EXIT THEN
-    _RTHP-TBS-CONTROLS @ _RTHP-PROJECTION-RECT-SIZE _RTHP-TBS-MUL-ADD
+    _RTHP-TBS-CONTROLS @ RUCL-CLAIM-SIZE _RTHP-TBS-MUL-ADD
         0= IF 0 0 EXIT THEN
     _RTHP-TBS-TOTAL @ -1 ;
 
@@ -789,12 +804,12 @@ VARIABLE _RTHP-TBC-P
 \ Capacity comes from the same caller bounds as the live planner; only used
 \ records and unit bytes are copied.  Packed UNIT-A cells are byte offsets,
 \ so neither source reuse nor moving a bank can leave borrowed pointers.
-\ Each instrument also reserves one compact projection coverage rectangle.
+\ Each instrument also reserves one claim.
 : _RTHP-INSTRUMENT-BANK-BYTES?
   ( regions instruments unit-bytes -- bytes flag )
     _RTHP-ALIGN8? 0= IF DROP 2DROP 0 0 EXIT THEN >R
     RTE-INSTRUMENT-SIZE RUIP-CORRELATION-SIZE +
-    _RTHP-PROJECTION-RECT-SIZE + _RTHP-U32*?
+    RUCL-CLAIM-SIZE + _RTHP-U32*?
         0= IF 2DROP R> DROP 0 0 EXIT THEN
     R> _RTHP-U32+? 0= IF 2DROP 0 0 EXIT THEN >R
     RTE-INSTRUMENT-REGION-SIZE _RTHP-U32*?
@@ -804,11 +819,11 @@ VARIABLE _RTHP-TBC-P
 : _RTHP-STATIC-BANK-BYTES? ( count text-bytes -- bytes flag )
     _RTHP-ALIGN8? 0= IF DROP DROP 0 0 EXIT THEN >R
     RTE-STATIC-SIZE _RTHP-STATIC-CORR-SIZE +
-    _RTHP-PROJECTION-RECT-SIZE + _RTHP-U32*?
+    RUCL-CLAIM-SIZE + _RTHP-U32*?
         0= IF DROP R> DROP 0 0 EXIT THEN
     R> _RTHP-U32+? ;
 
-\ SERIES owns no projection rectangle: only the graph's objects cover cells.
+\ SERIES owns no claim: only the graph's objects cover cells.
 : _RTHP-SERIES-BANK-BYTES? ( count sample-bytes -- bytes flag )
     _RTHP-ALIGN8? 0= IF DROP DROP 0 0 EXIT THEN >R
     RTE-SERIES-SIZE _RTHP-SERIES-CORR-SIZE + _RTHP-U32*?
@@ -2148,7 +2163,7 @@ VARIABLE _RTHP-PK-INSTRUMENT-REGIONS-U
 VARIABLE _RTHP-PK-INSTRUMENTS-U
 VARIABLE _RTHP-PK-INSTRUMENT-CORR-U
 VARIABLE _RTHP-PK-INSTRUMENT-UNITS-U
-VARIABLE _RTHP-PK-PROJECTION-RECTS-U
+VARIABLE _RTHP-PK-CLAIMS-U
 VARIABLE _RTHP-PK-PACK-A
 VARIABLE _RTHP-PK-CURSOR
 VARIABLE _RTHP-PK-CONTROLS-A
@@ -2162,7 +2177,7 @@ VARIABLE _RTHP-PK-INSTRUMENT-REGIONS-A
 VARIABLE _RTHP-PK-INSTRUMENTS-A
 VARIABLE _RTHP-PK-INSTRUMENT-CORR-A
 VARIABLE _RTHP-PK-INSTRUMENT-UNITS-A
-VARIABLE _RTHP-PK-PROJECTION-RECTS-A
+VARIABLE _RTHP-PK-CLAIMS-A
 VARIABLE _RTHP-PK-CONTROL
 VARIABLE _RTHP-PK-INSTRUMENT
 VARIABLE _RTHP-PK-OLD-A
@@ -2207,7 +2222,7 @@ VARIABLE _RTHP-PK-SERIES
     0 _RTHP-PK-DIRECTORY-U !
     0 _RTHP-PK-INSTRUMENT-REGIONS-U ! 0 _RTHP-PK-INSTRUMENTS-U !
     0 _RTHP-PK-INSTRUMENT-CORR-U ! 0 _RTHP-PK-INSTRUMENT-UNITS-U !
-    0 _RTHP-PK-PROJECTION-RECTS-U !
+    0 _RTHP-PK-CLAIMS-U !
     0 _RTHP-PK-PACK-A ! 0 _RTHP-PK-CURSOR !
     0 _RTHP-PK-CONTROLS-A ! 0 _RTHP-PK-CORR-A !
     0 _RTHP-PK-SOURCE-A ! 0 _RTHP-PK-ITEMS-A !
@@ -2215,7 +2230,7 @@ VARIABLE _RTHP-PK-SERIES
     0 _RTHP-PK-DIRECTORY-A !
     0 _RTHP-PK-INSTRUMENT-REGIONS-A ! 0 _RTHP-PK-INSTRUMENTS-A !
     0 _RTHP-PK-INSTRUMENT-CORR-A ! 0 _RTHP-PK-INSTRUMENT-UNITS-A !
-    0 _RTHP-PK-PROJECTION-RECTS-A !
+    0 _RTHP-PK-CLAIMS-A !
     0 _RTHP-PK-CONTROL ! 0 _RTHP-PK-INSTRUMENT !
     0 _RTHP-PK-OLD-A ! 0 _RTHP-PK-OLD-U !
     0 _RTHP-PK-SPAN-A ! 0 _RTHP-PK-SPAN-U ! 0 _RTHP-PK-SPAN-CAP !
@@ -2430,12 +2445,12 @@ VARIABLE _RTHP-SH-P
         0= IF DROP 0 EXIT THEN
     _RTHP-PK-P @ _RTHP.MAX-STATICS @ _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
-    _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @ SWAP U> IF 0 EXIT THEN
-    _RTHP-PK-BANK @ _RTHP-TB.MENU-RECTS @
-        _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @ U> IF 0 EXIT THEN
-    _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @
-        _RTHP-PROJECTION-RECT-SIZE _RTHP-U32*? 0= IF DROP 0 EXIT THEN
-        DUP _RTHP-PK-PROJECTION-RECTS-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.CLAIMS @ SWAP U> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.MENU-CLAIMS @
+        _RTHP-PK-BANK @ _RTHP-TB.CLAIMS @ U> IF 0 EXIT THEN
+    _RTHP-PK-BANK @ _RTHP-TB.CLAIMS @
+        RUCL-CLAIM-SIZE _RTHP-U32*? 0= IF DROP 0 EXIT THEN
+        DUP _RTHP-PK-CLAIMS-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.SERIES-COUNT @ RTE-SERIES-SIZE _RTHP-U32*?
         0= IF DROP 0 EXIT THEN DUP _RTHP-PK-SERIES-U ! _RTHP-PK-ADD? 0= IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE _RTHP-U32*?
@@ -2462,8 +2477,7 @@ VARIABLE _RTHP-SH-P
     _RTHP-PK-STATICS-U @ _RTHP-PK-TAKE _RTHP-PK-STATICS-A !
     _RTHP-PK-STATIC-CORR-U @ _RTHP-PK-TAKE _RTHP-PK-STATIC-CORR-A !
     _RTHP-PK-STATIC-TEXT-U @ _RTHP-PK-TAKE _RTHP-PK-STATIC-TEXT-A !
-    _RTHP-PK-PROJECTION-RECTS-U @ _RTHP-PK-TAKE
-        _RTHP-PK-PROJECTION-RECTS-A !
+    _RTHP-PK-CLAIMS-U @ _RTHP-PK-TAKE _RTHP-PK-CLAIMS-A !
     _RTHP-PK-SERIES-U @ _RTHP-PK-TAKE _RTHP-PK-SERIES-A !
     _RTHP-PK-SERIES-CORR-U @ _RTHP-PK-TAKE _RTHP-PK-SERIES-CORR-A !
     _RTHP-PK-SERIES-SAMPLES-U @ _RTHP-PK-TAKE _RTHP-PK-SERIES-SAMPLES-A !
@@ -2484,6 +2498,7 @@ VARIABLE _RTHP-SH-P
     _RTHP-PK-P @ _RTHP.INSTRUMENT-CORR-A @ 7 AND OR
     _RTHP-PK-P @ _RTHP.STATICS-A @ 7 AND OR
     _RTHP-PK-P @ _RTHP.STATIC-CORR-A @ 7 AND OR
+    _RTHP-PK-P @ _RTHP.CLAIMS-A @ 7 AND OR
     _RTHP-PK-P @ _RTHP.SERIES-A @ 7 AND OR
     _RTHP-PK-P @ _RTHP.SERIES-CORR-A @ 7 AND OR
     _RTHP-PK-P @ _RTHP.SERIES-SAMPLES-A @ 7 AND OR IF 0 EXIT THEN
@@ -2535,6 +2550,8 @@ VARIABLE _RTHP-SH-P
     _RTHP-PK-P @ _RTHP.STATIC-TEXT-A @
         _RTHP-PK-BANK @ _RTHP-TB.STATIC-TEXT-BYTES @
         _RTHP-PK-P @ _RTHP.STATIC-TEXT-U @ _RTHP-PK-BOUNDED-SOURCE? 0= IF 0 EXIT THEN
+    _RTHP-PK-P @ _RTHP.CLAIMS-A @ _RTHP-PK-CLAIMS-U @
+        _RTHP-PK-P @ _RTHP.CLAIMS-U @ _RTHP-PK-BOUNDED-SOURCE? 0= IF 0 EXIT THEN
     _RTHP-PK-P @ _RTHP.SERIES-A @ _RTHP-PK-SERIES-U @
         _RTHP-PK-P @ _RTHP.SERIES-U @ _RTHP-PK-BOUNDED-SOURCE? 0= IF 0 EXIT THEN
     _RTHP-PK-P @ _RTHP.SERIES-CORR-A @ _RTHP-PK-SERIES-CORR-U @
@@ -2604,23 +2621,25 @@ VARIABLE _RTHP-SH-P
     RUCL-CLAIM-SIZE / DUP _RTHP-PK-P @ _RTHP.MENU-CLAIMS @ U< IF
         DROP 0 EXIT
     THEN
-    _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS !
-    _RTHP-PK-P @ _RTHP.MENU-CLAIMS @ _RTHP-PK-BANK @ _RTHP-TB.MENU-RECTS !
+    _RTHP-PK-BANK @ _RTHP-TB.CLAIMS !
+    _RTHP-PK-P @ _RTHP.MENU-CLAIMS @ _RTHP-PK-BANK @ _RTHP-TB.MENU-CLAIMS !
     _RTHP-PK-LAYOUT? 0= IF 0 EXIT THEN
     _RTHP-PK-SOURCE-SPANS? ;
 
-\ Keep the exact coverage geometry of every claim in each acknowledged bank,
-\ the menus' first, so the next frame plans again only the rows of claims
-\ that came, went or moved.  The bank must keep the menus' too: a menu's
-\ controls have no CELL rectangle, so its host geometry cannot recover them
-\ after the next source snapshot replaces it.  Source generations and text
-\ revisions are intentionally absent: only these rectangles, and which are
-\ menus', determine which CELL pixels the residual planner suppresses.
+\ Keep every claim whole in each acknowledged bank, the menus' first, so
+\ that the next frame plans again only the rows of claims that came, went
+\ or moved, and a candidate taken from the bank has its claims.  The bank
+\ must keep the menus' too: a menu's controls have no CELL rectangle, so
+\ its host geometry cannot recover them after the next source snapshot
+\ replaces it.  Only the claims' rectangles, and which are menus', decide
+\ which CELL pixels the residual planner suppresses.
 VARIABLE _RTHP-PR-RECT
 VARIABLE _RTHP-PR-COLS
 VARIABLE _RTHP-PR-ROWS
 
-: _RTHP-PROJECTION-RECT?  ( rect cols rows -- flag )
+\ ( rect cols rows -- flag ) RECT, a claim's rectangle (_RUCL-C.ROW0), lies
+\ on a surface of COLS and ROWS and holds at least one cell.
+: _RTHP-CLAIM-RECT?  ( rect cols rows -- flag )
     _RTHP-PR-ROWS ! _RTHP-PR-COLS ! _RTHP-PR-RECT !
     _RTHP-PR-RECT @ @ 0< IF 0 EXIT THEN
     _RTHP-PR-RECT @ 8 + @ 0< IF 0 EXIT THEN
@@ -2629,17 +2648,15 @@ VARIABLE _RTHP-PR-ROWS
     _RTHP-PR-RECT @ 16 + @ _RTHP-PR-ROWS @ U> IF 0 EXIT THEN
     _RTHP-PR-RECT @ 24 + @ _RTHP-PR-COLS @ U> 0= ;
 
-: _RTHP-PK-PROJECTION-RECTS?  ( -- flag )
-    _RTHP-PK-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
-        _RTHP-PK-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
-            _RUCL-C.ROW0 DUP
+: _RTHP-PK-CLAIMS?  ( -- flag )
+    _RTHP-PK-BANK @ _RTHP-TB.CLAIMS @ 0 ?DO
+        _RTHP-PK-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RUCL-C.ROW0
         _RTHP-PK-BANK @ _RTHP-TB.COLS @
-        _RTHP-PK-BANK @ _RTHP-TB.ROWS @ _RTHP-PROJECTION-RECT? 0= IF
-            DROP 0 UNLOOP EXIT
-        THEN
-        _RTHP-PK-PROJECTION-RECTS-A @ I _RTHP-PROJECTION-RECT-SIZE * +
-            _RTHP-PROJECTION-RECT-SIZE MOVE
-    LOOP -1 ;
+        _RTHP-PK-BANK @ _RTHP-TB.ROWS @ _RTHP-CLAIM-RECT?
+            0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-PK-P @ _RTHP.CLAIMS-A @ _RTHP-PK-CLAIMS-A @
+        _RTHP-PK-CLAIMS-U @ MOVE -1 ;
 
 \ A packed instrument's unit, status field's text and series' samples are
 \ addresses into the bank's own copies, as a control's text is, so a batch
@@ -2736,7 +2753,7 @@ VARIABLE _RTHP-PR-ROWS
         _RTHP-PK-STATICS-A @ I RTE-STATIC-SIZE * +
             _RTHP-PK-STATIC-REBASE? 0= IF 0 UNLOOP EXIT THEN
     LOOP
-    _RTHP-PK-PROJECTION-RECTS? 0= IF 0 EXIT THEN
+    _RTHP-PK-CLAIMS? 0= IF 0 EXIT THEN
     _RTHP-PK-BANK @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         _RTHP-PK-CONTROLS-A @ I RTE-CONTROL-SIZE * +
             _RTHP-PK-CONTROL-REBASE? 0= IF
@@ -2834,14 +2851,14 @@ VARIABLE _RTHP-PR-ROWS
 : _RTHP-PACK-STATIC-TEXT-A ( bank -- a )
     DUP _RTHP-PACK-STATIC-CORR-A SWAP _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE * + ;
 
-: _RTHP-PACK-PROJECTION-RECTS-A  ( bank -- a )
+: _RTHP-PACK-CLAIMS-A  ( bank -- a )
     DUP _RTHP-PACK-STATIC-TEXT-A SWAP _RTHP-TB.STATIC-TEXT-BYTES @
         _RTHP-ALIGN8? DROP + ;
 
 
 : _RTHP-PACK-SERIES-A ( bank -- a )
-    DUP _RTHP-PACK-PROJECTION-RECTS-A SWAP _RTHP-TB.PROJECTION-RECTS @
-        _RTHP-PROJECTION-RECT-SIZE * + ;
+    DUP _RTHP-PACK-CLAIMS-A SWAP _RTHP-TB.CLAIMS @
+        RUCL-CLAIM-SIZE * + ;
 : _RTHP-PACK-SERIES-CORR-A ( bank -- a )
     DUP _RTHP-PACK-SERIES-A SWAP _RTHP-TB.SERIES-COUNT @ RTE-SERIES-SIZE * + ;
 : _RTHP-PACK-SERIES-SAMPLES-A ( bank -- a )
@@ -2936,7 +2953,21 @@ VARIABLE _RTHP-OR-REGION
     _RTHP-TG-P @ _RTHP.STATIC-TEXT-USED @ _RTHP-TG-BANK @ _RTHP-TB.STATIC-TEXT-BYTES !
     _RTHP-TG-P @ _RTHP.PICTURE-EPOCH @ _RTHP-TG-BANK @ _RTHP-TB.PICTURE-EPOCH !
     _RTHP-TG-P @ _RTHP.DOCUMENT-COUNT @
-        _RTHP-TG-BANK @ _RTHP-TB.DOCUMENT-COUNT ! ;
+        _RTHP-TG-BANK @ _RTHP-TB.DOCUMENT-COUNT !
+    _RTHP-TG-P @ _RTHP.FIELD-BASE-TEXT @
+        _RTHP-TG-BANK @ _RTHP-TB.FIELD-BASE-TEXT !
+    _RTHP-TG-P @ _RTHP.FIELD-BASE-CLAIMS @
+        _RTHP-TG-BANK @ _RTHP-TB.FIELD-BASE-CLAIMS !
+    _RTHP-TG-P @ _RTHP.DIALOG-BASE-TEXT @
+        _RTHP-TG-BANK @ _RTHP-TB.DIALOG-BASE-TEXT !
+    _RTHP-TG-P @ _RTHP.DIALOG-BASE-CLAIMS @
+        _RTHP-TG-BANK @ _RTHP-TB.DIALOG-BASE-CLAIMS !
+    _RTHP-TG-P @ _RTHP.BASE-CLAIMS-USED @
+        _RTHP-TG-BANK @ _RTHP-TB.BASE-CLAIMS !
+    _RTHP-TG-P @ _RTHP.STATIC-BASE-CLAIMS @
+        _RTHP-TG-BANK @ _RTHP-TB.STATIC-BASE-CLAIMS !
+    _RTHP-TG-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
+        _RTHP-TG-BANK @ _RTHP-TB.FEATURES ! ;
 
 : _RTHP-TARGET-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-TARGET-ABORT _RTHP-TG-P !
@@ -7744,31 +7775,35 @@ VARIABLE _RTHP-RD-ROW-CAP
     -1 ;
 
 VARIABLE _RTHP-RD-PROJECTION-SAME
-VARIABLE _RTHP-RD-RECTS
+VARIABLE _RTHP-RD-CLAIMS
 VARIABLE _RTHP-RD-RECT
 
-\ The current claims are the acknowledged bank's rectangles: as many, as
+\ ( index -- rect ) the rectangle of the acknowledged bank's claim INDEX.
+: _RTHP-RD-ACKED@  ( index -- rect )
+    RUCL-CLAIM-SIZE * _RTHP-RD-CLAIMS @ + _RUCL-C.ROW0 ;
+
+\ The current claims have the acknowledged bank's rectangles: as many, as
 \ many of them menus', and each in its place.
 : _RTHP-RD-PROJECTION-SAME?  ( -- flag )
     _RTHP-RD-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
-        _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ <> IF 0 EXIT THEN
+        _RTHP-RD-BANK @ _RTHP-TB.CLAIMS @ <> IF 0 EXIT THEN
     _RTHP-RD-P @ _RTHP.MENU-CLAIMS @
-        _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @ <> IF 0 EXIT THEN
-    _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
+        _RTHP-RD-BANK @ _RTHP-TB.MENU-CLAIMS @ <> IF 0 EXIT THEN
+    _RTHP-RD-BANK @ _RTHP-TB.CLAIMS @ 0 ?DO
         _RTHP-RD-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
-            _RUCL-C.ROW0 _RTHP-PROJECTION-RECT-SIZE
-        _RTHP-RD-RECTS @ I _RTHP-PROJECTION-RECT-SIZE * +
-            _RTHP-PROJECTION-RECT-SIZE COMPARE IF 0 UNLOOP EXIT THEN
+            _RUCL-C.ROW0 _RTHP-CLAIM-RECT-SIZE
+        I _RTHP-RD-ACKED@ _RTHP-CLAIM-RECT-SIZE
+            COMPARE IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
 VARIABLE _RTHP-RD-FIND
 
-\ The places of the acknowledged rectangles, and of the current claims, of
-\ one kind: the menus' when MENU, the others' otherwise.
+\ The places of the acknowledged claims, and of the current ones, of one
+\ kind: the menus' when MENU, the others' otherwise.
 : _RTHP-RD-ACKED-RANGE  ( menu -- end start )
-    IF _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @ 0 ELSE
-        _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @
-        _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @
+    IF _RTHP-RD-BANK @ _RTHP-TB.MENU-CLAIMS @ 0 ELSE
+        _RTHP-RD-BANK @ _RTHP-TB.CLAIMS @
+        _RTHP-RD-BANK @ _RTHP-TB.MENU-CLAIMS @
     THEN ;
 : _RTHP-RD-CURRENT-RANGE  ( menu -- end start )
     IF _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ 0 ELSE
@@ -7781,9 +7816,8 @@ VARIABLE _RTHP-RD-FIND
 : _RTHP-RD-ACKED-RECT?  ( rect menu -- flag )
     SWAP _RTHP-RD-FIND !
     _RTHP-RD-ACKED-RANGE ?DO
-        _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
-        _RTHP-RD-RECTS @ I _RTHP-PROJECTION-RECT-SIZE * +
-            _RTHP-PROJECTION-RECT-SIZE
+        _RTHP-RD-FIND @ _RTHP-CLAIM-RECT-SIZE
+        I _RTHP-RD-ACKED@ _RTHP-CLAIM-RECT-SIZE
         COMPARE 0= IF -1 UNLOOP EXIT THEN
     LOOP 0 ;
 
@@ -7792,21 +7826,21 @@ VARIABLE _RTHP-RD-FIND
 : _RTHP-RD-CURRENT-RECT?  ( rect menu -- flag )
     SWAP _RTHP-RD-FIND !
     _RTHP-RD-CURRENT-RANGE ?DO
-        _RTHP-RD-FIND @ _RTHP-PROJECTION-RECT-SIZE
+        _RTHP-RD-FIND @ _RTHP-CLAIM-RECT-SIZE
         _RTHP-RD-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
-            _RUCL-C.ROW0 _RTHP-PROJECTION-RECT-SIZE
+            _RUCL-C.ROW0 _RTHP-CLAIM-RECT-SIZE
         COMPARE 0= IF -1 UNLOOP EXIT THEN
     LOOP 0 ;
 
-\ The rows of each acknowledged rectangle the current claims lack.
+\ The rows of each acknowledged claim's rectangle the current claims lack.
 : _RTHP-RD-MARK-OLD-PROJECTION?  ( -- flag )
     _RTHP-RD-PROJECTION-SAME @ IF -1 EXIT THEN
-    _RTHP-RD-BANK @ _RTHP-TB.PROJECTION-RECTS @ 0 ?DO
-        _RTHP-RD-RECTS @ I _RTHP-PROJECTION-RECT-SIZE * + DUP _RTHP-RD-RECT !
-        _RTHP-RD-COLS @ _RTHP-RD-ROWS @ _RTHP-PROJECTION-RECT? 0= IF
+    _RTHP-RD-BANK @ _RTHP-TB.CLAIMS @ 0 ?DO
+        I _RTHP-RD-ACKED@ DUP _RTHP-RD-RECT !
+        _RTHP-RD-COLS @ _RTHP-RD-ROWS @ _RTHP-CLAIM-RECT? 0= IF
             0 UNLOOP EXIT
         THEN
-        _RTHP-RD-RECT @ I _RTHP-RD-BANK @ _RTHP-TB.MENU-RECTS @ U<
+        _RTHP-RD-RECT @ I _RTHP-RD-BANK @ _RTHP-TB.MENU-CLAIMS @ U<
             _RTHP-RD-CURRENT-RECT? 0= IF
             _RTHP-RD-RECT @ 16 + @ _RTHP-RD-RECT @ @ ?DO
                 I _RTHP-RD-DAMAGE!
@@ -7825,7 +7859,7 @@ VARIABLE _RTHP-RD-FIND
         _RTHP-RD-P @ _RTHP.CLAIMS-A @ OVER _RTHP-RD-P @
             _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
     THEN
-    _RTHP-RD-BANK @ _RTHP-PACK-PROJECTION-RECTS-A _RTHP-RD-RECTS !
+    _RTHP-RD-BANK @ _RTHP-PACK-CLAIMS-A _RTHP-RD-CLAIMS !
     _RTHP-RD-PROJECTION-SAME? _RTHP-RD-PROJECTION-SAME !
     _RTHP-RD-MARK-OLD-PROJECTION? 0= IF DROP 0 EXIT THEN
     _RTHP-RD-PROJECTION-SAME @ IF DROP -1 EXIT THEN

@@ -16,7 +16,7 @@ takes a picture, its CELL view shows only what the picture is.
 `max-dialog-native`. Zero selects no picture bank. Each picture the arena can
 take adds a 192-byte UPICSN descriptor, one 208-byte static record and its
 40-byte correlation, one claim with its residual-planner events, which a
-figure leaves unused, and one projection rectangle in each target bank. A static is a status field or a
+figure leaves unused, and that claim kept whole in each target bank. A static is a status field or a
 picture, so `MAX-STATICS` is `max-status-native / 72` plus `max-pictures`.
 `RTHP-FIRST-CAPACITIES` starts at zero pictures; with a memory source the
 arena grows to the pictures a draw shows, half again as other content does.

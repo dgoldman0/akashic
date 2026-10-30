@@ -816,7 +816,7 @@ def _packed_bank_usage(
     cell_capacity: int,
     max_rows: int,
     rows: int,
-    projection_rect_count: int,
+    claim_count: int,
     document_count: int,
     target_count: int,
     control_count: int,
@@ -832,7 +832,7 @@ def _packed_bank_usage(
         + max_records * 24
         + max_controls * 192
         + max_controls * 56
-        + max_controls * 32
+        + max_controls * 80
         + align8(max_control_bytes)
         + cell_capacity * 120
         + cell_capacity * 16
@@ -851,7 +851,7 @@ def _packed_bank_usage(
         + align8(glyph_text_bytes)
         + document_count * 160
         + align8(rows)
-        + projection_rect_count * 32
+        + claim_count * 80
     )
     return used_bytes, bank_bytes
 
@@ -2902,9 +2902,9 @@ def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None
         glyph_count=12,
         source_text_bytes=99,
         glyph_text_bytes=48,
-        max_rows=3, rows=3, projection_rect_count=7,
+        max_rows=3, rows=3, claim_count=7,
     )
-    assert used == capacity == 4_576
+    assert used == capacity == 4_912
 
     partial, same_capacity = _packed_bank_usage(
         **maximum,
@@ -2914,7 +2914,7 @@ def test_full_ack_bank_capacity_covers_every_configured_candidate_byte() -> None
         glyph_count=8,
         source_text_bytes=61,
         glyph_text_bytes=29,
-        max_rows=3, rows=3, projection_rect_count=4,
+        max_rows=3, rows=3, claim_count=4,
     )
     assert partial < same_capacity == capacity
 
@@ -3020,7 +3020,7 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
         glyph_count=8,
         source_text_bytes=61,
         glyph_text_bytes=29,
-        max_rows=3, rows=3, projection_rect_count=4,
+        max_rows=3, rows=3, claim_count=4,
     )
     three_used, same_capacity = _packed_bank_usage(
         max_documents=3,
@@ -3034,7 +3034,7 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
         glyph_count=8,
         source_text_bytes=61,
         glyph_text_bytes=29,
-        max_rows=3, rows=3, projection_rect_count=4,
+        max_rows=3, rows=3, claim_count=4,
     )
     _, four_document_capacity = _packed_bank_usage(
         max_documents=4,
@@ -3048,7 +3048,7 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
         glyph_count=8,
         source_text_bytes=61,
         glyph_text_bytes=29,
-        max_rows=3, rows=3, projection_rect_count=4,
+        max_rows=3, rows=3, claim_count=4,
     )
     assert three_used - partial_used == 160
     assert same_capacity == three_document_capacity
@@ -6434,7 +6434,7 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 392
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 448
     assert _offset(source, "_RTHP-TB.XBLOCK") == 368
     assert _offset(source, "_RTHP-TB.XBLOCK-BYTES") == 376
     assert _offset(source, "_RTHP-TB.PICTURE-EPOCH") == 336

@@ -44,6 +44,9 @@ def _definitions(producer_source: str) -> dict[str, str]:
         "tui/rich-terminal/engine.f",
         "tui/rich-terminal/uidl-control-planner.f",
         "tui/rich-terminal/uidl-instrument-planner.f",
+        # Each target bank keeps the candidate's claims whole, so its size
+        # takes the claim's.
+        "tui/rich-terminal/uidl-claim-ledger.f",
         # Content headers: normalization keeps an unchanged body's revision.
         "tui/rich-terminal/uidl-semantic-content-stx1.f",
         "tui/rich-terminal/uidl-semantic-items-itm1.f",

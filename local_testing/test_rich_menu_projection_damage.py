@@ -114,18 +114,18 @@ def test_closed_menu_and_residue_only_changes_survive_clean_cell_damage(harness)
     assert match
     directory_size = int(match[1])
     header = harness.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
-    # No controls or glyphs: the projection's rectangles follow the one
-    # directory slot, and the one there is a menu's.
+    # No controls or glyphs: the claims follow the one directory slot, and
+    # the one there is a menu's.
     bank = harness.allocate(bytes(header + directory_size)
-                            + struct.pack("<4Q", 1, 0, 3, 4))
+                            + struct.pack("<10Q", 0, 0, 0, 0, 0, 0, 1, 0, 3, 4))
     harness.field(bank, "_RTHP-TB.DOCUMENT-COUNT", 1)
-    harness.field(bank, "_RTHP-TB.PROJECTION-RECTS", 1)
-    harness.field(bank, "_RTHP-TB.MENU-RECTS", 1)
+    harness.field(bank, "_RTHP-TB.CLAIMS", 1)
+    harness.field(bank, "_RTHP-TB.MENU-CLAIMS", 1)
     damage = harness.allocate(bytes(rows))
     cell_damage = harness.allocate(bytes(rows))
     residue_damage = harness.allocate(bytes((0, 0, 0, 0, 0, 1, 0, 0)))
     harness.field(producer, "_RTHP.ARENA-A", bank)
-    harness.field(producer, "_RTHP.ARENA-U", header + directory_size + 32)
+    harness.field(producer, "_RTHP.ARENA-U", header + directory_size + 80)
     harness.field(producer, "_RTHP.ROW-DAMAGE-A", damage)
     for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-BANK", bank),
                         ("_RTHP-RD-ROWS", rows), ("_RTHP-RD-COLS", 4),
@@ -161,7 +161,8 @@ def test_full_packed_target_fills_its_exact_capacity(harness):
                 + 2 * harness.constant("RUCP-CORRELATION-SIZE") + 16
                 + 27 * harness.constant("RTE-GLYPH-RUN-PLAN-ITEM-SIZE")
                 + 27 * harness.constant("RGRP-TEXT-REF-SIZE") + 112
-                + 2 * harness.constant("RUHA-DOCUMENT-SIZE") + 2 * 32)
+                + 2 * harness.constant("RUHA-DOCUMENT-SIZE")
+                + 2 * harness.constant("RUCL-CLAIM-SIZE"))
     assert bank_bytes == expected
     storage = harness.allocate(b"LEFTGUAR" + bytes(bank_bytes) + b"RIGHTGUA")
     bank = storage + 8
@@ -171,8 +172,8 @@ def test_full_packed_target_fills_its_exact_capacity(harness):
                         ("_RTHP-TB.COUNT", 2), ("_RTHP-TB.CONTROL-COUNT", 2),
                         ("_RTHP-TB.MENU-CONTROL-COUNT", 2),
                         ("_RTHP-TB.DOCUMENT-COUNT", 2),
-                        ("_RTHP-TB.PROJECTION-RECTS", 2),
-                        ("_RTHP-TB.MENU-RECTS", 1),
+                        ("_RTHP-TB.CLAIMS", 2),
+                        ("_RTHP-TB.MENU-CLAIMS", 1),
                         ("_RTHP-TB.GLYPH-SLOT-COUNT", 27),
                         ("_RTHP-TB.SOURCE-TEXT-USED", 13),
                         ("_RTHP-TB.MENU-TEXT-USED", 13),
@@ -181,8 +182,8 @@ def test_full_packed_target_fills_its_exact_capacity(harness):
     harness.variable("_RTHP-PK-P", producer)
     harness.variable("_RTHP-PK-BANK", bank)
     assert harness.call("_RTHP-PK-LAYOUT?")
-    assert harness.value("_RTHP-PK-PROJECTION-RECTS-A") == bank + bank_bytes - 64
-    assert harness.value("_RTHP-PK-PROJECTION-RECTS-U") == 64
+    assert harness.value("_RTHP-PK-CLAIMS-A") == bank + bank_bytes - 160
+    assert harness.value("_RTHP-PK-CLAIMS-U") == 160
     assert harness.value("_RTHP-PK-CURSOR") == bank + bank_bytes
     packed_bytes = harness.value("_RTHP-PK-TOTAL")
     assert packed_bytes == bank_bytes - header - 2 * entry
@@ -191,26 +192,26 @@ def test_full_packed_target_fills_its_exact_capacity(harness):
     assert harness.call("_RTHP-PACKED-BANK?", bank, producer)
 
     # A packed size the layout does not give cannot be admitted, nor more
-    # menus than rectangles, nor an otherwise full target whose caller arena
+    # menus than claims, nor an otherwise full target whose caller arena
     # is one byte short.
     harness.field(bank, "_RTHP-TB.PACKED-BYTES", packed_bytes - 16)
     assert not harness.call("_RTHP-PACKED-BANK?", bank, producer)
     harness.field(bank, "_RTHP-TB.PACKED-BYTES", packed_bytes)
-    harness.field(bank, "_RTHP-TB.MENU-RECTS", 3)
+    harness.field(bank, "_RTHP-TB.MENU-CLAIMS", 3)
     assert not harness.call("_RTHP-PACKED-BANK?", bank, producer)
-    harness.field(bank, "_RTHP-TB.MENU-RECTS", 1)
+    harness.field(bank, "_RTHP-TB.MENU-CLAIMS", 1)
     harness.field(producer, "_RTHP.ARENA-U", bank_bytes - 1)
     assert not harness.call("_RTHP-PACKED-BANK?", bank, producer)
     assert memory.read_bytes(storage, 8) == b"LEFTGUAR"
     assert memory.read_bytes(bank + bank_bytes, 8) == b"RIGHTGUA"
 
 
-def test_unchanged_clone_preserves_projection_rectangles_and_their_packed_extent(harness):
+def test_unchanged_clone_preserves_claims_and_their_packed_extent(harness):
     memory = harness.runtime.memory
     producer, bank_bytes = _bounded_target_producer(harness)
     header = harness.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
     directory = harness.constant("RUHA-DOCUMENT-SIZE")
-    packed_bytes = directory + 2 * 32  # A menu's rectangle, then another.
+    packed_bytes = directory + 2 * 80  # A menu's claim, then another.
     copy_bytes = header + packed_bytes
     storage = harness.allocate(b"LEFTGUAR" + bytes(bank_bytes)
                                + b"MIDGUARD" + b"?" * bank_bytes + b"RIGHTGUA")
@@ -222,15 +223,16 @@ def test_unchanged_clone_preserves_projection_rectangles_and_their_packed_extent
         harness.field(producer, name, value)
     for name, value in (("_RTHP-TB.COLS", 3), ("_RTHP-TB.ROWS", 9),
                         ("_RTHP-TB.DOCUMENT-COUNT", 1),
-                        ("_RTHP-TB.PROJECTION-RECTS", 2),
-                        ("_RTHP-TB.MENU-RECTS", 1),
+                        ("_RTHP-TB.CLAIMS", 2),
+                        ("_RTHP-TB.MENU-CLAIMS", 1),
                         ("_RTHP-TB.PACKED-BYTES", packed_bytes),
                         ("_RTHP-TB.VALID", harness.constant("_RTHP-TARGET-VALID-MAGIC")),
                         ("_RTHP-TB.DRAW", 7), ("_RTHP-TB.SOURCE-GEN", 9),
                         ("_RTHP-TB.CONTENT-EPOCH", 11)):
         harness.field(active, name, value)
     memory.write_bytes(active + header, b"D" * directory)
-    rects = struct.pack("<8Q", 0, 0, 1, 3, 2, 1, 5, 2)
+    rects = (struct.pack("<10Q", 1, 9, 1, 0, 0, 0, 0, 0, 1, 3)
+             + struct.pack("<10Q", 1, 9, 1, 1, 0, 0, 2, 1, 5, 2))
     memory.write_bytes(active + header + directory, rects)
     assert harness.call("_RTHP-PACKED-BANK?", active, producer)
     original = memory.read_bytes(active, bank_bytes)
@@ -244,7 +246,7 @@ def test_unchanged_clone_preserves_projection_rectangles_and_their_packed_extent
                         ("_RTHP-TB.SOURCE-GEN", 10), ("_RTHP-TB.CONTENT-EPOCH", 12)):
         struct.pack_into("<Q", expected, harness.offset(name), value)
     assert memory.read_bytes(pending, copy_bytes) == expected
-    assert memory.read_bytes(pending + header + directory, 64) == rects
+    assert memory.read_bytes(pending + header + directory, 160) == rects
     assert memory.read_bytes(pending + copy_bytes, bank_bytes - copy_bytes) == b"?" * (bank_bytes - copy_bytes)
     assert memory.read_bytes(active, bank_bytes) == original
     assert memory.read_bytes(storage, 8) == b"LEFTGUAR"
@@ -377,11 +379,11 @@ def _claim_damage(h, menus, current, acked_menus, acked, rows=8, cols=12):
                         ("_RTHP.ROW-DAMAGE-A", damage)):
         h.field(producer, name, value)
     bank = h.allocate(bytes(h.constant("_RTHP-TARGET-BANK-HEADER-SIZE") + 4096))
-    h.field(bank, "_RTHP-TB.PROJECTION-RECTS", len(acked_menus) + len(acked))
-    h.field(bank, "_RTHP-TB.MENU-RECTS", len(acked_menus))
-    rects_a, = h.results("_RTHP-PACK-PROJECTION-RECTS-A", bank)
-    memory.write_bytes(rects_a, b"".join(struct.pack("<4Q", *rect)
-                                         for rect in list(acked_menus) + list(acked)))
+    h.field(bank, "_RTHP-TB.CLAIMS", len(acked_menus) + len(acked))
+    h.field(bank, "_RTHP-TB.MENU-CLAIMS", len(acked_menus))
+    claims_b, = h.results("_RTHP-PACK-CLAIMS-A", bank)
+    memory.write_bytes(claims_b, b"".join(struct.pack("<10Q", 1, 1, 1, i, 0, 0, *rect)
+                                          for i, rect in enumerate(list(acked_menus) + list(acked))))
     for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-BANK", bank),
                         ("_RTHP-RD-ROWS", rows), ("_RTHP-RD-COLS", cols)):
         h.variable(name, value)

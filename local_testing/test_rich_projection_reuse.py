@@ -10,7 +10,7 @@ from test_rich_glyph_growth import MASK64
 @pytest.fixture(params=['python', 'native'])
 def projection(request):
     h = InstrumentHarness(request.param, (
-        '_RTHP-RD-MARK-CURRENT-CLAIMS?', '_RTHP-PACK-PROJECTION-RECTS-A',
+        '_RTHP-RD-MARK-CURRENT-CLAIMS?', '_RTHP-PACK-CLAIMS-A',
         '_RTHP-U-CLONE?', '_RTHP-RD-SCAN-ACTIVE-ROW?',
     ))
     h.setup(units=b'', kinds=(), controls=4)
@@ -61,7 +61,9 @@ def test_content_revision_does_not_rebuild_unchanged_coverage(projection):
     # is unchanged. The optimization may not clear a previously dirty row.
     h.runtime.memory.write_bytes(h.damage, bytes((255, 0)))
     assert damage(h, before) == bytes((255, 0))
-    assert h.runtime.memory.read_bytes(h.packed('PROJECTION-RECTS'), 32) == struct.pack('<4Q', *rects[0])
+    # The bank keeps the claim whole, as it was captured.
+    assert h.runtime.memory.read_bytes(h.packed('CLAIMS'), 80) == struct.pack(
+        '<10Q', 1, 1, 1, 0, 0, 0, *rects[0])
 
 
 def test_acknowledged_empty_residual_rows_keep_the_coverage_proof(projection):
@@ -107,7 +109,7 @@ def test_menu_and_nonmenu_coverage_have_distinct_authority(projection):
 
 @pytest.mark.parametrize('rect', [(-1, 0, 1, 8), (0, -1, 1, 8), (1, 0, 1, 8),
                                  (0, 2, 1, 2), (0, 0, 3, 8), (0, 0, 1, 9)])
-def test_bad_projection_rectangles_cannot_be_captured(projection, rect):
+def test_bad_claim_rectangles_cannot_be_captured(projection, rect):
     h = projection
     claims(h, [rect])
     assert not h.call('_RTHP-PACK-ADMITTED-CANDIDATE', h.bank, h.producer)
@@ -118,7 +120,7 @@ def test_bad_projection_rectangles_cannot_be_captured(projection, rect):
 def test_invalid_old_rectangle_falls_back_without_overrunning_damage(projection):
     h = projection
     capture(h, [(0, 0, 1, 8)])
-    h.runtime.memory.write64(h.packed('PROJECTION-RECTS') + 16, 3)
+    h.runtime.memory.write64(h.packed('CLAIMS') + 48 + 16, 3)
     assert not h.call('_RTHP-RD-MARK-CURRENT-CLAIMS?')
     assert h.runtime.memory.read_bytes(h.damage + 2, 8) == b'RIGHTGUA'
 
@@ -132,7 +134,7 @@ def test_clone_owns_projection_coverage_after_source_reuse(projection):
                         ('_RTHP-U-CONTENT-EPOCH', 2)):
         h.variable(name, value)
     assert h.call('_RTHP-U-CLONE?')
-    offset = h.packed('PROJECTION-RECTS') - h.bank
+    offset = h.packed('CLAIMS') - h.bank
     h.runtime.memory.write_bytes(h.claims, bytes(320))
-    assert h.runtime.memory.read_bytes(h.other + offset, 32) == struct.pack('<4Q', 0, 0, 2, 8)
+    assert h.runtime.memory.read_bytes(h.other + offset + 48, 32) == struct.pack('<4Q', 0, 0, 2, 8)
     assert h.runtime.memory.read_bytes(h.bank, h.bank_size) == before

@@ -47,11 +47,13 @@ RSHSP-PART-HEADER-SIZE 96 = _FM-A
 0 RSHSP-PART.CORRELATIONS 24 = _FM-A 0 RSHSP-PART.ACTIONS 40 = _FM-A
 0 RSHSP-PART.MEMBERSHIP 56 = _FM-A 0 RSHSP-PART.NEXT-REGION 72 = _FM-A
 0 RSHSP-PART.NEXT-OBJECT 80 = _FM-A
-\ The bank of the frame names the part and the bytes it uses, and counts
-\ the menus' rectangles among its projection's.
+\ The bank of the frame names the part and the bytes it uses, counts the
+\ menus' claims among its claims, and records where its lanes began and
+\ the features it was built under.
 0 _RTHP-TB.XBLOCK 368 = _FM-A 0 _RTHP-TB.XBLOCK-BYTES 376 = _FM-A
-0 _RTHP-TB.MENU-RECTS 384 = _FM-A
-_RTHP-TARGET-BANK-HEADER-SIZE 392 = _FM-A
+0 _RTHP-TB.MENU-CLAIMS 384 = _FM-A
+0 _RTHP-TB.FIELD-BASE-TEXT 392 = _FM-A 0 _RTHP-TB.FEATURES 440 = _FM-A
+_RTHP-TARGET-BANK-HEADER-SIZE 448 = _FM-A
 _FM-DONE
 ''', minimum=20)
 
