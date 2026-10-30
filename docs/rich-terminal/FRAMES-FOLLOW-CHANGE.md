@@ -1749,7 +1749,15 @@ frame before the change driver.
       resulting targets, and takes the control out of its ledger when the
       terminal accepts the transaction. The root facts' judge holds each
       control that went to a root that went or moved. This takes the item
-      views going and the tab coming, 3 frames.
+      views going and the tab coming, 3 frames. **Done** on 2026-10-30
+      (e4ad55fc comparison, shell and family emitter; 8ff2cf07 engine
+      drops). In the canonical journey with the shadow check the 3 frames
+      go out as DELTAs, with 2 drops and 1 definition: 52 DELTAs and 34
+      STARTs, against 49 and 37 before 9c.2a. The journey made 25,285
+      comparisons without a difference, and passed in safe mode with 52
+      DELTAs and 35 STARTs. A typed letter builds in 1.92 million steps,
+      and the typing run with the shadow check made 7,227 comparisons
+      without a difference.
     - **9c.2b. Overlays that open or close.** Fields and dialogs may come
       and go in the comparison. Desk's shell keeps the identity of each
       region the frame on screen has by its part in the screen, gives a
