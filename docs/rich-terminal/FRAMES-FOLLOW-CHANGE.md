@@ -1416,6 +1416,41 @@ frame before the change driver.
       reads come from the bank on screen, which then keeps its claims whole
       rather than their rectangles alone. A shadow stage lowers the
       candidate whole as well and compares the two banks.
+      Read once 9a.3b.2 was done. Of a typed letter's 1.09 million steps in
+      the candidate, the text area's content takes 0.35 million. Most of
+      the rest goes to roots whose facts did not move: 0.16 million to the
+      status fields' lane, most of it checking each field against every
+      claim placed before it, 0.11 million to the item views' content and
+      0.16 million to the menus, their claims and the fields; the root facts
+      take 0.10 million and the pictures 0.08. Everything after the
+      lowering reads the candidate: the shell takes its claims, counts and
+      plans, the candidate's checks prove its numbering and where each
+      lane's text and claims begin, and the copy packs it. So the candidate
+      itself is taken from the bank on screen, each item numbered and
+      stamped as a full lowering numbers and stamps it, and the moved roots
+      are lowered into it in place. In two steps, each sending what it sent
+      before:
+      - **9a.3b.3a. The bank keeps whole claims.** Each bank keeps every
+        claim whole, the menus' first, where it kept their rectangles. It
+        also records where its fields' and dialogs' text and claims began,
+        where its claims before the instruments and before the status fields
+        ended, and the features the terminal had negotiated. The rows
+        planned again are still found from the claims' rectangles.
+      - **9a.3b.3b. The candidate from the bank on screen.** The candidate
+        is unpacked from the bank on screen when a comparison would follow
+        the facts, only text roots and status fields moved, every document
+        lies where it lay, the bank was built under the same features and
+        surface, and it holds no instruments, series or pictures. The unpack
+        takes the bank's controls, correlations, text, status fields and
+        claims, with their counts and where each lane began. Each moved root
+        is then lowered alone into its place, its content packed where the
+        old lay and the text after it moved. It must keep its kind,
+        visibility, rectangle, depth and identity, so that its claim, and
+        every check of a later root against the claims before it, stay what
+        they were on screen; otherwise the candidate is lowered in full. The
+        copy then builds the pending bank as before. With the shadow check
+        on, the candidate is lowered in full as well, and the two
+        candidates must be the same byte for byte.
     Other kinds of root, such as menus, tab sets and dialogs, take the copy
     once an ordinary use needs it; until then a frame that moves one takes
     the full driver.
