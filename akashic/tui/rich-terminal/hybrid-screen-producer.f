@@ -13583,10 +13583,9 @@ VARIABLE _RTHP-D-SORT-RUNS
     UNTIL
     _RTHP-D-SORT-FINISH ;
 
-: _RTHP-D-INDEX-WORK?  ( -- flag )
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-INDEX-N !
-    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
-        DUP _RTHP-D-INDEX-A-N ! _RTHP-D-INDEX-N @ U> IF 0 EXIT THEN
+\ The work space of an index of _RTHP-D-INDEX-N pending controls: a control
+\ map, then the two banks' indexes, in the producer's ORDER2 span.
+: _RTHP-D-INDEX-SPACE?  ( -- flag )
     _RTHP-D-INDEX-N @ 24 _RTHP-U32*? 0= IF DROP 0 EXIT THEN
     DUP _RTHP-D-P @ _RTHP.ORDER2-U @ U> IF DROP 0 EXIT THEN
     DUP IF
@@ -13596,6 +13595,12 @@ VARIABLE _RTHP-D-SORT-RUNS
     _RTHP-D-INDEX-N @ 8 * DUP _RTHP-D-INDEX-BYTES !
     _RTHP-D-P @ _RTHP.ORDER2-A @ + DUP _RTHP-D-INDEX-A !
     _RTHP-D-INDEX-BYTES @ + _RTHP-D-INDEX-B ! -1 ;
+
+: _RTHP-D-INDEX-WORK?  ( -- flag )
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-INDEX-N !
+    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
+        DUP _RTHP-D-INDEX-A-N ! _RTHP-D-INDEX-N @ U> IF 0 EXIT THEN
+    _RTHP-D-INDEX-SPACE? ;
 
 \ Active IDs need not follow graph order after earlier semantic reordering.
 \ Sorting both ID indexes proves a complete, duplicate-free bijection, then
@@ -15076,6 +15081,34 @@ VARIABLE _RTHP-D-TARGET-E
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ OVER _RTHP-KF.CONTROLS !
     _RTHP-D-LAST-ID @ OVER _RTHP-KF.LAST-ID !
     _RTHP-D-PENDING @ SWAP _RTHP-KF.BANK ! ;
+
+\ A START's bank keeps the facts a comparison keeps for a DELTA's, so the
+\ frame after it may follow them (FRAMES-FOLLOW-CHANGE, 9c.1): for a bank
+\ built for Desk's shell, with no glyph runs, the index of its controls
+\ sorted by identity, as the comparison sorts a pending bank's, its control
+\ count and its last ID.  Its controls hold fresh IDs in place order, which
+\ the index requires.  Safe mode keeps none, since it reuses nothing an
+\ earlier frame built, and a bank whose index cannot be made keeps none.
+: _RTHP-START-FACTS  ( producer -- )
+    DUP _RTHP-D-P ! 0 OVER _RTHP.PENDING-FACTS _RTHP-KF.BANK !
+    CHK-SAFE? IF DROP EXIT THEN
+    DUP _RTHP.SHELL-BUILT @ 0= IF DROP EXIT THEN
+    _RTHP.TARGET-PENDING @ DUP 0= IF DROP EXIT THEN _RTHP-D-PENDING !
+    _RTHP-D-PENDING @ _RTHP-TB.GLYPH-SLOT-COUNT @ IF EXIT THEN
+    _RTHP-D-PENDING @ _RTHP-TB.FIRST-OBJECT @ _RTHP-D-PENDING-FIRST !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-INDEX-N !
+    0 _RTHP-D-INDEX-A-N !
+    _RTHP-D-INDEX-SPACE? 0= IF EXIT THEN
+    _RTHP-D-PENDING-CONTROL-INDEX? 0= IF EXIT THEN
+    _RTHP-D-INDEX-B @ _RTHP-D-INDEX-N @ _RTHP-D-PENDING @
+        _RTHP-D-SORT-IDENTITIES? 0= IF EXIT THEN
+    _RTHP-D-NO-GLYPHS
+    0 _RTHP-D-LAST-ID !
+    _RTHP-D-INDEX-N @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+        DUP _RTHP-D-LAST-ID @ U> IF _RTHP-D-LAST-ID ! ELSE DROP THEN
+    LOOP
+    _RTHP-D-KEEP-FACTS ;
 
 \ A packed status field's text, which lies in its bank's copy.
 : _RTHP-D-STATIC-SPAN ( field -- a u )  DUP @ SWAP 8 + @ ;
@@ -16803,6 +16836,7 @@ VARIABLE _RTHP-DIAG-ALONE-REBUILDS
         _RTHP-P-P @ _RTHP-TARGET-ABORT
         _RTHP-P-P @ _RTHP-CANCEL-STATUS EXIT
     THEN DROP
+    _RTHP-P-P @ _RTHP-START-FACTS
     _RTHP-P-P @ _RTHP-SEAL-PENDING
     _RTHP-PH-START-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 

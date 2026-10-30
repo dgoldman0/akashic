@@ -42,7 +42,8 @@ class FollowHarness(DeltaHarness):
         InstrumentHarness.__init__(self, backend, (
             "_RTHP-DELTA-CANDIDATE?", "_RTHP-D-PLAN-BIND?", "_RTHP-U-CLONE?",
             "_RTHP-U-FENCE-PLAN?", "_RTHP-U-COMMIT", "_RTHP-TARGET-PUBLISH?",
-            "_RTHP-R-BANK-CEILING?", "_RTHP-C-FOLLOWS?", "_RTHP-C-COPY?"))
+            "_RTHP-R-BANK-CEILING?", "_RTHP-C-FOLLOWS?", "_RTHP-C-COPY?",
+            "_RTHP-START-FACTS"))
         self.runtime.evaluate(HEAP.encode())
         self.variable("_CF-HEAP", self.allocate(bytes(1 << 18)))
         self.runtime.evaluate(b"' _CF-ALLOCATE _FSHD-ALLOCATE-XT ! ' _CF-FREE _FSHD-FREE-XT !")
@@ -75,6 +76,27 @@ class FollowHarness(DeltaHarness):
         self.field(self.producer, "_RTHP.SHELL-BUILT", MASK64)
         assert self.call("_RTHP-DELTA-CANDIDATE?", self.producer)
         assert self.variable("_RTHP-DIAG-PLACED") == 0
+        self.field(self.producer, "_RTHP.PHASE", self.constant("_RTHP-PH-LIVE"))
+        assert self.call("_RTHP-TARGET-PUBLISH?", self.producer)
+        assert self.read("ACTIVE-FACTS") == self.other
+
+    def start_bank(self, *, runs=()):
+        """A frame built for the shell whose bank goes out as a START, with
+        RUNS of its own, and each bank's annex for its sorted index."""
+        self.delta_pair(pending=runs)
+        for number in (0, 1):
+            self.field(self.producer, f"_RTHP.FACTS-INDEX{number}-A", self.cursor)
+            self.cursor += 8
+        assert self.cursor <= self.arena + self.arena_size
+        self.field(self.producer, "_RTHP.FACTS-INDEX-U", 8)
+        self.field(self.producer, "_RTHP.SHELL-BUILT", MASK64)
+
+    def start_frame(self):
+        """The START's bank, which nothing compares, keeps the facts a
+        comparison would keep for it, and goes out."""
+        self.start_bank()
+        self.results("_RTHP-START-FACTS", self.producer)
+        assert self.read("PENDING-FACTS") == self.other
         self.field(self.producer, "_RTHP.PHASE", self.constant("_RTHP-PH-LIVE"))
         assert self.call("_RTHP-TARGET-PUBLISH?", self.producer)
         assert self.read("ACTIVE-FACTS") == self.other
@@ -307,6 +329,40 @@ def test_a_frame_whose_roots_did_not_move_copies_the_bank_on_screen(follow):
     assert h.read("FIRST-OBJECT") == 100
     assert h.read("PENDING-FACTS") == h.other
     h.assert_unchanged_active()
+
+
+def test_a_start_s_bank_keeps_facts_the_next_frame_follows(follow):
+    """A bank that went out as a START keeps its controls' sorted index, as
+    a comparison keeps a DELTA's bank's, so the next frame is paired by place
+    and copied from it (FRAMES-FOLLOW-CHANGE, 9c.1)."""
+    h = follow
+    h.start_frame()
+    kept = h.producer + h.offset("_RTHP.ACTIVE-FACTS")
+    assert h.runtime.memory.read64(kept + h.offset("_RTHP-KF.CONTROLS")) == 1
+    # The START's one control holds the first fresh ID, the frontier.
+    assert h.runtime.memory.read64(kept + h.offset("_RTHP-KF.LAST-ID")) == h.frontier
+    h.second_frame(runs=())
+    h.variable("_RTHP-C-P", h.producer)
+    assert h.call("_RTHP-C-FOLLOWS?")
+    assert h.call("_RTHP-C-COPY?", h.producer)
+    assert h.variable("_RTHP-DIAG-COPIED") == 1
+    assert h.read("PENDING-FACTS") == h.other
+    h.assert_unchanged_active()
+
+
+@pytest.mark.parametrize("why", ("runs", "safe", "alone", "kept"))
+def test_a_start_keeps_no_facts_in_safe_mode_alone_or_with_runs(follow, why):
+    """Desk's shell builds no runs, and a START's glyph facts would need the
+    comparison's glyph plan; safe mode reuses nothing an earlier frame built;
+    a bank built alone is compared in full."""
+    h = follow
+    h.start_bank(runs=("B",) if why == "runs" else ())
+    if why == "safe":
+        h.variable("CHK-SAFE-MODE", MASK64)
+    if why == "alone":
+        h.field(h.producer, "_RTHP.SHELL-BUILT", 0)
+    h.results("_RTHP-START-FACTS", h.producer)
+    assert h.read("PENDING-FACTS") == (h.other if why == "kept" else 0)
 
 
 @pytest.mark.parametrize("why", ("menus", "runs", "safe"))

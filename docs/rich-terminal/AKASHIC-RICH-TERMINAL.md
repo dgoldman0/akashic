@@ -970,7 +970,11 @@ A retained DELTA comparison keeps the facts it proved about the bank it
 built: every glyph slot canonical, the visible count, the lowest object ID,
 and the identity-sorted control index. Only that exact bank's publication
 hands them to the active role; any other publication leaves none, and
-abandoning the pending bank drops them. The next comparison uses them only for
+abandoning the pending bank drops them. A bank built for Desk's shell that
+goes out as a START keeps the same facts, so the frame after it may follow
+them: it holds no glyph slots, and its controls' index is sorted by identity
+as the comparison sorts a pending bank's. In safe mode a START keeps none.
+The next comparison uses them only for
 that exact bank, and still proves its object IDs one exact slot permutation
 and its control IDs below the new namespace. This rests on two facts the
 producer maintains: normalization after the audit writes only object IDs and

@@ -5711,8 +5711,24 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
     # Facts are kept only by a comparison that has passed every fallible
     # step, dropped whenever the pending bank is abandoned, and handed to the
     # active role only by that exact bank's publication.
-    # The comparison and the copy of the bank on screen keep them.
-    assert source.count("_RTHP-D-KEEP-FACTS") == 3
+    # The comparison, the copy of the bank on screen and a START keep them.
+    assert source.count("_RTHP-D-KEEP-FACTS") == 4
+    # A START's bank keeps them once it has gone out, before its seal, and
+    # only outside safe mode, for a bank built for Desk's shell with no
+    # glyph runs, whose index the comparison's own words build.
+    start = _word(source, "_RTHP-PREPARE-START")
+    assert start.index("RTE-RETAINED-SEAL") < start.index(
+        "_RTHP-P-P @ _RTHP-START-FACTS") < start.index("_RTHP-SEAL-PENDING")
+    start_facts = " ".join(_word(source, "_RTHP-START-FACTS").split())
+    for needle in ("DUP _RTHP-D-P ! 0 OVER _RTHP.PENDING-FACTS _RTHP-KF.BANK !",
+                   "CHK-SAFE? IF DROP EXIT THEN",
+                   "_RTHP.SHELL-BUILT @ 0= IF DROP EXIT THEN",
+                   "_RTHP-TB.GLYPH-SLOT-COUNT @ IF EXIT THEN",
+                   "0 _RTHP-D-INDEX-A-N ! _RTHP-D-INDEX-SPACE? 0= IF EXIT THEN",
+                   "_RTHP-D-PENDING-CONTROL-INDEX? 0= IF EXIT THEN",
+                   "_RTHP-D-SORT-IDENTITIES? 0= IF EXIT THEN",
+                   "_RTHP-D-NO-GLYPHS", "_RTHP-D-KEEP-FACTS ;"):
+        assert needle in start_facts, needle
     copy = " ".join(_word(source, "_RTHP-C-COPY?").split())
     assert copy.index("0= IF _RTHP-C-P @ _RTHP-TARGET-ABORT") < copy.index(
         "_RTHP-D-KEEP-FACTS _RTHP-D-PLAN-SEAL")
@@ -5741,7 +5757,8 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
         # compares them with its own and clears them before its own runs.
         "_RTHP.PENDING-FACTS": {"_RTHP-TARGET-ABORT", "_RTHP-FACTS-PUBLISH",
                                 "_RTHP-D-KEEP-FACTS", "_RTHP-D-SH-KEEP",
-                                "_RTHP-D-SH-RESTORE", "_RTHP-D-SH-COMPARE"},
+                                "_RTHP-D-SH-RESTORE", "_RTHP-D-SH-COMPARE",
+                                "_RTHP-START-FACTS"},
         # The acknowledged empty frame retires the active bank and its facts.
         # The copy of the bank on screen reads the facts it kept, and a
         # candidate is taken from that bank only while it keeps them.
@@ -5850,7 +5867,9 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     plan_start = _word(source, "_RTHP-D-PLAN-START?")
     plan_compact = _word(source, "_RTHP-D-PLAN-COMPACT-GLYPHS")
     control_map = _word(source, "_RTHP-D-BUILD-CONTROL-MAP?")
-    control_index_work = _word(source, "_RTHP-D-INDEX-WORK?")
+    # The index's work space, which a START's kept facts take too.
+    control_index_work = (_word(source, "_RTHP-D-INDEX-WORK?")
+                          + _word(source, "_RTHP-D-INDEX-SPACE?"))
     control_active_index = _word(source, "_RTHP-D-ACTIVE-CONTROL-INDEX?")
     control_pending_index = _word(source, "_RTHP-D-PENDING-CONTROL-INDEX?")
     control_join = _word(source, "_RTHP-D-JOIN-CONTROL-INDEXES?")
