@@ -120,7 +120,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "680 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "696 CONSTANT RTAPT-OWNER-SIZE" in source
     assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
     assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
@@ -185,6 +185,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "HIDDEN-PATH-POINTS": 656,
         "PENDING-PATH-POINTS": 664,
         "A-PATH-POINTS": 672,
+        "PENDING-CONTROL-DROPS": 680,
+        "A-CDROPS": 688,
     }
     for field, offset in owner_fields.items():
         definition = _definition(source, f"_RTAPT-O.{field}")
@@ -519,6 +521,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     )
     control_capture = _definition(source, "_RTAPT-CONTROL-CAPTURE")
     control_drop_body = _definition(source, "_RTAPT-CONTROL-DROP-BODY")
+    control_drop_capture = _definition(source, "_RTAPT-CONTROL-DROP-CAPTURE")
     glyph_run_target = _definition(source, "_RTAPT-GLYPH-RUN-TARGET?")
     glyph_run_geometry = _definition(source, "_RTAPT-GLYPH-RUN-GEOMETRY?")
     control_root_geometry = _definition(
@@ -615,7 +618,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledger_wrapper
     assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledger_wrapper
     assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledger_wrapper
-    assert "_RTAPT-OP-CONTROL-DROP" not in ledger_wrapper
+    assert "_RTAPT-OP-CONTROL-DROP = OR" in ledger_wrapper
     assert "_RTAPT-OP-INSTRUMENT-REPLACE = OR" in ledger_wrapper
     assert "_RTAPT-OP-STATIC-REPLACE = OR" in ledger_wrapper
     assert "_RTAPT-SERIES-SAMPLE-OP? OR IF" in ledger_wrapper
@@ -712,12 +715,20 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "_RTAPT-OP-GLYPH-RUN-DEFINE"
     )
     assert glyph_run_body.index("0 FILL") < glyph_run_body.index("MOVE")
-    for captured_op in (glyph_run_replace_body, control_capture):
+    for captured_op in (glyph_run_replace_body, control_capture, control_drop_capture):
         assert "_RTAPT-P.OWNER-SLOT !" in captured_op
-    assert "RTAPT-S-UNSUPPORTED" in control_drop_body
-    assert "_RTAPT-CONTROL-CAPTURE" not in control_drop_body
-    assert "_RTAPT-OP-CONTROL-DROP" not in control_drop_body
-    assert "_RTAPT-P.OWNER-SLOT" not in control_drop_body
+    # A drop is DELTA-only and names an active control that has not changed;
+    # every check runs before its capture writes anything.
+    assert "PT-RET-DELTA <>" in control_drop_body
+    assert "_RTAPT-CL-ACTIVE" in control_drop_body
+    places = [control_drop_body.index(word) for word in (
+        "_RTAPT-CAPTURE-READY?", "_RTAPT-OWNER-FIND", "_RTAPT-CONTROL-LEDGER-FIND",
+        "_RTAPT-CONTROL-CHANGED?", "_RTAPT-CONTROL-DROP-TARGETS?",
+        "_RTAPT-CONTROL-DROP-ROOM?", "_RTAPT-CONTROL-DROP-CAPTURE")]
+    assert places == sorted(places)
+    assert "_RTAPT-OP-CONTROL-DROP _RTAPT-CX-DIRTY-P @ _RTAPT-P.KIND !" in control_drop_capture
+    assert control_drop_capture.index("_RTAPT-E.OP-COUNT +!") < control_drop_capture.index(
+        "_RTAPT-O.PENDING-CONTROL-DROPS +!")
 
     # Replacement reuses the exact neutral record and retry shape, but it is
     # admitted only against the selected committed target and never mutates
@@ -938,6 +949,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     audit_clear = _definition(source, "_RTAPT-OWNER-AUDIT-CLEAR")
     assert "_RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL" in audit_clear
     assert "_RTAPT-O.A-SERIES 24 0 FILL" in audit_clear
+    assert "_RTAPT-O.A-CDROPS OFF" in audit_clear
     assert "_RTAPT-AUDIT-SCRATCH-DIRTY" in publication_finish
     assert cell_commit.count("_RTAPT-PUBLICATION-AUDIT?") == 1
     assert "_RTAPT-PRIOR-REGION?" not in source
@@ -1044,6 +1056,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "PENDING-OBJECT-HIGH",
         "PENDING-UTF8",
         "PENDING-CONTROL-REPLACEMENTS",
+        "PENDING-CONTROL-DROPS",
         "PENDING-CONTENT-TARGET",
         "PENDING-UTF8-TARGET",
     ):
@@ -1057,6 +1070,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "PENDING-OBJECT-HIGH",
         "PENDING-UTF8",
         "PENDING-CONTROL-REPLACEMENTS",
+        "PENDING-CONTROL-DROPS",
         "PENDING-CONTENT-TARGET",
         "PENDING-UTF8-TARGET",
     ):

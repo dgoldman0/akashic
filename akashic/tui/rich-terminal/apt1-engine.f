@@ -358,6 +358,11 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 14 CONSTANT _RTAPT-OP-PANE-REPLACE
 15 CONSTANT _RTAPT-OP-IMAGE-DEFINE
 16 CONSTANT _RTAPT-OP-IMAGE-REPLACE
+17 CONSTANT _RTAPT-OP-CONTROL-DROP
+\ A CONTROL_DROP copy is the identity alone: owner, generation and control,
+\ as its 24-byte payload carries them after APT-1's 40-byte frame header.
+24 CONSTANT _RTAPT-CONTROL-DROP-COPY-SIZE
+64 CONSTANT _RTAPT-CONTROL-DROP-FRAME-BYTES
 \ An IMAGE copy is the descriptor alone; its frame is APT-1's 40-byte header
 \ and the 96-byte OBJECT payload.  Every IMAGE goes with CLIP, its whole
 \ rectangle when it shows all of it, so each frame has one exact size and
@@ -476,10 +481,11 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 \ and instruments.  Seven cells hold the quota set an open owner has asked
 \ for while that request is queued or awaiting its answer.  The next three
 \ hold the owner-wide resource store: committed resources, their bytes, and
-\ the highest resource ID this generation has used.  The last six are the
+\ the highest resource ID this generation has used.  The next six are the
 \ line points the owner holds and asks for, its active, hidden and pending
-\ usage of them, and their audit cell.
-680 CONSTANT RTAPT-OWNER-SIZE
+\ usage of them, and their audit cell.  The last two count the controls a
+\ DELTA drops and their audit cell.
+696 CONSTANT RTAPT-OWNER-SIZE
 \ One durable control ledger entry accounts for one CONTROL identity in the
 \ active and/or hidden retained target.
 \ Capacity remains entirely caller-selected.
@@ -791,7 +797,8 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 
 \ Mutable-control replacements do not add identities.  These fields hold the
 \ checked post-candidate target totals and the number of controls contributing
-\ to them.  Zero replacements requires both target fields to be zero.
+\ to them.  Zero replacements and zero drops require both target fields to be
+\ zero.
 : _RTAPT-O.PENDING-CONTROL-REPLACEMENTS ( o -- a ) 424 + ;
 : _RTAPT-O.PENDING-CONTENT-TARGET ( o -- a ) 432 + ;
 : _RTAPT-O.PENDING-UTF8-TARGET ( o -- a ) 440 + ;
@@ -831,10 +838,26 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 : _RTAPT-O.HIDDEN-PATH-POINTS ( o -- a ) 656 + ;
 : _RTAPT-O.PENDING-PATH-POINTS ( o -- a ) 664 + ;
 : _RTAPT-O.A-PATH-POINTS ( o -- a ) 672 + ;
+\ The controls a DELTA drops, and their audit cell.  A drop, like a
+\ replacement, stages the resulting content and UTF-8 targets above: the
+\ dropped control's items and bytes leave them.
+: _RTAPT-O.PENDING-CONTROL-DROPS ( o -- a ) 680 + ;
+: _RTAPT-O.A-CDROPS ( o -- a ) 688 + ;
 : _RTAPT-OWNER-AUDIT-CLEAR ( owner -- )
     DUP _RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL
     DUP _RTAPT-O.A-SERIES 24 0 FILL
+    DUP _RTAPT-O.A-CDROPS OFF
     _RTAPT-O.A-PATH-POINTS OFF ;
+
+\ Whether the owner's DELTA stages resulting control targets: it replaces
+\ or drops a control.
+: _RTAPT-CONTROL-TARGETS?  ( owner -- flag )
+    DUP _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @
+    SWAP _RTAPT-O.PENDING-CONTROL-DROPS @ OR 0<> ;
+
+\ The active controls the owner's candidate keeps.
+: _RTAPT-KEPT-CONTROLS  ( owner -- n )
+    DUP _RTAPT-O.ACTIVE-CONTROLS @ SWAP _RTAPT-O.PENDING-CONTROL-DROPS @ - ;
 
 
 \ Captured operation records contain no borrowed caller pointer.  COPY-OFF is
@@ -2066,6 +2089,11 @@ VARIABLE _RTAPT-SF-U
             IF 0 UNLOOP EXIT THEN
         _RTAPT-BV-E @ _RTAPT-E.COPY-A @ _RTAPT-BV-OFF @ +
             _RTAPT-BV-COPY !
+        _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
+            _RTAPT-BV-COPY-U @ _RTAPT-CONTROL-DROP-COPY-SIZE <>
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-CONTROL-DROP-FRAME-BYTES _RTAPT-BV-FRAME !
+        ELSE
         _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-IMAGE-OP? IF
             _RTAPT-BV-COPY-U @ RTAPT-IMAGE-SIZE <> IF 0 UNLOOP EXIT THEN
             _RTAPT-IMAGE-FRAME-BYTES _RTAPT-BV-FRAME !
@@ -2238,6 +2266,7 @@ VARIABLE _RTAPT-SF-U
                     THEN
                 THEN
             THEN
+        THEN
         THEN
         THEN
         THEN
@@ -2428,6 +2457,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
 : _RTAPT-OWNER-AUDIT-ZERO?  ( owner-record -- flag )
     DUP _RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE _RTAPT-ZERO-SPAN?
     OVER _RTAPT-O.A-PATH-POINTS @ 0= AND
+    OVER _RTAPT-O.A-CDROPS @ 0= AND
     SWAP _RTAPT-O.A-SERIES 24 _RTAPT-ZERO-SPAN? AND ;
 
 : _RTAPT-OWNER-AUDIT-MATCH?  ( -- flag )
@@ -2449,7 +2479,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
         _RTAPT-LV-O @ _RTAPT-O.A-OHIGH @
         _RTAPT-LV-O @ _RTAPT-O.OBJECT-HIGH @ <> IF 0 EXIT THEN
     THEN
-    _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ IF
+    _RTAPT-LV-O @ _RTAPT-CONTROL-TARGETS? IF
         _RTAPT-LV-O @ _RTAPT-O.PENDING-UTF8-TARGET @
         _RTAPT-LV-O @ _RTAPT-O.PENDING-UTF8 @ _RTAPT-UADD?
             0= IF DROP 0 EXIT THEN
@@ -2467,6 +2497,8 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
     THEN
     _RTAPT-LV-O @ _RTAPT-O.A-CCOUNT @
         _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROLS @ <> IF 0 EXIT THEN
+    _RTAPT-LV-O @ _RTAPT-O.A-CDROPS @
+        _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-DROPS @ <> IF 0 EXIT THEN
     _RTAPT-LV-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA = IF
         _RTAPT-LV-O @ _RTAPT-O.A-CCOUNT @ IF
             _RTAPT-LV-O @ _RTAPT-O.A-CHIGH @
@@ -2640,6 +2672,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-CONTENT-ITEMS @ OR
             _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTENT-ITEMS @ OR
             _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ OR
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-DROPS @ OR
             _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTENT-TARGET @ OR
             _RTAPT-LV-O @ _RTAPT-O.PENDING-UTF8-TARGET @ OR IF
                 0 UNLOOP EXIT
@@ -2682,7 +2715,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTENT-ITEMS @
                 _RTAPT-UADD? 0= IF DROP 0 UNLOOP EXIT THEN
                 _RTAPT-LV-PENDING-SHARED !
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ IF
+            _RTAPT-LV-O @ _RTAPT-CONTROL-TARGETS? IF
                 _RTAPT-LV-ACTIVE-SHARED @
                     _RTAPT-LV-O @ _RTAPT-O.OBJECTS @ U>
                 _RTAPT-LV-HIDDEN-SHARED @
@@ -2774,7 +2807,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
                 0 UNLOOP EXIT
             THEN
 
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ IF
+            _RTAPT-LV-O @ _RTAPT-CONTROL-TARGETS? IF
                 _RTAPT-LV-O @ _RTAPT-O.ACTIVE-UTF8 @
                     _RTAPT-LV-O @ _RTAPT-O.UTF8-BYTES @ U>
                 _RTAPT-LV-O @ _RTAPT-O.HIDDEN-UTF8 @
@@ -2791,11 +2824,16 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
                     _RTAPT-TARGET-COUNT? 0= IF 0 UNLOOP EXIT THEN
             THEN
 
-            \ Mutable replacements stage exact resulting DELTA-target totals,
-            \ never unsigned additions.  Validate those totals independently
-            \ from the ordinary definition ledgers above.
+            \ Mutable replacements and drops stage exact resulting
+            \ DELTA-target totals, never unsigned additions.  Validate those
+            \ totals independently from the ordinary definition ledgers
+            \ above.  Each active control is replaced or dropped at most
+            \ once, and the controls dropped leave the shared object count.
             _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @
                 DUP _RTAPT-U32? 0= IF DROP 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-DROPS @
+                DUP _RTAPT-U32? 0= IF 2DROP 0 UNLOOP EXIT THEN
+            +
             DUP 0= IF
                 DROP
                 _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTENT-TARGET @
@@ -2811,7 +2849,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
                 _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTENT-TARGET @
                     _RTAPT-U32? 0= IF 0 UNLOOP EXIT THEN
                 _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @
-                _RTAPT-LV-O @ _RTAPT-O.ACTIVE-CONTROLS @
+                _RTAPT-LV-O @ _RTAPT-KEPT-CONTROLS
                     _RTAPT-UADD? 0= IF DROP 0 UNLOOP EXIT THEN
                 _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @
                     _RTAPT-UADD? 0= IF DROP 0 UNLOOP EXIT THEN
@@ -2870,13 +2908,14 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
 
 : _RTAPT-OWNER-LEDGERS?  ( engine -- flag )
     DUP _RTAPT-LV-E ! 0 _RTAPT-LV-PENDING !
-    \ Replacement operations consume transaction capacity but add no retained
-    \ identities.  Count those typed records directly; definition additions
-    \ remain cross-checked against their per-owner pending ledgers.
+    \ Replacement and drop operations consume transaction capacity but add no
+    \ retained identities.  Count those typed records directly; definition
+    \ additions remain cross-checked against their per-owner pending ledgers.
     _RTAPT-LV-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
         I _RTAPT-LV-E @ _RTAPT-OP-NTH _RTAPT-P.KIND @
         DUP _RTAPT-OP-GLYPH-RUN-REPLACE =
         OVER _RTAPT-OP-CONTROL-REPLACE = OR
+        OVER _RTAPT-OP-CONTROL-DROP = OR
         OVER _RTAPT-OP-INSTRUMENT-REPLACE = OR
         OVER _RTAPT-OP-STATIC-REPLACE = OR
         OVER _RTAPT-OP-PANE-REPLACE = OR
@@ -3322,6 +3361,7 @@ VARIABLE _RTAPT-QA-O
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-CONTROL-HIGH !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-CONTENT-ITEMS !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS !
+            0 _RTAPT-QA-O @ _RTAPT-O.PENDING-CONTROL-DROPS !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-CONTENT-TARGET !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-UTF8-TARGET !
         THEN
@@ -4188,6 +4228,7 @@ VARIABLE _RTAPT-BC-E
         DUP _RTAPT-O.PENDING-CONTENT-ITEMS OFF
         DUP _RTAPT-O.PENDING-UTF8 OFF
         DUP _RTAPT-O.PENDING-CONTROL-REPLACEMENTS OFF
+        DUP _RTAPT-O.PENDING-CONTROL-DROPS OFF
         DUP _RTAPT-O.PENDING-CONTENT-TARGET OFF
         _RTAPT-O.PENDING-UTF8-TARGET OFF
     LOOP DROP ;
@@ -6496,11 +6537,11 @@ VARIABLE _RTAPT-SOB-HIDDEN
 : _RTAPT-SHARED-OBJECT-BASE?  ( owner-record engine -- count flag )
     _RTAPT-SOB-E ! _RTAPT-SOB-O !
     _RTAPT-SOB-O @ _RTAPT-O.ACTIVE-OBJECTS @
-    _RTAPT-SOB-O @ _RTAPT-O.ACTIVE-CONTROLS @ _RTAPT-UADD? 0= IF
+    _RTAPT-SOB-O @ _RTAPT-KEPT-CONTROLS _RTAPT-UADD? 0= IF
         DROP 0 0 EXIT
     THEN
     _RTAPT-SOB-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA =
-    _RTAPT-SOB-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ 0<> AND IF
+    _RTAPT-SOB-O @ _RTAPT-CONTROL-TARGETS? AND IF
         _RTAPT-SOB-O @ _RTAPT-O.PENDING-CONTENT-TARGET @
     ELSE
         _RTAPT-SOB-O @ _RTAPT-O.ACTIVE-CONTENT-ITEMS @
@@ -6518,7 +6559,7 @@ VARIABLE _RTAPT-SOB-HIDDEN
 : _RTAPT-UTF8-BASE  ( owner-record engine -- bytes )
     _RTAPT-SOB-E ! _RTAPT-SOB-O !
     _RTAPT-SOB-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA =
-    _RTAPT-SOB-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ 0<> AND IF
+    _RTAPT-SOB-O @ _RTAPT-CONTROL-TARGETS? AND IF
         _RTAPT-SOB-O @ _RTAPT-O.PENDING-UTF8-TARGET @
     ELSE
         _RTAPT-SOB-O @ _RTAPT-O.ACTIVE-UTF8 @
@@ -7469,39 +7510,15 @@ VARIABLE _RTAPT-CRP-E
 VARIABLE _RTAPT-CRP-O-SLOT
 VARIABLE _RTAPT-CRP-CONTROL
 VARIABLE _RTAPT-CRP-P
-VARIABLE _RTAPT-CRP-OFF
-
-: _RTAPT-CONTROL-REPLACE-PRIOR?  ( -- flag )
-    _RTAPT-CD-E @ _RTAPT-CRP-E !
-    _RTAPT-CD-O @ _RTAPT-CD-E @ _RTAPT-OWNER-SLOT _RTAPT-CRP-O-SLOT !
-    _RTAPT-CD-ID @ _RTAPT-CRP-CONTROL !
-    _RTAPT-CRP-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
-        I _RTAPT-CRP-E @ _RTAPT-OP-NTH DUP _RTAPT-CRP-P !
-        DUP _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-REPLACE =
-        SWAP _RTAPT-P.OWNER-SLOT @ _RTAPT-CRP-O-SLOT @ = AND IF
-            _RTAPT-CRP-P @ _RTAPT-P.COPY-U @
-                _RTAPT-CONTROL-COPY-FIXED U< IF 0 UNLOOP EXIT THEN
-            _RTAPT-CRP-P @ _RTAPT-P.COPY-OFF @ DUP _RTAPT-CRP-OFF !
-                7 AND IF 0 UNLOOP EXIT THEN
-            _RTAPT-CRP-OFF @ _RTAPT-CONTROL-COPY-FIXED _RTAPT-UADD?
-                0= IF DROP 0 UNLOOP EXIT THEN
-            _RTAPT-CRP-E @ _RTAPT-E.COPY-USED @ U> IF 0 UNLOOP EXIT THEN
-            _RTAPT-CRP-E @ _RTAPT-E.COPY-A @ _RTAPT-CRP-OFF @ +
-                _RTAPT-CD.CONTROL @ _RTAPT-CRP-CONTROL @ = IF
-                -1 UNLOOP EXIT
-            THEN
-        THEN
-    LOOP 0 ;
+VARIABLE _RTAPT-CRP-MIN
 
 : _RTAPT-CONTROL-REPLACE-TARGETS?  ( -- flag )
-    _RTAPT-CD-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ DUP IF
-        DROP
+    _RTAPT-CD-O @ _RTAPT-CONTROL-TARGETS? IF
         _RTAPT-CD-O @ _RTAPT-O.PENDING-CONTENT-TARGET @
             _RTAPT-CD-BASE-CONTENT !
         _RTAPT-CD-O @ _RTAPT-O.PENDING-UTF8-TARGET @
             _RTAPT-CD-BASE-UTF8 !
     ELSE
-        DROP
         _RTAPT-CD-O @ _RTAPT-O.ACTIVE-CONTENT-ITEMS @
             _RTAPT-CD-BASE-CONTENT !
         _RTAPT-CD-O @ _RTAPT-O.ACTIVE-UTF8 @
@@ -7519,15 +7536,18 @@ VARIABLE _RTAPT-CRP-OFF
     _RTAPT-CD-LEDGER @ _RTAPT-CL.ACTIVE-ITEMS @ -
     _RTAPT-CD-CONTENT-ITEMS @ _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
         _RTAPT-CD-NEXT-CONTENT-TARGET !
+    \ Each control on screen is replaced or dropped at most once.
     _RTAPT-CD-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @
         1 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
-        DUP _RTAPT-CD-O @ _RTAPT-O.ACTIVE-CONTROLS @ U> IF DROP 0 EXIT THEN
+    DUP _RTAPT-CD-O @ _RTAPT-O.PENDING-CONTROL-DROPS @ _RTAPT-UADD?
+        0= IF 2DROP 0 EXIT THEN
+        _RTAPT-CD-O @ _RTAPT-O.ACTIVE-CONTROLS @ U> IF DROP 0 EXIT THEN
         _RTAPT-CD-NEXT-REPLACEMENTS !
     -1 ;
 
 : _RTAPT-CONTROL-REPLACE-QUOTA?  ( -- flag )
     _RTAPT-CD-O @ _RTAPT-O.ACTIVE-OBJECTS @
-    _RTAPT-CD-O @ _RTAPT-O.ACTIVE-CONTROLS @ _RTAPT-UADD?
+    _RTAPT-CD-O @ _RTAPT-KEPT-CONTROLS _RTAPT-UADD?
         0= IF DROP 0 EXIT THEN
     _RTAPT-CD-O @ _RTAPT-O.PENDING-OBJECTS @ _RTAPT-UADD?
         0= IF DROP 0 EXIT THEN
@@ -7562,6 +7582,31 @@ VARIABLE _RTAPT-CRP-OFF
     OVER _RTAPT-P.COPY-U @ R@ _RTAPT-E.COPY-USED @ 2 PICK - U> IF
         2DROP R> DROP 0 0 EXIT
     THEN NIP R> _RTAPT-E.COPY-A @ + -1 ;
+
+\ Whether an earlier operation of this capture replaces or drops the same
+\ control of the same owner: each control on screen changes at most once.
+\ A replacement's copy and a drop's both keep the control at +16.  A record
+\ whose framing does not hold counts as a change, so it refuses the call.
+: _RTAPT-CONTROL-CHANGED?  ( owner-slot control engine -- flag )
+    _RTAPT-CRP-E ! _RTAPT-CRP-CONTROL ! _RTAPT-CRP-O-SLOT !
+    _RTAPT-CRP-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
+        I _RTAPT-CRP-E @ _RTAPT-OP-NTH DUP _RTAPT-CRP-P !
+        _RTAPT-P.KIND @ DUP _RTAPT-OP-CONTROL-REPLACE = IF
+            DROP _RTAPT-CONTROL-COPY-FIXED
+        ELSE _RTAPT-OP-CONTROL-DROP = IF
+            _RTAPT-CONTROL-DROP-COPY-SIZE
+        ELSE 0 THEN THEN
+        _RTAPT-CRP-MIN !
+        _RTAPT-CRP-MIN @ IF
+            _RTAPT-CRP-P @ _RTAPT-P.OWNER-SLOT @ _RTAPT-CRP-O-SLOT @ = IF
+                _RTAPT-CRP-P @ _RTAPT-CRP-MIN @ _RTAPT-CRP-E @
+                    _RTAPT-PRIOR-COPY? 0= IF DROP -1 UNLOOP EXIT THEN
+                _RTAPT-CD.CONTROL @ _RTAPT-CRP-CONTROL @ = IF
+                    -1 UNLOOP EXIT
+                THEN
+            THEN
+        THEN
+    LOOP 0 ;
 
 \ TASKBAR graph authority is the complete captured candidate only. All
 \ sibling slots are compared exactly; authored gaps are retained as gaps.
@@ -7692,7 +7737,8 @@ VARIABLE _RTAPT-CRP-OFF
         _RTAPT-CL-KIND-MASK AND _RTAPT-CD-KIND @ <> IF
         RTAPT-S-INVALID EXIT
     THEN
-    _RTAPT-CONTROL-REPLACE-PRIOR? IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-CD-O @ _RTAPT-CD-E @ _RTAPT-OWNER-SLOT _RTAPT-CD-ID @
+        _RTAPT-CD-E @ _RTAPT-CONTROL-CHANGED? IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CD-KIND @ _RTAPT-MUTABLE-CONTROL-KIND? 0= IF
         _RTAPT-CD-LEDGER @ _RTAPT-CL.ACTIVE-ITEMS @
             _RTAPT-CD-CONTENT-ITEMS @ <>
@@ -7800,16 +7846,91 @@ CREATE _RTAPT-TASKBAR-OWNED-END
     THEN
     _RTAPT-CONTROL-SCRUB ;
 
-\ CONTROL_REPLACE is deliberately DELTA-only in this rung; replacement/layout
-\ construction accepts CONTROL_DEFINE records only.  Per-control DROP remains
-\ unsupported until it can update the same exact identity and quota ledger
-\ atomically.  Owner DROP already removes that owner's complete ledger.
+\ CONTROL_REPLACE and CONTROL_DROP are DELTA-only; replacement and layout
+\ construction accept CONTROL_DEFINE records only.  Owner DROP removes that
+\ owner's complete ledger.
 
 VARIABLE _RTAPT-CX-E
 VARIABLE _RTAPT-CX-OWNER
 VARIABLE _RTAPT-CX-GEN
 VARIABLE _RTAPT-CX-ID
+VARIABLE _RTAPT-CX-O
+VARIABLE _RTAPT-CX-LEDGER
+VARIABLE _RTAPT-CX-CONTENT
+VARIABLE _RTAPT-CX-UTF8
+VARIABLE _RTAPT-CX-NEXT-RET
+VARIABLE _RTAPT-CX-DIRTY-P
+VARIABLE _RTAPT-CX-DIRTY-COPY
 
+\ The resulting targets without the dropped control's items and bytes, and
+\ whether the owner's active controls cover every control this capture
+\ replaces or drops.
+: _RTAPT-CONTROL-DROP-TARGETS?  ( -- flag )
+    _RTAPT-CX-O @ _RTAPT-CONTROL-TARGETS? IF
+        _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTENT-TARGET @
+        _RTAPT-CX-O @ _RTAPT-O.PENDING-UTF8-TARGET @
+    ELSE
+        _RTAPT-CX-O @ _RTAPT-O.ACTIVE-CONTENT-ITEMS @
+        _RTAPT-CX-O @ _RTAPT-O.ACTIVE-UTF8 @
+    THEN
+    _RTAPT-CX-LEDGER @ _RTAPT-CL.ACTIVE-UTF8 @
+        2DUP U< IF 2DROP DROP 0 EXIT THEN - _RTAPT-CX-UTF8 !
+    _RTAPT-CX-LEDGER @ _RTAPT-CL.ACTIVE-ITEMS @
+        2DUP U< IF 2DROP 0 EXIT THEN - _RTAPT-CX-CONTENT !
+    _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @
+    _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTROL-DROPS @
+        _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    1 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    _RTAPT-CX-O @ _RTAPT-O.ACTIVE-CONTROLS @ U> 0= ;
+
+\ Room for one more operation, its copy and its frame, within the banks and
+\ the terminal's limits.
+: _RTAPT-CONTROL-DROP-ROOM?  ( -- flag )
+    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @ 0xFFFFFFFF U< 0= IF 0 EXIT THEN
+    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @
+        _RTAPT-CX-E @ _RTAPT-E.OP-CAP @ U< 0= IF 0 EXIT THEN
+    _RTAPT-CX-E @ _RTAPT-E.COPY-U @ _RTAPT-CX-E @ _RTAPT-E.COPY-USED @ -
+        _RTAPT-CONTROL-DROP-COPY-SIZE U< IF 0 EXIT THEN
+    _RTAPT-CX-E @ _RTAPT-E.LIMITS
+    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @ 1+
+        OVER _RTAPT-L.OPS @ U> IF DROP 0 EXIT THEN
+    _RTAPT-CONTROL-DROP-COPY-SIZE
+        OVER _RTAPT-L.OUTBOUND-PAYLOAD @ U> IF DROP 0 EXIT THEN
+    _RTAPT-CX-E @ _RTAPT-E.RET-BYTES @ _RTAPT-CONTROL-DROP-FRAME-BYTES
+        _RTAPT-UADD? 0= IF 2DROP 0 EXIT THEN DUP _RTAPT-CX-NEXT-RET !
+    _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES _RTAPT-UADD? 0= IF 2DROP 0 EXIT THEN
+    SWAP _RTAPT-L.UPDATE-BYTES @ U> 0= ;
+
+: _RTAPT-CONTROL-DROP-CAPTURE  ( -- status )
+    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @ _RTAPT-CX-E @ _RTAPT-OP-NTH
+        DUP _RTAPT-CX-DIRTY-P ! RTAPT-OP-SIZE 0 FILL
+    _RTAPT-CX-E @ _RTAPT-E.COPY-A @ _RTAPT-CX-E @ _RTAPT-E.COPY-USED @ +
+        DUP _RTAPT-CX-DIRTY-COPY ! _RTAPT-CONTROL-DROP-COPY-SIZE 0 FILL
+    _RTAPT-OP-CONTROL-DROP _RTAPT-CX-DIRTY-P @ _RTAPT-P.KIND !
+    _RTAPT-CX-E @ _RTAPT-E.COPY-USED @
+        _RTAPT-CX-DIRTY-P @ _RTAPT-P.COPY-OFF !
+    _RTAPT-CONTROL-DROP-COPY-SIZE _RTAPT-CX-DIRTY-P @ _RTAPT-P.COPY-U !
+    _RTAPT-CX-O @ _RTAPT-CX-E @ _RTAPT-OWNER-SLOT
+        _RTAPT-CX-DIRTY-P @ _RTAPT-P.OWNER-SLOT !
+    _RTAPT-CX-OWNER @ _RTAPT-CX-DIRTY-COPY @ _RTAPT-CD.OWNER !
+    _RTAPT-CX-GEN @ _RTAPT-CX-DIRTY-COPY @ _RTAPT-CD.GENERATION !
+    _RTAPT-CX-ID @ _RTAPT-CX-DIRTY-COPY @ _RTAPT-CD.CONTROL !
+    _RTAPT-CONTROL-DROP-COPY-SIZE _RTAPT-CX-E @ _RTAPT-E.COPY-USED +!
+    _RTAPT-CX-NEXT-RET @ _RTAPT-CX-E @ _RTAPT-E.RET-BYTES !
+    1 _RTAPT-CX-E @ _RTAPT-E.OP-COUNT +!
+    0 _RTAPT-CX-DIRTY-P ! 0 _RTAPT-CX-DIRTY-COPY !
+    _RTAPT-CX-CONTENT @ _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTENT-TARGET !
+    _RTAPT-CX-UTF8 @ _RTAPT-CX-O @ _RTAPT-O.PENDING-UTF8-TARGET !
+    1 _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTROL-DROPS +!
+    RTAPT-S-OK DUP _RTAPT-CX-E @ _RTAPT-E.LAST-STATUS ! ;
+
+\ A drop names an active control of an open owner, in a DELTA, that no
+\ earlier operation of this capture replaced or dropped.  Its content items
+\ and UTF-8 bytes leave the owner's resulting targets, as a replacement
+\ stages them, and its identity leaves the shared object count, so the room
+\ it held is free for the definitions after it.  The identity stays used: a
+\ control defined later takes a higher one.  The ledger entry goes when the
+\ terminal accepts the transaction; a cancel keeps it.
 : _RTAPT-CONTROL-DROP-BODY  ( -- status )
     _RTAPT-CX-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CX-OWNER @ 0= _RTAPT-CX-GEN @ 0= OR
@@ -7818,11 +7939,43 @@ VARIABLE _RTAPT-CX-ID
     _RTAPT-CX-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
         IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-CX-E @ _RTAPT-CAPTURE-READY? 0= IF RTAPT-S-INVALID EXIT THEN
-    RTAPT-S-UNSUPPORTED ;
+    _RTAPT-CX-E @ _RTAPT-E.LIMITS DUP RTAPT-LIMITS-VALID? 0= IF
+        DROP RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-L.FEATURES @ RTAPT-F-CONTROLS AND 0= IF
+        RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-CX-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF
+        RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-CX-OWNER @ _RTAPT-CX-GEN @ _RTAPT-CX-E @
+        _RTAPT-OWNER-FIND DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-CX-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-CX-O @ _RTAPT-CX-GEN @ _RTAPT-CX-ID @ _RTAPT-CX-E @
+        _RTAPT-CONTROL-LEDGER-FIND DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-CX-LEDGER ! _RTAPT-CL.META @ _RTAPT-CL-ACTIVE AND 0= IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    \ Each REPLACE_START sends a TASKBAR graph whole, as for a replacement.
+    _RTAPT-CX-LEDGER @ _RTAPT-CL-KIND@ _RTAPT-CONTROL-TASKBAR-KIND? IF
+        RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-CX-O @ _RTAPT-CX-E @ _RTAPT-OWNER-SLOT _RTAPT-CX-ID @
+        _RTAPT-CX-E @ _RTAPT-CONTROL-CHANGED? IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-CONTROL-DROP-TARGETS? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-CONTROL-DROP-ROOM? 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-CONTROL-DROP-CAPTURE ;
 
 : _RTAPT-CONTROL-DROP-SCRUB  ( -- )
+    _RTAPT-CX-DIRTY-P @ ?DUP IF RTAPT-OP-SIZE 0 FILL THEN
+    _RTAPT-CX-DIRTY-COPY @ ?DUP IF
+        _RTAPT-CONTROL-DROP-COPY-SIZE 0 FILL
+    THEN
     0 _RTAPT-CX-E ! 0 _RTAPT-CX-OWNER ! 0 _RTAPT-CX-GEN !
-    0 _RTAPT-CX-ID ! ;
+    0 _RTAPT-CX-ID ! 0 _RTAPT-CX-O ! 0 _RTAPT-CX-LEDGER !
+    0 _RTAPT-CX-CONTENT ! 0 _RTAPT-CX-UTF8 ! 0 _RTAPT-CX-NEXT-RET !
+    0 _RTAPT-CX-DIRTY-P ! 0 _RTAPT-CX-DIRTY-COPY ! ;
 
 : RTAPT-CONTROL-DROP  ( owner generation control engine -- status )
     _RTAPT-CX-E ! _RTAPT-CX-ID ! _RTAPT-CX-GEN ! _RTAPT-CX-OWNER !
@@ -10542,7 +10695,7 @@ VARIABLE _RTAPT-PA-NEW-UTF8
             DUP _RTAPT-O.OBJECT-HIGH @ OVER _RTAPT-O.A-OHIGH !
             DUP _RTAPT-O.CONTROL-HIGH @ OVER _RTAPT-O.A-CHIGH !
             DUP _RTAPT-O.SERIES-HIGH @ OVER _RTAPT-O.A-SERIES-HIGH !
-            DUP _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ IF
+            DUP _RTAPT-CONTROL-TARGETS? IF
                 DUP _RTAPT-O.ACTIVE-UTF8 @ OVER _RTAPT-O.A-UTF8 !
                 DUP _RTAPT-O.ACTIVE-CONTENT-ITEMS @
                     OVER _RTAPT-O.A-CONTENT-ITEMS !
@@ -10647,6 +10800,11 @@ VARIABLE _RTAPT-PA-NEW-UTF8
     _RTAPT-BV-NEXT @ _RTAPT-PA-E @ _RTAPT-E.COPY-U @ U> IF 0 EXIT THEN
     _RTAPT-PA-E @ _RTAPT-E.COPY-A @ _RTAPT-BV-OFF @ +
         DUP _RTAPT-BV-COPY ! _RTAPT-PF-COPY !
+    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
+        _RTAPT-BV-COPY-U @ _RTAPT-CONTROL-DROP-COPY-SIZE <> IF 0 EXIT THEN
+        _RTAPT-CONTROL-DROP-FRAME-BYTES _RTAPT-BV-FRAME !
+        -1 EXIT
+    THEN
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-SERIES-OP? IF
         _RTAPT-PA-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @ RTAPT-F-SERIES AND 0= IF 0 EXIT THEN
         _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-BV-COPY @ _RTAPT-BV-COPY-U @
@@ -10902,10 +11060,14 @@ VARIABLE _RTAPT-PA-NEW-UTF8
     THEN
     _RTAPT-PUBLICATION-NONDEFINITION+? ;
 
-: _RTAPT-PUBLICATION-CONTROL-REPLACE-PRIOR?  ( -- flag )
+\ Whether an earlier operation replaces or drops this control: each control
+\ on screen changes at most once.  The framing pass proved every earlier
+\ copy, and a replacement's and a drop's both keep the control at +16.
+: _RTAPT-PUBLICATION-CONTROL-CHANGED?  ( -- flag )
     _RTAPT-PA-I @ 0 ?DO
         I _RTAPT-PA-E @ _RTAPT-OP-NTH DUP _RTAPT-PA-PRIOR-P !
-            _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-REPLACE = IF
+            _RTAPT-P.KIND @ DUP _RTAPT-OP-CONTROL-REPLACE =
+            SWAP _RTAPT-OP-CONTROL-DROP = OR IF
             _RTAPT-PA-PRIOR-P @ _RTAPT-P.OWNER-SLOT @
                 _RTAPT-PF-P @ _RTAPT-P.OWNER-SLOT @ = IF
                 _RTAPT-PA-E @ _RTAPT-E.COPY-A @
@@ -10917,6 +11079,20 @@ VARIABLE _RTAPT-PA-NEW-UTF8
             THEN
         THEN
     LOOP 0 ;
+
+\ Whether an earlier operation drops control ID of this owner.  A control
+\ dropped is no parent for a control that stays.
+: _RTAPT-PUBLICATION-CONTROL-DROPPED?  ( id -- flag )
+    _RTAPT-PA-I @ 0 ?DO
+        I _RTAPT-PA-E @ _RTAPT-OP-NTH DUP _RTAPT-PA-PRIOR-P !
+        DUP _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP =
+        SWAP _RTAPT-P.OWNER-SLOT @
+            _RTAPT-PF-P @ _RTAPT-P.OWNER-SLOT @ = AND IF
+            _RTAPT-PA-E @ _RTAPT-E.COPY-A @
+            _RTAPT-PA-PRIOR-P @ _RTAPT-P.COPY-OFF @ + _RTAPT-CD.CONTROL @
+            OVER = IF DROP -1 UNLOOP EXIT THEN
+        THEN
+    LOOP DROP 0 ;
 
 : _RTAPT-PUBLICATION-CONTROL-REPLACE?  ( -- flag )
     _RTAPT-PA-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF 0 EXIT THEN
@@ -10932,7 +11108,10 @@ VARIABLE _RTAPT-PA-NEW-UTF8
     DUP _RTAPT-CL-ACTIVE AND 0= IF DROP 0 EXIT THEN
     _RTAPT-CL-KIND-MASK AND
         _RTAPT-PF-COPY @ _RTAPT-CD.KIND @ <> IF 0 EXIT THEN
-    _RTAPT-PUBLICATION-CONTROL-REPLACE-PRIOR? IF 0 EXIT THEN
+    _RTAPT-PUBLICATION-CONTROL-CHANGED? IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-CD.PARENT @ ?DUP IF
+        _RTAPT-PUBLICATION-CONTROL-DROPPED? IF 0 EXIT THEN
+    THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.LABEL-U @
     _RTAPT-PF-COPY @ _RTAPT-CD.SHORTCUT-U @ _RTAPT-UADD?
         0= IF DROP 0 EXIT THEN
@@ -11018,6 +11197,7 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     DUP _RTAPT-PA-LEDGER ! _RTAPT-CL.META @
         DUP _RTAPT-CL-ACTIVE AND 0= IF DROP 0 EXIT THEN
         _RTAPT-CL-KIND-MASK AND _RTAPT-PA-PARENT-KIND !
+    _RTAPT-PA-PARENT @ _RTAPT-PUBLICATION-CONTROL-DROPPED? IF 0 EXIT THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.KIND @ _RTAPT-PA-PARENT-KIND @
         _RTAPT-PUBLICATION-CONTROL-PARENT-KIND? ;
 
@@ -11049,6 +11229,54 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     _RTAPT-PF-COPY @ _RTAPT-CD.CONTENT-UTF8 @
         _RTAPT-UADD? 0= IF DROP 0 EXIT THEN _RTAPT-PF-UTF8 !
     -1 ;
+
+\ Whether an earlier definition or replacement takes the dropped control as
+\ its parent.
+: _RTAPT-PUBLICATION-CONTROL-ORPHANS?  ( -- flag )
+    _RTAPT-PA-I @ 0 ?DO
+        I _RTAPT-PA-E @ _RTAPT-OP-NTH DUP _RTAPT-PA-PRIOR-P !
+        DUP _RTAPT-P.KIND @ _RTAPT-CONTROL-WRITE-OP?
+        SWAP _RTAPT-P.OWNER-SLOT @
+            _RTAPT-PF-P @ _RTAPT-P.OWNER-SLOT @ = AND IF
+            _RTAPT-PA-E @ _RTAPT-E.COPY-A @
+            _RTAPT-PA-PRIOR-P @ _RTAPT-P.COPY-OFF @ + _RTAPT-CD.PARENT @
+            _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ = IF -1 UNLOOP EXIT THEN
+        THEN
+    LOOP 0 ;
+
+\ A DELTA drop names an active control, not a TASKBAR graph's, that no
+\ earlier operation replaced, dropped or took as a parent.  Its items and
+\ UTF-8 bytes leave the owner's resulting targets.  The terminal is the
+\ authority for the controls on screen that name it as their parent; the
+\ ledger keeps no parents.
+: _RTAPT-PUBLICATION-CONTROL-DROP?  ( -- flag )
+    _RTAPT-PA-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF 0 EXIT THEN
+    _RTAPT-PA-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @
+        RTAPT-F-CONTROLS AND 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ DUP 0= IF DROP 0 EXIT THEN
+        _RTAPT-PF-O @ _RTAPT-O.CONTROL-HIGH @ U> IF 0 EXIT THEN
+    _RTAPT-PF-O @
+    _RTAPT-PF-COPY @ _RTAPT-CD.GENERATION @
+    _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-PA-E @
+        _RTAPT-CONTROL-LEDGER-FIND DUP 0= IF DROP 0 EXIT THEN
+        DUP _RTAPT-PA-LEDGER ! _RTAPT-CL.META @
+    DUP _RTAPT-CL-ACTIVE AND 0= IF DROP 0 EXIT THEN
+    _RTAPT-CL-KIND-MASK AND _RTAPT-CONTROL-TASKBAR-KIND? IF 0 EXIT THEN
+    _RTAPT-PUBLICATION-CONTROL-CHANGED? IF 0 EXIT THEN
+    _RTAPT-PUBLICATION-CONTROL-ORPHANS? IF 0 EXIT THEN
+    _RTAPT-PA-LEDGER @ _RTAPT-CL.ACTIVE-ITEMS @
+        _RTAPT-PF-CONTENT-ITEMS @ U> IF 0 EXIT THEN
+    _RTAPT-PF-CONTENT-ITEMS @
+        _RTAPT-PA-LEDGER @ _RTAPT-CL.ACTIVE-ITEMS @ -
+        _RTAPT-PF-CONTENT-ITEMS !
+    _RTAPT-PA-LEDGER @ _RTAPT-CL.ACTIVE-UTF8 @
+        _RTAPT-PF-UTF8 @ U> IF 0 EXIT THEN
+    _RTAPT-PF-UTF8 @ _RTAPT-PA-LEDGER @ _RTAPT-CL.ACTIVE-UTF8 @ -
+        _RTAPT-PF-UTF8 !
+    _RTAPT-PF-O @ _RTAPT-O.A-CDROPS @ 1 _RTAPT-UADD? 0= IF
+        DROP 0 EXIT
+    THEN _RTAPT-PF-O @ _RTAPT-O.A-CDROPS !
+    _RTAPT-PUBLICATION-NONDEFINITION+? ;
 
 : _RTAPT-PUBLICATION-CONTROL?  ( -- flag )
     _RTAPT-PF-COPY @ _RTAPT-CD.KIND @ _RTAPT-CONTROL-TASKBAR-KIND? IF
@@ -11170,6 +11398,9 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     THEN
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-CONTROL-WRITE-OP? IF
         _RTAPT-PUBLICATION-CONTROL? EXIT
+    THEN
+    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
+        _RTAPT-PUBLICATION-CONTROL-DROP? EXIT
     THEN
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-INSTRUMENT-OP? IF
         _RTAPT-PUBLICATION-INSTRUMENT? EXIT
@@ -11928,6 +12159,12 @@ VARIABLE _RTAPT-CS-RGBA
         _RTAPT-PT>STATUS
     0 _RTAPT-CS-REPLACE ! ;
 
+: _RTAPT-SEND-CONTROL-DROP  ( -- status )
+    _RTAPT-CS-COPY @ _RTAPT-CD.OWNER @
+    _RTAPT-CS-COPY @ _RTAPT-CD.GENERATION @
+    _RTAPT-CS-COPY @ _RTAPT-CD.CONTROL @
+    _RTAPT-CS-E @ _RTAPT-E.SESSION @ PT-CONTROL-DROP _RTAPT-PT>STATUS ;
+
 \ Copy shape and full dependency audit are required before the publication loop.
 : _RTAPT-SEND-SERIES ( -- status )
     _RTAPT-CS-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @ RTAPT-F-SERIES AND 0= IF
@@ -11963,6 +12200,9 @@ VARIABLE _RTAPT-CS-RGBA
     THEN
     _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-REPLACE = IF
         -1 _RTAPT-SEND-CONTROL EXIT
+    THEN
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
+        _RTAPT-SEND-CONTROL-DROP EXIT
     THEN
     _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-PANE-DEFINE = IF
         0 _RTAPT-SEND-PANE EXIT
@@ -12290,6 +12530,31 @@ VARIABLE _RTAPT-CLI-ACTIVE
         _RTAPT-CLI-ENTRY @ _RTAPT-CL.ACTIVE-ITEMS !
     _RTAPT-CLI-UTF8 @ _RTAPT-CLI-ENTRY @ _RTAPT-CL.ACTIVE-UTF8 ! -1 ;
 
+\ A DELTA drop takes the control out of the active target.  A control the
+\ hidden target also holds keeps its entry for that target; otherwise the
+\ entry goes and the sorted entries after it move down one place.
+: _RTAPT-CONTROL-LEDGER-DROP-ACTIVE?  ( op copy engine -- flag )
+    _RTAPT-CLI-E ! _RTAPT-CLI-COPY ! _RTAPT-CLI-P !
+    _RTAPT-CLI-P @ _RTAPT-P.OWNER-SLOT @ _RTAPT-CLI-E @ _RTAPT-OWNER-NTH
+    _RTAPT-CLI-COPY @ _RTAPT-CD.GENERATION @
+    _RTAPT-CLI-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-CLI-E @
+        _RTAPT-CONTROL-LEDGER-FIND DUP 0= IF DROP 0 EXIT THEN
+        DUP _RTAPT-CLI-ENTRY ! _RTAPT-CL.META @
+        DUP _RTAPT-CL-ACTIVE AND 0= IF DROP 0 EXIT THEN
+    _RTAPT-CL-HIDDEN AND IF
+        _RTAPT-CLI-ENTRY @ _RTAPT-CL.META @ _RTAPT-CL-ACTIVE INVERT AND
+            _RTAPT-CLI-ENTRY @ _RTAPT-CL.META !
+        0 _RTAPT-CLI-ENTRY @ _RTAPT-CL.ACTIVE-ITEMS !
+        0 _RTAPT-CLI-ENTRY @ _RTAPT-CL.ACTIVE-UTF8 ! -1 EXIT
+    THEN
+    _RTAPT-CLI-E @ _RTAPT-E.CONTROL-LEDGER-USED @ 1- _RTAPT-CLI-USED !
+    _RTAPT-CLI-ENTRY @ RTAPT-CONTROL-LEDGER-SIZE + _RTAPT-CLI-ENTRY @
+    _RTAPT-CLI-USED @ _RTAPT-CLI-E @ _RTAPT-CONTROL-LEDGER-NTH
+        _RTAPT-CLI-ENTRY @ - MOVE
+    _RTAPT-CLI-USED @ _RTAPT-CLI-E @ _RTAPT-CONTROL-LEDGER-NTH
+        RTAPT-CONTROL-LEDGER-SIZE 0 FILL
+    _RTAPT-CLI-USED @ _RTAPT-CLI-E @ _RTAPT-E.CONTROL-LEDGER-USED ! -1 ;
+
 : _RTAPT-CONTROL-LEDGER-REFRESH-UTF8?  ( engine -- flag )
     _RTAPT-CLA-E !
     _RTAPT-CLA-E @ _RTAPT-E.OWNER-CAP @ 0 ?DO
@@ -12352,6 +12617,14 @@ VARIABLE _RTAPT-CLAP-COPY
             _RTAPT-OP-CONTROL-REPLACE = AND IF
             _RTAPT-CLAP-P @ _RTAPT-CLAP-COPY @ _RTAPT-CLAP-E @
                 _RTAPT-CONTROL-LEDGER-REPLACE-ACTIVE? 0= IF
+                0 UNLOOP EXIT
+            THEN
+        THEN
+        _RTAPT-CLAP-MODE @ PT-RET-DELTA =
+        _RTAPT-CLAP-P @ _RTAPT-P.KIND @
+            _RTAPT-OP-CONTROL-DROP = AND IF
+            _RTAPT-CLAP-P @ _RTAPT-CLAP-COPY @ _RTAPT-CLAP-E @
+                _RTAPT-CONTROL-LEDGER-DROP-ACTIVE? 0= IF
                 0 UNLOOP EXIT
             THEN
         THEN
@@ -12639,7 +12912,10 @@ VARIABLE _RTAPT-PR-PENDING
                 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTROL-HIGH @
                     _RTAPT-PR-O @ _RTAPT-O.CONTROL-HIGH !
             THEN
-            _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ IF
+            \ Only a DELTA drops, from the active target.
+            _RTAPT-PR-O @ _RTAPT-KEPT-CONTROLS
+                _RTAPT-PR-O @ _RTAPT-O.ACTIVE-CONTROLS !
+            _RTAPT-PR-O @ _RTAPT-CONTROL-TARGETS? IF
                 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTENT-TARGET @
                 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTENT-ITEMS @ +
                     _RTAPT-PR-O @ _RTAPT-O.ACTIVE-CONTENT-ITEMS !
@@ -12656,7 +12932,7 @@ VARIABLE _RTAPT-PR-PENDING
                 THEN
             THEN
             _RTAPT-PR-MODE @ PT-RET-DELTA = IF
-                _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS @ IF
+                _RTAPT-PR-O @ _RTAPT-CONTROL-TARGETS? IF
                     _RTAPT-PR-O @ _RTAPT-O.PENDING-UTF8-TARGET @
                     _RTAPT-PR-O @ _RTAPT-O.PENDING-UTF8 @ +
                         _RTAPT-PR-O @ _RTAPT-O.ACTIVE-UTF8 !
@@ -12689,6 +12965,7 @@ VARIABLE _RTAPT-PR-PENDING
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTENT-ITEMS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-UTF8 !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTROL-REPLACEMENTS !
+            0 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTROL-DROPS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTENT-TARGET !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-UTF8-TARGET !
         THEN

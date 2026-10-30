@@ -55,7 +55,7 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
         "184 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "680 CONSTANT RTAPT-OWNER-SIZE",
+        "696 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
         "728 CONSTANT RTAPT-ENGINE-SIZE",
@@ -198,7 +198,8 @@ def test_glyph_and_control_definitions_share_object_and_utf8_quotas() -> None:
 
     for field in (
         "_RTAPT-O.ACTIVE-OBJECTS",
-        "_RTAPT-O.ACTIVE-CONTROLS",
+        "_RTAPT-KEPT-CONTROLS",
+        "_RTAPT-CONTROL-TARGETS?",
         "_RTAPT-O.ACTIVE-CONTENT-ITEMS",
         "_RTAPT-O.HIDDEN-OBJECTS",
         "_RTAPT-O.HIDDEN-CONTROLS",
@@ -222,7 +223,7 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
     replace = _word(source, "_RTAPT-CONTROL-REPLACE-BODY")
     targets = _word(source, "_RTAPT-CONTROL-REPLACE-TARGETS?")
     quota = _word(source, "_RTAPT-CONTROL-REPLACE-QUOTA?")
-    prior = _word(source, "_RTAPT-CONTROL-REPLACE-PRIOR?")
+    prior = _word(source, "_RTAPT-CONTROL-CHANGED?")
     mutable = _word(source, "_RTAPT-MUTABLE-CONTROL-KIND?")
     drop = _word(source, "_RTAPT-CONTROL-DROP-BODY")
 
@@ -232,7 +233,7 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
         replace,
         "_RTAPT-CONTROL-REGION?",
         "_RTAPT-CONTROL-LEDGER-FIND",
-        "_RTAPT-CONTROL-REPLACE-PRIOR?",
+        "_RTAPT-CONTROL-CHANGED?",
         "_RTAPT-CONTROL-REPLACE-TARGETS?",
         "_RTAPT-CONTROL-REPLACE-QUOTA?",
         "_RTAPT-CONTROL-CAPTURE",
@@ -244,6 +245,7 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
     for kind in ("TEXT-AREA", "TEXT-GRID", "TAB"):
         assert f"RTAPT-CONTROL-{kind}" in mutable
     assert "_RTAPT-OP-CONTROL-REPLACE" in prior
+    assert "_RTAPT-OP-CONTROL-DROP" in prior
     assert "_RTAPT-CD.CONTROL" in prior
     assert "_RTAPT-CL.ACTIVE-ITEMS" in targets
     assert "_RTAPT-CL.ACTIVE-UTF8" in targets
@@ -254,11 +256,24 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
     assert replace.index("_RTAPT-CONTROL-CAPTURE") < replace.index(
         "_RTAPT-O.PENDING-CONTROL-REPLACEMENTS !"
     )
-    assert "RTAPT-S-UNSUPPORTED" in drop
+    # A drop stages the same resulting targets, and each control on screen
+    # is replaced or dropped once.
+    drop_targets = _word(source, "_RTAPT-CONTROL-DROP-TARGETS?")
+    _ordered(
+        drop,
+        "PT-RET-DELTA <>",
+        "_RTAPT-CONTROL-LEDGER-FIND",
+        "_RTAPT-CONTROL-CHANGED?",
+        "_RTAPT-CONTROL-DROP-TARGETS?",
+        "_RTAPT-CONTROL-DROP-CAPTURE",
+    )
     assert "_RTAPT-CONTROL-CAPTURE" not in drop
-    assert "_RTAPT-OP-CONTROL-DROP" not in drop
-    for mutation in ("_RTAPT-O.", "_RTAPT-E.OP-COUNT", "_RTAPT-E.COPY-USED"):
-        assert mutation not in drop
+    for name in ("_RTAPT-CL.ACTIVE-ITEMS", "_RTAPT-CL.ACTIVE-UTF8",
+                 "_RTAPT-O.PENDING-CONTENT-TARGET", "_RTAPT-O.PENDING-UTF8-TARGET",
+                 "_RTAPT-O.PENDING-CONTROL-DROPS", "_RTAPT-O.ACTIVE-CONTROLS @ U>"):
+        assert name in drop_targets
+    assert "_RTAPT-O.PENDING-CONTROL-DROPS" in targets
+    assert "_RTAPT-KEPT-CONTROLS" in quota
 
 
 def test_recording_relies_on_the_begin_and_commit_ledger_audits() -> None:
@@ -285,7 +300,8 @@ def test_recording_relies_on_the_begin_and_commit_ledger_audits() -> None:
              "_RTAPT-PUBLICATION-OPS?")
     for check in ("_RTAPT-CONTROL-LEDGER-FIND", "_RTAPT-CL-ACTIVE",
                   "_RTAPT-CL-KIND-MASK",
-                  "_RTAPT-PUBLICATION-CONTROL-REPLACE-PRIOR?"):
+                  "_RTAPT-PUBLICATION-CONTROL-CHANGED?",
+                  "_RTAPT-PUBLICATION-CONTROL-DROPPED?"):
         assert check in replace_check
 
 
@@ -472,9 +488,23 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     sender = _word(source, "_RTAPT-SEND-CONTROL")
 
     assert "_RTAPT-CONTROL-COPY-FIXED" in banks
-    assert "_RTAPT-OP-CONTROL-DROP" not in banks
-    assert "_RTAPT-OP-CONTROL-DROP" not in shape
     assert "_RTAPT-CONTROL-COPY-FIXED" in shape
+    # A drop's copy is its 24-byte identity alone, and its frame 64 bytes.
+    for checked in (banks, shape):
+        _ordered(checked, "_RTAPT-OP-CONTROL-DROP = IF",
+                 "_RTAPT-BV-COPY-U @ _RTAPT-CONTROL-DROP-COPY-SIZE <>",
+                 "_RTAPT-CONTROL-DROP-FRAME-BYTES _RTAPT-BV-FRAME !")
+    drop = _word(source, "_RTAPT-PUBLICATION-CONTROL-DROP?")
+    for check in ("PT-RET-DELTA <>", "_RTAPT-CONTROL-LEDGER-FIND", "_RTAPT-CL-ACTIVE",
+                  "_RTAPT-CONTROL-TASKBAR-KIND?", "_RTAPT-PUBLICATION-CONTROL-CHANGED?",
+                  "_RTAPT-PUBLICATION-CONTROL-ORPHANS?", "_RTAPT-O.A-CDROPS",
+                  "_RTAPT-PUBLICATION-NONDEFINITION+?"):
+        assert check in drop
+    assert "_RTAPT-O.A-CDROPS" in ledgers
+    assert "_RTAPT-O.PENDING-CONTROL-DROPS" in ledgers
+    send_drop = _word(source, "_RTAPT-SEND-CONTROL-DROP")
+    _ordered(send_drop, "_RTAPT-CD.OWNER", "_RTAPT-CD.GENERATION",
+             "_RTAPT-CD.CONTROL", "PT-CONTROL-DROP")
     assert "_RTAPT-CONTROL-COPY-SHAPE?" in control
     assert "_RTAPT-PF-CCOUNT" in control
     assert "_RTAPT-PF-CONTROL-DEFINE-GRAPH?" in control

@@ -907,8 +907,9 @@ After successful preflight, the producer opens one aggregate screen owner and
 captures a hidden replacement or active delta through the same facade. Initial,
 reset, resize, topology-changing, and otherwise uncertain candidates use
 replacement and reveal. A compatible candidate begins the retained transaction
-in delta mode through `RTE-RETAINED-BEGIN` and uses only
-control/instrument/glyph replacement operations. Seal or commit failure
+in delta mode through `RTE-RETAINED-BEGIN`, replaces the controls,
+instruments and glyph runs that changed, defines the controls that came, and
+drops those that went (`RTE-CONTROL-DROP`). Seal or commit failure
 advances neither CELL nor retained authority. Exact owner drop or confirmed
 session destruction is required before owner storage can be reused.
 
@@ -989,8 +990,16 @@ dropped. The sealed plan lists the definitions with the controls that
 changed, by their places in the pending bank, and the drops by their places
 on screen (`_RTHP-DELTA-PLAN-DROPS@`). The producer's own DELTA and Desk's
 shell send the drops first, so the room they held is free for the
-definitions. A field or a dialog that comes or goes still needs the frame
-replaced whole, as does a change in the number of menu controls.
+definitions. The APT-1 engine captures each drop as it captures a
+replacement: the dropped control's items and UTF-8 bytes leave the owner's
+resulting targets, and its identity leaves the shared object count. A drop
+names a control on screen that no earlier operation of the transaction
+replaced, dropped, or took as a parent, and no later definition or
+replacement takes it as one. Its ledger entry goes when the terminal accepts
+the transaction, and a cancel keeps it. The terminal, which holds every
+control's parent, refuses a drop that would leave a control on screen
+without its parent. A field or a dialog that comes or goes still needs the
+frame replaced whole, as does a change in the number of menu controls.
 
 A comparison of a candidate built for Desk's shell whose bank on screen kept
 those facts, and whose controls each carry, with their own correlation in

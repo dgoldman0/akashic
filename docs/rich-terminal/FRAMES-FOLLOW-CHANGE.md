@@ -1744,9 +1744,12 @@ frame before the change driver.
       identity the comparison gave it, and a family of application
       controls may gain or lose controls: the family emitter defines,
       replaces and drops them by identity. The producer's own DELTA drops
-      as well. The root facts' judge holds each control that went to a
-      root that went or moved. This takes the item views going and the tab
-      coming, 3 frames.
+      as well. The APT-1 engine, whose control drop answered UNSUPPORTED,
+      captures each drop as it captures a replacement, staging the
+      resulting targets, and takes the control out of its ledger when the
+      terminal accepts the transaction. The root facts' judge holds each
+      control that went to a root that went or moved. This takes the item
+      views going and the tab coming, 3 frames.
     - **9c.2b. Overlays that open or close.** Fields and dialogs may come
       and go in the comparison. Desk's shell keeps the identity of each
       region the frame on screen has by its part in the screen, gives a
