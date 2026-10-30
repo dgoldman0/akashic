@@ -585,7 +585,8 @@ inline caller-owned span sets, checked buffer writer, and caller-owned
 scalar/locator schema initializers. It covers the range primitive's separate
 validity result, signed-length and unsigned-wrap boundaries, bitset byte-span
 sizing, null and logical-padding policy, prevalidated range mutation, exact
-logical popcount and unambiguous clear-bit search, empty/null policy separation,
+logical popcount, unambiguous clear-bit search and byte-stepping clear-run
+search, empty/null policy separation,
 half-open overlap and adjacency, borrowed span geometry, independent bounded
 sets and writers, sticky
 all-or-nothing capacity failure, decimal cell extrema, exact schema bytes,

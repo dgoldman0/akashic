@@ -127,8 +127,12 @@ Bitmap admission and mutation use the shared checked LSB0 bitset algebra with
 `total_sectors` as the logical bit count. The on-disk bitmap remains rounded to
 whole 512-byte sectors, but its final padding bits are neither allocatable nor
 counted by logical queries, and shared mutations do not normalize them. The
-driver retains contiguous first-fit search policy, exact on-disk sector-count
-validation, dirty-state publication, and full-physical-span persistence.
+driver retains contiguous first-fit search policy from the data start, exact
+on-disk sector-count validation, dirty-state publication, and
+full-physical-span persistence. Its search is one shared
+`BITSET-FIND-CLEAR-RUN?` call, which checks the cached view once and passes
+full bitmap bytes eight sectors at a time, so the allocated sectors ahead of
+the first gap cost little.
 Malformed internal run geometry is reported as corruption before an immediate
 claim or retirement can publish dependent extent state.
 
@@ -152,9 +156,10 @@ conservatively allocated rather than becoming unsafe reusable space. Unmount
 reports sync failure rather than silently discarding it. Delete and multi-run
 shrink validate every pending range before setting the first pending-free bit;
 an empty optional extent remains a no-op. Applying pending frees stays a
-driver-local bytewise operation over the rounded physical bitmap because it
-owns that durability transition and padding cleanup rather than generic bit
-semantics.
+driver-local operation over the rounded physical bitmap because it owns that
+durability transition and padding cleanup rather than generic bit semantics.
+It works a cell at a time: both maps start at cell offsets in the
+cell-aligned context and span whole sectors.
 
 ## On-disk layout
 
