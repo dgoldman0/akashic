@@ -1400,7 +1400,16 @@ frame before the change driver.
       shell reads what it reads today; its packing and comparison go for
       such frames. With the shadow check on, the full packing and
       comparison run first, and the copy must equal their bank byte for
-      byte and their plan.
+      byte and their plan. **Done** on 2026-10-29 (95f0bba7). The copy
+      takes collections and status fields that moved, with each moved
+      collection a text root; a field's input target keeps the revision its
+      content carries. A typed letter's frame builds in 4.19 million steps
+      against 4.72 for ddd92813, run beside it, the copy taking 0.23
+      million where packing and comparing took 0.77, and it sends the same
+      18 DELTAs and bytes. The canonical journey passed with the shadow
+      check, 14,478 comparisons without a difference, 110 of them the copy
+      stage's from 22 copies, each writing one moved control; it sent the
+      same presents, and passed in safe mode.
     - **9a.3b.3. Only the moved roots are lowered.** A root whose facts did
       not move keeps the items of the bank on screen, and only the moved
       roots are lowered from the snapshot. The claims and counts the shell
