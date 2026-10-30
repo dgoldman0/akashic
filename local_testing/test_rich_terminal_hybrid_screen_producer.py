@@ -6307,11 +6307,22 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     ):
         assert proof in eligible
     assert "_RTHP-RD-FORCE @ IF 0 EXIT THEN" in eligible
-    assert "COMPARE" not in mark_cells
     assert "_RTHP-RD-CELL-DAMAGE-A @ 0= IF 0 EXIT THEN" in mark_cells
     assert "_RTHP-RD-CELL-DAMAGE-U @ _RTHP-RD-ROWS @ <>" in mark_cells
     assert "MSPAN-NONWRAPPING?" in mark_cells
-    assert "_RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ MOVE" in mark_cells
+    # A row the CELL paint changed is marked only where a cell no claim
+    # covers changed: the claims are proved, the map starts clean, and only
+    # the unclaimed spans of FRONT and BACK are compared.
+    assert mark_cells.index("_RTHP-RD-CLAIMS?") < mark_cells.index(
+        "_RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ 0 FILL")
+    assert "_RTHP-RD-UNCLAIMED-SAME? 0= IF I _RTHP-RD-DAMAGE! THEN" in mark_cells
+    assert "_RTHP-ARENA-SPAN?" in _word(source, "_RTHP-RD-CLAIMS?")
+    unclaimed = _word(source, "_RTHP-RD-UNCLAIMED-SAME?")
+    assert "_RTHP-RD-COVER-END" in unclaimed
+    assert "_RTHP-RD-NEXT-CLAIM" in unclaimed
+    span = _word(source, "_RTHP-RD-SPAN-SAME?")
+    assert "_RTHP-RD-FRONT @" in span and "_RTHP-RD-BACK @" in span
+    assert "COMPARE 0=" in span
     assert "SCR-GET" not in source
     assert "RUCL-CLAIM-ROW0@" in mark_claims
     assert "RUCL-CLAIM-ROW1@" in mark_claims

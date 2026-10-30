@@ -140,6 +140,45 @@ def test_closed_menu_and_residue_only_changes_survive_clean_cell_damage(harness)
     assert memory.read_bytes(damage, rows) == bytes((0, 255, 255, 0, 0, 255, 0, 0))
 
 
+
+def test_cell_damage_under_claims_alone_plans_no_row(harness):
+    """A row the CELL paint changed is planned again only where a cell no
+    claim covers changed, since the runs read nothing under a claim."""
+    memory = harness.runtime.memory
+    rows, cols = 4, 8
+    producer = harness.allocate(bytes(harness.constant("RTHP-SIZE")))
+    # One claim, over row 1 from column 2 up to column 6.
+    claim = struct.pack("<10Q", 1, 1, 1, 0, 0, 0, 1, 2, 2, 6)
+    arena = harness.allocate(claim)
+    for name, value in (("_RTHP.ARENA-A", arena), ("_RTHP.ARENA-U", len(claim)),
+                        ("_RTHP.CLAIMS-A", arena), ("_RTHP.CLAIMS-U", len(claim)),
+                        ("_RTHP.CLAIMS-USED", len(claim))):
+        harness.field(producer, name, value)
+    front = b"".join(struct.pack("<Q", 0x20 + i) for i in range(rows * cols))
+    back = bytearray(front)
+
+    def write(row, col, value):
+        back[(row * cols + col) * 8:(row * cols + col + 1) * 8] = struct.pack("<Q", value)
+
+    write(1, 3, 0x41)
+    write(1, 4, 0x42)  # under the claim
+    write(2, 0, 0x43)  # under none; row 3 is written with what it held
+    front_a, back_a = harness.allocate(front), harness.allocate(bytes(back))
+    damage = harness.allocate(bytes(rows))
+    harness.field(producer, "_RTHP.ROW-DAMAGE-A", damage)
+    for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-ROWS", rows),
+                        ("_RTHP-RD-COLS", cols), ("_RTHP-RD-FRONT", front_a),
+                        ("_RTHP-RD-BACK", back_a),
+                        ("_RTHP-RD-CELL-DAMAGE-A", harness.allocate(bytes((0, 255, 255, 255)))),
+                        ("_RTHP-RD-CELL-DAMAGE-U", rows)):
+        harness.variable(name, value)
+    assert harness.call("_RTHP-RD-MARK-CELL-DAMAGE?")
+    assert memory.read_bytes(damage, rows) == bytes((0, 0, 255, 0))
+    # A change beside the claim, on its row, is one the runs read.
+    memory.write64(back_a + (1 * cols + 7) * 8, 0x44)
+    assert harness.call("_RTHP-RD-MARK-CELL-DAMAGE?")
+    assert memory.read_bytes(damage, rows) == bytes((0, 255, 255, 0))
+
 def _bounded_target_producer(harness):
     producer = harness.allocate(bytes(harness.constant("RTHP-SIZE")))
     for name, value in (("_RTHP.MAX-COLS", 3), ("_RTHP.MAX-ROWS", 9),

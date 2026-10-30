@@ -7759,14 +7759,92 @@ VARIABLE _RTHP-RD-ROW-CAP
     THEN
     _RTHP-RD-DRAW @ _RTHP-W-DRAW @ = ;
 
+\ A row the CELL paint changed is planned again only where its runs read a
+\ cell that changed.  The residual plan reads BACK only in cells no claim
+\ covers; under a menu's claim it reads the preserved residue, whose
+\ changes the projection damage marks, and under any other claim nothing.
+\ So a changed row whose unclaimed cells all hold what the frame on screen
+\ showed keeps its runs.  The candidate's claims decide which cells are
+\ claimed; where they differ from the acknowledged ones, every row a claim
+\ of either covers is marked as well (_RTHP-RD-MARK-CURRENT-CLAIMS?).
+VARIABLE _RTHP-RD-CLAIMS-N
+VARIABLE _RTHP-RD-C
+VARIABLE _RTHP-RD-CN
+VARIABLE _RTHP-RD-X
+VARIABLE _RTHP-RD-XE
+
+\ The candidate's claims lie whole in the arena.
+: _RTHP-RD-CLAIMS?  ( -- flag )
+    _RTHP-RD-P @ _RTHP.CLAIMS-USED @ DUP
+        _RTHP-RD-P @ _RTHP.CLAIMS-U @ U> IF DROP 0 EXIT THEN
+    DUP RUCL-CLAIM-SIZE MOD IF DROP 0 EXIT THEN
+    DUP RUCL-CLAIM-SIZE / _RTHP-RD-CLAIMS-N !
+    ?DUP IF
+        _RTHP-RD-P @ _RTHP.CLAIMS-A @ SWAP _RTHP-RD-P @ _RTHP-ARENA-SPAN? EXIT
+    THEN -1 ;
+
+: _RTHP-RD-CURRENT  ( index -- claim )
+    RUCL-CLAIM-SIZE * _RTHP-RD-P @ _RTHP.CLAIMS-A @ + ;
+
+\ CLAIM covers the row in _RTHP-RD-ROW.
+: _RTHP-RD-ON-ROW?  ( claim -- flag )
+    _RTHP-RD-ROW @ OVER RUCL-CLAIM-ROW0@ ROT RUCL-CLAIM-ROW1@ WITHIN ;
+
+\ The furthest column a claim of the row that covers column C reaches, or
+\ C when none covers it.
+: _RTHP-RD-COVER-END  ( c -- end )
+    DUP _RTHP-RD-X ! _RTHP-RD-XE !
+    _RTHP-RD-CLAIMS-N @ 0 ?DO
+        I _RTHP-RD-CURRENT DUP _RTHP-RD-ON-ROW? IF
+            _RTHP-RD-X @ OVER RUCL-CLAIM-COL0@ 2 PICK RUCL-CLAIM-COL1@ WITHIN IF
+                RUCL-CLAIM-COL1@ _RTHP-RD-XE @ MAX _RTHP-RD-XE !
+            ELSE DROP THEN
+        ELSE DROP THEN
+    LOOP _RTHP-RD-XE @ ;
+
+\ The first column past C where a claim of the row begins, or the row's end.
+: _RTHP-RD-NEXT-CLAIM  ( c -- next )
+    _RTHP-RD-X ! _RTHP-RD-COLS @ _RTHP-RD-XE !
+    _RTHP-RD-CLAIMS-N @ 0 ?DO
+        I _RTHP-RD-CURRENT DUP _RTHP-RD-ON-ROW? IF
+            RUCL-CLAIM-COL0@ DUP _RTHP-RD-X @ > IF
+                _RTHP-RD-XE @ MIN _RTHP-RD-XE !
+            ELSE DROP THEN
+        ELSE DROP THEN
+    LOOP _RTHP-RD-XE @ ;
+
+\ FRONT and BACK hold the same cells from C0 to C1 of the row.
+: _RTHP-RD-SPAN-SAME?  ( c0 c1 -- flag )
+    OVER - 8 * >R
+    _RTHP-RD-ROW @ _RTHP-RD-COLS @ * + 8 *
+    DUP _RTHP-RD-FRONT @ + R@
+    ROT _RTHP-RD-BACK @ + R> COMPARE 0= ;
+
+\ The row's unclaimed cells hold what the frame on screen showed.
+: _RTHP-RD-UNCLAIMED-SAME?  ( row -- flag )
+    _RTHP-RD-ROW ! 0 _RTHP-RD-C !
+    BEGIN _RTHP-RD-C @ _RTHP-RD-COLS @ < WHILE
+        _RTHP-RD-C @ _RTHP-RD-COVER-END DUP _RTHP-RD-C @ > IF
+            _RTHP-RD-C !
+        ELSE
+            DROP _RTHP-RD-C @ _RTHP-RD-NEXT-CLAIM _RTHP-RD-CN !
+            _RTHP-RD-C @ _RTHP-RD-CN @ _RTHP-RD-SPAN-SAME? 0= IF 0 EXIT THEN
+            _RTHP-RD-CN @ _RTHP-RD-C !
+        THEN
+    REPEAT -1 ;
+
 : _RTHP-RD-MARK-CELL-DAMAGE?  ( -- flag )
     _RTHP-RD-CELL-DAMAGE-A @ 0= IF 0 EXIT THEN
     _RTHP-RD-CELL-DAMAGE-U @ _RTHP-RD-ROWS @ <> IF 0 EXIT THEN
     _RTHP-RD-CELL-DAMAGE-A @ _RTHP-RD-CELL-DAMAGE-U @
         MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
-    _RTHP-RD-CELL-DAMAGE-A @
-    _RTHP-RD-P @ _RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ MOVE
-    -1 ;
+    _RTHP-RD-CLAIMS? 0= IF 0 EXIT THEN
+    _RTHP-RD-P @ _RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ 0 FILL
+    _RTHP-RD-ROWS @ 0 ?DO
+        _RTHP-RD-CELL-DAMAGE-A @ I + C@ IF
+            I _RTHP-RD-UNCLAIMED-SAME? 0= IF I _RTHP-RD-DAMAGE! THEN
+        THEN
+    LOOP -1 ;
 
 \ Projection-only changes need the same row authority as CELL damage.  An
 \ ordinary write may update residue even when BACK already holds that value.

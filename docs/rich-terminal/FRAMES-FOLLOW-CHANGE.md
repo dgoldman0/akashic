@@ -1340,6 +1340,21 @@ frame before the change driver.
     packing and comparison cost 2.32 million and the snapshot 1.61. By the
     rule above, 9a.3b comes next, and the copy returns when the shell's
     layer again costs most.
+    Read once 9a.3c.2 was done: the shell's layer, 0.94 million steps of a
+    typed letter's 2.81, costs as much as the snapshot again. Of it, 0.34
+    million plan glyph runs again on the rows marked damaged and 0.22
+    million copy the runs of every other row from the frame on screen,
+    though a typed letter changes no glyph run at all: the rows its CELL
+    paint changed lie under the text area's and the status field's claims,
+    and a residual plan reads BACK only in cells no claim covers, the
+    preserved residue under a menu's claim, whose changes the projection
+    damage marks, and nothing under any other claim. So the third piece:
+    a row the CELL paint changed is marked damaged only where a cell no
+    claim of the candidate covers differs from the frame on screen, which
+    a comparison of those cells shows. Where the candidate's claims differ
+    from the acknowledged ones, every row a claim of either covers is
+    marked as before. The shadow check's glyph stages compare the plans
+    with plans built whole.
   - **9a.3b. The producer follows change.** The producer keeps each bank's
     root facts in normal mode too. When the facts show that only some
     roots' contents moved, with every document in its place, the same roots
