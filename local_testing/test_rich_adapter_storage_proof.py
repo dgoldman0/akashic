@@ -32,6 +32,7 @@ SPANS = (
     "SNAP-SFIELD-DESCRIPTORS", "SNAP-SFIELD-NATIVE",
     "SNAP-FIELD-DESCRIPTORS", "SNAP-FIELD-NATIVE",
     "SNAP-DIALOG-DESCRIPTORS", "SNAP-DIALOG-NATIVE",
+    "COLLECTION-BUILDER", "DATA-GRAPHICS-BUILDER",
 )
 # The copy of the records a build saves, which has the records' length.
 # Shared MSPAN-PROVE-DISJOINT? state, idle between proofs.

@@ -306,8 +306,8 @@ REQUIRE ../check-mode.f
 : RUHA-SNAPSHOT-DIALOGS-COUNT@ ( snapshot -- count )
     _RUHA-S.DIALOG-DESCRIPTORS-U @ UDLSN-DESCRIPTOR-SIZE / ;
 
-11 CONSTANT _RUHA-ABI
-0x3131485544495552 CONSTANT _RUHA-MAGIC  \ "RUIDUH11"
+12 CONSTANT _RUHA-ABI
+0x3231485544495552 CONSTANT _RUHA-MAGIC  \ "RUIDUH12"
 
 : _RUHA-A.MAGIC          ( adapter -- a )       ;
 : _RUHA-A.ABI            ( adapter -- a )   8 + ;
@@ -346,10 +346,13 @@ REQUIRE ../check-mode.f
 : _RUHA-A.SNAP-NATIVE-A  ( adapter -- a ) 272 + ;
 : _RUHA-A.SNAP-NATIVE-U  ( adapter -- a ) 280 + ;
 : _RUHA-A.SNAP-NATIVE-BANK-U ( adapter -- a ) 288 + ;
-: _RUHA-A.COLLECTION-BUILDER ( adapter -- a ) 296 + ;
-\ The fields after each embedded builder or snapshot take their offsets
-\ from its size, so a builder that grows cannot overwrite them.
-296 USCOL-BUILDER-SIZE + CONSTANT _RUHA-O.DGRAPH
+\ The builders the collections' and the data graphics' captures use lie in
+\ the block, beside the spans each capture proves together with its builder.
+: _RUHA-A.COLLECTION-BUILDER-A ( adapter -- a ) 296 + ;
+: _RUHA-A.COLLECTION-BUILDER-U ( adapter -- a ) 304 + ;
+: _RUHA-A.COLLECTION-BUILDER ( adapter -- builder )
+    _RUHA-A.COLLECTION-BUILDER-A @ ;
+312 CONSTANT _RUHA-O.DGRAPH
 : _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A ( adapter -- a ) _RUHA-O.DGRAPH + ;
 : _RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U ( adapter -- a ) _RUHA-O.DGRAPH 8 + + ;
 : _RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U ( adapter -- a )
@@ -357,9 +360,11 @@ REQUIRE ../check-mode.f
 : _RUHA-A.SNAP-DGRAPH-NATIVE-A ( adapter -- a ) _RUHA-O.DGRAPH 24 + + ;
 : _RUHA-A.SNAP-DGRAPH-NATIVE-U ( adapter -- a ) _RUHA-O.DGRAPH 32 + + ;
 : _RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U ( adapter -- a ) _RUHA-O.DGRAPH 40 + + ;
-_RUHA-O.DGRAPH 48 + CONSTANT _RUHA-O.DGRAPH-BUILDER
-: _RUHA-A.DATA-GRAPHICS-BUILDER ( adapter -- a ) _RUHA-O.DGRAPH-BUILDER + ;
-_RUHA-O.DGRAPH-BUILDER UDG-BUILDER-SIZE + CONSTANT _RUHA-O.SFIELD
+: _RUHA-A.DATA-GRAPHICS-BUILDER-A ( adapter -- a ) _RUHA-O.DGRAPH 48 + + ;
+: _RUHA-A.DATA-GRAPHICS-BUILDER-U ( adapter -- a ) _RUHA-O.DGRAPH 56 + + ;
+: _RUHA-A.DATA-GRAPHICS-BUILDER ( adapter -- builder )
+    _RUHA-A.DATA-GRAPHICS-BUILDER-A @ ;
+_RUHA-O.DGRAPH 64 + CONSTANT _RUHA-O.SFIELD
 : _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A ( adapter -- a ) _RUHA-O.SFIELD + ;
 : _RUHA-A.SNAP-SFIELD-DESCRIPTORS-U ( adapter -- a ) _RUHA-O.SFIELD 8 + + ;
 : _RUHA-A.SNAP-SFIELD-DESCRIPTOR-BANK-U ( adapter -- a ) _RUHA-O.SFIELD 16 + + ;
@@ -380,6 +385,7 @@ _RUHA-O.FIELD 48 + CONSTANT _RUHA-O.DIALOG
 : _RUHA-A.SNAP-DIALOG-NATIVE-A ( adapter -- a ) _RUHA-O.DIALOG 24 + + ;
 : _RUHA-A.SNAP-DIALOG-NATIVE-U ( adapter -- a ) _RUHA-O.DIALOG 32 + + ;
 : _RUHA-A.SNAP-DIALOG-NATIVE-BANK-U ( adapter -- a ) _RUHA-O.DIALOG 40 + + ;
+\ The fields after each embedded snapshot take their offsets from its size.
 _RUHA-O.DIALOG 48 + CONSTANT _RUHA-O.SNAPSHOT-A
 : _RUHA-A.SNAPSHOT-A     ( adapter -- a ) _RUHA-O.SNAPSHOT-A + ;
 _RUHA-O.SNAPSHOT-A RUHA-SNAPSHOT-SIZE + CONSTANT _RUHA-O.SNAPSHOT-B
@@ -414,11 +420,7 @@ _RUHA-O.LAYERS 40 + CONSTANT RUHA-SIZE
     DUP _RUHA-A.MAGIC @ _RUHA-MAGIC =
     OVER _RUHA-A.ABI @ _RUHA-ABI = AND
     OVER _RUHA-A.SIZE @ RUHA-SIZE = AND
-    OVER _RUHA-A.SELF @ 2 PICK = AND
-    OVER _RUHA-A.COLLECTION-BUILDER USCOL-BUILDER-SIZE
-        MSPAN-NONWRAPPING? AND
-    SWAP _RUHA-A.DATA-GRAPHICS-BUILDER UDG-BUILDER-SIZE
-        MSPAN-NONWRAPPING? AND ;
+    OVER _RUHA-A.SELF @ 2 PICK = AND NIP ;
 
 \ The status, field and dialog families' banks are complete A/B banks, each
 \ native half holding at least one model's header.
@@ -552,6 +554,17 @@ _RUHA-O.LAYERS 40 + CONSTANT RUHA-SIZE
         OVER _RUHA-A.SNAP-DIALOG-DESCRIPTOR-BANK-U @ <> IF DROP 0 EXIT THEN
     DUP _RUHA-A.SNAP-DIALOG-NATIVE-U @ 2 /
         OVER _RUHA-A.SNAP-DIALOG-NATIVE-BANK-U @ <> IF DROP 0 EXIT THEN
+    DUP _RUHA-A.COLLECTION-BUILDER-A @ OVER _RUHA-A.COLLECTION-BUILDER-U @
+        _RUHA-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RUHA-A.COLLECTION-BUILDER-U @ USCOL-BUILDER-SIZE <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _RUHA-A.DATA-GRAPHICS-BUILDER-A @
+        OVER _RUHA-A.DATA-GRAPHICS-BUILDER-U @
+        _RUHA-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RUHA-A.DATA-GRAPHICS-BUILDER-U @ UDG-BUILDER-SIZE <> IF
+        DROP 0 EXIT
+    THEN
     DROP -1 ;
 
 : RUHA-VALID?  ( adapter -- flag )
@@ -703,6 +716,12 @@ VARIABLE _RUHA-SAFE-ADAPTER
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-DIALOG-NATIVE-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.SNAP-DIALOG-NATIVE-U @
         R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
+    _RUHA-SAFE-ADAPTER @ _RUHA-A.COLLECTION-BUILDER-A @
+        _RUHA-SAFE-ADAPTER @ _RUHA-A.COLLECTION-BUILDER-U @
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
+    _RUHA-SAFE-ADAPTER @ _RUHA-A.DATA-GRAPHICS-BUILDER-A @
+        _RUHA-SAFE-ADAPTER @ _RUHA-A.DATA-GRAPHICS-BUILDER-U @
+        R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
     _RUHA-SAFE-ADAPTER @ _RUHA-A.SAVE-A @
         _RUHA-SAFE-ADAPTER @ _RUHA-A.RECORDS-U @
         R@ EXECUTE 0= IF R> DROP 0 EXIT THEN
@@ -710,7 +729,7 @@ VARIABLE _RUHA-SAFE-ADAPTER
         R> EXECUTE ;
 
 
-20 CONSTANT _RUHA-SAFE-SPAN-CAPACITY
+22 CONSTANT _RUHA-SAFE-SPAN-CAPACITY
 CREATE _RUHA-SAFE-SPANS _RUHA-SAFE-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT
 
 \ RUHA admits no span at address zero and no empty or negative length.
@@ -754,12 +773,14 @@ CREATE _RUHA-SAFE-SPANS _RUHA-SAFE-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT
 \  Storage
 \ =====================================================================
 \
-\ RUHA keeps its two snapshot banks, its work spans and a copy of its
-\ document records in one block it takes from the memory source its caller
-\ gives it (memory-source.f).  Each of the thirteen bank spans holds both
-\ banks, A then B, each of the bank's bytes; each work span and the copy
-\ hold one.  A bank's growable spans start from the capacities RUHA-INIT is
-\ given, and the other spans follow from them and the records' count:
+\ RUHA keeps its two snapshot banks, its work spans, the builders of its
+\ collection and data-graphics captures and a copy of its document records
+\ in one block it takes from the memory source its caller gives it
+\ (memory-source.f), so that each capture's spans and builder lie together.
+\ Each of the thirteen bank spans holds both banks, A then B, each of the
+\ bank's bytes; each work span, builder and the copy hold one.  A bank's
+\ growable spans start from the capacities RUHA-INIT is given, and the
+\ other spans follow from them and the records' count:
 \
 \   directory               an entry for every document record
 \   dialog descriptors      one for every document record
@@ -767,6 +788,8 @@ CREATE _RUHA-SAFE-SPANS _RUHA-SAFE-SPAN-CAPACITY MSPAN-SET-BYTES ALLOT
 \   collection validation   the collection native bank
 \   collection work         the collection descriptors' work, or the status
 \                           fields' or fields' frozen work, whichever is most
+\   collection builder      one builder
+\   data-graphics builder   one builder
 \
 \ A build that runs short in a family doubles that family's growable spans
 \ and builds again (_RUHA-G-GROW?), so a bank grows to what its snapshots
@@ -817,7 +840,7 @@ CREATE _RUHA-G-UNITS
 \ The spans in their order in the block, by the adapter field that holds
 \ each one's address; its total bytes follow that field, and a bank span's
 \ bank bytes follow those.  The first thirteen are bank spans.
-17 CONSTANT _RUHA-G-SPANS
+19 CONSTANT _RUHA-G-SPANS
 13 CONSTANT _RUHA-G-BANKED
 CREATE _RUHA-G-FIELDS
     0 _RUHA-A.SNAP-DIRECTORY-A ,          0 _RUHA-A.SNAP-RECORDS-A ,
@@ -828,7 +851,8 @@ CREATE _RUHA-G-FIELDS
     0 _RUHA-A.SNAP-FIELD-NATIVE-A ,       0 _RUHA-A.SNAP-DIALOG-DESCRIPTORS-A ,
     0 _RUHA-A.SNAP-DIALOG-NATIVE-A ,      0 _RUHA-A.WORK-A ,
     0 _RUHA-A.WORK-TEXT-A ,               0 _RUHA-A.COLLECTION-VALIDATION-A ,
-    0 _RUHA-A.COLLECTION-WORK-A ,
+    0 _RUHA-A.COLLECTION-WORK-A ,         0 _RUHA-A.COLLECTION-BUILDER-A ,
+    0 _RUHA-A.DATA-GRAPHICS-BUILDER-A ,
 \ The bank spans' address fields in a snapshot record, in the same order.
 CREATE _RUHA-G-SNAP-FIELDS
     0 _RUHA-S.DIRECTORY-A ,               0 _RUHA-S.RECORDS-A ,
@@ -878,7 +902,8 @@ CREATE _RUHA-G-OLD _RUHA-G-SPANS CELLS ALLOT
     DUP 0= IF DROP 0 EXIT THEN
     7 _RUHA-G-CAP@ USFSN-DESCRIPTOR-SIZE / USFSN-FROZEN-WORK-BYTES MAX
     9 _RUHA-G-CAP@ UFLSN-DESCRIPTOR-SIZE / UFLSN-FROZEN-WORK-BYTES MAX
-    _RUHA-G-ALIGN 16 _RUHA-G-CAP! -1 ;
+    _RUHA-G-ALIGN 16 _RUHA-G-CAP!
+    USCOL-BUILDER-SIZE 17 _RUHA-G-CAP! UDG-BUILDER-SIZE 18 _RUHA-G-CAP! -1 ;
 
 \ The bytes a layout of _RUHA-G-CAP takes with a copy of RECORDS-U bytes of
 \ records, or 0 when they overflow.

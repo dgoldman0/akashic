@@ -1325,8 +1325,13 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0<> _RA-ASSERT",
         "RUHA-DOCUMENT-SIZE 312 = _RA-ASSERT",
         "RUHA-SNAPSHOT-SIZE 240 = _RA-ASSERT",
-        "RUHA-SIZE 1176 = _RA-ASSERT",
-        "_RA-ADAPTER _RUHA-A.COLLECTION-BUILDER _RA-ADAPTER - 296 = _RA-ASSERT",
+        "RUHA-SIZE 1040 = _RA-ASSERT",
+        # The builders lie in the block RUHA took, with the spans their
+        # captures prove together with them.
+        "_RA-ADAPTER _RUHA-A.COLLECTION-BUILDER _RA-ADAPTER _RUHA-A.BLOCK-A @",
+        "  DUP _RA-ADAPTER _RUHA-A.BLOCK-U @ + WITHIN _RA-ASSERT",
+        "_RA-ADAPTER _RUHA-A.DATA-GRAPHICS-BUILDER _RA-ADAPTER _RUHA-A.BLOCK-A @",
+        "  DUP _RA-ADAPTER _RUHA-A.BLOCK-U @ + WITHIN _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-DESCRIPTOR-BANK-U @ UCSN-DESCRIPTOR-SIZE = _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-NATIVE-BANK-U @ 512 = _RA-ASSERT",
         # A corrupted high-bit half length must not pass by wrapping when

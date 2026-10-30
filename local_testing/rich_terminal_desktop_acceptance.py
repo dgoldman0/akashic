@@ -11882,24 +11882,26 @@ def _growing_storage_record(client, variables: dict) -> dict:
 # the bytes of each span in it, both halves of each bank span counted, and
 # two snapshots, the active one holding the bytes the last aggregate used.
 # The attachment records lie in Desk's own storage.  The cells follow
-# uidl-hybrid-adapter.f's ABI 11 layout; its magic and size guard against
+# uidl-hybrid-adapter.f's ABI 12 layout; its magic and size guard against
 # reading another layout.
-_ADAPTER_MAGIC = 0x3131485544495552  # "RUIDUH11"
-_ADAPTER_RECORD_CELLS = 147
+_ADAPTER_MAGIC = 0x3231485544495552  # "RUIDUH12"
+_ADAPTER_RECORD_CELLS = 130
 _ADAPTER_ATTACHMENT_RECORDS = 6
 _ADAPTER_SPAN_CELLS = {
     "capture_work": 9, "capture_text": 11,
     "directory": 13, "menu_records": 16, "menu_text": 19,
     "collection_validation": 28, "collection_work": 30,
     "collection_descriptors": 32, "collection_native": 35,
-    "data_graphics_descriptors": 49, "data_graphics_native": 52,
-    "status_field_descriptors": 65, "status_field_native": 68,
-    "field_descriptors": 71, "field_native": 74,
-    "dialog_descriptors": 77, "dialog_native": 80,
+    "collection_builder": 38,
+    "data_graphics_descriptors": 40, "data_graphics_native": 43,
+    "data_graphics_builder": 46,
+    "status_field_descriptors": 48, "status_field_native": 51,
+    "field_descriptors": 54, "field_native": 57,
+    "dialog_descriptors": 60, "dialog_native": 63,
 }
 _ADAPTER_ACTIVE_BANK = 21
-_ADAPTER_SNAPSHOT_CELLS = (82, 112)
-_ADAPTER_BLOCK_BYTES = 145
+_ADAPTER_SNAPSHOT_CELLS = (65, 95)
+_ADAPTER_BLOCK_BYTES = 128
 _SNAPSHOT_DOCUMENT_COUNT = 8
 _SNAPSHOT_USED_CELLS = {
     "directory": 3, "menu_records": 5, "menu_text": 7,
@@ -11928,7 +11930,7 @@ def _adapter_storage_record(client, producer: int) -> dict:
     except Exception as exc:  # noqa: BLE001 - diagnostics must not fail a pass
         return {"unavailable": True, "error": f"{type(exc).__name__}: {exc}"}
     if cells[0] != _ADAPTER_MAGIC or cells[2] != _ADAPTER_RECORD_CELLS * GUEST_CELL_BYTES:
-        return {"unavailable": True, "error": "not an ABI 11 adapter record"}
+        return {"unavailable": True, "error": "not an ABI 12 adapter record"}
     record = {
         "block_bytes": cells[_ADAPTER_BLOCK_BYTES],
         "attachment_record_bytes": cells[_ADAPTER_ATTACHMENT_RECORDS],

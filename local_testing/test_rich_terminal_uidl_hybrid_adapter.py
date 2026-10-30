@@ -374,8 +374,10 @@ def test_constructor_takes_one_proved_block_from_the_memory_source() -> None:
     )
     _ordered(apart, "_RUHA-I-OWNED-DISJOINT?", "_RUHA-CURRENT-AUTHORITY-DISJOINT?")
     assert "_RUHA-A.SELF @ 2 PICK = AND" in header
-    assert "_RUHA-A.COLLECTION-BUILDER USCOL-BUILDER-SIZE" in header
-    assert "_RUHA-A.DATA-GRAPHICS-BUILDER UDG-BUILDER-SIZE" in header
+    # The builders lie in the block, each a span of its own size.
+    shape = _word(source, "_RUHA-STORAGE-SHAPE?")
+    assert "_RUHA-A.COLLECTION-BUILDER-U @ USCOL-BUILDER-SIZE <>" in shape
+    assert "_RUHA-A.DATA-GRAPHICS-BUILDER-U @ UDG-BUILDER-SIZE <>" in shape
     assert "_RUHA-OWNED-START" in owned_disjoint
     assert "_RUHA-OWNED-LIMIT @" in owned_disjoint
     assert "MSPAN-OVERLAP? 0=" in owned_disjoint
@@ -399,10 +401,11 @@ def test_constructor_takes_one_proved_block_from_the_memory_source() -> None:
 
 def test_the_block_holds_two_banks_of_each_bank_span_and_one_of_each_work_span() -> None:
     """The layout follows from the capacities and the records' count alone:
-    each bank span holds bank A then bank B, and the copy of the records
-    follows the spans."""
+    each bank span holds bank A then bank B, the builders the collection and
+    data-graphics captures prove with their spans lie among them, and the
+    copy of the records follows the spans."""
     source = _source()
-    assert "17 CONSTANT _RUHA-G-SPANS" in source
+    assert "19 CONSTANT _RUHA-G-SPANS" in source
     assert "13 CONSTANT _RUHA-G-BANKED" in source
     assert "11 CONSTANT RUHA-CAPACITY-COUNT" in source
     banked = ["DIRECTORY", "RECORDS", "TEXT", "DESCRIPTORS", "NATIVE",
@@ -412,7 +415,8 @@ def test_the_block_holds_two_banks_of_each_bank_span_and_one_of_each_work_span()
     assert _table(source, "_RUHA-G-FIELDS") == (
         [f"0 _RUHA-A.SNAP-{span}-A" for span in banked]
         + ["0 _RUHA-A.WORK-A", "0 _RUHA-A.WORK-TEXT-A",
-           "0 _RUHA-A.COLLECTION-VALIDATION-A", "0 _RUHA-A.COLLECTION-WORK-A"])
+           "0 _RUHA-A.COLLECTION-VALIDATION-A", "0 _RUHA-A.COLLECTION-WORK-A",
+           "0 _RUHA-A.COLLECTION-BUILDER-A", "0 _RUHA-A.DATA-GRAPHICS-BUILDER-A"])
     snapshot = ["DIRECTORY", "RECORDS", "TEXT", "COLLECTION-DESCRIPTORS",
                 "COLLECTION-NATIVE"] + banked[5:]
     assert _table(source, "_RUHA-G-SNAP-FIELDS") == [
@@ -429,7 +433,9 @@ def test_the_block_holds_two_banks_of_each_bank_span_and_one_of_each_work_span()
                     "_UTUI-MAX-ELEMS UMSN-WORK-ENTRY-SIZE * 13 _RUHA-G-CAP!",
                     "_UCTX-STRS-SZ 14 _RUHA-G-CAP!",
                     "4 _RUHA-G-CAP@ 15 _RUHA-G-CAP!", "UCSN-WORK-BYTES",
-                    "USFSN-FROZEN-WORK-BYTES MAX", "UFLSN-FROZEN-WORK-BYTES MAX"):
+                    "USFSN-FROZEN-WORK-BYTES MAX", "UFLSN-FROZEN-WORK-BYTES MAX",
+                    "USCOL-BUILDER-SIZE 17 _RUHA-G-CAP!",
+                    "UDG-BUILDER-SIZE 18 _RUHA-G-CAP!"):
         assert derived in derive, derived
     place = _word(source, "_RUHA-G-PLACE")
     assert "I _RUHA-G-BANKED < IF DUP _RUHA-G-F @ 16 + ! 2* THEN" in place
@@ -557,6 +563,8 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
         "_RUHA-A.SNAP-NATIVE-A",
         "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A",
         "_RUHA-A.SNAP-DGRAPH-NATIVE-A",
+        "_RUHA-A.COLLECTION-BUILDER-A",
+        "_RUHA-A.DATA-GRAPHICS-BUILDER-A",
         "_RUHA-A.SAVE-A",
         "RUHA-SIZE",
     ):
@@ -577,7 +585,7 @@ def test_runtime_preflights_every_attached_uctx_before_any_bank_write() -> None:
     # RUHA's policy: no address zero and no empty or negative span.
     assert "OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN" in admit
     assert "_RUHA-SAFE-SPANS MSPAN-SET-PUSH MSPAN-SET-S-OK =" in admit
-    assert "20 CONSTANT _RUHA-SAFE-SPAN-CAPACITY" in source
+    assert "22 CONSTANT _RUHA-SAFE-SPAN-CAPACITY" in source
     for lifecycle in (
         "_RUHA-RELAYOUT",
         "_RUHA-PROJECT",
@@ -609,7 +617,7 @@ def test_storage_shape_compares_halves_without_wrapping_multiplication() -> None
     assert "BANK-U @ 2 *" not in shape
 
 
-def test_abi11_layout_embeds_both_fixed_model_builders_and_its_block() -> None:
+def test_abi12_layout_names_its_builders_and_its_block() -> None:
     source = _source()
     assert "312 CONSTANT RUHA-DOCUMENT-SIZE" in source
     assert _offset_for_snapshot_field(source, "_RUHA-D.OWNER-ID") == 224
@@ -621,16 +629,16 @@ def test_abi11_layout_embeds_both_fixed_model_builders_and_its_block() -> None:
     # Then the document's layer: 1 for an overlay slot's document.
     assert _offset_for_snapshot_field(source, "_RUHA-D.LAYER") == 304
     assert "240 CONSTANT RUHA-SNAPSHOT-SIZE" in source
-    assert _constant(source, "RUHA-SIZE") == 1176
-    assert "11 CONSTANT _RUHA-ABI" in source
-    assert '0x3131485544495552 CONSTANT _RUHA-MAGIC' in source
+    assert _constant(source, "RUHA-SIZE") == 1040
+    assert "12 CONSTANT _RUHA-ABI" in source
+    assert '0x3231485544495552 CONSTANT _RUHA-MAGIC' in source
     # The memory source and the block taken from it, then the records' copy
     # in that block, end the adapter.
-    assert _offset_for_snapshot_field(source, "_RUHA-A.LAYERS") == 1136
-    assert _offset_for_snapshot_field(source, "_RUHA-A.MEMORY") == 1144
-    assert _offset_for_snapshot_field(source, "_RUHA-A.BLOCK-A") == 1152
-    assert _offset_for_snapshot_field(source, "_RUHA-A.BLOCK-U") == 1160
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SAVE-A") == 1168
+    assert _offset_for_snapshot_field(source, "_RUHA-A.LAYERS") == 1000
+    assert _offset_for_snapshot_field(source, "_RUHA-A.MEMORY") == 1008
+    assert _offset_for_snapshot_field(source, "_RUHA-A.BLOCK-A") == 1016
+    assert _offset_for_snapshot_field(source, "_RUHA-A.BLOCK-U") == 1024
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SAVE-A") == 1032
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.COLLECTION-VALIDATION-A"
     ) == 216
@@ -647,30 +655,35 @@ def test_abi11_layout_embeds_both_fixed_model_builders_and_its_block() -> None:
     assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-A") == 272
     assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-U") == 280
     assert _offset_for_snapshot_field(source, "_RUHA-A.SNAP-NATIVE-BANK-U") == 288
-    assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-BUILDER") == 296
+    # Each builder's address and bytes, where the builder lies in the block.
+    assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-BUILDER-A") == 296
+    assert _offset_for_snapshot_field(source, "_RUHA-A.COLLECTION-BUILDER-U") == 304
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-A"
-    ) == 384
+    ) == 312
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTORS-U"
-    ) == 392
+    ) == 320
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-DESCRIPTOR-BANK-U"
-    ) == 400
+    ) == 328
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-NATIVE-A"
-    ) == 408
+    ) == 336
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-NATIVE-U"
-    ) == 416
+    ) == 344
     assert _offset_for_snapshot_field(
         source, "_RUHA-A.SNAP-DGRAPH-NATIVE-BANK-U"
-    ) == 424
+    ) == 352
     assert _offset_for_snapshot_field(
-        source, "_RUHA-A.DATA-GRAPHICS-BUILDER"
-    ) == 432
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 656
-    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 896
+        source, "_RUHA-A.DATA-GRAPHICS-BUILDER-A"
+    ) == 360
+    assert _offset_for_snapshot_field(
+        source, "_RUHA-A.DATA-GRAPHICS-BUILDER-U"
+    ) == 368
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-A") == 520
+    assert _offset_for_snapshot_field(source, "_RUHA-A.SNAPSHOT-B") == 760
     assert _offset_for_snapshot_field(
         source, "_RUHA-D.COLLECTION-DESCRIPTOR-OFF"
     ) == 80
@@ -740,8 +753,8 @@ def test_public_aggregate_abi_keeps_document_slices_and_draw_identity() -> None:
         "1 CONSTANT RUHA-S-CAPACITY",
         "RUHA-CAPACITY-COUNT",
         "RUHA-FIRST-CAPACITIES",
-        "11 CONSTANT _RUHA-ABI",
-        '0x3131485544495552 CONSTANT _RUHA-MAGIC',
+        "12 CONSTANT _RUHA-ABI",
+        '0x3231485544495552 CONSTANT _RUHA-MAGIC',
     ):
         assert required in source
 
