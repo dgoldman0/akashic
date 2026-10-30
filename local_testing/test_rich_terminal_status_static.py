@@ -334,7 +334,7 @@ def test_static_abi_is_separate_from_instruments():
     assert "144 CONSTANT RTE-STATIC-PLAN-SIZE" in SOURCE
     assert "168 CONSTANT RTE-HYBRID-PLAN-SIZE" in SOURCE
     assert "504 CONSTANT RTE-HYBRID-ADMISSION-SIZE" in SOURCE
-    assert "328 CONSTANT RTE-FACADE-SIZE" in SOURCE
+    assert "336 CONSTANT RTE-FACADE-SIZE" in SOURCE
     body = _word(SOURCE, "_RTE-HPV-STATIC?")
     assert "INSTRUMENT" not in body
     assert body.count("_RTE-SPV-ITEM?") == 1

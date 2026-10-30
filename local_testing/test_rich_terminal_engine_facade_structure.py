@@ -110,7 +110,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "328 CONSTANT RTE-FACADE-SIZE" in code
+    assert "336 CONSTANT RTE-FACADE-SIZE" in code
     assert "184 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -151,6 +151,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "PIXELS",
         "RESOURCE-WANTS",
         "RESOURCE-FEED",
+        "REGION-DROP",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -202,6 +203,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-CONTROL-DEFINE": "( control facade -- status )",
         "RTE-CONTROL-REPLACE": "( control facade -- status )",
         "RTE-CONTROL-DROP": "( owner generation control facade -- status )",
+        "RTE-REGION-DROP": "( owner generation region facade -- status )",
         "RTE-HYBRID-PLAN-BYTES": "( -- bytes )",
         "RTE-HYBRID-TEXT-REF-BYTES": "( -- bytes )",
         "RTE-HYBRID-ADMISSION-BYTES": "( -- bytes )",
@@ -347,6 +349,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.CONTROL-DEF-XT !",
         "_RTE-F.CONTROL-REPLACE-XT !",
         "_RTE-F.CONTROL-DROP-XT !",
+        "_RTE-F.REGION-DROP-XT !",
         "_RTE-F.HYBRID-PREFLIGHT-XT !",
         "_RTE-F.INSTRUMENT-DEF-XT !",
     ):

@@ -120,7 +120,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "696 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "712 CONSTANT RTAPT-OWNER-SIZE" in source
     assert "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE" in source
     assert "80 CONSTANT RTAPT-CONFIG-SIZE" in source
     assert "40 CONSTANT RTAPT-OP-SIZE" in source
@@ -187,6 +187,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "A-PATH-POINTS": 672,
         "PENDING-CONTROL-DROPS": 680,
         "A-CDROPS": 688,
+        "PENDING-REGION-DROPS": 696,
+        "A-RDROPS": 704,
     }
     for field, offset in owner_fields.items():
         definition = _definition(source, f"_RTAPT-O.{field}")
@@ -521,7 +523,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     )
     control_capture = _definition(source, "_RTAPT-CONTROL-CAPTURE")
     control_drop_body = _definition(source, "_RTAPT-CONTROL-DROP-BODY")
-    control_drop_capture = _definition(source, "_RTAPT-CONTROL-DROP-CAPTURE")
+    control_drop_capture = _definition(source, "_RTAPT-DROP-CAPTURE")
     glyph_run_target = _definition(source, "_RTAPT-GLYPH-RUN-TARGET?")
     glyph_run_geometry = _definition(source, "_RTAPT-GLYPH-RUN-GEOMETRY?")
     control_root_geometry = _definition(
@@ -618,7 +620,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledger_wrapper
     assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledger_wrapper
     assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledger_wrapper
-    assert "_RTAPT-OP-CONTROL-DROP = OR" in ledger_wrapper
+    assert "_RTAPT-DROP-OP? OR" in ledger_wrapper
     assert "_RTAPT-OP-INSTRUMENT-REPLACE = OR" in ledger_wrapper
     assert "_RTAPT-OP-STATIC-REPLACE = OR" in ledger_wrapper
     assert "_RTAPT-SERIES-SAMPLE-OP? OR IF" in ledger_wrapper
@@ -724,11 +726,19 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     places = [control_drop_body.index(word) for word in (
         "_RTAPT-CAPTURE-READY?", "_RTAPT-OWNER-FIND", "_RTAPT-CONTROL-LEDGER-FIND",
         "_RTAPT-CONTROL-CHANGED?", "_RTAPT-CONTROL-DROP-TARGETS?",
-        "_RTAPT-CONTROL-DROP-ROOM?", "_RTAPT-CONTROL-DROP-CAPTURE")]
+        "_RTAPT-DROP-ROOM?", "_RTAPT-DROP-CAPTURE")]
     assert places == sorted(places)
-    assert "_RTAPT-OP-CONTROL-DROP _RTAPT-CX-DIRTY-P @ _RTAPT-P.KIND !" in control_drop_capture
-    assert control_drop_capture.index("_RTAPT-E.OP-COUNT +!") < control_drop_capture.index(
+    assert "_RTAPT-OP-CONTROL-DROP _RTAPT-CX-O @ _RTAPT-DROP-CAPTURE" in control_drop_body
+    assert "_RTAPT-DX-DIRTY-P @ _RTAPT-P.KIND !" in control_drop_capture
+    assert control_drop_body.index("_RTAPT-DROP-CAPTURE") < control_drop_body.index(
         "_RTAPT-O.PENDING-CONTROL-DROPS +!")
+    region_drop_body = _definition(source, "_RTAPT-REGION-DROP-BODY")
+    places = [region_drop_body.index(word) for word in (
+        "_RTAPT-CAPTURE-READY?", "PT-RET-DELTA <>", "_RTAPT-OWNER-FIND",
+        "_RTAPT-O.REGION-HIGH @ U>", "_RTAPT-KEPT-REGIONS", "_RTAPT-REGION-DROPPED?",
+        "_RTAPT-DROP-ROOM?", "_RTAPT-DROP-CAPTURE",
+        "_RTAPT-O.PENDING-REGION-DROPS +!")]
+    assert places == sorted(places)
 
     # Replacement reuses the exact neutral record and retry shape, but it is
     # admitted only against the selected committed target and never mutates
@@ -950,6 +960,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL" in audit_clear
     assert "_RTAPT-O.A-SERIES 24 0 FILL" in audit_clear
     assert "_RTAPT-O.A-CDROPS OFF" in audit_clear
+    assert "_RTAPT-O.A-RDROPS OFF" in audit_clear
     assert "_RTAPT-AUDIT-SCRATCH-DIRTY" in publication_finish
     assert cell_commit.count("_RTAPT-PUBLICATION-AUDIT?") == 1
     assert "_RTAPT-PRIOR-REGION?" not in source
@@ -1057,6 +1068,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "PENDING-UTF8",
         "PENDING-CONTROL-REPLACEMENTS",
         "PENDING-CONTROL-DROPS",
+        "PENDING-REGION-DROPS",
         "PENDING-CONTENT-TARGET",
         "PENDING-UTF8-TARGET",
     ):
@@ -1071,6 +1083,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "PENDING-UTF8",
         "PENDING-CONTROL-REPLACEMENTS",
         "PENDING-CONTROL-DROPS",
+        "PENDING-REGION-DROPS",
         "PENDING-CONTENT-TARGET",
         "PENDING-UTF8-TARGET",
     ):

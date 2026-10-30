@@ -359,10 +359,12 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 15 CONSTANT _RTAPT-OP-IMAGE-DEFINE
 16 CONSTANT _RTAPT-OP-IMAGE-REPLACE
 17 CONSTANT _RTAPT-OP-CONTROL-DROP
-\ A CONTROL_DROP copy is the identity alone: owner, generation and control,
-\ as its 24-byte payload carries them after APT-1's 40-byte frame header.
-24 CONSTANT _RTAPT-CONTROL-DROP-COPY-SIZE
-64 CONSTANT _RTAPT-CONTROL-DROP-FRAME-BYTES
+18 CONSTANT _RTAPT-OP-REGION-DROP
+\ A drop's copy is the identity alone: owner, generation and the control or
+\ region, as its 24-byte payload carries them after APT-1's 40-byte frame
+\ header.  A region drop's copy keeps the region at +16, as a define's does.
+24 CONSTANT _RTAPT-DROP-COPY-SIZE
+64 CONSTANT _RTAPT-DROP-FRAME-BYTES
 \ An IMAGE copy is the descriptor alone; its frame is APT-1's 40-byte header
 \ and the 96-byte OBJECT payload.  Every IMAGE goes with CLIP, its whole
 \ rectangle when it shows all of it, so each frame has one exact size and
@@ -424,6 +426,10 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
     DUP _RTAPT-OP-CONTROL-DEFINE =
     SWAP _RTAPT-OP-CONTROL-REPLACE = OR ;
 
+: _RTAPT-DROP-OP?  ( kind -- flag )
+    DUP _RTAPT-OP-CONTROL-DROP =
+    SWAP _RTAPT-OP-REGION-DROP = OR ;
+
 : _RTAPT-INSTRUMENT-OP?  ( kind -- flag )
     DUP _RTAPT-OP-INSTRUMENT-DEFINE =
     SWAP _RTAPT-OP-INSTRUMENT-REPLACE = OR ;
@@ -483,9 +489,9 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 \ hold the owner-wide resource store: committed resources, their bytes, and
 \ the highest resource ID this generation has used.  The next six are the
 \ line points the owner holds and asks for, its active, hidden and pending
-\ usage of them, and their audit cell.  The last two count the controls a
-\ DELTA drops and their audit cell.
-696 CONSTANT RTAPT-OWNER-SIZE
+\ usage of them, and their audit cell.  The last four count the controls and
+\ the regions a DELTA drops, each with its audit cell.
+712 CONSTANT RTAPT-OWNER-SIZE
 \ One durable control ledger entry accounts for one CONTROL identity in the
 \ active and/or hidden retained target.
 \ Capacity remains entirely caller-selected.
@@ -843,10 +849,15 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 \ dropped control's items and bytes leave them.
 : _RTAPT-O.PENDING-CONTROL-DROPS ( o -- a ) 680 + ;
 : _RTAPT-O.A-CDROPS ( o -- a ) 688 + ;
+\ The regions a DELTA drops, and their audit cell.  A dropped region keeps
+\ its identity: REGION-HIGH does not fall.
+: _RTAPT-O.PENDING-REGION-DROPS ( o -- a ) 696 + ;
+: _RTAPT-O.A-RDROPS ( o -- a ) 704 + ;
 : _RTAPT-OWNER-AUDIT-CLEAR ( owner -- )
     DUP _RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE 0 FILL
     DUP _RTAPT-O.A-SERIES 24 0 FILL
     DUP _RTAPT-O.A-CDROPS OFF
+    DUP _RTAPT-O.A-RDROPS OFF
     _RTAPT-O.A-PATH-POINTS OFF ;
 
 \ Whether the owner's DELTA stages resulting control targets: it replaces
@@ -858,6 +869,10 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 \ The active controls the owner's candidate keeps.
 : _RTAPT-KEPT-CONTROLS  ( owner -- n )
     DUP _RTAPT-O.ACTIVE-CONTROLS @ SWAP _RTAPT-O.PENDING-CONTROL-DROPS @ - ;
+
+\ The active regions the owner's candidate keeps.
+: _RTAPT-KEPT-REGIONS  ( owner -- n )
+    DUP _RTAPT-O.ACTIVE-REGIONS @ SWAP _RTAPT-O.PENDING-REGION-DROPS @ - ;
 
 
 \ Captured operation records contain no borrowed caller pointer.  COPY-OFF is
@@ -933,6 +948,11 @@ _RTAPT-REGION-F-VISIBLE _RTAPT-REGION-F-CLIPPED OR _RTAPT-REGION-F-MODAL OR
 : _RTAPT-CD.CONTENT-RUNS ( c -- a ) 144 + ;
 : _RTAPT-CD.CONTENT-FIELDS ( c -- a ) 152 + ;
 : _RTAPT-CD.TEXT       ( c -- a ) 160 + ;
+
+\ A drop's copy: the owner, its generation, and the control or region.
+: _RTAPT-XD.OWNER      ( d -- a )       ;
+: _RTAPT-XD.GENERATION ( d -- a )   8 + ;
+: _RTAPT-XD.ID         ( d -- a )  16 + ;
 
 \ Durable provider accounting for controls whose complete wire record may
 \ change in DELTA.  OWNER-SLOT is an exact pointer into the
@@ -2089,10 +2109,10 @@ VARIABLE _RTAPT-SF-U
             IF 0 UNLOOP EXIT THEN
         _RTAPT-BV-E @ _RTAPT-E.COPY-A @ _RTAPT-BV-OFF @ +
             _RTAPT-BV-COPY !
-        _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
-            _RTAPT-BV-COPY-U @ _RTAPT-CONTROL-DROP-COPY-SIZE <>
+        _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-DROP-OP? IF
+            _RTAPT-BV-COPY-U @ _RTAPT-DROP-COPY-SIZE <>
                 IF 0 UNLOOP EXIT THEN
-            _RTAPT-CONTROL-DROP-FRAME-BYTES _RTAPT-BV-FRAME !
+            _RTAPT-DROP-FRAME-BYTES _RTAPT-BV-FRAME !
         ELSE
         _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-IMAGE-OP? IF
             _RTAPT-BV-COPY-U @ RTAPT-IMAGE-SIZE <> IF 0 UNLOOP EXIT THEN
@@ -2458,6 +2478,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
     DUP _RTAPT-OWNER-AUDIT-OFF + _RTAPT-OWNER-AUDIT-SIZE _RTAPT-ZERO-SPAN?
     OVER _RTAPT-O.A-PATH-POINTS @ 0= AND
     OVER _RTAPT-O.A-CDROPS @ 0= AND
+    OVER _RTAPT-O.A-RDROPS @ 0= AND
     SWAP _RTAPT-O.A-SERIES 24 _RTAPT-ZERO-SPAN? AND ;
 
 : _RTAPT-OWNER-AUDIT-MATCH?  ( -- flag )
@@ -2499,6 +2520,8 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
         _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROLS @ <> IF 0 EXIT THEN
     _RTAPT-LV-O @ _RTAPT-O.A-CDROPS @
         _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-DROPS @ <> IF 0 EXIT THEN
+    _RTAPT-LV-O @ _RTAPT-O.A-RDROPS @
+        _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-DROPS @ <> IF 0 EXIT THEN
     _RTAPT-LV-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA = IF
         _RTAPT-LV-O @ _RTAPT-O.A-CCOUNT @ IF
             _RTAPT-LV-O @ _RTAPT-O.A-CHIGH @
@@ -2653,6 +2676,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
             _RTAPT-LV-O @ _RTAPT-O.REGION-HIGH @ OR
             _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ OR
             _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-HIGH @ OR
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-DROPS @ OR
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @ OR
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-OBJECTS @ OR
             _RTAPT-LV-O @ _RTAPT-O.OBJECT-HIGH @ OR
@@ -2684,7 +2708,13 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
                 0 UNLOOP EXIT
             THEN
         ELSE
-            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @
+            \ Only a DELTA drops regions, and only regions on screen.
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-DROPS @ ?DUP IF
+                _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ U>
+                _RTAPT-LV-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> OR
+                    IF 0 UNLOOP EXIT THEN
+            THEN
+            _RTAPT-LV-O @ _RTAPT-KEPT-REGIONS
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @
             _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @
             _RTAPT-LV-O @ _RTAPT-O.REGIONS @ _RTAPT-LV-E @
@@ -2915,7 +2945,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
         I _RTAPT-LV-E @ _RTAPT-OP-NTH _RTAPT-P.KIND @
         DUP _RTAPT-OP-GLYPH-RUN-REPLACE =
         OVER _RTAPT-OP-CONTROL-REPLACE = OR
-        OVER _RTAPT-OP-CONTROL-DROP = OR
+        OVER _RTAPT-DROP-OP? OR
         OVER _RTAPT-OP-INSTRUMENT-REPLACE = OR
         OVER _RTAPT-OP-STATIC-REPLACE = OR
         OVER _RTAPT-OP-PANE-REPLACE = OR
@@ -3354,6 +3384,7 @@ VARIABLE _RTAPT-QA-O
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-SAMPLES !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-REGIONS !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-REGION-HIGH !
+            0 _RTAPT-QA-O @ _RTAPT-O.PENDING-REGION-DROPS !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-OBJECTS !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-OBJECT-HIGH !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-UTF8 !
@@ -4221,6 +4252,7 @@ VARIABLE _RTAPT-BC-E
         DUP _RTAPT-O.PENDING-PATH-POINTS OFF
         DUP _RTAPT-O.PENDING-REGIONS OFF
         DUP _RTAPT-O.PENDING-REGION-HIGH OFF
+        DUP _RTAPT-O.PENDING-REGION-DROPS OFF
         DUP _RTAPT-O.PENDING-OBJECTS OFF
         DUP _RTAPT-O.PENDING-OBJECT-HIGH OFF
         DUP _RTAPT-O.PENDING-CONTROLS OFF
@@ -6285,7 +6317,7 @@ VARIABLE _RTAPT-RD-BASE
     _RTAPT-RD-E ! _RTAPT-RD-O !
     _RTAPT-RD-E @ _RTAPT-E.RET-MODE @ DUP PT-RET-DELTA =
     OVER PT-RET-LAYOUT-START = OR IF
-        DROP _RTAPT-RD-O @ _RTAPT-O.ACTIVE-REGIONS @ EXIT
+        DROP _RTAPT-RD-O @ _RTAPT-KEPT-REGIONS EXIT
     THEN
     PT-RET-REPLACE-START = IF 0 EXIT THEN
     _RTAPT-RD-O @ _RTAPT-O.HIDDEN-REGIONS @ ;
@@ -7325,6 +7357,12 @@ VARIABLE _RTAPT-CD-DIRTY-COPY-U
     _RTAPT-CD-O @ _RTAPT-O.ACTIVE-REGIONS @ 0= IF 0 EXIT THEN
     _RTAPT-CD-REGION @ _RTAPT-CD-O @ _RTAPT-O.REGION-HIGH @ U> 0= ;
 
+\ A DELTA's definition goes into a region on screen, or into one this
+\ capture defined before it, above the regions on screen.
+: _RTAPT-CONTROL-DELTA-REGION?  ( -- flag )
+    _RTAPT-CD-REGION @ _RTAPT-CD-O @ _RTAPT-O.REGION-HIGH @ U>
+        _RTAPT-CONTROL-REGION? ;
+
 : _RTAPT-CONTROL-SHARED-QUOTA?  ( addition -- flag )
     >R
     _RTAPT-CD-O @ _RTAPT-CD-E @ _RTAPT-SHARED-OBJECT-BASE? 0= IF
@@ -7594,7 +7632,7 @@ VARIABLE _RTAPT-CRP-MIN
         _RTAPT-P.KIND @ DUP _RTAPT-OP-CONTROL-REPLACE = IF
             DROP _RTAPT-CONTROL-COPY-FIXED
         ELSE _RTAPT-OP-CONTROL-DROP = IF
-            _RTAPT-CONTROL-DROP-COPY-SIZE
+            _RTAPT-DROP-COPY-SIZE
         ELSE 0 THEN THEN
         _RTAPT-CRP-MIN !
         _RTAPT-CRP-MIN @ IF
@@ -7690,8 +7728,9 @@ VARIABLE _RTAPT-CRP-MIN
     _RTAPT-CONTROL-LEDGER-DEFINE-CAPACITY? 0= IF
         RTAPT-S-CAPACITY EXIT
     THEN
-    _RTAPT-CD-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <>
-        _RTAPT-CONTROL-REGION? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-CD-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA = IF
+        _RTAPT-CONTROL-DELTA-REGION?
+    ELSE -1 _RTAPT-CONTROL-REGION? THEN 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CD-ID @ _RTAPT-CD-O @ _RTAPT-O.CONTROL-HIGH @ U> 0=
         IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CD-ID @ _RTAPT-CD-O @ _RTAPT-O.PENDING-CONTROL-HIGH @ U> 0=
@@ -7846,9 +7885,64 @@ CREATE _RTAPT-TASKBAR-OWNED-END
     THEN
     _RTAPT-CONTROL-SCRUB ;
 
-\ CONTROL_REPLACE and CONTROL_DROP are DELTA-only; replacement and layout
-\ construction accept CONTROL_DEFINE records only.  Owner DROP removes that
-\ owner's complete ledger.
+\ =====================================================================
+\  Drops
+\ =====================================================================
+
+\ CONTROL_REPLACE, CONTROL_DROP and REGION_DROP are DELTA-only; replacement
+\ and layout construction accept definitions only.  Owner DROP removes that
+\ owner's complete ledger.  Every drop records the same 24-byte identity and
+\ sends a 64-byte frame.
+
+VARIABLE _RTAPT-DX-E
+VARIABLE _RTAPT-DX-NEXT-RET
+VARIABLE _RTAPT-DX-DIRTY-P
+VARIABLE _RTAPT-DX-DIRTY-COPY
+
+\ Room for one more drop in ENGINE's banks, within the terminal's limits.
+: _RTAPT-DROP-ROOM?  ( engine -- flag )
+    _RTAPT-DX-E !
+    _RTAPT-DX-E @ _RTAPT-E.OP-COUNT @ 0xFFFFFFFF U< 0= IF 0 EXIT THEN
+    _RTAPT-DX-E @ _RTAPT-E.OP-COUNT @
+        _RTAPT-DX-E @ _RTAPT-E.OP-CAP @ U< 0= IF 0 EXIT THEN
+    _RTAPT-DX-E @ _RTAPT-E.COPY-U @ _RTAPT-DX-E @ _RTAPT-E.COPY-USED @ -
+        _RTAPT-DROP-COPY-SIZE U< IF 0 EXIT THEN
+    _RTAPT-DX-E @ _RTAPT-E.LIMITS
+    _RTAPT-DX-E @ _RTAPT-E.OP-COUNT @ 1+
+        OVER _RTAPT-L.OPS @ U> IF DROP 0 EXIT THEN
+    _RTAPT-DROP-COPY-SIZE
+        OVER _RTAPT-L.OUTBOUND-PAYLOAD @ U> IF DROP 0 EXIT THEN
+    _RTAPT-DX-E @ _RTAPT-E.RET-BYTES @ _RTAPT-DROP-FRAME-BYTES
+        _RTAPT-UADD? 0= IF 2DROP 0 EXIT THEN DUP _RTAPT-DX-NEXT-RET !
+    _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES _RTAPT-UADD? 0= IF 2DROP 0 EXIT THEN
+    SWAP _RTAPT-L.UPDATE-BYTES @ U> 0= ;
+
+\ Record the drop of ID, of op KIND, by the owner in OWNER-RECORD, in the
+\ engine _RTAPT-DROP-ROOM? last found room in.
+: _RTAPT-DROP-CAPTURE  ( owner generation id kind owner-record -- )
+    _RTAPT-DX-E @ _RTAPT-OWNER-SLOT >R
+    _RTAPT-DX-E @ _RTAPT-E.OP-COUNT @ _RTAPT-DX-E @ _RTAPT-OP-NTH
+        DUP _RTAPT-DX-DIRTY-P ! RTAPT-OP-SIZE 0 FILL
+    _RTAPT-DX-E @ _RTAPT-E.COPY-A @ _RTAPT-DX-E @ _RTAPT-E.COPY-USED @ +
+        DUP _RTAPT-DX-DIRTY-COPY ! _RTAPT-DROP-COPY-SIZE 0 FILL
+    _RTAPT-DX-DIRTY-P @ _RTAPT-P.KIND !
+    _RTAPT-DX-E @ _RTAPT-E.COPY-USED @
+        _RTAPT-DX-DIRTY-P @ _RTAPT-P.COPY-OFF !
+    _RTAPT-DROP-COPY-SIZE _RTAPT-DX-DIRTY-P @ _RTAPT-P.COPY-U !
+    R> _RTAPT-DX-DIRTY-P @ _RTAPT-P.OWNER-SLOT !
+    _RTAPT-DX-DIRTY-COPY @ _RTAPT-XD.ID !
+    _RTAPT-DX-DIRTY-COPY @ _RTAPT-XD.GENERATION !
+    _RTAPT-DX-DIRTY-COPY @ _RTAPT-XD.OWNER !
+    _RTAPT-DROP-COPY-SIZE _RTAPT-DX-E @ _RTAPT-E.COPY-USED +!
+    _RTAPT-DX-NEXT-RET @ _RTAPT-DX-E @ _RTAPT-E.RET-BYTES !
+    1 _RTAPT-DX-E @ _RTAPT-E.OP-COUNT +!
+    0 _RTAPT-DX-DIRTY-P ! 0 _RTAPT-DX-DIRTY-COPY ! ;
+
+: _RTAPT-DROP-SCRUB  ( -- )
+    _RTAPT-DX-DIRTY-P @ ?DUP IF RTAPT-OP-SIZE 0 FILL THEN
+    _RTAPT-DX-DIRTY-COPY @ ?DUP IF _RTAPT-DROP-COPY-SIZE 0 FILL THEN
+    0 _RTAPT-DX-E ! 0 _RTAPT-DX-NEXT-RET !
+    0 _RTAPT-DX-DIRTY-P ! 0 _RTAPT-DX-DIRTY-COPY ! ;
 
 VARIABLE _RTAPT-CX-E
 VARIABLE _RTAPT-CX-OWNER
@@ -7858,9 +7952,6 @@ VARIABLE _RTAPT-CX-O
 VARIABLE _RTAPT-CX-LEDGER
 VARIABLE _RTAPT-CX-CONTENT
 VARIABLE _RTAPT-CX-UTF8
-VARIABLE _RTAPT-CX-NEXT-RET
-VARIABLE _RTAPT-CX-DIRTY-P
-VARIABLE _RTAPT-CX-DIRTY-COPY
 
 \ The resulting targets without the dropped control's items and bytes, and
 \ whether the owner's active controls cover every control this capture
@@ -7882,47 +7973,6 @@ VARIABLE _RTAPT-CX-DIRTY-COPY
         _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
     1 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
     _RTAPT-CX-O @ _RTAPT-O.ACTIVE-CONTROLS @ U> 0= ;
-
-\ Room for one more operation, its copy and its frame, within the banks and
-\ the terminal's limits.
-: _RTAPT-CONTROL-DROP-ROOM?  ( -- flag )
-    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @ 0xFFFFFFFF U< 0= IF 0 EXIT THEN
-    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @
-        _RTAPT-CX-E @ _RTAPT-E.OP-CAP @ U< 0= IF 0 EXIT THEN
-    _RTAPT-CX-E @ _RTAPT-E.COPY-U @ _RTAPT-CX-E @ _RTAPT-E.COPY-USED @ -
-        _RTAPT-CONTROL-DROP-COPY-SIZE U< IF 0 EXIT THEN
-    _RTAPT-CX-E @ _RTAPT-E.LIMITS
-    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @ 1+
-        OVER _RTAPT-L.OPS @ U> IF DROP 0 EXIT THEN
-    _RTAPT-CONTROL-DROP-COPY-SIZE
-        OVER _RTAPT-L.OUTBOUND-PAYLOAD @ U> IF DROP 0 EXIT THEN
-    _RTAPT-CX-E @ _RTAPT-E.RET-BYTES @ _RTAPT-CONTROL-DROP-FRAME-BYTES
-        _RTAPT-UADD? 0= IF 2DROP 0 EXIT THEN DUP _RTAPT-CX-NEXT-RET !
-    _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES _RTAPT-UADD? 0= IF 2DROP 0 EXIT THEN
-    SWAP _RTAPT-L.UPDATE-BYTES @ U> 0= ;
-
-: _RTAPT-CONTROL-DROP-CAPTURE  ( -- status )
-    _RTAPT-CX-E @ _RTAPT-E.OP-COUNT @ _RTAPT-CX-E @ _RTAPT-OP-NTH
-        DUP _RTAPT-CX-DIRTY-P ! RTAPT-OP-SIZE 0 FILL
-    _RTAPT-CX-E @ _RTAPT-E.COPY-A @ _RTAPT-CX-E @ _RTAPT-E.COPY-USED @ +
-        DUP _RTAPT-CX-DIRTY-COPY ! _RTAPT-CONTROL-DROP-COPY-SIZE 0 FILL
-    _RTAPT-OP-CONTROL-DROP _RTAPT-CX-DIRTY-P @ _RTAPT-P.KIND !
-    _RTAPT-CX-E @ _RTAPT-E.COPY-USED @
-        _RTAPT-CX-DIRTY-P @ _RTAPT-P.COPY-OFF !
-    _RTAPT-CONTROL-DROP-COPY-SIZE _RTAPT-CX-DIRTY-P @ _RTAPT-P.COPY-U !
-    _RTAPT-CX-O @ _RTAPT-CX-E @ _RTAPT-OWNER-SLOT
-        _RTAPT-CX-DIRTY-P @ _RTAPT-P.OWNER-SLOT !
-    _RTAPT-CX-OWNER @ _RTAPT-CX-DIRTY-COPY @ _RTAPT-CD.OWNER !
-    _RTAPT-CX-GEN @ _RTAPT-CX-DIRTY-COPY @ _RTAPT-CD.GENERATION !
-    _RTAPT-CX-ID @ _RTAPT-CX-DIRTY-COPY @ _RTAPT-CD.CONTROL !
-    _RTAPT-CONTROL-DROP-COPY-SIZE _RTAPT-CX-E @ _RTAPT-E.COPY-USED +!
-    _RTAPT-CX-NEXT-RET @ _RTAPT-CX-E @ _RTAPT-E.RET-BYTES !
-    1 _RTAPT-CX-E @ _RTAPT-E.OP-COUNT +!
-    0 _RTAPT-CX-DIRTY-P ! 0 _RTAPT-CX-DIRTY-COPY !
-    _RTAPT-CX-CONTENT @ _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTENT-TARGET !
-    _RTAPT-CX-UTF8 @ _RTAPT-CX-O @ _RTAPT-O.PENDING-UTF8-TARGET !
-    1 _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTROL-DROPS +!
-    RTAPT-S-OK DUP _RTAPT-CX-E @ _RTAPT-E.LAST-STATUS ! ;
 
 \ A drop names an active control of an open owner, in a DELTA, that no
 \ earlier operation of this capture replaced or dropped.  Its content items
@@ -7964,18 +8014,19 @@ VARIABLE _RTAPT-CX-DIRTY-COPY
     _RTAPT-CX-O @ _RTAPT-CX-E @ _RTAPT-OWNER-SLOT _RTAPT-CX-ID @
         _RTAPT-CX-E @ _RTAPT-CONTROL-CHANGED? IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CONTROL-DROP-TARGETS? 0= IF RTAPT-S-INVALID EXIT THEN
-    _RTAPT-CONTROL-DROP-ROOM? 0= IF RTAPT-S-CAPACITY EXIT THEN
-    _RTAPT-CONTROL-DROP-CAPTURE ;
+    _RTAPT-CX-E @ _RTAPT-DROP-ROOM? 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-CX-OWNER @ _RTAPT-CX-GEN @ _RTAPT-CX-ID @
+        _RTAPT-OP-CONTROL-DROP _RTAPT-CX-O @ _RTAPT-DROP-CAPTURE
+    _RTAPT-CX-CONTENT @ _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTENT-TARGET !
+    _RTAPT-CX-UTF8 @ _RTAPT-CX-O @ _RTAPT-O.PENDING-UTF8-TARGET !
+    1 _RTAPT-CX-O @ _RTAPT-O.PENDING-CONTROL-DROPS +!
+    RTAPT-S-OK DUP _RTAPT-CX-E @ _RTAPT-E.LAST-STATUS ! ;
 
 : _RTAPT-CONTROL-DROP-SCRUB  ( -- )
-    _RTAPT-CX-DIRTY-P @ ?DUP IF RTAPT-OP-SIZE 0 FILL THEN
-    _RTAPT-CX-DIRTY-COPY @ ?DUP IF
-        _RTAPT-CONTROL-DROP-COPY-SIZE 0 FILL
-    THEN
+    _RTAPT-DROP-SCRUB
     0 _RTAPT-CX-E ! 0 _RTAPT-CX-OWNER ! 0 _RTAPT-CX-GEN !
     0 _RTAPT-CX-ID ! 0 _RTAPT-CX-O ! 0 _RTAPT-CX-LEDGER !
-    0 _RTAPT-CX-CONTENT ! 0 _RTAPT-CX-UTF8 ! 0 _RTAPT-CX-NEXT-RET !
-    0 _RTAPT-CX-DIRTY-P ! 0 _RTAPT-CX-DIRTY-COPY ! ;
+    0 _RTAPT-CX-CONTENT ! 0 _RTAPT-CX-UTF8 ! ;
 
 : RTAPT-CONTROL-DROP  ( owner generation control engine -- status )
     _RTAPT-CX-E ! _RTAPT-CX-ID ! _RTAPT-CX-GEN ! _RTAPT-CX-OWNER !
@@ -7983,6 +8034,74 @@ VARIABLE _RTAPT-CX-DIRTY-COPY
         DROP RTAPT-S-INVALID
     THEN
     _RTAPT-CONTROL-DROP-SCRUB ;
+
+VARIABLE _RTAPT-RX-E
+VARIABLE _RTAPT-RX-OWNER
+VARIABLE _RTAPT-RX-GEN
+VARIABLE _RTAPT-RX-ID
+VARIABLE _RTAPT-RX-O
+VARIABLE _RTAPT-RX-SLOT
+VARIABLE _RTAPT-RX-P
+
+\ Whether an earlier operation of this capture drops the same region of the
+\ same owner.  A record whose framing does not hold counts as a drop, so it
+\ refuses the call.
+: _RTAPT-REGION-DROPPED?  ( -- flag )
+    _RTAPT-RX-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
+        I _RTAPT-RX-E @ _RTAPT-OP-NTH DUP _RTAPT-RX-P !
+        DUP _RTAPT-P.KIND @ _RTAPT-OP-REGION-DROP =
+        SWAP _RTAPT-P.OWNER-SLOT @ _RTAPT-RX-SLOT @ = AND IF
+            _RTAPT-RX-P @ _RTAPT-DROP-COPY-SIZE _RTAPT-RX-E @
+                _RTAPT-PRIOR-COPY? 0= IF DROP -1 UNLOOP EXIT THEN
+            _RTAPT-XD.ID @ _RTAPT-RX-ID @ = IF -1 UNLOOP EXIT THEN
+        THEN
+    LOOP 0 ;
+
+\ A region drop names a region on screen of an open owner, in a DELTA, that
+\ no earlier operation of this capture dropped.  Its identity stays used,
+\ and the room it held is free for a region defined after it.  The engine
+\ counts regions without a ledger of them, so the terminal, which holds
+\ each one with what lies in it, is the authority for its existence; the
+\ commit's audit refuses a drop of a region this capture writes into.
+: _RTAPT-REGION-DROP-BODY  ( -- status )
+    _RTAPT-RX-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RX-OWNER @ 0= _RTAPT-RX-GEN @ 0= OR
+    _RTAPT-RX-ID @ 0= OR IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RX-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-RX-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-RX-E @ _RTAPT-CAPTURE-READY? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RX-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF
+        RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-RX-OWNER @ _RTAPT-RX-GEN @ _RTAPT-RX-E @
+        _RTAPT-OWNER-FIND DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-RX-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <>
+        IF RTAPT-S-BUSY EXIT THEN
+    \ A region on screen, while the candidate still keeps one.
+    _RTAPT-RX-ID @ _RTAPT-RX-O @ _RTAPT-O.REGION-HIGH @ U> IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-RX-O @ _RTAPT-KEPT-REGIONS 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RX-O @ _RTAPT-RX-E @ _RTAPT-OWNER-SLOT _RTAPT-RX-SLOT !
+    _RTAPT-REGION-DROPPED? IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RX-E @ _RTAPT-DROP-ROOM? 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-RX-OWNER @ _RTAPT-RX-GEN @ _RTAPT-RX-ID @
+        _RTAPT-OP-REGION-DROP _RTAPT-RX-O @ _RTAPT-DROP-CAPTURE
+    1 _RTAPT-RX-O @ _RTAPT-O.PENDING-REGION-DROPS +!
+    RTAPT-S-OK DUP _RTAPT-RX-E @ _RTAPT-E.LAST-STATUS ! ;
+
+: _RTAPT-REGION-DROP-SCRUB  ( -- )
+    _RTAPT-DROP-SCRUB
+    0 _RTAPT-RX-E ! 0 _RTAPT-RX-OWNER ! 0 _RTAPT-RX-GEN !
+    0 _RTAPT-RX-ID ! 0 _RTAPT-RX-O ! 0 _RTAPT-RX-SLOT ! 0 _RTAPT-RX-P ! ;
+
+: RTAPT-REGION-DROP  ( owner generation region engine -- status )
+    _RTAPT-RX-E ! _RTAPT-RX-ID ! _RTAPT-RX-GEN ! _RTAPT-RX-OWNER !
+    ['] _RTAPT-REGION-DROP-BODY CATCH ?DUP IF
+        DROP RTAPT-S-INVALID
+    THEN
+    _RTAPT-REGION-DROP-SCRUB ;
 
 \ =====================================================================
 \  Neutral semantic INSTRUMENT capture
@@ -10800,9 +10919,9 @@ VARIABLE _RTAPT-PA-NEW-UTF8
     _RTAPT-BV-NEXT @ _RTAPT-PA-E @ _RTAPT-E.COPY-U @ U> IF 0 EXIT THEN
     _RTAPT-PA-E @ _RTAPT-E.COPY-A @ _RTAPT-BV-OFF @ +
         DUP _RTAPT-BV-COPY ! _RTAPT-PF-COPY !
-    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
-        _RTAPT-BV-COPY-U @ _RTAPT-CONTROL-DROP-COPY-SIZE <> IF 0 EXIT THEN
-        _RTAPT-CONTROL-DROP-FRAME-BYTES _RTAPT-BV-FRAME !
+    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-DROP-OP? IF
+        _RTAPT-BV-COPY-U @ _RTAPT-DROP-COPY-SIZE <> IF 0 EXIT THEN
+        _RTAPT-DROP-FRAME-BYTES _RTAPT-BV-FRAME !
         -1 EXIT
     THEN
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-SERIES-OP? IF
@@ -10886,6 +11005,18 @@ VARIABLE _RTAPT-PA-NEW-UTF8
         _RTAPT-BV-COPY @ _RTAPT-BV-COPY-U @ _RTAPT-IMAGE-COPY-SHAPE? EXIT
     THEN
     0 ;
+
+\ The region the copy of an operation writes into, or 0 for a kind that
+\ writes into none.  A pane's content region is the terminal's to check.
+: _RTAPT-OP-REGION@  ( op copy -- region|0 )
+    SWAP _RTAPT-P.KIND @
+    DUP _RTAPT-CONTROL-WRITE-OP? IF DROP _RTAPT-CD.REGION @ EXIT THEN
+    DUP _RTAPT-GLYPH-RUN-OP? IF DROP _RTAPT-LD.REGION @ EXIT THEN
+    DUP _RTAPT-INSTRUMENT-OP? IF DROP _RTAPT-INSTRUMENT.REGION @ EXIT THEN
+    DUP _RTAPT-STATIC-OP? IF DROP _RTAPT-STATIC.REGION @ EXIT THEN
+    DUP _RTAPT-PANE-OP? IF DROP _RTAPT-PANE.REGION @ EXIT THEN
+    _RTAPT-IMAGE-OP? IF _RTAPT-IMAGE.REGION @ EXIT THEN
+    DROP 0 ;
 
 : _RTAPT-PUBLICATION-OWNER?  ( -- flag )
     _RTAPT-PF-P @ _RTAPT-P.OWNER-SLOT @ _RTAPT-PA-E @ _RTAPT-OWNER-NTH
@@ -11209,9 +11340,14 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
 \ contains a second complete graph description.
 : _RTAPT-PUBLICATION-CONTROL-DELTA-DEFINE?  ( -- flag )
     _RTAPT-PA-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF 0 EXIT THEN
-    _RTAPT-PF-O @ _RTAPT-O.ACTIVE-REGIONS @ 0= IF 0 EXIT THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.REGION @
-        _RTAPT-PF-O @ _RTAPT-O.REGION-HIGH @ U> IF 0 EXIT THEN
+        _RTAPT-PF-O @ _RTAPT-O.REGION-HIGH @ U> IF
+        \ A region this capture defined before the control.
+        _RTAPT-PF-RCOUNT @ 0= IF 0 EXIT THEN
+        _RTAPT-PF-COPY @ _RTAPT-CD.REGION @ _RTAPT-PF-RHIGH @ U> IF 0 EXIT THEN
+    ELSE
+        _RTAPT-PF-O @ _RTAPT-O.ACTIVE-REGIONS @ 0= IF 0 EXIT THEN
+    THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @
         _RTAPT-PF-CHIGH @ U> 0= IF 0 EXIT THEN
     _RTAPT-PUBLICATION-CONTROL-DELTA-PARENT? 0= IF 0 EXIT THEN
@@ -11253,11 +11389,11 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     _RTAPT-PA-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF 0 EXIT THEN
     _RTAPT-PA-E @ _RTAPT-E.LIMITS _RTAPT-L.FEATURES @
         RTAPT-F-CONTROLS AND 0= IF 0 EXIT THEN
-    _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ DUP 0= IF DROP 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-XD.ID @ DUP 0= IF DROP 0 EXIT THEN
         _RTAPT-PF-O @ _RTAPT-O.CONTROL-HIGH @ U> IF 0 EXIT THEN
     _RTAPT-PF-O @
-    _RTAPT-PF-COPY @ _RTAPT-CD.GENERATION @
-    _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-PA-E @
+    _RTAPT-PF-COPY @ _RTAPT-XD.GENERATION @
+    _RTAPT-PF-COPY @ _RTAPT-XD.ID @ _RTAPT-PA-E @
         _RTAPT-CONTROL-LEDGER-FIND DUP 0= IF DROP 0 EXIT THEN
         DUP _RTAPT-PA-LEDGER ! _RTAPT-CL.META @
     DUP _RTAPT-CL-ACTIVE AND 0= IF DROP 0 EXIT THEN
@@ -11276,6 +11412,48 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     _RTAPT-PF-O @ _RTAPT-O.A-CDROPS @ 1 _RTAPT-UADD? 0= IF
         DROP 0 EXIT
     THEN _RTAPT-PF-O @ _RTAPT-O.A-CDROPS !
+    _RTAPT-PUBLICATION-NONDEFINITION+? ;
+
+\ Whether an earlier operation of this owner drops region ID.
+: _RTAPT-PUBLICATION-REGION-DROPPED?  ( id -- flag )
+    _RTAPT-PA-I @ 0 ?DO
+        I _RTAPT-PA-E @ _RTAPT-OP-NTH DUP _RTAPT-PA-PRIOR-P !
+        DUP _RTAPT-P.KIND @ _RTAPT-OP-REGION-DROP =
+        SWAP _RTAPT-P.OWNER-SLOT @
+            _RTAPT-PF-P @ _RTAPT-P.OWNER-SLOT @ = AND IF
+            _RTAPT-PA-E @ _RTAPT-E.COPY-A @
+            _RTAPT-PA-PRIOR-P @ _RTAPT-P.COPY-OFF @ + _RTAPT-XD.ID @
+            OVER = IF DROP -1 UNLOOP EXIT THEN
+        THEN
+    LOOP DROP 0 ;
+
+\ Whether an earlier operation of this owner writes into region ID.
+: _RTAPT-PUBLICATION-REGION-WRITTEN?  ( id -- flag )
+    _RTAPT-PA-I @ 0 ?DO
+        I _RTAPT-PA-E @ _RTAPT-OP-NTH DUP _RTAPT-PA-PRIOR-P !
+        _RTAPT-P.OWNER-SLOT @ _RTAPT-PF-P @ _RTAPT-P.OWNER-SLOT @ = IF
+            _RTAPT-PA-PRIOR-P @
+            _RTAPT-PA-E @ _RTAPT-E.COPY-A @
+                _RTAPT-PA-PRIOR-P @ _RTAPT-P.COPY-OFF @ +
+            _RTAPT-OP-REGION@ OVER = IF DROP -1 UNLOOP EXIT THEN
+        THEN
+    LOOP DROP 0 ;
+
+\ A DELTA region drop names a region on screen that no earlier operation
+\ dropped or wrote into, while the candidate keeps an active region to
+\ drop.  The terminal is the authority for what lies in the region on
+\ screen; the engine keeps no ledger of it.
+: _RTAPT-PUBLICATION-REGION-DROP?  ( -- flag )
+    _RTAPT-PA-E @ _RTAPT-E.RET-MODE @ PT-RET-DELTA <> IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-XD.ID @ DUP 0= IF DROP 0 EXIT THEN
+        _RTAPT-PF-O @ _RTAPT-O.REGION-HIGH @ U> IF 0 EXIT THEN
+    _RTAPT-PF-O @ _RTAPT-O.A-RDROPS @
+        _RTAPT-PF-O @ _RTAPT-O.ACTIVE-REGIONS @ U< 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-XD.ID @
+        _RTAPT-PUBLICATION-REGION-DROPPED? IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-XD.ID @
+        _RTAPT-PUBLICATION-REGION-WRITTEN? IF 0 EXIT THEN
+    1 _RTAPT-PF-O @ _RTAPT-O.A-RDROPS +!
     _RTAPT-PUBLICATION-NONDEFINITION+? ;
 
 : _RTAPT-PUBLICATION-CONTROL?  ( -- flag )
@@ -11387,6 +11565,11 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     _RTAPT-PUBLICATION-NONDEFINITION+? ;
 
 : _RTAPT-PUBLICATION-SEMANTICS?  ( -- flag )
+    _RTAPT-PF-O @ _RTAPT-O.PENDING-REGION-DROPS @ IF
+        _RTAPT-PF-P @ _RTAPT-PF-COPY @ _RTAPT-OP-REGION@ ?DUP IF
+            _RTAPT-PUBLICATION-REGION-DROPPED? IF 0 EXIT THEN
+        THEN
+    THEN
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-SERIES-OP? IF
         _RTAPT-PUBLICATION-SERIES? EXIT
     THEN
@@ -11401,6 +11584,9 @@ VARIABLE _RTAPT-PA-PARENT-MATCHES
     THEN
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
         _RTAPT-PUBLICATION-CONTROL-DROP? EXIT
+    THEN
+    _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-OP-REGION-DROP = IF
+        _RTAPT-PUBLICATION-REGION-DROP? EXIT
     THEN
     _RTAPT-PF-P @ _RTAPT-P.KIND @ _RTAPT-INSTRUMENT-OP? IF
         _RTAPT-PUBLICATION-INSTRUMENT? EXIT
@@ -12159,11 +12345,14 @@ VARIABLE _RTAPT-CS-RGBA
         _RTAPT-PT>STATUS
     0 _RTAPT-CS-REPLACE ! ;
 
-: _RTAPT-SEND-CONTROL-DROP  ( -- status )
-    _RTAPT-CS-COPY @ _RTAPT-CD.OWNER @
-    _RTAPT-CS-COPY @ _RTAPT-CD.GENERATION @
-    _RTAPT-CS-COPY @ _RTAPT-CD.CONTROL @
-    _RTAPT-CS-E @ _RTAPT-E.SESSION @ PT-CONTROL-DROP _RTAPT-PT>STATUS ;
+: _RTAPT-SEND-DROP  ( -- status )
+    _RTAPT-CS-COPY @ _RTAPT-XD.OWNER @
+    _RTAPT-CS-COPY @ _RTAPT-XD.GENERATION @
+    _RTAPT-CS-COPY @ _RTAPT-XD.ID @
+    _RTAPT-CS-E @ _RTAPT-E.SESSION @
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-REGION-DROP = IF
+        PT-REGION-DROP
+    ELSE PT-CONTROL-DROP THEN _RTAPT-PT>STATUS ;
 
 \ Copy shape and full dependency audit are required before the publication loop.
 : _RTAPT-SEND-SERIES ( -- status )
@@ -12201,8 +12390,8 @@ VARIABLE _RTAPT-CS-RGBA
     _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-REPLACE = IF
         -1 _RTAPT-SEND-CONTROL EXIT
     THEN
-    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-CONTROL-DROP = IF
-        _RTAPT-SEND-CONTROL-DROP EXIT
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-DROP-OP? IF
+        _RTAPT-SEND-DROP EXIT
     THEN
     _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-PANE-DEFINE = IF
         0 _RTAPT-SEND-PANE EXIT
@@ -12536,8 +12725,8 @@ VARIABLE _RTAPT-CLI-ACTIVE
 : _RTAPT-CONTROL-LEDGER-DROP-ACTIVE?  ( op copy engine -- flag )
     _RTAPT-CLI-E ! _RTAPT-CLI-COPY ! _RTAPT-CLI-P !
     _RTAPT-CLI-P @ _RTAPT-P.OWNER-SLOT @ _RTAPT-CLI-E @ _RTAPT-OWNER-NTH
-    _RTAPT-CLI-COPY @ _RTAPT-CD.GENERATION @
-    _RTAPT-CLI-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-CLI-E @
+    _RTAPT-CLI-COPY @ _RTAPT-XD.GENERATION @
+    _RTAPT-CLI-COPY @ _RTAPT-XD.ID @ _RTAPT-CLI-E @
         _RTAPT-CONTROL-LEDGER-FIND DUP 0= IF DROP 0 EXIT THEN
         DUP _RTAPT-CLI-ENTRY ! _RTAPT-CL.META @
         DUP _RTAPT-CL-ACTIVE AND 0= IF DROP 0 EXIT THEN
@@ -12878,6 +13067,9 @@ VARIABLE _RTAPT-PR-PENDING
                 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGION-HIGH @
                     _RTAPT-PR-O @ _RTAPT-O.REGION-HIGH !
             THEN
+            \ Only a DELTA drops, from the active target.
+            _RTAPT-PR-O @ _RTAPT-KEPT-REGIONS
+                _RTAPT-PR-O @ _RTAPT-O.ACTIVE-REGIONS !
             _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECTS @
                 DUP _RTAPT-PR-PENDING ! IF
                 _RTAPT-PR-MODE @ PT-RET-DELTA = IF
@@ -12958,6 +13150,7 @@ VARIABLE _RTAPT-PR-PENDING
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-PATH-POINTS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGIONS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGION-HIGH !
+            0 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGION-DROPS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECTS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECT-HIGH !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-CONTROLS !

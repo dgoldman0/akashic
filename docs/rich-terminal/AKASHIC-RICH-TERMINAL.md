@@ -811,6 +811,7 @@ RTE-INSTRUMENT-DEFINE
 RTE-CONTROL-DEFINE
 RTE-CONTROL-REPLACE
 RTE-CONTROL-DROP
+RTE-REGION-DROP
 RTE-GLYPH-RUN-DEFINE
 RTE-GLYPH-RUN-REPLACE
 RTE-RETAINED-SEAL
@@ -998,8 +999,18 @@ replaced, dropped, or took as a parent, and no later definition or
 replacement takes it as one. Its ledger entry goes when the terminal accepts
 the transaction, and a cancel keeps it. The terminal, which holds every
 control's parent, refuses a drop that would leave a control on screen
-without its parent. A field or a dialog that comes or goes still needs the
-frame replaced whole, as does a change in the number of menu controls.
+without its parent.
+
+The engine also lets a DELTA define a region with the controls in it, above
+the regions on screen, and drop a region on screen after the controls in it
+(`RTE-REGION-DROP`). It counts regions without a ledger of them: a drop
+names a region the terminal acknowledged, once, the room it held is free
+for a region defined after it, and its identity stays used. The commit's
+audit refuses a drop of a region the transaction writes into, and a write
+into a region it dropped; the terminal refuses a drop of a region that
+still holds a control or object. A field or a dialog that comes or goes
+still needs the frame replaced whole, as does a change in the number of
+menu controls.
 
 A comparison of a candidate built for Desk's shell whose bank on screen kept
 those facts, and whose controls each carry, with their own correlation in

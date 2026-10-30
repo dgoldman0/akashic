@@ -338,7 +338,7 @@ def test_grid_gate_does_not_extend_records_or_scan_aggregate_preflight():
                   "RTE-CONTROL-PLAN-SIZE": 144}),
         (provider, {"RTAPT-F-GRID-CELLS": 0x2000, "_RTAPT-FEATURE-MASK": 0xFFFF,
                     "_RTAPT-PT-F-GRID-CELLS": 0x8000, "RTAPT-LIMITS-SIZE": 184,
-                    "RTAPT-OWNER-SIZE": 696, "RTAPT-ENGINE-SIZE": 728,
+                    "RTAPT-OWNER-SIZE": 712, "RTAPT-ENGINE-SIZE": 728,
                     "RTAPT-CONFIG-SIZE": 80, "RTAPT-OP-SIZE": 40,
                     "RTAPT-CONTROL-LEDGER-SIZE": 64,
                     "_RTAPT-CONTROL-COPY-FIXED": 160}),

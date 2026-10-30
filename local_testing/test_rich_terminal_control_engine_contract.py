@@ -55,7 +55,7 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "0x200 CONSTANT _RTAPT-PT-F-CONTROL-COLLECTIONS",
         "184 CONSTANT RTAPT-LIMITS-SIZE",
         "40 CONSTANT RTAPT-OP-SIZE",
-        "696 CONSTANT RTAPT-OWNER-SIZE",
+        "712 CONSTANT RTAPT-OWNER-SIZE",
         "64 CONSTANT RTAPT-CONTROL-LEDGER-SIZE",
         "80 CONSTANT RTAPT-CONFIG-SIZE",
         "728 CONSTANT RTAPT-ENGINE-SIZE",
@@ -265,7 +265,7 @@ def test_control_delta_replacement_reconciles_exact_identity_quotas() -> None:
         "_RTAPT-CONTROL-LEDGER-FIND",
         "_RTAPT-CONTROL-CHANGED?",
         "_RTAPT-CONTROL-DROP-TARGETS?",
-        "_RTAPT-CONTROL-DROP-CAPTURE",
+        "_RTAPT-DROP-CAPTURE",
     )
     assert "_RTAPT-CONTROL-CAPTURE" not in drop
     for name in ("_RTAPT-CL.ACTIVE-ITEMS", "_RTAPT-CL.ACTIVE-UTF8",
@@ -322,7 +322,12 @@ def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
 
     assert "PT-RET-REPLACE-START =" in define
     assert "PT-RET-DELTA = OR" in define
-    assert "PT-RET-DELTA <>" in define
+    # A DELTA's definition goes into a region on screen or one the capture
+    # defined before it, above the regions on screen.
+    assert "_RTAPT-CONTROL-DELTA-REGION?" in define
+    delta_region = _word(source, "_RTAPT-CONTROL-DELTA-REGION?")
+    assert "_RTAPT-O.REGION-HIGH @ U>" in delta_region
+    assert "_RTAPT-CONTROL-REGION?" in delta_region
     assert "_RTAPT-CONTROL-LEDGER-VALID?" not in define
     _ordered(
         define,
@@ -335,6 +340,8 @@ def test_control_delta_definition_is_monotonic_and_ack_gated() -> None:
     assert "PT-RET-DELTA <> IF 0 EXIT" in publication
     assert "_RTAPT-O.ACTIVE-REGIONS" in publication
     assert "_RTAPT-O.REGION-HIGH" in publication
+    assert "_RTAPT-PF-RCOUNT @ 0= IF 0 EXIT THEN" in publication
+    assert "_RTAPT-PF-RHIGH @ U> IF 0 EXIT THEN" in publication
     assert "_RTAPT-PF-CHIGH @ U> 0=" in publication
     assert "_RTAPT-PUBLICATION-CONTROL-DELTA-PARENT?" in publication
     assert "_RTAPT-PF-CCOUNT" in publication
@@ -491,9 +498,9 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     assert "_RTAPT-CONTROL-COPY-FIXED" in shape
     # A drop's copy is its 24-byte identity alone, and its frame 64 bytes.
     for checked in (banks, shape):
-        _ordered(checked, "_RTAPT-OP-CONTROL-DROP = IF",
-                 "_RTAPT-BV-COPY-U @ _RTAPT-CONTROL-DROP-COPY-SIZE <>",
-                 "_RTAPT-CONTROL-DROP-FRAME-BYTES _RTAPT-BV-FRAME !")
+        _ordered(checked, "_RTAPT-DROP-OP? IF",
+                 "_RTAPT-BV-COPY-U @ _RTAPT-DROP-COPY-SIZE <>",
+                 "_RTAPT-DROP-FRAME-BYTES _RTAPT-BV-FRAME !")
     drop = _word(source, "_RTAPT-PUBLICATION-CONTROL-DROP?")
     for check in ("PT-RET-DELTA <>", "_RTAPT-CONTROL-LEDGER-FIND", "_RTAPT-CL-ACTIVE",
                   "_RTAPT-CONTROL-TASKBAR-KIND?", "_RTAPT-PUBLICATION-CONTROL-CHANGED?",
@@ -502,9 +509,19 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
         assert check in drop
     assert "_RTAPT-O.A-CDROPS" in ledgers
     assert "_RTAPT-O.PENDING-CONTROL-DROPS" in ledgers
-    send_drop = _word(source, "_RTAPT-SEND-CONTROL-DROP")
-    _ordered(send_drop, "_RTAPT-CD.OWNER", "_RTAPT-CD.GENERATION",
-             "_RTAPT-CD.CONTROL", "PT-CONTROL-DROP")
+    send_drop = _word(source, "_RTAPT-SEND-DROP")
+    _ordered(send_drop, "_RTAPT-XD.OWNER", "_RTAPT-XD.GENERATION",
+             "_RTAPT-XD.ID", "PT-REGION-DROP", "PT-CONTROL-DROP")
+    region_drop = _word(source, "_RTAPT-PUBLICATION-REGION-DROP?")
+    for check in ("PT-RET-DELTA <>", "_RTAPT-O.REGION-HIGH @ U>",
+                  "_RTAPT-PUBLICATION-REGION-DROPPED?",
+                  "_RTAPT-PUBLICATION-REGION-WRITTEN?", "_RTAPT-O.A-RDROPS",
+                  "_RTAPT-PUBLICATION-NONDEFINITION+?"):
+        assert check in region_drop
+    semantics = _word(source, "_RTAPT-PUBLICATION-SEMANTICS?")
+    _ordered(semantics, "_RTAPT-O.PENDING-REGION-DROPS @ IF", "_RTAPT-OP-REGION@",
+             "_RTAPT-PUBLICATION-REGION-DROPPED?")
+    assert "_RTAPT-O.A-RDROPS" in ledgers
     assert "_RTAPT-CONTROL-COPY-SHAPE?" in control
     assert "_RTAPT-PF-CCOUNT" in control
     assert "_RTAPT-PF-CONTROL-DEFINE-GRAPH?" in control
