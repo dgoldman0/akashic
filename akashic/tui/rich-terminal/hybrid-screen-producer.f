@@ -9887,6 +9887,18 @@ VARIABLE _RTHP-UB-LAST
 \ lowered into them.
 VARIABLE _RTHP-DIAG-UNPACKED
 VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
+\ Which check refused the candidate from the bank on screen, by code:
+\  1 safe mode           2 not Desk's shell     3 no bank on screen
+\  4 the bank's header   5 the bank kept no facts (it went out as a START)
+\  6 another owner       7 another surface      8 the bank holds glyph runs
+\  9 instruments or series                     10 pictures
+\ 11 a static that is no status field          12 the menus' text length
+\ 13 a document moved    14 the facts do not pair
+\ 15 a root of another family moved            16 no room
+\ 17 the controls        18 the statics         19 the instruments' strip
+\ 20 the moved roots     21 the control plan    22 the statics' glyphs
+\ _RTHP-BUILD-OBSERVED-CANDIDATE counts each in _RTHP-DIAG-UB-WHY.
+VARIABLE _RTHP-UB-WHY
 
 \ ( value address -- ) VALUE's eight bytes at ADDRESS, low byte first, as a
 \ content header keeps them.
@@ -9928,6 +9940,7 @@ VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
 
 \ Every document lies where it lay on screen.
 : _RTHP-UB-DOCUMENTS?  ( -- flag )
+    13 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.DOCUMENT-COUNT @
         _RTHP-UB-P @ _RTHP.DOCUMENT-COUNT @ <> IF 0 EXIT THEN
     _RTHP-UB-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
@@ -9938,36 +9951,47 @@ VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
 \ comparison kept its facts, it holds no runs, instruments, series or
 \ pictures, and its menus' text is as long as this snapshot's.
 : _RTHP-UB-BANK?  ( -- flag )
+    4 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-UB-P @ _RTHP-TARGET-BANK-HEADER? 0= IF 0 EXIT THEN
+    5 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.BANK @
         _RTHP-UB-A @ <> IF 0 EXIT THEN
+    6 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.OWNER @ _RTHP-UB-P @ _RTHP.OWNER @ <> IF 0 EXIT THEN
     _RTHP-UB-A @ _RTHP-TB.GENERATION @
         _RTHP-UB-P @ _RTHP.OWNER-GEN @ <> IF 0 EXIT THEN
+    7 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.COLS @ _RTHP-UB-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
     _RTHP-UB-A @ _RTHP-TB.ROWS @ _RTHP-UB-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
     _RTHP-UB-A @ _RTHP-TB.PHYSICAL-GEN @
         _RTHP-UB-P @ _RTHP.PHYSICAL-GEN @ <> IF 0 EXIT THEN
     _RTHP-UB-A @ _RTHP-TB.FEATURES @
         _RTHP-UB-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@ <> IF 0 EXIT THEN
+    8 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.GLYPH-SLOT-COUNT @ IF 0 EXIT THEN
+    9 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @
     _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ OR
     _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ OR IF 0 EXIT THEN
+    10 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP.PICTURE-COUNT @ IF 0 EXIT THEN
+    11 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
         _RTHP-UB-A @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * +
             _RTE-STATIC.KIND @ RTE-STATIC-STATUS-FIELD <> IF 0 UNLOOP EXIT THEN
     LOOP
+    12 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.MENU-TEXT-USED @
         _RTHP-UB-P @ _RTHP.SOURCE-MENU-TEXT-USED @ = ;
 
 \ The two snapshots' root facts name the same roots in the same order, and
 \ every root whose facts moved is a collection or a status field.
 : _RTHP-UB-ROOTS?  ( -- flag )
+    14 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP-ROOT-P !
     _RTHP-UB-A @ _RTHP-TB.SOURCE-GEN @ _RTHP-UB-P @ _RTHP.SOURCE-GEN @
         _RTHP-ROOT-PAIR? >R _RTHP-UB-NEW ! _RTHP-UB-OLD ! R> 0= IF 0 EXIT THEN
+    15 _RTHP-UB-WHY !
     _RTHP-UB-NEW @ _RTHP-ROOT.N @ 0 ?DO
         I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
         I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
@@ -9981,8 +10005,11 @@ VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
 \ a candidate built for Desk's shell, from a bank of this arena that allows
 \ it, with every document where it lay and the roots as the facts allow.
 : _RTHP-UB-FOLLOWS?  ( -- flag )
+    1 _RTHP-UB-WHY !
     CHK-SAFE? IF 0 EXIT THEN
+    2 _RTHP-UB-WHY !
     _RTHP-W-SHELL-MODE? 0= IF 0 EXIT THEN
+    3 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP.TARGET-ACTIVE @ DUP 0= IF EXIT THEN _RTHP-UB-A !
     _RTHP-UB-BANK? 0= IF 0 EXIT THEN
     _RTHP-UB-DOCUMENTS? 0= IF 0 EXIT THEN
@@ -10355,14 +10382,21 @@ VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
 : _RTHP-UB-CANDIDATE?  ( producer -- flag )
     _RTHP-UB-P !
     _RTHP-UB-FOLLOWS? 0= IF 0 EXIT THEN
+    16 _RTHP-UB-WHY !
     _RTHP-UB-ROOM? 0= IF 0 EXIT THEN
+    17 _RTHP-UB-WHY !
     _RTHP-UB-CONTROLS? 0= IF 0 EXIT THEN
     _RTHP-W-SHELL-CONTROLS!
+    18 _RTHP-UB-WHY !
     _RTHP-UB-STATICS? 0= IF 0 EXIT THEN
+    19 _RTHP-UB-WHY !
     _RTHP-W-STRIP-INSTRUMENTS? 0= IF 0 EXIT THEN
+    20 _RTHP-UB-WHY !
     _RTHP-UB-MOVED? 0= IF 0 EXIT THEN
+    21 _RTHP-UB-WHY !
     _RTHP-W-WRAP-CONTROL-PLAN? 0= IF 0 EXIT THEN
     _RTHP-UB-P @ _RTHP-SS-P ! _RTHP-SS-WRAP
+    22 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP-STATIC-GLYPH-FIRST? 0= IF 0 EXIT THEN
     1 _RTHP-DIAG-UNPACKED +!
     _RTHP-UB-MOVED @ _RTHP-DIAG-UNPACKED-ROOTS +! -1 ;
@@ -10481,6 +10515,12 @@ VARIABLE _RTHP-UB-SH-KEPT
         OVER I 8 * + @ +
     LOOP 2DROP ;
 
+\ How often each check refused the candidate from the bank on screen, by
+\ _RTHP-UB-WHY's code.
+CREATE _RTHP-DIAG-UB-WHY 32 CELLS ALLOT
+_RTHP-DIAG-UB-WHY 32 CELLS 0 FILL
+: _RTHP-DIAG-UB-WHY+  ( code -- )  31 MIN CELLS _RTHP-DIAG-UB-WHY + 1 SWAP +! ;
+
 : _RTHP-BUILD-OBSERVED-CANDIDATE
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
@@ -10523,7 +10563,9 @@ VARIABLE _RTHP-UB-SH-KEPT
     \ shadow check on, the frame is lowered in full as well and the two
     \ candidates are compared.
     0 _RTHP-UB-SH-KEPT !
-    _RTHP-W-P @ _RTHP-UB-CANDIDATE? DUP IF
+    _RTHP-W-P @ _RTHP-UB-CANDIDATE?
+    DUP 0= IF _RTHP-UB-WHY @ _RTHP-DIAG-UB-WHY+ THEN
+    DUP IF
         FSHD? IF DROP _RTHP-UB-SH-KEEP 0 THEN
     THEN
     0= IF
@@ -15447,23 +15489,42 @@ VARIABLE _RTHP-C-DELTA
 VARIABLE _RTHP-DIAG-COPIED
 VARIABLE _RTHP-DIAG-COPIED-CONTROLS
 
+\ Which check refused the copy of the bank on screen, by code: 1 safe mode,
+\ 2 not built for Desk's shell, 3 glyph runs, 4 no bank on screen, 5 the
+\ bank kept no facts (it went out as a START), 6 another control count,
+\ 7 the facts do not pair, 8 a root of another family moved, 9 the pending
+\ bank's write, 10 the pairing and its plan.  _RTHP-STAGE-BANK counts each in
+\ _RTHP-DIAG-C-WHY.
+VARIABLE _RTHP-C-WHY
+CREATE _RTHP-DIAG-C-WHY 16 CELLS ALLOT
+_RTHP-DIAG-C-WHY 16 CELLS 0 FILL
+: _RTHP-DIAG-C-WHY+  ( code -- )  15 MIN CELLS _RTHP-DIAG-C-WHY + 1 SWAP +! ;
+
 \ The copy may be tried: not in safe mode, for a candidate built for Desk's
 \ shell with no runs of its own and the controls on screen, whose bank
 \ kept the facts its comparison proved.  The two snapshots' root facts
 \ name the same roots in the same order, and only collections and status
 \ fields moved.
 : _RTHP-C-FOLLOWS?  ( -- flag )
+    1 _RTHP-C-WHY !
     CHK-SAFE? IF 0 EXIT THEN
+    2 _RTHP-C-WHY !
     _RTHP-C-P @ _RTHP.SHELL-BUILT @ 0= IF 0 EXIT THEN
+    3 _RTHP-C-WHY !
     _RTHP-C-P @ _RTHP.GLYPH-COUNT @ IF 0 EXIT THEN
+    4 _RTHP-C-WHY !
     _RTHP-C-P @ _RTHP.TARGET-ACTIVE @ DUP 0= IF EXIT THEN _RTHP-C-ACTIVE !
+    5 _RTHP-C-WHY !
     _RTHP-C-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.BANK @
         _RTHP-C-ACTIVE @ <> IF 0 EXIT THEN
+    6 _RTHP-C-WHY !
     _RTHP-C-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
         _RTHP-C-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    7 _RTHP-C-WHY !
     _RTHP-C-P @ _RTHP-ROOT-P !
     _RTHP-C-ACTIVE @ _RTHP-TB.SOURCE-GEN @ _RTHP-C-P @ _RTHP.SOURCE-GEN @
         _RTHP-D-ROOTS-OF? 0= IF 0 EXIT THEN
+    8 _RTHP-C-WHY !
     _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ 0 ?DO
         I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT
         I _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-RECORD-AT
@@ -15623,7 +15684,9 @@ VARIABLE _RTHP-C-SERIES
     DUP _RTHP.REGION @ _RTHP-C-REGION !
     DUP _RTHP.FIRST-OBJECT @ _RTHP-C-FIRST !
     _RTHP.FIRST-SERIES @ _RTHP-C-SERIES !
+    9 _RTHP-C-WHY !
     _RTHP-C-WRITE? 0= IF 0 EXIT THEN
+    10 _RTHP-C-WHY !
     _RTHP-C-PAIR? IF _RTHP-C-NORMALIZE? ELSE 0 THEN
     IF _RTHP-D-PLAN-COMPACT-CONTROLS? ELSE 0 THEN
     0= IF
@@ -15698,6 +15761,8 @@ VARIABLE _RTHP-C-SH-KEPT
             THEN DROP
         THEN
     THEN
+    \ The copy was not made.
+    _RTHP-C-WHY @ _RTHP-DIAG-C-WHY+
     _RTHP-C-P @ _RTHP-TARGET-CANDIDATE? 0= IF SCB-S-INVALID _RTHP-STAGE-NONE EXIT THEN
     SCB-S-OK _RTHP-STAGE-FULL ;
 

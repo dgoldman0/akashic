@@ -11950,11 +11950,15 @@ def _adapter_storage_record(client, producer: int) -> dict:
 # its DELTA refusals by the check that refused them.  The base producer's
 # codes are those of _RTHP-D-WHY; the shell's prepare codes are its DSTAGE
 # times 16 plus the build stage or family kind, and its probe codes those of
-# _RSHSP-DM-WHY.
+# _RSHSP-DM-WHY.  The change driver's two steps count why they passed over a
+# frame: the candidate from the bank on screen by _RTHP-UB-WHY's codes, the
+# copy of that bank by _RTHP-C-WHY's (hybrid-screen-producer.f).
 _DELTA_REFUSAL_ARRAYS = {
     "base": ("_RTHP-DIAG-DELTA-WHY", 64),
     "shell_prepare": ("_RSHSP-DIAG-DELTA-WHY", 128),
     "shell_probe": ("_RSHSP-DIAG-PROBE-WHY", 16),
+    "candidate_from_bank": ("_RTHP-DIAG-UB-WHY", 32),
+    "bank_copy": ("_RTHP-DIAG-C-WHY", 16),
 }
 
 
