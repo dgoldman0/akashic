@@ -1506,7 +1506,16 @@ frame before the change driver.
       to the root as the tree walk would resolve it, where they walked the
       whole tree. Each family's capture reads only its own elements and
       their ancestors, so resolving every other element added nothing to
-      it.
+      it. **Done** on 2026-10-29 (49215a25, ca206b79). The dialogs find
+      their element through a new pass of UIDL-TUI's over the elements of
+      one type, `UTUI-RESOLVED-TYPE-EACH`. A typed letter's status fields
+      take 0.17 million steps against 0.36 and its dialogs 0.01 million
+      against 0.15, so the snapshot takes 1.29 million against 1.61. The
+      frame builds in 3.17 million steps against 3.48 for da32dc95, each
+      run apart, and sends the same 18 DELTAs and bytes. The canonical
+      journey passed after each piece with the shadow check, 14,491
+      comparisons without a difference, sending the same presents, and in
+      safe mode.
     - **9a.3c.2. One walk.** The menus and the collections, whose roots
       keep the tree's order, take them from one walk of the resolved tree,
       which calls each family's visitor in turn at each node, where each
