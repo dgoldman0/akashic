@@ -139,7 +139,9 @@ CREATE _RTE-FEM-RUN-MEM RTE-GLYPH-RUN-SIZE 7 + ALLOT
 \ PENDING is the next frame and ACTIVE the acknowledged one.  The caller has
 \ given every pending item the identity of the active item in the same place
 \ and has begun a retained DELTA.  Both batches carry the same catalog and
-\ the same families in the same order, kind and region.  A changed control,
+\ the same families in the same order, kind and region, but for leading
+\ keyed families of controls, which the caller paired by identity and whose
+\ controls may come and go (below).  A changed control,
 \ static, pane or glyph run is replaced, and a glyph family may end with new
 \ runs, which are defined.  Instruments, series and taskbar controls have no
 \ DELTA replacement, so they must be unchanged.  When nothing changed, the
@@ -239,18 +241,20 @@ CREATE _RTE-FDE-PTRS 24 ALLOT
     THEN
     RTE-S-INVALID ;
 
-\ A family whose changed items the caller found: N indexes at LIST-A, in
-\ ascending order.  A glyph family, which a DELTA may extend, is never
-\ known.  Every kind but a glyph run keeps its identity where a control
-\ does, and the shadow check names an item by it.
+\ A family whose changed items the caller found: N cells at LIST-A, each an
+\ item's index doubled, with the low bit set for an item to define, in
+\ ascending order.  Only a keyed family defines items.  A glyph family,
+\ which a DELTA may extend, is never known.  Every kind but a glyph run
+\ keeps its identity where a control does, and the shadow check names an
+\ item by it.
 VARIABLE _RTE-FDE-KNOWN-XT VARIABLE _RTE-FDE-LIST VARIABLE _RTE-FDE-LEFT
-VARIABLE _RTE-FDE-NEXT VARIABLE _RTE-FDE-ITEMS
+VARIABLE _RTE-FDE-NEXT VARIABLE _RTE-FDE-ITEMS VARIABLE _RTE-FDE-KEYED
 : _RTE-FDE-JUDGE ( list-a n -- )
     _RTE-FDE-LEFT ! _RTE-FDE-LIST !
     _RTE-FEM-ITEM @ _RTE-FDE-AITEM @
     _RTE-FEM-COUNT @ 0 ?DO
         _RTE-FDE-SAME? 0=
-        _RTE-FDE-LEFT @ IF _RTE-FDE-LIST @ @ I = ELSE 0 THEN
+        _RTE-FDE-LEFT @ IF _RTE-FDE-LIST @ @ 2/ I = ELSE 0 THEN
         DUP IF 8 _RTE-FDE-LIST +! -1 _RTE-FDE-LEFT +! THEN
         = _RTE-FEM-ITEM @ _RTE-CONTROL.ID @ FSHD-STAGE-SHELL-DELTA FSHD-HELD
         _RTE-FEM-STRIDE @ DUP _RTE-FEM-ITEM +! _RTE-FDE-AITEM +!
@@ -258,18 +262,127 @@ VARIABLE _RTE-FDE-NEXT VARIABLE _RTE-FDE-ITEMS
     _RTE-FDE-AITEM ! _RTE-FEM-ITEM ! ;
 : _RTE-FDE-KNOWN ( list-a n -- status )
     _RTE-FEM-KIND @ RTE-FAMILY-GLYPH = IF 2DROP RTE-S-INVALID EXIT THEN
-    FSHD? IF 2DUP _RTE-FDE-JUDGE THEN
+    FSHD? _RTE-FDE-KEYED @ 0= AND IF 2DUP _RTE-FDE-JUDGE THEN
     _RTE-FEM-ITEM @ _RTE-FDE-ITEMS ! 0 _RTE-FDE-NEXT !
     0 ?DO
-        DUP I 8 * + @
+        DUP I 8 * + @ DUP 1 AND SWAP 2/                    ( list define index )
         DUP _RTE-FDE-NEXT @ U< OVER _RTE-FEM-COUNT @ U< 0= OR IF
-            2DROP RTE-S-INVALID UNLOOP EXIT
+            2DROP DROP RTE-S-INVALID UNLOOP EXIT
         THEN
         DUP 1+ _RTE-FDE-NEXT !
         _RTE-FEM-STRIDE @ * _RTE-FDE-ITEMS @ + _RTE-FEM-ITEM !
-        _RTE-FDE-REPLACE DUP RTE-S-OK <> IF NIP UNLOOP EXIT THEN DROP
+        IF
+            _RTE-FDE-KEYED @ 0= IF DROP RTE-S-INVALID UNLOOP EXIT THEN
+            _RTE-FEM-ITEM @ _RTE-FEM-BASE @ RTE-CONTROL-DEFINE
+        ELSE _RTE-FDE-REPLACE THEN
+        DUP RTE-S-OK <> IF NIP UNLOOP EXIT THEN DROP
         1 _RTE-FDE-OPS +!
     LOOP DROP RTE-S-OK ;
+
+\ Keyed families: the leading families of controls whose items a caller's
+\ own comparison paired by identity, so that controls may come and go and
+\ an item need not lie in the same place in both batches.  KEYED-P families
+\ of the pending batch and KEYED-A of the active one are keyed; the caller
+\ knows each pending one, and lists the keyed controls on screen that went,
+\ by identity, as DROPS-N cells at DROPS-A.  The other families pair in
+\ place after them.  The drops go first, so the room they held is free for
+\ the controls defined after them.
+VARIABLE _RTE-FDE-KEYED-P VARIABLE _RTE-FDE-KEYED-A
+VARIABLE _RTE-FDE-DROPS-A VARIABLE _RTE-FDE-DROPS-N VARIABLE _RTE-FDE-REST
+VARIABLE _RTE-FDE-SEEK VARIABLE _RTE-FDE-J-ENTRY VARIABLE _RTE-FDE-J-LISTED
+: _RTE-FAMILY-DELTA-KEYED! ( keyed-p keyed-a drops-a drops-n -- )
+    _RTE-FDE-DROPS-N ! _RTE-FDE-DROPS-A ! _RTE-FDE-KEYED-A ! _RTE-FDE-KEYED-P ! ;
+: _RTE-FDE-KEYED-CLEAR ( -- ) 0 0 0 0 _RTE-FAMILY-DELTA-KEYED! 0 _RTE-FDE-KEYED ! ;
+: _RTE-FDE-DROPS ( -- status )
+    _RTE-FDE-DROPS-N @ 0 ?DO
+        _RTE-FEM-CATALOG @ _RTE-RC.OWNER @ _RTE-FEM-CATALOG @ _RTE-RC.GENERATION @
+        _RTE-FDE-DROPS-A @ I 8 * + @ _RTE-FEM-BASE @ RTE-CONTROL-DROP
+        DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+        1 _RTE-FDE-OPS +!
+    LOOP RTE-S-OK ;
+\ The control with identity ID in the first KEYED families of BATCH, or 0.
+: _RTE-FDE-KEYED-FIND ( id batch keyed -- control|0 )
+    ROT _RTE-FDE-SEEK ! SWAP _RTE-FB.FAMILIES-A @ SWAP 0 ?DO
+        DUP I RTE-FAMILY-ENTRY-SIZE * + RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE / 0 ?DO
+            DUP I RTE-CONTROL-SIZE * + DUP _RTE-CONTROL.ID @ _RTE-FDE-SEEK @ = IF
+                NIP NIP UNLOOP UNLOOP EXIT
+            THEN DROP
+        LOOP DROP
+    LOOP DROP 0 ;
+\ With the shadow check on, each control of a keyed family is found by its
+\ identity among the keyed families on screen: one found must be replaced
+\ exactly when it differs, and one not found must be defined.
+: _RTE-FDE-KEYED-JUDGE ( list-a n -- )
+    _RTE-FDE-LEFT ! _RTE-FDE-LIST !
+    _RTE-FEM-ITEM @
+    _RTE-FEM-COUNT @ 0 ?DO
+        0 _RTE-FDE-J-LISTED ! 0 _RTE-FDE-J-ENTRY !
+        _RTE-FDE-LEFT @ IF
+            _RTE-FDE-LIST @ @ DUP 2/ I = IF
+                _RTE-FDE-J-ENTRY ! -1 _RTE-FDE-J-LISTED !
+                8 _RTE-FDE-LIST +! -1 _RTE-FDE-LEFT +!
+            ELSE DROP THEN
+        THEN
+        _RTE-FEM-ITEM @ _RTE-CONTROL.ID @
+            _RTE-FDE-ACTIVE @ _RTE-FDE-KEYED-A @ _RTE-FDE-KEYED-FIND
+        ?DUP IF
+            _RTE-FEM-ITEM @ SWAP _RTE-FDE-RECORD= 0=
+            _RTE-FDE-J-LISTED @ =
+            _RTE-FDE-J-ENTRY @ 1 AND 0= AND
+        ELSE
+            _RTE-FDE-J-ENTRY @ 1 AND 0<>
+        THEN
+        _RTE-FEM-ITEM @ _RTE-CONTROL.ID @ FSHD-STAGE-SHELL-DELTA FSHD-HELD
+        _RTE-FEM-STRIDE @ _RTE-FEM-ITEM +!
+    LOOP
+    _RTE-FEM-ITEM ! ;
+: _RTE-FDE-IN-DROPS? ( id -- flag )
+    _RTE-FDE-DROPS-N @ 0 ?DO
+        DUP _RTE-FDE-DROPS-A @ I 8 * + @ = IF DROP -1 UNLOOP EXIT THEN
+    LOOP DROP 0 ;
+\ With the shadow check on, each keyed control on screen is among the
+\ pending keyed controls or among the drops, not both, and each drop is a
+\ keyed control on screen.
+: _RTE-FDE-DROPS-JUDGE ( -- )
+    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-A @
+    _RTE-FDE-KEYED-A @ 0 ?DO
+        DUP I RTE-FAMILY-ENTRY-SIZE * + RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE / 0 ?DO
+            DUP I RTE-CONTROL-SIZE * + _RTE-CONTROL.ID @
+            DUP _RTE-FEM-BATCH @ _RTE-FDE-KEYED-P @ _RTE-FDE-KEYED-FIND 0<>
+            OVER _RTE-FDE-IN-DROPS? XOR
+            SWAP FSHD-STAGE-SHELL-DELTA FSHD-HELD
+        LOOP DROP
+    LOOP DROP
+    _RTE-FDE-DROPS-N @ 0 ?DO
+        _RTE-FDE-DROPS-A @ I 8 * + @
+        DUP _RTE-FDE-ACTIVE @ _RTE-FDE-KEYED-A @ _RTE-FDE-KEYED-FIND 0<>
+        SWAP FSHD-STAGE-SHELL-DELTA FSHD-HELD
+    LOOP ;
+\ One keyed family of the pending batch, at _RTE-FEM-ENTRY: its known
+\ controls are defined or replaced.
+: _RTE-FDE-KEYED-FAMILY ( -- status )
+    _RTE-FEM-ENTRY @ _RTE-FE.KIND @ DUP _RTE-FEM-KIND !
+        RTE-FAMILY-CONTROL <> IF RTE-S-INVALID EXIT THEN
+    RTE-FAMILY-CONTROL RTE-FAMILY-ITEM-SIZE _RTE-FEM-STRIDE !
+    RTE-FAMILY-CONTROL _RTE-FDE-LAYOUT
+    _RTE-FEM-ENTRY @ _RTE-FE.PLAN-A @ _RTE-FEM-PLAN !
+    _RTE-FEM-ENTRY @ _RTE-FE.BYTES-A @ _RTE-FEM-BYTES !
+    _RTE-FEM-ENTRY @ RTE-FAMILY-ITEMS@ _RTE-FEM-STRIDE @ / _RTE-FEM-COUNT !
+        _RTE-FEM-ITEM !
+    _RTE-FDE-KNOWN-XT @ ?DUP 0= IF RTE-S-INVALID EXIT THEN
+    _RTE-FEM-ENTRY @ SWAP EXECUTE 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    FSHD? IF 2DUP _RTE-FDE-KEYED-JUDGE THEN
+    _RTE-FDE-KNOWN ;
+: _RTE-FDE-KEYED-BODY ( -- status )
+    -1 _RTE-FDE-KEYED !
+    _RTE-FDE-DROPS DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-A @ _RTE-FEM-ENTRY !
+    _RTE-FDE-KEYED-P @ 0 ?DO
+        _RTE-FDE-KEYED-FAMILY DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+        RTE-FAMILY-ENTRY-SIZE _RTE-FEM-ENTRY +!
+    LOOP
+    FSHD? IF _RTE-FDE-DROPS-JUDGE THEN
+    0 _RTE-FDE-KEYED ! RTE-S-OK ;
 
 \ Both catalogs name the same surface and the same regions.
 : _RTE-FDE-CATALOGS? ( -- flag )
@@ -371,18 +484,28 @@ VARIABLE _RTE-FDE-PROVED
     THEN
     _RTE-FEM-BATCH @ _RTE-FB.CATALOG-A @ _RTE-FEM-CATALOG !
     _RTE-FDE-CATALOGS? 0= IF RTE-S-INVALID EXIT THEN
-    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-U @
-    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-U @ <> IF RTE-S-INVALID EXIT THEN
-    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-A @ _RTE-FEM-ENTRY !
-    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-A @ _RTE-FDE-AE !
-    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
+    \ The keyed families lead both batches, and as many others follow in
+    \ each, which pair in place.
+    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE /
+        DUP _RTE-FDE-KEYED-P @ U< IF DROP RTE-S-INVALID EXIT THEN
+        _RTE-FDE-KEYED-P @ - _RTE-FDE-REST !
+    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE /
+        DUP _RTE-FDE-KEYED-A @ U< IF DROP RTE-S-INVALID EXIT THEN
+        _RTE-FDE-KEYED-A @ - _RTE-FDE-REST @ <> IF RTE-S-INVALID EXIT THEN
+    _RTE-FDE-KEYED-BODY DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-A @
+        _RTE-FDE-KEYED-P @ RTE-FAMILY-ENTRY-SIZE * + _RTE-FEM-ENTRY !
+    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-A @
+        _RTE-FDE-KEYED-A @ RTE-FAMILY-ENTRY-SIZE * + _RTE-FDE-AE !
+    _RTE-FDE-REST @ 0 ?DO
         _RTE-FDE-FAMILY DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
         RTE-FAMILY-ENTRY-SIZE DUP _RTE-FEM-ENTRY +! _RTE-FDE-AE +!
     LOOP
     _RTE-FDE-OPS @ IF RTE-S-OK EXIT THEN
     _RTE-FDE-FENCE ;
 : _RTE-FDE-FINISH ( status -- status )
-    _RTE-FEM-FINISH
+    _RTE-FEM-FINISH _RTE-FDE-KEYED-CLEAR 0 _RTE-FDE-REST ! 0 _RTE-FDE-SEEK !
+    0 _RTE-FDE-J-ENTRY ! 0 _RTE-FDE-J-LISTED !
     0 _RTE-FDE-ACTIVE ! 0 _RTE-FDE-AE ! 0 _RTE-FDE-AITEM !
     0 _RTE-FDE-AREF ! 0 _RTE-FDE-ABYTES ! 0 _RTE-FDE-ACOUNT !
     0 _RTE-FDE-OPS ! 0 _RTE-FDE-FENCE-E ! 0 _RTE-FDE-FENCE-I !
@@ -394,13 +517,15 @@ VARIABLE _RTE-FDE-PROVED
 \ public entry's proofs check what a caller hands it and name nothing.
 : _RTE-FDE-NAMED ( flag -- flag )
     _RTE-FDE-PROVED @ IF S" the shell's banks" CHK-NAME THEN ;
+: _RTE-FDE-REFUSE ( pending-batch active-batch shell -- status )
+    DROP 2DROP 0 _RTE-FDE-PROVED ! _RTE-FDE-KEYED-CLEAR RTE-S-INVALID ;
 : _RTE-FDE-EMIT ( pending-batch active-batch shell -- status )
-    2 PICK 2 PICK = IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+    2 PICK 2 PICK = IF _RTE-FDE-REFUSE EXIT THEN
     _RTE-FDE-PROVED @ 0= CHK-EVERY-FRAME? OR IF
         2 PICK OVER _RTE-FEM-AUTHORITY? _RTE-FDE-NAMED
-            0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+            0= IF _RTE-FDE-REFUSE EXIT THEN
         2DUP _RTE-FEM-AUTHORITY? _RTE-FDE-NAMED
-            0= IF DROP 2DROP 0 _RTE-FDE-PROVED ! RTE-S-INVALID EXIT THEN
+            0= IF _RTE-FDE-REFUSE EXIT THEN
     THEN
     DUP _RTE-SH.BASE @ _RTE-FEM-BASE ! _RTE-FEM-SHELL !
     _RTE-FDE-ACTIVE ! _RTE-FEM-BATCH !
@@ -408,7 +533,7 @@ VARIABLE _RTE-FDE-PROVED
     ['] _RTE-FDE-BODY CATCH ?DUP IF DROP RTE-S-INVALID THEN
     _RTE-FDE-FINISH ;
 : RTE-FAMILY-BATCH-DELTA-EMIT ( pending-batch active-batch shell -- status )
-    0 _RTE-FDE-KNOWN-XT ! 0 _RTE-FDE-PROVED ! _RTE-FDE-EMIT ;
+    0 _RTE-FDE-KNOWN-XT ! 0 _RTE-FDE-PROVED ! _RTE-FDE-KEYED-CLEAR _RTE-FDE-EMIT ;
 \ Internal peer for a caller that proved both batches with
 \ RTE-FAMILY-BATCH-VALID? and has not written them since, such as the shell
 \ sidecar's parts, which hold batches the family preflight admitted. It
@@ -419,11 +544,14 @@ VARIABLE _RTE-FDE-PROVED
 \ (check-mode.f).
 \ KNOWN-XT ( entry -- list-a n known? ), or 0, says what the caller's own
 \ comparison found.  It is called once for each family of PENDING, in
-\ order.  For a family it knows, it gives the indexes of the items that
-\ changed, in ascending order, and those are replaced; for an instrument
-\ or series family, which a DELTA cannot replace, it gives none.  KNOWN?
-\ false leaves the family to be compared.  KNOWN-XT may throw, which
-\ refuses the DELTA.
+\ order.  For a family it knows, it gives the items that changed, each an
+\ index doubled with the low bit set for an item to define, in ascending
+\ order, and those are replaced or defined; for an instrument or series
+\ family, which a DELTA cannot replace, it gives none.  KNOWN? false leaves
+\ the family to be compared.  KNOWN-XT may throw, which refuses the DELTA.
+\ A caller whose comparison paired controls by identity first names its
+\ keyed families and the controls that went (_RTE-FAMILY-DELTA-KEYED!);
+\ the emission clears them.
 : _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED ( pending-batch active-batch shell known-xt -- status )
     _RTE-FDE-KNOWN-XT ! -1 _RTE-FDE-PROVED ! _RTE-FDE-EMIT 0 _RTE-FDE-KNOWN-XT ! ;
 

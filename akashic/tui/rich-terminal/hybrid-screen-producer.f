@@ -409,7 +409,10 @@ VARIABLE _RTHP-OWNED-LIMIT
 \ candidate carried once built (_RTHP-PRESENT-PARTS).  Each grows from the
 \ memory source to what a snapshot needs and half again.
 : _RTHP.ROOT-BLOCK               ( block p -- a ) SWAP 1- 40 * + 5152 + ;
-5232 CONSTANT RTHP-SIZE
+\ The controls on screen the sealed DELTA plan drops, whose places on
+\ screen follow the comparison's work in ORDER2 (_RTHP-DELTA-PLAN-DROPS@).
+: _RTHP.DELTA-PLAN-DROPS         ( p -- a ) 5232 + ;
+5240 CONSTANT RTHP-SIZE
 40 CONSTANT _RTHP-STATIC-CORR-SIZE
 80 CONSTANT _RTHP-SERIES-CORR-SIZE
 \ An omitted graph: the cells it paints, row col row1 col1, and the token
@@ -2062,7 +2065,7 @@ VARIABLE _RTHP-FT-INTENTS
     LOOP -1 ;
 
 : _RTHP-DELTA-PLAN-CLEAR  ( producer -- )
-    _RTHP.DELTA-PLAN-VALID 88 0 FILL ;
+    0 OVER _RTHP.DELTA-PLAN-DROPS ! _RTHP.DELTA-PLAN-VALID 88 0 FILL ;
 
 \ ---------------------------------------------------------------------
 \  The extension's part of a frame
@@ -12712,6 +12715,9 @@ VARIABLE _RTHP-D-EMITTED
 VARIABLE _RTHP-D-CHANGED
 VARIABLE _RTHP-D-PLAN-CONTROLS
 VARIABLE _RTHP-D-PLAN-GLYPHS
+\ The controls on screen the plan drops, whose places on screen ascend in
+\ the drops' cells (_RTHP-D-DROPS-A).
+VARIABLE _RTHP-D-PLAN-DROPS
 VARIABLE _RTHP-D-MATCHED
 VARIABLE _RTHP-D-CONTROL-MAP-VALUE
 VARIABLE _RTHP-D-PLAN-MAP-VALUE
@@ -13183,16 +13189,18 @@ VARIABLE _RTHP-ROOT-ONLY
     URF-SAME? 0= _RTHP-ROOT-PART-MOVED? OR
     SWAP FSHD-STAGE-ROOT-FACTS FSHD-HELD ;
 
-\ Seek the root of the pending bank's control INDEX, from its correlation
-\ and kind; false for a control no document root projects.
-: _RTHP-ROOT-CONTROL-ROOT?  ( index -- flag )
-    _RTHP-D-PENDING @ _RTHP-PACK-CORR-A OVER RUCP-CORRELATION-SIZE * +
+\ Seek the root of control INDEX of BANK, from its correlation and kind;
+\ false for a control no document root projects.
+VARIABLE _RTHP-ROOT-K-BANK
+: _RTHP-ROOT-BANK-CONTROL-ROOT?  ( index bank -- flag )
+    _RTHP-ROOT-K-BANK !
+    _RTHP-ROOT-K-BANK @ _RTHP-PACK-CORR-A OVER RUCP-CORRELATION-SIZE * +
     DUP RUCP-CORRELATION-ATTACHMENT@ _RTHP-ROOT-K-TOKEN !
     DUP RUCP-CORRELATION-SOURCE@ _RTHP-ROOT-K-SOURCE !
     DUP RUCP-CORRELATION-INDEX@ _RTHP-ROOT-K-INDEX !
     DUP RUCP-CORRELATION-LIFECYCLE-GENERATION@ _RTHP-ROOT-K-GEN !
     DUP RUCP-CORRELATION-SUBKEY@ _RTHP-ROOT-K-KEY !
-    SWAP _RTHP-D-PENDING @ _RTHP-PACK-CONTROLS-A SWAP RTE-CONTROL-SIZE * +
+    SWAP _RTHP-ROOT-K-BANK @ _RTHP-PACK-CONTROLS-A SWAP RTE-CONTROL-SIZE * +
         _RTE-CONTROL.KIND @                           ( correlation kind )
     DUP RTE-CONTROL-MENU-BAR RTE-CONTROL-MENU-SEPARATOR 1+ WITHIN IF
         2DROP URF-F-MENUS _RTHP-ROOT-K-FAMILY !
@@ -13218,9 +13226,28 @@ VARIABLE _RTHP-ROOT-ONLY
     THEN
     0 ;
 
+\ Seek the root of the pending bank's control INDEX.
+: _RTHP-ROOT-CONTROL-ROOT?  ( index -- flag )
+    _RTHP-D-PENDING @ _RTHP-ROOT-BANK-CONTROL-ROOT? ;
+
 : _RTHP-ROOT-JUDGE-CONTROL  ( index -- )
     _RTHP-ROOT-NEW @ 0= IF DROP EXIT THEN
     DUP _RTHP-ROOT-CONTROL-ROOT? IF _RTHP-ROOT-JUDGE ELSE DROP THEN ;
+
+\ Judge one control the comparison drops, whose root on screen is the
+\ identity sought: held when that root went from the pending bank's facts,
+\ its facts moved, or its family went with this bank.  A root missing from
+\ the facts on screen is a difference.  ITEM numbers it.
+: _RTHP-ROOT-JUDGE-GONE  ( item -- )
+    1 _RTHP-DIAG-ROOT-ITEMS +!
+    0 _RTHP-ROOT-OLD @ _RTHP-ROOT-FIND ?DUP 0= IF
+        0 SWAP FSHD-STAGE-ROOT-FACTS FSHD-HELD EXIT
+    THEN
+    0 _RTHP-ROOT-NEW @ _RTHP-ROOT-FIND ?DUP 0= IF
+        DROP -1 SWAP FSHD-STAGE-ROOT-FACTS FSHD-HELD EXIT
+    THEN
+    URF-SAME? 0= _RTHP-ROOT-PART-MOVED? OR
+    SWAP FSHD-STAGE-ROOT-FACTS FSHD-HELD ;
 
 \ Seek the root of the pending bank's static INDEX: a status field's;
 \ false for a picture's.
@@ -13336,9 +13363,9 @@ VARIABLE _RTHP-ROOT-ONLY
         _RTHP-D-P @ _RTHP.SOURCE-GEN @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.CONTENT-EPOCH @
         _RTHP-D-P @ _RTHP.SOURCE-CONTENT-EPOCH @ <> IF 0 EXIT THEN
+    \ Controls may come and go: the comparison defines the new ones and
+    \ drops those that went.  The menus keep their count.
     10 _RTHP-D-WHY !
-    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
-        _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
         _RTHP-D-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
     _RTHP-D-ACTIVE @ _RTHP-TB.MENU-CONTROL-COUNT @
@@ -13351,8 +13378,6 @@ VARIABLE _RTHP-ROOT-ONLY
     _RTHP-D-PENDING @ _RTHP-TB.DOCUMENT-COUNT @
         _RTHP-D-P @ _RTHP.DOCUMENT-COUNT @ <> IF 0 EXIT THEN
     12 _RTHP-D-WHY !
-    _RTHP-D-ACTIVE @ _RTHP-TB.COLLECTION-COUNT @
-        _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-COUNT @ U> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-COUNT @
         _RTHP-D-P @ _RTHP.COLLECTION-COUNT @ <> IF 0 EXIT THEN
     13 _RTHP-D-WHY !
@@ -13438,6 +13463,8 @@ VARIABLE _RTHP-D-INDEX-B
 VARIABLE _RTHP-D-INDEX-N
 VARIABLE _RTHP-D-INDEX-A-N
 VARIABLE _RTHP-D-INDEX-BYTES
+\ The larger of the two banks' control counts, which sizes each slice.
+VARIABLE _RTHP-D-INDEX-M
 VARIABLE _RTHP-D-INDEX-LAST-ID
 VARIABLE _RTHP-D-INDEX-ID
 VARIABLE _RTHP-D-INDEX-ORDINAL
@@ -13445,6 +13472,8 @@ VARIABLE _RTHP-D-JOIN-CURSOR
 VARIABLE _RTHP-D-JOIN-A
 VARIABLE _RTHP-D-JOIN-B
 VARIABLE _RTHP-D-JOIN-ENTRY
+\ The controls on screen the join paired with no pending control.
+VARIABLE _RTHP-D-JOIN-DROPS
 
 VARIABLE _RTHP-D-SORT-A
 VARIABLE _RTHP-D-SORT-N
@@ -13583,24 +13612,35 @@ VARIABLE _RTHP-D-SORT-RUNS
     UNTIL
     _RTHP-D-SORT-FINISH ;
 
-\ The work space of an index of _RTHP-D-INDEX-N pending controls: a control
-\ map, then the two banks' indexes, in the producer's ORDER2 span.
+\ The work space of an index of _RTHP-D-INDEX-N pending controls against
+\ _RTHP-D-INDEX-A-N on screen, in the producer's ORDER2 span: a control
+\ map, then the two banks' indexes, each slice sized for the larger bank,
+\ since a sort borrows the map's slice and the active index's sort borrows
+\ the pending one's.  Once the join is made, the active index's slice holds
+\ the drops (_RTHP-D-DROPS-A).
 : _RTHP-D-INDEX-SPACE?  ( -- flag )
-    _RTHP-D-INDEX-N @ 24 _RTHP-U32*? 0= IF DROP 0 EXIT THEN
+    _RTHP-D-INDEX-N @ _RTHP-D-INDEX-A-N @ MAX DUP _RTHP-D-INDEX-M !
+    24 _RTHP-U32*? 0= IF DROP 0 EXIT THEN
     DUP _RTHP-D-P @ _RTHP.ORDER2-U @ U> IF DROP 0 EXIT THEN
     DUP IF
         _RTHP-D-P @ _RTHP.ORDER2-A @ DUP 7 AND IF 2DROP 0 EXIT THEN
         OVER _RTHP-D-P @ _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
     THEN DROP
-    _RTHP-D-INDEX-N @ 8 * DUP _RTHP-D-INDEX-BYTES !
-    _RTHP-D-P @ _RTHP.ORDER2-A @ + DUP _RTHP-D-INDEX-A !
-    _RTHP-D-INDEX-BYTES @ + _RTHP-D-INDEX-B ! -1 ;
+    _RTHP-D-INDEX-N @ 8 * _RTHP-D-INDEX-BYTES !
+    _RTHP-D-INDEX-M @ 8 * _RTHP-D-P @ _RTHP.ORDER2-A @ + DUP _RTHP-D-INDEX-A !
+    _RTHP-D-INDEX-M @ 8 * + _RTHP-D-INDEX-B ! -1 ;
 
 : _RTHP-D-INDEX-WORK?  ( -- flag )
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-INDEX-N !
-    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
-        DUP _RTHP-D-INDEX-A-N ! _RTHP-D-INDEX-N @ U> IF 0 EXIT THEN
+    _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-INDEX-A-N !
+    0 _RTHP-D-JOIN-DROPS !
     _RTHP-D-INDEX-SPACE? ;
+
+\ The drops' cells: the slice of the active index in ORDER2, which the
+\ comparison no longer reads once the join is made, and which a kept
+\ index, read from the bank's annex, never used.
+: _RTHP-D-DROPS-A  ( -- a )
+    _RTHP-D-INDEX-M @ 8 * _RTHP-D-P @ _RTHP.ORDER2-A @ + ;
 
 \ Active IDs need not follow graph order after earlier semantic reordering.
 \ Sorting both ID indexes proves a complete, duplicate-free bijection, then
@@ -13667,33 +13707,40 @@ VARIABLE _RTHP-D-SORT-RUNS
         _RTHP-D-CORRELATION-COMPARE 0< 0= IF 0 UNLOOP EXIT THEN
     LOOP -1 ;
 
-\ Merge unique identities once.  An unmatched pending identity is growth;
-\ an unmatched active identity is deletion and refuses DELTA.  The resulting
-\ ORDER2 prefix remains indexed by pending graph ordinal, preserving its
-\ parent-first order for later compatibility, normalization and wire planning.
+\ The order of the active identity at the join's cursor against the pending
+\ one in _RTHP-D-JOIN-B: -1 below, 0 the same, 1 above or none left.
+: _RTHP-D-JOIN-ORDER  ( -- -1|0|1 )
+    _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ U< 0= IF 1 EXIT THEN
+    _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A @ _RTHP-D-INDEX-AT @
+        DUP _RTHP-D-JOIN-A !
+        _RTHP-D-ACTIVE @ _RTHP-D-INDEX-CORRELATION
+    _RTHP-D-JOIN-B @ _RTHP-D-CORRELATION-COMPARE ;
+
+\ Merge unique identities once.  An unmatched pending identity is a control
+\ to define; an unmatched active identity, one the pending bank no longer
+\ holds, is a control to drop, which _RTHP-D-JOIN-DROPS counts.  The
+\ resulting ORDER2 prefix remains indexed by pending graph ordinal,
+\ preserving its parent-first order for later compatibility, normalization
+\ and wire planning.
 : _RTHP-D-JOIN-CONTROL-INDEXES?  ( -- flag )
     \ Sorting borrowed this prefix as scratch.  Only this merge publishes
     \ graph-map entries, and an unmatched pending identity must start at zero.
     _RTHP-D-P @ _RTHP.ORDER2-A @ _RTHP-D-INDEX-BYTES @ 0 FILL
-    0 _RTHP-D-JOIN-CURSOR !
+    0 _RTHP-D-JOIN-CURSOR ! 0 _RTHP-D-JOIN-DROPS !
     _RTHP-D-INDEX-N @ 0 ?DO
         I _RTHP-D-INDEX-B @ _RTHP-D-INDEX-AT @
         DUP 0xFFFFFFFF AND _RTHP-D-CONTROL-MAP-AT _RTHP-D-JOIN-ENTRY !
         _RTHP-D-PENDING @ _RTHP-D-INDEX-CORRELATION _RTHP-D-JOIN-B !
-        _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ U< IF
-            _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A @ _RTHP-D-INDEX-AT @
-                DUP _RTHP-D-JOIN-A !
-                _RTHP-D-ACTIVE @ _RTHP-D-INDEX-CORRELATION
-            _RTHP-D-JOIN-B @ _RTHP-D-CORRELATION-COMPARE
-            DUP 0< IF DROP 0 UNLOOP EXIT THEN
-            0= IF
-                _RTHP-D-JOIN-A @ 0xFFFFFFFF AND 1+
-                    _RTHP-D-JOIN-ENTRY @ !
-                1 _RTHP-D-JOIN-CURSOR +!
-            THEN
+        BEGIN _RTHP-D-JOIN-ORDER DUP 0< WHILE
+            DROP 1 _RTHP-D-JOIN-DROPS +! 1 _RTHP-D-JOIN-CURSOR +!
+        REPEAT
+        0= IF
+            _RTHP-D-JOIN-A @ 0xFFFFFFFF AND 1+
+                _RTHP-D-JOIN-ENTRY @ !
+            1 _RTHP-D-JOIN-CURSOR +!
         THEN
     LOOP
-    _RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ = ;
+    _RTHP-D-INDEX-A-N @ _RTHP-D-JOIN-CURSOR @ - _RTHP-D-JOIN-DROPS +! -1 ;
 
 \ The comparison that built the active bank sorted its correlation/graph
 \ associations by semantic identity and proved them unique.  Join that exact
@@ -13966,10 +14013,10 @@ VARIABLE _RTHP-D-REV-PENDING
 : _RTHP-D-CONTROL-COMPATIBLE?  ( index -- flag )
     _RTHP-D-CONTROL-PAIR 0= IF 0 EXIT THEN
     _RTHP-D-MATCHED @ 0= IF
-        \ Desk's shell keeps every applet control under its acknowledged
-        \ identity in a DELTA, so a control the frame on screen lacks
-        \ needs a complete candidate replacement.
-        _RTHP-D-P @ _RTHP.SHELL-BUILT @ IF 0 EXIT THEN
+        \ A control the frame on screen lacks is defined under its fresh
+        \ identity, which lies above every one on screen, Desk's shell
+        \ defining it among the applications' controls.  A field or a
+        \ dialog still needs the frame replaced whole.
         _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ DUP RTE-CONTROL-FIELD =
             SWAP _RTHP-DIALOG-KIND? OR IF 0 EXIT THEN
         _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION @
@@ -14717,20 +14764,48 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
 \ Load each map cell before writing because the compact output may occupy that
 \ same cell.  At most one operation is emitted per input ordinal, so the write
 \ cursor never reaches an unread cell.
+\ The plan lists the controls to define and those that changed, each by its
+\ place in the pending bank, ascending, in the map's own cells, which it
+\ reads before it writes.  The places on screen that no pending control
+\ took are the controls to drop: each paired place is marked in the drops'
+\ cells first, then the unmarked ones are listed there, ascending.
 : _RTHP-D-PLAN-COMPACT-CONTROLS?  ( -- flag )
-    0 _RTHP-D-PLAN-CONTROLS !
+    0 _RTHP-D-PLAN-CONTROLS ! 0 _RTHP-D-PLAN-DROPS !
+    _RTHP-D-DROPS-A _RTHP-D-INDEX-A-N @ 8 * 0 FILL
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         I _RTHP-D-CONTROL-MAP-AT @ _RTHP-D-PLAN-MAP-VALUE !
         _RTHP-D-PLAN-MAP-VALUE @ 0= IF
             I _RTHP-D-CONTROL-ORDINAL !
             _RTHP-D-PLAN-CONTROL-DEFINE! 0= IF 0 UNLOOP EXIT THEN
         ELSE
+            _RTHP-D-PLAN-MAP-VALUE @ DUP 0< IF NEGATE THEN 1-
+                DUP _RTHP-D-INDEX-A-N @ U< 0= IF DROP 0 UNLOOP EXIT THEN
+                8 * _RTHP-D-DROPS-A + -1 SWAP !
             _RTHP-D-PLAN-MAP-VALUE @ 0< IF
                 I _RTHP-D-CONTROL-ORDINAL !
                 _RTHP-D-PLAN-CONTROL! 0= IF 0 UNLOOP EXIT THEN
             THEN
         THEN
-    LOOP -1 ;
+    LOOP
+    _RTHP-D-INDEX-A-N @ 0 ?DO
+        I 8 * _RTHP-D-DROPS-A + @ 0= IF
+            I _RTHP-D-PLAN-DROPS @ 8 * _RTHP-D-DROPS-A + !
+            1 _RTHP-D-PLAN-DROPS +!
+        THEN
+    LOOP
+    _RTHP-D-PLAN-DROPS @ _RTHP-D-JOIN-DROPS @ = ;
+
+\ With the root facts judged, each control the plan drops belongs to a root
+\ of the bank on screen that went or moved; its item is its place on
+\ screen plus 196608.
+: _RTHP-ROOT-JUDGE-DROPS  ( -- )
+    _RTHP-ROOT-NEW @ 0= IF EXIT THEN
+    _RTHP-D-PLAN-DROPS @ 0 ?DO
+        I 8 * _RTHP-D-DROPS-A + @
+        DUP _RTHP-D-ACTIVE @ _RTHP-ROOT-BANK-CONTROL-ROOT? IF
+            196608 + _RTHP-ROOT-JUDGE-GONE
+        ELSE DROP THEN
+    LOOP ;
 
 : _RTHP-D-PLAN-SEAL  ( -- )
     _RTHP-D-ACTIVE @
@@ -14745,6 +14820,8 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
         _RTHP-D-P @ _RTHP.DELTA-PLAN-CONTROLS !
     _RTHP-D-PLAN-GLYPHS @
         _RTHP-D-P @ _RTHP.DELTA-PLAN-GLYPHS !
+    _RTHP-D-PLAN-DROPS @
+        _RTHP-D-P @ _RTHP.DELTA-PLAN-DROPS !
     _RTHP-D-P @ _RTHP.ATTEMPT @
         _RTHP-D-P @ _RTHP.DELTA-PLAN-ATTEMPT !
     _RTHP-D-PENDING @ _RTHP-TB.SOURCE-GEN @
@@ -14793,12 +14870,35 @@ VARIABLE _RTHP-D-LAYOUT-FIRST
     2 PICK _RTHP.ORDER2-U @ U> IF 2DROP 0 0 0 EXIT THEN
     SWAP _RTHP.ORDER2-A @ SWAP -1 ;
 
+\ ( producer -- a n flag ) The controls on screen the sealed DELTA plan
+\ drops: N cells at A, each a control's place in the bank on screen,
+\ ascending.  They follow the comparison's control map in ORDER2, a slice
+\ sized for the larger of the two banks.  FLAG is false when no plan is
+\ sealed for the banks now pending and on screen.
+VARIABLE _RTHP-PD-P
+: _RTHP-DELTA-PLAN-DROPS@  ( producer -- a n flag )
+    DUP _RTHP-PD-P !
+    _RTHP-DELTA-PLAN-SEALED? 0= IF 0 0 0 EXIT THEN
+    _RTHP-PD-P @ _RTHP.TARGET-PENDING @ _RTHP-TB.CONTROL-COUNT @
+    _RTHP-PD-P @ _RTHP.TARGET-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
+    _RTHP-PD-P @ _RTHP.DELTA-PLAN-DROPS @ OVER U> IF 2DROP 0 0 0 EXIT THEN
+    MAX 8 _RTHP-U32*? 0= IF DROP 0 0 0 EXIT THEN
+    _RTHP-PD-P @ _RTHP.DELTA-PLAN-DROPS @ 8 * OVER _RTHP-U32+? 0= IF
+        2DROP 0 0 0 EXIT
+    THEN
+    _RTHP-PD-P @ _RTHP.ORDER2-U @ U> IF DROP 0 0 0 EXIT THEN
+    _RTHP-PD-P @ _RTHP.ORDER2-A @ +
+    _RTHP-PD-P @ _RTHP.DELTA-PLAN-DROPS @ -1 ;
+
 \ The compact glyph plan uses the same low DEFINE bit as the control plan.
 : _RTHP-D-PLAN-GLYPH-AT  ( plan-index -- glyph-index definition? )
     8 * _RTHP-D-P @ _RTHP.GLYPH-ID-MAP-A @ + @
     DUP 1 AND SWAP 2/ SWAP ;
 
 VARIABLE _RTHP-D-PLAN-LAST-GLYPH
+\ The sealed plan's drops, as _RTHP-DELTA-PLAN-DROPS@ gives them.
+VARIABLE _RTHP-D-DROPS-AT
+VARIABLE _RTHP-D-PLAN-LAST-DROP
 VARIABLE _RTHP-D-PLAN-NEXT-GLYPH
 VARIABLE _RTHP-D-PLAN-NEW-GLYPHS
 
@@ -14890,7 +14990,24 @@ VARIABLE _RTHP-D-PLAN-NEW-GLYPHS
             THEN
         THEN
     LOOP
-    _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ OR 0<> ;
+    \ The drops name places on screen, each once, ascending.
+    _RTHP-D-P @ _RTHP-DELTA-PLAN-DROPS@ 0= IF 2DROP 0 EXIT THEN
+    DUP _RTHP-D-PLAN-DROPS !
+    8 * DUP IF
+        OVER SWAP _RTHP-D-P @ _RTHP-ARENA-SPAN? 0= IF DROP 0 EXIT THEN
+    ELSE DROP THEN
+    _RTHP-D-DROPS-AT !
+    -1 _RTHP-D-PLAN-LAST-DROP !
+    _RTHP-D-PLAN-DROPS @ 0 ?DO
+        I 8 * _RTHP-D-DROPS-AT @ + @
+        DUP _RTHP-D-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        DUP 1+ _RTHP-D-PLAN-LAST-DROP @ 1+ U> 0= IF DROP 0 UNLOOP EXIT THEN
+        _RTHP-D-PLAN-LAST-DROP !
+    LOOP
+    _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ OR
+        _RTHP-D-PLAN-DROPS @ OR 0<> ;
 
 : _RTHP-D-CONTROL-REFERENCES-NORMALIZABLE?  ( -- flag )
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
@@ -15302,7 +15419,8 @@ VARIABLE _RTHP-D-PLACE-ORD
     ELSE
         _RTHP-D-BUILD-CONTROL-MAP? 0= IF 0 EXIT THEN
     THEN
-    0 _RTHP-D-OPS !
+    \ Each control that went is an operation of the DELTA.
+    _RTHP-D-JOIN-DROPS @ _RTHP-D-OPS !
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
         24 _RTHP-D-WHY !
         _RTHP-D-FACTS @ IF I _RTHP-D-CONTROL-MOVED? ELSE -1 THEN IF
@@ -15363,6 +15481,7 @@ VARIABLE _RTHP-D-PLACE-ORD
     _RTHP-D-PLAN-COMPACT-CONTROLS? 0= IF
         _RTHP-D-RESTORE-FRESH-CANDIDATE 0 EXIT
     THEN
+    _RTHP-ROOT-JUDGE-DROPS
     _RTHP-D-KEEP-FACTS
     _RTHP-D-FACTS @ IF 1 _RTHP-DIAG-FOLLOWED +! THEN
     _RTHP-D-PLAN-SEAL -1 ;
@@ -15370,13 +15489,14 @@ VARIABLE _RTHP-D-PLACE-ORD
 \ The shadow check of the comparison that follows the facts.  A copy of the
 \ packed pending bank is taken, the full comparison runs on the bank with
 \ the root facts' judge, and its result is kept: whether it made a DELTA,
-\ the plan's counts, the bank, the plan and the kept facts with their
-\ index.  The copy is then put back, with the fields the comparison sets,
-\ and the comparison runs again as it does with the check off.  When that
-\ run paired the controls by place, its result must be the full one: the
-\ flag and counts, the bank, the plan, the kept facts and their index, as
-\ items 0 to 4 of the comparison stage; otherwise it was the full
-\ comparison again.  The second run's result is the one the frame keeps.
+\ the plan's counts, the bank, the plan, its drops and the kept facts with
+\ their index.  The copy is then put back, with the fields the comparison
+\ sets, and the comparison runs again as it does with the check off.  When
+\ that run paired the controls by place, its result must be the full one:
+\ the flag and counts, the bank, the plan, the kept facts and their index,
+\ and the drops, as items 0 to 5 of the comparison stage; otherwise it was
+\ the full comparison again.  The second run's result is the one the frame
+\ keeps.
 VARIABLE _RTHP-D-SH-P
 VARIABLE _RTHP-D-SH-BANK
 VARIABLE _RTHP-D-SH-BYTES
@@ -15395,28 +15515,41 @@ VARIABLE _RTHP-SH-STAGE
 : _RTHP-D-SH-BANK-BYTES  ( bank -- u )
     DUP _RTHP-PACK-A OVER - SWAP _RTHP-TB.PACKED-BYTES @ + ;
 \ The block: the packed copy, then the full result's bank and head of
-\ three cells, the second run's head, and the full result's plan, kept
-\ facts record and their index.
+\ four cells, the second run's head, and the full result's plan, drops,
+\ kept facts record and their index.  SH-AN counts the controls on screen.
+VARIABLE _RTHP-D-SH-AN
 : _RTHP-D-SH-COPY      ( -- a )  _RTHP-SH-B @ ;
 : _RTHP-D-SH-BANK2     ( -- a )  _RTHP-SH-B @ _RTHP-D-SH-BYTES @ + ;
 : _RTHP-D-SH-HEAD2     ( -- a )  _RTHP-D-SH-BANK2 _RTHP-D-SH-BYTES @ + ;
-: _RTHP-D-SH-HEAD      ( -- a )  _RTHP-D-SH-HEAD2 24 + ;
-: _RTHP-D-SH-PLAN2     ( -- a )  _RTHP-D-SH-HEAD 24 + ;
-: _RTHP-D-SH-FACTS2    ( -- a )  _RTHP-D-SH-PLAN2 _RTHP-D-SH-N @ 8 * + ;
+: _RTHP-D-SH-HEAD      ( -- a )  _RTHP-D-SH-HEAD2 32 + ;
+: _RTHP-D-SH-PLAN2     ( -- a )  _RTHP-D-SH-HEAD 32 + ;
+: _RTHP-D-SH-DROPS2    ( -- a )  _RTHP-D-SH-PLAN2 _RTHP-D-SH-N @ 8 * + ;
+: _RTHP-D-SH-FACTS2    ( -- a )  _RTHP-D-SH-DROPS2 _RTHP-D-SH-AN @ 8 * + ;
 : _RTHP-D-SH-INDEX2    ( -- a )  _RTHP-D-SH-FACTS2 _RTHP-KF-SIZE + ;
 : _RTHP-D-SH-NEED      ( -- u )
-    _RTHP-D-SH-BYTES @ 2* 48 + _RTHP-D-SH-N @ 16 * + _RTHP-KF-SIZE + ;
+    _RTHP-D-SH-BYTES @ 2* 64 + _RTHP-D-SH-N @ 16 * +
+    _RTHP-D-SH-AN @ 8 * + _RTHP-KF-SIZE + ;
 
-\ FLAG and the plan's counts, as three cells at A.
+\ FLAG and the plan's counts, as four cells at A.
 : _RTHP-D-SH-HEAD!  ( flag a -- )
     TUCK !
     _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-CONTROLS @ OVER 8 + !
-    _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-GLYPHS @ SWAP 16 + ! ;
+    _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-GLYPHS @ OVER 16 + !
+    _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-DROPS @ SWAP 24 + ! ;
 
 \ The plan's control cells, valid while a plan is sealed.
 : _RTHP-D-SH-PLAN  ( -- a u )
     _RTHP-D-SH-P @ _RTHP.ORDER2-A @
     _RTHP-D-SH-P @ _RTHP.DELTA-PLAN-CONTROLS @ _RTHP-D-SH-N @ MIN 8 * ;
+
+\ The controls on screen, for the drops' cells.
+: _RTHP-D-SH-ACTIVE-N  ( producer -- n )
+    _RTHP.TARGET-ACTIVE @ DUP IF _RTHP-TB.CONTROL-COUNT @ THEN ;
+
+\ The plan's drops' cells, while a plan is sealed.
+: _RTHP-D-SH-DROPS  ( -- a u )
+    _RTHP-D-SH-P @ _RTHP-DELTA-PLAN-DROPS@ 0= IF 2DROP 0 0 EXIT THEN
+    _RTHP-D-SH-AN @ MIN 8 * ;
 
 : _RTHP-D-SH-INDEX  ( -- a )
     _RTHP-D-SH-BANK @ _RTHP-D-SH-P @ _RTHP-FACTS-INDEX ;
@@ -15426,6 +15559,7 @@ VARIABLE _RTHP-SH-STAGE
     0= IF EXIT THEN
     _RTHP-D-SH-BANK @ _RTHP-D-SH-BANK2 _RTHP-D-SH-BYTES @ MOVE
     _RTHP-D-SH-PLAN _RTHP-D-SH-PLAN2 SWAP MOVE
+    _RTHP-D-SH-DROPS _RTHP-D-SH-DROPS2 SWAP MOVE
     _RTHP-D-SH-P @ _RTHP.PENDING-FACTS _RTHP-D-SH-FACTS2 _RTHP-KF-SIZE MOVE
     _RTHP-D-SH-INDEX _RTHP-D-SH-INDEX2 _RTHP-D-SH-N @ 8 * MOVE ;
 
@@ -15441,13 +15575,15 @@ VARIABLE _RTHP-SH-STAGE
 : _RTHP-D-SH-COMPARE  ( flag -- )
     _RTHP-D-SH-P @ _RTHP.SOURCE-DRAW @ FSHD-DRAW !
     DUP _RTHP-D-SH-HEAD _RTHP-D-SH-HEAD!
-    _RTHP-D-SH-HEAD2 24 _RTHP-D-SH-HEAD 24 0 _RTHP-SH-STAGE @ FSHD-SAME?
+    _RTHP-D-SH-HEAD2 32 _RTHP-D-SH-HEAD 32 0 _RTHP-SH-STAGE @ FSHD-SAME?
         0= IF DROP EXIT THEN
     0= IF EXIT THEN
     _RTHP-D-SH-BANK2 _RTHP-D-SH-BYTES @ _RTHP-D-SH-BANK @ _RTHP-D-SH-BYTES @
         1 _RTHP-SH-STAGE @ FSHD-SAME? DROP
     _RTHP-D-SH-PLAN2 _RTHP-D-SH-PLAN NIP _RTHP-D-SH-PLAN
         2 _RTHP-SH-STAGE @ FSHD-SAME? DROP
+    _RTHP-D-SH-DROPS2 _RTHP-D-SH-DROPS NIP _RTHP-D-SH-DROPS
+        5 _RTHP-SH-STAGE @ FSHD-SAME? DROP
     _RTHP-D-SH-FACTS2 _RTHP-KF-SIZE
     _RTHP-D-SH-P @ _RTHP.PENDING-FACTS _RTHP-KF-SIZE
         3 _RTHP-SH-STAGE @ FSHD-SAME? DROP
@@ -15463,6 +15599,7 @@ VARIABLE _RTHP-SH-STAGE
     THEN
     _RTHP-D-SH-BANK @ _RTHP-D-SH-BANK-BYTES _RTHP-D-SH-BYTES !
     _RTHP-D-SH-BANK @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-SH-N !
+    _RTHP-D-SH-P @ _RTHP-D-SH-ACTIVE-N _RTHP-D-SH-AN !
     _RTHP-D-SH-NEED _RTHP-D-SH-A _RTHP-D-SH-U FSHD-GROW 0= IF
         FSHD-SKIP
         -1 _RTHP-D-FULL ! -1 _RTHP-D-JUDGE !
@@ -15746,6 +15883,7 @@ VARIABLE _RTHP-C-SH-KEPT
     _RTHP-C-P @ _RTHP.TARGET-PENDING @ DUP _RTHP-D-SH-BANK ! IF
         _RTHP-D-SH-BANK @ _RTHP-D-SH-BANK-BYTES _RTHP-D-SH-BYTES !
         _RTHP-D-SH-BANK @ _RTHP-TB.CONTROL-COUNT @ _RTHP-D-SH-N !
+        _RTHP-C-P @ _RTHP-D-SH-ACTIVE-N _RTHP-D-SH-AN !
         _RTHP-D-SH-NEED _RTHP-C-SH-A _RTHP-C-SH-U FSHD-GROW
     ELSE 0 THEN
     DUP 0<> _RTHP-C-SH-KEPT !
@@ -16325,6 +16463,15 @@ VARIABLE _RTHP-D-RUN-P
     \ plan until target abort or physical publication so a refused abandon can
     \ safely retry after the engine slot becomes cancellable.
     0 _RTHP-D-EMITTED !
+    \ The controls that went go first, so the room they held is free for
+    \ the controls defined after them.
+    _RTHP-D-PLAN-DROPS @ 0 ?DO
+        _RTHP-D-P @ _RTHP.OWNER @ _RTHP-D-P @ _RTHP.OWNER-GEN @
+        I 8 * _RTHP-D-DROPS-AT @ + @ _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT
+            _RTE-CONTROL.ID @
+        _RTHP-D-P @ _RTHP.FACADE @ RTE-CONTROL-DROP
+        DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP 1 _RTHP-D-EMITTED +!
+    LOOP
     _RTHP-D-PLAN-CONTROLS @ 0 ?DO
         I _RTHP-D-PLAN-CONTROL-AT _RTHP-D-PLAN-DEFINE ! DUP
             _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF
@@ -16361,7 +16508,8 @@ VARIABLE _RTHP-D-RUN-P
         THEN DROP 1 _RTHP-D-EMITTED +!
     LOOP
     _RTHP-D-EMITTED @
-        _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ + <> IF RTE-S-INVALID EXIT THEN
+        _RTHP-D-PLAN-CONTROLS @ _RTHP-D-PLAN-GLYPHS @ +
+        _RTHP-D-PLAN-DROPS @ + <> IF RTE-S-INVALID EXIT THEN
     \ Changed status fields follow; the active and pending banks give them.
     _RTHP-D-PENDING @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
         I _RTHP-D-STATIC-CHANGED? IF
@@ -16926,6 +17074,17 @@ VARIABLE _RTHP-DIAG-ALONE-REBUILDS
     THEN
     DROP _RTHP-P-P @ _RTHP-DELTA-STALE ;
 
+\ Diagnostics: the controls the DELTAs sent dropped and defined, from the
+\ plan each was sent by.
+VARIABLE _RTHP-DIAG-DELTA-DROPS
+VARIABLE _RTHP-DIAG-DELTA-DEFINES
+: _RTHP-DIAG-DELTA-MEMBERSHIP+  ( producer -- )
+    DUP _RTHP-DELTA-PLAN-SEALED? 0= IF DROP EXIT THEN
+    DUP _RTHP.DELTA-PLAN-DROPS @ _RTHP-DIAG-DELTA-DROPS +!
+    DUP _RTHP.ORDER2-A @ SWAP _RTHP.DELTA-PLAN-CONTROLS @ 0 ?DO
+        DUP I 8 * + @ 1 AND _RTHP-DIAG-DELTA-DEFINES +!
+    LOOP DROP ;
+
 : _RTHP-PREPARE-DELTA  ( producer -- scb-status )
     _RTPROF-PH-OTHER _RTPROF-MARK
     DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT
@@ -16946,6 +17105,7 @@ VARIABLE _RTHP-DIAG-ALONE-REBUILDS
     RTE-COMMIT _RTHP-P-P @ _RTHP.FACADE @ RTE-RETAINED-SEAL
     _RTPROF-PH-OTHER _RTPROF-MARK
     DUP RTE-S-OK <> IF _RTHP-P-P @ _RTHP-D-ABANDON EXIT THEN DROP
+    _RTHP-P-P @ _RTHP-DIAG-DELTA-MEMBERSHIP+
     _RTHP-P-P @ _RTHP-SEAL-PENDING
     _RTHP-PH-DELTA-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 

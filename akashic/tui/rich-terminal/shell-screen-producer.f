@@ -1567,11 +1567,15 @@ VARIABLE _RSHSP-DIAG-PREPARE-STAGE VARIABLE _RSHSP-PSTAGE
     \ full by the engine as it is sent, so in normal mode it is not admitted
     \ again.  With every-frame checks on it is, which checks how the shell
     \ built it, and a batch found malformed names the shell's batch
-    \ (check-mode.f).  A DELTA too large for the terminal's space fails as it
-    \ is sent and goes out as a START, whose admission asks for the space.
+    \ (check-mode.f).  Its items keep the identities of the frame on screen,
+    \ which need not lie together or ascend once controls came or went, so
+    \ it is admitted as a DELTA's batch.  A DELTA too large for the
+    \ terminal's space fails as it is sent and goes out as a START, whose
+    \ admission asks for the space.
     _RSHSP-DBATCH @ IF CHK-EVERY-FRAME? 0= IF EXIT THEN THEN
     _RSHSP-BATCH @ _RSHSP-ADMISSION @ _RSHSP-S @ _RSHSP.SHELL @
-        _RTE-FAMILY-BATCH-PREFLIGHT-PROVED
+        _RSHSP-DBATCH @ IF _RTE-FAMILY-BATCH-DELTA-PREFLIGHT-PROVED
+        ELSE _RTE-FAMILY-BATCH-PREFLIGHT-PROVED THEN
     DUP RTE-S-INVALID = _RSHSP-DBATCH @ 0<> AND IF
         S" the shell's batch" CHK-DAMAGED
     THEN
@@ -1971,9 +1975,10 @@ VARIABLE _RSHSP-DM-UA
     _RSHSP-DBATCH @ _RTE-FB.CATALOG-A @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @
     COMPARE 0= _RSHSP-CHECK ;
 
-\ Applet controls already carry acknowledged identities. The taskbar takes
-\ the acknowledged identities in place and must be otherwise unchanged,
-\ since a DELTA cannot replace it.
+\ The shell's own controls, past the applications' (_RSHSP-D-APPS).  The
+\ taskbar takes the acknowledged identities in place and must be otherwise
+\ unchanged, since a DELTA cannot replace it; any other family keeps the
+\ identities in place.
 : _RSHSP-D-CONTROLS ( -- )
     _RSHSP-DN @ _RSHSP-DAN @ = _RSHSP-CHECK
     _RSHSP-DN @ 0= IF EXIT THEN
@@ -2084,6 +2089,71 @@ VARIABLE _RSHSP-DBANK
     _RSHSP-COUNT @ RTE-GLYPH-RUN-PLAN-ITEM-SIZE * _RSHSP-PLAN @ _RTE-LP.ITEMS-U !
     _RSHSP-COUNT @ 16 * _RSHSP-DPE @ _RTE-FE.REFS-U ! ;
 
+\ The leading families of BATCH whose controls lie in BANK: the
+\ applications' controls, in runs of the bank's controls by region.
+VARIABLE _RSHSP-AF-LO VARIABLE _RSHSP-AF-HI
+: _RSHSP-APP-FAMILIES ( batch bank -- n )
+    _RTHP-PACKED@ OVER + _RSHSP-AF-HI ! _RSHSP-AF-LO !
+    DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE /
+    0 SWAP 0 ?DO
+        OVER I RTE-FAMILY-ENTRY-SIZE * +
+        DUP _RTE-FE.KIND @ RTE-FAMILY-CONTROL <> IF DROP LEAVE THEN
+        RTE-FAMILY-ITEMS@ DROP _RSHSP-AF-LO @ _RSHSP-AF-HI @ WITHIN 0= IF LEAVE THEN
+        1+
+    LOOP NIP ;
+
+\ The applications' controls lead both batches, and the screen producer's
+\ comparison is the one comparison of them: they carry the identities it
+\ gave them.  With the plan it sealed for these banks, each control it
+\ defines lies at or past the producer's object frontier and every other
+\ below it, and the pending bank holds the controls on screen less those
+\ the plan drops and plus those it defines.  New runs then take identities
+\ above the controls defined.  Without a plan both batches hold the same
+\ runs of the same controls in place.
+VARIABLE _RSHSP-DKP VARIABLE _RSHSP-DKA
+VARIABLE _RSHSP-DA-PLAN VARIABLE _RSHSP-DA-N VARIABLE _RSHSP-DA-K
+VARIABLE _RSHSP-DA-DEFINES VARIABLE _RSHSP-DA-MAX
+: _RSHSP-D-APP-PLACES ( -- )
+    0 _RSHSP-DA-K ! 0 _RSHSP-DA-DEFINES ! 0 _RSHSP-DA-MAX !
+    _RSHSP-P @ _RTHP.TARGET-PENDING @
+        DUP _RTHP-PACK-CONTROLS-A SWAP _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        0 _RSHSP-DA-K @ _RSHSP-DA-N @ U< IF
+            _RSHSP-DA-PLAN @ _RSHSP-DA-K @ 8 * + @ DUP 2/ I = IF
+                1 AND 0<> NIP 1 _RSHSP-DA-K +!
+            ELSE DROP THEN
+        THEN
+        DUP IF 1 _RSHSP-DA-DEFINES +! THEN
+        OVER I RTE-CONTROL-SIZE * + _RTE-CONTROL.ID @
+            DUP _RSHSP-DA-MAX @ MAX _RSHSP-DA-MAX !
+            _RSHSP-P @ _RTHP.NEXT-OBJECT @ U< 0= = _RSHSP-CHECK
+    LOOP DROP
+    _RSHSP-DA-K @ _RSHSP-DA-N @ = _RSHSP-CHECK
+    _RSHSP-P @ _RTHP.TARGET-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
+        _RSHSP-DA-DEFINES @ +
+        _RSHSP-P @ _RTHP-DELTA-PLAN-DROPS@ _RSHSP-CHECK NIP -
+    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RTHP-TB.CONTROL-COUNT @ = _RSHSP-CHECK
+    _RSHSP-DA-DEFINES @ IF
+        _RSHSP-DA-MAX @ 1 _RSHSP-ADD _RSHSP-DNEXT @ MAX _RSHSP-DNEXT !
+    THEN ;
+: _RSHSP-D-APPS ( -- )
+    _RSHSP-P @ _RTHP-DELTA-PLAN-CONTROLS@ IF
+        _RSHSP-DA-N ! _RSHSP-DA-PLAN ! _RSHSP-D-APP-PLACES EXIT
+    THEN 2DROP
+    _RSHSP-DKP @ _RSHSP-DKA @ = _RSHSP-CHECK
+    _RSHSP-DKP @ 0 ?DO
+        _RSHSP-FAMILIES @ I RTE-FAMILY-ENTRY-SIZE * + DUP _RSHSP-DPE !
+            RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE /
+        _RSHSP-DBATCH @ _RTE-FB.FAMILIES-A @ I RTE-FAMILY-ENTRY-SIZE * +
+            DUP _RSHSP-DAE ! RTE-FAMILY-ITEMS@ RTE-CONTROL-SIZE /
+        ROT OVER = _RSHSP-CHECK
+        _RSHSP-DPE @ _RTE-FE.PLAN-A @ _RTE-CP.REGION-ID @
+            _RSHSP-DAE @ _RTE-FE.PLAN-A @ _RTE-CP.REGION-ID @ = _RSHSP-CHECK
+        0 ?DO
+            OVER I RTE-CONTROL-SIZE * + _RTE-CONTROL.ID @
+            OVER I RTE-CONTROL-SIZE * + _RTE-CONTROL.ID @ = _RSHSP-CHECK
+        LOOP 2DROP
+    LOOP ;
+
 : _RSHSP-D-REGION? ( -- flag )
     _RSHSP-KIND @ RTE-FAMILY-SERIES = IF -1 EXIT THEN
     _RSHSP-KIND @ RTE-FAMILY-INSTRUMENT = IF
@@ -2091,13 +2161,20 @@ VARIABLE _RSHSP-DBANK
     THEN
     _RSHSP-DPE @ _RTE-FE.PLAN-A @ _RTE-CP.REGION-ID @
     _RSHSP-DAE @ _RTE-FE.PLAN-A @ _RTE-CP.REGION-ID @ = ;
+\ The applications' families lead both batches (_RSHSP-D-APPS), and as many
+\ other families follow in each, which pair in place.
 : _RSHSP-D-FAMILIES ( -- )
-    _RSHSP-FAMILY-N @ RTE-FAMILY-ENTRY-SIZE *
-        _RSHSP-DBATCH @ _RTE-FB.FAMILIES-U @ = _RSHSP-CHECK
-    _RSHSP-FAMILY-N @ 0 ?DO
-        I _RSHSP-DIAG-FAMILY ! 2 _RSHSP-DSTAGE !
-        _RSHSP-FAMILIES @ I RTE-FAMILY-ENTRY-SIZE * + _RSHSP-DPE !
-        _RSHSP-DBATCH @ _RTE-FB.FAMILIES-A @ I RTE-FAMILY-ENTRY-SIZE * + _RSHSP-DAE !
+    _RSHSP-BATCH @ _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-APP-FAMILIES _RSHSP-DKP !
+    _RSHSP-DBATCH @ _RSHSP-P @ _RTHP.TARGET-ACTIVE @ _RSHSP-APP-FAMILIES _RSHSP-DKA !
+    _RSHSP-FAMILY-N @ _RSHSP-DKP @ -
+        _RSHSP-DBATCH @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE /
+        _RSHSP-DKA @ - = _RSHSP-CHECK
+    3 _RSHSP-DSTAGE ! _RSHSP-D-APPS
+    _RSHSP-FAMILY-N @ _RSHSP-DKP @ - 0 ?DO
+        I _RSHSP-DKP @ + DUP _RSHSP-DIAG-FAMILY ! 2 _RSHSP-DSTAGE !
+        RTE-FAMILY-ENTRY-SIZE * _RSHSP-FAMILIES @ + _RSHSP-DPE !
+        _RSHSP-DBATCH @ _RTE-FB.FAMILIES-A @
+            I _RSHSP-DKA @ + RTE-FAMILY-ENTRY-SIZE * + _RSHSP-DAE !
         _RSHSP-DPE @ _RTE-FE.KIND @ DUP _RSHSP-KIND !
             _RSHSP-DAE @ _RTE-FE.KIND @ = _RSHSP-CHECK
         _RSHSP-D-REGION? _RSHSP-CHECK
@@ -2151,29 +2228,36 @@ VARIABLE _RSHSP-DBANK
     THEN 127 MIN CELLS _RSHSP-DIAG-DELTA-WHY + 1 SWAP +! ;
 \ What the screen producer's comparison found, which the emission takes
 \ rather than comparing those items again: the applications' controls that
-\ changed, from the plan it sealed for the banks now pending and on screen,
-\ and their instruments and series, which a DELTA keeps unchanged.  The
-\ shell's own items and the applications' statics are compared there.  The
-\ applications' families of controls take the bank's records in order, so
-\ the plan's places, which ascend, fall to them in turn, and once every
-\ family has been asked the whole plan has been used.  A family's places
-\ become its indexes in the scratch block, which nothing reads once the
-\ part is frozen; the build that froze it took a family entry for each
-\ application control there, more than an index takes.
+\ came or changed, from the plan it sealed for the banks now pending and on
+\ screen, those that went, and their instruments and series, which a DELTA
+\ keeps unchanged.  The shell's own items and the applications' statics
+\ are compared there.  The applications' families of controls take the
+\ bank's records in order, so the plan's places, which ascend, fall to them
+\ in turn, and once every family has been asked the whole plan has been
+\ used.  Those families are the emitter's keyed ones, paired by identity,
+\ since controls may come and go.  The drops' identities and then a
+\ family's places, as its indexes, lie in the scratch block, which nothing
+\ reads once the part is frozen; the build that froze it took a family
+\ entry for each application control there, more than an index takes.
 VARIABLE _RSHSP-K-PLAN VARIABLE _RSHSP-K-LEFT VARIABLE _RSHSP-K-LIST
 VARIABLE _RSHSP-K-FIRST VARIABLE _RSHSP-K-END
 VARIABLE _RSHSP-K-A VARIABLE _RSHSP-K-U
+\ The scratch block holds the identities of the controls the plan drops,
+\ then, OFFSET bytes in, the list of the family asked.
+VARIABLE _RSHSP-K-OFFSET VARIABLE _RSHSP-K-DEFINE
 \ The plan's controls in the bank's places FIRST to END, as indexes from
-\ FIRST.  None lies before FIRST, past the families already asked, and none
-\ is to be defined, since each family keeps its count.
+\ FIRST, doubled, with the low bit set for a control to define.  None lies
+\ before FIRST, past the families already asked.
 : _RSHSP-K-CONTROLS ( -- list-a n )
-    _RSHSP-P @ _RTHP.XSCRATCH-A @ DUP _RSHSP-K-LIST ! 0
+    _RSHSP-P @ _RTHP.XSCRATCH-A @ _RSHSP-K-OFFSET @ + DUP _RSHSP-K-LIST ! 0
     BEGIN
         _RSHSP-K-LEFT @ IF _RSHSP-K-PLAN @ @ 2/ _RSHSP-K-END @ U< ELSE 0 THEN
     WHILE
-        _RSHSP-K-PLAN @ @ DUP 1 AND 0= _RSHSP-CHECK
+        _RSHSP-K-PLAN @ @ DUP 1 AND _RSHSP-K-DEFINE !
         2/ DUP _RSHSP-K-FIRST @ U< 0= _RSHSP-CHECK _RSHSP-K-FIRST @ -
-        OVER 1+ 8 * _RSHSP-P @ _RTHP.XSCRATCH-U @ U> 0= _RSHSP-CHECK
+            2* _RSHSP-K-DEFINE @ OR
+        OVER 1+ 8 * _RSHSP-K-OFFSET @ +
+            _RSHSP-P @ _RTHP.XSCRATCH-U @ U> 0= _RSHSP-CHECK
         OVER 8 * _RSHSP-K-LIST @ + ! 1+
         8 _RSHSP-K-PLAN +! -1 _RSHSP-K-LEFT +!
     REPEAT ;
@@ -2188,6 +2272,26 @@ VARIABLE _RSHSP-K-A VARIABLE _RSHSP-K-U
         RTE-CONTROL-SIZE / DUP _RSHSP-K-FIRST !
     _RSHSP-K-U @ RTE-CONTROL-SIZE / + _RSHSP-K-END !
     _RSHSP-K-CONTROLS -1 ;
+\ With a plan sealed for these banks, the emitter's keyed families are the
+\ applications' controls of both batches, and the identities of the
+\ controls the plan drops are written at the start of the scratch block.
+\ False when the block cannot hold them.
+: _RSHSP-K-KEYED ( pending-batch active-batch -- flag )
+    _RSHSP-P @ _RTHP.TARGET-ACTIVE @ _RSHSP-APP-FAMILIES >R
+    _RSHSP-P @ _RTHP.TARGET-PENDING @ _RSHSP-APP-FAMILIES R>
+    _RSHSP-P @ _RTHP-DELTA-PLAN-DROPS@ 0= IF 2DROP 2DROP 0 EXIT THEN
+    DUP 8 * DUP _RSHSP-K-OFFSET !
+        _RSHSP-P @ _RTHP.XSCRATCH-U @ U> IF 2DROP 2DROP 0 EXIT THEN
+    _RSHSP-P @ _RTHP.XSCRATCH-A @ SWAP 0 ?DO
+        OVER I 8 * + @
+        DUP _RSHSP-P @ _RTHP.TARGET-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ U< 0= IF
+            DROP 2DROP 2DROP 0 UNLOOP EXIT
+        THEN
+        RTE-CONTROL-SIZE * _RSHSP-P @ _RTHP.TARGET-ACTIVE @ _RTHP-PACK-CONTROLS-A +
+            _RTE-CONTROL.ID @
+        OVER I 8 * + !
+    LOOP
+    NIP _RSHSP-K-OFFSET @ 8 / _RTE-FAMILY-DELTA-KEYED! -1 ;
 \ Inside an open retained DELTA, send what changed since the frame on
 \ screen.  Both parts were checked in full when they were frozen, and the
 \ acknowledged one again, with every-frame checks on, when the DELTA was
@@ -2199,8 +2303,10 @@ VARIABLE _RSHSP-K-A VARIABLE _RSHSP-K-U
     _RSHSP-ACTIVE-PART DUP RSHSP-PART.BATCH @ +
     _RSHSP-S @ _RSHSP.SHELL @
     _RSHSP-P @ _RTHP-DELTA-PLAN-CONTROLS@ IF
-        _RSHSP-K-LEFT ! _RSHSP-K-PLAN ! ['] _RSHSP-KNOWN
-    ELSE 2DROP 0 _RSHSP-K-LEFT ! 0 THEN
+        _RSHSP-K-LEFT ! _RSHSP-K-PLAN !
+        2 PICK 2 PICK _RSHSP-K-KEYED 0= IF 2DROP DROP RTE-S-INVALID EXIT THEN
+        ['] _RSHSP-KNOWN
+    ELSE 2DROP 0 _RSHSP-K-LEFT ! 0 _RSHSP-K-OFFSET ! 0 THEN
     FSHD? IF _RSHSP-P @ _RTHP.SOURCE-DRAW @ FSHD-DRAW ! THEN
     _RTE-FAMILY-BATCH-DELTA-EMIT-PROVED
     \ Every control the plan found changed lies in a family and was replaced.

@@ -229,11 +229,13 @@ def test_the_part_is_built_where_it_is_kept_and_finished_after_the_preflight():
 
     build = word("_RSHSP-BUILD-BATCH")
     # A START's batch is admitted; a DELTA's only with every-frame checks
-    # on, which then name a malformed batch.
+    # on, as a DELTA's, whose identities are kept from the frame on screen,
+    # and those checks then name a malformed batch.
     assert build.rstrip().endswith(
         "    _RSHSP-DBATCH @ IF CHK-EVERY-FRAME? 0= IF EXIT THEN THEN\n"
         "    _RSHSP-BATCH @ _RSHSP-ADMISSION @ _RSHSP-S @ _RSHSP.SHELL @\n"
-        "        _RTE-FAMILY-BATCH-PREFLIGHT-PROVED\n"
+        "        _RSHSP-DBATCH @ IF _RTE-FAMILY-BATCH-DELTA-PREFLIGHT-PROVED\n"
+        "        ELSE _RTE-FAMILY-BATCH-PREFLIGHT-PROVED THEN\n"
         "    DUP RTE-S-INVALID = _RSHSP-DBATCH @ 0<> AND IF\n"
         "        S\" the shell's batch\" CHK-DAMAGED\n"
         "    THEN\n"

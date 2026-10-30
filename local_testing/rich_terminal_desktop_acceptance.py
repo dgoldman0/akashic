@@ -439,6 +439,9 @@ _GUEST_DIAGNOSTIC_WORDS = (
     # Banks copied from the one on screen, and the moved controls written in.
     "_RTHP-DIAG-COPIED",
     "_RTHP-DIAG-COPIED-CONTROLS",
+    # Controls the DELTAs sent dropped and defined.
+    "_RTHP-DIAG-DELTA-DROPS",
+    "_RTHP-DIAG-DELTA-DEFINES",
     # Candidates taken from the bank on screen, and the moved roots lowered
     # into them.
     "_RTHP-DIAG-UNPACKED",
@@ -563,7 +566,7 @@ _GUEST_FAILURE_RECORDS = {
     ),
     "hybrid_producer": (
         "_A1D-FAILURE-SCREEN-A",
-        654,
+        655,
         {
             "magic": 0,
             "size": 1,

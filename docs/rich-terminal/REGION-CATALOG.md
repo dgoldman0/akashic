@@ -148,7 +148,8 @@ through enumeration. `FIXED?` alone proves no semantic or cross-span validity.
 require the entry's fixed header and plan span to have been checked. The
 aggregate layer preserves the provider's stricter CONTROL ordering: CONTROL
 plans first with globally contiguous control IDs; later object families use
-strictly increasing disjoint IDs. SERIES identities occupy their independent
+strictly increasing disjoint IDs. A DELTA's batch keeps the identities on
+screen instead ([FAMILY-BATCH-ADMISSION](FAMILY-BATCH-ADMISSION.md)). SERIES identities occupy their independent
 namespace. The catalog is defined and charged once per aggregate, not once per
 family referencing it.
 

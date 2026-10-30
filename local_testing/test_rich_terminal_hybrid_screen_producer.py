@@ -3912,12 +3912,15 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
                  "XBLOCK1-U", "SHELL-CONTROLS", "XSCRATCH-A", "XSCRATCH-U"):
         assert _offset(source, "_RTHP." + name) == expected
         expected += 8
-    # Two root facts blocks of five cells each close the record.
+    # Two root facts blocks of five cells each follow.
     assert expected == 5152
     assert " ".join(_word(source, "_RTHP.ROOT-BLOCK").split()).endswith(
         "SWAP 1- 40 * + 5152 + ;")
     expected += 2 * 40
-    assert _constant(source, "RTHP-SIZE") == expected == 5232
+    # The sealed DELTA plan's drops follow them.
+    assert _offset(source, "_RTHP.DELTA-PLAN-DROPS") == expected
+    expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 5240
 
 
 def test_full_base_projection_uses_unclipped_visible_region_contract() -> None:
@@ -5295,13 +5298,14 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
         assert absent not in for_shell
     assert for_shell.index("_RTHP-SHELL-RESIDUE?") < for_shell.index(
         "_RTHP-BASE-LAYER!") < for_shell.index("_RTHP-WRAP-HYBRID")
-    # The shell keeps every applet control under its acknowledged identity in
-    # a DELTA, so a comparison of shell-built candidates refuses a control the
-    # frame on screen lacks before anything renumbers the candidate.
+    # A control the frame on screen lacks is defined under its fresh
+    # identity, in a comparison of shell-built candidates too; a field or a
+    # dialog still refuses the DELTA before anything renumbers the candidate.
     compatible = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
     unmatched = compatible[compatible.index("_RTHP-D-MATCHED @ 0= IF"):]
-    assert unmatched.index("_RTHP.SHELL-BUILT @ IF 0 EXIT THEN") < unmatched.index(
-        "-1 _RTHP-D-CHANGED !")
+    assert "_RTHP.SHELL-BUILT" not in unmatched[:unmatched.index("-1 _RTHP-D-CHANGED !")]
+    assert unmatched.index("RTE-CONTROL-FIELD =") < unmatched.index(
+        "_RTHP-DIALOG-KIND? OR IF 0 EXIT THEN") < unmatched.index("-1 _RTHP-D-CHANGED !")
     # A DELTA short of engine working storage is prepared again once it grew,
     # and one short of terminal space asks for more before any START.
     live = _word(source, "_RTHP-PREPARE-LIVE")
@@ -6156,7 +6160,11 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "255 FILL" in control_pending_index
     assert control_active_index.count("_RTHP-D-INDEX-SORT") == 2
     assert "_RTHP-D-INDEX-LAST-ID @ U> 0=" in control_active_index
-    assert "_RTHP-D-JOIN-CURSOR @ _RTHP-D-INDEX-A-N @ =" in control_join
+    # An identity on screen no pending one matches is a control to drop,
+    # which the join counts, and every one left past the last is too.
+    assert "BEGIN _RTHP-D-JOIN-ORDER DUP 0< WHILE" in control_join
+    assert "1 _RTHP-D-JOIN-DROPS +!" in control_join
+    assert "_RTHP-D-INDEX-A-N @ _RTHP-D-JOIN-CURSOR @ - _RTHP-D-JOIN-DROPS +!" in control_join
     assert "_RTHP-D-JOIN-ENTRY @ !" in control_join
     assert "_RTHP-B-CONTROLS @ 24 _RTHP-B-MUL-ADD" in source
     assert "DUP _RTHP.MAX-CONTROLS @ 24 *" in source
@@ -6167,7 +6175,12 @@ def test_stable_glyph_delta_is_proved_once_and_revision_bound_at_emit() -> None:
     assert "_RTHP-D-PLAN-MAP-VALUE" in control_compact
     assert "_RTHP-D-PLAN-CONTROL-DEFINE!" in control_compact
     assert "_RTHP-D-PLAN-CONTROL!" in control_compact
-    assert control_compact.count("?DO") == 1
+    # One pass over the pending controls lists the plan and marks the places
+    # on screen they took; one over those places lists the drops.
+    assert control_compact.count("?DO") == 2
+    assert control_compact.index("_RTHP-D-PLAN-CONTROL!") < control_compact.index(
+        "_RTHP-D-INDEX-A-N @ 0 ?DO")
+    assert "_RTHP-D-PLAN-DROPS @ _RTHP-D-JOIN-DROPS @ =" in control_compact
     assert "_RTHP-D-CONTROL-ORDINAL @" in plan_control_store
     assert "_RTHP-D-OFFSET-P @" not in plan_control + plan_control_store
     for repeated_proof in (

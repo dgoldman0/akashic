@@ -398,9 +398,11 @@ def test_the_delta_replaces_the_controls_the_producer_found_changed_without_comp
     replaces the controls the plan lists and compares none of them again, so
     a control the plan lists is replaced even when nothing about it changed,
     and one it leaves out is not sent even when it did.  The shadow check
-    compares them as well and counts the difference.  A plan that would
-    define a control, or that lists one no family holds, refuses the DELTA,
-    and without a plan sealed for these banks every control is compared."""
+    compares them as well and counts the difference.  A plan that lists a
+    control no family holds refuses the DELTA, and without a plan sealed for
+    these banks every control is compared.  A plan that defines a control
+    the frame on screen holds, whose identity lies below the producer's
+    object frontier, refuses the DELTA as the shell prepares it."""
     staged_run(DELTA + r'''
 : _SK-CONTROL ( -- control ) _SD-TA _RTHP-PACK-CONTROLS-A ;
 : _SK-EMIT ( -- status ) _SD-CLEAR _RSHSP-DELTA-EMIT ;
@@ -425,16 +427,136 @@ FSHD-FIRST-ITEM @ _SK-CONTROL _RTE-CONTROL.ID @ = _SS-A
 FSHD-RESET 1 _SD-SEAL
 _SK-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A FSHD-MISMATCHES @ 0= _SS-A
 0 FSHD-ON !
-\ A control to define, or past every family's, refuses the DELTA.
-1 _SD-PLAN ! 1 _SD-SEAL _SK-EMIT RTE-S-INVALID = _SS-A
+\ A control past every family's refuses the DELTA.
 2 _SD-PLAN ! 1 _SD-SEAL _SK-EMIT RTE-S-INVALID = _SS-A
 \ A plan sealed for other banks, or none, leaves every control compared.
 0 _SD-SEAL _SD-TB _SX-P _RTHP.DELTA-PLAN-PENDING !
 _SK-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A
 0 _SX-P _RTHP.DELTA-PLAN-VALID !
 _SK-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A
+\ Defining the control on screen, below the frontier, refuses the DELTA
+\ as the shell prepares it.
+1 _SD-PLAN ! 1 _SD-SEAL _RSHSP-DELTA-PREPARE RTE-S-OK <> _SS-A
 _SS-DONE
 ''', minimum=22)
+
+
+# Two of the applications' controls: the fixture's menu bar and a menu under
+# it, with its own correlation.  The candidate holds the bar alone or both,
+# and a test gives the menu a fresh identity, as the screen producer's
+# comparison gives a control the frame on screen lacks.  The facade counts
+# the controls defined and dropped, and whether a definition followed a drop.
+MEMBERS = r'''
+CREATE _SY-CIS RTE-CONTROL-SIZE 2 * 7 + ALLOT
+CREATE _SY-CXS RUCP-CORRELATION-SIZE 2 * 7 + ALLOT
+CREATE _SY-LABEL 1 ALLOT 70 _SY-LABEL C!
+: _SY-CI _SY-CIS 7 + -8 AND ; : _SY-CX _SY-CXS 7 + -8 AND ;
+: _SY-MENU ( -- control ) _SY-CI RTE-CONTROL-SIZE + ;
+VARIABLE _SY-DEFINE VARIABLE _SY-DROP VARIABLE _SY-DROPPED VARIABLE _SY-AFTER
+: _SY-CONTROL-DEFINE ( control context -- status )
+    2DROP 1 _SY-DEFINE +! _SY-DROP @ IF -1 _SY-AFTER ! THEN RTE-S-OK ;
+: _SY-CONTROL-DROP ( owner generation control context -- status )
+    DROP _SY-DROPPED ! 2DROP 1 _SY-DROP +! RTE-S-OK ;
+: _SY-HOOKS
+    ['] _SY-CONTROL-DEFINE _SX-F _RTE-F.CONTROL-DEF-XT !
+    ['] _SY-CONTROL-DROP _SX-F _RTE-F.CONTROL-DROP-XT ! ;
+: _SY-CLEAR 0 _SY-DEFINE ! 0 _SY-DROP ! 0 _SY-DROPPED ! 0 _SY-AFTER ! _SD-CLEAR ;
+\ The candidate's applications' controls: the first N of the bar and the
+\ menu, the menu under identity 101.
+: _SY-CONTROLS ( n -- )
+    _SX-CI _SY-CI RTE-CONTROL-SIZE MOVE
+    _SY-MENU RTE-CONTROL-SIZE 0 FILL
+    88 _SY-MENU _RTE-CONTROL.OWNER ! 99 _SY-MENU _RTE-CONTROL.GENERATION !
+    101 _SY-MENU _RTE-CONTROL.ID ! RTE-CONTROL-MENU _SY-MENU _RTE-CONTROL.KIND !
+    3 _SY-MENU _RTE-CONTROL.STATE ! 10 _SY-MENU _RTE-CONTROL.REGION !
+    100 _SY-MENU _RTE-CONTROL.PARENT !
+    12 _SY-MENU _RTE-CONTROL.ROOT-HEIGHT ! 32 _SY-MENU _RTE-CONTROL.ROOT-WIDTH !
+    _SY-LABEL _SY-MENU _RTE-CONTROL.LABEL-A ! 1 _SY-MENU _RTE-CONTROL.LABEL-U !
+    _SX-CX _SY-CX RUCP-CORRELATION-SIZE MOVE
+    _SY-CX DUP RUCP-CORRELATION-SIZE + RUCP-CORRELATION-SIZE MOVE
+    1 _SY-CX RUCP-CORRELATION-SIZE + 16 + !
+    _SY-CI _SX-P _RTHP.CONTROLS-A ! _SY-CX _SX-P _RTHP.CORR-A !
+    _SX-P _RTHP.CONTROL-COUNT ! ;
+\ After a draw, the static takes the identity the frame on screen gave it,
+\ as the screen producer's comparison moves it there, and the producer
+\ packs the candidate into the pending BANK.
+: _SY-PENDING ( bank -- )
+    _SX-P _RTHP.TARGET-ACTIVE @ _RTHP-PACK-STATICS-A _RTE-STATIC.ID @
+        DUP _SX-P _RTHP.STATICS-A @ _RTE-STATIC.ID ! _SX-P _RTHP.STATIC-LAST !
+    _SD-PENDING ;
+\ The plan's drops: the control in place PLACE on screen, past the map of
+\ the larger of the two banks, here two controls.
+: _SY-DROPS ( place -- ) _SD-PLAN 16 + ! 1 _SX-P _RTHP.DELTA-PLAN-DROPS ! ;
+'''
+
+
+def test_controls_that_go_are_dropped_and_controls_that_come_are_defined():
+    """Controls come and go within the regions on screen (FRAMES-FOLLOW-CHANGE
+    9c.2a).  The screen producer's comparison pairs the applications'
+    controls by identity, and its plan defines a new control under an
+    identity past the producer's object frontier and drops one that went.
+    The shell prepares the DELTA from that plan and sends the drops first,
+    then the definitions.  The applications' families are paired by
+    identity, so a family may lose or gain controls."""
+    staged_run(DELTA + MEMBERS + r'''
+_SX-SETUP _SD-HOOKS _SY-HOOKS
+2 _SY-CONTROLS ' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
+\ The menu goes, and the plan drops it.
+1 _SY-CONTROLS ' _SD-HELLO _SD-DRAW _SD-TA _SY-PENDING
+_RSHSP-DELTA-PROBE _SS-OK
+0 _SD-SEAL 1 _SY-DROPS
+_RSHSP-DELTA-PREPARE _SS-OK
+_SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
+_SY-DROP @ 1 = _SS-A _SY-DROPPED @ 101 = _SS-A
+_SY-DEFINE @ 0= _SS-A _SD-CREPLACE @ 0= _SS-A _SD-GREPLACE @ 0= _SS-A
+_SD-ACK
+\ It comes back under a fresh identity, and the plan defines it.
+2 _SY-CONTROLS _SX-P _RTHP.NEXT-OBJECT @ _SY-MENU _RTE-CONTROL.ID !
+' _SD-HELLO _SD-DRAW _SD-TB _SY-PENDING
+_RSHSP-DELTA-PROBE _SS-OK
+3 _SD-PLAN ! 1 _SD-SEAL 0 _SX-P _RTHP.DELTA-PLAN-DROPS !
+_RSHSP-DELTA-PREPARE _SS-OK
+_SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
+_SY-DEFINE @ 1 = _SS-A _SY-DROP @ 0= _SS-A _SD-CREPLACE @ 0= _SS-A
+\ A plan that defines it without counting it in the bank refuses the
+\ DELTA as the shell prepares it.
+0 _SD-SEAL _RSHSP-DELTA-PREPARE RTE-S-OK <> _SS-A
+_SS-DONE
+''', minimum=14)
+
+
+def test_a_control_replaced_by_a_new_one_is_dropped_before_it_is_defined():
+    """One control goes and another comes in its place: the drop goes first,
+    so the room it held is free for the definition.  With the shadow check
+    on, the emission finds each control by identity and agrees with the
+    plan; listing an unchanged control is a difference.  With every-frame
+    checks on, the batch is admitted as a DELTA's, whose identities are
+    those kept from the frame on screen; admitted as a START's, whose
+    identities lie together, it is refused."""
+    staged_run(DELTA + MEMBERS + r'''
+_SX-SETUP _SD-HOOKS _SY-HOOKS
+2 _SY-CONTROLS ' _SD-HELLO _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
+2 _SY-CONTROLS _SX-P _RTHP.NEXT-OBJECT @ _SY-MENU _RTE-CONTROL.ID !
+' _SD-HELLO _SD-DRAW _SD-TA _SY-PENDING
+_RSHSP-DELTA-PROBE _SS-OK
+3 _SD-PLAN ! 1 _SD-SEAL 1 _SY-DROPS
+-1 CHK-EVERY-FRAME ! _RSHSP-DELTA-PREPARE _SS-OK 0 CHK-EVERY-FRAME !
+_RSHSP-PENDING-PART _SD-BATCH _RSHSP-ADMISSION @ _SX-FX
+    _RTE-FAMILY-BATCH-PREFLIGHT-PROVED RTE-S-INVALID = _SS-A
+_RSHSP-PENDING-PART _SD-BATCH _RSHSP-ADMISSION @ _SX-FX
+    _RTE-FAMILY-BATCH-DELTA-PREFLIGHT-PROVED _SS-OK
+-1 FSHD-ON ! FSHD-RESET
+_SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
+_SY-DROP @ 1 = _SS-A _SY-DROPPED @ 101 = _SS-A
+_SY-DEFINE @ 1 = _SS-A _SY-AFTER @ _SS-A
+FSHD-CHECKS-SHELL-DELTA @ 0> _SS-A FSHD-MISMATCHES @ 0= _SS-A
+\ Listing the unchanged bar is a difference the shadow check names.
+FSHD-RESET 0 _SD-PLAN ! 3 _SD-PLAN 8 + ! 2 _SD-SEAL 1 _SY-DROPS
+_SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
+FSHD-MISMATCHES @ 1 = _SS-A FSHD-FIRST-ITEM @ 100 = _SS-A
+0 FSHD-ON !
+_SS-DONE
+''', minimum=13)
 
 
 def test_a_delta_s_batch_is_admitted_only_with_every_frame_checks_on():

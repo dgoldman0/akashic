@@ -3054,6 +3054,14 @@ VARIABLE _RTE-CPV-PARENT-RECORD
 VARIABLE _RTE-CPV-CONTROL-BYTES-A
 VARIABLE _RTE-CPV-CONTROL-BYTES-U
 VARIABLE _RTE-CPV-FIXED-AUTHORITY
+\ A plan whose controls keep the identities of the frame on screen, as a
+\ DELTA's batch does, need not number them contiguously: each parent is
+\ then found by its identity among the controls of its root.  The family
+\ admission sets this for a DELTA's batch; nothing else does.
+VARIABLE _RTE-CPV-INHERITED
+0 _RTE-CPV-INHERITED !
+\ The record of the current root.
+VARIABLE _RTE-CPV-ROOT-RECORD
 
 0 CONSTANT _RTE-CPV-PHASE-MENUBAR
 1 CONSTANT _RTE-CPV-PHASE-MENU
@@ -3099,6 +3107,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-PARENT-INDEX !
     0 _RTE-CPV-PARENT-OFFSET !
     0 _RTE-CPV-PARENT-RECORD !
+    0 _RTE-CPV-ROOT-RECORD !
     0 _RTE-CPV-CONTROL-BYTES-A !
     0 _RTE-CPV-CONTROL-BYTES-U !
     0 _RTE-CPV-FIXED-AUTHORITY ! ;
@@ -3234,6 +3243,14 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     _RTE-CPV-ITEM @ _RTE-CONTROL-LABELS? ;
 
 : _RTE-CPV-ID?  ( -- flag )
+    _RTE-CPV-INHERITED @ IF
+        \ Kept identities: nonzero, and the last is the largest.
+        _RTE-CPV-ITEM @ _RTE-CONTROL.ID @ DUP 0= IF DROP 0 EXIT THEN
+        _RTE-CPV-COUNT @ 0= IF DUP _RTE-CPV-FIRST-ID ! THEN
+        DUP _RTE-CPV-PRIOR-ID !
+        _RTE-CPV-LAST-ID @ 2DUP U< IF SWAP THEN DROP _RTE-CPV-LAST-ID !
+        -1 EXIT
+    THEN
     _RTE-CPV-COUNT @ 0= IF
         _RTE-CPV-ITEM @ _RTE-CONTROL.ID @ DUP _RTE-CPV-FIRST-ID !
         DUP _RTE-CPV-PRIOR-ID !
@@ -3246,7 +3263,21 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     _RTE-CPV-LAST-ID !
     -1 ;
 
+\ With kept identities the parent is the record of its identity among the
+\ current root's controls before this one.
+: _RTE-CPV-PARENT-FOUND?  ( -- flag )
+    _RTE-CPV-ITEM @ _RTE-CONTROL.PARENT @ DUP 0= IF DROP 0 EXIT THEN
+    DUP _RTE-CPV-PARENT-ID !
+    _RTE-CPV-ROOT-RECORD @ DUP 0= IF 2DROP 0 EXIT THEN
+    _RTE-CPV-ITEM @ SWAP ?DO
+        I _RTE-CONTROL.ID @ OVER = IF
+            DROP I _RTE-CPV-PARENT-RECORD ! -1 UNLOOP EXIT
+        THEN
+    RTE-CONTROL-SIZE +LOOP
+    DROP 0 ;
+
 : _RTE-CPV-PARENT-RECORD?  ( -- flag )
+    _RTE-CPV-INHERITED @ IF _RTE-CPV-PARENT-FOUND? EXIT THEN
     \ Contiguous identities make the already-validated parent an O(1)
     \ lookup at ITEMS-A + (parent - FIRST-ID) * CONTROL-SIZE.
     _RTE-CPV-ITEM @ _RTE-CONTROL.PARENT @ DUP 0= IF DROP 0 EXIT THEN
@@ -3263,17 +3294,19 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     DUP _RTE-CPV-PARENT-RECORD !
     _RTE-CONTROL.ID @ _RTE-CPV-PARENT-ID @ = ;
 
+\ A group is the run of controls under one parent, and the groups follow
+\ their parents' places, which with contiguous identities is their order.
 : _RTE-CPV-GROUP-RESET  ( -- )
     -1 _RTE-CPV-GROUP-ACTIVE !
-    _RTE-CPV-PARENT-ID @ _RTE-CPV-GROUP-PARENT !
+    _RTE-CPV-PARENT-RECORD @ _RTE-CPV-GROUP-PARENT !
     _RTE-CPV-ITEM @ _RTE-CONTROL.ORDER @ _RTE-CPV-PRIOR-ORDER !
     0 _RTE-CPV-OPEN-SEEN !
     0 _RTE-CPV-SELECTED-SEEN ! ;
 
 : _RTE-CPV-GROUP-ORDER?  ( -- flag )
     _RTE-CPV-GROUP-ACTIVE @ 0= IF _RTE-CPV-GROUP-RESET -1 EXIT THEN
-    _RTE-CPV-PARENT-ID @ _RTE-CPV-GROUP-PARENT @ U< IF 0 EXIT THEN
-    _RTE-CPV-PARENT-ID @ _RTE-CPV-GROUP-PARENT @ <> IF
+    _RTE-CPV-PARENT-RECORD @ _RTE-CPV-GROUP-PARENT @ U< IF 0 EXIT THEN
+    _RTE-CPV-PARENT-RECORD @ _RTE-CPV-GROUP-PARENT @ <> IF
         _RTE-CPV-GROUP-RESET -1 EXIT
     THEN
     _RTE-CPV-ITEM @ _RTE-CONTROL.ORDER @
@@ -3362,6 +3395,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
 : _RTE-CPV-ROOT-START  ( phase -- )
     _RTE-CPV-PHASE !
     _RTE-CPV-ITEM @ _RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !
+    _RTE-CPV-ITEM @ _RTE-CPV-ROOT-RECORD !
     0 _RTE-CPV-GROUP-ACTIVE !
     0 _RTE-CPV-GROUP-PARENT !
     0 _RTE-CPV-PRIOR-ORDER !
@@ -3529,6 +3563,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
     0 _RTE-CPV-PARENT-INDEX !
     0 _RTE-CPV-PARENT-OFFSET !
     0 _RTE-CPV-PARENT-RECORD !
+    0 _RTE-CPV-ROOT-RECORD !
     _RTE-CPV-ITEMS-A @ _RTE-CPV-ITEM !
     _RTE-CPV-ITEMS-U @ RTE-CONTROL-SIZE / 0 ?DO
         _RTE-CPV-ITEM? 0= IF 0 UNLOOP EXIT THEN

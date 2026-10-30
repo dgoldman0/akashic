@@ -99,6 +99,16 @@ must reference a SERIES in an earlier family entry of the same batch. Duplicate,
 forward, missing, and cross-generation history references are rejected before
 provider admission. A history-only batch may have no catalog rows or OBJECTs.
 
+A DELTA's batch keeps the identities of the frame on screen, and once
+controls came or went those need not lie together or increase. Desk's shell
+admits such a batch again only with every-frame checks on, through
+`_RTE-FAMILY-BATCH-DELTA-PREFLIGHT-PROVED`: CONTROL entries still precede the
+others and every identity is nonzero, the summary takes the smallest and the
+largest, and the control plan check finds each parent by its identity among
+its root's controls, ordering groups by their parents' places
+(`_RTE-CPV-INHERITED`). The shell's DELTA build gives each item its identity
+and checks it there.
+
 The neutral layer computes family semantics, exact UTF-8, copy alignment,
 maximum payloads, sample slots, history capacities, and chunk counts. The
 provider receives only the checked scalar summary, validates its own typed

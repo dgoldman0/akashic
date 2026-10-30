@@ -61,13 +61,30 @@ it for its parts, each checked once when built.
 
 Its `known-xt ( entry -- list-a n known? )`, or 0, says what the caller's
 own comparison already found. The emitter calls it once for each family of
-the pending batch, in order. For a family it knows, it gives the indexes of
-the items that changed, in ascending order, and the emitter replaces those
-items without comparing any; for an instrument or series family, which has
-no DELTA replacement, it gives none. A glyph family is never known, an index
+the pending batch, in order. For a family it knows, it gives the items that
+changed, each an index doubled with the low bit set for an item to define,
+in ascending order, and the emitter replaces or defines those items without
+comparing any; only a keyed family, below, defines items. For an instrument
+or series family, which has no DELTA replacement, it gives none. A glyph family is never known, an index
 out of order or past the family refuses the DELTA, and `known-xt` may throw,
 which refuses it too. `known? = false` leaves the family to be compared.
 With the shadow check on (`frame-shadow.f`), a known family is compared as
 well, and each item counts as a comparison of the shell-delta stage, an item
 whose comparison disagrees with the list as a difference named by its
 identity.
+
+A caller whose comparison paired controls by identity names the leading
+families of controls it paired as keyed, and the controls on screen that
+went, by identity, with `_RTE-FAMILY-DELTA-KEYED! ( keyed-pending
+keyed-active drops-a drops-n -- )` before the proved emission, which clears
+them. Controls may come and go among the keyed families, so the two batches
+may hold different numbers of them, and only the families after them pair
+in place. The emitter drops the controls that went first, so the room they
+held is free for the controls defined after them, then defines and replaces
+each keyed family's known controls. With the shadow check on, each control
+of a keyed family is found by its identity among the keyed families on
+screen and must be replaced exactly when it differs, or defined when none
+is found; each keyed control on screen must be among the pending ones or
+among the drops, not both. Desk's shell keys the applications' controls,
+which its screen producer's comparison paired
+([SHELL-SCREEN-PRODUCER](SHELL-SCREEN-PRODUCER.md)).

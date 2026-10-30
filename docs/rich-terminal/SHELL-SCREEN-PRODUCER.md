@@ -349,8 +349,16 @@ admission asks for the space.
 The shell then gives each item the acknowledged identity in the same place:
 
 - the catalog must be identical, region identities included;
-- families must match in order, kind and region;
-- applet controls must already carry their acknowledged identities;
+- the applications' controls lead both batches, in runs of the bank's
+  controls by region, and carry the identities the base producer's
+  comparison gave them. Controls may come and go among them, so their
+  families are paired as one set by identity rather than in place: with the
+  plan sealed for these banks, each control the plan defines lies at or
+  past the producer's object frontier and every other below it, and the
+  pending bank holds the controls on screen less those the plan drops and
+  plus those it defines. Without a plan, both batches hold the same runs of
+  the same controls in place;
+- the other families must match in order, kind and region;
 - Desk's prompt takes its acknowledged identity and may change, so typing in
   it sends one CONTROL-REPLACE;
 - the notice takes its acknowledged identity and is unchanged;
@@ -369,22 +377,32 @@ identities for a complete START. DELTA-EMIT sends the difference between the
 pending and acknowledged parts through `_RTE-FAMILY-BATCH-DELTA-EMIT-PROVED`
 inside the open retained DELTA, and the base producer's comparison is the one
 comparison of the applications' controls, instruments and series. That
-comparison seals a plan of the controls it found changed, each a place in
-the pending bank, and `_RTHP-DELTA-PLAN-CONTROLS@ ( producer -- a n flag )`
-gives it while it is the plan sealed for the banks now pending and on
-screen. The applications' families of controls take the bank's records in
-order, so the plan's places, which ascend, fall to them in turn: the shell
-hands the emitter each family's places as indexes in the family, written in
-the scratch block, which nothing reads once the part is built, and the
-emitter replaces those controls without comparing them. The instruments and
+comparison seals a plan of the controls it found changed or new, each a
+place in the pending bank with a flag for a control to define, and of the
+controls on screen that went, each a place on screen.
+`_RTHP-DELTA-PLAN-CONTROLS@ ( producer -- a n flag )` and
+`_RTHP-DELTA-PLAN-DROPS@ ( producer -- a n flag )` give them while it is the
+plan sealed for the banks now pending and on screen. The applications'
+families of controls take the bank's records in order, so the plan's
+places, which ascend, fall to them in turn: the shell names those families
+to the emitter as its keyed ones, with the identities of the controls that
+went, and hands it each family's places as indexes in the family, written
+in the scratch block after those identities, which nothing reads once the
+part is built. The emitter drops the controls that went first, so the room
+they held is free, then defines and replaces the listed controls without
+comparing them. New runs take identities above the controls defined. The instruments and
 series are known unchanged. The shell's own items and the applications'
 statics are compared as before, and the base producer, which counts the
 statics' changes for its own DELTA, looks for them in a comparison built for
-the shell only to judge them for the root facts. A plan control to define,
-or one no family holds, refuses the DELTA, and without a plan sealed for
-these banks every item is compared. With the shadow check on, the emitter
-compares the known families too, and the journey counts each item as a
-comparison of the shell-delta stage. After the physical acknowledgement the producer publishes
+the shell only to judge them for the root facts. A plan control no family
+holds refuses the DELTA, and without a plan sealed for these banks every
+item is compared. With the shadow check on, the emitter compares the known
+families too, finding each of the applications' controls by its identity
+among those on screen, and the journey counts each item as a comparison of
+the shell-delta stage. With every-frame checks on, the DELTA's batch is
+admitted as a DELTA's, whose identities are those kept from the frame on
+screen and need not lie together or ascend
+([FAMILY-BATCH-ADMISSION](FAMILY-BATCH-ADMISSION.md)). After the physical acknowledgement the producer publishes
 the pending bank, its part with it, exactly as after a reveal. A DELTA
 consumes no region identities, and the published part's frontier covers its
 new object identities.

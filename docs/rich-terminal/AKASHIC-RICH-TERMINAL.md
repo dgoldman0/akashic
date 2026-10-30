@@ -980,6 +980,18 @@ and its control IDs below the new namespace. This rests on two facts the
 producer maintains: normalization after the audit writes only object IDs and
 canonical tombstones, and no producer word writes a bank while it is active.
 
+Controls may come and go between the two banks, for a candidate built for
+Desk's shell as for any other. The comparison then sorts and joins them by
+identity: a pending control that no control on screen matches is defined
+under the fresh identity its candidate gave it, past the producer's object
+frontier, and a control on screen that no pending control matches is
+dropped. The sealed plan lists the definitions with the controls that
+changed, by their places in the pending bank, and the drops by their places
+on screen (`_RTHP-DELTA-PLAN-DROPS@`). The producer's own DELTA and Desk's
+shell send the drops first, so the room they held is free for the
+definitions. A field or a dialog that comes or goes still needs the frame
+replaced whole, as does a change in the number of menu controls.
+
 A comparison of a candidate built for Desk's shell whose bank on screen kept
 those facts, and whose controls each carry, with their own correlation in
 their place, the identity of the control in the same place on screen, pairs

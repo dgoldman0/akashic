@@ -183,7 +183,9 @@ def test_the_shadow_check_compares_the_two_comparisons(follow):
     h.second_frame(state=11, new_stamp=6)
     h.variable("FSHD-ON", MASK64)
     assert h.call("_RTHP-DELTA-CANDIDATE?", h.producer)
-    assert h.variable("FSHD-CHECKS-COMPARISON") == 5
+    # The flag and counts, the bank, the plan, the kept facts, their index
+    # and the plan's drops.
+    assert h.variable("FSHD-CHECKS-COMPARISON") == 6
     assert h.variable("FSHD-MISMATCHES") == 0
     assert h.variable("FSHD-SKIPPED") == 0
     assert h.read("DELTA-PLAN-CONTROLS") == 1

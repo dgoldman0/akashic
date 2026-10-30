@@ -139,6 +139,11 @@ class ControlMapHarness:
         )
         return (word.body_address + 7) & -8
 
+    def variable(self, name: str) -> int:
+        word = self.runtime.dictionary.find(name.encode())
+        assert word is not None, name
+        return self.runtime.memory.read64(word.body_address)
+
     def _set_variable(self, name: str, value: int) -> None:
         word = self.runtime.dictionary.find(name.encode())
         assert word is not None, name
@@ -173,7 +178,8 @@ class ControlMapHarness:
             *, first=1001, workspace_bytes=None, arena_bytes=None, entry_counts=(0, 0)):
         active, active_size = self._bank(active_ids, active_correlations, entry_counts[0])
         pending, pending_size = self._bank(pending_ids, pending_correlations, entry_counts[1])
-        required = len(pending_ids) * 24
+        # Each slice of the work space holds the larger bank.
+        required = max(len(pending_ids), len(active_ids)) * 24
         capacity = required if workspace_bytes is None else workspace_bytes
         scratch = self._allocate(required + 16)
         producer = self._allocate(4096)
@@ -248,7 +254,7 @@ def test_control_map_keeps_every_identity_field_and_all_64_bits(harness, field):
 @pytest.mark.parametrize("defect", (
     "active_id_duplicate", "active_id_zero", "active_id_fresh", "active_correlation_id",
     "active_identity", "pending_id", "pending_correlation_id", "pending_identity",
-    "missing_active", "short_workspace", "short_arena", "wrapped_pending_id",
+    "short_workspace", "short_arena", "wrapped_pending_id",
 ))
 def test_control_map_rejects_invalid_bijections_and_bounds_without_bank_writes(harness, defect):
     a, b, c, other = (_identity(i) for i in range(4))
@@ -263,12 +269,28 @@ def test_control_map_rejects_invalid_bijections_and_bounds_without_bank_writes(h
     elif defect == "pending_id": pending_ids[1] = 1001
     elif defect == "pending_correlation_id": pending[1] = (b, 1002)
     elif defect == "pending_identity": pending[0] = (a, 1002)
-    elif defect == "missing_active": pending[1] = (other, 1001)
     elif defect == "short_workspace": options["workspace_bytes"] = 24 * 3 - 1
     elif defect == "short_arena": options["arena_bytes"] = 24 * 3 - 1
     elif defect == "wrapped_pending_id": options["first"] = MASK64
     accepted, _, _ = harness.run(active_ids, active, pending_ids, pending, **options)
     assert not accepted
+
+
+def test_control_map_counts_the_controls_on_screen_no_pending_control_pairs(harness):
+    """A control on screen that no pending control matches went: the map
+    pairs the others, and the join counts it among the controls to drop
+    (FRAMES-FOLLOW-CHANGE 9c.2a)."""
+    a, b, c, other = (_identity(i) for i in range(4))
+    accepted, mapping, _ = harness.run(
+        (41, 42), ((a, 41), (b, 42)),
+        (1001, 1002, 1003), ((c, 1002), (other, 1001), (a, 1003)),
+    )
+    assert accepted and mapping == (0, 0, 1)
+    assert harness.variable("_RTHP-D-JOIN-DROPS") == 1
+    # Every control on screen may go.
+    accepted, mapping, _ = harness.run((41, 42), ((a, 41), (b, 42)), (1001,), ((c, 1001),))
+    assert accepted and mapping == (0,)
+    assert harness.variable("_RTHP-D-JOIN-DROPS") == 2
 
 
 def test_control_map_accepts_empty_banks_and_all_new_controls(harness):
