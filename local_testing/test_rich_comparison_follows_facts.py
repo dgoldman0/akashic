@@ -23,7 +23,7 @@ import struct
 import pytest
 
 from test_rich_glyph_growth import GrowthHarness, MASK64
-from test_rich_instrument_reuse import DeltaHarness
+from test_rich_instrument_reuse import DeltaHarness, InstrumentHarness
 
 # The heap the shadow check takes its blocks from: a bump allocator over a
 # block the test gives it.
@@ -38,7 +38,11 @@ TOKEN = 1
 
 class FollowHarness(DeltaHarness):
     def __init__(self, backend):
-        super().__init__(backend)
+        # The DELTA harness's words, and the copy of the bank on screen.
+        InstrumentHarness.__init__(self, backend, (
+            "_RTHP-DELTA-CANDIDATE?", "_RTHP-D-PLAN-BIND?", "_RTHP-U-CLONE?",
+            "_RTHP-U-FENCE-PLAN?", "_RTHP-U-COMMIT", "_RTHP-TARGET-PUBLISH?",
+            "_RTHP-R-BANK-CEILING?", "_RTHP-C-FOLLOWS?", "_RTHP-C-COPY?"))
         self.runtime.evaluate(HEAP.encode())
         self.variable("_CF-HEAP", self.allocate(bytes(1 << 18)))
         self.runtime.evaluate(b"' _CF-ALLOCATE _FSHD-ALLOCATE-XT ! ' _CF-FREE _FSHD-FREE-XT !")
@@ -75,13 +79,13 @@ class FollowHarness(DeltaHarness):
         assert self.call("_RTHP-TARGET-PUBLISH?", self.producer)
         assert self.read("ACTIVE-FACTS") == self.other
 
-    def second_frame(self, *, state=3, old_stamp=5, new_stamp=5, facts=True):
+    def second_frame(self, *, state=3, old_stamp=5, new_stamp=5, facts=True, runs=("A",)):
         """The next candidate, packed for draw 12 with its one menu control
-        in STATE, and the root facts of both snapshots."""
+        in STATE and RUNS, and the root facts of both snapshots."""
         self.bank, self.other = self.other, self.bank
         self.frontier = self.read("NEXT-OBJECT")
         self.active_before = self.runtime.memory.read_bytes(self.bank, self.bank_size)
-        self.stage(self.other, self.frontier, 27, 12, ("A",), state)
+        self.stage(self.other, self.frontier, 27, 12, runs, state)
         self.field(self.producer, "_RTHP.TARGET-PENDING", self.other)
         self.field(self.producer, "_RTHP.SHELL-BUILT", MASK64)
         if facts:
@@ -278,3 +282,40 @@ def test_controls_that_moved_or_changed_identity_need_the_join(place, case):
         # The kept index no longer names the control its correlation names.
         place.pair(active_places=(0, 1, 2))
     assert not place.call("_RTHP-D-PLACE-MAP?")
+
+
+# ---------------------------------------------------------------------------
+# The copy of the bank on screen
+
+def test_a_frame_whose_roots_did_not_move_copies_the_bank_on_screen(follow):
+    """A candidate built for the shell, with no runs of its own, whose
+    snapshot's root facts did not move: the pending bank is the bank on
+    screen's copy, its control in the identity on screen, nothing planned,
+    and the bank on screen's kept facts its own."""
+    h = follow
+    h.first_frame()
+    h.second_frame(runs=())
+    h.variable("_RTHP-C-P", h.producer)
+    assert h.call("_RTHP-C-FOLLOWS?")
+    assert h.call("_RTHP-C-COPY?", h.producer)
+    assert h.variable("_RTHP-DIAG-COPIED") == 1
+    assert h.read("TARGET-PENDING") == h.other
+    assert h.read("DELTA-PLAN-CONTROLS") == 0
+    assert h.read("DELTA-PLAN-VALID") == MASK64
+    controls = h.results("_RTHP-PACK-CONTROLS-A", h.other)[0]
+    assert h.runtime.memory.read64(controls + h.offset("_RTE-CONTROL.ID")) == 100
+    assert h.read("FIRST-OBJECT") == 100
+    assert h.read("PENDING-FACTS") == h.other
+    h.assert_unchanged_active()
+
+
+@pytest.mark.parametrize("why", ("menus", "runs", "safe"))
+def test_a_moved_menu_runs_of_its_own_and_safe_mode_are_not_copied(follow, why):
+    h = follow
+    h.first_frame()
+    h.second_frame(runs=("A",) if why == "runs" else (),
+                   new_stamp=6 if why == "menus" else 5)
+    if why == "safe":
+        h.variable("CHK-SAFE-MODE", MASK64)
+    h.variable("_RTHP-C-P", h.producer)
+    assert not h.call("_RTHP-C-FOLLOWS?")

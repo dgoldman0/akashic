@@ -20,6 +20,16 @@ def _word(source: str, name: str) -> str:
     return match.group(0)
 
 
+def _target_candidate(source: str) -> str:
+    """The pack of a candidate's bank, with the header writer it shares with
+    the copy of the bank on screen read in place."""
+    header = _word(source, "_RTHP-TG-HEADER!")
+    body = header[header.index(")") + 1:header.rindex(";")]
+    word = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    assert word.count("_RTHP-TG-HEADER!") == 1
+    return word.replace("_RTHP-TG-HEADER!", body)
+
+
 def _build(source: str) -> str:
     """The candidate build entry, then the observed build it runs, in order."""
     return (_word(source, "_RTHP-BUILD-CANDIDATE")
@@ -2918,7 +2928,7 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
     pack_sources = _word(source, "_RTHP-PK-SOURCE-SPANS?")
     pack_copy = _word(source, "_RTHP-PK-COPY?")
     packed_directory = _word(source, "_RTHP-PACK-DIRECTORY-A")
-    candidate = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    candidate = _target_candidate(source)
     directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
     header = _bank_verifier(source)
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
@@ -4024,7 +4034,7 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     claims = _word(source, "_RTHP-BUILD-CLAIMS?")
     wrap_control = _word(source, "_RTHP-W-WRAP-CONTROL-PLAN?")
     document_at = _word(source, "_RTHP-DOCUMENT-AT")
-    target_build = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    target_build = _target_candidate(source)
 
     assert (
         "max-documents max-records max-source-text max-collection-native "
@@ -4058,7 +4068,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "_RTHP.MAX-CONTROLS @ RUCP-CORRELATION-SIZE" in layout
     assert "RUHA-DOCUMENT-CAPACITY@" in init
     assert "_RTHP.MAX-DOCUMENTS !" in init
-    assert source.index(document_at) < source.index(target_build)
+    assert source.index(document_at) < source.index(
+        _word(source, "_RTHP-TARGET-CANDIDATE?"))
 
     for aggregate in (
         "RUHA-SNAPSHOT-DOCUMENT-COUNT@",
@@ -4188,7 +4199,7 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     glyphs = _word(source, "_RTHP-BUILD-GLYPHS-FULL?")
     wrap = _word(source, "_RTHP-WRAP-HYBRID")
     candidate = _build(source)
-    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    target = _target_candidate(source)
     target_header = _bank_verifier(source)
     target_directory = _word(source, "_RTHP-TARGET-MENU-DIRECTORY?")
     prepare = _word(source, "_RTHP-PREPARE-START").replace(
@@ -4406,7 +4417,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     delta_unique = _word(source, "_RTHP-D-SORT-IDENTITIES?")
     delta_identity = _word(source, "_RTHP-D-CORRELATION-COMPARE")
     delta_control = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
-    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    target = _target_candidate(source)
 
     # The producer consumes only the canonical frozen collection aggregate.
     # Neither text nor tab lowering reaches back into an applet or widget.
@@ -4814,7 +4825,7 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     fixed_body = _word(source, "_RTHP-FIXED-BODY?")
     fixed_instruments = _word(source, "_RTHP-INSTRUMENT-FIXED?")
     fixed_aggregates = _word(source, "_RTHP-X-INSTRUMENT-AGGREGATES?")
-    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    target = _target_candidate(source)
     target_header = _bank_verifier(source)
     target_publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     pack_copy = _word(source, "_RTHP-PK-COPY?")
@@ -5692,7 +5703,11 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
     # Facts are kept only by a comparison that has passed every fallible
     # step, dropped whenever the pending bank is abandoned, and handed to the
     # active role only by that exact bank's publication.
-    assert source.count("_RTHP-D-KEEP-FACTS") == 2
+    # The comparison and the copy of the bank on screen keep them.
+    assert source.count("_RTHP-D-KEEP-FACTS") == 3
+    copy = " ".join(_word(source, "_RTHP-C-COPY?").split())
+    assert copy.index("0= IF _RTHP-C-P @ _RTHP-TARGET-ABORT") < copy.index(
+        "_RTHP-D-KEEP-FACTS _RTHP-D-PLAN-SEAL")
     candidate_code = " ".join(candidate.split())
     assert candidate_code.endswith(
         "_RTHP-D-KEEP-FACTS _RTHP-D-FACTS @ IF 1 _RTHP-DIAG-FOLLOWED +! THEN"
@@ -5720,10 +5735,12 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
                                 "_RTHP-D-KEEP-FACTS", "_RTHP-D-SH-KEEP",
                                 "_RTHP-D-SH-RESTORE", "_RTHP-D-SH-COMPARE"},
         # The acknowledged empty frame retires the active bank and its facts.
+        # The copy of the bank on screen reads the facts it kept.
         "_RTHP.ACTIVE-FACTS": {"_RTHP-FACTS-PUBLISH", "_RTHP-D-KEPT?",
                                "_RTHP-D-GLYPH-BOUNDS?", "_RTHP-D-KEPT-SLOT-MAP?",
                                "_RTHP-D-KEPT-CONTROL-INDEX?",
-                               "_RTHP-TARGET-RETIRE"},
+                               "_RTHP-TARGET-RETIRE", "_RTHP-C-FOLLOWS?",
+                               "_RTHP-C-NORMALIZE?"},
     }
     for field, users in writers.items():
         found = {match[1] for match in re.finditer(
@@ -6237,7 +6254,7 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
     source = _source()
     sizing = _word(source, "_RTHP-BYTES-BODY")
     layout = _word(source, "_RTHP-LAYOUT")
-    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    target = _target_candidate(source)
     header = _bank_verifier(source)
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     bind = _word(source, "_RTHP-D-BIND?")
@@ -6391,7 +6408,7 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     sizing = _word(source, "_RTHP-BYTES-BODY")
     target_sizing = _word(source, "_RTHP-TARGET-BYTES-CALC")
     layout = _word(source, "_RTHP-LAYOUT")
-    build = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    build = _target_candidate(source)
     candidate_shape = _word(source, "_RTHP-CT-CANDIDATE-SHAPE?")
     find_control = _word(source, "_RTHP-CT-FIND-CONTROL?")
     control = _word(source, "_RTHP-CT-CONTROL?")
@@ -6695,7 +6712,7 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     sizing = _word(source, "_RTHP-BYTES-BODY")
     target_sizing = _word(source, "_RTHP-TARGET-BYTES-CALC")
     layout = _word(source, "_RTHP-LAYOUT")
-    candidate = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    candidate = _target_candidate(source)
     pack_layout = _word(source, "_RTHP-PK-LAYOUT?")
     assert (
         "_RTHP-TB.ROWS @ _RTHP-U32*?\n        0= IF 2DROP 0 EXIT THEN U>"
@@ -6790,7 +6807,12 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
     assert prepare_start.index("_RTHP-FIXED?") < prepare_start.index(
         "_RTHP-TARGET-CANDIDATE?"
     )
+    # A live candidate's bank is a copy of the one on screen or is packed.
     assert stage_live.index("_RTHP-FIXED?") < stage_live.index(
+        "_RTHP-STAGE-BANK"
+    )
+    stage_bank = _word(source, "_RTHP-STAGE-BANK")
+    assert stage_bank.index("_RTHP-C-COPY?") < stage_bank.rindex(
         "_RTHP-TARGET-CANDIDATE?"
     )
     assert checked_pack.index("_RTHP-PK-BEGIN?") < checked_pack.index(
@@ -6805,7 +6827,8 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
         in source
     )
     assert source.count("_RTHP-PK-REFS?") == 2
-    assert source.count("_RTHP-PACK-ADMITTED-CANDIDATE") == 2
+    # The pack and the copy of the bank on screen take the admitted pack.
+    assert source.count("_RTHP-PACK-ADMITTED-CANDIDATE") == 3
     assert source.count("_RTHP-PACK-CANDIDATE") == 2
 
     # Both packing entries share the exact copy/rebase implementation, including the
@@ -7006,7 +7029,7 @@ def test_content_epoch_is_carried_by_candidates_ack_targets_and_retry_plans() ->
     source = _source()
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
     current = _word(source, "_RTHP-DRAW-CURRENT?")
-    target = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    target = _target_candidate(source)
     header = _bank_verifier(source)
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     bind = _word(source, "_RTHP-D-BIND?")

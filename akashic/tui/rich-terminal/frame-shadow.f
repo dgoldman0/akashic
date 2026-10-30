@@ -27,6 +27,11 @@
 \  comparison runs as well, on the same packed bank, and a result that
 \  differs counts as a difference of the comparison stage.
 \
+\  Where it can, the screen producer makes the pending bank a copy of the
+\  bank on screen with the moved roots' items written in.  The bank is
+\  then packed and compared in full as well, and a copy that differs from
+\  that result counts as a difference of the copy stage.
+\
 \  While the shadow check is on, a step that takes a shortcut also runs its
 \  full path, into storage that does not feed the frame, and compares the
 \  two results here.  Comparisons are counted in all and by stage, so a run
@@ -61,6 +66,7 @@ PROVIDED akashic-tui-rterm-frame-shadow
 5 CONSTANT FSHD-STAGE-ROOT-FACTS
 6 CONSTANT FSHD-STAGE-SHELL-DELTA
 7 CONSTANT FSHD-STAGE-COMPARISON
+8 CONSTANT FSHD-STAGE-COPY
 
 VARIABLE FSHD-ON
 VARIABLE FSHD-DRAW
@@ -81,6 +87,7 @@ VARIABLE FSHD-CHECKS-SHELL-GLYPHS
 VARIABLE FSHD-CHECKS-ROOT-FACTS
 VARIABLE FSHD-CHECKS-SHELL-DELTA
 VARIABLE FSHD-CHECKS-COMPARISON
+VARIABLE FSHD-CHECKS-COPY
 
 \ FSHD? ( -- flag )  Whether the shadow check is on.
 : FSHD?  ( -- flag )  FSHD-ON @ 0<> ;
@@ -93,7 +100,7 @@ VARIABLE FSHD-CHECKS-COMPARISON
     0 FSHD-CHECKS-SNAPSHOT ! 0 FSHD-CHECKS-PRODUCER-GLYPHS !
     0 FSHD-CHECKS-PRODUCER-MENUS ! 0 FSHD-CHECKS-SHELL-GLYPHS !
     0 FSHD-CHECKS-ROOT-FACTS ! 0 FSHD-CHECKS-SHELL-DELTA !
-    0 FSHD-CHECKS-COMPARISON ! ;
+    0 FSHD-CHECKS-COMPARISON ! 0 FSHD-CHECKS-COPY ! ;
 
 0 FSHD-ON ! 0 FSHD-DRAW ! FSHD-RESET
 
@@ -162,8 +169,9 @@ VARIABLE _FSHD-STAGE
     DUP FSHD-STAGE-PRODUCER-MENUS = IF DROP FSHD-CHECKS-PRODUCER-MENUS EXIT THEN
     DUP FSHD-STAGE-SHELL-GLYPHS = IF DROP FSHD-CHECKS-SHELL-GLYPHS EXIT THEN
     DUP FSHD-STAGE-ROOT-FACTS = IF DROP FSHD-CHECKS-ROOT-FACTS EXIT THEN
-    FSHD-STAGE-SHELL-DELTA = IF FSHD-CHECKS-SHELL-DELTA EXIT THEN
-    FSHD-CHECKS-COMPARISON ;
+    DUP FSHD-STAGE-SHELL-DELTA = IF DROP FSHD-CHECKS-SHELL-DELTA EXIT THEN
+    FSHD-STAGE-COMPARISON = IF FSHD-CHECKS-COMPARISON EXIT THEN
+    FSHD-CHECKS-COPY ;
 
 \ FSHD-SAME? ( a1 u1 a2 u2 item stage -- flag )
 \   Count one comparison of STAGE's ITEM: the shortcut's U1 bytes at A1

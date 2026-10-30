@@ -436,6 +436,9 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTHP-DIAG-PLACED",
     "_RTHP-DIAG-FOLLOWED",
     "_RTHP-DIAG-CHECKED",
+    # Banks copied from the one on screen, and the moved controls written in.
+    "_RTHP-DIAG-COPIED",
+    "_RTHP-DIAG-COPIED-CONTROLS",
     "_RTHP-DIAG-ARENA-GROWTHS",
     "_RTHP-DIAG-ARENA-KEPT",
     "_RTHP-DIAG-ALONE-REBUILDS",
@@ -11975,6 +11978,7 @@ _SHADOW_CHECK_VARIABLES = {
     "checks_root_facts": "FSHD-CHECKS-ROOT-FACTS",
     "checks_shell_delta": "FSHD-CHECKS-SHELL-DELTA",
     "checks_comparison": "FSHD-CHECKS-COMPARISON",
+    "checks_copy": "FSHD-CHECKS-COPY",
     # The judge of the root facts (hybrid-screen-producer.f): comparisons
     # judged, the roots their pending banks held, how many of those changed
     # or went, and the items judged.
@@ -11991,6 +11995,7 @@ SHADOW_CHECK_STAGES = {
     5: "the root facts",
     6: "the shell's DELTA of the applications' items",
     7: "the screen producer's comparison",
+    8: "the screen producer's copy of the bank on screen",
 }
 
 

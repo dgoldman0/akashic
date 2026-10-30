@@ -990,6 +990,23 @@ those on screen. Safe mode always takes the full comparison. With the shadow
 check on, both run on copies of one packed bank and must give the same bank,
 plan and kept facts.
 
+When such a comparison would follow the facts and only collections and
+status fields moved, the pending bank is instead a copy of the bank on screen
+with the moved roots' items written in, and is neither packed afresh nor
+compared. It takes the bank on screen's input targets, a text root's target
+with its control's content revision and any other but a field's with the
+candidate's content epoch, as packing and the comparison would give them.
+The candidate's sections are copied as the pack copies them, and each control
+and correlation takes the identity, region and parent of the one in its place
+on screen. A moved root's controls must be text roots whose correlations,
+identities, places and input targets are those on screen, each checked
+against its partner as the comparison checks a pair; an unmoved text root
+keeps the content revision on screen. The pending bank keeps the bank on
+screen's sorted index, and the plan lists the controls that changed. Any
+other frame is packed and compared. With the shadow check on, the copy is
+built and kept, then the frame is packed and compared in full, and where the
+copy made a DELTA the two must give the same bank, plan and kept facts.
+
 The former LABEL plan, per-binding materializer, and per-cell producer layouts
 were development prototypes and are not part of this contract. Their copied
 offset inventories have been removed rather than retained as a second,

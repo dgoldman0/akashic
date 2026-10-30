@@ -45,6 +45,7 @@ STAGES: list[tuple[str, list[str] | re.Pattern]] = [
     ("    producer glyphs (_RTHP-BUILD-GLYPHS?)", ["_RTHP-BUILD-GLYPHS?"]),
     ("    producer rows for the shell (_RTHP-SHELL-RESIDUE?)",
      ["_RTHP-SHELL-RESIDUE?"]),
+    ("  copy of the bank on screen (_RTHP-C-COPY?)", ["_RTHP-C-COPY?"]),
     ("  target pack (_RTHP-TARGET-CANDIDATE?)", ["_RTHP-TARGET-CANDIDATE?"]),
     ("  comparison (_RTHP-DELTA-CANDIDATE?)", ["_RTHP-DELTA-CANDIDATE?"]),
     ("  shell batch (_RSHSP-BUILD-BATCH)", ["_RSHSP-BUILD-BATCH"]),
