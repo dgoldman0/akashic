@@ -1714,8 +1714,50 @@ frame before the change driver.
     difference and sent the same presents, and passed in safe mode; the
     typing run made 4,771, against 3,271, and a typed letter still builds
     in 2.02 million steps.
-  - **9c.2. Controls that come or go.** The copy of the bank on screen
-    takes controls that came or went, within what a DELTA may carry.
+  - **9c.2. Controls that come or go.** A frame in which an application's
+    controls came or went goes out as a DELTA that defines the new controls
+    and drops the gone ones, where it went out as a START. RETAINED-1
+    carries CONTROL_DEFINE, CONTROL_DROP, REGION_DEFINE and REGION_DROP in
+    a DELTA, and the terminal applies them, but the producers sent none of
+    them in one: the comparison refused a control that went, a frame built
+    for Desk's shell refused a new control, fields and dialogs had to keep
+    their counts, and Desk's shell required a DELTA to keep its catalog,
+    its families and each family's count. The copy of the bank on screen,
+    which pairs controls by place, turned these frames away first (code 6)
+    and the comparison then refused them, so teaching the copy alone would
+    have taken none of them.
+    Read in a plain canonical journey made with a copy of the producer that
+    recorded each refused comparison's controls by kind: of 18 refusals, 12
+    were refused only because controls came or went. An application's
+    prompt opened in 4 and closed in 3, a dialog with its two buttons
+    opened in 1 and closed in 1, an item view went in 2 and a tab came in
+    1. With dialogs negotiated, the prompt or dialog an application opens
+    lies in a modal region over its pane, so 9 of the 12 also bring or
+    remove that region. The other 6 refusals keep their STARTs: the frame
+    on screen was the first after its storage grew (2), its instruments
+    changed (1), or its statics changed (3).
+    - **9c.2a. Within the regions on screen.** When the counts differ the
+      comparison pairs the controls by identity, plans each control that
+      went as a drop and each new one as a definition, whose identity lies
+      above the frame on screen's, and does so for a frame built for
+      Desk's shell too. Desk's shell gives each application control the
+      identity the comparison gave it, and a family of application
+      controls may gain or lose controls: the family emitter defines,
+      replaces and drops them by identity. The producer's own DELTA drops
+      as well. The root facts' judge holds each control that went to a
+      root that went or moved. This takes the item views going and the tab
+      coming, 3 frames.
+    - **9c.2b. Overlays that open or close.** Fields and dialogs may come
+      and go in the comparison. Desk's shell keeps the identity of each
+      region the frame on screen has by its part in the screen, gives a
+      new modal region an identity above the frontier, and defines that
+      region with its controls; a modal region that went is dropped after
+      its controls. The engine gains REGION-DROP, which the terminal
+      already applies. This takes the 9 frames of prompts and dialogs.
+    - **9c.2c. The copy pairs by identity.** The copy of the bank on
+      screen pairs its controls by identity in the same way, so these
+      frames take the change driver; it plans the definitions and drops the
+      comparison plans, which the shadow check compares.
   - **9c.3. The other families' roots.** A moved menu, tab set, dialog,
     field or data-graphics root is lowered alone, as a moved collection or
     status field is.
