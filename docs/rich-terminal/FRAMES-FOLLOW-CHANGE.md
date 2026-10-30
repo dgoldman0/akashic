@@ -1535,7 +1535,16 @@ frame before the change driver.
       types, and the count is kept with the generation of the snapshot
       whose slice it describes. Safe mode and the shadow check's full
       capture capture the menus as before, and the shadow check compares
-      the two snapshots.
+      the two snapshots. **Done** on 2026-10-30 (ca6decf5). The check is
+      `URF-MENUS-SINCE?`, which costs less than the profile shows. A typed
+      letter's frame no longer captures its menus, so the snapshot takes
+      0.91 million steps against 1.29; the frame builds in 2.81 million
+      against 3.17 for ca206b79, each run apart, and sends the same 18
+      DELTAs and bytes. With the shadow check, the typing run made 3,771
+      comparisons without a difference, and the canonical journey 14,491,
+      1,176 of them the snapshot stage's, keeping the menus 64 times and
+      sending the same presents; the journey passed in safe mode. Desk's
+      shell, at 0.94 million, now costs as much as the snapshot.
     - **9a.3c.3. The other families keep their slices.** The other
       families' roots also read widget and model revisions, which count
       apart from the elements' count, so keeping their slices needs each
