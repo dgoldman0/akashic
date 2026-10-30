@@ -100,6 +100,11 @@ def test_every_check_that_runs_only_with_every_check_on_names_its_structure():
         # compares, and that check names what it finds.
         if word == "_RTHP-BANK-SEAL-TAKE":
             continue
+        # Deciding whether a capture holds its relation checks is not a
+        # check either: it reads the switch so that with every check on the
+        # relations are checked in every pass.
+        if word == "_RUHA-B-HOLD?":
+            continue
         # The shell's proved emission names through one helper of its own,
         # and the checks of a seal through the one that compares seals.
         assert ("CHK-NAME" in body or "_RTE-FDE-NAMED" in body
