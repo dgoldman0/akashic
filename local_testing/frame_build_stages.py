@@ -41,6 +41,8 @@ STAGES: list[tuple[str, list[str] | re.Pattern]] = [
     ("  documents' snapshot (RUHA-SNAPSHOT-FOR@)", ["RUHA-SNAPSHOT-FOR@"]),
     ("  producer candidate (_RTHP-BUILD-OBSERVED-CANDIDATE)",
      ["_RTHP-BUILD-OBSERVED-CANDIDATE"]),
+    ("    candidate from the bank on screen (_RTHP-UB-CANDIDATE?)",
+     ["_RTHP-UB-CANDIDATE?"]),
     ("    engine admission (RTE-HYBRID-PREFLIGHT)", ["RTE-HYBRID-PREFLIGHT"]),
     ("    producer glyphs (_RTHP-BUILD-GLYPHS?)", ["_RTHP-BUILD-GLYPHS?"]),
     ("    producer rows for the shell (_RTHP-SHELL-RESIDUE?)",

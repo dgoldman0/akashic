@@ -1007,6 +1007,23 @@ other frame is packed and compared. With the shadow check on, the copy is
 built and kept, then the frame is packed and compared in full, and where the
 copy made a DELTA the two must give the same bank, plan and kept facts.
 
+Such a frame's candidate is itself taken from the bank on screen when only
+text roots and status fields moved, every document lies where it lay, and
+that bank was built for the same owner, surface and features and holds no
+runs, instruments, series or pictures. Each bank keeps every claim whole,
+where each lane's text and claims began, and the features it was built
+under, so the candidate can be unpacked from it: its controls, correlations
+and their text, its status fields with theirs, and its claims, each item
+numbered from the candidate's first object and stamped with its snapshot's
+generation and content epoch, as a full lowering numbers and stamps it. Each
+moved root is then lowered alone into its place by its lane's own words, a
+text root's content packed where the old content lay with the text after it
+moved, and it must keep its kind, visibility, rectangle, depth and identity,
+so its claim and the check of every later root against the claims before it
+stay as they were on screen. Any other frame is lowered in full. With the
+shadow check on, the frame is lowered in full as well, and the two
+candidates, their fields, spans and plans, must be the same byte for byte.
+
 The former LABEL plan, per-binding materializer, and per-cell producer layouts
 were development prototypes and are not part of this contract. Their copied
 offset inventories have been removed rather than retained as a second,

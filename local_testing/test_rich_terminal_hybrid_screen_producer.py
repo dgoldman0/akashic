@@ -31,9 +31,15 @@ def _target_candidate(source: str) -> str:
 
 
 def _build(source: str) -> str:
-    """The candidate build entry, then the observed build it runs, in order."""
+    """The candidate build entry, then the observed build it runs, in order,
+    with the full lowering it runs where it takes no candidate from the bank
+    on screen read in place."""
+    lower = _word(source, "_RTHP-W-LOWER")
+    body = lower[lower.index(")") + 1:lower.rindex(";")]
+    observed = _word(source, "_RTHP-BUILD-OBSERVED-CANDIDATE")
+    assert observed.count("_RTHP-W-LOWER ") == 1
     return (_word(source, "_RTHP-BUILD-CANDIDATE")
-            + _word(source, "_RTHP-BUILD-OBSERVED-CANDIDATE"))
+            + observed.replace("_RTHP-W-LOWER ", body + " "))
 
 
 def _init(source: str) -> str:
@@ -4392,7 +4398,9 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     geometry = _word(source, "_RTHP-W-COLLECTION-GEOMETRY?")
     entry = _word(source, "_RTHP-W-COLLECTION-ENTRY?")
     overlap = _word(source, "_RTHP-W-COLLECTION-NONOVERLAPPING?")
-    content = _word(source, "_RTHP-W-COLLECTION-CONTENT")
+    # The content's bytes, for its kind, then its pack.
+    content = (_word(source, "_RTHP-W-CONTENT-BYTES")
+               + _word(source, "_RTHP-W-COLLECTION-CONTENT"))
     write_text = _word(source, "_RTHP-W-WRITE-TEXT-COLLECTION")
     copy_tab_text = _word(source, "_RTHP-W-COPY-TAB-TEXT")
     tab_correlation = _word(source, "_RTHP-W-TAB-CORRELATION!")
@@ -5735,12 +5743,13 @@ def test_kept_comparison_facts_follow_their_exact_bank() -> None:
                                 "_RTHP-D-KEEP-FACTS", "_RTHP-D-SH-KEEP",
                                 "_RTHP-D-SH-RESTORE", "_RTHP-D-SH-COMPARE"},
         # The acknowledged empty frame retires the active bank and its facts.
-        # The copy of the bank on screen reads the facts it kept.
+        # The copy of the bank on screen reads the facts it kept, and a
+        # candidate is taken from that bank only while it keeps them.
         "_RTHP.ACTIVE-FACTS": {"_RTHP-FACTS-PUBLISH", "_RTHP-D-KEPT?",
                                "_RTHP-D-GLYPH-BOUNDS?", "_RTHP-D-KEPT-SLOT-MAP?",
                                "_RTHP-D-KEPT-CONTROL-INDEX?",
                                "_RTHP-TARGET-RETIRE", "_RTHP-C-FOLLOWS?",
-                               "_RTHP-C-NORMALIZE?"},
+                               "_RTHP-C-NORMALIZE?", "_RTHP-UB-BANK?"},
     }
     for field, users in writers.items():
         found = {match[1] for match in re.finditer(

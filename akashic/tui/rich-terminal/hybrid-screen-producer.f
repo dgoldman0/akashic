@@ -5417,7 +5417,8 @@ VARIABLE _RTHP-W-COPY-END
 : _RTHP-W-ITEM-VIEW?  ( -- flag )  _RTHP-W-KIND @ RTE-CONTROL-ITEM-VIEW = ;
 : _RTHP-W-DOCUMENT?   ( -- flag )  _RTHP-W-KIND @ RTE-CONTROL-DOCUMENT = ;
 
-: _RTHP-W-COLLECTION-CONTENT  ( -- rte-status )
+\ The bytes the descriptor's root packs its content into, for its kind.
+: _RTHP-W-CONTENT-BYTES  ( -- bytes uscol-status )
     _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-SUMMARY
     _RTHP-W-ITEM-VIEW? IF
         USCOL-SUMMARY-ITM1-BYTES
@@ -5425,9 +5426,12 @@ VARIABLE _RTHP-W-COPY-END
         USCOL-SUMMARY-DOC1-BYTES
     ELSE
         USCOL-SUMMARY-STX1-BYTES
-    THEN THEN
+    THEN THEN ;
+
+: _RTHP-W-COLLECTION-CONTENT  ( -- rte-status )
+    _RTHP-W-CONTENT-BYTES
     DUP USCOL-S-OK <> IF NIP _RTHP-W-USCOL>RTE EXIT THEN
-    DROP DUP _RTHP-W-CONTENT-U ! DROP
+    DROP _RTHP-W-CONTENT-U !
     _RTHP-W-CONTENT-CURSOR @ _RTHP-W-CONTENT-U @ _RTHP-U32+?
         0= IF DROP RTE-S-CAPACITY EXIT THEN
     _RTHP-W-P @ _RTHP.SOURCE-TEXT-U @ U> IF
@@ -7521,37 +7525,46 @@ VARIABLE _RTHP-SI-COL-END
         THEN
     LOOP RTE-S-OK ;
 
+\ The status-field slices of the document _RTHP-SS-DOC lie within the
+\ copied banks: its descriptors from _RTHP-SS-DA, its native entries from
+\ _RTHP-SS-NA.
+: _RTHP-SS-DOCUMENT?  ( -- flag )
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@ _RTHP-SS-DU !
+    _RTHP-SS-P @ _RTHP.STATUS-DESCRIPTORS-A @
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@ + _RTHP-SS-DA !
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-BYTES@ _RTHP-SS-NU !
+    _RTHP-SS-P @ _RTHP.STATUS-NATIVE-A @
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@ + _RTHP-SS-NA !
+    _RTHP-SS-DU @ USFSN-DESCRIPTOR-SIZE MOD IF 0 EXIT THEN
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@
+    _RTHP-SS-DU @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-SS-P @ _RTHP.STATUS-DESCRIPTORS-USED @ U> IF 0 EXIT THEN
+    _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@
+    _RTHP-SS-NU @ _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-SS-P @ _RTHP.STATUS-NATIVE-USED @ U> 0= ;
+
+\ The document's descriptor INDEX into _RTHP-SS-DESC, and its native entry
+\ into _RTHP-SS-ENTRY, which lies in the document's slice, is valid, and is
+\ as wide as its descriptor.
+: _RTHP-SS-ENTRY?  ( index -- flag )
+    USFSN-DESCRIPTOR-SIZE * _RTHP-SS-DA @ + _RTHP-SS-DESC !
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-NATIVE-OFFSET@
+    _RTHP-SS-DESC @ USFSN-DESCRIPTOR-ENTRY-BYTES@ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-SS-NU @ U> IF 0 EXIT THEN
+    _RTHP-SS-DESC @ _RTHP-SS-NA @ USFSN-DESCRIPTOR-NATIVE
+        OVER _RTHP-SS-ENTRY ! USF-VALIDATE USF-S-OK <> IF 0 EXIT THEN
+    _RTHP-SS-ENTRY @ USF-WIDTH@ _RTHP-SS-DESC @ USFSN-DESCRIPTOR-WIDTH@ = ;
+
 : _RTHP-BUILD-STATICS ( producer -- rte-status )
     0 _RTHP-SS-OVERLAP !
     DUP _RTHP-SS-P ! DUP _RTHP-STATIC-CLEAR
     DUP _RTHP.CLAIMS-USED @ SWAP _RTHP.STATIC-BASE-CLAIMS !
     _RTHP-SS-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
         I _RTHP-SS-P @ _RTHP-DOCUMENT-AT _RTHP-SS-DOC !
-        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-BYTES@ _RTHP-SS-DU !
-        _RTHP-SS-P @ _RTHP.STATUS-DESCRIPTORS-A @
-        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@ + _RTHP-SS-DA !
-        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-BYTES@ _RTHP-SS-NU !
-        _RTHP-SS-P @ _RTHP.STATUS-NATIVE-A @
-        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@ + _RTHP-SS-NA !
-        _RTHP-SS-DU @ USFSN-DESCRIPTOR-SIZE MOD IF RTE-S-INVALID UNLOOP EXIT THEN
-        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-DESCRIPTOR-OFFSET@
-        _RTHP-SS-DU @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID UNLOOP EXIT THEN
-        _RTHP-SS-P @ _RTHP.STATUS-DESCRIPTORS-USED @ U> IF RTE-S-INVALID UNLOOP EXIT THEN
-        _RTHP-SS-DOC @ RUHA-DOCUMENT-STATUS-FIELDS-NATIVE-OFFSET@
-        _RTHP-SS-NU @ _RTHP-U32+? 0= IF DROP RTE-S-INVALID UNLOOP EXIT THEN
-        _RTHP-SS-P @ _RTHP.STATUS-NATIVE-USED @ U> IF RTE-S-INVALID UNLOOP EXIT THEN
+        _RTHP-SS-DOCUMENT? 0= IF RTE-S-INVALID UNLOOP EXIT THEN
         _RTHP-SS-DU @ USFSN-DESCRIPTOR-SIZE / 0 ?DO
-            _RTHP-SS-DA @ I USFSN-DESCRIPTOR-SIZE * + _RTHP-SS-DESC !
-            _RTHP-SS-DESC @ USFSN-DESCRIPTOR-NATIVE-OFFSET@
-            _RTHP-SS-DESC @ USFSN-DESCRIPTOR-ENTRY-BYTES@ _RTHP-U32+?
-                0= IF DROP RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
-            _RTHP-SS-NU @ U> IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
-            _RTHP-SS-DESC @ _RTHP-SS-NA @ USFSN-DESCRIPTOR-NATIVE
-                OVER _RTHP-SS-ENTRY ! USF-VALIDATE USF-S-OK <>
-                IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
-            _RTHP-SS-ENTRY @ USF-WIDTH@
-                _RTHP-SS-DESC @ USFSN-DESCRIPTOR-WIDTH@ <>
-                IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
+            I _RTHP-SS-ENTRY? 0= IF RTE-S-INVALID UNLOOP UNLOOP EXIT THEN
             _RTHP-SS-WRITE DUP RTE-S-OK <>
                 IF UNLOOP UNLOOP EXIT THEN DROP
         LOOP
@@ -9583,6 +9596,29 @@ VARIABLE _RTHP-ROOT-B
     _RTHP.TARGET-ACTIVE @ ?DUP IF _RTHP-TB.SOURCE-GEN @ ELSE 0 THEN
     1 _RTHP-ROOT.GEN @ = IF 2 ELSE 1 THEN ;
 
+\ The block holding the facts of the snapshot of GENERATION, or 0.
+: _RTHP-ROOT-FIND-BLOCK  ( generation -- block|0 )
+    DUP 0= IF EXIT THEN
+    DUP 1 _RTHP-ROOT.GEN @ = IF DROP 1 EXIT THEN
+    2 _RTHP-ROOT.GEN @ = IF 2 ELSE 0 THEN ;
+
+: _RTHP-ROOT-RECORD-AT  ( index block -- record )
+    _RTHP-ROOT.A @ SWAP URF-SIZE * + ;
+
+\ ( old-generation new-generation -- old new flag ) The blocks holding the
+\ facts of the snapshots of the two generations, when both are kept and
+\ name the same roots in the same order; 0 0 when either is not kept.
+: _RTHP-ROOT-PAIR?  ( old-generation new-generation -- old new flag )
+    2DUP = IF 2DROP 0 0 0 EXIT THEN
+    _RTHP-ROOT-FIND-BLOCK SWAP _RTHP-ROOT-FIND-BLOCK SWAP
+    2DUP 0= SWAP 0= OR IF 2DROP 0 0 0 EXIT THEN
+    OVER _RTHP-ROOT.N @ OVER _RTHP-ROOT.N @ <> IF 0 EXIT THEN
+    DUP _RTHP-ROOT.N @ 0 ?DO
+        I 2 PICK _RTHP-ROOT-RECORD-AT URF-IDENTITY-SIZE
+        I 3 PICK _RTHP-ROOT-RECORD-AT URF-IDENTITY-SIZE
+        COMPARE IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
 : _RTHP-ROOT-CAPTURE  ( -- count status )
     _RTHP-ROOT-B @ _RTHP-ROOT.A @ _RTHP-ROOT-B @ _RTHP-ROOT.U @
     _RTHP-W-DRAW @ _RTHP-ROOT-P @ _RTHP.ADAPTER @ RUHA-ROOT-FACTS@ ;
@@ -9642,6 +9678,669 @@ VARIABLE _RTHP-ROOT-BYTES
         RTHPX-PLAN _RTHP-W-P @ _RTHP-EXTENSION-NOTIFY
     THEN ;
 
+: _RTHP-W-LOWER  ( -- rte-status )
+    _RTPROF-PH-CONTROL-PLAN _RTPROF-MARK
+    _RTHP-W-P @ _RTHP-BUILD-CONTROLS
+    _RTPROF-PH-OTHER _RTPROF-MARK
+    DUP _RTHP-W-STATUS !
+    DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTPROF-PH-CLAIM-PLAN _RTPROF-MARK
+    _RTHP-W-P @ _RTHP-BUILD-CLAIMS?
+    _RTPROF-PH-OTHER _RTPROF-MARK
+        0= IF RTE-S-INVALID EXIT THEN
+    _RTHP-W-BUILD-OPTIONAL-FIELDS
+    DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTHP-W-BUILD-OPTIONAL-DIALOGS
+    DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTHP-W-SHELL-CONTROLS!
+    _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
+    DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTHP-W-BUILD-OPTIONAL-STATICS ;
+
+\ ---------------------------------------------------------------------
+\  The candidate from the bank on screen
+\ ---------------------------------------------------------------------
+\
+\  When the root facts show that only text roots and status fields moved
+\  since the bank on screen, every document lies where it lay, and that
+\  bank was built for this owner, surface and features and holds no runs,
+\  instruments, series or pictures, the candidate is taken from the bank
+\  instead of lowered from the snapshot: its controls, correlations and
+\  their text, its status fields with theirs, and its claims, each item
+\  numbered and stamped as a full lowering numbers and stamps it, with its
+\  counts and where each lane began.  Each moved root is then lowered alone
+\  into its place by its lane's own words, its content packed where the
+\  old lay and the text after it moved.  It must keep its kind,
+\  visibility, rectangle, depth and identity, so that its claim, and the
+\  check of every later root against the claims before it, stay what they
+\  were on screen.  Any other frame is lowered in full, which also replaces
+\  whatever a refused attempt wrote.  Safe mode, which reuses nothing an
+\  earlier frame built, never takes this path.  With the shadow check on,
+\  the candidate taken from the bank is kept, the frame is lowered in full
+\  as well, and the two candidates must be the same byte for byte
+\  (FSHD-STAGE-UNPACK).
+
+VARIABLE _RTHP-UB-P            \ the producer
+VARIABLE _RTHP-UB-A            \ the bank on screen
+VARIABLE _RTHP-UB-OLD          \ the root facts block of the bank on screen
+VARIABLE _RTHP-UB-NEW          \ the root facts block of this build's snapshot
+VARIABLE _RTHP-UB-N            \ the controls taken
+VARIABLE _RTHP-UB-ID           \ the identity the first status field takes
+VARIABLE _RTHP-UB-BY           \ how far an address moves
+VARIABLE _RTHP-UB-AT           \ addresses from here on move
+VARIABLE _RTHP-UB-END          \ the offset an old text ends at
+VARIABLE _RTHP-UB-I            \ the place of the moved root's item
+VARIABLE _RTHP-UB-ITEM         \ the moved root's item
+VARIABLE _RTHP-UB-O            \ the offset its text began at
+VARIABLE _RTHP-UB-OLD-D        \ a directory entry of the bank on screen
+VARIABLE _RTHP-UB-NEW-D        \ the snapshot's entry in its place
+VARIABLE _RTHP-UB-CELL
+VARIABLE _RTHP-UB-MOVED        \ the moved roots lowered into the candidate
+\ The moved root's item as the bank on screen held it.
+VARIABLE _RTHP-UB-KIND
+VARIABLE _RTHP-UB-STATE
+VARIABLE _RTHP-UB-Z
+VARIABLE _RTHP-UB-ROW
+VARIABLE _RTHP-UB-COL
+VARIABLE _RTHP-UB-HEIGHT
+VARIABLE _RTHP-UB-WIDTH
+VARIABLE _RTHP-UB-ITEMS
+VARIABLE _RTHP-UB-UTF8
+\ The status fields' counts, which their lane's write moves.
+VARIABLE _RTHP-UB-STATICS
+VARIABLE _RTHP-UB-STATIC-TEXT
+VARIABLE _RTHP-UB-CLAIMS
+VARIABLE _RTHP-UB-LAST
+\ Diagnostics: candidates taken from the bank on screen, and the moved roots
+\ lowered into them.
+VARIABLE _RTHP-DIAG-UNPACKED
+VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
+
+\ ( value address -- ) VALUE's eight bytes at ADDRESS, low byte first, as a
+\ content header keeps them.
+: _RTHP-UB-LE64!  ( value address -- )
+    SWAP _RTHP-UB-CELL ! _RTHP-UB-CELL SWAP 8 MOVE ;
+
+\ ( address -- address' ) a text address of the bank on screen, as the
+\ candidate's: an empty text's stays 0.
+: _RTHP-UB-REBASE  ( address -- address' )
+    DUP IF _RTHP-UB-BY @ + THEN ;
+
+\ ( address -- address' ) an address at or past _RTHP-UB-AT moved on.
+: _RTHP-UB-SHIFT  ( address -- address' )
+    DUP _RTHP-UB-AT @ U< 0= IF _RTHP-UB-BY @ + THEN ;
+
+\ The snapshot's directory entry in place INDEX and the bank on screen's
+\ name the same document, with the same slot, place, owner, overlay and
+\ layer.
+: _RTHP-UB-OVERLAY=?  ( -- flag )
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-OVERLAY@
+    _RTHP-UB-NEW-D @ RUHA-DOCUMENT-OVERLAY@
+    4 ROLL = >R 3 ROLL = >R ROT = >R = R> AND R> AND R> AND ;
+: _RTHP-UB-DOCUMENT=?  ( index -- flag )
+    RUHA-DOCUMENT-SIZE * DUP _RTHP-UB-A @ _RTHP-PACK-DIRECTORY-A + _RTHP-UB-OLD-D !
+    _RTHP-UB-P @ _RTHP.SOURCE-DIR-A @ + _RTHP-UB-NEW-D !
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-TOKEN@ _RTHP-UB-NEW-D @ RUHA-DOCUMENT-TOKEN@ <>
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-SLOT-ID@ _RTHP-UB-NEW-D @ RUHA-DOCUMENT-SLOT-ID@ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-ROW@ _RTHP-UB-NEW-D @ RUHA-DOCUMENT-ROW@ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-COL@ _RTHP-UB-NEW-D @ RUHA-DOCUMENT-COL@ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-HEIGHT@ _RTHP-UB-NEW-D @ RUHA-DOCUMENT-HEIGHT@ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-WIDTH@ _RTHP-UB-NEW-D @ RUHA-DOCUMENT-WIDTH@ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-OWNER-ID@
+        _RTHP-UB-NEW-D @ RUHA-DOCUMENT-OWNER-ID@ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-OWNER-GENERATION@
+        _RTHP-UB-NEW-D @ RUHA-DOCUMENT-OWNER-GENERATION@ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-LAYER@ _RTHP-UB-NEW-D @ RUHA-DOCUMENT-LAYER@ <> OR
+    IF 0 EXIT THEN
+    _RTHP-UB-OVERLAY=? ;
+
+\ Every document lies where it lay on screen.
+: _RTHP-UB-DOCUMENTS?  ( -- flag )
+    _RTHP-UB-A @ _RTHP-TB.DOCUMENT-COUNT @
+        _RTHP-UB-P @ _RTHP.DOCUMENT-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I _RTHP-UB-DOCUMENT=? 0= IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ The bank on screen was built for this owner, surface and features, its
+\ comparison kept its facts, it holds no runs, instruments, series or
+\ pictures, and its menus' text is as long as this snapshot's.
+: _RTHP-UB-BANK?  ( -- flag )
+    _RTHP-UB-A @ _RTHP-UB-P @ _RTHP-TARGET-BANK-HEADER? 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.BANK @
+        _RTHP-UB-A @ <> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.OWNER @ _RTHP-UB-P @ _RTHP.OWNER @ <> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.GENERATION @
+        _RTHP-UB-P @ _RTHP.OWNER-GEN @ <> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.COLS @ _RTHP-UB-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.ROWS @ _RTHP-UB-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.PHYSICAL-GEN @
+        _RTHP-UB-P @ _RTHP.PHYSICAL-GEN @ <> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.FEATURES @
+        _RTHP-UB-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@ <> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.GLYPH-SLOT-COUNT @ IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ OR
+    _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ OR IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.PICTURE-COUNT @ IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-UB-A @ _RTHP-PACK-STATICS-A I RTE-STATIC-SIZE * +
+            _RTE-STATIC.KIND @ RTE-STATIC-STATUS-FIELD <> IF 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-UB-A @ _RTHP-TB.MENU-TEXT-USED @
+        _RTHP-UB-P @ _RTHP.SOURCE-MENU-TEXT-USED @ = ;
+
+\ The two snapshots' root facts name the same roots in the same order, and
+\ every root whose facts moved is a collection or a status field.
+: _RTHP-UB-ROOTS?  ( -- flag )
+    _RTHP-UB-P @ _RTHP-ROOT-P !
+    _RTHP-UB-A @ _RTHP-TB.SOURCE-GEN @ _RTHP-UB-P @ _RTHP.SOURCE-GEN @
+        _RTHP-ROOT-PAIR? >R _RTHP-UB-NEW ! _RTHP-UB-OLD ! R> 0= IF 0 EXIT THEN
+    _RTHP-UB-NEW @ _RTHP-ROOT.N @ 0 ?DO
+        I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
+        I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
+            I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT URF.FAMILY @
+            DUP URF-F-COLLECTION <> SWAP URF-F-STATUS-FIELD <> AND
+                IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
+
+\ The candidate may be taken from the bank on screen: not in safe mode, for
+\ a candidate built for Desk's shell, from a bank of this arena that allows
+\ it, with every document where it lay and the roots as the facts allow.
+: _RTHP-UB-FOLLOWS?  ( -- flag )
+    CHK-SAFE? IF 0 EXIT THEN
+    _RTHP-W-SHELL-MODE? 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.TARGET-ACTIVE @ DUP 0= IF EXIT THEN _RTHP-UB-A !
+    _RTHP-UB-BANK? 0= IF 0 EXIT THEN
+    _RTHP-UB-DOCUMENTS? 0= IF 0 EXIT THEN
+    _RTHP-UB-ROOTS? ;
+
+\ The candidate's items fit its storage.
+: _RTHP-UB-ROOM?  ( -- flag )
+    _RTHP-UB-A @ _RTHP-TB.CONTROL-COUNT @ DUP _RTHP-UB-N !
+        _RTHP-UB-P @ _RTHP.MAX-CONTROLS @ U> IF 0 EXIT THEN
+    _RTHP-UB-N @ RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-N @ RUCP-CORRELATION-SIZE *
+        _RTHP-UB-P @ _RTHP.CORR-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.SOURCE-TEXT-USED @
+        _RTHP-UB-P @ _RTHP.SOURCE-TEXT-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.CLAIMS @ RUCL-CLAIM-SIZE *
+        _RTHP-UB-P @ _RTHP.CLAIMS-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @
+        _RTHP-UB-P @ _RTHP.MAX-STATICS @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ RTE-STATIC-SIZE *
+        _RTHP-UB-P @ _RTHP.STATICS-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE *
+        _RTHP-UB-P @ _RTHP.STATIC-CORR-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.STATIC-TEXT-BYTES @
+        _RTHP-UB-P @ _RTHP.STATIC-TEXT-U @ U> 0= ;
+
+\ Control INDEX as a full lowering numbers it: from the candidate's first
+\ object, its parent with it, in the candidate's region, its texts in the
+\ candidate's copy, and a text root's content stamped with this snapshot's
+\ content epoch.  The bank on screen numbers its controls by place too,
+\ each from that bank's first object, which shows the parent's place.
+: _RTHP-UB-CONTROL?  ( index -- flag )
+    DUP RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ + _RTHP-UB-ITEM !
+    DUP _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ +
+        _RTHP-UB-ITEM @ _RTE-CONTROL.ID @ <> IF DROP 0 EXIT THEN
+    DUP RUCP-CORRELATION-SIZE * _RTHP-UB-P @ _RTHP.CORR-A @ +
+        DUP RUCP-CORRELATION-CONTROL-ID@
+        _RTHP-UB-ITEM @ _RTE-CONTROL.ID @ <> IF 2DROP 0 EXIT THEN
+    OVER _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + DUP ROT _RUCP-X.CONTROL-ID !
+        _RTHP-UB-ITEM @ _RTE-CONTROL.ID !
+    DROP
+    _RTHP-UB-ITEM @ _RTE-CONTROL.PARENT @ ?DUP IF
+        _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ -
+        DUP _RTHP-UB-N @ U< 0= IF DROP 0 EXIT THEN
+        _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + _RTHP-UB-ITEM @ _RTE-CONTROL.PARENT !
+    THEN
+    _RTHP-UB-P @ _RTHP.REGION @ _RTHP-UB-ITEM @ _RTE-CONTROL.REGION !
+    _RTHP-UB-ITEM @ _RTE-CONTROL.LABEL-A DUP @ _RTHP-UB-REBASE SWAP !
+    _RTHP-UB-ITEM @ _RTE-CONTROL.SHORTCUT-A DUP @ _RTHP-UB-REBASE SWAP !
+    _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-A DUP @ _RTHP-UB-REBASE SWAP !
+    _RTHP-UB-ITEM @ _RTE-CONTROL.KIND @ _RTHP-CONTENT-CONTROL-KIND? IF
+        _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-U @ 16 < IF 0 EXIT THEN
+        _RTHP-UB-P @ _RTHP.SOURCE-CONTENT-EPOCH @
+            _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-A @ 8 + _RTHP-UB-LE64!
+    THEN -1 ;
+
+\ The bank's controls, correlations, their text past the menus', and its
+\ claims, into the candidate, with the counts and lane bounds the bank
+\ records.  The menus' text is this snapshot's, as long as the bank's.
+: _RTHP-UB-CONTROLS?  ( -- flag )
+    _RTHP-UB-A @ _RTHP-PACK-CONTROLS-A _RTHP-UB-P @ _RTHP.CONTROLS-A @
+        _RTHP-UB-N @ RTE-CONTROL-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-CORR-A _RTHP-UB-P @ _RTHP.CORR-A @
+        _RTHP-UB-N @ RUCP-CORRELATION-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-SOURCE-A _RTHP-UB-A @ _RTHP-TB.MENU-TEXT-USED @ +
+    _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-UB-A @ _RTHP-TB.MENU-TEXT-USED @ +
+    _RTHP-UB-A @ _RTHP-TB.SOURCE-TEXT-USED @ _RTHP-UB-A @ _RTHP-TB.MENU-TEXT-USED @ -
+        MOVE
+    _RTHP-UB-A @ _RTHP-PACK-CLAIMS-A _RTHP-UB-P @ _RTHP.CLAIMS-A @
+        _RTHP-UB-A @ _RTHP-TB.CLAIMS @ RUCL-CLAIM-SIZE * MOVE
+    _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-UB-A @ _RTHP-PACK-SOURCE-A -
+        _RTHP-UB-BY !
+    _RTHP-UB-N @ 0 ?DO I _RTHP-UB-CONTROL? 0= IF 0 UNLOOP EXIT THEN LOOP
+    \ Every claim is this snapshot's.
+    _RTHP-UB-A @ _RTHP-TB.CLAIMS @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.SOURCE-GEN @
+            _RTHP-UB-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RUCL-C.GENERATION !
+    LOOP
+    _RTHP-UB-P @ >R _RTHP-UB-A @
+    _RTHP-UB-N @ R@ _RTHP.CONTROL-COUNT !
+    DUP _RTHP-TB.MENU-CONTROL-COUNT @ R@ _RTHP.MENU-CONTROL-COUNT !
+    DUP _RTHP-TB.COLLECTION-COUNT @ R@ _RTHP.COLLECTION-COUNT !
+    DUP _RTHP-TB.COLLECTION-ITEMS @ R@ _RTHP.COLLECTION-ITEMS !
+    DUP _RTHP-TB.COLLECTION-UTF8 @ R@ _RTHP.COLLECTION-UTF8 !
+    DUP _RTHP-TB.FIELD-COUNT @ R@ _RTHP.FIELD-COUNT !
+    DUP _RTHP-TB.FIELD-ITEMS @ R@ _RTHP.FIELD-ITEMS !
+    DUP _RTHP-TB.FIELD-UTF8 @ R@ _RTHP.FIELD-UTF8 !
+    DUP _RTHP-TB.DIALOG-COUNT @ R@ _RTHP.DIALOG-COUNT !
+    DUP _RTHP-TB.DIALOG-CONTROLS @ R@ _RTHP.DIALOG-CONTROLS !
+    DUP _RTHP-TB.DIALOG-UTF8 @ R@ _RTHP.DIALOG-UTF8 !
+    DUP _RTHP-TB.SOURCE-TEXT-USED @ R@ _RTHP.SOURCE-TEXT-USED !
+    DUP _RTHP-TB.CLAIMS @ RUCL-CLAIM-SIZE * R@ _RTHP.CLAIMS-USED !
+    DUP _RTHP-TB.MENU-CLAIMS @ R@ _RTHP.MENU-CLAIMS !
+    DUP _RTHP-TB.FIELD-BASE-TEXT @ R@ _RTHP.FIELD-BASE-TEXT !
+    DUP _RTHP-TB.FIELD-BASE-CLAIMS @ R@ _RTHP.FIELD-BASE-CLAIMS !
+    DUP _RTHP-TB.DIALOG-BASE-TEXT @ R@ _RTHP.DIALOG-BASE-TEXT !
+    DUP _RTHP-TB.DIALOG-BASE-CLAIMS @ R@ _RTHP.DIALOG-BASE-CLAIMS !
+    DUP _RTHP-TB.BASE-CLAIMS @ R@ _RTHP.BASE-CLAIMS-USED !
+    DUP _RTHP-TB.STATIC-BASE-CLAIMS @ R@ _RTHP.STATIC-BASE-CLAIMS !
+    DUP _RTHP-TB.STATIC-COUNT @ R@ _RTHP.STATIC-COUNT !
+    _RTHP-TB.STATIC-TEXT-BYTES @ R@ _RTHP.STATIC-TEXT-USED !
+    R@ _RTHP.CONTROL-COUNT @ R@ _RTHP.DIALOG-CONTROLS @ -
+        DUP R@ _RTHP.DIALOG-BASE-CONTROLS !
+    R@ _RTHP.FIELD-COUNT @ - R> _RTHP.FIELD-BASE-CONTROLS ! -1 ;
+
+\ The bank's status fields, their correlations and text into the
+\ candidate, numbered as a full lowering numbers them, past the controls
+\ Desk's shell adds and the instruments, of which there are none.
+: _RTHP-UB-STATICS?  ( -- flag )
+    _RTHP-UB-A @ _RTHP-PACK-STATICS-A _RTHP-UB-P @ _RTHP.STATICS-A @
+        _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ RTE-STATIC-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-STATIC-CORR-A _RTHP-UB-P @ _RTHP.STATIC-CORR-A @
+        _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-STATIC-TEXT-A _RTHP-UB-P @ _RTHP.STATIC-TEXT-A @
+        _RTHP-UB-A @ _RTHP-TB.STATIC-TEXT-BYTES @ MOVE
+    _RTHP-UB-P @ _RTHP.STATIC-TEXT-A @ _RTHP-UB-A @ _RTHP-PACK-STATIC-TEXT-A -
+        _RTHP-UB-BY !
+    _RTHP-UB-P @ _RTHP-OBJECTS-FIRST? 0= IF DROP 0 EXIT THEN _RTHP-UB-ID !
+    0 _RTHP-UB-P @ _RTHP.STATIC-LAST !
+    _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * + _RTHP-UB-ITEM !
+        _RTHP-UB-ID @ I + DUP _RTHP-UB-ITEM @ _RTE-STATIC.ID !
+            _RTHP-UB-P @ _RTHP.STATIC-LAST !
+        _RTHP-UB-P @ _RTHP.REGION @ _RTHP-UB-ITEM @ _RTE-STATIC.REGION !
+        _RTHP-UB-ITEM @ _RTE-STATIC.LABEL-A DUP @ _RTHP-UB-REBASE SWAP !
+        _RTHP-UB-ITEM @ _RTE-STATIC.VALUE-A DUP @ _RTHP-UB-REBASE SWAP !
+    LOOP -1 ;
+
+\ ( end delta -- flag ) The candidate's control text from END moved on by
+\ DELTA bytes, room for a text there that changes length, with every
+\ control's text address past it and where the fields' and dialogs' text
+\ begins.
+: _RTHP-UB-TEXT-ROOM?  ( end delta -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    _RTHP-UB-BY ! _RTHP-UB-END !
+    _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED @ _RTHP-UB-BY @ +
+        _RTHP-UB-P @ _RTHP.SOURCE-TEXT-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-UB-END @ + DUP _RTHP-UB-AT !
+    DUP _RTHP-UB-BY @ +
+    _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED @ _RTHP-UB-END @ - MOVE
+    _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.CONTROLS-A @ I RTE-CONTROL-SIZE * +
+        DUP _RTE-CONTROL.LABEL-A DUP @ _RTHP-UB-SHIFT SWAP !
+        DUP _RTE-CONTROL.SHORTCUT-A DUP @ _RTHP-UB-SHIFT SWAP !
+        _RTE-CONTROL.CONTENT-A DUP @ _RTHP-UB-SHIFT SWAP !
+    LOOP
+    _RTHP-UB-P @ _RTHP.FIELD-BASE-TEXT @ _RTHP-UB-END @ U< 0= IF
+        _RTHP-UB-BY @ _RTHP-UB-P @ _RTHP.FIELD-BASE-TEXT +!
+    THEN
+    _RTHP-UB-P @ _RTHP.DIALOG-BASE-TEXT @ _RTHP-UB-END @ U< 0= IF
+        _RTHP-UB-BY @ _RTHP-UB-P @ _RTHP.DIALOG-BASE-TEXT +!
+    THEN
+    _RTHP-UB-BY @ _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED +! -1 ;
+
+\ ( end delta -- flag ) The same for the status fields' text.
+: _RTHP-UB-STATIC-ROOM?  ( end delta -- flag )
+    DUP 0= IF 2DROP -1 EXIT THEN
+    _RTHP-UB-BY ! _RTHP-UB-END !
+    _RTHP-UB-P @ _RTHP.STATIC-TEXT-USED @ _RTHP-UB-BY @ +
+        _RTHP-UB-P @ _RTHP.STATIC-TEXT-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.STATIC-TEXT-A @ _RTHP-UB-END @ + DUP _RTHP-UB-AT !
+    DUP _RTHP-UB-BY @ +
+    _RTHP-UB-P @ _RTHP.STATIC-TEXT-USED @ _RTHP-UB-END @ - MOVE
+    _RTHP-UB-P @ _RTHP.STATIC-COUNT @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * +
+        DUP _RTE-STATIC.LABEL-A DUP @ _RTHP-UB-SHIFT SWAP !
+        _RTE-STATIC.VALUE-A DUP @ _RTHP-UB-SHIFT SWAP !
+    LOOP
+    _RTHP-UB-BY @ _RTHP-UB-P @ _RTHP.STATIC-TEXT-USED +! -1 ;
+
+\ Bind the lanes' words to the snapshot's document TOKEN: its directory
+\ entry and its slices.
+: _RTHP-UB-DOCUMENT?  ( token -- flag )
+    _RTHP-W-COPIED-BEGIN
+    BEGIN _RTHP-W-DOCUMENT-I @ _RTHP-W-P @ _RTHP.DOCUMENT-COUNT @ U< WHILE
+        _RTHP-W-COPIED-DOCUMENT? 0= IF DROP 0 EXIT THEN
+        _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-TOKEN@ OVER = IF DROP -1 EXIT THEN
+        1 _RTHP-W-DOCUMENT-I +!
+    REPEAT DROP 0 ;
+
+\ The collection descriptor of the bound document that names ROOT, into
+\ _RTHP-W-DESCRIPTOR.
+: _RTHP-UB-COLLECTION-DESCRIPTOR?  ( root -- flag )
+    _RTHP-W-DOC-COLLECTION-COUNT @ 0 ?DO
+        _RTHP-W-P @ _RTHP.COLLECTION-DESCRIPTORS-A @ _RTHP-W-DOC-DESCRIPTOR-O @ +
+            I UCSN-DESCRIPTOR-SIZE * + _RTHP-W-DESCRIPTOR !
+        _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-SOURCE-INDEX@ OVER URF.INDEX @ =
+        _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-SOURCE-GENERATION@
+            2 PICK URF.GENERATION @ = AND
+        _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-ROOT-KEY@ 2 PICK URF.KEY @ = AND
+        IF DROP -1 UNLOOP EXIT THEN
+    LOOP DROP 0 ;
+
+\ The place among the collections' controls of the control whose
+\ correlation names ROOT, or -1.
+: _RTHP-UB-ROOT-CONTROL  ( root -- index|-1 )
+    _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ _RTHP-UB-P @ _RTHP.FIELD-COUNT @ -
+    _RTHP-UB-P @ _RTHP.DIALOG-CONTROLS @ -
+    _RTHP-UB-P @ _RTHP.MENU-CONTROL-COUNT @ ?DO
+        _RTHP-UB-P @ _RTHP.CORR-A @ I RUCP-CORRELATION-SIZE * +
+        DUP RUCP-CORRELATION-ATTACHMENT@ 2 PICK URF.TOKEN @ =
+        OVER RUCP-CORRELATION-INDEX@ 3 PICK URF.INDEX @ = AND
+        OVER RUCP-CORRELATION-LIFECYCLE-GENERATION@ 3 PICK URF.GENERATION @ = AND
+        OVER RUCP-CORRELATION-SUBKEY@ 3 PICK URF.KEY @ = AND
+        SWAP RUCP-CORRELATION-SCOPE@ 0= AND IF DROP I UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+\ The place of the status field whose correlation names ROOT, or -1.
+: _RTHP-UB-ROOT-STATIC  ( root -- index|-1 )
+    _RTHP-UB-P @ _RTHP.STATIC-COUNT @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.STATIC-CORR-A @ I _RTHP-STATIC-CORR-SIZE * +
+        DUP @ 2 PICK URF.TOKEN @ =
+        OVER 8 + @ 3 PICK URF.INDEX @ = AND
+        OVER 16 + @ 3 PICK URF.GENERATION @ = AND
+        SWAP 24 + @ 2 PICK URF.KEY @ = AND IF DROP I UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+\ The status-field descriptor of _RTHP-SS-DOC that names ROOT, with its
+\ native entry.
+: _RTHP-UB-STATUS-DESCRIPTOR?  ( root -- flag )
+    _RTHP-SS-DU @ USFSN-DESCRIPTOR-SIZE / 0 ?DO
+        _RTHP-SS-DA @ I USFSN-DESCRIPTOR-SIZE * +
+        DUP USFSN-DESCRIPTOR-SOURCE-INDEX@ 2 PICK URF.INDEX @ =
+        OVER USFSN-DESCRIPTOR-SOURCE-GENERATION@ 3 PICK URF.GENERATION @ = AND
+        SWAP USFSN-DESCRIPTOR-ROOT-KEY@ 2 PICK URF.KEY @ = AND IF
+            DROP I _RTHP-SS-ENTRY? UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+\ The moved control keeps its kind, visibility, depth and rectangle.
+: _RTHP-UB-CONTROL-SAVE  ( control -- )
+    DUP _RTE-CONTROL.KIND @ _RTHP-UB-KIND !
+    DUP _RTE-CONTROL.STATE @ _RTHP-UB-STATE !
+    DUP _RTE-CONTROL.Z @ _RTHP-UB-Z !
+    DUP _RTE-CONTROL.ROW @ _RTHP-UB-ROW !
+    DUP _RTE-CONTROL.COL @ _RTHP-UB-COL !
+    DUP _RTE-CONTROL.HEIGHT @ _RTHP-UB-HEIGHT !
+    DUP _RTE-CONTROL.WIDTH @ _RTHP-UB-WIDTH !
+    DUP _RTE-CONTROL.CONTENT-ITEMS @ _RTHP-UB-ITEMS !
+    _RTE-CONTROL.CONTENT-UTF8 @ _RTHP-UB-UTF8 ! ;
+: _RTHP-UB-CONTROL-KEPT?  ( control -- flag )
+    DUP _RTE-CONTROL.KIND @ _RTHP-UB-KIND @ =
+    OVER _RTE-CONTROL.STATE @ _RTHP-UB-STATE @ XOR RTE-CONTROL-VISIBLE AND 0= AND
+    OVER _RTE-CONTROL.Z @ _RTHP-UB-Z @ = AND
+    OVER _RTE-CONTROL.ROW @ _RTHP-UB-ROW @ = AND
+    OVER _RTE-CONTROL.COL @ _RTHP-UB-COL @ = AND
+    OVER _RTE-CONTROL.HEIGHT @ _RTHP-UB-HEIGHT @ = AND
+    SWAP _RTE-CONTROL.WIDTH @ _RTHP-UB-WIDTH @ = AND ;
+
+\ Lower the moved collection ROOT alone, in its control's place: a text
+\ root's content, packed where the old content lay.
+: _RTHP-UB-COLLECTION?  ( root -- flag )
+    DUP URF.TOKEN @ _RTHP-UB-DOCUMENT? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-UB-COLLECTION-DESCRIPTOR? 0= IF DROP 0 EXIT THEN
+    _RTHP-UB-ROOT-CONTROL DUP 0< IF DROP 0 EXIT THEN _RTHP-UB-I !
+    _RTHP-UB-I @ RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ +
+        _RTHP-UB-ITEM !
+    _RTHP-UB-ITEM @ _RTE-CONTROL.KIND @ _RTHP-CONTENT-CONTROL-KIND? 0= IF
+        0 EXIT
+    THEN
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-SAVE
+    _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-FAMILY@ DUP _RTHP-W-LOWERS-FAMILY?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-USCOL-FAMILY>CONTROL-KIND DUP 0= IF DROP 0 EXIT THEN _RTHP-W-KIND !
+    _RTHP-W-CONTENT-BYTES USCOL-S-OK <> IF DROP 0 EXIT THEN    ( new )
+    _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-A @
+        _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ - _RTHP-UB-O !
+    _RTHP-UB-O @ _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-U @ +
+    SWAP _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-U @ -             ( end delta )
+    _RTHP-UB-TEXT-ROOM? 0= IF 0 EXIT THEN
+    _RTHP-UB-I @ _RTHP-W-TOTAL !
+    _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ _RTHP-UB-I @ + _RTHP-W-NEXT-ID !
+    _RTHP-UB-O @ _RTHP-W-CONTENT-CURSOR !
+    _RTHP-UB-P @ _RTHP.COLLECTION-COUNT @ 1- _RTHP-W-COLLECTIONS !
+    _RTHP-UB-P @ _RTHP.COLLECTION-ITEMS @ _RTHP-UB-ITEMS @ -
+        _RTHP-W-CONTENT-ITEMS !
+    _RTHP-UB-P @ _RTHP.COLLECTION-UTF8 @ _RTHP-UB-UTF8 @ -
+        _RTHP-W-CONTENT-UTF8 !
+    _RTHP-W-WRITE-TEXT-COLLECTION RTE-S-OK <> IF 0 EXIT THEN
+    _RTHP-W-TOTAL @ _RTHP-UB-I @ 1+ <> IF 0 EXIT THEN
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-KEPT? 0= IF 0 EXIT THEN
+    _RTHP-W-CONTENT-ITEMS @ _RTHP-UB-P @ _RTHP.COLLECTION-ITEMS !
+    _RTHP-W-CONTENT-UTF8 @ _RTHP-UB-P @ _RTHP.COLLECTION-UTF8 ! -1 ;
+
+\ The moved status field keeps its kind, visibility, depth and rectangle.
+: _RTHP-UB-STATIC-SAVE  ( static -- )
+    DUP _RTE-STATIC.KIND @ _RTHP-UB-KIND !
+    DUP _RTE-STATIC.VISIBLE @ _RTHP-UB-STATE !
+    DUP _RTE-STATIC.Z @ _RTHP-UB-Z !
+    DUP _RTE-STATIC.ROW @ _RTHP-UB-ROW !
+    DUP _RTE-STATIC.COL @ _RTHP-UB-COL !
+    DUP _RTE-STATIC.HEIGHT @ _RTHP-UB-HEIGHT !
+    _RTE-STATIC.WIDTH @ _RTHP-UB-WIDTH ! ;
+: _RTHP-UB-STATIC-KEPT?  ( static -- flag )
+    DUP _RTE-STATIC.KIND @ _RTHP-UB-KIND @ =
+    OVER _RTE-STATIC.VISIBLE @ _RTHP-UB-STATE @ = AND
+    OVER _RTE-STATIC.Z @ _RTHP-UB-Z @ = AND
+    OVER _RTE-STATIC.ROW @ _RTHP-UB-ROW @ = AND
+    OVER _RTE-STATIC.COL @ _RTHP-UB-COL @ = AND
+    OVER _RTE-STATIC.HEIGHT @ _RTHP-UB-HEIGHT @ = AND
+    SWAP _RTE-STATIC.WIDTH @ _RTHP-UB-WIDTH @ = AND ;
+
+\ Lower the moved status field ROOT alone, in its place: its text where
+\ the old lay, and its claim where each status field's lies, one apiece
+\ after the claims before them.
+: _RTHP-UB-STATUS?  ( root -- flag )
+    DUP URF.TOKEN @ _RTHP-UB-DOCUMENT? 0= IF DROP 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP-SS-P ! _RTHP-W-DOCUMENT @ _RTHP-SS-DOC !
+    _RTHP-SS-DOCUMENT? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-UB-STATUS-DESCRIPTOR? 0= IF DROP 0 EXIT THEN
+    _RTHP-UB-ROOT-STATIC DUP 0< IF DROP 0 EXIT THEN _RTHP-UB-I !
+    _RTHP-UB-I @ RTE-STATIC-SIZE * _RTHP-UB-P @ _RTHP.STATICS-A @ +
+        _RTHP-UB-ITEM !
+    _RTHP-UB-ITEM @ _RTHP-UB-STATIC-SAVE
+    \ The status fields' text lies in their order.
+    0 _RTHP-UB-I @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * +
+        DUP _RTE-STATIC.LABEL-U @ SWAP _RTE-STATIC.VALUE-U @ + +
+    LOOP DUP _RTHP-UB-O !
+    _RTHP-UB-ITEM @ _RTE-STATIC.LABEL-U @ _RTHP-UB-ITEM @ _RTE-STATIC.VALUE-U @ +
+    TUCK +                                                    ( old end )
+    _RTHP-SS-ENTRY @ USF-LABEL-BYTES@ _RTHP-SS-ENTRY @ USF-VALUE-BYTES@ +
+    ROT -                                                     ( end delta )
+    _RTHP-UB-STATIC-ROOM? 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.STATIC-COUNT @ _RTHP-UB-STATICS !
+    _RTHP-UB-P @ _RTHP.STATIC-TEXT-USED @ _RTHP-UB-STATIC-TEXT !
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @ _RTHP-UB-CLAIMS !
+    _RTHP-UB-P @ _RTHP.STATIC-LAST @ _RTHP-UB-LAST !
+    _RTHP-UB-I @ _RTHP-UB-P @ _RTHP.STATIC-COUNT !
+    _RTHP-UB-O @ _RTHP-UB-P @ _RTHP.STATIC-TEXT-USED !
+    _RTHP-UB-P @ _RTHP.STATIC-BASE-CLAIMS @ _RTHP-UB-I @ RUCL-CLAIM-SIZE * +
+        _RTHP-UB-P @ _RTHP.CLAIMS-USED !
+    0 _RTHP-SS-OVERLAP !
+    _RTHP-SS-WRITE RTE-S-OK <> IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.STATIC-COUNT @ _RTHP-UB-I @ 1+ <> IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @
+        _RTHP-UB-P @ _RTHP.STATIC-BASE-CLAIMS @ _RTHP-UB-I @ 1+ RUCL-CLAIM-SIZE * +
+        <> IF 0 EXIT THEN
+    _RTHP-UB-STATICS @ _RTHP-UB-P @ _RTHP.STATIC-COUNT !
+    _RTHP-UB-STATIC-TEXT @ _RTHP-UB-P @ _RTHP.STATIC-TEXT-USED !
+    _RTHP-UB-CLAIMS @ _RTHP-UB-P @ _RTHP.CLAIMS-USED !
+    _RTHP-UB-LAST @ _RTHP-UB-P @ _RTHP.STATIC-LAST !
+    _RTHP-UB-ITEM @ _RTHP-UB-STATIC-KEPT? ;
+
+\ Lower each root whose facts moved alone into the candidate.
+: _RTHP-UB-MOVED?  ( -- flag )
+    0 _RTHP-UB-MOVED !
+    _RTHP-UB-P @ _RTHP-ROOT-P !
+    _RTHP-UB-NEW @ _RTHP-ROOT.N @ 0 ?DO
+        I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
+        I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
+            I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
+            DUP URF.FAMILY @ URF-F-COLLECTION = IF
+                _RTHP-UB-COLLECTION?
+            ELSE _RTHP-UB-STATUS? THEN
+            0= IF 0 UNLOOP EXIT THEN
+            1 _RTHP-UB-MOVED +!
+        THEN
+    LOOP -1 ;
+
+\ ( producer -- flag ) Take the candidate from the bank on screen and lower
+\ into it the roots that moved, or leave the frame to the full lowering.
+: _RTHP-UB-CANDIDATE?  ( producer -- flag )
+    _RTHP-UB-P !
+    _RTHP-UB-FOLLOWS? 0= IF 0 EXIT THEN
+    _RTHP-UB-ROOM? 0= IF 0 EXIT THEN
+    _RTHP-UB-CONTROLS? 0= IF 0 EXIT THEN
+    _RTHP-W-SHELL-CONTROLS!
+    _RTHP-UB-STATICS? 0= IF 0 EXIT THEN
+    _RTHP-W-STRIP-INSTRUMENTS? 0= IF 0 EXIT THEN
+    _RTHP-UB-MOVED? 0= IF 0 EXIT THEN
+    _RTHP-W-WRAP-CONTROL-PLAN? 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP-SS-P ! _RTHP-SS-WRAP
+    _RTHP-UB-P @ _RTHP-STATIC-GLYPH-FIRST? 0= IF 0 EXIT THEN
+    1 _RTHP-DIAG-UNPACKED +!
+    _RTHP-UB-MOVED @ _RTHP-DIAG-UNPACKED-ROOTS +! -1 ;
+
+\ ---------------------------------------------------------------------
+\  The shadow check of the candidate from the bank on screen
+\ ---------------------------------------------------------------------
+\
+\  The candidate's fields the full lowering sets, then its controls,
+\  correlations and their text, its claims, its status fields with their
+\  correlations and text, and its plans, are kept in one block from the
+\  heap: thirteen item lengths, the kept fields, room for the full
+\  lowering's fields, then the kept spans in order.
+
+VARIABLE _RTHP-UB-SH-A
+VARIABLE _RTHP-UB-SH-U
+VARIABLE _RTHP-UB-SH-KEPT
+35 CONSTANT _RTHP-UB-FIELDS
+13 CONSTANT _RTHP-UB-SH-ITEMS
+
+\ The address of the candidate's field INDEX.
+: _RTHP-UB-FIELD  ( index -- a )
+    _RTHP-UB-P @ SWAP CASE
+         0 OF _RTHP.CONTROL-COUNT ENDOF
+         1 OF _RTHP.MENU-CONTROL-COUNT ENDOF
+         2 OF _RTHP.COLLECTION-COUNT ENDOF
+         3 OF _RTHP.COLLECTION-ITEMS ENDOF
+         4 OF _RTHP.COLLECTION-UTF8 ENDOF
+         5 OF _RTHP.SOURCE-TEXT-USED ENDOF
+         6 OF _RTHP.CLAIMS-USED ENDOF
+         7 OF _RTHP.MENU-CLAIMS ENDOF
+         8 OF _RTHP.FIELD-COUNT ENDOF
+         9 OF _RTHP.FIELD-ITEMS ENDOF
+        10 OF _RTHP.FIELD-UTF8 ENDOF
+        11 OF _RTHP.FIELD-BASE-CONTROLS ENDOF
+        12 OF _RTHP.FIELD-BASE-TEXT ENDOF
+        13 OF _RTHP.FIELD-BASE-CLAIMS ENDOF
+        14 OF _RTHP.DIALOG-COUNT ENDOF
+        15 OF _RTHP.DIALOG-CONTROLS ENDOF
+        16 OF _RTHP.DIALOG-UTF8 ENDOF
+        17 OF _RTHP.DIALOG-BASE-CONTROLS ENDOF
+        18 OF _RTHP.DIALOG-BASE-TEXT ENDOF
+        19 OF _RTHP.DIALOG-BASE-CLAIMS ENDOF
+        20 OF _RTHP.SHELL-CONTROLS ENDOF
+        21 OF _RTHP.BASE-CLAIMS-USED ENDOF
+        22 OF _RTHP.INSTRUMENT-CLAIM-COUNT ENDOF
+        23 OF _RTHP.INSTRUMENT-COUNT ENDOF
+        24 OF _RTHP.INSTRUMENT-REGION-COUNT ENDOF
+        25 OF _RTHP.INSTRUMENT-UNITS-USED ENDOF
+        26 OF _RTHP.INSTRUMENT-LAST ENDOF
+        27 OF _RTHP.INSTRUMENT-LAST-REGION ENDOF
+        28 OF _RTHP.STATIC-BASE-CLAIMS ENDOF
+        29 OF _RTHP.STATIC-COUNT ENDOF
+        30 OF _RTHP.STATIC-TEXT-USED ENDOF
+        31 OF _RTHP.STATIC-LAST ENDOF
+        32 OF _RTHP.OMITTED-GRAPHS-USED ENDOF
+        33 OF _RTHP.SERIES-SAMPLES-USED ENDOF
+        34 OF DROP _RTHP-W-GLYPH-FIRST ENDOF
+    ENDCASE ;
+
+\ The candidate's fields, one cell apiece, at A.
+: _RTHP-UB-FIELDS!  ( a -- )
+    _RTHP-UB-FIELDS 0 DO I _RTHP-UB-FIELD @ OVER I 8 * + ! LOOP DROP ;
+
+\ The candidate's span ITEM, from 1: its controls, correlations and their
+\ text, claims, status fields with their correlations and text, and its
+\ control, status field, instrument and series plans with the series'
+\ counts.
+: _RTHP-UB-SH-SPAN  ( item -- a u )
+    _RTHP-UB-P @ SWAP CASE
+         1 OF DUP _RTHP.CONTROLS-A @
+                SWAP _RTHP.CONTROL-COUNT @ RTE-CONTROL-SIZE * ENDOF
+         2 OF DUP _RTHP.CORR-A @
+                SWAP _RTHP.CONTROL-COUNT @ RUCP-CORRELATION-SIZE * ENDOF
+         3 OF DUP _RTHP.SOURCE-TEXT-A @ SWAP _RTHP.SOURCE-TEXT-USED @ ENDOF
+         4 OF DUP _RTHP.CLAIMS-A @ SWAP _RTHP.CLAIMS-USED @ ENDOF
+         5 OF DUP _RTHP.STATICS-A @
+                SWAP _RTHP.STATIC-COUNT @ RTE-STATIC-SIZE * ENDOF
+         6 OF DUP _RTHP.STATIC-CORR-A @
+                SWAP _RTHP.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE * ENDOF
+         7 OF DUP _RTHP.STATIC-TEXT-A @ SWAP _RTHP.STATIC-TEXT-USED @ ENDOF
+         8 OF _RTHP.CONTROL-PLAN RTE-CONTROL-PLAN-SIZE ENDOF
+         9 OF _RTHP.STATIC-PLAN RTE-STATIC-PLAN-SIZE ENDOF
+        10 OF _RTHP.INSTRUMENT-PLAN RTE-INSTRUMENT-PLAN-SIZE ENDOF
+        11 OF _RTHP.SERIES-COUNT 64 ENDOF
+        12 OF _RTHP.SERIES-PLAN RTE-SERIES-PLAN-SIZE ENDOF
+    ENDCASE ;
+
+\ Keep the candidate taken from the bank on screen in the stage's block.
+: _RTHP-UB-SH-KEEP  ( -- )
+    0 _RTHP-UB-SH-KEPT !
+    _RTHP-UB-SH-ITEMS 8 * _RTHP-UB-FIELDS 16 * +
+    _RTHP-UB-SH-ITEMS 1 DO I _RTHP-UB-SH-SPAN NIP + LOOP
+    _RTHP-UB-SH-A _RTHP-UB-SH-U FSHD-GROW ?DUP 0= IF FSHD-SKIP EXIT THEN
+    _RTHP-UB-FIELDS 8 * OVER !
+    DUP _RTHP-UB-SH-ITEMS 8 * + _RTHP-UB-FIELDS!
+    DUP _RTHP-UB-SH-ITEMS 8 * _RTHP-UB-FIELDS 16 * + +           ( block cursor )
+    _RTHP-UB-SH-ITEMS 1 DO
+        I _RTHP-UB-SH-SPAN DUP 4 PICK I 8 * + !
+        >R OVER R@ MOVE R> +
+    LOOP 2DROP -1 _RTHP-UB-SH-KEPT ! ;
+
+\ Compare the full lowering's candidate with the one kept.
+: _RTHP-UB-SH-COMPARE  ( -- )
+    _RTHP-UB-SH-KEPT @ 0= IF EXIT THEN
+    0 _RTHP-UB-SH-KEPT !
+    _RTHP-W-DRAW @ FSHD-DRAW !
+    _RTHP-UB-SH-A @
+    DUP _RTHP-UB-SH-ITEMS 8 * + _RTHP-UB-FIELDS 8 * + _RTHP-UB-FIELDS!
+    DUP _RTHP-UB-SH-ITEMS 8 * + _RTHP-UB-FIELDS 8 * 2DUP + OVER
+        0 FSHD-STAGE-UNPACK FSHD-SAME? DROP
+    DUP _RTHP-UB-SH-ITEMS 8 * _RTHP-UB-FIELDS 16 * + +           ( block cursor )
+    _RTHP-UB-SH-ITEMS 1 DO
+        DUP 2 PICK I 8 * + @
+        I _RTHP-UB-SH-SPAN I FSHD-STAGE-UNPACK FSHD-SAME? DROP
+        OVER I 8 * + @ +
+    LOOP 2DROP ;
+
 : _RTHP-BUILD-OBSERVED-CANDIDATE
   ( snapshot status draw producer -- rte-status built? )
     _RTHP-W-P ! _RTHP-W-DRAW ! _RTHP-W-STATUS ! _RTHP-W-SNAP !
@@ -9680,24 +10379,17 @@ VARIABLE _RTHP-ROOT-BYTES
     _RTHP-W-P @ _RTHP-SELECT-NEXT-IDS?
     _RTPROF-PH-OTHER _RTPROF-MARK
         0= IF RTE-S-INVALID 0 EXIT THEN
-    _RTPROF-PH-CONTROL-PLAN _RTPROF-MARK
-    _RTHP-W-P @ _RTHP-BUILD-CONTROLS
-    _RTPROF-PH-OTHER _RTPROF-MARK
-    DUP _RTHP-W-STATUS !
-    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
-    _RTPROF-PH-CLAIM-PLAN _RTPROF-MARK
-    _RTHP-W-P @ _RTHP-BUILD-CLAIMS?
-    _RTPROF-PH-OTHER _RTPROF-MARK
-        0= IF RTE-S-INVALID 0 EXIT THEN
-    _RTHP-W-BUILD-OPTIONAL-FIELDS
-    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
-    _RTHP-W-BUILD-OPTIONAL-DIALOGS
-    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
-    _RTHP-W-SHELL-CONTROLS!
-    _RTHP-W-BUILD-OPTIONAL-INSTRUMENTS
-    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
-    _RTHP-W-BUILD-OPTIONAL-STATICS
-    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+    \ The candidate from the bank on screen, where it can be taken; with the
+    \ shadow check on, the frame is lowered in full as well and the two
+    \ candidates are compared.
+    0 _RTHP-UB-SH-KEPT !
+    _RTHP-W-P @ _RTHP-UB-CANDIDATE? DUP IF
+        FSHD? IF DROP _RTHP-UB-SH-KEEP 0 THEN
+    THEN
+    0= IF
+        _RTHP-W-LOWER DUP RTE-S-OK <> IF 0 EXIT THEN DROP
+        _RTHP-UB-SH-COMPARE
+    THEN
     _RTHP-W-P @ _RTHP-PRESENT-PARTS _RTHP-W-HAD !
     \ A request to build alone holds for one build.
     _RTHP-W-SHELL-MODE? 0 _RTHP-W-ALONE !
@@ -12210,14 +12902,6 @@ VARIABLE _RTHP-ROOT-K-INDEX
 VARIABLE _RTHP-ROOT-K-GEN
 VARIABLE _RTHP-ROOT-K-KEY
 
-: _RTHP-ROOT-FIND-BLOCK  ( generation -- block|0 )
-    DUP 0= IF EXIT THEN
-    DUP 1 _RTHP-ROOT.GEN @ = IF DROP 1 EXIT THEN
-    2 _RTHP-ROOT.GEN @ = IF 2 ELSE 0 THEN ;
-
-: _RTHP-ROOT-RECORD-AT  ( index block -- record )
-    _RTHP-ROOT.A @ SWAP URF-SIZE * + ;
-
 : _RTHP-ROOT-IS?  ( record -- flag )
     DUP URF.TOKEN @ _RTHP-ROOT-K-TOKEN @ <> IF DROP 0 EXIT THEN
     _RTHP-ROOT-K-FAMILY @ _RTHP-ROOT-K-SOURCE @ _RTHP-ROOT-K-INDEX @
@@ -14340,21 +15024,11 @@ VARIABLE _RTHP-D-PLACE-ORD
 \ they name the same roots in the same order and the candidates carried
 \ the same parts.  _RTHP-ROOT-P names the producer.
 : _RTHP-D-ROOTS-OF?  ( old-generation new-generation -- flag )
-    0 _RTHP-D-ROOTS-OLD ! 0 _RTHP-D-ROOTS-NEW !
     0 _RTHP-D-ROOT-LAST ! 0 _RTHP-D-ROOT-HINT !
-    2DUP = IF 2DROP 0 EXIT THEN
-    _RTHP-ROOT-FIND-BLOCK SWAP _RTHP-ROOT-FIND-BLOCK          ( new old )
-    2DUP 0= SWAP 0= OR IF 2DROP 0 EXIT THEN
-    _RTHP-D-ROOTS-OLD ! _RTHP-D-ROOTS-NEW !
-    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.N @
-        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ <> IF 0 EXIT THEN
+    _RTHP-ROOT-PAIR? >R _RTHP-D-ROOTS-NEW ! _RTHP-D-ROOTS-OLD !
+    R> 0= IF 0 EXIT THEN
     _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @
-        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ <> IF 0 EXIT THEN
-    _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ 0 ?DO
-        I _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-RECORD-AT URF-IDENTITY-SIZE
-        I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT URF-IDENTITY-SIZE
-        COMPARE IF 0 UNLOOP EXIT THEN
-    LOOP -1 ;
+        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ = ;
 
 \ Those of the bank on screen's snapshot and the pending bank's.
 : _RTHP-D-ROOTS?  ( -- flag )
