@@ -1661,7 +1661,23 @@ frame before the change driver.
   caller could leave without banks go, and so does 9a.2's capture into
   scratch, which nothing on the frame's path calls. The shadow check's full
   capture and the full refresh grow the same way. It sends what it sent
-  before.
+  before. **Done** on 2026-10-30 (53ab9ef7, 689c3793, 64aa38fb). Desk's
+  storage at load falls by 20,044,256 bytes, and its setup takes 114,240
+  bytes from its memory source for RUHA's first block, which its uninstall
+  gives back. In the canonical journey the block grew 16 times, to 702,632
+  bytes, and the last snapshot used 107,042 of them for six documents. A
+  growth doubles the short families' spans, since a capture answers
+  CAPACITY without saying how much it needs, and builds the draw again,
+  reusing each clean document's slices. The builders of the collection and
+  data-graphics captures lie in the block too, beside the spans each
+  capture proves with its builder, so each proof stays one query: with the
+  builders still in RUHA's record, the snapshot's span-set proofs rose from
+  0.05 to 0.18 million steps a typed letter. A typed letter's frame builds
+  in 2.02 million steps, the snapshot in 0.66, as at e5908dc7, sending the
+  same 18 DELTAs and bytes. With the shadow check the typing run made 3,271
+  comparisons and the canonical journey 14,491, 1,176 of them the snapshot
+  stage's, without a difference; the journey committed 49 DELTAs, 37
+  STARTs, 36 CONTINUEs and one NONE, as at 9a.1, and passed in safe mode.
 - **9c. The rest of the DELTA.** The other changes the terminal accepts in
   a DELTA go through the change driver as well, such as controls that come
   or go within what a DELTA may carry. The whole-screen comparison remains
@@ -1701,23 +1717,24 @@ Desk's memory source, 13.5 MB of it its arena, and the shell about 5 MB: two
 2026-10-18). With one application, in part 0, the producer held 14.3 to
 15.4 MiB and the shell 4.2 to 4.4 MiB. The rich Desktop machine has 384 MiB
 of external memory, and about 178 MiB of its general partition is free once
-the system and Desk have loaded (`akashic_tui.py`). RUHA's banks are fixed
-by Desk when it starts, at 19.1 MiB, and its snapshots used 12 to 40 KiB of
-them in part 0's runs.
+the system and Desk have loaded (`akashic_tui.py`). Until 9a.4 Desk carved
+RUHA's banks when it started, 19.1 MiB, and its snapshots used 12 to 40 KiB
+of them in part 0's runs.
 
-Part 9 frees RUHA's banks (9a) and the shell's work space (9b.3). 9b.2
-moved the shell's two banks into the screen producer's extension blocks,
-which grow by the banks' rule from a part 40 bytes smaller; in the canonical
-journey each came to 236,536 bytes. 9b.3.2 replaced the work space with a
-scratch block the producer owns, which grew to 389,208 bytes in that
-journey, and moved the glyph slots that made up most of the work space
-into the producer's glyph banks, which shell mode had left unused. Part 9 also adds the projection's record
-of what each element last projected, sized from the elements on the screen,
-and the pending change set, sized from one frame's changes. Captures go into
-scratch, which grows to what one build needs; a full build's captures came
-to 12 to 40 KiB in part 0's runs. Every block grows from Desk's memory
-source to what the screen needs and half again, as the engine's does. Each
-part reports what it adds or frees.
+Part 9 frees RUHA's fixed banks (9a.4) and the shell's work space (9b.3).
+9a.4 has RUHA take one block from Desk's memory source, which grows to what
+its snapshots need and up to as much again: in the canonical journey it came
+to 702,632 bytes, its last snapshot using 107,042. 9b.2 moved the shell's
+two banks into the screen producer's extension blocks, which grow by the
+banks' rule from a part 40 bytes smaller; in the canonical journey each came
+to 236,536 bytes. 9b.3.2 replaced the work space with a scratch block the
+producer owns, which grew to 389,208 bytes in that journey, and moved the
+glyph slots that made up most of the work space into the producer's glyph
+banks, which shell mode had left unused. Part 9 also adds the projection's
+record of what each element last projected, sized from the elements on the
+screen, and the pending change set, sized from one frame's changes. The
+other blocks grow from Desk's memory source to what the screen needs and
+half again, as the engine's does. Each part reports what it adds or frees.
 
 ## Order and checks
 
