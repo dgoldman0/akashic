@@ -664,7 +664,6 @@ def test_bitmap_queries_use_shared_logical_bit_bounds():
     assert "_VMP-C.BN" not in bitset_view
     assert "BITSET-BYTES?" in word_body("_VMP-GEOMETRY?")
     for name, shared_word in (
-        ("_VMP-BIT-FREE?", "BITSET-TEST?"),
         ("_VMP-BMAP-ALL-CLEAR?", "BITSET-ALL-CLEAR?"),
         ("_VMP-BMAP-ALL-SET?", "BITSET-ALL-SET?"),
     ):
@@ -673,7 +672,15 @@ def test_bitmap_queries_use_shared_logical_bit_bounds():
         assert "0= IF DROP FALSE" in body
     assert "_VMP-BMAP-ALL-CLEAR?" in word_body("_VMP-RUN-FREE?")
     assert "_VMP-BMAP-ALL-SET?" in word_body("_VMP-RUN-ALLOCATED?")
-    assert "_VMP-BIT-FREE?" in word_body("_VMP-FIND-FREE")
+    # First fit keeps its policy (data start, run length) and leaves the
+    # checked scan to one shared run search instead of a per-sector query.
+    find_free = word_body("_VMP-FIND-FREE")
+    assert "_VMP-BITSET" in find_free
+    assert "_VMP-C.DSTART" in find_free
+    assert "BITSET-FIND-CLEAR-RUN?" in find_free
+    assert " DO" not in find_free
+    assert "_VMP-BIT-FREE?" not in source
+    assert "_VMFF-" not in source
     assert "_VMP-BMAP-ALL-SET?" in word_body("_VMP-INIT")
     assert "_VMEV-START" not in source
     assert "_VMEV-COUNT" not in source
@@ -809,11 +816,16 @@ def test_deferred_frees_validate_all_ranges_before_publication():
 
     assert "_VMP-C.BN" in apply_deferred
     assert "_VMP-C.PFREE" in apply_deferred
-    assert "INVERT AND" in apply_deferred
-    assert apply_deferred.index("INVERT AND") < apply_deferred.index(
+    assert "_VMPA-CTX" not in source
+    # Pending bits clear a cell at a time, then the map empties and only
+    # then do the pending flag drop and the bitmap become dirty.
+    assert "1 CELLS +LOOP" in apply_deferred
+    assert apply_deferred.index("INVERT") < apply_deferred.index(
+        "@ AND SWAP !"
+    ) < apply_deferred.index("1 CELLS +LOOP") < apply_deferred.index(
         "_VMP-SECTOR * 0 FILL"
-    ) < apply_deferred.index("0 _VMPA-CTX @ _VMP-C.DFREE") < apply_deferred.index(
-        "-1 _VMPA-CTX @ _VMP-C.DBMAP"
+    ) < apply_deferred.index("0 OVER _VMP-C.DFREE + !") < apply_deferred.index(
+        "-1 SWAP _VMP-C.DBMAP + !"
     )
     first_bmap = settle.index("_VMP-PUBLISH-BMAP-CACHE")
     directory = settle.index("_VMP-PUBLISH-DIR-CACHE")
@@ -929,11 +941,94 @@ def test_constructor_adopts_maximum_marker1_geometry_and_bitmap_maps():
         f'_MAX-CTX _VMP-PFREE-BITSET {last_sector} '
         'BITSET-TEST? AND _MAX-CHECK',
         '_MAX-CTX _VMP-APPLY-DEFERRED-FREES',
-        f'{last_sector} _MAX-CTX _VMP-BIT-FREE? _MAX-CHECK',
+        f'{last_sector} 1 _MAX-CTX _VMP-RUN-FREE? _MAX-CHECK',
         f'_MAX-CTX _VMP-PFREE-BITSET {last_sector} '
         'BITSET-TEST? AND 0= _MAX-CHECK',
         '_MAX-OK @ IF ." MAX-GEOMETRY-OK" THEN',
     ], "MAX-GEOMETRY-OK", disk_image=image)
+
+
+def _first_fit(used, start, total, count):
+    """Per-sector first-fit reference: the old search, written in Python."""
+    run = 0
+    for sector in range(start, total):
+        run = 0 if used[sector] else run + 1
+        if run >= count:
+            return sector - count + 1
+    return -1
+
+
+def test_first_fit_and_deferred_frees_match_per_sector_reference():
+    """First fit and deferred frees agree with per-sector models.
+
+    The volume's sector count is not a whole number of bitmap bytes, its
+    data start is not byte-aligned, and the gaps cross byte and cell edges,
+    sit across a full clear byte, and end exactly at the last sector.
+    """
+    total = 2051
+    image = build_disk_image([], total_sectors=total)
+    dstart = BMAP_START + 1 + DIR_SECTORS
+    used = [True] * total
+    lines = [
+        'VARIABLE _FF-OK -1 _FF-OK !',
+        ': _FF-CHECK  ( flag -- ) 0= IF 0 _FF-OK ! THEN ;',
+        'T-ARENA T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0= _FF-CHECK',
+        '_V V.BCTX @ CONSTANT _C',
+        f'_C _VMP-C.DSTART + @ {dstart} = _FF-CHECK',
+        f'{dstart} {total - dstart} _C _VMP-RUN-SET 0= _FF-CHECK',
+    ]
+
+    def mark(start, count, now_used):
+        word = "_VMP-RUN-SET" if now_used else "_VMP-RUN-CLR"
+        lines.append(f'{start} {count} _C {word} 0= _FF-CHECK')
+        for sector in range(start, start + count):
+            used[sector] = now_used
+
+    def expect_fits(counts):
+        for count in counts:
+            sector = _first_fit(used, dstart, total, count)
+            lines.append(f'{count} _C _VMP-FIND-FREE {sector} = _FF-CHECK')
+
+    gaps = [(21, 3), (30, 5), (100, 16), (total - 6, 6)]
+    for start, count in gaps:
+        mark(start, count, False)
+    expect_fits([1, 3, 4, 5, 6, 16, 17])
+    mark(100, 16, True)
+    expect_fits([1, 6, 7])
+    mark(21, 3, True)
+    mark(30, 5, True)
+    expect_fits([1, 6])
+    mark(total - 6, 6, True)
+    expect_fits([1])
+
+    # Pending frees in the first cell, across a cell edge and in the final,
+    # partly logical cell clear only their own bits.
+    freed = [(21, 1), (63, 2), (total - 1, 1)]
+    for start, count in freed:
+        lines.append(f'{start} {count} _C _VMP-RUN-DEFER-FREE 0= _FF-CHECK')
+    lines += [
+        '21 1 _C _VMP-RUN-FREE? 0= _FF-CHECK',
+        '0 _C _VMP-C.DBMAP + !',
+        '_C _VMP-APPLY-DEFERRED-FREES',
+    ]
+    for start, count in freed:
+        for sector in range(start, start + count):
+            used[sector] = False
+    for sector in (20, 21, 22, 62, 63, 64, 65, total - 2, total - 1):
+        flag = "" if not used[sector] else " 0="
+        lines.append(f'{sector} 1 _C _VMP-RUN-FREE?{flag} _FF-CHECK')
+    lines += [
+        '_C _VMP-BITSET BITSET-COUNT-SET? _FF-CHECK',
+        f'{sum(used)} = _FF-CHECK',
+        '_C _VMP-PFREE-BITSET BITSET-COUNT-SET? _FF-CHECK 0= _FF-CHECK',
+        '_C _VMP-C.DFREE + @ 0= _FF-CHECK',
+        '_C _VMP-C.DBMAP + @ 0<> _FF-CHECK',
+    ]
+    expect_fits([1, 2, 3])
+    lines.append('_FF-OK @ IF ." FIRST-FIT-OK" THEN')
+    check("first fit and deferred frees match per-sector reference",
+          lines, "FIRST-FIT-OK", disk_image=image)
 
 
 def test_constructor_rejects_malformed_media():
@@ -1107,11 +1202,11 @@ def test_delete_and_shrink_defer_frees_past_directory_durability():
         'SWAP _VMP-C.DDIR + @ 0<> AND AND',
         'T-VMP-NEW CONSTANT _VR',
         'S" /hello.txt" _VR VFS-RESOLVE 0= AND',
-        '_OLDSEC _VR V.BCTX @ _VMP-BIT-FREE? 0= AND',
+        '_OLDSEC 1 _VR V.BCTX @ _VMP-RUN-FREE? 0= AND',
         '_V VFS-SYNC 0= AND',
         'T-VMP-NEW CONSTANT _VR2',
         'S" /hello.txt" _VR2 VFS-RESOLVE 0= AND',
-        '_OLDSEC _VR2 V.BCTX @ _VMP-BIT-FREE? AND',
+        '_OLDSEC 1 _VR2 V.BCTX @ _VMP-RUN-FREE? AND',
         'IF ." DELETE-DEFERRED-FREE-OK" THEN',
     ], "DELETE-DEFERRED-FREE-OK", storage_faults=flush_fault)
 
@@ -1129,12 +1224,12 @@ def test_delete_and_shrink_defer_frees_past_directory_durability():
         'T-VMP-NEW CONSTANT _VR',
         'S" /data.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
         '_RFD VFS-SIZE 512 = AND',
-        '_OLDSEC 1+ _VR V.BCTX @ _VMP-BIT-FREE? 0= AND',
+        '_OLDSEC 1+ 1 _VR V.BCTX @ _VMP-RUN-FREE? 0= AND',
         '_V VFS-SYNC 0= AND',
         'T-VMP-NEW CONSTANT _VR2',
         'S" /data.bin" VFS-FF-READ _VR2 VFS-OPEN? THROW CONSTANT _RFD2',
         '_RFD2 VFS-SIZE 512 = AND',
-        '_OLDSEC 1+ _VR2 V.BCTX @ _VMP-BIT-FREE? AND',
+        '_OLDSEC 1+ 1 _VR2 V.BCTX @ _VMP-RUN-FREE? AND',
         'IF ." SHRINK-DEFERRED-FREE-OK" THEN',
     ], "SHRINK-DEFERRED-FREE-OK", storage_faults=flush_fault)
 
@@ -1410,7 +1505,7 @@ def test_second_bitmap_sector_sync_and_remount():
         '_VR VFS-SYNC 0= AND',
         'T-VMP-NEW CONSTANT _VR2',
         'S" /high.bin" _VR2 VFS-RESOLVE 0= AND',
-        '4115 _VR2 V.BCTX @ _VMP-BIT-FREE? AND',
+        '4115 1 _VR2 V.BCTX @ _VMP-RUN-FREE? AND',
         'IF ." HIGH-ALLOC-OK" THEN',
     ], "HIGH-ALLOC-OK", disk_image=image)
 
@@ -1658,6 +1753,7 @@ def main():
     test_constructor_propagates_checked_read_failure()
     test_constructor_adopts_volume_geometry()
     test_constructor_adopts_maximum_marker1_geometry_and_bitmap_maps()
+    test_first_fit_and_deferred_frees_match_per_sector_reference()
     test_constructor_rejects_malformed_media()
     test_constructor_reports_core_arena_exhaustion()
     test_final_directory_slot_mounts_without_pair_loop_wrap()

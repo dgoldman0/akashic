@@ -17,12 +17,20 @@ rounded byte span, determines which bits belong to the set.
 | `BITSET-RANGE-CLEAR?` | `( buffer bit-count first count -- valid? )` | Clear a complete validated range. |
 | `BITSET-COUNT-SET?` | `( buffer bit-count -- set-count valid? )` | Count set logical bits, ignoring final-byte padding. |
 | `BITSET-FIND-CLEAR?` | `( buffer bit-count first -- bit found? valid? )` | Find the first clear bit at or after `first`. |
+| `BITSET-FIND-CLEAR-RUN?` | `( buffer bit-count first count -- bit found? valid? )` | Find the lowest bit at or after `first` that starts `count` consecutive clear bits below the logical count. |
 
 Counts use the ordinary Forth convention of a nonnegative signed cell. A null
 buffer is valid only when the logical bit count is zero. Empty ranges at any
 index through the logical end are valid; both universal range predicates are
-true for an empty range. `BITSET-FIND-CLEAR?` returns `0 false true` when a
-valid search has no result and `0 false false` for invalid geometry.
+true for an empty range. Both searches return `0 false true` when a valid
+search has no result and `0 false false` for invalid geometry.
+`BITSET-FIND-CLEAR-RUN?` checks the view and `first` once. While it looks for
+a clear bit it passes over a byte-aligned byte whose eight bits are all set
+in one comparison, and while it measures a run it does the same for a byte
+whose bits are all clear, so a long stretch of allocated bits is read a byte
+at a time. A run never extends past the logical count, even over clear
+padding bits. A zero `count` finds the empty run at `first`; a negative
+`count` is invalid.
 
 The caller must provide at least the successful `BITSET-BYTES?` byte span at
 `buffer`. Invalid queries return zero in their value field and a false validity

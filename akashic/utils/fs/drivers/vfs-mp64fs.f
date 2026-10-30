@@ -190,10 +190,6 @@ VARIABLE _VMP-NL
 : _VMP-BITSET  ( ctx -- bitmap logical-bits )
     DUP _VMP-C.BMAP + SWAP _VMP-C.TOTAL + @ ;
 
-: _VMP-BIT-FREE?  ( sector ctx -- flag )
-    _VMP-BITSET ROT BITSET-TEST?
-    0= IF DROP FALSE EXIT THEN 0= ;
-
 : _VMP-BMAP-ALL-SET?  ( start count ctx -- flag )
     _VMP-BITSET 2SWAP BITSET-ALL-SET?
     0= IF DROP FALSE THEN ;
@@ -202,31 +198,14 @@ VARIABLE _VMP-NL
     _VMP-BITSET 2SWAP BITSET-ALL-CLEAR?
     0= IF DROP FALSE THEN ;
 
-\ Find a contiguous run of free sectors in the cached bitmap.
-VARIABLE _VMFF-NEED
-VARIABLE _VMFF-START
-VARIABLE _VMFF-LEN
-VARIABLE _VMFF-CTX
-VARIABLE _VMFF-TOTAL
-
+\ First fit: the lowest data sector that starts COUNT free sectors in the
+\ cached bitmap, or -1.  Callers ask for at least one sector.  The bitset
+\ search checks the view once and passes full bitmap bytes eight sectors
+\ at a time, so the used sectors ahead of the first gap cost little.
 : _VMP-FIND-FREE  ( count ctx -- sector | -1 )
-    _VMFF-CTX !  _VMFF-NEED !
-    _VMFF-CTX @ _VMP-C.DSTART + @  _VMFF-START !
-    0 _VMFF-LEN !
-    _VMFF-CTX @ _VMP-C.TOTAL + @   _VMFF-TOTAL !
-    -1
-    _VMFF-TOTAL @  _VMFF-CTX @ _VMP-C.DSTART + @  DO
-        I _VMFF-CTX @  _VMP-BIT-FREE? IF
-            _VMFF-LEN @ 0= IF  I _VMFF-START !  THEN
-            1 _VMFF-LEN +!
-            _VMFF-LEN @ _VMFF-NEED @ >= IF
-                DROP _VMFF-START @
-                LEAVE
-            THEN
-        ELSE
-            0 _VMFF-LEN !
-        THEN
-    LOOP ;
+    SWAP >R DUP _VMP-BITSET ROT _VMP-C.DSTART + @ R>
+    BITSET-FIND-CLEAR-RUN? 0= IF 2DROP -1 EXIT THEN
+    0= IF DROP -1 THEN ;
 
 : _VMP-RUN-FREE?  ( start count ctx -- flag )
     DUP _VMP-C.DSTART + @ 3 PICK > IF
@@ -260,20 +239,20 @@ VARIABLE _VMFF-TOTAL
     NIP NIP
     -1 SWAP _VMP-C.DFREE + ! 0 ;
 
-VARIABLE _VMPA-CTX
-
+\ Both maps start at cell offsets in the context, which ARENA-ALLOT? keeps
+\ cell-aligned, and span BN whole sectors, so the pending bits clear a cell
+\ at a time.  A cell with no pending free leaves its BMAP cell untouched.
 : _VMP-APPLY-DEFERRED-FREES  ( ctx -- )
     DUP _VMP-C.DFREE + @ 0= IF DROP EXIT THEN
-    _VMPA-CTX !
-    _VMPA-CTX @ _VMP-C.BN + @ _VMP-SECTOR * 0 ?DO
-        _VMPA-CTX @ _VMP-C.BMAP + I + DUP C@
-        _VMPA-CTX @ _VMP-C.PFREE + I + C@ INVERT AND
-        SWAP C!
-    LOOP
-    _VMPA-CTX @ _VMP-C.PFREE +
-    _VMPA-CTX @ _VMP-C.BN + @ _VMP-SECTOR * 0 FILL
-    0 _VMPA-CTX @ _VMP-C.DFREE + !
-    -1 _VMPA-CTX @ _VMP-C.DBMAP + ! ;
+    DUP _VMP-C.BMAP + OVER _VMP-C.PFREE +       ( ctx bmap pfree )
+    2 PICK _VMP-C.BN + @ _VMP-SECTOR * 0 ?DO
+        DUP I + @ ?DUP IF
+            INVERT 2 PICK I + TUCK @ AND SWAP !
+        THEN
+    1 CELLS +LOOP
+    NIP OVER _VMP-C.BN + @ _VMP-SECTOR * 0 FILL
+    0 OVER _VMP-C.DFREE + !
+    -1 SWAP _VMP-C.DBMAP + ! ;
 
 VARIABLE _VMZR-START
 VARIABLE _VMZR-COUNT

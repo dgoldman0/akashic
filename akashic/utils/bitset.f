@@ -129,3 +129,63 @@ REQUIRE uint-range.f
         THEN
     LOOP
     ROT DROP TRUE ;
+
+\ The run search's two scans read a view that is already checked.  The
+\ clear-bit scan passes a byte-aligned byte whose eight bits are all set
+\ in one comparison; the run-end scan does the same for a byte whose bits
+\ are all clear.  Neither moves past its limit, so bits at or beyond the
+\ logical count are never read as members.
+
+\ Lowest clear bit in [I, BIT-COUNT), or BIT-COUNT when none remains.
+: _BITSET-NEXT-CLEAR  ( buffer bit-count i -- i' )
+    BEGIN 2DUP > WHILE
+        DUP 7 AND 0= IF 2 PICK OVER 3 RSHIFT + C@ 0xFF = ELSE FALSE THEN
+        IF
+            2DUP - 8 MIN +
+        ELSE
+            2 PICK OVER _BITSET-RAW@ 0= IF NIP NIP EXIT THEN
+            1+
+        THEN
+    REPEAT
+    DROP NIP ;
+
+\ Lowest set bit in [I, LIMIT), or LIMIT when every bit there is clear.
+: _BITSET-CLEAR-END  ( buffer limit i -- end )
+    BEGIN 2DUP > WHILE
+        DUP 7 AND 0= IF 2 PICK OVER 3 RSHIFT + C@ 0= ELSE FALSE THEN
+        IF
+            2DUP - 8 MIN +
+        ELSE
+            2 PICK OVER _BITSET-RAW@ IF NIP NIP EXIT THEN
+            1+
+        THEN
+    REPEAT
+    DROP NIP ;
+
+\ The lowest bit at or after FIRST that starts COUNT consecutive clear bits,
+\ all below BIT-COUNT.  The view and FIRST are checked once, as
+\ BITSET-FIND-CLEAR? checks them, before any byte is read.  A zero COUNT
+\ finds the empty run at FIRST; a negative COUNT is invalid.
+: BITSET-FIND-CLEAR-RUN?  ( buffer bit-count first count -- bit found? valid? )
+    DUP 0< IF 2DROP 2DROP 0 FALSE FALSE EXIT THEN
+    >R
+    2 PICK 2 PICK 2 PICK 0 _BITSET-RANGE-VALID? 0= IF
+        R> DROP 2DROP DROP 0 FALSE FALSE EXIT
+    THEN
+    R@ 0= IF R> DROP NIP NIP TRUE TRUE EXIT THEN
+    BEGIN
+        >R 2DUP R> _BITSET-NEXT-CLEAR          ( buffer bit-count c )
+        2DUP > WHILE
+        \ The limit is c plus the smaller of COUNT and the bits left, so
+        \ the sum c + COUNT, which could pass the largest cell, is never
+        \ formed.
+        2DUP - R@ MIN OVER +                    ( buffer bit-count c limit )
+        3 PICK SWAP 2 PICK _BITSET-CLEAR-END    ( buffer bit-count c end )
+        2DUP SWAP - R@ < 0= IF
+            DROP NIP NIP R> DROP TRUE TRUE EXIT
+        THEN
+        \ A shorter run ends at a set bit, and the search resumes past
+        \ it; a run that reached BIT-COUNT leaves nothing after it.
+        NIP 2DUP > IF 1+ THEN
+    REPEAT
+    R> DROP 2DROP DROP 0 FALSE TRUE ;
