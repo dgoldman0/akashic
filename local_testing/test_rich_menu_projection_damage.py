@@ -105,7 +105,9 @@ def harness(request):
 
 def test_closed_menu_and_residue_only_changes_survive_clean_cell_damage(harness):
     """A menu the frame on screen showed and the current claims lack plans
-    its rows again, as residue-only damage does, though CELL is clean."""
+    its rows again, though CELL is clean.  A row whose residue alone changed
+    where no menu's claim lies keeps its runs, since the runs read the
+    residue only under the menus' claims."""
     memory = harness.runtime.memory
     rows = 8
     producer = harness.allocate(bytes(harness.constant("RTHP-SIZE")))
@@ -137,7 +139,7 @@ def test_closed_menu_and_residue_only_changes_survive_clean_cell_damage(harness)
     for name in ("_RTHP-RD-MARK-CELL-DAMAGE?", "_RTHP-RD-MARK-PROJECTION-DAMAGE?",
                  "_RTHP-RD-MARK-CURRENT-CLAIMS?"):
         assert harness.call(name)
-    assert memory.read_bytes(damage, rows) == bytes((0, 255, 255, 0, 0, 255, 0, 0))
+    assert memory.read_bytes(damage, rows) == bytes((0, 255, 255, 0, 0, 0, 0, 0))
 
 
 
@@ -178,6 +180,50 @@ def test_cell_damage_under_claims_alone_plans_no_row(harness):
     memory.write64(back_a + (1 * cols + 7) * 8, 0x44)
     assert harness.call("_RTHP-RD-MARK-CELL-DAMAGE?")
     assert memory.read_bytes(damage, rows) == bytes((0, 255, 255, 0))
+    # Changes under two claims of one row, and none between them, are swept
+    # span by span and leave the row clean.
+    memory.write64(back_a + (1 * cols + 7) * 8, 0x20 + 1 * cols + 7)
+    two = (struct.pack("<10Q", 1, 1, 1, 0, 0, 0, 1, 2, 2, 4)
+           + struct.pack("<10Q", 1, 1, 1, 1, 0, 0, 1, 5, 2, 7))
+    arena = harness.allocate(two)
+    for name, value in (("_RTHP.ARENA-A", arena), ("_RTHP.ARENA-U", len(two)),
+                        ("_RTHP.CLAIMS-A", arena), ("_RTHP.CLAIMS-U", len(two)),
+                        ("_RTHP.CLAIMS-USED", len(two))):
+        harness.field(producer, name, value)
+    memory.write64(back_a + (1 * cols + 4) * 8, 0x20 + 1 * cols + 4)
+    memory.write64(back_a + (1 * cols + 6) * 8, 0x45)
+    assert harness.call("_RTHP-RD-MARK-CELL-DAMAGE?")
+    assert memory.read_bytes(damage, rows) == bytes((0, 0, 255, 0))
+
+
+def test_residue_damage_counts_only_under_a_menu_claim(harness):
+    """The runs read the preserved residue only under the menus' claims: a
+    row whose residue changed is planned again where a menu's claim covers
+    it, and not elsewhere."""
+    memory = harness.runtime.memory
+    rows = 6
+    producer = harness.allocate(bytes(harness.constant("RTHP-SIZE")))
+    # A menu's claim over rows 1 and 2, then another claim over row 4.
+    claims = (struct.pack("<10Q", 1, 1, 1, 0, 0, 0, 1, 0, 3, 8)
+              + struct.pack("<10Q", 1, 1, 1, 1, 0, 0, 4, 0, 5, 8))
+    arena = harness.allocate(claims)
+    for name, value in (("_RTHP.ARENA-A", arena), ("_RTHP.ARENA-U", len(claims)),
+                        ("_RTHP.CLAIMS-A", arena), ("_RTHP.CLAIMS-U", len(claims)),
+                        ("_RTHP.CLAIMS-USED", len(claims)), ("_RTHP.MENU-CLAIMS", 1)):
+        harness.field(producer, name, value)
+    damage = harness.allocate(bytes(rows))
+    harness.field(producer, "_RTHP.ROW-DAMAGE-A", damage)
+    for name, value in (("_RTHP-RD-P", producer), ("_RTHP-RD-ROWS", rows),
+                        ("_RTHP-RD-COLS", 8),
+                        ("_RTHP-RD-PROJECTION-DAMAGE-A",
+                         harness.allocate(bytes((0, 0, 1, 0, 1, 1)))),
+                        ("_RTHP-RD-PROJECTION-DAMAGE-U", rows)):
+        harness.variable(name, value)
+    assert harness.call("_RTHP-RD-MARK-PROJECTION-DAMAGE?")
+    assert memory.read_bytes(damage, rows) == bytes((0, 0, 255, 0, 0, 0))
+    # More menus than claims cannot be read.
+    harness.field(producer, "_RTHP.MENU-CLAIMS", 3)
+    assert not harness.call("_RTHP-RD-MARK-PROJECTION-DAMAGE?")
 
 def _bounded_target_producer(harness):
     producer = harness.allocate(bytes(harness.constant("RTHP-SIZE")))

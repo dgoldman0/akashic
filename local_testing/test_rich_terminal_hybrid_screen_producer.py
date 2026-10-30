@@ -6317,9 +6317,19 @@ def test_residual_capture_is_ack_baselined_and_row_damage_bounded() -> None:
         "_RTHP.ROW-DAMAGE-A @ _RTHP-RD-ROWS @ 0 FILL")
     assert "_RTHP-RD-UNCLAIMED-SAME? 0= IF I _RTHP-RD-DAMAGE! THEN" in mark_cells
     assert "_RTHP-ARENA-SPAN?" in _word(source, "_RTHP-RD-CLAIMS?")
+    # The changed span is found by halving, one claim covering it settles
+    # the row, and only otherwise are the unclaimed spans swept.
     unclaimed = _word(source, "_RTHP-RD-UNCLAIMED-SAME?")
-    assert "_RTHP-RD-COVER-END" in unclaimed
-    assert "_RTHP-RD-NEXT-CLAIM" in unclaimed
+    steps = [unclaimed.index(word) for word in (
+        "_RTHP-RD-FIRST-DIFF", "_RTHP-RD-LAST-DIFF", "_RTHP-RD-COVERED?",
+        "_RTHP-RD-SWEEP?")]
+    assert steps == sorted(steps)
+    sweep = _word(source, "_RTHP-RD-SWEEP?")
+    assert "_RTHP-RD-COVER-END" in sweep
+    assert "_RTHP-RD-NEXT-CLAIM" in sweep
+    # Residue changes count only where a menu's claim covers the row.
+    assert "_RTHP-RD-MENU-ROW? IF I _RTHP-RD-DAMAGE! THEN" in _word(
+        source, "_RTHP-RD-MARK-PROJECTION-DAMAGE?")
     span = _word(source, "_RTHP-RD-SPAN-SAME?")
     assert "_RTHP-RD-FRONT @" in span and "_RTHP-RD-BACK @" in span
     assert "COMPARE 0=" in span

@@ -7820,9 +7820,37 @@ VARIABLE _RTHP-RD-XE
     DUP _RTHP-RD-FRONT @ + R@
     ROT _RTHP-RD-BACK @ + R> COMPARE 0= ;
 
-\ The row's unclaimed cells hold what the frame on screen showed.
-: _RTHP-RD-UNCLAIMED-SAME?  ( row -- flag )
-    _RTHP-RD-ROW ! 0 _RTHP-RD-C !
+VARIABLE _RTHP-RD-CEND
+
+\ The first column in C0..C1 where FRONT and BACK differ, or C1.
+: _RTHP-RD-FIRST-DIFF  ( c0 c1 -- c )
+    2DUP _RTHP-RD-SPAN-SAME? IF NIP EXIT THEN
+    BEGIN 2DUP SWAP - 1 > WHILE
+        2DUP + 2/ 2 PICK OVER _RTHP-RD-SPAN-SAME? IF ROT DROP SWAP ELSE NIP THEN
+    REPEAT DROP ;
+
+\ The last column in C0..C1 where FRONT and BACK differ, given C0 does.
+: _RTHP-RD-LAST-DIFF  ( c0 c1 -- c )
+    DUP _RTHP-RD-CEND !
+    BEGIN 2DUP SWAP - 1 > WHILE
+        2DUP + 2/ DUP _RTHP-RD-CEND @ _RTHP-RD-SPAN-SAME? IF NIP ELSE ROT DROP SWAP THEN
+    REPEAT DROP ;
+
+\ One claim of the row covers columns D0 to D1.
+: _RTHP-RD-COVERED?  ( d0 d1 -- flag )
+    _RTHP-RD-XE ! _RTHP-RD-X !
+    _RTHP-RD-CLAIMS-N @ 0 ?DO
+        I _RTHP-RD-CURRENT DUP _RTHP-RD-ON-ROW? IF
+            DUP RUCL-CLAIM-COL0@ _RTHP-RD-X @ SWAP U< 0=
+            SWAP RUCL-CLAIM-COL1@ _RTHP-RD-XE @ SWAP U< AND
+            IF -1 UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP 0 ;
+
+\ The row's unclaimed cells hold what the frame on screen showed, span by
+\ span between the claims.
+: _RTHP-RD-SWEEP?  ( -- flag )
+    0 _RTHP-RD-C !
     BEGIN _RTHP-RD-C @ _RTHP-RD-COLS @ < WHILE
         _RTHP-RD-C @ _RTHP-RD-COVER-END DUP _RTHP-RD-C @ > IF
             _RTHP-RD-C !
@@ -7832,6 +7860,16 @@ VARIABLE _RTHP-RD-XE
             _RTHP-RD-CN @ _RTHP-RD-C !
         THEN
     REPEAT -1 ;
+
+\ The row's unclaimed cells hold what the frame on screen showed: the row
+\ is equal, or one claim covers every cell that changed, or no unclaimed
+\ span changed.
+: _RTHP-RD-UNCLAIMED-SAME?  ( row -- flag )
+    _RTHP-RD-ROW !
+    0 _RTHP-RD-COLS @ _RTHP-RD-FIRST-DIFF
+    DUP _RTHP-RD-COLS @ = IF DROP -1 EXIT THEN
+    DUP _RTHP-RD-COLS @ _RTHP-RD-LAST-DIFF _RTHP-RD-COVERED? IF -1 EXIT THEN
+    _RTHP-RD-SWEEP? ;
 
 : _RTHP-RD-MARK-CELL-DAMAGE?  ( -- flag )
     _RTHP-RD-CELL-DAMAGE-A @ 0= IF 0 EXIT THEN
@@ -7846,15 +7884,29 @@ VARIABLE _RTHP-RD-XE
         THEN
     LOOP -1 ;
 
+\ A menu's claim covers the row.
+: _RTHP-RD-MENU-ROW?  ( row -- flag )
+    _RTHP-RD-ROW !
+    _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ 0 ?DO
+        I _RTHP-RD-CURRENT _RTHP-RD-ON-ROW? IF -1 UNLOOP EXIT THEN
+    LOOP 0 ;
+
 \ Projection-only changes need the same row authority as CELL damage.  An
 \ ordinary write may update residue even when BACK already holds that value.
+\ The runs read the residue only under the menus' claims, so a row whose
+\ residue changed is planned again only where a menu's claim covers it; a
+\ menu that closed marks its rows with the claims that went.
 : _RTHP-RD-MARK-PROJECTION-DAMAGE?  ( -- flag )
     _RTHP-RD-PROJECTION-DAMAGE-A @ 0= IF 0 EXIT THEN
     _RTHP-RD-PROJECTION-DAMAGE-U @ _RTHP-RD-ROWS @ <> IF 0 EXIT THEN
     _RTHP-RD-PROJECTION-DAMAGE-A @ _RTHP-RD-PROJECTION-DAMAGE-U @
         MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _RTHP-RD-CLAIMS? 0= IF 0 EXIT THEN
+    _RTHP-RD-P @ _RTHP.MENU-CLAIMS @ _RTHP-RD-CLAIMS-N @ U> IF 0 EXIT THEN
     _RTHP-RD-ROWS @ 0 ?DO
-        _RTHP-RD-PROJECTION-DAMAGE-A @ I + C@ IF I _RTHP-RD-DAMAGE! THEN
+        _RTHP-RD-PROJECTION-DAMAGE-A @ I + C@ IF
+            I _RTHP-RD-MENU-ROW? IF I _RTHP-RD-DAMAGE! THEN
+        THEN
     LOOP
     -1 ;
 
