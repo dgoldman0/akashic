@@ -1252,15 +1252,21 @@ VARIABLE _RSHSP-SG-ITEM
     _RSHSP-SG-PUT-BACK ;
 
 \ How many runs a glyph family's arrays hold: its own, and in a DELTA's
-\ build as many as the frame on screen's family in the same place, so that
-\ the identity mapping writes the tombstones it adds where the runs lie.
+\ build as many as the frame on screen's glyph family of the same region,
+\ which the identity mapping pairs it with, so that the tombstones it adds
+\ are written where the runs lie.  The family is found by its region, not
+\ its place: the applications' families before it may come and go.
 : _RSHSP-GLYPH-ROOM ( -- n )
     _RSHSP-GCOUNT @ _RSHSP-DBATCH @ ?DUP 0= IF EXIT THEN
-    _RSHSP-FAMILY-N @ 1- OVER _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / U<
-        0= IF DROP EXIT THEN
-    _RTE-FB.FAMILIES-A @ _RSHSP-FAMILY-N @ 1- RTE-FAMILY-ENTRY-SIZE * +
-    DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH <> IF DROP EXIT THEN
-    RTE-FAMILY-ITEMS@ NIP RTE-GLYPH-RUN-PLAN-ITEM-SIZE / MAX ;
+    DUP _RTE-FB.FAMILIES-A @ SWAP _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE / 0 ?DO
+        DUP I RTE-FAMILY-ENTRY-SIZE * +
+        DUP _RTE-FE.KIND @ RTE-FAMILY-GLYPH =
+        OVER _RTE-FE.PLAN-A @ _RTE-LP.REGION-ID @
+            _RSHSP-REGION @ _RTE-IR.ID @ = AND IF
+            NIP RTE-FAMILY-ITEMS@ NIP RTE-GLYPH-RUN-PLAN-ITEM-SIZE / MAX
+            UNLOOP EXIT
+        THEN DROP
+    LOOP DROP ;
 : _RSHSP-GLYPH ( region -- )
     _RSHSP-REGION !
     _RSHSP-PCURSOR @ _RSHSP-SAVED !

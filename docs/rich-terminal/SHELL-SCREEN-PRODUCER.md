@@ -101,8 +101,10 @@ Both blocks use checked aligned bump allocation. Glyph projection plans each
 clip in slots in the producer's glyph banks, then copies the runs it planned
 into the part before the next clip. In a DELTA's build a glyph family's
 items and references leave room for as many runs as the frame on screen's
-family in the same place holds, and the identity mapping writes the
-tombstones it adds there. `SCRATCH-USED@` and `PART-BYTES@` record each
+glyph family of the same region holds, which the identity mapping pairs it
+with, and that mapping writes the tombstones it adds there. The family is
+found by its region rather than its place, since the applications'
+families before it may come and go. `SCRATCH-USED@` and `PART-BYTES@` record each
 block's peak reservation. On capacity failure each reports the first
 required prefix that did not fit, which is what its block grows to.
 
