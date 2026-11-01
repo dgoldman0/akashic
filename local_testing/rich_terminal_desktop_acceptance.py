@@ -12001,7 +12001,6 @@ _SHADOW_CHECK_VARIABLES = {
     "first_draw": "FSHD-FIRST-DRAW",
     "checks_snapshot": "FSHD-CHECKS-SNAPSHOT",
     "checks_producer_glyphs": "FSHD-CHECKS-PRODUCER-GLYPHS",
-    "checks_producer_menus": "FSHD-CHECKS-PRODUCER-MENUS",
     "checks_shell_glyphs": "FSHD-CHECKS-SHELL-GLYPHS",
     "checks_root_facts": "FSHD-CHECKS-ROOT-FACTS",
     "checks_shell_delta": "FSHD-CHECKS-SHELL-DELTA",
@@ -12019,13 +12018,12 @@ _SHADOW_CHECK_VARIABLES = {
 SHADOW_CHECK_STAGES = {
     1: "the snapshot",
     2: "the screen producer's runs",
-    3: "the screen producer's menu controls",
-    4: "the shell's runs of a region",
-    5: "the root facts",
-    6: "the shell's DELTA of the applications' items",
-    7: "the screen producer's comparison",
-    8: "the screen producer's copy of the bank on screen",
-    9: "the screen producer's candidate from the bank on screen",
+    3: "the shell's runs of a region",
+    4: "the root facts",
+    5: "the shell's DELTA of the applications' items",
+    6: "the screen producer's comparison",
+    7: "the screen producer's copy of the bank on screen",
+    8: "the screen producer's candidate from the bank on screen",
 }
 
 

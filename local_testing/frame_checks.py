@@ -10,9 +10,8 @@ Every call chain under the frame build (_RTHP-PREPARE-LIVE) is charged to the
 outermost check word it passes through, and that word's group:
 
 - repeat: a check of data that nothing has written since it was last checked,
-  such as a stored snapshot slice before reuse, menus copied from the
-  acknowledged bank, the frozen bank, the engine's audit of its own state,
-  or a proof the same frame already made;
+  such as a stored snapshot slice before reuse, the frozen bank, the
+  engine's audit of its own state, or a proof the same frame already made;
 - handover: a proof about memory layout or a header, which can change only
   when memory is handed over or grows;
 - items: the checks of the items a frame sends, at capture or admission;
@@ -47,8 +46,6 @@ REPEAT = {
     # RUHA re-validates another document's stored slices before reusing them.
     "UCSN-FROZEN-VALIDATE", "USFSN-FROZEN-VALIDATE", "UFLSN-FROZEN-VALIDATE",
     "UDLSN-FROZEN-VALIDATE",
-    # Menus copied from the producer's acknowledged bank are checked again.
-    "_RTHP-W-MENU-REUSE-PREFLIGHT?", "RTE-CONTROL-VALID?", "_RTHP-W-MENU-REUSE-TEXT?",
     # The shell checks its batch and the part it built, then emission proves
     # the batch's storage again.
     "RTE-FAMILY-BATCH-VALID?", "_RSHSP-PART-VALID?",
@@ -84,8 +81,10 @@ HANDOVER = {
 }
 HANDOVER_PATTERN = re.compile(r"STORAGE-DISJOINT\?$|AUTHORITY-DISJOINT\?$")
 ITEMS = {
-    # The engine admits the producer's candidate.
+    # The engine admits the producer's candidate, and the producer checks the
+    # controls its field and dialog lanes built.
     "_RTE-CONTROL-PLAN-VALID-BODY", "_RTE-HPV-SERIES?", "_RTE-HPV-INSTRUMENT?",
+    "RTE-CONTROL-VALID?",
     "_RTE-HPV-STATIC?", "_RTE-HPV-GLYPH?", "_RTE-HPV-IDENTITY-RANGES?",
     "_RTE-GLYPH-RUN-TEXT?", "_RTE-STATIC-TEXT?",
     # Captures check what they read from UIDL and the widgets.

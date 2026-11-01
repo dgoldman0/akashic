@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """The screen producer's shadow check of its shortcuts. A glyph plan that
 kept a held plan or planned only the damaged rows is compared with the full
-planner's, and a document's menu controls copied from the acknowledged bank
-with the control planner's. The shortcut's result is the one that stays."""
+planner's. The shortcut's result is the one that stays."""
 
 from __future__ import annotations
 
@@ -17,31 +16,15 @@ PLANNER = ROOT / "akashic/tui/rich-terminal/residual-glyph-planner.f"
 MASK64 = (1 << 64) - 1
 
 # The heap is a bump allocator over a block the test gives it. The full
-# glyph planner and the control planner are stand-ins that run whatever the
-# test chose; the control planner's request keeps the first ID it is given
-# and its output the addresses it is given.
+# glyph planner is a stand-in that runs whatever the test chose.
 STUB = r'''
 VARIABLE _ST-HEAP
 : _ST-ALLOCATE  ( bytes -- addr ior ) 7 + -8 AND _ST-HEAP @ SWAP _ST-HEAP +! 0 ;
 : _ST-FREE  ( addr -- ) DROP ;
 VARIABLE _ST-FULL-XT
 : _RTHP-BUILD-GLYPHS-FULL?  ( producer -- flag ) DROP _ST-FULL-XT @ EXECUTE ;
-VARIABLE _ST-SPANS
-VARIABLE _ST-FIRST-ID
-VARIABLE _ST-CONTROLS-A
-VARIABLE _ST-CORR-A
-VARIABLE _ST-BUILD-XT
-: _RTHP-W-RUCP-WORK-SPANS?  ( -- flag ) _ST-SPANS @ ;
-: _RTHP-W-RUCP-REQUEST  ( next-id -- ) _ST-FIRST-ID ! ;
-: RUCP-REQUEST-OUTPUT!  ( plan-a plan-u controls-a controls-u corr-a corr-u request -- )
-    DROP DROP _ST-CORR-A ! DROP _ST-CONTROLS-A ! 2DROP ;
-: RUCP-BUILD  ( request -- count text aligned max last status )
-    DROP _ST-BUILD-XT @ EXECUTE ;
 '''
-STUBBED = ("_RTHP-BUILD-GLYPHS-FULL?", "_RTHP-W-RUCP-WORK-SPANS?", "_RTHP-W-RUCP-REQUEST",
-           "RUCP-REQUEST-OUTPUT!", "RUCP-BUILD")
-BUILD_RESULTS = ("_RTHP-W-COUNT", "_RTHP-W-TEXT", "_RTHP-W-ALIGNED", "_RTHP-W-MAX",
-                 "_RTHP-W-LAST", "_RTHP-W-STATUS")
+STUBBED = ("_RTHP-BUILD-GLYPHS-FULL?",)
 
 
 class ShadowHarness:
@@ -67,8 +50,8 @@ class ShadowHarness:
                     include(token)
             chunks.append(declaration)
 
-        for name in ("_RTHP-SH-GLYPHS", "_RTHP-SH-MENU", "FSHD-RESET", "_FSHD-ALLOCATE-XT",
-                     "_FSHD-FREE-XT", "_RTHP-W-DRAW", *BUILD_RESULTS):
+        for name in ("_RTHP-SH-GLYPHS", "FSHD-RESET", "_FSHD-ALLOCATE-XT",
+                     "_FSHD-FREE-XT", "_RTHP-W-DRAW"):
             include(name)
         self.runtime.evaluate("\n".join(chunks).encode(), step_budget=3_000_000)
         self.serial = 0
@@ -110,14 +93,10 @@ class ShadowHarness:
         assert self.runtime.main_context.returns.snapshot() == ()
 
     def shadow(self, name, *inputs, draw):
-        """Run a shadow check with the build's own results set, and return
-        what it counted. Those results must be as they were."""
+        """Run a shadow check and return what it counted."""
         self.run("FSHD-RESET")
-        for index, result in enumerate(BUILD_RESULTS):
-            self.variable(result, 11 + index)
         self.variable("_RTHP-W-DRAW", draw)
         self.run(name, *inputs)
-        assert [self.variable(result) for result in BUILD_RESULTS] == list(range(11, 17))
         return tuple(self.variable(f"FSHD-{name}") for name in (
             "CHECKS", "MISMATCHES", "SKIPPED", "FIRST-STAGE", "FIRST-ITEM", "FIRST-OFFSET",
             "FIRST-DRAW"))
@@ -217,95 +196,6 @@ def test_a_refused_full_plan_is_a_difference(h, glyphs):
 
 
 # ---------------------------------------------------------------------
-# Menu reuse
-# ---------------------------------------------------------------------
-
-CONTROL = 200      # RTE-CONTROL-SIZE
-CORRELATION = 56   # RUCP-CORRELATION-SIZE
-MENUS = 3          # FSHD-STAGE-PRODUCER-MENUS
-
-
-class Menu:
-    """The second document's two menu controls and their correlations, as
-    reuse copied them, numbered from 900, over five bytes of text."""
-
-    def __init__(self, h, count=2, text=5):
-        self.h = h
-        self.count = count
-        self.control_bytes = bytes((i * 7 + 1) & 0xFF for i in range(count * CONTROL))
-        self.corr_bytes = bytes((i * 5 + 3) & 0xFF for i in range(count * CORRELATION))
-        self.controls = h.allocate(self.control_bytes)
-        self.corr = h.allocate(self.corr_bytes)
-        self.fresh_controls = h.allocate(self.control_bytes)
-        self.fresh_corr = h.allocate(self.corr_bytes)
-        for name, value in (
-                ("_RTHP-W-P", h.allocate(bytes(4096))),
-                ("_RTHP-W-OUT-CONTROLS-A", self.controls), ("_RTHP-W-OUT-CORR-A", self.corr),
-                ("_RTHP-W-RUCP-CONTROL-U", count * CONTROL),
-                ("_RTHP-W-RUCP-CORR-U", count * CORRELATION),
-                ("_RTHP-W-DOC-RECORD-COUNT", count), ("_RTHP-W-DOC-TEXT-U", text),
-                ("_RTHP-W-MR-NEW-FIRST", 900), ("_RTHP-W-MR-NEW-NEXT", 900 + count),
-                ("_RTHP-W-DOCUMENT-I", 1), ("_ST-SPANS", -1)):
-            h.variable(name, value)
-
-    def check(self, *, status=0, count=2, text=5, last=901, change=""):
-        """Run the check against a control planner that writes the copied
-        controls and correlations, changed by CHANGE, and gives the results
-        named."""
-        h = self.h
-        h.runtime.evaluate(
-            f": _ST-BUILD {self.fresh_controls} _ST-CONTROLS-A @ {len(self.control_bytes)} MOVE"
-            f" {self.fresh_corr} _ST-CORR-A @ {len(self.corr_bytes)} MOVE {change}"
-            f" {count} {text} 0 0 {last} {status} ; ' _ST-BUILD _ST-BUILD-XT !".encode())
-        h.variable("_ST-CONTROLS-A", 0)
-        counts = h.shadow("_RTHP-SH-MENU", draw=55)
-        memory = h.runtime.memory
-        # The planner was asked for the document's controls from the first ID
-        # reuse gave them, into storage of its own, and the copy stays.
-        if counts[0]:
-            assert h.variable("_ST-FIRST-ID") == 900
-            fresh = h.variable("_ST-CONTROLS-A")
-            assert not self.controls <= fresh < self.controls + len(self.control_bytes)
-        assert memory.read_bytes(self.controls, len(self.control_bytes)) == self.control_bytes
-        assert memory.read_bytes(self.corr, len(self.corr_bytes)) == self.corr_bytes
-        return counts
-
-
-@pytest.fixture
-def menu(h):
-    return Menu(h)
-
-
-def test_a_fresh_plan_equal_to_the_copy_is_three_equal_comparisons(h, menu):
-    assert menu.check()[:3] == (3, 0, 0)
-
-
-def test_a_different_control_names_the_document_and_the_byte(h, menu):
-    counts = menu.check(change="99 _ST-CONTROLS-A @ 210 + C!")
-    assert counts == (3, 1, 0, MENUS, 4, 210, 55)
-
-
-def test_a_different_correlation_is_the_documents_third_item(h, menu):
-    counts = menu.check(change="99 _ST-CORR-A @ 60 + C!")
-    assert counts == (3, 1, 0, MENUS, 5, 60, 55)
-
-
-def test_a_refused_fresh_plan_differs_in_the_header(h, menu):
-    counts = menu.check(status=7)
-    assert counts == (1, 1, 0, MENUS, 3, 0, 55)
-
-
-def test_a_fresh_plan_ending_at_another_identity_differs_in_the_header(h, menu):
-    counts = menu.check(last=905)
-    assert counts == (1, 1, 0, MENUS, 3, 24, 55)
-
-
-def test_a_document_without_work_spans_is_skipped_not_passed(h, menu):
-    h.variable("_ST-SPANS", 0)
-    assert menu.check()[:3] == (0, 0, 1)
-
-
-# ---------------------------------------------------------------------
 # Where the checks run
 # ---------------------------------------------------------------------
 
@@ -328,7 +218,8 @@ def test_each_check_runs_only_after_its_shortcut_was_taken():
     assert held.index("_RTHP-WRAP-GLYPH-PLAN? IF") < held.index(hook)
     assert "_RTHP-BUILD-GLYPHS-DAMAGE? THEN IF" in damage and hook in damage
     assert "_RTHP-SH-GLYPHS" not in full
-    # Menu controls are checked only when reuse copied them.
+    # Every document's menu controls are planned, so they take no shortcut
+    # for the check to compare.
     menus = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
-    assert "_RTHP-W-MENU-REUSE? IF\n            FSHD? IF _RTHP-SH-MENU THEN\n          ELSE" in menus
-    assert menus.count("_RTHP-SH-MENU") == 1
+    assert "_RTHP-W-DOC-MENUS? 0= IF 0 EXIT THEN" in menus
+    assert "FSHD?" not in menus
