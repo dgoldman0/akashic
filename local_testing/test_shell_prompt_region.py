@@ -156,7 +156,7 @@ DELTA_PROMPT = DELTA + MEMBERS + PROMPT + r'''
 : _SP-CLOSED _SD-HELLP 19 0 DO 32 8 I DRW-CHAR LOOP ;
 \ The prompt's modal region on screen, and the region frontier.
 VARIABLE _SP-MID
-VARIABLE _SP-NEXT
+VARIABLE _SP-FRONTIER
 '''
 
 
@@ -164,7 +164,8 @@ def test_a_delta_keeps_the_prompts_modal_region_and_drops_it_with_the_prompt():
     """While the prompt is open a DELTA keeps its region, and typing replaces
     only its field.  Closing it drops the field and then its region, under
     the plan the screen producer's comparison seals (FRAMES-FOLLOW-CHANGE
-    9c.2b)."""
+    9c.2b).  The part then ends at its last region, while the region's
+    identity stays used, so the prompt opening again takes a new one."""
     staged_run(DELTA_PROMPT + r'''
 _SX-SETUP _SD-HOOKS _SY-HOOKS 8 _SP-CANDIDATE _SP-DIALOGS
 ' _SP-HELLO-PROMPT _SD-DRAW _SX-PREPARE _SS-OK _SD-ACK
@@ -194,15 +195,28 @@ _SX-CI _SX-P _RTHP.CONTROLS-A ! 1 _SX-P _RTHP.CONTROL-COUNT ! _SX-CX _SX-P _RTHP
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE RTE-S-OK <> _SS-A
 _RSHSP-DIAG-STAGE @ 3 = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
-\ The plan drops the field, the second control on screen.
+\ The plan drops the field, the second control on screen.  The part, which
+\ every-frame checks find whole, ends at its last region.
 0 _SD-SEAL 1 _SD-PLAN 16 + ! 1 _SX-P _RTHP.DELTA-PLAN-DROPS !
-_RSHSP-DELTA-PREPARE _SS-OK _RSHSP-PENDING-PART _SP-MODALS 0= _SS-A
+-1 CHK-EVERY-FRAME ! _RSHSP-DELTA-PREPARE _SS-OK 0 CHK-EVERY-FRAME !
+CHK-DAMAGE-COUNT @ 0= _SS-A _RSHSP-PENDING-PART _SX-PART-VALID? _SS-A
+_RSHSP-PENDING-PART _SP-MODALS 0= _SS-A
 _SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
 _SY-DROP @ 1 = _SS-A _SY-DROPPED @ 101 = _SS-A
 _SX-REGION-DROPS @ 1 = _SS-A _SX-REGION-DROPPED @ _SP-MID @ = _SS-A
 _SY-DROP-AT @ _SX-REGION-DROP-AT @ < _SS-A _SX-REGIONS @ 0= _SS-A
+\ The dropped region's identity stays used: the prompt opening again takes
+\ the producer's frontier, past it.
+_SD-ACK _SX-P _RTHP.NEXT-REGION @ DUP _SP-FRONTIER ! _SP-MID @ > _SS-A
+8 _SP-CANDIDATE _SX-P _RTHP.NEXT-OBJECT @ _SP-FIELD _RTE-CONTROL.ID !
+' _SP-HELLP-PROMPT _SD-DRAW _SD-TB _SY-PENDING
+_RSHSP-DELTA-PROBE _SS-OK
+3 _SD-PLAN ! 1 _SD-SEAL 0 _SX-P _RTHP.DELTA-PLAN-DROPS !
+-1 CHK-EVERY-FRAME ! _RSHSP-DELTA-PREPARE _SS-OK 0 CHK-EVERY-FRAME !
+CHK-DAMAGE-COUNT @ 0= _SS-A _RSHSP-PENDING-PART _SX-PART-VALID? _SS-A
+_RSHSP-PENDING-PART _SP-MODALS 1 = _SS-A _SP-MODAL @ _RTE-IR.ID @ _SP-FRONTIER @ = _SS-A
 _SS-DONE
-''', minimum=29)
+''', minimum=37)
 
 
 def test_a_prompt_that_opens_in_a_delta_takes_a_fresh_modal_region():
@@ -213,7 +227,7 @@ def test_a_prompt_that_opens_in_a_delta_takes_a_fresh_modal_region():
 _SX-SETUP _SD-HOOKS _SY-HOOKS _SP-DIALOGS
 ' _SD-HELLO _SD-DRAW _SX-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SP-MODALS 0= _SS-A
-_RSHSP-ACTIVE-PART RSHSP-PART.NEXT-REGION @ _SP-NEXT !
+_RSHSP-ACTIVE-PART RSHSP-PART.NEXT-REGION @ _SP-FRONTIER !
 \ The prompt comes under the fresh identity the comparison gives it, and
 \ the plan defines it.
 8 _SP-CANDIDATE _SX-P _RTHP.NEXT-OBJECT @ _SP-FIELD _RTE-CONTROL.ID !
@@ -223,10 +237,10 @@ _RSHSP-DELTA-PROBE _SS-OK
 _RSHSP-DELTA-PREPARE _SS-OK
 _RSHSP-PENDING-PART _SX-PART-VALID? _SS-A
 _RSHSP-PENDING-PART _SP-MODALS 1 = _SS-A
-_SP-MODAL @ _RTE-IR.ID @ _SP-NEXT @ = _SS-A
+_SP-MODAL @ _RTE-IR.ID @ _SP-FRONTIER @ = _SS-A
 RTE-CONTROL-FIELD _RSHSP-PENDING-PART _SP-CONTROL
-    _RTE-CONTROL.REGION @ _SP-NEXT @ = _SS-A
-_RSHSP-PENDING-PART RSHSP-PART.NEXT-REGION @ _SP-NEXT @ 1+ = _SS-A
+    _RTE-CONTROL.REGION @ _SP-FRONTIER @ = _SS-A
+_RSHSP-PENDING-PART RSHSP-PART.NEXT-REGION @ _SP-FRONTIER @ 1+ = _SS-A
 _SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
 _SX-REGIONS @ 1 = _SS-A _SY-DEFINE @ 1 = _SS-A _SY-DROP @ 0= _SS-A
 _SX-REGION-DROPS @ 0= _SS-A _SX-REGION-AT @ _SY-DEFINE-AT @ < _SS-A

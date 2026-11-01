@@ -275,7 +275,7 @@ def test_the_part_is_built_where_it_is_kept_and_finished_after_the_preflight():
     between = delta[delta.index("_RSHSP-BUILD-BATCH"):delta.index("_RSHSP-FINISH")]
     writers = {w for w in re.findall(r"_RSHSP-D-[A-Z-]+", between)}
     assert writers == {"_RSHSP-D-CATALOG", "_RSHSP-D-FAMILIES", "_RSHSP-D-METADATA",
-                       "_RSHSP-D-NEXT-OBJECT"}
+                       "_RSHSP-D-NEXT-REGION", "_RSHSP-D-NEXT-OBJECT"}
     assert code.count("_RSHSP-FINISH") == 3
     # A DELTA copies the runs of rows no draw touched, except in safe mode,
     # where every row is planned.

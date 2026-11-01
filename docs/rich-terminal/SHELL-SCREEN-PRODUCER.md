@@ -421,8 +421,12 @@ admitted as a DELTA's, whose identities are those kept from the frame on
 screen and need not lie together or ascend
 ([FAMILY-BATCH-ADMISSION](FAMILY-BATCH-ADMISSION.md)). After the physical acknowledgement the producer publishes
 the pending bank, its part with it, exactly as after a reveal. A DELTA
-consumes a region identity only for a modal region that came, and the
-published part's frontier covers it and the new object identities.
+consumes a region identity only for a modal region that came. Its part's
+frontiers, like a START's, are those of what it holds: one past its last
+region, which has the largest identity, and one past its largest object.
+Publication raises the producer's frontiers to them and never lowers them,
+so the identity of a region or run a later DELTA drops stays used, and a
+region that comes after it takes another.
 
 A DELTA plans residual runs only on rows that changed. Once a candidate is
 built, the producer's ROW-DAMAGE names the rows a plan must build again:

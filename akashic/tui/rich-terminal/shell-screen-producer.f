@@ -2023,6 +2023,12 @@ VARIABLE _RSHSP-DM-UA
             LOOP DROP
         THEN
     LOOP DROP _RSHSP-DX-MAX @ 1 _RSHSP-ADD ;
+\ One more than the identity of BATCH's last region, the largest: the modal
+\ regions go last in the order of their identities, and a new one takes an
+\ identity past every other.
+: _RSHSP-D-NEXT-REGION ( batch -- next )
+    _RTE-FB.CATALOG-A @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @ +
+    96 - _RTE-IR.ID @ 1 _RSHSP-ADD ;
 
 \ The catalog names the same surface as the frame on screen's, and each of
 \ its regions is that frame's region of the same identity, unchanged, but
@@ -2283,8 +2289,11 @@ VARIABLE _RSHSP-DA-DEFINES VARIABLE _RSHSP-DA-MAX
     _RSHSP-ACTIVE-PART RSHSP-PART.NEXT-OBJECT @ MAX _RSHSP-DNEXT !
     1 _RSHSP-DSTAGE ! _RSHSP-D-CATALOG _RSHSP-D-FAMILIES _RSHSP-D-METADATA
     6 _RSHSP-DSTAGE !
-    _RSHSP-DMODAL-NEXT @ _RSHSP-NEXT-REGION !
-    _RSHSP-BATCH @ _RSHSP-D-NEXT-OBJECT _RSHSP-NEXT-OBJECT !
+    \ The part's frontiers are those of what it holds; publication raises
+    \ the producer's to them and never lowers it, so the identity of a
+    \ region or run that went stays used.
+    _RSHSP-BATCH @ DUP _RSHSP-D-NEXT-REGION _RSHSP-NEXT-REGION !
+    _RSHSP-D-NEXT-OBJECT _RSHSP-NEXT-OBJECT !
     _RSHSP-FINISH ;
 : _RSHSP-DELTA-PREPARE ( -- status )
     0 _RSHSP-DSTAGE !
