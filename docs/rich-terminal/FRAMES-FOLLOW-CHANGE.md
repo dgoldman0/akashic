@@ -1829,10 +1829,9 @@ frame before the change driver.
     numbered as a full lowering numbers them, and the shadow check compares
     them with a full lowering's. Each bank records the graphs its candidate
     left out because the terminal could not take them, and a bank that
-    left any out is not taken, since it does not keep them. Lowering a
-    moved data-graphics root alone is not built: a frame whose instruments
-    changed goes out as a START, since a DELTA carries no changed
-    instrument, and no frame of the canonical journey needed it. **Done**
+    left any out is not taken, since it does not keep them. A moved
+    data-graphics root still has the frame lowered in full; 9c.5 lowers it
+    alone. **Done**
     on 2026-10-31 (fb083de9; 76190dd5 an instrument's claim keeps the
     generation of its data graphics, a difference the shadow check found).
     In the canonical journey with the shadow check the candidate was taken
@@ -1871,6 +1870,19 @@ frame before the change driver.
       before, taking neither path; a typed letter builds in 2.07 million
       steps, and the typing run with the shadow check made 6,046
       comparisons without a difference.
+    - **9c.3b. A bank numbered by identity.** The candidate takes a bank
+      whose DELTA defined or dropped controls, which keeps the identities
+      on screen until the next START, numbering each control, parent and
+      correlation by place as a full lowering does, through the bank's
+      identities found in their places (decision 22).
+    - **9c.3c. Menus.** A moved menus root is lowered alone, and the copy
+      builds the menus' targets again.
+    - **9c.3d. Dialogs and tab sets.** A moved dialog or tab set root is
+      lowered alone, and the copy checks its controls and builds their
+      targets again.
+  - **9c.5. A moved data-graphics root.** It is lowered alone into the
+    candidate, its instruments and series in their places, after 9c.3
+    (decision 23).
 
 **Proof.** The change driver passes over an element only when none of the
 counters it keeps for that element has moved. A capture reads only the
@@ -2169,3 +2181,17 @@ Taken on 2026-10-31:
     cause, each then packed and compared in full.
 21. **The order of 9c.3 and 9c.4.** 9c.4 first: it takes 41 frames on its
     own, and neither piece depends on the other.
+
+Taken on 2026-11-01:
+
+22. **A bank numbered by identity** (9c.3b). The candidate from the bank
+    takes it, finding each of the bank's identities in its place, before
+    the menus and the dialogs. Since 9c.2 a DELTA that defines or drops
+    controls leaves the bank numbered by identity until the next START, so
+    the candidate, which took only a bank numbered by place, turned away
+    every frame after one, 11 in the canonical journey after 9c.3a,
+    typing into a prompt a DELTA opened among them.
+23. **A moved data-graphics root** (9c.5). It is lowered alone into the
+    candidate after 9c.3, as fields are, though a frame whose instruments
+    changed goes out as a START: a live plot then pays only for the
+    graphs that changed, not for a full lowering beside its START.
