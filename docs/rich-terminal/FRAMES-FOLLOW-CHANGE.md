@@ -1774,7 +1774,19 @@ frame before the change driver.
       that every family pairing in place keeps its region. The engine
       gains REGION-DROP, which the terminal already applies, and a DELTA's
       definitions may name a region the same DELTA defines. This takes the
-      9 frames of prompts and dialogs.
+      9 frames of prompts and dialogs. **Done** on 2026-10-31 (ac1e73f1
+      engine region drops; 0384f5e7 comparison, shell and family emitter;
+      52e39747 and 5156bd47 two faults the slice exposed). In the
+      canonical journey with the shadow check the 9 frames go out as
+      DELTAs: 61 DELTAs and 25 STARTs, against 52 and 34 before 9c.2b,
+      with 8 control drops and 10 definitions, against 2 and 1. The
+      journey made 29,163 comparisons without a difference, and passed in
+      safe mode with 61 DELTAs and 26 STARTs. A typed letter builds in
+      2.05 million steps, and 9c.2a's code, measured again in the same
+      session, in 2.03 million. The profile records one call chain every
+      65,536 steps, so a burst frame's figure carries about four percent,
+      and 9c.2a's 1.92 million was a low reading. The typing run with the
+      shadow check made 7,227 comparisons without a difference.
     - **9c.2c. The copy pairs by identity.** The copy of the bank on
       screen pairs its controls by identity in the same way, so these
       frames take the change driver; it plans the definitions and drops the
