@@ -192,6 +192,24 @@ def test_the_unpack_numbers_each_item_as_a_full_lowering_would(h):
     assert h.spans()["claims"] == before["claims"]
 
 
+def test_an_instrument_claim_keeps_the_generation_of_its_data_graphics(h):
+    """Each claim takes this snapshot's generation but an instrument's, which
+    lies between the claims before the instruments and the status fields'
+    and carries the generation of the data graphics it shows
+    (FRAMES-FOLLOW-CHANGE 9c.4)."""
+    h.candidate()
+    bank = h.bank_on_screen()
+    claims = h.results("_RTHP-PACK-CLAIMS-A", bank)[0]
+    # The bank's second claim lies where an instrument's would.
+    h.field(bank, "_RTHP-TB.BASE-CLAIMS", 80)
+    h.runtime.memory.write64(claims + 80 + 8, 77)
+    h.forget()
+    h.field(h.producer, "_RTHP.SOURCE-GEN", 31)
+    h.unpack()
+    out = h.get("CLAIMS-A")
+    assert [h.runtime.memory.read64(out + i * 80 + 8) for i in range(3)] == [31, 77, 31]
+
+
 def test_a_correlation_keeps_naming_its_control_by_identity(h):
     """A menu's correlations keep their source order while its controls lie
     in graph order, so a correlation names its control by identity, which

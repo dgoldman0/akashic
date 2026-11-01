@@ -10116,10 +10116,15 @@ VARIABLE _RTHP-UB-WHY
     _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-UB-A @ _RTHP-PACK-SOURCE-A -
         _RTHP-UB-BY !
     _RTHP-UB-N @ 0 ?DO I _RTHP-UB-CONTROL? 0= IF 0 UNLOOP EXIT THEN LOOP
-    \ Every claim is this snapshot's.
+    \ Every claim is this snapshot's but the instruments', which lie between
+    \ the claims before them and the status fields' and carry the generation
+    \ of the data graphics they show.
     _RTHP-UB-A @ _RTHP-TB.CLAIMS @ 0 ?DO
-        _RTHP-UB-P @ _RTHP.SOURCE-GEN @
-            _RTHP-UB-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RUCL-C.GENERATION !
+        I RUCL-CLAIM-SIZE * DUP _RTHP-UB-A @ _RTHP-TB.BASE-CLAIMS @ U<
+        SWAP _RTHP-UB-A @ _RTHP-TB.STATIC-BASE-CLAIMS @ U< 0= OR IF
+            _RTHP-UB-P @ _RTHP.SOURCE-GEN @
+                _RTHP-UB-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + _RUCL-C.GENERATION !
+        THEN
     LOOP
     _RTHP-UB-P @ >R _RTHP-UB-A @
     _RTHP-UB-N @ R@ _RTHP.CONTROL-COUNT !
