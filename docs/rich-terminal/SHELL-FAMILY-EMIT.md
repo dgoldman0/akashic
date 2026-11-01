@@ -40,8 +40,11 @@ banks before construction.
 `RTE-FAMILY-BATCH-DELTA-EMIT ( pending-batch active-batch shell -- status )`
 sends a retained DELTA between two batches of the same shape. The caller has
 given every pending item the identity of the active item in the same place
-and begun a retained DELTA. Both batches carry the same catalog and the same
-families in order, kind and region. A changed control, status field, pane or
+and begun a retained DELTA. Both batches carry the same families in order,
+kind and region, and catalogs that name the same surface, in which a region
+both hold is the same row. A region only the catalog on screen holds is
+dropped, and one only the pending catalog holds is defined, as described
+below. A changed control, status field, pane or
 glyph run is replaced; a glyph family may end with new runs, which are
 defined. Instruments, series and taskbar controls have no DELTA replacement,
 so they must be unchanged. Records compare exactly except where their text,
@@ -79,9 +82,14 @@ went, by identity, with `_RTE-FAMILY-DELTA-KEYED! ( keyed-pending
 keyed-active drops-a drops-n -- )` before the proved emission, which clears
 them. Controls may come and go among the keyed families, so the two batches
 may hold different numbers of them, and only the families after them pair
-in place. The emitter drops the controls that went first, so the room they
-held is free for the controls defined after them, then defines and replaces
-each keyed family's known controls. With the shadow check on, each control
+in place. Before it sends anything, the emitter proves that each of those
+pairs has the same kind and region, so a region only one catalog holds can
+belong only to a keyed family. It drops the controls that went first, so
+the room they held is free for the controls defined after them, then the
+regions only the catalog on screen holds, then defines the regions only the
+pending catalog holds, and then defines and replaces each keyed family's
+known controls. Desk's shell defines and drops the modal regions of the
+applications' prompts and dialogs this way. With the shadow check on, each control
 of a keyed family is found by its identity among the keyed families on
 screen and must be replaced exactly when it differs, or defined when none
 is found; each keyed control on screen must be among the pending ones or

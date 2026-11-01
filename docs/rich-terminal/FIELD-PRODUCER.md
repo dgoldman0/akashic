@@ -74,9 +74,12 @@ accounting, so ordinary selection movement retains an unchanged
 SERIES/WAVEFORM graph; new content, such as the text a prompt's user types,
 replaces the field without replacing anything else. The new text may be
 longer or shorter: each field is compared on its own, and the fields' total
-text may differ from the acknowledged bank's. Other state changes,
-content whose revision is not newer, and changes to the label, membership or
-identity still require complete owner replacement. FIELD semantic content
+text may differ from the acknowledged bank's. A field that comes, as an
+application's prompt opens, is defined under the fresh identity the
+comparison gives it, and one that goes is dropped; Desk's shell defines and
+drops the modal region it lies in. Other state changes, content whose
+revision is not newer, and changes to the label or identity still require
+complete owner replacement. FIELD semantic content
 does not use the collection content-delta path.
 
 Return coordinates identify the first cell of the declared value rectangle,

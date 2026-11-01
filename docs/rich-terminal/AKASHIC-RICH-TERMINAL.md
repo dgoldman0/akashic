@@ -1008,9 +1008,11 @@ names a region the terminal acknowledged, once, the room it held is free
 for a region defined after it, and its identity stays used. The commit's
 audit refuses a drop of a region the transaction writes into, and a write
 into a region it dropped; the terminal refuses a drop of a region that
-still holds a control or object. A field or a dialog that comes or goes
-still needs the frame replaced whole, as does a change in the number of
-menu controls.
+still holds a control or object. Fields and dialogs come and go so too: a
+prompt or a dialog an application opens is defined, and Desk's shell
+defines the modal region it lies in first; one that closes is dropped, and
+its region after it. A change in the number of menu controls still needs
+the frame replaced whole.
 
 A comparison of a candidate built for Desk's shell whose bank on screen kept
 those facts, and whose controls each carry, with their own correlation in

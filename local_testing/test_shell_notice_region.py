@@ -64,7 +64,7 @@ _SX-KA _SN-REGIONS 1 = _SS-A
 _SN-REGION @ _RTE-IR.ID @ _SX-KA RSHSP-PART.NEXT-REGION @ 1- = _SS-A
 _SN-REGION @ _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR = _SS-A
 _SN-REGION @ _RTE-IR.COLS @ 32 = _SS-A _SN-REGION @ _RTE-IR.ROWS @ 12 = _SS-A
-_SN-REGION @ _RTE-IR.CLIP-X @ 2 = _SS-A _SN-REGION @ _RTE-IR.Z @ 4 = _SS-A
+_SN-REGION @ _RTE-IR.CLIP-X @ 2 = _SS-A _SN-REGION @ _RTE-IR.Z @ 5 = _SS-A
 _SX-KA _SP-MODALS 0= _SS-A
 \ The notice is a DIALOG there, with its DLG1, after the application's
 \ control and the taskbar's.
@@ -151,8 +151,8 @@ _SQ-VALUE _SQ-VU ! _SQ-VA ! 1 _SQ-REV ! -1 _SQ-ON !
 ' _SN-PROMPT-PAINT _SD-DRAW _SX-PACK-PREPARE _SS-OK _SD-ACK
 _SX-KA _SX-PART-VALID? _SS-A
 \ The prompt's whole-screen modal region, and the notice's above it.
-_SX-KA _SP-MODALS 1 = _SS-A _SP-MODAL @ _RTE-IR.Z @ 3 = _SS-A
-_SX-KA _SN-REGIONS 1 = _SS-A _SN-REGION @ _RTE-IR.Z @ 4 = _SS-A
+_SX-KA _SP-MODALS 1 = _SS-A _SP-MODAL @ _RTE-IR.Z @ 4 = _SS-A
+_SX-KA _SN-REGIONS 1 = _SS-A _SN-REGION @ _RTE-IR.Z @ 5 = _SS-A
 _SX-KA _SQ-PROMPT 0<> _SS-A _SX-KA _SN-DIALOG 0<> _SS-A
 _SX-KA _SN-DIALOG _RTE-CONTROL.ID @ _SX-KA _SQ-PROMPT _RTE-CONTROL.ID @ 1+ = _SS-A
 \ A typed character moves the notice in the model, but only the prompt's

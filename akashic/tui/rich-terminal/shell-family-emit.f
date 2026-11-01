@@ -59,19 +59,21 @@ CREATE _RTE-FEM-RUN-MEM RTE-GLYPH-RUN-SIZE 7 + ALLOT
         ELSE 2DROP THEN
     LOOP 2DROP DROP -1 ;
 
+\ Define the catalog row at _RTE-FEM-REGION.
+: _RTE-FEM-REGION-DEFINE ( -- status )
+    _RTE-FEM-CATALOG @ _RTE-RC.OWNER @
+    _RTE-FEM-CATALOG @ _RTE-RC.GENERATION @
+    _RTE-FEM-REGION @ _RTE-IR.ID @
+    _RTE-FEM-REGION @ _RTE-IR.X @ _RTE-FEM-REGION @ _RTE-IR.Y @
+    _RTE-FEM-REGION @ _RTE-IR.COLS @ _RTE-FEM-REGION @ _RTE-IR.ROWS @
+    _RTE-FEM-REGION @ _RTE-IR.CLIP-X @ _RTE-FEM-REGION @ _RTE-IR.CLIP-Y @
+    _RTE-FEM-REGION @ _RTE-IR.CLIP-COLS @ _RTE-FEM-REGION @ _RTE-IR.CLIP-ROWS @
+    _RTE-FEM-REGION @ _RTE-IR.Z @ _RTE-FEM-REGION @ _RTE-IR.FLAGS @
+    _RTE-FEM-BASE @ RTE-REGION-DEFINE ;
 : _RTE-FEM-REGIONS ( -- status )
     _RTE-FEM-CATALOG @ _RTE-RC.REGIONS-A @ _RTE-FEM-REGION !
     _RTE-FEM-CATALOG @ _RTE-RC.REGIONS-U @ RTE-INSTRUMENT-REGION-SIZE / 0 ?DO
-        _RTE-FEM-CATALOG @ _RTE-RC.OWNER @
-        _RTE-FEM-CATALOG @ _RTE-RC.GENERATION @
-        _RTE-FEM-REGION @ _RTE-IR.ID @
-        _RTE-FEM-REGION @ _RTE-IR.X @ _RTE-FEM-REGION @ _RTE-IR.Y @
-        _RTE-FEM-REGION @ _RTE-IR.COLS @ _RTE-FEM-REGION @ _RTE-IR.ROWS @
-        _RTE-FEM-REGION @ _RTE-IR.CLIP-X @ _RTE-FEM-REGION @ _RTE-IR.CLIP-Y @
-        _RTE-FEM-REGION @ _RTE-IR.CLIP-COLS @ _RTE-FEM-REGION @ _RTE-IR.CLIP-ROWS @
-        _RTE-FEM-REGION @ _RTE-IR.Z @ _RTE-FEM-REGION @ _RTE-IR.FLAGS @
-        _RTE-FEM-BASE @ RTE-REGION-DEFINE
-        DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+        _RTE-FEM-REGION-DEFINE DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
         RTE-INSTRUMENT-REGION-SIZE _RTE-FEM-REGION +!
     LOOP RTE-S-OK ;
 : _RTE-FEM-RUN! ( -- )
@@ -138,10 +140,14 @@ CREATE _RTE-FEM-RUN-MEM RTE-GLYPH-RUN-SIZE 7 + ALLOT
 \ ---------------------------------------------------------------------
 \ PENDING is the next frame and ACTIVE the acknowledged one.  The caller has
 \ given every pending item the identity of the active item in the same place
-\ and has begun a retained DELTA.  Both batches carry the same catalog and
-\ the same families in the same order, kind and region, but for leading
-\ keyed families of controls, which the caller paired by identity and whose
-\ controls may come and go (below).  A changed control,
+\ and has begun a retained DELTA.  Both batches carry the same families in
+\ the same order, kind and region, but for leading keyed families of
+\ controls, which the caller paired by identity and whose controls may come
+\ and go (below).  Their catalogs name the same surface, and a region in
+\ both is the same row; a region only on screen is dropped once the
+\ controls that went have been, and one only in the pending catalog is
+\ defined before any control, as an application's prompt or dialog brings
+\ or takes the modal region it lies in.  A changed control,
 \ static, pane or glyph run is replaced, and a glyph family may end with new
 \ runs, which are defined.  Instruments, series and taskbar controls have no
 \ DELTA replacement, so they must be unchanged.  When nothing changed, the
@@ -373,9 +379,35 @@ VARIABLE _RTE-FDE-SEEK VARIABLE _RTE-FDE-J-ENTRY VARIABLE _RTE-FDE-J-LISTED
     _RTE-FEM-ENTRY @ SWAP EXECUTE 0= IF 2DROP RTE-S-INVALID EXIT THEN
     FSHD? IF 2DUP _RTE-FDE-KEYED-JUDGE THEN
     _RTE-FDE-KNOWN ;
+\ The regions on screen the pending catalog lacks go, and those it alone
+\ holds come.
+VARIABLE _RTE-FDE-ROWS
+: _RTE-FDE-REGION-DROPS ( -- status )
+    _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ DUP _RTE-RC.REGIONS-A @ _RTE-FDE-ROWS !
+    _RTE-RC.REGIONS-U @ RTE-INSTRUMENT-REGION-SIZE / 0 ?DO
+        _RTE-FDE-ROWS @ _RTE-IR.ID @ _RTE-FEM-CATALOG @ RTE-REGION-CATALOG-FIND 0= IF
+            _RTE-FEM-CATALOG @ _RTE-RC.OWNER @ _RTE-FEM-CATALOG @ _RTE-RC.GENERATION @
+            _RTE-FDE-ROWS @ _RTE-IR.ID @ _RTE-FEM-BASE @ RTE-REGION-DROP
+            DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+            1 _RTE-FDE-OPS +!
+        THEN
+        RTE-INSTRUMENT-REGION-SIZE _RTE-FDE-ROWS +!
+    LOOP RTE-S-OK ;
+: _RTE-FDE-REGION-DEFINES ( -- status )
+    _RTE-FEM-CATALOG @ DUP _RTE-RC.REGIONS-A @ _RTE-FEM-REGION !
+    _RTE-RC.REGIONS-U @ RTE-INSTRUMENT-REGION-SIZE / 0 ?DO
+        _RTE-FEM-REGION @ _RTE-IR.ID @
+            _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ RTE-REGION-CATALOG-FIND 0= IF
+            _RTE-FEM-REGION-DEFINE DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
+            1 _RTE-FDE-OPS +!
+        THEN
+        RTE-INSTRUMENT-REGION-SIZE _RTE-FEM-REGION +!
+    LOOP RTE-S-OK ;
 : _RTE-FDE-KEYED-BODY ( -- status )
     -1 _RTE-FDE-KEYED !
     _RTE-FDE-DROPS DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTE-FDE-REGION-DROPS DUP RTE-S-OK <> IF EXIT THEN DROP
+    _RTE-FDE-REGION-DEFINES DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-A @ _RTE-FEM-ENTRY !
     _RTE-FDE-KEYED-P @ 0 ?DO
         _RTE-FDE-KEYED-FAMILY DUP RTE-S-OK <> IF UNLOOP EXIT THEN DROP
@@ -384,16 +416,21 @@ VARIABLE _RTE-FDE-SEEK VARIABLE _RTE-FDE-J-ENTRY VARIABLE _RTE-FDE-J-LISTED
     FSHD? IF _RTE-FDE-DROPS-JUDGE THEN
     0 _RTE-FDE-KEYED ! RTE-S-OK ;
 
-\ Both catalogs name the same surface and the same regions.
+\ Both catalogs name the same surface, and each region in both is the same
+\ row in each.
 : _RTE-FDE-CATALOGS? ( -- flag )
     _RTE-FEM-CATALOG @ _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ 0 32 _RTE-FDE-BYTES= 0= IF
         0 EXIT
     THEN
-    _RTE-FEM-CATALOG @ _RTE-RC.REGIONS-U @
-    _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ _RTE-RC.REGIONS-U @ <> IF 0 EXIT THEN
-    _RTE-FEM-CATALOG @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @
-    _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @
-    _RTE-FDE-SPAN= ;
+    _RTE-FEM-CATALOG @ DUP _RTE-RC.REGIONS-A @ _RTE-FDE-ROWS !
+    _RTE-RC.REGIONS-U @ RTE-INSTRUMENT-REGION-SIZE / 0 ?DO
+        _RTE-FDE-ROWS @ _RTE-IR.ID @
+            _RTE-FDE-ACTIVE @ _RTE-FB.CATALOG-A @ RTE-REGION-CATALOG-FIND ?DUP IF
+            RTE-INSTRUMENT-REGION-SIZE _RTE-FDE-ROWS @ RTE-INSTRUMENT-REGION-SIZE
+            _RTE-FDE-SPAN= 0= IF 0 UNLOOP EXIT THEN
+        THEN
+        RTE-INSTRUMENT-REGION-SIZE _RTE-FDE-ROWS +!
+    LOOP -1 ;
 
 \ The two family entries have the same kind and region.
 : _RTE-FDE-PLANS? ( -- flag )
@@ -424,7 +461,6 @@ VARIABLE _RTE-FDE-SEEK VARIABLE _RTE-FDE-J-ENTRY VARIABLE _RTE-FDE-J-LISTED
 : _RTE-FDE-FAMILY ( -- status )
     _RTE-FEM-ENTRY @ _RTE-FE.KIND @ DUP _RTE-FEM-KIND !
         RTE-FAMILY-ITEM-SIZE _RTE-FEM-STRIDE !
-    _RTE-FDE-PLANS? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-FEM-KIND @ _RTE-FDE-LAYOUT
     _RTE-FEM-ENTRY @ _RTE-FE.PLAN-A @ _RTE-FEM-PLAN !
     _RTE-FEM-ENTRY @ _RTE-FE.BYTES-A @ _RTE-FEM-BYTES !
@@ -476,6 +512,21 @@ VARIABLE _RTE-FDE-SEEK VARIABLE _RTE-FDE-J-ENTRY VARIABLE _RTE-FDE-J-LISTED
     _RTE-FEM-ENTRY @ _RTE-FE.REFS-A @ _RTE-FDE-FENCE-I @ 16 * + _RTE-FEM-REF !
     _RTE-FDE-REPLACE ;
 
+\ Every family after the keyed ones has the kind and region of the family
+\ on screen in the same place.  A region either batch alone holds is
+\ therefore a keyed family's, and none is defined or dropped before the
+\ pairs are proved.
+: _RTE-FDE-PAIRS? ( -- flag )
+    _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-A @
+        _RTE-FDE-KEYED-P @ RTE-FAMILY-ENTRY-SIZE * + _RTE-FEM-ENTRY !
+    _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-A @
+        _RTE-FDE-KEYED-A @ RTE-FAMILY-ENTRY-SIZE * + _RTE-FDE-AE !
+    _RTE-FDE-REST @ 0 ?DO
+        _RTE-FEM-ENTRY @ _RTE-FE.KIND @ _RTE-FEM-KIND !
+        _RTE-FDE-PLANS? 0= IF 0 UNLOOP EXIT THEN
+        RTE-FAMILY-ENTRY-SIZE DUP _RTE-FEM-ENTRY +! _RTE-FDE-AE +!
+    LOOP -1 ;
+
 VARIABLE _RTE-FDE-PROVED
 : _RTE-FDE-BODY ( -- status )
     _RTE-FDE-PROVED @ 0= IF
@@ -492,6 +543,7 @@ VARIABLE _RTE-FDE-PROVED
     _RTE-FDE-ACTIVE @ _RTE-FB.FAMILIES-U @ RTE-FAMILY-ENTRY-SIZE /
         DUP _RTE-FDE-KEYED-A @ U< IF DROP RTE-S-INVALID EXIT THEN
         _RTE-FDE-KEYED-A @ - _RTE-FDE-REST @ <> IF RTE-S-INVALID EXIT THEN
+    _RTE-FDE-PAIRS? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-FDE-KEYED-BODY DUP RTE-S-OK <> IF EXIT THEN DROP
     _RTE-FEM-BATCH @ _RTE-FB.FAMILIES-A @
         _RTE-FDE-KEYED-P @ RTE-FAMILY-ENTRY-SIZE * + _RTE-FEM-ENTRY !
@@ -511,7 +563,7 @@ VARIABLE _RTE-FDE-PROVED
     0 _RTE-FDE-OPS ! 0 _RTE-FDE-FENCE-E ! 0 _RTE-FDE-FENCE-I !
     0 _RTE-FDE-FROM ! 0 _RTE-FDE-SIZE ! 0 _RTE-FDE-NPTR ! 0 _RTE-FDE-PROVED !
     0 _RTE-FDE-LIST ! 0 _RTE-FDE-LEFT ! 0 _RTE-FDE-NEXT ! 0 _RTE-FDE-ITEMS !
-    _RTE-FDE-PTRS 24 0 FILL ;
+    0 _RTE-FDE-ROWS ! _RTE-FDE-PTRS 24 0 FILL ;
 \ A proof the proved peer makes only with every-frame checks on names the
 \ shell's banks, which hold its batches, when it fails (check-mode.f).  The
 \ public entry's proofs check what a caller hands it and name nothing.

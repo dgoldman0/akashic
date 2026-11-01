@@ -471,7 +471,7 @@ VARIABLE _RSHSP-SR VARIABLE _RSHSP-SC VARIABLE _RSHSP-SW
     _RSHSP-OVERLAYS! _RSHSP-ELIGIBILITY _RSHSP-BANDS!
     \ The panes' content takes the Z of the candidate's own region, above
     \ its instrument regions (_RTHP-BASE-LAYER!); the chrome lies above.
-    _RSHSP-P @ _RTHP.BASE-Z @ DUP 2147483643 > IF DROP _RSHSP-FAIL THEN
+    _RSHSP-P @ _RTHP.BASE-Z @ DUP 2147483642 > IF DROP _RSHSP-FAIL THEN
         _RSHSP-CONTENT-Z !
     _RSHSP-P @ _RTHP.REGION @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ _RSHSP-ADD
         1 _RSHSP-ADD _RSHSP-FIRST-REGION !
@@ -534,14 +534,59 @@ VARIABLE _RSHSP-SR VARIABLE _RSHSP-SC VARIABLE _RSHSP-SW
     DUP _RTE-IR.ROWS @ OVER _RTE-IR.CLIP-ROWS !
     DUP _RTE-IR.FLAGS @ RTE-REGION-CLIPPED OR SWAP _RTE-IR.FLAGS ! ;
 
-\ A modal region for each overlay follows the planner's regions.  Like a
-\ pane's content region it has the surface as its logical bounds and the
-\ pane's content as its clip, and it sits above every region of the shell.
+\ A modal region for each overlay follows every other region of the shell,
+\ so an overlay that opens or closes in a DELTA leaves the others their
+\ identities.  Like a pane's content region it has the surface as its
+\ logical bounds and the pane's content as its clip, and it sits above the
+\ panes, at a z of its own below the overlay panes'.  In a DELTA a modal
+\ region keeps the identity the frame on screen gave the modal region with
+\ the same clip, the one over the same pane, and a new one takes the next
+\ identity past every region the producer has used; the rows then go in
+\ the order of their identities.
+VARIABLE _RSHSP-DMODAL-NEXT
+VARIABLE _RSHSP-DMODAL-ROW
+: _RSHSP-APP-MODAL? ( row -- flag )
+    DUP _RTE-IR.FLAGS @ RTE-REGION-MODAL AND 0= IF DROP 0 EXIT THEN
+    DUP _RTE-IR.CLIP-X @ OVER _RTE-IR.CLIP-Y @ OR
+    OVER _RTE-IR.CLIP-COLS @ _RSHSP-P @ _RTHP.COLS @ <> OR
+    SWAP _RTE-IR.CLIP-ROWS @ _RSHSP-P @ _RTHP.ROWS @ <> OR ;
+: _RSHSP-D-MODAL-ID ( row -- id )
+    _RSHSP-DMODAL-ROW !
+    _RSHSP-DBATCH @ _RTE-FB.CATALOG-A @ DUP _RTE-RC.REGIONS-A @
+    SWAP _RTE-RC.REGIONS-U @ 96 / 0 ?DO
+        DUP _RSHSP-APP-MODAL? IF
+            DUP _RTE-IR.CLIP-X 32 _RSHSP-DMODAL-ROW @ _RTE-IR.CLIP-X 32 COMPARE 0= IF
+                _RTE-IR.ID @ UNLOOP EXIT
+            THEN
+        THEN 96 +
+    LOOP DROP
+    _RSHSP-DMODAL-NEXT @ DUP 1 _RSHSP-ADD _RSHSP-DMODAL-NEXT ! ;
+\ Sort N rows at A by identity; a pane shows one overlay, so N is small.
+VARIABLE _RSHSP-MS-A
+VARIABLE _RSHSP-MS-J
+VARIABLE _RSHSP-MS-T
+: _RSHSP-ROW-SWAP ( a b -- )
+    12 0 DO
+        OVER I 8 * + @ _RSHSP-MS-T !
+        DUP I 8 * + @ 2 PICK I 8 * + !
+        _RSHSP-MS-T @ OVER I 8 * + !
+    LOOP 2DROP ;
+: _RSHSP-MODAL-SORT ( a n -- )
+    DUP 2 < IF 2DROP EXIT THEN
+    SWAP _RSHSP-MS-A ! 1 ?DO
+        I _RSHSP-MS-J !
+        BEGIN
+            _RSHSP-MS-J @ 0>
+            IF _RSHSP-MS-A @ _RSHSP-MS-J @ 96 * + DUP 96 - _RTE-IR.ID @
+                SWAP _RTE-IR.ID @ U> ELSE 0 THEN
+        WHILE
+            _RSHSP-MS-A @ _RSHSP-MS-J @ 96 * + DUP 96 - _RSHSP-ROW-SWAP
+            -1 _RSHSP-MS-J +!
+        REPEAT
+    LOOP ;
 : _RSHSP-MODAL-ROWS ( first-row -- next-row )
-    _RSHSP-MODAL-N @ 0 ?DO
+    DUP _RSHSP-MODAL-N @ 0 ?DO
         I _RSHSP-OV 8 + @ _RSHSP-ENTRY _RSHSP-E !
-        _RSHSP-ROW-ID @ I _RSHSP-OV 16 + !
-        _RSHSP-ROW-ID @ OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
         _RSHSP-P @ _RTHP.COLS @ OVER _RTE-IR.COLS !
         _RSHSP-P @ _RTHP.ROWS @ OVER _RTE-IR.ROWS !
         _RSHSP-E @ SHME.CONTENT-COL @ OVER _RTE-IR.CLIP-X !
@@ -551,14 +596,18 @@ VARIABLE _RSHSP-SR VARIABLE _RSHSP-SC VARIABLE _RSHSP-SW
         _RSHSP-CONTENT-Z @ 2 + OVER _RTE-IR.Z !
         RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR
             OVER _RTE-IR.FLAGS !
+        _RSHSP-DBATCH @ IF DUP _RSHSP-D-MODAL-ID
+        ELSE _RSHSP-ROW-ID @ DUP 1 _RSHSP-ADD _RSHSP-ROW-ID ! THEN
+        DUP I _RSHSP-OV 16 + ! OVER _RTE-IR.ID !
         96 +
-    LOOP ;
+    LOOP
+    _RSHSP-DBATCH @ IF SWAP _RSHSP-MODAL-N @ _RSHSP-MODAL-SORT ELSE NIP THEN ;
 \ An overlay pane's host gives it every key while it is open and ignores a
 \ press outside it, as Desk does its own screens.  With dialogs the
 \ overlay pane's document therefore goes in a modal region over the whole
 \ screen, surface-sized with the surface as its clip: a modal scope over
-\ everything beneath it.  The regions follow the overlays' modal regions
-\ at the same z, so they lie above them, and Desk's prompt lies above all.
+\ everything beneath it.  The regions lie above the overlays' modal
+\ regions, at a z of their own, and Desk's prompt lies above all.
 VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
 : _RSHSP-SCREEN-ROWS ( first-row -- next-row )
     _RSHSP-ROW-ID @ _RSHSP-SCREEN-FIRST !
@@ -566,7 +615,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
         _RSHSP-ROW-ID @ OVER _RTE-IR.ID ! 1 _RSHSP-ROW-ID +!
         _RSHSP-P @ _RTHP.COLS @ 2DUP SWAP _RTE-IR.COLS ! OVER _RTE-IR.CLIP-COLS !
         _RSHSP-P @ _RTHP.ROWS @ 2DUP SWAP _RTE-IR.ROWS ! OVER _RTE-IR.CLIP-ROWS !
-        _RSHSP-CONTENT-Z @ 2 + OVER _RTE-IR.Z !
+        _RSHSP-CONTENT-Z @ 3 + OVER _RTE-IR.Z !
         RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR
             OVER _RTE-IR.FLAGS !
         96 +
@@ -595,7 +644,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
         1 OVER _RTE-IR.CLIP-ROWS !
         RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR
     THEN OVER _RTE-IR.FLAGS !
-    _RSHSP-CONTENT-Z @ 3 + OVER _RTE-IR.Z ! 96 + ;
+    _RSHSP-CONTENT-Z @ 4 + OVER _RTE-IR.Z ! 96 + ;
 \ The app shell's notice lies in a region of its own, its rectangle the
 \ clip, above every other region of the shell, Desk's prompt too.  It is no
 \ modal scope: the notice takes no input, and what lies beneath it stays
@@ -607,7 +656,7 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
     _RSHSP-P @ _RTHP.ROWS @ OVER _RTE-IR.ROWS !
     _RSHSP-NC @ OVER _RTE-IR.CLIP-X ! _RSHSP-NR @ OVER _RTE-IR.CLIP-Y !
     _RSHSP-NW @ OVER _RTE-IR.CLIP-COLS ! _RSHSP-NH @ OVER _RTE-IR.CLIP-ROWS !
-    _RSHSP-CONTENT-Z @ 4 + OVER _RTE-IR.Z !
+    _RSHSP-CONTENT-Z @ 5 + OVER _RTE-IR.Z !
     RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR OVER _RTE-IR.FLAGS !
     96 + ;
 
@@ -659,9 +708,9 @@ VARIABLE _RSHSP-SCREEN-N VARIABLE _RSHSP-SCREEN-FIRST
         _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ 96 * MOVE
     _RSHSP-FIRST-REGION @ _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + _RSHSP-ROW-ID !
     _RSHSP-OUT @ _RSHSP-P @ _RTHP.INSTRUMENT-REGION-COUNT @ 1+
-        _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + 96 * + _RSHSP-MODAL-ROWS
+        _RSHSP-RESULT @ RSHPL-RESULT.REGIONS @ + 96 * +
         _RSHSP-SCREEN-ROWS _RSHSP-PROMPT-REGION-ROW _RSHSP-NOTICE-REGION-ROW
-        _RSHSP-STATUS-REGION-ROW DROP
+        _RSHSP-STATUS-REGION-ROW _RSHSP-MODAL-ROWS DROP
     _RSHSP-CATALOG @ RTE-REGION-CATALOG-VALID? _RSHSP-CHECK
     _RSHSP-P @ _RTHP.CONTROL-COUNT @ _RSHSP-P @ _RTHP.STATIC-COUNT @ _RSHSP-ADD
     _RSHSP-N @ _RSHSP-ADD 6 _RSHSP-ADD _RSHSP-PROMPT-N @ _RSHSP-ADD
@@ -1975,11 +2024,23 @@ VARIABLE _RSHSP-DM-UA
         THEN
     LOOP DROP _RSHSP-DX-MAX @ 1 _RSHSP-ADD ;
 
+\ The catalog names the same surface as the frame on screen's, and each of
+\ its regions is that frame's region of the same identity, unchanged, but
+\ for the modal regions of the applications' overlays, which may come and
+\ go: the family emission defines and drops them.
+VARIABLE _RSHSP-DR-TO
+: _RSHSP-D-ROWS ( from to -- )
+    _RSHSP-DR-TO !
+    DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @ 96 / 0 ?DO
+        DUP _RTE-IR.ID @ _RSHSP-DR-TO @ RTE-REGION-CATALOG-FIND ?DUP IF
+            96 2 PICK 96 COMPARE 0= _RSHSP-CHECK
+        ELSE DUP _RSHSP-APP-MODAL? _RSHSP-CHECK THEN
+        96 +
+    LOOP DROP ;
 : _RSHSP-D-CATALOG ( -- )
     _RSHSP-CATALOG @ 32 _RSHSP-DBATCH @ _RTE-FB.CATALOG-A @ 32 COMPARE 0= _RSHSP-CHECK
-    _RSHSP-CATALOG @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @
-    _RSHSP-DBATCH @ _RTE-FB.CATALOG-A @ DUP _RTE-RC.REGIONS-A @ SWAP _RTE-RC.REGIONS-U @
-    COMPARE 0= _RSHSP-CHECK ;
+    _RSHSP-CATALOG @ _RSHSP-DBATCH @ _RTE-FB.CATALOG-A @ _RSHSP-D-ROWS
+    _RSHSP-DBATCH @ _RTE-FB.CATALOG-A @ _RSHSP-CATALOG @ _RSHSP-D-ROWS ;
 
 \ The shell's own controls, past the applications' (_RSHSP-D-APPS).  The
 \ taskbar takes the acknowledged identities in place and must be otherwise
@@ -2207,6 +2268,10 @@ VARIABLE _RSHSP-DA-DEFINES VARIABLE _RSHSP-DA-MAX
 
 : _RSHSP-BUILD-DELTA ( -- )
     _RSHSP-ACTIVE-PART DUP RSHSP-PART.BATCH @ + _RSHSP-DBATCH !
+    \ A modal region new to the frame takes an identity past every region
+    \ published, or consumed by an acknowledged hidden START.
+    _RSHSP-ACTIVE-PART RSHSP-PART.NEXT-REGION @
+        _RSHSP-P @ _RTHP.NEXT-REGION @ MAX _RSHSP-DMODAL-NEXT !
     7 _RSHSP-DSTAGE ! 0 _RSHSP-DIAG-FAMILY !
     \ A DELTA copies the runs of rows no draw touched, except in safe mode.
     CHK-SAFE? 0= _RSHSP-REUSE ! _RSHSP-SOURCE-TARGET _RSHSP-BUILD-BATCH
@@ -2218,7 +2283,7 @@ VARIABLE _RSHSP-DA-DEFINES VARIABLE _RSHSP-DA-MAX
     _RSHSP-ACTIVE-PART RSHSP-PART.NEXT-OBJECT @ MAX _RSHSP-DNEXT !
     1 _RSHSP-DSTAGE ! _RSHSP-D-CATALOG _RSHSP-D-FAMILIES _RSHSP-D-METADATA
     6 _RSHSP-DSTAGE !
-    _RSHSP-ACTIVE-PART RSHSP-PART.NEXT-REGION @ _RSHSP-NEXT-REGION !
+    _RSHSP-DMODAL-NEXT @ _RSHSP-NEXT-REGION !
     _RSHSP-BATCH @ _RSHSP-D-NEXT-OBJECT _RSHSP-NEXT-OBJECT !
     _RSHSP-FINISH ;
 : _RSHSP-DELTA-PREPARE ( -- status )

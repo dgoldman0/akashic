@@ -5299,13 +5299,13 @@ def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -
     assert for_shell.index("_RTHP-SHELL-RESIDUE?") < for_shell.index(
         "_RTHP-BASE-LAYER!") < for_shell.index("_RTHP-WRAP-HYBRID")
     # A control the frame on screen lacks is defined under its fresh
-    # identity, in a comparison of shell-built candidates too; a field or a
-    # dialog still refuses the DELTA before anything renumbers the candidate.
+    # identity, in a comparison of shell-built candidates too, and so is a
+    # field or a dialog, whose modal region Desk's shell defines (9c.2b).
     compatible = _word(source, "_RTHP-D-CONTROL-COMPATIBLE?")
     unmatched = compatible[compatible.index("_RTHP-D-MATCHED @ 0= IF"):]
-    assert "_RTHP.SHELL-BUILT" not in unmatched[:unmatched.index("-1 _RTHP-D-CHANGED !")]
-    assert unmatched.index("RTE-CONTROL-FIELD =") < unmatched.index(
-        "_RTHP-DIALOG-KIND? OR IF 0 EXIT THEN") < unmatched.index("-1 _RTHP-D-CHANGED !")
+    defined = unmatched[:unmatched.index("-1 _RTHP-D-CHANGED !")]
+    assert "_RTHP.SHELL-BUILT" not in defined
+    assert "RTE-CONTROL-FIELD" not in defined and "_RTHP-DIALOG-KIND?" not in defined
     # A DELTA short of engine working storage is prepared again once it grew,
     # and one short of terminal space asks for more before any START.
     live = _word(source, "_RTHP-PREPARE-LIVE")

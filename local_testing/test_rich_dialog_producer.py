@@ -524,7 +524,9 @@ def test_dialog_delta_keeps_title_and_takes_only_newer_content(h, mutation):
     h.guards()
 
 
-def test_a_new_dialog_has_no_delta_match(h):
+def test_a_new_dialog_is_defined_under_its_fresh_identities(h):
+    """A dialog an application opens has no match on screen: the dialog and
+    its two buttons are each defined (9c.2b)."""
     h.setup()
     assert h.build() == (0,)
     active = h.pack()
@@ -533,11 +535,13 @@ def test_a_new_dialog_has_no_delta_match(h):
     assert h.build() == (0,)
     pending = h.pack(index=1)
     for name, value in (("P", h.producer), ("ACTIVE", active), ("PENDING", pending),
-                        ("PENDING-FIRST", 200)):
+                        ("PENDING-FIRST", 200), ("OPS", 0)):
         h.variable("_RTHP-D-" + name, value)
     h.runtime.memory.write_bytes(h.get("ORDER2-A"), bytes(24))
     for index in range(3):
-        assert not h.call("_RTHP-D-CONTROL-COMPATIBLE?", index)
+        assert h.call("_RTHP-D-CONTROL-COMPATIBLE?", index)
+        assert h.variable("_RTHP-D-CHANGED") == MASK64
+    assert h.variable("_RTHP-D-OPS") == 3
 
 
 def test_an_unchanged_dialog_clone_rebases_its_owned_spans(h):

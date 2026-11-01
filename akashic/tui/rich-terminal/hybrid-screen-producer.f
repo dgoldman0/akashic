@@ -13380,33 +13380,25 @@ VARIABLE _RTHP-ROOT-K-BANK
     12 _RTHP-D-WHY !
     _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-COUNT @
         _RTHP-D-P @ _RTHP.COLLECTION-COUNT @ <> IF 0 EXIT THEN
+    \ Fields and dialogs may come and go, as an application's prompt or
+    \ dialog opens and closes: the comparison defines the new ones and drops
+    \ those that went.  A field's text may differ in length from the
+    \ acknowledged bank's, as a prompt's does with every key typed: each
+    \ field is compared, and replaced when its content is newer, on its own.
     13 _RTHP-D-WHY !
     _RTHP-D-PENDING @ _RTHP-TB.FIELD-COUNT @
         _RTHP-D-P @ _RTHP.FIELD-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-D-PENDING @ _RTHP-TB.FIELD-COUNT @
-        _RTHP-D-ACTIVE @ _RTHP-TB.FIELD-COUNT @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.FIELD-ITEMS @
         _RTHP-D-P @ _RTHP.FIELD-ITEMS @ <> IF 0 EXIT THEN
-    _RTHP-D-PENDING @ _RTHP-TB.FIELD-ITEMS @
-        _RTHP-D-ACTIVE @ _RTHP-TB.FIELD-ITEMS @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.FIELD-UTF8 @
         _RTHP-D-P @ _RTHP.FIELD-UTF8 @ <> IF 0 EXIT THEN
-    \ The fields' text may differ in length from the acknowledged bank's, as
-    \ a prompt's does with every key typed: each field is compared, and
-    \ replaced when its content is newer, on its own.
     14 _RTHP-D-WHY !
     _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @
         _RTHP-D-P @ _RTHP.DIALOG-CONTROLS @ <> IF 0 EXIT THEN
-    _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @
-        _RTHP-D-ACTIVE @ _RTHP-TB.DIALOG-CONTROLS @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.DIALOG-COUNT @
         _RTHP-D-P @ _RTHP.DIALOG-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-D-PENDING @ _RTHP-TB.DIALOG-COUNT @
-        _RTHP-D-ACTIVE @ _RTHP-TB.DIALOG-COUNT @ <> IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.DIALOG-UTF8 @
         _RTHP-D-P @ _RTHP.DIALOG-UTF8 @ <> IF 0 EXIT THEN
-    _RTHP-D-PENDING @ _RTHP-TB.DIALOG-UTF8 @
-        _RTHP-D-ACTIVE @ _RTHP-TB.DIALOG-UTF8 @ <> IF 0 EXIT THEN
 
     15 _RTHP-D-WHY !
     _RTHP-D-PENDING @ _RTHP-TB.COLLECTION-ITEMS @
@@ -14015,10 +14007,9 @@ VARIABLE _RTHP-D-REV-PENDING
     _RTHP-D-MATCHED @ 0= IF
         \ A control the frame on screen lacks is defined under its fresh
         \ identity, which lies above every one on screen, Desk's shell
-        \ defining it among the applications' controls.  A field or a
-        \ dialog still needs the frame replaced whole.
-        _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @ DUP RTE-CONTROL-FIELD =
-            SWAP _RTHP-DIALOG-KIND? OR IF 0 EXIT THEN
+        \ defining it among the applications' controls.  A prompt or dialog
+        \ an application opens is defined so too: Desk's shell defines the
+        \ modal region it lies in.
         _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION @
             _RTHP-D-PENDING @ _RTHP-TB.REGION @ <> IF 0 EXIT THEN
         _RTHP-D-PENDING-C @ _RTHP-D-PENDING @

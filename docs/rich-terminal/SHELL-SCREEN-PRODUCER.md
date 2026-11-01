@@ -166,13 +166,18 @@ A dialog element is the document's own paint, not an overlay: it and its
 contents stay in the pane's content region.
 
 When the terminal negotiated `RTE-F-DIALOGS`, each overlay gets a modal
-region after the planner's regions, in control order: surface-sized logical
-bounds, the pane's content as its clip, `VISIBLE | CLIPPED | MODAL`, and z two
-above the content z, so above every region the shell defines. The prompt's
-control, or the dialog and its buttons, go in it, and the terminal shows the
-rest of that application inactive while the overlay is open; Desk and other
-applications stay active. Without dialogs the prompt stays in its pane's
-content region, and the base candidate carries no dialog.
+region, last in the catalog after every other region the shell defines, in
+control order: surface-sized logical bounds, the pane's content as its clip,
+`VISIBLE | CLIPPED | MODAL`, and z two above the content z, so above the
+panes and beneath the overlay panes' screens, Desk's prompt and the notice,
+each of which has a z of its own. The prompt's control, or the dialog and
+its buttons, go in it, and the terminal shows the rest of that application
+inactive while the overlay is open; Desk and other applications stay
+active. Since the modal regions come last and stacking does not rest on
+their identities, an overlay that opens or closes leaves every other region
+its identity, and a DELTA defines or drops the overlay's region (below).
+Without dialogs the prompt stays in its pane's content region, and the base
+candidate carries no dialog.
 
 An overlay whose document is in no pane refuses the candidate, as any
 control of such a document does.
@@ -202,8 +207,8 @@ so when this candidate cannot be built for such a draw, CELL shows it.
 
 Desk gives an open screen every key and ignores a press outside it. With
 dialogs each overlay pane's document therefore goes in a modal region over
-the whole screen, after the overlays' modal regions and at the same z, so
-above them: surface-sized with the surface as its clip and `VISIBLE |
+the whole screen, three above the content z, above the overlays' modal
+regions: surface-sized with the surface as its clip and `VISIBLE |
 CLIPPED | MODAL`. Every control of the document goes there, so the screen
 is a modal scope over everything beneath it, and the terminal shows the
 panes and taskbar beneath inactive while it is open. The document's
@@ -220,8 +225,8 @@ covers it. It is one of the controls the producer numbers its statics and
 instruments past, and the part records its identity. With dialogs its region is a modal scope over
 the whole screen, surface-sized with the surface as its clip, since Desk
 takes no other input while the prompt is open; without them it is the last
-row alone. Either way it sits three above the content z, above the panes'
-modal regions. `PLACE` and `EXTEND` on it resolve to its value's first cell
+row alone. Either way it sits four above the content z, above the panes'
+and the overlay panes' modal regions. `PLACE` and `EXTEND` on it resolve to its value's first cell
 on that row and its field's revision, and Desk's prompt takes them through
 its ordinary event path.
 
@@ -230,7 +235,7 @@ too: its UDLG model and where its root lies, apart from every pane. With
 dialogs the shell makes it a `DIALOG` with the `NOTICE` flag, packed from
 that model, after Desk's prompt or the taskbar's controls, in a region of
 its own: surface-sized logical bounds, the notice's root as its clip,
-`VISIBLE | CLIPPED`, and z four above the content z, above every other
+`VISIBLE | CLIPPED`, and z five above the content z, above every other
 region, Desk's prompt too. It is no modal scope: the notice takes no input,
 and what lies beneath it stays active. A claim on its root keeps residual
 glyphs off it. Its cells are its own paint, so the taskbar bands and their
@@ -350,7 +355,13 @@ terminal's space fails as it is sent and goes out as a START, whose
 admission asks for the space.
 The shell then gives each item the acknowledged identity in the same place:
 
-- the catalog must be identical, region identities included;
+- the catalog keeps each region of the frame on screen, unchanged and under
+  its identity, but the modal regions of the applications' overlays, which
+  come and go as a prompt or dialog opens and closes. A modal region whose
+  pane still shows an overlay keeps its identity, found by its clip, which is
+  that pane's content. A new one takes the next identity past every region
+  the producer has used, and the catalog's regions go in the order of their
+  identities. One whose overlay closed is left out;
 - the applications' controls lead both batches, in runs of the bank's
   controls by region, and carry the identities the base producer's
   comparison gave them. Controls may come and go among them, so their
@@ -390,9 +401,13 @@ places, which ascend, fall to them in turn: the shell names those families
 to the emitter as its keyed ones, with the identities of the controls that
 went, and hands it each family's places as indexes in the family, written
 in the scratch block after those identities, which nothing reads once the
-part is built. The emitter drops the controls that went first, so the room
-they held is free, then defines and replaces the listed controls without
-comparing them. New runs take identities above the controls defined. The instruments and
+part is built. The emitter first proves that every family after the keyed
+ones pairs with the family on screen in the same place, kind and region,
+so a region only one catalog holds is a keyed family's. It then drops the
+controls that went, so the room they held is free, then the regions only
+the catalog on screen holds, once nothing in them remains, defines the
+regions only the pending catalog holds, and defines and replaces the listed
+controls without comparing them. New runs take identities above the controls defined. The instruments and
 series are known unchanged. The shell's own items and the applications'
 statics are compared as before, and the base producer, which counts the
 statics' changes for its own DELTA, looks for them in a comparison built for
@@ -406,8 +421,8 @@ admitted as a DELTA's, whose identities are those kept from the frame on
 screen and need not lie together or ascend
 ([FAMILY-BATCH-ADMISSION](FAMILY-BATCH-ADMISSION.md)). After the physical acknowledgement the producer publishes
 the pending bank, its part with it, exactly as after a reveal. A DELTA
-consumes no region identities, and the published part's frontier covers its
-new object identities.
+consumes a region identity only for a modal region that came, and the
+published part's frontier covers it and the new object identities.
 
 A DELTA plans residual runs only on rows that changed. Once a candidate is
 built, the producer's ROW-DAMAGE names the rows a plan must build again:

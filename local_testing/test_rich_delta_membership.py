@@ -8,8 +8,8 @@ frontier, and a control on screen that no pending control matches is
 dropped.  The plan lists the definitions with the controls that changed,
 by their places in the pending bank, and keeps the drops beside them, by
 their places on screen, ascending.  This holds for a frame built for
-Desk's shell as for one that is not.  A field or a dialog that comes still
-needs the frame replaced whole.
+Desk's shell as for one that is not, and for a field or a dialog, as an
+application's prompt or dialog opens and closes (9c.2b).
 
 These tests run the production packing, comparison and plan check of
 test_rich_instrument_reuse's DELTA harness over banks of tab sets, each
@@ -30,10 +30,10 @@ FIELD = 13
 
 
 class MembershipHarness(DeltaHarness):
-    def banks(self, active, pending, *, shell=True, kinds=None):
+    def banks(self, active, pending, *, shell=True, kinds=None, active_kinds=None):
         """The bank on screen holds a tab set for each correlation index in
-        ACTIVE, the pending bank one for each in PENDING, its kind from
-        KINDS when given.  A pending control with an index on screen is the
+        ACTIVE, the pending bank one for each in PENDING, their kinds from
+        ACTIVE-KINDS and KINDS when given.  A pending control with an index on screen is the
         same control; the pending bank's take fresh identities from the
         producer's frontier, as a candidate's do.  A frame built for the
         shell has no runs of its own."""
@@ -66,7 +66,7 @@ class MembershipHarness(DeltaHarness):
                      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1)
         self.runtime.memory.write_bytes(self.source_dir, struct.pack("<20Q", *directory))
         runs = () if shell else ("A",)
-        self.stage_tabs(self.bank, 100, 7, 10, active, runs, None)
+        self.stage_tabs(self.bank, 100, 7, 10, active, runs, active_kinds)
         self.active_before = self.runtime.memory.read_bytes(self.bank, self.bank_size)
         self.frontier = 100 + len(active) + 3 + len(runs)
         self.stage_tabs(self.other, self.frontier, 17, 11, pending, runs, kinds)
@@ -195,8 +195,24 @@ def test_every_control_on_screen_may_go(membership):
     assert h.call("_RTHP-D-PLAN-BIND?", h.producer)
 
 
-def test_a_field_that_came_still_needs_a_start(membership):
+@pytest.mark.parametrize("shell", (True, False))
+def test_a_field_that_came_is_defined(membership, shell):
     h = membership
-    h.banks((1,), (1, 2), kinds=(TABSET, FIELD))
-    assert not h.call("_RTHP-DELTA-CANDIDATE?", h.producer)
+    h.banks((1,), (1, 2), shell=shell, kinds=(TABSET, FIELD))
+    assert h.call("_RTHP-DELTA-CANDIDATE?", h.producer)
+    assert h.ids(h.other) == [100, h.frontier + 1]
+    assert h.plan() == [1 * 2 + 1]
+    assert h.drops() == []
+    assert h.call("_RTHP-D-PLAN-BIND?", h.producer)
+    h.assert_unchanged_active()
+
+
+@pytest.mark.parametrize("shell", (True, False))
+def test_a_field_that_went_is_dropped(membership, shell):
+    h = membership
+    h.banks((1, 2), (1,), shell=shell, active_kinds=(TABSET, FIELD))
+    assert h.call("_RTHP-DELTA-CANDIDATE?", h.producer)
+    assert h.plan() == []
+    assert h.drops() == [1]
+    assert h.call("_RTHP-D-PLAN-BIND?", h.producer)
     h.assert_unchanged_active()

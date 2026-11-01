@@ -1763,8 +1763,18 @@ frame before the change driver.
       region the frame on screen has by its part in the screen, gives a
       new modal region an identity above the frontier, and defines that
       region with its controls; a modal region that went is dropped after
-      its controls. The engine gains REGION-DROP, which the terminal
-      already applies. This takes the 9 frames of prompts and dialogs.
+      its controls. The shell's modal regions come last in its catalog,
+      and the overlay panes' screens, Desk's prompt and the notice each
+      take a z of their own above them, so stacking no longer rests on
+      region identities and the other regions keep theirs. In a DELTA a
+      modal region keeps the identity of the one over the same pane,
+      found by its clip. The family emitter turns the difference between
+      the two catalogs into region drops and definitions, after the
+      controls that went and before those defined, once it has proved
+      that every family pairing in place keeps its region. The engine
+      gains REGION-DROP, which the terminal already applies, and a DELTA's
+      definitions may name a region the same DELTA defines. This takes the
+      9 frames of prompts and dialogs.
     - **9c.2c. The copy pairs by identity.** The copy of the bank on
       screen pairs its controls by identity in the same way, so these
       frames take the change driver; it plans the definitions and drops the

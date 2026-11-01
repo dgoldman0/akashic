@@ -2,7 +2,7 @@
 
 import pytest
 
-from test_shell_delta import DELTA
+from test_shell_delta import DELTA, MEMBERS
 from test_shell_screen_producer import STAGED, staged_run
 
 
@@ -146,7 +146,7 @@ _SS-DONE
 ''', minimum=2)
 
 
-DELTA_PROMPT = DELTA + PROMPT + r'''
+DELTA_PROMPT = DELTA + MEMBERS + PROMPT + r'''
 \ The pending target bank carries both controls with their identities.
 : _SP-PENDING ( bank -- )
     DUP 4096 0 FILL DUP _SX-BANK _SX-P _RTHP.TARGET-PENDING ! ;
@@ -154,14 +154,19 @@ DELTA_PROMPT = DELTA + PROMPT + r'''
 : _SP-HELLP-PROMPT _SD-HELLP ['] _SP-PAINT DRW-OVERLAY ;
 \ The application repaints the row the prompt held once it closes.
 : _SP-CLOSED _SD-HELLP 19 0 DO 32 8 I DRW-CHAR LOOP ;
+\ The prompt's modal region on screen, and the region frontier.
+VARIABLE _SP-MID
+VARIABLE _SP-NEXT
 '''
 
 
-def test_a_delta_keeps_the_prompts_modal_region_and_a_closed_prompt_restarts():
+def test_a_delta_keeps_the_prompts_modal_region_and_drops_it_with_the_prompt():
     """While the prompt is open a DELTA keeps its region, and typing replaces
-    only its field; closing it restarts."""
+    only its field.  Closing it drops the field and then its region, under
+    the plan the screen producer's comparison seals (FRAMES-FOLLOW-CHANGE
+    9c.2b)."""
     staged_run(DELTA_PROMPT + r'''
-_SX-SETUP _SD-HOOKS 8 _SP-CANDIDATE _SP-DIALOGS
+_SX-SETUP _SD-HOOKS _SY-HOOKS 8 _SP-CANDIDATE _SP-DIALOGS
 ' _SP-HELLO-PROMPT _SD-DRAW _SX-PREPARE _SS-OK _SD-ACK
 _RSHSP-ACTIVE-PART _SX-KA = _SS-A _SX-KA _SP-MODALS 1 = _SS-A
 \ A changed letter in the pane while the prompt stays open is a DELTA.
@@ -180,15 +185,53 @@ _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE _SS-OK
 _SX-KA _SX-PART-VALID? _SS-A _SD-CATALOGS= _SS-A
 _SD-EMIT _SS-OK _SD-CREPLACE @ 1 = _SS-A _SD-GREPLACE @ 0= _SS-A _SD-GDEFINE @ 0= _SS-A
 _SD-ACK _RSHSP-ACTIVE-PART _SX-KA = _SS-A
-\ With the prompt closed the catalog loses its modal region: a START.
+\ With the prompt closed the catalog loses its modal region.  Without the
+\ plan the screen producer's comparison seals, the applications' families
+\ must match in place, and they do not.
+_RSHSP-ACTIVE-PART _SP-MODALS 1 = _SS-A _SP-MODAL @ _RTE-IR.ID @ _SP-MID !
 _SX-CI _SX-P _RTHP.CONTROLS-A ! 1 _SX-P _RTHP.CONTROL-COUNT ! _SX-CX _SX-P _RTHP.CORR-A !
-' _SP-CLOSED _SD-DRAW _SD-TA _SD-PENDING
+' _SP-CLOSED _SD-DRAW _SD-TA _SY-PENDING
 _RSHSP-DELTA-PROBE _SS-OK _RSHSP-DELTA-PREPARE RTE-S-OK <> _SS-A
-_RSHSP-DIAG-STAGE @ 1 = _SS-A
+_RSHSP-DIAG-STAGE @ 3 = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
-_SX-PREPARE _SS-OK _RSHSP-PENDING-PART _SX-KB = _SS-A _SX-KB _SP-MODALS 0= _SS-A
+\ The plan drops the field, the second control on screen.
+0 _SD-SEAL 1 _SD-PLAN 16 + ! 1 _SX-P _RTHP.DELTA-PLAN-DROPS !
+_RSHSP-DELTA-PREPARE _SS-OK _RSHSP-PENDING-PART _SP-MODALS 0= _SS-A
+_SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
+_SY-DROP @ 1 = _SS-A _SY-DROPPED @ 101 = _SS-A
+_SX-REGION-DROPS @ 1 = _SS-A _SX-REGION-DROPPED @ _SP-MID @ = _SS-A
+_SY-DROP-AT @ _SX-REGION-DROP-AT @ < _SS-A _SX-REGIONS @ 0= _SS-A
 _SS-DONE
-''', minimum=20)
+''', minimum=29)
+
+
+def test_a_prompt_that_opens_in_a_delta_takes_a_fresh_modal_region():
+    """A prompt opening keeps the pane's regions and their identities: its
+    modal region, last in the catalog, takes the next identity past every
+    region used, and the DELTA defines it before the field in it."""
+    staged_run(DELTA_PROMPT + r'''
+_SX-SETUP _SD-HOOKS _SY-HOOKS _SP-DIALOGS
+' _SD-HELLO _SD-DRAW _SX-PREPARE _SS-OK _SD-ACK
+_RSHSP-ACTIVE-PART _SP-MODALS 0= _SS-A
+_RSHSP-ACTIVE-PART RSHSP-PART.NEXT-REGION @ _SP-NEXT !
+\ The prompt comes under the fresh identity the comparison gives it, and
+\ the plan defines it.
+8 _SP-CANDIDATE _SX-P _RTHP.NEXT-OBJECT @ _SP-FIELD _RTE-CONTROL.ID !
+' _SP-HELLO-PROMPT _SD-DRAW _SD-TA _SY-PENDING
+_RSHSP-DELTA-PROBE _SS-OK
+3 _SD-PLAN ! 1 _SD-SEAL 0 _SX-P _RTHP.DELTA-PLAN-DROPS !
+_RSHSP-DELTA-PREPARE _SS-OK
+_RSHSP-PENDING-PART _SX-PART-VALID? _SS-A
+_RSHSP-PENDING-PART _SP-MODALS 1 = _SS-A
+_SP-MODAL @ _RTE-IR.ID @ _SP-NEXT @ = _SS-A
+RTE-CONTROL-FIELD _RSHSP-PENDING-PART _SP-CONTROL
+    _RTE-CONTROL.REGION @ _SP-NEXT @ = _SS-A
+_RSHSP-PENDING-PART RSHSP-PART.NEXT-REGION @ _SP-NEXT @ 1+ = _SS-A
+_SY-CLEAR _RSHSP-DELTA-EMIT _SS-OK
+_SX-REGIONS @ 1 = _SS-A _SY-DEFINE @ 1 = _SS-A _SY-DROP @ 0= _SS-A
+_SX-REGION-DROPS @ 0= _SS-A _SX-REGION-AT @ _SY-DEFINE-AT @ < _SS-A
+_SS-DONE
+''', minimum=15)
 
 
 # Desk's own Ask prompt.  While it is open Desk hides its taskbar, blocks
@@ -250,7 +293,7 @@ _SP-MODAL @ _RTE-IR.ID @ _SX-KA RSHSP-PART.NEXT-REGION @ 1- = _SS-A
 _SP-MODAL @ _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR RTE-REGION-MODAL OR = _SS-A
 _SP-MODAL @ _RTE-IR.CLIP-X @ 0= _SS-A _SP-MODAL @ _RTE-IR.CLIP-Y @ 0= _SS-A
 _SP-MODAL @ _RTE-IR.CLIP-COLS @ 32 = _SS-A _SP-MODAL @ _RTE-IR.CLIP-ROWS @ 12 = _SS-A
-_SP-MODAL @ _RTE-IR.Z @ 3 = _SS-A
+_SP-MODAL @ _RTE-IR.Z @ 4 = _SS-A
 \ The prompt is a FIELD across the taskbar row, after the application's
 \ control, and the part names it.
 _SX-KA _SQ-PROMPT DUP 0<> _SS-A
@@ -280,7 +323,7 @@ _RTE-CONTROL.REGION @ _SX-KA _SP-REGION DUP 0<> _SS-A
 DUP _RTE-IR.FLAGS @ RTE-REGION-VISIBLE RTE-REGION-CLIPPED OR = _SS-A
 DUP _RTE-IR.CLIP-X @ 0= _SS-A DUP _RTE-IR.CLIP-Y @ 11 = _SS-A
 DUP _RTE-IR.CLIP-COLS @ 32 = _SS-A DUP _RTE-IR.CLIP-ROWS @ 1 = _SS-A
-_RTE-IR.Z @ 3 = _SS-A
+_RTE-IR.Z @ 4 = _SS-A
 _SS-DONE
 ''', minimum=12)
 

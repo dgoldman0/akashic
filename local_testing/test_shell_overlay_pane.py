@@ -132,7 +132,7 @@ _SP-MODAL @ _RTE-IR.X @ 0= _SS-A _SP-MODAL @ _RTE-IR.Y @ 0= _SS-A
 _SP-MODAL @ _RTE-IR.COLS @ 32 = _SS-A _SP-MODAL @ _RTE-IR.ROWS @ 12 = _SS-A
 _SP-MODAL @ _RTE-IR.CLIP-X @ 0= _SS-A _SP-MODAL @ _RTE-IR.CLIP-Y @ 0= _SS-A
 _SP-MODAL @ _RTE-IR.CLIP-COLS @ 32 = _SS-A _SP-MODAL @ _RTE-IR.CLIP-ROWS @ 12 = _SS-A
-_SP-MODAL @ _RTE-IR.Z @ 2 = _SS-A
+_SP-MODAL @ _RTE-IR.Z @ 3 = _SS-A
 \ The overlay document's control is in it; the pane's stays beneath.
 101 _SX-KA _SO-CONTROL DUP 0<> _SS-A
 _RTE-CONTROL.REGION @ _SP-MODAL @ _RTE-IR.ID @ = _SS-A

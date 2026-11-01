@@ -202,9 +202,12 @@ _SD-SAVED @ _SD-LABEL C!
 _SX-P _RTHP.REGION @ 100 + _SX-P _RTHP.REGION !
 _RSHSP-DELTA-PREPARE RTE-S-UNAVAILABLE = _SS-A
 _RSHSP-PENDING-PART 0= _SS-A
-_SX-PACK-PREPARE _SS-OK _SD-EMIT RTE-S-INVALID = _SS-A
+\ Its families' regions differ from those on screen, so the emission refuses
+\ it before it defines or drops a region.
+_SX-PACK-PREPARE _SS-OK 0 _SX-REGIONS ! 0 _SX-REGION-DROPS !
+_SD-EMIT RTE-S-INVALID = _SS-A _SX-REGIONS @ 0= _SS-A _SX-REGION-DROPS @ 0= _SS-A
 _SS-DONE
-''', minimum=8)
+''', minimum=10)
 
 
 def test_unchanged_rows_are_copied_and_give_the_part_planning_gives():
@@ -453,14 +456,19 @@ CREATE _SY-LABEL 1 ALLOT 70 _SY-LABEL C!
 : _SY-CI _SY-CIS 7 + -8 AND ; : _SY-CX _SY-CXS 7 + -8 AND ;
 : _SY-MENU ( -- control ) _SY-CI RTE-CONTROL-SIZE + ;
 VARIABLE _SY-DEFINE VARIABLE _SY-DROP VARIABLE _SY-DROPPED VARIABLE _SY-AFTER
+VARIABLE _SY-DEFINE-AT
+VARIABLE _SY-DROP-AT
+\ Each records how many operations went before it (_SX-OPS).
 : _SY-CONTROL-DEFINE ( control context -- status )
-    2DROP 1 _SY-DEFINE +! _SY-DROP @ IF -1 _SY-AFTER ! THEN RTE-S-OK ;
+    2DROP 1 _SY-DEFINE +! _SY-DROP @ IF -1 _SY-AFTER ! THEN
+    _SX-OPS @ _SY-DEFINE-AT ! 1 _SX-OPS +! RTE-S-OK ;
 : _SY-CONTROL-DROP ( owner generation control context -- status )
-    DROP _SY-DROPPED ! 2DROP 1 _SY-DROP +! RTE-S-OK ;
+    DROP _SY-DROPPED ! 2DROP 1 _SY-DROP +! _SX-OPS @ _SY-DROP-AT ! 1 _SX-OPS +! RTE-S-OK ;
 : _SY-HOOKS
     ['] _SY-CONTROL-DEFINE _SX-F _RTE-F.CONTROL-DEF-XT !
     ['] _SY-CONTROL-DROP _SX-F _RTE-F.CONTROL-DROP-XT ! ;
-: _SY-CLEAR 0 _SY-DEFINE ! 0 _SY-DROP ! 0 _SY-DROPPED ! 0 _SY-AFTER ! _SD-CLEAR ;
+: _SY-CLEAR 0 _SY-DEFINE ! 0 _SY-DROP ! 0 _SY-DROPPED ! 0 _SY-AFTER !
+    0 _SX-OPS ! 0 _SX-REGIONS ! 0 _SX-REGION-DROPS ! _SD-CLEAR ;
 \ The candidate's applications' controls: the first N of the bar and the
 \ menu, the menu under identity 101.
 : _SY-CONTROLS ( n -- )

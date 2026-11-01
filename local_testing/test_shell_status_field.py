@@ -178,7 +178,7 @@ _SX-KA _SX-PART-VALID? _SS-A _SX-KA _SP-BATCH RTE-FAMILY-BATCH-VALID? _SS-A
 _SX-KA _SF-STATIC 0<> _SS-A _SX-KA _SN-DIALOG 0<> _SS-A
 \ The notice's region lies above the status's.
 _SX-KA _SF-REGIONS 1 = _SS-A _SF-REGION @ _RTE-IR.Z @ 1 = _SS-A
-_SX-KA _SN-DIALOG _RTE-CONTROL.REGION @ _SX-KA _SP-REGION _RTE-IR.Z @ 4 = _SS-A
+_SX-KA _SN-DIALOG _RTE-CONTROL.REGION @ _SX-KA _SP-REGION _RTE-IR.Z @ 5 = _SS-A
 \ Paint over the status's cells the notice leaves still leaves it residual.
 : _SF-STRAY-CELL 88 11 26 DRW-CHAR ;
 : _SF-STRAY _SF-UNDER ['] _SF-STRAY-CELL DRW-OVERLAY ;

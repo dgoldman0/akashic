@@ -95,9 +95,10 @@ takes every pointer event of its application, and scrolls its message, as
 CELL's wheel does. The new lines in view go out as newer DLG1 content.
 
 Packed acknowledgement banks own every title, label, DLG1 and BTN1; packing
-and unchanged cloning rebase them. A DELTA keeps the dialog lane's shape: a
-dialog that appears or goes, or a changed number of buttons, takes a
-complete replacement. A DIALOG keeps its title and geometry, and its DLG1
+and unchanged cloning rebase them. A dialog that appears in a DELTA is
+defined, with its buttons, under the fresh identities the comparison gives
+them, and one that goes is dropped with its buttons; Desk's shell defines
+and drops the modal region they lie in. A DIALOG keeps its title and geometry, and its DLG1
 may change only with a strictly newer revision, in one CONTROL-REPLACE. A
 BUTTON keeps its geometry and may change its label, roles and state.
 
