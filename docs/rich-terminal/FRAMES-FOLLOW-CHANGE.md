@@ -1948,7 +1948,25 @@ frame before the change driver.
       a difference.
   - **9c.5. A moved data-graphics root.** It is lowered alone into the
     candidate, its instruments and series in their places, after 9c.3
-    (decision 23).
+    (decision 23). As built, the candidate lowers every document's
+    instruments and series again by the instrument lane's own builder when
+    a data-graphics root moved, building their claims past its own; those
+    claims must be the bank's, so the status fields' claims after them,
+    and those fields' checks against the claims before them, stay as they
+    were, and the base claims are then checked against them as the lane's
+    caller checks them after a full lowering. The copy of the bank on
+    screen, which makes DELTAs only, still turns such a frame away.
+    **Done** on 2026-11-01 (7563cde6). In the canonical journey's one
+    frame in which data graphics moved, the number of their claims
+    changes, which would move the status fields' claims after them, so
+    the candidate turns it away there (code 19); a throwaway diagnostic
+    found that cause. With the shadow check the journey sent the same
+    presents, 61 DELTAs and 25 STARTs, and made 30,483 comparisons
+    without a difference, 342 of them of a copy and 1,160 of a candidate
+    from the bank, which was taken 58 times and the copy 57, as before.
+    Safe mode passed with 61 DELTAs and 26 STARTs; a typed letter builds
+    in 2.07 million steps, as before, and the typing run with the shadow
+    check made 5,615 comparisons without a difference.
 
 **Proof.** The change driver passes over an element only when none of the
 counters it keeps for that element has moved. A capture reads only the
