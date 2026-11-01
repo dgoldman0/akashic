@@ -15304,6 +15304,8 @@ VARIABLE _RTHP-D-ROOT-MOVED      \ whether that root's facts moved
 VARIABLE _RTHP-D-ROOT-CAME       \ whether that root is new to the bank on screen
 VARIABLE _RTHP-D-ROOT-HINT
 VARIABLE _RTHP-D-ROOT-SHIFT      \ the last root's place on screen less its place now
+VARIABLE _RTHP-D-ROOTS-SAME      \ the two name the same roots in the same order
+VARIABLE _RTHP-D-ROOTS-PARTS     \ the optional parts one bank carries and not the other
 0 _RTHP-D-FULL ! 0 _RTHP-D-JUDGE !
 \ Diagnostics: comparisons that paired the controls by place, those that
 \ followed the facts too, and the controls those checked against partners.
@@ -15360,13 +15362,15 @@ VARIABLE _RTHP-D-PLACE-ORD
 \ The root facts blocks of the snapshots of generations OLD and NEW, when
 \ both are kept.  The two pair their roots by identity: a root may come or
 \ go, and one both name moved when its facts did or the two banks differ in
-\ carrying its family.  _RTHP-ROOT-P names the producer.
+\ carrying its family.  When they name the same roots in the same order,
+\ which _RTHP-ROOT-PAIR? proves once, each root's place on screen is its
+\ place now.  _RTHP-ROOT-P names the producer.
 : _RTHP-D-ROOTS-OF?  ( old-generation new-generation -- flag )
     0 _RTHP-D-ROOT-LAST ! 0 _RTHP-D-ROOT-HINT ! 0 _RTHP-D-ROOT-SHIFT !
-    2DUP = IF 2DROP 0 EXIT THEN
-    _RTHP-ROOT-FIND-BLOCK _RTHP-D-ROOTS-NEW !
-    _RTHP-ROOT-FIND-BLOCK DUP _RTHP-D-ROOTS-OLD !
-    0<> _RTHP-D-ROOTS-NEW @ 0<> AND ;
+    _RTHP-ROOT-PAIR? _RTHP-D-ROOTS-SAME ! _RTHP-D-ROOTS-NEW ! _RTHP-D-ROOTS-OLD !
+    _RTHP-D-ROOTS-OLD @ 0= _RTHP-D-ROOTS-NEW @ 0= OR IF 0 EXIT THEN
+    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @ _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ XOR
+        _RTHP-D-ROOTS-PARTS ! -1 ;
 
 \ Those of the bank on screen's snapshot and the pending bank's.
 : _RTHP-D-ROOTS?  ( -- flag )
@@ -15378,21 +15382,25 @@ VARIABLE _RTHP-D-PLACE-ORD
 \ went with the family, which lowering, not its roots, decided, as when the
 \ terminal had no room for it before.
 : _RTHP-D-ROOT-PART-MOVED?  ( family -- flag )
-    _RTHP-ROOT-PART
-    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @ _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ XOR
-    AND 0<> ;
+    _RTHP-ROOT-PART _RTHP-D-ROOTS-PARTS @ AND 0<> ;
 
-\ Whether RECORD, the pending bank's root at INDEX and the identity sought,
-\ moved since the bank on screen: it is new to that bank, its facts moved,
-\ or its family came or went with the bank.  _RTHP-D-ROOT-CAME says whether
-\ it is new.  The roots of two banks mostly lie in the same order, so its
-\ place on screen is sought first as far from INDEX as the last root's was.
+\ Whether RECORD, the pending bank's root at INDEX, moved since the bank on
+\ screen: it is new to that bank, its facts moved, or its family came or
+\ went with the bank.  _RTHP-D-ROOT-CAME says whether it is new.  When the
+\ two do not name the same roots in the same order, its place on screen is
+\ sought by its identity, first as far from INDEX as the last root's was,
+\ since the roots of two banks mostly lie in the same order.
 : _RTHP-D-RECORD-MOVED?  ( record index -- flag )
-    DUP _RTHP-D-ROOT-SHIFT @ + 0 MAX _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-FIND
-    ?DUP 0= IF 2DROP -1 _RTHP-D-ROOT-CAME ! -1 EXIT THEN
-    0 _RTHP-D-ROOT-CAME !
-    DUP _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.A @ - URF-SIZE /
-        ROT - _RTHP-D-ROOT-SHIFT !
+    _RTHP-D-ROOTS-SAME @ IF
+        _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-RECORD-AT 0 _RTHP-D-ROOT-CAME !
+    ELSE
+        OVER _RTHP-ROOT-SEEK!
+        DUP _RTHP-D-ROOT-SHIFT @ + 0 MAX _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-FIND
+        ?DUP 0= IF 2DROP -1 _RTHP-D-ROOT-CAME ! -1 EXIT THEN
+        0 _RTHP-D-ROOT-CAME !
+        DUP _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.A @ - URF-SIZE /
+            ROT - _RTHP-D-ROOT-SHIFT !
+    THEN
     OVER URF-SAME? 0= SWAP URF.FAMILY @ _RTHP-D-ROOT-PART-MOVED? OR ;
 
 \ Whether pending control INDEX may differ from its partner: no root
@@ -15728,7 +15736,7 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
         _RTHP-D-ROOTS-OF? 0= IF 0 EXIT THEN
     7 _RTHP-C-WHY !
     _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ 0 ?DO
-        I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT DUP _RTHP-ROOT-SEEK!
+        I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT
         DUP I _RTHP-D-RECORD-MOVED? _RTHP-D-ROOT-CAME @ 0= AND IF
             URF.FAMILY @ DUP URF-F-COLLECTION <>
             SWAP URF-F-STATUS-FIELD <> AND IF 0 UNLOOP EXIT THEN
@@ -16136,12 +16144,8 @@ VARIABLE _RTHP-C-T-ID
 \ carried the same parts, and the pending bank holds as many controls as
 \ the bank on screen: each control then lies in its partner's place.
 : _RTHP-C-PLACE?  ( -- flag )
-    _RTHP-C-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
-        _RTHP-C-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
-    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @
-        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ <> IF 0 EXIT THEN
-    _RTHP-C-ACTIVE @ _RTHP-TB.SOURCE-GEN @ _RTHP-C-P @ _RTHP.SOURCE-GEN @
-        _RTHP-ROOT-PAIR? NIP NIP ;
+    _RTHP-C-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ _RTHP-C-P @ _RTHP.CONTROL-COUNT @ =
+    _RTHP-D-ROOTS-SAME @ AND _RTHP-D-ROOTS-PARTS @ 0= AND ;
 
 \ ( producer -- flag ) Build the pending bank as the copy of the bank on
 \ screen and seal its plan, or leave no bank pending and the candidate's
