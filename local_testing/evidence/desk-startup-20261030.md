@@ -141,6 +141,13 @@ the hidden replacement. The change needs these checks:
 - The handoff edge is cleared on soft reset, on CELL-only operation and on ANSI
   retirement; those paths must keep working with the request.
 
+On 2026-11-01 cec8f16f made this change, and it did not remove the copy:
+`APTSCB-SERVICE` forced the same snapshot again while the first awaited its
+result, so the handoff's force was already redundant. MegaPad c3e8ef5f and
+Akashic 1dd520c8 removed that second force;
+[desk-startup-second-screen-20261101.md](desk-startup-second-screen-20261101.md)
+records the cause and the measurements.
+
 ### A related cost
 
 Full-screen CELL frames pay a per-cell rate: about 660 steps a cell by the
