@@ -6,8 +6,8 @@ mode (part 4), an occasional full refresh (part 8), and one projection with
 two drivers (parts 9 and 10). On 2026-10-27 it gained part 6b, which drops
 a frame Desk sends but never shows when a document is handed to Pad, and
 part 7 took on three faults part 6 found. Each part is approved on its
-own. Parts 0 to 8 and 6b are done, and part 9 is under way. Decisions lists
-what is settled and what is still open.
+own. Every part is done, the last on 2026-11-01. Decisions lists what is
+settled.
 
 Earlier work: [KEYSTROKE-FRAME-WORK.md](KEYSTROKE-FRAME-WORK.md)
 (2026-10-14, all seven parts done),
@@ -2013,6 +2013,55 @@ and the full Desktop journey with the shadow check, and safe mode passes the
 same journeys, the structures part 9 replaced are removed. Nothing is kept
 for compatibility. The full driver remains the one full path.
 
+Read once part 9 was done. Part 9 removed most of what it replaced in its
+own slices: RUHA's fixed banks (9a.4), the shell's banks, work space,
+second admission and second comparison (9b), and 9a.2's capture into
+scratch. What was left of today's structure is the reuse each layer had
+built into the full path before part 9, the shortcuts part 1 put under the
+shadow check. The snapshot adapter's reuse of an unchanged document's
+slices now follows counted change (9a.3c), and the producer's and the
+shell's reuse of the runs of rows no draw touched is the change driver's
+own residual glyph planning. But the full lowering still copied a
+document's menu controls from the bank on screen when their records
+matched, a shortcut the change driver had replaced and safe mode turned
+off. In three steps:
+
+- **10a. Every full lowering plans each document's menus.** The menu reuse
+  goes, with its shadow-check stage (decision 24). A profiled typing run
+  with the shadow check, whose menu stage planned each reused document
+  afresh beside the reuse, measured a document's planning at about 123,000
+  steps against about 9,000 for its reuse: about 0.5 million steps more
+  for each frame the full driver builds on the canonical Desktop, a START
+  or a frame the change driver turns away. A typed letter, which the
+  change driver takes, builds as before. **Done** on 2026-11-01
+  (6e5047a2).
+- **10b. The snapshot adapter keeps no menu epochs.** Each document entry
+  carried two menu epochs, which the adapter derived at each capture by
+  comparing every menu record with the prior snapshot's and carried
+  through reuse. Their one reader was the menu reuse; the producer only
+  checked their shape, and the full refresh compared them after comparing
+  the menus' slices themselves. The cells and their lineage go, a
+  document entry shrinks from 312 bytes to 296, and the adapter's ABI
+  becomes 13. **Done** on 2026-11-01 (48321db6). The producer's directory
+  strips, which wrote the status fields', fields' and dialogs' cells at
+  literal offsets, name them by the adapter's words, as do the test
+  harnesses that had literal offsets too.
+- **10c. What part 9 left unused.** Two variables, one each in the region
+  catalog and the shell producer. **Done** on 2026-11-01 (3d916720).
+
+**End of part.** Done on 2026-11-01, at 3d916720. Desk with each of the
+ten applications and the canonical Desktop journey passed with the shadow
+check, the journey making 29,058 comparisons without a difference, part 9's
+30,483 less the 1,425 of the menu stage that went; the journey passed
+without the check, with the same presents and bytes, and in safe mode. A
+typed letter's burst frame builds in 2.05 million steps, as at the end of
+part 9, and the typing run with the shadow check made 5,420 comparisons
+without a difference. The isolated letter, which goes through the full
+lowering, built its frame in 6.49 million steps against 5.90 at the last
+commit before the part, the difference being the menus planned afresh. The
+evidence is
+`local_testing/evidence/frames-follow-change-part10-20261101.md`.
+
 ## Memory
 
 On the canonical Desktop at 280 × 84 the producer holds about 19 MB from
@@ -2061,7 +2110,7 @@ fixes part 6 found (decision 12).
 | 7 | A repaint fills each cell once, then three faults part 6 found | done |
 | 8 | The occasional full refresh | done |
 | 9 | One projection, two drivers, in slices 9a.1 to 9c | done |
-| 10 | Today's structure retires | proposed |
+| 10 | Today's structure retires | done |
 
 For each slice:
 
@@ -2298,3 +2347,10 @@ Taken on 2026-11-01:
     candidate after 9c.3, as fields are, though a frame whose instruments
     changed goes out as a START: a live plot then pays only for the
     graphs that changed, not for a full lowering beside its START.
+24. **The full lowering's menu reuse** (10a). It is removed, so a full frame
+    is built the same way in normal and safe mode, and the reuse's mapping
+    of the bank's menu identities by place, which a bank numbered by
+    identity does not keep, goes with it. Keeping it, with its identities
+    mapped as the candidate from the bank maps them, would have kept about
+    0.5 million steps of each frame the full driver builds on the canonical
+    Desktop, at the price of a second way to build a full frame.
