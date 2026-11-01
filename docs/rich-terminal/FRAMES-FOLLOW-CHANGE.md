@@ -1965,8 +1965,9 @@ frame before the change driver.
     without a difference, 342 of them of a copy and 1,160 of a candidate
     from the bank, which was taken 58 times and the copy 57, as before.
     Safe mode passed with 61 DELTAs and 26 STARTs; a typed letter builds
-    in 2.07 million steps, as before, and the typing run with the shadow
-    check made 5,615 comparisons without a difference.
+    in 2.02 million steps, against 2.07 at 9c.3d, a difference inside the
+    profile's sampling, and the typing run with the shadow check made
+    5,615 comparisons without a difference.
 
 **Proof.** The change driver passes over an element only when none of the
 counters it keeps for that element has moved. A capture reads only the
