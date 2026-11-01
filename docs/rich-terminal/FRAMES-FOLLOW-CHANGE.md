@@ -1832,7 +1832,16 @@ frame before the change driver.
     left any out is not taken, since it does not keep them. Lowering a
     moved data-graphics root alone is not built: a frame whose instruments
     changed goes out as a START, since a DELTA carries no changed
-    instrument, and no frame of the canonical journey needed it.
+    instrument, and no frame of the canonical journey needed it. **Done**
+    on 2026-10-31 (fb083de9; 76190dd5 an instrument's claim keeps the
+    generation of its data graphics, a difference the shadow check found).
+    In the canonical journey with the shadow check the candidate was taken
+    from the bank 35 times, against 2, and the journey sent the same
+    presents, 61 DELTAs and 25 STARTs, with 29,885 comparisons without a
+    difference, 700 of them of a candidate from the bank. It passed in
+    safe mode with 61 DELTAs and 26 STARTs, a typed letter builds in 1.97
+    million steps, and the typing run with the shadow check made 6,908
+    comparisons without a difference.
   - **9c.3. The other families' roots.** A moved menu, tab set, dialog or
     field root is lowered alone, as a moved collection or status field is,
     and the copy of the bank on screen checks that root's controls against
