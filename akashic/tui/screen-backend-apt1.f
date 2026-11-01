@@ -584,8 +584,14 @@ VARIABLE _APTSCB-PENDING
     _APTSCB-ADAPTER @ _APTSCB-RETAINED-HANDOFF
     _APTSCB-ADAPTER @ _APTSCB-PUBLISHER-STEP
     DUP SCB-S-OK <> IF EXIT THEN DROP
+    \ PT needs a complete snapshot after opening, a soft reset or a resize.
+    \ A committed snapshot answers that need until its result arrives, so
+    \ force one only while PT admits work: forcing in that gap would send
+    \ the whole screen a second time once the first succeeded.
     _APTSCB-SESSION @ PT-SNAPSHOT-NEEDED? IF
-        _APTSCB-ADAPTER @ SCR-BACKEND@ = IF SCR-FORCE THEN
+        _APTSCB-SESSION @ PT-RESULT-BUSY? 0= IF
+            _APTSCB-ADAPTER @ SCR-BACKEND@ = IF SCR-FORCE THEN
+        THEN
     THEN
     _APTSCB-STATUS @ SCB-S-WOULD-BLOCK = IF SCB-S-WOULD-BLOCK EXIT THEN
     _APTSCB-STATUS @ SCB-S-OK = IF SCB-S-OK EXIT THEN

@@ -110,7 +110,11 @@ untouched rows.
 `SCR-FORCE` sets an explicit force-snapshot flag. Snapshot enumeration never
 depends on poisoning front cells with a sentinel, because a native packed cell
 could otherwise equal the sentinel. Binding the APT adapter after open, an
-accepted resize, or a soft reset calls `SCR-FORCE` before the next flush.
+accepted resize, or a soft reset calls `SCR-FORCE` before the next flush. The
+APT service answers PT's `PT-SNAPSHOT-NEEDED?` with `SCR-FORCE` only while
+`PT-RESULT-BUSY?` is false: a snapshot already committed meets the need until
+its result arrives, and forcing again in that gap would send the whole screen
+a second time.
 
 The backend uses `span-count` and `cell-count` to reserve an upper bound for
 the complete transaction before accepting `begin`. Therefore, after a

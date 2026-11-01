@@ -433,6 +433,11 @@ def test_retained_availability_handoff_is_exact_one_shot_and_resettable() -> Non
     producer = service.index("_APTSCB-PUBLISHER-STEP", transition)
     reset_force = service.index("PT-SNAPSHOT-NEEDED?", producer)
     assert pt_service < active < transition < producer < reset_force
+    # A committed snapshot answers PT's need until its result, so the
+    # service forces another only once PT admits work again.
+    admitted = service.index("PT-RESULT-BUSY? 0= IF", reset_force)
+    assert reset_force < admitted < service.index("SCR-FORCE", admitted)
+    assert service.count("SCR-FORCE") == 1
     assert "0 OVER _APTSCB.RETAINED-HANDOFF !" in ansi
     assert ansi.index("_APTSCB.RETAINED-HANDOFF !") < ansi.index(
         "_APTSCB-FALLBACK"
