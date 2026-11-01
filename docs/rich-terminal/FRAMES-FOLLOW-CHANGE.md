@@ -1988,6 +1988,24 @@ work space are freed. The shell's banks become the screen producer's
 extension blocks, of about the same size, since the frame on screen needs its
 record.
 
+**End of part.** Done on 2026-11-01, at d1db8bc9. The canonical Desktop
+journey passed with the shadow check, making 30,483 comparisons without a
+difference; without it, sending the same presents and bytes; and in safe
+mode, which took neither of the change driver's paths. Desk with each
+application passed with the shadow check, nine of them at 7563cde6, since
+d1db8bc9 changes only the Agent's panel. A typed letter's frame builds in
+2.05 million steps, and the typing run with the shadow check made 7,339
+comparisons without a difference. Desk with the Agent had failed the shadow
+check at 7563cde6: the Agent's transcript changed a card in place, as a
+streaming reply does, without its list counting the change, so the candidate
+from the bank on screen kept the card's earlier text, and d1db8bc9 has the
+Agent's panel tell the list of each change to the conversation it shows. The
+end of part's test selection, the rich-terminal set and every test that
+reads a file part 9 changed, 176 files, ran one file at a time: 4,829 tests
+passed in 161 files, and 15 standalone drivers, from which pytest collects
+nothing, were not run. The evidence is
+`local_testing/evidence/frames-follow-change-part9-20261101.md`.
+
 ## Part 10. Today's structure retires — cleanup
 
 Once the change driver passes the typing run, Desk with every application
@@ -2042,7 +2060,7 @@ fixes part 6 found (decision 12).
 | 6b | A document handed to Pad opens before Desk paints | done |
 | 7 | A repaint fills each cell once, then three faults part 6 found | done |
 | 8 | The occasional full refresh | done |
-| 9 | One projection, two drivers, in slices 9a.1 to 9c | under way |
+| 9 | One projection, two drivers, in slices 9a.1 to 9c | done |
 | 10 | Today's structure retires | proposed |
 
 For each slice:
