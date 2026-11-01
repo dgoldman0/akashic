@@ -570,8 +570,11 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-TB.STATIC-BASE-CLAIMS      ( bank -- a ) 432 + ;
 \ The features the terminal had negotiated when the candidate was built.
 : _RTHP-TB.FEATURES                ( bank -- a ) 440 + ;
+\ The bytes of the graphs the candidate left out because the terminal could
+\ not take them (_RTHP.OMITTED-GRAPHS-USED), which stay CELL.
+: _RTHP-TB.OMITTED-GRAPHS          ( bank -- a ) 448 + ;
 
-448 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
+456 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
 \ A claim's rectangle: its four cells from _RUCL-C.ROW0, which decide
 \ which rows a frame plans again.
 32 CONSTANT _RTHP-CLAIM-RECT-SIZE
@@ -2970,7 +2973,9 @@ VARIABLE _RTHP-OR-REGION
     _RTHP-TG-P @ _RTHP.STATIC-BASE-CLAIMS @
         _RTHP-TG-BANK @ _RTHP-TB.STATIC-BASE-CLAIMS !
     _RTHP-TG-P @ _RTHP.LIMITS RTE-LIMITS-FEATURES@
-        _RTHP-TG-BANK @ _RTHP-TB.FEATURES ! ;
+        _RTHP-TG-BANK @ _RTHP-TB.FEATURES !
+    _RTHP-TG-P @ _RTHP.OMITTED-GRAPHS-USED @
+        _RTHP-TG-BANK @ _RTHP-TB.OMITTED-GRAPHS ! ;
 
 : _RTHP-TARGET-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-TARGET-ABORT _RTHP-TG-P !
@@ -9838,10 +9843,11 @@ VARIABLE _RTHP-ROOT-BYTES
 \
 \  When the root facts show that only text roots and status fields moved
 \  since the bank on screen, every document lies where it lay, and that
-\  bank was built for this owner, surface and features and holds no runs,
-\  instruments, series or pictures, the candidate is taken from the bank
+\  bank was built for this owner, surface and features, holds no runs or
+\  pictures and left out no graph, the candidate is taken from the bank
 \  instead of lowered from the snapshot: its controls, correlations and
-\  their text, its status fields with theirs, and its claims, each item
+\  their text, its instruments and series with their regions, units and
+\  samples, its status fields with their text, and its claims, each item
 \  numbered and stamped as a full lowering numbers and stamps it, with its
 \  counts and where each lane began.  Each moved root is then lowered alone
 \  into its place by its lane's own words, its content packed where the
@@ -9894,11 +9900,11 @@ VARIABLE _RTHP-DIAG-UNPACKED-ROOTS
 \  1 safe mode           2 not Desk's shell     3 no bank on screen
 \  4 the bank's header   5 the bank kept no facts (it went out as a START)
 \  6 another owner       7 another surface      8 the bank holds glyph runs
-\  9 instruments or series                     10 pictures
+\  9 a graph left out                          10 pictures
 \ 11 a static that is no status field          12 the menus' text length
 \ 13 a document moved    14 the facts do not pair
 \ 15 a root of another family moved            16 no room
-\ 17 the controls        18 the statics         19 the instruments' strip
+\ 17 the controls        18 the statics         19 the instruments and series
 \ 20 the moved roots     21 the control plan    22 the statics' glyphs
 \ _RTHP-BUILD-OBSERVED-CANDIDATE counts each in _RTHP-DIAG-UB-WHY.
 VARIABLE _RTHP-UB-WHY
@@ -9951,8 +9957,9 @@ VARIABLE _RTHP-UB-WHY
     LOOP -1 ;
 
 \ The bank on screen was built for this owner, surface and features, its
-\ comparison kept its facts, it holds no runs, instruments, series or
-\ pictures, and its menus' text is as long as this snapshot's.
+\ comparison kept its facts, it holds no runs or pictures, its frame left
+\ out no graph the terminal could not take, which the bank does not keep,
+\ and its menus' text is as long as this snapshot's.
 : _RTHP-UB-BANK?  ( -- flag )
     4 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-UB-P @ _RTHP-TARGET-BANK-HEADER? 0= IF 0 EXIT THEN
@@ -9973,9 +9980,7 @@ VARIABLE _RTHP-UB-WHY
     8 _RTHP-UB-WHY !
     _RTHP-UB-A @ _RTHP-TB.GLYPH-SLOT-COUNT @ IF 0 EXIT THEN
     9 _RTHP-UB-WHY !
-    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @
-    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ OR
-    _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ OR IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.OMITTED-GRAPHS @ IF 0 EXIT THEN
     10 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP.PICTURE-COUNT @ IF 0 EXIT THEN
     11 _RTHP-UB-WHY !
@@ -10036,7 +10041,26 @@ VARIABLE _RTHP-UB-WHY
     _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ _RTHP-STATIC-CORR-SIZE *
         _RTHP-UB-P @ _RTHP.STATIC-CORR-U @ U> IF 0 EXIT THEN
     _RTHP-UB-A @ _RTHP-TB.STATIC-TEXT-BYTES @
-        _RTHP-UB-P @ _RTHP.STATIC-TEXT-U @ U> 0= ;
+        _RTHP-UB-P @ _RTHP.STATIC-TEXT-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ DUP
+        _RTHP-UB-P @ _RTHP.MAX-INSTRUMENT-REGIONS @ U> IF DROP 0 EXIT THEN
+    RTE-INSTRUMENT-REGION-SIZE *
+        _RTHP-UB-P @ _RTHP.INSTRUMENT-REGIONS-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @ DUP
+        _RTHP-UB-P @ _RTHP.MAX-INSTRUMENTS @ U> IF DROP 0 EXIT THEN
+    DUP RTE-INSTRUMENT-SIZE *
+        _RTHP-UB-P @ _RTHP.INSTRUMENTS-U @ U> IF DROP 0 EXIT THEN
+    RUIP-CORRELATION-SIZE *
+        _RTHP-UB-P @ _RTHP.INSTRUMENT-CORR-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @
+        _RTHP-UB-P @ _RTHP.INSTRUMENT-UNITS-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ DUP
+        _RTHP-UB-P @ _RTHP.MAX-SERIES @ U> IF DROP 0 EXIT THEN
+    DUP RTE-SERIES-SIZE * _RTHP-UB-P @ _RTHP.SERIES-U @ U> IF DROP 0 EXIT THEN
+    _RTHP-SERIES-CORR-SIZE *
+        _RTHP-UB-P @ _RTHP.SERIES-CORR-U @ U> IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.SERIES-SAMPLE-BYTES @
+        _RTHP-UB-P @ _RTHP.SERIES-SAMPLES-U @ U> 0= ;
 
 \ ( id -- id' flag ) The identity ID of the bank on screen, which numbers
 \ its controls by place from its first object, as the candidate numbers
@@ -10126,7 +10150,7 @@ VARIABLE _RTHP-UB-WHY
 
 \ The bank's status fields, their correlations and text into the
 \ candidate, numbered as a full lowering numbers them, past the controls
-\ Desk's shell adds and the instruments, of which there are none.
+\ Desk's shell adds and the instruments.
 : _RTHP-UB-STATICS?  ( -- flag )
     _RTHP-UB-A @ _RTHP-PACK-STATICS-A _RTHP-UB-P @ _RTHP.STATICS-A @
         _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ RTE-STATIC-SIZE * MOVE
@@ -10136,7 +10160,9 @@ VARIABLE _RTHP-UB-WHY
         _RTHP-UB-A @ _RTHP-TB.STATIC-TEXT-BYTES @ MOVE
     _RTHP-UB-P @ _RTHP.STATIC-TEXT-A @ _RTHP-UB-A @ _RTHP-PACK-STATIC-TEXT-A -
         _RTHP-UB-BY !
-    _RTHP-UB-P @ _RTHP-OBJECTS-FIRST? 0= IF DROP 0 EXIT THEN _RTHP-UB-ID !
+    _RTHP-UB-P @ _RTHP-OBJECTS-FIRST? 0= IF DROP 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.INSTRUMENT-COUNT @ _RTHP-U+? 0= IF DROP 0 EXIT THEN
+        _RTHP-UB-ID !
     0 _RTHP-UB-P @ _RTHP.STATIC-LAST !
     _RTHP-UB-A @ _RTHP-TB.STATIC-COUNT @ 0 ?DO
         _RTHP-UB-P @ _RTHP.STATICS-A @ I RTE-STATIC-SIZE * + _RTHP-UB-ITEM !
@@ -10146,6 +10172,118 @@ VARIABLE _RTHP-UB-WHY
         _RTHP-UB-ITEM @ _RTE-STATIC.LABEL-A DUP @ _RTHP-UB-REBASE SWAP !
         _RTHP-UB-ITEM @ _RTE-STATIC.VALUE-A DUP @ _RTHP-UB-REBASE SWAP !
     LOOP -1 ;
+
+\ The bank's instruments and series into the candidate, numbered as a full
+\ lowering numbers them: its instrument regions from the one past the
+\ candidate's region, its instruments from the first identity past the
+\ controls Desk's shell adds, and its series from the candidate's first
+\ series, each family's identities following on from its first in the
+\ order the bank holds them.  No data-graphics root moved, so these are
+\ the ones the snapshot would lower, with the units and samples they show,
+\ and their claims lie whole among the bank's.
+VARIABLE _RTHP-UB-R            \ how far a region identity moves
+VARIABLE _RTHP-UB-IO           \ how far an instrument identity moves
+VARIABLE _RTHP-UB-SO           \ how far a series identity moves
+VARIABLE _RTHP-UB-UNITS        \ how far a unit's text moves
+VARIABLE _RTHP-UB-SAMPLES      \ how far a series' samples move
+VARIABLE _RTHP-UB-IFIRST       \ the candidate's first instrument
+: _RTHP-UB-INSTRUMENT?  ( index -- flag )
+    DUP RTE-INSTRUMENT-SIZE * _RTHP-UB-P @ _RTHP.INSTRUMENTS-A @ + _RTHP-UB-ITEM !
+    _RTHP-UB-ITEM @ _RTE-INSTRUMENT.ID DUP @ _RTHP-UB-IO @ +
+        DUP 3 PICK _RTHP-UB-IFIRST @ + <> IF 2DROP DROP 0 EXIT THEN SWAP !
+    _RTHP-UB-ITEM @ _RTE-INSTRUMENT.REGION DUP @ _RTHP-UB-R @ + SWAP !
+    _RTHP-UB-ITEM @ _RTE-INSTRUMENT.SERIES-ID DUP @ ?DUP IF
+        _RTHP-UB-SO @ + SWAP !
+    ELSE DROP THEN
+    _RTHP-UB-ITEM @ _RTE-INSTRUMENT.UNIT-U @ IF
+        _RTHP-UB-ITEM @ _RTE-INSTRUMENT.UNIT-A DUP @ _RTHP-UB-UNITS @ + SWAP !
+    THEN
+    RUIP-CORRELATION-SIZE * _RTHP-UB-P @ _RTHP.INSTRUMENT-CORR-A @ +
+    DUP _RUIP-X.REGION-ID DUP @ _RTHP-UB-R @ + SWAP !
+    _RUIP-X.INSTRUMENT-ID DUP @ _RTHP-UB-IO @ + SWAP ! -1 ;
+: _RTHP-UB-SERIES?  ( index -- flag )
+    DUP RTE-SERIES-SIZE * _RTHP-UB-P @ _RTHP.SERIES-A @ + _RTHP-UB-ITEM !
+    _RTHP-UB-ITEM @ _RTE-SERIES.ID DUP @ _RTHP-UB-SO @ +
+        DUP 3 PICK _RTHP-UB-P @ _RTHP.FIRST-SERIES @ + <> IF 2DROP DROP 0 EXIT THEN
+        SWAP !
+    _RTHP-UB-ITEM @ _RTE-SERIES.SAMPLES-U @ IF
+        _RTHP-UB-ITEM @ _RTE-SERIES.SAMPLES-A DUP @ _RTHP-UB-SAMPLES @ + SWAP !
+    THEN
+    _RTHP-SERIES-CORR-SIZE * _RTHP-UB-P @ _RTHP.SERIES-CORR-A @ +
+    DUP _RUIP-X.REGION-ID DUP @ _RTHP-UB-R @ + SWAP !
+    _RUIP-X.INSTRUMENT-ID DUP @ _RTHP-UB-SO @ + SWAP ! -1 ;
+: _RTHP-UB-INSTRUMENTS?  ( -- flag )
+    _RTHP-W-STRIP-INSTRUMENTS? 0= IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @ OR
+    _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ OR 0= IF -1 EXIT THEN
+    _RTHP-UB-A @ _RTHP-PACK-INSTRUMENT-REGIONS-A
+        _RTHP-UB-P @ _RTHP.INSTRUMENT-REGIONS-A @
+        _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ RTE-INSTRUMENT-REGION-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-INSTRUMENTS-A _RTHP-UB-P @ _RTHP.INSTRUMENTS-A @
+        _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @ RTE-INSTRUMENT-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-INSTRUMENT-CORR-A _RTHP-UB-P @ _RTHP.INSTRUMENT-CORR-A @
+        _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @ RUIP-CORRELATION-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-INSTRUMENT-UNITS-A _RTHP-UB-P @ _RTHP.INSTRUMENT-UNITS-A @
+        _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ MOVE
+    _RTHP-UB-A @ _RTHP-PACK-SERIES-A _RTHP-UB-P @ _RTHP.SERIES-A @
+        _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ RTE-SERIES-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-SERIES-CORR-A _RTHP-UB-P @ _RTHP.SERIES-CORR-A @
+        _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE * MOVE
+    _RTHP-UB-A @ _RTHP-PACK-SERIES-SAMPLES-A _RTHP-UB-P @ _RTHP.SERIES-SAMPLES-A @
+        _RTHP-UB-A @ _RTHP-TB.SERIES-SAMPLE-BYTES @ MOVE
+    _RTHP-UB-P @ _RTHP.REGION @ _RTHP-UB-A @ _RTHP-TB.REGION @ - _RTHP-UB-R !
+    _RTHP-UB-P @ _RTHP-OBJECTS-FIRST? 0= IF DROP 0 EXIT THEN _RTHP-UB-IFIRST !
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @ IF
+        _RTHP-UB-IFIRST @
+            _RTHP-UB-A @ _RTHP-PACK-INSTRUMENTS-A _RTE-INSTRUMENT.ID @ -
+    ELSE 0 THEN _RTHP-UB-IO !
+    _RTHP-UB-P @ _RTHP.FIRST-SERIES @ _RTHP-UB-A @ _RTHP-TB.FIRST-SERIES @ -
+        _RTHP-UB-SO !
+    _RTHP-UB-P @ _RTHP.INSTRUMENT-UNITS-A @
+        _RTHP-UB-A @ _RTHP-PACK-INSTRUMENT-UNITS-A - _RTHP-UB-UNITS !
+    _RTHP-UB-P @ _RTHP.SERIES-SAMPLES-A @
+        _RTHP-UB-A @ _RTHP-PACK-SERIES-SAMPLES-A - _RTHP-UB-SAMPLES !
+    \ The instrument regions follow on from the one past the bank's region.
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.INSTRUMENT-REGIONS-A @ I RTE-INSTRUMENT-REGION-SIZE * +
+        DUP _RTE-IR.ID @ _RTHP-UB-A @ _RTHP-TB.REGION @ 1+ I + <> IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        _RTE-IR.ID DUP @ _RTHP-UB-R @ + SWAP !
+    LOOP
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @ 0 ?DO
+        I _RTHP-UB-INSTRUMENT? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ 0 ?DO
+        I _RTHP-UB-SERIES? 0= IF 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-REGION-COUNT @ DUP _RTHP-W-INSTRUMENT-REGIONS !
+        DUP _RTHP-UB-P @ _RTHP.INSTRUMENT-REGION-COUNT !
+    ?DUP IF _RTHP-UB-P @ _RTHP.REGION @ + ELSE 0 THEN
+        DUP _RTHP-W-INSTRUMENT-LAST-REGION ! _RTHP-UB-P @ _RTHP.INSTRUMENT-LAST-REGION !
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-COUNT @ DUP _RTHP-W-INSTRUMENTS !
+        DUP _RTHP-UB-P @ _RTHP.INSTRUMENT-COUNT !
+    ?DUP IF _RTHP-UB-IFIRST @ + 1- ELSE 0 THEN
+        DUP _RTHP-W-INSTRUMENT-LAST ! _RTHP-UB-P @ _RTHP.INSTRUMENT-LAST !
+    _RTHP-UB-A @ _RTHP-TB.INSTRUMENT-UNIT-BYTES @ DUP _RTHP-W-INSTRUMENT-UNITS !
+        _RTHP-UB-P @ _RTHP.INSTRUMENT-UNITS-USED !
+    \ The instruments' claims lie between the claims before them and the
+    \ status fields'.
+    _RTHP-UB-P @ _RTHP.STATIC-BASE-CLAIMS @ _RTHP-UB-P @ _RTHP.BASE-CLAIMS-USED @ -
+        RUCL-CLAIM-SIZE / DUP _RTHP-W-INSTRUMENT-CLAIMS !
+        _RTHP-UB-P @ _RTHP.INSTRUMENT-CLAIM-COUNT !
+    _RTHP-W-WRAP-INSTRUMENT-PLAN? 0= IF 0 EXIT THEN
+    _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ DUP _RTHP-UB-P @ _RTHP.SERIES-COUNT !
+    ?DUP IF _RTHP-UB-P @ _RTHP.FIRST-SERIES @ + 1- ELSE 0 THEN
+        _RTHP-UB-P @ _RTHP.SERIES-LAST !
+    _RTHP-UB-A @ _RTHP-TB.SERIES-SAMPLE-BYTES @ _RTHP-UB-P @ _RTHP.SERIES-SAMPLES-USED !
+    \ Without series the strip left the plan a full lowering wraps.
+    _RTHP-UB-A @ _RTHP-TB.SERIES-COUNT @ IF
+        _RTHP-W-WRAP-SERIES? 0= IF 0 EXIT THEN
+    THEN
+    _RTHP-UB-IFIRST @ _RTHP-UB-P @ _RTHP.INSTRUMENT-COUNT @ _RTHP-U+?
+        0= IF DROP 0 EXIT THEN _RTHP-W-GLYPH-FIRST ! -1 ;
 
 \ ( end delta -- flag ) The candidate's control text from END moved on by
 \ DELTA bytes, room for a text there that changes length, with every
@@ -10390,10 +10528,10 @@ VARIABLE _RTHP-UB-WHY
     17 _RTHP-UB-WHY !
     _RTHP-UB-CONTROLS? 0= IF 0 EXIT THEN
     _RTHP-W-SHELL-CONTROLS!
+    19 _RTHP-UB-WHY !
+    _RTHP-UB-INSTRUMENTS? 0= IF 0 EXIT THEN
     18 _RTHP-UB-WHY !
     _RTHP-UB-STATICS? 0= IF 0 EXIT THEN
-    19 _RTHP-UB-WHY !
-    _RTHP-W-STRIP-INSTRUMENTS? 0= IF 0 EXIT THEN
     20 _RTHP-UB-WHY !
     _RTHP-UB-MOVED? 0= IF 0 EXIT THEN
     21 _RTHP-UB-WHY !
@@ -10418,7 +10556,7 @@ VARIABLE _RTHP-UB-SH-A
 VARIABLE _RTHP-UB-SH-U
 VARIABLE _RTHP-UB-SH-KEPT
 35 CONSTANT _RTHP-UB-FIELDS
-13 CONSTANT _RTHP-UB-SH-ITEMS
+20 CONSTANT _RTHP-UB-SH-ITEMS
 
 \ The address of the candidate's field INDEX.
 : _RTHP-UB-FIELD  ( index -- a )
@@ -10465,9 +10603,10 @@ VARIABLE _RTHP-UB-SH-KEPT
     _RTHP-UB-FIELDS 0 DO I _RTHP-UB-FIELD @ OVER I 8 * + ! LOOP DROP ;
 
 \ The candidate's span ITEM, from 1: its controls, correlations and their
-\ text, claims, status fields with their correlations and text, and its
+\ text, claims, status fields with their correlations and text, its
 \ control, status field, instrument and series plans with the series'
-\ counts.
+\ counts, and its instrument regions, instruments with their correlations
+\ and units, and series with their correlations and samples.
 : _RTHP-UB-SH-SPAN  ( item -- a u )
     _RTHP-UB-P @ SWAP CASE
          1 OF DUP _RTHP.CONTROLS-A @
@@ -10486,6 +10625,17 @@ VARIABLE _RTHP-UB-SH-KEPT
         10 OF _RTHP.INSTRUMENT-PLAN RTE-INSTRUMENT-PLAN-SIZE ENDOF
         11 OF _RTHP.SERIES-COUNT 64 ENDOF
         12 OF _RTHP.SERIES-PLAN RTE-SERIES-PLAN-SIZE ENDOF
+        13 OF DUP _RTHP.INSTRUMENT-REGIONS-A @
+                SWAP _RTHP.INSTRUMENT-REGION-COUNT @ RTE-INSTRUMENT-REGION-SIZE * ENDOF
+        14 OF DUP _RTHP.INSTRUMENTS-A @
+                SWAP _RTHP.INSTRUMENT-COUNT @ RTE-INSTRUMENT-SIZE * ENDOF
+        15 OF DUP _RTHP.INSTRUMENT-CORR-A @
+                SWAP _RTHP.INSTRUMENT-COUNT @ RUIP-CORRELATION-SIZE * ENDOF
+        16 OF DUP _RTHP.INSTRUMENT-UNITS-A @ SWAP _RTHP.INSTRUMENT-UNITS-USED @ ENDOF
+        17 OF DUP _RTHP.SERIES-A @ SWAP _RTHP.SERIES-COUNT @ RTE-SERIES-SIZE * ENDOF
+        18 OF DUP _RTHP.SERIES-CORR-A @
+                SWAP _RTHP.SERIES-COUNT @ _RTHP-SERIES-CORR-SIZE * ENDOF
+        19 OF DUP _RTHP.SERIES-SAMPLES-A @ SWAP _RTHP.SERIES-SAMPLES-USED @ ENDOF
     ENDCASE ;
 
 \ Keep the candidate taken from the bank on screen in the stage's block.

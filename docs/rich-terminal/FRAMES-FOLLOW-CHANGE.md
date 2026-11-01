@@ -1823,7 +1823,16 @@ frame before the change driver.
     that of the 70 candidates turned away because the bank on screen held
     instruments or series, 41 moved nothing else, so 9c.4 alone takes
     them; in 15 a menu, field or dialog root moved as well, and in 14 the
-    facts did not pair.
+    facts did not pair. As built, the candidate takes the bank's instrument
+    regions, instruments with their correlations and units, and series
+    with their correlations and samples when no data-graphics root moved,
+    numbered as a full lowering numbers them, and the shadow check compares
+    them with a full lowering's. Each bank records the graphs its candidate
+    left out because the terminal could not take them, and a bank that
+    left any out is not taken, since it does not keep them. Lowering a
+    moved data-graphics root alone is not built: a frame whose instruments
+    changed goes out as a START, since a DELTA carries no changed
+    instrument, and no frame of the canonical journey needed it.
   - **9c.3. The other families' roots.** A moved menu, tab set, dialog or
     field root is lowered alone, as a moved collection or status field is,
     and the copy of the bank on screen checks that root's controls against

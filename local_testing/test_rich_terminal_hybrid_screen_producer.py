@@ -6497,7 +6497,8 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     collection_targets = _word(source, "_RTHP-TG-COLLECTION-TARGETS?")
     prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 448
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 456
+    assert _offset(source, "_RTHP-TB.OMITTED-GRAPHS") == 448
     assert _offset(source, "_RTHP-TB.XBLOCK") == 368
     assert _offset(source, "_RTHP-TB.XBLOCK-BYTES") == 376
     assert _offset(source, "_RTHP-TB.PICTURE-EPOCH") == 336

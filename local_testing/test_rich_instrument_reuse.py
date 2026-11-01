@@ -32,10 +32,11 @@ class InstrumentHarness(GrowthHarness):
                          "tui/uidl-field-snapshot.f", "tui/uidl-dialog-snapshot.f"):
             sources.append((ROOT / "akashic" / relative).read_text())
         self.definitions = _definitions("\n".join(sources))
-        # fdc1.f bounds the storage its variables own between two markers,
-        # which a field's validation keeps the field's bytes clear of.
-        for marker in ("_FDC1-OWNED-START", "_FDC1-OWNED-END"):
-            self.definitions[marker] = f"CREATE {marker}"
+        # A module bounds the storage its variables own between two CREATE
+        # markers, which the words that keep other storage clear of it name.
+        for source in sources + [(ROOT / "akashic/tui/rich-terminal/engine.f").read_text()]:
+            for marker in re.findall(r"(?m)^CREATE (\S+-OWNED-(?:START|END))\s*$", source):
+                self.definitions.setdefault(marker, f"CREATE {marker}")
         chunks, seen = [], set()
 
         def include(name):
