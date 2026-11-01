@@ -236,7 +236,9 @@ def test_a_correlation_keeps_naming_its_control_by_identity(h):
     # A control dropped before both, which keep their order: the second
     # correlation's control lies as far from its number as the first's.
     ((101, 102), (102, 101), 101, (301, 300)),
-), ids=("defined", "reordered", "dropped"))
+    # A control defined last, after the controls numbered by place.
+    ((100, 105), (100, 105), 100, (300, 301)),
+), ids=("defined", "reordered", "dropped", "appended"))
 def test_a_bank_numbered_by_identity_is_numbered_by_place(h, ids, named, parent, out_named):
     """A DELTA that defines or drops controls leaves the bank on screen
     numbered by the identities on screen until the next START, and they

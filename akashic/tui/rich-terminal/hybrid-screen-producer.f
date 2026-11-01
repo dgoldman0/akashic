@@ -10072,6 +10072,8 @@ VARIABLE _RTHP-UB-WHY
 \ same purpose lay from its own, the offset OFFSET-A keeps; then at HINT;
 \ then through the bank.
 VARIABLE _RTHP-UB-CONTROLS-A   \ the bank's controls
+VARIABLE _RTHP-UB-BANK-FIRST   \ the bank's first object
+VARIABLE _RTHP-UB-BY-PLACE     \ the bank numbers its controls by place
 VARIABLE _RTHP-UB-SOUGHT       \ the identity sought
 VARIABLE _RTHP-UB-OFF          \ the offset the search learns
 VARIABLE _RTHP-UB-NAMED-OFF    \ that of the last control a correlation named
@@ -10086,7 +10088,7 @@ VARIABLE _RTHP-UB-PLACE        \ the place of the control being numbered
     TUCK SWAP - _RTHP-UB-OFF @ ! -1 ;
 : _RTHP-UB-PLACE?  ( id hint offset-a -- place flag )
     _RTHP-UB-OFF !
-    SWAP DUP _RTHP-UB-SOUGHT ! _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ -
+    SWAP DUP _RTHP-UB-SOUGHT ! _RTHP-UB-BANK-FIRST @ -
     DUP _RTHP-UB-OFF @ @ + DUP _RTHP-UB-AT? IF NIP NIP -1 EXIT THEN DROP
     SWAP DUP _RTHP-UB-AT? IF _RTHP-UB-FOUND EXIT THEN DROP
     _RTHP-UB-N @ 0 ?DO
@@ -10095,11 +10097,23 @@ VARIABLE _RTHP-UB-PLACE        \ the place of the control being numbered
         THEN
     LOOP DROP 0 0 ;
 
+\ ( -- flag ) Each of the bank's controls bears the identity of its place
+\ from the bank's first object, which this one pass proves for every
+\ identity a parent or correlation names: each then lies at its number.
+: _RTHP-UB-BY-PLACE?  ( -- flag )
+    _RTHP-UB-N @ 0 ?DO
+        I _RTHP-UB-BANK-ID@ _RTHP-UB-BANK-FIRST @ I + <> IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
 \ ( id hint offset-a -- id' flag ) The candidate's identity for the bank's
 \ control of identity ID: the one a full lowering gives the control in its
-\ place.
+\ place, which in a bank numbered by place is its number.
 : _RTHP-UB-RENUMBER  ( id hint offset-a -- id' flag )
-    _RTHP-UB-PLACE? 0= IF 0 EXIT THEN _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + -1 ;
+    _RTHP-UB-BY-PLACE @ IF
+        2DROP _RTHP-UB-BANK-FIRST @ - DUP _RTHP-UB-N @ U< 0= IF 0 EXIT THEN
+    ELSE
+        _RTHP-UB-PLACE? 0= IF 0 EXIT THEN
+    THEN _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + -1 ;
 
 \ Control INDEX as a full lowering numbers it: from the candidate's first
 \ object by its place, with its parent and its correlation's control, in
@@ -10151,6 +10165,8 @@ VARIABLE _RTHP-UB-PLACE        \ the place of the control being numbered
     _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-UB-A @ _RTHP-PACK-SOURCE-A -
         _RTHP-UB-BY !
     _RTHP-UB-A @ _RTHP-PACK-CONTROLS-A _RTHP-UB-CONTROLS-A !
+    _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ _RTHP-UB-BANK-FIRST !
+    _RTHP-UB-BY-PLACE? _RTHP-UB-BY-PLACE !
     0 _RTHP-UB-NAMED-OFF ! 0 _RTHP-UB-PARENT-OFF !
     _RTHP-UB-N @ 0 ?DO I _RTHP-UB-CONTROL? 0= IF 0 UNLOOP EXIT THEN LOOP
     \ Every claim is this snapshot's but the instruments', which lie between
