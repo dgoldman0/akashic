@@ -1851,6 +1851,26 @@ frame before the change driver.
     fields 10, menus 6, a dialog 1 and several families 2. It comes in
     three pieces, the fields first, then the menus, then the dialogs and
     tab sets.
+    - **9c.3a. Fields.** The candidate lowers a moved field alone, in its
+      control's place, by the field lane's own writer, with the lane's
+      counts pointed at that place, and the field keeps its kind,
+      visibility, depth and rectangle. The copy checks a moved field
+      against its partner, by place or by identity, and builds its input
+      target again by the pack's own field words. **Done** on 2026-11-01
+      (4bcd163b). In the canonical journey with the shadow check the copy
+      took 44 frames, against 34, and turned away 9 for a moved root of
+      another family, against 19; the journey sent the same presents, 61
+      DELTAs and 25 STARTs, and made 29,965 comparisons without a
+      difference, 264 of them of a copy and 720 of a candidate from the
+      bank. The candidate was taken from the bank 36 times, against 35:
+      most frames whose field moved were turned away instead by the
+      candidate's check that the bank on screen numbers its controls by
+      place (code 17, 11 against 3), which a bank whose DELTA defined or
+      dropped controls no longer does until the next START. Safe mode
+      passed with 60 DELTAs and 27 STARTs and the same refusal counts as
+      before, taking neither path; a typed letter builds in 2.07 million
+      steps, and the typing run with the shadow check made 6,046
+      comparisons without a difference.
 
 **Proof.** The change driver passes over an element only when none of the
 counters it keeps for that element has moved. A capture reads only the
