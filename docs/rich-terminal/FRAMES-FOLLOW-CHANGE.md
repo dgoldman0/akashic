@@ -1874,7 +1874,24 @@ frame before the change driver.
       whose DELTA defined or dropped controls, which keeps the identities
       on screen until the next START, numbering each control, parent and
       correlation by place as a full lowering does, through the bank's
-      identities found in their places (decision 22).
+      identities found in their places (decision 22). As built, one pass
+      proves whether the bank is numbered by place, in which case each
+      identity a parent or correlation names lies at its number; otherwise
+      each is sought where its number lies moved as far as the last one
+      found for the same purpose lay from its own, then at the place of the
+      control naming it or before it, then through the bank. **Done** on
+      2026-11-01 (0b34d004; 70a3b6f4 a bank numbered by place mapped by
+      number again, which the first search made cost about 33,000 steps of
+      each typed letter). In the canonical journey with the shadow check
+      the candidate was taken from the bank 46 times, against 36, and code
+      17 turned none away, against 11; one of those frames stops instead at
+      a moved root the candidate does not lower yet (code 20, 7 against 6).
+      The journey sent the same presents, 61 DELTAs and 25 STARTs, and made
+      30,165 comparisons without a difference, 920 of them of a
+      candidate from the bank. Safe mode passed with 61 DELTAs and 26
+      STARTs, taking neither path; a typed letter builds in 2.07
+      million steps, and the typing run with the shadow check made
+      6,046 comparisons without a difference.
     - **9c.3c. Menus.** A moved menus root is lowered alone, and the copy
       builds the menus' targets again.
     - **9c.3d. Dialogs and tab sets.** A moved dialog or tab set root is
