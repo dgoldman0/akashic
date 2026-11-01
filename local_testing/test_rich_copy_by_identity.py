@@ -30,6 +30,7 @@ URF_F_MENUS = 1
 URF_F_COLLECTION = 2
 URF_F_DATA_GRAPHICS = 3
 URF_F_FIELD = 5
+URF_F_DIALOG = 6
 # The draws, and so the snapshot generations, of the bank on screen and
 # the pending one.
 OLD, NEW = 10, 11
@@ -166,19 +167,16 @@ def test_the_same_roots_in_the_same_order_are_copied_by_place(identity):
     assert h.ids(h.other) == [100, 101] and h.plan() == [] and h.drops() == []
 
 
-@pytest.mark.parametrize("case", ("came into a root on screen", "went from a root kept",
-                                  "a moved tab set"))
+@pytest.mark.parametrize("case", ("came into a root on screen", "went from a root kept"))
 def test_each_pairing_must_be_the_one_the_facts_allow(identity, case):
-    """A control the frame on screen lacks belongs to a root that came, a
-    control dropped to a root that went, and a moved root's controls are
-    text roots: otherwise the copy is refused, by its pairing."""
+    """A control the frame on screen lacks belongs to a root that came, and
+    a control dropped to a root that went: otherwise the copy is refused,
+    by its pairing."""
     h = identity
     if case == "came into a root on screen":
         h.frame((1, 3), (1, 2, 3), old=(1, 2, 3))
-    elif case == "went from a root kept":
-        h.frame((1, 2, 3), (1, 3), new=(1, 2, 3))
     else:
-        h.frame((1, 3), (1, 2, 3), new_facts={"stamps": {1: 6}})
+        h.frame((1, 2, 3), (1, 3), new=(1, 2, 3))
     assert h.call("_RTHP-C-FOLLOWS?")
     assert not h.call("_RTHP-C-COPY?", h.producer)
     assert h.why() == 9
@@ -236,13 +234,18 @@ def test_a_moved_menus_root_passes_the_facts_and_pairs_by_identity(identity):
         assert bool(h.call("_RTHP-C-PLACE?")) == (not moved)
 
 
-def test_a_moved_menu_control_is_checked_against_its_partner_whatever_its_state(identity):
-    """A menu control of a moved menus root keeps its partner's place in
-    the input whatever state it shows, since the menus' targets are built
-    again; a moved tab set, whose targets are not, does not."""
+def test_a_moved_menu_control_or_tab_set_is_paired_whatever_its_state(identity):
+    """A menu control of a moved menus root, or a moved tab set, keeps its
+    partner's place in the input whatever state it shows, since their
+    targets are built again; a control the copy does not write in does
+    not."""
     h = identity
     h.frame((1, 2), (1, 2))
     h.variable("_RTHP-D-PENDING", h.other)
+    assert h.call("_RTHP-C-MOVED-PAIR?", 0)
+    controls = h.results("_RTHP-PACK-CONTROLS-A", h.other)[0]
+    kind = controls + h.offset("_RTE-CONTROL.KIND")
+    h.runtime.memory.write64(kind, h.constant("RTE-CONTROL-BUTTON"))
     assert not h.call("_RTHP-C-MOVED-PAIR?", 0)
     h.field(h.other, "_RTHP-TB.MENU-CONTROL-COUNT", 1)
     assert h.call("_RTHP-C-MOVED-PAIR?", 0)
@@ -273,3 +276,19 @@ def test_menu_targets_built_again_take_their_partners_identities(identity):
     assert [h.runtime.memory.read64(targets + header + place * size)
             for place in range(2)] == [101, first + 1]
 
+
+@pytest.mark.parametrize("pending", ((1, 2), (1, 2, 3)), ids=("by place", "by identity"))
+def test_a_moved_tab_set_is_copied_with_its_targets_built_again(identity, pending):
+    """A moved tab set is checked against its partner, and its tabs'
+    targets are built again by the pack's own words, in their places on
+    screen or, when the copy pairs by identity, under their partners'
+    identities; the copy gives the bank, plan and kept facts the full
+    comparison gives (FRAMES-FOLLOW-CHANGE 9c.3d)."""
+    h = identity
+    h.frame((1, 2), pending, new_facts={"stamps": {1: 6}})
+    full = h.compared()
+    assert h.call("_RTHP-C-FOLLOWS?")
+    assert h.call("_RTHP-C-COPY?", h.producer)
+    assert h.variable("_RTHP-DIAG-COPIED-BY-IDENTITY") == (len(pending) == 3)
+    assert h.result() == full
+    h.assert_unchanged_active()

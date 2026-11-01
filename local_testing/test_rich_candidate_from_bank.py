@@ -549,3 +549,14 @@ def test_a_moved_menus_root_is_lowered_alone_by_the_full_lowerings_words(h):
     assert "_RTHP-W-DOC-MENU-CLAIMS?" in h.definitions["_RTHP-BUILD-CLAIMS?"]
     assert "URF-F-MENUS = IF _RTHP-UB-MENUS?" in " ".join(
         h.definitions["_RTHP-UB-MOVED?"].split())
+
+
+def test_a_moved_tab_set_is_lowered_alone_by_the_collection_lanes_writer(h):
+    """The candidate lowers a moved tab set by the collection lane's own
+    writer, with as many tabs as on screen (FRAMES-FOLLOW-CHANGE 9c.3d)."""
+    tabset = " ".join(h.definitions["_RTHP-UB-TABSET?"].split())
+    assert "_RTHP-W-WRITE-COLLECTION" in tabset
+    assert "_RTHP-UB-TABS @ _RTHP-W-ENTRY @ USCOL-TABSET-COUNT@ <> IF 0 EXIT THEN" in tabset
+    assert "_RTHP-UB-CONTROL-KEPT?" in tabset
+    assert "RTE-CONTROL-TABSET = IF DROP _RTHP-UB-TABSET? EXIT THEN" in " ".join(
+        h.definitions["_RTHP-UB-COLLECTION?"].split())

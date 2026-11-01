@@ -1040,12 +1040,13 @@ content revision and any other but a field's with the candidate's content
 epoch, as packing and the comparison would give them. The candidate's
 sections are copied as the pack copies them, and each control and
 correlation takes the identity, region and parent of the one in its place on
-screen. A moved root's controls must be text roots or fields whose
-correlations, identities and places, and states shown and enabled, are
-those on screen, each checked against its partner as the comparison checks
-a pair; a moved field's input target is built again as packing builds it,
-in the place its target on screen holds, and an unmoved text root keeps the
-content revision on screen. The pending bank keeps the bank on
+screen. A moved root's controls must be text roots, tab sets, tabs or
+fields whose correlations, identities and places, and states shown and
+enabled, are those on screen, each checked against its partner as the
+comparison checks a pair; a moved field's input target, or a moved tab
+set's tabs' targets, are built again as packing builds them, in the places
+their targets on screen hold, and an unmoved text root keeps the content
+revision on screen. The pending bank keeps the bank on
 screen's sorted index, and the plan lists the controls that changed.
 
 Otherwise the copy joins the controls by identity, as the comparison does,
@@ -1053,11 +1054,12 @@ and the facts decide each pairing: a control of a root that came is defined
 under the fresh identity its candidate gave it, a control of a root that
 went is dropped, a control of a root both hold that did not move keeps its
 partner's identity, and a moved root's controls are menus' controls, text
-roots or fields checked against their partners, a field's target built
-again. A moved menu control may change the state it shows, as a menu
-opening does, so the menus' targets, which then change in number, are all
-built again by packing's own walk of the menus, each paired control's
-under its partner's identity. The input targets follow the pending
+roots, tab sets, tabs or fields checked against their partners, a field's
+or a tab's target built again under its partner's identity. A moved menu
+control or tab may change the state it shows, as a menu opening does, so
+the menus' targets, which then change in number, are all built again by
+packing's own walk of the menus, each paired control's under its partner's
+identity. The input targets follow the pending
 controls in the order packing gives them, a paired control taking its
 partner's target on screen and a new one the target packing's own words
 build for it, so the
@@ -1087,9 +1089,10 @@ keeps the identities on screen until the next START, so the unpack finds in
 the bank the place of each identity a parent or correlation names. Since no
 data-graphics root moved, the instruments and series are those the snapshot
 would lower. Each moved root is then lowered alone into its place by its
-lane's own words, a text root's content, or a field's label and FDC1
-content, packed where the old lay with the text after it moved, and it must
-keep its kind, visibility, rectangle, depth and identity, so its claim and
+lane's own words, a text root's content, a field's label and FDC1 content,
+or a tab set's tabs with their labels and shortcuts, packed where the old
+lay with the text after it moved, and it must keep its kind, visibility,
+rectangle, depth and identity, a tab set its count of tabs, so its claim and
 the check of every later root against the claims before it stay as they were
 on screen. A document's moved menus are planned again in their place from
 the snapshot's records, which must be as many with as much text as on

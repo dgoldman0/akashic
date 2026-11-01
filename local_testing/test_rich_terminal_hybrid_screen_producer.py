@@ -4490,8 +4490,9 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     assert "RTE-CONTROL-ITEM-VIEW" in content_kind
     assert "RTE-CONTROL-DOCUMENT" in content_kind
     assert "_RTHP-CONTENT-CONTROL-KIND?" in collection_kind
-    assert "RTE-CONTROL-TABSET" in collection_kind
-    assert "RTE-CONTROL-TAB" in collection_kind
+    assert "_RTHP-TAB-KIND?" in collection_kind
+    tab_kind = _word(source, "_RTHP-TAB-KIND?")
+    assert "RTE-CONTROL-TABSET =" in tab_kind and "RTE-CONTROL-TAB =" in tab_kind
     assert "_RTHP-CONTENT-CONTROL-KIND?" in root_kind
     assert "RTE-CONTROL-TABSET" in root_kind
     assert "RTE-CONTROL-TAB =" not in root_kind

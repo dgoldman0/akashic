@@ -679,10 +679,12 @@ VARIABLE _RTHP-OWNED-LIMIT
     OVER RTE-CONTROL-ITEM-VIEW = OR
     SWAP RTE-CONTROL-DOCUMENT = OR ;
 
+: _RTHP-TAB-KIND?  ( rte-kind -- flag )
+    DUP RTE-CONTROL-TABSET = SWAP RTE-CONTROL-TAB = OR ;
+
 : _RTHP-COLLECTION-CONTROL-KIND?  ( rte-kind -- flag )
     DUP _RTHP-CONTENT-CONTROL-KIND? IF DROP -1 EXIT THEN
-    DUP RTE-CONTROL-TABSET =
-    SWAP RTE-CONTROL-TAB = OR ;
+    _RTHP-TAB-KIND? ;
 
 : _RTHP-COLLECTION-ROOT-KIND?  ( rte-kind -- flag )
     DUP _RTHP-CONTENT-CONTROL-KIND? IF DROP -1 EXIT THEN
@@ -10487,15 +10489,72 @@ VARIABLE _RTHP-UB-IFIRST       \ the candidate's first instrument
     OVER _RTE-CONTROL.HEIGHT @ _RTHP-UB-HEIGHT @ = AND
     SWAP _RTE-CONTROL.WIDTH @ _RTHP-UB-WIDTH @ = AND ;
 
+\ Lower the moved tab set whose control is _RTHP-UB-ITEM, in place
+\ _RTHP-UB-I, alone, by the collection lane's own writer: the tab set and
+\ its tabs in their places, their labels and shortcuts where the old lay,
+\ the text after them moved.  It keeps as many tabs, and its kind,
+\ visibility, depth and rectangle, so its claim stays as it was.
+VARIABLE _RTHP-UB-TABS         \ the tabs that follow the moved tab set
+VARIABLE _RTHP-UB-TAB-BYTES    \ the bytes of their labels and shortcuts
+VARIABLE _RTHP-UB-TABSET-ID    \ the identity of the moved tab set
+: _RTHP-UB-OLD-TABS  ( -- )
+    0 _RTHP-UB-TABS ! 0 _RTHP-UB-TAB-BYTES !
+    _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ _RTHP-UB-I @ + _RTHP-UB-TABSET-ID !
+    BEGIN
+        _RTHP-UB-I @ _RTHP-UB-TABS @ + 1+
+        DUP _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ U< IF
+            RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ +
+            DUP _RTE-CONTROL.KIND @ RTE-CONTROL-TAB =
+            OVER _RTE-CONTROL.PARENT @ _RTHP-UB-TABSET-ID @ = AND
+            IF -1 ELSE DROP 0 THEN
+        ELSE DROP 0 THEN
+    WHILE
+        DUP _RTE-CONTROL.LABEL-U @ SWAP _RTE-CONTROL.SHORTCUT-U @ +
+            _RTHP-UB-TAB-BYTES +!
+        1 _RTHP-UB-TABS +!
+    REPEAT ;
+: _RTHP-UB-TABSET?  ( -- flag )
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-SAVE
+    _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-FAMILY@ USCOL-F-TABSET <> IF 0 EXIT THEN
+    _RTHP-W-COLLECTION-ENTRY? 0= IF 0 EXIT THEN
+    _RTHP-UB-OLD-TABS
+    _RTHP-UB-TABS @ _RTHP-W-ENTRY @ USCOL-TABSET-COUNT@ <> IF 0 EXIT THEN
+    \ The tabs' text begins at the first tab's label, which a tab has.
+    _RTHP-UB-TABS @ IF
+        _RTHP-UB-ITEM @ RTE-CONTROL-SIZE + DUP _RTE-CONTROL.LABEL-U @ 0= IF
+            DROP 0 EXIT
+        THEN
+        _RTE-CONTROL.LABEL-A @ _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ -
+    ELSE 0 THEN _RTHP-UB-O !
+    _RTHP-UB-O @ _RTHP-UB-TAB-BYTES @ +
+    _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-SUMMARY USCOL-SUMMARY-UTF8-BYTES@
+        _RTHP-UB-TAB-BYTES @ -                                  ( end delta )
+    _RTHP-UB-TABS @ 0= OVER 0<> AND IF 2DROP 0 EXIT THEN
+    _RTHP-UB-TEXT-ROOM? 0= IF 0 EXIT THEN
+    _RTHP-UB-I @ _RTHP-W-TOTAL !
+    _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ _RTHP-UB-I @ + _RTHP-W-NEXT-ID !
+    _RTHP-UB-O @ _RTHP-W-CONTENT-CURSOR !
+    _RTHP-UB-P @ _RTHP.COLLECTION-COUNT @ _RTHP-UB-TABS @ 1+ - _RTHP-W-COLLECTIONS !
+    _RTHP-UB-P @ _RTHP.COLLECTION-ITEMS @ _RTHP-W-CONTENT-ITEMS !
+    _RTHP-UB-P @ _RTHP.COLLECTION-UTF8 @ _RTHP-UB-TAB-BYTES @ -
+        _RTHP-W-CONTENT-UTF8 !
+    _RTHP-W-WRITE-COLLECTION RTE-S-OK <> IF 0 EXIT THEN
+    _RTHP-W-TOTAL @ _RTHP-UB-I @ _RTHP-UB-TABS @ + 1+ <> IF 0 EXIT THEN
+    _RTHP-W-COLLECTIONS @ _RTHP-UB-P @ _RTHP.COLLECTION-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-KEPT? 0= IF 0 EXIT THEN
+    _RTHP-W-CONTENT-UTF8 @ _RTHP-UB-P @ _RTHP.COLLECTION-UTF8 ! -1 ;
+
 \ Lower the moved collection ROOT alone, in its control's place: a text
-\ root's content, packed where the old content lay.
+\ root's content, packed where the old content lay, or a tab set.
 : _RTHP-UB-COLLECTION?  ( root -- flag )
     DUP URF.TOKEN @ _RTHP-UB-DOCUMENT? 0= IF DROP 0 EXIT THEN
     DUP _RTHP-UB-COLLECTION-DESCRIPTOR? 0= IF DROP 0 EXIT THEN
     _RTHP-UB-ROOT-CONTROL DUP 0< IF DROP 0 EXIT THEN _RTHP-UB-I !
     _RTHP-UB-I @ RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ +
         _RTHP-UB-ITEM !
-    _RTHP-UB-ITEM @ _RTE-CONTROL.KIND @ _RTHP-CONTENT-CONTROL-KIND? 0= IF
+    _RTHP-UB-ITEM @ _RTE-CONTROL.KIND @
+    DUP RTE-CONTROL-TABSET = IF DROP _RTHP-UB-TABSET? EXIT THEN
+    _RTHP-CONTENT-CONTROL-KIND? 0= IF
         0 EXIT
     THEN
     _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-SAVE
@@ -16166,6 +16225,8 @@ VARIABLE _RTHP-C-DELTA
 \ A menus root both snapshots hold moved, so the menus' targets are built
 \ again.
 VARIABLE _RTHP-C-MENUS
+\ A tab set both snapshots hold moved, whose tabs' targets are built again.
+VARIABLE _RTHP-C-TABS
 \ Diagnostics: banks copied, those paired by identity, and the moved and
 \ new controls written into them.
 VARIABLE _RTHP-DIAG-COPIED
@@ -16251,14 +16312,16 @@ VARIABLE _RTHP-C-PLACE
     _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ - ;
 
 \ A moved control of KIND at INDEX that the copy writes in: a collection's
-\ text root, or a field.
+\ text root, tab set or tab, or a field.
 : _RTHP-C-MOVABLE?  ( index kind -- flag )
-    SWAP _RTHP-C-COLLECTIONS-END U< IF _RTHP-CONTENT-CONTROL-KIND? EXIT THEN
+    SWAP _RTHP-C-COLLECTIONS-END U< IF
+        DUP _RTHP-CONTENT-CONTROL-KIND? SWAP _RTHP-TAB-KIND? OR EXIT
+    THEN
     RTE-CONTROL-FIELD = ;
 
-\ The moved control at INDEX keeps its place: a text root or field whose
-\ correlation, at its own place in both banks, carries the identity on
-\ screen, and whose state shown and enabled is that on screen.
+\ The moved control at INDEX keeps its place: a text root, tab set, tab or
+\ field whose correlation, at its own place in both banks, carries the
+\ identity on screen, and whose state shown and enabled is that on screen.
 : _RTHP-C-MOVED-PLACE?  ( index -- flag )
     DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP _RTE-CONTROL.KIND @
         2 PICK SWAP _RTHP-C-MOVABLE? 0= IF 2DROP 0 EXIT THEN
@@ -16288,9 +16351,12 @@ VARIABLE _RTHP-C-PLACE
     _RTHP-D-INDEX-N @ 0 ?DO I 1+ I _RTHP-D-CONTROL-MAP-AT ! LOOP
     _RTHP-D-NO-GLYPHS
     0 _RTHP-D-OPS !
+    0 _RTHP-C-TABS !
     _RTHP-C-FIELDS-END _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
         I _RTHP-D-CONTROL-MOVED? IF
             I _RTHP-C-MOVED-PLACE? 0= IF 0 UNLOOP EXIT THEN
+            I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.KIND @
+                _RTHP-TAB-KIND? IF -1 _RTHP-C-TABS ! THEN
             I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
             _RTHP-D-CHANGED @ IF
                 _RTHP-D-CONTROL-MARK-CHANGED? 0= IF 0 UNLOOP EXIT THEN
@@ -16390,10 +16456,12 @@ VARIABLE _RTHP-C-PLACE
 
 \ The moved control at INDEX keeps its partner's place in the input: a
 \ collection's text root or a field whose state shown and enabled is its
-\ partner's.  A menu control may change its state, since the menus'
-\ targets are built again.
+\ partner's.  A menu control, tab set or tab may change its state, since
+\ their targets are built again.
 : _RTHP-C-MOVED-PAIR?  ( index -- flag )
     DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ U< IF DROP -1 EXIT THEN
+    DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.KIND @
+        _RTHP-TAB-KIND? IF DROP -1 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @
         _RTHP-C-FIELDS-END WITHIN 0= IF DROP 0 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP _RTE-CONTROL.KIND @
@@ -16503,16 +16571,41 @@ VARIABLE _RTHP-C-T-ID
     _RTHP-TG-MENU-TARGETS? 0 _RTHP-TG-COUNTING ! 0= IF 0 EXIT THEN
     _RTHP-C-T-WRITE @ IF _RTHP-C-T-MENU-IDS THEN -1 ;
 
+\ ( ordinal -- flag ) The pending control ORDINAL is a tab set or tab whose
+\ root moved, whose target is built again.
+: _RTHP-C-TAB-MOVED?  ( ordinal -- flag )
+    DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.KIND @ _RTHP-TAB-KIND?
+    IF _RTHP-D-CONTROL-MOVED? ELSE DROP 0 THEN ;
+
+\ The target of the moved tab set's control at correlation ORDINAL built
+\ again as the pack builds it, under the identity of the partner of the
+\ pending control at INDEX.
+: _RTHP-C-T-TAB?  ( index ordinal -- flag )
+    _RTHP-CT-COLLECTION-CONTROL-AT? 0= IF DROP 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TABSET = IF
+        DROP _RTHP-CT-TABSET? EXIT
+    THEN
+    _RTHP-CT-TAB? 0= IF 2DROP 0 EXIT THEN
+    0= IF DROP -1 EXIT THEN
+    0 _RTHP-C-T-TAKE? 0= IF DROP 0 EXIT THEN
+    _RTHP-C-T-WRITE @ 0= IF DROP -1 EXIT THEN
+    _RTHP-D-CONTROL-MAP-AT @ DUP 0< IF NEGATE THEN 1-
+        _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+    _RTHP-TG-COUNT @ 1- _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY _RTHP-TE.ID ! -1 ;
+
 \ The collections' targets, in the order of their correlations, as the pack
-\ walks them.
+\ walks them.  A paired control takes its partner's target, but a moved
+\ tab set's, whose targets are built again.
 : _RTHP-C-T-COLLECTIONS?  ( -- flag )
-    0 _RTHP-CT-TAB-ROOT !
+    0 _RTHP-CT-TAB-ROOT ! 0 _RTHP-D-ROOT-LAST !
     _RTHP-C-COLLECTIONS-END _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
         I RUCP-CORRELATION-SIZE * _RTHP-C-P @ _RTHP.CORR-A @ +
             RUCP-CORRELATION-CONTROL-ID@ _RTHP-C-ORDINAL? 0= IF
             DROP 0 UNLOOP EXIT
         THEN
-        DUP _RTHP-D-CONTROL-MAP-AT @ IF
+        DUP _RTHP-D-CONTROL-MAP-AT @ IF DUP _RTHP-C-TAB-MOVED? ELSE 0 THEN IF
+            I _RTHP-C-T-TAB? 0= IF 0 UNLOOP EXIT THEN
+        ELSE DUP _RTHP-D-CONTROL-MAP-AT @ IF
             \ A tab follows only a tab set new with it.
             DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.KIND @
                 RTE-CONTROL-TAB <> IF 0 _RTHP-CT-TAB-ROOT ! THEN
@@ -16534,7 +16627,7 @@ VARIABLE _RTHP-C-T-ID
                     IF 0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN THEN
                 THEN
             THEN
-        THEN
+        THEN THEN
     LOOP -1 ;
 
 \ The control at ORDINAL, as the pack's field and dialog words read it.
@@ -16695,6 +16788,45 @@ VARIABLE _RTHP-C-FT-ENTRY
         THEN
     LOOP -1 ;
 
+\ A moved tab set's tabs have their input targets built again as the pack
+\ builds them, walking the collections' correlations in its order, each in
+\ the place its target on screen holds among the targets the copy took: a
+\ tab had one there exactly when it has one now.  Its state shown and
+\ enabled is the one on screen, but a label that changed moves the tabs
+\ after it.  The targets are built before the pending bank takes the
+\ identities on screen, while the candidate's controls still lie at their
+\ numbers from its first object, so each is found by its partner's in its
+\ place on screen.
+: _RTHP-C-TAB-TARGET?  ( index target? -- flag )
+    SWAP _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ _RTHP-C-FT-ID !
+    0 _RTHP-C-FT-ENTRY !
+    _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY DUP _RTHP-TE.ID @ _RTHP-C-FT-ID @ = IF
+            _RTHP-C-FT-ENTRY ! LEAVE
+        THEN DROP
+    LOOP
+    _RTHP-C-FT-ENTRY @ 0<> <> IF 0 EXIT THEN
+    _RTHP-C-FT-ENTRY @ ?DUP 0= IF -1 EXIT THEN
+    _RTHP-CT-ROW @ OVER _RTHP-TE.ROW !
+    _RTHP-CT-COL @ SWAP _RTHP-TE.COL ! -1 ;
+: _RTHP-C-TAB-TARGETS?  ( -- flag )
+    _RTHP-CT-CLEAR
+    _RTHP-C-P @ DUP _RTHP-CT-P !
+    DUP _RTHP.OWNER @ _RTHP-CT-OWNER ! _RTHP.OWNER-GEN @ _RTHP-CT-GENERATION !
+    0 _RTHP-D-ROOT-LAST !
+    _RTHP-C-COLLECTIONS-END _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
+        I _RTHP-CT-COLLECTION-CONTROL-AT? 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-CT-ID @ _RTHP-C-P @ _RTHP.FIRST-OBJECT @ -
+        DUP _RTHP-C-TAB-MOVED? IF
+            _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-TABSET = IF
+                DROP _RTHP-CT-TABSET? 0= IF 0 UNLOOP EXIT THEN
+            ELSE
+                _RTHP-CT-TAB? 0= IF 2DROP 0 UNLOOP EXIT THEN
+                _RTHP-C-TAB-TARGET? 0= IF 0 UNLOOP EXIT THEN
+            THEN
+        ELSE DROP 0 _RTHP-CT-TAB-ROOT ! THEN
+    LOOP -1 ;
+
 \ ( producer -- flag ) Build the pending bank as the copy of the bank on
 \ screen and seal its plan, or leave no bank pending and the candidate's
 \ region and first identities as they were, for the pack.
@@ -16711,7 +16843,9 @@ VARIABLE _RTHP-C-SERIES
     _RTHP-C-WRITE? 0= IF 0 EXIT THEN
     9 _RTHP-C-WHY !
     _RTHP-C-PLACE @ IF
-        _RTHP-C-PAIR? IF _RTHP-C-NORMALIZE? ELSE 0 THEN
+        _RTHP-C-PAIR? IF _RTHP-C-TABS @ IF _RTHP-C-TAB-TARGETS? ELSE -1 THEN
+        ELSE 0 THEN
+        IF _RTHP-C-NORMALIZE? ELSE 0 THEN
         IF _RTHP-C-FIELD-TARGETS? ELSE 0 THEN
     ELSE _RTHP-C-BY-IDENTITY? THEN
     IF _RTHP-D-PLAN-COMPACT-CONTROLS? ELSE 0 THEN
