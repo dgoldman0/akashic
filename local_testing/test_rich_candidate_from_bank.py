@@ -226,21 +226,60 @@ def test_a_correlation_keeps_naming_its_control_by_identity(h):
     assert (memory.read64(corr + 32), memory.read64(corr + 56 + 32)) == (301, 300)
 
 
-def test_a_bank_numbered_otherwise_is_not_taken(h):
-    """The bank on screen numbers its controls by place from its first
-    object, which shows where each parent lies; one that does not cannot
-    be taken."""
+@pytest.mark.parametrize("ids, named, parent, out_named", (
+    # A control defined before the other, with an identity past the last:
+    # each correlation names the control in its own place, and the parent
+    # lies in the place before its child.
+    ((105, 100), (105, 100), 105, (300, 301)),
+    # Correlations in another order, each found through the bank.
+    ((105, 100), (100, 105), 105, (301, 300)),
+    # A control dropped before both, which keep their order: the second
+    # correlation's control lies as far from its number as the first's.
+    ((101, 102), (102, 101), 101, (301, 300)),
+), ids=("defined", "reordered", "dropped"))
+def test_a_bank_numbered_by_identity_is_numbered_by_place(h, ids, named, parent, out_named):
+    """A DELTA that defines or drops controls leaves the bank on screen
+    numbered by the identities on screen until the next START, and they
+    follow their places only in part (FRAMES-FOLLOW-CHANGE 9c.3b).  The
+    unpack finds each identity a correlation or parent names in its place
+    in the bank, and numbers the control there as a full lowering would."""
     h.candidate()
     bank = h.bank_on_screen()
+    memory = h.runtime.memory
+    size = h.constant("RTE-CONTROL-SIZE")
     controls, = h.results("_RTHP-PACK-CONTROLS-A", bank)
-    h.runtime.memory.write64(controls + h.offset("_RTE-CONTROL.ID"), 105)
-    h.forget()
-    assert h.call("_RTHP-UB-ROOM?")
-    assert not h.call("_RTHP-UB-CONTROLS?")
-    # Nor one whose correlation names a control it does not hold.
-    h.runtime.memory.write64(controls + h.offset("_RTE-CONTROL.ID"), 100)
     correlations, = h.results("_RTHP-PACK-CORR-A", bank)
-    h.runtime.memory.write64(correlations + 32, 102)
+    for index in range(2):
+        memory.write64(controls + index * size + h.offset("_RTE-CONTROL.ID"), ids[index])
+        memory.write64(correlations + index * 56 + 32, named[index])
+    memory.write64(controls + size + h.offset("_RTE-CONTROL.PARENT"), parent)
+    before = h.spans()
+    h.forget()
+    h.field(h.producer, "_RTHP.FIRST-OBJECT", 300)
+    h.unpack()
+    out, corr = h.get("CONTROLS-A"), h.get("CORR-A")
+    assert [memory.read64(out + i * size + h.offset("_RTE-CONTROL.ID"))
+            for i in range(2)] == [300, 301]
+    assert tuple(memory.read64(corr + i * 56 + 32) for i in range(2)) == out_named
+    assert memory.read64(out + h.offset("_RTE-CONTROL.PARENT")) == 0
+    assert memory.read64(out + size + h.offset("_RTE-CONTROL.PARENT")) == 300
+    assert h.spans()["claims"] == before["claims"]
+
+
+@pytest.mark.parametrize("where", ("correlation", "parent"))
+def test_a_bank_naming_a_control_it_does_not_hold_is_not_taken(h, where):
+    """A correlation or parent naming an identity the bank on screen does
+    not hold has no place, so the bank cannot be taken."""
+    h.candidate()
+    bank = h.bank_on_screen()
+    memory = h.runtime.memory
+    if where == "correlation":
+        correlations, = h.results("_RTHP-PACK-CORR-A", bank)
+        memory.write64(correlations + 32, 102)
+    else:
+        controls, = h.results("_RTHP-PACK-CONTROLS-A", bank)
+        memory.write64(controls + h.constant("RTE-CONTROL-SIZE")
+                       + h.offset("_RTE-CONTROL.PARENT"), 102)
     h.forget()
     assert h.call("_RTHP-UB-ROOM?")
     assert not h.call("_RTHP-UB-CONTROLS?")

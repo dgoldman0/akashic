@@ -10062,31 +10062,66 @@ VARIABLE _RTHP-UB-WHY
     _RTHP-UB-A @ _RTHP-TB.SERIES-SAMPLE-BYTES @
         _RTHP-UB-P @ _RTHP.SERIES-SAMPLES-U @ U> 0= ;
 
-\ ( id -- id' flag ) The identity ID of the bank on screen, which numbers
-\ its controls by place from its first object, as the candidate numbers
-\ the control in that place.
-: _RTHP-UB-RENUMBER  ( id -- id' flag )
-    _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ -
-    DUP _RTHP-UB-N @ U< 0= IF 0 EXIT THEN
-    _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + -1 ;
+\ ( id hint offset-a -- place flag ) The place of the bank's control of
+\ identity ID.  A bank numbers its controls by place from its first object
+\ until a DELTA defines or drops some, after which it keeps the identities
+\ on screen until the next START: a run of controls then keeps its order,
+\ moved together by the controls defined or dropped before it, while each
+\ control defined bears an identity past the last.  The control is sought
+\ where its number lies moved as far as the last control found for the
+\ same purpose lay from its own, the offset OFFSET-A keeps; then at HINT;
+\ then through the bank.
+VARIABLE _RTHP-UB-CONTROLS-A   \ the bank's controls
+VARIABLE _RTHP-UB-SOUGHT       \ the identity sought
+VARIABLE _RTHP-UB-OFF          \ the offset the search learns
+VARIABLE _RTHP-UB-NAMED-OFF    \ that of the last control a correlation named
+VARIABLE _RTHP-UB-PARENT-OFF   \ that of the last parent
+VARIABLE _RTHP-UB-PLACE        \ the place of the control being numbered
+: _RTHP-UB-BANK-ID@  ( place -- id )
+    RTE-CONTROL-SIZE * _RTHP-UB-CONTROLS-A @ + _RTE-CONTROL.ID @ ;
+: _RTHP-UB-AT?  ( place -- flag )
+    DUP _RTHP-UB-N @ U< IF _RTHP-UB-BANK-ID@ _RTHP-UB-SOUGHT @ = EXIT THEN
+    DROP 0 ;
+: _RTHP-UB-FOUND  ( number place -- place -1 )
+    TUCK SWAP - _RTHP-UB-OFF @ ! -1 ;
+: _RTHP-UB-PLACE?  ( id hint offset-a -- place flag )
+    _RTHP-UB-OFF !
+    SWAP DUP _RTHP-UB-SOUGHT ! _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ -
+    DUP _RTHP-UB-OFF @ @ + DUP _RTHP-UB-AT? IF NIP NIP -1 EXIT THEN DROP
+    SWAP DUP _RTHP-UB-AT? IF _RTHP-UB-FOUND EXIT THEN DROP
+    _RTHP-UB-N @ 0 ?DO
+        I _RTHP-UB-BANK-ID@ _RTHP-UB-SOUGHT @ = IF
+            I _RTHP-UB-FOUND UNLOOP EXIT
+        THEN
+    LOOP DROP 0 0 ;
+
+\ ( id hint offset-a -- id' flag ) The candidate's identity for the bank's
+\ control of identity ID: the one a full lowering gives the control in its
+\ place.
+: _RTHP-UB-RENUMBER  ( id hint offset-a -- id' flag )
+    _RTHP-UB-PLACE? 0= IF 0 EXIT THEN _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + -1 ;
 
 \ Control INDEX as a full lowering numbers it: from the candidate's first
-\ object, with its parent and its correlation's control, in the
-\ candidate's region, its texts in the candidate's copy, and a text
-\ root's content stamped with this snapshot's content epoch.  The bank on
-\ screen numbers its controls by place too, each from that bank's first
-\ object.  A correlation names its control by identity, not by place: a
-\ menu's keep their source order while its controls lie in graph order.
+\ object by its place, with its parent and its correlation's control, in
+\ the candidate's region, its texts in the candidate's copy, and a text
+\ root's content stamped with this snapshot's content epoch.  The bank's
+\ parents and correlations name its controls by its own identities, which
+\ _RTHP-UB-RENUMBER finds in their places: a correlation's control is
+\ sought first in the correlation's own place, a parent, which precedes
+\ its children, in the place before.  A correlation names its control by
+\ identity, not by place: a menu's keep their source order while its
+\ controls lie in graph order.
 : _RTHP-UB-CONTROL?  ( index -- flag )
+    DUP _RTHP-UB-PLACE !
     DUP RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ + _RTHP-UB-ITEM !
-    DUP _RTHP-UB-A @ _RTHP-TB.FIRST-OBJECT @ +
-        _RTHP-UB-ITEM @ _RTE-CONTROL.ID @ <> IF DROP 0 EXIT THEN
     DUP _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + _RTHP-UB-ITEM @ _RTE-CONTROL.ID !
     RUCP-CORRELATION-SIZE * _RTHP-UB-P @ _RTHP.CORR-A @ +
-        DUP RUCP-CORRELATION-CONTROL-ID@ _RTHP-UB-RENUMBER 0= IF 2DROP 0 EXIT THEN
+        DUP RUCP-CORRELATION-CONTROL-ID@ _RTHP-UB-PLACE @ _RTHP-UB-NAMED-OFF
+            _RTHP-UB-RENUMBER 0= IF 2DROP 0 EXIT THEN
         SWAP _RUCP-X.CONTROL-ID !
     _RTHP-UB-ITEM @ _RTE-CONTROL.PARENT @ ?DUP IF
-        _RTHP-UB-RENUMBER 0= IF DROP 0 EXIT THEN
+        _RTHP-UB-PLACE @ 1- _RTHP-UB-PARENT-OFF _RTHP-UB-RENUMBER
+            0= IF DROP 0 EXIT THEN
         _RTHP-UB-ITEM @ _RTE-CONTROL.PARENT !
     THEN
     _RTHP-UB-P @ _RTHP.REGION @ _RTHP-UB-ITEM @ _RTE-CONTROL.REGION !
@@ -10115,6 +10150,8 @@ VARIABLE _RTHP-UB-WHY
         _RTHP-UB-A @ _RTHP-TB.CLAIMS @ RUCL-CLAIM-SIZE * MOVE
     _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ _RTHP-UB-A @ _RTHP-PACK-SOURCE-A -
         _RTHP-UB-BY !
+    _RTHP-UB-A @ _RTHP-PACK-CONTROLS-A _RTHP-UB-CONTROLS-A !
+    0 _RTHP-UB-NAMED-OFF ! 0 _RTHP-UB-PARENT-OFF !
     _RTHP-UB-N @ 0 ?DO I _RTHP-UB-CONTROL? 0= IF 0 UNLOOP EXIT THEN LOOP
     \ Every claim is this snapshot's but the instruments', which lie between
     \ the claims before them and the status fields' and carry the generation

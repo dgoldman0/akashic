@@ -1072,12 +1072,15 @@ the candidate can be unpacked from it: its controls, correlations and their
 text, its instrument regions, instruments with their correlations and
 units, and series with their correlations and samples, its status fields
 with theirs, and its claims. Each item is numbered as a full lowering
-numbers it, the controls from the candidate's first object, the
+numbers it, the controls from the candidate's first object by place, the
 instruments from the first identity past the controls Desk's shell adds,
 the instrument regions from the one past the candidate's region and the
 series from its first series, and stamped with its snapshot's generation
-and content epoch. Since no data-graphics root moved, the instruments and
-series are those the snapshot would lower. Each
+and content epoch. A bank whose DELTA defined or dropped controls keeps the
+identities on screen until the next START, so the unpack finds in the bank
+the place of each identity a parent or correlation names. Since no
+data-graphics root moved, the instruments and series are those the
+snapshot would lower. Each
 moved root is then lowered alone into its place by its lane's own words, a
 text root's content, or a field's label and FDC1 content, packed where the
 old lay with the text after it moved, and it must keep its kind, visibility, rectangle, depth and identity,
