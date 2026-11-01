@@ -1893,7 +1893,32 @@ frame before the change driver.
       million steps, and the typing run with the shadow check made
       6,046 comparisons without a difference.
     - **9c.3c. Menus.** A moved menus root is lowered alone, and the copy
-      builds the menus' targets again.
+      builds the menus' targets again. A throwaway diagnostic in a plain
+      canonical journey after 9c.3b found the menus alone moved in 6 of
+      the candidate's 8 frames turned away for a root of another family
+      and 6 of the copy's 9, with as many menu controls as on screen; in 5
+      of each their claims changed, as a menu opening or closing changes
+      them, while every claim after the menus stayed as it was. As built,
+      the copy checks a moved menu control against its partner whatever
+      state it shows, pairs by identity, since the menus' targets may
+      change in number, and builds those targets again by the pack's own
+      walk of the menus. The candidate plans the document's menus again in
+      their place and builds their claims again by the full lowering's own
+      words; claims that changed take the old ones' place only when no
+      claim of the fields, dialogs or status fields, whose lanes check each
+      rectangle against the claims before it, meets the old or the new,
+      and none of those lanes was refused. **Done** on 2026-11-01
+      (9795569b). In the canonical journey with the shadow check the copy
+      took 49 frames, against 44, 13 of them by identity, and the
+      candidate was taken from the bank 51 times, against 46; each took 5
+      of the 6 frames whose menus alone moved, the candidate turning one
+      away at a moved root it does not lower and the copy one at its
+      pairing. The journey sent the same presents, 61 DELTAs and 25
+      STARTs, and made 30,295 comparisons without a difference, 294 of
+      them of a copy and 1,020 of a candidate from the bank. Safe mode
+      passed with 60 DELTAs and 27 STARTs, taking neither path; a typed
+      letter builds in 2.07 million steps, as before, and the typing run
+      with the shadow check made 6,477 comparisons without a difference.
     - **9c.3d. Dialogs and tab sets.** A moved dialog or tab set root is
       lowered alone, and the copy checks its controls and builds their
       targets again.
