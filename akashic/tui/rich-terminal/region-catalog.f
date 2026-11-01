@@ -220,7 +220,6 @@ VARIABLE _RTE-RC-CONTENT
 VARIABLE _RTE-RC-LEFT VARIABLE _RTE-RC-TOP
 VARIABLE _RTE-RC-PANE
 VARIABLE _RTE-RC-SEARCH
-VARIABLE _RTE-RC-USED
 
 \ Enumerate exact source extents; unused span positions are canonical (0,0).
 \ Separate families can use adjacent slices of one allocation, not overlapping
