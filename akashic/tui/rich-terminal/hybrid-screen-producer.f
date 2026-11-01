@@ -1889,11 +1889,12 @@ VARIABLE _RTHP-TG-P
 VARIABLE _RTHP-TG-BANK
 VARIABLE _RTHP-TG-BYTES
 VARIABLE _RTHP-TG-COUNT
+VARIABLE _RTHP-TG-COUNTING
 
 : _RTHP-TG-CLEAR  ( -- )
     _RTHP-CT-CLEAR
     0 _RTHP-TG-P ! 0 _RTHP-TG-BANK !
-    0 _RTHP-TG-BYTES ! 0 _RTHP-TG-COUNT ! ;
+    0 _RTHP-TG-BYTES ! 0 _RTHP-TG-COUNT ! 0 _RTHP-TG-COUNTING ! ;
 
 : _RTHP-TG-APPEND-CURRENT?  ( -- flag )
     _RTHP-TG-COUNT @ _RTHP-TG-P @ _RTHP.MAX-CONTROLS @
@@ -2977,6 +2978,45 @@ VARIABLE _RTHP-OR-REGION
     _RTHP-TG-P @ _RTHP.OMITTED-GRAPHS-USED @
         _RTHP-TG-BANK @ _RTHP-TB.OMITTED-GRAPHS ! ;
 
+\ The menus' targets, walking every document's menu records in order:
+\ each visible, enabled and paintable menu or item is one target.
+\ With _RTHP-TG-COUNTING on, the walk counts them without writing them.
+: _RTHP-TG-MENU-TARGET?  ( -- flag )
+    _RTHP-TG-COUNTING @ 0= IF _RTHP-TG-APPEND-CURRENT? EXIT THEN
+    _RTHP-TG-COUNT @ _RTHP-TG-P @ _RTHP.MAX-CONTROLS @ U< 0= IF 0 EXIT THEN
+    1 _RTHP-TG-COUNT +! -1 ;
+: _RTHP-TG-MENU-TARGETS?  ( -- flag )
+    0 _RTHP-CT-ORDINAL ! 0 _RTHP-CT-DOCUMENT-I !
+    0 _RTHP-CT-RECORD-CURSOR ! 0 _RTHP-CT-TEXT-CURSOR !
+    BEGIN _RTHP-CT-DOCUMENT-I @
+        _RTHP-CT-P @ _RTHP.DOCUMENT-COUNT @ U< WHILE
+        _RTHP-CT-DOCUMENT-I @ _RTHP-CT-P @ _RTHP-DOCUMENT-AT
+            _RTHP-CT-DOCUMENT !
+        _RTHP-CT-DOCUMENT-SHAPE? 0= IF 0 EXIT THEN
+        0 _RTHP-CT-LOCAL !
+        BEGIN _RTHP-CT-LOCAL @ _RTHP-CT-DOC-RECORD-COUNT @ U< WHILE
+        _RTHP-CT-ORDINAL @ _RTHP-CT-CORRELATION-AT? 0= IF 0 EXIT THEN
+        _RTHP-CT-RECORD-AT? 0= IF 0 EXIT THEN
+        _RTHP-CT-FIND-CONTROL? 0= IF 0 EXIT THEN
+        _RTHP-CT-CONTROL? 0= IF 0 EXIT THEN
+        _RTHP-CT-CORRELATION? 0= IF 0 EXIT THEN
+        _RTHP-CT-RECORD? 0= IF 0 EXIT THEN
+        _RTHP-CT-CONTROL @ _RTHP-CT-TARGET? IF
+            _RTHP-CT-RECORD @ UMSN-RECORD-STATE@
+                UMSN-F-PAINTABLE AND IF
+                _RTHP-CT-GEOMETRY? 0= IF 0 EXIT THEN
+                _RTHP-TG-MENU-TARGET? 0= IF 0 EXIT THEN
+            THEN
+        THEN
+        1 _RTHP-CT-LOCAL +! 1 _RTHP-CT-ORDINAL +!
+        REPEAT
+        1 _RTHP-CT-DOCUMENT-I +!
+    REPEAT
+    _RTHP-CT-ORDINAL @ _RTHP-CT-P @ _RTHP.MENU-CONTROL-COUNT @ =
+    _RTHP-CT-RECORD-CURSOR @ _RTHP-CT-P @ _RTHP.SOURCE-USED @ = AND
+    _RTHP-CT-TEXT-CURSOR @
+        _RTHP-CT-P @ _RTHP.SOURCE-MENU-TEXT-USED @ = AND ;
+
 : _RTHP-TARGET-CANDIDATE?  ( producer -- flag )
     DUP _RTHP-TARGET-ABORT _RTHP-TG-P !
     _RTHP-TG-P @ _RTHP-TARGET-INACTIVE _RTHP-TG-BANK !
@@ -2991,39 +3031,7 @@ VARIABLE _RTHP-OR-REGION
     _RTHP-TG-P @ _RTHP.OWNER-GEN @ _RTHP-CT-GENERATION !
     _RTHP-CT-CANDIDATE-SHAPE? 0= IF _RTHP-TG-FAIL EXIT THEN
     0 _RTHP-TG-COUNT !
-    0 _RTHP-CT-ORDINAL ! 0 _RTHP-CT-DOCUMENT-I !
-    0 _RTHP-CT-RECORD-CURSOR ! 0 _RTHP-CT-TEXT-CURSOR !
-    BEGIN _RTHP-CT-DOCUMENT-I @
-        _RTHP-TG-P @ _RTHP.DOCUMENT-COUNT @ U< WHILE
-        _RTHP-CT-DOCUMENT-I @ _RTHP-TG-P @ _RTHP-DOCUMENT-AT
-            _RTHP-CT-DOCUMENT !
-        _RTHP-CT-DOCUMENT-SHAPE? 0= IF _RTHP-TG-FAIL EXIT THEN
-        0 _RTHP-CT-LOCAL !
-        BEGIN _RTHP-CT-LOCAL @ _RTHP-CT-DOC-RECORD-COUNT @ U< WHILE
-        _RTHP-CT-ORDINAL @ _RTHP-CT-CORRELATION-AT?
-            0= IF _RTHP-TG-FAIL EXIT THEN
-        _RTHP-CT-RECORD-AT? 0= IF _RTHP-TG-FAIL EXIT THEN
-        _RTHP-CT-FIND-CONTROL? 0= IF _RTHP-TG-FAIL EXIT THEN
-        _RTHP-CT-CONTROL? 0= IF _RTHP-TG-FAIL EXIT THEN
-        _RTHP-CT-CORRELATION? 0= IF _RTHP-TG-FAIL EXIT THEN
-        _RTHP-CT-RECORD? 0= IF _RTHP-TG-FAIL EXIT THEN
-        _RTHP-CT-CONTROL @ _RTHP-CT-TARGET? IF
-            _RTHP-CT-RECORD @ UMSN-RECORD-STATE@
-                UMSN-F-PAINTABLE AND IF
-                _RTHP-CT-GEOMETRY? 0= IF _RTHP-TG-FAIL EXIT THEN
-                _RTHP-TG-APPEND-CURRENT? 0= IF _RTHP-TG-FAIL EXIT THEN
-            THEN
-        THEN
-        1 _RTHP-CT-LOCAL +! 1 _RTHP-CT-ORDINAL +!
-        REPEAT
-        1 _RTHP-CT-DOCUMENT-I +!
-    REPEAT
-    _RTHP-CT-ORDINAL @ _RTHP-TG-P @ _RTHP.MENU-CONTROL-COUNT @ <>
-    _RTHP-CT-RECORD-CURSOR @ _RTHP-TG-P @ _RTHP.SOURCE-USED @ <> OR
-    _RTHP-CT-TEXT-CURSOR @
-        _RTHP-TG-P @ _RTHP.SOURCE-MENU-TEXT-USED @ <> OR IF
-        _RTHP-TG-FAIL EXIT
-    THEN
+    _RTHP-TG-MENU-TARGETS? 0= IF _RTHP-TG-FAIL EXIT THEN
     _RTHP-TG-COLLECTION-TARGETS? 0= IF _RTHP-TG-FAIL EXIT THEN
     _RTHP-TG-FIELD-TARGETS? 0= IF _RTHP-TG-FAIL EXIT THEN
     _RTHP-TG-DIALOG-TARGETS? 0= IF _RTHP-TG-FAIL EXIT THEN
@@ -5167,6 +5175,29 @@ VARIABLE _RTHP-SM-CORR
     _RTHP-SM-CORR @ _RTHP-W-RUCP-CORR-U @
         _RTHP-W-DOCUMENT-I @ 3 * 2 + FSHD-STAGE-PRODUCER-MENUS FSHD-SAME? DROP ;
 
+\ Plan the current document's menu controls, numbered from NEXT-ID, into
+\ the controls past TOTAL, which moves on past them with NEXT-ID.
+: _RTHP-W-DOC-MENUS?  ( -- flag )
+    _RTHP-W-RUCP-WORK-SPANS? 0= IF 0 EXIT THEN
+    _RTHP-W-NEXT-ID @ _RTHP-W-RUCP-REQUEST
+    _RTHP-W-CONTROL-OUTPUT? 0= IF 0 EXIT THEN
+    _RTHP-W-P @ _RTHP.CONTROL-PLAN RTE-CONTROL-PLAN-SIZE
+    _RTHP-W-OUT-CONTROLS-A @ _RTHP-W-OUT-CONTROLS-U @
+    _RTHP-W-OUT-CORR-A @ _RTHP-W-OUT-CORR-U @
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-OUTPUT!
+    _RTHP-W-P @ _RTHP.RUCP-Q RUCP-BUILD
+    _RTHP-W-STATUS ! _RTHP-W-LAST ! _RTHP-W-MAX !
+    _RTHP-W-ALIGNED ! _RTHP-W-TEXT ! _RTHP-W-COUNT !
+    _RTHP-W-STATUS @ RUCP-S-OK <> IF 0 EXIT THEN
+    _RTHP-W-COUNT @ _RTHP-W-DOC-RECORD-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-W-TEXT @ _RTHP-W-DOC-TEXT-U @ <> IF 0 EXIT THEN
+    _RTHP-W-TOTAL @ _RTHP-W-COUNT @ _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    DUP _RTHP-W-P @ _RTHP.MAX-RECORDS @ U> IF DROP 0 EXIT THEN
+        _RTHP-W-TOTAL !
+    _RTHP-W-LAST @ 1 _RTHP-U+? 0= IF DROP 0 EXIT THEN
+        DUP 0= IF DROP 0 EXIT THEN _RTHP-W-NEXT-ID ! -1 ;
+
 : _RTHP-BUILD-MENU-CONTROLS?  ( producer -- flag )
     _RTHP-W-P !
     0 _RTHP-W-TOTAL !
@@ -5181,25 +5212,7 @@ VARIABLE _RTHP-SM-CORR
           _RTHP-W-MENU-REUSE? IF
             FSHD? IF _RTHP-SH-MENU THEN
           ELSE
-            _RTHP-W-RUCP-WORK-SPANS? 0= IF 0 EXIT THEN
-            _RTHP-W-NEXT-ID @ _RTHP-W-RUCP-REQUEST
-            _RTHP-W-CONTROL-OUTPUT? 0= IF 0 EXIT THEN
-            _RTHP-W-P @ _RTHP.CONTROL-PLAN RTE-CONTROL-PLAN-SIZE
-            _RTHP-W-OUT-CONTROLS-A @ _RTHP-W-OUT-CONTROLS-U @
-            _RTHP-W-OUT-CORR-A @ _RTHP-W-OUT-CORR-U @
-            _RTHP-W-P @ _RTHP.RUCP-Q RUCP-REQUEST-OUTPUT!
-            _RTHP-W-P @ _RTHP.RUCP-Q RUCP-BUILD
-            _RTHP-W-STATUS ! _RTHP-W-LAST ! _RTHP-W-MAX !
-            _RTHP-W-ALIGNED ! _RTHP-W-TEXT ! _RTHP-W-COUNT !
-            _RTHP-W-STATUS @ RUCP-S-OK <> IF 0 EXIT THEN
-            _RTHP-W-COUNT @ _RTHP-W-DOC-RECORD-COUNT @ <> IF 0 EXIT THEN
-            _RTHP-W-TEXT @ _RTHP-W-DOC-TEXT-U @ <> IF 0 EXIT THEN
-            _RTHP-W-TOTAL @ _RTHP-W-COUNT @ _RTHP-U32+?
-                0= IF DROP 0 EXIT THEN
-            DUP _RTHP-W-P @ _RTHP.MAX-RECORDS @ U> IF DROP 0 EXIT THEN
-                _RTHP-W-TOTAL !
-            _RTHP-W-LAST @ 1 _RTHP-U+? 0= IF DROP 0 EXIT THEN
-                DUP 0= IF DROP 0 EXIT THEN _RTHP-W-NEXT-ID !
+            _RTHP-W-DOC-MENUS? 0= IF 0 EXIT THEN
           THEN
         THEN
         1 _RTHP-W-DOCUMENT-I +!
@@ -5822,6 +5835,31 @@ VARIABLE _RTHP-W-COPY-END
     LOOP
     -1 ;
 
+\ ( -- count flag ) Build the current document's menu claims past
+\ _RTHP-W-CLAIMS, at most one for each of its menu records.
+: _RTHP-W-DOC-MENU-CLAIMS?  ( -- count flag )
+    _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-CLEAR
+    _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-TOKEN@
+    _RTHP-W-P @ _RTHP.SOURCE-GEN @
+    _RTHP-W-DOC-RECORD-COUNT @
+    _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-ADMISSION!
+    _RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @
+    _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-ROW@
+    _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-COL@
+    _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-HEIGHT@
+    _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-WIDTH@
+    _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-GEOMETRY!
+    _RTHP-W-P @ _RTHP.SOURCE-RECS-A @
+        _RTHP-W-DOC-RECORD-O @ +
+    _RTHP-W-DOC-RECORD-U @
+    _RTHP-W-CLAIM-OUTPUT? 0= IF 2DROP 0 0 EXIT THEN
+    _RTHP-W-OUT-CLAIMS-A @ _RTHP-W-OUT-CLAIMS-U @
+    _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-STORAGE!
+    _RTHP-W-P @ _RTHP.RUCL-Q RUCL-BUILD
+    _RTHP-W-STATUS ! _RTHP-W-COUNT !
+    _RTHP-W-STATUS @ RUCL-S-OK <> IF 0 0 EXIT THEN
+    _RTHP-W-COUNT @ DUP _RTHP-W-DOC-RECORD-COUNT @ U> 0= ;
+
 : _RTHP-BUILD-CLAIMS?  ( producer -- flag )
     _RTHP-W-P !
     0 _RTHP-W-CLAIMS !
@@ -5830,28 +5868,8 @@ VARIABLE _RTHP-W-COPY-END
         _RTHP-W-P @ _RTHP.DOCUMENT-COUNT @ U< WHILE
         _RTHP-W-COPIED-DOCUMENT? 0= IF 0 EXIT THEN
         _RTHP-W-DOC-RECORD-COUNT @ IF
-            _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-CLEAR
-            _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-TOKEN@
-            _RTHP-W-P @ _RTHP.SOURCE-GEN @
-            _RTHP-W-DOC-RECORD-COUNT @
-            _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-ADMISSION!
-            _RTHP-W-P @ _RTHP.COLS @ _RTHP-W-P @ _RTHP.ROWS @
-            _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-ROW@
-            _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-COL@
-            _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-HEIGHT@
-            _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-WIDTH@
-            _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-GEOMETRY!
-            _RTHP-W-P @ _RTHP.SOURCE-RECS-A @
-                _RTHP-W-DOC-RECORD-O @ +
-            _RTHP-W-DOC-RECORD-U @
-            _RTHP-W-CLAIM-OUTPUT? 0= IF 2DROP 0 EXIT THEN
-            _RTHP-W-OUT-CLAIMS-A @ _RTHP-W-OUT-CLAIMS-U @
-            _RTHP-W-P @ _RTHP.RUCL-Q RUCL-REQUEST-STORAGE!
-            _RTHP-W-P @ _RTHP.RUCL-Q RUCL-BUILD
-            _RTHP-W-STATUS ! _RTHP-W-COUNT !
-            _RTHP-W-STATUS @ RUCL-S-OK <> IF 0 EXIT THEN
-            _RTHP-W-COUNT @ _RTHP-W-DOC-RECORD-COUNT @ U> IF 0 EXIT THEN
-            _RTHP-W-CLAIMS @ _RTHP-W-COUNT @ _RTHP-U32+?
+            _RTHP-W-DOC-MENU-CLAIMS? 0= IF DROP 0 EXIT THEN
+            _RTHP-W-CLAIMS @ SWAP _RTHP-U32+?
                 0= IF DROP 0 EXIT THEN
             DUP _RTHP-W-P @ _RTHP.MAX-RECORDS @ U> IF DROP 0 EXIT THEN
                 _RTHP-W-CLAIMS !
@@ -9841,11 +9859,11 @@ VARIABLE _RTHP-ROOT-BYTES
 \  The candidate from the bank on screen
 \ ---------------------------------------------------------------------
 \
-\  When the root facts show that only text roots, fields and status fields
-\  moved since the bank on screen, every document lies where it lay, and that
-\  bank was built for this owner, surface and features, holds no runs or
-\  pictures and left out no graph, the candidate is taken from the bank
-\  instead of lowered from the snapshot: its controls, correlations and
+\  When the root facts show that only menus, text roots, fields and status
+\  fields moved since the bank on screen, every document lies where it lay,
+\  and that bank was built for this owner, surface and features, holds no
+\  runs or pictures and left out no graph, the candidate is taken from the
+\  bank instead of lowered from the snapshot: its controls, correlations and
 \  their text, its instruments and series with their regions, units and
 \  samples, its status fields with their text, and its claims, each item
 \  numbered and stamped as a full lowering numbers and stamps it, with its
@@ -9854,7 +9872,9 @@ VARIABLE _RTHP-ROOT-BYTES
 \  old lay and the text after it moved.  It must keep its kind,
 \  visibility, rectangle, depth and identity, so that its claim, and the
 \  check of every later root against the claims before it, stay what they
-\  were on screen.  Any other frame is lowered in full, which also replaces
+\  were on screen.  A document's menus keep their records and text, while
+\  their claims, built again, may change when no later check meets them.
+\  Any other frame is lowered in full, which also replaces
 \  whatever a refused attempt wrote.  Safe mode, which reuses nothing an
 \  earlier frame built, never takes this path.  With the shadow check on,
 \  the candidate taken from the bank is kept, the frame is lowered in full
@@ -9993,7 +10013,8 @@ VARIABLE _RTHP-UB-WHY
         _RTHP-UB-P @ _RTHP.SOURCE-MENU-TEXT-USED @ = ;
 
 \ The two snapshots' root facts name the same roots in the same order, and
-\ every root whose facts moved is a collection, a field or a status field.
+\ every root whose facts moved is a document's menus, a collection, a
+\ field or a status field.
 : _RTHP-UB-ROOTS?  ( -- flag )
     14 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP-ROOT-P !
@@ -10005,7 +10026,8 @@ VARIABLE _RTHP-UB-WHY
         I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
             I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT URF.FAMILY @
             DUP URF-F-COLLECTION <> OVER URF-F-STATUS-FIELD <> AND
-            SWAP URF-F-FIELD <> AND IF 0 UNLOOP EXIT THEN
+            OVER URF-F-FIELD <> AND SWAP URF-F-MENUS <> AND
+                IF 0 UNLOOP EXIT THEN
         THEN
     LOOP -1 ;
 
@@ -10592,6 +10614,142 @@ VARIABLE _RTHP-UB-CLAIMS-N
     0= IF 0 EXIT THEN
     _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-KEPT? ;
 
+\ The menus' claims of the bound document among the candidate's first
+\ MENU-CLAIMS, which lie in the order of their documents: where they
+\ begin, after those of the documents before it, and how many.
+VARIABLE _RTHP-UB-MC-FIRST     \ the place of the document's first menu claim
+VARIABLE _RTHP-UB-MC-N         \ how many menu claims it had
+VARIABLE _RTHP-UB-MC-NEW       \ how many it has
+VARIABLE _RTHP-UB-MC-A         \ where those were built
+VARIABLE _RTHP-UB-MC-DOC       \ the document of the last menu claim met
+VARIABLE _RTHP-UB-MC-BY        \ how far the claims after them move
+VARIABLE _RTHP-UB-MEET         \ a claim tested against the menus' claims
+: _RTHP-UB-DOCUMENT-INDEX?  ( token -- index flag )
+    _RTHP-UB-P @ _RTHP.DOCUMENT-COUNT @ 0 ?DO
+        I _RTHP-UB-P @ _RTHP-DOCUMENT-AT RUHA-DOCUMENT-TOKEN@ OVER = IF
+            DROP I -1 UNLOOP EXIT
+        THEN
+    LOOP DROP 0 0 ;
+: _RTHP-UB-MENU-CLAIMS?  ( -- flag )
+    0 _RTHP-UB-MC-FIRST ! 0 _RTHP-UB-MC-N ! 0 _RTHP-UB-MC-DOC !
+    _RTHP-UB-P @ _RTHP.MENU-CLAIMS @ 0 ?DO
+        _RTHP-UB-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * + RUCL-CLAIM-ATTACHMENT@
+        _RTHP-UB-DOCUMENT-INDEX? 0= IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-UB-MC-DOC @ < IF DROP 0 UNLOOP EXIT THEN
+        DUP _RTHP-UB-MC-DOC !
+        _RTHP-W-DOCUMENT-I @ 2DUP < IF
+            2DROP 1 _RTHP-UB-MC-FIRST +!
+        ELSE
+            = IF 1 _RTHP-UB-MC-N +! THEN
+        THEN
+    LOOP -1 ;
+
+\ ( claim other -- flag ) The two claims' rectangles meet.
+: _RTHP-UB-MEETS?  ( claim other -- flag )
+    SWAP _RTHP-UB-MEET !
+    DUP RUCL-CLAIM-ROW0@ _RTHP-UB-MEET @ RUCL-CLAIM-ROW1@ <
+    OVER RUCL-CLAIM-ROW1@ _RTHP-UB-MEET @ RUCL-CLAIM-ROW0@ > AND
+    OVER RUCL-CLAIM-COL0@ _RTHP-UB-MEET @ RUCL-CLAIM-COL1@ < AND
+    SWAP RUCL-CLAIM-COL1@ _RTHP-UB-MEET @ RUCL-CLAIM-COL0@ > AND ;
+
+\ ( claim -- flag ) The claim meets none of the document's menu claims, the
+\ old or those built again.
+: _RTHP-UB-CLEAR-OF-MENUS?  ( claim -- flag )
+    _RTHP-UB-MC-N @ 0 ?DO
+        DUP _RTHP-UB-P @ _RTHP.CLAIMS-A @
+            _RTHP-UB-MC-FIRST @ I + RUCL-CLAIM-SIZE * +
+        _RTHP-UB-MEETS? IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    _RTHP-UB-MC-NEW @ 0 ?DO
+        DUP _RTHP-UB-MC-A @ I RUCL-CLAIM-SIZE * + _RTHP-UB-MEETS?
+            IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+\ The fields', dialogs' and status fields' lanes check each rectangle
+\ against the claims before it, the menus' among them, and an overlap
+\ refuses the whole lane.  Their checks give what they gave when no claim
+\ of theirs meets the document's menu claims, the old or the new, and no
+\ such lane was refused, which leaves it with no items while the snapshot
+\ has some.
+: _RTHP-UB-MENUS-CLEAR?  ( -- flag )
+    _RTHP-UB-P @ _RTHP.FIELD-COUNT @ 0=
+        _RTHP-UB-P @ _RTHP.FIELD-DESCRIPTORS-USED @ 0<> AND IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.DIALOG-COUNT @ 0=
+        _RTHP-UB-P @ _RTHP.DIALOG-DESCRIPTORS-USED @ 0<> AND IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.STATIC-COUNT @ 0=
+        _RTHP-UB-P @ _RTHP.STATUS-DESCRIPTORS-USED @ 0<> AND IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @ RUCL-CLAIM-SIZE /
+    _RTHP-UB-P @ _RTHP.FIELD-BASE-CLAIMS @ RUCL-CLAIM-SIZE / ?DO
+        \ The instruments' claims lie between the dialogs' and the status
+        \ fields'.
+        I RUCL-CLAIM-SIZE * DUP _RTHP-UB-P @ _RTHP.BASE-CLAIMS-USED @ U<
+        SWAP _RTHP-UB-P @ _RTHP.STATIC-BASE-CLAIMS @ U< 0= OR IF
+            _RTHP-UB-P @ _RTHP.CLAIMS-A @ I RUCL-CLAIM-SIZE * +
+                _RTHP-UB-CLEAR-OF-MENUS? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
+
+\ The document's menu claims built again take the old ones' place, the
+\ claims after them moved on with where each lane's claims begin.
+: _RTHP-UB-MENU-SPLICE?  ( -- flag )
+    _RTHP-UB-P @ _RTHP.MENU-CLAIMS @ _RTHP-UB-MC-NEW @ + _RTHP-UB-MC-N @ -
+        _RTHP-UB-P @ _RTHP.MAX-RECORDS @ U> IF 0 EXIT THEN
+    _RTHP-UB-MC-NEW @ _RTHP-UB-MC-N @ - RUCL-CLAIM-SIZE * _RTHP-UB-MC-BY !
+    _RTHP-UB-MC-BY @ 0> IF
+        \ Those built lie just past the claims, where the ones moved go.
+        _RTHP-UB-P @ _RTHP.CLAIMS-USED @ _RTHP-UB-MC-BY @ +
+            _RTHP-UB-MC-NEW @ RUCL-CLAIM-SIZE * +
+            _RTHP-UB-P @ _RTHP.CLAIMS-U @ U> IF 0 EXIT THEN
+        _RTHP-UB-MC-A @ DUP _RTHP-UB-MC-BY @ +
+            _RTHP-UB-MC-NEW @ RUCL-CLAIM-SIZE * MOVE
+        _RTHP-UB-MC-BY @ _RTHP-UB-MC-A +!
+    THEN
+    _RTHP-UB-MC-FIRST @ _RTHP-UB-MC-N @ + RUCL-CLAIM-SIZE *
+    DUP _RTHP-UB-P @ _RTHP.CLAIMS-A @ + DUP _RTHP-UB-MC-BY @ +
+    ROT _RTHP-UB-P @ _RTHP.CLAIMS-USED @ SWAP - MOVE
+    _RTHP-UB-MC-A @
+    _RTHP-UB-P @ _RTHP.CLAIMS-A @ _RTHP-UB-MC-FIRST @ RUCL-CLAIM-SIZE * +
+        _RTHP-UB-MC-NEW @ RUCL-CLAIM-SIZE * MOVE
+    _RTHP-UB-MC-NEW @ _RTHP-UB-MC-N @ - _RTHP-UB-P @ _RTHP.MENU-CLAIMS +!
+    _RTHP-UB-MC-BY @
+    DUP _RTHP-UB-P @ _RTHP.CLAIMS-USED +!
+    DUP _RTHP-UB-P @ _RTHP.FIELD-BASE-CLAIMS +!
+    DUP _RTHP-UB-P @ _RTHP.DIALOG-BASE-CLAIMS +!
+    DUP _RTHP-UB-P @ _RTHP.BASE-CLAIMS-USED +!
+    _RTHP-UB-P @ _RTHP.STATIC-BASE-CLAIMS +! -1 ;
+
+\ Lower the moved menus ROOT alone: its document's menu controls planned
+\ again in their places from the snapshot's records, and its menu claims
+\ built again past the candidate's.  Its menus must lie where they lay,
+\ with as many records and as much text.  The same claims stay; claims
+\ that changed, as a menu opening or closing changes them, take the old
+\ ones' place when the later lanes' checks still give what they gave.
+: _RTHP-UB-MENUS?  ( root -- flag )
+    URF.TOKEN @ _RTHP-UB-DOCUMENT? 0= IF 0 EXIT THEN
+    _RTHP-W-DOCUMENT-I @ RUHA-DOCUMENT-SIZE *
+        _RTHP-UB-A @ _RTHP-PACK-DIRECTORY-A + _RTHP-UB-OLD-D !
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-RECORD-OFFSET@ _RTHP-W-DOC-RECORD-O @ <>
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-RECORD-BYTES@ _RTHP-W-DOC-RECORD-U @ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-TEXT-OFFSET@ _RTHP-W-DOC-TEXT-O @ <> OR
+    _RTHP-UB-OLD-D @ RUHA-DOCUMENT-TEXT-BYTES@ _RTHP-W-DOC-TEXT-U @ <> OR
+    _RTHP-W-DOC-RECORD-COUNT @ 0= OR IF 0 EXIT THEN
+    _RTHP-W-DOC-RECORD-O @ UMSN-RECORD-SIZE / DUP _RTHP-W-TOTAL !
+        _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ + _RTHP-W-NEXT-ID !
+    _RTHP-W-DOC-MENUS? 0= IF 0 EXIT THEN
+    _RTHP-W-NEXT-ID @ _RTHP-UB-P @ _RTHP.FIRST-OBJECT @ -
+        _RTHP-W-TOTAL @ <> IF 0 EXIT THEN
+    _RTHP-UB-MENU-CLAIMS? 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @ DUP RUCL-CLAIM-SIZE / _RTHP-W-CLAIMS !
+        _RTHP-UB-P @ _RTHP.CLAIMS-A @ + _RTHP-UB-MC-A !
+    _RTHP-W-DOC-MENU-CLAIMS? 0= IF DROP 0 EXIT THEN _RTHP-UB-MC-NEW !
+    _RTHP-UB-MC-NEW @ _RTHP-UB-MC-N @ = IF
+        _RTHP-UB-MC-A @ _RTHP-UB-MC-NEW @ RUCL-CLAIM-SIZE *
+        _RTHP-UB-P @ _RTHP.CLAIMS-A @ _RTHP-UB-MC-FIRST @ RUCL-CLAIM-SIZE * +
+            _RTHP-UB-MC-N @ RUCL-CLAIM-SIZE * COMPARE 0= IF -1 EXIT THEN
+    THEN
+    _RTHP-UB-MENUS-CLEAR? 0= IF 0 EXIT THEN
+    _RTHP-UB-MENU-SPLICE? ;
+
 \ The moved status field keeps its kind, visibility, depth and rectangle.
 : _RTHP-UB-STATIC-SAVE  ( static -- )
     DUP _RTE-STATIC.KIND @ _RTHP-UB-KIND !
@@ -10662,7 +10820,11 @@ VARIABLE _RTHP-UB-CLAIMS-N
             I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
             DUP URF.FAMILY @ DUP URF-F-COLLECTION = IF
                 DROP _RTHP-UB-COLLECTION?
-            ELSE URF-F-FIELD = IF _RTHP-UB-FIELD? ELSE _RTHP-UB-STATUS? THEN THEN
+            ELSE DUP URF-F-FIELD = IF
+                DROP _RTHP-UB-FIELD?
+            ELSE
+                URF-F-MENUS = IF _RTHP-UB-MENUS? ELSE _RTHP-UB-STATUS? THEN
+            THEN THEN
             0= IF 0 UNLOOP EXIT THEN
             1 _RTHP-UB-MOVED +!
         THEN
@@ -15967,8 +16129,8 @@ VARIABLE _RTHP-D-SH-AN
 \ ---------------------------------------------------------------------
 \
 \  When a comparison would follow the root facts and, of the roots both
-\  snapshots hold, only collections, fields and status fields moved, the pending
-\  bank is the bank on screen with the moved roots' items written in,
+\  snapshots hold, only menus, collections, fields and status fields moved,
+\  the pending bank is the bank on screen with the moved roots' items written in,
 \  instead of a bank packed afresh and compared.  When the facts name the
 \  same roots in the same order and the controls are as many, each control
 \  lies in its partner's place.  The copy then takes the bank on screen's
@@ -15982,9 +16144,13 @@ VARIABLE _RTHP-D-SH-AN
 \  correlation, identity and place those on screen, and its state shown
 \  and enabled, and is checked against its partner as the comparison checks
 \  a pair; a moved field's input target is built again as the pack builds
-\  it, and an unmoved text root keeps the content revision on screen.  The pending bank keeps the
-\  bank on screen's sorted index, and the plan lists the controls that
-\  changed.  Otherwise the copy pairs the controls by identity (below).
+\  it, and an unmoved text root keeps the content revision on screen.  The
+\  pending bank keeps the bank on screen's sorted index, and the plan lists
+\  the controls that changed.  Otherwise, or when a document's menus moved,
+\  the copy pairs the controls by identity (below): a moved menu control is
+\  checked against its partner whatever state it shows, and the menus'
+\  targets, which may then change in number, are built again by the pack's
+\  own walk.
 \  The candidate is still lowered whole, so the shell reads what it reads
 \  after a comparison.  A frame the copy cannot take is packed and
 \  compared.  With the shadow check on, the copy is built and kept, then
@@ -15997,6 +16163,9 @@ VARIABLE _RTHP-C-ACTIVE
 \ The answer of a bank the copy route built or saw compared: whether it
 \ goes out as a DELTA of the bank on screen.
 VARIABLE _RTHP-C-DELTA
+\ A menus root both snapshots hold moved, so the menus' targets are built
+\ again.
+VARIABLE _RTHP-C-MENUS
 \ Diagnostics: banks copied, those paired by identity, and the moved and
 \ new controls written into them.
 VARIABLE _RTHP-DIAG-COPIED
@@ -16017,8 +16186,8 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
 \ The copy may be tried: not in safe mode, for a candidate built for Desk's
 \ shell with no runs of its own, while the bank on screen kept the facts its
 \ comparison proved.  Both snapshots' root facts are kept, and of the roots
-\ both hold only collections, fields and status fields moved; other roots
-\ may come or go.
+\ both hold only menus, collections, fields and status fields moved; other
+\ roots may come or go.
 : _RTHP-C-FOLLOWS?  ( -- flag )
     1 _RTHP-C-WHY !
     CHK-SAFE? IF 0 EXIT THEN
@@ -16036,11 +16205,16 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
     _RTHP-C-ACTIVE @ _RTHP-TB.SOURCE-GEN @ _RTHP-C-P @ _RTHP.SOURCE-GEN @
         _RTHP-D-ROOTS-OF? 0= IF 0 EXIT THEN
     7 _RTHP-C-WHY !
+    0 _RTHP-C-MENUS !
     _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ 0 ?DO
         I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT
         DUP I _RTHP-D-RECORD-MOVED? _RTHP-D-ROOT-CAME @ 0= AND IF
-            URF.FAMILY @ DUP URF-F-COLLECTION <> OVER URF-F-STATUS-FIELD <> AND
-            SWAP URF-F-FIELD <> AND IF 0 UNLOOP EXIT THEN
+            URF.FAMILY @ DUP URF-F-MENUS = IF
+                DROP -1 _RTHP-C-MENUS !
+            ELSE
+                DUP URF-F-COLLECTION <> OVER URF-F-STATUS-FIELD <> AND
+                SWAP URF-F-FIELD <> AND IF 0 UNLOOP EXIT THEN
+            THEN
         ELSE DROP THEN
     LOOP -1 ;
 
@@ -16216,8 +16390,10 @@ VARIABLE _RTHP-C-PLACE
 
 \ The moved control at INDEX keeps its partner's place in the input: a
 \ collection's text root or a field whose state shown and enabled is its
-\ partner's.
+\ partner's.  A menu control may change its state, since the menus'
+\ targets are built again.
 : _RTHP-C-MOVED-PAIR?  ( index -- flag )
+    DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ U< IF DROP -1 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @
         _RTHP-C-FIELDS-END WITHIN 0= IF DROP 0 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP _RTE-CONTROL.KIND @
@@ -16293,8 +16469,22 @@ VARIABLE _RTHP-C-T-ID
         THEN DROP
     LOOP -1 ;
 
-\ The menus' targets, which lead the list: their root did not move, so they
-\ are those on screen.
+\ The written menus' targets built again, from the first, each of a paired
+\ control under its partner's identity.  The pending controls are still
+\ numbered by place.
+: _RTHP-C-T-MENU-IDS  ( -- )
+    _RTHP-TG-COUNT @ 0 ?DO
+        I _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
+        DUP _RTHP-TE.ID @ _RTHP-D-PENDING-FIRST @ -
+            _RTHP-D-CONTROL-MAP-AT @ ?DUP IF
+            DUP 0< IF NEGATE THEN 1-
+            _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+            OVER _RTHP-TE.ID !
+        THEN DROP
+    LOOP ;
+
+\ The menus' targets, which lead the list: those on screen while their
+\ root did not move, else built again by the pack's own walk.
 : _RTHP-C-T-MENUS?  ( -- flag )
     BEGIN
         _RTHP-C-T-CUR @ _RTHP-D-ACTIVE @ _RTHP-TB.COUNT @ U< IF
@@ -16302,10 +16492,16 @@ VARIABLE _RTHP-C-T-ID
             DUP RTE-CONTROL-MENU = SWAP RTE-CONTROL-MENU-ITEM = OR
         ELSE 0 THEN
     WHILE
-        _RTHP-C-T-CUR @ _RTHP-D-ACTIVE @ _RTHP-TARGET-ENTRY
-            _RTHP-C-T-TAKE? 0= IF 0 EXIT THEN
+        _RTHP-C-MENUS @ 0= IF
+            _RTHP-C-T-CUR @ _RTHP-D-ACTIVE @ _RTHP-TARGET-ENTRY
+                _RTHP-C-T-TAKE? 0= IF 0 EXIT THEN
+        THEN
         1 _RTHP-C-T-CUR +!
-    REPEAT -1 ;
+    REPEAT
+    _RTHP-C-MENUS @ 0= IF -1 EXIT THEN
+    _RTHP-C-T-WRITE @ 0= _RTHP-TG-COUNTING !
+    _RTHP-TG-MENU-TARGETS? 0 _RTHP-TG-COUNTING ! 0= IF 0 EXIT THEN
+    _RTHP-C-T-WRITE @ IF _RTHP-C-T-MENU-IDS THEN -1 ;
 
 \ The collections' targets, in the order of their correlations, as the pack
 \ walks them.
@@ -16459,10 +16655,13 @@ VARIABLE _RTHP-C-T-ID
 
 \ The two snapshots name the same roots in the same order, the candidates
 \ carried the same parts, and the pending bank holds as many controls as
-\ the bank on screen: each control then lies in its partner's place.
+\ the bank on screen: each control then lies in its partner's place.  The
+\ targets then lie in theirs too, unless the menus moved, whose targets
+\ may change in number.
 : _RTHP-C-PLACE?  ( -- flag )
     _RTHP-C-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ _RTHP-C-P @ _RTHP.CONTROL-COUNT @ =
-    _RTHP-D-ROOTS-SAME @ AND _RTHP-D-ROOTS-PARTS @ 0= AND ;
+    _RTHP-D-ROOTS-SAME @ AND _RTHP-D-ROOTS-PARTS @ 0= AND
+    _RTHP-C-MENUS @ 0= AND ;
 
 \ A moved field's input target is built again as the pack builds it, in
 \ the place its target on screen holds among the targets the copy took:

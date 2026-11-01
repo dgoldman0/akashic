@@ -20,14 +20,35 @@ def _word(source: str, name: str) -> str:
     return match.group(0)
 
 
+def _inline(source: str, name: str, *parts: str) -> str:
+    """Word NAME with each word of PARTS it calls once read in place."""
+    word = _word(source, name)
+    for part in parts:
+        definition = _word(source, part)
+        body = definition[definition.index(")") + 1:definition.rindex(";")]
+        assert word.count(part) == 1, part
+        word = word.replace(part, body)
+    return word
+
+
 def _target_candidate(source: str) -> str:
     """The pack of a candidate's bank, with the header writer it shares with
-    the copy of the bank on screen read in place."""
-    header = _word(source, "_RTHP-TG-HEADER!")
-    body = header[header.index(")") + 1:header.rindex(";")]
-    word = _word(source, "_RTHP-TARGET-CANDIDATE?")
-    assert word.count("_RTHP-TG-HEADER!") == 1
-    return word.replace("_RTHP-TG-HEADER!", body)
+    the copy of the bank on screen and the menus' target walk read in
+    place."""
+    return _inline(source, "_RTHP-TARGET-CANDIDATE?", "_RTHP-TG-HEADER!",
+                   "_RTHP-TG-MENU-TARGETS?")
+
+
+def _menu_controls(source: str) -> str:
+    """The menus' lowering, with each document's planning, which the
+    candidate from the bank on screen shares, read in place."""
+    return _inline(source, "_RTHP-BUILD-MENU-CONTROLS?", "_RTHP-W-DOC-MENUS?")
+
+
+def _claims(source: str) -> str:
+    """The claims' lowering, with each document's menu claims, which the
+    candidate from the bank on screen shares, read in place."""
+    return _inline(source, "_RTHP-BUILD-CLAIMS?", "_RTHP-W-DOC-MENU-CLAIMS?")
 
 
 def _build(source: str) -> str:
@@ -3071,7 +3092,7 @@ def test_per_document_menu_reuse_is_ack_bound_preflighted_and_rebased() -> None:
     correlations = _word(source, "_RTHP-W-MENU-REUSE-CORRELATIONS?")
     copy = _word(source, "_RTHP-W-MENU-REUSE-COPY")
     reuse = _word(source, "_RTHP-W-MENU-REUSE?")
-    build = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    build = _menu_controls(source)
 
     assert baseline.count("_RTHP.TARGET-ACTIVE @") == 1
     assert "_RTHP.TARGET-PENDING" not in baseline
@@ -4036,11 +4057,11 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     document_shape = _word(source, "_RTHP-W-DOCUMENT-SHAPE?")
     copied_complete = _word(source, "_RTHP-W-COPIED-COMPLETE?")
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
-    controls = (_word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    controls = (_menu_controls(source)
                 + _word(source, "_RTHP-W-RUCP-REQUEST"))
     control_pipeline = _word(source, "_RTHP-BUILD-CONTROLS")
     strip_collections = _word(source, "_RTHP-W-STRIP-COLLECTIONS?")
-    claims = _word(source, "_RTHP-BUILD-CLAIMS?")
+    claims = _claims(source)
     wrap_control = _word(source, "_RTHP-W-WRAP-CONTROL-PLAN?")
     document_at = _word(source, "_RTHP-DOCUMENT-AT")
     target_build = _target_candidate(source)
@@ -4201,9 +4222,9 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     snapshot_spans = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
     shape = " ".join(_word(source, "_RTHP-W-DOCUMENT-SHAPE?").split())
-    menus = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    menus = _menu_controls(source)
     collections = _word(source, "_RTHP-W-LOWER-COLLECTIONS")
-    claims = _word(source, "_RTHP-BUILD-CLAIMS?")
+    claims = _claims(source)
     instruments = _word(source, "_RTHP-BUILD-INSTRUMENTS")
     glyphs = _word(source, "_RTHP-BUILD-GLYPHS-FULL?")
     wrap = _word(source, "_RTHP-WRAP-HYBRID")
@@ -4415,7 +4436,7 @@ def test_canonical_collections_lower_through_the_generic_producer() -> None:
     lower = _word(source, "_RTHP-W-LOWER-COLLECTIONS")
     build_controls = _word(source, "_RTHP-BUILD-CONTROLS")
     append_claim = _word(source, "_RTHP-W-APPEND-COLLECTION-CLAIM?")
-    build_claims = _word(source, "_RTHP-BUILD-CLAIMS?")
+    build_claims = _claims(source)
     build_candidate = _build(source)
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     emit = _word(source, "_RTHP-EMIT-CONTROLS")
@@ -5187,7 +5208,7 @@ def test_each_rucp_document_uses_exact_sparse_work_and_output_spans() -> None:
     source = _source()
     work = _word(source, "_RTHP-W-RUCP-WORK-SPANS?")
     output = _word(source, "_RTHP-W-CONTROL-OUTPUT?")
-    build = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    build = _menu_controls(source)
     request = _word(source, "_RTHP-W-RUCP-REQUEST")
     shadow = _word(source, "_RTHP-SH-MENU")
 
@@ -5491,7 +5512,7 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert successors.count("_RTHP-U+?") == 4
     assert "_RTHP-U32+?" not in successors
 
-    build_controls = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    build_controls = _menu_controls(source)
     assert "_RTHP-W-LAST @ 1 _RTHP-U+?" in build_controls
     assert "_RTHP-W-LAST @ 1 _RTHP-U32+?" not in build_controls
     assert "_RTE-HA.GLYPH-LAST" in candidate_last
@@ -7562,7 +7583,7 @@ def test_safe_mode_takes_the_producer_s_full_paths() -> None:
     assert "CHK-SAFE? IF 0 ELSE DUP _RTHP-MARK-GLYPHS-DAMAGE? THEN" in shell
     assert "_RTHP-ROWS-ALL-REBUILT" in shell
     # Menus are planned afresh, and the unchanged route is never taken.
-    menus = _word(source, "_RTHP-BUILD-MENU-CONTROLS?")
+    menus = _menu_controls(source)
     assert ("CHK-SAFE? IF 0 ELSE _RTHP-W-MENU-REUSE-BASELINE? THEN _RTHP-W-MR-ENABLED !"
             in menus)
     stage = _word(source, "_RTHP-STAGE-LIVE-CANDIDATE")

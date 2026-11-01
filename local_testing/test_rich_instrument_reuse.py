@@ -29,9 +29,18 @@ class InstrumentHarness(GrowthHarness):
                          "tui/dialog-model.f",
                          # An instrument may lie beneath its document's overlay,
                          # whose sources these name.
-                         "tui/uidl-field-snapshot.f", "tui/uidl-dialog-snapshot.f"):
+                         "tui/uidl-field-snapshot.f", "tui/uidl-dialog-snapshot.f",
+                         # A menu's input target lies at its resolved rectangle,
+                         # whose attributes are the cells'.
+                         "tui/uidl-tui.f", "tui/cell.f"):
             sources.append((ROOT / "akashic" / relative).read_text())
         self.definitions = _definitions("\n".join(sources))
+        # A constant a module computes from an expression, which the
+        # extraction of plain numeric constants leaves out.
+        for source in sources:
+            text = re.sub(r"(?m)\\[^\n]*$", "", source)
+            for match in re.finditer(r"(?m)^(\S.*?)\s+CONSTANT\s+(\S+)\s*$", text):
+                self.definitions.setdefault(match[2], match[0])
         # A module bounds the storage its variables own between two CREATE
         # markers, which the words that keep other storage clear of it name.
         for source in sources + [(ROOT / "akashic/tui/rich-terminal/engine.f").read_text()]:

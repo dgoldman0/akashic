@@ -39,7 +39,8 @@ class BankHarness(StatusHarness):
             "_RTHP-TG-HEADER!", "_RTHP-UB-ROOM?", "_RTHP-UB-CONTROLS?",
             "_RTHP-UB-STATICS?", "_RTHP-UB-TEXT-ROOM?", "_RTHP-UB-STATIC-ROOM?",
             "_RTHP-UB-STATUS?", "_RTHP-UB-DOCUMENTS?", "_RTHP-W-LOWER-BEGIN",
-            "_RTHP-W-APPEND-COLLECTION-CLAIMS?"))
+            "_RTHP-W-APPEND-COLLECTION-CLAIMS?", "_RTHP-UB-MENU-CLAIMS?",
+            "_RTHP-UB-MENUS-CLEAR?", "_RTHP-UB-MENU-SPLICE?"))
 
     def candidate(self):
         """One menu bar labelled LABEL, one text area, and a status field."""
@@ -387,3 +388,164 @@ def test_the_full_lowering_claims_every_collection_after_a_refused_unpack(h):
     lower = source[source.index(": _RTHP-W-LOWER  "):]
     lower = lower[:lower.index(" ;")]
     assert lower.index("_RTHP-W-LOWER-BEGIN") < lower.index("_RTHP-BUILD-CONTROLS")
+
+
+# A claim: its attachment, generation, source, index, subkey and depth, then
+# its rectangle, rows and columns from the first to past the last.
+def claim(attachment, rect, *, index=20):
+    return struct.pack("<10Q", attachment, 9, 1, index, 0, 0, *rect)
+
+
+CLAIM = 80
+BAR = (0, 0, 1, 32)          # a menu bar across the top
+DROPDOWN = (1, 0, 4, 12)     # a menu open beneath it
+TEXT = (4, 0, 8, 32)         # a text area beneath
+
+
+def menus_setup(h, claims, *, documents=(11,), records=8):
+    """A candidate holding CLAIMS, the menus' first, with a directory of
+    DOCUMENTS by token and room for RECORDS menu claims."""
+    h.setup(label=b"Ln", value=b"1", width=20, row=3, col=2, documents=len(documents))
+    for index, token in enumerate(documents):
+        h.document(index, token=token)
+    h.runtime.memory.write_bytes(h.get("CLAIMS-A"), b"".join(claims))
+    h.field(h.producer, "_RTHP.CLAIMS-USED", len(claims) * CLAIM)
+    h.field(h.producer, "_RTHP.MAX-RECORDS", records)
+    h.variable("_RTHP-UB-P", h.producer)
+
+
+def test_a_documents_menu_claims_follow_those_of_the_documents_before_it(h):
+    """The candidate from the bank on screen finds the claims of a moved
+    document's menus among the menus' claims, which lie in the order of
+    their documents (FRAMES-FOLLOW-CHANGE 9c.3c)."""
+    menus_setup(h, [claim(11, BAR), claim(11, DROPDOWN), claim(12, BAR)],
+                documents=(11, 12))
+    h.field(h.producer, "_RTHP.MENU-CLAIMS", 3)
+    for document, first, count in ((0, 0, 2), (1, 2, 1)):
+        h.variable("_RTHP-W-DOCUMENT-I", document)
+        assert h.call("_RTHP-UB-MENU-CLAIMS?")
+        assert (h.variable("_RTHP-UB-MC-FIRST"), h.variable("_RTHP-UB-MC-N")) == (first, count)
+    # Claims out of their documents' order, or of no document, are refused.
+    for attachments in ((12, 11, 11), (11, 99, 12)):
+        menus_setup(h, [claim(a, BAR) for a in attachments], documents=(11, 12))
+        h.field(h.producer, "_RTHP.MENU-CLAIMS", 3)
+        h.variable("_RTHP-W-DOCUMENT-I", 1)
+        assert not h.call("_RTHP-UB-MENU-CLAIMS?")
+
+
+def changed_menus(h, later, *, field_count=1, field_descriptors=128):
+    """A candidate whose document 11 had the menu bar's claim and now has a
+    menu open beneath it too, built past its claims: a text area's claim,
+    then the claims LATER, as many fields' as FIELD-COUNT, then a dialog's,
+    an instrument's and a status field's, where each is not None."""
+    field, dialog, instrument, status = later
+    claims = [claim(11, BAR), claim(11, TEXT, index=21)]
+    bases = {}
+    for name, rect in (("FIELD-BASE-CLAIMS", field), ("DIALOG-BASE-CLAIMS", dialog),
+                       ("BASE-CLAIMS-USED", instrument), ("STATIC-BASE-CLAIMS", status)):
+        bases[name] = len(claims) * CLAIM
+        if rect is not None:
+            claims.append(claim(11, rect, index=22 + len(claims)))
+    menus_setup(h, claims)
+    for name, value in bases.items():
+        h.field(h.producer, "_RTHP." + name, value)
+    h.field(h.producer, "_RTHP.MENU-CLAIMS", 1)
+    h.field(h.producer, "_RTHP.FIELD-COUNT", field_count)
+    h.field(h.producer, "_RTHP.FIELD-DESCRIPTORS-USED", field_descriptors)
+    h.field(h.producer, "_RTHP.STATIC-COUNT", 1)
+    built = h.get("CLAIMS-A") + h.get("CLAIMS-USED")
+    h.runtime.memory.write_bytes(built, claim(11, BAR) + claim(11, DROPDOWN))
+    for name, value in (("_RTHP-UB-MC-FIRST", 0), ("_RTHP-UB-MC-N", 1),
+                        ("_RTHP-UB-MC-NEW", 2), ("_RTHP-UB-MC-A", built)):
+        h.variable(name, value)
+    return claims
+
+
+@pytest.mark.parametrize("later, clear", (
+    # A field, dialog and status field clear of the menus.
+    (((5, 0, 6, 10), (5, 12, 7, 20), None, (7, 0, 8, 10)), True),
+    # A field the open menu now covers.
+    (((2, 2, 3, 10), None, None, None), False),
+    # A dialog that met the menu bar.
+    ((None, (0, 20, 3, 30), None, None), False),
+    # A status field beneath the open menu.
+    ((None, None, None, (3, 4, 4, 8)), False),
+    # An instrument's claim is checked with the whole frame's, not here.
+    ((None, None, (2, 2, 3, 10), (7, 0, 8, 10)), True),
+))
+def test_changed_menu_claims_are_taken_only_clear_of_the_lanes_that_check_them(h, later, clear):
+    """The fields', dialogs' and status fields' lanes check each rectangle
+    against the claims before it, the menus' among them, so the candidate
+    takes menus whose claims changed only when none of those lanes' claims
+    meets the menus' claims, the old or the new."""
+    changed_menus(h, later)
+    assert bool(h.call("_RTHP-UB-MENUS-CLEAR?")) == clear
+
+
+def test_changed_menu_claims_need_every_checking_lane_unrefused(h):
+    """A lane that holds nothing while the snapshot has items for it may
+    have been refused because of the old claims."""
+    changed_menus(h, (None, None, None, (7, 0, 8, 10)), field_count=0)
+    assert not h.call("_RTHP-UB-MENUS-CLEAR?")
+    changed_menus(h, (None, None, None, (7, 0, 8, 10)), field_count=0, field_descriptors=0)
+    assert h.call("_RTHP-UB-MENUS-CLEAR?")
+
+
+@pytest.mark.parametrize("old, new", ((2, 1), (1, 1), (1, 2), (1, 3)))
+def test_menu_claims_built_again_take_the_old_ones_place(h, old, new):
+    """The menus' claims built again replace the old, and the claims after
+    them move on, with where each lane's claims begin."""
+    menus = [claim(11, BAR), claim(11, DROPDOWN), claim(11, (1, 12, 3, 20))]
+    later = [claim(11, TEXT, index=21), claim(11, (5, 0, 6, 10), index=22),
+             claim(11, (7, 0, 8, 10), index=23)]
+    menus_setup(h, [claim(11, BAR, index=40 + i) for i in range(old)] + later)
+    bases = {"FIELD-BASE-CLAIMS": (old + 1) * CLAIM, "DIALOG-BASE-CLAIMS": (old + 2) * CLAIM,
+             "BASE-CLAIMS-USED": (old + 2) * CLAIM, "STATIC-BASE-CLAIMS": (old + 2) * CLAIM}
+    for name, value in bases.items():
+        h.field(h.producer, "_RTHP." + name, value)
+    h.field(h.producer, "_RTHP.MENU-CLAIMS", old)
+    built = h.get("CLAIMS-A") + h.get("CLAIMS-USED")
+    h.runtime.memory.write_bytes(built, b"".join(menus[:new]))
+    for name, value in (("_RTHP-UB-MC-FIRST", 0), ("_RTHP-UB-MC-N", old),
+                        ("_RTHP-UB-MC-NEW", new), ("_RTHP-UB-MC-A", built)):
+        h.variable(name, value)
+    assert h.call("_RTHP-UB-MENU-SPLICE?")
+    assert h.get("MENU-CLAIMS") == new
+    assert h.get("CLAIMS-USED") == (new + 3) * CLAIM
+    assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"), (new + 3) * CLAIM) == (
+        b"".join(menus[:new]) + b"".join(later))
+    moved = (new - old) * CLAIM
+    for name, value in bases.items():
+        assert h.get(name) == value + moved
+    h.guards()
+
+
+def test_menu_claims_that_do_not_fit_are_not_taken(h):
+    """More claims than the menus may hold, or than the claims' storage
+    holds past those that move, leave the candidate as it was."""
+    menus_setup(h, [claim(11, BAR), claim(11, TEXT, index=21)], records=1)
+    built = h.get("CLAIMS-A") + h.get("CLAIMS-USED")
+    h.runtime.memory.write_bytes(built, claim(11, BAR) + claim(11, DROPDOWN))
+    h.field(h.producer, "_RTHP.MENU-CLAIMS", 1)
+    for name, value in (("_RTHP-UB-MC-FIRST", 0), ("_RTHP-UB-MC-N", 1),
+                        ("_RTHP-UB-MC-NEW", 2), ("_RTHP-UB-MC-A", built)):
+        h.variable(name, value)
+    before = h.runtime.memory.read_bytes(h.get("CLAIMS-A"), 2 * CLAIM)
+    assert not h.call("_RTHP-UB-MENU-SPLICE?")
+    h.field(h.producer, "_RTHP.MAX-RECORDS", 8)
+    h.field(h.producer, "_RTHP.CLAIMS-U", 4 * CLAIM)
+    assert not h.call("_RTHP-UB-MENU-SPLICE?")
+    assert h.runtime.memory.read_bytes(h.get("CLAIMS-A"), 2 * CLAIM) == before
+    assert (h.get("MENU-CLAIMS"), h.get("CLAIMS-USED")) == (1, 2 * CLAIM)
+
+
+
+def test_a_moved_menus_root_is_lowered_alone_by_the_full_lowerings_words(h):
+    """The candidate plans a moved document's menus, and builds its menu
+    claims, by the words the full lowering takes each document's with."""
+    menus = h.definitions["_RTHP-UB-MENUS?"]
+    assert "_RTHP-W-DOC-MENUS?" in menus and "_RTHP-W-DOC-MENU-CLAIMS?" in menus
+    assert "_RTHP-W-DOC-MENUS?" in h.definitions["_RTHP-BUILD-MENU-CONTROLS?"]
+    assert "_RTHP-W-DOC-MENU-CLAIMS?" in h.definitions["_RTHP-BUILD-CLAIMS?"]
+    assert "URF-F-MENUS = IF _RTHP-UB-MENUS?" in " ".join(
+        h.definitions["_RTHP-UB-MOVED?"].split())

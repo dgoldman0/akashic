@@ -367,13 +367,24 @@ def test_a_start_keeps_no_facts_in_safe_mode_alone_or_with_runs(follow, why):
     assert h.read("PENDING-FACTS") == (h.other if why == "kept" else 0)
 
 
-@pytest.mark.parametrize("why", ("menus", "runs", "safe"))
-def test_a_moved_menu_runs_of_its_own_and_safe_mode_are_not_copied(follow, why):
+@pytest.mark.parametrize("why", ("runs", "safe"))
+def test_runs_of_its_own_and_safe_mode_are_not_copied(follow, why):
     h = follow
     h.first_frame()
-    h.second_frame(runs=("A",) if why == "runs" else (),
-                   new_stamp=6 if why == "menus" else 5)
+    h.second_frame(runs=("A",) if why == "runs" else ())
     if why == "safe":
         h.variable("CHK-SAFE-MODE", MASK64)
     h.variable("_RTHP-C-P", h.producer)
     assert not h.call("_RTHP-C-FOLLOWS?")
+
+
+def test_a_moved_menu_passes_the_facts(follow):
+    """A document's moved menus no longer turn the copy away at the facts:
+    the copy pairs by identity and builds the menus' targets again
+    (FRAMES-FOLLOW-CHANGE 9c.3c)."""
+    h = follow
+    h.first_frame()
+    h.second_frame(runs=(), new_stamp=6)
+    h.variable("_RTHP-C-P", h.producer)
+    assert h.call("_RTHP-C-FOLLOWS?")
+    assert h.variable("_RTHP-C-MENUS")

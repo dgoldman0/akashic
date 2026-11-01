@@ -26,6 +26,7 @@ import pytest
 from test_rich_delta_membership import MembershipHarness
 from test_rich_instrument_reuse import InstrumentHarness
 
+URF_F_MENUS = 1
 URF_F_COLLECTION = 2
 URF_F_DATA_GRAPHICS = 3
 URF_F_FIELD = 5
@@ -219,3 +220,56 @@ def test_the_copy_needs_both_snapshots_facts(identity):
     h.roots(2, NEW + 1, (1, 2, 3))
     assert not h.call("_RTHP-C-FOLLOWS?")
     assert h.why() == 6
+
+
+def test_a_moved_menus_root_passes_the_facts_and_pairs_by_identity(identity):
+    """A moved menus root no longer refuses the copy at the facts.  Its
+    targets may then change in number, so the copy pairs by identity even
+    with every control in its partner's place (FRAMES-FOLLOW-CHANGE 9c.3c)."""
+    h = identity
+    menus = {"families": {7: URF_F_MENUS}}
+    for stamps, moved in (({}, False), ({7: 6}, True)):
+        h.frame((1, 2), (1, 2), old=(1, 2, 7), new=(1, 2, 7), old_facts=menus,
+                new_facts={**menus, "stamps": stamps})
+        assert h.call("_RTHP-C-FOLLOWS?")
+        assert bool(h.variable("_RTHP-C-MENUS")) == moved
+        assert bool(h.call("_RTHP-C-PLACE?")) == (not moved)
+
+
+def test_a_moved_menu_control_is_checked_against_its_partner_whatever_its_state(identity):
+    """A menu control of a moved menus root keeps its partner's place in
+    the input whatever state it shows, since the menus' targets are built
+    again; a moved tab set, whose targets are not, does not."""
+    h = identity
+    h.frame((1, 2), (1, 2))
+    h.variable("_RTHP-D-PENDING", h.other)
+    assert not h.call("_RTHP-C-MOVED-PAIR?", 0)
+    h.field(h.other, "_RTHP-TB.MENU-CONTROL-COUNT", 1)
+    assert h.call("_RTHP-C-MOVED-PAIR?", 0)
+
+
+def test_menu_targets_built_again_take_their_partners_identities(identity):
+    """The menus' targets built again carry the identities the candidate
+    numbered by place: a paired control's takes its partner's on screen,
+    and a new control's keeps the candidate's."""
+    h = identity
+    h.frame((1, 2), (1, 2))
+    first = h.frontier
+    for name, value in (("_RTHP-D-P", h.producer), ("_RTHP-D-ACTIVE", h.bank),
+                        ("_RTHP-D-PENDING-FIRST", first)):
+        h.variable(name, value)
+    # Pending control 0 pairs with control 1 on screen; control 1 is new.
+    order2 = h.read("ORDER2-A")
+    h.runtime.memory.write64(order2, 2)
+    h.runtime.memory.write64(order2 + 8, 0)
+    header = h.constant("_RTHP-TARGET-BANK-HEADER-SIZE")
+    size = h.constant("_RTHP-TARGET-ENTRY-SIZE")
+    targets = h.allocate(bytes(header + 2 * size))
+    for place in range(2):
+        h.runtime.memory.write64(targets + header + place * size, first + place)
+    h.variable("_RTHP-TG-BANK", targets)
+    h.variable("_RTHP-TG-COUNT", 2)
+    h.results("_RTHP-C-T-MENU-IDS")
+    assert [h.runtime.memory.read64(targets + header + place * size)
+            for place in range(2)] == [101, first + 1]
+
