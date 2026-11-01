@@ -520,9 +520,14 @@ VARIABLE _APTSCB-PENDING
     _APTSCB-PENDING @ ;
 
 \ Retained discovery deliberately follows the accepted initial CELL snapshot.
-\ Remember only a handoff actually scheduled for this exact screen/backend,
-\ not raw protocol availability.  Ineligibility therefore leaves the edge
-\ pending, while reset or a CELL-only answer clears it for a later epoch.
+\ The publisher learns the screen's size only from an offer that reaches it,
+\ and a clean screen makes none, so the handoff requests one neutral flush.
+\ That offer carries the exact size and no CELL cells: the snapshot already
+\ sent the CELL plane, and a cell changed since goes in the same offer as a
+\ delta.  Remember only a handoff actually scheduled for this exact
+\ screen/backend, not raw protocol availability.  Ineligibility therefore
+\ leaves the edge pending, while reset or a CELL-only answer clears it for a
+\ later epoch.
 : _APTSCB-RETAINED-HANDOFF  ( adapter -- )
     DUP APTSCB.SESSION @ PT-RETAINED-AVAILABLE? 0= IF
         0 SWAP _APTSCB.RETAINED-HANDOFF ! EXIT
@@ -531,7 +536,7 @@ VARIABLE _APTSCB-PENDING
     DUP APTSCB.PUBLISHER @ 0= IF DROP EXIT THEN
     DUP SCR-BACKEND@ <> IF DROP EXIT THEN
     DUP _APTSCB.ROUTE @ _APTSCB-ROUTE-IDLE <> IF DROP EXIT THEN
-    SCR-FORCE
+    SCR-REQUEST-FLUSH
     -1 SWAP _APTSCB.RETAINED-HANDOFF ! ;
 
 \ Every observed ANSI transition is also the neutral publisher-retirement

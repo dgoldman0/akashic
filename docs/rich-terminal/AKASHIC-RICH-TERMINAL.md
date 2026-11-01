@@ -1570,10 +1570,11 @@ structural status. It never spins until credit appears, waits for a response,
 allocates a resend buffer, recursively pumps Desk, or calls `PT-SERVICE` as a
 second session owner.
 
-The service owns the discovery-transition obligation. On `AVAILABLE`, it forces
-the exact current screen through the unified publisher and schedules complete
-initial aggregate materialization; after reset it schedules the same complete
-replay in the new epoch. A terminal `CELL-ONLY` answer leaves local attachments
+The service owns the discovery-transition obligation. On `AVAILABLE`, it
+requests one neutral flush, whose offer gives the unified publisher the exact
+current screen without resending the cells the initial snapshot carried, and
+schedules complete initial aggregate materialization; after reset it
+schedules the same complete replay in the new epoch. A terminal `CELL-ONLY` answer leaves local attachments
 and application lifecycle intact but never schedules `OWNER_OPEN`.
 
 Fairness applies at protocol-safe boundaries. Once the session-global immutable
@@ -1702,14 +1703,18 @@ while the acknowledged frame is live has nothing to do, so it checks only the
 producer's identity and the surface; the bridge calls it on every service
 turn. `RTHP-PREPARE` correlates and freezes the contribution for the exact
 authoritative CELL offer. Once the producer is bound, the bridge invokes it on
-each non-`NONE` CELL offer; a persistent `NONE` request is first promoted to a
-forced authoritative CELL offer. `STEP` is what schedules that request, and
-prepare's draw/generation checks prevent an unrelated flush from manufacturing
-retained state.
+every CELL offer. The screen offers `NONE` for a persistent neutral request
+only while its CELL plane is unchanged, so the bridge sends what the producer
+sealed for it as a PRESENT with no CELL cells, and the flush completes having
+sent nothing when the producer sealed nothing or no producer is bound. `STEP`
+schedules such a request, and prepare's draw/generation checks prevent an
+unrelated flush from manufacturing retained state.
 
-On the unavailable-to-available discovery edge, the screen adapter forces the
-exact current surface through the unified publisher once. Initial
-materialization is a hidden complete build followed by reveal. After the exact
+On the unavailable-to-available discovery edge, the screen adapter requests
+one neutral flush. Its offer gives the unified publisher the exact current
+surface, from which the producer starts, without resending the CELL plane the
+initial snapshot carried; a cell changed since goes in the same offer as a
+delta. Initial materialization is a hidden complete build followed by reveal. After the exact
 accepted `TX_RESULT`, the producer publishes its immutable target bank as the
 sole comparison baseline and control-input resolver. `TX_RESULT` is the host's
 logical commit into its retained model; the wire carries no display

@@ -295,7 +295,7 @@ def _retained_handoff_step(
     exact_backend: bool,
     route_idle: bool,
 ) -> tuple[bool, bool]:
-    """Model the one-shot availability edge and report (latch, force)."""
+    """Model the one-shot availability edge and report (latch, request)."""
     if not available:
         return False, False
     eligible = publisher_attached and exact_backend and route_idle
@@ -419,10 +419,13 @@ def test_retained_availability_handoff_is_exact_one_shot_and_resettable() -> Non
     publisher = handoff.index("APTSCB.PUBLISHER @ 0= IF DROP EXIT THEN")
     exact = handoff.index("SCR-BACKEND@ <> IF DROP EXIT THEN")
     idle = handoff.index("_APTSCB-ROUTE-IDLE <> IF DROP EXIT THEN")
-    force = handoff.index("SCR-FORCE", idle)
-    publish = handoff.index("-1 SWAP _APTSCB.RETAINED-HANDOFF !", force)
-    assert unavailable < clear < latched < publisher < exact < idle < force < publish
-    assert handoff.count("SCR-FORCE") == 1
+    request = handoff.index("SCR-REQUEST-FLUSH", idle)
+    publish = handoff.index("-1 SWAP _APTSCB.RETAINED-HANDOFF !", request)
+    assert unavailable < clear < latched < publisher < exact < idle < request < publish
+    assert handoff.count("SCR-REQUEST-FLUSH") == 1
+    # The initial snapshot already sent the CELL plane; the handoff resends
+    # none of it.
+    assert "SCR-FORCE" not in handoff
 
     pt_service = service.index("PT-SERVICE")
     active = service.index("PT-ACTIVE? 0= IF", pt_service)
@@ -436,50 +439,50 @@ def test_retained_availability_handoff_is_exact_one_shot_and_resettable() -> Non
     )
 
     latch = False
-    forces = 0
+    requests = 0
 
     # Initial CELL-only/PENDING service cannot consume the future edge.
     for _ in range(2):
-        latch, forced = _retained_handoff_step(
+        latch, requested = _retained_handoff_step(
             available=False,
             handed_off=latch,
             publisher_attached=True,
             exact_backend=True,
             route_idle=True,
         )
-        forces += forced
-    assert (latch, forces) == (False, 0)
+        requests += requested
+    assert (latch, requests) == (False, 0)
 
-    # The first eligible AVAILABLE observation forces exactly once.
+    # The first eligible AVAILABLE observation requests exactly one flush.
     for _ in range(2):
-        latch, forced = _retained_handoff_step(
+        latch, requested = _retained_handoff_step(
             available=True,
             handed_off=latch,
             publisher_attached=True,
             exact_backend=True,
             route_idle=True,
         )
-        forces += forced
-    assert (latch, forces) == (True, 1)
+        requests += requested
+    assert (latch, requests) == (True, 1)
 
-    # Reset clears the epoch latch; rediscovery earns one new force.
-    latch, forced = _retained_handoff_step(
+    # Reset clears the epoch latch; rediscovery earns one new request.
+    latch, requested = _retained_handoff_step(
         available=False,
         handed_off=latch,
         publisher_attached=True,
         exact_backend=True,
         route_idle=True,
     )
-    forces += forced
-    latch, forced = _retained_handoff_step(
+    requests += requested
+    latch, requested = _retained_handoff_step(
         available=True,
         handed_off=latch,
         publisher_attached=True,
         exact_backend=True,
         route_idle=True,
     )
-    forces += forced
-    assert (latch, forces) == (True, 2)
+    requests += requested
+    assert (latch, requests) == (True, 2)
 
     # Ineligible availability remains pending rather than losing the edge.
     for publisher_attached, exact_backend, route_idle in (
@@ -487,31 +490,31 @@ def test_retained_availability_handoff_is_exact_one_shot_and_resettable() -> Non
         (True, False, True),
         (True, True, False),
     ):
-        pending, forced = _retained_handoff_step(
+        pending, requested = _retained_handoff_step(
             available=True,
             handed_off=False,
             publisher_attached=publisher_attached,
             exact_backend=exact_backend,
             route_idle=route_idle,
         )
-        assert (pending, forced) == (False, False)
+        assert (pending, requested) == (False, False)
 
-    pending, forced = _retained_handoff_step(
+    pending, requested = _retained_handoff_step(
         available=True,
         handed_off=False,
         publisher_attached=False,
         exact_backend=True,
         route_idle=True,
     )
-    assert (pending, forced) == (False, False)
-    pending, forced = _retained_handoff_step(
+    assert (pending, requested) == (False, False)
+    pending, requested = _retained_handoff_step(
         available=True,
         handed_off=pending,
         publisher_attached=True,
         exact_backend=True,
         route_idle=True,
     )
-    assert (pending, forced) == (True, True)
+    assert (pending, requested) == (True, True)
 
 
 def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
@@ -1735,22 +1738,32 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     assert "SCR-FORCE" not in source
     neutral_begin = _definition(source, "_RTAPTSCB-NEUTRAL-BEGIN")
     bound = neutral_begin.index("_RTAPTSCB-PRODUCER-BOUND? 0= IF")
-    neutral_prepare = neutral_begin.index("_RTAPTSCB-AUTHORITATIVE-PREPARE", bound)
+    # Without a producer the flush completes empty, so the screen's request
+    # cannot stay pending: no producer can be bound once BEGIN has observed
+    # the surface.
+    unbound_empty = neutral_begin.index(
+        "-1 _RTAPTSCB-R @ _RTAPTSCB.NEUTRAL-EMPTY !", bound)
+    unbound_done = neutral_begin.index("SCB-S-OK EXIT", unbound_empty)
+    neutral_prepare = neutral_begin.index(
+        "_RTAPTSCB-AUTHORITATIVE-PREPARE", unbound_done)
     nothing_sealed = neutral_begin.index(
         "_RTAPTSCB-SEALED-READ RTAPT-S-BUSY = IF", neutral_prepare)
     mark_empty = neutral_begin.index(
         "-1 _RTAPTSCB-R @ _RTAPTSCB.NEUTRAL-EMPTY !", nothing_sealed)
     none_begin = neutral_begin.index("0 0 0 PT-CELL-NONE", mark_empty)
     engine_none = neutral_begin.index("RTAPT-CELL-BEGIN", none_begin)
-    assert bound < neutral_prepare < nothing_sealed < mark_empty < none_begin < engine_none
+    assert bound < unbound_empty < unbound_done < neutral_prepare
+    assert neutral_prepare < nothing_sealed < mark_empty < none_begin < engine_none
+    assert "SCB-S-WOULD-BLOCK" not in neutral_begin
     assert neutral_begin.count("_RTAPTSCB.OUTPUT-NEEDED !") == 2
     for name in ("_RTAPTSCB-COMMIT", "_RTAPTSCB-ABORT"):
         body = _definition(source, name)
         assert body.index("_RTAPTSCB.NEUTRAL-EMPTY @ IF") < body.index("RTAPT-CELL-")
     valid = _definition(source, "RTAPTSCB-VALID?")
     assert "_RTAPTSCB.NEUTRAL-EMPTY @ _RTAPTSCB-BOOL? 0= IF 0 EXIT THEN" in valid
+    # The empty flag belongs to the flush, not to the producer.
     unbound = _definition(source, "_RTAPTSCB-PRODUCER-VALID?")
-    assert "_RTAPTSCB.NEUTRAL-EMPTY @ 0= AND" in unbound
+    assert "NEUTRAL-EMPTY" not in unbound
 
     prepare = _definition(source, "_RTAPTSCB-PRODUCER-PREPARE")
     assert "_RTAPTSCB-EXACT-SCREEN?" in prepare

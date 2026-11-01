@@ -174,7 +174,6 @@ VARIABLE _RTAPTSCB-VALID-CONTEXT-U
         _RTAPTSCB-VALID-PUBLISHER @ _RTAPTSCB.OUTPUT-NEEDED @ 0= AND
         _RTAPTSCB-VALID-PUBLISHER @ _RTAPTSCB.PHASE @
             _RTAPTSCB-PHASE-CELL = AND
-        _RTAPTSCB-VALID-PUBLISHER @ _RTAPTSCB.NEUTRAL-EMPTY @ 0= AND
         EXIT
     THEN
     _RTAPTSCB-VALID-CONTEXT @ _RTAPTSCB-VALID-CONTEXT-U @
@@ -417,10 +416,14 @@ VARIABLE _RTAPTSCB-SURFACE-NEXT
 \ while its CELL plane is unchanged, and every BEGIN carries the screen's
 \ exact dimensions, so the change goes as a PRESENT with no CELL cells.  The
 \ producer prepares as for any CELL offer.  When it seals nothing the flush
-\ completes having sent nothing, and COMMIT accepts that.
+\ completes having sent nothing, and COMMIT accepts that.  Without a
+\ producer there is nothing to send, and none can be bound once BEGIN has
+\ observed the surface, so such a flush completes empty at once; refusing it
+\ would leave the screen's request pending for good.
 : _RTAPTSCB-NEUTRAL-BEGIN  ( -- status )
     _RTAPTSCB-R @ _RTAPTSCB-PRODUCER-BOUND? 0= IF
-        SCB-S-WOULD-BLOCK EXIT
+        -1 _RTAPTSCB-R @ _RTAPTSCB.NEUTRAL-EMPTY !
+        SCB-S-OK EXIT
     THEN
     _RTAPTSCB-AUTHORITATIVE-PREPARE DUP SCB-S-OK <> IF EXIT THEN DROP
     _RTAPTSCB-SEALED-READ RTAPT-S-BUSY = IF
