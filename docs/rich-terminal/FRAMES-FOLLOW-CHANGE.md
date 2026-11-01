@@ -1921,7 +1921,31 @@ frame before the change driver.
       with the shadow check made 6,477 comparisons without a difference.
     - **9c.3d. Dialogs and tab sets.** A moved dialog or tab set root is
       lowered alone, and the copy checks its controls and builds their
-      targets again.
+      targets again. A throwaway diagnostic in a plain canonical journey
+      after 9c.3c found all 8 of the candidate's refusals at its moved
+      roots to be tab sets, and 9 of the copy's 12 at its pairing a moved
+      tab set it did not write in; a dialog alone moved in one frame on
+      each side. As built, the candidate lowers a moved tab set by the
+      collection lane's writer, with as many tabs, and a moved dialog by
+      the dialog lane's measure and writer, with as many buttons shown,
+      each with the lane's counts pointed at its place; the copy writes in
+      their controls and builds their targets again by the pack's words,
+      in their places or under their partners' identities, a tab set's
+      right after the pairing while the candidate's controls still lie at
+      their numbers. **Done** on 2026-11-01 (ea541cc4 tab sets; 28b363cc
+      dialogs, with the candidate's tab sets, which ea541cc4 turned away
+      by reading a tab set's native entry before its geometry, as a second
+      diagnostic found). In the canonical journey with the shadow check
+      the copy took 57 frames, against 49, and the candidate was taken
+      from the bank 58 times, against 51; each now turns away only a
+      moved data-graphics root at the facts, and the candidate 2 tab set
+      frames at their lowering. The journey sent the same presents, 61
+      DELTAs and 25 STARTs, and made 30,483 comparisons without a
+      difference, 342 of them of a copy and 1,160 of a candidate from the
+      bank. Safe mode passed with 61 DELTAs and 26 STARTs, taking neither
+      path; a typed letter builds in 2.07 million steps, as before, and
+      the typing run with the shadow check made 6,046 comparisons without
+      a difference.
   - **9c.5. A moved data-graphics root.** It is lowered alone into the
     candidate, its instruments and series in their places, after 9c.3
     (decision 23).
