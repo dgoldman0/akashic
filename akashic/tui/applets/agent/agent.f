@@ -67,6 +67,9 @@ _AG-CURRENT-STATE 40 CMP-FIELD: _AG-PANEL
 _AG-CURRENT-STATE CMP-CELL: _AG-PANEL-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-LIST
 _AG-CURRENT-STATE CMP-CELL: _AG-LIST-RGN
+\ The conversation the transcript's rows came from, and its revision then.
+_AG-CURRENT-STATE CMP-CELL: _AG-LIST-CONV
+_AG-CURRENT-STATE CMP-CELL: _AG-LIST-REVISION
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT-RGN
 _AG-CURRENT-STATE CMP-CELL: _AG-PROMPT-MODE
@@ -1050,6 +1053,23 @@ VARIABLE _AGRD-BCOUNT
     _AG-LIST @ ?DUP IF LST-SCROLL-END THEN
     _AG-INVALIDATE ;
 
+\ Before it draws, the transcript takes the changes to the conversation it
+\ shows, each of which moves the conversation's revision: rows added at its
+\ end or dropped from it change their count, and the others change rows in
+\ place, as a reply streaming into its last message or a message's state in
+\ its header does.  Either way the list counts the change, so whatever
+\ reads its revision sees it.
+: _AG-LIST-FOLLOW  ( -- )
+    _AG-SHOWN-CONV
+    DUP _AG-LIST-CONV @ = OVER ACONV.REVISION @ _AG-LIST-REVISION @ = AND
+    IF DROP EXIT THEN
+    DUP _AG-LIST-CONV ! DUP ACONV.REVISION @ _AG-LIST-REVISION !
+    ACONV.COUNT @ DUP _AG-LIST @ LST-COUNT = IF
+        DROP _AG-LIST @ LST-REFRESH
+    ELSE
+        _AG-LIST @ LST-RECOUNT
+    THEN ;
+
 : _AG-VIEW-CHAT  ( -- )
     _AG-VIEW @ _AG-V-CHAT = IF EXIT THEN
     _AG-V-CHAT _AG-VIEW !
@@ -1141,12 +1161,12 @@ VARIABLE _AGD-H
     \ The account panel covers the body: the transcript waits beneath it.
     _AG-USER-OVERLAY? IF DRW-STYLE-RESET EXIT THEN
     _AG-VIEW @ _AG-V-RUNS = IF _AG-RUNS-DRAW EXIT THEN
-    _AG-SHOWN-CONV ACONV.COUNT @ ?DUP 0= IF
+    _AG-SHOWN-CONV ACONV.COUNT @ 0= IF
         244 234 0 DRW-STYLE!
         S" Start a conversation" 1 2 DRW-TEXT
         DRW-STYLE-RESET EXIT
     THEN
-    _AG-LIST @ LST-RECOUNT
+    _AG-LIST-FOLLOW
     _AG-LIST-RGN @ _AG-OVER-PANEL
     253 234 0 DRW-STYLE! DRW-STYLE-SAVE
     _AG-LIST @ _AG-PANEL-RGN @ WDG-DRAW-IN
@@ -1337,7 +1357,7 @@ VARIABLE _AG-REVIEW-APPROVED
     -1 _AG-COMPACT-STATUS !
     _AG-REVIEW-TRACKING-CLEAR 0 _AG-REVIEW-DIALOG ! -1 _AG-REVIEW-APPROVE !
     _AG-DISPLAY ACONV-MAX-MESSAGES _AGDT-SIZE * 0 FILL
-    0 _AG-LAST-REVISION ! _AG-PRM-ASK _AG-PROMPT-MODE !
+    0 _AG-LAST-REVISION ! 0 _AG-LIST-CONV ! _AG-PRM-ASK _AG-PROMPT-MODE !
     _AG-V-CHAT _AG-VIEW ! 0 _AG-RUNS-SELECTED !
     S" org.akashic.agent.dispatch" _AG-CURRENT-INSTANCE @ CINST-SERVICE
         _AG-RUNS ASRV-INIT
