@@ -547,7 +547,7 @@ def test_a_moved_menus_root_is_lowered_alone_by_the_full_lowerings_words(h):
     assert "_RTHP-W-DOC-MENUS?" in menus and "_RTHP-W-DOC-MENU-CLAIMS?" in menus
     assert "_RTHP-W-DOC-MENUS?" in h.definitions["_RTHP-BUILD-MENU-CONTROLS?"]
     assert "_RTHP-W-DOC-MENU-CLAIMS?" in h.definitions["_RTHP-BUILD-CLAIMS?"]
-    assert "URF-F-MENUS = IF _RTHP-UB-MENUS?" in " ".join(
+    assert "URF-F-MENUS = IF DROP _RTHP-UB-MENUS?" in " ".join(
         h.definitions["_RTHP-UB-MOVED?"].split())
 
 
@@ -560,3 +560,19 @@ def test_a_moved_tab_set_is_lowered_alone_by_the_collection_lanes_writer(h):
     assert "_RTHP-UB-CONTROL-KEPT?" in tabset
     assert "RTE-CONTROL-TABSET = IF DROP _RTHP-UB-TABSET? EXIT THEN" in " ".join(
         h.definitions["_RTHP-UB-COLLECTION?"].split())
+
+def test_a_moved_dialog_is_lowered_alone_by_the_dialog_lanes_writer(h):
+    """The candidate lowers a moved dialog by the dialog lane's own measure
+    and writer, with as many buttons shown as on screen, and takes a moved
+    root of every family but data graphics (FRAMES-FOLLOW-CHANGE 9c.3d)."""
+    dialog = " ".join(h.definitions["_RTHP-UB-DIALOG?"].split())
+    assert "_RTHP-DD-MEASURE" in dialog and "_RTHP-DD-WRITE" in dialog
+    assert "_RTHP-DD-SHOWN @ _RTHP-UB-BUTTONS @ <> IF 0 EXIT THEN" in dialog
+    assert "_RTHP-UB-CONTROL-KEPT?" in dialog
+    assert "URF-F-DIALOG = IF _RTHP-UB-DIALOG?" in " ".join(
+        h.definitions["_RTHP-UB-MOVED?"].split())
+    alone = " ".join(h.definitions["_RTHP-MOVES-ALONE?"].split())
+    assert "URF-F-DATA-GRAPHICS" not in alone
+    for family in ("URF-F-MENUS", "URF-F-COLLECTION", "URF-F-FIELD", "URF-F-DIALOG",
+                   "URF-F-STATUS-FIELD"):
+        assert family in alone

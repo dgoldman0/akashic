@@ -245,7 +245,7 @@ def test_a_moved_menu_control_or_tab_set_is_paired_whatever_its_state(identity):
     assert h.call("_RTHP-C-MOVED-PAIR?", 0)
     controls = h.results("_RTHP-PACK-CONTROLS-A", h.other)[0]
     kind = controls + h.offset("_RTE-CONTROL.KIND")
-    h.runtime.memory.write64(kind, h.constant("RTE-CONTROL-BUTTON"))
+    h.runtime.memory.write64(kind, h.constant("RTE-CONTROL-MENU-BAR"))
     assert not h.call("_RTHP-C-MOVED-PAIR?", 0)
     h.field(h.other, "_RTHP-TB.MENU-CONTROL-COUNT", 1)
     assert h.call("_RTHP-C-MOVED-PAIR?", 0)
@@ -292,3 +292,31 @@ def test_a_moved_tab_set_is_copied_with_its_targets_built_again(identity, pendin
     assert h.variable("_RTHP-DIAG-COPIED-BY-IDENTITY") == (len(pending) == 3)
     assert h.result() == full
     h.assert_unchanged_active()
+
+def test_a_moved_dialog_passes_the_facts_and_is_paired_whatever_its_state(identity):
+    """A moved dialog root no longer refuses the copy at the facts, and a
+    moved dialog or button is paired by identity whatever state it shows,
+    since its targets are built again (FRAMES-FOLLOW-CHANGE 9c.3d)."""
+    h = identity
+    h.frame((1, 2), (1, 2), old=(1, 2, 7), new=(1, 2, 7),
+            old_facts={"families": {7: URF_F_DIALOG}},
+            new_facts={"families": {7: URF_F_DIALOG}, "stamps": {7: 6}})
+    assert h.call("_RTHP-C-FOLLOWS?")
+    h.variable("_RTHP-D-PENDING", h.other)
+    controls = h.results("_RTHP-PACK-CONTROLS-A", h.other)[0]
+    kind = controls + h.offset("_RTE-CONTROL.KIND")
+    for name in ("RTE-CONTROL-DIALOG", "RTE-CONTROL-BUTTON"):
+        h.runtime.memory.write64(kind, h.constant(name))
+        assert h.call("_RTHP-C-MOVED-PAIR?", 0)
+
+
+def test_the_copy_writes_in_a_dialogs_controls_past_the_fields(identity):
+    """Past the collections and fields lie the dialogs' controls, which the
+    copy writes in when it is a dialog or button."""
+    h = identity
+    h.frame((1, 2), (1, 2))
+    h.variable("_RTHP-D-PENDING", h.other)
+    h.field(h.other, "_RTHP-TB.DIALOG-CONTROLS", 1)
+    for name, movable in (("RTE-CONTROL-DIALOG", True), ("RTE-CONTROL-BUTTON", True),
+                          ("RTE-CONTROL-FIELD", False)):
+        assert bool(h.call("_RTHP-C-MOVABLE?", 1, h.constant(name))) == movable

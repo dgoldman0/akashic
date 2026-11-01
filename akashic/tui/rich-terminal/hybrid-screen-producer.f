@@ -682,6 +682,9 @@ VARIABLE _RTHP-OWNED-LIMIT
 : _RTHP-TAB-KIND?  ( rte-kind -- flag )
     DUP RTE-CONTROL-TABSET = SWAP RTE-CONTROL-TAB = OR ;
 
+: _RTHP-DIALOG-KIND?  ( rte-kind -- flag )
+    DUP RTE-CONTROL-DIALOG = SWAP RTE-CONTROL-BUTTON = OR ;
+
 : _RTHP-COLLECTION-CONTROL-KIND?  ( rte-kind -- flag )
     DUP _RTHP-CONTENT-CONTROL-KIND? IF DROP -1 EXIT THEN
     _RTHP-TAB-KIND? ;
@@ -10014,9 +10017,15 @@ VARIABLE _RTHP-UB-WHY
     _RTHP-UB-A @ _RTHP-TB.MENU-TEXT-USED @
         _RTHP-UB-P @ _RTHP.SOURCE-MENU-TEXT-USED @ = ;
 
+\ ( family -- flag ) A moved root of FAMILY is lowered alone into the
+\ candidate from the bank on screen and written into the copy of that bank:
+\ a document's menus, a collection, a field, a dialog or a status field.
+: _RTHP-MOVES-ALONE?  ( family -- flag )
+    DUP URF-F-MENUS = OVER URF-F-COLLECTION = OR OVER URF-F-FIELD = OR
+    OVER URF-F-DIALOG = OR SWAP URF-F-STATUS-FIELD = OR ;
+
 \ The two snapshots' root facts name the same roots in the same order, and
-\ every root whose facts moved is a document's menus, a collection, a
-\ field or a status field.
+\ every root whose facts moved is lowered alone.
 : _RTHP-UB-ROOTS?  ( -- flag )
     14 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP-ROOT-P !
@@ -10027,9 +10036,7 @@ VARIABLE _RTHP-UB-WHY
         I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
         I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
             I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT URF.FAMILY @
-            DUP URF-F-COLLECTION <> OVER URF-F-STATUS-FIELD <> AND
-            OVER URF-F-FIELD <> AND SWAP URF-F-MENUS <> AND
-                IF 0 UNLOOP EXIT THEN
+                _RTHP-MOVES-ALONE? 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP -1 ;
 
@@ -10516,6 +10523,8 @@ VARIABLE _RTHP-UB-TABSET-ID    \ the identity of the moved tab set
 : _RTHP-UB-TABSET?  ( -- flag )
     _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-SAVE
     _RTHP-W-DESCRIPTOR @ UCSN-DESCRIPTOR-FAMILY@ USCOL-F-TABSET <> IF 0 EXIT THEN
+    \ The native entry is checked against the geometry read before it.
+    _RTHP-W-COLLECTION-GEOMETRY? 0= IF 0 EXIT THEN
     _RTHP-W-COLLECTION-ENTRY? 0= IF 0 EXIT THEN
     _RTHP-UB-OLD-TABS
     _RTHP-UB-TABS @ _RTHP-W-ENTRY @ USCOL-TABSET-COUNT@ <> IF 0 EXIT THEN
@@ -10809,6 +10818,142 @@ VARIABLE _RTHP-UB-MEET         \ a claim tested against the menus' claims
     _RTHP-UB-MENUS-CLEAR? 0= IF 0 EXIT THEN
     _RTHP-UB-MENU-SPLICE? ;
 
+\ The dialog control whose correlation names ROOT among the dialog lane's,
+\ or -1: a dialog control names its document, its descriptor's source and
+\ its key.
+: _RTHP-UB-ROOT-DIALOG  ( root -- index|-1 )
+    _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ _RTHP-UB-P @ _RTHP.DIALOG-BASE-CONTROLS @ ?DO
+        _RTHP-UB-P @ _RTHP.CONTROLS-A @ I RTE-CONTROL-SIZE * + _RTE-CONTROL.KIND @
+            RTE-CONTROL-DIALOG = IF
+            _RTHP-UB-P @ _RTHP.CORR-A @ I RUCP-CORRELATION-SIZE * +
+            DUP RUCP-CORRELATION-ATTACHMENT@ 2 PICK URF.TOKEN @ =
+            OVER RUCP-CORRELATION-SOURCE@ 3 PICK URF.SOURCE @ = AND
+            SWAP RUCP-CORRELATION-SUBKEY@ 2 PICK URF.KEY @ = AND
+                IF DROP I UNLOOP EXIT THEN
+        THEN
+    LOOP DROP -1 ;
+
+\ The dialog descriptor of the bound document, which must name ROOT, with
+\ its native entry, checked as the dialog lane checks them.
+: _RTHP-UB-DIALOG-DESCRIPTOR?  ( root -- flag )
+    _RTHP-UB-P @ _RTHP-DD-P ! _RTHP-W-DOCUMENT @ _RTHP-DD-DOC !
+    _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-BYTES@ 0= IF DROP 0 EXIT THEN
+    _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-OFFSET@
+        UDLSN-DESCRIPTOR-SIZE _RTHP-U32+? 0= IF 2DROP 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.DIALOG-DESCRIPTORS-USED @ U> IF DROP 0 EXIT THEN
+    _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-NATIVE-OFFSET@
+    _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-NATIVE-BYTES@ _RTHP-U32+?
+        0= IF 2DROP 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.DIALOG-NATIVE-USED @ U> IF DROP 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.DIALOG-DESCRIPTORS-A @
+        _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-OFFSET@ + _RTHP-DD-DESC !
+    _RTHP-DD-DESC @ _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-DESCRIPTOR-BYTES@
+    _RTHP-UB-P @ _RTHP.DIALOG-NATIVE-A @
+        _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-NATIVE-OFFSET@ +
+    _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-NATIVE-BYTES@
+    UDLSN-FROZEN-VALIDATE UDLSN-S-OK <> IF DROP 0 EXIT THEN
+    _RTHP-DD-DESC @ _RTHP-UB-P @ _RTHP.DIALOG-NATIVE-A @
+        _RTHP-DD-DOC @ RUHA-DOCUMENT-DIALOGS-NATIVE-OFFSET@ +
+        UDLSN-DESCRIPTOR-NATIVE DROP _RTHP-DD-ENTRY !
+    _RTHP-DD-DESC @ UDLSN-DESCRIPTOR-SOURCE@ OVER URF.SOURCE @ =
+    _RTHP-DD-DESC @ UDLSN-DESCRIPTOR-KEY@ ROT URF.KEY @ = AND ;
+
+\ The moved dialog in place _RTHP-UB-I as the bank on screen held it: the
+\ buttons that follow it, the bytes of its text and of its buttons', the
+\ UTF-8 bytes they count, and the dialogs before it.
+VARIABLE _RTHP-UB-BUTTONS      \ the moved dialog's buttons
+VARIABLE _RTHP-UB-DIALOG-TEXT  \ the bytes of its text
+VARIABLE _RTHP-UB-DIALOG-UTF8  \ the UTF-8 bytes it counts
+VARIABLE _RTHP-UB-DIALOG-I     \ the dialogs before it
+\ The candidate's dialog counts while the moved dialog is written in place.
+VARIABLE _RTHP-UB-DIALOGS-N
+VARIABLE _RTHP-UB-DIALOG-CONTROLS
+VARIABLE _RTHP-UB-DIALOGS-UTF8
+: _RTHP-UB-OLD-DIALOG  ( -- )
+    _RTHP-UB-ITEM @ DUP _RTE-CONTROL.LABEL-U @ OVER _RTE-CONTROL.CONTENT-U @ +
+        _RTHP-UB-DIALOG-TEXT !
+    DUP _RTE-CONTROL.LABEL-U @ SWAP _RTE-CONTROL.CONTENT-UTF8 @ +
+        _RTHP-UB-DIALOG-UTF8 !
+    0 _RTHP-UB-BUTTONS !
+    BEGIN
+        _RTHP-UB-I @ _RTHP-UB-BUTTONS @ + 1+
+        DUP _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ U< IF
+            RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ +
+            DUP _RTE-CONTROL.KIND @ RTE-CONTROL-BUTTON = IF -1 ELSE DROP 0 THEN
+        ELSE DROP 0 THEN
+    WHILE
+        DUP _RTE-CONTROL.LABEL-U @ OVER _RTE-CONTROL.SHORTCUT-U @ +
+            DUP _RTHP-UB-DIALOG-UTF8 +!
+        SWAP _RTE-CONTROL.CONTENT-U @ + _RTHP-UB-DIALOG-TEXT +!
+        1 _RTHP-UB-BUTTONS +!
+    REPEAT
+    0 _RTHP-UB-DIALOG-I !
+    _RTHP-UB-I @ _RTHP-UB-P @ _RTHP.DIALOG-BASE-CONTROLS @ ?DO
+        _RTHP-UB-P @ _RTHP.CONTROLS-A @ I RTE-CONTROL-SIZE * + _RTE-CONTROL.KIND @
+            RTE-CONTROL-DIALOG = IF 1 _RTHP-UB-DIALOG-I +! THEN
+    LOOP ;
+
+\ The candidate's counts pointed at the moved dialog's place, as the lane
+\ finds them when it writes that dialog, and back.
+: _RTHP-UB-DIALOG-SAVE  ( -- )
+    _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ _RTHP-UB-COUNT !
+    _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED @ _RTHP-UB-TEXT !
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @ _RTHP-UB-CLAIMS-N !
+    _RTHP-UB-P @ _RTHP.DIALOG-COUNT @ _RTHP-UB-DIALOGS-N !
+    _RTHP-UB-P @ _RTHP.DIALOG-CONTROLS @ _RTHP-UB-DIALOG-CONTROLS !
+    _RTHP-UB-P @ _RTHP.DIALOG-UTF8 @ _RTHP-UB-DIALOGS-UTF8 ! ;
+: _RTHP-UB-DIALOG-AT  ( -- )
+    _RTHP-UB-I @ _RTHP-UB-P @ _RTHP.CONTROL-COUNT !
+    _RTHP-UB-O @ _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED !
+    _RTHP-UB-DIALOG-I @ RUCL-CLAIM-SIZE * _RTHP-UB-P @ _RTHP.DIALOG-BASE-CLAIMS @ +
+        _RTHP-UB-P @ _RTHP.CLAIMS-USED !
+    _RTHP-UB-DIALOG-I @ _RTHP-UB-P @ _RTHP.DIALOG-COUNT !
+    _RTHP-UB-I @ _RTHP-UB-P @ _RTHP.DIALOG-BASE-CONTROLS @ -
+        _RTHP-UB-P @ _RTHP.DIALOG-CONTROLS !
+    _RTHP-UB-DIALOGS-UTF8 @ _RTHP-UB-DIALOG-UTF8 @ - _RTHP-UB-P @ _RTHP.DIALOG-UTF8 ! ;
+: _RTHP-UB-DIALOG-RESTORE  ( -- )
+    _RTHP-UB-COUNT @ _RTHP-UB-P @ _RTHP.CONTROL-COUNT !
+    _RTHP-UB-TEXT @ _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED !
+    _RTHP-UB-CLAIMS-N @ _RTHP-UB-P @ _RTHP.CLAIMS-USED !
+    _RTHP-UB-DIALOGS-N @ _RTHP-UB-P @ _RTHP.DIALOG-COUNT !
+    _RTHP-UB-DIALOG-CONTROLS @ _RTHP-UB-P @ _RTHP.DIALOG-CONTROLS !
+    _RTHP-UB-DIALOGS-UTF8 @ _RTHP-UB-P @ _RTHP.DIALOG-UTF8 ! ;
+
+\ Lower the moved dialog ROOT alone, in its controls' places, by the dialog
+\ lane's own writer: its title, DLG1 content and buttons where the old lay,
+\ the text after them moved, and its claim where its claim lies, checked
+\ against the claims before it as a full lowering checks it.  It keeps as
+\ many buttons shown, and its kind, visibility, depth and rectangle.
+: _RTHP-UB-DIALOG?  ( root -- flag )
+    DUP URF.TOKEN @ _RTHP-UB-DOCUMENT? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-UB-DIALOG-DESCRIPTOR? 0= IF DROP 0 EXIT THEN
+    _RTHP-UB-ROOT-DIALOG DUP 0< IF DROP 0 EXIT THEN _RTHP-UB-I !
+    _RTHP-UB-I @ RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ +
+        _RTHP-UB-ITEM !
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-SAVE
+    _RTHP-UB-OLD-DIALOG
+    \ Its text begins at its title, or with none at its content.
+    _RTHP-UB-ITEM @ DUP _RTE-CONTROL.LABEL-U @ IF _RTE-CONTROL.LABEL-A ELSE
+        _RTE-CONTROL.CONTENT-A THEN @ _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ -
+        _RTHP-UB-O !
+    \ The lane measures the dialog as it would write it there.
+    _RTHP-UB-DIALOG-SAVE _RTHP-UB-DIALOG-AT
+    _RTHP-DD-MEASURE _RTHP-UB-DIALOG-RESTORE
+    RTE-S-OK <> IF 0 EXIT THEN
+    _RTHP-DD-SHOWN @ _RTHP-UB-BUTTONS @ <> IF 0 EXIT THEN
+    _RTHP-UB-O @ _RTHP-UB-DIALOG-TEXT @ +
+        _RTHP-DD-TEXT @ _RTHP-UB-DIALOG-TEXT @ -               ( end delta )
+    _RTHP-UB-TEXT-ROOM? 0= IF 0 EXIT THEN
+    _RTHP-UB-DIALOG-SAVE _RTHP-UB-DIALOG-AT
+    0 _RTHP-DD-OVERLAP !
+    _RTHP-DD-WRITE RTE-S-OK =
+    _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ _RTHP-UB-I @ _RTHP-UB-BUTTONS @ + 1+ = AND
+    _RTHP-UB-DIALOG-RESTORE
+    0= IF 0 EXIT THEN
+    _RTHP-UB-DIALOGS-UTF8 @ _RTHP-UB-DIALOG-UTF8 @ - _RTHP-DD-UTF8 @ +
+        _RTHP-UB-P @ _RTHP.DIALOG-UTF8 !
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-KEPT? ;
+
 \ The moved status field keeps its kind, visibility, depth and rectangle.
 : _RTHP-UB-STATIC-SAVE  ( static -- )
     DUP _RTE-STATIC.KIND @ _RTHP-UB-KIND !
@@ -10881,9 +11026,11 @@ VARIABLE _RTHP-UB-MEET         \ a claim tested against the menus' claims
                 DROP _RTHP-UB-COLLECTION?
             ELSE DUP URF-F-FIELD = IF
                 DROP _RTHP-UB-FIELD?
+            ELSE DUP URF-F-MENUS = IF
+                DROP _RTHP-UB-MENUS?
             ELSE
-                URF-F-MENUS = IF _RTHP-UB-MENUS? ELSE _RTHP-UB-STATUS? THEN
-            THEN THEN
+                URF-F-DIALOG = IF _RTHP-UB-DIALOG? ELSE _RTHP-UB-STATUS? THEN
+            THEN THEN THEN
             0= IF 0 UNLOOP EXIT THEN
             1 _RTHP-UB-MOVED +!
         THEN
@@ -16246,9 +16393,8 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
 
 \ The copy may be tried: not in safe mode, for a candidate built for Desk's
 \ shell with no runs of its own, while the bank on screen kept the facts its
-\ comparison proved.  Both snapshots' root facts are kept, and of the roots
-\ both hold only menus, collections, fields and status fields moved; other
-\ roots may come or go.
+\ comparison proved.  Both snapshots' root facts are kept, and every root
+\ both hold that moved is one lowered alone; other roots may come or go.
 : _RTHP-C-FOLLOWS?  ( -- flag )
     1 _RTHP-C-WHY !
     CHK-SAFE? IF 0 EXIT THEN
@@ -16273,8 +16419,7 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
             URF.FAMILY @ DUP URF-F-MENUS = IF
                 DROP -1 _RTHP-C-MENUS !
             ELSE
-                DUP URF-F-COLLECTION <> OVER URF-F-STATUS-FIELD <> AND
-                SWAP URF-F-FIELD <> AND IF 0 UNLOOP EXIT THEN
+                _RTHP-MOVES-ALONE? 0= IF 0 UNLOOP EXIT THEN
             THEN
         ELSE DROP THEN
     LOOP -1 ;
@@ -16312,12 +16457,13 @@ VARIABLE _RTHP-C-PLACE
     _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ - ;
 
 \ A moved control of KIND at INDEX that the copy writes in: a collection's
-\ text root, tab set or tab, or a field.
+\ text root, tab set or tab, a field, or a dialog or its button.
 : _RTHP-C-MOVABLE?  ( index kind -- flag )
-    SWAP _RTHP-C-COLLECTIONS-END U< IF
-        DUP _RTHP-CONTENT-CONTROL-KIND? SWAP _RTHP-TAB-KIND? OR EXIT
+    OVER _RTHP-C-COLLECTIONS-END U< IF
+        NIP DUP _RTHP-CONTENT-CONTROL-KIND? SWAP _RTHP-TAB-KIND? OR EXIT
     THEN
-    RTE-CONTROL-FIELD = ;
+    SWAP _RTHP-C-FIELDS-END U< IF RTE-CONTROL-FIELD = EXIT THEN
+    _RTHP-DIALOG-KIND? ;
 
 \ The moved control at INDEX keeps its place: a text root, tab set, tab or
 \ field whose correlation, at its own place in both banks, carries the
@@ -16339,7 +16485,8 @@ VARIABLE _RTHP-C-PLACE
     _RTHP-D-CORRELATION-COMPARE NIP 0= ;
 
 \ Pair every control with the one in its place, and check those of the
-\ moved roots against their partners.
+\ moved roots against their partners, the menus' aside, which a moved
+\ menus root takes the pairing by identity for.
 : _RTHP-C-PAIR?  ( -- flag )
     _RTHP-C-P @ _RTHP-D-BIND? 0= IF 0 EXIT THEN
     _RTHP-D-KEPT @ 0= IF 0 EXIT THEN
@@ -16352,7 +16499,8 @@ VARIABLE _RTHP-C-PLACE
     _RTHP-D-NO-GLYPHS
     0 _RTHP-D-OPS !
     0 _RTHP-C-TABS !
-    _RTHP-C-FIELDS-END _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
+    _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
         I _RTHP-D-CONTROL-MOVED? IF
             I _RTHP-C-MOVED-PLACE? 0= IF 0 UNLOOP EXIT THEN
             I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.KIND @
@@ -16456,12 +16604,12 @@ VARIABLE _RTHP-C-PLACE
 
 \ The moved control at INDEX keeps its partner's place in the input: a
 \ collection's text root or a field whose state shown and enabled is its
-\ partner's.  A menu control, tab set or tab may change its state, since
-\ their targets are built again.
+\ partner's.  A menu control, tab set, tab, dialog or button may change its
+\ state, since their targets are built again.
 : _RTHP-C-MOVED-PAIR?  ( index -- flag )
     DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ U< IF DROP -1 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.KIND @
-        _RTHP-TAB-KIND? IF DROP -1 EXIT THEN
+        DUP _RTHP-TAB-KIND? SWAP _RTHP-DIALOG-KIND? OR IF DROP -1 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @
         _RTHP-C-FIELDS-END WITHIN 0= IF DROP 0 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP _RTE-CONTROL.KIND @
@@ -16662,19 +16810,39 @@ VARIABLE _RTHP-C-T-ID
     LOOP -1 ;
 
 \ The dialog lane's targets.
+\ The written target just built, of the pending control ORDINAL's
+\ partner, takes that partner's identity.
+: _RTHP-C-T-PARTNER-ID  ( ordinal -- )
+    _RTHP-C-T-WRITE @ 0= IF DROP EXIT THEN
+    _RTHP-D-CONTROL-MAP-AT @ DUP 0< IF NEGATE THEN 1-
+        _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+    _RTHP-TG-COUNT @ 1- _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY _RTHP-TE.ID ! ;
+\ The control at ORDINAL's targets as the pack's dialog words build them,
+\ each taken; a paired control's under its partner's identity.
+: _RTHP-C-T-DIALOG?  ( ordinal paired? -- flag )
+    SWAP DUP _RTHP-C-T-CONTROL
+    _RTHP-CT-BUTTON? 0= IF 2DROP DROP 0 EXIT THEN IF
+        0 _RTHP-C-T-TAKE? 0= IF 2DROP 0 EXIT THEN
+        OVER IF DUP _RTHP-C-T-PARTNER-ID THEN
+    THEN
+    _RTHP-CT-DIALOG? 0= IF 2DROP DROP 0 EXIT THEN IF
+        0 _RTHP-C-T-TAKE? 0= IF 2DROP 0 EXIT THEN
+        OVER IF DUP _RTHP-C-T-PARTNER-ID THEN
+    THEN 2DROP -1 ;
+\ The dialog lane's targets.  A paired control takes its partner's, but a
+\ dialog whose root moved has its targets built again.
 : _RTHP-C-T-DIALOGS?  ( -- flag )
+    0 _RTHP-D-ROOT-LAST !
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
     DUP _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ - ?DO
         I _RTHP-D-CONTROL-MAP-AT @ IF
-            I _RTHP-C-T-PARTNER? 0= IF 0 UNLOOP EXIT THEN
+            I _RTHP-D-CONTROL-MOVED? IF
+                I -1 _RTHP-C-T-DIALOG? 0= IF 0 UNLOOP EXIT THEN
+            ELSE
+                I _RTHP-C-T-PARTNER? 0= IF 0 UNLOOP EXIT THEN
+            THEN
         ELSE
-            I _RTHP-C-T-CONTROL
-            _RTHP-CT-BUTTON? 0= IF DROP 0 UNLOOP EXIT THEN IF
-                0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN
-            THEN
-            _RTHP-CT-DIALOG? 0= IF DROP 0 UNLOOP EXIT THEN IF
-                0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN
-            THEN
+            I 0 _RTHP-C-T-DIALOG? 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP -1 ;
 
@@ -16777,6 +16945,25 @@ VARIABLE _RTHP-C-FT-ENTRY
     _RTHP-CT-COL @ OVER _RTHP-TE.COL !
     _RTHP-FT-REVISION @ OVER _RTHP-TE.REVISION !
     _RTHP-FT-INTENTS @ SWAP _RTHP-TE.INTENTS ! -1 ;
+\ A moved dialog's or button's input target is built again the same way,
+\ by the pack's dialog words.
+: _RTHP-C-DIALOG-TARGET?  ( index -- flag )
+    DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ _RTHP-C-FT-ID !
+    _RTHP-C-T-CONTROL
+    _RTHP-CT-BUTTON? 0= IF DROP 0 EXIT THEN
+    _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ RTE-CONTROL-DIALOG = IF
+        DROP _RTHP-CT-DIALOG? 0= IF DROP 0 EXIT THEN
+    THEN
+    0 _RTHP-C-FT-ENTRY !
+    _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY DUP _RTHP-TE.ID @ _RTHP-C-FT-ID @ = IF
+            _RTHP-C-FT-ENTRY ! LEAVE
+        THEN DROP
+    LOOP
+    _RTHP-C-FT-ENTRY @ 0<> <> IF 0 EXIT THEN
+    _RTHP-C-FT-ENTRY @ ?DUP 0= IF -1 EXIT THEN
+    _RTHP-CT-ROW @ OVER _RTHP-TE.ROW !
+    _RTHP-CT-COL @ SWAP _RTHP-TE.COL ! -1 ;
 : _RTHP-C-FIELD-TARGETS?  ( -- flag )
     _RTHP-CT-CLEAR
     _RTHP-C-P @ DUP _RTHP-CT-P !
@@ -16785,6 +16972,11 @@ VARIABLE _RTHP-C-FT-ENTRY
     _RTHP-C-FIELDS-END _RTHP-C-COLLECTIONS-END ?DO
         I _RTHP-D-CONTROL-MOVED? IF
             I _RTHP-C-FIELD-TARGET? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ _RTHP-C-FIELDS-END ?DO
+        I _RTHP-D-CONTROL-MOVED? IF
+            I _RTHP-C-DIALOG-TARGET? 0= IF 0 UNLOOP EXIT THEN
         THEN
     LOOP -1 ;
 
