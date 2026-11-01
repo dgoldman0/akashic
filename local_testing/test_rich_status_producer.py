@@ -139,8 +139,9 @@ class StatusHarness(GrowthHarness):
         self.runtime.memory.write_bytes(self.get("STATUS-DESCRIPTORS-A"), self.descriptor)
         self.field(self.producer, "_RTHP.STATUS-DESCRIPTORS-USED", 128)
         self.field(self.producer, "_RTHP.STATUS-NATIVE-USED", length)
-        for offset, number in ((160, 0), (168, 128), (176, 0), (184, length)):
-            self.runtime.memory.write64(self.dir + offset, number)
+        for name, number in (("DESCRIPTOR-OFF", 0), ("DESCRIPTOR-U", 128),
+                             ("NATIVE-OFF", 0), ("NATIVE-U", length)):
+            self.runtime.memory.write64(self.dir + self.offset("_RUHA-D.SFIELD-" + name), number)
         self.expected_text = text
         self.label = label
         self.value = value
@@ -347,7 +348,7 @@ def test_optional_source_copy_uses_negotiation_and_independent_capacity(h, featu
     assert h.get("STATUS-NATIVE-USED") == (len(h.model) if copied else 0)
     assert h.runtime.memory.read_bytes(h.get("STATUS-NATIVE-A"), len(h.model)) == (
         h.model if copied else bytes(len(h.model)))
-    assert h.runtime.memory.read64(h.dir + 168) == (128 if copied else 0)
+    assert h.runtime.memory.read64(h.dir + h.offset("_RUHA-D.SFIELD-DESCRIPTOR-U")) == (128 if copied else 0)
     assert h.build() == (0,)
     assert h.get("STATIC-COUNT") == int(copied)
     h.guards()
@@ -361,7 +362,7 @@ def test_invalid_source_slices_remain_invalid_without_capability(h):
     directory = h.allocate(h.runtime.memory.read_bytes(h.dir, 192))
     for offset, value in ((144, descriptors), (152, 128), (160, native), (168, len(h.model))):
         h.runtime.memory.write64(snapshot + offset, value)
-    h.runtime.memory.write64(directory + 184, len(h.model) + 8)
+    h.runtime.memory.write64(directory + h.offset("_RUHA-D.SFIELD-NATIVE-U"), len(h.model) + 8)
     h.variable("_RTHP-W-SNAP", snapshot)
     h.variable("_RTHP-W-DIRECTORY-A", directory)
     assert not h.call("_RTHP-COPY-STATUS-SOURCE?")
@@ -454,8 +455,8 @@ def test_static_overlap_strips_both_roots_without_claims(h):
     struct.pack_into("<Q", second, 32, len(h.model))
     h.runtime.memory.write_bytes(h.get("STATUS-DESCRIPTORS-A") + 128, second)
     h.runtime.memory.write_bytes(h.get("STATUS-NATIVE-A") + len(h.model), h.model)
-    h.runtime.memory.write64(h.dir + 168, 256)
-    h.runtime.memory.write64(h.dir + 184, 2 * len(h.model))
+    h.runtime.memory.write64(h.dir + h.offset("_RUHA-D.SFIELD-DESCRIPTOR-U"), 256)
+    h.runtime.memory.write64(h.dir + h.offset("_RUHA-D.SFIELD-NATIVE-U"), 2 * len(h.model))
     h.field(h.producer, "_RTHP.STATUS-DESCRIPTORS-USED", 256)
     h.field(h.producer, "_RTHP.STATUS-NATIVE-USED", 2 * len(h.model))
     assert h.results("_RTHP-W-BUILD-OPTIONAL-STATICS") == (0,)

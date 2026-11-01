@@ -86,7 +86,8 @@ class FieldHarness(StatusHarness):
         self.runtime.memory.write_bytes(self.get("FIELD-DESCRIPTORS-A"), self.descriptor)
         self.field(self.producer, "_RTHP.FIELD-DESCRIPTORS-USED", 128)
         self.field(self.producer, "_RTHP.FIELD-NATIVE-USED", len(self.model))
-        for offset, n in ((192,0),(200,128),(208,0),(216,len(self.model))):
+        for offset, n in ((self.offset("_RUHA-D.FIELD-DESCRIPTOR-OFF"),0),(self.offset("_RUHA-D.FIELD-DESCRIPTOR-U"),128),
+                          (self.offset("_RUHA-D.FIELD-NATIVE-OFF"),0),(self.offset("_RUHA-D.FIELD-NATIVE-U"),len(self.model))):
             self.runtime.memory.write64(self.dir+offset,n)
 
     def build(self):
@@ -237,7 +238,7 @@ def test_invalid_source_extent_remains_invalid_without_field_capability(h):
     directory=h.allocate(h.runtime.memory.read_bytes(h.dir,h.constant("RUHA-DOCUMENT-SIZE")))
     for offset,value in ((176,descriptors),(184,128),(192,native),(200,len(h.model))):
         h.runtime.memory.write64(snapshot+offset,value)
-    h.runtime.memory.write64(directory+216,len(h.model)+8)
+    h.runtime.memory.write64(directory+h.offset("_RUHA-D.FIELD-NATIVE-U"),len(h.model)+8)
     h.variable("_RTHP-W-SNAP",snapshot);h.variable("_RTHP-W-DIRECTORY-A",directory)
     assert not h.call("_RTHP-COPY-FIELD-SOURCE?")
     assert h.get("FIELD-NATIVE-USED")==0
@@ -286,7 +287,8 @@ def test_overlapping_fields_strip_the_entire_optional_lane(h):
     struct.pack_into("<Q",descriptor,8,5);struct.pack_into("<Q",descriptor,32,len(h.model))
     h.runtime.memory.write_bytes(h.get("FIELD-DESCRIPTORS-A")+128,descriptor)
     h.runtime.memory.write_bytes(h.get("FIELD-NATIVE-A")+len(h.model),h.model)
-    h.runtime.memory.write64(h.dir+200,256);h.runtime.memory.write64(h.dir+216,2*len(h.model))
+    h.runtime.memory.write64(h.dir+h.offset("_RUHA-D.FIELD-DESCRIPTOR-U"),256)
+    h.runtime.memory.write64(h.dir+h.offset("_RUHA-D.FIELD-NATIVE-U"),2*len(h.model))
     h.field(h.producer,"_RTHP.FIELD-DESCRIPTORS-USED",256)
     h.field(h.producer,"_RTHP.FIELD-NATIVE-USED",2*len(h.model))
     assert h.results("_RTHP-W-BUILD-OPTIONAL-FIELDS")== (0,)
@@ -545,7 +547,8 @@ def test_distinct_mounted_roots_preserve_claim_identity_with_same_native_key(h):
     for offset in (40,72):struct.pack_into("<Q",descriptor,offset,4)
     h.runtime.memory.write_bytes(h.get("FIELD-DESCRIPTORS-A")+128,descriptor)
     h.runtime.memory.write_bytes(h.get("FIELD-NATIVE-A")+len(h.model),h.model)
-    h.runtime.memory.write64(h.dir+200,256);h.runtime.memory.write64(h.dir+216,2*len(h.model))
+    h.runtime.memory.write64(h.dir+h.offset("_RUHA-D.FIELD-DESCRIPTOR-U"),256)
+    h.runtime.memory.write64(h.dir+h.offset("_RUHA-D.FIELD-NATIVE-U"),2*len(h.model))
     h.field(h.producer,"_RTHP.FIELD-DESCRIPTORS-USED",256)
     h.field(h.producer,"_RTHP.FIELD-NATIVE-USED",2*len(h.model))
     assert h.build()==(0,);assert h.fixed()

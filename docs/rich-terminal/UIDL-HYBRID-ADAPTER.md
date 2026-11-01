@@ -15,12 +15,11 @@ Custom widgets and panels require no adapter. Anything not represented by an
 ordinary core UIDL semantic type remains eligible for the residual projection
 of the completed draw. CELL remains the complete fallback.
 
-## Published ABI 12
+## Published ABI 13
 
-Each 312-byte document directory entry identifies one ordinary visible
+Each 296-byte document directory entry identifies one ordinary visible
 document. It carries the attachment token, slot identity, absolute surface
-geometry, menu exact/topology lineage, and offset/byte pairs into twelve
-aggregate payload banks:
+geometry, and offset/byte pairs into twelve aggregate payload banks:
 
 - UMSN menu records;
 - UMSN menu text;
@@ -47,7 +46,7 @@ bytes cannot appear without their corresponding descriptors.
 
 The borrowed aggregate snapshot is 240 bytes. In addition to generation,
 draw-generation, document count, content epoch, directory, menu-record, and
-menu-text fields, ABI 12 publishes the used spans of UCSN, UDGSN, USFSN, UFLSN
+menu-text fields, ABI 13 publishes the used spans of UCSN, UDGSN, USFSN, UFLSN
 and UDLSN descriptor/native bank pairs. `RUHA-SNAPSHOT-COLLECTION-COUNT@`,
 `RUHA-SNAPSHOT-DATA-GRAPHICS-COUNT@`, `RUHA-SNAPSHOT-STATUS-FIELDS-COUNT@`,
 `RUHA-SNAPSHOT-FIELDS-COUNT@` and `RUHA-SNAPSHOT-DIALOGS-COUNT@` derive family
@@ -56,27 +55,27 @@ invalidation or the next successful aggregate publication; a downstream
 producer must copy them into its own immutable attempt before asynchronous
 owner work begins.
 
-The checked adapter ABI is 12 and the adapter is 1040 bytes. It embeds two
+The checked adapter ABI is 13 and the adapter is 1040 bytes. It embeds two
 snapshots, and the offsets after them follow their size; the collection and
 data-graphics builders lie in RUHA's block, and the adapter holds each one's
-address and bytes, at 296/304 and 360/368. Existing directory offsets through menu
-topology epoch at 152 stay fixed. Status descriptor offset/bytes are at
-160/168 and native offset/bytes at 176/184. Snapshot status descriptor address/
-bytes are at 144/152 and native address/bytes at 160/168. FIELD appends directory
-descriptor offset/bytes at 192/200 and native offset/bytes at 208/216; snapshot
+address and bytes, at 296/304 and 360/368. The directory's status descriptor
+offset/bytes follow the data graphics' at 144/152, and its native offset/bytes
+are at 160/168. Snapshot status descriptor address/bytes are at 144/152 and
+native address/bytes at 160/168. FIELD appends directory descriptor
+offset/bytes at 176/184 and native offset/bytes at 192/200; snapshot
 FIELD descriptor address/bytes are 176/184 and native address/bytes 192/200.
 The independent 48-byte FIELD bank family follows. Dialogs append
-directory descriptor offset/bytes at 240/248 and native offset/bytes at
-256/264; snapshot dialog descriptor address/bytes are 208/216 and native
+directory descriptor offset/bytes at 224/232 and native offset/bytes at
+240/248; snapshot dialog descriptor address/bytes are 208/216 and native
 address/bytes 224/232. Their independent 48-byte bank family moves snapshot
 A/B to 520/760.
 
-`OWNER-ID` is at directory offset 224 and `OWNER-GEN` at 232. `RUHA-DOCUMENT-OWNER-ID@` and
+`OWNER-ID` is at directory offset 208 and `OWNER-GEN` at 216. `RUHA-DOCUMENT-OWNER-ID@` and
 `RUHA-DOCUMENT-OWNER-GENERATION@` expose the nonzero identity tuple read
-from the slot's actual `AHS.INST` component instance. Four cells at 272 to
-296 hold the screen cells of the document's own overlay when its roots may
+from the slot's actual `AHS.INST` component instance. Four cells at 256 to
+280 hold the screen cells of the document's own overlay when its roots may
 lie beneath it, described below, and are zero otherwise
-(`RUHA-DOCUMENT-OVERLAY@`). The last cell, at 304, is the document's layer:
+(`RUHA-DOCUMENT-OVERLAY@`). The last cell, at 288, is the document's layer:
 1 for an overlay slot's document, which its host paints above every other,
 else 0 (`RUHA-DOCUMENT-LAYER@`). The attachment record is 144 bytes and the
 snapshot 240 bytes. After the two snapshots the adapter holds the layers the
@@ -97,8 +96,8 @@ state. Malformed provenance refuses before any caller bank mutation. Every
 published entry, including a directory-only fallback, freezes both values.
 Prior slice reuse requires the same attachment token, slot identity, component
 ID, and component generation. Replacing a genuine instance in the slot forces
-live recapture and fresh menu lineage; stale prior data cannot acquire the new
-component's provenance. Existing directory offsets through 216 stay fixed.
+live recapture; stale prior data cannot acquire the new component's
+provenance.
 
 
 ## Pictures
@@ -269,9 +268,7 @@ A clean document may reuse a prior whole-document slice only after RUHA
 validates its directory extents, every UMSN record and text reference, the
 complete UCSN, UDGSN, USFSN, and UFLSN frozen descriptor/native pairs. It then copies all ten slices and rebases only the
 caller-issued UMSN aggregate-generation cells. A shallow copy, digest, or
-descriptor summary is not accepted as proof of prior content. Menu exact and
-topology epochs are separately collision-free lineage certificates, so a
-recaptured menu state change need not be mistaken for structural identity loss.
+descriptor summary is not accepted as proof of prior content.
 Reuse is only a shortcut. When the prior slices no longer fit behind the
 documents already captured in the same draw, the refused append changes
 nothing and the document is captured afresh, where each family falls back
@@ -336,13 +333,13 @@ refuse the whole aggregate.
 The content epoch is a provenance certificate, not a revision guess, digest,
 or byte-equality shortcut. It carries only when every nonempty emitted document
 arrived through validated prior whole-document reuse, the document count and
-complete 312-byte directory are identical, and all twelve aggregate payload
+complete 296-byte directory are identical, and all twelve aggregate payload
 byte totals match. Any live recapture takes the ordinary new-epoch path even if the
 resulting bytes happen to be equal.
 
 ## Downstream status
 
-ABI 12 makes the frozen UCSN, UDGSN, USFSN, UFLSN, and UDLSN descriptor/native banks available at the
+ABI 13 makes the frozen UCSN, UDGSN, USFSN, UFLSN, and UDLSN descriptor/native banks available at the
 generic aggregate boundary. The selected producer lowers native text roots plus
 TABSET/TAB root/descendant graphs through one generic collection boundary and
 lowers canonical `DATA_GRAPHICS` values through the distinct instrument
@@ -362,7 +359,7 @@ That is software/reference-view evidence, not physical UART or panel proof.
 ## Bounded selector
 
 `local_testing/test_rich_terminal_uidl_hybrid_adapter.py` is the seconds-scale
-structural and executed reuse selector for ABI 12.
+structural and executed reuse selector for ABI 13.
 `local_testing/test_rich_adapter_provenance.py` loads the actual full AHOST,
 CINST, app-shell and UIDL dependency closure. It verifies replacement-instance
 and generation-only recapture, frozen tuple corruption, directory-only fallback,

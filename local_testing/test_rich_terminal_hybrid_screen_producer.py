@@ -151,7 +151,6 @@ def _directory_only_projection_oracle(
     token: int,
     slot: int,
     geometry: tuple[int, int, int, int],
-    menu_epochs: tuple[int, int],
     semantic_slice_bytes: tuple[int, int, int, int, int, int],
     residual_runs: int,
 ) -> _DirectoryOnlyProjection | None:
@@ -165,7 +164,6 @@ def _directory_only_projection_oracle(
         or col < 0
         or height <= 0
         or width <= 0
-        or menu_epochs != (0, 0)
         or semantic_slice_bytes != (0, 0, 0, 0, 0, 0)
         or residual_runs <= 0
     ):
@@ -2491,25 +2489,10 @@ def test_retained_uidl_directory_is_caller_bounded_packed_copied_and_validated()
         "RUHA-DOCUMENT-RECORD-OFFSET@",
         "UMSN-RECORD-SIZE MOD",
         "RUHA-DOCUMENT-TEXT-OFFSET@",
-        "RUHA-DOCUMENT-MENU-EPOCH@",
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@",
         "_RTHP-TV-EXPECTED-RECORD-U",
         "_RTHP-TB.MENU-TEXT-USED",
     ):
         assert proof in directory
-    assert (
-        "_RTHP-TV-RECORD-U @ 0= _RTHP-TV-EPOCH @ 0= <> IF 0 EXIT THEN"
-        in directory
-    )
-    assert (
-        "_RTHP-TV-RECORD-U @ 0= "
-        "_RTHP-TV-TOPOLOGY-EPOCH @ 0= <> IF 0 EXIT THEN"
-        in " ".join(directory.split())
-    )
-    assert (
-        "_RTHP-TV-TOPOLOGY-EPOCH @ _RTHP-TV-EPOCH @ U> IF 0 EXIT THEN"
-        in directory
-    )
     assert header.index("_RTHP-PACKED-BANK?") < header.index(
         "_RTHP-TARGET-MENU-DIRECTORY?"
     )
@@ -3142,26 +3125,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
         "RUHA-DOCUMENT-DATA-GRAPHICS-DESCRIPTOR-BYTES@",
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-OFFSET@",
         "RUHA-DOCUMENT-DATA-GRAPHICS-NATIVE-BYTES@",
-        "RUHA-DOCUMENT-MENU-EPOCH@",
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@",
     ):
         assert field in source
-    compact_document_shape = " ".join(document_shape.split())
-    assert (
-        "_RTHP-W-DOC-RECORD-U @ 0= _RTHP-W-DOCUMENT @ "
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ 0= <> IF 0 EXIT THEN"
-        in compact_document_shape
-    )
-    assert (
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ "
-        "_RTHP-W-SOURCE-GEN @ U> IF 0 EXIT THEN"
-        in compact_document_shape
-    )
-    assert (
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ _RTHP-W-DOCUMENT @ "
-        "RUHA-DOCUMENT-MENU-EPOCH@ U> IF 0 EXIT THEN"
-        in compact_document_shape
-    )
     assert snapshot_shape.count("_RTHP-W-DOCUMENT-SHAPE?") == 1
     assert "_RTHP.SOURCE-DIR-A" in copy
     assert "_RTHP.SOURCE-DIR-USED" in copy
@@ -3249,7 +3214,6 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         token=7,
         slot=5,
         geometry=(28, 94, 28, 92),
-        menu_epochs=(0, 0),
         semantic_slice_bytes=(0, 0, 0, 0, 0, 0),
         residual_runs=14,
     )
@@ -3258,7 +3222,6 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         token=7,
         slot=5,
         geometry=(28, 94, 28, 92),
-        menu_epochs=(0, 0),
         semantic_slice_bytes=(0, 0, 8, 0, 0, 0),
         residual_runs=14,
     ) is None
@@ -3266,7 +3229,6 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         token=7,
         slot=5,
         geometry=(28, 94, 28, 92),
-        menu_epochs=(0, 0),
         semantic_slice_bytes=(0, 0, 0, 0, 0, 0),
         residual_runs=0,
     ) is None
@@ -3323,19 +3285,9 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
     assert document_cells <= residual_cells
     assert _old_claim_rows_from_residual(residual, cols=6, rows=3) == set()
 
-    # A zero menu slice is valid only with both zero menu epochs.  Empty
-    # collection and DATA_GRAPHICS descriptor families likewise require their
+    # Empty collection and DATA_GRAPHICS descriptor families require their
     # paired native slices to be empty, so the directory identity is retained
     # without admitting a partial semantic family.
-    assert (
-        "_RTHP-W-DOC-RECORD-U @ 0= _RTHP-W-DOCUMENT @ "
-        "RUHA-DOCUMENT-MENU-EPOCH@ 0= <> IF 0 EXIT THEN" in shape
-    )
-    assert (
-        "_RTHP-W-DOC-RECORD-U @ 0= _RTHP-W-DOCUMENT @ "
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ 0= <> IF 0 EXIT THEN"
-        in shape
-    )
     assert "_RTHP-W-DOC-COLLECTION-COUNT @ 0= OVER 0= <>" in shape
     assert "_RTHP-W-DOC-DGRAPH-COUNT @ 0= OVER 0= <>" in shape
 
@@ -3376,12 +3328,6 @@ def test_directory_only_occlusion_lowers_to_a_glyph_only_base_surface() -> None:
         "_RTHP-TV-BANK @ _RTHP-TB.DOCUMENT-COUNT @ DUP "
         "0> 0= IF DROP 0 EXIT THEN" in target_directory_flat
     )
-    for zero_epoch_gate in (
-        "_RTHP-TV-RECORD-U @ 0= _RTHP-TV-EPOCH @ 0= <> IF 0 EXIT THEN",
-        "_RTHP-TV-RECORD-U @ 0= _RTHP-TV-TOPOLOGY-EPOCH @ 0= <> "
-        "IF 0 EXIT THEN",
-    ):
-        assert zero_epoch_gate in target_directory_flat
     assert (
         "_RTHP-TV-RECORD-CURSOR @ _RTHP-TV-EXPECTED-RECORD-U @ = "
         "_RTHP-TV-TEXT-CURSOR @ _RTHP-TV-BANK @ "
@@ -5615,22 +5561,6 @@ def test_native_semantic_targets_are_built_once_into_the_inactive_bounded_bank()
     assert "RUHA-DOCUMENT-TOKEN@" in document_shape
     assert "RUHA-DOCUMENT-RECORD-OFFSET@" in document_shape
     assert "RUHA-DOCUMENT-TEXT-OFFSET@" in document_shape
-    compact_document_shape = " ".join(document_shape.split())
-    assert (
-        "_RTHP-CT-DOC-RECORD-U @ 0= _RTHP-CT-DOCUMENT @ "
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ 0= <> IF 0 EXIT THEN"
-        in compact_document_shape
-    )
-    assert (
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ "
-        "_RTHP-CT-P @ _RTHP.SOURCE-GEN @ U> IF 0 EXIT THEN"
-        in compact_document_shape
-    )
-    assert (
-        "RUHA-DOCUMENT-MENU-TOPOLOGY-EPOCH@ _RTHP-CT-DOCUMENT @ "
-        "RUHA-DOCUMENT-MENU-EPOCH@ U> IF 0 EXIT THEN"
-        in compact_document_shape
-    )
     assert "UMSN-RECORD-GENERATION@" in record
     assert "UMSN-RECORD-SOURCE-INDEX@" in record
     assert "_UMSN-R.SOURCE" in record

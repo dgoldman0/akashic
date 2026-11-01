@@ -108,7 +108,8 @@ VARIABLE FS-REPLACEMENTS VARIABLE FS-OTHER
         m.write_bytes(self.get("FIELD-DESCRIPTORS-A"),descriptors)
         self.field(self.producer,"_RTHP.FIELD-NATIVE-USED",len(native))
         self.field(self.producer,"_RTHP.FIELD-DESCRIPTORS-USED",len(descriptors))
-        for off,value in ((192,0),(200,len(descriptors)),(208,0),(216,len(native))):
+        for off,value in ((self.offset("_RUHA-D.FIELD-DESCRIPTOR-OFF"),0),(self.offset("_RUHA-D.FIELD-DESCRIPTOR-U"),len(descriptors)),
+                          (self.offset("_RUHA-D.FIELD-NATIVE-OFF"),0),(self.offset("_RUHA-D.FIELD-NATIVE-U"),len(native))):
             m.write64(self.dir+off,value)
         assert self.build()==(0,)
         m.write_bytes(self.get("INSTRUMENT-REGIONS-A"),struct.pack("<12Q",region+1,0,0,32,8,0,0,0,0,1,1,0))

@@ -1323,7 +1323,7 @@ def _ruha_constructor_program() -> list[str]:
         "_RA-STACK _RA-ADAPTER RUHA-VALID? _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-DESCRIPTORS-A @ 0<> _RA-ASSERT",
         "_RA-ADAPTER _RUHA-A.SNAP-SFIELD-NATIVE-A @ 0<> _RA-ASSERT",
-        "RUHA-DOCUMENT-SIZE 312 = _RA-ASSERT",
+        "RUHA-DOCUMENT-SIZE 296 = _RA-ASSERT",
         "RUHA-SNAPSHOT-SIZE 240 = _RA-ASSERT",
         "RUHA-SIZE 1040 = _RA-ASSERT",
         # The builders lie in the block RUHA took, with the spans their

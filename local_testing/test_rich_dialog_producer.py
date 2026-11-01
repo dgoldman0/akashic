@@ -93,7 +93,10 @@ class DialogHarness(StatusHarness):
         self.runtime.memory.write_bytes(self.get("DIALOG-DESCRIPTORS-A"), self.descriptor)
         self.field(self.producer, "_RTHP.DIALOG-DESCRIPTORS-USED", DESCRIPTOR)
         self.field(self.producer, "_RTHP.DIALOG-NATIVE-USED", len(self.model))
-        for offset, n in ((240, 0), (248, DESCRIPTOR), (256, 0), (264, len(self.model))):
+        for offset, n in ((self.offset("_RUHA-D.DIALOG-DESCRIPTOR-OFF"), 0),
+                          (self.offset("_RUHA-D.DIALOG-DESCRIPTOR-U"), DESCRIPTOR),
+                          (self.offset("_RUHA-D.DIALOG-NATIVE-OFF"), 0),
+                          (self.offset("_RUHA-D.DIALOG-NATIVE-U"), len(self.model))):
             self.runtime.memory.write64(self.dir + offset, n)
 
     def build(self):
@@ -421,7 +424,7 @@ def test_dialog_source_copy_omits_an_unnegotiated_or_unaffordable_lane(h, featur
     copied = feature and not short
     assert h.get("DIALOG-DESCRIPTORS-USED") == DESCRIPTOR * copied
     assert h.get("DIALOG-NATIVE-USED") == len(h.model) * copied
-    entry = h.runtime.memory.read_bytes(h.dir + 240, 32)
+    entry = h.runtime.memory.read_bytes(h.dir + h.offset("_RUHA-D.DIALOG-DESCRIPTOR-OFF"), 32)
     assert entry == (struct.pack("<4Q", 0, DESCRIPTOR, 0, len(h.model)) if copied else bytes(32))
     assert h.build() == (0,)
     assert h.get("DIALOG-COUNT") == int(copied)
@@ -436,7 +439,7 @@ def test_a_dialog_extent_past_its_bank_is_invalid_without_the_feature(h):
     directory = h.allocate(h.runtime.memory.read_bytes(h.dir, h.constant("RUHA-DOCUMENT-SIZE")))
     for offset, value in ((208, descriptors), (216, DESCRIPTOR), (224, native), (232, len(h.model))):
         h.runtime.memory.write64(snapshot + offset, value)
-    h.runtime.memory.write64(directory + 264, len(h.model) + 8)
+    h.runtime.memory.write64(directory + h.offset("_RUHA-D.DIALOG-NATIVE-U"), len(h.model) + 8)
     h.variable("_RTHP-W-SNAP", snapshot)
     h.variable("_RTHP-W-DIRECTORY-A", directory)
     assert not h.call("_RTHP-COPY-DIALOG-SOURCE?")
