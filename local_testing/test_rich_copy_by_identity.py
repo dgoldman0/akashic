@@ -27,6 +27,7 @@ from test_rich_delta_membership import MembershipHarness
 from test_rich_instrument_reuse import InstrumentHarness
 
 URF_F_COLLECTION = 2
+URF_F_DATA_GRAPHICS = 3
 URF_F_FIELD = 5
 # The draws, and so the snapshot generations, of the bank on screen and
 # the pending one.
@@ -186,22 +187,28 @@ def test_each_pairing_must_be_the_one_the_facts_allow(identity, case):
 
 
 def test_a_root_of_another_family_both_hold_that_moved_refuses_the_copy(identity):
+    """A moved data-graphics root refuses the copy at the facts, while a
+    moved field root, which the copy checks against its partner, does not
+    (FRAMES-FOLLOW-CHANGE 9c.3a)."""
     h = identity
-    h.frame((1, 3), (1, 2, 3), old_facts={"families": {1: URF_F_FIELD}},
-            new_facts={"families": {1: URF_F_FIELD}, "stamps": {1: 6}})
+    h.frame((1, 3), (1, 2, 3), old_facts={"families": {1: URF_F_DATA_GRAPHICS}},
+            new_facts={"families": {1: URF_F_DATA_GRAPHICS}, "stamps": {1: 6}})
     assert not h.call("_RTHP-C-FOLLOWS?")
     assert h.why() == 7
-
-
-@pytest.mark.parametrize("parts", (0, "fields"))
-def test_a_family_that_came_with_the_bank_moves_its_roots(identity, parts):
-    """A field root both hold with the same facts moved all the same when
-    the fields came with the pending bank, as when the terminal had no room
-    for them before."""
-    h = identity
-    fields = h.constant("RTHP-PART-FIELDS") if parts else 0
     h.frame((1, 3), (1, 2, 3), old_facts={"families": {1: URF_F_FIELD}},
-            new_facts={"families": {1: URF_F_FIELD}, "parts": fields})
+            new_facts={"families": {1: URF_F_FIELD}, "stamps": {1: 6}})
+    assert h.call("_RTHP-C-FOLLOWS?")
+
+
+@pytest.mark.parametrize("parts", (0, "instruments"))
+def test_a_family_that_came_with_the_bank_moves_its_roots(identity, parts):
+    """A data-graphics root both hold with the same facts moved all the same
+    when the instruments came with the pending bank, as when the terminal had
+    no room for them before."""
+    h = identity
+    instruments = h.constant("RTHP-PART-INSTRUMENTS") if parts else 0
+    h.frame((1, 3), (1, 2, 3), old_facts={"families": {1: URF_F_DATA_GRAPHICS}},
+            new_facts={"families": {1: URF_F_DATA_GRAPHICS}, "parts": instruments})
     assert bool(h.call("_RTHP-C-FOLLOWS?")) == (not parts)
 
 

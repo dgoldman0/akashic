@@ -1030,7 +1030,7 @@ comparison. With the shadow check on, both run on copies of one packed bank
 and must give the same bank, plan and kept facts.
 
 When such a comparison would follow the facts and, of the roots both
-snapshots hold, only collections and status fields moved, the pending bank
+snapshots hold, only collections, fields and status fields moved, the pending bank
 is instead a copy of the bank on screen with the moved roots' items written
 in, and is neither packed afresh nor compared. When the facts name the same
 roots in the same order and the controls are as many, the copy takes the
@@ -1039,18 +1039,20 @@ content revision and any other but a field's with the candidate's content
 epoch, as packing and the comparison would give them. The candidate's
 sections are copied as the pack copies them, and each control and
 correlation takes the identity, region and parent of the one in its place on
-screen. A moved root's controls must be text roots whose correlations,
-identities, places and input targets are those on screen, each checked
-against its partner as the comparison checks a pair; an unmoved text root
-keeps the content revision on screen. The pending bank keeps the bank on
+screen. A moved root's controls must be text roots or fields whose
+correlations, identities and places, and states shown and enabled, are
+those on screen, each checked against its partner as the comparison checks
+a pair; a moved field's input target is built again as packing builds it,
+in the place its target on screen holds, and an unmoved text root keeps the
+content revision on screen. The pending bank keeps the bank on
 screen's sorted index, and the plan lists the controls that changed.
 
 Otherwise the copy joins the controls by identity, as the comparison does,
 and the facts decide each pairing: a control of a root that came is defined
 under the fresh identity its candidate gave it, a control of a root that
 went is dropped, a control of a root both hold that did not move keeps its
-partner's identity, and a moved root's controls are text roots checked
-against their partners. The input targets follow the pending controls in
+partner's identity, and a moved root's controls are text roots or fields
+checked against their partners, a field's target built again. The input targets follow the pending controls in
 the order packing gives them, a paired control taking its partner's target
 on screen and a new one the target packing's own words build for it, so the
 frame is not packed for its targets; since the packed sections follow the
@@ -1061,7 +1063,7 @@ and kept, then the frame is packed and compared in full, and where the copy
 made a DELTA the two must give the same bank, plan and kept facts.
 
 Such a frame's candidate is itself taken from the bank on screen when only
-text roots and status fields moved, every document lies where it lay, and
+text roots, fields and status fields moved, every document lies where it lay, and
 that bank was built for the same owner, surface and features, holds no runs
 or pictures, and left out no graph the terminal could not take, which the
 bank records but does not keep. Each bank keeps every claim whole, where
@@ -1077,8 +1079,8 @@ series from its first series, and stamped with its snapshot's generation
 and content epoch. Since no data-graphics root moved, the instruments and
 series are those the snapshot would lower. Each
 moved root is then lowered alone into its place by its lane's own words, a
-text root's content packed where the old content lay with the text after it
-moved, and it must keep its kind, visibility, rectangle, depth and identity,
+text root's content, or a field's label and FDC1 content, packed where the
+old lay with the text after it moved, and it must keep its kind, visibility, rectangle, depth and identity,
 so its claim and the check of every later root against the claims before it
 stay as they were on screen. Any other frame is lowered in full. With the
 shadow check on, the frame is lowered in full as well, and the two

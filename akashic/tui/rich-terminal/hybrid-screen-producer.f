@@ -9841,8 +9841,8 @@ VARIABLE _RTHP-ROOT-BYTES
 \  The candidate from the bank on screen
 \ ---------------------------------------------------------------------
 \
-\  When the root facts show that only text roots and status fields moved
-\  since the bank on screen, every document lies where it lay, and that
+\  When the root facts show that only text roots, fields and status fields
+\  moved since the bank on screen, every document lies where it lay, and that
 \  bank was built for this owner, surface and features, holds no runs or
 \  pictures and left out no graph, the candidate is taken from the bank
 \  instead of lowered from the snapshot: its controls, correlations and
@@ -9993,7 +9993,7 @@ VARIABLE _RTHP-UB-WHY
         _RTHP-UB-P @ _RTHP.SOURCE-MENU-TEXT-USED @ = ;
 
 \ The two snapshots' root facts name the same roots in the same order, and
-\ every root whose facts moved is a collection or a status field.
+\ every root whose facts moved is a collection, a field or a status field.
 : _RTHP-UB-ROOTS?  ( -- flag )
     14 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP-ROOT-P !
@@ -10004,8 +10004,8 @@ VARIABLE _RTHP-UB-WHY
         I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
         I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
             I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT URF.FAMILY @
-            DUP URF-F-COLLECTION <> SWAP URF-F-STATUS-FIELD <> AND
-                IF 0 UNLOOP EXIT THEN
+            DUP URF-F-COLLECTION <> OVER URF-F-STATUS-FIELD <> AND
+            SWAP URF-F-FIELD <> AND IF 0 UNLOOP EXIT THEN
         THEN
     LOOP -1 ;
 
@@ -10447,6 +10447,98 @@ VARIABLE _RTHP-UB-IFIRST       \ the candidate's first instrument
     _RTHP-W-CONTENT-ITEMS @ _RTHP-UB-P @ _RTHP.COLLECTION-ITEMS !
     _RTHP-W-CONTENT-UTF8 @ _RTHP-UB-P @ _RTHP.COLLECTION-UTF8 ! -1 ;
 
+\ The place among the fields' controls of the field whose correlation
+\ names ROOT, or -1.
+: _RTHP-UB-ROOT-FIELD  ( root -- index|-1 )
+    _RTHP-UB-P @ _RTHP.FIELD-BASE-CONTROLS @ DUP _RTHP-UB-P @ _RTHP.FIELD-COUNT @ +
+    SWAP ?DO
+        _RTHP-UB-P @ _RTHP.CORR-A @ I RUCP-CORRELATION-SIZE * +
+        DUP RUCP-CORRELATION-ATTACHMENT@ 2 PICK URF.TOKEN @ =
+        OVER RUCP-CORRELATION-SOURCE@ 3 PICK URF.SOURCE @ = AND
+        OVER RUCP-CORRELATION-INDEX@ 3 PICK URF.INDEX @ = AND
+        OVER RUCP-CORRELATION-LIFECYCLE-GENERATION@ 3 PICK URF.GENERATION @ = AND
+        SWAP RUCP-CORRELATION-SUBKEY@ 2 PICK URF.KEY @ = AND IF DROP I UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+\ The field descriptor of the bound document that names ROOT, with its
+\ native entry, checked as the field lane checks them.
+: _RTHP-UB-FIELD-DESCRIPTOR?  ( root -- flag )
+    _RTHP-UB-P @ _RTHP-FF-P ! _RTHP-W-DOCUMENT @ _RTHP-FF-DOC !
+    _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-BYTES@ _RTHP-FF-DU !
+    _RTHP-UB-P @ _RTHP.FIELD-DESCRIPTORS-A @
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-DESCRIPTOR-OFFSET@ + _RTHP-FF-DA !
+    _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-NATIVE-BYTES@ _RTHP-FF-NU !
+    _RTHP-UB-P @ _RTHP.FIELD-NATIVE-A @
+        _RTHP-FF-DOC @ RUHA-DOCUMENT-FIELDS-NATIVE-OFFSET@ + _RTHP-FF-NA !
+    _RTHP-FF-DU @ UFLSN-DESCRIPTOR-SIZE / 0 ?DO
+        _RTHP-FF-DA @ I UFLSN-DESCRIPTOR-SIZE * + _RTHP-FF-DESC !
+        _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE@ OVER URF.SOURCE @ =
+        _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE-INDEX@ 2 PICK URF.INDEX @ = AND
+        _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-SOURCE-GENERATION@ 2 PICK URF.GENERATION @ = AND
+        _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ROOT-KEY@ 2 PICK URF.KEY @ = AND IF
+            DROP
+            _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-NATIVE-OFFSET@
+            _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-ENTRY-BYTES@ _RTHP-U32+?
+                0= IF DROP 0 UNLOOP EXIT THEN
+            _RTHP-FF-NU @ U> IF 0 UNLOOP EXIT THEN
+            _RTHP-FF-DESC @ _RTHP-FF-NA @ UFLSN-DESCRIPTOR-NATIVE
+                OVER _RTHP-FF-ENTRY ! UFLD-VALIDATE UFLD-S-OK <>
+                IF 0 UNLOOP EXIT THEN
+            _RTHP-FF-ENTRY @ UFLD-WIDTH@ _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-WIDTH@ =
+            _RTHP-FF-ENTRY @ UFLD-HEIGHT@ _RTHP-FF-DESC @ UFLSN-DESCRIPTOR-HEIGHT@ = AND
+            UNLOOP EXIT
+        THEN
+    LOOP DROP 0 ;
+
+\ The candidate's counts while a moved field is written in its place.
+VARIABLE _RTHP-UB-COUNT
+VARIABLE _RTHP-UB-FIELDS-N
+VARIABLE _RTHP-UB-TEXT
+VARIABLE _RTHP-UB-CLAIMS-N
+
+\ Lower the moved field ROOT alone, in its control's place, by the field
+\ lane's own writer: its label and FDC1 content where the old lay, the
+\ text after them moved, and its claim where its claim lies, checked
+\ against the claims before it as a full lowering checks it.
+: _RTHP-UB-FIELD?  ( root -- flag )
+    DUP URF.TOKEN @ _RTHP-UB-DOCUMENT? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-UB-FIELD-DESCRIPTOR? 0= IF DROP 0 EXIT THEN
+    _RTHP-UB-ROOT-FIELD DUP 0< IF DROP 0 EXIT THEN _RTHP-UB-I !
+    _RTHP-UB-I @ RTE-CONTROL-SIZE * _RTHP-UB-P @ _RTHP.CONTROLS-A @ +
+        _RTHP-UB-ITEM !
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-SAVE
+    \ The field's text is its label, then its content.
+    _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-A @ _RTHP-UB-ITEM @ _RTE-CONTROL.LABEL-U @ -
+        _RTHP-UB-P @ _RTHP.SOURCE-TEXT-A @ - _RTHP-UB-O !
+    _RTHP-UB-ITEM @ _RTE-CONTROL.LABEL-U @ _RTHP-UB-ITEM @ _RTE-CONTROL.CONTENT-U @ +
+    DUP _RTHP-UB-O @ + SWAP                                     ( end old )
+    _RTHP-FF-ENTRY @ UFLD-LABEL@ NIP
+    _RTHP-FF-ENTRY @ DUP UFLD-BYTES@ UFLDC-BYTES 0<> IF 2DROP 2DROP 0 EXIT THEN
+    + SWAP -                                                    ( end delta )
+    _RTHP-UB-TEXT-ROOM? 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ _RTHP-UB-COUNT !
+    _RTHP-UB-P @ _RTHP.FIELD-COUNT @ _RTHP-UB-FIELDS-N !
+    _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED @ _RTHP-UB-TEXT !
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @ _RTHP-UB-CLAIMS-N !
+    _RTHP-UB-I @ _RTHP-UB-P @ _RTHP.CONTROL-COUNT !
+    _RTHP-UB-I @ _RTHP-UB-P @ _RTHP.FIELD-BASE-CONTROLS @ -
+        DUP _RTHP-UB-P @ _RTHP.FIELD-COUNT !
+    RUCL-CLAIM-SIZE * _RTHP-UB-P @ _RTHP.FIELD-BASE-CLAIMS @ +
+        _RTHP-UB-P @ _RTHP.CLAIMS-USED !
+    _RTHP-UB-O @ _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED !
+    _RTHP-UB-P @ _RTHP.FIELD-ITEMS @ _RTHP-UB-ITEMS @ -
+        _RTHP-UB-P @ _RTHP.FIELD-ITEMS !
+    _RTHP-UB-P @ _RTHP.FIELD-UTF8 @ _RTHP-UB-UTF8 @ -
+        _RTHP-UB-ITEM @ _RTE-CONTROL.LABEL-U @ - _RTHP-UB-P @ _RTHP.FIELD-UTF8 !
+    _RTHP-FF-WRITE RTE-S-OK =
+    _RTHP-UB-P @ _RTHP.CONTROL-COUNT @ _RTHP-UB-I @ 1+ = AND
+    _RTHP-UB-COUNT @ _RTHP-UB-P @ _RTHP.CONTROL-COUNT !
+    _RTHP-UB-FIELDS-N @ _RTHP-UB-P @ _RTHP.FIELD-COUNT !
+    _RTHP-UB-TEXT @ _RTHP-UB-P @ _RTHP.SOURCE-TEXT-USED !
+    _RTHP-UB-CLAIMS-N @ _RTHP-UB-P @ _RTHP.CLAIMS-USED !
+    0= IF 0 EXIT THEN
+    _RTHP-UB-ITEM @ _RTHP-UB-CONTROL-KEPT? ;
+
 \ The moved status field keeps its kind, visibility, depth and rectangle.
 : _RTHP-UB-STATIC-SAVE  ( static -- )
     DUP _RTE-STATIC.KIND @ _RTHP-UB-KIND !
@@ -10515,9 +10607,9 @@ VARIABLE _RTHP-UB-IFIRST       \ the candidate's first instrument
         I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
         I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
             I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
-            DUP URF.FAMILY @ URF-F-COLLECTION = IF
-                _RTHP-UB-COLLECTION?
-            ELSE _RTHP-UB-STATUS? THEN
+            DUP URF.FAMILY @ DUP URF-F-COLLECTION = IF
+                DROP _RTHP-UB-COLLECTION?
+            ELSE URF-F-FIELD = IF _RTHP-UB-FIELD? ELSE _RTHP-UB-STATUS? THEN THEN
             0= IF 0 UNLOOP EXIT THEN
             1 _RTHP-UB-MOVED +!
         THEN
@@ -15822,7 +15914,7 @@ VARIABLE _RTHP-D-SH-AN
 \ ---------------------------------------------------------------------
 \
 \  When a comparison would follow the root facts and, of the roots both
-\  snapshots hold, only collections and status fields moved, the pending
+\  snapshots hold, only collections, fields and status fields moved, the pending
 \  bank is the bank on screen with the moved roots' items written in,
 \  instead of a bank packed afresh and compared.  When the facts name the
 \  same roots in the same order and the controls are as many, each control
@@ -15833,10 +15925,11 @@ VARIABLE _RTHP-D-SH-AN
 \  sections are copied as the pack copies them, and each control and
 \  correlation takes the identity, region and parent of the one in its
 \  place on screen, which the full comparison would give them.  Each
-\  control of a moved root must be a text root with its correlation,
-\  identity, place and input target those on screen, and is checked
-\  against its partner as the comparison checks a pair; an unmoved text
-\  root keeps the content revision on screen.  The pending bank keeps the
+\  control of a moved root must be a text root or a field with its
+\  correlation, identity and place those on screen, and its state shown
+\  and enabled, and is checked against its partner as the comparison checks
+\  a pair; a moved field's input target is built again as the pack builds
+\  it, and an unmoved text root keeps the content revision on screen.  The pending bank keeps the
 \  bank on screen's sorted index, and the plan lists the controls that
 \  changed.  Otherwise the copy pairs the controls by identity (below).
 \  The candidate is still lowered whole, so the shell reads what it reads
@@ -15871,8 +15964,8 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
 \ The copy may be tried: not in safe mode, for a candidate built for Desk's
 \ shell with no runs of its own, while the bank on screen kept the facts its
 \ comparison proved.  Both snapshots' root facts are kept, and of the roots
-\ both hold only collections and status fields moved; other roots may come
-\ or go.
+\ both hold only collections, fields and status fields moved; other roots
+\ may come or go.
 : _RTHP-C-FOLLOWS?  ( -- flag )
     1 _RTHP-C-WHY !
     CHK-SAFE? IF 0 EXIT THEN
@@ -15893,8 +15986,8 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
     _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ 0 ?DO
         I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT
         DUP I _RTHP-D-RECORD-MOVED? _RTHP-D-ROOT-CAME @ 0= AND IF
-            URF.FAMILY @ DUP URF-F-COLLECTION <>
-            SWAP URF-F-STATUS-FIELD <> AND IF 0 UNLOOP EXIT THEN
+            URF.FAMILY @ DUP URF-F-COLLECTION <> OVER URF-F-STATUS-FIELD <> AND
+            SWAP URF-F-FIELD <> AND IF 0 UNLOOP EXIT THEN
         ELSE DROP THEN
     LOOP -1 ;
 
@@ -15921,18 +16014,27 @@ VARIABLE _RTHP-C-PLACE
     _RTHP-TG-BANK @ _RTHP-TG-P @ _RTHP.TARGET-PENDING !
     _RTHP-TG-CLEAR -1 ;
 
-\ The first place past the collections' controls.
+\ The first place past the collections' controls, and past the fields'.
 : _RTHP-C-COLLECTIONS-END  ( -- index )
     _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
     _RTHP-D-PENDING @ _RTHP-TB.FIELD-COUNT @ -
     _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ - ;
+: _RTHP-C-FIELDS-END  ( -- index )
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
+    _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ - ;
 
-\ The moved control at INDEX keeps its place: a text root whose
+\ A moved control of KIND at INDEX that the copy writes in: a collection's
+\ text root, or a field.
+: _RTHP-C-MOVABLE?  ( index kind -- flag )
+    SWAP _RTHP-C-COLLECTIONS-END U< IF _RTHP-CONTENT-CONTROL-KIND? EXIT THEN
+    RTE-CONTROL-FIELD = ;
+
+\ The moved control at INDEX keeps its place: a text root or field whose
 \ correlation, at its own place in both banks, carries the identity on
-\ screen, and whose input target comes or goes as on screen.
+\ screen, and whose state shown and enabled is that on screen.
 : _RTHP-C-MOVED-PLACE?  ( index -- flag )
     DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP _RTE-CONTROL.KIND @
-        _RTHP-CONTENT-CONTROL-KIND? 0= IF 2DROP 0 EXIT THEN
+        2 PICK SWAP _RTHP-C-MOVABLE? 0= IF 2DROP 0 EXIT THEN
     _RTE-CONTROL.STATE @
     OVER _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.STATE @ XOR
         RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR AND IF DROP 0 EXIT THEN
@@ -15959,7 +16061,7 @@ VARIABLE _RTHP-C-PLACE
     _RTHP-D-INDEX-N @ 0 ?DO I 1+ I _RTHP-D-CONTROL-MAP-AT ! LOOP
     _RTHP-D-NO-GLYPHS
     0 _RTHP-D-OPS !
-    _RTHP-C-COLLECTIONS-END _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
+    _RTHP-C-FIELDS-END _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
         I _RTHP-D-CONTROL-MOVED? IF
             I _RTHP-C-MOVED-PLACE? 0= IF 0 UNLOOP EXIT THEN
             I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
@@ -16044,8 +16146,9 @@ VARIABLE _RTHP-C-PLACE
 \  control on screen that none pairs is dropped.  The facts decide what
 \  each pairing may be: a control of a root both hold that did not move has
 \  its partner; one of a root that came has none; one of a root both hold
-\  that moved is a collection's text root, checked against its partner as
-\  the copy by place checks it; and a control dropped lies in a root that
+\  that moved is a collection's text root or a field, checked against its
+\  partner as the copy by place checks it, a field's target built again;
+\  and a control dropped lies in a root that
 \  went.  The input targets follow the pending controls in the order the
 \  pack gives them, a paired control taking its partner's on screen and a
 \  new one the target the pack's own words build for it.  Since the packed
@@ -16059,13 +16162,13 @@ VARIABLE _RTHP-C-PLACE
         _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< ;
 
 \ The moved control at INDEX keeps its partner's place in the input: a
-\ collection's text root whose input target comes or goes as its
+\ collection's text root or a field whose state shown and enabled is its
 \ partner's.
 : _RTHP-C-MOVED-PAIR?  ( index -- flag )
     DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @
-        _RTHP-C-COLLECTIONS-END WITHIN 0= IF DROP 0 EXIT THEN
+        _RTHP-C-FIELDS-END WITHIN 0= IF DROP 0 EXIT THEN
     DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP _RTE-CONTROL.KIND @
-        _RTHP-CONTENT-CONTROL-KIND? 0= IF 2DROP 0 EXIT THEN
+        2 PICK SWAP _RTHP-C-MOVABLE? 0= IF 2DROP 0 EXIT THEN
     _RTE-CONTROL.STATE @
     SWAP _RTHP-D-CONTROL-MAP-AT @ DUP 0< IF NEGATE THEN 1-
         _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.STATE @ XOR
@@ -16190,12 +16293,13 @@ VARIABLE _RTHP-C-T-ID
     RTE-CONTROL-SIZE * _RTHP-C-P @ _RTHP.CONTROLS-A @ +
     DUP _RTHP-CT-CONTROL ! _RTE-CONTROL.ID @ _RTHP-CT-ID ! ;
 
-\ The fields' targets, which lie just before the dialog lane.
+\ The fields' targets, which lie just before the dialog lane.  A field
+\ whose root moved has its target built again, under its partner's
+\ identity.
 : _RTHP-C-T-FIELDS?  ( -- flag )
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
-        _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ -
-    _RTHP-C-COLLECTIONS-END ?DO
-        I _RTHP-D-CONTROL-MAP-AT @ IF
+    0 _RTHP-D-ROOT-LAST !
+    _RTHP-C-FIELDS-END _RTHP-C-COLLECTIONS-END ?DO
+        I _RTHP-D-CONTROL-MAP-AT @ DUP IF I _RTHP-D-CONTROL-MOVED? 0= AND THEN IF
             I _RTHP-C-T-PARTNER? 0= IF 0 UNLOOP EXIT THEN
         ELSE
             I _RTHP-C-T-CONTROL
@@ -16204,7 +16308,12 @@ VARIABLE _RTHP-C-T-ID
                 _RTHP-C-T-WRITE @ IF
                     _RTHP-TG-COUNT @ 1- _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
                     _RTHP-FT-REVISION @ OVER _RTHP-TE.REVISION !
-                    _RTHP-FT-INTENTS @ SWAP _RTHP-TE.INTENTS !
+                    _RTHP-FT-INTENTS @ OVER _RTHP-TE.INTENTS !
+                    I _RTHP-D-CONTROL-MAP-AT @ ?DUP IF
+                        DUP 0< IF NEGATE THEN 1-
+                        _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @
+                        OVER _RTHP-TE.ID !
+                    THEN DROP
                 THEN
             THEN
         THEN
@@ -16302,6 +16411,38 @@ VARIABLE _RTHP-C-T-ID
     _RTHP-C-ACTIVE @ _RTHP-TB.CONTROL-COUNT @ _RTHP-C-P @ _RTHP.CONTROL-COUNT @ =
     _RTHP-D-ROOTS-SAME @ AND _RTHP-D-ROOTS-PARTS @ 0= AND ;
 
+\ A moved field's input target is built again as the pack builds it, in
+\ the place its target on screen holds among the targets the copy took:
+\ the field had one there exactly when it has one now.
+VARIABLE _RTHP-C-FT-ID
+VARIABLE _RTHP-C-FT-ENTRY
+: _RTHP-C-FIELD-TARGET?  ( index -- flag )
+    DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ _RTHP-C-FT-ID !
+    _RTHP-C-T-CONTROL
+    _RTHP-CT-FIELD? 0= IF DROP 0 EXIT THEN
+    0 _RTHP-C-FT-ENTRY !
+    _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY DUP _RTHP-TE.ID @ _RTHP-C-FT-ID @ = IF
+            _RTHP-C-FT-ENTRY ! LEAVE
+        THEN DROP
+    LOOP
+    _RTHP-C-FT-ENTRY @ 0<> <> IF 0 EXIT THEN
+    _RTHP-C-FT-ENTRY @ ?DUP 0= IF -1 EXIT THEN
+    _RTHP-CT-ROW @ OVER _RTHP-TE.ROW !
+    _RTHP-CT-COL @ OVER _RTHP-TE.COL !
+    _RTHP-FT-REVISION @ OVER _RTHP-TE.REVISION !
+    _RTHP-FT-INTENTS @ SWAP _RTHP-TE.INTENTS ! -1 ;
+: _RTHP-C-FIELD-TARGETS?  ( -- flag )
+    _RTHP-CT-CLEAR
+    _RTHP-C-P @ DUP _RTHP-CT-P !
+    DUP _RTHP.OWNER @ _RTHP-CT-OWNER ! _RTHP.OWNER-GEN @ _RTHP-CT-GENERATION !
+    0 _RTHP-D-ROOT-LAST !
+    _RTHP-C-FIELDS-END _RTHP-C-COLLECTIONS-END ?DO
+        I _RTHP-D-CONTROL-MOVED? IF
+            I _RTHP-C-FIELD-TARGET? 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
+
 \ ( producer -- flag ) Build the pending bank as the copy of the bank on
 \ screen and seal its plan, or leave no bank pending and the candidate's
 \ region and first identities as they were, for the pack.
@@ -16319,6 +16460,7 @@ VARIABLE _RTHP-C-SERIES
     9 _RTHP-C-WHY !
     _RTHP-C-PLACE @ IF
         _RTHP-C-PAIR? IF _RTHP-C-NORMALIZE? ELSE 0 THEN
+        IF _RTHP-C-FIELD-TARGETS? ELSE 0 THEN
     ELSE _RTHP-C-BY-IDENTITY? THEN
     IF _RTHP-D-PLAN-COMPACT-CONTROLS? ELSE 0 THEN
     _RTHP-C-PLACE @ 0= OVER AND IF DROP _RTHP-C-DROPS-WENT? THEN
