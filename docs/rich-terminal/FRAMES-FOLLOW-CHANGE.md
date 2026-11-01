@@ -1816,12 +1816,23 @@ frame before the change driver.
       DELTAs and 26 STARTs. A typed letter builds in 2.05 million steps,
       and the typing run with the shadow check made 7,651 comparisons
       without a difference.
-  - **9c.3. The other families' roots.** A moved menu, tab set, dialog,
-    field or data-graphics root is lowered alone, as a moved collection or
-    status field is.
   - **9c.4. Instruments and series.** The candidate from the bank carries
     the instruments and series of the bank on screen, lowering again only
-    those whose roots moved.
+    those whose roots moved. It comes before 9c.3 (decision 21): a
+    throwaway diagnostic in a plain canonical journey after 9c.2c found
+    that of the 70 candidates turned away because the bank on screen held
+    instruments or series, 41 moved nothing else, so 9c.4 alone takes
+    them; in 15 a menu, field or dialog root moved as well, and in 14 the
+    facts did not pair.
+  - **9c.3. The other families' roots.** A moved menu, tab set, dialog or
+    field root is lowered alone, as a moved collection or status field is,
+    and the copy of the bank on screen checks that root's controls against
+    their partners and builds their input targets again (decision 20). The
+    same diagnostic found the candidate turning away 3 frames for such a
+    root, a menu, a field and a dialog, while the copy turned away 19:
+    fields 10, menus 6, a dialog 1 and several families 2. It comes in
+    three pieces, the fields first, then the menus, then the dialogs and
+    tab sets.
 
 **Proof.** The change driver passes over an element only when none of the
 counters it keeps for that element has moved. A capture reads only the
@@ -2111,3 +2122,12 @@ Taken on 2026-10-31:
     for its targets. Letting the comparison follow the facts when it pairs
     by identity would have needed less new code, but every such frame
     would still have been packed in full for its targets.
+20. **What 9c.3 covers.** Both the candidate from the bank on screen and
+    the copy of it: a moved menu, field, dialog or tab set root is lowered
+    alone, and the copy checks its controls against their partners and
+    builds their targets again. The candidate alone would have taken 3 of
+    the canonical journey's frames, since most frames with such a root also
+    have instruments on screen, while the copy turned away 19 for the same
+    cause, each then packed and compared in full.
+21. **The order of 9c.3 and 9c.4.** 9c.4 first: it takes 41 frames on its
+    own, and neither piece depends on the other.
