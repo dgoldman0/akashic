@@ -5139,7 +5139,8 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
     assert "_RTHP-INSTRUMENTS-REUSABLE?" in delta_bind
     assert "_RTHP.DELTA-PLAN-VALID" in delta_bind
     assert "_RTHP-D-BIND?" in delta_candidate
-    assert "_RTHP-INSTRUMENTS-NORMALIZE" in _word(source, "_RTHP-D-NORMALIZE")
+    assert "_RTHP-D-NORMALIZE-REST" in _word(source, "_RTHP-D-NORMALIZE")
+    assert "_RTHP-INSTRUMENTS-NORMALIZE" in _word(source, "_RTHP-D-NORMALIZE-REST")
     assert "_RTHP-TB.INSTRUMENT-COUNT @ IF 0 EXIT THEN" not in unchanged
 
     # START emits the base region for controls, status or residual glyphs,
@@ -6889,8 +6890,9 @@ def test_ack_baseline_has_complete_caller_bounded_storage_and_required_pack() ->
         in source
     )
     assert source.count("_RTHP-PK-REFS?") == 2
-    # The pack and the copy of the bank on screen take the admitted pack.
-    assert source.count("_RTHP-PACK-ADMITTED-CANDIDATE") == 3
+    # The pack and the copy of the bank on screen take the admitted pack, and
+    # the copy by identity packs again past the targets it counted.
+    assert source.count("_RTHP-PACK-ADMITTED-CANDIDATE") == 4
     assert source.count("_RTHP-PACK-CANDIDATE") == 2
 
     # Both packing entries share the exact copy/rebase implementation, including the

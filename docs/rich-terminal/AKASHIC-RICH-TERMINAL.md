@@ -1020,30 +1020,45 @@ their place, the identity of the control in the same place on screen, pairs
 each control with that control. Sorting and joining the two banks would give
 the same pairing, since the kept index proved the identities on screen
 unique, and the pending bank keeps that index as its own. The producer also
-keeps the root facts of each bank's snapshot (`RUHA-ROOT-FACTS@`). When those
-of both banks name the same roots in the same order, and the two candidates
-carried the same optional parts, the comparison checks against its partner
-only a control whose root's facts moved: the controls of the others are
-those on screen. Safe mode always takes the full comparison. With the shadow
-check on, both run on copies of one packed bank and must give the same bank,
-plan and kept facts.
+keeps the root facts of each bank's snapshot (`RUHA-ROOT-FACTS@`), and pairs
+the roots of two snapshots by identity, so a root may come or go. A root both
+hold moved when its facts did, or when the two candidates differ in carrying
+its family's optional part. A comparison that pairs its controls by place
+checks against its partner only a control whose root is new or moved: the
+controls of the others are those on screen. Safe mode always takes the full
+comparison. With the shadow check on, both run on copies of one packed bank
+and must give the same bank, plan and kept facts.
 
-When such a comparison would follow the facts and only collections and
-status fields moved, the pending bank is instead a copy of the bank on screen
-with the moved roots' items written in, and is neither packed afresh nor
-compared. It takes the bank on screen's input targets, a text root's target
-with its control's content revision and any other but a field's with the
-candidate's content epoch, as packing and the comparison would give them.
-The candidate's sections are copied as the pack copies them, and each control
-and correlation takes the identity, region and parent of the one in its place
-on screen. A moved root's controls must be text roots whose correlations,
+When such a comparison would follow the facts and, of the roots both
+snapshots hold, only collections and status fields moved, the pending bank
+is instead a copy of the bank on screen with the moved roots' items written
+in, and is neither packed afresh nor compared. When the facts name the same
+roots in the same order and the controls are as many, the copy takes the
+bank on screen's input targets, a text root's target with its control's
+content revision and any other but a field's with the candidate's content
+epoch, as packing and the comparison would give them. The candidate's
+sections are copied as the pack copies them, and each control and
+correlation takes the identity, region and parent of the one in its place on
+screen. A moved root's controls must be text roots whose correlations,
 identities, places and input targets are those on screen, each checked
 against its partner as the comparison checks a pair; an unmoved text root
 keeps the content revision on screen. The pending bank keeps the bank on
-screen's sorted index, and the plan lists the controls that changed. Any
-other frame is packed and compared. With the shadow check on, the copy is
-built and kept, then the frame is packed and compared in full, and where the
-copy made a DELTA the two must give the same bank, plan and kept facts.
+screen's sorted index, and the plan lists the controls that changed.
+
+Otherwise the copy joins the controls by identity, as the comparison does,
+and the facts decide each pairing: a control of a root that came is defined
+under the fresh identity its candidate gave it, a control of a root that
+went is dropped, a control of a root both hold that did not move keeps its
+partner's identity, and a moved root's controls are text roots checked
+against their partners. The input targets follow the pending controls in
+the order packing gives them, a paired control taking its partner's target
+on screen and a new one the target packing's own words build for it, so the
+frame is not packed for its targets; since the packed sections follow the
+targets, the copy packs the sections once for the join and again past the
+targets it counted. The pending bank keeps its own sorted index. Any other
+frame is packed and compared. With the shadow check on, the copy is built
+and kept, then the frame is packed and compared in full, and where the copy
+made a DELTA the two must give the same bank, plan and kept facts.
 
 Such a frame's candidate is itself taken from the bank on screen when only
 text roots and status fields moved, every document lies where it lay, and

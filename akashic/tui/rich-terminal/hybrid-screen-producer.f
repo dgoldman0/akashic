@@ -15110,6 +15110,40 @@ VARIABLE _RTHP-D-TARGET-E
     _RTHP-D-PENDING @ _RTHP-D-CONTENT-REVISION? 0= IF DROP 0 EXIT THEN
     _RTHP-D-TARGET-E @ _RTHP-TE.REVISION ! -1 ;
 
+\ Once each control holds its final identity, its parent and its
+\ correlation's control move from the identities the candidate gave them
+\ to those final ones, through the controls' own places.
+: _RTHP-D-NORMALIZE-REFERENCES?  ( -- flag )
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP
+            _RTHP-D-PENDING-C ! _RTE-CONTROL.PARENT @ ?DUP IF
+            _RTHP-D-RAW>NORMALIZED? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN _RTHP-D-PENDING-C @ _RTE-CONTROL.PARENT !
+        THEN
+        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT DUP
+            _RTHP-D-PENDING-X ! RUCP-CORRELATION-CONTROL-ID@
+            _RTHP-D-RAW>NORMALIZED? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN _RTHP-D-PENDING-X @ _RUCP-X.CONTROL-ID !
+    LOOP -1 ;
+
+\ The instruments, statics and series move to theirs on screen, and the
+\ pending bank and the producer take the region and first identity on
+\ screen.
+: _RTHP-D-NORMALIZE-REST  ( -- )
+    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-INSTRUMENTS-NORMALIZE
+    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-STATICS-NORMALIZE
+    _RTHP-D-ACTIVE @ _RTHP-TB.SERIES-COUNT @ IF
+        _RTHP-D-ACTIVE @ _RTHP-TB.FIRST-SERIES @ _RTHP-D-P @ _RTHP.FIRST-SERIES !
+    THEN
+    _RTHP-D-ACTIVE @ _RTHP-TB.REGION @ DUP
+        _RTHP-D-PENDING @ _RTHP-TB.REGION !
+        _RTHP-D-P @ _RTHP.REGION !
+    _RTHP-D-ACTIVE-FIRST @ DUP
+        _RTHP-D-PENDING @ _RTHP-TB.FIRST-OBJECT !
+        _RTHP-D-P @ _RTHP.FIRST-OBJECT ! ;
+
 : _RTHP-D-NORMALIZE  ( -- flag )
     \ Stable glyph IDs have already been written into the spatially ordered
     \ inactive bank.  First turn the packed control array into the exact
@@ -15131,34 +15165,12 @@ VARIABLE _RTHP-D-TARGET-E
         _RTHP-D-ACTIVE @ _RTHP-TB.REGION @
             _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION !
     LOOP
-    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
-        I _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP
-            _RTHP-D-PENDING-C ! _RTE-CONTROL.PARENT @ ?DUP IF
-            _RTHP-D-RAW>NORMALIZED? 0= IF
-                DROP 0 UNLOOP EXIT
-            THEN _RTHP-D-PENDING-C @ _RTE-CONTROL.PARENT !
-        THEN
-        I _RTHP-D-PENDING @ _RTHP-D-CORR-AT DUP
-            _RTHP-D-PENDING-X ! RUCP-CORRELATION-CONTROL-ID@
-            _RTHP-D-RAW>NORMALIZED? 0= IF
-                DROP 0 UNLOOP EXIT
-            THEN _RTHP-D-PENDING-X @ _RUCP-X.CONTROL-ID !
-    LOOP
+    _RTHP-D-NORMALIZE-REFERENCES? 0= IF 0 EXIT THEN
     _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
         I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY
         _RTHP-D-NORMALIZE-TARGET? 0= IF 0 UNLOOP EXIT THEN
     LOOP
-    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-INSTRUMENTS-NORMALIZE
-    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-STATICS-NORMALIZE
-    _RTHP-D-ACTIVE @ _RTHP-TB.SERIES-COUNT @ IF
-        _RTHP-D-ACTIVE @ _RTHP-TB.FIRST-SERIES @ _RTHP-D-P @ _RTHP.FIRST-SERIES !
-    THEN
-    _RTHP-D-ACTIVE @ _RTHP-TB.REGION @ DUP
-        _RTHP-D-PENDING @ _RTHP-TB.REGION !
-        _RTHP-D-P @ _RTHP.REGION !
-    _RTHP-D-ACTIVE-FIRST @ DUP
-        _RTHP-D-PENDING @ _RTHP-TB.FIRST-OBJECT !
-        _RTHP-D-P @ _RTHP.FIRST-OBJECT ! -1 ;
+    _RTHP-D-NORMALIZE-REST -1 ;
 
 \ Everything the next comparison would derive from this bank as the active
 \ one has just been proved: its slots are canonical with PENDING-VISIBLE
@@ -15289,7 +15301,9 @@ VARIABLE _RTHP-D-ROOTS-OLD       \ the root facts block of the bank on screen
 VARIABLE _RTHP-D-ROOTS-NEW       \ the pending bank's
 VARIABLE _RTHP-D-ROOT-LAST       \ the last control's root record, or 0
 VARIABLE _RTHP-D-ROOT-MOVED      \ whether that root's facts moved
+VARIABLE _RTHP-D-ROOT-CAME       \ whether that root is new to the bank on screen
 VARIABLE _RTHP-D-ROOT-HINT
+VARIABLE _RTHP-D-ROOT-SHIFT      \ the last root's place on screen less its place now
 0 _RTHP-D-FULL ! 0 _RTHP-D-JUDGE !
 \ Diagnostics: comparisons that paired the controls by place, those that
 \ followed the facts too, and the controls those checked against partners.
@@ -15344,14 +15358,15 @@ VARIABLE _RTHP-D-PLACE-ORD
     _RTHP-D-INDEX-A @ _RTHP-D-INDEX-B ! -1 ;
 
 \ The root facts blocks of the snapshots of generations OLD and NEW, when
-\ they name the same roots in the same order and the candidates carried
-\ the same parts.  _RTHP-ROOT-P names the producer.
+\ both are kept.  The two pair their roots by identity: a root may come or
+\ go, and one both name moved when its facts did or the two banks differ in
+\ carrying its family.  _RTHP-ROOT-P names the producer.
 : _RTHP-D-ROOTS-OF?  ( old-generation new-generation -- flag )
-    0 _RTHP-D-ROOT-LAST ! 0 _RTHP-D-ROOT-HINT !
-    _RTHP-ROOT-PAIR? >R _RTHP-D-ROOTS-NEW ! _RTHP-D-ROOTS-OLD !
-    R> 0= IF 0 EXIT THEN
-    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @
-        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ = ;
+    0 _RTHP-D-ROOT-LAST ! 0 _RTHP-D-ROOT-HINT ! 0 _RTHP-D-ROOT-SHIFT !
+    2DUP = IF 2DROP 0 EXIT THEN
+    _RTHP-ROOT-FIND-BLOCK _RTHP-D-ROOTS-NEW !
+    _RTHP-ROOT-FIND-BLOCK DUP _RTHP-D-ROOTS-OLD !
+    0<> _RTHP-D-ROOTS-NEW @ 0<> AND ;
 
 \ Those of the bank on screen's snapshot and the pending bank's.
 : _RTHP-D-ROOTS?  ( -- flag )
@@ -15359,21 +15374,44 @@ VARIABLE _RTHP-D-PLACE-ORD
     _RTHP-D-ACTIVE @ _RTHP-TB.SOURCE-GEN @
     _RTHP-D-PENDING @ _RTHP-TB.SOURCE-GEN @ _RTHP-D-ROOTS-OF? ;
 
+\ Whether the two banks differ in carrying FAMILY: its items then came or
+\ went with the family, which lowering, not its roots, decided, as when the
+\ terminal had no room for it before.
+: _RTHP-D-ROOT-PART-MOVED?  ( family -- flag )
+    _RTHP-ROOT-PART
+    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @ _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ XOR
+    AND 0<> ;
+
+\ Whether RECORD, the pending bank's root at INDEX and the identity sought,
+\ moved since the bank on screen: it is new to that bank, its facts moved,
+\ or its family came or went with the bank.  _RTHP-D-ROOT-CAME says whether
+\ it is new.  The roots of two banks mostly lie in the same order, so its
+\ place on screen is sought first as far from INDEX as the last root's was.
+: _RTHP-D-RECORD-MOVED?  ( record index -- flag )
+    DUP _RTHP-D-ROOT-SHIFT @ + 0 MAX _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-FIND
+    ?DUP 0= IF 2DROP -1 _RTHP-D-ROOT-CAME ! -1 EXIT THEN
+    0 _RTHP-D-ROOT-CAME !
+    DUP _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.A @ - URF-SIZE /
+        ROT - _RTHP-D-ROOT-SHIFT !
+    OVER URF-SAME? 0= SWAP URF.FAMILY @ _RTHP-D-ROOT-PART-MOVED? OR ;
+
 \ Whether pending control INDEX may differ from its partner: no root
-\ projects it, its root is not among the pending bank's, or that root's
-\ facts moved.  A root's controls lie together, so the last root found is
-\ tried first.
+\ projects it, its root is not among the pending bank's, or that root
+\ moved (_RTHP-D-RECORD-MOVED?), _RTHP-D-ROOT-CAME saying whether it is
+\ new.  A root's controls lie together, so the last root found is tried
+\ first.
 : _RTHP-D-CONTROL-MOVED?  ( index -- flag )
-    _RTHP-ROOT-CONTROL-ROOT? 0= IF -1 EXIT THEN
+    _RTHP-ROOT-CONTROL-ROOT? 0= IF
+        0 _RTHP-D-ROOT-LAST ! 0 _RTHP-D-ROOT-CAME ! -1 EXIT
+    THEN
     _RTHP-D-ROOT-LAST @ ?DUP IF
         _RTHP-ROOT-IS? IF _RTHP-D-ROOT-MOVED @ EXIT THEN
     THEN
     _RTHP-D-ROOT-HINT @ _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-FIND
-    DUP _RTHP-D-ROOT-LAST ! DUP 0= IF DROP -1 EXIT THEN
+    DUP _RTHP-D-ROOT-LAST ! DUP 0= IF DROP 0 _RTHP-D-ROOT-CAME ! -1 EXIT THEN
     DUP _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.A @ - URF-SIZE /
     DUP 1+ _RTHP-D-ROOT-HINT !
-    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0=
-    DUP _RTHP-D-ROOT-MOVED ! ;
+    _RTHP-D-RECORD-MOVED? DUP _RTHP-D-ROOT-MOVED ! ;
 
 \ With every-frame checks on, a control not checked against its partner,
 \ which lies in its place, still has its texts, and its partner's, checked
@@ -15620,41 +15658,47 @@ VARIABLE _RTHP-D-SH-AN
 \  The copy of the bank on screen
 \ ---------------------------------------------------------------------
 \
-\  When a comparison would follow the root facts and only collections and
-\  status fields moved, the pending bank is the bank on screen with the
-\  moved roots' items written in, instead of a bank packed afresh and
-\  compared.  It takes the bank on screen's input targets, each with the
-\  revision the full path gives it: a text root's target its control's
-\  content revision, any other the candidate's content epoch.  The
-\  candidate's sections are copied as the pack copies them, and each
-\  control and correlation takes the identity, region and parent of the
-\  one in its place on screen, which the full comparison would give them,
-\  since the facts name the same roots in the same order.  Each control of
-\  a moved root must be a text root with its correlation, identity, place
-\  and input target those on screen, and is checked against its partner as
-\  the comparison checks a pair; an unmoved text root keeps the content
-\  revision on screen.  The pending bank keeps the bank on screen's sorted
-\  index, and the plan lists the controls that changed.  The candidate is
-\  still lowered whole, so the shell reads what it reads after a
-\  comparison.  A frame the copy cannot take is packed and compared.  With
-\  the shadow check on, the copy is built and kept, then dropped, and the
-\  frame is packed and compared in full; when the copy made a DELTA, the
-\  two must give the same bank, plan and kept facts (FSHD-STAGE-COPY).
+\  When a comparison would follow the root facts and, of the roots both
+\  snapshots hold, only collections and status fields moved, the pending
+\  bank is the bank on screen with the moved roots' items written in,
+\  instead of a bank packed afresh and compared.  When the facts name the
+\  same roots in the same order and the controls are as many, each control
+\  lies in its partner's place.  The copy then takes the bank on screen's
+\  input targets, each with the revision the full path gives it: a text
+\  root's target its control's content revision, a field's its FDC1
+\  revision, any other the candidate's content epoch.  The candidate's
+\  sections are copied as the pack copies them, and each control and
+\  correlation takes the identity, region and parent of the one in its
+\  place on screen, which the full comparison would give them.  Each
+\  control of a moved root must be a text root with its correlation,
+\  identity, place and input target those on screen, and is checked
+\  against its partner as the comparison checks a pair; an unmoved text
+\  root keeps the content revision on screen.  The pending bank keeps the
+\  bank on screen's sorted index, and the plan lists the controls that
+\  changed.  Otherwise the copy pairs the controls by identity (below).
+\  The candidate is still lowered whole, so the shell reads what it reads
+\  after a comparison.  A frame the copy cannot take is packed and
+\  compared.  With the shadow check on, the copy is built and kept, then
+\  dropped, and the frame is packed and compared in full; when the copy
+\  made a DELTA, the two must give the same bank, plan and kept facts
+\  (FSHD-STAGE-COPY).
 
 VARIABLE _RTHP-C-P
 VARIABLE _RTHP-C-ACTIVE
 \ The answer of a bank the copy route built or saw compared: whether it
 \ goes out as a DELTA of the bank on screen.
 VARIABLE _RTHP-C-DELTA
-\ Diagnostics: banks copied, and moved controls written into them.
+\ Diagnostics: banks copied, those paired by identity, and the moved and
+\ new controls written into them.
 VARIABLE _RTHP-DIAG-COPIED
+VARIABLE _RTHP-DIAG-COPIED-BY-IDENTITY
 VARIABLE _RTHP-DIAG-COPIED-CONTROLS
 
 \ Which check refused the copy of the bank on screen, by code: 1 safe mode,
 \ 2 not built for Desk's shell, 3 glyph runs, 4 no bank on screen, 5 the
-\ bank kept no facts (it went out as a START), 6 another control count,
-\ 7 the facts do not pair, 8 a root of another family moved, 9 the pending
-\ bank's write, 10 the pairing and its plan.  _RTHP-STAGE-BANK counts each in
+\ bank kept no facts (it went out as a START), 6 the snapshots' root facts
+\ are not both kept, 7 a root of another family moved, 8 the pending bank's
+\ write, 9 the pairing and its plan.  _RTHP-STAGE-BANK counts each in
 \ _RTHP-DIAG-C-WHY.
 VARIABLE _RTHP-C-WHY
 CREATE _RTHP-DIAG-C-WHY 16 CELLS ALLOT
@@ -15662,10 +15706,10 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
 : _RTHP-DIAG-C-WHY+  ( code -- )  15 MIN CELLS _RTHP-DIAG-C-WHY + 1 SWAP +! ;
 
 \ The copy may be tried: not in safe mode, for a candidate built for Desk's
-\ shell with no runs of its own and the controls on screen, whose bank
-\ kept the facts its comparison proved.  The two snapshots' root facts
-\ name the same roots in the same order, and only collections and status
-\ fields moved.
+\ shell with no runs of its own, while the bank on screen kept the facts its
+\ comparison proved.  Both snapshots' root facts are kept, and of the roots
+\ both hold only collections and status fields moved; other roots may come
+\ or go.
 : _RTHP-C-FOLLOWS?  ( -- flag )
     1 _RTHP-C-WHY !
     CHK-SAFE? IF 0 EXIT THEN
@@ -15679,25 +15723,22 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
     _RTHP-C-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.BANK @
         _RTHP-C-ACTIVE @ <> IF 0 EXIT THEN
     6 _RTHP-C-WHY !
-    _RTHP-C-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
-        _RTHP-C-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
-    7 _RTHP-C-WHY !
     _RTHP-C-P @ _RTHP-ROOT-P !
     _RTHP-C-ACTIVE @ _RTHP-TB.SOURCE-GEN @ _RTHP-C-P @ _RTHP.SOURCE-GEN @
         _RTHP-D-ROOTS-OF? 0= IF 0 EXIT THEN
-    8 _RTHP-C-WHY !
+    7 _RTHP-C-WHY !
     _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.N @ 0 ?DO
-        I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT
-        I _RTHP-D-ROOTS-OLD @ _RTHP-ROOT-RECORD-AT
-        2DUP URF-SAME? IF 2DROP ELSE
-            DROP URF.FAMILY @ DUP URF-F-COLLECTION <>
+        I _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-RECORD-AT DUP _RTHP-ROOT-SEEK!
+        DUP I _RTHP-D-RECORD-MOVED? _RTHP-D-ROOT-CAME @ 0= AND IF
+            URF.FAMILY @ DUP URF-F-COLLECTION <>
             SWAP URF-F-STATUS-FIELD <> AND IF 0 UNLOOP EXIT THEN
-        THEN
+        ELSE DROP THEN
     LOOP -1 ;
 
 \ Write the pending bank: the candidate's header, the bank on screen's
-\ input targets in their places, and the candidate's sections as the pack
-\ copies them.
+\ input targets in their places when its controls lie in theirs, and the
+\ candidate's sections as the pack copies them.
+VARIABLE _RTHP-C-PLACE
 : _RTHP-C-WRITE?  ( -- flag )
     _RTHP-C-P @ DUP _RTHP-TARGET-ABORT _RTHP-TG-P !
     _RTHP-TG-P @ _RTHP-TARGET-INACTIVE _RTHP-TG-BANK !
@@ -15706,10 +15747,12 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
     _RTHP-TG-BANK @ _RTHP-TG-BYTES @ _RTHP-TG-P @
         _RTHP-ARENA-SPAN? 0= IF _RTHP-TG-FAIL EXIT THEN
     _RTHP-TG-HEADER!
-    _RTHP-C-ACTIVE @ _RTHP-TB.COUNT @ DUP _RTHP-TG-BANK @ _RTHP-TB.COUNT !
-    0 _RTHP-C-ACTIVE @ _RTHP-TARGET-ENTRY
-    0 _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
-    ROT _RTHP-TARGET-ENTRY-SIZE * MOVE
+    _RTHP-C-PLACE @ IF
+        _RTHP-C-ACTIVE @ _RTHP-TB.COUNT @ DUP _RTHP-TG-BANK @ _RTHP-TB.COUNT !
+        0 _RTHP-C-ACTIVE @ _RTHP-TARGET-ENTRY
+        0 _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
+        ROT _RTHP-TARGET-ENTRY-SIZE * MOVE
+    THEN
     _RTHP-TG-BANK @ _RTHP-TG-P @ _RTHP-PACK-ADMITTED-CANDIDATE
         0= IF _RTHP-TG-FAIL EXIT THEN
     _RTHP-TG-BANK @ _RTHP-TG-P @ _RTHP.TARGET-PENDING !
@@ -15774,12 +15817,29 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
         THEN DROP
     LOOP DROP 0 0 ;
 
+\ Each input target takes the revision the full path gives it: a text
+\ root's its control's content revision, a field's the revision its FDC1
+\ content carries, which an unmoved field keeps, and any other the
+\ candidate's content epoch.
+: _RTHP-C-TARGET-REVISIONS?  ( -- flag )
+    _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
+        I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY DUP _RTHP-TE.KIND @
+        DUP _RTHP-CONTENT-CONTROL-KIND? IF
+            DROP DUP _RTHP-TE.ID @ _RTHP-C-TARGET-REVISION? 0= IF
+                2DROP 0 UNLOOP EXIT
+            THEN SWAP _RTHP-TE.REVISION !
+        ELSE
+            RTE-CONTROL-FIELD = IF DROP ELSE
+                _RTHP-C-P @ _RTHP.SOURCE-CONTENT-EPOCH @
+                    SWAP _RTHP-TE.REVISION !
+            THEN
+        THEN
+    LOOP -1 ;
+
 \ Each control and correlation takes the identity, region and parent of
 \ the one in its place on screen; a text root keeps the content revision on
 \ screen where its body is unchanged, which for an unmoved root it is; each
-\ input target takes the revision the full path gives it, a field's the
-\ revision its content carries and any other but a text root's the
-\ candidate's content epoch; and the
+\ input target takes the revision the full path gives it; and the
 \ instruments, statics and series move to theirs on screen, as the
 \ comparison moves them.
 : _RTHP-C-NORMALIZE?  ( -- flag )
@@ -15805,34 +15865,283 @@ _RTHP-DIAG-C-WHY 16 CELLS 0 FILL
         I _RTHP-D-ACTIVE @ _RTHP-D-CORR-AT RUCP-CORRELATION-CONTROL-ID@
             I _RTHP-D-PENDING @ _RTHP-D-CORR-AT _RUCP-X.CONTROL-ID !
     LOOP
-    _RTHP-D-PENDING @ _RTHP-TB.COUNT @ 0 ?DO
-        I _RTHP-D-PENDING @ _RTHP-TARGET-ENTRY DUP _RTHP-TE.KIND @
-        DUP _RTHP-CONTENT-CONTROL-KIND? IF
-            DROP DUP _RTHP-TE.ID @ _RTHP-C-TARGET-REVISION? 0= IF
-                2DROP 0 UNLOOP EXIT
-            THEN SWAP _RTHP-TE.REVISION !
-        ELSE
-            \ A field's target keeps its FDC1 revision, which an unmoved
-            \ field keeps; any other takes the candidate's content epoch.
-            RTE-CONTROL-FIELD = IF DROP ELSE
-                _RTHP-C-P @ _RTHP.SOURCE-CONTENT-EPOCH @
-                    SWAP _RTHP-TE.REVISION !
-            THEN
-        THEN
-    LOOP
-    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-INSTRUMENTS-NORMALIZE
-    _RTHP-D-ACTIVE @ _RTHP-D-PENDING @ _RTHP-STATICS-NORMALIZE
-    _RTHP-D-ACTIVE @ _RTHP-TB.SERIES-COUNT @ IF
-        _RTHP-D-ACTIVE @ _RTHP-TB.FIRST-SERIES @ _RTHP-D-P @ _RTHP.FIRST-SERIES !
-    THEN
-    _RTHP-D-ACTIVE @ _RTHP-TB.REGION @ DUP
-        _RTHP-D-PENDING @ _RTHP-TB.REGION !
-        _RTHP-D-P @ _RTHP.REGION !
-    _RTHP-D-ACTIVE-FIRST @ DUP
-        _RTHP-D-PENDING @ _RTHP-TB.FIRST-OBJECT !
-        _RTHP-D-P @ _RTHP.FIRST-OBJECT !
+    _RTHP-C-TARGET-REVISIONS? 0= IF 0 EXIT THEN
+    _RTHP-D-NORMALIZE-REST
     _RTHP-D-P @ _RTHP.ACTIVE-FACTS _RTHP-KF.LAST-ID @ _RTHP-D-LAST-ID !
     -1 ;
+
+\ ---------------------------------------------------------------------
+\  The copy by identity
+\ ---------------------------------------------------------------------
+\
+\  When roots came or went, or the controls on screen are not as many, the
+\  copy pairs the controls by identity, as the comparison does: the bank on
+\  screen's kept index joins the pending bank's, sorted, so a new control
+\  keeps the fresh identity its candidate gave it and is defined, and a
+\  control on screen that none pairs is dropped.  The facts decide what
+\  each pairing may be: a control of a root both hold that did not move has
+\  its partner; one of a root that came has none; one of a root both hold
+\  that moved is a collection's text root, checked against its partner as
+\  the copy by place checks it; and a control dropped lies in a root that
+\  went.  The input targets follow the pending controls in the order the
+\  pack gives them, a paired control taking its partner's on screen and a
+\  new one the target the pack's own words build for it.  Since the packed
+\  sections follow the targets, the bank is packed once for the join, the
+\  targets counted, and packed again past them.
+
+\ The pending control of identity ID in the candidate's numbering, by its
+\ place.
+: _RTHP-C-ORDINAL?  ( id -- ordinal flag )
+    _RTHP-D-PENDING-FIRST @ - DUP
+        _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ U< ;
+
+\ The moved control at INDEX keeps its partner's place in the input: a
+\ collection's text root whose input target comes or goes as its
+\ partner's.
+: _RTHP-C-MOVED-PAIR?  ( index -- flag )
+    DUP _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @
+        _RTHP-C-COLLECTIONS-END WITHIN 0= IF DROP 0 EXIT THEN
+    DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT DUP _RTE-CONTROL.KIND @
+        _RTHP-CONTENT-CONTROL-KIND? 0= IF 2DROP 0 EXIT THEN
+    _RTE-CONTROL.STATE @
+    SWAP _RTHP-D-CONTROL-MAP-AT @ DUP 0< IF NEGATE THEN 1-
+        _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.STATE @ XOR
+    RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR AND 0= ;
+
+\ Join the controls by identity and check each pairing against the facts.
+: _RTHP-C-PAIR-ID?  ( -- flag )
+    _RTHP-C-P @ _RTHP-D-BIND? 0= IF 0 EXIT THEN
+    _RTHP-D-KEPT @ 0= IF 0 EXIT THEN
+    _RTHP-D-PLAN-START? 0= IF 0 EXIT THEN
+    _RTHP-D-BUILD-CONTROL-MAP? 0= IF 0 EXIT THEN
+    _RTHP-D-NO-GLYPHS
+    \ Each control that went is an operation of the DELTA.
+    _RTHP-D-JOIN-DROPS @ _RTHP-D-OPS !
+    0 _RTHP-D-ROOT-LAST !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-CONTROL-MOVED? IF
+            \ A root that came brings only new controls, and one both hold
+            \ keeps its own.
+            I _RTHP-D-CONTROL-MAP-AT @ 0= _RTHP-D-ROOT-CAME @ <> IF
+                0 UNLOOP EXIT
+            THEN
+            _RTHP-D-ROOT-CAME @ 0= IF
+                I _RTHP-C-MOVED-PAIR? 0= IF 0 UNLOOP EXIT THEN
+            THEN
+            I _RTHP-D-CONTROL-COMPATIBLE? 0= IF 0 UNLOOP EXIT THEN
+            _RTHP-D-ROOT-CAME @ 0= _RTHP-D-CHANGED @ AND IF
+                _RTHP-D-CONTROL-MARK-CHANGED? 0= IF 0 UNLOOP EXIT THEN
+            THEN
+            1 _RTHP-DIAG-COPIED-CONTROLS +!
+        ELSE
+            I _RTHP-D-CONTROL-MAP-AT @ 0= IF 0 UNLOOP EXIT THEN
+        THEN
+    LOOP -1 ;
+
+\ Building the targets: whether this pass writes them or only counts them,
+\ where the next search of the targets on screen begins, and the partner's
+\ identity sought.
+VARIABLE _RTHP-C-T-WRITE
+VARIABLE _RTHP-C-T-CUR
+VARIABLE _RTHP-C-T-N
+VARIABLE _RTHP-C-T-ID
+
+\ One more target: ENTRY's copy, or with ENTRY 0 the one the pack's words
+\ just built.  A counting pass writes neither.
+: _RTHP-C-T-TAKE?  ( entry|0 -- flag )
+    _RTHP-TG-COUNT @ _RTHP-TG-P @ _RTHP.MAX-CONTROLS @ U< 0= IF DROP 0 EXIT THEN
+    _RTHP-C-T-WRITE @ 0= IF DROP 1 _RTHP-TG-COUNT +! -1 EXIT THEN
+    ?DUP IF
+        _RTHP-TG-COUNT @ _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
+            _RTHP-TARGET-ENTRY-SIZE MOVE
+        1 _RTHP-TG-COUNT +! -1 EXIT
+    THEN
+    _RTHP-TG-APPEND-CURRENT? ;
+
+\ The target on screen of pending control ORDINAL's partner, when the
+\ partner had one.  The targets lie in the order of their controls, so the
+\ search begins past the last one found.
+: _RTHP-C-T-PARTNER?  ( ordinal -- flag )
+    _RTHP-D-CONTROL-MAP-AT @ DUP 0< IF NEGATE THEN 1-
+        _RTHP-D-ACTIVE @ _RTHP-D-CONTROL-AT _RTE-CONTROL.ID @ _RTHP-C-T-ID !
+    _RTHP-D-ACTIVE @ _RTHP-TB.COUNT @ _RTHP-C-T-N !
+    _RTHP-C-T-N @ 0 ?DO
+        _RTHP-C-T-CUR @ I + DUP _RTHP-C-T-N @ U< 0= IF _RTHP-C-T-N @ - THEN
+        DUP _RTHP-D-ACTIVE @ _RTHP-TARGET-ENTRY _RTHP-TE.ID @
+            _RTHP-C-T-ID @ = IF
+            DUP 1+ _RTHP-C-T-CUR !
+            _RTHP-D-ACTIVE @ _RTHP-TARGET-ENTRY _RTHP-C-T-TAKE? UNLOOP EXIT
+        THEN DROP
+    LOOP -1 ;
+
+\ The menus' targets, which lead the list: their root did not move, so they
+\ are those on screen.
+: _RTHP-C-T-MENUS?  ( -- flag )
+    BEGIN
+        _RTHP-C-T-CUR @ _RTHP-D-ACTIVE @ _RTHP-TB.COUNT @ U< IF
+            _RTHP-C-T-CUR @ _RTHP-D-ACTIVE @ _RTHP-TARGET-ENTRY _RTHP-TE.KIND @
+            DUP RTE-CONTROL-MENU = SWAP RTE-CONTROL-MENU-ITEM = OR
+        ELSE 0 THEN
+    WHILE
+        _RTHP-C-T-CUR @ _RTHP-D-ACTIVE @ _RTHP-TARGET-ENTRY
+            _RTHP-C-T-TAKE? 0= IF 0 EXIT THEN
+        1 _RTHP-C-T-CUR +!
+    REPEAT -1 ;
+
+\ The collections' targets, in the order of their correlations, as the pack
+\ walks them.
+: _RTHP-C-T-COLLECTIONS?  ( -- flag )
+    0 _RTHP-CT-TAB-ROOT !
+    _RTHP-C-COLLECTIONS-END _RTHP-D-PENDING @ _RTHP-TB.MENU-CONTROL-COUNT @ ?DO
+        I RUCP-CORRELATION-SIZE * _RTHP-C-P @ _RTHP.CORR-A @ +
+            RUCP-CORRELATION-CONTROL-ID@ _RTHP-C-ORDINAL? 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+        DUP _RTHP-D-CONTROL-MAP-AT @ IF
+            \ A tab follows only a tab set new with it.
+            DUP _RTHP-D-PENDING @ _RTHP-D-CONTROL-AT _RTE-CONTROL.KIND @
+                RTE-CONTROL-TAB <> IF 0 _RTHP-CT-TAB-ROOT ! THEN
+            _RTHP-C-T-PARTNER? 0= IF 0 UNLOOP EXIT THEN
+        ELSE
+            DROP
+            I _RTHP-CT-COLLECTION-CONTROL-AT? 0= IF 0 UNLOOP EXIT THEN
+            _RTHP-CT-CONTROL @ _RTE-CONTROL.KIND @ DUP
+                _RTHP-CONTENT-CONTROL-KIND? IF
+                DROP 0 _RTHP-CT-TAB-ROOT !
+                _RTHP-CT-TEXT-ROOT? 0= IF DROP 0 UNLOOP EXIT THEN
+                IF 0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN THEN
+            ELSE
+                DUP RTE-CONTROL-TABSET = IF
+                    DROP _RTHP-CT-TABSET? 0= IF 0 UNLOOP EXIT THEN
+                ELSE
+                    RTE-CONTROL-TAB <> IF 0 UNLOOP EXIT THEN
+                    _RTHP-CT-TAB? 0= IF DROP 0 UNLOOP EXIT THEN
+                    IF 0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN THEN
+                THEN
+            THEN
+        THEN
+    LOOP -1 ;
+
+\ The control at ORDINAL, as the pack's field and dialog words read it.
+: _RTHP-C-T-CONTROL  ( ordinal -- )
+    RTE-CONTROL-SIZE * _RTHP-C-P @ _RTHP.CONTROLS-A @ +
+    DUP _RTHP-CT-CONTROL ! _RTE-CONTROL.ID @ _RTHP-CT-ID ! ;
+
+\ The fields' targets, which lie just before the dialog lane.
+: _RTHP-C-T-FIELDS?  ( -- flag )
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
+        _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ -
+    _RTHP-C-COLLECTIONS-END ?DO
+        I _RTHP-D-CONTROL-MAP-AT @ IF
+            I _RTHP-C-T-PARTNER? 0= IF 0 UNLOOP EXIT THEN
+        ELSE
+            I _RTHP-C-T-CONTROL
+            _RTHP-CT-FIELD? 0= IF DROP 0 UNLOOP EXIT THEN IF
+                0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN
+                _RTHP-C-T-WRITE @ IF
+                    _RTHP-TG-COUNT @ 1- _RTHP-TG-BANK @ _RTHP-TARGET-ENTRY
+                    _RTHP-FT-REVISION @ OVER _RTHP-TE.REVISION !
+                    _RTHP-FT-INTENTS @ SWAP _RTHP-TE.INTENTS !
+                THEN
+            THEN
+        THEN
+    LOOP -1 ;
+
+\ The dialog lane's targets.
+: _RTHP-C-T-DIALOGS?  ( -- flag )
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @
+    DUP _RTHP-D-PENDING @ _RTHP-TB.DIALOG-CONTROLS @ - ?DO
+        I _RTHP-D-CONTROL-MAP-AT @ IF
+            I _RTHP-C-T-PARTNER? 0= IF 0 UNLOOP EXIT THEN
+        ELSE
+            I _RTHP-C-T-CONTROL
+            _RTHP-CT-BUTTON? 0= IF DROP 0 UNLOOP EXIT THEN IF
+                0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN
+            THEN
+            _RTHP-CT-DIALOG? 0= IF DROP 0 UNLOOP EXIT THEN IF
+                0 _RTHP-C-T-TAKE? 0= IF 0 UNLOOP EXIT THEN
+            THEN
+        THEN
+    LOOP -1 ;
+
+\ Count or write the pending bank's targets, as _RTHP-C-T-WRITE says.
+: _RTHP-C-TARGETS?  ( -- flag )
+    _RTHP-CT-CLEAR
+    _RTHP-C-P @ DUP _RTHP-TG-P ! DUP _RTHP-CT-P !
+    DUP _RTHP.OWNER @ _RTHP-CT-OWNER ! _RTHP.OWNER-GEN @ _RTHP-CT-GENERATION !
+    _RTHP-D-PENDING @ _RTHP-TG-BANK !
+    0 _RTHP-TG-COUNT ! 0 _RTHP-C-T-CUR !
+    _RTHP-C-T-MENUS? 0= IF 0 EXIT THEN
+    _RTHP-C-T-COLLECTIONS? 0= IF 0 EXIT THEN
+    _RTHP-C-T-FIELDS? 0= IF 0 EXIT THEN
+    _RTHP-C-T-DIALOGS? ;
+
+\ Each paired control takes its partner's identity and a new one keeps the
+\ fresh identity the candidate gave it, in the region on screen; a text
+\ root keeps the content revision on screen where its body is unchanged,
+\ which for an unmoved root's it is; parents and correlations follow; each
+\ input target takes the revision the full path gives it; and the
+\ instruments, statics and series move to theirs on screen.
+: _RTHP-C-NORMALIZE-ID?  ( -- flag )
+    0 _RTHP-D-LAST-ID ! 0 _RTHP-D-ROOT-LAST !
+    _RTHP-D-PENDING @ _RTHP-TB.CONTROL-COUNT @ 0 ?DO
+        I _RTHP-D-CONTROL-PAIR 0= IF 0 UNLOOP EXIT THEN
+        _RTHP-D-MATCHED @ IF
+            _RTHP-D-PENDING-C @ _RTE-CONTROL.KIND @
+                _RTHP-CONTENT-CONTROL-KIND? IF
+                I _RTHP-D-CONTROL-MOVED? IF
+                    _RTHP-D-KEEP-CONTENT-REVISION
+                ELSE
+                    _RTHP-D-ACTIVE-C @ _RTE-CONTROL.CONTENT-A @ 8 +
+                    _RTHP-D-PENDING-C @ _RTE-CONTROL.CONTENT-A @ 8 + 8 MOVE
+                THEN
+            THEN
+            _RTHP-D-ACTIVE-C @ _RTE-CONTROL.ID @
+        ELSE
+            _RTHP-D-EXPECTED-P @
+        THEN
+        DUP _RTHP-D-LAST-ID @ U> IF DUP _RTHP-D-LAST-ID ! THEN
+        _RTHP-D-PENDING-C @ _RTE-CONTROL.ID !
+        _RTHP-D-ACTIVE @ _RTHP-TB.REGION @
+            _RTHP-D-PENDING-C @ _RTE-CONTROL.REGION !
+    LOOP
+    _RTHP-D-NORMALIZE-REFERENCES? 0= IF 0 EXIT THEN
+    _RTHP-C-TARGET-REVISIONS? 0= IF 0 EXIT THEN
+    _RTHP-D-NORMALIZE-REST -1 ;
+
+\ Each control the plan drops lies in a root of the bank on screen that
+\ went.
+: _RTHP-C-DROPS-WENT?  ( -- flag )
+    _RTHP-D-PLAN-DROPS @ 0 ?DO
+        I 8 * _RTHP-D-DROPS-A + @
+            _RTHP-D-ACTIVE @ _RTHP-ROOT-BANK-CONTROL-ROOT? 0= IF 0 UNLOOP EXIT THEN
+        0 _RTHP-D-ROOTS-NEW @ _RTHP-ROOT-FIND IF 0 UNLOOP EXIT THEN
+    LOOP -1 ;
+
+\ Pair by identity, count the targets, pack the bank again past them and
+\ write them, and normalize it.
+: _RTHP-C-BY-IDENTITY?  ( -- flag )
+    _RTHP-C-PAIR-ID? 0= IF 0 EXIT THEN
+    0 _RTHP-C-T-WRITE ! _RTHP-C-TARGETS? 0= IF 0 EXIT THEN
+    _RTHP-TG-COUNT @ DUP _RTHP-D-PENDING @ _RTHP-TB.COUNT ! IF
+        _RTHP-D-PENDING @ _RTHP-C-P @ _RTHP-PACK-ADMITTED-CANDIDATE
+            0= IF 0 EXIT THEN
+        -1 _RTHP-C-T-WRITE ! _RTHP-C-TARGETS? 0= IF 0 EXIT THEN
+        _RTHP-TG-COUNT @ _RTHP-D-PENDING @ _RTHP-TB.COUNT @ <> IF 0 EXIT THEN
+    THEN
+    _RTHP-TG-CLEAR
+    _RTHP-C-NORMALIZE-ID? ;
+
+\ The two snapshots name the same roots in the same order, the candidates
+\ carried the same parts, and the pending bank holds as many controls as
+\ the bank on screen: each control then lies in its partner's place.
+: _RTHP-C-PLACE?  ( -- flag )
+    _RTHP-C-ACTIVE @ _RTHP-TB.CONTROL-COUNT @
+        _RTHP-C-P @ _RTHP.CONTROL-COUNT @ <> IF 0 EXIT THEN
+    _RTHP-D-ROOTS-OLD @ _RTHP-ROOT.PARTS @
+        _RTHP-D-ROOTS-NEW @ _RTHP-ROOT.PARTS @ <> IF 0 EXIT THEN
+    _RTHP-C-ACTIVE @ _RTHP-TB.SOURCE-GEN @ _RTHP-C-P @ _RTHP.SOURCE-GEN @
+        _RTHP-ROOT-PAIR? NIP NIP ;
 
 \ ( producer -- flag ) Build the pending bank as the copy of the bank on
 \ screen and seal its plan, or leave no bank pending and the candidate's
@@ -15845,11 +16154,15 @@ VARIABLE _RTHP-C-SERIES
     DUP _RTHP.REGION @ _RTHP-C-REGION !
     DUP _RTHP.FIRST-OBJECT @ _RTHP-C-FIRST !
     _RTHP.FIRST-SERIES @ _RTHP-C-SERIES !
-    9 _RTHP-C-WHY !
+    _RTHP-C-PLACE? _RTHP-C-PLACE !
+    8 _RTHP-C-WHY !
     _RTHP-C-WRITE? 0= IF 0 EXIT THEN
-    10 _RTHP-C-WHY !
-    _RTHP-C-PAIR? IF _RTHP-C-NORMALIZE? ELSE 0 THEN
+    9 _RTHP-C-WHY !
+    _RTHP-C-PLACE @ IF
+        _RTHP-C-PAIR? IF _RTHP-C-NORMALIZE? ELSE 0 THEN
+    ELSE _RTHP-C-BY-IDENTITY? THEN
     IF _RTHP-D-PLAN-COMPACT-CONTROLS? ELSE 0 THEN
+    _RTHP-C-PLACE @ 0= OVER AND IF DROP _RTHP-C-DROPS-WENT? THEN
     0= IF
         _RTHP-C-P @ _RTHP-TARGET-ABORT
         _RTHP-C-REGION @ _RTHP-C-P @ _RTHP.REGION !
@@ -15859,6 +16172,7 @@ VARIABLE _RTHP-C-SERIES
     THEN
     _RTHP-D-KEEP-FACTS
     _RTHP-D-PLAN-SEAL
+    _RTHP-C-PLACE @ 0= IF 1 _RTHP-DIAG-COPIED-BY-IDENTITY +! THEN
     1 _RTHP-DIAG-COPIED +! -1 ;
 
 \ The shadow check of the copy: its block, and whether it holds the

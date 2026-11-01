@@ -25,12 +25,17 @@ class InstrumentHarness(GrowthHarness):
                          "tui/rich-terminal/uidl-semantic-items-itm1.f",
                          "tui/rich-terminal/uidl-semantic-documents-doc1.f",
                          "tui/uidl-menu-snapshot.f", "tui/field-content.f",
-                         "tui/rich-terminal/dlg1.f",
+                         "tui/rich-terminal/fdc1.f", "tui/rich-terminal/dlg1.f",
+                         "tui/dialog-model.f",
                          # An instrument may lie beneath its document's overlay,
                          # whose sources these name.
                          "tui/uidl-field-snapshot.f", "tui/uidl-dialog-snapshot.f"):
             sources.append((ROOT / "akashic" / relative).read_text())
         self.definitions = _definitions("\n".join(sources))
+        # fdc1.f bounds the storage its variables own between two markers,
+        # which a field's validation keeps the field's bytes clear of.
+        for marker in ("_FDC1-OWNED-START", "_FDC1-OWNED-END"):
+            self.definitions[marker] = f"CREATE {marker}"
         chunks, seen = [], set()
 
         def include(name):

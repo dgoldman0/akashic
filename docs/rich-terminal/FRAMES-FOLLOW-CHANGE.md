@@ -1787,10 +1787,25 @@ frame before the change driver.
       65,536 steps, so a burst frame's figure carries about four percent,
       and 9c.2a's 1.92 million was a low reading. The typing run with the
       shadow check made 7,227 comparisons without a difference.
-    - **9c.2c. The copy pairs by identity.** The copy of the bank on
-      screen pairs its controls by identity in the same way, so these
-      frames take the change driver; it plans the definitions and drops the
-      comparison plans, which the shadow check compares.
+    - **9c.2c. The copy pairs by identity.** The two snapshots' root facts
+      pair their roots by identity, so a root may come or go; a root both
+      hold moved when its facts did or its family's part came or went with
+      the bank. When the roots or the number of controls differ, the copy
+      of the bank on screen joins its controls by identity, as the
+      comparison does, and the facts decide each pairing: a control of a
+      root that came is defined under its fresh identity, a control of a
+      root that went is dropped, a control of an unmoved root both hold
+      keeps its partner's identity unchecked, and a moved root's controls
+      are text roots checked against their partners. The input targets
+      follow the pending controls in the pack's order, a paired control
+      taking its partner's on screen and a new one the target the pack's
+      own words build for it, so these frames skip the target pack (decision
+      19); the sections are packed once for the join and again past the
+      targets counted. The shadow check compares the copy's bank, plan and
+      kept facts with the full comparison's. A throwaway diagnostic in a
+      plain canonical journey found that 10 of the 12 frames whose control
+      count changed would follow the facts with roots paired by identity;
+      the other 2 moved a data-graphics root.
   - **9c.3. The other families' roots.** A moved menu, tab set, dialog,
     field or data-graphics root is lowered alone, as a moved collection or
     status field is.
@@ -2066,3 +2081,23 @@ Taken on 2026-10-28:
     stays as it is, and with or without the shell a change to an
     application item is written in one place, which the change driver
     needs.
+
+Taken on 2026-10-30:
+
+18. **How a frame whose controls come or go goes out** (9c.2). As a DELTA
+    that defines the new controls and drops those that went, with Desk's
+    shell widening its DELTA to carry them: its catalog gains and loses the
+    applications' modal regions, and its families of application controls
+    change their counts. Teaching only the copy of the bank on screen to
+    pair such frames would have taken none of them, since the comparison
+    and Desk's shell each refused them. The APT-1 engine gains control and
+    region drops, which RETAINED-1 and the terminal already carry.
+
+Taken on 2026-10-31:
+
+19. **How the copy takes a frame whose roots came or went** (9c.2c). It
+    pairs the controls, the roots and the input targets by identity, and
+    builds targets only for new controls, so such a frame is not packed
+    for its targets. Letting the comparison follow the facts when it pairs
+    by identity would have needed less new code, but every such frame
+    would still have been packed in full for its targets.

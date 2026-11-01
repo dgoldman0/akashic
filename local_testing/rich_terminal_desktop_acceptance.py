@@ -436,8 +436,10 @@ _GUEST_DIAGNOSTIC_WORDS = (
     "_RTHP-DIAG-PLACED",
     "_RTHP-DIAG-FOLLOWED",
     "_RTHP-DIAG-CHECKED",
-    # Banks copied from the one on screen, and the moved controls written in.
+    # Banks copied from the one on screen, those paired by identity, and the
+    # moved and new controls written in.
     "_RTHP-DIAG-COPIED",
+    "_RTHP-DIAG-COPIED-BY-IDENTITY",
     "_RTHP-DIAG-COPIED-CONTROLS",
     # Controls the DELTAs sent dropped and defined.
     "_RTHP-DIAG-DELTA-DROPS",

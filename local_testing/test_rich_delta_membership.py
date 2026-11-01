@@ -30,6 +30,9 @@ FIELD = 13
 
 
 class MembershipHarness(DeltaHarness):
+    # The subkey each tab set's correlation carries.
+    subkey = 0
+
     def banks(self, active, pending, *, shell=True, kinds=None, active_kinds=None):
         """The bank on screen holds a tab set for each correlation index in
         ACTIVE, the pending bank one for each in PENDING, their kinds from
@@ -105,7 +108,7 @@ class MembershipHarness(DeltaHarness):
             memory.write_bytes(self.controls + place * self.control_size,
                                struct.pack("<24Q", *control))
             memory.write_bytes(self.corr + place * self.corr_size,
-                               struct.pack("<7Q", 1, 1, index, 0, first + place, 0, 0))
+                               struct.pack("<7Q", 1, 1, index, self.subkey, first + place, 0, 0))
         memory.write64(self.instrument_regions, region + 1)
         for index in range(3):
             memory.write64(self.instruments + index * 216 + 16, first + n + index)
