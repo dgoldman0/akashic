@@ -569,10 +569,28 @@ def test_a_moved_dialog_is_lowered_alone_by_the_dialog_lanes_writer(h):
     assert "_RTHP-DD-MEASURE" in dialog and "_RTHP-DD-WRITE" in dialog
     assert "_RTHP-DD-SHOWN @ _RTHP-UB-BUTTONS @ <> IF 0 EXIT THEN" in dialog
     assert "_RTHP-UB-CONTROL-KEPT?" in dialog
-    assert "URF-F-DIALOG = IF _RTHP-UB-DIALOG?" in " ".join(
+    assert "URF-F-DIALOG = IF DROP _RTHP-UB-DIALOG?" in " ".join(
         h.definitions["_RTHP-UB-MOVED?"].split())
     alone = " ".join(h.definitions["_RTHP-MOVES-ALONE?"].split())
     assert "URF-F-DATA-GRAPHICS" not in alone
     for family in ("URF-F-MENUS", "URF-F-COLLECTION", "URF-F-FIELD", "URF-F-DIALOG",
                    "URF-F-STATUS-FIELD"):
         assert family in alone
+
+
+def test_a_moved_data_graphics_root_has_the_instruments_lowered_again(h):
+    """When a data-graphics root moved, the candidate lowers every
+    document's instruments and series again by the instrument lane's own
+    builder, whose claims must be those the bank holds, and checks the base
+    claims against them as the lane's caller does (FRAMES-FOLLOW-CHANGE
+    9c.5)."""
+    graphs = " ".join(h.definitions["_RTHP-UB-GRAPHS?"].split())
+    assert "_RTHP-UB-P @ _RTHP-BUILD-INSTRUMENTS" in graphs
+    assert "COMPARE IF 0 EXIT THEN" in graphs
+    for check in ("_RTHP-BASE-CLAIMS-DISJOINT?", "_RTHP-BASE-REGION-Z?"):
+        assert check in graphs
+        assert check in h.definitions["_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS"]
+    roots = " ".join(h.definitions["_RTHP-UB-ROOTS?"].split())
+    assert "URF-F-DATA-GRAPHICS = IF DROP -1 _RTHP-UB-GRAPHS ! ELSE" in roots
+    candidate = " ".join(h.definitions["_RTHP-UB-CANDIDATE?"].split())
+    assert "_RTHP-UB-GRAPHS @ IF _RTHP-UB-GRAPHS? ELSE _RTHP-UB-INSTRUMENTS? THEN" in candidate

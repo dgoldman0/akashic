@@ -1071,41 +1071,44 @@ frame is packed and compared in full, and where the copy made a DELTA the
 two must give the same bank, plan and kept facts.
 
 Such a frame's candidate is itself taken from the bank on screen when only
-menus, text roots, tab sets, fields, dialogs and status fields moved, every
-document lies where it lay, and that bank was built for the same owner,
-surface and features, holds no runs or pictures, and left out no graph the
-terminal could not take, which the bank records but does not keep. Each bank
-keeps every claim whole, where each lane's text and claims began, and the
-features it was built under, so the candidate can be unpacked from it: its
-controls, correlations and their text, its instrument regions, instruments
-with their correlations and units, and series with their correlations and
-samples, its status fields with theirs, and its claims. Each item is
-numbered as a full lowering numbers it, the controls from the candidate's
-first object by place, the instruments from the first identity past the
-controls Desk's shell adds, the instrument regions from the one past the
-candidate's region and the series from its first series, and stamped with
-its snapshot's generation and content epoch. A bank whose DELTA defined or
-dropped controls keeps the identities on screen until the next START, so the
-unpack finds in the bank the place of each identity a parent or correlation
-names. Since no data-graphics root moved, the instruments and series are
-those the snapshot would lower. Each moved root is then lowered alone into
-its place by its lane's own words, a text root's content, a field's label
-and FDC1 content, a tab set's tabs with their labels and shortcuts, or a
-dialog's title, DLG1 content and buttons, packed where the old lay with the
-text after it moved, and it must keep its kind, visibility, rectangle, depth
-and identity, a tab set its count of tabs and a dialog its count of buttons
-shown, so its claim and the check of every later root against the claims
-before it stay as they were on screen. A document's moved menus are planned
-again in their place from the snapshot's records, which must be as many with
-as much text as on screen, and their claims built again by the words the
-full lowering uses. Claims that changed, as a menu opening or closing
-changes them, replace the old ones, the later claims moving with them, only
-when no claim of the fields, dialogs and status fields, whose lanes check
-each rectangle against the claims before it, meets the old or the new, and
-none of those lanes was refused, so each of their checks gives what it gave.
-Any other frame is lowered in full. With the shadow check on, the frame is
-lowered in full as well, and the two candidates, their fields, spans and
-plans, must be the same byte for byte.
+menus, text roots, tab sets, fields, dialogs, status fields and data
+graphics moved, every document lies where it lay, and that bank was built
+for the same owner, surface and features, holds no runs or pictures, and
+left out no graph the terminal could not take, which the bank records but
+does not keep. Each bank keeps every claim whole, where each lane's text and
+claims began, and the features it was built under, so the candidate can be
+unpacked from it: its controls, correlations and their text, its instrument
+regions, instruments with their correlations and units, and series with
+their correlations and samples, its status fields with theirs, and its
+claims. Each item is numbered as a full lowering numbers it, the controls
+from the candidate's first object by place, the instruments from the first
+identity past the controls Desk's shell adds, the instrument regions from
+the one past the candidate's region and the series from its first series,
+and stamped with its snapshot's generation and content epoch. A bank whose
+DELTA defined or dropped controls keeps the identities on screen until the
+next START, so the unpack finds in the bank the place of each identity a
+parent or correlation names. When no data-graphics root moved, the
+instruments and series are those the snapshot would lower; when one did,
+they are lowered again by the instrument lane's own builder, their claims,
+which must be those the bank holds, checked against the base claims as after
+a full lowering, and the frame goes out as a START. Each moved root is then
+lowered alone into its place by its lane's own words, a text root's content,
+a field's label and FDC1 content, a tab set's tabs with their labels and
+shortcuts, or a dialog's title, DLG1 content and buttons, packed where the
+old lay with the text after it moved, and it must keep its kind, visibility,
+rectangle, depth and identity, a tab set its count of tabs and a dialog its
+count of buttons shown, so its claim and the check of every later root
+against the claims before it stay as they were on screen. A document's moved
+menus are planned again in their place from the snapshot's records, which
+must be as many with as much text as on screen, and their claims built again
+by the words the full lowering uses. Claims that changed, as a menu opening
+or closing changes them, replace the old ones, the later claims moving with
+them, only when no claim of the fields, dialogs and status fields, whose
+lanes check each rectangle against the claims before it, meets the old or
+the new, and none of those lanes was refused, so each of their checks gives
+what it gave. Any other frame is lowered in full. With the shadow check on,
+the frame is lowered in full as well, and the two candidates, their fields,
+spans and plans, must be the same byte for byte.
 
 The former LABEL plan, per-binding materializer, and per-cell producer layouts
 were development prototypes and are not part of this contract. Their copied

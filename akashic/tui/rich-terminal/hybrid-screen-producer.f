@@ -10025,18 +10025,22 @@ VARIABLE _RTHP-UB-WHY
     OVER URF-F-DIALOG = OR SWAP URF-F-STATUS-FIELD = OR ;
 
 \ The two snapshots' root facts name the same roots in the same order, and
-\ every root whose facts moved is lowered alone.
+\ every root whose facts moved is lowered alone, or is a data-graphics root,
+\ whose family's instruments and series are lowered again.
+VARIABLE _RTHP-UB-GRAPHS       \ a data-graphics root moved
 : _RTHP-UB-ROOTS?  ( -- flag )
     14 _RTHP-UB-WHY !
     _RTHP-UB-P @ _RTHP-ROOT-P !
     _RTHP-UB-A @ _RTHP-TB.SOURCE-GEN @ _RTHP-UB-P @ _RTHP.SOURCE-GEN @
         _RTHP-ROOT-PAIR? >R _RTHP-UB-NEW ! _RTHP-UB-OLD ! R> 0= IF 0 EXIT THEN
-    15 _RTHP-UB-WHY !
+    15 _RTHP-UB-WHY ! 0 _RTHP-UB-GRAPHS !
     _RTHP-UB-NEW @ _RTHP-ROOT.N @ 0 ?DO
         I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT
         I _RTHP-UB-OLD @ _RTHP-ROOT-RECORD-AT URF-SAME? 0= IF
             I _RTHP-UB-NEW @ _RTHP-ROOT-RECORD-AT URF.FAMILY @
+            DUP URF-F-DATA-GRAPHICS = IF DROP -1 _RTHP-UB-GRAPHS ! ELSE
                 _RTHP-MOVES-ALONE? 0= IF 0 UNLOOP EXIT THEN
+            THEN
         THEN
     LOOP -1 ;
 
@@ -10373,6 +10377,33 @@ VARIABLE _RTHP-UB-IFIRST       \ the candidate's first instrument
     THEN
     _RTHP-UB-IFIRST @ _RTHP-UB-P @ _RTHP.INSTRUMENT-COUNT @ _RTHP-U+?
         0= IF DROP 0 EXIT THEN _RTHP-W-GLYPH-FIRST ! -1 ;
+
+\ When a data-graphics root moved, the candidate's instruments and series
+\ are lowered again by the instrument lane's own builder, every document's,
+\ instead of taken from the bank on screen.  The lane builds their claims
+\ past the candidate's, which must be those the bank holds, so the status
+\ fields' claims after them, and those fields' checks against the claims
+\ before them, stay as they were; the lane's checks of the base claims
+\ against the instruments' follow, as after a full lowering's.  The frame
+\ then goes out as a START, but pays only for the graphs.
+VARIABLE _RTHP-UB-BASE         \ where the instruments' claims begin
+VARIABLE _RTHP-UB-CLAIMS-END   \ where the candidate's claims end
+: _RTHP-UB-GRAPHS?  ( -- flag )
+    _RTHP-UB-P @ _RTHP.BASE-CLAIMS-USED @ _RTHP-UB-BASE !
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @ _RTHP-UB-CLAIMS-END !
+    _RTHP-UB-P @ _RTHP-BUILD-INSTRUMENTS
+    _RTHP-UB-BASE @ _RTHP-UB-P @ _RTHP.BASE-CLAIMS-USED !
+    RTE-S-OK <> IF
+        _RTHP-UB-CLAIMS-END @ _RTHP-UB-P @ _RTHP.CLAIMS-USED ! 0 EXIT
+    THEN
+    _RTHP-UB-P @ _RTHP.CLAIMS-A @ _RTHP-UB-CLAIMS-END @ +
+    _RTHP-UB-P @ _RTHP.CLAIMS-USED @ _RTHP-UB-CLAIMS-END @ -
+    _RTHP-UB-CLAIMS-END @ _RTHP-UB-P @ _RTHP.CLAIMS-USED !
+    _RTHP-UB-P @ _RTHP.CLAIMS-A @ _RTHP-UB-BASE @ +
+    _RTHP-UB-P @ _RTHP.STATIC-BASE-CLAIMS @ _RTHP-UB-BASE @ -
+        COMPARE IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP-BASE-CLAIMS-DISJOINT? 0= IF 0 EXIT THEN
+    _RTHP-UB-P @ _RTHP-BASE-REGION-Z? NIP ;
 
 \ ( end delta -- flag ) The candidate's control text from END moved on by
 \ DELTA bytes, room for a text there that changes length, with every
@@ -11028,9 +11059,12 @@ VARIABLE _RTHP-UB-DIALOGS-UTF8
                 DROP _RTHP-UB-FIELD?
             ELSE DUP URF-F-MENUS = IF
                 DROP _RTHP-UB-MENUS?
+            ELSE DUP URF-F-DIALOG = IF
+                DROP _RTHP-UB-DIALOG?
             ELSE
-                URF-F-DIALOG = IF _RTHP-UB-DIALOG? ELSE _RTHP-UB-STATUS? THEN
-            THEN THEN THEN
+                \ A data-graphics root's instruments are lowered again.
+                URF-F-DATA-GRAPHICS = IF DROP -1 ELSE _RTHP-UB-STATUS? THEN
+            THEN THEN THEN THEN
             0= IF 0 UNLOOP EXIT THEN
             1 _RTHP-UB-MOVED +!
         THEN
@@ -11047,7 +11081,8 @@ VARIABLE _RTHP-UB-DIALOGS-UTF8
     _RTHP-UB-CONTROLS? 0= IF 0 EXIT THEN
     _RTHP-W-SHELL-CONTROLS!
     19 _RTHP-UB-WHY !
-    _RTHP-UB-INSTRUMENTS? 0= IF 0 EXIT THEN
+    _RTHP-UB-GRAPHS @ IF _RTHP-UB-GRAPHS? ELSE _RTHP-UB-INSTRUMENTS? THEN
+        0= IF 0 EXIT THEN
     18 _RTHP-UB-WHY !
     _RTHP-UB-STATICS? 0= IF 0 EXIT THEN
     20 _RTHP-UB-WHY !

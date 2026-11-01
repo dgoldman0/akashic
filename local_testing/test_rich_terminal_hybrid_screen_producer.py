@@ -5057,7 +5057,11 @@ def test_data_graphics_lower_through_one_generic_instrument_family() -> None:
             "DUP RTE-S-OK <> IF", caller.index("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS")
         )
     assert "_RTHP-BUILD-INSTRUMENTS" not in menu_retry
-    assert source.count("_RTHP-BUILD-INSTRUMENTS") == 2
+    # The lane is built by the full lowering's optional instruments, and by
+    # the candidate from the bank on screen when a data-graphics root moved
+    # (FRAMES-FOLLOW-CHANGE 9c.5).
+    assert source.count("_RTHP-BUILD-INSTRUMENTS") == 3
+    assert "_RTHP-BUILD-INSTRUMENTS" in _word(source, "_RTHP-UB-GRAPHS?")
     assert source.count("_RTHP-W-BUILD-OPTIONAL-INSTRUMENTS") == 5
 
     # Opaque provider CAPACITY/UNAVAILABLE strips status first, then explores
