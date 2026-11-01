@@ -1805,7 +1805,17 @@ frame before the change driver.
       kept facts with the full comparison's. A throwaway diagnostic in a
       plain canonical journey found that 10 of the 12 frames whose control
       count changed would follow the facts with roots paired by identity;
-      the other 2 moved a data-graphics root.
+      the other 2 moved a data-graphics root. **Done** on 2026-10-31
+      (2b41d953 the copy by identity; 3c9e1119 the facts' order proved
+      once). In the canonical journey with the shadow check the copy took
+      34 frames, against 26, 8 of them by identity, of the 10 the
+      diagnostic expected; its pairing turned away 11, against 5. The
+      journey sent the same
+      presents, 61 DELTAs and 25 STARTs, made 29,211 comparisons without a
+      difference, 204 of them of a copy, and passed in safe mode with 61
+      DELTAs and 26 STARTs. A typed letter builds in 2.05 million steps,
+      and the typing run with the shadow check made 7,651 comparisons
+      without a difference.
   - **9c.3. The other families' roots.** A moved menu, tab set, dialog,
     field or data-graphics root is lowered alone, as a moved collection or
     status field is.
