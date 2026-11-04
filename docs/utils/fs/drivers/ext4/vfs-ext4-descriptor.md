@@ -34,6 +34,14 @@ the caller-owned target intentionally retains a zero checksum and the caller
 must abort its operation. On success it writes the low 16 bits of the seeded
 CRC.
 
+Inside an open proof scope the loader remembers which group and table base
+verified their checksum in the scope's current generation. A later load of the
+same descriptor in that generation reads the same bytes from the scope's copy,
+so it skips only the checksum; the pointer, span, flag, and counter checks run
+on every load. Any discard of the scope's copies starts a new generation and
+forgets every remembered verification. The memory holds 16 pairs, and a
+forgotten pair is simply verified again.
+
 The parser now delegates its checksum phase to that shared predicate, and the
 group-0 recovery candidate uses the same service after preserving its existing
 pointer-field checks. This removes duplicate CRC algebra and checksum-only

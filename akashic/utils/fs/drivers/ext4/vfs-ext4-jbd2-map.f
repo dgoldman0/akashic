@@ -67,10 +67,21 @@ VARIABLE _EXT4-JMH-CTX
 VARIABLE _EXT4-JMH-KEY
 VARIABLE _EXT4-JMH-SLOT
 
-: _EXT4-JOURNAL-MAP-UNIQUE?  ( physical ctx -- flag )
+\ A journal occupies contiguous physical runs, so the block number itself
+\ would fill one run of adjacent slots and send every lookup that lands in
+\ it probing to the run's end.  Multiplying by an odd 64-bit constant and
+\ taking bits above the low 32 spreads adjacent blocks across the table.
+\ Membership and uniqueness are unchanged; only the first probed slot moves.
+0x5851F42D4C957F2D CONSTANT _EXT4-JMH-MIX
+
+: _EXT4-JMH-START  ( physical ctx -- )
     _EXT4-JMH-CTX ! DUP _EXT4-JMH-KEY !
+    _EXT4-JMH-MIX * 32 RSHIFT
     _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
-    _EXT4-JMH-SLOT !
+    _EXT4-JMH-SLOT ! ;
+
+: _EXT4-JOURNAL-MAP-UNIQUE?  ( physical ctx -- flag )
+    _EXT4-JMH-START
     _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 0 DO
         _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH + @
         _EXT4-JMH-SLOT @ CELLS + DUP @ DUP 0= IF
@@ -85,9 +96,7 @@ VARIABLE _EXT4-JMH-SLOT
     FALSE ;
 
 : _EXT4-JOURNAL-DATA?  ( physical ctx -- flag )
-    _EXT4-JMH-CTX ! DUP _EXT4-JMH-KEY !
-    _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
-    _EXT4-JMH-SLOT !
+    _EXT4-JMH-START
     _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 0 DO
         _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH + @
         _EXT4-JMH-SLOT @ CELLS + @ DUP 0= IF

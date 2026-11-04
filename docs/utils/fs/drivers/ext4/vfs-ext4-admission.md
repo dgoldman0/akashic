@@ -49,14 +49,33 @@ admitted filesystem bounds, journal workspace layout, typed errors, and that
 arena for recovery revoke allocation and indexing. None of these units calls
 back into later filesystem policy.
 
-Most mutable scratch in this unit is private to admission. Four cells remain
+Checked block reads also serve proof scopes. A read-only proof can name one
+metadata block many times: the filesystem-wide owner scan checks every block
+another inode maps, and each check reloads that group's descriptor page and
+bitmap. While `_EXT4-PROOF-SCOPE-OPEN ( ctx -- )` holds a scope open for one
+context, `_EXT4-READ-BLOCK` serves a block the scope has already read from a
+private copy and leaves the same checked-I/O evidence the original read left.
+`_EXT4-PROOF-SCOPE-CLOSE`, a new open, and every write through
+`_EXT4-WRITE-SECTORS` discard all copies and start a new generation, so a scope
+reads each block from media at most once and no copy outlives the scope or a
+write. The copy area is 16 KiB; its slot count follows the mounted block size,
+and a full area evicts its least recently used copy. A miss reads from media,
+so the area's size limits only how much repetition is removed, never what a
+proof can read. The facade opens scopes around the owner scan and around each
+mount authentication. `_EXT4-BYTES=?` and `_EXT4-BYTES-ZERO?` test whole
+aligned cells and use bytes only for an unaligned head, the tail, or two spans
+whose alignments differ.
+
+Most mutable scratch in this unit is private to admission. Five cells remain
 an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
 `_EXT4-IO-VOL` identify the callback-selected checked I/O session, while
 `_EXT4-IO-EXPECTED` and `_EXT4-IO-COMPLETED` preserve write-attempt evidence
-consumed by later durability code. They are implementation state, not public
-API, and remain documented facade coupling rather than a backwards dependency
-into admission. They are outside the bounded CREATE/HTree context pilot; a
-later feature must justify any separate lifetime migration.
+consumed by later durability code. The descriptor unit reads
+`_EXT4-PS-GENERATION` so that a descriptor verified inside a scope is
+forgotten when the scope's copies are. They are implementation state, not
+public API, and remain documented facade coupling rather than a backwards
+dependency into admission. They are outside the bounded CREATE/HTree context
+pilot; a later feature must justify any separate lifetime migration.
 
 Physical extraction does not change the profile, error precedence, or
 cold-source qualification model. Packaging and the real-image harness resolve

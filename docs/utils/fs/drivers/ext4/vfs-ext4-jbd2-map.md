@@ -34,6 +34,14 @@ blocks, protected-authority exclusions, and empty map slot; after a successful
 reservation its only remaining action is the infallible map store. The
 read-only `_EXT4-JOURNAL-DATA?` probe never changes the table.
 
+Both table services begin probing at a mixed slot: the physical block times an
+odd 64-bit constant, shifted right 32 bits and masked to the table size. A
+journal occupies contiguous physical runs, and starting at the block number
+itself filled one run of adjacent slots, so a lookup that landed in the run
+probed to its end; on the canonical fixture every metadata home below the
+journal probed thousands of slots. The mixed start spreads adjacent blocks
+across the table and leaves membership and uniqueness unchanged.
+
 The raw map, membership, and ring helpers are preconditioned internal words:
 they require already admitted and published journal geometry and return no
 `ior`. `_EXT4-JOURNAL-NEXT` advances one position and wraps at `MAXLEN` to

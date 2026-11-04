@@ -7628,6 +7628,67 @@ def test_jbd2_recovery_refuses_physical_read_only_media(
     assert media_sha256 == _sha256(image)
 
 
+def test_ext4_byte_predicates_match_byte_loops(tmp_path: Path) -> None:
+    """Cell-wise compare and zero tests answer exactly as byte loops do.
+
+    Every head alignment of both spans, lengths 0 through 24, zero and
+    patterned contents, and one changed byte at each position from just
+    before the span to just after it.
+    """
+    blank = tmp_path / "byte-predicates.img"
+    blank.write_bytes(bytes(4 * 512))
+    cases = 8 * 8 * sum(2 * (length + 3) for length in range(25))
+    output = run_forth(
+        blank,
+        [
+            "CREATE _BP-A 64 ALLOT",
+            "CREATE _BP-B 64 ALLOT",
+            "VARIABLE _BP-OA VARIABLE _BP-OB VARIABLE _BP-LEN",
+            "VARIABLE _BP-BAD VARIABLE _BP-CASES",
+            (
+                ": _BP-REF-ZERO? ( a len -- flag ) 0 ?DO "
+                "DUP I + C@ IF DROP FALSE UNLOOP EXIT THEN "
+                "LOOP DROP TRUE ;"
+            ),
+            (
+                ": _BP-REF=? ( a b len -- flag ) 0 ?DO "
+                "2DUP I + C@ SWAP I + C@ <> "
+                "IF 2DROP FALSE UNLOOP EXIT THEN LOOP 2DROP TRUE ;"
+            ),
+            ": _BP-SA ( -- a ) _BP-A 8 + _BP-OA @ + ;",
+            ": _BP-SB ( -- b ) _BP-B 8 + _BP-OB @ + ;",
+            (
+                ": _BP-ONE ( -- ) 1 _BP-CASES +! "
+                "_BP-SA _BP-SB _BP-LEN @ _EXT4-BYTES=? "
+                "_BP-SA _BP-SB _BP-LEN @ _BP-REF=? "
+                "<> IF 1 _BP-BAD +! THEN "
+                "_BP-SA _BP-LEN @ _EXT4-BYTES-ZERO? "
+                "_BP-SA _BP-LEN @ _BP-REF-ZERO? "
+                "<> IF 1 _BP-BAD +! THEN ;"
+            ),
+            (
+                ": _BP-SWEEP ( fill changed -- ) "
+                "OVER _BP-A 64 ROT FILL OVER _BP-B 64 ROT FILL _BP-ONE "
+                "_BP-LEN @ 2 + 0 ?DO "
+                "OVER _BP-A 64 ROT FILL OVER _BP-B 64 ROT FILL "
+                "DUP _BP-SA I + 1- C! _BP-ONE LOOP 2DROP ;"
+            ),
+            (
+                ": _BP-RUN ( -- ) 0 _BP-BAD ! 0 _BP-CASES ! "
+                "8 0 DO I _BP-OA ! 8 0 DO I _BP-OB ! "
+                "25 0 DO I _BP-LEN ! 0 7 _BP-SWEEP 90 91 _BP-SWEEP LOOP "
+                "LOOP LOOP ;"
+            ),
+            "_BP-RUN",
+            (
+                f"_BP-BAD @ 0= _BP-CASES @ {cases} = AND "
+                'IF ." EXT4-BYTE-PREDICATES-MATCH" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-BYTE-PREDICATES-MATCH")
+
+
 def test_binding_descriptors_are_valid_and_truthful(
     tmp_path: Path,
 ) -> None:

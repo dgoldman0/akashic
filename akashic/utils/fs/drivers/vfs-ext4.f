@@ -870,6 +870,16 @@ VARIABLE _EXT4-LV-ROOT-BASE
     _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ CMOVE
     0 ;
 
+\ Restore a parent pointer block after a child traversal.  The walk proved
+\ the parent's allocation when it first loaded it and writes nothing, so the
+\ restore only reloads the bytes.
+: _EXT4-RELOAD-LEGACY-POINTER-BLOCK  ( physical-block ctx -- ior )
+    DUP _EXT4-LV-CTX ! _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _EXT4-LV-CTX @ _EXT4-C.BLOCK +
+    _EXT4-LV-CTX @ _EXT4-C.TREE-BLOCK +
+    _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ CMOVE
+    0 ;
+
 : _EXT4-U-POWER  ( base exponent -- value )
     1 SWAP 0 ?DO OVER * LOOP NIP ;
 
@@ -898,7 +908,7 @@ VARIABLE _EXT4-LV-ROOT-BASE
                 THEN
                 \ Recursion owns the shared tree buffer; restore this parent
                 \ only after an actual child traversal, not once per null slot.
-                2 PICK _EXT4-LV-CTX @ _EXT4-LOAD-LEGACY-POINTER-BLOCK
+                2 PICK _EXT4-LV-CTX @ _EXT4-RELOAD-LEGACY-POINTER-BLOCK
                 ?DUP IF >R DROP 2DROP R> UNLOOP EXIT THEN
             ELSE
                 _EXT4-MAP-VALIDATION-LIMIT @ IF
@@ -2517,10 +2527,74 @@ VARIABLE _EXT4-RAB-CTX
     LOOP
     DROP 0 ;
 
+\ The snapshot is a pure function of the witnessed journal tuple, the journal
+\ length, the volume size, the recovery-authority homes it refuses, and its
+\ workspace.  Every checkpoint reloads the mount and would rebuild it from
+\ those same bytes.  When every input equals the last successful build for
+\ this context and the workspace still holds exactly the bytes that build
+\ left, the build would reproduce them, so it is skipped.  Any difference,
+\ including a changed workspace, rebuilds from media.
+\ The 68-byte tuple area is rounded up to a whole cell so the scalar inputs
+\ after it keep cell alignment within the key.
+68 CONSTANT _EXT4-JMM-TUPLE-BYTES
+72 CONSTANT _EXT4-JMM-TUPLE-AREA
+_EXT4-JMM-TUPLE-AREA 13 CELLS + CONSTANT _EXT4-JMM-KEY-BYTES
+CREATE _EXT4-JMM-KEY _EXT4-JMM-KEY-BYTES ALLOT
+CREATE _EXT4-JMM-NOW _EXT4-JMM-KEY-BYTES ALLOT
+VARIABLE _EXT4-JMM-CTX
+VARIABLE _EXT4-JMM-CRC
+VARIABLE _EXT4-JMM-BUF
+
+: _EXT4-JMM-CELL!  ( value index -- )
+    CELLS _EXT4-JMM-TUPLE-AREA + _EXT4-JMM-BUF @ + ! ;
+
+: _EXT4-JMM-FILL  ( ctx buffer -- )
+    DUP _EXT4-JMM-BUF ! _EXT4-JMM-KEY-BYTES 0 FILL
+    DUP _EXT4-C.J.WITNESS-SUPER + _EXT4-SB.JOURNAL-BLOCKS +
+    _EXT4-JMM-BUF @ _EXT4-JMM-TUPLE-BYTES CMOVE
+    DUP _EXT4-C.J.MAXLEN + @ 0 _EXT4-JMM-CELL!
+    DUP _EXT4-C.BLOCKS + @ 1 _EXT4-JMM-CELL!
+    DUP _EXT4-C.BSIZE + @ 2 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.WITNESS-SUPER-BLOCK + @ 3 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.WITNESS-GDT-BLOCK + @ 4 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.WITNESS-GDT-SPAN + @ 5 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.INODE-BITMAP-BLOCK + @ 6 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.BLOCK-BITMAP-BLOCK + @ 7 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.INODE-TABLE-BLOCK + @ 8 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.MAP + @ 9 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.MAP-HASH + @ 10 _EXT4-JMM-CELL!
+    DUP _EXT4-C.J.MAP-HASH-SLOTS + @ 11 _EXT4-JMM-CELL!
+    _EXT4-C.J.MAP-CAPACITY + @ 12 _EXT4-JMM-CELL! ;
+
+: _EXT4-JMM-WORKSPACE-CRC  ( ctx -- crc ior )
+    0xFFFFFFFF _EXT4-CRC-START
+    DUP _EXT4-C.J.MAP + @ OVER _EXT4-C.J.MAXLEN + @ CELLS
+    _EXT4-CRC-ADD ?DUP IF NIP 0 SWAP EXIT THEN
+    DUP _EXT4-C.J.MAP-HASH + @ SWAP _EXT4-C.J.MAP-HASH-SLOTS + @ CELLS
+    _EXT4-CRC-ADD ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-CRC@ 0 ;
+
+: _EXT4-JMM-CURRENT?  ( ctx -- flag )
+    DUP _EXT4-JMM-CTX @ <> IF DROP FALSE EXIT THEN
+    DUP _EXT4-JMM-NOW _EXT4-JMM-FILL
+    _EXT4-JMM-NOW _EXT4-JMM-KEY _EXT4-JMM-KEY-BYTES _EXT4-BYTES=? 0= IF
+        DROP FALSE EXIT
+    THEN
+    _EXT4-JMM-WORKSPACE-CRC IF DROP FALSE EXIT THEN
+    _EXT4-JMM-CRC @ = ;
+
+: _EXT4-JMM-RECORD  ( ctx -- )
+    0 _EXT4-JMM-CTX !
+    DUP _EXT4-JMM-WORKSPACE-CRC IF 2DROP EXIT THEN _EXT4-JMM-CRC !
+    DUP _EXT4-JMM-KEY _EXT4-JMM-FILL
+    _EXT4-JMM-CTX ! ;
+
 : _EXT4-SNAPSHOT-JOURNAL-MAP  ( ctx -- ior )
     DUP _EXT4-JV-CTX ! _EXT4-JM-CTX !
     _EXT4-JM-CTX @ _EXT4-C.J.MAXLEN + @ _EXT4-JM-CTX @
     _EXT4-ENSURE-JOURNAL-WORKSPACE ?DUP IF EXIT THEN
+    _EXT4-JM-CTX @ _EXT4-JMM-CURRENT? IF 0 EXIT THEN
+    0 _EXT4-JMM-CTX !
     _EXT4-JM-CTX @ _EXT4-C.J.MAP + @
     _EXT4-JM-CTX @ _EXT4-C.J.MAXLEN + @ CELLS 0 FILL
     _EXT4-JV-CTX @ _EXT4-C.J.MAP-HASH + @
@@ -2533,6 +2607,7 @@ VARIABLE _EXT4-RAB-CTX
             EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
         THEN
     LOOP
+    _EXT4-JM-CTX @ _EXT4-JMM-RECORD
     0 ;
 
 VARIABLE _EXT4-JA-BUF
@@ -11543,15 +11618,18 @@ _EXT4-MUTATION-PROTOCOL-XT !
     LOOP
     0 ;
 
+\ One walk reads each descriptor page, bitmap, inode-table block, and map
+\ block from media once; the walk itself writes nothing.
 : _EXT4-JFO-SCAN-EXCLUDING-TARGETS  ( -- ior )
+    _EXT4-JFO-CTX @ _EXT4-PROOF-SCOPE-OPEN
     0 _EXT4-JFO-GROUP !
     BEGIN
         _EXT4-JFO-GROUP @ _EXT4-JFO-CTX @ _EXT4-C.GROUPS + @ U<
     WHILE
-        _EXT4-JFO-SCAN-GROUP ?DUP IF EXIT THEN
+        _EXT4-JFO-SCAN-GROUP ?DUP IF _EXT4-PROOF-SCOPE-CLOSE EXIT THEN
         1 _EXT4-JFO-GROUP +!
     REPEAT
-    0 ;
+    _EXT4-PROOF-SCOPE-CLOSE 0 ;
 
 : _EXT4-JFO-SCAN-OTHER-INODES  ( -- ior )
     0 _EXT4-JFO-TARGET-INO-B !
@@ -16940,16 +17018,26 @@ VARIABLE _EXT4-RS-V
 
 \ Complete every persistent validation/allocation before a mount creates its
 \ transient recovery tail.  Checkpoint reloads reuse the same preplan.
-: _EXT4-AUTHENTICATE-REST-PREPLAN  ( ctx -- ior )
+: _EXT4-AUTHENTICATE-REST-STEPS  ( ctx -- ior )
     DUP _EXT4-C.J.STRICT + -1 SWAP !
     DUP _EXT4-VALIDATE-GROUPS ?DUP IF NIP EXIT THEN
     DUP _EXT4-VALIDATE-BACKUPS ?DUP IF NIP EXIT THEN
     DUP _EXT4-AUTHENTICATE-ORPHAN-COUNTS ?DUP IF NIP EXIT THEN
     _EXT4-VALIDATE-JOURNAL ;
 
+\ One authentication reads each block from media once: every group check
+\ reloads the shared descriptor page, and backup and journal checks revisit
+\ the same witness blocks.  A write inside it still discards every copy.
+: _EXT4-AUTHENTICATE-REST-PREPLAN  ( ctx -- ior )
+    DUP _EXT4-PROOF-SCOPE-OPEN
+    _EXT4-AUTHENTICATE-REST-STEPS _EXT4-PROOF-SCOPE-CLOSE ;
+
 : _EXT4-AUTHENTICATE-REST  ( ctx -- ior )
-    DUP _EXT4-AUTHENTICATE-REST-PREPLAN ?DUP IF NIP EXIT THEN
-    _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN ;
+    DUP _EXT4-PROOF-SCOPE-OPEN
+    DUP _EXT4-AUTHENTICATE-REST-STEPS ?DUP IF
+        NIP _EXT4-PROOF-SCOPE-CLOSE EXIT
+    THEN
+    _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN _EXT4-PROOF-SCOPE-CLOSE ;
 
 : _EXT4-RELOAD-AUTHENTICATED  ( ctx vfs -- ior )
     _EXT4-RS-V ! _EXT4-RS-CTX !

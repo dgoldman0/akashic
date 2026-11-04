@@ -470,12 +470,85 @@ VARIABLE _EXT4-IO-REASON
     _EXT4-IO-BACKEND @ 0xFFFFFFFF AND
     _EXT4-IO-FLAGS @ VFS-IOR-D-VOLUME _EXT4-IO-REASON @ VFS-IOR-MAKE ;
 
+\ A read-only proof can name one metadata block many times.  The
+\ filesystem-wide owner scan checks every block that another inode maps, and
+\ each check reloads its group's descriptor block and bitmap; a legacy map
+\ walk also reloads its parent pointer block after every child.  While a
+\ proof scope is open for one context, a block the scope has already read is
+\ served from a private copy instead of the volume, so the proof itself is
+\ unchanged and only its repeated media reads go.  The scope carries nothing
+\ past its own end: opening and closing it discard every copy, and so does
+\ any write through the checked volume path below.  Each scope therefore
+\ reads a block from media at most once, and the next scope reads it again.
+\ The copy area has a fixed byte size; its slot count follows the mounted
+\ block size, and a full area evicts its least recently used copy.
+16 CONSTANT _EXT4-PS-SLOT-MAX
+_EXT4-PS-SLOT-MAX 1024 * CONSTANT _EXT4-PS-BYTES
+CREATE _EXT4-PS-DATA _EXT4-PS-BYTES ALLOT
+CREATE _EXT4-PS-HOME _EXT4-PS-SLOT-MAX CELLS ALLOT
+CREATE _EXT4-PS-USED _EXT4-PS-SLOT-MAX CELLS ALLOT
+VARIABLE _EXT4-PS-CTX
+VARIABLE _EXT4-PS-SLOTS
+VARIABLE _EXT4-PS-BSIZE
+VARIABLE _EXT4-PS-CLOCK
+VARIABLE _EXT4-PS-VICTIM
+\ Each discard starts a new generation, so evidence derived from the copies,
+\ such as a verified descriptor, never outlives the bytes it was derived from.
+VARIABLE _EXT4-PS-GENERATION
+
+\ A slot whose use stamp is zero holds no copy.
+: _EXT4-PS-DISCARD  ( -- )
+    _EXT4-PS-USED _EXT4-PS-SLOT-MAX CELLS 0 FILL
+    0 _EXT4-PS-CLOCK ! 1 _EXT4-PS-GENERATION +! ;
+
+: _EXT4-PS-ACTIVE?  ( ctx -- flag )
+    DUP 0<> SWAP _EXT4-PS-CTX @ = AND ;
+
+: _EXT4-PS-SLOT-DATA  ( slot -- address )
+    _EXT4-PS-BSIZE @ * _EXT4-PS-DATA + ;
+
+: _EXT4-PROOF-SCOPE-OPEN  ( ctx -- )
+    _EXT4-PS-DISCARD
+    DUP _EXT4-C.BSIZE + @ DUP _EXT4-PS-BSIZE !
+    _EXT4-PS-BYTES SWAP / _EXT4-PS-SLOT-MAX MIN _EXT4-PS-SLOTS !
+    _EXT4-PS-CTX ! ;
+
+: _EXT4-PROOF-SCOPE-CLOSE  ( -- )
+    _EXT4-PS-DISCARD
+    0 _EXT4-PS-CTX ! 0 _EXT4-PS-SLOTS ! 0 _EXT4-PS-BSIZE ! ;
+
+\ Return the slot holding BLOCK, or -1.
+: _EXT4-PS-FIND  ( block -- slot )
+    _EXT4-PS-SLOTS @ 0 ?DO
+        I CELLS _EXT4-PS-USED + @ IF
+            DUP I CELLS _EXT4-PS-HOME + @ = IF DROP I UNLOOP EXIT THEN
+        THEN
+    LOOP
+    DROP -1 ;
+
+\ Prefer an empty slot, then the least recently used one.
+: _EXT4-PS-CHOOSE  ( -- slot )
+    0 _EXT4-PS-VICTIM !
+    _EXT4-PS-SLOTS @ 0 ?DO
+        I CELLS _EXT4-PS-USED + @ 0= IF I UNLOOP EXIT THEN
+        I CELLS _EXT4-PS-USED + @
+        _EXT4-PS-VICTIM @ CELLS _EXT4-PS-USED + @ U< IF
+            I _EXT4-PS-VICTIM !
+        THEN
+    LOOP
+    _EXT4-PS-VICTIM @ ;
+
+: _EXT4-PS-TOUCH  ( slot -- )
+    1 _EXT4-PS-CLOCK +!
+    _EXT4-PS-CLOCK @ SWAP CELLS _EXT4-PS-USED + ! ;
+
 : _EXT4-READ-SECTORS  ( dma lba count -- ior )
     DUP _EXT4-IO-EXPECTED !
     _EXT4-IO-VOL @ VOL-READ
     SWAP _EXT4-IO-COMPLETED ! _EXT4-MAP-IOR ;
 
 : _EXT4-WRITE-SECTORS  ( dma lba count -- ior )
+    _EXT4-PS-CTX @ IF _EXT4-PS-DISCARD THEN
     DUP _EXT4-IO-EXPECTED !
     _EXT4-IO-VOL @ VOL-WRITE
     SWAP _EXT4-IO-COMPLETED ! _EXT4-MAP-IOR ;
@@ -548,14 +621,37 @@ VARIABLE _EXT4-UB
 VARIABLE _EXT4-RB-BLOCK
 VARIABLE _EXT4-RB-CTX
 
+\ A copy served inside a proof scope leaves the same checked-I/O evidence
+\ that the successful media read which produced it left.
+: _EXT4-PS-SERVE  ( slot -- )
+    DUP _EXT4-PS-TOUCH _EXT4-PS-SLOT-DATA
+    _EXT4-RB-CTX @ _EXT4-C.BLOCK + _EXT4-PS-BSIZE @ MOVE
+    _EXT4-RB-CTX @ _EXT4-C.SPB + @
+    DUP _EXT4-IO-EXPECTED ! _EXT4-IO-COMPLETED !
+    0 _EXT4-IO-BACKEND ! 0 _EXT4-IO-FLAGS !
+    VFS-R-IO _EXT4-IO-REASON ! ;
+
+: _EXT4-PS-KEEP  ( -- )
+    _EXT4-PS-CHOOSE
+    _EXT4-RB-BLOCK @ OVER CELLS _EXT4-PS-HOME + !
+    DUP _EXT4-PS-TOUCH
+    _EXT4-RB-CTX @ _EXT4-C.BLOCK + SWAP _EXT4-PS-SLOT-DATA
+    _EXT4-PS-BSIZE @ MOVE ;
+
 : _EXT4-READ-BLOCK  ( block ctx -- ior )
     _EXT4-RB-CTX ! _EXT4-RB-BLOCK !
     _EXT4-RB-BLOCK @ _EXT4-RB-CTX @ _EXT4-C.BLOCKS + @ >= IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
+    _EXT4-RB-CTX @ _EXT4-PS-CTX @ = IF
+        _EXT4-RB-BLOCK @ _EXT4-PS-FIND
+        DUP 0< 0= IF _EXT4-PS-SERVE 0 EXIT THEN
+        DROP
+    THEN
     _EXT4-RB-BLOCK @ _EXT4-RB-CTX @ _EXT4-C.SPB + @ *
     _EXT4-RB-CTX @ _EXT4-C.BLOCK + SWAP
-    _EXT4-RB-CTX @ _EXT4-C.SPB + @ _EXT4-READ-SECTORS ;
+    _EXT4-RB-CTX @ _EXT4-C.SPB + @ _EXT4-READ-SECTORS
+    DUP 0= _EXT4-RB-CTX @ _EXT4-PS-CTX @ = AND IF _EXT4-PS-KEEP THEN ;
 
 VARIABLE _EXT4-WB-BUFFER
 VARIABLE _EXT4-WB-BLOCK
@@ -574,13 +670,39 @@ VARIABLE _EXT4-WB-CTX
     _EXT4-WB-BUFFER @ SWAP
     _EXT4-WB-CTX @ _EXT4-C.SPB + @ _EXT4-WRITE-SECTORS ;
 
+\ Both predicates test whole aligned cells and use bytes only for an
+\ unaligned head and the tail; their results are those of a byte loop.
+\ Two spans whose alignments differ compare byte by byte throughout.
+VARIABLE _EXT4-BX-N
+
 : _EXT4-BYTES=?  ( a b len -- flag )
-    0 ?DO
+    _EXT4-BX-N !
+    2DUP XOR 7 AND 0= IF
+        BEGIN _EXT4-BX-N @ 0> OVER 7 AND 0<> AND WHILE
+            2DUP C@ SWAP C@ <> IF 2DROP FALSE EXIT THEN
+            1+ SWAP 1+ SWAP -1 _EXT4-BX-N +!
+        REPEAT
+        _EXT4-BX-N @ 8 / 0 ?DO
+            2DUP @ SWAP @ <> IF 2DROP FALSE UNLOOP EXIT THEN
+            8 + SWAP 8 + SWAP
+        LOOP
+        _EXT4-BX-N @ 7 AND _EXT4-BX-N !
+    THEN
+    _EXT4-BX-N @ 0 ?DO
         2DUP I + C@ SWAP I + C@ <> IF 2DROP FALSE UNLOOP EXIT THEN
     LOOP 2DROP TRUE ;
 
 : _EXT4-BYTES-ZERO?  ( a len -- flag )
-    0 ?DO
+    _EXT4-BX-N !
+    BEGIN DUP 7 AND 0<> _EXT4-BX-N @ 0> AND WHILE
+        DUP C@ IF DROP FALSE EXIT THEN
+        1+ -1 _EXT4-BX-N +!
+    REPEAT
+    _EXT4-BX-N @ 8 / 0 ?DO
+        DUP @ IF DROP FALSE UNLOOP EXIT THEN
+        8 +
+    LOOP
+    _EXT4-BX-N @ 7 AND 0 ?DO
         DUP I + C@ IF DROP FALSE UNLOOP EXIT THEN
     LOOP DROP TRUE ;
 

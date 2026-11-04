@@ -1729,6 +1729,18 @@ decrement at both boundaries, while `FINAL` additionally requires the
 authenticated empty-orphan predicate. Thus neither `FINAL` nor `MORE`
 admission can survive a mismatched first home-write boundary.
 
+Each of those reloads reauthenticates the mount from media without repeating
+work inside itself. One authentication runs in a proof scope (see the
+[admission foundation](ext4/vfs-ext4-admission.md)), so it reads each block
+it needs from media once even though every group check reloads the shared
+descriptor page. The journal-map snapshot is a pure function of the witnessed
+journal tuple, the journal length, the volume size, the recovery-authority
+homes it refuses, and its workspace addresses. When all of those equal the
+last successful build for the same context, and the map and uniqueness table
+still have that build's CRC32C, the reload keeps the snapshot instead of
+rebuilding it entry by entry. Any changed input, or any change to the
+workspace, rebuilds it from media.
+
 Journal release preserves the mounted write-active state. It reuses the active
 guard `G` as an `AKG1`-qualified `AKR1` reset anchor, publishes and flushes the
 empty witnessed primary, then removes the primary witness and flushes it while
@@ -1949,7 +1961,10 @@ For initialized RMW, the exact inode-table home is authenticated
 separately. One filesystem-wide other-inode walk then publishes both
 transaction destinations—the selected data block and inode-table home—and
 refuses either range through another allocated inode's data, extent/legacy map
-metadata, or external-xattr pointer.
+metadata, or external-xattr pointer. Each walk runs in one proof scope, so
+the descriptor pages, bitmaps, inode-table blocks, and map blocks it checks
+are read from media once per walk, and a legacy walk restores a parent pointer
+block after each child without re-proving the parent's allocation.
 The target's generation, locator, complete map, size, link count, flags, and
 external-xattr pointer are reauthenticated after each cache-clobbering scan. A
 stale generation, unwritten extent, unsupported inode flag, cross-block write,
