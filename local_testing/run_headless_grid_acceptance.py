@@ -162,7 +162,7 @@ def main():
             pygame, client, generation=status['generation'], input_enabled=True,
             display_required=status['rich_terminal']['display_required'])
         ready = tui.PROFILES[PROFILE].ready_markers
-        journey = DesktopAcceptanceJourney(ready)
+        journey = DesktopAcceptanceJourney(ready, soundlab=tui.desktop_composes('soundlab'))
         report['final_stage'] = journey.final_stage
         print(f'Desktop journey: {journey.final_stage} stages; {cols}x{rows} cells', flush=True)
         revision = -1

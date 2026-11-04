@@ -303,9 +303,9 @@ DESKTOP_SMOKE_MAX_STEPS = 15_000_000_000
 DESKTOP_SMOKE_TIMEOUT = 420.0
 # The paired dd27f34/29bdfd6 cold physical run reached its first complete
 # retained frame near 395 seconds and completed its eleven-stage Pad/Daybook
-# journey near 607 seconds.  Keep a finite post-boot runway for the current
-# fifteen-stage journey through the ordinary Desk launcher into Sound Lab,
-# without changing either guest step limits or the Desktop smoke watchdog.
+# journey near 607 seconds.  Keep a finite post-boot runway for the canonical
+# journey without changing either guest step limits or the Desktop smoke
+# watchdog.
 DESKTOP_ACCEPTANCE_TIMEOUT = 900.0
 DESKTOP_ACCEPTANCE_COLS = 280
 DESKTOP_ACCEPTANCE_ROWS = 84
@@ -702,14 +702,6 @@ DESK_APPLETS = (
         stable=("Agent",),
     ),
     DeskApplet(
-        "soundlab",
-        "tui/applets/soundlab/soundlab.f",
-        ("tui/applets/soundlab/soundlab.uidl",),
-        "SOUNDLAB-ENTRY",
-        tile=False,
-        note="\\ Sound Lab is a discoverable built-in but does not consume a startup tile.",
-    ),
-    DeskApplet(
         "streams",
         "tui/applets/streams/streams.f",
         ("tui/applets/streams/streams.uidl",),
@@ -722,8 +714,17 @@ DESK_APPLETS = (
     ),
 )
 # Applets Desk runs that the Desktop profile does not compose.  Desk with
-# one of them checks its work on the optional rich terminal.
+# one of them checks its work on the optional rich terminal.  Sound Lab,
+# Observatory and Worlds stay out of the first release.
 ADJACENT_DESK_APPLETS = (
+    DeskApplet(
+        "soundlab",
+        "tui/applets/soundlab/soundlab.f",
+        ("tui/applets/soundlab/soundlab.uidl",),
+        "SOUNDLAB-ENTRY",
+        tile=False,
+        note="\\ Sound Lab is a discoverable built-in but does not consume a startup tile.",
+    ),
     DeskApplet(
         "observatory",
         "tui/applets/observatory/observatory.f",
@@ -954,6 +955,12 @@ def desktop_ready_markers(applets) -> tuple[str, ...]:
 
 def desktop_stable_markers(applets) -> tuple[str, ...]:
     return tuple(marker for applet in applets for marker in applet.stable)
+
+
+def desktop_composes(name: str) -> bool:
+    """Whether the Desktop profile composes the Desk applet NAME."""
+
+    return any(applet.name == name for applet in DESK_APPLETS)
 
 
 def desk_applet(name: str) -> DeskApplet:
@@ -35369,6 +35376,7 @@ def accept_physical_desktop(
             phase_profile=phase_profile,
             phase_profile_max_events=phase_profile_max_events,
             journey=journey,
+            soundlab=desktop_composes("soundlab"),
             safe_mode=safe_mode,
         )
     except PhysicalDesktopAcceptanceError as exc:

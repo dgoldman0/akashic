@@ -3232,6 +3232,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
                 "phase_profile_max_events": 1234,
                 # The canonical journey, not one for Desk with one applet.
                 "journey": None,
+                # The first release's Desktop does not compose Sound Lab.
+                "soundlab": False,
                 # The image boots in safe mode, so the run requires its notice.
                 "safe_mode": "boot",
             },

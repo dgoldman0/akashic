@@ -1975,19 +1975,23 @@ def _soundlab_prompt(
     )
 
 
-def _soundlab_desktop_projection(
+def _exercised_desktop_projection(
     *,
     pad_tab_identity_base: int = 30_000,
     daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
-    frequency: int = 440,
+    taskbar: str = TEST_TASKBAR,
+    extra_lines: tuple[tuple[int, int, str], ...] = (),
 ) -> RichScreenProjection:
+    """The Desktop once Pad's edit and tabs and Daybook's navigation are done,
+    with EXTRA_LINES drawn and TASKBAR as its last row."""
+
     projection = _desktop_projection(
         (4, 4, PAD_ACCEPTANCE_TEXT),
         (1, 190, daybook_date),
-        (44, 190, "SOUND LAB"),
-        (83, 0, TEST_TASKBAR.replace("Sound Lab]", "Sound Lab*]")),
+        *extra_lines,
+        (83, 0, taskbar),
     )
-    projection = replace(
+    return replace(
         projection,
         semantic_collection_claims=tuple(
             replace(claim, content_revision=5)
@@ -2013,6 +2017,20 @@ def _soundlab_desktop_projection(
                 identity_base=pad_tab_identity_base,
             ),
         ),
+    )
+
+
+def _soundlab_desktop_projection(
+    *,
+    pad_tab_identity_base: int = 30_000,
+    daybook_date: str = TEST_DAYBOOK_NEXT_DATE,
+    frequency: int = 440,
+) -> RichScreenProjection:
+    projection = _exercised_desktop_projection(
+        pad_tab_identity_base=pad_tab_identity_base,
+        daybook_date=daybook_date,
+        taskbar=TEST_TASKBAR.replace("Sound Lab]", "Sound Lab*]"),
+        extra_lines=((44, 190, "SOUND LAB"),),
     )
     kinds = ("READOUT",) * 8 + ("METER",) * 2 + ("STATUS",) * 3
     claims = tuple(
@@ -3894,7 +3912,7 @@ def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
             )
         )
 
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.after_present(
         _offer("X", offer_id=1, pad_menu=True),
         1,
@@ -3971,7 +3989,7 @@ def test_daybook_prompt_gate_holds_daybook_alone_modal() -> None:
 
 
 def test_journey_types_the_daybook_task_only_into_its_open_prompt() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = 6
     actions: list[tuple[str, str, int]] = []
     rollover_initial = "2026-12-31"
@@ -4039,6 +4057,7 @@ def test_journey_types_the_daybook_task_only_into_its_open_prompt() -> None:
     assert journey.final_cell_markers == (
         acceptance_runner.CELL_FINAL_STATIC_MARKERS
         + (
+            acceptance_runner.SOUNDLAB_CELL_FINAL_MARKER,
             "2027-01-08",
             mixed_text.visual(mixed_text.DAYBOOK_TASK),
             styled_text.EXAMPLE_LINE,
@@ -4068,7 +4087,7 @@ def test_journey_types_the_daybook_task_only_into_its_open_prompt() -> None:
         acceptance_runner.PAD_DESKTOP_TILE,
         acceptance_runner.PAD_MENU_SIGNATURE,
     )
-    wrong_tile = DesktopAcceptanceJourney(("READY",))
+    wrong_tile = DesktopAcceptanceJourney(("READY",), soundlab=True)
     wrong_tile.stage = 6
     sent = len(actions)
     wrong_tile.after_present(
@@ -4242,7 +4261,7 @@ def test_daybook_acceptance_dates_are_exact_tile_evidence() -> None:
 
 
 def test_final_cell_markers_require_the_acknowledged_daybook_date() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     with pytest.raises(
         PhysicalDesktopAcceptanceError,
         match="no acknowledged Daybook wheel date",
@@ -5519,8 +5538,13 @@ def test_physical_runner_rejects_noncanonical_terminal_geometry(
         )
 
 
-def test_journey_advances_only_across_new_physically_presented_frames() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+def _journey_to_pad_tab_activation(*, soundlab: bool):
+    """Walk the canonical journey through Pad's tab activation at stage 11,
+    which the Desktop with and without Sound Lab share.  Returns the journey,
+    the inputs it sent, its sender, the activated frame's projection and the
+    tab identity base of the handoff."""
+
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=soundlab)
     actions: list[tuple[str, str, int, int]] = []
 
     def sender(method, value, offer, generation):
@@ -5840,6 +5864,13 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     )
     assert progress.milestone == "pad-tab-activated"
     assert not progress.complete
+    return journey, actions, sender, activated_projection, handoff_tab_identity_base
+
+
+def test_journey_advances_only_across_new_physically_presented_frames() -> None:
+    # The Desktop composing Sound Lab: Desk's launcher opens it after Pad.
+    journey, actions, sender, activated_projection, handoff_tab_identity_base = (
+        _journey_to_pad_tab_activation(soundlab=True))
     assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE
     intervening = _offer("X", offer_id=19, pad_menu=True)
     progress = journey.after_present(
@@ -6582,12 +6613,94 @@ def _pointer_frame(
 LARGE_PAD_TABS = ("Untitled*", "/daybook.md", "/notes.txt")
 
 
+def test_journey_without_soundlab_goes_from_pad_to_the_menus_and_the_pointer() -> None:
+    # The first release's Desktop does not compose Sound Lab (decision 35 of
+    # the release plan).  After Pad's tab activation the ordinary menus come
+    # next, from File Explorer, and closing Daybook's menu hands over to File
+    # Explorer's task, which starts the pointer journey.
+    journey, actions, sender, _, handoff_tab_identity_base = (
+        _journey_to_pad_tab_activation(soundlab=False))
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_MENUS_FIRST_STAGE
+    assert actions[-1] == ("send_key", "alt+2", 18, 9)
+
+    def focused(marker: str) -> RichScreenProjection:
+        tasks = ("[1:Akashic Pa]", "[2:File Explo]", "[3:Daybook]")
+        row = " ".join(task[:-1] + "*]" if task[:-1] + "*]" == marker else task
+                       for task in tasks)
+        assert marker in row
+        return _rebase_semantic_control_ids(
+            _exercised_desktop_projection(
+                pad_tab_identity_base=handoff_tab_identity_base, taskbar=row),
+            90_000,
+        )
+
+    fe_marker = acceptance_runner.FEXPLORER_FOCUS_MARKER
+    for offer_id, marker, open_key, milestone in (
+        (37, fe_marker, None, "fexplorer-view-focused"),
+        (38, fe_marker, "fexplorer-view", "fexplorer-view-open"),
+        (39, fe_marker, None, "fexplorer-view-closed"),
+        (40, DAYBOOK_FOCUS_MARKER, None, "daybook-go-focused"),
+        (41, DAYBOOK_FOCUS_MARKER, "daybook-go", "daybook-go-open"),
+        (42, DAYBOOK_FOCUS_MARKER, None, "daybook-go-closed"),
+    ):
+        if milestone == "daybook-go-closed":
+            # The handover checks that Pad's and Daybook's exercised state
+            # came through the menus, as Sound Lab's restore stage does.
+            lost = _rebase_semantic_control_ids(
+                _exercised_desktop_projection(
+                    pad_tab_identity_base=handoff_tab_identity_base,
+                    daybook_date=TEST_DAYBOOK_INITIAL_DATE,
+                    taskbar=focused(marker).row_text(acceptance_runner.CANONICAL_DESKTOP_ROWS - 1),
+                ),
+                90_000,
+            )
+            with pytest.raises(PhysicalDesktopAcceptanceError,
+                               match="Daybook navigation state"):
+                journey.after_present(
+                    _ordinary_menus_offer(offer_id * 100 + 1, focus_marker=marker),
+                    9, lost, sender)
+        # No Sound Lab instruments are on screen, and none are asked for.
+        progress = journey.after_present(
+            _ordinary_menus_offer(offer_id * 100 + 1, focus_marker=marker,
+                                  open_key=open_key),
+            9,
+            focused(marker),
+            sender,
+        )
+        assert progress.milestone == milestone
+        assert not progress.complete
+    assert journey.stage == acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
+    button = TEST_TASKBAR.index(acceptance_runner.FEXPLORER_TASKBAR_BUTTON)
+    assert actions[-7:] == [
+        ("send_key", "alt+2", 18, 9),
+        ("activate_ordinary_menu", "fexplorer-view", 3701, 9),
+        ("close_ordinary_menu", "fexplorer-view", 3801, 9),
+        ("send_key", "alt+3", 3901, 9),
+        ("activate_ordinary_menu", "daybook-go", 4001, 9),
+        ("close_ordinary_menu", "daybook-go", 4101, 9),
+        ("pointer_click", f"{button + 1},83", 4201, 9),
+    ]
+
+
+def test_final_cell_evidence_names_sound_lab_only_when_the_desktop_composes_it() -> None:
+    for soundlab in (False, True):
+        journey = DesktopAcceptanceJourney(("READY",), soundlab=soundlab)
+        journey._daybook_wheel_date = TEST_DAYBOOK_NEXT_DATE
+        journey._pointer_text_key = 1
+        journey._mixed_daybook_text = "task"
+        journey._followed_text = "followed"
+        journey._picture_shown = True
+        markers = journey.final_cell_markers
+        assert (acceptance_runner.SOUNDLAB_CELL_FINAL_MARKER in markers) == soundlab
+        assert acceptance_runner.PAD_FOCUS_MARKER in markers
+
+
 @pytest.mark.parametrize("semantic_status", [False, True])
 def test_pointer_journey_drives_prompt_editor_readout_and_calendar(semantic_status) -> None:
     def build_frame(*args, **kwargs):
         return _pointer_frame(*args, semantic_status=semantic_status, **kwargs)
 
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     journey.frame_barrier = 100
     journey._daybook_next_date = TEST_DAYBOOK_NEXT_DATE
@@ -6959,7 +7072,7 @@ def _characters_before(text: str, offset: int) -> int:
 
 
 def test_mixed_text_journey_types_clicks_and_adds_a_daybook_task() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_MIXED_LINE_END_STAGE
     journey.frame_barrier = 300
     journey._pointer_text_key = 15
@@ -7198,7 +7311,7 @@ def test_the_sample_document_is_the_one_previewed() -> None:
 
 
 def test_document_journey_previews_the_sample_rich_then_goes_back_to_details() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE
     journey.frame_barrier = 450
     actions: list[tuple[str, str, int]] = []
@@ -7250,7 +7363,7 @@ def test_document_journey_previews_the_sample_rich_then_goes_back_to_details() -
     ),
 )
 def test_document_journey_refuses_what_is_not_the_sample(frame, cell, message) -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_DOCUMENT_PREVIEW_STAGE
     journey.frame_barrier = 450
 
@@ -7270,7 +7383,7 @@ def test_the_sample_picture_facts_are_its_own() -> None:
 
 
 def test_picture_journey_previews_the_sample_rich_over_what_cell_says_it_is() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE
     journey.frame_barrier = 450
     actions: list[tuple[str, str, int]] = []
@@ -7341,7 +7454,7 @@ def test_picture_journey_previews_the_sample_rich_over_what_cell_says_it_is() ->
     ),
 )
 def test_picture_journey_refuses_what_is_not_the_preview(stage, frame, cell, message) -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = stage
     journey.frame_barrier = 450
     actions: list[tuple[str, str]] = []
@@ -7400,7 +7513,7 @@ def _keyed(key: int, runs) -> tuple[tuple[int, int, int, int], ...]:
 
 
 def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_FOCUS_STAGE
     journey.frame_barrier = 500
     journey._pointer_text_key = 15
@@ -7492,7 +7605,7 @@ def test_styled_text_journey_opens_markdown_and_follows_its_link() -> None:
 
 
 def test_styled_text_journey_refuses_missing_runs_and_leaked_semantics() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_STYLED_NOTES_STAGE
     journey.frame_barrier = 500
     journey._pad_pointer_bounds = _pad_editor_bounds()
@@ -7539,7 +7652,7 @@ def test_styled_text_journey_refuses_missing_runs_and_leaked_semantics() -> None
     ),
 )
 def test_mixed_text_journey_refuses_wrong_results(stage, frame, message) -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = stage
     journey.frame_barrier = 300
     journey._pointer_text_key = 15
@@ -7773,7 +7886,7 @@ def _also_inactive(projection: RichScreenProjection, identity: ControlIdentity):
     ),
 )
 def test_pointer_journey_refuses_wrong_results(stage, setup, frame, message) -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = stage
     journey._pad_tabset_before_pointer_open = acceptance_runner._tabset_state(
         acceptance_runner._canonical_pad_tabset_claim(_pointer_frame(FEXPLORER_BUTTON))
@@ -7821,7 +7934,7 @@ def test_pointer_journey_refuses_wrong_results(stage, setup, frame, message) -> 
      "frequency changed while it rendered"),
 ))
 def test_soundlab_prompt_refuses_wrong_results(stage, frame, message) -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = stage
     journey._soundlab_frequency_before = 440
     journey._soundlab_frequency = 880
@@ -7835,7 +7948,7 @@ def test_soundlab_prompt_refuses_wrong_results(stage, frame, message) -> None:
 
 
 def test_owed_click_release_precedes_any_other_input() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
     journey._soundlab_frequency = 880
     journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
@@ -7894,7 +8007,7 @@ def test_owed_click_release_precedes_any_other_input() -> None:
         ("item_scroll", _table_value(1), 3),
     ]
 
-    other = DesktopAcceptanceJourney(("READY",))
+    other = DesktopAcceptanceJourney(("READY",), soundlab=True)
     other.stage = acceptance_runner.DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
     with pytest.raises(PhysicalDesktopAcceptanceError, match="cannot owe"):
         other.after_present(
@@ -7910,7 +8023,7 @@ def test_file_explorer_task_waits_for_soundlab_notice_to_end() -> None:
     identity, and the guest drops a press it reads after that frame, so the
     press on File Explorer's task waits until no notice shows."""
 
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
     journey._soundlab_frequency = 880
     journey._soundlab_landmarks_before = acceptance_runner._soundlab_landmarks(
@@ -7934,7 +8047,7 @@ def test_file_explorer_task_waits_for_soundlab_notice_to_end() -> None:
 
 
 def test_owed_drag_finishes_its_move_and_release_before_other_input() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_RENAME_PROMPT_STAGE
     actions: list[tuple[str, str, int]] = []
     statuses = {
@@ -8354,7 +8467,7 @@ def test_canonical_launcher_needs_the_shells_modal_scope(change, message) -> Non
     def sender(*_args):
         raise AssertionError("no input may be sent")
 
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE
     projection = _desk_launcher_projection("Akashic Pad", modal=change != "base")
     if change == "no-shell":
@@ -8366,7 +8479,7 @@ def test_canonical_launcher_needs_the_shells_modal_scope(change, message) -> Non
 
 
 def test_pad_edit_marker_and_revision_must_share_one_matched_text_area_root() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     actions = []
 
     def sender(method, value, offer, generation):
@@ -8426,7 +8539,7 @@ def test_pad_edit_marker_and_revision_must_share_one_matched_text_area_root() ->
 
 
 def test_journey_rejects_multiple_initial_pad_tabs() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     projection = _projection("READY")
     projection = replace(
         projection,
@@ -8453,7 +8566,7 @@ def test_journey_rejects_multiple_initial_pad_tabs() -> None:
 
 def test_journey_activates_pad_menu_when_initial_frame_is_already_focused(
 ) -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     actions = []
 
     def sender(method, value, offer, generation):
@@ -8500,7 +8613,7 @@ def test_journey_mutation_markers_are_distinct_single_scalars() -> None:
 
 
 def test_journey_never_routes_input_from_background_popup_or_prompt() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     calls = []
 
     def sender(method, value, offer, generation):
@@ -8579,7 +8692,7 @@ def test_journey_never_routes_input_from_background_popup_or_prompt() -> None:
 
 
 def test_journey_cannot_cross_session_lineage() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     calls = []
 
     def sender(method, value, offer, generation):
@@ -8607,7 +8720,7 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
     def sender(_method, _value, _offer, _generation):
         return "progress"
 
-    pad = DesktopAcceptanceJourney(("READY",))
+    pad = DesktopAcceptanceJourney(("READY",), soundlab=True)
     pad.after_present(
         _offer("X", offer_id=1, pad_menu=True),
         1,
@@ -8634,7 +8747,7 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
             sender,
         )
 
-    daybook = DesktopAcceptanceJourney(("READY",))
+    daybook = DesktopAcceptanceJourney(("READY",), soundlab=True)
     daybook.after_present(
         _offer("X", offer_id=1, pad_menu=True),
         1,
@@ -8683,7 +8796,7 @@ def test_journey_rejects_preexisting_mutation_markers() -> None:
 
 
 def test_backpressured_action_retries_against_same_acknowledged_frame() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     statuses = iter(("backpressured", "progress", "progress"))
     calls = []
 
@@ -8719,7 +8832,7 @@ def test_backpressured_action_retries_against_same_acknowledged_frame() -> None:
 
 def test_backpressured_file_activation_reauthorizes_from_qualifying_new_frame(
 ) -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     activation_statuses = iter(("backpressured", "progress"))
     calls = []
     requests = []
@@ -9884,7 +9997,7 @@ def test_soundlab_landmark_cells_match_the_terminal_lines() -> None:
 
 
 def test_soundlab_rerender_refuses_a_pitch_mark_that_did_not_move() -> None:
-    journey = DesktopAcceptanceJourney(("READY",))
+    journey = DesktopAcceptanceJourney(("READY",), soundlab=True)
     journey.stage = acceptance_runner.DESKTOP_ACCEPTANCE_SOUNDLAB_RENDERED_STAGE
     journey._soundlab_frequency = 880
     journey._require_exercised_state_survives = lambda _projection: None

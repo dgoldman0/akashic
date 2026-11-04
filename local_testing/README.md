@@ -928,19 +928,22 @@ qualifies physical UART or panel completion, reset/resize, persistence, or
 sustained cadence. The physical `accept` journey is a heavyweight sequential
 gate and remains subject to the repository resource-approval rules.
 
-The canonical `accept` journey has 22 stages. After Sound Lab's instruments
-become live (stage 15), the journey continues:
-
-1. Focus File Explorer, open its ordinary View menu, and close it.
-2. Focus Daybook, open its Go menu, and close it.
-3. Restore Sound Lab focus and require the exercised Pad and Daybook state.
-
-Each menu is opened through its exact acknowledged hit target and closed with
-Escape against its complete acknowledged popup. The run records 18 milestones
-and 21 revision-bound inputs. These stages were first run through an
-untracked wrapper, `physical_menu_acceptance.py`; the September 12–17
-evidence ledgers cite that wrapper as provenance. The journey is now built
-into the tracked harness, so no wrapper is needed.
+The canonical `accept` journey has 68 stages. Stages 1-11 drive Desk, Pad's
+File menu, an edit, a Daybook task and Pad's tabs. Stages 16-21 focus File
+Explorer, open its ordinary View menu and close it, then do the same with
+Daybook's Go menu; each menu is opened through its exact acknowledged hit
+target and closed with Escape against its complete acknowledged popup.
+Stages 28-68 are the pointer journey through File Explorer, Pad and Daybook,
+text that mixes scripts in Pad and Daybook, File Explorer's document and
+picture previews, and Pad's Markdown link. Stages 12-15 and 22-27 belong to
+Sound Lab and run only when the Desktop composes it: Desk's launcher opens
+it, its instruments go live, and its exact-value prompt sets and renders a
+new frequency. The first release's Desktop does not compose Sound Lab
+(decision 35 of fantasy-engine's release plan), so its journey goes from
+stage 11 to the menus and from the menus to stage 28. The menu stages were
+first run through an untracked wrapper, `physical_menu_acceptance.py`; the
+September 12–17 evidence ledgers cite that wrapper as provenance. The
+journey is now built into the tracked harness, so no wrapper is needed.
 
 Run the regression gate through the guarded launcher. It selects the native
 simulator, stops the process group at the 900-second watchdog or 3.5 GiB

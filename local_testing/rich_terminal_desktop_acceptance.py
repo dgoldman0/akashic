@@ -161,8 +161,9 @@ DAYBOOK_WHEEL_DAYS = 7
 # The journey ends in Pad, which has just followed a Markdown link.
 CELL_FINAL_STATIC_MARKERS = (
     PAD_FOCUS_MARKER,
-    "SOUND LAB",
 )
+# What CELL's final frame shows of Sound Lab when the Desktop composes it.
+SOUNDLAB_CELL_FINAL_MARKER = "SOUND LAB"
 # Pad's Open prompt, which Ctrl+O shows in its tile.
 PAD_OPEN_PROMPT_MARKER = "Open:"
 # The sample picture the Desktop image keeps in its root directory, and the
@@ -253,10 +254,17 @@ DESKTOP_ACCEPTANCE_PAD_TAB_STAGE = 11
 DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE = 12
 DESKTOP_ACCEPTANCE_LAUNCHER_END_STAGE = 13
 DESKTOP_ACCEPTANCE_SOUNDLAB_SELECTED_STAGE = 14
-# Sound Lab's instruments are live at stage 15.  Stages 16-21 then open and
-# close File Explorer's View and Daybook's Go menus through their acknowledged
-# hit maps; stage 22 restores Sound Lab focus with all exercised state intact.
+# Stages 12-15 and 22-27 are Sound Lab's, and run only when the Desktop
+# composes it; the first release's Desktop does not (decision 35 of the
+# release plan).  Without them, stage 11 hands over to the menus at 16, and
+# the menus to the pointer journey at 28.  With them, Desk's launcher opens
+# Sound Lab, whose instruments are live at stage 15.  Stages 16-21 open and
+# close File Explorer's View and Daybook's Go menus through their
+# acknowledged hit maps; stage 22 restores Sound Lab focus with all exercised
+# state intact.
 DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE = 15
+DESKTOP_ACCEPTANCE_MENUS_FIRST_STAGE = 16
+DESKTOP_ACCEPTANCE_MENUS_LAST_STAGE = 21
 # Stage 22 proves Sound Lab and the exercised state after the ordinary menus.
 # Sound Lab's exact-value prompt then sets its frequency: activating the
 # Frequency field opens the prompt (23), Ctrl+A selects the value it holds
@@ -8962,11 +8970,12 @@ class FrameBoundJourney:
 
 
 class DesktopAcceptanceJourney(FrameBoundJourney):
-    """The canonical journey across Desk, Pad, File Explorer, Daybook, and
-    Sound Lab."""
+    """The canonical journey across Desk, Pad, File Explorer and Daybook, and
+    through Sound Lab when SOUNDLAB says the Desktop composes it."""
 
-    def __init__(self, ready_markers: tuple[str, ...]):
+    def __init__(self, ready_markers: tuple[str, ...], *, soundlab: bool = False):
         super().__init__(ready_markers)
+        self._soundlab = soundlab
         self._pad_area_before_edit: _CollectionStates | None = None
         self._pad_area_after_edit: _CollectionStates | None = None
         self._daybook_grid_before_navigation: _CollectionStates | None = None
@@ -9022,7 +9031,8 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             raise PhysicalDesktopAcceptanceError(
                 "final CELL evidence has no acknowledged rich picture"
             )
-        return CELL_FINAL_STATIC_MARKERS + (
+        sound_lab = (SOUNDLAB_CELL_FINAL_MARKER,) if self._soundlab else ()
+        return CELL_FINAL_STATIC_MARKERS + sound_lab + (
             self._daybook_wheel_date,
             # Daybook's task that mixes scripts, as its cells show it.
             mixed_text.visual(self._mixed_daybook_text),
@@ -9033,23 +9043,55 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             FEXPLORER_PICTURE_FACTS,
         )
 
+    def _require_soundlab_live(self, projection: RichScreenProjection) -> None:
+        """Sound Lab's instruments stay live while it is composed."""
+
+        if self._soundlab:
+            _require_soundlab_desktop_semantics(projection)
+
+    def _fexplorer_task_press(
+        self,
+        projection: RichScreenProjection,
+    ) -> tuple[str, str]:
+        """The press on File Explorer's taskbar task that starts the pointer
+        journey: its semantic task where the taskbar has one, else a click."""
+
+        column, row = _taskbar_button_cell(
+            projection,
+            FEXPLORER_TASKBAR_BUTTON,
+        )
+        if not projection.semantic_taskbar_claims:
+            return "pointer_click", f"{column},{row}"
+        matches = [task for bar in projection.semantic_taskbar_claims for task in bar.tasks
+                   if task.kind is ControlKind.TASK and
+                   task.bounds.left <= column < task.bounds.right and
+                   task.bounds.top <= row < task.bounds.bottom]
+        if len(matches) != 1:
+            raise PhysicalDesktopAcceptanceError("canonical taskbar click has ambiguous semantic authority")
+        target = matches[0].identity
+        return (
+            "activate_shell_task",
+            f"{target.owner_id},{target.owner_generation},{target.control_id}",
+        )
+
     def _require_exercised_state_survives(
         self,
         projection: RichScreenProjection,
     ) -> None:
-        """Keep the accepted Pad/Daybook state live after Sound Lab opens."""
+        """Keep the accepted Pad/Daybook state live once the ordinary menus
+        have run, and while Sound Lab opens when the Desktop composes it."""
 
         expected_tabset = self._pad_tabset_after_activation
         if expected_tabset is None:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame has no acknowledged activated Pad "
+                "the frame has no acknowledged activated Pad "
                 "tab state"
             )
         tabset = _canonical_pad_tabset_claim(projection)
         current_tabset = _tabset_state(tabset)
         if current_tabset != expected_tabset:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame did not preserve the exercised Pad "
+                "the frame did not preserve the exercised Pad "
                 "two-tab signature graph, root bounds, and activated original "
                 f"tab: expected={expected_tabset!r} "
                 f"observed={current_tabset!r}"
@@ -9057,7 +9099,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
 
         if self._pad_area_after_tab_activation is None:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame has no acknowledged activated Pad "
+                "the frame has no acknowledged activated Pad "
                 "editor state"
             )
         pad_claims = _collection_claims_preserving_state(
@@ -9069,13 +9111,13 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         )
         if len(pad_claims) != 1:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame did not preserve the exercised Pad "
+                "the frame did not preserve the exercised Pad "
                 "editor state and accepted text across retained replacement"
             )
 
         if self._daybook_grid_after_navigation is None:
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame has no acknowledged navigated Daybook "
+                "the frame has no acknowledged navigated Daybook "
                 "state"
             )
         if (
@@ -9097,7 +9139,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             != 1
         ):
             raise PhysicalDesktopAcceptanceError(
-                "final Sound Lab frame did not preserve the exercised "
+                "the frame did not preserve the exercised "
                 "Daybook navigation state across retained replacement"
             )
 
@@ -9489,10 +9531,16 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                 )
                 self._pad_tabset_after_activation = current_tabset
                 milestone = self._milestone("pad-tab-activated")
+                if self._soundlab:
+                    # Desk's launcher opens Sound Lab.
+                    key, stage = "alt+h", DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE
+                else:
+                    # File Explorer takes focus for the first menu.
+                    key, stage = "alt+2", DESKTOP_ACCEPTANCE_MENUS_FIRST_STAGE
                 self._send(
                     "send_key",
-                    "alt+h",
-                    DESKTOP_ACCEPTANCE_LAUNCHER_OPEN_STAGE,
+                    key,
+                    stage,
                     offer,
                     generation,
                     sender,
@@ -9568,16 +9616,16 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             self._send(
                 "send_key",
                 "alt+2",
-                DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE + 1,
+                DESKTOP_ACCEPTANCE_MENUS_FIRST_STAGE,
                 offer,
                 generation,
                 sender,
             )
             return JourneyProgress(milestone)
         if (
-            DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE
-            < self.stage
-            < DESKTOP_ACCEPTANCE_SOUNDLAB_RESTORED_STAGE
+            DESKTOP_ACCEPTANCE_MENUS_FIRST_STAGE
+            <= self.stage
+            <= DESKTOP_ACCEPTANCE_MENUS_LAST_STAGE
         ):
             return self._ordinary_menu_stage(
                 offer,
@@ -9641,10 +9689,6 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
                     or landmarks.pitch == before.pitch):
                 raise PhysicalDesktopAcceptanceError(
                     "Sound Lab's pitch mark did not move with its new frequency")
-            column, row = _taskbar_button_cell(
-                projection,
-                FEXPLORER_TASKBAR_BUTTON,
-            )
             # The render's notice ends in a frame of its own, which gives
             # every control a new identity.  The guest drops a press it reads
             # after that frame, since the press names a control that frame no
@@ -9652,17 +9696,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
             if any(claim.content.notice for claim in projection.semantic_dialog_claims):
                 return self._wait("Sound Lab's notice to end before File Explorer's task")
             milestone = self._milestone("soundlab-rerendered")
-            method, value = "pointer_click", f"{column},{row}"
-            if projection.semantic_taskbar_claims:
-                matches = [task for bar in projection.semantic_taskbar_claims for task in bar.tasks
-                           if task.kind is ControlKind.TASK and
-                           task.bounds.left <= column < task.bounds.right and
-                           task.bounds.top <= row < task.bounds.bottom]
-                if len(matches) != 1:
-                    raise PhysicalDesktopAcceptanceError("canonical taskbar click has ambiguous semantic authority")
-                target = matches[0].identity
-                method = "activate_shell_task"
-                value = f"{target.owner_id},{target.owner_generation},{target.control_id}"
+            method, value = self._fexplorer_task_press(projection)
             self._send(
                 method,
                 value,
@@ -9835,13 +9869,13 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         """Open and close File Explorer View, then Daybook Go, while live.
 
         Each menu takes three acknowledged frames: focused with the menu
-        closed, open with its authored popup, then closed again.  Instrument
-        semantics must stay live throughout, and both popups must paint
-        above their ordinary content.
+        closed, open with its authored popup, then closed again.  Sound
+        Lab's instruments, when it is composed, must stay live throughout,
+        and both popups must paint above their ordinary content.
         """
 
-        _require_soundlab_desktop_semantics(projection)
-        phase = self.stage - DESKTOP_ACCEPTANCE_SOUNDLAB_LIVE_STAGE
+        self._require_soundlab_live(projection)
+        phase = self.stage - DESKTOP_ACCEPTANCE_MENUS_FIRST_STAGE + 1
         capture = ORDINARY_MENU_CAPTURES[
             "fexplorer-view" if phase <= 3 else "daybook-go"
         ]
@@ -9852,17 +9886,23 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         if bool(menu.state & ControlState.OPEN) != (local_phase == 2):
             return JourneyProgress()
         _require_ordinary_menu_state(offer, capture, local_phase == 2)
+        next_stage = self.stage + 1
         if local_phase == 1:
             method, value, suffix = "activate_ordinary_menu", capture.key, "focused"
         elif local_phase == 2:
             method, value, suffix = "close_ordinary_menu", capture.key, "open"
+        elif phase == 3:
+            method, value, suffix = "send_key", "alt+3", "closed"
+        elif self._soundlab:
+            method, value, suffix = "send_key", "alt+6", "closed"
         else:
-            method, value, suffix = (
-                "send_key",
-                "alt+3" if phase == 3 else "alt+6",
-                "closed",
-            )
-        self._send(method, value, self.stage + 1, offer, generation, sender)
+            # Without Sound Lab, File Explorer's task starts the pointer
+            # journey once Daybook's menu has closed and the exercised Pad
+            # and Daybook state has come through the menus.
+            self._require_exercised_state_survives(projection)
+            method, value = self._fexplorer_task_press(projection)
+            suffix, next_stage = "closed", DESKTOP_ACCEPTANCE_FEXPLORER_CLICKED_STAGE
+        self._send(method, value, next_stage, offer, generation, sender)
         return JourneyProgress(self._milestone(f"{capture.key}-{suffix}"))
 
     def _pad_pointer_claim(
@@ -9899,10 +9939,10 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         moves its date a week.  Residual cells take raw pointer input; text
         roots take STX1 positions and scrolls from the viewer's own layout,
         and item views take item events at the viewer's own item layout.
-        Sound Lab stays live throughout.
+        Sound Lab, when composed, stays live throughout.
         """
 
-        _require_soundlab_desktop_semantics(projection)
+        self._require_soundlab_live(projection)
         rename = _tile_prompt(projection, RENAME_PROMPT_LABEL, FEXPLORER_DESKTOP_TILE)
         if rename is not None:
             # The rename prompt holds File Explorer alone modal.
@@ -10479,7 +10519,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         to the agenda.
         """
 
-        _require_soundlab_desktop_semantics(projection)
+        self._require_soundlab_live(projection)
         daybook_prompt = _tile_prompt(
             projection,
             DAYBOOK_PROMPT_MARKER,
@@ -10833,7 +10873,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         Details tab then brings the table back for the picture.
         """
 
-        _require_soundlab_desktop_semantics(projection)
+        self._require_soundlab_live(projection)
         focused = _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
         bounds = _desktop_tile_bounds(projection, FEXPLORER_DESKTOP_TILE)
         if self.stage == DESKTOP_ACCEPTANCE_DOCUMENT_FOCUS_STAGE:
@@ -10942,7 +10982,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         is exercised to the end, so the last frames carry it too.
         """
 
-        _require_soundlab_desktop_semantics(projection)
+        self._require_soundlab_live(projection)
         focused = _taskbar_has_focus(projection, FEXPLORER_FOCUS_MARKER, legacy_row=True)
         bounds = _desktop_tile_bounds(projection, FEXPLORER_DESKTOP_TILE)
         if self.stage == DESKTOP_ACCEPTANCE_PICTURE_FOCUS_STAGE:
@@ -11034,7 +11074,7 @@ class DesktopAcceptanceJourney(FrameBoundJourney):
         text areas stay rich and inactive beneath it.
         """
 
-        _require_soundlab_desktop_semantics(projection)
+        self._require_soundlab_live(projection)
         pad_prompt = _tile_prompt(projection, PAD_OPEN_PROMPT_MARKER, PAD_DESKTOP_TILE)
         if pad_prompt is not None:
             _require_tile_prompt(
@@ -12406,10 +12446,12 @@ def run_physical_desktop_acceptance(
     phase_profile: bool = False,
     phase_profile_max_events: int = GUEST_PHASE_PROFILE_DEFAULT_MAX_EVENTS,
     journey: FrameBoundJourney | None = None,
+    soundlab: bool = False,
     safe_mode: str | None = None,
 ) -> PhysicalDesktopAcceptanceEvidence:
     """Run and record a reference-sink journey: the canonical one across Desk,
-    Pad, and Daybook, or JOURNEY, such as one for Desk with a single applet.
+    Pad, and Daybook, through Sound Lab when SOUNDLAB says the Desktop
+    composes it, or JOURNEY, such as one for Desk with a single applet.
     SAFE_MODE is why the guest was asked to be in safe mode, "boot" or
     "config" (its system settings), or None: some frame before the journey
     ends must then show the warning notice that says so for that reason, in
@@ -12561,7 +12603,7 @@ def run_physical_desktop_acceptance(
         # changes from it.
         composed_frame = None
         if journey is None:
-            journey = DesktopAcceptanceJourney(tuple(ready_markers))
+            journey = DesktopAcceptanceJourney(tuple(ready_markers), soundlab=soundlab)
         journey.cell_pixels = (cell_width, cell_height)
         frames: list[PresentedFrameEvidence] = []
         inputs: list[AcceptedInputEvidence] = []
