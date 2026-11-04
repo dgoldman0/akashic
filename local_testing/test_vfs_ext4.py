@@ -9057,7 +9057,7 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
             "_JST-HASH _JST-CTX _EXT4-C.J.MAP-HASH + !",
             "32 _JST-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
             "-1 _JST-CTX _EXT4-C.J.WRITER-CURRENT + !",
-            "900 _JST-HASH 900 31 AND CELLS + !",
+            "900 _JST-CTX _EXT4-JOURNAL-MAP-UNIQUE? DROP",
             (
                 "_JST-BYTES 2 CELLS + A-XMEM ARENA-NEW THROW "
                 "CONSTANT _JST-ARENA"
