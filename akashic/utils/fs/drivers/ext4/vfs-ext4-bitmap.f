@@ -139,6 +139,72 @@ VARIABLE _EXT4-LIB-STORED
     THEN
     _EXT4-LIB-HOME @ 0 ;
 
+\ =====================================================================
+\  Lazy BLOCK_UNINIT bitmaps
+\ =====================================================================
+
+VARIABLE _EXT4-UB-GROUP
+VARIABLE _EXT4-UB-BUF
+VARIABLE _EXT4-UB-CTX
+VARIABLE _EXT4-UB-FIRST
+VARIABLE _EXT4-UB-COUNT
+VARIABLE _EXT4-UB-SPAN
+
+\ Mark the part of one metadata interval that falls inside the group.
+: _EXT4-UB-MARK  ( first count -- ior )
+    OVER + _EXT4-UB-FIRST @ _EXT4-UB-COUNT @ + MIN
+    SWAP _EXT4-UB-FIRST @ MAX
+    2DUP U> 0= IF 2DROP 0 EXIT THEN
+    TUCK - SWAP _EXT4-UB-FIRST @ - SWAP
+    _EXT4-UB-BUF @ _EXT4-UB-COUNT @ 2SWAP BITSET-RANGE-SET? 0= IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ Build the bitmap a BLOCK_UNINIT group stands for, as the kernel's
+\ ext4_init_block_bitmap does: the backup superblock, descriptor table and
+\ reserved descriptor blocks when sparse_super puts a copy in the group,
+\ every bitmap and inode table that a descriptor places inside it, and set
+\ padding past a short last group.  The descriptor's free count must equal
+\ the clear bits that leaves, or the group's accounting is corrupt and
+\ nothing may be allocated from it.  BUFFER holds one filesystem block.
+: _EXT4-BUILD-UNINIT-BLOCK-BITMAP  ( group buffer ctx -- ior )
+    _EXT4-UB-CTX ! _EXT4-UB-BUF ! _EXT4-UB-GROUP !
+    _EXT4-UB-GROUP @ _EXT4-UB-CTX @ _EXT4-GROUP-BLOCK-RANGE
+    ?DUP IF NIP NIP EXIT THEN
+    _EXT4-UB-COUNT ! _EXT4-UB-FIRST !
+    _EXT4-UB-BUF @ _EXT4-UB-CTX @ _EXT4-C.BSIZE + @ 0 FILL
+    _EXT4-UB-GROUP @ _EXT4-SPARSE-GROUP? IF
+        _EXT4-UB-FIRST @
+        1 _EXT4-UB-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ +
+        _EXT4-UB-CTX @ _EXT4-C.SB + _EXT4-SB.RESERVED-GDT + W@ +
+        _EXT4-UB-MARK ?DUP IF EXIT THEN
+    THEN
+    _EXT4-UB-CTX @ _EXT4-C.GROUPS + @ 0 ?DO
+        I _EXT4-UB-CTX @ _EXT4-LOAD-DESC ?DUP IF UNLOOP EXIT THEN
+        _EXT4-GD-SPAN @ _EXT4-UB-SPAN !
+        _EXT4-UB-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@ 1
+        _EXT4-UB-MARK ?DUP IF UNLOOP EXIT THEN
+        _EXT4-UB-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-BITMAP-LO + L@ 1
+        _EXT4-UB-MARK ?DUP IF UNLOOP EXIT THEN
+        _EXT4-UB-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-TABLE-LO + L@
+        _EXT4-UB-SPAN @ _EXT4-UB-MARK ?DUP IF UNLOOP EXIT THEN
+    LOOP
+    _EXT4-UB-BUF @ _EXT4-UB-CTX @ _EXT4-C.BSIZE + @ 8 *
+    _EXT4-UB-COUNT @ OVER OVER - BITSET-RANGE-SET? 0= IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UB-GROUP @ _EXT4-UB-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-UB-BUF @ _EXT4-UB-COUNT @ BITSET-COUNT-SET? 0= IF
+        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UB-COUNT @ SWAP -
+    _EXT4-UB-CTX @ _EXT4-C.DESC + DUP _EXT4-GD.FREE-BLOCKS-LO + W@
+    SWAP _EXT4-GD.FREE-BLOCKS-HI + W@ 16 LSHIFT OR <> IF
+        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
 VARIABLE _EXT4-BA-BLOCK
 VARIABLE _EXT4-BA-CTX
 VARIABLE _EXT4-BA-GROUP

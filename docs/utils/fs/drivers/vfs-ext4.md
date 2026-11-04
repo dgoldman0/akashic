@@ -23,36 +23,15 @@ This VFS ABI 1 driver reads filesystems in the pinned
 different descriptors. `EXT4-BINDING` is the ordinary read-only surface.
 `EXT4-STAGED-WRITE-BINDING` is the current explicitly staged write surface for
 authenticated 1 KiB/256-byte-inode geometry. It
-supports block-bounded overwrite of initialized extents, strict no-gap append
-inside an already allocated partial EOF block, and allocation-backed fill of
-complete logical holes inside the existing file size under the extent-root
-conditions described below. It also performs allocation-backed no-gap growth
-one initialized block per callback from exact aligned EOF under that
-authenticated resident-root insertion, coalescing, single-leaf-composition, or
-resident depth-one leaf edit/split envelope. `VFS-WRITE-EXACT`
-composes a qualified request from an initialized partial tail or aligned EOF
-through additional newly allocated logical blocks. That route uses an optional
-`1/1/0` tail RMW followed by independently checkpointed allocation
-transactions through one reusable writer. An ordinary resident-root
-insert/coalesce uses `4/1/0`; a saturated unmergeable resident root is composed
-into one external leaf under an exact topology-derived `5/1/0`, `6/1/0`, or
-`7/1/0` transaction. Allocation may then continue from a resident depth-one
-root containing one through its authenticated inline index capacity: the root
-selects the governing checksum-valid leaf, and insertion with a spare leaf slot
-or exact in-place coalescing uses `5/1/0` for the bitmap, GDT, primary
-superblock, selected leaf, and inode homes. If that leaf is full and cannot
-coalesce, it splits while the resident root retains an index slot, under exact
-topology-derived `6/1/0` through `8/1/0` credit. A full root remains editable
-when the selected leaf has room; a full root plus an unmergeable full selected
-leaf is the typed unsupported depth-growth boundary. Each callback is independently
-committed and synchronously checkpointed, targets at most one logical block,
-and makes no cross-callback atomicity promise. Free-block selection may cross
-from the target inode's initialized group into a later initialized group; the
-current public evidence covers a group-0-to-group-1 transition whose
-descriptors share one primary GDT block, a group-0-to-group-16 transition onto
-the next primary GDT block, and a two-allocation root-composition transaction
-whose data and leaf accounting span distinct bitmaps and distinct primary GDT
-pages, plus a same-group singleton-leaf split. The broader 1/2/4 KiB and
+supports a general regular-file write: overwrite, growth from any EOF, and
+writes past EOF that leave holes, on extent trees of any depth the format
+allows. Each callback commits as much of the caller's span as one
+transaction of the bound writer profile holds, allocating runs of free blocks
+through every initialized and `BLOCK_UNINIT` group with wraparound and
+inserting them into the extent tree with the kernel's merge, split, and
+depth-growth rules. Callbacks are independently committed and synchronously
+checkpointed; `VFS-WRITE-EXACT` composes a larger request from them and makes
+no cross-callback atomicity promise. The broader 1/2/4 KiB and
 128/256-byte-inode forms remain available to
 read and recovery paths; 2/4 KiB and 128-byte-inode mutation await equivalent
 qualification. The staged surface additionally provides atomic empty-file
@@ -546,27 +525,16 @@ zero and does not allocate the additional record.
 
 The staged mount admits nonempty mutation only on authenticated 1 KiB
 filesystem geometry with 256-byte inodes and a journal capable of at least the
-`1 metadata / 1 ordered data / 0 revoke` initialized-RMW transaction. These checks
-occur during staged mount before it can publish a writable VFS or mutate media.
-The allocation-backed hole and aligned-EOF growth operations, including the
-allocation leg of a cross-tail exact request, require the journal and bound
-writer profile to contain the exact measured topology. An ordinary
-insert/coalesce consumes `4/1/0`; single-leaf root composition consumes
-`5/1/0` through `7/1/0`; editing a selected resident depth-one leaf consumes
-`5/1/0`; splitting its saturated unmergeable leaf while the root has capacity
-consumes exact `6/1/0` through `8/1/0`. A crossing request still preflights the
-ordinary `4/1/0` allocation floor before the first clock sample or tail
-mutation. Each later allocation callback then reauthenticates its current root
-and geometry and resolves its exact credit before beginning a transaction, so
-a larger root-composition, existing-leaf, or split requirement can cleanly stop
-after an independently durable tail prefix. An `8/1/0` containing profile admits every
-currently qualified allocation topology. The ordinary constructor retains the
-broader read/recovery geometry, including 2/4 KiB filesystems and 128-byte
-inodes.
+`1 metadata / 1 ordered data / 0 revoke` transaction of a one-block overwrite.
+These checks occur during staged mount before it can publish a writable VFS or
+mutate media. A write transaction then holds at most the bound profile's
+ordered-data credit in data blocks and its metadata credit in homes, and a
+write that needs more spans several transactions. The ordinary constructor
+retains the broader read/recovery geometry, including 2/4 KiB filesystems and
+128-byte inodes.
 
-A mounted instance can reserve an initialized-RMW profile as follows (use
-`8 1 0` in both calls to admit every currently qualified hole-fill,
-aligned-EOF, root-composition, leaf-split, and exact-write topology as well):
+A mounted instance can reserve the smallest profile, one metadata home and
+one ordered-data block, as follows:
 
 ```forth
 1 1 0 fs EXT4-WRITER-WORKSPACE-BYTES? THROW
@@ -576,15 +544,14 @@ writer-arena 1 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 ```
 
 The three capacities are maximum metadata, ordered-data, and revoke credits;
-there is no driver-chosen split or operation-count ceiling. Initialized-block
-overwrite and initialized partial-tail append consume `1/1/0`;
-allocation-backed hole fill and aligned-EOF growth consume exact
-topology-derived `4/1/0` through `8/1/0`. A `1/1/0` profile therefore serves
-both initialized-RMW operations. A `4/1/0` containing profile serves ordinary
-resident insert/coalesce allocations, a `5/1/0` profile also serves selected
-resident depth-one existing-leaf edits, and an `8/1/0` containing profile
-serves every currently qualified allocation and exact-write composition. The
-sizing query proves
+there is no driver-chosen split or operation-count ceiling. Overwriting mapped
+blocks needs one metadata home, the inode-table block, plus one data credit per
+block. Allocating needs the inode plus the bitmap, primary-GDT page, and
+primary superblock of each group it draws from, so a one-block allocation into
+an inline root fits `4/1/0`; a tree edit adds every external node it rewrites
+or creates, and a new node from another group adds that group's bitmap and GDT
+page. Larger credits let one transaction carry more blocks of a write and
+spread its proof and checkpoint over them. The sizing query proves
 that the complete tuple fits the journal ring,
 `s_max_transaction`, and `s_max_trans_data`. Binding requires a fresh dedicated
 arena whose backing is disjoint from the VFS arena. Its descriptor, backing,
@@ -1256,70 +1223,43 @@ members remain separate, and a merged run still chunks exactly at group
 boundaries. This changes neither the ordered authority vector nor its sealed
 checkpoint representation.
 
-`_EXT4-JTX-STAGE-ALLOCATE-BLOCK` is the inverse accounting primitive for one
-exact already-owner-proved block. The enclosing operation may use it for the
-ordered data candidate and, during root composition, again for the new extent
-leaf. It requires the selected physical block to be in
-bounds, outside every journal/static metadata role, and clear in both the
-checksum-authenticated raw bitmap and the transaction's effective bitmap.
-The initialized group must retain a positive bounded free count, its effective
-descriptor must authenticate the same bitmap home and checksum, and the
-primary super must retain a positive bounded global count. Only after all of
-those checks succeed does the builder set the bit, decrement both counters,
+`_EXT4-JTX-STAGE-ALLOCATE-RANGE` is the inverse accounting primitive for one
+run of free blocks inside a single group, and `_EXT4-JTX-STAGE-ALLOCATE-BLOCK`
+is its one-block form. It requires the run in bounds, outside every
+journal/static metadata role, and clear in both the checksum-authenticated raw
+bitmap and the transaction's effective bitmap. For a `BLOCK_UNINIT` group the
+raw bitmap is the one the group stands for, built as described under run
+allocation below, and the effective descriptor may keep the flag only until
+the transaction's first allocation in that group stages a bitmap. The group
+must retain at least the run's free count, its effective descriptor must
+authenticate the same bitmap home and checksum, and the primary super must
+retain the count globally. Only after all of those checks succeed does the
+builder set the run's bits, decrement both counters, clear `BLOCK_UNINIT`,
 replace the bitmap checksum, and restamp the descriptor and super checksums.
-The raw and retained clear-bit checks and the private after-image bit set use
-the shared checked bitset utility with the exact owning group length; invalid
+The raw and retained clear-range checks and the private after-image set use the
+shared checked bitset utility with the exact owning group length; invalid
 internal geometry is corruption, while a valid retained-state change remains
-the existing transaction conflict.
-The retained homes are the exact bitmap, primary GDT block, and primary-super
-home; context caches remain media-derived until reload. Any failure after the
-first replacement aborts and scrubs the transaction.
+the existing transaction conflict. The retained homes are the exact bitmap,
+primary GDT block, and primary-super home; context caches remain media-derived
+until reload. Any failure after the first replacement aborts and scrubs the
+transaction.
 
 This primitive deliberately does not choose storage or make a file map point
-at it. `_EXT4-FIND-FREE-BLOCK` supplies the separate read-only selection step.
-Starting from a caller-provided locality group, it visits each runtime group at
-most once with explicit wraparound, uses the actual final-group length, and
-requires every initialized bitmap's observed clear-bit count to equal its
-authenticated descriptor counter. Candidate arithmetic is checked and the
-result must pass the complete journal/static-role validator; the exact bitmap
-home and clear bit are then reauthenticated after that cache-clobbering scan.
-Logical popcount, first-clear search, and the final singleton recheck delegate
-to the shared checked bitset utility with the exact group-block count. The
-excluding form searches again only when the ordinary first candidate is the
-withheld bit, so earlier eligible blocks and descriptor accounting retain
-their original meaning.
-Groups with `BLOCK_UNINIT` are skipped rather than initialized implicitly. If
-only such groups advertise free space, selection returns a stable unsupported
-result rather than claiming disk-full or interpreting nonexistent bitmap
-authority.
+at it. `_EXT4-JTX-FIND-FREE-RUN` selects storage for the general write: the
+first free run of at most a requested length in the transaction's own view of
+the bitmaps, searched as described under run allocation below, with a zero
+count when no group has a free block. `_EXT4-FIND-FREE-BLOCK` and its
+excluding form remain the read-only planners of the namespace operations,
+which choose their blocks before staging. They visit each initialized group
+once from a locality group, skip `BLOCK_UNINIT` groups, and require the same
+clear-count agreement; the excluding form withholds one planned candidate
+without pretending its raw bit is set.
 
-`_EXT4-FIND-FREE-BLOCK-EXCLUDING` performs the same authenticated geometry
-walk for root composition while withholding the first planned candidate from
-selection without pretending its raw bitmap bit is already set. Raw clear-bit
-counts must still match descriptor counters. It returns a distinct second block
-or clean `NOSPC`; it cannot manufacture authority by decrementing the observed
-free count during planning.
-
-The allocation-backed file operation derives each candidate group again from
-the selected physical block before its reverse-owner proof. It certifies that
-group's exact block-bitmap and primary-GDT homes rather than reusing the inode's
-locality group. Root composition repeats this derivation independently for the
-leaf candidate. After each `_EXT4-JTX-STAGE-ALLOCATE-BLOCK` independently
-derives and stages its accounting replacements, the operation requires its
-staged group, bitmap, GDT, and primary-super homes to equal the corresponding
-certified homes. A mismatch aborts and scrubs the transaction before the inode
-after-image is retained. This binding is required even when two group
-descriptors happen to share one GDT block, because their block-bitmap homes and
-descriptor offsets remain distinct.
-
-The enclosing file operation must still perform complete reverse-owner proof,
-ordered full-block initialization, an authenticated resident insert/coalesce,
-single-leaf root transition, or singleton existing-leaf edit, exact one- or
-two-block `i_blocks` accounting, leaf and inode checksum work, and publication
-in the same transaction. Keeping those
-authorities separate lets selection and accounting be tested exactly while
-preventing either private piece from being mistaken for a complete user-visible
-write operation.
+The enclosing operation must still perform its complete reverse-owner proof,
+ordered data, map edit, `i_blocks` accounting, and publication in the same
+transaction. Keeping those authorities separate lets selection and accounting
+be tested exactly while preventing either private piece from being mistaken
+for a complete user-visible write operation.
 
 Mutation-side admission also has reusable authorities beyond that free-only
 builder. `_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER` scans every authenticated allocated
@@ -1863,559 +1803,140 @@ explicitly staged boundary.
 ## Current staged writes
 
 `EXT4-STAGED-WRITE-BINDING` is the explicit ABI-1 surface for the currently
-implemented mutations. A nonempty write request is admitted
-only on authenticated 1 KiB filesystem geometry with 256-byte inodes and only
-for a linked regular file whose inode flags are exactly `EXTENTS`. An
-initialized-block overwrite or tail-only partial-tail append may use an
-authenticated depth-0 or depth-1 extent tree. At an unaligned authenticated
-EOF, a nonempty request may fit within the initialized tail or cross it. A
-crossing request must start exactly at EOF, fill the remaining tail, leave at
-least one byte for aligned allocation callbacks, and end at or below
-`0xffffffff`. Each freshly reauthenticated aligned leg must find an unmapped
-target representable by a qualified depth-zero edit or resident depth-one
-selected-leaf edit or capacity-preserving split, and the request must preflight reusable
-ordinary `4/1/0` capacity before its first clock sample. Allocation-backed hole fill and
-aligned-EOF growth require either an authenticated inline depth-0 extent root
-or a resident depth-1 root whose authenticated indexes name checksum-valid,
-nonoverlapping external leaves. A
-depth-zero candidate may use sorted insertion into a spare resident slot, exact
-logical-and-physical initialized coalescing, or—when all four resident slots
-are occupied and no coalesce is valid—one depth-zero-to-depth-one composition
-through a newly allocated checksummed external leaf. In the depth-one form,
-the root's logical intervals choose the target leaf. The candidate is inserted
-there when it has capacity, exactly coalesced in place, or used to split a
-saturated unmergeable selected leaf into two external leaves while the
-resident root retains an index slot. Both operations
-require an exact `i_blocks` account and an unmapped target logical block. Hole
-fill keeps that block inside the existing file size and before its final
-partial logical block. Aligned growth instead requires the request offset to
-equal an exactly block-aligned authenticated EOF and advances it without a gap.
-A callback remains block-bounded and returns
-legal short success for a larger request; `VFS-WRITE-EXACT` may re-enter at the
-new EOF for additional allocations while every next callback still satisfies
-the structural admission. Exact requests may likewise continue across adjacent
-complete in-size holes. The mounted instance must also have a trusted clock and
-a caller-owned writer arena. Overwrite and partial-tail append require a
-profile containing `1 metadata / 1 ordered data / 0 revoke`. Allocation-backed
-operations require a containing profile for the measured `4/1/0` through
-`8/1/0` topology; `8/1/0` contains the complete current set.
-
-`Staged` distinguishes the currently implemented operation set from complete
+implemented mutations. `Staged` distinguishes that operation set from complete
 `akashic-ext4-rw-v1` conformance. It describes capability breadth, not a
 separate write path: every operation admitted here uses the production driver,
 durability lifecycle, recovery machinery, and on-disk ext4 format.
 
-Every callback invocation is bounded at the next filesystem-block boundary and
-may return short success. For an admitted cross-tail span, the first callback
-returns the checkpointed tail prefix and `VFS-WRITE-EXACT` re-enters at the now-
-aligned EOF for the independently durable allocation leg. This is request-level
-composition, not callback fallthrough or atomic batching. Requests overflowing
-the 32-bit final size or lacking the ordinary `4/1/0` allocation floor fail
-with zero progress before clock sampling. A later callback whose freshly
-measured root composition exceeds the containing profile fails before media
-I/O while preserving any earlier independently checkpointed prefix. The public
-route otherwise sends partial-tail append directly
-to initialized RMW and aligned-EOF growth directly to allocation. An in-size request first attempts
-initialized overwrite; only its exact clean unmapped result is eligible for
-allocation-backed hole fill. Corruption, an unwritten extent, stale authority,
-or another refusal is returned without reinterpretation. The qualified surface
-does not create a sparse gap, perform overwrite-through-EOF growth, convert
-unwritten extents, grow a depth-one root beyond its resident index capacity,
-grow a deeper tree, allocate more than one
-logical block per callback, or provide a multi-block atomic-write contract.
+### General regular-file write
 
-The initialized-RMW typed stage builds exactly one ordered data-block
-after-image, one inode-table metadata-block after-image, and no revokes. Its
-ordered image is a full-block read-modify-write copy. Overwrite preserves
-`i_size`; append writes the authenticated new EOF into the same inode
-after-image. The allocation-backed stage described below instead constructs a
-zero-backed ordered block and four metadata after-images for an ordinary
-insert/coalesce. Root composition additionally retains the new leaf and, when
-the second allocation uses different accounting geometry, one more bitmap and
-one more primary-GDT home. It therefore uses exactly five through seven
-metadata after-images, one ordered data image, and no revokes. Editing a
-selected resident depth-one leaf retains exactly five metadata after-images—
-the data bitmap, GDT, primary superblock, existing leaf, and inode—plus one
-ordered data image and no revokes. Splitting a saturated selected leaf retains
-the existing and new leaves in addition to the allocation accounting and
-inode, for exactly six through eight metadata after-images, one ordered data
-image, and no revokes. All four operations update
-`mtime` and `ctime` from the trusted clock and restamp the ext4 inode checksum.
-Dry staging itself neither emits nor checkpoints; the
-staged callback composes it with activation, emission, synchronous checkpoint,
-vnode publication, and clean unmount behavior.
+A nonempty write is admitted on authenticated 1 KiB filesystem geometry with
+256-byte inodes for a linked regular file whose inode flags are exactly
+`EXTENTS`. The mounted instance needs a trusted clock and a caller-owned writer
+arena. Any span the format can represent is accepted: overwrite inside EOF,
+growth from any EOF, and a write past EOF, which leaves the blocks between as
+holes. The final size must fit 32-bit logical blocks, and stays below 2 GiB
+unless `large_file` is set; a larger request refuses with `VFS-E-OVERFLOW`
+before the clock is sampled. A mapped unwritten extent refuses with the
+data-map unsupported result, and a write that reaches one after other blocks
+completes the blocks before it.
 
-Before retaining the initialized-RMW after-image pair, its primitive authenticates
-the complete target tree under a scoped mutation audit. Every target leaf range
-and external extent node is checked against journal, primary-super/GDT,
-descriptor, bitmap, inode-table, and sparse-super/GDT roles. Leaf-local
-validation rejects physical overlap within each leaf; the scoped audit
-additionally requires the selected physical block to occur in exactly one leaf
-across the complete tree and never as an external node. A nonzero
-external-xattr block must differ from the selected block and pass the same
-mutation-role check. The allocation stage performs the expanded ownership
-proof over the selected data block plus every distinct planned metadata home
-described below.
+One callback commits as much of the caller's span as one journal transaction
+holds and returns that byte count, so a larger request returns legal short
+success and `VFS-WRITE-EXACT` continues from the new cursor. The transaction
+begins with the whole bound profile, which caps it at the profile's
+ordered-data credit in data blocks and its metadata credit in homes. The pass
+stages every logical block of the span in order. A mapped initialized block
+receives its new full-block image in place as ordered data, read and modified
+first when the span covers it only in part. An unmapped run is allocated,
+zero-filled around the caller's bytes, and inserted into the extent tree. When
+the write starts past the block that holds a partial old EOF, that block's
+bytes past the old size are written as zeros, since the new size makes them
+readable, and bytes of a modified block past the old size are zeroed rather
+than read. The inode record is staged last with the new size, `i_blocks`, and
+trusted-clock `mtime` and `ctime`.
 
-For initialized RMW, the exact inode-table home is authenticated
-separately. One filesystem-wide other-inode walk then publishes both
-transaction destinations—the selected data block and inode-table home—and
-refuses either range through another allocated inode's data, extent/legacy map
-metadata, or external-xattr pointer. Each walk runs in one proof scope, so
-the descriptor pages, bitmaps, inode-table blocks, and map blocks it checks
-are read from media once per walk, and a legacy walk restores a parent pointer
-block after each child without re-proving the parent's allocation.
-The target's generation, locator, complete map, size, link count, flags, and
-external-xattr pointer are reauthenticated after each cache-clobbering scan. A
-stale generation, unwritten extent, unsupported inode flag, cross-block write,
-duplicate selected-block mapping, or ambiguous ownership fails before
-publication. Overwrite additionally refuses growth. Append independently
-reauthenticates exact old EOF, partial-block placement, checked new size, and
-initialized mapping. An exact clean in-size hole returns a distinct unmapped
-result to the public router; it is not an overwrite after-image. Once ordered
-data has been retained, any later staging failure aborts and scrubs the
-transaction.
+A pass that runs out of transaction room or free blocks, or reaches a block it
+may not write, is discarded and restaged up to the last completely staged block
+after which a metadata home was still free: a mapped block counts once its
+image is staged, an allocated run once its extent is inserted. That free home
+takes the inode record, the transaction's last home. The profile therefore
+bounds each transaction exactly rather than through a worst-case credit
+estimate, and a profile with one data credit writes one block per transaction.
+The restaged pass repeats the first pass's runs up to that point, so it stages
+the same homes and always fits. A span that cannot stage even its first block
+refuses, with `VFS-E-NOSPC` for a full volume or a profile too small for that
+block's homes. A write that starts past a partial old EOF block also stages
+that block's zeroed tail, which takes one of the pass's data credits, so the
+pass covers one block fewer and a one-credit profile refuses such a write.
 
-Depth-positive qualification writes logical block 10 of a 12-block file through
-its real depth-1 root and external node.
-The generic VFS path checkpoints the selected data block and inode-table home,
-reads the replacement back through the unchanged tree, never writes the
-external extent node, and cleanly unmounts. A checksum-valid adversarial leaf
-that maps logical block 0 onto its own extent-node block is refused as
-`EXT4-D-DATA-MAP`; relocating the valid node into an unused journal-ring block
-is refused as `EXT4-D-JOURNAL`; and two independently valid external-leaf
-shapes that repeat the selected physical block are refused on the second hit.
-The paired other-owner qualification separately exercises refusal through its
-second range and success for the actual data/inode-home pair. The write-path
-refusals return with scoped authority cleared and perform no write or flush;
-the standalone two-leaf parser qualification explicitly closes its test scope.
-Deeper trees use the same bounded reader/parser, but staged mutation policy
-stops at depth 1 after authenticating a structurally valid wider tree. A valid
-deeper tree is unsupported for write; malformed trees remain corruption.
+On a clean mount the first pass is staged and proved before the journal is
+activated, so a refusal performs no media I/O; the live pass then repeats it
+against the activated volume, emits it, and checkpoints it synchronously.
+Later transactions on the same mount stage, prove, emit, and checkpoint
+directly, and every successful callback leaves the writer idle and clean for
+the next.
 
-### Initialized partial-tail append
+### Extent-tree insertion
 
-The staged binding admits no-gap EOF growth when the linked regular file ends
-partway through an already allocated initialized extent block. The request
-offset must equal the authenticated `i_size`, the EOF must be nonempty and
-unaligned, checked `offset + count` must remain representable by the current
-VFS cursor model, and this initialized-RMW callback may consume only the unused
-remainder of that same block. A request fitting wholly in the tail completes
-there. A request in the qualified crossing envelope is short-completed through
-the tail and may be continued only after `VFS-WRITE-EXACT` advances to the
-aligned allocation route. The complete depth-0 or depth-1 extent tree, target
-mapping, inode locator/generation, link count, flags, xattr pointer, and both
-transaction homes are authenticated exactly as for overwrite. Gaps and mixed
-overwrite-plus-growth requests refuse before clock sampling or writer work.
-Exact aligned EOF is classified separately and routes to the allocation-backed
-growth operation below rather than this initialized-RMW mode. Sparse or
-unwritten tails refuse during dry staging before journal activation or mutation
-I/O.
+Each allocated run is inserted at any depth the format allows, as the kernel's
+`ext4_ext_insert_extent` inserts it. The run first tries to extend the extent
+before it or the extent after it inside the governing leaf, or to bridge both,
+as one initialized extent of at most 32,768 blocks; otherwise it takes a free
+entry in that leaf. A full leaf splits at the insertion point, as
+`ext4_ext_split` splits it: the entries after the insertion point move to a new
+leaf whose first key is the next extent's start, or, when nothing follows,
+the new leaf holds just the run, so a file growing at EOF keeps full leaves.
+Every full index level between the leaf and the lowest level with a free entry
+likewise moves its entries after the path into a new index node that begins
+with the index for the new node below, and that level takes the index for the
+new node above it. When no level on the path has a free entry, the root's
+entries move into a new node one level below and the root becomes one index
+naming it, as `ext4_ext_grow_indepth` does, up to the format's five levels
+below the inode. A leaf whose first key changes corrects each parent index
+upward while the corrected index is its node's first entry.
 
-Append uses the existing `1 metadata / 1 ordered data / 0 revoke` full-block
-RMW transaction. It changes only the bytes in the allocated tail, `i_size`, the
-inode checksum, and clock-derived `mtime`/`ctime`; the extent tree, physical
-mapping, `i_blocks`, free-space accounting, link count, generation, atime, and
-xattrs remain unchanged. The public VFS append flag reselects the shared
-vnode's current EOF even after the descriptor was deliberately sought
-elsewhere. After commit, the callback publishes the exact new size and times
-into that shared vnode before generic cursor accounting, so every hard-link
-alias observes the same committed EOF without a dirty-vnode fallback.
+Every node keeps the read side's invariants: an index key equals its child's
+first block, no external node is empty, and each external node is checksummed
+against the inode number and generation, with the entry bytes past its count
+zeroed. Edited and new nodes are staged straight into the transaction, and a
+later read in the same transaction takes the staged image; the root is edited
+in the operation's private inode record. New tree nodes are allocated next to
+the data they map and add to `i_blocks`.
 
-The public inode-14 qualification appends six bytes at EOF 54 and produces an
-exact 60-byte file while retaining the one initialized mapping to physical
-block 1346 and `i_blocks = 4`. The 1/1/0 success journey measures 672,608,905
-guest steps; its ordinary hard-link remount measures 65,968,242 steps with no
-writes or flushes. Pinned e2fsprogs 1.47.4 `debugfs` reads identical bytes
-through both names and reports inode 14, two links, size 60, block count 4, and
-the unchanged mapping; read-only `e2fsck -f -n` reports a clean filesystem.
+### Run allocation
 
-Two trace-derived cuts close the new reachability boundary without duplicating
-the shared journal matrix. At ordered-data write W7, all six caller bytes are
-already present in the initialized home block, but the inode transaction has
-not committed. Commit-granular append credit therefore reports `actual = 0`,
-keeps the cursor and shared vnode at EOF 54 with old times, and recovery applies
-zero inode homes; both names expose the old file and a second remount is
-write-free. At inode checkpoint write W16, journal commit is durable and the
-home tears. The public call reports all six bytes, advances the cursor and
-shared vnode to 60 with committed times, and quarantines the volume
-`PARTIAL|READONLY`. Recovery replays exactly one inode-table home, never
-rewrites block 1346, and reaches the exact successful inode followed by a
-byte-stable write-free remount. Neither path creates orphan state.
+Allocation searches the transaction's own view of the bitmaps, so a later run
+never takes a block an earlier run in the same transaction took. It searches
+the goal's group from the goal, then each following group with wraparound,
+then the start of the goal's group. The goal continues the extent before the
+hole by the logical gap, as `ext4_ext_find_goal` chooses it, or else starts
+the inode's group. A run stays inside one group. Each group's clear-bit count
+must equal its effective descriptor free count before the group is searched,
+and a bitmap that offers a block in the journal or in a static metadata role
+is corrupt rather than allocatable.
 
-### Allocation-backed aligned-EOF growth
+A `BLOCK_UNINIT` group counts with the bitmap it stands for, built as the
+kernel's `ext4_init_block_bitmap` builds it: the backup superblock, descriptor
+table, and reserved descriptor blocks when sparse_super places a copy there,
+every bitmap and inode table a descriptor places inside the group, and set
+padding past a short last group. The descriptor's free count must equal the
+clear bits that leaves. The first allocation in such a group stages that bitmap
+with the run set, and clears `BLOCK_UNINIT` in the same descriptor edit that
+records the new free count and bitmap checksum.
 
-The staged binding also admits linked-file growth from an exactly block-aligned
-authenticated EOF. Its offset must equal EOF, and each block-bounded callback's
-target logical block must be unmapped in either an authenticated inline
-depth-zero resident extent root or a resident depth-one root whose indexes name
-checksum-valid, nonoverlapping external leaves. The depth-zero edit may use a spare resident
-slot, exact logical-and-physical initialized coalescing, or the qualified
-saturated-root composition into one new external leaf and a one-index resident
-depth-one root. The depth-one edit selects the governing leaf by the root's
-logical intervals, inserts or coalesces there, and repairs only that index key
-when the leaf's first key changes. A saturated unmergeable selected leaf splits
-into a second leaf and adjacent resident index while root capacity remains. A larger public
-request returns one committed block-bounded chunk to `VFS-WRITE?`;
-`VFS-WRITE-EXACT` advances and reauthenticates at the new EOF. A gap, mixed
-overwrite plus growth, a mapped or unwritten target, a full resident root with
-a full unmergeable selected leaf, or a deeper tree refuses without being
-reinterpreted as another write mode. Public gap and mixed-growth requests refuse
-before clock sampling, writer work, or media I/O. Capacity, second-candidate,
-and structural-map refusals occur after that callback's clock sample but
-complete during write-free preflight or dry staging before journal activation.
+### Home-set proof
 
-This is current production capability inside the documented 1 KiB/256-byte-
-inode envelope. It is not a fixture-specific approximation of general growth.
-The mounted engine first measures the authenticated target and selected
-allocation geometry. Ordinary insert/coalesce resolves signed metadata credit
-`-4`. Saturated-root composition resolves `-5`, `-6`, or `-7` after selecting a
-distinct second free block for the leaf and deduplicating the data/leaf bitmap,
-GDT, primary-super, leaf, and inode homes. A selected resident depth-one leaf
-edit resolves `-5` for the data bitmap, GDT, primary superblock, existing leaf,
-and inode homes. A saturated selected-leaf split resolves exact `-6` through
-`-8` after selecting the distinct new leaf and deduplicating its bitmap/GDT
-homes with the data allocation's accounting. A containing profile must admit
-that exact result before `_EXT4-JTX-BEGIN`. The transaction writes a fully
-initialized zero-backed data
-candidate with the caller span overlaid and stages allocation accounting for
-every new block. A resident depth-zero edit stores the mapping in the
-checksummed inode after-image. Root composition stores the complete map in its
-new leaf and publishes the resident index in the inode; an existing-leaf edit
-stores the map in the selected leaf and publishes only its repaired index key
-when required. A split replaces the selected leaf with the lower half, creates
-a checksummed upper leaf, and inserts their first keys and pointers into the
-resident root. Every unselected leaf remains byte-exact, and preexisting
-unselected index pairs remain value-exact. Every form publishes incremented `i_blocks`, the applicable exact
-`i_size`, and clock-derived `mtime`/`ctime` in the checksummed inode after-image.
-Negative signed credit makes progress
-commit-granular: no caller byte is reported until the complete allocation,
-mapping, and EOF transaction commits. Success, and a later checkpoint failure
-after commit, publish the shared vnode size, block count, filesystem free-block
-count, and timestamps before returning confirmed progress.
+The complete home set of each transaction is proved before emission,
+whatever mix of data, tree, and accounting homes it holds. The target inode is
+authenticated at the start of every pass: its complete map is validated, its
+flags, generation, and external xattr block are checked, and its inode-table
+home must fall in exactly its own group's table. Allocation accounting proves
+every new block clear in both the raw and the transaction's bitmap and outside
+every static role. After staging, one validation walk of the target's
+pre-transaction tree counts every overlap with the home set while checking
+each target range's mutation role. The count must equal the existing data
+blocks and tree nodes the transaction rewrites, so each of those is mapped
+exactly once, and the target maps no block the transaction allocated and no
+accounting home. The target's external xattr block may not be a home. One
+filesystem-wide walk then proves that no other allocated inode maps any home
+through its data, tree nodes, or xattr block.
 
-The public hard-link qualification grows an exactly 1,024-byte file by one
-24-byte request, attaches a new initialized logical block, advances `i_size` to
-1,048 and `i_blocks` from 4 to 6, decrements free space once, and leaves the
-unused 1,000 bytes of the new block zero. Both names expose the same committed
-bytes and metadata; a clean ordinary remount is write-free, and pinned
-e2fsprogs `debugfs` read/map/stat plus read-only `e2fsck` accept the result.
+### Progress and crash boundaries
 
-W7 and W22 close the operation-specific crash boundary. A tear of the ordered
-candidate at W7 reports `actual = 0`, retains the old EOF, `i_blocks`, free
-count, and timestamps in memory, and leaves the raw candidate free, unmapped,
-and unreachable; recovery replays no metadata home and the next remount is
-write-free. At W22 the journal commit is already durable and the final
-inode-table checkpoint home tears. The callback reports the complete request,
-publishes the new size, block count, free count, and timestamps, and quarantines
-the mount `PARTIAL|READONLY`. Fresh recovery replays the four allocation/inode
-metadata homes, never rewrites the ordered candidate, and reaches the exact
-successful image followed by a byte-stable write-free remount. Growing a linked
-inode in this transaction creates no orphan state; broader allocation and
-orphan recovery are admitted when write or interoperability evidence makes them
-reachable, not by speculative orphan expansion.
-
-The focused W7 and W22 journeys pass in 190.29 and 190.46 host seconds. A
-shared-fixture capstone passes success, policy refusal, W7, and W22 together in
-265.57 seconds; pinned e2fsprogs `debugfs`/`e2fsck` qualification passes in a
-separate explicitly configured run in 105.60 seconds.
-
-Commit `57961e0` extends request-level composition through additional allocated
-EOF blocks without changing that transaction primitive. A single exact request
-grows an exactly 1,024-byte hard-linked file by one full block and 24 bytes in a
-second new logical block. The first `4/1/0` callback inserts logical block 1 at
-physical block 1351; the second selects 1352 and coalesces the adjacent mapping
-into a length-two initialized extent. Two clock samples, two independently
-checkpointed accounting/inode rounds, exact `i_blocks` growth from 4 to 8, and
-two decremented free blocks are published cumulatively. The unused 1,000-byte
-suffix of the second candidate is zero despite a poisoned prestate. Both hard
-links, a byte-stable write-free ordinary remount, pinned `debugfs`, and read-only
-`e2fsck` agree on the exact 2,072-byte result.
-
-At the `57961e0` historical landing, a later clean structural refusal proved
-that allocated EOF progress survived the then-unimplemented root transition. A
-first allocation filled the fourth resident-root slot and checkpointed a
-complete new block; the next exact-write callback reauthenticated that full
-root, selected another free candidate, and refused before retaining ordered
-data or allocation metadata because it could not yet insert or coalesce the
-mapping. The terminal ior had no partial flag, while the cursor, shared vnode,
-`i_blocks`, free-space count, first timestamp, allocation bit, and on-disk inode
-all retained the first callback's durable 1,024-byte prefix. The refused
-candidate remained poisoned, free, unmapped, and unwritten. Ordinary remount
-was write-free and pinned `e2fsck` accepted the prefix image. Commit `851d2c6`
-supersedes only that format boundary: a containing `5/1/0` through `7/1/0`
-profile and two usable candidates now compose the full root. Sequential prefix
-durability and the absence of multi-block atomicity are unchanged. A combined aligned-EOF,
-cross-tail, and additional-EOF capstone passes all 13 selected success,
-external-tool, refusal, and recovery checks sequentially in 805.56 host seconds.
-
-Commits `d367584` and `38a6d03` qualify one broader initialized allocation
-boundary without claiming arbitrary geometry. A checksum-valid unwritten
-ballast extent consumes the canonical group-0 free run while leaving the
-hard-linked target at its 1,024-byte aligned EOF. Its next 24-byte append starts
-selection in the inode's group 0 but obtains physical block 8451 from initialized
-group 1. The exact replacement homes are group-1 block bitmap 260, primary GDT
-block 2 at descriptor offset 64, primary superblock home 1, and target inode
-home 278. The operation maps logical block 1, advances `i_size` to 1,048 and
-`i_blocks` to 6, decrements group 1 and global free space once, leaves the
-group-0 bitmap and descriptor unchanged, and zeroes the unused candidate
-suffix. Both hard links, a write-free stable remount, pinned `debugfs`, and
-read-only `e2fsck` agree on the result.
-
-The paired refusal maps a live non-target extent to the actual selected
-group-1 bitmap home 260. Reverse-owner proof rejects the operation with the
-data-map corruption class before any media I/O; candidate 8451 remains free,
-poisoned, and unmapped, and every target, ballast, and accounting home remains
-unchanged. The distinct committed checkpoint cut is W19 at bitmap home 260,
-after its allocation bit becomes durable but before the GDT, superblock, or
-inode home is checkpointed. Fresh recovery replays exactly bitmap 260, GDT 2,
-super 1, and inode 278; it never rewrites ordered candidate 8451, group-0 bitmap
-259, or ballast inode home 279. The repaired image equals the exact success
-image and reaches a hash-identical zero-I/O remount. These four focused
-success, external-tool, alias-refusal, and W19 checks pass sequentially in
-199.19 host seconds. Existing W7 and W22 evidence continues to close the
-unchanged `4/1/0` transaction's precommit reachability and final-inode
-checkpoint endpoints.
-
-Commit `5c19364` extends that same candidate-owned proof across a primary-GDT-
-page boundary. A pinned supplemental 144 MiB image has 18 block groups and
-64-byte descriptors, so groups 0--15 reside in primary GDT block 2 while group
-16 begins primary GDT block 3 at descriptor offset 0. A checksummed depth-one
-ballast inode consumes every clear run in initialized groups 0, 1, 3, 5, 7, 8,
-and 9, using external leaf 2504 and unwritten extents past its unchanged
-3,072-byte size. Groups 2, 4, 6, and 10--15 retain `BLOCK_UNINIT` and are
-skipped. Public aligned-EOF growth for group-0 inode 14 then selects physical
-block 131333, index 260 in initialized group 16, and binds its exact bitmap home
-131073, GDT home 3, primary-super home 1, and inode home 295. The transaction
-remains exactly `4/1/0`; primary GDT block 2, ballast inode home 296, and leaf
-2504 remain byte-exact and unwritten. Stable-remount, hard-link, zero-backed
-suffix, pinned `debugfs`, and read-only `e2fsck` checks all pass.
-
-The distinct W20 cut tears checkpoint home 3 after descriptor-16 free-count
-byte `0x0c`, with bitmap 131073 already checkpointed but the primary superblock
-and target inode still old. Recovery replays bitmap 131073, GDT 3, superblock 1,
-and inode 295 once each. It never rewrites ordered candidate 131333, group-0
-bitmap 260, local GDT block 2, ballast inode 296, or ballast leaf 2504. Clean
-deactivation writes primary superblock 1 once more outside replay, and the exact
-success image reaches a checker-clean hash-identical zero-I/O remount. The
-focused fixture, success, external-tool, and W20 set
-passes all four checks sequentially in 249.82 host seconds. This qualifies the
-exact second-page/offset-zero geometry; it does not initialize `BLOCK_UNINIT`
-groups, prove wraparound, cover nonzero descriptor offsets on the second page,
-or admit 2/4 KiB mutation.
-
-### Saturated extent-root composition
-
-Commit `851d2c6` closes the formerly unmergeable four-entry resident-root
-boundary for both aligned-EOF growth and complete in-size hole fill. After
-authenticating the inline depth-zero root and selecting the data candidate, the
-planner still prefers a valid left, right, or bridge coalesce and then a spare-
-slot insertion. If the root is saturated and none applies, it selects a second,
-distinct free block, composes the four old extents plus the new initialized
-singleton into one external depth-zero leaf, and replaces the inode's resident
-root with one depth-one index. The index key is the leaf's first logical block;
-both headers preserve the old extent-root generation. The leaf checksum is
-bound to the target inode number and inode generation. An inode whose root is
-already the exact singleton depth-one form is handled by the separate
-existing-leaf edit below. Root composition itself still starts at depth zero,
-and creates only one leaf; the later singleton-leaf split described below is
-the separately qualified transition to two leaves. Deeper growth remains
-outside the allocating envelope.
-
-Root composition allocates two filesystem blocks in one transaction: one
-ordered initialized data block and one metadata leaf. It sets both allocation
-bits and decrements aggregate free space twice. When both blocks share a group,
-that group's free counter falls by two; otherwise each selected group's counter
-falls by one. On the qualified 1 KiB geometry, `i_blocks` advances by four
-512-byte sectors. The primary-super image is composed in place, as is a shared
-primary-GDT image; bitmap and GDT homes are otherwise retained separately. The
-distinct metadata topology is therefore exactly:
-
-- five homes when both allocations share a bitmap and GDT page;
-- six homes when they use distinct bitmaps whose descriptors share one primary
-  GDT page; or
-- seven homes when the two bitmaps and primary GDT pages are all distinct.
-
-The mounted write engine accepts signed credit zero as a request for the
-allocation resolver. Before it begins either the dry or live transaction, the
-resolver reauthenticates the target, selects both candidates, derives their
-bitmap/GDT homes, deduplicates the primary super and any shared accounting
-home, and returns exact negative credit `-5`, `-6`, or `-7`. The caller's bound
-writer is a containing profile, not the transaction shape: an `8/1/0` profile
-can run every currently qualified measured allocation from `4/1/0` through
-`8/1/0` without inflating the smaller transaction. A full-root operation bound
-only to
-`4/1/0`, or a geometry with only one usable initialized free block, returns a
-clean pre-I/O `NOSPC` refusal; it does not weaken the edit or partially stage
-one allocation.
-
-Measurement performs only the revalidation needed to derive exact credit.
-Dry and live staging each publish the selected data block plus every distinct
-metadata home as one range vector and perform the complete filesystem-wide
-other-owner scan. The target inode is excluded only after its complete existing
-map has passed a scoped role audit. Candidate selection, bitmap/GDT ownership,
-inode-table ownership, external-xattr disjointness, and target bytes are then
-reauthenticated after each cache-clobbering scan. The new leaf itself is one of
-the proved metadata ranges. This eight-range maximum—one data destination plus
-seven distinct metadata homes—is geometry-derived, not an operation-count
-constant. In the maximum topology, measurement orders those metadata ranges as
-`{ 269, 2, 1, 295, 131333, 131073, 3 }`; the separate data range is block
-73988.
-
-Retained metadata order follows staging rather than measurement-vector order.
-The data allocation retains its bitmap, GDT, and the primary super; the new
-leaf follows; leaf-allocation accounting then retains or replaces its bitmap,
-GDT, and already-present primary super; the inode-table home is last. In the
-five-home topology that order is `{ 259, 2, 1, 1355, 278 }`, with ordered data
-home 1354. The exact-six typed topology uses
-`{ 259, 2, 1, 8451, 260, 278 }`, again with data home 1354; its two bitmap
-edits compose through one retained GDT block, and the typed transaction aborts
-without media I/O. In the maximum qualified topology the exact retained and
-checkpoint order is `{ 269, 2, 1, 131333, 131073, 3, 295 }`: group-9 bitmap,
-first primary GDT page, primary super, leaf, group-16 bitmap, second primary
-GDT page, and target inode table. The corresponding data home is 73988. Each
-ordered data home is emitted before journal metadata; clean deactivation later
-writes primary-super home 1 again outside the transaction checkpoint.
-
-The same-group five-home public journey grows a 6,144-byte four-extent file with
-a saturated root by 24 bytes, allocating data block 1354 and a checksummed leaf
-at block 1355. The result has leaf entries for logical blocks 0, 2, 4, 5, and
-6, one resident index, and `i_blocks` increased from 10 to 14. A separate
-public in-size journey inserts logical block 1 into the middle of the same
-saturated shape without changing `i_size`; both hard-link views, stable
-ordinary remount, `debugfs`, and read-only `e2fsck` accept the composed
-depth-one tree. Nonzero and deliberately different inode/extent-root
-generations prove that leaf checksum authority and header-generation
-preservation are not conflated.
-
-The maximum seven-home public journey uses the 18-group fixture. Its data
-candidate is block 73988, group 9 index 259, with bitmap 269 and descriptor
-offset 576 in GDT block 2. Its leaf candidate is block 131333, group 16 index
-260, with bitmap 131073 and descriptor offset zero in GDT block 3. Both
-allocation counters, the one shared super image, leaf, inode, exact file bytes,
-hard-link alias, stable zero-I/O remount, `debugfs` mapping, ballast tree, and
-read-only `e2fsck` are checked. This is exact cross-page composition evidence;
-it does not claim implicit initialization of the intervening `BLOCK_UNINIT`
-groups.
-
-W23 closes the new leaf-home crash boundary for the five-home form. Ordered
-data block 1354 is durable at W7; bitmap 259, GDT 2, and primary super 1 reach
-their transaction homes at W20--W22; leaf 1355 tears at byte 13 during W23,
-before inode home 278 at W24. The committed callback reports its caller bytes
-and quarantines the mount. Fresh recovery replays exactly the five metadata
-homes in `{ bitmap, GDT, super, leaf, inode }` order, never rewrites ordered
-data 1354, reconstructs the exact successful operation homes, and reaches a
-second byte-stable zero-I/O remount. It writes the clean primary-super endpoint
-separately after those five replay homes. No orphan state is created.
-
-### Resident depth-one existing-leaf allocation
-
-Allocation-backed hole fill and aligned-EOF growth may continue from a
-checksum-valid resident depth-one root containing one through its authenticated
-inline index capacity. The driver captures the complete fanout, chooses the
-governing leaf from the root's logical intervals, and reauthenticates the inode
-and selected leaf before use. It inserts the new initialized extent when that
-leaf has a spare entry or applies an exact left, right, or bridge coalesce in
-place. Those forms do not allocate another tree block. A full leaf remains
-eligible for a coalesce that does not add an entry; a full unmergeable selected
-leaf instead takes the split transition below when the root retains capacity.
-Only a full root plus full unmergeable selected leaf, or a deeper tree, is
-unsupported.
-
-The transaction is exactly `5/1/0`. Ordered data is emitted first, followed by
-the data allocation bitmap, primary GDT, primary superblock, existing leaf, and
-inode homes. The leaf checksum is restamped against the filesystem seed, inode
-number, and inode generation. If insertion or right coalescing changes the
-leaf's first logical block, the inode after-image repairs that selected
-resident index key while preserving every pointer and the authenticated header
-generations. Unselected leaves remain byte-exact and preexisting unselected
-index pairs remain value-exact. Only one new data block is allocated, so on the qualified 1 KiB
-geometry free space falls by one and `i_blocks` rises by two 512-byte sectors.
-
-The public qualification continues from the five-entry leaf produced by root
-composition, checkpoints a partial-tail `1/1/0` leg, and then inserts the next
-logical block into that existing leaf under exact `5/1/0` credit. The success
-journey now measures 866,727,642 guest steps; its ordinary byte-stable,
-write-free remount measures 512,274,129. Exact leaf bytes and checksum,
-inode/root topology, data zeroing, allocation and free-space accounting, both hard-link
-views, `debugfs`, and read-only `e2fsck` are checked.
-
-A separate leading-hole journey inserts logical block zero before the former
-first key and verifies the resident key changes from two to zero while its leaf
-pointer and tree topology remain fixed. The authority gate also changes the
-leaf to a different checksum-valid image between authentication and use and
-requires `STALE` from full-byte revalidation. Typed negative gates reject the
-leaf when it aliases the target's data, its external-xattr role, or another
-linked inode's data. A typed 84-entry unmergeable-leaf gate now stages and
-aborts the exact split without media I/O. The committed existing-leaf W23
-cut replays exactly its five metadata homes without rewriting ordered data and
-then reaches a write-free stable remount.
-
-Multi-leaf admission retains one bounded target-local range vector containing
-the external-xattr block when present, every resident external-leaf home, and
-every initialized or unwritten data extent in the target map. Pairwise overlap
-checking rejects data/data, data/node, node/node, and xattr overlap across
-different leaves before staging or publication. The complete temporary vector
-is scrubbed on every return path.
-
-### Resident depth-one leaf split
-
-On qualified 1 KiB geometry an external extent leaf has 84 usable entries once
-its checksum tail is reserved. When a selected leaf has all 84 entries, the new
-initialized mapping cannot coalesce, and the resident root has a free index
-slot, the allocator selects a second free block for extent metadata. It treats
-the selected leaf's old entries and new singleton as one sorted 85-entry
-sequence, rewrites that leaf with the lower 42 entries, writes the new leaf
-with the upper 43, and restamps both checksums against the filesystem seed,
-inode number, and inode generation. The resident inode root retains depth one
-and the authenticated header generation and inserts the new adjacent index.
-
-The split allocates one ordered data block and one metadata leaf. Its exact
-deduplicated metadata set contains the data bitmap, data GDT, primary
-superblock, inode, existing leaf, new leaf, and any distinct bitmap and GDT
-needed by the new-leaf allocation. It therefore consumes exact `6/1/0`,
-`7/1/0`, or `8/1/0` credit. The existing leaf is a replacement home and the new
-leaf is an allocation home; both remain in the same committed journal
-transaction as allocation accounting and the two-index inode after-image. On
-1 KiB geometry free space falls by two and `i_blocks` rises by four 512-byte
-sectors. Reverse-owner admission covers one data destination plus all eight
-possible distinct metadata homes in one nine-range proof.
-
-The public same-group qualification starts with 84 one-block extents at even
-logical blocks 0 through 166 in leaf 1353. Filling logical hole 1 selects data
-block 1364 and new leaf 1454 under exact `6/1/0` credit. The resulting root
-indexes keys 0 and 82, the leaves contain 42 and 43 entries, file size remains
-171,008 bytes, and `i_blocks` advances from 170 to 174. Both leaf checksums,
-both allocation bits, exact whole-file bytes, `debugfs` read/map/stat, and
-read-only e2fsprogs 1.47.4 `e2fsck` are checked. The public write measures
-1,136,810,443 guest steps; an active-empty remount performs zero transaction
-home replays and completes in 187,081,244 steps.
-
-A committed checkpoint fault tears new leaf 1454 at byte 13 after the bitmap,
-GDT, primary superblock, and existing leaf have landed but before the inode.
-The faulting public journey measures 1,049,742,606 guest steps and returns
-committed progress with partial/read-only quarantine. Fresh recovery measures
-206,112,098 steps and replays exactly the six metadata homes in
-`{ bitmap, GDT, super, existing leaf, new leaf, inode }` order. It does not
-rewrite ordered data block 1364 and reconstructs the byte-exact clean result.
-That singleton-to-two-leaf result supplied the first split and crash-boundary
-evidence. Commit `1f4e0ea` closes mutation from an already multi-leaf resident
-root: target intervals select the proper leaf, selected-key repair leaves the
-other root pairs unchanged, and a full selected leaf splits from two indexes to
-three while the root retains capacity. The clean public second-leaf edit
-allocates data block 1455, changes only leaf 1454 from 43 to 44 entries, advances
-`i_blocks` from 174 to 176 under exact `5/1/0`, and survives a stable remount.
-The clean public multi-leaf split allocates data 1455 and new leaf 1456, produces
-root keys 0, 1, and 84 with 42/43 selected halves, advances `i_blocks` to 178
-under exact `6/1/0`, and likewise survives remount. Pinned e2fsprogs 1.47.4
-`debugfs` and read-only `e2fsck` accept both results. A four-index root remains
-writable when the selected leaf has room; the four-index/full-selected-leaf
-case returns typed unsupported depth growth before publication and does not
-misreport physical `NOSPC`. The focused final capstone covers the three
-prepublication alias roles, singleton-split regression, fanout selection and
-key repair, cross-leaf alias refusal, typed and public fanout splitting, both
-external-oracle paths, and both four-index boundaries: 14 tests pass in one
-sequential process. Deeper-tree mutation is still outside this envelope.
+Progress is commit-granular for a transaction that allocates or changes the
+size: no caller byte is reported until the commit block is durable, and a
+fault before then leaves the old size, map, and free-space accounting in
+memory and on the medium, with any newly written block still free. A
+transaction that only rewrites mapped blocks inside EOF instead reports the
+ordered-data prefix that reached the medium before a fault, through the
+completed sectors of the torn block, because those bytes are already
+reachable. A fault after commit reports the transaction's bytes, publishes the
+committed size, block count, free count, and times, and quarantines the mount
+`PARTIAL|READONLY`; the next mount replays every metadata home and never
+rewrites ordered data. A committed write publishes the same state into the
+shared vnode before generic cursor accounting, so every hard link sees one
+EOF, and the caller's bytes leave the driver's block buffer on every return.
 
 ### Atomic CREATE slices
 
@@ -3545,378 +3066,6 @@ and neither path sets `ORPHAN_PRESENT`. The expanded pre-generalization
 sequential capstone runs the prior eight cases plus these three final-link
 cases: all 11 pass in 949.80 host seconds.
 
-### Allocation-backed in-size hole fill
-
-The staged binding publicly routes an exact clean unmapped target to the typed
-allocation operation for one complete logical hole inside the current file
-size. Its admission contract is structural: a linked regular file with flags
-exactly `EXTENTS`, an authenticated inline depth-0 root or resident depth-1
-root with authenticated external leaves, a target representable by a spare-slot insertion, an exact
-logical-and-physical initialized coalescing edit, or the qualified saturated-
-root composition or selected-leaf split within resident root capacity, an exact `i_blocks` account, and a
-hole before
-the final partial logical block qualifies. Admission is derived from
-authenticated on-disk geometry and inode state, not a named image or path.
-
-The topology-derived `4/1/0` through `8/1/0` transaction selects an
-authenticated free data block from runtime group geometry, retains a full
-zeroed image with the caller span overlaid, and attaches it by inserting a
-sorted initialized singleton, applying a checked left/right/bridge coalesce,
-editing the selected resident leaf, composing the saturated depth-zero root
-through a second leaf allocation, or splitting a saturated selected leaf while
-the resident root has capacity,
-without changing `i_size`. Its metadata after-images set every new bitmap bit,
-decrement the exact group and primary-super free-block counters, restamp their
-checksums, increment `i_blocks` for every allocation, update `mtime`/`ctime`,
-and restamp the inode. One other-inode scan covers the data destination and all
-four through eight distinct metadata homes. The target's complete existing map
-is separately checked against static metadata and journal roles before that
-inode is excluded from the scan.
-
-The in-size hole-fill mode refuses an existing initialized mapping, unwritten
-conversion, a full resident root whose selected leaf is full and unmergeable,
-a deeper extent tree, a cross-block request, the final partial logical block,
-and EOF growth.
-Those are boundaries of this mode, not claims that such files are invalid or
-unreadable. The public router reaches it only after the initialized overwrite
-builder has authenticated the target as exactly unmapped.
-
-Both transaction shapes, all four public transaction primitives, and their
-qualified exact-write compositions use the real durability lifecycle. A write-
-free dry stage is
-aborted before clean-to-`RECOVER` activation; the live stage emits ordered data
-before its descriptor and final commit and then synchronously checkpoints the
-active metadata homes. Initialized overwrite and append each have one
-inode-table metadata home. Ordinary hole fill and aligned-EOF growth have four
-metadata homes: the inode table, block bitmap, primary GDT, and primary
-superblock. Saturated-root composition has exactly five through seven homes and
-attaches the same initialized data block through one additionally allocated
-leaf. Singleton-leaf splitting has exactly six through eight homes and replaces
-the existing leaf while allocating a second. All forms update authenticated
-free-block accounting and `i_blocks` for every allocation; aligned growth also
-advances `i_size`.
-Public unmount cleanly deactivates the retained writer, and a fresh ordinary
-read-only mount reads the resulting file without requiring a new mutation
-capability.
-
-Pinned e2fsprogs 1.47.4 independently accepts that public result. `debugfs`
-reads the exact three-block file, maps logical block 1 to the geometry-selected
-candidate, and reports size 3,072 with `i_blocks = 6`; read-only
-`e2fsck -f -n` reports a clean filesystem.
-
-Three operation-specific cuts close the materially distinct new allocation
-boundaries without claiming that every shared journal ordinal has been
-re-enumerated. A tear in the ordered candidate block reports `actual = 0`,
-leaves the cursor and vnode unchanged, and quarantines the writer before any
-allocation home is written. Fresh recovery enters the empty active journal but
-replays zero homes, so the torn raw candidate remains free and unreachable and
-the original sparse file is preserved. GDT and primary-super checkpoint-home
-tears occur after the allocation transaction is committed: both report the
-complete confirmed caller count and publish committed vnode block accounting,
-filesystem free space, and timestamps before returning the quarantine error.
-Fresh recovery writes all four metadata homes, never rewrites the ordered
-candidate, publishes the allocated extent and exact free-block/`i_blocks` state
-on reload, and reaches a byte-stable write/flush-free remount. The
-combined public success, external-tool, ordered-data, GDT, and primary-super
-capstone passes five tests sequentially in 310.47 host seconds.
-
-### Tail-to-next-block exact composition
-
-Commit `c8f0804` qualifies a single `VFS-WRITE-EXACT` request beginning at EOF
-byte 1,016, eight bytes before the block boundary, and continuing 24 bytes into
-one allocated next logical block.
-The initialized tail data/inode pair and allocation data/four metadata homes
-commit in two ordered rounds through one writer. The clock is sampled once per
-callback, the second timestamp wins on complete success, hard-link views agree
-on the exact 1,048-byte result, and a write-free ordinary remount plus pinned
-`debugfs` and `e2fsck` accept the image.
-
-The two callbacks are separate durability boundaries. At commit `f6411bf`, that
-distinction was proved against a saturated unmergeable resident root: the first
-eight bytes remained checkpointed and advanced the cursor and vnode to byte
-1,024, while the freshly reauthenticated allocation leg refused with a zero-
-progress format/unsupported result. Its terminal ior had flags zero, allocation
-accounting, extent root, and candidate remain unchanged, the first timestamp
-stayed published, and the idle-clean writer remained reusable. The following
-ordinary remount was write-free and byte-stable. That record is historical;
-the current allocation leg resolves the full-root topology and proceeds when
-its containing profile and two-block geometry admit it.
-
-Two trace-derived crash cuts close the new combined reachability boundary.
-At ordered candidate write W22, the first callback's data and inode home are
-already checkpointed; the torn candidate remains free and unmapped, recovery
-replays zero metadata homes, and the 1,024-byte prefix remains authoritative on
-a stable remount. At the final inode-home checkpoint W37, both transaction
-commits are durable and the journal authoritatively retains all four allocation/
-inode after-images; three second-leg homes reached their checkpoints before the
-inode home tears. The tear's inode suffix is therefore the already checkpointed
-first-leg inode rather than the original input inode. The public call reports
-all 32 bytes and the final vnode state; recovery replays the four metadata
-homes, never rewrites either ordered data home, and converges on the exact
-successful 1,048-byte image and a write-free stable remount. Neither cut creates
-orphan state. The consolidated cross-tail closure capstone passes deterministic
-refusal, success, pinned external-tool inspection, late clean refusal, W22, and
-W37 sequentially: six tests in 383.36 host seconds.
-
-Consecutive-hole composition is also qualified on a valid four-block sparse
-inode whose initialized endpoints surround two complete logical holes. One
-public `VFS-WRITE-EXACT` fills both holes through the same reusable writer as
-two independently durable `4/1/0` transactions, allocating geometry-selected
-blocks 1351 and 1352. Trace checks bound the lifecycle at 89 events and require
-the two candidate/bitmap/GDT/inode rounds in order, while exact cursor,
-timestamp, `i_blocks`, free-space, and full-file readback checks prove
-cumulative publication. Clean unmount completes in 1,285,188,318 guest steps
-under the established scoped 1.5-billion multi-record ceiling; the ordinary
-remount completes in 62,181,924 steps with no writes or flushes, and pinned
-`debugfs` plus read-only `e2fsck` accept the result. The request has
-independently durable block semantics, not an atomic two-block transaction. Its
-first allocation inserts a singleton; its second coalesces with that singleton
-into a real length-two initialized extent, leaving the inline root at three
-entries with one resident slot still available. This directly qualifies
-adjacent initialized coalescing on the current public hole-fill path. Focused
-typed stages also qualify bridge coalescing and right coalescing in a full
-resident root. Before `851d2c6`, the unmergeable full root was the one remaining
-resident shape requiring extent-root growth; it is now the qualified single-
-leaf composition described above.
-
-`_EXT4-MOUNTED-ONEBLOCK-WRITE` now composes that exact slice as a reusable
-private mounted client. It accepts source/count, file offset, inode number,
-expected generation, explicit seconds/nanoseconds, the mounted VFS, a signed
-metadata credit, and a typed stage XT, and returns `actual ior`. A nonzero
-credit is already exact. Signed zero invokes the allocation credit resolver,
-which performs a read-only authenticated planning pass and returns exact
-negative credit before transaction capacity preflight and begin. Positive credit
-selects ordered-sector prefix progress for bytes already reachable through the
-old inode size. Negative credit selects commit-granular progress for operations
-whose caller bytes are not yet reachable—allocation-backed hole fill,
-initialized partial-tail append, and aligned-EOF growth—while its absolute value
-is the real metadata credit. A zero-length request returns `0 0` without
-allocating a writer. Every nonempty request preflights and ensures the resolved
-`abs(metadata-credit)/1/0`: `1/1/0` for overwrite or partial-tail append,
-`4/1/0` for a depth-zero ordinary allocation, exact `5/1/0` for a selected
-resident depth-one leaf edit, and `5/1/0` through `7/1/0` for saturated-root
-composition, or `6/1/0` through `8/1/0` for a selected-leaf split while the
-root retains capacity.
-Allocation-backed public routes pass signed zero; the
-resolver's negative result withholds progress until journal commit. Each cross-
-tail leg performs that exact per-callback capacity check; request classification
-additionally preflights the ordinary `4/1/0` floor before the first `1/1/0` leg
-can sample time or publish bytes. Before any operation it
-copies the admitted source into one private `_EXT4-MAX-BLOCK` snapshot,
-preserving caller bytes even when the source aliases a shared ext4 cache or
-writer storage that dry staging, activation, or writer rebase will overwrite.
-Every post-copy return scrubs the complete snapshot; a caller span overlapping
-that private snapshot is invalid. The public router also protects the complete
-unconsumed caller span from its own fallback buffer so later
-`VFS-WRITE-EXACT` chunks cannot be scrubbed accidentally.
-
-The first clean request dry-stages and aborts before activation; after
-activation, successful calls synchronously stage, emit, and checkpoint, then
-retain the same scrubbed `IDLE` writer for the next call without arena growth.
-A staging refusal reports zero progress and aborts only a still-mutable
-transaction. Once emission has advanced, existing writer fault/quarantine
-semantics retain the uncertain durable state for remount recovery, and an
-already latched abort fault takes precedence over the staging error that led
-to it. For initialized overwrite, `actual` is the conservative contiguous
-prefix of caller bytes confirmed by the ordered-data write. If `c` whole
-512-byte sectors completed and the caller range begins at byte `o` within the
-block, the exact rule is `min(count, max(0, c * 512 - o))`; a tear inside the
-next sector proves none of that sector. Hole fill and append report no caller
-progress until the complete typed transaction has passed emission, because a
-new data allocation or bytes beyond old EOF are not yet reachable file content.
-Once an operation has crossed its corresponding progress boundary, a later
-proof or checkpoint error retains the complete confirmed count. For committed
-append, the callback also publishes the committed EOF and times before
-returning a checkpoint error so generic VFS advances the descriptor without
-creating stale dirty-vnode state.
-
-Every error with nonzero `actual` has `VFS-IOR-F-PARTIAL`, including an error
-with `actual = count`. A low-level torn-sector error may retain `PARTIAL` even
-when the conservative caller prefix is zero. Writer quarantine preserves the
-first error's domain, reason, detail, and causal flags, adds
-`VFS-IOR-F-READONLY` at the mounted-client boundary, and leaves the VFS
-`RO|DIRTY`; same-mount retry is therefore forbidden without discarding the
-original diagnostic. Bytes after `actual` are indeterminate, not asserted
-unchanged. A checkpoint-entry refusal after commit is explicitly latched at a
-valid checkpoint phase rather than leaving replayable authority available for
-same-session retry.
-
-The nonzero-`actual`/`PARTIAL` invariant is per callback.
-`VFS-WRITE-EXACT` returns the terminal ior and does not synthesize `PARTIAL`
-from an earlier successful callback. A clean zero-progress refusal on the
-second leg can therefore have flags zero while the FD cursor and shared vnode
-EOF expose the independently checkpointed prefix from the first leg.
-
-Focused mounted-client qualification separates media-clean refusal from the
-long durability journey so each remains within its measured emulator
-watchdog. Zero length leaves the arena unchanged; a stale generation allocates
-the one reusable workspace but emits no write or flush and leaves the clean
-journal inactive. A fresh journey performs two disjoint overwrites of the same
-file through one writer, preserves the first edit in the second full-block RMW,
-and checkpoints both inode after-images. The first source is deliberately
-placed in the shared ext4 block cache and the second in writer scratch, pinning
-the cross-phase snapshot rule. It then drops the volatile mount at the
-authenticated dirty/empty write-active endpoint. A fresh mount performs
-the clean landing, returns both edits and the second exact timestamp through
-the path and its hard-link alias, and leaves a subsequent unmount clean. The
-client remains absent from the ordinary `EXT4-OPS`: it deliberately does not
-publish vnode timestamps or dirty state itself. `_EXT4-WRITE`, installed in
-`EXT4-STAGED-WRITE-OPS`, supplies the ABI callback boundary and publishes the
-successful timestamp and VFS dirty state.
-
-Fault qualification now crosses a 512-byte boundary inside one initialized
-block. A 24-byte request beginning at byte 500 tears six bytes into the second
-sector after the first sector completed: the callback reports exactly 12
-confirmed bytes even though raw-media inspection shows that six later caller
-bytes also changed. A separate body-flush failure occurs after the ordered
-block completed and reports the full nine-byte request with
-`PARTIAL|READONLY`. Both cases retain the exact underlying writer fault,
-quarantine the mounted instance, scrub the private source snapshot, preserve
-the old inode-table home, and publish no vnode timestamps.
-
-The public staged path also qualifies one second-transaction durability
-boundary derived from its successful two-write trace. At flush ordinal 22,
-the second ordered-data block is already behind its body fence but the final
-commit block has not been confirmed durable. The faulted call reports all six
-caller bytes with `PARTIAL|READONLY`, keeps the first write's published vnode
-time, and quarantines the reused writer at `COMMIT-FLUSH`. Both modeled
-durability views contain both data edits and only the first inode-table home.
-If the final commit reached media, a fresh mount replays exactly the second
-inode after-image; if only the prior fence survived, it applies no inode home
-and retains the first timestamp. Both results clean the active journal and are
-byte-stable on another write-free remount. This is a representative reachable
-commit fence for the promoted operation, not a claim that every power-cut
-ordinal has already been enumerated.
-
-A private driver word, `_EXT4-WRITE`, has the exact ABI-1 callback shape
-`( source count offset dentry vfs -- actual ior )`. It validates an owned,
-linked regular-file dentry, its shared vnode identity/generation and clean
-cached state, and a nonwrapping caller range. An in-size nonempty call derives
-`min(count, block_size - (offset mod block_size))` and sends exactly that first
-block-bounded chunk through the initialized-overwrite/hole-fill router. A
-larger in-size request therefore returns legal short success rather than
-widening either qualified transaction. A growth request must begin at exact
-EOF. At a partial EOF it may fit the remaining initialized tail or enter the
-qualified crossing envelope, in which case the callback preflights `4/1/0` and
-returns only the independently committed tail prefix. `VFS-WRITE?` exposes
-that short result directly; `VFS-WRITE-EXACT` advances the buffer and offset and
-re-enters at aligned EOF for each allocation leg. At aligned EOF the callback
-admits at most one data block; its mounted client resolves the current
-allocation/root topology to exact `4/1/0` through `8/1/0` credit before begin.
-Only the exact-write caller chains committed short results into additional new
-logical blocks.
-The callback passes the
-vnode's ext4 inode number and generation and never owns or advances an FD
-cursor. Every exact checkpointed success publishes `mtime`/`ctime` seconds and
-nanoseconds into the shared vnode, making the result immediately visible
-through every hard-link alias. Initialized overwrite leaves `VN.BLOCKS`
-unchanged; successful hole fill publishes the exact incremented ext4
-`i_blocks` value into `VN.BLOCKS`. Initialized partial-tail append publishes the
-new `VN.SIZE` and leaves `VN.BLOCKS` unchanged; aligned-EOF growth publishes the
-new size, exact incremented block count, and free-space count. Atime, link count,
-identity, generation, and vnode-dirty state remain unchanged. A pre-commit
-failure publishes no vnode fields. A committed partial-tail append that later
-fails checkpoint has authoritative full progress, EOF, and times; committed
-aligned growth additionally has authoritative block and free-space accounting.
-Those fields are published before the partial/read-only error returns.
-
-Block-bounded qualification supplies 1,040 caller bytes at offset 1,016 of the
-3 KiB sparse-file shape with a `1/1/0` profile. The initialized first block
-checkpoints exactly eight bytes and returns short success; the next independently
-bounded request reaches the hole and fails cleanly with `NOSPC`, leaving the
-first overwrite durable and its timestamp published. A separate public
-`VFS-WRITE?` journey binds `4/1/0`, writes inside that complete logical hole,
-allocates one initialized block, and publishes the exact new block count after
-its four-home checkpoint. These tests establish both sides of the capacity
-boundary without claiming mixed-route multi-block atomicity.
-
-Positive multi-block qualification uses one public `VFS-WRITE-EXACT` request
-across the only adjacent initialized pair in the real depth-1 extent fixture.
-The request writes eight bytes at the end of logical block 10 and sixteen at
-the start of logical block 11. It completes as two independent `1/1/0`
-transactions through one allocation-stable writer, samples the clock once per
-chunk, and leaves the final vnode/inode time at the second sample. The trace
-contains the ordered homes for physical blocks 1362 then 1363 and two
-inode-table checkpoints; external extent node 1353 is never written. A clean
-ordinary remount performs no I/O, pinned `debugfs` observes the exact 12 KiB
-file and unchanged six-range extent map, and pinned `e2fsck` accepts the image.
-This promotes a size-preserving multi-block transfer over existing initialized
-allocation. It does not promote an atomic multi-block transaction: every
-completed chunk is independently durable, a later error leaves earlier chunks
-checkpointed, and the FD cursor is the cumulative progress witness.
-
-Generic cursor qualification uses the real staged binding. Its operation table
-uses the staged mount gate and installs `_EXT4-WRITE`; its capability mask adds
-`WRITE`, and its flags omit `READ_ONLY`. The ordinary `EXT4-BINDING`,
-`EXT4-CAPS`, and `EXT4-OPS` remain unchanged. Through the staged binding,
-`VFS-WRITE-EXACT` advances an FD only by each callback's confirmed prefix. The
-current generic-cursor regression uses a `1/1/0` profile: it checkpoints the
-initialized eight-byte prefix, then stops at the allocation step with `NOSPC`
-and the cursor at 1,024. The single-hole `4/1/0` journey separately establishes
-successful allocation publication. A positive `4/1/0` exact journey now
-composes the initialized eight-byte suffix and the following complete logical
-hole as two transactions through one writer, advances the cursor to 2,048,
-publishes the second timestamp and new block count, and leaves the later
-initialized block untouched. Its paired reverse journey fills the complete
-hole first, then overwrites eight bytes at the start of the following
-initialized block through the same writer. It advances the cursor to 2,056,
-writes only the candidate and following data homes, publishes the second clock
-sample, and finishes with the initialized-overwrite callback geometry. Together
-the tests qualify both `1/1/0 -> 4/1/0` and `4/1/0 -> 1/1/0` transitions. The
-callback contract makes no mixed-route atomicity claim.
-
-The same staged binding qualifies generic fault propagation. An ordered-data
-tear during a 24-byte `VFS-WRITE?` at offset 500 changes 18 raw caller bytes
-but certifies only the 12-byte prefix ending at the first complete sector.
-The call returns `actual = 12` with `PARTIAL | READONLY`, advances the FD to
-512, records that result in `V.LAST-IOR`, and quarantines the writable clone as
-read-only and dirty. The writer retains the causal volume fault with `PARTIAL`
-but without the derived `READONLY` consequence. A retry is rejected by generic
-VFS admission before callback or clock dispatch, leaves the cursor at 512, and
-does not replace `V.LAST-IOR`; vnode times, size, and dirty state remain
-unpublished. This distinguishes certified cursor progress from raw torn-sector
-effects and pins the retry boundary after quarantine.
-
-The callback obtains time from a caller-installed per-context provider rather
-than ambient `EPOCH@`. `EXT4-BIND-WRITE-CLOCK?` binds it once at an
-authenticated clean mounted endpoint before the first mutation. Clock and
-dedicated-profile binding may occur in either order while the profile remains
-untouched, idle, and clean. The provider contract is
-`( clock-context -- epoch-ms ior )`; one nonzero write samples it exactly once
-and converts the admitted scalar to ext4 seconds/nanoseconds. Zero-length
-writes do not sample or publish time. The binding survives strict reload,
-checkpoint, and live sync/deactivation.
-
-`FSYNC` and `SYNCFS` now validate the retained writer, checkpoint a lower-level
-`COMMITTED` transaction if present, return any latched fault, and require an
-idle-clean endpoint. `FSYNC` leaves the already-checkpointed filesystem's
-empty journal write-active. `SYNCFS` cleanly deactivates it before generic
-`VFS-SYNC` clears `VFS-F-DIRTY`, then republishes ready and writer-current
-authority so the still-mounted context can reactivate later. Focused
-qualification covers missing-clock and duplicate-bind refusal, two live
-sync/deactivation boundaries, reactivation through the same writer, exact
-hard-link cache publication, unchanged callback-side FD cursors, alias
-readback, clean unmount, and independent raw data/inode/journal checks.
-
-`_EXT4-WRITE` remains absent from the ordinary `EXT4-OPS` and `EXT4-CAPS` and
-is present only in `EXT4-STAGED-WRITE-OPS`. Generic `VFS-WRITE?` advances only
-the calling FD by the returned confirmed prefix; the callback itself owns no
-FD. This is a real, deliberately named staged capability. It does not make the
-ordinary ext4 binding writable and does not imply support for general data
-shapes, allocation geometry beyond the qualified block transactions and their
-evidenced initialized and two-allocation transitions across the first two
-primary GDT pages, sparse/gap growth, growth past a full resident depth-one
-root/full selected-leaf boundary, deeper extent-tree mutation, or namespace
-mutation.
-
-Controlled sequential-write qualification tears the first inode-table home
-write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
-data and committed journal are already durable, while the torn home is neither
-the old nor new inode and fails its inode checksum. A fresh mount replays the
-retained inode-table after-image exactly, cleans the journal, and is stable on
-another write-free remount. This is one pinned checkpoint tear, not yet the
-complete power-cut matrix for ordinary writes.
-
 ## Read and inspection behavior
 
 The current binding advertises directory enumeration, open/release, reads,
@@ -3972,16 +3121,11 @@ capability bits and dispatch slots. The current worktree additionally wires
 `RENAME`, `ATOMIC-RENAME`, and `CROSSDIR-RENAME` to the qualified regular-file
 and cross-parent empty-directory no-replacement slices described above; it
 does not wire `RENAME-REPLACE`. It also advertises the focused-qualified
-linked-regular `SETATTR` slot described above. Its write slot covers the
-initialized overwrite,
-initialized partial-tail append, in-size hole-fill, and aligned-EOF growth
-operations described above.
-`VFS-WRITE-EXACT` composes those same primitives for the qualified tail-to-one-
-new-block route; it does not introduce a fifth transaction primitive.
-Both bindings retain `VFS-CAP-SPARSE` for existing sparse mappings and
-zero-filled hole reads. The bounded allocation operation is
-part of the staged `WRITE` contract; it is not implied for arbitrary holes by
-the `SPARSE` capability bit. `VOL-WRITE` and `VOL-FLUSH` remain confined to
+linked-regular `SETATTR` slot described above. Its write slot is the general
+regular-file write described above, and `VFS-WRITE-EXACT` composes its
+transactions. Both bindings retain `VFS-CAP-SPARSE` for sparse mappings and
+zero-filled hole reads; the staged write leaves holes when it writes past EOF
+and fills them when it writes into them. `VOL-WRITE` and `VOL-FLUSH` remain confined to
 authenticated recovery and the staged transaction lifecycle.
 
 ## Recovery baseline and writable ratchet
@@ -4036,15 +3180,13 @@ authority, batching, ring wrap, or resolver behavior.
 The ratchet order is:
 
 1. freeze or clamp the qualified recovery baseline (completed);
-2. close initialized overwrite, bounded allocation-backed hole fill and
-   aligned growth, exact-write composition, allocation geometry, depth-zero
-   root composition, singleton depth-one mutation, and singleton-leaf
-   splitting (completed through `3091fca`);
-3. make an existing authenticated multi-leaf depth-one root writable: select
-   and reauthenticate the governing leaf, insert or coalesce, repair its
-   resident index key, and split that leaf while the root retains index
-   capacity, preserving untouched leaves byte-exact and preexisting
-   unselected index pairs value-exact (completed at `1f4e0ea`);
+2. close regular-file writes: bounded overwrite, hole fill, aligned growth,
+   exact-write composition, allocation geometry, root composition, and
+   depth-one leaf editing and splitting landed first (through `1f4e0ea`), and
+   the general write described above has since replaced every one of those
+   bounded paths with one routine for any span, any extent depth, multi-block
+   transactions, and lazily initialized groups;
+3. (merged into item 2);
 4. build shared inode allocation and directory insertion, then expose the
    first bounded `CREATE` slice (completed in the current worktree);
 5. retain completed same-retained-block shrink and generalized inline
@@ -4085,11 +3227,11 @@ The ratchet order is:
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 
-Extent-tree depth and indexed-directory HTree depth are independent ratchets.
-Broaden either only when the next operation or a realistic pinned corpus
-demands it. `CREATE` may require a directory-leaf split before any regular-file
-workload requires extent depth two; neither tree's speculative generalization
-gates the other.
+Each remaining family closes its gaps the way the write did: when it next
+needs a case its bounded paths lack, one general routine replaces those paths
+and the special cases are deleted rather than kept beside it. Extent-tree
+editing is now general; directory insertion and removal, truncation, and
+unlink are the families that follow.
 
 Each landing may move only forward: it must keep all prior qualified behavior,
 remain crash-closed, and advertise exactly the capabilities it has earned. An
@@ -4100,11 +3242,10 @@ conformance.
 ## Deliberate remaining limits
 
 The current explicitly staged write surface is not completion of the writable
-profile. Its initialized-overwrite, initialized partial-tail append, in-size
-hole-fill, and aligned-EOF growth operations are production-closed for their
-documented request envelopes. Their qualified tail-to-allocation and additional
-allocated-EOF exact compositions preserve independently durable prefixes, but
-no broader geometry or operation inherits that status.
+profile. Its general regular-file write is production-closed on 1 KiB/256-byte-
+inode geometry for extent-mapped files at every depth the format allows; exact
+writes compose independently durable transactions, and no broader geometry or
+operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded `CREATE` and
 `MKDIR` under their documented linear/indexed envelopes, qualified shrink
 `TRUNCATE`, and bounded regular-file
@@ -4131,19 +3272,12 @@ mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
 The staged binding's production-closed inventory contains the following
-concrete durable paths. Initialized
-overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
-after-image and consumes `1/1/0`. Strict append uses the same transaction shape
-to extend exact partial EOF inside the initialized block, updating `i_size`
-without allocation. In-size hole fill allocates one geometry-
-selected block, attaches it through a resident depth-zero insertion, checked
-adjacent initialized coalescing, qualified single-leaf root composition, or a
-selected resident depth-one existing-leaf edit or capacity-preserving split,
-updates every required bitmap,
-group, and super free-block account plus `i_blocks`, and consumes exact
-`4/1/0` through `8/1/0` credit.
-Aligned-EOF growth uses the same topology-derived allocation transaction and
-also advances `i_size`. Same-retained-block TRUNCATE journals its zeroed data
+concrete durable paths. The general write stages each transaction's mapped
+blocks as ordered full-block images and its allocated runs as zero-backed
+ordered blocks, edits the extent tree at any depth, updates every touched
+bitmap, group, and super free-block account plus `i_blocks`, `i_size`, and the
+trusted-clock times, and carries as many blocks as the bound profile holds.
+Same-retained-block TRUNCATE journals its zeroed data
 block and checksummed size/timestamp inode as exact `2/0/0`, without allocation
 or orphan state. Depth-zero TRUNCATE-to-zero uses exact `3/0/0` `ADD_FIRST` or
 `2/0/0` `ADD_MORE` orphan publication, topology-derived linked-orphan cleanup,
@@ -4209,45 +3343,10 @@ or parent geometry. Linked-regular scalar SETATTR persists any nonempty subset
 of `MODE`, `UID`, `GID`, `ATIME`, `MTIME`, and `CTIME` through one checksummed
 inode-table after-image under exact `1/0/0`, without a clock sample, data,
 revoke, allocation, or orphan mutation. The other clock-derived mutation paths
-update `mtime`/`ctime`; both
-allocation-backed operations change `VN.BLOCKS` and free-space accounting, and
-both append modes change file size. Exact writes compose the qualified
-initialized and hole callbacks across evidenced adjacent blocks and compose the
-qualified tail-to-allocation and additional allocated-EOF routes as sequential
-`1/1/0` and/or topology-derived `4/1/0` through `8/1/0` transactions. Every
-callback is independently durable; a later failure
-preserves earlier checkpointed progress, and no multi-block atomicity is
-implied. The landed
-hole-fill lifecycle includes dry-stage, activation, ordered emission,
-synchronous checkpoint, clean deactivation, and a byte-stable write-free
-ordinary remount. Its pinned external-tool journey and representative ordered
-candidate, GDT-home, and primary-super-home crash recovery are also qualified.
-Aligned growth adds its own pinned external-tool journey and W7 ordered-
-candidate/W22 inode-home crash closure. Cross-tail composition adds success,
-pinned external-tool, deterministic-refusal, late clean-refusal, W22 ordered-
-candidate, and W37 committed-inode closure. Additional allocated EOF composition
-adds insert-then-coalesce success and the historical late full-root durable-
-prefix refusal. The
-same-primary-GDT-page initialized cross-group slice adds candidate-derived
-accounting-home certification, actual-bitmap alias refusal, and W19 replay of
-the exact later-group homes. The cross-GDT-page slice adds an 18-group pinned
-fixture, group-16 allocation through primary GDT block 3, and exact W20 replay
-without touching the inode-local GDT page. Saturated-root composition adds
-public EOF and hole-fill trees, exact five/seven-home public accounting plus
-six-home typed stage/abort, distinct inode/root-generation evidence, maximum cross-GDT-page publication with
-external checking, clean profile/single-candidate refusals, and W23 leaf-home
-replay. Singleton depth-one continuation adds exact five-home existing-leaf
-publication, leaf checksum, resident-index pointer/topology preservation and
-first-key repair, data/accounting checks, stable remount, and external-tool
-acceptance. Singleton-leaf splitting adds exact six-home public publication and
-typed staging, two checksummed 42/43-entry leaves, two-index root publication,
-whole-file external-tool acceptance, active-empty remount cleanup, and exact
-six-home committed new-leaf replay without ordered-data rewrite. Existing
-multi-leaf depth-one mutation adds interval-based target selection, full-fanout
-capture, selected-leaf reauthentication and key repair, byte-exact preservation
-of unselected leaves, exact in-place editing under a full root, two-to-three
-index splitting, target-local cross-leaf alias rejection, stable remount, and
-pinned `debugfs`/`e2fsck` acceptance. The initial CREATE slice adds initialized-
+update `mtime`/`ctime`; the general write also publishes `VN.BLOCKS`, the
+free-block count, and the size. Exact writes compose its transactions: every
+callback is independently durable, a later failure preserves earlier
+checkpointed progress, and no multi-block atomicity is implied. The initial CREATE slice adds initialized-
 group inode selection and allocation, checksum/accounting updates, one-block
 linear-directory slack insertion, parent/new inode construction, cache
 publication, clean unmount, precommit rollback, six-home committed replay,
@@ -4333,11 +3432,8 @@ full-leaf refusal and compositional recovery boundary draft-close the
 namespace-insertion tranche; indexed LINK/MKDIR splitting and growth remain
 gated.
 Replacement, victims, broader
-concurrent orphan unions, general sparse/gap
-growth, unwritten conversion, growth beyond a
-full resident root plus full unmergeable selected leaf, mutation starting from
-a deeper extent tree, other broader allocation and mutation geometry, multi-
-block atomicity, partial or depth-positive block-releasing truncation, and other
+concurrent orphan unions, unwritten conversion, 2/4 KiB and 128-byte-inode
+allocation, multi-block atomicity across callbacks, partial or depth-positive block-releasing truncation, and other
 namespace mutation remain later capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an
@@ -4347,35 +3443,9 @@ ordered list of prerequisites for retaining the qualified write surface:
   enforcement is not claimed;
 - read and recovery retain the authenticated 1/2/4 KiB and 128/256-byte-inode
   forms, while staged mutation is currently qualified on 1 KiB/256-byte-inode
-  geometry. The initialized-overwrite extent corpus reaches depth 1; hole fill
-  and aligned-EOF allocation start either from a depth-0 resident root or from
-  a depth-1 resident root containing one through its authenticated inline index
-  capacity, with every index naming one checksum-valid external leaf.
-  The depth-0 form uses a spare-slot insertion, exact initialized coalescing
-  edit, or one saturated-root composition into a single external leaf and
-  resident depth-one index. The depth-1 form selects the governing leaf by its
-  logical interval and inserts with spare leaf capacity or coalesces in place
-  under exact `5/1/0` credit; when that leaf is saturated and cannot coalesce,
-  exact `6/1/0` through `8/1/0` credit splits it while the resident root retains
-  an index slot.
-  Allocation selection is qualified across an initialized group-0-to-group-1
-  boundary whose 64-byte descriptors share one 1 KiB primary GDT block, an
-  initialized group-0-to-group-16 boundary whose descriptor begins the next
-  primary GDT block, a two-allocation group-0/group-1 composition with distinct
-  bitmaps sharing one GDT page, and a two-allocation group-9/group-16
-  composition with distinct bitmaps and GDT pages. `BLOCK_UNINIT` initialization, partial-last-group
-  mutation, wraparound, wider GDT-page layouts, and 2/4 KiB allocation remain
-  unqualified.
-  The consecutive-hole
-  journey proves coalescing by extending the first allocated singleton to
-  length two while leaving the root at three entries. The planner also admits
-  a full resident root when coalescing preserves its entry count and otherwise
-  performs the qualified single-leaf transition. A full existing leaf remains
-  eligible for a coalesce that adds no entry or a capacity-preserving split.
-  A full resident root remains writable through an in-place selected-leaf edit;
-  only a full root plus full unmergeable selected leaf requires unsupported
-  deeper growth. Deeper
-  trees remain readable through the bounded profile depth limit of 5;
+  geometry. The general write edits extent trees through the format's five
+  levels below the inode and allocates from initialized and `BLOCK_UNINIT`
+  groups with wraparound;
 - the real special-inode fixture covers FIFO, character, and block devices,
   but not a socket inode;
 - replay currently requires checksum-v3/64-bit journal records, supports
@@ -4394,16 +3464,9 @@ ordered list of prerequisites for retaining the qualified write surface:
   preflight, retained-image home writes, dirty-empty journal release,
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as shared durability
-  foundations. The staged binding composes them with a full ordered-data RMW
-  and timed checksummed inode after-image for initialized overwrite or strict
-  partial-tail append, or with a newly allocated zero-backed ordered block plus
-  four authenticated allocation/inode metadata homes for an ordinary hole fill
-  or aligned-EOF growth. Saturated-root composition adds one checksummed leaf
-  and any distinct second bitmap/GDT accounting homes, for an exact five-to-
-  seven-home transaction. Cross-tail exact writes sequence those existing RMW and
-  allocation foundations rather than introducing a third transaction shape.
-  Aligned growth carries map, `i_blocks`, `i_size`, times, and checksum in the
-  one inode after-image. All
+  foundations. The staged binding composes them with the general write's
+  ordered full-block images, run allocation accounting, extent-tree nodes,
+  and timed checksummed inode after-image. All
   operations run only after
   mutation-range and filesystem-wide ownership proof. Broader mutation remains
   gated operation by operation.

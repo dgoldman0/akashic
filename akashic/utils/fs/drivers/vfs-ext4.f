@@ -143,11 +143,17 @@ VARIABLE _EXT4-MOB-NEXT-FIRST
 \ A target inode is excluded from the other-owner scan, so a scoped complete
 \ map audit separately proves that every target data/node range has a safe
 \ mutation role and that the selected physical block occurs exactly once as
-\ data and never as map metadata.  ACTIVE is the publication word.
+\ data and never as map metadata.  A published vector of homes instead adds
+\ every overlap with it to HITS, for a caller that knows how many
+\ target-owned blocks the vector holds.  ACTIVE is the publication word.
 VARIABLE _EXT4-MUTATION-MAP-TARGET
 VARIABLE _EXT4-MUTATION-MAP-ACTIVE
 VARIABLE _EXT4-MUTATION-MAP-HITS
+VARIABLE _EXT4-MUTATION-MAP-VECTOR
+VARIABLE _EXT4-MUTATION-MAP-VECTOR-COUNT
 VARIABLE _EXT4-MUTATION-ROLE-XT
+VARIABLE _EXT4-MMV-FIRST
+VARIABLE _EXT4-MMV-END
 
 \ Normal read validation leaves both mutation-owner ranges and the protocol
 \ scope empty.  A bounded mutation proof temporarily publishes them while
@@ -208,6 +214,17 @@ VARIABLE _EXT4-MUTATION-ROLE-XT
 
 : _EXT4-MUTATION-MAP-ALIASES?  ( first count -- alias? valid? )
     _EXT4-MUTATION-MAP-ACTIVE @ 0= IF 2DROP FALSE TRUE EXIT THEN
+    _EXT4-MUTATION-MAP-VECTOR-COUNT @ IF
+        2DUP URANGE-VALID? 0= IF 2DROP FALSE FALSE EXIT THEN
+        OVER + _EXT4-MMV-END ! _EXT4-MMV-FIRST !
+        _EXT4-MUTATION-MAP-VECTOR-COUNT @ 0 ?DO
+            I 2* CELLS _EXT4-MUTATION-MAP-VECTOR @ +
+            DUP @ SWAP CELL+ @ OVER +
+            _EXT4-MMV-END @ MIN SWAP _EXT4-MMV-FIRST @ MAX
+            2DUP U> IF - _EXT4-MUTATION-MAP-HITS +! ELSE 2DROP THEN
+        LOOP
+        FALSE TRUE EXIT
+    THEN
     _EXT4-MUTATION-MAP-TARGET @ 1 URANGE-OVERLAP? ;
 
 \ The descriptor-wide mutation-role validator is defined after the generic
@@ -752,6 +769,19 @@ VARIABLE _EXT4-ET-ROOT-COUNT
         THEN
     THEN 0 ;
 
+\ Restore a node after a child traversal reused the tree buffer.  Its first
+\ load in this walk proved it, and the walk writes nothing, so only its bytes
+\ and entry count come back.  Proving it again for each child would repeat
+\ the same proof, and would count the node again in a mutation map audit.
+: _EXT4-RELOAD-EXTENT-NODE  ( physical-block ctx -- ior )
+    DUP _EXT4-EV-CTX ! _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _EXT4-EV-CTX @ _EXT4-C.BLOCK +
+    _EXT4-EV-CTX @ _EXT4-C.TREE-BLOCK +
+    _EXT4-EV-CTX @ _EXT4-C.BSIZE + @ CMOVE
+    _EXT4-EV-CTX @ _EXT4-C.TREE-BLOCK + DUP _EXT4-EV-IN !
+    2 + W@ _EXT4-EV-COUNT !
+    0 ;
+
 : _EXT4-VALIDATE-EXTENT-SUBTREE  ( physical-block depth -- ior )
     2DUP _EXT4-ET-CTX @ _EXT4-LOAD-EXTENT-NODE ?DUP IF
         >R 2DROP R> EXIT
@@ -761,7 +791,7 @@ VARIABLE _EXT4-ET-ROOT-COUNT
     THEN
     DUP 0= IF 2DROP 0 EXIT THEN
     _EXT4-ET-CTX @ _EXT4-C.TREE-BLOCK + 2 + W@ 0 ?DO
-        2DUP _EXT4-ET-CTX @ _EXT4-LOAD-EXTENT-NODE ?DUP IF
+        OVER _EXT4-ET-CTX @ _EXT4-RELOAD-EXTENT-NODE ?DUP IF
             >R 2DROP R> UNLOOP EXIT
         THEN
         _EXT4-ET-CTX @ _EXT4-C.TREE-BLOCK + 12 I 12 * + + L@
@@ -6818,6 +6848,35 @@ VARIABLE _EXT4-JMA-SCRATCH
 : _EXT4-JTX-META-REPLACE  ( afterimage home transaction -- ior )
     _EXT4-JTX-META-PUT ;
 
+VARIABLE _EXT4-JMI-HOME
+VARIABLE _EXT4-JMI-WRITER
+VARIABLE _EXT4-JMI-INDEX
+
+\ The active after-image this transaction holds for HOME, or zero when it
+\ holds none.  Its retained CRC is checked before the caller may read it.
+: _EXT4-JTX-META-IMAGE  ( home transaction -- image ior )
+    _EXT4-JMI-WRITER ! _EXT4-JMI-HOME !
+    _EXT4-JMI-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JMI-HOME @
+    _EXT4-JMI-WRITER @ _EXT4-JWR.META-ENTRIES + @
+    _EXT4-JWR-IMAGE-ENTRY-CELLS
+    _EXT4-JMI-WRITER @ _EXT4-JWR.META-HASH + @
+    _EXT4-JMI-WRITER @ _EXT4-JWR.META-SLOTS + @
+    _EXT4-JMI-WRITER @ _EXT4-JWR.META-USED + @
+    _EXT4-JTX-HASH-FIND ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    0= IF DROP 0 0 EXIT THEN
+    DUP _EXT4-JMI-INDEX !
+    _EXT4-JMI-WRITER @ _EXT4-JWR-META-ENTRY CELL+ @
+    DUP _EXT4-JE-ACTIVE <> IF
+        _EXT4-JE-CANCELLED = IF 0 0 ELSE 0 VFS-E-CORRUPT THEN EXIT
+    THEN
+    DROP
+    _EXT4-JMI-INDEX @ _EXT4-JMI-WRITER @ _EXT4-JWR-META-IMAGE
+    DUP _EXT4-JMI-WRITER @ _EXT4-JTX-IMAGE-CRC ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    _EXT4-JMI-INDEX @ _EXT4-JMI-WRITER @ _EXT4-JWR-META-ENTRY 2 CELLS + @
+    <> IF DROP 0 VFS-E-CORRUPT EXIT THEN
+    0 ;
+
 VARIABLE _EXT4-JTD-BUFFER
 VARIABLE _EXT4-JTD-HOME
 VARIABLE _EXT4-JTD-WRITER
@@ -10607,10 +10666,11 @@ VARIABLE _EXT4-JBV-NEXT-COUNT
     _EXT4-JTX-STAGE-FREE-BLOCK-RANGE-AFTER-VECTOR-TARGETS ;
 
 \ =====================================================================
-\  Exact one-block allocation accounting
+\  Run allocation accounting
 \ =====================================================================
 
 VARIABLE _EXT4-JAB-BLOCK
+VARIABLE _EXT4-JAB-COUNT
 VARIABLE _EXT4-JAB-WRITER
 VARIABLE _EXT4-JAB-CTX
 VARIABLE _EXT4-JAB-GROUP
@@ -10621,6 +10681,8 @@ VARIABLE _EXT4-JAB-GDT-HOME
 VARIABLE _EXT4-JAB-GDT-OFF
 VARIABLE _EXT4-JAB-IMAGE
 VARIABLE _EXT4-JAB-DESC
+VARIABLE _EXT4-JAB-UNINIT
+VARIABLE _EXT4-JAB-STILL-UNINIT
 VARIABLE _EXT4-JAB-BITMAP-CRC
 VARIABLE _EXT4-JAB-NEW-BITMAP-CRC
 VARIABLE _EXT4-JAB-GROUP-FREE
@@ -10648,25 +10710,37 @@ VARIABLE _EXT4-JAB-ABORT-IOR
     THEN
     _EXT4-JAB-IOR @ ;
 
+\ A run is accounted inside one block group.
 : _EXT4-JAB-LOCATE  ( -- ior )
     _EXT4-JAB-BLOCK @ _EXT4-JAB-CTX @ _EXT4-C.FIRST + @ -
     _EXT4-JAB-CTX @ _EXT4-C.BPG + @ /MOD
     _EXT4-JAB-GROUP ! _EXT4-JAB-INDEX !
     _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @ _EXT4-GROUP-BLOCK-COUNT
     DUP IF NIP EXIT THEN DROP _EXT4-JAB-GROUP-BLOCKS !
-    _EXT4-JAB-INDEX @ _EXT4-JAB-GROUP-BLOCKS @ U< 0= IF
+    _EXT4-JAB-INDEX @ _EXT4-JAB-COUNT @ +
+    _EXT4-JAB-GROUP-BLOCKS @ U> IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     0 ;
 
+\ The effective descriptor keeps BLOCK_UNINIT only until this transaction's
+\ first allocation in the group initializes its bitmap, so the flag needs a
+\ raw BLOCK_UNINIT group with no bitmap image staged.  An initialized
+\ descriptor must authenticate the effective bitmap.
 : _EXT4-JAB-VALIDATE-EFFECTIVE-DESC  ( -- ior )
     _EXT4-JAB-DESC @ _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @
     _EXT4-GROUP-DESC-CHECKSUM? ?DUP IF NIP EXIT THEN 0= IF
         EXT4-D-DESC-CHECKSUM _EXT4-CORRUPT EXIT
     THEN
-    _EXT4-JAB-DESC @ _EXT4-GD.FLAGS + W@
-    _EXT4-BG-BLOCK-UNINIT AND IF
-        EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+    _EXT4-JAB-DESC @ _EXT4-GD.FLAGS + W@ _EXT4-BG-BLOCK-UNINIT AND 0<>
+    DUP _EXT4-JAB-STILL-UNINIT ! IF
+        _EXT4-JAB-UNINIT @ 0= IF
+            EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-JAB-BITMAP-HOME @ _EXT4-JAB-WRITER @ _EXT4-JTX-META-IMAGE
+        ?DUP IF NIP EXIT THEN IF
+            EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+        THEN
     THEN
     _EXT4-JAB-DESC @ _EXT4-GD.BLOCK-BITMAP-HI + L@ IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
@@ -10675,18 +10749,21 @@ VARIABLE _EXT4-JAB-ABORT-IOR
     _EXT4-JAB-BITMAP-HOME @ <> IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
-    _EXT4-JAB-DESC @ _EXT4-JFB-DESC-BITMAP-CRC@
-    _EXT4-JAB-BITMAP-CRC @ <> IF
-        EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+    _EXT4-JAB-STILL-UNINIT @ 0= IF
+        _EXT4-JAB-DESC @ _EXT4-JFB-DESC-BITMAP-CRC@
+        _EXT4-JAB-BITMAP-CRC @ <> IF
+            EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+        THEN
     THEN
     _EXT4-JAB-DESC @ _EXT4-JFB-DESC-FREE@
-    DUP _EXT4-JAB-GROUP-FREE ! DUP 0= IF
+    DUP _EXT4-JAB-GROUP-FREE !
+    DUP _EXT4-JAB-COUNT @ U< IF
         DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
     DUP _EXT4-JAB-GROUP-BLOCKS @ U> IF
         DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
-    1- _EXT4-JAB-NEW-GROUP-FREE !
+    _EXT4-JAB-COUNT @ - _EXT4-JAB-NEW-GROUP-FREE !
     0 ;
 
 : _EXT4-JAB-ACQUIRE-DESC  ( -- ior )
@@ -10702,38 +10779,42 @@ VARIABLE _EXT4-JAB-ABORT-IOR
     _EXT4-JAB-GDT-OFF @ + _EXT4-JAB-DESC !
     _EXT4-JAB-VALIDATE-EFFECTIVE-DESC ;
 
+\ The raw bitmap is the authenticated block, or for a BLOCK_UNINIT group the
+\ bitmap the group stands for, built in writer scratch.  The run must be
+\ clear in it and in the transaction's retained image.
 : _EXT4-JAB-ACQUIRE-BITMAP  ( -- ior )
-    _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @ _EXT4-LOAD-BLOCK-BITMAP
-    _EXT4-JAB-IOR ! _EXT4-JAB-BITMAP-HOME !
-    _EXT4-JAB-IOR @ ?DUP IF EXIT THEN
+    _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND 0<> _EXT4-JAB-UNINIT !
+    _EXT4-JAB-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@
+    _EXT4-JAB-BITMAP-HOME !
     _EXT4-JAB-BITMAP-HOME @ _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @
     _EXT4-VALIDATE-BLOCK-BITMAP-HOME ?DUP IF EXIT THEN
-    \ The descriptor-wide home proof reused C.BLOCK.  Reload the exact raw
-    \ bitmap and require both raw and retained views to keep the bit clear.
-    _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @ _EXT4-LOAD-BLOCK-BITMAP
-    _EXT4-JAB-IOR !
-    _EXT4-JAB-IOR @ IF DROP _EXT4-JAB-IOR @ EXIT THEN
-    _EXT4-JAB-BITMAP-HOME @ <> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    \ The descriptor-wide home proof reused C.BLOCK.  Rebuild or reload the
+    \ exact raw bitmap before checking the run.
+    _EXT4-JAB-UNINIT @ IF
+        _EXT4-JAB-GROUP @ _EXT4-JAB-WRITER @ _EXT4-JWR.SCRATCH-B + @
+        _EXT4-JAB-CTX @ _EXT4-BUILD-UNINIT-BLOCK-BITMAP ?DUP IF EXIT THEN
+        _EXT4-JAB-WRITER @ _EXT4-JWR.SCRATCH-B + @
+    ELSE
+        _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+        ?DUP IF NIP EXIT THEN
+        _EXT4-JAB-BITMAP-HOME @ <> IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-JAB-CTX @ _EXT4-C.BLOCK +
     THEN
-    _EXT4-JAB-CTX @ _EXT4-C.BLOCK +
-    _EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ BITSET-TEST?
-    0= IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    DUP _EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ _EXT4-JAB-COUNT @
+    BITSET-ALL-CLEAR? 0= IF
+        2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
-    IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JAB-CTX @ _EXT4-C.BLOCK + _EXT4-JAB-BITMAP-HOME @
-    _EXT4-JAB-WRITER @ _EXT4-JTX-META-ACQUIRE
+    0= IF DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+    _EXT4-JAB-BITMAP-HOME @ _EXT4-JAB-WRITER @ _EXT4-JTX-META-ACQUIRE
     DUP IF NIP EXIT THEN DROP DUP _EXT4-JAB-IMAGE !
-    _EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ BITSET-TEST?
-    0= IF
+    _EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ _EXT4-JAB-COUNT @
+    BITSET-ALL-CLEAR? 0= IF
         DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
-    IF
-        VFS-E-CONFLICT EXIT
-    THEN
+    0= IF VFS-E-CONFLICT EXIT THEN
     _EXT4-JAB-IMAGE @ _EXT4-JAB-CTX @ _EXT4-BLOCK-BITMAP-CRC
     ?DUP IF NIP EXIT THEN
     _EXT4-JAB-BITMAP-CRC !
@@ -10748,16 +10829,16 @@ VARIABLE _EXT4-JAB-ABORT-IOR
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     _EXT4-JAB-SUPER @ _EXT4-SB.FREE-BLOCKS-LO + L@
-    DUP 0= IF DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT THEN
+    DUP _EXT4-JAB-COUNT @ U< IF DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT THEN
     DUP _EXT4-JAB-CTX @ _EXT4-C.BLOCKS + @ U> IF
         DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
-    1- _EXT4-JAB-NEW-SUPER-FREE !
+    _EXT4-JAB-COUNT @ - _EXT4-JAB-NEW-SUPER-FREE !
     0 ;
 
 : _EXT4-JAB-PREFLIGHT  ( -- ior )
     _EXT4-JAB-LOCATE ?DUP IF EXIT THEN
-    _EXT4-JAB-BLOCK @ 1 _EXT4-JAB-CTX @
+    _EXT4-JAB-BLOCK @ _EXT4-JAB-COUNT @ _EXT4-JAB-CTX @
     _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
     _EXT4-JAB-ACQUIRE-BITMAP ?DUP IF EXIT THEN
     _EXT4-JAB-ACQUIRE-DESC ?DUP IF EXIT THEN
@@ -10769,8 +10850,8 @@ VARIABLE _EXT4-JAB-ABORT-IOR
     _EXT4-JAB-WRITER @ _EXT4-JWR.SCRATCH-B + @
     _EXT4-JAB-WRITER @ _EXT4-JWR.BSIZE + @ MOVE
     _EXT4-JAB-WRITER @ _EXT4-JWR.SCRATCH-B + @
-    _EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ BITSET-BIT-SET?
-    0= IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
+    _EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ _EXT4-JAB-COUNT @
+    BITSET-RANGE-SET? 0= IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
     _EXT4-JAB-WRITER @ _EXT4-JWR.SCRATCH-B + @
     _EXT4-JAB-CTX @ _EXT4-BLOCK-BITMAP-CRC
     ?DUP IF NIP EXIT THEN
@@ -10780,6 +10861,8 @@ VARIABLE _EXT4-JAB-ABORT-IOR
     _EXT4-JAB-DESC @ _EXT4-JFB-DESC-FREE!
     _EXT4-JAB-NEW-BITMAP-CRC @ _EXT4-JAB-DESC @
     _EXT4-JFB-DESC-BITMAP-CRC!
+    _EXT4-JAB-DESC @ _EXT4-GD.FLAGS + DUP W@
+    _EXT4-BG-BLOCK-UNINIT INVERT AND SWAP W!
     _EXT4-JAB-DESC @ _EXT4-JAB-GROUP @ _EXT4-JAB-CTX @
     _EXT4-RESTAMP-GROUP-DESC ?DUP IF EXIT THEN
     \ Retain homes in bitmap/GDT order.  This order is not a crash-safety
@@ -10805,18 +10888,22 @@ VARIABLE _EXT4-JAB-ABORT-IOR
     -1 _EXT4-JAB-PUBLISHED !
     0 ;
 
-\ Stage allocation accounting for one exact, already owner-proved free data
-\ block.  The caller still owns candidate selection, complete reverse-owner
-\ proof, initialized ordered data, map insertion, and i_blocks.  This word
-\ updates exactly the block bitmap, its primary descriptor, and the primary
-\ superblock; it neither emits nor checkpoints the transaction.
-: _EXT4-JTX-STAGE-ALLOCATE-BLOCK  ( physical-block transaction -- ior )
-    _EXT4-JAB-WRITER ! _EXT4-JAB-BLOCK !
+\ Stage allocation accounting for one run of free blocks inside a single
+\ group: the run's bits in the block bitmap, the group's free count, bitmap
+\ checksum and BLOCK_UNINIT flag in its primary descriptor, and the primary
+\ superblock's free count.  The first allocation in a BLOCK_UNINIT group
+\ stages the bitmap that group stands for, with the run set.  The caller
+\ still owns choosing the run, proving its homes, its data and map, and
+\ i_blocks; this word neither emits nor checkpoints the transaction.
+: _EXT4-JTX-STAGE-ALLOCATE-RANGE  ( first count transaction -- ior )
+    _EXT4-JAB-WRITER ! _EXT4-JAB-COUNT ! _EXT4-JAB-BLOCK !
     0 _EXT4-JAB-PUBLISHED !
     _EXT4-JAB-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
     _EXT4-JAB-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JAB-CTX !
+    _EXT4-JAB-COUNT @ 0> 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-JAB-BLOCK @ _EXT4-JAB-CTX @ _EXT4-C.FIRST + @ U<
-    _EXT4-JAB-BLOCK @ _EXT4-JAB-CTX @ _EXT4-C.BLOCKS + @ U< 0= OR IF
+    _EXT4-JAB-BLOCK @ _EXT4-JAB-COUNT @
+    _EXT4-JAB-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= OR IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     _EXT4-JAB-PREFLIGHT ?DUP IF EXIT THEN
@@ -10827,6 +10914,9 @@ VARIABLE _EXT4-JAB-ABORT-IOR
         _EXT4-JAB-FAIL-AFTER-PUBLISH EXIT
     THEN
     0 ;
+
+: _EXT4-JTX-STAGE-ALLOCATE-BLOCK  ( physical-block transaction -- ior )
+    >R 1 R> _EXT4-JTX-STAGE-ALLOCATE-RANGE ;
 
 VARIABLE _EXT4-FFB-GOAL
 VARIABLE _EXT4-FFB-CTX
@@ -10996,6 +11086,140 @@ VARIABLE _EXT4-FFB-EXCLUDE-ACTIVE
     _EXT4-FFB-EXCLUDE-GROUP ! _EXT4-FFB-EXCLUDE-INDEX !
     -1 _EXT4-FFB-EXCLUDE-ACTIVE !
     _EXT4-FFB-FIND ;
+
+\ =====================================================================
+\  Transaction-aware free-run search
+\ =====================================================================
+
+VARIABLE _EXT4-FFR-GOAL
+VARIABLE _EXT4-FFR-MAX
+VARIABLE _EXT4-FFR-WRITER
+VARIABLE _EXT4-FFR-CTX
+VARIABLE _EXT4-FFR-GROUP
+VARIABLE _EXT4-FFR-START
+VARIABLE _EXT4-FFR-VISITED
+VARIABLE _EXT4-FFR-GROUP-BLOCKS
+VARIABLE _EXT4-FFR-FREE
+VARIABLE _EXT4-FFR-RAW-UNINIT
+VARIABLE _EXT4-FFR-UNINIT
+VARIABLE _EXT4-FFR-BITMAP-HOME
+VARIABLE _EXT4-FFR-BITMAP
+VARIABLE _EXT4-FFR-FIRST
+VARIABLE _EXT4-FFR-LENGTH
+
+\ The group's free count and BLOCK_UNINIT flag as this transaction stages
+\ its primary descriptor page.  Only a raw BLOCK_UNINIT group may still carry
+\ the flag.
+: _EXT4-FFR-DESC  ( -- ior )
+    _EXT4-FFR-GROUP @ _EXT4-FFR-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND 0<> _EXT4-FFR-RAW-UNINIT !
+    _EXT4-FFR-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@
+    _EXT4-FFR-BITMAP-HOME !
+    _EXT4-FFR-CTX @ _EXT4-C.BLOCK + _EXT4-GD-BLOCK @
+    _EXT4-FFR-WRITER @ _EXT4-JTX-META-ACQUIRE ?DUP IF NIP EXIT THEN
+    _EXT4-GD-OFF @ +
+    DUP _EXT4-FFR-GROUP @ _EXT4-FFR-CTX @ _EXT4-GROUP-DESC-CHECKSUM?
+    ?DUP IF NIP NIP EXIT THEN 0= IF
+        DROP EXT4-D-DESC-CHECKSUM _EXT4-CORRUPT EXIT
+    THEN
+    DUP _EXT4-GD.BLOCK-BITMAP-LO + L@ _EXT4-FFR-BITMAP-HOME @ <> IF
+        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    DUP _EXT4-JFB-DESC-FREE@ _EXT4-FFR-FREE !
+    _EXT4-GD.FLAGS + W@ _EXT4-BG-BLOCK-UNINIT AND 0<> _EXT4-FFR-UNINIT !
+    _EXT4-FFR-UNINIT @ _EXT4-FFR-RAW-UNINIT @ 0= AND IF
+        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-FFR-FREE @ _EXT4-FFR-GROUP-BLOCKS @ U> IF
+        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ The group's bitmap as this transaction stages it.  The raw source is the
+\ authenticated block, or the built bitmap of a BLOCK_UNINIT group; a group
+\ this transaction already initialized supplies its retained image.  The
+\ clear bits must match the effective free count exactly.
+: _EXT4-FFR-LOAD-BITMAP  ( -- ior )
+    _EXT4-FFR-RAW-UNINIT @ IF
+        _EXT4-FFR-UNINIT @ IF
+            _EXT4-FFR-BITMAP-HOME @ _EXT4-FFR-WRITER @ _EXT4-JTX-META-IMAGE
+            ?DUP IF NIP EXIT THEN IF
+                EXT4-D-BITMAP-CHECKSUM _EXT4-CORRUPT EXIT
+            THEN
+        THEN
+        _EXT4-FFR-GROUP @ _EXT4-FFR-WRITER @ _EXT4-JWR.SCRATCH-B + @
+        _EXT4-FFR-CTX @ _EXT4-BUILD-UNINIT-BLOCK-BITMAP ?DUP IF EXIT THEN
+        _EXT4-FFR-WRITER @ _EXT4-JWR.SCRATCH-B + @
+    ELSE
+        _EXT4-FFR-GROUP @ _EXT4-FFR-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+        ?DUP IF NIP EXIT THEN
+        _EXT4-FFR-BITMAP-HOME @ <> IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-FFR-CTX @ _EXT4-C.BLOCK +
+    THEN
+    _EXT4-FFR-BITMAP-HOME @ _EXT4-FFR-WRITER @ _EXT4-JTX-META-ACQUIRE
+    ?DUP IF NIP EXIT THEN
+    DUP _EXT4-FFR-BITMAP !
+    _EXT4-FFR-GROUP-BLOCKS @ BITSET-COUNT-SET? 0= IF
+        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-FFR-GROUP-BLOCKS @ SWAP - _EXT4-FFR-FREE @ <> IF
+        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _EXT4-FFR-SCAN-GROUP  ( -- found? ior )
+    _EXT4-FFR-GROUP @ _EXT4-FFR-CTX @ _EXT4-GROUP-BLOCK-COUNT
+    ?DUP IF NIP FALSE SWAP EXIT THEN
+    _EXT4-FFR-GROUP-BLOCKS !
+    _EXT4-FFR-START @ _EXT4-FFR-GROUP-BLOCKS @ U< 0= IF FALSE 0 EXIT THEN
+    _EXT4-FFR-DESC ?DUP IF FALSE SWAP EXIT THEN
+    _EXT4-FFR-FREE @ 0= IF FALSE 0 EXIT THEN
+    _EXT4-FFR-LOAD-BITMAP ?DUP IF FALSE SWAP EXIT THEN
+    _EXT4-FFR-BITMAP @ _EXT4-FFR-GROUP-BLOCKS @
+    _EXT4-FFR-START @ _EXT4-FFR-MAX @ BITSET-CLEAR-RUN? 0= IF
+        2DROP DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    0= IF 2DROP FALSE 0 EXIT THEN
+    _EXT4-FFR-LENGTH !
+    _EXT4-FFR-GROUP @ _EXT4-FFR-CTX @ _EXT4-C.BPG + @ *
+    _EXT4-FFR-CTX @ _EXT4-C.FIRST + @ + + _EXT4-FFR-FIRST !
+    _EXT4-FFR-FIRST @ _EXT4-FFR-LENGTH @ _EXT4-FFR-CTX @
+    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF FALSE SWAP EXIT THEN
+    TRUE 0 ;
+
+\ The first free run of at most MAX blocks in the transaction's view of the
+\ bitmaps: in GOAL's group from GOAL, then in each following group with
+\ wraparound, then from the start of GOAL's group.  A run stays inside one
+\ group, BLOCK_UNINIT groups count with the bitmaps they stand for, and a
+\ bitmap that offers a block in the journal or a static metadata role is
+\ corrupt.  COUNT zero means no group has a free block.
+: _EXT4-JTX-FIND-FREE-RUN  ( goal max transaction -- first count ior )
+    _EXT4-FFR-WRITER ! _EXT4-FFR-MAX ! _EXT4-FFR-GOAL !
+    _EXT4-FFR-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF 0 0 ROT EXIT THEN
+    _EXT4-FFR-WRITER @ _EXT4-JWR.CTX + @ _EXT4-FFR-CTX !
+    _EXT4-FFR-MAX @ 0> 0= IF 0 0 VFS-E-INVALID EXIT THEN
+    _EXT4-FFR-GOAL @ _EXT4-FFR-CTX @ _EXT4-C.FIRST + @ MAX
+    DUP _EXT4-FFR-CTX @ _EXT4-C.BLOCKS + @ U< 0= IF
+        DROP _EXT4-FFR-CTX @ _EXT4-C.FIRST + @
+    THEN
+    _EXT4-FFR-CTX @ _EXT4-C.FIRST + @ -
+    _EXT4-FFR-CTX @ _EXT4-C.BPG + @ /MOD
+    _EXT4-FFR-GROUP ! _EXT4-FFR-START !
+    0 _EXT4-FFR-VISITED !
+    BEGIN
+        _EXT4-FFR-VISITED @ _EXT4-FFR-CTX @ _EXT4-C.GROUPS + @ U> 0=
+    WHILE
+        _EXT4-FFR-SCAN-GROUP ?DUP IF NIP 0 0 ROT EXIT THEN
+        IF _EXT4-FFR-FIRST @ _EXT4-FFR-LENGTH @ 0 EXIT THEN
+        1 _EXT4-FFR-VISITED +!
+        _EXT4-FFR-GROUP @ 1+
+        DUP _EXT4-FFR-CTX @ _EXT4-C.GROUPS + @ = IF DROP 0 THEN
+        _EXT4-FFR-GROUP !
+        0 _EXT4-FFR-START !
+    REPEAT
+    0 0 0 ;
 
 VARIABLE _EXT4-OFR-RECORD
 VARIABLE _EXT4-OFR-CTX
@@ -11994,33 +12218,6 @@ VARIABLE _EXT4-JOW-META-IOR
     THEN
     0 ;
 
-: _EXT4-JOW-REQUIRE-FRESH-EXACT  ( -- ior )
-    _EXT4-JOW-WRITER @ _EXT4-JWR.META-CREDIT + @ 1 <>
-    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 1 <> OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ 0<> OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-JOW-WRITER @ _EXT4-JWR.META-USED + @
-    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-USED + @ OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-USED + @ OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.META-ACTIVE + @ OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ OR IF
-        VFS-E-BUSY EXIT
-    THEN
-    _EXT4-JOW-WRITER @ _EXT4-JWR.CP-MODE + @
-    _EXT4-JCPM-NONE <> IF VFS-E-BUSY EXIT THEN
-    _EXT4-JOW-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-JOW-CTX @ _EXT4-C.O.ACTIVE + @
-    _EXT4-JOW-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ OR
-    _EXT4-JOW-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
-    _EXT4-JOW-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    0 ;
-
 \ Once mapping identifies the selected data block, audit the complete target
 \ tree.  Every data and node range must have a safe mutation role; the target
 \ physical block must occur in exactly one leaf range and in no external node.
@@ -12158,127 +12355,6 @@ VARIABLE _EXT4-JOW-META-IOR
     _EXT4-JOW-PRESENT @ 0=
     SWAP _EXT4-JOW-PHYS @ <> OR IF VFS-E-STALE EXIT THEN
     _EXT4-JOW-REQUIRE-MAP-AUDIT ;
-
-: _EXT4-JOW-FAIL-AFTER-PUBLISH  ( ior -- ior )
-    _EXT4-JOW-IOR !
-    _EXT4-JOW-PUBLISHED @ IF
-        _EXT4-JOW-WRITER @ _EXT4-JWR.STATE + @ DUP
-        _EXT4-JWR-STAGING = IF
-            DROP
-            _EXT4-JOW-WRITER @ _EXT4-JTX-ABORT
-            DUP _EXT4-JOW-ABORT-IOR ! IF
-                _EXT4-JOW-ABORT-IOR @
-                _EXT4-JOW-WRITER @ _EXT4-JWR.FAULT + !
-                _EXT4-JWR-FAULTED
-                _EXT4-JOW-WRITER @ _EXT4-JWR.STATE + !
-            THEN
-        ELSE
-            DUP _EXT4-JWR-IDLE = SWAP _EXT4-JWR-FAULTED = OR 0= IF
-                _EXT4-JOW-IOR @
-                _EXT4-JOW-WRITER @ _EXT4-JWR.FAULT + !
-                _EXT4-JWR-FAULTED
-                _EXT4-JOW-WRITER @ _EXT4-JWR.STATE + !
-            THEN
-        THEN
-    THEN
-    _EXT4-JOW-IOR @ ;
-
-: _EXT4-JOW-STAGE-SIZE  ( -- )
-    _EXT4-JOW-GROW @ 0= IF EXIT THEN
-    _EXT4-JOW-NEW-SIZE @ 0xFFFFFFFF AND
-    _EXT4-JOW-RECORD @ _EXT4-I.SIZE-LO + L!
-    _EXT4-JOW-NEW-SIZE @ 32 RSHIFT 0xFFFFFFFF AND
-    _EXT4-JOW-RECORD @ _EXT4-I.SIZE-HI + L! ;
-
-\ Stage one regular-file RMW wholly inside one already initialized extent
-\ block, whether its authenticated map is inline or uses external extent-tree
-\ nodes.  The selected mode is either a size-preserving overwrite or strict
-\ no-gap growth from the exact partial-block EOF.  Ordered data carries the
-\ full block; one checksummed inode-table after-image carries the explicit
-\ size when growing plus mtime/ctime.  This word neither emits nor checkpoints.
-: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-RMW
-  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
-    _EXT4-JOW-WRITER ! _EXT4-JOW-NSEC ! _EXT4-JOW-SECONDS !
-    _EXT4-JOW-EXPECTED-GEN ! _EXT4-JOW-INO ! _EXT4-JOW-OFFSET !
-    _EXT4-JOW-COUNT ! _EXT4-JOW-SOURCE !
-    0 _EXT4-JOW-PUBLISHED !
-    _EXT4-JOW-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
-    _EXT4-JOW-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOW-CTX !
-    _EXT4-JOW-WRITER @ _EXT4-JWR.BSIZE + @ _EXT4-JOW-BSIZE !
-    _EXT4-JOW-COUNT @ 0> 0= _EXT4-JOW-OFFSET @ 0< OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-JOW-SOURCE @ _EXT4-JOW-COUNT @ _VFS-BUFFER? 0= IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-JOW-COUNT @ _EXT4-JOW-BSIZE @ U> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-JOW-REQUIRE-FRESH-EXACT ?DUP IF EXIT THEN
-    \ Preserve caller bytes before any checked read reuses C.BLOCK.  SCRATCH-B
-    \ is not used by metadata acquisition and survives until DATA-PUT copies
-    \ the completed RMW block into its retained transaction image.
-    _EXT4-JOW-SOURCE @
-    _EXT4-JOW-WRITER @ _EXT4-JWR.SCRATCH-B + @
-    _EXT4-JOW-COUNT @ MOVE
-    _EXT4-JOW-AUTH-TARGET ?DUP IF EXIT THEN
-    _EXT4-JOW-PHYS @ 1 _EXT4-JOW-CTX @
-    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-    _EXT4-JOW-INODE-HOME @ _EXT4-JOW-GROUP @ _EXT4-JOW-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _EXT4-JOW-INO @ _EXT4-JOW-PHYS @ 1
-    _EXT4-JOW-INODE-HOME @ 1 _EXT4-JOW-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR ?DUP IF EXIT THEN
-    _EXT4-JOW-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
-    _EXT4-JOW-INODE-HOME @ _EXT4-JOW-GROUP @ _EXT4-JOW-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _EXT4-JOW-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
-    _EXT4-JOW-INODE-HOME @ _EXT4-JOW-CTX @ _EXT4-READ-BLOCK
-    ?DUP IF EXIT THEN
-    _EXT4-JOW-CTX @ _EXT4-C.BLOCK + _EXT4-JOW-INODE-HOME @
-    _EXT4-JOW-WRITER @ _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _EXT4-JOW-IMAGE !
-    _EXT4-JOW-INODE-OFF @ + DUP _EXT4-JOW-RECORD !
-    _EXT4-JOW-CTX @ _EXT4-C.INODE +
-    _EXT4-JOW-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _EXT4-JOW-STAGE-SIZE
-    _EXT4-JOW-SECONDS @ _EXT4-JOW-NSEC @ _EXT4-JOW-RECORD @
-    _EXT4-JOW-CTX @ _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
-    _EXT4-JOW-RECORD @ _EXT4-JOW-INO @ _EXT4-JOW-CTX @
-    _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
-    _EXT4-JOW-PHYS @ _EXT4-JOW-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _EXT4-JOW-WRITER @ _EXT4-JWR.SCRATCH-B + @
-    _EXT4-JOW-CTX @ _EXT4-C.BLOCK + _EXT4-JOW-BLOCK-OFF @ +
-    _EXT4-JOW-COUNT @ MOVE
-    _EXT4-JOW-CTX @ _EXT4-C.BLOCK + _EXT4-JOW-PHYS @
-    _EXT4-JOW-WRITER @ _EXT4-JTX-DATA-PUT ?DUP IF EXIT THEN
-    -1 _EXT4-JOW-PUBLISHED !
-    _EXT4-JOW-IMAGE @ _EXT4-JOW-INODE-HOME @ _EXT4-JOW-WRITER @
-    _EXT4-JTX-META-REPLACE ?DUP IF
-        _EXT4-JOW-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    _EXT4-JOW-WRITER @ _EXT4-JWR.META-USED + @ 1 <>
-    _EXT4-JOW-WRITER @ _EXT4-JWR.META-ACTIVE + @ 1 <> OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-USED + @ 1 <> OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ 1 <> OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-USED + @ 0<> OR
-    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ 0<> OR
-    _EXT4-JOW-WRITER @ _EXT4-JTX-TABLES-VALID? 0= OR IF
-        VFS-E-CORRUPT _EXT4-JOW-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    0 ;
-
-: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
-  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
-    0 _EXT4-JOW-GROW !
-    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-RMW ;
-
-: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-TAIL-APPEND
-  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
-    -1 _EXT4-JOW-GROW !
-    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-RMW ;
 
 VARIABLE _EXT4-JTS-END
 VARIABLE _EXT4-JTS-DATA-IMAGE
@@ -14972,8 +15048,8 @@ VARIABLE _EXT4-RDN-TAIL
     _EXT4-CRC@ _EXT4-RDN-TAIL @ 4 + L!
     0 ;
 
-\ Restamp one authenticated external extent leaf after a deterministic local
-\ edit.  The new extent may name a transaction-owned block whose allocation
+\ Restamp one external extent node, leaf or index, after a deterministic
+\ local edit.  The node may name a transaction-owned block whose allocation
 \ bitmap afterimage has not been staged yet, so this constructor validates
 \ the resident geometry but deliberately does not invoke the allocation-aware
 \ extent walker on the afterimage.
@@ -14983,7 +15059,7 @@ VARIABLE _EXT4-REL-GEN
 VARIABLE _EXT4-REL-CTX
 VARIABLE _EXT4-REL-MAX
 
-: _EXT4-RESTAMP-EXTENT-LEAF  ( block inode generation ctx -- ior )
+: _EXT4-RESTAMP-EXTENT-NODE  ( block inode generation ctx -- ior )
     _EXT4-REL-CTX ! _EXT4-REL-GEN ! _EXT4-REL-INO ! _EXT4-REL-BLOCK !
     _EXT4-REL-BLOCK @ 0= _EXT4-REL-CTX @ 0= OR IF
         VFS-E-INVALID EXIT
@@ -15003,7 +15079,7 @@ VARIABLE _EXT4-REL-MAX
     _EXT4-REL-BLOCK @ 2 + W@ DUP 0=
         SWAP _EXT4-REL-MAX @ U> OR OR
     _EXT4-REL-BLOCK @ 4 + W@ _EXT4-REL-MAX @ <> OR
-    _EXT4-REL-BLOCK @ 6 + W@ 0<> OR IF
+    _EXT4-REL-BLOCK @ 6 + W@ _EXT4-MAX-EXTENT-DEPTH 1- U> OR IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     _EXT4-REL-INO @ _EXT4-REL-CTX @ _EXT4-C.TMP + L!
@@ -18142,46 +18218,14 @@ VARIABLE _EXT4-JCP-ADD-ENTRY
     _EXT4-JCP-ENTRY-READY @ _EXT4-JCP-CTX @ _EXT4-C.READY + !
     0 ;
 
-VARIABLE _EXT4-MOW-SOURCE
-VARIABLE _EXT4-MOW-COUNT
-VARIABLE _EXT4-MOW-OFFSET
-VARIABLE _EXT4-MOW-INO
-VARIABLE _EXT4-MOW-GEN
-VARIABLE _EXT4-MOW-SECONDS
-VARIABLE _EXT4-MOW-NSEC
 VARIABLE _EXT4-MOW-V
 VARIABLE _EXT4-MOW-CTX
-VARIABLE _EXT4-MOW-WRITER
-VARIABLE _EXT4-MOW-TX
-VARIABLE _EXT4-MOW-CREDIT
-VARIABLE _EXT4-MOW-CREDIT-XT
-VARIABLE _EXT4-MOW-STAGE-XT
-VARIABLE _EXT4-MOW-IOR
-VARIABLE _EXT4-MOW-ACTUAL
 VARIABLE _EXT4-MOW-ACTIVE
 VARIABLE _EXT4-MOW-ALLOW-ORPHAN-UNION
 VARIABLE _EXT4-MOW-O-ACTIVE
 VARIABLE _EXT4-MOW-O-MODERN
 VARIABLE _EXT4-MOW-O-LEGACY
 VARIABLE _EXT4-MOW-O-PRESENT
-CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
-
-: _EXT4-MOW-SCRUB  ( -- )
-    _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK 0 FILL ;
-
-\ A zero signed credit is an internal request for a typed, read-only
-\ measurement pass.  The late-bound selector is installed by the allocation
-\ builder below, after its words exist.  It returns the real nonzero signed
-\ credit, preserving the ordinary positive/negative progress convention.
-: _EXT4-MOW-RESOLVE-CREDIT  ( -- ior )
-    _EXT4-MOW-CREDIT @ IF 0 EXIT THEN
-    _EXT4-MOW-CREDIT-XT @ DUP 0= IF DROP VFS-E-INVALID EXIT THEN
-    EXECUTE
-    DUP IF NIP EXIT THEN DROP
-    DUP 0= IF DROP VFS-E-INVALID EXIT THEN
-    _EXT4-MOW-CREDIT !
-    0 ;
-
 \ Classify the complete retained orphan state before admitting any mounted
 \ mutation.  Ordinary writers remain strict.  A caller that explicitly owns
 \ modern-orphan composition may retain only an authenticated modern-only
@@ -18285,169 +18329,6 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
         THEN
     THEN
     _EXT4-MOW-CTX @ _EXT4-RECOVERY-MEDIA ;
-
-\ The exact client emits one full-block ordered image.  VOL-WRITE reports a
-\ contiguous prefix of fully completed 512-byte sectors; a tear inside the
-\ next sector deliberately proves none of that sector.  Intersect that media
-\ prefix with the caller's range to obtain the only byte prefix VFS may use
-\ for cursor advancement.  EXPECTED must describe this exact block attempt.
-: _EXT4-MOW-ORDERED-ACTUAL  ( -- actual )
-    _EXT4-IO-EXPECTED @ _EXT4-MOW-CTX @ _EXT4-C.SPB + @ <> IF
-        0 EXIT
-    THEN
-    _EXT4-IO-COMPLETED @ DUP 0< IF DROP 0 EXIT THEN
-    DUP _EXT4-IO-EXPECTED @ U> IF DROP 0 EXIT THEN
-    _EXT4-SECTOR *
-    _EXT4-MOW-OFFSET @ _EXT4-MOW-CTX @ _EXT4-C.BSIZE + @ MOD -
-    DUP 0< IF DROP 0 EXIT THEN
-    _EXT4-MOW-COUNT @ MIN ;
-
-\ Before ordered data, no caller byte has media authority.  Phase 8 retains
-\ the sector certificate for the ordered attempt.  Every later emission or
-\ checkpoint phase proves that the complete ordered block was accepted.
-: _EXT4-MOW-FAULT-ACTUAL  ( -- actual )
-    _EXT4-MOW-ACTUAL @ DUP IF EXIT THEN DROP
-    _EXT4-MOW-WRITER @ ?DUP 0= IF 0 EXIT THEN
-    DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED <> IF DROP 0 EXIT THEN
-    _EXT4-JWR.PHASE + @ DUP _EXT4-JWP-ORDERED-DATA = IF
-        DROP _EXT4-MOW-ORDERED-ACTUAL EXIT
-    THEN
-    DUP _EXT4-JWP-EMISSION? SWAP _EXT4-JWP-CHECKPOINT? OR IF
-        _EXT4-MOW-COUNT @ EXIT
-    THEN
-    0 ;
-
-\ A quarantined writer cannot accept another mutation on this mount.  Retain
-\ the first error's domain, reason, detail, and causal flags, then add the
-\ read-only consequence.  PARTIAL is additionally required for every error
-\ accompanied by a confirmed caller-byte prefix, including actual=count.
-: _EXT4-MOW-RESULT  ( actual ior -- actual ior )
-    _EXT4-MOW-IOR ! _EXT4-MOW-ACTUAL !
-    _EXT4-MOW-WRITER @ ?DUP IF
-        _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
-            _EXT4-MOW-IOR @ VFS-IOR-F-READONLY 24 LSHIFT OR
-            _EXT4-MOW-IOR !
-        THEN
-    THEN
-    _EXT4-MOW-ACTUAL @ _EXT4-MOW-IOR @ _EXT4-PARTIAL-IOR ;
-
-\ Clean staging errors retain no media authority.  Abort only when the
-\ transaction is still mutable; the typed builder may already have aborted
-\ itself after an internal ordered-data publication.  A structurally failed
-\ abort is latched because the persistent workspace can no longer be reused.
-\ A post-commit checkpoint-entry refusal is also terminal: give the latch a
-\ valid checkpoint phase rather than leaving replayable authority retryable in
-\ the same session.  Positive metadata credit admits ordered-sector prefix
-\ progress for already reachable bytes; negative credit requires a successful
-\ journal emit before any caller progress is authoritative.
-: _EXT4-MOW-FAIL  ( ior -- actual ior )
-    _EXT4-MOW-IOR !
-    _EXT4-MOW-WRITER @ ?DUP IF
-        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING = IF
-            _EXT4-JTX-ABORT ?DUP IF
-                _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
-                _EXT4-MOW-IOR !
-            THEN
-        ELSE
-            DUP _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = IF
-                DROP
-                _EXT4-JWP-CHECKPOINT-PREFLIGHT
-                _EXT4-MOW-WRITER @ _EXT4-JWR.PHASE + !
-                _EXT4-MOW-IOR @
-                _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
-                _EXT4-MOW-IOR !
-            ELSE DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
-                _EXT4-JWR.FAULT + @ ?DUP IF _EXT4-MOW-IOR ! THEN
-            ELSE
-                DROP
-            THEN THEN
-        THEN
-    THEN
-    _EXT4-MOW-CREDIT @ 0> IF
-        _EXT4-MOW-FAULT-ACTUAL _EXT4-MOW-ACTUAL !
-    THEN
-    _EXT4-MOW-SCRUB
-    _EXT4-MOW-ACTUAL @ _EXT4-MOW-IOR @ _EXT4-MOW-RESULT ;
-
-\ Common mounted engine for one typed, block-bounded transaction.  The first
-\ clean call dry-stages before journal activation; successful calls checkpoint
-\ synchronously and retain one scrubbed writer for reuse.  The stage XT has the
-\ standard typed one-block builder shape.  A negative metadata credit selects
-\ commit-granular progress (only a successful emit confirms COUNT); its
-\ absolute value is the real credit.  Positive credit retains ordered-sector
-\ progress for size-preserving overwrite.
-: _EXT4-MOUNTED-ONEBLOCK-WRITE
-  ( source count file-offset inode-number expected-generation seconds nsec vfs signed-meta-credit stage-xt -- actual ior )
-    _EXT4-MOW-STAGE-XT ! _EXT4-MOW-CREDIT !
-    _EXT4-MOW-V ! _EXT4-MOW-NSEC ! _EXT4-MOW-SECONDS !
-    _EXT4-MOW-GEN ! _EXT4-MOW-INO ! _EXT4-MOW-OFFSET !
-    _EXT4-MOW-COUNT ! _EXT4-MOW-SOURCE !
-    0 _EXT4-MOW-WRITER ! 0 _EXT4-MOW-ACTUAL !
-    0 _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
-    _EXT4-MOW-COUNT @ 0< IF 0 VFS-E-INVALID EXIT THEN
-    _EXT4-MOW-COUNT @ 0= IF 0 0 EXIT THEN
-    _EXT4-MOW-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
-    _EXT4-JWR-STORE-DEDICATED <> IF 0 VFS-E-NOSPC EXIT THEN
-    _EXT4-MOW-CTX @ _EXT4-C.J.WRITER-ARENA + @ 0=
-    _EXT4-MOW-CTX @ _EXT4-C.J.WRITER + @ 0= OR IF
-        0 VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-MOW-SOURCE @ _EXT4-MOW-COUNT @ _VFS-BUFFER? 0= IF
-        0 VFS-E-INVALID EXIT
-    THEN
-    _EXT4-MOW-SOURCE @ _EXT4-MOW-COUNT @
-    _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK MSPAN-OVERLAP? IF
-        0 VFS-E-INVALID EXIT
-    THEN
-    _EXT4-MOW-OFFSET @ 0< IF 0 VFS-E-INVALID EXIT THEN
-    _EXT4-MOW-COUNT @ _EXT4-MOW-CTX @ _EXT4-C.BSIZE + @ U> IF
-        0 EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    \ Preserve caller bytes across dry-stage abort, activation cache reuse,
-    \ and live-stage writer rebase, then scrub them on every later return.
-    _EXT4-MOW-SOURCE @ _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ MOVE
-    _EXT4-MOW-RESOLVE-CREDIT ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-    _EXT4-MOW-CREDIT @ ABS 1 0 _EXT4-MOW-CTX @
-    _EXT4-JTX-PREFLIGHT-CAPACITY
-    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-    _EXT4-MOW-CREDIT @ ABS 1 0 _EXT4-MOW-CTX @ _EXT4-JWR-ENSURE
-    DUP IF NIP _EXT4-MOW-FAIL EXIT THEN
-    DROP _EXT4-MOW-WRITER !
-    _EXT4-MOW-ACTIVE @ 0= IF
-        _EXT4-MOW-CREDIT @ ABS 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
-        DUP IF NIP _EXT4-MOW-FAIL EXIT THEN
-        DROP _EXT4-MOW-TX !
-        _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ _EXT4-MOW-OFFSET @
-        _EXT4-MOW-INO @ _EXT4-MOW-GEN @ _EXT4-MOW-SECONDS @
-        _EXT4-MOW-NSEC @ _EXT4-MOW-TX @ _EXT4-MOW-STAGE-XT @ EXECUTE
-        ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-        _EXT4-MOW-TX @ _EXT4-JTX-ABORT
-        ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-        _EXT4-MOW-WRITER @ _EXT4-JWR-ACTIVATE
-        ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-    THEN
-    _EXT4-MOW-CREDIT @ ABS 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
-    DUP IF NIP _EXT4-MOW-FAIL EXIT THEN
-    DROP _EXT4-MOW-TX !
-    _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ _EXT4-MOW-OFFSET @
-    _EXT4-MOW-INO @ _EXT4-MOW-GEN @ _EXT4-MOW-SECONDS @
-    _EXT4-MOW-NSEC @ _EXT4-MOW-TX @ _EXT4-MOW-STAGE-XT @ EXECUTE
-    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-    _EXT4-MOW-TX @ _EXT4-JTX-EMIT
-    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-    _EXT4-MOW-COUNT @ _EXT4-MOW-ACTUAL !
-    _EXT4-MOW-TX @ _EXT4-JTX-CHECKPOINT
-    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-    _EXT4-MOW-WRITER @ _EXT4-JWR-VALID? 0= IF
-        VFS-E-CORRUPT _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
-        _EXT4-MOW-FAIL EXIT
-    THEN
-    _EXT4-MOW-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
-    _EXT4-MOW-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF
-        VFS-E-CORRUPT _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
-        _EXT4-MOW-FAIL EXIT
-    THEN
-    _EXT4-MOW-ACTUAL @ _EXT4-MOW-SCRUB 0 ;
 
 \ =====================================================================
 \  Private VFS-shaped write boundary and trusted clock injection
@@ -18702,31 +18583,20 @@ VARIABLE _EXT4-WR-VN
 VARIABLE _EXT4-WR-BID
 VARIABLE _EXT4-WR-GEN
 VARIABLE _EXT4-WR-REQUEST-END
-VARIABLE _EXT4-WR-NEW-SIZE
-VARIABLE _EXT4-WR-NEW-BLOCKS
-VARIABLE _EXT4-WR-NEW-FREE
-VARIABLE _EXT4-WR-CHUNK
-VARIABLE _EXT4-WR-TAIL-ROOM
 VARIABLE _EXT4-WR-MS
 VARIABLE _EXT4-WR-SECONDS
 VARIABLE _EXT4-WR-NSEC
 VARIABLE _EXT4-WR-HOOK
 VARIABLE _EXT4-WR-IOR
-VARIABLE _EXT4-WR-ACTUAL
-VARIABLE _EXT4-WR-KIND
 
-0 CONSTANT _EXT4-WRK-IN-SIZE
-1 CONSTANT _EXT4-WRK-HOLE-FILL
-2 CONSTANT _EXT4-WRK-TAIL-APPEND
-3 CONSTANT _EXT4-WRK-ALIGNED-APPEND
-
-: _EXT4-WR-GROW?  ( -- flag )
-    _EXT4-WR-KIND @ DUP _EXT4-WRK-TAIL-APPEND =
-    SWAP _EXT4-WRK-ALIGNED-APPEND = OR ;
-
-: _EXT4-WR-COMMIT-GRANULAR?  ( -- flag )
-    _EXT4-WR-KIND @ _EXT4-WRK-HOLE-FILL =
-    _EXT4-WR-GROW? OR ;
+\ An extent names 32-bit logical blocks, which bounds a file's size; without
+\ large_file the size also stays below 2 GiB.
+: _EXT4-WR-MAX-SIZE  ( -- bytes )
+    _EXT4-WR-CTX @ _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ 2 AND IF
+        0xFFFFFFFF _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ *
+    ELSE
+        0x7FFFFFFF
+    THEN ;
 
 : _EXT4-WRITE-VALIDATE  ( -- ior )
     _EXT4-WR-D @ 0= _EXT4-WR-V @ 0= OR IF VFS-E-INVALID EXIT THEN
@@ -18765,64 +18635,16 @@ VARIABLE _EXT4-WR-KIND
     _EXT4-WR-OFFSET @ _EXT4-WR-COUNT @ _EXT4-UADD?
     _EXT4-WR-IOR ! _EXT4-WR-REQUEST-END !
     _EXT4-WR-IOR @ ?DUP IF EXIT THEN
-    \ Nonempty staged writes currently require authenticated 1 KiB filesystem
-    \ geometry with 256-byte inodes.  This is the published operation boundary
-    \ for initialized overwrite, in-size hole fill, partial-tail append,
-    \ allocation-backed growth from aligned EOF, and exact-write composition
-    \ from a partial tail through additional allocated logical blocks.  Each
-    \ callback remains block-bounded and independently checkpointed.  Other
-    \ akashic-ext4-rw-v1 geometries remain available to the read/recovery path
-    \ until their mutation paths pass equivalent qualification.
+    \ Staged writes need authenticated 1 KiB filesystem geometry with
+    \ 256-byte inodes.  Other akashic-ext4-rw-v1 geometries stay available to
+    \ reading and recovery until their mutation paths are qualified.
     _EXT4-WR-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
+    \ Refuse a final size the format cannot hold before any durable prefix.
     _EXT4-WR-REQUEST-END @ _EXT4-WR-VN @ VN.SIZE-LO @ U> IF
-        _EXT4-WR-OFFSET @ _EXT4-WR-VN @ VN.SIZE-LO @ <> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        \ Reject an unsupported final size before publishing any durable
-        \ prefix.  Later exact-write callbacks see the same request endpoint,
-        \ but the first callback owns this whole-request overflow decision.
-        _EXT4-WR-REQUEST-END @ 0xFFFFFFFF U> IF
+        _EXT4-WR-REQUEST-END @ _EXT4-WR-MAX-SIZE U> IF
             VFS-E-OVERFLOW EXIT
         THEN
-        _EXT4-WR-VN @ VN.SIZE-LO @
-        _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD 0= IF
-            _EXT4-WRK-ALIGNED-APPEND _EXT4-WR-KIND !
-        ELSE
-            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
-            _EXT4-WR-OFFSET @
-            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD -
-            _EXT4-WR-TAIL-ROOM !
-            _EXT4-WR-COUNT @ _EXT4-WR-TAIL-ROOM @ U> IF
-                \ Admit one independently checkpointed tail chunk followed by
-                \ as many block-bounded allocation callbacks as the exact
-                \ caller can complete.  Refuse a profile that cannot support
-                \ even the ordinary following allocation before publishing
-                \ the initialized tail prefix.  A later callback independently
-                \ measures any five-to-seven-home root-growth topology,
-                \ preserving exact write's checkpointed-prefix semantics.
-                4 1 0 _EXT4-WR-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
-                ?DUP IF EXIT THEN
-            THEN
-            _EXT4-WRK-TAIL-APPEND _EXT4-WR-KIND !
-        THEN
-    ELSE
-        _EXT4-WRK-IN-SIZE _EXT4-WR-KIND !
     THEN
-    _EXT4-WR-COUNT @
-    _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
-    _EXT4-WR-OFFSET @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - MIN
-    _EXT4-WR-CHUNK !
-    _EXT4-WR-GROW? IF
-        _EXT4-WR-OFFSET @ _EXT4-WR-CHUNK @ _EXT4-UADD?
-        _EXT4-WR-IOR ! _EXT4-WR-NEW-SIZE !
-        _EXT4-WR-IOR @ ?DUP IF EXIT THEN
-        _EXT4-WR-NEW-SIZE @ 0xFFFFFFFF U> IF
-            VFS-E-OVERFLOW EXIT
-        THEN
-    ELSE
-        _EXT4-WR-VN @ VN.SIZE-LO @ _EXT4-WR-NEW-SIZE !
-    THEN
-    _EXT4-WR-VN @ VN.BLOCKS @ _EXT4-WR-NEW-BLOCKS !
     _EXT4-WR-CTX @ _EXT4-C.WCLOCK-XT + @ 0= IF
         VFS-E-UNSUPPORTED EXIT
     THEN
@@ -18841,67 +18663,21 @@ VARIABLE _EXT4-WR-KIND
     _EXT4-WR-SECONDS ! 1000000 * _EXT4-WR-NSEC !
     0 ;
 
-\ Exact binding-callback shape for the qualified slice.  A larger admitted
-\ caller range completes at most the first filesystem-block chunk and returns
-\ short success; VFS-WRITE-EXACT or the caller may advance and invoke it again,
-\ including through additional independently allocated EOF blocks.
-\ It remains absent from the ordinary EXT4-OPS and EXT4-CAPS.  The explicit
-\ staged binding below publishes this qualified operation while broader
-\ public-write gates remain.
-\ Confirmed progress and quarantine flags are safe for VFS cursor semantics.
-\ Successful checkpointed writes publish mtime/ctime.  Allocation-backed
-\ operations additionally publish authenticated i_blocks; growth publishes
-\ its committed EOF.  A checkpoint error after a growth commit publishes that
-\ exact EOF, i_blocks, and time because progress is commit-granular for newly
-\ reachable bytes.
-: _EXT4-WR-PUBLISH-COMMITTED  ( -- )
-    _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.MTIME !
-    _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.MTIME-NS !
-    _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.CTIME !
-    _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.CTIME-NS !
-    _EXT4-WR-KIND @ DUP _EXT4-WRK-HOLE-FILL =
-    SWAP _EXT4-WRK-ALIGNED-APPEND = OR IF
-        _EXT4-WR-NEW-BLOCKS @ _EXT4-WR-VN @ VN.BLOCKS !
-        _EXT4-WR-NEW-FREE @ _EXT4-WR-CTX @ _EXT4-C.FREE-BLOCKS + !
-    THEN
-    _EXT4-WR-GROW? IF
-        _EXT4-WR-NEW-SIZE @ _EXT4-WR-VN @ VN.SIZE-LO !
-        0 _EXT4-WR-VN @ VN.SIZE-HI !
-    THEN
-    VFS-F-DIRTY _EXT4-WR-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
-
+\ Binding write callback.  One call commits at most one journal transaction
+\ of the caller's span through the general write below and returns the
+\ bytes it covers, so a larger request returns legal short success and
+\ VFS-WRITE-EXACT continues from there.  A committed write publishes the
+\ new size, block count, free count and times into the shared vnode before
+\ generic cursor accounting.  The callback stays absent from the ordinary
+\ EXT4-OPS and EXT4-CAPS; only the staged binding publishes it.
 : _EXT4-WRITE  ( source count file-offset dentry vfs -- actual ior )
     _EXT4-WR-V ! _EXT4-WR-D ! _EXT4-WR-OFFSET !
     _EXT4-WR-COUNT ! _EXT4-WR-SOURCE !
-    0 _EXT4-WR-CHUNK ! 0 _EXT4-WR-TAIL-ROOM !
-    0 _EXT4-WR-ACTUAL !
-    _EXT4-WRK-IN-SIZE _EXT4-WR-KIND !
     _EXT4-WRITE-VALIDATE ?DUP IF 0 SWAP EXIT THEN
-    _EXT4-WR-COUNT @ 0= IF
-        _EXT4-WR-SOURCE @ 0 _EXT4-WR-OFFSET @
-        _EXT4-WR-BID @ _EXT4-WR-GEN @ 0 0 _EXT4-WR-V @
-        1 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
-        _EXT4-MOUNTED-ONEBLOCK-WRITE EXIT
+    _EXT4-WR-COUNT @ IF
+        _EXT4-WRITE-NOW ?DUP IF 0 SWAP EXIT THEN
     THEN
-    _EXT4-WRITE-NOW ?DUP IF 0 SWAP EXIT THEN
-    _EXT4-WR-HOOK @ EXECUTE
-    _EXT4-WR-IOR ! _EXT4-WR-ACTUAL !
-    _EXT4-WR-ACTUAL @ 0<
-    _EXT4-WR-ACTUAL @ _EXT4-WR-CHUNK @ U> OR IF
-        0 VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-WR-IOR @ IF
-        _EXT4-WR-COMMIT-GRANULAR?
-        _EXT4-WR-ACTUAL @ _EXT4-WR-CHUNK @ = AND IF
-            _EXT4-WR-PUBLISH-COMMITTED
-        THEN
-        _EXT4-WR-ACTUAL @ _EXT4-WR-IOR @ EXIT
-    THEN
-    _EXT4-WR-ACTUAL @ _EXT4-WR-CHUNK @ <> IF
-        0 VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-WR-PUBLISH-COMMITTED
-    _EXT4-WR-ACTUAL @ 0 ;
+    _EXT4-WR-HOOK @ EXECUTE ;
 
 VARIABLE _EXT4-EL-CTX
 VARIABLE _EXT4-EL-V
@@ -20416,1433 +20192,1009 @@ EXT4-STAGED-WRITE-OPS ,
 : EXT4-INODE-SIZE@  ( vfs -- bytes )  _EXT4-CTX _EXT4-C.ISIZE + @ ;
 
 \ =====================================================================
-\  Allocation-backed one-block hole fill
+\  General regular-file write
 \ =====================================================================
+\
+\ One write callback commits as much of the caller's span as one journal
+\ transaction holds and returns that byte count; VFS-WRITE-EXACT calls again
+\ for the rest.  Each logical block in the span is either mapped and
+\ initialized, so its new full-block image is written in place as ordered
+\ data (read and modified first when the span covers it only in part), or
+\ unmapped, so a run of free blocks is allocated for it, zero-filled around
+\ the caller's bytes, and inserted into the extent tree.  A write may start
+\ past EOF: the blocks in between stay holes, and the old EOF block's bytes
+\ past the old size are written as zeros before the size moves past them.
+\ Unwritten extents, inline data and legacy block maps are refused.
+\
+\ A transaction holds at most the writer profile's ordered-data blocks and
+\ metadata homes.  Staging begins with the span the data credit allows,
+\ less the old tail block that a write past a partial EOF also stages.
+\ When a home no longer fits, or the volume runs out of free blocks, or a
+\ block cannot be written, the transaction is discarded and restaged up to
+\ the last completely staged block that still left a metadata home free for
+\ the inode record, which is staged last.  The profile therefore bounds each
+\ transaction exactly rather than through a worst-case estimate.
+\
+\ The complete home set is proved before emission.  Allocation accounting
+\ proves every new block clear in both the raw bitmap and the
+\ transaction's, and outside the journal and every static metadata role.
+\ A map audit of the target's pre-transaction tree proves that each existing
+\ data block and tree node the transaction rewrites is mapped exactly once
+\ and in a mutable role, and one filesystem-wide walk proves that no other
+\ inode maps any home.
 
-VARIABLE _XH-SOURCE
-VARIABLE _XH-COUNT
-VARIABLE _XH-OFFSET
-VARIABLE _XH-INO
-VARIABLE _XH-EXPECTED-GEN
-VARIABLE _XH-SECONDS
-VARIABLE _XH-NSEC
-VARIABLE _XH-WRITER
-VARIABLE _XH-CTX
-VARIABLE _XH-BSIZE
-VARIABLE _XH-SIZE
-VARIABLE _XH-NEW-SIZE
-VARIABLE _XH-GROW
-VARIABLE _XH-LOGICAL
-VARIABLE _XH-BLOCK-OFF
-VARIABLE _XH-TYPE
-VARIABLE _XH-EA
-VARIABLE _XH-GROUP
-VARIABLE _XH-CANDIDATE-GROUP
-VARIABLE _XH-LEAF-GROUP
-VARIABLE _XH-INODE-HOME
-VARIABLE _XH-INODE-OFF
-VARIABLE _XH-BITMAP-HOME
-VARIABLE _XH-GDT-HOME
-VARIABLE _XH-LEAF-BITMAP-HOME
-VARIABLE _XH-LEAF-GDT-HOME
-VARIABLE _XH-SUPER-HOME
-VARIABLE _XH-BLOCKS
-VARIABLE _XH-NEW-BLOCKS
-VARIABLE _XH-NEW-FREE
-VARIABLE _XH-ROOT
-VARIABLE _XH-EDIT-NODE
-VARIABLE _XH-TREE-DEPTH
-VARIABLE _XH-ROOT-ENTRIES
-VARIABLE _XH-ROOT-INDEX
-VARIABLE _XH-ROOT-GENERATION
-VARIABLE _XH-INODE-GENERATION
-VARIABLE _XH-ENTRIES
-VARIABLE _XH-ENTRY-MAX
-VARIABLE _XH-INSERT
-VARIABLE _XH-INDEX
-VARIABLE _XH-ENTRY
-VARIABLE _XH-START
-VARIABLE _XH-RAW-LEN
-VARIABLE _XH-LEN
-VARIABLE _XH-END
-VARIABLE _XH-PHYSICAL
-VARIABLE _XH-DATA-BLOCKS
-VARIABLE _XH-ACCOUNTED-BLOCKS
-VARIABLE _XH-CANDIDATE
-VARIABLE _XH-EXISTING-LEAF
-VARIABLE _XH-LEAF-CANDIDATE
-VARIABLE _XH-LEAF-MAX
-VARIABLE _XH-LEAF-FIRST
-VARIABLE _XH-LEAF-SECOND-FIRST
-VARIABLE _XH-ROOT-GROW
-VARIABLE _XH-LEAF-SPLIT
-VARIABLE _XH-SCAN-NODE
-VARIABLE _XH-SCAN-ENTRIES
-VARIABLE _XH-SCAN-LEAF
-VARIABLE _XH-RANGE-COUNT
-VARIABLE _XH-RANGE-CAP
-VARIABLE _XH-RANGE-INDEX
-VARIABLE _XH-RANGE-FIRST
-VARIABLE _XH-RANGE-LEN
-VARIABLE _XH-META-CREDIT
-VARIABLE _XH-META-HOME-COUNT
-VARIABLE _XH-OWNER-RANGE-COUNT
-VARIABLE _XH-IMAGE
-VARIABLE _XH-RECORD
-VARIABLE _XH-SHIFT
-VARIABLE _XH-EDIT
-VARIABLE _XH-LEFT-LEN
-VARIABLE _XH-RIGHT-LEN
-VARIABLE _XH-LEFT-OK
-VARIABLE _XH-RIGHT-OK
-VARIABLE _XH-SPLIT-FIRST
-VARIABLE _XH-SPLIT-COUNT
-VARIABLE _XH-SPLIT-LEFT
-VARIABLE _XH-SPLIT-RIGHT
-VARIABLE _XH-IOR
-VARIABLE _XH-PUBLISHED
-VARIABLE _XH-ABORT-IOR
-CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
-CREATE _XH-LEAF-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
-8 CONSTANT _XH-META-HOME-CAP
-CREATE _XH-META-HOMES _XH-META-HOME-CAP CELLS ALLOT
+\ ---------------------------------------------------------------------
+\  Extent-tree insertion
+\ ---------------------------------------------------------------------
+\
+\ An insertion places one run of newly allocated initialized blocks into the
+\ tree at any depth, as the kernel's ext4_ext_insert_extent does.  The run
+\ first tries to extend the extent before it or the one after it inside the
+\ governing leaf, and otherwise takes a free entry there.  A full leaf
+\ splits at the insertion point (ext4_ext_split): the entries after it move
+\ to a new leaf, and every full index level above moves its entries after
+\ the path into a new index node, up to the lowest level with a free entry.
+\ When no level has one, the root's entries move into a new node and the
+\ tree grows by one level (ext4_ext_grow_indepth).  Every node keeps the
+\ read side's rules: an index key is its child's first block, no external
+\ node is empty, and each is checksummed against the inode number and
+\ generation.
+\
+\ Edited and new nodes go straight into the open transaction, and a later
+\ read in the same transaction takes them from there.  The root lives in
+\ the operation's private inode record, which is staged last.
 
-0 CONSTANT _XH-EDIT-INSERT
-1 CONSTANT _XH-EDIT-MERGE-LEFT
-2 CONSTANT _XH-EDIT-MERGE-RIGHT
-3 CONSTANT _XH-EDIT-MERGE-BOTH
-4 CONSTANT _XH-EDIT-GROW-ROOT
-5 CONSTANT _XH-EDIT-SPLIT-LEAF
+VARIABLE _XN-TX
+VARIABLE _XN-CTX
+VARIABLE _XN-BSIZE
+VARIABLE _XN-INO
+VARIABLE _XN-GEN
+VARIABLE _XN-ROOT
+VARIABLE _XN-NODE-MAX
+VARIABLE _XN-DEPTH
+VARIABLE _XN-LIMIT
+VARIABLE _XN-NEW-NODES
+VARIABLE _XN-EXISTING
+VARIABLE _XN-GOAL
+VARIABLE _XN-LOGICAL
+VARIABLE _XN-LEN
+VARIABLE _XN-PHYSICAL
+VARIABLE _XN-PLACED
+VARIABLE _XN-BORDER
+VARIABLE _XN-AT
+VARIABLE _XN-BELOW
+VARIABLE _XN-NEW
+VARIABLE _XN-MOVE
+VARIABLE _XN-LEVEL
+VARIABLE _XN-R-HOME
+VARIABLE _XN-R-DEPTH
+VARIABLE _XN-R-BUF
+VARIABLE _XN-S-NODE
+VARIABLE _XN-S-LOGICAL
+VARIABLE _XN-F-LOGICAL
+VARIABLE _XN-F-NODE
+VARIABLE _XN-F-LEVEL
+VARIABLE _XN-K-KEY
+VARIABLE _XN-K-LEVEL
+VARIABLE _XN-L-NODE
+VARIABLE _XN-L-POS
+VARIABLE _XN-L-LEFT
+VARIABLE _XN-L-RIGHT
+CREATE _XN-HOME _EXT4-MAX-EXTENT-DEPTH 1+ CELLS ALLOT
+CREATE _XN-POS _EXT4-MAX-EXTENT-DEPTH 1+ CELLS ALLOT
+CREATE _XN-FILL _EXT4-MAX-EXTENT-DEPTH 1+ CELLS ALLOT
+CREATE _XN-A _EXT4-MAX-BLOCK ALLOT
+CREATE _XN-B _EXT4-MAX-BLOCK ALLOT
 
-: _XH-ENTRY-AT  ( index -- extent-entry )
-    12 * 12 + _XH-EDIT-NODE @ + ;
+: _XN-HOME@  ( level -- home )  CELLS _XN-HOME + @ ;
+: _XN-HOME!  ( home level -- )  CELLS _XN-HOME + ! ;
+: _XN-POS@  ( level -- index )  CELLS _XN-POS + @ ;
+: _XN-POS!  ( index level -- )  CELLS _XN-POS + ! ;
+: _XN-FILL@  ( level -- count )  CELLS _XN-FILL + @ ;
+: _XN-FILL!  ( count level -- )  CELLS _XN-FILL + ! ;
+: _XN-ENTRY  ( node index -- entry )  12 * 12 + + ;
+: _XN-COUNT@  ( node -- count )  2 + W@ ;
+: _XN-COUNT!  ( count node -- )  2 + W! ;
 
-: _XH-ROOT-ENTRY-AT  ( index -- extent-index )
-    12 * 12 + _XH-ROOT @ + ;
+: _XN-MAX-AT  ( level -- max )
+    IF _XN-NODE-MAX @ ELSE _EXT4-RESIDENT-EXTENT-ENTRY-MAX THEN ;
 
-: _XH-RANGE-AT  ( index -- range-pair )
-    2* CELLS _XH-CTX @ _EXT4-C.MUTATION-RANGES + @ + ;
+: _XN-PHYS@  ( extent -- physical )
+    DUP 6 + W@ 32 LSHIFT SWAP 8 + L@ OR ;
 
-: _XH-NEW-LEAF?  ( -- flag )
-    _XH-ROOT-GROW @ _XH-LEAF-SPLIT @ OR ;
+: _XN-EXTENT!  ( logical length physical extent -- )
+    >R DUP 0xFFFFFFFF AND R@ 8 + L! 32 RSHIFT R@ 6 + W!
+    R@ 4 + W! R> L! ;
 
-: _XH-REQUIRE-FRESH  ( -- ior )
-    _XH-WRITER @ _EXT4-JWR.META-CREDIT + @
-    DUP 4 U< SWAP _XH-META-HOME-CAP U> OR
-    _XH-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 1 <> OR
-    _XH-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ 0<> OR IF
-        VFS-E-INVALID EXIT
+: _XN-CHILD@  ( index -- physical )
+    DUP 8 + W@ 32 LSHIFT SWAP 4 + L@ OR ;
+
+: _XN-INDEX!  ( logical child index -- )
+    >R DUP 0xFFFFFFFF AND R@ 4 + L! 32 RSHIFT R@ 8 + W!
+    0 R@ 10 + W! R> L! ;
+
+: _XN-INITIALIZED?  ( extent -- flag )  4 + W@ 32768 U> 0= ;
+
+\ Zero the entry bytes past COUNT, up to the node's own entry capacity, so
+\ a shortened node carries no stale entries under its checksum.
+: _XN-CLEAR-TAIL  ( node -- )
+    DUP DUP _XN-COUNT@ _XN-ENTRY
+    SWAP DUP 4 + W@ _XN-ENTRY OVER - 0 FILL ;
+
+\ Copy the transaction's view of the external node at HOME into BUFFER: the
+\ after-image this transaction already holds for it, or else the
+\ checksum-verified block.  The copy must be a nonempty node of DEPTH with
+\ the external fanout.
+: _XN-READ  ( home depth buffer -- ior )
+    _XN-R-BUF ! _XN-R-DEPTH ! DUP _XN-R-HOME !
+    _XN-TX @ _EXT4-JTX-META-IMAGE ?DUP IF NIP EXIT THEN
+    ?DUP IF
+        _XN-R-BUF @ _XN-BSIZE @ MOVE
+    ELSE
+        _XN-R-HOME @ _XN-R-DEPTH @ _XN-CTX @ _EXT4-LOAD-EXTENT-NODE
+        ?DUP IF EXIT THEN
+        _XN-CTX @ _EXT4-C.TREE-BLOCK + _XN-R-BUF @ _XN-BSIZE @ MOVE
     THEN
-    _XH-WRITER @ _EXT4-JWR.META-USED + @
-    _XH-WRITER @ _EXT4-JWR.DATA-USED + @ OR
-    _XH-WRITER @ _EXT4-JWR.REVOKE-USED + @ OR
-    _XH-WRITER @ _EXT4-JWR.META-ACTIVE + @ OR
-    _XH-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ OR
-    _XH-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ OR IF
-        VFS-E-BUSY EXIT
-    THEN
-    _XH-WRITER @ _EXT4-JWR.CP-MODE + @
-    _EXT4-JCPM-NONE <> IF VFS-E-BUSY EXIT THEN
-    _XH-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-CTX @ _EXT4-C.O.ACTIVE + @
-    _XH-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ OR
-    _XH-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
-    _XH-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    _XN-R-BUF @ W@ _EXT4-EXTENT-MAGIC <>
+    _XN-R-BUF @ 4 + W@ _XN-NODE-MAX @ <> OR
+    _XN-R-BUF @ 6 + W@ _XN-R-DEPTH @ <> OR
+    _XN-R-BUF @ _XN-COUNT@ DUP 0= SWAP _XN-NODE-MAX @ U> OR OR IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     0 ;
 
-: _XH-FAIL-AFTER-PUBLISH  ( ior -- ior )
-    _XH-IOR !
-    _XH-PUBLISHED @ IF
-        _XH-WRITER @ _EXT4-JWR.STATE + @ DUP
-        _EXT4-JWR-STAGING = IF
-            DROP
-            _XH-WRITER @ _EXT4-JTX-ABORT
-            DUP _XH-ABORT-IOR ! IF
-                _XH-ABORT-IOR @
-                _XH-WRITER @ _EXT4-JWR.FAULT + !
-                _EXT4-JWR-FAULTED
-                _XH-WRITER @ _EXT4-JWR.STATE + !
-            THEN
-        ELSE
-            DUP _EXT4-JWR-IDLE = SWAP _EXT4-JWR-FAULTED = OR 0= IF
-                _XH-IOR @
-                _XH-WRITER @ _EXT4-JWR.FAULT + !
-                _EXT4-JWR-FAULTED
-                _XH-WRITER @ _EXT4-JWR.STATE + !
-            THEN
-        THEN
-    THEN
-    _XH-IOR @ ;
+\ The last entry of NODE whose key is at or below LOGICAL, or -1 when
+\ LOGICAL precedes every entry.
+: _XN-SEARCH  ( node logical -- index )
+    _XN-S-LOGICAL ! _XN-S-NODE !
+    -1 _XN-S-NODE @ _XN-COUNT@ 0 ?DO
+        _XN-S-NODE @ I _XN-ENTRY L@ _XN-S-LOGICAL @ U> IF LEAVE THEN
+        DROP I
+    LOOP ;
 
-: _XH-ADD-DATA-BLOCKS  ( blocks -- ior )
-    _XH-DATA-BLOCKS @ _EXT4-UADD?
-    DUP IF NIP EXIT THEN DROP _XH-DATA-BLOCKS !
-    0 ;
-
-\ Retain every target-owned data, external tree-node, and xattr range while
-\ selecting an allocating edit.  The vector is private scratch rather than a
-\ published ownership scope: it rejects aliases inside the excluded target
-\ inode before the later filesystem-wide scan reasons about other owners.
-: _XH-RANGE-ADD-DISJOINT  ( first count -- ior )
-    _XH-RANGE-LEN ! _XH-RANGE-FIRST !
-    _XH-RANGE-FIRST @ 0= _XH-RANGE-LEN @ 0= OR IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-RANGE-FIRST @ _XH-RANGE-LEN @ _EXT4-UADD?
-    _XH-IOR ! _XH-END !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-END @ _XH-RANGE-FIRST @ U< IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-RANGE-COUNT @ DUP 0<
-    SWAP _XH-RANGE-CAP @ U< 0= OR IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    0 _XH-RANGE-INDEX !
+\ Record the root-to-leaf path that governs LOGICAL.  An index level takes
+\ its last entry at or below LOGICAL, or its first for a leading hole; the
+\ leaf position may be -1.  The leaf is left in _XN-A, or is the root.
+\ _XN-FILL keeps each level's entry count, and _XN-LIMIT the smallest key
+\ above the path, which bounds the leaf's logical range.
+: _XN-FIND  ( logical -- ior )
+    _XN-F-LOGICAL !
+    _XN-ROOT @ 6 + W@ DUP _XN-DEPTH !
+    _EXT4-MAX-EXTENT-DEPTH U> IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+    0x100000000 _XN-LIMIT !
+    0 0 _XN-HOME!
+    _XN-ROOT @ _XN-F-NODE !
+    0 _XN-F-LEVEL !
     BEGIN
-        _XH-RANGE-INDEX @ _XH-RANGE-COUNT @ U<
+        _XN-F-NODE @ _XN-COUNT@ _XN-F-LEVEL @ _XN-FILL!
+        _XN-F-NODE @ _XN-F-LOGICAL @ _XN-SEARCH
+        _XN-F-LEVEL @ _XN-DEPTH @ U<
     WHILE
-        _XH-RANGE-FIRST @ _XH-RANGE-LEN @
-        _XH-RANGE-INDEX @ _XH-RANGE-AT DUP @ SWAP CELL+ @
-        _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        1 _XH-RANGE-INDEX +!
-    REPEAT
-    _XH-RANGE-FIRST @
-    _XH-RANGE-COUNT @ _XH-RANGE-AT !
-    _XH-RANGE-LEN @
-    _XH-RANGE-COUNT @ _XH-RANGE-AT CELL+ !
-    1 _XH-RANGE-COUNT +!
-    0 ;
-
-: _XH-CAPTURE-RANGES-BEGIN  ( -- ior )
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _XH-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-CTX @ _EXT4-C.MUTATION-RANGES + @ 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE-CAPACITY
-    DUP IF NIP EXIT THEN DROP _XH-RANGE-CAP !
-    _XH-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _XH-RANGE-CAP @ <> IF VFS-E-CORRUPT EXIT THEN
-    _XH-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _XH-RANGE-CAP @ 2* CELLS 0 FILL
-    0 _XH-RANGE-COUNT !
-    0 ;
-
-: _XH-CAPTURE-RANGES-SCRUB  ( -- )
-    _XH-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _XH-RANGE-CAP @ 2* CELLS 0 FILL
-    0 _XH-RANGE-COUNT ! ;
-
-\ Validate every existing extent as an ordinary mutable data role before the
-\ target inode is excluded from the filesystem-wide other-owner scan.  A zero
-\ probe target cannot alias any admitted ext4 block, so this scoped walk uses
-\ the existing mutation-map hook only for its complete role validation.
-: _XH-REQUIRE-MAP-AUDIT  ( -- ior )
-    _EXT4-MUTATION-MAP-TARGET @
-    _EXT4-MUTATION-MAP-ACTIVE @ OR
-    _EXT4-MUTATION-MAP-HITS @ OR IF VFS-E-BUSY EXIT THEN
-    0 _EXT4-MUTATION-MAP-TARGET !
-    0 _EXT4-MUTATION-MAP-HITS !
-    -1 _EXT4-MUTATION-MAP-ACTIVE !
-    _XH-CTX @ _EXT4-VALIDATE-EXTENT-TREE _XH-IOR !
-    0 _EXT4-MUTATION-MAP-ACTIVE !
-    0 _EXT4-MUTATION-MAP-TARGET !
-    _XH-IOR @ 0= _EXT4-MUTATION-MAP-HITS @ 0<> AND IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT _XH-IOR !
-    THEN
-    0 _EXT4-MUTATION-MAP-HITS !
-    _XH-IOR @ ;
-
-\ Capture and account one member of the authenticated resident depth-one
-\ fanout.  Every leaf contributes to exact i_blocks authentication.  Only the
-\ selected leaf is copied into the mutable snapshot and derives an insertion
-\ point; all other leaf blocks remain read-only authority.
-: _XH-CAPTURE-DEPTH1-LEAF  ( -- ior )
-    _XH-INDEX @ _XH-ROOT-ENTRY-AT DUP _XH-ENTRY !
-    DUP 8 + W@ IF DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
-    DUP 10 + W@ IF DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
-    4 + L@ DUP _XH-SCAN-LEAF !
-    0= IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
-    _XH-EA @ _XH-SCAN-LEAF @ = IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-SCAN-LEAF @ 0 _XH-CTX @
-    _EXT4-LOAD-EXTENT-NODE ?DUP IF EXIT THEN
-    _XH-SCAN-LEAF @ 1 _XH-RANGE-ADD-DISJOINT ?DUP IF EXIT THEN
-    _XH-CTX @ _EXT4-C.TREE-BLOCK + DUP _XH-SCAN-NODE !
-    12 + L@ _XH-ENTRY @ L@ <> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-SCAN-NODE @ 2 + W@ DUP _XH-SCAN-ENTRIES !
-    0= IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
-    _XH-BSIZE @ 12 - 12 / DUP _XH-LEAF-MAX !
-    _XH-SCAN-NODE @ 4 + W@ <> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-SCAN-ENTRIES @ _XH-LEAF-MAX @ U> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-INDEX @ _XH-ROOT-INDEX @ = IF
-        _XH-SCAN-LEAF @ _XH-EXISTING-LEAF !
-        _XH-SCAN-NODE @ _XH-LEAF-SNAPSHOT _XH-BSIZE @ MOVE
-        _XH-LEAF-SNAPSHOT _XH-EDIT-NODE !
-        _XH-LEAF-MAX @ _XH-ENTRY-MAX !
-        _XH-SCAN-ENTRIES @ DUP _XH-ENTRIES ! _XH-INSERT !
-    THEN
-    0 _XH-SHIFT !
-    BEGIN
-        _XH-SHIFT @ _XH-SCAN-ENTRIES @ U<
-    WHILE
-        _XH-SCAN-NODE @ 12 + _XH-SHIFT @ 12 * + DUP _XH-ENTRY !
-        DUP L@ _XH-START !
-        DUP 4 + W@ _XH-RAW-LEN !
-        DUP _EXT4-EXTENT-LEN@ _XH-LEN !
-        DUP 6 + W@ 32 LSHIFT SWAP 8 + L@ OR _XH-PHYSICAL !
-        _XH-PHYSICAL @ _XH-LEN @
-        _XH-RANGE-ADD-DISJOINT ?DUP IF EXIT THEN
-        _XH-LEN @ _XH-ADD-DATA-BLOCKS ?DUP IF EXIT THEN
-        _XH-START @ _XH-LEN @ _EXT4-UADD?
-        _XH-IOR ! _XH-END !
-        _XH-IOR @ ?DUP IF EXIT THEN
-        _XH-END @ 0xFFFFFFFF U> IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _XH-LOGICAL @ _XH-START @ >=
-        _XH-LOGICAL @ _XH-END @ U< AND IF
-            EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XH-INDEX @ _XH-ROOT-INDEX @ = IF
-            _XH-INSERT @ _XH-ENTRIES @ =
-            _XH-START @ _XH-LOGICAL @ U> AND IF
-                _XH-SHIFT @ _XH-INSERT !
-            THEN
-        THEN
-        1 _XH-SHIFT +!
-    REPEAT
-    0 ;
-
-\ The ordinary extent validator has already authenticated every entry and
-\ allocation bit.  This second pass admits either the resident depth-zero
-\ root or a resident depth-one root with its complete bounded leaf fanout.
-\ Depth-one selection follows ext4 index semantics: the rightmost key no
-\ greater than the target wins, while the first child governs a leading hole.
-\ Physical-candidate planning later decides whether the selected leaf inserts,
-\ coalesces, or splits while the resident root retains index capacity.  Deeper
-\ trees remain structurally valid read input but are outside this mutation.
-: _XH-CAPTURE-ROOT-BODY  ( -- ior )
-    _XH-EA @ ?DUP IF
-        1 _XH-RANGE-ADD-DISJOINT ?DUP IF EXIT THEN
-    THEN
-    _XH-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + DUP
-    _XH-ROOT !
-    DUP W@ _EXT4-EXTENT-MAGIC <> IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    DUP 4 + W@ _EXT4-RESIDENT-EXTENT-ENTRY-MAX <> IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    DUP 8 + L@ _XH-ROOT-GENERATION !
-    DUP 6 + W@ DUP _XH-TREE-DEPTH !
-    DUP 1 U> IF
-        2DROP EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
-    THEN
-    IF
-        DUP 2 + W@ DUP _XH-ROOT-ENTRIES !
-        DUP 0= SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR IF
+        _XN-F-NODE @ _XN-COUNT@ 0= IF
             DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
         THEN
-        DROP
-        0 _XH-ROOT-INDEX !
-        0 _XH-INDEX !
-        BEGIN
-            _XH-INDEX @ _XH-ROOT-ENTRIES @ U<
-        WHILE
-            _XH-INDEX @ _XH-ROOT-ENTRY-AT L@
-            _XH-LOGICAL @ U> 0= IF _XH-INDEX @ _XH-ROOT-INDEX ! THEN
-            1 _XH-INDEX +!
-        REPEAT
-        0 _XH-DATA-BLOCKS !
-        0 _XH-INDEX !
-        BEGIN
-            _XH-INDEX @ _XH-ROOT-ENTRIES @ U<
-        WHILE
-            _XH-CAPTURE-DEPTH1-LEAF ?DUP IF EXIT THEN
-            1 _XH-INDEX +!
-        REPEAT
-        _XH-EXISTING-LEAF @ 0= IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        0 MAX DUP _XN-F-LEVEL @ _XN-POS!
+        DUP 1+ _XN-F-NODE @ _XN-COUNT@ < IF
+            _XN-F-NODE @ OVER 1+ _XN-ENTRY L@
+            _XN-LIMIT @ MIN _XN-LIMIT !
         THEN
-    ELSE
-        DROP
-        0 _XH-ROOT-ENTRIES !
-        0 _XH-ROOT-INDEX !
-        0 _XH-EXISTING-LEAF !
-        _XH-ROOT @ _XH-EDIT-NODE !
-        _EXT4-RESIDENT-EXTENT-ENTRY-MAX _XH-ENTRY-MAX !
-        _XH-ROOT @ 2 + W@ DUP _XH-ENTRIES !
-        _XH-ENTRY-MAX @ U> IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-    THEN
-    _XH-TREE-DEPTH @ 0= IF
-        _XH-ENTRIES @ _XH-INSERT !
-        0 _XH-DATA-BLOCKS !
-        0 _XH-INDEX !
-        BEGIN
-            _XH-INDEX @ _XH-ENTRIES @ U<
-        WHILE
-            _XH-INDEX @ _XH-ENTRY-AT _XH-ENTRY !
-            _XH-ENTRY @ L@ _XH-START !
-            _XH-ENTRY @ 4 + W@ _XH-RAW-LEN !
-            _XH-ENTRY @ _EXT4-EXTENT-LEN@ _XH-LEN !
-            _XH-ENTRY @ DUP 6 + W@ 32 LSHIFT
-            SWAP 8 + L@ OR _XH-PHYSICAL !
-            _XH-PHYSICAL @ _XH-LEN @
-            _XH-RANGE-ADD-DISJOINT ?DUP IF EXIT THEN
-            _XH-LEN @ _XH-ADD-DATA-BLOCKS ?DUP IF EXIT THEN
-            _XH-START @ _XH-LEN @ _EXT4-UADD?
-            _XH-IOR ! _XH-END !
-            _XH-IOR @ ?DUP IF EXIT THEN
-            _XH-END @ 0xFFFFFFFF U> IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            _XH-LOGICAL @ _XH-START @ >=
-            _XH-LOGICAL @ _XH-END @ U< AND IF
-                _XH-RAW-LEN @ 32768 > IF
-                    EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
-                THEN
-                EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
-            THEN
-            _XH-INSERT @ _XH-ENTRIES @ =
-            _XH-START @ _XH-LOGICAL @ U> AND IF
-                _XH-INDEX @ _XH-INSERT !
-            THEN
-            1 _XH-INDEX +!
-        REPEAT
-    THEN
-    _XH-DATA-BLOCKS @ _XH-EA @ IF 1+ THEN
-    _XH-ROOT-ENTRIES @ +
-    _XH-CTX @ _EXT4-C.SPB + @ _EXT4-UMUL?
-    _XH-IOR ! _XH-ACCOUNTED-BLOCKS !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-ACCOUNTED-BLOCKS @ _XH-BLOCKS @ <> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
+        _XN-F-NODE @ SWAP _XN-ENTRY _XN-CHILD@
+        DUP 0= IF DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+        1 _XN-F-LEVEL +!
+        DUP _XN-F-LEVEL @ _XN-HOME!
+        _XN-DEPTH @ _XN-F-LEVEL @ - _XN-A _XN-READ ?DUP IF EXIT THEN
+        _XN-A _XN-F-NODE !
+    REPEAT
+    _XN-F-LEVEL @ _XN-POS!
     0 ;
 
-\ Always scrub the shared range workspace, including corrupt early exits.
-\ Later reverse-owner proofs reuse it only after this complete target-local
-\ disjointness check has reduced its authority to retained scalar snapshots.
-: _XH-CAPTURE-ROOT  ( -- ior )
-    _XH-CAPTURE-RANGES-BEGIN ?DUP IF EXIT THEN
-    _XH-CAPTURE-ROOT-BODY _XH-IOR !
-    _XH-CAPTURE-RANGES-SCRUB
-    _XH-IOR @ ;
+: _XN-LEAF  ( -- node )
+    _XN-DEPTH @ IF _XN-A ELSE _XN-ROOT @ THEN ;
 
-: _XH-AUTH-TARGET  ( -- ior )
-    0 _XH-ROOT-GROW !
-    0 _XH-LEAF-SPLIT !
-    0 _XH-TREE-DEPTH !
-    0 _XH-ROOT-ENTRIES !
-    0 _XH-ROOT-INDEX !
-    0 _XH-EDIT-NODE !
-    0 _XH-EXISTING-LEAF !
-    0 _XH-LEAF-CANDIDATE !
-    0 _XH-LEAF-FIRST !
-    0 _XH-LEAF-SECOND-FIRST !
-    0 _XH-SPLIT-LEFT !
-    0 _XH-SPLIT-RIGHT !
-    0 _XH-META-CREDIT !
-    _XH-INO @
-    _XH-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
+\ Stamp one external node and stage it at HOME.  The first edit of an
+\ existing node counts it for the map audit; a new node is staged with
+\ _XN-PUT-NEW instead.
+: _XN-PUT-AT  ( node home -- ior )
+    DUP _XN-TX @ _EXT4-JTX-META-IMAGE ?DUP IF NIP NIP NIP EXIT THEN
+    0= IF 1 _XN-EXISTING +! THEN
+    OVER _XN-INO @ _XN-GEN @ _XN-CTX @ _EXT4-RESTAMP-EXTENT-NODE
+    ?DUP IF NIP NIP EXIT THEN
+    _XN-TX @ _EXT4-JTX-META-PUT ;
+
+: _XN-PUT-NEW  ( node home -- ior )
+    OVER _XN-INO @ _XN-GEN @ _XN-CTX @ _EXT4-RESTAMP-EXTENT-NODE
+    ?DUP IF NIP NIP EXIT THEN
+    _XN-TX @ _EXT4-JTX-META-PUT ;
+
+\ Stage the node at LEVEL.  The root is part of the private inode record.
+: _XN-PUT  ( node level -- ior )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    _XN-HOME@ _XN-PUT-AT ;
+
+\ Allocate one block for a new tree node, near the data it maps.
+: _XN-ALLOCATE-NODE  ( -- home ior )
+    _XN-GOAL @ 1 _XN-TX @ _EXT4-JTX-FIND-FREE-RUN
+    ?DUP IF NIP NIP 0 SWAP EXIT THEN
+    0= IF DROP 0 VFS-E-NOSPC EXIT THEN
+    DUP 1 _XN-TX @ _EXT4-JTX-STAGE-ALLOCATE-RANGE ?DUP IF NIP 0 SWAP EXIT THEN
+    DUP 1+ _XN-GOAL !
+    1 _XN-NEW-NODES +!
+    0 ;
+
+\ Begin a new external node of DEPTH in BUFFER with the generation of the
+\ node it splits from.
+: _XN-NEW-HEADER  ( depth generation buffer -- )
+    DUP _XN-BSIZE @ 0 FILL
+    _EXT4-EXTENT-MAGIC OVER W!
+    _XN-NODE-MAX @ OVER 4 + W!
+    TUCK 8 + L! 6 + W! ;
+
+\ The node at LEVEL now begins at KEY.  Each parent index naming it must
+\ say so, upward while the corrected index is its own node's first entry
+\ (ext4_ext_correct_indexes).
+: _XN-FIX-KEYS  ( key level -- ior )
+    _XN-K-LEVEL ! _XN-K-KEY !
+    BEGIN _XN-K-LEVEL @ 0> WHILE
+        -1 _XN-K-LEVEL +!
+        _XN-K-LEVEL @ IF
+            _XN-K-LEVEL @ _XN-HOME@
+            _XN-DEPTH @ _XN-K-LEVEL @ - _XN-B _XN-READ ?DUP IF EXIT THEN
+            _XN-B
+        ELSE
+            _XN-ROOT @
+        THEN
+        DUP _XN-K-LEVEL @ _XN-POS@ _XN-ENTRY _XN-K-KEY @ SWAP L!
+        _XN-K-LEVEL @ _XN-PUT ?DUP IF EXIT THEN
+        _XN-K-LEVEL @ _XN-POS@ IF 0 EXIT THEN
+    REPEAT
+    0 ;
+
+\ Open a free entry at INDEX of NODE, moving later entries up by one.
+: _XN-OPEN-ENTRY  ( node index -- )
+    2DUP _XN-ENTRY 2 PICK 2 PICK 1+ _XN-ENTRY
+    3 PICK _XN-COUNT@ 3 PICK - 12 * MOVE
+    DROP DUP _XN-COUNT@ 1+ SWAP _XN-COUNT! ;
+
+\ Remove the entry at INDEX of NODE.
+: _XN-DELETE-ENTRY  ( node index -- )
+    2DUP 1+ _XN-ENTRY 2 PICK 2 PICK _XN-ENTRY
+    3 PICK _XN-COUNT@ 3 PICK - 1- 12 * MOVE
+    DROP DUP _XN-COUNT@ 1- OVER _XN-COUNT! _XN-CLEAR-TAIL ;
+
+\ Does EXTENT end exactly where the run begins, logically and physically?
+: _XN-JOINS-LEFT?  ( extent -- flag )
+    DUP _XN-INITIALIZED? 0= IF DROP FALSE EXIT THEN
+    DUP L@ OVER _EXT4-EXTENT-LEN@ + _XN-LOGICAL @ <> IF
+        DROP FALSE EXIT
+    THEN
+    DUP _XN-PHYS@ SWAP _EXT4-EXTENT-LEN@ + _XN-PHYSICAL @ = ;
+
+\ Does EXTENT begin exactly where the run ends?
+: _XN-JOINS-RIGHT?  ( extent -- flag )
+    DUP _XN-INITIALIZED? 0= IF DROP FALSE EXIT THEN
+    DUP L@ _XN-LOGICAL @ _XN-LEN @ + <> IF DROP FALSE EXIT THEN
+    _XN-PHYS@ _XN-PHYSICAL @ _XN-LEN @ + = ;
+
+\ Put the run into the leaf when it extends a neighbour, bridges two, or
+\ finds a free entry.  An initialized extent holds at most 32,768 blocks.
+\ A leaf whose first key changes corrects its parents.
+: _XN-LEAF-INSERT  ( -- taken? ior )
+    _XN-LEAF _XN-L-NODE !
+    _XN-DEPTH @ _XN-POS@ _XN-L-POS !
+    0 _XN-L-LEFT ! 0 _XN-L-RIGHT !
+    _XN-L-POS @ 0< 0= IF
+        _XN-L-NODE @ _XN-L-POS @ _XN-ENTRY DUP _XN-JOINS-LEFT? IF
+            _XN-L-LEFT !
+        ELSE DROP THEN
+    THEN
+    _XN-L-POS @ 1+ _XN-L-NODE @ _XN-COUNT@ < IF
+        _XN-L-NODE @ _XN-L-POS @ 1+ _XN-ENTRY DUP _XN-JOINS-RIGHT? IF
+            _XN-L-RIGHT !
+        ELSE DROP THEN
+    THEN
+    _XN-L-LEFT @ 0<> _XN-L-RIGHT @ 0<> AND IF
+        _XN-L-LEFT @ _EXT4-EXTENT-LEN@ _XN-LEN @ +
+        _XN-L-RIGHT @ _EXT4-EXTENT-LEN@ +
+        DUP 32768 U> 0= IF
+            _XN-L-LEFT @ 4 + W!
+            _XN-L-NODE @ _XN-L-POS @ 1+ _XN-DELETE-ENTRY
+            _XN-L-NODE @ _XN-DEPTH @ _XN-PUT TRUE SWAP EXIT
+        THEN
+        DROP
+    THEN
+    _XN-L-LEFT @ IF
+        _XN-L-LEFT @ _EXT4-EXTENT-LEN@ _XN-LEN @ +
+        DUP 32768 U> 0= IF
+            _XN-L-LEFT @ 4 + W!
+            _XN-L-NODE @ _XN-DEPTH @ _XN-PUT TRUE SWAP EXIT
+        THEN
+        DROP
+    THEN
+    _XN-L-RIGHT @ IF
+        _XN-L-RIGHT @ _EXT4-EXTENT-LEN@ _XN-LEN @ +
+        DUP 32768 U> 0= IF
+            _XN-LOGICAL @ SWAP _XN-PHYSICAL @ _XN-L-RIGHT @ _XN-EXTENT!
+            _XN-L-NODE @ _XN-DEPTH @ _XN-PUT ?DUP IF FALSE SWAP EXIT THEN
+            _XN-L-POS @ 0< IF
+                _XN-LOGICAL @ _XN-DEPTH @ _XN-FIX-KEYS
+                ?DUP IF FALSE SWAP EXIT THEN
+            THEN
+            TRUE 0 EXIT
+        THEN
+        DROP
+    THEN
+    _XN-L-NODE @ _XN-COUNT@ _XN-DEPTH @ _XN-MAX-AT U< 0= IF
+        FALSE 0 EXIT
+    THEN
+    _XN-L-NODE @ _XN-L-POS @ 1+ _XN-OPEN-ENTRY
+    _XN-LOGICAL @ _XN-LEN @ _XN-PHYSICAL @
+    _XN-L-NODE @ _XN-L-POS @ 1+ _XN-ENTRY _XN-EXTENT!
+    _XN-L-NODE @ _XN-DEPTH @ _XN-PUT ?DUP IF FALSE SWAP EXIT THEN
+    _XN-L-POS @ 0< IF
+        _XN-LOGICAL @ _XN-DEPTH @ _XN-FIX-KEYS ?DUP IF FALSE SWAP EXIT THEN
+    THEN
+    TRUE 0 ;
+
+\ The lowest index level on the path with a free entry, or -1 when every
+\ level up to the root is full.
+: _XN-ROOM-LEVEL  ( -- level )
+    _XN-DEPTH @
+    BEGIN DUP 0> WHILE
+        1- DUP _XN-FILL@ OVER _XN-MAX-AT U< IF EXIT THEN
+    REPEAT
+    DROP -1 ;
+
+\ Split every full level below AT, as ext4_ext_split does.  The leaf keeps
+\ its entries through the insertion point and the rest move to a new leaf
+\ whose first key, BORDER, is the next extent's start.  When nothing
+\ follows the insertion point, the new leaf instead holds just the run,
+\ which is then placed.  Each full index level moves the entries after its
+\ path position into a new index node that begins with BORDER and the new
+\ node below; level AT takes the index for the new node above it.
+: _XN-SPLIT  ( at -- ior )
+    _XN-AT !
+    _XN-DEPTH @ _XN-POS@ 0 MAX _XN-L-POS !
+    _XN-L-POS @ 1+ _XN-DEPTH @ _XN-FILL@ < IF
+        _XN-A _XN-L-POS @ 1+ _XN-ENTRY L@ _XN-BORDER !
+        0 _XN-PLACED !
+    ELSE
+        _XN-LOGICAL @ _XN-BORDER !
+        -1 _XN-PLACED !
+    THEN
+    _XN-ALLOCATE-NODE ?DUP IF NIP EXIT THEN _XN-NEW !
+    0 _XN-A 8 + L@ _XN-B _XN-NEW-HEADER
+    _XN-DEPTH @ _XN-FILL@ _XN-L-POS @ 1+ - _XN-MOVE !
+    _XN-MOVE @ IF
+        _XN-A _XN-L-POS @ 1+ _XN-ENTRY _XN-B 12 +
+        _XN-MOVE @ 12 * MOVE
+        _XN-MOVE @ _XN-B _XN-COUNT!
+        _XN-L-POS @ 1+ _XN-A _XN-COUNT!
+        _XN-A _XN-CLEAR-TAIL
+    ELSE
+        _XN-LOGICAL @ _XN-LEN @ _XN-PHYSICAL @ _XN-B 12 + _XN-EXTENT!
+        1 _XN-B _XN-COUNT!
+    THEN
+    _XN-MOVE @ IF
+        _XN-A _XN-DEPTH @ _XN-PUT ?DUP IF EXIT THEN
+    THEN
+    _XN-B _XN-NEW @ _XN-PUT-NEW ?DUP IF EXIT THEN
+    _XN-NEW @ _XN-BELOW !
+    _XN-DEPTH @ 1- _XN-LEVEL !
+    BEGIN _XN-LEVEL @ _XN-AT @ > WHILE
+        _XN-LEVEL @ _XN-HOME@ _XN-DEPTH @ _XN-LEVEL @ - _XN-A _XN-READ
+        ?DUP IF EXIT THEN
+        _XN-ALLOCATE-NODE ?DUP IF NIP EXIT THEN _XN-NEW !
+        _XN-DEPTH @ _XN-LEVEL @ - _XN-A 8 + L@ _XN-B _XN-NEW-HEADER
+        _XN-BORDER @ _XN-BELOW @ _XN-B 12 + _XN-INDEX!
+        _XN-A _XN-COUNT@ _XN-LEVEL @ _XN-POS@ 1+ - _XN-MOVE !
+        _XN-MOVE @ IF
+            _XN-A _XN-LEVEL @ _XN-POS@ 1+ _XN-ENTRY _XN-B 24 +
+            _XN-MOVE @ 12 * MOVE
+            _XN-LEVEL @ _XN-POS@ 1+ _XN-A _XN-COUNT!
+            _XN-A _XN-CLEAR-TAIL
+            _XN-A _XN-LEVEL @ _XN-PUT ?DUP IF EXIT THEN
+        THEN
+        _XN-MOVE @ 1+ _XN-B _XN-COUNT!
+        _XN-B _XN-NEW @ _XN-PUT-NEW ?DUP IF EXIT THEN
+        _XN-NEW @ _XN-BELOW !
+        -1 _XN-LEVEL +!
+    REPEAT
+    _XN-AT @ IF
+        _XN-AT @ _XN-HOME@ _XN-DEPTH @ _XN-AT @ - _XN-A _XN-READ
+        ?DUP IF EXIT THEN
+        _XN-A
+    ELSE
+        _XN-ROOT @
+    THEN
+    DUP _XN-AT @ _XN-POS@ 1+ _XN-OPEN-ENTRY
+    DUP _XN-AT @ _XN-POS@ 1+ _XN-ENTRY
+    _XN-BORDER @ _XN-BELOW @ ROT _XN-INDEX!
+    _XN-AT @ _XN-PUT ;
+
+\ Move the root's entries into a new node one level below it and leave the
+\ root as one index naming that node, as ext4_ext_grow_indepth does.  The
+\ format allows five levels below the inode.
+: _XN-GROW  ( -- ior )
+    _XN-DEPTH @ _EXT4-MAX-EXTENT-DEPTH U< 0= IF
+        EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XN-ALLOCATE-NODE ?DUP IF NIP EXIT THEN _XN-NEW !
+    _XN-DEPTH @ _XN-ROOT @ 8 + L@ _XN-B _XN-NEW-HEADER
+    _XN-ROOT @ 12 + _XN-B 12 + _XN-ROOT @ _XN-COUNT@ 12 * MOVE
+    _XN-ROOT @ _XN-COUNT@ _XN-B _XN-COUNT!
+    _XN-B _XN-NEW @ _XN-PUT-NEW ?DUP IF EXIT THEN
+    _XN-ROOT @ 12 + L@ _XN-NEW @
+    _XN-ROOT @ 12 + DUP _EXT4-RESIDENT-EXTENT-ENTRY-MAX 12 * 0 FILL
+    _XN-INDEX!
+    1 _XN-ROOT @ _XN-COUNT!
+    _XN-DEPTH @ 1+ _XN-ROOT @ 6 + W!
+    0 ;
+
+\ Insert the initialized run LOGICAL..LOGICAL+LEN-1 at PHYSICAL.  Each pass
+\ either places the run or makes room for it by one split or one growth.
+: _XN-INSERT  ( logical len physical -- ior )
+    _XN-PHYSICAL ! _XN-LEN ! _XN-LOGICAL !
+    BEGIN
+        _XN-LOGICAL @ _XN-FIND ?DUP IF EXIT THEN
+        _XN-LEAF-INSERT ?DUP IF NIP EXIT THEN
+        IF 0 EXIT THEN
+        _XN-ROOM-LEVEL DUP 0< IF
+            DROP _XN-GROW ?DUP IF EXIT THEN
+        ELSE
+            _XN-SPLIT ?DUP IF EXIT THEN
+            _XN-PLACED @ IF 0 EXIT THEN
+        THEN
+    AGAIN ;
+
+\ How LOGICAL stands in the transaction's tree.  A mapped block returns its
+\ physical block and how many blocks of its extent follow from there; a
+\ hole returns how many blocks stay unmapped before the next extent or the
+\ edge of the leaf's range.  _XN-HINT receives, for a hole, the physical
+\ block that would continue the extent before it, or zero.
+0 CONSTANT _XN-MAPPED
+1 CONSTANT _XN-HOLE
+2 CONSTANT _XN-UNWRITTEN
+
+VARIABLE _XN-HINT
+VARIABLE _XL-LOGICAL
+VARIABLE _XL-NODE
+VARIABLE _XL-POS
+VARIABLE _XL-ENTRY
+VARIABLE _XL-END
+
+: _XN-LOOKUP  ( logical -- physical run kind ior )
+    DUP _XL-LOGICAL ! _XN-FIND ?DUP IF >R 0 0 0 R> EXIT THEN
+    0 _XN-HINT !
+    _XN-LEAF _XL-NODE !
+    _XN-DEPTH @ _XN-POS@ _XL-POS !
+    _XL-POS @ 0< 0= IF
+        _XL-NODE @ _XL-POS @ _XN-ENTRY _XL-ENTRY !
+        _XL-ENTRY @ L@ _XL-ENTRY @ _EXT4-EXTENT-LEN@ + _XL-END !
+        _XL-END @ _XL-LOGICAL @ U> IF
+            _XL-ENTRY @ _XN-PHYS@ _XL-LOGICAL @ _XL-ENTRY @ L@ - +
+            _XL-END @ _XL-LOGICAL @ -
+            _XL-ENTRY @ _XN-INITIALIZED? IF _XN-MAPPED ELSE _XN-UNWRITTEN THEN
+            0 EXIT
+        THEN
+        _XL-ENTRY @ _XN-PHYS@ _XL-LOGICAL @ _XL-ENTRY @ L@ - + _XN-HINT !
+    THEN
+    _XN-LIMIT @
+    _XL-POS @ 1+ _XL-NODE @ _XN-COUNT@ < IF
+        _XL-NODE @ _XL-POS @ 1+ _XN-ENTRY L@ MIN
+    THEN
+    _XL-LOGICAL @ - 0 SWAP _XN-HOLE 0 ;
+
+\ ---------------------------------------------------------------------
+\  Write staging
+\ ---------------------------------------------------------------------
+
+VARIABLE _XW-SOURCE
+VARIABLE _XW-COUNT
+VARIABLE _XW-OFFSET
+VARIABLE _XW-INO
+VARIABLE _XW-EXPECTED-GEN
+VARIABLE _XW-SECONDS
+VARIABLE _XW-NSEC
+VARIABLE _XW-TX
+VARIABLE _XW-CTX
+VARIABLE _XW-BSIZE
+VARIABLE _XW-SIZE
+VARIABLE _XW-BLOCKS
+VARIABLE _XW-EA
+VARIABLE _XW-GROUP
+VARIABLE _XW-INODE-HOME
+VARIABLE _XW-INODE-OFF
+VARIABLE _XW-DONE
+VARIABLE _XW-SAFE
+VARIABLE _XW-NEW-DATA
+VARIABLE _XW-OVERWRITES
+VARIABLE _XW-NEW-SIZE
+VARIABLE _XW-NEW-BLOCKS
+VARIABLE _XW-NEW-FREE
+VARIABLE _XW-GRANULAR
+VARIABLE _XW-LOGICAL
+VARIABLE _XW-LAST
+VARIABLE _XW-PHYS
+VARIABLE _XW-RUN
+VARIABLE _XW-KIND
+VARIABLE _XW-PREV
+VARIABLE _XW-RUN-FIRST
+VARIABLE _XW-RUN-COUNT
+VARIABLE _XB-PHYS
+VARIABLE _XB-EXISTING
+VARIABLE _XB-BASE
+VARIABLE _XB-LO
+VARIABLE _XB-HI
+CREATE _XW-INODE _EXT4-MAX-INODE ALLOT
+CREATE _XW-DATA _EXT4-MAX-BLOCK ALLOT
+
+\ Authenticate the target before each staging pass: a linked regular file
+\ outside the reserved inodes, with exactly the EXTENTS flag, the expected
+\ generation, a fully validated map, and a valid external xattr block when
+\ it has one.  Its record is copied into _XW-INODE for editing, and the
+\ target stays the loaded inode so its extent nodes verify.
+: _XW-AUTH  ( -- ior )
+    _XW-INO @ _XW-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
-    _XH-INO @ 8 =
-    _XH-INO @ _XH-CTX @ _EXT4-C.ORPHAN-INO + @ = OR IF
+    _XW-INO @ 8 =
+    _XW-INO @ _XW-CTX @ _EXT4-C.ORPHAN-INO + @ = OR IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    _XH-EXPECTED-GEN @ 0xFFFFFFFF U> IF
-        VFS-E-INVALID EXIT
-    THEN
-    _XH-INO @ _XH-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _XH-CTX @ _EXT4-STAGE-CURRENT-INODE
-    _XH-IOR ! _XH-TYPE !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-TYPE @ VFS-T-FILE <> IF
-        EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XH-CTX @ _EXT4-C.INODE + DUP
-    _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL <> IF
+    _XW-EXPECTED-GEN @ 0xFFFFFFFF U> IF VFS-E-INVALID EXIT THEN
+    _XW-INO @ _XW-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _XW-CTX @ _EXT4-STAGE-CURRENT-INODE ?DUP IF NIP EXIT THEN
+    VFS-T-FILE <> IF EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT THEN
+    _XW-CTX @ _EXT4-C.INODE +
+    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL <> IF
         DROP EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
     THEN
-    DUP _EXT4-I.GENERATION + L@
-    DUP _XH-INODE-GENERATION !
-    _XH-EXPECTED-GEN @ <> IF
+    DUP _EXT4-I.GENERATION + L@ _XW-EXPECTED-GEN @ <> IF
         DROP VFS-E-STALE EXIT
     THEN
-    DUP _EXT4-I.FILE-ACL-HI + W@ IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-I.FILE-ACL-LO + L@ _XH-EA !
-    _XH-CTX @ _EXT4-C.R.SIZE + @ _XH-SIZE !
-    _XH-CTX @ _EXT4-C.R.BLOCKS + @ _XH-BLOCKS !
-    _XH-GROW @ IF
-        _XH-OFFSET @ _XH-SIZE @ <> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XH-SIZE @ _XH-BSIZE @ MOD IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XH-OFFSET @ _XH-COUNT @ _EXT4-UADD?
-        _XH-IOR ! _XH-NEW-SIZE !
-        _XH-IOR @ ?DUP IF EXIT THEN
-    ELSE
-        _XH-OFFSET @ _XH-SIZE @ U< 0= IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XH-COUNT @
-        _XH-SIZE @ _XH-OFFSET @ - U> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XH-SIZE @ _XH-NEW-SIZE !
-    THEN
-    _XH-OFFSET @ _XH-BSIZE @ /MOD
-    _XH-LOGICAL ! _XH-BLOCK-OFF !
-    _XH-LOGICAL @ 1 _EXT4-UADD?
-    _XH-IOR ! _XH-END !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-END @ 0xFFFFFFFF U> IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XH-COUNT @
-    _XH-BSIZE @ _XH-BLOCK-OFF @ - U> IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XH-GROW @ IF
-        _XH-LOGICAL @
-        _XH-SIZE @ _XH-BSIZE @ / <> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-    ELSE
-        _XH-LOGICAL @
-        _XH-SIZE @ _XH-BSIZE @ / U< 0= IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-    THEN
-    _XH-CAPTURE-ROOT ?DUP IF EXIT THEN
-    _XH-REQUIRE-MAP-AUDIT ?DUP IF EXIT THEN
-    _XH-EA @ IF
-        _XH-EA @ 1 _XH-CTX @
-        _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-        _XH-EA @ EXT4-D-XATTR _XH-CTX @
-        _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN
-        _XH-EA @ _XH-CTX @ _EXT4-LOAD-XATTR-BLOCK
-        ?DUP IF EXIT THEN
-    THEN
-    _XH-CTX @ _EXT4-C.INODE + _XH-INODE-SNAPSHOT
-    _XH-CTX @ _EXT4-C.ISIZE + @ MOVE
-    _EXT4-IR-GROUP @ _XH-GROUP !
-    _EXT4-IR-BLOCK @ _XH-INODE-HOME !
-    _EXT4-IR-OFF @ _XH-INODE-OFF !
-    0 ;
-
-: _XH-REQUIRE-SAME-TARGET  ( -- ior )
-    _XH-INO @ _XH-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XH-GROUP @ <>
-    _EXT4-IR-BLOCK @ _XH-INODE-HOME @ <> OR
-    _EXT4-IR-OFF @ _XH-INODE-OFF @ <> OR IF
-        VFS-E-STALE EXIT
-    THEN
-    _XH-CTX @ _EXT4-STAGE-CURRENT-INODE
-    _XH-IOR ! _XH-TYPE !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-TYPE @ VFS-T-FILE <> IF VFS-E-STALE EXIT THEN
-    _XH-CTX @ _EXT4-C.INODE + _XH-INODE-SNAPSHOT
-    _XH-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-STALE EXIT
-    THEN
-    _XH-TREE-DEPTH @ IF
-        _XH-ROOT-INDEX @ _XH-ROOT-ENTRIES @ U< 0= IF
-            VFS-E-STALE EXIT
-        THEN
-        _XH-ROOT-INDEX @ _XH-ROOT-ENTRY-AT DUP
-        4 + L@ _XH-EXISTING-LEAF @ <>
-        OVER 8 + W@ 0<> OR
-        SWAP 10 + W@ 0<> OR IF VFS-E-STALE EXIT THEN
-        _XH-EXISTING-LEAF @ 0 _XH-CTX @
-        _EXT4-LOAD-EXTENT-NODE ?DUP IF EXIT THEN
-        _XH-CTX @ _EXT4-C.TREE-BLOCK + _XH-LEAF-SNAPSHOT
-        _XH-BSIZE @ _EXT4-BYTES=? 0= IF VFS-E-STALE EXIT THEN
-    THEN
-    _XH-EA @ IF
-        _XH-EA @ _XH-CANDIDATE @ = IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _XH-TREE-DEPTH @
-        _XH-EA @ _XH-EXISTING-LEAF @ = AND IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _XH-NEW-LEAF?
-        _XH-EA @ _XH-LEAF-CANDIDATE @ = AND IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _XH-EA @ _XH-CTX @ _EXT4-LOAD-XATTR-BLOCK
-        ?DUP IF EXIT THEN
-    THEN
-    0 ;
-
-: _XH-LOCATE-ACCOUNTING-HOMES  ( -- ior )
-    \ Candidate search begins at the inode group but may return from any
-    \ initialized group.  Derive the accounting owner from the selected
-    \ physical block; using the locality goal here would omit the real bitmap
-    \ (and possibly GDT page) from the reverse-owner certificate.
-    _XH-CANDIDATE @ _XH-CTX @ _EXT4-C.FIRST + @ -
-    _XH-CTX @ _EXT4-C.BPG + @ /MOD
-    _XH-CANDIDATE-GROUP ! DROP
-    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-C.GROUPS + @ U< 0= IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-LOAD-BLOCK-BITMAP
-    _XH-IOR ! _XH-BITMAP-HOME !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC
-    ?DUP IF EXIT THEN
-    _EXT4-GD-BLOCK @ _XH-GDT-HOME !
-    _XH-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
-    _XH-SUPER-HOME !
-    0 ;
-
-: _XH-OWNER-RANGE!  ( block index -- )
-    2* CELLS _XH-CTX @ _EXT4-C.MUTATION-RANGES + @ +
-    DUP _XH-ENTRY ! !
-    1 _XH-ENTRY @ CELL+ ! ;
-
-: _XH-META-HOME-ADD  ( block -- ior )
-    DUP 0< IF DROP VFS-E-CORRUPT EXIT THEN
-    DUP _XH-CTX @ _EXT4-C.BLOCKS + @ U< 0= IF
-        DROP VFS-E-CORRUPT EXIT
-    THEN
-    _XH-META-HOME-COUNT @ 0 ?DO
-        DUP I CELLS _XH-META-HOMES + @ = IF
-            DROP 0 UNLOOP EXIT
-        THEN
-    LOOP
-    _XH-META-HOME-COUNT @ _XH-META-HOME-CAP U< 0= IF
-        DROP VFS-E-CORRUPT EXIT
-    THEN
-    _XH-META-HOME-COUNT @ CELLS _XH-META-HOMES + !
-    1 _XH-META-HOME-COUNT +!
-    0 ;
-
-\ Count the exact distinct metadata homes implied by the selected topology.
-\ Ordinary inline-root allocation is the established bitmap/GDT/super/inode
-\ quartet.  Editing one selected depth-one leaf adds that leaf as exactly one
-\ fifth home; its siblings remain authenticated read authority.  Root growth
-\ instead owns the new leaf and may add a second bitmap and primary-GDT page,
-\ yielding five through seven.  Splitting also replaces the old leaf, yielding
-\ six through eight distinct homes.
-: _XH-MEASURE-META-CREDIT  ( -- ior )
-    _XH-META-HOMES _XH-META-HOME-CAP CELLS 0 FILL
-    0 _XH-META-HOME-COUNT !
-    _XH-BITMAP-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-    _XH-GDT-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-    _XH-SUPER-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-    _XH-INODE-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-    _XH-LEAF-SPLIT @ IF
-        _XH-EXISTING-LEAF @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-LEAF-CANDIDATE @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-LEAF-BITMAP-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-LEAF-GDT-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-META-HOME-COUNT @
-        DUP 6 U< SWAP _XH-META-HOME-CAP U> OR IF
-            VFS-E-CORRUPT EXIT
-        THEN
-    ELSE _XH-ROOT-GROW @ IF
-        _XH-LEAF-CANDIDATE @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-LEAF-BITMAP-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-LEAF-GDT-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-META-HOME-COUNT @ DUP 5 U< SWAP 7 U> OR IF
-            VFS-E-CORRUPT EXIT
-        THEN
-    ELSE _XH-TREE-DEPTH @ IF
-        _XH-EXISTING-LEAF @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-        _XH-META-HOME-COUNT @ 5 <> IF VFS-E-CORRUPT EXIT THEN
-    ELSE
-        _XH-META-HOME-COUNT @ 4 <> IF VFS-E-CORRUPT EXIT THEN
-    THEN THEN THEN
-    _XH-META-HOME-COUNT @ 0 ?DO
-        I CELLS _XH-META-HOMES + @ _XH-CANDIDATE @ = IF
-            VFS-E-CORRUPT UNLOOP EXIT
-        THEN
-    LOOP
-    _XH-META-HOME-COUNT @ _XH-META-CREDIT !
-    0 ;
-
-\ Prove every proposed data, tree, inode, and accounting role in one global
-\ inode walk.  The target's complete existing map was role-audited above, so
-\ excluding it cannot hide an alias.  Duplicate accounting roles are harmless
-\ in the proof vector and remain coalesced independently for journal credit.
-: _XH-REQUIRE-UNIQUE-HOMES  ( -- ior )
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _XH-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-META-CREDIT @ 1+ _XH-OWNER-RANGE-COUNT !
-    _XH-CTX @ _EXT4-C.MUTATION-RANGES + @ 0=
-    _XH-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _XH-OWNER-RANGE-COUNT @ U< OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _XH-CTX @ _EXT4-JFO-CTX !
-    _XH-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-UOW-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XH-CANDIDATE @ 0 _XH-OWNER-RANGE!
-    _XH-META-CREDIT @ 0 ?DO
-        I CELLS _XH-META-HOMES + @ I 1+ _XH-OWNER-RANGE!
-    LOOP
-    _XH-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _XH-OWNER-RANGE-COUNT @
-    _XH-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _EXT4-UOW-IOR !
-    _EXT4-UOW-IOR @ 0= IF
-        _EXT4-JFO-SCAN-OTHER-INODES _EXT4-UOW-IOR !
-    THEN
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-UOW-IOR @ ;
-
-: _XH-SELECT-CANDIDATE  ( -- ior )
-    _XH-GROUP @ _XH-CTX @ _EXT4-FIND-FREE-BLOCK
-    _XH-IOR ! _XH-CANDIDATE !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-EA @ _XH-CANDIDATE @ = IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-TREE-DEPTH @
-    _XH-CANDIDATE @ _XH-EXISTING-LEAF @ = AND IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-INODE-HOME @ _XH-GROUP @ _XH-CTX @
+    DUP _EXT4-I.FILE-ACL-HI + W@ IF DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
+    _EXT4-I.FILE-ACL-LO + L@ _XW-EA !
+    _XW-CTX @ _EXT4-C.R.SIZE + @ _XW-SIZE !
+    _XW-CTX @ _EXT4-C.R.BLOCKS + @ _XW-BLOCKS !
+    _XW-CTX @ _EXT4-C.INODE + _XW-INODE _XW-CTX @ _EXT4-C.ISIZE + @ MOVE
+    _EXT4-IR-GROUP @ _XW-GROUP !
+    _EXT4-IR-BLOCK @ _XW-INODE-HOME !
+    _EXT4-IR-OFF @ _XW-INODE-OFF !
+    _XW-INODE-HOME @ _XW-GROUP @ _XW-CTX @
     _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XH-LOCATE-ACCOUNTING-HOMES ;
-
-: _XH-SELECT-LEAF-CANDIDATE  ( -- ior )
-    _XH-NEW-LEAF? 0= IF 0 EXIT THEN
-    _XH-CANDIDATE @ _XH-CANDIDATE-GROUP @ _XH-CTX @
-    _EXT4-FIND-FREE-BLOCK-EXCLUDING
-    _XH-IOR ! _XH-LEAF-CANDIDATE !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-LEAF-CANDIDATE @ _XH-CANDIDATE @ = IF
-        VFS-E-CORRUPT EXIT
+    _XW-EA @ IF
+        _XW-EA @ 1 _XW-CTX @
+        _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
+        _XW-EA @ EXT4-D-XATTR _XW-CTX @
+        _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN
+        _XW-EA @ _XW-CTX @ _EXT4-LOAD-XATTR-BLOCK ?DUP IF EXIT THEN
     THEN
-    _XH-EA @ _XH-LEAF-CANDIDATE @ = IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-LEAF-CANDIDATE @ _XH-CTX @ _EXT4-C.FIRST + @ -
-    _XH-CTX @ _EXT4-C.BPG + @ /MOD
-    _XH-LEAF-GROUP ! DROP
-    _XH-LEAF-GROUP @ _XH-CTX @ _EXT4-C.GROUPS + @ U< 0= IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _XH-LEAF-GROUP @ _XH-CTX @ _EXT4-LOAD-BLOCK-BITMAP
-    _XH-IOR ! _XH-LEAF-BITMAP-HOME !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-LEAF-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
-    _EXT4-GD-BLOCK @ _XH-LEAF-GDT-HOME !
+    _XW-INO @ _XW-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _XW-CTX @ _EXT4-C.INODE + _XW-INODE
+    _XW-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF VFS-E-STALE EXIT THEN
     0 ;
 
-: _XH-REQUIRE-SAME-CANDIDATES  ( -- ior )
-    _XH-GROUP @ _XH-CTX @ _EXT4-FIND-FREE-BLOCK
-    DUP IF NIP EXIT THEN DROP
-    _XH-CANDIDATE @ <> IF VFS-E-CONFLICT EXIT THEN
-    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-LOAD-BLOCK-BITMAP
-    _XH-IOR ! _XH-ENTRY !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-ENTRY @ _XH-BITMAP-HOME @ <> IF VFS-E-CONFLICT EXIT THEN
-    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
-    _EXT4-GD-BLOCK @ _XH-GDT-HOME @ <> IF VFS-E-CONFLICT EXIT THEN
-    _XH-NEW-LEAF? IF
-        _XH-CANDIDATE @ _XH-CANDIDATE-GROUP @ _XH-CTX @
-        _EXT4-FIND-FREE-BLOCK-EXCLUDING
-        DUP IF NIP EXIT THEN DROP
-        _XH-LEAF-CANDIDATE @ <> IF VFS-E-CONFLICT EXIT THEN
-        _XH-LEAF-GROUP @ _XH-CTX @ _EXT4-LOAD-BLOCK-BITMAP
-        _XH-IOR ! _XH-ENTRY !
-        _XH-IOR @ ?DUP IF EXIT THEN
-        _XH-ENTRY @ _XH-LEAF-BITMAP-HOME @ <> IF
-            VFS-E-CONFLICT EXIT
-        THEN
-        _XH-LEAF-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
-        _EXT4-GD-BLOCK @ _XH-LEAF-GDT-HOME @ <> IF
-            VFS-E-CONFLICT EXIT
+: _XW-ADVANCE-DONE  ( -- )
+    _XW-LOGICAL @ _XW-BSIZE @ * _XW-OFFSET @ -
+    _XW-COUNT @ MIN _XW-DONE !
+    _XW-TX @ _EXT4-JWR.META-USED + @
+    _XW-TX @ _EXT4-JWR.META-CREDIT + @ U< IF _XW-DONE @ _XW-SAFE ! THEN ;
+
+\ Stage the ordered image of logical block LOGICAL at PHYSICAL.  A block the
+\ caller covers completely is copied whole.  Otherwise an existing block is
+\ read and modified, while a new block starts from zeros.  The bytes of an
+\ existing block past the old size read as zeros once the size moves past
+\ them, so they are zeroed rather than read.
+: _XW-STAGE-BLOCK  ( logical physical existing? -- ior )
+    _XB-EXISTING ! _XB-PHYS !
+    _XW-BSIZE @ * _XB-BASE !
+    _XW-OFFSET @ _XB-BASE @ - 0 MAX _XB-LO !
+    _XW-OFFSET @ _XW-COUNT @ + _XB-BASE @ - _XW-BSIZE @ MIN _XB-HI !
+    _XW-DATA _XW-BSIZE @ 0 FILL
+    _XB-EXISTING @ IF
+        1 _XW-OVERWRITES +!
+        _XB-LO @ 0= _XB-HI @ _XW-BSIZE @ = AND 0=
+        _XW-SIZE @ _XB-BASE @ U> AND IF
+            _XB-PHYS @ _XW-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+            _XW-CTX @ _EXT4-C.BLOCK + _XW-DATA
+            _XW-SIZE @ _XB-BASE @ - _XW-BSIZE @ MIN MOVE
         THEN
     THEN
-    _XH-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
-    _XH-SUPER-HOME @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XW-SOURCE @ _XB-BASE @ _XB-LO @ + _XW-OFFSET @ - +
+    _XW-DATA _XB-LO @ + _XB-HI @ _XB-LO @ - MOVE
+    _XW-DATA _XB-PHYS @ _XW-TX @ _EXT4-JTX-DATA-PUT ;
+
+\ A write that starts in a later block than the one holding a partial old
+\ EOF of SIZE bytes also writes that block's bytes past the old size as
+\ zeros, since the new size makes them readable.
+: _XW-TAIL-ZERO?  ( size -- flag )
+    DUP _XW-BSIZE @ MOD 0<>
+    SWAP _XW-BSIZE @ / _XW-OFFSET @ _XW-BSIZE @ / U< AND ;
+
+: _XW-ZERO-OLD-TAIL  ( -- ior )
+    _XW-SIZE @ _XW-TAIL-ZERO? 0= IF 0 EXIT THEN
+    _XW-SIZE @ _XW-BSIZE @ / DUP _XN-LOOKUP ?DUP IF
+        >R 2DROP 2DROP R> EXIT
+    THEN
+    _XN-MAPPED <> IF 2DROP DROP 0 EXIT THEN
+    DROP SWAP
+    _XW-BSIZE @ * _XB-BASE ! _XB-PHYS !
+    1 _XW-OVERWRITES +!
+    _XB-PHYS @ _XW-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _XW-DATA _XW-BSIZE @ 0 FILL
+    _XW-CTX @ _EXT4-C.BLOCK + _XW-DATA _XW-SIZE @ _XB-BASE @ - MOVE
+    _XW-DATA _XB-PHYS @ _XW-TX @ _EXT4-JTX-DATA-PUT ;
+
+\ Where to look for the next run: just past the block staged before it when
+\ there is one, else the start of the inode's group.
+: _XW-GOAL  ( -- physical )
+    _XW-PREV @ ?DUP IF EXIT THEN
+    _XW-GROUP @ _XW-CTX @ _EXT4-C.BPG + @ *
+    _XW-CTX @ _EXT4-C.FIRST + @ + ;
+
+\ Allocate free runs for the hole at _XW-LOGICAL, stage each run's blocks,
+\ and insert the run into the tree.
+: _XW-STAGE-HOLE  ( -- ior )
+    BEGIN _XW-RUN @ WHILE
+        _XW-GOAL _XW-RUN @ 32768 MIN _XW-TX @ _EXT4-JTX-FIND-FREE-RUN
+        ?DUP IF NIP NIP EXIT THEN
+        _XW-RUN-COUNT ! _XW-RUN-FIRST !
+        _XW-RUN-COUNT @ 0= IF VFS-E-NOSPC EXIT THEN
+        _XW-RUN-FIRST @ _XW-RUN-COUNT @ _XW-TX @
+        _EXT4-JTX-STAGE-ALLOCATE-RANGE ?DUP IF EXIT THEN
+        _XW-RUN-COUNT @ 0 ?DO
+            _XW-LOGICAL @ I + _XW-RUN-FIRST @ I + FALSE _XW-STAGE-BLOCK
+            ?DUP IF UNLOOP EXIT THEN
+        LOOP
+        _XW-RUN-FIRST @ _XW-RUN-COUNT @ + DUP _XN-GOAL ! _XW-PREV !
+        _XW-LOGICAL @ _XW-RUN-COUNT @ _XW-RUN-FIRST @ _XN-INSERT
+        ?DUP IF EXIT THEN
+        _XW-RUN-COUNT @ _XW-NEW-DATA +!
+        _XW-RUN-COUNT @ _XW-LOGICAL +!
+        _XW-RUN-COUNT @ NEGATE _XW-RUN +!
+        _XW-ADVANCE-DONE
+    REPEAT
     0 ;
 
-: _XH-REVALIDATE-PLANNED-HOMES  ( -- ior )
-    _XH-MEASURE-META-CREDIT ?DUP IF EXIT THEN
-    _XH-REQUIRE-SAME-CANDIDATES ?DUP IF EXIT THEN
-    _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
-    _XH-INODE-HOME @ _XH-GROUP @ _XH-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ;
-
-: _XH-QUALIFY-PLANNED-HOMES  ( -- ior )
-    _XH-REVALIDATE-PLANNED-HOMES ?DUP IF EXIT THEN
-    _XH-REQUIRE-UNIQUE-HOMES ?DUP IF EXIT THEN
-    \ The ownership walk may perform many intervening reads.  Rebind every
-    \ selected role to the same authenticated geometry before publication.
-    _XH-REQUIRE-SAME-CANDIDATES ?DUP IF EXIT THEN
-    _XH-REQUIRE-SAME-TARGET ;
-
-: _XH-REQUIRE-EXACT-CREDIT  ( -- ior )
-    _XH-WRITER @ _EXT4-JWR.META-CREDIT + @
-    _XH-META-CREDIT @ <> IF VFS-E-INVALID EXIT THEN
-    0 ;
-
-: _XH-PLAN-LEFT?  ( -- flag )
-    _XH-INSERT @ 0= IF FALSE EXIT THEN
-    _XH-INSERT @ 1- _XH-ENTRY-AT _XH-ENTRY !
-    _XH-ENTRY @ 4 + W@ DUP _XH-LEFT-LEN !
-    DUP 0= SWAP 32768 U> OR IF FALSE EXIT THEN
-    _XH-ENTRY @ L@ _XH-LEFT-LEN @ _EXT4-UADD?
-    _XH-IOR ! _XH-END !
-    _XH-IOR @ IF FALSE EXIT THEN
-    _XH-END @ _XH-LOGICAL @ <> IF FALSE EXIT THEN
-    _XH-ENTRY @ 8 + L@ _XH-LEFT-LEN @ _EXT4-UADD?
-    _XH-IOR ! _XH-END !
-    _XH-IOR @ IF FALSE EXIT THEN
-    _XH-END @ _XH-CANDIDATE @ <> IF FALSE EXIT THEN
-    _XH-LEFT-LEN @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
-    _XH-IOR @ 0= _XH-END @ 32768 U> 0= AND ;
-
-: _XH-PLAN-RIGHT?  ( -- flag )
-    _XH-INSERT @ _XH-ENTRIES @ U< 0= IF FALSE EXIT THEN
-    _XH-INSERT @ _XH-ENTRY-AT _XH-ENTRY !
-    _XH-ENTRY @ 4 + W@ DUP _XH-RIGHT-LEN !
-    DUP 0= SWAP 32768 U> OR IF FALSE EXIT THEN
-    _XH-LOGICAL @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
-    _XH-IOR @ IF FALSE EXIT THEN
-    _XH-END @ _XH-ENTRY @ L@ <> IF FALSE EXIT THEN
-    _XH-CANDIDATE @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
-    _XH-IOR @ IF FALSE EXIT THEN
-    _XH-END @ _XH-ENTRY @ 8 + L@ <> IF FALSE EXIT THEN
-    _XH-RIGHT-LEN @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
-    _XH-IOR @ 0= _XH-END @ 32768 U> 0= AND ;
-
-: _XH-BRIDGE-LENGTH?  ( -- flag )
-    _XH-LEFT-LEN @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
-    _XH-IOR @ IF FALSE EXIT THEN
-    _XH-END @ _XH-RIGHT-LEN @ _EXT4-UADD?
-    _XH-IOR ! _XH-END !
-    _XH-IOR @ 0= _XH-END @ 32768 U> 0= AND ;
-
-\ Choose the editable-node operation only after the geometry-selected physical
-\ block is known.  Coalescing remains valid even when the node is full.  A
-\ depth-zero root with no free slot takes the qualified one-leaf transition.
-\ A full external leaf takes the split transition only while its resident
-\ depth-one root retains an index slot.  A full root still permits all edits
-\ above that do not add an index; only full-root/full-leaf growth is refused.
-: _XH-PLAN-ROOT-EDIT  ( -- ior )
-    _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
-    _XH-PLAN-LEFT? _XH-LEFT-OK !
-    _XH-PLAN-RIGHT? _XH-RIGHT-OK !
-    _XH-LEFT-OK @ _XH-RIGHT-OK @ AND IF
-        _XH-BRIDGE-LENGTH? IF
-            _XH-EDIT-MERGE-BOTH _XH-EDIT ! 0 EXIT
-        THEN
-    THEN
-    _XH-LEFT-OK @ IF
-        _XH-EDIT-MERGE-LEFT _XH-EDIT ! 0 EXIT
-    THEN
-    _XH-RIGHT-OK @ IF
-        _XH-EDIT-MERGE-RIGHT _XH-EDIT ! 0 EXIT
-    THEN
-    _XH-ENTRIES @ _XH-ENTRY-MAX @ U< IF
-        _XH-EDIT-INSERT _XH-EDIT ! 0 EXIT
-    THEN
-    _XH-TREE-DEPTH @ IF
-        _XH-ROOT-ENTRIES @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX U< 0= IF
+\ Stage the pass's blocks in logical order.  _XW-DONE moves past each
+\ mapped block, and past each allocated run, once it is completely staged.
+: _XW-STAGE-BLOCKS  ( -- ior )
+    _XW-OFFSET @ _XW-BSIZE @ / _XW-LOGICAL !
+    _XW-OFFSET @ _XW-COUNT @ + 1- _XW-BSIZE @ / _XW-LAST !
+    BEGIN _XW-LOGICAL @ _XW-LAST @ U> 0= WHILE
+        _XW-LOGICAL @ _XN-LOOKUP ?DUP IF >R 2DROP DROP R> EXIT THEN
+        _XW-KIND ! _XW-LAST @ _XW-LOGICAL @ - 1+ MIN _XW-RUN ! _XW-PHYS !
+        _XW-KIND @ _XN-UNWRITTEN = IF
             EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
         THEN
-        _XH-ENTRY-MAX @ 1+ DUP 2/ DUP 0= IF
-            2DROP VFS-E-CORRUPT EXIT
+        _XW-KIND @ _XN-MAPPED = IF
+            _XW-RUN @ 0 ?DO
+                _XW-LOGICAL @ _XW-PHYS @ TRUE _XW-STAGE-BLOCK
+                ?DUP IF UNLOOP EXIT THEN
+                1 _XW-PHYS +! _XW-PHYS @ _XW-PREV !
+                1 _XW-LOGICAL +!
+                _XW-ADVANCE-DONE
+            LOOP
+        ELSE
+            _XW-PREV @ 0= IF _XN-HINT @ _XW-PREV ! THEN
+            _XW-STAGE-HOLE ?DUP IF EXIT THEN
         THEN
-        DUP _XH-SPLIT-LEFT ! - DUP 0= IF
-            DROP VFS-E-CORRUPT EXIT
-        THEN
-        _XH-SPLIT-RIGHT !
-        _XH-EDIT-SPLIT-LEAF _XH-EDIT !
-        -1 _XH-LEAF-SPLIT !
-        0 EXIT
-    THEN
-    _XH-EDIT-GROW-ROOT _XH-EDIT !
-    -1 _XH-ROOT-GROW !
+    REPEAT
     0 ;
 
-: _XH-STAGE-DATA  ( -- ior )
-    _XH-WRITER @ _EXT4-JWR.SCRATCH-A + @ DUP
-    _XH-BSIZE @ 0 FILL
-    _XH-WRITER @ _EXT4-JWR.SCRATCH-B + @
-    SWAP _XH-BLOCK-OFF @ + _XH-COUNT @ MOVE
-    _XH-WRITER @ _EXT4-JWR.SCRATCH-A + @
-    _XH-CANDIDATE @ _XH-WRITER @
-    _EXT4-JTX-DATA-PUT ?DUP IF EXIT THEN
-    -1 _XH-PUBLISHED !
-    0 ;
-
-: _XH-STAMP-LEAF  ( leaf -- ior )
-    _XH-INO @ _XH-INODE-GENERATION @ _XH-CTX @
-    _EXT4-RESTAMP-EXTENT-LEAF ;
-
-\ Copy one ordinal from the conceptual sorted sequence formed by inserting
-\ the new singleton extent into the authenticated full-leaf snapshot.  This
-\ avoids a second block-sized temporary and never edits the source snapshot.
-: _XH-SPLIT-ENTRY>  ( ordinal destination -- )
-    _XH-ENTRY !
-    DUP _XH-INSERT @ = IF
-        DROP
-        _XH-LOGICAL @ _XH-ENTRY @ L!
-        1 _XH-ENTRY @ 4 + W!
-        _XH-CANDIDATE @ DUP 32 RSHIFT _XH-ENTRY @ 6 + W!
-        0xFFFFFFFF AND _XH-ENTRY @ 8 + L!
+\ Publish the new size, block count and times in the private record and
+\ stage it into its inode-table home, the transaction's last metadata home.
+: _XW-STAGE-INODE  ( -- ior )
+    _XW-OFFSET @ _XW-COUNT @ + _XW-SIZE @ MAX _XW-NEW-SIZE !
+    _XW-NEW-DATA @ _XN-NEW-NODES @ + _XW-CTX @ _EXT4-C.SPB + @ *
+    _XW-BLOCKS @ + _XW-NEW-BLOCKS !
+    _XW-NEW-BLOCKS @ _XW-INODE _XW-CTX @ _EXT4-ENCODE-I-BLOCKS
+    ?DUP IF EXIT THEN
+    _XW-NEW-SIZE @ 0xFFFFFFFF AND _XW-INODE _EXT4-I.SIZE-LO + L!
+    _XW-NEW-SIZE @ 32 RSHIFT _XW-INODE _EXT4-I.SIZE-HI + L!
+    _XW-SECONDS @ _XW-NSEC @ _XW-INODE _XW-CTX @
+    _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
+    _XW-INODE _XW-INO @ _XW-CTX @ _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
+    _XW-INODE-HOME @ _XW-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _XW-CTX @ _EXT4-C.BLOCK + _XW-INODE-HOME @ _XW-TX @
+    _EXT4-JTX-META-ACQUIRE ?DUP IF NIP EXIT THEN
+    DUP _XW-INODE-OFF @ + _XW-INODE SWAP _XW-CTX @ _EXT4-C.ISIZE + @ MOVE
+    _XW-INODE-HOME @ _XW-TX @ _EXT4-JTX-META-REPLACE ?DUP IF EXIT THEN
+    _XW-NEW-DATA @ _XN-NEW-NODES @ OR
+    _XW-NEW-SIZE @ _XW-SIZE @ <> OR 0<> _XW-GRANULAR !
+    _XW-NEW-DATA @ _XN-NEW-NODES @ OR IF
+        _EXT4-JAB-NEW-SUPER-FREE @ _XW-NEW-FREE !
     ELSE
-        DUP _XH-INSERT @ U> IF 1- THEN
-        12 * _XH-LEAF-SNAPSHOT 12 + +
-        _XH-ENTRY @ 12 MOVE
+        _XW-CTX @ _EXT4-C.FREE-BLOCKS + @ _XW-NEW-FREE !
+    THEN
+    0 ;
+
+\ Stage one pass of _XW-COUNT bytes at _XW-OFFSET into _XW-TX.  _XW-SAFE
+\ follows the last completely staged block after which a metadata home was
+\ still free, so a restaged prefix of that length always fits the inode.
+: _XW-STAGE  ( -- ior )
+    0 _XW-DONE ! 0 _XW-SAFE ! 0 _XW-NEW-DATA ! 0 _XW-OVERWRITES ! 0 _XW-PREV !
+    0 _XN-NEW-NODES ! 0 _XN-EXISTING !
+    _XW-AUTH ?DUP IF EXIT THEN
+    _XW-TX @ _XN-TX ! _XW-CTX @ _XN-CTX ! _XW-BSIZE @ _XN-BSIZE !
+    _XW-INO @ _XN-INO ! _XW-EXPECTED-GEN @ _XN-GEN !
+    _XW-INODE _EXT4-I.BLOCK + _XN-ROOT !
+    _XW-BSIZE @ 12 - 12 / _XN-NODE-MAX !
+    _XW-GOAL _XN-GOAL !
+    _XW-ZERO-OLD-TAIL ?DUP IF EXIT THEN
+    _XW-STAGE-BLOCKS ?DUP IF EXIT THEN
+    _XW-STAGE-INODE ;
+
+\ ---------------------------------------------------------------------
+\  Home-set proof
+\ ---------------------------------------------------------------------
+
+VARIABLE _XP-RANGES
+VARIABLE _XP-CAP
+VARIABLE _XP-COUNT
+VARIABLE _XP-IOR
+VARIABLE _XP-LIMIT
+
+\ Add HOME to the range vector, extending the last range when it continues
+\ it.
+: _XP-ADD  ( home -- ior )
+    _XP-COUNT @ IF
+        _XP-COUNT @ 1- 2* CELLS _XP-RANGES @ +
+        DUP @ OVER CELL+ @ + 2 PICK = IF
+            1 SWAP CELL+ +! DROP 0 EXIT
+        THEN
+        DROP
+    THEN
+    _XP-COUNT @ _XP-CAP @ U< 0= IF DROP VFS-E-NOSPC EXIT THEN
+    _XP-COUNT @ 2* CELLS _XP-RANGES @ + TUCK ! 1 SWAP CELL+ !
+    1 _XP-COUNT +!
+    0 ;
+
+\ Collect every active data and metadata home of the transaction.
+: _XP-COLLECT  ( -- ior )
+    _XW-CTX @ _EXT4-C.MUTATION-RANGES + @ DUP _XP-RANGES ! 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ _XP-CAP !
+    0 _XP-COUNT !
+    _XW-TX @ _EXT4-JWR.DATA-USED + @ 0 ?DO
+        I _XW-TX @ _EXT4-JWR-DATA-ENTRY DUP CELL+ @ _EXT4-JE-ACTIVE = IF
+            @ _XP-ADD ?DUP IF UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP
+    _XW-TX @ _EXT4-JWR.META-USED + @ 0 ?DO
+        I _XW-TX @ _EXT4-JWR-META-ENTRY DUP CELL+ @ _EXT4-JE-ACTIVE = IF
+            @ _XP-ADD ?DUP IF UNLOOP EXIT THEN
+        ELSE DROP THEN
+    LOOP
+    _XW-EA @ IF
+        _XP-COUNT @ 0 ?DO
+            _XW-EA @ 1
+            I 2* CELLS _XP-RANGES @ + DUP @ SWAP CELL+ @
+            _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+        LOOP
+    THEN
+    0 ;
+
+\ Every existing data block and tree node the transaction rewrites must be
+\ mapped exactly once by the target's pre-transaction tree; homes the
+\ transaction allocated and static metadata homes must not be mapped at
+\ all.  One validation walk counts every overlap with the home set and
+\ also checks each target range's mutation role.
+: _XP-MAP-AUDIT  ( -- ior )
+    _EXT4-MUTATION-MAP-TARGET @
+    _EXT4-MUTATION-MAP-ACTIVE @ OR
+    _EXT4-MUTATION-MAP-HITS @ OR
+    _EXT4-MUTATION-MAP-VECTOR-COUNT @ OR IF VFS-E-BUSY EXIT THEN
+    _XW-INO @ _XW-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _XP-RANGES @ _EXT4-MUTATION-MAP-VECTOR !
+    _XP-COUNT @ _EXT4-MUTATION-MAP-VECTOR-COUNT !
+    0 _EXT4-MUTATION-MAP-HITS !
+    -1 _EXT4-MUTATION-MAP-ACTIVE !
+    _XW-CTX @ _EXT4-PROOF-SCOPE-OPEN
+    _XW-CTX @ _EXT4-VALIDATE-EXTENT-TREE _XP-IOR !
+    _EXT4-PROOF-SCOPE-CLOSE
+    0 _EXT4-MUTATION-MAP-ACTIVE !
+    0 _EXT4-MUTATION-MAP-VECTOR-COUNT !
+    0 _EXT4-MUTATION-MAP-VECTOR !
+    _XP-IOR @ 0=
+    _EXT4-MUTATION-MAP-HITS @ _XW-OVERWRITES @ _XN-EXISTING @ + <> AND IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT _XP-IOR !
+    THEN
+    0 _EXT4-MUTATION-MAP-HITS !
+    _XP-IOR @ ;
+
+\ No other allocated inode may map any home.
+: _XP-OTHER-OWNERS  ( -- ior )
+    _EXT4-MUTATION-OWNER-RANGES-BUSY?
+    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-JFO-CERT-INVALIDATE
+    _XW-CTX @ _EXT4-JFO-CTX !
+    _XW-INO @ _EXT4-JFO-TARGET-INO !
+    _EXT4-MAP-VALIDATION-LIMIT @ _XP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _XP-RANGES @ _XP-COUNT @ _XP-CAP @
+    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _XP-IOR !
+    _XP-IOR @ 0= IF
+        _EXT4-JFO-SCAN-OTHER-INODES _XP-IOR !
+    THEN
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _XP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _XP-IOR @ ;
+
+: _XW-PROVE  ( -- ior )
+    _XP-COLLECT ?DUP IF EXIT THEN
+    _XP-MAP-AUDIT ?DUP IF EXIT THEN
+    _XP-OTHER-OWNERS ;
+
+\ ---------------------------------------------------------------------
+\  Mounted write engine
+\ ---------------------------------------------------------------------
+
+VARIABLE _XW-V
+VARIABLE _XW-VN
+VARIABLE _XW-WRITER
+VARIABLE _XW-REQUEST
+VARIABLE _XW-ACTUAL
+VARIABLE _XW-IOR
+
+\ Discard a pass that could not be completed.  A builder may already have
+\ aborted it; a structurally failed abort is latched, since the workspace
+\ can no longer be reused.
+: _XW-DISCARD  ( -- ior )
+    _XW-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING <> IF 0 EXIT THEN
+    _XW-WRITER @ _EXT4-JTX-ABORT DUP IF
+        _XW-WRITER @ _EXT4-JWR-LATCH-FAULT
     THEN ;
 
-: _XH-COMPOSE-SPLIT-LEAF  ( first-ordinal count leaf -- ior )
-    _XH-IMAGE ! _XH-SPLIT-COUNT ! _XH-SPLIT-FIRST !
-    _XH-SPLIT-COUNT @ 0= IF VFS-E-CORRUPT EXIT THEN
-    _XH-SPLIT-FIRST @ _XH-SPLIT-COUNT @ _EXT4-UADD?
-    _XH-IOR ! _XH-END !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-END @ _XH-ENTRY-MAX @ 1+ U> IF VFS-E-CORRUPT EXIT THEN
-    _XH-IMAGE @ _XH-BSIZE @ 0 FILL
-    _EXT4-EXTENT-MAGIC _XH-IMAGE @ W!
-    _XH-SPLIT-COUNT @ _XH-IMAGE @ 2 + W!
-    _XH-LEAF-MAX @ _XH-IMAGE @ 4 + W!
-    0 _XH-IMAGE @ 6 + W!
-    _XH-ROOT-GENERATION @ _XH-IMAGE @ 8 + L!
-    0 _XH-INDEX !
+\ A pass that ran out of transaction room or free blocks, or reached a
+\ block it may not write, is restaged up to its safe point when it has one.
+: _XW-SHORTEN?  ( ior -- flag )
+    DUP VFS-E-NOSPC =
+    SWAP EXT4-D-DATA-MAP _EXT4-UNSUPPORTED = OR
+    _XW-SAFE @ 0> AND _XW-SAFE @ _XW-COUNT @ U< AND ;
+
+\ Begin a transaction with the whole profile, stage and prove one pass,
+\ shortening it until it fits.  On success the transaction stays staged.
+: _XW-PASS  ( -- ior )
     BEGIN
-        _XH-INDEX @ _XH-SPLIT-COUNT @ U<
-    WHILE
-        _XH-SPLIT-FIRST @ _XH-INDEX @ +
-        _XH-IMAGE @ 12 + _XH-INDEX @ 12 * +
-        _XH-SPLIT-ENTRY>
-        1 _XH-INDEX +!
-    REPEAT
-    0 ;
+        _XW-WRITER @ _EXT4-JWR.META-CAP + @
+        _XW-WRITER @ _EXT4-JWR.DATA-CAP + @ 0
+        _XW-WRITER @ _EXT4-JTX-BEGIN ?DUP IF NIP EXIT THEN
+        _XW-TX !
+        _XW-STAGE DUP 0= IF DROP _XW-PROVE THEN
+        DUP 0= IF EXIT THEN
+        _XW-IOR !
+        _XW-DISCARD ?DUP IF EXIT THEN
+        _XW-IOR @ _XW-SHORTEN? 0= IF _XW-IOR @ EXIT THEN
+        _XW-SAFE @ _XW-COUNT !
+    AGAIN ;
 
-\ Publish the new external node before allocation accounting reuses both
-\ writer scratch blocks.  META-PUT is correct for a newly allocated home:
-\ there is no authenticated old metadata image to acquire.
-: _XH-STAGE-LEAF  ( -- ior )
-    _XH-NEW-LEAF? 0= IF 0 EXIT THEN
-    _XH-WRITER @ _EXT4-JWR.SCRATCH-A + @ DUP _XH-IMAGE !
-    _XH-BSIZE @ 0 FILL
-    _XH-LEAF-SPLIT @ IF
-        _XH-BSIZE @ 12 - 12 / _XH-LEAF-MAX @ <> IF
-            VFS-E-CORRUPT EXIT
-        THEN
-        _XH-SPLIT-LEFT @ _XH-SPLIT-RIGHT @ _XH-IMAGE @
-        _XH-COMPOSE-SPLIT-LEAF ?DUP IF EXIT THEN
-        _XH-IMAGE @ 12 + L@ _XH-LEAF-SECOND-FIRST !
-    ELSE
-        _XH-BSIZE @ 12 - 12 / _XH-LEAF-MAX !
-        _EXT4-RESIDENT-EXTENT-ENTRY-MAX 1+
-        _XH-LEAF-MAX @ U> IF VFS-E-CORRUPT EXIT THEN
-        _EXT4-EXTENT-MAGIC _XH-IMAGE @ W!
-        _EXT4-RESIDENT-EXTENT-ENTRY-MAX 1+ _XH-IMAGE @ 2 + W!
-        _XH-LEAF-MAX @ _XH-IMAGE @ 4 + W!
-        0 _XH-IMAGE @ 6 + W!
-        _XH-ROOT-GENERATION @ _XH-IMAGE @ 8 + L!
-        _XH-INODE-SNAPSHOT _EXT4-I.BLOCK + 12 + _XH-IMAGE @ 12 +
-        _XH-INSERT @ 12 * MOVE
-        _XH-IMAGE @ 12 + _XH-INSERT @ 12 * + _XH-ENTRY !
-        _XH-LOGICAL @ _XH-ENTRY @ L!
-        1 _XH-ENTRY @ 4 + W!
-        _XH-CANDIDATE @ DUP 32 RSHIFT _XH-ENTRY @ 6 + W!
-        0xFFFFFFFF AND _XH-ENTRY @ 8 + L!
-        _XH-INODE-SNAPSHOT _EXT4-I.BLOCK + 12 +
-        _XH-INSERT @ 12 * +
-        _XH-ENTRY @ 12 +
-        _EXT4-RESIDENT-EXTENT-ENTRY-MAX _XH-INSERT @ - 12 * MOVE
-        _XH-IMAGE @ 12 + L@ _XH-LEAF-FIRST !
+\ For a pass that only rewrites existing blocks inside EOF, the caller
+\ bytes in ordered blocks that reached the medium before a fault are
+\ durable and reachable.  Data entries follow logical order, so the prefix
+\ runs through the completed sectors of the block being written.
+: _XW-ORDERED-ACTUAL  ( -- actual )
+    _EXT4-JEM-INDEX @ _XW-BSIZE @ *
+    _EXT4-IO-EXPECTED @ _XW-CTX @ _EXT4-C.SPB + @ = IF
+        _EXT4-IO-COMPLETED @ 0 MAX
+        _XW-CTX @ _EXT4-C.SPB + @ MIN _EXT4-SECTOR * +
     THEN
-    _XH-IMAGE @ _XH-STAMP-LEAF ?DUP IF EXIT THEN
-    _XH-IMAGE @ _XH-LEAF-CANDIDATE @ _XH-WRITER @
-    _EXT4-JTX-META-PUT ?DUP IF EXIT THEN
-    -1 _XH-PUBLISHED !
-    0 ;
+    _XW-OFFSET @ _XW-BSIZE @ MOD - 0 MAX _XW-COUNT @ MIN ;
 
-\ Bind the allocation builder's independently derived geometry back to the
-\ homes covered by the pre-mutation reverse-owner certificate.  This turns a
-\ future drift between candidate planning and accounting staging into an
-\ aborted transaction rather than an unproved metadata replacement.
-: _XH-REQUIRE-STAGED-ACCOUNTING-HOMES  ( -- ior )
-    _EXT4-JAB-GROUP @ _XH-CANDIDATE-GROUP @ <>
-    _EXT4-JAB-BITMAP-HOME @ _XH-BITMAP-HOME @ <> OR
-    _EXT4-JAB-GDT-HOME @ _XH-GDT-HOME @ <> OR
-    _EXT4-JAB-SUPER-HOME @ _XH-SUPER-HOME @ <> OR IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+: _XW-FAULT-ACTUAL  ( -- actual )
+    _XW-ACTUAL @ ?DUP IF EXIT THEN
+    _XW-GRANULAR @ IF 0 EXIT THEN
+    _XW-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED <> IF 0 EXIT THEN
+    _XW-WRITER @ _EXT4-JWR.PHASE + @ DUP _EXT4-JWP-ORDERED-DATA = IF
+        DROP _XW-ORDERED-ACTUAL EXIT
+    THEN
+    DUP _EXT4-JWP-EMISSION? SWAP _EXT4-JWP-CHECKPOINT? OR IF
+        _XW-COUNT @ EXIT
     THEN
     0 ;
 
-: _XH-REQUIRE-STAGED-LEAF-ACCOUNTING-HOMES  ( -- ior )
-    _EXT4-JAB-GROUP @ _XH-LEAF-GROUP @ <>
-    _EXT4-JAB-BITMAP-HOME @ _XH-LEAF-BITMAP-HOME @ <> OR
-    _EXT4-JAB-GDT-HOME @ _XH-LEAF-GDT-HOME @ <> OR
-    _EXT4-JAB-SUPER-HOME @ _XH-SUPER-HOME @ <> OR IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    0 ;
+\ Publish a committed pass into the shared vnode before generic cursor
+\ accounting, so every hard link sees the same EOF, block count and times.
+: _XW-PUBLISH  ( -- )
+    _XW-SECONDS @ _XW-VN @ VN.MTIME !
+    _XW-NSEC @ _XW-VN @ VN.MTIME-NS !
+    _XW-SECONDS @ _XW-VN @ VN.CTIME !
+    _XW-NSEC @ _XW-VN @ VN.CTIME-NS !
+    _XW-NEW-BLOCKS @ _XW-VN @ VN.BLOCKS !
+    _XW-NEW-FREE @ _XW-CTX @ _EXT4-C.FREE-BLOCKS + !
+    _XW-NEW-SIZE @ _XW-VN @ VN.SIZE-LO !
+    0 _XW-VN @ VN.SIZE-HI !
+    VFS-F-DIRTY _XW-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
 
-: _XH-ENTRY-PHYSICAL!  ( physical-block extent-entry -- )
-    _XH-ENTRY !
-    DUP 32 RSHIFT _XH-ENTRY @ 6 + W!
-    0xFFFFFFFF AND _XH-ENTRY @ 8 + L! ;
-
-: _XH-APPLY-INSERT  ( -- ior )
-    _XH-ENTRIES @ _XH-ENTRY-MAX @ U< 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-ENTRIES @ _XH-SHIFT !
-    BEGIN
-        _XH-SHIFT @ _XH-INSERT @ U>
-    WHILE
-        _XH-SHIFT @ 1- _XH-ENTRY-AT
-        _XH-SHIFT @ _XH-ENTRY-AT 12 MOVE
-        -1 _XH-SHIFT +!
-    REPEAT
-    _XH-INSERT @ _XH-ENTRY-AT _XH-ENTRY !
-    _XH-LOGICAL @ _XH-ENTRY @ L!
-    1 _XH-ENTRY @ 4 + W!
-    _XH-CANDIDATE @ _XH-ENTRY @ _XH-ENTRY-PHYSICAL!
-    _XH-ENTRIES @ 1+ DUP _XH-ENTRIES ! _XH-EDIT-NODE @ 2 + W!
-    0 ;
-
-: _XH-APPLY-MERGE-LEFT  ( -- ior )
-    _XH-INSERT @ 0= IF VFS-E-CORRUPT EXIT THEN
-    _XH-INSERT @ 1- _XH-ENTRY-AT
-    _XH-LEFT-LEN @ 1+ SWAP 4 + W!
-    0 ;
-
-: _XH-APPLY-MERGE-RIGHT  ( -- ior )
-    _XH-INSERT @ _XH-ENTRIES @ U< 0= IF VFS-E-CORRUPT EXIT THEN
-    _XH-INSERT @ _XH-ENTRY-AT _XH-ENTRY !
-    _XH-LOGICAL @ _XH-ENTRY @ L!
-    _XH-RIGHT-LEN @ 1+ _XH-ENTRY @ 4 + W!
-    _XH-CANDIDATE @ _XH-ENTRY @ _XH-ENTRY-PHYSICAL!
-    0 ;
-
-: _XH-REMOVE-RIGHT-ENTRY  ( -- )
-    _XH-INSERT @ _XH-SHIFT !
-    BEGIN
-        _XH-SHIFT @ 1+ _XH-ENTRIES @ U<
-    WHILE
-        _XH-SHIFT @ 1+ _XH-ENTRY-AT
-        _XH-SHIFT @ _XH-ENTRY-AT 12 MOVE
-        1 _XH-SHIFT +!
-    REPEAT
-    _XH-ENTRIES @ 1- _XH-ENTRY-AT 12 0 FILL
-    _XH-ENTRIES @ 1- DUP _XH-ENTRIES ! _XH-EDIT-NODE @ 2 + W! ;
-
-: _XH-APPLY-MERGE-BOTH  ( -- ior )
-    _XH-INSERT @ 0= _XH-INSERT @ _XH-ENTRIES @ U< 0= OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-INSERT @ 1- _XH-ENTRY-AT
-    _XH-LEFT-LEN @ 1+ _XH-RIGHT-LEN @ + SWAP 4 + W!
-    _XH-REMOVE-RIGHT-ENTRY
-    0 ;
-
-: _XH-APPLY-GROW-ROOT  ( -- ior )
-    _XH-ENTRIES @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX <> IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-ROOT @ 12 + 48 0 FILL
-    _EXT4-EXTENT-MAGIC _XH-ROOT @ W!
-    1 _XH-ROOT @ 2 + W!
-    _EXT4-RESIDENT-EXTENT-ENTRY-MAX _XH-ROOT @ 4 + W!
-    1 _XH-ROOT @ 6 + W!
-    _XH-ROOT-GENERATION @ _XH-ROOT @ 8 + L!
-    _XH-LEAF-FIRST @ _XH-ROOT @ 12 + L!
-    _XH-LEAF-CANDIDATE @ DUP 0xFFFFFFFF AND
-    _XH-ROOT @ 16 + L!
-    32 RSHIFT _XH-ROOT @ 20 + W!
-    0 _XH-ROOT @ 22 + W!
-    1 _XH-ENTRIES !
-    0 ;
-
-: _XH-APPLY-NODE-EDIT  ( -- ior )
-    _XH-EDIT @ _XH-EDIT-INSERT = IF _XH-APPLY-INSERT EXIT THEN
-    _XH-EDIT @ _XH-EDIT-MERGE-LEFT = IF
-        _XH-APPLY-MERGE-LEFT EXIT
-    THEN
-    _XH-EDIT @ _XH-EDIT-MERGE-RIGHT = IF
-        _XH-APPLY-MERGE-RIGHT EXIT
-    THEN
-    _XH-EDIT @ _XH-EDIT-MERGE-BOTH = IF
-        _XH-APPLY-MERGE-BOTH EXIT
-    THEN
-    VFS-E-CORRUPT ;
-
-: _XH-APPLY-EXTENT-EDIT  ( -- ior )
-    _XH-RECORD @ _EXT4-I.BLOCK + DUP _XH-ROOT ! _XH-EDIT-NODE !
-    _XH-EDIT @ _XH-EDIT-GROW-ROOT = IF
-        _XH-APPLY-GROW-ROOT EXIT
-    THEN
-    _XH-APPLY-NODE-EDIT ;
-
-\ Replace the already allocated external leaf from its authenticated snapshot.
-\ An ordinary edit changes it in place.  A split composes the lower half here
-\ and the upper half in the separately staged new leaf.  The inode transaction
-\ later republishes the authoritative first key or both split indexes together
-\ with i_blocks, size, times, and checksum.
-: _XH-STAGE-EXISTING-LEAF  ( -- ior )
-    _XH-TREE-DEPTH @ 0= IF 0 EXIT THEN
-    _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
-    _XH-LEAF-SNAPSHOT _XH-EXISTING-LEAF @ _XH-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XH-IMAGE ! _XH-EDIT-NODE !
-    _XH-LEAF-SPLIT @ IF
-        0 _XH-SPLIT-LEFT @ _XH-IMAGE @
-        _XH-COMPOSE-SPLIT-LEAF
-    ELSE
-        _XH-APPLY-NODE-EDIT
-    THEN ?DUP IF EXIT THEN
-    _XH-IMAGE @ 12 + L@ _XH-LEAF-FIRST !
-    _XH-IMAGE @ _XH-STAMP-LEAF ?DUP IF EXIT THEN
-    _XH-IMAGE @ _XH-EXISTING-LEAF @ _XH-WRITER @
-    _EXT4-JTX-META-REPLACE ?DUP IF EXIT THEN
-    -1 _XH-PUBLISHED !
-    0 ;
-
-: _XH-REQUIRE-STAGED-SELECTED-ROOT  ( -- ior )
-    _XH-ROOT @ DUP W@ _EXT4-EXTENT-MAGIC <>
-    OVER 2 + W@ _XH-ROOT-ENTRIES @ <> OR
-    OVER 4 + W@ _EXT4-RESIDENT-EXTENT-ENTRY-MAX <> OR
-    OVER 6 + W@ 1 <> OR IF
-        DROP VFS-E-CORRUPT EXIT
-    THEN
-    DROP
-    _XH-ROOT-ENTRIES @ DUP 0=
-    SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR
-    _XH-ROOT-INDEX @ _XH-ROOT-ENTRIES @ U< 0= OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-ROOT-INDEX @ _XH-ROOT-ENTRY-AT DUP
-    4 + L@ _XH-EXISTING-LEAF @ <>
-    OVER 8 + W@ 0<> OR
-    SWAP 10 + W@ 0<> OR IF VFS-E-CORRUPT EXIT THEN
-    0 ;
-
-: _XH-REQUIRE-SELECTED-FIRST-KEY-BOUNDS  ( -- ior )
-    _XH-ROOT-INDEX @ IF
-        _XH-ROOT-INDEX @ 1- _XH-ROOT-ENTRY-AT L@
-        _XH-LEAF-FIRST @ U< 0= IF VFS-E-CORRUPT EXIT THEN
-    THEN
-    _XH-ROOT-INDEX @ 1+ _XH-ROOT-ENTRIES @ U< IF
-        _XH-LEAF-FIRST @
-        _XH-ROOT-INDEX @ 1+ _XH-ROOT-ENTRY-AT L@ U< 0= IF
-            VFS-E-CORRUPT EXIT
-        THEN
-    THEN
-    0 ;
-
-: _XH-APPLY-EXISTING-ROOT-KEY  ( -- ior )
-    _XH-REQUIRE-STAGED-SELECTED-ROOT ?DUP IF EXIT THEN
-    _XH-REQUIRE-SELECTED-FIRST-KEY-BOUNDS ?DUP IF EXIT THEN
-    _XH-LEAF-FIRST @
-    _XH-ROOT-INDEX @ _XH-ROOT-ENTRY-AT L!
-    0 ;
-
-: _XH-APPLY-SPLIT-ROOT  ( -- ior )
-    _XH-REQUIRE-STAGED-SELECTED-ROOT ?DUP IF EXIT THEN
-    _XH-ROOT-ENTRIES @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX U< 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-LEAF-FIRST @ _XH-LEAF-SECOND-FIRST @ U< 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XH-ROOT-INDEX @ IF
-        _XH-ROOT-INDEX @ 1- _XH-ROOT-ENTRY-AT L@
-        _XH-LEAF-FIRST @ U< 0= IF VFS-E-CORRUPT EXIT THEN
-    THEN
-    _XH-ROOT-INDEX @ 1+ _XH-ROOT-ENTRIES @ U< IF
-        _XH-LEAF-SECOND-FIRST @
-        _XH-ROOT-INDEX @ 1+ _XH-ROOT-ENTRY-AT L@ U< 0= IF
-            VFS-E-CORRUPT EXIT
-        THEN
-    THEN
-    _XH-ROOT-ENTRIES @ _XH-SHIFT !
-    BEGIN
-        _XH-SHIFT @ _XH-ROOT-INDEX @ 1+ U>
-    WHILE
-        _XH-SHIFT @ 1- _XH-ROOT-ENTRY-AT
-        _XH-SHIFT @ _XH-ROOT-ENTRY-AT 12 MOVE
-        -1 _XH-SHIFT +!
-    REPEAT
-    _XH-LEAF-FIRST @
-    _XH-ROOT-INDEX @ _XH-ROOT-ENTRY-AT L!
-    _XH-ROOT-INDEX @ 1+ _XH-ROOT-ENTRY-AT DUP 12 0 FILL
-    DUP _XH-LEAF-SECOND-FIRST @ SWAP L!
-    DUP 4 + _XH-LEAF-CANDIDATE @ 0xFFFFFFFF AND SWAP L!
-    DUP 8 + _XH-LEAF-CANDIDATE @ 32 RSHIFT 0xFFFF AND SWAP W!
-    10 + 0 SWAP W!
-    _XH-ROOT-ENTRIES @ 1+ DUP _XH-ROOT-ENTRIES !
-    _XH-ROOT @ 2 + W!
-    0 ;
-
-: _XH-STAGE-INODE  ( -- ior )
-    _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
-    _XH-INODE-HOME @ _XH-CTX @ _EXT4-READ-BLOCK
-    ?DUP IF EXIT THEN
-    _XH-CTX @ _EXT4-C.BLOCK + _XH-INODE-HOME @
-    _XH-WRITER @ _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XH-IMAGE !
-    _XH-INODE-OFF @ + DUP _XH-RECORD !
-    _XH-CTX @ _EXT4-C.INODE +
-    _XH-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XH-CTX @ _EXT4-C.SPB + @
-    _XH-NEW-LEAF? IF 2* THEN
-    _XH-BLOCKS @ SWAP _EXT4-UADD?
-    _XH-IOR ! _XH-NEW-BLOCKS !
-    _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-NEW-BLOCKS @ _XH-RECORD @ _XH-CTX @
-    _EXT4-ENCODE-I-BLOCKS ?DUP IF EXIT THEN
-    _XH-TREE-DEPTH @ IF
-        _XH-RECORD @ _EXT4-I.BLOCK + _XH-ROOT !
-        _XH-LEAF-SPLIT @ IF
-            _XH-APPLY-SPLIT-ROOT
+\ Settle a failed write.  A staged pass is discarded, a committed pass
+\ whose checkpoint could not start is latched, and a latched fault keeps
+\ its first diagnosis.  A quarantined writer adds the read-only flag, and a
+\ confirmed prefix marks the result partial.
+: _XW-FAIL  ( ior -- actual ior )
+    _XW-IOR !
+    _XW-WRITER @ ?DUP IF
+        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING = IF
+            DROP _XW-DISCARD ?DUP IF _XW-IOR ! THEN
+        ELSE DUP _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = IF
+            _EXT4-JWP-CHECKPOINT-PREFLIGHT OVER _EXT4-JWR.PHASE + !
+            _XW-IOR @ SWAP _EXT4-JWR-LATCH-FAULT _XW-IOR !
+        ELSE DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
+            _EXT4-JWR.FAULT + @ ?DUP IF _XW-IOR ! THEN
         ELSE
-            _XH-APPLY-EXISTING-ROOT-KEY
-        THEN
-    ELSE
-        _XH-APPLY-EXTENT-EDIT
-    THEN ?DUP IF EXIT THEN
-    _XH-GROW @ IF
-        _XH-NEW-SIZE @ 0xFFFFFFFF AND
-        _XH-RECORD @ _EXT4-I.SIZE-LO + L!
-        _XH-NEW-SIZE @ 32 RSHIFT 0xFFFFFFFF AND
-        _XH-RECORD @ _EXT4-I.SIZE-HI + L!
+            DROP
+        THEN THEN THEN
     THEN
-    _XH-SECONDS @ _XH-NSEC @ _XH-RECORD @
-    _XH-CTX @ _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
-    _XH-RECORD @ _XH-INO @ _XH-CTX @
-    _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
-    _XH-IMAGE @ _XH-INODE-HOME @ _XH-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-\ Stage the common allocation-backed one-block edit.  The selected typed mode
-\ is either a complete logical hole inside current EOF or strict no-gap growth
-\ from an exactly block-aligned EOF.  Both modes admit an authenticated inline
-\ depth-zero extent root or a resident depth-one index fanout.  An insertion
-\ selects the governing leaf and uses a free entry or exact coalescing when
-\ possible.  A saturated unmergeable resident root allocates a second block,
-\ composes all five extents in one checksummed external leaf, and installs a
-\ one-index depth-one resident root.  An existing selected leaf is replaced in
-\ place; when it is full and unmergeable, it splits into two checksummed leaves
-\ and a new adjacent root index is inserted if the root has capacity.  The
-\ transaction increments
-\ i_blocks for every newly allocated data/tree block.
-\ Aligned growth additionally stages its exact new i_size.  Partial-tail RMW,
-\ unwritten conversion, and sparse growth remain separate boundaries.
-: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALLOCATING-WRITE
-  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
-    _XH-WRITER ! _XH-NSEC ! _XH-SECONDS !
-    _XH-EXPECTED-GEN ! _XH-INO ! _XH-OFFSET !
-    _XH-COUNT ! _XH-SOURCE !
-    0 _XH-PUBLISHED !
-    _XH-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
-    _XH-WRITER @ _EXT4-JWR.CTX + @ _XH-CTX !
-    _XH-WRITER @ _EXT4-JWR.BSIZE + @ _XH-BSIZE !
-    _XH-COUNT @ 0> 0= _XH-OFFSET @ 0< OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _XH-SOURCE @ _XH-COUNT @ _VFS-BUFFER? 0= IF
-        VFS-E-INVALID EXIT
-    THEN
-    _XH-COUNT @ _XH-BSIZE @ U> IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XH-SOURCE @ _XH-COUNT @
-    _XH-WRITER @ _EXT4-JWR.SCRATCH-B + @ _XH-BSIZE @
-    MSPAN-OVERLAP? IF VFS-E-INVALID EXIT THEN
-    _XH-REQUIRE-FRESH ?DUP IF EXIT THEN
-    _XH-SOURCE @ _XH-WRITER @ _EXT4-JWR.SCRATCH-B + @
-    _XH-COUNT @ MOVE
-    _XH-AUTH-TARGET ?DUP IF EXIT THEN
-    _XH-SELECT-CANDIDATE ?DUP IF EXIT THEN
-    _XH-PLAN-ROOT-EDIT ?DUP IF EXIT THEN
-    _XH-SELECT-LEAF-CANDIDATE ?DUP IF EXIT THEN
-    _XH-QUALIFY-PLANNED-HOMES ?DUP IF EXIT THEN
-    _XH-REQUIRE-EXACT-CREDIT ?DUP IF EXIT THEN
-    _XH-STAGE-DATA ?DUP IF
-        _XH-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    _XH-CANDIDATE @ _XH-WRITER @
-    _EXT4-JTX-STAGE-ALLOCATE-BLOCK ?DUP IF
-        _XH-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    _XH-REQUIRE-STAGED-ACCOUNTING-HOMES ?DUP IF
-        _XH-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    _XH-STAGE-EXISTING-LEAF ?DUP IF
-        _XH-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    _XH-NEW-LEAF? IF
-        _XH-STAGE-LEAF ?DUP IF
-            _XH-FAIL-AFTER-PUBLISH EXIT
-        THEN
-        _XH-LEAF-CANDIDATE @ _XH-WRITER @
-        _EXT4-JTX-STAGE-ALLOCATE-BLOCK ?DUP IF
-            _XH-FAIL-AFTER-PUBLISH EXIT
-        THEN
-        _XH-REQUIRE-STAGED-LEAF-ACCOUNTING-HOMES ?DUP IF
-            _XH-FAIL-AFTER-PUBLISH EXIT
+    _XW-FAULT-ACTUAL _XW-ACTUAL !
+    _XW-ACTUAL @ _XW-COUNT @ = _XW-GRANULAR @ AND IF _XW-PUBLISH THEN
+    _XW-WRITER @ ?DUP IF
+        _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
+            _XW-IOR @ VFS-IOR-F-READONLY 24 LSHIFT OR _XW-IOR !
         THEN
     THEN
-    _EXT4-JAB-NEW-SUPER-FREE @ _XH-NEW-FREE !
-    _XH-STAGE-INODE ?DUP IF
-        _XH-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    _XH-WRITER @ _EXT4-JWR.META-USED + @ _XH-META-CREDIT @ <>
-    _XH-WRITER @ _EXT4-JWR.META-ACTIVE + @ _XH-META-CREDIT @ <> OR
-    _XH-WRITER @ _EXT4-JWR.DATA-USED + @ 1 <> OR
-    _XH-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ 1 <> OR
-    _XH-WRITER @ _EXT4-JWR.REVOKE-USED + @ 0<> OR
-    _XH-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ 0<> OR
-    _XH-WRITER @ _EXT4-JTX-TABLES-VALID? 0= OR IF
-        VFS-E-CORRUPT _XH-FAIL-AFTER-PUBLISH EXIT
-    THEN
-    0 ;
+    _XW-ACTUAL @ _XW-IOR @ _EXT4-PARTIAL-IOR ;
 
-: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
-  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
-    0 _XH-GROW !
-    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALLOCATING-WRITE ;
-
-: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALIGNED-APPEND
-  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
-    -1 _XH-GROW !
-    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALLOCATING-WRITE ;
-
-\ Measure an allocation callback before the mounted engine begins a
-\ transaction.  Measurement revalidates the selected geometry needed to
-\ derive exact credit, while dry and live staging each perform the expensive
-\ global reverse-owner proof before publication.  Repeating that proof during
-\ capacity measurement would establish no additional safety property.  The
-\ reusable caller profile is only a containing capacity, so a resident
-\ depth-zero edit begins 4/1/0, an existing selected depth-one leaf edit begins
-\ 5/1/0, root growth begins its exact 5/1/0 through 7/1/0 topology, and a
-\ selected-leaf split begins its exact 6/1/0 through 8/1/0 topology.
-: _XH-MEASURE-ALLOCATION-CREDIT  ( -- signed-meta-credit ior )
-    0 _XH-WRITER !
-    _EXT4-MOW-SNAPSHOT _XH-SOURCE !
-    _EXT4-MOW-COUNT @ _XH-COUNT !
-    _EXT4-MOW-OFFSET @ _XH-OFFSET !
-    _EXT4-MOW-INO @ _XH-INO !
-    _EXT4-MOW-GEN @ _XH-EXPECTED-GEN !
-    _EXT4-MOW-SECONDS @ _XH-SECONDS !
-    _EXT4-MOW-NSEC @ _XH-NSEC !
-    _EXT4-MOW-CTX @ _XH-CTX !
-    _EXT4-MOW-CTX @ _EXT4-C.BSIZE + @ _XH-BSIZE !
-    _EXT4-MOW-STAGE-XT @
-    ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALIGNED-APPEND = IF
-        -1 _XH-GROW !
-    ELSE
-        _EXT4-MOW-STAGE-XT @
-        ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL <> IF
-            0 VFS-E-INVALID EXIT
-        THEN
-        0 _XH-GROW !
-    THEN
-    _XH-AUTH-TARGET ?DUP IF 0 SWAP EXIT THEN
-    _XH-SELECT-CANDIDATE ?DUP IF 0 SWAP EXIT THEN
-    _XH-PLAN-ROOT-EDIT ?DUP IF 0 SWAP EXIT THEN
-    _XH-SELECT-LEAF-CANDIDATE ?DUP IF 0 SWAP EXIT THEN
-    _XH-REVALIDATE-PLANNED-HOMES ?DUP IF 0 SWAP EXIT THEN
-    _XH-META-CREDIT @ NEGATE 0 ;
-
-' _XH-MEASURE-ALLOCATION-CREDIT _EXT4-MOW-CREDIT-XT !
-
-CREATE _XB _EXT4-MAX-BLOCK ALLOT
-
-: _XP
-  ( source -- source count file-offset inode-number expected-generation seconds nsec vfs )
-    _EXT4-WR-CHUNK @ _EXT4-WR-OFFSET @
-    _EXT4-WR-BID @ _EXT4-WR-GEN @
-    _EXT4-WR-SECONDS @ _EXT4-WR-NSEC @ _EXT4-WR-V @ ;
-
-\ Preserve the public caller chunk.  Each callback's growth kind routes
-\ directly to its typed builder: partial-tail append uses initialized RMW,
-\ while aligned EOF uses allocation.  Neither callback can fall through to
-\ another operation; VFS-WRITE-EXACT may advance after a short committed tail
-\ or allocation chunk and re-enter as aligned growth.  An in-size target first
-\ tries overwrite, then promotes only its exact clean unmapped refusal to hole
-\ fill.
-:NONAME  ( -- actual ior )
-    _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @
-    _XB _EXT4-MAX-BLOCK MSPAN-OVERLAP?
-    _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @
-    _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK MSPAN-OVERLAP? OR IF
+\ Write one transaction of the callback's span.  The first pass on a clean
+\ mount is staged and proved before the journal is activated, so a refusal
+\ leaves the volume untouched; the live pass then repeats it against the
+\ activated volume, emits it, and checkpoints it synchronously.
+: _XW-RUN  ( -- actual ior )
+    _EXT4-WR-V @ _XW-V ! _EXT4-WR-VN @ _XW-VN !
+    _EXT4-WR-SOURCE @ _XW-SOURCE ! _EXT4-WR-COUNT @ _XW-REQUEST !
+    _EXT4-WR-OFFSET @ _XW-OFFSET !
+    _EXT4-WR-BID @ _XW-INO ! _EXT4-WR-GEN @ _XW-EXPECTED-GEN !
+    _EXT4-WR-SECONDS @ _XW-SECONDS ! _EXT4-WR-NSEC @ _XW-NSEC !
+    0 _XW-WRITER ! 0 _XW-ACTUAL ! 0 _XW-GRANULAR ! 0 _XW-DONE !
+    _XW-V @ _EXT4-MOW-V !
+    0 _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-MOW-CTX @ _XW-CTX !
+    _XW-CTX @ _EXT4-C.BSIZE + @ _XW-BSIZE !
+    _XW-REQUEST @ 0= IF 0 0 EXIT THEN
+    _XW-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
+    _EXT4-JWR-STORE-DEDICATED <> IF 0 VFS-E-NOSPC EXIT THEN
+    1 1 0 _XW-CTX @ _EXT4-JWR-ENSURE ?DUP IF NIP 0 SWAP EXIT THEN
+    _XW-WRITER !
+    _XW-SOURCE @ _XW-REQUEST @
+    _XW-WRITER @ _XW-WRITER @ _EXT4-JWR.TOTAL + @ MSPAN-OVERLAP? IF
         0 VFS-E-INVALID EXIT
     THEN
-    _EXT4-WR-SOURCE @ _XB _EXT4-WR-CHUNK @ MOVE
-    _EXT4-WR-KIND @ _EXT4-WRK-TAIL-APPEND = IF
-        _XB _XP
-        -1 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-TAIL-APPEND
-        _EXT4-MOUNTED-ONEBLOCK-WRITE
-    ELSE _EXT4-WR-KIND @ _EXT4-WRK-ALIGNED-APPEND = IF
-        _XB _XP
-        0 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALIGNED-APPEND
-        _EXT4-MOUNTED-ONEBLOCK-WRITE
-        OVER _EXT4-WR-CHUNK @ = IF
-            _XH-NEW-BLOCKS @ _EXT4-WR-NEW-BLOCKS !
-            _XH-NEW-FREE @ _EXT4-WR-NEW-FREE !
-        THEN
-    ELSE
-        -1 _EXT4-JOW-IOR !
-        -1 _EXT4-JOW-PRESENT !
-        _XB _XP
-        1 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
-        _EXT4-MOUNTED-ONEBLOCK-WRITE
-        DUP EXT4-D-DATA-MAP _EXT4-UNSUPPORTED =
-        _EXT4-JOW-IOR @ 0= AND _EXT4-JOW-PRESENT @ 0= AND IF
-            2DROP
-            _EXT4-WRK-HOLE-FILL _EXT4-WR-KIND !
-            _XB _XP
-            0 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
-            _EXT4-MOUNTED-ONEBLOCK-WRITE
-            OVER _EXT4-WR-CHUNK @ = IF
-                _XH-NEW-BLOCKS @ _EXT4-WR-NEW-BLOCKS !
-                _XH-NEW-FREE @ _EXT4-WR-NEW-FREE !
-            THEN
-        THEN
-    THEN THEN
-    _XB _EXT4-MAX-BLOCK 0 FILL
-; _EXT4-WR-HOOK !
+    \ One pass covers at most the data credit's blocks, less the old tail
+    \ block a write past a partial EOF also stages, and its homes must also
+    \ fit the mutation range workspace that carries the owner proof.
+    _XW-WRITER @ _EXT4-JWR.DATA-CAP + @
+    _XW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
+    _XW-WRITER @ _EXT4-JWR.META-CAP + @ - MIN
+    _XW-VN @ VN.SIZE-LO @ _XW-TAIL-ZERO? IF 1- THEN
+    DUP 1 < IF DROP 0 VFS-E-NOSPC EXIT THEN
+    _XW-BSIZE @ * _XW-OFFSET @ _XW-BSIZE @ MOD -
+    _XW-REQUEST @ MIN _XW-COUNT !
+    _EXT4-MOW-ACTIVE @ 0= IF
+        _XW-PASS ?DUP IF _XW-FAIL EXIT THEN
+        _XW-DISCARD ?DUP IF _XW-FAIL EXIT THEN
+        _XW-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XW-FAIL EXIT THEN
+    THEN
+    _XW-PASS ?DUP IF _XW-FAIL EXIT THEN
+    _XW-TX @ _EXT4-JTX-EMIT ?DUP IF _XW-FAIL EXIT THEN
+    _XW-COUNT @ _XW-ACTUAL !
+    _XW-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF _XW-FAIL EXIT THEN
+    _XW-WRITER @ _EXT4-JWR-VALID? 0= IF
+        VFS-E-CORRUPT _XW-WRITER @ _EXT4-JWR-LATCH-FAULT _XW-FAIL EXIT
+    THEN
+    _XW-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
+    _XW-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF
+        VFS-E-CORRUPT _XW-WRITER @ _EXT4-JWR-LATCH-FAULT _XW-FAIL EXIT
+    THEN
+    _XW-PUBLISH
+    _XW-COUNT @ 0 ;
+
+\ The staged binding's write hook.  Caller bytes leave the block buffer on
+\ every return; the writer scrubs its own retained images.
+:NONAME  ( -- actual ior )
+    _XW-RUN _XW-DATA _EXT4-MAX-BLOCK 0 FILL ;
+_EXT4-WR-HOOK !
 
 \ =====================================================================
 \  Atomic inode creation and namespace insertion
@@ -25258,7 +24610,7 @@ VARIABLE _XC-NEW-ROOT
     _EXT4-BYTES=? 0= IF DROP VFS-E-CONFLICT EXIT THEN
     _XC-APPLY-INDEX-MAP-EDIT ?DUP IF EXIT THEN
     _XC-IMAGE @ _XC-PARENT-INO @ _XC-PARENT-GEN @ _XC-CTX @
-    _EXT4-RESTAMP-EXTENT-LEAF ?DUP IF EXIT THEN
+    _EXT4-RESTAMP-EXTENT-NODE ?DUP IF EXIT THEN
     _XC-IMAGE @ _XC-INDEX-MAP-HOME @ _XC-WRITER @
     _EXT4-JTX-META-REPLACE ;
 

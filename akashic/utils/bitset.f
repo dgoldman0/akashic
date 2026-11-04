@@ -189,3 +189,21 @@ REQUIRE uint-range.f
         NIP 2DUP > IF 1+ THEN
     REPEAT
     R> DROP 2DROP DROP 0 FALSE TRUE ;
+
+\ The lowest clear bit at or after FIRST and the length of the clear run
+\ that starts there, capped at MAX.  An allocator takes such a run when it
+\ is long enough and otherwise continues its search past the run.  The view
+\ and FIRST are checked once, before any byte is read.  A negative MAX is
+\ invalid; a zero MAX asks for nothing and finds nothing.
+: BITSET-CLEAR-RUN?  ( buffer bit-count first max -- bit length found? valid? )
+    DUP 0< IF 2DROP 2DROP 0 0 FALSE FALSE EXIT THEN
+    >R
+    2 PICK 2 PICK 2 PICK 0 _BITSET-RANGE-VALID? 0= IF
+        R> DROP 2DROP DROP 0 0 FALSE FALSE EXIT
+    THEN
+    R@ 0= IF R> DROP 2DROP DROP 0 0 FALSE TRUE EXIT THEN
+    >R 2DUP R> _BITSET-NEXT-CLEAR              ( buffer bit-count c )
+    2DUP > 0= IF R> DROP 2DROP DROP 0 0 FALSE TRUE EXIT THEN
+    2DUP - R> MIN OVER +                        ( buffer bit-count c limit )
+    3 PICK SWAP 2 PICK _BITSET-CLEAR-END        ( buffer bit-count c end )
+    OVER - 2SWAP 2DROP TRUE TRUE ;
