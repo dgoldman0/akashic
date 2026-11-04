@@ -4484,7 +4484,11 @@ def run_forth(
     ) as mapped:
         for offset, data in patches:
             mapped[offset : offset + len(data)] = data
-        system.storage._replace_media(mapped, str(image))
+        # The mapping is a private copy that may carry patches, so the file
+        # does not hold this media; this journey must never save it anyway.
+        system.storage._replace_media(
+            mapped, str(image), file_holds_media=False
+        )
         system.storage.write_protected = False
         read_requests = 0
         write_requests = 0
@@ -4603,7 +4607,9 @@ def run_recovery_forth(
         media[offset : offset + len(data)] = data
     if capture_prior_flush_media is not None and 1 in pending_flush_faults:
         _write_sparse_bytes(capture_prior_flush_media, media, durable=True)
-    system.storage._replace_media(media, str(backing))
+    # The backing file is written only by save_sparse_media below, so it does
+    # not yet hold this patched media.
+    system.storage._replace_media(media, str(backing), file_holds_media=False)
     system.storage.write_protected = write_protected
 
     def save_sparse_media() -> None:
@@ -94099,7 +94105,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         "_EXT4-GROUP-INODE-COUNT": 7,
         "_EXT4-BLOCK-ALLOCATED?": 3,
         "_EXT4-GROUP-BLOCK-RANGE": 3,
-        "_EXT4-LOAD-BLOCK-BITMAP": 28,
+        "_EXT4-LOAD-BLOCK-BITMAP": 30,
         "_EXT4-LOAD-INODE-BITMAP": 11,
         "_EXT4-BLOCK-BITMAP-CRC": 8,
         "_EXT4-INODE-BITMAP-CRC": 10,
@@ -94344,9 +94350,9 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
         "_EXT4-S32@": 6,
         "_EXT4-I-BLOCK-ZERO-FROM?": 1,
         "_EXT4-DECODE-SPECIAL": 1,
-        "_EXT4-RESTAMP-INODE": 16,
-        "_EXT4-SET-INODE-MTIME-CTIME": 10,
-        "_EXT4-SET-INODE-CTIME": 5,
+        "_EXT4-RESTAMP-INODE": 17,
+        "_EXT4-SET-INODE-MTIME-CTIME": 11,
+        "_EXT4-SET-INODE-CTIME": 7,
         "_EXT4-ENCODE-I-BLOCKS": 5,
     }
     for service, count in expected_facade_calls.items():
@@ -95549,7 +95555,7 @@ def test_ext4_jbd2_map_service_is_private_acyclic_unit() -> None:
         "_EXT4-ENSURE-JOURNAL-WORKSPACE": 1,
         "_EXT4-JOURNAL-MAP@": 7,
         "_EXT4-JOURNAL-MAP-UNIQUE?": 1,
-        "_EXT4-JOURNAL-DATA?": 3,
+        "_EXT4-JOURNAL-DATA?": 5,
         "_EXT4-READ-JBLOCK": 26,
         "_EXT4-WRITE-JBLOCK": 16,
         "_EXT4-JOURNAL-NEXT": 7,
