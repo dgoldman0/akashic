@@ -40,21 +40,12 @@ HTree leaf slack, or by converting a full admitted one-block linear parent
 directly to a canonical two-leaf depth-zero HTree. A full selected leaf in an
 existing depth-zero HTree may also split into one old and one newly allocated
 leaf while the root retains an entry slot and the admitted parent extent map
-can attach the new EOF block. Its `TRUNCATE`
-surface includes strict same-retained-block shrink under exact `2/0/0` credit
-and generalized depth-zero shrink-to-zero release. The latter accepts a linked
-positive-size regular inode whose flags are exactly `EXTENTS` and whose valid
-inline depth-zero root has zero through four initialized or unwritten extents,
-including sparse logical gaps. Before emission, retained transaction
-certificate state binds exact release authority. The first transaction commits
-the zero-size inode with its old map and `i_blocks` retained and publishes its
-membership in either an empty modern orphan union or the first free slot of an
-existing authenticated modern-only union. It then uses linked-orphan cleanup
-to release every
-captured physical range while retaining any qualified external xattr, and
-finally clears transient
-`ORPHAN_PRESENT` after the complete union drains while leaving the mounted
-writer active. The staged surface also provides three `UNLINK` forms. A
+can attach the new EOF block. Its `TRUNCATE` sets a linked regular file's
+size to any value in one transaction: a shrink releases every block past the
+new EOF at any extent depth and zeroes the new EOF block's tail as a journaled
+after-image, and a growth leaves a hole after zeroing the old EOF block's tail.
+A release too large for one transaction under the bound profile refuses before
+any media I/O. The staged surface also provides three `UNLINK` forms. A
 regular inode with more than one link may lose one same-parent name without
 changing allocation, even when an open descriptor retains the removed dentry.
 An already-empty inode with one link and no external allocation may lose its
@@ -401,8 +392,7 @@ journey measures 2,196,652,327; each clean remount measures 55,772,107. The
 modern `ADD_MORE` orphan-home tear journey, which first replays the insertion
 and then drains two independently data-bearing linked records, measures
 1,679,279,160 steps under that same watchdog; its write-free stable remount
-measures 44,133,436. The public retained-union `TRUNCATE(0)` composition
-journey measures 1,656,718,410 steps under the same unchanged watchdog. The
+measures 44,133,436. The
 clean insertion and injected-fault setup journeys
 measure 519,567,371 and 421,722,917 steps respectively. The
 direct COW stage/seal/abort workloads without persistence tracing measure
@@ -2634,218 +2624,75 @@ matrix.
 same-parent directory moves, indexed leaf splitting or growth, HTree-key
 mutation, and deeper or multi-node HTree shapes remain gated. Indexed
 insertion, UNLINK, RMDIR, and this RENAME extension now draft-close the
-namespace/deletion vertical. The indexed-parent retained-block TRUNCATE
-composition below is complete. The linked-regular-file scalar SETATTR slice is
+namespace/deletion vertical. TRUNCATE is general within one transaction, as
+described below, including through an indexed parent's name. The linked-regular-file scalar SETATTR slice is
 now focused-qualified; xattr mutation remains the next Stage 6 handoff.
 
-### Same-retained-block shrink TRUNCATE
+### General TRUNCATE
 
-The retained-block subpath accepts a strict shrink whose new EOF is nonaligned
-and lies inside the old final initialized logical block.
-The generic VFS prepublishes the requested shared-vnode size and retains the
-old size while the guarded callback runs. The ext4 callback reauthenticates
-that exact old EOF, positive link count, inode identity, complete depth-zero or
-depth-one extent map, selected block, xattr pointer, inode-table home, and
-unique ownership of the data/inode-home pair. A same-size or growing request,
-an aligned nonzero new EOF, or a nonzero shrink selecting an earlier logical
-block returns typed unsupported and the VFS restores its old cache projection.
-Those refused shapes can require a wider block-release policy and are not
-approximated by retaining blocks beyond the qualified boundary. Exact zero
-dispatches to the separate depth-zero release path below.
+`_EXT4-TRUNCATE` sets a linked regular file's size to any value the format
+holds, in one journal transaction under the bound writer profile. The generic
+VFS prepublishes the requested size and retains the old size while the
+guarded callback runs. The callback authenticates the target as the general
+write does: a linked regular file outside the reserved inodes, with exactly
+the `EXTENTS` flag, the expected generation, a fully validated map, and a
+valid external xattr block when it has one. The on-disk size must equal the
+VFS's old size, the orphan union must be empty as for every other staged
+mutation, and a size past the format's limit refuses with `VFS-E-OVERFLOW`.
+A request for the current size refuses as unsupported: the generic VFS marks
+the volume dirty after any successful truncate, and a dirty volume whose
+journal is inactive refuses every later mutation until the next sync.
 
-An admitted call zeroes the entire retained block suffix beginning at the new
-EOF, writes the exact 64-bit inode size, updates trusted-clock `mtime`/`ctime`,
-and restamps the inode checksum. It preserves the extent map, physical block,
-`i_blocks`, link count, generation, atime, xattrs, block bitmaps, descriptors,
-superblock free count, and orphan state. The zeroed file block and inode-table
-block are both JBD2 metadata payloads in an exact `2 metadata / 0 ordered data /
-0 revoke` transaction. The file block deliberately is not ordinary ordered
-data: a precommit ordered write could zero bytes still visible under the old
-EOF. Journaling both full-block after-images makes the old pair or the
-committed new pair the only recovery authorities.
+A shrink releases every mapped block at or past the block that follows the new
+EOF, at any depth the format allows, as the kernel's `ext4_ext_remove_space`
+releases it. Working from the end of the file, each step cuts the last
+group-bounded run from the last extent that reaches past that block, shortening
+the extent or removing its entry; initialized and unwritten extents are
+released alike. A leaf that empties is freed with a journal revoke and its
+index leaves the parent, upward while parents empty in turn, and a root that
+empties becomes an empty depth-zero root. No index key changes, since a node
+keeps its first entry until the node itself goes, so every step ends in a valid
+tree. One walk serves each leaf, which is staged once after its cuts. The freed
+runs are recorded, coalescing with their neighbours, and their allocation
+accounting is staged after the cuts through the vector free builder, one
+bitmap, descriptor, and superblock update per coalesced run. `i_blocks` falls
+by the freed data and tree blocks, and the root's slots past its last entry are
+zeroed, as every edited node's are.
 
-Clean qualification shrinks inode 14 and both hard-link aliases from 54 to 24
-bytes, clamps the calling descriptor cursor, leaves `i_blocks=4` and free-space
-accounting fixed, and proves bytes 24 through 1023 zero. A cold ordinary mount
-reads both aliases with the exact prefix and performs no writes; pinned
-e2fsprogs 1.47.4 `debugfs` observes the unchanged mapping/link/block counts and
-read-only `e2fsck` accepts the image. A missing trusted clock refuses before
-writer creation or media I/O and restores the prepublished cached size.
+When the new EOF falls inside a mapped initialized block, the bytes past it
+are zeroed, and that block is staged as a journaled after-image rather than
+ordered data. Ordered data lands before commit, so a transaction that then
+failed would leave the old size showing zeroed bytes; journaling the block
+makes the old and the committed images the only recovery authorities. A
+growing truncate leaves the new range as a hole. When the old EOF falls
+inside a mapped initialized block, that block's bytes past the old size are
+written as zeros, this time as ordered data, since the old size hides them
+until commit. The inode record, with the new size, `i_blocks`, and
+trusted-clock `mtime` and `ctime`, is the transaction's last home.
 
-The focused
-`test_staged_vfs_truncate_beneath_singleton_depth_one_indexed_parent`
-composition first uses the existing public exact `3/0/0` LINK to publish inode
-14 as `/fixture/indexed/linked.txt` in leaf 1497 and unmounts that qualified
-image. A fresh mount of the LINK after-image then installs the retained-block
-operation's exact `2/0/0` writer and shrinks through the indexed name. LINK
-checkpoints `[278, 281, 1497]`; the second stage checkpoints only data block
-1346 and inode-table home 278. Leaf 1497 retains exactly the LINK after-image
-and is not touched by TRUNCATE, while the root, DX node, external extent node,
-and every unselected mapped directory block remain byte-exact. This is
-resolver composition, not a wider TRUNCATE or indexed-directory mutation
-policy, and it introduces no new recovery state.
+The home-set proof is the general write's. One validation walk of the
+target's pre-transaction tree counts every overlap with the freed runs and
+the transaction's homes; the count must equal the freed blocks, the zeroed
+tail, and the existing tree nodes the transaction edits. The filesystem-wide
+owner scan then proves that no other inode maps any of them.
 
-The W7 descriptor tear returns the volume I/O error, restores the old cached
-EOF, leaves the descriptor cursor and both filesystem homes unchanged, and
-requires no transaction-home replay. At W17 the committed transaction's data
-home has landed and its inode home tears. The callback returns TRUNCATE success,
-reapplies the new vnode size and timestamps after checkpoint quarantine, and
-retains the partial/read-only error in `V.LAST-IOR`. Recovery replays both
-homes; the following mount is byte-stable and write-free.
+On a clean mount the transaction is staged and proved before the journal is
+activated, so a refusal performs no media I/O; the live pass then repeats it
+against the activated volume, emits it, and checkpoints it synchronously. A
+failure before commit returns its error, and the VFS restores the old cached
+size. A failure after commit returns success with the diagnostic in
+`V.LAST-IOR`, republishes the committed size, block count, and times, and
+quarantines the mount, whose next mount replays the transaction.
 
-### Generalized depth-zero TRUNCATE-to-zero release and canonicalization
-
-The public path accepts a linked positive-size regular file
-whose inode flags are exactly `EXTENTS` and whose authenticated inline extent
-root is depth zero with any format-valid count from zero through four. A
-positive-size count-zero inode is a valid wholly sparse input. Nonempty roots
-may begin at any valid logical block and contain arbitrary valid logical gaps;
-each entry may be initialized or unwritten and retains its standard decoded
-length (initialized 1 through 32,768 blocks, unwritten 1 through 32,767). The
-ordered exact physical `{ first, count }` vector and aggregate block count are
-authenticated rather than inferred from file size or logical continuity. The
-inode may retain one qualified external xattr block, including its `i_blocks`
-contribution. Partial release, nonzero block-releasing EOFs, and depth-positive
-release remain typed unsupported boundaries.
-
-The callback composes an insertion, one cleanup transaction per retained
-record, and a final clear through a caller-owned writer sized componentwise to
-the maximum exact insertion, prospective-target cleanup, retained-union
-cleanup, and one-home clear requirements. Prospective cleanup credit is derived
-from the captured topology. A count-zero target needs one metadata home to
-clear its modern slot. A nonempty target starts with the distinct target-inode,
-orphan-file, and primary-super homes, then adds one bitmap home for every
-touched block group and each distinct primary GDT page needed by those groups.
-The target cleanup is therefore exact `1/0/0` for count zero; a nonempty target
-uses its computed metadata count with zero data and revoke credit. No singleton
-fixture count is a public capacity. Thus the empty-union path has
-three synchronously checkpointed transactions, while `ADD_MORE` drains the
-complete enlarged union. First, an exact `3/0/0` `ADD_FIRST` transaction
-atomically sets the target size and trusted-clock
-`mtime`/`ctime`, inserts the target inode number into the first authenticated
-empty modern orphan-file slot, and sets `ORPHAN_PRESENT` in the primary
-superblock. If an authenticated modern-only union is already active, exact
-`2/0/0` `ADD_MORE` instead changes only the target inode and deterministic
-first free orphan-file slot, preserving the already-set feature bit and primary
-superblock byte-exact. Both modes bind the complete pre-union counts, require
-spare geometry-derived runtime-plan capacity, reject a duplicate target, and
-rebuild their exact after-images from current media before the first home
-write. The prospective JTA ownership certificate binds the filesystem context,
-inode and generation, the complete ordered release vector, and the target
-inode-table home as an additional one-block ownership range; the latter is not
-release authority. One global other-inode walk proves that combined vector, so
-count zero still performs a one-range owner proof for the inode home. Its xattr
-identity is retained with zero refcount action.
-The prospective checkpoint (CP) authority separately seals the exact target
-entry count, ordered release vector, aggregate data-block count, and inline-
-extents map discriminator. Its unused range tail and all EA-release fields are
-zero. Their poststate is exactly the old union plus the new linked zero-size
-inode while the old extent ranges and `i_blocks` remain recoverable.
-
-A count-zero input is not required to arrive with zero bytes in its inactive
-extent slots. `ADD_FIRST` or `ADD_MORE` canonicalizes all 48 inactive bytes
-while publishing size zero, so its later cleanup can be the exact one-home
-orphan-slot clear. Final refresh accepts only the canonical empty depth-zero
-root. Nonempty inputs retain their complete map through `ADD`; cleanup performs
-the canonical empty-root conversion only when it acquires release authority.
-
-Before insertion, every preexisting record is authenticated and measured and
-must still be linked. An unlinked record is a live-session lifetime authority
-that this operation may not consume, so it returns `BUSY` before the clock or
-media mutation; crash-time mount recovery retains its broader delete semantics.
-Admission also reconciles each initialized block bitmap's exact clear-bit
-count with its authenticated group descriptor and reconciles the group sum
-with the mounted superblock free count. `BLOCK_UNINIT` groups remain lazy and
-cannot own any admitted release range. Together with disjoint allocated-range
-ownership, this proves the union's cumulative counter updates before `ADD`
-even though cleanup is deliberately checkpointed one record at a time.
-The clear-bit reconciliation delegates LSB0 popcount to the shared checked
-bitset utility with the authenticated exact group-block count as its logical
-bound. A short final group's padding is ignored without being normalized;
-ext4 bitmap checksum authentication remains over the format-defined byte span.
-
-Second, the existing linked-orphan cleanup measures its exact homes. For a
-nonempty target it replaces the map with a canonical empty extent root, reduces
-`i_blocks` to the retained xattr contribution, releases every certified
-physical range through all touched block bitmaps, repairs the corresponding
-group and global free-block counters, and clears the modern slot. For a
-count-zero target, `ADD` already supplied the canonical inode after-image and
-cleanup changes only the orphan-file home. The external xattr remains allocated
-in both cases. Third, an exact `1/0/0` transaction clears transient
-`ORPHAN_PRESENT` only after authenticated empty-union proof. It deliberately
-leaves ext4 `RECOVER` and the private writer active so a later operation can
-reuse the mounted write session.
-
-After each cleanup emit, the driver projects the committed `i_blocks` value
-into the shared cached vnode identified by inode number and generation before
-checkpoint. Thus a retained union member already materialized by directory
-enumeration cannot remain stale after its on-disk map is released; all hard
-link dentries continue to share that one corrected vnode. A checkpoint failure
-does not roll this projection back because the committed journal remains the
-authoritative state.
-
-Public success clamps every descriptor sharing the vnode to EOF zero, exposes
-zero bytes through every hard-link name, advances free space by the exact sum
-of released data-range lengths, and publishes `VN.BLOCKS` as zero or the
-retained xattr block's sector contribution. The focused public journeys close
-their descriptors while leaving the writer recovery-active, then require a
-fresh authenticated mount to perform witnessed deactivation with no ext4 home
-replay. The following stable mount performs no writes, and pinned e2fsprogs
-1.47.4 read-only `e2fsck` accepts every generalized image. Historical
-singleton qualification additionally included `debugfs` acceptance. An
-ordinary clean unmount may instead perform the same existing deactivation.
-
-The original singleton qualification fixture supplies the following recovery
-evidence. A torn first-transaction descriptor returns the precommit volume
-error and restores the old 54-byte public file, four-sector block count, inode
-home, and allocated data block. A committed tear of the first inode checkpoint
-home returns public truncate success with EOF zero and quarantines the live writer;
-fresh mount replay installs the orphan, existing mount recovery releases its
-data block, clears the slot and transient bit, and reaches a checker-clean,
-write-free stable remount. Separate `ADD_MORE` qualification begins with one
-linked zero-size orphan retaining two sparse data ranges, checkpoints a second
-linked truncation, tears the orphan-file home after its new slot bytes but
-before its checksum, then proves that fresh-mount replay reconstructs and
-drains the full two-record union. The final image frees all three data blocks,
-preserves both positive link counts and the target xattr, passes pinned
-`e2fsck`, and remounts without I/O. These boundaries prove that durable EOF
-zero cannot strand the old allocation and that a failed precommit orphan
-insertion cannot publish the shrink. A focused authenticated retained-union
-mount fixture, intentionally bypassing ordinary mount-time orphan draining,
-also drives public `VFS-TRUNCATE` through `ADD_MORE` and the full two-record
-drain in 1,656,718,410 guest steps. It verifies inode 17's already-cached vnode
-changes from four sectors to zero, all three data blocks become free, the
-target retains its two-sector xattr accounting, the feature bit clears, and
-pinned `e2fsck` accepts the image. At the pre-generalization `109158b`
-boundary, the ordinary one-record public journey with the exact counter audit
-and stable remount completed in 1,195,226,705 steps under the unchanged
-1.2-billion guard. The pre-generalization zero-release,
-retained-shrink, policy, orphan-cleanup, and CREATE adjacency capstone passed
-all eight selected tests sequentially in 573.98 host seconds; that capstone
-contained the original singleton release case.
-
-Final generalized-envelope qualification covers every resident entry count.
-Direct seal/abort journeys prove the sparse two-entry `ADD_MORE` vector in
-226,531,856 steps, the saturated four-entry `ADD_FIRST` vector in 231,319,776,
-and a three-entry vector containing a two-block unwritten extent in
-227,974,625, all under the unchanged 800-million guard. Public journeys prove
-the canonical singleton at 1,116,644,505 steps, wholly sparse count-zero
-canonicalization at 886,800,408, canonical sparse count two at 1,156,748,458,
-and a saturated count-four root on compact primary-profile geometry built by
-the pinned toolchain at 950,483,090, each under the unchanged 1.2-billion
-guard. Every public case performs authenticated recovery/deactivation, a
-zero-write stable remount, and
-pinned `e2fsck`; the count-zero case also preserves its xattr block byte-exact.
-The saturated case begins with the clean journal explicitly activated, then
-executes the unchanged public live-stage/emit/checkpoint/drain path; singleton
-and sparse cases retain first-activation coverage. Its compact image reduces
-the global proof's inode-slot, group, and block-accounting scan geometry while
-leaving transaction shapes, exact credits, and recovery assertions unchanged.
-The five-test zero-through-four capstone passes sequentially in 496.67 host
-seconds, with the separately run saturated public case passing in 121.85.
-At this generalized-TRUNCATE milestone, cold source mode measured
-1,317,793,564 of 1.35 billion steps across 3,266 packed ext4 lines. No
-checked-in limit was raised for that slice.
+A truncate that does not fit one transaction under the bound profile refuses
+with `VFS-E-NOSPC` before any media I/O. Each block group the freed runs
+touch costs one bitmap home, each distinct descriptor page one more, every
+freed tree node one revoke, and every coalesced run one entry in the mutation
+range workspace, so the limit follows how many groups the released blocks
+span and how scattered they are rather than the file's size. Truncation
+across several transactions, with the orphan file carrying the target over a
+crash, is the next step; until then the linked-orphan cleanup that mount
+recovery runs keeps its existing shapes.
 
 ### Linked-regular-file scalar SETATTR
 
@@ -3189,8 +3036,9 @@ The ratchet order is:
 3. (merged into item 2);
 4. build shared inode allocation and directory insertion, then expose the
    first bounded `CREATE` slice (completed in the current worktree);
-5. retain completed same-retained-block shrink and generalized inline
-   depth-zero `TRUNCATE`-to-zero release, and close the first nonfinal regular-
+5. retain general single-transaction `TRUNCATE`, which has replaced the
+   same-retained-block shrink and the inline depth-zero release, and close the
+   first nonfinal regular-
    file `UNLINK` slice plus atomic closed last-link removal of an already-empty,
    allocation-free regular inode, including descriptor-retained nonfinal
    unlink and orphan-backed closed/open final-link lifetime handling (completed
@@ -3221,8 +3069,8 @@ The ratchet order is:
    including same-parent same- and cross-leaf regular moves and cross-parent
    regular/canonical-directory moves. Its two-operation positive gate and
    compositional evidence draft-close the namespace/deletion vertical; next
-   retain the completed representative indexed-parent retained-block TRUNCATE
-   composition and the focused-qualified scalar SETATTR slice, then admit xattr
+   retain the indexed-parent TRUNCATE composition and the focused-qualified
+   scalar SETATTR slice, then admit xattr
    mutation; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
@@ -3230,8 +3078,9 @@ The ratchet order is:
 Each remaining family closes its gaps the way the write did: when it next
 needs a case its bounded paths lack, one general routine replaces those paths
 and the special cases are deleted rather than kept beside it. Extent-tree
-editing is now general; directory insertion and removal, truncation, and
-unlink are the families that follow.
+editing and single-transaction truncation are now general; truncation across
+transactions, directory insertion and removal, and unlink are the families
+that follow.
 
 Each landing may move only forward: it must keep all prior qualified behavior,
 remain crash-closed, and advertise exactly the capabilities it has earned. An
@@ -3247,8 +3096,8 @@ inode geometry for extent-mapped files at every depth the format allows; exact
 writes compose independently durable transactions, and no broader geometry or
 operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded `CREATE` and
-`MKDIR` under their documented linear/indexed envelopes, qualified shrink
-`TRUNCATE`, and bounded regular-file
+`MKDIR` under their documented linear/indexed envelopes, general
+single-transaction `TRUNCATE`, and bounded regular-file
 `UNLINK`—including nonfinal, direct empty-final, and orphan-backed closed/open
 final removal from admitted linear, depth-zero HTree, or singleton depth-one
 HTree parents—and bounded canonical empty-directory `RMDIR` from those same
@@ -3277,14 +3126,10 @@ blocks as ordered full-block images and its allocated runs as zero-backed
 ordered blocks, edits the extent tree at any depth, updates every touched
 bitmap, group, and super free-block account plus `i_blocks`, `i_size`, and the
 trusted-clock times, and carries as many blocks as the bound profile holds.
-Same-retained-block TRUNCATE journals its zeroed data
-block and checksummed size/timestamp inode as exact `2/0/0`, without allocation
-or orphan state. Depth-zero TRUNCATE-to-zero uses exact `3/0/0` `ADD_FIRST` or
-`2/0/0` `ADD_MORE` orphan publication, topology-derived linked-orphan cleanup,
-and `1/0/0` transient-bit retirement. It accepts a pure-`EXTENTS`, zero-through-
-four-entry inline root with arbitrary valid gaps and initialized or unwritten
-lengths, frees its exact physical vector, canonicalizes a count-zero map, and
-preserves links and a qualified external xattr. Nonfinal regular-file UNLINK
+TRUNCATE releases every block past the new EOF at any extent depth in one
+transaction, staging the new EOF block's zeroed tail as a journaled after-image,
+and a growth zeroes the old EOF block's tail as ordered data; it preserves links
+and a qualified external xattr. Nonfinal regular-file UNLINK
 uses exact deduplicated `2/0/0` or `3/0/0` metadata credit to decrement one link, update
 target/parent times, and remove one checksummed record from an admitted linear
 parent block or selected depth-zero/singleton-depth-one HTree leaf without
@@ -3433,7 +3278,7 @@ namespace-insertion tranche; indexed LINK/MKDIR splitting and growth remain
 gated.
 Replacement, victims, broader
 concurrent orphan unions, unwritten conversion, 2/4 KiB and 128-byte-inode
-allocation, multi-block atomicity across callbacks, partial or depth-positive block-releasing truncation, and other
+allocation, multi-block atomicity across callbacks, truncation whose release spans more than one transaction, and other
 namespace mutation remain later capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an

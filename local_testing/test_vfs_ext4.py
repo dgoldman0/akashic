@@ -52595,6 +52595,516 @@ def test_general_write_refuses_unwritten_extent_without_io(
     _assert_emitted(output, "EXT4-GENERAL-WRITE-UNWRITTEN-REFUSED")
 
 
+def _general_truncate_forth(
+    file_path: str,
+    sizes: tuple[int, ...],
+    profile: tuple[int, int, int],
+    *,
+    marker: str,
+) -> list[str]:
+    """Mount staged, truncate the file to each size in turn, unmount."""
+    meta, data, revoke = profile
+    lines = [
+        "VARIABLE _GTR-BAD 0 _GTR-BAD !",
+        (
+            ": _GTR-NOW ( context -- epoch-ms ior ) "
+            f"DROP {_GENERAL_WRITE_EPOCH_MS} 0 ;"
+        ),
+        "T-ARENA CONSTANT _GTR-ARENA",
+        (
+            "_GTR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            "CONSTANT _GTR-MOUNT-IOR CONSTANT _GTR-V"
+        ),
+        "' _GTR-NOW 0 _GTR-V EXT4-BIND-WRITE-CLOCK? CONSTANT _GTR-CLOCK-IOR",
+        *_ext4_dedicated_writer_profile_forth(
+            "_GTR-PROFILE", "_GTR-V", meta, data, revoke
+        ),
+        (
+            f'S" {file_path}" VFS-FF-READ VFS-FF-WRITE OR _GTR-V VFS-OPEN? '
+            "CONSTANT _GTR-OPEN-IOR CONSTANT _GTR-FD"
+        ),
+        "_GTR-FD FD.INODE @ D.VNODE @ CONSTANT _GTR-VN",
+    ]
+    for size in sizes:
+        lines += [
+            f"{size} _GTR-FD VFS-TRUNCATE IF 1 _GTR-BAD +! THEN",
+            f"_GTR-VN VN.SIZE-LO @ {size} <> IF 1 _GTR-BAD +! THEN",
+            "_GTR-V V.LAST-IOR @ IF 1 _GTR-BAD +! THEN",
+        ]
+    lines += [
+        "_GTR-FD VFS-CLOSE? CONSTANT _GTR-CLOSE-IOR",
+        "0 _GTR-V VFS-UNMOUNT CONSTANT _GTR-UNMOUNT-IOR",
+        (
+            _forth_conjunction(
+                [
+                    "_GTR-MOUNT-IOR 0=",
+                    "_GTR-CLOCK-IOR 0=",
+                    "_GTR-PROFILE-BIND-IOR 0=",
+                    "_GTR-OPEN-IOR 0=",
+                    "_GTR-BAD @ 0=",
+                    "_GTR-CLOSE-IOR 0=",
+                    "_GTR-UNMOUNT-IOR 0=",
+                    "_GTR-V V.LIFECYCLE @ VFS-L-UNMOUNTED =",
+                    "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ]
+            )
+            + f' IF ." {marker}" THEN'
+        ),
+    ]
+    return lines
+
+
+def _general_truncate_case(
+    image: Path,
+    media: Path,
+    file_path: str,
+    sizes: tuple[int, ...],
+    profile: tuple[int, int, int],
+    jbd2_toolchain: dict[str, object],
+    *,
+    marker: str,
+    max_steps: int = 600_000_000,
+) -> tuple[bytes, tuple[tuple[str, int, int], ...]]:
+    """Truncate through each size and return the file bytes and the trace."""
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    assert isinstance(patches, tuple)
+    base = _general_write_cat(image, file_path, jbd2_toolchain)
+    output, trace, _ = run_recovery_forth(
+        image,
+        media,
+        _general_truncate_forth(file_path, sizes, profile, marker=marker),
+        patches=patches,
+        capture_media=media,
+        max_steps=max_steps,
+    )
+    _assert_emitted(output, marker)
+    _assert_e2fsck_clean(media, jbd2_toolchain)
+    got = _general_write_cat(media, file_path, jbd2_toolchain)
+    expected = bytearray(base)
+    for size in sizes:
+        if size < len(expected):
+            del expected[size:]
+        else:
+            expected += bytes(size - len(expected))
+    assert got == bytes(expected)
+    return got, trace
+
+
+def _general_truncate_image(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    directory: Path,
+    blocks: int,
+) -> Path:
+    """Add /long.bin, BLOCKS full blocks of a pattern, written by debugfs."""
+    source = directory / f"long-{blocks}.bin"
+    source.write_bytes(_general_write_bytes(blocks * 1024, 71))
+    image = directory / f"long-{blocks}.img"
+    shutil.copyfile(canonical_images["primary-1k-i256"], image)
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    wrote = subprocess.run(
+        [str(debugfs), "-w", "-R", f"write {source} long.bin", str(image)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert wrote.returncode == 0, wrote.stdout + wrote.stderr
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+    return image
+
+
+def test_general_truncate_prunes_and_collapses_a_depth_two_tree(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Truncation frees extents, leaves and index nodes from the end.
+
+    The 340-extent tree has five leaves under one index node.  Cutting to
+    logical block 300 frees 189 extents and three leaves; cutting to zero
+    frees every leaf and the index node and leaves an empty depth-zero root.
+    """
+    image = _general_write_fragmented_image(
+        canonical_images, jbd2_toolchain, tmp_path, 340
+    )
+    assert _general_write_extent_levels(
+        _general_write_debugfs(image, "ex /frag.bin", jbd2_toolchain)
+    ) == {"0/2": 1, "1/2": 5, "2/2": 340}
+    middle = tmp_path / "general-truncate-middle.img"
+    _general_truncate_case(
+        image,
+        middle,
+        "/frag.bin",
+        (300 * 1024 + 100,),
+        (24, 0, 8),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-MIDDLE",
+        # Measured at 414,383,633 steps.
+        max_steps=800_000_000,
+    )
+    assert _general_write_extent_levels(
+        _general_write_debugfs(middle, "ex /frag.bin", jbd2_toolchain)
+    ) == {"0/2": 1, "1/2": 2, "2/2": 151}
+    stat = _general_write_debugfs(middle, "stat /frag.bin", jbd2_toolchain)
+    assert "Blockcount: 308" in stat
+    empty = tmp_path / "general-truncate-empty.img"
+    _general_truncate_case(
+        image,
+        empty,
+        "/frag.bin",
+        (0,),
+        (24, 0, 8),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-EMPTY",
+    )
+    assert _general_write_extent_levels(
+        _general_write_debugfs(empty, "ex /frag.bin", jbd2_toolchain)
+    ) == {}
+    stat = _general_write_debugfs(empty, "stat /frag.bin", jbd2_toolchain)
+    assert "Blockcount: 0" in stat
+
+
+def test_general_truncate_trims_a_long_extent_and_zeroes_the_new_tail(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A shrink inside an extent frees its tail and zeroes the EOF block.
+
+    The block that holds the new EOF keeps its bytes before EOF and has the
+    rest zeroed on disk, since a later growth would expose them.
+    """
+    image = _general_truncate_image(canonical_images, jbd2_toolchain, tmp_path, 20)
+    before = _general_write_debugfs(image, "stat /long.bin", jbd2_toolchain)
+    first = int(re.search(r"\(0-19\):(\d+)-(\d+)", before).group(1))
+    media = tmp_path / "general-truncate-trim.img"
+    _general_truncate_case(
+        image,
+        media,
+        "/long.bin",
+        (5000,),
+        (8, 0, 0),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-TRIM",
+    )
+    stat = _general_write_debugfs(media, "stat /long.bin", jbd2_toolchain)
+    assert f"(0-4):{first}-{first + 4}" in stat
+    assert "Blockcount: 10" in stat
+    tail = _read_ext4_home(media, first + 4, block_size=1024)
+    assert tail[: 5000 - 4096] == _general_write_bytes(20 * 1024, 71)[4096:5000]
+    assert tail[5000 - 4096 :] == bytes(1024 - (5000 - 4096))
+
+
+def test_general_truncate_grows_and_zeroes_the_old_tail(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A growing truncate zeroes the old EOF block past the old size.
+
+    The bytes after the 54-byte EOF in block 1346 are poisoned first; the
+    new size makes them readable, so they must be written as zeros, and the
+    rest of the new size reads as a hole.
+    """
+    image = tmp_path / "general-truncate-grow-source.img"
+    shutil.copyfile(canonical_images["primary-1k-i256"], image)
+    with image.open("r+b") as poison:
+        poison.seek(1346 * 1024 + 54)
+        poison.write(b"\xa5" * (1024 - 54))
+    media = tmp_path / "general-truncate-grow.img"
+    got, _ = _general_truncate_case(
+        image,
+        media,
+        "/fixture/payload.txt",
+        (3000,),
+        (4, 1, 0),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-GROW",
+    )
+    assert got[54:] == bytes(3000 - 54)
+    assert _read_ext4_home(media, 1346, block_size=1024)[54:] == bytes(970)
+    stat = _general_write_debugfs(media, "stat /fixture/payload.txt", jbd2_toolchain)
+    assert "(0):1346" in stat
+    assert "Size: 3000" in stat
+
+
+def test_general_truncate_releases_unwritten_extents(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """An unwritten extent past the new EOF is released like any other."""
+    image = tmp_path / "general-truncate-unwritten-source.img"
+    shutil.copyfile(canonical_images["primary-1k-i256"], image)
+    superblock, inode, inode_offset = _ext4_inode_record(image, 14)
+    unwritten = bytearray(inode)
+    assert struct.unpack_from("<IHHI", unwritten, 0x34) == (0, 1, 0, 1346)
+    struct.pack_into("<H", unwritten, 0x38, 32768 + 1)
+    unwritten[:] = _inode_with_checksum(superblock, 14, unwritten)
+    with image.open("r+b") as patched:
+        patched.seek(inode_offset)
+        patched.write(bytes(unwritten))
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+    media = tmp_path / "general-truncate-unwritten.img"
+    _general_truncate_case(
+        image,
+        media,
+        "/fixture/payload.txt",
+        (0,),
+        (8, 0, 0),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-UNWRITTEN",
+    )
+    assert _ext4_block_allocation_state(media, (1346,)) == {1346: False}
+
+
+def test_general_truncate_releases_across_block_groups(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """One transaction frees runs in two block groups.
+
+    The 9,000-block file spans groups 0 and 1, so cutting it to 1,000 blocks
+    updates both groups' bitmaps and free counts.
+    """
+    image = _general_truncate_image(
+        canonical_images, jbd2_toolchain, tmp_path, 9000
+    )
+    stats = _general_write_debugfs(image, "stats", jbd2_toolchain)
+    group0 = stats[stats.index(" Group  0:"): stats.index(" Group  1:")]
+    group1 = stats[stats.index(" Group  1:"): stats.index(" Group  2:")]
+    media = tmp_path / "general-truncate-groups.img"
+    _general_truncate_case(
+        image,
+        media,
+        "/long.bin",
+        (1000 * 1024,),
+        (8, 0, 0),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-GROUPS",
+    )
+    after = _general_write_debugfs(media, "stats", jbd2_toolchain)
+    assert after[after.index(" Group  0:"): after.index(" Group  1:")] != group0
+    assert after[after.index(" Group  1:"): after.index(" Group  2:")] != group1
+
+
+def test_general_truncate_refuses_a_release_too_big_for_the_profile_without_io(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Freeing six tree nodes needs six revokes; a one-revoke profile refuses.
+
+    The refusal comes from the first pass, staged before the journal is
+    activated, so the medium sees no write and the cached size returns.
+    """
+    image = _general_write_fragmented_image(
+        canonical_images, jbd2_toolchain, tmp_path, 340
+    )
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    assert isinstance(patches, tuple)
+    output = run_forth(
+        image,
+        [
+            ": _GTR-NOW ( context -- epoch-ms ior ) DROP 1 0 ;",
+            "T-ARENA CONSTANT _GTR-ARENA",
+            (
+                "_GTR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _GTR-MOUNT-IOR CONSTANT _GTR-V"
+            ),
+            "' _GTR-NOW 0 _GTR-V EXT4-BIND-WRITE-CLOCK? DROP",
+            *_ext4_dedicated_writer_profile_forth(
+                "_GTR-PROFILE", "_GTR-V", 24, 0, 1
+            ),
+            (
+                'S" /frag.bin" VFS-FF-READ VFS-FF-WRITE OR _GTR-V VFS-OPEN? '
+                "CONSTANT _GTR-OPEN-IOR CONSTANT _GTR-FD"
+            ),
+            "_GTR-FD FD.INODE @ D.VNODE @ CONSTANT _GTR-VN",
+            "0 _GTR-FD VFS-TRUNCATE CONSTANT _GTR-IOR",
+            (
+                "_GTR-MOUNT-IOR 0= _GTR-OPEN-IOR 0= AND "
+                "_GTR-IOR VFS-E-NOSPC = AND "
+                "_GTR-VN VN.SIZE-LO @ 695296 = AND "
+                "_GTR-V _EXT4-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                "_XW-WRITER @ _EXT4-JWR-IDLE-CLEAN? AND "
+                'IF ." EXT4-GENERAL-TRUNCATE-REFUSED" THEN'
+            ),
+        ],
+        patches=patches,
+        max_steps=800_000_000,
+    )
+    _assert_emitted(output, "EXT4-GENERAL-TRUNCATE-REFUSED")
+
+
+def test_general_truncate_and_write_alternate_in_one_session(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed truncate leaves the file ready for the next mutation.
+
+    Saving over a file truncates it and writes the new bytes.  The VFS marks
+    the vnode dirty after a committed truncate, and neither the following
+    write nor a second truncate refuses it.
+    """
+    image = canonical_images["primary-1k-i256"]
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    assert isinstance(patches, tuple)
+    media = tmp_path / "general-truncate-session.img"
+    output, _, _ = run_recovery_forth(
+        image,
+        media,
+        [
+            "CREATE _GTS-BUF 3000 ALLOT",
+            (
+                ": _GTS-FILL ( seed length -- ) 0 ?DO "
+                "DUP I 13 * + 251 MOD _GTS-BUF I + C! LOOP DROP ;"
+            ),
+            (
+                ": _GTS-NOW ( context -- epoch-ms ior ) "
+                f"DROP {_GENERAL_WRITE_EPOCH_MS} 0 ;"
+            ),
+            "T-ARENA CONSTANT _GTS-ARENA",
+            (
+                "_GTS-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _GTS-MOUNT-IOR CONSTANT _GTS-V"
+            ),
+            "' _GTS-NOW 0 _GTS-V EXT4-BIND-WRITE-CLOCK? DROP",
+            *_ext4_dedicated_writer_profile_forth(
+                "_GTS-PROFILE", "_GTS-V", 8, 4, 0
+            ),
+            (
+                'S" /fixture/payload.txt" VFS-FF-READ VFS-FF-WRITE OR '
+                "_GTS-V VFS-OPEN? CONSTANT _GTS-OPEN-IOR CONSTANT _GTS-FD"
+            ),
+            "_GTS-FD FD.INODE @ D.VNODE @ CONSTANT _GTS-VN",
+            "0 _GTS-FD VFS-TRUNCATE CONSTANT _GTS-FIRST",
+            "33 3000 _GTS-FILL",
+            "0 _GTS-FD VFS-SEEK? DROP",
+            "_GTS-BUF 3000 _GTS-FD VFS-WRITE-EXACT CONSTANT _GTS-WRITE",
+            "1000 _GTS-FD VFS-TRUNCATE CONSTANT _GTS-SECOND",
+            "_GTS-VN VN.SIZE-LO @ CONSTANT _GTS-SIZE",
+            "_GTS-FD VFS-CLOSE? CONSTANT _GTS-CLOSE-IOR",
+            "0 _GTS-V VFS-UNMOUNT CONSTANT _GTS-UNMOUNT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_GTS-MOUNT-IOR 0=",
+                        "_GTS-PROFILE-BIND-IOR 0=",
+                        "_GTS-OPEN-IOR 0=",
+                        "_GTS-FIRST 0=",
+                        "_GTS-WRITE 0=",
+                        "_GTS-SECOND 0=",
+                        "_GTS-SIZE 1000 =",
+                        "_GTS-CLOSE-IOR 0=",
+                        "_GTS-UNMOUNT-IOR 0=",
+                    ]
+                )
+                + ' IF ." EXT4-GENERAL-TRUNCATE-SESSION" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media,
+        max_steps=800_000_000,
+    )
+    _assert_emitted(output, "EXT4-GENERAL-TRUNCATE-SESSION")
+    _assert_e2fsck_clean(media, jbd2_toolchain)
+    assert _general_write_cat(
+        media, "/fixture/payload.txt", jbd2_toolchain
+    ) == _general_write_bytes(3000, 33)[:1000]
+
+
+@pytest.mark.parametrize("case", ("descriptor", "checkpoint"))
+def test_general_truncate_crash_cuts_keep_old_or_committed_state(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+    case: str,
+) -> None:
+    """Tear one write of a releasing truncate, then recover on a fresh mount.
+
+    The descriptor is the transaction's first write, so tearing it leaves
+    the old file.  The inode-table home is its last checkpoint write; the
+    commit is durable by then, so recovery replays the shrink.
+    """
+    image = _general_truncate_image(canonical_images, jbd2_toolchain, tmp_path, 20)
+    base = _general_write_cat(image, "/long.bin", jbd2_toolchain)
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    activation_trace = fixture["success_trace"]
+    assert isinstance(patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    success = tmp_path / "general-truncate-crash-success.img"
+    _, trace = _general_truncate_case(
+        image,
+        success,
+        "/long.bin",
+        (5000,),
+        (8, 0, 0),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-CRASH-SUCCESS",
+    )
+    stat = _general_write_debugfs(image, "stat /long.bin", jbd2_toolchain)
+    inode_number = int(re.search(r"Inode: (\d+)", stat).group(1))
+    _, _, inode_offset = _ext4_inode_record(image, inode_number)
+    if case == "descriptor":
+        ordinal = sum(1 for kind, _, _ in activation_trace if kind == "write") + 1
+        expected = base
+    else:
+        ordinal = _write_ordinals_for_ext4_home(
+            trace, inode_offset // 1024, block_size=1024
+        )[-1]
+        expected = base[:5000]
+    torn = tmp_path / f"general-truncate-{case}-torn.img"
+    output, _, _ = run_recovery_forth(
+        image,
+        tmp_path / f"general-truncate-{case}-backing.img",
+        _general_truncate_forth(
+            "/long.bin", (5000,), (8, 0, 0), marker="EXT4-UNREACHED"
+        ),
+        patches=patches,
+        write_faults_by_ordinal={
+            ordinal: {
+                "stage": "media",
+                "sector_index": 1,
+                "byte_index": 0,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+        max_steps=600_000_000,
+    )
+    assert "\r\nEXT4-UNREACHED ok\r\n" not in output
+    recovered = tmp_path / f"general-truncate-{case}-recovered.img"
+    output, _, _ = run_recovery_forth(
+        torn,
+        recovered,
+        [
+            "T-ARENA CONSTANT _GTR-ARENA",
+            "_GTR-ARENA T-VOLUME EXT4-NEW CONSTANT _GTR-MOUNT-IOR CONSTANT _GTR-V",
+            "0 _GTR-V VFS-UNMOUNT CONSTANT _GTR-UNMOUNT-IOR",
+            (
+                "_GTR-MOUNT-IOR 0= _GTR-UNMOUNT-IOR 0= AND "
+                'IF ." EXT4-GENERAL-TRUNCATE-RECOVERED" THEN'
+            ),
+        ],
+        capture_media=recovered,
+    )
+    _assert_emitted(output, "EXT4-GENERAL-TRUNCATE-RECOVERED")
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+    assert _general_write_cat(recovered, "/long.bin", jbd2_toolchain) == expected
+
+
 @pytest.fixture(scope="session")
 def staged_multiblock_exact_fixture(
     extent_writer_activation_fixture: dict[str, object],
@@ -68655,10 +69165,6 @@ def staged_public_truncate_zero_fixture(
                 "CONSTANT _TZ-STAT-BEFORE-IOR"
             ),
             "_TZ-STAT VSF.BFREE @ CONSTANT _TZ-FREE-BEFORE",
-            (
-                "_TZ-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ "
-                "CONSTANT _TZ-PROTOCOL-OWNERS-BEFORE"
-            ),
             "50 _TZ-FD VFS-SEEK? CONSTANT _TZ-SEEK-IOR",
             "0 _TZ-FD VFS-TRUNCATE CONSTANT _TZ-IOR",
             "_TZ-FD FD.CUR-LO @ CONSTANT _TZ-CLAMPED",
@@ -68698,11 +69204,6 @@ def staged_public_truncate_zero_fixture(
                         "_TZ-V V.LAST-IOR @ 0=",
                         "_TZ-CLAMPED 0=",
                         "_TZ-CLOCK-CALLS @ 1 =",
-                        "_TZ-PROTOCOL-OWNERS-BEFORE 0=",
-                        (
-                            "_TZ-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ "
-                            "-1 ="
-                        ),
                         "_TZ-VN VN.SIZE-LO @ 0=",
                         "_TZ-VN VN.SIZE-HI @ 0=",
                         "_TZ-VN VN.BLOCKS @ 2 =",
@@ -68721,7 +69222,7 @@ def staged_public_truncate_zero_fixture(
                         "_TZ-STAT-BEFORE-IOR 0=",
                         "_TZ-STAT-AFTER-IOR 0=",
                         "_TZ-FREE-AFTER _TZ-FREE-BEFORE 1+ =",
-                        "_TZ-HOMES 1 =",
+                        "_TZ-HOMES 4 =",
                         "_TZ-WRITER _TZ-PROFILE-BASE =",
                         "_TZ-WRITER _EXT4-JWR-IDLE-CLEAN?",
                         "_TZ-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
@@ -68748,15 +69249,7 @@ def staged_public_truncate_zero_fixture(
                         "_TZ-PREAD-IOR 0=",
                         "_TZ-PREAD-ACTUAL 0=",
                         (
-                            "_XT-ZERO _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_EXT4-JTA-EXPECTED-INODE _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK "
+                            "_XW-DATA _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
@@ -69007,10 +69500,6 @@ def test_staged_vfs_truncate_zero_canonicalizes_hole_only_depth0_root(
                         "_T0-TRUNCATE-IOR 0=",
                         "_T0-V V.LAST-IOR @ 0=",
                         "_T0-CLOCK-CALLS @ 1 =",
-                        "_XT-ADD-CREDIT @ 3 =",
-                        "_XT-TARGET-CREDIT @ 1 =",
-                        "_XT-META-CAP @ 3 =",
-                        "_XT-TARGET-DRAINED @ -1 =",
                         "_T0-VN VN.SIZE-LO @ 0=",
                         "_T0-VN VN.SIZE-HI @ 0=",
                         "_T0-VN VN.BLOCKS @ 2 =",
@@ -69558,9 +70047,6 @@ def test_staged_vfs_truncate_zero_accepts_saturated_depth0_root(
                     "_T4-TRUNCATE-IOR 0=",
                     "_T4-V V.LAST-IOR @ 0=",
                     "_T4-CLOCK-CALLS @ 1 =",
-                    "_XT-ADD-CREDIT @ 3 =",
-                    "_XT-TARGET-CREDIT @ 5 =",
-                    "_XT-TARGET-DRAINED @ -1 =",
                     "_T4-VN VN.SIZE-LO @ 0=",
                     "_T4-VN VN.SIZE-HI @ 0=",
                     "_T4-VN VN.BLOCKS @ 2 =",
@@ -69690,265 +70176,6 @@ def test_staged_vfs_truncate_zero_accepts_saturated_depth0_root(
     ) == original_xattr
 
 
-def test_staged_vfs_truncate_zero_add_more_drains_linked_union(
-    canonical_images: dict[str, Path],
-    jbd2_toolchain: dict[str, object],
-    tmp_path: Path,
-) -> None:
-    """Public ADD_MORE drains the retained linked union before clearing it."""
-    path = canonical_images["primary-1k-i256"]
-    source_patches = list(_modern_orphan_patches(path, (17,)))
-    superblock, target_inode, _ = _ext4_inode_record(path, 14)
-    _, seed_inode, seed_offset = _ext4_inode_record(path, 17)
-    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    target_data = _extent_root_physical(target_inode, 0)
-    target_xattr = struct.unpack_from("<I", target_inode, 0x68)[0]
-    target_links = struct.unpack_from("<H", target_inode, 0x1A)[0]
-    target_generation = struct.unpack_from("<I", target_inode, 0x64)[0]
-    seed_data = (
-        _extent_root_physical(seed_inode, 0),
-        _extent_root_physical(seed_inode, 2),
-    )
-    seed_blocks = struct.unpack_from("<I", seed_inode, 0x1C)[0]
-    seed_links = struct.unpack_from("<H", seed_inode, 0x1A)[0]
-    seed_generation = struct.unpack_from("<I", seed_inode, 0x64)[0]
-    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
-        struct.unpack_from("<I", superblock, 0x158)[0] << 32
-    )
-    epoch_ms = 3_000_004_321_765
-
-    assert block_size == 1024
-    assert target_data == 1346
-    assert target_xattr > 0
-    assert target_links == 2
-    assert target_generation == 0
-    assert seed_data == (1348, 1350)
-    assert seed_blocks == 4
-    assert seed_links == 1
-
-    zero_size_seed = bytearray(seed_inode)
-    struct.pack_into("<I", zero_size_seed, 0x04, 0)
-    struct.pack_into("<I", zero_size_seed, 0x6C, 0)
-    zero_size_seed = _inode_with_checksum(
-        source_patches[0][1],
-        17,
-        zero_size_seed,
-    )
-    source_patches.append((seed_offset, zero_size_seed))
-    source_patches = tuple(source_patches)
-
-    image = tmp_path / "staged-public-truncate-zero-add-more.img"
-    output, _, _ = run_recovery_forth(
-        path,
-        image,
-        [
-            ": _TZM-MOUNT ( vfs -- ior )",
-            (
-                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF "
-                "_EXT4-MOUNT-FAIL EXIT THEN"
-            ),
-            (
-                "_EXT4-M-CTX @ _EXT4-MOUNT-TAIL-RELEASE "
-                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
-            ),
-            (
-                "_EXT4-M-CTX @ _EXT4-M-V @ "
-                "_EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
-                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
-            ),
-            (
-                "_EXT4-M-CTX @ _EXT4-AUTHENTICATE-ORPHAN-PLAN "
-                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
-            ),
-            (
-                "_EXT4-M-CTX @ _EXT4-JWR-REBASE-MOUNTED "
-                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
-            ),
-            (
-                "_EXT4-M-V @ V.FLAGS DUP @ VFS-F-DIRTY INVERT AND SWAP ! "
-                "_EXT4-M-CTX @ _EXT4-M-V @ _EXT4-PUBLISH-ROOT"
-            ),
-            (
-                "-1 _EXT4-M-CTX @ _EXT4-C.J.WRITER-CURRENT + ! "
-                "-1 _EXT4-M-CTX @ _EXT4-C.READY + ! 0 ;"
-            ),
-            "CREATE _TZM-OPS VFS-OPS-SIZE ALLOT",
-            "EXT4-STAGED-WRITE-OPS _TZM-OPS VFS-OPS-SIZE CMOVE",
-            "' _TZM-MOUNT _TZM-OPS VFS-OP-MOUNT CELLS + !",
-            "CREATE _TZM-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-            (
-                "EXT4-STAGED-WRITE-BINDING _TZM-BINDING "
-                "VFS-BINDING-DESC-SIZE CMOVE"
-            ),
-            "_TZM-OPS _TZM-BINDING VB.OPS !",
-            ": _TZM-NEW _TZM-BINDING SWAP VFS-NEW ;",
-            "VARIABLE _TZM-CLOCK-CALLS",
-            (
-                ": _TZM-NOW ( context -- epoch-ms ior ) "
-                "DROP 1 _TZM-CLOCK-CALLS +! "
-                f"{epoch_ms} 0 ;"
-            ),
-            "CREATE _TZM-STAT VFS-STATFS-SIZE ALLOT",
-            "VARIABLE _TZM-SEED-VN",
-            "VARIABLE _TZM-SEED-BLOCKS-BEFORE",
-            "T-ARENA CONSTANT _TZM-ARENA",
-            (
-                "_TZM-ARENA T-VOLUME _TZM-NEW "
-                "CONSTANT _TZM-MOUNT-IOR CONSTANT _TZM-V"
-            ),
-            "_TZM-V _EXT4-CTX CONSTANT _TZM-CTX",
-            (
-                "_TZM-CTX _EXT4-C.O.ACTIVE + @ "
-                "CONSTANT _TZM-PRE-ACTIVE"
-            ),
-            (
-                "_TZM-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
-                "CONSTANT _TZM-PRE-MODERN"
-            ),
-            (
-                "' _TZM-NOW 0 _TZM-V EXT4-BIND-WRITE-CLOCK? "
-                "CONSTANT _TZM-CLOCK-IOR"
-            ),
-            *_ext4_dedicated_writer_profile_forth(
-                "_TZM-PROFILE", "_TZM-V", 5, 0, 0
-            ),
-            (
-                'S" /fixture/payload.txt" '
-                "VFS-FF-READ VFS-FF-WRITE OR _TZM-V VFS-OPEN? "
-                "CONSTANT _TZM-OPEN-IOR CONSTANT _TZM-FD"
-            ),
-            "_TZM-FD FD.INODE @ D.VNODE @ CONSTANT _TZM-VN",
-            (
-                ": _TZM-CAPTURE-SEED-VN ( -- ) "
-                f"17 {seed_generation} _TZM-V _VFS-FIND-VNODE "
-                "DUP _TZM-SEED-VN ! ?DUP IF "
-                "VN.BLOCKS @ _TZM-SEED-BLOCKS-BEFORE ! THEN ; "
-                "_TZM-CAPTURE-SEED-VN"
-            ),
-            (
-                ": _TZM-SEED-BLOCKS-ZERO? ( -- flag ) "
-                "_TZM-SEED-VN @ ?DUP IF VN.BLOCKS @ 0= "
-                "ELSE FALSE THEN ;"
-            ),
-            (
-                "_TZM-STAT VFS-STATFS-SIZE _TZM-V VFS-STATFS "
-                "CONSTANT _TZM-BEFORE-IOR"
-            ),
-            "_TZM-STAT VSF.BFREE @ CONSTANT _TZM-FREE-BEFORE",
-            "0 _TZM-FD VFS-TRUNCATE CONSTANT _TZM-IOR",
-            (
-                "_TZM-STAT VFS-STATFS-SIZE _TZM-V VFS-STATFS "
-                "CONSTANT _TZM-AFTER-IOR"
-            ),
-            "_TZM-STAT VSF.BFREE @ CONSTANT _TZM-FREE-AFTER",
-            *_forth_accumulated_conjunction(
-                "_TZM-ALL-CLEAN",
-                [
-                    "_TZM-MOUNT-IOR 0=",
-                    "_TZM-PRE-ACTIVE 1 =",
-                    "_TZM-PRE-MODERN 1 =",
-                    "_TZM-CLOCK-IOR 0=",
-                    "_TZM-PROFILE-SIZE-IOR 0=",
-                    "_TZM-PROFILE-BIND-IOR 0=",
-                    "_TZM-OPEN-IOR 0=",
-                    "_TZM-SEED-VN @ 0<>",
-                    "_TZM-SEED-BLOCKS-BEFORE @ 4 =",
-                    "_TZM-IOR 0=",
-                    "_TZM-V V.LAST-IOR @ 0=",
-                    "_TZM-CLOCK-CALLS @ 1 =",
-                    "_XT-ADD-CREDIT @ 2 =",
-                    "_XT-TARGET-CREDIT @ 5 =",
-                    "_XT-PLAN-META-CAP @ 5 =",
-                    "_XT-PLAN-REVOKE-CAP @ 0=",
-                    "_XT-META-CAP @ 5 =",
-                    "_XT-REVOKE-CAP @ 0=",
-                    "_XT-TARGET-DRAINED @ -1 =",
-                    "_TZM-VN VN.SIZE-LO @ 0=",
-                    "_TZM-VN VN.SIZE-HI @ 0=",
-                    "_TZM-VN VN.BLOCKS @ 2 =",
-                    f"_TZM-VN VN.GEN @ {target_generation} =",
-                    f"_TZM-VN VN.NLINK @ {target_links} =",
-                    "_TZM-SEED-BLOCKS-ZERO?",
-                    "_TZM-BEFORE-IOR 0=",
-                    "_TZM-AFTER-IOR 0=",
-                    "_TZM-FREE-AFTER _TZM-FREE-BEFORE 3 + =",
-                    "_TZM-CTX _EXT4-C.O.ACTIVE + @ 0=",
-                    "_TZM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
-                    "_TZM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                    "_TZM-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                    (
-                        "_TZM-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
-                        "_EXT4-RO-ORPHAN-PRESENT AND 0="
-                    ),
-                    "_TZM-CTX _EXT4-C.RECOVERY + @ 0<>",
-                    "_TZM-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
-                    "_TZM-CTX _EXT4-C.J.WRITER + @ _EXT4-JWR-IDLE-CLEAN?",
-                    "_TZM-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                    "_TZM-V V.FLAGS @ VFS-F-RO AND 0=",
-                ],
-            ),
-            (
-                '_TZM-ALL-CLEAN @ IF ." '
-                'EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE" ELSE ." '
-                'EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE-CHECK " '
-                "_TZM-ALL-CLEAN-FIRST-FAILURE @ . THEN"
-            ),
-            "_TZM-FD VFS-CLOSE? CONSTANT _TZM-CLOSE-IOR",
-            "0 _TZM-V VFS-UNMOUNT CONSTANT _TZM-UNMOUNT-IOR",
-            (
-                "_TZM-CLOSE-IOR 0= _TZM-UNMOUNT-IOR 0= AND "
-                "_TZM-PROFILE-ARENA ARENA-USED 0= AND "
-                'IF ." EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE-UNMOUNTED" THEN'
-            ),
-        ],
-        patches=source_patches,
-        capture_media=image,
-        max_steps=_MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS,
-    )
-    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE")
-    _assert_emitted(
-        output,
-        "EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE-UNMOUNTED",
-    )
-
-    final_superblock, final_target, _ = _ext4_inode_record(image, 14)
-    _, final_seed, _ = _ext4_inode_record(image, 17)
-    final_free_blocks = struct.unpack_from("<I", final_superblock, 0x0C)[0] | (
-        struct.unpack_from("<I", final_superblock, 0x158)[0] << 32
-    )
-    assert final_free_blocks == free_blocks_before + 3
-    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
-    assert struct.unpack_from("<I", final_target, 0x04)[0] == 0
-    assert struct.unpack_from("<I", final_target, 0x1C)[0] == 2
-    assert struct.unpack_from("<I", final_target, 0x68)[0] == target_xattr
-    assert struct.unpack_from("<H", final_target, 0x1A)[0] == target_links
-    assert struct.unpack_from("<HHHH", final_target, 0x28) == (
-        0xF30A,
-        0,
-        4,
-        0,
-    )
-    assert struct.unpack_from("<I", final_seed, 0x04)[0] == 0
-    assert struct.unpack_from("<I", final_seed, 0x1C)[0] == 0
-    assert struct.unpack_from("<H", final_seed, 0x1A)[0] == seed_links
-    assert struct.unpack_from("<HHHH", final_seed, 0x28) == (
-        0xF30A,
-        0,
-        4,
-        0,
-    )
-    assert not any(final_seed[0x34:0x64])
-    assert _ext4_block_allocation_state(
-        image,
-        (target_data, *seed_data),
-    ) == {
-        target_data: False,
-        seed_data[0]: False,
-        seed_data[1]: False,
-    }
-    _assert_e2fsck_clean(image, jbd2_toolchain)
-
-
 def test_staged_vfs_truncate_zero_descriptor_tear_retains_old_file(
     staged_public_truncate_zero_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
@@ -70069,15 +70296,7 @@ def test_staged_vfs_truncate_zero_descriptor_tear_retains_old_file(
                         "_TZD-V V.FLAGS @ VFS-F-RO AND 0<>",
                         "_TZD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         (
-                            "_XT-ZERO _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_EXT4-JTA-EXPECTED-INODE _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK "
+                            "_XW-DATA _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
@@ -70138,254 +70357,6 @@ def test_staged_vfs_truncate_zero_descriptor_tear_retains_old_file(
     assert stable_sha256 == recovery_sha256
     assert _ext4_block_allocation_state(stable, (data_block,)) == {
         data_block: True
-    }
-    _assert_e2fsck_clean(stable, jbd2_toolchain)
-
-
-def test_staged_vfs_truncate_zero_add_home_tear_converges_via_orphan(
-    staged_public_truncate_zero_fixture: dict[str, object],
-    jbd2_toolchain: dict[str, object],
-    tmp_path: Path,
-) -> None:
-    """A committed torn zero-size home must replay, free, and clear."""
-    case = staged_public_truncate_zero_fixture
-    path = case["source"]
-    source_patches = case["source_patches"]
-    success_trace = case["trace"]
-    block_size = case["block_size"]
-    inode_number = case["inode_number"]
-    inode_home = case["inode_home"]
-    data_block = case["data_block"]
-    old_blocks = case["old_blocks"]
-    old_links = case["old_links"]
-    old_generation = case["old_generation"]
-    epoch_ms = case["epoch_ms"]
-    original_data = case["original_data"]
-    original_inode_home = case["original_inode_home"]
-    assert isinstance(path, Path)
-    assert isinstance(source_patches, tuple)
-    assert isinstance(success_trace, tuple)
-    assert isinstance(block_size, int)
-    assert isinstance(inode_number, int)
-    assert isinstance(inode_home, int)
-    assert isinstance(data_block, int)
-    assert isinstance(old_blocks, int)
-    assert isinstance(old_links, int)
-    assert isinstance(old_generation, int)
-    assert isinstance(epoch_ms, int)
-    assert isinstance(original_data, bytes)
-    assert isinstance(original_inode_home, bytes)
-
-    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
-    _, inode_block_offset = divmod(inode_offset, block_size)
-    expected_add_inode_home = _staged_write_timestamped_inode_home(
-        superblock,
-        inode,
-        original_inode_home,
-        inode_number=inode_number,
-        inode_block_offset=inode_block_offset,
-        epoch_ms=epoch_ms,
-        expected_size=0,
-    )
-    inode_ordinals = _write_ordinals_for_ext4_home(
-        success_trace, inode_home, block_size=block_size
-    )
-    assert len(inode_ordinals) == 2
-    add_inode_ordinal = inode_ordinals[0]
-    add_inode_event = _trace_event_index_for_ordinal(
-        success_trace, "write", add_inode_ordinal
-    )
-    tear_offset = 300
-    expected_torn_inode = (
-        expected_add_inode_home[:tear_offset]
-        + original_inode_home[tear_offset:]
-    )
-    assert expected_torn_inode not in {
-        original_inode_home,
-        expected_add_inode_home,
-    }
-    seconds, milliseconds = divmod(epoch_ms, 1000)
-    nanoseconds = milliseconds * 1_000_000
-
-    faulted = tmp_path / "staged-truncate-zero-add-home-faulted.img"
-    repaired = tmp_path / "staged-truncate-zero-add-home-repaired.img"
-    stable = tmp_path / "staged-truncate-zero-add-home-stable.img"
-    output, failed_trace, _ = run_recovery_forth(
-        path,
-        faulted,
-        [
-            "VARIABLE _TZH-CLOCK-CALLS",
-            (
-                ": _TZH-NOW ( context -- epoch-ms ior ) "
-                "DROP 1 _TZH-CLOCK-CALLS +! "
-                f"{epoch_ms} 0 ;"
-            ),
-            "T-ARENA CONSTANT _TZH-ARENA",
-            (
-                "_TZH-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
-                "CONSTANT _TZH-MOUNT-IOR CONSTANT _TZH-V"
-            ),
-            "_TZH-V _EXT4-CTX CONSTANT _TZH-CTX",
-            (
-                "' _TZH-NOW 0 _TZH-V EXT4-BIND-WRITE-CLOCK? "
-                "CONSTANT _TZH-CLOCK-IOR"
-            ),
-            *_ext4_dedicated_writer_profile_forth(
-                "_TZH-PROFILE", "_TZH-V", 5, 0, 0
-            ),
-            (
-                'S" /fixture/payload.txt" '
-                "VFS-FF-READ VFS-FF-WRITE OR _TZH-V VFS-OPEN? "
-                "CONSTANT _TZH-OPEN-IOR CONSTANT _TZH-FD"
-            ),
-            "_TZH-FD FD.INODE @ D.VNODE @ CONSTANT _TZH-VN",
-            "50 _TZH-FD VFS-SEEK? CONSTANT _TZH-SEEK-IOR",
-            "0 _TZH-FD VFS-TRUNCATE CONSTANT _TZH-IOR",
-            "_TZH-V V.LAST-IOR @ CONSTANT _TZH-LAST-IOR",
-            "_TZH-CTX _EXT4-C.J.WRITER + @ CONSTANT _TZH-WRITER",
-            *_forth_accumulated_conjunction(
-                "_TZH-ALL-FAULTED",
-                    [
-                        "_TZH-MOUNT-IOR 0=",
-                        "_TZH-CLOCK-IOR 0=",
-                        "_TZH-PROFILE-SIZE-IOR 0=",
-                        "_TZH-PROFILE-BIND-IOR 0=",
-                        "_TZH-OPEN-IOR 0=",
-                        "_TZH-SEEK-IOR 0=",
-                        "_TZH-IOR 0=",
-                        (
-                            "_TZH-LAST-IOR VFS-IOR-DOMAIN "
-                            "VFS-IOR-D-VOLUME ="
-                        ),
-                        "_TZH-LAST-IOR VFS-IOR-REASON VFS-R-IO =",
-                        (
-                            "_TZH-LAST-IOR VFS-IOR-FLAGS "
-                            "VFS-IOR-F-PARTIAL AND 0<>"
-                        ),
-                        "_TZH-VN VN.SIZE-LO @ 0=",
-                        "_TZH-VN VN.SIZE-HI @ 0=",
-                        f"_TZH-VN VN.BLOCKS @ {old_blocks} =",
-                        f"_TZH-VN VN.NLINK @ {old_links} =",
-                        f"_TZH-VN VN.GEN @ {old_generation} =",
-                        f"_TZH-VN VN.MTIME @ {seconds} =",
-                        f"_TZH-VN VN.MTIME-NS @ {nanoseconds} =",
-                        f"_TZH-VN VN.CTIME @ {seconds} =",
-                        f"_TZH-VN VN.CTIME-NS @ {nanoseconds} =",
-                        "_TZH-VN VN.FLAGS @ VFS-IF-DIRTY AND 0<>",
-                        "_TZH-FD FD.CUR-LO @ 0=",
-                        "_TZH-CLOCK-CALLS @ 1 =",
-                        "_TZH-WRITER _TZH-PROFILE-BASE =",
-                        (
-                            "_TZH-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-FAULTED ="
-                        ),
-                        (
-                            "_TZH-WRITER _EXT4-JWR.PHASE + @ "
-                            "_EXT4-JWP-CHECKPOINT-HOME ="
-                        ),
-                        "_TZH-WRITER _EXT4-JWR-VALID?",
-                        "_TZH-WRITER _EXT4-JWR.META-CREDIT + @ 3 =",
-                        "_TZH-WRITER _EXT4-JWR.META-USED + @ 3 =",
-                        "_TZH-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
-                        "_TZH-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
-                        "_TZH-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
-                        (
-                            "_TZH-WRITER _EXT4-JWR.CP-MODE + @ "
-                            "_EXT4-JCPM-ORPHAN-MODERN-ADD-FIRST ="
-                        ),
-                        (
-                            "_TZH-WRITER _EXT4-JWR.CP-O-INO + @ "
-                            f"{inode_number} ="
-                        ),
-                        (
-                            "0 _TZH-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{inode_home} ="
-                        ),
-                        (
-                            "1 _TZH-WRITER _EXT4-JWR-META-ENTRY @ "
-                            "_TZH-WRITER _EXT4-JWR.CP-O-HOME + @ ="
-                        ),
-                        (
-                            "2 _TZH-WRITER _EXT4-JWR-META-ENTRY @ "
-                            "_TZH-CTX _EXT4-PRIMARY-SUPER-BLOCK ="
-                        ),
-                        (
-                            "0 _TZH-WRITER _EXT4-JWR-META-ENTRY "
-                            "2 CELLS + @ _TZH-WRITER "
-                            "_EXT4-JWR.CP-TARGET-CRC + @ ="
-                        ),
-                        (
-                            "1 _TZH-WRITER _EXT4-JWR-META-ENTRY "
-                            "2 CELLS + @ _TZH-WRITER "
-                            "_EXT4-JWR.CP-ORPHAN-CRC + @ ="
-                        ),
-                        (
-                            "2 _TZH-WRITER _EXT4-JWR-META-ENTRY "
-                            "2 CELLS + @ _TZH-WRITER "
-                            "_EXT4-JWR.CP-ADD-SUPER-CRC + @ ="
-                        ),
-                        "_TZH-WRITER _EXT4-JWR-CP-AUTHORITY?",
-                        "_TZH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
-                        "_TZH-CTX _EXT4-C.RECOVERY + @ 0<>",
-                        "_TZH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
-                        "_TZH-V V.FLAGS @ VFS-F-RO AND 0<>",
-                        "_TZH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                        (
-                            "_XT-ZERO _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_EXT4-JTA-EXPECTED-INODE _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                    ],
-            ),
-            (
-                '_TZH-ALL-FAULTED @ IF ." '
-                'EXT4-PUBLIC-TRUNCATE-ZERO-ADD-HOME" ELSE ." '
-                'EXT4-PUBLIC-TRUNCATE-ZERO-ADD-HOME-CHECK " '
-                '_TZH-ALL-FAULTED-FIRST-FAILURE @ . THEN'
-            ),
-        ],
-        patches=source_patches,
-        write_faults_by_ordinal={
-            add_inode_ordinal: {
-                "stage": "media",
-                "sector_index": 0,
-                "byte_index": tear_offset,
-                "result": STORAGE_RESULT_MEDIA_FAILURE,
-                "command": STORAGE_CMD_WRITE,
-            }
-        },
-        capture_media=faulted,
-    )
-    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-ADD-HOME")
-    assert failed_trace == success_trace[: add_inode_event + 1]
-    assert _read_ext4_home(
-        faulted, inode_home, block_size=block_size
-    ) == expected_torn_inode
-    assert _read_ext4_home(
-        faulted, data_block, block_size=block_size
-    ) == original_data
-    assert _ext4_block_allocation_state(faulted, (data_block,)) == {
-        data_block: True
-    }
-
-    recovery_trace, _ = _assert_singleton_cleanup_media_converges(
-        faulted,
-        repaired,
-        stable,
-        protocol="modern",
-    )
-    assert recovery_trace
-    assert _ext4_block_allocation_state(stable, (data_block,)) == {
-        data_block: False
     }
     _assert_e2fsck_clean(stable, jbd2_toolchain)
 
@@ -70614,7 +70585,7 @@ def staged_public_truncate_fixture(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XT-ZERO _EXT4-MAX-BLOCK "
+                                "_XW-DATA _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                         ]
@@ -70861,7 +70832,7 @@ def test_staged_vfs_truncate_descriptor_tear_retains_old_eof(
                             "_TDF-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_TDF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                             (
-                                "_XT-ZERO _EXT4-MAX-BLOCK "
+                                "_XW-DATA _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                         ]
@@ -71070,7 +71041,7 @@ def test_staged_vfs_truncate_inode_home_tear_replays_both_homes(
                             "_TIH-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_TIH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                             (
-                                "_XT-ZERO _EXT4-MAX-BLOCK "
+                                "_XW-DATA _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                         ]
@@ -71189,7 +71160,7 @@ def test_staged_vfs_truncate_without_clock_restores_cached_size_before_io(
                         "_TNC-CTX _EXT4-C.J.WRITER + @ 0=",
                         "_TNC-CTX _EXT4-C.WCLOCK-XT + @ 0=",
                         (
-                            "_XT-ZERO _EXT4-MAX-BLOCK "
+                            "_XW-DATA _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                     ]
@@ -71201,9 +71172,15 @@ def test_staged_vfs_truncate_without_clock_restores_cached_size_before_io(
     _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-NO-CLOCK")
 
 
-def test_staged_vfs_truncate_policy_boundaries_refuse_before_clock(
+def test_staged_vfs_truncate_without_writer_refuses_before_clock(
     read_side_image: Path,
 ) -> None:
+    """Without a bound writer profile every size change refuses early.
+
+    The refusals come before the trusted clock is sampled, so sizes and
+    cursors stay as they were.  Truncating to the current size refuses as
+    unsupported, so the VFS never marks an unchanged volume dirty.
+    """
     output = run_forth(
         read_side_image,
         [
@@ -71253,18 +71230,9 @@ def test_staged_vfs_truncate_policy_boundaries_refuse_before_clock(
                             "_TPR-EQUAL-IOR EXT4-D-WRITE-POLICY "
                             "_EXT4-UNSUPPORTED ="
                         ),
-                        (
-                            "_TPR-GROW-IOR EXT4-D-WRITE-POLICY "
-                            "_EXT4-UNSUPPORTED ="
-                        ),
-                        (
-                            "_TPR-ZERO-IOR VFS-IOR-REASON "
-                            "VFS-R-NOSPC ="
-                        ),
-                        (
-                            "_TPR-CROSS-IOR EXT4-D-WRITE-POLICY "
-                            "_EXT4-UNSUPPORTED ="
-                        ),
+                        "_TPR-GROW-IOR VFS-IOR-REASON VFS-R-NOSPC =",
+                        "_TPR-ZERO-IOR VFS-IOR-REASON VFS-R-NOSPC =",
+                        "_TPR-CROSS-IOR VFS-IOR-REASON VFS-R-NOSPC =",
                         "_TPR-V V.LAST-IOR @ _TPR-CROSS-IOR =",
                         "_TPR-P-VN VN.SIZE-LO @ 54 =",
                         "_TPR-P-VN VN.SIZE-HI @ 0=",
@@ -71278,7 +71246,7 @@ def test_staged_vfs_truncate_policy_boundaries_refuse_before_clock(
                         "_TPR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_TPR-V V.FLAGS @ VFS-F-RO AND 0=",
                         (
-                            "_XT-ZERO _EXT4-MAX-BLOCK "
+                            "_XW-DATA _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                     ]
@@ -87288,8 +87256,8 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
         "_EXT4-S32@": 6,
         "_EXT4-I-BLOCK-ZERO-FROM?": 1,
         "_EXT4-DECODE-SPECIAL": 1,
-        "_EXT4-RESTAMP-INODE": 16,
-        "_EXT4-SET-INODE-MTIME-CTIME": 10,
+        "_EXT4-RESTAMP-INODE": 15,
+        "_EXT4-SET-INODE-MTIME-CTIME": 9,
         "_EXT4-SET-INODE-CTIME": 7,
         "_EXT4-ENCODE-I-BLOCKS": 5,
     }
@@ -87459,7 +87427,7 @@ def test_ext4_xattr_block_service_is_private_acyclic_unit() -> None:
     assert "EXT4-D-XATTR _EXT4-CORRUPT EXIT" in loader
 
     expected_facade_calls = {
-        "_EXT4-LOAD-XATTR-BLOCK": 8,
+        "_EXT4-LOAD-XATTR-BLOCK": 7,
         "_EXT4-STAMP-XATTR-BLOCK": 2,
         "_EXT4-XATTR-MAGIC": 1,
         "_EXT4-XATTR-REFCOUNT-MAX": 2,
@@ -88845,21 +88813,21 @@ def test_ext4_exact_block_accounting_uses_shared_logical_popcount() -> None:
         assert match is not None, f"missing Forth word {name}"
         return match.group("body")
 
-    counter = word_body("_XT-COUNT-CLEAR-GROUP-BITS")
-    accounting = word_body("_XT-REQUIRE-EXACT-BLOCK-ACCOUNTING")
+    counter = word_body("_EXT4-RBA-COUNT-CLEAR")
+    accounting = word_body("_EXT4-REQUIRE-EXACT-BLOCK-ACCOUNTING")
 
     assert "REQUIRE ../../bitset.f" in source
     assert (
-        "_XT-CTX @ _EXT4-C.BLOCK + _XT-ACCOUNT-GROUP-BLOCKS @\n"
+        "_EXT4-RBA-CTX @ _EXT4-C.BLOCK + _EXT4-RBA-GROUP-BLOCKS @\n"
         "    BITSET-COUNT-SET?"
     ) in counter
     assert "DROP 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in counter
-    assert "_XT-ACCOUNT-GROUP-BLOCKS @ SWAP - 0" in counter
+    assert "_EXT4-RBA-GROUP-BLOCKS @ SWAP - 0" in counter
     assert (
-        "_XT-COUNT-CLEAR-GROUP-BITS\n"
-        "            _XT-IOR ! _XT-ACCOUNT-GROUP-FREE !\n"
-        "            _XT-IOR @ ?DUP IF EXIT THEN\n"
-        "            _XT-ACCOUNT-GROUP-FREE @"
+        "_EXT4-RBA-COUNT-CLEAR\n"
+        "            _EXT4-RBA-IOR ! _EXT4-RBA-GROUP-FREE !\n"
+        "            _EXT4-RBA-IOR @ ?DUP IF EXIT THEN\n"
+        "            _EXT4-RBA-GROUP-FREE @"
     ) in accounting
     assert "_XT-BYTE-POPCOUNT" not in source
     assert "_XT-ACCOUNT-GROUP-SET" not in source
