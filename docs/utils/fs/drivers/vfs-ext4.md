@@ -41,11 +41,12 @@ directly to a canonical two-leaf depth-zero HTree. A full selected leaf in an
 existing depth-zero HTree may also split into one old and one newly allocated
 leaf while the root retains an entry slot and the admitted parent extent map
 can attach the new EOF block. Its `TRUNCATE` sets a linked regular file's
-size to any value in one transaction: a shrink releases every block past the
-new EOF at any extent depth and zeroes the new EOF block's tail as a journaled
-after-image, and a growth leaves a hole after zeroing the old EOF block's tail.
-A release too large for one transaction under the bound profile refuses before
-any media I/O. The staged surface also provides three `UNLINK` forms. A
+size to any value: a shrink releases every block past the new EOF at any
+extent depth and zeroes the new EOF block's tail, and a growth leaves a hole
+after zeroing the old EOF block's tail. A release too large for one
+transaction under the bound profile runs across transactions behind a modern
+orphan record, which mount recovery completes after a crash. The staged
+surface also provides three `UNLINK` forms. A
 regular inode with more than one link may lose one same-parent name without
 changing allocation, even when an open descriptor retains the removed dentry.
 An already-empty inode with one link and no external allocation may lose its
@@ -830,11 +831,12 @@ before publication: a `RECOVER`-clear input first enters a tear-safe recovery
 epoch through writer-free `AKW1` activation while preserving
 `ORPHAN_PRESENT`; `AKR1` then lands an empty checksum-v3 journal and a
 checksummed primary superblock with both transient bits clear. Any union whose
-records all fit the exact linked-truncate shapes (an inline depth-0 extent map
-or an exact empty legacy-format map), empty/one-to-four-entry inline-depth-0,
-resident depth-1 fanout, or admitted legacy direct/indirect unlinked-delete slices is
-transactionally drained before mount
-publication; a union containing any other record returns stable
+linked records hold extent trees of any depth or an exact empty legacy-format
+map, and whose unlinked records fit the empty/one-to-four-entry
+inline-depth-0, resident depth-1 fanout, or admitted legacy direct/indirect
+delete slices, is transactionally drained before mount publication: release
+passes free a linked record's blocks past EOF before its final cleanup
+removes it. A union containing any other record returns stable
 `EXT4-D-RECOVERY` without a cleanup write. Malformed authority still fails
 closed, and no public mutation capability is exposed. Malformed links,
 cycles, out-of-range locators, and duplicate inode membership return
@@ -1480,10 +1482,17 @@ canonical map order followed by the xattr.
 
 `_EXT4-JTX-STAGE-ORPHAN-CLEANUP` owns an initially empty metadata-only
 transaction for one deterministically selected record of either protocol. It
-dispatches by the authenticated link count, and composes either admitted
-zero-size linked truncation or an admitted unlinked inode release with modern slot
-removal or legacy-head advancement. It requires used and active
-metadata homes to equal the exact credit, then seals protocol- and operation-specific
+dispatches by the authenticated link count. A linked record whose inode still
+maps blocks past EOF gets one release pass. A pass that leaves blocks past
+EOF keeps the record and seals its own certificate, described with TRUNCATE
+below; one that ends the release, or a record whose release is already
+complete, composes the linked record's final cleanup. The transaction
+composes that final cleanup, or an admitted unlinked inode release, with
+modern slot removal or legacy-head advancement. A deletion requires used and
+active metadata homes to equal the exact credit; a linked final cleanup that
+ends a release uses at most the pass's capacity and may hold a cancelled
+entry for a tree node it edited and then freed. The transaction then seals
+protocol- and operation-specific
 raw authority plus retained after-image CRC32Cs into the arena-owned writer.
 Modern modes bind the logical block, slot, physical orphan-file home, and
 generation. Legacy modes bind the raw checksummed primary super, head inode,
@@ -1509,12 +1518,15 @@ valid zero CRC distinct from “not reconstructed yet,” so the strict pre-home
 comparison cannot skip a zero-valued checksum. The retained
 transaction entries and
 semantic verifier bind every distinct touched block-bitmap after-image and
-coalesced data-group GDT page. For linked truncation the explicit target-entry
-count binds the authenticated pre-truncation data-entry count: an empty extent
-root or exact empty legacy-format map has zero, while a nonempty inline extent
-root binds raw `eh_entries`. An empty legacy-format map additionally seals
-data-map kind `NONE` and a zero range/revoke vector; the raw and staged checks
-bind the clear `EXTENTS` flag and all-zero `i_block` array. For deletion, the
+coalesced data-group GDT page. For a linked record the target-entry count
+binds the raw `eh_entries` of its inline root, or zero for an exact empty
+legacy-format map, with data-map kind `NONE` and a zero range vector, and the
+certificate binds the checksum of the target's whole pre-image record, so the
+reload before the first home write proves the target unchanged since sealing.
+A final cleanup stages the target when it also ends the release or clears a
+nonterminal legacy head's `i_dtime` successor, and then allows only the block
+count, extent root, that link, and the checksum to differ from the
+pre-image; it binds the tail block it zeroes. For deletion, the
 target-entry count binds the admitted inline, external-leaf, direct,
 single-indirect, or sparse-double semantic data-entry count plus a mandatory
 zero target after-image. No valid CRC32C value is
@@ -1522,24 +1534,23 @@ reserved as a sentinel. Mode is published last; once published, every generic
 and typed staging entry point returns busy, while abort and emit remain legal.
 The certificate also binds the exact pre-transaction total, modern, and legacy
 orphan counts and publishes an operation/protocol-specific `FINAL` mode for a
-one-record prestate or `MORE` mode for a larger prestate. Abort and every
+one-record prestate or `MORE` mode for a larger prestate, or the protocol's
+`RELEASE` mode for a release pass, whose post-checkpoint union equals its
+prestate. Abort and every
 successful writer rebase scrub the complete sealed transaction certificate;
 this is distinct from the operation-scoped reverse-owner proof.
 
 `_EXT4-MEASURE-ORPHAN-CLEANUP` applies the same per-record authentication
 without allocating a writer or publishing an after-image. It returns exact
 metadata and revoke credits as explicit values; no caller depends on ambient
-post-measurement state. An already-empty-map record costs one protocol home for
-a modern orphan-file slot or a terminal legacy orphan-protocol head; a
-nonterminal legacy head also needs the target inode-table home to clear its
-consumed `i_dtime` successor. A nonempty linked extent map under the modern orphan
-protocol starts with the target inode table, primary super, and orphan-file
-block; under the legacy orphan protocol it starts with the target inode table
-and primary super. Both add one uniquely owned block
-bitmap per touched group and one copy of each distinct primary GDT page. Thus
-the canonical one-block linked-truncate legacy-protocol fixture has exact
-credit four, while its already-empty-map form has credit one. The
-geometry-bounded, constant-space
+post-measurement state. A linked record whose inode maps blocks past EOF
+measures a release pass: the bound writer profile's capacity, or for mount
+recovery a writer sized to free one full leaf of fragmented extents per pass
+and halved until the mount arena and the journal hold it. Otherwise its final
+cleanup costs one protocol home for a modern orphan-file slot or a terminal
+legacy head, one more for the tail block when bytes past EOF need zeroing, and
+the target inode-table home for a nonterminal legacy head, whose consumed
+`i_dtime` successor it clears. A deletion's geometry-bounded, constant-space
 group scan imposes no candidate array or cleanup-specific capacity. A deletion
 adds one revoke for every admitted external map-metadata block (each depth-1
 extent leaf or legacy pointer block) and one for a uniquely
@@ -1758,23 +1769,29 @@ The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
 remain read-only. Geometry- and arena-bounded transactional completion is
-implemented for unions of the exact linked zero-size inline-depth-0 extent or
-exact empty legacy-format map and nonnegative-size inline-depth-0, resident
-depth-1 fanout, or legacy
-direct/indirect unlinked-inode cases admitted above under both orphan mechanisms. The
+implemented for unions of linked records with extent trees of any depth or an
+exact empty legacy-format map, and of the nonnegative-size inline-depth-0,
+resident depth-1 fanout, or legacy direct/indirect unlinked-inode cases
+admitted above, under both orphan mechanisms. The
 implementation adds no fixed cleanup
 record-count constant; positive union-drain qualification currently reaches
 two records.
-Before a supported linked truncation or unlinked deletion may release storage,
-it publishes every physical range in the admitted map together and performs one
-complete allocated-inode scan. Any data, map-metadata, or external-xattr
+Before a supported unlinked deletion may release storage, it publishes every
+physical range in the admitted map together and performs one complete
+allocated-inode scan. Any data, map-metadata, or external-xattr
 reference from another inode to any of those ranges is a corrupt cross-link
 refusal. When physical ranges are present, the operation-scoped certificate
 binds the context, inode, generation, map family, range count, and all ordered
 range pairs; it may bridge measurement, dry staging, activation, restaging,
 and journal emission, but checkpoint invalidates it before its first home
-write. Whole-union qualification performs this proof for every retained linked
-or unlinked record before the first cleanup transaction may mutate media.
+write. Whole-union qualification performs this proof for every retained
+record before the first cleanup transaction may mutate media: for an
+unlinked record over every range of its admitted map, and for a linked
+record over every data run its release will free, published from the end of
+the file in vectors as large as the mutation range workspace. Each linked
+release pass then proves the runs and tree nodes it frees with the general
+write's home-set proof: the target's tree maps each exactly once, and no
+other inode maps any of them.
 Per-shape single-record qualification includes initialized and unwritten
 extents, nonzero logical starts, multiple separated logical/physical ranges,
 the four-entry inline maximum, the 12-slot legacy-direct maximum, sparse
@@ -2624,14 +2641,15 @@ matrix.
 same-parent directory moves, indexed leaf splitting or growth, HTree-key
 mutation, and deeper or multi-node HTree shapes remain gated. Indexed
 insertion, UNLINK, RMDIR, and this RENAME extension now draft-close the
-namespace/deletion vertical. TRUNCATE is general within one transaction, as
-described below, including through an indexed parent's name. The linked-regular-file scalar SETATTR slice is
+namespace/deletion vertical. TRUNCATE is general, as described below,
+including through an indexed parent's name. The linked-regular-file scalar SETATTR slice is
 now focused-qualified; xattr mutation remains the next Stage 6 handoff.
 
 ### General TRUNCATE
 
 `_EXT4-TRUNCATE` sets a linked regular file's size to any value the format
-holds, in one journal transaction under the bound writer profile. The generic
+holds, in one journal transaction when its release fits the bound writer
+profile and otherwise across several, as described at the end. The generic
 VFS prepublishes the requested size and retains the old size while the
 guarded callback runs. The callback authenticates the target as the general
 write does: a linked regular file outside the reserved inodes, with exactly
@@ -2684,15 +2702,50 @@ size. A failure after commit returns success with the diagnostic in
 `V.LAST-IOR`, republishes the committed size, block count, and times, and
 quarantines the mount, whose next mount replays the transaction.
 
-A truncate that does not fit one transaction under the bound profile refuses
-with `VFS-E-NOSPC` before any media I/O. Each block group the freed runs
-touch costs one bitmap home, each distinct descriptor page one more, every
-freed tree node one revoke, and every coalesced run one entry in the mutation
-range workspace, so the limit follows how many groups the released blocks
-span and how scattered they are rather than the file's size. Truncation
-across several transactions, with the orphan file carrying the target over a
-crash, is the next step; until then the linked-orphan cleanup that mount
-recovery runs keeps its existing shapes.
+Each block group the freed runs touch costs one bitmap home, each distinct
+descriptor page one more, every freed tree node one revoke, and every
+coalesced run one entry in the mutation range workspace, so what fits one
+transaction follows how many groups the released blocks span and how
+scattered they are rather than the file's size. A shrink that does not fit
+runs across transactions, as the kernel's ext4 truncates. The first commits
+the new size and trusted-clock times together with one modern orphan-file
+slot and the primary `ORPHAN_PRESENT` bit, leaving the map and `i_blocks`
+unchanged. Release passes then free the blocks past the new EOF from the end
+of the file. A pass takes a removal step only while the step's worst case
+still fits the profile: its run can add a group's bitmap and descriptor page
+and the superblock, and every level it empties adds a freed node with its own
+bitmap and descriptor page, an edited parent, a revoke, and a recorded run.
+A pass keeps the inode's size and times, and its home-set proof covers the
+runs it frees. The record's final cleanup zeroes the bytes past EOF in the
+block that holds it, when any of them is not zero, and clears the slot. The
+pass that ends the release carries the final cleanup too when its homes
+still fit, as the kernel's last truncate handle removes the orphan; otherwise
+the final cleanup is a transaction of its own. A last transaction retires
+`ORPHAN_PRESENT`. Every refusal comes before the first commit: the profile
+must hold the three-home insertion, the volume must have an orphan file with
+room in its runtime plan, and a probe pass staged before any media I/O must
+be able to take one removal step, so a profile whose revokes cannot cover the
+tree's depth refuses with `VFS-E-NOSPC`. After the insertion commits, a
+failure returns success with the diagnostic in `V.LAST-IOR`, republishes the
+committed state, and turns the volume read-only, and the next mount finishes
+the release.
+
+The orphan record makes a crash recoverable at every point. Before the
+insertion commits, the old file stands. After it, mount recovery finds the
+linked record and runs the same release passes and final cleanup with its own
+writer, sized to free one full leaf of fragmented extents per pass and halved
+while the mount arena or the journal cannot hold it, so the file ends at its
+new size with its blocks free. A record the kernel leaves for an interrupted
+truncate completes the same way, its tail zeroed as the kernel's orphan
+cleanup zeroes it. A release pass's checkpoint certificate binds the record's
+locators and union, the target's pre-image checksum, and the staged target,
+which may differ from its pre-image only in block count, extent root, and
+checksum; for a legacy record it also binds the staged superblock, which
+keeps the record at the list head. The final cleanup's certificate binds the
+same pre-image, the staged target when the cleanup also ends the release or
+clears a legacy successor link, which may then differ from its pre-image in
+block count, extent root, that link, and checksum, and the tail block's
+image, which keeps the bytes before EOF and zeroes the rest.
 
 ### Linked-regular-file scalar SETATTR
 
@@ -3204,16 +3257,15 @@ acceptance, four zero-write refusals, precommit rollback, and committed
 eight-home replay on the canonical fixture. The initial TRUNCATE slice adds shared-vnode
 shrink publication, complete retained-tail zeroing, exact two-home commit,
 W7 old-EOF rollback, W17 committed two-home replay, stable remount, and pinned
-`debugfs`/`e2fsck` acceptance. The zero-TRUNCATE release/canonicalization slice adds
-authenticated prospective modern-orphan publication for an exact zero-through-
-four-entry inline depth-zero vector, topology-derived linked cleanup and data
-release, count-zero canonicalization, and transient-bit retirement without
-deactivating the writer. JTA retains the xattr identity with zero refcount
-action; its checkpoint certificate binds the entry count, physical vector,
-aggregate blocks, and map representation with all EA-release fields zero. The
-original singleton fixture supplies clean/stable external-tool
-acceptance, precommit descriptor rollback, and committed inode-home recovery
-through the orphan path. Empty closed final-link UNLINK adds a clean same-mount
+`debugfs`/`e2fsck` acceptance. Releasing truncation adds count-zero
+canonicalization of inline depth-zero roots, release of sparse, saturated, and
+hole-only roots, a 340-extent depth-two tree pruned and collapsed both in one
+transaction and across several behind a modern orphan record, a final
+cleanup of its own that zeroes a partial EOF block's tail, and recovery after
+a tear in each transaction of that sequence: the insertion, a release pass,
+the final cleanup, and the retirement of `ORPHAN_PRESENT`, which keeps the
+writer active. The original singleton fixture supplies clean/stable
+external-tool acceptance and precommit descriptor rollback. Empty closed final-link UNLINK adds a clean same-mount
 CREATE/remove cycle that restores
 inode capacity and cache counts; a precommit descriptor tear retains the name,
 inode, and allocation with no UNLINK home replay; and a committed torn
@@ -3278,7 +3330,7 @@ namespace-insertion tranche; indexed LINK/MKDIR splitting and growth remain
 gated.
 Replacement, victims, broader
 concurrent orphan unions, unwritten conversion, 2/4 KiB and 128-byte-inode
-allocation, multi-block atomicity across callbacks, truncation whose release spans more than one transaction, and other
+allocation, multi-block atomicity across callbacks, and other
 namespace mutation remain later capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an
@@ -3748,9 +3800,10 @@ ordered list of prerequisites for retaining the qualified write surface:
   and cross-protocol duplicate rejection without writes. Passing per-shape
   single-record legacy cleanup coverage across 1/2/4 KiB geometry now includes
   the 32-write/24-flush successful mount. Focused 1 KiB coverage additionally pins
-  exact one-home already-truncated sealing with zero target entries, exact
-  four-home linked-truncate sealing for the original one-range fixture, post-seal mutation
-  refusal, and abort scrubbing. Its controlled crash matrix covers 14 write
+  exact one-home already-truncated sealing with zero target entries, the
+  original one-range fixture's cleanup sealed as one four-home transaction
+  within the release pass's capacity, post-seal mutation refusal, and abort
+  scrubbing. Its controlled crash matrix covers 14 write
   prefixes spanning activation, transaction description and commit, every
   legacy metadata home, reset, final-super publication, witness clearing, and
   guard retirement. It also covers all nine durability fences; both the writes

@@ -16910,1699 +16910,6 @@ def test_runtime_modern_orphan_lookup_reauthenticates_exact_inode_and_locator(
     assert trace == ()
 
 
-def test_modern_orphan_add_more_stages_exact_two_home_transaction_without_io(
-    canonical_images: dict[str, Path],
-) -> None:
-    path = canonical_images["primary-1k-i256"]
-    patches = _modern_orphan_patches(path, (13,))
-    superblock, target_inode, target_offset = _ext4_inode_record(path, 14)
-    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    old_size = struct.unpack_from("<I", target_inode, 0x04)[0]
-    generation = struct.unpack_from("<I", target_inode, 0x64)[0]
-    target_home = target_offset // block_size
-    orphan_home = patches[1][0] // block_size
-    seconds = 3_000_000_987
-    nanoseconds = 654_000_000
-    assert block_size == 1024
-    assert old_size == 54
-    assert generation == 0
-    assert target_home == 278
-    assert target_home != orphan_home
-    assert struct.unpack_from("<HHHH", target_inode, 0x28) == (
-        0xF30A,
-        1,
-        4,
-        0,
-    )
-    assert _extent_root_physical(target_inode, 0) == 1346
-
-    output = run_forth(
-        path,
-        [
-            (
-                ": _AM-MOUNT ( vfs -- ior ) "
-                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
-                "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
-            ),
-            "CREATE _AM-OPS VFS-OPS-SIZE ALLOT",
-            "EXT4-STAGED-WRITE-OPS _AM-OPS VFS-OPS-SIZE CMOVE",
-            "' _AM-MOUNT _AM-OPS VFS-OP-MOUNT CELLS + !",
-            "CREATE _AM-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-            (
-                "EXT4-STAGED-WRITE-BINDING _AM-BINDING "
-                "VFS-BINDING-DESC-SIZE CMOVE"
-            ),
-            "_AM-OPS _AM-BINDING VB.OPS !",
-            ": _AM-NEW _AM-BINDING SWAP VFS-NEW ;",
-            "T-ARENA CONSTANT _AM-ARENA",
-            (
-                "_AM-ARENA T-VOLUME _AM-NEW "
-                "CONSTANT _AM-MOUNT-IOR CONSTANT _AM-V"
-            ),
-            "_AM-V _EXT4-CTX CONSTANT _AM-CTX",
-            (
-                "_AM-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
-                "CONSTANT _AM-RUNTIME"
-            ),
-            (
-                "_AM-CTX _EXT4-C.O.TABLE + @ "
-                "CONSTANT _AM-TRANSIENT"
-            ),
-            (
-                "_AM-CTX _EXT4-C.O.ACTIVE + @ "
-                "CONSTANT _AM-PRE-ACTIVE"
-            ),
-            (
-                "_AM-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
-                "CONSTANT _AM-PRE-MODERN"
-            ),
-            (
-                "_AM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ "
-                "CONSTANT _AM-PRE-LEGACY"
-            ),
-            (
-                "13 _AM-CTX _EXT4-ORPHAN-PLAN-FIND "
-                "CONSTANT _AM-FIND-IOR CONSTANT _AM-RECORD"
-            ),
-            "CREATE _AM-SAVED _EXT4-ORPHAN-RECORD-SIZE ALLOT",
-            (
-                "_AM-RECORD _AM-SAVED _EXT4-ORPHAN-RECORD-SIZE "
-                "CMOVE"
-            ),
-            (
-                "_AM-CTX _EXT4-MOUNT-TAIL-RELEASE "
-                "CONSTANT _AM-RELEASE-IOR"
-            ),
-            (
-                "_AM-CTX _AM-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
-                "CONSTANT _AM-BIND-IOR"
-            ),
-            (
-                "_AM-SAVED @ _AM-SAVED _EXT4-OE.KIND + @ "
-                "_AM-SAVED _EXT4-OE.LOCATOR-A + @ "
-                "_AM-SAVED _EXT4-OE.LOCATOR-B + @ _AM-CTX "
-                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _AM-PUT-IOR"
-            ),
-            (
-                "13 _AM-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
-                "CONSTANT _AM-REAUTH-IOR CONSTANT _AM-RUNTIME-RECORD"
-            ),
-            "-1 _AM-CTX _EXT4-C.J.WRITER-CURRENT + !",
-            (
-                "2 0 0 _AM-CTX _EXT4-JWR-ALLOCATE-MOUNT "
-                "CONSTANT _AM-WRITER-IOR CONSTANT _AM-WRITER"
-            ),
-            (
-                "2 0 0 _AM-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _AM-TX-IOR CONSTANT _AM-TX"
-            ),
-            "_AM-V V.VOLUME @ _EXT4-IO-VOL ! _AM-V _EXT4-IO-VFS !",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _AM-CERT-BEGIN-IOR",
-            (
-                f"{old_size} 14 {generation} {seconds} {nanoseconds} "
-                "_AM-TX _EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE-ZERO "
-                "CONSTANT _AM-STAGE-IOR"
-            ),
-            "0 _AM-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AM-TARGET-IMAGE",
-            "1 _AM-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AM-ORPHAN-IMAGE",
-            "0x12345678 _EXT4-JFO-IOR !",
-            (
-                "_AM-WRITER _EXT4-JTA-STAGED? "
-                "CONSTANT _AM-STAGED-IOR"
-            ),
-            (
-                "_EXT4-JFO-IOR @ "
-                "CONSTANT _AM-CERT-REUSE-SENTINEL"
-            ),
-            "_EXT4-JFO-CERT-END",
-            (
-                "_AM-CTX _EXT4-PRIMARY-SUPER-BLOCK _AM-WRITER "
-                "_EXT4-JFC-FIND-META CONSTANT _AM-SUPER-FIND-IOR"
-            ),
-            "_EXT4-JFC-FOUND @ CONSTANT _AM-SUPER-FOUND",
-            *_forth_accumulated_conjunction(
-                "_AM-ALL-SAFE",
-                [
-                    (
-                        "_AM-MOUNT-IOR VFS-IOR-REASON "
-                        "VFS-R-UNSUPPORTED ="
-                    ),
-                    (
-                        "_AM-MOUNT-IOR VFS-IOR-DOMAIN "
-                        "VFS-IOR-D-FORMAT ="
-                    ),
-                    "_AM-MOUNT-IOR VFS-IOR-FLAGS 0=",
-                    (
-                        "_AM-MOUNT-IOR VFS-IOR-DETAIL "
-                        "EXT4-D-RECOVERY ="
-                    ),
-                    "_AM-V V.LIFECYCLE @ VFS-L-NEW =",
-                    "_AM-RUNTIME 0<>",
-                    "_AM-TRANSIENT 0<>",
-                    "_AM-TRANSIENT _AM-RUNTIME <>",
-                    "_AM-PRE-ACTIVE 1 =",
-                    "_AM-PRE-MODERN 1 =",
-                    "_AM-PRE-LEGACY 0=",
-                    "_AM-FIND-IOR 0=",
-                    "_AM-RECORD 0<>",
-                    "_AM-SAVED _EXT4-OE.INO + @ 13 =",
-                    (
-                        "_AM-SAVED _EXT4-OE.KIND + @ "
-                        "_EXT4-OK-MODERN ="
-                    ),
-                    "_AM-SAVED _EXT4-OE.LOCATOR-A + @ 0=",
-                    "_AM-SAVED _EXT4-OE.LOCATOR-B + @ 0=",
-                    "_AM-RELEASE-IOR 0=",
-                    "_AM-BIND-IOR 0=",
-                    "_AM-PUT-IOR 0=",
-                    "_AM-REAUTH-IOR 0=",
-                    "_AM-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
-                    (
-                        "_AM-CTX _EXT4-C.O.TABLE + @ "
-                        "_AM-RUNTIME ="
-                    ),
-                    (
-                        "_AM-CTX _EXT4-C.O.SLOTS + @ _AM-CTX "
-                        "_EXT4-C.O.RUNTIME-SLOTS + @ ="
-                    ),
-                    "_AM-CTX _EXT4-C.O.ACTIVE + @ 1 =",
-                    "_AM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
-                    "_AM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                    "_AM-RUNTIME-RECORD 0<>",
-                    (
-                        "_AM-RUNTIME-RECORD _AM-CTX "
-                        "_EXT4-ORPHAN-PLAN-MEMBER?"
-                    ),
-                    "_AM-WRITER-IOR 0=",
-                    "_AM-TX-IOR 0=",
-                    "_AM-CERT-BEGIN-IOR 0=",
-                    "_AM-STAGE-IOR 0=",
-                    "_AM-STAGED-IOR 0=",
-                    "_AM-CERT-REUSE-SENTINEL 0x12345678 =",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    (
-                        "_AM-WRITER _EXT4-JWR.STATE + @ "
-                        "_EXT4-JWR-STAGING ="
-                    ),
-                    (
-                        "_AM-WRITER _EXT4-JWR.CP-MODE + @ "
-                        "_EXT4-JCPM-ORPHAN-MODERN-ADD-MORE ="
-                    ),
-                    "_AM-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 1 =",
-                    "_AM-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 1 =",
-                    "_AM-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 0=",
-                    "_AM-WRITER _EXT4-JWR.META-CREDIT + @ 2 =",
-                    "_AM-WRITER _EXT4-JWR.META-USED + @ 2 =",
-                    "_AM-WRITER _EXT4-JWR.META-ACTIVE + @ 2 =",
-                    "_AM-WRITER _EXT4-JWR.DATA-CREDIT + @ 0=",
-                    "_AM-WRITER _EXT4-JWR.DATA-USED + @ 0=",
-                    "_AM-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
-                    "_AM-WRITER _EXT4-JWR.REVOKE-CREDIT + @ 0=",
-                    "_AM-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
-                    "_AM-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
-                    (
-                        "0 _AM-WRITER _EXT4-JWR-META-ENTRY @ "
-                        f"{target_home} ="
-                    ),
-                    (
-                        "1 _AM-WRITER _EXT4-JWR-META-ENTRY @ "
-                        f"{orphan_home} ="
-                    ),
-                    (
-                        "_AM-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
-                        f"{target_home} ="
-                    ),
-                    (
-                        "_AM-WRITER _EXT4-JWR.CP-O-HOME + @ "
-                        f"{orphan_home} ="
-                    ),
-                    "_AM-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 0=",
-                    "_AM-WRITER _EXT4-JWR.CP-O-SLOT + @ 1 =",
-                    "_AM-WRITER _EXT4-JWR.CP-O-INO + @ 14 =",
-                    (
-                        "_AM-WRITER _EXT4-JWR.CP-TARGET-GEN + @ "
-                        f"{generation} ="
-                    ),
-                    "_AM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 1 =",
-                    "_AM-WRITER _EXT4-JWR.CP-ADD-SECONDS + @ "
-                    f"{seconds} =",
-                    "_AM-WRITER _EXT4-JWR.CP-ADD-NSEC + @ "
-                    f"{nanoseconds} =",
-                    "_AM-WRITER _EXT4-JWR.CP-ADD-SUPER-CRC + @ 0=",
-                    (
-                        "0 _AM-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
-                        "_AM-WRITER _EXT4-JWR.CP-TARGET-CRC + @ ="
-                    ),
-                    (
-                        "1 _AM-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
-                        "_AM-WRITER _EXT4-JWR.CP-ORPHAN-CRC + @ ="
-                    ),
-                    (
-                        "_AM-TARGET-IMAGE _AM-WRITER "
-                        "_EXT4-JWR.CP-TARGET-OFF + @ + "
-                        "_EXT4-I.SIZE-LO + L@ 0="
-                    ),
-                    (
-                        "_AM-TARGET-IMAGE _AM-WRITER "
-                        "_EXT4-JWR.CP-TARGET-OFF + @ + "
-                        "_EXT4-I.SIZE-HI + L@ 0="
-                    ),
-                    "_AM-ORPHAN-IMAGE L@ 13 =",
-                    "_AM-ORPHAN-IMAGE 4 + L@ 14 =",
-                    "_AM-SUPER-FIND-IOR 0=",
-                    "_AM-SUPER-FOUND 0=",
-                    "_AM-WRITER _EXT4-JTX-TABLES-VALID?",
-                    "_AM-WRITER _EXT4-JWR-CP-AUTHORITY?",
-                    (
-                        "_AM-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
-                        "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
-                    ),
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                ],
-            ),
-            (
-                '_AM-ALL-SAFE @ IF ." EXT4-ORPHAN-ADD-MORE-EXACT" '
-                'ELSE ." EXT4-ORPHAN-ADD-MORE-CHECK " '
-                '_AM-ALL-SAFE-FIRST-FAILURE @ . THEN'
-            ),
-            "_AM-TX _EXT4-JTX-ABORT CONSTANT _AM-ABORT-IOR",
-            (
-                "_AM-ABORT-IOR 0= _AM-WRITER _EXT4-JWR.STATE + @ "
-                "_EXT4-JWR-IDLE = AND _AM-WRITER "
-                "_EXT4-JWR-IDLE-CLEAN? AND IF .\" "
-                "EXT4-ORPHAN-ADD-MORE-ABORTED\" THEN"
-            ),
-        ],
-        patches=patches,
-    )
-    _assert_emitted(output, "EXT4-ORPHAN-ADD-MORE-EXACT")
-    _assert_emitted(output, "EXT4-ORPHAN-ADD-MORE-ABORTED")
-
-
-def test_modern_orphan_add_more_seals_sparse_depth0_vectors_without_io(
-    canonical_images: dict[str, Path],
-) -> None:
-    """Seal inode 17's two sparse extents into every ADD authority layer."""
-    path = canonical_images["primary-1k-i256"]
-    patches = _modern_orphan_patches(path, (13,))
-    superblock, target_inode, target_offset = _ext4_inode_record(path, 17)
-    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    old_size = struct.unpack_from("<I", target_inode, 0x04)[0]
-    old_blocks = struct.unpack_from("<I", target_inode, 0x1C)[0]
-    old_links = struct.unpack_from("<H", target_inode, 0x1A)[0]
-    generation = struct.unpack_from("<I", target_inode, 0x64)[0]
-    target_home, target_block_offset = divmod(target_offset, block_size)
-    orphan_home = patches[1][0] // block_size
-    data_ranges = (
-        (_extent_root_physical(target_inode, 0), 1),
-        (_extent_root_physical(target_inode, 2), 1),
-    )
-    seconds = 3_000_000_988
-    nanoseconds = 655_000_000
-
-    assert block_size == 1024
-    assert old_size == 3072
-    assert old_blocks == 4
-    assert old_links == 1
-    assert generation == 0
-    assert target_home == 279
-    assert target_block_offset == 0
-    assert target_home != orphan_home
-    assert struct.unpack_from("<I", target_inode, 0x68)[0] == 0
-    assert struct.unpack_from("<HHHH", target_inode, 0x28) == (
-        0xF30A,
-        2,
-        4,
-        0,
-    )
-    assert data_ranges == ((1348, 1), (1350, 1))
-    with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
-        _extent_root_physical(target_inode, 1)
-
-    output = run_forth(
-        path,
-        [
-            (
-                ": _AS-MOUNT ( vfs -- ior ) "
-                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
-                "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
-            ),
-            "CREATE _AS-OPS VFS-OPS-SIZE ALLOT",
-            "EXT4-STAGED-WRITE-OPS _AS-OPS VFS-OPS-SIZE CMOVE",
-            "' _AS-MOUNT _AS-OPS VFS-OP-MOUNT CELLS + !",
-            "CREATE _AS-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-            (
-                "EXT4-STAGED-WRITE-BINDING _AS-BINDING "
-                "VFS-BINDING-DESC-SIZE CMOVE"
-            ),
-            "_AS-OPS _AS-BINDING VB.OPS !",
-            ": _AS-NEW _AS-BINDING SWAP VFS-NEW ;",
-            "T-ARENA CONSTANT _AS-ARENA",
-            (
-                "_AS-ARENA T-VOLUME _AS-NEW "
-                "CONSTANT _AS-MOUNT-IOR CONSTANT _AS-V"
-            ),
-            "_AS-V _EXT4-CTX CONSTANT _AS-CTX",
-            (
-                "_AS-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
-                "CONSTANT _AS-RUNTIME"
-            ),
-            (
-                "_AS-CTX _EXT4-C.O.TABLE + @ "
-                "CONSTANT _AS-TRANSIENT"
-            ),
-            (
-                "13 _AS-CTX _EXT4-ORPHAN-PLAN-FIND "
-                "CONSTANT _AS-FIND-IOR CONSTANT _AS-RECORD"
-            ),
-            "CREATE _AS-SAVED _EXT4-ORPHAN-RECORD-SIZE ALLOT",
-            (
-                "_AS-RECORD _AS-SAVED _EXT4-ORPHAN-RECORD-SIZE "
-                "CMOVE"
-            ),
-            (
-                "_AS-CTX _EXT4-MOUNT-TAIL-RELEASE "
-                "CONSTANT _AS-RELEASE-IOR"
-            ),
-            (
-                "_AS-CTX _AS-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
-                "CONSTANT _AS-BIND-IOR"
-            ),
-            (
-                "_AS-SAVED @ _AS-SAVED _EXT4-OE.KIND + @ "
-                "_AS-SAVED _EXT4-OE.LOCATOR-A + @ "
-                "_AS-SAVED _EXT4-OE.LOCATOR-B + @ _AS-CTX "
-                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _AS-PUT-IOR"
-            ),
-            (
-                "13 _AS-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
-                "CONSTANT _AS-REAUTH-IOR CONSTANT _AS-RUNTIME-RECORD"
-            ),
-            "-1 _AS-CTX _EXT4-C.J.WRITER-CURRENT + !",
-            (
-                "2 0 0 _AS-CTX _EXT4-JWR-ALLOCATE-MOUNT "
-                "CONSTANT _AS-WRITER-IOR CONSTANT _AS-WRITER"
-            ),
-            (
-                "2 0 0 _AS-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _AS-TX-IOR CONSTANT _AS-TX"
-            ),
-            "_AS-V V.VOLUME @ _EXT4-IO-VOL ! _AS-V _EXT4-IO-VFS !",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _AS-CERT-BEGIN-IOR",
-            (
-                f"{old_size} 17 {generation} {seconds} {nanoseconds} "
-                "_AS-TX _EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE-ZERO "
-                "CONSTANT _AS-STAGE-IOR"
-            ),
-            "0 _AS-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AS-TARGET-IMAGE",
-            "1 _AS-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AS-ORPHAN-IMAGE",
-            (
-                "_AS-TARGET-IMAGE _AS-WRITER "
-                "_EXT4-JWR.CP-TARGET-OFF + @ + "
-                "CONSTANT _AS-TARGET-RECORD"
-            ),
-            "0x12345678 _EXT4-JFO-IOR !",
-            "_AS-WRITER _EXT4-JTA-STAGED? CONSTANT _AS-STAGED-IOR",
-            "_EXT4-JFO-IOR @ CONSTANT _AS-CERT-REUSE-SENTINEL",
-            "_EXT4-JOT-COUNT @ CONSTANT _AS-JOT-COUNT",
-            "_EXT4-JOT-DATA-BLOCKS @ CONSTANT _AS-JOT-BLOCKS",
-            "0 _EXT4-JOT-RANGE @ CONSTANT _AS-JOT-FIRST-A",
-            "0 _EXT4-JOT-RANGE CELL+ @ CONSTANT _AS-JOT-COUNT-A",
-            "1 _EXT4-JOT-RANGE @ CONSTANT _AS-JOT-FIRST-B",
-            "1 _EXT4-JOT-RANGE CELL+ @ CONSTANT _AS-JOT-COUNT-B",
-            (
-                "_EXT4-JOT-RANGES 4 CELLS + 4 CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _AS-JOT-TAIL-ZERO"
-            ),
-            "_EXT4-JTA-CERT-PRESENT? CONSTANT _AS-CERT-PRESENT",
-            "_EXT4-JTA-CERT-CONTENTS? CONSTANT _AS-CERT-CONTENTS",
-            "_EXT4-JFO-CERT-VALID @ CONSTANT _AS-CERT-VALID",
-            "_EXT4-JFO-CERT-KIND @ CONSTANT _AS-CERT-KIND",
-            "_EXT4-JFO-CERT-CTX @ CONSTANT _AS-CERT-CTX",
-            "_EXT4-JFO-CERT-INO @ CONSTANT _AS-CERT-INO",
-            "_EXT4-JFO-CERT-GEN @ CONSTANT _AS-CERT-GEN",
-            (
-                "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                "CONSTANT _AS-CERT-RANGE-COUNT"
-            ),
-            (
-                "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                "CONSTANT _AS-CERT-MAP-KIND"
-            ),
-            "_EXT4-JFO-CERT-EA @ CONSTANT _AS-CERT-EA",
-            "0 _EXT4-JFO-CERT-RANGE @ CONSTANT _AS-CERT-FIRST-A",
-            (
-                "0 _EXT4-JFO-CERT-RANGE CELL+ @ "
-                "CONSTANT _AS-CERT-COUNT-A"
-            ),
-            "1 _EXT4-JFO-CERT-RANGE @ CONSTANT _AS-CERT-FIRST-B",
-            (
-                "1 _EXT4-JFO-CERT-RANGE CELL+ @ "
-                "CONSTANT _AS-CERT-COUNT-B"
-            ),
-            "2 _EXT4-JFO-CERT-RANGE @ CONSTANT _AS-CERT-HOME",
-            (
-                "2 _EXT4-JFO-CERT-RANGE CELL+ @ "
-                "CONSTANT _AS-CERT-HOME-COUNT"
-            ),
-            (
-                "_EXT4-JFO-CERT-RANGES 6 CELLS + "
-                "_EXT4-JFO-CERT-RANGE-CAP 3 - 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _AS-CERT-TAIL-ZERO"
-            ),
-            "1349 _AS-WRITER _EXT4-JWR.CP-EA-HOME + !",
-            (
-                "_EXT4-JEA-RELEASE _AS-WRITER "
-                "_EXT4-JWR.CP-EA-ACTION + !"
-            ),
-            (
-                "_AS-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
-                "CONSTANT _AS-CP-REJECTS-EA"
-            ),
-            "0 _AS-WRITER _EXT4-JWR.CP-EA-HOME + !",
-            "0 _AS-WRITER _EXT4-JWR.CP-EA-ACTION + !",
-            (
-                "_AS-WRITER _EXT4-JWR-CP-AUTHORITY? "
-                "CONSTANT _AS-CP-AUTHORITY-RESTORED"
-            ),
-            "_EXT4-JFO-CERT-END",
-            (
-                "_AS-CTX _EXT4-PRIMARY-SUPER-BLOCK _AS-WRITER "
-                "_EXT4-JFC-FIND-META CONSTANT _AS-SUPER-FIND-IOR"
-            ),
-            "_EXT4-JFC-FOUND @ CONSTANT _AS-SUPER-FOUND",
-            *_forth_accumulated_conjunction(
-                "_AS-ALL-SAFE",
-                [
-                    (
-                        "_AS-MOUNT-IOR VFS-IOR-REASON "
-                        "VFS-R-UNSUPPORTED ="
-                    ),
-                    (
-                        "_AS-MOUNT-IOR VFS-IOR-DETAIL "
-                        "EXT4-D-RECOVERY ="
-                    ),
-                    "_AS-RUNTIME 0<>",
-                    "_AS-TRANSIENT 0<>",
-                    "_AS-TRANSIENT _AS-RUNTIME <>",
-                    "_AS-FIND-IOR 0=",
-                    "_AS-RECORD 0<>",
-                    "_AS-SAVED _EXT4-OE.INO + @ 13 =",
-                    (
-                        "_AS-SAVED _EXT4-OE.KIND + @ "
-                        "_EXT4-OK-MODERN ="
-                    ),
-                    "_AS-RELEASE-IOR 0=",
-                    "_AS-BIND-IOR 0=",
-                    "_AS-PUT-IOR 0=",
-                    "_AS-REAUTH-IOR 0=",
-                    "_AS-RUNTIME-RECORD 0<>",
-                    (
-                        "_AS-RUNTIME-RECORD _AS-CTX "
-                        "_EXT4-ORPHAN-PLAN-MEMBER?"
-                    ),
-                    "_AS-CTX _EXT4-C.O.ACTIVE + @ 1 =",
-                    "_AS-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
-                    "_AS-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                    "_AS-WRITER-IOR 0=",
-                    "_AS-TX-IOR 0=",
-                    "_AS-CERT-BEGIN-IOR 0=",
-                    "_AS-STAGE-IOR 0=",
-                    "_AS-STAGED-IOR 0=",
-                    "_AS-CERT-REUSE-SENTINEL 0x12345678 =",
-                    "_AS-JOT-COUNT 2 =",
-                    "_AS-JOT-BLOCKS 2 =",
-                    f"_AS-JOT-FIRST-A {data_ranges[0][0]} =",
-                    "_AS-JOT-COUNT-A 1 =",
-                    f"_AS-JOT-FIRST-B {data_ranges[1][0]} =",
-                    "_AS-JOT-COUNT-B 1 =",
-                    "_AS-JOT-TAIL-ZERO",
-                    "_AS-CERT-PRESENT",
-                    "_AS-CERT-CONTENTS",
-                    "_AS-CERT-VALID 0<>",
-                    "_AS-CERT-KIND _EXT4-JFO-CERT-JTA =",
-                    "_AS-CERT-CTX _AS-CTX =",
-                    "_AS-CERT-INO 17 =",
-                    f"_AS-CERT-GEN {generation} =",
-                    "_AS-CERT-RANGE-COUNT 3 =",
-                    "_AS-CERT-MAP-KIND _EXT4-JDM-INLINE-EXTENTS =",
-                    "_AS-CERT-EA 0=",
-                    f"_AS-CERT-FIRST-A {data_ranges[0][0]} =",
-                    "_AS-CERT-COUNT-A 1 =",
-                    f"_AS-CERT-FIRST-B {data_ranges[1][0]} =",
-                    "_AS-CERT-COUNT-B 1 =",
-                    f"_AS-CERT-HOME {target_home} =",
-                    "_AS-CERT-HOME-COUNT 1 =",
-                    "_AS-CERT-TAIL-ZERO",
-                    "_AS-CP-REJECTS-EA",
-                    "_AS-CP-AUTHORITY-RESTORED",
-                    (
-                        "_AS-WRITER _EXT4-JWR.STATE + @ "
-                        "_EXT4-JWR-STAGING ="
-                    ),
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-MODE + @ "
-                        "_EXT4-JCPM-ORPHAN-MODERN-ADD-MORE ="
-                    ),
-                    "_AS-WRITER _EXT4-JWR.META-CREDIT + @ 2 =",
-                    "_AS-WRITER _EXT4-JWR.META-USED + @ 2 =",
-                    "_AS-WRITER _EXT4-JWR.META-ACTIVE + @ 2 =",
-                    "_AS-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
-                    "_AS-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
-                        f"{target_home} ="
-                    ),
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-TARGET-OFF + @ "
-                        f"{target_block_offset} ="
-                    ),
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-O-HOME + @ "
-                        f"{orphan_home} ="
-                    ),
-                    "_AS-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 0=",
-                    "_AS-WRITER _EXT4-JWR.CP-O-SLOT + @ 1 =",
-                    "_AS-WRITER _EXT4-JWR.CP-O-INO + @ 17 =",
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-TARGET-GEN + @ "
-                        f"{generation} ="
-                    ),
-                    "_AS-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 2 =",
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
-                        "_EXT4-JDM-INLINE-EXTENTS ="
-                    ),
-                    *_forth_cp_delete_vector_checks(
-                        "_AS-WRITER",
-                        data_ranges,
-                    ),
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-ADD-SECONDS + @ "
-                        f"{seconds} ="
-                    ),
-                    (
-                        "_AS-WRITER _EXT4-JWR.CP-ADD-NSEC + @ "
-                        f"{nanoseconds} ="
-                    ),
-                    "_AS-WRITER _EXT4-JWR.CP-ADD-SUPER-CRC + @ 0=",
-                    "_AS-TARGET-RECORD _EXT4-I.SIZE-LO + L@ 0=",
-                    "_AS-TARGET-RECORD _EXT4-I.SIZE-HI + L@ 0=",
-                    (
-                        "_AS-TARGET-RECORD _EXT4-I.BLOCKS-LO + L@ "
-                        f"{old_blocks} ="
-                    ),
-                    (
-                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + DUP W@ "
-                        "_EXT4-EXTENT-MAGIC = SWAP 2 + W@ 2 = AND"
-                    ),
-                    (
-                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 12 + "
-                        "DUP L@ 0= SWAP 4 + W@ 1 = AND"
-                    ),
-                    (
-                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 20 + L@ "
-                        f"{data_ranges[0][0]} ="
-                    ),
-                    (
-                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 24 + "
-                        "DUP L@ 2 = SWAP 4 + W@ 1 = AND"
-                    ),
-                    (
-                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 32 + L@ "
-                        f"{data_ranges[1][0]} ="
-                    ),
-                    "_AS-ORPHAN-IMAGE L@ 13 =",
-                    "_AS-ORPHAN-IMAGE 4 + L@ 17 =",
-                    "_AS-SUPER-FIND-IOR 0=",
-                    "_AS-SUPER-FOUND 0=",
-                    "_AS-WRITER _EXT4-JTX-TABLES-VALID?",
-                    "_AS-WRITER _EXT4-JWR-CP-AUTHORITY?",
-                    "_AS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                ],
-            ),
-            (
-                '_AS-ALL-SAFE @ IF ." EXT4-ORPHAN-ADD-SPARSE-EXACT" '
-                'ELSE ." EXT4-ORPHAN-ADD-SPARSE-CHECK " '
-                "_AS-ALL-SAFE-FIRST-FAILURE @ . THEN"
-            ),
-            "_AS-TX _EXT4-JTX-ABORT CONSTANT _AS-ABORT-IOR",
-            (
-                _forth_conjunction(
-                    [
-                        "_AS-ABORT-IOR 0=",
-                        (
-                            "_AS-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
-                        ),
-                        "_AS-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_AS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-ORPHAN-ADD-SPARSE-ABORTED" THEN'
-            ),
-        ],
-        patches=patches,
-    )
-    _assert_emitted(output, "EXT4-ORPHAN-ADD-SPARSE-EXACT")
-    _assert_emitted(output, "EXT4-ORPHAN-ADD-SPARSE-ABORTED")
-
-
-@pytest.mark.parametrize(
-    "shape",
-    ("full-four", "mixed-three"),
-)
-def test_modern_orphan_add_first_seals_depth0_vector_shapes_without_io(
-    staged_public_extent_root_growth_prestate: dict[str, object],
-    shape: str,
-) -> None:
-    """Seal full and mixed/unwritten resident vectors without xattr release."""
-    geometry = staged_public_extent_root_growth_prestate
-    path = geometry["path"]
-    input_patches = geometry["input_patches"]
-    superblock = geometry["superblock"]
-    target_inode = geometry["inode"]
-    target_offset = geometry["inode_offset"]
-    inode_number = geometry["inode_number"]
-    block_size = geometry["block_size"]
-    old_size = geometry["old_size"]
-    old_blocks = geometry["old_blocks"]
-    generation = geometry["generation"]
-    root_generation = geometry["root_generation"]
-    extent_entries = geometry["extent_entries"]
-    xattr_block = geometry["xattr_block"]
-    assert isinstance(path, Path)
-    assert isinstance(input_patches, tuple)
-    assert isinstance(superblock, bytes)
-    assert isinstance(target_inode, bytes)
-    assert isinstance(target_offset, int)
-    assert isinstance(inode_number, int)
-    assert isinstance(block_size, int)
-    assert isinstance(old_size, int)
-    assert isinstance(old_blocks, int)
-    assert isinstance(generation, int)
-    assert isinstance(root_generation, int)
-    assert isinstance(extent_entries, tuple)
-    assert isinstance(xattr_block, int)
-
-    if shape == "mixed-three":
-        mixed_entries = (
-            (0, 1, 1346),
-            (2, 0x8002, 1351),
-            (5, 1, 1353),
-        )
-        mixed_inode = bytearray(target_inode)
-        struct.pack_into("<H", mixed_inode, 0x2A, len(mixed_entries))
-        mixed_inode[0x34:0x64] = bytes(48)
-        for index, (logical, raw_length, physical) in enumerate(
-            mixed_entries
-        ):
-            struct.pack_into(
-                "<IHHI",
-                mixed_inode,
-                0x34 + index * 12,
-                logical,
-                raw_length,
-                physical >> 32,
-                physical & 0xFFFF_FFFF,
-            )
-        target_inode = _inode_with_checksum(
-            superblock,
-            inode_number,
-            mixed_inode,
-        )
-        input_patches = tuple(
-            (offset, target_inode if offset == target_offset else data)
-            for offset, data in input_patches
-        )
-        extent_entries = tuple(
-            (logical, raw_length & 0x7FFF, physical)
-            for logical, raw_length, physical in mixed_entries
-        )
-        raw_lengths = tuple(entry[1] for entry in mixed_entries)
-    else:
-        raw_lengths = tuple(entry[1] for entry in extent_entries)
-
-    target_home, target_block_offset = divmod(target_offset, block_size)
-    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
-    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
-    orphan_home = _extent_root_physical(orphan_inode, 0)
-    super_home = 1
-    data_ranges = tuple(
-        (physical, length) for _, length, physical in extent_entries
-    )
-    entry_count = len(extent_entries)
-    seconds = 3_000_000_989
-    nanoseconds = 656_000_000
-
-    assert block_size == 1024
-    assert inode_number == 14
-    assert old_size == 6 * block_size
-    assert old_blocks == 10
-    assert generation != root_generation
-    assert target_home == 278
-    assert target_block_offset == 256
-    assert orphan_home not in {target_home, super_home, xattr_block}
-    assert xattr_block not in {target_home, super_home}
-    assert entry_count in {3, 4}
-    assert sum(length for _, length in data_ranges) == 4
-    assert raw_lengths == (
-        (1, 0x8002, 1)
-        if shape == "mixed-three"
-        else (1, 1, 1, 1)
-    )
-    assert all(
-        physical not in {target_home, orphan_home, super_home, xattr_block}
-        for physical, _ in data_ranges
-    )
-    assert struct.unpack_from("<HHHHI", target_inode, 0x28) == (
-        0xF30A,
-        entry_count,
-        4,
-        0,
-        root_generation,
-    )
-    assert struct.unpack_from("<I", target_inode, 0x68)[0] == xattr_block
-    assert struct.unpack_from("<I", superblock, 0x64)[0] & 0x0001_0000 == 0
-
-    output = run_forth(
-        path,
-        [
-            (
-                ": _A4-MOUNT ( vfs -- ior ) "
-                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
-                "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
-            ),
-            "CREATE _A4-OPS VFS-OPS-SIZE ALLOT",
-            "EXT4-STAGED-WRITE-OPS _A4-OPS VFS-OPS-SIZE CMOVE",
-            "' _A4-MOUNT _A4-OPS VFS-OP-MOUNT CELLS + !",
-            "CREATE _A4-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-            (
-                "EXT4-STAGED-WRITE-BINDING _A4-BINDING "
-                "VFS-BINDING-DESC-SIZE CMOVE"
-            ),
-            "_A4-OPS _A4-BINDING VB.OPS !",
-            ": _A4-NEW _A4-BINDING SWAP VFS-NEW ;",
-            "T-ARENA CONSTANT _A4-ARENA",
-            (
-                "_A4-ARENA T-VOLUME _A4-NEW "
-                "CONSTANT _A4-MOUNT-IOR CONSTANT _A4-V"
-            ),
-            "_A4-V _EXT4-CTX CONSTANT _A4-CTX",
-            (
-                "_A4-CTX _EXT4-C.O.ACTIVE + @ "
-                "CONSTANT _A4-PRE-ACTIVE"
-            ),
-            (
-                "_A4-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
-                "CONSTANT _A4-PRE-MODERN"
-            ),
-            (
-                "_A4-CTX _EXT4-MOUNT-TAIL-RELEASE "
-                "CONSTANT _A4-RELEASE-IOR"
-            ),
-            (
-                "_A4-CTX _A4-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
-                "CONSTANT _A4-BIND-IOR"
-            ),
-            "-1 _A4-CTX _EXT4-C.J.WRITER-CURRENT + !",
-            (
-                "3 0 0 _A4-CTX _EXT4-JWR-ALLOCATE-MOUNT "
-                "CONSTANT _A4-WRITER-IOR CONSTANT _A4-WRITER"
-            ),
-            (
-                "3 0 0 _A4-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _A4-TX-IOR CONSTANT _A4-TX"
-            ),
-            "_A4-V V.VOLUME @ _EXT4-IO-VOL ! _A4-V _EXT4-IO-VFS !",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _A4-CERT-BEGIN-IOR",
-            (
-                f"{old_size} {inode_number} {generation} "
-                f"{seconds} {nanoseconds} _A4-TX "
-                "_EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE-ZERO "
-                "CONSTANT _A4-STAGE-IOR"
-            ),
-            "0 _A4-WRITER _EXT4-JWR-META-IMAGE CONSTANT _A4-TARGET-IMAGE",
-            (
-                "_A4-TARGET-IMAGE _A4-WRITER "
-                "_EXT4-JWR.CP-TARGET-OFF + @ + "
-                "CONSTANT _A4-TARGET-RECORD"
-            ),
-            "0x12345678 _EXT4-JFO-IOR !",
-            "_A4-WRITER _EXT4-JTA-STAGED? CONSTANT _A4-STAGED-IOR",
-            "_EXT4-JFO-IOR @ CONSTANT _A4-CERT-REUSE-SENTINEL",
-            "_EXT4-JTA-CERT-PRESENT? CONSTANT _A4-CERT-PRESENT",
-            "_EXT4-JTA-CERT-CONTENTS? CONSTANT _A4-CERT-CONTENTS",
-            "_EXT4-JFO-CERT-VALID @ CONSTANT _A4-CERT-VALID",
-            "_EXT4-JFO-CERT-KIND @ CONSTANT _A4-CERT-KIND",
-            (
-                "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                "CONSTANT _A4-CERT-RANGE-COUNT"
-            ),
-            "_EXT4-JFO-CERT-EA @ CONSTANT _A4-CERT-EA",
-            (
-                "_EXT4-JFO-CERT-EA-ACTION @ "
-                "CONSTANT _A4-CERT-EA-ACTION"
-            ),
-            (
-                "_EXT4-JFO-CERT-EA-REFCOUNT @ "
-                "CONSTANT _A4-CERT-EA-REFCOUNT"
-            ),
-            (
-                "_A4-WRITER _EXT4-JWR-CP-AUTHORITY? "
-                "CONSTANT _A4-CP-AUTHORITY"
-            ),
-            "DEPTH CONSTANT _A4-STAGED-DEPTH",
-            "_EXT4-JFO-CERT-END",
-            *_forth_accumulated_conjunction(
-                "_A4-ALL-SAFE",
-                [
-                    (
-                        "_A4-MOUNT-IOR VFS-IOR-REASON "
-                        "VFS-R-UNSUPPORTED ="
-                    ),
-                    (
-                        "_A4-MOUNT-IOR VFS-IOR-DETAIL "
-                        "EXT4-D-RECOVERY ="
-                    ),
-                    "_A4-PRE-ACTIVE 0=",
-                    "_A4-PRE-MODERN 0=",
-                    "_A4-RELEASE-IOR 0=",
-                    "_A4-BIND-IOR 0=",
-                    "_A4-WRITER-IOR 0=",
-                    "_A4-TX-IOR 0=",
-                    "_A4-CERT-BEGIN-IOR 0=",
-                    "_A4-STAGE-IOR 0=",
-                    "_A4-STAGED-IOR 0=",
-                    "_A4-CERT-REUSE-SENTINEL 0x12345678 =",
-                    "_A4-STAGED-DEPTH 0=",
-                    f"_EXT4-JOT-COUNT @ {entry_count} =",
-                    "_EXT4-JOT-DATA-BLOCKS @ 4 =",
-                    *(
-                        check
-                        for index, (physical, length) in enumerate(data_ranges)
-                        for check in (
-                            (
-                                f"{index} _EXT4-JOT-RANGE @ "
-                                f"{physical} ="
-                            ),
-                            (
-                                f"{index} _EXT4-JOT-RANGE CELL+ @ "
-                                f"{length} ="
-                            ),
-                        )
-                    ),
-                    f"_EXT4-JOT-EA @ {xattr_block} =",
-                    "_A4-CERT-PRESENT",
-                    "_A4-CERT-CONTENTS",
-                    "_A4-CERT-VALID 0<>",
-                    "_A4-CERT-KIND _EXT4-JFO-CERT-JTA =",
-                    f"_A4-CERT-RANGE-COUNT {entry_count + 1} =",
-                    f"_A4-CERT-EA {xattr_block} =",
-                    "_A4-CERT-EA-ACTION 0=",
-                    "_A4-CERT-EA-REFCOUNT 0=",
-                    *(
-                        check
-                        for index, (physical, length) in enumerate(data_ranges)
-                        for check in (
-                            (
-                                f"{index} _EXT4-JFO-CERT-RANGE @ "
-                                f"{physical} ="
-                            ),
-                            (
-                                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ "
-                                f"{length} ="
-                            ),
-                        )
-                    ),
-                    (
-                        f"{entry_count} _EXT4-JFO-CERT-RANGE @ "
-                        f"{target_home} ="
-                    ),
-                    (
-                        f"{entry_count} _EXT4-JFO-CERT-RANGE "
-                        "CELL+ @ 1 ="
-                    ),
-                    (
-                        "_EXT4-JFO-CERT-RANGES "
-                        f"{(entry_count + 1) * 2} CELLS + "
-                        "_EXT4-JFO-CERT-RANGE-CAP "
-                        f"{entry_count + 1} - 2* CELLS "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
-                    "_A4-CP-AUTHORITY",
-                    (
-                        "_A4-WRITER _EXT4-JWR.CP-MODE + @ "
-                        "_EXT4-JCPM-ORPHAN-MODERN-ADD-FIRST ="
-                    ),
-                    "_A4-WRITER _EXT4-JWR.META-CREDIT + @ 3 =",
-                    "_A4-WRITER _EXT4-JWR.META-USED + @ 3 =",
-                    "_A4-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
-                    (
-                        "_A4-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
-                        f"{target_home} ="
-                    ),
-                    (
-                        "_A4-WRITER _EXT4-JWR.CP-O-HOME + @ "
-                        f"{orphan_home} ="
-                    ),
-                    (
-                        "_A4-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
-                        f"{entry_count} ="
-                    ),
-                    (
-                        "_A4-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
-                        "_EXT4-JDM-INLINE-EXTENTS ="
-                    ),
-                    *_forth_cp_delete_vector_checks(
-                        "_A4-WRITER",
-                        data_ranges,
-                    ),
-                    "_A4-WRITER _EXT4-JWR.CP-EA-HOME + @ 0=",
-                    "_A4-WRITER _EXT4-JWR.CP-EA-ACTION + @ 0=",
-                    "_A4-WRITER _EXT4-JWR.CP-EA-REFCOUNT + @ 0=",
-                    "_A4-WRITER _EXT4-JWR.CP-EA-CRC + @ 0=",
-                    "_A4-TARGET-RECORD _EXT4-I.SIZE-LO + L@ 0=",
-                    "_A4-TARGET-RECORD _EXT4-I.SIZE-HI + L@ 0=",
-                    (
-                        "_A4-TARGET-RECORD _EXT4-I.BLOCKS-LO + L@ "
-                        f"{old_blocks} ="
-                    ),
-                    (
-                        "_A4-TARGET-RECORD _EXT4-I.FILE-ACL-LO + L@ "
-                        f"{xattr_block} ="
-                    ),
-                    (
-                        "_A4-TARGET-RECORD _EXT4-I.BLOCK + DUP W@ "
-                        "_EXT4-EXTENT-MAGIC = SWAP 2 + W@ "
-                        f"{entry_count} = AND"
-                    ),
-                    (
-                        "_A4-TARGET-RECORD _EXT4-I.BLOCK + DUP 4 + W@ "
-                        "4 = SWAP 6 + W@ 0= AND"
-                    ),
-                    (
-                        "_A4-TARGET-RECORD _EXT4-I.BLOCK + 8 + L@ "
-                        f"{root_generation} ="
-                    ),
-                    *(
-                        (
-                            "_A4-TARGET-RECORD _EXT4-I.BLOCK + "
-                            f"{12 + index * 12 + 4} + W@ "
-                            f"{raw_length} ="
-                        )
-                        for index, raw_length in enumerate(raw_lengths)
-                    ),
-                    "_A4-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                ],
-            ),
-            (
-                '_A4-ALL-SAFE @ IF ." EXT4-ORPHAN-ADD-FOUR-EXACT" '
-                'ELSE ." EXT4-ORPHAN-ADD-FOUR-CHECK " '
-                "_A4-ALL-SAFE-FIRST-FAILURE @ . THEN"
-            ),
-            "_A4-TX _EXT4-JTX-ABORT CONSTANT _A4-ABORT-IOR",
-            "DEPTH CONSTANT _A4-ABORT-DEPTH",
-            (
-                _forth_conjunction(
-                    [
-                        "_A4-ABORT-IOR 0=",
-                        "_A4-ABORT-DEPTH 0=",
-                        (
-                            "_A4-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
-                        ),
-                        "_A4-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_A4-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-ORPHAN-ADD-FOUR-ABORTED" THEN'
-            ),
-        ],
-        patches=input_patches,
-    )
-    _assert_emitted(output, "EXT4-ORPHAN-ADD-FOUR-EXACT")
-    _assert_emitted(output, "EXT4-ORPHAN-ADD-FOUR-ABORTED")
-
-
-def test_modern_orphan_add_refuses_a_full_runtime_plan_without_io(
-    canonical_images: dict[str, Path],
-) -> None:
-    path = canonical_images["primary-1k-i256"]
-    patches = _modern_orphan_patches(path, (13, 17))
-    output = run_forth(
-        path,
-        [
-            (
-                ": _AC-MOUNT ( vfs -- ior ) "
-                "1 OVER V.FDMAX ! "
-                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
-                "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
-            ),
-            "CREATE _AC-OPS VFS-OPS-SIZE ALLOT",
-            "EXT4-STAGED-WRITE-OPS _AC-OPS VFS-OPS-SIZE CMOVE",
-            "' _AC-MOUNT _AC-OPS VFS-OP-MOUNT CELLS + !",
-            "CREATE _AC-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-            (
-                "EXT4-STAGED-WRITE-BINDING _AC-BINDING "
-                "VFS-BINDING-DESC-SIZE CMOVE"
-            ),
-            "_AC-OPS _AC-BINDING VB.OPS !",
-            ": _AC-NEW _AC-BINDING SWAP VFS-NEW ;",
-            "T-ARENA CONSTANT _AC-ARENA",
-            (
-                "_AC-ARENA T-VOLUME _AC-NEW "
-                "CONSTANT _AC-MOUNT-IOR CONSTANT _AC-V"
-            ),
-            "_AC-V _EXT4-CTX CONSTANT _AC-CTX",
-            (
-                "_AC-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
-                "CONSTANT _AC-RUNTIME"
-            ),
-            (
-                "13 _AC-CTX _EXT4-ORPHAN-PLAN-FIND "
-                "CONSTANT _AC-FIND13-IOR CONSTANT _AC-RECORD13"
-            ),
-            (
-                "17 _AC-CTX _EXT4-ORPHAN-PLAN-FIND "
-                "CONSTANT _AC-FIND17-IOR CONSTANT _AC-RECORD17"
-            ),
-            "CREATE _AC-SAVED13 _EXT4-ORPHAN-RECORD-SIZE ALLOT",
-            "CREATE _AC-SAVED17 _EXT4-ORPHAN-RECORD-SIZE ALLOT",
-            (
-                "_AC-RECORD13 _AC-SAVED13 _EXT4-ORPHAN-RECORD-SIZE "
-                "CMOVE"
-            ),
-            (
-                "_AC-RECORD17 _AC-SAVED17 _EXT4-ORPHAN-RECORD-SIZE "
-                "CMOVE"
-            ),
-            (
-                "_AC-CTX _EXT4-MOUNT-TAIL-RELEASE "
-                "CONSTANT _AC-RELEASE-IOR"
-            ),
-            (
-                "_AC-CTX _AC-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
-                "CONSTANT _AC-BIND-IOR"
-            ),
-            (
-                "_AC-SAVED13 @ _AC-SAVED13 _EXT4-OE.KIND + @ "
-                "_AC-SAVED13 _EXT4-OE.LOCATOR-A + @ "
-                "_AC-SAVED13 _EXT4-OE.LOCATOR-B + @ _AC-CTX "
-                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _AC-PUT13-IOR"
-            ),
-            (
-                "_AC-SAVED17 @ _AC-SAVED17 _EXT4-OE.KIND + @ "
-                "_AC-SAVED17 _EXT4-OE.LOCATOR-A + @ "
-                "_AC-SAVED17 _EXT4-OE.LOCATOR-B + @ _AC-CTX "
-                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _AC-PUT17-IOR"
-            ),
-            (
-                "13 _AC-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
-                "CONSTANT _AC-REAUTH13-IOR CONSTANT _AC-RUNTIME13"
-            ),
-            (
-                "17 _AC-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
-                "CONSTANT _AC-REAUTH17-IOR CONSTANT _AC-RUNTIME17"
-            ),
-            "_AC-ARENA ARENA-USED CONSTANT _AC-USED-BEFORE",
-            (
-                "_AC-CTX _AC-V _EXT4-MEASURE-MODERN-ORPHAN-ADD "
-                "CONSTANT _AC-MEASURE-IOR CONSTANT _AC-META"
-            ),
-            "_AC-ARENA ARENA-USED CONSTANT _AC-USED-AFTER",
-            *_forth_accumulated_conjunction(
-                "_AC-ALL-SAFE",
-                [
-                    (
-                        "_AC-MOUNT-IOR VFS-IOR-REASON "
-                        "VFS-R-UNSUPPORTED ="
-                    ),
-                    (
-                        "_AC-MOUNT-IOR VFS-IOR-DETAIL "
-                        "EXT4-D-RECOVERY ="
-                    ),
-                    "_AC-V V.FDMAX @ 1 =",
-                    "_AC-RUNTIME 0<>",
-                    "_AC-CTX _EXT4-C.O.RUNTIME-CAPACITY + @ 2 =",
-                    "_AC-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 4 =",
-                    "_AC-FIND13-IOR 0=",
-                    "_AC-FIND17-IOR 0=",
-                    "_AC-SAVED13 _EXT4-OE.INO + @ 13 =",
-                    "_AC-SAVED17 _EXT4-OE.INO + @ 17 =",
-                    "_AC-SAVED13 _EXT4-OE.LOCATOR-A + @ 0=",
-                    "_AC-SAVED13 _EXT4-OE.LOCATOR-B + @ 0=",
-                    "_AC-SAVED17 _EXT4-OE.LOCATOR-A + @ 0=",
-                    "_AC-SAVED17 _EXT4-OE.LOCATOR-B + @ 1 =",
-                    "_AC-RELEASE-IOR 0=",
-                    "_AC-BIND-IOR 0=",
-                    "_AC-PUT13-IOR 0=",
-                    "_AC-PUT17-IOR 0=",
-                    "_AC-REAUTH13-IOR 0=",
-                    "_AC-REAUTH17-IOR 0=",
-                    "_AC-RUNTIME13 0<>",
-                    "_AC-RUNTIME17 0<>",
-                    (
-                        "_AC-RUNTIME13 _AC-CTX "
-                        "_EXT4-ORPHAN-PLAN-MEMBER?"
-                    ),
-                    (
-                        "_AC-RUNTIME17 _AC-CTX "
-                        "_EXT4-ORPHAN-PLAN-MEMBER?"
-                    ),
-                    "_AC-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
-                    "_AC-CTX _EXT4-C.O.TABLE + @ _AC-RUNTIME =",
-                    "_AC-CTX _EXT4-C.O.ACTIVE + @ 2 =",
-                    "_AC-CTX _EXT4-C.O.MODERN-ACTIVE + @ 2 =",
-                    "_AC-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                    "_AC-META 0=",
-                    "_AC-MEASURE-IOR VFS-E-NOSPC =",
-                    "_AC-USED-BEFORE _AC-USED-AFTER =",
-                    "_AC-CTX _EXT4-C.J.WRITER + @ 0=",
-                    "_AC-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    (
-                        "_AC-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
-                        "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
-                    ),
-                ],
-            ),
-            (
-                '_AC-ALL-SAFE @ IF ." EXT4-ORPHAN-ADD-CAPACITY" '
-                'ELSE ." EXT4-ORPHAN-ADD-CAPACITY-CHECK " '
-                '_AC-ALL-SAFE-FIRST-FAILURE @ . THEN'
-            ),
-        ],
-        patches=patches,
-    )
-    _assert_emitted(output, "EXT4-ORPHAN-ADD-CAPACITY")
-
-
-def _modern_orphan_add_more_checkpoint_lines(
-    *,
-    old_size: int,
-    generation: int,
-    seconds: int,
-    nanoseconds: int,
-    target_home: int,
-    orphan_home: int,
-    expect_fault: bool,
-) -> list[str]:
-    """Build one exact ADD-MORE commit/checkpoint journey."""
-    checks = [
-        (
-            "_AT-MOUNT-IOR VFS-IOR-REASON "
-            "VFS-R-UNSUPPORTED ="
-        ),
-        (
-            "_AT-MOUNT-IOR VFS-IOR-DETAIL "
-            "EXT4-D-RECOVERY ="
-        ),
-        "_AT-FIND-IOR 0=",
-        "_AT-RECORD 0<>",
-        "_AT-SAVED _EXT4-OE.INO + @ 17 =",
-        (
-            "_AT-SAVED _EXT4-OE.KIND + @ "
-            "_EXT4-OK-MODERN ="
-        ),
-        "_AT-SAVED _EXT4-OE.LOCATOR-A + @ 0=",
-        "_AT-SAVED _EXT4-OE.LOCATOR-B + @ 0=",
-        "_AT-RELEASE-IOR 0=",
-        "_AT-BIND-IOR 0=",
-        "_AT-PUT-IOR 0=",
-        "_AT-REAUTH-IOR 0=",
-        "_AT-RUNTIME-RECORD 0<>",
-        (
-            "_AT-RUNTIME-RECORD _AT-CTX "
-            "_EXT4-ORPHAN-PLAN-MEMBER?"
-        ),
-        "_AT-MEASURE-IOR 0=",
-        "_AT-META 2 =",
-        "_AT-OWNER-IOR 0=",
-        "_AT-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ -1 =",
-        "_AT-WRITER-IOR 0=",
-        "_AT-CERT-BEGIN-IOR 0=",
-        "_AT-DRY-BEGIN-IOR 0=",
-        "_AT-DRY-STAGE-IOR 0=",
-        "_AT-DRY-ABORT-IOR 0=",
-        "_AT-ACTIVATE-IOR 0=",
-        "_AT-LIVE-BEGIN-IOR 0=",
-        "_AT-LIVE-STAGE-IOR 0=",
-        "_AT-EMIT-IOR 0=",
-        "_EXT4-JFO-CERT-SCOPE @ 0=",
-        "_EXT4-JFO-CERT-VALID @ 0=",
-        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-        "_EXT4-MUTATION-OWNER-INO @ 0=",
-        "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
-        "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
-        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-    ]
-    if expect_fault:
-        checks.extend(
-            [
-                (
-                    "_AT-CHECKPOINT-IOR VFS-IOR-DOMAIN "
-                    "VFS-IOR-D-VOLUME ="
-                ),
-                (
-                    "_AT-CHECKPOINT-IOR VFS-IOR-REASON "
-                    "VFS-R-IO ="
-                ),
-                (
-                    "_AT-CHECKPOINT-IOR VFS-IOR-FLAGS "
-                    "VFS-IOR-F-PARTIAL ="
-                ),
-                (
-                    "_AT-WRITER _EXT4-JWR.FAULT + @ "
-                    "_AT-CHECKPOINT-IOR ="
-                ),
-                (
-                    "_AT-WRITER _EXT4-JWR.STATE + @ "
-                    "_EXT4-JWR-FAULTED ="
-                ),
-                (
-                    "_AT-WRITER _EXT4-JWR.PHASE + @ "
-                    "_EXT4-JWP-CHECKPOINT-HOME ="
-                ),
-                "_AT-WRITER _EXT4-JWR-VALID?",
-                "_AT-WRITER _EXT4-JWR.META-CREDIT + @ 2 =",
-                "_AT-WRITER _EXT4-JWR.META-USED + @ 2 =",
-                "_AT-WRITER _EXT4-JWR.META-ACTIVE + @ 2 =",
-                "_AT-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
-                "_AT-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
-                (
-                    "_AT-WRITER _EXT4-JWR.CP-MODE + @ "
-                    "_EXT4-JCPM-ORPHAN-MODERN-ADD-MORE ="
-                ),
-                "_AT-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 1 =",
-                "_AT-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 1 =",
-                "_AT-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 0=",
-                (
-                    "0 _AT-WRITER _EXT4-JWR-META-ENTRY @ "
-                    f"{target_home} ="
-                ),
-                (
-                    "1 _AT-WRITER _EXT4-JWR-META-ENTRY @ "
-                    f"{orphan_home} ="
-                ),
-                (
-                    "_AT-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
-                    f"{target_home} ="
-                ),
-                (
-                    "_AT-WRITER _EXT4-JWR.CP-O-HOME + @ "
-                    f"{orphan_home} ="
-                ),
-                "_AT-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 0=",
-                "_AT-WRITER _EXT4-JWR.CP-O-SLOT + @ 1 =",
-                "_AT-WRITER _EXT4-JWR.CP-O-INO + @ 14 =",
-                (
-                    "_AT-WRITER _EXT4-JWR.CP-TARGET-GEN + @ "
-                    f"{generation} ="
-                ),
-                "_AT-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 1 =",
-                (
-                    "_AT-WRITER _EXT4-JWR.CP-ADD-SECONDS + @ "
-                    f"{seconds} ="
-                ),
-                (
-                    "_AT-WRITER _EXT4-JWR.CP-ADD-NSEC + @ "
-                    f"{nanoseconds} ="
-                ),
-                "_AT-WRITER _EXT4-JWR.CP-ADD-SUPER-CRC + @ 0=",
-                (
-                    "0 _AT-WRITER _EXT4-JWR-META-ENTRY "
-                    "2 CELLS + @ _AT-WRITER "
-                    "_EXT4-JWR.CP-TARGET-CRC + @ ="
-                ),
-                (
-                    "1 _AT-WRITER _EXT4-JWR-META-ENTRY "
-                    "2 CELLS + @ _AT-WRITER "
-                    "_EXT4-JWR.CP-ORPHAN-CRC + @ ="
-                ),
-                "_AT-WRITER _EXT4-JWR-CP-AUTHORITY?",
-                "_AT-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
-                "_AT-CTX _EXT4-C.J.COMMITTED + @ 1 =",
-                "_AT-CTX _EXT4-C.RECOVERY + @ 0<>",
-                "_AT-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
-                "_AT-CTX _EXT4-C.O.ACTIVE + @ 1 =",
-                "_AT-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
-                "_AT-POST-FIND-IOR 0=",
-                "_AT-POST-RECORD 0=",
-            ]
-        )
-        marker = "EXT4-ORPHAN-ADD-MORE-HOME-FAULT"
-    else:
-        checks.extend(
-            [
-                "_AT-CHECKPOINT-IOR 0=",
-                (
-                    "_AT-WRITER _EXT4-JWR.STATE + @ "
-                    "_EXT4-JWR-IDLE ="
-                ),
-                "_AT-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                "_AT-WRITER _EXT4-JWR-VALID?",
-                "_AT-CTX _EXT4-C.J.HOME-WRITES + @ 2 =",
-                "_AT-CTX _EXT4-C.J.COMMITTED + @ 0=",
-                "_AT-CTX _EXT4-C.RECOVERY + @ 0<>",
-                "_AT-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
-                "_AT-CTX _EXT4-C.O.ACTIVE + @ 2 =",
-                "_AT-CTX _EXT4-C.O.MODERN-ACTIVE + @ 2 =",
-                "_AT-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                "_AT-POST-FIND-IOR 0=",
-                "_AT-POST-RECORD 0<>",
-                (
-                    "_AT-POST-RECORD _AT-CTX "
-                    "_EXT4-ORPHAN-PLAN-MEMBER?"
-                ),
-                (
-                    "_AT-POST-RECORD _EXT4-OE.KIND + @ "
-                    "_EXT4-OK-MODERN ="
-                ),
-                "_AT-POST-RECORD _EXT4-OE.LOCATOR-A + @ 0=",
-                "_AT-POST-RECORD _EXT4-OE.LOCATOR-B + @ 1 =",
-            ]
-        )
-        marker = "EXT4-ORPHAN-ADD-MORE-HOME-LANDED"
-
-    return [
-        (
-            ": _AT-MOUNT ( vfs -- ior ) "
-            "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
-            "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
-        ),
-        "CREATE _AT-OPS VFS-OPS-SIZE ALLOT",
-        "EXT4-STAGED-WRITE-OPS _AT-OPS VFS-OPS-SIZE CMOVE",
-        "' _AT-MOUNT _AT-OPS VFS-OP-MOUNT CELLS + !",
-        "CREATE _AT-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-        (
-            "EXT4-STAGED-WRITE-BINDING _AT-BINDING "
-            "VFS-BINDING-DESC-SIZE CMOVE"
-        ),
-        "_AT-OPS _AT-BINDING VB.OPS !",
-        ": _AT-NEW _AT-BINDING SWAP VFS-NEW ;",
-        "T-ARENA CONSTANT _AT-ARENA",
-        (
-            "_AT-ARENA T-VOLUME _AT-NEW "
-            "CONSTANT _AT-MOUNT-IOR CONSTANT _AT-V"
-        ),
-        "_AT-V _EXT4-CTX CONSTANT _AT-CTX",
-        (
-            "17 _AT-CTX _EXT4-ORPHAN-PLAN-FIND "
-            "CONSTANT _AT-FIND-IOR CONSTANT _AT-RECORD"
-        ),
-        "CREATE _AT-SAVED _EXT4-ORPHAN-RECORD-SIZE ALLOT",
-        (
-            "_AT-RECORD _AT-SAVED _EXT4-ORPHAN-RECORD-SIZE "
-            "CMOVE"
-        ),
-        (
-            "_AT-CTX _EXT4-MOUNT-TAIL-RELEASE "
-            "CONSTANT _AT-RELEASE-IOR"
-        ),
-        (
-            "_AT-CTX _AT-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
-            "CONSTANT _AT-BIND-IOR"
-        ),
-        (
-            "_AT-SAVED @ _AT-SAVED _EXT4-OE.KIND + @ "
-            "_AT-SAVED _EXT4-OE.LOCATOR-A + @ "
-            "_AT-SAVED _EXT4-OE.LOCATOR-B + @ _AT-CTX "
-            "_EXT4-ORPHAN-TABLE-PUT CONSTANT _AT-PUT-IOR"
-        ),
-        (
-            "17 _AT-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
-            "CONSTANT _AT-REAUTH-IOR CONSTANT _AT-RUNTIME-RECORD"
-        ),
-        (
-            "_AT-CTX _AT-V _EXT4-MEASURE-MODERN-ORPHAN-ADD "
-            "CONSTANT _AT-MEASURE-IOR CONSTANT _AT-META"
-        ),
-        "_AT-V V.VOLUME @ _EXT4-IO-VOL ! _AT-V _EXT4-IO-VFS !",
-        (
-            "_AT-CTX _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS "
-            "CONSTANT _AT-OWNER-IOR"
-        ),
-        "-1 _AT-CTX _EXT4-C.J.WRITER-CURRENT + !",
-        (
-            "2 0 0 _AT-CTX _EXT4-JWR-ALLOCATE-MOUNT "
-            "CONSTANT _AT-WRITER-IOR CONSTANT _AT-WRITER"
-        ),
-        "_EXT4-JFO-CERT-BEGIN CONSTANT _AT-CERT-BEGIN-IOR",
-        (
-            "2 0 0 _AT-WRITER _EXT4-JTX-BEGIN "
-            "CONSTANT _AT-DRY-BEGIN-IOR CONSTANT _AT-DRY-TX"
-        ),
-        (
-            f"{old_size} 14 {generation} {seconds} {nanoseconds} "
-            "_AT-DRY-TX _EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE-ZERO "
-            "CONSTANT _AT-DRY-STAGE-IOR"
-        ),
-        (
-            "_AT-DRY-TX _EXT4-JTX-ABORT "
-            "CONSTANT _AT-DRY-ABORT-IOR"
-        ),
-        (
-            "_AT-WRITER _EXT4-JWR-ACTIVATE "
-            "CONSTANT _AT-ACTIVATE-IOR"
-        ),
-        (
-            "2 0 0 _AT-WRITER _EXT4-JTX-BEGIN "
-            "CONSTANT _AT-LIVE-BEGIN-IOR CONSTANT _AT-LIVE-TX"
-        ),
-        (
-            f"{old_size} 14 {generation} {seconds} {nanoseconds} "
-            "_AT-LIVE-TX _EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE-ZERO "
-            "CONSTANT _AT-LIVE-STAGE-IOR"
-        ),
-        "_AT-LIVE-TX _EXT4-JTX-EMIT CONSTANT _AT-EMIT-IOR",
-        (
-            "_AT-LIVE-TX _EXT4-JTX-CHECKPOINT "
-            "CONSTANT _AT-CHECKPOINT-IOR"
-        ),
-        "_EXT4-JFO-CERT-END",
-        (
-            "14 _AT-CTX _EXT4-ORPHAN-PLAN-FIND "
-            "CONSTANT _AT-POST-FIND-IOR CONSTANT _AT-POST-RECORD"
-        ),
-        *_forth_accumulated_conjunction("_AT-ALL-SAFE", checks),
-        (
-            f'_AT-ALL-SAFE @ IF ." {marker}" ELSE ." '
-            f'{marker}-CHECK " _AT-ALL-SAFE-FIRST-FAILURE @ . THEN'
-        ),
-    ]
-
-
-def test_modern_orphan_add_more_home_tear_replays_and_drains_full_union(
-    canonical_images: dict[str, Path],
-    jbd2_toolchain: dict[str, object],
-    tmp_path: Path,
-) -> None:
-    """A torn ADD-MORE slot must replay and drain both modern records."""
-    path = canonical_images["primary-1k-i256"]
-    source_patches = list(_modern_orphan_patches(path, (17,)))
-    expected_patches = list(_modern_orphan_patches(path, (17, 14)))
-    assert source_patches[0] == expected_patches[0]
-    assert source_patches[1][0] == expected_patches[1][0]
-
-    superblock, target_inode, target_offset = _ext4_inode_record(path, 14)
-    _, seed_inode, seed_offset = _ext4_inode_record(path, 17)
-    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    target_home, target_block_offset = divmod(target_offset, block_size)
-    orphan_home = source_patches[1][0] // block_size
-    target_data = _extent_root_physical(target_inode, 0)
-    seed_data = (
-        _extent_root_physical(seed_inode, 0),
-        _extent_root_physical(seed_inode, 2),
-    )
-    old_size = struct.unpack_from("<I", target_inode, 0x04)[0]
-    generation = struct.unpack_from("<I", target_inode, 0x64)[0]
-    seed_size = struct.unpack_from("<I", seed_inode, 0x04)[0]
-    seed_blocks = struct.unpack_from("<I", seed_inode, 0x1C)[0]
-    seed_links = struct.unpack_from("<H", seed_inode, 0x1A)[0]
-    seconds = 3_000_001_234
-    nanoseconds = 567_000_000
-    epoch_ms = seconds * 1000 + nanoseconds // 1_000_000
-    assert block_size == 1024
-    assert target_home == 278
-    assert target_data == 1346
-    assert seed_data == (1348, 1350)
-    assert old_size == 54
-    assert generation == 0
-    assert seed_size == 3072
-    assert seed_blocks == 4
-    assert seed_links == 1
-
-    zero_size_seed = bytearray(seed_inode)
-    struct.pack_into("<I", zero_size_seed, 0x04, 0)
-    struct.pack_into("<I", zero_size_seed, 0x6C, 0)
-    zero_size_seed = _inode_with_checksum(
-        source_patches[0][1],
-        17,
-        zero_size_seed,
-    )
-    assert struct.unpack_from("<I", zero_size_seed, 0x04)[0] == 0
-    assert struct.unpack_from("<I", zero_size_seed, 0x1C)[0] == seed_blocks
-    source_patches.append((seed_offset, zero_size_seed))
-    expected_patches.append((seed_offset, zero_size_seed))
-    source_patches = tuple(source_patches)
-    expected_patches = tuple(expected_patches)
-
-    original_target = _patched_ext4_home(
-        path,
-        source_patches,
-        target_home,
-        block_size=block_size,
-    )
-    expected_target = _staged_write_timestamped_inode_home(
-        source_patches[0][1],
-        target_inode,
-        original_target,
-        inode_number=14,
-        inode_block_offset=target_block_offset,
-        epoch_ms=epoch_ms,
-        expected_size=0,
-    )
-    old_orphan = _patched_ext4_home(
-        path,
-        source_patches,
-        orphan_home,
-        block_size=block_size,
-    )
-    new_orphan = _patched_ext4_home(
-        path,
-        expected_patches,
-        orphan_home,
-        block_size=block_size,
-    )
-    assert struct.unpack_from("<II", old_orphan, 0) == (17, 0)
-    assert struct.unpack_from("<II", new_orphan, 0) == (17, 14)
-    tear_offset = 8
-    torn_orphan = new_orphan[:tear_offset] + old_orphan[tear_offset:]
-    assert torn_orphan not in {old_orphan, new_orphan}
-
-    success = tmp_path / "modern-orphan-add-more-success.img"
-    success_output, success_trace, _ = run_recovery_forth(
-        path,
-        success,
-        _modern_orphan_add_more_checkpoint_lines(
-            old_size=old_size,
-            generation=generation,
-            seconds=seconds,
-            nanoseconds=nanoseconds,
-            target_home=target_home,
-            orphan_home=orphan_home,
-            expect_fault=False,
-        ),
-        patches=source_patches,
-    )
-    _assert_emitted(success_output, "EXT4-ORPHAN-ADD-MORE-HOME-LANDED")
-    target_ordinals = _write_ordinals_for_ext4_home(
-        success_trace,
-        target_home,
-        block_size=block_size,
-    )
-    orphan_ordinals = _write_ordinals_for_ext4_home(
-        success_trace,
-        orphan_home,
-        block_size=block_size,
-    )
-    assert len(target_ordinals) == 1
-    assert len(orphan_ordinals) == 1
-    assert target_ordinals[0] + 1 == orphan_ordinals[0]
-    orphan_ordinal = orphan_ordinals[0]
-    orphan_event = _trace_event_index_for_ordinal(
-        success_trace,
-        "write",
-        orphan_ordinal,
-    )
-
-    faulted = tmp_path / "modern-orphan-add-more-faulted.img"
-    repaired = tmp_path / "modern-orphan-add-more-repaired.img"
-    stable = tmp_path / "modern-orphan-add-more-stable.img"
-    fault_output, fault_trace, _ = run_recovery_forth(
-        path,
-        faulted,
-        _modern_orphan_add_more_checkpoint_lines(
-            old_size=old_size,
-            generation=generation,
-            seconds=seconds,
-            nanoseconds=nanoseconds,
-            target_home=target_home,
-            orphan_home=orphan_home,
-            expect_fault=True,
-        ),
-        patches=source_patches,
-        write_faults_by_ordinal={
-            orphan_ordinal: {
-                "stage": "media",
-                "sector_index": 0,
-                "byte_index": tear_offset,
-                "result": STORAGE_RESULT_MEDIA_FAILURE,
-                "command": STORAGE_CMD_WRITE,
-            }
-        },
-        capture_media=faulted,
-    )
-    _assert_emitted(fault_output, "EXT4-ORPHAN-ADD-MORE-HOME-FAULT")
-    assert fault_trace == success_trace[: orphan_event + 1]
-    assert _read_ext4_home(
-        faulted,
-        target_home,
-        block_size=block_size,
-    ) == expected_target
-    assert _read_ext4_home(
-        faulted,
-        orphan_home,
-        block_size=block_size,
-    ) == torn_orphan
-    assert _ext4_block_allocation_state(
-        faulted,
-        (target_data, *seed_data),
-    ) == {
-        target_data: True,
-        seed_data[0]: True,
-        seed_data[1]: True,
-    }
-
-    recovery_trace, _ = _assert_singleton_cleanup_media_converges(
-        faulted,
-        repaired,
-        stable,
-        protocol="modern",
-        recovery_max_steps=_MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS,
-    )
-    assert recovery_trace
-    _, final_seed, _ = _ext4_inode_record(stable, 17)
-    assert struct.unpack_from("<I", final_seed, 0x04)[0] == 0
-    assert struct.unpack_from("<I", final_seed, 0x6C)[0] == 0
-    assert struct.unpack_from("<I", final_seed, 0x1C)[0] == 0
-    assert struct.unpack_from("<H", final_seed, 0x74)[0] == 0
-    assert struct.unpack_from("<H", final_seed, 0x1A)[0] == seed_links
-    assert struct.unpack_from("<HHHH", final_seed, 0x28) == (
-        0xF30A,
-        0,
-        4,
-        0,
-    )
-    assert not any(final_seed[0x34:0x64])
-    assert _ext4_block_allocation_state(
-        stable,
-        (target_data, *seed_data),
-    ) == {
-        target_data: False,
-        seed_data[0]: False,
-        seed_data[1]: False,
-    }
-    _assert_e2fsck_clean(stable, jbd2_toolchain)
-
-
 @pytest.mark.parametrize(
     (
         "case",
@@ -21976,6 +20283,14 @@ def test_linked_nonempty_legacy_map_remains_unsupported(
     _assert_emitted(output, marker)
 
 
+
+# A linked orphan record whose inode still maps blocks past EOF measures a
+# release pass rather than its exact homes.  At 1 KiB blocks, mount
+# recovery's own writer frees a full leaf of 84 fragmented extents at two
+# homes each, with three more homes for each of five tree levels and eight
+# besides.
+_EXT4_RECOVERY_RELEASE_CREDIT = 2 * ((1024 - 12) // 12) + 3 * 5 + 8
+
 @pytest.mark.parametrize("extent_count", (1, 2))
 def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
     canonical_images: dict[str, Path],
@@ -22110,7 +20425,7 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
                         "_LM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
                         "_LM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 2 =",
                         "_LM-MEASURE-IOR 0=",
-                        "_LM-CREDIT 4 =",
+                        f"_LM-CREDIT {_EXT4_RECOVERY_RELEASE_CREDIT} =",
                         "_LM-CAPACITY-IOR 0=",
                         "_LM-WRITER-IOR 0=",
                         "_LM-BEGIN-IOR 0=",
@@ -22122,7 +20437,10 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
                             "_LM-WRITER _EXT4-JWR.STATE + @ "
                             "_EXT4-JWR-STAGING ="
                         ),
-                        "_LM-WRITER _EXT4-JWR.META-CREDIT + @ 4 =",
+                        (
+                            "_LM-WRITER _EXT4-JWR.META-CREDIT + @ "
+                            f"{_EXT4_RECOVERY_RELEASE_CREDIT} ="
+                        ),
                         "_LM-WRITER _EXT4-JWR.META-USED + @ 4 =",
                         "_LM-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
                         "_LM-WRITER _EXT4-JWR.DATA-USED + @ 0=",
@@ -22354,7 +20672,7 @@ def test_linked_modern_head_with_successor_stages_exact_more_transaction(
                         "_MM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 2 =",
                         "_MM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
                         "_MM-MEASURE-IOR 0=",
-                        "_MM-CREDIT 5 =",
+                        f"_MM-CREDIT {_EXT4_RECOVERY_RELEASE_CREDIT} =",
                         "_MM-CAPACITY-IOR 0=",
                         "_MM-WRITER-IOR 0=",
                         "_MM-BEGIN-IOR 0=",
@@ -22366,7 +20684,10 @@ def test_linked_modern_head_with_successor_stages_exact_more_transaction(
                             "_MM-WRITER _EXT4-JWR.STATE + @ "
                             "_EXT4-JWR-STAGING ="
                         ),
-                        "_MM-WRITER _EXT4-JWR.META-CREDIT + @ 5 =",
+                        (
+                            "_MM-WRITER _EXT4-JWR.META-CREDIT + @ "
+                            f"{_EXT4_RECOVERY_RELEASE_CREDIT} ="
+                        ),
                         "_MM-WRITER _EXT4-JWR.META-USED + @ 5 =",
                         "_MM-WRITER _EXT4-JWR.META-ACTIVE + @ 5 =",
                         "_MM-WRITER _EXT4-JWR.DATA-USED + @ 0=",
@@ -26343,10 +24664,10 @@ def _run_multi_linked_cleanup(
         assert len(data_bitmap_writes) == len(gdt_writes) == 1
         assert (
             super_writes[0]
-            < inode18_writes[0]
             < gdt_writes[0]
             < data_bitmap_writes[0]
             < super_writes[1]
+            < inode18_writes[0]
         )
         for physical in data_blocks:
             assert not _write_ordinals_for_ext4_home(trace, physical)
@@ -26365,10 +24686,10 @@ def _run_multi_linked_cleanup(
             < super_writes[2]
         )
         first_home_batch = (
-            inode18_writes[0],
             gdt_writes[0],
             data_bitmap_writes[0],
             super_writes[1],
+            inode18_writes[0],
             orphan_writes[0],
         )
         assert first_home_batch == tuple(
@@ -28296,18 +26617,19 @@ def _linked_first_more_trace_points(
     gdt_write = gdt_writes[0]
     bitmap_write = bitmap_writes[0]
     more_super_write = super_writes[1]
+    # The release stages its freed run's accounting before the inode.
     first_home_writes = (
-        inode18_write,
         gdt_write,
         bitmap_write,
         more_super_write,
+        inode18_write,
     )
     if protocol == "modern":
         first_home_writes += (orphan_writes[0],)
     assert first_home_writes == tuple(
-        range(inode18_write, inode18_write + len(first_home_writes))
+        range(gdt_write, gdt_write + len(first_home_writes))
     )
-    assert super_writes[0] < inode18_write
+    assert super_writes[0] < gdt_write
     if protocol == "modern":
         assert more_super_write < orphan_writes[0] < orphan_writes[1]
         assert orphan_writes[1] < super_writes[2]
@@ -28315,16 +26637,16 @@ def _linked_first_more_trace_points(
         assert more_super_write < super_writes[2] < super_writes[3]
     assert not _write_ordinals_for_ext4_home(trace, data_block)
 
-    commit_write = inode18_write - 1
+    commit_write = first_home_writes[0] - 1
     commit_event = _trace_event_index_for_ordinal(
         trace,
         "write",
         commit_write,
     )
-    inode18_event = _trace_event_index_for_ordinal(
+    first_home_event = _trace_event_index_for_ordinal(
         trace,
         "write",
-        inode18_write,
+        first_home_writes[0],
     )
     last_more_home_write = first_home_writes[-1]
     last_more_home_event = _trace_event_index_for_ordinal(
@@ -28332,7 +26654,7 @@ def _linked_first_more_trace_points(
         "write",
         last_more_home_write,
     )
-    assert inode18_event == commit_event + 2
+    assert first_home_event == commit_event + 2
     assert trace[commit_event + 1] == ("flush", 0, 0)
     assert trace[last_more_home_event + 1] == ("flush", 0, 0)
 
@@ -30401,6 +28723,12 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
         patches = _zero_size_depth0_legacy_orphan_patches(path)
     sealed_marker = f"EXT4-LEGACY-{case.upper()}-FINAL-SEALED"
     aborted_marker = f"EXT4-LEGACY-{case.upper()}-FINAL-ABORTED"
+    # A record whose data still needs releasing measures a release pass.
+    measured_credit = (
+        expected_credit
+        if case == "already-truncated"
+        else _EXT4_RECOVERY_RELEASE_CREDIT
+    )
     primary_home_check = []
     if expected_credit == 1:
         primary_home_check.append(
@@ -30490,7 +28818,7 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
                         "_LF-RECORD _EXT4-OE.LOCATOR-B + @ 0=",
                         "_LF-MEASURE1-IOR 0=",
                         "_LF-MEASURE2-IOR 0=",
-                        f"_LF-CREDIT1 {expected_credit} =",
+                        f"_LF-CREDIT1 {measured_credit} =",
                         "_LF-CREDIT2 _LF-CREDIT1 =",
                         "_LF-CAPACITY-IOR 0=",
                         "_LF-WRITER-IOR 0=",
@@ -32459,7 +30787,7 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
                             "EXT4-D-ORPHAN-FILE ="
                         ),
                         "_OF-MEASURE-IOR 0=",
-                        "_OF-CREDIT 5 =",
+                        f"_OF-CREDIT {_EXT4_RECOVERY_RELEASE_CREDIT} =",
                         "_OF-CAPACITY-IOR 0=",
                         "_OF-WRITER-IOR 0=",
                         "_OF-TX-IOR 0=",
@@ -32568,19 +30896,13 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
                         "_OM-JOURNAL-IOR 0=",
                         "_OM-MEASURE1-IOR 0=",
                         "_OM-MEASURE2-IOR 0=",
-                        "_OM-CREDIT1 6 =",
+                        f"_OM-CREDIT1 {_EXT4_RECOVERY_RELEASE_CREDIT} =",
                         "_OM-CREDIT2 _OM-CREDIT1 =",
                         "_OM-WRITER-IOR 0=",
                         "_OM-BEGIN-IOR 0=",
                         "_OM-STAGE-IOR 0=",
-                        (
-                            "_OM-WRITER _EXT4-JWR.META-USED + @ "
-                            "_OM-CREDIT1 ="
-                        ),
-                        (
-                            "_OM-WRITER _EXT4-JWR.META-ACTIVE + @ "
-                            "_OM-CREDIT1 ="
-                        ),
+                        "_OM-WRITER _EXT4-JWR.META-USED + @ 6 =",
+                        "_OM-WRITER _EXT4-JWR.META-ACTIVE + @ 6 =",
                         "_OM-WRITER _EXT4-JWR-CP-AUTHORITY?",
                         "_OM-WRITER _EXT4-JTX-TABLES-VALID?",
                         "_OM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
@@ -33120,526 +31442,6 @@ def test_linked_legacy_more_rejects_postseal_certificate_tamper_prehome(
         media_path.unlink(missing_ok=True)
 
     _assert_emitted(output, marker)
-
-
-@pytest.mark.parametrize(
-    ("image_id", "data_block", "xattr_block", "bitmap_home"),
-    (
-        ("primary-1k-i256", 1346, 1349, 259),
-        ("primary-2k-i256", 1204, 1207, 129),
-        ("primary-4k-i256", 2160, 2163, 65),
-    ),
-)
-def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
-    canonical_images: dict[str, Path],
-    image_id: str,
-    data_block: int,
-    xattr_block: int,
-    bitmap_home: int,
-) -> None:
-    path = canonical_images[image_id]
-    patches = _zero_size_depth0_orphan_patches(path)
-    superblock = patches[0][1]
-    orphan_home = patches[1][0] // (
-        1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    )
-    inode_offset, zero_size_inode = patches[2]
-    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    sectors_per_block = block_size // 512
-    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
-    total_blocks = struct.unpack_from("<I", superblock, 0x04)[0] | (
-        struct.unpack_from("<I", superblock, 0x150)[0] << 32
-    )
-    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
-    seed = struct.unpack_from("<I", superblock, 0x270)[0]
-    group, data_index = divmod(data_block - first_data, blocks_per_group)
-    xattr_group, xattr_index = divmod(
-        xattr_block - first_data, blocks_per_group
-    )
-    assert group == xattr_group == 0
-    group_first = first_data + group * blocks_per_group
-    group_blocks = min(blocks_per_group, total_blocks - group_first)
-    assert max(data_index, xattr_index) < group_blocks
-    inode_home, inode_block_offset = divmod(inode_offset, block_size)
-    gdt_home = 2 if block_size == 1024 else 1
-    super_home = 1 if block_size == 1024 else 0
-    super_offset = 0 if block_size == 1024 else 1024
-
-    def read_block(block: int) -> bytearray:
-        with path.open("rb") as source:
-            source.seek(block * block_size)
-            result = bytearray(source.read(block_size))
-        assert len(result) == block_size
-        return result
-
-    terminal_inode = bytearray(zero_size_inode)
-    assert struct.unpack_from("<HHHH", terminal_inode, 0x28) == (
-        0xF30A,
-        1,
-        4,
-        0,
-    )
-    assert struct.unpack_from("<I", terminal_inode, 0x1C)[0] == (
-        2 * sectors_per_block
-    )
-    struct.pack_into("<H", terminal_inode, 0x2A, 0)
-    terminal_inode[0x34:0x64] = bytes(48)
-    struct.pack_into("<I", terminal_inode, 0x1C, sectors_per_block)
-    struct.pack_into("<H", terminal_inode, 0x74, 0)
-    terminal_inode = bytearray(
-        _inode_with_checksum(superblock, 14, terminal_inode)
-    )
-    expected_inode_table = read_block(inode_home)
-    expected_inode_table[
-        inode_block_offset : inode_block_offset + len(terminal_inode)
-    ] = terminal_inode
-
-    expected_bitmap = read_block(bitmap_home)
-    data_byte, data_bit = divmod(data_index, 8)
-    xattr_byte, xattr_bit = divmod(xattr_index, 8)
-    assert expected_bitmap[data_byte] & (1 << data_bit)
-    assert expected_bitmap[xattr_byte] & (1 << xattr_bit)
-    expected_bitmap[data_byte] &= ~(1 << data_bit)
-    bitmap_checksum = _crc32c_raw(expected_bitmap, seed)
-
-    expected_gdt = read_block(gdt_home)
-    descriptor_offset = group * 64 % block_size
-    descriptor = bytearray(
-        expected_gdt[descriptor_offset : descriptor_offset + 64]
-    )
-    group_free_before = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
-        struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
-    )
-    group_free_after = group_free_before + 1
-    struct.pack_into("<H", descriptor, 0x0C, group_free_after & 0xFFFF)
-    struct.pack_into("<H", descriptor, 0x2C, group_free_after >> 16)
-    struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
-    struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
-    descriptor = bytearray(
-        _group_descriptor_with_checksum(superblock, descriptor, group)
-    )
-    descriptor_checksum = struct.unpack_from("<H", descriptor, 0x1E)[0]
-    expected_gdt[descriptor_offset : descriptor_offset + 64] = descriptor
-
-    expected_super_home = read_block(super_home)
-    expected_super_home[super_offset : super_offset + 1024] = superblock
-    staged_super = bytearray(superblock)
-    super_free_before = struct.unpack_from("<I", staged_super, 0x0C)[0]
-    assert struct.unpack_from("<I", staged_super, 0x158)[0] == 0
-    super_free_after = super_free_before + 1
-    struct.pack_into("<I", staged_super, 0x0C, super_free_after)
-    staged_super = bytearray(_ext4_super_with_checksum(staged_super))
-    super_checksum = struct.unpack_from("<I", staged_super, 0x3FC)[0]
-    expected_super_home[
-        super_offset : super_offset + 1024
-    ] = staged_super
-
-    expected_inode_crc = _crc32c_raw(expected_inode_table)
-    expected_gdt_crc = _crc32c_raw(expected_gdt)
-    expected_bitmap_crc = _crc32c_raw(expected_bitmap)
-    expected_super_crc = _crc32c_raw(expected_super_home)
-
-    output = run_forth(
-        path,
-        [
-            *_EXT4_AUTH_ONLY_BINDING_FORTH,
-            (
-                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
-                "CONSTANT _OT-MOUNT-IOR CONSTANT _OT-V"
-            ),
-            "_OT-V _EXT4-CTX CONSTANT _OT-CTX",
-            "0 _OT-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OT-RECORD",
-            "1 _OT-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OT-EMPTY",
-            "CREATE _OT-COPY _EXT4-ORPHAN-RECORD-SIZE ALLOT",
-            (
-                "_OT-RECORD _OT-COPY _EXT4-ORPHAN-RECORD-SIZE "
-                "CMOVE"
-            ),
-            (
-                "_OT-RECORD _OT-EMPTY _EXT4-ORPHAN-RECORD-SIZE CMOVE "
-                "_OT-EMPTY _OT-CTX _EXT4-ORPHAN-PLAN-MEMBER? "
-                "CONSTANT _OT-INJECTED-MEMBER "
-                "_OT-EMPTY _EXT4-ORPHAN-RECORD-SIZE 0 FILL"
-            ),
-            (
-                "_OT-CTX _EXT4-C.FREE-BLOCKS + @ "
-                "CONSTANT _OT-CONTEXT-FREE"
-            ),
-            (
-                "_OT-CTX _EXT4-C.SB + _EXT4-SB.FREE-BLOCKS-LO + L@ "
-                "CONSTANT _OT-CACHED-SUPER-FREE"
-            ),
-            "_OT-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OT-JOURNAL-IOR",
-            "-1 _OT-CTX _EXT4-C.J.WRITER-CURRENT + !",
-            (
-                "4 0 0 _OT-CTX _EXT4-JWR-ALLOCATE-MOUNT "
-                "CONSTANT _OT-WRITER-IOR CONSTANT _OT-WRITER"
-            ),
-            "_OT-WRITER _EXT4-JWR.FREE + @ CONSTANT _OT-FREE-BEFORE",
-            (
-                "4 0 0 _OT-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _OT-TX-IOR CONSTANT _OT-TX"
-            ),
-            (
-                "_OT-COPY _OT-TX "
-                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
-                "CONSTANT _OT-COPY-IOR"
-            ),
-            (
-                "_OT-WRITER _EXT4-JWR.META-USED + @ "
-                "CONSTANT _OT-USED-AFTER-COPY"
-            ),
-            (
-                "_OT-RECORD _OT-TX "
-                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
-                "CONSTANT _OT-STAGE-IOR"
-            ),
-            (
-                "0 _OT-WRITER _EXT4-JWR-META-IMAGE "
-                "CONSTANT _OT-INODE-IMAGE"
-            ),
-            (
-                "1 _OT-WRITER _EXT4-JWR-META-IMAGE "
-                "CONSTANT _OT-GDT-IMAGE"
-            ),
-            (
-                "2 _OT-WRITER _EXT4-JWR-META-IMAGE "
-                "CONSTANT _OT-BITMAP-IMAGE"
-            ),
-            (
-                "3 _OT-WRITER _EXT4-JWR-META-IMAGE "
-                "CONSTANT _OT-SUPER-IMAGE"
-            ),
-            (
-                "_OT-CTX _EXT4-PREPARE-ORPHAN-FILE "
-                "CONSTANT _OT-ORPHAN-PREP-IOR"
-            ),
-            (
-                "0 _OT-CTX _EXT4-READ-ORPHAN-BLOCK "
-                "CONSTANT _OT-ORPHAN-READ-IOR"
-            ),
-            "_OT-CTX _EXT4-C.BLOCK + L@ CONSTANT _OT-MEDIA-SLOT",
-            (
-                _forth_conjunction(
-                    [
-                        (
-                            "_OT-MOUNT-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
-                        ),
-                        (
-                            "_OT-MOUNT-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-RECOVERY ="
-                        ),
-                        "_OT-JOURNAL-IOR 0=",
-                        "_OT-WRITER-IOR 0=",
-                        "_OT-TX-IOR 0=",
-                        "_OT-RECORD _OT-CTX _EXT4-ORPHAN-PLAN-MEMBER?",
-                        (
-                            "_OT-COPY _OT-CTX "
-                            "_EXT4-ORPHAN-PLAN-MEMBER? 0="
-                        ),
-                        (
-                            "_OT-EMPTY _OT-CTX "
-                            "_EXT4-ORPHAN-PLAN-MEMBER? 0="
-                        ),
-                        "_OT-INJECTED-MEMBER 0=",
-                        (
-                            "_OT-COPY-IOR VFS-IOR-REASON "
-                            "VFS-R-CORRUPT ="
-                        ),
-                        (
-                            "_OT-COPY-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-ORPHAN-FILE ="
-                        ),
-                        "_OT-USED-AFTER-COPY 0=",
-                        "_OT-STAGE-IOR 0=",
-                        "_OT-ORPHAN-PREP-IOR 0=",
-                        "_OT-ORPHAN-READ-IOR 0=",
-                        "_OT-MEDIA-SLOT 14 =",
-                        "_OT-CTX _EXT4-C.O.ACTIVE + @ 1 =",
-                        "_OT-RECORD _EXT4-OE.INO + @ 14 =",
-                        (
-                            "_OT-RECORD _EXT4-OE.KIND + @ "
-                            "_EXT4-OK-MODERN ="
-                        ),
-                        "_OT-RECORD _EXT4-OE.LOCATOR-A + @ 0=",
-                        "_OT-RECORD _EXT4-OE.LOCATOR-B + @ 0=",
-                        "_OT-WRITER _EXT4-JWR.META-USED + @ 4 =",
-                        "_OT-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
-                        "_OT-WRITER _EXT4-JTX-TABLES-VALID?",
-                        (
-                            "0 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{inode_home} ="
-                        ),
-                        (
-                            "1 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{gdt_home} ="
-                        ),
-                        (
-                            "2 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{bitmap_home} ="
-                        ),
-                        (
-                            "3 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{super_home} ="
-                        ),
-                        (
-                            f"0 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{orphan_home} <>"
-                        ),
-                        (
-                            f"1 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{orphan_home} <>"
-                        ),
-                        (
-                            f"2 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{orphan_home} <>"
-                        ),
-                        (
-                            f"3 _OT-WRITER _EXT4-JWR-META-ENTRY @ "
-                            f"{orphan_home} <>"
-                        ),
-                        (
-                            f"_OT-INODE-IMAGE {inode_block_offset} + "
-                            "_EXT4-I.SIZE-LO + L@ 0="
-                        ),
-                        (
-                            f"_OT-INODE-IMAGE {inode_block_offset} + "
-                            "_EXT4-I.SIZE-HI + L@ 0="
-                        ),
-                        (
-                            f"_OT-INODE-IMAGE {inode_block_offset} + "
-                            "_EXT4-I.BLOCKS-LO + L@ "
-                            f"{sectors_per_block} ="
-                        ),
-                        (
-                            f"_OT-INODE-IMAGE {inode_block_offset} + "
-                            "_EXT4-I.BLOCKS-HI + W@ 0="
-                        ),
-                        (
-                            f"_OT-INODE-IMAGE {inode_block_offset} + "
-                            "_EXT4-I.FILE-ACL-LO + L@ "
-                            f"{xattr_block} ="
-                        ),
-                        (
-                            f"_OT-INODE-IMAGE {inode_block_offset} + "
-                            "_EXT4-I.BLOCK + 2 + W@ 0="
-                        ),
-                        (
-                            f"_OT-INODE-IMAGE {inode_block_offset} + "
-                            "_EXT4-I.BLOCK + 12 + 48 "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            f"_OT-BITMAP-IMAGE {group_blocks} {data_index} "
-                            "BITSET-TEST? SWAP 0= AND"
-                        ),
-                        (
-                            f"_OT-BITMAP-IMAGE {group_blocks} {xattr_index} "
-                            "BITSET-TEST? AND"
-                        ),
-                        (
-                            f"_OT-GDT-IMAGE {descriptor_offset} + "
-                            "_EXT4-GD.FREE-BLOCKS-LO + W@ "
-                            f"{group_free_after & 0xFFFF} ="
-                        ),
-                        (
-                            f"_OT-GDT-IMAGE {descriptor_offset} + "
-                            "_EXT4-GD.FREE-BLOCKS-HI + W@ "
-                            f"{group_free_after >> 16} ="
-                        ),
-                        (
-                            f"_OT-GDT-IMAGE {descriptor_offset} + "
-                            "_EXT4-GD.BLOCK-CSUM-LO + W@ "
-                            f"{bitmap_checksum & 0xFFFF} ="
-                        ),
-                        (
-                            f"_OT-GDT-IMAGE {descriptor_offset} + "
-                            "_EXT4-GD.BLOCK-CSUM-HI + W@ "
-                            f"{bitmap_checksum >> 16} ="
-                        ),
-                        (
-                            f"_OT-GDT-IMAGE {descriptor_offset} + "
-                            "_EXT4-GD.CHECKSUM + W@ "
-                            f"{descriptor_checksum} ="
-                        ),
-                        (
-                            f"_OT-SUPER-IMAGE {super_offset} + "
-                            "_EXT4-SB.FREE-BLOCKS-LO + L@ "
-                            f"{super_free_after} ="
-                        ),
-                        (
-                            f"_OT-SUPER-IMAGE {super_offset} + "
-                            f"_EXT4-SB.CHECKSUM + L@ {super_checksum} ="
-                        ),
-                        (
-                            "_OT-INODE-IMAGE _OT-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
-                            f"{expected_inode_crc} = AND"
-                        ),
-                        (
-                            "_OT-GDT-IMAGE _OT-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
-                            f"{expected_gdt_crc} = AND"
-                        ),
-                        (
-                            "_OT-BITMAP-IMAGE _OT-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
-                            f"{expected_bitmap_crc} = AND"
-                        ),
-                        (
-                            "_OT-SUPER-IMAGE _OT-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
-                            f"{expected_super_crc} = AND"
-                        ),
-                        "_OT-WRITER _EXT4-JWR.DATA-USED + @ 0=",
-                        "_OT-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
-                        "_OT-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                        (
-                            "_OT-CTX _EXT4-C.FREE-BLOCKS + @ "
-                            "_OT-CONTEXT-FREE ="
-                        ),
-                        (
-                            "_OT-CTX _EXT4-C.SB + "
-                            "_EXT4-SB.FREE-BLOCKS-LO + L@ "
-                            "_OT-CACHED-SUPER-FREE ="
-                        ),
-                    ]
-                )
-                + ' IF ." EXT4-TYPED-DEPTH0-TRUNCATE" THEN'
-            ),
-            "_OT-TX _EXT4-JTX-ABORT CONSTANT _OT-ABORT-IOR",
-            (
-                _forth_conjunction(
-                    [
-                        "_OT-ABORT-IOR 0=",
-                        (
-                            "_OT-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
-                        ),
-                        (
-                            "_OT-WRITER _EXT4-JWR.FREE + @ "
-                            "_OT-FREE-BEFORE ="
-                        ),
-                        "_OT-WRITER _EXT4-JWR.META-USED + @ 0=",
-                        "_OT-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
-                        "_OT-WRITER _EXT4-JWR.META-IMAGES + @ C@ 0=",
-                        "_OT-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
-                        "_OT-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-TYPED-DEPTH0-TRUNCATE-ABORTED" THEN'
-            ),
-        ],
-        patches=patches,
-    )
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-TRUNCATE")
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-TRUNCATE-ABORTED")
-
-
-def test_typed_depth0_orphan_truncation_auto_aborts_partial_credit_failure(
-    canonical_images: dict[str, Path],
-) -> None:
-    path = canonical_images["primary-1k-i256"]
-    patches = _zero_size_depth0_orphan_patches(path)
-    output = run_forth(
-        path,
-        [
-            *_EXT4_AUTH_ONLY_BINDING_FORTH,
-            (
-                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
-                "CONSTANT _OA-MOUNT-IOR CONSTANT _OA-V"
-            ),
-            "_OA-V _EXT4-CTX CONSTANT _OA-CTX",
-            "0 _OA-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OA-RECORD",
-            "_OA-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OA-JOURNAL-IOR",
-            "-1 _OA-CTX _EXT4-C.J.WRITER-CURRENT + !",
-            (
-                "4 0 0 _OA-CTX _EXT4-JWR-ALLOCATE-MOUNT "
-                "CONSTANT _OA-WRITER-IOR CONSTANT _OA-WRITER"
-            ),
-            "_OA-WRITER _EXT4-JWR.FREE + @ CONSTANT _OA-FREE-BEFORE",
-            (
-                "3 0 0 _OA-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _OA-TX-IOR CONSTANT _OA-TX"
-            ),
-            (
-                "_OA-RECORD _OA-TX "
-                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
-                "CONSTANT _OA-STAGE-IOR"
-            ),
-            "_OA-TX _EXT4-JTX-EMIT CONSTANT _OA-EMIT-IOR",
-            (
-                _forth_conjunction(
-                    [
-                        (
-                            "_OA-MOUNT-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
-                        ),
-                        (
-                            "_OA-MOUNT-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-RECOVERY ="
-                        ),
-                        "_OA-JOURNAL-IOR 0=",
-                        "_OA-WRITER-IOR 0=",
-                        "_OA-TX-IOR 0=",
-                        "_OA-STAGE-IOR VFS-E-NOSPC =",
-                        "_OA-EMIT-IOR VFS-E-BUSY =",
-                        (
-                            "_OA-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
-                        ),
-                        "_OA-WRITER _EXT4-JWR.FAULT + @ 0=",
-                        (
-                            "_OA-WRITER _EXT4-JWR.FREE + @ "
-                            "_OA-FREE-BEFORE ="
-                        ),
-                        "_OA-WRITER _EXT4-JWR.META-USED + @ 0=",
-                        "_OA-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
-                        "_OA-WRITER _EXT4-JWR.DATA-USED + @ 0=",
-                        "_OA-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
-                        "_OA-WRITER _EXT4-JWR.META-IMAGES + @ C@ 0=",
-                        "_OA-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
-                        "_OA-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
-                        "_OA-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-TYPED-DEPTH0-AUTO-ABORT" THEN'
-            ),
-            (
-                "4 0 0 _OA-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _OA-RETRY-IOR CONSTANT _OA-RETRY"
-            ),
-            (
-                "_OA-RECORD _OA-RETRY "
-                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
-                "CONSTANT _OA-RETRY-STAGE-IOR"
-            ),
-            (
-                "_OA-RETRY _EXT4-JTX-ABORT "
-                "CONSTANT _OA-RETRY-ABORT-IOR"
-            ),
-            (
-                _forth_conjunction(
-                    [
-                        "_OA-RETRY-IOR 0=",
-                        "_OA-RETRY-STAGE-IOR 0=",
-                        "_OA-RETRY-ABORT-IOR 0=",
-                        (
-                            "_OA-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
-                        ),
-                        "_OA-WRITER _EXT4-JWR.META-USED + @ 0=",
-                        "_OA-WRITER _EXT4-JWR.FAULT + @ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-TYPED-DEPTH0-AUTO-ABORT-REUSABLE" THEN'
-            ),
-        ],
-        patches=patches,
-    )
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-AUTO-ABORT")
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-AUTO-ABORT-REUSABLE")
 
 
 def test_mount_cleanup_rejects_orphan_storage_alias_without_writes(
@@ -51843,8 +49645,6 @@ def test_staged_write_updates_initialized_depth_positive_extent(
         backing.unlink(missing_ok=True)
 
 
-
-
 _GENERAL_WRITE_EPOCH_MS = 3_100_000_000_789
 
 
@@ -52899,10 +50699,13 @@ def test_general_truncate_refuses_a_release_too_big_for_the_profile_without_io(
     jbd2_toolchain: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """Freeing six tree nodes needs six revokes; a one-revoke profile refuses.
+    """A one-revoke profile cannot free a depth-two tree, even across passes.
 
-    The refusal comes from the first pass, staged before the journal is
-    activated, so the medium sees no write and the cached size returns.
+    The release does not fit one transaction, and a release pass takes a
+    step only when the revokes of every level it could empty fit, which one
+    revoke cannot cover in a depth-two tree.  The probe pass, staged before
+    the journal is activated, finds that, so the medium sees no write and
+    the cached size returns.
     """
     image = _general_write_fragmented_image(
         canonical_images, jbd2_toolchain, tmp_path, 340
@@ -53101,6 +50904,217 @@ def test_general_truncate_crash_cuts_keep_old_or_committed_state(
         capture_media=recovered,
     )
     _assert_emitted(output, "EXT4-GENERAL-TRUNCATE-RECOVERED")
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+    assert _general_write_cat(recovered, "/long.bin", jbd2_toolchain) == expected
+
+
+def _general_truncate_homes(
+    image: Path, file_path: str, jbd2_toolchain: dict[str, object]
+) -> tuple[int, int]:
+    """Return the file's inode-table home and the orphan file's first block."""
+    stat = _general_write_debugfs(image, f"stat {file_path}", jbd2_toolchain)
+    match = re.search(r"Inode: (\d+)", stat)
+    assert match is not None
+    _, _, inode_offset = _ext4_inode_record(image, int(match.group(1)))
+    _, orphan_inode, _ = _ext4_inode_record(image, 12)
+    return inode_offset // 1024, _extent_root_physical(orphan_inode, 0)
+
+
+def test_general_truncate_spans_transactions_through_the_orphan_file(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A release too big for one transaction runs as the kernel's ext4 does.
+
+    The four revokes of the profile are fewer than the six tree nodes that
+    truncating the 340-extent depth-two tree to zero frees, so the release
+    does not fit one transaction.  The first commits the new size behind a
+    modern orphan record, release passes free the blocks past EOF, and the
+    pass that ends the release also removes the record.  The orphan block is
+    written only by the insertion and that last pass, and the file's inode
+    by the insertion and again by each pass.
+    """
+    image = _general_write_fragmented_image(
+        canonical_images, jbd2_toolchain, tmp_path, 340
+    )
+    inode_home, orphan_block = _general_truncate_homes(
+        image, "/frag.bin", jbd2_toolchain
+    )
+    media = tmp_path / "general-truncate-orphan.img"
+    _, trace = _general_truncate_case(
+        image,
+        media,
+        "/frag.bin",
+        (0,),
+        (16, 0, 4),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-ORPHAN",
+        # Measured at 1,371,560,966 steps.
+        max_steps=2_000_000_000,
+    )
+    assert len(_write_ordinals_for_ext4_home(trace, orphan_block)) == 2
+    assert len(_write_ordinals_for_ext4_home(trace, inode_home)) >= 3
+    assert _general_write_extent_levels(
+        _general_write_debugfs(media, "ex /frag.bin", jbd2_toolchain)
+    ) == {}
+    stat = _general_write_debugfs(media, "stat /frag.bin", jbd2_toolchain)
+    assert "Blockcount: 0" in stat
+
+
+def test_general_truncate_across_transactions_zeroes_the_new_tail(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """The final cleanup zeroes the bytes past a partial new EOF.
+
+    Cutting the 9,000-block file to just past 1,000 blocks under a four-home
+    profile releases one pass per block group.  The last pass has no room
+    left for the final cleanup's orphan block and tail, so a transaction of
+    its own zeroes the tail of the block that holds the new EOF, which the
+    committed size already hides, and clears the slot.
+    """
+    image = _general_truncate_image(
+        canonical_images, jbd2_toolchain, tmp_path, 9000
+    )
+    inode_home, orphan_block = _general_truncate_homes(
+        image, "/long.bin", jbd2_toolchain
+    )
+    media = tmp_path / "general-truncate-orphan-tail.img"
+    size = 1000 * 1024 + 100
+    _, trace = _general_truncate_case(
+        image,
+        media,
+        "/long.bin",
+        (size,),
+        (4, 0, 0),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-ORPHAN-TAIL",
+        max_steps=1_200_000_000,
+    )
+    assert len(_write_ordinals_for_ext4_home(trace, orphan_block)) == 2
+    assert len(_write_ordinals_for_ext4_home(trace, inode_home)) == 3
+    stat = _general_write_debugfs(media, "stat /long.bin", jbd2_toolchain)
+    assert "Blockcount: 2002" in stat
+    match = re.search(r"Inode: (\d+)", stat)
+    assert match is not None
+    _, inode, _ = _ext4_inode_record(media, int(match.group(1)))
+    tail_block = _extent_root_physical(inode, 1000)
+    with media.open("rb") as source:
+        source.seek(tail_block * 1024)
+        tail = source.read(1024)
+    assert tail[100:] == bytes(924)
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "insert-descriptor",
+        "insert-home",
+        "release-home",
+        "final-home",
+        "clear-home",
+    ),
+)
+def test_general_truncate_across_transactions_crash_cuts_recover(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+    case: str,
+) -> None:
+    """Tear one write of a truncate across transactions, then remount.
+
+    Cutting the 9,000-block file to 1,000 blocks under a four-home profile
+    takes an insertion, a release pass for each block group, the last of
+    which also removes the orphan record, and a transaction that retires
+    ORPHAN_PRESENT.  Tearing the insertion's descriptor leaves the old file.
+    Once the insertion has committed, mount recovery finishes the release
+    from wherever the tear stopped it, so the file ends at its new size with
+    its blocks free.
+    """
+    image = _general_truncate_image(
+        canonical_images, jbd2_toolchain, tmp_path, 9000
+    )
+    base = _general_write_cat(image, "/long.bin", jbd2_toolchain)
+    inode_home, orphan_block = _general_truncate_homes(
+        image, "/long.bin", jbd2_toolchain
+    )
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    activation_trace = fixture["success_trace"]
+    assert isinstance(patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    size = 1000 * 1024
+    success = tmp_path / "general-truncate-orphan-crash-success.img"
+    _, trace = _general_truncate_case(
+        image,
+        success,
+        "/long.bin",
+        (size,),
+        (4, 0, 0),
+        jbd2_toolchain,
+        marker="EXT4-GENERAL-TRUNCATE-ORPHAN-CRASH-SUCCESS",
+        max_steps=1_200_000_000,
+    )
+    inode_writes = _write_ordinals_for_ext4_home(trace, inode_home)
+    orphan_writes = _write_ordinals_for_ext4_home(trace, orphan_block)
+    assert len(inode_writes) == 3
+    assert len(orphan_writes) == 2
+    expected = base[:size]
+    if case == "insert-descriptor":
+        ordinal = sum(1 for kind, _, _ in activation_trace if kind == "write") + 1
+        expected = base
+    elif case == "insert-home":
+        ordinal = inode_writes[0]
+    elif case == "release-home":
+        ordinal = inode_writes[1]
+    elif case == "final-home":
+        ordinal = orphan_writes[1]
+    else:
+        ordinal = next(
+            write
+            for write in _write_ordinals_for_ext4_home(trace, 1)
+            if write > orphan_writes[1]
+        )
+    torn = tmp_path / f"general-truncate-orphan-{case}-torn.img"
+    output, _, _ = run_recovery_forth(
+        image,
+        tmp_path / f"general-truncate-orphan-{case}-backing.img",
+        _general_truncate_forth(
+            "/long.bin", (size,), (4, 0, 0), marker="EXT4-UNREACHED"
+        ),
+        patches=patches,
+        write_faults_by_ordinal={
+            ordinal: {
+                "stage": "media",
+                "sector_index": 1,
+                "byte_index": 0,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+        max_steps=1_200_000_000,
+    )
+    assert "\r\nEXT4-UNREACHED ok\r\n" not in output
+    recovered = tmp_path / f"general-truncate-orphan-{case}-recovered.img"
+    output, _, _ = run_recovery_forth(
+        torn,
+        recovered,
+        [
+            "T-ARENA CONSTANT _GTR-ARENA",
+            "_GTR-ARENA T-VOLUME EXT4-NEW CONSTANT _GTR-MOUNT-IOR CONSTANT _GTR-V",
+            "0 _GTR-V VFS-UNMOUNT CONSTANT _GTR-UNMOUNT-IOR",
+            (
+                "_GTR-MOUNT-IOR 0= _GTR-UNMOUNT-IOR 0= AND "
+                'IF ." EXT4-GENERAL-TRUNCATE-ORPHAN-RECOVERED" THEN'
+            ),
+        ],
+        capture_media=recovered,
+        max_steps=1_200_000_000,
+    )
+    _assert_emitted(output, "EXT4-GENERAL-TRUNCATE-ORPHAN-RECOVERED")
     _assert_e2fsck_clean(recovered, jbd2_toolchain)
     assert _general_write_cat(recovered, "/long.bin", jbd2_toolchain) == expected
 
@@ -87252,14 +85266,14 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     )
 
     expected_facade_calls = {
-        "_EXT4-DECODE-I-BLOCKS": 4,
+        "_EXT4-DECODE-I-BLOCKS": 3,
         "_EXT4-S32@": 6,
         "_EXT4-I-BLOCK-ZERO-FROM?": 1,
         "_EXT4-DECODE-SPECIAL": 1,
-        "_EXT4-RESTAMP-INODE": 15,
-        "_EXT4-SET-INODE-MTIME-CTIME": 9,
+        "_EXT4-RESTAMP-INODE": 14,
+        "_EXT4-SET-INODE-MTIME-CTIME": 8,
         "_EXT4-SET-INODE-CTIME": 7,
-        "_EXT4-ENCODE-I-BLOCKS": 5,
+        "_EXT4-ENCODE-I-BLOCKS": 4,
     }
     for service, count in expected_facade_calls.items():
         assert facade_executable.count(service) == count
@@ -87427,7 +85441,7 @@ def test_ext4_xattr_block_service_is_private_acyclic_unit() -> None:
     assert "EXT4-D-XATTR _EXT4-CORRUPT EXIT" in loader
 
     expected_facade_calls = {
-        "_EXT4-LOAD-XATTR-BLOCK": 7,
+        "_EXT4-LOAD-XATTR-BLOCK": 6,
         "_EXT4-STAMP-XATTR-BLOCK": 2,
         "_EXT4-XATTR-MAGIC": 1,
         "_EXT4-XATTR-REFCOUNT-MAX": 2,
@@ -88774,7 +86788,7 @@ def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
     group_touched = word_body("_EXT4-JCM-GROUP-TOUCHED?")
 
     assert "URANGE-OVERLAP? 0= IF DROP TRUE THEN" in adapter
-    assert source.count(adapter_name) == 34
+    assert source.count(adapter_name) == 32
     assert "_EXT4-BLOCK-RANGES-OVERLAP?" not in source
     for scratch in (
         "_EXT4-BRO-A",
