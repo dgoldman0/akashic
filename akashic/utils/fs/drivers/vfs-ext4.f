@@ -43,109 +43,109 @@ REQUIRE ext4/vfs-ext4-jbd2-revoke.f
 \ authority use the larger admitted extent-tree geometry as their shared bound.
 4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX
 _EXT4-NDIRECT CONSTANT _EXT4-LEGACY-DIRECT-RANGE-MAX
-VARIABLE _EXT4-MUTATION-OWNER-RANGES
-VARIABLE _EXT4-MUTATION-OWNER-RANGE-CAP
-VARIABLE _EXT4-MUTATION-OWNER-RANGE-COUNT
-VARIABLE _EXT4-MUTATION-OWNER-BOUND-FIRST
-VARIABLE _EXT4-MUTATION-OWNER-BOUND-LIMIT
-VARIABLE _EXT4-MUTATION-OWNER-INO
+
+\ A claim map holds one bit for each block from C.FIRST.  While a claim scope
+\ is open, the map validators below note every block an inode owns, its data
+\ and its tree or pointer blocks, as they authenticate the inode: a claim
+\ requires the block's bit clear and sets it, a release requires it set and
+\ clears it, so a block noted twice fails closed.  COUNT follows the claimed
+\ blocks.  The mount's ownership proof and each transaction's map check open
+\ the scope over arena memory sized from the volume.
+VARIABLE _EXT4-OWN-MAP
+VARIABLE _EXT4-OWN-FIRST
+VARIABLE _EXT4-OWN-BITS
+VARIABLE _EXT4-OWN-COUNT
+VARIABLE _EXT4-OWN-MODE
+VARIABLE _EXT4-OS-AT
+VARIABLE _EXT4-OS-END
+VARIABLE _EXT4-OS-CELL
+VARIABLE _EXT4-OS-CLAIM
+
+\ The bits LO up to LO+N of one cell, for 0 < N and LO+N <= 64.
+: _EXT4-OWN-MASK  ( lo n -- mask )
+    DUP 64 = IF 2DROP -1 EXIT THEN
+    1 SWAP LSHIFT 1- SWAP LSHIFT ;
+
+\ Claim (CLAIM? true) or release the blocks FIRST up to FIRST+COUNT, one
+\ cell of the map at a time.  A failure can leave cells already passed
+\ changed; the scope is then discarded.
+: _EXT4-OWN-SPAN  ( first count claim? -- ior )
+    _EXT4-OS-CLAIM !
+    OVER _EXT4-OWN-FIRST @ U< IF 2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
+    2DUP URANGE-VALID? 0= IF 2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
+    OVER + _EXT4-OWN-FIRST @ - _EXT4-OS-END !
+    _EXT4-OWN-FIRST @ - _EXT4-OS-AT !
+    _EXT4-OS-END @ _EXT4-OWN-BITS @ U> IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
+    _EXT4-OS-END @ _EXT4-OS-AT @ -
+    _EXT4-OS-CLAIM @ 0= IF NEGATE THEN _EXT4-OWN-COUNT +!
+    BEGIN _EXT4-OS-AT @ _EXT4-OS-END @ U< WHILE
+        _EXT4-OS-AT @ 64 /MOD CELLS _EXT4-OWN-MAP @ + _EXT4-OS-CELL !
+        64 OVER - _EXT4-OS-END @ _EXT4-OS-AT @ - MIN
+        DUP _EXT4-OS-AT +!
+        _EXT4-OWN-MASK
+        _EXT4-OS-CELL @ @ OVER AND
+        _EXT4-OS-CLAIM @ IF
+            IF DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+            _EXT4-OS-CELL @ @ OR
+        ELSE
+            OVER <> IF DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+            INVERT _EXT4-OS-CELL @ @ AND
+        THEN
+        _EXT4-OS-CELL @ !
+    REPEAT 0 ;
+
+\ Note one owned range in the open scope: a claim in mode 1, a release in
+\ mode -1, nothing when no scope is open or it is paused at mode 0.
+: _EXT4-OWN-NOTE  ( first count -- ior )
+    _EXT4-OWN-MODE @ DUP 0= IF DROP 2DROP 0 EXIT THEN
+    0> _EXT4-OWN-SPAN ;
+
+\ The cell-rounded bytes of a claim map for CTX's volume.
+: _EXT4-OWN-BYTES  ( ctx -- bytes )
+    DUP _EXT4-C.BLOCKS + @ SWAP _EXT4-C.FIRST + @ - 63 + 64 / CELLS ;
+
+\ Open a claim scope over MAP, a zeroed claim map for CTX, in MODE.
+: _EXT4-OWN-OPEN  ( map mode ctx -- ior )
+    _EXT4-OWN-MAP @ IF DROP 2DROP VFS-E-BUSY EXIT THEN
+    DUP _EXT4-C.FIRST + @ _EXT4-OWN-FIRST !
+    DUP _EXT4-C.BLOCKS + @ SWAP _EXT4-C.FIRST + @ - _EXT4-OWN-BITS !
+    _EXT4-OWN-MODE ! _EXT4-OWN-MAP ! 0 _EXT4-OWN-COUNT ! 0 ;
+
+: _EXT4-OWN-CLOSE  ( -- )
+    0 _EXT4-OWN-MAP ! 0 _EXT4-OWN-MODE ! 0 _EXT4-OWN-COUNT !
+    0 _EXT4-OWN-FIRST ! 0 _EXT4-OWN-BITS ! ;
+
+\ An external xattr block may be shared, so the ownership proof lists each
+\ reference to one instead of claiming it.  The list grows a cell at a time
+\ at the top of the mount arena, where nothing else allocates while the
+\ proof runs.
+VARIABLE _EXT4-OWN-EA-ARENA
+VARIABLE _EXT4-OWN-EA-LIST
+VARIABLE _EXT4-OWN-EA-COUNT
+
+: _EXT4-OWN-LIST-EA  ( block -- ior )
+    _EXT4-OWN-EA-ARENA @ DUP 0= IF 2DROP VFS-E-INVALID EXIT THEN
+    1 CELLS ARENA-ALLOT? IF 2DROP VFS-E-NOMEM EXIT THEN
+    DUP _EXT4-OWN-EA-LIST @ _EXT4-OWN-EA-COUNT @ CELLS + <> IF
+        2DROP VFS-E-CORRUPT EXIT
+    THEN
+    ! 1 _EXT4-OWN-EA-COUNT +! 0 ;
+
 VARIABLE _EXT4-MUTATION-PROTOCOL-CTX
 VARIABLE _EXT4-MUTATION-PROTOCOL-ACTIVE
 VARIABLE _EXT4-MUTATION-PROTOCOL-XT
 VARIABLE _EXT4-MUTATION-PROTOCOL-PROOF-XT
-VARIABLE _EXT4-MUTATION-EA-REF-ACTIVE
-VARIABLE _EXT4-MUTATION-EA-REF-HOME
-VARIABLE _EXT4-MUTATION-EA-REF-HITS
-VARIABLE _EXT4-MOA-FIRST
-VARIABLE _EXT4-MOA-COUNT
-VARIABLE _EXT4-MOB-COUNT
-VARIABLE _EXT4-MOB-INDEX
-VARIABLE _EXT4-MOB-FIRST
-VARIABLE _EXT4-MOB-LIMIT
-VARIABLE _EXT4-MOB-NEXT-FIRST
 
 : _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID?
   ( first-a count-a first-b count-b -- flag )
     URANGE-OVERLAP? 0= IF DROP TRUE THEN ;
 
-: _EXT4-MUTATION-OWNER-RANGE  ( index -- pair-address )
-    2 * CELLS _EXT4-MUTATION-OWNER-RANGES @ + ;
-
-: _EXT4-MUTATION-OWNER-RANGES-CLEAR  ( -- )
-    0 _EXT4-MUTATION-OWNER-RANGE-COUNT !
-    0 _EXT4-MUTATION-OWNER-BOUND-FIRST !
-    0 _EXT4-MUTATION-OWNER-BOUND-LIMIT !
-    0 _EXT4-MUTATION-OWNER-RANGE-CAP !
-    0 _EXT4-MUTATION-OWNER-RANGES ! ;
-
-: _EXT4-MUTATION-OWNER-RANGES-BUSY?  ( -- flag )
-    _EXT4-MUTATION-OWNER-RANGES @
-    _EXT4-MUTATION-OWNER-RANGE-CAP @ OR
-    _EXT4-MUTATION-OWNER-RANGE-COUNT @ OR
-    _EXT4-MUTATION-OWNER-BOUND-FIRST @ OR
-    _EXT4-MUTATION-OWNER-BOUND-LIMIT @ OR 0<> ;
-
-\ Publish a fail-closed envelope around an already validated exact range
-\ vector.  The count is the final publication word.  Candidate map ranges
-\ outside this envelope cannot overlap any member; candidates inside it still
-\ take the exact pairwise path below.  All admitted ext4 block numbers and
-\ lengths fit in one cell, but retain an unsigned wrap check here so malformed
-\ internal publication cannot weaken the owner proof.
-: _EXT4-MUTATION-OWNER-RANGES-PUBLISH  ( ranges count capacity -- ior )
-    _EXT4-MUTATION-OWNER-RANGE-CAP !
-    _EXT4-MOB-COUNT ! _EXT4-MUTATION-OWNER-RANGES !
-    _EXT4-MUTATION-OWNER-RANGES @ 0=
-    _EXT4-MOB-COUNT @ DUP 0= SWAP 0< OR OR
-    _EXT4-MUTATION-OWNER-RANGE-CAP @ DUP 0= SWAP 0< OR OR
-    _EXT4-MOB-COUNT @ _EXT4-MUTATION-OWNER-RANGE-CAP @ U> OR IF
-        _EXT4-MUTATION-OWNER-RANGES-CLEAR
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    0 _EXT4-MUTATION-OWNER-RANGE DUP @ DUP _EXT4-MOB-FIRST !
-    SWAP CELL+ @ DUP 0= IF
-        2DROP _EXT4-MUTATION-OWNER-RANGES-CLEAR
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    2DUP URANGE-VALID? 0= IF
-        2DROP _EXT4-MUTATION-OWNER-RANGES-CLEAR
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    + _EXT4-MOB-LIMIT !
-    1 _EXT4-MOB-INDEX !
-    BEGIN
-        _EXT4-MOB-INDEX @ _EXT4-MOB-COUNT @ U<
-    WHILE
-        _EXT4-MOB-INDEX @ _EXT4-MUTATION-OWNER-RANGE
-        DUP @ _EXT4-MOB-NEXT-FIRST !
-        CELL+ @ DUP 0= IF
-            DROP _EXT4-MUTATION-OWNER-RANGES-CLEAR
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-MOB-NEXT-FIRST @ SWAP 2DUP URANGE-VALID? 0= IF
-            2DROP _EXT4-MUTATION-OWNER-RANGES-CLEAR
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        +
-        DUP _EXT4-MOB-LIMIT @ U> IF
-            DUP _EXT4-MOB-LIMIT !
-        THEN
-        DROP
-        _EXT4-MOB-NEXT-FIRST @ _EXT4-MOB-FIRST @ U< IF
-            _EXT4-MOB-NEXT-FIRST @ _EXT4-MOB-FIRST !
-        THEN
-        1 _EXT4-MOB-INDEX +!
-    REPEAT
-    _EXT4-MOB-FIRST @ _EXT4-MUTATION-OWNER-BOUND-FIRST !
-    _EXT4-MOB-LIMIT @ _EXT4-MUTATION-OWNER-BOUND-LIMIT !
-    _EXT4-MOB-COUNT @ _EXT4-MUTATION-OWNER-RANGE-COUNT !
-    0 ;
-
-\ A target inode is excluded from the other-owner scan, so a scoped complete
-\ map audit separately proves that every target data/node range has a safe
-\ mutation role and that the selected physical block occurs exactly once as
-\ data and never as map metadata.  A published vector of homes instead adds
-\ every overlap with it to HITS, for a caller that knows how many
-\ target-owned blocks the vector holds.  ACTIVE is the publication word.
+\ A map audit validates a target's complete map while a vector of homes is
+\ published: every overlap with the vector adds to HITS, for a caller that
+\ knows how many target-owned blocks the vector holds, or, with no vector,
+\ the one TARGET block must occur exactly once as data and never as map
+\ metadata.  Each range of the map also has its mutation role checked.
+\ ACTIVE is the publication word.
 VARIABLE _EXT4-MUTATION-MAP-TARGET
 VARIABLE _EXT4-MUTATION-MAP-ACTIVE
 VARIABLE _EXT4-MUTATION-MAP-HITS
@@ -155,57 +155,30 @@ VARIABLE _EXT4-MUTATION-ROLE-XT
 VARIABLE _EXT4-MMV-FIRST
 VARIABLE _EXT4-MMV-END
 
-\ Normal read validation leaves both mutation-owner ranges and the protocol
-\ scope empty.  A bounded mutation proof temporarily publishes them while
-\ validating every other allocated inode, turning any overlapping data or
-\ map-metadata reference into a corrupt cross-link refusal.  The protocol hook
-\ is late-bound after the journal geometry helpers have been defined.
-: _EXT4-MUTATION-PROTOCOL-ALIASES?  ( -- flag )
-    _EXT4-MUTATION-PROTOCOL-ACTIVE @ 0= IF FALSE EXIT THEN
+\ Ordinary validation leaves the protocol scope empty.  The protocol-home
+\ proof publishes it while validating every allocated inode but the
+\ journal's, turning any data or map-metadata reference to a home the
+\ journal protocol writes into a corrupt cross-link refusal.  The hook is
+\ late-bound after the journal geometry helpers have been defined.
+: _EXT4-MUTATION-PROTOCOL-ALIASES?  ( first count -- flag )
+    _EXT4-MUTATION-PROTOCOL-ACTIVE @ 0= IF 2DROP FALSE EXIT THEN
     _EXT4-MUTATION-PROTOCOL-CTX @ 0=
-    _EXT4-MUTATION-PROTOCOL-XT @ 0= OR IF TRUE EXIT THEN
-    _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @
+    _EXT4-MUTATION-PROTOCOL-XT @ 0= OR IF 2DROP TRUE EXIT THEN
     _EXT4-MUTATION-PROTOCOL-CTX @
     _EXT4-MUTATION-PROTOCOL-XT @ EXECUTE ;
 
-: _EXT4-MUTATION-OWNER-ALIASES?  ( first count -- flag )
-    _EXT4-MOA-COUNT ! _EXT4-MOA-FIRST !
-    _EXT4-MUTATION-OWNER-RANGE-COUNT @ IF
-        _EXT4-MUTATION-OWNER-RANGES @ 0=
-        _EXT4-MUTATION-OWNER-RANGE-CAP @ DUP 0= SWAP 0< OR OR
-        _EXT4-MUTATION-OWNER-RANGE-COUNT @ DUP 0<
-        SWAP _EXT4-MUTATION-OWNER-RANGE-CAP @ U> OR OR IF
-            TRUE EXIT
-        THEN
-        _EXT4-MUTATION-OWNER-BOUND-FIRST @
-        _EXT4-MUTATION-OWNER-BOUND-LIMIT @ U< 0= IF TRUE EXIT THEN
-        _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @
-        _EXT4-MUTATION-OWNER-BOUND-FIRST @
-        _EXT4-MUTATION-OWNER-BOUND-LIMIT @
-        _EXT4-MUTATION-OWNER-BOUND-FIRST @ -
-        URANGE-OVERLAP? 0= IF DROP TRUE EXIT THEN
-        IF
-            _EXT4-MUTATION-OWNER-RANGE-COUNT @ 0 ?DO
-                I _EXT4-MUTATION-OWNER-RANGE DUP @ SWAP CELL+ @
-                DUP 0= IF 2DROP TRUE UNLOOP EXIT THEN
-                _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @
-                _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF TRUE UNLOOP EXIT THEN
-            LOOP
-        THEN
-    ELSE
-        _EXT4-MUTATION-OWNER-RANGES @
-        _EXT4-MUTATION-OWNER-RANGE-CAP @ OR
-        _EXT4-MUTATION-OWNER-BOUND-FIRST @ OR
-        _EXT4-MUTATION-OWNER-BOUND-LIMIT @ OR IF TRUE EXIT THEN
-    THEN
-    _EXT4-MUTATION-PROTOCOL-ALIASES? ;
-
 \ The filesystem-wide proof implementation follows the generic inode scanner.
 \ Every mutating entry point reaches this fail-closed forward hook only after
-\ the complete driver source has bound it.
+\ the complete driver source has bound it.  A mount whose block ownership is
+\ proved needs no second walk: each block has one owner, the journal's
+\ blocks are inode 8's, whose root the journal backup in the witness
+\ superblock matches, and the primary superblock is group 0's.
 : _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS  ( ctx -- ior )
     DUP 0= IF DROP VFS-E-INVALID EXIT THEN
     DUP _EXT4-C.J.PROTOCOL-OWNERS + @ -1 = IF DROP 0 EXIT THEN
+    DUP _EXT4-C.OWNERSHIP + @ -1 = IF
+        -1 SWAP _EXT4-C.J.PROTOCOL-OWNERS + ! 0 EXIT
+    THEN
     _EXT4-MUTATION-PROTOCOL-PROOF-XT @ ?DUP IF
         EXECUTE
     ELSE
@@ -240,11 +213,15 @@ VARIABLE _EXT4-RA-BLOCK
 VARIABLE _EXT4-RA-DETAIL
 VARIABLE _EXT4-RA-CTX
 
+\ A block a map references must be allocated.  A release scope walks a
+\ transaction's new map, where the claim map stands in for the bitmap the
+\ transaction stages: every block must be claimed, which the release proves.
 : _EXT4-REQUIRE-ALLOCATED-BLOCK  ( physical-block detail ctx -- ior )
+    _EXT4-OWN-MODE @ 0< IF 2DROP DROP 0 EXIT THEN
     _EXT4-RA-CTX ! _EXT4-RA-DETAIL ! DUP _EXT4-RA-BLOCK !
     _EXT4-RA-CTX @ _EXT4-BLOCK-ALLOCATED? ?DUP IF NIP EXIT THEN
     0= IF _EXT4-RA-DETAIL @ _EXT4-CORRUPT EXIT THEN
-    _EXT4-RA-BLOCK @ 1 _EXT4-MUTATION-OWNER-ALIASES? IF
+    _EXT4-RA-BLOCK @ 1 _EXT4-MUTATION-PROTOCOL-ALIASES? IF
         _EXT4-RA-DETAIL @ _EXT4-CORRUPT EXIT
     THEN
     0 ;
@@ -261,6 +238,7 @@ VARIABLE _EXT4-RAR-CHUNK
 VARIABLE _EXT4-RAR-GROUP-BLOCKS
 
 : _EXT4-REQUIRE-ALLOCATED-RANGE  ( first count detail ctx -- ior )
+    _EXT4-OWN-MODE @ 0< IF 2DROP 2DROP 0 EXIT THEN
     _EXT4-RAR-CTX ! _EXT4-RAR-DETAIL !
     _EXT4-RAR-COUNT ! _EXT4-RAR-FIRST !
     _EXT4-RAR-FIRST @ _EXT4-RAR-COUNT @
@@ -271,7 +249,7 @@ VARIABLE _EXT4-RAR-GROUP-BLOCKS
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     _EXT4-RAR-FIRST @ _EXT4-RAR-COUNT @
-    _EXT4-MUTATION-OWNER-ALIASES? IF
+    _EXT4-MUTATION-PROTOCOL-ALIASES? IF
         _EXT4-RAR-DETAIL @ _EXT4-CORRUPT EXIT
     THEN
     _EXT4-RAR-FIRST @ _EXT4-RAR-CURRENT !
@@ -577,6 +555,7 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
     THEN
     _EXT4-EV-PHYS @ EXT4-D-DATA-MAP _EXT4-EV-CTX @
     _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN
+    _EXT4-EV-PHYS @ 1 _EXT4-OWN-NOTE ?DUP IF EXIT THEN
     0 _EXT4-EV-J !
     BEGIN _EXT4-EV-J @ _EXT4-EV-INDEX @ < WHILE
         _EXT4-EV-IN @ 12 _EXT4-EV-J @ 12 * + + 4 + L@
@@ -610,6 +589,7 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
     THEN
     _EXT4-EV-PHYS @ _EXT4-EV-LEN @ EXT4-D-DATA-MAP
     _EXT4-EV-CTX @ _EXT4-REQUIRE-ALLOCATED-RANGE ?DUP IF EXIT THEN
+    _EXT4-EV-PHYS @ _EXT4-EV-LEN @ _EXT4-OWN-NOTE ?DUP IF EXIT THEN
     _EXT4-MUTATION-MAP-ACTIVE @ IF
         _EXT4-EV-PHYS @ _EXT4-EV-LEN @ _EXT4-EV-CTX @
         _EXT4-MUTATION-ROLE-RANGE ?DUP IF EXIT THEN
@@ -689,6 +669,25 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
     _EXT4-EV-IN @ 4 ROT
     _EXT4-EV-CTX @ _EXT4-VALIDATE-EXTENT-NODE ;
 
+VARIABLE _EXT4-EV-IMAGE-XT
+VARIABLE _EXT4-EVR-BLOCK
+VARIABLE _EXT4-EVR-CTX
+
+\ Read one extent node or legacy pointer block into C.BLOCK.  A
+\ transaction's map check walks a new map with IMAGE-XT ( block -- image
+\ ior ) set, so a block the transaction holds an after-image of is read
+\ from that image, and any other from media.
+: _EXT4-EV-READ  ( block ctx -- ior )
+    _EXT4-EVR-CTX ! _EXT4-EVR-BLOCK !
+    _EXT4-EV-IMAGE-XT @ ?DUP IF
+        _EXT4-EVR-BLOCK @ SWAP EXECUTE ?DUP IF NIP EXIT THEN
+        ?DUP IF
+            _EXT4-EVR-CTX @ _EXT4-C.BLOCK +
+            _EXT4-EVR-CTX @ _EXT4-C.BSIZE + @ MOVE 0 EXIT
+        THEN
+    THEN
+    _EXT4-EVR-BLOCK @ _EXT4-EVR-CTX @ _EXT4-READ-BLOCK ;
+
 \ Read and authenticate one external extent-tree node.  Its checksum covers
 \ inode number/generation plus the node bytes before the four-byte tail.
 \ The verified node is copied to DIR-BLOCK so allocation checks may reuse the
@@ -709,7 +708,7 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
     THEN
     EXT4-D-DATA-MAP _EXT4-EV-CTX @ _EXT4-REQUIRE-ALLOCATED-BLOCK
     ?DUP IF EXIT THEN
-    _EXT4-EV-BLOCK @ _EXT4-EV-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _EXT4-EV-BLOCK @ _EXT4-EV-CTX @ _EXT4-EV-READ ?DUP IF EXIT THEN
     _EXT4-EV-CTX @ _EXT4-C.BLOCK +
     _EXT4-EV-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-EV-CTX @ _EXT4-C.BSIZE + @ CMOVE
@@ -774,7 +773,7 @@ VARIABLE _EXT4-ET-ROOT-COUNT
 \ and entry count come back.  Proving it again for each child would repeat
 \ the same proof, and would count the node again in a mutation map audit.
 : _EXT4-RELOAD-EXTENT-NODE  ( physical-block ctx -- ior )
-    DUP _EXT4-EV-CTX ! _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    DUP _EXT4-EV-CTX ! _EXT4-EV-READ ?DUP IF EXIT THEN
     _EXT4-EV-CTX @ _EXT4-C.BLOCK +
     _EXT4-EV-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-EV-CTX @ _EXT4-C.BSIZE + @ CMOVE
@@ -894,7 +893,7 @@ VARIABLE _EXT4-LV-ROOT-BASE
 : _EXT4-LOAD-LEGACY-POINTER-BLOCK  ( physical-block ctx -- ior )
     DUP _EXT4-LV-CTX ! SWAP DUP >R EXT4-D-DATA-MAP ROT
     _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF R> DROP EXIT THEN
-    R> _EXT4-LV-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    R> _EXT4-LV-CTX @ _EXT4-EV-READ ?DUP IF EXIT THEN
     _EXT4-LV-CTX @ _EXT4-C.BLOCK +
     _EXT4-LV-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ CMOVE
@@ -904,7 +903,7 @@ VARIABLE _EXT4-LV-ROOT-BASE
 \ the parent's allocation when it first loaded it and writes nothing, so the
 \ restore only reloads the bytes.
 : _EXT4-RELOAD-LEGACY-POINTER-BLOCK  ( physical-block ctx -- ior )
-    DUP _EXT4-LV-CTX ! _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    DUP _EXT4-LV-CTX ! _EXT4-EV-READ ?DUP IF EXIT THEN
     _EXT4-LV-CTX @ _EXT4-C.BLOCK +
     _EXT4-LV-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ CMOVE
@@ -917,6 +916,7 @@ VARIABLE _EXT4-LV-ROOT-BASE
     2 PICK _EXT4-LV-CTX @ _EXT4-LOAD-LEGACY-POINTER-BLOCK ?DUP IF
         >R DROP 2DROP R> EXIT
     THEN
+    2 PICK 1 _EXT4-OWN-NOTE ?DUP IF >R DROP 2DROP R> EXIT THEN
     _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ 4 / 0 ?DO
         _EXT4-LV-CTX @ _EXT4-C.TREE-BLOCK + I 4 * + L@ ?DUP IF
             2 PICK 1 > IF
@@ -947,8 +947,11 @@ VARIABLE _EXT4-LV-ROOT-BASE
                         UNLOOP EXIT
                     THEN
                 THEN
-                EXT4-D-DATA-MAP _EXT4-LV-CTX @
+                DUP EXT4-D-DATA-MAP _EXT4-LV-CTX @
                 _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF
+                    >R 2DROP 2DROP R> UNLOOP EXIT
+                THEN
+                1 _EXT4-OWN-NOTE ?DUP IF
                     >R DROP 2DROP R> UNLOOP EXIT
                 THEN
             THEN
@@ -965,10 +968,11 @@ VARIABLE _EXT4-LV-ROOT-BASE
                     UNLOOP EXIT
                 THEN
             THEN
-            EXT4-D-DATA-MAP _EXT4-LV-CTX @
+            DUP EXT4-D-DATA-MAP _EXT4-LV-CTX @
             _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF
-                NIP UNLOOP EXIT
+                NIP NIP UNLOOP EXIT
             THEN
+            1 _EXT4-OWN-NOTE ?DUP IF NIP UNLOOP EXIT THEN
         THEN
     LOOP
     _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ 4 / _EXT4-LV-PTRS !
@@ -8850,9 +8854,6 @@ VARIABLE _EXT4-OW-BYTES
 VARIABLE _EXT4-MRW-CTX
 VARIABLE _EXT4-MRW-REQUIRED
 VARIABLE _EXT4-MRW-BYTES
-VARIABLE _EXT4-OCW-CTX
-VARIABLE _EXT4-OCW-REQUIRED
-VARIABLE _EXT4-OCW-BYTES
 
 _EXT4-NONNEG-MAX _EXT4-ORPHAN-RECORD-SIZE /
 CONSTANT _EXT4-ORPHAN-SLOTS-MAX
@@ -8901,40 +8902,40 @@ CONSTANT _EXT4-ORPHAN-SLOTS-MAX
     _EXT4-MRW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + !
     0 ;
 
-: _EXT4-OWNER-CERT-RANGE-WORKSPACE?  ( ctx -- flag )
-    DUP _EXT4-C.OWNER-CERT-RANGES + @
-    SWAP _EXT4-C.OWNER-CERT-RANGE-CAP + @
+VARIABLE _EXT4-CW-CTX
+VARIABLE _EXT4-CW-BYTES
+
+\ The block-claim workspace holds a claim map of the volume's blocks and one
+\ block of scratch.  The ownership proof and every transaction's map check
+\ use it while a mount cleanup writer may own the arena's end, so it is
+\ reserved with the other persistent workspaces and cleared on each reuse.
+: _EXT4-CLAIM-WORKSPACE?  ( ctx -- flag )
+    DUP _EXT4-C.CLAIM-WORKSPACE + @
+    SWAP _EXT4-C.CLAIM-WORKSPACE-BYTES + @
     2DUP OR 0= IF 2DROP TRUE EXIT THEN
     OVER 0= OVER 0= OR IF 2DROP FALSE EXIT THEN
     DUP 0< IF 2DROP FALSE EXIT THEN
-    2 _EXT4-UMUL? DUP IF NIP 2DROP FALSE EXIT THEN DROP
-    1 CELLS _EXT4-UMUL? DUP IF NIP 2DROP FALSE EXIT THEN DROP
     MSPAN-NONWRAPPING? ;
 
-: _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE  ( ctx -- ior )
-    DUP _EXT4-OCW-CTX ! 0= IF VFS-E-INVALID EXIT THEN
-    _EXT4-OCW-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE-CAPACITY
-    DUP IF NIP EXIT THEN DROP _EXT4-OCW-REQUIRED !
-    _EXT4-OCW-CTX @ _EXT4-OWNER-CERT-RANGE-WORKSPACE? 0= IF
+: _EXT4-ENSURE-CLAIM-WORKSPACE  ( ctx -- ior )
+    DUP _EXT4-CW-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-CW-CTX @ _EXT4-CLAIM-WORKSPACE? 0= IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
-    _EXT4-OCW-CTX @ _EXT4-C.OWNER-CERT-RANGES + @ IF
-        _EXT4-OCW-CTX @ _EXT4-C.OWNER-CERT-RANGE-CAP + @
-        _EXT4-OCW-REQUIRED @ U< IF VFS-E-NOMEM EXIT THEN
-        _EXT4-OCW-CTX @ _EXT4-C.OWNER-CERT-RANGES + @
-        _EXT4-OCW-CTX @ _EXT4-C.OWNER-CERT-RANGE-CAP + @
-        2 * CELLS 0 FILL
-        0 EXIT
+    _EXT4-CW-CTX @ _EXT4-OWN-BYTES
+    _EXT4-CW-CTX @ _EXT4-C.BSIZE + @ + _EXT4-CW-BYTES !
+    _EXT4-CW-CTX @ _EXT4-C.CLAIM-WORKSPACE + @ IF
+        _EXT4-CW-CTX @ _EXT4-C.CLAIM-WORKSPACE-BYTES + @
+        _EXT4-CW-BYTES @ U< IF VFS-E-NOMEM EXIT THEN
+    ELSE
+        _EXT4-CW-CTX @ _EXT4-C.ARENA + @
+        _EXT4-CW-BYTES @ ARENA-ALLOT? IF DROP VFS-E-NOMEM EXIT THEN
+        _EXT4-CW-CTX @ _EXT4-C.CLAIM-WORKSPACE + !
+        _EXT4-CW-BYTES @
+        _EXT4-CW-CTX @ _EXT4-C.CLAIM-WORKSPACE-BYTES + !
     THEN
-    _EXT4-OCW-REQUIRED @ 2 _EXT4-UMUL?
-    DUP IF NIP EXIT THEN DROP
-    1 CELLS _EXT4-UMUL? DUP IF NIP EXIT THEN DROP _EXT4-OCW-BYTES !
-    _EXT4-OCW-CTX @ _EXT4-C.ARENA + @
-    _EXT4-OCW-BYTES @ ARENA-ALLOT? IF DROP VFS-E-NOMEM EXIT THEN
-    DUP _EXT4-OCW-CTX @ _EXT4-C.OWNER-CERT-RANGES + !
-    _EXT4-OCW-BYTES @ 0 FILL
-    _EXT4-OCW-REQUIRED @
-    _EXT4-OCW-CTX @ _EXT4-C.OWNER-CERT-RANGE-CAP + !
+    _EXT4-CW-CTX @ _EXT4-C.CLAIM-WORKSPACE + @
+    _EXT4-CW-CTX @ _EXT4-C.CLAIM-WORKSPACE-BYTES + @ 0 FILL
     0 ;
 
 : _EXT4-ORPHAN-WORKSPACE?  ( ctx -- flag )
@@ -8946,14 +8947,15 @@ CONSTANT _EXT4-ORPHAN-SLOTS-MAX
     DUP _EXT4-ORPHAN-SLOTS-MAX U> IF 2DROP FALSE EXIT THEN
     DUP 1- AND 0= NIP ;
 
-\ Reserve the geometry-derived authentication workspaces before examining any
-\ orphan inode or orphan-file block.  Failed-mount retries reuse and clear the
-\ retained allocations rather than consuming the monotonic arena again.
+\ Reserve the geometry-derived mutation-range and block-claim workspaces
+\ before examining any orphan inode or orphan-file block.  Failed-mount
+\ retries reuse and clear the retained allocations rather than consuming the
+\ monotonic arena again.
 : _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE  ( ctx -- ior )
     DUP 0= IF DROP VFS-E-INVALID EXIT THEN
     DUP _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE
     ?DUP IF NIP EXIT THEN
-    _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE ;
+    _EXT4-ENSURE-CLAIM-WORKSPACE ;
 
 \ Authenticate the retained runtime allocation structurally before using any
 \ its fields in rollback geometry.  Current media capacity is authenticated
@@ -11277,20 +11279,6 @@ VARIABLE _EXT4-FFR-LENGTH
     REPEAT
     0 0 0 ;
 
-VARIABLE _EXT4-OFR-RECORD
-VARIABLE _EXT4-OFR-CTX
-VARIABLE _EXT4-OFR-INDEX
-VARIABLE _EXT4-OFR-RANGES
-VARIABLE _EXT4-OFR-RANGE-COUNT
-VARIABLE _EXT4-OFR-RANGE-CAP
-VARIABLE _EXT4-OFR-EA
-VARIABLE _EXT4-OFR-IOR
-VARIABLE _EXT4-OFR-MAP-LIMIT
-VARIABLE _EXT4-OFR-PROSPECTIVE
-VARIABLE _EXT4-OFR-PROSPECTIVE-INO
-VARIABLE _EXT4-OFR-PROSPECTIVE-GEN
-VARIABLE _EXT4-OFR-PROSPECTIVE-CTX
-CREATE _EXT4-OFR-EA-RANGE 2 CELLS ALLOT
 
 \ Prove that no proposed release range names any storage owned by the modern
 \ orphan file.  Publish the exact candidate vector while the complete reader
@@ -11300,116 +11288,6 @@ CREATE _EXT4-OFR-EA-RANGE 2 CELLS ALLOT
 \ geometry into another fixed table.  Check an external xattr block under the
 \ same scope, authenticate every logical orphan-block tail, withdraw the scope
 \ on every return, and finally restore the target plan record in C.INODE.
-
-: _EXT4-OFR-FAIL  ( ior -- ior )
-    _EXT4-OFR-IOR !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-OFR-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-OFR-IOR @ ;
-
-: _EXT4-OFR-PUBLISH  ( -- ior )
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-OFR-RANGES @ _EXT4-OFR-RANGE-COUNT @
-    _EXT4-OFR-RANGE-CAP @ _EXT4-MUTATION-OWNER-RANGES-PUBLISH ;
-
-: _EXT4-OFR-PUBLISH-EA  ( -- ior )
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-OFR-EA @ _EXT4-OFR-EA-RANGE !
-    1 _EXT4-OFR-EA-RANGE CELL+ !
-    _EXT4-OFR-EA-RANGE 1 1 _EXT4-MUTATION-OWNER-RANGES-PUBLISH ;
-
-: _EXT4-ORPHAN-FILE-RANGES-DISJOINT-COMMON
-  ( ranges range-count capacity plan-record ctx -- ior )
-    _EXT4-OFR-CTX ! _EXT4-OFR-RECORD !
-    _EXT4-OFR-RANGE-CAP ! _EXT4-OFR-RANGE-COUNT ! _EXT4-OFR-RANGES !
-    _EXT4-OFR-CTX @ 0=
-    _EXT4-OFR-RECORD @ 0= _EXT4-OFR-PROSPECTIVE @ 0= AND OR
-    _EXT4-OFR-RANGE-COUNT @ 0< OR _EXT4-OFR-RANGE-CAP @ 0< OR
-    _EXT4-OFR-RANGE-COUNT @ _EXT4-OFR-RANGE-CAP @ U> OR
-    _EXT4-OFR-RANGE-COUNT @ 0<> _EXT4-OFR-RANGES @ 0= AND OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-OWNER-INO @ OR
-    _EXT4-MUTATION-MAP-TARGET @ OR
-    _EXT4-MUTATION-MAP-ACTIVE @ OR
-    _EXT4-MUTATION-MAP-HITS @ OR
-    _EXT4-MUTATION-PROTOCOL-CTX @ OR
-    _EXT4-MUTATION-PROTOCOL-ACTIVE @ OR
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR
-    _EXT4-MUTATION-EA-REF-HOME @ OR
-    _EXT4-MUTATION-EA-REF-HITS @ OR IF
-        VFS-E-BUSY EXIT
-    THEN
-    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-OFR-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-OFR-RANGE-COUNT @ IF
-        _EXT4-OFR-PUBLISH ?DUP IF _EXT4-OFR-FAIL EXIT THEN
-    THEN
-    _EXT4-OFR-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF
-        _EXT4-OFR-FAIL EXIT
-    THEN
-    _EXT4-OV-IN @ _EXT4-I.FILE-ACL-HI + W@ IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT _EXT4-OFR-FAIL EXIT
-    THEN
-    _EXT4-OV-IN @ _EXT4-I.FILE-ACL-LO + L@ DUP _EXT4-OFR-EA ! IF
-        _EXT4-OFR-EA @ EXT4-D-DATA-MAP _EXT4-OFR-CTX @
-        _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF _EXT4-OFR-FAIL EXIT THEN
-    THEN
-    _EXT4-XOP-LIST _EXT4-XA-OP !
-    0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
-    _EXT4-OFR-CTX @ _EXT4-XA-SCAN-BOTH
-    ?DUP IF _EXT4-OFR-FAIL EXIT THEN
-    0 _EXT4-OFR-INDEX !
-    BEGIN _EXT4-OFR-INDEX @ _EXT4-OV-BLOCKS @ < WHILE
-        _EXT4-OFR-INDEX @ _EXT4-OFR-CTX @
-        _EXT4-READ-ORPHAN-BLOCK ?DUP IF _EXT4-OFR-FAIL EXIT THEN
-        1 _EXT4-OFR-INDEX +!
-    REPEAT
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    \ The xattr walker authenticates the external block, but that block must
-    \ also be disjoint from every data or map-metadata reference owned by the
-    \ orphan inode itself.  Check the singleton EA against the complete map in
-    \ a separate scope so loading the EA does not reject its own valid owner.
-    _EXT4-OFR-EA @ IF
-        _EXT4-OFR-PUBLISH-EA ?DUP IF _EXT4-OFR-FAIL EXIT THEN
-        _EXT4-OFR-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF
-            _EXT4-OFR-FAIL EXIT
-        THEN
-        _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    THEN
-    _EXT4-OFR-PROSPECTIVE @ IF
-        _EXT4-OFR-PROSPECTIVE-INO @ _EXT4-OFR-CTX @
-        _EXT4-VALIDATE-ACTIVE-ORPHAN _EXT4-OFR-IOR !
-        _EXT4-OFR-IOR @ 0= IF
-            _EXT4-OFR-CTX @ _EXT4-C.INODE + DUP
-            _EXT4-I.GENERATION + L@
-            _EXT4-OFR-PROSPECTIVE-GEN @ <>
-            OVER _EXT4-I.DTIME + L@ OR
-            SWAP _EXT4-I.LINKS + W@ 1 <> OR IF
-                VFS-E-CONFLICT _EXT4-OFR-IOR !
-            THEN
-        THEN
-    ELSE
-        _EXT4-OFR-RECORD @ _EXT4-OFR-CTX @
-        _EXT4-REAUTH-ORPHAN-PLAN-RECORD _EXT4-OFR-IOR !
-    THEN
-    _EXT4-OFR-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-OFR-IOR @ ;
-
-: _EXT4-ORPHAN-FILE-RANGES-DISJOINT
-  ( ranges range-count capacity plan-record ctx -- ior )
-    0 _EXT4-OFR-PROSPECTIVE !
-    _EXT4-ORPHAN-FILE-RANGES-DISJOINT-COMMON ;
-
-: _EXT4-ORPHAN-FILE-RANGES-DISJOINT-PROSPECTIVE
-  ( ranges range-count capacity inode-number generation ctx -- ior )
-    _EXT4-OFR-PROSPECTIVE-CTX !
-    _EXT4-OFR-PROSPECTIVE-GEN ! _EXT4-OFR-PROSPECTIVE-INO !
-    -1 _EXT4-OFR-PROSPECTIVE !
-    0 _EXT4-OFR-PROSPECTIVE-CTX @
-    _EXT4-ORPHAN-FILE-RANGES-DISJOINT-COMMON
-    0 _EXT4-OFR-PROSPECTIVE ! ;
 
 \ =====================================================================
 \  Plan-bound unlinked inode allocation release
@@ -11503,15 +11381,6 @@ CREATE _EXT4-JFI-EA-RANGE
     THEN
     0 ;
 
-: _EXT4-JFI-ORPHAN-FILE-RANGES-DISJOINT
-  ( ranges range-count capacity -- ior )
-    _EXT4-JFI-PROSPECTIVE @ IF
-        _EXT4-JFI-INO @ _EXT4-JFI-PROSPECTIVE-GEN @ _EXT4-JFI-CTX @
-        _EXT4-ORPHAN-FILE-RANGES-DISJOINT-PROSPECTIVE EXIT
-    THEN
-    _EXT4-JFI-RECORD @ _EXT4-JFI-CTX @
-    _EXT4-ORPHAN-FILE-RANGES-DISJOINT ;
-
 : _EXT4-JFI-RANGES  ( -- ranges )
     _EXT4-JFI-CTX @ _EXT4-C.MUTATION-RANGES + @ ;
 
@@ -11539,10 +11408,6 @@ CREATE _EXT4-JFI-EA-RANGE
 
 : _EXT4-JFI-RANGE-BLOCKS  ( -- blocks )
     _EXT4-JFI-DATA-BLOCKS @ _EXT4-JFI-MAP-BLOCKS @ + ;
-
-: _EXT4-JFI-OWNER-RANGE-COUNT  ( -- count )
-    _EXT4-JFI-RANGE-COUNT
-    _EXT4-JFI-EA @ IF 1+ THEN ;
 
 : _EXT4-JFI-RELEASE-RANGE-COUNT  ( -- count )
     _EXT4-JFI-RANGE-COUNT
@@ -11638,9 +11503,7 @@ VARIABLE _EXT4-JRV-INDEX
     TRUE ;
 
 VARIABLE _EXT4-JFO-CTX
-VARIABLE _EXT4-JFO-RECORD
 VARIABLE _EXT4-JFO-TARGET-INO
-VARIABLE _EXT4-JFO-TARGET-INO-B
 VARIABLE _EXT4-JFO-GROUP
 VARIABLE _EXT4-JFO-GROUP-INODES
 VARIABLE _EXT4-JFO-GROUP-BASE
@@ -11649,32 +11512,7 @@ VARIABLE _EXT4-JFO-INODE
 VARIABLE _EXT4-JFO-NLINK
 VARIABLE _EXT4-JFO-TYPE
 VARIABLE _EXT4-JFO-IOR
-VARIABLE _EXT4-JFO-MAP-LIMIT
 VARIABLE _EXT4-JFO-INODE-TABLE
-
-VARIABLE _EXT4-JFO-CERT-SCOPE
-VARIABLE _EXT4-JFO-CERT-VALID
-VARIABLE _EXT4-JFO-CERT-CTX
-VARIABLE _EXT4-JFO-CERT-INO
-VARIABLE _EXT4-JFO-CERT-GEN
-1 CONSTANT _EXT4-JFO-CERT-JFI
-3 CONSTANT _EXT4-JFO-CERT-UOW-PAIR
-VARIABLE _EXT4-JFO-CERT-KIND
-VARIABLE _EXT4-JFO-CERT-RANGE-COUNT
-VARIABLE _EXT4-JFO-CERT-EA
-VARIABLE _EXT4-JFO-CERT-EA-ACTION
-VARIABLE _EXT4-JFO-CERT-EA-REFCOUNT
-VARIABLE _EXT4-JFO-CERT-DATA-MAP-KIND
-VARIABLE _EXT4-JFO-CERT-NLINK
-
-: _EXT4-JFO-CERT-RANGES  ( -- ranges )
-    _EXT4-JFO-CERT-CTX @ _EXT4-C.OWNER-CERT-RANGES + @ ;
-
-: _EXT4-JFO-CERT-RANGE-CAP  ( -- capacity )
-    _EXT4-JFO-CERT-CTX @ _EXT4-C.OWNER-CERT-RANGE-CAP + @ ;
-
-: _EXT4-JFO-CERT-RANGE  ( index -- pair-address )
-    2 * CELLS _EXT4-JFO-CERT-RANGES + ;
 
 VARIABLE _EXT4-MPH-FIRST
 VARIABLE _EXT4-MPH-COUNT
@@ -11703,83 +11541,6 @@ VARIABLE _EXT4-MPH-ROOT
 ' _EXT4-MUTATION-PROTOCOL-HOME-ALIASES?
 _EXT4-MUTATION-PROTOCOL-XT !
 
-: _EXT4-JFO-CERT-INVALIDATE  ( -- )
-    0 _EXT4-JFO-CERT-VALID ! ;
-
-: _EXT4-JFO-CERT-BEGIN  ( -- ior )
-    _EXT4-JFO-CERT-SCOPE @ IF VFS-E-BUSY EXIT THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    -1 _EXT4-JFO-CERT-SCOPE !
-    0 ;
-
-: _EXT4-JFO-CERT-END  ( -- )
-    _EXT4-JFO-CERT-INVALIDATE
-    0 _EXT4-JFO-CERT-SCOPE ! ;
-
-: _EXT4-JFO-CERT-MATCH?  ( -- flag )
-    _EXT4-JFO-CERT-SCOPE @ 0= IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-VALID @ 0= IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-KIND @ _EXT4-JFO-CERT-JFI <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-CTX @ _EXT4-JFI-CTX @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-INO @ _EXT4-JFI-INO @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-GEN @
-    _EXT4-JFI-INODE @ _EXT4-I.GENERATION + L@ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-NLINK @ _EXT4-JFI-AUTH-NLINK @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-RANGE-COUNT @ _EXT4-JFI-RANGE-COUNT <> IF
-        FALSE EXIT
-    THEN
-    _EXT4-JFO-CERT-RANGE-COUNT @ _EXT4-JFO-CERT-RANGE-CAP U> IF
-        FALSE EXIT
-    THEN
-    _EXT4-JFO-CERT-EA @ _EXT4-JFI-EA @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-EA-ACTION @
-    _EXT4-JFI-EA-ACTION @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-EA-REFCOUNT @
-    _EXT4-JFI-EA-REFCOUNT @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-DATA-MAP-KIND @
-    _EXT4-JFI-DATA-MAP-KIND @ <> IF FALSE EXIT THEN
-    _EXT4-JFI-RANGE-COUNT 0 ?DO
-        I _EXT4-JFI-RANGE @ I _EXT4-JFO-CERT-RANGE @ <> IF
-            FALSE UNLOOP EXIT
-        THEN
-        I _EXT4-JFI-RANGE CELL+ @
-        I _EXT4-JFO-CERT-RANGE CELL+ @ <> IF
-            FALSE UNLOOP EXIT
-        THEN
-    LOOP
-    TRUE ;
-
-: _EXT4-JFO-CERT-STORE  ( -- )
-    _EXT4-JFO-CERT-SCOPE @ 0= IF EXIT THEN
-    0 _EXT4-JFO-CERT-VALID !
-    _EXT4-JFI-CTX @ _EXT4-JFO-CERT-CTX !
-    _EXT4-JFI-CTX @ _EXT4-OWNER-CERT-RANGE-WORKSPACE? 0= IF EXIT THEN
-    _EXT4-JFO-CERT-RANGES 0= IF EXIT THEN
-    _EXT4-JFI-RANGE-COUNT _EXT4-JFO-CERT-RANGE-CAP U> IF EXIT THEN
-    _EXT4-JFO-CERT-JFI _EXT4-JFO-CERT-KIND !
-    0 _EXT4-JFO-CERT-RANGE-COUNT !
-    0 _EXT4-JFO-CERT-EA !
-    0 _EXT4-JFO-CERT-EA-ACTION !
-    0 _EXT4-JFO-CERT-EA-REFCOUNT !
-    0 _EXT4-JFO-CERT-DATA-MAP-KIND !
-    0 _EXT4-JFO-CERT-NLINK !
-    _EXT4-JFI-INO @ _EXT4-JFO-CERT-INO !
-    _EXT4-JFI-INODE @ _EXT4-I.GENERATION + L@ _EXT4-JFO-CERT-GEN !
-    _EXT4-JFI-AUTH-NLINK @ _EXT4-JFO-CERT-NLINK !
-    _EXT4-JFI-RANGE-COUNT _EXT4-JFO-CERT-RANGE-COUNT !
-    _EXT4-JFI-EA @ _EXT4-JFO-CERT-EA !
-    _EXT4-JFI-EA-ACTION @ _EXT4-JFO-CERT-EA-ACTION !
-    _EXT4-JFI-EA-REFCOUNT @ _EXT4-JFO-CERT-EA-REFCOUNT !
-    _EXT4-JFI-DATA-MAP-KIND @ _EXT4-JFO-CERT-DATA-MAP-KIND !
-    _EXT4-JFO-CERT-RANGES
-    _EXT4-JFO-CERT-RANGE-CAP 2* CELLS 0 FILL
-    _EXT4-JFI-RANGE-COUNT 0 ?DO
-        I _EXT4-JFI-RANGE @ I _EXT4-JFO-CERT-RANGE !
-        I _EXT4-JFI-RANGE CELL+ @
-        I _EXT4-JFO-CERT-RANGE CELL+ !
-    LOOP
-    -1 _EXT4-JFO-CERT-VALID ! ;
-
 : _EXT4-JFO-REQUIRE-EMPTY-RESERVED  ( -- ior )
     _EXT4-JFO-INODE @ _EXT4-I.FILE-ACL-HI + W@
     _EXT4-JFO-INODE @ _EXT4-I.FILE-ACL-LO + L@ OR IF
@@ -11794,26 +11555,18 @@ _EXT4-MUTATION-PROTOCOL-XT !
     THEN
     0 ;
 
-\ A shared external-xattr proof keeps the candidate home in the ordinary
-\ forbidden-owner vector, so every data or map-metadata reference still
-\ fails closed.  The inode's single i_file_acl field is the sole semantic
-\ exception: authenticate its allocation and count that exact reference.
-\ The target inode is excluded from this scan and contributes the initial hit.
+\ An inode's external xattr block must be allocated.  Other inodes may
+\ share it, so the ownership proof lists the reference instead of claiming
+\ the block.
 : _EXT4-JFO-REQUIRE-XATTR-BLOCK  ( physical-block -- ior )
-    DUP _EXT4-MUTATION-EA-REF-HOME @ =
-    _EXT4-MUTATION-EA-REF-ACTIVE @ AND IF
-        _EXT4-JFO-CTX @ _EXT4-BLOCK-ALLOCATED?
-        ?DUP IF NIP EXIT THEN
-        0= IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
-        _EXT4-MUTATION-EA-REF-HITS @ 1 _EXT4-UADD?
-        DUP IF NIP EXIT THEN
-        DROP _EXT4-MUTATION-EA-REF-HITS !
-        0 EXIT
-    THEN
-    EXT4-D-DATA-MAP _EXT4-JFO-CTX @ _EXT4-REQUIRE-ALLOCATED-BLOCK ;
+    DUP EXT4-D-DATA-MAP _EXT4-JFO-CTX @ _EXT4-REQUIRE-ALLOCATED-BLOCK
+    ?DUP IF NIP EXIT THEN
+    _EXT4-OWN-MODE @ IF _EXT4-OWN-LIST-EA EXIT THEN
+    DROP 0 ;
 
-\ With the scoped owner target active, ordinary complete map validation turns
-\ every reference to the candidate block into a corruption refusal.  Inode 1
+\ Validate the loaded record's complete map and xattr reference through the
+\ ordinary validators, which note its blocks in an open claim scope and
+\ refuse a protocol home while the protocol scope is published.  Inode 1
 \ may own a legacy bad-block map even with mode zero; other mode-zero reserved
 \ records must be storage-empty.  Fast symlink and device payload bytes are
 \ interpreted by the normal inode validator rather than mistaken for maps.
@@ -11884,21 +11637,18 @@ _EXT4-MUTATION-PROTOCOL-XT !
         THEN
         IF
             _EXT4-JFO-GROUP-BASE @ I + 1+ DUP _EXT4-JFO-INO !
-            DUP _EXT4-JFO-TARGET-INO @ <>
-            SWAP _EXT4-JFO-TARGET-INO-B @ <> AND IF
+            _EXT4-JFO-TARGET-INO @ <> IF
                 _EXT4-JFO-LOAD-CURRENT-INODE ?DUP IF UNLOOP EXIT THEN
-                _EXT4-JFO-INO @ _EXT4-MUTATION-OWNER-INO !
-                _EXT4-JFO-CHECK-CURRENT-INODE _EXT4-JFO-IOR !
-                0 _EXT4-MUTATION-OWNER-INO !
-                _EXT4-JFO-IOR @ ?DUP IF UNLOOP EXIT THEN
+                _EXT4-JFO-CHECK-CURRENT-INODE ?DUP IF UNLOOP EXIT THEN
             THEN
         THEN
     LOOP
     0 ;
 
-\ One walk reads each descriptor page, bitmap, inode-table block, and map
-\ block from media once; the walk itself writes nothing.
-: _EXT4-JFO-SCAN-EXCLUDING-TARGETS  ( -- ior )
+\ Check every allocated inode but TARGET-INO, which is zero when the walk
+\ excludes none.  One walk reads each descriptor page, bitmap, inode-table
+\ block, and map block from media once; the walk itself writes nothing.
+: _EXT4-JFO-SCAN-INODES  ( -- ior )
     _EXT4-JFO-CTX @ _EXT4-PROOF-SCOPE-OPEN
     0 _EXT4-JFO-GROUP !
     BEGIN
@@ -11909,14 +11659,516 @@ _EXT4-MUTATION-PROTOCOL-XT !
     REPEAT
     _EXT4-PROOF-SCOPE-CLOSE 0 ;
 
-: _EXT4-JFO-SCAN-OTHER-INODES  ( -- ior )
-    0 _EXT4-JFO-TARGET-INO-B !
-    _EXT4-JFO-SCAN-EXCLUDING-TARGETS ;
+\ =====================================================================
+\  Block ownership proof
+\ =====================================================================
+\
+\ Before a mount's first write, prove that the block bitmaps hold exactly
+\ the blocks the fixed metadata and the allocated inodes own, each owned
+\ once.  The fixed metadata are every group's block and inode bitmaps and
+\ inode table, wherever its descriptor places them, and the superblock and
+\ descriptor-table copies each sparse group holds; the resize inode owns
+\ the reserved descriptor blocks.  One walk of every allocated inode claims
+\ its map through the ordinary validators, so a block claimed twice, by two
+\ owners or twice by one, refuses.  An external xattr block may be shared:
+\ the walk lists every reference, and each listed block is claimed once and
+\ must carry a reference count equal to the inodes that name it.  Every
+\ group's block bitmap, or the one a BLOCK_UNINIT group stands for, must
+\ then equal the claims in the group's blocks.  Nothing else writes a
+\ mounted volume, and each later transaction proves that it changes maps by
+\ exactly the blocks it allocates and frees, so the proof stands for the
+\ rest of the mount.  Its claim map, one bit per block, is the mount's
+\ claim workspace, cleared when the proof ends; the reference list grows at
+\ the top of the mount arena and is rolled back.
 
-: _EXT4-JFO-SCAN-OTHER-INODES-PAIR  ( target-b -- ior )
-    _EXT4-JFO-TARGET-INO-B !
-    _EXT4-JFO-SCAN-EXCLUDING-TARGETS
-    0 _EXT4-JFO-TARGET-INO-B ! ;
+VARIABLE _EXT4-BOP-CTX
+VARIABLE _EXT4-BOP-ARENA
+VARIABLE _EXT4-BOP-MARK
+VARIABLE _EXT4-BOP-MAP
+VARIABLE _EXT4-BOP-BUF
+VARIABLE _EXT4-BOP-GROUP
+VARIABLE _EXT4-BOP-BLOCKS
+VARIABLE _EXT4-BOP-LIMIT
+VARIABLE _EXT4-BOP-IOR
+VARIABLE _EXT4-BOP-AT
+VARIABLE _EXT4-BOP-RUN
+VARIABLE _EXT4-BOP-EA
+VARIABLE _EXT4-BOP-A
+VARIABLE _EXT4-BOP-B
+VARIABLE _EXT4-BOP-N
+
+\ Claim the fixed metadata GROUP's descriptor places, and the superblock and
+\ descriptor-table copies a sparse group holds.
+: _EXT4-BOP-CLAIM-GROUP  ( group -- ior )
+    DUP _EXT4-BOP-GROUP ! _EXT4-BOP-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-BOP-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@ 1
+    _EXT4-OWN-NOTE ?DUP IF EXIT THEN
+    _EXT4-BOP-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-BITMAP-LO + L@ 1
+    _EXT4-OWN-NOTE ?DUP IF EXIT THEN
+    _EXT4-BOP-CTX @ _EXT4-C.DESC + _EXT4-GD.INODE-TABLE-LO + L@
+    _EXT4-GD-SPAN @ _EXT4-OWN-NOTE ?DUP IF EXIT THEN
+    _EXT4-BOP-GROUP @ _EXT4-SPARSE-GROUP? 0= IF 0 EXIT THEN
+    _EXT4-BOP-GROUP @ _EXT4-BOP-CTX @ _EXT4-C.BPG + @ *
+    _EXT4-BOP-CTX @ _EXT4-C.FIRST + @ +
+    _EXT4-BOP-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ 1+
+    _EXT4-OWN-NOTE ;
+
+VARIABLE _EXT4-CS-BASE
+VARIABLE _EXT4-CS-N
+VARIABLE _EXT4-CS-GAP
+VARIABLE _EXT4-CS-V
+VARIABLE _EXT4-CS-J
+
+: _EXT4-CS@  ( index -- value )  CELLS _EXT4-CS-BASE @ + @ ;
+: _EXT4-CS!  ( value index -- )  CELLS _EXT4-CS-BASE @ + ! ;
+
+\ Sort N cells at BASE into ascending unsigned order, by Shell sort with
+\ Knuth's gaps.
+: _EXT4-SORT-CELLS  ( base n -- )
+    _EXT4-CS-N ! _EXT4-CS-BASE !
+    1 BEGIN DUP 3 * 1+ _EXT4-CS-N @ U< WHILE 3 * 1+ REPEAT _EXT4-CS-GAP !
+    BEGIN _EXT4-CS-GAP @ WHILE
+        _EXT4-CS-N @ _EXT4-CS-GAP @ ?DO
+            I _EXT4-CS@ _EXT4-CS-V ! I _EXT4-CS-J !
+            BEGIN
+                _EXT4-CS-J @ _EXT4-CS-GAP @ U< 0= DUP IF
+                    DROP _EXT4-CS-J @ _EXT4-CS-GAP @ - _EXT4-CS@
+                    _EXT4-CS-V @ U>
+                THEN
+            WHILE
+                _EXT4-CS-J @ _EXT4-CS-GAP @ - _EXT4-CS@
+                _EXT4-CS-J @ _EXT4-CS!
+                _EXT4-CS-GAP @ NEGATE _EXT4-CS-J +!
+            REPEAT
+            _EXT4-CS-V @ _EXT4-CS-J @ _EXT4-CS!
+        LOOP
+        _EXT4-CS-GAP @ 3 / _EXT4-CS-GAP !
+    REPEAT ;
+
+\ Claim each listed xattr block once.  Its reference count must equal the
+\ inodes that name it.
+: _EXT4-BOP-CLAIM-EAS  ( -- ior )
+    _EXT4-OWN-EA-LIST @ _EXT4-OWN-EA-COUNT @ _EXT4-SORT-CELLS
+    0 _EXT4-BOP-AT !
+    BEGIN _EXT4-BOP-AT @ _EXT4-OWN-EA-COUNT @ U< WHILE
+        _EXT4-BOP-AT @ CELLS _EXT4-OWN-EA-LIST @ + @ _EXT4-BOP-EA !
+        1 _EXT4-BOP-RUN !
+        BEGIN
+            _EXT4-BOP-AT @ _EXT4-BOP-RUN @ +
+            DUP _EXT4-OWN-EA-COUNT @ U< IF
+                CELLS _EXT4-OWN-EA-LIST @ + @ _EXT4-BOP-EA @ =
+            ELSE
+                DROP FALSE
+            THEN
+        WHILE
+            1 _EXT4-BOP-RUN +!
+        REPEAT
+        _EXT4-BOP-EA @ 1 TRUE _EXT4-OWN-SPAN ?DUP IF EXIT THEN
+        _EXT4-BOP-EA @ _EXT4-BOP-CTX @ _EXT4-LOAD-XATTR-BLOCK
+        ?DUP IF EXIT THEN
+        _EXT4-BOP-CTX @ _EXT4-C.BLOCK + 4 + L@ _EXT4-BOP-RUN @ <> IF
+            EXT4-D-XATTR _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-BOP-RUN @ _EXT4-BOP-AT +!
+    REPEAT 0 ;
+
+\ Whether the first BITS bits of A and B agree.
+: _EXT4-BOP-BITS=?  ( a b bits -- flag )
+    _EXT4-BOP-N ! _EXT4-BOP-B ! _EXT4-BOP-A !
+    _EXT4-BOP-A @ _EXT4-BOP-B @ _EXT4-BOP-N @ 8 / _EXT4-BYTES=? 0= IF
+        FALSE EXIT
+    THEN
+    _EXT4-BOP-N @ 8 MOD 0= IF TRUE EXIT THEN
+    _EXT4-BOP-A @ _EXT4-BOP-N @ 8 / + C@
+    _EXT4-BOP-B @ _EXT4-BOP-N @ 8 / + C@ XOR
+    1 _EXT4-BOP-N @ 8 MOD LSHIFT 1- AND 0= ;
+
+\ The claims in GROUP's blocks must equal its block bitmap, or the bitmap a
+\ BLOCK_UNINIT group stands for.  A group spans one bitmap block of bits, so
+\ its claims start GROUP blocks into the claim map.
+: _EXT4-BOP-COMPARE-GROUP  ( group -- ior )
+    DUP _EXT4-BOP-GROUP ! _EXT4-BOP-CTX @ _EXT4-GROUP-BLOCK-COUNT
+    ?DUP IF NIP EXIT THEN _EXT4-BOP-BLOCKS !
+    _EXT4-BOP-GROUP @ _EXT4-BOP-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF
+        _EXT4-BOP-GROUP @ _EXT4-BOP-BUF @ _EXT4-BOP-CTX @
+        _EXT4-BUILD-UNINIT-BLOCK-BITMAP ?DUP IF EXIT THEN
+        _EXT4-BOP-BUF @
+    ELSE
+        _EXT4-BOP-GROUP @ _EXT4-BOP-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+        ?DUP IF NIP EXIT THEN DROP
+        _EXT4-BOP-CTX @ _EXT4-C.BLOCK +
+    THEN
+    _EXT4-BOP-GROUP @ _EXT4-BOP-CTX @ _EXT4-C.BSIZE + @ *
+    _EXT4-BOP-MAP @ +
+    _EXT4-BOP-BLOCKS @ _EXT4-BOP-BITS=? 0= IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _EXT4-BOP-BODY  ( -- ior )
+    _EXT4-BOP-CTX @ _EXT4-PROOF-SCOPE-OPEN
+    _EXT4-BOP-CTX @ _EXT4-C.GROUPS + @ 0 ?DO
+        I _EXT4-BOP-CLAIM-GROUP ?DUP IF
+            _EXT4-PROOF-SCOPE-CLOSE UNLOOP EXIT
+        THEN
+    LOOP
+    _EXT4-PROOF-SCOPE-CLOSE
+    _EXT4-BOP-CTX @ _EXT4-JFO-CTX !
+    0 _EXT4-JFO-TARGET-INO !
+    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-BOP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-JFO-SCAN-INODES
+    _EXT4-BOP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    ?DUP IF EXIT THEN
+    _EXT4-BOP-CLAIM-EAS ?DUP IF EXIT THEN
+    _EXT4-BOP-CTX @ _EXT4-PROOF-SCOPE-OPEN
+    _EXT4-BOP-CTX @ _EXT4-C.GROUPS + @ 0 ?DO
+        I _EXT4-BOP-COMPARE-GROUP ?DUP IF
+            _EXT4-PROOF-SCOPE-CLOSE UNLOOP EXIT
+        THEN
+    LOOP
+    _EXT4-PROOF-SCOPE-CLOSE 0 ;
+
+\ Prove block ownership for CTX's mount, once: a proved mount answers at
+\ once, and a refusal leaves the proof to be attempted again.
+: _EXT4-PROVE-OWNERSHIP  ( ctx -- ior )
+    DUP _EXT4-BOP-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-BOP-CTX @ _EXT4-C.OWNERSHIP + @ -1 = IF 0 EXIT THEN
+    0 _EXT4-BOP-CTX @ _EXT4-C.OWNERSHIP + !
+    _EXT4-OWN-MAP @ _EXT4-OWN-EA-ARENA @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-BOP-CTX @ _EXT4-C.ARENA + @ DUP _EXT4-BOP-ARENA !
+    0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-BOP-CTX @ _EXT4-C.CLAIM-WORKSPACE + @ DUP _EXT4-BOP-MAP !
+    0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-BOP-MAP @ _EXT4-BOP-CTX @ _EXT4-OWN-BYTES + _EXT4-BOP-BUF !
+    _EXT4-BOP-ARENA @ ARENA-SNAP _EXT4-BOP-MARK !
+    _EXT4-BOP-ARENA @ _EXT4-OWN-EA-ARENA !
+    _EXT4-BOP-MARK @ _EXT4-OWN-EA-LIST ! 0 _EXT4-OWN-EA-COUNT !
+    _EXT4-BOP-MAP @ 1 _EXT4-BOP-CTX @ _EXT4-OWN-OPEN DUP 0= IF
+        DROP _EXT4-BOP-BODY
+    THEN
+    _EXT4-BOP-IOR !
+    _EXT4-OWN-CLOSE
+    0 _EXT4-OWN-EA-ARENA ! 0 _EXT4-OWN-EA-LIST ! 0 _EXT4-OWN-EA-COUNT !
+    _EXT4-BOP-ARENA @ _EXT4-BOP-MARK @ ARENA-ROLLBACK
+    _EXT4-BOP-MAP @ _EXT4-BOP-CTX @ _EXT4-OWN-BYTES 0 FILL
+    _EXT4-BOP-IOR @ 0= IF -1 _EXT4-BOP-CTX @ _EXT4-C.OWNERSHIP + ! THEN
+    _EXT4-BOP-IOR @ ;
+
+\ ---------------------------------------------------------------------
+\  Transaction map check
+\ ---------------------------------------------------------------------
+\
+\ Before a transaction commits, the maps it changes must differ from their
+\ old selves by exactly the blocks it allocates and frees, so the mount's
+\ ownership proof still stands after it.  The check opens a claim map over
+\ the volume and claims each changed map as it stood before the
+\ transaction.  Each block bitmap the transaction changes then claims the
+\ blocks it sets and releases the blocks it clears.  Each map as the
+\ transaction stages it, read through the transaction, must then release
+\ every claim that is left, and nothing more, so a block mapped by mistake,
+\ a block dropped without being freed, and a block mapped twice all refuse.
+\ The claim map is the mount's claim workspace.  A mount cleanup writer owns
+\ the end of the mount arena while it stages, so the check allocates nothing.
+
+VARIABLE _EXT4-NMC-CTX
+VARIABLE _EXT4-NMC-TX
+VARIABLE _EXT4-NMC-OPENED
+VARIABLE _EXT4-NMC-BUF
+VARIABLE _EXT4-NMC-PAGE
+VARIABLE _EXT4-NMC-IMAGE
+VARIABLE _EXT4-NMC-GROUP
+VARIABLE _EXT4-NMC-DESC
+VARIABLE _EXT4-NMC-AFTER
+VARIABLE _EXT4-NMC-BEFORE
+VARIABLE _EXT4-NMC-FIRST
+VARIABLE _EXT4-NMC-BASE
+VARIABLE _EXT4-NMC-BITS
+VARIABLE _EXT4-NMC-CLAIM
+VARIABLE _EXT4-NMC-A
+VARIABLE _EXT4-NMC-B
+
+\ Open the check of TRANSACTION on CTX over the mount's claim workspace,
+\ whose map is clear, claiming.
+: _EXT4-NMC-OPEN  ( ctx transaction -- ior )
+    _EXT4-NMC-TX ! DUP _EXT4-NMC-CTX ! 0 _EXT4-NMC-OPENED !
+    _EXT4-C.CLAIM-WORKSPACE + @ DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    DUP _EXT4-NMC-CTX @ _EXT4-OWN-BYTES + _EXT4-NMC-BUF !
+    1 _EXT4-NMC-CTX @ _EXT4-OWN-OPEN ?DUP IF EXIT THEN
+    -1 _EXT4-NMC-OPENED ! 0 ;
+
+\ End the check.  Unless an earlier step failed, every claim must have been
+\ released, which leaves the map clear; a failed check clears it.
+: _EXT4-NMC-CLOSE  ( ior -- ior )
+    0 _EXT4-EV-IMAGE-XT !
+    _EXT4-NMC-OPENED @ 0= IF EXIT THEN
+    DUP 0= _EXT4-OWN-COUNT @ 0<> AND IF
+        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT
+    THEN
+    DUP IF _EXT4-OWN-MAP @ _EXT4-NMC-CTX @ _EXT4-OWN-BYTES 0 FILL THEN
+    _EXT4-OWN-CLOSE
+    0 _EXT4-NMC-OPENED ! ;
+
+\ Claim (NMC-CLAIM true) or release each block whose bit is set in BITS,
+\ in the claim-map cell whose first block is NMC-BASE.
+: _EXT4-NMC-CELL  ( bits -- ior )
+    DUP -1 = IF
+        DROP _EXT4-NMC-BASE @ 64 _EXT4-NMC-CLAIM @ _EXT4-OWN-SPAN EXIT
+    THEN
+    _EXT4-NMC-BITS !
+    64 0 DO
+        _EXT4-NMC-BITS @ I RSHIFT 1 AND IF
+            _EXT4-NMC-BASE @ I + 1 _EXT4-NMC-CLAIM @ _EXT4-OWN-SPAN
+            ?DUP IF UNLOOP EXIT THEN
+        THEN
+    LOOP 0 ;
+
+\ Apply GROUP's block-bitmap change from BEFORE to AFTER: claim each block
+\ whose bit it sets and release each block whose bit it clears.
+: _EXT4-NMC-APPLY  ( before after group -- ior )
+    _EXT4-NMC-CTX @ _EXT4-C.BPG + @ *
+    _EXT4-NMC-CTX @ _EXT4-C.FIRST + @ + _EXT4-NMC-FIRST !
+    _EXT4-NMC-AFTER ! _EXT4-NMC-BEFORE !
+    _EXT4-NMC-CTX @ _EXT4-C.BSIZE + @ 8 / 0 DO
+        I CELLS _EXT4-NMC-BEFORE @ + @ _EXT4-NMC-B !
+        I CELLS _EXT4-NMC-AFTER @ + @ _EXT4-NMC-A !
+        _EXT4-NMC-A @ _EXT4-NMC-B @ <> IF
+            _EXT4-NMC-FIRST @ I 64 * + _EXT4-NMC-BASE !
+            TRUE _EXT4-NMC-CLAIM !
+            _EXT4-NMC-A @ _EXT4-NMC-B @ INVERT AND ?DUP IF
+                _EXT4-NMC-CELL ?DUP IF UNLOOP EXIT THEN
+            THEN
+            FALSE _EXT4-NMC-CLAIM !
+            _EXT4-NMC-B @ _EXT4-NMC-A @ INVERT AND ?DUP IF
+                _EXT4-NMC-CELL ?DUP IF UNLOOP EXIT THEN
+            THEN
+        THEN
+    LOOP 0 ;
+
+\ GROUP's change, when the transaction's descriptor for it differs from the
+\ one on media and the transaction stages its block bitmap.  The bitmap's
+\ media image is the pre-image, or for a BLOCK_UNINIT group the one the
+\ group stands for.
+: _EXT4-NMC-GROUP-DELTA  ( group -- ior )
+    DUP _EXT4-NMC-GROUP ! _EXT4-NMC-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-NMC-GROUP @
+    _EXT4-NMC-CTX @ _EXT4-C.BSIZE + @ _EXT4-DESC-SIZE / MOD
+    _EXT4-DESC-SIZE * _EXT4-NMC-IMAGE @ + _EXT4-NMC-DESC !
+    _EXT4-NMC-DESC @ _EXT4-NMC-CTX @ _EXT4-C.DESC + _EXT4-DESC-SIZE
+    _EXT4-BYTES=? IF 0 EXIT THEN
+    _EXT4-NMC-DESC @ _EXT4-GD.BLOCK-BITMAP-LO + L@
+    _EXT4-NMC-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@ <> IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-NMC-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@
+    _EXT4-NMC-TX @ _EXT4-JTX-META-IMAGE ?DUP IF NIP EXIT THEN
+    ?DUP 0= IF 0 EXIT THEN
+    _EXT4-NMC-AFTER !
+    _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF
+        _EXT4-NMC-GROUP @ _EXT4-NMC-BUF @ _EXT4-NMC-CTX @
+        _EXT4-BUILD-UNINIT-BLOCK-BITMAP ?DUP IF EXIT THEN
+    ELSE
+        _EXT4-NMC-GROUP @ _EXT4-NMC-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+        ?DUP IF NIP EXIT THEN DROP
+        _EXT4-NMC-CTX @ _EXT4-C.BLOCK + _EXT4-NMC-BUF @
+        _EXT4-NMC-CTX @ _EXT4-C.BSIZE + @ MOVE
+    THEN
+    _EXT4-NMC-BUF @ _EXT4-NMC-AFTER @ _EXT4-NMC-GROUP @ _EXT4-NMC-APPLY ;
+
+\ Apply every block-bitmap change the transaction stages.  A bitmap that
+\ changes changes its checksum in its group's descriptor, so the descriptors
+\ the transaction's descriptor-table pages change name every such bitmap.
+: _EXT4-NMC-DELTAS  ( -- ior )
+    1 _EXT4-OWN-MODE !
+    _EXT4-NMC-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ 0 ?DO
+        I _EXT4-NMC-PAGE !
+        _EXT4-NMC-CTX @ _EXT4-GDT-BASE I +
+        _EXT4-NMC-TX @ _EXT4-JTX-META-IMAGE ?DUP IF NIP UNLOOP EXIT THEN
+        ?DUP IF
+            _EXT4-NMC-IMAGE !
+            _EXT4-NMC-CTX @ _EXT4-C.BSIZE + @ _EXT4-DESC-SIZE / 0 ?DO
+                _EXT4-NMC-PAGE @
+                _EXT4-NMC-CTX @ _EXT4-C.BSIZE + @ _EXT4-DESC-SIZE / * I +
+                DUP _EXT4-NMC-CTX @ _EXT4-C.GROUPS + @ U< IF
+                    _EXT4-NMC-GROUP-DELTA ?DUP IF UNLOOP UNLOOP EXIT THEN
+                ELSE
+                    DROP
+                THEN
+            LOOP
+        THEN
+    LOOP 0 ;
+
+: _EXT4-NMC-NODE-IMAGE  ( block -- image ior )
+    _EXT4-NMC-TX @ _EXT4-JTX-META-IMAGE ;
+
+\ A family names each inode record its transaction stages by inode number,
+\ inode-table home and offset, and kind: kept by the transaction, created
+\ by it, or freed by it.  A kept record whose type, block count, flags, map
+\ and xattr block stay as they are keeps its map, so it is passed over.  The
+\ first refusal is kept, and the steps after it do nothing.
+0 CONSTANT _EXT4-NMC-RETAINED
+1 CONSTANT _EXT4-NMC-CREATED
+2 CONSTANT _EXT4-NMC-FREED
+
+VARIABLE _EXT4-NMC-IOR
+VARIABLE _EXT4-NMC-INO
+VARIABLE _EXT4-NMC-HOME
+VARIABLE _EXT4-NMC-OFF
+VARIABLE _EXT4-NMC-KIND
+VARIABLE _EXT4-NMC-IN
+
+\ Note the map of the record in C.INODE as its type defines it.  As the
+\ inode reader holds, a device, fifo, socket or fast symlink maps nothing.
+: _EXT4-NMC-WALK  ( -- ior )
+    _EXT4-NMC-CTX @ _EXT4-C.INODE + DUP _EXT4-NMC-IN !
+    _EXT4-I.MODE + W@ 0xF000 AND
+    DUP 0x8000 = OVER 0x4000 = OR IF
+        DROP
+    ELSE DUP 0xA000 = IF
+        DROP _EXT4-NMC-IN @ _EXT4-NMC-CTX @ _EXT4-DECODE-I-BLOCKS
+        ?DUP IF NIP EXIT THEN
+        _EXT4-NMC-IN @ _EXT4-I.FILE-ACL-LO + L@ IF
+            _EXT4-NMC-CTX @ _EXT4-C.SPB + @ -
+        THEN
+        0= IF 0 EXIT THEN
+    ELSE
+        DUP 0x1000 = OVER 0x2000 = OR OVER 0x6000 = OR
+        SWAP 0xC000 = OR 0= IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+        _EXT4-NMC-IN @ _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        0 EXIT
+    THEN THEN
+    _EXT4-NMC-IN @ _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND IF
+        _EXT4-NMC-CTX @ _EXT4-VALIDATE-EXTENT-TREE
+    ELSE
+        _EXT4-NMC-CTX @ _EXT4-VALIDATE-LEGACY-MAP
+    THEN ;
+
+\ Load the named inode as media holds it into C.INODE, from the named home.
+: _EXT4-NMC-MEDIA-RECORD  ( -- ior )
+    _EXT4-NMC-INO @ _EXT4-NMC-CTX @ _EXT4-LOAD-ORPHAN-INODE ?DUP IF EXIT THEN
+    _EXT4-IR-BLOCK @ _EXT4-NMC-HOME @ <>
+    _EXT4-IR-OFF @ _EXT4-NMC-OFF @ <> OR IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ The record the transaction stages at the named home and offset, or zero
+\ when it leaves the home alone.
+: _EXT4-NMC-STAGED  ( -- record ior )
+    _EXT4-NMC-HOME @ _EXT4-NMC-TX @ _EXT4-JTX-META-IMAGE ?DUP IF EXIT THEN
+    DUP IF _EXT4-NMC-OFF @ + THEN 0 ;
+
+\ Whether RECORD maps what C.INODE does: the same file type, block count,
+\ flags, xattr block and map.  The eight bytes from i_blocks_lo hold the
+\ low block count and the flags, and the four from i_blocks_high the high
+\ block count and the high xattr block.
+: _EXT4-NMC-SAME-MAP?  ( record -- flag )
+    _EXT4-NMC-CTX @ _EXT4-C.INODE + _EXT4-NMC-IN !
+    DUP _EXT4-I.MODE + W@ _EXT4-NMC-IN @ _EXT4-I.MODE + W@ XOR
+    0xF000 AND IF DROP FALSE EXIT THEN
+    DUP _EXT4-I.BLOCKS-LO + _EXT4-NMC-IN @ _EXT4-I.BLOCKS-LO + 8
+    _EXT4-BYTES=? 0= IF DROP FALSE EXIT THEN
+    DUP _EXT4-I.FILE-ACL-LO + L@ _EXT4-NMC-IN @ _EXT4-I.FILE-ACL-LO + L@
+    <> IF DROP FALSE EXIT THEN
+    DUP _EXT4-I.BLOCKS-HI + _EXT4-NMC-IN @ _EXT4-I.BLOCKS-HI + 4
+    _EXT4-BYTES=? 0= IF DROP FALSE EXIT THEN
+    _EXT4-I.BLOCK + _EXT4-NMC-IN @ _EXT4-I.BLOCK + 60 _EXT4-BYTES=? ;
+
+\ Whether the transaction changes the map of the kept record whose media
+\ image C.INODE holds.  No transaction moves a kept inode's xattr block.
+: _EXT4-NMC-CHANGED?  ( -- flag ior )
+    _EXT4-NMC-STAGED ?DUP IF EXIT THEN
+    DUP 0= IF 0 EXIT THEN
+    DUP _EXT4-NMC-SAME-MAP? IF DROP FALSE 0 EXIT THEN
+    DUP _EXT4-I.FILE-ACL-LO + L@
+    _EXT4-NMC-CTX @ _EXT4-C.INODE + _EXT4-I.FILE-ACL-LO + L@ <>
+    SWAP _EXT4-I.FILE-ACL-HI + W@
+    _EXT4-NMC-CTX @ _EXT4-C.INODE + _EXT4-I.FILE-ACL-HI + W@ <> OR IF
+        FALSE EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    TRUE 0 ;
+
+\ Release the map of the record in C.INODE, the named inode as the
+\ transaction stages it, reading its tree nodes through the transaction.
+: _EXT4-NMC-RELEASE-CURRENT  ( -- ior )
+    _EXT4-NMC-INO @ _EXT4-IR-INO !
+    -1 _EXT4-OWN-MODE !
+    ['] _EXT4-NMC-NODE-IMAGE _EXT4-EV-IMAGE-XT !
+    _EXT4-NMC-WALK
+    0 _EXT4-EV-IMAGE-XT ! 0 _EXT4-OWN-MODE ! ;
+
+\ Release the map inode INO has once the transaction lands: the record it
+\ stages at HOME and OFFSET, or the one on media when it leaves that home
+\ alone.
+: _EXT4-NMC-RELEASE  ( ino home offset -- ior )
+    _EXT4-NMC-OFF ! _EXT4-NMC-HOME ! _EXT4-NMC-INO !
+    _EXT4-NMC-STAGED ?DUP IF NIP EXIT THEN
+    ?DUP IF
+        _EXT4-NMC-CTX @ _EXT4-C.INODE + _EXT4-NMC-CTX @ _EXT4-C.ISIZE + @ MOVE
+    ELSE
+        _EXT4-NMC-MEDIA-RECORD ?DUP IF EXIT THEN
+    THEN
+    _EXT4-NMC-RELEASE-CURRENT ;
+
+\ Before the bitmap changes: claim the map inode INO holds on media, which
+\ a freed inode gives up and a kept one gives up when the transaction
+\ changes its map.
+: _EXT4-NMC-OLD  ( ino home offset kind -- )
+    _EXT4-NMC-KIND ! _EXT4-NMC-OFF ! _EXT4-NMC-HOME ! _EXT4-NMC-INO !
+    _EXT4-NMC-IOR @ IF EXIT THEN
+    _EXT4-NMC-KIND @ _EXT4-NMC-CREATED = IF EXIT THEN
+    _EXT4-NMC-MEDIA-RECORD ?DUP IF _EXT4-NMC-IOR ! EXIT THEN
+    _EXT4-NMC-KIND @ _EXT4-NMC-RETAINED = IF
+        _EXT4-NMC-CHANGED? ?DUP IF _EXT4-NMC-IOR ! DROP EXIT THEN
+        0= IF EXIT THEN
+    THEN
+    1 _EXT4-OWN-MODE ! _EXT4-NMC-WALK _EXT4-NMC-IOR !
+    0 _EXT4-OWN-MODE ! ;
+
+\ After the bitmap changes: release the map inode INO has as the
+\ transaction stages it, which a created inode takes and a kept one takes
+\ when the transaction changes its map.  A created inode has no xattr
+\ block.
+: _EXT4-NMC-NEW  ( ino home offset kind -- )
+    _EXT4-NMC-KIND ! _EXT4-NMC-OFF ! _EXT4-NMC-HOME ! _EXT4-NMC-INO !
+    _EXT4-NMC-IOR @ IF EXIT THEN
+    _EXT4-NMC-KIND @ _EXT4-NMC-FREED = IF EXIT THEN
+    _EXT4-NMC-KIND @ _EXT4-NMC-RETAINED = IF
+        _EXT4-NMC-MEDIA-RECORD ?DUP IF _EXT4-NMC-IOR ! EXIT THEN
+        _EXT4-NMC-CHANGED? ?DUP IF _EXT4-NMC-IOR ! DROP EXIT THEN
+        0= IF EXIT THEN
+    THEN
+    _EXT4-NMC-STAGED ?DUP IF _EXT4-NMC-IOR ! DROP EXIT THEN
+    ?DUP 0= IF EXT4-D-DATA-MAP _EXT4-CORRUPT _EXT4-NMC-IOR ! EXIT THEN
+    _EXT4-NMC-CTX @ _EXT4-C.INODE + _EXT4-NMC-CTX @ _EXT4-C.ISIZE + @ MOVE
+    _EXT4-NMC-KIND @ _EXT4-NMC-CREATED = IF
+        _EXT4-NMC-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FILE-ACL-LO + L@
+        SWAP _EXT4-I.FILE-ACL-HI + W@ OR IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT _EXT4-NMC-IOR ! EXIT
+        THEN
+    THEN
+    _EXT4-NMC-RELEASE-CURRENT _EXT4-NMC-IOR ! ;
+
+\ Open a family's check of TRANSACTION on CTX.
+: _EXT4-NMC-BEGIN  ( ctx transaction -- ior )
+    0 _EXT4-NMC-IOR ! _EXT4-NMC-OPEN ;
+
+\ Apply the transaction's block-bitmap changes, between the two phases.
+: _EXT4-NMC-BITMAPS  ( -- )
+    _EXT4-NMC-IOR @ IF EXIT THEN
+    _EXT4-NMC-DELTAS _EXT4-NMC-IOR ! ;
+
+\ Claim BLOCK, which the family frees outside any inode's map.
+: _EXT4-NMC-CLAIM-BLOCK  ( block -- )
+    _EXT4-NMC-IOR @ IF DROP EXIT THEN
+    1 TRUE _EXT4-OWN-SPAN _EXT4-NMC-IOR ! ;
+
+\ End a family's check with its first refusal, if any.
+: _EXT4-NMC-END  ( -- ior )
+    _EXT4-NMC-IOR @ _EXT4-NMC-CLOSE ;
 
 VARIABLE _EXT4-RPH-CTX
 VARIABLE _EXT4-RPH-MAP-LIMIT
@@ -11932,26 +12184,20 @@ VARIABLE _EXT4-RPH-IOR
 : _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS-IMPL  ( ctx -- ior )
     DUP _EXT4-RPH-CTX ! 0= IF VFS-E-INVALID EXIT THEN
     0 _EXT4-RPH-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + !
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-OWNER-INO @ OR
-    _EXT4-MUTATION-MAP-TARGET @ OR
+    _EXT4-MUTATION-MAP-TARGET @
     _EXT4-MUTATION-MAP-ACTIVE @ OR
     _EXT4-MUTATION-MAP-HITS @ OR
     _EXT4-MUTATION-PROTOCOL-CTX @ OR
     _EXT4-MUTATION-PROTOCOL-ACTIVE @ OR
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR
-    _EXT4-MUTATION-EA-REF-HOME @ OR
-    _EXT4-MUTATION-EA-REF-HITS @ OR IF VFS-E-BUSY EXIT THEN
-    _EXT4-JFO-CERT-INVALIDATE
+    _EXT4-OWN-MAP @ OR IF VFS-E-BUSY EXIT THEN
     _EXT4-RPH-CTX @ _EXT4-JFO-CTX !
     _EXT4-JOURNAL-INODE _EXT4-JFO-TARGET-INO !
     _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-RPH-MAP-LIMIT !
     0 _EXT4-MAP-VALIDATION-LIMIT !
     _EXT4-RPH-CTX @ _EXT4-MUTATION-PROTOCOL-CTX !
     -1 _EXT4-MUTATION-PROTOCOL-ACTIVE !
-    _EXT4-JFO-SCAN-OTHER-INODES _EXT4-RPH-IOR !
+    _EXT4-JFO-SCAN-INODES _EXT4-RPH-IOR !
     0 _EXT4-MUTATION-PROTOCOL-ACTIVE !
-    0 _EXT4-MUTATION-OWNER-INO !
     0 _EXT4-MUTATION-PROTOCOL-CTX !
     _EXT4-RPH-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
     _EXT4-RPH-IOR @ 0= IF
@@ -11961,327 +12207,6 @@ VARIABLE _EXT4-RPH-IOR
 
 ' _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS-IMPL
 _EXT4-MUTATION-PROTOCOL-PROOF-XT !
-
-VARIABLE _EXT4-UOW-INO
-VARIABLE _EXT4-UOW-INO-B
-VARIABLE _EXT4-UOW-FIRST
-VARIABLE _EXT4-UOW-COUNT
-VARIABLE _EXT4-UOW-FIRST-B
-VARIABLE _EXT4-UOW-COUNT-B
-VARIABLE _EXT4-UOW-CTX
-VARIABLE _EXT4-UOW-MAP-LIMIT
-VARIABLE _EXT4-UOW-IOR
-
-: _EXT4-UOW-PAIR-CERT-PRESENT?  ( -- flag )
-    _EXT4-JFO-CERT-SCOPE @ 0<>
-    _EXT4-JFO-CERT-VALID @ 0<> AND
-    _EXT4-JFO-CERT-KIND @ _EXT4-JFO-CERT-UOW-PAIR = AND ;
-
-: _EXT4-UOW-PAIR-CERT-MATCH?  ( -- flag )
-    _EXT4-UOW-PAIR-CERT-PRESENT? 0= IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-CTX @ _EXT4-UOW-CTX @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-INO @ _EXT4-UOW-INO @ <> IF FALSE EXIT THEN
-    _EXT4-IR-INO @ _EXT4-UOW-INO @ <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-GEN @
-    _EXT4-UOW-CTX @ _EXT4-C.INODE + _EXT4-I.GENERATION + L@ <> IF
-        FALSE EXIT
-    THEN
-    _EXT4-JFO-CERT-RANGE-COUNT @ 2 <> IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-RANGE-CAP 2 U< IF FALSE EXIT THEN
-    _EXT4-JFO-CERT-EA @
-    _EXT4-JFO-CERT-EA-ACTION @ OR
-    _EXT4-JFO-CERT-EA-REFCOUNT @ OR
-    _EXT4-JFO-CERT-DATA-MAP-KIND @ OR IF FALSE EXIT THEN
-    0 _EXT4-JFO-CERT-RANGE DUP @ _EXT4-UOW-FIRST @ <>
-    SWAP CELL+ @ _EXT4-UOW-COUNT @ <> OR IF FALSE EXIT THEN
-    1 _EXT4-JFO-CERT-RANGE DUP @ _EXT4-UOW-FIRST-B @ <>
-    SWAP CELL+ @ _EXT4-UOW-COUNT-B @ <> OR IF FALSE EXIT THEN
-    TRUE ;
-
-: _EXT4-UOW-PAIR-CERT-STORE  ( -- )
-    _EXT4-JFO-CERT-SCOPE @ 0= IF EXIT THEN
-    0 _EXT4-JFO-CERT-VALID !
-    _EXT4-UOW-CTX @ _EXT4-JFO-CERT-CTX !
-    _EXT4-UOW-CTX @ _EXT4-OWNER-CERT-RANGE-WORKSPACE? 0= IF EXIT THEN
-    _EXT4-JFO-CERT-RANGES 0= IF EXIT THEN
-    _EXT4-JFO-CERT-RANGE-CAP 2 U< IF EXIT THEN
-    _EXT4-JFO-CERT-UOW-PAIR _EXT4-JFO-CERT-KIND !
-    _EXT4-UOW-INO @ _EXT4-JFO-CERT-INO !
-    _EXT4-UOW-CTX @ _EXT4-C.INODE + _EXT4-I.GENERATION + L@
-    _EXT4-JFO-CERT-GEN !
-    2 _EXT4-JFO-CERT-RANGE-COUNT !
-    0 _EXT4-JFO-CERT-EA !
-    0 _EXT4-JFO-CERT-EA-ACTION !
-    0 _EXT4-JFO-CERT-EA-REFCOUNT !
-    0 _EXT4-JFO-CERT-DATA-MAP-KIND !
-    _EXT4-JFO-CERT-RANGES
-    _EXT4-JFO-CERT-RANGE-CAP 2* CELLS 0 FILL
-    _EXT4-UOW-FIRST @ 0 _EXT4-JFO-CERT-RANGE !
-    _EXT4-UOW-COUNT @ 0 _EXT4-JFO-CERT-RANGE CELL+ !
-    _EXT4-UOW-FIRST-B @ 1 _EXT4-JFO-CERT-RANGE !
-    _EXT4-UOW-COUNT-B @ 1 _EXT4-JFO-CERT-RANGE CELL+ !
-    -1 _EXT4-JFO-CERT-VALID ! ;
-
-\ Prove that no allocated inode other than TARGET-INO maps any part of one
-\ proposed mutation range.  The caller has already authenticated the target's
-\ own mapping; reload it after the scan restores that authority in C.INODE.
-: _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER
-  ( target-ino first count ctx -- ior )
-    _EXT4-UOW-CTX ! _EXT4-UOW-COUNT !
-    _EXT4-UOW-FIRST ! _EXT4-UOW-INO !
-    _EXT4-UOW-CTX @ 0= _EXT4-UOW-COUNT @ 0= OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-UOW-INO @ 0=
-    _EXT4-UOW-INO @ _EXT4-UOW-CTX @ _EXT4-C.INODES + @ U> OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U< IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
-    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _EXT4-UOW-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @ 0=
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ 1 U< OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _EXT4-UOW-CTX @ _EXT4-JFO-CTX !
-    _EXT4-UOW-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-UOW-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _EXT4-MUTATION-OWNER-RANGES !
-    _EXT4-UOW-FIRST @ 0 _EXT4-MUTATION-OWNER-RANGE !
-    _EXT4-UOW-COUNT @ 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @ 1
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH ?DUP IF
-        _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT ! EXIT
-    THEN
-    _EXT4-JFO-SCAN-OTHER-INODES _EXT4-UOW-IOR !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-UOW-IOR @ 0= IF
-        _EXT4-UOW-INO @ _EXT4-UOW-CTX @
-        _EXT4-LOAD-INODE _EXT4-UOW-IOR !
-    THEN
-    _EXT4-UOW-IOR @ ;
-
-\ Publish two disjoint ranges and scan every inode other than one completely
-\ authenticated target.  The caller must prove the target's own relationship
-\ to both ranges from its complete map; a range may therefore be target-owned
-\ or known unowned by the target.  This avoids separate filesystem walks or a
-\ conservative merge across unrelated blocks.
-: _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR
-  ( target-ino first-a count-a first-b count-b ctx -- ior )
-    _EXT4-UOW-CTX ! _EXT4-UOW-COUNT-B ! _EXT4-UOW-FIRST-B !
-    _EXT4-UOW-COUNT ! _EXT4-UOW-FIRST ! _EXT4-UOW-INO !
-    _EXT4-UOW-CTX @ 0=
-    _EXT4-UOW-COUNT @ 0= OR _EXT4-UOW-COUNT-B @ 0= OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-UOW-INO @ 0=
-    _EXT4-UOW-INO @ _EXT4-UOW-CTX @ _EXT4-C.INODES + @ U> OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U<
-    _EXT4-UOW-FIRST-B @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U< OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
-    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0=
-    _EXT4-UOW-FIRST-B @ _EXT4-UOW-COUNT-B @
-    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
-    _EXT4-UOW-FIRST-B @ _EXT4-UOW-COUNT-B @
-    _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _EXT4-UOW-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @ 0=
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ 2 U< OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-PAIR-CERT-PRESENT? IF
-        _EXT4-UOW-INO @ _EXT4-UOW-CTX @ _EXT4-LOAD-INODE
-        ?DUP IF EXIT THEN
-        _EXT4-UOW-PAIR-CERT-MATCH? IF 0 EXIT THEN
-    THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _EXT4-UOW-CTX @ _EXT4-JFO-CTX !
-    _EXT4-UOW-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-UOW-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _EXT4-MUTATION-OWNER-RANGES !
-    _EXT4-UOW-FIRST @ 0 _EXT4-MUTATION-OWNER-RANGE !
-    _EXT4-UOW-COUNT @ 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !
-    _EXT4-UOW-FIRST-B @ 1 _EXT4-MUTATION-OWNER-RANGE !
-    _EXT4-UOW-COUNT-B @ 1 _EXT4-MUTATION-OWNER-RANGE CELL+ !
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @ 2
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH ?DUP IF
-        _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT ! EXIT
-    THEN
-    _EXT4-JFO-SCAN-OTHER-INODES _EXT4-UOW-IOR !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-UOW-IOR @ 0= IF
-        _EXT4-UOW-INO @ _EXT4-UOW-CTX @
-        _EXT4-LOAD-INODE _EXT4-UOW-IOR !
-    THEN
-    _EXT4-UOW-IOR @ 0= IF _EXT4-UOW-PAIR-CERT-STORE THEN
-    _EXT4-UOW-IOR @ ;
-
-\ Prove two disjoint ranges have exactly the two separately authenticated
-\ inode owners supplied by the caller.  Each excluded inode must first have
-\ a complete exact map that reaches only its corresponding range.  The pair
-\ is then published together so every other allocated inode is checked in one
-\ filesystem walk; the second exclusion is scoped to that walk and is always
-\ cleared before returning.
-: _EXT4-REQUIRE-UNIQUE-BLOCK-OWNERS-PAIR
-  ( owner-a first-a count-a owner-b first-b count-b ctx -- ior )
-    _EXT4-UOW-CTX ! _EXT4-UOW-COUNT-B ! _EXT4-UOW-FIRST-B !
-    _EXT4-UOW-INO-B ! _EXT4-UOW-COUNT ! _EXT4-UOW-FIRST !
-    _EXT4-UOW-INO !
-    _EXT4-UOW-CTX @ 0=
-    _EXT4-UOW-COUNT @ 0= OR _EXT4-UOW-COUNT-B @ 0= OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-UOW-INO @ 0= _EXT4-UOW-INO-B @ 0= OR
-    _EXT4-UOW-INO @ _EXT4-UOW-CTX @ _EXT4-C.INODES + @ U> OR
-    _EXT4-UOW-INO-B @ _EXT4-UOW-CTX @ _EXT4-C.INODES + @ U> OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-INO @ _EXT4-UOW-INO-B @ = IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U<
-    _EXT4-UOW-FIRST-B @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U< OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
-    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0=
-    _EXT4-UOW-FIRST-B @ _EXT4-UOW-COUNT-B @
-    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
-    _EXT4-UOW-FIRST-B @ _EXT4-UOW-COUNT-B @
-    _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _EXT4-UOW-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @ 0=
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ 2 U< OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _EXT4-UOW-CTX @ _EXT4-JFO-CTX !
-    _EXT4-UOW-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-UOW-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _EXT4-MUTATION-OWNER-RANGES !
-    _EXT4-UOW-FIRST @ 0 _EXT4-MUTATION-OWNER-RANGE !
-    _EXT4-UOW-COUNT @ 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !
-    _EXT4-UOW-FIRST-B @ 1 _EXT4-MUTATION-OWNER-RANGE !
-    _EXT4-UOW-COUNT-B @ 1 _EXT4-MUTATION-OWNER-RANGE CELL+ !
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGES + @ 2
-    _EXT4-UOW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _EXT4-UOW-IOR !
-    _EXT4-UOW-IOR @ 0= IF
-        _EXT4-UOW-INO-B @ _EXT4-JFO-SCAN-OTHER-INODES-PAIR
-        _EXT4-UOW-IOR !
-    THEN
-    0 _EXT4-JFO-TARGET-INO-B !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    0 _EXT4-MUTATION-OWNER-INO !
-    _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-UOW-IOR @ ;
-
-
-
-\ Prove filesystem-wide ownership of every target block in one inode walk.
-\ Data ranges remain exclusive.  The external-xattr singleton is also kept in
-\ the forbidden vector so it cannot appear as data or map metadata, while the
-\ semantic i_file_acl boundary above counts exact references to it.  Requiring
-\ that count (including the excluded target) to equal authenticated
-\ h_refcount admits sharing without trusting a stale or forged refcount.
-: _EXT4-JFI-EA-REF-SCOPE-CLEAR  ( -- )
-    0 _EXT4-MUTATION-EA-REF-ACTIVE !
-    0 _EXT4-MUTATION-EA-REF-HOME !
-    0 _EXT4-MUTATION-EA-REF-HITS ! ;
-
-: _EXT4-JFI-REQUIRE-UNIQUE-RELEASE-OWNER  ( -- ior )
-    _EXT4-JFI-OWNER-RANGE-COUNT 0= IF 0 EXIT THEN
-    _EXT4-JFI-OWNER-RANGE-COUNT _EXT4-JFI-RANGE-CAP U> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _EXT4-JFO-CERT-MATCH? IF
-        _EXT4-JFI-REAUTH-CURRENT EXIT
-    THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _EXT4-JFI-CTX @ _EXT4-JFO-CTX !
-    _EXT4-JFI-RECORD @ _EXT4-JFO-RECORD !
-    _EXT4-JFI-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-JFO-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    0 _EXT4-JFO-IOR !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-JFI-EA-REF-SCOPE-CLEAR
-    _EXT4-JFI-EA @ IF
-        _EXT4-JFI-EA @ _EXT4-JFI-RANGE-COUNT
-        _EXT4-JFI-RANGE !
-        1 _EXT4-JFI-RANGE-COUNT
-        _EXT4-JFI-RANGE CELL+ !
-        _EXT4-JFI-EA @ _EXT4-MUTATION-EA-REF-HOME !
-        1 _EXT4-MUTATION-EA-REF-HITS !
-        -1 _EXT4-MUTATION-EA-REF-ACTIVE !
-    THEN
-    _EXT4-JFI-RANGES _EXT4-JFI-OWNER-RANGE-COUNT
-    _EXT4-JFI-RANGE-CAP
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _EXT4-JFO-IOR !
-    _EXT4-JFO-IOR @ 0= IF
-        _EXT4-JFO-SCAN-OTHER-INODES _EXT4-JFO-IOR !
-    THEN
-    _EXT4-JFO-IOR @ 0= _EXT4-JFI-EA @ 0<> AND IF
-        _EXT4-MUTATION-EA-REF-HITS @
-        _EXT4-JFI-EA-REFCOUNT @ <> IF
-            EXT4-D-XATTR _EXT4-CORRUPT _EXT4-JFO-IOR !
-        THEN
-    THEN
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _EXT4-JFI-EA-REF-SCOPE-CLEAR
-    _EXT4-JFO-IOR @ 0= IF
-        _EXT4-JFI-REAUTH-CURRENT _EXT4-JFO-IOR !
-    THEN
-    _EXT4-JFO-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-JFO-IOR @ 0= IF _EXT4-JFO-CERT-STORE THEN
-    _EXT4-JFO-IOR @ ;
 
 : _EXT4-JFI-XATTR-PREFLIGHT  ( -- ior )
     \ Inline values die with the inode allocation bit.  Authenticate an
@@ -12316,10 +12241,6 @@ VARIABLE _EXT4-UOW-IOR
         THEN
         _EXT4-JFI-EA @ 1 _EXT4-JFI-CTX @
         _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-        _EXT4-JFI-EA-RELEASE? IF
-            _EXT4-JFI-EA-RANGE 1 1
-            _EXT4-JFI-ORPHAN-FILE-RANGES-DISJOINT ?DUP IF EXIT THEN
-        THEN
     THEN
     0 ;
 
@@ -12367,9 +12288,6 @@ VARIABLE _EXT4-JFI-OVERLAP-OTHER
         _EXT4-JFI-RANGE-CAP
         _EXT4-JFI-CTX @ _EXT4-VALIDATE-MUTATION-RANGES-TARGETS
         ?DUP IF EXIT THEN
-        _EXT4-JFI-RANGES _EXT4-JFI-RANGE-COUNT
-        _EXT4-JFI-RANGE-CAP
-        _EXT4-JFI-ORPHAN-FILE-RANGES-DISJOINT ?DUP IF EXIT THEN
     THEN
     0 ;
 
@@ -12899,7 +12817,7 @@ VARIABLE _EXT4-JFI-CP-WRITER
 \ indirect slots remain zero.
 \ Retain each represented data and map-metadata range separately
 \ and bind the map family, ordered release vector, and explicit external-xattr
-\ disposition into the owner certificate.
+\ disposition into the release authority.
 \ Structurally valid resident inline xattrs die with the inode allocation bit.
 : _EXT4-JFI-AUTH-PREFLIGHT  ( -- ior )
     _EXT4-JFI-CTX @ 0=
@@ -12955,7 +12873,7 @@ VARIABLE _EXT4-JFI-CP-WRITER
     DROP
     _EXT4-JFI-DATA-PREFLIGHT ?DUP IF EXIT THEN
     _EXT4-JFI-XATTR-PREFLIGHT ?DUP IF EXIT THEN
-    _EXT4-JFI-REQUIRE-UNIQUE-RELEASE-OWNER ?DUP IF EXIT THEN
+    _EXT4-JFI-REAUTH-CURRENT ?DUP IF EXIT THEN
     _EXT4-IR-GROUP @ _EXT4-JFI-GROUP !
     _EXT4-IR-INDEX @ _EXT4-JFI-INDEX !
     _EXT4-IR-BLOCK @ _EXT4-JFI-INODE-HOME !
@@ -15762,11 +15680,9 @@ VARIABLE _EXT4-JPU-IOR
 \ the general write's tree code, which is defined later.  The step stages
 \ either one sealed release pass, answering TRUE, or the target's part of
 \ the record's final cleanup, answering FALSE.  The measure answers the
-\ credits of the record's next transaction, and the qualification proves
-\ the blocks its release will free before mount recovery's first write.
+\ credits of the record's next transaction.
 VARIABLE _EXT4-LINKED-STEP-XT     \ ( plan-record transaction -- release? ior )
 VARIABLE _EXT4-LINKED-MEASURE-XT  \ ( plan-record ctx -- meta revoke ior )
-VARIABLE _EXT4-LINKED-QUALIFY-XT  \ ( plan-record ctx -- ior )
 
 : _EXT4-MEASURE-ORPHAN-CLEANUP
   ( plan-record ctx -- meta-credit revoke-credit ior )
@@ -16092,6 +16008,18 @@ VARIABLE _EXT4-JFC-SIZE
     THEN
     0 ;
 
+\ A deletion frees the target's map and, when no other inode names it, its
+\ xattr block.
+: _EXT4-JFI-MAP-CHECK  ( -- ior )
+    _EXT4-JFI-CTX @ _EXT4-JFI-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
+    _EXT4-JFI-INO @ _EXT4-JFI-INODE-HOME @ _EXT4-JFI-INODE-OFF @
+    _EXT4-NMC-FREED _EXT4-NMC-OLD
+    _EXT4-JFI-EA @ IF
+        _EXT4-JFI-EA-RELEASE? IF _EXT4-JFI-EA @ _EXT4-NMC-CLAIM-BLOCK THEN
+    THEN
+    _EXT4-NMC-BITMAPS
+    _EXT4-NMC-END ;
+
 \ Own one initially empty transaction, compose one selected orphan cleanup
 \ and protocol-removal afterimage, then freeze it behind an exact pre-union
 \ certificate.  Emit and abort remain legal; every later mutation is rejected
@@ -16159,6 +16087,9 @@ VARIABLE _EXT4-JFC-SIZE
         _EXT4-JFC-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ U> OR
     THEN IF
         VFS-E-CORRUPT _EXT4-JFC-FAIL EXIT
+    THEN
+    _EXT4-JFC-DELETE @ IF
+        _EXT4-JFI-MAP-CHECK ?DUP IF _EXT4-JFC-FAIL EXIT THEN
     THEN
     _EXT4-JFC-SEAL ?DUP IF _EXT4-JFC-FAIL EXIT THEN
     0 ;
@@ -16810,7 +16741,7 @@ VARIABLE _EXT4-JPF-AFTER
 \ Reload admission binds an ADD certificate to the freshly authenticated
 \ pre-union and proves that its candidate is still absent.  The later staged
 \ proof, still before the first home write, rederives the deterministic empty
-\ slot and performs the expensive whole-filesystem owner proof exactly once.
+\ slot.
 : _EXT4-JWR-ORPHAN-ADD-RELOAD-ADMISSION  ( writer ctx -- ior )
     _EXT4-JPF-CTX ! _EXT4-JPF-WRITER !
     _EXT4-JPF-WRITER @ _EXT4-JWR.CTX + @
@@ -17512,8 +17443,6 @@ VARIABLE _EXT4-JCP-ADD-OFF
     _EXT4-JWR-CHECKPOINTING
     _EXT4-JCP-WRITER @ _EXT4-JWR.STATE + !
     _EXT4-JTX-CHECKPOINT-PREFLIGHT ?DUP IF _EXT4-JCP-FAULT EXIT THEN
-    \ Operation-scoped range authority cannot survive the first home mutation.
-    _EXT4-JFO-CERT-INVALIDATE
     _EXT4-JTX-CHECKPOINT-HOMES ?DUP IF _EXT4-JCP-FAULT EXIT THEN
     _EXT4-JWP-CHECKPOINT-PROOF
     _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
@@ -17697,7 +17626,8 @@ VARIABLE _EXT4-MOW-O-PRESENT
             VFS-E-BUSY EXIT
         THEN
     THEN
-    _EXT4-MOW-CTX @ _EXT4-RECOVERY-MEDIA ;
+    _EXT4-MOW-CTX @ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
+    _EXT4-MOW-CTX @ _EXT4-PROVE-OWNERSHIP ;
 
 \ =====================================================================
 \  Private VFS-shaped write boundary and trusted clock injection
@@ -18424,6 +18354,7 @@ VARIABLE _EXT4-RT-V
     0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-READY + !
     _EXT4-RJ-CTX @ _EXT4-C.J.START + @ IF
         0 _EXT4-RJ-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + !
+        0 _EXT4-RJ-CTX @ _EXT4-C.OWNERSHIP + !
         _EXT4-RJ-CTX @ _EXT4-C.J.FEATURES + @ DUP
         _EXT4-JBD2-I-RECOVERY = SWAP
         _EXT4-JBD2-I-RECOVERY-REVOKE = OR 0= IF
@@ -18604,10 +18535,6 @@ VARIABLE _EXT4-MQ-MAX VARIABLE _EXT4-MQ-REVOKE-MAX VARIABLE _EXT4-MQ-IOR
             DUP _EXT4-MQ-CTX @ _EXT4-MEASURE-ORPHAN-CLEANUP
             _EXT4-MQ-IOR ! _EXT4-MQ-REVOKE ! _EXT4-MQ-CREDIT !
             _EXT4-MQ-IOR @ ?DUP IF NIP 0 0 ROT EXIT THEN
-            _EXT4-JCM-DELETE @ 0= IF
-                DUP _EXT4-MQ-CTX @ _EXT4-LINKED-QUALIFY-XT @ EXECUTE
-                ?DUP IF NIP 0 0 ROT EXIT THEN
-            THEN
             _EXT4-MQ-CREDIT @ _EXT4-MQ-CAPACITY-CREDIT
             _EXT4-MQ-IOR ! _EXT4-MQ-CREDIT !
             _EXT4-MQ-IOR @ ?DUP IF NIP 0 0 ROT EXIT THEN
@@ -18706,7 +18633,8 @@ VARIABLE _EXT4-MOC-TRANSIENT
     0 _EXT4-MOC-RECORD !
     0 _EXT4-MOC@ _EXT4-C.J.WRITER-CURRENT + !
     0 _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + !
-    0 _EXT4-MOC@ _EXT4-C.J.PROTOCOL-OWNERS + ! ;
+    0 _EXT4-MOC@ _EXT4-C.J.PROTOCOL-OWNERS + !
+    0 _EXT4-MOC@ _EXT4-C.OWNERSHIP + ! ;
 
 \ Mount cleanup owns every allocation after this arena mark.  All exits scrub
 \ and roll back that tail, so its narrow writer geometry cannot pin the
@@ -18803,9 +18731,11 @@ VARIABLE _EXT4-MOC-TRANSIENT
     _EXT4-MOC-V@ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
     _EXT4-MOC-V@ V.VOLUME @ _EXT4-IO-VOL @ <> IF
         VFS-E-INVALID EXIT THEN
-    _EXT4-MOC@ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
     _EXT4-MOC@ _EXT4-RECOVERY-MEDIA
     ?DUP IF _EXT4-MOC-WITHDRAW EXIT THEN
+    _EXT4-MOC@ _EXT4-PROVE-OWNERSHIP
+    ?DUP IF _EXT4-MOC-WITHDRAW EXIT THEN
+    _EXT4-MOC@ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
     _EXT4-MOC@ _EXT4-QUALIFY-ORPHAN-PLAN
     _EXT4-MOC-IOR ! _EXT4-MOC-REVOKE-CAP ! _EXT4-MOC-CAP !
     _EXT4-MOC-IOR @ ?DUP IF _EXT4-MOC-WITHDRAW EXIT THEN
@@ -18813,7 +18743,6 @@ VARIABLE _EXT4-MOC-TRANSIENT
     _EXT4-JTX-PREFLIGHT-CAPACITY
     ?DUP IF _EXT4-MOC-WITHDRAW EXIT THEN
     _EXT4-MOC@ _EXT4-C.RECOVERY + @ IF
-        _EXT4-JFO-CERT-INVALIDATE
         _EXT4-MOC-CONVERGE-RETAINED-JOURNAL DUP IF
             _EXT4-MOC-WITHDRAW EXIT
         THEN DROP
@@ -18900,14 +18829,6 @@ VARIABLE _EXT4-MOC-TRANSIENT
     \ its authenticated protocol-owner proof for the mounted public writer;
     \ only a failed workspace release revokes that proof.
     _EXT4-MOC-RELEASE ?DUP IF _EXT4-MOC-WITHDRAW EXIT THEN 0 ;
-
-\ One mount-cleanup invocation owns the proof scope.  Every exit, including a
-\ media or writer failure returned by the body, clears the certificate before
-\ control can return to a caller or another filesystem context.
-: _EXT4-COMPLETE-ORPHAN-PLAN  ( ctx vfs -- ior )
-    _EXT4-JFO-CERT-BEGIN ?DUP IF >R 2DROP R> EXIT THEN
-    _EXT4-COMPLETE-ORPHAN-PLAN-BODY
-    _EXT4-JFO-CERT-END ;
 
 \ =====================================================================
 \  Mount, metadata callbacks, and binding descriptors
@@ -19047,6 +18968,7 @@ VARIABLE _EXT4-XCP-END
     \ remount check or media-derived context reset can fail.
     _EXT4-M-V @ V.BCTX @ ?DUP IF
         0 OVER _EXT4-C.J.WRITER-CURRENT + !
+        0 OVER _EXT4-C.OWNERSHIP + !
         0 SWAP _EXT4-C.J.PROTOCOL-OWNERS + !
     THEN
     DUP _EXT4-ATTACHED? 0= IF DROP EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT THEN
@@ -19086,6 +19008,7 @@ VARIABLE _EXT4-XCP-END
     0 _EXT4-M-CTX @ _EXT4-C.J.WRITE-ACTIVE + !
     0 _EXT4-M-CTX @ _EXT4-C.J.WRITER-CURRENT + !
     0 _EXT4-M-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + !
+    0 _EXT4-M-CTX @ _EXT4-C.OWNERSHIP + !
     0 _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + !
     0 _EXT4-M-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
     0 _EXT4-M-CTX @ _EXT4-C.O.LEGACY-ACTIVE + !
@@ -19177,6 +19100,7 @@ VARIABLE _EXT4-MF-IOR
     _EXT4-M-V @ V.BCTX @ DUP 0= IF DROP _EXT4-MF-IOR @ EXIT THEN
     0 OVER _EXT4-C.J.WRITER-CURRENT + !
     0 OVER _EXT4-C.J.PROTOCOL-OWNERS + !
+    0 OVER _EXT4-C.OWNERSHIP + !
     DUP _EXT4-UNBIND-RUNTIME-ORPHAN-WORKSPACE
     DUP IF NIP EXIT THEN DROP
     _EXT4-MOUNT-TAIL-RELEASE
@@ -19185,7 +19109,7 @@ VARIABLE _EXT4-MF-IOR
 : _EXT4-MOUNT-FINISH  ( -- ior )
     _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + @ IF
         _EXT4-M-CTX @ _EXT4-M-V @
-        _EXT4-COMPLETE-ORPHAN-PLAN ?DUP IF
+        _EXT4-COMPLETE-ORPHAN-PLAN-BODY ?DUP IF
             _EXT4-MOUNT-FAIL EXIT
         THEN
         _EXT4-M-V @ _EXT4-ATTACHED? 0= IF
@@ -19591,8 +19515,9 @@ EXT4-STAGED-WRITE-OPS ,
 \ transaction's, and outside the journal and every static metadata role.
 \ A map audit of the target's pre-transaction tree proves that each existing
 \ data block and tree node the transaction rewrites is mapped exactly once
-\ and in a mutable role, and one filesystem-wide walk proves that no other
-\ inode maps any home.
+\ and in a mutable role, and the map check proves that the staged tree
+\ differs from it by exactly the blocks the transaction allocates.  With the
+\ mount's ownership proof, no other owner holds any home.
 
 \ ---------------------------------------------------------------------
 \  Extent-tree insertion
@@ -20560,7 +20485,6 @@ VARIABLE _XP-RANGES
 VARIABLE _XP-CAP
 VARIABLE _XP-COUNT
 VARIABLE _XP-IOR
-VARIABLE _XP-LIMIT
 VARIABLE _XP-BASE
 VARIABLE _XP-EXPECT
 
@@ -20637,31 +20561,25 @@ VARIABLE _XP-EXPECT
     0 _EXT4-MUTATION-MAP-HITS !
     _XP-IOR @ ;
 
-\ No other allocated inode may map any collected range.
-: _XP-OTHER-OWNERS  ( -- ior )
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _XW-CTX @ _EXT4-JFO-CTX !
-    _XW-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _XP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XP-RANGES @ _XP-COUNT @ _XP-CAP @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _XP-IOR !
-    _XP-IOR @ 0= IF
-        _EXT4-JFO-SCAN-OTHER-INODES _XP-IOR !
+\ Prove the home set and the transaction's map change together.  The map
+\ audit's walk of the target's tree before the transaction claims its map;
+\ the bitmap changes then claim and release, and the tree as staged must
+\ release every claim that is left.
+: _XP-MAP-CHECK  ( -- ior )
+    _XW-CTX @ _XW-TX @ _EXT4-NMC-OPEN ?DUP IF EXIT THEN
+    _XP-MAP-AUDIT DUP 0= IF
+        DROP _EXT4-NMC-DELTAS DUP 0= IF
+            DROP _XW-INO @ _XW-INODE-HOME @ _XW-INODE-OFF @
+            _EXT4-NMC-RELEASE
+        THEN
     THEN
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _XP-IOR @ ;
+    _EXT4-NMC-CLOSE ;
 
 : _XW-PROVE  ( -- ior )
     0 _XP-BASE !
     _XW-OVERWRITES @ _XN-EXISTING @ + _XP-EXPECT !
     _XP-COLLECT ?DUP IF EXIT THEN
-    _XP-MAP-AUDIT ?DUP IF EXIT THEN
-    _XP-OTHER-OWNERS ;
+    _XP-MAP-CHECK ;
 
 \ ---------------------------------------------------------------------
 \  Mounted write engine
@@ -20797,7 +20715,7 @@ VARIABLE _XW-IOR
     THEN
     \ One pass covers at most the data credit's blocks, less the old tail
     \ block a write past a partial EOF also stages, and its homes must also
-    \ fit the mutation range workspace that carries the owner proof.
+    \ fit the mutation range workspace that carries the home-set proof.
     _XW-WRITER @ _EXT4-JWR.DATA-CAP + @
     _XW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
     _XW-WRITER @ _EXT4-JWR.META-CAP + @ - MIN
@@ -20992,7 +20910,6 @@ VARIABLE _XC-CONVERT-B
 VARIABLE _XC-CONVERT-B-GROUP
 VARIABLE _XC-CONVERT-B-BITMAP-HOME
 VARIABLE _XC-CONVERT-B-GDT-HOME
-VARIABLE _XC-CONVERT-MAP-LIMIT
 VARIABLE _XC-CONVERT-NEW-FREE
 VARIABLE _XC-CONVERT-LEAF-IMAGE
 VARIABLE _XC-CONVERT-LEAF-FIRST
@@ -22647,10 +22564,9 @@ VARIABLE _XC-HASH-SUPER
     THEN
     0 ;
 
-\ The parent is excluded from the filesystem-wide owner scan, so first prove
-\ from its complete extent tree that the chosen leaf is ordinary mutable data
-\ exactly once, never an external extent node, and that no extent escapes the
-\ authenticated directory size.
+\ Prove from the parent's complete extent tree that the chosen leaf is
+\ ordinary mutable data exactly once, never an external extent node, and that
+\ no extent escapes the authenticated directory size.
 : _XC-REQUIRE-DIRECTORY-MAP-AUDIT  ( -- ior )
     _EXT4-MUTATION-MAP-TARGET @
     _EXT4-MUTATION-MAP-ACTIVE @ OR
@@ -23211,29 +23127,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
 
 : _XC-AUTH-PARENT-DIRECTORY  ( plan -- plan ior )
     _XC-PREFLIGHT-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    DUP _XC-P.INDEXED + @ IF
-        _XC-INDEX-SPLITTING @ IF
-            _XC-CAPTURE-PARENT-DIRECTORY EXIT
-        THEN
-        _XC-PARENT-INO @ _XC-DIR-HOME @ 1 _XC-CTX @
-        _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ?DUP IF EXIT THEN
-        _XC-CAPTURE-PARENT-DIRECTORY EXIT
-    THEN
-    _XC-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    _XC-CONVERTING @ IF 0 EXIT THEN
-    _XC-PARENT-INO @ _XC-DIR-HOME @ 1 _XC-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ?DUP IF EXIT THEN
     _XC-CAPTURE-PARENT-DIRECTORY ;
-
-: _XC-PREPARE-PARENT-DIRECTORY  ( plan -- plan ior )
-    _XC-DIRECTORY @ IF
-        \ The cold measurement and each staged pass authenticate structure,
-        \ but MKDIR folds parent ownership and candidate nonownership into one
-        \ paired proof after selecting both exact ranges.
-        _XC-PREFLIGHT-PARENT-DIRECTORY ?DUP IF EXIT THEN
-        _XC-CAPTURE-PARENT-DIRECTORY EXIT
-    THEN
-    _XC-AUTH-PARENT-DIRECTORY ;
 
 : _XC-LOCATE-DIRECTORY-BLOCK-HOMES  ( -- ior )
     _XC-DATA-BLOCK @ _XC-CTX @ _EXT4-C.FIRST + @ -
@@ -23273,17 +23167,6 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-LOCATE-DIRECTORY-BLOCK-HOMES ?DUP IF EXIT THEN
     _XC-DATA-BLOCK @ 1 _XC-CTX @
     _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-    _XC-REQUIRE-SAME-DIRECTORY-BLOCK ?DUP IF EXIT THEN
-    _XC-WRITER @ IF
-        _XC-PARENT-INO @ _XC-DIR-HOME @ 1
-        _XC-DATA-BLOCK @ 1 _XC-CTX @
-        _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR ?DUP IF EXIT THEN
-        \ The parent's complete authenticated map proves that its exclusion
-        \ from the scan cannot hide ownership of the distinct free candidate.
-        \ Restore both namespace and allocation authority after each dry/live
-        \ proof before any afterimage is retained.
-        _XC-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    THEN
     _XC-REQUIRE-SAME-DIRECTORY-BLOCK ;
 
 : _XC-CONVERT-RANGE!  ( block index -- )
@@ -23412,42 +23295,11 @@ VARIABLE _XC-NEW-DIR-IMAGE
     0 ;
 
 : _XC-REQUIRE-CONVERSION-PROOF-IDLE  ( -- ior )
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-OWNER-INO @ OR
-    _EXT4-MUTATION-MAP-TARGET @ OR
+    _EXT4-MUTATION-MAP-TARGET @
     _EXT4-MUTATION-MAP-ACTIVE @ OR
     _EXT4-MUTATION-MAP-HITS @ OR
     _EXT4-MUTATION-PROTOCOL-CTX @ OR
-    _EXT4-MUTATION-PROTOCOL-ACTIVE @ OR
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR
-    _EXT4-MUTATION-EA-REF-HOME @ OR
-    _EXT4-MUTATION-EA-REF-HITS @ OR
-    _EXT4-JFO-CERT-SCOPE @ OR
-    _EXT4-JFO-CERT-VALID @ OR IF VFS-E-BUSY EXIT THEN 0 ;
-
-\ Publish the old root and both free candidates together.  The complete
-\ one-block parent map was audited immediately before this call, so excluding
-\ the parent cannot conceal a reference to either candidate.  Every exit
-\ withdraws the shared scope and restores the ambient map-validation bound.
-: _XC-REQUIRE-UNIQUE-CONVERSION-RANGES  ( -- ior )
-    _XC-REQUIRE-CONVERSION-PROOF-IDLE ?DUP IF EXIT THEN
-    _XC-CONVERT-PREPARE-RANGES ?DUP IF EXIT THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _XC-CTX @ _EXT4-JFO-CTX !
-    _XC-PARENT-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _XC-CONVERT-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XC-CTX @ _EXT4-C.MUTATION-RANGES + @ 3
-    _XC-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _XC-IOR !
-    _XC-IOR @ 0= IF
-        _EXT4-JFO-SCAN-OTHER-INODES _XC-IOR !
-    THEN
-    0 _EXT4-MUTATION-OWNER-INO !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XC-CONVERT-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _XC-IOR @ ;
+    _EXT4-MUTATION-PROTOCOL-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN 0 ;
 
 : _XC-SELECT-CONVERSION-BLOCKS  ( plan -- plan ior )
     _XC-REQUIRE-CONVERSION-PROOF-IDLE ?DUP IF EXIT THEN
@@ -23466,7 +23318,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-REQUIRE-SAME-CONVERSION-BLOCKS ?DUP IF EXIT THEN
     _XC-WRITER @ IF
         _XC-REQUIRE-DIRECTORY-MAP-AUDIT ?DUP IF EXIT THEN
-        _XC-REQUIRE-UNIQUE-CONVERSION-RANGES ?DUP IF EXIT THEN
+        _XC-CONVERT-PREPARE-RANGES ?DUP IF EXIT THEN
         _XC-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
         _XC-REQUIRE-SAME-CONVERSION-BLOCKS ?DUP IF EXIT THEN
     THEN
@@ -23623,24 +23475,6 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ _XC-CTX @
     _EXT4-VALIDATE-MUTATION-RANGES-TARGETS ;
 
-: _XC-REQUIRE-UNIQUE-INDEX-RANGES  ( -- ior )
-    _XC-INDEX-PREPARE-RANGES ?DUP IF EXIT THEN
-    _EXT4-JFO-CERT-INVALIDATE
-    _XC-CTX @ _EXT4-JFO-CTX !
-    _XC-PARENT-INO @ _EXT4-JFO-TARGET-INO !
-    _EXT4-MAP-VALIDATION-LIMIT @ _XC-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XC-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _XC-INDEX-RANGE-COUNT @
-    _XC-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _XC-IOR !
-    _XC-IOR @ 0= IF _EXT4-JFO-SCAN-OTHER-INODES _XC-IOR ! THEN
-    0 _EXT4-MUTATION-OWNER-INO !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XC-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _XC-IOR @ ;
-
 : _XC-SELECT-INDEX-BLOCK  ( plan -- plan ior )
     _XC-REQUIRE-CONVERSION-PROOF-IDLE ?DUP IF EXIT THEN
     0 _XC-INDEX-NODE-HOME ! 0 _XC-INDEX-NODE-GROUP !
@@ -23671,7 +23505,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-INDEX-PLAN-MAP-EDIT ?DUP IF EXIT THEN
     _XC-WRITER @ IF
         _XC-REQUIRE-INDEX-SPLIT-MAP-AUDIT ?DUP IF EXIT THEN
-        _XC-REQUIRE-UNIQUE-INDEX-RANGES ?DUP IF EXIT THEN
+        _XC-INDEX-PREPARE-RANGES ?DUP IF EXIT THEN
         _XC-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
         _XC-REQUIRE-SAME-INDEX-BLOCK ?DUP IF EXIT THEN
         _XC-INDEX-PLAN-MAP-EDIT ?DUP IF EXIT THEN
@@ -23812,7 +23646,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
         _XC-AUTH-PARENT-DIRECTORY ?DUP IF EXIT THEN
         _XC-REQUIRE-LINK-TARGET ?DUP IF EXIT THEN
     ELSE
-        _XC-PREPARE-PARENT-DIRECTORY ?DUP IF EXIT THEN
+        _XC-AUTH-PARENT-DIRECTORY ?DUP IF EXIT THEN
         _XC-FIND-FREE-INODE ?DUP IF EXIT THEN
     THEN
     _XC-DIRECTORY @ IF
@@ -24499,6 +24333,21 @@ VARIABLE _XC-NEW-ROOT
     THEN
     0 ;
 
+\ The parent is kept, and the entry's inode is created or, for LINK, kept.
+: _XC-INODE-KIND  ( -- kind )
+    _XC-LINKING @ IF _EXT4-NMC-RETAINED ELSE _EXT4-NMC-CREATED THEN ;
+
+: _XC-MAP-CHECK  ( -- ior )
+    _XC-CTX @ _XC-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
+    _XC-PARENT-INO @ _XC-PARENT-HOME @ _XC-PARENT-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    _XC-INODE @ _XC-INODE-HOME @ _XC-INODE-OFF @ _XC-INODE-KIND _EXT4-NMC-OLD
+    _EXT4-NMC-BITMAPS
+    _XC-PARENT-INO @ _XC-PARENT-HOME @ _XC-PARENT-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    _XC-INODE @ _XC-INODE-HOME @ _XC-INODE-OFF @ _XC-INODE-KIND _EXT4-NMC-NEW
+    _EXT4-NMC-END ;
+
 : _EXT4-JTX-STAGE-INSERT  ( plan transaction -- plan ior )
     DUP _XC-WRITER ! _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
     _XC-WRITER @ _EXT4-JWR.CTX + @ DUP _XC-CTX @ <> IF
@@ -24544,7 +24393,8 @@ VARIABLE _XC-NEW-ROOT
         _XC-STAGE-INODE-ALLOCATION ?DUP IF EXIT THEN
         _XC-STAGE-SUPER ?DUP IF EXIT THEN
     THEN
-    _XC-WRITER @ _XC-HP-REQUIRE-STAGED ;
+    _XC-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN
+    _XC-MAP-CHECK ;
 
 : _XC-SCRUB-PRIVATE  ( -- )
     _XC-NAME-SNAPSHOT 256 0 FILL
@@ -25105,15 +24955,13 @@ VARIABLE _XT-NEW-FREE
     _XT-NEW @ _XT-NEW-BLOCKS @ _XW-PUT-INODE ;
 
 \ The freed runs, the zeroed tail and every edited tree node must be mapped
-\ exactly once by the target, and no other inode may map any of them or
-\ any accounting home.
+\ exactly once by the target.
 : _XT-PROVE  ( -- ior )
     _XR-FREED @ _XP-BASE !
     _XW-OVERWRITES @ _XN-EXISTING @ + _XR-DATA @ + _XR-NODES @ +
     _XP-EXPECT !
     _XP-COLLECT ?DUP IF EXIT THEN
-    _XP-MAP-AUDIT ?DUP IF EXIT THEN
-    _XP-OTHER-OWNERS ;
+    _XP-MAP-CHECK ;
 
 \ ---------------------------------------------------------------------
 \  Linked-orphan release and final cleanup
@@ -25209,8 +25057,7 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
         _XW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ _XP-CAP !
         0 _XP-COUNT ! 1 _XP-EXPECT !
         _XP-ADD ?DUP IF EXIT THEN
-        _XP-MAP-AUDIT ?DUP IF EXIT THEN
-        _XP-OTHER-OWNERS ?DUP IF EXIT THEN
+        _XP-MAP-CHECK ?DUP IF EXIT THEN
     THEN
     _XO-SUCCESSOR? IF
         _XW-INODE _XO-AFTER _XW-CTX @ _EXT4-C.ISIZE + @ MOVE
@@ -25275,86 +25122,6 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
     _XO-RECORD @ _XW-TX @ _EXT4-JRL-SEAL TRUE SWAP ;
 
 ' _XO-STEP _EXT4-LINKED-STEP-XT !
-
-VARIABLE _XO-LOGICAL
-VARIABLE _XO-FIRST-KEY
-VARIABLE _XO-I
-VARIABLE _XO-RUN-FIRST
-VARIABLE _XO-RUN-COUNT
-
-\ Add the run FIRST COUNT to the owner vector, joining the last range when
-\ the two are contiguous, and prove the vector first when it is full.
-: _XO-OWNER-RUN  ( first count -- ior )
-    _XO-RUN-COUNT ! _XO-RUN-FIRST !
-    _XP-COUNT @ IF
-        _XP-COUNT @ 1- 2* CELLS _XP-RANGES @ +
-        DUP @ _XO-RUN-FIRST @ _XO-RUN-COUNT @ + = IF
-            _XO-RUN-FIRST @ OVER ! _XO-RUN-COUNT @ SWAP CELL+ +! 0 EXIT
-        THEN
-        DUP @ OVER CELL+ @ + _XO-RUN-FIRST @ = IF
-            _XO-RUN-COUNT @ SWAP CELL+ +! 0 EXIT
-        THEN
-        DROP
-    THEN
-    _XP-COUNT @ _XP-CAP @ U< 0= IF
-        _XP-OTHER-OWNERS ?DUP IF EXIT THEN
-        0 _XP-COUNT !
-    THEN
-    _XO-RUN-FIRST @ _XO-RUN-COUNT @
-    _XP-COUNT @ 2* CELLS _XP-RANGES @ + TUCK CELL+ ! !
-    1 _XP-COUNT +!
-    0 ;
-
-\ Publish the parts past EOF of the current leaf's extents, from its last
-\ entry back.  MORE? is true when every entry reaches past EOF and the leaf
-\ starts after it, so an earlier leaf may reach past EOF too.
-: _XO-OWNER-LEAF  ( -- more? ior )
-    _XN-LEAF _XR-NODE !
-    _XR-NODE @ _XN-COUNT@ _XO-I !
-    BEGIN _XO-I @ WHILE
-        -1 _XO-I +!
-        _XR-NODE @ _XO-I @ _XN-ENTRY DUP _XR-CUT-ENTRY !
-        DUP L@ _XR-FIRST ! DUP _EXT4-EXTENT-LEN@ _XR-LEN ! _XN-PHYS@ _XR-PHYS !
-        _XR-FIRST @ _XR-LEN @ + _XR-START @ U> 0= IF FALSE 0 EXIT THEN
-        _XR-START @ _XR-FIRST @ - 0 MAX _XR-KEEP !
-        _XR-PHYS @ _XR-KEEP @ + _XR-LEN @ _XR-KEEP @ -
-        _XO-OWNER-RUN ?DUP IF FALSE SWAP EXIT THEN
-    REPEAT
-    _XR-NODE @ 0 _XN-ENTRY L@ DUP _XO-FIRST-KEY !
-    _XR-START @ U> 0 ;
-
-\ Before mount recovery's first cleanup write, prove that no other inode
-\ maps a data block the linked record's release will free, as the
-\ whole-union qualification proves each unlinked record's ranges.  Walk the
-\ leaves from the end of the file, publishing each extent's part past EOF,
-\ in vectors as large as the mutation range workspace.  The release passes'
-\ own proofs also cover the tree nodes they free.
-: _XO-QUALIFY  ( plan-record ctx -- ior )
-    _XW-CTX ! _XO-RECORD ! 0 _XW-TX !
-    _XO-LOAD ?DUP IF EXIT THEN
-    _XO-LEGACY-MAP @ IF 0 EXIT THEN
-    _XW-CTX @ _EXT4-C.MUTATION-RANGES + @ DUP _XP-RANGES ! 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XW-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ _XP-CAP !
-    0 _XP-COUNT !
-    0xFFFFFFFF _XO-LOGICAL !
-    BEGIN
-        _XO-LOGICAL @ _XN-FIND ?DUP IF EXIT THEN
-        _XN-LEAF _XN-COUNT@ 0= IF
-            FALSE
-        ELSE _XN-LEAF 0 _XN-ENTRY L@ _XO-LOGICAL @ U> IF
-            FALSE
-        ELSE
-            _XO-OWNER-LEAF ?DUP IF NIP EXIT THEN
-        THEN THEN
-    WHILE
-        _XO-FIRST-KEY @ 1- _XO-LOGICAL !
-    REPEAT
-    _XP-COUNT @ IF _XP-OTHER-OWNERS EXIT THEN
-    0 ;
-
-' _XO-QUALIFY _EXT4-LINKED-QUALIFY-XT !
 
 \ A release pass's credits.  A bound writer profile is the pass's capacity.
 \ Mount recovery sizes its own writer to free one full leaf of fragmented
@@ -25487,17 +25254,12 @@ VARIABLE _XO-RUN-COUNT
     THEN
     _XW-DISCARD ?DUP IF NIP THEN ;
 
-\ No inode maps the inode-table home or the superblock the insertion
-\ writes, and the target's own tree does not map its orphan block either.
+\ The target's own tree maps none of the insertion's homes.
 : _XT-ADD-PROVE  ( -- ior )
     _XW-AUTH ?DUP IF EXIT THEN
     0 _XP-BASE ! 0 _XP-EXPECT !
     _XP-COLLECT ?DUP IF EXIT THEN
-    _XP-MAP-AUDIT ?DUP IF EXIT THEN
-    0 _XP-COUNT !
-    _XW-INODE-HOME @ _XP-ADD ?DUP IF EXIT THEN
-    _XW-CTX @ _EXT4-PRIMARY-SUPER-BLOCK _XP-ADD ?DUP IF EXIT THEN
-    _XP-OTHER-OWNERS ;
+    _XP-MAP-CHECK ;
 
 \ Stage and prove the orphan insertion that commits the new size.  On
 \ success the transaction stays staged.
@@ -26512,9 +26274,6 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
 : _XU-REQUIRE-DIRECTORY-MAP-AUDIT  ( -- ior )
     _XU-DIR-HOME @ 1 _XU-REQUIRE-PARENT-MAP-HITS ;
 
-: _XU-REQUIRE-CHILD-ABSENT-FROM-PARENT-MAP  ( -- ior )
-    _XU-DATA-BLOCK @ 0 _XU-REQUIRE-PARENT-MAP-HITS ;
-
 : _XU-DIR-SCAN  ( -- ior )
     0 _XU-DIR-DOT ! 0 _XU-DIR-DOTDOT ! 0 _XU-DIR-FOUND !
     0 _XU-TARGET-REFS ! -1 _XU-PREV-OFF !
@@ -26661,11 +26420,8 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
 : _XU-AUTH-PARENT-DIRECTORY  ( -- ior )
     0 _XU-DIR-HOME !
     _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    _XU-INDEXED @ IF
-        _XU-REQUIRE-DIRECTORY-MAP-AUDIT ?DUP IF EXIT THEN
-    THEN
-    _XU-PARENT-INO @ _XU-DIR-HOME @ 1 _XU-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ?DUP IF EXIT THEN
+    _XU-INDEXED @ 0= IF 0 EXIT THEN
+    _XU-REQUIRE-DIRECTORY-MAP-AUDIT ?DUP IF EXIT THEN
     _XU-CAPTURE-PARENT-DIRECTORY ;
 
 : _XU-BUILD-EXPECTED-CHILD-DIRECTORY  ( -- ior )
@@ -26719,16 +26475,10 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
 
 : _XU-PROVE-DIRECTORY-OWNERS  ( -- ior )
     _XU-INDEXED @ IF
-        \ The paired global scan excludes the authenticated parent and child.
-        \ First prove the child release block is wholly absent from the parent,
-        \ then prove the selected leaf occurs exactly once in its complete map,
-        \ so neither exclusion can hide an internal parent alias.
-        _XU-REQUIRE-CHILD-ABSENT-FROM-PARENT-MAP ?DUP IF EXIT THEN
+        \ The parent leaf the removal rewrites occurs exactly once in its
+        \ complete map.
         _XU-REQUIRE-DIRECTORY-MAP-AUDIT ?DUP IF EXIT THEN
     THEN
-    _XU-PARENT-INO @ _XU-DIR-HOME @ 1
-    _XU-INO @ _XU-DATA-BLOCK @ 1 _XU-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNERS-PAIR ?DUP IF EXIT THEN
     _XU-REQUIRE-TARGET ?DUP IF EXIT THEN
     _XU-AUTH-CHILD-DIRECTORY ?DUP IF EXIT THEN
     _XU-CAPTURE-PARENT-DIRECTORY ;
@@ -27150,6 +26900,26 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _EXT4-JFI-NEW-SUPER-FREE @ _XU-SUPER-NEW-FREE !
     0 ;
 
+\ A final link with nothing to drain frees the target; any other target is
+\ kept, as is the parent.
+: _XU-TARGET-KIND  ( -- kind )
+    _XU-FINAL @ _XU-ORPHAN @ 0= AND IF
+        _EXT4-NMC-FREED
+    ELSE
+        _EXT4-NMC-RETAINED
+    THEN ;
+
+: _XU-MAP-CHECK  ( -- ior )
+    _XU-CTX @ _XU-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
+    _XU-INO @ _XU-TARGET-HOME @ _XU-TARGET-OFF @ _XU-TARGET-KIND _EXT4-NMC-OLD
+    _XU-PARENT-INO @ _XU-PARENT-HOME @ _XU-PARENT-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    _EXT4-NMC-BITMAPS
+    _XU-INO @ _XU-TARGET-HOME @ _XU-TARGET-OFF @ _XU-TARGET-KIND _EXT4-NMC-NEW
+    _XU-PARENT-INO @ _XU-PARENT-HOME @ _XU-PARENT-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    _EXT4-NMC-END ;
+
 : _EXT4-JTX-STAGE-UNLINK-CLOSED  ( plan transaction -- plan ior )
     DUP _XU-WRITER ! _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
     _XU-WRITER @ _EXT4-JWR.CTX + @ DUP _XU-CTX @ <> IF
@@ -27174,7 +26944,8 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
             VFS-E-CORRUPT EXIT
         THEN
     THEN
-    _XU-WRITER @ _XC-HP-REQUIRE-STAGED ;
+    _XU-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN
+    _XU-MAP-CHECK ;
 
 : _XU-SCRUB-PRIVATE  ( -- )
     _XU-NAME-SNAPSHOT 256 0 FILL
@@ -27524,8 +27295,7 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-D @ D.FLAGS @ VFS-DF-UNLINKED AND 0= IF VFS-E-STALE EXIT THEN
     _XU-VN @ VN.OPEN-REFS @ DUP 1 U> IF DROP 0 EXIT THEN
     1 <> IF VFS-E-STALE EXIT THEN
-    _EXT4-JFO-CERT-BEGIN ?DUP IF EXIT THEN
-    _XU-RELEASE-LAST-BODY _EXT4-JFO-CERT-END
+    _XU-RELEASE-LAST-BODY
     DUP IF _XU-RELEASE-FAIL EXIT THEN
     DROP 0 _XU-V @ V.LAST-IOR ! _XU-SCRUB-PRIVATE 0 ;
 
@@ -27539,9 +27309,7 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
 : _EXT4-UNLINK  ( dentry vfs -- ior )
     _XU-V ! _XU-D !
     0 _XU-RENAME-SCAN ! 0 _XU-DIRECTORY !
-    _EXT4-JFO-CERT-BEGIN ?DUP IF EXIT THEN
-    _XU-REMOVE-COMMON
-    _EXT4-JFO-CERT-END ;
+    _XU-REMOVE-COMMON ;
 
 : _EXT4-RMDIR  ( dentry vfs -- ior )
     _XU-V ! _XU-D !
@@ -28791,42 +28559,20 @@ CREATE _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XR-DEST-SEPARATE @ IF
         _XU-INDEXED @ 0= IF VFS-E-CORRUPT EXIT THEN
         _XU-DIRECTORY-DESC _XR-DEST-HOME @ 1
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-        _XU-PARENT-INO @ _XU-DIR-HOME @ 1
-        _XR-DEST-HOME @ 1 _XU-CTX @
-        _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR EXIT
+        _XR-REQUIRE-DESC-MAP-HITS EXIT
     THEN
-    _XU-PARENT-INO @ _XU-DIR-HOME @ 1 _XU-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ;
+    0 ;
 
 : _XR-PROVE-CROSSDIR-OWNERS  ( -- ior )
     _XU-INDEXED @ IF
         _XU-DIRECTORY-DESC _XU-DIR-HOME @ 1
         _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-        _XU-DIRECTORY-DESC _XR-NP-DIR-HOME @ 0
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
     THEN
     _XR-NP-INDEXED @ IF
         _XR-NP-DIRECTORY-DESC _XR-NP-DIR-HOME @ 1
         _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-        _XR-NP-DIRECTORY-DESC _XU-DIR-HOME @ 0
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
     THEN
-    _XU-PARENT-INO @ _XU-DIR-HOME @ 1
-    _XR-NP-INO @ _XR-NP-DIR-HOME @ 1 _XU-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNERS-PAIR ;
-
-: _XR-PROVE-CHILD-OWNER  ( -- ior )
-    _XU-INDEXED @ IF
-        _XU-DIRECTORY-DESC _XU-DATA-BLOCK @ 0
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-    THEN
-    _XR-NP-INDEXED @ IF
-        _XR-NP-DIRECTORY-DESC _XU-DATA-BLOCK @ 0
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-    THEN
-    _XU-INO @ _XU-DATA-BLOCK @ 1 _XU-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ;
+    0 ;
 
 : _XR-ENTRY-NP  ( -- ior )
     _XR-PARENT @ D.VNODE @ DUP _XR-NP-VN ! 0= IF
@@ -28971,9 +28717,6 @@ CREATE _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
             -1 _XR-COMPACT !
         THEN THEN
     ELSE
-        _XU-PARENT-INO @ _XU-DIR-HOME @ 1 _XU-CTX @
-        _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ?DUP IF EXIT THEN
-        _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
         _XR-SCAN-NEW-NAME ?DUP IF EXIT THEN
         _XU-SHARED-DIR-SNAPSHOT _XU-CTX @ _EXT4-C.DIR-BLOCK +
         _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
@@ -29014,9 +28757,6 @@ CREATE _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
         _XU-AUTH-CHILD-DIRECTORY ?DUP IF EXIT THEN
     THEN
     _XR-PROVE-CROSSDIR-OWNERS ?DUP IF EXIT THEN
-    _XU-DIRECTORY @ IF
-        _XR-PROVE-CHILD-OWNER ?DUP IF EXIT THEN
-    THEN
     _XU-REQUIRE-TARGET ?DUP IF EXIT THEN
     _XU-REQUIRE-PARENT ?DUP IF EXIT THEN
     _XR-REQUIRE-NP ?DUP IF EXIT THEN
@@ -29241,6 +28981,29 @@ CREATE _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-IMAGE @ _XU-DIR-HOME @ _XU-WRITER @
     _EXT4-JTX-META-REPLACE ;
 
+\ A rename keeps the source, its parent and, across directories, the new
+\ parent.
+: _XR-MAP-CHECK  ( -- ior )
+    _XU-CTX @ _XU-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
+    _XU-INO @ _XU-TARGET-HOME @ _XU-TARGET-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    _XU-PARENT-INO @ _XU-PARENT-HOME @ _XU-PARENT-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    _XR-CROSSDIR @ IF
+        _XR-NP-INO @ _XR-NP-HOME @ _XR-NP-OFF @
+        _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    THEN
+    _EXT4-NMC-BITMAPS
+    _XU-INO @ _XU-TARGET-HOME @ _XU-TARGET-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    _XU-PARENT-INO @ _XU-PARENT-HOME @ _XU-PARENT-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    _XR-CROSSDIR @ IF
+        _XR-NP-INO @ _XR-NP-HOME @ _XR-NP-OFF @
+        _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    THEN
+    _EXT4-NMC-END ;
+
 : _EXT4-JTX-STAGE-RENAME  ( plan transaction -- plan ior )
     DUP _XU-WRITER ! _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
     _XU-WRITER @ _EXT4-JWR.CTX + @ _XU-CTX @ <> IF
@@ -29256,7 +29019,8 @@ CREATE _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
         _XU-STAGE-PARENT-INODE ?DUP IF EXIT THEN
         _XR-STAGE-DIRECTORY ?DUP IF EXIT THEN
     THEN
-    _XU-WRITER @ _XC-HP-REQUIRE-STAGED ;
+    _XU-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN
+    _XR-MAP-CHECK ;
 
 : _XR-SCRUB-PRIVATE  ( -- )
     _XR-NEW-NAME-SNAPSHOT 256 0 FILL
@@ -29627,56 +29391,6 @@ CREATE _XS-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XS-CTX @ _EXT4-C.ISIZE + @ CMOVE
     _XS-REQUIRE-TARGET ;
 
-: _XS-OWNER-FAIL  ( ior -- ior )
-    _XS-OWNER-IOR !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    0 _EXT4-MUTATION-OWNER-INO !
-    _XS-OWNER-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _XS-OWNER-IOR @ ;
-
-\ The global other-owner service excludes the target inode, so first publish
-\ HOME around one exact target rebind.  Complete inode staging makes every data
-\ or extent-node reference hit the ordinary range predicate; XA-SCAN-BOTH does
-\ the same for the external-xattr pointer while fully authenticating its bytes.
-: _XS-REQUIRE-TARGET-HOME-DISJOINT  ( -- ior )
-    _EXT4-MUTATION-OWNER-RANGES-BUSY?
-    _EXT4-MUTATION-OWNER-INO @ OR
-    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
-    _XS-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XS-CTX @ _EXT4-C.MUTATION-RANGES + @ 0=
-    _XS-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ 1 U< OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-MAP-VALIDATION-LIMIT @ _XS-OWNER-MAP-LIMIT !
-    0 _EXT4-MAP-VALIDATION-LIMIT !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XS-CTX @ _EXT4-C.MUTATION-RANGES + @
-    _EXT4-MUTATION-OWNER-RANGES !
-    _XS-HOME @ 0 _EXT4-MUTATION-OWNER-RANGE !
-    1 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !
-    _XS-CTX @ _EXT4-C.MUTATION-RANGES + @ 1
-    _XS-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
-    _EXT4-MUTATION-OWNER-RANGES-PUBLISH ?DUP IF
-        _XS-OWNER-FAIL EXIT
-    THEN
-    _XS-INO @ _EXT4-MUTATION-OWNER-INO !
-    _XS-REQUIRE-TARGET _XS-OWNER-IOR !
-    0 _EXT4-MUTATION-OWNER-INO !
-    _EXT4-MUTATION-OWNER-RANGES-CLEAR
-    _XS-OWNER-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _XS-OWNER-IOR @ ;
-
-\ After the target nonownership proof, reuse the bounded JFO walk to reject a
-\ data, map-metadata, or external-xattr reference from every other allocated
-\ inode.  Its terminal raw reload is followed by the exact snapshot rebind at
-\ the mutation site before any transaction image is acquired.
-: _XS-REQUIRE-HOME-OWNERS  ( -- ior )
-    _XS-REQUIRE-TARGET-HOME-DISJOINT ?DUP IF EXIT THEN
-    _XS-INO @ _XS-HOME @ 1 _XS-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ;
-
 : _XS-REQUIRE-FRESH-EXACT  ( -- ior )
     _XS-WRITER @ _EXT4-JWR.META-CREDIT + @ 1 <>
     _XS-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 0<> OR
@@ -29757,6 +29471,13 @@ CREATE _XS-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     THEN
     0 ;
 
+: _XS-MAP-CHECK  ( -- ior )
+    _XS-CTX @ _XS-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
+    _XS-INO @ _XS-HOME @ _XS-OFF @ _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    _EXT4-NMC-BITMAPS
+    _XS-INO @ _XS-HOME @ _XS-OFF @ _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    _EXT4-NMC-END ;
+
 : _EXT4-JTX-STAGE-SETATTR  ( transaction -- ior )
     DUP _XS-WRITER ! _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
     _XS-WRITER @ _EXT4-JWR.CTX + @ DUP _XS-CTX @ <> IF
@@ -29766,11 +29487,6 @@ CREATE _XS-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XS-REQUIRE-TARGET ?DUP IF EXIT THEN
     _XS-HOME @ _XS-GROUP @ _XS-CTX @
     _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XS-REQUIRE-HOME-OWNERS ?DUP IF EXIT THEN
-    _XS-REQUIRE-TARGET ?DUP IF EXIT THEN
-    _XS-HOME @ _XS-GROUP @ _XS-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XS-REQUIRE-TARGET ?DUP IF EXIT THEN
     _XS-HOME @ _XS-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
     _XS-CTX @ _EXT4-C.BLOCK + _XS-OFF @ +
     _XS-INODE-SNAPSHOT _XS-CTX @ _EXT4-C.ISIZE + @
@@ -29795,7 +29511,7 @@ CREATE _XS-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XS-WRITER @ _EXT4-JTX-TABLES-VALID? 0= OR IF
         VFS-E-CORRUPT EXIT
     THEN
-    0 ;
+    _XS-MAP-CHECK ;
 
 : _XS-FAIL  ( ior -- ior )
     _XS-IOR !

@@ -260,7 +260,9 @@ REQUIRE ../../../../math/crc.f
 \ +15440   caller-installed trusted write-clock provider and context
 \ +15456   mount-scoped protocol-home ownership certificate
 \ +15480   persistent caller-bounded mutation-range workspace
-\ +15552   opaque CREATE/HTree plan pointer and exact byte span
+\ +15536   opaque CREATE/HTree plan pointer and exact byte span
+\ +15552   mount-scoped block-ownership proof
+\ +15560   persistent volume-derived block-claim workspace
 
    0 CONSTANT _EXT4-C.SB
 1024 CONSTANT _EXT4-C.BLOCK
@@ -363,16 +365,17 @@ REQUIRE ../../../../math/crc.f
 15472 CONSTANT _EXT4-C.J.WRITER-ARENA
 15480 CONSTANT _EXT4-C.MUTATION-RANGES
 15488 CONSTANT _EXT4-C.MUTATION-RANGE-CAP
-15496 CONSTANT _EXT4-C.OWNER-CERT-RANGES
-15504 CONSTANT _EXT4-C.OWNER-CERT-RANGE-CAP
-15512 CONSTANT _EXT4-C.O.RUNTIME-TABLE
-15520 CONSTANT _EXT4-C.O.RUNTIME-SLOTS
-15528 CONSTANT _EXT4-C.O.RUNTIME-CAPACITY
-15536 CONSTANT _EXT4-C.O.RUNTIME-END
-15544 CONSTANT _EXT4-C.O.MOUNT-TAIL-MARK
-15552 CONSTANT _EXT4-C.XC-PLAN
-15560 CONSTANT _EXT4-C.XC-PLAN-SPAN
-15568 CONSTANT _EXT4-CTX-SIZE
+15496 CONSTANT _EXT4-C.O.RUNTIME-TABLE
+15504 CONSTANT _EXT4-C.O.RUNTIME-SLOTS
+15512 CONSTANT _EXT4-C.O.RUNTIME-CAPACITY
+15520 CONSTANT _EXT4-C.O.RUNTIME-END
+15528 CONSTANT _EXT4-C.O.MOUNT-TAIL-MARK
+15536 CONSTANT _EXT4-C.XC-PLAN
+15544 CONSTANT _EXT4-C.XC-PLAN-SPAN
+15552 CONSTANT _EXT4-C.OWNERSHIP
+15560 CONSTANT _EXT4-C.CLAIM-WORKSPACE
+15568 CONSTANT _EXT4-C.CLAIM-WORKSPACE-BYTES
+15576 CONSTANT _EXT4-CTX-SIZE
 
 4 CONSTANT _EXT4-ORPHAN-RECORD-CELLS
 _EXT4-ORPHAN-RECORD-CELLS CELLS CONSTANT _EXT4-ORPHAN-RECORD-SIZE
@@ -470,9 +473,9 @@ VARIABLE _EXT4-IO-REASON
     _EXT4-IO-BACKEND @ 0xFFFFFFFF AND
     _EXT4-IO-FLAGS @ VFS-IOR-D-VOLUME _EXT4-IO-REASON @ VFS-IOR-MAKE ;
 
-\ A read-only proof can name one metadata block many times.  The
-\ filesystem-wide owner scan checks every block that another inode maps, and
-\ each check reloads its group's descriptor block and bitmap; a legacy map
+\ A read-only proof can name one metadata block many times.  The mount's
+\ ownership proof checks every block each inode maps, and each check
+\ reloads its group's descriptor block and bitmap; a legacy map
 \ walk also reloads its parent pointer block after every child.  While a
 \ proof scope is open for one context, a block the scope has already read is
 \ served from a private copy instead of the volume, so the proof itself is

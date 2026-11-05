@@ -4788,15 +4788,12 @@ def _forth_cp_delete_vector_checks(
     return checks
 
 
-_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH = (
-    "_EXT4-MUTATION-OWNER-RANGES @ 0=",
-    "_EXT4-MUTATION-OWNER-RANGE-CAP @ 0=",
-    "_EXT4-MUTATION-OWNER-RANGE-COUNT @ 0=",
-    "_EXT4-MUTATION-OWNER-BOUND-FIRST @ 0=",
-    "_EXT4-MUTATION-OWNER-BOUND-LIMIT @ 0=",
-    "_EXT4-MUTATION-EA-REF-ACTIVE @ 0=",
-    "_EXT4-MUTATION-EA-REF-HOME @ 0=",
-    "_EXT4-MUTATION-EA-REF-HITS @ 0=",
+_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH = (
+    "_EXT4-OWN-MAP @ 0=",
+    "_EXT4-OWN-MODE @ 0=",
+    "_EXT4-OWN-COUNT @ 0=",
+    "_EXT4-OWN-EA-ARENA @ 0=",
+    "_EXT4-EV-IMAGE-XT @ 0=",
 )
 
 
@@ -8383,63 +8380,14 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
                 "CONSTANT _MR-FIRST-ZERO"
             ),
             (
-                "_MR-CTX _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE "
-                "CONSTANT _MR-CERT-FIRST-IOR"
-            ),
-            (
-                "_MR-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
-                "CONSTANT _MR-CERT-PTR"
-            ),
-            (
-                "_MR-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
-                "CONSTANT _MR-CERT-CAP"
-            ),
-            "_MR-ARENA ARENA-USED CONSTANT _MR-USED-AFTER-CERT",
-            (
-                "_MR-CERT-PTR _MR-CERT-CAP 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _MR-CERT-FIRST-ZERO"
-            ),
-            (
                 "_MR-PTR _MR-CAP 2* CELLS 0xA5 FILL "
                 "_MR-CTX _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE "
                 "CONSTANT _MR-REUSE-IOR"
-            ),
-            (
-                "_MR-CERT-PTR _MR-CERT-CAP 2* CELLS 0x5A FILL "
-                "_MR-CTX _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE "
-                "CONSTANT _MR-CERT-REUSE-IOR"
             ),
             "_MR-ARENA ARENA-USED CONSTANT _MR-USED-REUSED",
             (
                 "_MR-PTR _MR-CAP 2* CELLS _EXT4-BYTES-ZERO? "
                 "CONSTANT _MR-REUSED-ZERO"
-            ),
-            (
-                "_MR-CERT-PTR _MR-CERT-CAP 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _MR-CERT-REUSED-ZERO"
-            ),
-            (
-                ": _MR-POPULATE "
-                "_MR-CAP 0 ?DO "
-                "100 I 2* + I 2* CELLS _MR-PTR + ! "
-                "1 I 2* CELLS _MR-PTR + CELL+ ! "
-                "LOOP ;"
-            ),
-            "_MR-POPULATE",
-            (
-                "_MR-PTR _MR-CAP _MR-CAP "
-                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
-                "CONSTANT _MR-EXACT-IOR"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ _MR-CAP = "
-                "CONSTANT _MR-EXACT-PUBLISHED"
-            ),
-            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
-            (
-                "_MR-PTR _MR-CAP 1+ _MR-CAP "
-                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
-                "CONSTANT _MR-OVER-IOR"
             ),
             (
                 "CREATE _MR-NOMEM-CTX _EXT4-CTX-SIZE ALLOT "
@@ -8470,33 +8418,9 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
                             f"{workspace_bytes} + ="
                         ),
                         "_MR-FIRST-ZERO",
-                        "_MR-CERT-FIRST-IOR 0=",
-                        f"_MR-CERT-CAP {capacity} =",
-                        (
-                            "_MR-CERT-PTR _MR-PTR "
-                            f"{workspace_bytes} + ="
-                        ),
-                        (
-                            "_MR-USED-AFTER-CERT _MR-USED-AFTER "
-                            f"{workspace_bytes} + ="
-                        ),
-                        "_MR-CERT-FIRST-ZERO",
                         "_MR-REUSE-IOR 0=",
-                        "_MR-CERT-REUSE-IOR 0=",
-                        "_MR-USED-REUSED _MR-USED-AFTER-CERT =",
+                        "_MR-USED-REUSED _MR-USED-AFTER =",
                         "_MR-REUSED-ZERO",
-                        "_MR-CERT-REUSED-ZERO",
-                        "_MR-EXACT-IOR 0=",
-                        "_MR-EXACT-PUBLISHED",
-                        (
-                            "_MR-OVER-IOR VFS-IOR-REASON "
-                            "VFS-R-CORRUPT ="
-                        ),
-                        (
-                            "_MR-OVER-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-DATA-MAP ="
-                        ),
-                        "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0=",
                         "_MR-NOMEM-IOR VFS-E-NOMEM =",
                         (
                             "_MR-NOMEM-ARENA ARENA-USED "
@@ -8513,10 +8437,6 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
                         "_EXT4-C.MUTATION-RANGES _EXT4-CTX-RESET-SIZE >=",
                         (
                             "_EXT4-C.MUTATION-RANGE-CAP 1 CELLS + "
-                            "_EXT4-C.OWNER-CERT-RANGES <="
-                        ),
-                        (
-                            "_EXT4-C.OWNER-CERT-RANGE-CAP 1 CELLS + "
                             "_EXT4-CTX-SIZE <="
                         ),
                     ]
@@ -9418,7 +9338,7 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
                     "_AW-CTX _EXT4-C.READY + @ 0<> AND "
                     "_EXT4-MUTATION-PROTOCOL-CTX @ 0= AND "
                     "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0= AND "
-                    "_EXT4-MUTATION-OWNER-INO @ 0= AND "
+                    "_EXT4-OWN-MAP @ 0= AND "
                     "_EXT4-MUTATION-MAP-TARGET @ 0= AND "
                     "_EXT4-MUTATION-MAP-ACTIVE @ 0= AND "
                     "_EXT4-MUTATION-MAP-HITS @ 0= AND "
@@ -9571,13 +9491,11 @@ def test_jbd2_writer_activation_rejects_other_inode_protocol_home_alias(
                             "_PO-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                             "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                             "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
-                            "_EXT4-MUTATION-OWNER-INO @ 0=",
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                             "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                            "_EXT4-JFO-CERT-VALID @ 0=",
                         ]
                     )
                     + ' IF ." EXT4-PROTOCOL-HOME-OWNER-REFUSED" THEN'
@@ -16478,11 +16396,17 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
     tmp_path: Path,
 ) -> None:
     block_size = 1024
+    volume_blocks = 8192
+    first_data_block = 1
     range_capacity = 2 * (block_size // 4) + 16
     range_workspace_bytes = range_capacity * 2 * 8
+    claim_workspace_bytes = (
+        (volume_blocks - first_data_block + 63) // 64 * 8 + block_size
+    )
+    auth_workspace_bytes = range_workspace_bytes + claim_workspace_bytes
     plan_slots = 4
     plan_workspace_bytes = plan_slots * 4 * 8
-    arena_bytes = 2 * range_workspace_bytes + plan_workspace_bytes
+    arena_bytes = auth_workspace_bytes + plan_workspace_bytes
     blank = tmp_path / "runtime-orphan-workspaces.img"
     blank.write_bytes(bytes(4 * 512))
 
@@ -16492,6 +16416,8 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
             "CREATE _ROW-CTX _EXT4-CTX-SIZE ALLOT",
             "_ROW-CTX _EXT4-CTX-SIZE 0 FILL",
             f"{block_size} _ROW-CTX _EXT4-C.BSIZE + !",
+            f"{volume_blocks} _ROW-CTX _EXT4-C.BLOCKS + !",
+            f"{first_data_block} _ROW-CTX _EXT4-C.FIRST + !",
             f"{arena_bytes} A-XMEM ARENA-NEW THROW CONSTANT _ROW-ARENA",
             "_ROW-ARENA _ROW-CTX _EXT4-C.ARENA + !",
             (
@@ -16506,27 +16432,22 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                 "_ROW-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
                 "CONSTANT _ROW-MUTATION-CAP"
             ),
-            (
-                "_ROW-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
-                "CONSTANT _ROW-CERT"
-            ),
-            (
-                "_ROW-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
-                "CONSTANT _ROW-CERT-CAP"
-            ),
             "_ROW-ARENA ARENA-USED CONSTANT _ROW-AUTH-USED",
+            "_ROW-CTX _EXT4-C.CLAIM-WORKSPACE + @ CONSTANT _ROW-CLAIM",
+            (
+                "_ROW-CTX _EXT4-C.CLAIM-WORKSPACE-BYTES + @ "
+                "CONSTANT _ROW-CLAIM-BYTES"
+            ),
+            (
+                "_ROW-CLAIM _ROW-CLAIM-BYTES _EXT4-BYTES-ZERO? "
+                "CONSTANT _ROW-CLAIM-FIRST-ZERO"
+            ),
             (
                 "_ROW-MUTATION _ROW-MUTATION-CAP 2* CELLS "
                 "_EXT4-BYTES-ZERO? CONSTANT _ROW-MUTATION-FIRST-ZERO"
             ),
-            (
-                "_ROW-CERT _ROW-CERT-CAP 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _ROW-CERT-FIRST-ZERO"
-            ),
-            (
-                "_ROW-MUTATION _ROW-MUTATION-CAP 2* CELLS 0xA5 FILL "
-                "_ROW-CERT _ROW-CERT-CAP 2* CELLS 0x5A FILL"
-            ),
+            "_ROW-MUTATION _ROW-MUTATION-CAP 2* CELLS 0xA5 FILL",
+            "_ROW-CLAIM _ROW-CLAIM-BYTES 0x5A FILL",
             (
                 "_ROW-CTX _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE "
                 "CONSTANT _ROW-AUTH-REUSE-IOR"
@@ -16537,8 +16458,8 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                 "_EXT4-BYTES-ZERO? CONSTANT _ROW-MUTATION-REUSED-ZERO"
             ),
             (
-                "_ROW-CERT _ROW-CERT-CAP 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _ROW-CERT-REUSED-ZERO"
+                "_ROW-CLAIM _ROW-CLAIM-BYTES _EXT4-BYTES-ZERO? "
+                "CONSTANT _ROW-CLAIM-REUSED-ZERO"
             ),
             (
                 "2 _ROW-CTX _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE "
@@ -16576,6 +16497,22 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                 "_ROW-BAD-AUTH _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE "
                 "CONSTANT _ROW-BAD-AUTH-IOR"
             ),
+            "CREATE _ROW-BAD-CLAIM _EXT4-CTX-SIZE ALLOT",
+            "_ROW-BAD-CLAIM _EXT4-CTX-SIZE 0 FILL",
+            f"{block_size} _ROW-BAD-CLAIM _EXT4-C.BSIZE + !",
+            f"{volume_blocks} _ROW-BAD-CLAIM _EXT4-C.BLOCKS + !",
+            f"{first_data_block} _ROW-BAD-CLAIM _EXT4-C.FIRST + !",
+            "64 A-XMEM ARENA-NEW THROW CONSTANT _ROW-BAD-CLAIM-ARENA",
+            "_ROW-BAD-CLAIM-ARENA _ROW-BAD-CLAIM _EXT4-C.ARENA + !",
+            "1 _ROW-BAD-CLAIM _EXT4-C.CLAIM-WORKSPACE + !",
+            (
+                "_ROW-BAD-CLAIM-ARENA ARENA-USED "
+                "CONSTANT _ROW-BAD-CLAIM-BEFORE"
+            ),
+            (
+                "_ROW-BAD-CLAIM _EXT4-ENSURE-CLAIM-WORKSPACE "
+                "CONSTANT _ROW-BAD-CLAIM-IOR"
+            ),
             "CREATE _ROW-BAD-PLAN _EXT4-CTX-SIZE ALLOT",
             "_ROW-BAD-PLAN _EXT4-CTX-SIZE 0 FILL",
             "64 A-XMEM ARENA-NEW THROW CONSTANT _ROW-BAD-PLAN-ARENA",
@@ -16594,32 +16531,29 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                     [
                         "_ROW-AUTH-FIRST-IOR 0=",
                         f"_ROW-MUTATION-CAP {range_capacity} =",
-                        f"_ROW-CERT-CAP {range_capacity} =",
                         "_ROW-MUTATION _ROW-ARENA A.BASE @ =",
+                        f"_ROW-AUTH-USED {auth_workspace_bytes} =",
+                        "_ROW-MUTATION-FIRST-ZERO",
                         (
-                            "_ROW-CERT _ROW-MUTATION "
+                            "_ROW-CLAIM _ROW-MUTATION "
                             f"{range_workspace_bytes} + ="
                         ),
-                        f"_ROW-AUTH-USED {2 * range_workspace_bytes} =",
-                        "_ROW-MUTATION-FIRST-ZERO",
-                        "_ROW-CERT-FIRST-ZERO",
+                        f"_ROW-CLAIM-BYTES {claim_workspace_bytes} =",
+                        "_ROW-CLAIM-FIRST-ZERO",
                         "_ROW-AUTH-REUSE-IOR 0=",
                         "_ROW-AUTH-REUSED _ROW-AUTH-USED =",
                         (
                             "_ROW-CTX _EXT4-C.MUTATION-RANGES + @ "
                             "_ROW-MUTATION ="
                         ),
-                        (
-                            "_ROW-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
-                            "_ROW-CERT ="
-                        ),
                         "_ROW-MUTATION-REUSED-ZERO",
-                        "_ROW-CERT-REUSED-ZERO",
+                        "_ROW-CTX _EXT4-C.CLAIM-WORKSPACE + @ _ROW-CLAIM =",
+                        "_ROW-CLAIM-REUSED-ZERO",
                         "_ROW-PLAN-FIRST-IOR 0=",
                         f"_ROW-PLAN-SLOTS {plan_slots} =",
                         (
-                            "_ROW-PLAN _ROW-CERT "
-                            f"{range_workspace_bytes} + ="
+                            "_ROW-PLAN _ROW-CLAIM "
+                            f"{claim_workspace_bytes} + ="
                         ),
                         f"_ROW-PLAN-USED {arena_bytes} =",
                         "_ROW-PLAN-FIRST-ZERO",
@@ -16640,8 +16574,20 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                             "_ROW-BAD-AUTH-BEFORE ="
                         ),
                         (
-                            "_ROW-BAD-AUTH _EXT4-C.OWNER-CERT-RANGES + "
-                            "@ 0="
+                            "_ROW-BAD-CLAIM-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_ROW-BAD-CLAIM-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_ROW-BAD-CLAIM-ARENA ARENA-USED "
+                            "_ROW-BAD-CLAIM-BEFORE ="
+                        ),
+                        (
+                            "_ROW-BAD-CLAIM _EXT4-C.CLAIM-WORKSPACE-BYTES + @ "
+                            "0="
                         ),
                         (
                             "_ROW-BAD-PLAN-IOR VFS-IOR-REASON "
@@ -18179,7 +18125,6 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                 "CONSTANT _UX-FIND-IOR CONSTANT _UX-RECORD"
             ),
             "_UX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _UX-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _UX-CERT-BEGIN-IOR",
             (
                 "_UX-RECORD _UX-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
                 "CONSTANT _UX-MEASURE-IOR CONSTANT _UX-REVOKE "
@@ -18216,7 +18161,6 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                         ),
                         "_UX-FIND-IOR 0=",
                         "_UX-JOURNAL-IOR 0=",
-                        "_UX-CERT-BEGIN-IOR 0=",
                         "_UX-MEASURE-IOR 0=",
                         f"_UX-CREDIT {expected_credit} =",
                         "_UX-REVOKE 1 =",
@@ -18284,17 +18228,6 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                             "_EXT4-JFI-RELEASE-BLOCKS "
                             f"{data_blocks + 1} ="
                         ),
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        f"_EXT4-JFO-CERT-EA @ {xattr_block} =",
-                        (
-                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                            f"{len(data_ranges)} ="
-                        ),
-                        (
-                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                            f"{expected_data_map_kind} ="
-                        ),
-                        "_EXT4-JFO-CERT-MATCH?",
                         "_UX-WRITER _EXT4-JFI-CP-RANGES-MATCH?",
                         "_UX-WRITER _EXT4-JWR-CP-AUTHORITY?",
                         "_UX-BITMAP-IOR 0=",
@@ -18307,14 +18240,13 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                             )
                             for physical in released_blocks
                         ],
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_UX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + f' IF ." {marker}" THEN'
             ),
             "_UX-TX _EXT4-JTX-ABORT CONSTANT _UX-ABORT-IOR",
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
@@ -18325,8 +18257,6 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                         ),
                         "_UX-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
                         "_UX-WRITER _EXT4-JWR-VALID?",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
                         "_UX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
@@ -18418,7 +18348,6 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
                 "CONSTANT _SX-FIND-IOR CONSTANT _SX-RECORD"
             ),
             "_SX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _SX-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _SX-CERT-BEGIN-IOR",
             (
                 "_SX-RECORD _SX-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _SX-MEASURE-IOR CONSTANT _SX-CREDIT"
@@ -18473,7 +18402,6 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
                         ),
                         "_SX-FIND-IOR 0=",
                         "_SX-JOURNAL-IOR 0=",
-                        "_SX-CERT-BEGIN-IOR 0=",
                         "_SX-MEASURE-IOR 0=",
                         f"_SX-CREDIT {expected_credit} =",
                         "_SX-CAP-IOR 0=",
@@ -18541,30 +18469,16 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
                             "_EXT4-JFI-ACCOUNTED-BLOCKS "
                             f"{data_blocks + 1} ="
                         ),
-                        (
-                            "_EXT4-JFI-OWNER-RANGE-COUNT "
-                            f"{len(data_ranges) + 1} ="
-                        ),
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        f"_EXT4-JFO-CERT-EA @ {xattr_block} =",
-                        (
-                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                            f"{len(data_ranges)} ="
-                        ),
-                        "_EXT4-JFO-CERT-EA-ACTION @ _EXT4-JEA-REFDEC =",
-                        "_EXT4-JFO-CERT-EA-REFCOUNT @ 2 =",
-                        "_EXT4-JFO-CERT-MATCH?",
                         "_SX-WRITER _EXT4-JFI-CP-RANGES-MATCH?",
                         "_SX-WRITER _EXT4-JWR-CP-AUTHORITY?",
                         "_SX-WRITER _EXT4-JTX-TABLES-VALID?",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_SX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + f' IF ." {marker}" THEN'
             ),
             "_SX-TX _EXT4-JTX-ABORT CONSTANT _SX-ABORT-IOR",
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
@@ -18572,9 +18486,7 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
                         "_SX-WRITER _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE =",
                         "_SX-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
                         "_SX-WRITER _EXT4-JWR-VALID?",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_SX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
@@ -18616,7 +18528,6 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
                 "CONSTANT _XT-FIND-IOR CONSTANT _XT-RECORD"
             ),
             "_XT-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _XT-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _XT-CERT-BEGIN-IOR",
             (
                 "_XT-RECORD _XT-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _XT-MEASURE-IOR CONSTANT _XT-CREDIT"
@@ -18679,7 +18590,6 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
                         ),
                         "_XT-FIND-IOR 0=",
                         "_XT-JOURNAL-IOR 0=",
-                        "_XT-CERT-BEGIN-IOR 0=",
                         "_XT-MEASURE-IOR 0=",
                         "_XT-CREDIT 6 =",
                         "_XT-WRITER-IOR 0=",
@@ -18699,13 +18609,12 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
                         "_XT-WRITER-VALID",
                         "_XT-VERIFY-IOR VFS-E-CORRUPT =",
                         "_XT-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {marker}" THEN'
             ),
             "_XT-TX _EXT4-JTX-ABORT CONSTANT _XT-ABORT-IOR",
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
@@ -18713,10 +18622,8 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
                         "_XT-WRITER _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE =",
                         "_XT-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
                         "_XT-WRITER _EXT4-JWR-VALID?",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
                         "_XT-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {clean_marker}" THEN'
@@ -18863,9 +18770,7 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
                         "_UJ-CTX _EXT4-C.J.START + @ 0=",
                         "_UJ-CTX _EXT4-C.J.WITNESS + @ 0=",
                         "_UJ-CTX _EXT4-C.J.CLEANUP + @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_UJ-CTX _EXT4-C.O.ACTIVE + @ 1 =",
                         (
                             "_UJ-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
@@ -18947,9 +18852,7 @@ def test_mount_refuses_refcount_one_external_xattr_with_two_semantic_owners(
                         "_XO-CTX _EXT4-C.J.START + @ 0=",
                         "_XO-CTX _EXT4-C.J.WITNESS + @ 0=",
                         "_XO-CTX _EXT4-C.J.CLEANUP + @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {marker}" THEN'
@@ -19009,9 +18912,7 @@ def test_mount_refuses_unauthorized_external_xattr_release_shape(
                         "_XR-CTX _EXT4-C.J.WRITER + @ 0=",
                         "_XR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_XR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {marker}" THEN'
@@ -19450,9 +19351,7 @@ def _run_singleton_unlinked_cleanup(
                         "_UR-CTX _EXT4-C.J.START + @ 0=",
                         "_UR-CTX _EXT4-C.J.WITNESS + @ 0=",
                         "_UR-CTX _EXT4-C.J.CLEANUP + @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_UR-CTX _EXT4-C.O.ACTIVE + @ 0=",
                         "_UR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
                         "_UR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
@@ -20858,23 +20757,6 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
         f"EXT4-{protocol.upper()}-{format_tag}-DATA-DELETE-MORE-SEALED"
     )
     aborted_marker = f"{marker}-ABORTED"
-    certificate_checks = [
-        f"_EXT4-JFO-CERT-RANGE-COUNT @ {len(data_ranges)} =",
-    ]
-    for index, (first, count) in enumerate(data_ranges):
-        certificate_checks.extend(
-            (
-                f"{index} _EXT4-JFO-CERT-RANGE @ {first} =",
-                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
-            )
-        )
-    certificate_checks.append(
-        (
-            f"_EXT4-JFO-CERT-RANGES {len(data_ranges) * 2} CELLS + "
-            f"_EXT4-JFO-CERT-RANGE-CAP {len(data_ranges)} - "
-            "2* CELLS _EXT4-BYTES-ZERO?"
-        )
-    )
     structural_mutation_lines: list[str] = []
     structural_checks: list[str] = []
     if modern and map_format == "extents":
@@ -21009,7 +20891,6 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                 "CONSTANT _DM-FIND-IOR CONSTANT _DM-RECORD"
             ),
             "_DM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DM-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _DM-CERT-BEGIN-IOR",
             (
                 "_DM-RECORD _DM-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _DM-MEASURE-IOR CONSTANT _DM-CREDIT"
@@ -21075,7 +20956,6 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         ),
                         "_DM-FIND-IOR 0=",
                         "_DM-JOURNAL-IOR 0=",
-                        "_DM-CERT-BEGIN-IOR 0=",
                         "_DM-RECORD _EXT4-OE.INO + @ 18 =",
                         (
                             "_DM-RECORD _EXT4-OE.KIND + @ "
@@ -21199,24 +21079,12 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         ),
                         "_DM-WRITER _EXT4-JWR-CP-AUTHORITY?",
                         "_DM-WRITER _EXT4-JTX-TABLES-VALID?",
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        (
-                            "_EXT4-JFO-CERT-KIND @ "
-                            "_EXT4-JFO-CERT-JFI ="
-                        ),
-                        (
-                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                            f"{expected_data_map_kind} ="
-                        ),
-                        *certificate_checks,
                         "_DM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + f' IF ." {marker}" THEN'
             ),
             "_DM-TX _EXT4-JTX-ABORT CONSTANT _DM-ABORT-IOR",
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
@@ -21232,9 +21100,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         "_DM-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
                         "_DM-WRITER _EXT4-JWR.CP-MODE + @ 0=",
                         *_forth_cp_delete_vector_checks("_DM-WRITER", ()),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_DM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
@@ -21366,8 +21232,7 @@ def test_legacy_direct_unlinked_preflight_rejects_unsafe_shapes(
                         "_LD-DEPTH-BEFORE _LD-DEPTH-AFTER =",
                         "_EXT4-JFI-DATA-MAP-KIND @ "
                         f"{expected_map_kind} =",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_LD-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
@@ -21659,8 +21524,7 @@ def test_sparse_triple_rejects_unadmitted_roots(
             f"{expected_map_kind} ="
         ),
         *count_checks,
-        "_EXT4-JFO-CERT-VALID @ 0=",
-        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
         "_TR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
     ]
 
@@ -21786,8 +21650,6 @@ def test_unlinked_preflight_accepts_legacy_single_indirect(
             (
                 f"{index} _EXT4-JFI-RANGE @ {physical} =",
                 f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
-                f"{index} _EXT4-JFO-CERT-RANGE @ {physical} =",
-                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
             )
         )
 
@@ -21805,7 +21667,6 @@ def test_unlinked_preflight_accepts_legacy_single_indirect(
                 "CONSTANT _LI-FIND-IOR CONSTANT _LI-RECORD"
             ),
             "_LI-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _LI-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _LI-CERT-BEGIN-IOR",
             "_LI-RECORD _EXT4-JFI-RECORD !",
             "_LI-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _LI-DEPTH-BEFORE",
@@ -21824,7 +21685,6 @@ def test_unlinked_preflight_accepts_legacy_single_indirect(
                         ),
                         "_LI-FIND-IOR 0=",
                         "_LI-JOURNAL-IOR 0=",
-                        "_LI-CERT-BEGIN-IOR 0=",
                         "_LI-PREFLIGHT-IOR 0=",
                         "_LI-DEPTH-BEFORE _LI-DEPTH-AFTER =",
                         (
@@ -21841,24 +21701,13 @@ def test_unlinked_preflight_accepts_legacy_single_indirect(
                         f"_EXT4-JFI-RELEASE-BLOCKS {len(combined_ranges)} =",
                         "_EXT4-JFI-REVOKE-COUNT 1 =",
                         *range_checks,
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        (
-                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                            "_EXT4-JDM-LEGACY-SINGLE-INDIRECT ="
-                        ),
-                        (
-                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                            f"{len(combined_ranges)} ="
-                        ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_LI-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-PREFLIGHT" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
         ],
         patches=patches,
     )
@@ -21964,8 +21813,6 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
             (
                 f"{index} _EXT4-JFI-RANGE @ {physical} =",
                 f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
-                f"{index} _EXT4-JFO-CERT-RANGE @ {physical} =",
-                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
             )
         )
 
@@ -21983,7 +21830,6 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
                 "CONSTANT _SD-FIND-IOR CONSTANT _SD-RECORD"
             ),
             "_SD-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _SD-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _SD-CERT-BEGIN-IOR",
             "_SD-RECORD _EXT4-JFI-RECORD !",
             "_SD-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _SD-DEPTH-BEFORE",
@@ -22002,7 +21848,6 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
                         ),
                         "_SD-FIND-IOR 0=",
                         "_SD-JOURNAL-IOR 0=",
-                        "_SD-CERT-BEGIN-IOR 0=",
                         "_SD-PREFLIGHT-IOR 0=",
                         "_SD-DEPTH-BEFORE _SD-DEPTH-AFTER =",
                         (
@@ -22025,25 +21870,13 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
                         "_EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ 2 =",
                         "_EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ 1 =",
                         *range_checks,
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        (
-                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                            "_EXT4-JDM-LEGACY-SPARSE-DOUBLE ="
-                        ),
-                        (
-                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                            f"{len(combined_ranges)} ="
-                        ),
-                        "_EXT4-JFO-CERT-MATCH?",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_SD-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-LEGACY-SPARSE-DOUBLE-PREFLIGHT" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
         ],
         patches=patches,
     )
@@ -22728,7 +22561,6 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                 "_SD-S-CTX _EXT4-VALIDATE-JOURNAL "
                 "CONSTANT _SD-S-JOURNAL-IOR"
             ),
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _SD-S-CERT-BEGIN-IOR",
             (
                 "_SD-S-RECORD _SD-S-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
                 "CONSTANT _SD-S-MEASURE-IOR CONSTANT _SD-S-REVOKE "
@@ -22789,7 +22621,6 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                             f"{expected_legacy} ="
                         ),
                         "_SD-S-JOURNAL-IOR 0=",
-                        "_SD-S-CERT-BEGIN-IOR 0=",
                         "_SD-S-MEASURE-IOR 0=",
                         "_SD-S-META 0>",
                         f"_SD-S-REVOKE {len(expected_revoke_homes)} =",
@@ -22910,16 +22741,6 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                             "_SD-S-WRITER",
                             combined_ranges,
                         ),
-                        f"_EXT4-JFO-CERT-EA @ {xattr_block} =",
-                        (
-                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                            f"{expected_map_kind} ="
-                        ),
-                        (
-                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                            f"{len(combined_ranges)} ="
-                        ),
-                        "_EXT4-JFO-CERT-MATCH?",
                         "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY?",
                         "_SD-S-WRITER _EXT4-JTX-TABLES-VALID?",
                         "_SD-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
@@ -22929,16 +22750,13 @@ def test_legacy_indirect_stages_canonical_map_revokes(
             ),
             *tamper_probe,
             "_SD-S-TX _EXT4-JTX-ABORT CONSTANT _SD-S-ABORT-IOR",
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
                         "_SD-S-ABORT-IOR 0=",
                         "_SD-S-WRITER _EXT4-JWR-IDLE-CLEAN?",
                         "_SD-S-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_SD-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
@@ -23022,7 +22840,6 @@ def test_sparse_double_preflight_rejects_unadmitted_or_aliased_maps(
                 "_SD-R-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _SD-R-FIND-IOR CONSTANT _SD-R-RECORD"
             ),
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _SD-R-CERT-BEGIN-IOR",
             "_SD-R-RECORD _EXT4-JFI-RECORD !",
             "_SD-R-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _SD-R-DEPTH-BEFORE",
@@ -23036,7 +22853,6 @@ def test_sparse_double_preflight_rejects_unadmitted_or_aliased_maps(
                             "VFS-R-UNSUPPORTED ="
                         ),
                         "_SD-R-FIND-IOR 0=",
-                        "_SD-R-CERT-BEGIN-IOR 0=",
                         (
                             "_SD-R-PREFLIGHT-IOR VFS-IOR-REASON "
                             f"{reason} ="
@@ -23046,16 +22862,13 @@ def test_sparse_double_preflight_rejects_unadmitted_or_aliased_maps(
                             f"{detail} ="
                         ),
                         "_SD-R-DEPTH-BEFORE _SD-R-DEPTH-AFTER =",
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_SD-R-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + f' IF ." {marker}" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
         ],
         patches=tuple(patch_map.items()),
     )
@@ -23113,7 +22926,6 @@ def test_legacy_single_indirect_stages_exact_root_revoke(
                 "_LI-S-CTX _EXT4-VALIDATE-JOURNAL "
                 "CONSTANT _LI-S-JOURNAL-IOR"
             ),
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _LI-S-CERT-BEGIN-IOR",
             (
                 "_LI-S-RECORD _LI-S-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
                 "CONSTANT _LI-S-MEASURE-IOR CONSTANT _LI-S-REVOKE "
@@ -23153,7 +22965,6 @@ def test_legacy_single_indirect_stages_exact_root_revoke(
                         ),
                         "_LI-S-FIND-IOR 0=",
                         "_LI-S-JOURNAL-IOR 0=",
-                        "_LI-S-CERT-BEGIN-IOR 0=",
                         "_LI-S-MEASURE-IOR 0=",
                         "_LI-S-META 0>",
                         "_LI-S-REVOKE 1 =",
@@ -23210,15 +23021,12 @@ def test_legacy_single_indirect_stages_exact_root_revoke(
                 + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-STAGED" THEN'
             ),
             "_LI-S-TX _EXT4-JTX-ABORT CONSTANT _LI-S-ABORT-IOR",
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
                         "_LI-S-ABORT-IOR 0=",
                         "_LI-S-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_LI-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
@@ -23266,7 +23074,6 @@ def test_legacy_single_indirect_rejects_node_data_alias(
                 "_LI-A-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _LI-A-FIND-IOR CONSTANT _LI-A-RECORD"
             ),
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _LI-A-CERT-BEGIN-IOR",
             "_LI-A-RECORD _EXT4-JFI-RECORD !",
             "_LI-A-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _LI-A-DEPTH-BEFORE",
@@ -23280,7 +23087,6 @@ def test_legacy_single_indirect_rejects_node_data_alias(
                             "VFS-R-UNSUPPORTED ="
                         ),
                         "_LI-A-FIND-IOR 0=",
-                        "_LI-A-CERT-BEGIN-IOR 0=",
                         (
                             "_LI-A-PREFLIGHT-IOR VFS-IOR-REASON "
                             "VFS-R-CORRUPT ="
@@ -23290,22 +23096,17 @@ def test_legacy_single_indirect_rejects_node_data_alias(
                             "EXT4-D-DATA-MAP ="
                         ),
                         "_LI-A-DEPTH-BEFORE _LI-A-DEPTH-AFTER =",
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_LI-A-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-ALIAS-REJECTED" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_LI-A-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
@@ -23589,10 +23390,14 @@ def test_whole_orphan_union_refuses_later_unlinked_live_alias_before_io(
     assert physical_blocks[-1] == _extent_root_physical(live_inode, 0)
     media_path = tmp_path / "mixed-union-later-unlinked-live-alias.img"
     marker = "EXT4-ORPHAN-UNION-LATER-UNLINKED-LIVE-ALIAS-NO-IO"
+    # Qualifying the orphan plan resets this index first.  The ownership
+    # proof runs before qualification and finds the alias, so on both mount
+    # attempts the index keeps the mark.
     output, trace, media_sha256 = run_recovery_forth(
         path,
         media_path,
         [
+            "-1 _EXT4-MQ-INDEX !",
             "T-ARENA CONSTANT _UQ-ARENA",
             (
                 "_UQ-ARENA T-VOLUME EXT4-NEW "
@@ -23654,18 +23459,13 @@ def test_whole_orphan_union_refuses_later_unlinked_live_alias_before_io(
                         "_UQ-INODE-IOR 0=",
                         "_UQ-EXTENT-IOR 0=",
                         "_UQ-EXTENT-ENTRIES 4 =",
-                        "_EXT4-MQ-INDEX @ 2 =",
-                        "_EXT4-MQ-COUNT @ 1 =",
-                        "_EXT4-MQ-MAX @ 4 =",
-                        "_EXT4-MQ-IOR @ _UQ-IOR =",
+                        "_EXT4-MQ-INDEX @ -1 =",
                         "_EXT4-MOC-CAP @ 0=",
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
                         "_EXT4-MOC-RECORD @ 0=",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_UQ-USED-BEFORE-RETRY _UQ-USED-AFTER-RETRY =",
                     ]
                 )
@@ -23807,10 +23607,7 @@ def test_whole_orphan_union_rejects_later_linked_live_alias_before_io(
                         "_EXT4-MOC-TX @ 0=",
                         "_EXT4-MOC-RECORD @ 0=",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                        "_EXT4-MUTATION-OWNER-INO @ 0=",
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                         "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
@@ -24619,9 +24416,7 @@ def _run_multi_linked_cleanup(
                             "_ML-CTX _EXT4-C.FREE-BLOCKS + @ "
                             f"{expected_super_free_blocks} ="
                         ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
@@ -26376,9 +26171,7 @@ def _assert_unlinked_cleanup_media_converges(
                         "_UA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
                         "_UA-CTX _EXT4-C.ARENA + @ _UA-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         (
                             "_UA-CTX _EXT4-C.SB + "
                             "_EXT4-SB.LAST-ORPHAN + L@ 0="
@@ -26503,9 +26296,7 @@ def _assert_unlinked_cleanup_media_converges(
                         "_UB-V V.LIFECYCLE @ VFS-L-MOUNTED =",
                         "_UB-V _EXT4-READY?",
                         "_UB-CTX _EXT4-C.J.WRITER + @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         (
                             "_UB-INODE-IOR VFS-IOR-REASON "
                             "VFS-R-CORRUPT ="
@@ -27057,10 +26848,7 @@ def _assert_multi_linked_cleanup_media_converges(
                         "_EXT4-MOC-MARK @ _LR-ARENA A.PTR @ U>",
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                        "_EXT4-MUTATION-OWNER-INO @ 0=",
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                         "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
@@ -27173,10 +26961,7 @@ def _linked_first_more_fault_probe(
                     ),
                     "_EXT4-MOC-WRITER @ 0=",
                     "_EXT4-MOC-TX @ 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                    "_EXT4-MUTATION-OWNER-INO @ 0=",
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                     "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
                     "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
@@ -27661,8 +27446,6 @@ def mixed_multi_record_second_commit_fence_fixture(
                         ),
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -27926,9 +27709,7 @@ def test_unlinked_cleanup_write_prefixes_converge_on_fresh_mount(
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -28117,9 +27898,7 @@ def test_one_block_unlinked_cleanup_write_prefixes_converge(
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -28333,9 +28112,7 @@ def _exercise_unlinked_cleanup_flush_fence(
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -29114,7 +28891,7 @@ def test_mount_cleans_linked_orphan_with_depth1_orphan_file_map(
                         "_OF1-LOAD-IOR 0=",
                         "_OF1-DEPTH 1 =",
                         "_OF1-TREE-IOR 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                     ]
                 )
@@ -29206,7 +28983,6 @@ def test_unlinked_preflight_accepts_depth1_orphan_file_map(
                 "CONSTANT _OU-FIND-IOR CONSTANT _OU-RECORD"
             ),
             "_OU-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OU-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _OU-CERT-BEGIN-IOR",
             "_OU-RECORD _EXT4-JFI-RECORD !",
             "_OU-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _OU-DEPTH-BEFORE",
@@ -29225,7 +29001,6 @@ def test_unlinked_preflight_accepts_depth1_orphan_file_map(
                         ),
                         "_OU-FIND-IOR 0=",
                         "_OU-JOURNAL-IOR 0=",
-                        "_OU-CERT-BEGIN-IOR 0=",
                         "_OU-RECORD _EXT4-OE.INO + @ 18 =",
                         (
                             "_OU-RECORD _EXT4-OE.KIND + @ "
@@ -29238,31 +29013,17 @@ def test_unlinked_preflight_accepts_depth1_orphan_file_map(
                         "0 _EXT4-JFI-RANGE CELL+ @ 1 =",
                         "_EXT4-JFI-DATA-BLOCKS @ 1 =",
                         "_EXT4-OV-BLOCKS @ 31 =",
-                        "_EXT4-OFR-EA @ 0=",
-                        "_EXT4-OFR-IOR @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        (
-                            "_EXT4-JFO-CERT-KIND @ "
-                            "_EXT4-JFO-CERT-JFI ="
-                        ),
-                        "_EXT4-JFO-CERT-RANGE-COUNT @ 1 =",
-                        f"0 _EXT4-JFO-CERT-RANGE @ {data_block} =",
-                        "0 _EXT4-JFO-CERT-RANGE CELL+ @ 1 =",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_OU-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-DEPTH1-ORPHAN-FILE-JFI-PREFLIGHT" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_OU-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
@@ -29294,8 +29055,6 @@ def test_unlinked_preflight_accepts_four_external_extent_leaves(
             (
                 f"{index} _EXT4-JFI-RANGE @ {physical} =",
                 f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
-                f"{index} _EXT4-JFO-CERT-RANGE @ {physical} =",
-                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
             )
         )
 
@@ -29313,7 +29072,6 @@ def test_unlinked_preflight_accepts_four_external_extent_leaves(
                 "CONSTANT _DL-FIND-IOR CONSTANT _DL-RECORD"
             ),
             "_DL-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DL-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _DL-CERT-BEGIN-IOR",
             "_DL-RECORD _EXT4-JFI-RECORD !",
             "_DL-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _DL-DEPTH-BEFORE",
@@ -29332,7 +29090,6 @@ def test_unlinked_preflight_accepts_four_external_extent_leaves(
                         ),
                         "_DL-FIND-IOR 0=",
                         "_DL-JOURNAL-IOR 0=",
-                        "_DL-CERT-BEGIN-IOR 0=",
                         "_DL-RECORD _EXT4-OE.INO + @ 18 =",
                         "_DL-PREFLIGHT-IOR 0=",
                         "_DL-DEPTH-BEFORE _DL-DEPTH-AFTER =",
@@ -29349,34 +29106,17 @@ def test_unlinked_preflight_accepts_four_external_extent_leaves(
                         "_EXT4-JFI-ACCOUNTED-BLOCKS 12 =",
                         "_EXT4-JFI-RELEASE-BLOCKS 12 =",
                         *range_checks,
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        (
-                            "_EXT4-JFO-CERT-KIND @ "
-                            "_EXT4-JFO-CERT-JFI ="
-                        ),
-                        (
-                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                            "_EXT4-JDM-DEPTH1-LEAVES ="
-                        ),
-                        (
-                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                            f"{len(data_ranges) + len(leaf_blocks)} ="
-                        ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_DL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-DEPTH1-FOUR-LEAF-JFI-PREFLIGHT" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_DL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
@@ -29427,8 +29167,6 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
             (
                 f"{index} _EXT4-JFI-RANGE @ {physical} =",
                 f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
-                f"{index} _EXT4-JFO-CERT-RANGE @ {physical} =",
-                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
             )
         )
 
@@ -29445,7 +29183,6 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
                 "_D13-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _D13-FIND-IOR CONSTANT _D13-RECORD"
             ),
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _D13-CERT-BEGIN-IOR",
             "_D13-RECORD _EXT4-JFI-RECORD !",
             "_D13-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _D13-DEPTH-BEFORE",
@@ -29459,7 +29196,6 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
                             "VFS-R-UNSUPPORTED ="
                         ),
                         "_D13-FIND-IOR 0=",
-                        "_D13-CERT-BEGIN-IOR 0=",
                         "_D13-PREFLIGHT-IOR 0=",
                         "_D13-DEPTH-BEFORE _D13-DEPTH-AFTER =",
                         (
@@ -29475,15 +29211,13 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
                         "_EXT4-JFI-RELEASE-RANGE-COUNT 14 =",
                         "_EXT4-JFI-RELEASE-BLOCKS 14 =",
                         "_D13-CTX _EXT4-C.MUTATION-RANGE-CAP + @ 528 =",
-                        "_EXT4-JFO-CERT-RANGE-COUNT @ 14 =",
                         *range_checks,
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_D13-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-DEPTH1-ONELEAF-THIRTEEN-RANGES" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
         ],
         patches=patches,
     )
@@ -29510,12 +29244,6 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
             "VFS-R-CORRUPT",
             "EXT4-D-DATA-MAP",
             id="leaf-to-other-leaf-alias",
-        ),
-        pytest.param(
-            "other-inode-owns-leaf",
-            "VFS-R-CORRUPT",
-            "EXT4-D-DATA-MAP",
-            id="other-inode-owns-leaf",
         ),
     ),
 )
@@ -29547,7 +29275,6 @@ def test_unlinked_preflight_rejects_malformed_external_extent_leaves(
                 "CONSTANT _D1R-FIND-IOR CONSTANT _D1R-RECORD"
             ),
             "_D1R-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _D1R-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _D1R-CERT-BEGIN-IOR",
             "_D1R-RECORD _EXT4-JFI-RECORD !",
             "_D1R-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _D1R-DEPTH-BEFORE",
@@ -29566,7 +29293,6 @@ def test_unlinked_preflight_rejects_malformed_external_extent_leaves(
                         ),
                         "_D1R-FIND-IOR 0=",
                         "_D1R-JOURNAL-IOR 0=",
-                        "_D1R-CERT-BEGIN-IOR 0=",
                         "_D1R-RECORD _EXT4-OE.INO + @ 18 =",
                         (
                             "_D1R-PREFLIGHT-IOR VFS-IOR-REASON "
@@ -29577,22 +29303,17 @@ def test_unlinked_preflight_rejects_malformed_external_extent_leaves(
                             f"{expected_detail} ="
                         ),
                         "_D1R-DEPTH-BEFORE _D1R-DEPTH-AFTER =",
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_D1R-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + f' IF ." {marker}" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_D1R-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
@@ -29604,6 +29325,65 @@ def test_unlinked_preflight_rejects_malformed_external_extent_leaves(
     )
     _assert_emitted(output, marker)
     _assert_emitted(output, clean_marker)
+
+
+def test_ownership_proof_refuses_unlinked_orphan_leaf_another_inode_owns(
+    canonical_images: dict[str, Path],
+) -> None:
+    """An orphan's extent leaf that another inode maps is owned twice.
+
+    The orphan preflight checks only the orphan's own tree.  The mount's
+    ownership proof, which runs before the first cleanup write, finds the
+    second owner.
+    """
+    path = canonical_images["primary-1k-i256"]
+    patches, _, _ = _malformed_depth1_external_leaves_unlinked_orphan_patches(
+        path,
+        "other-inode-owns-leaf",
+    )
+    marker = "EXT4-DEPTH1-LEAVES-OTHER-INODE-OWNS-LEAF-UNPROVED"
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _OLO-MOUNT-IOR CONSTANT _OLO-V"
+            ),
+            "_OLO-V _EXT4-CTX CONSTANT _OLO-CTX",
+            "DEPTH CONSTANT _OLO-DEPTH-BEFORE",
+            "_OLO-CTX _EXT4-PROVE-OWNERSHIP CONSTANT _OLO-PROOF-IOR",
+            "DEPTH CONSTANT _OLO-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_OLO-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_OLO-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_OLO-PROOF-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_OLO-PROOF-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+                        "_OLO-DEPTH-BEFORE _OLO-DEPTH-AFTER =",
+                        "_OLO-CTX _EXT4-C.OWNERSHIP + @ 0=",
+                        (
+                            "_OLO-CTX _EXT4-C.CLAIM-WORKSPACE + @ "
+                            "_OLO-CTX _EXT4-C.CLAIM-WORKSPACE-BYTES + @ "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+                        "_OLO-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
 
 
 @pytest.mark.parametrize("protocol", ("modern", "legacy"))
@@ -29673,7 +29453,6 @@ def test_external_extent_leaves_stage_exact_revokes(
                 "CONSTANT _DS-FIND-IOR CONSTANT _DS-RECORD"
             ),
             "_DS-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DS-JOURNAL-IOR",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _DS-CERT-BEGIN-IOR",
             (
                 "_DS-RECORD _DS-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
                 "CONSTANT _DS-MEASURE-IOR CONSTANT _DS-REVOKE "
@@ -29733,7 +29512,6 @@ def test_external_extent_leaves_stage_exact_revokes(
                         ),
                         "_DS-FIND-IOR 0=",
                         "_DS-JOURNAL-IOR 0=",
-                        "_DS-CERT-BEGIN-IOR 0=",
                         "_DS-MEASURE-IOR 0=",
                         "_DS-META 0>",
                         f"_DS-REVOKE {len(leaf_blocks)} =",
@@ -29787,7 +29565,6 @@ def test_external_extent_leaves_stage_exact_revokes(
                 + f' IF ." {marker}" THEN'
             ),
             "_DS-TX _EXT4-JTX-ABORT CONSTANT _DS-ABORT-IOR",
-            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
@@ -29797,9 +29574,7 @@ def test_external_extent_leaves_stage_exact_revokes(
                             "_EXT4-JWR-IDLE ="
                         ),
                         "_DS-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_DS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
@@ -29830,7 +29605,6 @@ def test_external_extent_leaves_qualification_sizes_revoke_capacity(
                 "CONSTANT _DQ-MOUNT-IOR CONSTANT _DQ-V"
             ),
             "_DQ-V _EXT4-CTX CONSTANT _DQ-CTX",
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _DQ-CERT-BEGIN-IOR",
             "DEPTH CONSTANT _DQ-DEPTH-BEFORE",
             (
                 "_DQ-CTX _EXT4-QUALIFY-ORPHAN-PLAN "
@@ -29848,20 +29622,16 @@ def test_external_extent_leaves_qualification_sizes_revoke_capacity(
                             "_DQ-MOUNT-IOR VFS-IOR-DETAIL "
                             "EXT4-D-RECOVERY ="
                         ),
-                        "_DQ-CERT-BEGIN-IOR 0=",
                         "_DQ-IOR 0=",
                         "_DQ-META 0>",
                         f"_DQ-REVOKE {len(leaf_blocks)} =",
                         "_DQ-DEPTH-BEFORE _DQ-DEPTH-AFTER =",
-                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
-                        "_EXT4-JFO-CERT-VALID @ 0<>",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_DQ-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-DEPTH1-LEAVES-QUALIFIED" THEN'
             ),
-            "_EXT4-JFO-CERT-END",
         ],
         patches=patches,
     )
@@ -29930,9 +29700,7 @@ def test_mount_reclaims_four_external_extent_leaves(
                         "_DR-CTX _EXT4-C.O.ACTIVE + @ 0=",
                         "_DR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
                         "_DR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {marker}" THEN'
@@ -29975,11 +29743,16 @@ def test_mount_reclaims_four_external_extent_leaves(
     )
 
 
-def test_unlinked_preflight_rejects_orphan_xattr_map_alias(
+def test_ownership_proof_rejects_orphan_xattr_map_alias(
     canonical_images: dict[str, Path],
 ) -> None:
+    """An orphan-file xattr block mapped again as preallocation refuses.
+
+    The mount's block-ownership proof claims the block twice, before mount
+    recovery could release it, and leaves the mount unproved.
+    """
     path = canonical_images["primary-1k-i256"]
-    patches, data_block, xattr_block = _orphan_xattr_map_alias_patches(path)
+    patches, _, _ = _orphan_xattr_map_alias_patches(path)
 
     output = run_forth(
         path,
@@ -29995,10 +29768,8 @@ def test_unlinked_preflight_rejects_orphan_xattr_map_alias(
                 "CONSTANT _OX-FIND-IOR CONSTANT _OX-RECORD"
             ),
             "_OX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OX-JOURNAL-IOR",
-            "_OX-RECORD _EXT4-JFI-RECORD !",
-            "_OX-CTX _EXT4-JFI-CTX !",
             "DEPTH CONSTANT _OX-DEPTH-BEFORE",
-            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _OX-PREFLIGHT-IOR",
+            "_OX-CTX _EXT4-PROVE-OWNERSHIP CONSTANT _OX-PROOF-IOR",
             "DEPTH CONSTANT _OX-DEPTH-AFTER",
             (
                 _forth_conjunction(
@@ -30019,22 +29790,16 @@ def test_unlinked_preflight_rejects_orphan_xattr_map_alias(
                             "_EXT4-OK-MODERN ="
                         ),
                         (
-                            "_OX-PREFLIGHT-IOR VFS-IOR-REASON "
+                            "_OX-PROOF-IOR VFS-IOR-REASON "
                             "VFS-R-CORRUPT ="
                         ),
                         (
-                            "_OX-PREFLIGHT-IOR VFS-IOR-DETAIL "
+                            "_OX-PROOF-IOR VFS-IOR-DETAIL "
                             "EXT4-D-DATA-MAP ="
                         ),
+                        "_OX-CTX _EXT4-C.OWNERSHIP + @ 0=",
                         "_OX-DEPTH-BEFORE _OX-DEPTH-AFTER =",
-                        "_EXT4-JFI-DATA-ENTRIES @ 1 =",
-                        f"0 _EXT4-JFI-RANGE @ {data_block} =",
-                        "0 _EXT4-JFI-RANGE CELL+ @ 1 =",
-                        f"_EXT4-OFR-EA @ {xattr_block} =",
-                        "_EXT4-OFR-IOR @ _OX-PREFLIGHT-IOR =",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_OX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
@@ -32892,17 +32657,11 @@ def test_typed_free_block_range_rejects_an_aliased_bitmap_home(
     _assert_emitted(output, "EXT4-TYPED-FREE-ALIAS-ABORTED")
 
 
-def test_mutation_authority_validates_inode_table_home_and_range_owner(
+def test_mutation_authority_validates_inode_table_home(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
     superblock, inode, inode_offset = _ext4_inode_record(path, 14)
-    data_block = _extent_root_physical(inode, 0)
-    assert data_block == 1346
-    _, leading_inode, _ = _ext4_inode_record(path, 13)
-    _, trailing_inode, _ = _ext4_inode_record(path, 16)
-    assert _extent_root_physical(leading_inode, 0) == data_block - 1
-    assert _extent_root_physical(trailing_inode, 0) == data_block + 1
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
     expected_range_capacity = 2 * (block_size // 4) + 16
     inodes_per_group = struct.unpack_from("<I", superblock, 0x28)[0]
@@ -32959,184 +32718,10 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "_MA-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
                 "CONSTANT _MA-RANGE-CAP"
             ),
-            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
-            "0 _MA-RANGE-WORKSPACE !",
-            "1 _MA-RANGE-WORKSPACE CELL+ !",
-            (
-                "_MA-RANGE-WORKSPACE 1 _MA-RANGE-CAP "
-                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
-                "CONSTANT _MA-PUBLISH-IOR"
-            ),
-            (
-                "0 1 _EXT4-MUTATION-OWNER-ALIASES? "
-                "CONSTANT _MA-ZERO-FIRST-ALIASES"
-            ),
-            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
-            "17 _EXT4-MAP-VALIDATION-LIMIT !",
             "_MA-ARENA ARENA-USED CONSTANT _MA-USED-BEFORE",
             "DEPTH CONSTANT _MA-DEPTH-BEFORE",
-            (
-                f"14 {data_block - 1} 2 _MA-CTX "
-                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER "
-                "CONSTANT _MA-LEADING-ALIAS-IOR"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ "
-                "CONSTANT _MA-LEADING-RANGE-COUNT"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0= "
-                "CONSTANT _MA-LEADING-SCOPE-CLEAN"
-            ),
-            (
-                "_EXT4-MAP-VALIDATION-LIMIT @ "
-                "CONSTANT _MA-LEADING-LIMIT"
-            ),
-            (
-                f"14 {data_block} 2 _MA-CTX "
-                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER "
-                "CONSTANT _MA-TRAILING-ALIAS-IOR"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ "
-                "CONSTANT _MA-TRAILING-RANGE-COUNT"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0= "
-                "CONSTANT _MA-TRAILING-SCOPE-CLEAN"
-            ),
-            (
-                "_EXT4-MAP-VALIDATION-LIMIT @ "
-                "CONSTANT _MA-TRAILING-LIMIT"
-            ),
-            "-1 _EXT4-JFO-CERT-VALID !",
-            (
-                f"14 {data_block} 1 _MA-CTX "
-                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER "
-                "CONSTANT _MA-UNIQUE-IOR"
-            ),
-            "_EXT4-JFO-CERT-BEGIN CONSTANT _MA-PAIR-CERT-BEGIN-IOR",
-            (
-                f"14 {data_block} 1 _MA-INODE-HOME 1 _MA-CTX "
-                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR "
-                "CONSTANT _MA-PAIR-HOME-FIRST-IOR"
-            ),
-            (
-                "_EXT4-JFO-CERT-VALID @ 0<> "
-                "CONSTANT _MA-PAIR-CERT-FIRST-VALID"
-            ),
-            (
-                "_EXT4-JFO-CERT-KIND @ _EXT4-JFO-CERT-UOW-PAIR = "
-                "CONSTANT _MA-PAIR-CERT-FIRST-KIND"
-            ),
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? "
-                "CONSTANT _MA-PAIR-CERT-FIRST-MATCH"
-            ),
-            (
-                "_EXT4-JFO-CERT-GEN @ "
-                "CONSTANT _MA-PAIR-CERT-SAVED-GEN"
-            ),
-            "1 _EXT4-JFO-CERT-GEN +!",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? 0= "
-                "CONSTANT _MA-PAIR-CERT-GEN-MISMATCH"
-            ),
-            "_MA-PAIR-CERT-SAVED-GEN _EXT4-JFO-CERT-GEN !",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? "
-                "CONSTANT _MA-PAIR-CERT-GEN-RESTORED"
-            ),
-            "0 _EXT4-UOW-CTX !",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? 0= "
-                "CONSTANT _MA-PAIR-CERT-CTX-MISMATCH"
-            ),
-            "_MA-CTX _EXT4-UOW-CTX !",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? "
-                "CONSTANT _MA-PAIR-CERT-CTX-RESTORED"
-            ),
-            "_EXT4-UOW-FIRST @ CONSTANT _MA-PAIR-FIRST-A",
-            "_EXT4-UOW-FIRST-B @ CONSTANT _MA-PAIR-FIRST-B",
-            "_MA-PAIR-FIRST-B _EXT4-UOW-FIRST !",
-            "_MA-PAIR-FIRST-A _EXT4-UOW-FIRST-B !",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? 0= "
-                "CONSTANT _MA-PAIR-CERT-ORDER-MISMATCH"
-            ),
-            "_MA-PAIR-FIRST-A _EXT4-UOW-FIRST !",
-            "_MA-PAIR-FIRST-B _EXT4-UOW-FIRST-B !",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? "
-                "CONSTANT _MA-PAIR-CERT-ORDER-RESTORED"
-            ),
-            "_EXT4-JFO-CERT-JFI _EXT4-JFO-CERT-KIND !",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? 0= "
-                "CONSTANT _MA-PAIR-CERT-KIND-MISMATCH"
-            ),
-            "_EXT4-JFO-CERT-UOW-PAIR _EXT4-JFO-CERT-KIND !",
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? "
-                "CONSTANT _MA-PAIR-CERT-KIND-RESTORED"
-            ),
-            (
-                "13 _MA-CTX _EXT4-LOAD-INODE "
-                "CONSTANT _MA-PAIR-DISTRACTOR-IOR"
-            ),
-            "0x12345678 _EXT4-JFO-IOR !",
-            (
-                f"14 {data_block} 1 _MA-INODE-HOME 1 _MA-CTX "
-                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR "
-                "CONSTANT _MA-PAIR-HOME-REUSE-IOR"
-            ),
-            (
-                "_EXT4-JFO-IOR @ "
-                "CONSTANT _MA-PAIR-CERT-REUSE-SENTINEL"
-            ),
-            (
-                "_EXT4-UOW-PAIR-CERT-MATCH? "
-                "CONSTANT _MA-PAIR-CERT-REUSE-MATCH"
-            ),
-            "_EXT4-IR-INO @ 14 = CONSTANT _MA-PAIR-REUSE-RESTORED-INO",
-            (
-                "_EXT4-IR-BLOCK @ _MA-INODE-HOME = "
-                "CONSTANT _MA-PAIR-REUSE-RESTORED-HOME"
-            ),
-            (
-                f"14 {data_block} 1 {data_block - 1} 1 _MA-CTX "
-                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR "
-                "CONSTANT _MA-PAIR-ALIAS-IOR"
-            ),
-            (
-                "_EXT4-JFO-CERT-SCOPE @ 0<> "
-                "CONSTANT _MA-PAIR-ALIAS-SCOPE-RETAINED"
-            ),
-            (
-                "_EXT4-JFO-CERT-VALID @ 0= "
-                "CONSTANT _MA-PAIR-ALIAS-CERT-CLEARED"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ "
-                "CONSTANT _MA-PAIR-ALIAS-RANGE-COUNT"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0= "
-                "CONSTANT _MA-PAIR-ALIAS-SCOPE-CLEAN"
-            ),
-            (
-                "_EXT4-MAP-VALIDATION-LIMIT @ "
-                "CONSTANT _MA-PAIR-ALIAS-LIMIT"
-            ),
-            "_EXT4-JFO-CERT-END",
             "DEPTH CONSTANT _MA-DEPTH-AFTER",
             "_MA-ARENA ARENA-USED CONSTANT _MA-USED-AFTER",
-            (
-                "_EXT4-MAP-VALIDATION-LIMIT @ "
-                "CONSTANT _MA-MAP-LIMIT-AFTER"
-            ),
-            "_MA-MAP-LIMIT-BEFORE _EXT4-MAP-VALIDATION-LIMIT !",
             *_forth_accumulated_conjunction(
                 "_MA-ALL-SAFE",
                 [
@@ -33180,87 +32765,6 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                         ),
                         "_MA-RANGE-WORKSPACE 0<>",
                         f"_MA-RANGE-CAP {expected_range_capacity} =",
-                        "_MA-PUBLISH-IOR 0=",
-                        "_MA-ZERO-FIRST-ALIASES",
-                        (
-                            "_MA-LEADING-ALIAS-IOR VFS-IOR-REASON "
-                            "VFS-R-CORRUPT ="
-                        ),
-                        (
-                            "_MA-LEADING-ALIAS-IOR VFS-IOR-DOMAIN "
-                            "VFS-IOR-D-FORMAT ="
-                        ),
-                        (
-                            "_MA-LEADING-ALIAS-IOR VFS-IOR-FLAGS "
-                            "VFS-IOR-F-CORRUPT ="
-                        ),
-                        (
-                            "_MA-LEADING-ALIAS-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-DATA-MAP ="
-                        ),
-                        (
-                            "_MA-TRAILING-ALIAS-IOR VFS-IOR-REASON "
-                            "VFS-R-CORRUPT ="
-                        ),
-                        (
-                            "_MA-TRAILING-ALIAS-IOR VFS-IOR-DOMAIN "
-                            "VFS-IOR-D-FORMAT ="
-                        ),
-                        (
-                            "_MA-TRAILING-ALIAS-IOR VFS-IOR-FLAGS "
-                            "VFS-IOR-F-CORRUPT ="
-                        ),
-                        (
-                            "_MA-TRAILING-ALIAS-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-DATA-MAP ="
-                        ),
-                        "_MA-UNIQUE-IOR 0=",
-                        (
-                            "_MA-PAIR-ALIAS-IOR VFS-IOR-REASON "
-                            "VFS-R-CORRUPT ="
-                        ),
-                        (
-                            "_MA-PAIR-ALIAS-IOR VFS-IOR-DOMAIN "
-                            "VFS-IOR-D-FORMAT ="
-                        ),
-                        (
-                            "_MA-PAIR-ALIAS-IOR VFS-IOR-FLAGS "
-                            "VFS-IOR-F-CORRUPT ="
-                        ),
-                        (
-                            "_MA-PAIR-ALIAS-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-DATA-MAP ="
-                        ),
-                        "_MA-PAIR-CERT-BEGIN-IOR 0=",
-                        "_MA-PAIR-HOME-FIRST-IOR 0=",
-                        "_MA-PAIR-CERT-FIRST-VALID",
-                        "_MA-PAIR-CERT-FIRST-KIND",
-                        "_MA-PAIR-CERT-FIRST-MATCH",
-                        "_MA-PAIR-CERT-GEN-MISMATCH",
-                        "_MA-PAIR-CERT-GEN-RESTORED",
-                        "_MA-PAIR-CERT-CTX-MISMATCH",
-                        "_MA-PAIR-CERT-CTX-RESTORED",
-                        "_MA-PAIR-CERT-ORDER-MISMATCH",
-                        "_MA-PAIR-CERT-ORDER-RESTORED",
-                        "_MA-PAIR-CERT-KIND-MISMATCH",
-                        "_MA-PAIR-CERT-KIND-RESTORED",
-                        "_MA-PAIR-DISTRACTOR-IOR 0=",
-                        "_MA-PAIR-HOME-REUSE-IOR 0=",
-                        "_MA-PAIR-CERT-REUSE-SENTINEL 0x12345678 =",
-                        "_MA-PAIR-CERT-REUSE-MATCH",
-                        "_MA-PAIR-REUSE-RESTORED-INO",
-                        "_MA-PAIR-REUSE-RESTORED-HOME",
-                        "_MA-PAIR-ALIAS-SCOPE-RETAINED",
-                        "_MA-PAIR-ALIAS-CERT-CLEARED",
-                        "_MA-LEADING-RANGE-COUNT 0=",
-                        "_MA-LEADING-SCOPE-CLEAN",
-                        "_MA-LEADING-LIMIT 17 =",
-                        "_MA-TRAILING-RANGE-COUNT 0=",
-                        "_MA-TRAILING-SCOPE-CLEAN",
-                        "_MA-TRAILING-LIMIT 17 =",
-                        "_MA-PAIR-ALIAS-RANGE-COUNT 0=",
-                        "_MA-PAIR-ALIAS-SCOPE-CLEAN",
-                        "_MA-PAIR-ALIAS-LIMIT 17 =",
                         (
                             "_MA-CTX _EXT4-C.MUTATION-RANGES + @ "
                             "_MA-RANGE-WORKSPACE ="
@@ -33269,10 +32773,7 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                             "_MA-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
                             "_MA-RANGE-CAP ="
                         ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_MA-MAP-LIMIT-AFTER 17 =",
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_MA-DEPTH-BEFORE _MA-DEPTH-AFTER =",
                         "_MA-USED-BEFORE _MA-USED-AFTER =",
                         "_EXT4-MAP-VALIDATION-LIMIT @ _MA-MAP-LIMIT-BEFORE =",
@@ -38060,7 +37561,7 @@ def test_staged_public_cross_group_allocation_refuses_actual_bitmap_alias(
                         "_CA-HOMES 0=",
                         "_CA-WRITER _CA-PROFILE-BASE =",
                         "_CA-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-CROSS-GROUP-BITMAP-ALIAS-REFUSED" THEN'
@@ -40080,7 +39581,7 @@ def staged_public_extent_root_growth_fixture(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-EXTENT-ROOT-GROWTH" THEN'
@@ -40614,7 +40115,7 @@ def staged_public_extent_root_growth_seven_home_fixture(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-ROOT-GROWTH-SEVEN-HOMES" THEN'
@@ -41033,7 +40534,7 @@ def staged_public_existing_extent_leaf_fixture(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-EXISTING-LEAF" THEN'
@@ -41691,7 +41192,7 @@ def staged_public_existing_extent_leaf_first_key_fixture(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-EXISTING-LEAF-FIRST-KEY" THEN'
@@ -42041,7 +41542,7 @@ def _staged_existing_extent_leaf_first_key_fault_lines(
                         "_EXT4-BYTES-ZERO?"
                     ),
                     "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ]
             )
             + ' IF ." EXT4-PUBLIC-EXISTING-LEAF-FIRST-KEY-FAULT" THEN'
@@ -42524,7 +42025,7 @@ def _staged_extent_root_growth_leaf_fault_lines(
                         "_EXT4-BYTES-ZERO?"
                     ),
                     "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ]
             )
             + ' IF ." EXT4-PUBLIC-EXTENT-ROOT-LEAF-FAULT" THEN'
@@ -42784,7 +42285,7 @@ def test_staged_public_extent_root_growth_fills_in_size_hole(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-ROOT-GROWTH-HOLE" THEN'
@@ -43180,7 +42681,7 @@ def test_staged_public_extent_root_growth_refuses_profile_four_without_io(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-EXTENT-ROOT-PROFILE4" THEN'
@@ -43440,7 +42941,7 @@ def test_staged_public_extent_root_growth_refuses_single_free_block_without_io(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-ROOT-GROWTH-SINGLE-FREE" THEN'
@@ -45353,7 +44854,7 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_profile_ca
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-CROSS-TAIL-PROFILE-CAPACITY" THEN'
@@ -49598,7 +49099,7 @@ def test_staged_write_updates_initialized_depth_positive_extent(
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                             (
                                 "_XW-DATA _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
@@ -49722,7 +49223,7 @@ def _general_write_forth(
                     "_GW-UNMOUNT-IOR 0=",
                     "_GW-V V.LIFECYCLE @ VFS-L-UNMOUNTED =",
                     "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ]
             )
             + f' IF ." {marker}" THEN'
@@ -49809,6 +49310,340 @@ def _general_write_case(
     got = _general_write_cat(media, file_path, jbd2_toolchain)
     assert got == _general_write_expected(base, writes)
     return got, trace
+
+
+def _ownership_patched_media(
+    image: Path, patches: tuple[tuple[int, bytes], ...]
+) -> bytearray:
+    media = bytearray(image.read_bytes())
+    for offset, blob in patches:
+        media[offset : offset + len(blob)] = blob
+    return media
+
+
+def _block_bitmap_bit_patches(
+    media: bytes | bytearray, group: int, block: int, value: bool
+) -> dict[int, bytes]:
+    """Set or clear BLOCK's bit in GROUP's bitmap, restamping its checksums."""
+    superblock = bytes(media[1024:2048])
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    table = 2 if block_size == 1024 else 1
+    descriptor_offset = table * block_size + group * 64
+    descriptor = bytearray(media[descriptor_offset : descriptor_offset + 64])
+    bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0]
+    bitmap = bytearray(
+        media[bitmap_home * block_size : (bitmap_home + 1) * block_size]
+    )
+    index = block - first_data - group * per_group
+    assert 0 <= index < per_group
+    assert bool(bitmap[index // 8] & (1 << (index % 8))) != value
+    if value:
+        bitmap[index // 8] |= 1 << (index % 8)
+    else:
+        bitmap[index // 8] &= ~(1 << (index % 8)) & 0xFF
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    checksum = _crc32c_raw(bytes(bitmap[: per_group // 8]), seed)
+    struct.pack_into("<H", descriptor, 0x18, checksum & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x38, checksum >> 16)
+    return {
+        bitmap_home * block_size: bytes(bitmap),
+        descriptor_offset: _group_descriptor_with_checksum(
+            superblock, descriptor, group
+        ),
+    }
+
+
+def _ownership_fault_patches(
+    image: Path, case: str
+) -> tuple[tuple[tuple[int, bytes], ...], str]:
+    """Activation patches plus one ownership fault, with its refusal detail.
+
+    On the canonical fixture, payload.txt (inode 14) maps block 1346 and
+    names the refcount-one xattr block 1349, the slow symlink (inode 16)
+    maps block 1347, and block 3000 is free.
+    """
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    assert isinstance(patches, tuple)
+    media = _ownership_patched_media(image, patches)
+    superblock = bytes(media[1024:2048])
+    extra: dict[int, bytes] = {}
+    detail = "EXT4-D-DATA-MAP"
+    if case == "cross-link":
+        _, _, offset = _ext4_inode_record(image, 16)
+        record = bytearray(media[offset : offset + 256])
+        start = 0x28 + 12 + 8
+        assert struct.unpack_from("<I", record, start)[0] == 1347
+        struct.pack_into("<I", record, start, 1346)
+        extra[offset] = _inode_with_checksum(superblock, 16, record)
+    elif case == "leaked-bit":
+        extra.update(_block_bitmap_bit_patches(media, 0, 3000, True))
+    elif case == "unmarked-block":
+        extra.update(_block_bitmap_bit_patches(media, 0, 1346, False))
+    elif case == "xattr-refcount":
+        block = bytearray(media[1349 * 1024 : 1350 * 1024])
+        assert struct.unpack_from("<I", block, 4)[0] == 1
+        struct.pack_into("<I", block, 4, 2)
+        extra[1349 * 1024] = _external_xattr_block_with_checksum(
+            superblock, 1349, block
+        )
+        detail = "EXT4-D-XATTR"
+    else:
+        assert case == "consistent"
+    merged = dict(patches)
+    merged.update(extra)
+    return tuple(merged.items()), detail
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("consistent", "cross-link", "leaked-bit", "unmarked-block", "xattr-refcount"),
+)
+def test_ownership_proof_claims_every_block_once(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    case: str,
+) -> None:
+    """The mount's ownership proof holds only where bitmaps and owners agree.
+
+    The consistent fixture proves once, its claim map rolled back off the
+    arena, and a second request answers from the mount.  A block mapped by
+    two files, a bitmap bit no owner claims, an owned block its bitmap marks
+    free, and a shared xattr block whose reference count is wrong each
+    refuse and leave the mount unproved.
+    """
+    image = canonical_images["primary-1k-i256"]
+    patches, detail = _ownership_fault_patches(image, case)
+    lines = [
+        "T-ARENA CONSTANT _OP-ARENA",
+        (
+            "_OP-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            "CONSTANT _OP-MOUNT-IOR CONSTANT _OP-V"
+        ),
+        "_OP-V _EXT4-CTX CONSTANT _OP-CTX",
+        "_OP-ARENA ARENA-USED CONSTANT _OP-USED-BEFORE",
+        "_OP-CTX _EXT4-PROVE-OWNERSHIP CONSTANT _OP-IOR",
+        "_OP-ARENA ARENA-USED CONSTANT _OP-USED-AFTER",
+        "_OP-CTX _EXT4-C.OWNERSHIP + @ CONSTANT _OP-PROVED",
+        "_OP-CTX _EXT4-PROVE-OWNERSHIP CONSTANT _OP-AGAIN-IOR",
+    ]
+    if case == "consistent":
+        outcome = ["_OP-IOR 0=", "_OP-PROVED -1 =", "_OP-AGAIN-IOR 0="]
+    else:
+        outcome = [
+            "_OP-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+            f"_OP-IOR VFS-IOR-DETAIL {detail} =",
+            "_OP-PROVED 0=",
+            "_OP-AGAIN-IOR _OP-IOR =",
+        ]
+    lines += [
+        "0 _OP-V VFS-UNMOUNT CONSTANT _OP-UNMOUNT-IOR",
+        (
+            _forth_conjunction(
+                [
+                    "_OP-MOUNT-IOR 0=",
+                    *outcome,
+                    "_OP-USED-AFTER _OP-USED-BEFORE =",
+                    "_OP-UNMOUNT-IOR 0=",
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+                ]
+            )
+            + ' IF ." EXT4-OWNERSHIP-PROOF-OK" THEN'
+        ),
+    ]
+    output, trace, _ = run_recovery_forth(
+        image,
+        tmp_path / f"ownership-{case}.img",
+        lines,
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-OWNERSHIP-PROOF-OK")
+    assert not any(kind == "write" for kind, _, _ in trace)
+
+
+def test_first_write_on_a_cross_linked_volume_refuses_without_writes(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    """A write never starts on a volume the ownership proof refuses.
+
+    The slow symlink is made to map payload.txt's block.  The proof runs at
+    the mount's first write, before any staging, so the write returns the
+    cross-link refusal and the medium is never written.
+    """
+    image = canonical_images["primary-1k-i256"]
+    patches, _ = _ownership_fault_patches(image, "cross-link")
+    lines = [
+        "CREATE _CW-BUF 16 ALLOT _CW-BUF 16 65 FILL",
+        (
+            ": _CW-NOW ( context -- epoch-ms ior ) "
+            f"DROP {_GENERAL_WRITE_EPOCH_MS} 0 ;"
+        ),
+        "T-ARENA CONSTANT _CW-ARENA",
+        (
+            "_CW-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            "CONSTANT _CW-MOUNT-IOR CONSTANT _CW-V"
+        ),
+        "' _CW-NOW 0 _CW-V EXT4-BIND-WRITE-CLOCK? CONSTANT _CW-CLOCK-IOR",
+        *_ext4_dedicated_writer_profile_forth("_CW-PROFILE", "_CW-V", 8, 4, 0),
+        (
+            'S" /fixture/payload.txt" VFS-FF-READ VFS-FF-WRITE OR _CW-V '
+            "VFS-OPEN? CONSTANT _CW-OPEN-IOR CONSTANT _CW-FD"
+        ),
+        "_CW-BUF 16 _CW-FD VFS-WRITE? CONSTANT _CW-IOR CONSTANT _CW-ACTUAL",
+        "_CW-V _EXT4-CTX _EXT4-C.OWNERSHIP + @ CONSTANT _CW-PROVED",
+        (
+            _forth_conjunction(
+                [
+                    "_CW-MOUNT-IOR 0=",
+                    "_CW-CLOCK-IOR 0=",
+                    "_CW-PROFILE-BIND-IOR 0=",
+                    "_CW-OPEN-IOR 0=",
+                    "_CW-ACTUAL 0=",
+                    "_CW-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                    "_CW-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+                    "_CW-PROVED 0=",
+                    "_CW-V _EXT4-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+                ]
+            )
+            + ' IF ." EXT4-CROSS-LINKED-WRITE-REFUSED" THEN'
+        ),
+    ]
+    output, trace, _ = run_recovery_forth(
+        image,
+        tmp_path / "ownership-cross-linked-write.img",
+        lines,
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-CROSS-LINKED-WRITE-REFUSED")
+    assert not any(kind == "write" for kind, _, _ in trace)
+
+
+@pytest.mark.parametrize("case", ("staged", "cross-link", "dropped-block"))
+def test_general_write_map_check_refuses_a_misdirected_extent(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    case: str,
+) -> None:
+    """A staged map must differ from the old one by exactly the allocation.
+
+    One pass appends a block to payload.txt, which maps block 1346, as a
+    second extent.  Its prover passes as staged.  Pointing the new extent
+    at the slow symlink's block 1347 instead, or the old extent at it in
+    place of 1346, refuses: the first maps another file's block and leaves
+    the allocated block unmapped, the second drops 1346 without freeing it.
+    """
+    image = canonical_images["primary-1k-i256"]
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    assert isinstance(patches, tuple)
+    # payload.txt's root sits at 0x28 in its record; entry N's physical
+    # start is at 12 + 12 * N + 8 inside it.
+    tamper = {
+        "staged": (),
+        "cross-link": (0x28 + 24 + 8, 1347),
+        "dropped-block": (0x28 + 12 + 8, 1347),
+    }[case]
+    lines = [
+        (
+            ": _MC-NOW ( context -- epoch-ms ior ) "
+            f"DROP {_GENERAL_WRITE_EPOCH_MS} 0 ;"
+        ),
+        "CREATE _MC-BUF 1024 ALLOT _MC-BUF 1024 65 FILL",
+        "CREATE _MC-COPY 1024 ALLOT",
+        "T-ARENA CONSTANT _MC-ARENA",
+        (
+            "_MC-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            "CONSTANT _MC-MOUNT-IOR CONSTANT _MC-V"
+        ),
+        "' _MC-NOW 0 _MC-V EXT4-BIND-WRITE-CLOCK? CONSTANT _MC-CLOCK-IOR",
+        *_ext4_dedicated_writer_profile_forth("_MC-PROFILE", "_MC-V", 8, 4, 0),
+        "_MC-V _EXT4-MOW-V ! 0 _EXT4-MOW-ENTRY CONSTANT _MC-ENTRY-IOR",
+        (
+            "_MC-V _XW-V ! 0 _XW-VN ! _MC-BUF _XW-SOURCE ! "
+            "1024 _XW-COUNT ! 1024 _XW-OFFSET !"
+        ),
+        (
+            "14 _XW-INO ! 0 _XW-EXPECTED-GEN ! 1700000000 _XW-SECONDS ! "
+            "0 _XW-NSEC ! FALSE _XW-ORPHAN !"
+        ),
+        "_EXT4-MOW-CTX @ _XW-CTX ! 1024 _XW-BSIZE !",
+        (
+            "1 1 0 _XW-CTX @ _EXT4-JWR-ENSURE "
+            "CONSTANT _MC-WRITER-IOR _XW-WRITER !"
+        ),
+        (
+            "_XW-WRITER @ _EXT4-JWR.META-CAP + @ "
+            "_XW-WRITER @ _EXT4-JWR.DATA-CAP + @ 0 "
+            "_XW-WRITER @ _EXT4-JTX-BEGIN CONSTANT _MC-BEGIN-IOR _XW-TX !"
+        ),
+        "_XW-STAGE CONSTANT _MC-STAGE-IOR",
+        (
+            "_XW-INODE-HOME @ _XW-TX @ _EXT4-JTX-META-IMAGE "
+            "CONSTANT _MC-IMAGE-IOR CONSTANT _MC-IMAGE"
+        ),
+        (
+            "_MC-IMAGE _XW-INODE-OFF @ + 0x28 + "
+            "DUP 2 + W@ 2 = SWAP 24 + 8 + L@ 1351 = AND "
+            "CONSTANT _MC-SHAPE"
+        ),
+    ]
+    if tamper:
+        offset, value = tamper
+        lines += [
+            "_MC-IMAGE _MC-COPY 1024 MOVE",
+            f"{value} _MC-COPY _XW-INODE-OFF @ + {offset} + L!",
+            (
+                "_MC-COPY _XW-INODE-HOME @ _XW-TX @ _EXT4-JTX-META-REPLACE "
+                "CONSTANT _MC-REPLACE-IOR"
+            ),
+        ]
+    else:
+        lines.append("0 CONSTANT _MC-REPLACE-IOR")
+    lines += [
+        "_XW-PROVE CONSTANT _MC-PROVE-IOR",
+        "_XW-TX @ _EXT4-JTX-ABORT CONSTANT _MC-ABORT-IOR",
+        "0 _MC-V VFS-UNMOUNT CONSTANT _MC-UNMOUNT-IOR",
+    ]
+    if case == "staged":
+        verdict = ["_MC-PROVE-IOR 0="]
+    else:
+        verdict = [
+            "_MC-PROVE-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+            "_MC-PROVE-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+        ]
+    lines.append(
+        _forth_conjunction(
+            [
+                "_MC-MOUNT-IOR 0=",
+                "_MC-CLOCK-IOR 0=",
+                "_MC-PROFILE-BIND-IOR 0=",
+                "_MC-ENTRY-IOR 0=",
+                "_MC-WRITER-IOR 0=",
+                "_MC-BEGIN-IOR 0=",
+                "_MC-STAGE-IOR 0=",
+                "_MC-IMAGE-IOR 0=",
+                "_MC-SHAPE",
+                "_MC-REPLACE-IOR 0=",
+                *verdict,
+                "_MC-ABORT-IOR 0=",
+                "_MC-UNMOUNT-IOR 0=",
+                *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+            ]
+        )
+        + ' IF ." EXT4-MAP-CHECK-OK" THEN'
+    )
+    output, trace, _ = run_recovery_forth(
+        image,
+        tmp_path / f"map-check-{case}.img",
+        lines,
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-MAP-CHECK-OK")
+    assert not any(kind == "write" for kind, _, _ in trace)
 
 
 def test_general_write_spans_transactions_and_merges_one_run(
@@ -50446,7 +50281,7 @@ def _general_truncate_forth(
                     "_GTR-UNMOUNT-IOR 0=",
                     "_GTR-V V.LIFECYCLE @ VFS-L-UNMOUNTED =",
                     "_XW-DATA _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ]
             )
             + f' IF ." {marker}" THEN'
@@ -51119,6 +50954,162 @@ def test_general_truncate_across_transactions_crash_cuts_recover(
     assert _general_write_cat(recovered, "/long.bin", jbd2_toolchain) == expected
 
 
+_MAP_CHECK_KIND_CASES = (
+    # name, kind, record edit, block changes, passes
+    ("kept", "_EXT4-NMC-RETAINED", "links", (), True),
+    ("moved", "_EXT4-NMC-RETAINED", 3000, ("alloc 3000", "free 1347"), True),
+    ("cross-link", "_EXT4-NMC-RETAINED", 1346, (), False),
+    ("leak", "_EXT4-NMC-RETAINED", 3000, ("alloc 3000",), False),
+    ("created", "_EXT4-NMC-CREATED", 3000, ("alloc 3000",), True),
+    ("created-stray", "_EXT4-NMC-CREATED", "links", (), False),
+    ("freed", "_EXT4-NMC-FREED", "zero", ("free 1347",), True),
+    ("freed-unreleased", "_EXT4-NMC-FREED", "zero", (), False),
+)
+
+
+def test_transaction_map_check_balances_each_record_kind(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    """Each staged record kind must balance against the bitmap changes.
+
+    The namespace operations name the records they stage as kept, created
+    or freed.  Staging inode 16, a slow symlink mapping block 1347, by hand
+    under each kind shows the shared check: a kept record whose map stays
+    as it is passes untouched, one moved to block 3000 passes only when
+    3000 is allocated and 1347 freed, and one pointed at inode 14's block
+    1346 refuses.  A created record passes only when its blocks are
+    allocated, and a freed one only when its blocks are freed.  Every check
+    leaves the mount's claim map clear.
+    """
+    image = canonical_images["primary-1k-i256"]
+    fixture = _build_jbd2_activation_fixture(image)
+    patches = fixture["source_patches"]
+    assert isinstance(patches, tuple)
+    lines = [
+        (
+            ": _NC-NOW ( context -- epoch-ms ior ) "
+            f"DROP {_GENERAL_WRITE_EPOCH_MS} 0 ;"
+        ),
+        "T-ARENA CONSTANT _NC-ARENA",
+        (
+            "_NC-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            "CONSTANT _NC-MOUNT-IOR CONSTANT _NC-V"
+        ),
+        "' _NC-NOW 0 _NC-V EXT4-BIND-WRITE-CLOCK? CONSTANT _NC-CLOCK-IOR",
+        *_ext4_dedicated_writer_profile_forth("_NC-PROFILE", "_NC-V", 8, 4, 0),
+        "_NC-V _EXT4-MOW-V ! 0 _EXT4-MOW-ENTRY CONSTANT _NC-ENTRY-IOR",
+        "_EXT4-MOW-CTX @ CONSTANT _NC-CTX",
+        (
+            "1 1 0 _NC-CTX _EXT4-JWR-ENSURE "
+            "CONSTANT _NC-WRITER-IOR CONSTANT _NC-WRITER"
+        ),
+        "16 _NC-CTX _EXT4-LOAD-ORPHAN-INODE CONSTANT _NC-LOAD-IOR",
+        "_EXT4-IR-BLOCK @ CONSTANT _NC-HOME _EXT4-IR-OFF @ CONSTANT _NC-OFF",
+    ]
+    conjuncts = [
+        "_NC-MOUNT-IOR 0=",
+        "_NC-CLOCK-IOR 0=",
+        "_NC-PROFILE-BIND-IOR 0=",
+        "_NC-ENTRY-IOR 0=",
+        "_NC-WRITER-IOR 0=",
+        "_NC-LOAD-IOR 0=",
+    ]
+    for index, (name, kind, edit, changes, passes) in enumerate(
+        _MAP_CHECK_KIND_CASES
+    ):
+        tag = f"_NC{index}"
+        record = f"{tag}-IMAGE _NC-OFF +"
+        if edit == "links":
+            change = f"{record} _EXT4-I.LINKS + DUP W@ 1+ SWAP W!"
+        elif edit == "zero":
+            change = f"{record} _NC-CTX _EXT4-C.ISIZE + @ 0 FILL"
+        else:
+            change = f"{edit} {record} 0x28 + 12 + 8 + L!"
+        lines += [
+            (
+                "_NC-WRITER _EXT4-JWR.META-CAP + @ "
+                "_NC-WRITER _EXT4-JWR.DATA-CAP + @ 0 _NC-WRITER "
+                f"_EXT4-JTX-BEGIN CONSTANT {tag}-BEGIN CONSTANT {tag}-TX"
+            ),
+            "_NC-HOME _NC-CTX _EXT4-READ-BLOCK CONSTANT " f"{tag}-READ",
+            (
+                f"_NC-CTX _EXT4-C.BLOCK + _NC-HOME {tag}-TX "
+                f"_EXT4-JTX-META-ACQUIRE CONSTANT {tag}-ACQUIRE "
+                f"CONSTANT {tag}-IMAGE"
+            ),
+            change,
+            (
+                f"{tag}-IMAGE _NC-HOME {tag}-TX _EXT4-JTX-META-REPLACE "
+                f"CONSTANT {tag}-REPLACE"
+            ),
+        ]
+        steps = []
+        for step in changes:
+            verb, block = step.split()
+            if verb == "alloc":
+                steps.append(f"{block} {tag}-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK")
+            else:
+                steps.append(
+                    f"{block} 1 {tag}-TX _EXT4-JTX-STAGE-FREE-BLOCK-RANGE"
+                )
+        lines.append(
+            " ".join(steps + ["0"] + ["OR"] * len(steps))
+            + f" CONSTANT {tag}-CHANGES"
+        )
+        lines += [
+            f"_NC-CTX {tag}-TX _EXT4-NMC-BEGIN CONSTANT {tag}-OPEN",
+            (
+                f"16 _NC-HOME _NC-OFF {kind} _EXT4-NMC-OLD "
+                "_EXT4-NMC-BITMAPS "
+                f"16 _NC-HOME _NC-OFF {kind} _EXT4-NMC-NEW "
+                f"_EXT4-NMC-END CONSTANT {tag}-CHECK"
+            ),
+            f"{tag}-TX _EXT4-JTX-ABORT CONSTANT {tag}-ABORT",
+            f'." [{name} " {tag}-CHECK VFS-IOR-REASON . '
+            f'{tag}-CHECK VFS-IOR-DETAIL . ." ]"',
+        ]
+        conjuncts += [
+            f"{tag}-BEGIN 0=",
+            f"{tag}-READ 0=",
+            f"{tag}-ACQUIRE 0=",
+            f"{tag}-REPLACE 0=",
+            f"{tag}-CHANGES 0=",
+            f"{tag}-OPEN 0=",
+            f"{tag}-ABORT 0=",
+        ]
+        if passes:
+            conjuncts.append(f"{tag}-CHECK 0=")
+        else:
+            conjuncts += [
+                f"{tag}-CHECK VFS-IOR-REASON VFS-R-CORRUPT =",
+                f"{tag}-CHECK VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+            ]
+    lines += [
+        (
+            "_NC-CTX _EXT4-C.CLAIM-WORKSPACE + @ _NC-CTX _EXT4-OWN-BYTES "
+            "_EXT4-BYTES-ZERO? CONSTANT _NC-CLEAR"
+        ),
+        "0 _NC-V VFS-UNMOUNT CONSTANT _NC-UNMOUNT-IOR",
+    ]
+    conjuncts += [
+        "_NC-CLEAR",
+        "_NC-UNMOUNT-IOR 0=",
+        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+    ]
+    lines.append(
+        _forth_conjunction(conjuncts) + ' IF ." EXT4-MAP-CHECK-KINDS-OK" THEN'
+    )
+    output, trace, _ = run_recovery_forth(
+        image,
+        tmp_path / "map-check-kinds.img",
+        lines,
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-MAP-CHECK-KINDS-OK")
+    assert not any(kind == "write" for kind, _, _ in trace)
+
+
 @pytest.fixture(scope="session")
 def staged_multiblock_exact_fixture(
     extent_writer_activation_fixture: dict[str, object],
@@ -51366,7 +51357,7 @@ def staged_multiblock_exact_fixture(
                         "_EXT4-MUTATION-MAP-TARGET @ 0=",
                         "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                         "_EXT4-MUTATION-MAP-HITS @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         (
                             "_XW-DATA _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
@@ -51837,7 +51828,7 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                             (
                                 "_XW-DATA _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
@@ -52011,7 +52002,7 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                             (
                                 "_XW-DATA _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
@@ -52274,26 +52265,16 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "CONSTANT _RETRY-RANGE-CAP"
             ),
             (
-                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
-                "CONSTANT _RETRY-CERT-PTR"
-            ),
-            (
-                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
-                "CONSTANT _RETRY-CERT-CAP"
-            ),
-            (
                 ": _RETRY-POISON-RANGES "
                 "_RETRY-RANGE-PTR ?DUP IF "
                 "_RETRY-RANGE-CAP 2* CELLS 0xA5 FILL "
-                "THEN "
-                "_RETRY-CERT-PTR ?DUP IF "
-                "_RETRY-CERT-CAP 2* CELLS 0x5A FILL "
                 "THEN ; _RETRY-POISON-RANGES"
             ),
             "7 _RETRY-CTX _EXT4-C.J.REVOKE-COUNT + !",
             "8 _RETRY-CTX _EXT4-C.J.REVOKE-HITS + !",
             "-1 _RETRY-CTX _EXT4-C.J.REVOKE-READY + !",
             "-1 _RETRY-CTX _EXT4-C.J.PROTOCOL-OWNERS + !",
+            "-1 _RETRY-CTX _EXT4-C.OWNERSHIP + !",
             "_RETRY-V _EXT4-MOUNT CONSTANT _RETRY-IOR-2",
             "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-2",
             (
@@ -52306,24 +52287,17 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "_RETRY-MAP 0<> AND "
                 "_RETRY-RANGE-PTR 0<> AND "
                 "_RETRY-RANGE-CAP 0<> AND "
-                "_RETRY-CERT-PTR 0<> AND "
-                "_RETRY-CERT-CAP _RETRY-RANGE-CAP = AND "
                 "_RETRY-CTX _EXT4-C.MUTATION-RANGES + @ "
                 "_RETRY-RANGE-PTR = AND "
                 "_RETRY-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
                 "_RETRY-RANGE-CAP = AND "
                 "_RETRY-RANGE-PTR _RETRY-RANGE-CAP 2* CELLS "
                 "_EXT4-BYTES-ZERO? AND "
-                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
-                "_RETRY-CERT-PTR = AND "
-                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
-                "_RETRY-CERT-CAP = AND "
-                "_RETRY-CERT-PTR _RETRY-CERT-CAP 2* CELLS "
-                "_EXT4-BYTES-ZERO? AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0= AND "
+                "_RETRY-CTX _EXT4-C.OWNERSHIP + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.READY + @ 0= AND "
                 "_RETRY-V V.LIFECYCLE @ VFS-L-NEW = AND "
                 'IF ." EXT4-MOUNT-RETRY-WORKSPACE-OK" THEN'
@@ -53125,7 +53099,7 @@ def staged_public_linear_htree_create_fixture(
                     "_CG-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                     "_CG-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_CG-V V.FLAGS @ VFS-F-RO AND 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -53771,7 +53745,7 @@ def test_staged_vfs_linear_htree_conversion_uses_nonadjacent_cross_group_leaves(
                     "_XCG-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                     "_XCG-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_XCG-V V.FLAGS @ VFS-F-RO AND 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -54117,21 +54091,7 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
             "_CHR-STAT VSF.BFREE @ CONSTANT _CHR-BFREE-BEFORE",
             "_CHR-STAT VSF.FFREE @ CONSTANT _CHR-FFREE-BEFORE",
             "_CHR-XC-PLAN ?DUP IF _XC-P-SIZE 0xA5 FILL THEN",
-            (
-                "_CHR-CTX _EXT4-C.MUTATION-RANGES + @ "
-                "CONSTANT _CHR-AMBIENT-RANGES"
-            ),
-            (
-                "_CHR-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
-                "CONSTANT _CHR-AMBIENT-CAP"
-            ),
-            "1351 _CHR-AMBIENT-RANGES !",
-            "1 _CHR-AMBIENT-RANGES CELL+ !",
-            (
-                "_CHR-AMBIENT-RANGES 1 _CHR-AMBIENT-CAP "
-                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
-                "CONSTANT _CHR-AMBIENT-PUBLISH-IOR"
-            ),
+            "1351 _EXT4-MUTATION-MAP-TARGET !",
             (
                 "_XC-REQUIRE-CONVERSION-PROOF-IDLE "
                 "CONSTANT _CHR-AMBIENT-GUARD-IOR"
@@ -54164,20 +54124,9 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
             "_CHR-V V.STR-PTR @ CONSTANT _CHR-AMBIENT-STR",
             *_forth_accumulated_conjunction(
                 "_CHR-AMBIENT-PRESERVED",
-                [
-                    (
-                        "_EXT4-MUTATION-OWNER-RANGES @ "
-                        "_CHR-AMBIENT-RANGES ="
-                    ),
-                    "_EXT4-MUTATION-OWNER-RANGE-CAP @ _CHR-AMBIENT-CAP =",
-                    "_EXT4-MUTATION-OWNER-RANGE-COUNT @ 1 =",
-                    "_EXT4-MUTATION-OWNER-BOUND-FIRST @ 1351 =",
-                    "_EXT4-MUTATION-OWNER-BOUND-LIMIT @ 1352 =",
-                    "_CHR-AMBIENT-RANGES @ 1351 =",
-                    "_CHR-AMBIENT-RANGES CELL+ @ 1 =",
-                ],
+                ["_EXT4-MUTATION-MAP-TARGET @ 1351 ="],
             ),
-            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
+            "0 _EXT4-MUTATION-MAP-TARGET !",
             "_CHR-XC-PLAN ?DUP IF _XC-P-SIZE 0x5A FILL THEN",
             "DEPTH CONSTANT _CHR-DEPTH-BEFORE",
             (
@@ -54259,7 +54208,6 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                     "_CHR-CD-IOR 0=",
                     "_CHR-LOAD-IOR 0=",
                     "_CHR-STAT-BEFORE-IOR 0=",
-                    "_CHR-AMBIENT-PUBLISH-IOR 0=",
                     "_CHR-AMBIENT-GUARD-IOR VFS-E-BUSY =",
                     "_CHR-AMBIENT-IOR VFS-E-BUSY =",
                     "_CHR-AMBIENT-LAST-IOR _CHR-AMBIENT-IOR =",
@@ -54354,15 +54302,12 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                         "_XC-POST-CONVERT-NEW-FREE @ OR 0="
                     ),
                     "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                    "_EXT4-MUTATION-OWNER-INO @ 0=",
                     "_EXT4-MUTATION-MAP-TARGET @ 0=",
                     "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                     "_EXT4-MUTATION-MAP-HITS @ 0=",
                     "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                     "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     "_CHR-UNMOUNT-IOR 0=",
                     "_CHR-PROFILE-ARENA ARENA-USED 0=",
                 ],
@@ -54733,15 +54678,12 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
                                 "_XC-POST-CONVERT-NEW-FREE @ OR 0="
                             ),
                             "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                            "_EXT4-MUTATION-OWNER-INO @ 0=",
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
                             "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                             "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
-                            "_EXT4-JFO-CERT-SCOPE @ 0=",
-                            "_EXT4-JFO-CERT-VALID @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
                 ),
                 (
@@ -56425,7 +56367,7 @@ def staged_public_indexed_leaf_split_fixture(
                     "_ILS-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                     "_ILS-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_ILS-V V.FLAGS @ VFS-F-RO AND 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -56869,15 +56811,12 @@ def test_staged_vfs_indexed_leaf_split_new_leaf_tear_replays_ten_homes(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                        "_EXT4-MUTATION-OWNER-INO @ 0=",
                         "_EXT4-MUTATION-MAP-TARGET @ 0=",
                         "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                         "_EXT4-MUTATION-MAP-HITS @ 0=",
                         "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                         "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
                 ),
                 (
@@ -57540,7 +57479,7 @@ def test_staged_vfs_indexed_create_selected_leaf_tear_replays_six_homes(
                                 "_EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-INDEXED-CREATE-W22-SCRUBBED" THEN'
@@ -57787,6 +57726,7 @@ def _run_staged_indexed_create_refusal(
     setup_checks: tuple[str, ...] = (),
     metadata_capacity: int = 6,
     max_steps: int = 1_200_000_000,
+    clock_calls: int = 1,
 ) -> None:
     """Exercise one indexed CREATE refusal through the public VFS."""
     assert target_name and '"' not in target_name
@@ -57937,7 +57877,7 @@ def _run_staged_indexed_create_refusal(
                     "_IR-STAT-AFTER-IOR 0=",
                     "_IR-BFREE-AFTER _IR-BFREE-BEFORE =",
                     "_IR-FFREE-AFTER _IR-FFREE-BEFORE =",
-                    "_IR-CLOCK-CALLS @ 1 =",
+                    f"_IR-CLOCK-CALLS @ {clock_calls} =",
                     "_IR-WRITER _IR-PROFILE-BASE =",
                     "_IR-WRITER-CLEAN 0<>",
                     "_IR-HOME-WRITES 0=",
@@ -57961,11 +57901,14 @@ def _run_staged_indexed_create_refusal(
                         "_XC-CONVERT-PLAN-CELLS * CELLS "
                         "_EXT4-BYTES-ZERO?"
                     ),
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     "_IR-UNMOUNT-IOR 0=",
                 ],
             ),
-            f'_IR-OK @ IF ." {marker}" THEN',
+            (
+                f'_IR-OK @ IF ." {marker}" ELSE '
+                '." IR-FIRST-FAILURE " _IR-OK-FIRST-FAILURE @ . THEN'
+            ),
         ],
         patches=patches,
         capture_media=backing,
@@ -58433,7 +58376,7 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
                     "_XC-INDEX-ROOT-GROWING @ 0=",
                     "_XC-INDEX-NODE-HOME @ 0=",
                     "_XC-INDEX-NEW-HOME @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             "0 _RGP-V VFS-UNMOUNT CONSTANT _RGP-UNMOUNT-IOR",
@@ -58663,7 +58606,7 @@ def staged_public_indexed_root_growth_live_fixture(
                     "_RGL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_RGL-V V.FLAGS @ VFS-F-RO AND 0=",
                     "_RGL-PLAN-SCRUBBED 0<>",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -59004,7 +58947,7 @@ def test_staged_vfs_truncate_beneath_singleton_depth_one_indexed_parent(
                     "_ITR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_ITR-CTX _EXT4-C.O.ACTIVE + @ 0=",
                     "_ITR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -59459,15 +59402,12 @@ def test_staged_public_indexed_root_growth_node_tear_replays_all_eleven_homes(
                         "_XC-INDEX-NODE-HOME @ 0=",
                         "_XC-INDEX-NEW-HOME @ 0=",
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                        "_EXT4-MUTATION-OWNER-INO @ 0=",
                         "_EXT4-MUTATION-MAP-TARGET @ 0=",
                         "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                         "_EXT4-MUTATION-MAP-HITS @ 0=",
                         "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
                         "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
                 ),
                 (
@@ -59848,11 +59788,7 @@ def test_staged_vfs_indexed_link_and_mkdir_full_leaf_refuse_without_writes(
                     "_XC-INDEX-SPLITTING @ 0=",
                     "_XC-INDEX-ROOT-GROWING @ 0=",
                     "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                    "_EXT4-MUTATION-OWNER-INO @ 0=",
-                    "_EXT4-JFO-TARGET-INO-B @ 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -59949,7 +59885,11 @@ def test_staged_vfs_indexed_root_growth_refuses_other_inode_root_alias_without_w
     staged_public_indexed_root_growth_probe_prestate: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """An unrelated allocated inode cannot also own the HTree root."""
+    """An unrelated allocated inode cannot also own the HTree root.
+
+    The mount's ownership proof finds the root block claimed twice when the
+    create enters, so the create refuses before it reads the clock.
+    """
     case = staged_public_indexed_root_growth_probe_prestate
     path = case["source"]
     source_patches = case["source_patches"]
@@ -59986,13 +59926,10 @@ def test_staged_vfs_indexed_root_growth_refuses_other_inode_root_alias_without_w
             "_XC-INDEX-NODE-HOME @ 0=",
             "_XC-INDEX-NEW-HOME @ 0=",
             "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-            "_EXT4-MUTATION-OWNER-INO @ 0=",
-            "_EXT4-JFO-TARGET-INO-B @ 0=",
-            "_EXT4-JFO-CERT-SCOPE @ 0=",
-            "_EXT4-JFO-CERT-VALID @ 0=",
         ),
         metadata_capacity=11,
         max_steps=1_600_000_000,
+        clock_calls=0,
         marker="EXT4-INDEX-ROOT-GROWTH-OTHER-INODE-ALIAS",
     )
     assert _read_ext4_home(
@@ -60261,7 +60198,7 @@ def staged_public_depth_one_indexed_create_fixture(
                     "_D1C-DIRTY 0<>",
                     "_D1C-V V.FLAGS @ VFS-F-RO AND 0=",
                     "_D1C-PLAN-SCRUBBED 0<>",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -61037,11 +60974,7 @@ def _run_staged_indexed_link_success(
                     "_XC-INDEX-ROUTE-NODE-HOME @ 0=",
                     "_XC-CONVERTING @ 0=",
                     "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                    "_EXT4-MUTATION-OWNER-INO @ 0=",
-                    "_EXT4-JFO-TARGET-INO-B @ 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -62008,7 +61941,7 @@ def staged_public_mkdir_fixture(
                             "_EXT4-JWR-IDLE ="
                         ),
                         "_MD-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_MD-CTX _EXT4-C.O.ACTIVE + @ 0=",
                         "_MD-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
                         "_MD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
@@ -62946,7 +62879,7 @@ def test_staged_vfs_rmdir_from_singleton_depth_one_indexed_parent(
                     "_EXT4-MUTATION-MAP-HITS @ 0=",
                     "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                     "_XU-INDEX-MAP-EXPECTED @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     "_IRD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_IRD-V V.FLAGS @ VFS-F-RO AND 0=",
                 ],
@@ -63322,7 +63255,7 @@ def test_staged_vfs_mkdir_descriptor_tear_rolls_back_directory(
                             "_MDF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                             "_MDF-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_MDF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-MKDIR-W7-WRITER" THEN'
@@ -63598,7 +63531,7 @@ def test_staged_vfs_mkdir_child_block_tear_replays_all_eight_homes(
                             "_MDH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                             "_MDH-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_MDH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-MKDIR-W25-WRITER" THEN'
@@ -64226,7 +64159,7 @@ def staged_public_rmdir_fixture(
                         f"_XU-DATA-GDT-HOME @ {gdt_home} =",
                         f"_XU-SUPER-HOME @ {super_home} =",
                         f"_XU-DATA-SUPER-HOME @ {super_home} =",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_RD-CTX _EXT4-C.O.ACTIVE + @ 0=",
                         "_RD-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
                         "_RD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
@@ -64614,8 +64547,7 @@ def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
                             "_RDF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                             "_RDF-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_RDF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            "_EXT4-JFO-TARGET-INO-B @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-RMDIR-W7-WRITER" THEN'
@@ -64875,8 +64807,7 @@ def test_staged_vfs_rmdir_gdt_tear_replays_seven_homes_and_revoke(
                             "_RDH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                             "_RDH-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_RDH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            "_EXT4-JFO-TARGET-INO-B @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-RMDIR-W25-WRITER" THEN'
@@ -65049,11 +64980,15 @@ def _inode14_extent_alias_patches(
     return ((inode_offset, bytes(alias_inode)),)
 
 
-def test_staged_vfs_rmdir_two_owner_proof_refuses_third_inode_aliases(
+def test_staged_vfs_rmdir_refuses_third_inode_aliases_at_ownership_proof(
     staged_public_mkdir_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """Neither legitimate directory owner may hide a third owner."""
+    """Neither legitimate directory owner may hide a third owner.
+
+    The mount's ownership proof finds the aliased block claimed twice when
+    rmdir enters, so rmdir refuses before it reads the clock.
+    """
     path = staged_public_mkdir_fixture["stable_image"]
     parent_directory_home = staged_public_mkdir_fixture[
         "parent_directory_home"
@@ -65133,7 +65068,7 @@ def test_staged_vfs_rmdir_two_owner_proof_refuses_third_inode_aliases(
                                 f"{prefix}-FFREE-AFTER "
                                 f"{prefix}-FFREE-BEFORE ="
                             ),
-                            f"{prefix}-CLOCK-CALLS @ 1 =",
+                            f"{prefix}-CLOCK-CALLS @ 0=",
                             f"{prefix}-WRITER {prefix}-PROFILE-BASE =",
                             f"{prefix}-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             f"{prefix}-HOME-WRITES 0=",
@@ -65143,8 +65078,7 @@ def test_staged_vfs_rmdir_two_owner_proof_refuses_third_inode_aliases(
                             ),
                             f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                             f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0=",
-                            "_EXT4-JFO-TARGET-INO-B @ 0=",
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + f' IF ." {marker}" THEN'
@@ -65279,8 +65213,7 @@ def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
                         "_RNR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_RNR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_RNR-V V.FLAGS @ VFS-F-RO AND 0=",
-                        "_EXT4-JFO-TARGET-INO-B @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RMDIR-NO-REVOKE" THEN'
@@ -65331,8 +65264,7 @@ def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
                         "_RNM-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_RNM-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_RNM-V V.FLAGS @ VFS-F-RO AND 0=",
-                        "_EXT4-JFO-TARGET-INO-B @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RMDIR-SIX-METADATA" THEN'
@@ -65428,8 +65360,7 @@ def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
                         "_RZU-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_RZU-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_RZU-V V.FLAGS @ VFS-F-RO AND 0=",
-                        "_EXT4-JFO-TARGET-INO-B @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RMDIR-ZERO-USED-DIRS" THEN'
@@ -67266,9 +67197,7 @@ def staged_public_truncate_zero_fixture(
                             "_XW-DATA _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -68313,8 +68242,6 @@ def test_staged_vfs_truncate_zero_descriptor_tear_retains_old_file(
                             "_XW-DATA _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-TRUNCATE-ZERO-DESCRIPTOR" THEN'
@@ -70540,9 +70467,7 @@ def staged_public_final_unlink_closed_fixture(
                     ),
                     "_UFC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_UFC-V V.FLAGS @ VFS-F-RO AND 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -70952,9 +70877,7 @@ def test_staged_vfs_unlink_final_add_deduplicates_shared_inode_home(
                         "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
                         "_EXT4-BYTES-ZERO?"
                     ),
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -71296,9 +71219,7 @@ def staged_public_final_unlink_open_retained_fixture(
                     ),
                     "_UFR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_UFR-V V.FLAGS @ VFS-F-RO AND 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -71565,9 +71486,7 @@ def test_staged_vfs_unlink_open_final_link_drains_on_last_close(
                     "_UFL-V V.LAST-IOR @ 0=",
                     "_UFL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_UFL-V V.FLAGS @ VFS-F-RO AND 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -71789,9 +71708,7 @@ def test_staged_vfs_unlink_nonempty_final_add_descriptor_tear_rolls_back(
                             "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
                 ),
                 (
@@ -72063,9 +71980,7 @@ def test_staged_vfs_unlink_nonempty_final_add_home_tear_replays_and_drains(
                             "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
                 ),
                 (
@@ -72387,9 +72302,7 @@ def test_staged_vfs_unlink_last_close_descriptor_tear_recovers_orphan(
                             "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
                 ),
                 (
@@ -72721,9 +72634,7 @@ def test_staged_vfs_unlink_last_close_inode_home_tear_replays_cleanup(
                             "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        "_EXT4-JFO-CERT-SCOPE @ 0=",
-                        "_EXT4-JFO-CERT-VALID @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
                 ),
                 (
@@ -74285,7 +74196,7 @@ def staged_public_link_fixture(
                             "_XC-OLD-INODE _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-LINK-OK" THEN'
@@ -74624,7 +74535,7 @@ def test_staged_vfs_link_descriptor_tear_rolls_back_provisional_name(
                                 "_XC-OLD-INODE _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-LINK-W7-ROLLBACK" THEN'
@@ -74870,7 +74781,7 @@ def test_staged_vfs_link_directory_tear_replays_both_homes(
                                 "_XC-OLD-INODE _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-LINK-W17-TEAR" THEN'
@@ -75128,7 +75039,7 @@ def test_staged_vfs_link_distinct_parent_uses_three_exact_homes(
                         "_L3-WRITER _EXT4-JWR-IDLE-CLEAN?",
                         "_L3-CTX _EXT4-C.J.COMMITTED + @ 0=",
                         "_L3-V V.FLAGS @ VFS-F-RO AND 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-LINK-THREE-HOME-TXN" THEN'
@@ -75454,7 +75365,7 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
                             "_XC-OLD-INODE _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-LINK-REFUSAL-SCRUB" THEN'
@@ -76668,7 +76579,7 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
                     "_IR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                     "_IR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_IR-V V.FLAGS @ VFS-F-RO AND 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -76788,7 +76699,7 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
                     "_IR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                     "_IR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_IR-V V.FLAGS @ VFS-F-RO AND 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -77180,7 +77091,7 @@ def staged_public_rename_fixture(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         "_XU-RENAME-SCAN @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-SCRUB" THEN'
@@ -77641,7 +77552,7 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         "_XU-RENAME-SCAN @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-COMPACT-SCRUB" THEN'
@@ -78106,7 +78017,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         "_XU-RENAME-SCAN @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-NLINK1-SCRUB" THEN'
@@ -78331,7 +78242,7 @@ def test_staged_vfs_rename_descriptor_tear_rolls_back_name_and_media(
                                 "_XR-NEW-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-RENAME-W7-ROLLBACK" THEN'
@@ -78496,7 +78407,7 @@ def test_staged_vfs_rename_directory_tear_replays_both_homes(
                                 "_XR-NEW-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-RENAME-W17-PUBLISHED" THEN'
@@ -78780,7 +78691,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-REFUSAL-ZEROWRITE" THEN'
@@ -78989,7 +78900,7 @@ def test_staged_vfs_rename_refuses_aggregate_compaction_nospace_without_writes(
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-ZEROWRITE" THEN'
@@ -79372,7 +79283,7 @@ def staged_cross_parent_rename_fixture(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         "_XU-RENAME-SCAN @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-CROSS-SCRUB" THEN'
@@ -79766,7 +79677,7 @@ def test_staged_vfs_rename_cross_parent_refuses_credit_and_existing_victim(
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-CROSS-REFUSAL-ZEROWRITE" THEN'
@@ -79908,7 +79819,7 @@ def test_staged_vfs_rename_cross_parent_descriptor_tear_rolls_back_all_homes(
                                 "_XR-NEW-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-RENAME-CROSS-W7-ROLLBACK" THEN'
@@ -80099,7 +80010,7 @@ def test_staged_vfs_rename_cross_parent_final_home_tear_replays_four_homes(
                                 "_XR-NEW-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-RENAME-CROSS-W21-PUBLISHED" THEN'
@@ -80415,7 +80326,7 @@ def staged_directory_rename_preimage_fixture(
                         "_DMP-WRITER _EXT4-JWR-IDLE-CLEAN?",
                         "_DMP-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         "_DMP-V V.FLAGS @ VFS-F-RO AND 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-DIRECTORY-RENAME-PREIMAGE" THEN'
@@ -81329,7 +81240,7 @@ def staged_cross_parent_directory_rename_fixture(
                         ),
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         "_XU-RENAME-SCAN @ 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-DIRECTORY-RENAME-SCRUB" THEN'
@@ -81663,7 +81574,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_refusals(
                             "_XR-CHILD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-DIRECTORY-RENAME-SHORT-CREDIT" THEN'
@@ -81806,7 +81717,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_refusals(
                         "_DRE-HOMES 0=",
                         "_DRE-WRITER _DRE-PROFILE-BASE =",
                         "_DRE-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-DIRECTORY-RENAME-EDGE-REFUSALS" THEN'
@@ -81971,7 +81882,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_w7_rolls_back(
                                 "_XR-CHILD-DIR-AFTERIMAGE "
                                 "_EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-DIRECTORY-RENAME-W7-ROLLBACK" THEN'
@@ -82195,7 +82106,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_w23_replays_child(
                                 "_XR-CHILD-DIR-AFTERIMAGE "
                                 "_EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?"
                             ),
-                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
                     + ' IF ." EXT4-DIRECTORY-RENAME-W23-PUBLISHED" THEN'
@@ -82469,7 +82380,7 @@ def test_staged_vfs_mkdir_then_directory_rename_in_one_write_session(
                         "_DRC-WRITER _EXT4-JWR-IDLE-CLEAN?",
                         "_DRC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         "_DRC-V V.FLAGS @ VFS-F-RO AND 0=",
-                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-MKDIR-THEN-DIRECTORY-RENAME" THEN'
@@ -82770,11 +82681,8 @@ def test_staged_vfs_setattr_commits_all_linked_regular_scalars_exactly(
                         "_XS-INODE-SNAPSHOT _EXT4-MAX-INODE "
                         "_EXT4-BYTES-ZERO?"
                     ),
-                    "_EXT4-MUTATION-OWNER-INO @ 0=",
                     "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                    "_EXT4-JFO-CERT-SCOPE @ 0=",
-                    "_EXT4-JFO-CERT-VALID @ 0=",
-                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
             (
@@ -82836,9 +82744,13 @@ def test_staged_vfs_setattr_commits_all_linked_regular_scalars_exactly(
     assert _ext4_group_counts(backing, 0) == group_counts_before
 
 
-def test_ext4_setattr_proves_global_ownership_before_single_home_stage(
+def test_ext4_setattr_stages_one_authenticated_home(
 ) -> None:
-    """Pin SETATTR's owner proof and exact dry/live transaction lifecycle."""
+    """Pin SETATTR's target authority and exact dry/live transaction lifecycle.
+
+    The mount's ownership proof already gives the inode-table home one
+    owner, so the stage authenticates the target and its home once.
+    """
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
 
     def word_body(name: str) -> str:
@@ -82850,8 +82762,6 @@ def test_ext4_setattr_proves_global_ownership_before_single_home_stage(
         assert match is not None, f"missing Forth word {name}"
         return " ".join(match.group("body").split())
 
-    target_disjoint = word_body("_XS-REQUIRE-TARGET-HOME-DISJOINT")
-    owners = word_body("_XS-REQUIRE-HOME-OWNERS")
     validate_request = word_body("_XS-VALIDATE-REQUEST")
     apply_request_body = word_body("_XS-APPLY-REQUEST")
     stage = word_body("_EXT4-JTX-STAGE-SETATTR")
@@ -82898,47 +82808,12 @@ def test_ext4_setattr_proves_global_ownership_before_single_home_stage(
     ):
         assert fragment in apply_request_body
 
-    assert owners.endswith(
-        "_XS-REQUIRE-TARGET-HOME-DISJOINT ?DUP IF EXIT THEN "
-        "_XS-INO @ _XS-HOME @ 1 _XS-CTX @ "
-        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER"
-    )
-    assert "_XS-HOME @ 0 _EXT4-MUTATION-OWNER-RANGE !" in target_disjoint
-    assert (
-        "1 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !" in target_disjoint
-    )
-    publish = target_disjoint.index(
-        "_EXT4-MUTATION-OWNER-RANGES-PUBLISH"
-    )
-    owner_bind = target_disjoint.index(
-        "_XS-INO @ _EXT4-MUTATION-OWNER-INO !", publish
-    )
-    target_reauth = target_disjoint.index("_XS-REQUIRE-TARGET", owner_bind)
-    owner_clear = target_disjoint.index(
-        "0 _EXT4-MUTATION-OWNER-INO !", target_reauth
-    )
-    ranges_clear = target_disjoint.index(
-        "_EXT4-MUTATION-OWNER-RANGES-CLEAR", owner_clear
-    )
-    map_limit_restore = target_disjoint.index(
-        "_XS-OWNER-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !",
-        ranges_clear,
-    )
-    assert (
-        publish
-        < owner_bind
-        < target_reauth
-        < owner_clear
-        < ranges_clear
-        < map_limit_restore
-    )
-
     target_reloads = tuple(
         match.start()
         for match in re.finditer(r"\b_XS-REQUIRE-TARGET\b", stage)
     )
-    owner_proof = stage.index("_XS-REQUIRE-HOME-OWNERS")
-    raw_read = stage.index("_EXT4-READ-BLOCK", owner_proof)
+    table_home = stage.index("_EXT4-VALIDATE-INODE-TABLE-HOME")
+    raw_read = stage.index("_EXT4-READ-BLOCK", table_home)
     acquire = stage.index("_EXT4-JTX-META-ACQUIRE", raw_read)
     snapshot_checks = tuple(
         match.start() for match in re.finditer(r"_EXT4-BYTES=\?", stage)
@@ -82946,14 +82821,12 @@ def test_ext4_setattr_proves_global_ownership_before_single_home_stage(
     apply_request = stage.index("_XS-APPLY-REQUEST", acquire)
     restamp = stage.index("_EXT4-RESTAMP-INODE", apply_request)
     replace = stage.index("_EXT4-JTX-META-REPLACE", restamp)
-    assert len(target_reloads) == 3
-    assert stage.count("_EXT4-VALIDATE-INODE-TABLE-HOME") == 2
+    assert len(target_reloads) == 1
+    assert stage.count("_EXT4-VALIDATE-INODE-TABLE-HOME") == 1
     assert len(snapshot_checks) == 2
     assert (
         target_reloads[0]
-        < owner_proof
-        < target_reloads[1]
-        < target_reloads[2]
+        < table_home
         < raw_read
         < snapshot_checks[0]
         < acquire
@@ -83089,9 +82962,11 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     ):
         assert layout_fragment in facade
     for admission_fragment in (
-        "15552 CONSTANT _EXT4-C.XC-PLAN",
-        "15560 CONSTANT _EXT4-C.XC-PLAN-SPAN",
-        "15568 CONSTANT _EXT4-CTX-SIZE",
+        "15536 CONSTANT _EXT4-C.XC-PLAN",
+        "15544 CONSTANT _EXT4-C.XC-PLAN-SPAN",
+        "15560 CONSTANT _EXT4-C.CLAIM-WORKSPACE",
+        "15568 CONSTANT _EXT4-C.CLAIM-WORKSPACE-BYTES",
+        "15576 CONSTANT _EXT4-CTX-SIZE",
     ):
         assert admission_fragment in admission
 
@@ -83188,7 +83063,10 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     assert stage.index("_XC-HP-REQUIRE-CREDITS") < stage.index(
         "_XC-STAGE-NEW-INODE"
     )
-    assert stage.rstrip().endswith("_XC-WRITER @ _XC-HP-REQUIRE-STAGED")
+    assert stage.rstrip().endswith(
+        "_XC-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN\n"
+        "    _XC-MAP-CHECK"
+    )
 
 
 def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
@@ -83359,7 +83237,10 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     xu_stage_positions = tuple(xu_stage.index(name) for name in xu_stage_order)
     assert xu_stage_positions == tuple(sorted(xu_stage_positions))
     assert "_XC-PO-RMDIR ELSE\n        _XC-PO-UNLINK" in xu_stage
-    assert xu_stage.rstrip().endswith("_XU-WRITER @ _XC-HP-REQUIRE-STAGED")
+    assert xu_stage.rstrip().endswith(
+        "_XU-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN\n"
+        "    _XU-MAP-CHECK"
+    )
 
     xr_plan = word_body("_XR-PLAN")
     xr_stage = word_body("_EXT4-JTX-STAGE-RENAME")
@@ -83390,7 +83271,10 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     xr_stage_positions = tuple(xr_stage.index(name) for name in xr_stage_order)
     assert xr_stage_positions == tuple(sorted(xr_stage_positions))
     assert "_XU-CTX @ _XC-PO-RENAME _XC-P-REQUIRE-SEALED" in xr_stage
-    assert xr_stage.rstrip().endswith("_XU-WRITER @ _XC-HP-REQUIRE-STAGED")
+    assert xr_stage.rstrip().endswith(
+        "_XU-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN\n"
+        "    _XR-MAP-CHECK"
+    )
     assert "_XC-P.HOME-COUNT" not in xr_stage
     assert "_XC-P.HOME-COUNT" not in xr_remove
 
@@ -83572,7 +83456,6 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     parent_auth_order = (
         "_XU-CAPTURE-PARENT-DIRECTORY",
         "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
-        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER",
         "_XU-CAPTURE-PARENT-DIRECTORY",
     )
     parent_auth_positions: list[int] = []
@@ -83586,15 +83469,10 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     assert word_body("_XU-REQUIRE-DIRECTORY-MAP-AUDIT").rstrip().endswith(
         "_XU-DIR-HOME @ 1 _XU-REQUIRE-PARENT-MAP-HITS"
     )
-    assert word_body(
-        "_XU-REQUIRE-CHILD-ABSENT-FROM-PARENT-MAP"
-    ).rstrip().endswith(
-        "_XU-DATA-BLOCK @ 0 _XU-REQUIRE-PARENT-MAP-HITS"
-    )
     owner_order = (
-        "_XU-REQUIRE-CHILD-ABSENT-FROM-PARENT-MAP",
         "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
-        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNERS-PAIR",
+        "_XU-REQUIRE-TARGET",
+        "_XU-AUTH-CHILD-DIRECTORY",
     )
     owner_positions = tuple(
         directory_owners.index(name) for name in owner_order
@@ -83945,7 +83823,6 @@ def test_ext4_indexed_rename_seals_independent_selected_leaf_banks() -> None:
             "_XR-BIND-RENAME-FORM",
             "_XU-AUTH-CHILD-DIRECTORY",
             "_XR-PROVE-CROSSDIR-OWNERS",
-            "_XR-PROVE-CHILD-OWNER",
             "_XU-REQUIRE-TARGET",
             "_XU-REQUIRE-PARENT",
             "_XR-REQUIRE-NP",
@@ -83968,27 +83845,16 @@ def test_ext4_indexed_rename_seals_independent_selected_leaf_banks() -> None:
         word_body("_XR-PROVE-SAMEPARENT-OWNERS").split()
     )
     cross_owners = " ".join(word_body("_XR-PROVE-CROSSDIR-OWNERS").split())
-    child_owner = " ".join(word_body("_XR-PROVE-CHILD-OWNER").split())
     for audit in (
         "_XU-DIRECTORY-DESC _XU-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
         "_XU-DIRECTORY-DESC _XR-DEST-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
-        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR",
     ):
         assert audit in same_owners
     for audit in (
         "_XU-DIRECTORY-DESC _XU-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
-        "_XU-DIRECTORY-DESC _XR-NP-DIR-HOME @ 0 _XR-REQUIRE-DESC-MAP-HITS",
         "_XR-NP-DIRECTORY-DESC _XR-NP-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
-        "_XR-NP-DIRECTORY-DESC _XU-DIR-HOME @ 0 _XR-REQUIRE-DESC-MAP-HITS",
-        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNERS-PAIR",
     ):
         assert audit in cross_owners
-    for audit in (
-        "_XU-DIRECTORY-DESC _XU-DATA-BLOCK @ 0 _XR-REQUIRE-DESC-MAP-HITS",
-        "_XR-NP-DIRECTORY-DESC _XU-DATA-BLOCK @ 0 _XR-REQUIRE-DESC-MAP-HITS",
-        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER",
-    ):
-        assert audit in child_owner
 
     expected_roles = word_body("_XR-HP-EXPECTED-ROLES")
     plan_homes = word_body("_XR-HP-PLAN-HOMES")
@@ -84117,16 +83983,13 @@ def test_ext4_indexed_link_and_mkdir_reuse_only_authenticated_leaf_slack(
     assert plan.index("_XC-AUTH-PARENT-DIRECTORY") < plan.index(
         "_XC-SELECT-INDEX-BLOCK"
     )
-    pair_owner = select_directory_block.index(
-        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR"
-    )
-    parent_reauth = select_directory_block.index(
-        "_XC-CAPTURE-PARENT-DIRECTORY", pair_owner
+    role_check = select_directory_block.index(
+        "_EXT4-VALIDATE-MUTATION-RANGE-TARGETS"
     )
     candidate_reauth = select_directory_block.index(
-        "_XC-REQUIRE-SAME-DIRECTORY-BLOCK", parent_reauth
+        "_XC-REQUIRE-SAME-DIRECTORY-BLOCK", role_check
     )
-    assert pair_owner < parent_reauth < candidate_reauth
+    assert role_check < candidate_reauth
 
     link_admission = insert.index(
         "_XC-LINKING @ 0= _XC-DIRECTORY @ 0= AND"
@@ -85020,12 +84883,12 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         assert policy not in bitmap
 
     expected_facade_calls = {
-        "_EXT4-GROUP-BLOCK-COUNT": 7,
+        "_EXT4-GROUP-BLOCK-COUNT": 8,
         "_EXT4-GROUP-INODE-COUNT": 7,
-        "_EXT4-BLOCK-ALLOCATED?": 3,
+        "_EXT4-BLOCK-ALLOCATED?": 2,
         "_EXT4-GROUP-BLOCK-RANGE": 3,
-        "_EXT4-LOAD-BLOCK-BITMAP": 26,
-        "_EXT4-BUILD-UNINIT-BLOCK-BITMAP": 2,
+        "_EXT4-LOAD-BLOCK-BITMAP": 28,
+        "_EXT4-BUILD-UNINIT-BLOCK-BITMAP": 4,
         "_EXT4-LOAD-INODE-BITMAP": 11,
         "_EXT4-BLOCK-BITMAP-CRC": 8,
         "_EXT4-INODE-BITMAP-CRC": 10,
@@ -85266,7 +85129,7 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     )
 
     expected_facade_calls = {
-        "_EXT4-DECODE-I-BLOCKS": 3,
+        "_EXT4-DECODE-I-BLOCKS": 4,
         "_EXT4-S32@": 6,
         "_EXT4-I-BLOCK-ZERO-FROM?": 1,
         "_EXT4-DECODE-SPECIAL": 1,
@@ -85441,7 +85304,7 @@ def test_ext4_xattr_block_service_is_private_acyclic_unit() -> None:
     assert "EXT4-D-XATTR _EXT4-CORRUPT EXIT" in loader
 
     expected_facade_calls = {
-        "_EXT4-LOAD-XATTR-BLOCK": 6,
+        "_EXT4-LOAD-XATTR-BLOCK": 7,
         "_EXT4-STAMP-XATTR-BLOCK": 2,
         "_EXT4-XATTR-MAGIC": 1,
         "_EXT4-XATTR-REFCOUNT-MAX": 2,
@@ -86731,8 +86594,7 @@ def test_ext4_manual_range_proofs_use_checked_shared_algebra() -> None:
         assert match is not None, f"missing Forth word {name}"
         return match.group("body")
 
-    owner = word_body("_EXT4-MUTATION-OWNER-RANGES-PUBLISH")
-    owner_alias = word_body("_EXT4-MUTATION-OWNER-ALIASES?")
+    claim = word_body("_EXT4-OWN-SPAN")
     map_alias = word_body("_EXT4-MUTATION-MAP-ALIASES?")
     extent = word_body("_EXT4-VALIDATE-EXTENT-LEAF-ENTRY")
     extent_node = word_body("_EXT4-LOAD-EXTENT-NODE")
@@ -86742,10 +86604,7 @@ def test_ext4_manual_range_proofs_use_checked_shared_algebra() -> None:
     journal_disjoint = word_body("_EXT4-JOURNAL-RANGE-DISJOINT")
 
     assert "REQUIRE ../../uint-range.f" in source
-    assert owner.count("URANGE-VALID?") == 2
-    assert owner.count("_EXT4-MUTATION-OWNER-RANGES-CLEAR") == 5
-    assert owner_alias.count("URANGE-OVERLAP?") == 1
-    assert "0= IF DROP TRUE EXIT THEN" in owner_alias
+    assert claim.count("URANGE-VALID?") == 1
     assert map_alias.count("URANGE-OVERLAP?") == 1
     assert "IF 2DROP FALSE TRUE EXIT THEN" in map_alias
     assert extent.count("URANGE-OVERLAP?") == 1
@@ -86788,7 +86647,7 @@ def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
     group_touched = word_body("_EXT4-JCM-GROUP-TOUCHED?")
 
     assert "URANGE-OVERLAP? 0= IF DROP TRUE THEN" in adapter
-    assert source.count(adapter_name) == 32
+    assert source.count(adapter_name) == 29
     assert "_EXT4-BLOCK-RANGES-OVERLAP?" not in source
     for scratch in (
         "_EXT4-BRO-A",
@@ -87486,7 +87345,7 @@ def test_ext4_early_inode_reads_use_checked_exact_bitset_views() -> None:
     assert "_EXT4-JOURNAL-INODE 1- 8 /" not in recovery
 
 
-def test_ext4_reverse_owner_iterator_uses_checked_exact_inode_views() -> None:
+def test_ext4_inode_walk_uses_checked_exact_inode_views() -> None:
     source = _ext4_source_text()
 
     match = re.search(
@@ -87509,12 +87368,10 @@ def test_ext4_reverse_owner_iterator_uses_checked_exact_inode_views() -> None:
     ) in scan
     assert "_EXT4-JFO-GROUP-INODES @ 0 ?DO" in scan
     assert "_EXT4-JFO-GROUP-BASE @ I + 1+ DUP _EXT4-JFO-INO !" in scan
-    assert "DUP _EXT4-JFO-TARGET-INO @ <>" in scan
-    assert "SWAP _EXT4-JFO-TARGET-INO-B @ <> AND IF" in scan
+    assert "_EXT4-JFO-TARGET-INO @ <> IF" in scan
     assert (
-        "_EXT4-JFO-INO @ _EXT4-MUTATION-OWNER-INO !\n"
-        "                _EXT4-JFO-CHECK-CURRENT-INODE _EXT4-JFO-IOR !\n"
-        "                0 _EXT4-MUTATION-OWNER-INO !"
+        "_EXT4-JFO-LOAD-CURRENT-INODE ?DUP IF UNLOOP EXIT THEN\n"
+        "                _EXT4-JFO-CHECK-CURRENT-INODE ?DUP IF UNLOOP EXIT THEN"
     ) in scan
     assert scan.index("_EXT4-LOAD-INODE-BITMAP") < scan.index(
         "_EXT4-C.DIR-BLOCK +"

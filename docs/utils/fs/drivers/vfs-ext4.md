@@ -664,7 +664,7 @@ external leaves, or a legacy map using any of the 12 direct slots and one
 optional complete single-indirect block. The legacy map may additionally use
 an optional double-indirect root with zero or more occupied child pointer
 blocks when its exact canonical data-plus-map vector, plus any present
-external-xattr owner range, fits the `2P+16` caller workspace for
+external-xattr range, fits the `2P+16` caller workspace for
 `P = block_size / 4`. As a separate map family, slot 14 may name one allocated
 triple-indirect root whose full block is all zero while the single- and
 double-indirect slots remain zero. Direct slots may be occupied. Their ordered
@@ -679,8 +679,8 @@ pointer to one allocated all-zero level-2 pointer block. Its ordered
 and each receives an exact revoke. Each depth-1 leaf may use
 every entry that fits the mounted block size. Every resident root key must equal its leaf's
 first logical block, and each nonfinal leaf must end no later than the next
-root key. The external leaves join the exact release and reverse-owner
-authority and each receives a journal revoke. The inode size need not be zero
+root key. The external leaves join the exact release authority and each
+receives a journal revoke. The inode size need not be zero
 because
 deletion releases the complete authenticated map and then removes the inode;
 EOF does not select a retained tail.
@@ -716,12 +716,11 @@ unsupported recovery shape. Physical ranges must not overlap each other or the
 optional xattr block, and decoded `i_blocks` must exactly equal the aggregate
 data, map-metadata, and xattr block count in filesystem sectors.
 Every release range must be
-allocated, lie outside all static metadata and journal ranges, and not alias
-orphan-file storage. One combined filesystem-wide scan of authenticated
-allocated inodes must prove that no other extent or legacy data/map-metadata
-reference names any block in the complete release set. For a shared external
-xattr, the same role-aware scan admits the counted `i_file_acl` references but
-still rejects every data or map-metadata alias. A resident inline xattr area is
+allocated and lie outside all static metadata and journal ranges. The mount's
+block-ownership proof, which runs before recovery's first cleanup, gives every
+block of the release set its one owner, so no other inode or the orphan file
+maps any of it, and gives a shared external xattr block a reference count
+equal to the inodes that name it. A resident inline xattr area is
 admitted only after the structural walker
 proves bounded, ordered, nonoverlapping values with no value-inode reference.
 If even one record is outside these supported per-record shapes, the whole
@@ -927,7 +926,8 @@ before media mutation. Inode 8 is the sole exclusion because journal
 authentication requires its exact self-contained inline tuple and a zero
 external-xattr pointer. Proof scope is fail-closed and constant-workspace; every
 return restores the shared mutation/map bounds and clears its temporary inode,
-context, and active publications.
+context, and active publications. Once the mount's block-ownership proof
+stands, it answers this proof without another walk.
 
 A committed replay invalidates this certificate before preflight and keeps it
 invalid across replay, flush, authenticated reload, and root validation. The
@@ -1247,30 +1247,23 @@ once from a locality group, skip `BLOCK_UNINIT` groups, and require the same
 clear-count agreement; the excluding form withholds one planned candidate
 without pretending its raw bit is set.
 
-The enclosing operation must still perform its complete reverse-owner proof,
-ordered data, map edit, `i_blocks` accounting, and publication in the same
+The enclosing operation must still perform its ownership checks, ordered
+data, map edit, `i_blocks` accounting, and publication in the same
 transaction. Keeping those authorities separate lets selection and accounting
 be tested exactly while preventing either private piece from being mistaken
 for a complete user-visible write operation.
 
-Mutation-side admission also has reusable authorities beyond that free-only
-builder. `_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER` scans every authenticated allocated
-inode and proves that an arbitrary nonempty physical range is mapped only by
-the caller's already-authenticated target inode. The ambient probe is
-count-delimited, so a valid range beginning at physical block zero is not
-mistaken for an inactive proof. Every return clears the probe and restores the
-caller's map-validation bound; a successful proof reloads the target inode.
-Because the scan reuses the cleanup scanner and shared inode cache, it also
-invalidates any retained operation-scoped orphan ownership certificate before
-starting. `_EXT4-VALIDATE-INODE-TABLE-HOME` independently requires a proposed
-inode-table after-image to fall in exactly the named descriptor's table and in
-no other table, block/inode bitmap, sparse-super/GDT interval, or journal
-extent. These words provide the range and live-inode-table authority needed by
-an in-place data mutation, but do not stage or emit one by themselves.
+Mutation-side admission also has a reusable authority beyond that free-only
+builder. `_EXT4-VALIDATE-INODE-TABLE-HOME` requires a proposed inode-table
+after-image to fall in exactly the named descriptor's table and in no other
+table, block/inode bitmap, sparse-super/GDT interval, or journal extent. It
+provides the live-inode-table authority an in-place data mutation needs, but
+does not stage or emit one by itself.
 
 The mounted context additionally caches the successful protocol-home proof
 described above. It is acquired lazily, so a clean read-only mount does not pay
-for another whole-filesystem scan. Activation, emission, checkpoint,
+for a whole-filesystem walk, and a mount whose block ownership is proved
+answers it without one. Activation, emission, checkpoint,
 deactivation, and recovery cleanup fail closed unless the certificate is
 exactly valid; mount-state reset and active replay clear it.
 
@@ -1326,33 +1319,10 @@ owner counts or aliases, and xattr value inodes remain refused. Every candidate
 range bit must be set and each distinct touched block-bitmap home must have
 exactly one descriptor owner. Every release range must lie inside mutable data
 space, be disjoint from every other target range, and be disjoint from static
-metadata, the journal, and all modern-orphan-file extents.
-
-Release admission then walks every initialized, checksum-authenticated inode
-bitmap and every set inode record except the target. The retained bitmap copy
-is queried in ascending order through the checked exact group-inode view;
-invalid geometry is bounds corruption and valid clear bits are skipped. The
-copy remains separate because loading each selected inode record reuses the
-primary block buffer. Each record's inode checksum is verified before the
-normal complete extent or legacy-map validator enumerates data ranges and
-external tree/indirect nodes; a nonzero external xattr pointer is included as
-ownership. Extent leaves and index nodes, legacy direct data and indirect
-metadata/data, and external xattr storage therefore all participate in the
-reverse-owner proof. `INODE_UNINIT` groups contain no allocated owners and are
-skipped. Inode 1 retains its format-defined legacy
-bad-block-map interpretation; other mode-zero reserved records must be
-storage-empty, while fast-symlink and device payload bytes retain their normal
-non-map interpretation. Any data or map-metadata reference to a candidate range
-is `EXT4-D-DATA-MAP` corruption, even when both inode records and their
-allocation bits are individually checksum-valid. A shared candidate xattr has
-one exception at the semantic `i_file_acl` boundary: exact references to that
-same block are counted, and their total including the target must equal the
-authenticated header refcount. All admitted data ranges, external map-metadata
-blocks, and the optional external-xattr singleton are published together for
-this scan, so proving one entry cannot conceal an alias in a later entry. The
-retained ownership certificate binds the map family, ordered data-and-map
-tuple, xattr home, disposition, and raw pre-transaction refcount as separate
-fields.
+metadata and the journal. The mount's block-ownership proof keeps every range
+disjoint from every other owner, the modern orphan file included, and the
+shared xattr's reference count equal to the inodes that name it, so release
+admission walks no other inode.
 
 The builder derives the inode
 group, bitmap bit, table locator, primary GDT page, and primary-super home from
@@ -1416,66 +1386,9 @@ at its pre-free conservative high-water value and is not incremented during
 release; the now-free target record itself is exactly zero. Publish-then-fail
 paths abort and scrub the complete transaction.
 
-The production mount cleanup retains a successful reverse-owner proof only
-inside one serialized cleanup invocation, under the driver's exclusive
-raw-media-mutation contract. It is keyed to the context, target inode and
-generation, map family, range count, and every ordered physical
-`{ first, count }` pair;
-it is not backed by a per-write content generation counter. Every reuse still
-repeats local plan, inode, map-shape, static/journal, and orphan-file
-authentication. Dry staging and abort,
-journal-only activation, real staging, and commit cannot change another inode's
-home map while that exclusive contract holds. The proof is invalidated before
-retained-journal convergence, consumed immediately after a durable commit and
-before replay can write homes, and cleared on every return. It is never
-context-persistent and grants no authority across remount, a home write, or an
-external raw-media mutator.
-
-`_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE` joins that accounting builder to one
-authenticated map-removal case. It accepts only the canonical retained plan
-slot found by the plan's own hash probe; an external byte copy, empty table
-slot, or injected duplicate in a later probe slot has no cleanup authority.
-The media locator is reauthenticated and the target must be a linked regular
-file whose zero size is already durable, whose data map is either an inline
-depth-0 extent root or an exact empty legacy-format `i_block` array, and which
-does not use journal-data mode. The legacy-format case requires the `EXTENTS`
-flag clear and all 12 direct pointers plus the single-, double-, and
-triple-indirect roots zero. Any external xattr block is allocation- and
-checksum-authenticated, retained, and proved disjoint from the target data
-ranges. The decoded `i_blocks` value must exactly equal all captured extent
-blocks plus that retained xattr block in 512-byte sectors; for an empty map,
-only the retained xattr contribution may remain.
-
-Writable ownership admission also reauthenticates the modern orphan file
-through the complete read-profile mapper; cleanup no longer narrows that
-inode to an inline depth-0 extent root. While the exact target ranges are
-published, the full extent tree or legacy direct/indirect map is validated so
-leaf data, unwritten or preallocated storage beyond EOF, external extent
-nodes, and indirect metadata all participate in the disjointness proof. An
-external orphan-file xattr block is allocation- and checksum-authenticated
-under the same target scope. A separate singleton pass proves that this xattr
-block does not itself alias any data or map-metadata reference in the orphan
-inode, without making the xattr loader reject its own valid owner. Every
-logical orphan block is then reread through its physical-location-bound tail
-checksum, the ambient ownership scope is withdrawn on every return, and the
-selected target record is reauthenticated before staging continues. The
-target cleanup shapes remain the deliberately bounded inline-depth-0,
-resident depth-1 fanout, and admitted legacy direct/indirect deletion cases described
-above.
-
-For a nonempty captured extent root, the builder stages an inode with zero extent
-entries, clears all four inline entry slots, retains the extent header and
-external-xattr pointer, encodes the exact xattr-only `i_blocks` remainder
-(including `HUGE_FILE` units), and frees each captured range through the typed
-block-free builder. An already-empty, exactly accounted extent or legacy-format
-map has no storage work. Modern orphan-protocol cleanup therefore needs only
-its slot after-image, while a nonterminal legacy orphan-protocol record still
-stages the target inode to clear its consumed `i_dtime` successor. Once the
-inode afterimage is published, any later semantic, conflict, or credit failure
-aborts and scrubs the entire transaction; it recognizes a lower block-free
-auto-abort and does not abort twice. The operation intentionally leaves the
-orphan slot/list record active for a later durable protocol-completion step. It
-stages no data images and performs no media write.
+The target cleanup shapes remain the deliberately bounded inline-depth-0,
+resident depth-1 fanout, and admitted legacy direct/indirect deletion cases
+described above.
 Reusable external metadata freed by the transaction—the admitted extent leaves
 or legacy pointer blocks and a uniquely released external xattr—is retained in
 canonical map order followed by the xattr.
@@ -1537,8 +1450,7 @@ orphan counts and publishes an operation/protocol-specific `FINAL` mode for a
 one-record prestate or `MORE` mode for a larger prestate, or the protocol's
 `RELEASE` mode for a release pass, whose post-checkpoint union equals its
 prestate. Abort and every
-successful writer rebase scrub the complete sealed transaction certificate;
-this is distinct from the operation-scoped reverse-owner proof.
+successful writer rebase scrub the complete sealed transaction certificate.
 
 `_EXT4-MEASURE-ORPHAN-CLEANUP` applies the same per-record authentication
 without allocating a writer or publishing an after-image. It returns exact
@@ -1776,22 +1688,15 @@ admitted above, under both orphan mechanisms. The
 implementation adds no fixed cleanup
 record-count constant; positive union-drain qualification currently reaches
 two records.
-Before a supported unlinked deletion may release storage, it publishes every
-physical range in the admitted map together and performs one complete
-allocated-inode scan. Any data, map-metadata, or external-xattr
-reference from another inode to any of those ranges is a corrupt cross-link
-refusal. When physical ranges are present, the operation-scoped certificate
-binds the context, inode, generation, map family, range count, and all ordered
-range pairs; it may bridge measurement, dry staging, activation, restaging,
-and journal emission, but checkpoint invalidates it before its first home
-write. Whole-union qualification performs this proof for every retained
-record before the first cleanup transaction may mutate media: for an
-unlinked record over every range of its admitted map, and for a linked
-record over every data run its release will free, published from the end of
-the file in vectors as large as the mutation range workspace. Each linked
-release pass then proves the runs and tree nodes it frees with the general
-write's home-set proof: the target's tree maps each exactly once, and no
-other inode maps any of them.
+Before a supported unlinked deletion may release storage, every physical
+range in its admitted map must have the deleted inode as its one owner, as
+the mount's block-ownership proof establishes before the first cleanup
+transaction may mutate media; a data, map-metadata, or external-xattr
+reference from another inode is a corrupt cross-link refusal there, for
+every retained record at once. Each linked release pass proves the runs and
+tree nodes it frees with the general write's home-set proof and map check:
+the target's tree maps each exactly once, and the staged tree differs from
+the old one by exactly the blocks the pass frees.
 Per-shape single-record qualification includes initialized and unwritten
 extents, nonzero logical starts, multiple separated logical/physical ranges,
 the four-entry inline maximum, the 12-slot legacy-direct maximum, sparse
@@ -1814,6 +1719,69 @@ implemented mutations. `Staged` distinguishes that operation set from complete
 `akashic-ext4-rw-v1` conformance. It describes capability breadth, not a
 separate write path: every operation admitted here uses the production driver,
 durability lifecycle, recovery machinery, and on-disk ext4 format.
+
+### Block ownership
+
+Before a mount's first write, one walk proves that the block bitmaps hold
+exactly the blocks the volume's owners hold, each owned once. The fixed owners
+are every group's block and inode bitmaps and inode table, wherever its
+descriptor places them, and the superblock and descriptor-table copies each
+sparse group holds. Every allocated inode owns its map: an extent tree's data
+and the tree nodes below its root, or a legacy map's data and pointer blocks.
+The resize inode's map holds the reserved descriptor blocks, and the journal's
+and the orphan file's maps hold theirs. The walk validates every allocated
+inode through the ordinary complete validators, which claim each block they
+authenticate in a claim map of one bit per block, so the walk refuses a block
+claimed twice, by two owners or twice by one. An external xattr block may be
+shared, so the walk lists every reference to one; each listed block is then
+claimed once and must carry an `h_refcount` equal to the inodes that name it.
+Each group's block bitmap, or for a `BLOCK_UNINIT` group the one the group
+stands for, must finally equal the claims in the group's blocks. The claim map
+is the mount's claim workspace, one bit per block and one block of scratch,
+which mount reserves with its other workspaces before its rollback-owned tail;
+a mount whose arena is too small for it refuses with `VFS-E-NOMEM`. The
+reference list grows at the top of the mount arena and is rolled back when the
+proof ends, and the proof refuses with `VFS-E-NOMEM` when the list outgrows the
+arena. A failed proof returns a corrupt data-map or xattr result and leaves the
+mount unproved, and the driver refuses every write until a remount's proof
+succeeds. Mount recovery runs the proof before its first orphan cleanup, and
+every mounted mutation runs it at its entry otherwise, so only a mount that
+writes pays for it. On the 64 MiB, 1 KiB-block fixture it costs 28.6 million
+guest steps. The proof also covers the journal protocol's check that no inode
+maps the primary superblock or a journal block, since it gives each of those
+blocks its one owner.
+
+The driver is the one writer of a mounted volume, so each transaction
+afterwards checks its own changes. A block a transaction frees must have its
+bit set and be mapped once by the file's old map, a block it allocates must
+have its bit clear, and the maps it changes must differ from their old selves
+by exactly the blocks it allocates and frees. Every staged transaction proves
+the last with a map check before it can commit. The check claims each changed
+map as it stood before the transaction; each block bitmap the transaction
+stages then claims the blocks it sets and releases the blocks it clears; and
+each changed map as staged, read through the transaction, must release exactly
+the claims that remain. A transaction that maps a block by mistake, drops a
+block from a map while leaving it allocated, or maps a block twice therefore
+refuses before commit. A bitmap's checksum lives in its group's descriptor, so
+the descriptors the transaction's descriptor-table pages change name every
+bitmap it changes.
+
+The general write, truncate, the truncate's orphan insertion and the release
+passes claim the target's old map during the home-set audit's walk of its tree.
+Create, mkdir, link, unlink, rmdir, rename, setattr and an orphan's deletion
+name each inode record they stage as kept, created or freed. A created inode's
+staged map must hold only blocks the transaction allocates, and a freed inode's
+old map only blocks it frees. A kept inode's old and staged maps are both
+checked when the transaction changes its file type, block count, flags or map;
+otherwise the record passes after one comparison of those fields. A kept
+inode's xattr block stays where it is in every transaction, and the check
+refuses a kept record whose xattr block changes. An orphan's deletion also
+claims the xattr block it frees when the orphan is that block's last owner. A
+mount cleanup writer owns the end of the mount arena while it stages, so the
+check works entirely in the claim workspace; a check that passes leaves the map
+clear, and one that refuses clears it. Guest-step figures this document records
+for operations measured before the proof replaced each write's scan of every
+other inode include that scan.
 
 ### General regular-file write
 
@@ -1925,9 +1893,10 @@ pre-transaction tree counts every overlap with the home set while checking
 each target range's mutation role. The count must equal the existing data
 blocks and tree nodes the transaction rewrites, so each of those is mapped
 exactly once, and the target maps no block the transaction allocated and no
-accounting home. The target's external xattr block may not be a home. One
-filesystem-wide walk then proves that no other allocated inode maps any home
-through its data, tree nodes, or xattr block.
+accounting home. The target's external xattr block may not be a home. That
+walk also claims the target's map for the map check, which proves that the
+staged tree differs from the old one by exactly the blocks the transaction
+allocates; with the mount's ownership proof, no other owner holds any home.
 
 ### Progress and crash boundaries
 
@@ -1989,8 +1958,9 @@ qualified six-home depth-one slack CREATE. A representative committed W28 tear
 in the new DX node leaves three earlier homes landed, replays all 11 homes on a
 fresh mount, passes `e2fsck`, and is followed by a zero-write, byte-identical
 stable remount. A ten-home writer profile cannot admit the exact 11-home plan,
-and an allocated unrelated inode cannot alias the HTree root during reverse-
-owner proof; both refusals leave the cache and complete media image unchanged.
+and an allocated unrelated inode cannot alias the HTree root, which the
+mount's ownership proof refuses; both refusals leave the cache and complete
+media image unchanged.
 The accumulated seven-test source-JIT capstone passes those public, recovery,
 refusal, depth-one follow-on, and external-oracle paths sequentially in 926.68
 host seconds. The final depth-one mutation completes in 1,449,054,483 of its
@@ -2009,10 +1979,10 @@ route, selected leaf, target hash, and either the insertion
 tuple or complete stable split plan; every dry and live pass must reproduce
 them. Slack insertion uses a scoped complete-map audit to prove the selected
 leaf occurs exactly once as directory data and never as an external extent
-node before the filesystem-wide owner proof excludes the parent. Split
-admission instead validates every preimage extent role with no privileged
-target, then proves the root, old leaf, candidate leaf, and, when present,
-external extent leaf have no other owner. Admitted indexed sector accounting
+node. Split admission instead validates every preimage extent role with no
+privileged target. The mount's ownership proof gives the root, old leaf, and
+external extent leaf the parent alone and leaves the clear candidate leaf
+unowned. Admitted indexed sector accounting
 is exact for an inline depth-zero map or a singleton resident depth-one root
 naming one checksummed external extent leaf. The last extent must end at
 logical EOF and must either coalesce with the newly selected block or leave an
@@ -2035,11 +2005,10 @@ live entry can validly produce an empty first leaf represented by one deleted
 The allocator selects two distinct clear blocks through the ordinary
 geometry walk and its exclusion-aware second-candidate form. Their exact
 groups, bitmap homes, and primary-GDT homes are baseline authority. Before
-staging, one complete map audit proves the old one-block parent map, then one
-three-range filesystem walk proves the old root and both candidates have no
-other owner. The proof refuses any ambient owner, map, journal-protocol,
-external-xattr-reference, or ownership-certificate scope before publishing
-its temporary vector and withdraws that vector on every exit.
+staging, one complete map audit proves the old one-block parent map; the
+mount's ownership proof gives the old root the parent alone and leaves both
+clear candidates unowned. Conversion refuses any ambient map-audit or
+journal-protocol scope.
 
 The old directory block becomes the checksummed DX root; the two candidates
 become independently checksummed leaves. The parent is rewritten to size
@@ -2139,13 +2108,11 @@ A nonadjacent qualification leaves only block 1351 available in group zero and
 selects block 8451 in group one. It produces three singleton parent extents and
 ten exact homes, including both block bitmaps, while sharing the primary GDT
 page. It completes in 1,673,299,481 of the checked-in 1.70-billion guard and
-passes the same external oracles. Its complete owner proof also authenticates
-the 6,841-block unwritten ballast extent that leaves only the group-zero
-singleton available; this real topology accounts for the additional measured
-work. In the canonical nine-home case, a published ambient owner range for
-candidate 1351 returns `BUSY` before range preparation and preserves the
-caller's exact pointer, capacity, count, bounds, and range words. After that
-scope is explicitly cleared, a profile with one fewer metadata slot refuses
+passes the same external oracles. The 6,841-block unwritten ballast extent
+that leaves only the group-zero singleton available accounts for the
+additional measured work. In the canonical nine-home case, a published ambient
+map-audit target for candidate 1351 returns `BUSY` before range preparation
+and is preserved. After that scope is explicitly cleared, a profile with one fewer metadata slot refuses
 with `NOSPC` after exact topology measurement and performs no write. A sector
 tear on that case's second leaf at W27 retains committed CREATE authority after
 four complete checkpoint homes; the fault journey uses 1,376,638,284 steps,
@@ -2201,12 +2168,12 @@ Inode selection retains CREATE's initialized-group bitmap, inode-table,
 generation, descriptor, and primary-superblock authentication. MKDIR also
 selects a clear data-block bit from runtime initialized geometry. The complete
 parent-map audit proves that the selected linear block or indexed leaf occurs
-exactly once in that parent. A paired whole-filesystem owner proof then excludes
-every other inode from both the selected mutable block and the distinct child
-candidate. Static-metadata, journal, bitmap, descriptor, superblock, and
-inode-table aliases are rejected separately. Dry staging performs that proof
-before journal activation, and live staging repeats it and recaptures the
-complete parent authority plus candidate from current media.
+exactly once in that parent, and the mount's ownership proof gives it the
+parent alone and leaves the clear child candidate unowned. Static-metadata,
+journal, bitmap, descriptor, superblock, and inode-table aliases are rejected
+separately. Dry staging performs that audit before journal activation, and
+live staging repeats it and recaptures the complete parent authority plus
+candidate from current media.
 
 The new inode is a root-owned mode-0755 directory with link count two, size one
 filesystem block, one depth-zero initialized extent at logical block zero,
@@ -2279,16 +2246,11 @@ must contain one exact file-type-2 target entry. Its link count must be at least
 three. Indexed admission authenticates the complete parent map, HTree root,
 primary-super hash authority, active table or sole DX node, and every active
 checksummed leaf. It binds the route/hash and selected leaf across cold, dry,
-and live passes. Before excluding the parent and child from the paired owner
-walk, one complete parent-map pass proves the child release block has zero
-references and a second proves the selected leaf has exactly one. The generic
-map hook also rejects a child-block alias with the parent's external extent
-node. One two-owner reverse-map walk then publishes both distinct directory
-ranges and excludes only their two legitimate inode owners. Every other
-allocated inode is checked against both ranges in that single walk. Dry and
-live staging each repeat the proof and recapture the target, canonical child
-block, parent inode, complete HTree authority, and selected leaf before
-retaining an after-image.
+and live passes. One complete parent-map pass proves the selected leaf has
+exactly one reference, and the mount's ownership proof gives the child's
+release block the child alone. Dry and live staging each repeat the pass and
+recapture the target, canonical child block, parent inode, complete HTree
+authority, and selected leaf before retaining an after-image.
 
 Removal zeroes the complete child inode, decrements and restamps the parent
 inode, splices and restamps the parent directory, clears the child block bit,
@@ -2484,11 +2446,10 @@ same-parent envelope.
 
 The original cross-parent linear envelope admits the same regular-file source and two
 distinct authenticated, root-owned, non-setgid, checksummed one-block linear
-parents, with an absent destination and no victim. Before activation it runs
-one paired owner walk for the old and new directory blocks, then fully
+parents, with an absent destination and no victim. Before activation it fully
 reauthenticates the source inode, both parent inodes, both complete directory
-blocks, maps, xattrs, identities, generations, and cache projections after
-that walk. The old-parent after-image discards unused records and the exact
+blocks, maps, xattrs, identities, generations, and cache projections; the
+mount's ownership proof gives each directory block its parent alone. The old-parent after-image discards unused records and the exact
 source record, emits the other live records in original order at minimum
 aligned lengths, and lets the final survivor consume the remaining space. The
 new-parent after-image discards unused records, emits existing live records in
@@ -2608,18 +2569,12 @@ leaf, and destination leaf for five roles. The canonical directory move adds
 its child-directory role for six. Generic home deduplication still derives the
 exact metadata credit and checkpoint order.
 
-Ownership admission is topology-specific rather than weakened to a local
-leaf check. A same-parent same-leaf move requires one complete-map hit for the
-leaf and then its single-owner proof. A same-parent cross-leaf move requires
-one hit for each leaf and then the paired owner proof. Across parents, the old
-indexed map, when present, must report `(old leaf = 1, new leaf = 0)` and the
-new indexed map, when present, must report
-`(new leaf = 1, old leaf = 0)`. Thus two indexed parents form the exact 2x2
-map proof; a mixed move applies the corresponding row to its indexed parent.
-The filesystem-wide paired owner scan follows in every cross-parent shape.
-For a directory move, the canonical child block must additionally have zero
-hits in every applicable indexed parent map before its separate child-owner
-proof; the existing `..` rewrite and parent-link transfer remain unchanged.
+Ownership admission is topology-specific. A same-parent same-leaf move
+requires one complete-map hit for the leaf, and a same-parent cross-leaf move
+one hit for each leaf. Across parents, each indexed parent map, when present,
+must report one hit for its own leaf. The mount's ownership proof gives each
+leaf its parent alone and a moved directory's child block that directory
+alone; the existing `..` rewrite and parent-link transfer remain unchanged.
 
 The deliberately lean positive gate uses one source-built session for exactly
 two regular moves. It first renames
@@ -2691,8 +2646,9 @@ trusted-clock `mtime` and `ctime`, is the transaction's last home.
 The home-set proof is the general write's. One validation walk of the
 target's pre-transaction tree counts every overlap with the freed runs and
 the transaction's homes; the count must equal the freed blocks, the zeroed
-tail, and the existing tree nodes the transaction edits. The filesystem-wide
-owner scan then proves that no other inode maps any of them.
+tail, and the existing tree nodes the transaction edits. The map check then
+proves that the staged tree differs from the old one by exactly the blocks
+the transaction frees.
 
 On a clean mount the transaction is staged and proved before the journal is
 activated, so a refusal performs no media I/O; the live pass then repeats it
@@ -2775,9 +2731,10 @@ session must bind that clock before the first mutation.
 
 Admission and the dry/live transaction stages reauthenticate the dentry/vnode,
 inode generation and locator, complete current mapping, inode-table record,
-cache projection, and inline plus external xattrs. The owner proof establishes
-that neither the target nor any other inode aliases the inode-table home as
-data, extent-map metadata, or external-xattr storage. An accepted edit commits
+cache projection, and inline plus external xattrs. The mount's ownership
+proof gives the inode-table home its group's table alone, so no inode aliases
+it as data, extent-map metadata, or external-xattr storage. An accepted edit
+commits
 one checksummed inode-table metadata after-image under exact `1/0/0` credit:
 there is no data payload, revoke, allocation, accounting edit, or orphan state.
 Unselected scalar fields, file bytes, the complete map, links, size, block
@@ -2845,7 +2802,8 @@ cardinality are checked globally.
 Cold, dry, and live passes bind and compare the root, optional node, selected
 leaf, route/hash result, parent locator, and parent-inode snapshot in the
 binding-owned plan. A complete map audit requires the selected leaf exactly
-once before the existing unique-owner proof. The selected leaf then occupies
+once, and the mount's ownership proof gives it the parent alone. The selected
+leaf then occupies
 the unchanged `PARENT-DIRECTORY` transaction role; the root, optional node,
 extent map, and every other leaf remain immutable authenticated inputs and are
 not transaction homes. The selected name must still have a live predecessor
@@ -3149,8 +3107,8 @@ inode geometry for extent-mapped files at every depth the format allows; exact
 writes compose independently durable transactions, and no broader geometry or
 operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded `CREATE` and
-`MKDIR` under their documented linear/indexed envelopes, general
-single-transaction `TRUNCATE`, and bounded regular-file
+`MKDIR` under their documented linear/indexed envelopes, general `TRUNCATE`,
+and bounded regular-file
 `UNLINK`—including nonfinal, direct empty-final, and orphan-backed closed/open
 final removal from admitted linear, depth-zero HTree, or singleton depth-one
 HTree parents—and bounded canonical empty-directory `RMDIR` from those same
@@ -3221,7 +3179,7 @@ compacted after-image, restamps source ctime and parent mtime/ctime, and
 preserves link counts, allocation, data, maps, xattrs, and orphan state.
 Cross-parent regular-file RENAME uses exact deduplicated `3/0/0` through
 `5/0/0` credit for the three inode-table roles and two directory blocks. It
-performs one paired owner proof followed by full reauthentication, installs
+performs full reauthentication, installs
 canonical compact-remove and compact-append after-images, and restamps source
 ctime plus both parents' mtime/ctime while preserving all link counts,
 allocation, data, maps, xattrs, accounting, and orphan state. The canonical
@@ -3277,10 +3235,10 @@ CREATE/TRUNCATE/UNLINK capstone passes all 11 selected tests sequentially in
 canonical `.`/`..` construction, parent-link and `used_dirs` accounting,
 four zero-write refusal gates, W7 precommit rollback, and W25 committed
 eight-home replay, with pinned external-tool and stable-remount acceptance.
-The established linear-parent RMDIR qualification adds a single-walk two-owner
-proof, exact parent namespace and inode after-image oracles, inode/block release
-with parent-link and `used_dirs` decrement, a revoke-only freed child block, six
-zero-write refusal gates plus hostile aliases of each protected owner range, W7
+The established linear-parent RMDIR qualification adds exact parent namespace
+and inode after-image oracles, inode/block release with parent-link and
+`used_dirs` decrement, a revoke-only freed child block, six zero-write refusal
+gates plus hostile aliases of each protected range, W7
 rollback, and W25
 committed seven-home replay. Pinned external tools and the write-free stable
 remount accept the result. Bounded hard LINK adds exact shared-home and
@@ -3322,7 +3280,7 @@ targets, including last-close failure recovery. Depth-zero indexed CREATE now
 splits a full selected leaf while its root retains entry capacity. The bounded
 root-growth planner and public live path are qualified, as is stable singleton
 depth-one CREATE. Representative committed root-growth replay and byte-stable
-remount plus focused credit and reverse-owner refusals are qualified. Existing-
+remount plus focused credit and ownership refusals are qualified. Existing-
 slack indexed `LINK` and `MKDIR` are admitted for depth-zero and singleton
 depth-one parents, with happy-path qualification at both depths. Their shared
 full-leaf refusal and compositional recovery boundary draft-close the
@@ -3365,7 +3323,7 @@ ordered list of prerequisites for retaining the qualified write surface:
   ordered full-block images, run allocation accounting, extent-tree nodes,
   and timed checksummed inode after-image. All
   operations run only after
-  mutation-range and filesystem-wide ownership proof. Broader mutation remains
+  the mount's block-ownership proof and their own mutation-range checks. Broader mutation remains
   gated operation by operation.
   Transaction-aware metadata acquisition, checksum-safe typed
   orphan-inode replacement, free-only physical-block accounting, linked
@@ -3441,23 +3399,20 @@ ordered list of prerequisites for retaining the qualified write surface:
   depth-1 orphan-file fixture places all 31 logical blocks behind a preserved
   external extent node. Linked production cleanup completes with its existing
   exact 34-write/24-flush trace in 1,111,798,161 guest steps, and the resulting
-  image remounts byte-identically with zero I/O in 67,492,163 steps. The
-  corresponding unlinked JFI admission and complete owner proof take
-  240,654,652 steps without a media write. A hostile valid external-xattr
-  block also mapped as orphan-file preallocation is rejected as
-  `EXT4-D-DATA-MAP` in 121,741,936 steps with all temporary ownership state
-  cleared. These are harness measurements, not driver capacities.
+  image remounts byte-identically with zero I/O in 67,492,163 steps. A hostile
+  valid external-xattr block also mapped as orphan-file preallocation is
+  rejected as `EXT4-D-DATA-MAP` by the mount's ownership proof. These are
+  harness measurements, not driver capacities.
   Mount-level refusal covers a nonzero physical high word, unauthorized or
   malformed external-xattr release shapes, orphan-storage aliasing, a clear
   one-block data bit, and a two-block extent whose second allocation bit is
   clear.
   Checksum-valid allocated live-inode fixtures additionally prove that both a
   data extent and an external-xattr pointer aliasing the candidate are
-  rejected as `EXT4-D-DATA-MAP` before writer allocation or media mutation.
-  A three-block candidate whose middle block alone is named by a live inode
-  proves that reverse-owner admission covers the complete range. Both orphan
-  protocols are qualified; the same-binding retry returns the same refusal
-  with the scoped ownership proof and ambient probe cleared.
+  rejected as `EXT4-D-DATA-MAP` by the mount's ownership proof before writer
+  allocation or media mutation, as is a three-block candidate whose middle
+  block alone is named by a live inode. Both orphan protocols are qualified;
+  the same-binding retry returns the same refusal.
   Focused unique-external-xattr qualification covers xattr-only and
   data-plus-xattr deletion plus a complete modern production checkpoint.
   Shared-xattr qualification now separately passes exact EA-only
@@ -3523,7 +3478,7 @@ ordered list of prerequisites for retaining the qualified write surface:
   ordered singleton ranges. Duplicate pointers and mismatched `i_blocks` are
   corrupt data maps.
   A maximum-union regression adds the separate unique external-xattr block,
-  exercises all 13 ambient owner ranges, and keeps the 12 data pairs plus xattr
+  exercises all 13 release ranges, and keeps the 12 data pairs plus xattr
   field distinct through staged verification and abort. Full production cleanup
   with `i_size = 2^32 + 777` completes in
   1,156,337,987 modern and 1,157,813,068 legacy guest steps under a scoped
@@ -3580,7 +3535,7 @@ ordered list of prerequisites for retaining the qualified write surface:
   legacy head and locator authority. Both stage and seal retain zero target
   entries, one singleton map-metadata release range, one map block, the root's exact
   revoke, and distinct `LEGACY-SPARSE-TRIPLE` authority; preplan and staged
-  verification pass, and abort returns the writer and ownership scope clean
+  verification pass, and abort returns the writer and claim scope clean
   with zero home writes. A second staging pair adds one seeded direct singleton
   in slot 5 ahead of the same empty triple root. Modern completes in 538,439,735
   guest steps and legacy in 530,481,498 under the unchanged 800,000,000-step
@@ -3738,15 +3693,14 @@ ordered list of prerequisites for retaining the qualified write surface:
   legacy-format linked map remains unsupported. This focused evidence makes no
   production, crash-recovery, or e2fsck claim. A
   later four-extent unlinked record whose fourth range is also owned by a live
-  inode proves combined all-range ownership refusal after an earlier supported
-  record qualifies but before any write or flush. Structurally valid
+  inode is refused by the mount's ownership proof before any write or flush. Structurally valid
   post-seal total-count, protocol-split, and `MORE`/`FINAL` substitutions all
   fault at checkpoint preflight with zero home writes. A linked-owner matrix
   places a live-inode alias in the later selected record: a two-entry modern
-  root and a four-entry legacy root both fail whole-union qualification as
-  `EXT4-D-DATA-MAP`, leave the earlier safe record untouched, perform no write
-  or flush, preserve the caller arena on retry, and clear the ambient range
-  table and operation certificate. Modern-only and legacy-only two-record
+  root and a four-entry legacy root both fail the mount's ownership proof as
+  `EXT4-D-DATA-MAP` before qualification, leave the earlier safe record
+  untouched, perform no write or flush, and preserve the caller arena on
+  retry. Modern-only and legacy-only two-record
   deletion fixtures give unlinked head 18 respectively two and four separated
   initialized/unwritten extents before empty successor 21. Exact stage/abort
   qualification pins the six-credit `MODERN_DATA_DELETE_MORE` and five-credit
