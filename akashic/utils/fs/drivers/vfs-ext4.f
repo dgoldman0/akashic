@@ -38,11 +38,8 @@ REQUIRE ext4/vfs-ext4-jbd2-revoke.f
 \ not prove that a block referenced by an inode or metadata pointer is marked
 \ allocated.  Keep that ownership check explicit and reusable by every map.
 \ A resident extent root has four format-defined entry slots, used either as
-\ depth-zero extents or as child indexes.  A legacy inode has twelve direct
-\ slots plus block-size-derived indirect fanout.  Transaction and owner
-\ authority use the larger admitted extent-tree geometry as their shared bound.
+\ depth-zero extents or as child indexes.
 4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX
-_EXT4-NDIRECT CONSTANT _EXT4-LEGACY-DIRECT-RANGE-MAX
 
 \ A claim map holds one bit for each block from C.FIRST.  While a claim scope
 \ is open, the map validators below note every block an inode owns, its data
@@ -882,6 +879,8 @@ VARIABLE _EXT4-MAP-CHILD
 \ Legacy mappings remain an admitted read format even when the filesystem
 \ advertises extents globally.  Validate the complete direct/indirect tree
 \ with a depth bound of three and then use the same checked map interface.
+\ Data pointers that continue one another gather into one run, which is
+\ checked, noted and counted at once, as an extent's blocks are.
 VARIABLE _EXT4-LV-CTX
 VARIABLE _EXT4-LV-PTRS
 VARIABLE _EXT4-LV-CHILD
@@ -889,6 +888,51 @@ VARIABLE _EXT4-LV-CHILD-LEVEL
 VARIABLE _EXT4-LV-CHILD-BASE
 VARIABLE _EXT4-LV-SPAN
 VARIABLE _EXT4-LV-ROOT-BASE
+VARIABLE _EXT4-LV-RUN-FIRST
+VARIABLE _EXT4-LV-RUN-COUNT
+
+\ A published map audit checks the mutation role of each range it meets and
+\ counts the range's overlap with its vector, or, with no vector, whether
+\ the range holds its one TARGET block.  A pointer block is never TARGET.
+: _EXT4-LV-AUDIT  ( first count data? -- ior )
+    _EXT4-MUTATION-MAP-ACTIVE @ 0= IF DROP 2DROP 0 EXIT THEN
+    >R 2DUP _EXT4-LV-CTX @ _EXT4-MUTATION-ROLE-RANGE ?DUP IF
+        R> DROP NIP NIP EXIT
+    THEN
+    _EXT4-MUTATION-MAP-ALIASES? 0= IF
+        R> 2DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    R> SWAP IF
+        0= IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+        1 _EXT4-MUTATION-MAP-HITS +!
+        _EXT4-MUTATION-MAP-HITS @ 1 U> IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+    ELSE
+        DROP
+    THEN 0 ;
+
+\ Check the pending data run: allocated, noted in an open claim scope, and
+\ audited.
+: _EXT4-LV-FLUSH  ( -- ior )
+    _EXT4-LV-RUN-COUNT @ 0= IF 0 EXIT THEN
+    _EXT4-LV-RUN-FIRST @ _EXT4-LV-RUN-COUNT @ EXT4-D-DATA-MAP _EXT4-LV-CTX @
+    _EXT4-REQUIRE-ALLOCATED-RANGE ?DUP IF EXIT THEN
+    _EXT4-LV-RUN-FIRST @ _EXT4-LV-RUN-COUNT @ _EXT4-OWN-NOTE ?DUP IF EXIT THEN
+    _EXT4-LV-RUN-FIRST @ _EXT4-LV-RUN-COUNT @ TRUE _EXT4-LV-AUDIT
+    ?DUP IF EXIT THEN
+    0 _EXT4-LV-RUN-COUNT ! 0 ;
+
+\ Add one data pointer to the pending run, or check the run it does not
+\ continue and start another.
+: _EXT4-LV-DATA  ( block -- ior )
+    _EXT4-LV-RUN-COUNT @ IF
+        DUP _EXT4-LV-RUN-FIRST @ _EXT4-LV-RUN-COUNT @ + = IF
+            DROP 1 _EXT4-LV-RUN-COUNT +! 0 EXIT
+        THEN
+        _EXT4-LV-FLUSH ?DUP IF NIP EXIT THEN
+    THEN
+    _EXT4-LV-RUN-FIRST ! 1 _EXT4-LV-RUN-COUNT ! 0 ;
 
 : _EXT4-LOAD-LEGACY-POINTER-BLOCK  ( physical-block ctx -- ior )
     DUP _EXT4-LV-CTX ! SWAP DUP >R EXT4-D-DATA-MAP ROT
@@ -917,6 +961,7 @@ VARIABLE _EXT4-LV-ROOT-BASE
         >R DROP 2DROP R> EXIT
     THEN
     2 PICK 1 _EXT4-OWN-NOTE ?DUP IF >R DROP 2DROP R> EXIT THEN
+    2 PICK 1 FALSE _EXT4-LV-AUDIT ?DUP IF >R DROP 2DROP R> EXIT THEN
     _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ 4 / 0 ?DO
         _EXT4-LV-CTX @ _EXT4-C.TREE-BLOCK + I 4 * + L@ ?DUP IF
             2 PICK 1 > IF
@@ -947,19 +992,14 @@ VARIABLE _EXT4-LV-ROOT-BASE
                         UNLOOP EXIT
                     THEN
                 THEN
-                DUP EXT4-D-DATA-MAP _EXT4-LV-CTX @
-                _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF
-                    >R 2DROP 2DROP R> UNLOOP EXIT
-                THEN
-                1 _EXT4-OWN-NOTE ?DUP IF
-                    >R DROP 2DROP R> UNLOOP EXIT
-                THEN
+                _EXT4-LV-DATA ?DUP IF >R DROP 2DROP R> UNLOOP EXIT THEN
             THEN
         THEN
     LOOP DROP 2DROP 0 ;
 
 : _EXT4-VALIDATE-LEGACY-MAP  ( ctx -- ior )
     DUP _EXT4-LV-CTX ! _EXT4-C.INODE + _EXT4-I.BLOCK +
+    0 _EXT4-LV-RUN-COUNT !
     _EXT4-NDIRECT 0 DO
         DUP I 4 * + L@ ?DUP IF
             _EXT4-MAP-VALIDATION-LIMIT @ IF
@@ -968,11 +1008,7 @@ VARIABLE _EXT4-LV-ROOT-BASE
                     UNLOOP EXIT
                 THEN
             THEN
-            DUP EXT4-D-DATA-MAP _EXT4-LV-CTX @
-            _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF
-                NIP NIP UNLOOP EXIT
-            THEN
-            1 _EXT4-OWN-NOTE ?DUP IF NIP UNLOOP EXIT THEN
+            _EXT4-LV-DATA ?DUP IF NIP UNLOOP EXIT THEN
         THEN
     LOOP
     _EXT4-LV-CTX @ _EXT4-C.BSIZE + @ 4 / _EXT4-LV-PTRS !
@@ -993,7 +1029,46 @@ VARIABLE _EXT4-LV-ROOT-BASE
         THEN
         _EXT4-LV-PTRS @ I 1+ _EXT4-U-POWER
         _EXT4-LV-ROOT-BASE +!
-    LOOP DROP 0 ;
+    LOOP DROP _EXT4-LV-FLUSH ;
+
+\ Validate the map of the record in C.INODE, an extent tree or a legacy
+\ block map as its flags say.
+: _EXT4-VALIDATE-DATA-MAP  ( ctx -- ior )
+    DUP _EXT4-C.INODE + _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND IF
+        _EXT4-VALIDATE-EXTENT-TREE
+    ELSE
+        _EXT4-VALIDATE-LEGACY-MAP
+    THEN ;
+
+\ True when a regular file's map maps a block: an extent root with
+\ entries, or a legacy map with any pointer.
+: _EXT4-MAP-MAPS?  ( inode -- flag )
+    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND IF
+        _EXT4-I.BLOCK + 2 + W@ 0<> EXIT
+    THEN
+    _EXT4-I.BLOCK + 60 _EXT4-BYTES-ZERO? 0= ;
+
+\ The root entries a linked target's certificate binds: an extent root's
+\ entry count, or for a legacy map one entry, its i_block array, when the
+\ array maps a block.  A count of zero tells the checkpoint that the target
+\ maps nothing, so its transaction frees no block.
+: _EXT4-ROOT-ENTRIES  ( inode -- count )
+    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND IF
+        _EXT4-I.BLOCK + 2 + W@ EXIT
+    THEN
+    _EXT4-MAP-MAPS? 1 AND ;
+
+\ The levels a removal step from a regular file's map may empty: an extent
+\ tree's depth, or the highest indirect level a legacy map uses.
+: _EXT4-RELEASE-DEPTH  ( inode -- depth )
+    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND IF
+        _EXT4-I.BLOCK + 6 + W@ EXIT
+    THEN
+    _EXT4-I.BLOCK + 3
+    BEGIN DUP WHILE
+        2DUP _EXT4-NDIRECT + 1- 4 * + L@ IF NIP EXIT THEN
+        1-
+    REPEAT NIP ;
 
 VARIABLE _EXT4-LM-INDEX
 VARIABLE _EXT4-LM-PTR
@@ -3866,14 +3941,12 @@ VARIABLE _EXT4-RW-GDT-BLOCK
 15 CONSTANT _EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD-FIRST
 16 CONSTANT _EXT4-JCPM-ORPHAN-LEGACY-RELEASE
 
+\ A deletion's data vector.  Release passes empty the map before a deletion
+\ of its own, which frees no data.  A deletion whose release pass, in the
+\ same transaction, freed what was left of the map takes as its vector the
+\ runs that pass freed, map blocks among them.
 0 CONSTANT _EXT4-JDM-NONE
-1 CONSTANT _EXT4-JDM-INLINE-EXTENTS
-2 CONSTANT _EXT4-JDM-LEGACY-DIRECT
-3 CONSTANT _EXT4-JDM-DEPTH1-LEAVES
-4 CONSTANT _EXT4-JDM-LEGACY-SINGLE-INDIRECT
-5 CONSTANT _EXT4-JDM-LEGACY-SPARSE-DOUBLE
-6 CONSTANT _EXT4-JDM-LEGACY-SPARSE-TRIPLE
-7 CONSTANT _EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD
+1 CONSTANT _EXT4-JDM-RELEASED
 
 0 CONSTANT _EXT4-JEA-NONE
 1 CONSTANT _EXT4-JEA-RELEASE
@@ -4654,10 +4727,6 @@ VARIABLE _EXT4-JCA-EA-ACTION
 VARIABLE _EXT4-JCA-EA-REFCOUNT
 VARIABLE _EXT4-JCA-EA-CRC
 VARIABLE _EXT4-JCA-DATA-MAP-KIND
-VARIABLE _EXT4-JCA-MAP-ENTRIES
-VARIABLE _EXT4-JCA-MAP-DATA-CAP
-VARIABLE _EXT4-JCA-MAP-INDEX
-VARIABLE _EXT4-JCA-REVOKE-COUNT
 VARIABLE _EXT4-JCA-REVOKE-INDEX
 VARIABLE _EXT4-JCA-REVOKE-HOME
 VARIABLE _EXT4-JCA-PRE-ACTIVE
@@ -4778,127 +4847,17 @@ VARIABLE _EXT4-JCA-QUERY-HOME
     LOOP
     TRUE ;
 
-\ Bind deletion authority to the inode representation that produced its exact
-\ range vector.  Legacy direct slots stay as singleton ranges in logical-slot
-\ order; an arbitrary coalesced range is not an equivalent direct-map proof.
+\ A deletion's data vector is the runs a release pass freed with it, or
+\ nothing at all once release passes have emptied the map.  The target's
+\ entry count is the vector's run count.
 : _EXT4-JCA-DELETE-DATA-MAP?  ( -- flag )
-    0 _EXT4-JCA-MAP-ENTRIES !
     _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-MAP-KIND + @ DUP
     _EXT4-JCA-DATA-MAP-KIND !
-    _EXT4-JDM-INLINE-EXTENTS = IF
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> IF FALSE EXIT THEN
-        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ = EXIT
-    THEN
-    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-LEAVES = IF
-        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ U> IF
-            FALSE EXIT
-        THEN
-        _EXT4-JCA-RANGE-COUNT @ _EXT4-JCA-TARGET-ENTRIES @ -
-        DUP _EXT4-JCA-MAP-ENTRIES !
-        DUP 0= SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR IF
-            FALSE EXIT
-        THEN
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-JCA-MAP-ENTRIES @ U< IF FALSE EXIT THEN
-        _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 12 - 12 /
-        _EXT4-JCA-MAP-ENTRIES @ _EXT4-UMUL?
-        DUP IF 2DROP FALSE EXIT THEN DROP _EXT4-JCA-MAP-DATA-CAP !
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-JCA-MAP-DATA-CAP @ U> IF FALSE EXIT THEN
-        0 _EXT4-JCA-MAP-INDEX !
-        BEGIN
-            _EXT4-JCA-MAP-INDEX @ _EXT4-JCA-MAP-ENTRIES @ U<
-        WHILE
-            _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-MAP-INDEX @ +
-            _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE
-            CELL+ @ 1 <> IF FALSE EXIT THEN
-            1 _EXT4-JCA-MAP-INDEX +!
-        REPEAT
-        TRUE EXIT
-    THEN
-    _EXT4-JCA-DATA-MAP-KIND @
-    _EXT4-JDM-LEGACY-SINGLE-INDIRECT = IF
-        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ U> IF
-            FALSE EXIT
-        THEN
-        _EXT4-JCA-RANGE-COUNT @ _EXT4-JCA-TARGET-ENTRIES @ -
-        DUP _EXT4-JCA-MAP-ENTRIES ! 1 <> IF FALSE EXIT THEN
-        _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 /
-        _EXT4-LEGACY-DIRECT-RANGE-MAX _EXT4-UADD?
-        DUP IF 2DROP FALSE EXIT THEN DROP _EXT4-JCA-MAP-DATA-CAP !
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-JCA-MAP-DATA-CAP @ U> IF FALSE EXIT THEN
-        _EXT4-JCA-TARGET-ENTRIES @ 0 ?DO
-            I _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE CELL+ @
-            1 <> IF FALSE UNLOOP EXIT THEN
-        LOOP
-        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-WRITER @
-        _EXT4-JWR-CP-DELETE-RANGE CELL+ @ 1 = EXIT
-    THEN
-    _EXT4-JCA-DATA-MAP-KIND @
-    _EXT4-JDM-LEGACY-SPARSE-DOUBLE = IF
-        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ U> IF
-            FALSE EXIT
-        THEN
-        _EXT4-JCA-RANGE-COUNT @ _EXT4-JCA-TARGET-ENTRIES @ -
-        DUP _EXT4-JCA-MAP-ENTRIES !
-        DUP 1 U< SWAP
-        _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 / 2 + U> OR IF
-            FALSE EXIT
-        THEN
-        _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 /
-        _EXT4-JCA-MAP-ENTRIES @ 1- _EXT4-UMUL?
-        DUP IF 2DROP FALSE EXIT THEN DROP
-        _EXT4-LEGACY-DIRECT-RANGE-MAX _EXT4-UADD?
-        DUP IF 2DROP FALSE EXIT THEN DROP _EXT4-JCA-MAP-DATA-CAP !
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-JCA-MAP-DATA-CAP @ U> IF FALSE EXIT THEN
-        _EXT4-JCA-RANGE-COUNT @ 0 ?DO
-            I _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE CELL+ @
-            1 <> IF FALSE UNLOOP EXIT THEN
-        LOOP
-        TRUE EXIT
-    THEN
-    _EXT4-JCA-DATA-MAP-KIND @
-    _EXT4-JDM-LEGACY-SPARSE-TRIPLE = IF
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-LEGACY-DIRECT-RANGE-MAX U> IF FALSE EXIT THEN
-        _EXT4-JCA-TARGET-ENTRIES @ 1 _EXT4-UADD?
-        DUP IF 2DROP FALSE EXIT THEN DROP
-        _EXT4-JCA-RANGE-COUNT @ <> IF FALSE EXIT THEN
-        1 _EXT4-JCA-MAP-ENTRIES !
-        _EXT4-JCA-RANGE-COUNT @ 0 ?DO
-            I _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE CELL+ @
-            1 <> IF FALSE UNLOOP EXIT THEN
-        LOOP
-        TRUE EXIT
-    THEN
-    _EXT4-JCA-DATA-MAP-KIND @
-    _EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD = IF
-        _EXT4-JCA-TARGET-ENTRIES @ IF FALSE EXIT THEN
-        _EXT4-JCA-EA-HOME @ IF FALSE EXIT THEN
-        _EXT4-JCA-RANGE-COUNT @ 2 <> IF FALSE EXIT THEN
-        2 _EXT4-JCA-MAP-ENTRIES !
-        _EXT4-JCA-RANGE-COUNT @ 0 ?DO
-            I _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE CELL+ @
-            1 <> IF FALSE UNLOOP EXIT THEN
-        LOOP
-        TRUE EXIT
-    THEN
-    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-LEGACY-DIRECT <> IF
-        FALSE EXIT
-    THEN
-    _EXT4-JCA-TARGET-ENTRIES @
-    _EXT4-LEGACY-DIRECT-RANGE-MAX U> IF FALSE EXIT THEN
     _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ <> IF
-        FALSE EXIT
+        DROP FALSE EXIT
     THEN
-    _EXT4-JCA-RANGE-COUNT @ 0 ?DO
-        I _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE CELL+ @
-        1 <> IF FALSE UNLOOP EXIT THEN
-    LOOP
-    TRUE ;
+    DUP _EXT4-JDM-RELEASED = IF DROP TRUE EXIT THEN
+    _EXT4-JDM-NONE = _EXT4-JCA-RANGE-COUNT @ 0= AND ;
 
 : _EXT4-JCA-REVOKE-ENTRY?  ( index home -- flag )
     _EXT4-JCA-REVOKE-HOME ! _EXT4-JCA-REVOKE-INDEX !
@@ -4908,72 +4867,60 @@ VARIABLE _EXT4-JCA-QUERY-HOME
     DUP @ _EXT4-JCA-REVOKE-HOME @ =
     SWAP CELL+ @ _EXT4-JE-ACTIVE = AND ;
 
-\ DELETE-DATA-MAP? derives the trailing map count from the typed checkpoint
-\ vector.  Recheck that relationship before it can drive generic revoke
-\ storage.
-: _EXT4-JCA-TYPED-MAP-ENTRIES?  ( -- flag )
-    _EXT4-JCA-DATA-MAP-KIND @ DUP _EXT4-JDM-DEPTH1-LEAVES = IF
-        DROP _EXT4-JCA-MAP-ENTRIES @ DUP 0=
-        SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR 0= EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SINGLE-INDIRECT = IF
-        DROP _EXT4-JCA-MAP-ENTRIES @ 1 = EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SPARSE-DOUBLE = IF
-        DROP _EXT4-JCA-MAP-ENTRIES @ DUP 1 U<
-        SWAP _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 / 2 +
-        U> OR 0= EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SPARSE-TRIPLE = IF
-        DROP _EXT4-JCA-MAP-ENTRIES @ 1 =
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-LEGACY-DIRECT-RANGE-MAX U> 0= AND EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD = IF
-        DROP _EXT4-JCA-MAP-ENTRIES @ 2 =
-        _EXT4-JCA-TARGET-ENTRIES @ 0= AND
-        _EXT4-JCA-EA-HOME @ 0= AND EXIT
-    THEN
-    DUP _EXT4-JDM-INLINE-EXTENTS =
-    SWAP _EXT4-JDM-LEGACY-DIRECT = OR IF
-        _EXT4-JCA-MAP-ENTRIES @ 0= EXIT
-    THEN
-    FALSE ;
+\ True when BLOCK lies inside one of the certificate's delete ranges.
+: _EXT4-JCA-IN-RANGES?  ( block -- flag )
+    _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DELETE-RANGE-COUNT + @ 0 ?DO
+        DUP I _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE
+        DUP @ ROT SWAP - SWAP CELL+ @ U< IF
+            DROP TRUE UNLOOP EXIT
+        THEN
+    LOOP
+    DROP FALSE ;
 
-\ Bind generic revoke storage back to the typed deletion authority retained
-\ in the checkpoint certificate.  Every trailing map singleton is revoked in
-\ vector order; a released xattr follows all map metadata.
-: _EXT4-JCA-DELETE-REVOKES?  ( -- flag )
-    _EXT4-JCA-TYPED-MAP-ENTRIES? 0= IF FALSE EXIT THEN
-    _EXT4-JCA-MAP-ENTRIES @ _EXT4-JCA-REVOKE-COUNT !
+\ A released vector's revokes are the tree nodes the release freed, each
+\ inside one of its runs, then a released xattr block.  The staging proof
+\ bound every freed run to the target's map.
+: _EXT4-JCA-RELEASED-REVOKES?  ( -- flag )
+    _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-USED + @
+    DUP _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> IF
+        DROP FALSE EXIT
+    THEN
+    DUP _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ U>
+    OVER _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-CAP + @ U> OR IF
+        DROP FALSE EXIT
+    THEN
     _EXT4-JCA-EA-ACTION @ _EXT4-JEA-RELEASE = IF
-        1 _EXT4-JCA-REVOKE-COUNT +!
+        DUP 0= IF DROP FALSE EXIT THEN
+        1- DUP _EXT4-JCA-EA-HOME @ _EXT4-JCA-REVOKE-ENTRY? 0= IF
+            DROP FALSE EXIT
+        THEN
     THEN
-    _EXT4-JCA-REVOKE-COUNT @
-    _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-CAP + @ U> IF
-        FALSE EXIT
+    0 ?DO
+        _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-ENTRIES + @
+        I _EXT4-JWR-REVOKE-ENTRY-CELLS CELLS * +
+        DUP CELL+ @ _EXT4-JE-ACTIVE <> IF DROP FALSE UNLOOP EXIT THEN
+        @ _EXT4-JCA-IN-RANGES? 0= IF FALSE UNLOOP EXIT THEN
+    LOOP
+    TRUE ;
+
+\ Bind generic revoke storage back to the deletion authority retained in
+\ the checkpoint certificate: a released xattr block alone, or after it the
+\ revokes of the release pass a deletion folded into.
+: _EXT4-JCA-DELETE-REVOKES?  ( -- flag )
+    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-RELEASED = IF
+        _EXT4-JCA-RELEASED-REVOKES? EXIT
     THEN
-    _EXT4-JCA-REVOKE-COUNT @ DUP
-    _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ <>
+    _EXT4-JCA-EA-ACTION @ _EXT4-JEA-RELEASE = 1 AND
+    DUP _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-CAP + @ U> IF
+        DROP FALSE EXIT
+    THEN
+    DUP _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ <>
     OVER _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-USED + @ <> OR
     SWAP _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> OR IF
         FALSE EXIT
     THEN
-    0 _EXT4-JCA-MAP-INDEX !
-    BEGIN
-        _EXT4-JCA-MAP-INDEX @ _EXT4-JCA-MAP-ENTRIES @ U<
-    WHILE
-        _EXT4-JCA-MAP-INDEX @
-        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-MAP-INDEX @ +
-        _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE @
-        _EXT4-JCA-REVOKE-ENTRY? 0= IF
-            FALSE EXIT
-        THEN
-        1 _EXT4-JCA-MAP-INDEX +!
-    REPEAT
     _EXT4-JCA-EA-ACTION @ _EXT4-JEA-RELEASE = IF
-        _EXT4-JCA-MAP-ENTRIES @
-        _EXT4-JCA-EA-HOME @ _EXT4-JCA-REVOKE-ENTRY? 0= IF
+        0 _EXT4-JCA-EA-HOME @ _EXT4-JCA-REVOKE-ENTRY? 0= IF
             FALSE EXIT
         THEN
     THEN
@@ -5254,7 +5201,13 @@ VARIABLE _EXT4-JUA-META
     _EXT4-JCA-MODE @ _EXT4-JCPM-ORPHAN-UNLINK-ADD? IF
         _EXT4-JCA-DATA-RANGES? 0= IF FALSE EXIT THEN
         _EXT4-JCA-EA-HOME? 0= IF FALSE EXIT THEN
-        _EXT4-JCA-DELETE-DATA-MAP? 0= IF FALSE EXIT THEN
+        \ An unlink binds no release vector, as a truncate's insertion
+        \ binds none: release passes free the file's blocks, and its
+        \ deletion then frees an empty map.
+        _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-MAP-KIND + @ _EXT4-JDM-NONE <>
+        _EXT4-JCA-RANGE-COUNT @ OR _EXT4-JCA-TARGET-ENTRIES @ OR IF
+            FALSE EXIT
+        THEN
     ELSE
         \ A truncate ADD binds no release vector: each later release pass
         \ proves the runs it frees.
@@ -5386,9 +5339,6 @@ VARIABLE _EXT4-JUA-META
 \ checkpoint.
 : _EXT4-JWR-CP-AUTHORITY?  ( writer -- flag )
     DUP _EXT4-JCA-WRITER !
-    0 _EXT4-JCA-MAP-ENTRIES !
-    0 _EXT4-JCA-MAP-DATA-CAP !
-    0 _EXT4-JCA-MAP-INDEX !
     _EXT4-JDM-NONE _EXT4-JCA-DATA-MAP-KIND !
     _EXT4-JWR.CP-MODE + @
     DUP _EXT4-JCA-MODE ! _EXT4-JCPM-NONE = IF
@@ -11320,31 +11270,8 @@ VARIABLE _EXT4-JFI-IOR
 VARIABLE _EXT4-JFI-PUBLISHED
 VARIABLE _EXT4-JFI-ABORT-IOR
 VARIABLE _EXT4-JFI-DATA-ENTRIES
-VARIABLE _EXT4-JFI-EXTENT-ROOT
-VARIABLE _EXT4-JFI-ROOT-ENTRIES
-VARIABLE _EXT4-JFI-ROOT-INDEX
-VARIABLE _EXT4-JFI-ROOT-ENTRY
-VARIABLE _EXT4-JFI-ROOT-KEY
-VARIABLE _EXT4-JFI-DATA-ROOT
-VARIABLE _EXT4-JFI-DATA-ENTRY
 VARIABLE _EXT4-JFI-DATA-BLOCKS
-VARIABLE _EXT4-JFI-LEAF-ENTRIES
-VARIABLE _EXT4-JFI-LEAF-HOME
-VARIABLE _EXT4-JFI-MAP-ENTRIES
-VARIABLE _EXT4-JFI-MAP-BLOCKS
-VARIABLE _EXT4-JFI-MAP-INDEX
 VARIABLE _EXT4-JFI-DATA-MAP-KIND
-VARIABLE _EXT4-JFI-DATA-ACTUAL
-VARIABLE _EXT4-JFI-DATA-PHYSICAL
-VARIABLE _EXT4-JFI-DATA-LOGICAL
-VARIABLE _EXT4-JFI-DATA-INDEX
-VARIABLE _EXT4-JFI-LEGACY-INDIRECT-HOME
-VARIABLE _EXT4-JFI-LEGACY-DOUBLE-HOME
-VARIABLE _EXT4-JFI-LEGACY-TRIPLE-HOME
-VARIABLE _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME
-VARIABLE _EXT4-JFI-LEGACY-DOUBLE-CHILDREN
-VARIABLE _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE
-VARIABLE _EXT4-JFI-LEGACY-PTRS
 VARIABLE _EXT4-JFI-EA
 VARIABLE _EXT4-JFI-EA-ACTION
 VARIABLE _EXT4-JFI-EA-REFCOUNT
@@ -11390,24 +11317,15 @@ CREATE _EXT4-JFI-EA-RANGE
 : _EXT4-JFI-RANGE  ( index -- pair-address )
     2* CELLS _EXT4-JFI-RANGES + ;
 
-: _EXT4-JFI-MAP-RANGE  ( map-index -- pair-address )
-    _EXT4-JFI-DATA-ENTRIES @ + _EXT4-JFI-RANGE ;
-
-: _EXT4-JFI-MAP-SCRATCH-RANGE  ( map-index -- pair-address )
-    _EXT4-JFI-RANGE-CAP _EXT4-JFI-MAP-ENTRIES @ - +
-    _EXT4-JFI-RANGE ;
-
 : _EXT4-JFI-EA-RELEASE?  ( -- flag )
     _EXT4-JFI-EA-ACTION @ _EXT4-JEA-RELEASE = ;
 
 : _EXT4-JFI-EA-REFDEC?  ( -- flag )
     _EXT4-JFI-EA-ACTION @ _EXT4-JEA-REFDEC = ;
 
-: _EXT4-JFI-RANGE-COUNT  ( -- count )
-    _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-MAP-ENTRIES @ + ;
+: _EXT4-JFI-RANGE-COUNT  ( -- count )  _EXT4-JFI-DATA-ENTRIES @ ;
 
-: _EXT4-JFI-RANGE-BLOCKS  ( -- blocks )
-    _EXT4-JFI-DATA-BLOCKS @ _EXT4-JFI-MAP-BLOCKS @ + ;
+: _EXT4-JFI-RANGE-BLOCKS  ( -- blocks )  _EXT4-JFI-DATA-BLOCKS @ ;
 
 : _EXT4-JFI-RELEASE-RANGE-COUNT  ( -- count )
     _EXT4-JFI-RANGE-COUNT
@@ -11427,52 +11345,64 @@ CREATE _EXT4-JFI-EA-RANGE
     _EXT4-JFI-RANGE-BLOCKS
     _EXT4-JFI-EA-RELEASE? IF 1+ THEN ;
 
+\ A deletion revokes its xattr block when it releases it.  The release
+\ passes before it revoke the map blocks they free.
 : _EXT4-JFI-REVOKE-COUNT  ( -- count )
-    _EXT4-JFI-MAP-ENTRIES @
-    _EXT4-JFI-EA-RELEASE? IF 1+ THEN ;
+    _EXT4-JFI-EA-RELEASE? 1 AND ;
 
 VARIABLE _EXT4-JRV-WRITER
-VARIABLE _EXT4-JRV-INDEX
 
-\ The map family fixes how many trailing metadata singletons the canonical
-\ deletion vector owns.  Keep this typed so a forged generic range count cannot
-\ manufacture or suppress revokes.
-: _EXT4-JFI-TYPED-MAP-ENTRIES?  ( -- flag )
-    _EXT4-JFI-DATA-MAP-KIND @ DUP _EXT4-JDM-DEPTH1-LEAVES = IF
-        DROP _EXT4-JFI-MAP-ENTRIES @ DUP 0= SWAP
-        _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR 0= EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SINGLE-INDIRECT = IF
-        DROP _EXT4-JFI-MAP-ENTRIES @ 1 = EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SPARSE-DOUBLE = IF
-        DROP _EXT4-JFI-MAP-ENTRIES @ DUP 1 U<
-        SWAP _EXT4-JFI-LEGACY-PTRS @ 2 + U> OR 0= EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SPARSE-TRIPLE = IF
-        DROP _EXT4-JFI-MAP-ENTRIES @ 1 =
-        _EXT4-JFI-DATA-ENTRIES @
-        _EXT4-LEGACY-DIRECT-RANGE-MAX U> 0= AND EXIT
-    THEN
-    DUP _EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD = IF
-        DROP _EXT4-JFI-MAP-ENTRIES @ 2 =
-        _EXT4-JFI-DATA-ENTRIES @ 0= AND
-        _EXT4-JFI-EA @ 0= AND EXIT
-    THEN
-    DUP _EXT4-JDM-INLINE-EXTENTS =
-    SWAP _EXT4-JDM-LEGACY-DIRECT = OR IF
-        _EXT4-JFI-MAP-ENTRIES @ 0= EXIT
-    THEN
-    FALSE ;
+\ A deletion folded into a release pass takes as its vector the runs the
+\ pass freed, which stay in the mutation range workspace where the release
+\ recorded them.  Checkpoint verification reloads them from the
+\ certificate.
+VARIABLE _EXT4-JFI-RELEASED
+VARIABLE _EXT4-JFI-RELEASED-RUNS
+VARIABLE _EXT4-JFI-RELEASED-BLOCKS
 
-\ Prove the exact retained revoke vector in its deterministic insertion order:
-\ every admitted map-metadata block in canonical order, then a uniquely
-\ released external xattr block.  Ordinary data blocks and shared-xattr
-\ decrements are never revoked by orphan cleanup.
+\ True when BLOCK lies inside one of the vector's data runs.
+: _EXT4-JFI-IN-RUNS?  ( block -- flag )
+    _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
+        DUP I _EXT4-JFI-RANGE @ - I _EXT4-JFI-RANGE CELL+ @ U< IF
+            DROP TRUE UNLOOP EXIT
+        THEN
+    LOOP
+    DROP FALSE ;
+
+\ A released vector's revokes are the tree nodes the release freed, each
+\ inside one of its runs, then a released xattr block.
+: _EXT4-JFI-RELEASED-REVOKES?  ( -- flag )
+    _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-USED + @
+    DUP _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> IF
+        DROP FALSE EXIT
+    THEN
+    DUP _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ U> IF
+        DROP FALSE EXIT
+    THEN
+    _EXT4-JFI-EA-RELEASE? IF
+        DUP 0= IF DROP FALSE EXIT THEN
+        1- DUP _EXT4-JRV-WRITER @ _EXT4-JWR-REVOKE-ENTRY
+        DUP @ _EXT4-JFI-EA @ <> SWAP CELL+ @ _EXT4-JE-ACTIVE <> OR IF
+            DROP FALSE EXIT
+        THEN
+    THEN
+    0 ?DO
+        I _EXT4-JRV-WRITER @ _EXT4-JWR-REVOKE-ENTRY
+        DUP CELL+ @ _EXT4-JE-ACTIVE <> IF DROP FALSE UNLOOP EXIT THEN
+        @ _EXT4-JFI-IN-RUNS? 0= IF FALSE UNLOOP EXIT THEN
+    LOOP
+    TRUE ;
+
+\ Prove the exact retained revoke vector.  A deletion of an empty map
+\ revokes only an xattr block it releases, and one folded into a release
+\ pass keeps the pass's own revokes before it.  Data blocks and
+\ shared-xattr decrements are never revoked.
 : _EXT4-JFI-REVOKES-EXACT?  ( writer -- flag )
     _EXT4-JRV-WRITER !
-    _EXT4-JFI-TYPED-MAP-ENTRIES? 0= IF FALSE EXIT THEN
     _EXT4-JFI-EA-RELEASE? _EXT4-JFI-EA @ 0= AND IF FALSE EXIT THEN
+    _EXT4-JFI-DATA-MAP-KIND @ _EXT4-JDM-RELEASED = IF
+        _EXT4-JFI-RELEASED-REVOKES? EXIT
+    THEN
     _EXT4-JFI-REVOKE-COUNT
     DUP _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-CAP + @ U> IF
         DROP FALSE EXIT
@@ -11483,21 +11413,8 @@ VARIABLE _EXT4-JRV-INDEX
     SWAP _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> OR IF
         FALSE EXIT
     THEN
-    0 _EXT4-JRV-INDEX !
-    BEGIN
-        _EXT4-JRV-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
-    WHILE
-        _EXT4-JRV-INDEX @ _EXT4-JFI-MAP-RANGE DUP
-        CELL+ @ 1 <> SWAP @ 0= OR IF FALSE EXIT THEN
-        _EXT4-JRV-INDEX @ _EXT4-JRV-WRITER @
-        _EXT4-JWR-REVOKE-ENTRY DUP @
-        _EXT4-JRV-INDEX @ _EXT4-JFI-MAP-RANGE @ <>
-        SWAP CELL+ @ _EXT4-JE-ACTIVE <> OR IF FALSE EXIT THEN
-        1 _EXT4-JRV-INDEX +!
-    REPEAT
     _EXT4-JFI-EA-RELEASE? IF
-        _EXT4-JFI-MAP-ENTRIES @ _EXT4-JRV-WRITER @
-        _EXT4-JWR-REVOKE-ENTRY DUP @ _EXT4-JFI-EA @ <>
+        0 _EXT4-JRV-WRITER @ _EXT4-JWR-REVOKE-ENTRY DUP @ _EXT4-JFI-EA @ <>
         SWAP CELL+ @ _EXT4-JE-ACTIVE <> OR IF FALSE EXIT THEN
     THEN
     TRUE ;
@@ -12244,502 +12161,51 @@ _EXT4-MUTATION-PROTOCOL-PROOF-XT !
     THEN
     0 ;
 
-VARIABLE _EXT4-JFI-OVERLAP-INDEX
-VARIABLE _EXT4-JFI-OVERLAP-OTHER
-
-: _EXT4-JFI-RANGES-DISJOINT?  ( -- flag )
-    _EXT4-JFI-RANGE-COUNT DUP 0<
-    SWAP _EXT4-JFI-RANGE-CAP U> OR IF FALSE EXIT THEN
-    0 _EXT4-JFI-OVERLAP-INDEX !
-    BEGIN
-        _EXT4-JFI-OVERLAP-INDEX @ _EXT4-JFI-RANGE-COUNT U<
-    WHILE
-        0 _EXT4-JFI-OVERLAP-OTHER !
-        BEGIN
-            _EXT4-JFI-OVERLAP-OTHER @
-            _EXT4-JFI-OVERLAP-INDEX @ U<
-        WHILE
-            _EXT4-JFI-OVERLAP-INDEX @ _EXT4-JFI-RANGE
-            DUP @ SWAP CELL+ @
-            _EXT4-JFI-OVERLAP-OTHER @ _EXT4-JFI-RANGE
-            DUP @ SWAP CELL+ @ _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-                FALSE EXIT
-            THEN
-            1 _EXT4-JFI-OVERLAP-OTHER +!
-        REPEAT
-        1 _EXT4-JFI-OVERLAP-INDEX +!
-    REPEAT
-    TRUE ;
-
-: _EXT4-JFI-DATA-COMMON-PREFLIGHT  ( -- ior )
-    _EXT4-JFI-RANGES-DISJOINT? 0= IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JFI-INODE @ _EXT4-JFI-CTX @ _EXT4-DECODE-I-BLOCKS
-    DUP IF NIP EXIT THEN DROP _EXT4-JFI-DATA-ACTUAL !
-    _EXT4-JFI-ACCOUNTED-BLOCKS
-    _EXT4-JFI-CTX @ _EXT4-C.SPB + @ _EXT4-UMUL?
-    DUP IF NIP EXIT THEN DROP
-    _EXT4-JFI-DATA-ACTUAL @ <> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JFI-RANGE-COUNT IF
-        _EXT4-JFI-RANGES _EXT4-JFI-RANGE-COUNT
-        _EXT4-JFI-RANGE-CAP
-        _EXT4-JFI-CTX @ _EXT4-VALIDATE-MUTATION-RANGES-TARGETS
-        ?DUP IF EXIT THEN
-    THEN
-    0 ;
-
-: _EXT4-JFI-CAPTURE-EXTENT-LEAF  ( -- ior )
-    _EXT4-JFI-DATA-ROOT @ 2 + W@ _EXT4-JFI-LEAF-ENTRIES !
-    _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-LEAF-ENTRIES @
-    _EXT4-UADD? DUP IF NIP EXIT THEN DROP
-    _EXT4-JFI-RANGE-CAP _EXT4-JFI-MAP-ENTRIES @ - 1- U> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    0 _EXT4-JFI-DATA-INDEX !
-    BEGIN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-LEAF-ENTRIES @ U<
-    WHILE
-        _EXT4-JFI-DATA-ROOT @ 12
-        _EXT4-JFI-DATA-INDEX @ 12 * + + DUP _EXT4-JFI-DATA-ENTRY !
-        L@ _EXT4-JFI-DATA-LOGICAL !
-        _EXT4-JFI-DATA-ENTRY @ 4 + W@ 0= IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-DATA-ENTRY @ _EXT4-EXTENT-LEN@
-        DUP _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE CELL+ !
-        _EXT4-JFI-DATA-LOGICAL @ SWAP _EXT4-UADD?
-        DUP IF NIP EXIT THEN DROP 0xFFFFFFFF U> IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-DATA-ENTRY @ 6 + W@ IF
-            EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-DATA-ENTRY @ 8 + L@
-        DUP 0= IF
-            EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE !
-        _EXT4-JFI-DATA-BLOCKS @
-        _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE CELL+ @
-        _EXT4-UADD? DUP IF NIP EXIT THEN DROP _EXT4-JFI-DATA-BLOCKS !
-        1 _EXT4-JFI-DATA-ENTRIES +!
-        1 _EXT4-JFI-DATA-INDEX +!
-    REPEAT
-    0 ;
-
-: _EXT4-JFI-EXTENT-ROOT-ENTRY  ( index -- entry )
-    12 * 12 + _EXT4-JFI-EXTENT-ROOT @ + ;
-
-: _EXT4-JFI-CURRENT-LEAF-IN-ROOT-BOUNDS?  ( -- flag )
-    _EXT4-JFI-ROOT-INDEX @ 1+ _EXT4-JFI-ROOT-ENTRIES @ U< 0= IF
-        TRUE EXIT
-    THEN
-    _EXT4-JFI-DATA-ROOT @ 12
-    _EXT4-JFI-LEAF-ENTRIES @ 1- 12 * + + DUP
-    L@ SWAP _EXT4-EXTENT-LEN@ +
-    _EXT4-JFI-ROOT-INDEX @ 1+ _EXT4-JFI-EXTENT-ROOT-ENTRY L@
-    U> 0= ;
-
-: _EXT4-JFI-COMPACT-MAP-RANGES  ( -- )
-    0 _EXT4-JFI-MAP-INDEX !
-    BEGIN
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
-    WHILE
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-RANGE
-        2 CELLS CMOVE
-        1 _EXT4-JFI-MAP-INDEX +!
-    REPEAT
-    _EXT4-JFI-RANGES _EXT4-JFI-RANGE-COUNT 2* CELLS +
-    _EXT4-JFI-RANGE-CAP _EXT4-JFI-RANGE-COUNT -
-    2* CELLS 0 FILL ;
-
-\ Admit every format-valid resident depth-one fanout.  Root and child keys,
-\ child checksums, and sibling logical bounds are reauthenticated while leaf
-\ homes are parked at the workspace tail.  The final canonical vector keeps
-\ all data extents first and all leaf singletons in resident-root order.
-: _EXT4-JFI-EXTENT-DATA-PREFLIGHT  ( -- ior )
-    _EXT4-JFI-CTX @ _EXT4-VALIDATE-INLINE-EXTENTS ?DUP IF EXIT THEN
-    _EXT4-JFI-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JFI-EXTENT-ROOT !
-    6 + W@ DUP 0= IF
-        DROP
-        _EXT4-JDM-INLINE-EXTENTS _EXT4-JFI-DATA-MAP-KIND !
-        _EXT4-JFI-EXTENT-ROOT @ _EXT4-JFI-DATA-ROOT !
-        _EXT4-JFI-CAPTURE-EXTENT-LEAF ?DUP IF EXIT THEN
-        _EXT4-JFI-DATA-COMMON-PREFLIGHT EXIT
-    THEN
-    1 <> IF EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT THEN
-    _EXT4-JFI-EXTENT-ROOT @ 2 + W@ DUP _EXT4-JFI-ROOT-ENTRIES !
-    DUP 0= SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JDM-DEPTH1-LEAVES _EXT4-JFI-DATA-MAP-KIND !
-    _EXT4-JFI-ROOT-ENTRIES @ DUP _EXT4-JFI-MAP-ENTRIES !
-    _EXT4-JFI-MAP-BLOCKS !
-    0 _EXT4-JFI-ROOT-INDEX !
-    BEGIN
-        _EXT4-JFI-ROOT-INDEX @ _EXT4-JFI-ROOT-ENTRIES @ U<
-    WHILE
-        _EXT4-JFI-ROOT-INDEX @ _EXT4-JFI-EXTENT-ROOT-ENTRY
-        DUP _EXT4-JFI-ROOT-ENTRY !
-        DUP L@ _EXT4-JFI-ROOT-KEY !
-        4 + L@ DUP _EXT4-JFI-LEAF-HOME !
-        _EXT4-JFI-ROOT-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE !
-        1 _EXT4-JFI-ROOT-INDEX @
-        _EXT4-JFI-MAP-SCRATCH-RANGE CELL+ !
-        _EXT4-JFI-LEAF-HOME @ 0 _EXT4-JFI-CTX @
-        _EXT4-LOAD-EXTENT-NODE ?DUP IF EXIT THEN
-        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
-        DUP _EXT4-JFI-DATA-ROOT !
-        12 + L@ _EXT4-JFI-ROOT-KEY @ <> IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-CAPTURE-EXTENT-LEAF ?DUP IF EXIT THEN
-        _EXT4-JFI-CURRENT-LEAF-IN-ROOT-BOUNDS? 0= IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        1 _EXT4-JFI-ROOT-INDEX +!
-    REPEAT
-    _EXT4-JFI-COMPACT-MAP-RANGES
-    _EXT4-JFI-DATA-COMMON-PREFLIGHT ;
-
-\ Append one occupied legacy data pointer as a singleton while reserving all
-\ trailing map homes and a range slot only for an actually present xattr.
-: _EXT4-JFI-CAPTURE-LEGACY-DATA  ( physical -- ior )
-    DUP 0= IF DROP 0 EXIT THEN
-    _EXT4-JFI-DATA-PHYSICAL !
-    _EXT4-JFI-DATA-ENTRIES @
-    _EXT4-JFI-RANGE-CAP _EXT4-JFI-MAP-ENTRIES @ -
-    _EXT4-JFI-EA @ IF 1- THEN U< 0= IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-JFI-DATA-PHYSICAL @
-    _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE !
-    1 _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE CELL+ !
-    1 _EXT4-JFI-DATA-BLOCKS +!
-    1 _EXT4-JFI-DATA-ENTRIES +!
-    0 ;
-
-: _EXT4-JFI-CAPTURE-LEGACY-DIRECTS  ( -- ior )
-    0 _EXT4-JFI-DATA-INDEX !
-    BEGIN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-NDIRECT U<
-    WHILE
-        _EXT4-JFI-DATA-ROOT @ _EXT4-JFI-DATA-INDEX @ 4 * + L@
-        _EXT4-JFI-CAPTURE-LEGACY-DATA ?DUP IF EXIT THEN
-        1 _EXT4-JFI-DATA-INDEX +!
-    REPEAT
-    0 ;
-
-VARIABLE _EXT4-JFI-LEGACY-CHECK-HOME
-VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
-
-: _EXT4-JFI-LEGACY-HOME-IN-DATA?  ( home -- flag )
-    _EXT4-JFI-LEGACY-CHECK-HOME !
-    0 _EXT4-JFI-LEGACY-CHECK-INDEX !
-    BEGIN
-        _EXT4-JFI-LEGACY-CHECK-INDEX @ _EXT4-JFI-DATA-ENTRIES @ U<
-    WHILE
-        _EXT4-JFI-LEGACY-CHECK-INDEX @ _EXT4-JFI-RANGE @
-        _EXT4-JFI-LEGACY-CHECK-HOME @ = IF TRUE EXIT THEN
-        1 _EXT4-JFI-LEGACY-CHECK-INDEX +!
-    REPEAT
-    FALSE ;
-
-\ Check a candidate child before its contents can affect shape admission.
-\ Direct and single-indirect data has already been retained, while the scalar
-\ map and xattr homes survive every TREE-BLOCK reload.
-: _EXT4-JFI-LEGACY-CHILD-ALIASES-KNOWN?  ( home -- flag )
-    DUP _EXT4-JFI-LEGACY-HOME-IN-DATA? IF DROP TRUE EXIT THEN
-    DUP _EXT4-JFI-LEGACY-INDIRECT-HOME @ =
-    OVER _EXT4-JFI-LEGACY-DOUBLE-HOME @ = OR
-    OVER _EXT4-JFI-LEGACY-TRIPLE-HOME @ = OR
-    SWAP _EXT4-JFI-EA @ = OR ;
-
-\ Retain the sole admitted triple-root child before loading it can replace the
-\ shared tree buffer.  Known aliases and a duplicate child are corrupt; a
-\ second distinct child belongs to a later fanout tier.
-: _EXT4-JFI-SCAN-LEGACY-TRIPLE-ROOT  ( -- ior )
-    0 _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME !
-    0 _EXT4-JFI-DATA-INDEX !
-    BEGIN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-LEGACY-PTRS @ U<
-    WHILE
-        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
-        _EXT4-JFI-DATA-INDEX @ 4 * + L@ ?DUP IF
-            DUP _EXT4-JFI-LEGACY-CHILD-ALIASES-KNOWN? IF
-                DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME @ IF
-                DUP _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME @ = IF
-                    DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-                THEN
-                DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-            THEN
-            _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME !
-        THEN
-        1 _EXT4-JFI-DATA-INDEX +!
-    REPEAT
-    0 ;
-
-: _EXT4-JFI-LEGACY-CHILD-ALIASES-PARKED?  ( home -- flag )
-    _EXT4-JFI-LEGACY-CHECK-HOME !
-    _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @
-    _EXT4-JFI-LEGACY-CHECK-INDEX !
-    BEGIN
-        _EXT4-JFI-LEGACY-CHECK-INDEX @ _EXT4-JFI-MAP-INDEX @ U<
-    WHILE
-        _EXT4-JFI-LEGACY-CHECK-INDEX @
-        _EXT4-JFI-MAP-SCRATCH-RANGE @
-        _EXT4-JFI-LEGACY-CHECK-HOME @ = IF TRUE EXIT THEN
-        1 _EXT4-JFI-LEGACY-CHECK-INDEX +!
-    REPEAT
-    FALSE ;
-
-\ Park map homes at the workspace tail after the exact occupied-child count is
-\ known.  Data appends retain this map tail and the optional xattr reserve.
-: _EXT4-JFI-PARK-LEGACY-MAP  ( home -- )
-    _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE !
-    1 _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE CELL+ !
-    1 _EXT4-JFI-MAP-INDEX +! ;
-
-: _EXT4-JFI-CAPTURE-LEGACY-POINTER-BLOCK  ( home -- ior )
-    _EXT4-JFI-CTX @ _EXT4-LOAD-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
-    0 _EXT4-JFI-DATA-INDEX !
-    BEGIN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-LEGACY-PTRS @ U<
-    WHILE
-        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
-        _EXT4-JFI-DATA-INDEX @ 4 * + L@
-        _EXT4-JFI-CAPTURE-LEGACY-DATA ?DUP IF EXIT THEN
-        1 _EXT4-JFI-DATA-INDEX +!
-    REPEAT
-    0 ;
-
-\ Count every occupied double-root slot while the provisional P+2 map reserve
-\ protects already captured direct and single-indirect data.  The root remains
-\ resident for the ordered parking pass; duplicate children are diagnosed
-\ there against the growing parked prefix.
-: _EXT4-JFI-COUNT-LEGACY-DOUBLE-CHILDREN  ( -- ior )
-    0 _EXT4-JFI-LEGACY-DOUBLE-CHILDREN !
-    _EXT4-JFI-LEGACY-DOUBLE-HOME @ _EXT4-JFI-CTX @
-    _EXT4-LOAD-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
-    0 _EXT4-JFI-DATA-INDEX !
-    BEGIN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-LEGACY-PTRS @ U<
-    WHILE
-        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
-        _EXT4-JFI-DATA-INDEX @ 4 * + L@ ?DUP IF
-            DUP _EXT4-JFI-LEGACY-CHILD-ALIASES-KNOWN? IF
-                DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            DROP
-            _EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ 1 _EXT4-UADD?
-            DUP IF NIP EXIT THEN DROP
-            _EXT4-JFI-LEGACY-DOUBLE-CHILDREN !
-        THEN
-        1 _EXT4-JFI-DATA-INDEX +!
-    REPEAT
-    0 ;
-
-: _EXT4-JFI-FIX-LEGACY-DOUBLE-MAPS  ( -- ior )
-    _EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ 1 _EXT4-UADD?
-    DUP IF NIP EXIT THEN DROP
-    _EXT4-JFI-LEGACY-INDIRECT-HOME @ IF
-        1 _EXT4-UADD? DUP IF NIP EXIT THEN DROP
-    THEN
-    DUP _EXT4-JFI-RANGE-CAP 1- U> IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-JFI-MAP-ENTRIES ! _EXT4-JFI-MAP-BLOCKS !
-    0 ;
-
-\ Retain every child map home in double-root slot order before loading any
-\ child can overwrite TREE-BLOCK.  Known aliases and duplicate child homes are
-\ corrupt rather than alternate representations of the same authority.
-: _EXT4-JFI-PARK-LEGACY-DOUBLE-CHILDREN  ( -- ior )
-    _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE !
-    0 _EXT4-JFI-DATA-INDEX !
-    BEGIN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-LEGACY-PTRS @ U<
-    WHILE
-        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
-        _EXT4-JFI-DATA-INDEX @ 4 * + L@ ?DUP IF
-            DUP _EXT4-JFI-LEGACY-CHILD-ALIASES-KNOWN? IF
-                DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            DUP _EXT4-JFI-LEGACY-CHILD-ALIASES-PARKED? IF
-                DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-JFI-PARK-LEGACY-MAP
-        THEN
-        1 _EXT4-JFI-DATA-INDEX +!
-    REPEAT
-    _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ -
-    _EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ <> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    0 ;
-
-: _EXT4-JFI-CAPTURE-LEGACY-DOUBLE-CHILDREN  ( -- ior )
-    _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ _EXT4-JFI-MAP-INDEX !
-    BEGIN
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
-    WHILE
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE @
-        _EXT4-JFI-CAPTURE-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
-        1 _EXT4-JFI-MAP-INDEX +!
-    REPEAT
-    0 ;
-
-\ Decode every occupied direct slot, an optional complete single-indirect
-\ block, and every occupied child under an optional double-indirect root whose
-\ exact authority fits the caller workspace.  A triple root may be all zero and
-\ coexist with direct data, or may name one all-zero level-2 child when direct
-\ data and the external-xattr pointer are absent; the single- and
-\ double-indirect inode slots remain zero.
-\ Holes do not enter release authority.  Data remains in direct, single, then
-\ double outer/inner pointer order.  Map metadata follows as optional single
-\ root, double root and its children, or triple root then level-2 child.
-: _EXT4-JFI-LEGACY-DATA-PREFLIGHT  ( -- ior )
-    _EXT4-JDM-LEGACY-DIRECT _EXT4-JFI-DATA-MAP-KIND !
-    _EXT4-JFI-INODE @ _EXT4-I.BLOCK + _EXT4-JFI-DATA-ROOT !
-    _EXT4-JFI-CTX @ _EXT4-C.BSIZE + @ 4 /
-    _EXT4-JFI-LEGACY-PTRS !
-    _EXT4-JFI-DATA-ROOT @ _EXT4-NDIRECT 2 + 4 * + L@
-    DUP _EXT4-JFI-LEGACY-TRIPLE-HOME ! IF
-        _EXT4-JFI-DATA-ROOT @ _EXT4-NDIRECT 4 * + 8
-        _EXT4-BYTES-ZERO? 0= IF
-            EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _EXT4-JDM-LEGACY-SPARSE-TRIPLE _EXT4-JFI-DATA-MAP-KIND !
-        _EXT4-JFI-LEGACY-TRIPLE-HOME @ _EXT4-JFI-EA @ = IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        1 _EXT4-JFI-MAP-ENTRIES !
-        1 _EXT4-JFI-MAP-BLOCKS !
-        _EXT4-JFI-CAPTURE-LEGACY-DIRECTS ?DUP IF EXIT THEN
-        _EXT4-JFI-LEGACY-TRIPLE-HOME @
-        _EXT4-JFI-LEGACY-HOME-IN-DATA? IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-LEGACY-TRIPLE-HOME @ _EXT4-JFI-CTX @
-        _EXT4-LOAD-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
-        _EXT4-JFI-SCAN-LEGACY-TRIPLE-ROOT ?DUP IF EXIT THEN
-        _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME @ IF
-            _EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD
-            _EXT4-JFI-DATA-MAP-KIND !
-            _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-EA @ OR IF
-                EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-            THEN
-            2 _EXT4-JFI-MAP-ENTRIES !
-            2 _EXT4-JFI-MAP-BLOCKS !
-        THEN
-        0 _EXT4-JFI-MAP-INDEX !
-        _EXT4-JFI-LEGACY-TRIPLE-HOME @ _EXT4-JFI-PARK-LEGACY-MAP
-        _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME @ ?DUP IF
-            DUP _EXT4-JFI-PARK-LEGACY-MAP
-            _EXT4-JFI-CTX @ _EXT4-LOAD-LEGACY-POINTER-BLOCK ?DUP IF
-                EXIT
-            THEN
-            _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
-            _EXT4-JFI-CTX @ _EXT4-C.BSIZE + @
-            _EXT4-BYTES-ZERO? 0= IF
-                EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-            THEN
-        THEN
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ <> IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-COMPACT-MAP-RANGES
-        _EXT4-JFI-DATA-COMMON-PREFLIGHT EXIT
-    THEN
-    _EXT4-NDIRECT 2 + _EXT4-JFI-CTX @
-    _EXT4-I-BLOCK-ZERO-FROM? 0= IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-JFI-DATA-ROOT @ _EXT4-NDIRECT 4 * + L@
-    _EXT4-JFI-LEGACY-INDIRECT-HOME !
-    _EXT4-JFI-DATA-ROOT @ _EXT4-NDIRECT 1+ 4 * + L@
-    _EXT4-JFI-LEGACY-DOUBLE-HOME !
-    _EXT4-JFI-LEGACY-DOUBLE-HOME @ IF
-        _EXT4-JDM-LEGACY-SPARSE-DOUBLE _EXT4-JFI-DATA-MAP-KIND !
-        \ Reserve the maximum possible map tail while direct and optional
-        \ single data is captured.  The root scan then replaces this with the
-        \ exact occupied map count before any child data is appended.
-        _EXT4-JFI-LEGACY-PTRS @ 2 _EXT4-UADD?
-        DUP IF NIP EXIT THEN DROP _EXT4-JFI-MAP-ENTRIES !
-    ELSE _EXT4-JFI-LEGACY-INDIRECT-HOME @ IF
-        _EXT4-JDM-LEGACY-SINGLE-INDIRECT _EXT4-JFI-DATA-MAP-KIND !
-        1 _EXT4-JFI-MAP-ENTRIES !
-        1 _EXT4-JFI-MAP-BLOCKS !
-    THEN THEN
-    _EXT4-JFI-CAPTURE-LEGACY-DIRECTS ?DUP IF EXIT THEN
-    _EXT4-JFI-LEGACY-INDIRECT-HOME @ IF
-        _EXT4-JFI-LEGACY-INDIRECT-HOME @
-        _EXT4-JFI-CAPTURE-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
-    THEN
-    0 _EXT4-JFI-MAP-INDEX !
-    _EXT4-JFI-LEGACY-DOUBLE-HOME @ IF
-        _EXT4-JFI-LEGACY-DOUBLE-HOME @
-        DUP _EXT4-JFI-LEGACY-HOME-IN-DATA?
-        OVER _EXT4-JFI-LEGACY-INDIRECT-HOME @ = OR
-        SWAP _EXT4-JFI-EA @ = OR IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-JFI-COUNT-LEGACY-DOUBLE-CHILDREN ?DUP IF EXIT THEN
-        _EXT4-JFI-FIX-LEGACY-DOUBLE-MAPS ?DUP IF EXIT THEN
-        _EXT4-JFI-LEGACY-INDIRECT-HOME @ ?DUP IF
-            _EXT4-JFI-PARK-LEGACY-MAP
-        THEN
-        _EXT4-JFI-LEGACY-DOUBLE-HOME @ _EXT4-JFI-PARK-LEGACY-MAP
-        _EXT4-JFI-PARK-LEGACY-DOUBLE-CHILDREN ?DUP IF EXIT THEN
-        _EXT4-JFI-CAPTURE-LEGACY-DOUBLE-CHILDREN ?DUP IF EXIT THEN
-    ELSE
-        _EXT4-JFI-LEGACY-INDIRECT-HOME @ ?DUP IF
-            _EXT4-JFI-PARK-LEGACY-MAP
-        THEN
-    THEN
-    _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ <> IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JFI-MAP-ENTRIES @ IF _EXT4-JFI-COMPACT-MAP-RANGES THEN
-    _EXT4-JFI-DATA-COMMON-PREFLIGHT ;
-
-: _EXT4-JFI-DATA-PREFLIGHT  ( -- ior )
+: _EXT4-JFI-DATA-CLEAR  ( -- )
     0 _EXT4-JFI-DATA-ENTRIES !
     0 _EXT4-JFI-DATA-BLOCKS !
-    0 _EXT4-JFI-EXTENT-ROOT !
-    0 _EXT4-JFI-ROOT-ENTRIES !
-    0 _EXT4-JFI-ROOT-INDEX !
-    0 _EXT4-JFI-ROOT-ENTRY !
-    0 _EXT4-JFI-ROOT-KEY !
-    0 _EXT4-JFI-DATA-ROOT !
-    0 _EXT4-JFI-DATA-ENTRY !
-    0 _EXT4-JFI-LEAF-ENTRIES !
-    0 _EXT4-JFI-LEAF-HOME !
-    0 _EXT4-JFI-MAP-ENTRIES !
-    0 _EXT4-JFI-MAP-BLOCKS !
-    0 _EXT4-JFI-MAP-INDEX !
-    0 _EXT4-JFI-LEGACY-INDIRECT-HOME !
-    0 _EXT4-JFI-LEGACY-DOUBLE-HOME !
-    0 _EXT4-JFI-LEGACY-TRIPLE-HOME !
-    0 _EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME !
-    0 _EXT4-JFI-LEGACY-DOUBLE-CHILDREN !
-    0 _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE !
-    0 _EXT4-JFI-LEGACY-PTRS !
-    _EXT4-JDM-NONE _EXT4-JFI-DATA-MAP-KIND !
+    _EXT4-JDM-NONE _EXT4-JFI-DATA-MAP-KIND ! ;
+
+: _EXT4-JFI-DATA-RESET  ( -- )
+    _EXT4-JFI-DATA-CLEAR
     _EXT4-JFI-RANGES
-    _EXT4-JFI-RANGE-CAP 2* CELLS 0 FILL
-    _EXT4-JFI-INODE @ _EXT4-I.FLAGS + L@
-    _EXT4-EXTENTS-FL AND IF
-        _EXT4-JFI-EXTENT-DATA-PREFLIGHT
-    ELSE
-        _EXT4-JFI-LEGACY-DATA-PREFLIGHT
-    THEN ;
+    _EXT4-JFI-RANGE-CAP 2* CELLS 0 FILL ;
+
+\ The inode's block count holds the vector's blocks and its xattr block.
+: _EXT4-JFI-REQUIRE-ACCOUNTED  ( -- ior )
+    _EXT4-JFI-INODE @ _EXT4-JFI-CTX @ _EXT4-DECODE-I-BLOCKS
+    DUP IF NIP EXIT THEN DROP
+    _EXT4-JFI-ACCOUNTED-BLOCKS _EXT4-JFI-CTX @ _EXT4-C.SPB + @ * <> IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ Take the released runs as the vector, which must hold exactly the blocks
+\ the release freed.  Each earlier pass took its own runs off the inode's
+\ block count, which now holds this pass's runs and the xattr block.
+: _EXT4-JFI-DATA-RELEASED  ( -- ior )
+    _EXT4-JFI-DATA-CLEAR
+    _EXT4-JFI-RELEASED-RUNS @ DUP 0= OVER _EXT4-JFI-RANGE-CAP U> OR IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JFI-DATA-ENTRIES !
+    0 _EXT4-JFI-DATA-ENTRIES @ 0 ?DO I _EXT4-JFI-RANGE CELL+ @ + LOOP
+    DUP _EXT4-JFI-RELEASED-BLOCKS @ <> IF DROP VFS-E-CORRUPT EXIT THEN
+    _EXT4-JFI-DATA-BLOCKS !
+    _EXT4-JDM-RELEASED _EXT4-JFI-DATA-MAP-KIND !
+    _EXT4-JFI-REQUIRE-ACCOUNTED ;
+
+\ True when the deletion's map maps blocks.  Release passes free them
+\ before the inode is deleted, so the authority of the unlink that inserts
+\ its record holds no release vector for them.  The deletion itself comes
+\ only once the map is empty.
+: _EXT4-JFI-PASSES?  ( -- flag )
+    _EXT4-JFI-INODE @ _EXT4-MAP-MAPS? ;
+
+\ A deletion of an empty map frees no data, and the inode's block count
+\ holds at most its xattr block.
+: _EXT4-JFI-DATA-PREFLIGHT  ( -- ior )
+    _EXT4-JFI-DATA-RESET _EXT4-JFI-REQUIRE-ACCOUNTED ;
 
 VARIABLE _EXT4-JFI-CP-WRITER
 
@@ -12808,16 +12274,11 @@ VARIABLE _EXT4-JFI-CP-WRITER
         _EXT4-JWR-CP-DELETE-RANGE CELL+ !
     LOOP ;
 
-\ Authenticate one complete deletion shape: an inline extent root, every
-\ format-valid resident depth-one leaf fanout, or all twelve legacy direct
-\ slots plus optional complete single-indirect data and every occupied
-\ double-indirect child whose exact authority fits the caller workspace, or
-\ direct data plus one allocated all-zero triple-indirect root, or one triple
-\ root naming one allocated all-zero level-2 child while direct and lower
-\ indirect slots remain zero.
-\ Retain each represented data and map-metadata range separately
-\ and bind the map family, ordered release vector, and explicit external-xattr
-\ disposition into the release authority.
+\ Authenticate the deletion of one unlinked regular inode.  Its map is
+\ empty, or the release pass that freed the rest of it in this transaction
+\ hands over the runs it freed, or it still maps blocks, which release
+\ passes free before the deletion stages.  Bind the released runs and the
+\ explicit external-xattr disposition into the release authority.
 \ Structurally valid resident inline xattrs die with the inode allocation bit.
 : _EXT4-JFI-AUTH-PREFLIGHT  ( -- ior )
     _EXT4-JFI-CTX @ 0=
@@ -12853,10 +12314,9 @@ VARIABLE _EXT4-JFI-CP-WRITER
     DUP _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF
         DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
-    \ Linux recovery deletes an unlinked inode rather than truncating it to
-    \ i_size.  This builder releases the complete authenticated map, so a
-    \ nonzero or sparse size does not narrow its authority.  Still reject the
-    \ signed-host overflow shape on every reauthentication.
+    \ Linux recovery deletes an unlinked inode whatever its i_size, and
+    \ release passes free its whole map, so any size is valid here.  The
+    \ signed-host overflow shape stays corrupt on every reauthentication.
     DUP _EXT4-I.SIZE-HI + L@ 0x80000000 AND IF
         DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
@@ -12871,7 +12331,13 @@ VARIABLE _EXT4-JFI-CP-WRITER
         1 _EXT4-JFI-EA-RANGE CELL+ !
     THEN
     DROP
-    _EXT4-JFI-DATA-PREFLIGHT ?DUP IF EXIT THEN
+    _EXT4-JFI-RELEASED @ IF
+        _EXT4-JFI-DATA-RELEASED ?DUP IF EXIT THEN
+    ELSE _EXT4-JFI-PASSES? IF
+        _EXT4-JFI-DATA-RESET
+    ELSE
+        _EXT4-JFI-DATA-PREFLIGHT ?DUP IF EXIT THEN
+    THEN THEN
     _EXT4-JFI-XATTR-PREFLIGHT ?DUP IF EXIT THEN
     _EXT4-JFI-REAUTH-CURRENT ?DUP IF EXIT THEN
     _EXT4-IR-GROUP @ _EXT4-JFI-GROUP !
@@ -12923,7 +12389,7 @@ VARIABLE _EXT4-JFP-IOR
   ( inode-number expected-generation ctx -- ior )
     _EXT4-JFI-CTX ! _EXT4-JFI-PROSPECTIVE-GEN ! _EXT4-JFI-INO !
     _EXT4-JFI-CTX @ 0= IF VFS-E-INVALID EXIT THEN
-    0 _EXT4-JFI-RECORD !
+    0 _EXT4-JFI-RECORD ! FALSE _EXT4-JFI-RELEASED !
     1 _EXT4-JFI-AUTH-NLINK !
     -1 _EXT4-JFI-PROSPECTIVE !
     _EXT4-JFI-AUTH-PREFLIGHT _EXT4-JFP-IOR !
@@ -13005,9 +12471,11 @@ VARIABLE _EXT4-JFP-IOR
 
 : _EXT4-JFI-PREFLIGHT  ( -- ior )
     _EXT4-JFI-AUTH-PREFLIGHT ?DUP IF EXIT THEN
-    _EXT4-JFI-REVOKE-COUNT
-    _EXT4-JFI-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ <> IF
-        VFS-E-INVALID EXIT
+    _EXT4-JFI-RELEASED @ 0= IF
+        _EXT4-JFI-REVOKE-COUNT
+        _EXT4-JFI-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ <> IF
+            VFS-E-INVALID EXIT
+        THEN
     THEN
     _EXT4-JFI-CTX @ _EXT4-C.BLOCK + _EXT4-JFI-BITMAP-HOME @
     _EXT4-JFI-WRITER @ _EXT4-JTX-META-ACQUIRE
@@ -13143,11 +12611,12 @@ VARIABLE _EXT4-JFP-IOR
     -1 _EXT4-JFI-PUBLISHED !
     0 ;
 
-\ Release allocation authority for one exact unlinked regular-file orphan.
-\ First replace its authenticated inode record with zeros so ordinary ext4
-\ tools see a clean free record; then release every block in the admitted
-\ physical extent, optional unique external-xattr block, and inode allocation
-\ bit in the same transaction.
+\ Release allocation authority for one exact unlinked regular-file orphan
+\ whose map is empty, or whose release pass in the same transaction freed
+\ the rest of it.  First replace its authenticated inode record with zeros
+\ so ordinary ext4 tools see a clean free record; then release an optional
+\ unique external-xattr block and the inode allocation bit in the same
+\ transaction.
 : _EXT4-JTX-STAGE-FREE-ORPHAN-INODE
   ( plan-record transaction -- ior )
     _EXT4-JFI-WRITER ! _EXT4-JFI-RECORD !
@@ -13158,23 +12627,6 @@ VARIABLE _EXT4-JFP-IOR
     _EXT4-JFI-STAGE-INODE ?DUP IF
         _EXT4-JFI-FAIL-AFTER-PUBLISH EXIT
     THEN
-    _EXT4-JFI-RANGE-COUNT IF
-        _EXT4-JFI-RANGES _EXT4-JFI-RANGE-COUNT
-        _EXT4-JFI-RANGE-CAP
-        _EXT4-JFI-WRITER @ _EXT4-JTX-STAGE-FREE-BLOCK-RANGES
-        ?DUP IF _EXT4-JFI-FAIL-AFTER-PUBLISH EXIT THEN
-        -1 _EXT4-JFI-PUBLISHED !
-    THEN
-    0 _EXT4-JFI-MAP-INDEX !
-    BEGIN
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
-    WHILE
-        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-RANGE @
-        _EXT4-JFI-WRITER @ _EXT4-JTX-REVOKE
-        ?DUP IF _EXT4-JFI-FAIL-AFTER-PUBLISH EXIT THEN
-        -1 _EXT4-JFI-PUBLISHED !
-        1 _EXT4-JFI-MAP-INDEX +!
-    REPEAT
     _EXT4-JFI-EA @ IF
         _EXT4-JFI-EA-RELEASE? IF
             _EXT4-JFI-EA @ 1 _EXT4-JFI-WRITER @
@@ -14099,7 +13551,6 @@ VARIABLE _EXT4-JUA-O-HOME
 VARIABLE _EXT4-JUA-O-GEN
 VARIABLE _EXT4-JUA-O-INO
 VARIABLE _EXT4-JUA-O-IMAGE
-VARIABLE _EXT4-JUA-TARGET-IMAGE
 VARIABLE _EXT4-JUA-SUPER-IMAGE
 VARIABLE _EXT4-JUA-TARGET-CRC
 VARIABLE _EXT4-JUA-ORPHAN-CRC
@@ -15284,13 +14735,40 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
     _EXT4-JFI-BITMAP-HOME @ _EXT4-JFC-INODE-BITMAP-HOME !
     _EXT4-JFI-GDT-HOME @ _EXT4-JFC-INODE-GDT-HOME !
     _EXT4-JFI-GDT-OFF @ _EXT4-JFC-INODE-GDT-OFF !
-    _EXT4-JFD-WRITER @ _EXT4-JWR.META-USED + @
-    _EXT4-JDD-EXPECTED-CREDIT @ <>
+    \ A deletion folded into a release pass holds exactly these homes in a
+    \ transaction of the pass's capacity, with a cancelled entry for each
+    \ tree node the pass edited and then freed.
     _EXT4-JFD-WRITER @ _EXT4-JWR.META-ACTIVE + @
-    _EXT4-JDD-EXPECTED-CREDIT @ <> OR
-    _EXT4-JFD-WRITER @ _EXT4-JWR.META-CREDIT + @
-    _EXT4-JDD-EXPECTED-CREDIT @ <> OR IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JDD-EXPECTED-CREDIT @ <> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JFI-DATA-MAP-KIND @ _EXT4-JDM-RELEASED = IF
+        _EXT4-JFD-WRITER @ _EXT4-JWR.META-USED + @
+        _EXT4-JFD-WRITER @ _EXT4-JWR.META-CREDIT + @ U>
+    ELSE
+        _EXT4-JFD-WRITER @ _EXT4-JWR.META-USED + @
+        _EXT4-JDD-EXPECTED-CREDIT @ <>
+        _EXT4-JFD-WRITER @ _EXT4-JWR.META-CREDIT + @
+        _EXT4-JDD-EXPECTED-CREDIT @ <> OR
+    THEN IF VFS-E-CORRUPT EXIT THEN
     0 ;
+
+\ A deletion folded into a release pass carries the runs it freed in its
+\ certificate, from which checkpoint verification rebuilds the vector in
+\ the mutation range workspace.
+: _EXT4-JFI-USE-CP-RUNS  ( writer -- ior )
+    DUP _EXT4-JWR.CTX + @ _EXT4-JFI-CTX !
+    FALSE _EXT4-JFI-RELEASED !
+    DUP _EXT4-JWR.CP-DATA-MAP-KIND + @ _EXT4-JDM-RELEASED <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _EXT4-JWR.CP-DELETE-RANGE-COUNT + @
+    DUP _EXT4-JFI-RANGE-CAP U> IF 2DROP VFS-E-CORRUPT EXIT THEN
+    _EXT4-JFI-RELEASED-RUNS !
+    DUP _EXT4-JWR.CP-DELETE-BLOCKS + @ _EXT4-JFI-RELEASED-BLOCKS !
+    _EXT4-JFI-RELEASED-RUNS @ 0 ?DO
+        I OVER _EXT4-JWR-CP-DELETE-RANGE DUP @ SWAP CELL+ @
+        I _EXT4-JFI-RANGE CELL+ ! I _EXT4-JFI-RANGE !
+    LOOP
+    DROP TRUE _EXT4-JFI-RELEASED ! 0 ;
 
 : _EXT4-JFD-VERIFY-STAGED  ( plan-record writer -- ior )
     _EXT4-JFD-WRITER ! _EXT4-JFD-RECORD !
@@ -15304,7 +14782,7 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
     _EXT4-JFD-VERIFY-EMPTY-STAGED ;
 
 : _EXT4-JFC-FAIL  ( ior -- ior )
-    _EXT4-JFC-IOR !
+    _EXT4-JFC-IOR ! FALSE _EXT4-JFI-RELEASED !
     _EXT4-JFC-WRITER @ _EXT4-JWR.STATE + @ DUP
     _EXT4-JWR-STAGING = IF
         DROP _EXT4-JFC-WRITER @ _EXT4-JTX-ABORT
@@ -15622,6 +15100,7 @@ VARIABLE _EXT4-JCM-DELETE
     _EXT4-JCM-CREDIT @ 0 ;
 
 : _EXT4-JCM-MEASURE-DELETE  ( -- meta-credit ior )
+    FALSE _EXT4-JFI-RELEASED !
     _EXT4-JCM-RECORD @ _EXT4-JFI-RECORD !
     _EXT4-JCM-CTX @ _EXT4-JFI-CTX !
     _EXT4-JFI-AUTH-PREFLIGHT ?DUP IF 0 SWAP EXIT THEN
@@ -15631,7 +15110,6 @@ VARIABLE _EXT4-JPU-ORPHAN-HOME
 VARIABLE _EXT4-JPU-INO
 VARIABLE _EXT4-JPU-GEN
 VARIABLE _EXT4-JPU-CTX
-VARIABLE _EXT4-JPU-IOR
 
 : _EXT4-MEASURE-PROSPECTIVE-UNLINK-CLEANUP
   ( orphan-home inode-number expected-generation ctx -- meta-credit revoke-credit ior )
@@ -15676,20 +15154,31 @@ VARIABLE _EXT4-JPU-IOR
     _EXT4-JCM-DELETE @ 0= IF 0 VFS-E-INVALID EXIT THEN
     _EXT4-JCM-MEASURE-DELETE ;
 
-\ A linked record's cleanup reads and edits extent trees of any depth with
-\ the general write's tree code, which is defined later.  The step stages
-\ either one sealed release pass, answering TRUE, or the target's part of
-\ the record's final cleanup, answering FALSE.  The measure answers the
-\ credits of the record's next transaction.
-VARIABLE _EXT4-LINKED-STEP-XT     \ ( plan-record transaction -- release? ior )
-VARIABLE _EXT4-LINKED-MEASURE-XT  \ ( plan-record ctx -- meta revoke ior )
+\ Release passes free a record's blocks from the end of its extent tree, at
+\ any depth, with the general write's tree code, which is defined later: a
+\ linked record's blocks past EOF, and every block of an unlinked record
+\ before its inode is deleted.  The step stages either one sealed release
+\ pass, answering TRUE, or the target's part of a linked record's final
+\ cleanup, answering FALSE.  The measure answers the credits of the
+\ record's next transaction.
+VARIABLE _EXT4-ORPHAN-STEP-XT     \ ( plan-record transaction -- release? ior )
+VARIABLE _EXT4-ORPHAN-MEASURE-XT  \ ( plan-record ctx -- meta revoke ior )
+
+\ True when the loaded inode is an unlinked regular file whose map still
+\ maps blocks, which release passes free before the inode itself is
+\ deleted.
+: _EXT4-UNLINKED-RELEASE?  ( ctx -- flag )
+    _EXT4-C.INODE + DUP _EXT4-I.LINKS + W@ IF DROP FALSE EXIT THEN
+    DUP _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF DROP FALSE EXIT THEN
+    _EXT4-MAP-MAPS? ;
 
 : _EXT4-MEASURE-ORPHAN-CLEANUP
   ( plan-record ctx -- meta-credit revoke-credit ior )
     2DUP _EXT4-REAUTH-ORPHAN-PLAN-RECORD ?DUP IF NIP NIP 0 0 ROT EXIT THEN
-    DUP _EXT4-C.INODE + _EXT4-I.LINKS + W@ IF
+    DUP _EXT4-C.INODE + _EXT4-I.LINKS + W@
+    OVER _EXT4-UNLINKED-RELEASE? OR IF
         0 _EXT4-JCM-DELETE !
-        _EXT4-LINKED-MEASURE-XT @ EXECUTE EXIT
+        _EXT4-ORPHAN-MEASURE-XT @ EXECUTE EXIT
     THEN
     _EXT4-JCM-MEASURE-ORPHAN-META
     DUP IF NIP 0 0 ROT EXIT THEN
@@ -15892,7 +15381,7 @@ VARIABLE _EXT4-JFC-SIZE
     _EXT4-JFC-DELETE @ IF
         DROP 0 _EXT4-JFC-TARGET-ENTRIES !
     ELSE
-        _EXT4-I.BLOCK + 2 + W@ _EXT4-JFC-TARGET-ENTRIES !
+        _EXT4-ROOT-ENTRIES _EXT4-JFC-TARGET-ENTRIES !
     THEN
     _EXT4-IR-BLOCK @ _EXT4-JFC-TARGET-HOME !
     _EXT4-IR-OFF @ _EXT4-JFC-TARGET-OFF !
@@ -16048,14 +15537,23 @@ VARIABLE _EXT4-JFC-SIZE
     _EXT4-JFC-RECORD @ _EXT4-OE.LOCATOR-B + @ _EXT4-JFC-SLOT !
     \ The staging below reloads other inodes, so keep the target's kind.
     _EXT4-JFC-CTX @ _EXT4-C.INODE + _EXT4-I.LINKS + W@ 0= _EXT4-JFC-DELETE !
-    _EXT4-JFC-DELETE @ IF
+    FALSE _EXT4-JFI-RELEASED !
+    _EXT4-JFC-DELETE @ _EXT4-JFC-CTX @ _EXT4-UNLINKED-RELEASE? 0= AND IF
         _EXT4-JFC-RECORD @ _EXT4-JFC-WRITER @
         _EXT4-JTX-STAGE-FREE-ORPHAN-INODE ?DUP IF _EXT4-JFC-FAIL EXIT THEN
     ELSE
         _EXT4-JFC-RECORD @ _EXT4-JFC-WRITER @
-        _EXT4-LINKED-STEP-XT @ EXECUTE
+        _EXT4-ORPHAN-STEP-XT @ EXECUTE
         ?DUP IF NIP _EXT4-JFC-FAIL EXIT THEN
         IF 0 EXIT THEN
+        \ An unlinked record's pass that freed the rest of the map with room
+        \ to spare deletes the inode in the same transaction.
+        _EXT4-JFC-DELETE @ IF
+            _EXT4-JFI-RELEASED @ 0= IF VFS-E-CORRUPT _EXT4-JFC-FAIL EXIT THEN
+            _EXT4-JFC-RECORD @ _EXT4-JFC-WRITER @
+            _EXT4-JTX-STAGE-FREE-ORPHAN-INODE
+            ?DUP IF _EXT4-JFC-FAIL EXIT THEN
+        THEN
     THEN
     _EXT4-JFC-RECORD @ _EXT4-JFC-WRITER @
     _EXT4-JFC-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN = IF
@@ -16065,13 +15563,14 @@ VARIABLE _EXT4-JFC-SIZE
     THEN
     ?DUP IF _EXT4-JFC-FAIL EXIT THEN
     \ A deletion's homes equal its exact measured credit.  A linked final
-    \ cleanup that ends a release pass uses at most the pass's capacity, and
-    \ a tree node that pass edited and then freed leaves a cancelled entry.
+    \ cleanup or a deletion that ends a release pass uses at most the pass's
+    \ capacity, and a tree node that pass edited and then freed leaves a
+    \ cancelled entry.
     _EXT4-JFC-WRITER @ _EXT4-JWR.REVOKE-USED + @
     _EXT4-JFC-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> IF
         VFS-E-CORRUPT _EXT4-JFC-FAIL EXIT
     THEN
-    _EXT4-JFC-DELETE @ IF
+    _EXT4-JFC-DELETE @ _EXT4-JFI-RELEASED @ 0= AND IF
         _EXT4-JFC-WRITER @ _EXT4-JWR.META-USED + @
         _EXT4-JFC-WRITER @ _EXT4-JWR.META-ACTIVE + @ <>
         _EXT4-JFC-WRITER @ _EXT4-JWR.META-ACTIVE + @
@@ -16092,6 +15591,7 @@ VARIABLE _EXT4-JFC-SIZE
         _EXT4-JFI-MAP-CHECK ?DUP IF _EXT4-JFC-FAIL EXIT THEN
     THEN
     _EXT4-JFC-SEAL ?DUP IF _EXT4-JFC-FAIL EXIT THEN
+    FALSE _EXT4-JFI-RELEASED !
     0 ;
 
 \ True only after the unified legacy/modern pass has authenticated an empty
@@ -16201,19 +15701,21 @@ VARIABLE _EXT4-RS-V
     0 ;
 
 \ ---------------------------------------------------------------------
-\  Linked-orphan release passes
+\  Orphan release passes
 \ ---------------------------------------------------------------------
 \
 \ A truncate whose release does not fit one transaction first publishes its
-\ new size together with a linked orphan record, and release passes then
-\ free the blocks past EOF while the record keeps the inode recoverable.
-\ Mount recovery runs the same passes for any linked record whose inode
-\ still maps blocks past EOF, and the record's final cleanup removes it
-\ once none remain.  A pass stages the target's edited tree nodes, the
-\ accounting of the runs it frees and the target's inode, keeping its size
-\ and times.  Its certificate binds the record, the target's pre-image, the
-\ staged target and, for a legacy record, the staged superblock that keeps
-\ the record at the head of the list.
+\ new size together with a linked orphan record, and the unlink of a
+\ file's last link publishes an unlinked one.  Release passes then free the
+\ blocks past EOF, or every block of the unlinked file, while the record
+\ keeps the inode recoverable.  Mount recovery runs the same passes for any
+\ record whose inode still maps blocks it must free, and the record's final
+\ cleanup, or the unlinked inode's deletion, removes it once none remain.
+\ A pass stages the target's edited tree nodes, the accounting of the runs
+\ it frees and the target's inode, keeping its size and times.  Its
+\ certificate binds the record, the target's pre-image, the staged target
+\ and, for a legacy record, the staged superblock that keeps the record at
+\ the head of the list.
 
 VARIABLE _EXT4-JRL-RECORD
 VARIABLE _EXT4-JRL-WRITER
@@ -16269,7 +15771,7 @@ VARIABLE _EXT4-JRL-COUNT
     _EXT4-JIE-RELEASE? 0= IF VFS-E-CORRUPT EXIT THEN
     0 ;
 
-\ Seal one staged release pass for the selected linked RECORD.
+\ Seal one staged release pass for the selected RECORD, linked or unlinked.
 : _EXT4-JRL-SEAL  ( plan-record transaction -- ior )
     _EXT4-JRL-WRITER ! _EXT4-JRL-RECORD !
     _EXT4-JRL-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JRL-CTX !
@@ -16280,9 +15782,8 @@ VARIABLE _EXT4-JRL-COUNT
     ?DUP IF EXIT THEN
     _EXT4-JRL-RECORD @ _EXT4-OE.KIND + @ _EXT4-JRL-KIND !
     _EXT4-JRL-CTX @ _EXT4-C.INODE +
-    DUP _EXT4-I.LINKS + W@ 0= IF DROP VFS-E-CORRUPT EXIT THEN
     DUP _EXT4-I.GENERATION + L@ _EXT4-JRL-GEN !
-    DUP _EXT4-I.BLOCK + 2 + W@ _EXT4-JRL-ENTRIES !
+    DUP _EXT4-ROOT-ENTRIES _EXT4-JRL-ENTRIES !
     _EXT4-JRL-CTX @ _EXT4-RECORD-CRC ?DUP IF NIP EXIT THEN
     _EXT4-JRL-PRE-CRC !
     _EXT4-IR-BLOCK @ _EXT4-JRL-HOME !
@@ -16462,15 +15963,16 @@ VARIABLE _EXT4-JPF-AFTER
     _EXT4-REQUIRE-SELECTED-ORPHAN ?DUP IF EXIT THEN
     _EXT4-JPF-CTX @ _EXT4-C.INODE + DUP _EXT4-JPF-TARGET !
     _EXT4-I.LINKS + W@ 0=
-    _EXT4-JPF-MODE @ _EXT4-JCPM-ORPHAN-DELETE? <> IF
+    _EXT4-JPF-MODE @ _EXT4-JCPM-ORPHAN-DELETE? <>
+    _EXT4-JPF-MODE @ _EXT4-JCPM-ORPHAN-RELEASE? 0= AND IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
     _EXT4-JPF-TARGET @ _EXT4-I.GENERATION + L@
     _EXT4-JPF-WRITER @ _EXT4-JWR.CP-TARGET-GEN + @ <> IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
-    \ A linked record's release or final cleanup was sealed against this
-    \ exact pre-image, whose tree nothing else can have changed since.
+    \ A release pass or a linked record's final cleanup was sealed against
+    \ this exact pre-image, whose tree nothing else can have changed since.
     _EXT4-JPF-MODE @ _EXT4-JCPM-ORPHAN-DELETE? 0= IF
         _EXT4-JPF-TARGET @ _EXT4-JPF-CTX @ _EXT4-RECORD-CRC
         ?DUP IF NIP EXIT THEN
@@ -16480,6 +15982,7 @@ VARIABLE _EXT4-JPF-AFTER
     THEN
     _EXT4-JPF-MODE @ _EXT4-JCPM-ORPHAN-DELETE? IF
         _EXT4-JPF-RECORD @ _EXT4-JFI-RECORD !
+        _EXT4-JPF-WRITER @ _EXT4-JFI-USE-CP-RUNS ?DUP IF EXIT THEN
         _EXT4-JPF-CTX @ _EXT4-JFI-CTX !
         _EXT4-JFI-AUTH-PREFLIGHT ?DUP IF EXIT THEN
         _EXT4-JFI-DATA-ENTRIES @
@@ -16494,7 +15997,7 @@ VARIABLE _EXT4-JPF-AFTER
             EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
         THEN
     ELSE
-        _EXT4-JPF-TARGET @ _EXT4-I.BLOCK + 2 + W@
+        _EXT4-JPF-TARGET @ _EXT4-ROOT-ENTRIES
         _EXT4-JPF-WRITER @ _EXT4-JWR.CP-TARGET-ENTRIES + @ <> IF
             EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
         THEN
@@ -16716,6 +16219,7 @@ VARIABLE _EXT4-JPF-AFTER
     THEN
     _EXT4-JPF-WRITER @ _EXT4-JWR.CP-MODE + @
     _EXT4-JCPM-ORPHAN-DELETE? IF
+        _EXT4-JPF-WRITER @ _EXT4-JFI-USE-CP-RUNS ?DUP IF EXIT THEN
         _EXT4-JPF-RECORD @ _EXT4-JPF-WRITER @
         _EXT4-JFD-VERIFY-STAGED ?DUP IF EXIT THEN
         _EXT4-JFC-INODE-BITMAP-HOME @
@@ -16877,9 +16381,10 @@ VARIABLE _EXT4-JCE-GROUP-INODES
     THEN
     0 ;
 
-\ Every staged home reached the medium exactly.  Only a linked record's
-\ release may hold a cancelled entry: a tree node it edited and then freed,
-\ whose revoke took its after-image out of the transaction.
+\ Every staged home reached the medium exactly.  Only a release pass may
+\ hold a cancelled entry, a deletion folded into one included: a tree node
+\ it edited and then freed, whose revoke took its after-image out of the
+\ transaction.
 : _EXT4-JCP-REQUIRE-RETAINED-META-HOMES  ( -- ior )
     _EXT4-JCP-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
         VFS-E-CORRUPT EXIT
@@ -16896,7 +16401,9 @@ VARIABLE _EXT4-JCE-GROUP-INODES
         ELSE
             _EXT4-JE-CANCELLED =
             _EXT4-JCP-WRITER @ _EXT4-JWR.CP-MODE + @ DUP _EXT4-JCPM-ORPHAN?
-            SWAP _EXT4-JCPM-ORPHAN-DELETE? 0= AND AND 0= IF
+            SWAP _EXT4-JCPM-ORPHAN-DELETE? 0=
+            _EXT4-JCP-WRITER @ _EXT4-JWR.CP-DATA-MAP-KIND + @
+            _EXT4-JDM-RELEASED = OR AND AND 0= IF
                 VFS-E-CORRUPT EXIT
             THEN
         THEN
@@ -17121,7 +16628,7 @@ VARIABLE _EXT4-JCP-ADD-OFF
     _EXT4-JCPM-ORPHAN-UNLINK-ADD? IF
         _EXT4-JCP-ADD-RECORD @ _EXT4-JFI-RECORD !
         _EXT4-JCP-CTX @ _EXT4-JFI-CTX !
-        0 _EXT4-JFI-PROSPECTIVE !
+        0 _EXT4-JFI-PROSPECTIVE ! FALSE _EXT4-JFI-RELEASED !
         _EXT4-JFI-AUTH-PREFLIGHT ?DUP IF EXIT THEN
         _EXT4-JCP-WRITER @ _EXT4-JFI-CP-RANGES-MATCH? 0= IF
             VFS-E-CORRUPT EXIT
@@ -19576,6 +19083,7 @@ VARIABLE _XN-L-NODE
 VARIABLE _XN-L-POS
 VARIABLE _XN-L-LEFT
 VARIABLE _XN-L-RIGHT
+VARIABLE _XN-LEGACY
 CREATE _XN-HOME _EXT4-MAX-EXTENT-DEPTH 1+ CELLS ALLOT
 CREATE _XN-POS _EXT4-MAX-EXTENT-DEPTH 1+ CELLS ALLOT
 CREATE _XN-FILL _EXT4-MAX-EXTENT-DEPTH 1+ CELLS ALLOT
@@ -20188,14 +19696,9 @@ VARIABLE _XR-T-NEW-PAGE
         THEN
     AGAIN ;
 
-\ Take removal steps until nothing past _XR-START is mapped, or until the
-\ next step might not fit when _XR-FIT is set, then stage the accounting of
-\ every freed run.  _XR-STEPS counts the steps taken.
-: _XR-RELEASE  ( -- ior )
-    0 _XR-STEPS ! FALSE _XR-DONE ! FALSE _XR-STOP !
-    0 _XR-GROUPS ! 0 _XR-PAGES ! FALSE _XR-PENDING !
-    _XN-TX @ _EXT4-JWR.SCRATCH-B + @ _XR-SET !
-    _XN-BSIZE @ 1 CELLS / _XR-SET-CAP !
+\ Take removal steps from the extent tree until the release is done or
+\ stops.
+: _XR-WALK  ( -- ior )
     BEGIN
         0xFFFFFFFF _XN-FIND ?DUP IF EXIT THEN
         _XN-LEAF _XR-NODE !
@@ -20210,7 +19713,260 @@ VARIABLE _XR-T-NEW-PAGE
             FALSE _XR-PENDING !
         THEN
         _XR-DONE @ _XR-STOP @ OR
-    UNTIL
+    UNTIL 0 ;
+
+\ ---------------------------------------------------------------------
+\  Legacy block-map removal
+\ ---------------------------------------------------------------------
+\
+\ A legacy map, which ext2 and ext3 write and older ext4 files keep, holds
+\ twelve direct pointers in the inode and three indirect branches below
+\ them, each a tree of pointer blocks one level deeper than the last.  Its
+\ release works as the extent tree's does and shares its state: each step
+\ cuts the last group-bounded run of contiguous blocks that the last
+\ pointer block at or past _XR-START maps, zeroing their pointers, and a
+\ pointer block that maps nothing more is freed with a journal revoke and
+\ its pointer cleared above it, upward while blocks empty in turn.  A
+\ pointer block that maps nothing at all goes the same way, so an
+\ allocated block left empty by a hole is freed too.  Every step ends in a
+\ valid map, as ext4_ind_truncate keeps one.  The leaf being cut is staged
+\ once it is left, and a parent each time its pointer to a freed child is
+\ cleared.  Pointer blocks carry no checksum, and the map was validated as
+\ a whole when the target was authenticated.
+
+VARIABLE _XI-PTRS
+VARIABLE _XI-ITEM
+VARIABLE _XI-LEVEL
+VARIABLE _XI-HEIGHT
+VARIABLE _XI-BASE
+VARIABLE _XI-SPAN
+VARIABLE _XI-FROM
+VARIABLE _XI-AT
+VARIABLE _XI-J
+VARIABLE _XI-LEAF
+VARIABLE _XI-EDITED
+VARIABLE _XI-GROUP-FIRST
+VARIABLE _XI-H
+VARIABLE _XI-R-BUF
+VARIABLE _XI-R-HOME
+VARIABLE _XI-S-BUF
+VARIABLE _XI-S-FROM
+VARIABLE _XI-L-INDEX
+VARIABLE _XI-L-PTR
+VARIABLE _XI-L-H
+
+0 CONSTANT _XI-NONE
+1 CONSTANT _XI-DATA
+2 CONSTANT _XI-EMPTY
+
+\ Copy the transaction's view of the pointer block at HOME into BUFFER: its
+\ after-image when the transaction holds one, else the block on media.
+: _XI-READ  ( home buffer -- ior )
+    _XI-R-BUF ! DUP _XI-R-HOME !
+    _XN-TX @ ?DUP IF
+        _EXT4-JTX-META-IMAGE ?DUP IF NIP EXIT THEN
+    ELSE
+        DROP 0
+    THEN
+    ?DUP IF _XI-R-BUF @ _XN-BSIZE @ MOVE 0 EXIT THEN
+    _XI-R-HOME @ _XN-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _XN-CTX @ _EXT4-C.BLOCK + _XI-R-BUF @ _XN-BSIZE @ MOVE 0 ;
+
+\ Stage an existing pointer block.  Its first edit counts it for the map
+\ audit.
+: _XI-PUT  ( buffer home -- ior )
+    DUP _XN-TX @ _EXT4-JTX-META-IMAGE ?DUP IF NIP NIP NIP EXIT THEN
+    0= IF 1 _XN-EXISTING +! THEN
+    _XN-TX @ _EXT4-JTX-META-PUT ;
+
+\ The first logical block of branch LEVEL, the one an inode's pointer
+\ NDIRECT+LEVEL-1 roots.
+: _XI-BRANCH-BASE  ( level -- base )
+    _EXT4-NDIRECT SWAP 1 ?DO _XI-PTRS @ I _EXT4-U-POWER + LOOP ;
+
+\ The first entry of a block at logical BASE, whose entries map SPAN
+\ blocks each, that maps anything at or past _XR-START.
+: _XI-FIRST  ( base span -- index )
+    >R _XR-START @ OVER U< IF DROP R> DROP 0 EXIT THEN
+    _XR-START @ SWAP - R> / ;
+
+\ The last nonzero pointer of BUFFER from FROM up to END, or -1.
+: _XI-LAST  ( buffer from end -- index )
+    ROT _XI-S-BUF ! SWAP _XI-S-FROM !
+    BEGIN DUP _XI-S-FROM @ > WHILE
+        1- DUP 4 * _XI-S-BUF @ + L@ IF EXIT THEN
+    REPEAT DROP -1 ;
+
+\ Walk down branch _XI-LEVEL from its root block HOME to the last pointer
+\ at or past _XR-START.  A block at height one holds data pointers; a block
+\ higher up holds pointers to the blocks below.  The walk records each
+\ block's home and the entry it follows, and leaves the block it stops at
+\ in _XN-A.  It finds the data to cut, a block that maps nothing, or, in a
+\ block that also maps blocks before _XR-START, nothing more to free.
+: _XI-DESCEND  ( home -- ior )
+    _XI-LEVEL @ _XI-HEIGHT !
+    BEGIN
+        DUP _XI-HEIGHT @ _XN-HOME!
+        _XN-A _XI-READ ?DUP IF EXIT THEN
+        _XI-PTRS @ _XI-HEIGHT @ 1- _EXT4-U-POWER _XI-SPAN !
+        _XI-BASE @ _XI-SPAN @ _XI-FIRST _XI-FROM !
+        _XN-A _XI-FROM @ _XI-PTRS @ _XI-LAST DUP 0< IF
+            DROP
+            _XN-A _XN-BSIZE @ _EXT4-BYTES-ZERO? IF _XI-EMPTY _XI-ITEM ! THEN
+            0 EXIT
+        THEN
+        _XI-HEIGHT @ 1 = IF _XI-AT ! _XI-DATA _XI-ITEM ! 0 EXIT THEN
+        DUP _XI-HEIGHT @ _XN-POS!
+        DUP _XI-SPAN @ * _XI-BASE +!
+        4 * _XN-A + L@
+        -1 _XI-HEIGHT +!
+    AGAIN ;
+
+\ Find the last thing at or past _XR-START to free, from the highest
+\ branch down to the direct pointers.  A branch that ends at or before
+\ _XR-START ends the search, since every branch below it ends earlier.
+: _XI-FIND  ( -- ior )
+    _XI-NONE _XI-ITEM !
+    3 _XI-LEVEL !
+    BEGIN _XI-LEVEL @ WHILE
+        _XI-LEVEL @ _XI-BRANCH-BASE DUP _XI-BASE !
+        _XI-PTRS @ _XI-LEVEL @ _EXT4-U-POWER +
+        _XR-START @ U> 0= IF 0 EXIT THEN
+        _XN-ROOT @ _EXT4-NDIRECT _XI-LEVEL @ + 1- 4 * + L@ ?DUP IF
+            _XI-DESCEND EXIT
+        THEN
+        -1 _XI-LEVEL +!
+    REPEAT
+    _XR-START @ _EXT4-NDIRECT U< IF
+        _XN-ROOT @ _XR-START @ _EXT4-NDIRECT _XI-LAST DUP 0< 0= IF
+            _XI-AT ! _XR-START @ _XI-FROM !
+            0 _XI-HEIGHT ! _XI-DATA _XI-ITEM ! 0 EXIT
+        THEN
+        DROP
+    THEN
+    0 ;
+
+\ The pointer block at HEIGHT maps nothing: free it and clear its pointer in
+\ the block above, upward while that block maps nothing in turn.  A branch
+\ root's pointer is the inode's.
+: _XI-PRUNE  ( height -- ior )
+    _XI-H !
+    BEGIN
+        _XI-H @ _XN-HOME@ _XR-FREE-NODE ?DUP IF EXIT THEN
+        _XI-H @ _XI-LEVEL @ = IF
+            0 _XN-ROOT @ _EXT4-NDIRECT _XI-LEVEL @ + 1- 4 * + L! 0 EXIT
+        THEN
+        1 _XI-H +!
+        _XI-H @ _XN-HOME@ _XN-B _XI-READ ?DUP IF EXIT THEN
+        0 _XN-B _XI-H @ _XN-POS@ 4 * + L!
+        _XN-B _XN-BSIZE @ _EXT4-BYTES-ZERO? 0= IF
+            _XN-B _XI-H @ _XN-HOME@ _XI-PUT EXIT
+        THEN
+    AGAIN ;
+
+\ True when the pointer before the run's first continues the run inside its
+\ group and at or past _XI-FROM.
+: _XI-EXTENDS?  ( -- flag )
+    _XI-J @ _XI-FROM @ > 0= IF FALSE EXIT THEN
+    _XR-PHYS @ _XI-AT @ _XI-J @ - -
+    DUP _XI-GROUP-FIRST @ U> 0= IF DROP FALSE EXIT THEN
+    1- _XI-LEAF @ _XI-J @ 1- 4 * + L@ = ;
+
+\ Cut the last group-bounded run of contiguous blocks from the leaf, the run
+\ whose last pointer is _XI-AT, and zero its pointers.  _XI-J is left at
+\ the run's first pointer.
+: _XI-CUT-ONE  ( -- ior )
+    _XI-LEAF @ _XI-AT @ 4 * + L@ DUP _XR-PHYS !
+    _XR-GROUP-OF _XN-CTX @ _EXT4-C.BPG + @ *
+    _XN-CTX @ _EXT4-C.FIRST + @ + _XI-GROUP-FIRST !
+    _XI-AT @ _XI-J !
+    BEGIN _XI-EXTENDS? WHILE -1 _XI-J +! REPEAT
+    _XI-AT @ _XI-J @ - 1+ _XR-CUT !
+    _XR-PHYS @ _XR-CUT @ - 1+ _XR-CUT @ _XR-FREE ?DUP IF EXIT THEN
+    _XR-CUT @ _XR-DATA +!
+    _XI-LEAF @ _XI-J @ 4 * + _XR-CUT @ 4 * 0 FILL
+    TRUE _XI-EDITED !
+    0 ;
+
+\ Cut the leaf from its last pointer past _XR-START back until the release
+\ is done, the leaf maps nothing and is pruned, or, when _XR-FIT is set,
+\ the next step might not fit.  A leaf that keeps pointers before
+\ _XR-START ends the release, as the inode's direct pointers do.
+: _XI-CUT-LEAF  ( -- ior )
+    BEGIN
+        _XR-FIT @ IF
+            _XR-ROOM? 0= IF TRUE _XR-STOP ! 0 EXIT THEN
+        THEN
+        _XI-CUT-ONE ?DUP IF EXIT THEN
+        1 _XR-STEPS +!
+        _XI-LEAF @ _XI-FROM @ _XI-J @ _XI-LAST DUP 0< IF
+            DROP
+            _XI-HEIGHT @ IF
+                _XI-LEAF @ _XN-BSIZE @ _EXT4-BYTES-ZERO? IF
+                    FALSE _XR-PENDING !
+                    1 _XI-PRUNE EXIT
+                THEN
+            THEN
+            TRUE _XR-DONE ! 0 EXIT
+        THEN
+        _XI-AT !
+    AGAIN ;
+
+\ Take removal steps from the legacy map until the release is done or
+\ stops.  A step's worst case empties every level of its branch.
+: _XI-WALK  ( -- ior )
+    BEGIN
+        _XI-FIND ?DUP IF EXIT THEN
+        _XI-LEVEL @ _XN-DEPTH !
+        _XI-ITEM @ _XI-NONE = IF
+            TRUE _XR-DONE !
+        ELSE _XI-ITEM @ _XI-EMPTY = IF
+            _XR-FIT @ _XR-ROOM? 0= AND IF TRUE _XR-STOP ! 0 EXIT THEN
+            _XI-HEIGHT @ _XI-PRUNE ?DUP IF EXIT THEN
+            1 _XR-STEPS +!
+        ELSE
+            _XI-HEIGHT @ IF _XN-A ELSE _XN-ROOT @ THEN _XI-LEAF !
+            _XI-HEIGHT @ 0<> _XR-PENDING !
+            FALSE _XI-EDITED !
+            _XI-CUT-LEAF ?DUP IF EXIT THEN
+            _XR-PENDING @ _XI-EDITED @ AND IF
+                _XN-A 1 _XN-HOME@ _XI-PUT ?DUP IF EXIT THEN
+            THEN
+            FALSE _XR-PENDING !
+        THEN THEN
+        _XR-DONE @ _XR-STOP @ OR
+    UNTIL 0 ;
+
+\ The block a legacy map holds at LOGICAL, or zero for a hole, read through
+\ the transaction.
+: _XI-LOOKUP  ( logical -- physical ior )
+    DUP _EXT4-NDIRECT U< IF 4 * _XN-ROOT @ + L@ 0 EXIT THEN
+    _EXT4-NDIRECT - _XI-L-INDEX !
+    1 _XI-L-H !
+    BEGIN _XI-L-INDEX @ _XI-PTRS @ _XI-L-H @ _EXT4-U-POWER U< 0= WHILE
+        _XI-PTRS @ _XI-L-H @ _EXT4-U-POWER NEGATE _XI-L-INDEX +!
+        1 _XI-L-H +!
+        _XI-L-H @ 3 U> IF 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
+    REPEAT
+    _XN-ROOT @ _EXT4-NDIRECT _XI-L-H @ + 1- 4 * + L@ _XI-L-PTR !
+    BEGIN _XI-L-H @ WHILE
+        _XI-L-PTR @ 0= IF 0 0 EXIT THEN
+        _XI-L-PTR @ _XN-B _XI-READ ?DUP IF 0 SWAP EXIT THEN
+        _XI-L-INDEX @ _XI-PTRS @ _XI-L-H @ 1- _EXT4-U-POWER /MOD
+        4 * _XN-B + L@ _XI-L-PTR ! _XI-L-INDEX !
+        -1 _XI-L-H +!
+    REPEAT
+    _XI-L-PTR @ 0 ;
+
+\ Take removal steps until nothing past _XR-START is mapped, or until the
+\ next step might not fit when _XR-FIT is set, then stage the accounting of
+\ every freed run.  _XR-STEPS counts the steps taken.
+: _XR-RELEASE  ( -- ior )
+    0 _XR-STEPS ! FALSE _XR-DONE ! FALSE _XR-STOP !
+    0 _XR-GROUPS ! 0 _XR-PAGES ! FALSE _XR-PENDING !
+    _XN-TX @ _EXT4-JWR.SCRATCH-B + @ _XR-SET !
+    _XN-BSIZE @ 1 CELLS / _XR-SET-CAP !
+    _XN-LEGACY @ IF _XI-WALK ELSE _XR-WALK THEN ?DUP IF EXIT THEN
     _XR-FREED @ 0= IF 0 EXIT THEN
     _XN-CTX @ _EXT4-C.MUTATION-RANGES + @ _XR-FREED @
     _XN-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ _XN-TX @
@@ -20258,6 +20014,7 @@ VARIABLE _XB-BASE
 VARIABLE _XB-LO
 VARIABLE _XB-HI
 VARIABLE _XW-ORPHAN
+VARIABLE _XW-DELETION
 CREATE _XW-INODE _EXT4-MAX-INODE ALLOT
 CREATE _XW-DATA _EXT4-MAX-BLOCK ALLOT
 
@@ -20268,11 +20025,35 @@ CREATE _XW-DATA _EXT4-MAX-BLOCK ALLOT
     _XW-INO @ _XW-CTX @
     _XW-ORPHAN @ IF _EXT4-LOAD-ORPHAN-INODE ELSE _EXT4-LOAD-INODE THEN ;
 
+\ A deletion's release passes free an unlinked file, whose record an
+\ ordinary staging refuses, and may free one whose flags the write path
+\ never sets.  They need only its type, size and block count.
+: _XW-STAGE-DELETION  ( -- type ior )
+    _XW-CTX @ _EXT4-C.INODE +
+    DUP _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF DROP 0 0 EXIT THEN
+    DUP _EXT4-I.SIZE-HI + L@ DUP 0x80000000 AND IF
+        2DROP 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    32 LSHIFT OVER _EXT4-I.SIZE-LO + L@ OR _XW-CTX @ _EXT4-C.R.SIZE + !
+    _XW-CTX @ _EXT4-DECODE-I-BLOCKS ?DUP IF NIP 0 SWAP EXIT THEN
+    _XW-CTX @ _EXT4-C.R.BLOCKS + !
+    VFS-T-FILE 0 ;
+
+\ The refusal of a target outside the kinds the writer releases: mount
+\ recovery answers that it cannot recover the record, and a mounted write
+\ that the file uses a feature outside the writer.
+: _XW-KIND-REFUSAL  ( -- ior )
+    _XW-ORPHAN @ IF EXT4-D-RECOVERY ELSE EXT4-D-FEATURE THEN
+    _EXT4-UNSUPPORTED ;
+
 \ Authenticate the target before each staging pass: a linked regular file
 \ outside the reserved inodes, with exactly the EXTENTS flag, the expected
 \ generation, a fully validated map, and a valid external xattr block when
-\ it has one.  Its record is copied into _XW-INODE for editing, and the
-\ target stays the loaded inode so its extent nodes verify.
+\ it has one.  An orphan record's target may instead hold a legacy block
+\ map and no flags at all, and a deletion admits an unlinked file with any
+\ map and any flags but data journaling.  Its record is copied into
+\ _XW-INODE for editing, and the target stays the loaded inode so its map
+\ verifies.
 : _XW-AUTH  ( -- ior )
     _XW-INO @ _XW-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
@@ -20283,11 +20064,19 @@ CREATE _XW-DATA _EXT4-MAX-BLOCK ALLOT
     THEN
     _XW-EXPECTED-GEN @ 0xFFFFFFFF U> IF VFS-E-INVALID EXIT THEN
     _XW-LOAD ?DUP IF EXIT THEN
-    _XW-CTX @ _EXT4-STAGE-CURRENT-INODE ?DUP IF NIP EXIT THEN
-    VFS-T-FILE <> IF EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT THEN
+    _XW-DELETION @ IF
+        _XW-STAGE-DELETION
+    ELSE
+        _XW-CTX @ _EXT4-STAGE-CURRENT-INODE
+    THEN ?DUP IF NIP EXIT THEN
+    VFS-T-FILE <> IF _XW-KIND-REFUSAL EXIT THEN
     _XW-CTX @ _EXT4-C.INODE +
-    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL <> IF
-        DROP EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
+    DUP _EXT4-I.FLAGS + L@ _XW-DELETION @ IF
+        _EXT4-JOURNAL-DATA-FL AND
+    ELSE
+        DUP _EXT4-EXTENTS-FL <> SWAP 0<> _XW-ORPHAN @ 0= OR AND
+    THEN IF
+        DROP _XW-KIND-REFUSAL EXIT
     THEN
     DUP _EXT4-I.GENERATION + L@ _XW-EXPECTED-GEN @ <> IF
         DROP VFS-E-STALE EXIT
@@ -20319,6 +20108,8 @@ CREATE _XW-DATA _EXT4-MAX-BLOCK ALLOT
     _XW-TX @ _XN-TX ! _XW-CTX @ _XN-CTX ! _XW-BSIZE @ _XN-BSIZE !
     _XW-INO @ _XN-INO ! _XW-EXPECTED-GEN @ _XN-GEN !
     _XW-INODE _EXT4-I.BLOCK + _XN-ROOT !
+    _XW-INODE _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0= _XN-LEGACY !
+    _XW-BSIZE @ 4 / _XI-PTRS !
     _XW-BSIZE @ 12 - 12 / _XN-NODE-MAX ! ;
 
 : _XW-ADVANCE-DONE  ( -- )
@@ -20532,10 +20323,10 @@ VARIABLE _XP-EXPECT
     THEN
     0 ;
 
-\ Every existing data block and tree node the transaction rewrites or
-\ frees must be mapped exactly once by the target's pre-transaction tree;
-\ homes the transaction allocated and static metadata homes must not be
-\ mapped at all.  One validation walk counts every overlap with the
+\ Every existing data block, tree node and pointer block the transaction
+\ rewrites or frees must be mapped exactly once by the target's
+\ pre-transaction map; homes the transaction allocated and static metadata
+\ homes must not be mapped at all.  One validation walk counts every overlap with the
 \ collected ranges, which must equal _XP-EXPECT, and also checks each
 \ target range's mutation role.
 : _XP-MAP-AUDIT  ( -- ior )
@@ -20549,7 +20340,7 @@ VARIABLE _XP-EXPECT
     0 _EXT4-MUTATION-MAP-HITS !
     -1 _EXT4-MUTATION-MAP-ACTIVE !
     _XW-CTX @ _EXT4-PROOF-SCOPE-OPEN
-    _XW-CTX @ _EXT4-VALIDATE-EXTENT-TREE _XP-IOR !
+    _XW-CTX @ _EXT4-VALIDATE-DATA-MAP _XP-IOR !
     _EXT4-PROOF-SCOPE-CLOSE
     0 _EXT4-MUTATION-MAP-ACTIVE !
     0 _EXT4-MUTATION-MAP-VECTOR-COUNT !
@@ -20699,7 +20490,7 @@ VARIABLE _XW-IOR
     _EXT4-WR-BID @ _XW-INO ! _EXT4-WR-GEN @ _XW-EXPECTED-GEN !
     _EXT4-WR-SECONDS @ _XW-SECONDS ! _EXT4-WR-NSEC @ _XW-NSEC !
     0 _XW-WRITER ! 0 _XW-ACTUAL ! 0 _XW-GRANULAR ! 0 _XW-DONE !
-    FALSE _XW-ORPHAN !
+    FALSE _XW-ORPHAN ! FALSE _XW-DELETION !
     _XW-V @ _EXT4-MOW-V !
     0 _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
     _EXT4-MOW-CTX @ _XW-CTX !
@@ -24964,53 +24755,54 @@ VARIABLE _XT-NEW-FREE
     _XP-MAP-CHECK ;
 
 \ ---------------------------------------------------------------------
-\  Linked-orphan release and final cleanup
+\  Orphan release and a linked record's final cleanup
 \ ---------------------------------------------------------------------
 \
 \ A linked orphan record holds an inode whose size a truncate has already
-\ committed while blocks past its EOF may still be mapped.  Release passes
-\ free them from the end of the file, as many removal steps per pass as
-\ surely fit the transaction, and the final cleanup then zeroes the bytes
-\ past EOF in the block that holds it and removes the record.  A live
-\ truncate and mount recovery run the same steps.  The kernel's orphan
-\ cleanup truncates such an inode the same way, so a record either one
-\ leaves behind completes on the other.
+\ committed while blocks past its EOF may still be mapped, and an unlinked
+\ one holds a file whose last link is gone, every block of which must be
+\ freed before the inode is.  Release passes free them from the end of the
+\ file, as many removal steps per pass as surely fit the transaction.  A
+\ linked record's final cleanup then zeroes the bytes past EOF in the
+\ block that holds it and removes the record; an unlinked record's inode
+\ is then deleted with it.  A live truncate or unlink and mount recovery
+\ run the same steps.  The kernel's orphan cleanup truncates or deletes
+\ such an inode the same way, so a record either one leaves behind
+\ completes on the other.
 
 VARIABLE _XO-RECORD
 VARIABLE _XO-CTX
-VARIABLE _XO-LEGACY-MAP
 VARIABLE _XO-AT
 VARIABLE _XO-CAP
 VARIABLE _XO-HOME
 CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
 
-\ Load the record's target into the general write's state.  An extent
-\ target's whole tree is validated; a legacy map is admitted only empty, so
-\ it holds nothing to release and no tail to zero.
+\ Load the record's target into the general write's state, its whole map
+\ validated, an extent tree or a legacy block map.  A linked target is
+\ released from its EOF, and an unlinked one from its first block.
 : _XO-LOAD  ( -- ior )
     TRUE _XW-ORPHAN !
     _XO-RECORD @ _XW-CTX @ _EXT4-REAUTH-ORPHAN-PLAN-RECORD ?DUP IF EXIT THEN
     _XW-CTX @ _EXT4-C.BSIZE + @ _XW-BSIZE !
     _XO-RECORD @ _EXT4-OE.INO + @ _XW-INO !
     _XW-CTX @ _EXT4-C.INODE +
-    DUP _EXT4-I.GENERATION + L@ _XW-EXPECTED-GEN !
-    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0= IF
-        DUP _EXT4-I.BLOCK + 60 _EXT4-BYTES-ZERO? 0= IF
-            DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XW-INODE _XW-CTX @ _EXT4-C.ISIZE + @ MOVE
-        TRUE _XO-LEGACY-MAP ! 0 EXIT
-    THEN
-    DROP FALSE _XO-LEGACY-MAP !
+    DUP _EXT4-I.LINKS + W@ 0= _XW-DELETION !
+    _EXT4-I.GENERATION + L@ _XW-EXPECTED-GEN !
     _XW-AUTH ?DUP IF EXIT THEN
     _XW-TREE
-    _XW-SIZE @ _XW-BSIZE @ 1- + _XW-BSIZE @ / _XR-START !
+    _XW-DELETION @ IF 0 ELSE
+        _XW-SIZE @ _XW-BSIZE @ 1- + _XW-BSIZE @ /
+    THEN _XR-START !
     0 ;
 
 \ True when the target maps nothing at or past _XR-START.  Extents are
-\ ordered and no external node is empty, so the last extent decides.
+\ ordered and no external node is empty, so the last extent decides; a
+\ legacy map is searched from its last branch down.
 : _XO-COMPLETE?  ( -- flag ior )
-    _XO-LEGACY-MAP @ IF TRUE 0 EXIT THEN
+    _XN-LEGACY @ IF
+        _XI-FIND ?DUP IF FALSE SWAP EXIT THEN
+        _XI-ITEM @ _XI-NONE = 0 EXIT
+    THEN
     0xFFFFFFFF _XN-FIND ?DUP IF FALSE SWAP EXIT THEN
     _XN-LEAF DUP _XN-COUNT@ 0= IF DROP TRUE 0 EXIT THEN
     DUP _XN-COUNT@ 1- _XN-ENTRY DUP L@ SWAP _EXT4-EXTENT-LEN@ +
@@ -25020,11 +24812,16 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
 \ initialized, and a byte past EOF in it is not zero; otherwise zero.  The
 \ block is left in C.BLOCK.
 : _XO-TAIL-HOME  ( -- home ior )
-    _XO-LEGACY-MAP @ IF 0 0 EXIT THEN
     _XW-SIZE @ _XW-BSIZE @ /MOD SWAP DUP _XO-AT ! 0= IF DROP 0 0 EXIT THEN
-    _XN-LOOKUP ?DUP IF >R 2DROP DROP 0 R> EXIT THEN
-    _XN-MAPPED <> IF 2DROP 0 0 EXIT THEN
-    DROP DUP _XW-CTX @ _EXT4-READ-BLOCK ?DUP IF NIP 0 SWAP EXIT THEN
+    _XN-LEGACY @ IF
+        _XI-LOOKUP ?DUP IF NIP 0 SWAP EXIT THEN
+        ?DUP 0= IF 0 0 EXIT THEN
+    ELSE
+        _XN-LOOKUP ?DUP IF >R 2DROP DROP 0 R> EXIT THEN
+        _XN-MAPPED <> IF 2DROP 0 0 EXIT THEN
+        DROP
+    THEN
+    DUP _XW-CTX @ _EXT4-READ-BLOCK ?DUP IF NIP 0 SWAP EXIT THEN
     _XW-CTX @ _EXT4-C.BLOCK + _XO-AT @ + _XW-BSIZE @ _XO-AT @ -
     _EXT4-BYTES-ZERO? IF DROP 0 THEN 0 ;
 
@@ -25067,12 +24864,13 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
     THEN
     0 ;
 
-\ True when the pass's release finished and the final cleanup's homes still
-\ fit: the inode, the tail when it needs zeroing, and a modern record's
-\ orphan block.  A legacy record's head moves in the superblock the freed
-\ runs' accounting already staged.
+\ True when the pass's release finished and a linked record's final
+\ cleanup's homes still fit: the inode, the tail when it needs zeroing, and
+\ a modern record's orphan block.  A legacy record's head moves in the
+\ superblock the freed runs' accounting already staged.  An unlinked
+\ record's deletion folds through _XO-DELETE? instead.
 : _XO-FOLD?  ( -- flag ior )
-    _XR-DONE @ 0= IF FALSE 0 EXIT THEN
+    _XR-DONE @ 0= _XW-DELETION @ OR IF FALSE 0 EXIT THEN
     _XO-TAIL-HOME ?DUP IF NIP FALSE SWAP EXIT THEN
     DUP _XO-HOME ! 0<> 1 AND 1+
     _XO-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN = 1 AND +
@@ -25087,16 +24885,76 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
     _XR-DATA @ _XR-NODES @ + _XW-CTX @ _EXT4-C.SPB + @ * _XW-BLOCKS @ SWAP -
     _XW-PUT-RECORD ;
 
+VARIABLE _XO-D-NEED
+VARIABLE _XO-D-REVOKE
+
+\ Count HOME toward the folded deletion unless the pass already stages it.
+: _XO-D-HOME  ( home -- ior )
+    _XW-TX @ _EXT4-JTX-META-IMAGE ?DUP IF NIP EXIT THEN
+    0= IF 1 _XO-D-NEED +! THEN 0 ;
+
+\ The primary descriptor block that holds GROUP's descriptor.
+: _XO-D-PAGE  ( group -- home )
+    _XR-PAGE-OF _XW-CTX @ _EXT4-GDT-BASE + ;
+
+\ An external xattr block's part of the deletion.  A larger reference
+\ count rewrites the block itself; the last reference frees it with a
+\ revoke, in its group's bitmap and descriptor page.
+: _XO-D-XATTR  ( block -- ior )
+    DUP _XW-CTX @ _EXT4-LOAD-XATTR-BLOCK ?DUP IF NIP EXIT THEN
+    _XW-CTX @ _EXT4-C.BLOCK + 4 + L@ 1 <> IF
+        DROP 1 _XO-D-NEED +! 0 EXIT
+    THEN
+    1 _XO-D-REVOKE !
+    _XR-GROUP-OF DUP _XW-CTX @ _EXT4-LOAD-DESC ?DUP IF NIP EXIT THEN
+    _XW-CTX @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@
+    _XO-D-HOME ?DUP IF NIP EXIT THEN
+    _XO-D-PAGE _XO-D-HOME ;
+
+\ True when an unlinked record's pass freed the rest of the map and its
+\ deletion still fits, counted against the homes the pass already stages:
+\ the inode's record and the inode bitmap, the inode group's descriptor
+\ page, the superblock, a modern record's orphan block, and an external
+\ xattr block's part.  The pass's freed runs then become the deletion's
+\ vector.
+: _XO-DELETE?  ( -- flag ior )
+    _XR-DONE @ 0= IF FALSE 0 EXIT THEN
+    2 _XO-D-NEED ! 0 _XO-D-REVOKE !
+    _XO-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN = IF
+        1 _XO-D-NEED +!
+    THEN
+    _XW-INO @ 1- _XW-CTX @ _EXT4-C.IPG + @ / _XO-D-PAGE _XO-D-HOME
+    ?DUP IF FALSE SWAP EXIT THEN
+    _XW-CTX @ _EXT4-PRIMARY-SUPER-BLOCK _XO-D-HOME
+    ?DUP IF FALSE SWAP EXIT THEN
+    _XW-INODE _EXT4-I.FILE-ACL-LO + L@ ?DUP IF
+        _XO-D-XATTR ?DUP IF FALSE SWAP EXIT THEN
+    THEN
+    _XW-TX @ _EXT4-JWR.META-USED + @ _XO-D-NEED @ +
+    _XW-TX @ _EXT4-JWR.META-CREDIT + @ U> IF FALSE 0 EXIT THEN
+    _XW-TX @ _EXT4-JWR.REVOKE-USED + @ _XO-D-REVOKE @ +
+    _XW-TX @ _EXT4-JWR.REVOKE-CREDIT + @ U> IF FALSE 0 EXIT THEN
+    _XR-FREED @ _EXT4-JFI-RELEASED-RUNS !
+    _XR-DATA @ _XR-NODES @ + _EXT4-JFI-RELEASED-BLOCKS !
+    TRUE _EXT4-JFI-RELEASED !
+    TRUE 0 ;
+
 \ Stage one release pass: the removal steps that surely fit, then the
 \ target's inode with its unchanged size and times.  FOLD? is true when the
-\ pass also stages the target's part of the final cleanup.
+\ pass also stages the target's part of the final cleanup, or, for an
+\ unlinked record, when its deletion follows in the same transaction and
+\ stages the inode itself.
 : _XO-PASS  ( -- fold? ior )
     0 _XW-OVERWRITES ! 0 _XN-NEW-NODES ! 0 _XN-EXISTING !
     0 _XR-DATA ! 0 _XR-NODES ! 0 _XR-FREED !
     TRUE _XR-FIT !
     _XR-RELEASE ?DUP IF FALSE SWAP EXIT THEN
     _XR-STEPS @ 0= IF FALSE VFS-E-NOSPC EXIT THEN
-    _XN-ROOT @ _XN-CLEAR-TAIL
+    _XN-LEGACY @ 0= IF _XN-ROOT @ _XN-CLEAR-TAIL THEN
+    _XW-DELETION @ IF
+        _XO-DELETE? ?DUP IF NIP FALSE SWAP EXIT THEN
+        IF TRUE 0 EXIT THEN
+    THEN
     _XO-FOLD? ?DUP IF NIP FALSE SWAP EXIT THEN
     DUP IF
         _XO-HOME @ ?DUP IF
@@ -25106,22 +24964,26 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
     DUP _XO-PUT-TARGET ?DUP IF NIP FALSE SWAP EXIT THEN
     _XT-PROVE ;
 
-\ The linked-record step for mount recovery and a truncate's own drain.  A
+\ The record step for mount recovery and a live drain.  A linked record's
 \ pass that ends the release also stages the target's part of the final
 \ cleanup, as one that finds the release complete does, and the caller then
-\ removes the record in the same transaction.
+\ removes the record in the same transaction.  An unlinked record is
+\ stepped only while its tree maps blocks.
 : _XO-STEP  ( plan-record transaction -- release? ior )
     _XW-TX ! _XO-RECORD !
     _XW-TX @ _EXT4-JWR.CTX + @ _XW-CTX !
     0 _EXT4-JFC-TAIL-HOME !
     _XO-LOAD ?DUP IF FALSE SWAP EXIT THEN
     _XO-COMPLETE? ?DUP IF NIP FALSE SWAP EXIT THEN
-    IF _XO-FINAL FALSE SWAP EXIT THEN
+    IF
+        _XW-DELETION @ IF FALSE VFS-E-CORRUPT EXIT THEN
+        _XO-FINAL FALSE SWAP EXIT
+    THEN
     _XO-PASS ?DUP IF NIP TRUE SWAP EXIT THEN
     IF FALSE 0 EXIT THEN
     _XO-RECORD @ _XW-TX @ _EXT4-JRL-SEAL TRUE SWAP ;
 
-' _XO-STEP _EXT4-LINKED-STEP-XT !
+' _XO-STEP _EXT4-ORPHAN-STEP-XT !
 
 \ A release pass's credits.  A bound writer profile is the pass's capacity.
 \ Mount recovery sizes its own writer to free one full leaf of fragmented
@@ -25145,18 +25007,19 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
     _XO-CAP @ DUP 0 ;
 
 \ The credits of the record's next transaction: a release pass while blocks
-\ past EOF remain, else the final cleanup's exact homes, its orphan block or
-\ superblock, the tail and a legacy successor's inode.
+\ it must free remain, else a linked record's final cleanup's exact homes,
+\ its orphan block or superblock, the tail and a legacy successor's inode.
 : _XO-MEASURE  ( plan-record ctx -- meta-credit revoke-credit ior )
     _XW-CTX ! _XO-RECORD !
     0 _XW-TX !
     _XO-LOAD ?DUP IF 0 0 ROT EXIT THEN
     _XO-COMPLETE? ?DUP IF NIP 0 0 ROT EXIT THEN
     0= IF _XW-CTX @ _EXT4-RELEASE-PASS-CREDIT EXIT THEN
+    _XW-DELETION @ IF 0 0 VFS-E-CORRUPT EXIT THEN
     _XO-TAIL-HOME ?DUP IF NIP 0 0 ROT EXIT THEN
     0<> 1 AND 1+ _XO-SUCCESSOR? 1 AND + 0 0 ;
 
-' _XO-MEASURE _EXT4-LINKED-MEASURE-XT !
+' _XO-MEASURE _EXT4-ORPHAN-MEASURE-XT !
 
 \ Begin a transaction with the whole bound profile, then stage and prove
 \ the truncate.  On success the transaction stays staged.
@@ -25229,30 +25092,30 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
     _XT-PUBLISH
     0 ;
 
-: _XT-REQUIRE-IDLE  ( -- ior )
-    _XW-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
-    _XW-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
-    _XW-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF VFS-E-CORRUPT EXIT THEN
+: _EXT4-REQUIRE-IDLE-WRITER  ( writer -- ior )
+    DUP _EXT4-JWR-VALID? 0= IF DROP VFS-E-CORRUPT EXIT THEN
+    DUP _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
+    SWAP _EXT4-JWR-IDLE-CLEAN? 0= OR IF VFS-E-CORRUPT EXIT THEN
     0 ;
 
-\ Before any media change, one release pass under the bound profile must
-\ be able to take a removal step.
-: _XT-PROBE  ( -- ior )
-    _XW-WRITER @ _EXT4-JWR.META-CAP + @ 0
-    _XW-WRITER @ _EXT4-JWR.REVOKE-CAP + @
-    _XW-WRITER @ _EXT4-JTX-BEGIN ?DUP IF NIP EXIT THEN
-    _XW-TX !
-    _XW-AUTH DUP 0= IF
-        DROP _XW-TREE
-        _XT-NEW @ _XW-BSIZE @ 1- + _XW-BSIZE @ / _XR-START !
-        0 _XN-NEW-NODES ! 0 _XN-EXISTING !
-        0 _XR-DATA ! 0 _XR-NODES ! 0 _XR-FREED !
-        TRUE _XR-FIT !
-        _XR-RELEASE DUP 0= IF
-            DROP _XR-STEPS @ IF 0 ELSE VFS-E-NOSPC THEN
-        THEN
+VARIABLE _XW-ROOM-WRITER
+
+\ True when a release pass under WRITER's profile surely takes its first
+\ removal step from a tree of DEPTH, as _XR-ROOM? judges that step: the
+\ current leaf when the tree has external nodes, the inode, and room for
+\ every level the step may empty.  Every later step of every pass then has
+\ the same room, so the release cannot stall.
+: _XW-PASS-ROOM?  ( depth writer -- flag )
+    _XW-ROOM-WRITER !
+    DUP 0<> 1 AND 4 + OVER 3 * +
+    _XW-ROOM-WRITER @ _EXT4-JWR.META-CAP + @ U> IF DROP FALSE EXIT THEN
+    DUP _XW-ROOM-WRITER @ _EXT4-JWR.REVOKE-CAP + @ U> IF DROP FALSE EXIT THEN
+    DUP 1+ _XW-ROOM-WRITER @ _EXT4-JWR.META-CAP + @ +
+    _XW-ROOM-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.MUTATION-RANGE-CAP + @ U> IF
+        DROP FALSE EXIT
     THEN
-    _XW-DISCARD ?DUP IF NIP THEN ;
+    1+ _XW-ROOM-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.BSIZE + @
+    1 CELLS / U> 0= ;
 
 \ The target's own tree maps none of the insertion's homes.
 : _XT-ADD-PROVE  ( -- ior )
@@ -25272,42 +25135,54 @@ CREATE _XO-AFTER _EXT4-MAX-INODE ALLOT
     DUP 0= IF DROP _XT-ADD-PROVE THEN
     DUP IF _XW-DISCARD ?DUP IF NIP THEN THEN ;
 
-VARIABLE _XT-RECORD
-VARIABLE _XT-CREDIT
-VARIABLE _XT-REVOKE
+VARIABLE _EXT4-DRO-INO
+VARIABLE _EXT4-DRO-WRITER
+VARIABLE _EXT4-DRO-CTX
+VARIABLE _EXT4-DRO-TX
+VARIABLE _EXT4-DRO-RECORD
+VARIABLE _EXT4-DRO-CREDIT
+VARIABLE _EXT4-DRO-REVOKE
+VARIABLE _EXT4-DRO-IOR
 
-\ Free the blocks past the committed EOF and remove the record, through the
-\ same release passes and final cleanup mount recovery runs, then retire
-\ ORPHAN_PRESENT.  The union held only the target's record.
-: _XT-DRAIN  ( -- ior )
-    BEGIN _XW-CTX @ _EXT4-C.O.ACTIVE + @ WHILE
-        _XW-CTX @ _EXT4-FIND-SELECTED-ORPHAN _XT-IOR ! _XT-RECORD !
-        _XT-IOR @ ?DUP IF EXIT THEN
-        _XT-RECORD @ _EXT4-OE.INO + @ _XW-INO @ <> IF
+\ Finish INO's record through the release passes and final cleanup or
+\ deletion mount recovery runs, one transaction each, then retire
+\ ORPHAN_PRESENT.  The union holds only that record.
+: _EXT4-DRAIN-ORPHAN  ( ino writer ctx -- ior )
+    _EXT4-DRO-CTX ! _EXT4-DRO-WRITER ! _EXT4-DRO-INO !
+    BEGIN _EXT4-DRO-CTX @ _EXT4-C.O.ACTIVE + @ WHILE
+        _EXT4-DRO-CTX @ _EXT4-FIND-SELECTED-ORPHAN
+        _EXT4-DRO-IOR ! _EXT4-DRO-RECORD !
+        _EXT4-DRO-IOR @ ?DUP IF EXIT THEN
+        _EXT4-DRO-RECORD @ _EXT4-OE.INO + @ _EXT4-DRO-INO @ <> IF
             VFS-E-CORRUPT EXIT
         THEN
-        _XT-RECORD @ _XW-CTX @ _EXT4-MEASURE-ORPHAN-CLEANUP
-        _XT-IOR ! _XT-REVOKE ! _XT-CREDIT !
-        _XT-IOR @ ?DUP IF EXIT THEN
-        _XT-CREDIT @ 0 _XT-REVOKE @ _XW-WRITER @ _EXT4-JTX-BEGIN
-        ?DUP IF NIP EXIT THEN
-        _XW-TX !
-        _XT-RECORD @ _XW-TX @ _EXT4-JTX-STAGE-ORPHAN-CLEANUP
+        _EXT4-DRO-RECORD @ _EXT4-DRO-CTX @ _EXT4-MEASURE-ORPHAN-CLEANUP
+        _EXT4-DRO-IOR ! _EXT4-DRO-REVOKE ! _EXT4-DRO-CREDIT !
+        _EXT4-DRO-IOR @ ?DUP IF EXIT THEN
+        _EXT4-DRO-CREDIT @ 0 _EXT4-DRO-REVOKE @
+        _EXT4-DRO-WRITER @ _EXT4-JTX-BEGIN
+        ?DUP IF NIP EXIT THEN _EXT4-DRO-TX !
+        _EXT4-DRO-RECORD @ _EXT4-DRO-TX @ _EXT4-JTX-STAGE-ORPHAN-CLEANUP
         ?DUP IF EXIT THEN
-        _XW-TX @ _EXT4-JTX-EMIT ?DUP IF EXIT THEN
-        0 _XT-RECORD !
-        _XW-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF EXIT THEN
-        _XT-REQUIRE-IDLE ?DUP IF EXIT THEN
+        _EXT4-DRO-TX @ _EXT4-JTX-EMIT ?DUP IF EXIT THEN
+        0 _EXT4-DRO-RECORD !
+        _EXT4-DRO-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF EXIT THEN
+        _EXT4-DRO-WRITER @ _EXT4-REQUIRE-IDLE-WRITER ?DUP IF EXIT THEN
     REPEAT
-    _XW-CTX @ _EXT4-AUTHENTICATED-EMPTY-ORPHAN-UNION? 0= IF
+    _EXT4-DRO-CTX @ _EXT4-AUTHENTICATED-EMPTY-ORPHAN-UNION? 0= IF
         VFS-E-CORRUPT EXIT
     THEN
-    1 0 0 _XW-WRITER @ _EXT4-JTX-BEGIN ?DUP IF NIP EXIT THEN
-    _XW-TX !
-    _XW-TX @ _EXT4-JTX-STAGE-CLEAR-MODERN-ORPHAN-PRESENT ?DUP IF EXIT THEN
-    _XW-TX @ _EXT4-JTX-EMIT ?DUP IF EXIT THEN
-    _XW-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF EXIT THEN
-    _XT-REQUIRE-IDLE ;
+    1 0 0 _EXT4-DRO-WRITER @ _EXT4-JTX-BEGIN ?DUP IF NIP EXIT THEN
+    _EXT4-DRO-TX !
+    _EXT4-DRO-TX @ _EXT4-JTX-STAGE-CLEAR-MODERN-ORPHAN-PRESENT ?DUP IF EXIT THEN
+    _EXT4-DRO-TX @ _EXT4-JTX-EMIT ?DUP IF EXIT THEN
+    _EXT4-DRO-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF EXIT THEN
+    _EXT4-DRO-WRITER @ _EXT4-REQUIRE-IDLE-WRITER ?DUP IF EXIT THEN
+    _EXT4-DRO-CTX @ _EXT4-AUTHENTICATED-EMPTY-ORPHAN-UNION? 0=
+    _EXT4-DRO-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 ;
 
 \ A truncate whose release does not fit one transaction, as the kernel's
 \ ext4 truncates: one transaction commits the new size behind a modern
@@ -25319,7 +25194,9 @@ VARIABLE _XT-REVOKE
     _XW-WRITER @ _EXT4-JWR.META-CAP + @ 3 U< IF VFS-E-NOSPC EXIT THEN
     _XW-CTX @ _XT-V @ _EXT4-MEASURE-MODERN-ORPHAN-ADD NIP ?DUP IF EXIT THEN
     _XW-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
-    _XT-PROBE ?DUP IF EXIT THEN
+    _XW-INO @ _XW-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _XW-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + 6 + W@
+    _XW-WRITER @ _XW-PASS-ROOM? 0= IF VFS-E-NOSPC EXIT THEN
     _XW-BLOCKS @ _XT-NEW-BLOCKS !
     _XW-CTX @ _EXT4-C.FREE-BLOCKS + @ _XT-NEW-FREE !
     _EXT4-MOW-ACTIVE @ 0= IF
@@ -25330,8 +25207,9 @@ VARIABLE _XT-REVOKE
     _XT-ADD-PASS ?DUP IF _XT-FAIL EXIT THEN
     _XW-TX @ _EXT4-JTX-EMIT ?DUP IF _XT-FAIL EXIT THEN
     _XW-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-REQUIRE-IDLE ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-DRAIN ?DUP IF _XT-DURABLE-FAIL EXIT THEN
+    _XW-WRITER @ _EXT4-REQUIRE-IDLE-WRITER ?DUP IF _XT-DURABLE-FAIL EXIT THEN
+    _XW-INO @ _XW-WRITER @ _XW-CTX @ _EXT4-DRAIN-ORPHAN
+    ?DUP IF _XT-DURABLE-FAIL EXIT THEN
     _XT-REFRESH ?DUP IF _XT-DURABLE-FAIL EXIT THEN
     _XT-PUBLISH
     0 _XT-V @ V.LAST-IOR !
@@ -25371,7 +25249,7 @@ VARIABLE _XT-REVOKE
 
 : _EXT4-TRUNCATE  ( dentry vfs -- ior )
     _XT-V ! _XT-D !
-    0 _XW-WRITER ! 0 _XW-TX ! FALSE _XW-ORPHAN !
+    0 _XW-WRITER ! 0 _XW-TX ! FALSE _XW-ORPHAN ! FALSE _XW-DELETION !
     _XT-ENTRY ?DUP IF EXIT THEN
     \ The generic VFS marks the volume dirty after any successful truncate,
     \ and a dirty volume with an inactive journal refuses later mutations,
@@ -25494,12 +25372,9 @@ VARIABLE _XU-ACTIVE
 VARIABLE _XU-ROOT
 VARIABLE _XU-CLEANUP-CREDIT
 VARIABLE _XU-CLEANUP-REVOKE
-VARIABLE _XU-CLEANUP-EXPECTED-CREDIT
-VARIABLE _XU-CLEANUP-EXPECTED-REVOKE
 VARIABLE _XU-META-CAP
 VARIABLE _XU-REVOKE-CAP
 VARIABLE _XU-COOKIE
-VARIABLE _XU-ALIAS-HOME
 VARIABLE _XU-INDEXED
 VARIABLE _XU-INDEX-DEPTH
 VARIABLE _XU-INDEX-ROUTE
@@ -26483,15 +26358,6 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-AUTH-CHILD-DIRECTORY ?DUP IF EXIT THEN
     _XU-CAPTURE-PARENT-DIRECTORY ;
 
-: _XU-HOME-ALIASES-JFI?  ( home -- flag )
-    _XU-ALIAS-HOME !
-    _EXT4-JFI-RANGE-COUNT 0 ?DO
-        _XU-ALIAS-HOME @ 1
-        I _EXT4-JFI-RANGE DUP @ SWAP CELL+ @
-        _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF TRUE UNLOOP EXIT THEN
-    LOOP
-    FALSE ;
-
 : _XU-AUTH-ORPHAN-RELEASE  ( -- ior )
     _XU-ORPHAN @ 0= IF 0 EXIT THEN
     _XU-INO @ _XU-GEN @ _XU-CTX @ _XU-V @
@@ -26501,12 +26367,6 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-IOR ! _XU-CLEANUP-REVOKE ! _XU-CLEANUP-CREDIT !
     _XU-IOR @ ?DUP IF EXIT THEN
     _XU-CLEANUP-CREDIT @ 0= IF VFS-E-CORRUPT EXIT THEN
-    _XU-CLEANUP-CREDIT @ _XU-CLEANUP-EXPECTED-CREDIT !
-    _XU-CLEANUP-REVOKE @ _XU-CLEANUP-EXPECTED-REVOKE !
-    _XU-PARENT-HOME @ _XU-HOME-ALIASES-JFI?
-    _XU-DIR-HOME @ _XU-HOME-ALIASES-JFI? OR IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
     _EXT4-JFI-EA @ ?DUP IF
         DUP _XU-PARENT-HOME @ =
         SWAP _XU-DIR-HOME @ = OR IF
@@ -27130,57 +26990,15 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-SCRUB
     0 ;
 
-: _XU-REQUIRE-IDLE  ( -- ior )
-    _XU-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
-    _XU-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
-    _XU-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    0 ;
-
-: _XU-DRAIN-FINAL-ORPHAN  ( -- ior )
-    _XU-CTX @ _EXT4-FIND-SELECTED-ORPHAN
-    _XU-IOR ! _XU-RECORD !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-RECORD @ 0= IF VFS-E-CORRUPT EXIT THEN
-    _XU-RECORD @ _EXT4-OE.INO + @ _XU-INO @ <> IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XU-RECORD @ _XU-CTX @ _EXT4-MEASURE-ORPHAN-CLEANUP
-    _XU-IOR ! _XU-CLEANUP-REVOKE ! _XU-CLEANUP-CREDIT !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-CLEANUP-CREDIT @ _XU-CLEANUP-EXPECTED-CREDIT @ <>
-    _XU-CLEANUP-REVOKE @ _XU-CLEANUP-EXPECTED-REVOKE @ <> OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XU-CLEANUP-CREDIT @ _XU-META-CAP @ U>
-    _XU-CLEANUP-REVOKE @ _XU-REVOKE-CAP @ U> OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XU-CLEANUP-CREDIT @ 0 _XU-CLEANUP-REVOKE @
-    _XU-WRITER @ _EXT4-JTX-BEGIN
-    DUP IF NIP EXIT THEN DROP _XU-TX !
-    _XU-RECORD @ _XU-TX @ _EXT4-JTX-STAGE-ORPHAN-CLEANUP
-    ?DUP IF EXIT THEN
-    _XU-TX @ _EXT4-JTX-EMIT ?DUP IF EXIT THEN
-    0 _XU-RECORD !
-    _XU-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF EXIT THEN
-    _XU-REQUIRE-IDLE ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-AUTHENTICATED-EMPTY-ORPHAN-UNION? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    1 0 0 _XU-WRITER @ _EXT4-JTX-BEGIN
-    DUP IF NIP EXIT THEN DROP _XU-TX !
-    _XU-TX @ _EXT4-JTX-STAGE-CLEAR-MODERN-ORPHAN-PRESENT
-    ?DUP IF EXIT THEN
-    _XU-TX @ _EXT4-JTX-EMIT ?DUP IF EXIT THEN
-    _XU-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF EXIT THEN
-    _XU-REQUIRE-IDLE ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-AUTHENTICATED-EMPTY-ORPHAN-UNION? 0= IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.O.CLEAR-PENDING + @ IF
-        VFS-E-CORRUPT EXIT
+\ An unlink that leaves a file's mapped blocks to release passes first
+\ requires, before any media change, that a pass under the bound profile
+\ can take a removal step.
+: _XU-REQUIRE-PASS-ROOM  ( -- ior )
+    _XU-ORPHAN @ 0= IF 0 EXIT THEN
+    _XU-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _XU-CTX @ _EXT4-C.INODE + DUP _EXT4-MAP-MAPS? 0= IF DROP 0 EXIT THEN
+    _EXT4-RELEASE-DEPTH _XU-WRITER @ _XW-PASS-ROOM? 0= IF
+        VFS-E-NOSPC EXIT
     THEN
     0 ;
 
@@ -27203,6 +27021,7 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-META-CAP @ 0 _XU-REVOKE-CAP @
     _XU-CTX @ _EXT4-JWR-ENSURE
     DUP IF NIP _XU-P-FAIL EXIT THEN DROP _XU-WRITER !
+    _XU-REQUIRE-PASS-ROOM ?DUP IF _XU-P-FAIL EXIT THEN
     _XU-ACTIVE @ 0= IF
         _XU-WRITER @ _XC-HP-BEGIN-TX
         DUP IF NIP _XU-P-FAIL EXIT THEN DROP _XU-TX !
@@ -27220,10 +27039,12 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-PUBLISH-COMMITTED
     _XU-TX @ _EXT4-JTX-CHECKPOINT
     ?DUP IF _XU-POSTCOMMIT-FAIL EXIT THEN
-    _XU-REQUIRE-IDLE ?DUP IF _XU-POSTCOMMIT-FAIL EXIT THEN
+    _XU-WRITER @ _EXT4-REQUIRE-IDLE-WRITER
+    ?DUP IF _XU-POSTCOMMIT-FAIL EXIT THEN
     _XU-ORPHAN @ IF
         _XU-VN @ VN.OPEN-REFS @ 0= IF
-            _XU-DRAIN-FINAL-ORPHAN ?DUP IF _XU-DURABLE-FAIL EXIT THEN
+            _XU-INO @ _XU-WRITER @ _XU-CTX @ _EXT4-DRAIN-ORPHAN
+            ?DUP IF _XU-DURABLE-FAIL EXIT THEN
         THEN
     THEN
     0 _XU-V @ V.LAST-IOR ! _XU-SCRUB
@@ -27251,21 +27072,11 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     SWAP _EXT4-I.LINKS + W@ OR IF
         VFS-E-CORRUPT EXIT
     THEN
-    _XU-RECORD @ _XU-CTX @ _EXT4-MEASURE-ORPHAN-CLEANUP
-    _XU-IOR ! _XU-CLEANUP-EXPECTED-REVOKE !
-    _XU-CLEANUP-EXPECTED-CREDIT !
-    _XU-IOR @ ?DUP IF EXIT THEN
     _XU-CTX @ _EXT4-C.J.WRITER + @ DUP _XU-WRITER ! 0= IF
         VFS-E-CORRUPT EXIT
     THEN
-    _XU-WRITER @ _EXT4-JWR.META-CAP + @ _XU-META-CAP !
-    _XU-WRITER @ _EXT4-JWR.REVOKE-CAP + @ _XU-REVOKE-CAP !
-    _XU-CLEANUP-EXPECTED-CREDIT @ _XU-META-CAP @ U>
-    _XU-CLEANUP-EXPECTED-REVOKE @ _XU-REVOKE-CAP @ U> OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
     _XU-CTX @ _EXT4-REQUIRE-EXACT-BLOCK-ACCOUNTING ?DUP IF EXIT THEN
-    _XU-DRAIN-FINAL-ORPHAN ;
+    _XU-INO @ _XU-WRITER @ _XU-CTX @ _EXT4-DRAIN-ORPHAN ;
 
 : _XU-RELEASE-FAIL  ( ior -- ior )
     _XU-FAIL DROP

@@ -648,42 +648,21 @@ retained xattr after-image is replaced by a block-bitmap home and at most one
 new primary-GDT page. Each transaction still begins with its exact current
 credit. The record count is bounded by
 authenticated filesystem geometry, checked arithmetic, and available
-caller-arena storage; cleanup adds no separate fixed record-count constant. A
-linked record is supported only for a regular file whose zero size is already
-durable and which does not use journal-data mode. Its retained data map may be
-an inline depth-0 extent root, or an exact empty legacy-format map with the
-`EXTENTS` flag clear and all 60 bytes of `i_block` zero. An authenticated
-external xattr is retained. An empty map has no release ranges or revokes and
-its decoded `i_blocks` must equal only that retained xattr contribution; a
-nonempty inline extent root may contain ranges that the bounded free-block
-builder can account for exactly. An unlinked target must be an
-allocated regular file with zero links and an authenticated nonnegative
-63-bit size. Its complete data map may be an empty or one-to-four-entry inline
-depth-0 extent root, a resident depth-1 root with one to four checksum-valid
-external leaves, or a legacy map using any of the 12 direct slots and one
-optional complete single-indirect block. The legacy map may additionally use
-an optional double-indirect root with zero or more occupied child pointer
-blocks when its exact canonical data-plus-map vector, plus any present
-external-xattr range, fits the `2P+16` caller workspace for
-`P = block_size / 4`. As a separate map family, slot 14 may name one allocated
-triple-indirect root whose full block is all zero while the single- and
-double-indirect slots remain zero. Direct slots may be occupied. Their ordered
-data singletons precede the root's one map singleton under
-`LEGACY-SPARSE-TRIPLE` authority; the root contributes one block to `i_blocks`
-and receives one exact revoke. This shape remains subject to the same
-caller-workspace bound. As a second triple shape, when every direct slot and
-the external-xattr pointer are zero, the root may contain exactly one nonzero
-pointer to one allocated all-zero level-2 pointer block. Its ordered
-`{ triple-root, level-2-child }` map vector is sealed under
-`LEGACY-SPARSE-TRIPLE-CHILD` authority; both blocks contribute to `i_blocks`
-and each receives an exact revoke. Each depth-1 leaf may use
-every entry that fits the mounted block size. Every resident root key must equal its leaf's
-first logical block, and each nonfinal leaf must end no later than the next
-root key. The external leaves join the exact release authority and each
-receives a journal revoke. The inode size need not be zero
-because
-deletion releases the complete authenticated map and then removes the inode;
-EOF does not select a retained tail.
+caller-arena storage; cleanup adds no separate fixed record-count constant.
+A record is supported for a regular file that does not use data journaling,
+whose map is an extent tree of any depth or a legacy block map. A linked
+record's target has exactly the `EXTENTS` flag or, for a legacy map, no flags
+at all; an unlinked one may carry any flags but data journaling. Release passes
+free a linked record's blocks past EOF and every block of an unlinked record,
+from the end of its map, as many removal steps per pass as surely fit the
+transaction. A legacy map's step cuts the last group-bounded run of contiguous
+blocks from its last pointer block and frees each pointer block once it maps
+nothing, so holes, sparse branches, and allocated pointer blocks that map
+nothing all release the same way. An unlinked record's deletion then frees an
+empty map, or folds into the last pass when its homes still fit and takes the
+runs that pass freed as its release ranges. An authenticated external xattr is
+retained by a linked record. An unlinked record may have any size,
+because the release frees its complete map and EOF selects no retained tail.
 It may additionally reference one checksum-valid external xattr block. A raw
 `h_refcount` of one gives exact allocation-release authority. A count from 2
 through ext4's 1024-reference limit instead retains the allocation and permits
@@ -691,31 +670,11 @@ only `h_refcount - 1` plus the corresponding block-checksum restamp. The count
 must not exceed the filesystem inode count, and one complete allocated-inode
 scan must find exactly that many `i_file_acl` references while rejecting the
 same block through any data or map-metadata role. Xattr value inodes remain
-unsupported. Each extent entry may be initialized or unwritten and
-must have a zero physical high word. An initialized decoded length may be
-1..32768 blocks and an unwritten decoded length 1..32767 blocks, exactly as
-encoded by ext4 `ee_len`; every `logical_start + decoded_length` must be at
-most `0xffffffff`. The entries must retain ext4's exact logical ordering and
-nonoverlap rules. In a legacy map, zero direct and pointer-block slots are
-holes and every nonzero data pointer becomes an ordered singleton release
-range. Direct data precedes single-indirect data and then data from every
-double-indirect child in outer/inner slot order. Map singletons follow as the
-optional single root, double root, and every child in outer-slot order.
-Duplicate physical pointers or data/map and map/map aliases are corrupt. An
-empty double root is admitted as one map singleton. The all-zero triple root is
-likewise one trailing map singleton after zero or more direct data entries. A
-separate child-bearing triple root is admitted only with zero direct data and
-no external xattr: it may contain one pointer to one allocated all-zero child,
-and the root and child become two ordered trailing map singletons. A repeated
-child or an alias with the root, direct data, or external-xattr home is
-corrupt. A second distinct root child, any nonzero pointer in the admitted
-child, direct-data or external-xattr composition with that child, or a present
-triple root combined with a single- or double-indirect map remain unsupported.
-A double-indirect vector larger than the caller workspace also remains an
-unsupported recovery shape. Physical ranges must not overlap each other or the
-optional xattr block, and decoded `i_blocks` must exactly equal the aggregate
-data, map-metadata, and xattr block count in filesystem sectors.
-Every release range must be
+unsupported. A deletion's decoded `i_blocks` must equal the blocks its release
+ranges hold plus the xattr block, in filesystem sectors; each earlier pass took
+its own runs off the count. The map keeps the read side's validation rules,
+and each pass's map check refuses as corrupt a block the map names twice or
+names both as data and as one of its own map blocks. Every release range must be
 allocated and lie outside all static metadata and journal ranges. The mount's
 block-ownership proof, which runs before recovery's first cleanup, gives every
 block of the release set its one owner, so no other inode or the orphan file
@@ -728,11 +687,14 @@ union returns a stable refusal before writer allocation or cleanup mutation.
 
 Mount drains a qualified union deterministically: the current legacy head and
 its authenticated successor chain first, then modern records ordered by
-unsigned `(logical-block, slot)`. Each record gets one exact transaction using
-the same maximum-sized writer. Mount dry-stages and aborts that record,
+unsigned `(logical-block, slot)`. Each transaction uses the same
+maximum-sized writer. Mount dry-stages and aborts that record,
 activates or converges the recovery journal as required, then stages, emits,
 and checkpoints the same sealed cleanup before selecting again from the
-strictly rebuilt plan. Modern completion clears the exact orphan-file slot.
+strictly rebuilt plan. A record whose map still maps blocks it must free
+takes a release pass in each such transaction, and its final cleanup or
+deletion comes once none remain or folds into the last pass.
+Modern completion clears the exact orphan-file slot.
 Legacy completion advances `s_last_orphan` to the retained successor in the
 checksummed primary-super after-image. A linked intermediate record under the
 legacy orphan protocol also clears its consumed `i_dtime` link in that
@@ -743,10 +705,10 @@ unlinked delete zeroes the complete target inode record,
 including `i_dtime`, without synthesizing a deletion timestamp; the same
 transaction clears its inode-bitmap bit and increments the owning descriptor
 and primary-super free-inode counters.
-For a nonempty map it also clears every certified physical-range allocation
-bit, increments each touched group by the sum of its exact range chunks, and
-increments the primary-super free-block counter by the aggregate certified
-data-block count. Released data
+A deletion folded into a release pass certifies the runs that pass freed,
+whose allocation bits, group counts, and free-block count the pass staged, and
+the checkpoint rebuilds the expected bitmaps, descriptors, and superblock from
+those runs. Released data
 blocks are not overwritten: their bytes remain unchanged after allocation
 authority is removed. `itable_unused` remains at its conservative allocation
 high-water value; the zeroed record is a normal free-inode representation
@@ -830,13 +792,12 @@ before publication: a `RECOVER`-clear input first enters a tear-safe recovery
 epoch through writer-free `AKW1` activation while preserving
 `ORPHAN_PRESENT`; `AKR1` then lands an empty checksum-v3 journal and a
 checksummed primary superblock with both transient bits clear. Any union whose
-linked records hold extent trees of any depth or an exact empty legacy-format
-map, and whose unlinked records fit the empty/one-to-four-entry
-inline-depth-0, resident depth-1 fanout, or admitted legacy direct/indirect
-delete slices, is transactionally drained before mount publication: release
-passes free a linked record's blocks past EOF before its final cleanup
-removes it. A union containing any other record returns stable
-`EXT4-D-RECOVERY` without a cleanup write. Malformed authority still fails
+records are regular files mapped by an extent tree of any depth or by a legacy
+block map is transactionally drained before mount publication: release passes
+free a linked record's blocks past EOF before its final cleanup removes it, and
+every block of an unlinked record before its inode is deleted. A union holding
+any other record, such as an unlinked directory or a file in data-journaling
+mode, returns stable `EXT4-D-RECOVERY` without a cleanup write. Malformed authority still fails
 closed, and no public mutation capability is exposed. Malformed links,
 cycles, out-of-range locators, and duplicate inode membership return
 format-domain `VFS-R-CORRUPT`; inode allocation and checksum failures preserve
@@ -891,11 +852,12 @@ inode itself only with an extent map of depth zero or one. The generic parser
 first validates a recognized depth-two-through-five extent tree or legacy map
 completely, preserving corruption diagnostics, then a structurally valid wider
 map returns stable `EXT4-D-RECOVERY` unsupported without cleanup or mount
-publication. A union whose records all fit the supported linked map or admitted
-unlinked deletion shapes is processed as a sequence of sealed one-record
-transactions; its count is constrained by authenticated geometry, checked
-arithmetic, and caller-arena capacity rather than a cleanup-specific constant.
-Broader truncate/delete shapes remain refused. Pinned qualification covers
+publication. A union of linked and unlinked regular-file records, whose maps
+may be extent trees of any depth or legacy block maps, is processed one record
+at a time as a sequence of sealed transactions: each record's release passes,
+then its final cleanup or deletion. Its count is constrained by authenticated
+geometry, checked arithmetic, and caller-arena capacity, with no
+cleanup-specific constant. Pinned qualification covers
 multi-record hash collisions,
 malformed revoke geometry
 and ownership, a revoked primary-super repair, and transactions relocated
@@ -1267,62 +1229,35 @@ answers it without one. Activation, emission, checkpoint,
 deactivation, and recovery cleanup fail closed unless the certificate is
 exactly valid; mount-state reset and active replay clear it.
 
-`_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding first inode-release
-builder. It reauthenticates one canonical selected plan record and accepts
-only an allocated, unlinked regular inode with a valid nonnegative 63-bit size
-whose data map is an empty or one-to-four-entry inline depth-0 extent root, a
-resident depth-1 root with one to four external leaves, or a legacy map with
-direct slots, at most one complete single-indirect block, and an optional
-double-indirect root with zero or more occupied children whose exact canonical
-authority fits the caller workspace. It separately admits either one allocated
-all-zero triple-indirect root with zero or more direct data slots, or—with
-every direct slot and the external-xattr pointer zero—one triple root
-containing exactly one pointer to one allocated all-zero level-2 child. The
-single- and double-indirect slots must be zero in both cases. Unlike linked
-truncation, unlinked deletion does not require zero size: it releases the
-complete authenticated map and zeroes the inode. Every extent entry must have
-a zero physical high word. The depth-1 root and every external leaf are checksum- and
-allocation-checked; each root key must equal its leaf's first key, sibling
-logical bounds must agree, and no leaf may alias data or another leaf.
-Initialized decoded lengths are 1..32768 blocks and unwritten decoded lengths
-are 1..32767 blocks; every `logical_start + decoded_length` must be at most
-`0xffffffff`. A resident inline xattr area is structurally authenticated with
-the shared reader walker and may not refer to a value inode. The same walker
-admits one external xattr block only when its header, checksum, entries, and
-allocation are valid. At `h_refcount == 1` the external block is an independent
-release singleton rather than an inline extent or direct-data slot. At a valid
-larger refcount it remains allocated and contributes one exact metadata
-after-image; only its refcount and checksum may change. Legacy zero data-pointer
-slots are holes. Occupied direct slots, single-indirect entries, and entries in
-every double-indirect child remain ordered data singletons in outer/inner slot
-order. The optional single root, double root, and all children follow as map
-singletons with exact journal revokes. Duplicate data pointers and data/map or
-map/map aliases are corrupt. An empty double root contributes its exact root
-singleton and revoke. The empty triple root contributes one trailing map
-singleton and one revoke under distinct `LEGACY-SPARSE-TRIPLE` authority after
-any direct data entries. Its complete block and both lower indirect slots must
-remain zero. The child-bearing shape contributes the exact ordered
-`{ triple-root, level-2-child }` map vector and two revokes under
-`LEGACY-SPARSE-TRIPLE-CHILD` authority. Duplicate or known-owner aliases are
-corrupt. Exact double-indirect authority larger than the caller workspace, a
-second distinct triple-root child, a nonzero grandchild, child composition
-with direct data or an external xattr, and any triple root combined with a
-single- or double-indirect map are unsupported.
-Decoded `i_blocks` must exactly match all data and map blocks plus that
-optional xattr singleton. The target must be at or above `s_first_ino`.
-Journal-data mode, extent trees deeper than the admitted resident depth-1
-fanout, over-budget double-indirect maps, triple-indirect fanout or data beyond
-the admitted all-zero child, child composition, single-/double-combined
-triple-indirect maps, malformed lengths or ranges,
-inconsistent shared-xattr
-owner counts or aliases, and xattr value inodes remain refused. Every candidate
-range bit must be set and each distinct touched block-bitmap home must have
-exactly one descriptor owner. Every release range must lie inside mutable data
-space, be disjoint from every other target range, and be disjoint from static
-metadata and the journal. The mount's block-ownership proof keeps every range
-disjoint from every other owner, the modern orphan file included, and the
-shared xattr's reference count equal to the inodes that name it, so release
-admission walks no other inode.
+`_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding inode-release
+builder, the deletion that ends an unlinked record. Release passes free the
+record's data and map blocks before it, from the map's end, at any extent
+depth and for any legacy block map, as the orphan drain describes, so the
+builder frees no data of its own. It reauthenticates one canonical selected
+plan record and accepts an allocated, unlinked regular inode at or above
+`s_first_ino`, with a valid nonnegative 63-bit size, whose map is empty or
+whose last release pass freed the rest of it in the same transaction. Any size
+is valid, since Linux recovery also deletes an unlinked inode whatever its
+`i_size`. An empty map's deletion takes an empty data vector, and decoded
+`i_blocks` must then hold exactly the inode's xattr block when it has one. A
+folded pass instead hands the deletion the runs it freed, which become the
+deletion's certified `RELEASED` vector. Their block total must equal the blocks
+the pass freed, and decoded `i_blocks` must equal those runs plus the xattr
+block, because each earlier pass took its own runs off the count. A resident
+inline xattr area is structurally authenticated with the shared reader walker
+and must refer to no value inode. The same walker admits one external xattr
+block only when its header, checksum, entries, and allocation are valid. At
+`h_refcount == 1` the external block is an independent release singleton,
+freed last with its own revoke. At a valid larger refcount it remains
+allocated and contributes one exact metadata after-image in which only its
+refcount and checksum change. Journal-data mode, inodes of other types,
+inconsistent shared-xattr owner counts or aliases, and xattr value inodes
+remain refused. The typed block-free builder that stages each freed run
+requires every one of its bits set and one descriptor owner for each touched
+block-bitmap home. The mount's block-ownership proof keeps every run disjoint
+from every other owner, the modern orphan file and the journal included, and
+the shared xattr's reference count equal to the inodes that name it, so
+release admission walks no other inode.
 
 The builder derives the inode
 group, bitmap bit, table locator, primary GDT page, and primary-super home from
@@ -1332,20 +1267,16 @@ requires every transaction home to be pairwise disjoint except the intentional
 legacy protocol/super coalescing.
 
 The builder first stages the complete target inode-table home with exactly the
-target record zeroed and every sibling byte preserved. It releases each
-physical data range, reusable external map-metadata block, and unique
-external-xattr singleton through the typed block-free builder, including exact
-chunks crossing group boundaries. Extent leaves and the legacy indirect block
-receive exact revokes; the builder stages no released-block overwrite and does
-not wipe block contents. A shared xattr
-instead gets one exact raw-copy metadata image with only `h_refcount` and
-`h_checksum` changed. Its allocation bit, group and super free-block counters,
-entries, values, hashes, and reserved bytes remain untouched. After
-exact-vector target validation, physically
-adjacent data ranges execute as one allocation-accounting run without changing
-their separate certificate or checkpoint entries. Multiple ranges that touch
-the same block group compose into one bitmap after-image, and all group
-descriptor changes sharing a primary GDT block compose into one GDT
+target record zeroed and every sibling byte preserved. It then releases a
+unique external-xattr singleton through the typed block-free builder, with its
+exact revoke, and leaves the contents of every released block on the media. A
+shared xattr instead gets one exact raw-copy metadata image with only
+`h_refcount` and `h_checksum` changed; its allocation bit, group and super
+free-block counters, entries, values, hashes, and reserved bytes keep their
+values. A folded pass has already staged its runs' bitmap, descriptor and
+superblock changes, and the deletion's changes compose into the same
+after-images: frees in one block group share its bitmap after-image, and all
+group descriptor changes sharing a primary GDT block share one GDT
 after-image. It finally
 clears exactly one retained inode-bitmap bit, increments the split
 group free-inode count, installs the new inode-bitmap CRC32C, restamps the
@@ -1386,25 +1317,30 @@ at its pre-free conservative high-water value and is not incremented during
 release; the now-free target record itself is exactly zero. Publish-then-fail
 paths abort and scrub the complete transaction.
 
-The target cleanup shapes remain the deliberately bounded inline-depth-0,
-resident depth-1 fanout, and admitted legacy direct/indirect deletion cases
-described above.
-Reusable external metadata freed by the transaction—the admitted extent leaves
-or legacy pointer blocks and a uniquely released external xattr—is retained in
-canonical map order followed by the xattr.
+Reusable external metadata freed by the transaction, the extent nodes or
+legacy pointer blocks a release pass frees and a uniquely released external
+xattr, receives a journal revoke: each map block as the pass frees it, then
+the xattr.
 
 `_EXT4-JTX-STAGE-ORPHAN-CLEANUP` owns an initially empty metadata-only
 transaction for one deterministically selected record of either protocol. It
-dispatches by the authenticated link count. A linked record whose inode still
-maps blocks past EOF gets one release pass. A pass that leaves blocks past
+dispatches by the authenticated link count. A record whose inode still maps
+blocks it must free, past EOF for a linked record and anywhere for an
+unlinked one, gets one release pass. A pass that leaves blocks past
 EOF keeps the record and seals its own certificate, described with TRUNCATE
 below; one that ends the release, or a record whose release is already
 complete, composes the linked record's final cleanup. The transaction
-composes that final cleanup, or an admitted unlinked inode release, with
-modern slot removal or legacy-head advancement. A deletion requires used and
-active metadata homes to equal the exact credit; a linked final cleanup that
-ends a release uses at most the pass's capacity and may hold a cancelled
-entry for a tree node it edited and then freed. The transaction then seals
+composes that final cleanup, or an unlinked inode's deletion, with modern slot
+removal or legacy-head advancement. An unlinked record's pass that frees the
+rest of its map folds the deletion in when the deletion's homes still fit,
+counting each home the pass has not already staged: the inode record and
+inode bitmap, the inode group's descriptor page, the superblock, a modern
+record's orphan block, and an external xattr block's decrement image, or for
+its last reference the xattr group's bitmap and descriptor page and a revoke. A
+deletion of an empty map requires used and active metadata homes to equal the
+exact credit; a final cleanup or deletion that ends a release uses at most the
+pass's capacity and may hold a cancelled entry for a map block it edited and
+then freed. The transaction then seals
 protocol- and operation-specific
 raw authority plus retained after-image CRC32Cs into the arena-owned writer.
 Modern modes bind the logical block, slot, physical orphan-file home, and
@@ -1414,35 +1350,34 @@ generation, table location, target data-entry count, transaction epoch, and
 applicable retained-image checksums. Delete modes additionally bind the
 inode-bitmap home, GDT home and descriptor offset, and complete retained CRCs
 for the zeroed target inode-table block, inode bitmap, GDT, and primary-super
-after-images. Data-delete modes additionally bind the map family, exact range
-count, aggregate released-block count, and every ordered physical
-`{ first, count }` pair. A depth-1 shape retains its data ranges flattened in
-root/leaf order followed by every external-leaf singleton in root order. A
-legacy indirect shape retains direct data, single-indirect data, and sparse
-double-child data in outer/inner slot order, followed by the optional single
-root, double root, and every child in outer-slot order. Unused pair slots must
-be zero. Delete modes
+after-images. Data-delete modes additionally bind the `RELEASED` data-map
+kind, exact range count, aggregate released-block count, and every physical
+`{ first, count }` run in the order the folded pass recorded it. Unused pair
+slots must be zero. Delete modes
 also bind
 the external-xattr home, `NONE`/`RELEASE`/`REFDEC` disposition, post-decrement
-refcount, and retained-image CRC. The exact revoke count and identities are
-derived from those typed fields and must fit the allocated revoke vector before
-any entry is read. An explicit verifier-complete state keeps a
+refcount, and retained-image CRC. A deletion of an empty map revokes only a
+released xattr block; a folded deletion keeps its pass's revokes, each inside
+one certified run, with a released xattr block last. Every count must fit the
+allocated revoke vector before any entry is read. An explicit verifier-complete state keeps a
 valid zero CRC distinct from “not reconstructed yet,” so the strict pre-home
 comparison cannot skip a zero-valued checksum. The retained
 transaction entries and
 semantic verifier bind every distinct touched block-bitmap after-image and
 coalesced data-group GDT page. For a linked record the target-entry count
-binds the raw `eh_entries` of its inline root, or zero for an exact empty
-legacy-format map, with data-map kind `NONE` and a zero range vector, and the
-certificate binds the checksum of the target's whole pre-image record, so the
-reload before the first home write proves the target unchanged since sealing.
+binds the raw `eh_entries` of its inline root, or for a legacy map one entry,
+its `i_block` array, while the array maps a block and zero once it maps none,
+with data-map kind `NONE` and a zero range vector. A zero count tells the
+legacy-chain checkpoint that the transaction frees no block, so the
+superblock's free-block count must keep its value. The certificate also binds
+the checksum of the target's whole pre-image record, so the reload before the
+first home write proves the target unchanged since sealing.
 A final cleanup stages the target when it also ends the release or clears a
 nonterminal legacy head's `i_dtime` successor, and then allows only the block
-count, extent root, that link, and the checksum to differ from the
-pre-image; it binds the tail block it zeroes. For deletion, the
-target-entry count binds the admitted inline, external-leaf, direct,
-single-indirect, or sparse-double semantic data-entry count plus a mandatory
-zero target after-image. No valid CRC32C value is
+count, map, that link, and the checksum to differ from the
+pre-image; it binds the tail block it zeroes. For deletion, the target-entry
+count binds the certified run count plus a mandatory zero target
+after-image. No valid CRC32C value is
 reserved as a sentinel. Mode is published last; once published, every generic
 and typed staging entry point returns busy, while abort and emit remain legal.
 The certificate also binds the exact pre-transaction total, modern, and legacy
@@ -1463,23 +1398,20 @@ cleanup costs one protocol home for a modern orphan-file slot or a terminal
 legacy head, one more for the tail block when bytes past EOF need zeroing, and
 the target inode-table home for a nonterminal legacy head, whose consumed
 `i_dtime` successor it clears. A deletion's geometry-bounded, constant-space
-group scan imposes no candidate array or cleanup-specific capacity. A deletion
-adds one revoke for every admitted external map-metadata block (each depth-1
-extent leaf or legacy pointer block) and one for a uniquely
-released external xattr; ordinary data and shared-xattr decrements add none.
+group scan imposes no candidate array or cleanup-specific capacity. An
+unlinked record whose map maps blocks measures a release pass, as a linked one
+does. A deletion of an empty map adds one revoke for a uniquely released
+external xattr; ordinary data and shared-xattr decrements add none.
 Checked arithmetic, complete range/static/journal anti-alias validation, and unique
 bitmap-owner proofs make the result the coalesced home count rather than an
 upper bound. The sealing builder independently requires its staged active-home
 count to equal the measured credit, so media or plan drift remains fail-closed.
-An admitted unlinked target instead measures its inode table, inode bitmap,
-inode-group GDT page, and primary super for exact credit four under legacy
-cleanup; the distinct modern orphan-file home makes that five. A nonempty
-root adds one block-bitmap home per distinct data group touched by any entry
-and each distinct data-group GDT page not already represented by the
-inode-group GDT page. Several entries in one group therefore do not duplicate
-either home. A shared external xattr adds one metadata home but no release
-bitmap or descriptor credit; a unique one participates in the release-group
-scan. Whole-union writer sizing adds the single derived transition slot
+An unlinked target whose map is empty instead measures its inode table, inode
+bitmap, inode-group GDT page, and primary super for exact credit four under
+legacy cleanup; the distinct modern orphan-file home makes that five. A unique
+external xattr adds the block-bitmap home of its group and its group's GDT page
+when the inode-group GDT page does not already represent it. A shared external
+xattr adds one metadata home and no release bitmap or descriptor credit. Whole-union writer sizing adds the single derived transition slot
 described above when a current shared reference could become a final release.
 The
 canonical one-block fixtures therefore measure five legacy or six modern
@@ -1681,10 +1613,9 @@ The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
 remain read-only. Geometry- and arena-bounded transactional completion is
-implemented for unions of linked records with extent trees of any depth or an
-exact empty legacy-format map, and of the nonnegative-size inline-depth-0,
-resident depth-1 fanout, or legacy direct/indirect unlinked-inode cases
-admitted above, under both orphan mechanisms. The
+implemented for unions of linked and unlinked regular-file records whose maps
+are extent trees of any depth or legacy block maps, under both orphan
+mechanisms. The
 implementation adds no fixed cleanup
 record-count constant; positive union-drain qualification currently reaches
 two records.
@@ -1693,15 +1624,16 @@ range in its admitted map must have the deleted inode as its one owner, as
 the mount's block-ownership proof establishes before the first cleanup
 transaction may mutate media; a data, map-metadata, or external-xattr
 reference from another inode is a corrupt cross-link refusal there, for
-every retained record at once. Each linked release pass proves the runs and
-tree nodes it frees with the general write's home-set proof and map check:
-the target's tree maps each exactly once, and the staged tree differs from
-the old one by exactly the blocks the pass frees.
+every retained record at once. Each release pass, linked or unlinked, proves
+the runs and the tree nodes or pointer blocks it frees with the general
+write's home-set proof and map check: the target's map maps each exactly
+once, and the staged map differs from the old one by exactly the blocks the
+pass frees.
 Per-shape single-record qualification includes initialized and unwritten
 extents, nonzero logical starts, multiple separated logical/physical ranges,
-the four-entry inline maximum, the 12-slot legacy-direct maximum, sparse
-single-indirect pointers, one- and two-child double-indirect pointers, and a
-physical range crossing two data groups.
+the four-entry inline maximum, the 12-slot legacy-direct map, sparse
+single-indirect pointers, one- and two-child double-indirect pointers, legacy
+maps of any shape, and a physical range crossing two data groups.
 Pinned e2fsprogs accepts final
 empty-delete media at 1 KiB, ordinary one-block-delete media at 1/2/4 KiB, and
 the new multi-block 1 KiB results for both orphan protocols. Broader per-record
@@ -2770,10 +2702,12 @@ shared vnode and exact dentry readable through those descriptors, and reclaim
 that dentry on its last close. The direct final lifetime accepts an already-
 empty, allocation-free inode with link count one and exactly one authenticated
 directory reference. The orphan-backed final lifetime accepts an allocation-
-bearing regular inode inside the inode-directed JFI cleanup envelope. It
-publishes link zero and a singleton modern orphan while retaining the complete
-map and allocation state, then drains immediately when closed or on the last
-staged `RELEASE` when open. Both final forms currently require an authenticated
+bearing regular inode with an extent tree of any depth or a legacy block map.
+It publishes link zero and a singleton modern orphan while retaining the
+complete map and allocation state, then drains immediately when closed or on
+the last staged `RELEASE` when open: release passes free the file's blocks
+from its end, and the last pass also deletes the inode and removes the
+record. Both final forms currently require an authenticated
 empty orphan union before the namespace operation. Directory removal through
 `UNLINK` and nonfinal links whose remaining name is outside the same-parent
 proof remain explicit later boundaries. The bounded empty-directory `RMDIR`
@@ -2839,12 +2773,14 @@ valid but unexpectedly clear allocation bits retain the existing transaction
 conflict result. Checksums, counters, and publication order remain local to
 the final-release operation.
 
-Orphan-backed final admission instead reauthenticates the complete prospective
-cleanup topology before emission. Its exact `4/0/0` or `5/0/0` ADD retains the
-inode map and allocation, sets link zero and ctime, splices the directory,
+Orphan-backed final admission instead reauthenticates the target and its
+prospective deletion before emission, and requires that a release pass under
+the bound profile can take its first removal step from the file's map. Its
+exact `4/0/0` or `5/0/0` ADD retains the inode map and allocation, sets link zero and ctime, splices the directory,
 updates parent times, inserts the inode into modern-orphan slot zero, and sets
-`ORPHAN_PRESENT`. A closed target then executes topology-derived JFI cleanup
-and exact `1/0/0` transient-feature retirement before returning. An open target
+`ORPHAN_PRESENT`. A closed target then runs the release passes and deletion,
+one transaction each, and exact `1/0/0` transient-feature retirement before
+returning. An open target
 leaves that durable singleton live until the last staged `RELEASE`.
 
 The indexed-parent addition carries one representative runtime success: direct
@@ -3326,14 +3262,13 @@ ordered list of prerequisites for retaining the qualified write surface:
   the mount's block-ownership proof and their own mutation-range checks. Broader mutation remains
   gated operation by operation.
   Transaction-aware metadata acquisition, checksum-safe typed
-  orphan-inode replacement, free-only physical-block accounting, linked
-  zero-size inline depth-0 extent or exact empty legacy-format-map truncation,
-  exact nonnegative-size
-  inline-depth-0, resident depth-1 fanout, or legacy
-  direct/indirect unlinked data and inode allocation release, target-record
-  scrubbing, exact credit measurement, modern-slot removal, legacy-head
-  advancement, and operation/protocol-specific `FINAL`/`MORE` certificates now
-  compose one sealed transaction for either orphan mechanism. Production mount
+  orphan-inode replacement, free-only physical-block accounting, release
+  passes that free a linked record's blocks past EOF or an unlinked record's
+  whole map, at any extent depth or for any legacy block map, inode
+  allocation release, target-record scrubbing, exact credit measurement,
+  modern-slot removal, legacy-head advancement, and operation/protocol-specific
+  `FINAL`/`MORE` certificates now compose each record's sealed transactions
+  for either orphan mechanism. Production mount
   authenticates and measures the entire supported union before cleanup writes,
   allocates one writer at the maximum safe per-record capacity described above,
   then drains
@@ -3351,22 +3286,14 @@ ordered list of prerequisites for retaining the qualified write surface:
   checksummed primary-super transient bits; it does not change an orphan
   inode/file, a legacy link, allocate writer workspace, or expose a
   user-visible write. Cleanup derives its record count from authenticated
-  geometry, checked arithmetic, and caller-arena storage rather than a separate
-  fixed constant, but still does not cover linked nonzero-size/tail truncation,
-  target extent trees deeper than the resident depth-1 fanout, target legacy
-  double-indirect maps with authority larger than the caller workspace,
-  triple-indirect fanout beyond one allocated all-zero level-2 child, any
-  nonzero grandchild, child composition with direct data or an external xattr,
-  or a triple root combined with a single- or double-indirect legacy map, a
-  nonzero physical high word,
-  inconsistent or out-of-range
-  shared external-xattr ownership, inline or external xattr value-inode
-  release, or general
-  link-count and malformed-chain repair. General inode
-  allocation, general inode release outside the admitted shape, and every
-  user-visible mutation operation remain unimplemented. Cleanup releases
-  allocation authority but does not provide secure deletion or data-block
-  erasure;
+  geometry, checked arithmetic, and caller-arena storage, with no separate
+  fixed constant. It truncates linked regular files and deletes unlinked ones
+  whatever their size and map, and it refuses journal-data files, unlinked
+  inodes of other types, inconsistent or out-of-range shared external-xattr
+  ownership, and inline or external xattr value inodes; link-count and
+  malformed-chain repair stay with e2fsck. Cleanup releases allocation
+  authority and leaves freed blocks' contents on the media, so it provides no
+  secure deletion or data-block erasure;
 - focused per-shape empty, inline depth-0, and resident depth-1 unlinked
   qualification covers modern and legacy cleanup. Empty and one-block
   baselines span the
@@ -3440,212 +3367,41 @@ ordered list of prerequisites for retaining the qualified write surface:
   complete ownership proofs; it completed in 155.6 host seconds. The remaining
   negative/crash matrix and pinned e2fsck acceptance remain pending before this
   shape closes its release-qualification gate.
-  Multi-range qualification admits a separated two-entry modern root and the
-  four-entry inline maximum under legacy cleanup, mixing initialized and
-  unwritten entries and logical gaps. Deletion qualification now admits the
-  complete resident depth-1 fanout of one through four external leaves. A
-  13-entry one-leaf regression proves that authorization is bounded by mounted
-  block geometry rather than the legacy 12-slot direct-map count; its retained
-  release vector contains those 13 data ranges followed by the leaf singleton.
-  The four-leaf fixture captures six data ranges covering eight blocks followed
-  by four leaf singletons, and modern and legacy dry staging retain all four
-  exact revokes in root order. Its modern production mount reclaims all twelve
-  blocks under the unchanged 1,800,000,000-step watchdog, preserves every
-  released payload without a data or leaf home write, restores allocation
-  accounting, and publishes a clean mounted VFS. The shared mutation range
-  capacity is now the shared sparse-double legacy authority budget:
-  528, 1040, or 2064 pairs at 1, 2, or 4 KiB. The existing one-leaf modern production path
-  completed in
-  1,686,717,231 guest steps under the feature-specific 1,800,000,000-step
-  watchdog. Cross-leaf data overlap, leaf/data or leaf/leaf aliasing, and
-  another inode owning a leaf are corrupt data-map input; deeper trees remain
-  unsupported. Every refusal is stack-balanced and fails before writer
-  allocation or media I/O. The established
-  1 KiB cross-group fixture qualifies separate data- and inode-group
-  descriptors coalesced into one primary GDT home; the new boundary fixture
-  proves that one certified data range may itself cross two groups while both
-  data descriptors and the inode descriptor coalesce into that home. The
-  separated multi-range fixtures place every active range in one data group
-  and prove cumulative bitmap and descriptor changes still retain exactly one
-  data-bitmap home and one shared GDT home. Their sealed authority binds the
-  raw entry count, exact range count, aggregate block count, every ordered
-  pair, and a zero inactive tail; changing a later active pair is rejected by
-  exact staged verification. Legacy-direct deletion qualification separately
-  fills all 12 direct slots under both orphan protocols. Its certificate and
-  checkpoint plan retain 12 ordered singleton ranges and an explicit map-family
-  discriminator even though the contiguous physical vector executes as one
-  allocation-accounting run. Sparse slots 0, 5, and 11 compact to three
-  ordered singleton ranges. Duplicate pointers and mismatched `i_blocks` are
-  corrupt data maps.
-  A maximum-union regression adds the separate unique external-xattr block,
-  exercises all 13 release ranges, and keeps the 12 data pairs plus xattr
-  field distinct through staged verification and abort. Full production cleanup
-  with `i_size = 2^32 + 777` completes in
-  1,156,337,987 modern and 1,157,813,068 legacy guest steps under a scoped
-  1,300,000,000-step watchdog, preserving all seeded data-block payloads while
-  restoring exact allocation accounting. The focused modern/legacy pair now
-  passes pinned e2fsprogs 1.47.4 `e2fsck -f -n` after rebuilding both
-  production fixtures, completing in 200.43 host seconds.
-  Single-indirect qualification separately fills all 12 direct slots and the
-  final entry of the 1 KiB pointer block, crossing the old direct-only
-  12-block boundary. Its canonical
-  vector retains direct data, indirect data, and the pointer-block singleton in
-  that order; staging seals the distinct map family and exact root revoke. A
-  node/data self-alias is corrupt. With the larger shared mutation workspace,
-  focused modern production cleanup releases three data blocks and the pointer
-  block in 1,313,528,725 guest steps under a scoped 1,500,000,000-step
-  watchdog. It preserves all four homes without a payload write, restores
-  allocation accounting, and remounts byte-identically with zero I/O.
-  Legacy-protocol, maximum-fanout,
-  external-xattr composition, crash, and pinned e2fsck qualification remain
-  pending for this tier.
-  Sparse-double admission accepts an optional double root with zero or more
-  occupied children in root-slot order when the exact canonical data, map, and
-  present-xattr owner vector fits the shared `2P+16` workspace; the
-  single-indirect root remains independently optional. Focused empty-root
-  staging retains the double root as the exact one-map authority and one
-  revoke. Multi-child preflight covers `{ double root, child@2, child@7 }`;
-  exact multi-child staging covers `{ single root, double root, child@2,
-  child@7 }` and retains all four map revokes. A separate external-xattr
-  composition covers `{ single root, double root, child@2, external EA }`,
-  retaining the three map revokes followed by the EA revoke. A boundary check
-  admits 524 data plus four map ranges into the exact 528-pair 1 KiB workspace
-  when no xattr is present, while a present xattr or one additional data
-  pointer returns unsupported recovery. Child/data aliasing and duplicate
-  child homes are corrupt; over-budget double-indirect authority remains
-  unsupported. Focused sparse-double one-child modern production cleanup
-  releases three data blocks and all three map blocks in 1,431,070,159 guest
-  steps under a scoped 1,600,000,000-step watchdog. It preserves all six homes
-  without a payload write, restores allocation accounting, and remounts
-  byte-identically with zero I/O. Multi-child and external-xattr production,
-  legacy-protocol qualification, crash qualification, and pinned e2fsck
-  acceptance remain pending for this sparse-double tier.
-  Triple-indirect admission covers either an all-zero root with optional
-  direct data, or exactly one allocated all-zero level-2 child when direct data
-  and the external-xattr pointer are absent. Additional root children, nonzero
-  grandchildren, child composition, and any single-/double-indirect
-  composition remain unsupported.
-  Separate focused 1 KiB staging qualification covers one unlinked inode with
-  slots 0 through 13 zero, one allocated all-zero triple-indirect root, no
-  data, and root-only `i_blocks` under both orphan protocols. The modern case
-  completes in 534,968,795 guest steps under its 800,000,000-step watchdog and
-  pins six metadata credits, one revoke, and `MODERN_DATA_DELETE_FINAL`. The
-  legacy case completes in 529,173,143 steps under the same watchdog and pins
-  five metadata credits, one revoke, `LEGACY_DATA_DELETE_FINAL`, and the exact
-  legacy head and locator authority. Both stage and seal retain zero target
-  entries, one singleton map-metadata release range, one map block, the root's exact
-  revoke, and distinct `LEGACY-SPARSE-TRIPLE` authority; preplan and staged
-  verification pass, and abort returns the writer and claim scope clean
-  with zero home writes. A second staging pair adds one seeded direct singleton
-  in slot 5 ahead of the same empty triple root. Modern completes in 538,439,735
-  guest steps and legacy in 530,481,498 under the unchanged 800,000,000-step
-  watchdog. Both bind one target data entry, the exact ordered
-  `{ direct, triple-root }` release vector, one root revoke, and the same
-  protocol-specific credit and locator authority. A maximum-bound pair fills
-  direct slots 0 through 11 ahead of the root. Modern completes in 538,468,086
-  guest steps and legacy in 546,064,724 under the unchanged 800,000,000-step
-  watchdog. Both pin 12 target data entries and blocks, the exact 13-singleton
-  release vector with the root last, one map entry and block, the sole trailing
-  root revoke, six modern or five legacy metadata credits, zero home
-  writes, and clean abort. A further focused 1 KiB staging pair admits zero
-  data with one triple root naming one allocated all-zero level-2 child. The
-  modern case uses root slot 7 and completes in 597,938,156 guest steps; the
-  legacy case exercises the final legal root slot and completes in 560,613,920
-  steps, both under the unchanged 800,000,000-step watchdog. Each binds zero
-  target entries, the ordered `{ triple-root, level-2-child }` release vector,
-  two map blocks and exact revokes, exact root-plus-child `i_blocks`, distinct
-  `LEGACY-SPARSE-TRIPLE-CHILD` authority, six modern or five legacy metadata
-  credits, zero home writes, and clean abort. Focused modern
-  checkpoint-certificate tests refuse partial and coordinated count/revoke
-  downgrades while the child type remains sealed. A fully coherent rewrite
-  into the older root-only type is still a structurally valid checkpoint
-  certificate, but staged-source reauthentication rejects it as a data-map
-  mismatch. Focused refusal coverage treats a repeated
-  child, root/direct/xattr aliases, an unallocated child, and incorrect
-  root-plus-child `i_blocks` as corruption; a second distinct child, a nonzero
-  grandchild, and direct-data or external-xattr composition remain unsupported.
-  Focused modern production checkpoints the cleanup in 1,359,573,029 guest
-  steps under the existing 1,500,000,000-step watchdog. Its exact
-  37-write/24-flush trace has the same six cleanup homes as the root-only
-  modern shape: the primary super is written three times and the GDT, block
-  bitmap, inode bitmap, inode table, and orphan file are each written once.
-  Both map allocation bits and the target inode bit clear, free counters return
-  to their canonical values, and neither the pointer-bearing root nor its
-  all-zero child is written. A byte-identical zero-I/O stable remount completes
-  in 56,369,050 guest steps under the standard 1,200,000,000-step watchdog.
-  Legacy final-slot production parity completes in 1,379,226,136 guest steps
-  under the same production watchdog. Its exact 35-write/24-flush trace has
-  five cleanup homes: the primary super is written three times and the GDT,
-  block bitmap, inode bitmap, and inode table are each written once, with no
-  orphan-file-home write. It restores the same two map bits, inode bit, and
-  canonical accounting without writing either released map home, and its
-  byte-identical zero-I/O stable remount also completes in 56,369,050 guest
-  steps. Both resulting images pass the pinned e2fsprogs 1.47.4
-  `e2fsck -f -n` check. A representative modern F12 replay-home flush failure
-  reaches the injected fence in 1,088,178,921 guest steps under the standard
-  1,200,000,000-step watchdog. The F11-to-F12 interval contains exactly the
-  six expected cleanup-home writes and excludes both the triple root and its
-  child. Fresh mounts converge both permitted failed-flush durability views:
-  the F12 writes surviving and only the prior F11 fence surviving. Each repair
-  completes in 271,891,434 guest steps, matches every cleanup home and both
-  preserved map homes to the known clean image, and never writes either map
-  home. Each repaired image then reaches a byte-identical zero-I/O stable
-  remount in 55,920,483 guest steps. Legacy F12 parity; representative F11
-  commit and F16 final-super fences, followed by the full controlled
-  write-prefix and durability matrix, under both orphan protocols; broader
-  2/4 KiB geometry; and implementation, admission, and qualification of
-  additional triple-root child fanout remain pending for this child-bearing
-  tier.
-  The one-direct modern certificate
-  refuses missing or extra target counts, a missing range, widened data or root
-  singletons, swapped data/root order, and a downgraded map kind before its
-  restored authority and transaction tables pass. Root-only negative admission
-  covers single- or double-indirect composition, direct/root aliasing, and
-  aliasing the triple root with the external-xattr home. Focused single-record
-  production and byte-identical zero-I/O stable
-  remount qualification now cover the direct composition under both orphan
-  protocols. The modern journey checkpoints the cleanup in 1,305,226,732 guest
-  steps and the legacy journey in 1,318,122,553, each under the unchanged
-  1,500,000,000-step watchdog; both stable remounts complete in 56,367,757
-  steps under the standard 1,200,000,000-step watchdog. Their exact
-  37-write/24-flush modern and 35-write/24-flush legacy traces retain the same
-  six or five cleanup homes as the root-only shape, clear the direct-block,
-  triple-root, and target-inode allocation bits, restore every free counter,
-  and never write either released block home. Pinned e2fsprogs 1.47.4
-  `e2fsck -f -n` accepts both recovered images. Crash qualification for the
-  direct composition remains pending. For the root-only shape, the
-  single-record modern production journey emits and checkpoints the cleanup in
-  1,301,139,781 guest steps under
-  its 1,500,000,000-step watchdog. Its exact 37-write/24-flush trace has six
-  distinct ext4 cleanup homes: the primary super is written three times, while
-  the GDT, block bitmap, inode bitmap, inode table, and orphan file are each
-  written once. The released triple-root home is never written; its allocation
-  bit and the target inode bit clear, all free counters return to their expected
-  values, and a byte-identical zero-I/O stable remount completes in 56,367,001
-  guest steps under the standard 1,200,000,000-step watchdog. The corresponding
-  single-record legacy production journey completes in 1,314,117,314 guest
-  steps under the same 1,500,000,000-step production watchdog. Its exact
-  35-write/24-flush trace has five distinct cleanup homes: the primary super is
-  written three times, and the GDT, block bitmap, inode bitmap, and inode table
-  are each written once; neither the orphan-file home nor the triple-root home
-  is written. It likewise clears the root and inode allocation bits, restores
-  every counter, and reaches a byte-identical zero-I/O stable remount in
-  56,367,001 guest steps under the 1,200,000,000-step watchdog. This establishes
-  modern/legacy production and remount parity for the exact root-only shape.
-  Pinned e2fsprogs 1.47.4 `e2fsck -f -n` accepts both recovered images. A
-  representative F12 replay-home flush failure now qualifies both protocols:
-  the modern fault journey reaches F12 in 1,034,182,900 guest steps and the
-  legacy journey in 1,051,627,465, each under the standard 1,200,000,000-step
-  watchdog. The F11-to-F12 interval contains exactly the six modern or five
-  legacy cleanup-home writes, excluding the triple root and, for legacy, the
-  orphan file. Fresh mounts converge both permitted failed-flush durability
-  views: the F12 writes surviving and only the prior F11 fence surviving.
-  Modern repairs complete in 270,728,727 guest steps and legacy repairs in
-  266,212,919 for either view. The expected cleanup homes, orphan-file home,
-  and preserved triple-root home match the known clean image; no repair writes
-  the triple-root home, and each result reaches a byte-identical zero-I/O
-  stable remount in 55,919,141 steps. Other crash windows and the full crash
-  matrix remain pending.
+  Deletion of a data-bearing unlinked record follows the general release.
+  Release passes free the map from its end, and the pass that frees the rest
+  folds the deletion: its seal binds the pass's freed runs as the `RELEASED`
+  vector, the pass credit, every revoke inside those runs with a released
+  xattr block's last, and a target entry count equal to the run count.
+  Inspection tests seal that vector for separated inline extents mixing
+  initialized and unwritten entries, four external extent leaves with their
+  revokes in release order, all twelve legacy direct slots beside a unique
+  external xattr, and a single-indirect map with its pointer block; beside a
+  shared xattr a pass keeps its credit as the writer's whole capacity. A
+  certificate whose block count, data-map kind, run overlap or run length
+  changes fails checkpoint authority, and a shifted run passes authority and
+  fails staged verification. Mount recovery deletes legacy maps of any shape:
+  holes in the direct pointers, a double-indirect tree with no single root,
+  triple trees with data in several branches, and every branch at once across
+  186 fragmented data blocks, more than one pass frees, recorded in the orphan
+  file or on the superblock's chain. Each ends on a volume pinned e2fsprogs
+  1.47.4 finds clean, with the inode record zero and every released block
+  free. A duplicated data pointer, a data pointer that names a pointer block,
+  a duplicated child, an unallocated child and a misstated `i_blocks` each
+  refuse the mount as `EXT4-D-DATA-MAP` corruption before any write. A linked
+  record whose legacy map extends past EOF truncates under both protocols,
+  keeping the blocks before EOF and zeroing the bytes past it. The staged
+  unlink of the 340-extent depth-two file frees it through release passes
+  under a sixteen-home, four-revoke profile, closed or held open until its
+  last close, and five trace-derived tears of a 120-extent unlink, at the
+  unlink's descriptor and inode home, a pass's inode home, the deletion's
+  orphan home and the `ORPHAN_PRESENT` clear, recover on remount to the whole
+  file or to a clean volume without it. The 1 KiB cross-group fixture still
+  coalesces separate data- and inode-group descriptors into one primary GDT
+  home, and the boundary fixture proves that one released run may itself
+  cross two groups while both data descriptors and the inode descriptor
+  coalesce into that home. The per-shape production journeys and their crash
+  fences, from the empty and one-block baselines through legacy direct,
+  indirect and triple-root maps, run through the same passes.
   Pinned
   e2fsprogs 1.47.4 accepts both protocols for the empty 1 KiB result, ordinary
   one-block 1/2/4 KiB results, the initialized-offset and cross-group unwritten
@@ -3690,8 +3446,9 @@ ordered list of prerequisites for retaining the qualified write surface:
   entry count zero, data-map kind `NONE`, no release ranges or revokes, exact
   one-home modern and two-home legacy metadata credit, the corresponding
   protocol after-images, staged verification, and abort. A nonempty
-  legacy-format linked map remains unsupported. This focused evidence makes no
-  production, crash-recovery, or e2fsck claim. A
+  legacy-format linked map truncates through release passes, as described
+  above, and this focused empty-map evidence makes no production,
+  crash-recovery, or e2fsck claim. A
   later four-extent unlinked record whose fourth range is also owned by a live
   inode is refused by the mount's ownership proof before any write or flush. Structurally valid
   post-seal total-count, protocol-split, and `MORE`/`FINAL` substitutions all
@@ -3703,10 +3460,11 @@ ordered list of prerequisites for retaining the qualified write surface:
   retry. Modern-only and legacy-only two-record
   deletion fixtures give unlinked head 18 respectively two and four separated
   initialized/unwritten extents before empty successor 21. Exact stage/abort
-  qualification pins the six-credit `MODERN_DATA_DELETE_MORE` and five-credit
-  `LEGACY_DATA_DELETE_MORE` certificates, including protocol locators,
-  pre-union counts, target generation/home/offset/entry count, and the complete
-  physical range vector. Full production mounts restore the canonical block
+  qualification pins the `MODERN_DATA_DELETE_MORE` and
+  `LEGACY_DATA_DELETE_MORE` certificates of the pass that folds each deletion,
+  with the pass credit, protocol locators, pre-union counts, the target's
+  generation, home, offset and entry count, and the released runs. Full
+  production mounts restore the canonical block
   bitmap and aggregate free-block counters, reclaim both inodes through `MORE`
   then `FINAL`, preserve every seeded extent and gap payload without a
   data-home write, and produce a byte-stable zero-I/O remount. Their pinned
