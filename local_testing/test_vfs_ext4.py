@@ -69129,11 +69129,8 @@ def staged_public_final_unlink_closed_fixture(
                 "' _UFC-NOW 0 _UFC-V EXT4-BIND-WRITE-CLOCK? "
                 "CONSTANT _UFC-CLOCK-IOR"
             ),
-            # Seven homes let one release pass free both of the file's
-            # runs and fold its deletion, so the cleanup is one
-            # transaction.
             *_ext4_dedicated_writer_profile_forth(
-                "_UFC-PROFILE", "_UFC-V", 7, 0, 0
+                "_UFC-PROFILE", "_UFC-V", 6, 0, 0
             ),
             (
                 'S" /fixture/sparse.bin" _UFC-V VFS-RESOLVE? '
@@ -70128,9 +70125,8 @@ def test_staged_vfs_unlink_open_final_link_drains_on_last_close(
                 "' _UFL-NOW 0 _UFL-V EXT4-BIND-WRITE-CLOCK? "
                 "CONSTANT _UFL-CLOCK-IOR"
             ),
-            # The closed fixture's profile, so both drains match.
             *_ext4_dedicated_writer_profile_forth(
-                "_UFL-PROFILE", "_UFL-V", 7, 0, 0
+                "_UFL-PROFILE", "_UFL-V", 6, 0, 0
             ),
             (
                 'S" /fixture/sparse.bin" VFS-FF-READ _UFL-V '
@@ -70360,10 +70356,7 @@ def test_staged_vfs_unlink_nonempty_final_add_descriptor_tear_rolls_back(
             faulted,
             [
                 *_staged_final_unlink_attempt_forth(
-                    "_FAD",
-                    epoch_ms=epoch_ms,
-                    open_target=False,
-                    meta_capacity=7,
+                    "_FAD", epoch_ms=epoch_ms, open_target=False
                 ),
                 *_forth_accumulated_conjunction(
                     "_FAD-ALL-ROLLBACK",
@@ -70659,10 +70652,7 @@ def test_staged_vfs_unlink_nonempty_final_add_home_tear_replays_and_drains(
             faulted,
             [
                 *_staged_final_unlink_attempt_forth(
-                    "_FAH",
-                    epoch_ms=epoch_ms,
-                    open_target=False,
-                    meta_capacity=7,
+                    "_FAH", epoch_ms=epoch_ms, open_target=False
                 ),
                 *_forth_accumulated_conjunction(
                     "_FAH-ALL-COMMITTED",
@@ -70948,10 +70938,7 @@ def test_staged_vfs_unlink_last_close_descriptor_tear_recovers_orphan(
             faulted,
             [
                 *_staged_final_unlink_attempt_forth(
-                    "_FCD",
-                    epoch_ms=epoch_ms,
-                    open_target=True,
-                    meta_capacity=7,
+                    "_FCD", epoch_ms=epoch_ms, open_target=True
                 ),
                 "_FCD-VN VN.NLINK @ CONSTANT _FCD-ADD-NLINK",
                 "_FCD-VN VN.OPEN-REFS @ CONSTANT _FCD-ADD-OPEN-REFS",
@@ -71289,10 +71276,7 @@ def test_staged_vfs_unlink_last_close_inode_home_tear_replays_cleanup(
             faulted,
             [
                 *_staged_final_unlink_attempt_forth(
-                    "_FCH",
-                    epoch_ms=epoch_ms,
-                    open_target=True,
-                    meta_capacity=7,
+                    "_FCH", epoch_ms=epoch_ms, open_target=True
                 ),
                 "_FCH-VN VN.NLINK @ CONSTANT _FCH-ADD-NLINK",
                 "_FCH-VN VN.OPEN-REFS @ CONSTANT _FCH-ADD-OPEN-REFS",
@@ -85128,11 +85112,11 @@ def test_ext4_jbd2_map_service_is_private_acyclic_unit() -> None:
 
     expected_facade_calls = {
         "_EXT4-ENSURE-JOURNAL-WORKSPACE": 1,
-        "_EXT4-JOURNAL-MAP@": 7,
+        "_EXT4-JOURNAL-MAP@": 3,
         "_EXT4-JOURNAL-MAP-UNIQUE?": 1,
         "_EXT4-JOURNAL-DATA?": 5,
         "_EXT4-READ-JBLOCK": 26,
-        "_EXT4-WRITE-JBLOCK": 16,
+        "_EXT4-WRITE-JBLOCK": 21,
         "_EXT4-JOURNAL-NEXT": 7,
         "_EXT4-JOURNAL-ADVANCE": 3,
     }

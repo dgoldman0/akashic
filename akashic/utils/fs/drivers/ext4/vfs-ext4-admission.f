@@ -550,7 +550,15 @@ VARIABLE _EXT4-PS-GENERATION
     _EXT4-IO-VOL @ VOL-READ
     SWAP _EXT4-IO-COMPLETED ! _EXT4-MAP-IOR ;
 
+\ A write starts a new map epoch, so a map that passed a validation before
+\ it is walked again.  vfs-ext4.f keeps the maps that passed, and the
+\ journal's block writer keeps the epoch once the mount's ownership proof
+\ stands.
+VARIABLE _EXT4-MAP-EPOCH
+1 _EXT4-MAP-EPOCH !
+
 : _EXT4-WRITE-SECTORS  ( dma lba count -- ior )
+    1 _EXT4-MAP-EPOCH +!
     _EXT4-PS-CTX @ IF _EXT4-PS-DISCARD THEN
     DUP _EXT4-IO-EXPECTED !
     _EXT4-IO-VOL @ VOL-WRITE

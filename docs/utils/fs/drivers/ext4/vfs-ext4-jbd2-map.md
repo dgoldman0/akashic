@@ -50,7 +50,10 @@ admitted nonnegative count. The mapped I/O services retain explicit null and
 `logical < MAXLEN` checks and propagate the underlying checked block I/O
 result. A successful read places raw bytes in caller-owned `C.BLOCK`; content
 checksum, type, and sequence authentication remain the caller's responsibility.
-A write performs the requested journal media mutation.
+A write performs the requested journal media mutation. On a mount whose
+block-ownership proof stands, it keeps the admission unit's map epoch: every
+journal block is then inode 8's data alone, which no map validation reads, so
+the maps that passed before the write still pass.
 
 The module depends only on
 [`vfs-ext4-admission.f`](vfs-ext4-admission.md), whose closure supplies the

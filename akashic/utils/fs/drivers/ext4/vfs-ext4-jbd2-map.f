@@ -122,6 +122,9 @@ VARIABLE _EXT4-JWB-BUF
     _EXT4-JR-LOGICAL @ _EXT4-JR-CTX @ _EXT4-JOURNAL-MAP@
     _EXT4-JR-CTX @ _EXT4-READ-BLOCK ;
 
+\ A write to the journal keeps the map epoch once the mount's ownership
+\ proof stands: every block of the journal is then inode 8's data alone,
+\ which no map validation reads.
 : _EXT4-WRITE-JBLOCK  ( buffer logical ctx -- ior )
     _EXT4-JR-CTX ! _EXT4-JR-LOGICAL ! _EXT4-JWB-BUF !
     _EXT4-JR-CTX @ 0= IF VFS-E-INVALID EXIT THEN
@@ -130,9 +133,15 @@ VARIABLE _EXT4-JWB-BUF
     _EXT4-JR-CTX @ _EXT4-C.J.MAXLEN + @ U< 0= IF
         EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
     THEN
+    _EXT4-MAP-EPOCH @ >R
     _EXT4-JWB-BUF @
     _EXT4-JR-LOGICAL @ _EXT4-JR-CTX @ _EXT4-JOURNAL-MAP@
-    _EXT4-JR-CTX @ _EXT4-WRITE-BLOCK ;
+    _EXT4-JR-CTX @ _EXT4-WRITE-BLOCK
+    _EXT4-JR-CTX @ _EXT4-C.OWNERSHIP + @ -1 = IF
+        R> _EXT4-MAP-EPOCH !
+    ELSE
+        R> DROP
+    THEN ;
 
 VARIABLE _EXT4-JN-BLOCK
 VARIABLE _EXT4-JN-CTX

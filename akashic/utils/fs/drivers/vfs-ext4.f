@@ -725,6 +725,99 @@ VARIABLE _EXT4-EVR-CTX
     _EXT4-EV-IN @ _EXT4-EV-MAX @ _EXT4-EV-DEPTH @ _EXT4-EV-CTX @
     _EXT4-VALIDATE-EXTENT-NODE ;
 
+\ ---------------------------------------------------------------------
+\  Validated maps
+\ ---------------------------------------------------------------------
+\
+\ Every step of an operation authenticates its target again, so one
+\ transaction validates the same map many times: its measure, its staging
+\ and its seal each reload the record, and its checkpoint's reloads
+\ validate each orphan target in turn.  A plain validation, one outside a
+\ claim scope, an audit, the protocol scope and a transaction's images,
+\ depends on the inode number, the mount's geometry, two fields of the
+\ record and the blocks it walks.  The fields are the block array, which
+\ holds the map or its root, and the generation, which extent node
+\ checksums cover.  The blocks are the map's nodes or pointer blocks and the
+\ descriptors and block bitmaps of the groups its blocks lie in; it reads
+\ no data block.  Once the mount's ownership proof stands, each block has
+\ one owner, so the journal's block writes, to inode 8's data, reach none
+\ of the blocks a validation reads and keep the map epoch.  Every other
+\ write starts a new epoch, and so does the ownership proof.  A record that
+\ passed a walk in the current epoch passes it again while its block array
+\ and generation stay the same, so its map is walked once per epoch.  The
+\ table keeps a few records, since a reload validates the orphan file, the
+\ journal and each orphan target in turn.  A slot holds the epoch it passed
+\ in, the context, the inode number, the walk, the validation limit and the
+\ generation, then the block array.  The slots lie on cells, as the mount
+\ arena places a context's inode buffer, so the array compare runs a cell
+\ at a time.
+
+8 CONSTANT _EXT4-VM-SLOTS
+6 CELLS CONSTANT _EXT4-VM-HEAD
+60 CONSTANT _EXT4-VM-ARRAY
+_EXT4-VM-HEAD _EXT4-VM-ARRAY + 7 + -8 AND CONSTANT _EXT4-VM-SLOT-BYTES
+_EXT4-VM-SLOTS _EXT4-VM-SLOT-BYTES * CONSTANT _EXT4-VM-BYTES
+CREATE _EXT4-VM-SPACE _EXT4-VM-BYTES 7 + ALLOT
+_EXT4-VM-SPACE 7 + -8 AND CONSTANT _EXT4-VM-TABLE
+_EXT4-VM-TABLE _EXT4-VM-BYTES 0 FILL
+VARIABLE _EXT4-VM-NEXT
+VARIABLE _EXT4-VM-CTX
+VARIABLE _EXT4-VM-WALK
+
+: _EXT4-VM-SLOT  ( index -- slot )  _EXT4-VM-SLOT-BYTES * _EXT4-VM-TABLE + ;
+
+\ True when the validation about to run is plain, on a mount whose
+\ ownership proof stands.
+: _EXT4-VM-PLAIN?  ( -- flag )
+    _EXT4-VM-CTX @ _EXT4-C.OWNERSHIP + @ -1 =
+    _EXT4-OWN-MODE @ 0= AND
+    _EXT4-MUTATION-MAP-ACTIVE @ 0= AND
+    _EXT4-MUTATION-PROTOCOL-ACTIVE @ 0= AND
+    _EXT4-EV-IMAGE-XT @ 0= AND ;
+
+\ True when SLOT holds the record in C.INODE as it passed the walk in this
+\ epoch.
+: _EXT4-VM-MATCH?  ( slot -- flag )
+    DUP @ _EXT4-MAP-EPOCH @ <> IF DROP FALSE EXIT THEN
+    DUP CELL+ @ _EXT4-VM-CTX @ <> IF DROP FALSE EXIT THEN
+    DUP 2 CELLS + @ _EXT4-IR-INO @ <> IF DROP FALSE EXIT THEN
+    DUP 3 CELLS + @ _EXT4-VM-WALK @ <> IF DROP FALSE EXIT THEN
+    DUP 4 CELLS + @ _EXT4-MAP-VALIDATION-LIMIT @ <> IF DROP FALSE EXIT THEN
+    DUP 5 CELLS + @
+    _EXT4-VM-CTX @ _EXT4-C.INODE + _EXT4-I.GENERATION + L@ <> IF
+        DROP FALSE EXIT
+    THEN
+    _EXT4-VM-HEAD + _EXT4-VM-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK +
+    _EXT4-VM-ARRAY _EXT4-BYTES=? ;
+
+: _EXT4-VM-PASSED?  ( -- flag )
+    _EXT4-VM-SLOTS 0 DO
+        I _EXT4-VM-SLOT _EXT4-VM-MATCH? IF TRUE UNLOOP EXIT THEN
+    LOOP FALSE ;
+
+\ Keep the record in C.INODE as passed in this epoch.
+: _EXT4-VM-KEEP  ( -- )
+    _EXT4-VM-NEXT @ _EXT4-VM-SLOT
+    _EXT4-MAP-EPOCH @ OVER !
+    _EXT4-VM-CTX @ OVER CELL+ !
+    _EXT4-IR-INO @ OVER 2 CELLS + !
+    _EXT4-VM-WALK @ OVER 3 CELLS + !
+    _EXT4-MAP-VALIDATION-LIMIT @ OVER 4 CELLS + !
+    _EXT4-VM-CTX @ _EXT4-C.INODE + _EXT4-I.GENERATION + L@
+    OVER 5 CELLS + !
+    _EXT4-VM-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + SWAP _EXT4-VM-HEAD +
+    _EXT4-VM-ARRAY MOVE
+    _EXT4-VM-NEXT @ 1+ _EXT4-VM-SLOTS MOD _EXT4-VM-NEXT ! ;
+
+\ Validate CTX's map with WALK ( ctx -- ior ) unless its record passed WALK
+\ in this epoch.
+: _EXT4-VM-VALIDATE  ( ctx walk -- ior )
+    _EXT4-VM-WALK ! DUP _EXT4-VM-CTX !
+    _EXT4-VM-PLAIN? 0= IF _EXT4-VM-WALK @ EXECUTE EXIT THEN
+    _EXT4-VM-PASSED? IF DROP 0 EXIT THEN
+    _EXT4-VM-WALK @ EXECUTE ?DUP IF EXIT THEN
+    _EXT4-VM-KEEP 0 ;
+
 VARIABLE _EXT4-ET-CTX
 CREATE _EXT4-ET-LOWER 6 CELLS ALLOT
 CREATE _EXT4-ET-UPPER 6 CELLS ALLOT
@@ -807,7 +900,7 @@ VARIABLE _EXT4-ET-ROOT-COUNT
         THEN
     LOOP 2DROP 0 ;
 
-: _EXT4-VALIDATE-EXTENT-TREE  ( ctx -- ior )
+: _EXT4-WALK-EXTENT-TREE  ( ctx -- ior )
     DUP _EXT4-ET-CTX ! _EXT4-VALIDATE-INLINE-EXTENTS ?DUP IF EXIT THEN
     _EXT4-ET-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + DUP _EXT4-ET-ROOT !
     6 + W@ DUP _EXT4-ET-ROOT-DEPTH ! 0= IF
@@ -827,6 +920,9 @@ VARIABLE _EXT4-ET-ROOT-COUNT
         _EXT4-ET-ROOT-DEPTH @ 1- _EXT4-VALIDATE-EXTENT-SUBTREE
         ?DUP IF UNLOOP EXIT THEN
     LOOP 0 ;
+
+: _EXT4-VALIDATE-EXTENT-TREE  ( ctx -- ior )
+    ['] _EXT4-WALK-EXTENT-TREE _EXT4-VM-VALIDATE ;
 
 VARIABLE _EXT4-MAP-LBLOCK
 VARIABLE _EXT4-MAP-CTX
@@ -997,7 +1093,7 @@ VARIABLE _EXT4-LV-RUN-COUNT
         THEN
     LOOP DROP 2DROP 0 ;
 
-: _EXT4-VALIDATE-LEGACY-MAP  ( ctx -- ior )
+: _EXT4-WALK-LEGACY-MAP  ( ctx -- ior )
     DUP _EXT4-LV-CTX ! _EXT4-C.INODE + _EXT4-I.BLOCK +
     0 _EXT4-LV-RUN-COUNT !
     _EXT4-NDIRECT 0 DO
@@ -1030,6 +1126,9 @@ VARIABLE _EXT4-LV-RUN-COUNT
         _EXT4-LV-PTRS @ I 1+ _EXT4-U-POWER
         _EXT4-LV-ROOT-BASE +!
     LOOP DROP _EXT4-LV-FLUSH ;
+
+: _EXT4-VALIDATE-LEGACY-MAP  ( ctx -- ior )
+    ['] _EXT4-WALK-LEGACY-MAP _EXT4-VM-VALIDATE ;
 
 \ Validate the map of the record in C.INODE, an extent tree or a legacy
 \ block map as its flags say.
@@ -7628,7 +7727,6 @@ VARIABLE _EXT4-RM-CTX
 
 VARIABLE _EXT4-RJ-CTX
 VARIABLE _EXT4-RJ-V
-VARIABLE _EXT4-RJ-PHYS
 VARIABLE _EXT4-RJ-ANCHOR
 VARIABLE _EXT4-RJ-OLD-SEQUENCE
 VARIABLE _EXT4-RJ-OLD-HEAD
@@ -7789,9 +7887,8 @@ VARIABLE _EXT4-AJS-NEW
     _EXT4-RJ-CTX @ _EXT4-C.J.PRIMARY-TORN + @ IF
         _EXT4-RJ-CTX @ _EXT4-C.J.ANCHOR + @
         _EXT4-RJ-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
-        0 _EXT4-RJ-CTX @ _EXT4-JOURNAL-MAP@ _EXT4-RJ-PHYS !
-        _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-RJ-PHYS @ _EXT4-RJ-CTX @
-        _EXT4-WRITE-BLOCK ?DUP IF EXIT THEN
+        _EXT4-RJ-CTX @ _EXT4-C.BLOCK + 0 _EXT4-RJ-CTX @
+        _EXT4-WRITE-JBLOCK ?DUP IF EXIT THEN
         _EXT4-FLUSH ?DUP IF EXIT THEN
         0 _EXT4-RJ-CTX @ _EXT4-C.J.PRIMARY-TORN + !
         _EXT4-RJ-CTX @ _EXT4-C.J.CLEANUP + @
@@ -7812,20 +7909,16 @@ VARIABLE _EXT4-AJS-NEW
     _EXT4-RJ-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-RJ-CTX @ _EXT4-C.BSIZE + @ CMOVE
     0 _EXT4-RJ-CTX @ _EXT4-C.BLOCK + C!
-    _EXT4-RJ-ANCHOR @
-    _EXT4-RJ-CTX @ _EXT4-JOURNAL-MAP@ _EXT4-RJ-PHYS !
-    _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-RJ-PHYS @ _EXT4-RJ-CTX @
-    _EXT4-WRITE-BLOCK ?DUP IF EXIT THEN
+    _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-RJ-ANCHOR @ _EXT4-RJ-CTX @
+    _EXT4-WRITE-JBLOCK ?DUP IF EXIT THEN
     _EXT4-FLUSH ?DUP IF EXIT THEN
     _EXT4-RJ-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-RJ-CTX @ _EXT4-C.BLOCK +
     _EXT4-RJ-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-RJ-PHYS @ _EXT4-RJ-CTX @
-    _EXT4-WRITE-BLOCK ?DUP IF EXIT THEN
+    _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-RJ-ANCHOR @ _EXT4-RJ-CTX @
+    _EXT4-WRITE-JBLOCK ?DUP IF EXIT THEN
     _EXT4-FLUSH ?DUP IF EXIT THEN
-    0 _EXT4-RJ-CTX @ _EXT4-JOURNAL-MAP@ _EXT4-RJ-PHYS !
-    _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-RJ-PHYS @ _EXT4-RJ-CTX @
-    _EXT4-WRITE-BLOCK ;
+    _EXT4-RJ-CTX @ _EXT4-C.BLOCK + 0 _EXT4-RJ-CTX @ _EXT4-WRITE-JBLOCK ;
 
 : _EXT4-WRITE-CLEARED-SUPER  ( ctx -- ior )
     _EXT4-RJ-CTX !
@@ -7959,8 +8052,7 @@ VARIABLE _EXT4-RA-LOGICAL
     _EXT4-RA-CTX @ _EXT4-C.BLOCK +
     _EXT4-RA-CTX @ _EXT4-C.BSIZE + @ 0 FILL
     _EXT4-RA-CTX @ _EXT4-C.BLOCK +
-    _EXT4-RA-LOGICAL @ _EXT4-RA-CTX @ _EXT4-JOURNAL-MAP@
-    _EXT4-RA-CTX @ _EXT4-WRITE-BLOCK ;
+    _EXT4-RA-LOGICAL @ _EXT4-RA-CTX @ _EXT4-WRITE-JBLOCK ;
 
 VARIABLE _EXT4-JWF-IOR
 VARIABLE _EXT4-JWF-WRITER
@@ -11753,6 +11845,7 @@ VARIABLE _EXT4-CS-J
     DUP _EXT4-BOP-CTX ! 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-BOP-CTX @ _EXT4-C.OWNERSHIP + @ -1 = IF 0 EXIT THEN
     0 _EXT4-BOP-CTX @ _EXT4-C.OWNERSHIP + !
+    1 _EXT4-MAP-EPOCH +!
     _EXT4-OWN-MAP @ _EXT4-OWN-EA-ARENA @ OR IF VFS-E-BUSY EXIT THEN
     _EXT4-BOP-CTX @ _EXT4-C.ARENA + @ DUP _EXT4-BOP-ARENA !
     0= IF VFS-E-INVALID EXIT THEN
@@ -19640,12 +19733,13 @@ VARIABLE _XR-T-NEW-PAGE
     1+ ;
 
 \ True when one more step surely fits the pass.  A step's run can add its
-\ group's bitmap and descriptor page and the superblock, and each level it
-\ empties adds a freed node with its own bitmap and descriptor page, an
-\ edited parent, a revoke and a recorded run.  The proof appends every
-\ home after the recorded runs, so both share the mutation range workspace.
+\ group's bitmap and descriptor page, and the superblock until a run freed
+\ earlier in the pass has counted it, and each level it empties adds a
+\ freed node with its own bitmap and descriptor page, an edited parent, a
+\ revoke and a recorded run.  The proof appends every home after the
+\ recorded runs, so both share the mutation range workspace.
 : _XR-ROOM?  ( -- flag )
-    _XR-NEED 3 + _XN-DEPTH @ 3 * +
+    _XR-NEED 2 + _XR-FREED @ 0= 1 AND + _XN-DEPTH @ 3 * +
     _XN-TX @ _EXT4-JWR.META-CREDIT + @ U> IF FALSE EXIT THEN
     _XN-TX @ _EXT4-JWR.REVOKE-USED + @ _XN-DEPTH @ +
     _XN-TX @ _EXT4-JWR.REVOKE-CREDIT + @ U> IF FALSE EXIT THEN

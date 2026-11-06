@@ -1514,8 +1514,10 @@ decrement at both boundaries, while `FINAL` additionally requires the
 authenticated empty-orphan predicate. Thus neither `FINAL` nor `MORE`
 admission can survive a mismatched first home-write boundary.
 
-Each of those reloads reauthenticates the mount from media without repeating
-work inside itself. One authentication runs in a proof scope (see the
+Each of those reloads reauthenticates the mount from media, walking only the
+inode maps that have not passed a validation in the current map epoch (see
+[Block ownership](#block-ownership)), and repeats no work inside itself. One
+authentication runs in a proof scope (see the
 [admission foundation](ext4/vfs-ext4-admission.md)), so it reads each block
 it needs from media once even though every group check reloads the shared
 descriptor page. The journal-map snapshot is a pure function of the witnessed
@@ -1697,6 +1699,25 @@ block from a map while leaving it allocated, or maps a block twice therefore
 refuses before commit. A bitmap's checksum lives in its group's descriptor, so
 the descriptors the transaction's descriptor-table pages change name every
 bitmap it changes.
+
+Each step of an operation also authenticates its target again: its measure,
+its staging and its seal each reload the target, and its checkpoint's reloads
+validate every orphan target in turn. A plain validation, one outside a claim
+scope, an audit, the protocol scope and a transaction's images, depends only
+on the inode number, the mount's geometry, two fields of the record and the
+blocks it walks. The fields are the block array, which holds the map or its
+root, and the generation, which extent node checksums cover; the blocks are
+the map's nodes or pointer blocks and the descriptors and block bitmaps of the
+groups its blocks lie in. It reads no data block. Once the proof above stands,
+every block has one owner, so the journal's block writes, to inode 8's data,
+reach none of the blocks a validation reads. Every other write starts a new
+map epoch, and so does each run of the proof. The driver keeps the last eight
+records that passed a plain validation, each with its epoch, and a record that
+passed in the current epoch passes again without a walk while its block array
+and generation stay the same. Each map is therefore walked once per epoch
+however many steps authenticate it. A release pass walks its target's map once outside
+the map check, in its checkpoint's reload after the home writes, and the map
+check walks the map before and after the transaction.
 
 The general write, truncate, the truncate's orphan insertion and the release
 passes claim the target's old map during the home-set audit's walk of its tree.
@@ -2600,9 +2621,10 @@ the new size and trusted-clock times together with one modern orphan-file
 slot and the primary `ORPHAN_PRESENT` bit, leaving the map and `i_blocks`
 unchanged. Release passes then free the blocks past the new EOF from the end
 of the file. A pass takes a removal step only while the step's worst case
-still fits the profile: its run can add a group's bitmap and descriptor page
-and the superblock, and every level it empties adds a freed node with its own
-bitmap and descriptor page, an edited parent, a revoke, and a recorded run.
+still fits the profile: its run can add a group's bitmap and descriptor page,
+and the superblock until an earlier run of the pass has counted it, and every
+level it empties adds a freed node with its own bitmap and descriptor page, an
+edited parent, a revoke, and a recorded run.
 A pass keeps the inode's size and times, and its home-set proof covers the
 runs it frees. The record's final cleanup zeroes the bytes past EOF in the
 block that holds it, when any of them is not zero, and clears the slot. The
