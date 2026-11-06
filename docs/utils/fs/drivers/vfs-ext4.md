@@ -1533,7 +1533,9 @@ homes it refuses, and its workspace addresses. When all of those equal the
 last successful build for the same context, and the map and uniqueness table
 still have that build's CRC32C, the reload keeps the snapshot instead of
 rebuilding it entry by entry. Any changed input, or any change to the
-workspace, rebuilds it from media.
+workspace, rebuilds it from media. Only a build writes the tables, so one
+journal validation checks that CRC32C once, and its later calls whose inputs
+still match keep the snapshot it checked.
 
 A complete reload validates the superblock, the groups, the backups and the
 orphan union from blocks outside the journal and builds the context's state
@@ -1735,13 +1737,14 @@ the map's nodes or pointer blocks and the descriptors and block bitmaps of the
 groups its blocks lie in. It reads no data block. Once the proof above stands,
 every block has one owner, so the journal's block writes, to inode 8's data,
 reach none of the blocks a validation reads. Every other write starts a new
-map epoch, and so does each run of the proof. The driver keeps the last eight
-records that passed a plain validation, each with its epoch, and a record that
-passed in the current epoch passes again without a walk while its block array
-and generation stay the same. Each map is therefore walked once per epoch
-however many steps authenticate it. A release pass walks its target's map once outside
-the map check, in its checkpoint's reload after the home writes, and the map
-check walks the map before and after the transaction.
+map epoch, and so do each run of the proof and each mount authentication.
+The driver keeps the last eight records that passed a plain validation, each
+with its epoch, and a record that passed in the current epoch passes again
+without a walk while its block array and generation stay the same. Each map
+is therefore walked once per epoch however many steps authenticate it. A
+release pass walks its target's map once outside the map check, in its
+checkpoint's reload after the home writes, and the map check walks the map
+before and after the transaction.
 
 The general write, truncate, the truncate's orphan insertion and the release
 passes claim the target's old map during the home-set audit's walk of its tree.
@@ -1874,6 +1877,18 @@ accounting home. The target's external xattr block may not be a home. That
 walk also claims the target's map for the map check, which proves that the
 staged tree differs from the old one by exactly the blocks the transaction
 allocates; with the mount's ownership proof, no other owner holds any home.
+
+Each range's static role is checked against the mount's static-role table.
+It holds every group's block bitmap, inode bitmap and inode table and every
+superblock copy with the descriptor and reserved descriptor blocks after it,
+sorted by first block, each entry carrying the greatest end of the intervals
+up to it, so intervals that overlap, as corrupt descriptors could give, are
+answered exactly too. The table is built from the descriptors once per map
+epoch, since only a write can change them, and answers each range with a
+binary search, so a check reads no descriptor and its steps grow with the
+logarithm of the group count. The proof that the primary superblock and
+descriptor homes alias no group's metadata likewise runs once per epoch.
+Mount reserves the table with its claim workspace, four entries a group.
 
 ### Progress and crash boundaries
 

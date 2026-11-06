@@ -16505,7 +16505,12 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
     claim_workspace_bytes = (
         (volume_blocks - first_data_block + 63) // 64 * 8 + block_size
     )
-    auth_workspace_bytes = range_workspace_bytes + claim_workspace_bytes
+    groups = 2
+    role_capacity = 4 * groups
+    role_workspace_bytes = role_capacity * 2 * 8
+    auth_workspace_bytes = (
+        range_workspace_bytes + claim_workspace_bytes + role_workspace_bytes
+    )
     plan_slots = 4
     plan_workspace_bytes = plan_slots * 4 * 8
     arena_bytes = auth_workspace_bytes + plan_workspace_bytes
@@ -16520,6 +16525,7 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
             f"{block_size} _ROW-CTX _EXT4-C.BSIZE + !",
             f"{volume_blocks} _ROW-CTX _EXT4-C.BLOCKS + !",
             f"{first_data_block} _ROW-CTX _EXT4-C.FIRST + !",
+            f"{groups} _ROW-CTX _EXT4-C.GROUPS + !",
             f"{arena_bytes} A-XMEM ARENA-NEW THROW CONSTANT _ROW-ARENA",
             "_ROW-ARENA _ROW-CTX _EXT4-C.ARENA + !",
             (
@@ -16543,6 +16549,11 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
             (
                 "_ROW-CLAIM _ROW-CLAIM-BYTES _EXT4-BYTES-ZERO? "
                 "CONSTANT _ROW-CLAIM-FIRST-ZERO"
+            ),
+            "_ROW-CTX _EXT4-C.ROLE-TABLE + @ CONSTANT _ROW-ROLE",
+            (
+                "_ROW-CTX _EXT4-C.ROLE-CAPACITY + @ "
+                "CONSTANT _ROW-ROLE-CAP"
             ),
             (
                 "_ROW-MUTATION _ROW-MUTATION-CAP 2* CELLS "
@@ -16628,6 +16639,20 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                 "1 _ROW-BAD-PLAN _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE "
                 "CONSTANT _ROW-BAD-PLAN-IOR"
             ),
+            "CREATE _ROW-BAD-ROLE _EXT4-CTX-SIZE ALLOT",
+            "_ROW-BAD-ROLE _EXT4-CTX-SIZE 0 FILL",
+            f"{groups} _ROW-BAD-ROLE _EXT4-C.GROUPS + !",
+            "64 A-XMEM ARENA-NEW THROW CONSTANT _ROW-BAD-ROLE-ARENA",
+            "_ROW-BAD-ROLE-ARENA _ROW-BAD-ROLE _EXT4-C.ARENA + !",
+            "1 _ROW-BAD-ROLE _EXT4-C.ROLE-TABLE + !",
+            (
+                "_ROW-BAD-ROLE-ARENA ARENA-USED "
+                "CONSTANT _ROW-BAD-ROLE-BEFORE"
+            ),
+            (
+                "_ROW-BAD-ROLE _EXT4-ENSURE-ROLE-WORKSPACE "
+                "CONSTANT _ROW-BAD-ROLE-IOR"
+            ),
             (
                 _forth_conjunction(
                     [
@@ -16642,6 +16667,11 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                         ),
                         f"_ROW-CLAIM-BYTES {claim_workspace_bytes} =",
                         "_ROW-CLAIM-FIRST-ZERO",
+                        (
+                            "_ROW-ROLE _ROW-CLAIM "
+                            f"{claim_workspace_bytes} + ="
+                        ),
+                        f"_ROW-ROLE-CAP {role_capacity} =",
                         "_ROW-AUTH-REUSE-IOR 0=",
                         "_ROW-AUTH-REUSED _ROW-AUTH-USED =",
                         (
@@ -16651,11 +16681,16 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                         "_ROW-MUTATION-REUSED-ZERO",
                         "_ROW-CTX _EXT4-C.CLAIM-WORKSPACE + @ _ROW-CLAIM =",
                         "_ROW-CLAIM-REUSED-ZERO",
+                        "_ROW-CTX _EXT4-C.ROLE-TABLE + @ _ROW-ROLE =",
+                        (
+                            "_ROW-CTX _EXT4-C.ROLE-CAPACITY + @ "
+                            f"{role_capacity} ="
+                        ),
                         "_ROW-PLAN-FIRST-IOR 0=",
                         f"_ROW-PLAN-SLOTS {plan_slots} =",
                         (
-                            "_ROW-PLAN _ROW-CLAIM "
-                            f"{claim_workspace_bytes} + ="
+                            "_ROW-PLAN _ROW-ROLE "
+                            f"{role_workspace_bytes} + ="
                         ),
                         f"_ROW-PLAN-USED {arena_bytes} =",
                         "_ROW-PLAN-FIRST-ZERO",
@@ -16704,6 +16739,19 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
                             "_ROW-BAD-PLAN-BEFORE ="
                         ),
                         "_ROW-BAD-PLAN _EXT4-C.O.SLOTS + @ 0=",
+                        (
+                            "_ROW-BAD-ROLE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_ROW-BAD-ROLE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_ROW-BAD-ROLE-ARENA ARENA-USED "
+                            "_ROW-BAD-ROLE-BEFORE ="
+                        ),
+                        "_ROW-BAD-ROLE _EXT4-C.ROLE-CAPACITY + @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-RUNTIME-ORPHAN-WORKSPACES" THEN'
@@ -31273,6 +31321,207 @@ def test_mutation_authority_validates_inode_table_home(
         ],
     )
     _assert_emitted(output, "EXT4-MUTATION-AUTHORITY-RANGE-SAFE")
+
+
+def test_mutation_role_check_answers_every_static_interval_edge(
+    canonical_images: dict[str, Path],
+) -> None:
+    """The static-role table answers each range as a scan of every group does.
+
+    Each group's bitmaps and inode table, and each superblock copy with the
+    descriptor and reserved descriptor blocks after it, is a static interval.
+    The table reports every interval's first and last block, a range that
+    spans it, and the blocks just outside each edge exactly as the scan below
+    does; an empty range meets none and a wrapping one counts as meeting one.
+    The single and vector role checks refuse a range the table reports and
+    pass one it clears.  Valid descriptors give disjoint intervals, so a
+    synthetic table of unsorted and nested intervals, as corrupt descriptors
+    could give, checks the sort and the running greatest end against the
+    same scan.
+    """
+    path = canonical_images["primary-1k-i256"]
+    layout = _ext4_recovery_layout(path)
+    block_size = layout["block_size"]
+    groups = layout["groups"]
+    descriptor_size = layout["descriptor_size"]
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+        source.seek(layout["primary_gdt"] * block_size)
+        descriptors = source.read(groups * descriptor_size)
+    assert len(descriptors) == groups * descriptor_size
+    inodes_per_group = struct.unpack_from("<I", superblock, 0x28)[0]
+    reserved_gdt = struct.unpack_from("<H", superblock, 0xCE)[0]
+    table_span = -(-inodes_per_group * layout["inode_size"] // block_size)
+
+    def sparse(group: int) -> bool:
+        if group < 2:
+            return True
+        for base in (3, 5, 7):
+            power = base
+            while power < group:
+                power *= base
+            if power == group:
+                return True
+        return False
+
+    intervals: list[tuple[int, int]] = []
+    for group in range(groups):
+        entry = descriptors[group * descriptor_size :]
+        intervals.append((struct.unpack_from("<I", entry, 0x00)[0], 1))
+        intervals.append((struct.unpack_from("<I", entry, 0x04)[0], 1))
+        intervals.append(
+            (struct.unpack_from("<I", entry, 0x08)[0], table_span)
+        )
+        if sparse(group):
+            intervals.append(
+                (
+                    group * layout["blocks_per_group"] + layout["first"],
+                    1 + layout["witness_gdt_span"] + reserved_gdt,
+                )
+            )
+    assert groups > 2 and len(intervals) > 3 * groups
+
+    def meets(first: int, count: int) -> bool:
+        return any(
+            first < start + length and start < first + count
+            for start, length in intervals
+        )
+
+    queries = sorted(
+        query
+        for start, length in intervals
+        for query in (
+            (start, 1),
+            (start + length - 1, 1),
+            (start - 1, 1),
+            (start + length, 1),
+            (start - 1, length + 2),
+        )
+        if query[0] >= layout["first"]
+        and query[0] + query[1] <= layout["blocks"]
+    )
+    queries = list(dict.fromkeys(queries))
+    answers = [meets(*query) for query in queries]
+    assert any(answers) and not all(answers)
+
+    journal_root = superblock[0x10C : 0x10C + 60]
+    journal: list[tuple[int, int]] = []
+    for index in range(struct.unpack_from("<H", journal_root, 0x02)[0]):
+        entry = 0x0C + index * 0x0C
+        journal.append(
+            (
+                (struct.unpack_from("<H", journal_root, entry + 0x06)[0] << 32)
+                | struct.unpack_from("<I", journal_root, entry + 0x08)[0],
+                struct.unpack_from("<H", journal_root, entry + 0x04)[0],
+            )
+        )
+    clear = next(
+        block
+        for block in range(layout["first"], layout["blocks"])
+        if not meets(block, 1)
+        and not any(start <= block < start + length for start, length in journal)
+    )
+    # Group 0 holds a superblock copy, so it adds four intervals.
+    group_one_bitmap = intervals[4][0]
+    last_table_block = intervals[2][0] + table_span - 1
+
+    synthetic = [
+        (300, 10), (120, 1), (100, 50), (10, 5),
+        (200, 1), (130, 2), (305, 1), (200, 1),
+    ]
+
+    def synthetic_meets(first: int, count: int) -> bool:
+        return any(
+            first < start + length and start < first + count
+            for start, length in synthetic
+        )
+
+    synthetic_queries = [(block, 1) for block in range(0, 320)] + [
+        (5, 5), (15, 85), (140, 60), (150, 50), (99, 2), (309, 11)
+    ]
+    checks = [
+        "_SRT-MOUNT-IOR 0=",
+        "_SRT-BUILD-IOR 0=",
+        *(
+            f"{first} {count} _EXT4-SR-ALIAS? {'0<>' if hit else '0='}"
+            for (first, count), hit in zip(queries, answers)
+        ),
+        f"{intervals[2][0]} 0 _EXT4-SR-ALIAS? 0=",
+        "-1 2 _EXT4-SR-ALIAS? 0<>",
+        "_SRT-ONE-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+        "_SRT-ONE-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+        "_SRT-CLEAR-IOR 0=",
+        "_SRT-VEC-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+        "_SRT-VEC-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+        "_SRT-VEC-CLEAR-IOR 0=",
+    ]
+    synthetic_checks = [
+        "_SRS-WORK-IOR 0=",
+        "_SRS-ADD-IOR 0=",
+        *(
+            f"{first} {count} _EXT4-SR-ALIAS? "
+            f"{'0<>' if synthetic_meets(first, count) else '0='}"
+            for first, count in synthetic_queries
+        ),
+    ]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _SRT-MOUNT-IOR CONSTANT _SRT-V"
+            ),
+            "_SRT-V _EXT4-CTX CONSTANT _SRT-CTX",
+            "_SRT-CTX _EXT4-SR-CURRENT CONSTANT _SRT-BUILD-IOR",
+            (
+                f"{group_one_bitmap} 1 _SRT-CTX "
+                "_EXT4-VALIDATE-MUTATION-RANGE-TARGETS CONSTANT _SRT-ONE-IOR"
+            ),
+            (
+                f"{clear} 1 _SRT-CTX "
+                "_EXT4-VALIDATE-MUTATION-RANGE-TARGETS CONSTANT _SRT-CLEAR-IOR"
+            ),
+            "CREATE _SRT-VEC 4 CELLS ALLOT",
+            f"{clear} _SRT-VEC ! 1 _SRT-VEC CELL+ !",
+            f"{last_table_block} _SRT-VEC 2 CELLS + ! 1 _SRT-VEC 3 CELLS + !",
+            (
+                "_SRT-VEC 2 2 _SRT-CTX "
+                "_EXT4-VALIDATE-MUTATION-RANGES-TARGETS CONSTANT _SRT-VEC-IOR"
+            ),
+            (
+                "_SRT-VEC 1 2 _SRT-CTX _EXT4-VALIDATE-MUTATION-RANGES-TARGETS "
+                "CONSTANT _SRT-VEC-CLEAR-IOR"
+            ),
+            *_forth_accumulated_conjunction("_SRT-ALL", checks),
+            "CREATE _SRS-CTX _EXT4-CTX-SIZE ALLOT",
+            "_SRS-CTX _EXT4-CTX-SIZE 0 FILL",
+            "512 A-XMEM ARENA-NEW THROW _SRS-CTX _EXT4-C.ARENA + !",
+            "2 _SRS-CTX _EXT4-C.GROUPS + !",
+            "_SRS-CTX _EXT4-ENSURE-ROLE-WORKSPACE CONSTANT _SRS-WORK-IOR",
+            (
+                "0 _EXT4-SR-CTX ! _SRS-CTX _EXT4-SR-BUILD ! "
+                "_SRS-CTX _EXT4-C.ROLE-TABLE + @ _EXT4-SR-TABLE ! "
+                "0 _EXT4-SR-COUNT !"
+            ),
+            "VARIABLE _SRS-ADD-IORS 0 _SRS-ADD-IORS !",
+            *(
+                f"{first} {count} _EXT4-SR-ADD _SRS-ADD-IORS @ OR "
+                "_SRS-ADD-IORS !"
+                for first, count in synthetic
+            ),
+            "_SRS-ADD-IORS @ CONSTANT _SRS-ADD-IOR",
+            "_EXT4-SR-SORT _EXT4-SR-PREFIX",
+            *_forth_accumulated_conjunction("_SRS-ALL", synthetic_checks),
+            (
+                '_SRT-ALL @ _SRS-ALL @ AND IF '
+                '." EXT4-STATIC-ROLE-TABLE-EXACT" ELSE '
+                '." EXT4-STATIC-ROLE-TABLE-CHECK " _SRT-ALL-FIRST-FAILURE @ . '
+                "_SRS-ALL-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-STATIC-ROLE-TABLE-EXACT")
 
 
 def test_staged_vfs_write_publishes_shared_vnode_and_syncs_clean(
@@ -81742,7 +81991,9 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "15544 CONSTANT _EXT4-C.XC-PLAN-SPAN",
         "15560 CONSTANT _EXT4-C.CLAIM-WORKSPACE",
         "15568 CONSTANT _EXT4-C.CLAIM-WORKSPACE-BYTES",
-        "15576 CONSTANT _EXT4-CTX-SIZE",
+        "15576 CONSTANT _EXT4-C.ROLE-TABLE",
+        "15584 CONSTANT _EXT4-C.ROLE-CAPACITY",
+        "15592 CONSTANT _EXT4-CTX-SIZE",
     ):
         assert admission_fragment in admission
 
@@ -85421,9 +85672,21 @@ def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
     authority = word_body("_EXT4-RECOVERY-AUTHORITY-BLOCK?")
     inode_table = word_body("_EXT4-VALIDATE-INODE-TABLE-HOME")
     group_touched = word_body("_EXT4-JCM-GROUP-TOUCHED?")
+    role_add = word_body("_EXT4-SR-ADD")
+    role_alias = word_body("_EXT4-SR-ALIAS?")
+    range_targets = word_body("_EXT4-VALIDATE-MUTATION-RANGE-TARGETS")
+    vector_targets = word_body("_EXT4-VALIDATE-MUTATION-RANGES-TARGETS")
 
     assert "URANGE-OVERLAP? 0= IF DROP TRUE THEN" in adapter
-    assert source.count(adapter_name) == 27
+    assert source.count(adapter_name) == 23
+    assert role_add.count("URANGE-VALID?") == 1
+    assert "EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT" in role_add
+    assert role_alias.count("URANGE-VALID?") == 1
+    assert "URANGE-VALID? 0= IF 2DROP TRUE EXIT THEN" in role_alias
+    for body in (range_targets, vector_targets):
+        assert "_EXT4-SR-CURRENT ?DUP IF EXIT THEN" in body
+        assert "_EXT4-SR-ALIAS? IF" in body
+        assert "_EXT4-LOAD-DESC" not in body
     assert "_EXT4-BLOCK-RANGES-OVERLAP?" not in source
     for scratch in (
         "_EXT4-BRO-A",

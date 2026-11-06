@@ -726,6 +726,184 @@ VARIABLE _EXT4-EVR-CTX
     _EXT4-VALIDATE-EXTENT-NODE ;
 
 \ ---------------------------------------------------------------------
+\  Static-role table
+\ ---------------------------------------------------------------------
+
+VARIABLE _EXT4-SRW-CTX
+VARIABLE _EXT4-SRW-REQUIRED
+VARIABLE _EXT4-SRW-BYTES
+
+\ The static-role table holds every interval of static metadata: each
+\ group's block bitmap, inode bitmap and inode table, and in each group with
+\ a superblock copy, the copy with the descriptor and reserved descriptor
+\ blocks after it.  That is at most four intervals a group.  Each entry holds
+\ an interval's first block and, once the table is sorted, the greatest end
+\ of the intervals up to it.  A context with no groups reserves none.
+: _EXT4-ROLE-WORKSPACE-CAPACITY  ( ctx -- capacity ior )
+    DUP 0= IF DROP 0 VFS-E-INVALID EXIT THEN
+    _EXT4-C.GROUPS + @ 4 _EXT4-UMUL? ;
+
+: _EXT4-ROLE-WORKSPACE?  ( ctx -- flag )
+    DUP _EXT4-C.ROLE-TABLE + @
+    SWAP _EXT4-C.ROLE-CAPACITY + @
+    2DUP OR 0= IF 2DROP TRUE EXIT THEN
+    OVER 0= OVER 0= OR IF 2DROP FALSE EXIT THEN
+    DUP 0< IF 2DROP FALSE EXIT THEN
+    2 CELLS _EXT4-UMUL? DUP IF NIP 2DROP FALSE EXIT THEN DROP
+    MSPAN-NONWRAPPING? ;
+
+: _EXT4-ENSURE-ROLE-WORKSPACE  ( ctx -- ior )
+    DUP _EXT4-SRW-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-SRW-CTX @ _EXT4-ROLE-WORKSPACE-CAPACITY
+    DUP IF NIP EXIT THEN DROP _EXT4-SRW-REQUIRED !
+    _EXT4-SRW-CTX @ _EXT4-ROLE-WORKSPACE? 0= IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-SRW-CTX @ _EXT4-C.ROLE-TABLE + @ IF
+        _EXT4-SRW-CTX @ _EXT4-C.ROLE-CAPACITY + @
+        _EXT4-SRW-REQUIRED @ U< IF VFS-E-NOMEM EXIT THEN
+        0 EXIT
+    THEN
+    _EXT4-SRW-REQUIRED @ 0= IF 0 EXIT THEN
+    _EXT4-SRW-REQUIRED @ 2 CELLS _EXT4-UMUL?
+    DUP IF NIP EXIT THEN DROP _EXT4-SRW-BYTES !
+    _EXT4-SRW-CTX @ _EXT4-C.ARENA + @
+    _EXT4-SRW-BYTES @ ARENA-ALLOT? IF DROP VFS-E-NOMEM EXIT THEN
+    _EXT4-SRW-CTX @ _EXT4-C.ROLE-TABLE + !
+    _EXT4-SRW-REQUIRED @ _EXT4-SRW-CTX @ _EXT4-C.ROLE-CAPACITY + !
+    0 ;
+
+\ The table is built from the descriptors, which only a write can change, so
+\ a table built in the current map epoch stands.  Mount authentication starts
+\ a new epoch, so a table never outlives the mount it was built in.
+VARIABLE _EXT4-SR-CTX
+VARIABLE _EXT4-SR-EPOCH
+VARIABLE _EXT4-SR-TABLE
+VARIABLE _EXT4-SR-COUNT
+VARIABLE _EXT4-SR-BUILD
+VARIABLE _EXT4-SR-ROOT
+VARIABLE _EXT4-SR-CHILD
+VARIABLE _EXT4-SR-END
+VARIABLE _EXT4-SR-LOW
+VARIABLE _EXT4-SR-HIGH
+VARIABLE _EXT4-SR-QUERY-FIRST
+VARIABLE _EXT4-SR-QUERY-END
+0 _EXT4-SR-CTX !
+
+: _EXT4-SR-ENTRY  ( index -- address )  2* CELLS _EXT4-SR-TABLE @ + ;
+: _EXT4-SR-FIRST@  ( index -- first )  _EXT4-SR-ENTRY @ ;
+
+\ An empty interval meets no range, and one whose end wraps admits none.
+: _EXT4-SR-ADD  ( first count -- ior )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    2DUP URANGE-VALID? 0= IF 2DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+    _EXT4-SR-COUNT @
+    _EXT4-SR-BUILD @ _EXT4-C.ROLE-CAPACITY + @ U< 0= IF
+        2DROP VFS-E-CORRUPT EXIT
+    THEN
+    OVER + _EXT4-SR-COUNT @ _EXT4-SR-ENTRY TUCK CELL+ ! !
+    1 _EXT4-SR-COUNT +! 0 ;
+
+: _EXT4-SR-SWAP-CELL  ( a b -- )  2DUP @ SWAP @ ROT ! SWAP ! ;
+
+: _EXT4-SR-EXCHANGE  ( i j -- )
+    _EXT4-SR-ENTRY SWAP _EXT4-SR-ENTRY
+    2DUP _EXT4-SR-SWAP-CELL
+    CELL+ SWAP CELL+ _EXT4-SR-SWAP-CELL ;
+
+\ Restore the heap below ROOT among the first END entries.
+: _EXT4-SR-SIFT  ( root end -- )
+    _EXT4-SR-END ! _EXT4-SR-ROOT !
+    BEGIN
+        _EXT4-SR-ROOT @ 2* 1+ DUP _EXT4-SR-CHILD !
+        _EXT4-SR-END @ U<
+    WHILE
+        _EXT4-SR-CHILD @ 1+ _EXT4-SR-END @ U< IF
+            _EXT4-SR-CHILD @ _EXT4-SR-FIRST@
+            _EXT4-SR-CHILD @ 1+ _EXT4-SR-FIRST@ U< IF
+                1 _EXT4-SR-CHILD +!
+            THEN
+        THEN
+        _EXT4-SR-ROOT @ _EXT4-SR-FIRST@
+        _EXT4-SR-CHILD @ _EXT4-SR-FIRST@ U< 0= IF EXIT THEN
+        _EXT4-SR-ROOT @ _EXT4-SR-CHILD @ _EXT4-SR-EXCHANGE
+        _EXT4-SR-CHILD @ _EXT4-SR-ROOT !
+    REPEAT ;
+
+: _EXT4-SR-SORT  ( -- )
+    _EXT4-SR-COUNT @ 2/ _EXT4-SR-LOW !
+    BEGIN _EXT4-SR-LOW @ WHILE
+        -1 _EXT4-SR-LOW +!
+        _EXT4-SR-LOW @ _EXT4-SR-COUNT @ _EXT4-SR-SIFT
+    REPEAT
+    _EXT4-SR-COUNT @ _EXT4-SR-HIGH !
+    BEGIN _EXT4-SR-HIGH @ 1 U> WHILE
+        -1 _EXT4-SR-HIGH +!
+        0 _EXT4-SR-HIGH @ _EXT4-SR-EXCHANGE
+        0 _EXT4-SR-HIGH @ _EXT4-SR-SIFT
+    REPEAT ;
+
+\ Turn each sorted entry's end into the greatest end up to it.
+: _EXT4-SR-PREFIX  ( -- )
+    0 _EXT4-SR-COUNT @ 0 ?DO
+        I _EXT4-SR-ENTRY CELL+ DUP @ ROT
+        2DUP U< IF NIP ELSE DROP THEN
+        DUP ROT !
+    LOOP DROP ;
+
+: _EXT4-SR-BUILD-TABLE  ( ctx -- ior )
+    DUP _EXT4-SR-BUILD !
+    _EXT4-C.ROLE-TABLE + @ DUP _EXT4-SR-TABLE ! 0= IF VFS-E-CORRUPT EXIT THEN
+    0 _EXT4-SR-CTX ! 0 _EXT4-SR-COUNT !
+    _EXT4-SR-BUILD @ _EXT4-C.GROUPS + @ 0 ?DO
+        I _EXT4-SR-BUILD @ _EXT4-LOAD-DESC ?DUP IF UNLOOP EXIT THEN
+        _EXT4-SR-BUILD @ _EXT4-C.DESC + _EXT4-GD.BLOCK-BITMAP-LO + L@ 1
+        _EXT4-SR-ADD ?DUP IF UNLOOP EXIT THEN
+        _EXT4-SR-BUILD @ _EXT4-C.DESC + _EXT4-GD.INODE-BITMAP-LO + L@ 1
+        _EXT4-SR-ADD ?DUP IF UNLOOP EXIT THEN
+        _EXT4-SR-BUILD @ _EXT4-C.DESC + _EXT4-GD.INODE-TABLE-LO + L@
+        _EXT4-GD-SPAN @ _EXT4-SR-ADD ?DUP IF UNLOOP EXIT THEN
+        I _EXT4-SPARSE-GROUP? IF
+            I _EXT4-SR-BUILD @ _EXT4-C.BPG + @ *
+            _EXT4-SR-BUILD @ _EXT4-C.FIRST + @ +
+            1 _EXT4-SR-BUILD @ _EXT4-C.J.WITNESS-GDT-SPAN + @ +
+            _EXT4-SR-BUILD @ _EXT4-C.SB + _EXT4-SB.RESERVED-GDT + W@ +
+            _EXT4-SR-ADD ?DUP IF UNLOOP EXIT THEN
+        THEN
+    LOOP
+    _EXT4-SR-SORT _EXT4-SR-PREFIX
+    _EXT4-MAP-EPOCH @ _EXT4-SR-EPOCH !
+    _EXT4-SR-BUILD @ _EXT4-SR-CTX !
+    0 ;
+
+: _EXT4-SR-CURRENT  ( ctx -- ior )
+    DUP _EXT4-SR-CTX @ =
+    _EXT4-SR-EPOCH @ _EXT4-MAP-EPOCH @ = AND IF
+        _EXT4-C.ROLE-TABLE + @ _EXT4-SR-TABLE ! 0 EXIT
+    THEN
+    _EXT4-SR-BUILD-TABLE ;
+
+\ Whether a range meets a static interval, answered as the checked range
+\ algebra answers it: an empty range meets none, and a wrapping one counts
+\ as meeting one.  The last interval that starts before the range ends
+\ carries the greatest end of every interval that does.
+: _EXT4-SR-ALIAS?  ( first count -- flag )
+    2DUP URANGE-VALID? 0= IF 2DROP TRUE EXIT THEN
+    DUP 0= IF 2DROP FALSE EXIT THEN
+    OVER + _EXT4-SR-QUERY-END ! _EXT4-SR-QUERY-FIRST !
+    0 _EXT4-SR-LOW ! _EXT4-SR-COUNT @ _EXT4-SR-HIGH !
+    BEGIN _EXT4-SR-LOW @ _EXT4-SR-HIGH @ U< WHILE
+        _EXT4-SR-LOW @ _EXT4-SR-HIGH @ + 2/
+        DUP _EXT4-SR-FIRST@ _EXT4-SR-QUERY-END @ U< IF
+            1+ _EXT4-SR-LOW !
+        ELSE
+            _EXT4-SR-HIGH !
+        THEN
+    REPEAT
+    _EXT4-SR-LOW @ DUP 0= IF EXIT THEN
+    1- _EXT4-SR-ENTRY CELL+ @ _EXT4-SR-QUERY-FIRST @ U> ;
+
+\ ---------------------------------------------------------------------
 \  Validated maps
 \ ---------------------------------------------------------------------
 \
@@ -2741,7 +2919,9 @@ VARIABLE _EXT4-RAB-CTX
 \ those same bytes.  When every input equals the last successful build for
 \ this context and the workspace still holds exactly the bytes that build
 \ left, the build would reproduce them, so it is skipped.  Any difference,
-\ including a changed workspace, rebuilds from media.
+\ including a changed workspace, rebuilds from media.  Only a build writes
+\ the workspace, so within one journal check a snapshot that check already
+\ verified or built stands for its later calls while their inputs match.
 \ The 68-byte tuple area is rounded up to a whole cell so the scalar inputs
 \ after it keep cell alignment within the key.
 68 CONSTANT _EXT4-JMM-TUPLE-BYTES
@@ -2752,6 +2932,7 @@ CREATE _EXT4-JMM-NOW _EXT4-JMM-KEY-BYTES ALLOT
 VARIABLE _EXT4-JMM-CTX
 VARIABLE _EXT4-JMM-CRC
 VARIABLE _EXT4-JMM-BUF
+VARIABLE _EXT4-JMM-CHECKED
 
 : _EXT4-JMM-CELL!  ( value index -- )
     CELLS _EXT4-JMM-TUPLE-AREA + _EXT4-JMM-BUF @ + ! ;
@@ -2788,14 +2969,15 @@ VARIABLE _EXT4-JMM-BUF
     _EXT4-JMM-NOW _EXT4-JMM-KEY _EXT4-JMM-KEY-BYTES _EXT4-BYTES=? 0= IF
         DROP FALSE EXIT
     THEN
-    _EXT4-JMM-WORKSPACE-CRC IF DROP FALSE EXIT THEN
-    _EXT4-JMM-CRC @ = ;
+    DUP _EXT4-JMM-CHECKED @ = IF DROP TRUE EXIT THEN
+    DUP _EXT4-JMM-WORKSPACE-CRC IF 2DROP FALSE EXIT THEN
+    _EXT4-JMM-CRC @ = DUP IF SWAP _EXT4-JMM-CHECKED ! EXIT THEN NIP ;
 
 : _EXT4-JMM-RECORD  ( ctx -- )
     0 _EXT4-JMM-CTX !
     DUP _EXT4-JMM-WORKSPACE-CRC IF 2DROP EXIT THEN _EXT4-JMM-CRC !
     DUP _EXT4-JMM-KEY _EXT4-JMM-FILL
-    _EXT4-JMM-CTX ! ;
+    DUP _EXT4-JMM-CTX ! _EXT4-JMM-CHECKED ! ;
 
 : _EXT4-SNAPSHOT-JOURNAL-MAP  ( ctx -- ior )
     DUP _EXT4-JV-CTX ! _EXT4-JM-CTX !
@@ -3743,6 +3925,7 @@ VARIABLE _EXT4-RW-GDT-BLOCK
 
 : _EXT4-VALIDATE-JOURNAL  ( ctx -- ior )
     _EXT4-JV-CTX !
+    0 _EXT4-JMM-CHECKED !
     0 _EXT4-JV-CTX @ _EXT4-C.J.PRIMARY-TORN + !
     0 _EXT4-JV-CTX @ _EXT4-C.J.ANCHOR + !
     0 _EXT4-JV-CTX @ _EXT4-C.J.WITNESS + !
@@ -8989,15 +9172,16 @@ VARIABLE _EXT4-CW-BYTES
     DUP _EXT4-ORPHAN-SLOTS-MAX U> IF 2DROP FALSE EXIT THEN
     DUP 1- AND 0= NIP ;
 
-\ Reserve the geometry-derived mutation-range and block-claim workspaces
-\ before examining any orphan inode or orphan-file block.  Failed-mount
-\ retries reuse and clear the retained allocations rather than consuming the
-\ monotonic arena again.
+\ Reserve the geometry-derived mutation-range, block-claim and static-role
+\ workspaces before examining any orphan inode or orphan-file block.  A
+\ failed mount's retry reuses the retained allocations, so each is taken
+\ from the monotonic arena once.
 : _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE  ( ctx -- ior )
     DUP 0= IF DROP VFS-E-INVALID EXIT THEN
     DUP _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE
     ?DUP IF NIP EXIT THEN
-    _EXT4-ENSURE-CLAIM-WORKSPACE ;
+    DUP _EXT4-ENSURE-CLAIM-WORKSPACE ?DUP IF NIP EXIT THEN
+    _EXT4-ENSURE-ROLE-WORKSPACE ;
 
 \ Authenticate the retained runtime allocation structurally before using any
 \ its fields in rollback geometry.  Current media capacity is authenticated
@@ -9822,9 +10006,18 @@ VARIABLE _EXT4-MWH-COUNT
 \ Prove that the primary super/GDT homes this operation will replace are not
 \ also named as allocation metadata by any authenticated descriptor.  Read
 \ admission alone permits flex_bg placement, so writable admission must make
-\ this anti-alias invariant explicit before publishing an after-image.
+\ this anti-alias invariant explicit before publishing an after-image.  The
+\ proof reads only descriptors, so one that passed in the current map epoch
+\ stands.
+VARIABLE _EXT4-MWH-PASSED-CTX
+VARIABLE _EXT4-MWH-PASSED-EPOCH
+0 _EXT4-MWH-PASSED-CTX !
+
 : _EXT4-VALIDATE-PRIMARY-MUTATION-HOMES  ( ctx -- ior )
-    DUP 0= IF DROP VFS-E-INVALID EXIT THEN _EXT4-MWH-CTX !
+    DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    DUP _EXT4-MWH-PASSED-CTX @ =
+    _EXT4-MWH-PASSED-EPOCH @ _EXT4-MAP-EPOCH @ = AND IF DROP 0 EXIT THEN
+    _EXT4-MWH-CTX !
     _EXT4-MWH-CTX @ _EXT4-PRIMARY-SUPER-BLOCK _EXT4-MWH-FIRST !
     _EXT4-MWH-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ 1+
     _EXT4-MWH-COUNT !
@@ -9851,6 +10044,8 @@ VARIABLE _EXT4-MWH-COUNT
             EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
         THEN
     LOOP
+    _EXT4-MWH-CTX @ _EXT4-MWH-PASSED-CTX !
+    _EXT4-MAP-EPOCH @ _EXT4-MWH-PASSED-EPOCH !
     0 ;
 
 VARIABLE _EXT4-MBH-HOME
@@ -10046,14 +10241,12 @@ VARIABLE _EXT4-MTH-COUNT
 VARIABLE _EXT4-FRS-FIRST
 VARIABLE _EXT4-FRS-COUNT
 VARIABLE _EXT4-FRS-CTX
-VARIABLE _EXT4-FRS-GROUP
-VARIABLE _EXT4-FRS-BASE
-VARIABLE _EXT4-FRS-META-COUNT
 
 \ Reject every journal or descriptor/geometry-authenticated static metadata
 \ overlap before a mutation changes any transaction-owned after-image.
 \ flex_bg means a group's bitmap/table may reside outside that group's nominal
-\ interval, so the complete descriptor set is authoritative here.
+\ interval, so the complete descriptor set is authoritative here; the
+\ static-role table carries it.
 : _EXT4-VALIDATE-MUTATION-RANGE-TARGETS  ( first count ctx -- ior )
     _EXT4-FRS-CTX ! _EXT4-FRS-COUNT ! _EXT4-FRS-FIRST !
     _EXT4-FRS-CTX @ 0= IF VFS-E-INVALID EXIT THEN
@@ -10069,41 +10262,10 @@ VARIABLE _EXT4-FRS-META-COUNT
     ?DUP IF EXIT THEN
     _EXT4-FRS-FIRST @ _EXT4-FRS-COUNT @ _EXT4-FRS-CTX @
     _EXT4-JOURNAL-RANGE-DISJOINT ?DUP IF EXIT THEN
-    _EXT4-FRS-CTX @ _EXT4-C.GROUPS + @ 0 ?DO
-        I _EXT4-FRS-GROUP !
-        I _EXT4-FRS-CTX @ _EXT4-LOAD-DESC ?DUP IF UNLOOP EXIT THEN
-        _EXT4-FRS-FIRST @ _EXT4-FRS-COUNT @
-        _EXT4-FRS-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.BLOCK-BITMAP-LO + L@ 1
-        _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-FRS-FIRST @ _EXT4-FRS-COUNT @
-        _EXT4-FRS-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.INODE-BITMAP-LO + L@ 1
-        _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-FRS-FIRST @ _EXT4-FRS-COUNT @
-        _EXT4-FRS-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.INODE-TABLE-LO + L@ _EXT4-GD-SPAN @
-        _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-FRS-GROUP @ _EXT4-SPARSE-GROUP? IF
-            _EXT4-FRS-GROUP @ _EXT4-FRS-CTX @ _EXT4-C.BPG + @ *
-            _EXT4-FRS-CTX @ _EXT4-C.FIRST + @ + _EXT4-FRS-BASE !
-            1
-            _EXT4-FRS-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ +
-            _EXT4-FRS-CTX @ _EXT4-C.SB + _EXT4-SB.RESERVED-GDT + W@ +
-            _EXT4-FRS-META-COUNT !
-            _EXT4-FRS-FIRST @ _EXT4-FRS-COUNT @
-            _EXT4-FRS-BASE @ _EXT4-FRS-META-COUNT @
-            _EXT4-BLOCK-RANGES-ALIAS-OR-INVALID? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-            THEN
-        THEN
-    LOOP
+    _EXT4-FRS-CTX @ _EXT4-SR-CURRENT ?DUP IF EXIT THEN
+    _EXT4-FRS-FIRST @ _EXT4-FRS-COUNT @ _EXT4-SR-ALIAS? IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
     0 ;
 
 VARIABLE _EXT4-FRV-RANGES
@@ -10111,9 +10273,6 @@ VARIABLE _EXT4-FRV-RANGE-COUNT
 VARIABLE _EXT4-FRV-RANGE-CAP
 VARIABLE _EXT4-FRV-RANGE-INDEX
 VARIABLE _EXT4-FRV-CTX
-VARIABLE _EXT4-FRV-GROUP
-VARIABLE _EXT4-FRV-BASE
-VARIABLE _EXT4-FRV-META-COUNT
 VARIABLE _EXT4-FRV-QUERY-FIRST
 VARIABLE _EXT4-FRV-QUERY-COUNT
 
@@ -10139,7 +10298,7 @@ VARIABLE _EXT4-FRV-QUERY-COUNT
 \ Validate a complete inline extent vector without repeating geometry work
 \ for each member.  Bounds and journal separation remain exact per range;
 \ primary mutation homes and the flex_bg descriptor set are authenticated
-\ once, then every static metadata interval is compared with every pair.
+\ once, then every pair is compared with the static-role table.
 : _EXT4-VALIDATE-MUTATION-RANGES-TARGETS
   ( ranges range-count capacity ctx -- ior )
     _EXT4-FRV-CTX ! _EXT4-FRV-RANGE-CAP !
@@ -10172,34 +10331,10 @@ VARIABLE _EXT4-FRV-QUERY-COUNT
     REPEAT
     _EXT4-FRV-CTX @ _EXT4-VALIDATE-PRIMARY-MUTATION-HOMES
     ?DUP IF EXIT THEN
-    _EXT4-FRV-CTX @ _EXT4-C.GROUPS + @ 0 ?DO
-        I _EXT4-FRV-GROUP !
-        I _EXT4-FRV-CTX @ _EXT4-LOAD-DESC ?DUP IF UNLOOP EXIT THEN
-        _EXT4-FRV-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.BLOCK-BITMAP-LO + L@ 1
-        _EXT4-FRV-RANGES-ALIAS? IF
+    _EXT4-FRV-CTX @ _EXT4-SR-CURRENT ?DUP IF EXIT THEN
+    _EXT4-FRV-RANGE-COUNT @ 0 ?DO
+        I _EXT4-FRV-RANGE DUP @ SWAP CELL+ @ _EXT4-SR-ALIAS? IF
             EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-FRV-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.INODE-BITMAP-LO + L@ 1
-        _EXT4-FRV-RANGES-ALIAS? IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-FRV-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.INODE-TABLE-LO + L@ _EXT4-GD-SPAN @
-        _EXT4-FRV-RANGES-ALIAS? IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-FRV-GROUP @ _EXT4-SPARSE-GROUP? IF
-            _EXT4-FRV-GROUP @ _EXT4-FRV-CTX @ _EXT4-C.BPG + @ *
-            _EXT4-FRV-CTX @ _EXT4-C.FIRST + @ + _EXT4-FRV-BASE !
-            1 _EXT4-FRV-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ +
-            _EXT4-FRV-CTX @ _EXT4-C.SB +
-            _EXT4-SB.RESERVED-GDT + W@ + _EXT4-FRV-META-COUNT !
-            _EXT4-FRV-BASE @ _EXT4-FRV-META-COUNT @
-            _EXT4-FRV-RANGES-ALIAS? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-            THEN
         THEN
     LOOP
     0 ;
@@ -18629,6 +18764,9 @@ VARIABLE _EXT4-XCP-END
         0 OVER _EXT4-C.OWNERSHIP + !
         0 SWAP _EXT4-C.J.PROTOCOL-OWNERS + !
     THEN
+    \ A mount reads its medium afresh, so it starts a new map epoch: nothing
+    \ an earlier mount validated stands for it.
+    1 _EXT4-MAP-EPOCH +!
     DUP _EXT4-ATTACHED? 0= IF DROP EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT THEN
     DROP
     _EXT4-M-V @ V.VOLUME @ DUP VOL.SECTOR-SIZE _EXT4-SECTOR <> IF
