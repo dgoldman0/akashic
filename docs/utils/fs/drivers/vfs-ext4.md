@@ -1539,17 +1539,19 @@ still match keep the snapshot it checked.
 
 A complete reload validates the superblock, the groups, the backups and the
 orphan union from blocks outside the journal and builds the context's state
-from them. Every write starts a new map epoch except a journal write on a
-mount whose ownership proof stands, which none of those blocks can receive, so
-the driver records the context and the epoch each complete reload finishes
-in. While that epoch holds, those blocks read as the reload read them and the
-state it built stands, and authenticating the context again runs only the
-journal validation. Three reloads authenticate this way when they can: a
-checkpoint's pre-home reload after a transaction that wrote no ordered data
-and no superblock, its post-reset proof, and the first reload of a
-deactivation. The generic pre-home reload then checks the standing orphan
-union, and the orphan modes' pre-home reload compares the writer's
-certificate with the standing plan. Mount finish drops the record, because
+from them. Every write starts a new map epoch except, on a mount whose
+ownership proof stands, a journal write and ordered data to a fresh block,
+described with the validated maps below, and none of those blocks can
+receive either, so the driver records the context and the epoch each
+complete reload finishes in. While that epoch holds, those blocks read as
+the reload read them and the state it built stands, and authenticating the
+context again runs only the journal validation. Three reloads authenticate
+this way when they can: a checkpoint's pre-home reload after a transaction
+that wrote no superblock and whose ordered data, if any, went only to fresh
+blocks, its post-reset proof, and the first reload of a deactivation. The
+generic pre-home reload then checks the standing orphan union, and the
+orphan modes' pre-home reload compares the writer's certificate with the
+standing plan. Mount finish drops the record, because
 the orphan plan moves to its runtime table there without a write, so the
 first transaction after a mount reloads in full.
 
@@ -1736,8 +1738,14 @@ root, and the generation, which extent node checksums cover; the blocks are
 the map's nodes or pointer blocks and the descriptors and block bitmaps of the
 groups its blocks lie in. It reads no data block. Once the proof above stands,
 every block has one owner, so the journal's block writes, to inode 8's data,
-reach none of the blocks a validation reads. Every other write starts a new
-map epoch, and so do each run of the proof and each mount authentication.
+reach none of the blocks a validation reads. Every block a validation, a
+reload or the static-role table reads is one the medium's bitmap marks
+allocated, or static metadata in a group whose bitmap is uninitialized. A
+fresh block, one the bitmap marks free outside every static role and the
+journal, is therefore none of them, and ordered data written only to fresh
+blocks, as a hole fill's and an append's at a block boundary are, keeps the
+epoch. Every other write starts a new map epoch, and so do each run of the
+proof and each mount authentication.
 The driver keeps the last eight records that passed a plain validation, each
 with its epoch, and a record that passed in the current epoch passes again
 without a walk while its block array and generation stay the same. Each map

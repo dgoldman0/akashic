@@ -31323,23 +31323,13 @@ def test_mutation_authority_validates_inode_table_home(
     _assert_emitted(output, "EXT4-MUTATION-AUTHORITY-RANGE-SAFE")
 
 
-def test_mutation_role_check_answers_every_static_interval_edge(
-    canonical_images: dict[str, Path],
-) -> None:
-    """The static-role table answers each range as a scan of every group does.
+def _ext4_static_layout(path: Path) -> dict[str, object]:
+    """The static intervals and journal runs of an image, group by group.
 
-    Each group's bitmaps and inode table, and each superblock copy with the
-    descriptor and reserved descriptor blocks after it, is a static interval.
-    The table reports every interval's first and last block, a range that
-    spans it, and the blocks just outside each edge exactly as the scan below
-    does; an empty range meets none and a wrapping one counts as meeting one.
-    The single and vector role checks refuse a range the table reports and
-    pass one it clears.  Valid descriptors give disjoint intervals, so a
-    synthetic table of unsorted and nested intervals, as corrupt descriptors
-    could give, checks the sort and the running greatest end against the
-    same scan.
+    Each group adds its block bitmap, inode bitmap and inode table, and a
+    group holding a superblock copy adds the copy with the descriptor and
+    reserved descriptor blocks after it.
     """
-    path = canonical_images["primary-1k-i256"]
     layout = _ext4_recovery_layout(path)
     block_size = layout["block_size"]
     groups = layout["groups"]
@@ -31380,6 +31370,49 @@ def test_mutation_role_check_answers_every_static_interval_edge(
                     1 + layout["witness_gdt_span"] + reserved_gdt,
                 )
             )
+    journal_root = superblock[0x10C : 0x10C + 60]
+    journal: list[tuple[int, int]] = []
+    for index in range(struct.unpack_from("<H", journal_root, 0x02)[0]):
+        entry = 0x0C + index * 0x0C
+        journal.append(
+            (
+                (struct.unpack_from("<H", journal_root, entry + 0x06)[0] << 32)
+                | struct.unpack_from("<I", journal_root, entry + 0x08)[0],
+                struct.unpack_from("<H", journal_root, entry + 0x04)[0],
+            )
+        )
+    return {
+        "layout": layout,
+        "descriptors": descriptors,
+        "table_span": table_span,
+        "intervals": intervals,
+        "journal": journal,
+    }
+
+
+def test_mutation_role_check_answers_every_static_interval_edge(
+    canonical_images: dict[str, Path],
+) -> None:
+    """The static-role table answers each range as a scan of every group does.
+
+    Each group's bitmaps and inode table, and each superblock copy with the
+    descriptor and reserved descriptor blocks after it, is a static interval.
+    The table reports every interval's first and last block, a range that
+    spans it, and the blocks just outside each edge exactly as the scan below
+    does; an empty range meets none and a wrapping one counts as meeting one.
+    The single and vector role checks refuse a range the table reports and
+    pass one it clears.  Valid descriptors give disjoint intervals, so a
+    synthetic table of unsorted and nested intervals, as corrupt descriptors
+    could give, checks the sort and the running greatest end against the
+    same scan.
+    """
+    path = canonical_images["primary-1k-i256"]
+    static = _ext4_static_layout(path)
+    layout = static["layout"]
+    groups = layout["groups"]
+    table_span = static["table_span"]
+    intervals = static["intervals"]
+    journal = static["journal"]
     assert groups > 2 and len(intervals) > 3 * groups
 
     def meets(first: int, count: int) -> bool:
@@ -31405,17 +31438,6 @@ def test_mutation_role_check_answers_every_static_interval_edge(
     answers = [meets(*query) for query in queries]
     assert any(answers) and not all(answers)
 
-    journal_root = superblock[0x10C : 0x10C + 60]
-    journal: list[tuple[int, int]] = []
-    for index in range(struct.unpack_from("<H", journal_root, 0x02)[0]):
-        entry = 0x0C + index * 0x0C
-        journal.append(
-            (
-                (struct.unpack_from("<H", journal_root, entry + 0x06)[0] << 32)
-                | struct.unpack_from("<I", journal_root, entry + 0x08)[0],
-                struct.unpack_from("<H", journal_root, entry + 0x04)[0],
-            )
-        )
     clear = next(
         block
         for block in range(layout["first"], layout["blocks"])
@@ -31522,6 +31544,124 @@ def test_mutation_role_check_answers_every_static_interval_edge(
         ],
     )
     _assert_emitted(output, "EXT4-STATIC-ROLE-TABLE-EXACT")
+
+
+def test_ordered_data_freshness_takes_only_free_unshared_blocks(
+    canonical_images: dict[str, Path],
+) -> None:
+    """Ordered data keeps the map epoch only on blocks no validation reads.
+
+    A block is fresh when the medium's bitmap marks it free and it lies
+    outside every static interval and the journal.  On the fixture a block
+    of a BLOCK_UNINIT group and a free block of an initialized group are
+    fresh, and an allocated block, an inode table block, a superblock copy
+    and a journal block are not.  A block of the uninitialized group that
+    the table names as static, as such a group's own metadata would be, is
+    not fresh either, though its bitmap reads free.  The emitter's check
+    keeps the epoch only on a mount whose ownership proof stands.
+    """
+    path = canonical_images["primary-1k-i256"]
+    static = _ext4_static_layout(path)
+    layout = static["layout"]
+    block_size = layout["block_size"]
+    descriptor_size = layout["descriptor_size"]
+    descriptors = static["descriptors"]
+    intervals = static["intervals"]
+    journal = static["journal"]
+
+    def shared(block: int) -> bool:
+        return any(
+            start <= block < start + length
+            for start, length in (*intervals, *journal)
+        )
+
+    def descriptor(group: int) -> tuple[int, int]:
+        entry = descriptors[group * descriptor_size :]
+        return (
+            struct.unpack_from("<I", entry, 0x00)[0],
+            struct.unpack_from("<H", entry, 0x12)[0],
+        )
+
+    def group_blocks(group: int) -> range:
+        base = layout["first"] + group * layout["blocks_per_group"]
+        end = min(base + layout["blocks_per_group"], layout["blocks"])
+        return range(base, end)
+
+    block_uninit = 0x2
+    uninit_group = next(
+        group
+        for group in range(layout["groups"])
+        if descriptor(group)[1] & block_uninit
+    )
+    uninit = [b for b in group_blocks(uninit_group) if not shared(b)][:2]
+    assert len(uninit) == 2
+    assert not descriptor(0)[1] & block_uninit
+    with path.open("rb") as source:
+        source.seek(descriptor(0)[0] * block_size)
+        bitmap = source.read(block_size)
+
+    def allocated(block: int) -> bool:
+        index = block - layout["first"]
+        return bool(bitmap[index // 8] >> (index % 8) & 1)
+
+    free_block = next(
+        b for b in group_blocks(0) if not allocated(b) and not shared(b)
+    )
+    used_block = next(
+        b for b in group_blocks(0) if allocated(b) and not shared(b)
+    )
+    cases = {
+        "UNINIT": (uninit[0], True),
+        "FREE": (free_block, True),
+        "USED": (used_block, False),
+        "ITABLE": (intervals[2][0], False),
+        "COPY": (layout["first"] + layout["blocks_per_group"], False),
+        "JOURNAL": (layout["journal_block"], False),
+    }
+    checks = ["_OF-MOUNT-IOR 0=", "_OF-TABLE-IOR 0="]
+    for name, (_, fresh) in cases.items():
+        checks += [f"_OF-{name}-IOR 0=", f"_OF-{name} {'0<>' if fresh else '0='}"]
+    checks += [
+        "_OF-ADD-IOR 0=",
+        "_OF-NAMED-IOR 0=",
+        "_OF-NAMED 0=",
+        "_OF-OWNERSHIP -1 <>",
+        "_OF-DATA-IOR 0=",
+        "_OF-DATA 0=",
+    ]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _OF-MOUNT-IOR CONSTANT _OF-V"
+            ),
+            "_OF-V _EXT4-CTX CONSTANT _OF-CTX",
+            "_OF-CTX _EXT4-JEM-CTX !",
+            "_OF-CTX _EXT4-SR-CURRENT CONSTANT _OF-TABLE-IOR",
+            *(
+                f"{block} _EXT4-JEM-FRESH-HOME? "
+                f"CONSTANT _OF-{name}-IOR CONSTANT _OF-{name}"
+                for name, (block, _) in cases.items()
+            ),
+            f"{uninit[1]} 1 _EXT4-SR-ADD CONSTANT _OF-ADD-IOR",
+            "_EXT4-SR-SORT _EXT4-SR-PREFIX",
+            (
+                f"{uninit[1]} _EXT4-JEM-FRESH-HOME? "
+                "CONSTANT _OF-NAMED-IOR CONSTANT _OF-NAMED"
+            ),
+            "0 _EXT4-SR-CTX !",
+            "_OF-CTX _EXT4-C.OWNERSHIP + @ CONSTANT _OF-OWNERSHIP",
+            "_EXT4-JEM-FRESH-DATA? CONSTANT _OF-DATA-IOR CONSTANT _OF-DATA",
+            *_forth_accumulated_conjunction("_OF-ALL", checks),
+            (
+                '_OF-ALL @ IF ." EXT4-ORDERED-DATA-FRESHNESS-EXACT" ELSE '
+                '." EXT4-ORDERED-DATA-FRESHNESS-CHECK " '
+                "_OF-ALL-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-ORDERED-DATA-FRESHNESS-EXACT")
 
 
 def test_staged_vfs_write_publishes_shared_vnode_and_syncs_clean(
@@ -83912,7 +84052,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
     expected_facade_calls = {
         "_EXT4-GROUP-BLOCK-COUNT": 8,
         "_EXT4-GROUP-INODE-COUNT": 7,
-        "_EXT4-BLOCK-ALLOCATED?": 2,
+        "_EXT4-BLOCK-ALLOCATED?": 3,
         "_EXT4-GROUP-BLOCK-RANGE": 3,
         "_EXT4-LOAD-BLOCK-BITMAP": 28,
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP": 4,
@@ -85365,7 +85505,7 @@ def test_ext4_jbd2_map_service_is_private_acyclic_unit() -> None:
         "_EXT4-ENSURE-JOURNAL-WORKSPACE": 1,
         "_EXT4-JOURNAL-MAP@": 3,
         "_EXT4-JOURNAL-MAP-UNIQUE?": 1,
-        "_EXT4-JOURNAL-DATA?": 5,
+        "_EXT4-JOURNAL-DATA?": 6,
         "_EXT4-READ-JBLOCK": 26,
         "_EXT4-WRITE-JBLOCK": 21,
         "_EXT4-JOURNAL-NEXT": 7,

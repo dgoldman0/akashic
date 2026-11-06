@@ -75,9 +75,10 @@ an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
 `_EXT4-IO-EXPECTED` and `_EXT4-IO-COMPLETED` preserve write-attempt evidence
 consumed by later durability code. The descriptor unit reads
 `_EXT4-PS-GENERATION` so that a descriptor verified inside a scope is
-forgotten when the scope's copies are. The facade's validated maps and
-standing reloads read `_EXT4-MAP-EPOCH`, and the journal-map unit's writes
-keep it. They are implementation state, not
+forgotten when the scope's copies are. The facade's validated maps,
+standing reloads, static-role table and primary-homes proof read
+`_EXT4-MAP-EPOCH`, and the journal-map unit's writes and the emitter's
+ordered data to fresh blocks keep it. They are implementation state, not
 public API, and remain documented facade coupling rather than a backwards
 dependency into admission. They are outside the bounded CREATE/HTree context
 pilot; a later feature must justify any separate lifetime migration.

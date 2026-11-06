@@ -8748,7 +8748,46 @@ VARIABLE _EXT4-JEM-OLD-RESERVED
     _EXT4-JEM-CURSOR @ _EXT4-JEM-CTX @ _EXT4-JOURNAL-NEXT
     _EXT4-JEM-CURSOR ! ;
 
+\ Every block a map validation, a reload or the static-role table reads is
+\ one the medium's bitmap marks allocated, or static metadata in a group
+\ whose bitmap is uninitialized.  A data home the bitmap marks free, outside
+\ every static role and the journal, is therefore none of them, and on a
+\ mount whose ownership proof stands, ordered data written only to such homes
+\ keeps the map epoch.  The homes are checked before the first data write.
+VARIABLE _EXT4-JEM-FRESH
+VARIABLE _EXT4-JEM-SCAN
+
+: _EXT4-JEM-FRESH-HOME?  ( home -- fresh? ior )
+    DUP _EXT4-JEM-CTX @ _EXT4-JOURNAL-DATA? IF DROP FALSE 0 EXIT THEN
+    DUP 1 _EXT4-SR-ALIAS? IF DROP FALSE 0 EXIT THEN
+    _EXT4-JEM-CTX @ _EXT4-BLOCK-ALLOCATED? ?DUP IF NIP FALSE SWAP EXIT THEN
+    0= 0 ;
+
+: _EXT4-JEM-FRESH-DATA?  ( -- fresh? ior )
+    _EXT4-JEM-CTX @ _EXT4-C.OWNERSHIP + @ -1 <> IF FALSE 0 EXIT THEN
+    _EXT4-JEM-CTX @ _EXT4-SR-CURRENT ?DUP IF FALSE SWAP EXIT THEN
+    0 _EXT4-JEM-SCAN !
+    BEGIN
+        _EXT4-JEM-SCAN @ _EXT4-JEM-WRITER @ _EXT4-JWR.DATA-USED + @ U<
+    WHILE
+        _EXT4-JEM-SCAN @ _EXT4-JEM-WRITER @ _EXT4-JWR-DATA-ENTRY
+        DUP CELL+ @ _EXT4-JE-ACTIVE = IF
+            @ _EXT4-JEM-FRESH-HOME? ?DUP IF NIP FALSE SWAP EXIT THEN
+            0= IF FALSE 0 EXIT THEN
+        ELSE
+            DROP
+        THEN
+        1 _EXT4-JEM-SCAN +!
+    REPEAT
+    TRUE 0 ;
+
 : _EXT4-JTX-EMIT-ORDERED-DATA  ( -- ior )
+    FALSE _EXT4-JEM-FRESH !
+    _EXT4-JEM-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ IF
+        _EXT4-JWP-ORDERED-DATA _EXT4-JEM-WRITER @ _EXT4-JWR.PHASE + !
+        _EXT4-JEM-FRESH-DATA? ?DUP IF NIP _EXT4-JEM-FAULT EXIT THEN
+        _EXT4-JEM-FRESH !
+    THEN
     0 _EXT4-JEM-INDEX !
     BEGIN
         _EXT4-JEM-INDEX @
@@ -8758,8 +8797,10 @@ VARIABLE _EXT4-JEM-OLD-RESERVED
         DUP _EXT4-JEM-ENTRY ! CELL+ @ _EXT4-JE-ACTIVE = IF
             _EXT4-JWP-ORDERED-DATA
             _EXT4-JEM-WRITER @ _EXT4-JWR.PHASE + !
+            _EXT4-MAP-EPOCH @ >R
             _EXT4-JEM-INDEX @ _EXT4-JEM-WRITER @ _EXT4-JWR-DATA-IMAGE
             _EXT4-JEM-ENTRY @ @ _EXT4-JEM-CTX @ _EXT4-WRITE-BLOCK
+            _EXT4-JEM-FRESH @ IF R> _EXT4-MAP-EPOCH ! ELSE R> DROP THEN
             ?DUP IF _EXT4-JEM-FAULT EXIT THEN
         THEN
         1 _EXT4-JEM-INDEX +!
