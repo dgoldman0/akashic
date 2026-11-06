@@ -3057,6 +3057,29 @@ internal slice is useful implementation evidence but is not public capability;
 an explicitly staged capability is public ABI but is still not complete profile
 conformance.
 
+## Possible safe mode
+
+Some of the driver's checks can fail only when the driver has a bug, when the
+device hands back something other than what it was last given, or when
+another writer changes the volume during the mount. They include rereads that
+confirm a write landed, re-derivations of after-images the driver built
+itself, and cross-checks of a mapped range against the block bitmaps and
+static metadata once the mount has proved block ownership. Desk draws the same
+line in its check mode (`akashic/tui/check-mode.f`): checks of new data, of
+state and of fit run in every mode, while checks that can find only a bug run
+when memory changes hands, and on every frame in safe mode.
+
+The driver could follow it. Its normal mode would keep every check of what it
+reads from media, the journal's order and every crash-safety rule, and a safe
+mode would add the checks above. A caller would choose the mode for each
+mount, as Desk takes its own from the settings disk, and a failed check would
+turn safe mode on for the rest of the session. For now every check runs on
+every mount. Much of the time a normal mode would save goes to work that
+repeats an earlier check, rereads blocks nothing has written since, or
+recomputes inputs that stay fixed for the whole mount, and that work can go
+from every mount with no loss of detection. The choice comes back once those
+repeats are gone and the cost of the checks that remain is measured.
+
 ## Deliberate remaining limits
 
 The current explicitly staged write surface is not completion of the writable
