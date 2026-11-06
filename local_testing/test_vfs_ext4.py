@@ -16508,7 +16508,7 @@ def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pai
     )
     groups = 2
     role_capacity = 4 * groups
-    role_workspace_bytes = role_capacity * 2 * 8
+    role_workspace_bytes = role_capacity * 2 * 8 + groups * 2 * 8
     auth_workspace_bytes = (
         range_workspace_bytes + claim_workspace_bytes + role_workspace_bytes
     )
@@ -31402,7 +31402,10 @@ def test_mutation_role_check_answers_every_static_interval_edge(
     spans it, and the blocks just outside each edge exactly as the scan below
     does; an empty range meets none and a wrapping one counts as meeting one.
     The single and vector role checks refuse a range the table reports and
-    pass one it clears.  Valid descriptors give disjoint intervals, so a
+    pass one it clears, and each group's block bitmap location and flags are
+    the descriptor's.  Asked for in a new epoch, the facts are recorded again
+    alone, and the table waits for its own build.
+    Valid descriptors give disjoint intervals, so a
     synthetic table of unsorted and nested intervals, as corrupt descriptors
     could give, checks the sort and the running greatest end against the
     same scan.
@@ -31445,6 +31448,15 @@ def test_mutation_role_check_answers_every_static_interval_edge(
         if not meets(block, 1)
         and not any(start <= block < start + length for start, length in journal)
     )
+    facts = []
+    for group in range(groups):
+        entry = static["descriptors"][group * layout["descriptor_size"] :]
+        facts.append(
+            (
+                struct.unpack_from("<I", entry, 0x00)[0],
+                struct.unpack_from("<H", entry, 0x12)[0],
+            )
+        )
     # Group 0 holds a superblock copy, so it adds four intervals.
     group_one_bitmap = intervals[4][0]
     last_table_block = intervals[2][0] + table_span - 1
@@ -31478,6 +31490,18 @@ def test_mutation_role_check_answers_every_static_interval_edge(
         "_SRT-VEC-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
         "_SRT-VEC-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
         "_SRT-VEC-CLEAR-IOR 0=",
+        *(
+            f"{group} _SRT-CTX _EXT4-SR-GROUP-FACTS ROT {bitmap} = "
+            f"ROT {flags} = AND AND"
+            for group, (bitmap, flags) in enumerate(facts)
+        ),
+        f"{groups} _SRT-CTX _EXT4-SR-GROUP-FACTS 0=",
+        (
+            "1 _EXT4-MAP-EPOCH +! _EXT4-MAP-EPOCH @ 0 _SRT-CTX "
+            "_EXT4-SR-GROUP-FACTS IF 2DROP _EXT4-SRF-EPOCH @ = "
+            "ELSE DROP FALSE THEN"
+        ),
+        "_EXT4-SR-EPOCH @ _EXT4-MAP-EPOCH @ <>",
     ]
     synthetic_checks = [
         "_SRS-WORK-IOR 0=",

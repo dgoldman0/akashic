@@ -1902,8 +1902,15 @@ answered exactly too. The table is built from the descriptors once per map
 epoch, since only a write can change them, and answers each range with a
 binary search, so a check reads no descriptor and its steps grow with the
 logarithm of the group count. The proof that the primary superblock and
-descriptor homes alias no group's metadata likewise runs once per epoch.
-Mount reserves the table with its claim workspace, four entries a group.
+descriptor homes alias no group's metadata likewise runs once per epoch. The
+build also records each group's block bitmap location and descriptor flags,
+which every descriptor's verification in that epoch gave, and the allocation
+checks read them in place of loading the group's descriptor. The facts keep
+their own epoch, since the intervals also need the journal's witness geometry
+and an allocation check can run before the journal is validated: a check
+that finds them out of date records them alone in one pass over the
+descriptors, and a pass that refuses leaves it loading the one it needs. Mount reserves the table with its claim workspace: four entries
+and two cells of descriptor facts a group.
 
 ### Progress and crash boundaries
 
