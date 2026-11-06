@@ -15780,17 +15780,56 @@ VARIABLE _EXT4-RS-V
     THEN
     _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN _EXT4-PROOF-SCOPE-CLOSE ;
 
+\ A complete reload validates the superblock, groups, backups and orphan
+\ union from blocks outside the journal and builds the context's state from
+\ them.  Every write starts a new map epoch except a journal write on a mount
+\ whose ownership proof stands, which no such block can receive
+\ (vfs-ext4-admission.f, vfs-ext4-jbd2-map.f).  While the epoch a complete
+\ reload of a context finished in still holds, those blocks therefore read
+\ as that reload read them and the state it built stands, so authenticating
+\ the context again reads only the journal.
+VARIABLE _EXT4-AUTH-CTX
+VARIABLE _EXT4-AUTH-EPOCH
+0 _EXT4-AUTH-CTX !
+
+: _EXT4-AUTH-KEEP  ( ctx -- )
+    DUP _EXT4-C.OWNERSHIP + @ -1 = IF
+        _EXT4-AUTH-CTX ! _EXT4-MAP-EPOCH @ _EXT4-AUTH-EPOCH ! EXIT
+    THEN
+    DROP 0 _EXT4-AUTH-CTX ! ;
+
+: _EXT4-AUTH-STANDS?  ( ctx -- flag )
+    DUP 0= IF EXIT THEN
+    DUP _EXT4-AUTH-CTX @ =
+    SWAP _EXT4-C.OWNERSHIP + @ -1 = AND
+    _EXT4-MAP-EPOCH @ _EXT4-AUTH-EPOCH @ = AND ;
+
+: _EXT4-REAUTHENTICATE-JOURNAL  ( ctx -- ior )
+    DUP _EXT4-C.J.STRICT + -1 SWAP !
+    DUP _EXT4-PROOF-SCOPE-OPEN
+    _EXT4-VALIDATE-JOURNAL _EXT4-PROOF-SCOPE-CLOSE ;
+
 : _EXT4-RELOAD-AUTHENTICATED  ( ctx vfs -- ior )
     _EXT4-RS-V ! _EXT4-RS-CTX !
+    0 _EXT4-AUTH-CTX !
     _EXT4-RS-CTX @ _EXT4-C.SB + 2 2 _EXT4-READ-SECTORS ?DUP IF EXIT THEN
     _EXT4-RS-CTX @ _EXT4-RS-V @ _EXT4-VALIDATE-SUPER ?DUP IF EXIT THEN
-    _EXT4-RS-CTX @ _EXT4-AUTHENTICATE-REST ;
+    _EXT4-RS-CTX @ _EXT4-AUTHENTICATE-REST ?DUP IF EXIT THEN
+    _EXT4-RS-CTX @ _EXT4-AUTH-KEEP 0 ;
 
 : _EXT4-RELOAD-STRICT  ( ctx vfs -- ior )
     _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
     _EXT4-RS-CTX @ _EXT4-C.O.ACTIVE + @ IF
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
+    0 ;
+
+\ The strict reload, reading only the journal again while the context's
+\ last complete reload stands.
+: _EXT4-REAUTHENTICATE-STRICT  ( ctx vfs -- ior )
+    OVER _EXT4-AUTH-STANDS? 0= IF _EXT4-RELOAD-STRICT EXIT THEN
+    DROP DUP _EXT4-REAUTHENTICATE-JOURNAL ?DUP IF NIP EXIT THEN
+    _EXT4-C.O.ACTIVE + @ IF EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT THEN
     0 ;
 
 \ ---------------------------------------------------------------------
@@ -16362,7 +16401,11 @@ VARIABLE _EXT4-JPF-AFTER
 \ its exact checkpoint phase, and the fully authenticated pre-union.  It skips
 \ only the public policy refusal.  Cleanup retains its complete preplan here;
 \ insertion uses bounded admission and performs its complete staged proof
-\ later in this same checkpoint preflight.
+\ later in this same checkpoint preflight.  While the context's last complete
+\ reload stands, the certificate binds to the plan it built and only the
+\ journal is read again.
+VARIABLE _EXT4-JPF-STOOD
+
 : _EXT4-RELOAD-STRICT-ORPHAN-PREPLAN  ( writer ctx vfs -- ior )
     _EXT4-JPF-V ! _EXT4-JPF-CTX ! _EXT4-JPF-WRITER !
     _EXT4-JPF-WRITER @ _EXT4-JWR.CP-MODE + @
@@ -16388,14 +16431,17 @@ VARIABLE _EXT4-JPF-AFTER
     _EXT4-JPF-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0= OR IF
         VFS-E-INVALID EXIT
     THEN
-    _EXT4-JPF-CTX @ _EXT4-C.SB + 2 2 _EXT4-READ-SECTORS
-    ?DUP IF EXIT THEN
-    _EXT4-JPF-CTX @ _EXT4-JPF-V @ _EXT4-VALIDATE-SUPER
-    ?DUP IF EXIT THEN
-    -1 _EXT4-JPF-CTX @ _EXT4-C.J.STRICT + !
-    _EXT4-JPF-CTX @ _EXT4-VALIDATE-GROUPS ?DUP IF EXIT THEN
-    _EXT4-JPF-CTX @ _EXT4-VALIDATE-BACKUPS ?DUP IF EXIT THEN
-    _EXT4-JPF-CTX @ _EXT4-AUTHENTICATE-ORPHAN-PLAN ?DUP IF EXIT THEN
+    _EXT4-JPF-CTX @ _EXT4-AUTH-STANDS? DUP _EXT4-JPF-STOOD ! 0= IF
+        0 _EXT4-AUTH-CTX !
+        _EXT4-JPF-CTX @ _EXT4-C.SB + 2 2 _EXT4-READ-SECTORS
+        ?DUP IF EXIT THEN
+        _EXT4-JPF-CTX @ _EXT4-JPF-V @ _EXT4-VALIDATE-SUPER
+        ?DUP IF EXIT THEN
+        -1 _EXT4-JPF-CTX @ _EXT4-C.J.STRICT + !
+        _EXT4-JPF-CTX @ _EXT4-VALIDATE-GROUPS ?DUP IF EXIT THEN
+        _EXT4-JPF-CTX @ _EXT4-VALIDATE-BACKUPS ?DUP IF EXIT THEN
+        _EXT4-JPF-CTX @ _EXT4-AUTHENTICATE-ORPHAN-PLAN ?DUP IF EXIT THEN
+    THEN
     _EXT4-JPF-WRITER @ _EXT4-JWR.CP-MODE + @
     _EXT4-JCPM-ORPHAN-ADD? IF
         _EXT4-JPF-WRITER @ _EXT4-JPF-CTX @
@@ -16406,6 +16452,7 @@ VARIABLE _EXT4-JPF-AFTER
     THEN
     _EXT4-JPF-CTX @ _EXT4-VALIDATE-JOURNAL ?DUP IF EXIT THEN
     _EXT4-JPF-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JPF-STOOD @ 0= IF _EXT4-JPF-CTX @ _EXT4-AUTH-KEEP THEN
     0 ;
 
 : _EXT4-VALIDATE-ROOT  ( ctx -- ior )
@@ -16426,7 +16473,7 @@ VARIABLE _EXT4-JCP-ENTRY-READY
 : _EXT4-JCP-RELOAD-PREFLIGHT  ( -- ior )
     _EXT4-JCP-WRITER @ _EXT4-JWR.CP-MODE + @ DUP
     _EXT4-JCPM-NONE = IF
-        DROP _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-RELOAD-STRICT EXIT
+        DROP _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-REAUTHENTICATE-STRICT EXIT
     THEN
     DUP _EXT4-JCPM-ORPHAN-ADD? IF
         DROP
@@ -16474,10 +16521,11 @@ VARIABLE _EXT4-JCE-GROUP-INODES
     THEN
     0 ;
 
-\ Every staged home reached the medium exactly.  Only a release pass may
-\ hold a cancelled entry, a deletion folded into one included: a tree node
-\ it edited and then freed, whose revoke took its after-image out of the
-\ transaction.
+\ Every staged home reached the medium exactly.  A cancelled entry is a
+\ block the transaction edited and then freed, whose revoke took its
+\ after-image out of the transaction and left no home write: an ordinary
+\ transaction or a release pass, a deletion folded into one included, may
+\ hold one, and the other orphan modes never do.
 : _EXT4-JCP-REQUIRE-RETAINED-META-HOMES  ( -- ior )
     _EXT4-JCP-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
         VFS-E-CORRUPT EXIT
@@ -16494,9 +16542,10 @@ VARIABLE _EXT4-JCE-GROUP-INODES
         ELSE
             _EXT4-JE-CANCELLED =
             _EXT4-JCP-WRITER @ _EXT4-JWR.CP-MODE + @ DUP _EXT4-JCPM-ORPHAN?
-            SWAP _EXT4-JCPM-ORPHAN-DELETE? 0=
+            OVER _EXT4-JCPM-ORPHAN-DELETE? 0=
             _EXT4-JCP-WRITER @ _EXT4-JWR.CP-DATA-MAP-KIND + @
-            _EXT4-JDM-RELEASED = OR AND AND 0= IF
+            _EXT4-JDM-RELEASED = OR AND
+            SWAP _EXT4-JCPM-NONE = OR AND 0= IF
                 VFS-E-CORRUPT EXIT
             THEN
         THEN
@@ -16803,6 +16852,7 @@ VARIABLE _EXT4-JCP-ADD-OFF
     _EXT4-JCP-WRITER @ _EXT4-JWR.CP-MODE + @
     DUP _EXT4-JCPM-NONE = IF
         DROP
+        _EXT4-JCP-REQUIRE-RETAINED-META-HOMES ?DUP IF EXIT THEN
         _EXT4-JCP-CTX @
         _EXT4-AUTHENTICATED-EMPTY-ORPHAN-UNION? 0= IF
             VFS-E-CORRUPT EXIT
@@ -17092,11 +17142,19 @@ VARIABLE _EXT4-JCP-ADD-OFF
     THEN
     \ Context and writer publication are withdrawn before authenticated reload
     \ turns the in-memory active-log view into the empty write-active endpoint.
+    \ The journal release writes only journal blocks, so once the post-home
+    \ reload stands the poststate it proved stands too, and only the journal
+    \ is authenticated again.
     0 _EXT4-JCP-CTX @ _EXT4-C.J.WRITER-CURRENT + !
     0 _EXT4-JCP-CTX @ _EXT4-C.READY + !
-    _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-RELOAD-AUTHENTICATED
-    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
-    _EXT4-JCP-REQUIRE-POSTSTATE ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-AUTH-STANDS? IF
+        _EXT4-JCP-CTX @ _EXT4-REAUTHENTICATE-JOURNAL
+        ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    ELSE
+        _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-RELOAD-AUTHENTICATED
+        ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+        _EXT4-JCP-REQUIRE-POSTSTATE ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    THEN
     _EXT4-JCP-CTX @ _EXT4-VALIDATE-ROOT
     ?DUP IF _EXT4-JCP-FAULT EXIT THEN
     _EXT4-JCP-V @ _EXT4-ATTACHED? 0= IF
@@ -17612,7 +17670,7 @@ VARIABLE _EXT4-EL-WRITER
     _EXT4-EL-CTX @ _EXT4-C.J.CURSOR + !
     _EXT4-JWP-DEACTIVATE-PREFLIGHT _EXT4-EL-PHASE
     _EXT4-FLUSH ?DUP IF EXIT THEN
-    _EXT4-EL-CTX @ _EXT4-EL-V @ _EXT4-RELOAD-STRICT ?DUP IF EXIT THEN
+    _EXT4-EL-CTX @ _EXT4-EL-V @ _EXT4-REAUTHENTICATE-STRICT ?DUP IF EXIT THEN
     _EXT4-EL-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
     _EXT4-EL-CTX @ _EXT4-PREPARE-CLEAR ?DUP IF EXIT THEN
     _EXT4-JWP-DEACTIVATE-RESET _EXT4-EL-PHASE
@@ -18732,6 +18790,9 @@ VARIABLE _EXT4-MF-IOR
         _EXT4-M-CTX @ _EXT4-M-V @
         _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE ?DUP IF EXIT THEN
     THEN
+    \ The orphan plan moved tables without a write, so no reload made
+    \ during the mount stands for the operations that follow it.
+    0 _EXT4-AUTH-CTX !
     _EXT4-M-CTX @ _EXT4-JWR-REBASE-MOUNTED ?DUP IF
         _EXT4-MOUNT-FAIL EXIT
     THEN

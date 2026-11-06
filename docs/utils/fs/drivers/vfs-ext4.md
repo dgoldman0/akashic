@@ -1472,8 +1472,9 @@ the ordinary strict reload and require an authenticated empty orphan union
 both before and after their home writes; they therefore gain no authority from
 a nonempty orphan plan. Sealed orphan `FINAL` and `MORE` modes instead use a
 private pre-home reload that performs the same super, group, backup,
-orphan-union, and journal authentication but replaces the public nonempty-
-policy refusal with an exact writer-certificate comparison. It requires the
+orphan-union, and journal authentication, or the journal's alone while the
+context's last complete reload stands (described below), but replaces the
+public nonempty-policy refusal with an exact writer-certificate comparison. It requires the
 selected record to remain in the completely rebuilt plan, the plan's total and
 per-protocol counts to equal the certified prestate, the raw target identity
 and table location, the selected protocol's raw locator and authority, and the
@@ -1507,12 +1508,18 @@ After that preflight, checkpoint writes each retained active metadata
 after-image to its home block. Ordered data is not rewritten because emission
 made it durable before commit, and revoked/cancelled entries grant no home-write
 authority. All metadata home writes cross one volume flush, followed by a
-strict reload and root validation, before any journal block or reservation can
-be reused. Both the post-home proof and the final post-reset proof remain
-ordinary strict reloads. Every orphan transaction requires the certified exact
-decrement at both boundaries, while `FINAL` additionally requires the
-authenticated empty-orphan predicate. Thus neither `FINAL` nor `MORE`
-admission can survive a mismatched first home-write boundary.
+strict reload, a reread of every retained metadata home that requires its
+complete image and CRC, and root validation, before any journal block or
+reservation can be reused. Every mode rereads its homes this way, a generic
+transaction's directory and inode blocks included. Every orphan transaction
+requires the certified exact decrement at that boundary, while `FINAL`
+additionally requires the authenticated empty-orphan predicate. Thus neither
+`FINAL` nor `MORE` admission can survive a mismatched first home-write
+boundary. The journal release that follows writes only journal blocks, so the
+final post-reset proof authenticates the journal again and validates the root
+while the poststate the post-home proof established stands; when the
+post-home reload no longer stands, the post-reset proof repeats it in full,
+poststate included.
 
 Each of those reloads reauthenticates the mount from media, walking only the
 inode maps that have not passed a validation in the current map epoch (see
@@ -1527,6 +1534,22 @@ last successful build for the same context, and the map and uniqueness table
 still have that build's CRC32C, the reload keeps the snapshot instead of
 rebuilding it entry by entry. Any changed input, or any change to the
 workspace, rebuilds it from media.
+
+A complete reload validates the superblock, the groups, the backups and the
+orphan union from blocks outside the journal and builds the context's state
+from them. Every write starts a new map epoch except a journal write on a
+mount whose ownership proof stands, which none of those blocks can receive, so
+the driver records the context and the epoch each complete reload finishes
+in. While that epoch holds, those blocks read as the reload read them and the
+state it built stands, and authenticating the context again runs only the
+journal validation. Three reloads authenticate this way when they can: a
+checkpoint's pre-home reload after a transaction that wrote no ordered data
+and no superblock, its post-reset proof, and the first reload of a
+deactivation. The generic pre-home reload then checks the standing orphan
+union, and the orphan modes' pre-home reload compares the writer's
+certificate with the standing plan. Mount finish drops the record, because
+the orphan plan moves to its runtime table there without a write, so the
+first transaction after a mount reloads in full.
 
 Journal release preserves the mounted write-active state. It reuses the active
 guard `G` as an `AKG1`-qualified `AKR1` reset anchor, publishes and flushes the
@@ -1565,8 +1588,9 @@ Public unmount applies the writer state rather than silently discarding it:
 not bypass a checkpoint, a busy writer state, clean landing, final proof, or
 failure quarantine.
 
-Dirty-empty `IDLE` deactivation begins with a flush, strict reload, and root
-proof. It then uses the existing `AKR1` protocol: W1 installs an invalid-byte
+Dirty-empty `IDLE` deactivation begins with a flush, a strict reload that
+authenticates only the journal while the last checkpoint's reload stands, and
+a root proof. It then uses the existing `AKR1` protocol: W1 installs an invalid-byte
 reset-anchor preseed; W2 installs the exact valid `AKE1`-qualified anchor; W3
 installs the witnessed empty primary; W4 writes the checksummed clean ext4
 superblock with `RECOVER` and `ORPHAN_PRESENT` clear; W5 installs the standard

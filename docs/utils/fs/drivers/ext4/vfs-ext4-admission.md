@@ -63,8 +63,9 @@ and a full area evicts its least recently used copy. A miss reads from media,
 so the area's size limits only how much repetition is removed, never what a
 proof can read. The facade opens scopes around the owner scan and around each
 mount authentication. Every write through `_EXT4-WRITE-SECTORS` also adds one
-to `_EXT4-MAP-EPOCH`, which the facade's validated maps compare, so a map
-validation that passed before a write is walked again after it.
+to `_EXT4-MAP-EPOCH`, which the facade's validated maps and standing reloads
+compare, so a map validation or reload that passed before a write is repeated
+after it.
 `_EXT4-BYTES=?` and `_EXT4-BYTES-ZERO?` test whole aligned cells and use bytes
 only for an unaligned head, the tail, or two spans whose alignments differ.
 
@@ -74,8 +75,9 @@ an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
 `_EXT4-IO-EXPECTED` and `_EXT4-IO-COMPLETED` preserve write-attempt evidence
 consumed by later durability code. The descriptor unit reads
 `_EXT4-PS-GENERATION` so that a descriptor verified inside a scope is
-forgotten when the scope's copies are. The facade's validated maps read
-`_EXT4-MAP-EPOCH`, and the journal-map unit's writes keep it. They are implementation state, not
+forgotten when the scope's copies are. The facade's validated maps and
+standing reloads read `_EXT4-MAP-EPOCH`, and the journal-map unit's writes
+keep it. They are implementation state, not
 public API, and remain documented facade coupling rather than a backwards
 dependency into admission. They are outside the bounded CREATE/HTree context
 pilot; a later feature must justify any separate lifetime migration.
