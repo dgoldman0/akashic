@@ -526,8 +526,6 @@ VARIABLE _EXT4-EV-PHYS
 VARIABLE _EXT4-EV-BLOCK
 VARIABLE _EXT4-EV-STORED
 VARIABLE _EXT4-EV-J
-VARIABLE _EXT4-EV-OTHER
-VARIABLE _EXT4-EV-OTHER-LEN
 VARIABLE _EXT4-EV-INDEX
 VARIABLE _EXT4-MAP-VALIDATION-LIMIT
 
@@ -565,6 +563,70 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
         _EXT4-EV-PHYS @ = IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
         1 _EXT4-EV-J +!
     REPEAT 0 ;
+
+\ A plain validation keeps the physical ranges of a leaf's earlier entries
+\ sorted by first block.  Each was checked against those before it when it
+\ arrived, so they are disjoint and their ends rise with their starts: a new
+\ range meets one of them exactly when it meets the last that starts before
+\ it or the first that starts at or after it.  A leaf holds at most as many
+\ entries as the largest block admits.
+_EXT4-MAX-BLOCK 12 - 12 / CONSTANT _EXT4-LEAF-ENTRY-MAX
+CREATE _EXT4-EV-SEEN _EXT4-LEAF-ENTRY-MAX 2* CELLS ALLOT
+VARIABLE _EXT4-EV-SEEN-COUNT
+VARIABLE _EXT4-EV-SEEN-LOW
+VARIABLE _EXT4-EV-SEEN-HIGH
+
+: _EXT4-EV-SEEN-SLOT  ( index -- address )  2* CELLS _EXT4-EV-SEEN + ;
+
+\ How many earlier ranges start before FIRST.  Blocks are usually allocated
+\ forward, so a range past the last one ranks after them all at once.
+: _EXT4-EV-SEEN-RANK  ( first -- rank )
+    _EXT4-EV-SEEN-COUNT @ DUP IF
+        DUP 1- _EXT4-EV-SEEN-SLOT @ 2 PICK U< IF NIP EXIT THEN
+    THEN
+    _EXT4-EV-SEEN-HIGH ! 0 _EXT4-EV-SEEN-LOW !
+    BEGIN _EXT4-EV-SEEN-LOW @ _EXT4-EV-SEEN-HIGH @ U< WHILE
+        _EXT4-EV-SEEN-LOW @ _EXT4-EV-SEEN-HIGH @ + 2/
+        2DUP _EXT4-EV-SEEN-SLOT @ SWAP U< IF
+            1+ _EXT4-EV-SEEN-LOW !
+        ELSE
+            _EXT4-EV-SEEN-HIGH !
+        THEN
+    REPEAT
+    DROP _EXT4-EV-SEEN-LOW @ ;
+
+\ Whether the entry's range meets the earlier range in slot INDEX.
+: _EXT4-EV-SEEN-MEETS?  ( index -- flag )
+    _EXT4-EV-SEEN-SLOT DUP @ SWAP CELL+ @
+    _EXT4-EV-PHYS @ _EXT4-EV-LEN @ URANGE-OVERLAP? 0= IF DROP TRUE THEN ;
+
+\ Refuse an entry whose range meets an earlier entry's in this leaf, then
+\ add its range in order.
+: _EXT4-EV-SCAN-EARLIER  ( -- ior )
+    _EXT4-EV-INDEX @ 0= IF
+        _EXT4-EV-PHYS @ _EXT4-EV-SEEN !
+        _EXT4-EV-LEN @ _EXT4-EV-SEEN CELL+ !
+        1 _EXT4-EV-SEEN-COUNT ! 0 EXIT
+    THEN
+    _EXT4-EV-SEEN-COUNT @ _EXT4-EV-INDEX @ <>
+    _EXT4-EV-SEEN-COUNT @ _EXT4-LEAF-ENTRY-MAX U< 0= OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-EV-PHYS @ _EXT4-EV-SEEN-RANK
+    DUP IF
+        DUP 1- _EXT4-EV-SEEN-MEETS? IF
+            DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    DUP _EXT4-EV-SEEN-COUNT @ U< IF
+        DUP _EXT4-EV-SEEN-MEETS? IF
+            DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    DUP _EXT4-EV-SEEN-SLOT DUP 2 CELLS +
+    _EXT4-EV-SEEN-COUNT @ 3 PICK - 2* CELLS CMOVE>
+    _EXT4-EV-SEEN-SLOT _EXT4-EV-PHYS @ OVER ! _EXT4-EV-LEN @ SWAP CELL+ !
+    1 _EXT4-EV-SEEN-COUNT +! 0 ;
 
 : _EXT4-VALIDATE-EXTENT-LEAF-ENTRY  ( index -- ior )
     _EXT4-EV-INDEX !
@@ -611,21 +673,7 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
     \ block an earlier entry of this leaf holds, so only a plain validation
     \ scans.
     _EXT4-OWN-MODE @ IF 0 EXIT THEN
-    0 _EXT4-EV-J !
-    BEGIN _EXT4-EV-J @ _EXT4-EV-INDEX @ < WHILE
-        _EXT4-EV-IN @ 12 _EXT4-EV-J @ 12 * + + DUP
-        8 + L@ _EXT4-EV-OTHER !
-        _EXT4-EXTENT-LEN@ _EXT4-EV-OTHER-LEN !
-        _EXT4-EV-OTHER @ _EXT4-EV-OTHER-LEN @
-        _EXT4-EV-PHYS @ _EXT4-EV-LEN @
-        URANGE-OVERLAP? 0= IF
-            DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        1 _EXT4-EV-J +!
-    REPEAT 0 ;
+    _EXT4-EV-SCAN-EARLIER ;
 
 \ Validate one resident extent header and every entry it owns.  External
 \ children and every data block in a leaf must agree with the allocation

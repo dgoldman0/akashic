@@ -1696,8 +1696,9 @@ inode through the ordinary complete validators, which claim each block they
 authenticate in a claim map of one bit per block, so the walk refuses a block
 claimed twice, by two owners or twice by one. Those claims also stand in for
 the validators' scan of a node's earlier entries for a repeated block, which
-only a plain validation, outside any claim or release scope, runs. An
-external xattr block may be
+only a plain validation, outside any claim or release scope, runs. That scan
+keeps a leaf's earlier ranges sorted, so each entry is compared with its two
+neighbours in place of every entry before it. An external xattr block may be
 shared, so the walk lists every reference to one; each listed block is then
 claimed once and must carry an `h_refcount` equal to the inodes that name it.
 Each group's block bitmap, or for a `BLOCK_UNINIT` group the one the group

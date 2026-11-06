@@ -8,6 +8,7 @@ import hashlib
 import json
 import mmap
 import os
+import random
 import re
 import shutil
 import struct
@@ -31544,6 +31545,75 @@ def test_mutation_role_check_answers_every_static_interval_edge(
         ],
     )
     _assert_emitted(output, "EXT4-STATIC-ROLE-TABLE-EXACT")
+
+
+def test_plain_leaf_scan_refuses_exactly_the_ranges_a_full_scan_does(
+    tmp_path: Path,
+) -> None:
+    """A plain validation refuses a leaf entry whose range meets an earlier one.
+
+    The scan keeps the earlier ranges sorted and compares the new range with
+    its two neighbours.  Seeded sequences of ranges, overlapping, nested,
+    adjacent and disjoint, in rising, falling and mixed order, must refuse at
+    exactly the entry where a comparison with every earlier entry first finds
+    a shared block, with the data-map detail, and accept every entry before it.
+    """
+    generator = random.Random(20261106)
+    sequences: list[list[tuple[int, int]]] = []
+    for order in ("rising", "falling", "mixed"):
+        for _ in range(6):
+            ranges = []
+            for index in range(generator.randrange(3, 40)):
+                first = generator.randrange(1, 4000)
+                ranges.append((first, generator.randrange(1, 9)))
+            if order == "rising":
+                ranges.sort()
+            elif order == "falling":
+                ranges.sort(reverse=True)
+            sequences.append(ranges)
+    sequences.append([(10, 5), (15, 5), (5, 5), (20, 1), (9, 1)])
+    sequences.append([(100, 50), (160, 2), (150, 10), (99, 1), (149, 1)])
+
+    checks: list[str] = []
+    expected_refusals = 0
+    for ranges in sequences:
+        accepted: list[tuple[int, int]] = []
+        for index, (first, count) in enumerate(ranges):
+            meets = any(
+                first < start + length and start < first + count
+                for start, length in accepted
+            )
+            call = f"{index} {first} {count} _PLS-SCAN"
+            if meets:
+                checks.append(f"{call} _PLS-REFUSED?")
+                expected_refusals += 1
+                break
+            checks.append(f"{call} 0=")
+            accepted.append((first, count))
+    assert expected_refusals > 10
+    assert len(checks) - expected_refusals > 100
+    blank = tmp_path / "plain-leaf-scan.img"
+    blank.write_bytes(bytes(4 * 512))
+    output = run_forth(
+        blank,
+        [
+            (
+                ": _PLS-SCAN ( index first count -- ior ) _EXT4-EV-LEN ! "
+                "_EXT4-EV-PHYS ! _EXT4-EV-INDEX ! _EXT4-EV-SCAN-EARLIER ;"
+            ),
+            (
+                ": _PLS-REFUSED? ( ior -- flag ) DUP VFS-IOR-REASON "
+                "VFS-R-CORRUPT = SWAP VFS-IOR-DETAIL EXT4-D-DATA-MAP = AND ;"
+            ),
+            *_forth_accumulated_conjunction("_PLS-ALL", checks),
+            (
+                '_PLS-ALL @ IF ." EXT4-PLAIN-LEAF-SCAN-EXACT" ELSE '
+                '." EXT4-PLAIN-LEAF-SCAN-CHECK " '
+                "_PLS-ALL-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-PLAIN-LEAF-SCAN-EXACT")
 
 
 def test_ordered_data_freshness_takes_only_free_unshared_blocks(
@@ -85774,8 +85844,12 @@ def test_ext4_manual_range_proofs_use_checked_shared_algebra() -> None:
     assert claim.count("URANGE-VALID?") == 1
     assert map_alias.count("URANGE-OVERLAP?") == 1
     assert "IF 2DROP FALSE TRUE EXIT THEN" in map_alias
-    assert extent.count("URANGE-OVERLAP?") == 1
+    assert extent.count("URANGE-OVERLAP?") == 0
     assert extent.count("URANGE-VALID?") == 1
+    assert extent.rstrip().endswith("_EXT4-EV-SCAN-EARLIER")
+    seen = word_body("_EXT4-EV-SEEN-MEETS?")
+    assert seen.count("URANGE-OVERLAP?") == 1
+    assert "URANGE-OVERLAP? 0= IF DROP TRUE THEN" in seen
     assert "_EXT4-MUTATION-MAP-ALIASES? 0= IF" in extent
     assert "_EXT4-MUTATION-MAP-ALIASES? 0= IF" in extent_node
     assert "DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT" in extent
