@@ -553,6 +553,12 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
     _EXT4-EV-PHYS @ EXT4-D-DATA-MAP _EXT4-EV-CTX @
     _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN
     _EXT4-EV-PHYS @ 1 _EXT4-OWN-NOTE ?DUP IF EXIT THEN
+    \ A claim or release scope has already refused a child an earlier entry
+    \ names: each earlier entry claimed or released its child in the same
+    \ scope, and the note above refuses a block claimed or released twice
+    \ with the detail the scan below would give.  Only a plain validation
+    \ scans.
+    _EXT4-OWN-MODE @ IF 0 EXIT THEN
     0 _EXT4-EV-J !
     BEGIN _EXT4-EV-J @ _EXT4-EV-INDEX @ < WHILE
         _EXT4-EV-IN @ 12 _EXT4-EV-J @ 12 * + + 4 + L@
@@ -601,6 +607,10 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
             THEN
         THEN
     THEN
+    \ As for an index entry, a claim or release scope has already refused any
+    \ block an earlier entry of this leaf holds, so only a plain validation
+    \ scans.
+    _EXT4-OWN-MODE @ IF 0 EXIT THEN
     0 _EXT4-EV-J !
     BEGIN _EXT4-EV-J @ _EXT4-EV-INDEX @ < WHILE
         _EXT4-EV-IN @ 12 _EXT4-EV-J @ 12 * + + DUP
