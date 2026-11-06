@@ -845,7 +845,10 @@ commit is currently refused rather than classified as a torn tail. Unified
 legacy/modern orphan discovery runs after replay and strict reload. Its exact
 union count drives one arena-backed location plan, and failed-mount retries
 reuse a sufficient retained allocation rather than consume another monotonic
-arena allocation. The authenticated-empty modern branch completes recovery
+arena allocation. The plan's build keeps the counts taken in the current map
+epoch, since only a write changes the orphan file's blocks or a legacy
+chain's inodes, and counts the modern file again after one. The
+authenticated-empty modern branch completes recovery
 metadata only when both protocols are empty, without changing an orphan inode,
 orphan-file block, or legacy link. Recovery mutation admits the orphan-file
 inode itself only with an extent map of depth zero or one. The generic parser

@@ -9930,7 +9930,14 @@ VARIABLE _EXT4-URR-IOR
 \ Authenticate and publish exact union counts without allocating the transient
 \ discovery plan.  Mount can therefore finish all persistent allocations
 \ before beginning its rollback-owned tail.
+\ Counts taken in the current map epoch stand: only a write changes the
+\ orphan file's blocks or a legacy chain's inodes.
+VARIABLE _EXT4-OC-CTX
+VARIABLE _EXT4-OC-EPOCH
+0 _EXT4-OC-CTX !
+
 : _EXT4-AUTHENTICATE-ORPHAN-COUNTS  ( ctx -- ior )
+    0 _EXT4-OC-CTX !
     _EXT4-OP-CTX !
     0 _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
     0 _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
@@ -9956,20 +9963,25 @@ VARIABLE _EXT4-URR-IOR
         DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
     _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
+    _EXT4-OP-CTX @ _EXT4-OC-CTX ! _EXT4-MAP-EPOCH @ _EXT4-OC-EPOCH !
     0 ;
 
-\ Build the exact retained plan from authenticated counts.  Reprepare and
-\ recount the modern file because intervening journal validation may replace
-\ the shared inode cache; a changed slot count cannot reuse preplan sizing.
+\ Build the exact retained plan from authenticated counts.  Reprepare the
+\ modern file because intervening journal validation may replace the shared
+\ inode cache.  Counts from an earlier epoch are taken again, and a changed
+\ slot count cannot reuse their sizing; counts of the current epoch stand.
 : _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN  ( ctx -- ior )
     DUP _EXT4-OP-CTX ! 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
     _EXT4-OW-COUNT !
     _EXT4-OP-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
-    _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
-    _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
-    _EXT4-OW-COUNT @ <> IF
-        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    _EXT4-OP-CTX @ _EXT4-OC-CTX @ =
+    _EXT4-OC-EPOCH @ _EXT4-MAP-EPOCH @ = AND 0= IF
+        _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
+        _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
+        _EXT4-OW-COUNT @ <> IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
     THEN
     _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @
     _EXT4-OP-CTX @
