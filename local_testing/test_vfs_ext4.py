@@ -85767,9 +85767,9 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
         "_EXT4-S32@": 6,
         "_EXT4-I-BLOCK-ZERO-FROM?": 0,
         "_EXT4-DECODE-SPECIAL": 1,
-        "_EXT4-RESTAMP-INODE": 14,
+        "_EXT4-RESTAMP-INODE": 15,
         "_EXT4-SET-INODE-MTIME-CTIME": 8,
-        "_EXT4-SET-INODE-CTIME": 7,
+        "_EXT4-SET-INODE-CTIME": 9,
         "_EXT4-ENCODE-I-BLOCKS": 4,
     }
     for service, count in expected_facade_calls.items():
