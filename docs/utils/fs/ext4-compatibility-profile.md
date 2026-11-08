@@ -2302,13 +2302,10 @@ claimed, and this checkpoint does not close the deletion vertical.
 
 The public `MKDIR` slice uses the same provisional-object VFS contract as
 CREATE. Its root-owned, non-setgid, no-xattr parent may be an authenticated one-
-block linear directory, a depth-zero HTree, or the singleton depth-one HTree
-emitted by root growth. Indexed insertion requires existing slack in the hash-
-selected checksummed leaf and binds the complete leaf permutation, root, route,
-and optional sole DX node across cold, dry, and live passes. The HTree topology,
-parent map, size, and sector count remain immutable. The parent link count must
-be from 2 through 64999. A full selected indexed leaf returns `VFS-E-NOSPC`;
-MKDIR never converts, splits, or grows the parent. Inherited ACL or setgid
+block linear directory or an HTree at level zero or one. It inserts through
+the directory insert that CREATE and LINK share, described in the driver
+document, which takes a block's slack or grows the parent as the kernel does.
+The parent link count must be from 2 through 64999. Inherited ACL or setgid
 policy, non-root ownership, broader maps, lazy inode-table initialization, and
 an exhausted parent link count refuse without approximation.
 
@@ -2434,14 +2431,9 @@ reauthenticates its inode locator and generation, complete current map, cache
 projection, inline and external xattrs, ownership, flags, and link count. The
 target may be nonempty and open. The destination parent may be the target's
 current directory or a different directory. It must be a root-owned admitted
-one-block linear directory, an authenticated depth-zero HTree, or the singleton
-depth-one HTree emitted by root growth. Indexed insertion requires existing
-slack in the selected checksummed leaf and binds the complete leaf permutation,
-live hash policy, route, root, and, at depth one, the sole DX node across cold,
-dry, and live passes. The HTree root, optional DX node, extent map, other leaves,
-directory size and sector count, and allocation state remain immutable. A full
-selected indexed leaf returns `VFS-E-NOSPC`; LINK never splits or allocates.
-Every parent requires an absent destination name, no setgid or xattr state, and
+one-block linear directory or an authenticated HTree at level zero or one,
+and the name goes in through the directory insert that CREATE and MKDIR share,
+which grows a full parent as the kernel does. Every parent requires an absent destination name, no setgid or xattr state, and
 unique ownership of the selected mutable block. Nonregular targets, immutable
 or append-only targets, non-root ownership, and an exhausted link count remain
 gated rather than approximated.

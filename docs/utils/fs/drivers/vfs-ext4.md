@@ -34,13 +34,18 @@ checkpointed; `VFS-WRITE-EXACT` composes a larger request from them and makes
 no cross-callback atomicity promise. The broader 1/2/4 KiB and
 128/256-byte-inode forms remain available to
 read and recovery paths; 2/4 KiB and 128-byte-inode mutation await equivalent
-qualification. The staged surface additionally provides atomic empty-file
-`CREATE` in authenticated one-block linear-directory slack, existing depth-zero
-HTree leaf slack, or by converting a full admitted one-block linear parent
-directly to a canonical two-leaf depth-zero HTree. A full selected leaf in an
-existing depth-zero HTree may also split into one old and one newly allocated
-leaf while the root retains an entry slot and the admitted parent extent map
-can attach the new EOF block. Its `TRUNCATE` sets a linked regular file's
+qualification. The staged surface additionally provides atomic `CREATE`,
+`MKDIR`, and `LINK` through one directory insert. The parent is a one-block
+linear directory or an HTree at indirect level 0 or 1 with any number of
+index nodes and leaves, and its own extent map may have any depth. The name
+takes slack in its block, and a full block grows the directory as the
+kernel's `make_indexed_dir` and `ext4_dx_add_entry` do: a full linear block
+converts to a depth-zero HTree with two leaves, a full leaf splits, a full
+level-zero root grows to level one, and a full level-one node splits under a
+root with room. A full root over a full node at level one answers
+`VFS-E-NOSPC`, since a third level needs `largedir`. New directory blocks come
+from the general allocator and enter the parent's extent tree through the
+general insertion, which may split or deepen it. Its `TRUNCATE` sets a linked regular file's
 size to any value: a shrink releases every block past the new EOF at any
 extent depth and zeroes the new EOF block's tail, and a growth leaves a hole
 after zeroing the old EOF block's tail. A release too large for one
@@ -66,15 +71,10 @@ Regular files may move within or across parents, and the canonical empty
 directory may move across parents. A same-leaf record that already fits is
 rewritten in place; other selected-leaf edits use an aggregate compact-fit
 rebuild without splitting, growth, or HTree-key edits. Roots, optional
-DX nodes, extent maps, siblings, and parent geometry remain immutable. The
-same surface now provides a bounded atomic `MKDIR`: it allocates
-one inode and one globally unowned block, builds a canonical checksummed one-
-block `.`/`..` directory, and inserts its typed name into an authenticated one-
-block linear parent or existing slack in a depth-zero or singleton depth-one
-HTree. It updates parent links, free-space, and `used_dirs` accounting in one
-exact `7/0/0` through `9/0/0` transaction. The indexed form mutates only the
-selected leaf; its HTree root, optional DX node, extent map, other leaves,
-parent size, and parent sector count remain immutable. It also provides bounded
+DX nodes, extent maps, siblings, and parent geometry remain immutable. `MKDIR`
+also allocates the new directory's one block, a canonical checksummed
+`.`/`..` block, and updates the parent's link count and the group's
+`used_dirs` count in the same transaction. The surface also provides bounded
 empty-directory `RMDIR` for that exact canonical child shape. Removal atomically
 splices the typed parent entry from an authenticated linear, depth-zero HTree,
 or singleton depth-one HTree parent. The indexed form mutates only the selected
@@ -83,13 +83,9 @@ size, and parent sector count immutable. Removal
 decrements the parent link and group `used_dirs` count, frees the child inode
 and data block, and revokes the freed directory-block home under exact
 `6/0/1` through `8/0/1` credit; the canonical fixture uses `7/0/1`.
-The staged binding also provides bounded hard `LINK` for an authenticated
-root-owned regular inode and an admitted destination parent: either a one-block
-linear directory or an existing depth-zero or singleton depth-one HTree with
-authenticated slack in the selected checksummed leaf. It adds the typed
-directory record, increments the target link count, and updates target and
-parent timestamps under exact deduplicated `2/0/0` or `3/0/0` credit, without
-allocation, ordered data, revoke, or orphan state.
+`LINK` adds a name for an authenticated root-owned regular inode and raises
+its link count in the same transaction; it allocates only when the parent
+grows, and never creates ordered data, revoke, or orphan state.
 The staged binding now includes qualified atomic no-replacement `RENAME` for
 regular files and one cross-parent empty-directory slice. Regular-file
 same-parent rename keeps the in-place rewrite fast path when the source record
@@ -113,30 +109,6 @@ The current worktree also provides focused-qualified, staged-only scalar
 `SETATTR` for a linked regular file. A nonempty request can select `MODE`,
 `UID`, `GID`, `ATIME`, `MTIME`, and `CTIME` under one exact `1/0/0`
 inode-table transaction.
-Regular-file CREATE also admits existing depth-zero HTree parents when an
-authenticated hash interval already contains insertion slack, and it can
-insert into slack below the exact singleton depth-one HTree produced by root
-growth. The latter binds the checksummed route node in the operation record,
-authenticates its complete leaf permutation, and leaves the root, node, extent
-map, allocation metadata, size, and sector count unchanged. A full linear
-parent conversion allocates two globally unowned blocks, hashes every live and
-pending name under bound primary-super authority, builds two packed leaves and
-a checksummed root, and updates the parent's inline extent map and exact
-size/sector accounting in the same transaction. A full selected indexed leaf
-may instead allocate one globally unowned block, repack the selected records
-and pending name across two checksummed leaves, insert a separator into the
-depth-zero HTree root, and extend either an inline depth-zero extent map or the
-external leaf named by a singleton resident depth-one root. The HTree root and
-governing extent node must each retain any entry slot the edit needs. When the
-depth-zero root is saturated, regular CREATE can instead allocate a DX node
-before the split leaf and publish the exact 11-home depth-one transition.
-`LINK` and `MKDIR` may reuse authenticated existing slack in an admitted depth-
-zero or singleton depth-one HTree. `LINK` does not allocate; `MKDIR` retains its
-one child-inode and one child-directory-block allocation. Indexed parent-leaf
-splitting/growth, inheritance beyond the explicit root-owned non-setgid
-envelope, and broader directory shapes remain gated. Exact one-short credit and unrelated-
-owner alias cases refuse without writes or flushes. A committed tear in the new
-DX-node home replays all 11 afterimages before a write-free byte-stable remount.
 The driver also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
@@ -207,36 +179,33 @@ initialized-bitmap policy and retains all later filesystem authority,
 recovery, transaction, mutation, and VFS-operation policy. Consumers should
 not require these internal units directly.
 
-For namespace cross-phase evidence and home preplanning, the facade defines one
-8,992-byte binding-owned record. Its 8,264-byte authority/evidence body contains
-the common 47 insertion cells, 24-byte hash-authority snapshot, four 1,024-byte
-block snapshots, and one 256-byte inode snapshot; RENAME adds 21 scalar cells,
-one destination-leaf snapshot, independent new-parent root and DX-node
-snapshots, and one new-parent inode snapshot. Record-scoped `OP` and
-`OWNER-CTX` cells follow that evidence. The 728-byte tail contains one
-entry-count cell and 30 enum-derived `{ role, journal kind, home }` entries;
-storage is derived from the complete semantic role universe rather than a
-fixed maximum for one current topology. The extra root-growth evidence is one
-explicit admission cell plus a derived topology flag and the new DX node's exact home,
-group, bitmap home, and descriptor home. Singleton depth-one mutation adds the
-base depth, route-node home, and exact DX-node snapshot; neither path adds a
-second home collection. At begin the record binds exactly one of `INSERT`,
-`UNLINK`, `RMDIR`, or `RENAME` and the owning ext4 context. Namespace planning
-and staging receive the record address explicitly; there is no ambient alias.
-Seal carries that operation and context with the ordered vector and performs
-the complete bounds, journal-exclusion, uniqueness, and intentional-alias
-audit. Dry and live replanning require the same operation and owner context,
-then reauthenticate and resolve every expected role, kind, home, and exact role
-count before staging; the final audit reconciles first-seen distinct-home order
-against the transaction tables. Indexed and linear-to-HTree conversion
-evidence becomes immutable after sealing. Ordinary
-nonconversion linear insertion may refresh its bounded parent-inode and
-directory work buffers after each phase's reauthentication, preserving the
-established refusal behavior, but a sealed ordinary plan cannot become indexed
-or acquire new conversion authority. Each return after record ownership is
-established clears the complete record after any required committed cache
-projection. A failed ownership check does not dereference or clear an untrusted
-pointer; it returns a typed failure without touching that storage.
+For namespace cross-phase evidence and home planning, the facade defines one
+binding-owned record. Its authority/evidence body holds 17 shared cells and
+the 24-byte hash-authority snapshot, then, sized by the staged write
+geometry, the directory, root, and level-one node snapshots, the insert's
+node work block, its record map and that map's hash-sorted copy, the
+level-one walk's block-reference bitmap, and one 256-byte inode snapshot.
+RENAME adds 21 scalar cells, one destination-leaf snapshot, independent
+new-parent root and DX-node snapshots, and one new-parent inode snapshot.
+Record-scoped `OP` and `OWNER-CTX` cells follow that evidence. The tail holds
+one entry-count cell and `{ role, journal kind, home }` entries: one for each
+semantic role, and for an insert's growth the format bounds of its three
+repeatable families, the directory blocks it appends, the nodes of the
+parent's extent tree, and the bitmaps and descriptor pages its allocations
+stage. At begin the record binds exactly one of `INSERT`, `UNLINK`, `RMDIR`,
+or `RENAME` and the owning ext4 context. Namespace planning and staging
+receive the record address explicitly; there is no ambient alias. Seal
+carries that operation and context with the ordered vector and performs the
+complete bounds, journal-exclusion, uniqueness, and intentional-alias audit.
+An insert derives its vector from a measuring pass, as the directory-insert
+section describes. UNLINK, RMDIR, and RENAME bind theirs in their cold plans,
+and their dry and live replanning reauthenticate and resolve every expected
+role, kind, home, and exact role count before staging. Every live pass's
+final audit reconciles first-seen distinct-home order against the
+transaction tables. Each return after record ownership is established clears
+the complete record after any required committed cache projection. A failed
+ownership check does not dereference or clear an untrusted pointer; it returns
+a typed failure without touching that storage.
 
 The XU/XR paths use the following exact sealed vectors in transaction
 first-publication order; every unmarked entry has journal kind
@@ -507,8 +476,8 @@ writer-arena 8 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 ```
 
 The common base binding context is 15,568 bytes. The staged constructor also
-reserves the facade's 8,992-byte namespace-plan record from `fs-arena`, not the
-dedicated writer arena. The base-context-plus-record reservation is 24,560
+reserves the facade's 13,448-byte namespace-plan record from `fs-arena`, not the
+dedicated writer arena. The base-context-plus-record reservation is 29,016
 contiguous bytes; other VFS and mount allocations remain separate. The record
 is the exact allocation immediately following the base context and must remain
 inside the arena's allocated prefix. Allocation occurs only after authenticated
@@ -1185,8 +1154,7 @@ boundaries. This changes neither the ordered authority vector nor its sealed
 checkpoint representation.
 
 `_EXT4-JTX-STAGE-ALLOCATE-RANGE` is the inverse accounting primitive for one
-run of free blocks inside a single group, and `_EXT4-JTX-STAGE-ALLOCATE-BLOCK`
-is its one-block form. It requires the run in bounds, outside every
+run of free blocks inside a single group. It requires the run in bounds, outside every
 journal/static metadata role, and clear in both the checksum-authenticated raw
 bitmap and the transaction's effective bitmap. For a `BLOCK_UNINIT` group the
 raw bitmap is the one the group stands for, built as described under run
@@ -1206,15 +1174,11 @@ until reload. Any failure after the first replacement aborts and scrubs the
 transaction.
 
 This primitive deliberately does not choose storage or make a file map point
-at it. `_EXT4-JTX-FIND-FREE-RUN` selects storage for the general write: the
-first free run of at most a requested length in the transaction's own view of
-the bitmaps, searched as described under run allocation below, with a zero
-count when no group has a free block. `_EXT4-FIND-FREE-BLOCK` and its
-excluding form remain the read-only planners of the namespace operations,
-which choose their blocks before staging. They visit each initialized group
-once from a locality group, skip `BLOCK_UNINIT` groups, and require the same
-clear-count agreement; the excluding form withholds one planned candidate
-without pretending its raw bit is set.
+at it. `_EXT4-JTX-FIND-FREE-RUN` selects storage for every allocating write,
+the general write and the directory insert alike: the first free run of at
+most a requested length in the transaction's own view of the bitmaps,
+searched as described under run allocation below, with a zero count when no
+group has a free block.
 
 The enclosing operation must still perform its ownership checks, ordered
 data, map edit, `i_blocks` accounting, and publication in the same
@@ -1932,324 +1896,196 @@ rewrites ordered data. A committed write publishes the same state into the
 shared vnode before generic cursor accounting, so every hard link sees one
 EOF, and the caller's bytes leave the driver's block buffer on every return.
 
-### Atomic CREATE slices
+### Directory insert
 
-The staged binding now advertises `VFS-CAP-CREATE` and installs `_EXT4-CREATE`
-in operation slot 9. The ordinary binding remains read-only and retains a null
-CREATE slot. `VFS-MKFILE?` first loads the parent directory and creates a
-provisional cache dentry/vnode; the ext4 callback either commits the on-disk
-namespace operation and publishes its stable inode identity or returns an
-error, allowing the VFS to remove that provisional object.
+The staged binding advertises `VFS-CAP-CREATE`, `VFS-CAP-MKDIR`, and
+`VFS-CAP-LINK` and installs `_EXT4-CREATE`, `_EXT4-MKDIR`, and `_EXT4-LINK` in
+operation slots 9, 10, and 17; the ordinary binding keeps those slots null.
+All three run one directory insert. Generic VFS builds the provisional cache
+object before the callback, and the callback either commits the namespace
+change and publishes its stable identity or returns an error that lets VFS
+remove the object.
 
-Every admitted parent has root UID/GID, no setgid bit, and no inline or
-external xattrs. A linear parent has flags exactly `EXTENTS`, one initialized
-mapped block, and a complete checksummed dirent chain. Existing slack takes the
-original insertion path. If that authenticated block has no usable record,
-regular-file CREATE instead converts it atomically to `EXTENTS|INDEX` with one
-DX root and two packed leaves. Regular-file CREATE also admits an existing
-depth-zero HTree whose complete logical map and DX leaf permutation
-authenticate. It inserts into authenticated slack or splits a full selected
-leaf while the root retains an entry slot and the qualified parent map can
-attach one new EOF block. A singleton depth-one root may insert into an
-authenticated slack leaf after binding its root entry, DX-node home and
-snapshot, complete node fanout, selected route, and leaf snapshot across cold,
-dry, and live passes. If a saturated depth-zero root must split, regular CREATE
-allocates a DX node followed by the new leaf and emits the root, map, and
-allocation afterimages in the same exact transaction. Depth-one CREATE leaf
-splitting, every LINK or MKDIR path requiring conversion, splitting, or growth,
-default-ACL inheritance, and non-root credential policy remain gated; none is
-silently approximated.
+Every admitted parent has root UID/GID, no setgid bit, no inline or external
+xattrs, `extra_isize` 32, project 0, and a zero inode tail past byte 160.
+CREATE and MKDIR insert into the current directory, as generic `VFS-MKFILE?`
+and `VFS-MKDIR` create there. A linear parent has flags exactly `EXTENTS` and
+one block; a linear directory of several blocks stays readable, and writes to
+it refuse with the write-policy detail. An HTree parent has flags
+`EXTENTS|INDEX`, half-MD4 hashing under the superblock's signed or unsigned
+flag, and indirect level 0 or 1; other hash versions refuse with the
+write-policy detail. The directory's own extent map may have any depth. A
+depth-zero map's sector count must equal its blocks', and a deeper map's must
+equal its blocks and nodes.
 
-Root-growth authority is an explicit admission cell in the operation-owned
-record. The production wrapper sets it only for regular CREATE immediately
-after beginning the record; LINK and MKDIR leave it clear. Planning freezes the
-full root, selected leaf, parent inode, and
-extent-map preimages; selects the new DX node first and the split leaf second;
-plans logical EOF blocks in that order; and derives 13 semantic roles for an
-inline map or 14 for an external map. The same-group external-map fixture
-deduplicates those 14 roles to 11 exact metadata homes. A sealed replan must
-rebind both allocation candidates and every role before it may build the new
-DX node, packed leaf, depth-one root, extent-map edit, and two-block accounting
-afterimages. The production callback activates, emits, checkpoints, unmounts,
-and passes external oracles for all 11 homes. A fresh mount then performs the
-qualified six-home depth-one slack CREATE. A representative committed W28 tear
-in the new DX node leaves three earlier homes landed, replays all 11 homes on a
-fresh mount, passes `e2fsck`, and is followed by a zero-write, byte-identical
-stable remount. A ten-home writer profile cannot admit the exact 11-home plan,
-and an allocated unrelated inode cannot alias the HTree root, which the
-mount's ownership proof refuses; both refusals leave the cache and complete
-media image unchanged.
-The accumulated seven-test source-JIT capstone passes those public, recovery,
-refusal, depth-one follow-on, and external-oracle paths sequentially in 926.68
-host seconds. The final depth-one mutation completes in 1,449,054,483 of its
-2,400,000,000-step guard.
+The cold plan authenticates the parent once. It validates the linear block,
+or the HTree root and then every index node and leaf the root names, each by
+checksum, header, and entry vector or dirent chain. Every live name in every
+leaf is hashed and must lie in the interval its route gives it, and the new
+name is looked for in every leaf, so a duplicate anywhere returns
+`VFS-E-EXISTS`. A level-zero root must name every other block of the
+directory once. At level one the walk marks each block it reaches in a bitmap,
+refuses a block named twice, and requires the root, its nodes, and their
+entries to account for the whole directory. The walk selects the leaf the new
+name's hash routes to, as the kernel's `dx_probe` does: at each level, the
+last entry whose hash, continuation bit included, is at most the name's.
+Before an HTree parent's names or a converted block's are hashed, the hash
+seed, default version, and `s_flags` of the checksummed live primary
+superblock must match the mounted copy.
 
-Indexed admission binds the checksummed live primary hash seed, default hash
-version, and full `s_flags` to the mounted superblock cache. It hashes and
-validates every live name in every leaf against the exact even/continuation
-interval, rejects dot records and malformed deleted records, and detects the
-new name anywhere in the tree even when it is not in the initial lookup leaf.
-The first interval-eligible leaf with sufficient slack is selected in root
-entry order. If no eligible leaf has slack, the first eligible full leaf is the
-split target; that branch currently admits the bound seeded half-MD4 DX policy.
-Cold planning then binds the exact parent inode location and bytes, HTree root,
-route, selected leaf, target hash, and either the insertion
-tuple or complete stable split plan; every dry and live pass must reproduce
-them. Slack insertion uses a scoped complete-map audit to prove the selected
-leaf occurs exactly once as directory data and never as an external extent
-node. Split admission instead validates every preimage extent role with no
-privileged target. The mount's ownership proof gives the root, old leaf, and
-external extent leaf the parent alone and leaves the clear candidate leaf
-unowned. Admitted indexed sector accounting
-is exact for an inline depth-zero map or a singleton resident depth-one root
-naming one checksummed external extent leaf. The last extent must end at
-logical EOF and must either coalesce with the newly selected block or leave an
-entry slot for it; wider valid maps remain an explicit later policy rather
-than being mis-accounted.
+The name takes the first record with room in its block, splitting a live
+record's slack or reusing an unused record, as `add_dirent_to_buf` does. When
+no record has room, the insert grows the directory as `make_indexed_dir` and
+`ext4_dx_add_entry` do:
 
-Linear conversion binds the same checksummed live-primary seed, default hash
-version, and full `s_flags` across cold measurement, dry staging, and live
-staging. It snapshots the exact source block, hashes every non-dot live name
-plus the pending name with signed or unsigned seeded half-MD4 as selected by
-that authority, performs a stable unsigned major/minor sort, and chooses the
-most byte-balanced feasible boundary. An equal-major boundary emits an odd
-continuation separator. The shared plan holds 85 records: a 1 KiB checksummed
-linear source has a format-derived maximum of 83 non-dot records, while a
-packed indexed leaf can contribute 84 records plus the pending name. These are
-format bounds, not fixture name-count limits. A linear source with no non-dot
-live entry can validly produce an empty first leaf represented by one deleted
-1012-byte record.
+- A full linear block becomes a depth-zero HTree. The block keeps `.` and
+  `..`, with `..` spanning the rest of the block as the root's first records,
+  and gains the root information and two entries; the records after `..`
+  split by hash across two new leaves at logical blocks 1 and 2. The root
+  records the superblock's default hash version, which must be half-MD4.
+  Conversion needs `.` at offset 0 with a 12-byte record and `..` at offset
+  12, where the root keeps them, and another layout refuses with the
+  write-policy detail.
+- A full leaf splits into itself and a new leaf, whose entry goes into the
+  leaf's index block after the full leaf's.
+- When that index block is a full level-zero root, the root first grows to
+  level one: its entries move to a new index node, and it keeps one entry
+  naming that node.
+- When it is a full level-one node under a root with room, the node first
+  splits: it keeps the first half of its entries, a new node takes the rest,
+  and the root gains the new node's entry, whose hash is the first moved
+  entry's.
+- When the root is full at level one as well, the insert returns
+  `VFS-E-NOSPC`, since a third level needs `largedir`.
 
-The allocator selects two distinct clear blocks through the ordinary
-geometry walk and its exclusion-aware second-candidate form. Their exact
-groups, bitmap homes, and primary-GDT homes are baseline authority. Before
-staging, one complete map audit proves the old one-block parent map; the
-mount's ownership proof gives the old root the parent alone and leaves both
-clear candidates unowned. Conversion refuses any ambient map-audit or
-journal-protocol scope.
+A split follows `do_split`. Records move to the new leaf from the highest hash
+down while the moved bytes, each record counted by its rec_len, with half the
+next record's, stay within half the block; a leaf whose sizes defeat that rule
+splits its records in half by count. The last record of a converted block
+also counts the bytes `.` and `..` leave to it, as in the copy that
+`make_indexed_dir` splits. The first moved hash separates the leaves, with
+the continuation bit when the record before it has the same hash. The kept
+records stay in block order and the moved ones follow in hash order, each
+packed to its used length, and the new name joins the side its hash falls on.
+A side without room for the name, which very long names can leave, returns
+`VFS-E-NOSPC`, as does a block with fewer than two live records.
 
-The old directory block becomes the checksummed DX root; the two candidates
-become independently checksummed leaves. The parent is rewritten to size
-3,072 bytes and six 512-byte sectors with one, two, or three resident extents
-according only to logical and physical adjacency. The operation allocates the
-two leaf blocks and the new file inode in one metadata-only transaction. Exact
-credit is the deduplicated topology of primary superblock, participating GDT
-and bitmap pages, new/parent inode-table pages, old root, and both leaves:
-`8/0/0` through `12/0/0`, never a fixture-fixed nine-home reservation.
+New blocks append at the directory's end, a new index node before the new
+leaf. Each comes from the general allocator, at the block that would continue
+the directory's last extent or else from the start of the parent's group, and
+enters the parent's extent tree through the general insertion, which may
+extend an extent, add one, split nodes, or deepen the tree. A directory
+without `largedir` stays below 2 GiB, and a larger result refuses with the
+write-policy detail. Admission requires `dir_index` and `metadata_csum`, so
+every leaf ends in its 12-byte checksum record and every index block in its
+8-byte tail, and the insert derives every size and entry limit from the block
+size.
 
-Inode selection starts in the parent group and wraps across runtime geometry.
-It accepts only initialized inode groups, verifies the bitmap checksum and its
-free count, skips reserved inode numbers, proves the bitmap and inode-table
-homes have their unique descriptor roles, and rechecks the selected clear bit.
-The scan counts set bits across the canonical exact group-inode view, derives
-the complete logical clear count for descriptor reconciliation, and searches
-only from the one-based `s_first_ino` cutoff. Raw and transaction-effective
-singleton rechecks plus the private after-image set use the same exact bound.
-Invalid checked geometry is bounds corruption and a selected bit that becomes
-set is a transaction conflict; the mutation preserves final-group padding
-while ext4's bitmap CRC still covers the format-defined `IPG / 8` bytes.
-Allocation advances the free inode's prior generation modulo 32 bits with zero
-mapped to one, updates `bg_free_inodes_count`, `bg_itable_unused`, and
-`s_free_inodes_count`, and restamps the bitmap, descriptor, and superblock
-checksums. Groups requiring `INODE_UNINIT`/inode-table initialization remain an
-explicit later slice.
+A measuring pass then stages the complete insert into a transaction that the
+writer profile's metadata capacity bounds, binds each metadata home to the
+role it plays, and aborts the transaction. Staging names its own homes: the
+entry's inode-table block (`_XC-HR-INODE`), the parent's
+(`_XC-HR-PARENT-INODE`), the block that takes or splits the name
+(`_XC-HR-PARENT-DIRECTORY`), the routed level-one node and the root
+(`_XC-HR-DIRECTORY-NODE`, `_XC-HR-DIRECTORY-ROOT`), the new directory's block
+(`_XC-HR-MKDIR-DIRECTORY`), each appended directory block
+(`_XC-HR-DIRECTORY-GROWTH`), and the inode descriptor, inode bitmap, and
+primary superblock (`_XC-HR-INODE-GDT`, `_XC-HR-INODE-BITMAP`,
+`_XC-HR-PRIMARY-SUPER`). Every other home is the primary superblock, a block
+bitmap or descriptor page that block allocation staged (`_XC-HR-ALLOCATION`),
+or a node of the parent's extent tree (`_XC-HR-DIRECTORY-MAP`), and those
+nodes must be exactly the ones the tree edit allocated or first edited. The
+growth, map, and allocation roles are families that may bind several homes.
+The certificate's entries follow the order in which the transaction first
+stages their homes: the entry's inode, the parent's record when its map stays,
+the parent's existing directory blocks, the new directory's block with its
+allocation, each appended block with its allocation and map edits, the
+parent's record when its map grows, and the inode allocation. The plan is
+sealed, a clean journal is activated, and the live pass stages the insert
+again under exactly the certificate's credits. Every binding staging makes
+must name its sealed home, the transaction must hold exactly the sealed homes
+in order, and the map proof runs before emission. On a clean mount the
+measuring pass runs that proof too, so a refusal leaves the medium untouched
+before activation, and a profile too small for the measured transaction
+returns `VFS-E-NOSPC` without a write.
 
-The new 256-byte inode is an empty root-owned mode-0666 regular file with one
-link, an initialized empty depth-zero extent header, `extra_isize=32`, trusted-
-clock atime/mtime/ctime/crtime, and a full metadata checksum. The parent keeps
-its topology and link count but receives the same trusted mtime/ctime. Dirent
-insertion either splits authenticated slack from a live record or consumes a
-free record while preserving a valid trailing free record, then restamps the
-directory checksum.
+While no write has started a new map epoch since the cold plan, the bytes of
+the authenticated directory blocks stand, and staging takes them from the
+plan's snapshots; once activation has started one, staging rereads each block
+and requires its snapshot. The entry's and the parent's inode-table blocks are
+read in each pass and must hold their authenticated records. The home-set
+proof walks the parent's map as it stood before the transaction, once, with
+the transaction's homes published: each existing directory block and tree node
+the transaction rewrites must be mapped exactly once, and no allocated or
+accounting home at all. The walk claims the old map when the transaction
+changes it or the map has external nodes, and its claims count the blocks and
+nodes a deeper map's sector count must equal. A map the transaction keeps
+gives the claims back; a changed map keeps them for the map check, which
+proves that the parent's map, and a new directory's, change by exactly the
+blocks the transaction allocates. With the mount's ownership proof, no other
+owner holds any home.
 
-Non-growing edits are one no-data/no-revoke transaction over the deduplicated
-set of primary superblock, primary GDT page, inode bitmap, new inode-table
-page, parent inode-table page, and the selected directory leaf: at most exact
-`6/0/0` credit and fewer homes when pages coincide. An indexed insertion does
-not rewrite its HTree root, other leaves, external extent node, or block bitmap.
-A growing indexed edit performs a stable unsigned `(major, minor, input-order)`
-sort over the full selected leaf plus the pending name and chooses a nonempty,
-byte-balanced split. It repacks and restamps the old leaf and one new leaf,
-inserts the continuation-aware separator immediately after the selected root
-entry, restamps the depth-zero root, and updates the parent map, size,
-`i_blocks`, and timestamps. Exactly one directory block is allocated, so on the
-qualified 1 KiB geometry parent size rises by 1,024 bytes, `i_blocks` rises by
-two 512-byte sectors, and free blocks fall by one. Credit is the deduplicated
-set of the ordinary inode-allocation homes plus old leaf, new leaf, HTree root,
-block-allocation homes, and the external extent leaf when the parent uses the
-singleton depth-one map. The canonical external-map topology measures exactly
-ten homes; a caller profile containing only nine refuses with `NOSPC` before
-activation or media writes.
+Each insert is one metadata-only transaction with no ordered data and no
+revoke. Its checkpoint uses the ordinary mode: strict reauthentication before
+the home writes and the retained-home check after them, which depend on no
+directory shape, and recovery replays its homes like any other transaction's.
+A committed transaction whose checkpoint fails keeps the operation's success
+and its cache projection, records the checkpoint error in `V.LAST-IOR`, and
+quarantines the writer; the next mount replays every home.
 
-A clean mount dry-stages the complete edit before journal activation; live
-staging reauthenticates every locator, emits, checkpoints synchronously, and
-only then publishes inode number, generation, metadata, parent times, and
-free-inode accounting into the VFS cache. Public qualification creates inode
-33 both as `/created.txt` in the linear root and as
-`/fixture/indexed/new.txt` in existing leaf 1357. The indexed case pins the
-six home writes, target hash and route, untouched topology, `debugfs` result,
-and read-only e2fsprogs 1.47.4 `e2fsck`. A missing trusted clock rolls the
-provisional VFS object back before writer creation or media I/O.
+#### CREATE
 
-Operation-specific crash qualification covers both sides of commit authority.
-A W7 torn journal descriptor returns an I/O error, removes the provisional VFS
-object, leaves all six ext4 homes and free-inode accounting unchanged, and
-requires no transaction-home replay. A committed W22 directory-home tear
-returns CREATE success, retains inode 33 and the complete cache projection,
-records the checkpoint error in `V.LAST-IOR`, and quarantines the live mount.
-The next ordinary read-only mount replays all six metadata homes, resolves the
-file with its exact timestamps and identity, and passes `e2fsck`; the following
-mount is byte-stable and performs zero writes.
+CREATE allocates an empty root-owned mode-0666 regular inode with one link,
+an empty depth-zero extent root, `extra_isize` 32, trusted-clock
+atime/mtime/ctime/crtime, an advanced nonzero generation, and a full inode
+checksum. Inode selection starts in the parent's group and wraps across the
+groups. It accepts only initialized inode groups, verifies the bitmap checksum
+and its free count, skips reserved inode numbers, proves that the bitmap and
+inode-table homes have their unique descriptor roles, and rechecks the
+selected clear bit. Allocation updates the inode bitmap,
+`bg_free_inodes_count`, `bg_itable_unused`, and `s_free_inodes_count` and
+restamps their checksums; groups that need inode-table initialization refuse
+with the write-policy detail. An insert into slack stages the new
+inode-table block, the parent's, the parent's block, the inode descriptor and
+bitmap, and the primary superblock, six homes at most. A missing trusted
+clock refuses before the writer is touched.
 
-The indexed crash boundary tears selected leaf 1357 in sector one at W22,
-after the new and parent inode-table homes have landed. The public namespace
-retains commit authority and the live mount is quarantined. Recovery replays
-the same six after-images while root 1355, leaves 1359/1361, extent node 1365,
-and block bitmap 259 remain byte-exact; a second mount is write-free and
-byte-stable. Checksum-valid misbucketed names, a duplicate in a nonrouted
-continuation leaf, a full eligible leaf under a saturated HTree root, and
-inexact `i_blocks` all refuse without a transaction or cache/accounting
-publication.
+#### MKDIR
 
-Linear-conversion qualification starts from block 1345 with five live non-dot
-names and creates inode 18 for `new.txt`. The stable half-MD4 order splits
-three names into each leaf, using blocks 1351 and 1352 with separator
-`0x95d3b562`; the parent has a singleton old-root extent followed by one
-length-two extent for the adjacent leaves. The exact nine checkpoint homes are
-child inode table W23, parent inode table W24, root W25, the two leaves
-W26/W27, block bitmap W28, GDT W29, primary superblock W30, and inode bitmap
-W31. Raw after-images, public cache/accounting state, `debugfs`, and pinned
-read-only e2fsprogs 1.47.4 `e2fsck` all agree. The clean journey uses
-1,552,268,603 of its 1.6-billion-step guard.
+MKDIR's parent must have a link count from 2 through 64999, so the new
+subdirectory cannot overflow ext4's 65000-link bound. The new inode is a
+root-owned mode-0755 directory with link count two, size one block, one
+depth-zero extent at logical block zero, exact `i_blocks` sector accounting,
+and otherwise CREATE's fields. Its block holds `.` with a 12-byte record, `..`
+spanning to the checksum tail, and the tail; it comes from the general
+allocator, from the start of the new inode's group, and its allocation is
+staged after the parent's existing blocks. The parent's entry has file type 2
+and the parent gains one link; the group's `bg_used_dirs_count` rises by one.
+Default-ACL or setgid inheritance and non-root credential policy refuse with
+the write-policy detail.
 
-A nonadjacent qualification leaves only block 1351 available in group zero and
-selects block 8451 in group one. It produces three singleton parent extents and
-ten exact homes, including both block bitmaps, while sharing the primary GDT
-page. It completes in 1,673,299,481 of the checked-in 1.70-billion guard and
-passes the same external oracles. The 6,841-block unwritten ballast extent
-that leaves only the group-zero singleton available accounts for the
-additional measured work. In the canonical nine-home case, a published ambient
-map-audit target for candidate 1351 returns `BUSY` before range preparation
-and is preserved. After that scope is explicitly cleared, a profile with one fewer metadata slot refuses
-with `NOSPC` after exact topology measurement and performs no write. A sector
-tear on that case's second leaf at W27 retains committed CREATE authority after
-four complete checkpoint homes; the fault journey uses 1,376,638,284 steps,
-recovery replays all nine after-images in 209,835,075, and the following
-51,001,379-step mount is byte-stable and write-free. The existing indexed-slack
-and linear-slack CREATE regressions remain green at 880,000,604 and 772,991,247
-steps respectively under their unchanged 1.2-billion guards.
+#### LINK
 
-Existing-index full-leaf qualification starts from directory inode 27 with
-root 1355 containing three of 123 available depth-zero entries, a full selected
-leaf at 1357, and a singleton resident depth-one extent root naming external
-extent leaf 1365. `CREATE new.txt` selects clear block 1364 as logical block
-four, splits and restamps the selected records across old and new leaves,
-inserts the new separator into root 1355, and updates the checksummed external
-extent leaf. Parent size advances from 4,096 to 5,120 bytes and `i_blocks` from
-ten to twelve 512-byte sectors. Free blocks and free inodes each fall by one.
-The exact ten checkpoint homes at W24 through W33 are child inode table 283,
-parent inode table 281, old leaf 1357, new leaf 1364, HTree root 1355, external
-extent leaf 1365, block bitmap 259, primary GDT 2, primary superblock 1, and
-inode bitmap 267. The clean journey completes in 1,412,826,248 steps under its
-1.45-billion guard. A nine-metadata profile remeasures the exact ten-home
-topology, returns `NOSPC`, and performs no transaction or media write. A
-committed W27 new-leaf tear retains CREATE success and the public cache
-projection; recovery replays all ten after-images before a byte-stable,
-write-free remount. Independent raw checks, pinned `debugfs`, and read-only
-e2fsprogs 1.47.4 `e2fsck` accept both clean and recovered images.
-
-### Initial atomic MKDIR slice
-
-The staged binding now advertises `VFS-CAP-MKDIR` and installs `_EXT4-MKDIR`
-in operation slot 10. The ordinary binding remains read-only with a null MKDIR
-slot. Generic `VFS-MKDIR` attaches an empty provisional directory before the
-callback. An ext4 refusal leaves generic VFS to remove that object; commit
-authority publishes the stable inode, one-block directory projection, parent
-link and timestamps, and free-space accounting before generic VFS increments
-its inode count.
-
-The parent uses the CREATE slice's root-owned, non-setgid, no-xattr insertion
-envelope. It may be a one-block checksummed linear directory, an authenticated
-depth-zero HTree, or the singleton depth-one HTree emitted by root growth.
-Indexed insertion requires existing slack in the selected checksummed leaf and
-binds the complete leaf permutation, live hash policy, route, root, and, at
-depth one, the sole DX node across cold, dry, and live passes. The root,
-optional DX node, extent map, other leaves, parent size, and parent sector count
-remain immutable. Its on-disk link count must be from 2 through 64999 so the
-new subdirectory cannot overflow ext4's 65000-link bound. A full selected
-indexed leaf returns `VFS-E-NOSPC`; MKDIR never converts, splits, or grows the
-parent. Default-ACL or setgid inheritance, non-root credential policy, broader
-directory maps, and groups requiring inode-table initialization remain typed
-refusal boundaries.
-
-Inode selection retains CREATE's initialized-group bitmap, inode-table,
-generation, descriptor, and primary-superblock authentication. MKDIR also
-selects a clear data-block bit from runtime initialized geometry. The complete
-parent-map audit proves that the selected linear block or indexed leaf occurs
-exactly once in that parent, and the mount's ownership proof gives it the
-parent alone and leaves the clear child candidate unowned. Static-metadata,
-journal, bitmap, descriptor, superblock, and inode-table aliases are rejected
-separately. Dry staging performs that audit before journal activation, and
-live staging repeats it and recaptures the complete parent authority plus
-candidate from current media.
-
-The new inode is a root-owned mode-0755 directory with link count two, size one
-filesystem block, one depth-zero initialized extent at logical block zero,
-exact `i_blocks` sector accounting, `extra_isize=32`, an advanced nonzero
-generation, trusted atime/mtime/ctime/crtime, and a full inode checksum. Its
-new checksummed directory block contains `.` with a 12-byte record, `..`
-covering the remaining usable space, and the metadata-checksum tail. The
-parent receives a file-type-2 dirent, one additional link, and the same
-trusted mtime/ctime. Allocation sets the inode and block bitmap bits,
-decrements group/global free-inode and free-block counts, increments
-`bg_used_dirs_count`, updates `bg_itable_unused`, and repairs every affected
-checksum.
-
-All state changes are one no-data/no-revoke transaction. Deduplication derives
-exact `7/0/0` through `9/0/0` credit from inode-table and primary-GDT page
-sharing. The parent-directory role binds the selected leaf for indexed MKDIR;
-the root, optional DX node, extent map, and other leaves are authenticated
-immutable inputs rather than transaction homes. The canonical linear-root
-fixture consumes `8/0/0`: child inode-table block 283, parent inode-table block
-275, parent directory block 1299, child directory
-block 1364, inode bitmap 267, block bitmap 259, primary GDT block 2, and
-primary superblock 1. That linear success path validates the cache projection, raw
-inode and extent, canonical dirents, allocation bits, group/global counters,
-link counts, checksums, and exact checkpoint order, then passes pinned
-e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck` plus a zero-write byte-stable
-ordinary remount.
-
-Indexed-MKDIR happy-path qualification now exercises existing slack in both a
-depth-zero parent and the singleton depth-one parent produced by root growth.
-Both preserve the same exact nine-role certificate and eight distinct
-canonical homes. A combined full-selected-leaf test proves that indexed LINK
-and MKDIR each return exact `VFS-E-NOSPC` with complete public/cache rollback,
-scrubbed operation authority, no storage writes or flushes, and byte-identical
-media. The indexed namespace-insertion draft boundary closes compositionally
-against the established indexed selected-leaf/root-growth replay evidence and
-the operation-specific linear LINK/MKDIR crash matrices; neither operation adds
-a journal role or recovery branch. Indexed LINK/MKDIR splitting and growth
-remain gated.
-
-The established linear-parent refusal/recovery qualification covers a missing
-trusted clock, a caller profile containing only seven metadata
-homes, and a checksum-valid `used_dirs` count exceeding the
-group's allocated inode count each refuse without activation, media mutation,
-or cache drift. A W7 descriptor tear returns the precommit I/O error, removes
-the provisional directory, leaves both allocation bits and every ext4 home
-old, and requires no home replay. At W25, the committed child-directory home
-tears after public success: the complete directory/cache projection remains
-published, the checkpoint error is retained in `V.LAST-IOR`, and the live
-writer is quarantined. Recovery replays all eight canonical homes; pinned
-`e2fsck` accepts both recovery branches, and each following mount is byte-
-stable and write-free. The linear focused success journey consumes 1,054,460,044
-runtime steps under its existing 1.20-billion-step watchdog.
+LINK adds a name for an authenticated root-owned regular inode on the staged
+geometry. Its identity, generation, map, inode-table home, inline and external
+xattrs, cache projection, timestamps, flags, and zero deletion time are
+checked in the cold plan, and its record must hold in both passes. Its on-disk
+link count must be from 1 through 64999, and the callback-visible provisional
+count the exact incremented value. Reserved or orphan inodes and nonregular,
+immutable, append-only, deleted, or saturated targets refuse; an open target
+remains admissible because every dentry and descriptor shares its vnode. The
+destination parent need not be the current directory, its cache must be
+loaded, and the target and parent must be different inodes. The transaction
+raises the target's link count and ctime and inserts one file-type-1 record;
+it allocates only when the parent grows. Success publishes the target ctime,
+the parent's times and any growth, one more dentry reference and link, and one
+more VFS inode count.
 
 ### Bounded empty-directory RMDIR
 
 The staged binding advertises `VFS-CAP-RMDIR` and installs `_EXT4-RMDIR` in
 operation slot 12; the ordinary binding retains a null slot. Admission is the
-exact root-owned mode-0755 directory produced by the bounded MKDIR slice:
+exact root-owned mode-0755 directory MKDIR produces:
 link count two, one initialized depth-zero logical-zero extent, size one
 filesystem block, exact sector accounting, `extra_isize=32`, no external ACL,
 project ID, index flag, or post-160 inode state, and canonical checksummed
@@ -2319,81 +2155,6 @@ noncanonical empty child, an open reference, and hostile third-inode aliases of
 either the parent or child directory home. The clean linear RMDIR journey
 measures 1,016,967,358 steps and its stable remount 42,878,737 under the
 unchanged 1.20-billion runtime watchdog.
-
-### Bounded hard LINK
-
-The staged binding advertises `VFS-CAP-LINK` and installs `_EXT4-LINK` in
-operation slot 17; the ordinary binding remains read-only with a null LINK
-slot. Generic `VFS-LINK` constructs a provisional dentry that shares the target
-vnode and increments `VN.NLINK` and `VN.DREFS` before callback dispatch. It
-attaches that dentry and increments `V.ICOUNT` only after callback success.
-Generic prerequisite commit `1f688d1` also rejects a namespace-detached target
-or parent before dispatch and makes callback refusal restore both provisional
-counts, the dentry, and reclaimable tail name-pool capacity.
-
-The admitted target is a root-owned regular inode on authenticated 1 KiB/
-256-byte-inode geometry. Its stable identity, generation, complete current map,
-inode-table home, inline and external xattr forms, cache projection, timestamps,
-mutable flags, and zero deletion time are revalidated during both dry and live
-staging. Its old on-disk link count must be from 1 through 64999, while the
-callback-visible provisional cache count must be the exact incremented value
-from 2 through ext4's 65000 bound. Reserved or orphan inodes and nonregular,
-immutable, append-only, deleted, or saturated targets refuse. An open regular
-target remains admissible because every dentry and descriptor shares the same
-vnode.
-
-The destination parent is independently reauthenticated through the existing
-root-owned, non-setgid directory-insertion envelope. It may be the qualified
-one-block linear parent, an authenticated depth-zero HTree, or the singleton
-depth-one HTree emitted by root growth. Indexed insertion requires existing
-slack in the selected checksummed leaf and binds the complete leaf permutation,
-live hash policy, route, root, and, at depth one, the sole DX node across cold,
-dry, and live passes. The root, optional DX node, extent map, directory size and
-sector count, and allocation state remain immutable. A full selected indexed
-leaf returns `VFS-E-NOSPC`; LINK never splits or allocates. Every parent requires
-a loaded cache, an absent destination name, root ownership, no setgid or xattrs,
-and unique ownership of the selected mutable block. The target and parent inode
-identities must differ; the parent need not be the current directory.
-
-Dry and live staging each authenticate the target inode, parent inode, and
-parent directory block before retaining after-images; for indexed LINK the
-third block is the selected leaf. The HTree root, optional DX node, extent map,
-and other leaves are authenticated immutable inputs, not transaction homes. The
-transaction increments and restamps only the target inode, restamps the parent
-inode, and inserts and restamps one file-type-1 directory entry. Target size,
-mtime, atime, generation, map, `i_blocks`, xattrs, allocation state, and all
-free-space and orphan accounts remain unchanged. The exact deduplicated homes
-are acquired in target-inode-table, parent-inode-table, and parent-directory
-order, giving `2/0/0` when both inode records share a table block and `3/0/0`
-otherwise. On the canonical same-parent fixture, the shared target/parent inode-
-table home is W16 and the directory home is W17. The distinct-root fixture
-writes each of the three homes once in target, parent, directory order.
-
-Complete success publishes the target ctime, parent mtime/ctime, one additional
-dentry reference and link, and one additional VFS inode count while leaving
-`V.VCOUNT`, allocation counts, and every open descriptor unchanged. A
-precommit callback error lets the generic VFS discard the complete provisional
-object. Once commit authority exists, a later checkpoint error instead returns
-public LINK success, keeps the new dentry attached, retains the structured
-diagnostic in `V.LAST-IOR`, and quarantines the writer for recovery.
-
-Five focused LINK tests close the original linear envelope. Clean same-parent
-linking qualifies the shared vnode, open-FD continuity, exact cache counts,
-pinned e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck`, and a byte-stable
-write-free ordinary remount. A W7 descriptor tear proves complete provisional
-rollback and zero home replay. A committed W17 directory-home tear keeps the
-public link and diagnostic, then replays both homes before a stable remount. A
-distinct-root link qualifies exact three-home ordering, external inspection,
-and stable remount. The fifth test proves zero-write refusal for a missing
-clock, a one-metadata-credit profile, a nonregular target, and link-count
-saturation.
-
-The first indexed-LINK happy-path qualification reuses existing slack in
-admitted depth-zero and singleton depth-one parents. It preserves the exact
-three-role target-inode, parent-inode, selected-leaf plan, performs no
-allocation, and leaves the HTree root, optional DX node, extent map, other
-leaves, and accounting immutable. This milestone does not qualify indexed LINK
-leaf splitting/growth or its refusal and crash/replay matrix.
 
 ### RENAME
 
@@ -2576,7 +2337,7 @@ Every indexed rebuild starts from sealed, checksummed authority and restamps
 only the selected after-image or after-images. It performs no allocation,
 split, growth, or HTree interval-key repair. The root, optional DX node,
 complete extent map, unselected leaves, parent size, and parent sector count
-remain immutable. The shared 8,992-byte plan seals independent old- and
+remain immutable. The shared namespace plan seals independent old- and
 new-parent shape, locator, route, root, node, inode, and selected-leaf authority
 across cold, dry, and live planning. Filesystem hash parameters remain one
 shared authenticated baseline, while each name's computed hash is bound to its
@@ -2611,8 +2372,10 @@ the already-qualified indexed authority and generic sealed-home replay; this
 extension claims no cloned crash, refusal, external-tool, or stable-remount
 matrix.
 
-Same-parent directory moves, indexed leaf splitting or growth, HTree-key
-mutation, and deeper or multi-node HTree shapes remain gated. Indexed
+Same-parent directory moves and HTree-key mutation remain gated. RENAME
+inserts its new name with its own slack-only edit, so a full destination
+block returns `VFS-E-NOSPC`, and it admits only depth-zero and singleton
+depth-one HTree parents. Indexed
 insertion, UNLINK, RMDIR, and this RENAME extension now draft-close the
 namespace/deletion vertical. TRUNCATE is general, as described below,
 including through an indexed parent's name. The linked-regular-file scalar SETATTR slice is
@@ -3108,7 +2871,9 @@ The ratchet order is:
    transactions, and lazily initialized groups;
 3. (merged into item 2);
 4. build shared inode allocation and directory insertion, then expose the
-   first bounded `CREATE` slice (completed in the current worktree);
+   first bounded `CREATE` slice (completed in the current worktree); the
+   shared directory insert described above has since replaced the bounded
+   CREATE, MKDIR, and LINK paths with one insert that grows its parent;
 5. retain general single-transaction `TRUNCATE`, which has replaced the
    same-retained-block shrink and the inline depth-zero release, and close the
    first nonfinal regular-
@@ -3116,23 +2881,18 @@ The ratchet order is:
    allocation-free regular inode, including descriptor-retained nonfinal
    unlink and orphan-backed closed/open final-link lifetime handling (completed
    in the current worktree);
-6. retain bounded `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link
+6. retain `MKDIR` and bounded `RMDIR`, including `.`/`..`, parent/child link
    counts, inode/block allocation and release, directory accounting, and
    child-block revoke authority (completed in the current worktree);
-7. retain bounded hard `LINK` and no-victim `RENAME`, including regular-file
+7. retain hard `LINK` and bounded no-victim `RENAME`, including regular-file
    same-parent in-place/compacted forms, regular-file cross-parent canonical
    remove/append mutation, and canonical cross-parent empty-directory link
    transfer plus `..` rewrite (completed in the current worktree);
-8. retain atomic one-block linear-to-HTree conversion and indexed full-leaf
-   mutation under a depth-zero root with entry capacity; use the completed
-   bounded planner and public live path to qualify one representative committed
-   HTree root-growth recovery cut;
-   public root growth, representative committed replay, stable remount, and
-   singleton depth-one CREATE plus its focused credit/owner boundaries are
-   complete; existing-slack indexed `LINK` and `MKDIR` are admitted for depth-
-   zero and singleton depth-one parents. Their happy paths at both depths,
-   shared full-leaf refusal, and compositional recovery boundary are complete;
-   regular-file UNLINK now retains all three existing lifetimes in authenticated
+8. retain HTree insertion: linear-to-HTree conversion, full-leaf splitting,
+   and root growth landed first as bounded CREATE paths with representative
+   committed replay, and the shared directory insert now converts, splits
+   leaves, grows the root, and splits level-one nodes for CREATE, MKDIR, and
+   LINK alike; regular-file UNLINK now retains all three existing lifetimes in authenticated
    depth-zero and singleton depth-one parents, with one representative
    singleton-depth-one direct-final success and compositional prior recovery
    evidence; canonical empty-directory RMDIR now admits those same parent
@@ -3150,10 +2910,9 @@ The ratchet order is:
 
 Each remaining family closes its gaps the way the write did: when it next
 needs a case its bounded paths lack, one general routine replaces those paths
-and the special cases are deleted rather than kept beside it. Extent-tree
-editing and single-transaction truncation are now general; truncation across
-transactions, directory insertion and removal, and unlink are the families
-that follow.
+and the special cases are deleted. Extent-tree editing, truncation, file
+deletion, and directory insertion are general routines; directory removal and
+rename follow.
 
 Each landing may move only forward: it must keep all prior qualified behavior,
 remain crash-closed, and advertise exactly the capabilities it has earned. An
@@ -3191,14 +2950,13 @@ profile. Its general regular-file write is production-closed on 1 KiB/256-byte-
 inode geometry for extent-mapped files at every depth the format allows; exact
 writes compose independently durable transactions, and no broader geometry or
 operation inherits that status.
-`EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded `CREATE` and
-`MKDIR` under their documented linear/indexed envelopes, general `TRUNCATE`,
+`EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, `CREATE`, `MKDIR`, and
+`LINK` through the shared directory insert, general `TRUNCATE`,
 and bounded regular-file
 `UNLINK`—including nonfinal, direct empty-final, and orphan-backed closed/open
 final removal from admitted linear, depth-zero HTree, or singleton depth-one
 HTree parents—and bounded canonical empty-directory `RMDIR` from those same
-admitted parent shapes plus
-bounded regular-file `LINK` dispatch slots to its copy of the ordinary table. It also
+admitted parent shapes dispatch slots to its copy of the ordinary table. It also
 installs staged `RELEASE` and `SYNCFS` lifetime handling. The current worktree
 installs the qualified
 regular-file and cross-parent empty-directory RENAME callback, which also
@@ -3252,11 +3010,11 @@ form mutates only the selected leaf; root, optional DX node, map, and siblings
 remain immutable. It
 uses exact `6/0/1` through `8/0/1` credit to remove the typed parent entry,
 decrement parent links and `used_dirs`, free the inode and directory block,
-and revoke the unchanged freed block; the canonical path is `7/0/1`. Bounded
-hard LINK uses exact deduplicated `2/0/0` or `3/0/0` credit to add one
-checksummed record in an admitted linear or indexed slack leaf, increment and
-restamp the target inode, and restamp the parent inode without allocation,
-ordered data, revoke, or orphan state. Same-parent same-leaf regular-file
+and revoke the unchanged freed block; the canonical path is `7/0/1`. LINK
+into slack uses exact deduplicated `2/0/0` or `3/0/0` credit to add one
+checksummed record, increment and restamp the target inode, and restamp the
+parent inode, and grows the parent as the other inserts do when its block is
+full. Same-parent same-leaf regular-file
 RENAME likewise uses exact deduplicated `2/0/0` or `3/0/0` metadata credit. It
 uses an in-place source-record rewrite
 when possible and otherwise emits the qualified deterministic same-block
@@ -3287,17 +3045,7 @@ revoke, allocation, or orphan mutation. The other clock-derived mutation paths
 update `mtime`/`ctime`; the general write also publishes `VN.BLOCKS`, the
 free-block count, and the size. Exact writes compose its transactions: every
 callback is independently durable, a later failure preserves earlier
-checkpointed progress, and no multi-block atomicity is implied. The initial CREATE slice adds initialized-
-group inode selection and allocation, checksum/accounting updates, one-block
-linear-directory slack insertion, parent/new inode construction, cache
-publication, clean unmount, precommit rollback, six-home committed replay,
-write-free stable remount, and pinned `debugfs`/`e2fsck` acceptance in one
-at-most-six-home transaction. The initial MKDIR slice adds one authenticated
-globally unowned data-block allocation, a canonical checksummed `.`/`..`
-directory, typed parent insertion, parent/child link accounting,
-`bg_used_dirs_count`, exact seven-to-nine-home credit, clean and external-tool
-acceptance, four zero-write refusals, precommit rollback, and committed
-eight-home replay on the canonical fixture. The initial TRUNCATE slice adds shared-vnode
+checkpointed progress, and no multi-block atomicity is implied. The initial TRUNCATE slice adds shared-vnode
 shrink publication, complete retained-tail zeroing, exact two-home commit,
 W7 old-EOF rollback, W17 committed two-home replay, stable remount, and pinned
 `debugfs`/`e2fsck` acceptance. Releasing truncation adds count-zero
@@ -3361,16 +3109,11 @@ across 3,095 packed lines under the 1.25-billion-step watchdog; the descriptor
 journey measures 4,549,770 steps. Replacement, victims, and same-parent
 directory moves remain outside this envelope. Qualified singleton-modern-
 orphan final-link lifetime closure now covers closed and descriptor-retained
-targets, including last-close failure recovery. Depth-zero indexed CREATE now
-splits a full selected leaf while its root retains entry capacity. The bounded
-root-growth planner and public live path are qualified, as is stable singleton
-depth-one CREATE. Representative committed root-growth replay and byte-stable
-remount plus focused credit and ownership refusals are qualified. Existing-
-slack indexed `LINK` and `MKDIR` are admitted for depth-zero and singleton
-depth-one parents, with happy-path qualification at both depths. Their shared
-full-leaf refusal and compositional recovery boundary draft-close the
-namespace-insertion tranche; indexed LINK/MKDIR splitting and growth remain
-gated.
+targets, including last-close failure recovery. The shared directory insert
+then replaced the bounded CREATE, MKDIR, and LINK slices, with their
+conversion, depth-zero leaf split, and singleton root growth, by one insert
+that grows a one-block linear or level-zero or level-one HTree parent through
+the general allocator and extent-tree insertion.
 Replacement, victims, broader
 concurrent orphan unions, unwritten conversion, 2/4 KiB and 128-byte-inode
 allocation, multi-block atomicity across callbacks, and other

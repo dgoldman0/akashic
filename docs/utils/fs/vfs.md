@@ -165,9 +165,8 @@ under an aggregate compact-fit proof. They do not split or grow a leaf, edit
 an HTree interval key, or change a root, DX node, extent map, sibling leaf, or
 parent geometry. Same-parent regular moves bind three semantic roles when both names
 use one leaf and four when they use two; cross-parent regular and directory
-moves bind five and six respectively. Destination victims, replacement,
-same-parent directory moves, and deeper or multi-node HTree shapes remain
-gated. Public regular CREATE carries the first HTree root-depth transition through the
+moves bind five and six respectively. Same-parent directory moves and
+multi-node HTree parents remain gated for RENAME. Public regular CREATE carries the first HTree root-depth transition through the
 operation-owned sealed plan, exact home certificate, emission, and checkpoint.
 Ordinary staged CREATE can then mutate authenticated slack after a fresh mount
 of the resulting singleton depth-one tree. A committed tear in the new DX-node
