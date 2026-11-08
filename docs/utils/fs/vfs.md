@@ -152,8 +152,9 @@ directory block, decrements parent links and `used_dirs`, and revokes the
 unchanged freed child block under the unchanged nine semantic roles and exact
 `6/0/1` through `8/0/1` transaction; the canonical topology is 7 META + 1
 REVOKE. Depth-positive truncation and indexed LINK/MKDIR splitting or growth
-remain outside those envelopes. Bounded no-victim `RENAME` now admits a
-regular file in one parent, a regular file across parents, and the existing
+remain outside those envelopes. Bounded `RENAME` now admits a
+regular file in one parent, a regular file across parents, a regular file
+over an existing regular file in either case, and the existing
 canonical empty-directory cross-parent move when each participating parent is
 independently linear, depth-zero HTree, or singleton depth-one HTree. An
 indexed same-parent move may edit one selected leaf or move between two

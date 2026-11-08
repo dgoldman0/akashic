@@ -60,8 +60,8 @@ parent or an authenticated depth-zero or singleton depth-one HTree parent. The
 indexed form substitutes its selected checksummed leaf for the linear parent
 block while leaving the HTree root, optional DX node, extent map, other leaves,
 parent size, and parent sector count immutable. The same admitted parent
-shapes now also participate in bounded no-victim `RENAME`: old and new parents
-are independently linear, depth-zero HTree, or singleton depth-one HTree.
+shapes now also participate in `RENAME`: old and new parents are
+independently linear, depth-zero HTree, or singleton depth-one HTree.
 Regular files may move within or across parents, and the canonical empty
 directory may move across parents. A same-leaf record that already fits is
 rewritten in place; other selected-leaf edits use an aggregate compact-fit
@@ -104,7 +104,11 @@ the two parent blocks and inode roles, it journals the child directory block,
 transfers one parent link, and rewrites the child's `..` entry and checksum
 under exact `4/0/0` through `6/0/0` credit. Its canonical `5/0/0` homes are
 283, 275, 1299, 1377, and 1364. Neither form allocates storage or creates
-orphan state. Same-parent directories and replacement remain gated.
+orphan state. A rename over an existing regular file hands the victim's
+record to the source, splices the source's record out as an unlink does, and
+takes the victim's link in the same transaction; a final victim enters the
+orphan file there and drains as a final unlink's target does. Same-parent
+directories and directory victims remain gated.
 The current worktree also provides focused-qualified, staged-only scalar
 `SETATTR` for a linked regular file. A nonempty request can select `MODE`,
 `UID`, `GID`, `ATIME`, `MTIME`, and `CTIME` under one exact `1/0/0`
@@ -2391,13 +2395,14 @@ allocation, and leaves the HTree root, optional DX node, extent map, other
 leaves, and accounting immutable. This milestone does not qualify indexed LINK
 leaf splitting/growth or its refusal and crash/replay matrix.
 
-### Qualified NOREPLACE RENAME
+### RENAME
 
 The staged binding installs `_EXT4-RENAME` in operation slot 13 and adds
-`VFS-CAP-RENAME`, `VFS-CAP-ATOMIC-RENAME`, and
-`VFS-CAP-CROSSDIR-RENAME` to the staged descriptor. It does not add
-`VFS-CAP-RENAME-REPLACE`; the ordinary ext4 binding remains read-only with a
-null RENAME slot.
+`VFS-CAP-RENAME`, `VFS-CAP-ATOMIC-RENAME`, `VFS-CAP-CROSSDIR-RENAME`, and
+`VFS-CAP-RENAME-REPLACE` to the staged descriptor. The ordinary ext4 binding
+remains read-only with a null RENAME slot. The no-victim forms below move a
+name to an absent destination; a rename over an existing regular file is
+described after them.
 
 The original same-parent linear envelope is one authenticated, root-owned mutable
 regular source in its existing root-owned, non-setgid, checksummed one-block
@@ -2488,8 +2493,8 @@ vnode and an already-open descriptor.
 The canonical success proves exact W18/W19/W20/W21 writes to homes
 278/275/1345/1299, independent raw after-images, data and xattr preservation,
 pinned e2fsprogs 1.47.4 acceptance, and a byte-stable write-free remount. A
-three-credit writer profile and an existing destination victim both refuse
-without a mutation home write. A W7 descriptor tear rolls every provisional
+three-credit writer profile and a `VFS-RN-NOREPLACE` request onto an
+existing name both refuse without a mutation home write. A W7 descriptor tear rolls every provisional
 home back and preserves the old namespace. A committed W21 final-home tear
 publishes the new namespace after three completed home checkpoints; recovery
 then replays all four committed homes before the stable remount.
@@ -2606,13 +2611,50 @@ the already-qualified indexed authority and generic sealed-home replay; this
 extension claims no cloned crash, refusal, external-tool, or stable-remount
 matrix.
 
-`VFS-CAP-RENAME-REPLACE` remains absent. Destination victims, replacement,
-same-parent directory moves, indexed leaf splitting or growth, HTree-key
+Same-parent directory moves, indexed leaf splitting or growth, HTree-key
 mutation, and deeper or multi-node HTree shapes remain gated. Indexed
 insertion, UNLINK, RMDIR, and this RENAME extension now draft-close the
 namespace/deletion vertical. TRUNCATE is general, as described below,
 including through an indexed parent's name. The linked-regular-file scalar SETATTR slice is
 now focused-qualified; xattr mutation remains the next Stage 6 handoff.
+
+#### Rename over an existing file
+
+A rename onto an existing name replaces it when the caller passes no
+`VFS-RN-NOREPLACE`. The generic layer first checks that the victim is a
+distinct vnode, outside `V.CWD`, and of the source's kind; the binding then
+admits a regular-file victim in the new parent with a regular-file source,
+and refuses other victims with the write-policy detail. The callback
+authenticates the victim's inode against its cached vnode, as unlink
+authenticates its target, and finds the victim's record in the scan that
+authenticates the new parent, linear or indexed. The rename inserts nothing:
+the victim's record takes the source's inode number and keeps its name,
+length and file type, and the source's record joins its live predecessor, as
+an unlink removes a record. One block may hold both records; every record is
+checked against the scanned snapshot before either edit. A source record
+without a live predecessor, the first of an indexed leaf, refuses with the
+write-policy detail, as unlink's does.
+
+The victim loses that link in the same transaction. A victim with another
+link needs another name for it in the new parent, the proof unlink uses, and
+keeps its inode with one link fewer and a new change time; its transaction
+binds the victim's inode role beside the rename's, under exact `3/0/0`
+through `6/0/0` credit. A final link enters the modern orphan file in the
+same transaction, with `ORPHAN_PRESENT`, so the transaction seals the rename
+form of a final unlink's ADD payload: the victim's record and parent, the
+source's inode, its record and predecessor, and, across directories, the old
+parent. Before its home writes, the checkpoint rebuilds every journaled
+image from the media and that payload: the victim's link count of zero and
+change time, the source's change time, each parent's modification and change
+times in whatever inode-table blocks they share, the victim's record naming
+the source, the source record's splice, the orphan slot and the super flag.
+Its exact credit is five to eight metadata images. A final victim therefore
+needs what a final unlink needs: the modern orphan file with an empty union,
+and room for a release pass under the bound profile, whose cleanup credit the
+writer's capacity also covers. A closed victim then drains through its
+release passes and deletion before the callback returns; an open one stays
+readable through its descriptors and drains on its last `RELEASE`, and mount
+recovery deletes it after a crash. Directory victims remain gated.
 
 ### General TRUNCATE
 
@@ -2861,7 +2903,8 @@ prospective deletion before emission, and requires that a release pass under
 the bound profile can take its first removal step from the file's map. Its
 exact `4/0/0` or `5/0/0` ADD retains the inode map and allocation, sets link zero and ctime, splices the directory,
 updates parent times, inserts the inode into modern-orphan slot zero, and sets
-`ORPHAN_PRESENT`. A closed target then runs the release passes and deletion,
+`ORPHAN_PRESENT`. A rename over a final link seals the same ADD in its rename
+form, described under RENAME. A closed target then runs the release passes and deletion,
 one transaction each, and exact `1/0/0` transient-feature retirement before
 returning. An open target
 leaves that durable singleton live until the last staged `RELEASE`.
@@ -3158,9 +3201,9 @@ admitted parent shapes plus
 bounded regular-file `LINK` dispatch slots to its copy of the ordinary table. It also
 installs staged `RELEASE` and `SYNCFS` lifetime handling. The current worktree
 installs the qualified
-regular-file and cross-parent empty-directory no-replacement RENAME callback
-and advertises `VFS-CAP-RENAME`,
-`VFS-CAP-ATOMIC-RENAME`, and `VFS-CAP-CROSSDIR-RENAME`. It deliberately omits
+regular-file and cross-parent empty-directory RENAME callback, which also
+replaces an existing regular file, and advertises `VFS-CAP-RENAME`,
+`VFS-CAP-ATOMIC-RENAME`, `VFS-CAP-CROSSDIR-RENAME`, and
 `VFS-CAP-RENAME-REPLACE`. The staged worktree also installs `_EXT4-SETATTR`
 and advertises `VFS-CAP-SETATTR` for the focused-qualified linked-regular scalar
 slice. The ordinary binding remains `VFS-BF-READ-ONLY` and advertises none of

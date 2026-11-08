@@ -208,8 +208,9 @@ one-block linear parent or into authenticated existing slack in a depth-zero or
 singleton depth-one HTree, increments and restamps the target inode, and
 restamps the parent inode and checksummed directory block in exact deduplicated
 `2/0/0` or `3/0/0` credit without allocation, ordered data, revoke, or orphan
-state. The staged binding now qualifies atomic no-replacement
-`RENAME` for regular files and a canonical cross-parent empty directory.
+state. The staged binding now qualifies atomic `RENAME` for regular files
+and a canonical cross-parent empty directory, and a rename over an existing
+regular file, which takes the victim's link in the same transaction.
 Same-parent regular-file mutation retains the in-place fast path and uses
 deterministic bounded same-block compaction when the new encoded name exceeds
 the source record's current `rec_len`. Cross-parent mutation canonically
@@ -1031,11 +1032,11 @@ The ordinary ext4 binding remains read-only. The explicitly staged descriptor
 additionally exposes the qualified `CREATE`, `MKDIR`, `TRUNCATE`,
 `UNLINK`, `RMDIR`, and `LINK` namespace/metadata slices documented below;
 the current worktree also installs the qualified regular-file and cross-parent
-empty-directory no-replacement RENAME callback and adds `VFS-CAP-RENAME`,
-`VFS-CAP-ATOMIC-RENAME`, and
-`VFS-CAP-CROSSDIR-RENAME`. It separately advertises `VFS-CAP-SETATTR` for the
-focused-qualified linked-regular scalar slice documented below. It does not
-add `VFS-CAP-RENAME-REPLACE`. Other mutation capabilities remain disabled.
+empty-directory RENAME callback, which also replaces an existing regular file,
+and adds `VFS-CAP-RENAME`, `VFS-CAP-ATOMIC-RENAME`,
+`VFS-CAP-CROSSDIR-RENAME`, and `VFS-CAP-RENAME-REPLACE`. It separately
+advertises `VFS-CAP-SETATTR` for the focused-qualified linked-regular scalar
+slice documented below. Other mutation capabilities remain disabled.
 Modern
 `ORPHAN_PRESENT` and a nonzero legacy
 `s_last_orphan` are now admitted, after any required journal replay and strict
@@ -2653,9 +2654,9 @@ crash/replay, refusal, external-tool, and stable-remount evidence composes with
 the indexed topology and unchanged sealed-home replay; no new copy of those
 matrices is claimed.
 
-`VFS-CAP-RENAME-REPLACE` remains absent. Victims, replacement, same-parent
-directory moves, indexed split/growth, HTree-key mutation, and deeper or
-multi-node HTree shapes remain gated. Indexed insertion, UNLINK, RMDIR, and
+Directory victims, same-parent directory moves, indexed split/growth,
+HTree-key mutation, and deeper or multi-node HTree shapes remain gated. A
+rename over an existing regular file is described in the driver document. Indexed insertion, UNLINK, RMDIR, and
 RENAME now draft-close the namespace/deletion vertical. Indexed-parent
 retained-block TRUNCATE is now covered by one compositional singleton-depth-one
 success. An exact `3/0/0` stage publishes inode 14 as indexed `linked.txt` and
