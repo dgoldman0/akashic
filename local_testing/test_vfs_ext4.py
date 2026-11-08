@@ -60101,11 +60101,13 @@ def _ext4_mount_and_resolve(
     expected_replayed: bool,
     expected_home_writes: int,
     max_steps: int = 1_200_000_000,
+    absent: tuple[bytes, ...] = (),
 ) -> tuple[tuple[tuple[str, int, int], ...], str]:
     """Mount SOURCE through the ordinary binding and resolve every name.
 
-    Each path must name the expected inode number.  The mount replays the
-    journal when EXPECTED_REPLAYED says it holds a committed transaction.
+    Each path must name the expected inode number, and each ABSENT path
+    must not resolve.  The mount replays the journal when
+    EXPECTED_REPLAYED says it holds a committed transaction.
     """
     lines = [
         (
@@ -60141,6 +60143,20 @@ def _ext4_mount_and_resolve(
         checks.append(f"{prefix}-R{index}-IOR 0=")
         checks.append(
             f"{prefix}-R{index} DUP IF D.VNODE @ VN.BID @ THEN {number} ="
+        )
+    for index, name_path in enumerate(absent):
+        path_lines, path_text = _forth_bytes_buffer(
+            f"{prefix}-A{index}", name_path
+        )
+        lines.extend(path_lines)
+        lines.append(
+            f"{path_text} VFS-RP-NOFOLLOW-FINAL {prefix}-V "
+            "VFS-RESOLVE-POLICY? "
+            f"CONSTANT {prefix}-A{index}-IOR CONSTANT {prefix}-A{index}"
+        )
+        checks.append(f"{prefix}-A{index} 0=")
+        checks.append(
+            f"{prefix}-A{index}-IOR VFS-IOR-REASON VFS-R-NOENT ="
         )
     output, trace, media_sha256 = run_recovery_forth(
         source,
@@ -63481,7 +63497,13 @@ def test_staged_vfs_rmdir_from_singleton_depth_one_indexed_parent(
     staged_public_indexed_root_growth_live_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """Compose indexed MKDIR/RMDIR and pin the seven-home removal delta."""
+    """Compose indexed MKDIR/RMDIR and pin the removal's homes and drain.
+
+    RMDIR's transaction writes the child's and the parent's records, the
+    leaf, the orphan block and the superblock; its drain frees the child's
+    block and inode and then clears ORPHAN_PRESENT, and the unmount writes
+    the superblock last.
+    """
     case = staged_public_indexed_root_growth_live_fixture
     path = case["image"]
     block_size = case["block_size"]
@@ -63534,6 +63556,9 @@ def test_staged_vfs_rmdir_from_singleton_depth_one_indexed_parent(
     ) == (283, 281, 1364, 259, 267, 2, 1)
     assert child_before == bytes(len(child_before))
 
+    orphan_number = struct.unpack_from("<I", super_before, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
     free_blocks_before = struct.unpack_from("<I", super_before, 0x0C)[0] | (
         struct.unpack_from("<I", super_before, 0x158)[0] << 32
     )
@@ -63624,7 +63649,9 @@ def test_staged_vfs_rmdir_from_singleton_depth_one_indexed_parent(
                     ),
                     "_IRD-RMDIR-IOR 0=",
                     "_IRD-RMDIR-LAST-IOR 0=",
-                    "_IRD-RMDIR-HOME-WRITES 7 =",
+                    # The drain's last transaction clears
+                    # ORPHAN_PRESENT in the superblock alone.
+                    "_IRD-RMDIR-HOME-WRITES 1 =",
                     "_IRD-FINAL-CHILD 0=",
                     "_IRD-FINAL-D 0=",
                     (
@@ -63641,8 +63668,8 @@ def test_staged_vfs_rmdir_from_singleton_depth_one_indexed_parent(
                         "_IRD-ROOT-LINKS-BEFORE ="
                     ),
                     "_IRD-CLOCK-CALLS @ 2 =",
-                    f"_XU-DATA-BLOCK @ {child_directory_home} =",
-                    f"_XU-DIR-HOME @ {selected_leaf_home} =",
+                    f"_XC-DIR-HOME @ {selected_leaf_home} =",
+                    "_XC-ORPHAN @ 0<>",
                     "_IRD-WRITER _IRD-PROFILE-BASE =",
                     "_IRD-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_IRD-PLAN-SCRUBBED 0<>",
@@ -63650,7 +63677,6 @@ def test_staged_vfs_rmdir_from_singleton_depth_one_indexed_parent(
                     "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                     "_EXT4-MUTATION-MAP-HITS @ 0=",
                     "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
-                    "_XU-INDEX-MAP-EXPECTED @ 0=",
                     *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     "_IRD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_IRD-V V.FLAGS @ VFS-F-RO AND 0=",
@@ -63692,10 +63718,15 @@ def test_staged_vfs_rmdir_from_singleton_depth_one_indexed_parent(
         child_home,
         parent_home,
         selected_leaf_home,
+        orphan_home,
+        super_home,
         gdt_home,
         block_bitmap_home,
         super_home,
+        child_home,
         inode_bitmap_home,
+        orphan_home,
+        super_home,
         super_home,
     )
     observed_home_events = tuple(
@@ -64679,7 +64710,8 @@ def staged_public_rmdir_fixture(
     jbd2_toolchain: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
-    """Remove the exact bounded directory produced by public MKDIR."""
+    """Remove the directory public MKDIR made: the orphan file takes it in
+    the removal's transaction, and the drain releases it at once."""
     case = staged_public_mkdir_fixture
     path = case["stable_image"]
     debugfs = jbd2_toolchain["debugfs"]
@@ -64722,6 +64754,11 @@ def staged_public_rmdir_fixture(
         path, parent_inode_home, block_size=block_size
     )
     before_group_counts = _ext4_group_counts(path, 0)
+    orphan_inode_number = struct.unpack_from("<I", before_super, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    assert orphan_home == 1313
+    before_orphan = _read_ext4_home(path, orphan_home, block_size=block_size)
     with path.open("rb") as source:
         source.seek(parent_directory_home * block_size)
         before_parent_directory = source.read(block_size)
@@ -64824,7 +64861,7 @@ def staged_public_rmdir_fixture(
                 "CONSTANT _RD-CLOCK-IOR"
             ),
             *_ext4_dedicated_writer_profile_forth(
-                "_RD-PROFILE", "_RD-V", 7, 0, 1
+                "_RD-PROFILE", "_RD-V", 7, 0, 0
             ),
             (
                 "_RD-V V.ROOT @ _RD-V _VFS-ENSURE-CHILDREN? "
@@ -64914,23 +64951,14 @@ def staged_public_rmdir_fixture(
                             "_EXT4-JWR-IDLE ="
                         ),
                         "_RD-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_RD-HOME-WRITES 7 =",
-                        f"_XU-DATA-BLOCK @ {child_directory_home} =",
-                        f"_XU-TARGET-HOME @ {child_inode_home} =",
-                        f"_XU-PARENT-HOME @ {parent_inode_home} =",
-                        f"_XU-DIR-HOME @ {parent_directory_home} =",
-                        (
-                            f"_XU-DATA-BITMAP-HOME @ "
-                            f"{block_bitmap_home} ="
-                        ),
-                        (
-                            f"_XU-BITMAP-HOME @ "
-                            f"{inode_bitmap_home} ="
-                        ),
-                        f"_XU-GDT-HOME @ {gdt_home} =",
-                        f"_XU-DATA-GDT-HOME @ {gdt_home} =",
-                        f"_XU-SUPER-HOME @ {super_home} =",
-                        f"_XU-DATA-SUPER-HOME @ {super_home} =",
+                        # The drain's last transaction clears
+                        # ORPHAN_PRESENT in the superblock alone.
+                        "_RD-HOME-WRITES 1 =",
+                        f"_XC-INODE-HOME @ {child_inode_home} =",
+                        f"_XC-PARENT-HOME @ {parent_inode_home} =",
+                        f"_XC-DIR-HOME @ {parent_directory_home} =",
+                        "_XC-ORPHAN @ 0<>",
+                        "_XC-CLEANUP-REVOKE @ 0=",
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         "_RD-CTX _EXT4-C.O.ACTIVE + @ 0=",
                         "_RD-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
@@ -65019,30 +65047,40 @@ def staged_public_rmdir_fixture(
     )
     assert all(entry[4] != b"created-dir" for entry in parent_entries)
 
-    assert _write_ordinals_for_ext4_home(
-        trace, child_inode_home, block_size=block_size
-    ) == (22,)
-    assert _write_ordinals_for_ext4_home(
-        trace, parent_inode_home, block_size=block_size
-    ) == (23,)
-    assert _write_ordinals_for_ext4_home(
-        trace, parent_directory_home, block_size=block_size
-    ) == (24,)
-    assert _write_ordinals_for_ext4_home(
-        trace, block_bitmap_home, block_size=block_size
-    ) == (26,)
-    assert _write_ordinals_for_ext4_home(
-        trace, gdt_home, block_size=block_size
-    ) == (25,)
-    assert _write_ordinals_for_ext4_home(
-        trace, super_home, block_size=block_size
-    ) == (4, 27, 37)
-    assert _write_ordinals_for_ext4_home(
-        trace, inode_bitmap_home, block_size=block_size
-    ) == (28,)
-    assert _write_ordinals_for_ext4_home(
-        trace, child_directory_home, block_size=block_size
-    ) == ()
+    homes = {
+        "child_inode": child_inode_home,
+        "parent_inode": parent_inode_home,
+        "parent_directory": parent_directory_home,
+        "orphan": orphan_home,
+        "super": super_home,
+        "block_bitmap": block_bitmap_home,
+        "gdt": gdt_home,
+        "inode_bitmap": inode_bitmap_home,
+        "child_directory": child_directory_home,
+    }
+    observed_ordinals = {
+        name: _write_ordinals_for_ext4_home(trace, home, block_size=block_size)
+        for name, home in homes.items()
+    }
+    # The removal's checkpoint writes the child's record, the parent's
+    # record and block, the orphan block and the superblock (19-23).  The
+    # drain's release pass frees the child's one block and folds the
+    # deletion (42-47), and its last transaction clears ORPHAN_PRESENT
+    # (61).  No home of the removal writes the child's block.
+    assert observed_ordinals == {
+        "child_inode": (19, 45),
+        "parent_inode": (20,),
+        "parent_directory": (21,),
+        "orphan": (22, 47),
+        "super": (4, 23, 44, 61, 70),
+        "block_bitmap": (43,),
+        "gdt": (42,),
+        "inode_bitmap": (46,),
+        "child_directory": (),
+    }, observed_ordinals
+    with backing.open("rb") as source:
+        source.seek(orphan_home * block_size)
+        assert source.read(block_size) == before_orphan
 
     listing = subprocess.run(
         [str(debugfs), "-R", "ls -l /", str(backing)],
@@ -65094,6 +65132,9 @@ def staged_public_rmdir_fixture(
         "after_group_counts": after_group_counts,
         "before_child_inode": before_child_inode,
         "before_child_directory": before_child_directory,
+        "orphan_home": orphan_home,
+        "before_orphan": before_orphan,
+        "rmdir_ms": rmdir_ms,
     }
 
 
@@ -65298,7 +65339,7 @@ def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
                             "_RDF-WRITER _EXT4-JWR-VALID?",
                             (
                                 "_RDF-WRITER _EXT4-JWR.META-ACTIVE + @ "
-                                "7 ="
+                                "5 ="
                             ),
                             (
                                 "_RDF-WRITER _EXT4-JWR.DATA-ACTIVE + @ "
@@ -65306,12 +65347,7 @@ def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
                             ),
                             (
                                 "_RDF-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
-                                "1 ="
-                            ),
-                            (
-                                "0 _RDF-WRITER _EXT4-JWR-REVOKE-ENTRY "
-                                f"DUP @ {child_directory_home} = "
-                                "SWAP CELL+ @ _EXT4-JE-ACTIVE = AND"
+                                "0="
                             ),
                             "_RDF-HOME-WRITES 0=",
                             "_RDF-CTX _EXT4-C.J.COMMITTED + @ 0=",
@@ -65327,22 +65363,19 @@ def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
                 (
                     _forth_conjunction(
                         [
-                            "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                            "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                             (
-                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_XC-OLD-INODE "
+                                "_EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-CHILD-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_XC-CHILD-DESC _EXT4-DD-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
+                                "_RDF-CTX _EXT4-C.XC-PLAN + @ "
+                                "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                             ),
                         ]
                     )
@@ -65414,306 +65447,6 @@ def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
             expected_replayed=False,
             prefix="_RDF-S",
             marker="EXT4-PUBLIC-RMDIR-W7-STABLE",
-        )
-        assert stable_trace == ()
-        assert stable_sha256 == recovery_sha256
-        assert _sha256(stable) == stable_sha256
-    finally:
-        faulted.unlink(missing_ok=True)
-        recovered.unlink(missing_ok=True)
-        stable.unlink(missing_ok=True)
-
-
-def test_staged_vfs_rmdir_gdt_tear_replays_seven_homes_and_revoke(
-    staged_public_rmdir_fixture: dict[str, object],
-    jbd2_toolchain: dict[str, object],
-    tmp_path: Path,
-) -> None:
-    """A committed GDT tear replays all afterimages and honors the revoke."""
-    case = staged_public_rmdir_fixture
-    path = case["source"]
-    success_image = case["image"]
-    success_trace = case["trace"]
-    block_size = case["block_size"]
-    child_directory_home = case["child_directory_home"]
-    free_blocks_before = case["free_blocks_before"]
-    free_inodes_before = case["free_inodes_before"]
-    root_links_before = case["root_links_before"]
-    after_group_counts = case["after_group_counts"]
-    before_child_directory = case["before_child_directory"]
-    assert isinstance(path, Path)
-    assert isinstance(success_image, Path)
-    assert isinstance(success_trace, tuple)
-    assert isinstance(block_size, int)
-    assert isinstance(child_directory_home, int)
-    assert isinstance(free_blocks_before, int)
-    assert isinstance(free_inodes_before, int)
-    assert isinstance(root_links_before, int)
-    assert isinstance(after_group_counts, dict)
-    assert isinstance(before_child_directory, bytes)
-
-    expected_homes: dict[str, tuple[int, bytes, bytes]] = {}
-    for key in (
-        "child_inode_home",
-        "parent_inode_home",
-        "parent_directory_home",
-        "block_bitmap_home",
-        "gdt_home",
-        "super_home",
-        "inode_bitmap_home",
-    ):
-        home = case[key]
-        assert isinstance(home, int)
-        expected_homes[key] = (
-            home,
-            _read_ext4_home(path, home, block_size=block_size),
-            _read_ext4_home(success_image, home, block_size=block_size),
-        )
-    assert all(old != new for _, old, new in expected_homes.values())
-
-    gdt_home, old_gdt, expected_gdt = expected_homes["gdt_home"]
-    gdt_ordinal = _write_ordinals_for_ext4_home(
-        success_trace, gdt_home, block_size=block_size
-    )[0]
-    assert gdt_ordinal == 25
-    gdt_event = _trace_event_index_for_ordinal(
-        success_trace, "write", gdt_ordinal
-    )
-    differences = [
-        index
-        for index, (old, new) in enumerate(
-            zip(old_gdt[:512], expected_gdt[:512])
-        )
-        if old != new
-    ]
-    assert len(differences) >= 2
-    tear_offset = (differences[0] + differences[-1]) // 2
-    assert 0 < tear_offset < 512
-    expected_torn_gdt = expected_gdt[:tear_offset] + old_gdt[tear_offset:]
-    assert expected_torn_gdt not in {old_gdt, expected_gdt}
-
-    faulted = tmp_path / "staged-rmdir-w25-faulted.img"
-    recovered = tmp_path / "staged-rmdir-w25-recovered.img"
-    stable = tmp_path / "staged-rmdir-w25-stable.img"
-    try:
-        output, failed_trace, _ = run_recovery_forth(
-            path,
-            faulted,
-            [
-                *_staged_rmdir_attempt_forth("_RDH"),
-                (
-                    _forth_conjunction(
-                        [
-                            "_RDH-MOUNT-IOR 0=",
-                            "_RDH-CLOCK-IOR 0=",
-                            "_RDH-PROFILE-SIZE-IOR 0=",
-                            "_RDH-PROFILE-BIND-IOR 0=",
-                            "_RDH-LOAD-IOR 0=",
-                            "_RDH-BEFORE-RESOLVE-IOR 0=",
-                            "_RDH-RMDIR-IOR 0=",
-                            (
-                                "_RDH-LAST-IOR VFS-IOR-DOMAIN "
-                                "VFS-IOR-D-VOLUME ="
-                            ),
-                            (
-                                "_RDH-LAST-IOR VFS-IOR-REASON "
-                                "VFS-R-IO ="
-                            ),
-                            (
-                                "_RDH-LAST-IOR VFS-IOR-FLAGS "
-                                "VFS-IOR-F-PARTIAL AND 0<>"
-                            ),
-                            "_RDH-CHILD 0=",
-                            "_RDH-AFTER-D 0=",
-                            (
-                                "_RDH-AFTER-RESOLVE-IOR VFS-IOR-REASON "
-                                "VFS-R-NOENT ="
-                            ),
-                            "_RDH-STAT-AFTER-IOR 0=",
-                            "_RDH-BFREE-AFTER _RDH-BFREE-BEFORE 1+ =",
-                            "_RDH-FFREE-AFTER _RDH-FFREE-BEFORE 1+ =",
-                            "_RDH-ICOUNT-AFTER _RDH-ICOUNT-BEFORE 1- =",
-                            "_RDH-VCOUNT-AFTER _RDH-VCOUNT-BEFORE 1- =",
-                            (
-                                "_RDH-ROOT-VN VN.NLINK @ "
-                                "_RDH-ROOT-LINKS-BEFORE 1- ="
-                            ),
-                            "_RDH-CLOCK-CALLS @ 1 =",
-                        ]
-                    )
-                    + ' IF ." EXT4-PUBLIC-RMDIR-W25-PUBLISHED" THEN'
-                ),
-                (
-                    _forth_conjunction(
-                        [
-                            "_RDH-WRITER _RDH-PROFILE-BASE =",
-                            (
-                                "_RDH-WRITER _EXT4-JWR.STATE + @ "
-                                "_EXT4-JWR-FAULTED ="
-                            ),
-                            (
-                                "_RDH-WRITER _EXT4-JWR.PHASE + @ "
-                                "_EXT4-JWP-CHECKPOINT-HOME ="
-                            ),
-                            "_RDH-WRITER _EXT4-JWR-VALID?",
-                            (
-                                "_RDH-WRITER _EXT4-JWR.META-ACTIVE + @ "
-                                "7 ="
-                            ),
-                            (
-                                "_RDH-WRITER _EXT4-JWR.DATA-ACTIVE + @ "
-                                "0="
-                            ),
-                            (
-                                "_RDH-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
-                                "1 ="
-                            ),
-                            (
-                                "0 _RDH-WRITER _EXT4-JWR-REVOKE-ENTRY "
-                                f"DUP @ {child_directory_home} = "
-                                "SWAP CELL+ @ _EXT4-JE-ACTIVE = AND"
-                            ),
-                            "_RDH-HOME-WRITES 3 =",
-                            "_RDH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
-                            "_RDH-CTX _EXT4-C.RECOVERY + @ 0<>",
-                            "_RDH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
-                            "_RDH-V V.FLAGS @ VFS-F-RO AND 0<>",
-                            "_RDH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
-                        ]
-                    )
-                    + ' IF ." EXT4-PUBLIC-RMDIR-W25-WRITER" THEN'
-                ),
-            ],
-            write_faults_by_ordinal={
-                gdt_ordinal: {
-                    "stage": "media",
-                    "sector_index": 0,
-                    "byte_index": tear_offset,
-                    "result": STORAGE_RESULT_MEDIA_FAILURE,
-                    "command": STORAGE_CMD_WRITE,
-                }
-            },
-            capture_media=faulted,
-        )
-        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W25-PUBLISHED")
-        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W25-WRITER")
-        assert failed_trace == success_trace[: gdt_event + 1]
-
-        for key in (
-            "child_inode_home",
-            "parent_inode_home",
-            "parent_directory_home",
-        ):
-            home, _, expected = expected_homes[key]
-            assert _read_ext4_home(
-                faulted, home, block_size=block_size
-            ) == expected
-        assert _read_ext4_home(
-            faulted, gdt_home, block_size=block_size
-        ) == expected_torn_gdt
-        block_bitmap_home, old_block_bitmap, _ = expected_homes[
-            "block_bitmap_home"
-        ]
-        assert _read_ext4_home(
-            faulted, block_bitmap_home, block_size=block_size
-        ) == old_block_bitmap
-        inode_bitmap_home, old_inode_bitmap, _ = expected_homes[
-            "inode_bitmap_home"
-        ]
-        assert _read_ext4_home(
-            faulted, inode_bitmap_home, block_size=block_size
-        ) == old_inode_bitmap
-        faulted_super, _, _ = _ext4_inode_record(faulted, 2)
-        assert struct.unpack_from("<I", faulted_super, 0x0C)[0] == (
-            free_blocks_before - 1
-        )
-        assert struct.unpack_from("<I", faulted_super, 0x10)[0] == (
-            free_inodes_before - 1
-        )
-        with faulted.open("rb") as source:
-            source.seek(child_directory_home * block_size)
-            faulted_child_directory = source.read(block_size)
-        assert faulted_child_directory == before_child_directory
-
-        journal0_home = _ext4_journal_physical_map(path, (0,))[0]
-        with path.open("rb") as source:
-            source.seek(journal0_home * block_size)
-            journal_super = source.read(block_size)
-        journal_uuid = journal_super[0x30:0x40]
-        assert len(journal_uuid) == 16
-        revoke_event = success_trace[
-            _trace_event_index_for_ordinal(success_trace, "write", 15)
-        ]
-        commit_event = success_trace[
-            _trace_event_index_for_ordinal(success_trace, "write", 21)
-        ]
-        with faulted.open("rb") as source:
-            source.seek(revoke_event[1] * 512)
-            revoke = source.read(revoke_event[2] * 512)
-            source.seek(commit_event[1] * 512)
-            commit = source.read(commit_event[2] * 512)
-        magic, block_type, transaction_id, count, revoked_home = (
-            struct.unpack_from(">IIIIQ", revoke, 0)
-        )
-        assert (
-            magic,
-            block_type,
-            count,
-            revoked_home,
-        ) == (0xC03B3998, 5, 24, child_directory_home)
-        assert revoke[24:-4] == bytes(len(revoke) - 28)
-        assert revoke == _jbd2_metadata_with_checksum(revoke, journal_uuid)
-        assert struct.unpack_from(">III", commit, 0) == (
-            0xC03B3998,
-            2,
-            transaction_id,
-        )
-        assert commit == _jbd2_commit_with_checksum(
-            commit, journal_uuid, transaction_id
-        )
-
-        _, recovery_trace, recovery_sha256 = _staged_mkdir_recovery_view(
-            faulted,
-            recovered,
-            expected_present=False,
-            expected_free_blocks=free_blocks_before,
-            expected_free_inodes=free_inodes_before,
-            expected_parent_links=root_links_before,
-            expected_home_writes=7,
-            expected_replayed=True,
-            prefix="_RDH-R",
-            marker="EXT4-PUBLIC-RMDIR-W25-RECOVERED",
-        )
-        assert _write_ordinals_for_ext4_home(
-            recovery_trace, child_directory_home, block_size=block_size
-        ) == ()
-        for home, _, expected in expected_homes.values():
-            assert _read_ext4_home(
-                recovered, home, block_size=block_size
-            ) == expected
-        with recovered.open("rb") as source:
-            source.seek(child_directory_home * block_size)
-            recovered_child_directory = source.read(block_size)
-        assert recovered_child_directory == before_child_directory
-        assert not _ext4_block_allocation_state(
-            recovered, (child_directory_home,)
-        )[child_directory_home]
-        assert not _ext4_inode_allocation_state(recovered, (33,))[33]
-        assert _ext4_group_counts(recovered, 0) == after_group_counts
-        _assert_e2fsck_clean(recovered, jbd2_toolchain)
-
-        _, stable_trace, stable_sha256 = _staged_mkdir_recovery_view(
-            recovered,
-            stable,
-            expected_present=False,
-            expected_free_blocks=free_blocks_before,
-            expected_free_inodes=free_inodes_before,
-            expected_parent_links=root_links_before,
-            expected_home_writes=0,
-            expected_replayed=False,
-            prefix="_RDH-S",
-            marker="EXT4-PUBLIC-RMDIR-W25-STABLE",
         )
         assert stable_trace == ()
         assert stable_sha256 == recovery_sha256
@@ -65869,15 +65602,17 @@ def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
     staged_public_mkdir_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """Clock, revoke, shape, and lifetime refusals publish no write."""
+    """Clock, writer-capacity and group-count refusals publish no write.
+
+    RMDIR needs no revoke and admits any empty directory, so the refusals
+    left are the missing clock, a writer one block short of what the
+    removal and its drain need, and a group whose used-directory count
+    cannot lose the directory.
+    """
     path = staged_public_mkdir_fixture["stable_image"]
     block_size = staged_public_mkdir_fixture["block_size"]
-    child_directory_home = staged_public_mkdir_fixture[
-        "child_directory_home"
-    ]
     assert isinstance(path, Path)
     assert isinstance(block_size, int)
-    assert isinstance(child_directory_home, int)
     source_sha256 = _sha256(path)
 
     no_clock = tmp_path / "staged-rmdir-no-clock.img"
@@ -65952,59 +65687,16 @@ def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
     assert media_sha256 == source_sha256
     assert _sha256(no_clock) == source_sha256
 
-    no_revoke = tmp_path / "staged-rmdir-no-revoke.img"
-    output, trace, media_sha256 = run_recovery_forth(
-        path,
-        no_revoke,
-        [
-            *_staged_rmdir_attempt_forth("_RNR", revoke_capacity=0),
-            (
-                _forth_conjunction(
-                    [
-                        "_RNR-MOUNT-IOR 0=",
-                        "_RNR-CLOCK-IOR 0=",
-                        "_RNR-PROFILE-SIZE-IOR 0=",
-                        "_RNR-PROFILE-BIND-IOR 0=",
-                        "_RNR-LOAD-IOR 0=",
-                        "_RNR-BEFORE-RESOLVE-IOR 0=",
-                        "_RNR-RMDIR-IOR VFS-E-NOSPC =",
-                        "_RNR-LAST-IOR _RNR-RMDIR-IOR =",
-                        "_RNR-CHILD _RNR-D =",
-                        "_RNR-AFTER-D _RNR-D =",
-                        "_RNR-AFTER-RESOLVE-IOR 0=",
-                        "_RNR-VN VN.NLINK @ 2 =",
-                        "_RNR-ROOT-VN VN.NLINK @ _RNR-ROOT-LINKS-BEFORE =",
-                        "_RNR-ICOUNT-AFTER _RNR-ICOUNT-BEFORE =",
-                        "_RNR-VCOUNT-AFTER _RNR-VCOUNT-BEFORE =",
-                        "_RNR-BFREE-AFTER _RNR-BFREE-BEFORE =",
-                        "_RNR-FFREE-AFTER _RNR-FFREE-BEFORE =",
-                        "_RNR-CLOCK-CALLS @ 1 =",
-                        "_RNR-WRITER _RNR-PROFILE-BASE =",
-                        "_RNR-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_RNR-HOME-WRITES 0=",
-                        "_RNR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
-                        "_RNR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
-                        "_RNR-V V.FLAGS @ VFS-F-RO AND 0=",
-                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
-                    ]
-                )
-                + ' IF ." EXT4-PUBLIC-RMDIR-NO-REVOKE" THEN'
-            ),
-        ],
-        capture_media=no_revoke,
-    )
-    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-NO-REVOKE")
-    assert trace == ()
-    assert media_sha256 == source_sha256
-    assert _sha256(no_revoke) == source_sha256
-
-    no_metadata = tmp_path / "staged-rmdir-six-metadata.img"
+    # The removal stages five homes, and the deletion its drain stages
+    # takes five (inode table, inode bitmap, descriptor page, superblock
+    # and orphan block), so a four-block writer is one short.
+    no_metadata = tmp_path / "staged-rmdir-four-metadata.img"
     output, trace, media_sha256 = run_recovery_forth(
         path,
         no_metadata,
         [
             *_staged_rmdir_attempt_forth(
-                "_RNM", metadata_capacity=6
+                "_RNM", metadata_capacity=4, revoke_capacity=0
             ),
             (
                 _forth_conjunction(
@@ -66039,12 +65731,12 @@ def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
-                + ' IF ." EXT4-PUBLIC-RMDIR-SIX-METADATA" THEN'
+                + ' IF ." EXT4-PUBLIC-RMDIR-FOUR-METADATA" THEN'
             ),
         ],
         capture_media=no_metadata,
     )
-    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-SIX-METADATA")
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-FOUR-METADATA")
     assert trace == ()
     assert media_sha256 == source_sha256
     assert _sha256(no_metadata) == source_sha256
@@ -66146,161 +65838,1712 @@ def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
     assert media_sha256 == expected_zero_used_dirs_sha256
     assert _sha256(zero_used_dirs) == expected_zero_used_dirs_sha256
 
-    noncanonical = bytearray(block_size)
-    struct.pack_into("<IHBB", noncanonical, 0, 33, 16, 1, 2)
-    noncanonical[8:9] = b"."
-    struct.pack_into(
-        "<IHBB", noncanonical, 16, 2, block_size - 28, 2, 2
+
+def _rmdir_retained_child_inode_home(
+    path: Path, *, child_number: int, epoch_ms: int, block_size: int
+) -> bytes:
+    """Return the child's inode home as RMDIR's checkpoint writes it.
+
+    The child keeps its record, with no links and a new change time, until
+    its drain deletes it.
+    """
+    superblock, child_inode, child_offset = _ext4_inode_record(
+        path, child_number
     )
-    noncanonical[24:26] = b".."
-    struct.pack_into(
-        "<IHBB", noncanonical, block_size - 12, 0, 12, 0, 0xDE
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
     )
-    noncanonical = bytearray(
+    epoch = (seconds - signed_low) >> 32
+    extra_time = ((milliseconds * 1_000_000) << 2) | epoch
+    retained = bytearray(child_inode)
+    assert struct.unpack_from("<H", retained, 0x1A)[0] == 2
+    struct.pack_into("<H", retained, 0x1A, 0)
+    struct.pack_into("<I", retained, 0x0C, low_seconds)
+    struct.pack_into("<I", retained, 0x84, extra_time)
+    retained = bytearray(
+        _inode_with_checksum(superblock, child_number, retained)
+    )
+    home, offset = divmod(child_offset, block_size)
+    image = bytearray(_read_ext4_home(path, home, block_size=block_size))
+    image[offset : offset + len(retained)] = retained
+    return bytes(image)
+
+
+def test_staged_vfs_rmdir_directory_home_tear_replays_and_drains(
+    staged_public_rmdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A torn RMDIR checkpoint replays, then mount recovery drains the child.
+
+    The tear lands in the parent's directory block after the child's and
+    the parent's inode homes are written.  Mount recovery replays the five
+    homes, finds the child in the orphan file, and frees its block and
+    inode, with its group's used-directory count one lower.
+    """
+    case = staged_public_rmdir_fixture
+    path = case["source"]
+    success_image = case["image"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    child_inode_home = case["child_inode_home"]
+    parent_inode_home = case["parent_inode_home"]
+    parent_directory_home = case["parent_directory_home"]
+    child_directory_home = case["child_directory_home"]
+    orphan_home = case["orphan_home"]
+    before_orphan = case["before_orphan"]
+    rmdir_ms = case["rmdir_ms"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    root_links_before = case["root_links_before"]
+    after_group_counts = case["after_group_counts"]
+    before_child_directory = case["before_child_directory"]
+    assert isinstance(path, Path)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    for value in (
+        block_size,
+        child_inode_home,
+        parent_inode_home,
+        parent_directory_home,
+        child_directory_home,
+        orphan_home,
+        rmdir_ms,
+        free_blocks_before,
+        free_inodes_before,
+        root_links_before,
+    ):
+        assert isinstance(value, int)
+    assert isinstance(before_orphan, bytes)
+    assert isinstance(after_group_counts, dict)
+    assert isinstance(before_child_directory, bytes)
+
+    old_directory = _read_ext4_home(
+        path, parent_directory_home, block_size=block_size
+    )
+    new_directory = _read_ext4_home(
+        success_image, parent_directory_home, block_size=block_size
+    )
+    superblock, root_inode, _ = _ext4_inode_record(path, 2)
+    target_offset = next(
+        entry[0]
+        for entry in _checked_linear_directory_entries(
+            superblock,
+            2,
+            struct.unpack_from("<I", root_inode, 0x64)[0],
+            old_directory,
+        )
+        if entry[4] == b"created-dir"
+    )
+    tear_offset = target_offset + 4
+    assert 0 < tear_offset < 512
+    torn_directory = new_directory[:tear_offset] + old_directory[tear_offset:]
+    assert torn_directory not in {old_directory, new_directory}
+    # RMDIR's checkpoint writes the child's record (19), the parent's
+    # record (20) and directory block (21), the orphan block (22) and the
+    # superblock (23).
+    directory_ordinal = 21
+    assert _write_ordinals_for_ext4_home(
+        success_trace, parent_directory_home, block_size=block_size
+    ) == (directory_ordinal,)
+    directory_event = _trace_event_index_for_ordinal(
+        success_trace, "write", directory_ordinal
+    )
+    retained_child_home = _rmdir_retained_child_inode_home(
+        path, child_number=33, epoch_ms=rmdir_ms, block_size=block_size
+    )
+    expected_parent_home = _read_ext4_home(
+        success_image, parent_inode_home, block_size=block_size
+    )
+
+    faulted = tmp_path / "staged-rmdir-w21-faulted.img"
+    recovered = tmp_path / "staged-rmdir-w21-recovered.img"
+    stable = tmp_path / "staged-rmdir-w21-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_rmdir_attempt_forth("_RDT"),
+                *_forth_accumulated_conjunction(
+                    "_RDT-ALL",
+                    [
+                        "_RDT-MOUNT-IOR 0=",
+                        "_RDT-CLOCK-IOR 0=",
+                        "_RDT-PROFILE-SIZE-IOR 0=",
+                        "_RDT-PROFILE-BIND-IOR 0=",
+                        "_RDT-LOAD-IOR 0=",
+                        "_RDT-BEFORE-RESOLVE-IOR 0=",
+                        "_RDT-RMDIR-IOR 0=",
+                        "_RDT-LAST-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_RDT-LAST-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_RDT-LAST-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_RDT-CHILD 0=",
+                        "_RDT-AFTER-D 0=",
+                        (
+                            "_RDT-AFTER-RESOLVE-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        "_RDT-STAT-AFTER-IOR 0=",
+                        # The drain never ran: the child keeps its block
+                        # and inode until recovery frees them.
+                        "_RDT-BFREE-AFTER _RDT-BFREE-BEFORE =",
+                        "_RDT-FFREE-AFTER _RDT-FFREE-BEFORE =",
+                        "_RDT-ICOUNT-AFTER _RDT-ICOUNT-BEFORE 1- =",
+                        "_RDT-VCOUNT-AFTER _RDT-VCOUNT-BEFORE 1- =",
+                        (
+                            "_RDT-ROOT-VN VN.NLINK @ "
+                            "_RDT-ROOT-LINKS-BEFORE 1- ="
+                        ),
+                        "_RDT-CLOCK-CALLS @ 1 =",
+                        "_RDT-WRITER _RDT-PROFILE-BASE =",
+                        "_RDT-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_RDT-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_RDT-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-CHECKPOINT-HOME ="
+                        ),
+                        "_RDT-WRITER _EXT4-JWR.META-ACTIVE + @ 5 =",
+                        "_RDT-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        (
+                            "_RDT-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD-FIRST ="
+                        ),
+                        "_RDT-HOME-WRITES 2 =",
+                        "_RDT-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        "_RDT-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_RDT-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_RDT-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_RDT-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XC-CHILD-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
+                        (
+                            "_RDT-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
+                        ),
+                        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_RDT-ALL @ IF ." EXT4-PUBLIC-RMDIR-W21-COMMITTED" '
+                    'ELSE ." EXT4-PUBLIC-RMDIR-W21-CHECK " '
+                    "_RDT-ALL-FIRST-FAILURE @ . THEN"
+                ),
+            ],
+            write_faults_by_ordinal={
+                directory_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W21-COMMITTED")
+        assert failed_trace == success_trace[: directory_event + 1]
+        assert _read_ext4_home(
+            faulted, child_inode_home, block_size=block_size
+        ) == retained_child_home
+        assert _read_ext4_home(
+            faulted, parent_inode_home, block_size=block_size
+        ) == expected_parent_home
+        assert _read_ext4_home(
+            faulted, parent_directory_home, block_size=block_size
+        ) == torn_directory
+        assert _read_ext4_home(
+            faulted, orphan_home, block_size=block_size
+        ) == before_orphan
+        assert _read_ext4_home(
+            faulted, child_directory_home, block_size=block_size
+        ) == before_child_directory
+        faulted_super, _, _ = _ext4_inode_record(faulted, 2)
+        assert struct.unpack_from("<I", faulted_super, 0x0C)[0] == (
+            free_blocks_before - 1
+        )
+        assert struct.unpack_from("<I", faulted_super, 0x10)[0] == (
+            free_inodes_before - 1
+        )
+        assert struct.unpack_from("<I", faulted_super, 0x64)[0] & (
+            0x0001_0000
+        ) == 0
+        assert _ext4_block_allocation_state(
+            faulted, (child_directory_home,)
+        )[child_directory_home]
+        assert _ext4_inode_allocation_state(faulted, (33,))[33]
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_final_unlink_recovery_view(
+                faulted,
+                recovered,
+                expected_free_blocks=free_blocks_before,
+                expected_free_inodes=free_inodes_before,
+                expected_home_writes=6,
+                expected_replayed=True,
+                prefix="_RDT-R",
+                marker="EXT4-PUBLIC-RMDIR-W21-RECOVERED",
+                target_path="/created-dir",
+            )
+        )
+        assert recovery_trace
+        _assert_rmdir_recovered(
+            case,
+            recovered,
+            jbd2_toolchain,
+            after_group_counts=after_group_counts,
+            root_links=root_links_before,
+        )
+        _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+            recovered,
+            stable,
+            expected_free_blocks=free_blocks_before,
+            expected_free_inodes=free_inodes_before,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_RDT-S",
+            marker="EXT4-PUBLIC-RMDIR-W21-STABLE",
+            target_path="/created-dir",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def _assert_rmdir_recovered(
+    case: dict[str, object],
+    recovered: Path,
+    jbd2_toolchain: dict[str, object],
+    *,
+    after_group_counts: dict[str, int],
+    root_links: int,
+) -> None:
+    """The recovered medium holds the drained RMDIR the success run made."""
+    success_image = case["image"]
+    block_size = case["block_size"]
+    child_directory_home = case["child_directory_home"]
+    orphan_home = case["orphan_home"]
+    before_orphan = case["before_orphan"]
+    before_child_directory = case["before_child_directory"]
+    assert isinstance(success_image, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(child_directory_home, int)
+    assert isinstance(orphan_home, int)
+    for key in (
+        "parent_inode_home",
+        "parent_directory_home",
+        "block_bitmap_home",
+        "inode_bitmap_home",
+        "gdt_home",
+    ):
+        home = case[key]
+        assert isinstance(home, int)
+        assert _read_ext4_home(
+            recovered, home, block_size=block_size
+        ) == _read_ext4_home(success_image, home, block_size=block_size)
+    _, recovered_child, _ = _ext4_inode_record(recovered, 33)
+    assert recovered_child == bytes(len(recovered_child))
+    _, recovered_root, _ = _ext4_inode_record(recovered, 2)
+    assert struct.unpack_from("<H", recovered_root, 0x1A)[0] == root_links
+    assert _read_ext4_home(
+        recovered, orphan_home, block_size=block_size
+    ) == before_orphan
+    assert _read_ext4_home(
+        recovered, child_directory_home, block_size=block_size
+    ) == before_child_directory
+    assert not _ext4_block_allocation_state(
+        recovered, (child_directory_home,)
+    )[child_directory_home]
+    assert not _ext4_inode_allocation_state(recovered, (33,))[33]
+    assert _ext4_group_counts(recovered, 0) == after_group_counts
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+
+def test_staged_vfs_rmdir_crash_before_drain_recovers_the_directory(
+    staged_public_rmdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A crash between RMDIR's checkpoint and its drain leaves recovery work.
+
+    The drain's descriptor write tears after the checkpoint wrote every
+    home of the removal.  The orphan file holds the child, so mount
+    recovery frees its block and inode, and the group's used-directory
+    count and the free counts come out exact.
+    """
+    case = staged_public_rmdir_fixture
+    path = case["source"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    child_inode_home = case["child_inode_home"]
+    parent_inode_home = case["parent_inode_home"]
+    parent_directory_home = case["parent_directory_home"]
+    child_directory_home = case["child_directory_home"]
+    orphan_home = case["orphan_home"]
+    rmdir_ms = case["rmdir_ms"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    root_links_before = case["root_links_before"]
+    after_group_counts = case["after_group_counts"]
+    before_child_directory = case["before_child_directory"]
+    success_image = case["image"]
+    assert isinstance(path, Path)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    for value in (
+        block_size,
+        child_inode_home,
+        parent_inode_home,
+        parent_directory_home,
+        child_directory_home,
+        orphan_home,
+        rmdir_ms,
+        free_blocks_before,
+        free_inodes_before,
+        root_links_before,
+    ):
+        assert isinstance(value, int)
+    assert isinstance(after_group_counts, dict)
+    assert isinstance(before_child_directory, bytes)
+
+    # Each transaction's descriptor opens the emptied log: RMDIR's is
+    # write 7, the first after the journal's activation, and the drain's
+    # is the next write there after RMDIR's checkpoint (19-23).
+    writes = tuple(event for event in success_trace if event[0] == "write")
+    log_start = writes[6][1]
+    checkpoint_end = _write_ordinals_for_ext4_home(
+        success_trace, case["super_home"], block_size=block_size
+    )[1]
+    assert checkpoint_end == 23
+    descriptor_ordinal = next(
+        ordinal
+        for ordinal, (_, lba, _) in enumerate(writes, start=1)
+        if ordinal > checkpoint_end and lba == log_start
+    )
+    assert descriptor_ordinal == 29
+    descriptor_event = _trace_event_index_for_ordinal(
+        success_trace, "write", descriptor_ordinal
+    )
+    retained_child_home = _rmdir_retained_child_inode_home(
+        path, child_number=33, epoch_ms=rmdir_ms, block_size=block_size
+    )
+    _, expected_orphan = _modern_orphan_patches(path, (33,))[1]
+
+    faulted = tmp_path / "staged-rmdir-drain-descriptor.img"
+    recovered = tmp_path / "staged-rmdir-drain-descriptor-recovered.img"
+    stable = tmp_path / "staged-rmdir-drain-descriptor-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_rmdir_attempt_forth("_RDC"),
+                *_forth_accumulated_conjunction(
+                    "_RDC-ALL",
+                    [
+                        "_RDC-MOUNT-IOR 0=",
+                        "_RDC-CLOCK-IOR 0=",
+                        "_RDC-PROFILE-SIZE-IOR 0=",
+                        "_RDC-PROFILE-BIND-IOR 0=",
+                        "_RDC-LOAD-IOR 0=",
+                        "_RDC-BEFORE-RESOLVE-IOR 0=",
+                        "_RDC-RMDIR-IOR 0=",
+                        "_RDC-LAST-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_RDC-LAST-IOR VFS-IOR-REASON VFS-R-IO =",
+                        "_RDC-CHILD 0=",
+                        "_RDC-AFTER-D 0=",
+                        (
+                            "_RDC-AFTER-RESOLVE-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        "_RDC-STAT-AFTER-IOR 0=",
+                        "_RDC-BFREE-AFTER _RDC-BFREE-BEFORE =",
+                        "_RDC-FFREE-AFTER _RDC-FFREE-BEFORE =",
+                        (
+                            "_RDC-ROOT-VN VN.NLINK @ "
+                            "_RDC-ROOT-LINKS-BEFORE 1- ="
+                        ),
+                        "_RDC-CLOCK-CALLS @ 1 =",
+                        "_RDC-WRITER _RDC-PROFILE-BASE =",
+                        "_RDC-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_RDC-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_RDC-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-DESCRIPTOR ="
+                        ),
+                        "_RDC-WRITER _EXT4-JWR.META-ACTIVE + @ 6 =",
+                        (
+                            "_RDC-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-MODERN-DATA-DELETE-FINAL ="
+                        ),
+                        "_RDC-HOME-WRITES 5 =",
+                        "_RDC-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                        "_RDC-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_RDC-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        (
+                            "_RDC-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
+                        ),
+                        "_RDC-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_RDC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    ],
+                ),
+                (
+                    '_RDC-ALL @ IF ." EXT4-PUBLIC-RMDIR-DRAIN-CRASH" '
+                    'ELSE ." EXT4-PUBLIC-RMDIR-DRAIN-CRASH-CHECK " '
+                    "_RDC-ALL-FIRST-FAILURE @ . THEN"
+                ),
+            ],
+            write_faults_by_ordinal={
+                descriptor_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": 200,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-DRAIN-CRASH")
+        assert failed_trace == success_trace[: descriptor_event + 1]
+        assert _read_ext4_home(
+            faulted, child_inode_home, block_size=block_size
+        ) == retained_child_home
+        for home in (parent_inode_home, parent_directory_home):
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == _read_ext4_home(success_image, home, block_size=block_size)
+        assert _read_ext4_home(
+            faulted, orphan_home, block_size=block_size
+        ) == expected_orphan
+        faulted_super, _, _ = _ext4_inode_record(faulted, 2)
+        assert struct.unpack_from("<I", faulted_super, 0x0C)[0] == (
+            free_blocks_before - 1
+        )
+        assert struct.unpack_from("<I", faulted_super, 0x10)[0] == (
+            free_inodes_before - 1
+        )
+        assert struct.unpack_from("<I", faulted_super, 0x64)[0] & 0x0001_0000
+        assert _read_ext4_home(
+            faulted, child_directory_home, block_size=block_size
+        ) == before_child_directory
+        assert _ext4_block_allocation_state(
+            faulted, (child_directory_home,)
+        )[child_directory_home]
+        assert _ext4_inode_allocation_state(faulted, (33,))[33]
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_final_unlink_recovery_view(
+                faulted,
+                recovered,
+                expected_free_blocks=free_blocks_before,
+                expected_free_inodes=free_inodes_before,
+                expected_home_writes=6,
+                expected_replayed=True,
+                prefix="_RDC-R",
+                marker="EXT4-PUBLIC-RMDIR-DRAIN-CRASH-RECOVERED",
+                target_path="/created-dir",
+            )
+        )
+        assert recovery_trace
+        _assert_rmdir_recovered(
+            case,
+            recovered,
+            jbd2_toolchain,
+            after_group_counts=after_group_counts,
+            root_links=root_links_before,
+        )
+        _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+            recovered,
+            stable,
+            expected_free_blocks=free_blocks_before,
+            expected_free_inodes=free_inodes_before,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_RDC-S",
+            marker="EXT4-PUBLIC-RMDIR-DRAIN-CRASH-STABLE",
+            target_path="/created-dir",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_rmdir_open_directory_drains_on_last_close(
+    staged_public_mkdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """An open directory leaves the namespace and drains on its last close.
+
+    RMDIR removes the name and puts the child in the orphan file at once.
+    The child keeps its block and inode while a descriptor holds it, and
+    its last RELEASE runs the drain.
+    """
+    case = staged_public_mkdir_fixture
+    path = case["stable_image"]
+    block_size = case["block_size"]
+    child_directory_home = case["child_directory_home"]
+    group_counts_before = case["group_counts_before"]
+    root_links_before = case["root_links_before"]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(child_directory_home, int)
+    assert isinstance(group_counts_before, dict)
+    assert isinstance(root_links_before, int)
+    backing = tmp_path / "staged-rmdir-open.img"
+    _run_staged_removals(
+        path,
+        (),
+        backing,
+        prefix="_RDO",
+        marker="EXT4-PUBLIC-RMDIR-OPEN",
+        steps=(
+            ("open", b"/created-dir"),
+            ("rm", b"/created-dir"),
+            ("probe", b""),
+            ("close", b""),
+        ),
+        outcomes=("0=", "0=", "0=", "0="),
+        checks=(
+            "{p}-S2-BFREE {p}-BFREE-BEFORE =",
+            "{p}-S2-FFREE {p}-FFREE-BEFORE =",
+            "{p}-S2-ORPHANS 1 =",
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE 1+ =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE 1+ =",
+            "{p}-ROOT-VN VN.NLINK @ {p}-ROOT-LINKS-BEFORE 1- =",
+            "{p}-CTX _EXT4-C.O.ACTIVE + @ 0=",
+            (
+                "{p}-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                "_EXT4-RO-ORPHAN-PRESENT AND 0="
+            ),
+        ),
+        profile=(7, 0, 0),
+        max_steps=1_200_000_000,
+    )
+    _, child_inode, _ = _ext4_inode_record(backing, 33)
+    assert child_inode == bytes(len(child_inode))
+    _, root_inode, _ = _ext4_inode_record(backing, 2)
+    assert struct.unpack_from("<H", root_inode, 0x1A)[0] == root_links_before
+    assert not _ext4_block_allocation_state(
+        backing, (child_directory_home,)
+    )[child_directory_home]
+    assert not _ext4_inode_allocation_state(backing, (33,))[33]
+    assert _ext4_group_counts(backing, 0) == {
+        **group_counts_before,
+        "itable_unused": group_counts_before["itable_unused"] - 1,
+    }
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def _staged_removal_forth(
+    prefix: str,
+    steps: tuple[tuple[str, bytes], ...],
+    *,
+    epoch_ms: int,
+    profile: tuple[int, int, int],
+) -> list[str]:
+    """Build a sequence of public namespace operations under one mount.
+
+    A step is ("rm", path), ("cd", path), ("mkfile", name), ("mkdir",
+    name), ("open", path), ("close", b""), ("probe", b"") or
+    ("assume-empty", path).  An open keeps its descriptor for the next
+    close; a probe records the free counts and the active orphan records
+    at that point; assume-empty marks a directory's children loaded
+    without loading them, so RMDIR reaches the driver's own proof.  Step I
+    leaves its ior in PREFIX-S<I>-IOR and the volume's last ior after it in
+    PREFIX-S<I>-LAST, and the free counts, the root's link count and the
+    clock calls stay readable.
+    """
+    p = prefix
+    lines = [
+        f"VARIABLE {p}-CLOCK-CALLS",
+        (
+            f": {p}-NOW ( context -- epoch-ms ior ) DROP "
+            f"1 {p}-CLOCK-CALLS +! {epoch_ms} 0 ;"
+        ),
+        f"CREATE {p}-STAT VFS-STATFS-SIZE ALLOT",
+        f"T-ARENA CONSTANT {p}-ARENA",
+        (
+            f"{p}-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            f"CONSTANT {p}-MOUNT-IOR CONSTANT {p}-V"
+        ),
+        f"{p}-V _EXT4-CTX CONSTANT {p}-CTX",
+        (
+            f"' {p}-NOW 0 {p}-V EXT4-BIND-WRITE-CLOCK? "
+            f"CONSTANT {p}-CLOCK-IOR"
+        ),
+        *_ext4_dedicated_writer_profile_forth(
+            f"{p}-PROFILE", f"{p}-V", *profile
+        ),
+        f"{p}-V V.ROOT @ D.VNODE @ CONSTANT {p}-ROOT-VN",
+        f"{p}-ROOT-VN VN.NLINK @ CONSTANT {p}-ROOT-LINKS-BEFORE",
+        (
+            f"{p}-STAT VFS-STATFS-SIZE {p}-V VFS-STATFS "
+            f"CONSTANT {p}-STAT-BEFORE-IOR"
+        ),
+        f"{p}-STAT VSF.BFREE @ CONSTANT {p}-BFREE-BEFORE",
+        f"{p}-STAT VSF.FFREE @ CONSTANT {p}-FFREE-BEFORE",
+    ]
+    for index, (operation, text) in enumerate(steps):
+        result = f"CONSTANT {p}-S{index}-IOR"
+        last = f"{p}-V V.LAST-IOR @ CONSTANT {p}-S{index}-LAST"
+        if operation == "close":
+            lines.extend([f"{p}-FD VFS-CLOSE? {result}", last])
+            continue
+        if operation == "probe":
+            lines.extend(
+                [
+                    f"{p}-STAT VFS-STATFS-SIZE {p}-V VFS-STATFS {result}",
+                    f"{p}-STAT VSF.BFREE @ CONSTANT {p}-S{index}-BFREE",
+                    f"{p}-STAT VSF.FFREE @ CONSTANT {p}-S{index}-FFREE",
+                    (
+                        f"{p}-CTX _EXT4-C.O.ACTIVE + @ "
+                        f"CONSTANT {p}-S{index}-ORPHANS"
+                    ),
+                ]
+            )
+            continue
+        buffer_lines, buffer = _forth_bytes_buffer(f"{p}-N{index}", text)
+        lines.extend(buffer_lines)
+        if operation == "rm":
+            lines.append(f"{buffer} {p}-V VFS-RM {result}")
+        elif operation == "cd":
+            lines.append(f"{buffer} {p}-V VFS-CD? {result}")
+        elif operation == "mkfile":
+            lines.append(f"{buffer} {p}-V VFS-MKFILE? {result} DROP")
+        elif operation == "mkdir":
+            lines.append(f"{buffer} {p}-V VFS-MKDIR {result}")
+        elif operation == "open":
+            lines.append(
+                f"{buffer} VFS-FF-READ {p}-V VFS-OPEN? {result} "
+                f"CONSTANT {p}-FD"
+            )
+        elif operation == "assume-empty":
+            lines.append(
+                f"{buffer} {p}-V VFS-RESOLVE? {result} DUP IF "
+                "IN.FLAGS DUP @ VFS-IF-CHILDREN OR SWAP ! ELSE DROP THEN"
+            )
+        else:
+            raise AssertionError(f"unknown step {operation}")
+        lines.append(last)
+    lines.extend(
+        [
+            (
+                f"{p}-STAT VFS-STATFS-SIZE {p}-V VFS-STATFS "
+                f"CONSTANT {p}-STAT-AFTER-IOR"
+            ),
+            f"{p}-STAT VSF.BFREE @ CONSTANT {p}-BFREE-AFTER",
+            f"{p}-STAT VSF.FFREE @ CONSTANT {p}-FFREE-AFTER",
+            f"{p}-CTX _EXT4-C.J.WRITER + @ CONSTANT {p}-WRITER",
+            _forth_xc_plan_scrubbed(f"{p}-PLAN-SCRUBBED", f"{p}-CTX"),
+        ]
+    )
+    return lines
+
+
+def _run_staged_removals(
+    source: Path,
+    patches: tuple[tuple[int, bytes], ...],
+    backing: Path,
+    *,
+    prefix: str,
+    marker: str,
+    steps: tuple[tuple[str, bytes], ...],
+    outcomes: tuple[str, ...],
+    checks: tuple[str, ...],
+    profile: tuple[int, int, int],
+    max_steps: int,
+    epoch_ms: int = _STAGED_APPEND_EPOCH_MS,
+) -> tuple[tuple[tuple[str, int, int], ...], str]:
+    """Run STEPS under one mount, check each outcome, then unmount.
+
+    OUTCOMES gives one predicate tail per step, applied to its ior, and
+    CHECKS further predicates in which {p} stands for PREFIX.  The writer
+    ends idle and clean and the plan record scrubbed.
+    """
+    assert len(outcomes) == len(steps)
+    p = prefix
+    predicates = [
+        f"{p}-MOUNT-IOR 0=",
+        f"{p}-CLOCK-IOR 0=",
+        f"{p}-PROFILE-SIZE-IOR 0=",
+        f"{p}-PROFILE-BIND-IOR 0=",
+        f"{p}-STAT-BEFORE-IOR 0=",
+        f"{p}-STAT-AFTER-IOR 0=",
+        f"{p}-WRITER {p}-PROFILE-BASE =",
+        f"{p}-WRITER _EXT4-JWR-IDLE-CLEAN?",
+        f"{p}-PLAN-SCRUBBED 0<>",
+        *(
+            f"{p}-S{index}-IOR {outcome}"
+            for index, outcome in enumerate(outcomes)
+        ),
+        *(check.replace("{p}", p) for check in checks),
+        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+    ]
+    output, trace, media_sha256 = run_recovery_forth(
+        source,
+        backing,
+        [
+            *_staged_removal_forth(
+                p, steps, epoch_ms=epoch_ms, profile=profile
+            ),
+            *_forth_accumulated_conjunction(f"{p}-OK", predicates),
+            (
+                f'{p}-OK @ IF ." {marker}" ELSE ." {marker}-FAIL " '
+                f"{p}-OK-FIRST-FAILURE @ . THEN"
+            ),
+            f"0 {p}-V VFS-UNMOUNT CONSTANT {p}-UNMOUNT-IOR",
+            (
+                f"{p}-UNMOUNT-IOR 0= {p}-PROFILE-ARENA ARENA-USED 0= AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=backing,
+        max_steps=max_steps,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    return trace, media_sha256
+
+
+_RMDIR_SHAPE_NAMES = tuple(f"{index:02d}-" + "h" * 97 for index in range(40))
+
+
+@pytest.fixture(scope="session")
+def staged_rmdir_shapes_prestate(
+    compact_primary_writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Author the empty directories RMDIR admits and three it refuses.
+
+    debugfs fills /htree and /busy with 40 long names each, e2fsck indexes
+    them, and debugfs removes every name but one in a later leaf of /busy.
+    /d700 has mode 0700, /multi three linear blocks, /loose one block
+    whose `.` record is 16 bytes long, /flagged the DIRSYNC flag, /n3 is
+    an ordinary empty directory a test gives a third link, and /deep has
+    six blocks fragmented so its map has depth one.
+    """
+    base = compact_primary_writer_activation_fixture["image"]
+    debugfs = jbd2_toolchain["debugfs"]
+    e2fsck = jbd2_toolchain["e2fsck"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(base, Path)
+    assert isinstance(debugfs, Path)
+    assert isinstance(e2fsck, Path)
+    assert isinstance(env, dict)
+    directory = tmp_path_factory.mktemp("ext4-rmdir-shapes")
+    image = directory / "rmdir-shapes.img"
+    _copy_sparse_file(base, image)
+    payload = directory / "payload.bin"
+    payload.write_bytes(bytes(range(256)) * 2)
+
+    def run_debugfs(label: str, commands: list[str]) -> None:
+        script = directory / f"{label}.debugfs"
+        script.write_text("\n".join(commands) + "\n")
+        made = subprocess.run(
+            [str(debugfs), "-w", "-f", str(script), str(image)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert made.returncode == 0, made.stdout + made.stderr
+
+    def root_entries() -> dict[bytes, int]:
+        superblock, root_inode, _ = _ext4_inode_record(image, 2)
+        return {
+            name: number
+            for _, number, _, _, name in _checked_linear_directory_entries(
+                superblock,
+                2,
+                struct.unpack_from("<I", root_inode, 0x64)[0],
+                _read_ext4_home(
+                    image,
+                    _extent_root_physical(root_inode, 0),
+                    block_size=1024,
+                ),
+            )
+        }
+
+    run_debugfs(
+        "populate",
+        [
+            "mkdir /htree",
+            "mkdir /busy",
+            *(
+                f"write {payload} /{folder}/{name}"
+                for folder in ("htree", "busy")
+                for name in _RMDIR_SHAPE_NAMES
+            ),
+        ],
+    )
+    indexed = subprocess.run(
+        [str(e2fsck), "-f", "-y", "-D", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert indexed.returncode in (0, 1), indexed.stdout + indexed.stderr
+    superblock, _, _ = _ext4_inode_record(image, 2)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    busy_number = root_entries()[b"busy"]
+    _, busy_inode, _ = _ext4_inode_record(image, busy_number)
+    assert struct.unpack_from("<I", busy_inode, 0x20)[0] & 0x1000
+    busy_blocks = struct.unpack_from("<I", busy_inode, 0x04)[0] // block_size
+    assert busy_blocks >= 3
+    kept_leaf = _extent_map_physical(
+        image, busy_inode, busy_blocks - 1, block_size=block_size
+    )
+    kept = _checked_linear_directory_entries(
+        superblock,
+        busy_number,
+        struct.unpack_from("<I", busy_inode, 0x64)[0],
+        _read_ext4_home(image, kept_leaf, block_size=block_size),
+    )[0][4]
+    run_debugfs(
+        "shape",
+        [
+            *(f"rm /htree/{name}" for name in _RMDIR_SHAPE_NAMES),
+            *(
+                f"rm /busy/{name}"
+                for name in _RMDIR_SHAPE_NAMES
+                if name.encode() != kept
+            ),
+            "mkdir /d700",
+            "sif /d700 mode 040700",
+            "mkdir /multi",
+            "expand_dir /multi",
+            "expand_dir /multi",
+            "mkdir /flagged",
+            "sif /flagged flags 0x90000",
+            "mkdir /loose",
+            "mkdir /n3",
+            "mkdir /deep",
+        ],
+    )
+    numbers = root_entries()
+    _, deep_inode, _ = _ext4_inode_record(image, numbers[b"deep"])
+    deep_first = _extent_root_physical(deep_inode, 0)
+    holes = tuple(deep_first + 2 * index + 1 for index in range(6))
+    assert not any(_ext4_block_allocation_state(image, holes).values())
+    run_debugfs(
+        "deep",
+        [
+            *(f"setb {block}" for block in holes),
+            *("expand_dir /deep" for _ in range(5)),
+            *(f"freeb {block}" for block in holes),
+        ],
+    )
+
+    superblock, loose_inode, _ = _ext4_inode_record(image, numbers[b"loose"])
+    loose_block = bytearray(block_size)
+    struct.pack_into("<IHBB", loose_block, 0, numbers[b"loose"], 16, 1, 2)
+    loose_block[8:9] = b"."
+    struct.pack_into("<IHBB", loose_block, 16, 2, block_size - 28, 2, 2)
+    loose_block[24:26] = b".."
+    struct.pack_into("<IHBB", loose_block, block_size - 12, 0, 12, 0, 0xDE)
+    loose_block = bytearray(
         _linear_directory_block_with_checksum(
-            superblock, 33, 1, noncanonical
+            superblock,
+            numbers[b"loose"],
+            struct.unpack_from("<I", loose_inode, 0x64)[0],
+            loose_block,
         )
     )
-    assert _checked_linear_directory_entries(
-        superblock, 33, 1, noncanonical
-    ) == (
-        (0, 33, 16, 2, b"."),
-        (16, 2, block_size - 28, 2, b".."),
-    )
-    child_offset = child_directory_home * block_size
-    shape_patches = ((child_offset, bytes(noncanonical)),)
-    expected_shape_image = bytearray(path.read_bytes())
-    expected_shape_image[
-        child_offset : child_offset + block_size
-    ] = noncanonical
-    expected_shape_sha256 = hashlib.sha256(expected_shape_image).hexdigest()
+    with image.open("r+b") as target:
+        target.seek(_extent_root_physical(loose_inode, 0) * block_size)
+        target.write(loose_block)
+    _assert_e2fsck_clean(image, jbd2_toolchain)
 
-    bad_shape = tmp_path / "staged-rmdir-noncanonical-empty.img"
-    output, trace, media_sha256 = run_recovery_forth(
-        path,
-        bad_shape,
-        [
-            *_staged_rmdir_attempt_forth("_RNS"),
+    shapes: dict[bytes, dict[str, int]] = {}
+    for name in (
+        b"d700",
+        b"multi",
+        b"deep",
+        b"htree",
+        b"loose",
+        b"busy",
+        b"flagged",
+        b"n3",
+    ):
+        number = numbers[name]
+        _, inode, inode_offset = _ext4_inode_record(image, number)
+        shapes[name] = {
+            "number": number,
+            "inode_offset": inode_offset,
+            "mode": struct.unpack_from("<H", inode, 0x00)[0],
+            "flags": struct.unpack_from("<I", inode, 0x20)[0],
+            "logical_blocks": struct.unpack_from("<I", inode, 0x04)[0]
+            // block_size,
+            "blocks": struct.unpack_from("<I", inode, 0x1C)[0]
+            // (block_size // 512),
+            "depth": struct.unpack_from("<H", inode, 0x28 + 6)[0],
+        }
+    assert shapes[b"d700"]["mode"] == 0o40700
+    assert shapes[b"multi"]["logical_blocks"] == 3
+    assert shapes[b"multi"]["flags"] & 0x1000 == 0
+    assert shapes[b"deep"]["depth"] == 1
+    assert shapes[b"deep"]["logical_blocks"] == 6
+    assert shapes[b"deep"]["blocks"] == 7
+    assert shapes[b"htree"]["flags"] & 0x1000
+    assert shapes[b"htree"]["logical_blocks"] >= 3
+    assert shapes[b"flagged"]["flags"] == 0x90000
+    fixture = dict(_build_jbd2_activation_fixture(image))
+    fixture.update(
+        {
+            "image": image,
+            "block_size": block_size,
+            "shapes": shapes,
+            "kept": kept,
+            "free_blocks": struct.unpack_from("<I", superblock, 0x0C)[0],
+            "free_inodes": struct.unpack_from("<I", superblock, 0x10)[0],
+            "root_links": struct.unpack_from(
+                "<H", _ext4_inode_record(image, 2)[1], 0x1A
+            )[0],
+        }
+    )
+    return fixture
+
+
+def _ext4_total_used_dirs(path: Path) -> int:
+    """Sum the primary descriptors' used-directory counts."""
+    layout = _ext4_recovery_layout(path)
+    groups = layout["groups"]
+    assert isinstance(groups, int)
+    return sum(
+        _ext4_group_counts(path, group)["used_dirs"] for group in range(groups)
+    )
+
+
+def test_staged_vfs_rmdir_removes_every_empty_directory_shape(
+    staged_rmdir_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """RMDIR removes empty directories of any mode, size, index and depth.
+
+    Each removal proves its child empty by reading every block through
+    the child's map, takes the child into the orphan file and drains it,
+    so every block and inode the five held comes back free.
+    """
+    fixture = staged_rmdir_shapes_prestate
+    image = fixture["image"]
+    patches = fixture["source_patches"]
+    shapes = fixture["shapes"]
+    root_links = fixture["root_links"]
+    assert isinstance(image, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(shapes, dict)
+    assert isinstance(root_links, int)
+    used_dirs_before = _ext4_total_used_dirs(image)
+    # Two mounts keep each run well inside the default step budget: the
+    # small linear children first, then the indexed and the deep one.
+    first = tmp_path / "rmdir-shapes-linear.img"
+    second = tmp_path / "rmdir-shapes-indexed.img"
+    source = image
+    source_patches: tuple[tuple[int, bytes], ...] = patches
+    for backing, names, label in (
+        (first, (b"d700", b"multi", b"loose"), "LINEAR"),
+        (second, (b"htree", b"deep"), "INDEXED"),
+    ):
+        blocks = sum(shapes[name]["blocks"] for name in names)
+        _run_staged_removals(
+            source,
+            source_patches,
+            backing,
+            prefix=f"_RS{label[0]}",
+            marker=f"EXT4-RMDIR-SHAPES-{label}",
+            steps=tuple(("rm", b"/" + name) for name in names),
+            outcomes=tuple("0=" for _ in names),
+            checks=(
+                f"{{p}}-BFREE-AFTER {{p}}-BFREE-BEFORE {blocks} + =",
+                f"{{p}}-FFREE-AFTER {{p}}-FFREE-BEFORE {len(names)} + =",
+                (
+                    "{p}-ROOT-VN VN.NLINK @ "
+                    f"{{p}}-ROOT-LINKS-BEFORE {len(names)} - ="
+                ),
+                f"{{p}}-CLOCK-CALLS @ {len(names)} =",
+                "{p}-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                (
+                    "{p}-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                    "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                ),
+            ),
+            profile=(10, 0, 2),
+            max_steps=1_200_000_000,
+        )
+        _assert_e2fsck_clean(backing, jbd2_toolchain)
+        source = backing
+        source_patches = ()
+
+    removed = (b"d700", b"multi", b"loose", b"htree", b"deep")
+    assert not any(
+        _ext4_inode_allocation_state(
+            second, tuple(shapes[name]["number"] for name in removed)
+        ).values()
+    )
+    for name in removed:
+        _, inode, _ = _ext4_inode_record(second, shapes[name]["number"])
+        assert inode == bytes(len(inode))
+    assert _ext4_total_used_dirs(second) == used_dirs_before - len(removed)
+    final_super, final_root, _ = _ext4_inode_record(second, 2)
+    assert struct.unpack_from("<H", final_root, 0x1A)[0] == (
+        root_links - len(removed)
+    )
+    assert struct.unpack_from("<I", final_super, 0x0C)[0] == (
+        fixture["free_blocks"]
+        + sum(shapes[name]["blocks"] for name in removed)
+    )
+    assert struct.unpack_from("<I", final_super, 0x10)[0] == (
+        fixture["free_inodes"] + len(removed)
+    )
+    _ext4_mount_and_resolve(
+        second,
+        tmp_path / "rmdir-shapes-readback.img",
+        tuple(
+            (b"/" + name, shapes[name]["number"])
+            for name in (b"busy", b"flagged", b"n3")
+        ),
+        absent=tuple(b"/" + name for name in removed),
+        prefix="_RSR",
+        marker="EXT4-RMDIR-SHAPES-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+    )
+
+
+def test_staged_vfs_rmdir_refuses_live_child_extra_link_and_flag(
+    staged_rmdir_shapes_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A live name in a later leaf, a third link and DIRSYNC refuse RMDIR.
+
+    The VFS is told /busy's children are loaded, so the driver's own
+    emptiness proof meets the name it kept; /n3's inode gains a third
+    link, which the removal's entry refuses before it reads the clock.  No
+    refusal writes the medium.
+    """
+    fixture = staged_rmdir_shapes_prestate
+    image = fixture["image"]
+    patches = fixture["source_patches"]
+    shapes = fixture["shapes"]
+    assert isinstance(image, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(shapes, dict)
+    superblock, n3_inode, n3_offset = _ext4_inode_record(
+        image, shapes[b"n3"]["number"]
+    )
+    linked = bytearray(n3_inode)
+    assert struct.unpack_from("<H", linked, 0x1A)[0] == 2
+    struct.pack_into("<H", linked, 0x1A, 3)
+    linked = bytearray(
+        _inode_with_checksum(superblock, shapes[b"n3"]["number"], linked)
+    )
+    refusal_patches = (*patches, (n3_offset, bytes(linked)))
+    expected = bytearray(image.read_bytes())
+    for offset, payload in refusal_patches:
+        expected[offset : offset + len(payload)] = payload
+    expected_sha256 = hashlib.sha256(expected).hexdigest()
+    del expected
+    backing = tmp_path / "rmdir-shape-refusals.img"
+    trace, media_sha256 = _run_staged_removals(
+        image,
+        refusal_patches,
+        backing,
+        prefix="_RSF",
+        marker="EXT4-RMDIR-SHAPE-REFUSALS",
+        steps=(
+            ("assume-empty", b"/busy"),
+            ("rm", b"/busy"),
+            ("rm", b"/n3"),
+            ("rm", b"/flagged"),
+        ),
+        outcomes=(
+            "0=",
+            "VFS-E-NOTEMPTY =",
+            "VFS-E-CONFLICT =",
+            "VFS-IOR-DETAIL EXT4-D-WRITE-POLICY =",
+        ),
+        checks=(
+            "{p}-S3-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
+            "{p}-ROOT-VN VN.NLINK @ {p}-ROOT-LINKS-BEFORE =",
+            # /busy and /flagged refuse in the cold plan, after the
+            # clock; /n3 refuses at the removal's entry.
+            "{p}-CLOCK-CALLS @ 2 =",
+            "{p}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+            "{p}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+            "{p}-V V.FLAGS @ VFS-F-RO AND 0=",
+        ),
+        profile=(10, 0, 2),
+        max_steps=1_200_000_000,
+    )
+    assert trace == ()
+    assert media_sha256 == expected_sha256
+    assert _sha256(backing) == expected_sha256
+
+
+@pytest.fixture(scope="session")
+def staged_first_leaf_removals_fixture(
+    staged_rename_over_indexed_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Remove a leaf's first record in each form the kernel makes.
+
+    In /many's first leaf with three records: the first, a last link with
+    a block, enters the orphan file and its record turns unused in place;
+    the second, also a last link with a block, joins that unused record;
+    an empty file then created into the leaf takes the unused record, and
+    its UNLINK frees its inode at once and blanks the record again.
+    """
+    fixture = staged_rename_over_indexed_fixture
+    image = fixture["image"]
+    patches = fixture["source_patches"]
+    leaves = fixture["leaves"]
+    block_size = fixture["block_size"]
+    many_number = fixture["many_number"]
+    many_generation = fixture["many_generation"]
+    assert isinstance(image, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(leaves, dict)
+    assert isinstance(block_size, int)
+    assert isinstance(many_number, int)
+    assert isinstance(many_generation, int)
+    by_leaf: dict[int, list[tuple[int, bytes, int, int]]] = {}
+    for name, (logical, home, number, offset, _) in leaves.items():
+        by_leaf.setdefault(logical, []).append((offset, name, number, home))
+    leaf_logical = min(
+        logical for logical, records in by_leaf.items() if len(records) >= 3
+    )
+    records = sorted(by_leaf[leaf_logical])
+    first_offset, first_name, first_number, leaf_home = records[0]
+    second_offset, second_name, second_number, _ = records[1]
+    third_name, third_number = records[2][1], records[2][2]
+    other_name, other_number = next(
+        (record[1], record[2])
+        for logical, entries in sorted(by_leaf.items())
+        if logical != leaf_logical
+        for record in sorted(entries)
+    )
+    superblock = _patched_ext4_home(image, patches, 1, block_size=block_size)
+    original_leaf = _patched_ext4_home(
+        image, patches, leaf_home, block_size=block_size
+    )
+    first_rec = struct.unpack_from("<H", original_leaf, first_offset + 4)[0]
+    second_rec = struct.unpack_from("<H", original_leaf, second_offset + 4)[0]
+    assert first_offset == 0
+    assert second_offset == first_rec
+
+    # The hash model must route every live name to its own leaf before it
+    # chooses a new name for this one.
+    _, many_inode, many_inode_offset = _ext4_inode_record(image, many_number)
+    root = _patched_ext4_home(
+        image,
+        patches,
+        _extent_map_physical(image, many_inode, 0, block_size=block_size),
+        block_size=block_size,
+    )
+    entries = _dx_entries(root, 32)
+
+    def routed(name: bytes) -> int:
+        name_hash = _indexed_split_half_md4_hash(superblock, name)[0]
+        return entries[_dx_route(root, 32, name_hash)][1]
+
+    assert all(routed(name) == leaf[0] for name, leaf in leaves.items())
+    created = next(
+        candidate
+        for candidate in (f"made-{index:04d}".encode() for index in range(4096))
+        if routed(candidate) == leaf_logical
+    )
+
+    # The two removals leave one unused record over both.  The insert
+    # takes its first NEEDED bytes for the new name and leaves the rest an
+    # unused record, and the last UNLINK blanks the name's record in place.
+    merged = first_rec + second_rec
+    needed = (8 + len(created) + 3) & ~3
+    assert merged - needed >= 12
+    expected_leaf = bytearray(original_leaf)
+    expected_leaf[0:merged] = bytes(merged)
+    struct.pack_into("<H", expected_leaf, 4, needed)
+    struct.pack_into("<H", expected_leaf, needed + 4, merged - needed)
+    expected_leaf = bytearray(
+        _linear_directory_block_with_checksum(
+            superblock, many_number, many_generation, expected_leaf
+        )
+    )
+    _, first_inode, first_inode_offset = _ext4_inode_record(image, first_number)
+    _, second_inode, _ = _ext4_inode_record(image, second_number)
+    first_data = _extent_root_physical(first_inode, 0)
+    second_data = _extent_root_physical(second_inode, 0)
+
+    directory = tmp_path_factory.mktemp("ext4-first-leaf-removals")
+    backing = directory / "first-leaf-removals.img"
+    steps = (
+        ("rm", b"/many/" + first_name),
+        ("rm", b"/many/" + second_name),
+        ("cd", b"/many"),
+        ("mkfile", created),
+        ("rm", b"/many/" + created),
+    )
+    trace, media_sha256 = _run_staged_removals(
+        image,
+        patches,
+        backing,
+        prefix="_FLR",
+        marker="EXT4-FIRST-LEAF-REMOVALS",
+        steps=steps,
+        outcomes=tuple("0=" for _ in steps),
+        checks=(
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE 2 + =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE 2 + =",
+            "{p}-CLOCK-CALLS @ 4 =",
+            "{p}-CTX _EXT4-C.O.ACTIVE + @ 0=",
             (
-                _forth_conjunction(
+                "{p}-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                "_EXT4-RO-ORPHAN-PRESENT AND 0="
+            ),
+            "{p}-V V.FLAGS @ VFS-F-RO AND 0=",
+        ),
+        profile=(8, 0, 1),
+        max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+    )
+    assert _read_ext4_home(
+        backing, leaf_home, block_size=block_size
+    ) == expected_leaf
+    for number in (first_number, second_number):
+        _, inode, _ = _ext4_inode_record(backing, number)
+        assert inode == bytes(len(inode))
+    assert not any(
+        _ext4_inode_allocation_state(
+            backing, (first_number, second_number)
+        ).values()
+    )
+    assert not any(
+        _ext4_block_allocation_state(
+            backing, (first_data, second_data)
+        ).values()
+    )
+    final_super, _, _ = _ext4_inode_record(backing, 2)
+    assert struct.unpack_from("<I", final_super, 0x0C)[0] == (
+        fixture["free_blocks"] + 2
+    )
+    assert struct.unpack_from("<I", final_super, 0x10)[0] == (
+        fixture["free_inodes"] + 2
+    )
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    _ext4_mount_and_resolve(
+        backing,
+        directory / "first-leaf-removals-readback.img",
+        (
+            (b"/many/" + third_name, third_number),
+            (b"/many/" + other_name, other_number),
+        ),
+        absent=(
+            b"/many/" + first_name,
+            b"/many/" + second_name,
+            b"/many/" + created,
+        ),
+        prefix="_FLB",
+        marker="EXT4-FIRST-LEAF-REMOVALS-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+    )
+    return {
+        "source": image,
+        "source_patches": patches,
+        "image": backing,
+        "trace": trace,
+        "media_sha256": media_sha256,
+        "block_size": block_size,
+        "superblock": superblock,
+        "many_number": many_number,
+        "many_generation": many_generation,
+        "leaf_home": leaf_home,
+        "original_leaf": original_leaf,
+        "first_name": first_name,
+        "first_number": first_number,
+        "first_rec": first_rec,
+        "first_inode_offset": first_inode_offset,
+        "many_inode_offset": many_inode_offset,
+        "first_data": first_data,
+        "free_blocks": fixture["free_blocks"],
+        "free_inodes": fixture["free_inodes"],
+    }
+
+
+def test_staged_vfs_unlink_first_leaf_records_in_every_form(
+    staged_first_leaf_removals_fixture: dict[str, object],
+) -> None:
+    image = staged_first_leaf_removals_fixture["image"]
+    trace = staged_first_leaf_removals_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def test_staged_vfs_unlink_first_leaf_record_home_tear_replays_and_drains(
+    staged_first_leaf_removals_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A torn checkpoint of a blanked first record replays and drains.
+
+    The tear lands in the leaf after the target's and the parent's inode
+    homes are written.  Recovery replays the committed blank record and
+    the orphan file's entry, then frees the file's block and inode.
+    """
+    case = staged_first_leaf_removals_fixture
+    path = case["source"]
+    patches = case["source_patches"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    superblock = case["superblock"]
+    many_number = case["many_number"]
+    many_generation = case["many_generation"]
+    leaf_home = case["leaf_home"]
+    original_leaf = case["original_leaf"]
+    first_name = case["first_name"]
+    first_number = case["first_number"]
+    first_rec = case["first_rec"]
+    first_data = case["first_data"]
+    first_inode_offset = case["first_inode_offset"]
+    many_inode_offset = case["many_inode_offset"]
+    free_blocks = case["free_blocks"]
+    free_inodes = case["free_inodes"]
+    assert isinstance(path, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(original_leaf, bytes)
+    assert isinstance(first_name, bytes)
+    for value in (
+        block_size,
+        many_number,
+        many_generation,
+        leaf_home,
+        first_number,
+        first_rec,
+        first_data,
+        first_inode_offset,
+        many_inode_offset,
+        free_blocks,
+        free_inodes,
+    ):
+        assert isinstance(value, int)
+    # The checkpoint writes the target's inode home and the parent's
+    # before the leaf; one home serves both when they share a block.
+    shared_home = (
+        first_inode_offset // block_size == many_inode_offset // block_size
+    )
+    homes_before_leaf = 1 if shared_home else 2
+
+    blank_leaf = bytearray(original_leaf)
+    blank_leaf[0:4] = bytes(4)
+    blank_leaf[6:first_rec] = bytes(first_rec - 6)
+    blank_leaf = _linear_directory_block_with_checksum(
+        superblock, many_number, many_generation, blank_leaf
+    )
+    # The first UNLINK's checkpoint writes the leaf first of all the
+    # sequence's writes to it.
+    leaf_ordinal = _write_ordinals_for_ext4_home(
+        success_trace, leaf_home, block_size=block_size
+    )[0]
+    leaf_event = _trace_event_index_for_ordinal(
+        success_trace, "write", leaf_ordinal
+    )
+    tear_offset = 4
+    torn_leaf = blank_leaf[:tear_offset] + original_leaf[tear_offset:]
+    assert torn_leaf not in {blank_leaf, original_leaf}
+
+    faulted = tmp_path / "first-leaf-blank-tear.img"
+    recovered = tmp_path / "first-leaf-blank-tear-recovered.img"
+    stable = tmp_path / "first-leaf-blank-tear-stable.img"
+    p = "_FLT"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_removal_forth(
+                    p,
+                    (("rm", b"/many/" + first_name),),
+                    epoch_ms=_STAGED_APPEND_EPOCH_MS,
+                    profile=(8, 0, 1),
+                ),
+                f"{p}-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT {p}-HOMES",
+                *_forth_accumulated_conjunction(
+                    f"{p}-ALL",
                     [
-                        "_RNS-MOUNT-IOR 0=",
-                        "_RNS-CLOCK-IOR 0=",
-                        "_RNS-PROFILE-SIZE-IOR 0=",
-                        "_RNS-PROFILE-BIND-IOR 0=",
-                        "_RNS-LOAD-IOR 0=",
-                        "_RNS-BEFORE-RESOLVE-IOR 0=",
+                        f"{p}-MOUNT-IOR 0=",
+                        f"{p}-CLOCK-IOR 0=",
+                        f"{p}-PROFILE-SIZE-IOR 0=",
+                        f"{p}-PROFILE-BIND-IOR 0=",
+                        f"{p}-S0-IOR 0=",
+                        f"{p}-S0-LAST VFS-IOR-REASON VFS-R-IO =",
+                        f"{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
+                        f"{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
+                        f"{p}-CLOCK-CALLS @ 1 =",
+                        f"{p}-WRITER {p}-PROFILE-BASE =",
                         (
-                            "_RNS-RMDIR-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
+                            f"{p}-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
                         ),
                         (
-                            "_RNS-RMDIR-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-WRITE-POLICY ="
+                            f"{p}-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-CHECKPOINT-HOME ="
                         ),
-                        "_RNS-LAST-IOR _RNS-RMDIR-IOR =",
-                        "_RNS-CHILD _RNS-D =",
-                        "_RNS-AFTER-D _RNS-D =",
-                        "_RNS-AFTER-RESOLVE-IOR 0=",
-                        "_RNS-VN VN.NLINK @ 2 =",
-                        "_RNS-ROOT-VN VN.NLINK @ _RNS-ROOT-LINKS-BEFORE =",
-                        "_RNS-ICOUNT-AFTER _RNS-ICOUNT-BEFORE =",
-                        "_RNS-VCOUNT-AFTER _RNS-VCOUNT-BEFORE =",
-                        "_RNS-BFREE-AFTER _RNS-BFREE-BEFORE =",
-                        "_RNS-FFREE-AFTER _RNS-FFREE-BEFORE =",
-                        "_RNS-CLOCK-CALLS @ 1 =",
-                        "_RNS-WRITER _RNS-PROFILE-BASE =",
-                        "_RNS-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_RNS-HOME-WRITES 0=",
-                        "_RNS-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
-                        "_RNS-V V.FLAGS @ VFS-F-DIRTY AND 0=",
-                        "_RNS-V V.FLAGS @ VFS-F-RO AND 0=",
-                    ]
-                )
-                + ' IF ." EXT4-PUBLIC-RMDIR-NONCANONICAL" THEN'
-            ),
-        ],
-        patches=shape_patches,
-        capture_media=bad_shape,
-    )
-    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-NONCANONICAL")
-    assert trace == ()
-    assert media_sha256 == expected_shape_sha256
-    assert _sha256(bad_shape) == expected_shape_sha256
+                        (
+                            f"{p}-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            f"{homes_before_leaf + 3} ="
+                        ),
+                        (
+                            f"{p}-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-ADD-FIRST ="
+                        ),
+                        f"{p}-HOMES {homes_before_leaf} =",
+                        f"{p}-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        f"{p}-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        f"{p}-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        f"{p}-PLAN-SCRUBBED 0<>",
+                    ],
+                ),
+                (
+                    f'{p}-ALL @ IF ." EXT4-FIRST-LEAF-BLANK-TEAR" '
+                    'ELSE ." EXT4-FIRST-LEAF-BLANK-TEAR-CHECK " '
+                    f"{p}-ALL-FIRST-FAILURE @ . THEN"
+                ),
+            ],
+            patches=patches,
+            write_faults_by_ordinal={
+                leaf_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+        )
+        _assert_emitted(output, "EXT4-FIRST-LEAF-BLANK-TEAR")
+        assert failed_trace == success_trace[: leaf_event + 1]
+        assert _read_ext4_home(
+            faulted, leaf_home, block_size=block_size
+        ) == torn_leaf
+        assert _ext4_inode_allocation_state(faulted, (first_number,)) == {
+            first_number: True
+        }
+        assert _ext4_block_allocation_state(faulted, (first_data,)) == {
+            first_data: True
+        }
 
-    open_ref = tmp_path / "staged-rmdir-open-ref.img"
-    output, trace, media_sha256 = run_recovery_forth(
-        path,
-        open_ref,
-        [
-            "VARIABLE _ROR-CLOCK-CALLS",
-            (
-                ": _ROR-NOW ( context -- epoch-ms ior ) DROP "
-                "1 _ROR-CLOCK-CALLS +! 3000000135801 0 ;"
-            ),
-            (
-                "T-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
-                "CONSTANT _ROR-MOUNT-IOR CONSTANT _ROR-V"
-            ),
-            "_ROR-V _EXT4-CTX CONSTANT _ROR-CTX",
-            (
-                "' _ROR-NOW 0 _ROR-V EXT4-BIND-WRITE-CLOCK? "
-                "CONSTANT _ROR-CLOCK-IOR"
-            ),
-            *_ext4_dedicated_writer_profile_forth(
-                "_ROR-PROFILE", "_ROR-V", 7, 0, 1
-            ),
-            (
-                "_ROR-V V.ROOT @ _ROR-V _VFS-ENSURE-CHILDREN? "
-                "CONSTANT _ROR-LOAD-IOR"
-            ),
-            (
-                'S" /created-dir" _ROR-V VFS-RESOLVE? '
-                "CONSTANT _ROR-RESOLVE-IOR CONSTANT _ROR-D"
-            ),
-            "_ROR-D D.VNODE @ CONSTANT _ROR-VN",
-            "1 _ROR-VN VN.OPEN-REFS !",
-            "_ROR-V V.ICOUNT @ CONSTANT _ROR-ICOUNT",
-            "_ROR-V V.VCOUNT @ CONSTANT _ROR-VCOUNT",
-            "_ROR-V V.ROOT @ D.VNODE @ CONSTANT _ROR-ROOT-VN",
-            "_ROR-ROOT-VN VN.NLINK @ CONSTANT _ROR-ROOT-LINKS",
-            'S" /created-dir" _ROR-V VFS-RM CONSTANT _ROR-IOR',
-            (
-                'S" created-dir" _ROR-V V.ROOT @ _VFS-FIND-CHILD '
-                "CONSTANT _ROR-CHILD"
-            ),
-            (
-                _forth_conjunction(
-                    [
-                        "_ROR-MOUNT-IOR 0=",
-                        "_ROR-CLOCK-IOR 0=",
-                        "_ROR-PROFILE-SIZE-IOR 0=",
-                        "_ROR-PROFILE-BIND-IOR 0=",
-                        "_ROR-LOAD-IOR 0=",
-                        "_ROR-RESOLVE-IOR 0=",
-                        "_ROR-IOR VFS-E-BUSY =",
-                        "_ROR-CHILD _ROR-D =",
-                        "_ROR-VN VN.NLINK @ 2 =",
-                        "_ROR-VN VN.OPEN-REFS @ 1 =",
-                        "_ROR-ROOT-VN VN.NLINK @ _ROR-ROOT-LINKS =",
-                        "_ROR-V V.ICOUNT @ _ROR-ICOUNT =",
-                        "_ROR-V V.VCOUNT @ _ROR-VCOUNT =",
-                        "_ROR-CLOCK-CALLS @ 0=",
-                        "_ROR-PROFILE-BASE _EXT4-JWR-IDLE-CLEAN?",
-                        "_ROR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
-                        "_ROR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
-                        "_ROR-V V.FLAGS @ VFS-F-RO AND 0=",
-                    ]
-                )
-                + ' IF ." EXT4-PUBLIC-RMDIR-OPEN-REF" THEN'
-            ),
-        ],
-        capture_media=open_ref,
+        _, recovery_trace, recovery_sha256 = (
+            _staged_final_unlink_recovery_view(
+                faulted,
+                recovered,
+                expected_free_blocks=free_blocks + 1,
+                expected_free_inodes=free_inodes + 1,
+                expected_home_writes=6,
+                expected_replayed=True,
+                prefix="_FLT-R",
+                marker="EXT4-FIRST-LEAF-BLANK-TEAR-RECOVERED",
+                target_path="/many/" + first_name.decode(),
+            )
+        )
+        assert recovery_trace
+        assert _read_ext4_home(
+            recovered, leaf_home, block_size=block_size
+        ) == blank_leaf
+        _, recovered_inode, _ = _ext4_inode_record(recovered, first_number)
+        assert recovered_inode == bytes(len(recovered_inode))
+        assert _ext4_inode_allocation_state(recovered, (first_number,)) == {
+            first_number: False
+        }
+        assert _ext4_block_allocation_state(recovered, (first_data,)) == {
+            first_data: False
+        }
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+        _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+            recovered,
+            stable,
+            expected_free_blocks=free_blocks + 1,
+            expected_free_inodes=free_inodes + 1,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_FLT-S",
+            marker="EXT4-FIRST-LEAF-BLANK-TEAR-STABLE",
+            target_path="/many/" + first_name.decode(),
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
+def staged_level_one_two_node_prestate(
+    staged_public_indexed_leaf_split_prestate: dict[str, object],
+) -> dict[str, object]:
+    return _indexed_level_one_prestate(
+        staged_public_indexed_leaf_split_prestate, node_leaf_counts=(3, 2)
     )
-    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-OPEN-REF")
-    assert trace == ()
-    assert media_sha256 == source_sha256
-    assert _sha256(open_ref) == source_sha256
+
+
+def test_staged_vfs_removals_in_a_level_one_htree_with_two_nodes(
+    staged_level_one_two_node_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """MKDIR, RMDIR and a first-record UNLINK in a two-node level-one tree.
+
+    The new directory's name hashes into the second node's last empty
+    leaf and takes the start of the leaf's one unused record; RMDIR blanks
+    that record and drains the child.  candidate-000069, the first record
+    of the first node's full leaf, names an inode with further links, so
+    its record blanks in place and only that inode's link count drops.
+    """
+    prestate = staged_level_one_two_node_prestate
+    path = prestate["source"]
+    patches = prestate["source_patches"]
+    empty_hashes = prestate["empty_hashes"]
+    extra_first = prestate["extra_first"]
+    assert isinstance(path, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(empty_hashes, tuple)
+    assert isinstance(extra_first, int)
+    assert len(empty_hashes) == 2
+    block_size = 1024
+    superblock = _patched_ext4_home(path, patches, 1, block_size=block_size)
+    name = next(
+        candidate
+        for candidate in (f"dir-{index:04d}".encode() for index in range(4096))
+        if _indexed_split_half_md4_hash(superblock, candidate)[0]
+        >= empty_hashes[1]
+    )
+    # The empty leaves are the first two blocks of the run after the
+    # original four; the second takes every hash from its boundary up.
+    empty_leaf_home = extra_first + 1
+    original_empty = _patched_ext4_home(
+        path, patches, empty_leaf_home, block_size=block_size
+    )
+    needed = (8 + len(name) + 3) & ~3
+    expected_empty = bytearray(original_empty)
+    struct.pack_into("<H", expected_empty, 4, needed)
+    struct.pack_into(
+        "<IHBB", expected_empty, needed, 0, block_size - 12 - needed, 0, 0
+    )
+    expected_empty = _linear_directory_block_with_checksum(
+        superblock, 27, 0, expected_empty
+    )
+    selected_home = 1357
+    original_selected = _patched_ext4_home(
+        path, patches, selected_home, block_size=block_size
+    )
+    first_rec = struct.unpack_from("<H", original_selected, 4)[0]
+    assert original_selected[8:24] == b"candidate-000069"
+    expected_selected = bytearray(original_selected)
+    expected_selected[0:4] = bytes(4)
+    expected_selected[6:first_rec] = bytes(first_rec - 6)
+    expected_selected = _linear_directory_block_with_checksum(
+        superblock, 27, 0, expected_selected
+    )
+    def patched_links(number: int) -> int:
+        offset = _ext4_inode_record(path, number)[2]
+        home = _patched_ext4_home(
+            path, patches, offset // block_size, block_size=block_size
+        )
+        return struct.unpack_from("<H", home, offset % block_size + 0x1A)[0]
+
+    links_before = patched_links(28)
+    parent_links_before = patched_links(27)
+    assert links_before > 2
+
+    backing = tmp_path / "level-one-two-node-removals.img"
+    steps = (
+        ("cd", b"/fixture/indexed"),
+        ("mkdir", name),
+        ("rm", b"/fixture/indexed/" + name),
+        ("rm", b"/fixture/indexed/candidate-000069"),
+    )
+    _run_staged_removals(
+        path,
+        patches,
+        backing,
+        prefix="_L2R",
+        marker="EXT4-LEVEL-ONE-TWO-NODE-REMOVALS",
+        steps=steps,
+        outcomes=tuple("0=" for _ in steps),
+        checks=(
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
+            "{p}-CLOCK-CALLS @ 3 =",
+            "{p}-CTX _EXT4-C.O.ACTIVE + @ 0=",
+        ),
+        profile=(10, 0, 1),
+        max_steps=2_400_000_000,
+    )
+    assert _read_ext4_home(
+        backing, empty_leaf_home, block_size=block_size
+    ) == expected_empty
+    assert _read_ext4_home(
+        backing, selected_home, block_size=block_size
+    ) == expected_selected
+    _, linked_after, _ = _ext4_inode_record(backing, 28)
+    assert struct.unpack_from("<H", linked_after, 0x1A)[0] == links_before - 1
+    _, parent_after, _ = _ext4_inode_record(backing, 27)
+    assert struct.unpack_from("<H", parent_after, 0x1A)[0] == (
+        parent_links_before
+    )
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    _ext4_mount_and_resolve(
+        backing,
+        tmp_path / "level-one-two-node-readback.img",
+        (
+            (b"/fixture/indexed/collision-068446", 28),
+            (b"/fixture/indexed/candidate-000064", 28),
+        ),
+        absent=(
+            b"/fixture/indexed/candidate-000069",
+            b"/fixture/indexed/" + name,
+        ),
+        prefix="_L2B",
+        marker="EXT4-LEVEL-ONE-TWO-NODE-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -66919,21 +68162,14 @@ def test_staged_vfs_empty_final_unlink_descriptor_tear_retains_name(
                 (
                     _forth_conjunction(
                         [
+                            "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                             (
-                                "_XU-NAME-SNAPSHOT 256 "
+                                "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
+                                "_EUD-CTX _EXT4-C.XC-PLAN + @ "
+                                "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                             ),
                         ]
                     )
@@ -67151,21 +68387,14 @@ def test_staged_vfs_empty_final_unlink_directory_tear_replays_release(
                 (
                     _forth_conjunction(
                         [
+                            "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                             (
-                                "_XU-NAME-SNAPSHOT 256 "
+                                "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
+                                "_EUH-CTX _EXT4-C.XC-PLAN + @ "
+                                "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                             ),
                         ]
                     )
@@ -70522,21 +71751,14 @@ def staged_public_unlink_fixture(
             (
                 _forth_conjunction(
                     [
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-NAME-SNAPSHOT 256 "
+                            "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
+                            "_UL-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                         ),
                     ]
                 )
@@ -70594,21 +71816,14 @@ def staged_public_unlink_fixture(
                         ),
                         "_UL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         "_UL-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-NAME-SNAPSHOT 256 "
+                            "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
+                            "_UL-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                         ),
                     ]
                 )
@@ -71226,8 +72441,8 @@ def staged_public_final_unlink_closed_fixture(
                     "_UFC-V V.VCOUNT @ _UFC-OLD-VCOUNT 1- =",
                     # The deletion of the emptied map, which the
                     # file's release passes reach before it.
-                    "_XU-CLEANUP-CREDIT @ 5 =",
-                    "_XU-CLEANUP-REVOKE @ 0=",
+                    "_XC-CLEANUP-CREDIT @ 5 =",
+                    "_XC-CLEANUP-REVOKE @ 0=",
                     "_UFC-WRITER _UFC-PROFILE-BASE =",
                     "_UFC-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_UFC-CTX _EXT4-C.O.ACTIVE + @ 0=",
@@ -71619,8 +72834,8 @@ def test_staged_vfs_unlink_final_add_deduplicates_shared_inode_home(
                     f"_UF4-ACTUAL {old_size} =",
                     "_UF4-CRC-IOR 0=",
                     f"_UF4-CRC {expected_file_crc} =",
-                    "_XU-CLEANUP-CREDIT @ 6 =",
-                    "_XU-CLEANUP-REVOKE @ 1 =",
+                    "_XC-CLEANUP-CREDIT @ 6 =",
+                    "_XC-CLEANUP-REVOKE @ 1 =",
                     "_UF4-WRITER _UF4-PROFILE-BASE =",
                     "_UF4-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_UF4-WRITER _EXT4-JWR.META-CAP + @ 6 =",
@@ -71638,18 +72853,14 @@ def test_staged_vfs_unlink_final_add_deduplicates_shared_inode_home(
                     "_UF4-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                     "_UF4-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_UF4-V V.FLAGS @ VFS-F-RO AND 0=",
-                    "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                    "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                     (
-                        "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                        "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                         "_EXT4-BYTES-ZERO?"
                     ),
                     (
-                        "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
-                    (
-                        "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                        "_EXT4-BYTES-ZERO?"
+                        "_UF4-CTX _EXT4-C.XC-PLAN + @ "
+                        "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                     ),
                     *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
@@ -71980,8 +73191,8 @@ def staged_public_final_unlink_open_retained_fixture(
                     ),
                     # The deletion of the emptied map, which the
                     # file's release passes reach before it.
-                    "_XU-CLEANUP-CREDIT @ 5 =",
-                    "_XU-CLEANUP-REVOKE @ 0=",
+                    "_XC-CLEANUP-CREDIT @ 5 =",
+                    "_XC-CLEANUP-REVOKE @ 0=",
                     "_UFR-WRITER _UFR-PROFILE-BASE =",
                     "_UFR-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_UFR-CTX _EXT4-C.O.ACTIVE + @ 1 =",
@@ -72471,18 +73682,14 @@ def test_staged_vfs_unlink_nonempty_final_add_descriptor_tear_rolls_back(
                         ),
                         "_FAD-V V.FLAGS @ VFS-F-RO AND 0<>",
                         "_FAD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
+                            "_FAD-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                         ),
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
@@ -72743,18 +73950,14 @@ def test_staged_vfs_unlink_nonempty_final_add_home_tear_replays_and_drains(
                         "_FAH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                         "_FAH-V V.FLAGS @ VFS-F-RO AND 0<>",
                         "_FAH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
+                            "_FAH-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                         ),
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
@@ -73078,18 +74281,14 @@ def test_staged_vfs_unlink_last_close_descriptor_tear_recovers_orphan(
                         ),
                         "_FCD-V V.FLAGS @ VFS-F-RO AND 0<>",
                         "_FCD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
+                            "_FCD-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                         ),
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
@@ -73412,18 +74611,14 @@ def test_staged_vfs_unlink_last_close_inode_home_tear_replays_cleanup(
                         ),
                         "_FCH-V V.FLAGS @ VFS-F-RO AND 0<>",
                         "_FCH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
+                            "_FCH-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                         ),
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ],
@@ -73705,21 +74900,14 @@ def test_staged_vfs_unlink_refuses_missing_clock_and_undersized_writer(
                         "_UR-CTX _EXT4-C.RECOVERY + @ 0=",
                         "_UR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_UR-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-NAME-SNAPSHOT 256 "
+                            "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
+                            "_UR-CTX _EXT4-C.XC-PLAN + @ "
+                            "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                         ),
                     ]
                 )
@@ -73864,21 +75052,14 @@ def test_staged_vfs_unlink_descriptor_tear_retains_both_names(
                             "_UD-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                             "_UD-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_UD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                             (
-                                "_XU-NAME-SNAPSHOT 256 "
+                                "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
+                                "_UD-CTX _EXT4-C.XC-PLAN + @ "
+                                "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                             ),
                         ]
                     )
@@ -74101,21 +75282,14 @@ def test_staged_vfs_unlink_directory_home_tear_replays_both_homes(
                             "_UH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
                             "_UH-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_UH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                             (
-                                "_XU-NAME-SNAPSHOT 256 "
+                                "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
+                                "_UH-CTX _EXT4-C.XC-PLAN + @ "
+                                "_XC-P-SIZE _EXT4-BYTES-ZERO?"
                             ),
                         ]
                     )
@@ -85025,7 +86199,7 @@ def test_ext4_setattr_stages_one_authenticated_home(
 
 
 def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
-    """Pin the insert's plan record, its lifecycle and its home plan."""
+    """Pin the plan record, the shared namespace flow and its home plan."""
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
     admission = (AKASHIC_ROOT / EXT4_ADMISSION_MODULE).read_text(
         encoding="utf-8"
@@ -85147,8 +86321,8 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     ownership = word_body("_EXT4-XC-PLAN-CONTEXT?")
     mount_plan = word_body("_EXT4-MOUNT-XC-PLAN")
     context = word_body("_XC-P-CONTEXT?")
-    insert = word_body("_XC-INSERT-COMMON")
-    stage = word_body("_EXT4-JTX-STAGE-INSERT")
+    insert = word_body("_XC-RUN")
+    stage = word_body("_EXT4-JTX-STAGE-NAMESPACE")
     measure = word_body("_XC-MEASURE")
     linear = word_body("_XC-AUTH-LINEAR-PARENT")
     convert = word_body("_XC-CONVERT-RECORDS")
@@ -85178,7 +86352,7 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-MEASURE",
         "_XC-P-SEAL",
         "_XC-HP-BEGIN-TX",
-        "_EXT4-JTX-STAGE-INSERT",
+        "_EXT4-JTX-STAGE-NAMESPACE",
         "_EXT4-JTX-EMIT",
         "_EXT4-JTX-CHECKPOINT",
         "_XC-SCRUB",
@@ -85215,9 +86389,9 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
             r"(?m)^\s*(\d+) CONSTANT (_XC-HR-[A-Z0-9-]+)$", facade
         )
     )
-    assert tuple(value for value, _ in role_constants) == tuple(range(1, 22))
-    assert role_constants[-2] == (20, "_XC-HR-RENAME-VICTIM-INODE")
-    assert role_constants[-1] == (21, "_XC-HR-LIMIT")
+    assert tuple(value for value, _ in role_constants) == tuple(range(1, 19))
+    assert role_constants[-2] == (17, "_XC-HR-RENAME-VICTIM-INODE")
+    assert role_constants[-1] == (18, "_XC-HR-LIMIT")
     assert "3 CONSTANT _XC-HP-ENTRY-CELLS" in facade
     for family in (
         "_XC-HR-DIRECTORY-GROWTH",
@@ -85225,11 +86399,11 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-HR-ALLOCATION",
     ):
         assert family in word_body("_XC-HP-FAMILY-ROLE?")
-    # Twenty roles, two appended blocks, two map nodes per level for each
-    # at the format's five levels, and a bitmap and a descriptor page for
-    # every block an insert can allocate.
-    assert 20 + 2 + 20 + 46 == 88
-    assert 11312 + 3 * 8 + 88 * 3 * 8 == 13448
+    # Seventeen roles, two appended blocks, two map nodes per level for
+    # each at the format's five levels, and a bitmap and a descriptor page
+    # for every block an insert can allocate.
+    assert 17 + 2 + 20 + 46 == 85
+    assert 11312 + 3 * 8 + 85 * 3 * 8 == 13376
     assert "_XC-P.HOME-COUNT CELL+ CONSTANT _XC-P.HOME-ENTRIES" in facade
     assert re.search(
         r"(?ms)_XC-P\.HOME-ENTRIES\s+"
@@ -85247,6 +86421,9 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-HP-EXPECTED-ROLES",
         "_XC-HP-PLAN-HOMES",
         "_XC-PLAN-LINEAR-CONVERSION",
+        "_XC-INSERT-COMMON",
+        "_EXT4-JTX-STAGE-INSERT",
+        "_XC-HR-RELEASE-",
     ):
         assert removed not in facade
 
@@ -85272,7 +86449,8 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
 
 
 def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
-    """Pin XU/XR roles, lifecycle, credits, and complete plan withdrawal."""
+    """Pin the removal's and RENAME's roles, lifecycles, credits, and
+    complete plan withdrawal."""
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
 
     def word_body(name: str) -> str:
@@ -85330,50 +86508,19 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
         "_XC-HR-RENAME-NEW-PARENT-INODE",
         "_XC-HR-RENAME-VICTIM-INODE",
     )
-    gdt_alias_roles = tuple(
-        re.findall(r"_XC-HR-[A-Z0-9-]+", word_body("_XC-HP-GDT-ROLE?"))
-    )
-    assert gdt_alias_roles == (
-        "_XC-HR-INODE-GDT",
-        "_XC-HR-RELEASE-BLOCK-GDT",
-    )
     alias_policy = word_body("_XC-HP-ALIAS-ALLOWED?")
+    assert "_XC-HP-INODE-TABLE-ROLE?" in alias_policy
     for forbidden_alias_role in (
         "_XC-HR-ORPHAN",
+        "_XC-HR-INODE-GDT",
         "_XC-HR-RENAME-NEW-PARENT-DIRECTORY",
         "_XC-HR-RENAME-CHILD-DIRECTORY",
-        "_XC-HR-RELEASE-BLOCK-BITMAP",
-        "_XC-HR-RELEASE-DIRECTORY",
     ):
         assert forbidden_alias_role not in alias_policy
-
-    xu_expected = word_body("_XU-HP-EXPECTED-ROLES")
-    xu_homes = word_body("_XU-HP-PLAN-HOMES")
-    assert "_XU-DIRECTORY @ IF 9 EXIT THEN" in xu_expected
-    assert "_XU-ORPHAN @ IF 5 EXIT THEN" in xu_expected
-    assert "_XU-FINAL @ IF 6 ELSE 3 THEN" in xu_expected
-    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", xu_homes)) == (
-        "_XC-HR-INODE",
-        "_XC-HR-PARENT-INODE",
-        "_XC-HR-PARENT-DIRECTORY",
-        "_XC-HR-RELEASE-BLOCK-GDT",
-        "_XC-HR-RELEASE-BLOCK-BITMAP",
-        "_XC-HR-PRIMARY-SUPER",
-        "_XC-HR-RELEASE-DIRECTORY",
-        "_XC-HR-INODE-GDT",
-        "_XC-HR-INODE-BITMAP",
-        "_XC-HR-ORPHAN",
-        "_XC-HR-PRIMARY-SUPER",
-        "_XC-HR-INODE-GDT",
-        "_XC-HR-INODE-BITMAP",
-        "_XC-HR-PRIMARY-SUPER",
-    )
-    assert (
-        "_XC-HR-RELEASE-DIRECTORY _XC-HK-REVOKE "
-        "_XU-DATA-BLOCK @"
-    ) in xu_homes
-    assert xu_homes.count("_XC-HP-BIND-META") == 13
-    assert "_XU-DATA-SUPER-HOME @ _XU-SUPER-HOME @ <>" in xu_homes
+    # RMDIR frees its directory through the orphan file's release passes,
+    # so no removal stages a block release or a second descriptor page.
+    assert "_XC-HP-GDT-ROLE?" not in facade
+    assert "_XC-HR-RELEASE-" not in facade
 
     xr_expected = word_body("_XR-HP-EXPECTED-ROLES")
     xr_homes = word_body("_XR-HP-PLAN-HOMES")
@@ -85396,53 +86543,119 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     )
     assert xr_homes.count("_XC-HP-BIND-META") == 9
 
-    xu_plan = word_body("_XU-PLAN")
-    xu_caps = word_body("_XU-PLAN-CAPS")
-    xu_stage = word_body("_EXT4-JTX-STAGE-UNLINK-CLOSED")
-    xu_remove = word_body("_XU-REMOVE-COMMON")
-    orphan_stage = word_body("_XU-STAGE-ORPHAN-ADD")
-    xu_lifecycle = (
-        "_XC-P-CONTEXT?",
-        "_XC-P-BEGIN",
-        "_XU-PLAN",
-        "_XC-P-SEAL",
-        "_XU-PLAN-CAPS",
-        "_EXT4-JTX-PREFLIGHT-CAPACITY",
-        "_EXT4-JWR-ENSURE",
+    # UNLINK and RMDIR are the shared engine's removal: one cold plan, the
+    # measuring pass and the live pass of _XC-RUN, and no plan or
+    # authentication inside either staging pass.
+    for entry, directory in (("_EXT4-UNLINK", "0"), ("_EXT4-RMDIR", "-1")):
+        entry_body = word_body(entry)
+        assert (
+            f"0 _XC-LINKING ! {directory} _XC-DIRECTORY ! -1 _XC-REMOVING !"
+        ) in entry_body
+        assert entry_body.rstrip().endswith("_XC-RUN")
+    assert "_XC-DIRECTORY @ IF _XC-PO-RMDIR ELSE _XC-PO-UNLINK THEN" in (
+        word_body("_XC-OP")
     )
-    xu_positions = tuple(xu_remove.index(name) for name in xu_lifecycle)
-    assert xu_positions == tuple(sorted(xu_positions))
-    assert "_XC-P-BIND-SHAPE" not in xu_plan
-    assert xu_remove.count("_XC-HP-BEGIN-TX") == 2
-    assert xu_remove.count("_EXT4-JTX-STAGE-UNLINK-CLOSED") == 2
-    assert "_XC-HP-CREDITS@" in xu_caps
-    assert "_XU-CLEANUP-CREDIT @ _XU-META-CAP @ U>" in xu_caps
-    assert "_XU-CLEANUP-REVOKE @ _XU-REVOKE-CAP @ U>" in xu_caps
-    assert "_XU-WRITER @ _EXT4-JWR.META-CREDIT + @ _EXT4-JUA-META !" in (
+    plan = word_body("_XC-PLAN")
+    assert "_XC-REMOVING @ IF\n        _XC-PLAN-REMOVAL" in plan
+    removal_plan = word_body("_XC-PLAN-REMOVAL")
+    removal_plan_order = (
+        "_XC-AUTH-REMOVAL-TARGET",
+        "_XC-AUTH-PARENT",
+        "_XC-AUTH-EMPTY-DIRECTORY",
+        "_XC-AUTH-ORPHAN-RELEASE",
+        "_XC-AUTH-FINAL-RELEASE",
+    )
+    removal_plan_positions = tuple(
+        removal_plan.index(name) for name in removal_plan_order
+    )
+    assert removal_plan_positions == tuple(sorted(removal_plan_positions))
+    assert "_XC-REMOVING @ IF _XC-STAGE-REMOVAL EXIT THEN" in (
+        word_body("_XC-STAGE")
+    )
+    removal_stage = word_body("_XC-STAGE-REMOVAL")
+    removal_stage_order = (
+        "_XC-STAGE-REMOVAL-INODE",
+        "_XC-STAGE-PARENT-INODE",
+        "_XC-STAGE-TARGET",
+        "_XC-STAGE-ORPHAN-ADD",
+        "_XC-STAGE-FINAL-RELEASE",
+    )
+    removal_stage_positions = tuple(
+        removal_stage.index(name) for name in removal_stage_order
+    )
+    assert removal_stage_positions == tuple(sorted(removal_stage_positions))
+    orphan_stage = word_body("_XC-STAGE-ORPHAN-ADD")
+    final_stage = word_body("_XC-STAGE-FINAL-RELEASE")
+    for staging in (removal_stage, orphan_stage, final_stage):
+        assert "_XC-AUTH-" not in staging
+        assert "_XC-PLAN" not in staging
+        assert "_XC-P.HOME-COUNT" not in staging
+    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", orphan_stage)) == (
+        "_XC-HR-ORPHAN",
+        "_XC-HR-PRIMARY-SUPER",
+    )
+    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", final_stage)) == (
+        "_XC-HR-INODE-GDT",
+        "_XC-HR-INODE-BITMAP",
+        "_XC-HR-PRIMARY-SUPER",
+    )
+    assert "_XC-WRITER @ _EXT4-JWR.META-CREDIT + @ _EXT4-JUA-META !" in (
         orphan_stage
     )
-    for exact_credit_consumer in (xu_caps, xu_stage, xu_remove, orphan_stage):
-        assert "_XC-P.HOME-COUNT" not in exact_credit_consumer
-
-    xu_stage_order = (
-        "_XC-P-REQUIRE-SEALED",
+    # The measuring pass leaves no sealed checkpoint state: only the live
+    # pass under the sealed plan seals the unlink-ADD checkpoint.
+    assert orphan_stage.rstrip().endswith(
+        "DUP _XC-P.STATE + @ _XC-PS-SEALED = IF _EXT4-JUA-SEAL EXIT THEN\n"
+        "    0"
+    )
+    assert "_XC-CLEANUP-CREDIT @ 0 _XC-CLEANUP-REVOKE @ EXIT" in (
+        word_body("_XC-WRITER-NEED")
+    )
+    measure = word_body("_XC-MEASURE")
+    assert measure.index("_XC-WRITER-NEED") < measure.index(
+        "_EXT4-JWR-ENSURE"
+    ) < measure.index("_XC-REQUIRE-PASS-ROOM") < measure.index(
+        "_EXT4-JTX-BEGIN"
+    )
+    assert "_XC-OLD-INODE _EXT4-RELEASE-DEPTH _XC-WRITER @ _XW-PASS-ROOM?" in (
+        word_body("_XC-REQUIRE-PASS-ROOM")
+    )
+    run = word_body("_XC-RUN")
+    run_order = (
+        "_XC-PUBLISH-COMMITTED",
+        "_EXT4-JTX-CHECKPOINT",
+        "_EXT4-REQUIRE-IDLE-WRITER",
+        "_XC-DRAIN",
+        "_XC-SCRUB",
+    )
+    run_positions = tuple(run.index(name) for name in run_order)
+    assert run_positions == tuple(sorted(run_positions))
+    assert "_XC-DRAIN ?DUP IF _XC-DURABLE-FAIL EXIT THEN" in run
+    drain = word_body("_XC-DRAIN")
+    assert "_XC-VN @ VN.OPEN-REFS @ IF 0 EXIT THEN" in drain
+    assert "_XC-INODE @ _XC-WRITER @ _XC-CTX @ _EXT4-DRAIN-ORPHAN" in drain
+    for removed in (
         "_XU-PLAN",
-        "_XC-HP-REQUIRE-CREDITS",
+        "_XU-PLAN-CAPS",
+        "_XU-REMOVE-COMMON",
+        "_EXT4-JTX-STAGE-UNLINK-CLOSED",
+        "_XU-HP-EXPECTED-ROLES",
+        "_XU-HP-PLAN-HOMES",
         "_XU-STAGE-TARGET-INODE",
-        "_XU-STAGE-PARENT-INODE",
         "_XU-STAGE-DIRECTORY",
         "_XU-STAGE-ORPHAN-ADD",
         "_XU-STAGE-DIRECTORY-BLOCK-RELEASE",
         "_XU-STAGE-FINAL-ACCOUNTING",
-        "_XC-HP-REQUIRE-STAGED",
-    )
-    xu_stage_positions = tuple(xu_stage.index(name) for name in xu_stage_order)
-    assert xu_stage_positions == tuple(sorted(xu_stage_positions))
-    assert "_XC-PO-RMDIR ELSE\n        _XC-PO-UNLINK" in xu_stage
-    assert xu_stage.rstrip().endswith(
-        "_XU-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN\n"
-        "    _XU-MAP-CHECK"
-    )
+        "_XU-MAP-CHECK",
+        "_XU-SCRUB",
+        "_XU-REFUSE",
+        "_XU-P-FAIL",
+        "_XU-POSTCOMMIT-FAIL",
+        "_XU-DURABLE-FAIL",
+    ):
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(removed)}(?=[ \t\r\n(])", facade
+        ) is None
 
     xr_plan = word_body("_XR-PLAN")
     xr_stage = word_body("_EXT4-JTX-STAGE-RENAME")
@@ -85493,25 +86706,27 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     cross_positions = tuple(xr_cross_stage.index(name) for name in cross_order)
     assert cross_positions == tuple(sorted(cross_positions))
 
-    assert "_XC-P-SCRUB _XU-SCRUB-PRIVATE" in word_body("_XU-SCRUB")
     assert "_XC-P-SCRUB _XR-SCRUB-PRIVATE" in word_body("_XR-SCRUB")
     for cleanup_word, scrub_word in (
-        ("_XU-REFUSE", "_XU-SCRUB"),
-        ("_XU-P-FAIL", "_XU-SCRUB"),
-        ("_XU-POSTCOMMIT-FAIL", "_XU-SCRUB"),
-        ("_XU-DURABLE-FAIL", "_XU-SCRUB"),
+        ("_XC-REFUSE", "_XC-SCRUB"),
+        ("_XC-FAIL", "_XC-SCRUB"),
+        ("_XC-POSTCOMMIT-FAIL", "_XC-SCRUB"),
+        ("_XC-DURABLE-FAIL", "_XC-POSTCOMMIT-FAIL"),
         ("_XR-REFUSE", "_XR-SCRUB"),
         ("_XR-FAIL", "_XR-SCRUB"),
         ("_XR-POSTCOMMIT-FAIL", "_XR-SCRUB"),
     ):
         assert scrub_word in word_body(cleanup_word)
-    assert xu_remove.rstrip().endswith("0 _XU-V @ V.LAST-IOR ! _XU-SCRUB\n    0")
+    assert run.rstrip().endswith(
+        "0 _XC-V @ V.LAST-IOR !\n    _XC-SCRUB\n    0"
+    )
     assert xr_remove.rstrip().endswith("0 _XU-V @ V.LAST-IOR ! _XR-SCRUB\n    0")
 
 
 def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
 ) -> None:
-    """Pin indexed UNLINK/RMDIR at both admitted depths to one leaf plan."""
+    """Pin UNLINK/RMDIR to the shared parent walk in find mode, its one
+    record edit, and RENAME's bridge to the leaf plan it still uses."""
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
 
     def word_body(name: str) -> str:
@@ -85523,6 +86738,103 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         assert match is not None, f"missing Forth word {name}"
         return match.group("body")
 
+    # The removal walks the parent once, in the cold plan, with the
+    # insert's walk: every node and leaf, every name hashed against its
+    # interval.  Find mode counts the parent's references to the target,
+    # takes the target's record and its predecessor, and refuses a second
+    # record with the name.  No predecessor gate remains.
+    find = word_body("_XC-FIND-RECORD")
+    for fragment in (
+        "_XC-DIR-INODE @ _XC-INODE @ = IF 1 _XC-REFS +! THEN",
+        "_XC-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN",
+        "_XC-DIR-INODE @ _XC-INODE @ <> IF VFS-E-CONFLICT EXIT THEN",
+        "_XC-DIRECTORY @ IF 2 <> ELSE 1 U> THEN IF",
+        "_XC-DIR-OFF @ _XC-RM-OFF ! _XC-DIR-REC @ _XC-RM-REC !",
+        "_XC-PREV-OFF @ _XC-RM-PREV-OFF ! _XC-PREV-REC @ _XC-RM-PREV-REC !",
+    ):
+        assert fragment in find
+    assert find.index("_XC-REFS +!") < find.index("_XC-DIRENT-NAME=?")
+    linear_scan = word_body("_XC-DIR-SCAN")
+    leaf_scan = word_body("_XC-INDEXED-LEAF-SCAN")
+    for scan in (linear_scan, leaf_scan):
+        assert "_XC-FIND-RECORD ?DUP IF EXIT THEN" in scan
+        assert "-1 _XC-PREV-OFF ! 0 _XC-PREV-REC !" in scan
+        assert (
+            "_XC-DIR-OFF @ _XC-PREV-OFF ! _XC-DIR-REC @ _XC-PREV-REC !"
+        ) in scan
+        assert "EXT4-D-WRITE-POLICY" not in scan
+    assert "_XC-REMOVING @ IF 0 EXIT THEN" in linear_scan
+    for walk in ("_XC-AUTH-DEPTH0", "_XC-AUTH-DEPTH1"):
+        assert "_XC-CHOOSES? AND" in word_body(walk)
+    assert "_XC-REMOVING @ 0=" in word_body("_XC-CHOOSES?")
+    auth_leaf = word_body("_XC-AUTH-LEAF")
+    assert (
+        "_XC-REMOVING @ IF _XC-FOUND @ _XC-DIR-HOME @ 0= AND OR THEN IF"
+    ) in auth_leaf
+    assert auth_leaf.index("_XC-INDEXED-LEAF-SCAN") < auth_leaf.index(
+        "_XC-P.DIR-SNAPSHOT"
+    )
+    indexed = word_body("_XC-AUTH-INDEXED-PARENT")
+    assert "0 _XC-FOUND ! 0 _XC-REFS !" in indexed
+    assert indexed.rstrip().endswith(
+        "_XC-REMOVING @ IF _XC-REQUIRE-FOUND EXIT THEN\n"
+        "    _XC-PLAN-INDEXED-EDIT"
+    )
+    linear = word_body("_XC-AUTH-LINEAR-PARENT")
+    assert "0 _XC-FOUND ! 0 _XC-REFS !" in linear
+    assert (
+        "_XC-REMOVING @ IF ?DUP IF EXIT THEN _XC-REQUIRE-FOUND EXIT THEN"
+    ) in linear
+    found = word_body("_XC-REQUIRE-FOUND")
+    assert "_XC-FOUND @ 0= IF VFS-E-CONFLICT EXIT THEN" in found
+    assert (
+        "_XC-FINAL @ IF\n"
+        "        _XC-REFS @ 1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN"
+    ) in found
+    assert (
+        "_XC-REFS @ 2 U< IF EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT THEN"
+    ) in found
+    assert "_XC-EK-REMOVE _XC-EDIT ! 0 _XC-GROWTH !" in found
+    # RMDIR's parent holds 3..LINK-MAX links and loses one; the CWD rule
+    # belongs to CREATE and MKDIR alone.
+    parent = word_body("_XC-AUTH-PARENT")
+    assert (
+        "_XC-DIRECTORY @ IF\n"
+        "        _XC-REMOVING @ IF\n"
+        "            DUP 3 U< OVER _EXT4-LINK-MAX U> OR IF"
+    ) in parent
+    creating = word_body("_XC-CREATING?")
+    assert "_XC-LINKING @ 0= _XC-REMOVING @ 0= AND" in creating
+    assert "_XC-CREATING? _XC-PARENT @ _XC-V @ V.CWD @ <> AND IF" in (
+        word_body("_XC-REQUIRE-PARENT-RUNTIME")
+    )
+
+    # Both staging passes take the leaf the cold plan authenticated from
+    # the plan's snapshot and make the record edit the kernel's
+    # ext4_generic_delete_entry makes.
+    stage_target = word_body("_XC-STAGE-TARGET")
+    assert (
+        "_XC-P.DIR-SNAPSHOT + _XC-DIR-HOME @ _XC-ACQUIRE-SNAPSHOT"
+    ) in stage_target
+    assert (
+        "DUP _XC-EK-REMOVE = IF\n        DROP _XC-IMAGE @ _XC-DIR-REMOVE"
+    ) in stage_target
+    remove = word_body("_XC-DIR-REMOVE")
+    blank = remove.index("_XC-RM-PREV-OFF @ 0< IF")
+    blank_inode = remove.index("0 _XC-DIR-DE @ L!", blank)
+    blank_tail = remove.index(
+        "_XC-DIR-DE @ 6 + _XC-RM-REC @ 6 - 0 FILL", blank_inode
+    )
+    joined = remove.index("_XC-RM-PREV-REC @ _XC-RM-REC @ +", blank_tail)
+    joined_write = remove.index(
+        "_XC-DIR-IMAGE @ _XC-RM-PREV-OFF @ + 4 + W!", joined
+    )
+    zeroed = remove.index("_XC-DIR-DE @ _XC-RM-REC @ 0 FILL", joined_write)
+    assert blank < blank_inode < blank_tail < joined < joined_write < zeroed
+    assert remove.rstrip().endswith("_EXT4-RESTAMP-DIR-BLOCK")
+
+    # RENAME keeps the old source walk and its predecessor gate until it
+    # moves onto the shared removal.
     for removed in ("_XU-DIR-SNAPSHOT", "_XU-PARENT-SNAPSHOT"):
         assert removed not in facade
     assert word_body("_XU-SHARED-DIR-SNAPSHOT").rstrip().endswith(
@@ -85531,35 +86843,23 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     assert word_body("_XU-SHARED-PARENT-SNAPSHOT").rstrip().endswith(
         "_XU-SHARED-PLAN _XC-P.PARENT-SNAPSHOT +"
     )
-
     shape = word_body("_XC-P-SHAPE?")
     parent_stage = word_body("_XU-STAGE-CURRENT-PARENT")
-    remove = word_body("_XU-REMOVE-COMMON")
+    run = word_body("_XC-RUN")
     rename = word_body("_XR-RENAME-COMMON")
     assert shape.lstrip().startswith(
         "( plan -- plan flag )\n"
         "    DUP _XC-P.OP + @ _XC-P-OP? 0= IF FALSE EXIT THEN"
     )
-    assert (
-        "_XU-SHARED-PLAN _XC-P.OP + @\n"
-        "        _XU-RENAME-SCAN @ IF _XC-PO-RENAME ELSE\n"
-        "            _XU-DIRECTORY @ IF _XC-PO-RMDIR ELSE "
-        "_XC-PO-UNLINK THEN\n"
-        "        THEN\n"
-        "        <> IF"
-    ) in parent_stage
+    assert "_XU-SHARED-PLAN _XC-P.OP + @ _XC-PO-RENAME <> IF" in (
+        parent_stage
+    )
     assert "_EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF" in parent_stage
     assert "OVER _EXT4-I.BLOCK + 6 + W@ DUP 1 U> IF" in parent_stage
     assert (
         "_XU-SHARED-PLAN _XU-INDEXED @ _XC-P-BIND-SHAPE"
     ) in parent_stage
-    assert "_XU-FINAL" not in parent_stage
-    assert "_XU-ORPHAN" not in parent_stage
-    assert (
-        "_XU-CTX @ _XU-DIRECTORY @ IF _XC-PO-RMDIR ELSE\n"
-        "        _XC-PO-UNLINK\n"
-        "    THEN _XC-P-BEGIN"
-    ) in remove
+    assert "_XC-CTX @ _XC-OP _XC-P-BEGIN" in run
     assert "_XU-CTX @ _XC-PO-RENAME _XC-P-BEGIN" in rename
 
     active_table = word_body("_XU-AUTH-INDEX-ACTIVE-TABLE")
@@ -85578,8 +86878,8 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     assert depth_one_positions == tuple(sorted(depth_one_positions))
 
     bind_leaf = word_body("_XU-INDEX-BIND-SELECTED-LEAF")
-    leaf_scan = word_body("_XU-INDEXED-LEAF-SCAN")
-    indexed_auth = word_body("_XU-AUTH-INDEXED-PARENT")
+    rename_leaf_scan = word_body("_XU-INDEXED-LEAF-SCAN")
+    rename_indexed = word_body("_XU-AUTH-INDEXED-PARENT")
     complete_scan_order = (
         "_EXT4-DD-AUTH-INODE",
         "_EXT4-DD-AUTH-HTREE-ROOT",
@@ -85595,17 +86895,16 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         "_XU-DIR-FOUND @ 0= IF",
     )
     complete_scan_positions = tuple(
-        indexed_auth.index(name) for name in complete_scan_order
+        rename_indexed.index(name) for name in complete_scan_order
     )
     assert complete_scan_positions == tuple(sorted(complete_scan_positions))
-    assert "_XU-FINAL @ IF" in indexed_auth
-    assert "_XU-TARGET-REFS @ 1 <>" in indexed_auth
-    assert "_XU-TARGET-REFS @ 2 U<" in indexed_auth
-    assert "_XU-ORPHAN" not in indexed_auth
+    for removed_count in ("_XU-TARGET-REFS", "_XU-FINAL", "_XU-ORPHAN"):
+        assert removed_count not in rename_indexed
+        assert removed_count not in rename_leaf_scan
     assert (
         "_XU-DIRECTORY @ IF\n"
         "                    _XU-DIR-DTYPE @ 2 <> IF"
-    ) in leaf_scan
+    ) in rename_leaf_scan
     for baseline_field in (
         "_XC-P.INDEX-BASE-ROOT-HOME",
         "_XC-P.INDEX-BASE-DEPTH",
@@ -85619,7 +86918,7 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         "_XC-P.INDEX-BASE-PARENT-OFF",
         "_XC-P.ROOT-SNAPSHOT",
     ):
-        assert baseline_field in indexed_auth
+        assert baseline_field in rename_indexed
     for selected_field in (
         "_XC-P.INDEX-BASE-ENTRY",
         "_XC-P.INDEX-BASE-LOGICAL",
@@ -85628,14 +86927,14 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     ):
         assert selected_field in bind_leaf
 
-    rename_predecessor_gate = leaf_scan.index("_XU-SPLICE-SCAN @ IF")
-    predecessor_refusal = leaf_scan.index(
+    rename_predecessor_gate = rename_leaf_scan.index("_XU-SPLICE-SCAN @ IF")
+    predecessor_refusal = rename_leaf_scan.index(
         "_XU-PREV-OFF @ 0< _XU-PREV-INODE @ 0= OR IF"
     )
-    predecessor_capture = leaf_scan.index(
+    predecessor_capture = rename_leaf_scan.index(
         "_XU-PREV-OFF @ _XU-TARGET-PREV-OFF !", predecessor_refusal
     )
-    selected_bind = leaf_scan.index(
+    selected_bind = rename_leaf_scan.index(
         "_XU-SHARED-PLAN _XU-INDEX-BIND-SELECTED-LEAF",
         predecessor_capture,
     )
@@ -85645,56 +86944,10 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         < predecessor_capture
         < selected_bind
     )
-
     capture = word_body("_XU-CAPTURE-PARENT-DIRECTORY")
-    parent_auth = word_body("_XU-AUTH-PARENT-DIRECTORY")
-    map_hits = word_body("_XU-REQUIRE-PARENT-MAP-HITS")
-    directory_owners = word_body("_XU-PROVE-DIRECTORY-OWNERS")
-    stage_directory = word_body("_XU-STAGE-DIRECTORY")
     assert capture.index("_XU-AUTH-INDEXED-PARENT") < capture.index(
         "_EXT4-VALIDATE-MUTATION-RANGE-TARGETS EXIT"
     )
-    parent_auth_order = (
-        "_XU-CAPTURE-PARENT-DIRECTORY",
-        "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
-        "_XU-CAPTURE-PARENT-DIRECTORY",
-    )
-    parent_auth_positions: list[int] = []
-    start = 0
-    for name in parent_auth_order:
-        position = parent_auth.index(name, start)
-        parent_auth_positions.append(position)
-        start = position + len(name)
-    assert parent_auth_positions == sorted(parent_auth_positions)
-    assert "_EXT4-DD-REQUIRE-INODE" in map_hits
-    assert word_body("_XU-REQUIRE-DIRECTORY-MAP-AUDIT").rstrip().endswith(
-        "_XU-DIR-HOME @ 1 _XU-REQUIRE-PARENT-MAP-HITS"
-    )
-    owner_order = (
-        "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
-        "_XU-REQUIRE-TARGET",
-        "_XU-AUTH-CHILD-DIRECTORY",
-    )
-    owner_positions = tuple(
-        directory_owners.index(name) for name in owner_order
-    )
-    assert owner_positions == tuple(sorted(owner_positions))
-    stage_order = (
-        "_XU-CAPTURE-PARENT-DIRECTORY",
-        "_EXT4-READ-BLOCK",
-        "_EXT4-BYTES=?",
-        "_EXT4-JTX-META-ACQUIRE",
-        "_EXT4-BYTES=?",
-        "_XU-DIR-APPLY",
-        "_EXT4-JTX-META-REPLACE",
-    )
-    stage_positions: list[int] = []
-    start = 0
-    for name in stage_order:
-        position = stage_directory.index(name, start)
-        stage_positions.append(position)
-        start = position + len(name)
-    assert stage_positions == sorted(stage_positions)
 
     splice = word_body("_XU-DIR-SPLICE")
     adjacency = splice.index(
@@ -85719,69 +86972,17 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         < target_zero
     )
     assert "_EXT4-RESTAMP-DIR-BLOCK" not in splice
-    apply = word_body("_XU-DIR-APPLY")
-    assert apply.index("_XU-DIR-SPLICE") < apply.index(
-        "_EXT4-RESTAMP-DIR-BLOCK"
-    )
-
-    expected_roles = word_body("_XU-HP-EXPECTED-ROLES")
-    plan_homes = word_body("_XU-HP-PLAN-HOMES")
-    plan = word_body("_XU-PLAN")
-    stage = word_body("_EXT4-JTX-STAGE-UNLINK-CLOSED")
-    assert "_XU-DIRECTORY @ IF 9 EXIT THEN" in expected_roles
-    assert "_XU-ORPHAN @ IF 5 EXIT THEN" in expected_roles
-    assert "_XU-FINAL @ IF 6 ELSE 3 THEN" in expected_roles
-    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", plan_homes)) == (
-        "_XC-HR-INODE",
-        "_XC-HR-PARENT-INODE",
-        "_XC-HR-PARENT-DIRECTORY",
-        "_XC-HR-RELEASE-BLOCK-GDT",
-        "_XC-HR-RELEASE-BLOCK-BITMAP",
-        "_XC-HR-PRIMARY-SUPER",
-        "_XC-HR-RELEASE-DIRECTORY",
-        "_XC-HR-INODE-GDT",
-        "_XC-HR-INODE-BITMAP",
-        "_XC-HR-ORPHAN",
-        "_XC-HR-PRIMARY-SUPER",
-        "_XC-HR-INODE-GDT",
-        "_XC-HR-INODE-BITMAP",
-        "_XC-HR-PRIMARY-SUPER",
-    )
-    for immutable_role in (
-        "_XC-HR-DIRECTORY-ROOT",
-        "_XC-HR-DIRECTORY-NODE",
-        "_XC-HR-DIRECTORY-MAP",
-        "_XC-HR-DIRECTORY-GROWTH",
-    ):
-        assert immutable_role not in plan_homes
-    assert plan.index("_XU-AUTH-PARENT-DIRECTORY") < plan.index(
-        "_XU-AUTH-FINAL-RELEASE"
-    )
-    directory_plan_order = (
-        "_XU-CAPTURE-PARENT-DIRECTORY",
-        "_XU-AUTH-CHILD-DIRECTORY",
+    for removed in (
+        "_XU-AUTH-PARENT-DIRECTORY",
+        "_XU-REQUIRE-PARENT-MAP-HITS",
+        "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
         "_XU-PROVE-DIRECTORY-OWNERS",
-    )
-    directory_plan_positions = tuple(
-        plan.index(name) for name in directory_plan_order
-    )
-    assert directory_plan_positions == tuple(sorted(directory_plan_positions))
-    sealed_stage_order = (
-        "_XC-P-REQUIRE-SEALED",
-        "_XU-PLAN",
-        "_XC-HP-REQUIRE-CREDITS",
-        "_XU-STAGE-TARGET-INODE",
-        "_XU-STAGE-PARENT-INODE",
         "_XU-STAGE-DIRECTORY",
-        "_XU-STAGE-ORPHAN-ADD",
-        "_XU-STAGE-DIRECTORY-BLOCK-RELEASE",
-        "_XU-STAGE-FINAL-ACCOUNTING",
-        "_XC-HP-REQUIRE-STAGED",
-    )
-    sealed_stage_positions = tuple(
-        stage.index(name) for name in sealed_stage_order
-    )
-    assert sealed_stage_positions == tuple(sorted(sealed_stage_positions))
+        "_XU-DIR-APPLY",
+    ):
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(removed)}(?=[ \t\r\n(])", facade
+        ) is None
 
 
 def test_ext4_indexed_rename_seals_independent_selected_leaf_banks() -> None:
@@ -85926,10 +87127,11 @@ def test_ext4_indexed_rename_seals_independent_selected_leaf_banks() -> None:
     source_scan = word_body("_XU-INDEXED-LEAF-SCAN")
     source_auth = word_body("_XU-AUTH-INDEXED-PARENT")
     assert source_scan.count("_XU-SPLICE-SCAN @ IF") == 2
-    assert (
-        "_XU-RENAME-SCAN @ 0= IF\n"
-        "        _XU-FINAL @ IF"
-    ) in source_auth
+    # RENAME's source walk finds one record; only the removal's find mode
+    # counts the parent's references to its target.
+    for removal_only in ("_XU-RENAME-SCAN", "_XU-FINAL", "_XU-TARGET-REFS"):
+        assert removal_only not in source_auth
+        assert removal_only not in source_scan
 
     dest_scan = word_body("_XR-SCAN-INDEXED-DEST-LEAF")
     dest_auth = word_body("_XR-AUTH-INDEXED-DESTINATION")
@@ -86824,7 +88026,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
     assert "_EXT4-CRC-" not in primary_candidate
     assert "_EXT4-GD.CHECKSUM" not in facade_executable
     assert facade_executable.count("_EXT4-GROUP-DESC-CHECKSUM?") == 9
-    assert facade_executable.count("_EXT4-RESTAMP-GROUP-DESC") == 7
+    assert facade_executable.count("_EXT4-RESTAMP-GROUP-DESC") == 6
     assert descriptor.index(
         ": _EXT4-GROUP-DESC-CHECKSUM?"
     ) < descriptor.index(": _EXT4-LOAD-DESC-AT")
@@ -87051,11 +88253,11 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         assert policy not in bitmap
 
     expected_facade_calls = {
-        "_EXT4-GROUP-BLOCK-COUNT": 7,
+        "_EXT4-GROUP-BLOCK-COUNT": 6,
         "_EXT4-GROUP-INODE-COUNT": 7,
         "_EXT4-BLOCK-ALLOCATED?": 3,
         "_EXT4-GROUP-BLOCK-RANGE": 3,
-        "_EXT4-LOAD-BLOCK-BITMAP": 16,
+        "_EXT4-LOAD-BLOCK-BITMAP": 14,
         "_EXT4-BUILD-UNINIT-BLOCK-BITMAP": 4,
         "_EXT4-LOAD-INODE-BITMAP": 11,
         "_EXT4-BLOCK-BITMAP-CRC": 8,
@@ -87297,13 +88499,13 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     )
 
     expected_facade_calls = {
-        "_EXT4-DECODE-I-BLOCKS": 5,
+        "_EXT4-DECODE-I-BLOCKS": 6,
         "_EXT4-S32@": 6,
         "_EXT4-I-BLOCK-ZERO-FROM?": 0,
         "_EXT4-DECODE-SPECIAL": 1,
-        "_EXT4-RESTAMP-INODE": 15,
+        "_EXT4-RESTAMP-INODE": 14,
         "_EXT4-SET-INODE-MTIME-CTIME": 8,
-        "_EXT4-SET-INODE-CTIME": 9,
+        "_EXT4-SET-INODE-CTIME": 8,
         "_EXT4-ENCODE-I-BLOCKS": 3,
     }
     for service, count in expected_facade_calls.items():
@@ -89198,8 +90400,7 @@ def test_ext4_all_set_bridge_is_replaced_by_typed_exact_queries() -> None:
     staged = word_body("_EXT4-JFD-VERIFY-EMPTY-STAGED")
     bitmap_exact = word_body("_EXT4-JFD-REQUIRE-BITMAP-EXACT")
     checkpoint = word_body("_EXT4-JCP-REQUIRE-DELETE-HOMES")
-    final_inode = word_body("_XU-AUTH-FINAL-RELEASE")
-    final_directory = word_body("_XU-AUTH-DIRECTORY-BLOCK-RELEASE")
+    final_inode = word_body("_XC-AUTH-FINAL-RELEASE")
 
     assert (
         "_EXT4-JFC-IMAGE @ DUP\n"
@@ -89265,20 +90466,19 @@ def test_ext4_all_set_bridge_is_replaced_by_typed_exact_queries() -> None:
     assert "IF VFS-E-CORRUPT EXIT THEN" in checkpoint
 
     assert (
-        "_XU-GROUP-INODES @ _XU-TARGET-INDEX @ BITSET-TEST?"
+        "_XC-GROUP-INODES @ _XC-TARGET-INDEX @ BITSET-TEST?"
         in final_inode
     )
     assert (
-        "_XU-DATA-GROUP-BLOCKS @ _XU-DATA-INDEX @ BITSET-TEST?"
-        in final_directory
-    )
-    for body in (final_inode, final_directory):
-        assert (
-            "BITSET-TEST? 0= IF\n"
-            "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
-        ) in body
-        assert "0= IF VFS-E-CONFLICT EXIT THEN" in body
-        assert "_EXT4-BIT-RANGE-SET?" not in body
+        "BITSET-TEST? 0= IF\n"
+        "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in final_inode
+    assert "0= IF VFS-E-CONFLICT EXIT THEN" in final_inode
+    assert "_EXT4-BIT-RANGE-SET?" not in final_inode
+    # RMDIR frees a directory's blocks through the orphan file's release
+    # passes, so no removal frees a directory block in its own transaction.
+    assert ": _XU-AUTH-DIRECTORY-BLOCK-RELEASE" not in source
+    assert ": _XU-AUTH-FINAL-RELEASE" not in source
 
     assert ": _EXT4-BIT-RANGE-SET?" not in source
 

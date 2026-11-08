@@ -165,24 +165,22 @@ writer. In the original singleton fault fixture, precommit descriptor failure
 preserves the old file and a committed torn inode home converges through
 replay and orphan cleanup to a stable checker-clean empty file. Partial release,
 depth-positive maps, aligned nonzero EOFs, cross-block nonzero EOFs, and growth
-remain unsupported. The first nonfinal regular-file `UNLINK` lifetime is public
-too: one same-parent hard-link name, target/parent inode times and link count, and
-the selected checksummed parent-directory home commit together without
-allocation or orphan state. An open descriptor may retain and read the removed
-dentry until close because another persistent link keeps the inode live. W7
-preserves both old names; committed W17 recovery replays its two deduplicated
-homes. Closed last-link removal is now public for an
-already-empty, allocation-free regular inode: its name, complete inode record,
-inode bitmap bit, and group/global free-inode accounts commit atomically in at
-most six homes without an orphan interval. Allocation-backed final-link
-removal is also operation-admitted. Its exact `4/0/0` or `5/0/0` namespace ADD
-publishes link zero and a singleton modern orphan while retaining the complete
+remain unsupported. `UNLINK` and `RMDIR` are public through one directory
+removal that admits every parent the directory insert admits and takes any
+record out of it, a leaf's first record included, as the kernel's
+`ext4_generic_delete_entry` does. A nonfinal regular-file name leaves with
+the target's link decrement and the parent's times, without allocation or
+orphan state, and an open descriptor may retain and read the removed dentry
+until close because another persistent link keeps the inode live. W7 preserves
+both old names; committed W17 recovery replays its two deduplicated homes. A
+closed last link of an already-empty, allocation-free regular inode loses its
+name, complete inode record, inode bitmap bit, and group/global free-inode
+accounts atomically in at most six homes without an orphan interval. Any other
+last link enters the modern orphan file in its exact `4/0/0` or `5/0/0`
+removal, which publishes link zero while retaining the complete
 map/allocation state. Closed targets drain immediately; descriptor-retained
 targets remain readable and drain on the last staged `RELEASE`. Staged
-`SYNCFS` returns `BUSY` while that orphan is live. All three lifetimes admit an
-authenticated linear, depth-zero HTree, or singleton depth-one HTree parent.
-Indexed UNLINK mutates only the selected leaf; the root, optional DX node,
-extent map, other leaves, and parent geometry remain immutable. The first
+`SYNCFS` returns `BUSY` while that orphan is live. The first
 bounded `MKDIR`
 slice is now public too. It allocates one inode and one data block, constructs a
 checksummed one-block `.`/`..` directory, and inserts its typed name in an
@@ -195,14 +193,13 @@ transaction. In the established linear-parent crash qualification, a precommit
 descriptor tear rolls
 the provisional directory back without allocation, while a committed child-
 directory-home tear retains the public directory and replays all eight
-canonical homes. Bounded empty-directory `RMDIR` is now public for that exact
-canonical child shape. It proves the parent and child blocks have only their
-two legitimate owners, atomically removes the typed name, releases the inode
-and block, decrements parent links and `used_dirs`, and revokes the unchanged
-freed directory block under exact `6/0/1` through `8/0/1` credit. Its parent may
-be linear, depth-zero HTree, or singleton depth-one HTree; the indexed form
-mutates only the selected leaf and leaves the HTree topology and parent geometry
-immutable. Bounded hard
+canonical homes. `RMDIR` removes any empty directory, of any mode, linear or
+indexed, of any number of blocks, with an extent map of any depth, after
+reading every block through that map to prove it empty. Its transaction
+removes the typed name, lowers the parent's links, and enters the directory
+in the modern orphan file with no links; the release passes and deletion then
+free its blocks and inode and lower `used_dirs`, at once or on the last staged
+`RELEASE`, and mount recovery finishes after a crash. Bounded hard
 `LINK` is now public as well. It inserts one regular-file name into an admitted
 one-block linear parent or into authenticated existing slack in a depth-zero or
 singleton depth-one HTree, increments and restamps the target inode, and
@@ -2178,39 +2175,38 @@ an 84,152,965-step byte-stable write-free remount. The clean and recovered
 images pass independent raw after-image checks, pinned `debugfs`, and read-only
 e2fsprogs 1.47.4 `e2fsck`.
 
-The public `UNLINK` lifetimes are regular-file removals from an authenticated
-one-block linear parent, depth-zero HTree parent, or singleton depth-one HTree
-parent. The staged binding alone advertises the capability. The target and
-parent are root-owned on the qualified 1 KiB/256-byte-inode geometry. Nonfinal
-removal requires another live same-inode name in the same parent and permits
-descriptors to retain the selected dentry.
-Direct final removal requires link count one, no open references, zero size and
-`i_blocks`, a canonical empty extent or legacy map, no external xattr or
-project ID, and exactly one authenticated directory reference. Orphan-backed
-final removal instead requires a regular inode inside the complete inode-
-directed JFI cleanup envelope and an authenticated empty orphan union. It may
-retain open references. Cross-parent remaining-link proof, directories through
-`UNLINK`, indexed shapes beyond those two depths, first-live-entry removal, and
-directory growth remain gated rather than approximated. Canonical empty
-directories use the separate bounded `RMDIR` contract below; indexed RENAME
-uses its own independently sealed old/new parent authority described below.
+The public `UNLINK` lifetimes are regular-file removals through the directory
+removal that `UNLINK` and `RMDIR` share. Its parent is any parent the directory
+insert admits: an authenticated one-block linear directory, or an HTree at
+indirect level 0 or 1 with any number of index nodes and leaves and an extent
+map of any depth. The staged binding alone advertises the capability. The
+target and parent are root-owned on the qualified 1 KiB/256-byte-inode
+geometry. Nonfinal removal requires another live same-inode name in the same
+parent and permits descriptors to retain the selected dentry. Direct final
+removal requires link count one, no open references, zero size and
+`i_blocks`, an empty map, no external xattr or project ID, and exactly one
+authenticated directory reference. Orphan-backed final removal instead
+requires a regular inode inside the complete inode-directed JFI cleanup
+envelope and an authenticated empty orphan union. It may retain open
+references. Cross-parent remaining-link proof, directories through `UNLINK`,
+non-regular targets, and multi-block linear parents remain refused rather than
+approximated. Empty directories use the `RMDIR` contract below; RENAME uses its
+own independently sealed old/new parent authority described below.
 
-Admission reauthenticates the target's complete current map, inode locator and
-generation, cache projection, external xattrs, link count, and mutable flags.
-For a linear parent it reauthenticates the parent inode and single extent block,
-proves that block has one owner and no forbidden alias, and validates its
-checksum and complete dirent chain including `.`/`..`. For an indexed parent it
-reauthenticates the complete parent map, HTree root, primary-super hash
-authority, active depth-zero table or sole depth-one DX node, and every active
-checksummed leaf. Hash intervals, global target-name uniqueness, and target-
-inode reference cardinality are checked before a complete map audit proves the
-selected leaf occurs exactly once and the same unique-owner proof runs. Cold,
-dry, and live passes bind the root, optional node, selected leaf, route/hash,
-and parent locator. Only that leaf occupies the existing parent-directory home
-role; the root, optional node, map, and other leaves remain immutable. Both
-forms require exactly one matching name with a live predecessor in the selected
-block. The edit expands that predecessor over the removed record, zeroes the
-removed bytes, and restamps the selected directory checksum.
+Admission authenticates the target's current map, inode locator and
+generation, cache projection, external xattrs, link count, and mutable flags
+once, in the cold plan, and walks the parent once with the directory insert's
+walk in find mode: every block validated by checksum and structure, every live
+name hashed against its route's interval, and at level one every block named
+once. The walk finds the one matching record and its predecessor and counts
+the parent's references to the target inode; a last link needs one and a
+remaining link two or more. The record's block is the only parent block the
+removal changes. A record with a predecessor, live or unused, joins it, and the
+first record of a leaf keeps its `rec_len` with inode zero and every byte from
+`name_len` on zero; the block's checksum is restamped. A measuring pass binds
+the homes into a sealed certificate, and the live pass stages them again under
+exactly its credits, rereading an authenticated block only when a write has
+started a new map epoch since the cold plan.
 
 For the nonfinal lifetime, the target link decrement and ctime, parent
 mtime/ctime, and selected directory block are one no-data/no-revoke
@@ -2264,7 +2260,7 @@ then-checked-in 1.10-billion-step watchdog.
 
 Orphan-backed final removal reauthenticates the prospective link-one inode and
 complete future cleanup topology before it begins. Its exact `4/0/0` or
-`5/0/0` ADD changes target link/ctime, parent mtime/ctime, the directory splice,
+`5/0/0` ADD changes target link/ctime, parent mtime/ctime, the record's block,
 modern-orphan slot zero, and the primary-super `ORPHAN_PRESENT` feature as one
 namespace boundary. The allocation map, `i_blocks`, size, data, allocation
 bitmaps, and free counters remain unchanged at that boundary. A closed target
@@ -2288,17 +2284,17 @@ takes 1,397,480,707, and the stable mount takes 47,211,173 under a scoped
 sequentially in 673.75 host seconds, and the separate four-home qualification
 passes in 371.80 seconds.
 
-The indexed-parent addition carries one representative public runtime success:
-direct-final removal of `/fixture/indexed/new.txt` from a singleton depth-one
-parent. It commits the unchanged exact six-home order
-`[283, 281, 1357, 2, 267, 1]` for target inode, parent inode, selected leaf,
-inode GDT, inode bitmap, and primary super; frees inode 33; and increments free
-inodes without changing free blocks. Root 1355, DX node 1364, external-map
-block 1365, and the other leaf 1497 remain byte-immutable. Existing indexed
-topology authority and the linear UNLINK lifetime/recovery matrices compose
-because selected-leaf substitution adds no journal role or recovery branch.
-No new indexed crash, refusal, external-tool, or stable-remount evidence is
-claimed, and this checkpoint does not close the deletion vertical.
+Indexed qualification removes, in one mount of a depth-zero HTree folder, the
+first record of a leaf, a last link with a block that enters the orphan file
+and leaves an unused record in place; then the leaf's second record, which
+joins that unused record; then an empty file created into the leaf and freed
+at once, whose record blanks again. A tear in the first removal's leaf write
+replays the blank record and drains the file. In a level-one HTree with two
+index nodes, `candidate-000069`, the first record of a full leaf, leaves with
+its inode keeping its other links, beside a MKDIR and RMDIR in the second
+node's leaf. A singleton depth-one parent keeps its six-home direct-final
+removal `[283, 281, 1357, 2, 267, 1]`. Each result passes pinned `e2fsck` and
+resolves through the driver on a fresh mount.
 
 The public `MKDIR` slice uses the same provisional-object VFS contract as
 CREATE. Its root-owned, non-setgid, no-xattr parent may be an authenticated one-
@@ -2359,62 +2355,44 @@ write-free byte-stable mount. Fresh source mode with this slice measures
 1,091,816,729 ext4-load steps across 2,883 packed lines under the
 then-checked-in 1.10-billion-step watchdog.
 
-The first public `RMDIR` slice, now extended at the parent boundary, removes
-only the exact one-block empty directory produced by that MKDIR path. The child
-must remain root-owned mode 0755 with
-link count two, one depth-zero initialized extent, exact size and sector
-accounting, canonical checksummed `.`/`..` contents, loaded-empty cache state,
-no open references, exactly one dentry reference, and no active-CWD role. The
-parent must be an authenticated root-owned one-block linear directory,
-depth-zero HTree, or singleton depth-one HTree, with a link count of at least
-three and one exact type-2 target entry. Indexed admission reauthenticates the
-complete parent map, HTree root, primary-super hash authority, active depth-zero
-table or sole depth-one DX node, and every active checksummed leaf. Only the
-selected leaf is mutable; the root, optional DX node, extent map, sibling
-leaves, size, and sector accounting remain immutable.
+The public `RMDIR` removes any empty directory through the directory removal
+UNLINK uses. The child must be root-owned with link count two, flags `EXTENTS`
+or `EXTENTS|INDEX` and nothing else, `extra_isize` 32, project 0, a zero
+inode tail, no external xattr, loaded-empty cache state, exactly one dentry
+reference, and no active-CWD role; any mode is admitted. The parent is any
+parent the directory insert admits, with a link count from 3 through 65000.
+The cold plan proves the child empty as `ext4_empty_dir` does: every logical
+block is read through the child's extent map, of any depth; block 0 holds `.`
+and `..` or is a valid DX root, and every other block is a valid DX node or a
+checksummed leaf whose records are all unused. A live record returns
+`VFS-E-NOTEMPTY`. The map proof counts the child's map against its sector
+count, and the mount's ownership proof gives the child its blocks alone.
 
-Dry and live staging independently authenticate both inode maps. For an indexed
-parent, a complete parent-map audit first requires zero hits on the child block
-and then exactly one hit on the selected leaf; an alias through the external
-extent node is rejected by the same map hook. Staging then publishes the parent
-leaf and child directory ranges together and scans every other allocated inode
-once while excluding only those two legitimate owners. The admitted transaction
-zeroes and frees the child inode, splices and restamps the selected parent
-directory block, decrements and restamps the parent link count, frees the child
-block, decrements `bg_used_dirs_count`, composes group/global free inode and
-block accounting, and revokes the unchanged freed child block. It does not
-restore `bg_itable_unused`.
+As the kernel's `ext4_rmdir` does, the transaction removes the parent's
+record, lowers the parent's link count, sets the child's links from two to
+zero with a new change time, and adds the child to the modern orphan file
+under the unlink-ADD checkpoint, in five homes or four when the inode records
+share a table block. The child then drains through the release passes and
+deletion a file's last link uses, at once when closed, on the last staged
+`RELEASE` when open, and through mount recovery after a crash. The deletion
+lowers `bg_used_dirs_count`, as `ext4_free_inode` does; its after-image, seal
+and checkpoint verifier carry the decrement. `bg_itable_unused` keeps its
+high-water value. The child's data blocks release without revokes: checkpoint
+resets the journal after every transaction, so no release pass journals an
+image of a directory block it frees and a revoke could shadow nothing.
 
-The established linear-parent hostile inode-14 patches that claim either range
-remain qualified corruption refusals with zero writes.
-
-Deduplicated credit is exact `6/0/1` through `8/0/1`; the canonical same-group
-fixture uses `7/0/1`. Its checkpoint order is child inode W22, parent inode
-W23, parent directory W24, GDT W25, block bitmap W26, primary superblock W27,
-and inode bitmap W28. The child block is revoke-only and is never written as a
-home. Established linear-parent clean removal passes pinned e2fsprogs 1.47.4
-`debugfs` and read-only `e2fsck`, then reaches a byte-stable write-free remount.
-W7 proves precommit rollback; a committed W25 GDT tear recovers by replaying all
-seven after-images while honoring the revoke. Missing clock, missing revoke
-space, six metadata slots, zero `used_dirs`, noncanonical child layout, and an
-open reference all refuse without media mutation. At that linear-parent
-closure, fresh source mode measured 1,121,477,446 steps across 2,932 packed
-lines under the approved 1.15-billion-step watchdog.
-
-Indexed RMDIR preserves the unchanged nine semantic roles: child inode, parent
-inode, selected parent directory, released-block GDT, released-block bitmap,
-primary super, child-directory revoke, inode GDT, and inode bitmap. The
-canonical same-group instance remains exactly 7 META + 1 REVOKE. Its one new
-runtime result is a same-session singleton-depth-one `MKDIR` followed by
-`RMDIR`, which passed in 625.48 host seconds and restored the pre-MKDIR
-namespace, free inode/block counts, parent link, and `used_dirs` while leaving
-`bg_itable_unused` at its advanced high-water mark. The selected leaf was the
-only mutable HTree block; the root, sole DX node, external extent-map node, and
-sibling leaves remained byte-immutable. Structural and source-load/plan-core
-checks also pass. No new indexed crash, refusal, external-tool, or stable-
-remount clone is claimed; established linear RMDIR lifetime/recovery evidence
-and indexed topology evidence compose because no semantic role or recovery
-branch changed.
+Qualification removes the directory MKDIR made, with checkpoint homes W19
+through W23 and a six-home drain, and in one mount directories of mode 0700,
+three linear blocks, a 16-byte `.` record, an indexed directory with five
+emptied leaves, and a depth-one map over six blocks, with exact free counts
+and `used_dirs`. A live name the cache does not show returns `VFS-E-NOTEMPTY`
+from the emptiness proof; a third link, `DIRSYNC`, a missing clock, a
+four-block writer, `used_dirs == 0`, and hostile third-inode aliases of the
+parent's or child's block refuse without media mutation. A descriptor tear
+retains the directory; a torn parent-directory home replays and drains; a
+crash at the drain's descriptor leaves the child to mount recovery; and an
+open directory drains on its last close. Each result passes pinned
+e2fsprogs 1.47.4 `e2fsck` and reaches a write-free stable remount.
 
 The first public hard-`LINK` slice builds on the generic VFS hard-link contract,
 hardened by prerequisite commit `1f688d1`. The staged descriptor advertises
