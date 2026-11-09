@@ -7902,8 +7902,12 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR "
                 "VFS-CAP-MKDIR OR VFS-CAP-TRUNCATE OR VFS-CAP-SETATTR OR "
                 "VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR VFS-CAP-LINK OR "
-                "VFS-CAP-RENAME OR "
+                "CONSTANT _E4-STAGED-BASE-CAPS"
+            ),
+            (
+                "_E4-STAGED-BASE-CAPS VFS-CAP-RENAME OR "
                 "VFS-CAP-ATOMIC-RENAME OR VFS-CAP-CROSSDIR-RENAME OR "
+                "VFS-CAP-RENAME-REPLACE OR "
                 "CONSTANT _EXPECTED-E4-STAGED-CAPS"
             ),
             (
