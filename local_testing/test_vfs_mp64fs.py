@@ -1690,10 +1690,12 @@ def test_structured_volume_error_translation():
 
 
 def test_mount_population_nomem_rolls_back():
-    """Mount-time string exhaustion returns NOMEM with an empty root."""
+    """Mount-time name exhaustion returns NOMEM with an empty root."""
     check("mount population NOMEM rollback", [
         ': _OOM-MOUNT  ( vfs -- ior )',
-        '  DUP V.STR-PTR @ OVER V.STR-END ! VMP-INIT ;',
+        '  DUP V.STR-PTR @ OVER V.STR-END !',
+        '  DUP V.ARENA @ DUP ARENA-FREE _VMP-CTX-SIZE 2048 + -',
+        '  ARENA-ALLOT? 2DROP VMP-INIT ;',
         'CREATE _OOM-OPS VFS-OPS-SIZE ALLOT',
         'VMP-OPS _OOM-OPS VFS-OPS-SIZE CMOVE',
         "' _OOM-MOUNT _OOM-OPS VFS-OP-MOUNT CELLS + !",
@@ -1719,18 +1721,19 @@ def test_mount_population_nomem_rolls_back():
 
 
 def test_readdir_population_nomem_rolls_back():
-    """Lazy population restores children, counts, and the string cursor."""
+    """Lazy population restores its children, counts and live names."""
     check("readdir population NOMEM rollback", [
         'T-VMP-NEW CONSTANT _V',
         'S" /docs" _V VFS-RESOLVE CONSTANT _D',
         'VARIABLE _IC VARIABLE _VC VARIABLE _SP',
-        '_V V.ICOUNT @ _IC ! _V V.VCOUNT @ _VC ! _V V.STR-PTR @ _SP !',
-        '_SP @ _V V.STR-END !',
+        '_V V.ICOUNT @ _IC ! _V V.VCOUNT @ _VC ! _V _VFS-STR-LIVE _SP !',
+        '_V V.STR-PTR @ _V V.STR-END !',
+        '_V V.ARENA @ DUP ARENA-FREE 2048 - ARENA-ALLOT? 2DROP',
         '_D _V _VMP-READDIR VFS-IOR-REASON VFS-R-NOMEM =',
         '_D IN.CHILD @ 0= AND',
         '_V V.ICOUNT @ _IC @ = AND',
         '_V V.VCOUNT @ _VC @ = AND',
-        '_V V.STR-PTR @ _SP @ = AND',
+        '_V _VFS-STR-LIVE _SP @ = AND',
         '_D IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND',
         'IF ." READDIR-NOMEM-ROLLBACK-OK" THEN',
     ], "READDIR-NOMEM-ROLLBACK-OK")

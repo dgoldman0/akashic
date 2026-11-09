@@ -588,8 +588,8 @@ distinct hard-link dentry for the same vnode is a no-op, including under
 `VFS-RN-NOREPLACE`, that retains both names and the link count. Directory
 cycles, replacement of a nonempty directory, which the emptiness rule above
 decides, and file/directory type conflicts are rejected. Repeated successful
-renames reuse released variable-capacity name entries instead of consuming the
-bounded caller-provided string pool monotonically.
+renames reuse released name entries of the same capacity, so rename churn does
+not grow the name pool.
 
 `VFS-RM` rejects the root with `VFS-E-INVALID` and the dentry currently held
 in `V.CWD` with `VFS-E-BUSY` before binding dispatch. This prevents a
@@ -683,6 +683,18 @@ holds, whether it names a file or a directory. A child it removes leaves its
 parent's cached children incomplete, so the parent loses `VFS-IF-CHILDREN`:
 the parent's next listing runs `READDIR` again, and the evicted name returns
 through `LOOKUP` with its binding identity.
+
+The name pool grows the same way. It takes chunks of at least 4 KiB from the
+VFS arena as names arrive, so the storage the caller gave the VFS is its only
+bound, and a folder lists in full however many names it holds. A released
+name goes onto the free list of its capacity, in 8-byte classes up to 256
+bytes and one list for longer names, and the next name of that capacity takes
+it first, so cache churn and repeated renames reuse entries without growing
+the pool. With the arena full, a free entry of a larger capacity serves;
+without one the allocation returns `VFS-E-NOMEM`. The pool keeps its chunks,
+as the slab keeps its pages. A binding whose load fails rolls back by
+releasing the dentries it cached, which releases their names; no binding
+touches the pool's fields.
 
 Bindings populate lookup/readdir results through:
 

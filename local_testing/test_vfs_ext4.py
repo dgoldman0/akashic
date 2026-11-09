@@ -15153,10 +15153,9 @@ def _build_lookup_shapes_prestate(
     directory sub; /lk-idx0, eighty 45-byte names, which e2fsck indexes at
     level zero; /lk-idx1, 1,120 100-byte names, indexed at level one under
     two index nodes; /lk-big, 2,000 24-byte names of one file, whose cache
-    entries would take 80,000 bytes of the VFS string pool, more than its
-    64 KiB; /lk-wide, 330 200-byte names of one file, whose entries would
-    take 71,280 bytes, so that a listing fills the pool after about 300
-    names; and /lk-src/moved, a file to rename into /lk-big.  A second
+    entries take 80,000 bytes; /lk-wide, 330 200-byte names of one file,
+    whose entries take 71,280 bytes, more than the 64 KiB the name pool once
+    reserved; and /lk-src/moved, a file to rename into /lk-big.  A second
     debugfs pass after e2fsck makes /lk-multi, sixty 35-byte names over
     three linear blocks, which stays linear since no later e2fsck -D runs.
     """
@@ -15753,10 +15752,9 @@ def test_staged_vfs_lookup_serves_a_folder_beyond_the_string_pool(
     jbd2_toolchain: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """A folder whose names exceed the VFS string pool stays usable.
+    """A folder of 2,000 names stays usable with only its names in use cached.
 
-    /lk-big holds 2,000 names whose cache entries would take 80,000 bytes
-    of the 64 KiB pool.  One of them opens and reads its data; CREATE adds a
+    /lk-big holds 2,000 names whose cache entries would take 80,000 bytes.  One of them opens and reads its data; CREATE adds a
     name; a file renames into the folder from /lk-src; and one of the 2,000
     hard links is removed.  Each step looks up only the names it touches, so
     the cache holds a few dentries and the folder is never marked loaded.
@@ -15833,16 +15831,15 @@ def test_staged_vfs_lookup_serves_a_folder_beyond_the_string_pool(
     )
 
 
-def test_lookup_listing_beyond_the_string_pool_answers_nomem(
+def test_lookup_listing_beyond_the_old_string_pool_loads_every_name(
     lookup_shapes_prestate: dict[str, object],
 ) -> None:
-    """Listing a folder still loads every name and can run out of names.
+    """Listing a folder loads every name, however many bytes they fill.
 
-    READDIR caches each of /lk-wide's 330 names, whose entries would take
-    71,280 bytes of the 64 KiB string pool, so it answers VFS-E-NOMEM
-    once the pool is full.  Its rollback leaves the cache and the folder's
-    completeness flag as they were, and a lookup in the folder then still
-    resolves.
+    READDIR caches each of /lk-wide's 330 names, whose entries take 71,280
+    bytes, more than the 64 KiB the name pool once reserved, so the pool
+    grows from the mount arena.  The folder gains its completeness flag,
+    and a name in it then resolves to its inode.
     """
     prestate = lookup_shapes_prestate
     image = prestate["image"]
@@ -15850,25 +15847,29 @@ def test_lookup_listing_beyond_the_string_pool_answers_nomem(
     assert isinstance(image, Path)
     assert isinstance(entries, dict)
     name = _LOOKUP_WIDE_NAMES[321]
+    count = len(_LOOKUP_WIDE_NAMES)
     name_lines, name_text = _forth_bytes_buffer("_LKL-NAME", b"/lk-wide/" + name)
     lines = [
         "T-ARENA T-VOLUME EXT4-NEW CONSTANT _LKL-MOUNT-IOR CONSTANT _LKL-V",
         *name_lines,
         'S" /lk-wide" _LKL-V VFS-RESOLVE? CONSTANT _LKL-D-IOR CONSTANT _LKL-D',
         "_LKL-V V.ICOUNT @ CONSTANT _LKL-BEFORE",
+        "_LKL-V _VFS-STR-LIVE CONSTANT _LKL-LIVE",
         "_LKL-D _LKL-V _VFS-ENSURE-CHILDREN? CONSTANT _LKL-LIST-IOR",
-        "_LKL-V V.ICOUNT @ CONSTANT _LKL-AFTER",
-        "_LKL-D IN.CHILD @ CONSTANT _LKL-CHILD",
+        "_LKL-V V.ICOUNT @ _LKL-BEFORE - CONSTANT _LKL-LISTED",
+        "_LKL-V _VFS-STR-LIVE _LKL-LIVE - CONSTANT _LKL-NAMES",
+        "_LKL-V _VFS-STR-HELD CONSTANT _LKL-HELD",
         "_LKL-D IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _LKL-LOADED",
         f"{name_text} _LKL-V VFS-RESOLVE? CONSTANT _LKL-N-IOR CONSTANT _LKL-N",
     ]
     checks = [
         "_LKL-MOUNT-IOR 0=",
         "_LKL-D-IOR 0=",
-        "_LKL-LIST-IOR VFS-IOR-REASON VFS-R-NOMEM =",
-        "_LKL-AFTER _LKL-BEFORE =",
-        "_LKL-CHILD 0=",
-        "_LKL-LOADED 0=",
+        "_LKL-LIST-IOR 0=",
+        f"_LKL-LISTED {count} =",
+        f"_LKL-NAMES {count} =",
+        "_LKL-HELD 65536 U>",
+        "_LKL-LOADED 0<>",
         "_LKL-N-IOR 0=",
         f"_LKL-N IN.BID @ {entries[b'lk-wide'][name]} =",
         "_LKL-N IN.PARENT @ _LKL-D =",
@@ -15879,12 +15880,12 @@ def test_lookup_listing_beyond_the_string_pool_answers_nomem(
             *lines,
             *_forth_accumulated_conjunction("_LKL-OK", checks),
             (
-                '_LKL-OK @ IF ." EXT4-LOOKUP-LISTING-NOMEM" ELSE '
-                '." EXT4-LOOKUP-LISTING-NOMEM-FAIL " _LKL-OK-FIRST-FAILURE @ . THEN'
+                '_LKL-OK @ IF ." EXT4-LOOKUP-LISTING-COMPLETE" ELSE '
+                '." EXT4-LOOKUP-LISTING-FAIL " _LKL-OK-FIRST-FAILURE @ . THEN'
             ),
         ],
     )
-    _assert_emitted(output, "EXT4-LOOKUP-LISTING-NOMEM")
+    _assert_emitted(output, "EXT4-LOOKUP-LISTING-COMPLETE")
 
 
 def _super_with_mask(path: Path, field_offset: int, value: int) -> bytes:
@@ -54022,7 +54023,7 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
             "_CHR-V V.CWD @ D.VNODE @ CONSTANT _CHR-PARENT-VN",
             "_CHR-V V.ICOUNT @ CONSTANT _CHR-ICOUNT-BEFORE",
             "_CHR-V V.VCOUNT @ CONSTANT _CHR-VCOUNT-BEFORE",
-            "_CHR-V V.STR-PTR @ CONSTANT _CHR-STR-BEFORE",
+            "_CHR-V _VFS-STR-LIVE CONSTANT _CHR-STR-BEFORE",
             "_CHR-V V.IFREE @ CONSTANT _CHR-IFREE-BEFORE",
             "_CHR-PARENT-VN VN.FLAGS @ CONSTANT _CHR-PFLAGS-BEFORE",
             "_CHR-PARENT-VN VN.NLINK @ CONSTANT _CHR-NLINK-BEFORE",
@@ -54072,7 +54073,7 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
             ),
             "_CHR-V V.ICOUNT @ CONSTANT _CHR-AMBIENT-ICOUNT",
             "_CHR-V V.VCOUNT @ CONSTANT _CHR-AMBIENT-VCOUNT",
-            "_CHR-V V.STR-PTR @ CONSTANT _CHR-AMBIENT-STR",
+            "_CHR-V _VFS-STR-LIVE CONSTANT _CHR-AMBIENT-STR",
             *_forth_accumulated_conjunction(
                 "_CHR-AMBIENT-PRESERVED",
                 ["_EXT4-MUTATION-MAP-TARGET @ 1351 ="],
@@ -54104,7 +54105,7 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
             "_CHR-V V.LAST-IOR @ CONSTANT _CHR-LAST-IOR",
             "_CHR-V V.ICOUNT @ CONSTANT _CHR-ICOUNT-AFTER",
             "_CHR-V V.VCOUNT @ CONSTANT _CHR-VCOUNT-AFTER",
-            "_CHR-V V.STR-PTR @ CONSTANT _CHR-STR-AFTER",
+            "_CHR-V _VFS-STR-LIVE CONSTANT _CHR-STR-AFTER",
             "_CHR-V V.IFREE @ CONSTANT _CHR-IFREE-AFTER",
             "_CHR-PARENT-VN VN.FLAGS @ CONSTANT _CHR-PFLAGS-AFTER",
             "_CHR-PARENT-VN VN.NLINK @ CONSTANT _CHR-NLINK-AFTER",
@@ -58656,7 +58657,7 @@ def _run_staged_indexed_create_refusal(
             "_IR-V V.LAST-IOR @ CONSTANT _IR-LAST-BEFORE",
             "_IR-V V.ICOUNT @ CONSTANT _IR-ICOUNT-BEFORE",
             "_IR-V V.VCOUNT @ CONSTANT _IR-VCOUNT-BEFORE",
-            "_IR-V V.STR-PTR @ CONSTANT _IR-STR-BEFORE",
+            "_IR-V _VFS-STR-LIVE CONSTANT _IR-STR-BEFORE",
             "_IR-V V.IFREE @ CONSTANT _IR-IFREE-BEFORE",
             "_IR-PARENT-VN VN.NLINK @ CONSTANT _IR-NLINK-BEFORE",
             "_IR-PARENT-VN VN.SIZE-LO @ CONSTANT _IR-SIZE-BEFORE",
@@ -58688,7 +58689,7 @@ def _run_staged_indexed_create_refusal(
             "_IR-V V.LAST-IOR @ CONSTANT _IR-LAST-IOR",
             "_IR-V V.ICOUNT @ CONSTANT _IR-ICOUNT-AFTER",
             "_IR-V V.VCOUNT @ CONSTANT _IR-VCOUNT-AFTER",
-            "_IR-V V.STR-PTR @ CONSTANT _IR-STR-AFTER",
+            "_IR-V _VFS-STR-LIVE CONSTANT _IR-STR-AFTER",
             "_IR-V V.IFREE @ CONSTANT _IR-IFREE-AFTER",
             "_IR-PARENT-VN VN.NLINK @ CONSTANT _IR-NLINK-AFTER",
             "_IR-PARENT-VN VN.SIZE-LO @ CONSTANT _IR-SIZE-AFTER",
@@ -58748,6 +58749,7 @@ def _run_staged_indexed_create_refusal(
                             "_IR-LAST-IOR _IR-LAST-BEFORE =",
                             "_IR-ICOUNT-AFTER _IR-ICOUNT-BEFORE 1+ =",
                             "_IR-CHILD _IR-IFREE-BEFORE =",
+                            "_IR-STR-AFTER _IR-STR-BEFORE 1+ =",
                         )
                         if found_by_lookup
                         else (
@@ -58755,10 +58757,10 @@ def _run_staged_indexed_create_refusal(
                             "_IR-LAST-IOR _IR-CREATE-IOR =",
                             "_IR-ICOUNT-AFTER _IR-ICOUNT-BEFORE =",
                             "_IR-IFREE-AFTER _IR-IFREE-BEFORE =",
+                            "_IR-STR-AFTER _IR-STR-BEFORE =",
                         )
                     ),
                     "_IR-VCOUNT-AFTER _IR-VCOUNT-BEFORE =",
-                    "_IR-STR-AFTER _IR-STR-BEFORE =",
                     "_IR-NLINK-AFTER _IR-NLINK-BEFORE =",
                     "_IR-SIZE-AFTER _IR-SIZE-BEFORE =",
                     "_IR-BLOCKS-AFTER _IR-BLOCKS-BEFORE =",
@@ -59214,7 +59216,7 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
             "_RGP-V V.CWD @ D.VNODE @ CONSTANT _RGP-PARENT-VN",
             "_RGP-V V.ICOUNT @ CONSTANT _RGP-ICOUNT-BEFORE",
             "_RGP-V V.VCOUNT @ CONSTANT _RGP-VCOUNT-BEFORE",
-            "_RGP-V V.STR-PTR @ CONSTANT _RGP-STR-BEFORE",
+            "_RGP-V _VFS-STR-LIVE CONSTANT _RGP-STR-BEFORE",
             "_RGP-V V.IFREE @ CONSTANT _RGP-IFREE-BEFORE",
             "_RGP-PARENT-VN VN.NLINK @ CONSTANT _RGP-NLINK-BEFORE",
             "_RGP-PARENT-VN VN.SIZE-LO @ CONSTANT _RGP-SIZE-BEFORE",
@@ -59230,7 +59232,7 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
             "_RGP-V V.LAST-IOR @ CONSTANT _RGP-DRY-LAST-IOR",
             "_RGP-V V.ICOUNT @ CONSTANT _RGP-ICOUNT-AFTER-DRY",
             "_RGP-V V.VCOUNT @ CONSTANT _RGP-VCOUNT-AFTER-DRY",
-            "_RGP-V V.STR-PTR @ CONSTANT _RGP-STR-AFTER-DRY",
+            "_RGP-V _VFS-STR-LIVE CONSTANT _RGP-STR-AFTER-DRY",
             "_RGP-V V.IFREE @ CONSTANT _RGP-IFREE-AFTER-DRY",
             (
                 "_RGP-PARENT-VN VN.NLINK @ "
@@ -68514,8 +68516,7 @@ def _build_rename_shapes_prestate(
     directories to move; and /big, 1,120 100-byte names of one file and an
     empty directory evb, which e2fsck indexes at level one with two index
     nodes.  A second debugfs pass then removes every name but the first of
-    each /big leaf, and evb, so the VFS cache's 64 KiB string pool can hold
-    the names of the directory a rename loads.
+    each /big leaf, and evb.
     """
     debugfs = jbd2_toolchain["debugfs"]
     e2fsck = jbd2_toolchain["e2fsck"]
@@ -77562,7 +77563,7 @@ def _staged_link_attempt_forth(
         ),
         f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-OLD-ICOUNT",
         f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-OLD-VCOUNT",
-        f"{prefix}-V V.STR-PTR @ CONSTANT {prefix}-OLD-STR-PTR",
+        f"{prefix}-V _VFS-STR-LIVE CONSTANT {prefix}-OLD-STR-LIVE",
         f"{prefix}-V V.IFREE @ CONSTANT {prefix}-OLD-IFREE",
         (
             f'S" /fixture/payload.txt" VFS-FF-READ {prefix}-V '
@@ -78101,7 +78102,7 @@ def test_staged_vfs_link_descriptor_tear_rolls_back_provisional_name(
                             ),
                             "_LD-V V.ICOUNT @ _LD-OLD-ICOUNT =",
                             "_LD-V V.VCOUNT @ _LD-OLD-VCOUNT =",
-                            "_LD-V V.STR-PTR @ _LD-OLD-STR-PTR =",
+                            "_LD-V _VFS-STR-LIVE _LD-OLD-STR-LIVE =",
                             "_LD-V V.IFREE @ _LD-OLD-IFREE =",
                             "_LD-CLOCK-CALLS @ 1 =",
                             "_LD-WRITER _LD-PROFILE-BASE =",
@@ -78794,7 +78795,7 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
             "_LR-P-VN VN.CTIME @ CONSTANT _LR-OLD-P-CTIME",
             "_LR-V V.ICOUNT @ CONSTANT _LR-OLD-ICOUNT",
             "_LR-V V.VCOUNT @ CONSTANT _LR-OLD-VCOUNT",
-            "_LR-V V.STR-PTR @ CONSTANT _LR-OLD-STR-PTR",
+            "_LR-V _VFS-STR-LIVE CONSTANT _LR-OLD-STR-LIVE",
             "_LR-V V.IFREE @ CONSTANT _LR-OLD-IFREE",
             (
                 'S" missing-clock.txt" _LR-T _LR-P _LR-V VFS-LINK '
@@ -78944,7 +78945,7 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
             (
                 _forth_conjunction(
                     [
-                        "_LR-V V.STR-PTR @ _LR-OLD-STR-PTR =",
+                        "_LR-V _VFS-STR-LIVE _LR-OLD-STR-LIVE =",
                         "_LR-V V.IFREE @ _LR-OLD-IFREE =",
                     ]
                 )
@@ -79584,7 +79585,7 @@ def _staged_rename_attempt_forth(
         ),
         f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-OLD-ICOUNT",
         f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-OLD-VCOUNT",
-        f"{prefix}-V V.STR-PTR @ CONSTANT {prefix}-OLD-STR-PTR",
+        f"{prefix}-V _VFS-STR-LIVE CONSTANT {prefix}-OLD-STR-LIVE",
         f"{prefix}-V V.IFREE @ CONSTANT {prefix}-OLD-IFREE",
         (
             f'S" {source_path}" VFS-FF-READ {prefix}-V '
@@ -81823,7 +81824,7 @@ def test_staged_vfs_rename_descriptor_tear_rolls_back_name_and_media(
                             "_RD-D-VN VN.CTIME @ _RD-OLD-D-CTIME =",
                             "_RD-V V.ICOUNT @ _RD-OLD-ICOUNT =",
                             "_RD-V V.VCOUNT @ _RD-OLD-VCOUNT =",
-                            "_RD-V V.STR-PTR @ _RD-OLD-STR-PTR =",
+                            "_RD-V _VFS-STR-LIVE _RD-OLD-STR-LIVE =",
                             "_RD-V V.IFREE @ _RD-OLD-IFREE =",
                             "_RD-CLOCK-CALLS @ 1 =",
                             "_RD-HOMES 0=",
@@ -82169,7 +82170,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
             "_RR-D-VN VN.CTIME-NS @ CONSTANT _RR-OLD-D-CTIME-NS",
             "_RR-V V.ICOUNT @ CONSTANT _RR-OLD-ICOUNT",
             "_RR-V V.VCOUNT @ CONSTANT _RR-OLD-VCOUNT",
-            "_RR-V V.STR-PTR @ CONSTANT _RR-OLD-STR-PTR",
+            "_RR-V _VFS-STR-LIVE CONSTANT _RR-OLD-STR-LIVE",
             "_RR-V V.IFREE @ CONSTANT _RR-OLD-IFREE",
             (
                 'S" renamed.txt" _RR-S _RR-D VFS-RN-NOREPLACE '
@@ -82245,7 +82246,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                         ),
                         "_RR-V V.ICOUNT @ _RR-OLD-ICOUNT =",
                         "_RR-V V.VCOUNT @ _RR-OLD-VCOUNT =",
-                        "_RR-V V.STR-PTR @ _RR-OLD-STR-PTR =",
+                        "_RR-V _VFS-STR-LIVE _RR-OLD-STR-LIVE =",
                         "_RR-V V.IFREE @ _RR-OLD-IFREE =",
                     ]
                 )
@@ -82454,7 +82455,7 @@ def test_staged_vfs_rename_conversion_beyond_the_writer_refuses_without_writes(
                         "_RF-D-VN VN.CTIME-NS @ _RF-OLD-D-CTIME-NS =",
                         "_RF-V V.ICOUNT @ _RF-OLD-ICOUNT =",
                         "_RF-V V.VCOUNT @ _RF-OLD-VCOUNT =",
-                        "_RF-V V.STR-PTR @ _RF-OLD-STR-PTR =",
+                        "_RF-V _VFS-STR-LIVE _RF-OLD-STR-LIVE =",
                         "_RF-V V.IFREE @ _RF-OLD-IFREE =",
                     ]
                 )
@@ -83226,7 +83227,7 @@ def test_staged_vfs_rename_cross_parent_refuses_credit_and_existing_victim(
                         "_RG-D-VN VN.CTIME-NS @ _RG-OLD-D-CTIME-NS =",
                         "_RG-V V.ICOUNT @ _RG-OLD-ICOUNT =",
                         "_RG-V V.VCOUNT @ _RG-OLD-VCOUNT =",
-                        "_RG-V V.STR-PTR @ _RG-OLD-STR-PTR =",
+                        "_RG-V _VFS-STR-LIVE _RG-OLD-STR-LIVE =",
                         "_RG-V V.IFREE @ _RG-OLD-IFREE =",
                     ]
                 )
@@ -84678,7 +84679,7 @@ def test_staged_vfs_rename_cross_parent_descriptor_tear_rolls_back_all_homes(
                             "_RY-D-VN VN.CTIME @ _RY-OLD-D-CTIME =",
                             "_RY-V V.ICOUNT @ _RY-OLD-ICOUNT =",
                             "_RY-V V.VCOUNT @ _RY-OLD-VCOUNT =",
-                            "_RY-V V.STR-PTR @ _RY-OLD-STR-PTR =",
+                            "_RY-V _VFS-STR-LIVE _RY-OLD-STR-LIVE =",
                             "_RY-V V.IFREE @ _RY-OLD-IFREE =",
                             "_RY-CLOCK-CALLS @ 1 =",
                             "_RY-HOMES 0=",
@@ -85570,7 +85571,7 @@ def _staged_directory_rename_attempt_forth(
         ),
         f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-OLD-ICOUNT",
         f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-OLD-VCOUNT",
-        f"{prefix}-V V.STR-PTR @ CONSTANT {prefix}-OLD-STR-PTR",
+        f"{prefix}-V _VFS-STR-LIVE CONSTANT {prefix}-OLD-STR-LIVE",
         f"{prefix}-V V.IFREE @ CONSTANT {prefix}-OLD-IFREE",
         (
             f'S" /created-dir" {prefix}-V VFS-CD? '
@@ -86422,7 +86423,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_refusals(
                         "_DRG-NP-VN VN.CTIME @ _DRG-OLD-NP-CTIME =",
                         "_DRG-V V.ICOUNT @ _DRG-OLD-ICOUNT =",
                         "_DRG-V V.VCOUNT @ _DRG-OLD-VCOUNT =",
-                        "_DRG-V V.STR-PTR @ _DRG-OLD-STR-PTR =",
+                        "_DRG-V _VFS-STR-LIVE _DRG-OLD-STR-LIVE =",
                         "_DRG-V V.IFREE @ _DRG-OLD-IFREE =",
                         "_DRG-CLOCK-CALLS @ 1 =",
                         "_DRG-HOMES 0=",
@@ -86702,7 +86703,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_w7_rolls_back(
                             ),
                             "_DRY-V V.ICOUNT @ _DRY-OLD-ICOUNT =",
                             "_DRY-V V.VCOUNT @ _DRY-OLD-VCOUNT =",
-                            "_DRY-V V.STR-PTR @ _DRY-OLD-STR-PTR =",
+                            "_DRY-V _VFS-STR-LIVE _DRY-OLD-STR-LIVE =",
                             "_DRY-V V.IFREE @ _DRY-OLD-IFREE =",
                             "_DRY-CLOCK-CALLS @ 1 =",
                             "_DRY-HOMES 0=",

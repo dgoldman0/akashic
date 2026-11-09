@@ -299,9 +299,9 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 \   +64   fd-max        number of FD slots
 \   +72   root-inode    root directory inode
 \   +80   cwd-inode     current working directory inode
-\   +88   str-base      string pool base
-\   +96   str-ptr       next free byte in string pool
-\  +104   str-end       string pool limit
+\   +88   str-pool      string pool record
+\   +96   str-ptr       next free byte in the newest pool chunk
+\  +104   str-end       end of the newest pool chunk
 \  +112   binding-ctx   opaque pointer for binding's private state
 \  +120   arena         back-pointer to owning arena
 \  +128   volume        explicit volume object (0 only for no-volume binding)
@@ -328,7 +328,7 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 : V.FDMAX      64 + ;         \ +64
 : V.ROOT       72 + ;         \ +72
 : V.CWD        80 + ;         \ +80
-: V.STR-BASE   88 + ;         \ +88
+: V.STR-POOL   88 + ;         \ +88
 : V.STR-PTR    96 + ;         \ +96
 : V.STR-END    104 + ;        \ +104
 : V.BCTX       112 + ;        \ +112
@@ -606,54 +606,128 @@ VARIABLE _VPR-IOR
 \  String Pool
 \ =====================================================================
 \
+\  The pool holds the names the cache keeps.  It grows from the VFS arena
+\  in chunks as names arrive, so the storage the caller gave the VFS is
+\  its only bound.  A released name goes onto the free list of its
+\  capacity, which the next name of that capacity takes first, so rename
+\  and cache churn reuse entries instead of growing the pool.
+\
+\  Pool record, at V.STR-POOL:
+\    +0   newest chunk; a chunk's first cell links the chunk before it,
+\         its second cell holds its size, and its entries follow
+\    +8   live entries
+\   +16   bytes of chunk storage the pool holds
+\   +24   free-list heads for capacities 8, 16, ... 256, then one for
+\         larger capacities
+\
 \  String entry layout:
 \    +0   capacity in high 32 bits, len in low 32 bits (1 cell)
 \    +8   refcount  (1 cell)
-\   +16   bytes     (ALIGN8(len) payload)
+\   +16   bytes     (ALIGN8(len) payload, at least 8)
 \
-\  Handle = address of entry.  Handle 0 = null sentinel.
-\  Released interior entries retain their capacity and are reusable.  This
-\  keeps repeated rename and cache churn from consuming a monotonic name pool.
+\  Handle = address of entry.  Handle 0 = null sentinel.  A free entry's
+\  first payload cell links the next entry of its list.  New entries come
+\  from the newest chunk, between V.STR-PTR and V.STR-END.
+
+4096 CONSTANT _VFS-STR-CHUNK
+32 CONSTANT _VFS-STR-CLASSES
+_VFS-STR-CLASSES 1+ CELLS 24 + CONSTANT _VFS-STR-POOL-SIZE
+
+: _VFS-STR-LIVE  ( vfs -- entries )  V.STR-POOL @ 8 + @ ;
+: _VFS-STR-HELD  ( vfs -- bytes )  V.STR-POOL @ 16 + @ ;
+
+\ The free-list head for entries of CAPACITY.
+: _VFS-STR-FREE-HEAD  ( capacity vfs -- address )
+    V.STR-POOL @ 24 + SWAP
+    DUP _VFS-STR-CLASSES 8 * U> IF
+        DROP _VFS-STR-CLASSES
+    ELSE
+        8 / 1-
+    THEN CELLS + ;
 
 VARIABLE _VSA-SRC
 VARIABLE _VSA-LEN
 VARIABLE _VSA-REQ
 VARIABLE _VSA-CAP
-VARIABLE _VSA-SCAN
-VARIABLE _VSA-END
+VARIABLE _VSA-PREV
+VARIABLE _VSA-SIZE
 VARIABLE _VSA-V
 
+\ Write the header, one reference and the bytes into the entry at HANDLE,
+\ whose capacity _VSA-CAP holds, and count it live.
 : _VFS-STR-INIT  ( handle -- handle )
     DUP _VSA-LEN @ _VSA-CAP @ 32 LSHIFT OR SWAP !
     1 OVER 8 + !
     DUP 16 + _VSA-CAP @ 0 FILL
     _VSA-LEN @ IF
         _VSA-SRC @ OVER 16 + _VSA-LEN @ CMOVE
-    THEN ;
+    THEN
+    1 _VSA-V @ V.STR-POOL @ 8 + +! ;
 
+\ Unlink the first free entry of capacity at least _VSA-REQ from the list
+\ at HEAD, or answer 0.  A class list holds one capacity, so its head
+\ serves; the list of larger capacities is searched in order.  An entry
+\ that is not free, or whose capacity is not aligned, ends the search.
+: _VFS-STR-TAKE  ( head -- handle | 0 )
+    DUP _VSA-PREV ! @
+    BEGIN DUP WHILE
+        DUP 8 + @ IF DROP 0 EXIT THEN
+        DUP @ 32 RSHIFT DUP 7 AND IF 2DROP 0 EXIT THEN
+        DUP _VSA-REQ @ U< 0= IF
+            _VSA-CAP !
+            DUP 16 + @ _VSA-PREV @ !
+            EXIT
+        THEN DROP
+        16 + DUP _VSA-PREV ! @
+    REPEAT ;
+
+\ A new entry from the newest chunk's unused end, or 0 when it has no room.
+: _VFS-STR-BUMP  ( -- handle | 0 )
+    _VSA-V @ V.STR-PTR @ DUP 0= IF EXIT THEN
+    DUP _VSA-REQ @ 16 + +
+    DUP _VSA-V @ V.STR-END @ U> IF 2DROP 0 EXIT THEN
+    _VSA-V @ V.STR-PTR !
+    _VSA-REQ @ _VSA-CAP ! ;
+
+\ Take a chunk from the VFS arena with room for an entry of _VSA-REQ bytes,
+\ and at least _VFS-STR-CHUNK bytes, and make it the newest.
+: _VFS-STR-GROW  ( -- flag )
+    _VSA-REQ @ 32 + _VFS-STR-CHUNK MAX _VSA-SIZE !
+    _VSA-V @ V.ARENA @ _VSA-SIZE @ ARENA-ALLOT? IF DROP FALSE EXIT THEN
+    _VSA-V @ V.STR-POOL @ @ OVER !
+    _VSA-SIZE @ OVER 8 + !
+    DUP _VSA-V @ V.STR-POOL @ !
+    DUP 16 + _VSA-V @ V.STR-PTR !
+    _VSA-SIZE @ + _VSA-V @ V.STR-END !
+    _VSA-SIZE @ _VSA-V @ V.STR-POOL @ 16 + +!
+    TRUE ;
+
+\ With the arena full, a free entry of a larger capacity serves.
+: _VFS-STR-TAKE-LARGER  ( -- handle | 0 )
+    _VSA-REQ @ _VFS-STR-CLASSES 8 * U> IF 0 EXIT THEN
+    _VSA-REQ @ 8 +
+    BEGIN DUP _VFS-STR-CLASSES 8 * U> 0= WHILE
+        DUP _VSA-V @ _VFS-STR-FREE-HEAD _VFS-STR-TAKE
+        ?DUP IF NIP EXIT THEN
+        8 +
+    REPEAT
+    _VSA-V @ _VFS-STR-FREE-HEAD _VFS-STR-TAKE ;
+
+\ A name entry for the bytes at SRC-A: a free entry of its capacity, the
+\ newest chunk's room, a new chunk, or with the arena full a larger free
+\ entry; 0 when none is left.
 : _VFS-STR-ALLOC  ( src-a src-u vfs -- handle )
     _VSA-V ! _VSA-LEN ! _VSA-SRC !
     _VSA-LEN @ 0<
     _VSA-LEN @ 0xFFFFFFFF U> OR IF 0 EXIT THEN
-    _VSA-LEN @ 7 + -8 AND _VSA-REQ !
-    _VSA-V @ V.STR-BASE @ _VSA-SCAN !
-    BEGIN _VSA-SCAN @ _VSA-V @ V.STR-PTR @ U< WHILE
-        _VSA-SCAN @ @ 32 RSHIFT DUP _VSA-CAP !
-        7 AND IF 0 EXIT THEN
-        _VSA-SCAN @ _VSA-CAP @ 16 + + DUP _VSA-END !
-        _VSA-V @ V.STR-PTR @ U> IF 0 EXIT THEN
-        _VSA-SCAN @ 8 + @ 0=
-        _VSA-CAP @ _VSA-REQ @ U< 0= AND IF
-            _VSA-SCAN @ _VFS-STR-INIT EXIT
-        THEN
-        _VSA-END @ _VSA-SCAN !
-    REPEAT
-    _VSA-V @ V.STR-PTR @ DUP _VSA-SCAN !
-    _VSA-REQ @ 16 + + DUP _VSA-END !
-    _VSA-V @ V.STR-END @ U> IF 0 EXIT THEN
-    _VSA-REQ @ _VSA-CAP !
-    _VSA-SCAN @ _VFS-STR-INIT
-    _VSA-END @ _VSA-V @ V.STR-PTR ! ;
+    _VSA-LEN @ 7 + -8 AND 8 MAX _VSA-REQ !
+    _VSA-REQ @ _VSA-V @ _VFS-STR-FREE-HEAD _VFS-STR-TAKE
+    ?DUP IF _VFS-STR-INIT EXIT THEN
+    _VFS-STR-BUMP ?DUP IF _VFS-STR-INIT EXIT THEN
+    _VFS-STR-GROW IF
+        _VFS-STR-BUMP ?DUP IF _VFS-STR-INIT EXIT THEN
+    THEN
+    _VFS-STR-TAKE-LARGER DUP IF _VFS-STR-INIT THEN ;
 
 : _VFS-STR-GET  ( handle -- addr len )
     DUP 0= IF  0 EXIT  THEN
@@ -666,37 +740,17 @@ VARIABLE _VSA-V
 VARIABLE _VSR-H
 VARIABLE _VSR-V
 
-VARIABLE _VST-V
-VARIABLE _VST-SCAN
-VARIABLE _VST-OLD
-VARIABLE _VST-NEW
-VARIABLE _VST-CAP
-VARIABLE _VST-END
-
-: _VFS-STR-TRIM  ( vfs -- )
-    DUP _VST-V !
-    DUP V.STR-BASE @ DUP _VST-SCAN ! _VST-NEW !
-    V.STR-PTR @ _VST-OLD !
-    BEGIN _VST-SCAN @ _VST-OLD @ U< WHILE
-        _VST-SCAN @ @ 32 RSHIFT DUP _VST-CAP !
-        7 AND IF EXIT THEN
-        _VST-SCAN @ _VST-CAP @ 16 + + DUP _VST-END !
-        _VST-OLD @ U> IF EXIT THEN
-        _VST-SCAN @ 8 + @ IF _VST-END @ _VST-NEW ! THEN
-        _VST-END @ _VST-SCAN !
-    REPEAT
-    _VST-SCAN @ _VST-OLD @ <> IF EXIT THEN
-    _VST-NEW @ _VST-OLD @ U< IF
-        _VST-NEW @ _VST-OLD @ _VST-NEW @ - 0 FILL
-        _VST-NEW @ _VST-V @ V.STR-PTR !
-    THEN ;
-
+\ Drop one reference to HANDLE.  The last one returns the entry to the
+\ free list of its capacity.
 : _VFS-STR-RELEASE  ( handle vfs -- )
     _VSR-V ! _VSR-H !
     _VSR-H @ 0= IF EXIT THEN
     _VSR-H @ 8 + DUP @ 1- DUP ROT !
-    DUP 0<> IF DROP EXIT THEN DROP
-    _VSR-V @ _VFS-STR-TRIM ;
+    IF EXIT THEN
+    _VSR-H @ @ 32 RSHIFT _VSR-V @ _VFS-STR-FREE-HEAD
+    DUP @ _VSR-H @ 16 + !
+    _VSR-H @ SWAP !
+    -1 _VSR-V @ V.STR-POOL @ 8 + +! ;
 
 : _VFS-STR-MATCH?  ( c-addr u handle -- flag )
     DUP 0= IF  DROP 2DROP FALSE EXIT  THEN
@@ -1155,7 +1209,8 @@ VFS-RAM-OPS ,
 \    1. VFS descriptor (208 bytes)
 \    2. Initial inode slab page (_VFS-SLAB-SIZE bytes)
 \    3. FD pool (256 × 64 = 16384 bytes)
-\    4. Fixed string pool plus vnode/file capacity
+\    4. String pool record (_VFS-STR-POOL-SIZE bytes); the pool, slab pages,
+\       vnodes and file buffers then grow from the rest
 \  Creates root directory inode (type VFS-T-DIR, name "/").
 
 VARIABLE _VN-AR
@@ -1164,7 +1219,6 @@ VARIABLE _VN-VOLUME
 VARIABLE _VN-VFS
 VARIABLE _VN-IOR
 VARIABLE _VN-ENTRY-PTR
-VARIABLE _VN-POOL-SIZE
 
 : _VFS-NEW-ROLLBACK  ( -- vfs ior )
     _VN-ENTRY-PTR @ _VN-AR @ A.PTR !
@@ -1243,18 +1297,14 @@ VARIABLE _VN-POOL-SIZE
     \ Init FD free-list
     _VN-VFS @  _VFS-FD-INIT
 
-    \ 4. String pool — fixed allocation (rest stays free for
-    \    file content buffers, additional slab pages, etc.)
-    \    Pool size = min(65536, remaining / 4)
-    _VN-AR @ DUP A.BASE @ SWAP A.SIZE @ +  _VN-AR @ A.PTR @ -
-                                            ( remaining )
-    4 /  65536 MIN  4096 MAX                ( pool-size )
-    DUP _VN-POOL-SIZE !
-    _VN-AR @ SWAP ARENA-ALLOT?
-    IF DROP _VFS-NEW-ROLLBACK EXIT THEN    ( str-base )
-    DUP  _VN-VFS @ V.STR-BASE !
-    DUP  _VN-VFS @ V.STR-PTR !
-    _VN-POOL-SIZE @ + _VN-VFS @ V.STR-END !
+    \ 4. String pool record.  Its chunks come from the arena as names
+    \    arrive, beginning with the root's.
+    _VN-AR @ _VFS-STR-POOL-SIZE ARENA-ALLOT?
+    IF DROP _VFS-NEW-ROLLBACK EXIT THEN
+    DUP _VFS-STR-POOL-SIZE 0 FILL
+    _VN-VFS @ V.STR-POOL !
+    0 _VN-VFS @ V.STR-PTR !
+    0 _VN-VFS @ V.STR-END !
 
     \ 5. Create root directory inode
     VFS-T-DIR  _VN-VFS @  _VFS-INODE-ALLOC  ( root-inode )

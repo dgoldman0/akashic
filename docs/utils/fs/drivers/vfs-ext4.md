@@ -2626,9 +2626,9 @@ the four geometry fixtures and the supplemental `read-side-1k-i256` fixture:
   and
 - read-only `STATFS` geometry/counters and UUID-derived FSID cells.
 
-Directory population snapshots the child head, inode count, and string-pool
-cursor. Any I/O, checksum, allocation, or structural failure rolls the cache
-back before returning. Sparse reads synthesize zeroes without issuing a media
+Directory population snapshots the child head and inode count. Any I/O,
+checksum, allocation, or structural failure rolls the cache back before
+returning, releasing the dentries it cached and with them their names. Sparse reads synthesize zeroes without issuing a media
 read for the hole. `FSYNC` now validates or checkpoints a retained writer;
 `SYNCFS` additionally lands a write-active empty journal clean while
 preserving the still-mounted instance's ready/current authority.
@@ -2656,9 +2656,10 @@ resolves a path, and before CREATE, MKDIR, LINK, and RENAME check a new name.
 A lookup reads only the blocks the name can be in, loads only the named
 child's inode, and caches only that child, so it never marks the folder as
 having its children loaded. The folder's other names stay on media. A folder
-whose names would overflow the VFS string pool therefore still resolves its
-names, opens and reads them, takes new names by CREATE and RENAME, and loses
-them by UNLINK, while listing it through `READDIR` answers `VFS-E-NOMEM`.
+of any size therefore resolves its names, opens and reads them, takes new
+names by CREATE and RENAME, and loses them by UNLINK while the cache holds
+only the names in use. Listing it through `READDIR` caches every name, in a
+name pool that grows from the mount arena.
 
 LOOKUP and READDIR are one reader. `_EXT4-DD-AUTH-INODE` authenticates the
 directory's inode, which `_EXT4-DD-LOAD-LOGICAL` checks again before it reads
@@ -2717,8 +2718,10 @@ continuation bit, the name with that hash is found past the first node's last
 entry. A changed byte in one leaf, and a changed checksum in one index node,
 refuse only the lookups routed through them. A listed folder whose names are
 evicted lists every name again, and an open directory survives the eviction.
-A folder of 2,000 names, whose cache entries would take 80,000 bytes of the
-64 KiB pool, takes a read, a CREATE, a RENAME into it, and an UNLINK in one
+A folder of 330 200-byte names, whose cache entries take 71,280 bytes, more
+than the 64 KiB the name pool once reserved, lists in full. A folder of 2,000
+names, whose cache entries would take 80,000 bytes, takes a read, a CREATE, a
+RENAME into it, and an UNLINK in one
 staged mount of 338.5 million steps, and its result passes `e2fsck` and reads
 back through a fresh mount.
 

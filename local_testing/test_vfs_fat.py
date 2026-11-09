@@ -1035,7 +1035,9 @@ def test_mount_population_nomem_rolls_back():
     """Mount reports NOMEM without publishing a partial FAT root."""
     check("FAT mount population NOMEM rollback", [
         ': _OOM-MOUNT  ( vfs -- ior )',
-        '  DUP V.STR-PTR @ OVER V.STR-END ! VFAT-INIT ;',
+        '  DUP V.STR-PTR @ OVER V.STR-END !',
+        '  DUP V.ARENA @ DUP ARENA-FREE _VFAT-CTX-SIZE 2048 + -',
+        '  ARENA-ALLOT? 2DROP VFAT-INIT ;',
         'CREATE _OOM-OPS VFS-OPS-SIZE ALLOT',
         'VFAT-OPS _OOM-OPS VFS-OPS-SIZE CMOVE',
         "' _OOM-MOUNT _OOM-OPS VFS-OP-MOUNT CELLS + !",
@@ -1062,18 +1064,19 @@ def test_mount_population_nomem_rolls_back():
 
 
 def test_readdir_population_nomem_rolls_back():
-    """A failed lazy scan restores child/count/string observations."""
+    """A failed lazy scan restores its children, counts and live names."""
     check("FAT readdir population NOMEM rollback", [
         'T-VFAT-NEW CONSTANT _V',
         'S" /DOCS" _V VFS-RESOLVE CONSTANT _D',
         'VARIABLE _IC VARIABLE _VC VARIABLE _SP',
-        '_V V.ICOUNT @ _IC ! _V V.VCOUNT @ _VC ! _V V.STR-PTR @ _SP !',
-        '_SP @ _V V.STR-END !',
+        '_V V.ICOUNT @ _IC ! _V V.VCOUNT @ _VC ! _V _VFS-STR-LIVE _SP !',
+        '_V V.STR-PTR @ _V V.STR-END !',
+        '_V V.ARENA @ DUP ARENA-FREE 2048 - ARENA-ALLOT? 2DROP',
         '_D _V _VFAT-READDIR VFS-IOR-REASON VFS-R-NOMEM =',
         '_D IN.CHILD @ 0= AND',
         '_V V.ICOUNT @ _IC @ = AND',
         '_V V.VCOUNT @ _VC @ = AND',
-        '_V V.STR-PTR @ _SP @ = AND',
+        '_V _VFS-STR-LIVE _SP @ = AND',
         '_D IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND',
         'IF ." FAT-READDIR-NOMEM-OK" THEN',
     ], "FAT-READDIR-NOMEM-OK")

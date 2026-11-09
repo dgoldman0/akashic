@@ -1526,7 +1526,7 @@ def test_hard_link_callback_failure_restores_provisional_state():
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
         'S" source" _V1 VFS-MKFILE CONSTANT _A',
         '_A D.VNODE @ CONSTANT _VN',
-        '_V1 V.STR-PTR @ CONSTANT _OLD-STR',
+        '_V1 _VFS-STR-LIVE CONSTANT _OLD-STR',
         '_V1 V.ICOUNT @ CONSTANT _OLD-ICOUNT',
         '_V1 V.VCOUNT @ CONSTANT _OLD-VCOUNT',
         '_V1 V.FLAGS @ CONSTANT _OLD-FLAGS',
@@ -1540,7 +1540,7 @@ def test_hard_link_callback_failure_restores_provisional_state():
         '  _VN VN.NLINK @ 1 = _VN VN.DREFS @ 1 = AND IF ." REFS " THEN',
         '  _V1 V.ICOUNT @ _OLD-ICOUNT =',
         '  _V1 V.VCOUNT @ _OLD-VCOUNT = AND IF ." COUNTS " THEN',
-        '  _V1 V.STR-PTR @ _OLD-STR = IF ." STRING " THEN',
+        '  _V1 _VFS-STR-LIVE _OLD-STR = IF ." STRING " THEN',
         '  _V1 V.FLAGS @ _OLD-FLAGS = IF ." FLAGS" THEN ;',
         'T-LINK-ROLLBACK CR',
     ], "IOR ZERO OBSERVED ABSENT REFS COUNTS STRING FLAGS")
@@ -1560,7 +1560,7 @@ def test_hard_link_rejects_detached_target_and_parent():
         'S" parent" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _PFD',
         'S" live" _V1 VFS-RM ?DUP IF THROW THEN',
         'S" parent" _V1 VFS-RM ?DUP IF THROW THEN',
-        '_V1 V.STR-PTR @ CONSTANT _OLD-STR',
+        '_V1 _VFS-STR-LIVE CONSTANT _OLD-STR',
         '_V1 V.ICOUNT @ CONSTANT _OLD-ICOUNT',
         '_V1 V.VCOUNT @ CONSTANT _OLD-VCOUNT',
         '_TARGET D.VNODE @ VN.NLINK @ CONSTANT _TARGET-NLINK',
@@ -1581,7 +1581,7 @@ def test_hard_link_rejects_detached_target_and_parent():
         '  _TARGET D.VNODE @ VN.DREFS @ _TARGET-DREFS = AND IF ." REFS " THEN',
         '  _V1 V.ICOUNT @ _OLD-ICOUNT =',
         '  _V1 V.VCOUNT @ _OLD-VCOUNT = AND IF ." COUNTS " THEN',
-        '  _V1 V.STR-PTR @ _OLD-STR = IF ." STRING" THEN ;',
+        '  _V1 _VFS-STR-LIVE _OLD-STR = IF ." STRING" THEN ;',
         'T-DETACHED-LINK CR',
         '_TFD VFS-CLOSE _PFD VFS-CLOSE',
     ], "TARGET PARENT NO-CALL DETACHED REFS COUNTS STRING")
@@ -1641,14 +1641,14 @@ def test_rename_callback_failure_restores_tree_and_name_pool():
         '  S" rejected" _RN-V @ V.ROOT @ _VFS-FIND-CHILD 0= AND',
         '  _RN-VICTIM @ 0= AND',
         '  _RN-FLAGS @ VFS-RN-NOREPLACE = AND',
-        '  _RN-V @ V.STR-PTR @ _RN-OLD-STR @ > AND',
+        '  _RN-V @ _VFS-STR-LIVE _RN-OLD-STR @ > AND',
         '  _RN-OBSERVED ! VFS-E-IO ;',
         'T-BINDING-CLONE CONSTANT _BIND',
         "' T-RN-FAIL _BIND VB.OPS @ VFS-OP-RENAME CELLS + !",
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
         'S" source" _V1 VFS-MKFILE CONSTANT _SRC',
         '_SRC D.VNODE @ CONSTANT _VN',
-        '_V1 V.STR-PTR @ DUP _RN-OLD-STR ! CONSTANT _OLD-STR',
+        '_V1 _VFS-STR-LIVE DUP _RN-OLD-STR ! CONSTANT _OLD-STR',
         '_V1 V.ICOUNT @ CONSTANT _OLD-ICOUNT',
         '_V1 V.VCOUNT @ CONSTANT _OLD-VCOUNT',
         '_V1 V.FLAGS @ CONSTANT _OLD-FLAGS',
@@ -1662,7 +1662,7 @@ def test_rename_callback_failure_restores_tree_and_name_pool():
         '  _VN VN.NLINK @ 1 = _VN VN.DREFS @ 1 = AND IF ." REFS " THEN',
         '  _V1 V.ICOUNT @ _OLD-ICOUNT =',
         '  _V1 V.VCOUNT @ _OLD-VCOUNT = AND IF ." COUNTS " THEN',
-        '  _V1 V.STR-PTR @ _OLD-STR = IF ." STRING " THEN',
+        '  _V1 _VFS-STR-LIVE _OLD-STR = IF ." STRING " THEN',
         '  _V1 V.FLAGS @ _OLD-FLAGS = IF ." FLAGS " THEN',
         '  _V1 V.LAST-IOR @ _IOR = IF ." DIAG" THEN ;',
         'T-RN-ROLLBACK CR',
@@ -1684,7 +1684,7 @@ def test_rename_rejects_detached_source_and_parent():
         'S" parent" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _PFD',
         'S" source" _V1 VFS-RM ?DUP IF THROW THEN',
         'S" parent" _V1 VFS-RM ?DUP IF THROW THEN',
-        '_V1 V.STR-PTR @ CONSTANT _OLD-STR',
+        '_V1 _VFS-STR-LIVE CONSTANT _OLD-STR',
         '_V1 V.ICOUNT @ CONSTANT _OLD-ICOUNT',
         '_V1 V.VCOUNT @ CONSTANT _OLD-VCOUNT',
         'S" source-new" _SRC _V1 V.ROOT @ VFS-RN-NOREPLACE _V1',
@@ -1701,7 +1701,7 @@ def test_rename_rejects_detached_source_and_parent():
         '  _PARENT D.FLAGS @ VFS-DF-UNLINKED AND AND IF ." DETACHED " THEN',
         '  _V1 V.ICOUNT @ _OLD-ICOUNT =',
         '  _V1 V.VCOUNT @ _OLD-VCOUNT = AND IF ." COUNTS " THEN',
-        '  _V1 V.STR-PTR @ _OLD-STR = IF ." STRING" THEN ;',
+        '  _V1 _VFS-STR-LIVE _OLD-STR = IF ." STRING" THEN ;',
         'T-DETACHED-RN CR _SFD VFS-CLOSE _PFD VFS-CLOSE',
     ], "SOURCE PARENT NULL NO-CALL DETACHED COUNTS STRING")
 
@@ -1719,13 +1719,13 @@ def test_rename_gates_flags_semantic_caps_and_cwd_victim():
         'S" victim" _V1 VFS-MKFILE DROP',
         'S" destination" _V1 VFS-MKDIR DROP',
         'S" destination" _V1 VFS-RESOLVE CONSTANT _DST',
-        '_V1 V.STR-PTR @ CONSTANT _OLD-STR',
+        '_V1 _VFS-STR-LIVE CONSTANT _OLD-STR',
         'S" bad" _SRC _V1 V.ROOT @ 2 _V1 VFS-RENAME-AT CONSTANT _FLAG-IOR',
         'S" moved" _SRC _DST VFS-RN-NOREPLACE _V1',
         'VFS-RENAME-AT CONSTANT _CROSS-IOR',
         'S" victim" _SRC _V1 V.ROOT @ 0 _V1',
         'VFS-RENAME-AT CONSTANT _REPLACE-IOR',
-        '_V1 V.STR-PTR @ CONSTANT _AFTER-GATES',
+        '_V1 _VFS-STR-LIVE CONSTANT _AFTER-GATES',
         '_BIND VB.CAPS DUP @ VFS-CAP-RENAME-REPLACE OR SWAP !',
         'S" source-dir" _V1 VFS-MKDIR DROP',
         'S" victim-dir" _V1 VFS-MKDIR DROP',
@@ -1744,17 +1744,19 @@ def test_rename_gates_flags_semantic_caps_and_cwd_victim():
         '  S" /victim" _V1 VFS-RESOLVE 0<> IF ." VICTIM " THEN',
         '  _V1 V.CWD @ IN.NAME @ _VFS-STR-GET S" victim-dir" COMPARE 0=',
         '  IF ." CWD-LIVE " THEN',
-        '  _V1 V.STR-PTR @ _OLD-STR > IF ." LATER-STRINGS" THEN ;',
+        '  _V1 _VFS-STR-LIVE _OLD-STR > IF ." LATER-STRINGS" THEN ;',
         'T-RN-GATES CR',
     ], "FLAGS CROSS REPLACE NO-ALLOC CWD NO-CALL SOURCE VICTIM CWD-LIVE LATER-STRINGS")
 
 def test_repeated_rename_reuses_released_name_entries():
-    """Successful rename churn reuses holes instead of exhausting the pool."""
+    """Successful rename churn reuses released entries instead of growing."""
     check("rename reuses name pool", [
         'T-VFS-NEW CONSTANT _V1',
         'S" a" _V1 VFS-MKFILE CONSTANT _SRC',
+        'S" b" _SRC _V1 VFS-RENAME ?DUP IF THROW THEN',
         '_V1 V.STR-PTR @ CONSTANT _BASE',
-        '_BASE 24 + DUP CONSTANT _LIMIT _V1 V.STR-END !',
+        '_V1 _VFS-STR-HELD CONSTANT _HELD',
+        '_V1 _VFS-STR-LIVE CONSTANT _LIVE',
         ': T-RN-A  S" a" _SRC _V1 VFS-RENAME ?DUP IF THROW THEN ;',
         ': T-RN-B  S" b" _SRC _V1 VFS-RENAME ?DUP IF THROW THEN ;',
         ': T-RN-CHURN  10 0 DO I 1 AND IF T-RN-A ELSE T-RN-B THEN LOOP ;',
@@ -1763,9 +1765,90 @@ def test_repeated_rename_reuses_released_name_entries():
         '  S" a" _V1 VFS-RESOLVE _SRC = IF ." NAME " THEN',
         '  _SRC IN.PARENT @ _V1 V.ROOT @ = IF ." PARENT " THEN',
         '  _V1 V.STR-PTR @ _BASE = IF ." REUSED " THEN',
-        '  _V1 V.STR-END @ _LIMIT = IF ." BOUNDED" THEN ;',
+        '  _V1 _VFS-STR-HELD _HELD = IF ." BOUNDED " THEN',
+        '  _V1 _VFS-STR-LIVE _LIVE = IF ." LIVE" THEN ;',
         'T-RN-POOL CR',
-    ], "NAME PARENT REUSED BOUNDED")
+    ], "NAME PARENT REUSED BOUNDED LIVE")
+
+_POOL_NAME_LINES = [
+    'CREATE _NM 40 ALLOT',
+    ': T-NAME  ( n -- addr 40 )',
+    '  _NM 40 [CHAR] x FILL',
+    '  DUP 100 / 10 MOD [CHAR] 0 + _NM 37 + C!',
+    '  DUP 10 / 10 MOD [CHAR] 0 + _NM 38 + C!',
+    '  10 MOD [CHAR] 0 + _NM 39 + C!  _NM 40 ;',
+]
+
+
+def test_name_pool_grows_past_its_first_chunk():
+    """Two hundred 40-byte names grow the pool from the arena.
+
+    They stay under the cache's eviction mark of 256 dentries.
+    """
+    check("name pool grows", _POOL_NAME_LINES + [
+        'T-VFS-NEW CONSTANT _V1',
+        '_V1 _VFS-STR-LIVE CONSTANT _LIVE',
+        '_V1 _VFS-STR-HELD CONSTANT _HELD',
+        ': T-MAKE  200 0 DO I T-NAME _V1 VFS-MKFILE DROP LOOP ;',
+        'T-MAKE',
+        'VARIABLE _MISS',
+        ': T-FIND  200 0 DO I T-NAME _V1 VFS-RESOLVE 0= IF 1 _MISS +! THEN LOOP ;',
+        'T-FIND',
+        ': T-GROWN',
+        '  _MISS @ 0= IF ." FOUND " THEN',
+        '  _V1 _VFS-STR-LIVE _LIVE - 200 = IF ." LIVE " THEN',
+        '  _V1 _VFS-STR-HELD DUP _HELD U> SWAP 200 56 * U< 0= AND',
+        '  IF ." GREW" THEN ;',
+        'T-GROWN CR',
+    ], "FOUND LIVE GREW")
+
+
+def test_name_pool_reuses_released_entries_without_growing():
+    """Names released by removal serve the next names of their capacity."""
+    check("name pool reuses entries", _POOL_NAME_LINES + [
+        'T-VFS-NEW CONSTANT _V1',
+        ': T-MAKE  100 0 DO I T-NAME _V1 VFS-MKFILE DROP LOOP ;',
+        ': T-REMOVE  100 0 DO I T-NAME _V1 VFS-RM ?DUP IF THROW THEN LOOP ;',
+        ': T-REMAKE  200 100 DO I T-NAME _V1 VFS-MKFILE DROP LOOP ;',
+        'T-MAKE T-REMOVE',
+        '_V1 _VFS-STR-LIVE CONSTANT _LIVE',
+        '_V1 _VFS-STR-HELD CONSTANT _HELD',
+        '_V1 V.STR-PTR @ CONSTANT _BUMP',
+        'T-REMAKE',
+        ': T-REUSED',
+        '  150 T-NAME _V1 VFS-RESOLVE 0<> IF ." NAME " THEN',
+        '  50 T-NAME _V1 VFS-RESOLVE 0= IF ." GONE " THEN',
+        '  _V1 _VFS-STR-LIVE _LIVE - 100 = IF ." LIVE " THEN',
+        '  _V1 _VFS-STR-HELD _HELD = IF ." HELD " THEN',
+        '  _V1 V.STR-PTR @ _BUMP = IF ." REUSED" THEN ;',
+        'T-REUSED CR',
+    ], "NAME GONE LIVE HELD REUSED")
+
+
+def test_name_pool_refuses_when_the_arena_is_full():
+    """With no room for a chunk, a name takes a larger free entry or fails."""
+    check("name pool on a full arena", [
+        'T-VFS-NEW CONSTANT _V1',
+        'S" forty-byte-name-of-the-file-that-leaves" _V1 VFS-MKFILE DROP',
+        '_V1 V.STR-PTR @ _V1 V.STR-END !',
+        '_V1 V.ARENA @ DUP ARENA-FREE 2048 - ARENA-ALLOT? 2DROP',
+        '_V1 _VFS-STR-LIVE CONSTANT _LIVE',
+        'S" another" _V1 VFS-MKFILE? CONSTANT _FULL-IOR CONSTANT _FULL',
+        '_V1 _VFS-STR-LIVE CONSTANT _AFTER-FULL',
+        'S" forty-byte-name-of-the-file-that-leaves" _V1 VFS-RM',
+        'CONSTANT _RM-IOR',
+        'S" another" _V1 VFS-MKFILE? CONSTANT _REUSE-IOR CONSTANT _REUSED',
+        ': T-FULL',
+        '  _FULL-IOR VFS-IOR-REASON VFS-R-NOMEM = _FULL 0= AND',
+        '  IF ." NOMEM " THEN',
+        '  _AFTER-FULL _LIVE = IF ." NO-LEAK " THEN',
+        '  _RM-IOR 0= IF ." REMOVED " THEN',
+        '  _REUSE-IOR 0= _REUSED 0<> AND IF ." LARGER " THEN',
+        '  S" another" _V1 VFS-RESOLVE _REUSED = IF ." RESOLVES " THEN',
+        '  _REUSED IN.NAME @ @ 32 RSHIFT 40 = IF ." CAPACITY" THEN ;',
+        'T-FULL CR',
+    ], "NOMEM NO-LEAK REMOVED LARGER RESOLVES CAPACITY")
+
 
 def test_rename_between_same_vnode_aliases_is_noop():
     """NOREPLACE onto another alias of the same vnode remains a no-op."""
@@ -2177,6 +2260,13 @@ def main():
         test_cached_hard_links_share_vnode_identity,
         test_unlink_one_hard_link_keeps_other_name,
         test_rename_between_same_vnode_aliases_is_noop,
+        test_rename_callback_failure_restores_tree_and_name_pool,
+        test_rename_rejects_detached_source_and_parent,
+        test_rename_gates_flags_semantic_caps_and_cwd_victim,
+        test_repeated_rename_reuses_released_name_entries,
+        test_name_pool_grows_past_its_first_chunk,
+        test_name_pool_reuses_released_entries_without_growing,
+        test_name_pool_refuses_when_the_arena_is_full,
         test_unlink_while_open_keeps_file_alive,
         test_cross_directory_rename_is_atomic_in_cache,
         test_rename_replacement_keeps_open_victim_alive,
