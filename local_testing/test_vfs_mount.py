@@ -39,7 +39,7 @@ VFS_MOUNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
-from forth_snapshot import program_output
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -193,36 +193,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ──
 #
-# KDOS echoes every input line, so a check reads only what the program
-# printed (forth_snapshot.program_output): a marker that appears in the
-# program's own source cannot satisfy it.  A line that KDOS reports as
-# failed fails the check as well.  A failed check raises, so its test
-# fails, and the message names the check, what it expected and the last
-# lines of the transcript.
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-def _failure(name, detail, output):
-    lines = output.replace('\r', '').strip().split('\n')
-    got = "\n".join(f"        got:      {line!r}" for line in lines[-20:])
-    return f"{name}\n        {detail}\n{got}"
-
-# KDOS prints these when a line fails: an undefined word, a stack fault, a
-# full dictionary, EVALUATE nested too deep or a branch out of range.
-_DIAGNOSTICS = ("? (not found)", "Stack underflow", "Stack overflow",
-                "Return stack overflow", "Dictionary full",
-                "EVALUATE depth limit exceeded", "Branch offset overflow")
-
-def _printed(name, forth_lines, output):
-    """What the program printed, once no line of it has failed."""
-    printed = program_output(output, forth_lines)
-    failed = [item for item in _DIAGNOSTICS if item in printed]
-    assert not failed, _failure(
-        name, "KDOS reported: " + ", ".join(failed), output)
-    return printed
-
-def check(name, forth_lines, expected):
-    output = run_forth(forth_lines)
-    assert expected in _printed(name, forth_lines, output), _failure(
-        name, f"expected: {expected!r}", output)
+check = transcript_checks(run_forth)[0]
 
 # ═══════════════════════════════════════════════════════════════════
 #  Tests
@@ -380,6 +354,4 @@ def test_long_prefix():
     ], "0")
 
 if __name__ == "__main__":
-    import pytest
-    raise SystemExit(pytest.main(["-q", "-p", "no:cacheprovider", __file__,
-                                  *sys.argv[1:]]))
+    run_file_tests(__file__)

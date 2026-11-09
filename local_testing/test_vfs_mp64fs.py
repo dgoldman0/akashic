@@ -42,7 +42,9 @@ from devices import (
     STORAGE_RESULT_OK,
 )
 from system import MegapadSystem
-from forth_snapshot import program_output
+from forth_snapshot import (
+    failure_message, printed_output, run_file_tests, transcript_checks,
+)
 
 BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
 KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
@@ -587,41 +589,13 @@ def _run_cold_subprocess(phase, image_path):
 
 # ── Test framework ───────────────────────────────────────────────────
 #
-# KDOS echoes every input line, so a check reads only what the program
-# printed (forth_snapshot.program_output): a marker that appears in the
-# program's own source cannot satisfy it.  A line that KDOS reports as
-# failed fails the check as well.  A failed check raises, so its test
-# fails, and the message names the check, what it expected and the last
-# lines of the transcript.
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
 
-def _failure(name, detail, output):
-    lines = output.replace('\r', '').strip().split('\n')
-    got = "\n".join(f"        got:      {line!r}" for line in lines[-20:])
-    return f"{name}\n        {detail}\n{got}"
+def _transcript(lines, **options):
+    return run_forth(lines, **options)[0]
 
-# KDOS prints these when a line fails: an undefined word, a stack fault, a
-# full dictionary, EVALUATE nested too deep or a branch out of range.
-_DIAGNOSTICS = ("? (not found)", "Stack underflow", "Stack overflow",
-                "Return stack overflow", "Dictionary full",
-                "EVALUATE depth limit exceeded", "Branch offset overflow")
-
-def _printed(name, forth_lines, output):
-    """What the program printed, once no line of it has failed."""
-    printed = program_output(output, forth_lines)
-    failed = [item for item in _DIAGNOSTICS if item in printed]
-    assert not failed, _failure(
-        name, "KDOS reported: " + ", ".join(failed), output)
-    return printed
-
-def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
-    output, _ = run_forth(
-        forth_lines,
-        disk_image=disk_image,
-        storage_faults=storage_faults,
-    )
-    assert expected in _printed(name, forth_lines, output), _failure(
-        name, f"expected: {expected!r}", output)
-
+check = transcript_checks(_transcript)[0]
 
 # =====================================================================
 #  Tests
@@ -912,7 +886,7 @@ def test_constructor_requires_volume():
     ], "NOVOLUME-OK")
 
 
-def test_constructor_propagates_checked_read_failure():
+def test_constructor_propagates_checked_readfailure_message():
     """Mount exposes the checked-volume error instead of parsing stale bytes."""
     check("constructor checked-read failure", [
         'T-ARENA T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
@@ -1271,7 +1245,7 @@ def test_create_zeroes_newly_allocated_sector():
     media = bytes(sys_obj.storage._image_data)
     sector = media[free_sector * SECTOR:(free_sector + 1) * SECTOR]
     name = "create zeroes allocated sector"
-    assert "CREATE-SECTOR-OK" in _printed(name, lines, output), _failure(
+    assert "CREATE-SECTOR-OK" in printed_output(name, lines, output), failure_message(
         name, "expected: 'CREATE-SECTOR-OK'", output)
     assert sector == bytes(SECTOR), (
         f"create zeroes allocated sector: sector {free_sector} keeps old "
@@ -1628,9 +1602,9 @@ def test_nonzero_bounded_volume_slice_end_to_end():
     media = bytes(sys_obj.storage._image_data)
     slice_end = (base + 2048) * SECTOR
     name = "nonzero bounded volume slice"
-    printed = _printed(name, lines, output)
+    printed = printed_output(name, lines, output)
     assert all(marker in printed for marker in ("WRITE-OK", "SYNC-OK", "SLICE")), (
-        _failure(name, "expected: 'WRITE-OK', 'SYNC-OK' and 'SLICE'", output))
+        failure_message(name, "expected: 'WRITE-OK', 'SYNC-OK' and 'SLICE'", output))
     assert media[:base * SECTOR] == prefix_bytes, (
         "nonzero bounded volume slice: the prefix guard changed")
     assert media[slice_end:slice_end + len(suffix_bytes)] == suffix_bytes, (
@@ -1747,6 +1721,4 @@ if __name__ == "__main__":
     if len(sys.argv) >= 4 and sys.argv[1] == "--cold-worker":
         _cold_worker(sys.argv[2], sys.argv[3])
     else:
-        import pytest
-        raise SystemExit(pytest.main(["-q", "-p", "no:cacheprovider",
-                                      __file__, *sys.argv[1:]]))
+        run_file_tests(__file__)

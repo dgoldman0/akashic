@@ -234,3 +234,99 @@ def program_output(output: str, lines: list[str]) -> str:
             continue
         kept.append(line)
     return "\n".join(kept)
+
+
+# KDOS prints these when a line fails: an undefined word, a stack fault, a
+# full dictionary, EVALUATE nested too deep or a branch out of range.
+KDOS_DIAGNOSTICS = (
+    "? (not found)",
+    "Stack underflow",
+    "Stack overflow",
+    "Return stack overflow",
+    "Dictionary full",
+    "EVALUATE depth limit exceeded",
+    "Branch offset overflow",
+)
+
+
+def failure_message(name: str, detail: str, output: str) -> str:
+    """Name a failed check, what it expected and the transcript's last lines.
+
+    The 20 lines keep KDOS's echo, so the failing input line can be found.
+    """
+
+    lines = output.replace("\r", "").strip().split("\n")
+    got = "\n".join(f"        got:      {line!r}" for line in lines[-20:])
+    return f"{name}\n        {detail}\n{got}"
+
+
+def printed_output(name: str, lines: list[str], output: str) -> str:
+    """What the program printed, failing the check if KDOS reported a line."""
+
+    printed = program_output(output, lines)
+    failed = [item for item in KDOS_DIAGNOSTICS if item in printed]
+    assert not failed, failure_message(
+        name, "KDOS reported: " + ", ".join(failed), output
+    )
+    return printed
+
+
+def transcript_checks(run):
+    """Bind the transcript checks to a suite's ``run(lines, **options)``.
+
+    ``run`` answers the KDOS transcript of one program.  Every check reads
+    only what the program printed, fails its test when KDOS reported a
+    failed line, and raises an AssertionError built by ``failure_message``:
+
+    - ``check(name, lines, expected=None, check_fn=None)`` requires
+      EXPECTED in the printed output, or CHECK_FN to accept it;
+    - ``check_fn(name, lines, predicate, desc="")`` requires PREDICATE to
+      accept it;
+    - ``check_emitted(name, lines, markers)`` requires each marker as a
+      printed line of its own.
+
+    Keyword options beyond these pass through to ``run``.
+    """
+
+    def check(name, forth_lines, expected=None, check_fn=None, **options):
+        output = run(forth_lines, **options)
+        printed = printed_output(name, forth_lines, output)
+        if check_fn is not None:
+            assert check_fn(printed), failure_message(
+                name, "the check's predicate refused the output", output
+            )
+        elif expected is not None:
+            assert expected in printed, failure_message(
+                name, f"expected: {expected!r}", output
+            )
+
+    def check_fn(name, forth_lines, predicate, desc="", **options):
+        output = run(forth_lines, **options)
+        assert predicate(printed_output(name, forth_lines, output)), (
+            failure_message(name, desc, output)
+        )
+
+    def check_emitted(name, forth_lines, markers, **options):
+        def emitted(printed):
+            printed_lines = printed.split("\n")
+            return all(marker in printed_lines for marker in markers)
+
+        check_fn(
+            name,
+            forth_lines,
+            emitted,
+            "expected emitted markers: " + ", ".join(markers),
+            **options,
+        )
+
+    return check, check_fn, check_emitted
+
+
+def run_file_tests(path: str) -> None:
+    """Run one test file under pytest, as running the file directly does."""
+
+    import pytest
+
+    raise SystemExit(
+        pytest.main(["-q", "-p", "no:cacheprovider", path, *sys.argv[1:]])
+    )
