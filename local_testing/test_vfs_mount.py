@@ -14,6 +14,9 @@ Tests:
   - VMNT-INFO lists active mounts
   - Multiple mounts coexist with correct routing
   - Mount then unmount then resolve returns 0
+
+Run under pytest, for example
+``python3 -m pytest -q local_testing/test_vfs_mount.py``.
 """
 import os, sys, time
 
@@ -36,6 +39,7 @@ VFS_MOUNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import program_output
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -142,17 +146,14 @@ def build_snapshot():
         batch = sys_obj.run_batch(min(100_000, mx - steps))
         steps += max(batch, 1)
     text = uart_text(buf)
-    errors = []
-    for l in text.strip().split('\n'):
-        lo = l.lower()
-        if '?' in l and ('not found' in lo or 'undefined' in lo):
-            errors.append(l.strip())
-            print(f"  [!] {l.strip()}")
-    if errors:
-        print(f"  [FATAL] {len(errors)} errors during load!")
-        for l in text.strip().split('\n')[-30:]:
-            print(f"    {l}")
-        sys.exit(1)
+    errors = [
+        l.strip() for l in text.strip().split('\n')
+        if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower())
+    ]
+    assert not errors, (
+        f"{len(errors)} errors during load:\n" + "\n".join(errors)
+        + "\n" + "\n".join(text.strip().split('\n')[-30:])
+    )
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
@@ -191,38 +192,37 @@ def run_forth(lines, max_steps=800_000_000):
     return uart_text(buf)
 
 # ── Test framework ──
+#
+# KDOS echoes every input line, so a check reads only what the program
+# printed (forth_snapshot.program_output): a marker that appears in the
+# program's own source cannot satisfy it.  A line that KDOS reports as
+# failed fails the check as well.  A failed check raises, so its test
+# fails, and the message names the check, what it expected and the last
+# lines of the transcript.
 
-_pass_count = 0
-_fail_count = 0
+def _failure(name, detail, output):
+    lines = output.replace('\r', '').strip().split('\n')
+    got = "\n".join(f"        got:      {line!r}" for line in lines[-20:])
+    return f"{name}\n        {detail}\n{got}"
+
+# KDOS prints these when a line fails: an undefined word, a stack fault, a
+# full dictionary, EVALUATE nested too deep or a branch out of range.
+_DIAGNOSTICS = ("? (not found)", "Stack underflow", "Stack overflow",
+                "Return stack overflow", "Dictionary full",
+                "EVALUATE depth limit exceeded", "Branch offset overflow")
+
+def _printed(name, forth_lines, output):
+    """What the program printed, once no line of it has failed."""
+    printed = program_output(output, forth_lines)
+    failed = [item for item in _DIAGNOSTICS if item in printed]
+    assert not failed, _failure(
+        name, "KDOS reported: " + ", ".join(failed), output)
+    return printed
 
 def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
     output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected substring: {expected!r}")
-        last = clean.split('\n')[-5:]
-        for l in last:
-            print(f"        | {l}")
-
-def check_fn(name, forth_lines, fn, desc="custom"):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if fn(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        last = clean.split('\n')[-5:]
-        for l in last:
-            print(f"        | {l}")
+    assert expected in _printed(name, forth_lines, output), _failure(
+        name, f"expected: {expected!r}", output)
 
 # ═══════════════════════════════════════════════════════════════════
 #  Tests
@@ -379,43 +379,7 @@ def test_long_prefix():
         '_V1 _LP 200 VMNT-MOUNT . CR',
     ], "0")
 
-# ═══════════════════════════════════════════════════════════════════
-#  Runner
-# ═══════════════════════════════════════════════════════════════════
-
-def main():
-    build_snapshot()
-    print()
-    print("=" * 60)
-    print("  VFS Mount Table Test Suite")
-    print("=" * 60)
-    print()
-
-    tests = [
-        test_mount_returns_zero,
-        test_mount_prefix_too_long,
-        test_umount_returns_zero,
-        test_umount_not_found,
-        test_resolve_finds_mount,
-        test_resolve_returns_remainder,
-        test_resolve_no_match,
-        test_resolve_longest_prefix,
-        test_resolve_exact_prefix,
-        test_open_dispatches,
-        test_open_no_mount,
-        test_info_shows_mount,
-        test_multiple_mounts,
-        test_mount_umount_resolve,
-        test_long_prefix,
-    ]
-
-    for t in tests:
-        t()
-
-    print()
-    print(f"Results: {_pass_count} pass, {_fail_count} fail / {_pass_count + _fail_count} total")
-    if _fail_count > 0:
-        sys.exit(1)
-
 if __name__ == "__main__":
-    main()
+    import pytest
+    raise SystemExit(pytest.main(["-q", "-p", "no:cacheprovider", __file__,
+                                  *sys.argv[1:]]))

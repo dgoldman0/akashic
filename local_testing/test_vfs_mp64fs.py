@@ -4,8 +4,13 @@
 These tests attach a formatted MP64FS disk image to the emulator,
 load the VFS + binding, then exercise probe, init, readdir, read,
 write, create, delete, sync, and teardown through the VFS API.
+
+Run under pytest, for example
+``python3 -m pytest -q local_testing/test_vfs_mp64fs.py``.  The
+``--cold-worker`` command line is the subprocess that the cold-process
+sync test launches, not a way to run the suite.
 """
-import os, re, subprocess, sys, struct, tempfile, time
+import atexit, os, re, subprocess, sys, struct, tempfile, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -37,6 +42,7 @@ from devices import (
     STORAGE_RESULT_OK,
 )
 from system import MegapadSystem
+from forth_snapshot import program_output
 
 BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
 KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
@@ -317,6 +323,13 @@ def restore_cpu_state(cpu, state):
 _snapshot = None
 _img_path = None   # disk image path shared by all tests
 
+def _remove_image(path):
+    """Delete a scratch image when the process that made it exits."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
 def _build_default_image():
     """Build a default test disk with a few files + subdirectory."""
     global _img_path
@@ -331,6 +344,7 @@ def _build_default_image():
     os.write(fd, img)
     os.close(fd)
     _img_path = path
+    atexit.register(_remove_image, path)
     return img
 
 def build_snapshot():
@@ -401,17 +415,14 @@ def build_snapshot():
         batch = sys_obj.run_batch(min(100_000, mx - steps))
         steps += max(batch, 1)
     text = uart_text(buf)
-    errors = []
-    for l in text.strip().split('\n'):
-        lo = l.lower()
-        if '?' in l and ('not found' in lo or 'undefined' in lo):
-            errors.append(l.strip())
-            print(f"  [!] {l.strip()}")
-    if errors:
-        print(f"  [FATAL] {len(errors)} errors during load!")
-        for l in text.strip().split('\n')[-40:]:
-            print(f"    {l}")
-        sys.exit(1)
+    errors = [
+        l.strip() for l in text.strip().split('\n')
+        if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower())
+    ]
+    assert not errors, (
+        f"{len(errors)} errors during load:\n" + "\n".join(errors)
+        + "\n" + "\n".join(text.strip().split('\n')[-40:])
+    )
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem), bytes(sys_obj.storage._image_data))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
@@ -575,27 +586,41 @@ def _run_cold_subprocess(phase, image_path):
 
 
 # ── Test framework ───────────────────────────────────────────────────
+#
+# KDOS echoes every input line, so a check reads only what the program
+# printed (forth_snapshot.program_output): a marker that appears in the
+# program's own source cannot satisfy it.  A line that KDOS reports as
+# failed fails the check as well.  A failed check raises, so its test
+# fails, and the message names the check, what it expected and the last
+# lines of the transcript.
 
-_pass_count = 0
-_fail_count = 0
+def _failure(name, detail, output):
+    lines = output.replace('\r', '').strip().split('\n')
+    got = "\n".join(f"        got:      {line!r}" for line in lines[-20:])
+    return f"{name}\n        {detail}\n{got}"
+
+# KDOS prints these when a line fails: an undefined word, a stack fault, a
+# full dictionary, EVALUATE nested too deep or a branch out of range.
+_DIAGNOSTICS = ("? (not found)", "Stack underflow", "Stack overflow",
+                "Return stack overflow", "Dictionary full",
+                "EVALUATE depth limit exceeded", "Branch offset overflow")
+
+def _printed(name, forth_lines, output):
+    """What the program printed, once no line of it has failed."""
+    printed = program_output(output, forth_lines)
+    failed = [item for item in _DIAGNOSTICS if item in printed]
+    assert not failed, _failure(
+        name, "KDOS reported: " + ", ".join(failed), output)
+    return printed
 
 def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
-    global _pass_count, _fail_count
     output, _ = run_forth(
         forth_lines,
         disk_image=disk_image,
         storage_faults=storage_faults,
     )
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        # Show last 20 lines for debugging
-        for l in clean.split('\n')[-20:]:
-            print(f"        {l}")
+    assert expected in _printed(name, forth_lines, output), _failure(
+        name, f"expected: {expected!r}", output)
 
 
 # =====================================================================
@@ -1140,7 +1165,7 @@ def test_full_sector_reads_preserve_stack_depth():
         'S" /data.bin" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _BF',
         'DEPTH CONSTANT _BEFORE',
         '_RB 1024 _BF VFS-READ? THROW 1024 =',
-        'DEPTH _BEFORE = AND',
+        'DEPTH _BEFORE 1+ = AND',
         '_RB C@ 0= AND _RB 511 + C@ 255 = AND',
         '_RB 512 + C@ 0= AND _RB 1023 + C@ 255 = AND',
         'IF ." FULL-READ-STACK-OK" THEN',
@@ -1157,7 +1182,7 @@ def test_full_sector_writes_preserve_stack_depth():
         '_WB 1024 0xA5 FILL',
         'DEPTH CONSTANT _BEFORE',
         '_WB 1024 _BF VFS-WRITE? THROW 1024 =',
-        'DEPTH _BEFORE = AND',
+        'DEPTH _BEFORE 1+ = AND',
         '_BF VFS-REWIND',
         '_RB 1024 _BF VFS-READ? THROW 1024 = AND',
         '_RB C@ 0xA5 = AND _RB 1023 + C@ 0xA5 = AND',
@@ -1236,24 +1261,21 @@ def test_delete_and_shrink_defer_frees_past_directory_durability():
 
 def test_create_zeroes_newly_allocated_sector():
     """Create claims a sector only after old media bytes are zeroed."""
-    global _pass_count, _fail_count
     image, free_sector = build_stale_free_sector_image()
-    output, sys_obj = run_forth([
+    lines = [
         'T-VMP-NEW CONSTANT _V',
         'S" fresh.bin" _V VFS-MKFILE? THROW DUP',
         f'IN.BDATA @ {free_sector} = IF ." CREATE-SECTOR-OK" THEN DROP',
-    ], disk_image=image)
+    ]
+    output, sys_obj = run_forth(lines, disk_image=image)
     media = bytes(sys_obj.storage._image_data)
     sector = media[free_sector * SECTOR:(free_sector + 1) * SECTOR]
-    ok = "CREATE-SECTOR-OK" in output and sector == bytes(SECTOR)
-    if ok:
-        _pass_count += 1
-        print("  PASS  create zeroes allocated sector")
-    else:
-        _fail_count += 1
-        print("  FAIL  create zeroes allocated sector")
-        print("        sector zero:", sector == bytes(SECTOR))
-        print("        output:", output[-1500:])
+    name = "create zeroes allocated sector"
+    assert "CREATE-SECTOR-OK" in _printed(name, lines, output), _failure(
+        name, "expected: 'CREATE-SECTOR-OK'", output)
+    assert sector == bytes(SECTOR), (
+        f"create zeroes allocated sector: sector {free_sector} keeps old "
+        "media bytes")
 
 
 def test_seek_gap_and_truncate_growth_zero_visible_ranges():
@@ -1273,7 +1295,7 @@ def test_seek_gap_and_truncate_growth_zero_visible_ranges():
         '_FD VFS-REWIND',
         '_RB 101 _FD VFS-READ? THROW 101 = AND',
         f'_RB {used} + {100 - used} _ZERO? AND',
-        '_RB 100 + C@ [CHAR] Z = AND',
+        '_RB 100 + C@ CHAR Z = AND',
         'IF ." SEEK-GAP-ZERO-OK" THEN',
     ], "SEEK-GAP-ZERO-OK", disk_image=image)
 
@@ -1325,26 +1347,34 @@ def test_zeroing_failures_do_not_publish_size_or_extent():
     ], "ALLOC-FAIL-NOT-PUBLISHED", disk_image=image, storage_faults=fault)
 
 
+# _SAME-BYTE? ( a u byte -- flag ) keeps the byte in a variable: inside
+# ?DO, R@ is the loop index and R> would take the loop's own frame.
+_SAME_BYTE = (
+    'VARIABLE _SB-BYTE',
+    ': _SAME-BYTE? ( a u byte -- flag )',
+    '  _SB-BYTE ! 0 ?DO DUP I + C@ _SB-BYTE @ <> IF',
+    '    DROP FALSE UNLOOP EXIT',
+    '  THEN LOOP DROP TRUE ;',
+)
+
+
 def test_blocked_two_extent_growth_relocates_transactionally():
     """A blocked two-extent file relocates without losing bytes or stack cells."""
     image, primary_start, secondary_start = build_blocked_two_extent_image()
     check("blocked two-extent growth relocates and remounts", [
-        ': _SAME-BYTE? ( a u byte -- flag )',
-        '  >R 0 ?DO DUP I + C@ R@ <> IF',
-        '    DROP R> DROP FALSE UNLOOP EXIT',
-        '  THEN LOOP DROP R> DROP TRUE ;',
+        *_SAME_BYTE,
         'T-VMP-NEW CONSTANT _V',
         'DEPTH CONSTANT _BASE-DEPTH',
         'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
         'VFS-OPEN? THROW CONSTANT _FD',
         '1024 _FD VFS-SEEK',
         'S" C" _FD VFS-WRITE? THROW 1 =',
-        'DEPTH _BASE-DEPTH = AND',
+        'DEPTH _BASE-DEPTH 1+ = AND',
         '_FD VFS-REWIND',
         '_RB 1025 _FD VFS-READ? THROW 1025 = AND',
-        '_RB 512 [CHAR] A _SAME-BYTE? AND',
-        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
-        '_RB 1024 + C@ [CHAR] C = AND',
+        '_RB 512 CHAR A _SAME-BYTE? AND',
+        '_RB 512 + 512 CHAR B _SAME-BYTE? AND',
+        '_RB 1024 + C@ CHAR C = AND',
         '_FD FD.INODE @ DUP IN.BDATA @ '
         f'{primary_start} <>',
         'SWAP IN.BDATA 8 + @ 4 = AND AND',
@@ -1359,9 +1389,9 @@ def test_blocked_two_extent_growth_relocates_transactionally():
         'T-VMP-NEW CONSTANT _VR',
         'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
         '_RB 1025 _RFD VFS-READ? THROW 1025 = AND',
-        '_RB 512 [CHAR] A _SAME-BYTE? AND',
-        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
-        '_RB 1024 + C@ [CHAR] C = AND',
+        '_RB 512 CHAR A _SAME-BYTE? AND',
+        '_RB 512 + 512 CHAR B _SAME-BYTE? AND',
+        '_RB 1024 + C@ CHAR C = AND',
         'IF ." TWO-EXTENT-RELOCATE-OK" THEN',
     ], "TWO-EXTENT-RELOCATE-OK", disk_image=image)
 
@@ -1377,7 +1407,7 @@ def test_blocked_two_extent_growth_relocates_transactionally():
         'VFS-OPEN? THROW CONSTANT _FD',
         '1536 _FD VFS-TRUNCATE CONSTANT _IOR',
         '_IOR VFS-IOR-REASON VFS-R-IO =',
-        'DEPTH _BASE-DEPTH = AND',
+        'DEPTH _BASE-DEPTH 1+ = AND',
         '_FD VFS-SIZE 1024 = AND',
         '_FD FD.INODE @ DUP IN.BDATA @ '
         f'{primary_start} =',
@@ -1392,10 +1422,7 @@ def test_blocked_two_extent_growth_relocates_transactionally():
        disk_image=image, storage_faults=fault)
 
     check("relocation bitmap-flush failure remounts old authority", [
-        ': _SAME-BYTE? ( a u byte -- flag )',
-        '  >R 0 ?DO DUP I + C@ R@ <> IF',
-        '    DROP R> DROP FALSE UNLOOP EXIT',
-        '  THEN LOOP DROP R> DROP TRUE ;',
+        *_SAME_BYTE,
         'T-VMP-NEW CONSTANT _V',
         'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
         'VFS-OPEN? THROW CONSTANT _FD',
@@ -1407,8 +1434,8 @@ def test_blocked_two_extent_growth_relocates_transactionally():
         'T-VMP-NEW CONSTANT _VR',
         'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
         '_RB 1024 _RFD VFS-READ? THROW 1024 = AND',
-        '_RB 512 [CHAR] A _SAME-BYTE? AND',
-        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        '_RB 512 CHAR A _SAME-BYTE? AND',
+        '_RB 512 + 512 CHAR B _SAME-BYTE? AND',
         'IF ." RELOCATE-BMAP-FAIL-REMOUNT-OK" THEN',
     ], "RELOCATE-BMAP-FAIL-REMOUNT-OK",
        disk_image=image, storage_faults=[{
@@ -1421,10 +1448,7 @@ def test_blocked_two_extent_growth_relocates_transactionally():
     # image's bitmap.  Sector index one therefore selects the multi-sector
     # directory publication after the conservative bitmap is durable.
     check("relocation directory failure compensates and remounts", [
-        ': _SAME-BYTE? ( a u byte -- flag )',
-        '  >R 0 ?DO DUP I + C@ R@ <> IF',
-        '    DROP R> DROP FALSE UNLOOP EXIT',
-        '  THEN LOOP DROP R> DROP TRUE ;',
+        *_SAME_BYTE,
         'T-VMP-NEW CONSTANT _V',
         'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
         'VFS-OPEN? THROW CONSTANT _FD',
@@ -1436,8 +1460,8 @@ def test_blocked_two_extent_growth_relocates_transactionally():
         'T-VMP-NEW CONSTANT _VR',
         'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
         '_RB 1024 _RFD VFS-READ? THROW 1024 = AND',
-        '_RB 512 [CHAR] A _SAME-BYTE? AND',
-        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        '_RB 512 CHAR A _SAME-BYTE? AND',
+        '_RB 512 + 512 CHAR B _SAME-BYTE? AND',
         'IF ." RELOCATE-DIR-FAIL-REMOUNT-OK" THEN',
     ], "RELOCATE-DIR-FAIL-REMOUNT-OK",
        disk_image=image, storage_faults=[{
@@ -1448,10 +1472,7 @@ def test_blocked_two_extent_growth_relocates_transactionally():
        }])
 
     check("relocation retirement-flush failure remounts new authority", [
-        ': _SAME-BYTE? ( a u byte -- flag )',
-        '  >R 0 ?DO DUP I + C@ R@ <> IF',
-        '    DROP R> DROP FALSE UNLOOP EXIT',
-        '  THEN LOOP DROP R> DROP TRUE ;',
+        *_SAME_BYTE,
         'T-VMP-NEW CONSTANT _V',
         'S" /grow.bin" VFS-FF-READ VFS-FF-WRITE OR _V',
         'VFS-OPEN? THROW CONSTANT _FD',
@@ -1465,8 +1486,8 @@ def test_blocked_two_extent_growth_relocates_transactionally():
         'T-VMP-NEW CONSTANT _VR',
         'S" /grow.bin" VFS-FF-READ _VR VFS-OPEN? THROW CONSTANT _RFD',
         '_RB 1024 _RFD VFS-READ? THROW 1024 = AND',
-        '_RB 512 [CHAR] A _SAME-BYTE? AND',
-        '_RB 512 + 512 [CHAR] B _SAME-BYTE? AND',
+        '_RB 512 CHAR A _SAME-BYTE? AND',
+        '_RB 512 + 512 CHAR B _SAME-BYTE? AND',
         'IF ." RELOCATE-RETIRE-FAIL-REMOUNT-OK" THEN',
     ], "RELOCATE-RETIRE-FAIL-REMOUNT-OK",
        disk_image=image, storage_faults=[
@@ -1557,7 +1578,6 @@ def test_empty_formatted_volume_mounts():
 
 def test_checked_sync_survives_fresh_process_without_session_close():
     """Guest WRITE+FLUSH is visible after destroying the emulator process."""
-    global _pass_count, _fail_count
     fd, image_path = tempfile.mkstemp(suffix=".img")
     try:
         image = build_disk_image([
@@ -1569,20 +1589,10 @@ def test_checked_sync_survives_fresh_process_without_session_close():
 
         first = _run_cold_subprocess("write", image_path)
         second = _run_cold_subprocess("read", image_path)
-        ok = (
-            "14 <wrote" in first
-            and "0 <sync WRITE-DONE" in first
-            and "14 <read" in second
-            and "COLD-PERSISTED READ-DONE" in second
-        )
-        if ok:
-            _pass_count += 1
-            print("  PASS  checked sync cold process")
-        else:
-            _fail_count += 1
-            print("  FAIL  checked sync cold process")
-            print("        writer:", first[-1000:])
-            print("        reader:", second[-1000:])
+        assert "14 <wrote" in first and "0 <sync WRITE-DONE" in first, (
+            f"checked sync cold process: writer\n{first[-1000:]}")
+        assert "14 <read" in second and "COLD-PERSISTED READ-DONE" in second, (
+            f"checked sync cold process: reader\n{second[-1000:]}")
     finally:
         if fd >= 0:
             os.close(fd)
@@ -1592,7 +1602,6 @@ def test_checked_sync_survives_fresh_process_without_session_close():
 
 def test_nonzero_bounded_volume_slice_end_to_end():
     """A nonzero VOL-SLICE bounds reads, writes, and metadata sync."""
-    global _pass_count, _fail_count
     base = 7
     suffix = 5
     inner = build_disk_image([
@@ -1601,7 +1610,7 @@ def test_nonzero_bounded_volume_slice_end_to_end():
     prefix_bytes = bytes([0xA5]) * (base * SECTOR)
     suffix_bytes = bytes([0x5A]) * (suffix * SECTOR)
     parent_image = prefix_bytes + inner + suffix_bytes
-    output, sys_obj = run_forth([
+    lines = [
         'CREATE _SBD /BLOCK-DEVICE ALLOT',
         'CREATE _SVOL /VOLUME ALLOT',
         '_SBD BD-OPEN THROW',
@@ -1614,23 +1623,18 @@ def test_nonzero_bounded_volume_slice_end_to_end():
         '_SV VFS-SYNC THROW ." SYNC-OK "',
         '_SFD VFS-REWIND',
         '_RB 5 _SFD VFS-READ? THROW DROP _RB 5 TYPE',
-    ], disk_image=parent_image)
+    ]
+    output, sys_obj = run_forth(lines, disk_image=parent_image)
     media = bytes(sys_obj.storage._image_data)
     slice_end = (base + 2048) * SECTOR
-    guards_ok = (
-        media[:base * SECTOR] == prefix_bytes
-        and media[slice_end:slice_end + len(suffix_bytes)] == suffix_bytes
-    )
-    ok = all(marker in output for marker in ("WRITE-OK", "SYNC-OK", "SLICE"))
-    ok = ok and guards_ok
-    if ok:
-        _pass_count += 1
-        print("  PASS  nonzero bounded volume slice")
-    else:
-        _fail_count += 1
-        print("  FAIL  nonzero bounded volume slice")
-        print("        guards:", guards_ok)
-        print("        output:", output[-1500:])
+    name = "nonzero bounded volume slice"
+    printed = _printed(name, lines, output)
+    assert all(marker in printed for marker in ("WRITE-OK", "SYNC-OK", "SLICE")), (
+        _failure(name, "expected: 'WRITE-OK', 'SYNC-OK' and 'SLICE'", output))
+    assert media[:base * SECTOR] == prefix_bytes, (
+        "nonzero bounded volume slice: the prefix guard changed")
+    assert media[slice_end:slice_end + len(suffix_bytes)] == suffix_bytes, (
+        "nonzero bounded volume slice: the suffix guard changed")
 
 
 def test_open_unlink_is_busy_until_close():
@@ -1739,61 +1743,10 @@ def test_readdir_population_nomem_rolls_back():
     ], "READDIR-NOMEM-ROLLBACK-OK")
 
 
-# =====================================================================
-#  Runner
-# =====================================================================
-
-def main():
-    build_snapshot()
-    print()
-    print("=" * 60)
-    print("  VFS-MP64FS Volume-Binding Tests")
-    print("=" * 60)
-
-    test_constructor_binds_and_mounts_volume()
-    test_volume_probe_match_nonmatch_and_io_error()
-    test_constructor_requires_volume()
-    test_constructor_propagates_checked_read_failure()
-    test_constructor_adopts_volume_geometry()
-    test_constructor_adopts_maximum_marker1_geometry_and_bitmap_maps()
-    test_first_fit_and_deferred_frees_match_per_sector_reference()
-    test_constructor_rejects_malformed_media()
-    test_constructor_reports_core_arena_exhaustion()
-    test_final_directory_slot_mounts_without_pair_loop_wrap()
-    test_root_and_lazy_subdirectory_reads()
-    test_binary_read_and_offset()
-    test_full_sector_reads_preserve_stack_depth()
-    test_full_sector_writes_preserve_stack_depth()
-    test_create_write_read_delete_and_sync()
-    test_delete_and_shrink_defer_frees_past_directory_durability()
-    test_create_zeroes_newly_allocated_sector()
-    test_seek_gap_and_truncate_growth_zero_visible_ranges()
-    test_zeroing_failures_do_not_publish_size_or_extent()
-    test_blocked_two_extent_growth_relocates_transactionally()
-    test_second_bitmap_sector_sync_and_remount()
-    test_sync_retains_dirty_metadata_until_flush_succeeds()
-    test_two_instances_share_only_explicit_volume()
-    test_empty_formatted_volume_mounts()
-    test_checked_sync_survives_fresh_process_without_session_close()
-    test_nonzero_bounded_volume_slice_end_to_end()
-    test_open_unlink_is_busy_until_close()
-    test_open_rename_victim_is_busy()
-    test_structured_volume_error_translation()
-    test_mount_population_nomem_rolls_back()
-    test_readdir_population_nomem_rolls_back()
-
-    print()
-    total = _pass_count + _fail_count
-    print(f"  Results: {_pass_count} passed, {_fail_count} failed ({total} total)")
-    if _fail_count:
-        sys.exit(1)
-
-
-if __name__ == "__main__" and len(sys.argv) >= 4 and sys.argv[1] == "--cold-worker":
-    _cold_worker(sys.argv[2], sys.argv[3])
-elif __name__ == "__main__":
-    try:
-        main()
-    finally:
-        if _img_path and os.path.exists(_img_path):
-            os.unlink(_img_path)
+if __name__ == "__main__":
+    if len(sys.argv) >= 4 and sys.argv[1] == "--cold-worker":
+        _cold_worker(sys.argv[2], sys.argv[3])
+    else:
+        import pytest
+        raise SystemExit(pytest.main(["-q", "-p", "no:cacheprovider",
+                                      __file__, *sys.argv[1:]]))

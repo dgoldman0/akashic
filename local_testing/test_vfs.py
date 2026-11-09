@@ -21,6 +21,8 @@ Tests:
   - VFS-DESTROY tears down without crash
   - Multiple VFS instances coexist
   - Write-then-read round-trip through ramdisk binding
+
+Run under pytest, for example ``python3 -m pytest -q local_testing/test_vfs.py``.
 """
 import os, sys, time
 
@@ -54,6 +56,7 @@ VFS_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import program_output
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -170,17 +173,14 @@ def build_snapshot():
         batch = sys_obj.run_batch(min(100_000, mx - steps))
         steps += max(batch, 1)
     text = uart_text(buf)
-    errors = []
-    for l in text.strip().split('\n'):
-        lo = l.lower()
-        if '?' in l and ('not found' in lo or 'undefined' in lo):
-            errors.append(l.strip())
-            print(f"  [!] {l.strip()}")
-    if errors:
-        print(f"  [FATAL] {len(errors)} errors during load!")
-        for l in text.strip().split('\n')[-30:]:
-            print(f"    {l}")
-        sys.exit(1)
+    errors = [
+        l.strip() for l in text.strip().split('\n')
+        if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower())
+    ]
+    assert not errors, (
+        f"{len(errors)} errors during load:\n" + "\n".join(errors)
+        + "\n" + "\n".join(text.strip().split('\n')[-30:])
+    )
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
@@ -221,44 +221,48 @@ def run_forth(lines, max_steps=800_000_000):
     return uart_text(buf)
 
 # ── Test framework ──
+#
+# KDOS echoes every input line, so a check reads only what the program
+# printed (forth_snapshot.program_output): a marker that appears in the
+# program's own source cannot satisfy it.  A line that KDOS reports as
+# failed fails the check as well.  A failed check raises, so its test
+# fails, and the message names the check, what it expected and the last
+# lines of the transcript.
 
-_pass_count = 0
-_fail_count = 0
+def _failure(name, detail, output):
+    lines = output.replace('\r', '').strip().split('\n')
+    got = "\n".join(f"        got:      {line!r}" for line in lines[-20:])
+    return f"{name}\n        {detail}\n{got}"
+
+# KDOS prints these when a line fails: an undefined word, a stack fault, a
+# full dictionary, EVALUATE nested too deep or a branch out of range.
+_DIAGNOSTICS = ("? (not found)", "Stack underflow", "Stack overflow",
+                "Return stack overflow", "Dictionary full",
+                "EVALUATE depth limit exceeded", "Branch offset overflow")
+
+def _printed(name, forth_lines, output):
+    """What the program printed, once no line of it has failed."""
+    printed = program_output(output, forth_lines)
+    failed = [item for item in _DIAGNOSTICS if item in printed]
+    assert not failed, _failure(
+        name, "KDOS reported: " + ", ".join(failed), output)
+    return printed
 
 def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
     output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
+    assert expected in _printed(name, forth_lines, output), _failure(
+        name, f"expected: {expected!r}", output)
 
 def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
     output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
+    assert predicate(_printed(name, forth_lines, output)), _failure(
+        name, desc, output)
 
 def check_emitted(name, forth_lines, markers):
-    """Require markers emitted on their own lines, not merely echoed source."""
-    def emitted(clean):
-        diagnostics = ("Stack underflow", "Branch offset overflow",
-                       "dictionary full", "eval depth limit", "? (not found)")
-        return (all(f"\r\n{marker}\r\n" in clean for marker in markers)
-                and not any(diagnostic in clean for diagnostic in diagnostics))
+    """Require each marker printed as a line of its own."""
+    def emitted(printed):
+        lines = printed.split('\n')
+        return all(marker in lines for marker in markers)
     check_fn(name, forth_lines, emitted,
              "expected emitted markers: " + ", ".join(markers))
 
@@ -320,11 +324,10 @@ def test_root_inode_type():
 
 def test_root_inode_name():
     """Root inode name is '/'."""
-    check("root inode name = /", [
+    check_emitted("root inode name = /", [
         'T-VFS-NEW',
-        'V.ROOT @ IN.NAME @',
-        'DUP 16 + SWAP @ TYPE CR',
-    ], "/")
+        'V.ROOT @ IN.NAME @ _VFS-STR-GET TYPE CR',
+    ], ["/"])
 
 def test_cwd_equals_root():
     """After VFS-NEW, cwd = root."""
@@ -611,11 +614,11 @@ def test_mkfile_type():
 
 def test_mkfile_name():
     """Created file has correct name."""
-    check("MKFILE inode name", [
+    check_emitted("MKFILE inode name", [
         'T-VFS-NEW  CONSTANT _V1',
         'S" hello.dat" _V1 VFS-MKFILE',
-        'IN.NAME @  DUP 16 + SWAP @ TYPE CR',
-    ], "hello.dat")
+        'IN.NAME @ _VFS-STR-GET TYPE CR',
+    ], ["hello.dat"])
 
 def test_mkfile_initial_size():
     """New file starts at size 0."""
@@ -1125,14 +1128,12 @@ def test_namespace_operations_do_not_follow_terminal_symlinks():
         '  DEPTH _SY-DEPTH @ = IF ." STACK-CLEAN" CR THEN ;',
         'T-NAMESPACE-NOFOLLOW',
     ]
-    def emitted(clean):
-        markers = ("UNLINK-LINK", "TARGET-REMAINS", "LINK-GONE",
-                   "CREATE-REFUSES", "DANGLING-REMAINS", "STACK-CLEAN")
-        return (all(f"\r\n{marker}\r\n" in clean for marker in markers)
-                and "\r\nType:  symlink\r\n" in clean
-                and "Stack underflow" not in clean)
-    check_fn("namespace operations nofollow terminal links", lines, emitted,
-             "terminal symlink must remain the namespace object")
+    # VFS-STAT's type line shows that the terminal symlink remains the
+    # namespace object.
+    check_emitted("namespace operations nofollow terminal links", lines, [
+        "UNLINK-LINK", "TARGET-REMAINS", "LINK-GONE", "CREATE-REFUSES",
+        "DANGLING-REMAINS", "Type:  symlink", "STACK-CLEAN",
+    ])
 
 def test_readdir_failure_does_not_publish_completion():
     """A failed readdir remains retryable; only success marks children loaded."""
@@ -2152,166 +2153,7 @@ def test_inode_count_after_rm():
         'T-VFS-NEW  CONSTANT _V1  S" tmp" _V1 VFS-MKFILE DROP  _V1 V.ICOUNT @ .  S" tmp" _V1 VFS-RM DROP  _V1 V.ICOUNT @ . CR',
     ], "2 1")
 
-# ═══════════════════════════════════════════════════════════════════
-#  Runner
-# ═══════════════════════════════════════════════════════════════════
-
-def main():
-    build_snapshot()
-    print()
-    print("=" * 60)
-    print("  VFS Test Suite")
-    print("=" * 60)
-    print()
-
-    tests = [
-        # VFS-NEW / descriptor
-        test_vfs_new,
-        test_root_inode_type,
-        test_root_inode_name,
-        test_cwd_equals_root,
-        test_binding_descriptor_validation,
-        test_binding_semantic_capability_validation,
-        test_probe_capability_and_dispatch,
-        test_structured_ior_round_trip,
-        test_volume_required_rejects_null_attachment,
-        test_volume_attachment_snapshot_and_stale_transition,
-        test_volume_readonly_authority_propagates,
-        test_lookup_capability_and_dispatch,
-        test_unadvertised_operation_is_unsupported,
-        test_absent_metadata_cap_does_not_invoke_xt,
-        test_mount_error_keeps_instance_unmounted,
-        test_constructor_nospace_rolls_back_arena,
-        test_slab_growth_nospace_is_transactional,
-        test_multi_slab_chain_is_traversed_by_sync,
-        test_setattr_mask_publishes_zero_and_preserves_unselected,
-        test_ext4_facing_dispatch_surface,
-        # Context
-        test_vfs_use_cur,
-        # MKFILE
-        test_mkfile,
-        test_mkfile_type,
-        test_mkfile_name,
-        test_mkfile_initial_size,
-        # MKDIR
-        test_mkdir,
-        test_mkdir_child_is_dir,
-        test_reserved_and_nul_names_are_rejected,
-        # OPEN / CLOSE
-        test_open_close,
-        test_open_nonexistent,
-        # WRITE / READ
-        test_write_read_roundtrip,
-        test_write_extends_size,
-        test_checked_write_preserves_partial_progress,
-        test_checked_read_preserves_partial_progress,
-        test_source_write_wrapper_throws_after_progress,
-        test_fd_access_modes_and_append,
-        # SEEK / TELL
-        test_seek_tell,
-        test_seek_read,
-        test_rewind,
-        test_invalid_offsets_never_reach_binding,
-        test_successful_truncate_preserves_stack,
-        test_truncate_clamps_every_open_alias_only_after_success,
-        test_successful_truncate_preserves_new_binding_diagnostic_only,
-        test_successful_setattr_preserves_new_binding_diagnostic_only,
-        # RESOLVE
-        test_resolve_root,
-        test_resolve_absolute,
-        test_resolve_dot,
-        test_resolve_dotdot,
-        test_resolve_nonexistent,
-        test_symlink_following_and_terminal_policy,
-        test_symlink_relative_and_absolute_target_bases,
-        test_symlink_loops_and_readlink_failures_are_bounded,
-        test_namespace_operations_do_not_follow_terminal_symlinks,
-        test_readdir_failure_does_not_publish_completion,
-        test_checked_resolve_preserves_errors_and_lifecycle,
-        test_lookup_backed_eviction_reloads_entry,
-        test_lookup_binding_checks_names_without_loading_the_folder,
-        test_readdir_binding_checks_names_against_the_complete_folder,
-        test_lookup_binding_emptiness_leaves_the_proof_to_the_binding,
-        test_lookup_binding_eviction_and_drop_reload_complete_listings,
-        test_eviction_keeps_an_open_directory,
-        # CD
-        test_cd,
-        test_cd_fail,
-        test_checked_cd_preserves_error_class,
-        # DIR
-        test_dir_listing,
-        test_dir_shows_dirtype,
-        # STAT
-        test_stat_file,
-        test_stat_dir,
-        test_stat_nonexistent,
-        test_rdev_helpers_pin_binding_neutral_encoding,
-        # RM
-        test_rm_file,
-        test_rm_then_resolve,
-        test_rm_nonempty_dir,
-        test_rm_root_fails,
-        test_rm_current_directory_is_busy_and_remains_attached,
-        test_rm_nonexistent,
-        # Vnode / dentry semantics
-        test_hard_link_callback_failure_restores_provisional_state,
-        test_hard_link_rejects_detached_target_and_parent,
-        test_hard_link_shares_vnode_and_data,
-        test_cached_hard_links_share_vnode_identity,
-        test_unlink_one_hard_link_keeps_other_name,
-        test_rename_between_same_vnode_aliases_is_noop,
-        test_rename_callback_failure_restores_tree_and_name_pool,
-        test_rename_rejects_detached_source_and_parent,
-        test_rename_gates_flags_semantic_caps_and_cwd_victim,
-        test_repeated_rename_reuses_released_name_entries,
-        test_name_pool_grows_past_its_first_chunk,
-        test_name_pool_reuses_released_entries_without_growing,
-        test_name_pool_refuses_when_the_arena_is_full,
-        test_unlink_while_open_keeps_file_alive,
-        test_cross_directory_rename_is_atomic_in_cache,
-        test_rename_replacement_keeps_open_victim_alive,
-        test_directory_rename_cycle_is_rejected,
-        # SYNC
-        test_sync_clean,
-        test_sync_after_write,
-        test_syncfs_is_binding_owned_once,
-        test_unmount_is_binding_owned_once,
-        test_unmount_rejects_open_descriptors,
-        test_unmount_preserves_stale_latch,
-        test_unmount_latches_attachment_drift_before_callback,
-        test_post_unmount_checked_open_is_busy,
-        # Read-only enforcement
-        test_read_only_rejects_tree_mutations,
-        test_read_only_rejects_data_mutations,
-        test_read_only_allows_sync,
-        test_read_only_legacy_open_is_readable,
-        # SET-HWM
-        test_set_hwm,
-        # DESTROY
-        test_destroy,
-        test_cross_vfs_dentries_are_rejected,
-        # Multi-instance
-        test_two_instances,
-        # Larger I/O
-        test_large_write_read,
-        # Nested dirs
-        test_nested_dirs,
-        # Inode counting
-        test_inode_count,
-        test_inode_count_after_rm,
-    ]
-
-    for t in tests:
-        t()
-
-    print()
-    total = _pass_count + _fail_count
-    print(f"  {_pass_count}/{total} passed, {_fail_count} failed")
-    if _fail_count:
-        print("  *** FAILURES DETECTED ***")
-        sys.exit(1)
-    else:
-        print("  All tests passed.")
-
 if __name__ == "__main__":
-    main()
+    import pytest
+    raise SystemExit(pytest.main(["-q", "-p", "no:cacheprovider", __file__,
+                                  *sys.argv[1:]]))

@@ -11,8 +11,10 @@ follow the Microsoft FAT specification exactly:
   - FAT1 (and FAT2 copy)
   - Root directory area (FAT16) or root cluster (FAT32)
   - Data area
+
+Run under pytest, for example ``python3 -m pytest -q local_testing/test_vfs_fat.py``.
 """
-import os, sys, struct, tempfile, time, math
+import atexit, os, sys, struct, tempfile, time, math
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -38,6 +40,7 @@ sys.path.insert(0, MEGAPAD_ROOT)
 from asm import assemble
 from devices import STORAGE_CMD_READ, STORAGE_RESULT_MEDIA_FAILURE
 from system import MegapadSystem
+from forth_snapshot import program_output
 
 BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
 KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
@@ -488,6 +491,13 @@ _snapshot = None
 _boot_img_path = None     # MP64FS boot image (for snapshot build)
 _default_fat_img = None   # Default FAT16 test image (bytes)
 
+def _remove_image(path):
+    """Delete a scratch image when the process that made it exits."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
 def _build_default_fat_image():
     """Build a default FAT16 test disk with a few files + subdirectory."""
     global _default_fat_img
@@ -519,6 +529,7 @@ def build_snapshot():
     os.write(fd, boot_img)
     os.close(fd)
     _boot_img_path = path
+    atexit.register(_remove_image, path)
 
     bios_code  = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
@@ -586,14 +597,11 @@ def build_snapshot():
         batch = sys_obj.run_batch(min(100_000, mx - steps))
         steps += max(batch, 1)
     text = uart_text(buf)
-    errors = []
     transcript_lines = text.strip().split('\n')
-    for l in transcript_lines:
-        lo = l.lower()
-        missing_word = '?' in l and ('not found' in lo or 'undefined' in lo)
-        if missing_word:
-            errors.append(l.strip())
-            print(f"  [!] {l.strip()}")
+    errors = [
+        l.strip() for l in transcript_lines
+        if '?' in l and ('not found' in l.lower() or 'undefined' in l.lower())
+    ]
     executed_lines = {line.strip().lower() for line in transcript_lines}
     for marker in VFS_SOURCE_DIAGNOSTICS:
         if marker.lower() in executed_lines:
@@ -605,13 +613,10 @@ def build_snapshot():
         and f"\r\n{VFS_SOURCE_JIT_OFF_MARKER} ok\r\n" not in text
     ):
         errors.append("Akashic source JIT teardown marker missing")
-    if errors:
-        print(f"  [FATAL] {len(errors)} errors during load!")
-        for error in errors:
-            print(f"  [!] {error}")
-        for l in text.strip().split('\n')[-40:]:
-            print(f"    {l}")
-        sys.exit(1)
+    assert not errors, (
+        f"{len(errors)} errors during load:\n" + "\n".join(errors)
+        + "\n" + "\n".join(text.strip().split('\n')[-40:])
+    )
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(
@@ -679,26 +684,41 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None,
 # ═══════════════════════════════════════════════════════════════════
 #  Test Framework
 # ═══════════════════════════════════════════════════════════════════
+#
+# KDOS echoes every input line, so a check reads only what the program
+# printed (forth_snapshot.program_output): a marker that appears in the
+# program's own source cannot satisfy it.  A line that KDOS reports as
+# failed fails the check as well.  A failed check raises, so its test
+# fails, and the message names the check, what it expected and the last
+# lines of the transcript.
 
-_pass_count = 0
-_fail_count = 0
+def _failure(name, detail, output):
+    lines = output.replace('\r', '').strip().split('\n')
+    got = "\n".join(f"        got:      {line!r}" for line in lines[-20:])
+    return f"{name}\n        {detail}\n{got}"
+
+# KDOS prints these when a line fails: an undefined word, a stack fault, a
+# full dictionary, EVALUATE nested too deep or a branch out of range.
+_DIAGNOSTICS = ("? (not found)", "Stack underflow", "Stack overflow",
+                "Return stack overflow", "Dictionary full",
+                "EVALUATE depth limit exceeded", "Branch offset overflow")
+
+def _printed(name, forth_lines, output):
+    """What the program printed, once no line of it has failed."""
+    printed = program_output(output, forth_lines)
+    failed = [item for item in _DIAGNOSTICS if item in printed]
+    assert not failed, _failure(
+        name, "KDOS reported: " + ", ".join(failed), output)
+    return printed
 
 def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
-    global _pass_count, _fail_count
     output, _ = run_forth(
         forth_lines,
         disk_image=disk_image,
         storage_faults=storage_faults,
     )
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        for l in clean.split('\n')[-20:]:
-            print(f"        {l}")
+    assert expected in _printed(name, forth_lines, output), _failure(
+        name, f"expected: {expected!r}", output)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -860,7 +880,9 @@ def test_binary_read_offset_and_chain_navigation():
         '250 _FD VFS-SEEK',
         '_RB 20 _FD VFS-READ? THROW 20 = AND',
         '_RB C@ 250 = AND _RB 6 + C@ 0= AND',
-        '2 _V V.BCTX @ _VFAT-NEXT-CLUSTER _VFAT-EOC16 = AND',
+        # Any entry from 0xFFF8 up ends a FAT16 chain; the image builder
+        # writes 0xFFFF, and _VFAT-NEXT-CLUSTER returns the raw entry.
+        '2 _V V.BCTX @ _VFAT-NEXT-CLUSTER _V V.BCTX @ _VFAT-EOC? AND',
         'IF ." FAT-OFFSET-OK" THEN',
     ], "FAT-OFFSET-OK")
 
@@ -932,9 +954,8 @@ def test_fat32_root_high_cluster_and_read():
 
 def test_read_only_caps_and_mutations_leave_media_unchanged():
     """No mutation capability is advertised or able to alter the image."""
-    global _pass_count, _fail_count
     before = bytes(_default_fat_img)
-    output, sys_obj = run_forth([
+    lines = [
         'T-VFAT-NEW CONSTANT _V',
         'VARIABLE _C VARIABLE _O VARIABLE _R',
         'VFS-CAP-WRITE VFS-CAP-CREATE OR VFS-CAP-MKDIR OR',
@@ -949,17 +970,13 @@ def test_read_only_caps_and_mutations_leave_media_unchanged():
         '_R @ VFS-R-READONLY = AND',
         '_V VFS-SYNC 0= AND',
         'IF ." FAT-READONLY-OK" THEN',
-    ])
+    ]
+    output, sys_obj = run_forth(lines)
     after = bytes(sys_obj.storage._image_data[:len(before)])
-    ok = "FAT-READONLY-OK" in output and after == before
-    if ok:
-        _pass_count += 1
-        print("  PASS  read-only caps and immutable media")
-    else:
-        _fail_count += 1
-        print("  FAIL  read-only caps and immutable media")
-        print("        media unchanged:", after == before)
-        print("        output:", output[-1500:])
+    name = "read-only caps and immutable media"
+    assert "FAT-READONLY-OK" in _printed(name, lines, output), _failure(
+        name, "expected: 'FAT-READONLY-OK'", output)
+    assert after == before, "read-only caps and immutable media: media changed"
 
 
 def test_unmount_and_destroy_lifecycle():
@@ -974,7 +991,6 @@ def test_unmount_and_destroy_lifecycle():
 
 def test_nonzero_bounded_volume_slice_read():
     """FAT reads a nonzero slice without touching either guard region."""
-    global _pass_count, _fail_count
     base = 3
     suffix = 4
     inner = bytes(_default_fat_img)
@@ -982,7 +998,7 @@ def test_nonzero_bounded_volume_slice_read():
     prefix_bytes = bytes([0xC3]) * (base * SECTOR)
     suffix_bytes = bytes([0x3C]) * (suffix * SECTOR)
     parent_image = prefix_bytes + inner + suffix_bytes
-    output, sys_obj = run_forth([
+    lines = [
         'CREATE _SBD /BLOCK-DEVICE ALLOT',
         'CREATE _SVOL /VOLUME ALLOT',
         '_SBD BD-OPEN THROW',
@@ -990,22 +1006,17 @@ def test_nonzero_bounded_volume_slice_read():
         'T-ARENA _SVOL VFAT-NEW THROW CONSTANT _SV',
         'S" /HELLO.TXT" VFS-FF-READ _SV VFS-OPEN? THROW CONSTANT _FD',
         '_RB 17 _FD VFS-READ? THROW DROP _RB 17 TYPE',
-    ], disk_image=parent_image)
+    ]
+    output, sys_obj = run_forth(lines, disk_image=parent_image)
     media = bytes(sys_obj.storage._image_data)
     slice_end = (base + sectors) * SECTOR
-    guards_ok = (
-        media[:base * SECTOR] == prefix_bytes
-        and media[slice_end:slice_end + len(suffix_bytes)] == suffix_bytes
-    )
-    ok = "Hello, FAT world!" in output and guards_ok
-    if ok:
-        _pass_count += 1
-        print("  PASS  nonzero bounded FAT volume slice")
-    else:
-        _fail_count += 1
-        print("  FAIL  nonzero bounded FAT volume slice")
-        print("        guards:", guards_ok)
-        print("        output:", output[-1500:])
+    name = "nonzero bounded FAT volume slice"
+    assert "Hello, FAT world!" in _printed(name, lines, output), _failure(
+        name, "expected: 'Hello, FAT world!'", output)
+    assert media[:base * SECTOR] == prefix_bytes, (
+        "nonzero bounded FAT volume slice: the prefix guard changed")
+    assert media[slice_end:slice_end + len(suffix_bytes)] == suffix_bytes, (
+        "nonzero bounded FAT volume slice: the suffix guard changed")
 
 
 def test_structured_volume_error_translation():
@@ -1101,46 +1112,7 @@ def test_fat16_root_refill_uses_fixed_root_area():
     ], "FAT16-ROOT-REFILL-OK")
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  Runner
-# ═══════════════════════════════════════════════════════════════════
-
-def main():
-    build_snapshot()
-    print()
-    print("=" * 60)
-    print("  VFS-FAT Read-Only Volume-Binding Tests")
-    print("=" * 60)
-
-    test_constructor_binds_read_only_volume()
-    test_volume_probe_match_nonmatch_and_io_error()
-    test_constructor_requires_volume()
-    test_constructor_propagates_checked_read_failure()
-    test_constructor_rejects_invalid_formats()
-    test_geometry_is_derived_from_bpb_and_volume()
-    test_root_and_lazy_subdirectory_reads()
-    test_binary_read_offset_and_chain_navigation()
-    test_multicluster_read()
-    test_zero_entry_terminates_fixed_and_cluster_directories()
-    test_fat32_root_high_cluster_and_read()
-    test_read_only_caps_and_mutations_leave_media_unchanged()
-    test_unmount_and_destroy_lifecycle()
-    test_nonzero_bounded_volume_slice_read()
-    test_structured_volume_error_translation()
-    test_mount_population_nomem_rolls_back()
-    test_readdir_population_nomem_rolls_back()
-    test_fat16_root_refill_uses_fixed_root_area()
-
-    print()
-    total = _pass_count + _fail_count
-    print(f"  Results: {_pass_count} passed, {_fail_count} failed ({total} total)")
-    if _fail_count:
-        sys.exit(1)
-
-
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        if _boot_img_path and os.path.exists(_boot_img_path):
-            os.unlink(_boot_img_path)
+    import pytest
+    raise SystemExit(pytest.main(["-q", "-p", "no:cacheprovider", __file__,
+                                  *sys.argv[1:]]))
