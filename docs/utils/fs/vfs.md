@@ -480,7 +480,9 @@ Name lookup and resolution check the dentry cache first. On a cached-name
 miss, they use targeted binding `LOOKUP` when advertised; otherwise they load
 the complete directory through `READDIR` and treat a remaining miss as
 authoritative `VFS-E-NOENT`. Other binding errors are preserved. A cached hit
-never invokes either binding callback.
+never invokes either binding callback. Resolution's own lookups leave
+`V.LAST-IOR` unchanged; a public `VFS-LOOKUP` that reaches a binding's
+`LOOKUP` records its result there.
 
 `VFS-READ?` and `VFS-WRITE?` return progress and error together. Legal partial
 progress advances the cursor even when the same call returns a nonzero ior.
@@ -541,6 +543,24 @@ Names are nonempty, at most 255 bytes, contain neither `/` nor NUL, and cannot
 be exactly `.` or `..`. Their memory span must be non-null and non-wrapping.
 Leading or trailing dots in other names are legal.
 
+Before a namespace mutation, the VFS finds the dentry that holds the new name
+in its parent the way resolution finds a child. `VFS-MKFILE?`, `VFS-MKDIR`,
+`VFS-LINK`, and `VFS-SYMLINK` refuse a held name with `VFS-E-EXISTS`, and
+`VFS-RENAME-AT` takes the holder as its victim. On a binding with targeted
+`LOOKUP` the check asks the cache and then `LOOKUP` for that one name, and
+`VFS-E-NOENT` from `LOOKUP` means the name is absent; the parent's other names
+stay uncached, so work and cache memory follow the names an operation touches
+rather than the size of its parent. A `READDIR`-only binding loads the
+parent's complete listing first and answers from the cache. These checks leave
+`V.LAST-IOR` unchanged.
+
+`VFS-RM` of a directory and a directory victim of `VFS-RENAME-AT` refuse with
+`VFS-E-NOTEMPTY` when the directory has a cached child. A `READDIR`-only
+binding's directory is loaded first, so its cache shows every child. A
+`LOOKUP` binding's cache may hold only some of them, so the VFS leaves the
+proof of emptiness to the binding's `RMDIR` or `RENAME` callback, which must
+refuse a directory that still holds a name.
+
 `VFS-LINK` creates a second dentry for the target vnode. Directories cannot be
 hard-linked, and a namespace-detached target or parent returns `VFS-E-NOENT`
 without binding dispatch. Before the binding callback, the provisional dentry
@@ -566,16 +586,16 @@ Replacing an open destination unlinks its dentry but retains the old vnode
 until close. Replacing `V.CWD` is rejected with `VFS-E-BUSY`. Renaming onto a
 distinct hard-link dentry for the same vnode is a no-op, including under
 `VFS-RN-NOREPLACE`, that retains both names and the link count. Directory
-cycles, nonempty directory replacement, and file/directory type conflicts are
-rejected. Repeated successful renames reuse released variable-capacity name
-entries instead of consuming the bounded caller-provided string pool
-monotonically.
+cycles, replacement of a nonempty directory, which the emptiness rule above
+decides, and file/directory type conflicts are rejected. Repeated successful
+renames reuse released variable-capacity name entries instead of consuming the
+bounded caller-provided string pool monotonically.
 
 `VFS-RM` rejects the root with `VFS-E-INVALID` and the dentry currently held
 in `V.CWD` with `VFS-E-BUSY` before binding dispatch. This prevents a
 successful `RMDIR` callback from leaving the VFS current-directory pointer
-attached to a released cache object. Nonempty directories are rejected before
-their `RMDIR` callback as well.
+attached to a released cache object. Under the emptiness rule above, a
+directory with a cached child is rejected before its `RMDIR` callback as well.
 
 `VFS-SYMLINK` is capability-gated. ABI 1 exposes the operation for ext4-class
 bindings, but the RAM binding intentionally does not advertise it. Bindings
@@ -657,6 +677,12 @@ the complete cache. Eviction removes eligible cached dentries without changing b
 link counts. Automatic per-dentry eviction is enabled only for bindings with
 targeted `LOOKUP`; a `READDIR`-only binding keeps its complete enumeration.
 RAM-created vnodes are pinned because RAM `READDIR` cannot reconstruct them.
+Eviction never takes the current directory, a pinned or dirty vnode's dentry,
+a directory that still has cached children, or a dentry an open descriptor
+holds, whether it names a file or a directory. A child it removes leaves its
+parent's cached children incomplete, so the parent loses `VFS-IF-CHILDREN`:
+the parent's next listing runs `READDIR` again, and the evicted name returns
+through `LOOKUP` with its binding identity.
 
 Bindings populate lookup/readdir results through:
 
@@ -672,16 +698,20 @@ Loading a second on-disk hard-link name therefore attaches another dentry to
 the existing vnode rather than duplicating metadata. The helper does not
 change persistent `VN.NLINK`; the binding publishes the authoritative link
 count from disk. `VFS-CACHE-DROP` removes only the cache reference and returns
-busy for an open dentry. Once the last dentry and open reference disappears,
-the vnode is reclaimable even while its on-disk link count is nonzero.
+busy for an open dentry. On a binding with targeted `LOOKUP`, the dropped
+child's parent loses `VFS-IF-CHILDREN`, as it does when eviction removes a
+child. Once the last dentry and open reference disappears, the vnode is
+reclaimable even while its on-disk link count is nonzero.
 
-Known deferred invariant: dropping a child manually from a READDIR-only
-parent does not yet clear that parent's `VFS-IF-CHILDREN` completeness flag.
-A later lookup can therefore treat the reduced cache as a still-complete
+Known deferred invariant: dropping a child manually from a `READDIR`-only
+parent leaves that parent's `VFS-IF-CHILDREN` completeness flag set. The
+MP64FS and FAT `READDIR` build a listing without consulting the names already
+cached, so running one again over a partial cache would duplicate them. A
+later lookup can therefore treat the reduced cache as a still-complete
 enumeration and return stale `VFS-E-NOENT` without invoking `READDIR` again.
-Automatic eviction remains disabled for these bindings; callers must not use
-manual cache drop as a namespace-refresh mechanism until completeness
-invalidation and its broad VFS qualification are added.
+Automatic eviction stays disabled for these bindings; callers must not use
+manual cache drop on them as a namespace-refresh mechanism until their
+`READDIR` reconciles with cached names.
 
 ## Binding ABI 1
 
@@ -758,7 +788,12 @@ The operation cap is `1 << slot` and uses the corresponding `VFS-CAP-*` name.
 
 `PROBE` returns a score from 0 through 100 and performs no mutation. `LOOKUP`
 publishes a successful result with `VFS-CACHE-DENTRY`; the public dispatcher
-verifies that its vnode, parent, and exact byte name match the request.
+verifies that its vnode, parent, and exact byte name match the request, and
+resolution and the namespace checks apply the same verification. A binding
+that advertises `LOOKUP` receives `READDIR` for directories some of whose
+names are already cached, after a lookup, an eviction, or a drop. It publishes
+every name through `VFS-CACHE-DENTRY`, which returns the cached dentry for a
+name already present.
 
 `READDIR` must not publish partial cache state as complete. The core sets
 `VFS-IF-CHILDREN` only when the callback returns zero; an error remains

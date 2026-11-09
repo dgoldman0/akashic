@@ -2233,6 +2233,16 @@ VARIABLE _EXT4-DDI-RAW
 \ =====================================================================
 \  Checksummed directory cache population
 \ =====================================================================
+\
+\ READDIR and LOOKUP read a directory the same way.  The directory's inode
+\ and an indexed directory's HTree root are authenticated through the
+\ descriptor layer, and every block is read through that descriptor and
+\ validated, checksum tail and dirent chain, before any record is used.
+\ `.` must name the directory and `..` its parent.  A child's inode is
+\ loaded, its type checked against the record's file type, and its dentry
+\ published through VFS-CACHE-DENTRY with the inode's generation and
+\ metadata.  READDIR publishes every child of every block.  LOOKUP reads
+\ only the blocks its name can be in and publishes only that child.
 
 VARIABLE _EXT4-DS-PARENT
 VARIABLE _EXT4-DS-V
@@ -2243,7 +2253,6 @@ VARIABLE _EXT4-DS-GEN
 VARIABLE _EXT4-DS-OFF
 VARIABLE _EXT4-DS-LIMIT
 VARIABLE _EXT4-DS-DE
-VARIABLE _EXT4-DS-REC
 VARIABLE _EXT4-DS-NLEN
 VARIABLE _EXT4-DS-CINO
 VARIABLE _EXT4-DS-DTYPE
@@ -2252,7 +2261,75 @@ VARIABLE _EXT4-DS-DENTRY
 VARIABLE _EXT4-DS-IOR
 VARIABLE _EXT4-DS-DOT
 VARIABLE _EXT4-DS-DOTDOT
+VARIABLE _EXT4-DS-TARGET-A
+VARIABLE _EXT4-DS-TARGET-U
+VARIABLE _EXT4-DS-MATCH
+VARIABLE _EXT4-DN-NAME
+VARIABLE _EXT4-DN-NLEN
 
+\ Whether the record at DIRENT holds the name: its name length and bytes
+\ are the name's.
+: _EXT4-DIRENT-HOLDS?  ( dirent name nlen -- flag )
+    _EXT4-DN-NLEN ! _EXT4-DN-NAME !
+    DUP 6 + C@ _EXT4-DN-NLEN @ <> IF DROP FALSE EXIT THEN
+    8 + _EXT4-DN-NAME @ _EXT4-DN-NLEN @ _EXT4-BYTES=? ;
+
+\ Admit the child the live record at DIRENT names.  Its inode is loaded
+\ and must have the type the record's file type gives, when it gives one.
+\ Its dentry is cached under the scanned parent with the inode's
+\ generation, and the inode's metadata is published into its vnode.
+: _EXT4-DS-ADMIT  ( dirent -- ior )
+    DUP _EXT4-DS-DE ! DUP L@ _EXT4-DS-CINO ! 7 + C@ _EXT4-DS-DTYPE !
+    _EXT4-DS-CINO @ _EXT4-DS-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _EXT4-DS-CTX @ _EXT4-STAGE-CURRENT-INODE
+    _EXT4-DS-IOR ! _EXT4-DS-TYPE !
+    _EXT4-DS-IOR @ ?DUP IF EXIT THEN
+    _EXT4-DS-DTYPE @ IF
+        _EXT4-DS-TYPE @
+        _EXT4-DS-DTYPE @ _EXT4-DIRENT>TYPE DROP <> IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    _EXT4-DS-DE @ 8 + _EXT4-DS-DE @ 6 + C@
+    _EXT4-DS-TYPE @ _EXT4-DS-CINO @
+    _EXT4-DS-CTX @ _EXT4-C.R.GEN + @
+    _EXT4-DS-PARENT @ _EXT4-DS-V @ VFS-CACHE-DENTRY
+    _EXT4-DS-IOR ! _EXT4-DS-DENTRY !
+    _EXT4-DS-IOR @ ?DUP IF EXIT THEN
+    _EXT4-DS-CTX @ _EXT4-DS-DENTRY @ _EXT4-DS-TYPE @
+    _EXT4-PUBLISH-STAGED
+    0 ;
+
+\ A live record of the block being scanned.  `.` must name the directory
+\ and `..` its parent, each at most once in the directory.  Every other
+\ record is a child: READDIR admits it, and LOOKUP takes the first record
+\ holding its name as its match.
+: _EXT4-DS-LIVE  ( -- ior )
+    _EXT4-DS-DE @ L@ _EXT4-DS-CINO !
+    _EXT4-DS-DE @ 6 + C@ _EXT4-DS-NLEN !
+    _EXT4-DS-NLEN @ 1 = _EXT4-DS-DE @ 8 + C@ [CHAR] . = AND IF
+        _EXT4-DS-CINO @ _EXT4-DS-DIRINO @ <> _EXT4-DS-DOT @ OR IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        -1 _EXT4-DS-DOT ! 0 EXIT
+    THEN
+    _EXT4-DS-NLEN @ 2 = _EXT4-DS-DE @ 8 + W@ 0x2E2E = AND IF
+        _EXT4-DS-CINO @ _EXT4-DS-PARINO @ <> _EXT4-DS-DOTDOT @ OR IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        -1 _EXT4-DS-DOTDOT ! 0 EXIT
+    THEN
+    _EXT4-DS-TARGET-U @ 0= IF _EXT4-DS-DE @ _EXT4-DS-ADMIT EXIT THEN
+    _EXT4-DS-MATCH @ 0= IF
+        _EXT4-DS-DE @ _EXT4-DS-TARGET-A @ _EXT4-DS-TARGET-U @
+        _EXT4-DIRENT-HOLDS? IF _EXT4-DS-DE @ _EXT4-DS-MATCH ! THEN
+    THEN
+    0 ;
+
+\ Scan the block in the context's directory buffer as a block of PARENT.
+\ _EXT4-VALIDATE-DIR-BLOCK proves its checksum tail and every record of
+\ its dirent chain: length, bounds, name length, inode number, name bytes
+\ and file type.  The walk then reads each live record once.
 : _EXT4-SCAN-DIR-BLOCK  ( parent vfs ctx -- ior )
     _EXT4-DS-CTX ! _EXT4-DS-V ! _EXT4-DS-PARENT !
     _EXT4-DS-PARENT @ IN.BID @ _EXT4-DS-DIRINO !
@@ -2266,79 +2343,9 @@ VARIABLE _EXT4-DS-DOTDOT
     _EXT4-DS-CTX @ _EXT4-C.BSIZE + @ 12 - _EXT4-DS-LIMIT !
     BEGIN _EXT4-DS-OFF @ _EXT4-DS-LIMIT @ < WHILE
         _EXT4-DS-CTX @ _EXT4-C.DIR-BLOCK + _EXT4-DS-OFF @ +
-        _EXT4-DS-DE !
-        _EXT4-DS-DE @ 4 + W@ _EXT4-DS-REC !
-        _EXT4-DS-REC @ 12 < _EXT4-DS-REC @ 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-DS-OFF @ _EXT4-DS-REC @ + _EXT4-DS-LIMIT @ > IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-DS-DE @ 6 + C@ DUP _EXT4-DS-NLEN !
-        _EXT4-DS-REC @ 8 - U> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
-        _EXT4-DS-DE @ L@ DUP _EXT4-DS-CINO ! IF
-            _EXT4-DS-CINO @ _EXT4-DS-CTX @ _EXT4-C.INODES + @ > IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-DS-DE @ 8 + _EXT4-DS-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-DS-NLEN @ 1 =
-            _EXT4-DS-DE @ 8 + C@ [CHAR] . = AND IF
-                _EXT4-DS-CINO @ _EXT4-DS-DIRINO @ <> IF
-                    EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                THEN
-                _EXT4-DS-DOT @ IF
-                    EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                THEN
-                -1 _EXT4-DS-DOT !
-            ELSE
-                _EXT4-DS-NLEN @ 2 =
-                _EXT4-DS-DE @ 8 + C@ [CHAR] . = AND
-                _EXT4-DS-DE @ 9 + C@ [CHAR] . = AND IF
-                    _EXT4-DS-CINO @ _EXT4-DS-PARINO @ <> IF
-                        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN
-                    _EXT4-DS-DOTDOT @ IF
-                        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN
-                    -1 _EXT4-DS-DOTDOT !
-                ELSE
-                    _EXT4-DS-NLEN @ 0= IF
-                        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN
-                    _EXT4-DS-DE @ 7 + C@ DUP _EXT4-DS-DTYPE !
-                    _EXT4-DIRENT>TYPE 0= IF
-                        DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN _EXT4-DS-TYPE !
-                    _EXT4-DS-CINO @ _EXT4-DS-CTX @ _EXT4-LOAD-INODE
-                    ?DUP IF EXIT THEN
-                    _EXT4-DS-CTX @ _EXT4-STAGE-CURRENT-INODE
-                    _EXT4-DS-IOR ! _EXT4-DS-TYPE !
-                    _EXT4-DS-IOR @ ?DUP IF EXIT THEN
-                    _EXT4-DS-DTYPE @ IF
-                        _EXT4-DS-TYPE @
-                        _EXT4-DS-DTYPE @ _EXT4-DIRENT>TYPE DROP <> IF
-                            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                        THEN
-                    THEN
-                    _EXT4-DS-DE @ 8 + _EXT4-DS-NLEN @
-                    _EXT4-DS-TYPE @ _EXT4-DS-CINO @
-                    _EXT4-DS-CTX @ _EXT4-C.R.GEN + @
-                    _EXT4-DS-PARENT @ _EXT4-DS-V @ VFS-CACHE-DENTRY
-                    _EXT4-DS-IOR ! _EXT4-DS-DENTRY !
-                    _EXT4-DS-IOR @ ?DUP IF EXIT THEN
-                    _EXT4-DS-CTX @ _EXT4-DS-DENTRY @ _EXT4-DS-TYPE @
-                    _EXT4-PUBLISH-STAGED
-                THEN
-            THEN
-        THEN
-        _EXT4-DS-REC @ _EXT4-DS-OFF +!
+        DUP _EXT4-DS-DE ! L@ IF _EXT4-DS-LIVE ?DUP IF EXIT THEN THEN
+        _EXT4-DS-DE @ 4 + W@ _EXT4-DS-OFF +!
     REPEAT
-    _EXT4-DS-OFF @ _EXT4-DS-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
     0 ;
 
 VARIABLE _EXT4-RD-PARENT
@@ -2354,6 +2361,9 @@ VARIABLE _EXT4-RD-LEAF-EXPECTED
 VARIABLE _EXT4-RD-LEAF-SEEN
 CREATE _EXT4-RD-DESC _EXT4-DD-SIZE ALLOT
 CREATE _EXT4-RD-ROOT-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
+CREATE _EXT4-RD-NODE-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
+VARIABLE _EXT4-RD-HASH
+VARIABLE _EXT4-RD-ROOT-ENTRY
 
 : _EXT4-RD-ROLLBACK  ( -- )
     BEGIN
@@ -2368,12 +2378,16 @@ CREATE _EXT4-RD-ROOT-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
 : _EXT4-RD-LOAD-LOGICAL  ( logical-block -- ior )
     _EXT4-RD-DESC _EXT4-DD-LOAD-LOGICAL NIP ;
 
-: _EXT4-READDIR-LINEAR  ( -- ior )
+\ Read a linear directory's blocks in order.  READDIR admits the children
+\ of every block; LOOKUP stops after the block that holds its name.  A
+\ directory read to its end must have held `.` and `..`.
+: _EXT4-RD-LINEAR  ( -- ior )
     0 _EXT4-DS-DOT ! 0 _EXT4-DS-DOTDOT !
     _EXT4-RD-BLOCKS @ 0 ?DO
         I _EXT4-RD-LOAD-LOGICAL ?DUP IF UNLOOP EXIT THEN
         _EXT4-RD-PARENT @ _EXT4-RD-V @ _EXT4-RD-CTX @
         _EXT4-SCAN-DIR-BLOCK ?DUP IF UNLOOP EXIT THEN
+        _EXT4-DS-MATCH @ IF UNLOOP 0 EXIT THEN
     LOOP
     _EXT4-DS-DOT @ 0= _EXT4-DS-DOTDOT @ 0= OR IF
         EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
@@ -2418,17 +2432,96 @@ CREATE _EXT4-RD-ROOT-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     THEN
     0 ;
 
-: _EXT4-READDIR-WORK  ( -- ior )
+\ Load the index node that root entry ENTRY names and validate it as
+\ dx_probe reads a level-one node.  A snapshot of the node becomes the
+\ descriptor's active entry vector, so its entries outlive the leaf reads
+\ that follow.
+: _EXT4-RD-LOAD-NODE  ( entry -- ior )
+    DUP _EXT4-RD-ROOT-ENTRY !
+    8 * _EXT4-RD-DESC _EXT4-DD.ROOT-SNAPSHOT + @ 32 + + 4 + L@
+    0x0FFFFFFF AND _EXT4-RD-LOAD-LOGICAL ?DUP IF EXIT THEN
+    _EXT4-RD-CTX @ _EXT4-DX-NODE? 0= IF
+        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-RD-DESC _EXT4-DD.INO + @ _EXT4-DX-DIRINO !
+    _EXT4-RD-DESC _EXT4-DD.GEN + @ _EXT4-DX-GEN !
+    _EXT4-RD-CTX @ _EXT4-RD-BLOCKS @ _EXT4-VALIDATE-DX-NODE
+    ?DUP IF EXIT THEN
+    _EXT4-RD-CTX @ _EXT4-C.DIR-BLOCK + _EXT4-RD-NODE-SNAPSHOT
+    _EXT4-RD-CTX @ _EXT4-C.BSIZE + @ CMOVE
+    _EXT4-RD-NODE-SNAPSHOT 8 +
+    _EXT4-RD-DESC _EXT4-DD.ACTIVE-ENTRIES + !
+    _EXT4-DX-LIMIT @ _EXT4-RD-DESC _EXT4-DD.ACTIVE-LIMIT + !
+    _EXT4-DX-COUNT @ _EXT4-RD-DESC _EXT4-DD.ACTIVE-COUNT + !
+    0 ;
+
+\ After a miss, the next leaf as ext4_htree_next_block finds it: the next
+\ entry of the active vector, or, past the last entry of a level-one node,
+\ the root's next entry and the first entry of the node it names.  The
+\ walk goes on only while that entry's hash, without the continuation bit,
+\ is the name's, so a run of equal hashes is followed into every leaf it
+\ spans and no further.
+: _EXT4-RD-NEXT-LEAF?  ( -- more? ior )
+    _EXT4-RD-DESC _EXT4-DD.ROUTE-ENTRY + @ 1+
+    DUP _EXT4-RD-DESC _EXT4-DD.ACTIVE-COUNT + @ U< IF
+        DUP 8 * _EXT4-RD-DESC _EXT4-DD.ACTIVE-ENTRIES + @ + L@
+        0xFFFFFFFE AND _EXT4-RD-HASH @ <> IF DROP FALSE 0 EXIT THEN
+        _EXT4-RD-DESC _EXT4-DD-SET-INTERVAL TRUE SWAP EXIT
+    THEN
+    DROP _EXT4-RD-DESC _EXT4-DD.DX-LEVEL + @ 0= IF FALSE 0 EXIT THEN
+    _EXT4-RD-ROOT-ENTRY @ 1+
+    DUP _EXT4-RD-DESC _EXT4-DD.DX-COUNT + @ U< 0= IF
+        DROP FALSE 0 EXIT
+    THEN
+    DUP 8 * _EXT4-RD-DESC _EXT4-DD.ROOT-SNAPSHOT + @ 32 + + L@
+    0xFFFFFFFE AND _EXT4-RD-HASH @ <> IF DROP FALSE 0 EXIT THEN
+    _EXT4-RD-LOAD-NODE ?DUP IF FALSE SWAP EXIT THEN
+    0 _EXT4-RD-DESC _EXT4-DD-SET-INTERVAL TRUE SWAP ;
+
+\ LOOKUP in an indexed directory, as ext4_dx_find_entry does.  The name is
+\ hashed as the root's version and the superblock's signedness say and
+\ routed through the root and, at level one, the index node the root
+\ names, to one leaf; a miss moves on through _EXT4-RD-NEXT-LEAF?.  The
+\ root, the node and each leaf are validated as they are read, and no
+\ other block of the directory is read.
+: _EXT4-LOOKUP-HTREE  ( -- ior )
+    _EXT4-RD-DESC _EXT4-DD-AUTH-HTREE-ROOT ?DUP IF EXIT THEN
+    _EXT4-DS-TARGET-A @ _EXT4-DS-TARGET-U @
+    _EXT4-RD-DESC _EXT4-DD.DX-VERSION + @ _EXT4-RD-CTX @
+    _EXT4-HALF-MD4-DIRHASH? ?DUP IF NIP NIP EXIT THEN
+    DROP _EXT4-RD-HASH !
+    _EXT4-RD-HASH @ _EXT4-RD-DESC _EXT4-DD-SELECT-ROUTE ?DUP IF EXIT THEN
+    _EXT4-RD-DESC _EXT4-DD.DX-LEVEL + @ IF
+        _EXT4-RD-DESC _EXT4-DD.ROUTE-ENTRY + @ _EXT4-RD-LOAD-NODE
+        ?DUP IF EXIT THEN
+        _EXT4-RD-HASH @ _EXT4-RD-DESC _EXT4-DD-SELECT-ROUTE
+        ?DUP IF EXIT THEN
+    THEN
+    -1 _EXT4-DS-DOT ! -1 _EXT4-DS-DOTDOT !
+    BEGIN
+        _EXT4-RD-DESC _EXT4-DD.LEAF-LOGICAL + @ _EXT4-RD-LOAD-LOGICAL
+        ?DUP IF EXIT THEN
+        _EXT4-RD-PARENT @ _EXT4-RD-V @ _EXT4-RD-CTX @
+        _EXT4-SCAN-DIR-BLOCK ?DUP IF EXIT THEN
+        _EXT4-DS-MATCH @ IF 0 EXIT THEN
+        _EXT4-RD-NEXT-LEAF? ?DUP IF NIP EXIT THEN
+    0= UNTIL
+    0 ;
+
+\ Authenticate the directory's inode through the descriptor layer, then
+\ read it: a linear directory block by block, and an indexed one by
+\ READDIR's walk of every block or LOOKUP's routed leaves.
+: _EXT4-RD-WORK  ( -- ior )
     _EXT4-RD-ROOT-SNAPSHOT _EXT4-RD-DESC _EXT4-DD-INIT
     _EXT4-RD-PARENT @ _EXT4-RD-V @ _EXT4-RD-CTX @ _EXT4-RD-DESC
     _EXT4-DD-AUTH-INODE ?DUP IF EXIT THEN
     _EXT4-RD-DESC _EXT4-DD.LOGICAL-BLOCKS + @ _EXT4-RD-BLOCKS !
-    _EXT4-RD-DESC _EXT4-DD.INDEXED + @ IF
-        _EXT4-READDIR-HTREE
+    _EXT4-RD-DESC _EXT4-DD.INDEXED + @ 0= IF _EXT4-RD-LINEAR EXIT THEN
+    _EXT4-DS-TARGET-U @ IF
+        _EXT4-LOOKUP-HTREE
     ELSE
-        _EXT4-READDIR-LINEAR
-    THEN
-    ;
+        _EXT4-READDIR-HTREE
+    THEN ;
 
 : _EXT4-READDIR  ( directory vfs -- ior )
     DUP _EXT4-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
@@ -2439,7 +2532,28 @@ CREATE _EXT4-RD-ROOT-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     _EXT4-RD-V @ V.STR-PTR @ _EXT4-RD-OLD-STR !
     _EXT4-RD-V @ V.VOLUME @ _EXT4-IO-VOL !
     _EXT4-RD-V @ _EXT4-IO-VFS !
-    _EXT4-READDIR-WORK DUP IF _EXT4-RD-ROLLBACK THEN ;
+    0 _EXT4-DS-TARGET-U ! 0 _EXT4-DS-MATCH !
+    _EXT4-RD-WORK DUP IF _EXT4-RD-ROLLBACK THEN ;
+
+\ LOOKUP publishes the child the name selects in DIRECTORY and answers its
+\ dentry, or answers VFS-E-NOENT.  It reads the directory as READDIR does
+\ but stops at the block that holds the name, loads only the named
+\ child's inode, and caches nothing else.  The match is admitted once
+\ its whole block has been checked, so a refusal leaves the cache as it
+\ was.
+: _EXT4-LOOKUP  ( name-a name-u directory vfs -- dentry ior )
+    DUP _EXT4-READY? 0= IF 2DROP 2DROP 0 VFS-E-BUSY EXIT THEN
+    _EXT4-RD-V ! _EXT4-RD-PARENT !
+    _EXT4-DS-TARGET-U ! _EXT4-DS-TARGET-A !
+    _EXT4-DS-TARGET-U @ 0= IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-RD-V @ _EXT4-CTX _EXT4-RD-CTX !
+    _EXT4-RD-V @ V.VOLUME @ _EXT4-IO-VOL !
+    _EXT4-RD-V @ _EXT4-IO-VFS !
+    0 _EXT4-DS-MATCH !
+    _EXT4-RD-WORK ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-DS-MATCH @ DUP 0= IF DROP 0 VFS-E-NOENT EXIT THEN
+    _EXT4-DS-ADMIT ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-DS-DENTRY @ 0 ;
 
 \ =====================================================================
 \  Read-only file and symlink data operations
@@ -19734,7 +19848,7 @@ VARIABLE _EXT4-SY-D
     0 ;
 
 VFS-CAP-PROBE VFS-CAP-MOUNT OR VFS-CAP-UNMOUNT OR
-VFS-CAP-READDIR OR VFS-CAP-OPEN OR VFS-CAP-RELEASE OR
+VFS-CAP-LOOKUP OR VFS-CAP-READDIR OR VFS-CAP-OPEN OR VFS-CAP-RELEASE OR
 VFS-CAP-READ OR VFS-CAP-GETATTR OR VFS-CAP-READLINK OR
 VFS-CAP-SYNCFS OR VFS-CAP-FSYNC OR VFS-CAP-STATFS OR
 VFS-CAP-LISTXATTR OR VFS-CAP-GETXATTR OR
@@ -19745,6 +19859,7 @@ EXT4-OPS VFS-OPS-SIZE 0 FILL
 ' _EXT4-PROBE   EXT4-OPS VFS-OP-PROBE   CELLS + !
 ' _EXT4-MOUNT   EXT4-OPS VFS-OP-MOUNT   CELLS + !
 ' _EXT4-UNMOUNT EXT4-OPS VFS-OP-UNMOUNT CELLS + !
+' _EXT4-LOOKUP  EXT4-OPS VFS-OP-LOOKUP  CELLS + !
 ' _EXT4-READDIR EXT4-OPS VFS-OP-READDIR CELLS + !
 ' _EXT4-OPEN    EXT4-OPS VFS-OP-OPEN    CELLS + !
 ' _EXT4-RELEASE EXT4-OPS VFS-OP-RELEASE CELLS + !
@@ -21721,8 +21836,6 @@ VARIABLE _XC-WALK-VICTIM
 VARIABLE _XC-WALK-INSERT
 VARIABLE _XC-FIND-NAME
 VARIABLE _XC-FIND-NLEN
-VARIABLE _XC-HOLD-NAME
-VARIABLE _XC-HOLD-NLEN
 VARIABLE _XC-LEAF-FOUND
 VARIABLE _XC-LEAF-VICTIM
 
@@ -22427,13 +22540,8 @@ CREATE _XC-HP-SWAP _XC-HP-ENTRY-CELLS CELLS ALLOT
     THEN
     _XC-HP-ORDER ;
 
-: _XC-DIRENT-HOLDS?  ( dirent name nlen -- flag )
-    _XC-HOLD-NLEN ! _XC-HOLD-NAME !
-    DUP 6 + C@ _XC-HOLD-NLEN @ <> IF DROP FALSE EXIT THEN
-    8 + _XC-HOLD-NAME @ _XC-HOLD-NLEN @ _EXT4-BYTES=? ;
-
 : _XC-DIRENT-NAME=?  ( dirent -- flag )
-    _XC-NAME-SNAPSHOT _XC-NLEN @ _XC-DIRENT-HOLDS? ;
+    _XC-NAME-SNAPSHOT _XC-NLEN @ _EXT4-DIRENT-HOLDS? ;
 
 \ A named inode's record has its type: two for a directory, zero or one for
 \ a regular file.
@@ -22447,7 +22555,7 @@ CREATE _XC-HP-SWAP _XC-HP-ENTRY-CELLS CELLS ALLOT
 \ The name holds the target's inode and its type.
 : _XC-FIND-RECORD  ( -- ior )
     _XC-DIR-INODE @ _XC-INODE @ = IF 1 _XC-REFS +! THEN
-    _XC-DIR-DE @ _XC-FIND-NAME @ _XC-FIND-NLEN @ _XC-DIRENT-HOLDS? 0= IF
+    _XC-DIR-DE @ _XC-FIND-NAME @ _XC-FIND-NLEN @ _EXT4-DIRENT-HOLDS? 0= IF
         0 EXIT
     THEN
     _XC-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
@@ -25280,9 +25388,10 @@ VARIABLE _XC-CHILD-CLAIMS
 
 \ UNLINK removes a regular file's name and RMDIR an empty directory's.  The
 \ directory is held by its one dentry outside the working directory, with
-\ its children loaded and none cached.  Its last link is always final, and
-\ a regular file's last link is final; a final link whose file still holds
-\ data or is open, and every directory, goes through the orphan file.
+\ no child cached; the plan proves it empty on media.  Its last link is
+\ always final, and a regular file's last link is final; a final link
+\ whose file still holds data or is open, and every directory, goes
+\ through the orphan file.
 : _XC-ENTRY-REMOVAL  ( -- ior )
     _XC-VN @ VN.TYPE @
     _XC-DIRECTORY @ IF VFS-T-DIR ELSE VFS-T-FILE THEN <> IF
@@ -25291,9 +25400,6 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-DIRECTORY @ IF
         _XC-VN @ VN.DREFS @ 1 <> IF VFS-E-BUSY EXIT THEN
         _XC-D @ _XC-V @ V.CWD @ = IF VFS-E-BUSY EXIT THEN
-        _XC-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
         _XC-D @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN
     THEN
     _XC-VN @ VN.BID @ DUP _XC-INODE ! 0= IF VFS-E-STALE EXIT THEN
@@ -25324,11 +25430,6 @@ VARIABLE _XC-CHILD-CLAIMS
         VFS-E-STALE EXIT
     THEN
     _XC-PARENT-VN @ VN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
-    _XC-LINKING @ _XC-RENAMING @ OR IF
-        _XC-PARENT-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    THEN
     _XC-PARENT-VN @ VN.BID @ DUP _XC-PARENT-INO ! 0= IF
         VFS-E-STALE EXIT
     THEN
@@ -25371,8 +25472,9 @@ VARIABLE _XC-CHILD-CLAIMS
 \ A rename's victim is the new parent's child of the new name, apart from
 \ the source and both parents and of the source's type: a regular file, or
 \ an empty directory held by its one dentry outside the working directory,
-\ with its children loaded and none cached.  It loses the name as a
-\ removal's target loses its link, and a last link goes to the orphan file.
+\ with no child cached, which the plan proves empty on media.  It loses
+\ the name as a removal's target loses its link, and a last link goes to
+\ the orphan file.
 : _XC-ENTRY-VICTIM  ( -- ior )
     _XC-VICTIM-D @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
     _XC-VICTIM-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
@@ -25387,9 +25489,6 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-VICTIM-DIR @ IF
         _XC-VICTIM-VN @ VN.DREFS @ 1 <> IF VFS-E-BUSY EXIT THEN
         _XC-VICTIM-D @ _XC-V @ V.CWD @ = IF VFS-E-BUSY EXIT THEN
-        _XC-VICTIM-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
         _XC-VICTIM-D @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN
     THEN
     _XC-VICTIM-VN @ VN.BID @ DUP _XC-VICTIM-INO ! 0= IF
@@ -25417,11 +25516,11 @@ VARIABLE _XC-CHILD-CLAIMS
 
 \ RENAME names its source, a regular file or a directory held by its one
 \ dentry, the new parent and the new name, and over an existing name its
-\ victim.  Both parents are directories with their children loaded.  The
-\ old parent takes the parent cells first and moves to its own bank when
-\ the parents differ; it loses a link when a directory leaves it.  The new
-\ parent gains one when a directory arrives from another parent and loses
-\ one with a directory victim.
+\ victim.  Both parents are directories.  The old parent takes the parent
+\ cells first and moves to its own bank when the parents differ; it loses
+\ a link when a directory leaves it.  The new parent gains one when a
+\ directory arrives from another parent and loses one with a directory
+\ victim.
 : _XC-ENTRY-RENAME  ( -- ior )
     _XC-FLAGS @ VFS-RN-NOREPLACE INVERT AND IF VFS-E-INVALID EXIT THEN
     _XC-VN @ VN.TYPE @ DUP VFS-T-DIR = _XC-DIRECTORY !

@@ -965,7 +965,14 @@ flag, checksum and corruption validation, and comparison with the external
 oracles.  The current reader covers the four geometry images and supplemental
 read-side image, including checked HTree lookup, external extents, all legacy
 map levels, allocation-bitmap cross-checks, special metadata, namespaced raw
-xattrs, and bounded generic symlink traversal.
+xattrs, and bounded generic symlink traversal.  Both bindings look one name
+up without listing its folder: a linear folder's blocks are read in order
+until the name is found, and an HTree folder's name is hashed and routed
+through the root and a level-one node to one leaf, as `dx_probe` routes it,
+with a run of equal hashes followed into the leaves after it, as
+`ext4_htree_next_block` follows it.  Each block the lookup reads is validated
+as directory enumeration validates it, and only the named child's inode is
+loaded.
 
 The bounded reader now includes checksum-v3/64-bit, revoke-aware
 committed-prefix replay and a crash-retry anchor for clearing `RECOVER`. Dirty

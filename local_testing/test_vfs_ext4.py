@@ -7887,6 +7887,7 @@ def test_binding_descriptors_are_valid_and_truthful(
         [
             (
                 "VFS-CAP-PROBE VFS-CAP-MOUNT OR VFS-CAP-UNMOUNT OR "
+                "VFS-CAP-LOOKUP OR "
                 "VFS-CAP-READDIR OR VFS-CAP-OPEN OR VFS-CAP-RELEASE OR "
                 "VFS-CAP-READ OR VFS-CAP-GETATTR OR VFS-CAP-READLINK OR "
                 "VFS-CAP-SYNCFS OR VFS-CAP-FSYNC OR VFS-CAP-STATFS OR "
@@ -7955,6 +7956,7 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "EXT4-BINDING VFS-BINDING-VALID? "
                 "EXT4-CAPS _EXPECTED-E4-CAPS = AND "
                 "EXT4-BINDING VB.FLAGS @ _EXPECTED-E4-FLAGS = AND "
+                "EXT4-OPS VFS-OP-LOOKUP CELLS + @ ' _EXT4-LOOKUP = AND "
                 'IF ." EXT4-DESCRIPTOR-OK" THEN'
             ),
             (
@@ -15117,6 +15119,772 @@ def test_supplemental_image_closes_read_side_structural_gaps(
     ):
         _assert_emitted(output, marker)
     assert _sha256(read_side_image) == before
+
+
+# ---------------------------------------------------------------------
+#  Targeted LOOKUP
+# ---------------------------------------------------------------------
+
+_LOOKUP_ONE_NAMES = (b"alpha", b"beta", b"gamma")
+_LOOKUP_MULTI_NAMES = tuple(
+    f"m{index:03d}-".encode() + b"l" * 30 for index in range(60)
+)
+_LOOKUP_IDX0_NAMES = tuple(
+    f"i{index:03d}-".encode() + b"x" * 40 for index in range(80)
+)
+_LOOKUP_IDX1_NAMES = tuple(
+    f"{index:04d}-".encode() + b"k" * 95 for index in range(1120)
+)
+_LOOKUP_BIG_NAMES = tuple(
+    f"g{index:04d}-".encode() + b"b" * 18 for index in range(2000)
+)
+_LOOKUP_WIDE_NAMES = tuple(
+    f"w{index:03d}-".encode() + b"w" * 195 for index in range(330)
+)
+_LOOKUP_PAYLOAD = bytes(range(256)) * 2
+
+
+def _build_lookup_shapes_prestate(
+    base: Path, directory: Path, jbd2_toolchain: dict[str, object]
+) -> dict[str, object]:
+    """Author the folders the LOOKUP tests read.
+
+    debugfs makes /lk-one, a one-block linear folder of three files and the
+    directory sub; /lk-idx0, eighty 45-byte names, which e2fsck indexes at
+    level zero; /lk-idx1, 1,120 100-byte names, indexed at level one under
+    two index nodes; /lk-big, 2,000 24-byte names of one file, whose cache
+    entries would take 80,000 bytes of the VFS string pool, more than its
+    64 KiB; /lk-wide, 330 200-byte names of one file, whose entries would
+    take 71,280 bytes, so that a listing fills the pool after about 300
+    names; and /lk-src/moved, a file to rename into /lk-big.  A second
+    debugfs pass after e2fsck makes /lk-multi, sixty 35-byte names over
+    three linear blocks, which stays linear since no later e2fsck -D runs.
+    """
+    debugfs = jbd2_toolchain["debugfs"]
+    e2fsck = jbd2_toolchain["e2fsck"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(e2fsck, Path)
+    assert isinstance(env, dict)
+    image = directory / "lookup-shapes.img"
+    _copy_sparse_file(base, image)
+    payload = directory / "payload.bin"
+    payload.write_bytes(_LOOKUP_PAYLOAD)
+
+    def run_debugfs(label: str, commands: list[str]) -> None:
+        script = directory / f"{label}.debugfs"
+        script.write_text("\n".join(commands) + "\n")
+        made = subprocess.run(
+            [str(debugfs), "-w", "-f", str(script), str(image)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert made.returncode == 0, made.stdout + made.stderr
+
+    def links(folder: str, names: tuple[bytes, ...], grow: int) -> list[str]:
+        # debugfs's ln does not grow a directory, so the folder grows first.
+        first = f"/{folder}/{names[0].decode()}"
+        return [
+            f"mkdir /{folder}",
+            *(f"expand_dir /{folder}" for _ in range(grow)),
+            f"write {payload} {first}",
+            *(f"ln {first} /{folder}/{name.decode()}" for name in names[1:]),
+        ]
+
+    run_debugfs(
+        "lookup-shapes",
+        [
+            "mkdir /lk-one",
+            *(
+                f"write {payload} /lk-one/{name.decode()}"
+                for name in _LOOKUP_ONE_NAMES
+            ),
+            "mkdir /lk-one/sub",
+            *links("lk-idx0", _LOOKUP_IDX0_NAMES, 6),
+            *links("lk-idx1", _LOOKUP_IDX1_NAMES, 130),
+            *links("lk-big", _LOOKUP_BIG_NAMES, 70),
+            *links("lk-wide", _LOOKUP_WIDE_NAMES, 100),
+            "mkdir /lk-src",
+            f"write {payload} /lk-src/moved",
+        ],
+    )
+    indexed = subprocess.run(
+        [str(e2fsck), "-f", "-y", "-D", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert indexed.returncode in (0, 1), indexed.stdout + indexed.stderr
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+    run_debugfs(
+        "lookup-multi",
+        [
+            "mkdir /lk-multi",
+            *("expand_dir /lk-multi" for _ in range(3)),
+            *(
+                f"write /dev/null /lk-multi/{name.decode()}"
+                for name in _LOOKUP_MULTI_NAMES
+            ),
+        ],
+    )
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+    superblock, _, _ = _ext4_inode_record(image, 2)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    root = _directory_entries_of(image, 2)
+    folders = (
+        b"lk-one",
+        b"lk-multi",
+        b"lk-idx0",
+        b"lk-idx1",
+        b"lk-big",
+        b"lk-wide",
+        b"lk-src",
+    )
+    numbers = {name: root[name] for name in folders}
+    entries = {name: _directory_entries_of(image, numbers[name]) for name in folders}
+    shapes = {}
+    for name in folders:
+        _, inode, _ = _ext4_inode_record(image, numbers[name])
+        indexed_folder = bool(struct.unpack_from("<I", inode, 0x20)[0] & 0x1000)
+        shapes[name] = {
+            "indexed": indexed_folder,
+            "blocks": struct.unpack_from("<I", inode, 0x04)[0] // block_size,
+            "levels": _htree_shape(image, numbers[name])[0] if indexed_folder else None,
+        }
+    for name in (b"lk-one", b"lk-multi", b"lk-src"):
+        assert not shapes[name]["indexed"]
+    assert shapes[b"lk-one"]["blocks"] == 1
+    for name in (b"lk-idx0", b"lk-big", b"lk-wide"):
+        assert shapes[name]["indexed"] and shapes[name]["levels"] == 0
+    idx1_levels, _, idx1_nodes = _htree_shape(image, numbers[b"lk-idx1"])
+    assert idx1_levels == 1 and idx1_nodes >= 2
+
+    # The last name of /lk-multi's last occupied block, read through its map.
+    _, multi_inode, _ = _ext4_inode_record(image, numbers[b"lk-multi"])
+    multi_generation = struct.unpack_from("<I", multi_inode, 0x64)[0]
+    multi_blocks = []
+    for logical in range(shapes[b"lk-multi"]["blocks"]):
+        block = _read_ext4_home(
+            image,
+            _extent_map_physical(image, multi_inode, logical, block_size=block_size),
+            block_size=block_size,
+        )
+        multi_blocks.append(
+            tuple(
+                entry[4]
+                for entry in _checked_linear_directory_entries(
+                    superblock, numbers[b"lk-multi"], multi_generation, block
+                )
+            )
+        )
+    occupied = [index for index, names in enumerate(multi_blocks) if names]
+    assert len(occupied) >= 3
+    multi_last = multi_blocks[occupied[-1]][-1]
+    assert multi_last in _LOOKUP_MULTI_NAMES
+
+    for name, names in ((b"lk-big", _LOOKUP_BIG_NAMES), (b"lk-wide", _LOOKUP_WIDE_NAMES)):
+        assert len(entries[name]) == len(names) + 2
+        assert sum(16 + ((len(entry) + 7) & ~7) for entry in names) > 65536
+    fixture = dict(_build_jbd2_activation_fixture(image))
+    fixture.update(
+        {
+            "image": image,
+            "block_size": block_size,
+            "numbers": numbers,
+            "entries": entries,
+            "shapes": shapes,
+            "multi_last": multi_last,
+        }
+    )
+    return fixture
+
+
+@pytest.fixture(scope="session")
+def lookup_shapes_prestate(
+    compact_primary_writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    base = compact_primary_writer_activation_fixture["image"]
+    assert isinstance(base, Path)
+    return _build_lookup_shapes_prestate(
+        base, tmp_path_factory.mktemp("ext4-lookup-shapes"), jbd2_toolchain
+    )
+
+
+def _lookup_probe_forth(
+    prefix: str, vfs: str, folder: bytes, name: bytes, expect: object
+) -> tuple[list[str], list[str]]:
+    """Resolve FOLDER, then FOLDER/NAME, and check what the lookup caches.
+
+    An integer EXPECT is the inode the name resolves to: the resolution
+    adds exactly one dentry, a child of the folder.  None expects
+    VFS-E-NOENT and "corrupt" the directory corruption, each adding no
+    dentry.  The folder is never marked as having its children loaded.
+    """
+    folder_lines, folder_text = _forth_bytes_buffer(f"{prefix}-F", folder)
+    path_lines, path_text = _forth_bytes_buffer(
+        f"{prefix}-P", folder + b"/" + name
+    )
+    lines = [
+        *folder_lines,
+        *path_lines,
+        (
+            f"{folder_text} {vfs} VFS-RESOLVE? "
+            f"CONSTANT {prefix}-F-IOR CONSTANT {prefix}-DIR"
+        ),
+        f"{vfs} V.ICOUNT @ CONSTANT {prefix}-BEFORE",
+        (
+            f"{path_text} VFS-RP-NOFOLLOW-FINAL {vfs} VFS-RESOLVE-POLICY? "
+            f"CONSTANT {prefix}-IOR CONSTANT {prefix}-D"
+        ),
+        f"{vfs} V.ICOUNT @ CONSTANT {prefix}-AFTER",
+    ]
+    checks = [
+        f"{prefix}-F-IOR 0=",
+        f"{prefix}-DIR IN.FLAGS @ VFS-IF-CHILDREN AND 0=",
+    ]
+    if expect is None:
+        checks += [
+            f"{prefix}-D 0=",
+            f"{prefix}-IOR VFS-IOR-REASON VFS-R-NOENT =",
+            f"{prefix}-AFTER {prefix}-BEFORE =",
+        ]
+    elif expect == "corrupt":
+        checks += [
+            f"{prefix}-D 0=",
+            f"{prefix}-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+            f"{prefix}-IOR VFS-IOR-DETAIL EXT4-D-DIRECTORY =",
+            f"{prefix}-AFTER {prefix}-BEFORE =",
+        ]
+    else:
+        assert isinstance(expect, int)
+        checks += [
+            f"{prefix}-IOR 0=",
+            f"{prefix}-D DUP IF IN.BID @ THEN {expect} =",
+            f"{prefix}-D DUP IF IN.PARENT @ THEN {prefix}-DIR =",
+            f"{prefix}-AFTER {prefix}-BEFORE 1+ =",
+        ]
+    return lines, checks
+
+
+def _lookup_journey(
+    image: Path,
+    cases: tuple[tuple[bytes, bytes, object], ...],
+    *,
+    prefix: str,
+    marker: str,
+    patches: tuple[tuple[int, bytes], ...] = (),
+    extra_checks: tuple[str, ...] = (),
+    max_steps: int = 800_000_000,
+) -> None:
+    """Mount IMAGE read-only and probe each (folder, name, expect) case."""
+    vfs = f"{prefix}-V"
+    lines = [f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR CONSTANT {vfs}"]
+    checks = [f"{prefix}-MOUNT-IOR 0="]
+    for index, (folder, name, expect) in enumerate(cases):
+        case_lines, case_checks = _lookup_probe_forth(
+            f"{prefix}{index:02d}", vfs, folder, name, expect
+        )
+        lines += case_lines
+        checks += case_checks
+    checks += [check.replace("{p}", prefix) for check in extra_checks]
+    output = run_forth(
+        image,
+        [
+            *lines,
+            *_forth_accumulated_conjunction(f"{prefix}-OK", checks),
+            (
+                f'{prefix}-OK @ IF ." {marker}" ELSE ." {marker}-FAIL " '
+                f"{prefix}-OK-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+        patches=patches,
+        max_steps=max_steps,
+    )
+    _assert_emitted(output, marker)
+
+
+def test_lookup_finds_one_name_in_linear_and_indexed_folders(
+    lookup_shapes_prestate: dict[str, object],
+) -> None:
+    """LOOKUP reads only the blocks a name can be in and caches only it.
+
+    A name resolves in a one-block linear folder, in the last block of a
+    three-block linear folder, and in folders indexed at level zero and at
+    level one, and an absent name answers VFS-E-NOENT in each.  Each
+    resolution adds exactly one dentry, and no folder is marked as having
+    its children loaded.
+    """
+    prestate = lookup_shapes_prestate
+    image = prestate["image"]
+    entries = prestate["entries"]
+    multi_last = prestate["multi_last"]
+    assert isinstance(image, Path)
+    assert isinstance(entries, dict)
+    assert isinstance(multi_last, bytes)
+    one = entries[b"lk-one"]
+    cases = (
+        (b"/lk-one", b"gamma", one[b"gamma"]),
+        (b"/lk-one", b"sub", one[b"sub"]),
+        (b"/lk-one", b"delta", None),
+        (b"/lk-multi", multi_last, entries[b"lk-multi"][multi_last]),
+        (b"/lk-multi", b"m999-" + b"l" * 30, None),
+        (b"/lk-idx0", _LOOKUP_IDX0_NAMES[47], entries[b"lk-idx0"][_LOOKUP_IDX0_NAMES[47]]),
+        (b"/lk-idx0", b"i999-" + b"x" * 40, None),
+        (b"/lk-idx1", _LOOKUP_IDX1_NAMES[777], entries[b"lk-idx1"][_LOOKUP_IDX1_NAMES[777]]),
+        (b"/lk-idx1", b"9999-" + b"k" * 95, None),
+        (b"/lk-big", _LOOKUP_BIG_NAMES[1500], entries[b"lk-big"][_LOOKUP_BIG_NAMES[1500]]),
+        (b"/lk-big", b"g9999-" + b"b" * 18, None),
+    )
+    _lookup_journey(
+        image,
+        cases,
+        prefix="_LKS",
+        marker="EXT4-LOOKUP-SHAPES",
+        extra_checks=(
+            "{p}01-D IN.TYPE @ VFS-T-DIR =",
+            "{p}00-D IN.TYPE @ VFS-T-FILE =",
+            "{p}00-D IN.SIZE-LO @ 512 =",
+        ),
+    )
+
+
+def _lookup_cross_node_patch(
+    image: Path, number: int
+) -> tuple[bytes, tuple[tuple[int, bytes], ...]]:
+    """Make a level-one tree's second node start a run of equal hashes.
+
+    The root's entry for its second index node takes the lowest hash of
+    that node's first leaf with the continuation bit.  The name with that
+    hash then routes through the first node to its last leaf, and is found
+    only when the lookup steps past that node's last entry to the root's
+    next entry, as ext4_htree_next_block does.  The root is restamped.
+    """
+    superblock, inode, _ = _ext4_inode_record(image, number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    root_home = _extent_map_physical(image, inode, 0, block_size=block_size)
+    root = bytearray(_read_ext4_home(image, root_home, block_size=block_size))
+    assert root[30] == 1
+    root_entries = _dx_entries(bytes(root), 32)
+    assert len(root_entries) >= 2
+    node = _read_ext4_home(
+        image,
+        _extent_map_physical(
+            image, inode, root_entries[1][1] & 0x0FFF_FFFF, block_size=block_size
+        ),
+        block_size=block_size,
+    )
+    leaf = _dx_entries(node, 8)[0][1] & 0x0FFF_FFFF
+    hashed = sorted(
+        (_indexed_split_half_md4_hash(superblock, name)[0], name)
+        for name in _htree_leaf_names(image, number, leaf)
+    )
+    low_hash, low_name = hashed[0]
+    assert hashed[1][0] > low_hash
+    assert low_hash >= root_entries[1][0] & ~1
+    if len(root_entries) > 2:
+        assert low_hash < root_entries[2][0] & ~1
+    struct.pack_into("<I", root, 40, low_hash | 1)
+    patched = _dx_index_block_with_checksum(superblock, number, generation, root, 32)
+    return low_name, ((root_home * block_size, patched),)
+
+
+def test_lookup_follows_equal_hashes_into_the_next_leaf_and_node(
+    read_side_image: Path,
+    lookup_shapes_prestate: dict[str, object],
+) -> None:
+    """A miss goes on while the next index entry carries the name's hash.
+
+    In the read-side image's indexed folder, collision-068446 ends the leaf
+    both colliding names route to and collision-083826 begins the next one,
+    whose index entry carries their hash with the continuation bit.  The
+    first resolves in the routed leaf and the second once the lookup moves
+    on, each adding one dentry to the vnode they share with
+    /fixture/indexed-target.  In /lk-idx1, a level-one tree, the root's
+    entry for the second index node is given the lowest hash of that node's
+    first leaf with the continuation bit, so the name with that hash is
+    found past the first node's last entry; a name above it in the same
+    leaf routes there directly.
+    """
+    fixture_number = _directory_entries_of(read_side_image, 2)[b"fixture"]
+    fixture_entries = _directory_entries_of(read_side_image, fixture_number)
+    indexed_entries = _directory_entries_of(
+        read_side_image, fixture_entries[b"indexed"]
+    )
+    target = fixture_entries[b"indexed-target"]
+    assert indexed_entries[b"collision-068446"] == target
+    assert indexed_entries[b"collision-083826"] == target
+    _lookup_journey(
+        read_side_image,
+        (
+            (b"/fixture", b"indexed-target", target),
+            (b"/fixture/indexed", b"collision-068446", target),
+            (b"/fixture/indexed", b"collision-083826", target),
+            (b"/fixture/indexed", b"collision-000000", None),
+        ),
+        prefix="_LKC",
+        marker="EXT4-LOOKUP-CONTINUATION",
+        extra_checks=(
+            "{p}00-D D.VNODE @ {p}01-D D.VNODE @ =",
+            "{p}00-D D.VNODE @ {p}02-D D.VNODE @ =",
+            "{p}02-D D.VNODE @ VN.DREFS @ 3 =",
+            "{p}02-D D.VNODE @ VN.NLINK @ 100 =",
+        ),
+    )
+    prestate = lookup_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    entries = prestate["entries"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    assert isinstance(entries, dict)
+    low_name, patches = _lookup_cross_node_patch(image, numbers[b"lk-idx1"])
+    superblock, _, _ = _ext4_inode_record(image, 2)
+    low_hash = _indexed_split_half_md4_hash(superblock, low_name)[0]
+    above = min(
+        (
+            name
+            for name in entries[b"lk-idx1"]
+            if name not in (b".", b"..")
+            and _indexed_split_half_md4_hash(superblock, name)[0] > low_hash
+        ),
+        key=lambda name: _indexed_split_half_md4_hash(superblock, name)[0],
+    )
+    _lookup_journey(
+        image,
+        (
+            (b"/lk-idx1", low_name, entries[b"lk-idx1"][low_name]),
+            (b"/lk-idx1", above, entries[b"lk-idx1"][above]),
+        ),
+        prefix="_LKN",
+        marker="EXT4-LOOKUP-NODE-CONTINUATION",
+        patches=patches,
+    )
+
+
+def _lookup_root_route(image: Path, number: int, name: bytes) -> int:
+    """The root entry an HTree's root routes NAME to, as dx_probe does."""
+    superblock, inode, _ = _ext4_inode_record(image, number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    root = _read_ext4_home(
+        image,
+        _extent_map_physical(image, inode, 0, block_size=block_size),
+        block_size=block_size,
+    )
+    return _dx_route(root, 32, _indexed_split_half_md4_hash(superblock, name)[0])
+
+
+def test_lookup_authenticates_the_blocks_it_reads_and_no_others(
+    lookup_shapes_prestate: dict[str, object],
+) -> None:
+    """A damaged leaf or index node refuses only the lookups that read it.
+
+    One name byte of the leaf a name routes to in /lk-idx0, and the
+    checksum of the first index node of /lk-idx1, are changed.  A name
+    routed through either answers VFS-E-CORRUPT with the directory detail
+    and caches nothing, while a name routed through another leaf of
+    /lk-idx0 or the second node of /lk-idx1 still resolves.
+    """
+    prestate = lookup_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    entries = prestate["entries"]
+    block_size = prestate["block_size"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    assert isinstance(entries, dict)
+    assert isinstance(block_size, int)
+    idx0 = numbers[b"lk-idx0"]
+    damaged_name = _LOOKUP_IDX0_NAMES[5]
+    damaged_leaf = _htree_leaf_of(image, idx0, damaged_name)
+    intact_name = next(
+        name
+        for name in _LOOKUP_IDX0_NAMES
+        if _htree_leaf_of(image, idx0, name) != damaged_leaf
+    )
+    _, idx0_inode, _ = _ext4_inode_record(image, idx0)
+    leaf_home = _extent_map_physical(
+        image, idx0_inode, damaged_leaf, block_size=block_size
+    )
+    idx1 = numbers[b"lk-idx1"]
+    _, idx1_inode, _ = _ext4_inode_record(image, idx1)
+    idx1_root = _read_ext4_home(
+        image,
+        _extent_map_physical(image, idx1_inode, 0, block_size=block_size),
+        block_size=block_size,
+    )
+    first_node_home = _extent_map_physical(
+        image,
+        idx1_inode,
+        _dx_entries(idx1_root, 32)[0][1] & 0x0FFF_FFFF,
+        block_size=block_size,
+    )
+    through_first = next(
+        name for name in _LOOKUP_IDX1_NAMES if _lookup_root_route(image, idx1, name) == 0
+    )
+    through_second = next(
+        name for name in _LOOKUP_IDX1_NAMES if _lookup_root_route(image, idx1, name) == 1
+    )
+    patches = (
+        _one_byte_xor(image, leaf_home * block_size + 8, ord("i")),
+        _one_byte_xor(
+            image,
+            first_node_home * block_size + block_size - 1,
+            _read_ext4_home(image, first_node_home, block_size=block_size)[-1],
+        ),
+    )
+    _lookup_journey(
+        image,
+        (
+            (b"/lk-idx0", damaged_name, "corrupt"),
+            (b"/lk-idx0", intact_name, entries[b"lk-idx0"][intact_name]),
+            (b"/lk-idx1", through_first, "corrupt"),
+            (b"/lk-idx1", through_second, entries[b"lk-idx1"][through_second]),
+        ),
+        prefix="_LKD",
+        marker="EXT4-LOOKUP-DAMAGE",
+        patches=patches,
+    )
+
+
+def test_lookup_eviction_relists_every_name_and_spares_open_directories(
+    lookup_shapes_prestate: dict[str, object],
+) -> None:
+    """Evicted names come back, through READDIR and through LOOKUP.
+
+    /lk-idx0 is listed, which caches its eighty names and marks the folder
+    loaded, and /lk-one/sub is opened as a directory.  A low high-water
+    mark then lets the next resolution evict most of the cache.  The
+    listed folder loses its completeness flag, so listing it again runs
+    READDIR and finds every name, and an evicted name resolves to its
+    inode again through LOOKUP.  The open directory's dentry is never
+    evicted, and it closes normally.
+    """
+    prestate = lookup_shapes_prestate
+    image = prestate["image"]
+    entries = prestate["entries"]
+    assert isinstance(image, Path)
+    assert isinstance(entries, dict)
+    name = _LOOKUP_IDX0_NAMES[23]
+    number = entries[b"lk-idx0"][name]
+    name_lines, name_text = _forth_bytes_buffer("_LKE-NAME", b"/lk-idx0/" + name)
+    lines = [
+        "T-ARENA T-VOLUME EXT4-NEW CONSTANT _LKE-MOUNT-IOR CONSTANT _LKE-V",
+        (
+            ": _LKE-COUNT ( dir -- n ) 0 SWAP IN.CHILD @ "
+            "BEGIN ?DUP WHILE SWAP 1+ SWAP IN.SIBLING @ REPEAT ;"
+        ),
+        *name_lines,
+        'S" /lk-idx0" _LKE-V VFS-RESOLVE? CONSTANT _LKE-D0-IOR CONSTANT _LKE-D0',
+        "_LKE-D0 _LKE-V _VFS-ENSURE-CHILDREN? CONSTANT _LKE-L1",
+        "_LKE-D0 _LKE-COUNT CONSTANT _LKE-N1",
+        "_LKE-D0 IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _LKE-LOADED1",
+        f"{name_text} _LKE-V VFS-RESOLVE? CONSTANT _LKE-X-IOR CONSTANT _LKE-X",
+        "_LKE-X IN.BID @ CONSTANT _LKE-X-BID",
+        "_LKE-X D.VNODE @ VN.GEN @ CONSTANT _LKE-X-GEN",
+        (
+            'S" /lk-one/sub" VFS-FF-READ _LKE-V VFS-OPEN? '
+            "CONSTANT _LKE-OPEN-IOR CONSTANT _LKE-FD"
+        ),
+        "_LKE-FD FD.INODE @ CONSTANT _LKE-SUB",
+        "_LKE-V V.ICOUNT @ CONSTANT _LKE-ICOUNT-FULL",
+        "16 _LKE-V VFS-SET-HWM",
+        'S" /lk-one/alpha" _LKE-V VFS-RESOLVE? CONSTANT _LKE-A-IOR DROP',
+        "_LKE-V V.ICOUNT @ CONSTANT _LKE-ICOUNT-EVICTED",
+        'S" /lk-idx0" _LKE-V VFS-RESOLVE? CONSTANT _LKE-D1-IOR CONSTANT _LKE-D1',
+        "_LKE-D1 IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _LKE-LOADED2",
+        "_LKE-D1 _LKE-V _VFS-ENSURE-CHILDREN? CONSTANT _LKE-L2",
+        "_LKE-D1 _LKE-COUNT CONSTANT _LKE-N2",
+        f"{name_text} _LKE-V VFS-RESOLVE? CONSTANT _LKE-Y-IOR CONSTANT _LKE-Y",
+        "_LKE-SUB D.VNODE @ CONSTANT _LKE-SUB-VN",
+        "_LKE-SUB D.OWNER @ CONSTANT _LKE-SUB-OWNER",
+        'S" sub" _LKE-SUB IN.PARENT @ _VFS-FIND-CHILD CONSTANT _LKE-SUB-CACHED',
+        "_LKE-FD VFS-CLOSE? CONSTANT _LKE-CLOSE-IOR",
+        "256 _LKE-V VFS-SET-HWM",
+    ]
+    names = len(_LOOKUP_IDX0_NAMES)
+    checks = [
+        "_LKE-MOUNT-IOR 0=",
+        "_LKE-D0-IOR 0=",
+        "_LKE-L1 0=",
+        f"_LKE-N1 {names} =",
+        "_LKE-LOADED1 0<>",
+        "_LKE-X-IOR 0=",
+        f"_LKE-X-BID {number} =",
+        "_LKE-OPEN-IOR 0=",
+        "_LKE-SUB IN.TYPE @ VFS-T-DIR =",
+        f"_LKE-ICOUNT-FULL {names} >",
+        "_LKE-A-IOR 0=",
+        "_LKE-ICOUNT-EVICTED 16 <",
+        "_LKE-D1-IOR 0=",
+        "_LKE-LOADED2 0=",
+        "_LKE-L2 0=",
+        f"_LKE-N2 {names} =",
+        "_LKE-Y-IOR 0=",
+        "_LKE-Y IN.BID @ _LKE-X-BID =",
+        "_LKE-Y D.VNODE @ VN.GEN @ _LKE-X-GEN =",
+        "_LKE-SUB-VN 0<>",
+        "_LKE-SUB-OWNER _LKE-V =",
+        "_LKE-SUB-CACHED _LKE-SUB =",
+        "_LKE-CLOSE-IOR 0=",
+    ]
+    output = run_forth(
+        image,
+        [
+            *lines,
+            *_forth_accumulated_conjunction("_LKE-OK", checks),
+            (
+                '_LKE-OK @ IF ." EXT4-LOOKUP-EVICTION" ELSE '
+                '." EXT4-LOOKUP-EVICTION-FAIL " _LKE-OK-FIRST-FAILURE @ . THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-LOOKUP-EVICTION")
+
+
+def test_staged_vfs_lookup_serves_a_folder_beyond_the_string_pool(
+    lookup_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A folder whose names exceed the VFS string pool stays usable.
+
+    /lk-big holds 2,000 names whose cache entries would take 80,000 bytes
+    of the 64 KiB pool.  One of them opens and reads its data; CREATE adds a
+    name; a file renames into the folder from /lk-src; and one of the 2,000
+    hard links is removed.  Each step looks up only the names it touches, so
+    the cache holds a few dentries and the folder is never marked loaded.
+    The result passes pinned e2fsck and reads back through a fresh mount.
+    """
+    prestate = lookup_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    entries = prestate["entries"]
+    source_patches = prestate["source_patches"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    assert isinstance(entries, dict)
+    assert isinstance(source_patches, tuple)
+    opened, removed = _LOOKUP_BIG_NAMES[0], _LOOKUP_BIG_NAMES[1]
+    shared = entries[b"lk-big"][opened]
+    assert entries[b"lk-big"][removed] == shared
+    moved = entries[b"lk-src"][b"moved"]
+    backing = tmp_path / "lookup-big.img"
+    trace, _ = _run_staged_removals(
+        image,
+        source_patches,
+        backing,
+        prefix="_LKB",
+        marker="EXT4-LOOKUP-BIG-FOLDER",
+        steps=(
+            ("open", b"/lk-big/" + opened),
+            ("read", len(_LOOKUP_PAYLOAD)),
+            ("close", b""),
+            ("cd", b"/lk-big"),
+            ("mkfile", b"created-in-big"),
+            ("cd", b"/"),
+            ("mv", (b"/lk-src/moved", b"/lk-big", b"moved-into-big")),
+            ("rm", b"/lk-big/" + removed),
+        ),
+        outcomes=("0=",) * 8,
+        checks=(
+            f"{{p}}-S1-ACTUAL {len(_LOOKUP_PAYLOAD)} =",
+            "{p}-RB1 C@ 0 =",
+            "{p}-RB1 255 + C@ 255 =",
+            "{p}-RB1 511 + C@ 255 =",
+            (
+                'S" /lk-big" {p}-V VFS-RESOLVE? DROP '
+                "DUP IF IN.FLAGS @ VFS-IF-CHILDREN AND 0= THEN"
+            ),
+            "{p}-V V.ICOUNT @ 16 <",
+            "{p}-FFREE-AFTER 1+ {p}-FFREE-BEFORE =",
+        ),
+        profile=(16, 0, 2),
+        max_steps=800_000_000,
+    )
+    assert trace
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    big = _directory_entries_of(backing, numbers[b"lk-big"])
+    assert removed not in big
+    assert big[b"moved-into-big"] == moved
+    assert b"moved" not in _directory_entries_of(backing, numbers[b"lk-src"])
+    assert len(big) == len(_LOOKUP_BIG_NAMES) + 2 + 1
+    _, shared_inode, _ = _ext4_inode_record(backing, shared)
+    assert struct.unpack_from("<H", shared_inode, 0x1A)[0] == len(_LOOKUP_BIG_NAMES) - 1
+    _ext4_mount_and_resolve(
+        backing,
+        tmp_path / "lookup-big-readback.img",
+        (
+            (b"/lk-big/created-in-big", big[b"created-in-big"]),
+            (b"/lk-big/moved-into-big", moved),
+            (b"/lk-big/" + _LOOKUP_BIG_NAMES[1999], shared),
+        ),
+        absent=(b"/lk-big/" + removed, b"/lk-src/moved"),
+        prefix="_LKR",
+        marker="EXT4-LOOKUP-BIG-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+    )
+
+
+def test_lookup_listing_beyond_the_string_pool_answers_nomem(
+    lookup_shapes_prestate: dict[str, object],
+) -> None:
+    """Listing a folder still loads every name and can run out of names.
+
+    READDIR caches each of /lk-wide's 330 names, whose entries would take
+    71,280 bytes of the 64 KiB string pool, so it answers VFS-E-NOMEM
+    once the pool is full.  Its rollback leaves the cache and the folder's
+    completeness flag as they were, and a lookup in the folder then still
+    resolves.
+    """
+    prestate = lookup_shapes_prestate
+    image = prestate["image"]
+    entries = prestate["entries"]
+    assert isinstance(image, Path)
+    assert isinstance(entries, dict)
+    name = _LOOKUP_WIDE_NAMES[321]
+    name_lines, name_text = _forth_bytes_buffer("_LKL-NAME", b"/lk-wide/" + name)
+    lines = [
+        "T-ARENA T-VOLUME EXT4-NEW CONSTANT _LKL-MOUNT-IOR CONSTANT _LKL-V",
+        *name_lines,
+        'S" /lk-wide" _LKL-V VFS-RESOLVE? CONSTANT _LKL-D-IOR CONSTANT _LKL-D',
+        "_LKL-V V.ICOUNT @ CONSTANT _LKL-BEFORE",
+        "_LKL-D _LKL-V _VFS-ENSURE-CHILDREN? CONSTANT _LKL-LIST-IOR",
+        "_LKL-V V.ICOUNT @ CONSTANT _LKL-AFTER",
+        "_LKL-D IN.CHILD @ CONSTANT _LKL-CHILD",
+        "_LKL-D IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _LKL-LOADED",
+        f"{name_text} _LKL-V VFS-RESOLVE? CONSTANT _LKL-N-IOR CONSTANT _LKL-N",
+    ]
+    checks = [
+        "_LKL-MOUNT-IOR 0=",
+        "_LKL-D-IOR 0=",
+        "_LKL-LIST-IOR VFS-IOR-REASON VFS-R-NOMEM =",
+        "_LKL-AFTER _LKL-BEFORE =",
+        "_LKL-CHILD 0=",
+        "_LKL-LOADED 0=",
+        "_LKL-N-IOR 0=",
+        f"_LKL-N IN.BID @ {entries[b'lk-wide'][name]} =",
+        "_LKL-N IN.PARENT @ _LKL-D =",
+    ]
+    output = run_forth(
+        image,
+        [
+            *lines,
+            *_forth_accumulated_conjunction("_LKL-OK", checks),
+            (
+                '_LKL-OK @ IF ." EXT4-LOOKUP-LISTING-NOMEM" ELSE '
+                '." EXT4-LOOKUP-LISTING-NOMEM-FAIL " _LKL-OK-FIRST-FAILURE @ . THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-LOOKUP-LISTING-NOMEM")
 
 
 def _super_with_mask(path: Path, field_offset: int, value: int) -> bytes:
@@ -57833,8 +58601,15 @@ def _run_staged_indexed_create_refusal(
     metadata_capacity: int = 6,
     max_steps: int = 1_200_000_000,
     clock_calls: int = 1,
+    found_by_lookup: bool = False,
 ) -> None:
-    """Exercise one indexed CREATE refusal through the public VFS."""
+    """Exercise one indexed CREATE refusal through the public VFS.
+
+    The driver refuses the CREATE and records its ior in V.LAST-IOR, or,
+    with FOUND_BY_LOOKUP, the VFS's lookup finds the name on media,
+    caches its dentry and refuses before the callback, leaving V.LAST-IOR
+    as it was.
+    """
     assert target_name and '"' not in target_name
     patches = (*source_patches, *extra_patches)
     expected_media = bytearray(path.read_bytes())
@@ -57878,6 +58653,7 @@ def _run_staged_indexed_create_refusal(
             ),
             "_IR-V V.CWD @ D.VNODE @ CONSTANT _IR-PARENT-VN",
             *before_baseline,
+            "_IR-V V.LAST-IOR @ CONSTANT _IR-LAST-BEFORE",
             "_IR-V V.ICOUNT @ CONSTANT _IR-ICOUNT-BEFORE",
             "_IR-V V.VCOUNT @ CONSTANT _IR-VCOUNT-BEFORE",
             "_IR-V V.STR-PTR @ CONSTANT _IR-STR-BEFORE",
@@ -57966,12 +58742,23 @@ def _run_staged_indexed_create_refusal(
                     *setup_checks,
                     *expected_ior_checks,
                     "_IR-D 0=",
-                    "_IR-CHILD 0=",
-                    "_IR-LAST-IOR _IR-CREATE-IOR =",
-                    "_IR-ICOUNT-AFTER _IR-ICOUNT-BEFORE =",
+                    *(
+                        (
+                            "_IR-CHILD 0<>",
+                            "_IR-LAST-IOR _IR-LAST-BEFORE =",
+                            "_IR-ICOUNT-AFTER _IR-ICOUNT-BEFORE 1+ =",
+                            "_IR-CHILD _IR-IFREE-BEFORE =",
+                        )
+                        if found_by_lookup
+                        else (
+                            "_IR-CHILD 0=",
+                            "_IR-LAST-IOR _IR-CREATE-IOR =",
+                            "_IR-ICOUNT-AFTER _IR-ICOUNT-BEFORE =",
+                            "_IR-IFREE-AFTER _IR-IFREE-BEFORE =",
+                        )
+                    ),
                     "_IR-VCOUNT-AFTER _IR-VCOUNT-BEFORE =",
                     "_IR-STR-AFTER _IR-STR-BEFORE =",
-                    "_IR-IFREE-AFTER _IR-IFREE-BEFORE =",
                     "_IR-NLINK-AFTER _IR-NLINK-BEFORE =",
                     "_IR-SIZE-AFTER _IR-SIZE-BEFORE =",
                     "_IR-BLOCKS-AFTER _IR-BLOCKS-BEFORE =",
@@ -61390,6 +62177,15 @@ def test_staged_vfs_indexed_create_finds_duplicate_in_nonrouted_leaf(
     extent_writer_activation_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
+    """LOOKUP finds a duplicate in the next leaf of a run of equal hashes.
+
+    The colliding names trade leaves, so collision-068446 begins the leaf
+    after the one its hash routes to, whose index entry carries that hash
+    with the continuation bit.  Its cached dentry is dropped.  CREATE of
+    the name then looks it up, follows the run into the next leaf, finds
+    it there and caches it, and refuses with VFS-E-EXISTS before the
+    callback runs: no clock sample, no writer state, no media write.
+    """
     path = extent_writer_activation_fixture["image"]
     source_patches = extent_writer_activation_fixture["source_patches"]
     assert isinstance(path, Path)
@@ -61446,14 +62242,20 @@ def test_staged_vfs_indexed_create_finds_duplicate_in_nonrouted_leaf(
                 'S" collision-068446" _IR-V V.CWD @ _VFS-FIND-CHILD '
                 "CONSTANT _IR-DISK-DUP"
             ),
+            "_IR-DISK-DUP IN.BID @ CONSTANT _IR-DISK-BID",
             (
                 "_IR-DISK-DUP _IR-V VFS-CACHE-DROP "
                 "CONSTANT _IR-DROP-IOR"
             ),
         ),
         setup_checks=("_IR-DISK-DUP 0<>", "_IR-DROP-IOR 0="),
-        expected_ior_checks=("_IR-CREATE-IOR VFS-E-EXISTS =",),
+        expected_ior_checks=(
+            "_IR-CREATE-IOR VFS-E-EXISTS =",
+            "_IR-CHILD IN.BID @ _IR-DISK-BID =",
+        ),
         marker="EXT4-INDEXED-CREATE-GLOBAL-DUPLICATE",
+        clock_calls=0,
+        found_by_lookup=True,
     )
 
 
@@ -66490,15 +67292,19 @@ def _staged_removal_forth(
     """Build a sequence of public namespace operations under one mount.
 
     A step is ("rm", path), ("cd", path), ("mkfile", name), ("mkdir",
-    name), ("open", path), ("close", b""), ("probe", b""),
-    ("assume-empty", path), or ("mv", (source, new_parent, new_name)) and
+    name), ("open", path), ("read", length), ("close", b""), ("probe",
+    b""), ("list", path), or ("mv", (source, new_parent, new_name)) and
     ("mv-noreplace", ...) for VFS-RENAME-AT.  An open keeps its descriptor
-    for the next close; a probe records the free counts and the active
-    orphan records at that point; assume-empty marks a directory's
-    children loaded without loading them, so RMDIR and RENAME reach the
-    driver's own proof.  Step I leaves its ior in PREFIX-S<I>-IOR and the
-    volume's last ior after it in PREFIX-S<I>-LAST, and the free counts,
-    the root's link count and the clock calls stay readable.
+    for the reads and the close that follow; a read of LENGTH bytes lands
+    in PREFIX-RB<I> with its count in PREFIX-S<I>-ACTUAL; a probe records
+    the free counts and the active orphan records at that point; a list
+    resolves a directory into PREFIX-S<I>-DIR and loads every child through
+    READDIR, with the dentry count before and after it in
+    PREFIX-S<I>-ICOUNT and PREFIX-S<I>-ICOUNT-AFTER and the directory's
+    completeness flag after it in PREFIX-S<I>-LOADED.  Step I
+    leaves its ior in PREFIX-S<I>-IOR and the volume's last ior after it in
+    PREFIX-S<I>-LAST, and the free counts, the root's link count and the
+    clock calls stay readable.
     """
     p = prefix
     lines = [
@@ -66535,6 +67341,19 @@ def _staged_removal_forth(
         last = f"{p}-V V.LAST-IOR @ CONSTANT {p}-S{index}-LAST"
         if operation == "close":
             lines.extend([f"{p}-FD VFS-CLOSE? {result}", last])
+            continue
+        if operation == "read":
+            assert isinstance(text, int) and text > 0
+            lines.extend(
+                [
+                    f"CREATE {p}-RB{index} {text} ALLOT",
+                    (
+                        f"{p}-RB{index} {text} {p}-FD VFS-READ? {result} "
+                        f"CONSTANT {p}-S{index}-ACTUAL"
+                    ),
+                    last,
+                ]
+            )
             continue
         if operation == "probe":
             lines.extend(
@@ -66591,10 +67410,21 @@ def _staged_removal_forth(
                 f"{buffer} VFS-FF-READ {p}-V VFS-OPEN? {result} "
                 f"CONSTANT {p}-FD"
             )
-        elif operation == "assume-empty":
-            lines.append(
-                f"{buffer} {p}-V VFS-RESOLVE? {result} DUP IF "
-                "IN.FLAGS DUP @ VFS-IF-CHILDREN OR SWAP ! ELSE DROP THEN"
+        elif operation == "list":
+            lines.extend(
+                [
+                    (
+                        f"{buffer} {p}-V VFS-RESOLVE? "
+                        f"CONSTANT {p}-S{index}-DIR-IOR CONSTANT {p}-S{index}-DIR"
+                    ),
+                    f"{p}-V V.ICOUNT @ CONSTANT {p}-S{index}-ICOUNT",
+                    f"{p}-S{index}-DIR {p}-V _VFS-ENSURE-CHILDREN? {result}",
+                    f"{p}-V V.ICOUNT @ CONSTANT {p}-S{index}-ICOUNT-AFTER",
+                    (
+                        f"{p}-S{index}-DIR IN.FLAGS @ VFS-IF-CHILDREN AND "
+                        f"CONSTANT {p}-S{index}-LOADED"
+                    ),
+                ]
             )
         else:
             raise AssertionError(f"unknown step {operation}")
@@ -67018,10 +67848,10 @@ def test_staged_vfs_rmdir_refuses_live_child_extra_link_and_flag(
 ) -> None:
     """A live name in a later leaf, a third link and DIRSYNC refuse RMDIR.
 
-    The VFS is told /busy's children are loaded, so the driver's own
-    emptiness proof meets the name it kept; /n3's inode gains a third
-    link, which the removal's entry refuses before it reads the clock.  No
-    refusal writes the medium.
+    The VFS caches none of /busy's children, so the driver's own emptiness
+    proof meets the name it kept; /n3's inode gains a third link, which the
+    removal's entry refuses before it reads the clock.  No refusal writes
+    the medium.
     """
     fixture = staged_rmdir_shapes_prestate
     image = fixture["image"]
@@ -67053,19 +67883,17 @@ def test_staged_vfs_rmdir_refuses_live_child_extra_link_and_flag(
         prefix="_RSF",
         marker="EXT4-RMDIR-SHAPE-REFUSALS",
         steps=(
-            ("assume-empty", b"/busy"),
             ("rm", b"/busy"),
             ("rm", b"/n3"),
             ("rm", b"/flagged"),
         ),
         outcomes=(
-            "0=",
             "VFS-E-NOTEMPTY =",
             "VFS-E-CONFLICT =",
             "VFS-IOR-DETAIL EXT4-D-WRITE-POLICY =",
         ),
         checks=(
-            "{p}-S3-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+            "{p}-S2-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
             "{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
             "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
             "{p}-ROOT-VN VN.NLINK @ {p}-ROOT-LINKS-BEFORE =",
@@ -68270,7 +69098,7 @@ def test_staged_vfs_rename_refusals_leave_the_medium_unchanged(
 ) -> None:
     """A hidden live child, a symlink source and a full parent refuse.
 
-    The VFS is told the non-empty /lin/nev has its children loaded, so the
+    The VFS caches none of the non-empty /lin/nev's children, so the
     driver's emptiness proof meets its file; a symlink source stays
     refused at entry; and /big at the link limit takes no directory.  No
     refusal writes the medium.
@@ -68303,21 +69131,19 @@ def test_staged_vfs_rename_refusals_leave_the_medium_unchanged(
         prefix="_RW5",
         marker="EXT4-RENAME-REFUSALS",
         steps=(
-            ("assume-empty", b"/lin/nev"),
             ("mv", (b"/lin/dsrc", b"/lin", b"nev")),
             ("mv", (b"/lin/sym", b"/lin", b"sym2")),
             ("mv", (b"/mvl", b"/big", b"mvl")),
         ),
         outcomes=(
-            "0=",
             "VFS-E-NOTEMPTY =",
             "EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED =",
             "EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED =",
         ),
         checks=(
+            "{p}-S0-LAST {p}-S0-IOR =",
             "{p}-S1-LAST {p}-S1-IOR =",
             "{p}-S2-LAST {p}-S2-IOR =",
-            "{p}-S3-LAST {p}-S3-IOR =",
             "{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
             "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
             "{p}-CLOCK-CALLS @ 2 =",
@@ -77954,8 +78780,8 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
                 "CONSTANT _LR-P-IOR CONSTANT _LR-P"
             ),
             (
-                'S" fast-link" _LR-P _VFS-FIND-CHILD '
-                "CONSTANT _LR-S"
+                'S" fast-link" _LR-P _LR-V VFS-LOOKUP '
+                "CONSTANT _LR-S-IOR CONSTANT _LR-S"
             ),
             "_LR-T D.VNODE @ CONSTANT _LR-VN",
             "_LR-P D.VNODE @ CONSTANT _LR-P-VN",
@@ -78029,6 +78855,7 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
                         "_LR-MOUNT-IOR 0=",
                         "_LR-T-IOR 0=",
                         "_LR-P-IOR 0=",
+                        "_LR-S-IOR 0=",
                         "_LR-S 0<>",
                         "_LR-S-VN VN.TYPE @ VFS-T-SYMLINK =",
                     ]
@@ -79493,7 +80320,7 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
         # operations under one source load: the depth-one same-parent leaf hop
         # and a linear-to-indexed cross-parent hop. Crash, external, and stable
         # evidence remains compositional at this draft closure. The completed
-        # combined path measures 261,080,663 steps under this 3.6B watchdog.
+        # combined path measures 200,027,347 steps under this 3.6B watchdog.
         max_steps=3_600_000_000,
     )
     _assert_emitted(output, "EXT4-INDEXED-RENAME-DEPTH-ONE")
@@ -87451,7 +88278,7 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     find = word_body("_XC-FIND-RECORD")
     for fragment in (
         "_XC-DIR-INODE @ _XC-INODE @ = IF 1 _XC-REFS +! THEN",
-        "_XC-DIR-DE @ _XC-FIND-NAME @ _XC-FIND-NLEN @ _XC-DIRENT-HOLDS?",
+        "_XC-DIR-DE @ _XC-FIND-NAME @ _XC-FIND-NLEN @ _EXT4-DIRENT-HOLDS?",
         "_XC-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN",
         "_XC-DIR-INODE @ _XC-INODE @ <> IF VFS-E-CONFLICT EXIT THEN",
         "_XC-DIR-DE @ _XC-DIRECTORY @ _XC-RECORD-TYPE? 0= IF",
@@ -87459,7 +88286,7 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         "_XC-PREV-OFF @ _XC-RM-PREV-OFF ! _XC-PREV-REC @ _XC-RM-PREV-REC !",
     ):
         assert fragment in find
-    assert find.index("_XC-REFS +!") < find.index("_XC-DIRENT-HOLDS?")
+    assert find.index("_XC-REFS +!") < find.index("_EXT4-DIRENT-HOLDS?")
     # Victim mode finds a rename's victim by the new name and counts the new
     # parent's references to it.
     victim = word_body("_XC-FIND-VICTIM")
@@ -89989,16 +90816,32 @@ def test_ext4_dirent_codec_is_private_acyclic_unit() -> None:
     assert "_EXT4-DS-DOT" in facade
     assert "_EXT4-DS-DOTDOT" in facade
     assert "_EXT4-DS-" not in codec
+    # The scan validates the whole block before its walk reads a record.
+    # READDIR admits every child as the walk meets it; LOOKUP takes the
+    # first record holding its name and admits it once the walk is done.
     scanner = word_body(facade_executable, "_EXT4-SCAN-DIR-BLOCK")
-    scanner_order = (
-        "_EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN",
+    assert scanner.index("_EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN") < (
+        scanner.index("_EXT4-DS-LIVE ?DUP IF EXIT THEN")
+    )
+    for redundant in ("_EXT4-DIRENT-NAME-VALID?", "_EXT4-DIRENT>TYPE", "_EXT4-C.INODES"):
+        assert redundant not in scanner
+    live = word_body(facade_executable, "_EXT4-DS-LIVE")
+    assert "_EXT4-DS-TARGET-U @ 0= IF _EXT4-DS-DE @ _EXT4-DS-ADMIT EXIT THEN" in live
+    assert (
+        "_EXT4-DS-DE @ _EXT4-DS-TARGET-A @ _EXT4-DS-TARGET-U @ "
+        "_EXT4-DIRENT-HOLDS? IF _EXT4-DS-DE @ _EXT4-DS-MATCH ! THEN"
+    ) in live
+    admit = word_body(facade_executable, "_EXT4-DS-ADMIT")
+    admit_order = (
         "_EXT4-LOAD-INODE",
         "_EXT4-STAGE-CURRENT-INODE",
         "VFS-CACHE-DENTRY",
         "_EXT4-PUBLISH-STAGED",
     )
-    scanner_positions = tuple(scanner.index(fragment) for fragment in scanner_order)
-    assert scanner_positions == tuple(sorted(scanner_positions))
+    admit_positions = tuple(admit.index(fragment) for fragment in admit_order)
+    assert admit_positions == tuple(sorted(admit_positions))
+    lookup = word_body(facade_executable, "_EXT4-LOOKUP")
+    assert lookup.index("_EXT4-RD-WORK") < lookup.index("_EXT4-DS-ADMIT")
 
     assert ordered_source.index(": _EXT4-HALF-MD4-DIRHASH?") < (
         ordered_source.index(": _EXT4-DIRENT>TYPE")

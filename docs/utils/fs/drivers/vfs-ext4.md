@@ -2160,13 +2160,13 @@ e2fsprogs 1.47.4 `e2fsck` and resolves through the driver on a fresh mount.
 #### RMDIR
 
 RMDIR removes any empty directory. The cache must hold it with exactly one
-dentry reference, outside the current directory, with its children loaded and
-none cached, and with a link count of two; another cached count refuses with
-`VFS-E-CONFLICT`. Its flags are `EXTENTS`, or `EXTENTS|INDEX` for an indexed
-directory, and nothing else; it has `extra_isize` 32, project 0, a zero inode
-tail past byte 160, no external xattr, and no deletion time. Any mode is
-admitted. Other flags and inode state refuse with the write-policy detail. The
-parent's link count must be from 3 through 65000, and the parent loses one.
+dentry reference, outside the current directory, with no child cached, and
+with a link count of two; another cached count refuses with `VFS-E-CONFLICT`.
+Its flags are `EXTENTS`, or `EXTENTS|INDEX` for an indexed directory, and
+nothing else; it has `extra_isize` 32, project 0, a zero inode tail past byte
+160, no external xattr, and no deletion time. Any mode is admitted. Other flags
+and inode state refuse with the write-policy detail. The parent's link count
+must be from 3 through 65000, and the parent loses one.
 
 The cold plan proves the directory empty as `ext4_empty_dir` does, reading
 every logical block through the directory's own extent map, of any depth.
@@ -2230,11 +2230,12 @@ its parent as a removal takes a record out, and the new name enters the new
 parent as an insert places one, or takes over the victim's record. It moves a
 regular file or a directory within one parent or across two, over no victim, a
 regular-file victim, or an empty directory, and it admits every parent the
-insert admits. Generic `VFS-RENAME-AT` loads the new parent's children and
-finds the victim before the callback runs. It refuses a directory moved
-beneath itself, a victim of the other kind, a victim that is the current
-directory, a directory victim that holds a child once its children are
-loaded, and, under `VFS-RN-NOREPLACE`, an existing name.
+insert admits. Generic `VFS-RENAME-AT` looks the new name up in the new
+parent, through the dentry cache and LOOKUP, and takes the dentry it finds as
+the victim before the callback runs. It refuses a directory moved beneath
+itself, a victim of the other kind, a victim that is the current directory, a
+directory victim with a cached child, and, under `VFS-RN-NOREPLACE`, an
+existing name.
 
 The callback follows the engine's flow: entry, plan begin, one trusted-clock
 sample, one cold plan, a measuring pass, seal, activation of an inactive
@@ -2244,9 +2245,8 @@ no flag but `VFS-RN-NOREPLACE`. The source is a regular file, or a directory
 that exactly one dentry holds; a symbolic link or another kind of source
 refuses with the write-policy detail, and so does a victim of such a kind. A
 victim is a vnode distinct from the source's. A directory victim is held by
-one dentry outside the current directory, has its children loaded with none
-cached, and has a cached link count of two; another count refuses with
-`VFS-E-CONFLICT`.
+one dentry outside the current directory, has no child cached, and has a
+cached link count of two; another count refuses with `VFS-E-CONFLICT`.
 
 The cold plan authenticates the source, and then the victim, as the removal
 authenticates its target: an ordinary inode outside the reserved range that is
@@ -2386,29 +2386,27 @@ blocks refuses as it does for the insert and the removal. `VFS-RN-NOREPLACE`
 refuses an existing name, and no exchange form exists. The VFS layer refuses
 what its cache shows, and the driver's proofs refuse what the cache cannot
 show: a live record in a victim directory returns `VFS-E-NOTEMPTY`, as RMDIR's
-proof does. `VFS-RENAME-AT` loads the new parent's children into the VFS
-cache, whose string pool holds at most 64 KiB of names per mount, so a parent
-with more names than the pool has room for returns `VFS-E-NOMEM` before the
-callback runs.
+proof does. `VFS-RENAME-AT` looks up only the new name, so a parent of any
+size can take it.
 
 Qualification builds its parents with pinned e2fsprogs 1.47.4: `debugfs`
 writes them and `e2fsck -fyD` indexes them. Within one parent, a 40-byte name
 takes the space a 40-byte source leaves in a full linear block, directories
 are renamed in a linear and an indexed parent, and the first record of an
 HTree leaf takes a name of its own length, all without growth; one mount runs
-the four renames in 143.7 million steps. A full linear block converts for a
+the four renames in 133.5 million steps. A full linear block converts for a
 200-byte name, a 150-byte name splits another leaf of the same indexed parent,
 and a file from a linear parent enters a full leaf, which splits. A linear and
 an indexed non-empty directory move into a level-one parent with two index
-nodes, whose leaves hold one name each so that the VFS cache can load it; each
-child's `..` then names that parent, and the indexed child's leaves are
-unchanged. A directory replaces an empty directory within one parent and
-across parents, and a leaf's first record replaces a file in another leaf,
-each victim draining through the orphan file. A tear of the checkpoint in a
-split leaf, in a moved directory's block 0, and in the block of a sealed
-directory-victim rename each replays on the next mount, and the victim drains.
-A victim directory with a live record the cache does not show, a new parent at
-the link limit, and a symbolic-link source refuse without a write.
+nodes, whose leaves hold one name each; each child's `..` then names that
+parent, and the indexed child's leaves are unchanged. A directory replaces an
+empty directory within one parent and across parents, and a leaf's first
+record replaces a file in another leaf, each victim draining through the
+orphan file. A tear of the checkpoint in a split leaf, in a moved directory's
+block 0, and in the block of a sealed directory-victim rename each replays on
+the next mount, and the victim drains. A victim directory with a live record
+the cache does not show, a new parent at the link limit, and a symbolic-link
+source refuse without a write.
 
 The public fixtures pin each case's homes and write order. An open file
 renamed within its block writes homes 278 and 1345 at writes 16 and 17 after
@@ -2425,7 +2423,7 @@ an open final file, and a file with another link pass, as do renames over a
 name in an indexed folder across leaves, within one leaf, and from a leaf's
 first record, and over such a name from a file in a linear folder. A move
 between leaves of a level-one HTree with one index node, followed by a move
-into it from a linear parent, takes 261,080,663 steps in one mount. Each
+into it from a linear parent, takes 200,027,347 steps in one mount. Each
 result that writes passes pinned `e2fsck`, and each new case resolves its
 names through the driver on a fresh mount.
 
@@ -2590,11 +2588,11 @@ qualifies only the scalar envelope above; xattr mutation remains next.
 
 ## Read and inspection behavior
 
-The current binding advertises directory enumeration, open/release, reads,
-getattr, readlink, list/get xattr, statfs, syncfs, and fsync. Stable ext4 inode
-number plus generation is used as the VFS identity. `VFS-CACHE-DENTRY`
-therefore makes hard-link aliases share one vnode and preserves the
-authoritative on-disk link count.
+The current binding advertises targeted lookup, directory enumeration,
+open/release, reads, getattr, readlink, list/get xattr, statfs, syncfs, and
+fsync. Stable ext4 inode number plus generation is used as the VFS identity.
+`VFS-CACHE-DENTRY` therefore makes hard-link aliases share one vnode and
+preserves the authoritative on-disk link count.
 
 The implemented reader handles the clean read-side structures exercised by
 the four geometry fixtures and the supplemental `read-side-1k-i256` fixture:
@@ -2639,15 +2637,90 @@ preserving the still-mounted instance's ready/current authority.
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
 `EXT4-STAGED-WRITE-BINDING` instead omits `READ_ONLY` and adds the qualified
 `WRITE`, `CREATE`, `MKDIR`, `TRUNCATE`, `UNLINK`, `RMDIR`, and `LINK`
-capability bits and dispatch slots. It also wires `RENAME`,
-`ATOMIC-RENAME`, `CROSSDIR-RENAME`, and `RENAME-REPLACE` to the rename
-described above, and it advertises the focused-qualified
-linked-regular `SETATTR` slot described above. Its write slot is the general
-regular-file write described above, and `VFS-WRITE-EXACT` composes its
-transactions. Both bindings retain `VFS-CAP-SPARSE` for sparse mappings and
-zero-filled hole reads; the staged write leaves holes when it writes past EOF
-and fills them when it writes into them. `VOL-WRITE` and `VOL-FLUSH` remain confined to
-authenticated recovery and the staged transaction lifecycle.
+capability bits and dispatch slots, and it keeps the ordinary binding's
+`LOOKUP`. It also wires `RENAME`, `ATOMIC-RENAME`, `CROSSDIR-RENAME`, and
+`RENAME-REPLACE` to the rename described above, and it advertises the
+focused-qualified linked-regular `SETATTR` slot described above. Its write
+slot is the general regular-file write described above, and `VFS-WRITE-EXACT`
+composes its transactions. Both bindings retain `VFS-CAP-SPARSE` for sparse
+mappings and zero-filled hole reads; the staged write leaves holes when it
+writes past EOF and fills them when it writes into them. `VOL-WRITE` and
+`VOL-FLUSH` remain confined to authenticated recovery and the staged
+transaction lifecycle.
+
+### LOOKUP
+
+Both bindings install `_EXT4-LOOKUP` in operation slot 3 and advertise
+`VFS-CAP-LOOKUP`. The VFS calls it for a name its dentry cache lacks: while it
+resolves a path, and before CREATE, MKDIR, LINK, and RENAME check a new name.
+A lookup reads only the blocks the name can be in, loads only the named
+child's inode, and caches only that child, so it never marks the folder as
+having its children loaded. The folder's other names stay on media. A folder
+whose names would overflow the VFS string pool therefore still resolves its
+names, opens and reads them, takes new names by CREATE and RENAME, and loses
+them by UNLINK, while listing it through `READDIR` answers `VFS-E-NOMEM`.
+
+LOOKUP and READDIR are one reader. `_EXT4-DD-AUTH-INODE` authenticates the
+directory's inode, which `_EXT4-DD-LOAD-LOGICAL` checks again before it reads
+each block through the directory's map. `_EXT4-VALIDATE-DIR-BLOCK` validates
+each block's checksum tail and complete dirent chain: record lengths and
+bounds, name lengths, inode numbers, name bytes, and file types. The scan then
+requires `.` to name the directory and `..` its parent, once each. READDIR
+admits every other live record; LOOKUP takes the first record whose name is
+the one sought and admits it once the walk of its block is complete, so a
+refused lookup publishes nothing. A record is admitted as a child: its inode is
+loaded, must have the type the record's file type gives, when it gives one,
+and supplies the dentry's generation and the vnode's metadata through
+`VFS-CACHE-DENTRY` and `_EXT4-PUBLISH-STAGED`.
+
+- In a linear folder the lookup reads the blocks in order and stops after the
+  block that holds the name. A folder read to its end without the name must
+  have held `.` and `..`, as READDIR requires, and answers `VFS-E-NOENT`.
+- In an HTree folder `_EXT4-DD-AUTH-HTREE-ROOT` validates the root, the name
+  is hashed with half-MD4 under the superblock's signed or unsigned flag, and
+  `_EXT4-DD-SELECT-ROUTE` routes it as the kernel's `dx_probe` does: the last
+  entry whose hash, continuation bit included, is at most the name's. At level
+  one the routed index node is read and validated as a node, and its entries
+  route the name the same way to one leaf. When that leaf lacks the name, the
+  lookup moves on as `ext4_htree_next_block` does: to the next entry of the
+  node, or past a node's last entry to the root's next entry and the first
+  entry of the node it names, while that entry's hash without the
+  continuation bit is the name's. A run of equal hashes is followed into every
+  leaf it spans, and a miss reads no leaf beyond it.
+
+A lookup authenticates the blocks it reads and no others, so a damaged leaf or
+node refuses only the lookups routed through it. Checks that need every block
+belong to READDIR and the writer's walk: that a level-zero root names each
+other block once, and that a level-one root, its nodes, and their entries
+account for the whole folder. Like READDIR, the lookup accepts an unused
+record that still carries a name length or file type, which the writer's walk
+refuses. An HTree lookup hashes under the superblock's signed or unsigned hash
+flag, which `mke2fs` and the kernel's first read-write mount set; an image
+that sets neither refuses a lookup in an indexed folder with the write-policy
+detail, while READDIR still lists it.
+
+With `LOOKUP` advertised, the VFS evicts clean ext4 dentries once its cache
+passes the high-water mark. An evicted name returns through LOOKUP with its
+inode number and generation, and a folder that loses a child loses its
+completeness flag, so its next listing reads it again. An open descriptor keeps
+its dentry, file or directory.
+
+Qualification builds its folders with pinned e2fsprogs 1.47.4: `debugfs`
+writes them and `e2fsck -fyD` indexes the large ones. One mount resolves a
+name and an absent name in a one-block linear folder, in the last of three
+linear blocks, and in folders indexed at level zero and at level one, each
+lookup adding one dentry and leaving its folder unloaded, in 31.5 million
+steps. In the read-side image, `collision-083826` is found in the leaf after
+the one its hash routes to. In a level-one tree whose root entry for the
+second index node is given the lowest hash of that node's first leaf with the
+continuation bit, the name with that hash is found past the first node's last
+entry. A changed byte in one leaf, and a changed checksum in one index node,
+refuse only the lookups routed through them. A listed folder whose names are
+evicted lists every name again, and an open directory survives the eviction.
+A folder of 2,000 names, whose cache entries would take 80,000 bytes of the
+64 KiB pool, takes a read, a CREATE, a RENAME into it, and an UNLINK in one
+staged mount of 338.5 million steps, and its result passes `e2fsck` and reads
+back through a fresh mount.
 
 ## Recovery baseline and writable ratchet
 

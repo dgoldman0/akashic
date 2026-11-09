@@ -1349,7 +1349,6 @@ VARIABLE _VUM-V
 \ -- Forward reference for auto-eviction hook --
 \    _VFS-EVICT is defined later; we defer through a variable.
 VARIABLE _VFS-EVICT-XT   \ filled once _VFS-EVICT exists
-VARIABLE _VFS-LOOKUP-XT  \ filled once VFS-LOOKUP exists
 VARIABLE _VFS-READLINK-XT \ filled once VFS-READLINK exists
 : _VFS-MAYBE-EVICT  ( vfs -- )
     DUP V.ICOUNT @
@@ -1394,26 +1393,81 @@ VARIABLE _VFC-U
     OVER 0= IF 2DROP FALSE EXIT THEN
     SWAP D.OWNER @ = ;
 
-VARIABLE _VRCF-A
-VARIABLE _VRCF-U
-VARIABLE _VRCF-DIR
-VARIABLE _VRCF-V
-
-: _VFS-RESOLVE-CHILD  ( c-addr u dir vfs -- child | 0 )
-    _VRCF-V ! _VRCF-DIR ! _VRCF-U ! _VRCF-A !
-    _VRCF-A @ _VRCF-U @ _VRCF-DIR @ _VFS-FIND-CHILD
-    DUP IF EXIT THEN DROP
-    VFS-OP-LOOKUP _VRCF-V @ _VFS-HAS-OP? IF
-        _VRCF-A @ _VRCF-U @ _VRCF-DIR @ _VRCF-V @
-        _VFS-LOOKUP-XT @ EXECUTE
-        DUP IF
-            DUP VFS-IOR-REASON VFS-R-NOENT = IF 2DROP 0 EXIT THEN
-            NIP THROW
-        THEN
-        DROP EXIT
+\ A name is 1 to 255 bytes over a non-null, non-wrapping span, holds no
+\ NUL or `/`, and is neither `.` nor `..`.
+: _VFS-VALID-NAME?  ( c-addr u -- flag )
+    DUP 0= IF 2DROP FALSE EXIT THEN
+    DUP 0< IF 2DROP FALSE EXIT THEN
+    DUP 255 > IF 2DROP FALSE EXIT THEN
+    OVER 0= IF 2DROP FALSE EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP FALSE EXIT THEN
+    DUP 1 = IF
+        OVER C@ [CHAR] . = IF 2DROP FALSE EXIT THEN
     THEN
-    _VRCF-DIR @ _VRCF-V @ _VFS-ENSURE-CHILDREN
-    _VRCF-A @ _VRCF-U @ _VRCF-DIR @ _VFS-FIND-CHILD ;
+    DUP 2 = IF
+        OVER C@ [CHAR] . =
+        2 PICK 1+ C@ [CHAR] . = AND IF 2DROP FALSE EXIT THEN
+    THEN
+    DUP 0 ?DO
+        OVER I + C@ DUP 0= SWAP [CHAR] / = OR IF
+            2DROP FALSE UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP TRUE ;
+
+\ -- Child lookup --
+\    Path resolution, VFS-LOOKUP and the namespace checks find a named child
+\    of a directory the same way.  A cached dentry answers first.  On a
+\    miss, a binding with targeted LOOKUP finds that one name and publishes
+\    its dentry; a READDIR-only binding loads the complete directory, after
+\    which a name the cache still lacks is absent.  An absent name answers
+\    0 and an ior whose reason is VFS-R-NOENT.  These steps leave
+\    V.LAST-IOR alone; only the public VFS-LOOKUP records its dispatch.
+VARIABLE _VUC-A
+VARIABLE _VUC-U
+VARIABLE _VUC-DIR
+VARIABLE _VUC-V
+VARIABLE _VUC-D
+
+\ A READDIR-only binding's child: load the complete directory, then find
+\ the name among its cached children.
+: _VFS-LOADED-CHILD?  ( c-addr u dir vfs -- child ior )
+    OVER SWAP _VFS-ENSURE-CHILDREN? ?DUP IF >R 2DROP DROP 0 R> EXIT THEN
+    _VFS-FIND-CHILD DUP IF 0 ELSE VFS-E-NOENT THEN ;
+
+\ The binding's answer for a name the cache lacks.  A LOOKUP callback runs
+\ only on a ready VFS and a valid name, and its dentry must be a live
+\ dentry of this VFS, a child of DIR, holding exactly the name.
+: _VFS-UNCACHED-CHILD?  ( c-addr u dir vfs -- child ior )
+    VFS-OP-LOOKUP OVER _VFS-HAS-OP? 0= IF _VFS-LOADED-CHILD? EXIT THEN
+    _VUC-V ! _VUC-DIR ! _VUC-U ! _VUC-A !
+    _VUC-V @ _VFS-READY ?DUP IF 0 SWAP EXIT THEN
+    _VUC-A @ _VUC-U @ _VFS-VALID-NAME? 0= IF 0 VFS-E-INVALID EXIT THEN
+    _VUC-A @ _VUC-U @ _VUC-DIR @ _VUC-V @
+    VFS-OP-LOOKUP _VUC-V @ _VFS-XT EXECUTE
+    ?DUP IF NIP 0 SWAP EXIT THEN
+    DUP _VUC-D ! 0= IF 0 VFS-E-CORRUPT EXIT THEN
+    _VUC-D @ D.VNODE @ 0= IF 0 VFS-E-CORRUPT EXIT THEN
+    _VUC-D @ _VUC-V @ _VFS-DENTRY-OWNED? 0= IF 0 VFS-E-XDEV EXIT THEN
+    _VUC-D @ IN.PARENT @ _VUC-DIR @ <> IF 0 VFS-E-CORRUPT EXIT THEN
+    _VUC-A @ _VUC-U @ _VUC-D @ IN.NAME @ _VFS-STR-MATCH? 0= IF
+        0 VFS-E-CORRUPT EXIT
+    THEN
+    _VUC-D @ 0 ;
+
+: _VFS-CHILD?  ( c-addr u dir vfs -- child ior )
+    >R 2 PICK 2 PICK 2 PICK _VFS-FIND-CHILD ?DUP IF
+        R> DROP NIP NIP NIP 0 EXIT
+    THEN
+    R> _VFS-UNCACHED-CHILD? ;
+
+\ Resolution's step: an absent name answers 0, and any other failure
+\ throws its ior to the resolver's caller.
+: _VFS-RESOLVE-CHILD  ( c-addr u dir vfs -- child | 0 )
+    _VFS-CHILD? ?DUP IF
+        DUP VFS-IOR-REASON VFS-R-NOENT = IF 2DROP 0 EXIT THEN
+        NIP THROW
+    THEN ;
 
 \ -- Path-resolution state.  Expansion alternates between two fixed buffers,
 \    so a READLINK target can be joined to the unconsumed suffix without
@@ -2041,9 +2095,48 @@ VARIABLE _VRC-PREV
         _VRC-PREV @ IN.SIBLING @  _VRC-PREV !
     AGAIN ;
 
+\ _VFS-UNCACHE-CHILD ( child parent vfs -- )
+\   Remove a child that leaves the cache while its name stays on the
+\   backing store, as eviction and VFS-CACHE-DROP do.  On a binding with
+\   targeted LOOKUP the parent's cached children are then incomplete, so
+\   the parent loses VFS-IF-CHILDREN and its next listing runs READDIR
+\   again.  A READDIR-only binding's parent keeps the flag, since its
+\   READDIR builds a listing without consulting cached names.
+: _VFS-UNCACHE-CHILD  ( child parent vfs -- )
+    VFS-OP-LOOKUP SWAP _VFS-HAS-OP? IF
+        DUP IN.FLAGS DUP @ VFS-IF-CHILDREN INVERT AND SWAP !
+    THEN
+    _VFS-REMOVE-CHILD ;
+
 \ =====================================================================
 \  VFS-MKFILE / VFS-MKDIR / VFS-RM
 \ =====================================================================
+
+\ The dentry that holds a new name in PARENT, or 0 when the name is absent.
+\ A binding with targeted LOOKUP answers through the dentry cache and then
+\ its LOOKUP, as path resolution does, so no other name of the parent is
+\ loaded.  A READDIR-only binding loads the complete directory and answers
+\ from the cache.
+: _VFS-NAME-HOLDER?  ( c-addr u parent vfs -- dentry|0 ior )
+    VFS-OP-LOOKUP OVER _VFS-HAS-OP? IF
+        _VFS-CHILD?
+    ELSE
+        _VFS-LOADED-CHILD?
+    THEN
+    DUP IF
+        DUP VFS-IOR-REASON VFS-R-NOENT = IF 2DROP 0 0 THEN
+    THEN ;
+
+\ Whether DIR may lose its name as an empty directory, as far as the cache
+\ shows: a cached child refuses it with VFS-E-NOTEMPTY.  A READDIR-only
+\ binding loads the complete directory first, so its cache shows every
+\ child.  A LOOKUP binding's cache may hold only some, and its RMDIR or
+\ RENAME callback proves the directory empty on its backing store.
+: _VFS-EMPTY-DIR?  ( dir vfs -- ior )
+    VFS-OP-LOOKUP OVER _VFS-HAS-OP? 0= IF
+        2DUP _VFS-ENSURE-CHILDREN? ?DUP IF NIP NIP EXIT THEN
+    THEN
+    DROP IN.CHILD @ IF VFS-E-NOTEMPTY ELSE 0 THEN ;
 
 VARIABLE _VMK-V
 VARIABLE _VMK-IN
@@ -2051,36 +2144,15 @@ VARIABLE _VMK-IOR
 VARIABLE _VMK-A
 VARIABLE _VMK-U
 
-: _VFS-VALID-NAME?  ( c-addr u -- flag )
-    DUP 0= IF 2DROP FALSE EXIT THEN
-    DUP 0< IF 2DROP FALSE EXIT THEN
-    DUP 255 > IF 2DROP FALSE EXIT THEN
-    OVER 0= IF 2DROP FALSE EXIT THEN
-    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP FALSE EXIT THEN
-    DUP 1 = IF
-        OVER C@ [CHAR] . = IF 2DROP FALSE EXIT THEN
-    THEN
-    DUP 2 = IF
-        OVER C@ [CHAR] . =
-        2 PICK 1+ C@ [CHAR] . = AND IF 2DROP FALSE EXIT THEN
-    THEN
-    DUP 0 ?DO
-        OVER I + C@ DUP 0= SWAP [CHAR] / = OR IF
-            2DROP FALSE UNLOOP EXIT
-        THEN
-    LOOP
-    2DROP TRUE ;
-
 : VFS-MKFILE?  ( c-addr u vfs -- inode ior )
     _VMK-V ! _VMK-U ! _VMK-A !
     _VMK-V @ _VFS-READY ?DUP IF 0 SWAP EXIT THEN
     _VMK-V @ V.FLAGS @ VFS-F-RO AND IF 0 VFS-E-READONLY EXIT THEN
     VFS-OP-CREATE _VMK-V @ _VFS-HAS-OP? 0= IF 0 VFS-E-UNSUPPORTED EXIT THEN
     _VMK-A @ _VMK-U @ _VFS-VALID-NAME? 0= IF 0 VFS-E-INVALID EXIT THEN
-    _VMK-V @ V.CWD @ _VMK-V @ _VFS-ENSURE-CHILDREN?
-    ?DUP IF 0 SWAP EXIT THEN
-    _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VFS-FIND-CHILD
-    ?DUP IF DROP 0 VFS-E-EXISTS EXIT THEN
+    _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VMK-V @ _VFS-NAME-HOLDER?
+    ?DUP IF NIP 0 SWAP EXIT THEN
+    IF 0 VFS-E-EXISTS EXIT THEN
     \ Allocate new inode
     VFS-T-FILE _VMK-V @ _VFS-INODE-ALLOC   ( inode )
     DUP 0= IF 0 VFS-E-NOMEM EXIT THEN
@@ -2123,9 +2195,9 @@ VARIABLE _VMK-U
     _VMK-V @ V.FLAGS @ VFS-F-RO AND IF VFS-E-READONLY EXIT THEN
     VFS-OP-MKDIR _VMK-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN
     _VMK-A @ _VMK-U @ _VFS-VALID-NAME? 0= IF VFS-E-INVALID EXIT THEN
-    _VMK-V @ V.CWD @ _VMK-V @ _VFS-ENSURE-CHILDREN? ?DUP IF EXIT THEN
-    _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VFS-FIND-CHILD
-    ?DUP IF DROP VFS-E-EXISTS EXIT THEN
+    _VMK-A @ _VMK-U @ _VMK-V @ V.CWD @ _VMK-V @ _VFS-NAME-HOLDER?
+    ?DUP IF NIP EXIT THEN
+    IF VFS-E-EXISTS EXIT THEN
     VFS-T-DIR _VMK-V @ _VFS-INODE-ALLOC    ( inode )
     DUP 0= IF VFS-E-NOMEM EXIT THEN
     _VMK-A @ _VMK-U @ _VMK-V @ _VFS-STR-ALLOC ( inode handle )
@@ -2193,8 +2265,8 @@ VARIABLE _VRN-DEPTH
             VFS-E-UNSUPPORTED EXIT
         THEN
     THEN
-    _VRN-PARENT @ _VRN-V @ _VFS-ENSURE-CHILDREN? ?DUP IF EXIT THEN
-    _VRN-A @ _VRN-U @ _VRN-PARENT @ _VFS-FIND-CHILD
+    _VRN-A @ _VRN-U @ _VRN-PARENT @ _VRN-V @ _VFS-NAME-HOLDER?
+    ?DUP IF NIP EXIT THEN
     DUP _VRN-IN @ = IF DROP 0 EXIT THEN _VRN-VICTIM !
     _VRN-VICTIM @ IF
         _VRN-VICTIM @ D.VNODE @ _VRN-IN @ D.VNODE @ = IF 0 EXIT THEN
@@ -2204,8 +2276,7 @@ VARIABLE _VRN-DEPTH
         THEN
         _VRN-VICTIM @ _VRN-V @ V.CWD @ = IF VFS-E-BUSY EXIT THEN
         _VRN-VICTIM @ IN.TYPE @ VFS-T-DIR = IF
-            _VRN-VICTIM @ _VRN-V @ _VFS-ENSURE-CHILDREN? ?DUP IF EXIT THEN
-            _VRN-VICTIM @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN
+            _VRN-VICTIM @ _VRN-V @ _VFS-EMPTY-DIR? ?DUP IF EXIT THEN
         THEN
         _VRN-IN @ IN.TYPE @ VFS-T-DIR =
         _VRN-VICTIM @ IN.TYPE @ VFS-T-DIR = <> IF VFS-E-CONFLICT EXIT THEN
@@ -2288,9 +2359,9 @@ VARIABLE _VLN-H
     _VLN-TARGET @ IN.TYPE @ VFS-T-DIR = IF 0 VFS-E-ISDIR EXIT THEN
     _VLN-PARENT @ IN.TYPE @ VFS-T-DIR <> IF 0 VFS-E-NOTDIR EXIT THEN
     _VLN-A @ _VLN-U @ _VFS-VALID-NAME? 0= IF 0 VFS-E-INVALID EXIT THEN
-    _VLN-PARENT @ _VLN-V @ _VFS-ENSURE-CHILDREN? ?DUP IF 0 SWAP EXIT THEN
-    _VLN-A @ _VLN-U @ _VLN-PARENT @ _VFS-FIND-CHILD
-    ?DUP IF DROP 0 VFS-E-EXISTS EXIT THEN
+    _VLN-A @ _VLN-U @ _VLN-PARENT @ _VLN-V @ _VFS-NAME-HOLDER?
+    ?DUP IF NIP 0 SWAP EXIT THEN
+    IF 0 VFS-E-EXISTS EXIT THEN
     _VLN-V @ _VFS-DENTRY-ALLOC DUP 0= IF 0 VFS-E-NOMEM EXIT THEN _VLN-D !
     _VLN-A @ _VLN-U @ _VLN-V @ _VFS-STR-ALLOC DUP 0= IF
         DROP _VLN-D @ _VFS-ZERO-INODE
@@ -2418,7 +2489,7 @@ VARIABLE _VCDD-V
         DROP
         VFS-E-BUSY EXIT
     THEN
-    _VCDD-D @ SWAP _VFS-REMOVE-CHILD
+    _VCDD-D @ SWAP _VCDD-V @ _VFS-UNCACHE-CHILD
     _VCDD-D @ _VCDD-V @ _VFS-INODE-EVICT
     _VCDD-V @ V.ICOUNT DUP @ 1- SWAP !
     0 ;
@@ -2427,9 +2498,10 @@ VARIABLE _VLK-A
 VARIABLE _VLK-U
 VARIABLE _VLK-PARENT
 VARIABLE _VLK-V
-VARIABLE _VLK-D
-VARIABLE _VLK-IOR
 
+\ A cached name answers without dispatch.  Otherwise the child step asks
+\ the binding, and a binding with targeted LOOKUP has its callback's
+\ result recorded in V.LAST-IOR.
 : VFS-LOOKUP  ( name-a name-u parent vfs -- dentry ior )
     _VLK-V ! _VLK-PARENT ! _VLK-U ! _VLK-A !
     _VLK-V @ _VFS-READY ?DUP IF 0 SWAP EXIT THEN
@@ -2437,31 +2509,9 @@ VARIABLE _VLK-IOR
     _VLK-PARENT @ _VLK-V @ _VFS-DENTRY-OWNED? 0= IF 0 VFS-E-XDEV EXIT THEN
     _VLK-PARENT @ IN.TYPE @ VFS-T-DIR <> IF 0 VFS-E-NOTDIR EXIT THEN
     _VLK-A @ _VLK-U @ _VFS-VALID-NAME? 0= IF 0 VFS-E-INVALID EXIT THEN
-    _VLK-A @ _VLK-U @ _VLK-PARENT @ _VFS-FIND-CHILD DUP IF 0 EXIT THEN DROP
-    VFS-OP-LOOKUP _VLK-V @ _VFS-HAS-OP? 0= IF
-        _VLK-PARENT @ _VLK-V @ _VFS-ENSURE-CHILDREN?
-        ?DUP IF 0 SWAP EXIT THEN
-        _VLK-A @ _VLK-U @ _VLK-PARENT @ _VFS-FIND-CHILD
-        DUP IF 0 EXIT THEN
-        DROP 0 VFS-E-NOENT EXIT
-    THEN
-    _VLK-A @ _VLK-U @ _VLK-PARENT @ _VLK-V @
-    VFS-OP-LOOKUP _VLK-V @ _VFS-XT EXECUTE
-    _VLK-IOR ! _VLK-D !
-    _VLK-IOR @ IF
-        _VLK-IOR @ _VLK-V @ _VFS-RESULT DROP
-        0 _VLK-IOR @ EXIT
-    THEN
-    _VLK-D @ 0= IF 0 VFS-E-CORRUPT EXIT THEN
-    _VLK-D @ D.VNODE @ 0= IF 0 VFS-E-CORRUPT EXIT THEN
-    _VLK-D @ _VLK-V @ _VFS-DENTRY-OWNED? 0= IF 0 VFS-E-XDEV EXIT THEN
-    _VLK-D @ IN.PARENT @ _VLK-PARENT @ <> IF 0 VFS-E-CORRUPT EXIT THEN
-    _VLK-A @ _VLK-U @ _VLK-D @ IN.NAME @ _VFS-STR-MATCH? 0= IF
-        0 VFS-E-CORRUPT EXIT
-    THEN
-    _VLK-D @ 0 _VLK-V @ _VFS-RESULT ;
-
-' VFS-LOOKUP _VFS-LOOKUP-XT !
+    _VLK-A @ _VLK-U @ _VLK-PARENT @ _VFS-FIND-CHILD ?DUP IF 0 EXIT THEN
+    _VLK-A @ _VLK-U @ _VLK-PARENT @ _VLK-V @ _VFS-UNCACHED-CHILD?
+    VFS-OP-LOOKUP _VLK-V @ _VFS-HAS-OP? IF _VLK-V @ _VFS-RESULT THEN ;
 
 \ =====================================================================
 \  Ext4-facing metadata, symlink, xattr, and statfs dispatch
@@ -2570,9 +2620,9 @@ VARIABLE _VSL-H
     _VSL-PARENT @ IN.TYPE @ VFS-T-DIR <> IF 0 VFS-E-NOTDIR EXIT THEN
     _VSL-NA @ _VSL-NU @ _VFS-VALID-NAME? 0= IF 0 VFS-E-INVALID EXIT THEN
     _VSL-TA @ _VSL-TU @ _VFS-BUFFER? 0= IF 0 VFS-E-INVALID EXIT THEN
-    _VSL-PARENT @ _VSL-V @ _VFS-ENSURE-CHILDREN? ?DUP IF 0 SWAP EXIT THEN
-    _VSL-NA @ _VSL-NU @ _VSL-PARENT @ _VFS-FIND-CHILD
-    ?DUP IF DROP 0 VFS-E-EXISTS EXIT THEN
+    _VSL-NA @ _VSL-NU @ _VSL-PARENT @ _VSL-V @ _VFS-NAME-HOLDER?
+    ?DUP IF NIP 0 SWAP EXIT THEN
+    IF 0 VFS-E-EXISTS EXIT THEN
     VFS-T-SYMLINK _VSL-V @ _VFS-INODE-ALLOC
     DUP 0= IF 0 VFS-E-NOMEM EXIT THEN _VSL-D !
     _VSL-NA @ _VSL-NU @ _VSL-V @ _VFS-STR-ALLOC DUP 0= IF
@@ -2816,8 +2866,7 @@ VARIABLE _VRM-IOR
     \ Don't delete non-empty directories
     _VRM-IN @ IN.TYPE @ VFS-T-DIR = IF
         VFS-OP-RMDIR _VRM-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN
-        _VRM-IN @ _VRM-V @ _VFS-ENSURE-CHILDREN? ?DUP IF EXIT THEN
-        _VRM-IN @ IN.CHILD @ 0<> IF VFS-E-NOTEMPTY EXIT THEN
+        _VRM-IN @ _VRM-V @ _VFS-EMPTY-DIR? ?DUP IF EXIT THEN
         VFS-OP-RMDIR
     ELSE
         VFS-OP-UNLINK _VRM-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN
@@ -2969,12 +3018,13 @@ VARIABLE _VFY-V
 \     - NOT the active CWD
 \     - NOT pinned (VFS-IF-PINNED clear)
 \     - NOT dirty  (VFS-IF-DIRTY clear) — already sync'd
-\     - A leaf directory whose children were loaded from binding
-\       but can be discarded (VFS-IF-CHILDREN set, no child inodes)
-\     - OR a non-open file inode with no FD referencing it
+\     - NOT held by an open FD, whatever its type
+\     - NOT a directory that still has child inodes
 \
 \  Evicted directory inodes get VFS-IF-CHILDREN cleared so the
-\  binding re-populates on next access.
+\  binding re-populates on next access, and the parent of every evicted
+\  dentry loses VFS-IF-CHILDREN, since its cached children are then
+\  incomplete.
 \
 \  Strategy: single pass, evict up to (count - hwm/2) inodes to
 \  avoid thrashing on the boundary.
@@ -2984,18 +3034,6 @@ VARIABLE _VEV-P       \ slab page
 VARIABLE _VEV-IN      \ inode
 VARIABLE _VEV-GOAL    \ how many to evict
 VARIABLE _VEV-EVICTED \ evicted so far
-
-\ _VFS-INODE-HAS-FD? ( inode vfs -- flag )
-\   True if any FD currently references this inode.
-: _VFS-INODE-HAS-FD?  ( inode vfs -- flag )
-    DUP V.FDPOOL @  SWAP V.FDMAX @   ( inode base max )
-    0 DO
-        2DUP                          ( inode base inode base )
-        I VFS-FD-SIZE * +             ( inode base inode fd )
-        FD.INODE @                    ( inode base inode fd-inode )
-        = IF  2DROP TRUE UNLOOP EXIT  THEN
-    LOOP
-    2DROP FALSE ;
 
 \ _VFS-EVICT-INODE ( inode vfs -- flag )
 \   Attempt to evict a single inode.  Returns TRUE if evicted.
@@ -3015,6 +3053,10 @@ VARIABLE _VEV-EVICTED \ evicted so far
     VFS-OP-LOOKUP R@ _VFS-HAS-OP? 0= IF
         R> 2DROP FALSE EXIT
     THEN
+    \ An open descriptor holds its dentry: a file's, or a directory's.
+    DUP R@ _VFS-DENTRY-HAS-FD? IF
+        R> 2DROP FALSE EXIT
+    THEN
     \ Directory with no children remaining? Clear loaded flag.
     DUP IN.TYPE @  VFS-T-DIR = IF
         DUP IN.CHILD @ 0= IF
@@ -3028,15 +3070,9 @@ VARIABLE _VEV-EVICTED \ evicted so far
             R> 2DROP FALSE EXIT
         THEN
     THEN
-    \ File: must not have any open FD
-    DUP IN.TYPE @  VFS-T-FILE = IF
-        DUP R@ _VFS-INODE-HAS-FD? IF
-            R> 2DROP FALSE EXIT   \ in use
-        THEN
-    THEN
     \ Safe to evict — unlink from parent & free
     DUP IN.PARENT @ ?DUP IF
-        OVER SWAP _VFS-REMOVE-CHILD
+        OVER SWAP R@ _VFS-UNCACHE-CHILD
     THEN
     DUP R@ _VFS-INODE-EVICT
     R@ V.ICOUNT DUP @ 1- SWAP !

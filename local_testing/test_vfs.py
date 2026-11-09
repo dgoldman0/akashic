@@ -1185,6 +1185,170 @@ def test_lookup_backed_eviction_reloads_entry():
         'T-EVICT-RELOAD CR',
     ], "FIRST RELOADED TWICE BOUNDED")
 
+def _lookup_binding_lines():
+    """A RAM-derived binding with targeted LOOKUP and a counting READDIR.
+
+    LOOKUP knows two names: the file disk, with BID 99, and the directory
+    shelf, with BID 120; every other name answers VFS-E-NOENT.  READDIR
+    publishes nothing.  Both count their calls.
+    """
+    return [
+        'VARIABLE _LK-CALLS VARIABLE _RD-CALLS',
+        'VARIABLE _LK-A VARIABLE _LK-U VARIABLE _LK-P VARIABLE _LK-V',
+        ': T-LOOKUP  _LK-V ! _LK-P ! _LK-U ! _LK-A !  1 _LK-CALLS +!',
+        '  _LK-A @ _LK-U @ S" disk" COMPARE 0= IF _LK-A @ _LK-U @ VFS-T-FILE 99 7 _LK-P @ _LK-V @ VFS-CACHE-DENTRY EXIT THEN',
+        '  _LK-A @ _LK-U @ S" shelf" COMPARE 0= IF _LK-A @ _LK-U @ VFS-T-DIR 120 7 _LK-P @ _LK-V @ VFS-CACHE-DENTRY EXIT THEN',
+        '  0 VFS-E-NOENT ;',
+        ': T-READDIR  2DROP 1 _RD-CALLS +! 0 ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-LOOKUP _BIND VB.OPS @ VFS-OP-LOOKUP CELLS + !",
+        "' T-READDIR _BIND VB.OPS @ VFS-OP-READDIR CELLS + !",
+        '_BIND VB.CAPS DUP @ VFS-CAP-LOOKUP OR SWAP !',
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+    ]
+
+def test_lookup_binding_checks_names_without_loading_the_folder():
+    """CREATE, MKDIR, LINK and RENAME find a new name through LOOKUP.
+
+    A hit, cached or looked up, refuses with EXISTS or, for RENAME, becomes
+    the victim; NOENT means absent.  READDIR never runs, the root stays
+    partial, and the internal lookups leave V.LAST-IOR alone.
+    """
+    check("lookup binding checks names without loading the folder", [
+        *_lookup_binding_lines(),
+        '-77 _V1 V.LAST-IOR !',
+        'S" disk" _V1 VFS-MKFILE? CONSTANT _MK1-IOR CONSTANT _MK1',
+        '_LK-CALLS @ CONSTANT _LK1 _V1 V.ICOUNT @ CONSTANT _IC1 _V1 V.LAST-IOR @ CONSTANT _LAST1',
+        'S" fresh" _V1 VFS-MKFILE? CONSTANT _MK2-IOR CONSTANT _MK2',
+        '_LK-CALLS @ CONSTANT _LK2 _V1 V.ICOUNT @ CONSTANT _IC2',
+        'S" disk" _V1 VFS-MKDIR CONSTANT _MD-IOR _LK-CALLS @ CONSTANT _LK3',
+        'S" alias" _MK2 _V1 V.ROOT @ _V1 VFS-LINK CONSTANT _LN-IOR CONSTANT _LN',
+        'S" shelf" _MK2 _V1 V.ROOT @ 0 _V1 VFS-RENAME-AT CONSTANT _RN-IOR',
+        ': T-LOOKUP-CHECKS',
+        '  _MK1-IOR VFS-E-EXISTS = _MK1 0= AND IF ." EXISTS " THEN',
+        '  _LK1 1 = _IC1 2 = AND IF ." ONE-NAME " THEN',
+        '  _LAST1 -77 = IF ." LAST-KEPT " THEN',
+        '  _MK2-IOR 0= _LK2 2 = AND _IC2 3 = AND IF ." ABSENT-BY-LOOKUP " THEN',
+        '  _MD-IOR VFS-E-EXISTS = _LK3 2 = AND IF ." CACHED-HIT " THEN',
+        '  _LN-IOR 0= _LN D.VNODE @ _MK2 D.VNODE @ = AND IF ." LINKED " THEN',
+        '  _RN-IOR VFS-E-CONFLICT = IF ." VICTIM-FOUND " THEN',
+        '  _RD-CALLS @ 0= _V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND 0= AND IF ." NO-READDIR" THEN ;',
+        'T-LOOKUP-CHECKS CR',
+    ], "EXISTS ONE-NAME LAST-KEPT ABSENT-BY-LOOKUP CACHED-HIT LINKED VICTIM-FOUND NO-READDIR")
+
+def test_readdir_binding_checks_names_against_the_complete_folder():
+    """A READDIR-only binding loads the folder once for the name checks.
+
+    The load marks the root complete, and a later check answers from the
+    cache.  Dropping a child keeps the flag: this binding's READDIR builds
+    its listing without consulting cached names.
+    """
+    check("readdir binding checks names against the complete folder", [
+        'VARIABLE _RD-CALLS VARIABLE _RD-D VARIABLE _RD-V',
+        ': T-READDIR  _RD-V ! _RD-D !  1 _RD-CALLS +!',
+        '  S" disk" VFS-T-FILE 99 7 _RD-D @ _RD-V @ VFS-CACHE-DENTRY NIP ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-READDIR _BIND VB.OPS @ VFS-OP-READDIR CELLS + !",
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'S" disk" _V1 VFS-MKFILE? CONSTANT _MK1-IOR DROP',
+        '_RD-CALLS @ CONSTANT _RD1 _V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _FLAG1',
+        'S" fresh" _V1 VFS-MKFILE? CONSTANT _MK2-IOR DROP',
+        'S" fresh" _V1 VFS-MKDIR CONSTANT _MD-IOR _RD-CALLS @ CONSTANT _RD2',
+        'S" disk" _V1 VFS-RESOLVE _V1 VFS-CACHE-DROP CONSTANT _DROP',
+        ': T-READDIR-CHECKS',
+        '  _MK1-IOR VFS-E-EXISTS = IF ." EXISTS " THEN',
+        '  _RD1 1 = _FLAG1 0<> AND IF ." COMPLETE " THEN',
+        '  _MK2-IOR 0= IF ." CREATED " THEN',
+        '  _MD-IOR VFS-E-EXISTS = _RD2 1 = AND IF ." ONE-LOAD " THEN',
+        '  _DROP 0= _V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND 0<> AND IF ." FLAG-KEPT" THEN ;',
+        'T-READDIR-CHECKS CR',
+    ], "EXISTS COMPLETE CREATED ONE-LOAD FLAG-KEPT")
+
+def test_lookup_binding_emptiness_leaves_the_proof_to_the_binding():
+    """RM and a directory victim refuse only a cached child.
+
+    Without one, the VFS dispatches and leaves the proof of emptiness to
+    the binding, so READDIR never runs.
+    """
+    check("lookup binding emptiness leaves the proof to the binding", [
+        *_lookup_binding_lines(),
+        'S" shelf" _V1 VFS-RESOLVE CONSTANT _SHELF',
+        'S" item" VFS-T-FILE 130 7 _SHELF _V1 VFS-CACHE-DENTRY CONSTANT _ITEM-IOR CONSTANT _ITEM',
+        'S" shelf" _V1 VFS-RM CONSTANT _RM1',
+        'S" box" _V1 VFS-MKDIR CONSTANT _MD-IOR',
+        'S" box" _V1 VFS-RESOLVE CONSTANT _BOX',
+        'S" shelf" _BOX _V1 V.ROOT @ 0 _V1 VFS-RENAME-AT CONSTANT _RN1',
+        '_ITEM _V1 VFS-CACHE-DROP CONSTANT _DROP',
+        'S" shelf" _BOX _V1 V.ROOT @ 0 _V1 VFS-RENAME-AT CONSTANT _RN2',
+        'S" shelf" _V1 VFS-RM CONSTANT _RM2',
+        ': T-EMPTY-CHECKS',
+        '  _ITEM-IOR 0= _RM1 VFS-E-NOTEMPTY = AND IF ." CACHED-CHILD " THEN',
+        '  _MD-IOR 0= _RN1 VFS-E-NOTEMPTY = AND IF ." VICTIM-CHILD " THEN',
+        '  _DROP 0= _RN2 0= AND _RM2 0= AND IF ." PROOF-LEFT " THEN',
+        '  _RD-CALLS @ 0= IF ." NO-READDIR" THEN ;',
+        'T-EMPTY-CHECKS CR',
+    ], "CACHED-CHILD VICTIM-CHILD PROOF-LEFT NO-READDIR")
+
+def test_lookup_binding_eviction_and_drop_reload_complete_listings():
+    """An evicted or dropped child clears its parent's completeness flag.
+
+    READDIR and LOOKUP publish a, b and c.  After a listing, eviction
+    removes them and the root loses its flag, so the next listing runs
+    READDIR again and finds every name; an evicted name returns through
+    LOOKUP with its identity.  A manual drop does the same.
+    """
+    check("lookup binding eviction and drop reload complete listings", [
+        'VARIABLE _LK-CALLS VARIABLE _RD-CALLS',
+        'VARIABLE _LK-A VARIABLE _LK-U VARIABLE _LK-P VARIABLE _LK-V VARIABLE _RD-D VARIABLE _RD-V',
+        ': T-NAME-BID  ( a u -- bid|0 )  1 <> IF DROP 0 EXIT THEN C@ DUP [CHAR] a < OVER [CHAR] c > OR IF DROP 0 EXIT THEN [CHAR] a - 101 + ;',
+        ': T-LOOKUP  _LK-V ! _LK-P ! _LK-U ! _LK-A !  1 _LK-CALLS +!',
+        '  _LK-A @ _LK-U @ T-NAME-BID ?DUP 0= IF 0 VFS-E-NOENT EXIT THEN',
+        '  >R _LK-A @ _LK-U @ VFS-T-FILE R> 7 _LK-P @ _LK-V @ VFS-CACHE-DENTRY ;',
+        'CREATE _NAMES CHAR a C, CHAR b C, CHAR c C,',
+        ': T-READDIR  _RD-V ! _RD-D !  1 _RD-CALLS +!',
+        '  3 0 DO _NAMES I + 1 VFS-T-FILE 101 I + 7 _RD-D @ _RD-V @ VFS-CACHE-DENTRY NIP ?DUP IF UNLOOP EXIT THEN LOOP 0 ;',
+        ': T-COUNT  ( dir -- n )  0 SWAP IN.CHILD @ BEGIN ?DUP WHILE SWAP 1+ SWAP IN.SIBLING @ REPEAT ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-LOOKUP _BIND VB.OPS @ VFS-OP-LOOKUP CELLS + !",
+        "' T-READDIR _BIND VB.OPS @ VFS-OP-READDIR CELLS + !",
+        '_BIND VB.CAPS DUP @ VFS-CAP-LOOKUP OR SWAP !',
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        '_V1 V.ROOT @ _V1 _VFS-ENSURE-CHILDREN? CONSTANT _L1 _V1 V.ROOT @ T-COUNT CONSTANT _N1',
+        '1 _V1 VFS-SET-HWM',
+        'S" b" _V1 VFS-RESOLVE CONSTANT _B',
+        '_V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _FLAG2 _V1 V.ROOT @ T-COUNT CONSTANT _N2',
+        '256 _V1 VFS-SET-HWM',
+        '_V1 V.ROOT @ _V1 _VFS-ENSURE-CHILDREN? CONSTANT _L2 _V1 V.ROOT @ T-COUNT CONSTANT _N3',
+        'S" c" _V1 VFS-RESOLVE _V1 VFS-CACHE-DROP CONSTANT _DROP',
+        '_V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _FLAG3',
+        '_V1 V.ROOT @ _V1 _VFS-ENSURE-CHILDREN? CONSTANT _L3 _V1 V.ROOT @ T-COUNT CONSTANT _N4',
+        ': T-RELIST',
+        '  _L1 0= _N1 3 = AND IF ." LISTED " THEN',
+        '  _FLAG2 0= _N2 1 = AND IF ." EVICTED " THEN',
+        '  _B IN.BID @ 102 = _B D.VNODE @ VN.GEN @ 7 = AND IF ." RELOOKED " THEN',
+        '  _L2 0= _N3 3 = AND IF ." RELISTED " THEN',
+        '  _DROP 0= _FLAG3 0= AND _L3 0= AND _N4 3 = AND IF ." DROP-RELISTED " THEN',
+        '  _RD-CALLS @ 3 = IF ." THREE-READDIRS" THEN ;',
+        'T-RELIST CR',
+    ], "LISTED EVICTED RELOOKED RELISTED DROP-RELISTED THREE-READDIRS")
+
+def test_eviction_keeps_an_open_directory():
+    """An open descriptor holds a directory's dentry against eviction."""
+    check("eviction keeps an open directory", [
+        *_lookup_binding_lines(),
+        'S" shelf" VFS-FF-READ _V1 VFS-OPEN? CONSTANT _OPEN-IOR CONSTANT _FD',
+        '_FD FD.INODE @ CONSTANT _SHELF',
+        '1 _V1 VFS-SET-HWM',
+        'S" disk" _V1 VFS-RESOLVE CONSTANT _DISK',
+        ': T-OPEN-DIR',
+        '  _OPEN-IOR 0= _SHELF IN.TYPE @ VFS-T-DIR = AND IF ." OPENED " THEN',
+        '  _SHELF D.VNODE @ 0<> _SHELF D.OWNER @ _V1 = AND IF ." KEPT " THEN',
+        '  S" shelf" _V1 V.ROOT @ _VFS-FIND-CHILD _SHELF = IF ." ATTACHED " THEN',
+        '  _DISK IN.BID @ 99 = IF ." RESOLVED " THEN',
+        '  _FD VFS-CLOSE? 0= IF ." CLOSED" THEN ;',
+        'T-OPEN-DIR CR',
+    ], "OPENED KEPT ATTACHED RESOLVED CLOSED")
+
 # ── VFS-CD ──
 
 def test_cd():
@@ -1982,6 +2146,11 @@ def main():
         test_readdir_failure_does_not_publish_completion,
         test_checked_resolve_preserves_errors_and_lifecycle,
         test_lookup_backed_eviction_reloads_entry,
+        test_lookup_binding_checks_names_without_loading_the_folder,
+        test_readdir_binding_checks_names_against_the_complete_folder,
+        test_lookup_binding_emptiness_leaves_the_proof_to_the_binding,
+        test_lookup_binding_eviction_and_drop_reload_complete_listings,
+        test_eviction_keeps_an_open_directory,
         # CD
         test_cd,
         test_cd_fail,
