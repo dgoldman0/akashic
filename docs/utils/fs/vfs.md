@@ -673,9 +673,14 @@ does not forbid sync of state dirtied before the policy change.
 The dentry slab grows in 64-slot pages. Growth uses checked allocation; an
 exhausted arena returns `VFS-E-NOMEM` without publishing a partial namespace
 mutation. Each new page retains the older-page link so sync and eviction walk
-the complete cache. Eviction removes eligible cached dentries without changing backend
-link counts. Automatic per-dentry eviction is enabled only for bindings with
-targeted `LOOKUP`; a `READDIR`-only binding keeps its complete enumeration.
+the complete cache. Once the cache holds more dentries than its high-water
+mark, 256 unless `VFS-SET-HWM` sets another, each path resolution starts an
+eviction pass, which walks the slab and evicts eligible dentries until the
+count falls to half the mark. Eviction removes cached dentries without
+changing backend link counts. It runs only for bindings with targeted
+`LOOKUP`, which can bring an evicted name back on its own. On a
+`READDIR`-only binding the pass returns before it walks the slab, so the
+binding keeps its complete enumeration and its resolutions skip the walk.
 RAM-created vnodes are pinned because RAM `READDIR` cannot reconstruct them.
 Eviction never takes the current directory, a pinned or dirty vnode's dentry,
 a directory that still has cached children, or a dentry an open descriptor

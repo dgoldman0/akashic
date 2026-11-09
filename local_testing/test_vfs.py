@@ -1350,6 +1350,73 @@ def test_eviction_keeps_an_open_directory():
         'T-OPEN-DIR CR',
     ], "OPENED KEPT ATTACHED RESOLVED CLOSED")
 
+def _eviction_walk_lines(lookup):
+    """List twelve clean names past a high-water mark of 4, then resolve one.
+
+    The binding's READDIR publishes the files a to l, with BIDs 101 to 112.
+    With ``lookup`` the binding also advertises LOOKUP and finds each of
+    them by name.  _VEV-V, which a pass of the eviction walk sets to its
+    VFS before it reads a slot, holds 0 when the resolution starts.
+    """
+    lines = [
+        'VARIABLE _EW-D VARIABLE _EW-V',
+        'CREATE _EW-NAMES CHAR a C, CHAR b C, CHAR c C, CHAR d C, CHAR e C, CHAR f C,',
+        'CHAR g C, CHAR h C, CHAR i C, CHAR j C, CHAR k C, CHAR l C,',
+        ': T-EW-READDIR  _EW-V ! _EW-D !',
+        '  12 0 DO _EW-NAMES I + 1 VFS-T-FILE 101 I + 7 _EW-D @ _EW-V @',
+        '  VFS-CACHE-DENTRY NIP ?DUP IF UNLOOP EXIT THEN LOOP 0 ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-EW-READDIR _BIND VB.OPS @ VFS-OP-READDIR CELLS + !",
+    ]
+    if lookup:
+        lines += [
+            'VARIABLE _EW-LA VARIABLE _EW-LU VARIABLE _EW-LP VARIABLE _EW-LV',
+            ': T-EW-BID  ( a u -- bid|0 )  1 <> IF DROP 0 EXIT THEN',
+            '  C@ DUP [CHAR] a < OVER [CHAR] l > OR IF DROP 0 EXIT THEN [CHAR] a - 101 + ;',
+            ': T-EW-LOOKUP  _EW-LV ! _EW-LP ! _EW-LU ! _EW-LA !',
+            '  _EW-LA @ _EW-LU @ T-EW-BID ?DUP 0= IF 0 VFS-E-NOENT EXIT THEN',
+            '  >R _EW-LA @ _EW-LU @ VFS-T-FILE R> 7 _EW-LP @ _EW-LV @ VFS-CACHE-DENTRY ;',
+            "' T-EW-LOOKUP _BIND VB.OPS @ VFS-OP-LOOKUP CELLS + !",
+            '_BIND VB.CAPS DUP @ VFS-CAP-LOOKUP OR SWAP !',
+        ]
+    return lines + [
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        '_V1 V.ROOT @ _V1 _VFS-ENSURE-CHILDREN? CONSTANT _LISTED',
+        '_V1 V.ICOUNT @ CONSTANT _FULL',
+        '4 _V1 VFS-SET-HWM',
+        '0 _VEV-V !',
+        'S" a" _V1 VFS-RESOLVE CONSTANT _A',
+    ]
+
+def test_resolution_walks_the_cache_for_eviction_only_on_lookup_bindings():
+    """Past the high-water mark, only a LOOKUP binding runs the eviction walk.
+
+    Both bindings cache thirteen dentries, the root and twelve clean files,
+    against a mark of 4.  On the READDIR-only binding the resolution does
+    not start the walk: _VEV-V keeps 0, every dentry stays cached, and the
+    root stays complete.  On the LOOKUP binding the same steps start a
+    pass, which sets _VEV-V and evicts, so the observation detects a walk.
+    """
+    check("readdir binding resolves without the eviction walk", [
+        *_eviction_walk_lines(lookup=False),
+        ': T-NO-WALK',
+        '  _LISTED 0= _FULL 13 = AND IF ." LISTED " THEN',
+        '  _VEV-V @ 0= IF ." NO-WALK " THEN',
+        '  _V1 V.ICOUNT @ _FULL = IF ." KEPT " THEN',
+        '  _A IN.BID @ 101 = IF ." RESOLVED " THEN',
+        '  _V1 V.ROOT @ IN.FLAGS @ VFS-IF-CHILDREN AND IF ." COMPLETE" THEN ;',
+        'T-NO-WALK CR',
+    ], "LISTED NO-WALK KEPT RESOLVED COMPLETE")
+    check("lookup binding resolves after an eviction walk", [
+        *_eviction_walk_lines(lookup=True),
+        ': T-WALK',
+        '  _LISTED 0= _FULL 13 = AND IF ." LISTED " THEN',
+        '  _VEV-V @ _V1 = IF ." WALKED " THEN',
+        '  _V1 V.ICOUNT @ 4 < IF ." EVICTED " THEN',
+        '  _A IN.BID @ 101 = IF ." RESOLVED" THEN ;',
+        'T-WALK CR',
+    ], "LISTED WALKED EVICTED RESOLVED")
+
 # ── VFS-CD ──
 
 def test_cd():

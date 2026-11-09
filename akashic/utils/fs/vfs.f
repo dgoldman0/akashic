@@ -3063,8 +3063,10 @@ VARIABLE _VFY-V
 \  _VFS-EVICT ( vfs -- )
 \
 \  Called automatically by VFS-OPEN / VFS-RESOLVE when inode-count
-\  exceeds inode-hwm.  Walks all slab pages; for each live inode
-\  that is:
+\  exceeds inode-hwm.  A binding without targeted LOOKUP returns at
+\  once: it could not bring an evicted name back, so none of its
+\  dentries is evictable.  Otherwise walks all slab pages; for each
+\  live inode that is:
 \     - NOT the active CWD
 \     - NOT pinned (VFS-IF-PINNED clear)
 \     - NOT dirty  (VFS-IF-DIRTY clear) — already sync'd
@@ -3086,7 +3088,8 @@ VARIABLE _VEV-GOAL    \ how many to evict
 VARIABLE _VEV-EVICTED \ evicted so far
 
 \ _VFS-EVICT-INODE ( inode vfs -- flag )
-\   Attempt to evict a single inode.  Returns TRUE if evicted.
+\   Attempt to evict a single inode.  Returns TRUE if evicted.  The
+\   binding has targeted LOOKUP, which _VFS-EVICT checks once per pass.
 : _VFS-EVICT-INODE  ( inode vfs -- flag )
     >R
     DUP R@ V.CWD @ = IF
@@ -3097,11 +3100,6 @@ VARIABLE _VEV-EVICTED \ evicted so far
     THEN
     DUP IN.FLAGS @  VFS-IF-DIRTY AND IF
         R> 2DROP FALSE EXIT       \ dirty — must sync first
-    THEN
-    \ A single cached name may be removed only when targeted LOOKUP can
-    \ reconstruct it.  READDIR-only bindings keep complete enumerations.
-    VFS-OP-LOOKUP R@ _VFS-HAS-OP? 0= IF
-        R> 2DROP FALSE EXIT
     THEN
     \ An open descriptor holds its dentry: a file's, or a directory's.
     DUP R@ _VFS-DENTRY-HAS-FD? IF
@@ -3129,6 +3127,7 @@ VARIABLE _VEV-EVICTED \ evicted so far
     R> DROP DROP TRUE ;
 
 : _VFS-EVICT  ( vfs -- )
+    VFS-OP-LOOKUP OVER _VFS-HAS-OP? 0= IF DROP EXIT THEN
     _VEV-V !
     \ Calculate goal: evict down to hwm/2
     _VEV-V @ V.ICOUNT @

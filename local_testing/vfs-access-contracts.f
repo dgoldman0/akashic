@@ -399,9 +399,10 @@ VARIABLE _vfac-cb-reinit
     _vfac-scope-a VFA-SCOPE-VFS@ _vfac-vfs-a @ = _vfac-assert
     _vfac-scope-a VFA-SCOPE-FD@ 0= _vfac-assert
 
-    \ Even an unpinned, empty active CWD is not evictable.  Temporarily expose
-    \ targeted-reload capability so that, once another CWD is active, the same
-    \ otherwise eligible dentry can be reclaimed.
+    \ Even an unpinned, empty active CWD is not evictable.  Eviction passes
+    \ run only on bindings with targeted reload, so expose it while this
+    \ dentry is evicted directly; once another CWD is active, the same
+    \ otherwise eligible dentry is reclaimed.
     _vfac-vfs-b @ VFS-USE
     S" evict-cwd" _vfac-vfs-b @ VFS-MKDIR 0= _vfac-assert
     S" evict-cwd" _vfac-vfs-b @ VFS-CD? 0= _vfac-assert
