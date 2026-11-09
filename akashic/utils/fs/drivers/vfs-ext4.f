@@ -4449,9 +4449,10 @@ VARIABLE _EXT4-RW-GDT-BLOCK
 752 CONSTANT _EXT4-JWR.CP-ADD-OLD-DIR-SOURCE-REC
 760 CONSTANT _EXT4-JWR.CP-ADD-OLD-DIR-PREV-OFF
 768 CONSTANT _EXT4-JWR.CP-ADD-OLD-DIR-PREV-REC
-776 CONSTANT _EXT4-JWR.CP-ADD-TARGET-SIZE-LO
-784 CONSTANT _EXT4-JWR.CP-ADD-TARGET-SIZE-HI
-792 CONSTANT _EXT4-JWR-SIZE
+776 CONSTANT _EXT4-JWR.CP-ADD-CHILD-HOME
+784 CONSTANT _EXT4-JWR.CP-ADD-TARGET-SIZE-LO
+792 CONSTANT _EXT4-JWR.CP-ADD-TARGET-SIZE-HI
+800 CONSTANT _EXT4-JWR-SIZE
 
 \ CP fields after TARGET-ENTRIES are a mode-discriminated payload.  Deletion
 \ uses their inode-release meanings above; modern orphan insertion instead
@@ -5454,6 +5455,7 @@ VARIABLE _EXT4-JUA-OLD-SOURCE-OFF
 VARIABLE _EXT4-JUA-OLD-SOURCE-REC
 VARIABLE _EXT4-JUA-OLD-PREV-OFF
 VARIABLE _EXT4-JUA-OLD-PREV-REC
+VARIABLE _EXT4-JUA-CHILD-HOME
 
 \ An unlink seals the payload's rename form as zeros.
 : _EXT4-JUA-CLEAR-RENAME  ( -- )
@@ -5463,7 +5465,8 @@ VARIABLE _EXT4-JUA-OLD-PREV-REC
     0 _EXT4-JUA-OLD-PARENT-HOME ! 0 _EXT4-JUA-OLD-PARENT-OFF !
     0 _EXT4-JUA-OLD-DIR-HOME !
     0 _EXT4-JUA-OLD-SOURCE-OFF ! 0 _EXT4-JUA-OLD-SOURCE-REC !
-    0 _EXT4-JUA-OLD-PREV-OFF ! 0 _EXT4-JUA-OLD-PREV-REC ! ;
+    0 _EXT4-JUA-OLD-PREV-OFF ! 0 _EXT4-JUA-OLD-PREV-REC !
+    0 _EXT4-JUA-CHILD-HOME ! ;
 
 \ An inode a namespace payload names: the root or an ordinary inode, and
 \ never the orphan's target.
@@ -5523,11 +5526,14 @@ VARIABLE _EXT4-JUA-OLD-PREV-REC
     OR OR 0= ;
 
 \ The rename form of the payload: a rename over the target hands its record
-\ to the source, whose own record joins its predecessor, in the target's
-\ directory or, across directories, in the old parent's.  Every inode home
-\ may share a table block with the others; every directory home is distinct
-\ from them, from the orphan block and from the primary super, so the exact
-\ deduplicated credit is between five and eight metadata images.
+\ to the source, whose own record leaves its block as a removal's does,
+\ joined to its predecessor or, as the block's first record, left unused, in
+\ the target's directory or, across directories, in the old parent's.  A
+\ directory that changes parent also names the new parent in its block 0,
+\ the child home.  Every inode home may share a table block with the others;
+\ every directory home is distinct from them, from the orphan block and from
+\ the primary super, so the exact deduplicated credit is between five and
+\ nine metadata images.
 : _EXT4-JWR-CP-RENAME-PAYLOAD?  ( -- flag )
     _EXT4-JUA-PREV-OFF @ _EXT4-JUA-PREV-REC @ OR IF FALSE EXIT THEN
     _EXT4-JUA-TARGET-OFF @ _EXT4-JUA-TARGET-REC @
@@ -5576,7 +5582,7 @@ VARIABLE _EXT4-JUA-OLD-PREV-REC
     _EXT4-JUA-OLD-PREV-REC !
     _EXT4-JUA-OLD-PREV-OFF @ _EXT4-JUA-OLD-PREV-REC @
     _EXT4-JUA-OLD-SOURCE-OFF @ _EXT4-JUA-OLD-SOURCE-REC @
-    _EXT4-JCA-SPLICE? 0= IF FALSE EXIT THEN
+    _EXT4-JCA-REMOVAL? 0= IF FALSE EXIT THEN
     \ One block holds both records only inside one parent, and the source's
     \ record never overlaps the target's.
     _EXT4-JUA-OLD-DIR-HOME @ _EXT4-JUA-DIR-HOME @ = IF
@@ -5620,9 +5626,27 @@ VARIABLE _EXT4-JUA-OLD-PREV-REC
         OVER _EXT4-JUA-OLD-DIR-HOME @ = OR
         SWAP _EXT4-JUA-OLD-PARENT-HOME @ = OR IF FALSE EXIT THEN
     THEN
+    \ Only a move across parents names a child home, which is no other home.
+    _EXT4-JCA-WRITER @ _EXT4-JWR.CP-ADD-CHILD-HOME + @
+    DUP _EXT4-JUA-CHILD-HOME ! ?DUP IF
+        _EXT4-JUA-OLD-PARENT-INO @ 0= IF DROP FALSE EXIT THEN
+        DUP _EXT4-JCA-DIR-HOME? 0= IF DROP FALSE EXIT THEN
+        DUP _EXT4-JUA-PARENT-HOME @ =
+        OVER _EXT4-JUA-SOURCE-HOME @ = OR
+        OVER _EXT4-JUA-OLD-PARENT-HOME @ = OR
+        OVER _EXT4-JUA-DIR-HOME @ = OR
+        OVER _EXT4-JUA-OLD-DIR-HOME @ = OR
+        OVER _EXT4-JCA-WRITER @ _EXT4-JWR.CP-TARGET-HOME + @ = OR
+        OVER _EXT4-JCA-WRITER @ _EXT4-JWR.CP-O-HOME + @ = OR
+        OVER _EXT4-JCA-WRITER @ _EXT4-JWR.CTX + @
+        _EXT4-PRIMARY-SUPER-BLOCK = OR
+        OVER _EXT4-JCA-RANGES-ALIAS-HOME? OR
+        SWAP _EXT4-JCA-EA-HOME @ = OR IF FALSE EXIT THEN
+    THEN
     \ The orphan block, the primary super, the target's table block and the
     \ target's directory block, then each further distinct home.
     4 _EXT4-JUA-META !
+    _EXT4-JUA-CHILD-HOME @ IF 1 _EXT4-JUA-META +! THEN
     _EXT4-JUA-PARENT-HOME @
     _EXT4-JCA-WRITER @ _EXT4-JWR.CP-TARGET-HOME + @ <> IF
         1 _EXT4-JUA-META +!
@@ -14239,6 +14263,8 @@ CREATE _EXT4-JUA-EXPECTED-BLOCK _EXT4-MAX-BLOCK ALLOT
     _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-OLD-DIR-PREV-OFF + !
     _EXT4-JUA-OLD-PREV-REC @
     _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-OLD-DIR-PREV-REC + !
+    _EXT4-JUA-CHILD-HOME @
+    _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-CHILD-HOME + !
     _EXT4-JUA-SIZE-LO @
     _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-TARGET-SIZE-LO + !
     _EXT4-JUA-SIZE-HI @
@@ -14340,6 +14366,8 @@ VARIABLE _EXT4-JUA-DIRECTORY
     _EXT4-JUA-OLD-PREV-OFF !
     _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-OLD-DIR-PREV-REC + @
     _EXT4-JUA-OLD-PREV-REC !
+    _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-CHILD-HOME + @
+    _EXT4-JUA-CHILD-HOME !
     _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-TARGET-SIZE-LO + @
     _EXT4-JUA-SIZE-LO !
     _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-TARGET-SIZE-HI + @
@@ -14430,27 +14458,46 @@ VARIABLE _EXT4-JUA-DIRECTORY
     _EXT4-JUA-RECORD @ _EXT4-JUA-INO @ _EXT4-JUA-CTX @
     _EXT4-RESTAMP-INODE ;
 
+VARIABLE _EXT4-JUA-ENTRIES-CHANGED
+
 \ Stamp the loaded inode's record in the expected block with the sealed time:
-\ a directory whose entries changed takes it as its modification and change
-\ time, and a renamed file as its change time.  With LINKS-DOWN the record
-\ also loses a link, the `..` of a removed child directory.
-: _EXT4-JUA-APPLY-TIMES-EXPECTED  ( links-down? -- ior )
+\ with ENTRIES? a directory whose entries changed takes it as its
+\ modification and change time, and otherwise a renamed inode takes it as
+\ its change time.  The record's link count changes by DELTA: a parent loses
+\ the `..` of a removed or departing child directory and gains an arriving
+\ one's.
+: _EXT4-JUA-APPLY-TIMES-EXPECTED  ( delta entries? -- ior )
+    _EXT4-JUA-ENTRIES-CHANGED !
     _EXT4-JUA-EXPECTED-BLOCK _EXT4-JUA-PRE-OFF @ +
     DUP _EXT4-JUA-RECORD !
     _EXT4-JUA-PRE-INODE @ _EXT4-JUA-CTX @ _EXT4-C.ISIZE + @
     _EXT4-BYTES=? 0= IF DROP VFS-E-CONFLICT EXIT THEN
-    IF
-        _EXT4-JUA-RECORD @ _EXT4-I.LINKS + DUP W@ 1- SWAP W!
-    THEN
+    _EXT4-JUA-RECORD @ _EXT4-I.LINKS + DUP W@ ROT + SWAP W!
     _EXT4-JUA-SECONDS @ _EXT4-JUA-NSEC @ _EXT4-JUA-RECORD @
     _EXT4-JUA-CTX @
-    _EXT4-JUA-PRE-TYPE @ VFS-T-DIR = IF
+    _EXT4-JUA-ENTRIES-CHANGED @ IF
         _EXT4-SET-INODE-MTIME-CTIME
     ELSE
         _EXT4-SET-INODE-CTIME
     THEN ?DUP IF EXIT THEN
     _EXT4-JUA-RECORD @ _EXT4-JUA-PRE-INO @ _EXT4-JUA-CTX @
     _EXT4-RESTAMP-INODE ;
+
+\ A rename's source has the target's type: the VFS layer replaces a regular
+\ file only with a regular file and an empty directory only with a
+\ directory, and the source's typed prestate load proves it.
+: _EXT4-JUA-SOURCE-TYPE  ( -- type )
+    _EXT4-JUA-DIRECTORY @ IF VFS-T-DIR ELSE VFS-T-FILE THEN ;
+
+\ The target's parent loses a removed directory's `..` link, unless a
+\ directory arriving from another parent takes the target's name.  The old
+\ parent loses a departing directory's.
+: _EXT4-JUA-PARENT-LINKS  ( -- delta )
+    _EXT4-JUA-DIRECTORY @ 0= IF 0 EXIT THEN
+    _EXT4-JUA-OLD-PARENT-INO @ IF 0 ELSE -1 THEN ;
+
+: _EXT4-JUA-OLD-PARENT-LINKS  ( -- delta )
+    _EXT4-JUA-DIRECTORY @ IF -1 ELSE 0 THEN ;
 
 : _EXT4-JUA-REQUIRE-EXPECTED-HOME  ( home -- ior )
     _EXT4-JUA-FIND-META-IMAGE
@@ -14475,13 +14522,13 @@ VARIABLE _EXT4-JUA-DIRECTORY
     _EXT4-JUA-SOURCE-INO @
     _EXT4-JUA-AT-HOME @ _EXT4-JUA-SOURCE-HOME @ = AND IF
         _EXT4-JUA-SOURCE-INO @ _EXT4-JUA-SOURCE-GEN @
-        _EXT4-JUA-SOURCE-HOME @ _EXT4-JUA-SOURCE-OFF @ VFS-T-FILE
-        _EXT4-JUA-LOAD-PRESTATE ?DUP IF EXIT THEN
-        FALSE _EXT4-JUA-APPLY-TIMES-EXPECTED ?DUP IF EXIT THEN
+        _EXT4-JUA-SOURCE-HOME @ _EXT4-JUA-SOURCE-OFF @
+        _EXT4-JUA-SOURCE-TYPE _EXT4-JUA-LOAD-PRESTATE ?DUP IF EXIT THEN
+        0 FALSE _EXT4-JUA-APPLY-TIMES-EXPECTED ?DUP IF EXIT THEN
     THEN
     _EXT4-JUA-AT-HOME @ _EXT4-JUA-PARENT-HOME @ = IF
         _EXT4-JUA-LOAD-PARENT-PRESTATE ?DUP IF EXIT THEN
-        _EXT4-JUA-DIRECTORY @ _EXT4-JUA-APPLY-TIMES-EXPECTED
+        _EXT4-JUA-PARENT-LINKS TRUE _EXT4-JUA-APPLY-TIMES-EXPECTED
         ?DUP IF EXIT THEN
     THEN
     _EXT4-JUA-OLD-PARENT-INO @
@@ -14489,7 +14536,8 @@ VARIABLE _EXT4-JUA-DIRECTORY
         _EXT4-JUA-OLD-PARENT-INO @ _EXT4-JUA-OLD-PARENT-GEN @
         _EXT4-JUA-OLD-PARENT-HOME @ _EXT4-JUA-OLD-PARENT-OFF @
         VFS-T-DIR _EXT4-JUA-LOAD-PRESTATE ?DUP IF EXIT THEN
-        FALSE _EXT4-JUA-APPLY-TIMES-EXPECTED ?DUP IF EXIT THEN
+        _EXT4-JUA-OLD-PARENT-LINKS TRUE _EXT4-JUA-APPLY-TIMES-EXPECTED
+        ?DUP IF EXIT THEN
     THEN
     _EXT4-JUA-AT-HOME @ _EXT4-JUA-REQUIRE-EXPECTED-HOME ?DUP IF EXIT THEN
     _EXT4-JUA-AT-HOME @ _EXT4-JFI-INODE-HOME @ = IF
@@ -14593,38 +14641,41 @@ VARIABLE _EXT4-JUA-DIRECTORY
     _EXT4-JUA-DIR-TARGET @ 6 + _EXT4-JUA-CUT-REC @ 6 - 0 FILL
     0 ;
 
+\ Take the live record for INO of REC bytes at OFFSET out of the expected
+\ image as a removal does: it joins its predecessor of PREV-REC bytes at
+\ PREV-OFFSET, or with no predecessor, as its block's first record, becomes
+\ unused.
+: _EXT4-JUA-CUT-EXPECTED  ( prev-offset prev-rec offset rec ino -- ior )
+    3 PICK IF _EXT4-JUA-SPLICE-EXPECTED EXIT THEN
+    >R NIP NIP NIP R> _EXT4-JUA-BLANK-EXPECTED ;
+
 \ The removal's directory block: the target's record joins its
 \ predecessor, or as the block's first record becomes unused.
 : _EXT4-JUA-REQUIRE-DIRECTORY-AFTERIMAGE  ( -- ior )
     _EXT4-JUA-DIR-HOME @ _EXT4-JUA-PARENT-INO @ _EXT4-JUA-PARENT-GEN @
     _EXT4-JUA-LOAD-DIRECTORY ?DUP IF EXIT THEN
     _EXT4-JUA-DIRECTORY @ _EXT4-JUA-CUT-DIR !
-    _EXT4-JUA-PREV-REC @ IF
-        _EXT4-JUA-PREV-OFF @ _EXT4-JUA-PREV-REC @
-        _EXT4-JUA-TARGET-OFF @ _EXT4-JUA-TARGET-REC @ _EXT4-JUA-INO @
-        _EXT4-JUA-SPLICE-EXPECTED
-    ELSE
-        _EXT4-JUA-TARGET-REC @ _EXT4-JUA-INO @ _EXT4-JUA-BLANK-EXPECTED
-    THEN ?DUP IF EXIT THEN
+    _EXT4-JUA-PREV-OFF @ _EXT4-JUA-PREV-REC @
+    _EXT4-JUA-TARGET-OFF @ _EXT4-JUA-TARGET-REC @ _EXT4-JUA-INO @
+    _EXT4-JUA-CUT-EXPECTED ?DUP IF EXIT THEN
     _EXT4-JUA-REQUIRE-DIRECTORY-HOME ;
 
-\ A rename over the target: the target's record names the source, and the
-\ source's record joins its predecessor, in the same block or in its own
-\ directory block.
+\ A rename over the target: the target's record names the source and keeps
+\ its name, length and type, and the source's record of the same type
+\ leaves its block, the same one or its own directory block, as a removal's
+\ record does.
 : _EXT4-JUA-REQUIRE-RENAME-DIRECTORIES  ( -- ior )
     _EXT4-JUA-DIR-HOME @ _EXT4-JUA-PARENT-INO @ _EXT4-JUA-PARENT-GEN @
     _EXT4-JUA-LOAD-DIRECTORY ?DUP IF EXIT THEN
     _EXT4-JUA-TARGET-OFF @ _EXT4-JUA-RECORD-START? 0= IF
         VFS-E-CORRUPT EXIT
     THEN
-    _EXT4-JUA-EXPECTED-BLOCK _EXT4-JUA-TARGET-OFF @ +
-    DUP L@ _EXT4-JUA-INO @ <>
-    OVER 4 + W@ _EXT4-JUA-TARGET-REC @ <> OR
-    OVER 6 + C@ 0= OR
-    OVER 7 + C@ DUP 0<> SWAP 1 <> AND OR IF
-        DROP VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-JUA-SOURCE-INO @ SWAP L!
+    _EXT4-JUA-DIRECTORY @ _EXT4-JUA-CUT-DIR !
+    _EXT4-JUA-TARGET-OFF @ _EXT4-JUA-CUT-OFF !
+    _EXT4-JUA-TARGET-REC @ _EXT4-JUA-CUT-REC !
+    _EXT4-JUA-INO @ _EXT4-JUA-CUT-INO !
+    _EXT4-JUA-CUT-TARGET? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JUA-SOURCE-INO @ _EXT4-JUA-DIR-TARGET @ L!
     _EXT4-JUA-OLD-DIR-HOME @ _EXT4-JUA-DIR-HOME @ <> IF
         _EXT4-JUA-REQUIRE-DIRECTORY-HOME ?DUP IF EXIT THEN
         _EXT4-JUA-OLD-DIR-HOME @
@@ -14635,11 +14686,74 @@ VARIABLE _EXT4-JUA-DIRECTORY
         THEN
         _EXT4-JUA-LOAD-DIRECTORY ?DUP IF EXIT THEN
     THEN
-    FALSE _EXT4-JUA-CUT-DIR !
     _EXT4-JUA-OLD-PREV-OFF @ _EXT4-JUA-OLD-PREV-REC @
     _EXT4-JUA-OLD-SOURCE-OFF @ _EXT4-JUA-OLD-SOURCE-REC @
-    _EXT4-JUA-SOURCE-INO @ _EXT4-JUA-SPLICE-EXPECTED ?DUP IF EXIT THEN
+    _EXT4-JUA-SOURCE-INO @ _EXT4-JUA-CUT-EXPECTED ?DUP IF EXIT THEN
     _EXT4-JUA-REQUIRE-DIRECTORY-HOME ;
+
+VARIABLE _EXT4-DDD-BLOCK
+VARIABLE _EXT4-DDD-PARENT
+
+\ The offset of the `..` record in the validated linear block 0 of a
+\ directory: its first record `.` names INO and its second, `..`, names
+\ PARENT.  Any other block gives zero.
+: _EXT4-DIR-DOTDOT  ( block ino parent -- offset )
+    _EXT4-DDD-PARENT ! SWAP DUP _EXT4-DDD-BLOCK !
+    DUP L@ ROT <> OVER 6 + C@ 1 <> OR
+    SWAP 8 + C@ [CHAR] . <> OR IF 0 EXIT THEN
+    _EXT4-DDD-BLOCK @ 4 + W@
+    _EXT4-DDD-BLOCK @ OVER +
+    DUP L@ _EXT4-DDD-PARENT @ <> OVER 6 + C@ 2 <> OR
+    SWAP 8 + W@ 0x2E2E <> OR IF DROP 0 THEN ;
+
+VARIABLE _EXT4-JUA-CHILD-BLOCKS
+VARIABLE _EXT4-JUA-CHILD-INDEXED
+VARIABLE _EXT4-JUA-DOTDOT
+
+\ A directory the rename moves to another parent names the new parent in
+\ its block 0, the child home: the `..` record after `.` in a checksummed
+\ leaf, restamped with the dirent tail, or the `..` entry of a DX root,
+\ restamped with the DX tail.  The block on media names the moved directory
+\ in `.` and the old parent in `..`.
+: _EXT4-JUA-REQUIRE-CHILD-AFTERIMAGE  ( -- ior )
+    _EXT4-JUA-SOURCE-INO @ _EXT4-JUA-SOURCE-GEN @
+    _EXT4-JUA-SOURCE-HOME @ _EXT4-JUA-SOURCE-OFF @ VFS-T-DIR
+    _EXT4-JUA-LOAD-PRESTATE ?DUP IF EXIT THEN
+    _EXT4-JUA-CTX @ _EXT4-C.R.SIZE + @
+    _EXT4-JUA-CTX @ _EXT4-C.BSIZE + @ / _EXT4-JUA-CHILD-BLOCKS !
+    _EXT4-JUA-CTX @ _EXT4-C.INODE + _EXT4-I.FLAGS + L@
+    _EXT4-INDEX-FL AND 0<> _EXT4-JUA-CHILD-INDEXED !
+    _EXT4-JUA-CHILD-HOME @ _EXT4-JUA-CTX @ _EXT4-READ-BLOCK
+    ?DUP IF EXIT THEN
+    _EXT4-JUA-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JUA-CTX @ _EXT4-C.DIR-BLOCK +
+    _EXT4-JUA-CTX @ _EXT4-C.BSIZE + @ MOVE
+    _EXT4-JUA-CHILD-INDEXED @ IF
+        _EXT4-JUA-SOURCE-INO @ _EXT4-DX-DIRINO !
+        _EXT4-JUA-OLD-PARENT-INO @ _EXT4-DX-PARINO !
+        _EXT4-JUA-SOURCE-GEN @ _EXT4-DX-GEN !
+        _EXT4-JUA-CTX @ _EXT4-JUA-CHILD-BLOCKS @ _EXT4-VALIDATE-DX-ROOT
+        ?DUP IF EXIT THEN
+        12 _EXT4-JUA-DOTDOT !
+    ELSE
+        _EXT4-JUA-SOURCE-INO @ _EXT4-JUA-SOURCE-GEN @ _EXT4-JUA-CTX @
+        _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
+        _EXT4-JUA-CTX @ _EXT4-C.DIR-BLOCK +
+        _EXT4-JUA-SOURCE-INO @ _EXT4-JUA-OLD-PARENT-INO @ _EXT4-DIR-DOTDOT
+        DUP _EXT4-JUA-DOTDOT ! 0= IF VFS-E-CORRUPT EXIT THEN
+    THEN
+    _EXT4-JUA-CTX @ _EXT4-C.DIR-BLOCK + _EXT4-JUA-EXPECTED-BLOCK
+    _EXT4-JUA-CTX @ _EXT4-C.BSIZE + @ MOVE
+    _EXT4-JUA-PARENT-INO @
+    _EXT4-JUA-EXPECTED-BLOCK _EXT4-JUA-DOTDOT @ + L!
+    _EXT4-JUA-EXPECTED-BLOCK _EXT4-JUA-SOURCE-INO @
+    _EXT4-JUA-CHILD-INDEXED @ IF
+        _EXT4-JUA-PARENT-INO @ _EXT4-JUA-SOURCE-GEN @
+        _EXT4-JUA-CHILD-BLOCKS @ _EXT4-JUA-CTX @ _EXT4-RESTAMP-DX-ROOT
+    ELSE
+        _EXT4-JUA-SOURCE-GEN @ _EXT4-JUA-CTX @ _EXT4-RESTAMP-DIR-BLOCK
+    THEN ?DUP IF EXIT THEN
+    _EXT4-JUA-CHILD-HOME @ _EXT4-JUA-REQUIRE-EXPECTED-HOME ;
 
 : _EXT4-JUA-REQUIRE-ORPHAN-AFTERIMAGE  ( -- ior )
     _EXT4-JUA-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
@@ -14686,14 +14800,21 @@ VARIABLE _EXT4-JUA-DIRECTORY
     THEN
     0 ;
 
+\ A directory moving across parents names its block 0, and nothing else
+\ names a child home.
 : _EXT4-JUA-STAGED?  ( writer -- ior )
     _EXT4-JUA-LOAD-SEALED-PRESTATE ?DUP IF EXIT THEN
+    _EXT4-JUA-DIRECTORY @ _EXT4-JUA-OLD-PARENT-INO @ 0<> AND
+    _EXT4-JUA-CHILD-HOME @ 0<> <> IF VFS-E-CORRUPT EXIT THEN
     _EXT4-JUA-REQUIRE-INODE-AFTERIMAGES ?DUP IF EXIT THEN
     _EXT4-JUA-SOURCE-INO @ IF
         _EXT4-JUA-REQUIRE-RENAME-DIRECTORIES
     ELSE
         _EXT4-JUA-REQUIRE-DIRECTORY-AFTERIMAGE
     THEN ?DUP IF EXIT THEN
+    _EXT4-JUA-CHILD-HOME @ IF
+        _EXT4-JUA-REQUIRE-CHILD-AFTERIMAGE ?DUP IF EXIT THEN
+    THEN
     _EXT4-JUA-REQUIRE-ORPHAN-AFTERIMAGE ?DUP IF EXIT THEN
     _EXT4-JUA-REQUIRE-SUPER-AFTERIMAGE ?DUP IF EXIT THEN
     _EXT4-JUA-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
@@ -17960,7 +18081,9 @@ VARIABLE _EXT4-BWC-CTX
 
 \ The directory blocks an insert edits or appends, the parent's extent-tree
 \ nodes, and the bitmaps and descriptor pages its block allocations stage
-\ form the three repeatable families.
+\ form the three repeatable families.  A rename's parent roles name the
+\ parent that takes the new name; the old parent's record and the block the
+\ source's record leaves, when apart from them, have roles of their own.
  1 CONSTANT _XC-HR-INODE
  2 CONSTANT _XC-HR-PARENT-INODE
  3 CONSTANT _XC-HR-PARENT-DIRECTORY
@@ -17974,8 +18097,8 @@ VARIABLE _EXT4-BWC-CTX
 11 CONSTANT _XC-HR-DIRECTORY-MAP
 12 CONSTANT _XC-HR-ALLOCATION
 13 CONSTANT _XC-HR-ORPHAN
-14 CONSTANT _XC-HR-RENAME-NEW-PARENT-INODE
-15 CONSTANT _XC-HR-RENAME-NEW-PARENT-DIRECTORY
+14 CONSTANT _XC-HR-RENAME-OLD-PARENT-INODE
+15 CONSTANT _XC-HR-RENAME-SOURCE-DIRECTORY
 16 CONSTANT _XC-HR-RENAME-CHILD-DIRECTORY
 17 CONSTANT _XC-HR-RENAME-VICTIM-INODE
 18 CONSTANT _XC-HR-LIMIT
@@ -18042,39 +18165,16 @@ _XC-P.RECORDS _XC-RECORD-MAX CELLS + CONSTANT _XC-P.SORTED
 _XC-P.SORTED _XC-RECORD-MAX CELLS + CONSTANT _XC-P.SEEN
 _XC-P.SEEN _XC-SEEN-BITS 63 + 64 / CELLS +
     CONSTANT _XC-P.PARENT-SNAPSHOT
+\ A rename across parents keeps the old parent's record apart from the new
+\ parent's, and every rename keeps the block its source's record leaves as
+\ media holds it; a directory that changes parent keeps its block 0.
 _XC-P.PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +
-    CONSTANT _XC-P.RENAME-BASELINE
-_XC-P.RENAME-BASELINE CELL+ CONSTANT _XC-P.RENAME-CROSS-PARENT
-_XC-P.RENAME-CROSS-PARENT CELL+ CONSTANT _XC-P.RENAME-DEST-SEPARATE
-_XC-P.RENAME-DEST-SEPARATE CELL+ CONSTANT _XC-P.RENAME-EDIT-KIND
-_XC-P.RENAME-EDIT-KIND CELL+ CONSTANT _XC-P.RENAME-DEST-ROUTE
-_XC-P.RENAME-DEST-ROUTE CELL+ CONSTANT _XC-P.RENAME-DEST-ROUTE-LOGICAL
-_XC-P.RENAME-DEST-ROUTE-LOGICAL CELL+ CONSTANT _XC-P.RENAME-DEST-ENTRY
-_XC-P.RENAME-DEST-ENTRY CELL+ CONSTANT _XC-P.RENAME-DEST-LOGICAL
-_XC-P.RENAME-DEST-LOGICAL CELL+ CONSTANT _XC-P.RENAME-DEST-HOME
-_XC-P.RENAME-DEST-HOME CELL+ CONSTANT _XC-P.RENAME-DEST-HASH
-_XC-P.RENAME-DEST-HASH CELL+ CONSTANT _XC-P.RENAME-DEST-MINOR
-_XC-P.RENAME-DEST-MINOR CELL+ CONSTANT _XC-P.RENAME-NP-BASELINE
-_XC-P.RENAME-NP-BASELINE CELL+ CONSTANT _XC-P.RENAME-NP-INDEXED
-_XC-P.RENAME-NP-INDEXED CELL+ CONSTANT _XC-P.RENAME-NP-INDEX-BASELINE
-_XC-P.RENAME-NP-INDEX-BASELINE CELL+ CONSTANT _XC-P.RENAME-NP-ROOT-HOME
-_XC-P.RENAME-NP-ROOT-HOME CELL+ CONSTANT _XC-P.RENAME-NP-DEPTH
-_XC-P.RENAME-NP-DEPTH CELL+ CONSTANT _XC-P.RENAME-NP-ROUTE-NODE-HOME
-_XC-P.RENAME-NP-ROUTE-NODE-HOME CELL+
-    CONSTANT _XC-P.RENAME-NP-PARENT-GROUP
-_XC-P.RENAME-NP-PARENT-GROUP CELL+
-    CONSTANT _XC-P.RENAME-NP-PARENT-HOME
-_XC-P.RENAME-NP-PARENT-HOME CELL+
-    CONSTANT _XC-P.RENAME-NP-PARENT-OFF
-_XC-P.RENAME-NP-PARENT-OFF CELL+ CONSTANT _XC-P.RENAME-HASH-BASELINE
-_XC-P.RENAME-HASH-BASELINE CELL+ CONSTANT _XC-P.RENAME-DEST-DIR-SNAPSHOT
-_XC-P.RENAME-DEST-DIR-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE +
-    CONSTANT _XC-P.RENAME-NP-ROOT-SNAPSHOT
-_XC-P.RENAME-NP-ROOT-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE +
-    CONSTANT _XC-P.RENAME-NP-NODE-SNAPSHOT
-_XC-P.RENAME-NP-NODE-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE +
-    CONSTANT _XC-P.RENAME-NP-PARENT-SNAPSHOT
-_XC-P.RENAME-NP-PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +
+    CONSTANT _XC-P.OLD-PARENT-SNAPSHOT
+_XC-P.OLD-PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +
+    CONSTANT _XC-P.SOURCE-SNAPSHOT
+_XC-P.SOURCE-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE +
+    CONSTANT _XC-P.CHILD-SNAPSHOT
+_XC-P.CHILD-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE +
     CONSTANT _XC-P.OP
 _XC-P.OP CELL+ CONSTANT _XC-P.OWNER-CTX
 _XC-P.OWNER-CTX CELL+ CONSTANT _XC-P.HOME-COUNT
@@ -18096,18 +18196,16 @@ _XC-P.HOME-ENTRIES
 \ The edit an insert makes in its parent: a record in existing slack, a full
 \ linear block's conversion to an HTree, a full leaf's split, a split under
 \ a level-zero root grown to level one, or one under a split level-one node.
-\ A removal's one edit takes a record out of its block.
+\ A removal's one edit takes a record out of its block.  A rename makes an
+\ insert's edit for the new name, or over a victim hands the victim's record
+\ to the source.
 1 CONSTANT _XC-EK-SLACK
 2 CONSTANT _XC-EK-CONVERT
 3 CONSTANT _XC-EK-SPLIT
 4 CONSTANT _XC-EK-GROW
 5 CONSTANT _XC-EK-NODE-SPLIT
 6 CONSTANT _XC-EK-REMOVE
-
-1 CONSTANT _XR-EK-INPLACE
-2 CONSTANT _XR-EK-SAME-REBUILD
-3 CONSTANT _XR-EK-TWO-LEAF
-4 CONSTANT _XR-EK-REPLACE
+7 CONSTANT _XC-EK-REPLACE
 
 : _EXT4-STAGED-WRITE-FS-QUALIFY  ( ctx -- ior )
     DUP _EXT4-C.BSIZE + @ _EXT4-STAGED-WRITE-BLOCK-SIZE <>
@@ -19697,20 +19795,17 @@ EXT4-OPS ,
 \ when its release fits the bound profile and otherwise through a modern
 \ orphan insertion, release passes and a final cleanup that mount recovery
 \ completes after a crash.
-\ UNLINK admits nonfinal, direct empty-final, and orphan-backed final regular-
-\ file removal in one checksummed linear directory block.  Closed final
-\ orphans drain immediately; descriptor-retained final orphans drain on the
-\ last RELEASE.  RMDIR removes the exact empty
-\ one-block directory created by MKDIR, releasing both allocation units and
-\ revoking the freed directory-metadata home.  LINK inserts a second name for
-\ an authenticated regular inode and raises its link count atomically with the
-\ parent's edit.  RENAME admits atomic
-\ same-parent regular-file changes plus cross-parent regular-file and qualified
-\ empty-directory moves between authenticated linear, depth-zero, or singleton
-\ depth-one indexed parents.  Cross-parent moves rebuild both selected parent
-\ blocks; directory moves additionally transfer the parent link and rewrite
-\ the canonical child `..` record.  RENAME also replaces an existing regular
-\ file, which loses that link as an unlink's target would, so
+\ UNLINK and RMDIR share one removal from the same parents: a remaining
+\ link loses one count, a closed last link of an empty file is freed in the
+\ same transaction, and any other last link, an empty directory of any size
+\ included, enters the orphan file, which drains after the checkpoint or on
+\ the last RELEASE.  RENAME removes the source's record from its parent and
+\ inserts the new name into the new parent in one transaction, within one
+\ parent or across two, for regular files and directories of any size; a
+\ directory that changes parent takes the new parent in its `..` and moves
+\ a parent link.  Over an existing regular file or empty directory of the
+\ source's type the victim's record takes the source, and the victim loses
+\ that link as a removal's target would, so
 \ VFS-CAP-RENAME-REPLACE is set.  SETATTR persists an explicit nonempty
 \ subset of MODE/UID/GID/ATIME/MTIME/CTIME for an authenticated linked regular
 \ inode under exact 1/0/0 credit; it refuses RDEV and MODE while an access ACL
@@ -21447,7 +21542,7 @@ VARIABLE _EXT4-DRO-IOR
     0 ;
 
 \ =====================================================================
-\  Directory entry insertion and removal
+\  Directory entry insertion, removal and rename
 \ =====================================================================
 \
 \ CREATE, MKDIR and LINK share one directory insert.  CREATE allocates an
@@ -21479,10 +21574,20 @@ VARIABLE _EXT4-DRO-IOR
 \ and deletion drain it after the checkpoint, or on its last RELEASE while
 \ a descriptor holds it open.  RMDIR also lowers the parent's link count.
 \
-\ The cold plan authenticates the parent once: every index block and leaf
+\ RENAME is the removal of the source's record from its parent and the
+\ insert of the new name into the new parent, in one transaction.  Within
+\ one parent the removal comes first.  Over an existing name the victim's
+\ record takes the source's inode instead, and the victim loses that link
+\ as a removal's target does: a regular file's remaining link one count, a
+\ regular file's last link or an empty directory's two into the orphan
+\ file.  A directory moved to another parent names it in its `..`, and the
+\ parents' link counts follow the kernel's ext4_rename.
+\
+\ The cold plan authenticates each parent once: every index block and leaf
 \ is validated, every live name is hashed into its leaf's interval, and the
-\ name is looked for everywhere.  An insert must not find it; a removal
-\ finds its record and counts the records naming its inode.  A measuring
+\ names are looked for everywhere.  An insert must not find its name; a
+\ removal finds its record and counts the records naming its inode, and a
+\ rename finds its source's record and its victim's.  A measuring
 \ pass then stages the complete operation into a transaction the writer's
 \ capacity bounds, binds each metadata home to the role it plays, and
 \ aborts.  The live pass stages it again under exactly those credits, must
@@ -21607,15 +21712,117 @@ VARIABLE _XC-RM-PREV-OFF
 VARIABLE _XC-RM-PREV-REC
 VARIABLE _XC-CLEANUP-CREDIT
 VARIABLE _XC-CLEANUP-REVOKE
+VARIABLE _XC-INODE-ROLE
+VARIABLE _XC-PARENT-LINKS
+VARIABLE _XC-PARENT-ROLE
+VARIABLE _XC-PARENT-SNAP
+VARIABLE _XC-WALK-SOURCE
+VARIABLE _XC-WALK-VICTIM
+VARIABLE _XC-WALK-INSERT
+VARIABLE _XC-FIND-NAME
+VARIABLE _XC-FIND-NLEN
+VARIABLE _XC-HOLD-NAME
+VARIABLE _XC-HOLD-NLEN
+VARIABLE _XC-LEAF-FOUND
+VARIABLE _XC-LEAF-VICTIM
+
+\ A rename's own cells.  The new parent takes the main parent cells; a
+\ different old parent keeps its own in the OLD-PARENT bank, and a victim
+\ the removal target's in the VICTIM bank.
+VARIABLE _XC-RENAMING
+VARIABLE _XC-FLAGS
+VARIABLE _XC-CROSS
+VARIABLE _XC-MOVING
+VARIABLE _XC-VICTIM
+VARIABLE _XC-OLD-WALK
+VARIABLE _XC-OLD-NLEN
+VARIABLE _XC-SOURCE-HOME
+VARIABLE _XC-CHILD-HOME
+VARIABLE _XC-CHILD-DOTDOT
+VARIABLE _XC-VICTIM-D
+VARIABLE _XC-VICTIM-VN
+VARIABLE _XC-VICTIM-INO
+VARIABLE _XC-VICTIM-GEN
+VARIABLE _XC-VICTIM-NLINK
+VARIABLE _XC-VICTIM-FINAL
+VARIABLE _XC-VICTIM-ORPHAN
+VARIABLE _XC-VICTIM-GROUP
+VARIABLE _XC-VICTIM-INDEX
+VARIABLE _XC-VICTIM-INODE-HOME
+VARIABLE _XC-VICTIM-INODE-OFF
+VARIABLE _XC-VICTIM-ROLE
+VARIABLE _XC-VICTIM-DIR
+VARIABLE _XC-VICTIM-FOUND
+VARIABLE _XC-VICTIM-REFS
+VARIABLE _XC-VICTIM-DE-OFF
+VARIABLE _XC-VICTIM-DE-REC
+VARIABLE _XC-OLD-PARENT
+VARIABLE _XC-OLD-PARENT-VN
+VARIABLE _XC-OLD-PARENT-INO
+VARIABLE _XC-OLD-PARENT-PARENT-INO
+VARIABLE _XC-OLD-PARENT-GEN
+VARIABLE _XC-OLD-PARENT-NEW-NLINK
+VARIABLE _XC-OLD-PARENT-GROUP
+VARIABLE _XC-OLD-PARENT-HOME
+VARIABLE _XC-OLD-PARENT-OFF
+VARIABLE _XC-OLD-PARENT-BLOCKS
+VARIABLE _XC-OLD-PARENT-SECTORS
+VARIABLE _XC-OLD-PARENT-LINKS
+VARIABLE _XC-OLD-PARENT-ROLE
+VARIABLE _XC-OLD-PARENT-SNAP
+VARIABLE _XC-OLD-PARENT-EDIT
+VARIABLE _XC-OLD-PARENT-GROWTH
 
 CREATE _XC-NAME-SNAPSHOT 256 ALLOT
+CREATE _XC-OLD-NAME-SNAPSHOT 256 ALLOT
 CREATE _XC-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
 CREATE _XC-CHILD-DESC _EXT4-DD-SIZE ALLOT
+CREATE _XC-MOVED-DESC _EXT4-DD-SIZE ALLOT
 CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
+CREATE _XC-VICTIM-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
+CREATE _XC-SWAP-RECORD _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
 
-\ CREATE and MKDIR make a new inode; LINK and a removal name an existing one.
+\ CREATE and MKDIR make a new inode; LINK, a removal and a rename name an
+\ existing one.
 : _XC-CREATING?  ( -- flag )
-    _XC-LINKING @ 0= _XC-REMOVING @ 0= AND ;
+    _XC-LINKING @ 0= _XC-REMOVING @ 0= AND _XC-RENAMING @ 0= AND ;
+
+\ Exchange the cells at A and B.
+: _XC-EXCHANGE  ( a b -- )
+    2DUP @ SWAP @ ROT ! SWAP ! ;
+
+\ Exchange the inode records at A and B.
+: _XC-EXCHANGE-RECORDS  ( a b -- )
+    OVER _XC-SWAP-RECORD _EXT4-STAGED-WRITE-INODE-SIZE MOVE
+    2DUP SWAP _EXT4-STAGED-WRITE-INODE-SIZE MOVE
+    _XC-SWAP-RECORD SWAP _EXT4-STAGED-WRITE-INODE-SIZE MOVE
+    DROP ;
+
+\ Exchange the old parent's bank with the parent cells, so that one walk,
+\ one inode stager, one map audit and one publication serve both parents.
+: _XC-SWAP-PARENT  ( -- )
+    _XC-PARENT _XC-OLD-PARENT _XC-EXCHANGE
+    _XC-PARENT-VN _XC-OLD-PARENT-VN _XC-EXCHANGE
+    _XC-PARENT-INO _XC-OLD-PARENT-INO _XC-EXCHANGE
+    _XC-PARENT-PARENT-INO _XC-OLD-PARENT-PARENT-INO _XC-EXCHANGE
+    _XC-PARENT-GEN _XC-OLD-PARENT-GEN _XC-EXCHANGE
+    _XC-PARENT-NEW-NLINK _XC-OLD-PARENT-NEW-NLINK _XC-EXCHANGE
+    _XC-PARENT-GROUP _XC-OLD-PARENT-GROUP _XC-EXCHANGE
+    _XC-PARENT-HOME _XC-OLD-PARENT-HOME _XC-EXCHANGE
+    _XC-PARENT-OFF _XC-OLD-PARENT-OFF _XC-EXCHANGE
+    _XC-OLD-BLOCKS _XC-OLD-PARENT-BLOCKS _XC-EXCHANGE
+    _XC-OLD-SECTORS _XC-OLD-PARENT-SECTORS _XC-EXCHANGE
+    _XC-PARENT-LINKS _XC-OLD-PARENT-LINKS _XC-EXCHANGE
+    _XC-PARENT-ROLE _XC-OLD-PARENT-ROLE _XC-EXCHANGE
+    _XC-PARENT-SNAP _XC-OLD-PARENT-SNAP _XC-EXCHANGE
+    _XC-EDIT _XC-OLD-PARENT-EDIT _XC-EXCHANGE
+    _XC-GROWTH _XC-OLD-PARENT-GROWTH _XC-EXCHANGE ;
+
+\ The walk's modes: find the record the find name names, find the victim's
+\ record by the new name, and look for room for the new name, which must be
+\ absent, in the leaf its hash routes to.
+: _XC-WALK-MODE  ( source? victim? insert? -- )
+    _XC-WALK-INSERT ! _XC-WALK-VICTIM ! _XC-WALK-SOURCE ! ;
 
 \ Resolve the binding-owned record once at the operation boundary.  Lower
 \ planning and staging words receive this address explicitly and never recover
@@ -21654,123 +21861,15 @@ CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
 : _XC-P-FLAG?  ( value -- flag )
     DUP 0= SWAP -1 = OR ;
 
-: _XC-P-RENAME-CLEAR?  ( plan -- plan flag )
-    DUP _XC-P.RENAME-BASELINE + @
-    OVER _XC-P.RENAME-CROSS-PARENT + @ OR
-    OVER _XC-P.RENAME-DEST-SEPARATE + @ OR
-    OVER _XC-P.RENAME-EDIT-KIND + @ OR
-    OVER _XC-P.RENAME-DEST-ROUTE + @ OR
-    OVER _XC-P.RENAME-DEST-ROUTE-LOGICAL + @ OR
-    OVER _XC-P.RENAME-DEST-ENTRY + @ OR
-    OVER _XC-P.RENAME-DEST-LOGICAL + @ OR
-    OVER _XC-P.RENAME-DEST-HOME + @ OR
-    OVER _XC-P.RENAME-DEST-HASH + @ OR
-    OVER _XC-P.RENAME-DEST-MINOR + @ OR
-    OVER _XC-P.RENAME-NP-BASELINE + @ OR
-    OVER _XC-P.RENAME-NP-INDEXED + @ OR
-    OVER _XC-P.RENAME-NP-INDEX-BASELINE + @ OR
-    OVER _XC-P.RENAME-NP-ROOT-HOME + @ OR
-    OVER _XC-P.RENAME-NP-DEPTH + @ OR
-    OVER _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ OR
-    OVER _XC-P.RENAME-NP-PARENT-GROUP + @ OR
-    OVER _XC-P.RENAME-NP-PARENT-HOME + @ OR
-    OVER _XC-P.RENAME-NP-PARENT-OFF + @ OR
-    OVER _XC-P.RENAME-HASH-BASELINE + @ OR 0= ;
-
-: _XC-P-RENAME-NP-INDEX-SHAPE?  ( plan -- plan flag )
-    DUP _XC-P.RENAME-NP-INDEXED + @ IF
-        DUP _XC-P.RENAME-NP-INDEX-BASELINE + @ -1 <> IF
-            FALSE EXIT
-        THEN
-        DUP _XC-P.RENAME-NP-ROOT-HOME + @ 0= IF FALSE EXIT THEN
-        DUP _XC-P.RENAME-NP-DEPTH + @ DUP 0=
-        SWAP 1 = OR 0= IF FALSE EXIT THEN
-        DUP _XC-P.RENAME-NP-DEPTH + @ IF
-            DUP _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ 0<>
-        ELSE
-            DUP _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ 0=
-        THEN
-        EXIT
-    THEN
-    DUP _XC-P.RENAME-NP-INDEX-BASELINE + @ 0=
-    OVER _XC-P.RENAME-NP-ROOT-HOME + @ 0= AND
-    OVER _XC-P.RENAME-NP-DEPTH + @ 0= AND
-    OVER _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ 0= AND ;
-
-\ A rename that rewrites two directory blocks: a move between leaves or
-\ parents, or a replacement whose victim's record lies outside the source's
-\ block.
-: _XC-P-RENAME-TWO-BLOCK-KIND?  ( plan -- plan flag )
-    DUP _XC-P.RENAME-EDIT-KIND + @
-    DUP _XR-EK-TWO-LEAF = SWAP _XR-EK-REPLACE = OR ;
-
-: _XC-P-RENAME-SHAPE?  ( plan -- plan flag )
-    DUP _XC-P.RENAME-BASELINE + @ -1 <> IF FALSE EXIT THEN
-    DUP _XC-P.RENAME-CROSS-PARENT + @ _XC-P-FLAG? 0= IF
-        FALSE EXIT
-    THEN
-    DUP _XC-P.RENAME-DEST-SEPARATE + @ _XC-P-FLAG? 0= IF
-        FALSE EXIT
-    THEN
-    DUP _XC-P.RENAME-NP-INDEXED + @ _XC-P-FLAG? 0= IF
-        FALSE EXIT
-    THEN
-    DUP _XC-P.RENAME-EDIT-KIND + @ DUP _XR-EK-INPLACE U<
-    SWAP _XR-EK-REPLACE U> OR IF FALSE EXIT THEN
-    DUP _XC-P.RENAME-DEST-HOME + @ 0= IF FALSE EXIT THEN
-    DUP _XC-P.RENAME-CROSS-PARENT + @ IF
-        DUP _XC-P.RENAME-DEST-SEPARATE + @ 0= IF FALSE EXIT THEN
-        _XC-P-RENAME-TWO-BLOCK-KIND? 0= IF FALSE EXIT THEN
-        DUP _XC-P.RENAME-NP-BASELINE + @ -1 <> IF FALSE EXIT THEN
-        DUP _XC-P.RENAME-NP-PARENT-HOME + @ 0= IF FALSE EXIT THEN
-        _XC-P-RENAME-NP-INDEX-SHAPE? 0= IF FALSE EXIT THEN
-    ELSE
-        DUP _XC-P.RENAME-NP-BASELINE + @
-        OVER _XC-P.RENAME-NP-INDEXED + @ OR
-        OVER _XC-P.RENAME-NP-INDEX-BASELINE + @ OR
-        OVER _XC-P.RENAME-NP-ROOT-HOME + @ OR
-        OVER _XC-P.RENAME-NP-DEPTH + @ OR
-        OVER _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ OR
-        OVER _XC-P.RENAME-NP-PARENT-GROUP + @ OR
-        OVER _XC-P.RENAME-NP-PARENT-HOME + @ OR
-        OVER _XC-P.RENAME-NP-PARENT-OFF + @ OR IF
-            FALSE EXIT
-        THEN
-        DUP _XC-P.RENAME-DEST-SEPARATE + @ IF
-            DUP _XC-P.INDEXED + @ 0= IF FALSE EXIT THEN
-            _XC-P-RENAME-TWO-BLOCK-KIND? 0= IF FALSE EXIT THEN
-        ELSE
-            DUP _XC-P.RENAME-EDIT-KIND + @ _XR-EK-TWO-LEAF = IF
-                FALSE EXIT
-            THEN
-        THEN
-    THEN
-    DUP _XC-P.RENAME-CROSS-PARENT + @ IF
-        DUP _XC-P.RENAME-NP-INDEXED + @
-    ELSE
-        DUP _XC-P.INDEXED + @
-    THEN IF
-        DUP _XC-P.RENAME-DEST-LOGICAL + @ 0= IF FALSE EXIT THEN
-    ELSE
-        DUP _XC-P.RENAME-DEST-ROUTE + @
-        OVER _XC-P.RENAME-DEST-ROUTE-LOGICAL + @ OR
-        OVER _XC-P.RENAME-DEST-ENTRY + @ OR
-        OVER _XC-P.RENAME-DEST-LOGICAL + @ OR
-        OVER _XC-P.RENAME-DEST-HASH + @ OR
-        OVER _XC-P.RENAME-DEST-MINOR + @ OR IF FALSE EXIT THEN
-    THEN
-    DUP _XC-P.INDEXED + @
-    OVER _XC-P.RENAME-NP-INDEXED + @ OR IF
-        DUP _XC-P.RENAME-HASH-BASELINE + @ -1 =
-    ELSE
-        DUP _XC-P.RENAME-HASH-BASELINE + @ 0=
-    THEN ;
-
 \ An insert's edit fits its parent: a linear parent takes slack or a
 \ conversion, an HTree slack or a leaf split, and only a level-zero root
-\ grows and only a level-one node splits.
+\ grows and only a level-one node splits.  A rename over a victim hands the
+\ victim's record to the source in either kind of parent.
 : _XC-P-INSERT-SHAPE?  ( plan -- plan flag )
     DUP _XC-P.INSERT-EDIT + @
+    DUP _XC-EK-REPLACE = IF
+        DROP DUP _XC-P.OP + @ _XC-PO-RENAME = EXIT
+    THEN
     OVER _XC-P.INDEXED + @ IF
         DUP _XC-EK-SLACK = OVER _XC-EK-SPLIT = OR IF DROP TRUE EXIT THEN
         DUP _XC-EK-GROW = IF
@@ -21786,6 +21885,8 @@ CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
 \ The lifecycle/shape cell replaces the former ambient SHAPE-SET flag.  A
 \ sealed branch must have one coherent family of baseline markers; this is a
 \ shallow state check, not a repeated audit of every captured media byte.
+\ The markers describe the parent that takes the new name: an insert's, or
+\ a rename's new parent.
 : _XC-P-SHAPE?  ( plan -- plan flag )
     DUP _XC-P.OP + @ _XC-P-OP? 0= IF FALSE EXIT THEN
     DUP _XC-P.OWNER-CTX + @ 0= IF FALSE EXIT THEN
@@ -21806,16 +21907,10 @@ CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
         DUP _XC-P.INDEX-BASELINE + @
         OVER _XC-P.INDEX-BASE-DEPTH + @ OR IF FALSE EXIT THEN
     THEN
-    DUP _XC-P.OP + @ _XC-PO-INSERT = IF
-        _XC-P-INSERT-SHAPE? 0= IF FALSE EXIT THEN
-    ELSE
-        DUP _XC-P.INSERT-EDIT + @ IF FALSE EXIT THEN
+    DUP _XC-P.OP + @ DUP _XC-PO-INSERT = SWAP _XC-PO-RENAME = OR IF
+        _XC-P-INSERT-SHAPE? EXIT
     THEN
-    DUP _XC-P.OP + @ _XC-PO-RENAME = IF
-        _XC-P-RENAME-SHAPE?
-    ELSE
-        _XC-P-RENAME-CLEAR?
-    THEN ;
+    DUP _XC-P.INSERT-EDIT + @ 0= ;
 
 : _XC-P-SCRUB  ( plan -- )
     _XC-P-SIZE 0 FILL ;
@@ -21952,7 +22047,7 @@ CREATE _XC-HP-SWAP _XC-HP-ENTRY-CELLS CELLS ALLOT
 : _XC-HP-INODE-TABLE-ROLE?  ( role -- flag )
     DUP _XC-HR-INODE =
     OVER _XC-HR-PARENT-INODE = OR
-    OVER _XC-HR-RENAME-NEW-PARENT-INODE = OR
+    OVER _XC-HR-RENAME-OLD-PARENT-INODE = OR
     SWAP _XC-HR-RENAME-VICTIM-INODE = OR ;
 
 \ Two roles share a home only as inode records in one inode-table block.
@@ -22332,28 +22427,86 @@ CREATE _XC-HP-SWAP _XC-HP-ENTRY-CELLS CELLS ALLOT
     THEN
     _XC-HP-ORDER ;
 
-: _XC-DIRENT-NAME=?  ( dirent -- flag )
-    DUP 6 + C@ _XC-NLEN @ <> IF DROP FALSE EXIT THEN
-    8 + _XC-NAME-SNAPSHOT _XC-NLEN @ _EXT4-BYTES=? ;
+: _XC-DIRENT-HOLDS?  ( dirent name nlen -- flag )
+    _XC-HOLD-NLEN ! _XC-HOLD-NAME !
+    DUP 6 + C@ _XC-HOLD-NLEN @ <> IF DROP FALSE EXIT THEN
+    8 + _XC-HOLD-NAME @ _XC-HOLD-NLEN @ _EXT4-BYTES=? ;
 
-\ In a removal's scan, note the live record at DIR-OFF: count it when it
-\ names the target's inode, and when it holds the name take its place, its
-\ length and its predecessor in the block, the record before it, live or
-\ unused, or none.  The name holds the target's inode and its file type,
-\ two for a directory and zero or one for a regular file.
+: _XC-DIRENT-NAME=?  ( dirent -- flag )
+    _XC-NAME-SNAPSHOT _XC-NLEN @ _XC-DIRENT-HOLDS? ;
+
+\ A named inode's record has its type: two for a directory, zero or one for
+\ a regular file.
+: _XC-RECORD-TYPE?  ( dirent dir? -- flag )
+    SWAP 7 + C@ SWAP IF 2 = ELSE 1 U> 0= THEN ;
+
+\ In a removal's or a rename's scan, note the live record at DIR-OFF: count
+\ it when it names the target's inode, and when it holds the find name, the
+\ removed name or the rename's old one, take its place, its length and its
+\ predecessor in the block, the record before it, live or unused, or none.
+\ The name holds the target's inode and its type.
 : _XC-FIND-RECORD  ( -- ior )
     _XC-DIR-INODE @ _XC-INODE @ = IF 1 _XC-REFS +! THEN
-    _XC-DIR-DE @ _XC-DIRENT-NAME=? 0= IF 0 EXIT THEN
+    _XC-DIR-DE @ _XC-FIND-NAME @ _XC-FIND-NLEN @ _XC-DIRENT-HOLDS? 0= IF
+        0 EXIT
+    THEN
     _XC-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
     _XC-DIR-INODE @ _XC-INODE @ <> IF VFS-E-CONFLICT EXIT THEN
-    _XC-DIR-DE @ 7 + C@
-    _XC-DIRECTORY @ IF 2 <> ELSE 1 U> THEN IF
+    _XC-DIR-DE @ _XC-DIRECTORY @ _XC-RECORD-TYPE? 0= IF
         EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
     THEN
     -1 _XC-FOUND !
     _XC-DIR-OFF @ _XC-RM-OFF ! _XC-DIR-REC @ _XC-RM-REC !
     _XC-PREV-OFF @ _XC-RM-PREV-OFF ! _XC-PREV-REC @ _XC-RM-PREV-REC !
     0 ;
+
+\ In a rename's scan of its new parent, note the live record at DIR-OFF
+\ against the victim: count it when it names the victim's inode, and when
+\ it holds the new name take its place and length.  The name holds the
+\ victim's inode and its type.
+: _XC-FIND-VICTIM  ( -- ior )
+    _XC-DIR-INODE @ _XC-VICTIM-INO @ = IF 1 _XC-VICTIM-REFS +! THEN
+    _XC-DIR-DE @ _XC-DIRENT-NAME=? 0= IF 0 EXIT THEN
+    _XC-VICTIM-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
+    _XC-DIR-INODE @ _XC-VICTIM-INO @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-DIR-DE @ _XC-VICTIM-DIR @ _XC-RECORD-TYPE? 0= IF
+        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+    THEN
+    -1 _XC-VICTIM-FOUND !
+    _XC-DIR-OFF @ _XC-VICTIM-DE-OFF ! _XC-DIR-REC @ _XC-VICTIM-DE-REC !
+    0 ;
+
+\ Note the live record at DIR-OFF in the walk's modes: the find name's
+\ record, the victim's, or, while the new name must be absent, the new name
+\ itself, which answers EXISTS.
+: _XC-NOTE-LIVE  ( -- exists? ior )
+    _XC-WALK-SOURCE @ IF
+        _XC-FIND-RECORD ?DUP IF FALSE SWAP EXIT THEN
+    THEN
+    _XC-WALK-VICTIM @ IF
+        _XC-FIND-VICTIM ?DUP IF FALSE SWAP EXIT THEN
+    THEN
+    _XC-WALK-INSERT @ IF _XC-DIR-DE @ _XC-DIRENT-NAME=? 0 EXIT THEN
+    FALSE 0 ;
+
+\ Note the first record of the block with room for the new name: a live
+\ record's slack past its used length, USED bytes at DIR-USED, or an unused
+\ record.
+: _XC-NOTE-SLOT  ( live? -- )
+    _XC-INSERT-OFF @ -1 <> IF DROP EXIT THEN
+    IF
+        _XC-DIR-REC @ _XC-DIR-USED @ - _XC-NEEDED @ U< IF EXIT THEN
+        1 _XC-INSERT-KIND !
+        _XC-DIR-OFF @ _XC-INSERT-PREV-OFF !
+        _XC-DIR-USED @ _XC-INSERT-PREV-USED !
+        _XC-DIR-OFF @ _XC-DIR-USED @ + _XC-INSERT-OFF !
+        _XC-DIR-REC @ _XC-DIR-USED @ - _XC-INSERT-REC !
+    ELSE
+        _XC-DIR-REC @ _XC-NEEDED @ U< IF EXIT THEN
+        2 _XC-INSERT-KIND !
+        _XC-DIR-OFF @ _XC-INSERT-OFF !
+        _XC-DIR-REC @ _XC-INSERT-REC !
+    THEN ;
 
 : _XC-DIR-SCAN  ( -- ior )
     0 _XC-DIR-DOT ! 0 _XC-DIR-DOTDOT !
@@ -22405,42 +22558,23 @@ CREATE _XC-HP-SWAP _XC-HP-ENTRY-CELLS CELLS ALLOT
                         EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
                     THEN
                     -1 _XC-DIR-DOTDOT !
-                ELSE _XC-REMOVING @ IF
-                    _XC-FIND-RECORD ?DUP IF EXIT THEN
                 ELSE
-                    _XC-DIR-DE @ _XC-DIRENT-NAME=? IF
-                        VFS-E-EXISTS EXIT
-                    THEN
-                THEN THEN
+                    _XC-NOTE-LIVE ?DUP IF NIP EXIT THEN
+                    IF VFS-E-EXISTS EXIT THEN
+                THEN
             THEN
             _XC-DIR-NAME-LEN @ 8 + 3 + -4 AND
             DUP _XC-DIR-USED !
             _XC-DIR-REC @ U> IF
                 EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
             THEN
-            _XC-INSERT-OFF @ -1 = _XC-REMOVING @ 0= AND IF
-                _XC-DIR-REC @ _XC-DIR-USED @ -
-                _XC-NEEDED @ U< 0= IF
-                    1 _XC-INSERT-KIND !
-                    _XC-DIR-OFF @ _XC-INSERT-PREV-OFF !
-                    _XC-DIR-USED @ _XC-INSERT-PREV-USED !
-                    _XC-DIR-OFF @ _XC-DIR-USED @ +
-                    _XC-INSERT-OFF !
-                    _XC-DIR-REC @ _XC-DIR-USED @ -
-                    _XC-INSERT-REC !
-                THEN
-            THEN
+            _XC-WALK-INSERT @ IF TRUE _XC-NOTE-SLOT THEN
         ELSE
             _XC-DIR-NAME-LEN @
             _XC-DIR-DE @ 7 + C@ OR IF
                 EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
             THEN
-            _XC-INSERT-OFF @ -1 = _XC-REMOVING @ 0= AND
-            _XC-DIR-REC @ _XC-NEEDED @ U< 0= AND IF
-                2 _XC-INSERT-KIND !
-                _XC-DIR-OFF @ _XC-INSERT-OFF !
-                _XC-DIR-REC @ _XC-INSERT-REC !
-            THEN
+            _XC-WALK-INSERT @ IF FALSE _XC-NOTE-SLOT THEN
         THEN
         _XC-DIR-OFF @ _XC-PREV-OFF ! _XC-DIR-REC @ _XC-PREV-REC !
         _XC-DIR-REC @ _XC-DIR-OFF +!
@@ -22449,8 +22583,6 @@ CREATE _XC-HP-SWAP _XC-HP-ENTRY-CELLS CELLS ALLOT
     _XC-DIR-DOT @ 0= OR _XC-DIR-DOTDOT @ 0= OR IF
         EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
     THEN
-    _XC-REMOVING @ IF 0 EXIT THEN
-    _XC-INSERT-OFF @ -1 = IF VFS-E-NOSPC EXIT THEN
     0 ;
 
 VARIABLE _XC-HASH-SUPER
@@ -22598,9 +22730,9 @@ VARIABLE _XC-HASH-SUPER
     0 ;
 
 \ An HTree leaf contains no dot records.  Authenticate every live entry's
-\ name, type, inode bound, and hash interval, and look for the name.  The
-\ selected leaf's scan also finds the first record with room for the name
-\ and records the leaf's record map for a split.
+\ name, type, inode bound, and hash interval, and note the names the walk
+\ looks for.  The selected leaf's scan also finds the first record with room
+\ for the new name and records the leaf's record map for a split.
 : _XC-INDEXED-LEAF-SCAN  ( plan selected? -- plan ior )
     _XC-INDEX-SELECTED !
     DUP _XC-P.RECORDS + _XC-SPLIT-RECORDS !
@@ -22646,13 +22778,8 @@ VARIABLE _XC-HASH-SUPER
             _XC-DIR-DE @ 9 + C@ [CHAR] . = AND OR IF
                 EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
             THEN
-            _XC-REMOVING @ IF
-                _XC-FIND-RECORD ?DUP IF EXIT THEN
-            ELSE
-                _XC-DIR-DE @ _XC-DIRENT-NAME=? IF
-                    -1 _XC-INDEX-DUPLICATE !
-                THEN
-            THEN
+            _XC-NOTE-LIVE ?DUP IF NIP EXIT THEN
+            IF -1 _XC-INDEX-DUPLICATE ! THEN
             _XC-DIR-DE @ 8 + _XC-DIR-NAME-LEN @
             _XC-DIRECTORY-DESC _EXT4-DD.DX-VERSION + @ _XC-CTX @
             _EXT4-HALF-MD4-DIRHASH?
@@ -22675,29 +22802,13 @@ VARIABLE _XC-HASH-SUPER
             _XC-DIR-REC @ U> IF
                 EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
             THEN
-            _XC-INDEX-SELECTED @ _XC-INSERT-OFF @ -1 = AND IF
-                _XC-DIR-REC @ _XC-DIR-USED @ -
-                _XC-NEEDED @ U< 0= IF
-                    1 _XC-INSERT-KIND !
-                    _XC-DIR-OFF @ _XC-INSERT-PREV-OFF !
-                    _XC-DIR-USED @ _XC-INSERT-PREV-USED !
-                    _XC-DIR-OFF @ _XC-DIR-USED @ +
-                    _XC-INSERT-OFF !
-                    _XC-DIR-REC @ _XC-DIR-USED @ -
-                    _XC-INSERT-REC !
-                THEN
-            THEN
+            _XC-INDEX-SELECTED @ IF TRUE _XC-NOTE-SLOT THEN
         ELSE
             _XC-DIR-NAME-LEN @
             _XC-DIR-DE @ 7 + C@ OR IF
                 EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
             THEN
-            _XC-INDEX-SELECTED @ _XC-INSERT-OFF @ -1 = AND
-            _XC-DIR-REC @ _XC-NEEDED @ U< 0= AND IF
-                2 _XC-INSERT-KIND !
-                _XC-DIR-OFF @ _XC-INSERT-OFF !
-                _XC-DIR-REC @ _XC-INSERT-REC !
-            THEN
+            _XC-INDEX-SELECTED @ IF FALSE _XC-NOTE-SLOT THEN
         THEN
         _XC-DIR-OFF @ _XC-PREV-OFF ! _XC-DIR-REC @ _XC-PREV-REC !
         _XC-DIR-REC @ _XC-DIR-OFF +!
@@ -22709,14 +22820,17 @@ VARIABLE _XC-HASH-SUPER
 
 \ The operation must refer to the live VFS parent, not merely to an inode
 \ number that still parses on disk.  CREATE and MKDIR create in the
-\ working directory, as the generic VFS-MKFILE? and VFS-MKDIR do.
+\ working directory, as the generic VFS-MKFILE? and VFS-MKDIR do.  The
+\ entry's dentry is the parent's child, except in a rename's new parent.
 : _XC-REQUIRE-PARENT-RUNTIME  ( -- ior )
     _XC-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF VFS-E-STALE EXIT THEN
     _XC-V @ V.BCTX @ _XC-CTX @ <> IF VFS-E-STALE EXIT THEN
     _XC-V @ _EXT4-ATTACHED? 0= _XC-V @ _EXT4-READY? 0= OR IF
         VFS-E-STALE EXIT
     THEN
-    _XC-D @ IN.PARENT @ _XC-PARENT @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-RENAMING @ 0= _XC-WALK-SOURCE @ OR IF
+        _XC-D @ IN.PARENT @ _XC-PARENT @ <> IF VFS-E-CONFLICT EXIT THEN
+    THEN
     _XC-PARENT @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
     _XC-PARENT @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
     _XC-PARENT @ D.VNODE @ _XC-PARENT-VN @ <> IF
@@ -22739,35 +22853,61 @@ VARIABLE _XC-HASH-SUPER
 \  Parent authentication
 \ ---------------------------------------------------------------------
 \
-\ An operation authenticates its parent once, before any staging.  A
+\ An operation authenticates each parent once, before any staging.  A
 \ linear parent's block is validated and scanned.  An HTree parent's root
 \ is validated, and then every block it names: each index node, checksum
 \ and entry vector, and each leaf, checksum and dirent chain, with every
 \ live name hashed and checked against the hash interval its routing gives
-\ it.  The name is looked for in every leaf.  Every block but the root
+\ it.  The names are looked for in every leaf.  Every block but the root
 \ must be named exactly once, so a level-one walk marks each block it
 \ reaches and the root, its nodes and their entries must account for the
 \ whole directory.  An insert's walk selects the leaf the new name's hash
 \ routes to, as the kernel's dx_probe does, and that leaf's scan gives the
 \ record with room for the name and the record map a split sorts.  A
 \ removal's walk takes the leaf that holds the name, wherever a run of
-\ equal hashes put it.
+\ equal hashes put it.  A rename walks its old parent for the source's
+\ record and its new parent for the new name, as an insert does, or for the
+\ victim's record; within one parent one walk does both.
 
-\ A removal's name must be in the parent.  A last link's inode is named
-\ there once; a remaining link's must be named there again, which keeps
-\ the link the removal leaves.
-: _XC-REQUIRE-FOUND  ( -- ior )
-    _XC-FOUND @ 0= IF VFS-E-CONFLICT EXIT THEN
-    _XC-FINAL @ IF
-        _XC-REFS @ 1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
+\ The name a removal or a rename finds must be in its parent, and a
+\ victim's record in the new parent.  A last link's inode is named there
+\ once; a remaining link's must be named there again, which keeps the link
+\ the operation leaves.
+: _XC-REQUIRE-NAMED  ( found? final? refs -- ior )
+    ROT 0= IF 2DROP VFS-E-CONFLICT EXIT THEN
+    SWAP IF
+        1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
     ELSE
-        _XC-REFS @ 2 U< IF EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT THEN
+        2 U< IF EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT THEN
     THEN
+    0 ;
+
+: _XC-REQUIRE-FOUND  ( -- ior )
+    _XC-FOUND @ _XC-FINAL @ _XC-REFS @ _XC-REQUIRE-NAMED ?DUP IF EXIT THEN
     _XC-EK-REMOVE _XC-EDIT ! 0 _XC-GROWTH !
     0 ;
 
-\ An insert chooses the leaf its name routes to; a removal finds its leaf.
-: _XC-CHOOSES?  ( -- flag )  _XC-REMOVING @ 0= ;
+\ A rename's source keeps its links, so its record need only be found.
+: _XC-REQUIRE-SOURCE  ( -- ior )
+    _XC-FOUND @ 0= IF VFS-E-CONFLICT EXIT THEN 0 ;
+
+\ Over a victim the victim's record takes the source, and nothing grows.
+: _XC-REQUIRE-VICTIM  ( -- ior )
+    _XC-VICTIM-FOUND @ _XC-VICTIM-FINAL @ _XC-VICTIM-REFS @
+    _XC-REQUIRE-NAMED ?DUP IF EXIT THEN
+    _XC-EK-REPLACE _XC-EDIT ! 0 _XC-GROWTH !
+    0 ;
+
+\ A walk looking for room for the new name chooses the leaf it routes to;
+\ one finding records finds their leaves.
+: _XC-CHOOSES?  ( -- flag )  _XC-WALK-INSERT @ ;
+
+\ The block holding a rename's source record becomes the plan's source
+\ snapshot as media holds it.
+: _XC-CAPTURE-SOURCE  ( plan home -- plan )
+    _XC-SOURCE-HOME !
+    _XC-CTX @ _EXT4-C.DIR-BLOCK + OVER _XC-P.SOURCE-SNAPSHOT +
+    _XC-CTX @ _EXT4-C.BSIZE + @ CMOVE ;
 
 \ Mark the block at LOGICAL as named in a level-one tree.
 : _XC-MARK-SEEN  ( plan logical -- plan ior )
@@ -22780,11 +22920,13 @@ VARIABLE _XC-HASH-SUPER
     0 ;
 
 \ Validate the leaf at LOGICAL against the interval the descriptor holds.
-\ The selected leaf is the one the new name routes to, and a removal's is
-\ the one its scan finds the name in; its block becomes the plan's
-\ directory snapshot.
+\ The selected leaf is the one the new name routes to, a removal's is the
+\ one its scan finds the name in, and a rename's victim's the one holding
+\ the victim's record; that block becomes the plan's directory snapshot.
+\ The leaf holding a rename's source record becomes its source snapshot.
 : _XC-AUTH-LEAF  ( plan logical selected? -- plan ior )
     _XC-INDEX-SELECTED ! DUP _XC-WALK-LOGICAL !
+    _XC-FOUND @ _XC-LEAF-FOUND ! _XC-VICTIM-FOUND @ _XC-LEAF-VICTIM !
     _XC-DIRECTORY-DESC _EXT4-DD-LOAD-LOGICAL
     _XC-IOR ! _XC-INDEX-PHYS !
     _XC-IOR @ ?DUP IF EXIT THEN
@@ -22792,11 +22934,15 @@ VARIABLE _XC-HASH-SUPER
     _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
     _XC-INDEX-SELECTED @ _XC-INDEXED-LEAF-SCAN ?DUP IF EXIT THEN
     _XC-INDEX-SELECTED @
-    _XC-REMOVING @ IF _XC-FOUND @ _XC-DIR-HOME @ 0= AND OR THEN IF
+    _XC-VICTIM-FOUND @ _XC-LEAF-VICTIM @ <> OR
+    _XC-FOUND @ _XC-LEAF-FOUND @ <> _XC-RENAMING @ 0= AND OR IF
         _XC-INDEX-PHYS @ _XC-DIR-HOME !
         _XC-WALK-LOGICAL @ _XC-INDEX-LEAF-LOGICAL !
         _XC-CTX @ _EXT4-C.DIR-BLOCK + OVER _XC-P.DIR-SNAPSHOT +
         _XC-CTX @ _EXT4-C.BSIZE + @ CMOVE
+    THEN
+    _XC-FOUND @ _XC-LEAF-FOUND @ <> _XC-RENAMING @ AND IF
+        _XC-INDEX-PHYS @ _XC-CAPTURE-SOURCE
     THEN
     0 ;
 
@@ -22855,11 +23001,13 @@ VARIABLE _XC-HASH-SUPER
     LOOP ;
 
 \ A level-one root names the index nodes, and they the leaves.  The routed
-\ node is kept as the plan's node snapshot.
+\ node is kept as the plan's node snapshot.  Each walk starts with no block
+\ marked, since a rename walks two parents.
 : _XC-AUTH-DEPTH1  ( plan -- plan ior )
     _XC-OLD-BLOCKS @ _XC-SEEN-BITS U> IF
         EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
     THEN
+    DUP _XC-P.SEEN + _XC-SEEN-BITS 63 + 64 / CELLS 0 FILL
     0 _XC-MARK-SEEN ?DUP IF EXIT THEN
     1 _XC-WALK-TOTAL !
     0 _XC-INDEX-ENTRY !
@@ -22940,9 +23088,10 @@ VARIABLE _XC-HASH-SUPER
     0 _XC-SPLIT-BASE !
     _XC-CHOOSE-SPLIT ;
 
-\ Authenticate an HTree parent, select the leaf the new name routes to and
-\ choose the edit, or find a removal's record.  The plan records the
-\ authenticated route and the leaf the edit rewrites.
+\ Authenticate an HTree parent and select the leaf the new name routes to,
+\ or find the records a removal or a rename looks for.  The plan records
+\ the authenticated route and the leaf the edit rewrites in the parent that
+\ takes the new name; a rename's walk of its old parent records nothing.
 : _XC-AUTH-INDEXED-PARENT  ( plan -- plan ior )
     _XC-DIRECTORY-DESC _EXT4-DD-AUTH-HTREE-ROOT ?DUP IF EXIT THEN
     _XC-REQUIRE-HASH-AUTHORITY ?DUP IF EXIT THEN
@@ -22961,10 +23110,11 @@ VARIABLE _XC-HASH-SUPER
     0 _XC-INDEX-DUPLICATE !
     -1 _XC-INSERT-OFF ! 0 _XC-INSERT-KIND !
     0 _XC-INDEX-NODE-HOME ! 0 _XC-DIR-HOME !
-    0 _XC-FOUND ! 0 _XC-REFS !
+    0 _XC-FOUND ! 0 _XC-REFS ! 0 _XC-VICTIM-FOUND ! 0 _XC-VICTIM-REFS !
     _XC-INDEX-DEPTH @ IF _XC-AUTH-DEPTH1 ELSE _XC-AUTH-DEPTH0 THEN
     ?DUP IF EXIT THEN
     _XC-INDEX-DUPLICATE @ IF VFS-E-EXISTS EXIT THEN
+    _XC-OLD-WALK @ IF 0 EXIT THEN
     -1 OVER _XC-P.INDEX-BASELINE + !
     _XC-INDEX-ROOT-HOME @ OVER _XC-P.INDEX-BASE-ROOT-HOME + !
     _XC-INDEX-DEPTH @ OVER _XC-P.INDEX-BASE-DEPTH + !
@@ -22981,13 +23131,12 @@ VARIABLE _XC-HASH-SUPER
     _XC-PARENT-GROUP @ OVER _XC-P.INDEX-BASE-PARENT-GROUP + !
     _XC-PARENT-HOME @ OVER _XC-P.INDEX-BASE-PARENT-HOME + !
     _XC-PARENT-OFF @ OVER _XC-P.INDEX-BASE-PARENT-OFF + !
-    _XC-REMOVING @ IF _XC-REQUIRE-FOUND EXIT THEN
-    _XC-PLAN-INDEXED-EDIT ;
+    0 ;
 
-\ A one-block linear parent takes the name in its slack.  A full block
-\ converts to a depth-zero HTree as make_indexed_dir builds one, under the
-\ superblock's default hash.  A removal finds its record in the block.
+\ Authenticate a one-block linear parent and scan its block, which has no
+\ index blocks.
 : _XC-AUTH-LINEAR-PARENT  ( plan -- plan ior )
+    0 _XC-INDEX-DEPTH ! 0 _XC-INDEX-NODE-HOME ! 0 _XC-INDEX-ROOT-HOME !
     0 _XC-CTX @ _EXT4-MAP-BLOCK
     _XC-IOR ! SWAP _XC-DIR-HOME !
     _XC-IOR @ ?DUP IF NIP EXIT THEN
@@ -22999,13 +23148,21 @@ VARIABLE _XC-HASH-SUPER
     _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.DIR-BLOCK + OVER _XC-P.DIR-SNAPSHOT +
     _XC-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    0 _XC-FOUND ! 0 _XC-REFS !
-    _XC-DIR-SCAN
-    _XC-REMOVING @ IF ?DUP IF EXIT THEN _XC-REQUIRE-FOUND EXIT THEN
-    DUP 0= IF
-        DROP _XC-EK-SLACK _XC-EDIT ! 0 _XC-GROWTH ! 0 EXIT
+    0 _XC-FOUND ! 0 _XC-REFS ! 0 _XC-VICTIM-FOUND ! 0 _XC-VICTIM-REFS !
+    _XC-DIR-SCAN ?DUP IF EXIT THEN
+    _XC-RENAMING @ _XC-FOUND @ AND IF _XC-DIR-HOME @ _XC-CAPTURE-SOURCE THEN
+    0 ;
+
+\ Choose an insert's edit once its parent is walked.  A one-block linear
+\ parent takes the name in its slack, or a full block converts to a
+\ depth-zero HTree as make_indexed_dir builds one, under the superblock's
+\ default hash.  An HTree parent's edit is chosen as ext4_dx_add_entry
+\ chooses it.
+: _XC-PLAN-INSERT-EDIT  ( plan -- plan ior )
+    _XC-LOAD-INDEXED @ IF _XC-PLAN-INDEXED-EDIT EXIT THEN
+    _XC-INSERT-OFF @ -1 <> IF
+        _XC-EK-SLACK _XC-EDIT ! 0 _XC-GROWTH ! 0 EXIT
     THEN
-    DUP VFS-E-NOSPC <> IF EXIT THEN DROP
     _XC-REQUIRE-HASH-AUTHORITY ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.SB + _EXT4-SB.DEFAULT-HASH + C@ _XC-HASH-VERSION !
     _XC-NAME-SNAPSHOT _XC-NLEN @ _XC-HASH-VERSION @ _XC-CTX @
@@ -23015,6 +23172,71 @@ VARIABLE _XC-HASH-SUPER
     _XC-CONVERT-RECORDS ?DUP IF EXIT THEN
     _XC-EK-CONVERT _XC-EDIT ! 2 _XC-GROWTH !
     _XC-CHOOSE-SPLIT ;
+
+\ Find again, in the plan's directory snapshot, the first record with room
+\ for the new name, as the walk's scans find it.
+: _XC-SCAN-SLOT  ( plan -- plan )
+    -1 _XC-INSERT-OFF ! 0 _XC-INSERT-KIND !
+    0 _XC-DIR-OFF !
+    BEGIN
+        _XC-DIR-OFF @ _XC-CTX @ _EXT4-C.BSIZE + @ _XC-DIRENT-TAIL - U<
+    WHILE
+        DUP _XC-P.DIR-SNAPSHOT + _XC-DIR-OFF @ + DUP _XC-DIR-DE !
+        4 + W@ _XC-DIR-REC !
+        _XC-DIR-DE @ _XC-RECORD-USED _XC-DIR-USED !
+        _XC-DIR-DE @ L@ 0<> _XC-NOTE-SLOT
+        _XC-DIR-REC @ _XC-DIR-OFF +!
+    REPEAT ;
+
+\ Take the record at OFFSET out of the selected leaf's record map.
+: _XC-DROP-RECORD  ( plan offset -- plan ior )
+    _XC-DIR-OFF ! 0 _XC-SPLIT-I !
+    BEGIN _XC-SPLIT-I @ _XC-SPLIT-COUNT @ U< WHILE
+        DUP _XC-P.RECORDS + _XC-SPLIT-I @ CELLS +
+        DUP @ 0xFFFF AND _XC-DIR-OFF @ = IF
+            DUP CELL+ SWAP
+            _XC-SPLIT-COUNT @ _XC-SPLIT-I @ - 1- CELLS MOVE
+            -1 _XC-SPLIT-COUNT +!
+            0 EXIT
+        THEN
+        DROP 1 _XC-SPLIT-I +!
+    REPEAT
+    VFS-E-CORRUPT ;
+
+\ Take the target's record out of IMAGE as ext4_generic_delete_entry
+\ does.  The record before it in the block, live or unused, absorbs its
+\ length and the record's bytes are cleared; the first record of a block
+\ keeps its length and becomes unused, its inode and every byte from its
+\ name length to its end cleared.  IMAGE is the authenticated block, which
+\ its stager stamps once every edit is in.
+: _XC-DIR-REMOVE  ( image -- ior )
+    DUP _XC-DIR-IMAGE ! 0= IF VFS-E-INVALID EXIT THEN
+    _XC-DIR-IMAGE @ _XC-RM-OFF @ + _XC-DIR-DE !
+    _XC-RM-PREV-OFF @ 0< IF
+        0 _XC-DIR-DE @ L!
+        _XC-DIR-DE @ 6 + _XC-RM-REC @ 6 - 0 FILL
+    ELSE
+        _XC-RM-PREV-REC @ _XC-RM-REC @ +
+        _XC-DIR-IMAGE @ _XC-RM-PREV-OFF @ + 4 + W!
+        _XC-DIR-DE @ _XC-RM-REC @ 0 FILL
+    THEN
+    0 ;
+
+\ Within one parent the source's record leaves first, and the insert plans
+\ against the directory that removal leaves.  When the new name routes to
+\ the block that held the source, the plan's directory snapshot takes the
+\ removal, is scanned again for the first record with room, and loses the
+\ source's record from its record map, so a name that fits where the source
+\ was needs no growth.  The kernel's ext4_rename instead adds the new name
+\ first, then deletes the old one, finding it again after a split.  Both
+\ orders leave a valid directory; this one never splits a block that the
+\ removal leaves room in.
+: _XC-PLAN-AFTER-REMOVAL  ( plan -- plan ior )
+    _XC-CROSS @ _XC-SOURCE-HOME @ _XC-DIR-HOME @ <> OR IF 0 EXIT THEN
+    DUP _XC-P.DIR-SNAPSHOT + _XC-DIR-REMOVE ?DUP IF EXIT THEN
+    _XC-SCAN-SLOT
+    _XC-LOAD-INDEXED @ IF _XC-RM-OFF @ _XC-DROP-RECORD EXIT THEN
+    0 ;
 
 VARIABLE _XC-FI-GROUP
 VARIABLE _XC-FI-VISITED
@@ -23044,6 +23266,23 @@ VARIABLE _XC-GROUP-NEW-USED-DIRS
 VARIABLE _XC-DESC
 VARIABLE _XC-IMAGE
 VARIABLE _XC-NEW-DIR-IMAGE
+
+\ Exchange the victim's bank with the removal target's cells and record, so
+\ that the removal's words authenticate, stage and audit the victim.
+: _XC-SWAP-TARGET  ( -- )
+    _XC-D _XC-VICTIM-D _XC-EXCHANGE
+    _XC-VN _XC-VICTIM-VN _XC-EXCHANGE
+    _XC-INODE _XC-VICTIM-INO _XC-EXCHANGE
+    _XC-NEW-GEN _XC-VICTIM-GEN _XC-EXCHANGE
+    _XC-NLINK _XC-VICTIM-NLINK _XC-EXCHANGE
+    _XC-FINAL _XC-VICTIM-FINAL _XC-EXCHANGE
+    _XC-ORPHAN _XC-VICTIM-ORPHAN _XC-EXCHANGE
+    _XC-FI-GROUP _XC-VICTIM-GROUP _XC-EXCHANGE
+    _XC-TARGET-INDEX _XC-VICTIM-INDEX _XC-EXCHANGE
+    _XC-INODE-HOME _XC-VICTIM-INODE-HOME _XC-EXCHANGE
+    _XC-INODE-OFF _XC-VICTIM-INODE-OFF _XC-EXCHANGE
+    _XC-INODE-ROLE _XC-VICTIM-ROLE _XC-EXCHANGE
+    _XC-OLD-INODE _XC-VICTIM-INODE _XC-EXCHANGE-RECORDS ;
 
 : _XC-DESC-ITABLE-UNUSED@  ( descriptor -- inodes )
     DUP _EXT4-GD.ITABLE-UNUSED-LO + W@
@@ -23321,12 +23560,15 @@ VARIABLE _EXT4-VCM-CTX
     _XC-CTX @ _EXT4-C.R.CTIME-NS + @
         _XC-PARENT-VN @ VN.CTIME-NS @ = AND ;
 
-\ Authenticate the parent once for the whole operation: its VFS identity,
-\ the inode policy every namespace write admits, and then every block of
-\ the directory, which also chooses the edit.  MKDIR raises the parent's
-\ link count and RMDIR lowers it.  A depth-zero map's sector count must be
-\ exactly its blocks'; a deeper map's is checked against its walk in the
-\ map proof.
+\ Authenticate a parent once for the whole operation: its VFS identity, the
+\ inode policy every namespace write admits, and then every block of the
+\ directory.  Its link count changes by PARENT-LINKS: MKDIR and a directory
+\ arriving from another parent raise it, which needs a count below the
+\ limit, and RMDIR, a directory victim and a directory leaving for another
+\ parent lower it, which needs a subdirectory's link.  A depth-zero map's
+\ sector count must be exactly its blocks'; a deeper map's is checked
+\ against its walk in the map proof.  A rename's walk of its old parent
+\ leaves the plan's shape to the new parent.
 : _XC-AUTH-PARENT  ( plan -- plan ior )
     _XC-REQUIRE-PARENT-RUNTIME ?DUP IF EXIT THEN
     DUP _XC-P.ROOT-SNAPSHOT + _XC-DIRECTORY-DESC _EXT4-DD-INIT
@@ -23346,18 +23588,17 @@ VARIABLE _EXT4-VCM-CTX
     _XC-DIRECTORY-DESC _EXT4-DD.INODE-OFF + @ _XC-PARENT-OFF !
     _XC-PARENT-CACHE-MATCH? 0= IF VFS-E-CONFLICT EXIT THEN
     _XC-CTX @ _EXT4-C.R.NLINK + @
-    _XC-DIRECTORY @ IF
-        _XC-REMOVING @ IF
-            DUP 3 U< OVER _EXT4-LINK-MAX U> OR IF
-                DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-            THEN
-            1-
-        ELSE
-            DUP 2 U< OVER _EXT4-LINK-MAX U< 0= OR IF
-                DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-            THEN
-            1+
+    _XC-PARENT-LINKS @ 0< IF
+        DUP 3 U< OVER _EXT4-LINK-MAX U> OR IF
+            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
+        1-
+    THEN
+    _XC-PARENT-LINKS @ 0> IF
+        DUP 2 U< OVER _EXT4-LINK-MAX U< 0= OR IF
+            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        1+
     THEN
     _XC-PARENT-NEW-NLINK !
     _XC-CTX @ _EXT4-C.R.UID + @
@@ -23380,7 +23621,9 @@ VARIABLE _EXT4-VCM-CTX
             EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
     THEN
-    _XC-LOAD-INDEXED @ _XC-P-BIND-SHAPE ?DUP IF EXIT THEN
+    _XC-OLD-WALK @ 0= IF
+        _XC-LOAD-INDEXED @ _XC-P-BIND-SHAPE ?DUP IF EXIT THEN
+    THEN
     _XC-DIRECTORY-DESC _EXT4-DD.INDEXED + @ 0<>
     _XC-LOAD-INDEXED @ <> IF VFS-E-CONFLICT EXIT THEN
     _XC-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @ _XC-OLD-BLOCKS !
@@ -23408,7 +23651,7 @@ VARIABLE _EXT4-VCM-CTX
     THEN
     _XC-PARENT-HOME @ _XC-PARENT-GROUP @ _XC-CTX @
     _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XC-PARENT-IN @ OVER _XC-P.PARENT-SNAPSHOT +
+    _XC-PARENT-IN @ OVER _XC-PARENT-SNAP @ +
     _XC-CTX @ _EXT4-C.ISIZE + @ CMOVE
     _XC-LOAD-INDEXED @ IF
         _XC-AUTH-INDEXED-PARENT
@@ -23674,15 +23917,105 @@ VARIABLE _XC-EMPTY-DOTS
 : _XC-PLAN-REMOVAL  ( plan -- plan ior )
     _XC-AUTH-REMOVAL-TARGET ?DUP IF EXIT THEN
     _XC-AUTH-PARENT ?DUP IF EXIT THEN
+    _XC-REQUIRE-FOUND ?DUP IF EXIT THEN
     _XC-DIRECTORY @ IF _XC-AUTH-EMPTY-DIRECTORY ?DUP IF EXIT THEN THEN
     _XC-ORPHAN @ IF _XC-AUTH-ORPHAN-RELEASE EXIT THEN
     _XC-FINAL @ IF _XC-AUTH-FINAL-RELEASE EXIT THEN
     0 ;
 
+\ A directory that changes parent names the new parent in its `..`.  The
+\ cold plan reads its block 0 through its own map and validates it: a DX
+\ root whose `.` names the directory and whose `..` names the old parent,
+\ or a checksummed leaf whose first two records are those.  No other block
+\ of the directory is read.
+: _XC-AUTH-MOVED-DIRECTORY  ( plan -- plan ior )
+    DUP _XC-P.CHILD-SNAPSHOT + _XC-MOVED-DESC _EXT4-DD-INIT
+    _XC-D @ _XC-V @ _XC-CTX @ _XC-MOVED-DESC _EXT4-DD-AUTH-INODE
+    ?DUP IF EXIT THEN
+    _XC-MOVED-DESC _EXT4-DD.INO + @ _XC-INODE @ <>
+    _XC-MOVED-DESC _EXT4-DD.PARINO + @ _XC-OLD-PARENT-INO @ <> OR
+    _XC-MOVED-DESC _EXT4-DD.GEN + @ _XC-NEW-GEN @ <> OR IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _XC-MOVED-DESC _EXT4-DD.INDEXED + @ IF
+        _XC-MOVED-DESC _EXT4-DD-AUTH-HTREE-ROOT ?DUP IF EXIT THEN
+        _XC-MOVED-DESC _EXT4-DD.ROOT-HOME + @ _XC-CHILD-HOME !
+        12 _XC-CHILD-DOTDOT !
+        0 EXIT
+    THEN
+    0 _XC-MOVED-DESC _EXT4-DD-LOAD-LOGICAL
+    _XC-IOR ! _XC-CHILD-HOME !
+    _XC-IOR @ ?DUP IF EXIT THEN
+    _XC-INODE @ _XC-NEW-GEN @ _XC-CTX @
+    _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
+    _XC-CTX @ _EXT4-C.DIR-BLOCK + _XC-INODE @ _XC-OLD-PARENT-INO @
+    _EXT4-DIR-DOTDOT DUP _XC-CHILD-DOTDOT ! 0= IF
+        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+    THEN
+    _XC-CTX @ _EXT4-C.DIR-BLOCK + OVER _XC-P.CHILD-SNAPSHOT +
+    _XC-CTX @ _EXT4-C.BSIZE + @ CMOVE
+    0 ;
+
+\ A final victim's xattr block, which its drain frees, is none of the
+\ rename's own homes: the source's record, the old parent's, the block the
+\ source's record leaves and a moved directory's block 0.  The orphan
+\ release's own proof keeps it from the new parent's record and block.
+: _XC-REQUIRE-EA-APART  ( -- ior )
+    _EXT4-JFI-EA @ DUP 0= IF EXIT THEN
+    DUP _XC-INODE-HOME @ = OVER _XC-SOURCE-HOME @ = OR
+    _XC-CROSS @ IF OVER _XC-OLD-PARENT-HOME @ = OR THEN
+    _XC-MOVING @ IF OVER _XC-CHILD-HOME @ = OR THEN
+    NIP IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+    0 ;
+
+\ A rename's cold plan: the source, and a victim, under the removal
+\ target's policy; each parent walked once, the old parent for the source's
+\ record and the new one for the new name's room or the victim's record,
+\ in one walk within one parent; the new name's edit after the source's
+\ removal; a victim directory's blocks; a moved directory's block 0; and a
+\ final victim's release.
+: _XC-PLAN-RENAME  ( plan -- plan ior )
+    _XC-AUTH-REMOVAL-TARGET ?DUP IF EXIT THEN
+    _XC-VICTIM @ IF
+        _XC-SWAP-TARGET _XC-AUTH-REMOVAL-TARGET _XC-SWAP-TARGET
+        ?DUP IF EXIT THEN
+    THEN
+    _XC-CROSS @ IF
+        _XC-SWAP-PARENT -1 _XC-OLD-WALK !
+        TRUE FALSE FALSE _XC-WALK-MODE
+        _XC-AUTH-PARENT
+        _XC-EK-REMOVE _XC-EDIT ! 0 _XC-GROWTH !
+        0 _XC-OLD-WALK ! _XC-SWAP-PARENT
+        ?DUP IF EXIT THEN
+        _XC-REQUIRE-SOURCE ?DUP IF EXIT THEN
+        FALSE
+    ELSE
+        TRUE
+    THEN
+    _XC-VICTIM @ DUP 0= _XC-WALK-MODE
+    _XC-AUTH-PARENT ?DUP IF EXIT THEN
+    _XC-CROSS @ 0= IF _XC-REQUIRE-SOURCE ?DUP IF EXIT THEN THEN
+    _XC-VICTIM @ IF
+        _XC-REQUIRE-VICTIM ?DUP IF EXIT THEN
+        _XC-VICTIM-DIR @ IF
+            _XC-SWAP-TARGET _XC-AUTH-EMPTY-DIRECTORY _XC-SWAP-TARGET
+            ?DUP IF EXIT THEN
+        THEN
+    ELSE
+        _XC-PLAN-AFTER-REMOVAL ?DUP IF EXIT THEN
+        _XC-PLAN-INSERT-EDIT ?DUP IF EXIT THEN
+    THEN
+    _XC-MOVING @ IF _XC-AUTH-MOVED-DIRECTORY ?DUP IF EXIT THEN THEN
+    _XC-PLAN-GROWTH ?DUP IF EXIT THEN
+    _XC-VICTIM-FINAL @ 0= IF 0 EXIT THEN
+    _XC-SWAP-TARGET _XC-AUTH-ORPHAN-RELEASE _XC-SWAP-TARGET
+    ?DUP IF EXIT THEN
+    _XC-REQUIRE-EA-APART ;
+
 \ The cold plan: authenticate the link target, find the new inode, or
-\ authenticate the removal's target, then authenticate the parent and
-\ choose the edit, all before the writer is touched.  The epoch it ends in
-\ vouches for every block it read.
+\ authenticate the removal's or the rename's inodes, then authenticate the
+\ parents and choose the edits, all before the writer is touched.  The
+\ epoch it ends in vouches for every block it read.
 : _XC-PLAN  ( plan -- plan ior )
     _XC-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
     \ A map walk left in flight refuses the operation before it reads or
@@ -23690,23 +24023,30 @@ VARIABLE _XC-EMPTY-DOTS
     _EXT4-MUTATION-MAP-TARGET @ _EXT4-MUTATION-MAP-ACTIVE @ OR
     _EXT4-MUTATION-MAP-HITS @ OR
     _EXT4-MUTATION-MAP-VECTOR-COUNT @ OR IF VFS-E-BUSY EXIT THEN
-    _XC-REMOVING @ IF
+    _XC-RENAMING @ IF
+        _XC-PLAN-RENAME ?DUP IF EXIT THEN
+    ELSE _XC-REMOVING @ IF
+        TRUE FALSE FALSE _XC-WALK-MODE
         _XC-PLAN-REMOVAL ?DUP IF EXIT THEN
     ELSE _XC-LINKING @ IF
+        FALSE FALSE TRUE _XC-WALK-MODE
         _XC-AUTH-LINK-TARGET ?DUP IF EXIT THEN
         _XC-AUTH-PARENT ?DUP IF EXIT THEN
+        _XC-PLAN-INSERT-EDIT ?DUP IF EXIT THEN
         _XC-REQUIRE-LINK-TARGET ?DUP IF EXIT THEN
         _XC-PLAN-GROWTH ?DUP IF EXIT THEN
     ELSE
+        FALSE FALSE TRUE _XC-WALK-MODE
         _XC-CTX @ _EXT4-C.SB + DUP _EXT4-SB.MIN-EXTRA + W@ 32 <>
         SWAP _EXT4-SB.WANT-EXTRA + W@ 32 <> OR IF
             EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
         _XC-AUTH-PARENT ?DUP IF EXIT THEN
+        _XC-PLAN-INSERT-EDIT ?DUP IF EXIT THEN
         _XC-FIND-FREE-INODE ?DUP IF EXIT THEN
         _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK _XC-SUPER-HOME !
         _XC-PLAN-GROWTH ?DUP IF EXIT THEN
-    THEN THEN
+    THEN THEN THEN
     _XC-CTX @ _EXT4-VALIDATE-PRIMARY-MUTATION-HOMES ?DUP IF EXIT THEN
     _EXT4-MAP-EPOCH @ _XC-AUTH-EPOCH !
     0 ;
@@ -23763,10 +24103,11 @@ VARIABLE _XC-NEW-ROOT
 
 \ Acquire the after-image of the entry inode's table block, whose record
 \ the cold plan authenticated into OLD-INODE: the free slot CREATE and
-\ MKDIR fill, LINK's target or a removal's.  NEW-INODE-PTR points at the
-\ record in the image.
+\ MKDIR fill, LINK's target, a removal's, or a rename's source or, through
+\ the victim's bank, its victim.  NEW-INODE-PTR points at the record in the
+\ image.
 : _XC-ACQUIRE-INODE  ( plan -- plan ior )
-    _XC-HR-INODE _XC-INODE-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
+    _XC-INODE-ROLE @ _XC-INODE-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
     _XC-INODE-HOME @ _XC-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.BLOCK + _XC-INODE-OFF @ +
     _XC-OLD-INODE _XC-CTX @ _EXT4-C.ISIZE + @
@@ -23799,9 +24140,19 @@ VARIABLE _XC-NEW-ROOT
     _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
     _XC-REPLACE-INODE ;
 
+\ A rename's source keeps its links and takes a new change time.
+: _XC-STAGE-SOURCE-INODE  ( plan -- plan ior )
+    _XC-ACQUIRE-INODE ?DUP IF EXIT THEN
+    _XC-SECONDS @ _XC-NSEC @ _XC-NEW-INODE-PTR @ _XC-CTX @
+    _EXT4-SET-INODE-CTIME ?DUP IF EXIT THEN
+    _XC-NEW-INODE-PTR @ _XC-INODE @ _XC-CTX @
+    _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
+    _XC-REPLACE-INODE ;
+
 \ A removal's target loses the link: one fewer and a new change time, or
 \ for its last link no links at all while the orphan file holds it, or
-\ else a cleared record, which frees it.
+\ else a cleared record, which frees it.  A rename's victim loses its link
+\ the same way.
 : _XC-STAGE-REMOVAL-INODE  ( plan -- plan ior )
     _XC-ACQUIRE-INODE ?DUP IF EXIT THEN
     _XC-FINAL @ _XC-ORPHAN @ 0= AND IF
@@ -23848,6 +24199,10 @@ VARIABLE _XC-DX-BLOCK
     _XC-DIRENT-TAIL OVER 4 + W!
     0xDE SWAP 7 + C! ;
 
+\ Write the new name's record into IMAGE where the scan found room: in the
+\ slack after a live record, which keeps its used length, or in an unused
+\ record, which keeps the rest as an unused record when that rest holds a
+\ header.  Its stager stamps the block.
 : _XC-DIR-APPLY  ( image -- ior )
     DUP _XC-DIR-IMAGE ! 0= IF VFS-E-INVALID EXIT THEN
     _XC-INSERT-KIND @ 1 = IF
@@ -23868,27 +24223,7 @@ VARIABLE _XC-DX-BLOCK
     THEN
     _XC-DIR-IMAGE @ _XC-INSERT-OFF @ + _XC-INSERT-ALLOC-REC @
     _XC-PUT-NAME-RECORD
-    _XC-DIR-IMAGE @ _XC-PARENT-INO @ _XC-PARENT-GEN @ _XC-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ;
-
-\ Take the target's record out of IMAGE as ext4_generic_delete_entry
-\ does.  The record before it in the block, live or unused, absorbs its
-\ length and the record's bytes are cleared; the first record of a block
-\ keeps its length and becomes unused, its inode and every byte from its
-\ name length to its end cleared.  IMAGE is the authenticated block.
-: _XC-DIR-REMOVE  ( image -- ior )
-    DUP _XC-DIR-IMAGE ! 0= IF VFS-E-INVALID EXIT THEN
-    _XC-DIR-IMAGE @ _XC-RM-OFF @ + _XC-DIR-DE !
-    _XC-RM-PREV-OFF @ 0< IF
-        0 _XC-DIR-DE @ L!
-        _XC-DIR-DE @ 6 + _XC-RM-REC @ 6 - 0 FILL
-    ELSE
-        _XC-RM-PREV-REC @ _XC-RM-REC @ +
-        _XC-DIR-IMAGE @ _XC-RM-PREV-OFF @ + 4 + W!
-        _XC-DIR-DE @ _XC-RM-REC @ 0 FILL
-    THEN
-    _XC-DIR-IMAGE @ _XC-PARENT-INO @ _XC-PARENT-GEN @ _XC-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ;
+    0 ;
 
 \ Append the record at OFFSET of the split source to the leaf being built,
 \ packed to its used length.
@@ -24112,23 +24447,87 @@ VARIABLE _XC-ACQ-HOME
     _EXT4-BYTES=? 0= IF DROP 0 VFS-E-CONFLICT EXIT THEN
     0 ;
 
+\ Within one parent a rename's source record and its new name share a
+\ block, or lie apart.
+: _XC-SAME-BLOCK?  ( -- flag )
+    _XC-RENAMING @ _XC-CROSS @ 0= AND
+    _XC-SOURCE-HOME @ _XC-DIR-HOME @ = AND ;
+
+: _XC-SOURCE-APART?  ( -- flag )
+    _XC-RENAMING @ _XC-CROSS @ 0= AND
+    _XC-SOURCE-HOME @ _XC-DIR-HOME @ <> AND ;
+
+\ The edits that change records in place: slack, removal and replacement.
+: _XC-RECORD-EDIT?  ( -- flag )
+    _XC-EDIT @ DUP _XC-EK-SLACK = OVER _XC-EK-REMOVE = OR
+    SWAP _XC-EK-REPLACE = OR ;
+
+\ Edit the records of IMAGE in place and stamp it once.  A block that also
+\ holds a rename's source record loses that record first; then the new
+\ name fills its room, the removal's record leaves, or the victim's record
+\ takes the source's inode.
+: _XC-STAGE-RECORDS  ( -- ior )
+    _XC-SAME-BLOCK? IF _XC-IMAGE @ _XC-DIR-REMOVE ?DUP IF EXIT THEN THEN
+    _XC-EDIT @ DUP _XC-EK-SLACK = IF
+        DROP _XC-IMAGE @ _XC-DIR-APPLY
+    ELSE _XC-EK-REMOVE = IF
+        _XC-IMAGE @ _XC-DIR-REMOVE
+    ELSE
+        _XC-INODE @ _XC-IMAGE @ _XC-VICTIM-DE-OFF @ + L! 0
+    THEN THEN ?DUP IF EXIT THEN
+    _XC-IMAGE @ _XC-PARENT-INO @ _XC-PARENT-GEN @ _XC-CTX @
+    _EXT4-RESTAMP-DIR-BLOCK ;
+
 \ The block that holds, splits or loses the name: the linear block, which
-\ a conversion turns into the root, or the routed or found leaf.
+\ a conversion turns into the root, or the routed or found leaf.  A block
+\ that also holds a rename's source record is acquired as media holds it,
+\ the source snapshot, since the plan's directory snapshot took the
+\ source's removal; a conversion or a split rebuilds the block from that
+\ directory snapshot and stamps it as it builds it.
 : _XC-STAGE-TARGET  ( plan -- plan ior )
     _XC-HR-PARENT-DIRECTORY _XC-DIR-HOME @ _XC-HP-BIND-META
     ?DUP IF EXIT THEN
-    DUP _XC-P.DIR-SNAPSHOT + _XC-DIR-HOME @ _XC-ACQUIRE-SNAPSHOT
+    DUP _XC-SAME-BLOCK? IF _XC-P.SOURCE-SNAPSHOT ELSE _XC-P.DIR-SNAPSHOT THEN
+    + _XC-DIR-HOME @ _XC-ACQUIRE-SNAPSHOT
     ?DUP IF NIP EXIT THEN _XC-IMAGE !
-    _XC-EDIT @ DUP _XC-EK-SLACK = IF
-        DROP _XC-IMAGE @ _XC-DIR-APPLY
-    ELSE DUP _XC-EK-REMOVE = IF
-        DROP _XC-IMAGE @ _XC-DIR-REMOVE
-    ELSE _XC-EK-CONVERT = IF
+    _XC-EDIT @ _XC-EK-CONVERT = IF
         _XC-IMAGE @ _XC-BUILD-CONVERTED-ROOT
+    ELSE _XC-RECORD-EDIT? IF
+        _XC-STAGE-RECORDS
     ELSE
         _XC-IMAGE @ FALSE _XC-BUILD-LEAF
-    THEN THEN THEN ?DUP IF EXIT THEN
+    THEN THEN ?DUP IF EXIT THEN
     _XC-IMAGE @ _XC-DIR-HOME @ _XC-WRITER @ _EXT4-JTX-META-REPLACE ;
+
+\ The block a rename's source record leaves, apart from the block the new
+\ name edits: the old parent's block, or another leaf of the same parent.
+: _XC-STAGE-SOURCE-BLOCK  ( plan -- plan ior )
+    _XC-HR-RENAME-SOURCE-DIRECTORY _XC-SOURCE-HOME @ _XC-HP-BIND-META
+    ?DUP IF EXIT THEN
+    DUP _XC-P.SOURCE-SNAPSHOT + _XC-SOURCE-HOME @ _XC-ACQUIRE-SNAPSHOT
+    ?DUP IF NIP EXIT THEN _XC-IMAGE !
+    _XC-IMAGE @ _XC-DIR-REMOVE ?DUP IF EXIT THEN
+    _XC-IMAGE @ _XC-PARENT-INO @ _XC-PARENT-GEN @ _XC-CTX @
+    _EXT4-RESTAMP-DIR-BLOCK ?DUP IF EXIT THEN
+    _XC-IMAGE @ _XC-SOURCE-HOME @ _XC-WRITER @ _EXT4-JTX-META-REPLACE ;
+
+\ A directory that changes parent names the new parent in the `..` of its
+\ block 0, which is stamped as the leaf or the DX root it is.
+: _XC-STAGE-CHILD-BLOCK  ( plan -- plan ior )
+    _XC-HR-RENAME-CHILD-DIRECTORY _XC-CHILD-HOME @ _XC-HP-BIND-META
+    ?DUP IF EXIT THEN
+    DUP _XC-P.CHILD-SNAPSHOT + _XC-CHILD-HOME @ _XC-ACQUIRE-SNAPSHOT
+    ?DUP IF NIP EXIT THEN _XC-IMAGE !
+    _XC-PARENT-INO @ _XC-IMAGE @ _XC-CHILD-DOTDOT @ + L!
+    _XC-IMAGE @ _XC-INODE @
+    _XC-MOVED-DESC _EXT4-DD.INDEXED + @ IF
+        _XC-PARENT-INO @ _XC-NEW-GEN @
+        _XC-MOVED-DESC _EXT4-DD.LOGICAL-BLOCKS + @ _XC-CTX @
+        _EXT4-RESTAMP-DX-ROOT
+    ELSE
+        _XC-NEW-GEN @ _XC-CTX @ _EXT4-RESTAMP-DIR-BLOCK
+    THEN ?DUP IF EXIT THEN
+    _XC-IMAGE @ _XC-CHILD-HOME @ _XC-WRITER @ _EXT4-JTX-META-REPLACE ;
 
 \ The routed level-one node, which gains the new leaf's entry or splits.
 : _XC-STAGE-NODE  ( plan -- plan ior )
@@ -24219,17 +24618,17 @@ VARIABLE _XC-ACQ-HOME
 \ sector count and the map the tree edit left in the private record.  A
 \ conversion also makes it an HTree.
 : _XC-STAGE-PARENT-INODE  ( plan -- plan ior )
-    _XC-HR-PARENT-INODE _XC-PARENT-HOME @ _XC-HP-BIND-META
+    _XC-PARENT-ROLE @ _XC-PARENT-HOME @ _XC-HP-BIND-META
     ?DUP IF EXIT THEN
     _XC-PARENT-HOME @ _XC-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.BLOCK + _XC-PARENT-OFF @ +
-    OVER _XC-P.PARENT-SNAPSHOT + _XC-CTX @ _EXT4-C.ISIZE + @
+    OVER _XC-PARENT-SNAP @ + _XC-CTX @ _EXT4-C.ISIZE + @
     _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
     _XC-CTX @ _EXT4-C.BLOCK + _XC-PARENT-HOME @ _XC-WRITER @
     _EXT4-JTX-META-ACQUIRE
     DUP IF NIP EXIT THEN DROP _XC-IMAGE !
     _XC-IMAGE @ _XC-PARENT-OFF @ +
-    OVER _XC-P.PARENT-SNAPSHOT + _XC-CTX @ _EXT4-C.ISIZE + @
+    OVER _XC-PARENT-SNAP @ + _XC-CTX @ _EXT4-C.ISIZE + @
     _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
     _XC-PARENT-NEW-NLINK @ _XW-INODE _EXT4-I.LINKS + W!
     _XC-EDIT @ _XC-EK-CONVERT = IF
@@ -24252,7 +24651,7 @@ VARIABLE _XC-ACQ-HOME
 \ Point the general tree editor and the home-set proof at the parent, whose
 \ private record starts from its authenticated snapshot.
 : _XC-PREPARE-PARENT-TREE  ( plan -- plan )
-    DUP _XC-P.PARENT-SNAPSHOT + _XW-INODE _XC-CTX @ _EXT4-C.ISIZE + @ MOVE
+    DUP _XC-PARENT-SNAP @ + _XW-INODE _XC-CTX @ _EXT4-C.ISIZE + @ MOVE
     _XC-CTX @ _XW-CTX ! _XC-WRITER @ _XW-TX !
     _XC-CTX @ _EXT4-C.BSIZE + @ _XW-BSIZE !
     _XC-PARENT-INO @ _XW-INO ! _XC-PARENT-GEN @ _XW-EXPECTED-GEN !
@@ -24373,12 +24772,23 @@ VARIABLE _XC-ACQ-HOME
     _EXT4-JPS-IMAGE @ _XC-SUPER-HOME @ _XC-WRITER @
     _EXT4-JTX-META-REPLACE ;
 
+\ Stage the orphan record the payload cells describe: the target's record
+\ in the first orphan block and ORPHAN_PRESENT in the primary superblock.
+\ The live pass also seals the payload the checkpoint verifies.  The
+\ measuring transaction's credits are the writer's capacity, not the exact
+\ credits a seal binds, so it seals nothing.
+: _XC-STAGE-ORPHAN-RECORD  ( plan -- plan ior )
+    _XC-WRITER @ _EXT4-JWR.META-CREDIT + @ _EXT4-JUA-META !
+    _XC-HR-ORPHAN _EXT4-JUA-O-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
+    _EXT4-JUA-STAGE-ORPHAN ?DUP IF EXIT THEN
+    _XC-HR-PRIMARY-SUPER _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
+    _XC-HP-BIND-META ?DUP IF EXIT THEN
+    _EXT4-JUA-STAGE-SUPER ?DUP IF EXIT THEN
+    DUP _XC-P.STATE + @ _XC-PS-SEALED = IF _EXT4-JUA-SEAL EXIT THEN
+    0 ;
+
 \ A last link that keeps storage or an open descriptor, and every removed
-\ directory, enters the orphan file in the removal's transaction: the
-\ target's record in the first orphan block and ORPHAN_PRESENT in the
-\ primary superblock.  The live pass also seals the payload the checkpoint
-\ verifies.  The measuring transaction's credits are the writer's
-\ capacity, not the exact credits a seal binds, so it seals nothing.  A
+\ directory, enters the orphan file in the removal's transaction.  A
 \ block's first record leaves no predecessor, which the payload names as a
 \ predecessor of no length at the record's own offset.
 : _XC-STAGE-ORPHAN-ADD  ( plan -- plan ior )
@@ -24399,14 +24809,50 @@ VARIABLE _XC-ACQ-HOME
         _XC-RM-PREV-REC @ _EXT4-JUA-PREV-REC !
     THEN
     _EXT4-JUA-CLEAR-RENAME
-    _XC-WRITER @ _EXT4-JWR.META-CREDIT + @ _EXT4-JUA-META !
-    _XC-HR-ORPHAN _EXT4-JUA-O-HOME @ _XC-HP-BIND-META ?DUP IF EXIT THEN
-    _EXT4-JUA-STAGE-ORPHAN ?DUP IF EXIT THEN
-    _XC-HR-PRIMARY-SUPER _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
-    _XC-HP-BIND-META ?DUP IF EXIT THEN
-    _EXT4-JUA-STAGE-SUPER ?DUP IF EXIT THEN
-    DUP _XC-P.STATE + @ _XC-PS-SEALED = IF _EXT4-JUA-SEAL EXIT THEN
-    0 ;
+    _XC-STAGE-ORPHAN-RECORD ;
+
+\ A rename's final victim enters the orphan file under the rename form of
+\ the payload: the victim's record in the new parent names the source, and
+\ the source's record leaves its block, joined to its predecessor or, as
+\ its block's first record, left unused, which the payload names as a
+\ predecessor of no length at offset zero.  A directory that changes parent
+\ adds its block 0.
+: _XC-STAGE-RENAME-ORPHAN  ( plan -- plan ior )
+    _XC-V @ _EXT4-JUA-V ! _XC-WRITER @ _EXT4-JUA-WRITER !
+    _XC-CTX @ _EXT4-JUA-CTX ! _XC-VICTIM-INO @ _EXT4-JUA-INO !
+    _XC-VICTIM-GEN @ _EXT4-JUA-GEN ! _XC-SECONDS @ _EXT4-JUA-SECONDS !
+    _XC-NSEC @ _EXT4-JUA-NSEC ! _XC-PARENT-INO @ _EXT4-JUA-PARENT-INO !
+    _XC-PARENT-GEN @ _EXT4-JUA-PARENT-GEN !
+    _XC-PARENT-HOME @ _EXT4-JUA-PARENT-HOME !
+    _XC-PARENT-OFF @ _EXT4-JUA-PARENT-OFF !
+    _XC-DIR-HOME @ _EXT4-JUA-DIR-HOME !
+    _XC-VICTIM-DE-OFF @ _EXT4-JUA-TARGET-OFF !
+    _XC-VICTIM-DE-REC @ _EXT4-JUA-TARGET-REC !
+    0 _EXT4-JUA-PREV-OFF ! 0 _EXT4-JUA-PREV-REC !
+    _XC-INODE @ _EXT4-JUA-SOURCE-INO !
+    _XC-NEW-GEN @ _EXT4-JUA-SOURCE-GEN !
+    _XC-INODE-HOME @ _EXT4-JUA-SOURCE-HOME !
+    _XC-INODE-OFF @ _EXT4-JUA-SOURCE-OFF !
+    _XC-CROSS @ IF
+        _XC-OLD-PARENT-INO @ _EXT4-JUA-OLD-PARENT-INO !
+        _XC-OLD-PARENT-GEN @ _EXT4-JUA-OLD-PARENT-GEN !
+        _XC-OLD-PARENT-HOME @ _EXT4-JUA-OLD-PARENT-HOME !
+        _XC-OLD-PARENT-OFF @ _EXT4-JUA-OLD-PARENT-OFF !
+    ELSE
+        0 _EXT4-JUA-OLD-PARENT-INO ! 0 _EXT4-JUA-OLD-PARENT-GEN !
+        0 _EXT4-JUA-OLD-PARENT-HOME ! 0 _EXT4-JUA-OLD-PARENT-OFF !
+    THEN
+    _XC-SOURCE-HOME @ _EXT4-JUA-OLD-DIR-HOME !
+    _XC-RM-OFF @ _EXT4-JUA-OLD-SOURCE-OFF !
+    _XC-RM-REC @ _EXT4-JUA-OLD-SOURCE-REC !
+    _XC-RM-PREV-OFF @ 0< IF
+        0 _EXT4-JUA-OLD-PREV-OFF ! 0 _EXT4-JUA-OLD-PREV-REC !
+    ELSE
+        _XC-RM-PREV-OFF @ _EXT4-JUA-OLD-PREV-OFF !
+        _XC-RM-PREV-REC @ _EXT4-JUA-OLD-PREV-REC !
+    THEN
+    _XC-MOVING @ IF _XC-CHILD-HOME @ ELSE 0 THEN _EXT4-JUA-CHILD-HOME !
+    _XC-STAGE-ORPHAN-RECORD ;
 
 \ A closed last link of an empty file is freed in the removal's
 \ transaction: its inode bitmap bit, its group's descriptor and the
@@ -24433,20 +24879,24 @@ VARIABLE _XC-ACQ-HOME
     _EXT4-JFI-NEW-SUPER-FREE @ _XC-SUPER-NEW-FREE !
     0 ;
 
-\ The parent is kept.  The entry's inode is created, kept by LINK and a
-\ removal that leaves it links or the orphan file, and freed with a
-\ closed last link of an empty file.
+\ The parent is kept.  The entry's inode is created, kept by LINK, a
+\ rename and a removal that leaves it links or the orphan file, and freed
+\ with a closed last link of an empty file.
 : _XC-INODE-KIND  ( -- kind )
     _XC-CREATING? IF _EXT4-NMC-CREATED EXIT THEN
     _XC-FINAL @ _XC-ORPHAN @ 0= AND IF _EXT4-NMC-FREED EXIT THEN
     _EXT4-NMC-RETAINED ;
 
-\ The existing directory blocks the edit rewrites: the target, and an
-\ HTree's routed node and root when the edit changes them.
+\ The existing directory blocks the parent's edit rewrites: the target, an
+\ HTree's routed node and root when the edit changes them, and a rename's
+\ source block when it lies apart from the target.
 : _XC-REWRITTEN  ( -- blocks )
-    _XC-EDIT @ DUP _XC-EK-SLACK =
-    OVER _XC-EK-CONVERT = OR SWAP _XC-EK-REMOVE = OR IF 1 EXIT THEN
-    _XC-EDIT @ _XC-EK-NODE-SPLIT = IF 3 ELSE 2 THEN ;
+    _XC-RECORD-EDIT? _XC-EDIT @ _XC-EK-CONVERT = OR IF
+        1
+    ELSE
+        _XC-EDIT @ _XC-EK-NODE-SPLIT = IF 3 ELSE 2 THEN
+    THEN
+    _XC-SOURCE-APART? IF 1+ THEN ;
 
 VARIABLE _XC-MAP-LIMIT
 VARIABLE _XC-MAP-CLAIM
@@ -24507,10 +24957,65 @@ VARIABLE _XC-CHILD-CLAIMS
     <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
     _XC-INODE @ _XC-INODE-HOME @ _XC-INODE-OFF @ _EXT4-NMC-RELEASE ;
 
+\ A directory that changes parent keeps its map, which names the block 0
+\ the transaction rewrites exactly once and no other home it stages.
+: _XC-MOVED-MAP-AUDIT  ( -- ior )
+    _XC-INODE @ _XW-INO ! FALSE _XW-ORPHAN ! 0 _XW-EA !
+    0 _XP-BASE ! 1 _XP-EXPECT !
+    _XP-COLLECT ?DUP IF EXIT THEN
+    _EXT4-MAP-VALIDATION-LIMIT @ _XC-MAP-LIMIT !
+    _XC-MOVED-DESC _EXT4-DD.LOGICAL-BLOCKS + @
+    _EXT4-MAP-VALIDATION-LIMIT !
+    _XP-MAP-AUDIT
+    _XC-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT ! ;
+
+\ A rename keeps every inode it names: the source, both parents and a
+\ victim, whose map its drain frees.  The new parent's map changes by
+\ exactly the blocks its growth allocates.  The old parent's map, a moved
+\ directory's and a victim directory's stay as they are, the last counted
+\ against its sector count.  The new parent's audit comes first, while the
+\ tree editor's registers still describe its staging.
+: _XC-RENAME-MAP-CHECK  ( plan -- plan ior )
+    _XC-CTX @ _XC-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
+    _XC-MAP-AUDIT _EXT4-NMC-IOR !
+    _XC-CROSS @ _EXT4-NMC-IOR @ 0= AND IF
+        _XC-SWAP-PARENT _XC-PREPARE-PARENT-TREE
+        _XC-MAP-AUDIT _EXT4-NMC-IOR !
+        _XC-SWAP-PARENT
+    THEN
+    _XC-MOVING @ _EXT4-NMC-IOR @ 0= AND IF
+        _XC-MOVED-MAP-AUDIT _EXT4-NMC-IOR !
+    THEN
+    _XC-VICTIM-DIR @ _EXT4-NMC-IOR @ 0= AND IF
+        _XC-SWAP-TARGET _XC-CHILD-MAP-AUDIT _XC-SWAP-TARGET
+        _EXT4-NMC-IOR !
+    THEN
+    _XC-INODE @ _XC-INODE-HOME @ _XC-INODE-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    _XC-VICTIM @ IF
+        _XC-VICTIM-INO @ _XC-VICTIM-INODE-HOME @ _XC-VICTIM-INODE-OFF @
+        _EXT4-NMC-RETAINED _EXT4-NMC-OLD
+    THEN
+    _EXT4-NMC-BITMAPS
+    _XC-PARENT-INO @ _XC-PARENT-HOME @ _XC-PARENT-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    _XC-CROSS @ IF
+        _XC-OLD-PARENT-INO @ _XC-OLD-PARENT-HOME @ _XC-OLD-PARENT-OFF @
+        _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    THEN
+    _XC-INODE @ _XC-INODE-HOME @ _XC-INODE-OFF @
+    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    _XC-VICTIM @ IF
+        _XC-VICTIM-INO @ _XC-VICTIM-INODE-HOME @ _XC-VICTIM-INODE-OFF @
+        _EXT4-NMC-RETAINED _EXT4-NMC-NEW
+    THEN
+    _EXT4-NMC-END ;
+
 \ Prove the transaction's map change: the parent's map, and a new
 \ directory's, change by exactly the blocks the transaction allocates,
 \ and a removed directory keeps its exact map.
-: _XC-MAP-CHECK  ( -- ior )
+: _XC-MAP-CHECK  ( plan -- plan ior )
+    _XC-RENAMING @ IF _XC-RENAME-MAP-CHECK EXIT THEN
     _XC-CTX @ _XC-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
     _XC-MAP-AUDIT _EXT4-NMC-IOR !
     _XC-REMOVING @ _XC-DIRECTORY @ AND _EXT4-NMC-IOR @ 0= AND IF
@@ -24534,22 +25039,11 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-FINAL @ IF _XC-STAGE-FINAL-RELEASE EXIT THEN
     0 ;
 
-\ Stage the complete operation into _XC-WRITER's open transaction.  The
-\ order of first staged homes is the certificate's order: the entry's
-\ inode, the parent's record when its map stays, the parent's existing
-\ directory blocks, the new directory's block, each appended block with
-\ its allocation and map edits, the parent's record when its map grows,
-\ and the inode allocation.
-: _XC-STAGE  ( plan -- plan ior )
-    _XC-PREPARE-PARENT-TREE
-    _XC-REMOVING @ IF _XC-STAGE-REMOVAL EXIT THEN
-    _XC-CTX @ _EXT4-C.FREE-BLOCKS + @ _XC-NEW-FREE !
-    _XC-DIRECTORY @ IF _XC-FIND-CHILD-BLOCK ?DUP IF EXIT THEN THEN
-    _XC-LINKING @ IF
-        _XC-STAGE-LINK-TARGET
-    ELSE
-        _XC-STAGE-NEW-INODE
-    THEN ?DUP IF EXIT THEN
+\ Stage the parent's edit: its record when its map stays, its existing
+\ directory blocks, MKDIR's new block or a moved directory's block 0, each
+\ appended block with its allocation and map edits, and its record when its
+\ map grows.
+: _XC-STAGE-EDIT  ( plan -- plan ior )
     _XC-GROWTH @ 0= IF _XC-STAGE-PARENT-INODE ?DUP IF EXIT THEN THEN
     _XC-STAGE-TARGET ?DUP IF EXIT THEN
     _XC-EDIT @ _XC-EK-SPLIT = _XC-INDEX-DEPTH @ AND
@@ -24561,7 +25055,13 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-EDIT @ _XC-EK-NODE-SPLIT = OR IF
         _XC-STAGE-ROOT ?DUP IF EXIT THEN
     THEN
-    _XC-DIRECTORY @ IF _XC-STAGE-NEW-DIRECTORY-BLOCK ?DUP IF EXIT THEN THEN
+    _XC-RENAMING @ IF
+        _XC-MOVING @ IF _XC-STAGE-CHILD-BLOCK ?DUP IF EXIT THEN THEN
+    ELSE
+        _XC-DIRECTORY @ IF
+            _XC-STAGE-NEW-DIRECTORY-BLOCK ?DUP IF EXIT THEN
+        THEN
+    THEN
     _XC-GROWTH @ IF
         \ The tree's external nodes are checksummed against the parent, which
         \ must be the context's current inode while the tree is edited.
@@ -24573,6 +25073,47 @@ VARIABLE _XC-CHILD-CLAIMS
         REPEAT
         _XC-STAGE-PARENT-INODE ?DUP IF EXIT THEN
     THEN
+    0 ;
+
+\ Stage the complete rename: the source's record, a victim's, the old
+\ parent's record and the block the source's record leaves, apart from the
+\ new name's block, then the new parent's edit and a final victim's orphan
+\ record.  The old parent's staging runs in its own bank, after which the
+\ tree editor is pointed at the new parent again.
+: _XC-STAGE-RENAME  ( plan -- plan ior )
+    _XC-STAGE-SOURCE-INODE ?DUP IF EXIT THEN
+    _XC-VICTIM @ IF
+        _XC-SWAP-TARGET _XC-STAGE-REMOVAL-INODE _XC-SWAP-TARGET
+        ?DUP IF EXIT THEN
+    THEN
+    _XC-CROSS @ IF
+        _XC-SWAP-PARENT _XC-PREPARE-PARENT-TREE
+        _XC-STAGE-PARENT-INODE
+        DUP 0= IF DROP _XC-STAGE-SOURCE-BLOCK THEN
+        _XC-SWAP-PARENT ?DUP IF EXIT THEN
+        _XC-PREPARE-PARENT-TREE
+    ELSE _XC-SOURCE-APART? IF
+        _XC-STAGE-SOURCE-BLOCK ?DUP IF EXIT THEN
+    THEN THEN
+    _XC-STAGE-EDIT ?DUP IF EXIT THEN
+    _XC-VICTIM-FINAL @ IF _XC-STAGE-RENAME-ORPHAN EXIT THEN
+    0 ;
+
+\ Stage the complete operation into _XC-WRITER's open transaction.  The
+\ order of first staged homes is the certificate's order: the entry's
+\ inode, then the parent's edit, and a new inode's allocation.
+: _XC-STAGE  ( plan -- plan ior )
+    _XC-PREPARE-PARENT-TREE
+    _XC-REMOVING @ IF _XC-STAGE-REMOVAL EXIT THEN
+    _XC-CTX @ _EXT4-C.FREE-BLOCKS + @ _XC-NEW-FREE !
+    _XC-RENAMING @ IF _XC-STAGE-RENAME EXIT THEN
+    _XC-DIRECTORY @ IF _XC-FIND-CHILD-BLOCK ?DUP IF EXIT THEN THEN
+    _XC-LINKING @ IF
+        _XC-STAGE-LINK-TARGET
+    ELSE
+        _XC-STAGE-NEW-INODE
+    THEN ?DUP IF EXIT THEN
+    _XC-STAGE-EDIT ?DUP IF EXIT THEN
     _XC-LINKING @ 0= IF
         _XC-STAGE-INODE-ALLOCATION ?DUP IF EXIT THEN
         _XC-STAGE-SUPER ?DUP IF EXIT THEN
@@ -24580,6 +25121,7 @@ VARIABLE _XC-CHILD-CLAIMS
     0 ;
 
 : _XC-OP  ( -- op )
+    _XC-RENAMING @ IF _XC-PO-RENAME EXIT THEN
     _XC-REMOVING @ 0= IF _XC-PO-INSERT EXIT THEN
     _XC-DIRECTORY @ IF _XC-PO-RMDIR ELSE _XC-PO-UNLINK THEN ;
 
@@ -24594,22 +25136,30 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN
     _XC-MAP-CHECK ;
 
+\ An operation leaves an orphan to drain when a removal's last link or a
+\ rename's final victim enters the orphan file.
+: _XC-DRAINS?  ( -- flag )
+    _XC-RENAMING @ IF _XC-VICTIM-FINAL @ EXIT THEN
+    _XC-REMOVING @ _XC-ORPHAN @ AND ;
+
+\ The record of the inode the drain frees, as the cold plan authenticated it.
+: _XC-DRAIN-RECORD  ( -- record )
+    _XC-RENAMING @ IF _XC-VICTIM-INODE ELSE _XC-OLD-INODE THEN ;
+
 \ The writer an operation needs: room for its own transaction, which the
-\ measuring pass proves, and for a removal that drains an orphan the
-\ credits its deletion takes.
+\ measuring pass proves, and for an orphan's drain the credits its
+\ deletion takes.
 : _XC-WRITER-NEED  ( -- meta-cap data-cap revoke-cap )
-    _XC-REMOVING @ _XC-ORPHAN @ AND IF
-        _XC-CLEANUP-CREDIT @ 0 _XC-CLEANUP-REVOKE @ EXIT
-    THEN
+    _XC-DRAINS? IF _XC-CLEANUP-CREDIT @ 0 _XC-CLEANUP-REVOKE @ EXIT THEN
     1 0 0 ;
 
-\ A removal that leaves mapped blocks to release passes requires that a
-\ pass under the bound profile can take a removal step from the target's
-\ tree, whose depth the authenticated record gives.
+\ An orphan that leaves mapped blocks to release passes requires that a
+\ pass under the bound profile can take a removal step from its tree,
+\ whose depth the authenticated record gives.
 : _XC-REQUIRE-PASS-ROOM  ( -- ior )
-    _XC-REMOVING @ _XC-ORPHAN @ AND 0= IF 0 EXIT THEN
-    _XC-OLD-INODE _EXT4-MAP-MAPS? 0= IF 0 EXIT THEN
-    _XC-OLD-INODE _EXT4-RELEASE-DEPTH _XC-WRITER @ _XW-PASS-ROOM? 0= IF
+    _XC-DRAINS? 0= IF 0 EXIT THEN
+    _XC-DRAIN-RECORD _EXT4-MAP-MAPS? 0= IF 0 EXIT THEN
+    _XC-DRAIN-RECORD _EXT4-RELEASE-DEPTH _XC-WRITER @ _XW-PASS-ROOM? 0= IF
         VFS-E-NOSPC EXIT
     THEN
     0 ;
@@ -24629,6 +25179,31 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-ACTIVE @ 0= IF _XC-MAP-CHECK ?DUP IF EXIT THEN THEN
     _XC-WRITER @ _EXT4-JTX-ABORT ;
 
+\ Clear a rename's cells and both of its banks.
+: _XC-SCRUB-RENAME  ( -- )
+    0 _XC-RENAMING ! 0 _XC-FLAGS ! 0 _XC-CROSS ! 0 _XC-MOVING !
+    0 _XC-VICTIM ! 0 _XC-OLD-WALK ! 0 _XC-OLD-NLEN !
+    0 _XC-SOURCE-HOME ! 0 _XC-CHILD-HOME ! 0 _XC-CHILD-DOTDOT !
+    0 _XC-VICTIM-D ! 0 _XC-VICTIM-VN ! 0 _XC-VICTIM-INO !
+    0 _XC-VICTIM-GEN ! 0 _XC-VICTIM-NLINK ! 0 _XC-VICTIM-FINAL !
+    0 _XC-VICTIM-ORPHAN ! 0 _XC-VICTIM-GROUP ! 0 _XC-VICTIM-INDEX !
+    0 _XC-VICTIM-INODE-HOME ! 0 _XC-VICTIM-INODE-OFF !
+    0 _XC-VICTIM-ROLE ! 0 _XC-VICTIM-DIR !
+    0 _XC-VICTIM-FOUND ! 0 _XC-VICTIM-REFS !
+    0 _XC-VICTIM-DE-OFF ! 0 _XC-VICTIM-DE-REC !
+    0 _XC-OLD-PARENT ! 0 _XC-OLD-PARENT-VN ! 0 _XC-OLD-PARENT-INO !
+    0 _XC-OLD-PARENT-PARENT-INO ! 0 _XC-OLD-PARENT-GEN !
+    0 _XC-OLD-PARENT-NEW-NLINK ! 0 _XC-OLD-PARENT-GROUP !
+    0 _XC-OLD-PARENT-HOME ! 0 _XC-OLD-PARENT-OFF !
+    0 _XC-OLD-PARENT-BLOCKS ! 0 _XC-OLD-PARENT-SECTORS !
+    0 _XC-OLD-PARENT-LINKS ! 0 _XC-OLD-PARENT-ROLE !
+    0 _XC-OLD-PARENT-SNAP ! 0 _XC-OLD-PARENT-EDIT !
+    0 _XC-OLD-PARENT-GROWTH !
+    _XC-OLD-NAME-SNAPSHOT 256 0 FILL
+    _XC-MOVED-DESC _EXT4-DD-SIZE 0 FILL
+    _XC-VICTIM-INODE _EXT4-STAGED-WRITE-INODE-SIZE 0 FILL
+    _XC-SWAP-RECORD _EXT4-STAGED-WRITE-INODE-SIZE 0 FILL ;
+
 : _XC-SCRUB-PRIVATE  ( -- )
     0 _XC-WRITER ! 0 _XC-TX !
     _XC-NAME-SNAPSHOT 256 0 FILL
@@ -24646,7 +25221,8 @@ VARIABLE _XC-CHILD-CLAIMS
     0 _XC-SPLIT-COUNT ! 0 _XC-SPLIT-AT ! 0 _XC-SPLIT-KEY !
     0 _XC-SPLIT-SEPARATOR ! 0 _XC-SPLIT-HIGH ! 0 _XC-SPLIT-BASE !
     0 _XC-NODE-LOW ! 0 _XC-NODE-HASH !
-    _XC-CHILD-DESC _EXT4-DD-SIZE 0 FILL ;
+    _XC-CHILD-DESC _EXT4-DD-SIZE 0 FILL
+    _XC-SCRUB-RENAME ;
 
 : _XC-SCRUB  ( plan -- )
     _XC-P-SCRUB
@@ -24738,26 +25314,7 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-ORPHAN !
     0 ;
 
-: _XC-ENTRY  ( -- ior )
-    _XC-D @ 0= _XC-V @ 0= OR IF VFS-E-INVALID EXIT THEN
-    _XC-LINKING @ 0<> _XC-DIRECTORY @ 0<> AND
-    _XC-LINKING @ 0<> _XC-REMOVING @ 0<> AND OR IF VFS-E-INVALID EXIT THEN
-    0 _XC-FINAL ! 0 _XC-ORPHAN !
-    _XC-V @ _EXT4-MOW-V !
-    0 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
-    _EXT4-MOW-CTX @ _XC-CTX !
-    _EXT4-MOW-ACTIVE @ _XC-ACTIVE !
-    _XC-D @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
-    _XC-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
-    _XC-D @ D.VNODE @ DUP _XC-VN ! 0= IF VFS-E-STALE EXIT THEN
-    _XC-REMOVING @ IF
-        _XC-ENTRY-REMOVAL
-    ELSE _XC-LINKING @ IF
-        _XC-ENTRY-LINK
-    ELSE
-        _XC-ENTRY-NEW
-    THEN THEN ?DUP IF EXIT THEN
-    _XC-D @ IN.PARENT @ DUP _XC-PARENT ! 0= IF VFS-E-INVALID EXIT THEN
+: _XC-ENTRY-PARENT  ( -- ior )
     _XC-PARENT @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
     _XC-PARENT @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
     _XC-CREATING? IF
@@ -24767,7 +25324,7 @@ VARIABLE _XC-CHILD-CLAIMS
         VFS-E-STALE EXIT
     THEN
     _XC-PARENT-VN @ VN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
-    _XC-LINKING @ IF
+    _XC-LINKING @ _XC-RENAMING @ OR IF
         _XC-PARENT-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
             VFS-E-CONFLICT EXIT
         THEN
@@ -24788,7 +25345,10 @@ VARIABLE _XC-CHILD-CLAIMS
     ELSE
         _XC-PARENT-INO @
     THEN DUP _XC-PARENT-PARENT-INO ! 0= IF VFS-E-STALE EXIT THEN
-    _XC-D @ D.NAME @ _VFS-STR-GET _XC-NLEN ! _XC-NAME !
+    0 ;
+
+\ The new name, which a record of NEEDED bytes holds.
+: _XC-ENTRY-NAME  ( -- ior )
     _XC-NAME @ _XC-NLEN @ _VFS-VALID-NAME? 0= IF
         VFS-E-INVALID EXIT
     THEN
@@ -24797,12 +25357,160 @@ VARIABLE _XC-CHILD-CLAIMS
         VFS-E-NAMETOOLONG EXIT
     THEN
     _XC-NAME @ _XC-NAME-SNAPSHOT _XC-NLEN @ CMOVE
+    0 ;
+
+\ The trusted clock and the mount's dedicated writer.
+: _XC-ENTRY-WRITER  ( -- ior )
     _XC-CTX @ _EXT4-C.WCLOCK-XT + @ 0= IF VFS-E-UNSUPPORTED EXIT THEN
     _XC-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
     _EXT4-JWR-STORE-DEDICATED <> IF VFS-E-NOSPC EXIT THEN
     _XC-CTX @ _EXT4-C.J.WRITER-ARENA + @ 0=
     _XC-CTX @ _EXT4-C.J.WRITER + @ 0= OR IF VFS-E-CORRUPT EXIT THEN
     0 ;
+
+\ A rename's victim is the new parent's child of the new name, apart from
+\ the source and both parents and of the source's type: a regular file, or
+\ an empty directory held by its one dentry outside the working directory,
+\ with its children loaded and none cached.  It loses the name as a
+\ removal's target loses its link, and a last link goes to the orphan file.
+: _XC-ENTRY-VICTIM  ( -- ior )
+    _XC-VICTIM-D @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
+    _XC-VICTIM-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
+    _XC-VICTIM-D @ IN.PARENT @ _XC-PARENT @ <> IF VFS-E-STALE EXIT THEN
+    _XC-VICTIM-D @ D.VNODE @ DUP _XC-VICTIM-VN ! 0= IF VFS-E-STALE EXIT THEN
+    _XC-VICTIM-VN @ _XC-VN @ = IF VFS-E-INVALID EXIT THEN
+    _XC-VICTIM-VN @ VN.TYPE @ DUP VFS-T-DIR = _XC-VICTIM-DIR !
+    DUP VFS-T-FILE <> SWAP VFS-T-DIR <> AND IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XC-VICTIM-DIR @ _XC-DIRECTORY @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-VICTIM-DIR @ IF
+        _XC-VICTIM-VN @ VN.DREFS @ 1 <> IF VFS-E-BUSY EXIT THEN
+        _XC-VICTIM-D @ _XC-V @ V.CWD @ = IF VFS-E-BUSY EXIT THEN
+        _XC-VICTIM-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
+            VFS-E-CONFLICT EXIT
+        THEN
+        _XC-VICTIM-D @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN
+    THEN
+    _XC-VICTIM-VN @ VN.BID @ DUP _XC-VICTIM-INO ! 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _XC-VICTIM-INO @ _XC-CTX @ _EXT4-C.INODES + @ U> IF
+        VFS-E-STALE EXIT
+    THEN
+    _XC-VICTIM-INO @ _XC-INODE @ =
+    _XC-VICTIM-INO @ _XC-PARENT-INO @ = OR
+    _XC-VICTIM-INO @ _XC-OLD-PARENT-INO @ = OR IF VFS-E-CORRUPT EXIT THEN
+    _XC-VICTIM-VN @ VN.GEN @ DUP _XC-VICTIM-GEN !
+    0xFFFFFFFF U> IF VFS-E-STALE EXIT THEN
+    _XC-VICTIM-VN @ VN.NLINK @ DUP _XC-VICTIM-NLINK !
+    _XC-VICTIM-DIR @ IF
+        2 <> IF VFS-E-CONFLICT EXIT THEN
+        TRUE
+    ELSE
+        DUP 1 U< SWAP _EXT4-LINK-MAX U> OR IF VFS-E-STALE EXIT THEN
+        _XC-VICTIM-NLINK @ 1 =
+    THEN DUP _XC-VICTIM-FINAL ! _XC-VICTIM-ORPHAN !
+    _XC-HR-RENAME-VICTIM-INODE _XC-VICTIM-ROLE !
+    -1 _XC-VICTIM !
+    0 ;
+
+\ RENAME names its source, a regular file or a directory held by its one
+\ dentry, the new parent and the new name, and over an existing name its
+\ victim.  Both parents are directories with their children loaded.  The
+\ old parent takes the parent cells first and moves to its own bank when
+\ the parents differ; it loses a link when a directory leaves it.  The new
+\ parent gains one when a directory arrives from another parent and loses
+\ one with a directory victim.
+: _XC-ENTRY-RENAME  ( -- ior )
+    _XC-FLAGS @ VFS-RN-NOREPLACE INVERT AND IF VFS-E-INVALID EXIT THEN
+    _XC-VN @ VN.TYPE @ DUP VFS-T-DIR = _XC-DIRECTORY !
+    DUP VFS-T-FILE <> SWAP VFS-T-DIR <> AND IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XC-VN @ VN.DREFS @ _XC-DIRECTORY @ IF
+        1 <> IF VFS-E-CONFLICT EXIT THEN
+    ELSE
+        1 U< IF VFS-E-STALE EXIT THEN
+    THEN
+    _XC-VN @ VN.BID @ DUP _XC-INODE ! 0= IF VFS-E-STALE EXIT THEN
+    _XC-INODE @ _XC-CTX @ _EXT4-C.INODES + @ U> IF VFS-E-STALE EXIT THEN
+    _XC-VN @ VN.GEN @ DUP _XC-NEW-GEN ! 0xFFFFFFFF U> IF
+        VFS-E-STALE EXIT
+    THEN
+    _XC-VN @ VN.NLINK @ DUP _XC-NLINK !
+    DUP 1 U< SWAP _EXT4-LINK-MAX U> OR IF VFS-E-STALE EXIT THEN
+    _XC-D @ IN.PARENT @ DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    DUP _XC-PARENT @ <> DUP _XC-CROSS ! IF
+        _XC-PARENT @ _XC-OLD-PARENT ! _XC-PARENT !
+        _XC-DIRECTORY @ IF -1 ELSE 0 THEN _XC-PARENT-LINKS !
+        _XC-HR-RENAME-OLD-PARENT-INODE _XC-PARENT-ROLE !
+        _XC-P.OLD-PARENT-SNAPSHOT _XC-PARENT-SNAP !
+        _XC-ENTRY-PARENT
+        _XC-SWAP-PARENT
+        ?DUP IF EXIT THEN
+        _XC-DIRECTORY @ _XC-MOVING !
+    ELSE
+        DROP
+    THEN
+    _XC-HR-PARENT-INODE _XC-PARENT-ROLE !
+    _XC-P.PARENT-SNAPSHOT _XC-PARENT-SNAP !
+    _XC-ENTRY-PARENT ?DUP IF EXIT THEN
+    _XC-CROSS @ IF
+        _XC-PARENT-VN @ _XC-OLD-PARENT-VN @ =
+        _XC-PARENT-INO @ _XC-OLD-PARENT-INO @ = OR IF
+            VFS-E-CORRUPT EXIT
+        THEN
+    THEN
+    _XC-VICTIM-D @ IF _XC-ENTRY-VICTIM ?DUP IF EXIT THEN THEN
+    _XC-MOVING @ IF 1 ELSE 0 THEN
+    _XC-VICTIM-DIR @ IF 1- THEN _XC-PARENT-LINKS !
+    _XC-ENTRY-NAME ?DUP IF EXIT THEN
+    _XC-D @ D.NAME @ _VFS-STR-GET
+    2DUP _VFS-VALID-NAME? 0= IF 2DROP VFS-E-INVALID EXIT THEN
+    DUP _XC-OLD-NLEN ! _XC-OLD-NAME-SNAPSHOT SWAP CMOVE
+    _XC-CROSS @ 0= _XC-OLD-NLEN @ _XC-NLEN @ = AND IF
+        _XC-OLD-NAME-SNAPSHOT _XC-NAME-SNAPSHOT _XC-NLEN @ _EXT4-BYTES=? IF
+            VFS-E-INVALID EXIT
+        THEN
+    THEN
+    _XC-OLD-NAME-SNAPSHOT _XC-FIND-NAME ! _XC-OLD-NLEN @ _XC-FIND-NLEN !
+    _XC-ENTRY-WRITER ;
+
+: _XC-ENTRY  ( -- ior )
+    _XC-D @ 0= _XC-V @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _XC-LINKING @ 0<> _XC-DIRECTORY @ 0<> AND
+    _XC-LINKING @ 0<> _XC-REMOVING @ 0<> AND OR
+    _XC-RENAMING @ 0<> _XC-LINKING @ _XC-REMOVING @ OR 0<> AND OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    0 _XC-FINAL ! 0 _XC-ORPHAN !
+    _XC-HR-INODE _XC-INODE-ROLE !
+    _XC-HR-PARENT-INODE _XC-PARENT-ROLE !
+    _XC-P.PARENT-SNAPSHOT _XC-PARENT-SNAP !
+    _XC-DIRECTORY @ IF _XC-REMOVING @ IF -1 ELSE 1 THEN ELSE 0 THEN
+    _XC-PARENT-LINKS !
+    _XC-V @ _EXT4-MOW-V !
+    0 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
+    _EXT4-MOW-CTX @ _XC-CTX !
+    _EXT4-MOW-ACTIVE @ _XC-ACTIVE !
+    _XC-D @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
+    _XC-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
+    _XC-D @ D.VNODE @ DUP _XC-VN ! 0= IF VFS-E-STALE EXIT THEN
+    _XC-RENAMING @ IF _XC-ENTRY-RENAME EXIT THEN
+    _XC-REMOVING @ IF
+        _XC-ENTRY-REMOVAL
+    ELSE _XC-LINKING @ IF
+        _XC-ENTRY-LINK
+    ELSE
+        _XC-ENTRY-NEW
+    THEN THEN ?DUP IF EXIT THEN
+    _XC-D @ IN.PARENT @ DUP _XC-PARENT ! 0= IF VFS-E-INVALID EXIT THEN
+    _XC-ENTRY-PARENT ?DUP IF EXIT THEN
+    _XC-D @ D.NAME @ _VFS-STR-GET _XC-NLEN ! _XC-NAME !
+    _XC-ENTRY-NAME ?DUP IF EXIT THEN
+    _XC-NAME-SNAPSHOT _XC-FIND-NAME ! _XC-NLEN @ _XC-FIND-NLEN !
+    _XC-ENTRY-WRITER ;
 
 : _XC-NOW  ( -- ior )
     _XC-CTX @ _EXT4-C.WCLOCK-CTX + @
@@ -24863,10 +25571,24 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-FAIL-RETAIN
     OVER _XC-SCRUB NIP ;
 
+\ Publish a committed parent into the cache: its times and link count, and
+\ after growth its size and sectors.
+: _XC-PUBLISH-PARENT  ( -- )
+    _XC-SECONDS @ _XC-PARENT-VN @ VN.MTIME !
+    _XC-NSEC @ _XC-PARENT-VN @ VN.MTIME-NS !
+    _XC-SECONDS @ _XC-PARENT-VN @ VN.CTIME !
+    _XC-NSEC @ _XC-PARENT-VN @ VN.CTIME-NS !
+    _XC-PARENT-NEW-NLINK @ _XC-PARENT-VN @ VN.NLINK !
+    _XC-GROWTH @ IF
+        _XC-NEW-SIZE @ _XC-PARENT-VN @ VN.SIZE-LO !
+        0 _XC-PARENT-VN @ VN.SIZE-HI !
+        _XC-NEW-SECTORS @ _XC-PARENT-VN @ VN.BLOCKS !
+    THEN ;
+
 \ Publish a committed removal into the cache: the target's change time, or
 \ for a closed last link of an empty file the mount's free inode count; a
 \ removed directory's one link, which the VFS lowers to zero once the
-\ callback returns; and the parent's times and link count.
+\ callback returns; and the parent.
 : _XC-PUBLISH-REMOVAL  ( -- )
     _XC-FINAL @ _XC-ORPHAN @ 0= AND IF
         _XC-SUPER-NEW-FREE @ _XC-CTX @ _EXT4-C.FREE-INODES + !
@@ -24875,19 +25597,41 @@ VARIABLE _XC-CHILD-CLAIMS
         _XC-NSEC @ _XC-VN @ VN.CTIME-NS !
     THEN
     _XC-DIRECTORY @ IF 1 _XC-VN @ VN.NLINK ! THEN
-    _XC-SECONDS @ _XC-PARENT-VN @ VN.MTIME !
-    _XC-NSEC @ _XC-PARENT-VN @ VN.MTIME-NS !
-    _XC-SECONDS @ _XC-PARENT-VN @ VN.CTIME !
-    _XC-NSEC @ _XC-PARENT-VN @ VN.CTIME-NS !
-    _XC-PARENT-NEW-NLINK @ _XC-PARENT-VN @ VN.NLINK !
+    _XC-PUBLISH-PARENT
     VFS-IF-DIRTY _XC-VN @ VN.FLAGS DUP @ ROT OR SWAP !
     VFS-IF-DIRTY _XC-PARENT-VN @ VN.FLAGS DUP @ ROT OR SWAP !
     VFS-F-DIRTY _XC-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
 
-\ Publish a committed insert into the cache: the entry's inode, the parent's
-\ times and link count, and after growth its size and sectors, and the
-\ mount's free counts.
+\ Publish a committed rename into the cache: the source's change time; a
+\ victim's, and a directory victim's one link, which the VFS lowers to zero
+\ once the callback returns; both parents, the old one from its own bank;
+\ and after growth the mount's free blocks.
+: _XC-PUBLISH-RENAME  ( -- )
+    _XC-SECONDS @ _XC-VN @ VN.CTIME !
+    _XC-NSEC @ _XC-VN @ VN.CTIME-NS !
+    VFS-IF-DIRTY _XC-VN @ VN.FLAGS DUP @ ROT OR SWAP !
+    _XC-VICTIM @ IF
+        _XC-SECONDS @ _XC-VICTIM-VN @ VN.CTIME !
+        _XC-NSEC @ _XC-VICTIM-VN @ VN.CTIME-NS !
+        _XC-VICTIM-DIR @ IF 1 _XC-VICTIM-VN @ VN.NLINK ! THEN
+        VFS-IF-DIRTY _XC-VICTIM-VN @ VN.FLAGS DUP @ ROT OR SWAP !
+    THEN
+    _XC-PUBLISH-PARENT
+    VFS-IF-DIRTY _XC-PARENT-VN @ VN.FLAGS DUP @ ROT OR SWAP !
+    _XC-CROSS @ IF
+        _XC-SWAP-PARENT
+        _XC-PUBLISH-PARENT
+        VFS-IF-DIRTY _XC-PARENT-VN @ VN.FLAGS DUP @ ROT OR SWAP !
+        _XC-SWAP-PARENT
+    THEN
+    _XC-NEW-FREE @ _XC-CTX @ _EXT4-C.FREE-BLOCKS + !
+    VFS-F-DIRTY _XC-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
+
+\ Publish a committed operation into the cache: a rename's or a removal's
+\ own publication, or an insert's entry inode, its parent and the mount's
+\ free counts.
 : _XC-PUBLISH-COMMITTED  ( -- )
+    _XC-RENAMING @ IF _XC-PUBLISH-RENAME EXIT THEN
     _XC-REMOVING @ IF _XC-PUBLISH-REMOVAL EXIT THEN
     _XC-LINKING @ IF
         _XC-LINK-NEW-NLINK @ _XC-VN @ VN.NLINK !
@@ -24923,16 +25667,7 @@ VARIABLE _XC-CHILD-CLAIMS
         _XC-NSEC @ _XC-VN @ VN.CTIME-NS !
         _XC-SUPER-NEW-FREE @ _XC-CTX @ _EXT4-C.FREE-INODES + !
     THEN
-    _XC-SECONDS @ _XC-PARENT-VN @ VN.MTIME !
-    _XC-NSEC @ _XC-PARENT-VN @ VN.MTIME-NS !
-    _XC-SECONDS @ _XC-PARENT-VN @ VN.CTIME !
-    _XC-NSEC @ _XC-PARENT-VN @ VN.CTIME-NS !
-    _XC-PARENT-NEW-NLINK @ _XC-PARENT-VN @ VN.NLINK !
-    _XC-GROWTH @ IF
-        _XC-NEW-SIZE @ _XC-PARENT-VN @ VN.SIZE-LO !
-        0 _XC-PARENT-VN @ VN.SIZE-HI !
-        _XC-NEW-SECTORS @ _XC-PARENT-VN @ VN.BLOCKS !
-    THEN
+    _XC-PUBLISH-PARENT
     _XC-NEW-FREE @ _XC-CTX @ _EXT4-C.FREE-BLOCKS + !
     VFS-F-DIRTY _XC-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
 
@@ -24947,8 +25682,8 @@ VARIABLE _XC-CHILD-CLAIMS
     _XC-SCRUB
     0 ;
 
-\ A drain that fails after the removal's checkpoint leaves a durable orphan
-\ that mount recovery finishes.  Report success, keep the diagnostic in
+\ A drain that fails after the operation's checkpoint leaves a durable
+\ orphan that mount recovery finishes.  Report success, keep the diagnostic in
 \ V.LAST-IOR, and turn the volume read-only until that remount.
 : _XC-DURABLE-FAIL  ( plan ior -- ior )
     VFS-F-RO VFS-F-DIRTY OR _XC-V @ V.FLAGS DUP @ ROT OR SWAP !
@@ -24956,14 +25691,20 @@ VARIABLE _XC-CHILD-CLAIMS
 
 \ A closed last link that entered the orphan file drains now, through the
 \ release passes and the deletion; an open one drains on its last RELEASE.
+\ A rename's final victim drains as a removal's target does.
 : _XC-DRAIN  ( -- ior )
-    _XC-REMOVING @ _XC-ORPHAN @ AND 0= IF 0 EXIT THEN
-    _XC-VN @ VN.OPEN-REFS @ IF 0 EXIT THEN
-    _XC-INODE @ _XC-WRITER @ _XC-CTX @ _EXT4-DRAIN-ORPHAN ;
+    _XC-DRAINS? 0= IF 0 EXIT THEN
+    _XC-RENAMING @ IF
+        _XC-VICTIM-VN @ _XC-VICTIM-INO @
+    ELSE
+        _XC-VN @ _XC-INODE @
+    THEN
+    SWAP VN.OPEN-REFS @ IF DROP 0 EXIT THEN
+    _XC-WRITER @ _XC-CTX @ _EXT4-DRAIN-ORPHAN ;
 
 \ Plan, measure and seal the operation, activate a clean journal, then
 \ stage the live transaction, emit it, checkpoint it synchronously, and
-\ drain a removal's orphan.
+\ drain the orphan a removal or a rename's victim leaves.
 : _XC-RUN  ( -- ior )
     0 _XC-WRITER ! 0 _XC-TX !
     0 _XC-CTX ! 0 _EXT4-MOW-CTX !
@@ -24998,26 +25739,39 @@ VARIABLE _XC-CHILD-CLAIMS
 : _EXT4-CREATE  ( dentry vfs -- ior )
     _XC-V ! _XC-D !
     0 _XC-TARGET ! 0 _XC-LINKING ! 0 _XC-DIRECTORY ! 0 _XC-REMOVING !
+    0 _XC-RENAMING !
     _XC-RUN ;
 
 : _EXT4-MKDIR  ( dentry vfs -- ior )
     _XC-V ! _XC-D !
     0 _XC-TARGET ! 0 _XC-LINKING ! -1 _XC-DIRECTORY ! 0 _XC-REMOVING !
+    0 _XC-RENAMING !
     _XC-RUN ;
 
 : _EXT4-LINK  ( new-dentry target vfs -- ior )
     _XC-V ! _XC-TARGET ! _XC-D !
     -1 _XC-LINKING ! 0 _XC-DIRECTORY ! 0 _XC-REMOVING !
+    0 _XC-RENAMING !
     _XC-RUN ;
 
 : _EXT4-UNLINK  ( dentry vfs -- ior )
     _XC-V ! _XC-D !
     0 _XC-TARGET ! 0 _XC-LINKING ! 0 _XC-DIRECTORY ! -1 _XC-REMOVING !
+    0 _XC-RENAMING !
     _XC-RUN ;
 
 : _EXT4-RMDIR  ( dentry vfs -- ior )
     _XC-V ! _XC-D !
     0 _XC-TARGET ! 0 _XC-LINKING ! -1 _XC-DIRECTORY ! -1 _XC-REMOVING !
+    0 _XC-RENAMING !
+    _XC-RUN ;
+
+: _EXT4-RENAME  ( new-a new-u source new-parent victim flags vfs -- ior )
+    _XC-SCRUB-RENAME
+    _XC-V ! _XC-FLAGS ! _XC-VICTIM-D ! _XC-PARENT ! _XC-D !
+    _XC-NLEN ! _XC-NAME !
+    0 _XC-TARGET ! 0 _XC-LINKING ! 0 _XC-DIRECTORY ! 0 _XC-REMOVING !
+    -1 _XC-RENAMING !
     _XC-RUN ;
 
 ' _EXT4-CREATE EXT4-STAGED-WRITE-OPS VFS-OP-CREATE CELLS + !
@@ -25025,6 +25779,7 @@ VARIABLE _XC-CHILD-CLAIMS
 ' _EXT4-LINK EXT4-STAGED-WRITE-OPS VFS-OP-LINK CELLS + !
 ' _EXT4-UNLINK EXT4-STAGED-WRITE-OPS VFS-OP-UNLINK CELLS + !
 ' _EXT4-RMDIR EXT4-STAGED-WRITE-OPS VFS-OP-RMDIR CELLS + !
+' _EXT4-RENAME EXT4-STAGED-WRITE-OPS VFS-OP-RENAME CELLS + !
 
 \ =====================================================================
 \  General regular-file truncate
@@ -25588,1107 +26343,98 @@ VARIABLE _XO-D-REVOKE
 ' _EXT4-TRUNCATE EXT4-STAGED-WRITE-OPS VFS-OP-TRUNCATE CELLS + !
 
 \ =====================================================================
-\  Rename's source authentication and the last RELEASE
+\  The last RELEASE of an unlinked file or directory
 \ =====================================================================
-\
-\ RENAME authenticates its source and old parent with these words: the
-\ source's inode and, for a directory move, the canonical one-block child
-\ that MKDIR builds; the old parent's record, its linear block or its
-\ depth-zero or singleton depth-one HTree; and the record of the source's
-\ name.  UNLINK and RMDIR use the directory engine above.
 \
 \ A file or directory whose last link went while a descriptor held it open
 \ keeps its storage while the descriptor stays open, and its orphan record
 \ drains through the release passes and the deletion on its last staged
 \ RELEASE.
 
-VARIABLE _XU-D
-VARIABLE _XU-V
-VARIABLE _XU-CTX
-VARIABLE _XU-VN
-VARIABLE _XU-INO
-VARIABLE _XU-GEN
-VARIABLE _XU-NLINK
-VARIABLE _XU-DIRECTORY
-VARIABLE _XU-TARGET-GROUP
-VARIABLE _XU-TARGET-HOME
-VARIABLE _XU-TARGET-OFF
-VARIABLE _XU-DATA-BLOCK
-VARIABLE _XU-PARENT
-VARIABLE _XU-PARENT-VN
-VARIABLE _XU-PARENT-INO
-VARIABLE _XU-PARENT-PARENT-INO
-VARIABLE _XU-PARENT-GEN
-VARIABLE _XU-PARENT-NLINK
-VARIABLE _XU-PARENT-NEW-NLINK
-VARIABLE _XU-PARENT-GROUP
-VARIABLE _XU-PARENT-HOME
-VARIABLE _XU-PARENT-OFF
-VARIABLE _XU-NAME
-VARIABLE _XU-NLEN
-VARIABLE _XU-MS
-VARIABLE _XU-SECONDS
-VARIABLE _XU-NSEC
-VARIABLE _XU-DIR-HOME
-VARIABLE _XU-DIR-PRESENT
-VARIABLE _XU-DIR-IOR
-VARIABLE _XU-DIR-OFF
-VARIABLE _XU-DIR-LIMIT
-VARIABLE _XU-DIR-DE
-VARIABLE _XU-DIR-REC
-VARIABLE _XU-DIR-NAME-LEN
-VARIABLE _XU-DIR-INODE
-VARIABLE _XU-DIR-DTYPE
-VARIABLE _XU-DIR-DOT
-VARIABLE _XU-DIR-DOTDOT
-VARIABLE _XU-DIR-FOUND
-VARIABLE _XU-RENAME-SCAN
-VARIABLE _XU-SPLICE-SCAN
-VARIABLE _XU-PREV-OFF
-VARIABLE _XU-PREV-REC
-VARIABLE _XU-PREV-INODE
-VARIABLE _XU-TARGET-DIR-OFF
-VARIABLE _XU-TARGET-DIR-REC
-VARIABLE _XU-TARGET-DIR-DTYPE
-VARIABLE _XU-TARGET-PREV-OFF
-VARIABLE _XU-TARGET-PREV-REC
-VARIABLE _XU-TARGET-PREV-INODE
-VARIABLE _XU-DIR-IMAGE
-VARIABLE _XU-IMAGE
-VARIABLE _XU-RECORD
-VARIABLE _XU-IOR
-VARIABLE _XU-WRITER
-VARIABLE _XU-TX
-VARIABLE _XU-ACTIVE
-VARIABLE _XU-ROOT
-VARIABLE _XU-META-CAP
-VARIABLE _XU-REVOKE-CAP
-VARIABLE _XU-COOKIE
-VARIABLE _XU-INDEXED
-VARIABLE _XU-INDEX-DEPTH
-VARIABLE _XU-INDEX-ROUTE
-VARIABLE _XU-INDEX-ROUTE-LOGICAL
-VARIABLE _XU-INDEX-ROUTE-NODE-LOGICAL
-VARIABLE _XU-INDEX-ROUTE-NODE-HOME
-VARIABLE _XU-INDEX-ROOT-HOME
-VARIABLE _XU-INDEX-ENTRY
-VARIABLE _XU-INDEX-PHYS
-VARIABLE _XU-INDEX-HASH
-VARIABLE _XU-INDEX-MINOR
-VARIABLE _XU-INDEX-SCAN-HASH
-VARIABLE _XU-INDEX-SCAN-MINOR
-VARIABLE _XU-INDEX-NODE-CHECK-I
-VARIABLE _XU-HASH-SUPER
+VARIABLE _EXT4-LR-D
+VARIABLE _EXT4-LR-V
+VARIABLE _EXT4-LR-CTX
+VARIABLE _EXT4-LR-VN
+VARIABLE _EXT4-LR-INO
+VARIABLE _EXT4-LR-GEN
+VARIABLE _EXT4-LR-COOKIE
+VARIABLE _EXT4-LR-WRITER
+VARIABLE _EXT4-LR-RECORD
+VARIABLE _EXT4-LR-IOR
 
-CREATE _XU-NAME-SNAPSHOT 256 ALLOT
-CREATE _XU-CHILD-DIR-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
-CREATE _XU-TARGET-SNAPSHOT _EXT4-MAX-INODE ALLOT
-CREATE _XU-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE ALLOT
-CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
-
-\ Removal and rename consume the mounted caller-owned namespace record
-\ directly.  These accessors derive its existing directory and parent-inode
-\ evidence buffers from the already authenticated operation context; no
-\ second XU snapshot authority remains.
-: _XU-SHARED-PLAN  ( -- plan )
-    _XU-CTX @ _EXT4-C.XC-PLAN + @ ;
-
-: _XU-SHARED-DIR-SNAPSHOT  ( -- address )
-    _XU-SHARED-PLAN _XC-P.DIR-SNAPSHOT + ;
-
-: _XU-SHARED-PARENT-SNAPSHOT  ( -- address )
-    _XU-SHARED-PLAN _XC-P.PARENT-SNAPSHOT + ;
-
-: _XU-REQUIRE-EXACT-DIRECTORY-ROOT  ( inode -- ior )
-    _EXT4-I.BLOCK + DUP _XU-ROOT !
-    DUP W@ _EXT4-EXTENT-MAGIC <>
-    OVER 2 + W@ 1 <> OR
-    OVER 4 + W@ 4 <> OR
-    OVER 6 + W@ OR
-    OVER 8 + L@ OR IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    DUP 12 + L@ IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    DUP 16 + W@ 1 <>
-    OVER 18 + W@ OR IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    DUP 20 + L@ DUP _XU-DATA-BLOCK ! 0= IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XU-DATA-BLOCK @ 1 _XU-CTX @ _EXT4-C.BLOCKS + @
-    BLOCK-RANGE? 0= IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    24 + 36 _EXT4-BYTES-ZERO? 0= IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    0 ;
-
-: _XU-STAGE-CURRENT-TARGET  ( -- ior )
-    _XU-CTX @ _EXT4-STAGE-CURRENT-INODE
-    _XU-IOR ! DUP
-    _XU-DIRECTORY @ IF VFS-T-DIR ELSE VFS-T-FILE THEN <> IF
-        DROP _XU-IOR @ ?DUP IF EXIT THEN VFS-E-INVALID EXIT
-    THEN DROP
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-VN @ _XU-CTX @ _EXT4-VN-CACHE-MATCH? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.R.UID + @
-    _XU-CTX @ _EXT4-C.R.GID + @ OR IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.R.NLINK + @ DUP _XU-NLINK !
-    _XU-DIRECTORY @ IF
-        2 <> IF VFS-E-CONFLICT EXIT THEN
-    ELSE
-        1 U< IF VFS-E-STALE EXIT THEN
-    THEN
-    _XU-CTX @ _EXT4-C.INODE + _EXT4-I.FLAGS + L@ 0x30 AND IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-DIRECTORY @ IF
-        _XU-CTX @ _EXT4-C.R.MODE + @ 0x41ED <> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.SIZE + @
-        _XU-CTX @ _EXT4-C.BSIZE + @ <> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.BLOCKS + @
-        _XU-CTX @ _EXT4-C.SPB + @ <> IF
-            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.INODE + DUP
-        _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        DUP _EXT4-I.SIZE-HI + L@ IF
-            DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-        THEN
-        DUP _EXT4-I.FILE-ACL-LO + L@
-        OVER _EXT4-I.FILE-ACL-HI + W@ OR IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        DUP _EXT4-I.EXTRA-SIZE + W@ 32 <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        DUP _EXT4-I.PROJECT-ID + L@ IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        DUP _EXT4-I.DTIME + L@ IF
-            DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-        THEN
-        DUP _XU-REQUIRE-EXACT-DIRECTORY-ROOT ?DUP IF
-            NIP EXIT
-        THEN
-        160 + _XU-CTX @ _EXT4-C.ISIZE + @ 160 -
-        _EXT4-BYTES-ZERO? 0= IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        0 EXIT
-    THEN
-    0 ;
-
-: _XU-REQUIRE-TARGET  ( -- ior )
-    _XU-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XU-TARGET-GROUP @ <>
-    _EXT4-IR-BLOCK @ _XU-TARGET-HOME @ <> OR
-    _EXT4-IR-OFF @ _XU-TARGET-OFF @ <> OR IF VFS-E-STALE EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _XU-TARGET-SNAPSHOT
-    _XU-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-STAGE-CURRENT-TARGET ;
-
-: _XU-AUTH-TARGET  ( -- ior )
-    _XU-INO @
-    _XU-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _XU-INO @ 8 =
-    _XU-INO @ _XU-CTX @ _EXT4-C.ORPHAN-INO + @ = OR IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XU-TARGET-GROUP !
-    _EXT4-IR-BLOCK @ _XU-TARGET-HOME !
-    _EXT4-IR-OFF @ _XU-TARGET-OFF !
-    _XU-STAGE-CURRENT-TARGET ?DUP IF EXIT THEN
-    _XU-TARGET-HOME @ _XU-TARGET-GROUP @ _XU-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _XU-TARGET-SNAPSHOT
-    _XU-CTX @ _EXT4-C.ISIZE + @ CMOVE
-    _EXT4-XOP-LIST _EXT4-XA-OP !
-    0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
-    _XU-CTX @ _EXT4-XA-SCAN-BOTH ?DUP IF EXIT THEN
-    _XU-REQUIRE-TARGET ;
-
-: _XU-STAGE-CURRENT-PARENT  ( -- ior )
-    _XU-CTX @ _EXT4-STAGE-CURRENT-INODE
-    _XU-IOR ! DUP VFS-T-DIR <> IF
-        DROP _XU-IOR @ ?DUP IF EXIT THEN VFS-E-NOTDIR EXIT
-    THEN DROP
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-PARENT-VN @ _XU-CTX @ _EXT4-VN-CACHE-MATCH? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.R.NLINK + @ DUP _XU-PARENT-NLINK !
-    _XU-DIRECTORY @ IF
-        DUP 3 U< OVER _EXT4-LINK-MAX U> OR IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        1- _XU-PARENT-NEW-NLINK !
-    ELSE
-        _XU-PARENT-NEW-NLINK !
-    THEN
-    _XU-CTX @ _EXT4-C.R.UID + @
-    _XU-CTX @ _EXT4-C.R.GID + @ OR IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.R.MODE + @ _EXT4-S-ISGID AND IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FLAGS + L@ DUP
-    _EXT4-INDEX-FL AND 0<> _XU-INDEXED !
-    _XU-INDEXED @ IF
-        _XU-SHARED-PLAN _XC-P.OP + @ _XC-PO-RENAME <> IF
-            2DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.SIZE + @ DUP
-        DUP 0= SWAP 0x7FFFFFFF U> OR IF
-            2DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        DUP _XU-CTX @ _EXT4-C.BSIZE + @ MOD IF
-            2DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.BSIZE + @ /
-        OVER _EXT4-I.BLOCK + 6 + W@ DUP 1 U> IF
-            DROP 2DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        DUP IF
-            2 PICK _EXT4-I.BLOCK + 2 + W@ 1 <> IF
-                DROP 2DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-            THEN
-            DROP 1+
-        ELSE
-            DROP
-        THEN
-        _XU-CTX @ _EXT4-C.SPB + @ *
-        _XU-CTX @ _EXT4-C.R.BLOCKS + @ <> IF
-            DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-    ELSE
-        _EXT4-EXTENTS-FL <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.SIZE + @
-        _XU-CTX @ _EXT4-C.BSIZE + @ <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.BLOCKS + @
-        _XU-CTX @ _EXT4-C.SPB + @ <> IF
-            DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-    THEN
-    DUP _EXT4-I.FILE-ACL-LO + L@
-    OVER _EXT4-I.FILE-ACL-HI + W@ OR IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.EXTRA-SIZE + W@ 32 <> IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.PROJECT-ID + L@ IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    160 + _XU-CTX @ _EXT4-C.ISIZE + @ 160 -
-    _EXT4-BYTES-ZERO? 0= IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-SHARED-PLAN _XU-INDEXED @ _XC-P-BIND-SHAPE
-    DUP IF NIP EXIT THEN 2DROP
-    _XU-INDEXED @ IF 0 EXIT THEN
-    0 _XU-CTX @ _EXT4-MAP-BLOCK
-    _XU-DIR-IOR ! _XU-DIR-PRESENT !
-    _XU-DIR-IOR @ ?DUP IF NIP EXIT THEN
-    _XU-DIR-PRESENT @ 0= IF
-        DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XU-DIR-HOME @ IF
-        DUP _XU-DIR-HOME @ <> IF DROP VFS-E-CONFLICT EXIT THEN DROP
-    ELSE
-        _XU-DIR-HOME !
-    THEN
-    0 ;
-
-: _XU-LOAD-PARENT  ( -- ior )
-    _XU-PARENT-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XU-PARENT-GROUP !
-    _EXT4-IR-BLOCK @ _XU-PARENT-HOME !
-    _EXT4-IR-OFF @ _XU-PARENT-OFF !
-    _XU-STAGE-CURRENT-PARENT ?DUP IF EXIT THEN
-    _XU-PARENT-HOME @ _XU-PARENT-GROUP @ _XU-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _XU-SHARED-PARENT-SNAPSHOT
-    _XU-SHARED-PLAN _XC-P.STATE + @ _XC-PS-SEALED = IF
-        _XU-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XU-CTX @ _EXT4-C.ISIZE + @ CMOVE
-    THEN
-    0 ;
-
-: _XU-REQUIRE-PARENT  ( -- ior )
-    _XU-PARENT-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XU-PARENT-GROUP @ <>
-    _EXT4-IR-BLOCK @ _XU-PARENT-HOME @ <> OR
-    _EXT4-IR-OFF @ _XU-PARENT-OFF @ <> OR IF VFS-E-STALE EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _XU-SHARED-PARENT-SNAPSHOT
-    _XU-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-STAGE-CURRENT-PARENT ;
-
-: _XU-DIRENT-NAME=?  ( dirent -- flag )
-    DUP 6 + C@ _XU-NLEN @ <> IF DROP FALSE EXIT THEN
-    8 + _XU-NAME-SNAPSHOT _XU-NLEN @ _EXT4-BYTES=? ;
-
-: _XU-REQUIRE-HASH-AUTHORITY  ( -- ior )
-    _XU-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
-    _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK +
-    _XU-CTX @ _EXT4-PRIMARY-SUPER-OFF + DUP _XU-HASH-SUPER !
-    _EXT4-SUPER-CHECKSUM? ?DUP IF NIP EXIT THEN 0= IF
-        EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT
-    THEN
-    _XU-HASH-SUPER @ _EXT4-SUPER-SEED? ?DUP IF NIP EXIT THEN 0= IF
-        EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT
-    THEN
-    _XU-HASH-SUPER @ _EXT4-SB.HASH-SEED +
-    _XU-CTX @ _EXT4-C.SB + _EXT4-SB.HASH-SEED + 16
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-HASH-SUPER @ _EXT4-SB.DEFAULT-HASH + C@
-    _XU-CTX @ _EXT4-C.SB + _EXT4-SB.DEFAULT-HASH + C@ <> IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-HASH-SUPER @ _EXT4-SB.FLAGS + L@
-    _XU-CTX @ _EXT4-C.SB + _EXT4-SB.FLAGS + L@ <> IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    0 ;
-
-: _XU-BIND-HASH-AUTHORITY  ( -- ior )
-    _XU-SHARED-PLAN DUP _XC-P.OP + @ _XC-PO-RENAME = IF
-        DUP _XC-P.RENAME-HASH-BASELINE + @
-    ELSE
-        DUP _XC-P.INDEX-BASELINE + @
-    THEN IF
-        _XU-HASH-SUPER @ _EXT4-SB.HASH-SEED +
-        OVER _XC-P.CONVERT-HASH-BASE + 16 _EXT4-BYTES=? 0= IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-        _XU-HASH-SUPER @ _EXT4-SB.DEFAULT-HASH + C@
-        OVER _XC-P.CONVERT-HASH-BASE + 16 + C@ <> IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-        _XU-HASH-SUPER @ _EXT4-SB.FLAGS + L@
-        OVER _XC-P.CONVERT-HASH-BASE + 20 + L@ <> IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        DUP _XC-P.CONVERT-HASH-BASE + 24 0 FILL
-        _XU-HASH-SUPER @ _EXT4-SB.HASH-SEED +
-        OVER _XC-P.CONVERT-HASH-BASE + 16 CMOVE
-        _XU-HASH-SUPER @ _EXT4-SB.DEFAULT-HASH + C@
-        OVER _XC-P.CONVERT-HASH-BASE + 16 + C!
-        _XU-HASH-SUPER @ _EXT4-SB.FLAGS + L@
-        OVER _XC-P.CONVERT-HASH-BASE + 20 + L!
-        DUP _XC-P.OP + @ _XC-PO-RENAME = IF
-            -1 OVER _XC-P.RENAME-HASH-BASELINE + !
-        THEN
-    THEN
-    DROP 0 ;
-
-\ Authenticate the depth-zero root table or the singleton depth-one node
-\ emitted by the qualified root-growth path.  The selected node is immutable
-\ authority and is rebound byte-for-byte on every sealed pass.
-: _XU-AUTH-INDEX-ACTIVE-TABLE  ( -- ior )
-    _XU-DIRECTORY-DESC _EXT4-DD.DX-LEVEL + @ DUP
-    _XU-INDEX-DEPTH ! 0= IF
-        0 _XU-INDEX-ROUTE-NODE-LOGICAL !
-        0 _XU-INDEX-ROUTE-NODE-HOME !
-        _XU-DIRECTORY-DESC _EXT4-DD-REQUIRE-DEPTH0 EXIT
-    THEN
-    _XU-DIRECTORY-DESC _EXT4-DD-REQUIRE-MUTABLE-HASH
-    ?DUP IF EXIT THEN
-    _XU-DIRECTORY-DESC _EXT4-DD.DX-COUNT + @ 1 <> IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @ 3 U< IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XU-DIRECTORY-DESC _EXT4-DD.ROOT-SNAPSHOT + @ 36 + L@
-    0x0FFFFFFF AND DUP _XU-INDEX-ROUTE-NODE-LOGICAL !
-    _XU-DIRECTORY-DESC _EXT4-DD-LOAD-LOGICAL
-    _XU-IOR ! _XU-INDEX-ROUTE-NODE-HOME !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-INDEX-ROUTE-NODE-HOME @
-    _XU-DIRECTORY-DESC _EXT4-DD.ROOT-HOME + @ = IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XU-CTX @ _EXT4-DX-NODE? 0= IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XU-PARENT-INO @ _EXT4-DX-DIRINO !
-    _XU-PARENT-GEN @ _EXT4-DX-GEN !
-    _XU-CTX @
-    _XU-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @
-    _EXT4-VALIDATE-DX-NODE ?DUP IF EXIT THEN
-    _EXT4-DX-COUNT @
-    _XU-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @ 2 - <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    0 _XU-INDEX-NODE-CHECK-I !
-    BEGIN
-        _XU-INDEX-NODE-CHECK-I @ _EXT4-DX-COUNT @ U<
-    WHILE
-        _XU-CTX @ _EXT4-C.DIR-BLOCK + 12 +
-        _XU-INDEX-NODE-CHECK-I @ 8 * + L@ 0x0FFFFFFF AND
-        _XU-INDEX-ROUTE-NODE-LOGICAL @ = IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        1 _XU-INDEX-NODE-CHECK-I +!
-    REPEAT
-    _XU-SHARED-PLAN _XC-P.INDEX-BASELINE + @ IF
-        _XU-INDEX-ROUTE-NODE-HOME @ _XU-SHARED-PLAN
-        _XC-P.INDEX-BASE-ROUTE-NODE-HOME + @ <> IF
-            VFS-E-CONFLICT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.DIR-BLOCK +
-        _XU-SHARED-PLAN _XC-P.NODE-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XU-INDEX-ROUTE-NODE-HOME @ _XU-SHARED-PLAN
-        _XC-P.INDEX-BASE-ROUTE-NODE-HOME + !
-        _XU-CTX @ _EXT4-C.DIR-BLOCK +
-        _XU-SHARED-PLAN _XC-P.NODE-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    THEN
-    _XU-SHARED-PLAN _XC-P.NODE-SNAPSHOT + 8 +
-    _XU-DIRECTORY-DESC _EXT4-DD.ACTIVE-ENTRIES + !
-    _EXT4-DX-LIMIT @ _XU-DIRECTORY-DESC _EXT4-DD.ACTIVE-LIMIT + !
-    _EXT4-DX-COUNT @ _XU-DIRECTORY-DESC _EXT4-DD.ACTIVE-COUNT + !
-    _XU-DIRECTORY-DESC _EXT4-DD-REQUIRE-ACTIVE-HASHES ;
-
-: _XU-INDEX-BIND-SELECTED-LEAF  ( plan -- plan ior )
-    _XU-INDEX-PHYS @ _XU-DIR-HOME !
-    DUP _XC-P.INDEX-BASELINE + @ IF
-        _XU-INDEX-ENTRY @ OVER _XC-P.INDEX-BASE-ENTRY + @ <>
-        _XU-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @
-            2 PICK _XC-P.INDEX-BASE-LOGICAL + @ <> OR
-        _XU-INDEX-PHYS @ 2 PICK _XC-P.INDEX-BASE-HOME + @ <> OR IF
-            VFS-E-CONFLICT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.DIR-BLOCK +
-        OVER _XC-P.DIR-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XU-INDEX-ENTRY @ OVER _XC-P.INDEX-BASE-ENTRY + !
-        _XU-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @
-            OVER _XC-P.INDEX-BASE-LOGICAL + !
-        _XU-INDEX-PHYS @ OVER _XC-P.INDEX-BASE-HOME + !
-        _XU-CTX @ _EXT4-C.DIR-BLOCK +
-        OVER _XC-P.DIR-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    THEN
-    0 ;
-
-\ Validate every checksummed leaf in the active table.  Target-name
-\ uniqueness, inode-reference cardinality, and hash placement are global;
-\ predecessor authority is deliberately local to the selected leaf so the
-\ established journal afterimage splice remains unchanged.
-: _XU-INDEXED-LEAF-SCAN  ( -- ior )
-    -1 _XU-PREV-OFF ! 0 _XU-PREV-REC ! 0 _XU-PREV-INODE !
-    0 _XU-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XU-DIR-LIMIT !
-    BEGIN _XU-DIR-OFF @ _XU-DIR-LIMIT @ < WHILE
-        _XU-CTX @ _EXT4-C.DIR-BLOCK + _XU-DIR-OFF @ +
-        DUP _XU-DIR-DE !
-        DUP 4 + W@ DUP _XU-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        DROP
-        _XU-DIR-OFF @ _XU-DIR-REC @ + _XU-DIR-LIMIT @ > IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XU-DIR-DE @ 6 + C@ DUP _XU-DIR-NAME-LEN !
-        _XU-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XU-DIR-DE @ L@ DUP _XU-DIR-INODE ! IF
-            _XU-DIR-INODE @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-NAME-LEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-DE @ 8 + _XU-DIR-NAME-LEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-DE @ 7 + C@ DUP _XU-DIR-DTYPE !
-            _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XU-DIR-NAME-LEN @ 1 =
-            _XU-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XU-DIR-NAME-LEN @ 2 =
-            _XU-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XU-DIR-DE @ 9 + C@ [CHAR] . = AND OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-DE @ 8 + _XU-DIR-NAME-LEN @
-            _XU-DIRECTORY-DESC _EXT4-DD.DX-VERSION + @ _XU-CTX @
-            _EXT4-HALF-MD4-DIRHASH?
-            _XU-IOR ! _XU-INDEX-SCAN-MINOR ! _XU-INDEX-SCAN-HASH !
-            _XU-IOR @ ?DUP IF EXIT THEN
-            _XU-INDEX-SCAN-HASH @ _XU-DIRECTORY-DESC
-            _EXT4-DD-HASH-IN-INTERVAL? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-DE @ _XU-DIRENT-NAME=? IF
-                _XU-DIR-FOUND @ IF
-                    EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                THEN
-                _XU-DIR-INODE @ _XU-INO @ <> IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                _XU-DIRECTORY @ IF
-                    _XU-DIR-DTYPE @ 2 <> IF
-                        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN
-                ELSE
-                    _XU-DIR-DTYPE @ DUP IF
-                        1 <> IF
-                            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                        THEN
-                    ELSE DROP THEN
-                THEN
-                _XU-SPLICE-SCAN @ IF
-                    _XU-PREV-OFF @ 0< _XU-PREV-INODE @ 0= OR IF
-                        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-                    THEN
-                THEN
-                -1 _XU-DIR-FOUND !
-                _XU-DIR-OFF @ _XU-TARGET-DIR-OFF !
-                _XU-DIR-REC @ _XU-TARGET-DIR-REC !
-                _XU-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE !
-                _XU-SPLICE-SCAN @ IF
-                    _XU-PREV-OFF @ _XU-TARGET-PREV-OFF !
-                    _XU-PREV-REC @ _XU-TARGET-PREV-REC !
-                    _XU-PREV-INODE @ _XU-TARGET-PREV-INODE !
-                THEN
-                _XU-SHARED-PLAN _XU-INDEX-BIND-SELECTED-LEAF
-                DUP IF NIP EXIT THEN 2DROP
-            THEN
-        ELSE
-            _XU-DIR-NAME-LEN @ _XU-DIR-DE @ 7 + C@ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XU-DIR-OFF @ _XU-PREV-OFF !
-        _XU-DIR-REC @ _XU-PREV-REC !
-        _XU-DIR-INODE @ _XU-PREV-INODE !
-        _XU-DIR-REC @ _XU-DIR-OFF +!
-    REPEAT
-    _XU-DIR-OFF @ _XU-DIR-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    0 ;
-
-: _XU-AUTH-INDEXED-PARENT  ( -- ior )
-    _XU-ROOT-CURRENT _XU-DIRECTORY-DESC _EXT4-DD-INIT
-    _XU-PARENT @ _XU-V @ _XU-CTX @ _XU-DIRECTORY-DESC
-    _EXT4-DD-AUTH-INODE ?DUP IF EXIT THEN
-    _XU-DIRECTORY-DESC _EXT4-DD.CTX + @ _XU-CTX @ <>
-    _XU-DIRECTORY-DESC _EXT4-DD.PARENT + @ _XU-PARENT @ <> OR
-    _XU-DIRECTORY-DESC _EXT4-DD.VFS + @ _XU-V @ <> OR
-    _XU-DIRECTORY-DESC _EXT4-DD.INO + @ _XU-PARENT-INO @ <> OR
-    _XU-DIRECTORY-DESC _EXT4-DD.PARINO + @
-        _XU-PARENT-PARENT-INO @ <> OR
-    _XU-DIRECTORY-DESC _EXT4-DD.GEN + @ _XU-PARENT-GEN @ <> OR
-    _XU-DIRECTORY-DESC _EXT4-DD.GROUP + @ _XU-PARENT-GROUP @ <> OR
-    _XU-DIRECTORY-DESC _EXT4-DD.INODE-HOME + @
-        _XU-PARENT-HOME @ <> OR
-    _XU-DIRECTORY-DESC _EXT4-DD.INODE-OFF + @
-        _XU-PARENT-OFF @ <> OR IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-DIRECTORY-DESC _EXT4-DD.INDEXED + @ 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-DIRECTORY-DESC _EXT4-DD-AUTH-HTREE-ROOT ?DUP IF EXIT THEN
-    _XU-AUTH-INDEX-ACTIVE-TABLE ?DUP IF EXIT THEN
-    _XU-REQUIRE-HASH-AUTHORITY ?DUP IF EXIT THEN
-    _XU-BIND-HASH-AUTHORITY ?DUP IF EXIT THEN
-    _XU-NAME-SNAPSHOT _XU-NLEN @
-    _XU-DIRECTORY-DESC _EXT4-DD.DX-VERSION + @ _XU-CTX @
-    _EXT4-HALF-MD4-DIRHASH?
-    _XU-IOR ! _XU-INDEX-MINOR ! _XU-INDEX-HASH !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-INDEX-MINOR @ _XU-DIRECTORY-DESC _EXT4-DD.TARGET-MINOR + !
-    _XU-INDEX-HASH @ _XU-DIRECTORY-DESC
-    _EXT4-DD-SELECT-ROUTE ?DUP IF EXIT THEN
-    _XU-DIRECTORY-DESC _EXT4-DD.ROUTE-ENTRY + @ _XU-INDEX-ROUTE !
-    _XU-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @
-        _XU-INDEX-ROUTE-LOGICAL !
-    _XU-DIRECTORY-DESC _EXT4-DD.ROOT-HOME + @ _XU-INDEX-ROOT-HOME !
-    0 _XU-DIR-FOUND ! 0 _XU-DIR-HOME !
-    0 _XU-INDEX-ENTRY !
-    BEGIN
-        _XU-INDEX-ENTRY @
-        _XU-DIRECTORY-DESC _EXT4-DD.ACTIVE-COUNT + @ U<
-    WHILE
-        _XU-INDEX-ENTRY @ _XU-DIRECTORY-DESC _EXT4-DD-SET-INTERVAL
-        ?DUP IF EXIT THEN
-        _XU-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @
-        _XU-DIRECTORY-DESC _EXT4-DD-LOAD-LOGICAL
-        _XU-IOR ! _XU-INDEX-PHYS !
-        _XU-IOR @ ?DUP IF EXIT THEN
-        _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
-        _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
-        _XU-INDEXED-LEAF-SCAN ?DUP IF EXIT THEN
-        1 _XU-INDEX-ENTRY +!
-    REPEAT
-    _XU-DIR-FOUND @ 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-SHARED-PLAN _XC-P.INDEX-BASELINE + @ IF
-        _XU-INDEX-ROOT-HOME @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROOT-HOME + @ <>
-        _XU-INDEX-DEPTH @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-DEPTH + @ <> OR
-        _XU-INDEX-ROUTE-NODE-HOME @
-            _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROUTE-NODE-HOME + @ <> OR
-        _XU-INDEX-ROUTE @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROUTE + @ <> OR
-        _XU-INDEX-ROUTE-LOGICAL @
-            _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROUTE-LOGICAL + @ <> OR
-        _XU-INDEX-HASH @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-HASH + @ <> OR
-        _XU-INDEX-MINOR @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-MINOR + @ <> OR
-        _XU-PARENT-GROUP @
-            _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-PARENT-GROUP + @ <> OR
-        _XU-PARENT-HOME @
-            _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-PARENT-HOME + @ <> OR
-        _XU-PARENT-OFF @
-            _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-PARENT-OFF + @ <> OR IF
-            VFS-E-CONFLICT EXIT
-        THEN
-        _XU-ROOT-CURRENT _XU-SHARED-PLAN _XC-P.ROOT-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XU-ROOT-CURRENT _XU-SHARED-PLAN _XC-P.ROOT-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-        _XU-INDEX-ROOT-HOME @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROOT-HOME + !
-        _XU-INDEX-DEPTH @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-DEPTH + !
-        _XU-INDEX-ROUTE-NODE-HOME @
-            _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROUTE-NODE-HOME + !
-        _XU-INDEX-ROUTE @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROUTE + !
-        _XU-INDEX-ROUTE-LOGICAL @
-            _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-ROUTE-LOGICAL + !
-        _XU-INDEX-HASH @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-HASH + !
-        _XU-INDEX-MINOR @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-MINOR + !
-        _XU-PARENT-GROUP @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-PARENT-GROUP + !
-        _XU-PARENT-HOME @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-PARENT-HOME + !
-        _XU-PARENT-OFF @ _XU-SHARED-PLAN
-            _XC-P.INDEX-BASE-PARENT-OFF + !
-        -1 _XU-SHARED-PLAN _XC-P.INDEX-BASELINE + !
-    THEN
-    0 ;
-
-: _XU-DIR-SCAN  ( -- ior )
-    0 _XU-DIR-DOT ! 0 _XU-DIR-DOTDOT ! 0 _XU-DIR-FOUND !
-    -1 _XU-PREV-OFF !
-    0 _XU-PREV-REC ! 0 _XU-PREV-INODE ! 0 _XU-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XU-DIR-LIMIT !
-    BEGIN _XU-DIR-OFF @ _XU-DIR-LIMIT @ < WHILE
-        _XU-CTX @ _EXT4-C.DIR-BLOCK + _XU-DIR-OFF @ +
-        DUP _XU-DIR-DE !
-        DUP 4 + W@ DUP _XU-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        DROP
-        _XU-DIR-OFF @ _XU-DIR-REC @ + _XU-DIR-LIMIT @ > IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XU-DIR-DE @ 6 + C@ DUP _XU-DIR-NAME-LEN !
-        _XU-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XU-DIR-DE @ L@ DUP _XU-DIR-INODE ! IF
-            _XU-DIR-INODE @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-NAME-LEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-DE @ 8 + _XU-DIR-NAME-LEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XU-DIR-DE @ 7 + C@ DUP _XU-DIR-DTYPE !
-            _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XU-DIR-NAME-LEN @ 1 =
-            _XU-DIR-DE @ 8 + C@ [CHAR] . = AND IF
-                _XU-DIR-INODE @ _XU-PARENT-INO @ <>
-                _XU-DIR-DOT @ OR IF
-                    EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                THEN
-                -1 _XU-DIR-DOT !
-            ELSE
-                _XU-DIR-NAME-LEN @ 2 =
-                _XU-DIR-DE @ 8 + C@ [CHAR] . = AND
-                _XU-DIR-DE @ 9 + C@ [CHAR] . = AND IF
-                    _XU-DIR-INODE @ _XU-PARENT-PARENT-INO @ <>
-                    _XU-DIR-DOTDOT @ OR IF
-                        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN
-                    -1 _XU-DIR-DOTDOT !
-                ELSE
-                    _XU-DIR-DE @ _XU-DIRENT-NAME=? IF
-                        _XU-DIR-FOUND @ IF
-                            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                        THEN
-                        _XU-DIR-INODE @ _XU-INO @ <> IF
-                            VFS-E-CONFLICT EXIT
-                        THEN
-                        _XU-DIRECTORY @ IF
-                            _XU-DIR-DTYPE @ 2 <> IF
-                                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                            THEN
-                        ELSE
-                            _XU-DIR-DTYPE @ DUP IF
-                                1 <> IF
-                                    EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                                THEN
-                            ELSE DROP THEN
-                        THEN
-                        _XU-SPLICE-SCAN @ IF
-                            _XU-PREV-OFF @ 0<
-                            _XU-PREV-INODE @ 0= OR IF
-                                EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-                            THEN
-                        THEN
-                        -1 _XU-DIR-FOUND !
-                        _XU-DIR-OFF @ _XU-TARGET-DIR-OFF !
-                        _XU-DIR-REC @ _XU-TARGET-DIR-REC !
-                        _XU-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE !
-                        _XU-SPLICE-SCAN @ IF
-                            _XU-PREV-OFF @ _XU-TARGET-PREV-OFF !
-                            _XU-PREV-REC @ _XU-TARGET-PREV-REC !
-                            _XU-PREV-INODE @ _XU-TARGET-PREV-INODE !
-                        THEN
-                    THEN
-                THEN
-            THEN
-        ELSE
-            _XU-DIR-NAME-LEN @
-            _XU-DIR-DE @ 7 + C@ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XU-DIR-OFF @ _XU-PREV-OFF !
-        _XU-DIR-REC @ _XU-PREV-REC !
-        _XU-DIR-INODE @ _XU-PREV-INODE !
-        _XU-DIR-REC @ _XU-DIR-OFF +!
-    REPEAT
-    _XU-DIR-OFF @ _XU-DIR-LIMIT @ <>
-    _XU-DIR-DOT @ 0= OR _XU-DIR-DOTDOT @ 0= OR IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XU-DIR-FOUND @ 0= IF VFS-E-CONFLICT EXIT THEN
-    0 ;
-
-: _XU-CAPTURE-PARENT-DIRECTORY  ( -- ior )
-    _XU-LOAD-PARENT ?DUP IF EXIT THEN
-    _XU-INDEXED @ IF
-        _XU-AUTH-INDEXED-PARENT ?DUP IF EXIT THEN
-        _XU-DIR-HOME @ 1 _XU-CTX @
-        _EXT4-VALIDATE-MUTATION-RANGE-TARGETS EXIT
-    THEN
-    _XU-DIR-HOME @ 1 _XU-CTX @
-    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-    _XU-DIR-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-CTX @ _EXT4-C.DIR-BLOCK +
-    _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
-    _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
-    _XU-DIR-SCAN ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.DIR-BLOCK + _XU-SHARED-DIR-SNAPSHOT
-    _XU-SHARED-PLAN _XC-P.STATE + @ _XC-PS-SEALED = IF
-        _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    THEN
-    0 ;
-
-: _XU-BUILD-EXPECTED-CHILD-DIRECTORY  ( -- ior )
-    _XU-CHILD-DIR-SNAPSHOT _XU-CTX @ _EXT4-C.BSIZE + @ 0 FILL
-    _XU-INO @ _XU-CHILD-DIR-SNAPSHOT L!
-    12 _XU-CHILD-DIR-SNAPSHOT 4 + W!
-    1 _XU-CHILD-DIR-SNAPSHOT 6 + C!
-    2 _XU-CHILD-DIR-SNAPSHOT 7 + C!
-    [CHAR] . _XU-CHILD-DIR-SNAPSHOT 8 + C!
-    _XU-PARENT-INO @ _XU-CHILD-DIR-SNAPSHOT 12 + L!
-    _XU-CTX @ _EXT4-C.BSIZE + @ 24 -
-    _XU-CHILD-DIR-SNAPSHOT 16 + W!
-    2 _XU-CHILD-DIR-SNAPSHOT 18 + C!
-    2 _XU-CHILD-DIR-SNAPSHOT 19 + C!
-    [CHAR] . _XU-CHILD-DIR-SNAPSHOT 20 + C!
-    [CHAR] . _XU-CHILD-DIR-SNAPSHOT 21 + C!
-    _XU-CHILD-DIR-SNAPSHOT _XU-CTX @ _EXT4-C.BSIZE + @ 12 - + DUP
-    12 0 FILL
-    12 OVER 4 + W!
-    0 OVER 6 + C!
-    0xDE SWAP 7 + C!
-    _XU-CHILD-DIR-SNAPSHOT _XU-INO @ _XU-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ;
-
-: _XU-AUTH-CHILD-DIRECTORY  ( -- ior )
-    _XU-DATA-BLOCK @ _XU-DIR-HOME @ = IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XU-DATA-BLOCK @ 1 _XU-CTX @
-    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-    _XU-DATA-BLOCK @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-CTX @ _EXT4-C.DIR-BLOCK +
-    _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    _XU-INO @ _XU-GEN @ _XU-CTX @
-    _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
-    _XU-BUILD-EXPECTED-CHILD-DIRECTORY ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.DIR-BLOCK + _XU-CHILD-DIR-SNAPSHOT
-    _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    0 ;
-
-: _XU-REQUIRE-CHILD-DIRECTORY  ( -- ior )
-    _XU-DIRECTORY @ 0= IF 0 EXIT THEN
-    _XU-DATA-BLOCK @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-CHILD-DIR-SNAPSHOT
-    _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    0 ;
-
-: _XU-STAGE-PARENT-INODE  ( -- ior )
-    _XU-PARENT-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-PARENT-OFF @ +
-    _XU-SHARED-PARENT-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-PARENT-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XU-IMAGE !
-    _XU-PARENT-OFF @ + DUP _XU-RECORD !
-    _XU-SHARED-PARENT-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-RECORD @ _EXT4-I.LINKS + W@ _XU-PARENT-NLINK @ <> IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-DIRECTORY @ IF
-        _XU-PARENT-NEW-NLINK @
-        _XU-RECORD @ _EXT4-I.LINKS + W!
-    THEN
-    _XU-SECONDS @ _XU-NSEC @ _XU-RECORD @ _XU-CTX @
-    _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
-    _XU-RECORD @ _XU-PARENT-INO @ _XU-CTX @ _EXT4-RESTAMP-INODE
-    ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XU-PARENT-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-\ Join the target's record to its live predecessor in a directory image.
-: _XU-DIR-SPLICE  ( image -- ior )
-    DUP _XU-DIR-IMAGE ! 0= IF VFS-E-INVALID EXIT THEN
-    _XU-TARGET-PREV-OFF @ 0<
-    _XU-TARGET-DIR-OFF @ 0< OR IF VFS-E-CORRUPT EXIT THEN
-    _XU-TARGET-PREV-OFF @ _XU-TARGET-PREV-REC @ +
-    _XU-TARGET-DIR-OFF @ <> IF VFS-E-CORRUPT EXIT THEN
-    _XU-TARGET-DIR-OFF @ _XU-TARGET-DIR-REC @ +
-    _XU-DIR-LIMIT @ U> IF VFS-E-CORRUPT EXIT THEN
-    _XU-DIR-IMAGE @ _XU-TARGET-PREV-OFF @ + DUP
-    L@ _XU-TARGET-PREV-INODE @ <>
-    OVER 4 + W@ _XU-TARGET-PREV-REC @ <> OR IF
-        DROP VFS-E-CONFLICT EXIT
-    THEN DROP
-    _XU-DIR-IMAGE @ _XU-TARGET-DIR-OFF @ + DUP
-    L@ _XU-INO @ <>
-    OVER 4 + W@ _XU-TARGET-DIR-REC @ <> OR
-    OVER 7 + C@ _XU-TARGET-DIR-DTYPE @ <> OR
-    OVER _XU-DIRENT-NAME=? 0= OR IF DROP VFS-E-CONFLICT EXIT THEN
-    DROP
-    _XU-TARGET-PREV-REC @ _XU-TARGET-DIR-REC @ + DUP
-    0xFFFF U> IF DROP VFS-E-CORRUPT EXIT THEN
-    _XU-DIR-IMAGE @ _XU-TARGET-PREV-OFF @ + 4 + W!
-    _XU-DIR-IMAGE @ _XU-TARGET-DIR-OFF @ +
-    _XU-TARGET-DIR-REC @ 0 FILL
-    0 ;
-
-: _XU-SCRUB-PRIVATE  ( -- )
-    _XU-NAME-SNAPSHOT 256 0 FILL
-    _XU-CHILD-DIR-SNAPSHOT _EXT4-MAX-BLOCK 0 FILL
-    _XU-TARGET-SNAPSHOT _EXT4-MAX-INODE 0 FILL
-    _XU-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE 0 FILL
-    _XU-DIRECTORY-DESC _EXT4-DD-SIZE 0 FILL
-    0 _XU-INDEXED ! 0 _XU-INDEX-DEPTH !
-    0 _XU-INDEX-ROUTE ! 0 _XU-INDEX-ROUTE-LOGICAL !
-    0 _XU-INDEX-ROUTE-NODE-LOGICAL !
-    0 _XU-INDEX-ROUTE-NODE-HOME ! 0 _XU-INDEX-ROOT-HOME !
-    0 _XU-INDEX-ENTRY ! 0 _XU-INDEX-PHYS !
-    0 _XU-INDEX-HASH ! 0 _XU-INDEX-MINOR !
-    0 _XU-INDEX-SCAN-HASH ! 0 _XU-INDEX-SCAN-MINOR !
-    0 _XU-INDEX-NODE-CHECK-I !
-    0 _XU-HASH-SUPER ! ;
-
-: _XU-NOW  ( -- ior )
-    _XU-CTX @ _EXT4-C.WCLOCK-CTX + @
-    _XU-CTX @ _EXT4-C.WCLOCK-XT + @ EXECUTE
-    _XU-IOR ! _XU-MS !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-MS @ 0< IF VFS-E-INVALID EXIT THEN
-    _XU-MS @ _EXT4-WRITE-EPOCH-MS-MAX U> IF VFS-E-OVERFLOW EXIT THEN
-    _XU-MS @ 1000 /MOD _XU-SECONDS ! 1000000 * _XU-NSEC !
-    0 ;
-
-: _XU-FAIL-RETAIN  ( ior -- ior )
-    _XU-IOR !
-    _XU-WRITER @ ?DUP IF
-        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING = IF
-            _EXT4-JTX-ABORT ?DUP IF
-                _XU-WRITER @ _EXT4-JWR-LATCH-FAULT _XU-IOR !
-            THEN
-        ELSE
-            DUP _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = IF
-                DROP _EXT4-JWP-CHECKPOINT-PREFLIGHT
-                _XU-WRITER @ _EXT4-JWR.PHASE + !
-                _XU-IOR @ _XU-WRITER @ _EXT4-JWR-LATCH-FAULT _XU-IOR !
-            ELSE
-                DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
-                    _EXT4-JWR.FAULT + @ ?DUP IF _XU-IOR ! THEN
-                ELSE DROP THEN
-            THEN
-        THEN
-    THEN
-    _XU-IOR @ _XU-V @ V.LAST-IOR !
-    _XU-IOR @ ;
-
-: _XU-FAIL  ( ior -- ior )
-    _XU-FAIL-RETAIN _XU-SCRUB-PRIVATE ;
-
-\ A removal that leaves a file's mapped blocks to release passes first
-\ requires, before any media change, that a pass under the bound profile
-\ can take a removal step.
-: _XU-PASS-ROOM  ( inode-number -- ior )
-    _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + DUP _EXT4-MAP-MAPS? 0= IF DROP 0 EXIT THEN
-    _EXT4-RELEASE-DEPTH _XU-WRITER @ _XW-PASS-ROOM? 0= IF
-        VFS-E-NOSPC EXIT
-    THEN
-    0 ;
-
-: _XU-RELEASE-LAST-BODY  ( -- ior )
-    _XU-V @ _EXT4-MOW-V !
+\ The unlinked inode's modern orphan record, reauthenticated by inode, and
+\ its record with no links and no deletion time, under exact block
+\ accounting, drain through the mount's writer.
+: _EXT4-LR-BODY  ( -- ior )
+    _EXT4-LR-V @ _EXT4-MOW-V !
     -1 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
-    _EXT4-MOW-CTX @ _XU-CTX ! _EXT4-MOW-ACTIVE @ 0= IF
+    _EXT4-MOW-CTX @ _EXT4-LR-CTX ! _EXT4-MOW-ACTIVE @ 0= IF
         VFS-E-CORRUPT EXIT
     THEN
-    _XU-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.O.ACTIVE + @ 1 <>
-    _XU-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ 1 <> OR
-    _XU-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
-    _XU-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
+    _EXT4-LR-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
+    _EXT4-LR-CTX @ _EXT4-C.O.ACTIVE + @ 1 <>
+    _EXT4-LR-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ 1 <> OR
+    _EXT4-LR-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
+    _EXT4-LR-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
         VFS-E-CORRUPT EXIT
     THEN
-    _XU-INO @ _XU-CTX @ _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE
-    _XU-IOR ! _XU-RECORD !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XU-RECORD @ 0= IF VFS-E-CORRUPT EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + DUP _EXT4-I.GENERATION + L@
-    _XU-GEN @ <> OVER _EXT4-I.DTIME + L@ OR
+    _EXT4-LR-INO @ _EXT4-LR-CTX @ _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE
+    _EXT4-LR-IOR ! _EXT4-LR-RECORD !
+    _EXT4-LR-IOR @ ?DUP IF EXIT THEN
+    _EXT4-LR-RECORD @ 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-LR-CTX @ _EXT4-C.INODE + DUP _EXT4-I.GENERATION + L@
+    _EXT4-LR-GEN @ <> OVER _EXT4-I.DTIME + L@ OR
     SWAP _EXT4-I.LINKS + W@ OR IF
         VFS-E-CORRUPT EXIT
     THEN
-    _XU-CTX @ _EXT4-C.J.WRITER + @ DUP _XU-WRITER ! 0= IF
+    _EXT4-LR-CTX @ _EXT4-C.J.WRITER + @ DUP _EXT4-LR-WRITER ! 0= IF
         VFS-E-CORRUPT EXIT
     THEN
-    _XU-CTX @ _EXT4-REQUIRE-EXACT-BLOCK-ACCOUNTING ?DUP IF EXIT THEN
-    _XU-INO @ _XU-WRITER @ _XU-CTX @ _EXT4-DRAIN-ORPHAN ;
+    _EXT4-LR-CTX @ _EXT4-REQUIRE-EXACT-BLOCK-ACCOUNTING ?DUP IF EXIT THEN
+    _EXT4-LR-INO @ _EXT4-LR-WRITER @ _EXT4-LR-CTX @ _EXT4-DRAIN-ORPHAN ;
 
-: _XU-RELEASE-FAIL  ( ior -- ior )
-    _XU-FAIL DROP
+\ A drain that fails settles the writer as a failed namespace transaction
+\ does, keeps the diagnostic in V.LAST-IOR and turns the volume read-only
+\ until mount recovery finishes the orphan.
+: _EXT4-LR-FAIL  ( ior -- ior )
+    _EXT4-LR-WRITER @ _XC-WRITER ! _EXT4-LR-V @ _XC-V !
+    0 SWAP _XC-FAIL-RETAIN NIP
+    0 _XC-WRITER !
     VFS-F-RO VFS-F-DIRTY OR
-    _XU-V @ V.FLAGS DUP @ ROT OR SWAP !
-    _XU-IOR @ ;
+    _EXT4-LR-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
+
+: _EXT4-LR-SCRUB  ( -- )
+    0 _EXT4-LR-D ! 0 _EXT4-LR-V ! 0 _EXT4-LR-CTX ! 0 _EXT4-LR-VN !
+    0 _EXT4-LR-INO ! 0 _EXT4-LR-GEN ! 0 _EXT4-LR-COOKIE !
+    0 _EXT4-LR-WRITER ! 0 _EXT4-LR-RECORD ! 0 _EXT4-LR-IOR ! ;
 
 : _EXT4-STAGED-RELEASE  ( cookie dentry vfs -- ior )
-    _XU-V ! _XU-D ! _XU-COOKIE !
-    0 _XU-WRITER ! 0 _XU-TX !
-    _XU-D @ 0= _XU-V @ 0= OR IF VFS-E-INVALID EXIT THEN
-    _XU-V @ V.BINDING @ EXT4-STAGED-WRITE-BINDING <> IF
+    _EXT4-LR-V ! _EXT4-LR-D ! _EXT4-LR-COOKIE !
+    0 _EXT4-LR-WRITER !
+    _EXT4-LR-D @ 0= _EXT4-LR-V @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-LR-V @ V.BINDING @ EXT4-STAGED-WRITE-BINDING <> IF
         VFS-E-INVALID EXIT
     THEN
-    _XU-D @ _XU-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
-    _XU-D @ D.VNODE @ DUP _XU-VN ! 0= IF VFS-E-STALE EXIT THEN
-    _XU-VN @ VN.TYPE @ DUP VFS-T-FILE <> SWAP VFS-T-DIR <> AND IF
+    _EXT4-LR-D @ _EXT4-LR-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-LR-D @ D.VNODE @ DUP _EXT4-LR-VN ! 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-LR-VN @ VN.TYPE @ DUP VFS-T-FILE <> SWAP VFS-T-DIR <> AND IF
         0 EXIT
     THEN
-    _XU-VN @ VN.BID @ DUP _XU-INO !
-    DUP 0= SWAP _XU-D @ IN.BID @ <> OR
-    _XU-VN @ VN.GEN @ DUP _XU-GEN ! 0xFFFFFFFF U> OR IF
+    _EXT4-LR-VN @ VN.BID @ DUP _EXT4-LR-INO !
+    DUP 0= SWAP _EXT4-LR-D @ IN.BID @ <> OR
+    _EXT4-LR-VN @ VN.GEN @ DUP _EXT4-LR-GEN ! 0xFFFFFFFF U> OR IF
         VFS-E-STALE EXIT
     THEN
-    _XU-GEN @ 32 LSHIFT _XU-INO @ OR _XU-COOKIE @ <> IF
+    _EXT4-LR-GEN @ 32 LSHIFT _EXT4-LR-INO @ OR _EXT4-LR-COOKIE @ <> IF
         VFS-E-STALE EXIT
     THEN
-    _XU-VN @ VN.NLINK @ IF 0 EXIT THEN
-    _XU-D @ D.FLAGS @ VFS-DF-UNLINKED AND 0= IF VFS-E-STALE EXIT THEN
-    _XU-VN @ VN.OPEN-REFS @ DUP 1 U> IF DROP 0 EXIT THEN
+    _EXT4-LR-VN @ VN.NLINK @ IF 0 EXIT THEN
+    _EXT4-LR-D @ D.FLAGS @ VFS-DF-UNLINKED AND 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-LR-VN @ VN.OPEN-REFS @ DUP 1 U> IF DROP 0 EXIT THEN
     1 <> IF VFS-E-STALE EXIT THEN
-    _XU-RELEASE-LAST-BODY
-    DUP IF _XU-RELEASE-FAIL EXIT THEN
-    DROP 0 _XU-V @ V.LAST-IOR ! _XU-SCRUB-PRIVATE 0 ;
+    _EXT4-LR-BODY
+    DUP IF _EXT4-LR-FAIL _EXT4-LR-SCRUB EXIT THEN
+    DROP 0 _EXT4-LR-V @ V.LAST-IOR ! _EXT4-LR-SCRUB 0 ;
 
 : _EXT4-STAGED-SYNCFS  ( vfs -- ior )
     DUP _EXT4-LIVE-SYNC-PREPARE ?DUP IF NIP EXIT THEN
@@ -26699,2289 +26445,6 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
 
 ' _EXT4-STAGED-RELEASE EXT4-STAGED-WRITE-OPS VFS-OP-RELEASE CELLS + !
 ' _EXT4-STAGED-SYNCFS EXT4-STAGED-WRITE-OPS VFS-OP-SYNCFS CELLS + !
-
-\ =====================================================================
-\  Atomic rename
-\ =====================================================================
-\
-\ Regular-file RENAME admits independently authenticated linear, depth-zero,
-\ and singleton depth-one old and new parents.  It retains the linear in-place
-\ fast path, otherwise compacting whole selected leaves: same-leaf moves form
-\ one combined afterimage, while distinct leaves remove and append in exact
-\ role order.  Same-parent transactions therefore bind three semantic homes
-\ for one selected leaf and four for distinct selected leaves.  Selection scans
-\ every hash-eligible continuation leaf and uses aggregate minimal live bytes,
-\ discounted by the source only in its own leaf; it never splits, grows,
-\ contracts, or edits an HTree interval boundary.  Cross-parent regular and
-\ canonical empty-directory moves independently authenticate each selected
-\ parent leaf; directory moves additionally rewrite child `..` while
-\ transferring one parent link.  Same-parent directory moves remain gated.
-\
-\ A rename over an existing regular file hands the victim's record to the
-\ source and joins the source's record to its predecessor, in one block or
-\ two, so it inserts nothing.  The victim loses that link in the same
-\ transaction: a remaining link needs another name in the new parent, as an
-\ unlink's does, and a final link enters the orphan file under the rename
-\ form of a final unlink's sealed payload.  Release passes free a closed
-\ victim's blocks after the checkpoint and an open one's on its last
-\ RELEASE.  Directory victims remain gated.
-
-VARIABLE _XR-A
-VARIABLE _XR-U
-VARIABLE _XR-SOURCE
-VARIABLE _XR-PARENT
-VARIABLE _XR-VICTIM
-VARIABLE _XR-FLAGS
-VARIABLE _XR-V
-VARIABLE _XR-NEEDED
-VARIABLE _XR-DIR-OFF
-VARIABLE _XR-DIR-LIMIT
-VARIABLE _XR-DIR-DE
-VARIABLE _XR-DIR-REC
-VARIABLE _XR-DIR-NLEN
-VARIABLE _XR-DIR-INO
-VARIABLE _XR-DIR-DTYPE
-VARIABLE _XR-COMPACT
-VARIABLE _XR-COMPACT-SOURCE-COUNT
-VARIABLE _XR-COMPACT-EMIT
-VARIABLE _XR-COMPACT-NEXT
-VARIABLE _XR-COMPACT-MIN
-VARIABLE _XR-COMPACT-LAST
-VARIABLE _XR-COMPACT-FROM
-VARIABLE _XR-COMPACT-TO
-VARIABLE _XR-DIR-DOT
-VARIABLE _XR-DIR-DOTDOT
-VARIABLE _XR-CROSSDIR
-VARIABLE _XR-OLD-PARENT
-VARIABLE _XR-NP-VN
-VARIABLE _XR-NP-INO
-VARIABLE _XR-NP-PARENT-INO
-VARIABLE _XR-NP-GEN
-VARIABLE _XR-NP-NLINK
-VARIABLE _XR-NP-NEW-NLINK
-VARIABLE _XR-NP-GROUP
-VARIABLE _XR-NP-HOME
-VARIABLE _XR-NP-OFF
-VARIABLE _XR-NP-DIR-HOME
-VARIABLE _XR-NP-DIR-PRESENT
-VARIABLE _XR-NP-DIR-IOR
-VARIABLE _XR-NP-INDEXED
-VARIABLE _XR-NP-INDEX-DEPTH
-VARIABLE _XR-NP-INDEX-ROUTE-NODE-LOGICAL
-VARIABLE _XR-NP-INDEX-ROUTE-NODE-HOME
-VARIABLE _XR-NP-INDEX-ROOT-HOME
-VARIABLE _XR-NP-INDEX-NODE-CHECK-I
-VARIABLE _XR-DEST-DESC
-VARIABLE _XR-DEST-PARENT-INO
-VARIABLE _XR-DEST-PARENT-GEN
-VARIABLE _XR-DEST-SAMEPARENT
-VARIABLE _XR-DEST-ROUTE
-VARIABLE _XR-DEST-ROUTE-LOGICAL
-VARIABLE _XR-DEST-ENTRY
-VARIABLE _XR-DEST-SCAN-ENTRY
-VARIABLE _XR-DEST-LOGICAL
-VARIABLE _XR-DEST-HOME
-VARIABLE _XR-DEST-HASH
-VARIABLE _XR-DEST-MINOR
-VARIABLE _XR-DEST-PHYS
-VARIABLE _XR-DEST-FOUND
-VARIABLE _XR-DEST-DUPLICATE
-VARIABLE _XR-DEST-TOTAL
-VARIABLE _XR-DEST-SOURCE-MIN
-VARIABLE _XR-DEST-SCAN-HASH
-VARIABLE _XR-DEST-SCAN-MINOR
-VARIABLE _XR-DEST-SEPARATE
-VARIABLE _XR-EDIT-KIND
-VARIABLE _XR-LEAF-SOURCE-COUNT
-VARIABLE _XR-MAP-DESC
-VARIABLE _XR-MAP-EXPECTED
-VARIABLE _XR-MAP-LIMIT
-VARIABLE _XR-SD-HOME
-VARIABLE _XR-SD-SNAPSHOT
-VARIABLE _XR-SD-AFTERIMAGE
-VARIABLE _XR-SD-INO
-VARIABLE _XR-SD-GEN
-VARIABLE _XR-VICTIM-VN
-VARIABLE _XR-VICTIM-INO
-VARIABLE _XR-VICTIM-GEN
-VARIABLE _XR-VICTIM-NLINK
-VARIABLE _XR-VICTIM-FINAL
-VARIABLE _XR-VICTIM-GROUP
-VARIABLE _XR-VICTIM-HOME
-VARIABLE _XR-VICTIM-OFF
-VARIABLE _XR-VICTIM-FOUND
-VARIABLE _XR-VICTIM-LEAF
-VARIABLE _XR-VICTIM-REFS
-VARIABLE _XR-VICTIM-DIR-OFF
-VARIABLE _XR-VICTIM-DIR-REC
-VARIABLE _XR-VICTIM-CLEANUP-CREDIT
-VARIABLE _XR-VICTIM-CLEANUP-REVOKE
-
-CREATE _XR-NEW-NAME-SNAPSHOT 256 ALLOT
-CREATE _XR-DIR-AFTERIMAGE _EXT4-MAX-BLOCK ALLOT
-CREATE _XR-OLD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK ALLOT
-CREATE _XR-NP-DIR-AFTERIMAGE _EXT4-MAX-BLOCK ALLOT
-CREATE _XR-CHILD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK ALLOT
-CREATE _XR-NP-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE ALLOT
-CREATE _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
-CREATE _XR-VICTIM-SNAPSHOT _EXT4-MAX-INODE ALLOT
-
-\ A rename over an existing name finds the victim's record in the scan that
-\ authenticates the new parent: the new name, naming the victim as a regular
-\ file, once in the parent.
-: _XR-VICTIM-RECORD  ( -- ior )
-    _XR-VICTIM-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
-    _XR-DIR-DE @ L@ _XR-VICTIM-INO @ <> IF VFS-E-CONFLICT EXIT THEN
-    _XR-DIR-DE @ 7 + C@ DUP 0<> SWAP 1 <> AND IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-DIR-OFF @ _XR-VICTIM-DIR-OFF !
-    _XR-DIR-REC @ _XR-VICTIM-DIR-REC !
-    -1 _XR-VICTIM-FOUND ! -1 _XR-VICTIM-LEAF !
-    0 ;
-
-: _XR-VICTIM-SCAN-BEGIN  ( -- )
-    0 _XR-VICTIM-FOUND ! 0 _XR-VICTIM-LEAF ! 0 _XR-VICTIM-REFS ! ;
-
-\ The scan found the victim's record, and the parent's references prove the
-\ victim's link count as an unlink's would: a final link is the only one,
-\ and a remaining link needs another name in this parent.
-: _XR-REQUIRE-VICTIM  ( -- ior )
-    _XR-VICTIM-FOUND @ 0= IF VFS-E-CONFLICT EXIT THEN
-    _XR-VICTIM-FINAL @ IF
-        _XR-VICTIM-REFS @ 1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
-    ELSE
-        _XR-VICTIM-REFS @ 2 U< IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-    THEN
-    0 ;
-
-: _XR-NP-DIR-SNAPSHOT  ( -- address )
-    _XU-SHARED-PLAN _XC-P.RENAME-DEST-DIR-SNAPSHOT + ;
-
-: _XR-NP-PARENT-SNAPSHOT  ( -- address )
-    _XU-SHARED-PLAN _XC-P.RENAME-NP-PARENT-SNAPSHOT + ;
-
-: _XR-NP-ROOT-SNAPSHOT  ( -- address )
-    _XU-SHARED-PLAN _XC-P.RENAME-NP-ROOT-SNAPSHOT + ;
-
-: _XR-NP-NODE-SNAPSHOT  ( -- address )
-    _XU-SHARED-PLAN _XC-P.RENAME-NP-NODE-SNAPSHOT + ;
-
-: _XR-NEW-NAME=?  ( dirent -- flag )
-    DUP 6 + C@ _XR-U @ <> IF DROP FALSE EXIT THEN
-    8 + _XR-NEW-NAME-SNAPSHOT _XR-U @ _EXT4-BYTES=? ;
-
-: _XR-BIND-DEST-LEAF  ( -- ior )
-    _XU-SHARED-PLAN DUP _XC-P.RENAME-DEST-HOME + @ IF
-        _XR-DEST-ROUTE @ OVER _XC-P.RENAME-DEST-ROUTE + @ <>
-        _XR-DEST-ROUTE-LOGICAL @
-            2 PICK _XC-P.RENAME-DEST-ROUTE-LOGICAL + @ <> OR
-        _XR-DEST-ENTRY @ 2 PICK _XC-P.RENAME-DEST-ENTRY + @ <> OR
-        _XR-DEST-LOGICAL @ 2 PICK _XC-P.RENAME-DEST-LOGICAL + @ <> OR
-        _XR-DEST-HOME @ 2 PICK _XC-P.RENAME-DEST-HOME + @ <> OR
-        _XR-DEST-HASH @ 2 PICK _XC-P.RENAME-DEST-HASH + @ <> OR
-        _XR-DEST-MINOR @ 2 PICK _XC-P.RENAME-DEST-MINOR + @ <> OR IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.DIR-BLOCK +
-        OVER _XC-P.RENAME-DEST-DIR-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XR-DEST-ROUTE @ OVER _XC-P.RENAME-DEST-ROUTE + !
-        _XR-DEST-ROUTE-LOGICAL @
-            OVER _XC-P.RENAME-DEST-ROUTE-LOGICAL + !
-        _XR-DEST-ENTRY @ OVER _XC-P.RENAME-DEST-ENTRY + !
-        _XR-DEST-LOGICAL @ OVER _XC-P.RENAME-DEST-LOGICAL + !
-        _XR-DEST-HOME @ OVER _XC-P.RENAME-DEST-HOME + !
-        _XR-DEST-HASH @ OVER _XC-P.RENAME-DEST-HASH + !
-        _XR-DEST-MINOR @ OVER _XC-P.RENAME-DEST-MINOR + !
-        _XU-CTX @ _EXT4-C.DIR-BLOCK +
-        OVER _XC-P.RENAME-DEST-DIR-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    THEN
-    DROP 0 ;
-
-: _XR-BIND-RENAME-FORM  ( -- ior )
-    _XR-DEST-HOME @ _XU-DIR-HOME @ <> _XR-DEST-SEPARATE !
-    _XU-SHARED-PLAN DUP _XC-P.RENAME-BASELINE + @ IF
-        _XR-CROSSDIR @ OVER _XC-P.RENAME-CROSS-PARENT + @ <>
-        _XR-DEST-SEPARATE @
-            2 PICK _XC-P.RENAME-DEST-SEPARATE + @ <> OR
-        _XR-EDIT-KIND @ 2 PICK _XC-P.RENAME-EDIT-KIND + @ <> OR IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XR-CROSSDIR @ OVER _XC-P.RENAME-CROSS-PARENT + !
-        _XR-DEST-SEPARATE @ OVER _XC-P.RENAME-DEST-SEPARATE + !
-        _XR-EDIT-KIND @ OVER _XC-P.RENAME-EDIT-KIND + !
-        -1 OVER _XC-P.RENAME-BASELINE + !
-    THEN
-    DROP 0 ;
-
-
-\ Bind the leaf the destination scan holds as the rename's destination.
-: _XR-BIND-SCANNED-LEAF  ( -- ior )
-    _XR-DEST-SCAN-ENTRY @ _XR-DEST-ENTRY !
-    _XR-DEST-DESC @ _EXT4-DD.LEAF-LOGICAL + @ _XR-DEST-LOGICAL !
-    _XR-DEST-PHYS @ _XR-DEST-HOME !
-    _XR-BIND-DEST-LEAF ?DUP IF EXIT THEN
-    -1 _XR-DEST-FOUND !
-    0 ;
-
-\ Validate one complete HTree leaf while accumulating its compacted live
-\ payload.  Same-parent selection discounts the exact source record in its
-\ own leaf because the combined afterimage removes it before appending the
-\ new name.
-: _XR-SCAN-INDEXED-DEST-LEAF  ( -- ior )
-    0 _XR-DEST-TOTAL ! 0 _XR-DEST-SOURCE-MIN ! 0 _XR-DIR-OFF !
-    0 _XR-VICTIM-LEAF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
-    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
-        _XU-CTX @ _EXT4-C.DIR-BLOCK + _XR-DIR-OFF @ +
-        DUP _XR-DIR-DE !
-        4 + W@ DUP _XR-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 6 + C@ DUP _XR-DIR-NLEN !
-        _XR-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 7 + C@ _XR-DIR-DTYPE !
-        _XR-DIR-DE @ L@ DUP _XR-DIR-INO ! IF
-            _XR-DIR-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-NLEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DTYPE @ _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XR-DIR-NLEN @ 1 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XR-DIR-NLEN @ 2 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XR-DIR-DE @ 9 + C@ [CHAR] . = AND OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-INO @ _XR-VICTIM-INO @ = IF 1 _XR-VICTIM-REFS +! THEN
-            _XR-DIR-DE @ _XR-NEW-NAME=? IF
-                _XR-VICTIM @ IF
-                    _XR-VICTIM-RECORD ?DUP IF EXIT THEN
-                ELSE
-                    -1 _XR-DEST-DUPLICATE !
-                THEN
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _XR-DEST-DESC @ _EXT4-DD.DX-VERSION + @ _XU-CTX @
-            _EXT4-HALF-MD4-DIRHASH?
-            _XU-IOR ! _XR-DEST-SCAN-MINOR ! _XR-DEST-SCAN-HASH !
-            _XU-IOR @ ?DUP IF EXIT THEN
-            _XR-DEST-SCAN-HASH @ _XR-DEST-DESC @
-            _EXT4-DD-HASH-IN-INTERVAL? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-NLEN @ 8 + 3 + -4 AND DUP _XR-COMPACT-MIN !
-            _XR-DIR-REC @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DEST-TOTAL @ _XR-COMPACT-MIN @ _EXT4-UADD?
-            _XU-IOR ! _XR-DEST-TOTAL !
-            _XU-IOR @ ?DUP IF EXIT THEN
-            _XR-DEST-SAMEPARENT @
-            _XR-DEST-PHYS @ _XU-DIR-HOME @ = AND
-            _XR-DIR-DE @ _XU-DIRENT-NAME=? AND IF
-                _XR-DIR-INO @ _XU-INO @ <>
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ <> OR
-                _XR-DIR-REC @ _XU-TARGET-DIR-REC @ <> OR
-                _XR-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE @ <> OR IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                _XR-DEST-SOURCE-MIN @ IF VFS-E-CONFLICT EXIT THEN
-                _XR-COMPACT-MIN @ _XR-DEST-SOURCE-MIN !
-            THEN
-        ELSE
-            _XR-DIR-NLEN @ _XR-DIR-DTYPE @ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XR-DIR-REC @ _XR-DIR-OFF +!
-    REPEAT
-    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    \ A rename over the victim rewrites the victim's own leaf.
-    _XR-VICTIM @ IF
-        _XR-VICTIM-LEAF @ IF _XR-BIND-SCANNED-LEAF EXIT THEN
-        0 EXIT
-    THEN
-    _XR-DEST-HASH @ _XR-DEST-DESC @ _EXT4-DD-HASH-IN-INTERVAL?
-    _XR-DEST-FOUND @ 0= AND IF
-        _XR-DEST-TOTAL @ _XR-DEST-SOURCE-MIN @ -
-        _XR-NEEDED @ _EXT4-UADD? _XU-IOR !
-        _XU-IOR @ ?DUP IF NIP EXIT THEN
-        1012 U> 0= IF _XR-BIND-SCANNED-LEAF EXIT THEN
-    THEN
-    0 ;
-
-: _XR-AUTH-INDEXED-DESTINATION  ( -- ior )
-    _XU-REQUIRE-HASH-AUTHORITY ?DUP IF EXIT THEN
-    _XU-BIND-HASH-AUTHORITY ?DUP IF EXIT THEN
-    _XR-NEW-NAME-SNAPSHOT _XR-U @
-    _XR-DEST-DESC @ _EXT4-DD.DX-VERSION + @ _XU-CTX @
-    _EXT4-HALF-MD4-DIRHASH?
-    _XU-IOR ! _XR-DEST-MINOR ! _XR-DEST-HASH !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XR-DEST-MINOR @ _XR-DEST-DESC @ _EXT4-DD.TARGET-MINOR + !
-    _XR-DEST-HASH @ _XR-DEST-DESC @ _EXT4-DD-SELECT-ROUTE
-    ?DUP IF EXIT THEN
-    _XR-DEST-DESC @ _EXT4-DD.ROUTE-ENTRY + @ _XR-DEST-ROUTE !
-    _XR-DEST-DESC @ _EXT4-DD.LEAF-LOGICAL + @
-        _XR-DEST-ROUTE-LOGICAL !
-    0 _XR-DEST-FOUND ! 0 _XR-DEST-DUPLICATE !
-    0 _XR-DEST-SCAN-ENTRY ! _XR-VICTIM-SCAN-BEGIN
-    BEGIN
-        _XR-DEST-SCAN-ENTRY @
-        _XR-DEST-DESC @ _EXT4-DD.ACTIVE-COUNT + @ U<
-    WHILE
-        _XR-DEST-SCAN-ENTRY @ _XR-DEST-DESC @
-        _EXT4-DD-SET-INTERVAL ?DUP IF EXIT THEN
-        _XR-DEST-DESC @ _EXT4-DD.LEAF-LOGICAL + @
-        _XR-DEST-DESC @ _EXT4-DD-LOAD-LOGICAL
-        _XU-IOR ! _XR-DEST-PHYS !
-        _XU-IOR @ ?DUP IF EXIT THEN
-        _XR-DEST-PARENT-INO @ _XR-DEST-PARENT-GEN @ _XU-CTX @
-        _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
-        _XR-SCAN-INDEXED-DEST-LEAF ?DUP IF EXIT THEN
-        1 _XR-DEST-SCAN-ENTRY +!
-    REPEAT
-    _XR-VICTIM @ IF _XR-REQUIRE-VICTIM EXIT THEN
-    _XR-DEST-DUPLICATE @ IF VFS-E-CONFLICT EXIT THEN
-    _XR-DEST-FOUND @ 0= IF VFS-E-NOSPC EXIT THEN
-    0 ;
-
-: _XR-SCAN-NEW-NAME  ( -- ior )
-    _XU-TARGET-DIR-DTYPE @ DUP IF
-        1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
-    ELSE DROP THEN
-    _XR-VICTIM-SCAN-BEGIN
-    0 _XR-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
-    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
-        _XU-SHARED-DIR-SNAPSHOT _XR-DIR-OFF @ + DUP _XR-DIR-DE !
-        4 + W@ DUP _XR-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ L@ DUP IF
-            _XR-VICTIM-INO @ = IF 1 _XR-VICTIM-REFS +! THEN
-            _XR-DIR-DE @ _XR-NEW-NAME=? IF
-                _XR-VICTIM @ 0= IF VFS-E-CONFLICT EXIT THEN
-                _XR-VICTIM-RECORD ?DUP IF EXIT THEN
-            THEN
-        ELSE DROP THEN
-        _XR-DIR-REC @ _XR-DIR-OFF +!
-    REPEAT
-    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-VICTIM @ IF _XR-REQUIRE-VICTIM EXIT THEN
-    0 ;
-
-\ Construct the only admitted record-boundary-changing afterimage from the
-\ authenticated directory snapshot.  This pass independently rechecks every
-\ record bound and live header before it can address the scratch buffer.  The
-\ exact source record is withheld, all other live records retain their order,
-\ and the renamed source is emitted once at the end.  Thus the remaining span
-\ is both the aggregate-fit proof and the final source rec_len.
-: _XR-BUILD-COMPACT-AFTERIMAGE  ( -- ior )
-    _XR-DIR-AFTERIMAGE _XU-CTX @ _EXT4-C.BSIZE + @ 0 FILL
-    0 _XR-COMPACT-SOURCE-COUNT ! 0 _XR-COMPACT-EMIT !
-    0 _XR-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
-    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
-        _XU-SHARED-DIR-SNAPSHOT _XR-DIR-OFF @ + DUP _XR-DIR-DE !
-        4 + W@ DUP _XR-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 6 + C@ DUP _XR-DIR-NLEN !
-        _XR-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 7 + C@ _XR-DIR-DTYPE !
-        _XR-DIR-DE @ L@ DUP _XR-DIR-INO ! IF
-            _XR-DIR-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-NLEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DTYPE @ _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XR-DIR-DE @ _XR-NEW-NAME=? IF
-                VFS-E-CONFLICT EXIT
-            THEN
-            _XR-DIR-DE @ _XU-DIRENT-NAME=? IF
-                _XR-COMPACT-SOURCE-COUNT @ IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ <>
-                _XR-DIR-REC @ _XU-TARGET-DIR-REC @ <> OR
-                _XR-DIR-INO @ _XU-INO @ <> OR
-                _XR-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE @ <> OR IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                1 _XR-COMPACT-SOURCE-COUNT +!
-            ELSE
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                _XR-DIR-NLEN @ 8 + 3 + -4 AND
-                DUP _XR-COMPACT-MIN !
-                _XR-COMPACT-EMIT @ SWAP _EXT4-UADD?
-                DUP IF NIP EXIT THEN DROP
-                DUP _XR-DIR-LIMIT @ U> IF
-                    DROP VFS-E-NOSPC EXIT
-                THEN
-                _XR-COMPACT-NEXT !
-                _XR-DIR-AFTERIMAGE _XR-COMPACT-EMIT @ + DUP
-                _XR-COMPACT-MIN @ 0 FILL
-                _XR-DIR-INO @ OVER L!
-                _XR-COMPACT-MIN @ OVER 4 + W!
-                _XR-DIR-NLEN @ OVER 6 + C!
-                _XR-DIR-DTYPE @ OVER 7 + C!
-                _XR-DIR-DE @ 8 + OVER 8 + _XR-DIR-NLEN @ CMOVE
-                DROP
-                _XR-COMPACT-NEXT @ _XR-COMPACT-EMIT !
-            THEN
-        ELSE
-            _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
-                VFS-E-CONFLICT EXIT
-            THEN
-            _XR-DIR-NLEN @ _XR-DIR-DTYPE @ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XR-DIR-REC @ _XR-DIR-OFF +!
-    REPEAT
-    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-COMPACT-SOURCE-COUNT @ 1 <> IF VFS-E-CONFLICT EXIT THEN
-    _XR-DIR-LIMIT @ _XR-COMPACT-EMIT @ -
-    DUP _XR-NEEDED @ U< IF DROP VFS-E-NOSPC EXIT THEN
-    _XR-COMPACT-MIN !
-    _XR-DIR-AFTERIMAGE _XR-COMPACT-EMIT @ + DUP
-    _XR-COMPACT-MIN @ 0 FILL
-    _XU-INO @ OVER L!
-    _XR-COMPACT-MIN @ OVER 4 + W!
-    _XR-U @ OVER 6 + C!
-    _XU-TARGET-DIR-DTYPE @ OVER 7 + C!
-    _XR-NEW-NAME-SNAPSHOT OVER 8 + _XR-U @ CMOVE
-    DROP
-    _XR-DIR-AFTERIMAGE _XR-DIR-LIMIT @ + DUP
-    12 0 FILL
-    12 OVER 4 + W!
-    0 OVER 6 + C!
-    0xDE SWAP 7 + C!
-    _XR-DIR-AFTERIMAGE _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ;
-
-\ Emit one already validated live record at its minimum aligned length.  The
-\ caller supplies disjoint input and output buffers and retains the complete
-\ input traversal bound; this helper never reads directory slack.
-: _XR-EMIT-CURRENT-LIVE  ( from afterimage -- ior )
-    _XR-COMPACT-TO ! _XR-COMPACT-FROM !
-    _XR-DIR-NLEN @ 8 + 3 + -4 AND DUP _XR-COMPACT-MIN !
-    _XR-COMPACT-EMIT @ SWAP _EXT4-UADD?
-    DUP IF NIP EXIT THEN DROP
-    DUP _XR-DIR-LIMIT @ U> IF DROP VFS-E-NOSPC EXIT THEN
-    _XR-COMPACT-NEXT !
-    _XR-COMPACT-EMIT @ _XR-COMPACT-LAST !
-    _XR-COMPACT-TO @ _XR-COMPACT-EMIT @ + DUP
-    _XR-COMPACT-MIN @ 0 FILL
-    _XR-DIR-INO @ OVER L!
-    _XR-COMPACT-MIN @ OVER 4 + W!
-    _XR-DIR-NLEN @ OVER 6 + C!
-    _XR-DIR-DTYPE @ OVER 7 + C!
-    _XR-COMPACT-FROM @ 8 + OVER 8 + _XR-DIR-NLEN @ CMOVE
-    DROP
-    _XR-COMPACT-NEXT @ _XR-COMPACT-EMIT !
-    0 ;
-
-: _XR-INIT-DIR-TAIL  ( afterimage -- )
-    _XR-COMPACT-TO !
-    _XR-COMPACT-TO @ _XR-DIR-LIMIT @ + DUP
-    12 0 FILL
-    12 OVER 4 + W!
-    0 OVER 6 + C!
-    0xDE SWAP 7 + C! ;
-
-: _XR-FINALIZE-LAST-LIVE  ( afterimage dir-ino dir-gen -- ior )
-    _XR-SD-GEN ! _XR-SD-INO ! _XR-COMPACT-TO !
-    _XR-COMPACT-LAST @ 0< IF VFS-E-CORRUPT EXIT THEN
-    _XR-DIR-LIMIT @ _XR-COMPACT-LAST @ - DUP
-    12 U< OVER 0xFFFF U> OR IF DROP VFS-E-CORRUPT EXIT THEN
-    _XR-COMPACT-TO @ _XR-COMPACT-LAST @ + 4 + W!
-    _XR-COMPACT-TO @ _XR-INIT-DIR-TAIL
-    _XR-COMPACT-TO @ _XR-SD-INO @ _XR-SD-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ;
-
-\ Canonical cross-parent removal.  Every live non-source record retains input
-\ order at minimum size, unused records disappear, and the final remaining
-\ live record consumes the span to the checksum tail.
-: _XR-BUILD-OLD-DIR-AFTERIMAGE  ( -- ior )
-    _XR-OLD-DIR-AFTERIMAGE _XU-CTX @ _EXT4-C.BSIZE + @ 0 FILL
-    0 _XR-COMPACT-SOURCE-COUNT ! 0 _XR-COMPACT-EMIT !
-    -1 _XR-COMPACT-LAST ! 0 _XR-DIR-DOT ! 0 _XR-DIR-DOTDOT !
-    0 _XR-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
-    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
-        _XU-SHARED-DIR-SNAPSHOT _XR-DIR-OFF @ + DUP _XR-DIR-DE !
-        4 + W@ DUP _XR-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 6 + C@ DUP _XR-DIR-NLEN !
-        _XR-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 7 + C@ _XR-DIR-DTYPE !
-        _XR-DIR-DE @ L@ DUP _XR-DIR-INO ! IF
-            _XR-DIR-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-NLEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DTYPE @ _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XR-DIR-NLEN @ 1 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND IF
-                _XR-DIR-INO @ _XU-PARENT-INO @ <>
-                _XR-DIR-DTYPE @ 2 <> OR _XR-DIR-DOT @ OR IF
-                    EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                THEN
-                -1 _XR-DIR-DOT !
-            ELSE
-                _XR-DIR-NLEN @ 2 =
-                _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-                _XR-DIR-DE @ 9 + C@ [CHAR] . = AND IF
-                    _XR-DIR-INO @ _XU-PARENT-PARENT-INO @ <>
-                    _XR-DIR-DTYPE @ 2 <> OR
-                    _XR-DIR-DOTDOT @ OR IF
-                        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN
-                    -1 _XR-DIR-DOTDOT !
-                THEN
-            THEN
-            _XR-DIR-DE @ _XU-DIRENT-NAME=? IF
-                _XR-COMPACT-SOURCE-COUNT @ IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ <>
-                _XR-DIR-REC @ _XU-TARGET-DIR-REC @ <> OR
-                _XR-DIR-INO @ _XU-INO @ <> OR
-                _XR-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE @ <> OR IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                1 _XR-COMPACT-SOURCE-COUNT +!
-            ELSE
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                _XR-DIR-DE @ _XR-OLD-DIR-AFTERIMAGE
-                _XR-EMIT-CURRENT-LIVE ?DUP IF EXIT THEN
-            THEN
-        ELSE
-            _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
-                VFS-E-CONFLICT EXIT
-            THEN
-            _XR-DIR-NLEN @ _XR-DIR-DTYPE @ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XR-DIR-REC @ _XR-DIR-OFF +!
-    REPEAT
-    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <>
-    _XR-DIR-DOT @ 0= OR _XR-DIR-DOTDOT @ 0= OR IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-COMPACT-SOURCE-COUNT @ 1 <> IF VFS-E-CONFLICT EXIT THEN
-    _XR-OLD-DIR-AFTERIMAGE _XU-PARENT-INO @ _XU-PARENT-GEN @
-    _XR-FINALIZE-LAST-LIVE ;
-
-\ Canonical cross-parent insertion.  Existing live records are compacted in
-\ input order and the renamed regular source becomes the one final record.
-\ The final remainder is the aggregate same-block capacity proof.
-\ Authenticate the new parent's one block and build its after-image with the
-\ new name appended; a rename over a victim finds the victim's record
-\ instead.
-: _XR-BUILD-NEW-DIR-AFTERIMAGE  ( -- ior )
-    _XR-NP-DIR-AFTERIMAGE _XU-CTX @ _EXT4-C.BSIZE + @ 0 FILL
-    _XR-VICTIM-SCAN-BEGIN
-    0 _XR-COMPACT-EMIT ! -1 _XR-COMPACT-LAST !
-    0 _XR-DIR-DOT ! 0 _XR-DIR-DOTDOT ! 0 _XR-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
-    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
-        _XR-NP-DIR-SNAPSHOT _XR-DIR-OFF @ + DUP _XR-DIR-DE !
-        4 + W@ DUP _XR-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 6 + C@ DUP _XR-DIR-NLEN !
-        _XR-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 7 + C@ _XR-DIR-DTYPE !
-        _XR-DIR-DE @ L@ DUP _XR-DIR-INO ! IF
-            _XR-DIR-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-NLEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DTYPE @ _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XR-DIR-NLEN @ 1 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND IF
-                _XR-DIR-INO @ _XR-NP-INO @ <>
-                _XR-DIR-DTYPE @ 2 <> OR _XR-DIR-DOT @ OR IF
-                    EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                THEN
-                -1 _XR-DIR-DOT !
-            ELSE
-                _XR-DIR-NLEN @ 2 =
-                _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-                _XR-DIR-DE @ 9 + C@ [CHAR] . = AND IF
-                    _XR-DIR-INO @ _XR-NP-PARENT-INO @ <>
-                    _XR-DIR-DTYPE @ 2 <> OR
-                    _XR-DIR-DOTDOT @ OR IF
-                        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-                    THEN
-                    -1 _XR-DIR-DOTDOT !
-                THEN
-            THEN
-            _XR-DIR-INO @ _XR-VICTIM-INO @ = IF 1 _XR-VICTIM-REFS +! THEN
-            _XR-DIR-DE @ _XR-NEW-NAME=? IF
-                _XR-VICTIM @ 0= IF VFS-E-CONFLICT EXIT THEN
-                _XR-VICTIM-RECORD ?DUP IF EXIT THEN
-            THEN
-            _XR-VICTIM @ 0= IF
-                _XR-DIR-DE @ _XR-NP-DIR-AFTERIMAGE
-                _XR-EMIT-CURRENT-LIVE ?DUP IF EXIT THEN
-            THEN
-        ELSE
-            _XR-DIR-NLEN @ _XR-DIR-DTYPE @ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XR-DIR-REC @ _XR-DIR-OFF +!
-    REPEAT
-    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <>
-    _XR-DIR-DOT @ 0= OR _XR-DIR-DOTDOT @ 0= OR IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-VICTIM @ IF _XR-REQUIRE-VICTIM EXIT THEN
-    _XR-DIR-LIMIT @ _XR-COMPACT-EMIT @ -
-    DUP _XR-NEEDED @ U< IF DROP VFS-E-NOSPC EXIT THEN
-    DUP 0xFFFF U> IF DROP VFS-E-CORRUPT EXIT THEN
-    _XR-COMPACT-MIN !
-    _XR-NP-DIR-AFTERIMAGE _XR-COMPACT-EMIT @ + DUP
-    _XR-COMPACT-MIN @ 0 FILL
-    _XU-INO @ OVER L!
-    _XR-COMPACT-MIN @ OVER 4 + W!
-    _XR-U @ OVER 6 + C!
-    _XU-TARGET-DIR-DTYPE @ OVER 7 + C!
-    _XR-NEW-NAME-SNAPSHOT OVER 8 + _XR-U @ CMOVE
-    DROP
-    _XR-NP-DIR-AFTERIMAGE _XR-INIT-DIR-TAIL
-    _XR-NP-DIR-AFTERIMAGE _XR-NP-INO @ _XR-NP-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ;
-
-\ Rebuild an indexed source leaf without requiring a live predecessor.  The
-\ root entry remains authority even when the removal leaves a canonical empty
-\ payload record; RENAME never contracts or releases an HTree leaf.
-: _XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE  ( -- ior )
-    _XU-SHARED-PLAN _XC-P.INDEX-BASE-ENTRY + @
-    _XU-DIRECTORY-DESC _EXT4-DD-SET-INTERVAL ?DUP IF EXIT THEN
-    _XR-OLD-DIR-AFTERIMAGE _XU-CTX @ _EXT4-C.BSIZE + @ 0 FILL
-    0 _XR-COMPACT-SOURCE-COUNT ! 0 _XR-COMPACT-EMIT !
-    -1 _XR-COMPACT-LAST ! 0 _XR-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
-    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
-        _XU-SHARED-DIR-SNAPSHOT _XR-DIR-OFF @ + DUP _XR-DIR-DE !
-        4 + W@ DUP _XR-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 6 + C@ DUP _XR-DIR-NLEN !
-        _XR-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 7 + C@ _XR-DIR-DTYPE !
-        _XR-DIR-DE @ L@ DUP _XR-DIR-INO ! IF
-            _XR-DIR-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-NLEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DTYPE @ _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XR-DIR-NLEN @ 1 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XR-DIR-NLEN @ 2 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XR-DIR-DE @ 9 + C@ [CHAR] . = AND OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _XU-DIRECTORY-DESC _EXT4-DD.DX-VERSION + @ _XU-CTX @
-            _EXT4-HALF-MD4-DIRHASH?
-            _XU-IOR ! _XR-DEST-SCAN-MINOR ! _XR-DEST-SCAN-HASH !
-            _XU-IOR @ ?DUP IF EXIT THEN
-            _XR-DEST-SCAN-HASH @ _XU-DIRECTORY-DESC
-            _EXT4-DD-HASH-IN-INTERVAL? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ _XU-DIRENT-NAME=? IF
-                _XR-COMPACT-SOURCE-COUNT @ IF VFS-E-CONFLICT EXIT THEN
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ <>
-                _XR-DIR-REC @ _XU-TARGET-DIR-REC @ <> OR
-                _XR-DIR-INO @ _XU-INO @ <> OR
-                _XR-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE @ <> OR IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                1 _XR-COMPACT-SOURCE-COUNT +!
-            ELSE
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                _XR-DIR-DE @ _XR-OLD-DIR-AFTERIMAGE
-                _XR-EMIT-CURRENT-LIVE ?DUP IF EXIT THEN
-            THEN
-        ELSE
-            _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
-                VFS-E-CONFLICT EXIT
-            THEN
-            _XR-DIR-NLEN @ _XR-DIR-DTYPE @ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XR-DIR-REC @ _XR-DIR-OFF +!
-    REPEAT
-    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-COMPACT-SOURCE-COUNT @ 1 <> IF VFS-E-CONFLICT EXIT THEN
-    _XR-COMPACT-LAST @ 0< IF
-        1012 _XR-OLD-DIR-AFTERIMAGE 4 + W!
-        _XR-OLD-DIR-AFTERIMAGE _XR-INIT-DIR-TAIL
-        _XR-OLD-DIR-AFTERIMAGE _XU-PARENT-INO @ _XU-PARENT-GEN @
-        _XU-CTX @ _EXT4-RESTAMP-DIR-BLOCK EXIT
-    THEN
-    _XR-OLD-DIR-AFTERIMAGE _XU-PARENT-INO @ _XU-PARENT-GEN @
-    _XR-FINALIZE-LAST-LIVE ;
-
-\ Build the one destination-leaf afterimage used by same-parent combined
-\ rebuilds, same-parent cross-leaf moves, and cross-parent insertion.
-: _XR-BUILD-INDEXED-DEST-AFTERIMAGE
-  ( snapshot afterimage -- ior )
-    _XR-SD-AFTERIMAGE ! _XR-SD-SNAPSHOT !
-    _XU-SHARED-PLAN _XC-P.RENAME-DEST-ENTRY + @
-    _XR-DEST-DESC @ _EXT4-DD-SET-INTERVAL ?DUP IF EXIT THEN
-    _XR-SD-AFTERIMAGE @ _XU-CTX @ _EXT4-C.BSIZE + @ 0 FILL
-    0 _XR-COMPACT-EMIT ! -1 _XR-COMPACT-LAST !
-    0 _XR-LEAF-SOURCE-COUNT ! 0 _XR-DIR-OFF !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
-    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
-        _XR-SD-SNAPSHOT @ _XR-DIR-OFF @ + DUP _XR-DIR-DE !
-        4 + W@ DUP _XR-DIR-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 6 + C@ DUP _XR-DIR-NLEN !
-        _XR-DIR-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XR-DIR-DE @ 7 + C@ _XR-DIR-DTYPE !
-        _XR-DIR-DE @ L@ DUP _XR-DIR-INO ! IF
-            _XR-DIR-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-NLEN @ 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DTYPE @ _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-            _XR-DIR-NLEN @ 1 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XR-DIR-NLEN @ 2 =
-            _XR-DIR-DE @ 8 + C@ [CHAR] . = AND
-            _XR-DIR-DE @ 9 + C@ [CHAR] . = AND OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DIR-DE @ _XR-NEW-NAME=? IF VFS-E-CONFLICT EXIT THEN
-            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
-            _XR-DEST-DESC @ _EXT4-DD.DX-VERSION + @ _XU-CTX @
-            _EXT4-HALF-MD4-DIRHASH?
-            _XU-IOR ! _XR-DEST-SCAN-MINOR ! _XR-DEST-SCAN-HASH !
-            _XU-IOR @ ?DUP IF EXIT THEN
-            _XR-DEST-SCAN-HASH @ _XR-DEST-DESC @
-            _EXT4-DD-HASH-IN-INTERVAL? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _XR-DEST-SAMEPARENT @
-            _XR-DEST-HOME @ _XU-DIR-HOME @ = AND
-            _XR-DIR-DE @ _XU-DIRENT-NAME=? AND IF
-                _XR-DIR-INO @ _XU-INO @ <>
-                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ <> OR
-                _XR-DIR-REC @ _XU-TARGET-DIR-REC @ <> OR
-                _XR-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE @ <> OR IF
-                    VFS-E-CONFLICT EXIT
-                THEN
-                1 _XR-LEAF-SOURCE-COUNT +!
-            ELSE
-                _XR-DIR-DE @ _XR-SD-AFTERIMAGE @
-                _XR-EMIT-CURRENT-LIVE ?DUP IF EXIT THEN
-            THEN
-        ELSE
-            _XR-DIR-NLEN @ _XR-DIR-DTYPE @ OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _XR-DIR-REC @ _XR-DIR-OFF +!
-    REPEAT
-    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-DEST-SAMEPARENT @ _XR-DEST-HOME @ _XU-DIR-HOME @ = AND IF
-        _XR-LEAF-SOURCE-COUNT @ 1 <> IF VFS-E-CONFLICT EXIT THEN
-    ELSE
-        _XR-LEAF-SOURCE-COUNT @ IF VFS-E-CONFLICT EXIT THEN
-    THEN
-    _XR-DIR-LIMIT @ _XR-COMPACT-EMIT @ -
-    DUP _XR-NEEDED @ U< IF DROP VFS-E-NOSPC EXIT THEN
-    DUP 0xFFFF U> IF DROP VFS-E-CORRUPT EXIT THEN
-    _XR-COMPACT-MIN !
-    _XR-SD-AFTERIMAGE @ _XR-COMPACT-EMIT @ + DUP
-    _XR-COMPACT-MIN @ 0 FILL
-    _XU-INO @ OVER L!
-    _XR-COMPACT-MIN @ OVER 4 + W!
-    _XR-U @ OVER 6 + C!
-    _XU-TARGET-DIR-DTYPE @ OVER 7 + C!
-    _XR-NEW-NAME-SNAPSHOT OVER 8 + _XR-U @ CMOVE DROP
-    _XR-SD-AFTERIMAGE @ _XR-INIT-DIR-TAIL
-    _XR-SD-AFTERIMAGE @ _XR-DEST-PARENT-INO @
-    _XR-DEST-PARENT-GEN @ _XU-CTX @ _EXT4-RESTAMP-DIR-BLOCK ;
-
-: _XR-STAGE-CURRENT-NP  ( -- ior )
-    _XU-CTX @ _EXT4-STAGE-CURRENT-INODE
-    _XU-IOR ! DUP VFS-T-DIR <> IF
-        DROP _XU-IOR @ ?DUP IF EXIT THEN VFS-E-NOTDIR EXIT
-    THEN DROP
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XR-NP-VN @ _XU-CTX @ _EXT4-VN-CACHE-MATCH? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.R.NLINK + @ DUP _XR-NP-NLINK !
-    DUP 2 U< SWAP _EXT4-LINK-MAX U> OR IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XR-NP-NLINK @ _XU-DIRECTORY @ IF
-        DUP _EXT4-LINK-MAX U< 0= IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        1+
-    THEN _XR-NP-NEW-NLINK !
-    _XU-CTX @ _EXT4-C.R.UID + @
-    _XU-CTX @ _EXT4-C.R.GID + @ OR IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.R.MODE + @ _EXT4-S-ISGID AND IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FLAGS + L@ DUP
-    _EXT4-INDEX-FL AND 0<> _XR-NP-INDEXED !
-    _XU-SHARED-PLAN DUP _XC-P.RENAME-NP-BASELINE + @ IF
-        _XR-NP-INDEXED @ OVER _XC-P.RENAME-NP-INDEXED + @ <> IF
-            DROP 2DROP VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XR-NP-INDEXED @ OVER _XC-P.RENAME-NP-INDEXED + !
-    THEN DROP
-    _XR-NP-INDEXED @ IF
-        _XU-SHARED-PLAN _XC-P.OP + @ _XC-PO-RENAME <> IF
-            2DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.SIZE + @ DUP
-        DUP 0= SWAP 0x7FFFFFFF U> OR IF
-            2DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        DUP _XU-CTX @ _EXT4-C.BSIZE + @ MOD IF
-            2DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.BSIZE + @ /
-        OVER _EXT4-I.BLOCK + 6 + W@ DUP 1 U> IF
-            DROP 2DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        DUP IF
-            2 PICK _EXT4-I.BLOCK + 2 + W@ 1 <> IF
-                DROP 2DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-            THEN
-            DROP 1+
-        ELSE
-            DROP
-        THEN
-        _XU-CTX @ _EXT4-C.SPB + @ *
-        _XU-CTX @ _EXT4-C.R.BLOCKS + @ <> IF
-            DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-    ELSE
-        _EXT4-EXTENTS-FL <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.SIZE + @
-        _XU-CTX @ _EXT4-C.BSIZE + @ <> IF
-            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.R.BLOCKS + @
-        _XU-CTX @ _EXT4-C.SPB + @ <> IF
-            DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-    THEN
-    DUP _EXT4-I.FILE-ACL-LO + L@
-    OVER _EXT4-I.FILE-ACL-HI + W@ OR IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.EXTRA-SIZE + W@ 32 <> IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.PROJECT-ID + L@ IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.DTIME + L@ IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    160 + _XU-CTX @ _EXT4-C.ISIZE + @ 160 -
-    _EXT4-BYTES-ZERO? 0= IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XR-NP-INDEXED @ IF 0 EXIT THEN
-    0 _XU-CTX @ _EXT4-MAP-BLOCK
-    _XR-NP-DIR-IOR ! _XR-NP-DIR-PRESENT !
-    _XR-NP-DIR-IOR @ ?DUP IF NIP EXIT THEN
-    _XR-NP-DIR-PRESENT @ 0= IF
-        DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-NP-DIR-HOME @ IF
-        DUP _XR-NP-DIR-HOME @ <> IF DROP VFS-E-CONFLICT EXIT THEN
-        DROP
-    ELSE
-        _XR-NP-DIR-HOME !
-    THEN
-    0 ;
-
-: _XR-LOAD-NP  ( -- ior )
-    _XR-NP-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XR-NP-GROUP !
-    _EXT4-IR-BLOCK @ _XR-NP-HOME !
-    _EXT4-IR-OFF @ _XR-NP-OFF !
-    _XR-STAGE-CURRENT-NP ?DUP IF EXIT THEN
-    _XR-NP-HOME @ _XR-NP-GROUP @ _XU-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XU-SHARED-PLAN DUP _XC-P.RENAME-NP-BASELINE + @ IF
-        _XR-NP-GROUP @ OVER _XC-P.RENAME-NP-PARENT-GROUP + @ <>
-        _XR-NP-HOME @ 2 PICK _XC-P.RENAME-NP-PARENT-HOME + @ <> OR
-        _XR-NP-OFF @ 2 PICK _XC-P.RENAME-NP-PARENT-OFF + @ <> OR IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.INODE +
-        OVER _XC-P.RENAME-NP-PARENT-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-            DROP VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XR-NP-GROUP @ OVER _XC-P.RENAME-NP-PARENT-GROUP + !
-        _XR-NP-HOME @ OVER _XC-P.RENAME-NP-PARENT-HOME + !
-        _XR-NP-OFF @ OVER _XC-P.RENAME-NP-PARENT-OFF + !
-        _XU-CTX @ _EXT4-C.INODE +
-        OVER _XC-P.RENAME-NP-PARENT-SNAPSHOT +
-        _XU-CTX @ _EXT4-C.ISIZE + @ CMOVE
-        -1 OVER _XC-P.RENAME-NP-BASELINE + !
-    THEN
-    DROP
-    0 ;
-
-: _XR-REQUIRE-NP  ( -- ior )
-    _XR-NP-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XR-NP-GROUP @ <>
-    _EXT4-IR-BLOCK @ _XR-NP-HOME @ <> OR
-    _EXT4-IR-OFF @ _XR-NP-OFF @ <> OR IF VFS-E-STALE EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _XR-NP-PARENT-SNAPSHOT
-    _XU-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XR-STAGE-CURRENT-NP ;
-
-: _XR-AUTH-NP-INDEX-ACTIVE-TABLE  ( -- ior )
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.DX-LEVEL + @ DUP
-    _XR-NP-INDEX-DEPTH ! 0= IF
-        0 _XR-NP-INDEX-ROUTE-NODE-LOGICAL !
-        0 _XR-NP-INDEX-ROUTE-NODE-HOME !
-        _XR-NP-DIRECTORY-DESC _EXT4-DD-REQUIRE-DEPTH0 EXIT
-    THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD-REQUIRE-MUTABLE-HASH
-    ?DUP IF EXIT THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.DX-COUNT + @ 1 <> IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @ 3 U< IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.ROOT-SNAPSHOT + @ 36 + L@
-    0x0FFFFFFF AND DUP _XR-NP-INDEX-ROUTE-NODE-LOGICAL !
-    _XR-NP-DIRECTORY-DESC _EXT4-DD-LOAD-LOGICAL
-    _XU-IOR ! _XR-NP-INDEX-ROUTE-NODE-HOME !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XR-NP-INDEX-ROUTE-NODE-HOME @
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.ROOT-HOME + @ = IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XU-CTX @ _EXT4-DX-NODE? 0= IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-NP-INO @ _EXT4-DX-DIRINO !
-    _XR-NP-GEN @ _EXT4-DX-GEN !
-    _XU-CTX @
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @
-    _EXT4-VALIDATE-DX-NODE ?DUP IF EXIT THEN
-    _EXT4-DX-COUNT @
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @ 2 - <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    0 _XR-NP-INDEX-NODE-CHECK-I !
-    BEGIN
-        _XR-NP-INDEX-NODE-CHECK-I @ _EXT4-DX-COUNT @ U<
-    WHILE
-        _XU-CTX @ _EXT4-C.DIR-BLOCK + 12 +
-        _XR-NP-INDEX-NODE-CHECK-I @ 8 * + L@ 0x0FFFFFFF AND
-        _XR-NP-INDEX-ROUTE-NODE-LOGICAL @ = IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        1 _XR-NP-INDEX-NODE-CHECK-I +!
-    REPEAT
-    _XU-SHARED-PLAN _XC-P.RENAME-NP-INDEX-BASELINE + @ IF
-        _XR-NP-INDEX-ROUTE-NODE-HOME @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ <> IF
-            VFS-E-CONFLICT EXIT
-        THEN
-        _XU-CTX @ _EXT4-C.DIR-BLOCK + _XR-NP-NODE-SNAPSHOT
-        _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XR-NP-INDEX-ROUTE-NODE-HOME @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-ROUTE-NODE-HOME + !
-        _XU-CTX @ _EXT4-C.DIR-BLOCK + _XR-NP-NODE-SNAPSHOT
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    THEN
-    _XR-NP-NODE-SNAPSHOT 8 +
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.ACTIVE-ENTRIES + !
-    _EXT4-DX-LIMIT @ _XR-NP-DIRECTORY-DESC _EXT4-DD.ACTIVE-LIMIT + !
-    _EXT4-DX-COUNT @ _XR-NP-DIRECTORY-DESC _EXT4-DD.ACTIVE-COUNT + !
-    _XR-NP-DIRECTORY-DESC _EXT4-DD-REQUIRE-ACTIVE-HASHES ;
-
-: _XR-AUTH-NP-INDEXED-PARENT  ( -- ior )
-    _XR-NP-ROOT-CURRENT _XR-NP-DIRECTORY-DESC _EXT4-DD-INIT
-    _XR-PARENT @ _XR-V @ _XU-CTX @ _XR-NP-DIRECTORY-DESC
-    _EXT4-DD-AUTH-INODE ?DUP IF EXIT THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.CTX + @ _XU-CTX @ <>
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.PARENT + @ _XR-PARENT @ <> OR
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.VFS + @ _XR-V @ <> OR
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.INO + @ _XR-NP-INO @ <> OR
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.PARINO + @
-        _XR-NP-PARENT-INO @ <> OR
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.GEN + @ _XR-NP-GEN @ <> OR
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.GROUP + @ _XR-NP-GROUP @ <> OR
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.INODE-HOME + @
-        _XR-NP-HOME @ <> OR
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.INODE-OFF + @
-        _XR-NP-OFF @ <> OR IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.INDEXED + @ 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD-AUTH-HTREE-ROOT ?DUP IF EXIT THEN
-    _XR-AUTH-NP-INDEX-ACTIVE-TABLE ?DUP IF EXIT THEN
-    _XR-NP-DIRECTORY-DESC _EXT4-DD.ROOT-HOME + @
-        _XR-NP-INDEX-ROOT-HOME !
-    _XR-NP-DIRECTORY-DESC _XR-DEST-DESC !
-    _XR-NP-INO @ _XR-DEST-PARENT-INO !
-    _XR-NP-GEN @ _XR-DEST-PARENT-GEN !
-    0 _XR-DEST-SAMEPARENT !
-    _XR-AUTH-INDEXED-DESTINATION ?DUP IF EXIT THEN
-    _XU-SHARED-PLAN _XC-P.RENAME-NP-INDEX-BASELINE + @ IF
-        _XR-NP-INDEX-ROOT-HOME @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-ROOT-HOME + @ <>
-        _XR-NP-INDEX-DEPTH @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-DEPTH + @ <> OR
-        _XR-NP-INDEX-ROUTE-NODE-HOME @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ <> OR IF
-            VFS-E-CONFLICT EXIT
-        THEN
-        _XR-NP-ROOT-CURRENT _XR-NP-ROOT-SNAPSHOT
-        _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE
-        _XR-NP-INDEX-ROOT-HOME @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-ROOT-HOME + !
-        _XR-NP-INDEX-DEPTH @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-DEPTH + !
-        _XR-NP-INDEX-ROUTE-NODE-HOME @ _XU-SHARED-PLAN
-            _XC-P.RENAME-NP-ROUTE-NODE-HOME + !
-        _XR-NP-ROOT-CURRENT _XR-NP-ROOT-SNAPSHOT
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-        -1 _XU-SHARED-PLAN _XC-P.RENAME-NP-INDEX-BASELINE + !
-    THEN
-    0 ;
-
-: _XR-AUTH-SAMEPARENT-INDEXED-DESTINATION  ( -- ior )
-    _XU-DIRECTORY-DESC _XR-DEST-DESC !
-    _XU-PARENT-INO @ _XR-DEST-PARENT-INO !
-    _XU-PARENT-GEN @ _XR-DEST-PARENT-GEN !
-    -1 _XR-DEST-SAMEPARENT !
-    _XR-AUTH-INDEXED-DESTINATION ;
-
-: _XR-BIND-LINEAR-DESTINATION  ( home -- ior )
-    _XR-DEST-HOME !
-    0 _XR-DEST-ROUTE ! 0 _XR-DEST-ROUTE-LOGICAL !
-    0 _XR-DEST-ENTRY ! 0 _XR-DEST-LOGICAL !
-    0 _XR-DEST-HASH ! 0 _XR-DEST-MINOR !
-    _XR-BIND-DEST-LEAF ;
-
-: _XR-CAPTURE-NP-DIRECTORY  ( -- ior )
-    _XR-LOAD-NP ?DUP IF EXIT THEN
-    _XR-NP-INDEXED @ IF
-        _XR-AUTH-NP-INDEXED-PARENT ?DUP IF EXIT THEN
-        _XR-DEST-HOME @ _XR-NP-DIR-HOME !
-        _XR-NP-DIR-HOME @ 1 _XU-CTX @
-        _EXT4-VALIDATE-MUTATION-RANGE-TARGETS EXIT
-    THEN
-    _XR-NP-DIR-HOME @ 1 _XU-CTX @
-    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-    _XR-NP-DIR-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-CTX @ _EXT4-C.DIR-BLOCK +
-    _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    _XR-NP-INO @ _XR-NP-GEN @ _XU-CTX @
-    _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
-    _XR-NP-DIR-HOME @ _XR-BIND-LINEAR-DESTINATION ?DUP IF EXIT THEN
-    _XR-BUILD-NEW-DIR-AFTERIMAGE ;
-
-: _XR-AUTH-NP-DIRECTORY  ( -- ior )
-    0 _XR-NP-DIR-HOME !
-    _XR-CAPTURE-NP-DIRECTORY ;
-
-: _XR-REQUIRE-OLD-DIRECTORY  ( -- ior )
-    _XU-INDEXED @ IF
-        _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-        _XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE EXIT
-    THEN
-    _XU-DIR-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-SHARED-DIR-SNAPSHOT
-    _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-CTX @ _EXT4-C.DIR-BLOCK +
-    _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
-    _EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN
-    _XU-DIR-SCAN ?DUP IF EXIT THEN
-    _XR-BUILD-OLD-DIR-AFTERIMAGE ;
-
-: _XR-REQUIRE-NP-DIRECTORY  ( -- ior )
-    _XR-CAPTURE-NP-DIRECTORY ?DUP IF EXIT THEN
-    _XR-NP-INDEXED @ IF
-        _XR-NP-DIR-SNAPSHOT _XR-NP-DIR-AFTERIMAGE
-        _XR-BUILD-INDEXED-DEST-AFTERIMAGE
-    ELSE
-        0
-    THEN ;
-
-: _XR-BUILD-CHILD-DIR-AFTERIMAGE  ( -- ior )
-    _XU-CHILD-DIR-SNAPSHOT _XR-CHILD-DIR-AFTERIMAGE
-    _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    _XR-NP-INO @ _XR-CHILD-DIR-AFTERIMAGE 12 + L!
-    _XR-CHILD-DIR-AFTERIMAGE _XU-INO @ _XU-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ;
-
-: _XR-REQUIRE-DESC-MAP-HITS  ( descriptor physical expected -- ior )
-    _XR-MAP-EXPECTED !
-    _EXT4-MUTATION-MAP-TARGET @
-    _EXT4-MUTATION-MAP-ACTIVE @ OR
-    _EXT4-MUTATION-MAP-HITS @ OR IF 2DROP VFS-E-BUSY EXIT THEN
-    _EXT4-MUTATION-MAP-TARGET ! _XR-MAP-DESC !
-    _EXT4-MAP-VALIDATION-LIMIT @ _XR-MAP-LIMIT !
-    0 _EXT4-MUTATION-MAP-HITS !
-    _XR-MAP-DESC @ _EXT4-DD.LOGICAL-BLOCKS + @
-    _EXT4-MAP-VALIDATION-LIMIT !
-    -1 _EXT4-MUTATION-MAP-ACTIVE !
-    _XR-MAP-DESC @ _EXT4-DD-REQUIRE-INODE _XU-IOR !
-    0 _EXT4-MUTATION-MAP-ACTIVE !
-    0 _EXT4-MUTATION-MAP-TARGET !
-    _XR-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _XU-IOR @ 0= _EXT4-MUTATION-MAP-HITS @ _XR-MAP-EXPECTED @ <>
-        AND IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT _XU-IOR !
-    THEN
-    0 _EXT4-MUTATION-MAP-HITS ! 0 _XR-MAP-EXPECTED !
-    0 _XR-MAP-DESC ! _XU-IOR @ ;
-
-: _XR-PROVE-SAMEPARENT-OWNERS  ( -- ior )
-    _XU-INDEXED @ IF
-        _XU-DIRECTORY-DESC _XU-DIR-HOME @ 1
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-    THEN
-    _XR-DEST-SEPARATE @ IF
-        _XU-INDEXED @ 0= IF VFS-E-CORRUPT EXIT THEN
-        _XU-DIRECTORY-DESC _XR-DEST-HOME @ 1
-        _XR-REQUIRE-DESC-MAP-HITS EXIT
-    THEN
-    0 ;
-
-: _XR-PROVE-CROSSDIR-OWNERS  ( -- ior )
-    _XU-INDEXED @ IF
-        _XU-DIRECTORY-DESC _XU-DIR-HOME @ 1
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-    THEN
-    _XR-NP-INDEXED @ IF
-        _XR-NP-DIRECTORY-DESC _XR-NP-DIR-HOME @ 1
-        _XR-REQUIRE-DESC-MAP-HITS ?DUP IF EXIT THEN
-    THEN
-    0 ;
-
-: _XR-ENTRY-NP  ( -- ior )
-    _XR-PARENT @ D.VNODE @ DUP _XR-NP-VN ! 0= IF
-        VFS-E-STALE EXIT
-    THEN
-    _XR-NP-VN @ VN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
-    _XR-NP-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XR-NP-VN @ _XU-PARENT-VN @ = IF VFS-E-CORRUPT EXIT THEN
-    _XR-NP-VN @ VN.BID @ DUP _XR-NP-INO ! 0= IF VFS-E-STALE EXIT THEN
-    _XR-NP-INO @ _XU-INO @ =
-    _XR-NP-INO @ _XU-PARENT-INO @ = OR IF VFS-E-CORRUPT EXIT THEN
-    _XR-NP-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-        VFS-E-STALE EXIT
-    THEN
-    _XR-NP-VN @ VN.GEN @ DUP _XR-NP-GEN !
-    0xFFFFFFFF U> IF VFS-E-STALE EXIT THEN
-    _XR-PARENT @ IN.PARENT @ ?DUP IF IN.BID @ ELSE
-        _XR-NP-INO @
-    THEN DUP _XR-NP-PARENT-INO ! 0= IF VFS-E-STALE EXIT THEN
-    0 ;
-
-\ A rename over an existing name replaces a regular file of the new parent
-\ with a regular source.  The victim loses that name; its inode stays until
-\ its last link and descriptor go.
-: _XR-ENTRY-VICTIM  ( -- ior )
-    _XU-DIRECTORY @ IF EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT THEN
-    _XR-VICTIM @ _XR-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
-    _XR-VICTIM @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
-    _XR-VICTIM @ IN.PARENT @ _XR-PARENT @ <> IF VFS-E-STALE EXIT THEN
-    _XR-VICTIM @ D.VNODE @ DUP _XR-VICTIM-VN ! 0= IF VFS-E-STALE EXIT THEN
-    _XR-VICTIM-VN @ _XU-VN @ = IF VFS-E-INVALID EXIT THEN
-    _XR-VICTIM-VN @ VN.TYPE @ VFS-T-FILE <> IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XR-VICTIM-VN @ VN.BID @ DUP _XR-VICTIM-INO ! 0= IF
-        VFS-E-STALE EXIT
-    THEN
-    _XR-VICTIM-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-        VFS-E-STALE EXIT
-    THEN
-    _XR-VICTIM-INO @ _XU-INO @ =
-    _XR-VICTIM-INO @ _XU-PARENT-INO @ = OR
-    _XR-VICTIM-INO @ _XR-NP-INO @ = OR IF VFS-E-CORRUPT EXIT THEN
-    _XR-VICTIM-VN @ VN.GEN @ DUP _XR-VICTIM-GEN !
-    0xFFFFFFFF U> IF VFS-E-STALE EXIT THEN
-    _XR-VICTIM-VN @ VN.NLINK @
-    DUP 1 U< OVER _EXT4-LINK-MAX U> OR IF DROP VFS-E-STALE EXIT THEN
-    DUP _XR-VICTIM-NLINK ! 1 = _XR-VICTIM-FINAL !
-    0 ;
-
-: _XR-ENTRY  ( -- ior )
-    _XR-A @ 0= _XR-SOURCE @ 0= OR _XR-PARENT @ 0= OR
-    _XR-V @ 0= OR IF VFS-E-INVALID EXIT THEN
-    _XR-FLAGS @ VFS-RN-NOREPLACE INVERT AND IF VFS-E-INVALID EXIT THEN
-    _XR-V @ _EXT4-MOW-V !
-    0 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
-    _EXT4-MOW-CTX @ _XU-CTX ! _EXT4-MOW-ACTIVE @ _XU-ACTIVE !
-    _XR-V @ _XU-V ! _XR-SOURCE @ _XU-D !
-    _XR-SOURCE @ _XR-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
-    _XR-SOURCE @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
-    _XR-PARENT @ _XR-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
-    _XR-PARENT @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
-    _XR-SOURCE @ IN.PARENT @ DUP _XR-OLD-PARENT ! 0= IF
-        VFS-E-STALE EXIT
-    THEN
-    _XR-OLD-PARENT @ _XR-V @ _VFS-DENTRY-OWNED? 0= IF
-        VFS-E-STALE EXIT
-    THEN
-    _XR-OLD-PARENT @ D.FLAGS @ VFS-DF-UNLINKED AND IF
-        VFS-E-STALE EXIT
-    THEN
-    _XR-OLD-PARENT @ _XR-PARENT @ <> _XR-CROSSDIR !
-    _XR-SOURCE @ D.VNODE @ DUP _XU-VN ! 0= IF VFS-E-STALE EXIT THEN
-    _XU-VN @ VN.TYPE @ DUP VFS-T-FILE = IF
-        DROP 0 _XU-DIRECTORY !
-        _XU-VN @ VN.DREFS @ 1 U< IF VFS-E-STALE EXIT THEN
-    ELSE
-        VFS-T-DIR <> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _XR-CROSSDIR @ 0= IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        -1 _XU-DIRECTORY !
-        _XU-VN @ VN.DREFS @ 1 <> IF VFS-E-CONFLICT EXIT THEN
-        _XR-SOURCE @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN
-    THEN
-    _XU-VN @ VN.BID @ DUP _XU-INO ! 0= IF VFS-E-STALE EXIT THEN
-    _XU-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF VFS-E-STALE EXIT THEN
-    _XU-VN @ VN.GEN @ DUP _XU-GEN ! 0xFFFFFFFF U> IF
-        VFS-E-STALE EXIT
-    THEN
-    _XU-VN @ VN.NLINK @ _XU-DIRECTORY @ IF
-        DUP 2 <> IF DROP VFS-E-CONFLICT EXIT THEN
-    ELSE
-        DUP 1 U< OVER _EXT4-LINK-MAX U> OR IF
-            DROP VFS-E-STALE EXIT
-        THEN
-    THEN _XU-NLINK !
-    _XR-OLD-PARENT @ DUP _XU-PARENT ! D.VNODE @ DUP _XU-PARENT-VN !
-    0= IF VFS-E-STALE EXIT THEN
-    _XU-PARENT-VN @ VN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
-    _XU-PARENT-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-PARENT-VN @ VN.BID @ DUP _XU-PARENT-INO ! 0= IF
-        VFS-E-STALE EXIT
-    THEN
-    _XU-PARENT-INO @ _XU-INO @ = IF VFS-E-CORRUPT EXIT THEN
-    _XU-PARENT-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
-        VFS-E-STALE EXIT
-    THEN
-    _XU-PARENT-VN @ VN.GEN @ DUP _XU-PARENT-GEN !
-    0xFFFFFFFF U> IF VFS-E-STALE EXIT THEN
-    _XU-PARENT @ IN.PARENT @ ?DUP IF IN.BID @ ELSE
-        _XU-PARENT-INO @
-    THEN DUP _XU-PARENT-PARENT-INO ! 0= IF VFS-E-STALE EXIT THEN
-    _XR-CROSSDIR @ IF
-        _XR-ENTRY-NP ?DUP IF EXIT THEN
-    THEN
-    _XR-VICTIM @ IF
-        _XR-ENTRY-VICTIM ?DUP IF EXIT THEN
-    THEN
-    _XR-SOURCE @ D.NAME @ _VFS-STR-GET _XU-NLEN ! _XU-NAME !
-    _XU-NAME @ _XU-NLEN @ _VFS-VALID-NAME? 0= IF
-        VFS-E-INVALID EXIT
-    THEN
-    _XU-NAME @ _XU-NAME-SNAPSHOT _XU-NLEN @ CMOVE
-    _XR-A @ _XR-U @ _VFS-VALID-NAME? 0= IF VFS-E-INVALID EXIT THEN
-    _XR-U @ 8 + 3 + -4 AND DUP _XR-NEEDED !
-    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - U> IF
-        VFS-E-NAMETOOLONG EXIT
-    THEN
-    _XR-A @ _XR-NEW-NAME-SNAPSHOT _XR-U @ CMOVE
-    -1 _XU-RENAME-SCAN !
-    \ Over a victim the source's record joins its predecessor.
-    _XR-VICTIM @ 0<> _XU-SPLICE-SCAN !
-    _XU-CTX @ _EXT4-C.WCLOCK-XT + @ 0= IF VFS-E-UNSUPPORTED EXIT THEN
-    _XU-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
-    _EXT4-JWR-STORE-DEDICATED <> IF VFS-E-NOSPC EXIT THEN
-    _XU-CTX @ _EXT4-C.J.WRITER-ARENA + @ 0=
-    _XU-CTX @ _EXT4-C.J.WRITER + @ 0= OR IF VFS-E-CORRUPT EXIT THEN
-    0 ;
-
-: _XR-PLAN-SAMEPARENT  ( plan -- plan ior )
-    0 _XR-COMPACT !
-    0 _XU-DIR-HOME !
-    _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    _XU-INDEXED @ IF
-        _XR-AUTH-SAMEPARENT-INDEXED-DESTINATION ?DUP IF EXIT THEN
-        _XR-DEST-HOME @ _XU-DIR-HOME @ <> _XR-DEST-SEPARATE !
-        _XR-DEST-SEPARATE @ IF
-            _XR-EK-TWO-LEAF _XR-EDIT-KIND !
-        ELSE
-            _XU-TARGET-DIR-REC @ _XR-NEEDED @ U< IF
-                _XR-EK-SAME-REBUILD
-            ELSE
-                _XR-EK-INPLACE
-            THEN _XR-EDIT-KIND !
-        THEN
-        _XR-PROVE-SAMEPARENT-OWNERS ?DUP IF EXIT THEN
-        _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-        _XR-AUTH-SAMEPARENT-INDEXED-DESTINATION ?DUP IF EXIT THEN
-        _XR-DEST-SEPARATE @ IF
-            _XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE ?DUP IF EXIT THEN
-            _XR-NP-DIR-SNAPSHOT _XR-NP-DIR-AFTERIMAGE
-            _XR-BUILD-INDEXED-DEST-AFTERIMAGE ?DUP IF EXIT THEN
-        ELSE _XR-EDIT-KIND @ _XR-EK-SAME-REBUILD = IF
-            _XR-NP-DIR-SNAPSHOT _XR-DIR-AFTERIMAGE
-            _XR-BUILD-INDEXED-DEST-AFTERIMAGE ?DUP IF EXIT THEN
-            -1 _XR-COMPACT !
-        THEN THEN
-    ELSE
-        _XR-SCAN-NEW-NAME ?DUP IF EXIT THEN
-        _XU-SHARED-DIR-SNAPSHOT _XU-CTX @ _EXT4-C.DIR-BLOCK +
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-        _XU-DIR-HOME @ _XR-BIND-LINEAR-DESTINATION ?DUP IF EXIT THEN
-        _XU-TARGET-DIR-REC @ _XR-NEEDED @ U< IF
-            _XR-BUILD-COMPACT-AFTERIMAGE ?DUP IF EXIT THEN
-            -1 _XR-COMPACT !
-            _XR-EK-SAME-REBUILD
-        ELSE
-            _XR-EK-INPLACE
-        THEN _XR-EDIT-KIND !
-        0 _XR-DEST-SEPARATE !
-    THEN
-    _XU-REQUIRE-TARGET ?DUP IF EXIT THEN
-    _XU-REQUIRE-PARENT ?DUP IF EXIT THEN
-    _XU-DIR-HOME @ _XU-TARGET-HOME @ =
-    _XU-DIR-HOME @ _XU-PARENT-HOME @ = OR IF
-        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-DEST-SEPARATE @ IF
-        _XR-DEST-HOME @ _XU-TARGET-HOME @ =
-        _XR-DEST-HOME @ _XU-PARENT-HOME @ = OR IF
-            EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-        THEN
-    THEN
-    _XR-BIND-RENAME-FORM ?DUP IF EXIT THEN
-    0 ;
-
-: _XR-PLAN-CROSSDIR  ( plan -- plan ior )
-    0 _XU-DIR-HOME !
-    _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    _XR-AUTH-NP-DIRECTORY ?DUP IF EXIT THEN
-    _XR-DEST-HOME @ _XR-NP-DIR-HOME !
-    -1 _XR-DEST-SEPARATE !
-    _XR-EK-TWO-LEAF _XR-EDIT-KIND !
-    _XR-BIND-RENAME-FORM ?DUP IF EXIT THEN
-    _XU-DIRECTORY @ IF
-        _XU-AUTH-CHILD-DIRECTORY ?DUP IF EXIT THEN
-    THEN
-    _XR-PROVE-CROSSDIR-OWNERS ?DUP IF EXIT THEN
-    _XU-REQUIRE-TARGET ?DUP IF EXIT THEN
-    _XU-REQUIRE-PARENT ?DUP IF EXIT THEN
-    _XR-REQUIRE-NP ?DUP IF EXIT THEN
-    _XR-REQUIRE-OLD-DIRECTORY ?DUP IF EXIT THEN
-    _XR-REQUIRE-NP-DIRECTORY ?DUP IF EXIT THEN
-    _XU-REQUIRE-CHILD-DIRECTORY ?DUP IF EXIT THEN
-    _XU-DIRECTORY @ IF
-        _XR-BUILD-CHILD-DIR-AFTERIMAGE ?DUP IF EXIT THEN
-    THEN
-    _XU-DIR-HOME @ _XR-NP-DIR-HOME @ =
-    _XU-DIR-HOME @ _XU-TARGET-HOME @ = OR
-    _XU-DIR-HOME @ _XU-PARENT-HOME @ = OR
-    _XU-DIR-HOME @ _XR-NP-HOME @ = OR
-    _XR-NP-DIR-HOME @ _XU-TARGET-HOME @ = OR
-    _XR-NP-DIR-HOME @ _XU-PARENT-HOME @ = OR
-    _XR-NP-DIR-HOME @ _XR-NP-HOME @ = OR IF
-        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-    THEN
-    _XU-DIRECTORY @ IF
-        _XU-DATA-BLOCK @ _XU-DIR-HOME @ =
-        _XU-DATA-BLOCK @ _XR-NP-DIR-HOME @ = OR
-        _XU-DATA-BLOCK @ _XU-TARGET-HOME @ = OR
-        _XU-DATA-BLOCK @ _XU-PARENT-HOME @ = OR
-        _XU-DATA-BLOCK @ _XR-NP-HOME @ = OR IF
-            EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-        THEN
-    THEN
-    0 ;
-
-\ Authenticate the victim's inode against its cached vnode, as unlink
-\ authenticates its target.
-: _XR-STAGE-CURRENT-VICTIM  ( -- ior )
-    _XU-CTX @ _EXT4-STAGE-CURRENT-INODE
-    _XU-IOR ! VFS-T-FILE <> IF
-        _XU-IOR @ ?DUP IF EXIT THEN VFS-E-INVALID EXIT
-    THEN
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XR-VICTIM-VN @ _XU-CTX @ _EXT4-VN-CACHE-MATCH? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.R.UID + @
-    _XU-CTX @ _EXT4-C.R.GID + @ OR IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FLAGS + L@ 0x30 AND IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-I.DTIME + L@ IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
-    0 ;
-
-: _XR-REQUIRE-VICTIM-INODE  ( -- ior )
-    _XR-VICTIM-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XR-VICTIM-GROUP @ <>
-    _EXT4-IR-BLOCK @ _XR-VICTIM-HOME @ <> OR
-    _EXT4-IR-OFF @ _XR-VICTIM-OFF @ <> OR IF VFS-E-STALE EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _XR-VICTIM-SNAPSHOT
-    _XU-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XR-STAGE-CURRENT-VICTIM ;
-
-: _XR-AUTH-VICTIM  ( -- ior )
-    _XR-VICTIM-INO @
-    _XU-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _XR-VICTIM-INO @ 8 =
-    _XR-VICTIM-INO @ _XU-CTX @ _EXT4-C.ORPHAN-INO + @ = OR IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XR-VICTIM-INO @ _XU-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XR-VICTIM-GROUP !
-    _EXT4-IR-BLOCK @ _XR-VICTIM-HOME !
-    _EXT4-IR-OFF @ _XR-VICTIM-OFF !
-    _XR-STAGE-CURRENT-VICTIM ?DUP IF EXIT THEN
-    _XR-VICTIM-HOME @ _XR-VICTIM-GROUP @ _XU-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _XR-VICTIM-SNAPSHOT
-    _XU-CTX @ _EXT4-C.ISIZE + @ CMOVE
-    _EXT4-XOP-LIST _EXT4-XA-OP !
-    0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
-    _XU-CTX @ _EXT4-XA-SCAN-BOTH ?DUP IF EXIT THEN
-    _XR-REQUIRE-VICTIM-INODE ;
-
-\ The new parent's directory block that holds the victim's record.
-: _XR-VICTIM-DIR-HOME  ( -- home )
-    _XR-DEST-HOME @ ;
-
-\ A final victim enters the orphan file in the rename's transaction, as a
-\ final unlink's target does, and release passes then free its blocks.
-: _XR-AUTH-VICTIM-RELEASE  ( -- ior )
-    _XR-VICTIM-FINAL @ 0= IF 0 EXIT THEN
-    _XR-VICTIM-INO @ _XR-VICTIM-GEN @ _XU-CTX @ _XU-V @
-    _EXT4-JUA-AUTH-PREFLIGHT ?DUP IF EXIT THEN
-    _EXT4-JUA-O-HOME @ _XR-VICTIM-INO @ _XR-VICTIM-GEN @ _XU-CTX @
-    _EXT4-MEASURE-PROSPECTIVE-UNLINK-CLEANUP
-    _XU-IOR ! _XR-VICTIM-CLEANUP-REVOKE ! _XR-VICTIM-CLEANUP-CREDIT !
-    _XU-IOR @ ?DUP IF EXIT THEN
-    _XR-VICTIM-CLEANUP-CREDIT @ 0= IF VFS-E-CORRUPT EXIT THEN
-    _EXT4-JFI-EA @ ?DUP IF
-        DUP _XU-TARGET-HOME @ =
-        OVER _XU-PARENT-HOME @ = OR
-        OVER _XU-DIR-HOME @ = OR
-        OVER _XR-VICTIM-DIR-HOME = OR
-        _XR-CROSSDIR @ IF OVER _XR-NP-HOME @ = OR THEN
-        NIP IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
-    THEN
-    _XU-CTX @ _EXT4-REQUIRE-EXACT-BLOCK-ACCOUNTING ;
-
-\ Plan a rename over a regular file: the victim's record, found as the new
-\ parent is authenticated, names the source, and the source's record joins
-\ its predecessor.  Nothing is inserted, so no block or leaf grows.
-: _XR-PLAN-REPLACE  ( plan -- plan ior )
-    0 _XU-DIR-HOME !
-    _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    _XR-CROSSDIR @ IF
-        _XR-AUTH-NP-DIRECTORY ?DUP IF EXIT THEN
-        _XR-DEST-HOME @ _XR-NP-DIR-HOME !
-        -1 _XR-DEST-SEPARATE !
-    ELSE
-        _XU-INDEXED @ IF
-            _XR-AUTH-SAMEPARENT-INDEXED-DESTINATION ?DUP IF EXIT THEN
-        ELSE
-            _XR-SCAN-NEW-NAME ?DUP IF EXIT THEN
-            _XU-SHARED-DIR-SNAPSHOT _XU-CTX @ _EXT4-C.DIR-BLOCK +
-            _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-            _XU-DIR-HOME @ _XR-BIND-LINEAR-DESTINATION ?DUP IF EXIT THEN
-        THEN
-        _XR-DEST-HOME @ _XU-DIR-HOME @ <> _XR-DEST-SEPARATE !
-    THEN
-    _XR-EK-REPLACE _XR-EDIT-KIND !
-    _XR-BIND-RENAME-FORM ?DUP IF EXIT THEN
-    _XR-CROSSDIR @ IF
-        _XR-PROVE-CROSSDIR-OWNERS
-    ELSE
-        _XR-PROVE-SAMEPARENT-OWNERS
-    THEN ?DUP IF EXIT THEN
-    _XU-REQUIRE-TARGET ?DUP IF EXIT THEN
-    _XU-REQUIRE-PARENT ?DUP IF EXIT THEN
-    _XR-CROSSDIR @ IF _XR-REQUIRE-NP ?DUP IF EXIT THEN THEN
-    _XR-AUTH-VICTIM ?DUP IF EXIT THEN
-    \ Directory blocks share no home with an inode the rename rewrites.
-    _XU-DIR-HOME @ _XU-TARGET-HOME @ =
-    _XU-DIR-HOME @ _XU-PARENT-HOME @ = OR
-    _XU-DIR-HOME @ _XR-VICTIM-HOME @ = OR
-    _XR-VICTIM-DIR-HOME _XU-TARGET-HOME @ = OR
-    _XR-VICTIM-DIR-HOME _XU-PARENT-HOME @ = OR
-    _XR-VICTIM-DIR-HOME _XR-VICTIM-HOME @ = OR
-    _XR-CROSSDIR @ IF
-        _XU-DIR-HOME @ _XR-NP-HOME @ = OR
-        _XR-VICTIM-DIR-HOME _XR-NP-HOME @ = OR
-    THEN IF
-        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-    THEN
-    _XR-AUTH-VICTIM-RELEASE ;
-
-: _XR-HP-EXPECTED-ROLES  ( -- count )
-    _XR-CROSSDIR @ 0= IF
-        _XR-DEST-SEPARATE @ IF 4 ELSE 3 THEN
-    ELSE
-        _XU-DIRECTORY @ IF 6 ELSE 5 THEN
-    THEN
-    _XR-VICTIM @ IF
-        1+ _XR-VICTIM-FINAL @ IF 2 + THEN
-    THEN ;
-
-: _XR-HP-PLAN-HOMES  ( plan -- plan ior )
-    _XC-HR-INODE _XU-TARGET-HOME @
-    _XC-HP-BIND-META ?DUP IF EXIT THEN
-    _XC-HR-PARENT-INODE _XU-PARENT-HOME @
-    _XC-HP-BIND-META ?DUP IF EXIT THEN
-    _XR-CROSSDIR @ IF
-        _XC-HR-RENAME-NEW-PARENT-INODE _XR-NP-HOME @
-        _XC-HP-BIND-META ?DUP IF EXIT THEN
-    THEN
-    _XR-VICTIM @ IF
-        _XC-HR-RENAME-VICTIM-INODE _XR-VICTIM-HOME @
-        _XC-HP-BIND-META ?DUP IF EXIT THEN
-    THEN
-    _XC-HR-PARENT-DIRECTORY _XU-DIR-HOME @
-    _XC-HP-BIND-META ?DUP IF EXIT THEN
-    _XR-CROSSDIR @ _XR-DEST-SEPARATE @ OR IF
-        _XC-HR-RENAME-NEW-PARENT-DIRECTORY _XR-DEST-HOME @
-        _XC-HP-BIND-META ?DUP IF EXIT THEN
-    THEN
-    _XR-CROSSDIR @ IF
-        _XU-DIRECTORY @ IF
-            _XC-HR-RENAME-CHILD-DIRECTORY _XU-DATA-BLOCK @
-            _XC-HP-BIND-META ?DUP IF EXIT THEN
-        THEN
-    THEN
-    _XR-VICTIM-FINAL @ _XR-VICTIM @ AND IF
-        _XC-HR-ORPHAN _EXT4-JUA-O-HOME @
-        _XC-HP-BIND-META ?DUP IF EXIT THEN
-        _XC-HR-PRIMARY-SUPER _XU-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
-        _XC-HP-BIND-META ?DUP IF EXIT THEN
-    THEN
-    DUP _XC-P.HOME-COUNT + @ _XR-HP-EXPECTED-ROLES <> IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    0 ;
-
-: _XR-PLAN  ( plan -- plan ior )
-    _XU-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-VALIDATE-PRIMARY-MUTATION-HOMES ?DUP IF EXIT THEN
-    _XU-AUTH-TARGET ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.INODE + _EXT4-I.DTIME + L@ IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XR-VICTIM @ IF _XR-PLAN-REPLACE ELSE
-        _XR-CROSSDIR @ IF _XR-PLAN-CROSSDIR ELSE
-            _XR-PLAN-SAMEPARENT
-        THEN
-    THEN ?DUP IF EXIT THEN
-    _XR-HP-PLAN-HOMES ;
-
-: _XR-STAGE-SOURCE-INODE  ( -- ior )
-    _XU-TARGET-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-TARGET-OFF @ +
-    _XU-TARGET-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-TARGET-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XU-IMAGE !
-    _XU-TARGET-OFF @ + DUP _XU-RECORD !
-    _XU-TARGET-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-RECORD @ _EXT4-I.LINKS + W@ _XU-NLINK @ <> IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-SECONDS @ _XU-NSEC @ _XU-RECORD @ _XU-CTX @
-    _EXT4-SET-INODE-CTIME ?DUP IF EXIT THEN
-    _XU-RECORD @ _XU-INO @ _XU-CTX @ _EXT4-RESTAMP-INODE
-    ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XU-TARGET-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-: _XR-STAGE-NP-INODE  ( -- ior )
-    _XR-NP-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-NP-OFF @ +
-    _XR-NP-PARENT-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-NP-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XU-IMAGE !
-    _XR-NP-OFF @ + DUP _XU-RECORD !
-    _XR-NP-PARENT-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-RECORD @ _EXT4-I.LINKS + W@ _XR-NP-NLINK @ <> IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-DIRECTORY @ IF
-        _XR-NP-NEW-NLINK @ _XU-RECORD @ _EXT4-I.LINKS + W!
-    THEN
-    _XU-SECONDS @ _XU-NSEC @ _XU-RECORD @ _XU-CTX @
-    _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
-    _XU-RECORD @ _XR-NP-INO @ _XU-CTX @ _EXT4-RESTAMP-INODE
-    ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XR-NP-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-: _XR-STAGE-CROSS-DIRECTORY
-  ( home snapshot afterimage dir-ino dir-gen -- ior )
-    _XR-SD-GEN ! _XR-SD-INO ! _XR-SD-AFTERIMAGE !
-    _XR-SD-SNAPSHOT ! _XR-SD-HOME !
-    _XR-SD-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-SD-SNAPSHOT @
-    _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-SD-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XU-IMAGE !
-    DUP _XR-SD-SNAPSHOT @ _XU-CTX @ _EXT4-C.BSIZE + @
-    _EXT4-BYTES=? 0= IF DROP VFS-E-CONFLICT EXIT THEN
-    DROP
-    _XR-SD-AFTERIMAGE @ _XU-IMAGE @
-    _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    _XU-IMAGE @ _XR-SD-INO @ _XR-SD-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XR-SD-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-: _XR-STAGE-CROSSDIR  ( -- ior )
-    _XR-STAGE-SOURCE-INODE ?DUP IF EXIT THEN
-    _XU-STAGE-PARENT-INODE ?DUP IF EXIT THEN
-    _XR-STAGE-NP-INODE ?DUP IF EXIT THEN
-    _XR-REQUIRE-OLD-DIRECTORY ?DUP IF EXIT THEN
-    _XR-REQUIRE-NP-DIRECTORY ?DUP IF EXIT THEN
-    _XU-DIRECTORY @ IF
-        _XU-REQUIRE-CHILD-DIRECTORY ?DUP IF EXIT THEN
-        _XR-BUILD-CHILD-DIR-AFTERIMAGE ?DUP IF EXIT THEN
-    THEN
-    _XU-DIR-HOME @ _XU-SHARED-DIR-SNAPSHOT _XR-OLD-DIR-AFTERIMAGE
-    _XU-PARENT-INO @ _XU-PARENT-GEN @
-    _XR-STAGE-CROSS-DIRECTORY ?DUP IF EXIT THEN
-    _XR-NP-DIR-HOME @ _XR-NP-DIR-SNAPSHOT _XR-NP-DIR-AFTERIMAGE
-    _XR-NP-INO @ _XR-NP-GEN @
-    _XR-STAGE-CROSS-DIRECTORY ?DUP IF EXIT THEN
-    _XU-DIRECTORY @ IF
-        _XU-DATA-BLOCK @ _XU-CHILD-DIR-SNAPSHOT
-        _XR-CHILD-DIR-AFTERIMAGE _XU-INO @ _XU-GEN @
-        _XR-STAGE-CROSS-DIRECTORY
-    ELSE
-        0
-    THEN ;
-
-: _XR-REQUIRE-SAMEPARENT-DIRECTORIES  ( -- ior )
-    _XU-INDEXED @ 0= IF 0 EXIT THEN
-    _XU-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
-    _XR-AUTH-SAMEPARENT-INDEXED-DESTINATION ?DUP IF EXIT THEN
-    _XR-DEST-SEPARATE @ IF
-        _XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE ?DUP IF EXIT THEN
-        _XR-NP-DIR-SNAPSHOT _XR-NP-DIR-AFTERIMAGE
-        _XR-BUILD-INDEXED-DEST-AFTERIMAGE EXIT
-    THEN
-    _XR-EDIT-KIND @ _XR-EK-SAME-REBUILD = IF
-        _XR-NP-DIR-SNAPSHOT _XR-DIR-AFTERIMAGE
-        _XR-BUILD-INDEXED-DEST-AFTERIMAGE EXIT
-    THEN
-    0 ;
-
-: _XR-STAGE-DIRECTORY  ( -- ior )
-    _XR-REQUIRE-SAMEPARENT-DIRECTORIES ?DUP IF EXIT THEN
-    _XR-DEST-SEPARATE @ IF
-        _XU-DIR-HOME @ _XU-SHARED-DIR-SNAPSHOT
-        _XR-OLD-DIR-AFTERIMAGE _XU-PARENT-INO @ _XU-PARENT-GEN @
-        _XR-STAGE-CROSS-DIRECTORY ?DUP IF EXIT THEN
-        _XR-DEST-HOME @ _XR-NP-DIR-SNAPSHOT
-        _XR-NP-DIR-AFTERIMAGE _XU-PARENT-INO @ _XU-PARENT-GEN @
-        _XR-STAGE-CROSS-DIRECTORY EXIT
-    THEN
-    _XU-DIR-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-SHARED-DIR-SNAPSHOT
-    _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XU-DIR-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XU-IMAGE !
-    DUP _XU-SHARED-DIR-SNAPSHOT _XU-CTX @ _EXT4-C.BSIZE + @
-    _EXT4-BYTES=? 0= IF DROP VFS-E-CONFLICT EXIT THEN
-    DROP
-    _XU-IMAGE @ _XU-TARGET-DIR-OFF @ + DUP
-    L@ _XU-INO @ <>
-    OVER 4 + W@ _XU-TARGET-DIR-REC @ <> OR
-    OVER 7 + C@ _XU-TARGET-DIR-DTYPE @ <> OR
-    OVER _XU-DIRENT-NAME=? 0= OR IF
-        DROP VFS-E-CONFLICT EXIT
-    THEN
-    DROP
-    _XR-COMPACT @ IF
-        _XR-DIR-AFTERIMAGE _XU-IMAGE @
-        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
-    ELSE
-        _XU-IMAGE @ _XU-TARGET-DIR-OFF @ + DUP
-        8 + _XU-TARGET-DIR-REC @ 8 - 0 FILL
-        _XR-U @ OVER 6 + C!
-        _XR-NEW-NAME-SNAPSHOT OVER 8 + _XR-U @ CMOVE
-        DROP
-    THEN
-    _XU-IMAGE @ _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XU-DIR-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-\ The victim loses one link and keeps its time-stamped inode: a final
-\ victim's record keeps its map until release passes free it.
-: _XR-STAGE-VICTIM-INODE  ( -- ior )
-    _XR-VICTIM-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-VICTIM-OFF @ +
-    _XR-VICTIM-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-VICTIM-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP DUP _XU-IMAGE !
-    _XR-VICTIM-OFF @ + DUP _XU-RECORD !
-    _XR-VICTIM-SNAPSHOT _XU-CTX @ _EXT4-C.ISIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    _XU-RECORD @ _EXT4-I.LINKS + W@ _XR-VICTIM-NLINK @ <> IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    _XR-VICTIM-NLINK @ 1- _XU-RECORD @ _EXT4-I.LINKS + W!
-    _XU-SECONDS @ _XU-NSEC @ _XU-RECORD @ _XU-CTX @
-    _EXT4-SET-INODE-CTIME ?DUP IF EXIT THEN
-    _XU-RECORD @ _XR-VICTIM-INO @ _XU-CTX @ _EXT4-RESTAMP-INODE
-    ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XR-VICTIM-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-\ The victim's record in a directory image still names the victim by the
-\ new name.
-: _XR-REQUIRE-VICTIM-RECORD  ( image -- ior )
-    _XR-VICTIM-DIR-OFF @ +
-    DUP L@ _XR-VICTIM-INO @ <>
-    OVER 4 + W@ _XR-VICTIM-DIR-REC @ <> OR
-    OVER 7 + C@ DUP 0<> SWAP 1 <> AND OR
-    SWAP _XR-NEW-NAME=? 0= OR IF VFS-E-CONFLICT EXIT THEN
-    0 ;
-
-: _XR-NAME-SOURCE  ( image -- )
-    _XU-INO @ SWAP _XR-VICTIM-DIR-OFF @ + L! ;
-
-\ Read a directory block the rename rewrites, require its sealed snapshot
-\ on media and in the writer's image, and acquire that image.
-: _XR-ACQUIRE-DIRECTORY  ( home snapshot -- image ior )
-    _XR-SD-SNAPSHOT ! _XR-SD-HOME !
-    _XR-SD-HOME @ _XU-CTX @ _EXT4-READ-BLOCK ?DUP IF 0 SWAP EXIT THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-SD-SNAPSHOT @
-    _XU-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
-        0 VFS-E-CONFLICT EXIT
-    THEN
-    _XU-CTX @ _EXT4-C.BLOCK + _XR-SD-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-ACQUIRE
-    DUP IF EXIT THEN DROP
-    DUP _XR-SD-SNAPSHOT @ _XU-CTX @ _EXT4-C.BSIZE + @
-    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
-    0 ;
-
-\ The victim's record names the source and the source's record joins its
-\ predecessor: one image when one block holds both, checked against the
-\ scan before either edit.
-: _XR-STAGE-REPLACE-DIRECTORIES  ( -- ior )
-    _XU-DIR-HOME @ _XU-SHARED-DIR-SNAPSHOT _XR-ACQUIRE-DIRECTORY
-    DUP IF NIP EXIT THEN DROP _XU-IMAGE !
-    _XR-DEST-SEPARATE @ 0= IF
-        _XU-IMAGE @ _XR-REQUIRE-VICTIM-RECORD ?DUP IF EXIT THEN
-    THEN
-    _XU-IMAGE @ _XU-DIR-SPLICE ?DUP IF EXIT THEN
-    _XR-DEST-SEPARATE @ 0= IF _XU-IMAGE @ _XR-NAME-SOURCE THEN
-    _XU-IMAGE @ _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
-    _EXT4-RESTAMP-DIR-BLOCK ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XU-DIR-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ?DUP IF EXIT THEN
-    _XR-DEST-SEPARATE @ 0= IF 0 EXIT THEN
-    _XR-DEST-HOME @ _XR-NP-DIR-SNAPSHOT _XR-ACQUIRE-DIRECTORY
-    DUP IF NIP EXIT THEN DROP _XU-IMAGE !
-    _XU-IMAGE @ _XR-REQUIRE-VICTIM-RECORD ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XR-NAME-SOURCE
-    _XU-IMAGE @
-    _XR-CROSSDIR @ IF
-        _XR-NP-INO @ _XR-NP-GEN @
-    ELSE
-        _XU-PARENT-INO @ _XU-PARENT-GEN @
-    THEN
-    _XU-CTX @ _EXT4-RESTAMP-DIR-BLOCK ?DUP IF EXIT THEN
-    _XU-IMAGE @ _XR-DEST-HOME @ _XU-WRITER @
-    _EXT4-JTX-META-REPLACE ;
-
-\ A final victim's orphan record, sealed with the rename form of a final
-\ unlink's payload: the victim's record in the new parent names the source,
-\ and the source's record leaves the old parent.
-: _XR-STAGE-VICTIM-ORPHAN-ADD  ( -- ior )
-    _XR-VICTIM-FINAL @ 0= IF 0 EXIT THEN
-    _XU-V @ _EXT4-JUA-V ! _XU-WRITER @ _EXT4-JUA-WRITER !
-    _XU-CTX @ _EXT4-JUA-CTX ! _XR-VICTIM-INO @ _EXT4-JUA-INO !
-    _XR-VICTIM-GEN @ _EXT4-JUA-GEN ! _XU-SECONDS @ _EXT4-JUA-SECONDS !
-    _XU-NSEC @ _EXT4-JUA-NSEC !
-    _XR-CROSSDIR @ IF
-        _XR-NP-INO @ _EXT4-JUA-PARENT-INO !
-        _XR-NP-GEN @ _EXT4-JUA-PARENT-GEN !
-        _XR-NP-HOME @ _EXT4-JUA-PARENT-HOME !
-        _XR-NP-OFF @ _EXT4-JUA-PARENT-OFF !
-        _XU-PARENT-INO @ _EXT4-JUA-OLD-PARENT-INO !
-        _XU-PARENT-GEN @ _EXT4-JUA-OLD-PARENT-GEN !
-        _XU-PARENT-HOME @ _EXT4-JUA-OLD-PARENT-HOME !
-        _XU-PARENT-OFF @ _EXT4-JUA-OLD-PARENT-OFF !
-    ELSE
-        _XU-PARENT-INO @ _EXT4-JUA-PARENT-INO !
-        _XU-PARENT-GEN @ _EXT4-JUA-PARENT-GEN !
-        _XU-PARENT-HOME @ _EXT4-JUA-PARENT-HOME !
-        _XU-PARENT-OFF @ _EXT4-JUA-PARENT-OFF !
-        0 _EXT4-JUA-OLD-PARENT-INO ! 0 _EXT4-JUA-OLD-PARENT-GEN !
-        0 _EXT4-JUA-OLD-PARENT-HOME ! 0 _EXT4-JUA-OLD-PARENT-OFF !
-    THEN
-    _XR-VICTIM-DIR-HOME _EXT4-JUA-DIR-HOME !
-    _XR-VICTIM-DIR-OFF @ _EXT4-JUA-TARGET-OFF !
-    _XR-VICTIM-DIR-REC @ _EXT4-JUA-TARGET-REC !
-    0 _EXT4-JUA-PREV-OFF ! 0 _EXT4-JUA-PREV-REC !
-    _XU-INO @ _EXT4-JUA-SOURCE-INO !
-    _XU-GEN @ _EXT4-JUA-SOURCE-GEN !
-    _XU-TARGET-HOME @ _EXT4-JUA-SOURCE-HOME !
-    _XU-TARGET-OFF @ _EXT4-JUA-SOURCE-OFF !
-    _XU-DIR-HOME @ _EXT4-JUA-OLD-DIR-HOME !
-    _XU-TARGET-DIR-OFF @ _EXT4-JUA-OLD-SOURCE-OFF !
-    _XU-TARGET-DIR-REC @ _EXT4-JUA-OLD-SOURCE-REC !
-    _XU-TARGET-PREV-OFF @ _EXT4-JUA-OLD-PREV-OFF !
-    _XU-TARGET-PREV-REC @ _EXT4-JUA-OLD-PREV-REC !
-    _XU-WRITER @ _EXT4-JWR.META-CREDIT + @ _EXT4-JUA-META !
-    _EXT4-JUA-STAGE-ORPHAN ?DUP IF EXIT THEN
-    _EXT4-JUA-STAGE-SUPER ?DUP IF EXIT THEN
-    _EXT4-JUA-SEAL ;
-
-\ Stage in the plan's first-publication order: the source, its parent, the
-\ new parent across directories, the victim, the directory blocks, and a
-\ final victim's orphan block and primary super.
-: _XR-STAGE-REPLACE  ( -- ior )
-    _XR-STAGE-SOURCE-INODE ?DUP IF EXIT THEN
-    _XU-STAGE-PARENT-INODE ?DUP IF EXIT THEN
-    _XR-CROSSDIR @ IF _XR-STAGE-NP-INODE ?DUP IF EXIT THEN THEN
-    _XR-STAGE-VICTIM-INODE ?DUP IF EXIT THEN
-    _XR-STAGE-REPLACE-DIRECTORIES ?DUP IF EXIT THEN
-    _XR-STAGE-VICTIM-ORPHAN-ADD ;
-
-\ A rename keeps the source, its parent, the new parent across directories,
-\ and a victim, whose map release passes free.
-: _XR-MAP-CHECK  ( -- ior )
-    _XU-CTX @ _XU-WRITER @ _EXT4-NMC-BEGIN ?DUP IF EXIT THEN
-    _XU-INO @ _XU-TARGET-HOME @ _XU-TARGET-OFF @
-    _EXT4-NMC-RETAINED _EXT4-NMC-OLD
-    _XU-PARENT-INO @ _XU-PARENT-HOME @ _XU-PARENT-OFF @
-    _EXT4-NMC-RETAINED _EXT4-NMC-OLD
-    _XR-CROSSDIR @ IF
-        _XR-NP-INO @ _XR-NP-HOME @ _XR-NP-OFF @
-        _EXT4-NMC-RETAINED _EXT4-NMC-OLD
-    THEN
-    _XR-VICTIM @ IF
-        _XR-VICTIM-INO @ _XR-VICTIM-HOME @ _XR-VICTIM-OFF @
-        _EXT4-NMC-RETAINED _EXT4-NMC-OLD
-    THEN
-    _EXT4-NMC-BITMAPS
-    _XU-INO @ _XU-TARGET-HOME @ _XU-TARGET-OFF @
-    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
-    _XU-PARENT-INO @ _XU-PARENT-HOME @ _XU-PARENT-OFF @
-    _EXT4-NMC-RETAINED _EXT4-NMC-NEW
-    _XR-CROSSDIR @ IF
-        _XR-NP-INO @ _XR-NP-HOME @ _XR-NP-OFF @
-        _EXT4-NMC-RETAINED _EXT4-NMC-NEW
-    THEN
-    _XR-VICTIM @ IF
-        _XR-VICTIM-INO @ _XR-VICTIM-HOME @ _XR-VICTIM-OFF @
-        _EXT4-NMC-RETAINED _EXT4-NMC-NEW
-    THEN
-    _EXT4-NMC-END ;
-
-: _EXT4-JTX-STAGE-RENAME  ( plan transaction -- plan ior )
-    DUP _XU-WRITER ! _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
-    _XU-WRITER @ _EXT4-JWR.CTX + @ _XU-CTX @ <> IF
-        VFS-E-INVALID EXIT
-    THEN
-    _XU-CTX @ _XC-PO-RENAME _XC-P-REQUIRE-SEALED ?DUP IF EXIT THEN
-    _XR-PLAN ?DUP IF EXIT THEN
-    _XU-WRITER @ _XC-HP-REQUIRE-CREDITS ?DUP IF EXIT THEN
-    _XR-VICTIM @ IF
-        _XR-STAGE-REPLACE ?DUP IF EXIT THEN
-    ELSE _XR-CROSSDIR @ IF
-        _XR-STAGE-CROSSDIR ?DUP IF EXIT THEN
-    ELSE
-        _XR-STAGE-SOURCE-INODE ?DUP IF EXIT THEN
-        _XU-STAGE-PARENT-INODE ?DUP IF EXIT THEN
-        _XR-STAGE-DIRECTORY ?DUP IF EXIT THEN
-    THEN THEN
-    _XU-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN
-    _XR-MAP-CHECK ;
-
-: _XR-SCRUB-PRIVATE  ( -- )
-    _XR-NEW-NAME-SNAPSHOT 256 0 FILL
-    _XR-DIR-AFTERIMAGE _EXT4-MAX-BLOCK 0 FILL
-    _XR-OLD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK 0 FILL
-    _XR-NP-DIR-AFTERIMAGE _EXT4-MAX-BLOCK 0 FILL
-    _XR-CHILD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK 0 FILL
-    _XR-NP-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE 0 FILL
-    _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE 0 FILL
-    0 _XR-NEEDED ! 0 _XR-DIR-OFF ! 0 _XR-DIR-LIMIT !
-    0 _XR-DIR-DE ! 0 _XR-DIR-REC ! 0 _XR-DIR-NLEN !
-    0 _XR-DIR-INO ! 0 _XR-DIR-DTYPE !
-    0 _XR-COMPACT !
-    0 _XR-COMPACT-SOURCE-COUNT ! 0 _XR-COMPACT-EMIT !
-    0 _XR-COMPACT-NEXT ! 0 _XR-COMPACT-MIN !
-    0 _XR-COMPACT-LAST ! 0 _XR-COMPACT-FROM ! 0 _XR-COMPACT-TO !
-    0 _XR-DIR-DOT ! 0 _XR-DIR-DOTDOT !
-    0 _XR-CROSSDIR ! 0 _XR-OLD-PARENT !
-    0 _XR-NP-VN ! 0 _XR-NP-INO ! 0 _XR-NP-PARENT-INO !
-    0 _XR-NP-GEN ! 0 _XR-NP-NLINK ! 0 _XR-NP-NEW-NLINK !
-    0 _XR-NP-GROUP !
-    0 _XR-NP-HOME ! 0 _XR-NP-OFF ! 0 _XR-NP-DIR-HOME !
-    0 _XR-NP-DIR-PRESENT ! 0 _XR-NP-DIR-IOR !
-    0 _XR-NP-INDEXED ! 0 _XR-NP-INDEX-DEPTH !
-    0 _XR-NP-INDEX-ROUTE-NODE-LOGICAL !
-    0 _XR-NP-INDEX-ROUTE-NODE-HOME !
-    0 _XR-NP-INDEX-ROOT-HOME ! 0 _XR-NP-INDEX-NODE-CHECK-I !
-    0 _XR-DEST-DESC ! 0 _XR-DEST-PARENT-INO !
-    0 _XR-DEST-PARENT-GEN ! 0 _XR-DEST-SAMEPARENT !
-    0 _XR-DEST-ROUTE ! 0 _XR-DEST-ROUTE-LOGICAL !
-    0 _XR-DEST-ENTRY ! 0 _XR-DEST-SCAN-ENTRY !
-    0 _XR-DEST-LOGICAL ! 0 _XR-DEST-HOME !
-    0 _XR-DEST-HASH ! 0 _XR-DEST-MINOR ! 0 _XR-DEST-PHYS !
-    0 _XR-DEST-FOUND ! 0 _XR-DEST-DUPLICATE !
-    0 _XR-DEST-TOTAL ! 0 _XR-DEST-SOURCE-MIN !
-    0 _XR-DEST-SCAN-HASH ! 0 _XR-DEST-SCAN-MINOR !
-    0 _XR-DEST-SEPARATE ! 0 _XR-EDIT-KIND !
-    0 _XR-LEAF-SOURCE-COUNT !
-    0 _XR-MAP-DESC ! 0 _XR-MAP-EXPECTED ! 0 _XR-MAP-LIMIT !
-    0 _XR-SD-HOME ! 0 _XR-SD-SNAPSHOT ! 0 _XR-SD-AFTERIMAGE !
-    0 _XR-SD-INO ! 0 _XR-SD-GEN !
-    _XR-VICTIM-SNAPSHOT _EXT4-MAX-INODE 0 FILL
-    0 _XR-VICTIM-VN ! 0 _XR-VICTIM-INO ! 0 _XR-VICTIM-GEN !
-    0 _XR-VICTIM-NLINK ! 0 _XR-VICTIM-FINAL ! 0 _XR-VICTIM-GROUP !
-    0 _XR-VICTIM-HOME ! 0 _XR-VICTIM-OFF !
-    0 _XR-VICTIM-DIR-OFF ! 0 _XR-VICTIM-DIR-REC !
-    0 _XR-VICTIM-CLEANUP-CREDIT ! 0 _XR-VICTIM-CLEANUP-REVOKE !
-    _XR-VICTIM-SCAN-BEGIN
-    0 _XU-RENAME-SCAN ! 0 _XU-SPLICE-SCAN !
-    _XU-SCRUB-PRIVATE ;
-
-: _XR-SCRUB  ( plan -- )
-    _XC-P-SCRUB _XR-SCRUB-PRIVATE ;
-
-: _XR-REFUSE-ENTRY  ( ior -- ior )
-    _XU-IOR ! _XR-SCRUB-PRIVATE
-    _EXT4-MOW-CTX @ ?DUP IF
-        _XR-V @ _XC-P-CONTEXT?
-        DUP IF 2DROP ELSE DROP _XC-P-SCRUB THEN
-    THEN
-    _XR-V @ IF _XU-IOR @ _XR-V @ V.LAST-IOR ! THEN
-    _XU-IOR @ ;
-
-: _XR-REFUSE  ( plan ior -- ior )
-    DUP _XR-V @ V.LAST-IOR !
-    OVER _XR-SCRUB NIP ;
-
-: _XR-FAIL  ( plan ior -- ior )
-    _XU-FAIL-RETAIN
-    OVER _XR-SCRUB NIP ;
-
-: _XR-PUBLISH-COMMITTED  ( -- )
-    _XU-SECONDS @ _XU-VN @ VN.CTIME !
-    _XU-NSEC @ _XU-VN @ VN.CTIME-NS !
-    _XU-SECONDS @ _XU-PARENT-VN @ VN.MTIME !
-    _XU-NSEC @ _XU-PARENT-VN @ VN.MTIME-NS !
-    _XU-SECONDS @ _XU-PARENT-VN @ VN.CTIME !
-    _XU-NSEC @ _XU-PARENT-VN @ VN.CTIME-NS !
-    _XR-CROSSDIR @ IF
-        _XU-SECONDS @ _XR-NP-VN @ VN.MTIME !
-        _XU-NSEC @ _XR-NP-VN @ VN.MTIME-NS !
-        _XU-SECONDS @ _XR-NP-VN @ VN.CTIME !
-        _XU-NSEC @ _XR-NP-VN @ VN.CTIME-NS !
-        _XU-DIRECTORY @ IF
-            _XU-PARENT-NEW-NLINK @ _XU-PARENT-VN @ VN.NLINK !
-            _XR-NP-NEW-NLINK @ _XR-NP-VN @ VN.NLINK !
-        THEN
-    THEN
-    _XR-VICTIM @ IF
-        _XU-SECONDS @ _XR-VICTIM-VN @ VN.CTIME !
-        _XU-NSEC @ _XR-VICTIM-VN @ VN.CTIME-NS !
-        VFS-IF-DIRTY _XR-VICTIM-VN @ VN.FLAGS DUP @ ROT OR SWAP !
-    THEN
-    VFS-IF-DIRTY _XU-VN @ VN.FLAGS DUP @ ROT OR SWAP !
-    VFS-IF-DIRTY _XU-PARENT-VN @ VN.FLAGS DUP @ ROT OR SWAP !
-    _XR-CROSSDIR @ IF
-        VFS-IF-DIRTY _XR-NP-VN @ VN.FLAGS DUP @ ROT OR SWAP !
-    THEN
-    VFS-F-DIRTY _XU-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
-
-: _XR-POSTCOMMIT-FAIL  ( plan ior -- ior )
-    DUP _XU-V @ V.LAST-IOR ! _XU-FAIL-RETAIN DROP
-    _XR-PUBLISH-COMMITTED
-    _XR-SCRUB
-    0 ;
-
-\ The rename's committed namespace stands, but the final victim's release
-\ failed; the mount turns read-only and mount recovery completes it.
-: _XR-DURABLE-FAIL  ( plan ior -- ior )
-    _XU-FAIL-RETAIN DROP
-    VFS-F-RO VFS-F-DIRTY OR
-    _XU-V @ V.FLAGS DUP @ ROT OR SWAP !
-    _XR-PUBLISH-COMMITTED
-    _XR-SCRUB
-    0 ;
-
-\ The writer the rename needs: its own credits, and for a final victim the
-\ larger credits its cleanup takes.
-: _XR-PLAN-CAPS  ( plan -- plan ior )
-    _XC-HP-CREDITS@
-    DUP IF >R 2DROP DROP R> EXIT THEN DROP
-    _XU-REVOKE-CAP ! _XU-IOR ! _XU-META-CAP !
-    _XU-IOR @ _XU-REVOKE-CAP @ OR IF VFS-E-CORRUPT EXIT THEN
-    _XU-META-CAP @ 0= IF VFS-E-CORRUPT EXIT THEN
-    _XR-VICTIM-FINAL @ _XR-VICTIM @ AND IF
-        _XR-VICTIM-CLEANUP-CREDIT @ _XU-META-CAP @ U> IF
-            _XR-VICTIM-CLEANUP-CREDIT @ _XU-META-CAP !
-        THEN
-        _XR-VICTIM-CLEANUP-REVOKE @ _XU-REVOKE-CAP @ U> IF
-            _XR-VICTIM-CLEANUP-REVOKE @ _XU-REVOKE-CAP !
-        THEN
-    THEN
-    0 ;
-
-: _XR-RENAME-COMMON  ( -- ior )
-    0 _XU-WRITER ! 0 _XU-TX ! _XR-SCRUB-PRIVATE
-    0 _XU-CTX ! 0 _EXT4-MOW-CTX !
-    _XR-ENTRY ?DUP IF _XR-REFUSE-ENTRY EXIT THEN
-    _XU-CTX @ _XR-V @ _XC-P-CONTEXT?
-    DUP IF NIP _XR-REFUSE-ENTRY EXIT THEN DROP
-    _XU-CTX @ _XC-PO-RENAME _XC-P-BEGIN
-    ?DUP IF _XR-REFUSE EXIT THEN
-    _XU-NOW ?DUP IF _XR-REFUSE EXIT THEN
-    _XR-PLAN ?DUP IF _XR-REFUSE EXIT THEN
-    _XC-P-SEAL ?DUP IF _XR-REFUSE EXIT THEN
-    _XR-PLAN-CAPS ?DUP IF _XR-REFUSE EXIT THEN
-    _XU-META-CAP @ 0 _XU-REVOKE-CAP @
-    _XU-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
-    ?DUP IF _XR-REFUSE EXIT THEN
-    _XU-META-CAP @ 0 _XU-REVOKE-CAP @
-    _XU-CTX @ _EXT4-JWR-ENSURE
-    DUP IF NIP _XR-FAIL EXIT THEN DROP _XU-WRITER !
-    _XR-VICTIM-FINAL @ _XR-VICTIM @ AND IF
-        _XR-VICTIM-INO @ _XU-PASS-ROOM ?DUP IF _XR-FAIL EXIT THEN
-    THEN
-    _XU-ACTIVE @ 0= IF
-        _XU-WRITER @ _XC-HP-BEGIN-TX
-        DUP IF NIP _XR-FAIL EXIT THEN DROP _XU-TX !
-        _XU-TX @ _EXT4-JTX-STAGE-RENAME ?DUP IF _XR-FAIL EXIT THEN
-        _XU-TX @ _EXT4-JTX-ABORT ?DUP IF _XR-FAIL EXIT THEN
-        _XU-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XR-FAIL EXIT THEN
-    THEN
-    _XU-WRITER @ _XC-HP-BEGIN-TX
-    DUP IF NIP _XR-FAIL EXIT THEN DROP _XU-TX !
-    _XU-TX @ _EXT4-JTX-STAGE-RENAME ?DUP IF _XR-FAIL EXIT THEN
-    _XU-TX @ _EXT4-JTX-EMIT ?DUP IF _XR-FAIL EXIT THEN
-    _XR-PUBLISH-COMMITTED
-    _XU-TX @ _EXT4-JTX-CHECKPOINT
-    ?DUP IF _XR-POSTCOMMIT-FAIL EXIT THEN
-    _XU-WRITER @ _EXT4-JWR-VALID? 0= IF
-        VFS-E-CORRUPT _XR-POSTCOMMIT-FAIL EXIT
-    THEN
-    _XU-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
-    _XU-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF
-        VFS-E-CORRUPT _XR-POSTCOMMIT-FAIL EXIT
-    THEN
-    \ A closed final victim drains now; an open one on its last RELEASE.
-    _XR-VICTIM-FINAL @ _XR-VICTIM @ AND IF
-        _XR-VICTIM-VN @ VN.OPEN-REFS @ 0= IF
-            _XR-VICTIM-INO @ _XU-WRITER @ _XU-CTX @ _EXT4-DRAIN-ORPHAN
-            ?DUP IF _XR-DURABLE-FAIL EXIT THEN
-        THEN
-    THEN
-    0 _XU-V @ V.LAST-IOR ! _XR-SCRUB
-    0 ;
-
-: _EXT4-RENAME  ( new-a new-u source new-parent victim flags vfs -- ior )
-    _XR-V ! _XR-FLAGS ! _XR-VICTIM ! _XR-PARENT ! _XR-SOURCE !
-    _XR-U ! _XR-A !
-    _XR-RENAME-COMMON ;
-
-' _EXT4-RENAME EXT4-STAGED-WRITE-OPS VFS-OP-RENAME CELLS + !
 
 \ =====================================================================
 \  Atomic linked-regular-file scalar metadata

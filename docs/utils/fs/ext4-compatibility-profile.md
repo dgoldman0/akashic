@@ -205,26 +205,15 @@ one-block linear parent or into authenticated existing slack in a depth-zero or
 singleton depth-one HTree, increments and restamps the target inode, and
 restamps the parent inode and checksummed directory block in exact deduplicated
 `2/0/0` or `3/0/0` credit without allocation, ordered data, revoke, or orphan
-state. The staged binding now qualifies atomic `RENAME` for regular files
-and a canonical cross-parent empty directory, and a rename over an existing
-regular file, which takes the victim's link in the same transaction.
-Same-parent regular-file mutation retains the in-place fast path and uses
-deterministic bounded same-block compaction when the new encoded name exceeds
-the source record's current `rec_len`. Cross-parent mutation canonically
-compacts the old block while removing the source and the new block while
-appending it. Regular-file forms use exact deduplicated `2/0/0` through
-`5/0/0` metadata credit without changing links, allocation, data, xattrs, or
-orphan state. The directory form adds its canonical child block, transfers one
-parent link, and rewrites the child's `..` entry and checksum under exact
-`4/0/0` through `6/0/0` credit. It retains the same dentry/vnode, open
-descriptors, and current-working-directory object. Same-parent directories,
-victims, and replacement remain unsupported. RENAME parents may now be
-independently linear, depth-zero HTree, or singleton depth-one HTree.
-Same-parent regular moves admit one selected leaf or two, while cross-parent
-regular and canonical-directory moves admit mixed parent shapes. A fitting
-same-leaf record uses the in-place path; other selected leaves use an aggregate
-compact-fit rebuild without allocation, split, growth, HTree-key edits, or
-parent-geometry changes. Singleton-modern-orphan final-
+state. The staged binding's atomic `RENAME` runs the same removal and insert:
+it moves regular files and directories within one parent or across two, among
+every parent the insert admits, to an absent name or over a regular-file or
+empty-directory victim, and grows the new parent when its block is full. A
+directory that changes parent gets a new `..` in its block 0, and the parents'
+link counts change as `ext4_rename` changes them. A final victim, and every
+directory victim, enters the orphan file in the rename's transaction and
+drains as a final unlink's target does. The moved dentry keeps its vnode, its
+open descriptors, and the current-working-directory object. Singleton-modern-orphan final-
 link removal is operation-admitted for both closed and descriptor-retained
 targets. Existing depth-zero HTree CREATE, atomic one-block linear-to-HTree
 growth, and full-leaf splitting under a depth-zero root with entry capacity are
@@ -1028,10 +1017,9 @@ acceptance.
 The ordinary ext4 binding remains read-only. The explicitly staged descriptor
 additionally exposes the qualified `CREATE`, `MKDIR`, `TRUNCATE`,
 `UNLINK`, `RMDIR`, and `LINK` namespace/metadata slices documented below;
-the current worktree also installs the qualified regular-file and cross-parent
-empty-directory RENAME callback, which also replaces an existing regular file,
-and adds `VFS-CAP-RENAME`, `VFS-CAP-ATOMIC-RENAME`,
-`VFS-CAP-CROSSDIR-RENAME`, and `VFS-CAP-RENAME-REPLACE`. It separately
+it also installs the RENAME callback documented below and adds
+`VFS-CAP-RENAME`, `VFS-CAP-ATOMIC-RENAME`, `VFS-CAP-CROSSDIR-RENAME`, and
+`VFS-CAP-RENAME-REPLACE`. It separately
 advertises `VFS-CAP-SETATTR` for the focused-qualified linked-regular scalar
 slice documented below. Other mutation capabilities remain disabled.
 Modern
@@ -2190,8 +2178,8 @@ requires a regular inode inside the complete inode-directed JFI cleanup
 envelope and an authenticated empty orphan union. It may retain open
 references. Cross-parent remaining-link proof, directories through `UNLINK`,
 non-regular targets, and multi-block linear parents remain refused rather than
-approximated. Empty directories use the `RMDIR` contract below; RENAME uses its
-own independently sealed old/new parent authority described below.
+approximated. Empty directories use the `RMDIR` contract below, and RENAME
+takes its source's record out through this removal, as described below.
 
 Admission authenticates the target's current map, inode locator and
 generation, cache projection, external xattrs, link count, and mutable flags
@@ -2472,161 +2460,56 @@ RENAME, exact cold source mode measures 1,224,225,598 of 1,250,000,000 steps
 across 3,095 packed lines, leaving 25,774,402 steps of measured headroom; the
 descriptor journey measures 4,549,770 steps.
 
-The first staged RENAME implementation installs `_EXT4-RENAME` in ABI slot 13
-and advertises `VFS-CAP-RENAME` with the `VFS-CAP-ATOMIC-RENAME` and
-`VFS-CAP-CROSSDIR-RENAME` semantic bits. It deliberately omits
-`VFS-CAP-RENAME-REPLACE`; the ordinary binding remains read-only. The original
-same-parent linear request has one root-owned mutable regular source and the same
-authenticated, root-owned, non-setgid, checksummed one-block linear directory
-as old and new parent. The destination name is absent and no victim is
-admitted. If
-`ALIGN4(8 + new-name-length)` fits the source dirent's existing `rec_len`, the
-fast path rewrites that record in place. Otherwise a bounded pass reconstructs
-the authenticated block in distinct scratch storage: every live non-source
-record is emitted deterministically in original order at its minimum aligned
-length, unused records are discarded, and the renamed source is appended
-exactly once as the final live record consuming the remainder before the
-checksum tail. The pass proves exact source identity, destination absence,
-complete record bounds, and aggregate same-block capacity before activation;
-an aggregate-full block returns zero-write `VFS-E-NOSPC`.
+The staged binding installs `_EXT4-RENAME` in ABI slot 13 and advertises
+`VFS-CAP-RENAME`, `VFS-CAP-ATOMIC-RENAME`, `VFS-CAP-CROSSDIR-RENAME`, and
+`VFS-CAP-RENAME-REPLACE`; the ordinary binding remains read-only. RENAME runs
+the shared directory removal and insert. A regular file, or a directory that
+one dentry holds, moves within one parent or between two distinct parents,
+each a parent the insert admits, to an absent name or over a victim: a regular
+file over a regular file, or a directory over an empty directory. The source's
+record leaves its block as the removal takes a record out, joining its
+predecessor or leaving a block's first record unused. The new name then enters
+through the insert's edit, which grows the new parent by conversion, leaf
+split, root growth, or node split when its block is full, and a full level-one
+root over a full node answers `VFS-E-NOSPC`. Over a victim, the victim's
+record takes the source's inode and keeps its name, length, and type. Within
+one parent the removal comes first and a block that takes both edits is
+written once, so a name that fits where the source was needs no growth; the
+kernel adds the new name before it deletes the old one, and both orders leave
+a valid directory.
 
-One exact transaction restamps source ctime and parent mtime/ctime, installs
-the selected in-place or compacted directory after-image, and repairs inode
-and directory checksums. Its deduplicated homes are source inode table, parent
-inode table, and parent directory, giving exact `2/0/0` credit when the inode
-records share a table block and `3/0/0` otherwise. Link counts, source size,
-atime/mtime, map, data, `i_blocks`, generation, xattrs, allocation and
-directory accounting, and orphan state remain unchanged; the transaction has
-no ordered data or revoke.
+A directory that moves to another parent names the new parent in the `..` of
+its block 0, a linear block or a DX root, which is the only block of the child
+the transaction reads or writes; the child keeps its link count. As
+`ext4_rename` does, the old parent loses a link when a directory leaves it,
+the new parent gains one when a directory arrives from another parent, and the
+new parent loses one for a directory victim. A victim loses its link in the
+same transaction. A regular-file victim with another link needs another name
+for it in the new parent. A final file victim, and every directory victim,
+which the cold plan proves empty as `RMDIR` does, enters the modern orphan
+file in that transaction under the sealed rename form of the unlink-ADD
+payload, whose checkpoint rebuilds every journaled image from the media and
+the payload; it then drains after the checkpoint, on its last staged
+`RELEASE`, or through mount recovery. The rename's own transaction carries no
+ordered data or revoke. It restamps the source's change time and both parents'
+modification and change times and preserves the source's links, allocation,
+data, map, and xattrs.
 
-The established in-place cases pass across sequential invocations in 656.98
-seconds. The
-canonical open-file case proves exact shared-home `2/0/0`, preserves data and
-external xattrs, passes pinned e2fsprogs 1.47.4, and reaches a write-free stable
-remount. A distinct `3/0/0` success renames the data-bearing one-link sparse
-inode after a valid unused predecessor. W7 proves precommit rollback; W17
-proves public success plus two-home replay after a committed directory tear.
-The established zero-write matrix covers missing clock, short credit, and a
-directory source while preserving cache and pool state.
+Symbolic links and other sources or victims that are neither regular files nor
+directories, multi-block linear parents, and exchange stay refused, and
+`VFS-RN-NOREPLACE` refuses an existing name. Generic VFS refuses a directory
+moved beneath itself, a victim of the other kind, and a non-empty victim it
+can see, and the driver's emptiness proof refuses a live record the cache does
+not show. Qualification on parents that pinned `debugfs` writes and
+`e2fsck -fyD` indexes covers renames within one parent with and without
+growth, moves into full leaves, linear and indexed directories moved into a level-one parent
+with two index nodes, regular-file and directory victims within and across
+parents, checkpoint tears of a split, a directory move, and a sealed
+directory-victim rename, zero-write refusals, and the public fixtures' homes
+and tears. Pinned `e2fsck` accepts every result, and the driver document
+records the homes, roles, and measurements.
 
-The compactor's canonical success passes in 108.40 seconds with open-FD
-continuity, independent after-image and external-tool checks, and a stable
-write-free remount. Aggregate-full zero-write refusal passes in 46.93 seconds,
-and the in-place regression passes in 105.09 seconds.
-
-The original cross-parent linear request retains the regular-file,
-absent-destination, and no-victim boundary but admits distinct authenticated
-old and new one-block linear parents. Before activation it performs a paired
-owner proof for both directory blocks, then fully reauthenticates the target,
-both parent inodes,
-both complete directory blocks, maps, xattrs, identities, generations, and
-cache projections after that walk. Its old-parent after-image discards unused
-records and the exact source, emits other live records in original order at
-minimum aligned lengths, and lets the final survivor consume the remainder.
-Its new-parent after-image discards unused records, emits existing live records
-in original order at minimum aligned lengths, and appends the moved source
-exactly once as the final record consuming the remainder before the checksum
-tail. Aggregate fit is proved before activation; neither directory grows or
-allocates a block.
-
-The cross-parent transaction restamps source ctime and both parents'
-mtime/ctime and installs both checksummed directory after-images. Its three
-inode-table roles and two directory blocks deduplicate to exact `3/0/0`
-through `5/0/0` credit. The canonical inode-14 move composes the source and old
-parent in table home 278, uses new-parent table home 275, and mutates old/new
-directory homes 1345 and 1299, for exact `4/0/0`. All source and parent link
-counts, source size, atime/mtime, map, data, `i_blocks`, generation, xattrs,
-allocation and directory accounting, and orphan state remain unchanged.
-After commit authority the driver publishes all three timestamp projections;
-generic VFS moves the same dentry and name afterward, preserving the shared
-vnode and open descriptor.
-
-The canonical clean case writes homes 278/275/1345/1299 at W18/W19/W20/W21,
-passes independent raw after-image and pinned e2fsprogs checks, and reaches a
-byte-stable write-free remount. A three-credit profile and an existing victim
-refuse without mutation-home writes. W7 proves complete provisional rollback
-and preservation of the old namespace. A committed W21 final-home tear
-publishes the new namespace after three completed home checkpoints; recovery
-replays all four committed homes before the stable remount.
-
-The original cross-parent empty-directory linear slice admits a source with
-exact `VN.DREFS = 1`, canonical media link count two, two distinct admitted
-one-block linear parents, an absent destination, and no victim. The public path may
-present an unloaded source-child cache; the callback requires no cached child
-and proves the exact empty media shape itself, so callers need no private
-preload. Open directory descriptors and a
-source used as `V.CWD` retain the same dentry/vnode identity across the move.
-Same-parent directory moves remain unsupported.
-
-The transaction compact-removes the typed source from the old parent,
-compact-appends it to the new parent, changes source ctime and both parents'
-mtime/ctime, decreases the old-parent link count by one, increases the new-
-parent link count by one, and preserves source link count two. It also rewrites
-the canonical child's `..` inode from old parent to new parent and restamps
-that directory block's checksum. Allocation, size, map, `i_blocks`, xattrs,
-free-space/directory accounting, and orphan state do not change. The three
-inode roles and three directory blocks deduplicate to exact `4/0/0` through
-`6/0/0`. Canonical source inode 33 and new-parent inode 34 share table home
-283; old-parent inode 2 uses 275; old-parent, new-parent, and child directory
-homes are 1299, 1377, and 1364. Thus exact `5/0/0` checkpoints vector
-`[283, 275, 1299, 1377, 1364]` at W19 through W23.
-
-The stable preimage completed in 193.06 seconds and canonical success in
-304.10 seconds. Short-credit/refusal, W7 precommit rollback, and W23 committed
-five-home replay all pass in their combined run; the same-parent plus regular
-cross-parent regression completed in 193.01 seconds. Same-session `MKDIR`
-followed by directory `RENAME` completed in 1,524,547,503 guest steps under its
-measured 2,000,000,000-step composition watchdog, in 260.07 seconds. Cold source mode measures
-1,224,225,598 of 1,250,000,000 steps across 3,095 packed lines, and the
-descriptor journey measures 4,549,770 steps.
-
-The indexed-parent RENAME extension independently admits each old and new
-parent as a one-block linear directory, depth-zero HTree, or singleton
-depth-one HTree. Same-parent regular moves may use one leaf or cross to a
-second leaf; cross-parent regular and canonical empty-directory moves may mix
-the three admitted parent shapes. An encoded name that fits its existing
-same-leaf source record retains the exact in-place edit. Otherwise the source
-and destination selected-leaf edits rebuild under aggregate compact-fit:
-source removal admits the first or only live record, and destination selection
-chooses the first continuation-eligible hash leaf with sufficient aggregate
-space, including an empty leaf. The operation does not allocate, split, grow,
-repair an HTree interval key, or change any root, DX node, extent map,
-unselected leaf, size, or sector count.
-
-The enlarged sealed namespace plan is 8,992 bytes; with the unchanged
-15,568-byte base context, the staged caller arena reserves 24,560 contiguous
-bytes. It holds independent old/new shape, route, root, optional-node, parent
-inode, and selected-leaf authority plus each name's computed hash. The
-authenticated filesystem hash parameters remain one shared baseline.
-Same-parent same-leaf and cross-leaf regular moves bind exactly three and four
-semantic roles. Cross-parent regular
-and canonical-directory moves bind five and six. Home deduplication remains
-responsible for exact credit and checkpoint order.
-
-Ownership proof covers both candidate leaves against both parent maps. A
-same-parent same-leaf move requires one map hit and one leaf owner; a
-same-parent cross-leaf move requires one hit apiece followed by their paired
-owner proof. Across parents, an indexed old map must prove old leaf one/new
-leaf zero and an indexed new map new leaf one/old leaf zero. Two indexed
-parents form the exact 2x2 proof; a mixed move applies the corresponding row
-to its indexed participant, and every shape then runs the filesystem-wide
-paired owner scan. For the directory form, the child block must have zero hits
-in every applicable indexed parent map before its separate child-owner proof;
-the existing parent-link transfer and checksummed `..` rewrite are retained.
-
-The lean positive evidence is one source-built session with two regular moves,
-not a cloned matrix. Singleton-depth-one same-parent
-`new.txt` to `mkdir-depth1` crosses leaves through exact homes
-`[283, 281, 1357, 1497]` under `4/0/0`. Linear-to-indexed cross-parent
-`sparse.bin` to `moved-000.txt` uses exact homes
-`[279, 278, 281, 1345, 1497]` under `5/0/0`. Existing linear RENAME
-crash/replay, refusal, external-tool, and stable-remount evidence composes with
-the indexed topology and unchanged sealed-home replay; no new copy of those
-matrices is claimed.
-
-Directory victims, same-parent directory moves, indexed split/growth,
-HTree-key mutation, and deeper or multi-node HTree shapes remain gated. A
-rename over an existing regular file is described in the driver document. Indexed insertion, UNLINK, RMDIR, and
+Indexed insertion, UNLINK, RMDIR, and
 RENAME now draft-close the namespace/deletion vertical. Indexed-parent
 retained-block TRUNCATE is now covered by one compositional singleton-depth-one
 success. An exact `3/0/0` stage publishes inode 14 as indexed `linked.txt` and

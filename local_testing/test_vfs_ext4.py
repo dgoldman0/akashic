@@ -4899,6 +4899,19 @@ _EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH = (
     "_EXT4-EV-IMAGE-XT @ 0=",
 )
 
+# A rename leaves none of its names, records, banks or descriptors behind.
+_XC_RENAME_SCRUBBED_FORTH = (
+    "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+    "_XC-OLD-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+    "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE _EXT4-BYTES-ZERO?",
+    "_XC-VICTIM-INODE _EXT4-STAGED-WRITE-INODE-SIZE _EXT4-BYTES-ZERO?",
+    "_XC-MOVED-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
+    "_XC-CHILD-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
+    "_XC-RENAMING @ 0=",
+    "_XC-VICTIM-INO @ 0=",
+    "_XC-OLD-PARENT-INO @ 0=",
+)
+
 
 def _ext4_dedicated_writer_profile_forth(
     prefix: str,
@@ -60099,7 +60112,7 @@ def _ext4_mount_and_resolve(
     prefix: str,
     marker: str,
     expected_replayed: bool,
-    expected_home_writes: int,
+    expected_home_writes: int | None,
     max_steps: int = 1_200_000_000,
     absent: tuple[bytes, ...] = (),
 ) -> tuple[tuple[tuple[str, int, int], ...], str]:
@@ -60107,7 +60120,8 @@ def _ext4_mount_and_resolve(
 
     Each path must name the expected inode number, and each ABSENT path
     must not resolve.  The mount replays the journal when
-    EXPECTED_REPLAYED says it holds a committed transaction.
+    EXPECTED_REPLAYED says it holds a committed transaction, and writes
+    EXPECTED_HOME_WRITES homes unless that is None.
     """
     lines = [
         (
@@ -60125,9 +60139,13 @@ def _ext4_mount_and_resolve(
             if expected_replayed
             else f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0="
         ),
-        (
-            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
-            f"{expected_home_writes} ="
+        *(
+            ()
+            if expected_home_writes is None
+            else (
+                f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+                f"{expected_home_writes} =",
+            )
         ),
     ]
     for index, (name_path, number) in enumerate(names):
@@ -66460,7 +66478,7 @@ def test_staged_vfs_rmdir_open_directory_drains_on_last_close(
 
 def _staged_removal_forth(
     prefix: str,
-    steps: tuple[tuple[str, bytes], ...],
+    steps: tuple[tuple[str, object], ...],
     *,
     epoch_ms: int,
     profile: tuple[int, int, int],
@@ -66468,14 +66486,15 @@ def _staged_removal_forth(
     """Build a sequence of public namespace operations under one mount.
 
     A step is ("rm", path), ("cd", path), ("mkfile", name), ("mkdir",
-    name), ("open", path), ("close", b""), ("probe", b"") or
-    ("assume-empty", path).  An open keeps its descriptor for the next
-    close; a probe records the free counts and the active orphan records
-    at that point; assume-empty marks a directory's children loaded
-    without loading them, so RMDIR reaches the driver's own proof.  Step I
-    leaves its ior in PREFIX-S<I>-IOR and the volume's last ior after it in
-    PREFIX-S<I>-LAST, and the free counts, the root's link count and the
-    clock calls stay readable.
+    name), ("open", path), ("close", b""), ("probe", b""),
+    ("assume-empty", path), or ("mv", (source, new_parent, new_name)) and
+    ("mv-noreplace", ...) for VFS-RENAME-AT.  An open keeps its descriptor
+    for the next close; a probe records the free counts and the active
+    orphan records at that point; assume-empty marks a directory's
+    children loaded without loading them, so RMDIR and RENAME reach the
+    driver's own proof.  Step I leaves its ior in PREFIX-S<I>-IOR and the
+    volume's last ior after it in PREFIX-S<I>-LAST, and the free counts,
+    the root's link count and the clock calls stay readable.
     """
     p = prefix
     lines = [
@@ -66526,6 +66545,33 @@ def _staged_removal_forth(
                 ]
             )
             continue
+        if operation in ("mv", "mv-noreplace"):
+            assert isinstance(text, tuple) and len(text) == 3
+            source, new_parent, new_name = text
+            flags = "VFS-RN-NOREPLACE" if operation == "mv-noreplace" else "0"
+            for part, value in (("A", source), ("B", new_parent), ("C", new_name)):
+                part_lines, _ = _forth_bytes_buffer(f"{p}-N{index}{part}", value)
+                lines.extend(part_lines)
+            lines.extend(
+                [
+                    (
+                        f"{p}-N{index}A {len(source)} VFS-RP-NOFOLLOW-FINAL "
+                        f"{p}-V VFS-RESOLVE-POLICY? "
+                        f"CONSTANT {p}-S{index}-SRC-IOR CONSTANT {p}-S{index}-SRC"
+                    ),
+                    (
+                        f"{p}-N{index}B {len(new_parent)} {p}-V VFS-RESOLVE? "
+                        f"CONSTANT {p}-S{index}-PAR-IOR CONSTANT {p}-S{index}-PAR"
+                    ),
+                    (
+                        f"{p}-N{index}C {len(new_name)} {p}-S{index}-SRC "
+                        f"{p}-S{index}-PAR {flags} {p}-V VFS-RENAME-AT {result}"
+                    ),
+                    last,
+                ]
+            )
+            continue
+        assert isinstance(text, bytes)
         buffer_lines, buffer = _forth_bytes_buffer(f"{p}-N{index}", text)
         lines.extend(buffer_lines)
         if operation == "rm":
@@ -66571,30 +66617,40 @@ def _run_staged_removals(
     *,
     prefix: str,
     marker: str,
-    steps: tuple[tuple[str, bytes], ...],
+    steps: tuple[tuple[str, object], ...],
     outcomes: tuple[str, ...],
     checks: tuple[str, ...],
     profile: tuple[int, int, int],
     max_steps: int,
     epoch_ms: int = _STAGED_APPEND_EPOCH_MS,
+    write_faults_by_ordinal: dict[int, dict[str, int | str]] | None = None,
 ) -> tuple[tuple[tuple[str, int, int], ...], str]:
     """Run STEPS under one mount, check each outcome, then unmount.
 
     OUTCOMES gives one predicate tail per step, applied to its ior, and
     CHECKS further predicates in which {p} stands for PREFIX.  The writer
-    ends idle and clean and the plan record scrubbed.
+    ends idle and clean and the plan record scrubbed.  With
+    WRITE_FAULTS_BY_ORDINAL a write fails as the faults name it, the
+    checks then say what the writer holds, and the volume stays mounted.
     """
     assert len(outcomes) == len(steps)
     p = prefix
+    faulted = bool(write_faults_by_ordinal)
     predicates = [
         f"{p}-MOUNT-IOR 0=",
         f"{p}-CLOCK-IOR 0=",
         f"{p}-PROFILE-SIZE-IOR 0=",
         f"{p}-PROFILE-BIND-IOR 0=",
         f"{p}-STAT-BEFORE-IOR 0=",
-        f"{p}-STAT-AFTER-IOR 0=",
         f"{p}-WRITER {p}-PROFILE-BASE =",
-        f"{p}-WRITER _EXT4-JWR-IDLE-CLEAN?",
+        *(
+            ()
+            if faulted
+            else (
+                f"{p}-STAT-AFTER-IOR 0=",
+                f"{p}-WRITER _EXT4-JWR-IDLE-CLEAN?",
+            )
+        ),
         f"{p}-PLAN-SCRUBBED 0<>",
         *(
             f"{p}-S{index}-IOR {outcome}"
@@ -66603,6 +66659,17 @@ def _run_staged_removals(
         *(check.replace("{p}", p) for check in checks),
         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
     ]
+    tail = (
+        []
+        if faulted
+        else [
+            f"0 {p}-V VFS-UNMOUNT CONSTANT {p}-UNMOUNT-IOR",
+            (
+                f"{p}-UNMOUNT-IOR 0= {p}-PROFILE-ARENA ARENA-USED 0= AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
+        ]
+    )
     output, trace, media_sha256 = run_recovery_forth(
         source,
         backing,
@@ -66615,18 +66682,20 @@ def _run_staged_removals(
                 f'{p}-OK @ IF ." {marker}" ELSE ." {marker}-FAIL " '
                 f"{p}-OK-FIRST-FAILURE @ . THEN"
             ),
-            f"0 {p}-V VFS-UNMOUNT CONSTANT {p}-UNMOUNT-IOR",
-            (
-                f"{p}-UNMOUNT-IOR 0= {p}-PROFILE-ARENA ARENA-USED 0= AND "
-                f'IF ." {marker}-UNMOUNTED" THEN'
-            ),
+            *tail,
         ],
         patches=patches,
         capture_media=backing,
         max_steps=max_steps,
+        **(
+            {"write_faults_by_ordinal": write_faults_by_ordinal}
+            if faulted
+            else {}
+        ),
     )
     _assert_emitted(output, marker)
-    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    if not faulted:
+        _assert_emitted(output, f"{marker}-UNMOUNTED")
     return trace, media_sha256
 
 
@@ -67544,6 +67613,888 @@ def test_staged_vfs_removals_in_a_level_one_htree_with_two_nodes(
         expected_replayed=False,
         expected_home_writes=0,
     )
+
+
+_RENAME_FULL_NAMES = tuple(f"f{index:02d}-" + "n" * 36 for index in range(20))
+_RENAME_INDEXED_NAMES = tuple(
+    f"{index:02d}-" + "x" * 97 for index in range(40)
+)
+_RENAME_INDEXED_NAMES_BYTES = tuple(name.encode() for name in _RENAME_INDEXED_NAMES)
+_RENAME_CHILD_NAMES = tuple(f"{index:02d}-" + "c" * 97 for index in range(40))
+_RENAME_BIG_NAMES = tuple(f"{index:04d}-" + "b" * 95 for index in range(1120))
+
+
+def _directory_entries_of(image: Path, number: int) -> dict[bytes, int]:
+    """Read every live name of directory NUMBER, linear or indexed."""
+    superblock, inode, _ = _ext4_inode_record(image, number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    blocks = struct.unpack_from("<I", inode, 0x04)[0] // block_size
+    indexed = struct.unpack_from("<I", inode, 0x20)[0] & 0x1000
+    names: dict[bytes, int] = {}
+    for logical in range(blocks):
+        home = _extent_map_physical(image, inode, logical, block_size=block_size)
+        block = _read_ext4_home(image, home, block_size=block_size)
+        if indexed and (
+            logical == 0
+            or (
+                struct.unpack_from("<I", block, 0)[0] == 0
+                and struct.unpack_from("<H", block, 4)[0] == block_size
+            )
+        ):
+            if logical == 0:
+                names[b"."] = struct.unpack_from("<I", block, 0)[0]
+                names[b".."] = struct.unpack_from("<I", block, 12)[0]
+            continue
+        for _, entry, _, _, name in _checked_linear_directory_entries(
+            superblock, number, generation, block
+        ):
+            assert name not in names
+            names[name] = entry
+    return names
+
+
+def _htree_shape(image: Path, number: int) -> tuple[int, int, int]:
+    """Return an HTree's indirect levels, root entries and index nodes."""
+    superblock, inode, _ = _ext4_inode_record(image, number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    root = _read_ext4_home(
+        image,
+        _extent_map_physical(image, inode, 0, block_size=block_size),
+        block_size=block_size,
+    )
+    levels = root[30]
+    count = struct.unpack_from("<H", root, 34)[0]
+    return levels, count, count if levels else 0
+
+
+def _build_rename_shapes_prestate(
+    base: Path, directory: Path, jbd2_toolchain: dict[str, object]
+) -> dict[str, object]:
+    """Author the parents and children the rename tests move names through.
+
+    debugfs makes /lin, a one-block parent with three files, a symlink, an
+    empty directory evl, a directory dsrc holding a file and a directory
+    nev holding one; /full, a one-block parent of twenty 40-byte names
+    with less slack than any longer name needs; /idx and /mvi, forty
+    100-byte names each, which e2fsck indexes at level zero over full
+    leaves, /idx also holding a directory didx; /mvl and /mvl2, small
+    directories to move; and /big, 1,120 100-byte names of one file and an
+    empty directory evb, which e2fsck indexes at level one with two index
+    nodes.  A second debugfs pass then removes every name but the first of
+    each /big leaf, and evb, so the VFS cache's 64 KiB string pool can hold
+    the names of the directory a rename loads.
+    """
+    debugfs = jbd2_toolchain["debugfs"]
+    e2fsck = jbd2_toolchain["e2fsck"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(e2fsck, Path)
+    assert isinstance(env, dict)
+    image = directory / "rename-shapes.img"
+    _copy_sparse_file(base, image)
+    payload = directory / "payload.bin"
+    payload.write_bytes(bytes(range(256)) * 2)
+    commands = [
+        "mkdir /lin",
+        *(f"write {payload} /lin/{name}" for name in ("a-file", "b-file", "c-file")),
+        "symlink /lin/sym /lin/a-file",
+        "mkdir /lin/evl",
+        "mkdir /lin/dsrc",
+        f"write {payload} /lin/dsrc/inner",
+        "mkdir /lin/nev",
+        f"write {payload} /lin/nev/kept",
+        "mkdir /full",
+        *(f"write {payload} /full/{name}" for name in _RENAME_FULL_NAMES),
+        "mkdir /idx",
+        *(f"write {payload} /idx/{name}" for name in _RENAME_INDEXED_NAMES),
+        "mkdir /idx/didx",
+        f"write {payload} /idx/didx/inner",
+        "mkdir /mvi",
+        *(f"write {payload} /mvi/{name}" for name in _RENAME_CHILD_NAMES),
+        "mkdir /mvl",
+        f"write {payload} /mvl/one",
+        f"write {payload} /mvl/two",
+        "mkdir /mvl2",
+        f"write {payload} /mvl2/one",
+        "mkdir /big",
+        # debugfs's ln does not grow a directory, so /big grows first.
+        *("expand_dir /big" for _ in range(130)),
+        f"write {payload} /big/{_RENAME_BIG_NAMES[0]}",
+        *(
+            f"ln /big/{_RENAME_BIG_NAMES[0]} /big/{name}"
+            for name in _RENAME_BIG_NAMES[1:]
+        ),
+        "mkdir /big/evb",
+    ]
+    script = directory / "rename-shapes.debugfs"
+    script.write_text("\n".join(commands) + "\n")
+    made = subprocess.run(
+        [str(debugfs), "-w", "-f", str(script), str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert made.returncode == 0, made.stdout + made.stderr
+    indexed = subprocess.run(
+        [str(e2fsck), "-f", "-y", "-D", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert indexed.returncode in (0, 1), indexed.stdout + indexed.stderr
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+    # Each removed name joins the record before it, so every /big leaf keeps
+    # its first record live, as the removal walk requires.
+    big_number = _directory_entries_of(image, 2)[b"big"]
+    _, big_inode, _ = _ext4_inode_record(image, big_number)
+    thinned = []
+    for logical in range(1, struct.unpack_from("<I", big_inode, 0x04)[0] // 1024):
+        block = _read_ext4_home(
+            image,
+            _extent_map_physical(image, big_inode, logical, block_size=1024),
+            block_size=1024,
+        )
+        if struct.unpack_from("<IH", block, 0) == (0, 1024):
+            continue
+        names = _htree_leaf_names(image, big_number, logical)
+        thinned += [name for name in names[1:] if name != b"evb"]
+    assert len(thinned) > 900
+    script = directory / "rename-shapes-thin.debugfs"
+    script.write_text(
+        "".join(f"rm /big/{name.decode()}\n" for name in thinned)
+    )
+    made = subprocess.run(
+        [str(debugfs), "-w", "-f", str(script), str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert made.returncode == 0, made.stdout + made.stderr
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+    root = _directory_entries_of(image, 2)
+    numbers = {
+        name: root[name]
+        for name in (b"lin", b"full", b"idx", b"mvi", b"mvl", b"mvl2", b"big")
+    }
+    lin = _directory_entries_of(image, numbers[b"lin"])
+    idx = _directory_entries_of(image, numbers[b"idx"])
+    big = _directory_entries_of(image, numbers[b"big"])
+    for name in (b"a-file", b"b-file", b"c-file", b"sym", b"evl", b"dsrc", b"nev"):
+        numbers[b"lin/" + name] = lin[name]
+    numbers[b"idx/didx"] = idx[b"didx"]
+    numbers[b"big/evb"] = big[b"evb"]
+    assert len(big) == len(_RENAME_BIG_NAMES) + 3 - len(thinned)
+    superblock, _, _ = _ext4_inode_record(image, 2)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    shapes = {}
+    for name in (b"lin", b"full", b"idx", b"mvi", b"mvl", b"big"):
+        _, inode, _ = _ext4_inode_record(image, numbers[name])
+        shapes[name] = {
+            "flags": struct.unpack_from("<I", inode, 0x20)[0],
+            "blocks": struct.unpack_from("<I", inode, 0x04)[0] // block_size,
+            "links": struct.unpack_from("<H", inode, 0x1A)[0],
+        }
+    for name in (b"lin", b"full", b"mvl"):
+        assert shapes[name]["flags"] & 0x1000 == 0
+        assert shapes[name]["blocks"] == 1
+    for name in (b"idx", b"mvi"):
+        assert shapes[name]["flags"] & 0x1000
+        assert _htree_shape(image, numbers[name])[0] == 0
+    big_levels, big_entries, big_nodes = _htree_shape(image, numbers[b"big"])
+    assert big_levels == 1 and big_nodes >= 2, (big_levels, big_entries)
+    fixture = dict(_build_jbd2_activation_fixture(image))
+    fixture.update(
+        {
+            "image": image,
+            "block_size": block_size,
+            "numbers": numbers,
+            "shapes": shapes,
+            "free_blocks": struct.unpack_from("<I", superblock, 0x0C)[0],
+            "free_inodes": struct.unpack_from("<I", superblock, 0x10)[0],
+        }
+    )
+    return fixture
+
+
+@pytest.fixture(scope="session")
+def staged_rename_shapes_prestate(
+    compact_primary_writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    base = compact_primary_writer_activation_fixture["image"]
+    assert isinstance(base, Path)
+    return _build_rename_shapes_prestate(
+        base, tmp_path_factory.mktemp("ext4-rename-shapes"), jbd2_toolchain
+    )
+
+
+def _htree_leaf_of(image: Path, number: int, name: bytes) -> int:
+    """The logical leaf a level-zero HTree routes NAME to."""
+    superblock, inode, _ = _ext4_inode_record(image, number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    root = _read_ext4_home(
+        image,
+        _extent_map_physical(image, inode, 0, block_size=block_size),
+        block_size=block_size,
+    )
+    assert root[30] == 0
+    entry = _dx_route(
+        root, 32, _indexed_split_half_md4_hash(superblock, name)[0]
+    )
+    return _dx_entries(root, 32)[entry][1]
+
+
+def _htree_leaf_names(image: Path, number: int, logical: int) -> tuple[bytes, ...]:
+    """The names of leaf LOGICAL of directory NUMBER in block order."""
+    superblock, inode, _ = _ext4_inode_record(image, number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    block = _read_ext4_home(
+        image,
+        _extent_map_physical(image, inode, logical, block_size=block_size),
+        block_size=block_size,
+    )
+    return tuple(
+        entry[4]
+        for entry in _checked_linear_directory_entries(
+            superblock,
+            number,
+            struct.unpack_from("<I", inode, 0x64)[0],
+            block,
+        )
+    )
+
+
+def _routed_name(
+    image: Path,
+    number: int,
+    stem: str,
+    length: int,
+    *,
+    avoid: tuple[int, ...] = (),
+    want: int | None = None,
+) -> bytes:
+    """A new name of LENGTH bytes that routes to leaf WANT, or to none of
+    AVOID."""
+    for index in range(4096):
+        head = f"{stem}{index:04d}-".encode()
+        name = head + b"q" * (length - len(head))
+        leaf = _htree_leaf_of(image, number, name)
+        if want is not None and leaf == want:
+            return name
+        if want is None and leaf not in avoid:
+            return name
+    raise AssertionError("no name routes as asked")
+
+
+def _staged_rename_session(
+    prestate: dict[str, object],
+    backing: Path,
+    *,
+    prefix: str,
+    marker: str,
+    steps: tuple[tuple[str, object], ...],
+    outcomes: tuple[str, ...],
+    checks: tuple[str, ...],
+    patches: tuple[tuple[int, bytes], ...] = (),
+    write_faults_by_ordinal: dict[int, dict[str, int | str]] | None = None,
+) -> tuple[tuple[tuple[str, int, int], ...], str]:
+    """Run a rename session on the rename prestate under a 16/0/2 profile."""
+    image = prestate["image"]
+    source_patches = prestate["source_patches"]
+    assert isinstance(image, Path)
+    assert isinstance(source_patches, tuple)
+    return _run_staged_removals(
+        image,
+        (*source_patches, *patches),
+        backing,
+        prefix=prefix,
+        marker=marker,
+        steps=steps,
+        outcomes=outcomes,
+        checks=checks,
+        profile=(16, 0, 2),
+        max_steps=2_400_000_000,
+        write_faults_by_ordinal=write_faults_by_ordinal,
+    )
+
+
+def test_staged_vfs_rename_moves_names_within_one_parent(
+    staged_rename_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Renames inside one linear or indexed parent need no growth.
+
+    A 40-byte name takes the space a 40-byte source leaves in the full
+    /full; directories rename inside /lin and inside the indexed /idx with
+    their `..` and link counts unchanged; and the first record of an /idx
+    leaf, which leaves that record unused, takes a name of its length.
+    """
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    full = _directory_entries_of(image, numbers[b"full"])
+    idx = _directory_entries_of(image, numbers[b"idx"])
+    old_full = _RENAME_FULL_NAMES[5].encode()
+    new_full = b"g05-" + b"n" * 36
+    first = _htree_leaf_names(image, numbers[b"idx"], 1)[0]
+    assert first in _RENAME_INDEXED_NAMES_BYTES
+    new_first = first[:3] + b"y" * (len(first) - 3)
+    steps = (
+        ("mv", (b"/full/" + old_full, b"/full", new_full)),
+        ("mv", (b"/lin/dsrc", b"/lin", b"dren")),
+        ("mv", (b"/idx/didx", b"/idx", b"didx-renamed")),
+        ("mv", (b"/idx/" + first, b"/idx", new_first)),
+    )
+    backing = tmp_path / "rename-one-parent.img"
+    _staged_rename_session(
+        prestate,
+        backing,
+        prefix="_RW1",
+        marker="EXT4-RENAME-ONE-PARENT",
+        steps=steps,
+        outcomes=tuple("0=" for _ in steps),
+        checks=(
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
+            "{p}-ROOT-VN VN.NLINK @ {p}-ROOT-LINKS-BEFORE =",
+            "{p}-CLOCK-CALLS @ 4 =",
+            *_XC_RENAME_SCRUBBED_FORTH,
+        ),
+    )
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    for name in (b"lin", b"full", b"idx"):
+        _, after, _ = _ext4_inode_record(backing, numbers[name])
+        shape = prestate["shapes"][name]
+        assert struct.unpack_from("<H", after, 0x1A)[0] == shape["links"]
+        assert struct.unpack_from("<I", after, 0x04)[0] == (
+            shape["blocks"] * 1024
+        )
+    dren = _directory_entries_of(backing, numbers[b"lin/dsrc"])
+    assert dren[b".."] == numbers[b"lin"]
+    assert _directory_entries_of(backing, numbers[b"idx/didx"])[b".."] == (
+        numbers[b"idx"]
+    )
+    _ext4_mount_and_resolve(
+        backing,
+        tmp_path / "rename-one-parent-readback.img",
+        (
+            (b"/full/" + new_full, full[old_full]),
+            (b"/lin/dren", numbers[b"lin/dsrc"]),
+            (b"/lin/dren/inner", dren[b"inner"]),
+            (b"/idx/didx-renamed", numbers[b"idx/didx"]),
+            (b"/idx/" + new_first, idx[first]),
+        ),
+        absent=(
+            b"/full/" + old_full,
+            b"/lin/dsrc",
+            b"/idx/didx",
+            b"/idx/" + first,
+        ),
+        prefix="_RW1B",
+        marker="EXT4-RENAME-ONE-PARENT-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+        max_steps=2_400_000_000,
+    )
+
+
+def test_staged_vfs_rename_grows_full_parents(
+    staged_rename_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A longer name grows the full parent it enters, as an insert would.
+
+    /full converts to a depth-zero HTree when a 40-byte source's space
+    cannot take a 200-byte name; inside /idx a 150-byte name splits the
+    full leaf it routes to, which is not the source's; and a file of /lin
+    moves into another full leaf of /idx, splitting it too.
+    """
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    full = _directory_entries_of(image, numbers[b"full"])
+    idx = _directory_entries_of(image, numbers[b"idx"])
+    lin = _directory_entries_of(image, numbers[b"lin"])
+    old_full = _RENAME_FULL_NAMES[7].encode()
+    converted = b"conv-" + b"z" * 195
+    source = _htree_leaf_names(image, numbers[b"idx"], 2)[-1]
+    assert source in _RENAME_INDEXED_NAMES_BYTES
+    split_name = _routed_name(image, numbers[b"idx"], "s2-", 150, avoid=(2,))
+    split_leaf = _htree_leaf_of(image, numbers[b"idx"], split_name)
+    moved_name = _routed_name(
+        image, numbers[b"idx"], "x3-", 150, avoid=(2, split_leaf)
+    )
+    steps = (
+        ("mv", (b"/full/" + old_full, b"/full", converted)),
+        ("mv", (b"/idx/" + source, b"/idx", split_name)),
+        ("mv", (b"/lin/b-file", b"/idx", moved_name)),
+    )
+    backing = tmp_path / "rename-growth.img"
+    _staged_rename_session(
+        prestate,
+        backing,
+        prefix="_RW2",
+        marker="EXT4-RENAME-GROWTH",
+        steps=steps,
+        outcomes=tuple("0=" for _ in steps),
+        checks=(
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE 4 - =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
+            "{p}-CLOCK-CALLS @ 3 =",
+            *_XC_RENAME_SCRUBBED_FORTH,
+        ),
+    )
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    _, full_after, _ = _ext4_inode_record(backing, numbers[b"full"])
+    assert struct.unpack_from("<I", full_after, 0x20)[0] & 0x1000
+    assert struct.unpack_from("<I", full_after, 0x04)[0] == 3 * 1024
+    _, idx_after, _ = _ext4_inode_record(backing, numbers[b"idx"])
+    assert struct.unpack_from("<I", idx_after, 0x04)[0] == (
+        prestate["shapes"][b"idx"]["blocks"] + 2
+    ) * 1024
+    _ext4_mount_and_resolve(
+        backing,
+        tmp_path / "rename-growth-readback.img",
+        (
+            (b"/full/" + converted, full[old_full]),
+            *(
+                (b"/full/" + name.encode(), full[name.encode()])
+                for name in _RENAME_FULL_NAMES
+                if name.encode() != old_full
+            ),
+            (b"/idx/" + split_name, idx[source]),
+            (b"/idx/" + moved_name, lin[b"b-file"]),
+        ),
+        absent=(b"/full/" + old_full, b"/idx/" + source, b"/lin/b-file"),
+        prefix="_RW2B",
+        marker="EXT4-RENAME-GROWTH-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+        max_steps=2_400_000_000,
+    )
+
+
+def test_staged_vfs_rename_moves_directories_into_a_level_one_parent(
+    staged_rename_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Non-empty directories move into /big, a level-one HTree of two nodes.
+
+    /mvl's linear block 0 and /mvi's DX root each name /big in their
+    `..`; the root loses two links and /big gains two.  Neither child's
+    other blocks change.
+    """
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    shapes = prestate["shapes"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    assert isinstance(shapes, dict)
+    mvl = _directory_entries_of(image, numbers[b"mvl"])
+    mvi = _directory_entries_of(image, numbers[b"mvi"])
+    child_name = _RENAME_CHILD_NAMES[3].encode()
+    _, mvi_inode, _ = _ext4_inode_record(image, numbers[b"mvi"])
+    mvi_leaves = tuple(
+        _read_ext4_home(
+            image,
+            _extent_map_physical(image, mvi_inode, logical, block_size=1024),
+            block_size=1024,
+        )
+        for logical in range(1, shapes[b"mvi"]["blocks"])
+    )
+    steps = (
+        ("mv", (b"/mvl", b"/big", b"mvl")),
+        ("mv", (b"/mvi", b"/big", b"mvi")),
+    )
+    backing = tmp_path / "rename-directories-across.img"
+    _staged_rename_session(
+        prestate,
+        backing,
+        prefix="_RW3",
+        marker="EXT4-RENAME-DIRECTORIES-ACROSS",
+        steps=steps,
+        outcomes=("0=", "0="),
+        checks=(
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
+            "{p}-ROOT-VN VN.NLINK @ {p}-ROOT-LINKS-BEFORE 2 - =",
+            "{p}-CLOCK-CALLS @ 2 =",
+            *_XC_RENAME_SCRUBBED_FORTH,
+        ),
+    )
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    _, big_after, _ = _ext4_inode_record(backing, numbers[b"big"])
+    assert struct.unpack_from("<H", big_after, 0x1A)[0] == (
+        shapes[b"big"]["links"] + 2
+    )
+    assert _directory_entries_of(backing, numbers[b"mvl"])[b".."] == (
+        numbers[b"big"]
+    )
+    assert _directory_entries_of(backing, numbers[b"mvi"])[b".."] == (
+        numbers[b"big"]
+    )
+    _, mvi_after, _ = _ext4_inode_record(backing, numbers[b"mvi"])
+    assert tuple(
+        _read_ext4_home(
+            backing,
+            _extent_map_physical(backing, mvi_after, logical, block_size=1024),
+            block_size=1024,
+        )
+        for logical in range(1, shapes[b"mvi"]["blocks"])
+    ) == mvi_leaves
+    _ext4_mount_and_resolve(
+        backing,
+        tmp_path / "rename-directories-across-readback.img",
+        (
+            (b"/big/mvl", numbers[b"mvl"]),
+            (b"/big/mvl/one", mvl[b"one"]),
+            (b"/big/mvl/two", mvl[b"two"]),
+            (b"/big/mvi", numbers[b"mvi"]),
+            (b"/big/mvi/" + child_name, mvi[child_name]),
+        ),
+        absent=(b"/mvl", b"/mvi"),
+        prefix="_RW3B",
+        marker="EXT4-RENAME-DIRECTORIES-ACROSS-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+        max_steps=2_400_000_000,
+    )
+
+
+def test_staged_vfs_rename_over_empty_directories_and_a_first_record(
+    staged_rename_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Directory victims and a first-record source's victim drain away.
+
+    /lin/dsrc, holding a file, replaces the empty /lin/evl inside /lin,
+    which loses a link; /mvl2 replaces the empty /big/evb from the root,
+    whose link count drops while /big's stays.  The first record of an
+    /idx leaf replaces a regular file of another leaf, its own record
+    left unused.  Each victim enters the orphan file under the sealed
+    rename form and drains after its checkpoint.
+    """
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    shapes = prestate["shapes"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    assert isinstance(shapes, dict)
+    idx = _directory_entries_of(image, numbers[b"idx"])
+    source = _htree_leaf_names(image, numbers[b"idx"], 3)[0]
+    victim = _htree_leaf_names(image, numbers[b"idx"], 4)[1]
+    assert {source, victim} <= set(_RENAME_INDEXED_NAMES_BYTES)
+    dsrc = _directory_entries_of(image, numbers[b"lin/dsrc"])
+    steps = (
+        ("mv", (b"/lin/dsrc", b"/lin", b"evl")),
+        ("mv", (b"/mvl2", b"/big", b"evb")),
+        ("mv", (b"/idx/" + source, b"/idx", victim)),
+    )
+    victims = (numbers[b"lin/evl"], numbers[b"big/evb"], idx[victim])
+    backing = tmp_path / "rename-over-directories.img"
+    _staged_rename_session(
+        prestate,
+        backing,
+        prefix="_RW4",
+        marker="EXT4-RENAME-OVER-DIRECTORIES",
+        steps=steps,
+        outcomes=("0=", "0=", "0="),
+        checks=(
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE 3 + =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE 3 + =",
+            "{p}-ROOT-VN VN.NLINK @ {p}-ROOT-LINKS-BEFORE 1- =",
+            "{p}-CLOCK-CALLS @ 3 =",
+            "{p}-CTX _EXT4-C.O.ACTIVE + @ 0=",
+            (
+                "{p}-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                "_EXT4-RO-ORPHAN-PRESENT AND 0="
+            ),
+            *_XC_RENAME_SCRUBBED_FORTH,
+        ),
+    )
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    assert not any(_ext4_inode_allocation_state(backing, victims).values())
+    _, lin_after, _ = _ext4_inode_record(backing, numbers[b"lin"])
+    assert struct.unpack_from("<H", lin_after, 0x1A)[0] == (
+        shapes[b"lin"]["links"] - 1
+    )
+    _, big_after, _ = _ext4_inode_record(backing, numbers[b"big"])
+    assert struct.unpack_from("<H", big_after, 0x1A)[0] == (
+        shapes[b"big"]["links"]
+    )
+    assert _directory_entries_of(backing, numbers[b"mvl2"])[b".."] == (
+        numbers[b"big"]
+    )
+    _ext4_mount_and_resolve(
+        backing,
+        tmp_path / "rename-over-directories-readback.img",
+        (
+            (b"/lin/evl", numbers[b"lin/dsrc"]),
+            (b"/lin/evl/inner", dsrc[b"inner"]),
+            (b"/big/evb", numbers[b"mvl2"]),
+            (b"/idx/" + victim, idx[source]),
+        ),
+        absent=(b"/lin/dsrc", b"/mvl2", b"/idx/" + source),
+        prefix="_RW4B",
+        marker="EXT4-RENAME-OVER-DIRECTORIES-READBACK",
+        expected_replayed=False,
+        expected_home_writes=0,
+        max_steps=2_400_000_000,
+    )
+
+
+def test_staged_vfs_rename_refusals_leave_the_medium_unchanged(
+    staged_rename_shapes_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A hidden live child, a symlink source and a full parent refuse.
+
+    The VFS is told the non-empty /lin/nev has its children loaded, so the
+    driver's emptiness proof meets its file; a symlink source stays
+    refused at entry; and /big at the link limit takes no directory.  No
+    refusal writes the medium.
+    """
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    source_patches = prestate["source_patches"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    assert isinstance(source_patches, tuple)
+    superblock, big_inode, big_offset = _ext4_inode_record(
+        image, numbers[b"big"]
+    )
+    limited = bytearray(big_inode)
+    struct.pack_into("<H", limited, 0x1A, 65000)
+    limited = bytearray(
+        _inode_with_checksum(superblock, numbers[b"big"], limited)
+    )
+    patches = ((big_offset, bytes(limited)),)
+    expected = bytearray(image.read_bytes())
+    for offset, payload in (*source_patches, *patches):
+        expected[offset : offset + len(payload)] = payload
+    expected_sha256 = hashlib.sha256(expected).hexdigest()
+    del expected
+    backing = tmp_path / "rename-refusals.img"
+    trace, media_sha256 = _staged_rename_session(
+        prestate,
+        backing,
+        prefix="_RW5",
+        marker="EXT4-RENAME-REFUSALS",
+        steps=(
+            ("assume-empty", b"/lin/nev"),
+            ("mv", (b"/lin/dsrc", b"/lin", b"nev")),
+            ("mv", (b"/lin/sym", b"/lin", b"sym2")),
+            ("mv", (b"/mvl", b"/big", b"mvl")),
+        ),
+        outcomes=(
+            "0=",
+            "VFS-E-NOTEMPTY =",
+            "EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED =",
+            "EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED =",
+        ),
+        checks=(
+            "{p}-S1-LAST {p}-S1-IOR =",
+            "{p}-S2-LAST {p}-S2-IOR =",
+            "{p}-S3-LAST {p}-S3-IOR =",
+            "{p}-BFREE-AFTER {p}-BFREE-BEFORE =",
+            "{p}-FFREE-AFTER {p}-FFREE-BEFORE =",
+            "{p}-CLOCK-CALLS @ 2 =",
+            "{p}-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+            "{p}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+            "{p}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+            "{p}-V V.FLAGS @ VFS-F-RO AND 0=",
+            *_XC_RENAME_SCRUBBED_FORTH,
+        ),
+        patches=patches,
+    )
+    assert trace == ()
+    assert media_sha256 == expected_sha256
+    assert _sha256(backing) == expected_sha256
+
+
+def _staged_rename_tear(
+    prestate: dict[str, object],
+    tmp_path: Path,
+    jbd2_toolchain: dict[str, object],
+    *,
+    label: str,
+    step: tuple[str, object],
+    home: int,
+    resolved: tuple[tuple[bytes, int], ...],
+    absent: tuple[bytes, ...],
+) -> Path:
+    """Tear one rename's checkpoint at HOME and recover the whole rename.
+
+    A first run finds HOME's checkpoint write; the second tears that write
+    after its first sector's first bytes.  The rename has committed, so
+    it reports success and leaves the volume read-only, and the next
+    mount replays the journal and finishes any orphan.
+    """
+    success = tmp_path / f"rename-{label}-success.img"
+    trace, _ = _staged_rename_session(
+        prestate,
+        success,
+        prefix=f"_RT{label[0].upper()}",
+        marker=f"EXT4-RENAME-{label.upper()}-SUCCESS",
+        steps=(step,),
+        outcomes=("0=",),
+        checks=(*_XC_RENAME_SCRUBBED_FORTH,),
+    )
+    ordinals = _write_ordinals_for_ext4_home(trace, home, block_size=1024)
+    assert len(ordinals) == 1, ordinals
+    success.unlink()
+    faulted = tmp_path / f"rename-{label}-faulted.img"
+    _staged_rename_session(
+        prestate,
+        faulted,
+        prefix=f"_RF{label[0].upper()}",
+        marker=f"EXT4-RENAME-{label.upper()}-TORN",
+        steps=(step,),
+        outcomes=("0=",),
+        checks=(
+            "{p}-S0-LAST VFS-IOR-REASON VFS-R-IO =",
+            "{p}-V V.FLAGS @ VFS-F-RO AND 0<>",
+            "{p}-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+            "{p}-WRITER _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED =",
+        ),
+        write_faults_by_ordinal={
+            ordinals[0]: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 16,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+    )
+    recovered = tmp_path / f"rename-{label}-recovered.img"
+    _ext4_mount_and_resolve(
+        faulted,
+        recovered,
+        resolved,
+        absent=absent,
+        prefix=f"_RR{label[0].upper()}",
+        marker=f"EXT4-RENAME-{label.upper()}-RECOVERED",
+        expected_replayed=True,
+        expected_home_writes=None,
+        max_steps=2_400_000_000,
+    )
+    faulted.unlink()
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+    return recovered
+
+
+def test_staged_vfs_rename_growth_tear_replays_the_split(
+    staged_rename_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A tear in the leaf a cross-parent move splits replays the move."""
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    lin = _directory_entries_of(image, numbers[b"lin"])
+    name = _routed_name(image, numbers[b"idx"], "t1-", 150)
+    _, idx_inode, _ = _ext4_inode_record(image, numbers[b"idx"])
+    leaf_home = _extent_map_physical(
+        image,
+        idx_inode,
+        _htree_leaf_of(image, numbers[b"idx"], name),
+        block_size=1024,
+    )
+    recovered = _staged_rename_tear(
+        prestate,
+        tmp_path,
+        jbd2_toolchain,
+        label="split",
+        step=("mv", (b"/lin/a-file", b"/idx", name)),
+        home=leaf_home,
+        resolved=((b"/idx/" + name, lin[b"a-file"]),),
+        absent=(b"/lin/a-file",),
+    )
+    _, idx_after, _ = _ext4_inode_record(recovered, numbers[b"idx"])
+    assert struct.unpack_from("<I", idx_after, 0x04)[0] == (
+        prestate["shapes"][b"idx"]["blocks"] + 1
+    ) * 1024
+
+
+def test_staged_vfs_rename_directory_move_tear_replays_the_child(
+    staged_rename_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A tear in a moved directory's block 0 replays its new `..`."""
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    _, mvl_inode, _ = _ext4_inode_record(image, numbers[b"mvl"])
+    recovered = _staged_rename_tear(
+        prestate,
+        tmp_path,
+        jbd2_toolchain,
+        label="child",
+        step=("mv", (b"/mvl", b"/big", b"mvl")),
+        home=_extent_root_physical(mvl_inode, 0),
+        resolved=((b"/big/mvl", numbers[b"mvl"]),),
+        absent=(b"/mvl",),
+    )
+    assert _directory_entries_of(recovered, numbers[b"mvl"])[b".."] == (
+        numbers[b"big"]
+    )
+
+
+def test_staged_vfs_rename_directory_victim_tear_replays_and_drains(
+    staged_rename_shapes_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A torn sealed rename over an empty directory replays, then drains.
+
+    The tear lands in /lin's block, whose victim record now names the
+    source; recovery replays the sealed rename form's homes and frees the
+    victim from the orphan file.
+    """
+    prestate = staged_rename_shapes_prestate
+    image = prestate["image"]
+    numbers = prestate["numbers"]
+    assert isinstance(image, Path)
+    assert isinstance(numbers, dict)
+    _, lin_inode, _ = _ext4_inode_record(image, numbers[b"lin"])
+    recovered = _staged_rename_tear(
+        prestate,
+        tmp_path,
+        jbd2_toolchain,
+        label="victim",
+        step=("mv", (b"/lin/dsrc", b"/lin", b"evl")),
+        home=_extent_root_physical(lin_inode, 0),
+        resolved=((b"/lin/evl", numbers[b"lin/dsrc"]),),
+        absent=(b"/lin/dsrc",),
+    )
+    assert not _ext4_inode_allocation_state(
+        recovered, (numbers[b"lin/evl"],)
+    )[numbers[b"lin/evl"]]
 
 
 @pytest.fixture(scope="session")
@@ -75496,153 +76447,6 @@ def _linear_directory_link_afterimage(
     return expected, insert_offset
 
 
-def _linear_directory_compact_remove_afterimage(
-    superblock: bytes,
-    *,
-    parent_inode: int,
-    parent_generation: int,
-    original: bytes,
-    target_inode: int,
-    name: bytes,
-) -> tuple[bytes, int]:
-    """Independently compact surviving live dirents after one removal."""
-    assert name and len(name) <= 255
-    assert b"/" not in name and b"\x00" not in name
-    entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        original,
-    )
-    targets = [
-        entry
-        for entry in entries
-        if entry[1] == target_inode and entry[4] == name
-    ]
-    assert len(targets) == 1
-    target_offset = targets[0][0]
-    kept = tuple(entry for entry in entries if entry != targets[0])
-    assert kept
-    tail_offset = len(original) - 12
-    minimum_sizes = tuple((8 + len(entry[4]) + 3) & ~3 for entry in kept)
-    assert sum(minimum_sizes) <= tail_offset
-    result = bytearray(len(original))
-    result[tail_offset:] = original[tail_offset:]
-    offset = 0
-    for index, (_, inode_number, _, file_type, entry_name) in enumerate(kept):
-        record_length = minimum_sizes[index]
-        if index == len(kept) - 1:
-            record_length = tail_offset - offset
-        struct.pack_into(
-            "<IHBB",
-            result,
-            offset,
-            inode_number,
-            record_length,
-            len(entry_name),
-            file_type,
-        )
-        result[offset + 8 : offset + 8 + len(entry_name)] = entry_name
-        offset += record_length
-    assert offset == tail_offset
-    expected = _linear_directory_block_with_checksum(
-        superblock,
-        parent_inode,
-        parent_generation,
-        result,
-    )
-    final_entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        expected,
-    )
-    assert all(entry[4] != name for entry in final_entries)
-    assert tuple(entry[4] for entry in final_entries) == tuple(
-        entry[4] for entry in kept
-    )
-    return expected, target_offset
-
-
-def _linear_directory_compact_append_afterimage(
-    superblock: bytes,
-    *,
-    parent_inode: int,
-    parent_generation: int,
-    original: bytes,
-    target_inode: int,
-    name: bytes,
-    file_type: int = 1,
-) -> tuple[bytes, int]:
-    """Independently compact live dirents and append one typed source."""
-    assert name and len(name) <= 255
-    assert b"/" not in name and b"\x00" not in name
-    assert file_type in {1, 2}
-    entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        original,
-    )
-    assert all(entry[4] != name for entry in entries)
-    tail_offset = len(original) - 12
-    needed = (8 + len(name) + 3) & ~3
-    existing_bytes = sum((8 + len(entry[4]) + 3) & ~3 for entry in entries)
-    assert existing_bytes + needed <= tail_offset
-
-    result = bytearray(len(original))
-    result[tail_offset:] = original[tail_offset:]
-    offset = 0
-    for _, inode_number, _, entry_type, entry_name in entries:
-        record_length = (8 + len(entry_name) + 3) & ~3
-        struct.pack_into(
-            "<IHBB",
-            result,
-            offset,
-            inode_number,
-            record_length,
-            len(entry_name),
-            entry_type,
-        )
-        result[offset + 8 : offset + 8 + len(entry_name)] = entry_name
-        offset += record_length
-    insert_offset = offset
-    insert_record = tail_offset - insert_offset
-    struct.pack_into(
-        "<IHBB",
-        result,
-        insert_offset,
-        target_inode,
-        insert_record,
-        len(name),
-        file_type,
-    )
-    result[insert_offset + 8 : insert_offset + 8 + len(name)] = name
-    expected = _linear_directory_block_with_checksum(
-        superblock,
-        parent_inode,
-        parent_generation,
-        result,
-    )
-    final_entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        expected,
-    )
-    assert tuple(entry[4] for entry in final_entries[:-1]) == tuple(
-        entry[4] for entry in entries
-    )
-    assert final_entries[-1] == (
-        insert_offset,
-        target_inode,
-        insert_record,
-        file_type,
-        name,
-    )
-    return expected, insert_offset
-
-
 def _empty_directory_parent_afterimage(
     superblock: bytes,
     *,
@@ -77365,7 +78169,76 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
     assert trace == ()
 
 
-def _linear_directory_rename_afterimage(
+def _linear_directory_without_record(block: bytes, offset: int) -> bytearray:
+    """Take the record at OFFSET out of BLOCK as ext4_generic_delete_entry
+    does: the record before it, live or unused, absorbs its length and its
+    bytes are cleared, or as the block's first record it keeps its length
+    and becomes unused, its inode and every byte from its name length on
+    cleared."""
+    result = bytearray(block)
+    record_length = struct.unpack_from("<H", result, offset + 4)[0]
+    previous = None
+    position = 0
+    while position < offset:
+        previous = position
+        position += struct.unpack_from("<H", result, position + 4)[0]
+    assert position == offset
+    if previous is None:
+        result[offset : offset + 4] = bytes(4)
+        result[offset + 6 : offset + record_length] = bytes(record_length - 6)
+    else:
+        previous_length = struct.unpack_from("<H", result, previous + 4)[0]
+        struct.pack_into(
+            "<H", result, previous + 4, previous_length + record_length
+        )
+        result[offset : offset + record_length] = bytes(record_length)
+    return result
+
+
+def _linear_directory_with_record(
+    block: bytes, *, inode_number: int, name: bytes, file_type: int
+) -> tuple[bytearray, int] | None:
+    """Put NAME's record where the shared insert puts it, or return None.
+
+    The first record with room takes it: a live record's slack past its
+    used length, which the live record gives up, or an unused record,
+    which keeps the rest as an unused record when that rest holds a
+    header.
+    """
+    result = bytearray(block)
+    tail_offset = len(result) - 12
+    needed = (8 + len(name) + 3) & ~3
+    offset = 0
+    while offset < tail_offset:
+        number, record_length, name_length, _ = struct.unpack_from(
+            "<IHBB", result, offset
+        )
+        if number:
+            used = (8 + name_length + 3) & ~3
+            if record_length - used >= needed:
+                struct.pack_into("<H", result, offset + 4, used)
+                at, allocated = offset + used, record_length - used
+                break
+        elif record_length >= needed:
+            at, allocated = offset, record_length
+            if record_length - needed >= 12:
+                allocated = needed
+                rest = record_length - needed
+                result[at + needed : at + record_length] = bytes(rest)
+                struct.pack_into("<IHBB", result, at + needed, 0, rest, 0, 0)
+            break
+        offset += record_length
+    else:
+        return None
+    result[at : at + allocated] = bytes(allocated)
+    struct.pack_into(
+        "<IHBB", result, at, inode_number, allocated, len(name), file_type
+    )
+    result[at + 8 : at + 8 + len(name)] = name
+    return result, at
+
+
+def _linear_directory_move_afterimage(
     superblock: bytes,
     *,
     parent_inode: int,
@@ -77375,48 +78248,40 @@ def _linear_directory_rename_afterimage(
     old_name: bytes,
     new_name: bytes,
 ) -> tuple[bytes, int]:
-    """Independently rewrite one linear-dirent name inside its record."""
+    """Rename inside one linear block as the shared engine does: the
+    source's record leaves first and the new name then takes the first
+    record with room in the block that leaves."""
     assert old_name and new_name and old_name != new_name
-    assert len(new_name) <= 255
-    assert b"/" not in new_name and b"\x00" not in new_name
     entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        original,
+        superblock, parent_inode, parent_generation, original
     )
-    old_entries = [
+    sources = [
         entry
         for entry in entries
         if entry[1] == target_inode and entry[4] == old_name
     ]
-    assert len(old_entries) == 1
+    assert len(sources) == 1
     assert all(entry[4] != new_name for entry in entries)
-    offset, _, record_length, file_type, _ = old_entries[0]
-    needed = (8 + len(new_name) + 3) & ~3
-    assert needed <= record_length
-
-    result = bytearray(original)
-    result[offset + 8 : offset + record_length] = bytes(record_length - 8)
-    result[offset + 6] = len(new_name)
-    result[offset + 8 : offset + 8 + len(new_name)] = new_name
+    offset, _, _, file_type, _ = sources[0]
+    placed = _linear_directory_with_record(
+        _linear_directory_without_record(original, offset),
+        inode_number=target_inode,
+        name=new_name,
+        file_type=file_type,
+    )
+    assert placed is not None
+    result, new_offset = placed
     expected = _linear_directory_block_with_checksum(
-        superblock,
-        parent_inode,
-        parent_generation,
-        result,
+        superblock, parent_inode, parent_generation, result
     )
     final_entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        expected,
+        superblock, parent_inode, parent_generation, expected
     )
     assert all(entry[4] != old_name for entry in final_entries)
-    assert [entry for entry in final_entries if entry[4] == new_name] == [
-        (offset, target_inode, record_length, file_type, new_name)
+    assert [entry[1] for entry in final_entries if entry[4] == new_name] == [
+        target_inode
     ]
-    return expected, offset
+    return expected, new_offset
 
 
 def _linear_directory_with_fragmented_free_records(
@@ -77500,96 +78365,6 @@ def _linear_directory_with_fragmented_free_records(
         )
     )
     return prepared, tuple(free_records)
-
-
-def _linear_directory_compacting_rename_afterimage(
-    superblock: bytes,
-    *,
-    parent_inode: int,
-    parent_generation: int,
-    original: bytes,
-    target_inode: int,
-    old_name: bytes,
-    new_name: bytes,
-) -> tuple[bytes, int]:
-    """Independently compact live dirents and append the renamed source."""
-    assert old_name and new_name and old_name != new_name
-    assert len(new_name) <= 255
-    assert b"/" not in new_name and b"\x00" not in new_name
-    entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        original,
-    )
-    source_entries = [
-        entry
-        for entry in entries
-        if entry[1] == target_inode and entry[4] == old_name
-    ]
-    assert len(source_entries) == 1
-    assert all(entry[4] != new_name for entry in entries)
-    source_type = source_entries[0][3]
-    assert source_type == 1
-    kept = tuple(entry for entry in entries if entry != source_entries[0])
-    tail_offset = len(original) - 12
-    needed = (8 + len(new_name) + 3) & ~3
-    kept_bytes = sum((8 + len(entry[4]) + 3) & ~3 for entry in kept)
-    assert kept_bytes + needed <= tail_offset
-
-    result = bytearray(len(original))
-    result[tail_offset:] = original[tail_offset:]
-    offset = 0
-    for _, inode_number, _, file_type, name in kept:
-        record_length = (8 + len(name) + 3) & ~3
-        struct.pack_into(
-            "<IHBB",
-            result,
-            offset,
-            inode_number,
-            record_length,
-            len(name),
-            file_type,
-        )
-        result[offset + 8 : offset + 8 + len(name)] = name
-        offset += record_length
-    rename_offset = offset
-    rename_record = tail_offset - rename_offset
-    struct.pack_into(
-        "<IHBB",
-        result,
-        rename_offset,
-        target_inode,
-        rename_record,
-        len(new_name),
-        source_type,
-    )
-    result[
-        rename_offset + 8 : rename_offset + 8 + len(new_name)
-    ] = new_name
-    expected = _linear_directory_block_with_checksum(
-        superblock,
-        parent_inode,
-        parent_generation,
-        result,
-    )
-    final_entries = _checked_linear_directory_entries(
-        superblock,
-        parent_inode,
-        parent_generation,
-        expected,
-    )
-    assert tuple(entry[4] for entry in final_entries[:-1]) == tuple(
-        entry[4] for entry in kept
-    )
-    assert final_entries[-1] == (
-        rename_offset,
-        target_inode,
-        rename_record,
-        source_type,
-        new_name,
-    )
-    return expected, rename_offset
 
 
 def _linear_directory_with_appended_aliases(
@@ -78010,7 +78785,13 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
     staged_public_indexed_root_growth_live_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """RENAME compacts indexed leaves and rebinds an indexed new parent."""
+    """RENAME moves names between leaves of a level-one HTree and into it.
+
+    new.txt leaves its leaf, its record joining its predecessor there, and
+    mkdir-depth1 takes the slack after the last record of the leaf its hash
+    routes to.  sparse.bin then leaves the linear /fixture, whose record
+    before it absorbs it, and takes the slack after mkdir-depth1.
+    """
     case = staged_public_indexed_root_growth_live_fixture
     path = case["image"]
     block_size = case["block_size"]
@@ -78223,28 +79004,37 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
     assert all(entry[4] != b"mkdir-depth1" for entry in source_entries)
     assert all(entry[4] != b"new.txt" for entry in destination_entries)
     assert all(entry[4] != b"mkdir-depth1" for entry in destination_entries)
-    expected_source_leaf, remove_offset = (
-        _linear_directory_compact_remove_afterimage(
-            super_before,
-            parent_inode=parent_number,
-            parent_generation=parent_generation,
-            original=source_leaf_before,
-            target_inode=target_number,
-            name=b"new.txt",
-        )
+    expected_source_leaf = _linear_directory_block_with_checksum(
+        super_before,
+        parent_number,
+        parent_generation,
+        _linear_directory_without_record(source_leaf_before, 312),
     )
-    expected_destination_leaf, insert_offset = (
-        _linear_directory_compact_append_afterimage(
-            super_before,
-            parent_inode=parent_number,
-            parent_generation=parent_generation,
-            original=destination_leaf_before,
-            target_inode=target_number,
-            name=b"mkdir-depth1",
-        )
+    placed = _linear_directory_with_record(
+        destination_leaf_before,
+        inode_number=target_number,
+        name=b"mkdir-depth1",
+        file_type=1,
     )
-    assert remove_offset == 312
+    assert placed is not None
+    expected_destination_leaf = _linear_directory_block_with_checksum(
+        super_before, parent_number, parent_generation, placed[0]
+    )
+    insert_offset = placed[1]
     assert insert_offset == 504
+    assert _checked_linear_directory_entries(
+        super_before, parent_number, parent_generation, expected_source_leaf
+    ) == tuple(
+        (
+            offset,
+            number,
+            length + 700 if offset + length == 312 else length,
+            kind,
+            name,
+        )
+        for offset, number, length, kind, name in source_entries
+        if name != b"new.txt"
+    )
     assert [
         entry
         for entry in _checked_linear_directory_entries(
@@ -78264,42 +79054,35 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
     assert [entry for entry in cross_entries if entry[4] == b"sparse.bin"] == [
         (104, cross_target_number, 20, 1, b"sparse.bin")
     ]
-    expected_cross_directory, cross_remove_offset = (
-        _linear_directory_compact_remove_afterimage(
-            super_before,
-            parent_inode=cross_parent_number,
-            parent_generation=cross_parent_generation,
-            original=cross_directory_before,
-            target_inode=cross_target_number,
-            name=b"sparse.bin",
-        )
+    expected_cross_directory = _linear_directory_block_with_checksum(
+        super_before,
+        cross_parent_number,
+        cross_parent_generation,
+        _linear_directory_without_record(cross_directory_before, 104),
     )
-    expected_destination_final, cross_insert_offset = (
-        _linear_directory_compact_append_afterimage(
-            super_before,
-            parent_inode=parent_number,
-            parent_generation=parent_generation,
-            original=expected_destination_leaf,
-            target_inode=cross_target_number,
-            name=cross_name,
-        )
+    placed = _linear_directory_with_record(
+        expected_destination_leaf,
+        inode_number=cross_target_number,
+        name=cross_name,
+        file_type=1,
     )
-    assert cross_remove_offset == 104
+    assert placed is not None
+    expected_destination_final = _linear_directory_block_with_checksum(
+        super_before, parent_number, parent_generation, placed[0]
+    )
+    cross_insert_offset = placed[1]
     expected_cross_entries = _checked_linear_directory_entries(
         super_before,
         cross_parent_number,
         cross_parent_generation,
         expected_cross_directory,
     )
-    assert all(entry[4] != b"sparse.bin" for entry in expected_cross_entries)
-    assert expected_cross_entries[6] == (
-        104,
-        18,
-        24,
-        7,
-        b"absolute-link",
+    assert cross_entries[5] == (84, 16, 20, 7, b"slow-link")
+    assert expected_cross_entries == tuple(
+        (offset, number, length + 20 if offset == 84 else length, kind, name)
+        for offset, number, length, kind, name in cross_entries
+        if name != b"sparse.bin"
     )
-    assert expected_cross_entries[-1] == (364, 32, 648, 5, b"fifo")
     assert cross_insert_offset == 524
     assert [
         entry
@@ -78416,10 +79199,12 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
     expected_cross_parent_home[
         cross_parent_block_offset : cross_parent_block_offset + inode_size
     ] = expected_cross_parent
+    # The source's record and the leaf it leaves, then the parent's record
+    # and the leaf the new name enters.
     expected_home_order = (
         target_home,
-        parent_home,
         source_leaf_home,
+        parent_home,
         destination_leaf_home,
     )
     expected_homes = (
@@ -78428,15 +79213,17 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
         expected_source_leaf,
         expected_destination_leaf,
     )
-    assert expected_home_order == (283, 281, 1357, 1498)
+    assert expected_home_order == (283, 1357, 281, 1498)
+    # The source's record, the old parent's record and block, then the new
+    # parent's record and leaf.
     cross_expected_home_order = (
         cross_target_home,
         cross_parent_home,
-        parent_home,
         cross_directory_home,
+        parent_home,
         destination_leaf_home,
     )
-    assert cross_expected_home_order == (279, 278, 281, 1345, 1498)
+    assert cross_expected_home_order == (279, 278, 1345, 281, 1498)
     final_home_images = {
         target_home: bytes(expected_target_home),
         parent_home: bytes(expected_parent_home_final),
@@ -78702,7 +79489,7 @@ def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
         # operations under one source load: the depth-one same-parent leaf hop
         # and a linear-to-indexed cross-parent hop. Crash, external, and stable
         # evidence remains compositional at this draft closure. The completed
-        # combined path measures 2,869,457,042 steps under this 3.6B watchdog.
+        # combined path measures 261,080,663 steps under this 3.6B watchdog.
         max_steps=3_600_000_000,
     )
     _assert_emitted(output, "EXT4-INDEXED-RENAME-DEPTH-ONE")
@@ -78818,7 +79605,11 @@ def staged_public_rename_fixture(
     jbd2_toolchain: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
-    """Rename one open regular-file dentry inside its existing dirent."""
+    """Rename one open regular file inside its parent.
+
+    Its record leaves first and the new name, as long as the old one,
+    takes the space it left, so the block keeps its layout.
+    """
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -78938,7 +79729,7 @@ def staged_public_rename_fixture(
         inode_block_offset : inode_block_offset + inode_size
     ] = expected_inode
     expected_inode_home = bytes(expected_inode_home_buffer)
-    expected_directory, rename_offset = _linear_directory_rename_afterimage(
+    expected_directory, rename_offset = _linear_directory_move_afterimage(
         superblock,
         parent_inode=parent_number,
         parent_generation=struct.unpack_from("<I", parent_inode, 0x64)[0],
@@ -79026,9 +79817,9 @@ def staged_public_rename_fixture(
                 _forth_conjunction(
                     [
                         "_RN-CLOCK-CALLS @ 1 =",
-                        f"_XU-TARGET-HOME @ {inode_home} =",
-                        f"_XU-PARENT-HOME @ {parent_home} =",
-                        f"_XU-DIR-HOME @ {directory_home} =",
+                        f"_XC-INODE-HOME @ {inode_home} =",
+                        f"_XC-PARENT-HOME @ {parent_home} =",
+                        f"_XC-DIR-HOME @ {directory_home} =",
                         "_RN-XC-PLAN-SCRUBBED",
                         "_RN-HOMES 2 =",
                         "_RN-WRITER _RN-PROFILE-BASE =",
@@ -79047,22 +79838,7 @@ def staged_public_rename_fixture(
             (
                 _forth_conjunction(
                     [
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XU-SHARED-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        "_XU-RENAME-SCAN @ 0=",
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -79240,12 +80016,19 @@ def test_staged_vfs_rename_same_parent_open_file_and_external_oracles(
     assert trace
 
 
-def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
+def test_staged_vfs_rename_converts_fragmented_one_block_directory(
     writer_activation_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """A longer name compacts live dirents and fragmented aggregate slack."""
+    """A longer name converts a block whose slack is only in small holes.
+
+    The source's record joins its predecessor, which still cannot take the
+    136-byte record, and no hole can either, so the linear block becomes a
+    depth-zero HTree as an insert's conversion builds one: the block keeps
+    `.` and `..` as the root and its four live records, with the new name,
+    split by hash across two new leaves.
+    """
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -79345,23 +80128,39 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
         == (0, record_length, 0, 0)
         for offset, record_length in free_records
     )
-    expected_directory, rename_offset = (
-        _linear_directory_compacting_rename_afterimage(
+    removed = _linear_directory_without_record(prepared_directory, 44)
+    records = tuple(
+        entry
+        for entry in _checked_linear_directory_entries(
             superblock,
-            parent_inode=parent_number,
-            parent_generation=parent_generation,
-            original=prepared_directory,
-            target_inode=inode_number,
-            old_name=b"hardlink.txt",
-            new_name=new_name_bytes,
+            parent_number,
+            parent_generation,
+            _linear_directory_block_with_checksum(
+                superblock, parent_number, parent_generation, removed
+            ),
         )
+        if entry[4] not in (b".", b"..")
     )
-    assert rename_offset == 104
-    assert struct.unpack_from("<IHBB", expected_directory, rename_offset) == (
-        inode_number,
-        908,
-        len(new_name_bytes),
-        1,
+    assert tuple(entry[0] for entry in records) == (24, 64, 84, 104)
+    assert records[0][2] == 40
+    kept_leaf, moved_leaf, separator = _dx_expected_split(
+        superblock,
+        inode_number=parent_number,
+        generation=parent_generation,
+        leaf=removed,
+        name=new_name_bytes,
+        entry_inode=inode_number,
+        file_type=1,
+        base=24,
+        records=records,
+    )
+    expected_root = _dx_converted_root(
+        superblock,
+        inode_number=parent_number,
+        parent_number=2,
+        generation=parent_generation,
+        hash_version=superblock[0xFC],
+        separator=separator,
     )
     input_patches = source_patches + (
         (directory_home * block_size, prepared_directory),
@@ -79415,7 +80214,7 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
             *_staged_rename_attempt_forth(
                 "_RC",
                 epoch_ms=epoch_ms,
-                metadata_capacity=2,
+                metadata_capacity=8,
                 new_name=new_name,
             ),
             _forth_xc_plan_scrubbed("_RC-XC-PLAN-SCRUBBED", "_RC-CTX"),
@@ -79487,11 +80286,11 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
                 _forth_conjunction(
                     [
                         "_RC-CLOCK-CALLS @ 1 =",
-                        f"_XU-TARGET-HOME @ {inode_home} =",
-                        f"_XU-PARENT-HOME @ {parent_home} =",
-                        f"_XU-DIR-HOME @ {directory_home} =",
+                        f"_XC-INODE-HOME @ {inode_home} =",
+                        f"_XC-PARENT-HOME @ {parent_home} =",
+                        f"_XC-DIR-HOME @ {directory_home} =",
                         "_RC-XC-PLAN-SCRUBBED",
-                        "_RC-HOMES 2 =",
+                        "_RC-HOMES 7 =",
                         "_RC-WRITER _RC-PROFILE-BASE =",
                         "_RC-WRITER _EXT4-JWR-IDLE-CLEAN?",
                         "_RC-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
@@ -79508,22 +80307,7 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
             (
                 _forth_conjunction(
                     [
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XU-SHARED-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        "_XU-RENAME-SCAN @ 0=",
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -79550,32 +80334,67 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
     ):
         _assert_emitted(output, marker)
     assert trace[: len(activation_trace)] == activation_trace
-    assert _write_ordinals_for_ext4_home(
-        trace, inode_home, block_size=block_size
-    ) == (16,)
-    assert _write_ordinals_for_ext4_home(
-        trace, directory_home, block_size=block_size
-    ) == (17,)
+    final_superblock, final_parent, _ = _ext4_inode_record(
+        backing, parent_number
+    )
+    _, final_inode, _ = _ext4_inode_record(backing, inode_number)
+    leaf_homes = tuple(
+        _extent_root_physical(final_parent, logical) for logical in (1, 2)
+    )
+    assert _ext4_block_allocation_state(path, leaf_homes) == {
+        home: False for home in leaf_homes
+    }
+    layout = _ext4_recovery_layout(path)
+    # The checkpoint writes the seven homes in one run; the primary
+    # superblock is also written at activation and when the journal resets.
+    checkpoint = []
+    for home in (
+        inode_home,
+        directory_home,
+        *leaf_homes,
+        layout["block_bitmap"],
+        layout["primary_gdt"],
+    ):
+        ordinals = _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        )
+        assert len(ordinals) == 1
+        checkpoint.append(ordinals[0])
+    super_ordinals = _write_ordinals_for_ext4_home(
+        trace, layout["primary_super"], block_size=block_size
+    )
+    assert len(super_ordinals) == 3 and super_ordinals[0] == 4
+    checkpoint.append(super_ordinals[1])
+    assert sorted(checkpoint) == list(
+        range(min(checkpoint), min(checkpoint) + 7)
+    )
     assert not _write_ordinals_for_ext4_home(
         trace, data_block, block_size=block_size
     )
     assert not _write_ordinals_for_ext4_home(
         trace, xattr_block, block_size=block_size
     )
-
-    final_superblock, final_parent, _ = _ext4_inode_record(
-        backing, parent_number
-    )
-    _, final_inode, _ = _ext4_inode_record(backing, inode_number)
     assert final_superblock == _ext4_super_with_checksum(final_superblock)
-    assert final_parent == bytes(expected_parent)
     assert final_inode == bytes(expected_source)
-    assert _read_ext4_home(
-        backing, inode_home, block_size=block_size
-    ) == expected_inode_home
+    assert struct.unpack_from("<I", final_parent, 0x20)[0] == 0x81000
+    assert struct.unpack_from("<I", final_parent, 0x04)[0] == 3 * block_size
+    assert struct.unpack_from("<I", final_parent, 0x1C)[0] == 6
+    assert struct.unpack_from("<H", final_parent, 0x1A)[0] == 2
+    assert final_parent[0x0C:0x14] == expected_parent[0x0C:0x14]
+    assert final_parent[0x84:0x8C] == expected_parent[0x84:0x8C]
+    assert final_parent == _inode_with_checksum(
+        superblock, parent_number, final_parent
+    )
+    assert _extent_root_physical(final_parent, 0) == directory_home
     assert _read_ext4_home(
         backing, directory_home, block_size=block_size
-    ) == expected_directory
+    ) == expected_root
+    assert _read_ext4_home(
+        backing, leaf_homes[0], block_size=block_size
+    ) == kept_leaf
+    assert _read_ext4_home(
+        backing, leaf_homes[1], block_size=block_size
+    ) == moved_leaf
     assert _read_ext4_home(
         backing, data_block, block_size=block_size
     ) == original_data
@@ -79589,8 +80408,8 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
     assert struct.unpack_from("<I", final_inode, 0x68)[0] == xattr_block
     assert _extent_root_physical(final_inode, 0) == data_block
     assert _ext4_block_allocation_state(
-        backing, (data_block, xattr_block)
-    ) == {data_block: True, xattr_block: True}
+        backing, (data_block, xattr_block, *leaf_homes)
+    ) == {home: True for home in (data_block, xattr_block, *leaf_homes)}
     assert _ext4_inode_allocation_state(backing, (inode_number,)) == {
         inode_number: True
     }
@@ -79600,23 +80419,19 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
     final_free_inodes = struct.unpack_from(
         "<I", final_superblock, 0x10
     )[0] | (struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32)
-    assert final_free_blocks == free_blocks_before
+    assert final_free_blocks == free_blocks_before - 2
     assert final_free_inodes == free_inodes_before
-    assert _ext4_group_counts(backing, 0) == group_counts_before
 
-    final_entries = _checked_linear_directory_entries(
-        final_superblock,
-        parent_number,
-        struct.unpack_from("<I", final_parent, 0x64)[0],
-        expected_directory,
+    final_entries = tuple(
+        entry
+        for leaf in (kept_leaf, moved_leaf)
+        for entry in _checked_linear_directory_entries(
+            final_superblock, parent_number, parent_generation, leaf
+        )
     )
     assert all(entry[4] != b"hardlink.txt" for entry in final_entries)
-    assert final_entries[-1] == (
-        rename_offset,
-        inode_number,
-        908,
-        1,
-        new_name_bytes,
+    assert sorted(entry[4] for entry in final_entries) == sorted(
+        (b"payload.txt", b"fast-link", b"slow-link", b"sparse.bin", new_name_bytes)
     )
     listing = subprocess.run(
         [str(debugfs), "-R", "ls -l /fixture", str(backing)],
@@ -79685,7 +80500,11 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
     jbd2_toolchain: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """Rename a data-bearing last link whose predecessor is unused."""
+    """Rename a data-bearing last link whose predecessor is unused.
+
+    The unused record absorbs the source's record, and the new name then
+    takes the front of that unused record, which keeps the rest unused.
+    """
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -79851,7 +80670,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
         parent_block_offset : parent_block_offset + inode_size
     ] = expected_parent
     expected_parent_home = bytes(expected_parent_home_buffer)
-    expected_directory, rename_offset = _linear_directory_rename_afterimage(
+    expected_directory, rename_offset = _linear_directory_move_afterimage(
         superblock,
         parent_inode=parent_number,
         parent_generation=parent_generation,
@@ -79860,7 +80679,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
         old_name=b"sparse.bin",
         new_name=b"renamed.bin",
     )
-    assert rename_offset == 116
+    assert rename_offset == 104
     expected_file = (
         original_first_data + bytes(block_size) + original_last_data
     )
@@ -79947,9 +80766,9 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
                 _forth_conjunction(
                     [
                         "_R1-CLOCK-CALLS @ 1 =",
-                        f"_XU-TARGET-HOME @ {inode_home} =",
-                        f"_XU-PARENT-HOME @ {parent_home} =",
-                        f"_XU-DIR-HOME @ {directory_home} =",
+                        f"_XC-INODE-HOME @ {inode_home} =",
+                        f"_XC-PARENT-HOME @ {parent_home} =",
+                        f"_XC-DIR-HOME @ {directory_home} =",
                         "_R1-XC-PLAN-SCRUBBED",
                         "_R1-HOMES 3 =",
                         "_R1-WRITER _R1-PROFILE-BASE =",
@@ -79968,27 +80787,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
             (
                 _forth_conjunction(
                     [
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XU-SHARED-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-CHILD-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        "_XU-RENAME-SCAN @ 0=",
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -80083,15 +80882,15 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
         struct.unpack_from("<I", final_parent, 0x64)[0],
         expected_directory,
     )
-    assert struct.unpack_from("<IHBB", expected_directory, 104) == (
+    assert struct.unpack_from("<IHBB", expected_directory, 124) == (
         0,
-        12,
+        888,
         0,
         0,
     )
     assert all(entry[4] != b"sparse.bin" for entry in final_entries)
     assert [entry for entry in final_entries if entry[4] == b"renamed.bin"] == [
-        (rename_offset, inode_number, 896, 1, b"renamed.bin")
+        (rename_offset, inode_number, 20, 1, b"renamed.bin")
     ]
 
     listing = subprocess.run(
@@ -80210,10 +81009,7 @@ def test_staged_vfs_rename_descriptor_tear_rolls_back_name_and_media(
                             "_RD-CTX _EXT4-C.RECOVERY + @ 0<>",
                             "_RD-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_RD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            (
-                                "_XR-NEW-NAME-SNAPSHOT 256 "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            *_XC_RENAME_SCRUBBED_FORTH,
                             *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
@@ -80375,10 +81171,7 @@ def test_staged_vfs_rename_directory_tear_replays_both_homes(
                             "_RH-CTX _EXT4-C.RECOVERY + @ 0<>",
                             "_RH-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_RH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            (
-                                "_XR-NEW-NAME-SNAPSHOT 256 "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            *_XC_RENAME_SCRUBBED_FORTH,
                             *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
@@ -80480,7 +81273,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
     writer_activation_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """Missing-clock, short-credit, and directory-source gates are zero-write."""
+    """Missing-clock and short-credit refusals write nothing."""
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     parent_number = 13
@@ -80529,10 +81322,6 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                 'S" /fixture" _RR-V VFS-RESOLVE? '
                 "CONSTANT _RR-D-IOR CONSTANT _RR-D"
             ),
-            (
-                'S" /" _RR-V VFS-RESOLVE? '
-                "CONSTANT _RR-ROOT-IOR CONSTANT _RR-ROOT"
-            ),
             "_RR-S D.VNODE @ CONSTANT _RR-VN",
             "_RR-D D.VNODE @ CONSTANT _RR-D-VN",
             "_RR-VN VN.NLINK @ CONSTANT _RR-OLD-NLINK",
@@ -80570,21 +81359,12 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
             ),
             "_RR-V V.LAST-IOR @ CONSTANT _RR-SC-LAST",
             (
-                'S" fixture-new" _RR-D _RR-ROOT VFS-RN-NOREPLACE '
-                "_RR-V VFS-RENAME-AT CONSTANT _RR-DIR-IOR"
-            ),
-            "_RR-V V.LAST-IOR @ CONSTANT _RR-DIR-LAST",
-            (
                 'S" /fixture/hardlink.txt" _RR-V VFS-RESOLVE? '
                 "CONSTANT _RR-AFTER-S-IOR CONSTANT _RR-AFTER-S"
             ),
             (
                 'S" /fixture/renamed.txt" _RR-V VFS-RESOLVE? '
                 "CONSTANT _RR-AFTER-R-IOR CONSTANT _RR-AFTER-R"
-            ),
-            (
-                'S" /fixture-new" _RR-V VFS-RESOLVE? '
-                "CONSTANT _RR-AFTER-D-IOR CONSTANT _RR-AFTER-D"
             ),
             "_RR-CTX _EXT4-C.J.WRITER + @ CONSTANT _RR-WRITER",
             (
@@ -80593,18 +81373,12 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                         "_RR-MOUNT-IOR 0=",
                         "_RR-S-IOR 0=",
                         "_RR-D-IOR 0=",
-                        "_RR-ROOT-IOR 0=",
                         "_RR-NC-IOR VFS-E-UNSUPPORTED =",
                         "_RR-NC-LAST _RR-NC-IOR =",
                         "_RR-CLOCK-IOR 0=",
                         "_RR-PROFILE-BIND-IOR 0=",
                         "_RR-SC-IOR VFS-E-NOSPC =",
                         "_RR-SC-LAST _RR-SC-IOR =",
-                        (
-                            "_RR-DIR-IOR EXT4-D-WRITE-POLICY "
-                            "_EXT4-UNSUPPORTED ="
-                        ),
-                        "_RR-DIR-LAST _RR-DIR-IOR =",
                         "_RR-CLOCK-CALLS @ 1 =",
                     ]
                 )
@@ -80618,11 +81392,6 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                         "_RR-AFTER-R 0=",
                         (
                             "_RR-AFTER-R-IOR VFS-IOR-REASON "
-                            "VFS-R-NOENT ="
-                        ),
-                        "_RR-AFTER-D 0=",
-                        (
-                            "_RR-AFTER-D-IOR VFS-IOR-REASON "
                             "VFS-R-NOENT ="
                         ),
                         "_RR-VN VN.NLINK @ _RR-OLD-NLINK =",
@@ -80656,13 +81425,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                         "_RR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_RR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_RR-V V.FLAGS @ VFS-F-RO AND 0=",
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XU-SHARED-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -80701,11 +81464,16 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
     ) == original_xattr
 
 
-def test_staged_vfs_rename_refuses_aggregate_compaction_nospace_without_writes(
+def test_staged_vfs_rename_conversion_beyond_the_writer_refuses_without_writes(
     writer_activation_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """A full canonical live layout rejects a longer name before staging."""
+    """A conversion larger than the bound writer refuses before any write.
+
+    The block holds live records only, so a longer name converts it, which
+    stages seven metadata images; the two-image profile ends the measuring
+    pass with NOSPC, and the journal stays inactive.
+    """
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     assert isinstance(path, Path)
@@ -80865,13 +81633,7 @@ def test_staged_vfs_rename_refuses_aggregate_compaction_nospace_without_writes(
                         "_RF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_RF-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_RF-V V.FLAGS @ VFS-F-RO AND 0=",
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XU-SHARED-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -80917,7 +81679,11 @@ def staged_cross_parent_rename_fixture(
     jbd2_toolchain: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
-    """Move one open regular-file name from /fixture into the root."""
+    """Move one open regular-file name from /fixture into the root.
+
+    Its record joins its predecessor in /fixture, and the root takes the
+    name in the slack after /fixture's record.
+    """
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -81033,37 +81799,43 @@ def staged_cross_parent_rename_fixture(
         new_parent_block_offset : new_parent_block_offset + inode_size
     ] == new_parent_inode
 
-    expected_old_directory, remove_offset = (
-        _linear_directory_compact_remove_afterimage(
-            superblock,
-            parent_inode=old_parent_number,
-            parent_generation=old_parent_generation,
-            original=original_old_directory,
-            target_inode=inode_number,
-            name=b"hardlink.txt",
-        )
-    )
-    expected_new_directory, insert_offset = (
-        _linear_directory_compact_append_afterimage(
+    old_entries = _checked_linear_directory_entries(
         superblock,
-        parent_inode=new_parent_number,
-        parent_generation=new_parent_generation,
-        original=original_new_directory,
-        target_inode=inode_number,
-        name=b"moved.txt",
-        )
+        old_parent_number,
+        old_parent_generation,
+        original_old_directory,
     )
+    remove_offset = next(
+        entry[0] for entry in old_entries if entry[4] == b"hardlink.txt"
+    )
+    expected_old_directory = _linear_directory_block_with_checksum(
+        superblock,
+        old_parent_number,
+        old_parent_generation,
+        _linear_directory_without_record(original_old_directory, remove_offset),
+    )
+    placed = _linear_directory_with_record(
+        original_new_directory,
+        inode_number=inode_number,
+        name=b"moved.txt",
+        file_type=1,
+    )
+    assert placed is not None
+    expected_new_directory = _linear_directory_block_with_checksum(
+        superblock, new_parent_number, new_parent_generation, placed[0]
+    )
+    insert_offset = placed[1]
     assert remove_offset == 44
     assert insert_offset == 60
     assert struct.unpack_from("<IHBB", expected_old_directory, 24) == (
         inode_number,
-        20,
+        40,
         len(b"payload.txt"),
         1,
     )
-    assert struct.unpack_from("<IHBB", expected_old_directory, 84) == (
+    assert struct.unpack_from("<IHBB", expected_old_directory, 104) == (
         17,
-        928,
+        908,
         len(b"sparse.bin"),
         1,
     )
@@ -81243,18 +82015,7 @@ def staged_cross_parent_rename_fixture(
             (
                 _forth_conjunction(
                     [
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XR-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XU-SHARED-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        "_XU-RENAME-SCAN @ 0=",
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -81281,11 +82042,13 @@ def staged_cross_parent_rename_fixture(
     ):
         _assert_emitted(output, marker)
     assert trace[: len(activation_trace)] == activation_trace
+    # The source's record and the old parent's, the block the source
+    # leaves, then the new parent's record and block.
     for home, ordinal in zip(
         (
             inode_home,
-            new_parent_home,
             old_directory_home,
+            new_parent_home,
             new_directory_home,
         ),
         range(18, 22),
@@ -81381,7 +82144,7 @@ def staged_cross_parent_rename_fixture(
     )
     assert all(entry[4] != b"hardlink.txt" for entry in old_entries)
     assert [entry for entry in old_entries if entry[4] == b"payload.txt"] == [
-        (24, inode_number, 20, 1, b"payload.txt")
+        (24, inode_number, 40, 1, b"payload.txt")
     ]
     assert [entry for entry in new_entries if entry[4] == b"moved.txt"] == [
         (insert_offset, inode_number, 952, 1, b"moved.txt")
@@ -81642,13 +82405,7 @@ def test_staged_vfs_rename_cross_parent_refuses_credit_and_existing_victim(
                         "_RG-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_RG-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_RG-V V.FLAGS @ VFS-F-RO AND 0=",
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XU-SHARED-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -82109,8 +82866,7 @@ def test_staged_vfs_rename_over_closed_final_file_releases_the_victim(
                     ),
                     "_RO-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_RO-V V.FLAGS @ VFS-F-RO AND 0=",
-                    "_XR-VICTIM-INO @ 0=",
-                    "_XR-VICTIM-SNAPSHOT _EXT4-MAX-INODE _EXT4-BYTES-ZERO?",
+                    *_XC_RENAME_SCRUBBED_FORTH,
                     *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
@@ -82605,7 +83361,7 @@ def test_staged_vfs_rename_over_refuses_unsupported_victims_without_writes(
                     "_RR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                     "_RR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                     "_RR-V V.ICOUNT @ _RR-OLD-ICOUNT =",
-                    "_XR-VICTIM-INO @ 0=",
+                    *_XC_RENAME_SCRUBBED_FORTH,
                     *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
             ),
@@ -82772,10 +83528,12 @@ def _rename_over_indexed_pick(
     leaves: dict[bytes, tuple[int, int, int, int, bool]],
     *,
     same_leaf: bool,
+    first: bool,
 ) -> tuple[bytes, bytes]:
-    """Choose a source after the first record of its leaf, and a victim."""
+    """Choose a source that opens its leaf, or a later one, and a victim in
+    the same leaf or another."""
     for source, (source_leaf, _, _, _, source_first) in sorted(leaves.items()):
-        if source_first:
+        if source_first != first:
             continue
         for victim, (victim_leaf, _, _, _, _) in sorted(leaves.items()):
             if victim == source:
@@ -82832,9 +83590,8 @@ def _rename_over_indexed_forth(
     parent_path: str,
     new_name: str,
     epoch_ms: int,
-    expect_success: bool,
 ) -> list[str]:
-    """One rename over an indexed folder's name, with its outcome checked."""
+    """One rename over an indexed folder's name, with its success checked."""
     lines = list(
         _staged_rename_over_attempt_forth(
             prefix,
@@ -82845,43 +83602,26 @@ def _rename_over_indexed_forth(
             new_name=new_name,
         )
     )
-    if expect_success:
-        checks = [
-            f"{prefix}-MOUNT-IOR 0=",
-            f"{prefix}-S-IOR 0=",
-            f"{prefix}-T-IOR 0=",
-            f"{prefix}-P-IOR 0=",
-            f"{prefix}-T-NLINK 1 =",
-            f"{prefix}-IOR 0=",
-            f"{prefix}-LAST-IOR 0=",
-            f"{prefix}-OLD 0=",
-            f"{prefix}-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
-            f"{prefix}-NEW-IOR 0=",
-            f"{prefix}-NEW {prefix}-S =",
-            f"{prefix}-BFREE-AFTER {prefix}-BFREE-BEFORE 1+ =",
-            f"{prefix}-FFREE-AFTER {prefix}-FFREE-BEFORE 1+ =",
-            f"{prefix}-WRITER _EXT4-JWR-IDLE-CLEAN?",
-            f"{prefix}-CTX _EXT4-C.O.ACTIVE + @ 0=",
-            f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0=",
-            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
-        ]
-    else:
-        checks = [
-            f"{prefix}-MOUNT-IOR 0=",
-            f"{prefix}-S-IOR 0=",
-            f"{prefix}-T-IOR 0=",
-            f"{prefix}-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
-            f"{prefix}-LAST-IOR {prefix}-IOR =",
-            f"{prefix}-OLD-IOR 0=",
-            f"{prefix}-OLD {prefix}-S =",
-            f"{prefix}-NEW-IOR 0=",
-            f"{prefix}-NEW {prefix}-T =",
-            f"{prefix}-HOMES 0=",
-            f"{prefix}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
-            f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
-            "_XR-VICTIM-INO @ 0=",
-            *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
-        ]
+    checks = [
+        f"{prefix}-MOUNT-IOR 0=",
+        f"{prefix}-S-IOR 0=",
+        f"{prefix}-T-IOR 0=",
+        f"{prefix}-P-IOR 0=",
+        f"{prefix}-T-NLINK 1 =",
+        f"{prefix}-IOR 0=",
+        f"{prefix}-LAST-IOR 0=",
+        f"{prefix}-OLD 0=",
+        f"{prefix}-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+        f"{prefix}-NEW-IOR 0=",
+        f"{prefix}-NEW {prefix}-S =",
+        f"{prefix}-BFREE-AFTER {prefix}-BFREE-BEFORE 1+ =",
+        f"{prefix}-FFREE-AFTER {prefix}-FFREE-BEFORE 1+ =",
+        f"{prefix}-WRITER _EXT4-JWR-IDLE-CLEAN?",
+        f"{prefix}-CTX _EXT4-C.O.ACTIVE + @ 0=",
+        f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0=",
+        *_XC_RENAME_SCRUBBED_FORTH,
+        *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
+    ]
     lines += [
         *_forth_accumulated_conjunction(f"{prefix}-ALL", checks),
         (
@@ -82901,19 +83641,29 @@ def _rename_over_indexed_forth(
 
 
 @pytest.mark.parametrize(
-    "same_leaf", (False, True), ids=("two-leaf", "one-leaf")
+    ("same_leaf", "first"),
+    ((False, False), (True, False), (True, True)),
+    ids=("two-leaf", "one-leaf", "first-record"),
 )
 def test_staged_vfs_rename_over_inside_an_indexed_folder(
     staged_rename_over_indexed_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
     tmp_path: Path,
     same_leaf: bool,
+    first: bool,
 ) -> None:
-    """A rename over a name in an htree folder rewrites only its leaves."""
+    """A rename over a name in an htree folder rewrites only its leaves.
+
+    In the first-record case the source opens its leaf, so its record
+    stays there unused while the victim's record in the same leaf takes
+    the source's inode, and that one block takes both edits.
+    """
     fixture = staged_rename_over_indexed_fixture
     leaves = fixture["leaves"]
     assert isinstance(leaves, dict)
-    source, victim = _rename_over_indexed_pick(leaves, same_leaf=same_leaf)
+    source, victim = _rename_over_indexed_pick(
+        leaves, same_leaf=same_leaf, first=first
+    )
     source_number = leaves[source][2]
     victim_number = leaves[victim][2]
     backing = tmp_path / "staged-rename-over-indexed.img"
@@ -82927,7 +83677,6 @@ def test_staged_vfs_rename_over_inside_an_indexed_folder(
             parent_path="/many",
             new_name=victim.decode(),
             epoch_ms=3_000_005_012_345,
-            expect_success=True,
         ),
         patches=fixture["source_patches"],
         capture_media=backing,
@@ -82945,39 +83694,6 @@ def test_staged_vfs_rename_over_inside_an_indexed_folder(
         victim_number=victim_number,
         jbd2_toolchain=jbd2_toolchain,
     )
-
-
-def test_staged_vfs_rename_over_refuses_a_first_leaf_source_without_writes(
-    staged_rename_over_indexed_fixture: dict[str, object],
-    tmp_path: Path,
-) -> None:
-    """A source with no predecessor in its leaf keeps the unlink gate."""
-    fixture = staged_rename_over_indexed_fixture
-    leaves = fixture["leaves"]
-    assert isinstance(leaves, dict)
-    source = next(name for name, entry in sorted(leaves.items()) if entry[4])
-    victim = next(
-        name for name, entry in sorted(leaves.items()) if name != source
-    )
-    backing = tmp_path / "staged-rename-over-first-leaf.img"
-    output, trace, _ = run_recovery_forth(
-        fixture["image"],
-        backing,
-        _rename_over_indexed_forth(
-            "_RF",
-            source_path="/many/" + source.decode(),
-            victim_path="/many/" + victim.decode(),
-            parent_path="/many",
-            new_name=victim.decode(),
-            epoch_ms=3_000_005_123_456,
-            expect_success=False,
-        ),
-        patches=fixture["source_patches"],
-        capture_media=backing,
-        max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
-    )
-    _assert_emitted(output, "EXT4-RENAME-OVER-INDEXED")
-    assert trace == ()
 
 
 def test_staged_vfs_rename_over_across_folders(
@@ -83005,7 +83721,6 @@ def test_staged_vfs_rename_over_across_folders(
             parent_path="/many",
             new_name=victim.decode(),
             epoch_ms=3_000_005_234_567,
-            expect_success=True,
         ),
         patches=fixture["source_patches"],
         capture_media=backing,
@@ -83143,10 +83858,7 @@ def test_staged_vfs_rename_cross_parent_descriptor_tear_rolls_back_all_homes(
                             "_RY-CTX _EXT4-C.RECOVERY + @ 0<>",
                             "_RY-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_RY-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            (
-                                "_XR-NEW-NAME-SNAPSHOT 256 "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            *_XC_RENAME_SCRUBBED_FORTH,
                             *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
@@ -83334,10 +84046,7 @@ def test_staged_vfs_rename_cross_parent_final_home_tear_replays_four_homes(
                             "_RZ-CTX _EXT4-C.RECOVERY + @ 0<>",
                             "_RZ-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_RZ-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            (
-                                "_XR-NEW-NAME-SNAPSHOT 256 "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            *_XC_RENAME_SCRUBBED_FORTH,
                             *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
@@ -84247,7 +84956,12 @@ def staged_cross_parent_directory_rename_fixture(
     jbd2_toolchain: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
-    """Move inode 33 beneath inode 34 with five metadata credits."""
+    """Move inode 33 beneath inode 34 with five metadata credits.
+
+    The root's record for it joins its predecessor, /landing-dir takes the
+    name in the slack after its `..`, and the moved directory's block 0
+    names inode 34 in its `..`.
+    """
     preimage = staged_directory_rename_preimage_fixture
     path = preimage["source"]
     debugfs = jbd2_toolchain["debugfs"]
@@ -84342,27 +85056,30 @@ def staged_cross_parent_directory_rename_fixture(
     assert struct.unpack_from("<I", landing_inode, 0x68)[0] == 0
     assert struct.unpack_from("<I", root_inode, 0x68)[0] == 0
 
-    expected_root_directory, remove_offset = (
-        _linear_directory_compact_remove_afterimage(
-            superblock,
-            parent_inode=root_number,
-            parent_generation=root_generation,
-            original=original_root_directory,
-            target_inode=source_number,
-            name=b"created-dir",
+    remove_offset = next(
+        entry[0]
+        for entry in _checked_linear_directory_entries(
+            superblock, root_number, root_generation, original_root_directory
         )
+        if entry[1] == source_number and entry[4] == b"created-dir"
     )
-    expected_landing_directory, insert_offset = (
-        _linear_directory_compact_append_afterimage(
-            superblock,
-            parent_inode=landing_number,
-            parent_generation=landing_generation,
-            original=original_landing_directory,
-            target_inode=source_number,
-            name=b"moved-dir",
-            file_type=2,
-        )
+    expected_root_directory = _linear_directory_block_with_checksum(
+        superblock,
+        root_number,
+        root_generation,
+        _linear_directory_without_record(original_root_directory, remove_offset),
     )
+    placed = _linear_directory_with_record(
+        original_landing_directory,
+        inode_number=source_number,
+        name=b"moved-dir",
+        file_type=2,
+    )
+    assert placed is not None
+    expected_landing_directory = _linear_directory_block_with_checksum(
+        superblock, landing_number, landing_generation, placed[0]
+    )
+    insert_offset = placed[1]
     expected_source_directory = _empty_directory_parent_afterimage(
         superblock,
         inode_number=source_number,
@@ -84371,7 +85088,7 @@ def staged_cross_parent_directory_rename_fixture(
         old_parent=root_number,
         new_parent=landing_number,
     )
-    assert remove_offset >= 0
+    assert remove_offset >= 24
     assert insert_offset == 24
     assert struct.unpack_from("<IHBB", expected_landing_directory, 24) == (
         source_number,
@@ -84544,30 +85261,7 @@ def staged_cross_parent_directory_rename_fixture(
             (
                 _forth_conjunction(
                     [
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XR-OLD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XR-NP-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XR-NP-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XR-CHILD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XU-CHILD-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        "_XU-RENAME-SCAN @ 0=",
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -84897,11 +85591,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_refusals(
                         "_DRG-HOMES 0=",
                         "_DRG-WRITER _DRG-PROFILE-BASE =",
                         "_DRG-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XR-CHILD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        *_XC_RENAME_SCRUBBED_FORTH,
                         *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                     ]
                 )
@@ -84985,12 +85675,6 @@ def test_staged_vfs_rename_cross_parent_empty_directory_refusals(
             "_DRE-V V.LAST-IOR @ CONSTANT _DRE-TWO-DREF-LAST",
             "1 _DRE-VN VN.DREFS !",
             (
-                'S" local-dir" _DRE-S _DRE-OP '
-                "VFS-RN-NOREPLACE _DRE-V VFS-RENAME-AT "
-                "CONSTANT _DRE-SAME-IOR"
-            ),
-            "_DRE-V V.LAST-IOR @ CONSTANT _DRE-SAME-LAST",
-            (
                 'S" landing-dir" _DRE-S _DRE-OP '
                 "VFS-RN-NOREPLACE _DRE-V VFS-RENAME-AT "
                 "CONSTANT _DRE-EXISTS-IOR"
@@ -85021,15 +85705,10 @@ def test_staged_vfs_rename_cross_parent_empty_directory_refusals(
                         "_DRE-ZERO-DREF-LAST _DRE-ZERO-DREF-IOR =",
                         "_DRE-TWO-DREF-IOR VFS-E-CONFLICT =",
                         "_DRE-TWO-DREF-LAST _DRE-TWO-DREF-IOR =",
-                        (
-                            "_DRE-SAME-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
-                        ),
-                        "_DRE-SAME-LAST _DRE-SAME-IOR =",
                         "_DRE-EXISTS-IOR VFS-E-EXISTS =",
-                        "_DRE-EXISTS-LAST _DRE-SAME-IOR =",
+                        "_DRE-EXISTS-LAST _DRE-TWO-DREF-IOR =",
                         "_DRE-CYCLE-IOR VFS-E-INVALID =",
-                        "_DRE-CYCLE-LAST _DRE-SAME-IOR =",
+                        "_DRE-CYCLE-LAST _DRE-TWO-DREF-IOR =",
                         "_DRE-CLOCK-CALLS @ 0=",
                         "_DRE-S IN.PARENT @ _DRE-OP =",
                         "_DRE-S IN.CHILD @ 0=",
@@ -85206,10 +85885,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_w7_rolls_back(
                             "_DRY-CTX _EXT4-C.RECOVERY + @ 0<>",
                             "_DRY-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_DRY-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            (
-                                "_XR-CHILD-DIR-AFTERIMAGE "
-                                "_EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?"
-                            ),
+                            *_XC_RENAME_SCRUBBED_FORTH,
                             *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
@@ -85430,10 +86106,7 @@ def test_staged_vfs_rename_cross_parent_empty_directory_w23_replays_child(
                             "_DRZ-CTX _EXT4-C.RECOVERY + @ 0<>",
                             "_DRZ-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_DRZ-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
-                            (
-                                "_XR-CHILD-DIR-AFTERIMAGE "
-                                "_EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?"
-                            ),
+                            *_XC_RENAME_SCRUBBED_FORTH,
                             *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                         ]
                     )
@@ -86251,9 +86924,9 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     # The insert's evidence is 17 cells and the hash authority, four blocks
     # of directory snapshots and work, the leaf's record map and its sorted
     # copy, the level-one walk's reference bitmap and the parent's inode.
-    # RENAME adds 21 scalar bindings, three blocks and one inode.  At the
-    # staged 1 KiB geometry a leaf holds at most 84 records and a level-one
-    # tree 15,622 blocks.
+    # RENAME adds the old parent's inode, the block the source's record
+    # leaves and a moved directory's block 0.  At the staged 1 KiB geometry
+    # a leaf holds at most 84 records and a level-one tree 15,622 blocks.
     records = (1024 - 12) // 12
     seen_bits = ((1024 - 40) // 8) * ((1024 - 16) // 8) + (1024 - 40) // 8 + 1
     assert (records, seen_bits) == (84, 15622)
@@ -86264,11 +86937,10 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         + 2 * records * 8
         + (seen_bits + 63) // 64 * 8
         + 256
-        + 21 * 8
-        + 3 * 1024
         + 256
+        + 2 * 1024
     )
-    assert evidence == 11312
+    assert evidence == 10120
     for layout_fragment in (
         "14 CELLS CONSTANT _XC-P.INSERT-EDIT",
         "15 CELLS CONSTANT _XC-P.INDEX-BASE-DEPTH",
@@ -86282,13 +86954,14 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-P.RECORDS _XC-RECORD-MAX CELLS + CONSTANT _XC-P.SORTED",
         "_XC-P.SORTED _XC-RECORD-MAX CELLS + CONSTANT _XC-P.SEEN",
         "CONSTANT _XC-P.PARENT-SNAPSHOT",
-        "CONSTANT _XC-P.RENAME-BASELINE",
-        "CONSTANT _XC-P.RENAME-HASH-BASELINE",
-        "CONSTANT _XC-P.RENAME-DEST-DIR-SNAPSHOT",
-        "CONSTANT _XC-P.RENAME-NP-ROOT-SNAPSHOT",
-        "CONSTANT _XC-P.RENAME-NP-NODE-SNAPSHOT",
-        "CONSTANT _XC-P.RENAME-NP-PARENT-SNAPSHOT",
-        "CONSTANT _XC-P.OP",
+        "_XC-P.PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +\n"
+        "    CONSTANT _XC-P.OLD-PARENT-SNAPSHOT",
+        "_XC-P.OLD-PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +\n"
+        "    CONSTANT _XC-P.SOURCE-SNAPSHOT",
+        "_XC-P.SOURCE-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE +\n"
+        "    CONSTANT _XC-P.CHILD-SNAPSHOT",
+        "_XC-P.CHILD-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE +\n"
+        "    CONSTANT _XC-P.OP",
         "_XC-P.OP CELL+ CONSTANT _XC-P.OWNER-CTX",
         "_XC-P.OWNER-CTX CELL+ CONSTANT _XC-P.HOME-COUNT",
         "CONSTANT _XC-P-SIZE",
@@ -86305,6 +86978,7 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-P.INDEX-BASE-SPLITTING",
         "_XC-P.INDEX-MAP-SNAPSHOT",
         "_XC-P.CONVERT-BASELINE",
+        "_XC-P.RENAME-",
     ):
         assert removed_field not in facade
     for admission_fragment in (
@@ -86325,6 +86999,7 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     stage = word_body("_EXT4-JTX-STAGE-NAMESPACE")
     measure = word_body("_XC-MEASURE")
     linear = word_body("_XC-AUTH-LINEAR-PARENT")
+    insert_edit = word_body("_XC-PLAN-INSERT-EDIT")
     convert = word_body("_XC-CONVERT-RECORDS")
     scrub = word_body("_XC-SCRUB")
     private = word_body("_XC-SCRUB-PRIVATE")
@@ -86379,8 +87054,14 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     assert "_XC-P-SCRUB" in scrub
     assert "_XC-SCRUB-PRIVATE" in scrub
     assert "0 _XC-WRITER ! 0 _XC-TX !" in private
-    assert "_XC-REQUIRE-HASH-AUTHORITY" in linear
-    assert linear.index("_XC-DIR-SCAN") < linear.index("_XC-EK-CONVERT")
+    # The walk only scans; the insert's edit is chosen once the parent is
+    # walked, a full linear block's conversion under the hash authority.
+    assert "_XC-DIR-SCAN ?DUP IF EXIT THEN" in linear
+    assert "_XC-EK-CONVERT" not in linear
+    assert "_XC-PLAN-INDEXED-EDIT EXIT" in insert_edit
+    assert insert_edit.index("_XC-REQUIRE-HASH-AUTHORITY") < (
+        insert_edit.index("_XC-EK-CONVERT")
+    )
     assert "EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED" in convert
 
     role_constants = tuple(
@@ -86403,7 +87084,7 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     # each at the format's five levels, and a bitmap and a descriptor page
     # for every block an insert can allocate.
     assert 17 + 2 + 20 + 46 == 85
-    assert 11312 + 3 * 8 + 85 * 3 * 8 == 13376
+    assert 10120 + 3 * 8 + 85 * 3 * 8 == 12184
     assert "_XC-P.HOME-COUNT CELL+ CONSTANT _XC-P.HOME-ENTRIES" in facade
     assert re.search(
         r"(?ms)_XC-P\.HOME-ENTRIES\s+"
@@ -86423,7 +87104,9 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-PLAN-LINEAR-CONVERSION",
         "_XC-INSERT-COMMON",
         "_EXT4-JTX-STAGE-INSERT",
+        "_EXT4-JTX-STAGE-RENAME",
         "_XC-HR-RELEASE-",
+        "_XC-HR-RENAME-NEW-PARENT-",
     ):
         assert removed not in facade
 
@@ -86450,7 +87133,7 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
 
 def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     """Pin the removal's and RENAME's roles, lifecycles, credits, and
-    complete plan withdrawal."""
+    complete plan withdrawal on the shared engine."""
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
 
     def word_body(name: str) -> str:
@@ -86462,25 +87145,19 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
         assert match is not None, f"missing Forth word {name}"
         return match.group("body")
 
-    assert "0x0400 CONSTANT _EXT4-S-ISGID" in facade
-    for parent_gate in (
-        "_XC-AUTH-PARENT",
-        "_XU-STAGE-CURRENT-PARENT",
-        "_XR-STAGE-CURRENT-NP",
-    ):
-        body = word_body(parent_gate)
-        assert "_EXT4-C.R.MODE + @ _EXT4-S-ISGID AND IF" in body
-        assert "_EXT4-C.R.MODE + @ 0x0800 AND IF" not in body
+    def require_order(body: str, names: tuple[str, ...]) -> None:
+        start = 0
+        for name in names:
+            position = body.index(name, start)
+            start = position + len(name)
 
-    for removed in (
-        "_XU-META-HOME-MAX",
-        "_XU-META-HOMES",
-        "_XU-META-COUNT",
-        "_XU-META-HOME",
-        "_XU-META-RESET",
-        "_XU-ADD-META-HOME",
-    ):
-        assert removed not in facade
+    # One parent gate serves every parent the engine edits, a rename's old
+    # parent included.
+    assert "0x0400 CONSTANT _EXT4-S-ISGID" in facade
+    parent_gate = word_body("_XC-AUTH-PARENT")
+    assert "_EXT4-C.R.MODE + @ _EXT4-S-ISGID AND IF" in parent_gate
+    assert "_EXT4-C.R.MODE + @ 0x0800 AND IF" not in parent_gate
+    assert re.search(r"(?m)^\s*(?:VARIABLE|CREATE|:)\s+_XU-", facade) is None
 
     begin = word_body("_XC-P-BEGIN")
     require_sealed = word_body("_XC-P-REQUIRE-SEALED")
@@ -86505,7 +87182,7 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     assert inode_alias_roles == (
         "_XC-HR-INODE",
         "_XC-HR-PARENT-INODE",
-        "_XC-HR-RENAME-NEW-PARENT-INODE",
+        "_XC-HR-RENAME-OLD-PARENT-INODE",
         "_XC-HR-RENAME-VICTIM-INODE",
     )
     alias_policy = word_body("_XC-HP-ALIAS-ALLOWED?")
@@ -86513,7 +87190,8 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     for forbidden_alias_role in (
         "_XC-HR-ORPHAN",
         "_XC-HR-INODE-GDT",
-        "_XC-HR-RENAME-NEW-PARENT-DIRECTORY",
+        "_XC-HR-PARENT-DIRECTORY",
+        "_XC-HR-RENAME-SOURCE-DIRECTORY",
         "_XC-HR-RENAME-CHILD-DIRECTORY",
     ):
         assert forbidden_alias_role not in alias_policy
@@ -86522,75 +87200,91 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     assert "_XC-HP-GDT-ROLE?" not in facade
     assert "_XC-HR-RELEASE-" not in facade
 
-    xr_expected = word_body("_XR-HP-EXPECTED-ROLES")
-    xr_homes = word_body("_XR-HP-PLAN-HOMES")
-    assert (
-        "_XR-CROSSDIR @ 0= IF\n"
-        "        _XR-DEST-SEPARATE @ IF 4 ELSE 3 THEN\n"
-    ) in xr_expected
-    assert "_XU-DIRECTORY @ IF 6 ELSE 5 THEN" in xr_expected
-    assert "1+ _XR-VICTIM-FINAL @ IF 2 + THEN" in xr_expected
-    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", xr_homes)) == (
-        "_XC-HR-INODE",
-        "_XC-HR-PARENT-INODE",
-        "_XC-HR-RENAME-NEW-PARENT-INODE",
-        "_XC-HR-RENAME-VICTIM-INODE",
-        "_XC-HR-PARENT-DIRECTORY",
-        "_XC-HR-RENAME-NEW-PARENT-DIRECTORY",
-        "_XC-HR-RENAME-CHILD-DIRECTORY",
-        "_XC-HR-ORPHAN",
-        "_XC-HR-PRIMARY-SUPER",
-    )
-    assert xr_homes.count("_XC-HP-BIND-META") == 9
-
-    # UNLINK and RMDIR are the shared engine's removal: one cold plan, the
-    # measuring pass and the live pass of _XC-RUN, and no plan or
+    # UNLINK, RMDIR and RENAME are the shared engine's operations: one cold
+    # plan, the measuring pass and the live pass of _XC-RUN, and no plan or
     # authentication inside either staging pass.
-    for entry, directory in (("_EXT4-UNLINK", "0"), ("_EXT4-RMDIR", "-1")):
+    for entry, directory, removing, renaming in (
+        ("_EXT4-UNLINK", "0", "-1", "0"),
+        ("_EXT4-RMDIR", "-1", "-1", "0"),
+        ("_EXT4-RENAME", "0", "0", "-1"),
+    ):
         entry_body = word_body(entry)
         assert (
-            f"0 _XC-LINKING ! {directory} _XC-DIRECTORY ! -1 _XC-REMOVING !"
+            f"0 _XC-LINKING ! {directory} _XC-DIRECTORY ! "
+            f"{removing} _XC-REMOVING !"
         ) in entry_body
+        assert f"{renaming} _XC-RENAMING !" in entry_body
         assert entry_body.rstrip().endswith("_XC-RUN")
-    assert "_XC-DIRECTORY @ IF _XC-PO-RMDIR ELSE _XC-PO-UNLINK THEN" in (
-        word_body("_XC-OP")
+    assert "' _EXT4-RENAME EXT4-STAGED-WRITE-OPS VFS-OP-RENAME CELLS + !" in (
+        facade
+    )
+    op = word_body("_XC-OP")
+    assert op.index("_XC-RENAMING @ IF _XC-PO-RENAME EXIT THEN") < op.index(
+        "_XC-DIRECTORY @ IF _XC-PO-RMDIR ELSE _XC-PO-UNLINK THEN"
     )
     plan = word_body("_XC-PLAN")
-    assert "_XC-REMOVING @ IF\n        _XC-PLAN-REMOVAL" in plan
+    require_order(
+        plan,
+        (
+            "_XC-RENAMING @ IF\n        _XC-PLAN-RENAME",
+            "_XC-REMOVING @ IF\n        TRUE FALSE FALSE _XC-WALK-MODE\n"
+            "        _XC-PLAN-REMOVAL",
+        ),
+    )
     removal_plan = word_body("_XC-PLAN-REMOVAL")
-    removal_plan_order = (
-        "_XC-AUTH-REMOVAL-TARGET",
-        "_XC-AUTH-PARENT",
-        "_XC-AUTH-EMPTY-DIRECTORY",
-        "_XC-AUTH-ORPHAN-RELEASE",
-        "_XC-AUTH-FINAL-RELEASE",
+    require_order(
+        removal_plan,
+        (
+            "_XC-AUTH-REMOVAL-TARGET",
+            "_XC-AUTH-PARENT",
+            "_XC-REQUIRE-FOUND",
+            "_XC-AUTH-EMPTY-DIRECTORY",
+            "_XC-AUTH-ORPHAN-RELEASE",
+            "_XC-AUTH-FINAL-RELEASE",
+        ),
     )
-    removal_plan_positions = tuple(
-        removal_plan.index(name) for name in removal_plan_order
-    )
-    assert removal_plan_positions == tuple(sorted(removal_plan_positions))
-    assert "_XC-REMOVING @ IF _XC-STAGE-REMOVAL EXIT THEN" in (
-        word_body("_XC-STAGE")
+    stage = word_body("_XC-STAGE")
+    require_order(
+        stage,
+        (
+            "_XC-PREPARE-PARENT-TREE",
+            "_XC-REMOVING @ IF _XC-STAGE-REMOVAL EXIT THEN",
+            "_XC-RENAMING @ IF _XC-STAGE-RENAME EXIT THEN",
+            "_XC-STAGE-EDIT",
+        ),
     )
     removal_stage = word_body("_XC-STAGE-REMOVAL")
-    removal_stage_order = (
-        "_XC-STAGE-REMOVAL-INODE",
-        "_XC-STAGE-PARENT-INODE",
-        "_XC-STAGE-TARGET",
-        "_XC-STAGE-ORPHAN-ADD",
-        "_XC-STAGE-FINAL-RELEASE",
+    require_order(
+        removal_stage,
+        (
+            "_XC-STAGE-REMOVAL-INODE",
+            "_XC-STAGE-PARENT-INODE",
+            "_XC-STAGE-TARGET",
+            "_XC-STAGE-ORPHAN-ADD",
+            "_XC-STAGE-FINAL-RELEASE",
+        ),
     )
-    removal_stage_positions = tuple(
-        removal_stage.index(name) for name in removal_stage_order
-    )
-    assert removal_stage_positions == tuple(sorted(removal_stage_positions))
     orphan_stage = word_body("_XC-STAGE-ORPHAN-ADD")
+    rename_orphan = word_body("_XC-STAGE-RENAME-ORPHAN")
+    orphan_record = word_body("_XC-STAGE-ORPHAN-RECORD")
     final_stage = word_body("_XC-STAGE-FINAL-RELEASE")
-    for staging in (removal_stage, orphan_stage, final_stage):
+    rename_stage = word_body("_XC-STAGE-RENAME")
+    for staging in (
+        removal_stage,
+        orphan_stage,
+        rename_orphan,
+        orphan_record,
+        final_stage,
+        rename_stage,
+    ):
         assert "_XC-AUTH-" not in staging
         assert "_XC-PLAN" not in staging
         assert "_XC-P.HOME-COUNT" not in staging
-    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", orphan_stage)) == (
+    assert orphan_stage.rstrip().endswith("_XC-STAGE-ORPHAN-RECORD")
+    assert rename_orphan.rstrip().endswith("_XC-STAGE-ORPHAN-RECORD")
+    assert "_EXT4-JUA-CLEAR-RENAME" in orphan_stage
+    assert "_EXT4-JUA-CLEAR-RENAME" not in rename_orphan
+    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", orphan_record)) == (
         "_XC-HR-ORPHAN",
         "_XC-HR-PRIMARY-SUPER",
     )
@@ -86600,393 +87294,134 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
         "_XC-HR-PRIMARY-SUPER",
     )
     assert "_XC-WRITER @ _EXT4-JWR.META-CREDIT + @ _EXT4-JUA-META !" in (
-        orphan_stage
+        orphan_record
     )
     # The measuring pass leaves no sealed checkpoint state: only the live
     # pass under the sealed plan seals the unlink-ADD checkpoint.
-    assert orphan_stage.rstrip().endswith(
+    assert orphan_record.rstrip().endswith(
         "DUP _XC-P.STATE + @ _XC-PS-SEALED = IF _EXT4-JUA-SEAL EXIT THEN\n"
         "    0"
     )
-    assert "_XC-CLEANUP-CREDIT @ 0 _XC-CLEANUP-REVOKE @ EXIT" in (
+
+    # A rename's staging: the source's record, a victim's in its own bank,
+    # the old parent's record and the source's block in the old parent's
+    # bank, the new parent's edit, and a final victim's orphan record.
+    require_order(
+        rename_stage,
+        (
+            "_XC-STAGE-SOURCE-INODE",
+            "_XC-SWAP-TARGET _XC-STAGE-REMOVAL-INODE _XC-SWAP-TARGET",
+            "_XC-SWAP-PARENT _XC-PREPARE-PARENT-TREE",
+            "_XC-STAGE-PARENT-INODE",
+            "_XC-STAGE-SOURCE-BLOCK",
+            "_XC-SWAP-PARENT ?DUP IF EXIT THEN",
+            "_XC-PREPARE-PARENT-TREE",
+            "_XC-SOURCE-APART? IF",
+            "_XC-STAGE-SOURCE-BLOCK",
+            "_XC-STAGE-EDIT",
+            "_XC-VICTIM-FINAL @ IF _XC-STAGE-RENAME-ORPHAN EXIT THEN",
+        ),
+    )
+    assert "_XC-INODE-ROLE @ _XC-INODE-HOME @ _XC-HP-BIND-META" in (
+        word_body("_XC-ACQUIRE-INODE")
+    )
+    assert "_XC-PARENT-ROLE @ _XC-PARENT-HOME @ _XC-HP-BIND-META" in (
+        word_body("_XC-STAGE-PARENT-INODE")
+    )
+    for stager, role in (
+        ("_XC-STAGE-TARGET", "_XC-HR-PARENT-DIRECTORY"),
+        ("_XC-STAGE-SOURCE-BLOCK", "_XC-HR-RENAME-SOURCE-DIRECTORY"),
+        ("_XC-STAGE-CHILD-BLOCK", "_XC-HR-RENAME-CHILD-DIRECTORY"),
+    ):
+        assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", word_body(stager))) == (
+            role,
+        )
+
+    # An orphan's drain, a removal's or a rename's final victim's, sizes the
+    # writer and the release passes' room.
+    assert "_XC-DRAINS? IF _XC-CLEANUP-CREDIT @ 0 _XC-CLEANUP-REVOKE @ EXIT" in (
         word_body("_XC-WRITER-NEED")
     )
+    assert "_XC-RENAMING @ IF _XC-VICTIM-FINAL @ EXIT THEN" in (
+        word_body("_XC-DRAINS?")
+    )
+    assert "_XC-RENAMING @ IF _XC-VICTIM-INODE ELSE _XC-OLD-INODE THEN" in (
+        word_body("_XC-DRAIN-RECORD")
+    )
     measure = word_body("_XC-MEASURE")
-    assert measure.index("_XC-WRITER-NEED") < measure.index(
-        "_EXT4-JWR-ENSURE"
-    ) < measure.index("_XC-REQUIRE-PASS-ROOM") < measure.index(
-        "_EXT4-JTX-BEGIN"
+    require_order(
+        measure,
+        (
+            "_XC-WRITER-NEED",
+            "_EXT4-JWR-ENSURE",
+            "_XC-REQUIRE-PASS-ROOM",
+            "_EXT4-JTX-BEGIN",
+        ),
     )
-    assert "_XC-OLD-INODE _EXT4-RELEASE-DEPTH _XC-WRITER @ _XW-PASS-ROOM?" in (
-        word_body("_XC-REQUIRE-PASS-ROOM")
-    )
+    assert (
+        "_XC-DRAIN-RECORD _EXT4-RELEASE-DEPTH _XC-WRITER @ _XW-PASS-ROOM?"
+    ) in word_body("_XC-REQUIRE-PASS-ROOM")
     run = word_body("_XC-RUN")
-    run_order = (
-        "_XC-PUBLISH-COMMITTED",
-        "_EXT4-JTX-CHECKPOINT",
-        "_EXT4-REQUIRE-IDLE-WRITER",
-        "_XC-DRAIN",
-        "_XC-SCRUB",
+    require_order(
+        run,
+        (
+            "_XC-PUBLISH-COMMITTED",
+            "_EXT4-JTX-CHECKPOINT",
+            "_EXT4-REQUIRE-IDLE-WRITER",
+            "_XC-DRAIN",
+            "_XC-SCRUB",
+        ),
     )
-    run_positions = tuple(run.index(name) for name in run_order)
-    assert run_positions == tuple(sorted(run_positions))
     assert "_XC-DRAIN ?DUP IF _XC-DURABLE-FAIL EXIT THEN" in run
     drain = word_body("_XC-DRAIN")
-    assert "_XC-VN @ VN.OPEN-REFS @ IF 0 EXIT THEN" in drain
-    assert "_XC-INODE @ _XC-WRITER @ _XC-CTX @ _EXT4-DRAIN-ORPHAN" in drain
+    require_order(
+        drain,
+        (
+            "_XC-DRAINS? 0= IF 0 EXIT THEN",
+            "_XC-VICTIM-VN @ _XC-VICTIM-INO @",
+            "_XC-VN @ _XC-INODE @",
+            "SWAP VN.OPEN-REFS @ IF DROP 0 EXIT THEN",
+            "_XC-WRITER @ _XC-CTX @ _EXT4-DRAIN-ORPHAN",
+        ),
+    )
+    assert "_XC-RENAMING @ IF _XC-PUBLISH-RENAME EXIT THEN" in (
+        word_body("_XC-PUBLISH-COMMITTED")
+    )
     for removed in (
         "_XU-PLAN",
         "_XU-PLAN-CAPS",
         "_XU-REMOVE-COMMON",
         "_EXT4-JTX-STAGE-UNLINK-CLOSED",
-        "_XU-HP-EXPECTED-ROLES",
-        "_XU-HP-PLAN-HOMES",
-        "_XU-STAGE-TARGET-INODE",
-        "_XU-STAGE-DIRECTORY",
-        "_XU-STAGE-ORPHAN-ADD",
-        "_XU-STAGE-DIRECTORY-BLOCK-RELEASE",
-        "_XU-STAGE-FINAL-ACCOUNTING",
-        "_XU-MAP-CHECK",
-        "_XU-SCRUB",
-        "_XU-REFUSE",
-        "_XU-P-FAIL",
-        "_XU-POSTCOMMIT-FAIL",
-        "_XU-DURABLE-FAIL",
+        "_EXT4-JTX-STAGE-RENAME",
+        "_XR-PLAN",
+        "_XR-RENAME-COMMON",
+        "_XR-HP-PLAN-HOMES",
+        "_XR-STAGE-CROSSDIR",
+        "_XR-MAP-CHECK",
+        "_XR-SCRUB",
+        "_XR-PUBLISH-COMMITTED",
     ):
         assert re.search(
             rf"(?m)^:[ \t]+{re.escape(removed)}(?=[ \t\r\n(])", facade
         ) is None
 
-    xr_plan = word_body("_XR-PLAN")
-    xr_stage = word_body("_EXT4-JTX-STAGE-RENAME")
-    xr_remove = word_body("_XR-RENAME-COMMON")
-    xr_lifecycle = (
-        "_XC-P-CONTEXT?",
-        "_XC-P-BEGIN",
-        "_XU-NOW",
-        "_XR-PLAN",
-        "_XC-P-SEAL",
-        "_XR-PLAN-CAPS",
-        "_EXT4-JTX-PREFLIGHT-CAPACITY",
-        "_EXT4-JWR-ENSURE",
-    )
-    xr_positions = tuple(xr_remove.index(name) for name in xr_lifecycle)
-    assert xr_positions == tuple(sorted(xr_positions))
-    assert "_XC-P-BIND-SHAPE" not in xr_plan
-    assert xr_plan.index("_EXT4-STAGED-WRITE-FS-QUALIFY") < xr_plan.index(
-        "_XR-CROSSDIR @ IF"
-    )
-    assert xr_remove.count("_XC-HP-BEGIN-TX") == 2
-    assert xr_remove.count("_EXT4-JTX-STAGE-RENAME") == 2
-    xr_stage_order = (
-        "_XC-P-REQUIRE-SEALED",
-        "_XR-PLAN",
-        "_XC-HP-REQUIRE-CREDITS",
-        "_XC-HP-REQUIRE-STAGED",
-    )
-    xr_stage_positions = tuple(xr_stage.index(name) for name in xr_stage_order)
-    assert xr_stage_positions == tuple(sorted(xr_stage_positions))
-    assert "_XU-CTX @ _XC-PO-RENAME _XC-P-REQUIRE-SEALED" in xr_stage
-    assert xr_stage.rstrip().endswith(
-        "_XU-WRITER @ _XC-HP-REQUIRE-STAGED ?DUP IF EXIT THEN\n"
-        "    _XR-MAP-CHECK"
-    )
-    assert "_XC-P.HOME-COUNT" not in xr_stage
-    assert "_XC-P.HOME-COUNT" not in xr_remove
-
-    xr_cross_stage = word_body("_XR-STAGE-CROSSDIR")
-    cross_order = (
-        "_XR-STAGE-SOURCE-INODE",
-        "_XU-STAGE-PARENT-INODE",
-        "_XR-STAGE-NP-INODE",
-        "_XU-DIR-HOME @",
-        "_XR-NP-DIR-HOME @",
-        "_XU-DATA-BLOCK @",
-    )
-    cross_positions = tuple(xr_cross_stage.index(name) for name in cross_order)
-    assert cross_positions == tuple(sorted(cross_positions))
-
-    assert "_XC-P-SCRUB _XR-SCRUB-PRIVATE" in word_body("_XR-SCRUB")
     for cleanup_word, scrub_word in (
         ("_XC-REFUSE", "_XC-SCRUB"),
         ("_XC-FAIL", "_XC-SCRUB"),
         ("_XC-POSTCOMMIT-FAIL", "_XC-SCRUB"),
         ("_XC-DURABLE-FAIL", "_XC-POSTCOMMIT-FAIL"),
-        ("_XR-REFUSE", "_XR-SCRUB"),
-        ("_XR-FAIL", "_XR-SCRUB"),
-        ("_XR-POSTCOMMIT-FAIL", "_XR-SCRUB"),
     ):
         assert scrub_word in word_body(cleanup_word)
+    assert "_XC-SCRUB-RENAME" in word_body("_XC-SCRUB-PRIVATE")
     assert run.rstrip().endswith(
         "0 _XC-V @ V.LAST-IOR !\n    _XC-SCRUB\n    0"
     )
-    assert xr_remove.rstrip().endswith("0 _XU-V @ V.LAST-IOR ! _XR-SCRUB\n    0")
 
 
 def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
 ) -> None:
-    """Pin UNLINK/RMDIR to the shared parent walk in find mode, its one
-    record edit, and RENAME's bridge to the leaf plan it still uses."""
-    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
-
-    def word_body(name: str) -> str:
-        match = re.search(
-            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
-            rf"(?P<body>.*?)[ \t]+;",
-            facade,
-        )
-        assert match is not None, f"missing Forth word {name}"
-        return match.group("body")
-
-    # The removal walks the parent once, in the cold plan, with the
-    # insert's walk: every node and leaf, every name hashed against its
-    # interval.  Find mode counts the parent's references to the target,
-    # takes the target's record and its predecessor, and refuses a second
-    # record with the name.  No predecessor gate remains.
-    find = word_body("_XC-FIND-RECORD")
-    for fragment in (
-        "_XC-DIR-INODE @ _XC-INODE @ = IF 1 _XC-REFS +! THEN",
-        "_XC-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN",
-        "_XC-DIR-INODE @ _XC-INODE @ <> IF VFS-E-CONFLICT EXIT THEN",
-        "_XC-DIRECTORY @ IF 2 <> ELSE 1 U> THEN IF",
-        "_XC-DIR-OFF @ _XC-RM-OFF ! _XC-DIR-REC @ _XC-RM-REC !",
-        "_XC-PREV-OFF @ _XC-RM-PREV-OFF ! _XC-PREV-REC @ _XC-RM-PREV-REC !",
-    ):
-        assert fragment in find
-    assert find.index("_XC-REFS +!") < find.index("_XC-DIRENT-NAME=?")
-    linear_scan = word_body("_XC-DIR-SCAN")
-    leaf_scan = word_body("_XC-INDEXED-LEAF-SCAN")
-    for scan in (linear_scan, leaf_scan):
-        assert "_XC-FIND-RECORD ?DUP IF EXIT THEN" in scan
-        assert "-1 _XC-PREV-OFF ! 0 _XC-PREV-REC !" in scan
-        assert (
-            "_XC-DIR-OFF @ _XC-PREV-OFF ! _XC-DIR-REC @ _XC-PREV-REC !"
-        ) in scan
-        assert "EXT4-D-WRITE-POLICY" not in scan
-    assert "_XC-REMOVING @ IF 0 EXIT THEN" in linear_scan
-    for walk in ("_XC-AUTH-DEPTH0", "_XC-AUTH-DEPTH1"):
-        assert "_XC-CHOOSES? AND" in word_body(walk)
-    assert "_XC-REMOVING @ 0=" in word_body("_XC-CHOOSES?")
-    auth_leaf = word_body("_XC-AUTH-LEAF")
-    assert (
-        "_XC-REMOVING @ IF _XC-FOUND @ _XC-DIR-HOME @ 0= AND OR THEN IF"
-    ) in auth_leaf
-    assert auth_leaf.index("_XC-INDEXED-LEAF-SCAN") < auth_leaf.index(
-        "_XC-P.DIR-SNAPSHOT"
-    )
-    indexed = word_body("_XC-AUTH-INDEXED-PARENT")
-    assert "0 _XC-FOUND ! 0 _XC-REFS !" in indexed
-    assert indexed.rstrip().endswith(
-        "_XC-REMOVING @ IF _XC-REQUIRE-FOUND EXIT THEN\n"
-        "    _XC-PLAN-INDEXED-EDIT"
-    )
-    linear = word_body("_XC-AUTH-LINEAR-PARENT")
-    assert "0 _XC-FOUND ! 0 _XC-REFS !" in linear
-    assert (
-        "_XC-REMOVING @ IF ?DUP IF EXIT THEN _XC-REQUIRE-FOUND EXIT THEN"
-    ) in linear
-    found = word_body("_XC-REQUIRE-FOUND")
-    assert "_XC-FOUND @ 0= IF VFS-E-CONFLICT EXIT THEN" in found
-    assert (
-        "_XC-FINAL @ IF\n"
-        "        _XC-REFS @ 1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN"
-    ) in found
-    assert (
-        "_XC-REFS @ 2 U< IF EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT THEN"
-    ) in found
-    assert "_XC-EK-REMOVE _XC-EDIT ! 0 _XC-GROWTH !" in found
-    # RMDIR's parent holds 3..LINK-MAX links and loses one; the CWD rule
-    # belongs to CREATE and MKDIR alone.
-    parent = word_body("_XC-AUTH-PARENT")
-    assert (
-        "_XC-DIRECTORY @ IF\n"
-        "        _XC-REMOVING @ IF\n"
-        "            DUP 3 U< OVER _EXT4-LINK-MAX U> OR IF"
-    ) in parent
-    creating = word_body("_XC-CREATING?")
-    assert "_XC-LINKING @ 0= _XC-REMOVING @ 0= AND" in creating
-    assert "_XC-CREATING? _XC-PARENT @ _XC-V @ V.CWD @ <> AND IF" in (
-        word_body("_XC-REQUIRE-PARENT-RUNTIME")
-    )
-
-    # Both staging passes take the leaf the cold plan authenticated from
-    # the plan's snapshot and make the record edit the kernel's
-    # ext4_generic_delete_entry makes.
-    stage_target = word_body("_XC-STAGE-TARGET")
-    assert (
-        "_XC-P.DIR-SNAPSHOT + _XC-DIR-HOME @ _XC-ACQUIRE-SNAPSHOT"
-    ) in stage_target
-    assert (
-        "DUP _XC-EK-REMOVE = IF\n        DROP _XC-IMAGE @ _XC-DIR-REMOVE"
-    ) in stage_target
-    remove = word_body("_XC-DIR-REMOVE")
-    blank = remove.index("_XC-RM-PREV-OFF @ 0< IF")
-    blank_inode = remove.index("0 _XC-DIR-DE @ L!", blank)
-    blank_tail = remove.index(
-        "_XC-DIR-DE @ 6 + _XC-RM-REC @ 6 - 0 FILL", blank_inode
-    )
-    joined = remove.index("_XC-RM-PREV-REC @ _XC-RM-REC @ +", blank_tail)
-    joined_write = remove.index(
-        "_XC-DIR-IMAGE @ _XC-RM-PREV-OFF @ + 4 + W!", joined
-    )
-    zeroed = remove.index("_XC-DIR-DE @ _XC-RM-REC @ 0 FILL", joined_write)
-    assert blank < blank_inode < blank_tail < joined < joined_write < zeroed
-    assert remove.rstrip().endswith("_EXT4-RESTAMP-DIR-BLOCK")
-
-    # RENAME keeps the old source walk and its predecessor gate until it
-    # moves onto the shared removal.
-    for removed in ("_XU-DIR-SNAPSHOT", "_XU-PARENT-SNAPSHOT"):
-        assert removed not in facade
-    assert word_body("_XU-SHARED-DIR-SNAPSHOT").rstrip().endswith(
-        "_XU-SHARED-PLAN _XC-P.DIR-SNAPSHOT +"
-    )
-    assert word_body("_XU-SHARED-PARENT-SNAPSHOT").rstrip().endswith(
-        "_XU-SHARED-PLAN _XC-P.PARENT-SNAPSHOT +"
-    )
-    shape = word_body("_XC-P-SHAPE?")
-    parent_stage = word_body("_XU-STAGE-CURRENT-PARENT")
-    run = word_body("_XC-RUN")
-    rename = word_body("_XR-RENAME-COMMON")
-    assert shape.lstrip().startswith(
-        "( plan -- plan flag )\n"
-        "    DUP _XC-P.OP + @ _XC-P-OP? 0= IF FALSE EXIT THEN"
-    )
-    assert "_XU-SHARED-PLAN _XC-P.OP + @ _XC-PO-RENAME <> IF" in (
-        parent_stage
-    )
-    assert "_EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF" in parent_stage
-    assert "OVER _EXT4-I.BLOCK + 6 + W@ DUP 1 U> IF" in parent_stage
-    assert (
-        "_XU-SHARED-PLAN _XU-INDEXED @ _XC-P-BIND-SHAPE"
-    ) in parent_stage
-    assert "_XC-CTX @ _XC-OP _XC-P-BEGIN" in run
-    assert "_XU-CTX @ _XC-PO-RENAME _XC-P-BEGIN" in rename
-
-    active_table = word_body("_XU-AUTH-INDEX-ACTIVE-TABLE")
-    assert "_EXT4-DD-REQUIRE-DEPTH0 EXIT" in active_table
-    depth_one_order = (
-        "_EXT4-DD-REQUIRE-MUTABLE-HASH",
-        "_EXT4-DD.DX-COUNT + @ 1 <>",
-        "_EXT4-DD-LOAD-LOGICAL",
-        "_EXT4-VALIDATE-DX-NODE",
-        "_XC-P.NODE-SNAPSHOT",
-        "_EXT4-DD-REQUIRE-ACTIVE-HASHES",
-    )
-    depth_one_positions = tuple(
-        active_table.index(name) for name in depth_one_order
-    )
-    assert depth_one_positions == tuple(sorted(depth_one_positions))
-
-    bind_leaf = word_body("_XU-INDEX-BIND-SELECTED-LEAF")
-    rename_leaf_scan = word_body("_XU-INDEXED-LEAF-SCAN")
-    rename_indexed = word_body("_XU-AUTH-INDEXED-PARENT")
-    complete_scan_order = (
-        "_EXT4-DD-AUTH-INODE",
-        "_EXT4-DD-AUTH-HTREE-ROOT",
-        "_XU-AUTH-INDEX-ACTIVE-TABLE",
-        "_XU-REQUIRE-HASH-AUTHORITY",
-        "_XU-BIND-HASH-AUTHORITY",
-        "_EXT4-DD-SELECT-ROUTE",
-        "_EXT4-DD.ACTIVE-COUNT + @ U<",
-        "_EXT4-DD-SET-INTERVAL",
-        "_EXT4-DD-LOAD-LOGICAL",
-        "_EXT4-VALIDATE-DIR-BLOCK",
-        "_XU-INDEXED-LEAF-SCAN",
-        "_XU-DIR-FOUND @ 0= IF",
-    )
-    complete_scan_positions = tuple(
-        rename_indexed.index(name) for name in complete_scan_order
-    )
-    assert complete_scan_positions == tuple(sorted(complete_scan_positions))
-    for removed_count in ("_XU-TARGET-REFS", "_XU-FINAL", "_XU-ORPHAN"):
-        assert removed_count not in rename_indexed
-        assert removed_count not in rename_leaf_scan
-    assert (
-        "_XU-DIRECTORY @ IF\n"
-        "                    _XU-DIR-DTYPE @ 2 <> IF"
-    ) in rename_leaf_scan
-    for baseline_field in (
-        "_XC-P.INDEX-BASE-ROOT-HOME",
-        "_XC-P.INDEX-BASE-DEPTH",
-        "_XC-P.INDEX-BASE-ROUTE-NODE-HOME",
-        "_XC-P.INDEX-BASE-ROUTE",
-        "_XC-P.INDEX-BASE-ROUTE-LOGICAL",
-        "_XC-P.INDEX-BASE-HASH",
-        "_XC-P.INDEX-BASE-MINOR",
-        "_XC-P.INDEX-BASE-PARENT-GROUP",
-        "_XC-P.INDEX-BASE-PARENT-HOME",
-        "_XC-P.INDEX-BASE-PARENT-OFF",
-        "_XC-P.ROOT-SNAPSHOT",
-    ):
-        assert baseline_field in rename_indexed
-    for selected_field in (
-        "_XC-P.INDEX-BASE-ENTRY",
-        "_XC-P.INDEX-BASE-LOGICAL",
-        "_XC-P.INDEX-BASE-HOME",
-        "_XC-P.DIR-SNAPSHOT",
-    ):
-        assert selected_field in bind_leaf
-
-    rename_predecessor_gate = rename_leaf_scan.index("_XU-SPLICE-SCAN @ IF")
-    predecessor_refusal = rename_leaf_scan.index(
-        "_XU-PREV-OFF @ 0< _XU-PREV-INODE @ 0= OR IF"
-    )
-    predecessor_capture = rename_leaf_scan.index(
-        "_XU-PREV-OFF @ _XU-TARGET-PREV-OFF !", predecessor_refusal
-    )
-    selected_bind = rename_leaf_scan.index(
-        "_XU-SHARED-PLAN _XU-INDEX-BIND-SELECTED-LEAF",
-        predecessor_capture,
-    )
-    assert (
-        rename_predecessor_gate
-        < predecessor_refusal
-        < predecessor_capture
-        < selected_bind
-    )
-    capture = word_body("_XU-CAPTURE-PARENT-DIRECTORY")
-    assert capture.index("_XU-AUTH-INDEXED-PARENT") < capture.index(
-        "_EXT4-VALIDATE-MUTATION-RANGE-TARGETS EXIT"
-    )
-
-    splice = word_body("_XU-DIR-SPLICE")
-    adjacency = splice.index(
-        "_XU-TARGET-PREV-OFF @ _XU-TARGET-PREV-REC @ +"
-    )
-    predecessor_check = splice.index(
-        "L@ _XU-TARGET-PREV-INODE @ <>", adjacency
-    )
-    target_check = splice.index("L@ _XU-INO @ <>", predecessor_check)
-    merged_length = splice.index(
-        "_XU-TARGET-PREV-REC @ _XU-TARGET-DIR-REC @ +",
-        target_check,
-    )
-    merged_write = splice.index("4 + W!", merged_length)
-    target_zero = splice.index("_XU-TARGET-DIR-REC @ 0 FILL", merged_write)
-    assert (
-        adjacency
-        < predecessor_check
-        < target_check
-        < merged_length
-        < merged_write
-        < target_zero
-    )
-    assert "_EXT4-RESTAMP-DIR-BLOCK" not in splice
-    for removed in (
-        "_XU-AUTH-PARENT-DIRECTORY",
-        "_XU-REQUIRE-PARENT-MAP-HITS",
-        "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
-        "_XU-PROVE-DIRECTORY-OWNERS",
-        "_XU-STAGE-DIRECTORY",
-        "_XU-DIR-APPLY",
-    ):
-        assert re.search(
-            rf"(?m)^:[ \t]+{re.escape(removed)}(?=[ \t\r\n(])", facade
-        ) is None
-
-
-def test_ext4_indexed_rename_seals_independent_selected_leaf_banks() -> None:
-    """Pin full RENAME scope to sealed old/destination authority banks."""
+    """Pin UNLINK, RMDIR and RENAME to the shared parent walk and its modes,
+    and the removal's one record edit."""
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
 
     def word_body(name: str) -> str:
@@ -87004,308 +87439,534 @@ def test_ext4_indexed_rename_seals_independent_selected_leaf_banks() -> None:
             position = body.index(name, start)
             start = position + len(name)
 
+    # The removal walks the parent once, in the cold plan, with the
+    # insert's walk: every node and leaf, every name hashed against its
+    # interval.  Find mode counts the parent's references to the target,
+    # takes the record holding the find name and its predecessor, and
+    # refuses a second record with the name.  No predecessor gate remains.
+    find = word_body("_XC-FIND-RECORD")
+    for fragment in (
+        "_XC-DIR-INODE @ _XC-INODE @ = IF 1 _XC-REFS +! THEN",
+        "_XC-DIR-DE @ _XC-FIND-NAME @ _XC-FIND-NLEN @ _XC-DIRENT-HOLDS?",
+        "_XC-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN",
+        "_XC-DIR-INODE @ _XC-INODE @ <> IF VFS-E-CONFLICT EXIT THEN",
+        "_XC-DIR-DE @ _XC-DIRECTORY @ _XC-RECORD-TYPE? 0= IF",
+        "_XC-DIR-OFF @ _XC-RM-OFF ! _XC-DIR-REC @ _XC-RM-REC !",
+        "_XC-PREV-OFF @ _XC-RM-PREV-OFF ! _XC-PREV-REC @ _XC-RM-PREV-REC !",
+    ):
+        assert fragment in find
+    assert find.index("_XC-REFS +!") < find.index("_XC-DIRENT-HOLDS?")
+    # Victim mode finds a rename's victim by the new name and counts the new
+    # parent's references to it.
+    victim = word_body("_XC-FIND-VICTIM")
+    for fragment in (
+        "_XC-DIR-INODE @ _XC-VICTIM-INO @ = IF 1 _XC-VICTIM-REFS +! THEN",
+        "_XC-DIR-DE @ _XC-DIRENT-NAME=? 0= IF 0 EXIT THEN",
+        "_XC-VICTIM-FOUND @ IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN",
+        "_XC-DIR-INODE @ _XC-VICTIM-INO @ <> IF VFS-E-CONFLICT EXIT THEN",
+        "_XC-DIR-DE @ _XC-VICTIM-DIR @ _XC-RECORD-TYPE? 0= IF",
+        "_XC-DIR-OFF @ _XC-VICTIM-DE-OFF ! _XC-DIR-REC @ _XC-VICTIM-DE-REC !",
+    ):
+        assert fragment in victim
+    assert "IF 2 = ELSE 1 U> 0= THEN" in word_body("_XC-RECORD-TYPE?")
+    note = word_body("_XC-NOTE-LIVE")
+    require_order(
+        note,
+        (
+            "_XC-WALK-SOURCE @ IF",
+            "_XC-FIND-RECORD",
+            "_XC-WALK-VICTIM @ IF",
+            "_XC-FIND-VICTIM",
+            "_XC-WALK-INSERT @ IF _XC-DIR-DE @ _XC-DIRENT-NAME=? 0 EXIT THEN",
+        ),
+    )
+    linear_scan = word_body("_XC-DIR-SCAN")
+    leaf_scan = word_body("_XC-INDEXED-LEAF-SCAN")
+    for scan in (linear_scan, leaf_scan):
+        assert "_XC-NOTE-LIVE ?DUP IF NIP EXIT THEN" in scan
+        assert "-1 _XC-PREV-OFF ! 0 _XC-PREV-REC !" in scan
+        assert (
+            "_XC-DIR-OFF @ _XC-PREV-OFF ! _XC-DIR-REC @ _XC-PREV-REC !"
+        ) in scan
+        assert "EXT4-D-WRITE-POLICY" not in scan
+        assert "_XC-REMOVING" not in scan
+    assert "_XC-WALK-INSERT @ IF TRUE _XC-NOTE-SLOT THEN" in linear_scan
+    assert "_XC-WALK-INSERT @ IF FALSE _XC-NOTE-SLOT THEN" in linear_scan
+    assert "_XC-INDEX-SELECTED @ IF TRUE _XC-NOTE-SLOT THEN" in leaf_scan
+    assert "_XC-INDEX-SELECTED @ IF FALSE _XC-NOTE-SLOT THEN" in leaf_scan
+    assert "VFS-E-NOSPC" not in linear_scan
+    for walk in ("_XC-AUTH-DEPTH0", "_XC-AUTH-DEPTH1"):
+        assert "_XC-CHOOSES? AND" in word_body(walk)
+    assert "_XC-WALK-INSERT @" in word_body("_XC-CHOOSES?")
+    assert "_XC-P.SEEN + _XC-SEEN-BITS 63 + 64 / CELLS 0 FILL" in (
+        word_body("_XC-AUTH-DEPTH1")
+    )
+    auth_leaf = word_body("_XC-AUTH-LEAF")
+    require_order(
+        auth_leaf,
+        (
+            "_XC-FOUND @ _XC-LEAF-FOUND ! _XC-VICTIM-FOUND @ _XC-LEAF-VICTIM !",
+            "_XC-INDEXED-LEAF-SCAN",
+            "_XC-VICTIM-FOUND @ _XC-LEAF-VICTIM @ <> OR",
+            "_XC-FOUND @ _XC-LEAF-FOUND @ <> _XC-RENAMING @ 0= AND OR IF",
+            "_XC-P.DIR-SNAPSHOT",
+            "_XC-FOUND @ _XC-LEAF-FOUND @ <> _XC-RENAMING @ AND IF",
+            "_XC-INDEX-PHYS @ _XC-CAPTURE-SOURCE",
+        ),
+    )
+    indexed = word_body("_XC-AUTH-INDEXED-PARENT")
+    assert (
+        "0 _XC-FOUND ! 0 _XC-REFS ! 0 _XC-VICTIM-FOUND ! 0 _XC-VICTIM-REFS !"
+    ) in indexed
+    assert indexed.index("_XC-INDEX-DUPLICATE @ IF VFS-E-EXISTS EXIT THEN") < (
+        indexed.index("_XC-OLD-WALK @ IF 0 EXIT THEN")
+    ) < indexed.index("-1 OVER _XC-P.INDEX-BASELINE + !")
+    assert indexed.rstrip().endswith(
+        "_XC-PARENT-OFF @ OVER _XC-P.INDEX-BASE-PARENT-OFF + !\n    0"
+    )
+    linear = word_body("_XC-AUTH-LINEAR-PARENT")
+    assert (
+        "0 _XC-FOUND ! 0 _XC-REFS ! 0 _XC-VICTIM-FOUND ! 0 _XC-VICTIM-REFS !"
+    ) in linear
+    assert "_XC-REQUIRE-FOUND" not in linear
+    assert (
+        "_XC-RENAMING @ _XC-FOUND @ AND IF _XC-DIR-HOME @ _XC-CAPTURE-SOURCE THEN"
+    ) in linear
+    named = word_body("_XC-REQUIRE-NAMED")
+    assert "ROT 0= IF 2DROP VFS-E-CONFLICT EXIT THEN" in named
+    assert "1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN" in named
+    assert "2 U< IF EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT THEN" in named
+    found = word_body("_XC-REQUIRE-FOUND")
+    assert "_XC-FOUND @ _XC-FINAL @ _XC-REFS @ _XC-REQUIRE-NAMED" in found
+    assert "_XC-EK-REMOVE _XC-EDIT ! 0 _XC-GROWTH !" in found
+    victim_found = word_body("_XC-REQUIRE-VICTIM")
+    assert (
+        "_XC-VICTIM-FOUND @ _XC-VICTIM-FINAL @ _XC-VICTIM-REFS @"
+    ) in victim_found
+    assert "_XC-EK-REPLACE _XC-EDIT ! 0 _XC-GROWTH !" in victim_found
+    # A parent loses a link to RMDIR, a directory victim or a directory
+    # leaving it, and gains one to MKDIR or an arriving directory below the
+    # limit; the CWD rule belongs to CREATE and MKDIR alone.
+    parent = word_body("_XC-AUTH-PARENT")
+    assert (
+        "_XC-PARENT-LINKS @ 0< IF\n"
+        "        DUP 3 U< OVER _EXT4-LINK-MAX U> OR IF"
+    ) in parent
+    assert (
+        "_XC-PARENT-LINKS @ 0> IF\n"
+        "        DUP 2 U< OVER _EXT4-LINK-MAX U< 0= OR IF"
+    ) in parent
+    assert "_XC-OLD-WALK @ 0= IF\n        _XC-LOAD-INDEXED @ _XC-P-BIND-SHAPE" in (
+        parent
+    )
+    assert "_XC-PARENT-IN @ OVER _XC-PARENT-SNAP @ +" in parent
+    assert "_XC-DIRECTORY @ IF _XC-REMOVING @ IF -1 ELSE 1 THEN ELSE 0 THEN" in (
+        word_body("_XC-ENTRY")
+    )
+    creating = word_body("_XC-CREATING?")
+    assert "_XC-LINKING @ 0= _XC-REMOVING @ 0= AND _XC-RENAMING @ 0= AND" in (
+        creating
+    )
+    runtime = word_body("_XC-REQUIRE-PARENT-RUNTIME")
+    assert "_XC-CREATING? _XC-PARENT @ _XC-V @ V.CWD @ <> AND IF" in runtime
+    assert "_XC-RENAMING @ 0= _XC-WALK-SOURCE @ OR IF" in runtime
+
+    # Both staging passes take the leaf the cold plan authenticated from
+    # the plan's snapshot and make the record edit the kernel's
+    # ext4_generic_delete_entry makes, stamping the block once.
+    stage_target = word_body("_XC-STAGE-TARGET")
+    require_order(
+        stage_target,
+        (
+            "_XC-SAME-BLOCK? IF _XC-P.SOURCE-SNAPSHOT ELSE _XC-P.DIR-SNAPSHOT",
+            "_XC-DIR-HOME @ _XC-ACQUIRE-SNAPSHOT",
+            "_XC-RECORD-EDIT? IF\n        _XC-STAGE-RECORDS",
+        ),
+    )
+    records = word_body("_XC-STAGE-RECORDS")
+    require_order(
+        records,
+        (
+            "_XC-SAME-BLOCK? IF _XC-IMAGE @ _XC-DIR-REMOVE",
+            "_XC-IMAGE @ _XC-DIR-APPLY",
+            "_XC-IMAGE @ _XC-DIR-REMOVE",
+            "_XC-INODE @ _XC-IMAGE @ _XC-VICTIM-DE-OFF @ + L!",
+            "_EXT4-RESTAMP-DIR-BLOCK",
+        ),
+    )
+    remove = word_body("_XC-DIR-REMOVE")
+    require_order(
+        remove,
+        (
+            "_XC-RM-PREV-OFF @ 0< IF",
+            "0 _XC-DIR-DE @ L!",
+            "_XC-DIR-DE @ 6 + _XC-RM-REC @ 6 - 0 FILL",
+            "_XC-RM-PREV-REC @ _XC-RM-REC @ +",
+            "_XC-DIR-IMAGE @ _XC-RM-PREV-OFF @ + 4 + W!",
+            "_XC-DIR-DE @ _XC-RM-REC @ 0 FILL",
+        ),
+    )
+    assert "_EXT4-RESTAMP-DIR-BLOCK" not in remove
+    assert "_EXT4-RESTAMP-DIR-BLOCK" not in word_body("_XC-DIR-APPLY")
+
+    # RENAME walks its old parent in find mode in the old parent's bank, and
+    # the new parent for room or the victim; within one parent one walk does
+    # both, and the source's removal goes into the directory snapshot before
+    # the insert plans against it.
+    rename_plan = word_body("_XC-PLAN-RENAME")
+    require_order(
+        rename_plan,
+        (
+            "_XC-AUTH-REMOVAL-TARGET",
+            "_XC-SWAP-TARGET _XC-AUTH-REMOVAL-TARGET _XC-SWAP-TARGET",
+            "_XC-SWAP-PARENT -1 _XC-OLD-WALK !",
+            "TRUE FALSE FALSE _XC-WALK-MODE",
+            "_XC-AUTH-PARENT",
+            "_XC-EK-REMOVE _XC-EDIT ! 0 _XC-GROWTH !",
+            "0 _XC-OLD-WALK ! _XC-SWAP-PARENT",
+            "_XC-REQUIRE-SOURCE",
+            "_XC-VICTIM @ DUP 0= _XC-WALK-MODE",
+            "_XC-AUTH-PARENT",
+            "_XC-REQUIRE-SOURCE",
+            "_XC-REQUIRE-VICTIM",
+            "_XC-SWAP-TARGET _XC-AUTH-EMPTY-DIRECTORY _XC-SWAP-TARGET",
+            "_XC-PLAN-AFTER-REMOVAL",
+            "_XC-PLAN-INSERT-EDIT",
+            "_XC-AUTH-MOVED-DIRECTORY",
+            "_XC-PLAN-GROWTH",
+            "_XC-SWAP-TARGET _XC-AUTH-ORPHAN-RELEASE _XC-SWAP-TARGET",
+            "_XC-REQUIRE-EA-APART",
+        ),
+    )
+    after = word_body("_XC-PLAN-AFTER-REMOVAL")
+    require_order(
+        after,
+        (
+            "_XC-CROSS @ _XC-SOURCE-HOME @ _XC-DIR-HOME @ <> OR IF 0 EXIT THEN",
+            "_XC-P.DIR-SNAPSHOT + _XC-DIR-REMOVE",
+            "_XC-SCAN-SLOT",
+            "_XC-LOAD-INDEXED @ IF _XC-RM-OFF @ _XC-DROP-RECORD EXIT THEN",
+        ),
+    )
+    assert "_XC-DIR-DE @ L@ 0<> _XC-NOTE-SLOT" in word_body("_XC-SCAN-SLOT")
+    assert "-1 _XC-SPLIT-COUNT +!" in word_body("_XC-DROP-RECORD")
+    for removed in (
+        "_XU-SHARED-PLAN",
+        "_XU-AUTH-INDEX-ACTIVE-TABLE",
+        "_XU-INDEX-BIND-SELECTED-LEAF",
+        "_XU-INDEXED-LEAF-SCAN",
+        "_XU-AUTH-INDEXED-PARENT",
+        "_XU-CAPTURE-PARENT-DIRECTORY",
+        "_XU-DIR-SPLICE",
+        "_XU-AUTH-PARENT-DIRECTORY",
+        "_XU-REQUIRE-PARENT-MAP-HITS",
+        "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
+        "_XU-PROVE-DIRECTORY-OWNERS",
+        "_XU-STAGE-DIRECTORY",
+        "_XU-DIR-APPLY",
+    ):
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(removed)}(?=[ \t\r\n(])", facade
+        ) is None
+
+
+def test_ext4_rename_moves_names_through_the_shared_removal_and_insert(
+) -> None:
+    """Pin RENAME's two banks, its directory move and its sealed form."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    def require_order(body: str, names: tuple[str, ...]) -> None:
+        start = 0
+        for name in names:
+            position = body.index(name, start)
+            start = position + len(name)
+
+    # The plan keeps the old parent's record, the block the source's record
+    # leaves and a moved directory's block 0 after the parent's record.
     layout_start = facade.index(
         "_XC-P.PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +"
     )
     layout_end = facade.index("_XC-P.OP CELL+", layout_start)
-    rename_layout = facade[layout_start:layout_end]
     assert tuple(
-        re.findall(r"CONSTANT\s+(_XC-P\.RENAME-[A-Z0-9-]+)", rename_layout)
+        re.findall(r"CONSTANT\s+(_XC-P\.[A-Z0-9-]+)", facade[layout_start:layout_end])
     ) == (
-        "_XC-P.RENAME-BASELINE",
-        "_XC-P.RENAME-CROSS-PARENT",
-        "_XC-P.RENAME-DEST-SEPARATE",
-        "_XC-P.RENAME-EDIT-KIND",
-        "_XC-P.RENAME-DEST-ROUTE",
-        "_XC-P.RENAME-DEST-ROUTE-LOGICAL",
-        "_XC-P.RENAME-DEST-ENTRY",
-        "_XC-P.RENAME-DEST-LOGICAL",
-        "_XC-P.RENAME-DEST-HOME",
-        "_XC-P.RENAME-DEST-HASH",
-        "_XC-P.RENAME-DEST-MINOR",
-        "_XC-P.RENAME-NP-BASELINE",
-        "_XC-P.RENAME-NP-INDEXED",
-        "_XC-P.RENAME-NP-INDEX-BASELINE",
-        "_XC-P.RENAME-NP-ROOT-HOME",
-        "_XC-P.RENAME-NP-DEPTH",
-        "_XC-P.RENAME-NP-ROUTE-NODE-HOME",
-        "_XC-P.RENAME-NP-PARENT-GROUP",
-        "_XC-P.RENAME-NP-PARENT-HOME",
-        "_XC-P.RENAME-NP-PARENT-OFF",
-        "_XC-P.RENAME-HASH-BASELINE",
-        "_XC-P.RENAME-DEST-DIR-SNAPSHOT",
-        "_XC-P.RENAME-NP-ROOT-SNAPSHOT",
-        "_XC-P.RENAME-NP-NODE-SNAPSHOT",
-        "_XC-P.RENAME-NP-PARENT-SNAPSHOT",
+        "_XC-P.OLD-PARENT-SNAPSHOT",
+        "_XC-P.SOURCE-SNAPSHOT",
+        "_XC-P.CHILD-SNAPSHOT",
+        "_XC-P.OP",
     )
-    accessors = {
-        "_XR-NP-DIR-SNAPSHOT": "_XC-P.RENAME-DEST-DIR-SNAPSHOT +",
-        "_XR-NP-PARENT-SNAPSHOT": "_XC-P.RENAME-NP-PARENT-SNAPSHOT +",
-        "_XR-NP-ROOT-SNAPSHOT": "_XC-P.RENAME-NP-ROOT-SNAPSHOT +",
-        "_XR-NP-NODE-SNAPSHOT": "_XC-P.RENAME-NP-NODE-SNAPSHOT +",
-    }
-    for name, ending in accessors.items():
-        assert word_body(name).rstrip().endswith(
-            f"_XU-SHARED-PLAN {ending}"
+    assert "_XC-P.RENAME-" not in facade
+    assert "_XR-EK-" not in facade
+    assert "7 CONSTANT _XC-EK-REPLACE" in facade
+    roles = dict(
+        (name, int(value))
+        for value, name in re.findall(
+            r"(?m)^\s*(\d+) CONSTANT (_XC-HR-RENAME-[A-Z0-9-]+)$", facade
         )
-        assert re.search(
-            rf"(?m)^\s*(?:CREATE|VARIABLE)\s+{re.escape(name)}\b",
-            facade,
-        ) is None
+    )
+    assert roles == {
+        "_XC-HR-RENAME-OLD-PARENT-INODE": 14,
+        "_XC-HR-RENAME-SOURCE-DIRECTORY": 15,
+        "_XC-HR-RENAME-CHILD-DIRECTORY": 16,
+        "_XC-HR-RENAME-VICTIM-INODE": 17,
+    }
+    insert_shape = word_body("_XC-P-INSERT-SHAPE?")
+    assert (
+        "DUP _XC-EK-REPLACE = IF\n"
+        "        DROP DUP _XC-P.OP + @ _XC-PO-RENAME = EXIT"
+    ) in insert_shape
+    assert "_XC-PO-RENAME = OR IF\n        _XC-P-INSERT-SHAPE? EXIT" in (
+        word_body("_XC-P-SHAPE?")
+    )
 
-    rename_clear = word_body("_XC-P-RENAME-CLEAR?")
+    # One walk, one inode stager, one map audit and one publication serve
+    # both parents through the old parent's bank, and the removal target's
+    # words serve the victim through the victim's bank.
+    parent_pairs = tuple(
+        re.findall(r"(_XC-[A-Z0-9-]+) (_XC-[A-Z0-9-]+) _XC-EXCHANGE",
+                   word_body("_XC-SWAP-PARENT"))
+    )
+    assert parent_pairs == (
+        ("_XC-PARENT", "_XC-OLD-PARENT"),
+        ("_XC-PARENT-VN", "_XC-OLD-PARENT-VN"),
+        ("_XC-PARENT-INO", "_XC-OLD-PARENT-INO"),
+        ("_XC-PARENT-PARENT-INO", "_XC-OLD-PARENT-PARENT-INO"),
+        ("_XC-PARENT-GEN", "_XC-OLD-PARENT-GEN"),
+        ("_XC-PARENT-NEW-NLINK", "_XC-OLD-PARENT-NEW-NLINK"),
+        ("_XC-PARENT-GROUP", "_XC-OLD-PARENT-GROUP"),
+        ("_XC-PARENT-HOME", "_XC-OLD-PARENT-HOME"),
+        ("_XC-PARENT-OFF", "_XC-OLD-PARENT-OFF"),
+        ("_XC-OLD-BLOCKS", "_XC-OLD-PARENT-BLOCKS"),
+        ("_XC-OLD-SECTORS", "_XC-OLD-PARENT-SECTORS"),
+        ("_XC-PARENT-LINKS", "_XC-OLD-PARENT-LINKS"),
+        ("_XC-PARENT-ROLE", "_XC-OLD-PARENT-ROLE"),
+        ("_XC-PARENT-SNAP", "_XC-OLD-PARENT-SNAP"),
+        ("_XC-EDIT", "_XC-OLD-PARENT-EDIT"),
+        ("_XC-GROWTH", "_XC-OLD-PARENT-GROWTH"),
+    )
+    target = word_body("_XC-SWAP-TARGET")
     assert tuple(
-        re.findall(r"_XC-P\.RENAME-[A-Z0-9-]+", rename_clear)
+        re.findall(r"(_XC-[A-Z0-9-]+) (_XC-[A-Z0-9-]+) _XC-EXCHANGE(?!-)", target)
     ) == (
-        "_XC-P.RENAME-BASELINE",
-        "_XC-P.RENAME-CROSS-PARENT",
-        "_XC-P.RENAME-DEST-SEPARATE",
-        "_XC-P.RENAME-EDIT-KIND",
-        "_XC-P.RENAME-DEST-ROUTE",
-        "_XC-P.RENAME-DEST-ROUTE-LOGICAL",
-        "_XC-P.RENAME-DEST-ENTRY",
-        "_XC-P.RENAME-DEST-LOGICAL",
-        "_XC-P.RENAME-DEST-HOME",
-        "_XC-P.RENAME-DEST-HASH",
-        "_XC-P.RENAME-DEST-MINOR",
-        "_XC-P.RENAME-NP-BASELINE",
-        "_XC-P.RENAME-NP-INDEXED",
-        "_XC-P.RENAME-NP-INDEX-BASELINE",
-        "_XC-P.RENAME-NP-ROOT-HOME",
-        "_XC-P.RENAME-NP-DEPTH",
-        "_XC-P.RENAME-NP-ROUTE-NODE-HOME",
-        "_XC-P.RENAME-NP-PARENT-GROUP",
-        "_XC-P.RENAME-NP-PARENT-HOME",
-        "_XC-P.RENAME-NP-PARENT-OFF",
-        "_XC-P.RENAME-HASH-BASELINE",
+        ("_XC-D", "_XC-VICTIM-D"),
+        ("_XC-VN", "_XC-VICTIM-VN"),
+        ("_XC-INODE", "_XC-VICTIM-INO"),
+        ("_XC-NEW-GEN", "_XC-VICTIM-GEN"),
+        ("_XC-NLINK", "_XC-VICTIM-NLINK"),
+        ("_XC-FINAL", "_XC-VICTIM-FINAL"),
+        ("_XC-ORPHAN", "_XC-VICTIM-ORPHAN"),
+        ("_XC-FI-GROUP", "_XC-VICTIM-GROUP"),
+        ("_XC-TARGET-INDEX", "_XC-VICTIM-INDEX"),
+        ("_XC-INODE-HOME", "_XC-VICTIM-INODE-HOME"),
+        ("_XC-INODE-OFF", "_XC-VICTIM-INODE-OFF"),
+        ("_XC-INODE-ROLE", "_XC-VICTIM-ROLE"),
     )
-    shape = word_body("_XC-P-SHAPE?")
-    rename_shape = word_body("_XC-P-RENAME-SHAPE?")
-    np_index_shape = word_body("_XC-P-RENAME-NP-INDEX-SHAPE?")
-    assert shape.lstrip().startswith(
-        "( plan -- plan flag )\n"
-        "    DUP _XC-P.OP + @ _XC-P-OP? 0= IF FALSE EXIT THEN"
-    )
-    assert shape.rstrip().endswith(
-        "_XC-P-RENAME-SHAPE?\n    ELSE\n        _XC-P-RENAME-CLEAR?\n    THEN"
-    )
-    assert "_XC-P.RENAME-NP-ROOT-HOME + @ 0= IF FALSE EXIT THEN" in (
-        np_index_shape
-    )
-    assert (
-        "_XC-P.RENAME-NP-DEPTH + @ DUP 0=\n"
-        "        SWAP 1 = OR 0= IF FALSE EXIT THEN"
-    ) in np_index_shape
-    assert (
-        "_XC-P.RENAME-NP-DEPTH + @ IF\n"
-        "            DUP _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ 0<>\n"
-        "        ELSE\n"
-        "            DUP _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ 0="
-    ) in np_index_shape
-    for form_gate in (
-        "_XC-P.RENAME-CROSS-PARENT + @ _XC-P-FLAG?",
-        "_XC-P.RENAME-DEST-SEPARATE + @ _XC-P-FLAG?",
-        "_XC-P.RENAME-EDIT-KIND + @ DUP _XR-EK-INPLACE U<",
-        "SWAP _XR-EK-REPLACE U> OR",
-        "_XC-P.RENAME-NP-BASELINE + @ -1 <>",
-        "_XC-P-RENAME-NP-INDEX-SHAPE?",
-        "_XC-P.INDEXED + @ 0= IF FALSE EXIT THEN",
-        "_XC-P-RENAME-TWO-BLOCK-KIND? 0= IF FALSE EXIT THEN",
-        "_XC-P.RENAME-HASH-BASELINE + @ -1 =",
-    ):
-        assert form_gate in rename_shape
-
-    entry = word_body("_XR-ENTRY")
-    assert "_XR-FLAGS @ VFS-RN-NOREPLACE INVERT AND IF" in entry
-    assert "_XR-VICTIM @ IF" in entry
-    directory_gate = entry.index("VFS-T-DIR <> IF")
-    assert entry.index("_XR-CROSSDIR @ 0= IF", directory_gate) < entry.index(
-        "_XR-SOURCE @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN",
-        directory_gate,
+    assert target.rstrip().endswith(
+        "_XC-OLD-INODE _XC-VICTIM-INODE _XC-EXCHANGE-RECORDS"
     )
 
-    source_scan = word_body("_XU-INDEXED-LEAF-SCAN")
-    source_auth = word_body("_XU-AUTH-INDEXED-PARENT")
-    assert source_scan.count("_XU-SPLICE-SCAN @ IF") == 2
-    # RENAME's source walk finds one record; only the removal's find mode
-    # counts the parent's references to its target.
-    for removal_only in ("_XU-RENAME-SCAN", "_XU-FINAL", "_XU-TARGET-REFS"):
-        assert removal_only not in source_auth
-        assert removal_only not in source_scan
-
-    dest_scan = word_body("_XR-SCAN-INDEXED-DEST-LEAF")
-    dest_auth = word_body("_XR-AUTH-INDEXED-DESTINATION")
+    # The source is a regular file or a directory; a victim has its type,
+    # and a directory victim is the empty directory RMDIR admits.  The
+    # parents' links follow ext4_rename.
+    entry = word_body("_XC-ENTRY-RENAME")
     require_order(
-        dest_auth,
+        entry,
         (
-            "_XU-REQUIRE-HASH-AUTHORITY",
-            "_XU-BIND-HASH-AUTHORITY",
-            "_EXT4-HALF-MD4-DIRHASH?",
-            "_EXT4-DD-SELECT-ROUTE",
-            "_EXT4-DD.ACTIVE-COUNT + @ U<",
-            "_EXT4-DD-SET-INTERVAL",
-            "_EXT4-DD-LOAD-LOGICAL",
+            "_XC-FLAGS @ VFS-RN-NOREPLACE INVERT AND IF VFS-E-INVALID EXIT THEN",
+            "EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED",
+            "_XC-DIRECTORY @ IF -1 ELSE 0 THEN _XC-PARENT-LINKS !",
+            "_XC-HR-RENAME-OLD-PARENT-INODE _XC-PARENT-ROLE !",
+            "_XC-P.OLD-PARENT-SNAPSHOT _XC-PARENT-SNAP !",
+            "_XC-ENTRY-PARENT",
+            "_XC-SWAP-PARENT",
+            "_XC-DIRECTORY @ _XC-MOVING !",
+            "_XC-HR-PARENT-INODE _XC-PARENT-ROLE !",
+            "_XC-ENTRY-PARENT",
+            "_XC-ENTRY-VICTIM",
+            "_XC-MOVING @ IF 1 ELSE 0 THEN",
+            "_XC-VICTIM-DIR @ IF 1- THEN _XC-PARENT-LINKS !",
+            "_XC-ENTRY-NAME",
+            "_XC-OLD-NAME-SNAPSHOT _XC-FIND-NAME ! _XC-OLD-NLEN @ _XC-FIND-NLEN !",
+            "_XC-ENTRY-WRITER",
+        ),
+    )
+    victim = word_body("_XC-ENTRY-VICTIM")
+    for fragment in (
+        "_XC-VICTIM-D @ IN.PARENT @ _XC-PARENT @ <> IF VFS-E-STALE EXIT THEN",
+        "_XC-VICTIM-VN @ _XC-VN @ = IF VFS-E-INVALID EXIT THEN",
+        "_XC-VICTIM-DIR @ _XC-DIRECTORY @ <> IF VFS-E-CONFLICT EXIT THEN",
+        "_XC-VICTIM-D @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN",
+        "_XC-VICTIM-NLINK @ 1 =",
+        "_XC-HR-RENAME-VICTIM-INODE _XC-VICTIM-ROLE !",
+    ):
+        assert fragment in victim
+
+    # A directory that changes parent: its block 0, read through its own map
+    # and validated, takes the new parent in its `..`; its other blocks are
+    # never read.  Its map names that block once in the map check.
+    moved = word_body("_XC-AUTH-MOVED-DIRECTORY")
+    require_order(
+        moved,
+        (
+            "_XC-P.CHILD-SNAPSHOT + _XC-MOVED-DESC _EXT4-DD-INIT",
+            "_EXT4-DD-AUTH-INODE",
+            "_XC-MOVED-DESC _EXT4-DD.PARINO + @ _XC-OLD-PARENT-INO @ <> OR",
+            "_XC-MOVED-DESC _EXT4-DD-AUTH-HTREE-ROOT",
+            "12 _XC-CHILD-DOTDOT !",
+            "0 _XC-MOVED-DESC _EXT4-DD-LOAD-LOGICAL",
             "_EXT4-VALIDATE-DIR-BLOCK",
-            "_XR-SCAN-INDEXED-DEST-LEAF",
-            "_XR-DEST-DUPLICATE @ IF",
-            "_XR-DEST-FOUND @ 0= IF",
+            "_EXT4-DIR-DOTDOT DUP _XC-CHILD-DOTDOT ! 0= IF",
+            "_XC-P.CHILD-SNAPSHOT +",
         ),
     )
-    for aggregate_gate in (
-        "_XR-DEST-TOTAL @ _XR-COMPACT-MIN @ _EXT4-UADD?",
-        "_XR-DEST-SOURCE-MIN @ IF VFS-E-CONFLICT EXIT THEN",
-        "_XR-DEST-TOTAL @ _XR-DEST-SOURCE-MIN @ -",
-        "_XR-NEEDED @ _EXT4-UADD?",
-        "1012 U> 0= IF _XR-BIND-SCANNED-LEAF EXIT THEN",
-    ):
-        assert aggregate_gate in dest_scan
-    assert "_XR-BIND-DEST-LEAF" in word_body("_XR-BIND-SCANNED-LEAF")
-    assert (
-        "_XR-VICTIM-LEAF @ IF _XR-BIND-SCANNED-LEAF EXIT THEN"
-    ) in dest_scan
+    child = word_body("_XC-STAGE-CHILD-BLOCK")
+    require_order(
+        child,
+        (
+            "_XC-HR-RENAME-CHILD-DIRECTORY _XC-CHILD-HOME @ _XC-HP-BIND-META",
+            "_XC-P.CHILD-SNAPSHOT + _XC-CHILD-HOME @ _XC-ACQUIRE-SNAPSHOT",
+            "_XC-PARENT-INO @ _XC-IMAGE @ _XC-CHILD-DOTDOT @ + L!",
+            "_EXT4-RESTAMP-DX-ROOT",
+            "_EXT4-RESTAMP-DIR-BLOCK",
+        ),
+    )
+    assert "_XC-MOVING @ IF _XC-STAGE-CHILD-BLOCK" in word_body("_XC-STAGE-EDIT")
+    dotdot = word_body("_EXT4-DIR-DOTDOT")
+    assert "8 + C@ [CHAR] . <> OR IF 0 EXIT THEN" in dotdot
+    assert "8 + W@ 0x2E2E <> OR IF DROP 0 THEN" in dotdot
+    rename_check = word_body("_XC-RENAME-MAP-CHECK")
+    require_order(
+        rename_check,
+        (
+            "_EXT4-NMC-BEGIN",
+            "_XC-MAP-AUDIT _EXT4-NMC-IOR !",
+            "_XC-SWAP-PARENT _XC-PREPARE-PARENT-TREE",
+            "_XC-MAP-AUDIT _EXT4-NMC-IOR !",
+            "_XC-SWAP-PARENT",
+            "_XC-MOVED-MAP-AUDIT _EXT4-NMC-IOR !",
+            "_XC-SWAP-TARGET _XC-CHILD-MAP-AUDIT _XC-SWAP-TARGET",
+            "_EXT4-NMC-BITMAPS",
+            "_EXT4-NMC-END",
+        ),
+    )
+    assert "_XC-INODE @ _XW-INO !" in word_body("_XC-MOVED-MAP-AUDIT")
+    assert "1 _XP-EXPECT !" in word_body("_XC-MOVED-MAP-AUDIT")
+    assert "_XC-SOURCE-APART? IF 1+ THEN" in word_body("_XC-REWRITTEN")
 
-    same_dest = word_body("_XR-AUTH-SAMEPARENT-INDEXED-DESTINATION")
-    np_dest = word_body("_XR-AUTH-NP-INDEXED-PARENT")
-    require_order(
-        same_dest,
-        (
-            "_XU-DIRECTORY-DESC _XR-DEST-DESC !",
-            "_XU-PARENT-INO @ _XR-DEST-PARENT-INO !",
-            "_XU-PARENT-GEN @ _XR-DEST-PARENT-GEN !",
-            "-1 _XR-DEST-SAMEPARENT !",
-            "_XR-AUTH-INDEXED-DESTINATION",
-        ),
+    # Within one parent the removal comes first, which differs from the
+    # kernel's ext4_rename order.
+    after_start = facade.index(
+        "\\ Within one parent the source's record leaves first"
     )
-    for independent_binding in (
-        "_XR-NP-ROOT-CURRENT _XR-NP-DIRECTORY-DESC _EXT4-DD-INIT",
-        "_XR-NP-DIRECTORY-DESC _EXT4-DD.PARENT + @ _XR-PARENT @ <>",
-        "_XR-NP-DIRECTORY-DESC _EXT4-DD.INO + @ _XR-NP-INO @ <>",
-        "_XR-NP-DIRECTORY-DESC _EXT4-DD.GEN + @ _XR-NP-GEN @ <>",
-        "_XR-AUTH-NP-INDEX-ACTIVE-TABLE",
-        "_XR-NP-DIRECTORY-DESC _XR-DEST-DESC !",
-        "_XR-NP-INO @ _XR-DEST-PARENT-INO !",
-        "0 _XR-DEST-SAMEPARENT !",
-        "_XR-AUTH-INDEXED-DESTINATION",
-        "_XC-P.RENAME-NP-INDEX-BASELINE",
-    ):
-        assert independent_binding in np_dest
-    np_table = word_body("_XR-AUTH-NP-INDEX-ACTIVE-TABLE")
-    assert "_EXT4-DD-REQUIRE-DEPTH0 EXIT" in np_table
-    require_order(
-        np_table,
-        (
-            "_EXT4-DD-REQUIRE-MUTABLE-HASH",
-            "_EXT4-DD.DX-COUNT + @ 1 <>",
-            "_EXT4-DD-LOAD-LOGICAL",
-            "_EXT4-VALIDATE-DX-NODE",
-            "_XR-NP-NODE-SNAPSHOT",
-            "_EXT4-DD-REQUIRE-ACTIVE-HASHES",
-        ),
-    )
+    after_comment = facade[after_start:facade.index(
+        ": _XC-PLAN-AFTER-REMOVAL", after_start
+    )]
+    assert "ext4_rename" in after_comment
 
-    same_plan = word_body("_XR-PLAN-SAMEPARENT")
-    cross_plan = word_body("_XR-PLAN-CROSSDIR")
-    capture_np = word_body("_XR-CAPTURE-NP-DIRECTORY")
-    require_old = word_body("_XR-REQUIRE-OLD-DIRECTORY")
-    require_np = word_body("_XR-REQUIRE-NP-DIRECTORY")
-    require_order(
-        same_plan,
-        (
-            "_XU-CAPTURE-PARENT-DIRECTORY",
-            "_XR-AUTH-SAMEPARENT-INDEXED-DESTINATION",
-            "_XR-PROVE-SAMEPARENT-OWNERS",
-            "_XU-CAPTURE-PARENT-DIRECTORY",
-            "_XR-AUTH-SAMEPARENT-INDEXED-DESTINATION",
-            "_XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE",
-            "_XR-BUILD-INDEXED-DEST-AFTERIMAGE",
-            "_XR-SCAN-NEW-NAME",
-            "_XR-BIND-LINEAR-DESTINATION",
-            "_XR-BIND-RENAME-FORM",
-        ),
-    )
-    require_order(
-        cross_plan,
-        (
-            "_XU-CAPTURE-PARENT-DIRECTORY",
-            "_XR-AUTH-NP-DIRECTORY",
-            "_XR-BIND-RENAME-FORM",
-            "_XU-AUTH-CHILD-DIRECTORY",
-            "_XR-PROVE-CROSSDIR-OWNERS",
-            "_XU-REQUIRE-TARGET",
-            "_XU-REQUIRE-PARENT",
-            "_XR-REQUIRE-NP",
-            "_XR-REQUIRE-OLD-DIRECTORY",
-            "_XR-REQUIRE-NP-DIRECTORY",
-            "_XU-REQUIRE-CHILD-DIRECTORY",
-            "_XR-BUILD-CHILD-DIR-AFTERIMAGE",
-        ),
-    )
-    assert "_XR-NP-INDEXED @ IF" in capture_np
-    assert "_XR-AUTH-NP-INDEXED-PARENT" in capture_np
-    assert "_XR-BIND-LINEAR-DESTINATION" in capture_np
-    assert "_XU-INDEXED @ IF" in require_old
-    assert "_XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE" in require_old
-    assert "_XR-BUILD-OLD-DIR-AFTERIMAGE" in require_old
-    assert "_XR-NP-INDEXED @ IF" in require_np
-    assert "_XR-BUILD-INDEXED-DEST-AFTERIMAGE" in require_np
-
-    same_owners = " ".join(
-        word_body("_XR-PROVE-SAMEPARENT-OWNERS").split()
-    )
-    cross_owners = " ".join(word_body("_XR-PROVE-CROSSDIR-OWNERS").split())
-    for audit in (
-        "_XU-DIRECTORY-DESC _XU-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
-        "_XU-DIRECTORY-DESC _XR-DEST-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
+    # The sealed rename form: one writer cell for the child home, the
+    # source's removal in either form, a directory victim and source, and
+    # the parents' link changes, all rebuilt from media and the payload.
+    for fragment in (
+        "776 CONSTANT _EXT4-JWR.CP-ADD-CHILD-HOME",
+        "784 CONSTANT _EXT4-JWR.CP-ADD-TARGET-SIZE-LO",
+        "792 CONSTANT _EXT4-JWR.CP-ADD-TARGET-SIZE-HI",
+        "800 CONSTANT _EXT4-JWR-SIZE",
     ):
-        assert audit in same_owners
-    for audit in (
-        "_XU-DIRECTORY-DESC _XU-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
-        "_XR-NP-DIRECTORY-DESC _XR-NP-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
+        assert fragment in facade
+    payload = word_body("_EXT4-JWR-CP-RENAME-PAYLOAD?")
+    assert "_EXT4-JCA-REMOVAL? 0= IF FALSE EXIT THEN" in payload
+    assert "_EXT4-JCA-SPLICE?" not in payload
+    require_order(
+        payload,
+        (
+            "_EXT4-JWR.CP-ADD-CHILD-HOME + @",
+            "_EXT4-JUA-OLD-PARENT-INO @ 0= IF DROP FALSE EXIT THEN",
+            "_EXT4-JCA-DIR-HOME? 0= IF DROP FALSE EXIT THEN",
+            "_EXT4-JCA-RANGES-ALIAS-HOME? OR",
+            "4 _EXT4-JUA-META !",
+            "_EXT4-JUA-CHILD-HOME @ IF 1 _EXT4-JUA-META +! THEN",
+        ),
+    )
+    assert "_EXT4-JUA-CHILD-HOME @\n    _EXT4-JUA-WRITER @ _EXT4-JWR.CP-ADD-CHILD-HOME + !" in (
+        word_body("_EXT4-JUA-SEAL")
+    )
+    assert "_EXT4-JWR.CP-ADD-CHILD-HOME + @\n    _EXT4-JUA-CHILD-HOME !" in (
+        word_body("_EXT4-JUA-LOAD-SEALED-PRESTATE")
+    )
+    assert "0 _EXT4-JUA-CHILD-HOME !" in word_body("_EXT4-JUA-CLEAR-RENAME")
+    inode_home = word_body("_EXT4-JUA-REQUIRE-INODE-HOME")
+    for fragment in (
+        "_EXT4-JUA-SOURCE-TYPE _EXT4-JUA-LOAD-PRESTATE",
+        "0 FALSE _EXT4-JUA-APPLY-TIMES-EXPECTED",
+        "_EXT4-JUA-PARENT-LINKS TRUE _EXT4-JUA-APPLY-TIMES-EXPECTED",
+        "_EXT4-JUA-OLD-PARENT-LINKS TRUE _EXT4-JUA-APPLY-TIMES-EXPECTED",
     ):
-        assert audit in cross_owners
-
-    expected_roles = word_body("_XR-HP-EXPECTED-ROLES")
-    plan_homes = word_body("_XR-HP-PLAN-HOMES")
-    assert "_XR-DEST-SEPARATE @ IF 4 ELSE 3 THEN" in expected_roles
-    assert "_XU-DIRECTORY @ IF 6 ELSE 5 THEN" in expected_roles
-    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", plan_homes)) == (
-        "_XC-HR-INODE",
-        "_XC-HR-PARENT-INODE",
-        "_XC-HR-RENAME-NEW-PARENT-INODE",
-        "_XC-HR-RENAME-VICTIM-INODE",
-        "_XC-HR-PARENT-DIRECTORY",
-        "_XC-HR-RENAME-NEW-PARENT-DIRECTORY",
-        "_XC-HR-RENAME-CHILD-DIRECTORY",
-        "_XC-HR-ORPHAN",
-        "_XC-HR-PRIMARY-SUPER",
+        assert fragment in inode_home
+    assert "_EXT4-JUA-OLD-PARENT-INO @ IF 0 ELSE -1 THEN" in (
+        word_body("_EXT4-JUA-PARENT-LINKS")
     )
-    same_stage = word_body("_XR-STAGE-DIRECTORY")
-    cross_stage = word_body("_XR-STAGE-CROSSDIR")
+    directories = word_body("_EXT4-JUA-REQUIRE-RENAME-DIRECTORIES")
     require_order(
-        same_stage,
+        directories,
         (
-            "_XR-REQUIRE-SAMEPARENT-DIRECTORIES",
-            "_XU-DIR-HOME @",
-            "_XR-STAGE-CROSS-DIRECTORY",
-            "_XR-DEST-HOME @",
-            "_XR-STAGE-CROSS-DIRECTORY",
+            "_EXT4-JUA-DIRECTORY @ _EXT4-JUA-CUT-DIR !",
+            "_EXT4-JUA-CUT-TARGET? 0= IF VFS-E-CORRUPT EXIT THEN",
+            "_EXT4-JUA-SOURCE-INO @ _EXT4-JUA-DIR-TARGET @ L!",
+            "_EXT4-JUA-SOURCE-INO @ _EXT4-JUA-CUT-EXPECTED",
+            "_EXT4-JUA-REQUIRE-DIRECTORY-HOME",
         ),
     )
+    assert "3 PICK IF _EXT4-JUA-SPLICE-EXPECTED EXIT THEN" in (
+        word_body("_EXT4-JUA-CUT-EXPECTED")
+    )
+    child_afterimage = word_body("_EXT4-JUA-REQUIRE-CHILD-AFTERIMAGE")
     require_order(
-        cross_stage,
+        child_afterimage,
         (
-            "_XR-STAGE-SOURCE-INODE",
-            "_XU-STAGE-PARENT-INODE",
-            "_XR-STAGE-NP-INODE",
-            "_XR-REQUIRE-OLD-DIRECTORY",
-            "_XR-REQUIRE-NP-DIRECTORY",
-            "_XU-REQUIRE-CHILD-DIRECTORY",
-            "_XR-BUILD-CHILD-DIR-AFTERIMAGE",
-            "_XU-DIR-HOME @",
-            "_XR-NP-DIR-HOME @",
-            "_XU-DATA-BLOCK @",
+            "VFS-T-DIR\n    _EXT4-JUA-LOAD-PRESTATE",
+            "_EXT4-JUA-CHILD-HOME @ _EXT4-JUA-CTX @ _EXT4-READ-BLOCK",
+            "_EXT4-JUA-OLD-PARENT-INO @ _EXT4-DX-PARINO !",
+            "_EXT4-VALIDATE-DX-ROOT",
+            "_EXT4-VALIDATE-DIR-BLOCK",
+            "_EXT4-DIR-DOTDOT",
+            "_EXT4-JUA-EXPECTED-BLOCK _EXT4-JUA-DOTDOT @ + L!",
+            "_EXT4-RESTAMP-DX-ROOT",
+            "_EXT4-RESTAMP-DIR-BLOCK",
+            "_EXT4-JUA-CHILD-HOME @ _EXT4-JUA-REQUIRE-EXPECTED-HOME",
         ),
     )
+    staged = word_body("_EXT4-JUA-STAGED?")
+    require_order(
+        staged,
+        (
+            "_EXT4-JUA-LOAD-SEALED-PRESTATE",
+            "_EXT4-JUA-DIRECTORY @ _EXT4-JUA-OLD-PARENT-INO @ 0<> AND",
+            "_EXT4-JUA-CHILD-HOME @ 0<> <> IF VFS-E-CORRUPT EXIT THEN",
+            "_EXT4-JUA-REQUIRE-INODE-AFTERIMAGES",
+            "_EXT4-JUA-REQUIRE-RENAME-DIRECTORIES",
+            "_EXT4-JUA-REQUIRE-CHILD-AFTERIMAGE",
+            "_EXT4-JUA-REQUIRE-ORPHAN-AFTERIMAGE",
+        ),
+    )
+    rename_orphan = word_body("_XC-STAGE-RENAME-ORPHAN")
+    for fragment in (
+        "_XC-VICTIM-INO @ _EXT4-JUA-INO !",
+        "0 _EXT4-JUA-PREV-OFF ! 0 _EXT4-JUA-PREV-REC !",
+        "_XC-INODE @ _EXT4-JUA-SOURCE-INO !",
+        "_XC-SOURCE-HOME @ _EXT4-JUA-OLD-DIR-HOME !",
+        "0 _EXT4-JUA-OLD-PREV-OFF ! 0 _EXT4-JUA-OLD-PREV-REC !",
+        "_XC-MOVING @ IF _XC-CHILD-HOME @ ELSE 0 THEN _EXT4-JUA-CHILD-HOME !",
+    ):
+        assert fragment in rename_orphan
 
 
 def test_ext4_link_and_mkdir_share_the_growing_directory_insert() -> None:
@@ -87333,7 +87994,8 @@ def test_ext4_link_and_mkdir_share_the_growing_directory_insert() -> None:
     linear = word_body("_XC-AUTH-LINEAR-PARENT")
     indexed = word_body("_XC-AUTH-INDEXED-PARENT")
     edit = word_body("_XC-PLAN-INDEXED-EDIT")
-    for body in (linear, indexed, edit):
+    insert_edit = word_body("_XC-PLAN-INSERT-EDIT")
+    for body in (linear, indexed, edit, insert_edit):
         assert "_XC-LINKING" not in body
         assert "_XC-DIRECTORY @" not in body
     assert "_EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF" in parent
@@ -87353,8 +88015,9 @@ def test_ext4_link_and_mkdir_share_the_growing_directory_insert() -> None:
     )
 
     # One staging order serves every operation: the entry's inode, the
-    # directory edit, a new directory's block, the growth, the parent's
-    # record and, except for LINK, the inode allocation.
+    # parent's edit with a new directory's block, the growth and the
+    # parent's record, and, except for LINK, the inode allocation.  A
+    # rename stages the same parent edit.
     stage = word_body("_XC-STAGE")
     require_order(
         stage,
@@ -87363,6 +88026,16 @@ def test_ext4_link_and_mkdir_share_the_growing_directory_insert() -> None:
             "_XC-FIND-CHILD-BLOCK",
             "_XC-STAGE-LINK-TARGET",
             "_XC-STAGE-NEW-INODE",
+            "_XC-STAGE-EDIT",
+            "_XC-LINKING @ 0= IF",
+            "_XC-STAGE-INODE-ALLOCATION",
+            "_XC-STAGE-SUPER",
+        ),
+    )
+    stage_edit = word_body("_XC-STAGE-EDIT")
+    require_order(
+        stage_edit,
+        (
             "_XC-STAGE-PARENT-INODE",
             "_XC-STAGE-TARGET",
             "_XC-STAGE-NODE",
@@ -87370,12 +88043,10 @@ def test_ext4_link_and_mkdir_share_the_growing_directory_insert() -> None:
             "_XC-STAGE-NEW-DIRECTORY-BLOCK",
             "_XC-STAGE-GROWTH-BLOCK",
             "_XC-STAGE-PARENT-INODE",
-            "_XC-LINKING @ 0= IF",
-            "_XC-STAGE-INODE-ALLOCATION",
-            "_XC-STAGE-SUPER",
         ),
     )
-    growth_loop = stage[stage.index("_XC-GROWTH @ IF") :]
+    assert "_XC-STAGE-EDIT" in word_body("_XC-STAGE-RENAME")
+    growth_loop = stage_edit[stage_edit.index("_XC-GROWTH @ IF") :]
     assert "_XC-LINKING" not in growth_loop[: growth_loop.index("REPEAT")]
 
     # Every new block comes from the general allocator and enters the
@@ -88503,9 +89174,9 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
         "_EXT4-S32@": 6,
         "_EXT4-I-BLOCK-ZERO-FROM?": 0,
         "_EXT4-DECODE-SPECIAL": 1,
-        "_EXT4-RESTAMP-INODE": 14,
-        "_EXT4-SET-INODE-MTIME-CTIME": 8,
-        "_EXT4-SET-INODE-CTIME": 8,
+        "_EXT4-RESTAMP-INODE": 11,
+        "_EXT4-SET-INODE-MTIME-CTIME": 6,
+        "_EXT4-SET-INODE-CTIME": 7,
         "_EXT4-ENCODE-I-BLOCKS": 3,
     }
     for service, count in expected_facade_calls.items():
