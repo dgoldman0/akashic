@@ -81978,7 +81978,11 @@ def test_staged_vfs_rename_directory_tear_replays_both_homes(
                                 "VFS-IOR-F-PARTIAL AND 0<>"
                             ),
                             "_RH-OLD 0=",
-                            "_RH-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                            # The old name has left the cache, and its lookup
+                            # reads the torn directory block, whose checksum
+                            # refuses it until recovery replays the block.
+                            "_RH-OLD-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                            "_RH-OLD-IOR VFS-IOR-DETAIL EXT4-D-DIRECTORY =",
                             "_RH-NEW-IOR 0=",
                             "_RH-NEW _RH-S =",
                             "_RH-VN VN.NLINK @ _RH-OLD-NLINK =",
@@ -82419,7 +82423,9 @@ def test_staged_vfs_rename_conversion_beyond_the_writer_refuses_without_writes(
                         "_RF-D-IOR 0=",
                         "_RF-P D.VNODE @ _RF-VN =",
                         f"_RF-OLD-NLINK {dense_target_refs} =",
-                        f"_RF-OLD-DREFS {dense_target_refs} =",
+                        # The cache holds only the two names the attempt
+                        # resolves; the others stay on the media.
+                        "_RF-OLD-DREFS 2 =",
                         "_RF-OPEN-IOR 0=",
                         "_RF-IOR VFS-E-NOSPC =",
                         "_RF-LAST-IOR _RF-IOR =",
