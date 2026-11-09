@@ -65,8 +65,8 @@ CONSTANT VFS-SA-ALL
 \  Sizes
 \ =====================================================================
 
-64  CONSTANT VFS-INODE-SIZE    \ compatibility name: dentry record
-184 CONSTANT VFS-VNODE-SIZE
+80  CONSTANT VFS-INODE-SIZE    \ compatibility name: dentry record
+192 CONSTANT VFS-VNODE-SIZE
 64  CONSTANT VFS-FD-SIZE
 88  CONSTANT VFS-ATTR-SIZE
 VFS-ATTR-SIZE CONSTANT VFS-SETATTR-REQ-SIZE
@@ -312,8 +312,8 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 \  +168   open-count    live file descriptors
 \  +176   vnode-free    reusable vnode records
 \  +184   vnode-count   live vnode records
-\  +192   reserved
-\  +200   reserved
+\  +192   next-bid      next synthetic binding id (RAM and synthetic bindings)
+\  +200   cache-index   the name and identity indexes' records
 
 208 CONSTANT VFS-DESC-SIZE
 
@@ -342,6 +342,7 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 : V.VFREE      176 + ;        \ +176
 : V.VCOUNT     184 + ;        \ +184
 : V.NEXT-BID   192 + ;        \ +192 (RAM and synthetic bindings)
+: V.INDEX      200 + ;        \ +200
 
 0 CONSTANT VFS-L-NEW
 1 CONSTANT VFS-L-MOUNTED
@@ -350,21 +351,28 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 4 CONSTANT VFS-L-STALE
 
 \ A dentry has one name and parent and points at a shared vnode.  This split
-\ makes hard links and unlink-while-open representable.
+\ makes hard links and unlink-while-open representable.  A directory's
+\ children form a list linked both ways, so a child leaves it in constant
+\ time, and the name index files each listed child under its parent and
+\ name (see Cache Index).
 : D.CHILD      ;
 : D.SIBLING    8 + ;
 : D.PARENT     16 + ;
 : D.VNODE      24 + ;
 : D.NAME       32 + ;
 : D.FLAGS      40 + ;
-: D.COOKIE     48 + ;
+: D.PREV       48 + ;          \ previous sibling, 0 for the first child
 : D.OWNER      56 + ;
 : D.ALIAS      D.OWNER ;       \ retired spelling; ABI 1 stores owner VFS
+: D.HNEXT      64 + ;          \ next dentry in its name-index bucket
+: D.HASH       72 + ;          \ hash it is filed under, 0 when unfiled
 
 1 CONSTANT VFS-DF-UNLINKED
 
 \ Vnode fields retain the old metadata offsets where practical so legacy
-\ IN.* source accessors can dereference through D.VNODE.
+\ IN.* source accessors can dereference through D.VNODE.  VN.NEXT links a
+\ free vnode to the next free one, and a live vnode to the next in its
+\ identity-index bucket.
 : VN.NEXT      ;
 : VN.TYPE      8 + ;
 : VN.SIZE-LO   16 + ;
@@ -387,6 +395,7 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 : VN.DREFS     160 + ;
 : VN.GEN       168 + ;
 : VN.RDEV      176 + ;
+: VN.HASH      184 + ;         \ hash it is filed under, 0 when unfiled
 
 \ Binding-neutral SETATTR request.  A binding commits these values first;
 \ the VFS publishes selected fields into the shared vnode only on success.
@@ -420,20 +429,7 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 \  Compatibility inode accessors
 \ =====================================================================
 \
-\    +0   first-child / next-free   (union)
-\    +8   type          VFS-T-FILE, VFS-T-DIR, …
-\   +16   size-lo       file size low cell
-\   +24   size-hi       file size high cell
-\   +32   mode          permission / attribute bits
-\   +40   mtime         modification timestamp
-\   +48   ctime         creation / change timestamp
-\   +56   parent        inode pointer
-\   +64   next-sibling  inode pointer (child list is singly-linked)
-\   +72   name-handle   string pool handle
-\   +80   binding-id    stable on-disk identity (opaque to VFS)
-\   +88   bdata-0       binding-private cell 0
-\   +96   bdata-1       binding-private cell 1
-\  +104   flags         VFS-IF-DIRTY, VFS-IF-CHILDREN, …
+\  IN.* names a dentry field directly, or a vnode field through D.VNODE.
 
 : IN.CHILD      D.CHILD ;
 : IN.TYPE       D.VNODE @ VN.TYPE ;
@@ -768,6 +764,234 @@ VARIABLE _VSR-V
     2DROP TRUE ;
 
 \ =====================================================================
+\  Cache Index
+\ =====================================================================
+\
+\  Two hash indexes keep the cache's searches independent of its size.
+\  The name index finds a listed child from its parent and name, and the
+\  identity index finds a live vnode from its binding id and generation.
+\  An entry carries its own chain link and the hash it was filed under,
+\  so filing needs no storage beyond the entry, and removal finds the
+\  entry's bucket from that hash even when the entry's key has changed
+\  since.  A filed hash has its top bit set, so a zero hash cell marks an
+\  entry that no index holds.
+\
+\  An index grows by linear hashing.  Once its entries outnumber its
+\  buckets, each filing splits the bucket the split pointer names between
+\  itself and a partner one round above it, so the table grows a bucket
+\  at a time and is never rehashed whole.  Buckets live in segments of
+\  _VFS-IX-SEGMENT cells taken from the VFS arena as the table reaches
+\  them, and the directory of segment addresses doubles when it fills.  A
+\  split that finds the arena full is skipped: searches stay exact while
+\  chains lengthen, and later filings retry the split.
+\
+\  Index record:
+\    +0   offset of the chain link within an entry
+\    +8   offset of the filed hash within an entry
+\   +16   filed entries
+\   +24   round size, a power of two; buckets in use number round + split
+\   +32   split pointer, the next bucket to split
+\   +40   segment directory
+\   +48   directory capacity, in segments
+\
+\  V.INDEX holds the name index's record, and the identity index's record
+\  follows it.
+
+64 CONSTANT _VFS-IX-SEGMENT
+6 CONSTANT _VFS-IX-SEGMENT-SHIFT
+4 CONSTANT _VFS-IX-DIR-INITIAL
+56 CONSTANT _VFS-IX-SIZE
+1 63 LSHIFT CONSTANT _VFS-IX-FILED
+
+: _VIX.LINK      ;
+: _VIX.HASH      8 + ;
+: _VIX.ENTRIES   16 + ;
+: _VIX.ROUND     24 + ;
+: _VIX.SPLIT     32 + ;
+: _VIX.DIR       40 + ;
+: _VIX.DIR-CAP   48 + ;
+
+: _VFS-NAME-INDEX   ( vfs -- index )  V.INDEX @ ;
+: _VFS-VNODE-INDEX  ( vfs -- index )  V.INDEX @ _VFS-IX-SIZE + ;
+
+0xCBF29CE484222325 CONSTANT _VFS-FNV-BASIS
+0x100000001B3 CONSTANT _VFS-FNV-PRIME
+
+\ Spread every bit of X into the low bits that choose a bucket, as
+\ MurmurHash3's 64-bit finalizer does.
+: _VFS-MIX  ( x -- hash )
+    DUP 33 RSHIFT XOR 0xFF51AFD7ED558CCD *
+    DUP 33 RSHIFT XOR 0xC4CEB9FE1A85EC53 *
+    DUP 33 RSHIFT XOR ;
+
+\ The name index's hash for the name at C-ADDR in PARENT: FNV-1a over the
+\ name's bytes, begun from the parent's address.
+: _VFS-NAME-HASH  ( c-addr u parent -- hash )
+    _VFS-FNV-BASIS XOR _VFS-FNV-PRIME * -ROT
+    0 ?DO
+        DUP I + C@ ROT XOR _VFS-FNV-PRIME * SWAP
+    LOOP
+    DROP _VFS-MIX ;
+
+\ The identity index's hash for a binding id and generation.
+: _VFS-VNODE-HASH  ( bid generation -- hash )
+    0x9E3779B97F4A7C15 * XOR _VFS-MIX ;
+
+\ The head cell of bucket BUCKET.
+: _VFS-IX-CELL  ( bucket index -- address )
+    _VIX.DIR @ OVER _VFS-IX-SEGMENT-SHIFT RSHIFT CELLS + @
+    SWAP _VFS-IX-SEGMENT 1- AND CELLS + ;
+
+\ The head cell of the bucket that holds HASH: the hash's low bits below
+\ the round size, or one bit more when that bucket has already split.
+: _VFS-IX-BUCKET  ( hash index -- address )
+    >R DUP R@ _VIX.ROUND @ 1- AND
+    DUP R@ _VIX.SPLIT @ U< IF
+        DROP R@ _VIX.ROUND @ 2* 1- AND
+    ELSE
+        NIP
+    THEN
+    R> _VFS-IX-CELL ;
+
+VARIABLE _VIXG-S
+VARIABLE _VIXG-X
+VARIABLE _VIXG-V
+
+\ Give the index its segment SEGMENT, doubling the directory first when
+\ the directory is full.  FALSE when the arena has no room; a directory
+\ already doubled stays in use.
+: _VFS-IX-GROW  ( segment index vfs -- flag )
+    _VIXG-V ! _VIXG-X ! _VIXG-S !
+    _VIXG-S @ _VIXG-X @ _VIX.DIR-CAP @ U< 0= IF
+        _VIXG-V @ V.ARENA @ _VIXG-X @ _VIX.DIR-CAP @ 2* CELLS ARENA-ALLOT?
+        IF DROP FALSE EXIT THEN
+        DUP _VIXG-X @ _VIX.DIR-CAP @ 2* CELLS 0 FILL
+        _VIXG-X @ _VIX.DIR @ OVER _VIXG-X @ _VIX.DIR-CAP @ CELLS MOVE
+        _VIXG-X @ _VIX.DIR !
+        _VIXG-X @ _VIX.DIR-CAP DUP @ 2* SWAP !
+    THEN
+    _VIXG-V @ V.ARENA @ _VFS-IX-SEGMENT CELLS ARENA-ALLOT?
+    IF DROP FALSE EXIT THEN
+    DUP _VFS-IX-SEGMENT CELLS 0 FILL
+    _VIXG-X @ _VIX.DIR @ _VIXG-S @ CELLS + !
+    TRUE ;
+
+VARIABLE _VIXS-X
+VARIABLE _VIXS-V
+VARIABLE _VIXS-OLD
+VARIABLE _VIXS-NEW
+VARIABLE _VIXS-E
+
+\ Split the bucket the split pointer names.  Its entries whose hash has
+\ the round's bit set move to the partner bucket, a round above it, and
+\ the rest stay.  The pointer then advances, and a finished round
+\ doubles the round size.  A partner that starts a segment needs one
+\ from the arena; without it the split waits for a later filing.
+: _VFS-IX-SPLIT  ( index vfs -- )
+    _VIXS-V ! _VIXS-X !
+    _VIXS-X @ _VIX.ROUND @ _VIXS-X @ _VIX.SPLIT @ +
+    DUP _VFS-IX-SEGMENT 1- AND 0= IF
+        DUP _VFS-IX-SEGMENT-SHIFT RSHIFT _VIXS-X @ _VIXS-V @ _VFS-IX-GROW
+        0= IF DROP EXIT THEN
+    THEN
+    _VIXS-X @ _VFS-IX-CELL _VIXS-NEW !
+    _VIXS-X @ _VIX.SPLIT @ _VIXS-X @ _VFS-IX-CELL _VIXS-OLD !
+    _VIXS-OLD @ @ 0 _VIXS-OLD @ !
+    BEGIN ?DUP WHILE
+        DUP _VIXS-E !
+        _VIXS-X @ _VIX.LINK @ + @
+        _VIXS-E @ _VIXS-X @ _VIX.HASH @ + @ _VIXS-X @ _VIX.ROUND @ AND IF
+            _VIXS-NEW
+        ELSE
+            _VIXS-OLD
+        THEN @
+        DUP @ _VIXS-E @ _VIXS-X @ _VIX.LINK @ + !
+        _VIXS-E @ SWAP !
+    REPEAT
+    1 _VIXS-X @ _VIX.SPLIT +!
+    _VIXS-X @ _VIX.SPLIT @ _VIXS-X @ _VIX.ROUND @ = IF
+        0 _VIXS-X @ _VIX.SPLIT !
+        _VIXS-X @ _VIX.ROUND DUP @ 2* SWAP !
+    THEN ;
+
+VARIABLE _VIXA-E
+VARIABLE _VIXA-X
+
+\ File ENTRY under HASH in INDEX, then split a bucket when the entries
+\ outnumber the buckets.
+: _VFS-IX-ADD  ( entry hash index vfs -- )
+    >R _VIXA-X ! _VFS-IX-FILED OR SWAP _VIXA-E !
+    DUP _VIXA-E @ _VIXA-X @ _VIX.HASH @ + !
+    _VIXA-X @ _VFS-IX-BUCKET
+    DUP @ _VIXA-E @ _VIXA-X @ _VIX.LINK @ + !
+    _VIXA-E @ SWAP !
+    1 _VIXA-X @ _VIX.ENTRIES +!
+    _VIXA-X @ _VIX.ENTRIES @
+    _VIXA-X @ _VIX.ROUND @ _VIXA-X @ _VIX.SPLIT @ + U> IF
+        _VIXA-X @ R@ _VFS-IX-SPLIT
+    THEN
+    R> DROP ;
+
+VARIABLE _VIXR-E
+VARIABLE _VIXR-X
+
+\ Take ENTRY out of INDEX.  An entry that no index holds stays as it is.
+: _VFS-IX-REMOVE  ( entry index -- )
+    _VIXR-X ! _VIXR-E !
+    _VIXR-E @ _VIXR-X @ _VIX.HASH @ + @ ?DUP 0= IF EXIT THEN
+    _VIXR-X @ _VFS-IX-BUCKET
+    BEGIN
+        DUP @ ?DUP 0= IF DROP EXIT THEN
+        DUP _VIXR-E @ <>
+    WHILE
+        NIP _VIXR-X @ _VIX.LINK @ +
+    REPEAT
+    _VIXR-X @ _VIX.LINK @ + @ SWAP !
+    0 _VIXR-E @ _VIXR-X @ _VIX.HASH @ + !
+    -1 _VIXR-X @ _VIX.ENTRIES +! ;
+
+VARIABLE _VIXI-X
+VARIABLE _VIXI-V
+
+\ Set up the index record at INDEX for entries whose chain link and filed
+\ hash sit at the given offsets: one segment of buckets and a directory
+\ with room for _VFS-IX-DIR-INITIAL.  FALSE when the arena has no room.
+: _VFS-IX-INIT  ( link-offset hash-offset index vfs -- flag )
+    _VIXI-V ! _VIXI-X !
+    _VIXI-X @ _VIX.HASH !
+    _VIXI-X @ _VIX.LINK !
+    0 _VIXI-X @ _VIX.ENTRIES !
+    _VFS-IX-SEGMENT _VIXI-X @ _VIX.ROUND !
+    0 _VIXI-X @ _VIX.SPLIT !
+    _VIXI-V @ V.ARENA @ _VFS-IX-DIR-INITIAL CELLS ARENA-ALLOT?
+    IF DROP FALSE EXIT THEN
+    DUP _VFS-IX-DIR-INITIAL CELLS 0 FILL
+    _VIXI-X @ _VIX.DIR !
+    _VFS-IX-DIR-INITIAL _VIXI-X @ _VIX.DIR-CAP !
+    0 _VIXI-X @ _VIXI-V @ _VFS-IX-GROW ;
+
+\ File CHILD in the name index under its name and parent.
+: _VFS-NAME-FILE  ( child -- )
+    DUP D.NAME @ _VFS-STR-GET 2 PICK D.PARENT @ _VFS-NAME-HASH
+    OVER D.OWNER @ DUP _VFS-NAME-INDEX SWAP _VFS-IX-ADD ;
+
+: _VFS-NAME-UNFILE  ( child -- )
+    DUP D.HASH @ 0= IF DROP EXIT THEN
+    DUP D.OWNER @ _VFS-NAME-INDEX _VFS-IX-REMOVE ;
+
+\ File VNODE in the identity index under its binding id and generation.
+\ A vnode without a binding id, or one already filed, stays as it is.
+: _VFS-VNODE-FILE  ( vnode vfs -- )
+    OVER VN.BID @ 0= IF 2DROP EXIT THEN
+    OVER VN.HASH @ IF 2DROP EXIT THEN
+    >R DUP VN.BID @ OVER VN.GEN @ _VFS-VNODE-HASH
+    R@ _VFS-VNODE-INDEX R> _VFS-IX-ADD ;
+
+: _VFS-VNODE-UNFILE  ( vnode vfs -- )
+    OVER VN.HASH @ 0= IF 2DROP EXIT THEN
+    _VFS-VNODE-INDEX _VFS-IX-REMOVE ;
+
+\ =====================================================================
 \  Inode Zero / Slab Init
 \ =====================================================================
 
@@ -779,7 +1003,10 @@ VARIABLE _VSR-V
 
 \ _VFS-SLAB-INIT ( slab-addr vfs -- )
 \   Initialise a slab page whose next-page header was set by the caller:
-\   build the free-list through all slots and prepend it to VFS.IFREE.
+\   zero its slots, build the free-list through them and prepend it to
+\   VFS.IFREE.  A dentry on the free list is zero but for its link cell,
+\   and an allocated one holds its owner VFS, so D.OWNER tells the two
+\   apart.
 VARIABLE _VSI-A
 VARIABLE _VSI-V
 
@@ -787,6 +1014,7 @@ VARIABLE _VSI-V
     _VSI-V !  _VSI-A !
     \ First inode slot starts at slab-addr + 8 (after header)
     _VSI-A @ 8 +  _VSI-A !
+    _VSI-A @ _VFS-SLAB-SLOTS VFS-INODE-SIZE * 0 FILL
     \ Chain slots: each slot.+0 = address of next slot
     _VFS-SLAB-SLOTS 1- 0 DO
         _VSI-A @  VFS-INODE-SIZE +    \ next slot addr
@@ -894,6 +1122,7 @@ VARIABLE _VFR-V
     \ its on-disk link count remains nonzero.
     _VFR-VN @ VN.OPEN-REFS @ 0<>
     _VFR-VN @ VN.DREFS @ 0<> OR IF EXIT THEN
+    _VFR-VN @ _VFR-V @ _VFS-VNODE-UNFILE
     VFS-VNODE-SIZE _VFR-VN @ SWAP 0 FILL
     _VFR-V @ V.VFREE @ _VFR-VN @ VN.NEXT !
     _VFR-VN @ _VFR-V @ V.VFREE !
@@ -1209,8 +1438,10 @@ VFS-RAM-OPS ,
 \    1. VFS descriptor (208 bytes)
 \    2. Initial inode slab page (_VFS-SLAB-SIZE bytes)
 \    3. FD pool (256 × 64 = 16384 bytes)
-\    4. String pool record (_VFS-STR-POOL-SIZE bytes); the pool, slab pages,
-\       vnodes and file buffers then grow from the rest
+\    4. String pool record (_VFS-STR-POOL-SIZE bytes)
+\    5. Cache index records, each with a directory and its first segment;
+\       the pool, slab pages, vnodes, index segments and file buffers then
+\       grow from the rest
 \  Creates root directory inode (type VFS-T-DIR, name "/").
 
 VARIABLE _VN-AR
@@ -1306,7 +1537,17 @@ VARIABLE _VN-ENTRY-PTR
     0 _VN-VFS @ V.STR-PTR !
     0 _VN-VFS @ V.STR-END !
 
-    \ 5. Create root directory inode
+    \ 5. Cache index: the name and identity indexes' records, each with
+    \    its first segment of buckets.
+    _VN-AR @ _VFS-IX-SIZE 2* ARENA-ALLOT?
+    IF DROP _VFS-NEW-ROLLBACK EXIT THEN
+    _VN-VFS @ V.INDEX !
+    0 D.HNEXT 0 D.HASH _VN-VFS @ _VFS-NAME-INDEX _VN-VFS @ _VFS-IX-INIT
+    0= IF _VFS-NEW-ROLLBACK EXIT THEN
+    0 VN.NEXT 0 VN.HASH _VN-VFS @ _VFS-VNODE-INDEX _VN-VFS @ _VFS-IX-INIT
+    0= IF _VFS-NEW-ROLLBACK EXIT THEN
+
+    \ 6. Create root directory inode
     VFS-T-DIR  _VN-VFS @  _VFS-INODE-ALLOC  ( root-inode )
     DUP 0= IF DROP _VFS-NEW-ROLLBACK EXIT THEN
     DUP  _VN-VFS @ V.ROOT !
@@ -1335,6 +1576,8 @@ VARIABLE _VN-ENTRY-PTR
         _VN-VFS @ _VN-IOR @ EXIT
     THEN
     VFS-L-MOUNTED _VN-VFS @ V.LIFECYCLE !
+    \ The mount has given the root its binding id.
+    _VN-VFS @ V.ROOT @ D.VNODE @ _VN-VFS @ _VFS-VNODE-FILE
     _VN-VFS @ VFS-USE
     _VN-VFS @ 0 ;
 
@@ -1421,23 +1664,26 @@ VARIABLE _VFS-READLINK-XT \ filled once VFS-READLINK exists
     _VFS-ENSURE-CHILDREN? ?DUP IF THROW THEN ;
 
 \ -- Helper: find child by name in a directory inode --
-\    Walks first-child → sibling chain comparing name handles.
+\    The name index's bucket for the name and directory holds the child,
+\    if the directory lists one by that name.
 VARIABLE _VFC-A
 VARIABLE _VFC-U
+VARIABLE _VFC-DIR
+VARIABLE _VFC-H
 
 : _VFS-FIND-CHILD  ( c-addr u dir-inode -- child-inode | 0 )
-    IN.CHILD @                    ( c-addr u child )
-    BEGIN
-        DUP 0= IF                \ end of chain
-            NIP NIP EXIT
+    _VFC-DIR ! _VFC-U ! _VFC-A !
+    _VFC-A @ _VFC-U @ _VFC-DIR @ _VFS-NAME-HASH _VFS-IX-FILED OR _VFC-H !
+    _VFC-H @ _VFC-DIR @ D.OWNER @ _VFS-NAME-INDEX _VFS-IX-BUCKET @
+    BEGIN DUP WHILE
+        DUP D.HASH @ _VFC-H @ = IF
+            DUP D.PARENT @ _VFC-DIR @ = IF
+                _VFC-A @ _VFC-U @ 2 PICK D.NAME @ _VFS-STR-MATCH?
+                IF EXIT THEN
+            THEN
         THEN
-        2 PICK 2 PICK            ( c-addr u child c-addr u )
-        2 PICK IN.NAME @         ( c-addr u child c-addr u hndl )
-        _VFS-STR-MATCH? IF       \ found
-            NIP NIP EXIT
-        THEN
-        IN.SIBLING @             \ advance to next sibling
-    AGAIN ;
+        D.HNEXT @
+    REPEAT ;
 
 : _VFS-DENTRY-OWNED?  ( dentry vfs -- flag )
     OVER 0= IF 2DROP FALSE EXIT THEN
@@ -2110,40 +2356,46 @@ VARIABLE _VTR-V
 \  Inode Tree Mutation Helpers
 \ =====================================================================
 
+\ A directory lists its children first to last through D.SIBLING, and back
+\ through D.PREV.  A listed child is filed in the name index, and leaves
+\ the list, and with it the index, before its dentry is released.
+VARIABLE _VLC-C
+VARIABLE _VLC-P
+
+\ _VFS-LINK-CHILD ( child parent -- )
+\   Put child first in parent's child list.
+: _VFS-LINK-CHILD  ( child parent -- )
+    _VLC-P ! _VLC-C !
+    _VLC-P @ _VLC-C @ D.PARENT !
+    0 _VLC-C @ D.PREV !
+    _VLC-P @ D.CHILD @ DUP _VLC-C @ D.SIBLING !
+    ?DUP IF _VLC-C @ SWAP D.PREV ! THEN
+    _VLC-C @ _VLC-P @ D.CHILD ! ;
+
+\ _VFS-UNLINK-CHILD ( child parent -- )
+\   Take child out of parent's child list.  A child the list does not hold
+\   stays as it is.
+: _VFS-UNLINK-CHILD  ( child parent -- )
+    _VLC-P ! _VLC-C !
+    _VLC-C @ D.PREV @ ?DUP IF
+        _VLC-C @ D.SIBLING @ SWAP D.SIBLING !
+    ELSE
+        _VLC-P @ D.CHILD @ _VLC-C @ <> IF EXIT THEN
+        _VLC-C @ D.SIBLING @ _VLC-P @ D.CHILD !
+    THEN
+    _VLC-C @ D.SIBLING @ ?DUP IF _VLC-C @ D.PREV @ SWAP D.PREV ! THEN
+    0 _VLC-C @ D.PREV !
+    0 _VLC-C @ D.SIBLING ! ;
+
 \ _VFS-ADD-CHILD ( child parent -- )
-\   Prepend child to parent's child list.
+\   List child first in parent and file it under its name.
 : _VFS-ADD-CHILD  ( child parent -- )
-    2DUP SWAP IN.PARENT !       \ child.parent = parent
-    DUP IN.CHILD @              ( child parent old-first )
-    2 PICK IN.SIBLING !         \ child.sibling = old-first
-    IN.CHILD ! ;                \ parent.child = child
+    OVER >R _VFS-LINK-CHILD R> _VFS-NAME-FILE ;
 
 \ _VFS-REMOVE-CHILD ( child parent -- )
-\   Unlink child from parent's child list.
-VARIABLE _VRC-PREV
-
+\   Unfile child and take it out of parent's list.
 : _VFS-REMOVE-CHILD  ( child parent -- )
-    DUP IN.CHILD @              ( child parent first )
-    2 PICK = IF
-        \ child is first in list — parent.child = child.sibling
-        IN.CHILD                 ( child pchild-field )
-        SWAP IN.SIBLING @       ( pchild-field new-first )
-        SWAP ! EXIT
-    THEN
-    \ Walk sibling chain to find predecessor
-    DUP IN.CHILD @  _VRC-PREV !
-    DROP                         ( child )
-    BEGIN
-        _VRC-PREV @ IN.SIBLING @
-        DUP 0= IF  2DROP EXIT  THEN   \ not found (shouldn't happen)
-        OVER = IF
-            \ prev.sibling = child.sibling
-            DUP IN.SIBLING @
-            _VRC-PREV @ IN.SIBLING !
-            DROP EXIT
-        THEN
-        _VRC-PREV @ IN.SIBLING @  _VRC-PREV !
-    AGAIN ;
+    OVER _VFS-NAME-UNFILE _VFS-UNLINK-CHILD ;
 
 \ _VFS-UNCACHE-CHILD ( child parent vfs -- )
 \   Remove a child that leaves the cache while its name stays on the
@@ -2228,6 +2480,8 @@ VARIABLE _VMK-U
         _VMK-IN @ _VMK-V @ _VFS-INODE-FREE
         0 _VMK-IOR @ EXIT
     THEN
+    \ The binding has given the new vnode its identity.
+    DUP D.VNODE @ _VMK-V @ _VFS-VNODE-FILE
     \ Increment count
     _VMK-V @ V.ICOUNT DUP @ 1+ SWAP !
     VFS-F-DIRTY _VMK-V @ V.FLAGS DUP @ ROT OR SWAP !
@@ -2268,6 +2522,7 @@ VARIABLE _VMK-U
         _VMK-IN @ _VMK-V @ _VFS-INODE-FREE
         _VMK-IOR @ EXIT
     THEN
+    DUP D.VNODE @ _VMK-V @ _VFS-VNODE-FILE
     _VMK-V @ V.ICOUNT DUP @ 1+ SWAP !
     VFS-F-DIRTY _VMK-V @ V.FLAGS DUP @ ROT OR SWAP !
     DROP 0 ;                     \ ior = 0 (success)
@@ -2371,12 +2626,16 @@ VARIABLE _VRN-DEPTH
         THEN
         _VRN-V @ V.ICOUNT DUP @ 1- SWAP !
     THEN
+    \ The dentry is refiled under its new name; it keeps its place in
+    \ the list unless it moves to another parent.
+    _VRN-IN @ _VFS-NAME-UNFILE
     _VRN-OLD-PARENT @ _VRN-PARENT @ <> IF
-        _VRN-IN @ _VRN-OLD-PARENT @ _VFS-REMOVE-CHILD
-        _VRN-IN @ _VRN-PARENT @ _VFS-ADD-CHILD
+        _VRN-IN @ _VRN-OLD-PARENT @ _VFS-UNLINK-CHILD
+        _VRN-IN @ _VRN-PARENT @ _VFS-LINK-CHILD
     THEN
     _VRN-IN @ IN.NAME @ _VRN-V @ _VFS-STR-RELEASE
     _VRN-HANDLE @ _VRN-IN @ IN.NAME !
+    _VRN-IN @ _VFS-NAME-FILE
     VFS-IF-DIRTY _VRN-IN @ IN.FLAGS DUP @ ROT OR SWAP !
     VFS-F-DIRTY _VRN-V @ V.FLAGS DUP @ ROT OR SWAP !
     0 ;
@@ -2439,27 +2698,21 @@ VARIABLE _VLN-H
 \ without inventing another vnode or changing persistent NLINK metadata.
 VARIABLE _VFV-BID
 VARIABLE _VFV-GEN
-VARIABLE _VFV-V
-VARIABLE _VFV-P
-VARIABLE _VFV-D
+VARIABLE _VFV-H
 
+\ The live vnode with this identity, from the identity index's bucket for
+\ it.
 : _VFS-FIND-VNODE  ( bid generation vfs -- vnode | 0 )
-    _VFV-V ! _VFV-GEN ! _VFV-BID !
-    _VFV-V @ V.ISLAB @ _VFV-P !
-    BEGIN _VFV-P @ WHILE
-        _VFS-SLAB-SLOTS 0 DO
-            _VFV-P @ 8 + I VFS-INODE-SIZE * + _VFV-D !
-            _VFV-D @ D.VNODE @ ?DUP IF
-                DUP VN.BID @ _VFV-BID @ =
-                OVER VN.GEN @ _VFV-GEN @ = AND IF
-                    UNLOOP EXIT
-                THEN
-                DROP
-            THEN
-        LOOP
-        _VFV-P @ @ _VFV-P !
-    REPEAT
-    0 ;
+    >R _VFV-GEN ! _VFV-BID !
+    _VFV-BID @ _VFV-GEN @ _VFS-VNODE-HASH _VFS-IX-FILED OR _VFV-H !
+    _VFV-H @ R> _VFS-VNODE-INDEX _VFS-IX-BUCKET @
+    BEGIN DUP WHILE
+        DUP VN.HASH @ _VFV-H @ = IF
+            DUP VN.BID @ _VFV-BID @ =
+            OVER VN.GEN @ _VFV-GEN @ = AND IF EXIT THEN
+        THEN
+        VN.NEXT @
+    REPEAT ;
 
 : _VFS-DENTRY-ABANDON  ( dentry vfs -- )
     >R
@@ -2520,6 +2773,7 @@ VARIABLE _VCDN-H
             DROP _VCDN-D @ _VCDN-V @ _VFS-INODE-FREE
             0 VFS-E-NOMEM EXIT
         THEN _VCDN-D @ IN.NAME !
+        _VCDN-D @ D.VNODE @ _VCDN-V @ _VFS-VNODE-FILE
     THEN
     _VCDN-D @ _VCDN-PARENT @ _VFS-ADD-CHILD
     _VCDN-V @ V.ICOUNT DUP @ 1+ SWAP !
@@ -2688,6 +2942,7 @@ VARIABLE _VSL-H
         _VSL-D @ _VSL-V @ _VFS-INODE-FREE
         0 SWAP EXIT
     THEN DROP
+    _VSL-D @ D.VNODE @ _VSL-V @ _VFS-VNODE-FILE
     _VSL-D @ _VSL-PARENT @ _VFS-ADD-CHILD
     _VSL-V @ V.ICOUNT DUP @ 1+ SWAP !
     VFS-F-DIRTY _VSL-V @ V.FLAGS DUP @ ROT OR SWAP !
@@ -3010,14 +3265,6 @@ VARIABLE _VSY-I      \ slot index
 VARIABLE _VSY-IN     \ inode address
 VARIABLE _VSY-IOR    \ accumulated ior
 
-: _VFS-INODE-IN-FREELIST?  ( inode vfs -- flag )
-    V.IFREE @                    ( inode cursor )
-    BEGIN
-        DUP 0= IF  2DROP FALSE EXIT  THEN
-        2DUP = IF  2DROP TRUE EXIT   THEN
-        @                        \ follow next-free pointer
-    AGAIN ;
-
 : VFS-SYNC  ( vfs -- ior )
     _VSY-V !
     _VSY-V @ _VFS-READY ?DUP IF EXIT THEN
@@ -3030,8 +3277,7 @@ VARIABLE _VSY-IOR    \ accumulated ior
     BEGIN  _VSY-P @ 0<>  WHILE
         _VFS-SLAB-SLOTS 0 DO
             _VSY-P @ 8 + I VFS-INODE-SIZE * +  _VSY-IN !
-            _VSY-IN @ _VSY-V @  _VFS-INODE-IN-FREELIST?
-            0= IF
+            _VSY-IN @ D.OWNER @ IF       \ an allocated dentry
                 _VSY-IN @ IN.FLAGS @ VFS-IF-DIRTY INVERT AND
                 _VSY-IN @ IN.FLAGS !
             THEN
@@ -3144,8 +3390,7 @@ VARIABLE _VEV-EVICTED \ evicted so far
         _VFS-SLAB-SLOTS 0 DO
             _VEV-EVICTED @ _VEV-GOAL @ >= IF  LEAVE  THEN
             _VEV-P @ 8 + I VFS-INODE-SIZE * +  _VEV-IN !
-            _VEV-IN @ _VEV-V @  _VFS-INODE-IN-FREELIST?
-            0= IF
+            _VEV-IN @ D.OWNER @ IF       \ an allocated dentry
                 _VEV-IN @ _VEV-V @  _VFS-EVICT-INODE IF
                     _VEV-EVICTED @ 1+  _VEV-EVICTED !
                 THEN

@@ -1918,6 +1918,209 @@ def test_name_pool_refuses_when_the_arena_is_full():
     ], "NOMEM NO-LEAK REMOVED LARGER RESOLVES CAPACITY")
 
 
+_INDEX_PUBLISH_LINES = [
+    'VARIABLE _PP VARIABLE _PB VARIABLE _PV',
+    ': T-PUBLISH  ( parent base count vfs -- )  _PV ! SWAP _PB ! SWAP _PP !',
+    '  0 ?DO I T-NAME VFS-T-FILE _PB @ I + 1 _PP @ _PV @ VFS-CACHE-DENTRY',
+    '  NIP ?DUP IF THROW THEN LOOP ;',
+]
+
+
+def test_cache_index_files_entries_through_growth_and_a_full_arena():
+    """The index finds every filed entry as it grows and when it cannot.
+
+    In a roomy arena 1,000 entries split the table to 1,000 buckets and
+    double the segment directory twice, and removing every other entry
+    leaves the rest findable.  An arena with room for two segments stops
+    the splits at 128 buckets, and 300 entries stay findable in longer
+    chains.
+    """
+    check_emitted("cache index growth and a full arena", [
+        'CREATE _FV VFS-DESC-SIZE ALLOT',
+        'CREATE _FX _VFS-IX-SIZE ALLOT',
+        '16000 A-XMEM ARENA-NEW IF -1 THROW THEN A.BASE @ CONSTANT _FE',
+        ': T-ENTRY  ( i -- entry )  16 * _FE + ;',
+        ': T-FILE-ALL  ( n -- )  0 DO I T-ENTRY I _VFS-MIX _FX _FV _VFS-IX-ADD LOOP ;',
+        ': T-IN-BUCKET?  ( entry hash -- flag )  _VFS-IX-FILED OR _FX _VFS-IX-BUCKET @',
+        '  BEGIN DUP WHILE 2DUP = IF 2DROP TRUE EXIT THEN @ REPEAT 2DROP FALSE ;',
+        ': T-FOUND?  ( i -- flag )  DUP T-ENTRY SWAP _VFS-MIX T-IN-BUCKET? ;',
+        ': T-MISSING  ( n -- count )  0 SWAP 0 DO I T-FOUND? 0= IF 1+ THEN LOOP ;',
+        ': T-MISMATCH  ( n -- count )',
+        '  0 SWAP 0 DO I T-FOUND? I 1 AND 0<> <> IF 1+ THEN LOOP ;',
+        ': T-REMOVE-EVEN  ( n -- )  0 DO I T-ENTRY _FX _VFS-IX-REMOVE 2 +LOOP ;',
+        '65536 A-XMEM ARENA-NEW IF -1 THROW THEN _FV V.ARENA !',
+        '0 8 _FX _FV _VFS-IX-INIT CONSTANT _INIT1',
+        '1000 T-FILE-ALL  1000 T-MISSING CONSTANT _MISS1',
+        '_FX _VIX.ENTRIES @ CONSTANT _ENT1',
+        '_FX _VIX.ROUND @ _FX _VIX.SPLIT @ + CONSTANT _BUCKETS1',
+        '_FX _VIX.DIR-CAP @ CONSTANT _CAP1',
+        '1000 T-REMOVE-EVEN  1000 T-MISMATCH CONSTANT _MISMATCH1',
+        '_FX _VIX.ENTRIES @ CONSTANT _ENT2',
+        '1200 A-XMEM ARENA-NEW IF -1 THROW THEN _FV V.ARENA !',
+        '0 8 _FX _FV _VFS-IX-INIT CONSTANT _INIT2',
+        '300 T-FILE-ALL  300 T-MISSING CONSTANT _MISS2',
+        '_FX _VIX.ENTRIES @ CONSTANT _ENT3',
+        '_FX _VIX.ROUND @ CONSTANT _ROUND3  _FX _VIX.SPLIT @ CONSTANT _SPLIT3',
+        ': T-INDEX  CR',
+        '  _INIT1 _MISS1 0= AND _ENT1 1000 = AND IF ." FILED" CR THEN',
+        '  _BUCKETS1 1000 = _CAP1 16 = AND IF ." GREW" CR THEN',
+        '  _MISMATCH1 0= _ENT2 500 = AND IF ." REMOVED" CR THEN',
+        '  _INIT2 _MISS2 0= AND _ENT3 300 = AND IF ." CROWDED" CR THEN',
+        '  _ROUND3 128 = _SPLIT3 0= AND IF ." STOPPED" CR THEN ;',
+        'T-INDEX',
+    ], ["FILED", "GREW", "REMOVED", "CROWDED", "STOPPED"])
+
+
+def test_name_index_finds_each_parents_children():
+    """Two folders holding the same 200 names each find their own child."""
+    check_emitted("name index per parent", _POOL_NAME_LINES + _INDEX_PUBLISH_LINES + [
+        'T-VFS-NEW CONSTANT _V1',
+        'S" sub" _V1 VFS-MKDIR DROP  S" sub" _V1 VFS-RESOLVE CONSTANT _SUB',
+        '_V1 _VFS-NAME-INDEX _VIX.ENTRIES @ CONSTANT _NE0',
+        '_V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ CONSTANT _VE0',
+        '_V1 V.ROOT @ 1000 200 _V1 T-PUBLISH  _SUB 2000 200 _V1 T-PUBLISH',
+        'VARIABLE _BAD',
+        ': T-CHECK  ( parent base -- )  _PB ! _PP !',
+        '  200 0 DO I T-NAME _PP @ _VFS-FIND-CHILD DUP 0= IF DROP 1 _BAD +! ELSE',
+        '  IN.BID @ _PB @ I + <> IF 1 _BAD +! THEN THEN LOOP ;',
+        '_V1 V.ROOT @ 1000 T-CHECK  _SUB 2000 T-CHECK',
+        ': T-PER-PARENT  CR',
+        '  _BAD @ 0= IF ." FOUND" CR THEN',
+        '  S" absent" _V1 V.ROOT @ _VFS-FIND-CHILD 0= IF ." ABSENT" CR THEN',
+        '  _V1 _VFS-NAME-INDEX _VIX.ENTRIES @ _NE0 - 400 = IF ." NAMES" CR THEN',
+        '  _V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ _VE0 - 400 = IF ." VNODES" CR THEN',
+        '  _V1 _VFS-NAME-INDEX DUP _VIX.ROUND @ SWAP _VIX.SPLIT @ +',
+        '  _V1 _VFS-NAME-INDEX _VIX.ENTRIES @ = IF ." SPLIT" CR THEN ;',
+        'T-PER-PARENT',
+    ], ["FOUND", "ABSENT", "NAMES", "VNODES", "SPLIT"])
+
+
+def test_child_list_unlinks_children_from_any_position():
+    """Dropping the first, a middle and the last child keeps both links."""
+    check_emitted("child list unlinks anywhere", _POOL_NAME_LINES + _INDEX_PUBLISH_LINES + [
+        'T-VFS-NEW CONSTANT _V1',
+        '_V1 V.ROOT @ 1000 10 _V1 T-PUBLISH',
+        '_V1 _VFS-NAME-INDEX _VIX.ENTRIES @ CONSTANT _NE0',
+        '_V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ CONSTANT _VE0',
+        ': T-DROP  ( i -- )',
+        '  T-NAME _V1 V.ROOT @ _VFS-FIND-CHILD _V1 VFS-CACHE-DROP ?DUP IF THROW THEN ;',
+        '9 T-DROP  5 T-DROP  0 T-DROP',
+        'VARIABLE _N VARIABLE _BADLINK',
+        ': T-WALK  ( dir -- )  0 SWAP D.CHILD @ BEGIN ?DUP WHILE',
+        '  DUP D.PREV @ ROT <> IF 1 _BADLINK +! THEN 1 _N +! DUP D.SIBLING @ REPEAT DROP ;',
+        '_V1 V.ROOT @ T-WALK',
+        'VARIABLE _GONE VARIABLE _KEPT',
+        ': T-SCAN  10 0 DO I T-NAME _V1 V.ROOT @ _VFS-FIND-CHILD',
+        '  IF 1 _KEPT +! ELSE 1 _GONE +! THEN LOOP ;',
+        'T-SCAN',
+        ': T-UNLINKED  CR',
+        '  _N @ 7 = _BADLINK @ 0= AND IF ." LINKS" CR THEN',
+        '  _GONE @ 3 = _KEPT @ 7 = AND IF ." FOUND" CR THEN',
+        '  _NE0 _V1 _VFS-NAME-INDEX _VIX.ENTRIES @ - 3 = IF ." NAMES" CR THEN',
+        '  _VE0 _V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ - 3 = IF ." VNODES" CR THEN ;',
+        'T-UNLINKED',
+    ], ["LINKS", "FOUND", "NAMES", "VNODES"])
+
+
+def test_rename_refiles_the_name_and_keeps_the_list_place():
+    """A rename in place keeps the child's place; a move lists it first."""
+    check_emitted("rename refiles names", [
+        'T-VFS-NEW CONSTANT _V1',
+        'S" a" _V1 VFS-MKFILE CONSTANT _A  S" b" _V1 VFS-MKFILE CONSTANT _B',
+        'S" c" _V1 VFS-MKFILE CONSTANT _C',
+        'S" sub" _V1 VFS-MKDIR DROP  S" sub" _V1 VFS-RESOLVE CONSTANT _SUB',
+        '_V1 _VFS-NAME-INDEX _VIX.ENTRIES @ CONSTANT _NE0',
+        'S" bee" _B _V1 VFS-RENAME CONSTANT _R1',
+        'S" aa" _A _SUB 0 _V1 VFS-RENAME-AT CONSTANT _R2',
+        ': T-RENAMED  CR',
+        '  _R1 0= _R2 0= AND IF ." RENAMED" CR THEN',
+        '  _V1 V.ROOT @ D.CHILD @ _SUB = _SUB D.SIBLING @ _C = AND _C D.SIBLING @ _B = AND',
+        '  _B D.SIBLING @ 0= AND _B D.PREV @ _C = AND IF ." PLACE" CR THEN',
+        '  S" b" _V1 V.ROOT @ _VFS-FIND-CHILD 0=',
+        '  S" bee" _V1 V.ROOT @ _VFS-FIND-CHILD _B = AND IF ." REFILED" CR THEN',
+        '  _SUB D.CHILD @ _A = _A D.PARENT @ _SUB = AND _A D.PREV @ 0= AND',
+        '  S" a" _V1 V.ROOT @ _VFS-FIND-CHILD 0= AND',
+        '  S" aa" _SUB _VFS-FIND-CHILD _A = AND IF ." MOVED" CR THEN',
+        '  _V1 _VFS-NAME-INDEX _VIX.ENTRIES @ _NE0 = IF ." COUNTED" CR THEN ;',
+        'T-RENAMED',
+    ], ["RENAMED", "PLACE", "REFILED", "MOVED", "COUNTED"])
+
+
+def test_identity_index_files_vnodes_until_they_are_freed():
+    """Published identities share a vnode until its last dentry goes."""
+    check_emitted("identity index files vnodes", [
+        'T-VFS-NEW CONSTANT _V1',
+        '_V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ CONSTANT _VE0',
+        ': T-PUB  ( a u bid gen -- dentry )  >R >R VFS-T-FILE R> R>',
+        '  _V1 V.ROOT @ _V1 VFS-CACHE-DENTRY ?DUP IF THROW THEN ;',
+        'S" x" 500 3 T-PUB CONSTANT _X  _X D.VNODE @ CONSTANT _XV',
+        'S" y" 500 3 T-PUB CONSTANT _Y  _Y D.VNODE @ CONSTANT _YV',
+        'S" z" 500 4 T-PUB CONSTANT _Z  _Z D.VNODE @ CONSTANT _ZV',
+        '_V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ CONSTANT _VE1',
+        '_X _V1 VFS-CACHE-DROP DROP  _Y _V1 VFS-CACHE-DROP DROP',
+        '_V1 _VFS-VNODE-INDEX _VIX.ENTRIES @ CONSTANT _VE2',
+        '500 3 _V1 _VFS-FIND-VNODE CONSTANT _GONE',
+        'S" x" 500 3 T-PUB CONSTANT _X2',
+        ': T-IDENTITY  CR',
+        '  _XV _YV = IF ." SHARED" CR THEN',
+        '  _ZV _XV <> IF ." GENERATION" CR THEN',
+        '  _VE1 _VE0 - 2 = IF ." FILED" CR THEN',
+        '  _VE1 _VE2 - 1 = _GONE 0= AND IF ." UNFILED" CR THEN',
+        '  500 3 _V1 _VFS-FIND-VNODE _X2 D.VNODE @ = IF ." REFILED" CR THEN',
+        '  500 4 _V1 _VFS-FIND-VNODE _ZV = IF ." KEPT" CR THEN ;',
+        'T-IDENTITY',
+    ], ["SHARED", "GENERATION", "FILED", "UNFILED", "REFILED", "KEPT"])
+
+
+def test_cache_search_cost_stays_flat_as_the_folder_grows():
+    """Caching and finding a name cost the same in a folder of 200 or 400.
+
+    With each name compared against every name cached before it, the
+    second 200 names cost about three times the first 200, and finding the
+    first 200 names behind 200 later ones costs about three times as much.
+    The cycle counts print after the markers.
+    """
+    check_emitted("cache search cost stays flat", _POOL_NAME_LINES + [
+        'T-VFS-NEW CONSTANT _V1',
+        ': T-PUBLISH  ( from to -- )  SWAP DO I T-NAME VFS-T-FILE I 1000 + 1',
+        '  _V1 V.ROOT @ _V1 VFS-CACHE-DENTRY NIP ?DUP IF THROW THEN LOOP ;',
+        ': T-FIND  200 0 DO I T-NAME _V1 V.ROOT @ _VFS-FIND-CHILD 0= IF -1 THROW THEN LOOP ;',
+        'PERF-CYCLES 0 200 T-PUBLISH PERF-CYCLES SWAP - CONSTANT _T1',
+        'PERF-CYCLES T-FIND PERF-CYCLES SWAP - CONSTANT _T3',
+        'PERF-CYCLES 200 400 T-PUBLISH PERF-CYCLES SWAP - CONSTANT _T2',
+        'PERF-CYCLES T-FIND PERF-CYCLES SWAP - CONSTANT _T4',
+        ': T-FLAT  CR',
+        '  _T2 2 * _T1 3 * < IF ." CACHING" CR THEN',
+        '  _T4 4 * _T3 5 * < IF ." FINDING" CR THEN ;',
+        'T-FLAT _T1 . _T2 . _T3 . _T4 . CR',
+    ], ["CACHING", "FINDING"])
+
+
+def test_slab_walks_tell_free_slots_in_reused_memory():
+    """Sync and eviction pass over free slots of an arena of old bytes.
+
+    The arena is filled with 0xFF before the VFS is built in it, as reused
+    memory can be.  New slab pages start zeroed, so a free slot's owner
+    cell is 0 and both walks skip it.
+    """
+    check_emitted("slab walks skip free slots", _lookup_binding_lines() + [
+        '524288 A-XMEM ARENA-NEW IF -1 THROW THEN CONSTANT _AR',
+        '_AR A.BASE @ _AR A.SIZE @ 0xFF FILL',
+        '_AR _BIND 0 VFS-NEW ?DUP IF THROW THEN CONSTANT _V2',
+        'S" disk" _V2 VFS-RESOLVE CONSTANT _DISK',
+        'S" fresh" _V2 VFS-MKFILE CONSTANT _FRESH',
+        'VFS-IF-DIRTY _FRESH IN.FLAGS DUP @ ROT OR SWAP !',
+        '_V2 VFS-SYNC CONSTANT _SYNC-IOR',
+        '_V2 V.ICOUNT @ CONSTANT _IC0',
+        '0 _V2 VFS-SET-HWM  _V2 _VFS-EVICT',
+        ': T-WALKS  CR',
+        '  _SYNC-IOR 0= _FRESH IN.FLAGS @ VFS-IF-DIRTY AND 0= AND IF ." SYNCED" CR THEN',
+        '  _DISK 0<> S" disk" _V2 V.ROOT @ _VFS-FIND-CHILD 0= AND',
+        '  _V2 V.ICOUNT @ _IC0 1- = AND IF ." EVICTED" CR THEN ;',
+        'T-WALKS',
+    ], ["SYNCED", "EVICTED"])
+
+
 def test_rename_between_same_vnode_aliases_is_noop():
     """NOREPLACE onto another alias of the same vnode remains a no-op."""
     check("rename same-vnode aliases is no-op", [

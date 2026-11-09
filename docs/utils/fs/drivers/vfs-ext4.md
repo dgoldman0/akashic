@@ -2719,11 +2719,13 @@ entry. A changed byte in one leaf, and a changed checksum in one index node,
 refuse only the lookups routed through them. A listed folder whose names are
 evicted lists every name again, and an open directory survives the eviction.
 A folder of 330 200-byte names, whose cache entries take 71,280 bytes, more
-than the 64 KiB the name pool once reserved, lists in full. A folder of 2,000
-names, whose cache entries would take 80,000 bytes, takes a read, a CREATE, a
-RENAME into it, and an UNLINK in one
-staged mount of 338.5 million steps, and its result passes `e2fsck` and reads
-back through a fresh mount.
+than the 64 KiB the name pool once reserved, lists in full in 82.7 million
+cycles. A folder of 2,000 names, all hard links of one file, lists in full in
+218.3 million cycles, about 109,000 a name, since the VFS cache finds each
+name's siblings and the shared vnode through its indexes. The same folder
+takes a read, a CREATE, a RENAME into it, and an UNLINK in one staged mount of
+338.5 million steps, and its result passes `e2fsck` and reads back through a
+fresh mount.
 
 ## Recovery baseline and writable ratchet
 

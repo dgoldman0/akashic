@@ -266,7 +266,7 @@ one name and one parent and points to a shared vnode. Multiple hard-link
 dentries therefore share size, timestamps, binding identity, data, link count,
 and open-reference state.
 
-### Dentry (`VFS-INODE-SIZE` = 64)
+### Dentry (`VFS-INODE-SIZE` = 80)
 
 `VFS-INODE-SIZE` remains as a source-compatibility name for the dentry size.
 
@@ -278,16 +278,19 @@ and open-reference state.
 | `D.VNODE` | 24 | Shared vnode |
 | `D.NAME` | 32 | Refcounted string handle |
 | `D.FLAGS` | 40 | Dentry flags |
-| `D.COOKIE` | 48 | Binding-private directory cookie |
+| `D.PREV` | 48 | Previous sibling, 0 for a first child |
 | `D.OWNER` | 56 | Owning VFS instance (`D.ALIAS` is a retired spelling) |
+| `D.HNEXT` | 64 | Next dentry in its name-index bucket |
+| `D.HASH` | 72 | Hash the name index filed it under, 0 when unfiled |
 
 `VFS-DF-UNLINKED` marks a dentry removed from the namespace but retained by
 an open FD. It is reaped after the final close.
 
-### Vnode (`VFS-VNODE-SIZE` = 184)
+### Vnode (`VFS-VNODE-SIZE` = 192)
 
 | Accessor | Meaning |
 |---|---|
+| `VN.NEXT` | Next free vnode, or next vnode in its identity-index bucket |
 | `VN.TYPE` | `VFS-T-FILE`, `VFS-T-DIR`, `VFS-T-SYMLINK`, or `VFS-T-SPECIAL` |
 | `VN.SIZE-LO`, `VN.SIZE-HI` | Logical size |
 | `VN.MODE`, `VN.UID`, `VN.GID`, `VN.RDEV` | POSIX metadata |
@@ -300,6 +303,7 @@ an open FD. It is reaped after the final close.
 | `VN.BLOCKS` | Allocated-block count |
 | `VN.OPEN-REFS`, `VN.DREFS` | Lifetime references |
 | `VN.GEN` | Binding generation |
+| `VN.HASH` | Hash the identity index filed it under, 0 when unfiled |
 
 `VN.RDEV` uses a binding-neutral representation: the unsigned major number is
 stored in bits 32–63 and the unsigned minor number in bits 0–31. Filesystem
@@ -673,12 +677,14 @@ does not forbid sync of state dirtied before the policy change.
 The dentry slab grows in 64-slot pages. Growth uses checked allocation; an
 exhausted arena returns `VFS-E-NOMEM` without publishing a partial namespace
 mutation. Each new page retains the older-page link so sync and eviction walk
-the complete cache. Once the cache holds more dentries than its high-water
-mark, 256 unless `VFS-SET-HWM` sets another, each path resolution starts an
-eviction pass, which walks the slab and evicts eligible dentries until the
-count falls to half the mark. Eviction removes cached dentries without
-changing backend link counts. It runs only for bindings with targeted
-`LOOKUP`, which can bring an evicted name back on its own. On a
+the complete cache. A new page's slots start zeroed, and a released dentry is
+zeroed but for its free-list link, so the walks tell a free slot by its zero
+`D.OWNER` without searching the free list. Once the cache holds more dentries
+than its high-water mark, 256 unless `VFS-SET-HWM` sets another, each path
+resolution starts an eviction pass, which walks the slab and evicts eligible
+dentries until the count falls to half the mark. Eviction removes cached
+dentries without changing backend link counts. It runs only for bindings with
+targeted `LOOKUP`, which can bring an evicted name back on its own. On a
 `READDIR`-only binding the pass returns before it walks the slab, so the
 binding keeps its complete enumeration and its resolutions skip the walk.
 RAM-created vnodes are pinned because RAM `READDIR` cannot reconstruct them.
@@ -701,6 +707,25 @@ as the slab keeps its pages. A binding whose load fails rolls back by
 releasing the dentries it cached, which releases their names; no binding
 touches the pool's fields.
 
+Two hash indexes keep the cache's searches independent of its size. The name
+index files every listed child under its parent and name, and finds a cached
+child for path resolution, `VFS-LOOKUP`, the namespace checks and
+`VFS-CACHE-DENTRY`. The identity index files a vnode under its `BID` and
+generation once the VFS publishes that identity: the root's after mount, a
+new vnode's in `VFS-CACHE-DENTRY`, and a created file's, directory's or
+symlink's after the binding's callback succeeds. A vnode leaves the index when
+it is freed. MP64FS and FAT build their listings themselves and never search
+the identity index. A directory's children are linked both ways, so a child
+leaves the list in constant time, and a rename keeps the child's place unless
+it moves to another directory. Finding a child, finding a vnode and removing
+a child therefore cost the same however many names are cached, and caching a
+folder of N names costs time in proportion to N. Each index grows by linear
+hashing: once its entries outnumber its buckets, each new entry splits one
+bucket, so the table never rehashes whole. Buckets come from the VFS arena in
+segments of 64, recorded in a directory that doubles when it fills. A split
+that finds the arena full is skipped; searches stay exact while chains
+lengthen, so the index never makes an operation fail.
+
 Bindings populate lookup/readdir results through:
 
 ```forth
@@ -710,9 +735,10 @@ VFS-CACHE-DROP
   ( dentry vfs -- ior )
 ```
 
-`VFS-CACHE-DENTRY` keys vnode identity by the nonzero `BID` plus generation.
-Loading a second on-disk hard-link name therefore attaches another dentry to
-the existing vnode rather than duplicating metadata. The helper does not
+`VFS-CACHE-DENTRY` keys vnode identity by the nonzero `BID` plus generation,
+which it looks up in the identity index. Loading a second on-disk hard-link
+name therefore attaches another dentry to the existing vnode rather than
+duplicating metadata. The helper does not
 change persistent `VN.NLINK`; the binding publishes the authoritative link
 count from disk. `VFS-CACHE-DROP` removes only the cache reference and returns
 busy for an open dentry. On a binding with targeted `LOOKUP`, the dropped

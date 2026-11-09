@@ -15839,7 +15839,8 @@ def test_lookup_listing_beyond_the_old_string_pool_loads_every_name(
     READDIR caches each of /lk-wide's 330 names, whose entries take 71,280
     bytes, more than the 64 KiB the name pool once reserved, so the pool
     grows from the mount arena.  The folder gains its completeness flag,
-    and a name in it then resolves to its inode.
+    and a name in it then resolves to its inode.  The listing's cycle count
+    prints after the marker.
     """
     prestate = lookup_shapes_prestate
     image = prestate["image"]
@@ -15855,7 +15856,9 @@ def test_lookup_listing_beyond_the_old_string_pool_loads_every_name(
         'S" /lk-wide" _LKL-V VFS-RESOLVE? CONSTANT _LKL-D-IOR CONSTANT _LKL-D',
         "_LKL-V V.ICOUNT @ CONSTANT _LKL-BEFORE",
         "_LKL-V _VFS-STR-LIVE CONSTANT _LKL-LIVE",
+        "PERF-CYCLES CONSTANT _LKL-T0",
         "_LKL-D _LKL-V _VFS-ENSURE-CHILDREN? CONSTANT _LKL-LIST-IOR",
+        "PERF-CYCLES _LKL-T0 - CONSTANT _LKL-CYCLES",
         "_LKL-V V.ICOUNT @ _LKL-BEFORE - CONSTANT _LKL-LISTED",
         "_LKL-V _VFS-STR-LIVE _LKL-LIVE - CONSTANT _LKL-NAMES",
         "_LKL-V _VFS-STR-HELD CONSTANT _LKL-HELD",
@@ -15883,9 +15886,72 @@ def test_lookup_listing_beyond_the_old_string_pool_loads_every_name(
                 '_LKL-OK @ IF ." EXT4-LOOKUP-LISTING-COMPLETE" ELSE '
                 '." EXT4-LOOKUP-LISTING-FAIL " _LKL-OK-FIRST-FAILURE @ . THEN'
             ),
+            "CR _LKL-CYCLES .",
         ],
     )
     _assert_emitted(output, "EXT4-LOOKUP-LISTING-COMPLETE")
+
+
+def test_lookup_listing_of_two_thousand_names_takes_linear_time(
+    lookup_shapes_prestate: dict[str, object],
+) -> None:
+    """Listing a folder of 2,000 names caches each one at a constant cost.
+
+    READDIR caches all 2,000 names of /lk-big, hard links of one file, and
+    every name shares that file's vnode.  The cache's indexes find each
+    new name's siblings and its vnode without scanning the cache, so the
+    listing fits the default step budget; compared with every cached name,
+    1,600 of them took about 1.96 billion steps.  The listing's cycle count
+    prints after the marker.
+    """
+    prestate = lookup_shapes_prestate
+    image = prestate["image"]
+    entries = prestate["entries"]
+    assert isinstance(image, Path)
+    assert isinstance(entries, dict)
+    name = _LOOKUP_BIG_NAMES[1999]
+    count = len(_LOOKUP_BIG_NAMES)
+    shared = entries[b"lk-big"][name]
+    name_lines, name_text = _forth_bytes_buffer("_LKB-NAME", b"/lk-big/" + name)
+    lines = [
+        "T-ARENA T-VOLUME EXT4-NEW CONSTANT _LKB-MOUNT-IOR CONSTANT _LKB-V",
+        *name_lines,
+        'S" /lk-big" _LKB-V VFS-RESOLVE? CONSTANT _LKB-D-IOR CONSTANT _LKB-D',
+        "_LKB-V V.ICOUNT @ CONSTANT _LKB-BEFORE",
+        "_LKB-V V.VCOUNT @ CONSTANT _LKB-VNODES",
+        "PERF-CYCLES CONSTANT _LKB-T0",
+        "_LKB-D _LKB-V _VFS-ENSURE-CHILDREN? CONSTANT _LKB-LIST-IOR",
+        "PERF-CYCLES _LKB-T0 - CONSTANT _LKB-CYCLES",
+        "_LKB-V V.ICOUNT @ _LKB-BEFORE - CONSTANT _LKB-LISTED",
+        "_LKB-V V.VCOUNT @ _LKB-VNODES - CONSTANT _LKB-NEW-VNODES",
+        "_LKB-D IN.FLAGS @ VFS-IF-CHILDREN AND CONSTANT _LKB-LOADED",
+        "_LKB-D D.CHILD @ D.VNODE @ VN.DREFS @ CONSTANT _LKB-DREFS",
+        f"{name_text} _LKB-V VFS-RESOLVE? CONSTANT _LKB-N-IOR CONSTANT _LKB-N",
+    ]
+    checks = [
+        "_LKB-MOUNT-IOR 0=",
+        "_LKB-D-IOR 0=",
+        "_LKB-LIST-IOR 0=",
+        f"_LKB-LISTED {count} =",
+        "_LKB-NEW-VNODES 1 =",
+        "_LKB-LOADED 0<>",
+        f"_LKB-DREFS {count} =",
+        "_LKB-N-IOR 0=",
+        f"_LKB-N IN.BID @ {shared} =",
+    ]
+    output = run_forth(
+        image,
+        [
+            *lines,
+            *_forth_accumulated_conjunction("_LKB-OK", checks),
+            (
+                '_LKB-OK @ IF ." EXT4-LOOKUP-BIG-LISTING-COMPLETE" ELSE '
+                '." EXT4-LOOKUP-BIG-LISTING-FAIL " _LKB-OK-FIRST-FAILURE @ . THEN'
+            ),
+            "CR _LKB-CYCLES .",
+        ],
+    )
+    _assert_emitted(output, "EXT4-LOOKUP-BIG-LISTING-COMPLETE")
 
 
 def _super_with_mask(path: Path, field_offset: int, value: int) -> bytes:
