@@ -652,10 +652,23 @@ VARIABLE _EXT4-RB-CTX
     _EXT4-RB-CTX @ _EXT4-C.BLOCK + SWAP _EXT4-PS-SLOT-DATA
     _EXT4-PS-BSIZE @ MOVE ;
 
+\ The read gate.  While a VFS read callback runs, _EXT4-RG-ARMED is set,
+\ and each block read first runs the gate whose execution token vfs-ext4.f
+\ stores in _EXT4-RG-XT, ( block ctx -- ior ).  A nonzero ior is the
+\ read's answer.  The writer's own reads run with the gate disarmed.
+VARIABLE _EXT4-RG-ARMED
+0 _EXT4-RG-ARMED !
+VARIABLE _EXT4-RG-XT
+0 _EXT4-RG-XT !
+
 : _EXT4-READ-BLOCK  ( block ctx -- ior )
     _EXT4-RB-CTX ! _EXT4-RB-BLOCK !
     _EXT4-RB-BLOCK @ _EXT4-RB-CTX @ _EXT4-C.BLOCKS + @ >= IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-RG-ARMED @ IF
+        _EXT4-RB-BLOCK @ _EXT4-RB-CTX @ _EXT4-RG-XT @ EXECUTE
+        ?DUP IF EXIT THEN
     THEN
     _EXT4-RB-CTX @ _EXT4-PS-CTX @ = IF
         _EXT4-RB-BLOCK @ _EXT4-PS-FIND

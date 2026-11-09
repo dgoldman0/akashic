@@ -69,19 +69,32 @@ after it.
 `_EXT4-BYTES=?` and `_EXT4-BYTES-ZERO?` test whole aligned cells and use bytes
 only for an unaligned head, the tail, or two spans whose alignments differ.
 
-Most mutable scratch in this unit is private to admission. Six cells remain
+Every block read for a VFS read callback also passes a read gate. While one of
+the facade's read callbacks runs, `_EXT4-RG-ARMED` is set, and
+`_EXT4-READ-BLOCK` runs the gate whose execution token the facade stores in
+`_EXT4-RG-XT`, `( block ctx -- ior )`, after its bounds check and before it
+consults a proof-scope copy or the medium. A nonzero ior is the read's answer.
+The facade's gate refuses the metadata homes a torn checkpoint left
+unfinished, and every block after a commit that failed the writer's own check
+as it published (see
+[the facade's fault text](../vfs-ext4.md#private-transaction-staging-and-durable-emission)).
+Reads outside a read callback, the writer's and the mount's among them, never
+run the gate.
+
+Most mutable scratch in this unit is private to admission. Eight cells remain
 an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
 `_EXT4-IO-VOL` identify the callback-selected checked I/O session, while
 `_EXT4-IO-EXPECTED` and `_EXT4-IO-COMPLETED` preserve write-attempt evidence
-consumed by later durability code. The descriptor unit reads
-`_EXT4-PS-GENERATION` so that a descriptor verified inside a scope is
-forgotten when the scope's copies are. The facade's validated maps,
-standing reloads, static-role table and primary-homes proof read
-`_EXT4-MAP-EPOCH`, and the journal-map unit's writes and the emitter's
-ordered data to fresh blocks keep it. They are implementation state, not
-public API, and remain documented facade coupling rather than a backwards
-dependency into admission. They are outside the bounded CREATE/HTree context
-pilot; a later feature must justify any separate lifetime migration.
+consumed by later durability code. The facade's read callbacks set
+`_EXT4-RG-ARMED`, and the facade stores its gate in `_EXT4-RG-XT`. The
+descriptor unit reads `_EXT4-PS-GENERATION` so that a descriptor verified
+inside a scope is forgotten when the scope's copies are. The facade's validated
+maps, standing reloads, static-role table and primary-homes proof read
+`_EXT4-MAP-EPOCH`, and the journal-map unit's writes and the emitter's ordered
+data to fresh blocks keep it. They are implementation state, not public API,
+and remain documented facade coupling rather than a backwards dependency into
+admission. They are outside the bounded CREATE/HTree context pilot; a later
+feature must justify any separate lifetime migration.
 
 Physical extraction does not change the profile, error precedence, or
 cold-source qualification model. Packaging and the real-image harness resolve

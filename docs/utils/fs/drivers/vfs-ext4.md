@@ -1547,6 +1547,34 @@ reset path. Only a successful same-session checkpoint at the authenticated
 dirty/empty endpoint, or a final authenticated clean remount, may scrub and
 rebase the preserved writer workspace.
 
+A committed transaction whose checkpoint did not finish leaves the writer
+`FAULTED` with a checkpoint phase: a checkpoint step that fails keeps its own
+phase, and a caller that latches a committed writer whose checkpoint never
+started records `CHECKPOINT-PREFLIGHT`. The VFS cache already shows the
+committed state and the journal holds it, but each metadata home the checkpoint
+writes may be torn, or may still hold its old contents where the checkpoint had
+not reached it. While the writer stays faulted, a VFS read callback (LOOKUP,
+READDIR, READ with READLINK, GETATTR, LISTXATTR and GETXATTR) that reads a
+block the writer's metadata table holds as an active entry answers the writer's
+recorded first error, unchanged, instead of the block's contents. No path
+empties those tables while the writer is faulted, so they name every such home
+until the mount ends. Every other block reads as before: files and folders the
+transaction did not touch stay readable unless their path runs through a block
+it wrote, such as a shared inode-table block, bitmap or descriptor page.
+Ordered data is not gated, because emission wrote and flushed it before the
+commit record, and cached names still answer from the cache. A writer record
+that fails its shape check cannot name its homes, so every block then answers
+the error. A fault before the commit record gates nothing, since the homes then
+hold the old state the cache keeps. A writer that fails its own validity check
+after its commit publishes latches `VFS-E-CORRUPT` in `COMMIT-FLUSH` before the
+checkpoint writes any home. Its context still marks the transaction committed,
+so a remount will replay it, and its record cannot be trusted to name the
+homes, so every block then answers the error. The gate belongs to the faulted
+mount alone; a remount replays the transaction and reads every home normally.
+`_EXT4-READ-BLOCK` applies the gate only while a read callback runs, so the
+writer's own reads are never refused, and STATFS answers from the mount context
+without reading a home.
+
 The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
@@ -1973,7 +2001,10 @@ the home writes and the retained-home check after them, which depend on no
 directory shape, and recovery replays its homes like any other transaction's.
 A committed transaction whose checkpoint fails keeps the operation's success
 and its cache projection, records the checkpoint error in `V.LAST-IOR`, and
-quarantines the writer; the next mount replays every home.
+quarantines the writer; the next mount replays every home. Until then a VFS
+read of one of its homes, such as a lookup that reads the parent's directory
+block, answers that error (see
+[Private transaction staging and durable emission](#private-transaction-staging-and-durable-emission)).
 
 #### CREATE
 

@@ -66879,9 +66879,12 @@ def test_staged_vfs_rmdir_directory_home_tear_replays_and_drains(
                         ),
                         "_RDT-CHILD 0=",
                         "_RDT-AFTER-D 0=",
+                        # The lookup reads the parent's homes, which the torn
+                        # checkpoint left unfinished, so it answers the
+                        # writer's recorded fault.
                         (
-                            "_RDT-AFTER-RESOLVE-IOR VFS-IOR-REASON "
-                            "VFS-R-NOENT ="
+                            "_RDT-AFTER-RESOLVE-IOR "
+                            "_RDT-WRITER _EXT4-JWR.FAULT + @ ="
                         ),
                         "_RDT-STAT-AFTER-IOR 0=",
                         # The drain never ran: the child keeps its block
@@ -70191,9 +70194,12 @@ def test_staged_vfs_empty_final_unlink_directory_tear_replays_release(
                                 "VFS-IOR-F-PARTIAL AND 0<>"
                             ),
                             "_EUH-AFTER 0=",
+                            # The lookup reads the parent's homes, which the
+                            # torn checkpoint left unfinished, so it answers
+                            # the writer's recorded fault.
                             (
-                                "_EUH-AFTER-IOR VFS-IOR-REASON "
-                                "VFS-R-NOENT ="
+                                "_EUH-AFTER-IOR "
+                                "_EUH-WRITER _EXT4-JWR.FAULT + @ ="
                             ),
                             "_EUH-RM-ICOUNT _EUH-OLD-ICOUNT =",
                             "_EUH-RM-VCOUNT _EUH-OLD-VCOUNT =",
@@ -75755,9 +75761,12 @@ def test_staged_vfs_unlink_nonempty_final_add_home_tear_replays_and_drains(
                         ),
                         "_FAH-CLOCK-CALLS @ 1 =",
                         "_FAH-AFTER 0=",
+                        # The lookup reads the parent's homes, which the torn
+                        # checkpoint left unfinished, so it answers the
+                        # writer's recorded fault.
                         (
-                            "_FAH-AFTER-IOR VFS-IOR-REASON "
-                            "VFS-R-NOENT ="
+                            "_FAH-AFTER-IOR "
+                            "_FAH-WRITER _EXT4-JWR.FAULT + @ ="
                         ),
                         "_FAH-BEFORE-IOR 0=",
                         "_FAH-AFTER-STAT-IOR 0=",
@@ -77082,9 +77091,12 @@ def test_staged_vfs_unlink_directory_home_tear_replays_both_homes(
                             "_UH-AFTER-P-IOR 0=",
                             "_UH-AFTER-P D.VNODE @ _UH-VN =",
                             "_UH-AFTER-H 0=",
+                            # The lookup reads the parent's homes, which the
+                            # torn checkpoint left unfinished, so it answers
+                            # the writer's recorded fault.
                             (
-                                "_UH-AFTER-H-IOR VFS-IOR-REASON "
-                                "VFS-R-NOENT ="
+                                "_UH-AFTER-H-IOR "
+                                "_UH-WRITER _EXT4-JWR.FAULT + @ ="
                             ),
                             "_UH-VN VN.NLINK @ 1 =",
                             "_UH-VN VN.BLOCKS @ 4 =",
@@ -79568,8 +79580,12 @@ def _staged_rename_attempt_forth(
     source_parent_path: str = "/fixture",
     destination_parent_path: str = "/fixture",
     new_path: str | None = None,
+    before_rename: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
-    """Build one public bounded RENAME with complete cache observations."""
+    """Build one public bounded RENAME with complete cache observations.
+
+    BEFORE_RENAME runs once the source is open, just before the rename.
+    """
     if new_path is None:
         parent_prefix = destination_parent_path.rstrip("/")
         new_path = f"{parent_prefix}/{new_name}"
@@ -79657,6 +79673,7 @@ def _staged_rename_attempt_forth(
             f'S" {source_path}" VFS-FF-READ {prefix}-V '
             f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR CONSTANT {prefix}-FD"
         ),
+        *before_rename,
         (
             f'S" {new_name}" {prefix}-S {prefix}-D '
             f"VFS-RN-NOREPLACE {prefix}-V VFS-RENAME-AT "
@@ -82046,10 +82063,11 @@ def test_staged_vfs_rename_directory_tear_replays_both_homes(
                             ),
                             "_RH-OLD 0=",
                             # The old name has left the cache, and its lookup
-                            # reads the torn directory block, whose checksum
-                            # refuses it until recovery replays the block.
-                            "_RH-OLD-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
-                            "_RH-OLD-IOR VFS-IOR-DETAIL EXT4-D-DIRECTORY =",
+                            # reads the parent's homes, which the torn
+                            # checkpoint left unfinished, so it answers the
+                            # writer's recorded fault until a remount replays
+                            # them.
+                            "_RH-OLD-IOR _RH-WRITER _EXT4-JWR.FAULT + @ =",
                             "_RH-NEW-IOR 0=",
                             "_RH-NEW _RH-S =",
                             "_RH-VN VN.NLINK @ _RH-OLD-NLINK =",
@@ -82169,6 +82187,273 @@ def test_staged_vfs_rename_directory_tear_replays_both_homes(
         faulted.unlink(missing_ok=True)
         recovered.unlink(missing_ok=True)
         stable.unlink(missing_ok=True)
+
+
+def _staged_rename_fault_reads(
+    case: dict[str, object],
+    faulted: Path,
+    *,
+    prefix: str,
+    ordinal: int,
+    tear: int,
+    reads: tuple[str, ...],
+    checks: tuple[str, ...],
+    marker: str,
+    before_rename: tuple[str, ...] = (),
+) -> str:
+    """Fail the rename's write ORDINAL after TEAR bytes, then read.
+
+    The rename is the staged public rename fixture's: /fixture/hardlink.txt
+    becomes renamed.txt in /fixture.  READS run on the faulted mount after
+    the rename returns, and CHECKS, which may name {p}, must all hold.
+    """
+    tear_sector, tear_offset = divmod(tear, 512)
+    p = prefix
+    output, _, _ = run_recovery_forth(
+        case["source"],
+        faulted,
+        [
+            *_staged_rename_attempt_forth(
+                p, epoch_ms=case["epoch_ms"], before_rename=before_rename
+            ),
+            *reads,
+            f"{p}-WRITER _EXT4-JWR.FAULT + @ CONSTANT {p}-FAULT",
+            *_forth_accumulated_conjunction(
+                f"{p}-ALL", [check.format(p=p) for check in checks]
+            ),
+            (
+                f'{p}-ALL @ IF ." {marker}" ELSE ." {marker}-FAIL " '
+                f"{p}-ALL-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+        patches=case["source_patches"],
+        write_faults_by_ordinal={
+            ordinal: {
+                "stage": "media",
+                "sector_index": tear_sector,
+                "byte_index": tear_offset,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=faulted,
+    )
+    _assert_emitted(output, marker)
+    return output
+
+
+def test_staged_vfs_torn_rename_checkpoint_refuses_reads_of_its_homes(
+    staged_public_rename_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """After a committed rename's W17 tear, its homes answer the fault.
+
+    The checkpoint wrote /fixture's inode-table block, which holds inodes 13
+    to 16, and tore in /fixture's directory block.  A lookup in /fixture and
+    GETATTR of the renamed file read those homes, so each answers the
+    writer's recorded fault, unchanged.  The rename wrote no other block:
+    /lost+found resolves through root's homes and lost+found's inode-table
+    block, and sparse.bin, open since before the rename, reads its two data
+    blocks and its hole.
+    """
+    case = staged_public_rename_fixture
+    block_size = case["block_size"]
+    assert block_size == 1024
+    sparse = 3 * block_size
+    faulted = tmp_path / "staged-rename-w17-reads.img"
+    try:
+        _staged_rename_fault_reads(
+            case,
+            faulted,
+            prefix="_RG",
+            ordinal=17,
+            tear=case["rename_offset"] + 10,
+            before_rename=(
+                'S" /fixture/sparse.bin" VFS-FF-READ _RG-V VFS-OPEN? '
+                "CONSTANT _RG-SP-OPEN-IOR CONSTANT _RG-SP",
+            ),
+            reads=(
+                'S" /fixture/no-such-name" _RG-V VFS-RESOLVE? '
+                "CONSTANT _RG-MISS-IOR CONSTANT _RG-MISS",
+                "_RG-S _RG-V VFS-GETATTR CONSTANT _RG-ATTR-IOR",
+                'S" /lost+found" _RG-V VFS-RESOLVE? '
+                "CONSTANT _RG-LF-IOR CONSTANT _RG-LF",
+                f"CREATE _RG-BUF {sparse} ALLOT",
+                f"_RG-BUF {sparse} _RG-SP VFS-READ? "
+                "CONSTANT _RG-SP-IOR CONSTANT _RG-SP-ACTUAL",
+            ),
+            checks=(
+                "{p}-IOR 0=",
+                "{p}-WRITER _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED =",
+                "{p}-WRITER _EXT4-JWR.PHASE + @ _EXT4-JWP-CHECKPOINT-HOME =",
+                "{p}-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                "{p}-HOMES 1 =",
+                "{p}-FAULT VFS-IOR-REASON VFS-R-IO =",
+                "{p}-OLD 0=",
+                "{p}-OLD-IOR {p}-FAULT =",
+                "{p}-MISS 0=",
+                "{p}-MISS-IOR {p}-FAULT =",
+                "{p}-ATTR-IOR {p}-FAULT =",
+                "{p}-NEW-IOR 0=",
+                "{p}-NEW {p}-S =",
+                "{p}-LF-IOR 0=",
+                "{p}-LF IN.BID @ 11 =",
+                "{p}-SP-OPEN-IOR 0=",
+                "{p}-SP-IOR 0=",
+                f"{{p}}-SP-ACTUAL {sparse} =",
+                "{p}-BUF C@ 65 =",
+                f"{{p}}-BUF {block_size} + C@ 0=",
+                f"{{p}}-BUF {2 * block_size} + C@ 67 =",
+            ),
+            marker="EXT4-TORN-RENAME-READS",
+        )
+    finally:
+        faulted.unlink(missing_ok=True)
+
+
+def test_staged_vfs_torn_rename_checkpoint_refuses_a_home_it_had_not_reached(
+    staged_public_rename_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A home the torn checkpoint never wrote answers the fault, not old data.
+
+    The checkpoint tears its first home write, /fixture's inode-table block,
+    so /fixture's directory block still holds its old, valid contents, the
+    old name included.  A lookup in /fixture answers the recorded fault,
+    and so does a gated read of the directory block itself, while the same
+    read with the gate disarmed, as the writer reads, finds the old record.
+    Root's directory block, which the rename never names, reads normally.
+    """
+    case = staged_public_rename_fixture
+    block_size = case["block_size"]
+    inode_home = case["inode_home"]
+    directory_home = case["directory_home"]
+    original_inode_home = case["original_inode_home"]
+    expected_inode_home = case["expected_inode_home"]
+    original_directory = case["original_directory"]
+    assert _write_ordinals_for_ext4_home(
+        case["trace"], inode_home, block_size=block_size
+    ) == (16,)
+    torn_inode_home = expected_inode_home[:16] + original_inode_home[16:]
+    assert torn_inode_home not in {original_inode_home, expected_inode_home}
+    old_name_offset = original_directory.index(b"hardlink.txt")
+    _, root_inode, _ = _ext4_inode_record(case["source"], 2)
+    root_home = _extent_root_physical(root_inode, 0)
+    assert root_home not in {inode_home, directory_home}
+    faulted = tmp_path / "staged-rename-w16-reads.img"
+    try:
+        _staged_rename_fault_reads(
+            case,
+            faulted,
+            prefix="_RU",
+            ordinal=16,
+            tear=16,
+            reads=(
+                'S" /fixture/no-such-name" _RU-V VFS-RESOLVE? '
+                "CONSTANT _RU-MISS-IOR CONSTANT _RU-MISS",
+                f"-1 _EXT4-RG-ARMED ! {directory_home} _RU-CTX "
+                "_EXT4-READ-BLOCK 0 _EXT4-RG-ARMED ! CONSTANT _RU-GATED-IOR",
+                f"-1 _EXT4-RG-ARMED ! {root_home} _RU-CTX "
+                "_EXT4-READ-BLOCK 0 _EXT4-RG-ARMED ! CONSTANT _RU-ROOT-IOR",
+                f"{directory_home} _RU-CTX _EXT4-READ-BLOCK "
+                "CONSTANT _RU-RAW-IOR",
+                f"_RU-CTX _EXT4-C.BLOCK + {old_name_offset} + 12 "
+                'S" hardlink.txt" COMPARE 0= CONSTANT _RU-OLD-RECORD',
+            ),
+            checks=(
+                "{p}-IOR 0=",
+                "{p}-WRITER _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED =",
+                "{p}-WRITER _EXT4-JWR.PHASE + @ _EXT4-JWP-CHECKPOINT-HOME =",
+                "{p}-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                "{p}-HOMES 0=",
+                "{p}-FAULT VFS-IOR-REASON VFS-R-IO =",
+                "{p}-OLD-IOR {p}-FAULT =",
+                "{p}-MISS-IOR {p}-FAULT =",
+                "{p}-GATED-IOR {p}-FAULT =",
+                "{p}-ROOT-IOR 0=",
+                "{p}-RAW-IOR 0=",
+                "{p}-OLD-RECORD",
+            ),
+            marker="EXT4-TORN-RENAME-UNREACHED-HOME",
+        )
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == torn_inode_home
+        assert _read_ext4_home(
+            faulted, directory_home, block_size=block_size
+        ) == original_directory
+    finally:
+        faulted.unlink(missing_ok=True)
+
+
+def test_staged_vfs_rename_fault_before_commit_gates_no_read(
+    staged_public_rename_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A fault before the commit record leaves every home readable.
+
+    The rename's W7 descriptor tear faults the writer before its commit
+    record, so the homes keep the old state the cache keeps.  A lookup in
+    /fixture reads both of the rename's homes and answers NOENT for a
+    missing name, GETATTR of the source reads its inode-table block, and a
+    gated read of the directory block returns it.
+
+    The test then puts the faulted writer in the state a commit leaves when
+    it publishes and fails the writer's own check: the context marks the
+    transaction committed and the writer stays in COMMIT-FLUSH.  Its record
+    cannot be trusted to name the homes, so a lookup and a gated read of a
+    block the rename never touched answer the recorded fault, while the
+    writer's own read of that block still returns it.
+    """
+    case = staged_public_rename_fixture
+    directory_home = case["directory_home"]
+    data_block = case["data_block"]
+    faulted = tmp_path / "staged-rename-w7-reads.img"
+    try:
+        _staged_rename_fault_reads(
+            case,
+            faulted,
+            prefix="_RN",
+            ordinal=7,
+            tear=200,
+            reads=(
+                'S" /fixture/no-such-name" _RN-V VFS-RESOLVE? '
+                "CONSTANT _RN-MISS-IOR CONSTANT _RN-MISS",
+                "_RN-S _RN-V VFS-GETATTR CONSTANT _RN-ATTR-IOR",
+                f"-1 _EXT4-RG-ARMED ! {directory_home} _RN-CTX "
+                "_EXT4-READ-BLOCK 0 _EXT4-RG-ARMED ! CONSTANT _RN-GATED-IOR",
+                "_RN-WRITER _EXT4-JWR.PHASE + @ CONSTANT _RN-PHASE0",
+                "_RN-CTX _EXT4-C.J.COMMITTED + @ CONSTANT _RN-COMMITTED0",
+                "1 _RN-CTX _EXT4-C.J.COMMITTED + !",
+                "_EXT4-JWP-COMMIT-FLUSH _RN-WRITER _EXT4-JWR.PHASE + !",
+                'S" /fixture/still-missing" _RN-V VFS-RESOLVE? '
+                "CONSTANT _RN-MISS2-IOR CONSTANT _RN-MISS2",
+                f"-1 _EXT4-RG-ARMED ! {data_block} _RN-CTX "
+                "_EXT4-READ-BLOCK 0 _EXT4-RG-ARMED ! CONSTANT _RN-ALL-IOR",
+                f"{data_block} _RN-CTX _EXT4-READ-BLOCK "
+                "CONSTANT _RN-WRITER-READ-IOR",
+            ),
+            checks=(
+                "{p}-IOR VFS-IOR-REASON VFS-R-IO =",
+                "{p}-WRITER _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED =",
+                "{p}-PHASE0 _EXT4-JWP-DESCRIPTOR =",
+                "{p}-COMMITTED0 0=",
+                "{p}-FAULT {p}-IOR =",
+                "{p}-OLD-IOR 0=",
+                "{p}-OLD {p}-S =",
+                "{p}-MISS 0=",
+                "{p}-MISS-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                "{p}-ATTR-IOR 0=",
+                "{p}-GATED-IOR 0=",
+                "{p}-MISS2 0=",
+                "{p}-MISS2-IOR {p}-FAULT =",
+                "{p}-ALL-IOR {p}-FAULT =",
+                "{p}-WRITER-READ-IOR 0=",
+            ),
+            marker="EXT4-RENAME-PRECOMMIT-READS",
+        )
+    finally:
+        faulted.unlink(missing_ok=True)
 
 
 def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
@@ -84921,7 +85206,13 @@ def test_staged_vfs_rename_cross_parent_final_home_tear_replays_four_homes(
                                 "VFS-IOR-F-PARTIAL AND 0<>"
                             ),
                             "_RZ-OLD 0=",
-                            "_RZ-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                            # The lookup reads the parent's homes, which the
+                            # torn checkpoint left unfinished, so it answers
+                            # the writer's recorded fault.
+                            (
+                                "_RZ-OLD-IOR "
+                                "_RZ-WRITER _EXT4-JWR.FAULT + @ ="
+                            ),
                             "_RZ-NEW-IOR 0=",
                             "_RZ-NEW _RZ-S =",
                             "_RZ-S IN.PARENT @ _RZ-D =",
@@ -86967,9 +87258,12 @@ def test_staged_vfs_rename_cross_parent_empty_directory_w23_replays_child(
                                 "VFS-IOR-F-PARTIAL AND 0<>"
                             ),
                             "_DRZ-OLD 0=",
+                            # The lookup reads the parent's homes, which the
+                            # torn checkpoint left unfinished, so it answers
+                            # the writer's recorded fault.
                             (
-                                "_DRZ-OLD-IOR VFS-IOR-REASON "
-                                "VFS-R-NOENT ="
+                                "_DRZ-OLD-IOR "
+                                "_DRZ-WRITER _EXT4-JWR.FAULT + @ ="
                             ),
                             "_DRZ-NEW-IOR 0=",
                             "_DRZ-NEW _DRZ-S =",
@@ -90913,8 +91207,12 @@ def test_ext4_dirent_codec_is_private_acyclic_unit() -> None:
     )
     admit_positions = tuple(admit.index(fragment) for fragment in admit_order)
     assert admit_positions == tuple(sorted(admit_positions))
-    lookup = word_body(facade_executable, "_EXT4-LOOKUP")
+    lookup = word_body(facade_executable, "_EXT4-LOOKUP-BODY")
     assert lookup.index("_EXT4-RD-WORK") < lookup.index("_EXT4-DS-ADMIT")
+    # The binding's LOOKUP runs that body with the read gate armed.
+    assert word_body(facade_executable, "_EXT4-LOOKUP").endswith(
+        ") ['] _EXT4-LOOKUP-BODY _EXT4-VFS-READ"
+    )
 
     assert ordered_source.index(": _EXT4-HALF-MD4-DIRHASH?") < (
         ordered_source.index(": _EXT4-DIRENT>TYPE")
@@ -90927,6 +91225,102 @@ def test_ext4_dirent_codec_is_private_acyclic_unit() -> None:
     )
     assert ordered_source.index(": _EXT4-RESTAMP-DIR-BLOCK") < (
         ordered_source.index(": _EXT4-BE32@")
+    )
+
+
+def test_ext4_read_gate_arms_only_for_vfs_read_callbacks() -> None:
+    """Pin where the torn-checkpoint read gate sits and who arms it.
+
+    Every block read passes the gate first while a VFS read callback runs.
+    Only _EXT4-VFS-READ arms it, and only the six read callbacks call that,
+    so the writer's own reads are never refused.  The gate refuses the
+    active metadata homes of a writer faulted in a checkpoint phase, and
+    every block of a writer that faulted outside its checkpoint with its
+    transaction committed.
+    """
+    admission = (AKASHIC_ROOT / EXT4_ADMISSION_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def executable(source: str) -> str:
+        return "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
+
+    def word_body(source: str, name: str) -> str:
+        """The definition's code, without its stack comment."""
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            executable(source),
+        )
+        assert match is not None, f"missing Forth word {name}"
+        body = " ".join(match.group("body").split())
+        return re.sub(r"^\( [^)]*\) ", "", body)
+
+    assert "VARIABLE _EXT4-RG-ARMED\n0 _EXT4-RG-ARMED !" in admission
+    assert "VARIABLE _EXT4-RG-XT\n0 _EXT4-RG-XT !" in admission
+    reader = word_body(admission, "_EXT4-READ-BLOCK")
+    gate = (
+        "_EXT4-RG-ARMED @ IF _EXT4-RB-BLOCK @ _EXT4-RB-CTX @ "
+        "_EXT4-RG-XT @ EXECUTE ?DUP IF EXIT THEN THEN"
+    )
+    assert reader.count(gate) == 1
+    assert reader.index("EXT4-D-BOUNDS") < reader.index(gate)
+    assert reader.index(gate) < reader.index("_EXT4-PS-FIND")
+    assert reader.index(gate) < reader.index("_EXT4-READ-SECTORS")
+
+    assert word_body(facade, "_EXT4-VFS-READ") == (
+        "_EXT4-RG-ARMED @ >R -1 _EXT4-RG-ARMED ! EXECUTE R> _EXT4-RG-ARMED !"
+    )
+    armers = {
+        match.group("name")
+        for match in re.finditer(
+            r"(?ms)^:[ \t]+(?P<name>\S+)(?P<body>.*?)[ \t]+;",
+            executable(facade),
+        )
+        if "_EXT4-RG-ARMED !" in match.group("body")
+    }
+    assert armers == {"_EXT4-VFS-READ"}
+    callbacks = (
+        "_EXT4-READDIR",
+        "_EXT4-LOOKUP",
+        "_EXT4-READ",
+        "_EXT4-LISTXATTR",
+        "_EXT4-GETXATTR",
+        "_EXT4-GETATTR",
+    )
+    for callback in callbacks:
+        assert word_body(facade, callback) == (
+            f"['] {callback}-BODY _EXT4-VFS-READ"
+        )
+    scoped = {
+        match.group(1)
+        for match in re.finditer(
+            r"\['\] (\S+) _EXT4-VFS-READ", executable(facade)
+        )
+    }
+    assert scoped == {f"{callback}-BODY" for callback in callbacks}
+    assert "_EXT4-RL-IN @ _EXT4-RL-V @ _EXT4-READ" in word_body(
+        facade, "_EXT4-READLINK"
+    )
+
+    assert "' _EXT4-FAULT-GATE _EXT4-RG-XT !" in facade
+    fault_gate = word_body(facade, "_EXT4-FAULT-GATE")
+    for fragment in (
+        "_EXT4-C.J.WRITER + @",
+        "_EXT4-JWR-FAULTED <> IF 0 EXIT THEN",
+        "_EXT4-JWP-CHECKPOINT? 0= IF _EXT4-FG-CTX @ "
+        "_EXT4-C.J.COMMITTED + @ 1 = IF _EXT4-FG-FAULT @ ELSE 0 THEN "
+        "EXIT THEN",
+        "_EXT4-JWR-SHAPE? 0= IF _EXT4-FG-FAULT @ EXIT THEN",
+        "_EXT4-JWR.META-HASH",
+        "_EXT4-JTX-HASH-FIND",
+        "_EXT4-JE-ACTIVE = IF _EXT4-FG-FAULT @ ELSE 0 THEN",
+    ):
+        assert fault_gate.count(fragment) == 1, fragment
+    assert "DATA" not in fault_gate
+    assert facade.index(": _EXT4-JWR-LATCH-FAULT") < facade.index(
+        ": _EXT4-FAULT-GATE"
     )
 
 

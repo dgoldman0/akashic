@@ -2521,7 +2521,18 @@ VARIABLE _EXT4-RD-ROOT-ENTRY
         _EXT4-READDIR-HTREE
     THEN ;
 
-: _EXT4-READDIR  ( directory vfs -- ior )
+\ The VFS read callbacks, READDIR, LOOKUP, READ (which READLINK calls),
+\ GETATTR, LISTXATTR and GETXATTR, run their bodies through _EXT4-VFS-READ.
+\ It arms the read gate in _EXT4-READ-BLOCK for the body's block reads and
+\ then restores the gate as it found it, so after a torn checkpoint a
+\ callback's read of an unfinished home answers the writer's recorded fault
+\ (_EXT4-FAULT-GATE) while the writer's own reads stay ungated.
+: _EXT4-VFS-READ  ( i*x xt -- j*x )
+    _EXT4-RG-ARMED @ >R -1 _EXT4-RG-ARMED !
+    EXECUTE
+    R> _EXT4-RG-ARMED ! ;
+
+: _EXT4-READDIR-BODY  ( directory vfs -- ior )
     DUP _EXT4-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
     _EXT4-RD-V ! _EXT4-RD-PARENT !
     _EXT4-RD-V @ _EXT4-CTX _EXT4-RD-CTX !
@@ -2532,13 +2543,16 @@ VARIABLE _EXT4-RD-ROOT-ENTRY
     0 _EXT4-DS-TARGET-U ! 0 _EXT4-DS-MATCH !
     _EXT4-RD-WORK DUP IF _EXT4-RD-ROLLBACK THEN ;
 
+: _EXT4-READDIR  ( directory vfs -- ior )
+    ['] _EXT4-READDIR-BODY _EXT4-VFS-READ ;
+
 \ LOOKUP publishes the child the name selects in DIRECTORY and answers its
 \ dentry, or answers VFS-E-NOENT.  It reads the directory as READDIR does
 \ but stops at the block that holds the name, loads only the named
 \ child's inode, and caches nothing else.  The match is admitted once
 \ its whole block has been checked, so a refusal leaves the cache as it
 \ was.
-: _EXT4-LOOKUP  ( name-a name-u directory vfs -- dentry ior )
+: _EXT4-LOOKUP-BODY  ( name-a name-u directory vfs -- dentry ior )
     DUP _EXT4-READY? 0= IF 2DROP 2DROP 0 VFS-E-BUSY EXIT THEN
     _EXT4-RD-V ! _EXT4-RD-PARENT !
     _EXT4-DS-TARGET-U ! _EXT4-DS-TARGET-A !
@@ -2551,6 +2565,9 @@ VARIABLE _EXT4-RD-ROOT-ENTRY
     _EXT4-DS-MATCH @ DUP 0= IF DROP 0 VFS-E-NOENT EXIT THEN
     _EXT4-DS-ADMIT ?DUP IF 0 SWAP EXIT THEN
     _EXT4-DS-DENTRY @ 0 ;
+
+: _EXT4-LOOKUP  ( name-a name-u directory vfs -- dentry ior )
+    ['] _EXT4-LOOKUP-BODY _EXT4-VFS-READ ;
 
 \ =====================================================================
 \  Read-only file and symlink data operations
@@ -2626,7 +2643,7 @@ VARIABLE _EXT4-DR-UNLINKED-AUTH-XT
     REPEAT
     0 ;
 
-: _EXT4-READ  ( buffer len offset dentry vfs -- actual ior )
+: _EXT4-READ-BODY  ( buffer len offset dentry vfs -- actual ior )
     DUP _EXT4-READY? 0= IF 2DROP 2DROP DROP 0 VFS-E-BUSY EXIT THEN
     _EXT4-DR-V ! _EXT4-DR-IN ! _EXT4-DR-OFF !
     _EXT4-DR-LEN ! _EXT4-DR-BUF !
@@ -2637,6 +2654,9 @@ VARIABLE _EXT4-DR-UNLINKED-AUTH-XT
     0 _EXT4-DR-ACT !
     _EXT4-READ-DATA-WORK _EXT4-DR-IOR !
     _EXT4-DR-ACT @ _EXT4-DR-IOR @ _EXT4-PARTIAL-IOR ;
+
+: _EXT4-READ  ( buffer len offset dentry vfs -- actual ior )
+    ['] _EXT4-READ-BODY _EXT4-VFS-READ ;
 
 : _EXT4-OPEN  ( dentry vfs -- cookie ior )
     DUP _EXT4-READY? 0= IF 2DROP 0 VFS-E-BUSY EXIT THEN
@@ -2916,7 +2936,7 @@ VARIABLE _EXT4-LX-IN
 VARIABLE _EXT4-LX-V
 VARIABLE _EXT4-LX-CTX
 
-: _EXT4-LISTXATTR  ( buffer capacity dentry vfs -- actual ior )
+: _EXT4-LISTXATTR-BODY  ( buffer capacity dentry vfs -- actual ior )
     _EXT4-LX-V ! _EXT4-LX-IN ! _EXT4-LX-CAP ! _EXT4-LX-BUF !
     _EXT4-LX-V @ _EXT4-CTX _EXT4-LX-CTX !
     _EXT4-LX-V @ V.VOLUME @ _EXT4-IO-VOL !
@@ -2933,6 +2953,9 @@ VARIABLE _EXT4-LX-CTX
     _EXT4-LX-CTX @ _EXT4-XA-SCAN-BOTH ?DUP IF 0 SWAP EXIT THEN
     _EXT4-XA-TOTAL @ 0 ;
 
+: _EXT4-LISTXATTR  ( buffer capacity dentry vfs -- actual ior )
+    ['] _EXT4-LISTXATTR-BODY _EXT4-VFS-READ ;
+
 VARIABLE _EXT4-GX-NA
 VARIABLE _EXT4-GX-NU
 VARIABLE _EXT4-GX-BUF
@@ -2941,7 +2964,8 @@ VARIABLE _EXT4-GX-IN
 VARIABLE _EXT4-GX-V
 VARIABLE _EXT4-GX-CTX
 
-: _EXT4-GETXATTR  ( name-a name-u buffer capacity dentry vfs -- actual ior )
+: _EXT4-GETXATTR-BODY
+  ( name-a name-u buffer capacity dentry vfs -- actual ior )
     _EXT4-GX-V ! _EXT4-GX-IN ! _EXT4-GX-CAP ! _EXT4-GX-BUF !
     _EXT4-GX-NU ! _EXT4-GX-NA !
     _EXT4-GX-V @ _EXT4-CTX _EXT4-GX-CTX !
@@ -2957,6 +2981,9 @@ VARIABLE _EXT4-GX-CTX
     _EXT4-XA-FOUND @ 0= IF 0 VFS-E-NOENT EXIT THEN
     _EXT4-XA-IOR @ ?DUP IF 0 SWAP EXIT THEN
     _EXT4-XA-FOUND-SIZE @ 0 ;
+
+: _EXT4-GETXATTR  ( name-a name-u buffer capacity dentry vfs -- actual ior )
+    ['] _EXT4-GETXATTR-BODY _EXT4-VFS-READ ;
 
 \ =====================================================================
 \  Modern orphan-file block authentication
@@ -8708,6 +8735,58 @@ VARIABLE _EXT4-JWF-WRITER
         DUP V.FLAGS DUP @ VFS-F-RO OR VFS-F-DIRTY OR SWAP ! DROP
     THEN
     _EXT4-JWF-WRITER @ _EXT4-JWR.FAULT + @ ;
+
+\ The read gate of a mount whose writer faulted in a committed transaction's
+\ checkpoint.  Such a writer is FAULTED with a checkpoint phase: the
+\ checkpoint leaves the phase of the step that failed, and a caller that
+\ latches a committed writer first sets CHECKPOINT-PREFLIGHT.  The journal
+\ holds the transaction, so a remount replays it, but each metadata home the
+\ checkpoint writes may be torn, or still hold its old contents where the
+\ checkpoint had not reached it.  A VFS read of a block that the writer's
+\ metadata table holds as active therefore answers the recorded fault,
+\ unchanged.  Ordered data reached its homes and was flushed before the
+\ commit record, so data homes and every other block read as before.  A
+\ writer record that fails its shape check cannot name its homes, and every
+\ block then answers the fault.  So does every block of a writer that
+\ faulted outside its checkpoint while its context marks a transaction
+\ committed: its commit published and then failed the writer's own check,
+\ before any home was written, so the record cannot be trusted to name the
+\ homes a remount will replay.  A fault before the commit record gates
+\ nothing.
+VARIABLE _EXT4-FG-BLOCK
+VARIABLE _EXT4-FG-CTX
+VARIABLE _EXT4-FG-WRITER
+VARIABLE _EXT4-FG-FAULT
+
+: _EXT4-FAULT-GATE  ( block ctx -- ior )
+    DUP _EXT4-FG-CTX !
+    _EXT4-C.J.WRITER + @ _EXT4-FG-WRITER ! _EXT4-FG-BLOCK !
+    _EXT4-FG-WRITER @ 0= IF 0 EXIT THEN
+    _EXT4-FG-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED <> IF 0 EXIT THEN
+    _EXT4-FG-WRITER @ _EXT4-JWR.FAULT + @ ?DUP 0= IF VFS-E-CORRUPT THEN
+    _EXT4-FG-FAULT !
+    _EXT4-FG-WRITER @ _EXT4-JWR.PHASE + @ _EXT4-JWP-CHECKPOINT? 0= IF
+        _EXT4-FG-CTX @ _EXT4-C.J.COMMITTED + @ 1 = IF
+            _EXT4-FG-FAULT @
+        ELSE
+            0
+        THEN EXIT
+    THEN
+    _EXT4-FG-WRITER @ _EXT4-JWR-SHAPE? 0= IF _EXT4-FG-FAULT @ EXIT THEN
+    _EXT4-FG-WRITER @ _EXT4-JWR.META-USED + @
+    _EXT4-FG-WRITER @ _EXT4-JWR.META-CAP + @ U> IF _EXT4-FG-FAULT @ EXIT THEN
+    _EXT4-FG-BLOCK @
+    _EXT4-FG-WRITER @ _EXT4-JWR.META-ENTRIES + @
+    _EXT4-JWR-IMAGE-ENTRY-CELLS
+    _EXT4-FG-WRITER @ _EXT4-JWR.META-HASH + @
+    _EXT4-FG-WRITER @ _EXT4-JWR.META-SLOTS + @
+    _EXT4-FG-WRITER @ _EXT4-JWR.META-USED + @
+    _EXT4-JTX-HASH-FIND ?DUP IF DROP 2DROP _EXT4-FG-FAULT @ EXIT THEN
+    0= IF DROP 0 EXIT THEN
+    _EXT4-FG-WRITER @ _EXT4-JWR-META-ENTRY CELL+ @
+    _EXT4-JE-ACTIVE = IF _EXT4-FG-FAULT @ ELSE 0 THEN ;
+
+' _EXT4-FAULT-GATE _EXT4-RG-XT !
 
 VARIABLE _EXT4-JAP-BUF
 VARIABLE _EXT4-JAP-WRITER
@@ -19639,7 +19718,7 @@ VARIABLE _EXT4-GA-CTX
 VARIABLE _EXT4-GA-TYPE
 VARIABLE _EXT4-GA-IOR
 
-: _EXT4-GETATTR  ( dentry vfs -- ior )
+: _EXT4-GETATTR-BODY  ( dentry vfs -- ior )
     _EXT4-GA-V ! _EXT4-GA-D !
     _EXT4-GA-V @ _EXT4-CTX _EXT4-GA-CTX !
     _EXT4-GA-V @ V.VOLUME @ _EXT4-IO-VOL !
@@ -19654,6 +19733,9 @@ VARIABLE _EXT4-GA-IOR
     _EXT4-GA-V @ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
     _EXT4-GA-CTX @ _EXT4-GA-D @ _EXT4-GA-TYPE @ _EXT4-PUBLISH-STAGED
     0 ;
+
+: _EXT4-GETATTR  ( dentry vfs -- ior )
+    ['] _EXT4-GETATTR-BODY _EXT4-VFS-READ ;
 
 VARIABLE _EXT4-SF-BUF
 VARIABLE _EXT4-SF-SIZE
