@@ -1,202 +1,51 @@
 #!/usr/bin/env python3
-"""Test suite for SPHINCS+-SHAKE-128s (akashic/math/sphincs-plus.f).
+"""Test suite for SLH-DSA-SHAKE-128s (akashic/math/sphincs-plus.f).
 
-Tests individual components first (fast), then integration sign/verify.
-
-Depends on: sha3.f random.f sphincs-plus.f
+Tests individual components first (fast), then whole signatures against
+the known answers OpenSSL produced (fixtures/slh-dsa/README.md).
 """
-import os, sys, time, hashlib
+import hashlib
+from pathlib import Path
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-configured_megapad_root = os.environ.get("MEGAPAD_ROOT")
-if not configured_megapad_root:
-    raise RuntimeError(
-        "MEGAPAD_ROOT must name the explicitly selected qualified MegaPad worktree"
-    )
-MEGAPAD_ROOT = os.path.abspath(os.path.expanduser(configured_megapad_root))
-for required in ("asm.py", "system.py", "bios.asm", "kdos.f"):
-    if not os.path.isfile(os.path.join(MEGAPAD_ROOT, required)):
-        raise RuntimeError(
-            f"MegaPad checkout not found at {MEGAPAD_ROOT}; "
-            "set MEGAPAD_ROOT to the qualified emulator worktree"
-        )
+from forth_snapshot import ForthSnapshot, run_file_tests, transcript_checks
 
-LIB_PATHS = [
-    os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f"),
-    os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f"),
-    os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f"),
-    os.path.join(ROOT_DIR, "akashic", "math", "fp16.f"),
-    os.path.join(ROOT_DIR, "akashic", "math", "sha3.f"),
-    os.path.join(ROOT_DIR, "akashic", "math", "random.f"),
-    os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f"),
-]
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "slh-dsa"
+# OpenSSL's key from the seed 00..2f, and its deterministic signature of
+# the message DE AD through the standard's internal interface.
+KAT_PUBLIC_KEY = (FIXTURES / "shake-128s-seed-00-2f.pub").read_bytes()
+KAT_SIGNATURE = (FIXTURES / "shake-128s-seed-00-2f-dead.sig").read_bytes()
 
-sys.path.insert(0, MEGAPAD_ROOT)
-from asm import assemble
-from system import MegapadSystem
-from forth_snapshot import run_file_tests, transcript_checks
-
-BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
-KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
-
-# ── Emulator helpers ─────────────────────────────────────────────────
-
-_snapshot = None
-
-def _load_bios():
-    with open(BIOS_PATH) as f:
-        return assemble(f.read())
-
-def _load_forth_lines(path):
-    with open(path) as f:
-        lines = []
-        for line in f.read().splitlines():
-            s = line.strip()
-            if not s or s.startswith('\\'):
-                continue
-            if s.startswith('REQUIRE '):
-                continue
-            if s.startswith('PROVIDED '):
-                continue
-            lines.append(line)
-        return lines
-
-def _next_line_chunk(data, pos):
-    nl = data.find(b'\n', pos)
-    return data[pos:nl+1] if nl != -1 else data[pos:]
-
-def capture_uart(sys_obj):
-    buf = []
-    sys_obj.uart.on_tx = lambda b: buf.append(b)
-    return buf
-
-def uart_text(buf):
-    return "".join(
-        chr(b) if (0x20 <= b < 0x7F or b in (10, 13, 9)) else ""
-        for b in buf)
-
-def save_cpu_state(cpu):
-    return {k: getattr(cpu, k) for k in
-            ['pc','psel','xsel','spsel','flag_z','flag_c','flag_n','flag_v',
-             'flag_p','flag_g','flag_i','flag_s','d_reg','q_out','t_reg',
-             'ivt_base','ivec_id','trap_addr','halted','idle','cycle_count',
-             '_ext_modifier']} | {'regs': list(cpu.regs)}
-
-def restore_cpu_state(cpu, state):
-    cpu.regs[:] = state['regs']
-    for k, v in state.items():
-        if k != 'regs':
-            setattr(cpu, k, v)
-
-def build_snapshot():
-    global _snapshot
-    if _snapshot: return _snapshot
-    print(f"[*] Qualified MegaPad source: {MEGAPAD_ROOT}")
-    print("[*] Building snapshot: BIOS + KDOS + sha3 + random + sphincs-plus ...")
-    t0 = time.time()
-    bios_code  = _load_bios()
-    kdos_lines = _load_forth_lines(KDOS_PATH)
-
-    lib_lines = []
-    for path in LIB_PATHS:
-        if not os.path.isfile(path):
-            print(f"  FATAL: missing {path}")
-            sys.exit(1)
-        lib_lines += _load_forth_lines(path)
-
-    helpers = [
-        'CREATE _TB 1024 ALLOT  VARIABLE _TL',
-        ': TR  0 _TL ! ;',
-        ': TC  ( c -- ) _TB _TL @ + C!  1 _TL +! ;',
-        ': TA  ( -- addr u ) _TB _TL @ ;',
-        ': _HEXNIB  DUP 10 < IF 48 + ELSE 87 + THEN EMIT ;',
-        ': .HEX  ( addr n -- ) 0 ?DO DUP I + C@ DUP 4 RSHIFT _HEXNIB 15 AND _HEXNIB LOOP DROP ;',
+SNAPSHOT = ForthSnapshot(
+    ("math/sphincs-plus.f",),
+    prelude=(
+        ": _HEXNIB  DUP 10 < IF 48 + ELSE 87 + THEN EMIT ;",
+        ": .HEX  ( addr n -- ) 0 ?DO DUP I + C@ DUP 4 RSHIFT _HEXNIB 15 AND _HEXNIB LOOP DROP ;",
+        # HX stores the bytes its hex token spells at _HP and advances it.
+        "VARIABLE _HP",
+        ": _HEXD  ( c -- n )  DUP 58 < IF 48 - ELSE 87 - THEN ;",
+        ": HX  ( \"hex\" -- )  BL WORD COUNT 2 / 0 ?DO DUP I 2* + DUP C@ _HEXD"
+        " 4 LSHIFT SWAP 1+ C@ _HEXD OR _HP @ C! 1 _HP +! LOOP DROP ;",
         # Test buffers
-        'CREATE _TSEED 48 ALLOT',
-        'CREATE _TPK 32 ALLOT',
-        'CREATE _TSK 64 ALLOT',
-        'CREATE _TSIG 7856 ALLOT',
-        'CREATE _TMSG 256 ALLOT',
-        'CREATE _TBUF 1024 ALLOT',
-    ]
-
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-
-    all_lines = kdos_lines + ["ENTER-USERLAND"] + lib_lines + helpers
-    payload = "\n".join(all_lines) + "\n"
-    data = payload.encode(); pos = 0; steps = 0; mx = 2_000_000_000
-    while steps < mx:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, mx - steps))
-        steps += max(batch, 1)
-    text = uart_text(buf)
-    errors = []
-    for l in text.strip().split('\n'):
-        if '?' in l and 'not found' in l.lower():
-            errors.append(l.strip())
-            print(f"  [!] {l}")
-    if errors:
-        print(f"  [FATAL] {len(errors)} 'not found' errors during load!")
-        print(f"  Aborting — sphincs-plus.f failed to compile cleanly.")
-        sys.exit(1)
-    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
-                 bytes(sys_obj._ext_mem))
-    print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
-    return _snapshot
+        "CREATE _TSEED 48 ALLOT",
+        "CREATE _TPK 32 ALLOT",
+        "CREATE _TSK 64 ALLOT",
+        "CREATE _TSIG 7856 ALLOT",
+        "CREATE _TMSG 256 ALLOT",
+        "CREATE _TBUF 1024 ALLOT",
+    ),
+)
 
 
 def run_forth(lines, max_steps=800_000_000):
-    if _snapshot is None:
-        build_snapshot()
-    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
-    buf = capture_uart(sys_obj)
-    sys_obj.load_binary(0, bios_code)
-    sys_obj.boot()
-    for _ in range(5_000_000):
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            break
-        sys_obj.run_batch(10_000)
-    sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
-    sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
-    restore_cpu_state(sys_obj.cpu, cpu_state)
-    buf.clear()
-    payload = "\n".join(lines) + "\nBYE\n"
-    data = payload.encode(); pos = 0; steps = 0
-    while steps < max_steps:
-        if sys_obj.cpu.halted: break
-        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
-            if pos < len(data):
-                chunk = _next_line_chunk(data, pos)
-                sys_obj.uart.inject_input(chunk); pos += len(chunk)
-            else: break
-            continue
-        batch = sys_obj.run_batch(min(100_000, max_steps - steps))
-        steps += max(batch, 1)
-    return uart_text(buf)
+    return SNAPSHOT.run(lines, max_steps)
 
 
-# ── Test framework ───────────────────────────────────────────────────
+def _stored(buffer, data):
+    """Forth lines that store DATA at BUFFER."""
+    return [f"{buffer} _HP !"] + [
+        "HX " + data[at:at + 100].hex() for at in range(0, len(data), 100)
+    ]
 
-
-import re
-_HEX_RE = re.compile(r'[0-9a-f]+')
-
-def _extract_hex(text, min_len=32):
-    joined = ''.join(_HEX_RE.findall(text.lower()))
-    if len(joined) >= min_len:
-        return joined[:min_len]
-    return None
 
 # The checks read only what the program printed, and fail their test when a
 # check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
@@ -301,10 +150,11 @@ def test_adrs():
            '_SPX-ADRS 23 + C@ . _SPX-ADRS 27 + C@ . CR'],
           "42 7")
 
+    # The tree address is twelve bytes; a 64-bit index fills the low eight.
     expected_wots_pk = (
         "00000007"
-        "0102030405060708"
         "00000000"
+        "0102030405060708"
         "00000001"
         "0000002a"
         "00000000"
@@ -412,6 +262,13 @@ def test_wots_context_layout():
          '_SPX-WOTS-CONTEXT 64 0 FILL'],
         lambda out: expected in out.strip().lower().replace(' ', ''),
         f"expected {expected}")
+
+
+    # The accelerator reads the context from Bank 0 and refuses one that
+    # lies in extended memory, where the userland dictionary is.
+    check("T21a WOTS-context-in-Bank-0",
+          ['_SPX-WOTS-CONTEXT 64 + MEM-SIZE U> 0= . CR'],
+          "-1")
 
 
 # ── Tests: T_2 hash function ────────────────────────────────────────
@@ -678,11 +535,69 @@ def test_wots_roundtrip():
         max_steps=2_000_000_000)
 
 
-# ── Tests: Full keygen + sign + verify ───────────────────────────────
+# ── Tests: OpenSSL's known answers ───────────────────────────────────
+
+_VERIFY_KAT = [
+    '0xDE _TMSG C!  0xAD _TMSG 1+ C!',
+    ': _KV  _TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY'
+    ' IF ." SPX-VERIFY-OK" ELSE ." SPX-VERIFY-FAIL" THEN CR ;',
+    '_KV',
+]
+
+
+def _verdict(out, wanted):
+    return any(line.strip() == wanted for line in out.split('\n'))
+
+
+def test_verifies_openssl_signature():
+    """SPX-VERIFY accepts the signature the standard defines."""
+    print("\n=== Verify OpenSSL's Signature ===")
+    check_fn("K01 verify-openssl-signature",
+        [*_stored("_TPK", KAT_PUBLIC_KEY),
+         *_stored("_TSIG", KAT_SIGNATURE),
+         *_VERIFY_KAT],
+        lambda out: _verdict(out, "SPX-VERIFY-OK"),
+        "OpenSSL's signature should verify")
+
+
+def test_rejects_altered_signature_message_and_key():
+    """One flipped bit anywhere makes SPX-VERIFY refuse."""
+    print("\n=== Verify Rejects Alterations ===")
+    # The randomizer, a FORS secret, a FORS authentication node, and a WOTS
+    # signature and an authentication node of the first and last layers.
+    for offset in (0, 16, 40, 2928, 3500, 7152, 7855):
+        altered = bytearray(KAT_SIGNATURE)
+        altered[offset] ^= 0x01
+        check_fn(f"K02 reject-signature-byte-{offset}",
+            [*_stored("_TPK", KAT_PUBLIC_KEY),
+             *_stored("_TSIG", bytes(altered)),
+             *_VERIFY_KAT],
+            lambda out: _verdict(out, "SPX-VERIFY-FAIL"),
+            f"a flipped bit in signature byte {offset} should be refused")
+    check_fn("K03 reject-other-message",
+        [*_stored("_TPK", KAT_PUBLIC_KEY),
+         *_stored("_TSIG", KAT_SIGNATURE),
+         *_VERIFY_KAT[1:2],
+         '0xDE _TMSG C!  0xAE _TMSG 1+ C!',
+         '_KV'],
+        lambda out: _verdict(out, "SPX-VERIFY-FAIL"),
+        "another message should be refused")
+    for offset in (0, 31):
+        altered = bytearray(KAT_PUBLIC_KEY)
+        altered[offset] ^= 0x80
+        check_fn(f"K04 reject-key-byte-{offset}",
+            [*_stored("_TPK", bytes(altered)),
+             *_stored("_TSIG", KAT_SIGNATURE),
+             *_VERIFY_KAT],
+            lambda out: _verdict(out, "SPX-VERIFY-FAIL"),
+            f"a flipped bit in key byte {offset} should be refused")
+
 
 def test_full_roundtrip():
-    """Full keygen → sign → verify roundtrip.
-    WARNING: This is extremely slow in the emulator (~billions of steps).
+    """Key generation and signing reproduce OpenSSL's bytes.
+
+    One signature is about 2.2 million hashes: close to two billion guest
+    steps, several minutes in the emulator.
     """
     print("\n=== Full Roundtrip (SLOW) ===")
     check_fn("T33 keygen-sign-verify",
@@ -696,35 +611,18 @@ def test_full_roundtrip():
             '  _TMSG 2 _TSK _TSIG SPX-SIGN',
             '  _TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
             '  IF ." SPX-VERIFY-OK" ELSE ." SPX-VERIFY-FAIL" THEN CR',
+            '  ." PK=" _TPK SPX-PK-LEN .HEX CR',
+            '  ." SIG=" _TSIG SPX-SIG-LEN .HEX CR',
             ';',
             '_T33',
         ],
-        lambda out: any(l.strip() == "SPX-VERIFY-OK" for l in out.split('\n')),
-        "sign/verify roundtrip",
-        max_steps=50_000_000_000)
-
-
-def test_verify_rejects_bad_sig():
-    """Verify rejects if a sig byte is flipped."""
-    print("\n=== Verify Rejects Bad Sig ===")
-    check_fn("T34 verify-reject-bad-sig",
-        [
-            'SPX-MODE-DETERMINISTIC SPX-SIGN-MODE !',
-            # Entire test body compiled (DO/LOOP/I/IF/THEN are compile-only)
-            ': _T34',
-            '  48 0 DO I _TSEED I + C! LOOP',
-            '  _TSEED _TPK _TSK SPX-KEYGEN',
-            '  _TMSG 2 0 FILL  0xDE _TMSG C!  0xAD _TMSG 1+ C!',
-            '  _TMSG 2 _TSK _TSIG SPX-SIGN',
-            '  _TSIG 100 + C@ 255 XOR _TSIG 100 + C!',
-            '  _TMSG 2 _TPK _TSIG SPX-SIG-LEN SPX-VERIFY',
-            '  IF ." SPX-VERIFY-OK" ELSE ." SPX-VERIFY-FAIL" THEN CR',
-            ';',
-            '_T34',
-        ],
-        lambda out: any(l.strip() == "SPX-VERIFY-FAIL" for l in out.split('\n')),
-        "should reject flipped sig",
-        max_steps=50_000_000_000)
+        lambda out: (
+            _verdict(out, "SPX-VERIFY-OK")
+            and _verdict(out, "PK=" + KAT_PUBLIC_KEY.hex())
+            and _verdict(out, "SIG=" + KAT_SIGNATURE.hex())
+        ),
+        "the key and the signature should be OpenSSL's, and verify",
+        max_steps=4_000_000_000)
 
 
 # ── Tests: Hardening (P06, P07, P08) ─────────────────────────────────
@@ -773,7 +671,7 @@ def test_p07_keygen_zeroization():
         ],
         lambda out: any(line.strip() == "ZEROED" for line in out.split('\n')),
         "_SPX-RNG-SEED should be all zeros after keygen",
-        max_steps=50_000_000_000)
+        max_steps=1_000_000_000)
     check("P07 failure zeroizes seed and preserves direct owner",
         [
             ': _T07-KEYGEN  _TPK _TSK SPX-KEYGEN-RANDOM ;',

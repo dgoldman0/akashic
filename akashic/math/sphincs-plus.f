@@ -93,8 +93,11 @@ CREATE _SPX-ADRS     32 ALLOT   _SPX-ADRS  32 0 FILL
 CREATE _SPX-DIGEST   32 ALLOT
 
 \ Caller-owned WOTS transaction context.  The checked BIOS word reads this
-\ exact Bank-0 layout: PK.seed[16] | ADRS[32] | node[16].
-CREATE _SPX-WOTS-CONTEXT 64 ALLOT
+\ exact layout from Bank 0: PK.seed[16] | ADRS[32] | node[16].  The record
+\ therefore comes from the Bank 0 heap; a CREATEd buffer lands in extended
+\ memory when the module loads into the userland dictionary, and the
+\ accelerator refuses a context there.
+64 DMA-ALLOCATE THROW CONSTANT _SPX-WOTS-CONTEXT
 
 CREATE _SPX-WOTS-MSG 40 ALLOT
 CREATE _SPX-NODE     16 ALLOT
@@ -187,18 +190,19 @@ VARIABLE _SPX-KG-SEC
 \ =====================================================================
 \  6. ADRS manipulation
 \ =====================================================================
-\  ADRS is 32 bytes big-endian:
-\    0-3:  layer (u32)    4-11: tree (u64)   12-15: zero
+\  ADRS is 32 bytes big-endian (FIPS 205, section 4.2):
+\    0-3:  layer (u32)    4-15: tree (96 bits; the 64-bit index in 8-15)
 \   16-19: type (u32)    20-23: kp/pad (u32)
 \   24-27: chain/height (u32)  28-31: hash/index (u32)
 \
-\  NOTE: _SPX-ADRS-TYPE! does NOT auto-clear bytes 20-31.
-\  Callers must explicitly set kp-addr, chain, hash after changing type.
+\  NOTE: _SPX-ADRS-TYPE! does NOT auto-clear bytes 20-31, which the
+\  standard's setTypeAndClear does.  Callers must explicitly set every
+\  word of 20-31 that the new type defines, zeros included.
 
 : _SPX-ADRS-ZERO     ( -- )  _SPX-ADRS 32 0 FILL ;
 : _SPX-ADRS-LAYER!   ( u -- ) _SPX-ADRS      _SPX-BE32! ;
-: _SPX-ADRS-TREE!    ( u -- ) _SPX-ADRS 4 +  _SPX-BE64!
-                               0 _SPX-ADRS 12 + _SPX-BE32! ;
+: _SPX-ADRS-TREE!    ( u -- ) 0 _SPX-ADRS 4 + _SPX-BE32!
+                               _SPX-ADRS 8 +  _SPX-BE64! ;
 : _SPX-ADRS-TYPE!    ( u -- ) _SPX-ADRS 16 + _SPX-BE32! ;
 : _SPX-ADRS-KP!      ( u -- ) _SPX-ADRS 20 + _SPX-BE32! ;
 : _SPX-ADRS-CHAIN!   ( u -- ) _SPX-ADRS 24 + _SPX-BE32! ;
@@ -546,6 +550,7 @@ VARIABLE _SPX-KG-SEC
     >R
     _SPX-T-FORS-PRF _SPX-ADRS-TYPE!
     _SPX-FORS-KP @ _SPX-ADRS-KP!
+    0 _SPX-ADRS-HEIGHT!
     DUP _SPX-ADRS-INDEX!
     _SPX-NODE2 _SPX-PRF
     _SPX-T-FORS-TREE _SPX-ADRS-TYPE!
@@ -593,6 +598,7 @@ VARIABLE _SPX-KG-SEC
         \ Secret value -> sig
         _SPX-T-FORS-PRF _SPX-ADRS-TYPE!
         _SPX-FORS-KP @ _SPX-ADRS-KP!
+        0 _SPX-ADRS-HEIGHT!
         _SPX-CUR-FIDX @ _SPX-FORS-BASE @ + _SPX-ADRS-INDEX!
         _SPX-V-FSIG-OUT @ I _SPX-FORS-ENTRY * + _SPX-PRF
         \ Auth path: a levels
@@ -639,6 +645,8 @@ VARIABLE _SPX-KG-SEC
     LOOP
     _SPX-T-FORS-ROOTS _SPX-ADRS-TYPE!
     _SPX-FORS-KP @ _SPX-ADRS-KP!
+    0 _SPX-ADRS-HEIGHT!
+    0 _SPX-ADRS-INDEX!
     _SPX-FORS-RTS R> _SPX-T-K ;
 
 \ =====================================================================

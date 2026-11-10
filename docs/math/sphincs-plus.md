@@ -33,7 +33,7 @@ REQUIRE sphincs-plus.f
 
 | Principle | Realisation |
 |---|---|
-| **FIPS 205 compliant** | Full SLH-DSA-SHAKE-128s implementation matching the specification |
+| **FIPS 205 compliant** | SLH-DSA-SHAKE-128s as the standard defines it: from a fixed seed and message, the key pair and the deterministic signature are byte for byte the ones OpenSSL 3.5 produces, and `SPX-VERIFY` accepts OpenSSL's signature (`local_testing/fixtures/slh-dsa/`) |
 | **Hardware-accelerated** | Segmented hashes use checked SHAKE-256; complete WOTS chains use the shared-Keccak production sequencer |
 | **Checked interfaces** | No raw MMIO transaction words; nonzero SHAKE or WOTS status is thrown unchanged through the result-only SPHINCS API |
 | **Pure Forth** | No assembly; checked accelerator access is through `sha3.f` and the BIOS `WOTS-CHAIN` word |
@@ -182,16 +182,30 @@ Rejects immediately if `sig-len ≠ SPX-SIG-LEN` (7856).
 
 ## Performance
 
-The earlier software-chain measurements no longer describe this
-implementation. Each `_SPX-CHAIN` request now performs one checked 64-byte
-context transaction and lets the production sequencer execute all zero to
-fifteen steps. New key-generation, signing, and verification measurements
-must come from the qualified checked-interface build; no speedup or wall-time
-claim is inferred from the interface cutover alone.
+Each `_SPX-CHAIN` request performs one checked 64-byte context transaction
+and lets the production sequencer execute all zero to fifteen steps.
+
+Measured on the emulator on 2026-11-10 for the known-answer seed and
+message, with the default build and the WOTS context in Bank 0, before the
+address corrections of that day, which add two stores to each FORS leaf:
+
+| Operation | Hash calls | Guest steps | System cycles | At 100 MHz |
+|---|---:|---:|---:|---:|
+| Key pair | 287,743 | 142 million | 200 million | 2.0 s |
+| Signature | 2,185,972 | 1.94 billion | 2.66 billion | 26.6 s |
+| Verification | 2,174 | 2.3 million | 3.1 million | 0.03 s |
+
+A chain step counts as one hash call. One PRF call costs 3,574 guest steps,
+and 10,339 when the opt-in guard layer is compiled in.
 
 The "s" (small) variant intentionally trades signing speed for its 7,856-byte
-signature. The WOTS sequencer changes chain execution cost, not the FIPS 205
-parameter set or signature format.
+signature: a signature is about 2.2 million hash calls whatever runs them.
+The WOTS sequencer changes chain execution cost, not the FIPS 205 parameter
+set or signature format.
+
+`SPX-SIGN` is the standard's internal signing function, which hashes the
+message as given. A caller that wants the standard's pure signature signs
+`00`, the context string's length, the context string and then the message.
 
 ---
 
@@ -276,6 +290,14 @@ in-place source/destination cases. No private software-chain fallback remains.
   (e.g., `_SPX-PK-SEED`, `_SPX-SK-SEED`), not stack parameters.
 - `_SPX-CHAIN` stores its four arguments before constructing the context; it
   does not place saved parameters on the return stack of a caller's loop.
+- The 64-byte WOTS context comes from the Bank 0 heap (`DMA-ALLOCATE`). The
+  accelerator reads it from Bank 0 only, and a `CREATE`d buffer lies in
+  extended memory when the module loads into the userland dictionary.
+- ADRS follows FIPS 205: layer in bytes 0 through 3, the tree address in
+  bytes 4 through 15 with the 64-bit tree index in its low eight bytes, type
+  in 16 through 19, and three type-specific words. `_SPX-ADRS-TYPE!` does not
+  clear those three words as the standard's `setTypeAndClear` does, so every
+  caller sets each word the new type defines, zeros included.
 - Both WOTS public-key compression paths use `_SPX-ADRS-WOTS-PK!`; they retain
   the layer, tree, and keypair address fields but explicitly zero bytes 24
   through 31 instead of inheriting the preceding chain/hash state.
@@ -307,6 +329,26 @@ in-place source/destination cases. No private software-chain fallback remains.
 6. **WOTS_PK residual address words** — Public-key compression inherited the
    preceding WOTS_HASH chain/hash words. Fix: both compression paths now
    select WOTS_PK and explicitly zero its trailing padding words.
+
+### Conformance Corrections (2026-11-10)
+
+Until these, the library verified its own signatures, but they were not the
+standard's: it refused OpenSSL's signature, and OpenSSL's rules refused its
+own. Key pairs already matched, since key generation uses only tree address
+zero and no FORS address.
+
+7. **Tree address position** — `_SPX-ADRS-TREE!` stored the 64-bit tree index
+   in bytes 4 through 11. FIPS 205's tree address is twelve bytes, so the
+   index belongs in bytes 8 through 15.
+8. **FORS_PRF residual height** — The address of a FORS secret kept the tree
+   height of the node computed before it. Fix: both FORS_PRF sites zero the
+   height word.
+9. **FORS_ROOTS residual words** — The address that compresses the FORS roots
+   kept the last node's height and index. Fix: both words are zeroed.
+10. **WOTS context outside Bank 0** — Loaded into the userland dictionary, the
+    module's `CREATE`d context lay in extended memory, the accelerator refused
+    every chain, and no signature or key could be made. Fix: the context comes
+    from the Bank 0 heap.
 
 ---
 

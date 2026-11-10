@@ -598,7 +598,7 @@ def test_sign_verify_sphincs():
     check_fn("SPX sign+verify", lines,
              lambda out: "1" in out and "-1" in out,
              "sig_mode=1 and verify=TRUE",
-             max_steps=50_000_000_000)
+             max_steps=4_000_000_000)  # a key pair and a signature: ~2.1 billion
 
 # ── Phase 6.6 hardening tests ──
 
@@ -643,7 +643,7 @@ def test_p09_hybrid_and():
     check_fn("hybrid AND",  lines,
              _hybrid_pred,
              "first verify=-1, after corrupt Ed25519 expect 0",
-             max_steps=100_000_000_000)  # hybrid: 2 signs + 2 verifies
+             max_steps=6_000_000_000)  # hybrid: 2 signs + 2 verifies
 
 def test_p10_negative_amount():
     """P10: TX-SET-AMOUNT rejects negative values."""
