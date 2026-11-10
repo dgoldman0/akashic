@@ -23,52 +23,17 @@ EMU_DIR    = os.environ.get(
 # ── Dependency file paths (combined blockchain + net + web + rpc) ──
 
 # Blockchain stack
-EVENT_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F       = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
-FP16_F      = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
-CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
-SHA512_F    = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
-FIELD_F     = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
-SHA3_F      = os.path.join(ROOT_DIR, "akashic", "math", "sha3.f")
-RANDOM_F    = os.path.join(ROOT_DIR, "akashic", "math", "random.f")
-ED25519_F   = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
-SPHINCS_F   = os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f")
-CBOR_F      = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
-FMT_F       = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
-MERKLE_F    = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
-TX_F        = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
-SMT_F       = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
-STATE_F     = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
-BLOCK_F     = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
-CONSENSUS_F = os.path.join(ROOT_DIR, "akashic", "consensus", "consensus.f")
-MEMPOOL_F   = os.path.join(ROOT_DIR, "akashic", "store", "mempool.f")
-LIGHT_F     = os.path.join(ROOT_DIR, "akashic", "store", "light.f")
 
 # Network stack (string, url, headers shared with web)
-STRING_F    = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-URL_F       = os.path.join(ROOT_DIR, "akashic", "net", "url.f")
-HEADERS_F   = os.path.join(ROOT_DIR, "akashic", "net", "headers.f")
-BASE64_F    = os.path.join(ROOT_DIR, "akashic", "net", "base64.f")
-HTTP_F      = os.path.join(ROOT_DIR, "akashic", "net", "http.f")
-WS_F        = os.path.join(ROOT_DIR, "akashic", "net", "ws.f")
-GOSSIP_F    = os.path.join(ROOT_DIR, "akashic", "net", "gossip.f")
 
 # Web server stack (string/url/headers already above)
-DT_F        = os.path.join(ROOT_DIR, "akashic", "utils", "datetime.f")
-TBL_F       = os.path.join(ROOT_DIR, "akashic", "utils", "table.f")
-REQ_F       = os.path.join(ROOT_DIR, "akashic", "web", "request.f")
-RESP_F      = os.path.join(ROOT_DIR, "akashic", "web", "response.f")
-RTR_F       = os.path.join(ROOT_DIR, "akashic", "web", "router.f")
-SRV_F       = os.path.join(ROOT_DIR, "akashic", "web", "server.f")
 
 # JSON + RPC
-JSON_F      = os.path.join(ROOT_DIR, "akashic", "utils", "json.f")
-RPC_F       = os.path.join(ROOT_DIR, "akashic", "web", "rpc.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines, megapad_module_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -132,26 +97,44 @@ def build_snapshot():
     kdos_lines = _load_forth_lines(KDOS_PATH)
 
     # Load all dependencies in correct order
-    dep_lines = []
-    for path in [
-        # Concurrency
-        EVENT_F, SEM_F, GUARD_F,
-        # Crypto / math
-        FP16_F, CRYPTO_ACC_F, SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
-        ED25519_F, SPHINCS_F,
-        # CBOR + formatting
-        CBOR_F, FMT_F,
-        # Blockchain
-        MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F, CONSENSUS_F, MEMPOOL_F,
-        LIGHT_F,
-        # Net (string/url/headers shared with web)
-        STRING_F, URL_F, HEADERS_F, BASE64_F, HTTP_F, WS_F, GOSSIP_F,
-        # Web server
-        DT_F, TBL_F, REQ_F, RESP_F, RTR_F, SRV_F,
-        # JSON + RPC
-        JSON_F, RPC_F,
-    ]:
-        dep_lines += _load_forth_lines(path)
+    dep_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "math/fp16.f",
+        "math/crypto-acc.f",
+        "math/sha512.f",
+        "math/field.f",
+        "math/sha3.f",
+        "math/random.f",
+        "math/ed25519.f",
+        "math/sphincs-plus.f",
+        "cbor/cbor.f",
+        "utils/fmt.f",
+        "math/merkle.f",
+        "store/tx.f",
+        "store/smt.f",
+        "store/state.f",
+        "store/block.f",
+        "consensus/consensus.f",
+        "store/mempool.f",
+        "store/light.f",
+        "utils/string.f",
+        "net/url.f",
+        "net/headers.f",
+        "net/base64.f",
+        "net/http.f",
+        "net/ws.f",
+        "net/gossip.f",
+        "utils/datetime.f",
+        "utils/table.f",
+        "web/request.f",
+        "web/response.f",
+        "web/router.f",
+        "web/server.f",
+        "utils/json.f",
+        "web/rpc.f",
+    ))
 
     helpers = [
         # String buffer for building HTTP requests
@@ -195,7 +178,7 @@ def build_snapshot():
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
-    all_lines = (kdos_lines + ["ENTER-USERLAND"]
+    all_lines = (kdos_lines + ["ENTER-USERLAND"] + megapad_module_lines("networking.f")
                  + dep_lines
                  + helpers)
     payload = "\n".join(all_lines) + "\n"
@@ -239,6 +222,8 @@ def build_snapshot():
 
 
 def run_forth(lines, max_steps=200_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=64 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -303,22 +288,9 @@ def rpc_request(method, params=None, id_val=1):
 
 # ── Test framework ──
 
-_pass = 0; _fail = 0
-
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    ok = check_fn(clean) if check_fn else (expected in clean if expected else True)
-    if ok:
-        _pass += 1; print(f"  PASS  {name}")
-    else:
-        _fail += 1; print(f"  FAIL  {name}")
-        if expected:
-            print(f"        expected: {expected!r}")
-        print(f"        got (last 5 lines):")
-        for ln in clean.split('\n')[-5:]:
-            print(f"          {ln}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # =====================================================================
@@ -521,21 +493,6 @@ def test_broadcast_after_send():
 #  Main
 # =====================================================================
 
-if __name__ == "__main__":
-    build_snapshot()
-    test_compile()
-    test_block_number()
-    test_mempool_status()
-    test_node_info()
-    test_unknown_method()
-    test_parse_error()
-    test_get_balance()
-    test_id_echo()
-    test_repeated_requests()
-    test_http_200()
-    test_proof_buffer_size()
-    test_rate_limiter()
-    test_broadcast_after_send()
 
-    print(f"\nResults: {_pass}/{_pass + _fail} passed, {_fail} failed")
-    sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    run_file_tests(__file__)

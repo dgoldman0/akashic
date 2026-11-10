@@ -11,11 +11,11 @@ ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
-UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -75,7 +75,9 @@ def build_snapshot():
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    utf8_lines = _load_forth_lines(UTF8_F)
+    module_lines = module_source_lines((
+        "text/utf8.f",
+    ))
 
     # Scratch buffers for tests
     helpers = [
@@ -88,7 +90,7 @@ def build_snapshot():
     sys_obj.boot()
 
     payload = "\n".join(
-        kdos_lines + ["ENTER-USERLAND"] + utf8_lines + helpers
+        kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers
     ) + "\n"
     data = payload.encode()
     pos = 0
@@ -140,6 +142,8 @@ def _make_system():
 
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     sys_obj = _make_system()
     buf = capture_uart(sys_obj)
     payload = "\n".join(lines) + "\nBYE\n"
@@ -164,22 +168,9 @@ def run_forth(lines, max_steps=50_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
-
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # =====================================================================
@@ -203,8 +194,8 @@ def test_decode_ascii():
     # 'A' = 0x41, 1 byte
     buf = make_buf('_DB', [0x41, 0x42, 0x43])
     check("decode A",
-        buf + ['_DB 3 UTF8-DECODE ROT . SWAP . .'],
-        "65 2")  # cp=65, len'=2  (addr changes)
+        buf + ['_DB 3 UTF8-DECODE ROT . SWAP DROP .'],
+        "65 2")  # cp=65, len'=2
 
     # Single byte
     check("decode single Z",
@@ -268,7 +259,7 @@ def test_decode_invalid():
     # Overlong 2-byte: U+0041 encoded as C1 81 (should be just 41)
     check("decode overlong 2-byte",
         make_buf('_DB', [0xC1, 0x81]) + ['_DB 2 UTF8-DECODE ROT . SWAP DROP .'],
-        "65533 0")
+        "65533 1")  # C1 cannot start a sequence: one U+FFFD, one byte
 
     # Empty buffer
     check("decode empty buffer",
@@ -452,27 +443,6 @@ def test_replacement():
 #  Main
 # =====================================================================
 
+
 if __name__ == "__main__":
-    build_snapshot()
-
-    test_decode_ascii()
-    test_decode_2byte()
-    test_decode_3byte()
-    test_decode_4byte()
-    test_decode_invalid()
-
-    test_encode_ascii()
-    test_encode_2byte()
-    test_encode_3byte()
-    test_encode_4byte()
-    test_encode_decode_roundtrip()
-
-    test_len()
-    test_valid()
-    test_nth()
-    test_replacement()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail_count else 0)
+    run_file_tests(__file__)

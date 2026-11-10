@@ -12,11 +12,11 @@ EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
 
-FMT_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -77,14 +77,16 @@ def build_snapshot():
     t0 = time.time()
     bios_code  = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    fmt_lines  = _load_forth_lines(FMT_F)
+    module_lines = module_source_lines((
+        "utils/fmt.f",
+    ))
 
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
-    all_lines = kdos_lines + ["ENTER-USERLAND"] + fmt_lines
+    all_lines = kdos_lines + ["ENTER-USERLAND"] + module_lines
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 400_000_000
     while steps < mx:
@@ -114,6 +116,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=200_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -143,35 +147,10 @@ def run_forth(lines, max_steps=200_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # ── Tests ──
 
@@ -283,7 +262,7 @@ def test_hexdump_multiline():
     # 20 bytes — should produce 2 lines
     lines = [
         'CREATE _HD2 20 ALLOT',
-        '20 0 DO  65 I + _HD2 I + C!  LOOP',   # A B C D ... T
+        ': _RUN-LOOP 20 0 DO  65 I + _HD2 I + C!  LOOP ; _RUN-LOOP',   # A B C D ... T
         '_HD2 20 FMT-.HEXDUMP',
         '." DONE"',
     ]
@@ -295,13 +274,13 @@ def test_hexdump_multiline():
 def test_c_to_nib():
     """FMT-C>NIB converts ASCII hex chars to nibble values."""
     print("\n=== FMT-C>NIB ===")
-    check("char '0' -> 0",  ['[CHAR] 0 FMT-C>NIB .'], "0")
-    check("char '9' -> 9",  ['[CHAR] 9 FMT-C>NIB .'], "9")
+    check("char '0' -> 0",  ['CHAR 0 FMT-C>NIB .'], "0")
+    check("char '9' -> 9",  ['CHAR 9 FMT-C>NIB .'], "9")
     check("char 'a' -> 10", ['97 FMT-C>NIB .'], "10")
     check("char 'f' -> 15", ['102 FMT-C>NIB .'], "15")
     check("char 'A' -> 10", ['65 FMT-C>NIB .'], "10")
     check("char 'F' -> 15", ['70 FMT-C>NIB .'], "15")
-    check("invalid -> 0",   ['[CHAR] G FMT-C>NIB .'], "0")
+    check("invalid -> 0",   ['CHAR G FMT-C>NIB .'], "0")
 
 
 def test_hex_decode():
@@ -359,23 +338,4 @@ def test_hex_decode():
 # ── Main ──
 
 if __name__ == "__main__":
-    build_snapshot()
-
-    test_compile()
-    test_nib_to_char()
-    test_dot_nib()
-    test_dot_byte()
-    test_dot_hex()
-    test_to_hex()
-    test_u_dot_h()
-    test_u_dot_h4()
-    test_hexdump_basic()
-    test_hexdump_multiline()
-    test_c_to_nib()
-    test_hex_decode()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    if _fail_count:
-        sys.exit(1)
-    print("  All tests passed!")
+    run_file_tests(__file__)

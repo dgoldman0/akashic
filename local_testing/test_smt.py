@@ -40,6 +40,7 @@ SMT_F      = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -169,6 +170,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -198,35 +201,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # ── Shared preamble: init tree + fill key/value buffers ──
 
@@ -354,7 +332,7 @@ def test_root_nonzero():
     lines = _init_tree() + [
         '_K1 _V1 _TREE SMT-INSERT DROP',
         '_TREE SMT-ROOT _R1 32 CMOVE',
-        '0 _R1 32 0 DO OVER I + C@ OR LOOP NIP',
+        ': _RUN-LOOP 0 _R1 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
     ]
     check("root is non-zero", lines, "NONZERO")
@@ -364,7 +342,7 @@ def test_empty_root_zero():
     print("\n=== SMT-ROOT empty = zero ===")
     lines = _init_tree() + [
         '_TREE SMT-ROOT _R1 32 CMOVE',
-        '0 _R1 32 0 DO OVER I + C@ OR LOOP NIP',
+        ': _RUN-LOOP 0 _R1 32 0 DO OVER I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0= IF ." ZERO" ELSE ." NONZERO" THEN',
     ]
     check("empty root is zero", lines, "ZERO")
@@ -579,39 +557,5 @@ def test_destroy():
 
 # ── Main ──
 
-def main():
-    build_snapshot()
-
-    test_compile()
-    test_init_empty()
-    test_smt_max()
-    test_insert_single()
-    test_insert_two()
-    test_insert_update()
-    test_lookup_hit()
-    test_lookup_miss()
-    test_lookup_after_two_inserts()
-    test_root_nonzero()
-    test_empty_root_zero()
-    test_root_determinism()
-    test_root_changes()
-    test_prove_verify_round_trip()
-    test_prove_verify_second_key()
-    test_verify_wrong_value()
-    test_verify_wrong_root()
-    test_delete()
-    test_delete_last()
-    test_delete_nonexistent()
-    test_insert_many()
-    test_proof_length()
-    test_order_independence()
-    test_prove_verify_three_keys()
-    test_destroy()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail_count else 0)
-
 if __name__ == "__main__":
-    main()
+    run_file_tests(__file__)

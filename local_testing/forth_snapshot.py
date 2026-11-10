@@ -49,6 +49,31 @@ def _source_lines(path: Path) -> list[str]:
     return lines
 
 
+def module_source_lines(roots: tuple[str, ...]) -> list[str]:
+    """The source lines of ROOTS and their REQUIRE closure, as KDOS loads them.
+
+    ROOTS name modules under akashic/akashic.  Each module's dependencies come
+    before it, so a suite that names the modules it tests also loads every
+    module they come to require later.
+    """
+
+    lines = []
+    for module in dependency_order(SOURCE_ROOT, roots):
+        lines.extend(_source_lines(SOURCE_ROOT / module))
+    return lines
+
+
+def megapad_module_lines(name: str) -> list[str]:
+    """The source lines of the MegaPad system module NAME, such as networking.f.
+
+    A booted system loads its system modules right after ENTER-USERLAND, and
+    Akashic's network modules build on networking.f, so a suite whose modules
+    use it loads these lines there too.
+    """
+
+    return _source_lines(MEGAPAD_ROOT / name)
+
+
 def _next_line(data: bytes, pos: int) -> bytes:
     end = data.find(b"\n", pos)
     return data[pos:end + 1] if end >= 0 else data[pos:]
@@ -223,12 +248,18 @@ class ForthSnapshot:
         return output.decode("utf-8", errors="replace")
 
 
-def program_output(output: str, lines: list[str]) -> str:
-    """Drop KDOS's echo of the input lines and its ``ok`` acknowledgements."""
+def program_output(output: str, lines: list[str], *, keep_cr: bool = False) -> str:
+    """Drop KDOS's echo of the input lines and its ``ok`` acknowledgements.
+
+    KDOS ends each line with CR LF, so the text normally drops every CR.  With
+    KEEP_CR the text keeps them, for a check of output whose own lines must
+    end in CR LF.
+    """
 
     typed = {line.strip() for line in lines}
     kept = []
-    for line in output.replace("\r", "").splitlines():
+    text = output.split("\n") if keep_cr else output.replace("\r", "").splitlines()
+    for line in text:
         stripped = line.strip()
         if line.startswith("> ") or stripped in typed or stripped == "ok":
             continue
@@ -236,16 +267,33 @@ def program_output(output: str, lines: list[str]) -> str:
     return "\n".join(kept)
 
 
-# KDOS prints these when a line fails: an undefined word, a stack fault, a
-# full dictionary, EVALUATE nested too deep or a branch out of range.
+# The BIOS prints these when a line fails: an undefined or missing name, a
+# compile-only word or a definition begun while compiling, a stack fault, a
+# full dictionary, EVALUATE nested too deep or fed too long a line, a branch
+# out of range, too many LEAVEs, a misplaced quotation end, or a CPU fault.
 KDOS_DIAGNOSTICS = (
     "? (not found)",
+    "name expected",
+    "dictionary name exceeds 127 bytes",
+    "compile-only word",
+    "nested definition",
+    "IMMEDIATE after :NONAME",
+    "unmatched ;]",
+    "; inside [: ... ;]",
     "Stack underflow",
     "Stack overflow",
     "Return stack overflow",
     "Dictionary full",
+    "dictionary overflow",
     "EVALUATE depth limit exceeded",
+    "EVALUATE input exceeds 255 bytes",
     "Branch offset overflow",
+    "Too many LEAVEs",
+    "*** BUS FAULT",
+    "*** PRIVILEGE FAULT",
+    "*** ILLEGAL INSTRUCTION",
+    "*** ALIGNMENT FAULT",
+    "*** DIVIDE BY ZERO",
 )
 
 
@@ -260,10 +308,12 @@ def failure_message(name: str, detail: str, output: str) -> str:
     return f"{name}\n        {detail}\n{got}"
 
 
-def printed_output(name: str, lines: list[str], output: str) -> str:
+def printed_output(
+    name: str, lines: list[str], output: str, *, keep_cr: bool = False
+) -> str:
     """What the program printed, failing the check if KDOS reported a line."""
 
-    printed = program_output(output, lines)
+    printed = program_output(output, lines, keep_cr=keep_cr)
     failed = [item for item in KDOS_DIAGNOSTICS if item in printed]
     assert not failed, failure_message(
         name, "KDOS reported: " + ", ".join(failed), output
@@ -278,8 +328,11 @@ def transcript_checks(run):
     only what the program printed, fails its test when KDOS reported a
     failed line, and raises an AssertionError built by ``failure_message``:
 
-    - ``check(name, lines, expected=None, check_fn=None)`` requires
-      EXPECTED in the printed output, or CHECK_FN to accept it;
+    - ``check(name, lines, expected=None, check_fn=None,
+      not_expected=None)`` requires EXPECTED in the printed output, or
+      CHECK_FN to accept it, and NOT_EXPECTED absent from it; an
+      expectation that holds a CR, and a predicate given KEEP_CR, read the
+      CRs printed;
     - ``check_fn(name, lines, predicate, desc="")`` requires PREDICATE to
       accept it;
     - ``check_emitted(name, lines, markers)`` requires each marker as a
@@ -288,9 +341,18 @@ def transcript_checks(run):
     Keyword options beyond these pass through to ``run``.
     """
 
-    def check(name, forth_lines, expected=None, check_fn=None, **options):
+    def check(
+        name, forth_lines, expected=None, check_fn=None, not_expected=None,
+        keep_cr=False, **options,
+    ):
         output = run(forth_lines, **options)
-        printed = printed_output(name, forth_lines, output)
+        # Expected text that holds a CR is compared with the CRs printed, as
+        # is the printed text a KEEP_CR predicate reads.
+        keep_cr = keep_cr or any(
+            isinstance(text, str) and "\r" in text
+            for text in (expected, not_expected)
+        )
+        printed = printed_output(name, forth_lines, output, keep_cr=keep_cr)
         if check_fn is not None:
             assert check_fn(printed), failure_message(
                 name, "the check's predicate refused the output", output
@@ -298,6 +360,10 @@ def transcript_checks(run):
         elif expected is not None:
             assert expected in printed, failure_message(
                 name, f"expected: {expected!r}", output
+            )
+        if not_expected is not None:
+            assert not_expected not in printed, failure_message(
+                name, f"not expected: {not_expected!r}", output
             )
 
     def check_fn(name, forth_lines, predicate, desc="", **options):

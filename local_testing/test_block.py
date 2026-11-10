@@ -25,28 +25,11 @@ EMU_DIR    = os.environ.get(
 )
 
 # Dependency file paths (in load order)
-EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
-FP16_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
-CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
-SHA512_F   = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
-FIELD_F    = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
-SHA3_F     = os.path.join(ROOT_DIR, "akashic", "math", "sha3.f")
-RANDOM_F   = os.path.join(ROOT_DIR, "akashic", "math", "random.f")
-ED25519_F  = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
-SPHINCS_F  = os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f")
-CBOR_F     = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
-FMT_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
-MERKLE_F   = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
-TX_F       = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
-SMT_F      = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
-STATE_F    = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
-BLOCK_F    = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -108,12 +91,26 @@ def build_snapshot():
     bios_code   = _load_bios()
     kdos_lines  = _load_forth_lines(KDOS_PATH)
 
-    dep_lines = []
-    for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
-                 CRYPTO_ACC_F, SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
-                 ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-                 MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F]:
-        dep_lines += _load_forth_lines(path)
+    dep_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "math/fp16.f",
+        "math/crypto-acc.f",
+        "math/sha512.f",
+        "math/field.f",
+        "math/sha3.f",
+        "math/random.f",
+        "math/ed25519.f",
+        "math/sphincs-plus.f",
+        "cbor/cbor.f",
+        "utils/fmt.f",
+        "math/merkle.f",
+        "store/tx.f",
+        "store/smt.f",
+        "store/state.f",
+        "store/block.f",
+    ))
 
     helpers = [
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
@@ -161,6 +158,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -190,35 +189,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # ── Forth helpers ──
 
@@ -452,7 +426,7 @@ def test_finalize():
         # Finalize
         '_BK BLK-FINALIZE',
         # Check tx_root not all zero
-        '_BK BLK-TX-ROOT@ 32 0 DO DUP I + C@ OR LOOP',
+        ': _RUN-LOOP _BK BLK-TX-ROOT@ 32 0 DO DUP I + C@ OR LOOP ; _RUN-LOOP',
         'IF ." TXRNZ" ELSE ." TXRZ" THEN',
     ]
     check("tx root non-zero after finalize", lines, "TXRNZ")
@@ -466,7 +440,7 @@ def test_finalize():
         '1700000000 _BK BLK-SET-TIME',
         'CREATE _PH 32 ALLOT  _PH 32 0 FILL  _PH _BK BLK-SET-PREV',
         '_BK BLK-FINALIZE',
-        '_BK BLK-STATE-ROOT@ 32 0 DO DUP I + C@ OR LOOP',
+        ': _RUN-LOOP _BK BLK-STATE-ROOT@ 32 0 DO DUP I + C@ OR LOOP ; _RUN-LOOP',
         'IF ." SRNZ" ELSE ." SRZ" THEN',
     ]
     check("state root non-zero after finalize", lines2, "SRNZ")
@@ -493,7 +467,7 @@ def test_hash():
         '_BK BLK-INIT',
         'CREATE _H 32 ALLOT',
         '_BK _H BLK-HASH',
-        '_H 32 0 DO DUP I + C@ OR LOOP',
+        ': _RUN-LOOP _H 32 0 DO DUP I + C@ OR LOOP ; _RUN-LOOP',
         'IF ." HNZ" ELSE ." HZ" THEN',
     ]
     check("hash is non-zero", lines, "HNZ")
@@ -504,7 +478,7 @@ def test_hash():
         '_BK BLK-INIT  42 _BK BLK-SET-HEIGHT',
         'CREATE _H1 32 ALLOT  CREATE _H2 32 ALLOT',
         '_BK _H1 BLK-HASH  _BK _H2 BLK-HASH',
-        '_H1 _H2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP',
+        ': _RUN-LOOP _H1 _H2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         'IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("hash is deterministic", lines2, "SAME")
@@ -516,7 +490,7 @@ def test_hash():
         '_BK2 BLK-INIT  2 _BK2 BLK-SET-HEIGHT',
         'CREATE _H1 32 ALLOT  CREATE _H2 32 ALLOT',
         '_BK1 _H1 BLK-HASH  _BK2 _H2 BLK-HASH',
-        '_H1 _H2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP',
+        ': _RUN-LOOP _H1 _H2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         'IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("different height -> different hash", lines3, "DIFF")
@@ -1037,36 +1011,6 @@ def test_cbuf_size_d07():
 #  Main
 # =================================================================
 
+
 if __name__ == "__main__":
-    build_snapshot()
-
-    test_compile()
-    test_constants()
-    test_init()
-    test_setters()
-    test_add_tx()
-    test_finalize()
-    test_hash()
-    test_snapshot_restore()
-    test_verify_valid()
-    test_verify_bad_prev()
-    test_verify_bad_state_root()
-    test_verify_no_mutation()
-    test_encode_decode()
-    test_chain_init()
-    test_chain_append()
-    test_chain_append_mutates()
-    test_chain_append_bad_height()
-    test_chain_two_blocks()
-    test_empty_block()
-    test_finalize_truncate_p22()
-    test_chain_append_truncate_a02()
-    test_decode_txs_b06()
-    test_chain_history_b09()
-    test_decode_version_check_c07()
-    test_cbuf_size_d07()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail_count else 0)
+    run_file_tests(__file__)

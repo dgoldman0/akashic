@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-web-template Forth library (web/template.f).
 
 Tests:
@@ -50,6 +33,7 @@ GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -154,6 +138,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -201,31 +187,9 @@ def tstr_compiled(s):
 
 # ── Test Infrastructure ──
 
-_pass_count = 0
-_fail_count = 0
-
-def check(label, lines, expected=None, contains=False, negate=False, check_fn=None):
-    global _pass_count, _fail_count
-    out = run_forth(lines)
-    clean = out.strip()
-    if check_fn:
-        ok = check_fn(clean)
-    elif negate:
-        ok = expected not in clean
-    elif contains:
-        ok = expected in clean
-    else:
-        ok = expected in clean
-    if ok:
-        _pass_count += 1
-        print(f"  [PASS] {label}")
-    else:
-        _fail_count += 1
-        print(f"  [FAIL] {label}")
-        if expected is not None:
-            print(f"         expected: {repr(expected)}")
-        tail = clean.split('\n')[-3:]
-        print(f"         got (last lines): {tail}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # =====================================================================
@@ -451,27 +415,6 @@ def test_tpl_combined():
 #  Main
 # =====================================================================
 
-def main():
-    build_snapshot()
-    test_compile()
-    test_tpl_link()
-    test_tpl_input()
-    test_tpl_list()
-    test_tpl_table_row()
-    test_tpl_form()
-    test_tpl_page()
-    test_tpl_var()
-    test_tpl_expand_multi()
-    test_tpl_var_overwrite()
-    test_tpl_var_clear()
-    test_tpl_expand_edge()
-    test_tpl_combined()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    return 1 if _fail_count > 0 else 0
-
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_file_tests(__file__)

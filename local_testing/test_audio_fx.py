@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for Akashic audio Phase 2a+2b — Effects Processing.
 
 Tests: chain.f (effect-chain routing), fx.f (delay, distortion,
@@ -51,6 +34,7 @@ MIX_F      = os.path.join(AUDIO_DIR, "mix.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import failure_message, printed_output, run_file_tests
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -177,18 +161,27 @@ def build_snapshot():
         print(f"[!] Snapshot has {len(errors)} error(s) — tests may fail")
         for l in text.strip().split('\n')[-20:]:
             print(f"     | {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=80_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -205,8 +198,6 @@ def run_forth(lines, max_steps=80_000_000):
 
 # ── Test infrastructure ──
 
-_pass_count = 0
-_fail_count = 0
 
 def parse_last_int(output):
     for line in reversed(output.strip().split('\n')):
@@ -246,108 +237,47 @@ def has_error(output):
             return line.strip()
     return None
 
-def check_val(name, forth_lines, expected):
-    global _pass_count, _fail_count
+# The checks read only what the program printed, and fail their test when a
+# value differs or the program reports an error (forth_snapshot.printed_output).
+
+def _printed(name, forth_lines):
+    """Run FORTH_LINES; answer what they printed and the transcript."""
     output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-        return
-    val = parse_last_int(output)
-    if val == expected:
-        _pass_count += 1
-        print(f"  PASS  {name}  ({val})")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  expected={expected} got={val}")
-        for l in output.strip().split('\n')[-4:]:
-            print(f"        uart: '{l.strip()}'")
+    printed = printed_output(name, forth_lines, output)
+    err = has_error(printed)
+    assert err is None, failure_message(name, f"runtime error: {err}", output)
+    return printed, output
+
+def check_val(name, forth_lines, expected):
+    printed, output = _printed(name, forth_lines)
+    val = parse_last_int(printed)
+    assert val == expected, failure_message(
+        name, f"expected {expected}, got {val}", output)
 
 def check_val_range(name, forth_lines, lo, hi):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-        return
-    val = parse_last_int(output)
-    if val is not None and lo <= val <= hi:
-        _pass_count += 1
-        print(f"  PASS  {name}  ({val} in [{lo},{hi}])")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  expected [{lo},{hi}] got={val}")
-        for l in output.strip().split('\n')[-4:]:
-            print(f"        uart: '{l.strip()}'")
+    printed, output = _printed(name, forth_lines)
+    val = parse_last_int(printed)
+    assert val is not None and lo <= val <= hi, failure_message(
+        name, f"expected [{lo},{hi}], got {val}", output)
 
 def check_vals(name, forth_lines, expected_list):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-        return
-    vals = parse_ints(output)
-    if len(vals) < len(expected_list):
-        _fail_count += 1
-        print(f"  FAIL  {name}  expected {len(expected_list)} values, got {len(vals)}: {vals}")
-        return
-    ok = True
-    for i, exp in enumerate(expected_list):
-        if vals[i] != exp: ok = False
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}  {vals[:len(expected_list)]}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        for i, exp in enumerate(expected_list):
-            got = vals[i] if i < len(vals) else '?'
-            marker = '!!' if got != exp else '  '
-            print(f"    {marker} [{i}] expected={exp} got={got}")
+    printed, output = _printed(name, forth_lines)
+    vals = parse_ints(printed)
+    assert vals[:len(expected_list)] == list(expected_list), failure_message(
+        name, f"expected {list(expected_list)}, got {vals}", output)
 
 def check_vals_range(name, forth_lines, range_list):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-        return
-    vals = parse_ints(output)
-    if len(vals) < len(range_list):
-        _fail_count += 1
-        print(f"  FAIL  {name}  expected {len(range_list)} values, got {len(vals)}: {vals}")
-        return
-    ok = True
-    for i, (lo, hi) in enumerate(range_list):
-        if not (lo <= vals[i] <= hi): ok = False
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}  {vals[:len(range_list)]}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        for i, (lo, hi) in enumerate(range_list):
-            got = vals[i] if i < len(vals) else '?'
-            ok_i = lo <= vals[i] <= hi if i < len(vals) else False
-            marker = '  ' if ok_i else '!!'
-            print(f"    {marker} [{i}] expected [{lo},{hi}] got={got}")
+    printed, output = _printed(name, forth_lines)
+    vals = parse_ints(printed)
+    ok = len(vals) >= len(range_list) and all(
+        lo <= vals[i] <= hi for i, (lo, hi) in enumerate(range_list))
+    assert ok, failure_message(
+        name, f"expected {list(range_list)}, got {vals}", output)
 
 def check_no_error(name, forth_lines):
-    """Just verify no runtime error occurs."""
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-    else:
-        _pass_count += 1
-        print(f"  PASS  {name}")
+    """Run FORTH_LINES; they must print no runtime error."""
+    _printed(name, forth_lines)
+
 
 # ════════════════════════════════════════════════════════════════════
 #  Chain tests
@@ -1094,8 +1024,7 @@ def test_chorus_modulation():
     # With a constant input, the chorus output should vary slightly
     # due to the LFO modulating the tap position.  Check that not
     # all output frames are identical.
-    global _pass_count, _fail_count
-    output = run_forth([
+    printed, output = _printed("chorus_modulation", [
         "VARIABLE _TB",
         "VARIABLE _TC",
         ": TMP",
@@ -1111,25 +1040,11 @@ def test_chorus_modulation():
         "  _TB @ PCM-FREE ;",
         "TMP"
     ])
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  chorus_modulation  (runtime error: {err})")
-        return
-    vals = parse_ints(output)
-    if len(vals) < 3:
-        _fail_count += 1
-        print(f"  FAIL  chorus_modulation  not enough values: {vals}")
-        return
-    # At least one pair of values should differ (LFO modulates output)
-    unique = len(set(vals))
-    if unique > 1:
-        _pass_count += 1
-        print(f"  PASS  chorus_modulation  ({vals} — {unique} unique)")
-    else:
-        # Might still pass if LFO happens to hit same phase — be lenient
-        _pass_count += 1
-        print(f"  PASS  chorus_modulation  (all same={vals[0]}, LFO phase aligned)")
+    vals = parse_ints(printed)
+    assert len(vals) >= 3, failure_message(
+        "chorus_modulation", f"expected 3 values, got {vals}", output)
+    # The LFO usually varies the three frames; one that lands on the same
+    # phase each time leaves them equal, which passes as well.
 
 def test_chorus_in_chain():
     """Chorus works in an effect chain slot."""
@@ -1694,105 +1609,6 @@ def test_mix_channel_gain():
 #  Main
 # ════════════════════════════════════════════════════════════════════
 
-if __name__ == '__main__':
-    build_snapshot()
-    print()
 
-    print("── chain.f ──")
-    test_chain_create()
-    test_chain_create_clamp()
-    test_chain_process_empty()
-    test_chain_set_and_process()
-    test_chain_bypass()
-    test_chain_clear()
-    test_chain_two_effects()
-
-    print("\n── fx.f — delay ──")
-    test_delay_create()
-    test_delay_silence()
-    test_delay_basic()
-    test_delay_wet_mix()
-    test_delay_feedback()
-    test_delay_change_time()
-
-    print("\n── fx.f — dist (soft clip) ──")
-    test_dist_create()
-    test_dist_soft_zero()
-    test_dist_soft_one()
-    test_dist_soft_negative()
-    test_dist_soft_saturation()
-
-    print("\n── fx.f — dist (hard clip) ──")
-    test_dist_hard_within()
-    test_dist_hard_clip_pos()
-    test_dist_hard_clip_neg()
-    test_dist_hard_zero()
-
-    print("\n── fx.f — dist (bitcrush) ──")
-    test_dist_crush_quantize()
-    test_dist_crush_clean()
-    test_dist_crush_hold()
-    test_dist_drive_change()
-
-    print("\n── integration (2a) ──")
-    test_osc_through_chain()
-    test_delay_then_dist()
-
-    print("\n── fx.f — reverb ──")
-    test_reverb_create()
-    test_reverb_silence()
-    test_reverb_impulse()
-    test_reverb_wet_zero()
-    test_reverb_room_param()
-    test_reverb_damp_param()
-    test_reverb_multiple_passes()
-    test_reverb_in_chain()
-
-    print("\n── fx.f — chorus ──")
-    test_chorus_create()
-    test_chorus_silence()
-    test_chorus_signal()
-    test_chorus_wet_zero()
-    test_chorus_modulation()
-    test_chorus_in_chain()
-
-    print("\n── fx.f — EQ ──")
-    test_eq_create()
-    test_eq_unity()
-    test_eq_band_set()
-    test_eq_peaking_boost()
-    test_eq_lowshelf()
-    test_eq_highshelf()
-    test_eq_multi_band()
-    test_eq_nbands_clamp()
-    test_eq_zero_gain()
-    test_eq_in_chain()
-
-    print("\n── integration (2b) ──")
-    test_full_chain_2b()
-    test_osc_reverb()
-
-    print("\n── fx.f — compressor ──")
-    test_comp_create_free()
-    test_comp_below_threshold()
-    test_comp_above_threshold()
-    test_comp_limiter()
-    test_comp_silence()
-    test_comp_ratio_one()
-    test_comp_in_chain()
-
-    print("\n── mix.f — mixer ──")
-    test_mix_create_free()
-    test_mix_silence()
-    test_mix_center_pan()
-    test_mix_hard_left()
-    test_mix_hard_right()
-    test_mix_mute()
-    test_mix_two_channels()
-    test_mix_master_gain()
-    test_mix_channel_gain()
-
-    print(f"\n{'='*50}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*50}")
-    sys.exit(1 if _fail_count else 0)
+if __name__ == "__main__":
+    run_file_tests(__file__)

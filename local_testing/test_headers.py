@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-http-headers Forth library."""
 import os, sys, time
 
@@ -33,6 +16,7 @@ GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -130,6 +114,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -171,18 +157,9 @@ def tstr(s):
     if full: lines.append(full)
     return lines
 
-_pass = 0; _fail = 0
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    ok = check_fn(clean) if check_fn else (expected in clean if expected else True)
-    if ok:
-        _pass += 1; print(f"  PASS  {name}")
-    else:
-        _fail += 1; print(f"  FAIL  {name}")
-        if expected: print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # ── Build tests ──
@@ -263,7 +240,8 @@ def test_build():
               "GET /api/v1/users HTTP/1.1\r\n",
               "Host: api.example.com\r\n",
               "Content-Type: application/json\r\n",
-              "Connection: close\r\n"]))
+              "Connection: close\r\n"]),
+          keep_cr=True)
 
 
 # ── Parse tests ──
@@ -388,10 +366,4 @@ def test_parse():
 # ── Main ──
 
 if __name__ == "__main__":
-    build_snapshot()
-    test_build()
-    test_parse()
-    print(f"\n{'='*60}")
-    print(f"  {_pass} passed, {_fail} failed")
-    print(f"{'='*60}")
-    sys.exit(1 if _fail > 0 else 0)
+    run_file_tests(__file__)

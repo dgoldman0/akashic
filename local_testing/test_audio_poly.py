@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for Akashic audio Phase 4b — Voice Management.
 
 Tests: poly.f (polyphonic voice manager), porta.f (monophonic portamento).
@@ -57,6 +40,7 @@ PORTA_F    = os.path.join(AUDIO_DIR, "porta.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import failure_message, printed_output, run_file_tests
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -190,18 +174,27 @@ def build_snapshot():
         print(f"[!] Snapshot has {len(errors)} error(s) — tests may fail")
         for l in text.strip().split('\n')[-20:]:
             print(f"     | {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=80_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -218,8 +211,6 @@ def run_forth(lines, max_steps=80_000_000):
 
 # ── Test infrastructure ──
 
-_pass_count = 0
-_fail_count = 0
 
 def parse_last_int(output):
     for line in reversed(output.strip().split('\n')):
@@ -259,52 +250,33 @@ def has_error(output):
             return line.strip()
     return None
 
-def check_val(name, forth_lines, expected):
-    global _pass_count, _fail_count
+# The checks read only what the program printed, and fail their test when a
+# value differs or the program reports an error (forth_snapshot.printed_output).
+
+def _printed(name, forth_lines):
+    """Run FORTH_LINES; answer what they printed and the transcript."""
     output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-        return
-    val = parse_last_int(output)
-    if val == expected:
-        _pass_count += 1
-        print(f"  PASS  {name}  ({val})")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  expected={expected} got={val}")
-        for l in output.strip().split('\n')[-4:]:
-            print(f"        uart: '{l.strip()}'")
+    printed = printed_output(name, forth_lines, output)
+    err = has_error(printed)
+    assert err is None, failure_message(name, f"runtime error: {err}", output)
+    return printed, output
+
+def check_val(name, forth_lines, expected):
+    printed, output = _printed(name, forth_lines)
+    val = parse_last_int(printed)
+    assert val == expected, failure_message(
+        name, f"expected {expected}, got {val}", output)
 
 def check_val_range(name, forth_lines, lo, hi):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-        return
-    val = parse_last_int(output)
-    if val is not None and lo <= val <= hi:
-        _pass_count += 1
-        print(f"  PASS  {name}  ({val} in [{lo},{hi}])")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  expected [{lo},{hi}] got={val}")
-        for l in output.strip().split('\n')[-4:]:
-            print(f"        uart: '{l.strip()}'")
+    printed, output = _printed(name, forth_lines)
+    val = parse_last_int(printed)
+    assert val is not None and lo <= val <= hi, failure_message(
+        name, f"expected [{lo},{hi}], got {val}", output)
 
 def check_no_error(name, forth_lines):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    err = has_error(output)
-    if err:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (runtime error: {err})")
-    else:
-        _pass_count += 1
-        print(f"  PASS  {name}")
+    """Run FORTH_LINES; they must print no runtime error."""
+    _printed(name, forth_lines)
+
 
 # ════════════════════════════════════════════════════════════════════
 #  POLY tests — Polyphonic voice manager
@@ -650,36 +622,6 @@ def test_porta_glide_converges():
 #  Runner
 # ════════════════════════════════════════════════════════════════════
 
+
 if __name__ == "__main__":
-    build_snapshot()
-    print()
-
-    print("── poly.f — Polyphonic voice manager ──")
-    test_poly_create_free()
-    test_poly_count()
-    test_poly_voice_access()
-    test_poly_note_on_renders()
-    test_poly_two_notes()
-    test_poly_voice_stealing()
-    test_poly_note_off_all()
-    test_poly_cutoff_setter()
-    test_poly_reso_setter()
-    test_poly_filter_state_isolation()
-
-    print()
-    print("── porta.f — Monophonic portamento ──")
-    test_porta_create_free()
-    test_porta_note_on_renders()
-    test_porta_first_note_snaps()
-    test_porta_glide_moves_freq()
-    test_porta_instant_speed()
-    test_porta_speed_setter()
-    test_porta_note_off()
-    test_porta_render_convenience()
-    test_porta_glide_converges()
-
-    print()
-    print("=" * 50)
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print("=" * 50)
-    sys.exit(1 if _fail_count else 0)
+    run_file_tests(__file__)

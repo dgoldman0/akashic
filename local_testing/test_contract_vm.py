@@ -22,32 +22,11 @@ EMU_DIR    = os.environ.get(
 )
 
 # Dependency file paths (in load order)
-EVENT_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F        = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
-FP16_F       = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
-CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
-SHA512_F     = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
-FIELD_F      = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
-SHA3_F       = os.path.join(ROOT_DIR, "akashic", "math", "sha3.f")
-RANDOM_F     = os.path.join(ROOT_DIR, "akashic", "math", "random.f")
-ED25519_F    = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
-SPHINCS_F    = os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f")
-CBOR_F       = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
-FMT_F        = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
-MERKLE_F     = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
-TX_F         = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
-SMT_F        = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
-STATE_F      = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
-BLOCK_F      = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
-CONSENSUS_F  = os.path.join(ROOT_DIR, "akashic", "consensus", "consensus.f")
-STRING_F     = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-ITC_F        = os.path.join(ROOT_DIR, "akashic", "utils", "itc.f")
-CONTRACT_VM_F = os.path.join(ROOT_DIR, "akashic", "store", "contract-vm.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -109,14 +88,30 @@ def build_snapshot():
     bios_code   = _load_bios()
     kdos_lines  = _load_forth_lines(KDOS_PATH)
 
-    dep_lines = []
-    for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
-                 CRYPTO_ACC_F, SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
-                 ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-                 MERKLE_F, TX_F, SMT_F, STATE_F, BLOCK_F,
-                 CONSENSUS_F,
-                 STRING_F, ITC_F, CONTRACT_VM_F]:
-        dep_lines += _load_forth_lines(path)
+    dep_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "math/fp16.f",
+        "math/crypto-acc.f",
+        "math/sha512.f",
+        "math/field.f",
+        "math/sha3.f",
+        "math/random.f",
+        "math/ed25519.f",
+        "math/sphincs-plus.f",
+        "cbor/cbor.f",
+        "utils/fmt.f",
+        "math/merkle.f",
+        "store/tx.f",
+        "store/smt.f",
+        "store/state.f",
+        "store/block.f",
+        "consensus/consensus.f",
+        "utils/string.f",
+        "utils/itc.f",
+        "store/contract-vm.f",
+    ))
 
     helpers = [
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
@@ -164,6 +159,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -193,35 +190,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # ── Forth helpers ──
 
@@ -492,40 +464,6 @@ def test_19_rstk_isolation():
 #  Main
 # =====================================================================
 
-def main():
-    global _pass_count, _fail_count
-    build_snapshot()
-    print()
-    print("=" * 60)
-    print("  contract-vm.f test suite — 19 tests")
-    print("=" * 60)
-    print()
-
-    test_01_vm_init()
-    test_02_bounds_checked_at_store()
-    test_03_bounds_outside_faults()
-    test_04_write_code_region_faults()
-    test_05_write_rstk_region_faults()
-    test_06_gas_exhaustion()
-    test_07_deploy_simple()
-    test_08_call_contract()
-    test_09_vm_balance()
-    test_10_vm_caller_self()
-    test_11_contract_storage()
-    test_12_vm_sha3()
-    test_13_vm_return()
-    test_14_vm_revert()
-    test_15_gas_accounting()
-    test_16_dictionary_escape()
-    test_17_dictionary_escape_require()
-    test_18_memory_escape()
-    test_19_rstk_isolation()
-
-    print()
-    total = _pass_count + _fail_count
-    print(f"Results: {_pass_count}/{total} passed, {_fail_count} failed")
-    if _fail_count:
-        sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    run_file_tests(__file__)

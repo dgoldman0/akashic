@@ -23,48 +23,15 @@ EMU_DIR    = os.environ.get(
 )
 
 # Dependency file paths
-EVENT_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F       = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
-FP16_F      = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
-CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
-SHA512_F    = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
-FIELD_F     = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
-SHA3_F      = os.path.join(ROOT_DIR, "akashic", "math", "sha3.f")
-RANDOM_F    = os.path.join(ROOT_DIR, "akashic", "math", "random.f")
-ED25519_F   = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
-SPHINCS_F   = os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f")
-CBOR_F      = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
-FMT_F       = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
-MERKLE_F    = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
-SMT_F       = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
-TX_F        = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
-STATE_F     = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
-BLOCK_F     = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
-CONSENSUS_F = os.path.join(ROOT_DIR, "akashic", "consensus", "consensus.f")
-MEMPOOL_F   = os.path.join(ROOT_DIR, "akashic", "store", "mempool.f")
-PERSIST_F   = os.path.join(ROOT_DIR, "akashic", "store", "persist.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 from diskutil import format_image
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
-
-# ── Temp disk image ──
-
-_disk_image_path = None
-
-def _create_disk_image():
-    """Create a fresh formatted MP64FS disk image in a temp file."""
-    global _disk_image_path
-    fd, path = tempfile.mkstemp(suffix=".img", prefix="pst_test_")
-    os.close(fd)
-    format_image(path)
-    _disk_image_path = path
-    return path
 
 # ── Emulator helpers ──
 
@@ -143,15 +110,29 @@ def build_snapshot():
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
 
-    dep_lines = []
-    for path in [
-        EVENT_F, SEM_F, GUARD_F, FP16_F,
-        CRYPTO_ACC_F, SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
-        ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-        MERKLE_F, SMT_F, TX_F, STATE_F, BLOCK_F,
-        CONSENSUS_F, MEMPOOL_F, PERSIST_F,
-    ]:
-        dep_lines += _load_forth_lines(path)
+    dep_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "math/fp16.f",
+        "math/crypto-acc.f",
+        "math/sha512.f",
+        "math/field.f",
+        "math/sha3.f",
+        "math/random.f",
+        "math/ed25519.f",
+        "math/sphincs-plus.f",
+        "cbor/cbor.f",
+        "utils/fmt.f",
+        "math/merkle.f",
+        "store/smt.f",
+        "store/tx.f",
+        "store/state.f",
+        "store/block.f",
+        "consensus/consensus.f",
+        "store/mempool.f",
+        "store/persist.f",
+    ))
 
     # ST-INIT + CHAIN-INIT + MP-INIT.
     # CHAIN-INIT is needed so CHAIN-HEAD points to a valid genesis block
@@ -209,6 +190,8 @@ def build_snapshot():
 
 def run_forth(lines, max_steps=200_000_000):
     """Restore snapshot, attach a fresh formatted disk, run Forth lines."""
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
 
     # Write a fresh copy of the base disk image to a temp file
@@ -252,23 +235,9 @@ def run_forth(lines, max_steps=200_000_000):
         except OSError:
             pass
 
-
-_pass = 0; _fail = 0
-
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    ok = check_fn(clean) if check_fn else (expected in clean if expected else True)
-    if ok:
-        _pass += 1; print(f"  PASS  {name}")
-    else:
-        _fail += 1; print(f"  FAIL  {name}")
-        if expected:
-            print(f"        expected: {expected!r}")
-        print(f"        got (last 5 lines):")
-        for ln in clean.split('\n')[-5:]:
-            print(f"          {ln}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # =====================================================================
@@ -484,24 +453,6 @@ def test_encode_buffer_size():
 #  Main
 # =====================================================================
 
+
 if __name__ == "__main__":
-    build_snapshot()
-    test_compile()
-    test_init()
-    test_save_genesis()
-    test_load_block()
-    test_load_out_of_range()
-    test_multiple_saves()
-    test_clear()
-    test_save_state()
-    test_close_reopen()
-    test_set_chain_id()
-    test_set_capacity()
-    test_o1_block_load()
-    test_encode_buffer_size()
-    print(f"\n{'='*40}")
-    print(f"  {_pass} passed, {_fail} failed")
-    print(f"{'='*40}")
-    if _disk_image_path and os.path.exists(_disk_image_path):
-        os.unlink(_disk_image_path)
-    sys.exit(1 if _fail else 0)
+    run_file_tests(__file__)

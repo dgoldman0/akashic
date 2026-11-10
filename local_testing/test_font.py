@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for Akashic font libraries (ttf.f, raster.f).
 
 Tests: Big-endian readers, TTF table parsing, cmap lookup,
@@ -30,19 +13,11 @@ EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
 
-FP16_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
-FP16EXT_F  = os.path.join(ROOT_DIR, "akashic", "math", "fp16-ext.f")
-FIXED_F    = os.path.join(ROOT_DIR, "akashic", "math", "fixed.f")
-BEZIER_F   = os.path.join(ROOT_DIR, "akashic", "math", "bezier.f")
-TTF_F      = os.path.join(ROOT_DIR, "akashic", "font", "ttf.f")
-RASTER_F   = os.path.join(ROOT_DIR, "akashic", "font", "raster.f")
-CACHE_F    = os.path.join(ROOT_DIR, "akashic", "font", "cache.f")
-UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
-LAYOUT_F   = os.path.join(ROOT_DIR, "akashic", "text", "layout.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -101,15 +76,17 @@ def build_snapshot():
     t0 = time.time()
     bios_code   = _load_bios()
     kdos_lines  = _load_forth_lines(KDOS_PATH)
-    fp16_lines  = _load_forth_lines(FP16_F)
-    fp16e_lines = _load_forth_lines(FP16EXT_F)
-    fixed_lines = _load_forth_lines(FIXED_F)
-    bezier_lines= _load_forth_lines(BEZIER_F)
-    ttf_lines   = _load_forth_lines(TTF_F)
-    raster_lines= _load_forth_lines(RASTER_F)
-    cache_lines = _load_forth_lines(CACHE_F)
-    utf8_lines  = _load_forth_lines(UTF8_F)
-    layout_lines= _load_forth_lines(LAYOUT_F)
+    module_lines = module_source_lines((
+        "math/fp16.f",
+        "math/fp16-ext.f",
+        "math/fixed.f",
+        "math/bezier.f",
+        "font/ttf.f",
+        "font/raster.f",
+        "font/cache.f",
+        "text/utf8.f",
+        "text/layout.f",
+    ))
 
     # Test helpers
     helpers = [
@@ -126,10 +103,7 @@ def build_snapshot():
 
     # Load in dependency order
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + fp16_lines + fp16e_lines
-                 + fixed_lines + bezier_lines
-                 + ttf_lines + raster_lines + cache_lines
-                 + utf8_lines + layout_lines
+                 + module_lines
                  + helpers)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
@@ -147,18 +121,27 @@ def build_snapshot():
     for l in text.strip().split('\n'):
         if '?' in l and 'not found' in l.lower():
             print(f"  [!] {l}")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -175,22 +158,9 @@ def run_forth(lines, max_steps=50_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
-
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 # =====================================================================
 #  TTF tests — big-endian readers
@@ -331,7 +301,7 @@ def test_contour_walker_lines():
            '3 0 CELLS _TTF-CONT-ENDS + !',
            '1000 _TTF-UPEM !',
            '16 _RST-YFLIP !',
-           '16 1000 RAST-SCALE!',
+           '16 16 1000 RAST-SCALE!',
            'RAST-RESET',
            '0 3 _RST-WALK-CONTOUR',
            # 2 non-horizontal edges (horiz top/bottom discarded)
@@ -358,7 +328,7 @@ def test_contour_walker_curves():
            '2 0 CELLS _TTF-CONT-ENDS + !',
            '1000 _TTF-UPEM !',
            '16 _RST-YFLIP !',
-           '16 1000 RAST-SCALE!',
+           '16 16 1000 RAST-SCALE!',
            'RAST-RESET',
            '0 2 _RST-WALK-CONTOUR',
            # Should have MORE than 3 edges (Bézier flattening subdivides)
@@ -387,7 +357,7 @@ def test_contour_walker_consecutive_offcurve():
            '3 0 CELLS _TTF-CONT-ENDS + !',
            '1000 _TTF-UPEM !',
            '16 _RST-YFLIP !',
-           '16 1000 RAST-SCALE!',
+           '16 16 1000 RAST-SCALE!',
            'RAST-RESET',
            '0 3 _RST-WALK-CONTOUR',
            # Should generate edges (more than just 4 straight lines)
@@ -416,7 +386,7 @@ def test_rast_glyph_synthetic():
            'CREATE _GBUF 256 ALLOT',
            # Set scale and rasterize manually
            '16 _RST-YFLIP !',
-           '16 1000 RAST-SCALE!',
+           '16 16 1000 RAST-SCALE!',
            'RAST-RESET',
            # Manually decode points and walk
            '0 2 _RST-WALK-CONTOUR',
@@ -647,33 +617,6 @@ def test_layout_wrap_fits():
 #  Main
 # =====================================================================
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    test_big_endian_readers()
-    test_edge_insertion()
-    test_scanline_fill()
-    test_contour_walker_lines()
-    test_contour_walker_curves()
-    test_contour_walker_consecutive_offcurve()
-    test_rast_glyph_synthetic()
-
-    test_cache_flush()
-    test_cache_hash()
-    test_cache_store_and_lookup()
-    test_cache_gc_get_miss()
-
-    test_layout_bew_diag()
-    test_layout_char_width()
-    test_layout_text_width()
-    test_layout_metrics()
-    test_layout_cursor()
-    test_layout_wrap_word_break()
-    test_layout_wrap_hard_newline()
-    test_layout_wrap_forced_break()
-    test_layout_wrap_fits()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    if _fail_count:
-        sys.exit(1)
+if __name__ == "__main__":
+    run_file_tests(__file__)

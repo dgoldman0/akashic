@@ -22,25 +22,26 @@ sys.path.insert(0, EMU_DIR)
 
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
 
-# Dependency order: everything through focus-2d.f
-_DEP_PATHS = [
-    os.path.join(AK, "text",  "utf8.f"),
-    os.path.join(AK, "tui",   "ansi.f"),
-    os.path.join(AK, "tui",   "keys.f"),
-    os.path.join(AK, "tui",   "cell.f"),
-    os.path.join(AK, "tui",   "screen.f"),
-    os.path.join(AK, "tui",   "draw.f"),
-    os.path.join(AK, "tui",   "box.f"),
-    os.path.join(AK, "tui",   "region.f"),
-    os.path.join(AK, "tui",   "layout.f"),
-    os.path.join(AK, "tui",   "widget.f"),
-    os.path.join(AK, "tui",   "focus.f"),
-    os.path.join(AK, "tui",   "focus-2d.f"),
-]
+# The modules under test; the snapshot loads them with their REQUIRE closure.
+_DEP_ROOTS = (
+    "text/utf8.f",
+    "tui/ansi.f",
+    "tui/keys.f",
+    "tui/cell.f",
+    "tui/screen.f",
+    "tui/draw.f",
+    "tui/box.f",
+    "tui/region.f",
+    "tui/layout.f",
+    "tui/widget.f",
+    "tui/focus.f",
+    "tui/focus-2d.f",
+)
 
 # ═══════════════════════════════════════════════════════════════════
 #  Emulator helpers  (same pattern as test_tui.py)
@@ -118,11 +119,7 @@ def build_snapshot():
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
 
-    dep_lines = []
-    for p in _DEP_PATHS:
-        if not os.path.exists(p):
-            raise FileNotFoundError(f"Missing dep: {p}")
-        dep_lines.extend(_load_forth_lines(p))
+    dep_lines = module_source_lines(_DEP_ROOTS)
 
     # Test helpers:
     # _MOCK-DRAW / _MOCK-HANDLE: dummy draw / handle xts
@@ -184,7 +181,7 @@ def build_snapshot():
         for ln in err_lines[-20:]:
             print(f"    {ln}")
 
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     elapsed = time.time() - t0
     print(f"[*] Snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
@@ -192,12 +189,21 @@ def build_snapshot():
 
 
 def run_forth(lines, max_steps=80_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
 
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode()
@@ -225,38 +231,9 @@ def run_forth(lines, max_steps=80_000_000):
 #  Test framework
 # ═══════════════════════════════════════════════════════════════════
 
-_pass_count = 0
-_fail_count = 0
-
-def check(name, forth_lines, expected=None, check_fn=None, not_expected=None):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-
-    if check_fn:
-        ok = check_fn(clean)
-    elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if not_expected is not None and ok:
-        ok = not_expected not in clean
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        if not_expected is not None:
-            print(f"        NOT expected: {not_expected!r}")
-        last = clean.split('\n')[-8:]
-        print(f"        got (last lines):")
-        for l in last:
-            print(f"          {l}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -525,7 +502,7 @@ def test_each():
         _mk(0, 0, 1, 10, 1), 'FOC-ADD',
         _mk(1, 0, 1, 10, 2), 'FOC-ADD',
         _mk(2, 0, 1, 10, 3), 'FOC-ADD',
-        "['] _INC-CNT FOC-EACH",
+        "' _INC-CNT FOC-EACH",
         '_ECNT @ . CR',
     ], "3")
 
@@ -534,7 +511,7 @@ def test_each_empty():
     check("each-empty", [
         'FOC-CLEAR',
         ': _NOP-EACH ( wdg -- ) DROP ;',
-        "['] _NOP-EACH FOC-EACH",
+        "' _NOP-EACH FOC-EACH",
         '." OK" CR',
     ], "OK")
 
@@ -705,101 +682,6 @@ def test_dispatch_alt_del():
 #  Main
 # ═══════════════════════════════════════════════════════════════════
 
-def main():
-    global _pass_count, _fail_count
-
-    build_snapshot()
-    print()
-    print("=" * 60)
-    print("  Focus + Focus-2D Test Suite")
-    print("=" * 60)
-    print()
-
-    # §A
-    print("[A] Compilation")
-    test_compilation()
-    print()
-
-    # §B
-    print("[B] FOC-ADD / FOC-GET / FOC-COUNT")
-    test_add_get()
-    test_count()
-    test_add_duplicate()
-    test_empty_get()
-    print()
-
-    # §C
-    print("[C] FOC-NEXT / FOC-PREV (Ring Cycle)")
-    test_next_cycle()
-    test_prev_cycle()
-    test_next_single()
-    test_next_empty()
-    print()
-
-    # §D
-    print("[D] FOC-SET")
-    test_set_explicit()
-    test_set_not_in_chain()
-    test_set_updates_flags()
-    print()
-
-    # §E
-    print("[E] FOC-REMOVE")
-    test_remove_middle()
-    test_remove_focused()
-    test_remove_last()
-    print()
-
-    # §F
-    print("[F] FOC-CLEAR")
-    test_clear()
-    print()
-
-    # §G
-    print("[G] FOC-DISPATCH")
-    test_dispatch()
-    test_dispatch_empty()
-    print()
-
-    # §H
-    print("[H] FOC-EACH")
-    test_each()
-    test_each_empty()
-    print()
-
-    # §I
-    print("[I] F2D Directional Navigation")
-    test_f2d_down()
-    test_f2d_up()
-    test_f2d_right()
-    test_f2d_left()
-    test_f2d_diagonal_bias()
-    test_f2d_no_candidate()
-    test_f2d_empty()
-    print()
-
-    # §J
-    print("[J] F2D Synthetic Clicks")
-    test_click_left()
-    test_click_empty()
-    print()
-
-    # §K
-    print("[K] F2D-DISPATCH (Key Routing)")
-    test_dispatch_alt_down()
-    test_dispatch_alt_right()
-    test_dispatch_non_alt()
-    test_dispatch_char_key()
-    test_dispatch_alt_del()
-    print()
-
-    # Summary
-    print("=" * 60)
-    total = _pass_count + _fail_count
-    print(f"  {_pass_count}/{total} passed, {_fail_count} failed")
-    print("=" * 60)
-    return 1 if _fail_count > 0 else 0
-
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_file_tests(__file__)

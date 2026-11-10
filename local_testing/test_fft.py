@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for Akashic math/fft.f — Fast Fourier Transform.
 
 Uses snapshot-based testing: boots BIOS + KDOS + all deps once,
@@ -45,6 +28,7 @@ GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import failure_message, printed_output, run_file_tests
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -179,6 +163,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=80_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -208,8 +194,6 @@ def run_forth(lines, max_steps=80_000_000):
 
 # ── Test infrastructure ──
 
-_pass_count = 0
-_fail_count = 0
 
 def parse_ints(output):
     """Parse integers from ok-ending lines AFTER the |RESULT| marker.
@@ -237,56 +221,30 @@ def parse_ints(output):
                 pass
     return vals
 
+# The checks read only what the program printed, and fail their test when a
+# value differs or KDOS reports a failed line (forth_snapshot.printed_output).
+
+def fp16_to_sortable(bits):
+    """FP16 bits as a signed magnitude that orders like the floats."""
+    if bits & 0x8000:
+        return -(bits ^ 0x8000)
+    return bits
+
 def check_fp16_arr(name, forth_lines, expected_floats, max_ulp=2):
-    """Check multiple FP16 values printed in order."""
-    global _pass_count, _fail_count
+    """The FP16 values printed after |RESULT| match EXPECTED_FLOATS, each
+    within MAX_ULP units in the last place."""
     output = run_forth(forth_lines)
-    # Check for errors
-    for line in output.strip().split('\n'):
-        if 'underflow' in line.lower() or 'not found' in line.lower():
-            _fail_count += 1
-            print(f"  FAIL  {name}  (runtime error: {line.strip()})")
-            return
-    vals = parse_ints(output)
-    if len(vals) < len(expected_floats):
-        _fail_count += 1
-        print(f"  FAIL  {name}  (expected {len(expected_floats)} values, got {len(vals)})")
-        if vals:
-            print(f"        got raw: {vals}")
-        # Show some output for debugging
-        for line in output.strip().split('\n')[-5:]:
-            if line.strip():
-                print(f"        uart: {line.strip()}")
-        return
-    ok = True
-    details = []
-    for i, exp_f in enumerate(expected_floats):
-        exp_bits = fp16(exp_f)
-        got_bits = vals[i] & 0xFFFF
-        # Use signed ULP distance that handles zero crossing correctly
-        # Convert FP16 bits to signed magnitude (like float comparison)
-        def fp16_to_sortable(bits):
-            if bits & 0x8000:  # negative
-                return -(bits ^ 0x8000)  # flip to negative sortable
-            return bits
-        sdiff = abs(fp16_to_sortable(got_bits) - fp16_to_sortable(exp_bits))
-        details.append(sdiff)
-        if sdiff > max_ulp:
-            ok = False
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}  (ULP diffs={details})")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  (ULP diffs={details})")
-        for i, exp_f in enumerate(expected_floats):
-            exp_b = fp16(exp_f)
-            got_b = vals[i] & 0xFFFF if i < len(vals) else -1
-            print(f"        [{i}] expected=0x{exp_b:04X} ({fp16_to_float(exp_b):.4f}) "
-                  f"got=0x{got_b:04X} ({fp16_to_float(got_b):.4f})")
+    vals = parse_ints(printed_output(name, forth_lines, output))
+    assert len(vals) >= len(expected_floats), failure_message(
+        name, f"expected {len(expected_floats)} values, got {vals}", output)
+    diffs = [abs(fp16_to_sortable(vals[i] & 0xFFFF) - fp16_to_sortable(fp16(e)))
+             for i, e in enumerate(expected_floats)]
+    assert max(diffs, default=0) <= max_ulp, failure_message(
+        name, f"ULP differences {diffs} exceed {max_ulp}", output)
 
 def check_fp16(name, forth_lines, expected, max_ulp=2):
     check_fp16_arr(name, forth_lines, [expected], max_ulp)
+
 
 # ── Tests ──
 
@@ -311,15 +269,11 @@ def test_log2():
     """Verify _FFT-LOG2 helper."""
     print("\n── _FFT-LOG2 ──")
     for n, expected in [(2, 1), (4, 2), (8, 3), (16, 4), (32, 5)]:
-        output = run_forth([f"{n} _FFT-LOG2 ."])
-        val = parse_last_int(output)
-        global _pass_count, _fail_count
-        if val == expected:
-            _pass_count += 1
-            print(f"  PASS  log2({n})={expected}")
-        else:
-            _fail_count += 1
-            print(f"  FAIL  log2({n}) expected={expected} got={val}")
+        lines = [f"{n} _FFT-LOG2 ."]
+        output = run_forth(lines)
+        val = parse_last_int(printed_output(f"log2({n})", lines, output))
+        assert val == expected, failure_message(
+            f"log2({n})", f"expected {expected}, got {val}", output)
 
 def test_bitrev():
     """Verify _FFT-BITREV helper."""
@@ -327,15 +281,12 @@ def test_bitrev():
     # For nbits=3 (n=8): 0→0, 1→4, 2→2, 3→6, 4→1, 5→5, 6→3, 7→7
     cases = [(0,3,0), (1,3,4), (2,3,2), (3,3,6), (4,3,1)]
     for i, nbits, expected in cases:
-        output = run_forth([f"{i} {nbits} _FFT-BITREV ."])
-        val = parse_last_int(output)
-        global _pass_count, _fail_count
-        if val == expected:
-            _pass_count += 1
-            print(f"  PASS  bitrev({i}, {nbits})={expected}")
-        else:
-            _fail_count += 1
-            print(f"  FAIL  bitrev({i}, {nbits}) expected={expected} got={val}")
+        lines = [f"{i} {nbits} _FFT-BITREV ."]
+        output = run_forth(lines)
+        name = f"bitrev({i}, {nbits})"
+        val = parse_last_int(printed_output(name, lines, output))
+        assert val == expected, failure_message(
+            name, f"expected {expected}, got {val}", output)
 
 def test_fft_dc():
     """FFT of DC signal [1,1,1,1] → [4,0,0,0] + i*[0,0,0,0]."""
@@ -728,39 +679,6 @@ def test_tw_n64_convolve():
 
 # ── Main ──
 
-if __name__ == "__main__":
-    build_snapshot()
-    test_log2()
-    test_bitrev()
-    test_fft_dc()
-    test_fft_impulse()
-    test_fft_nyquist()
-    test_fft_sine()
-    test_fft_inverse_dc()
-    test_fft_inverse_impulse()
-    test_fft_inverse_sine()
-    test_fft_magnitude()
-    test_fft_power()
-    test_fft_convolve_impulse()
-    test_fft_convolve_shift()
-    test_fft_correlate_auto()
-    test_fft_n8_dc()
-    test_fft_n8_roundtrip()
-    test_fft_convolve_box()
-    # Twiddle-based tests (Tier 3.1)
-    test_tw_forward_dc()
-    test_tw_forward_impulse()
-    test_tw_forward_sine()
-    test_tw_roundtrip_dc()
-    test_tw_roundtrip_sine()
-    test_tw_n8_roundtrip()
-    test_tw_convolve_impulse()
-    test_tw_convolve_box()
-    test_tw_correlate_auto()
-    test_tw_n64_roundtrip()
-    test_tw_n64_convolve()
 
-    print(f"\n{'='*60}")
-    print(f"  Total: {_pass_count+_fail_count}  |  PASS: {_pass_count}  |  FAIL: {_fail_count}")
-    print(f"{'='*60}")
-    sys.exit(0 if _fail_count == 0 else 1)
+if __name__ == "__main__":
+    run_file_tests(__file__)

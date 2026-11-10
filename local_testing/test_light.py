@@ -26,29 +26,11 @@ EMU_DIR    = os.environ.get(
 )
 
 # Dependency file paths (in load order)
-EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
-FP16_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
-CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
-SHA512_F   = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
-FIELD_F    = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
-SHA3_F     = os.path.join(ROOT_DIR, "akashic", "math", "sha3.f")
-RANDOM_F   = os.path.join(ROOT_DIR, "akashic", "math", "random.f")
-ED25519_F  = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
-SPHINCS_F  = os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f")
-CBOR_F     = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
-FMT_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
-MERKLE_F   = os.path.join(ROOT_DIR, "akashic", "math", "merkle.f")
-SMT_F      = os.path.join(ROOT_DIR, "akashic", "store", "smt.f")
-TX_F       = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
-STATE_F    = os.path.join(ROOT_DIR, "akashic", "store", "state.f")
-BLOCK_F    = os.path.join(ROOT_DIR, "akashic", "store", "block.f")
-LIGHT_F    = os.path.join(ROOT_DIR, "akashic", "store", "light.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -112,12 +94,27 @@ def build_snapshot():
 
     # Load all deps in correct topological order
     # light.f needs: state.f + block.f (both need sha3, merkle, tx, etc.)
-    dep_lines = []
-    for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
-                 CRYPTO_ACC_F, SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
-                 ED25519_F, SPHINCS_F, CBOR_F, FMT_F,
-                 MERKLE_F, SMT_F, TX_F, STATE_F, BLOCK_F, LIGHT_F]:
-        dep_lines += _load_forth_lines(path)
+    dep_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "math/fp16.f",
+        "math/crypto-acc.f",
+        "math/sha512.f",
+        "math/field.f",
+        "math/sha3.f",
+        "math/random.f",
+        "math/ed25519.f",
+        "math/sphincs-plus.f",
+        "cbor/cbor.f",
+        "utils/fmt.f",
+        "math/merkle.f",
+        "store/smt.f",
+        "store/tx.f",
+        "store/state.f",
+        "store/block.f",
+        "store/light.f",
+    ))
 
     helpers = [
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
@@ -166,6 +163,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -195,35 +194,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # ── Forth helpers ──
 
@@ -306,7 +280,7 @@ def test_lc_state_leaf():
         '_ADDR1 1000 ST-CREATE DROP',
         'CREATE _LEAF 32 ALLOT',
         '_ADDR1 _LEAF LC-STATE-LEAF DROP',
-        '_LEAF 32 0 DO DUP I + C@ OR LOOP NIP',
+        ': _RUN-LOOP _LEAF 32 0 DO DUP I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
     ]
     check("leaf hash is non-zero", lines3, "NONZERO")
@@ -339,7 +313,7 @@ def test_lc_state_proof():
         '_ADDR1 1000 ST-CREATE DROP',
         'CREATE _PROOF 10240 ALLOT',
         '_ADDR1 _PROOF LC-STATE-PROOF DROP',
-        '_PROOF 256 0 DO DUP I + C@ OR LOOP NIP',
+        ': _RUN-LOOP _PROOF 256 0 DO DUP I + C@ OR LOOP NIP ; _RUN-LOOP',
         '0<> IF ." NONZERO" ELSE ." ZERO" THEN',
     ]
     check("proof buffer non-zero", lines2, "NONZERO")
@@ -419,7 +393,7 @@ def test_proof_changes_on_mutation():
         # Root after
         'ST-ROOT _R2 32 CMOVE',
         # Compare
-        '_R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP',
+        ': _RUN-LOOP _R1 _R2 32 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         '0<> IF ." CHANGED" ELSE ." SAME" THEN',
     ]
     check("root changes after mutation", lines, "CHANGED")
@@ -453,7 +427,7 @@ def test_different_proofs():
         '_ADDR1 _P1 LC-STATE-PROOF DROP',
         '_ADDR2 _P2 LC-STATE-PROOF DROP',
         # Compare proof buffers (first 256 bytes)
-        '_P1 _P2 256 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP',
+        ': _RUN-LOOP _P1 _P2 256 0 DO OVER I + C@ OVER I + C@ XOR OR LOOP NIP NIP ; _RUN-LOOP',
         '0<> IF ." DIFF" ELSE ." SAME" THEN',
     ]
     check("different accounts → different proofs", lines, "DIFF")
@@ -521,26 +495,5 @@ def test_two_account_round_trip():
 
 # ── Main ──
 
-def main():
-    build_snapshot()
-
-    test_compile()
-    test_lc_state_leaf()
-    test_lc_state_leaf_miss()
-    test_lc_state_proof()
-    test_lc_state_proof_miss()
-    test_lc_verify_state()
-    test_round_trip()
-    test_proof_changes_on_mutation()
-    test_different_proofs()
-    test_lc_state_root_at()
-    test_lc_block_header()
-    test_two_account_round_trip()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail_count else 0)
-
 if __name__ == "__main__":
-    main()
+    run_file_tests(__file__)

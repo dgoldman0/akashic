@@ -12,11 +12,11 @@ ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
-STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -75,7 +75,9 @@ def build_snapshot():
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    str_lines  = _load_forth_lines(STR_F)
+    module_lines = module_source_lines((
+        "utils/string.f",
+    ))
     helpers = [
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
         ': TR  0 _TL ! ;',
@@ -90,7 +92,7 @@ def build_snapshot():
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
-    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + str_lines + helpers) + "\n"
+    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
         if sys_obj.cpu.halted: break
@@ -112,6 +114,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -158,22 +162,9 @@ def tstr(s, buf='T'):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
-
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 # =====================================================================
 #  Tests
@@ -375,24 +366,6 @@ def test_str_to_num():
 #  Main
 # =====================================================================
 
+
 if __name__ == "__main__":
-    build_snapshot()
-
-    test_str_str_equal()
-    test_str_stri_equal()
-    test_str_starts()
-    test_str_startsi()
-    test_str_ends()
-    test_str_index()
-    test_str_rindex()
-    test_str_split()
-    test_str_trim()
-    test_str_tolower()
-    test_str_toupper()
-    test_num_to_str()
-    test_str_to_num()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail_count else 0)
+    run_file_tests(__file__)

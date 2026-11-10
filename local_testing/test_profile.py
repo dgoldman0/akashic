@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic LIRAQ presentation profile parser (profile.f).
 
 Structural tests — verifying YAML-based presentation profile loading,
@@ -29,14 +12,11 @@ EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
 
-STRING_F   = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
-YAML_F     = os.path.join(ROOT_DIR, "akashic", "utils", "yaml.f")
-PROFILE_F  = os.path.join(ROOT_DIR, "akashic", "liraq", "profile.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -92,21 +72,16 @@ def build_snapshot():
     global _snapshot
     if _snapshot:
         return _snapshot
-    libs = [
-        ("string.f",  STRING_F),
-        ("utf8.f",    UTF8_F),
-        ("yaml.f",    YAML_F),
-        ("profile.f", PROFILE_F),
-    ]
-    print(f"[*] Building snapshot: BIOS + KDOS + {len(libs)} libraries ...")
+    print("[*] Building snapshot: BIOS + KDOS + profile.f and its REQUIRE closure ...")
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    all_lib_lines = []
-    for name, path in libs:
-        ll = _load_forth_lines(path)
-        all_lib_lines.extend(ll)
-        print(f"    loaded {name}: {len(ll)} lines")
+    all_lib_lines = module_source_lines((
+        "utils/string.f",
+        "text/utf8.f",
+        "utils/yaml.f",
+        "liraq/profile.f",
+    ))
 
     helpers = [
         'CREATE _TB 4096 ALLOT  VARIABLE _TL',
@@ -145,18 +120,27 @@ def build_snapshot():
             errors = True
     if errors:
         print("[!] SNAPSHOT ERRORS — some words not found!")
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16*(1<<20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode(); pos = 0; steps = 0
     while steps < max_steps:
@@ -175,8 +159,6 @@ def run_forth(lines, max_steps=50_000_000):
 
 # ── Test runner ──
 
-_pass = 0
-_fail = 0
 
 def tstr(s):
     """Build string s in _TB via TR/TC.  Returns list of Forth lines."""
@@ -195,21 +177,9 @@ def tstr(s):
         lines.append(full)
     return lines
 
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    ok = check_fn(clean) if check_fn else (expected in clean if expected else True)
-    if ok:
-        print(f"  PASS  {name}")
-        _pass += 1
-    else:
-        _fail += 1
-        print(f"  FAIL  {name}")
-        if expected:
-            print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 # ── Reference YAML profiles ──
 
@@ -1140,29 +1110,6 @@ def test_to_csl():
 
 # ── Main entry point ──
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    test_metadata()
-    test_elem_cat()
-    test_defaults()
-    test_etype()
-    test_roles()
-    test_states()
-    test_importance()
-    test_density()
-    test_high_contrast()
-    test_cascade()
-    test_auditory()
-    test_property_constants()
-    test_multicap()
-    test_stacking()
-    test_inline()
-    test_accommodation()
-    test_resolution()
-    test_to_csl()
-
-    print(f"\n{'='*60}")
-    print(f"  Profile Parser:  {_pass} passed, {_fail} failed")
-    print(f"{'='*60}")
-    sys.exit(1 if _fail else 0)
+if __name__ == "__main__":
+    run_file_tests(__file__)

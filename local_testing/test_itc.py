@@ -22,6 +22,7 @@ ITC_F      = os.path.join(ROOT_DIR, "akashic", "utils", "itc.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -151,6 +152,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=200_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -180,35 +183,10 @@ def run_forth(lines, max_steps=200_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # ── Compile + Execute helper ──
 # These Forth lines compile ITC source, then execute the first entry point.
@@ -491,33 +469,4 @@ def test_image_roundtrip():
 # ── Main ──
 
 if __name__ == "__main__":
-    build_snapshot()
-
-    test_compile_loads()
-    test_whitelist()
-    test_compile_literal()
-    test_compile_execute_word()
-    test_stack_ops()
-    test_arithmetic()
-    test_if_then()
-    test_if_else_then()
-    test_nested_if()
-    test_begin_until()
-    test_begin_while_repeat()
-    test_do_loop()
-    test_do_ploop()
-    test_constant()
-    test_variable()
-    test_multi_word()
-    test_recurse()
-    test_pre_dispatch_callback()
-    test_bad_opcode()
-    test_rstack_overflow()
-    test_unknown_word()
-    test_image_roundtrip()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    if _fail_count:
-        sys.exit(1)
-    print("  All tests passed!")
+    run_file_tests(__file__)

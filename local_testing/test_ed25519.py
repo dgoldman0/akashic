@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for Akashic Ed25519 (akashic/math/ed25519.f).
 
 Tests key generation, signing, and verification using RFC 8032 test vectors.
@@ -28,17 +11,11 @@ EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
 
-CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
-SHA512_F   = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
-FIELD_F    = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
-ED25519_F  = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
-EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -99,13 +76,15 @@ def build_snapshot():
     t0 = time.time()
     bios_code    = _load_bios()
     kdos_lines   = _load_forth_lines(KDOS_PATH)
-    event_lines  = _load_forth_lines(EVENT_F)
-    sem_lines    = _load_forth_lines(SEM_F)
-    guard_lines  = _load_forth_lines(GUARD_F)
-    crypto_acc_lines = _load_forth_lines(CRYPTO_ACC_F)
-    sha512_lines = _load_forth_lines(SHA512_F)
-    field_lines  = _load_forth_lines(FIELD_F)
-    ed_lines     = _load_forth_lines(ED25519_F)
+    module_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "math/crypto-acc.f",
+        "math/sha512.f",
+        "math/field.f",
+        "math/ed25519.f",
+    ))
 
     helpers = [
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
@@ -123,11 +102,7 @@ def build_snapshot():
     sys_obj.boot()
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + event_lines + sem_lines + guard_lines
-                 + crypto_acc_lines
-                 + sha512_lines
-                 + field_lines
-                 + ed_lines
+                 + module_lines
                  + helpers)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
@@ -157,6 +132,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -186,35 +163,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
 
 # ── Forth helpers ──
 
@@ -539,7 +491,7 @@ def test_p05_zeroization():
         '_TSEED _TPUB _TPRIV ED25519-KEYGEN',
         '0 0 _TPRIV _TPUB _TSIG ED25519-SIGN',
         # Check _ED-H64 is zeroed (sum all 64 bytes)
-        '0 64 0 DO _ED-H64 I + C@ + LOOP .',
+        ': _RUN-LOOP 0 64 0 DO _ED-H64 I + C@ + LOOP . ; _RUN-LOOP',
     ]
     check("P05 _ED-H64 zeroed after sign", lines, "0")
 
@@ -550,7 +502,7 @@ def test_p05_zeroization():
         '_TSEED _TPUB _TPRIV ED25519-KEYGEN',
         '0 0 _TPRIV _TPUB _TSIG ED25519-SIGN',
         # Check _ED-SC1 is zeroed
-        '0 32 0 DO _ED-SC1 I + C@ + LOOP .',
+        ': _RUN-LOOP 0 32 0 DO _ED-SC1 I + C@ + LOOP . ; _RUN-LOOP',
     ]
     check("P05 _ED-SC1 zeroed after sign", lines2, "0")
 
@@ -561,7 +513,7 @@ def test_p05_zeroization():
         '_TSEED _TPUB _TPRIV ED25519-KEYGEN',
         '0 0 _TPRIV _TPUB _TSIG ED25519-SIGN',
         # Check _ED-PA is zeroed (sum all 128 bytes)
-        '0 128 0 DO _ED-PA I + C@ + LOOP .',
+        ': _RUN-LOOP 0 128 0 DO _ED-PA I + C@ + LOOP . ; _RUN-LOOP',
     ]
     check("P05 _ED-PA zeroed after sign", lines3, "0")
 
@@ -604,28 +556,4 @@ def test_p01_constant_time_smul():
 # ── Main ──
 
 if __name__ == "__main__":
-    build_snapshot()
-
-    test_constants()
-    test_compile()
-    test_keygen_tv1()
-    test_sign_tv1()
-    test_verify_tv1()
-    test_keygen_tv2()
-    test_sign_verify_tv2()
-    test_keygen_tv3()
-    test_sign_verify_tv3()
-    test_verify_bad_sig()
-    test_verify_wrong_key()
-
-    # Phase 6.6 hardening tests
-    test_p01_constant_time_smul()
-    test_p02_malleability_reject()
-    test_p04_noncanonical_y()
-    test_p05_zeroization()
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    if _fail_count:
-        sys.exit(1)
-    print("  All tests passed!")
+    run_file_tests(__file__)

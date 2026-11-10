@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for integer SIMD / multi-mode tile engine support (simd.f).
 
 Tests: mode words (U8-MODE, U16-MODE, U32-MODE, etc.),
@@ -42,6 +25,7 @@ GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -152,6 +136,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -181,22 +167,9 @@ def run_forth(lines, max_steps=50_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
-
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-4:]:
-            print(f"        got:      '{l}'")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 # ── Tile alloc helper (used in most tests) ──
 # Allocate 3 tiles: a, b, c  (each 64 bytes in HBW)
@@ -754,42 +727,6 @@ def test_fill_helpers():
 #  Main
 # ====================================================================
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    test_mode_words()
-    test_u8_add()
-    test_u8_sub()
-    test_u8_mul()
-    test_u8_bitwise()
-    test_u8_minmax()
-    test_u8_reductions()
-    test_u8_saturating()
-    test_u8_zero()
-    test_u8_copy()
-
-    test_u16_add()
-    test_u16_sub()
-    test_u16_mul()
-    test_u16_reductions()
-    test_u16_minmax()
-    test_u16_saturating()
-
-    test_u32_add()
-    test_u32_mul()
-    test_u32_reductions()
-
-    test_u8_wmul()
-    test_u16_wmul()
-
-    test_fp16_fma()
-    test_u8_dot()
-    test_tile_trans()
-
-    test_fill_helpers()
-    test_fp16_regression()
-
-    print(f"\n{'='*50}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    print(f"{'='*50}")
-    sys.exit(1 if _fail_count else 0)
+if __name__ == "__main__":
+    run_file_tests(__file__)

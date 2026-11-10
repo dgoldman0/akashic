@@ -35,6 +35,7 @@ LIB_PATHS = [
 sys.path.insert(0, MEGAPAD_ROOT)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
 KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
@@ -155,6 +156,8 @@ def build_snapshot():
 
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -185,8 +188,6 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ───────────────────────────────────────────────────
 
-_pass_count = 0
-_fail_count = 0
 
 import re
 _HEX_RE = re.compile(r'[0-9a-f]+')
@@ -197,37 +198,9 @@ def _extract_hex(text, min_len=32):
         return joined[:min_len]
     return None
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc="", max_steps=800_000_000):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines, max_steps=max_steps)
-    clean = output.strip()
-    try:
-        ok = predicate(clean)
-    except Exception as e:
-        ok = False
-        desc = f"{desc}; predicate raised {e}"
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}" + (f" ({desc})" if desc else ""))
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
 
 # ── Python reference: SHAKE-256 ──────────────────────────────────────
@@ -834,41 +807,5 @@ def test_p08_siglen_validation():
 
 # ── Main ─────────────────────────────────────────────────────────────
 
-if __name__ == '__main__':
-    t0 = time.time()
-    build_snapshot()
-
-    # Fast component tests
-    test_constants()
-    test_be_helpers()
-    test_adrs()
-    test_base_w()
-    test_wots_checksum()
-    test_t1_hash()
-    test_wots_context_layout()
-    test_t2_hash()
-    test_prf()
-    test_chain()
-    test_digest_extraction()
-    test_sign_mode()
-
-    # Medium tests
-    test_wots_roundtrip()
-
-    # Hardening tests (fast)
-    test_p06_checksum_correctness()
-    test_p08_siglen_validation()
-
-    # Slow integration tests (only run if --full flag)
-    if '--full' in sys.argv:
-        test_full_roundtrip()
-        test_verify_rejects_bad_sig()
-        test_p07_keygen_zeroization()
-    else:
-        print("\n  [SKIP] Full roundtrip tests (use --full to enable)")
-
-    elapsed = time.time() - t0
-    print(f"\n{'='*60}")
-    print(f"  {_pass_count} passed, {_fail_count} failed   ({elapsed:.1f}s)")
-    print(f"{'='*60}")
-    sys.exit(1 if _fail_count else 0)
+if __name__ == "__main__":
+    run_file_tests(__file__)

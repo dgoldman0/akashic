@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-http Forth library (http.f).
 
 Tests layers that don't require actual network:
@@ -43,6 +26,7 @@ GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, megapad_module_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -121,7 +105,7 @@ def build_snapshot():
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
-    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + event_lines + sem_lines + guard_lines + str_lines + url_lines + hdr_lines + http_lines + helpers) + "\n"
+    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + megapad_module_lines("networking.f") + event_lines + sem_lines + guard_lines + str_lines + url_lines + hdr_lines + http_lines + helpers) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
         if sys_obj.cpu.halted: break
@@ -144,6 +128,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -195,18 +181,9 @@ def http_response(status_line, headers, body=""):
     raw += body
     return tstr(raw)
 
-_pass = 0; _fail = 0
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    ok = check_fn(clean) if check_fn else (expected in clean if expected else True)
-    if ok:
-        _pass += 1; print(f"  PASS  {name}")
-    else:
-        _fail += 1; print(f"  FAIL  {name}")
-        if expected: print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # ── Tests ──
@@ -306,8 +283,9 @@ def test_parse():
 
     # Empty buffer → error
     check("PARSE empty → error",
-          [': _T 0 HTTP-RECV-LEN !',
-           'CREATE _EB 16 ALLOT _EB HTTP-RECV-BUF !',
+          ['CREATE _EB 16 ALLOT',
+           ': _T 0 HTTP-RECV-LEN !',
+           '_EB HTTP-RECV-BUF !',
            'HTTP-PARSE . HTTP-ERR @ . ; _T'],
           "-1 4 ")   # -1 ior, HTTP-E-TIMEOUT=4
 
@@ -1054,25 +1032,4 @@ def test_redirect_edge_cases():
 # ── Main ──
 
 if __name__ == "__main__":
-    build_snapshot()
-    test_error_handling()
-    test_static_buffer()
-    test_parse()
-    test_parse_edge_cases()
-    test_header_lookup()
-    test_dechunk()
-    test_dechunk_edge_cases()
-    test_dechunk_with_parse()
-    test_session()
-    test_session_default_ua()
-    test_method_buffer()
-    test_redirect()
-    test_redirect_edge_cases()
-    test_dns_cache()
-    test_req_target()
-    test_req_target_bounds()
-    test_compile_check()
-    print(f"\n{'='*40}")
-    print(f"  {_pass} passed,  {_fail} failed")
-    print(f"{'='*40}\n")
-    sys.exit(1 if _fail else 0)
+    run_file_tests(__file__)

@@ -17,24 +17,11 @@ EMU_DIR    = os.environ.get(
 )
 
 # Dependency file paths (in load order)
-EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
-FP16_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp16.f")
-CRYPTO_ACC_F = os.path.join(ROOT_DIR, "akashic", "math", "crypto-acc.f")
-SHA512_F   = os.path.join(ROOT_DIR, "akashic", "math", "sha512.f")
-FIELD_F    = os.path.join(ROOT_DIR, "akashic", "math", "field.f")
-SHA3_F     = os.path.join(ROOT_DIR, "akashic", "math", "sha3.f")
-RANDOM_F   = os.path.join(ROOT_DIR, "akashic", "math", "random.f")
-ED25519_F  = os.path.join(ROOT_DIR, "akashic", "math", "ed25519.f")
-SPHINCS_F  = os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f")
-CBOR_F     = os.path.join(ROOT_DIR, "akashic", "cbor", "cbor.f")
-FMT_F      = os.path.join(ROOT_DIR, "akashic", "utils", "fmt.f")
-TX_F       = os.path.join(ROOT_DIR, "akashic", "store", "tx.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -97,11 +84,22 @@ def build_snapshot():
     kdos_lines  = _load_forth_lines(KDOS_PATH)
 
     # Load all deps in correct topological order
-    dep_lines = []
-    for path in [EVENT_F, SEM_F, GUARD_F, FP16_F,
-                 CRYPTO_ACC_F, SHA512_F, FIELD_F, SHA3_F, RANDOM_F,
-                 ED25519_F, SPHINCS_F, CBOR_F, FMT_F, TX_F]:
-        dep_lines += _load_forth_lines(path)
+    dep_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "math/fp16.f",
+        "math/crypto-acc.f",
+        "math/sha512.f",
+        "math/field.f",
+        "math/sha3.f",
+        "math/random.f",
+        "math/ed25519.f",
+        "math/sphincs-plus.f",
+        "cbor/cbor.f",
+        "utils/fmt.f",
+        "store/tx.f",
+    ))
 
     helpers = [
         'CREATE _TB 512 ALLOT  VARIABLE _TL',
@@ -150,6 +148,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -183,35 +183,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ──
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected, max_steps=800_000_000):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines, max_steps=max_steps)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc="", max_steps=800_000_000):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines, max_steps=max_steps)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # ── Forth helpers ──
 
@@ -788,48 +763,4 @@ def test_c06_valid_until():
 # ── Main ──
 
 if __name__ == "__main__":
-    quick = "--quick" in sys.argv
-
-    build_snapshot()
-
-    test_constants()
-    test_compile()
-    test_init()
-    test_setters_getters()
-    test_set_data()
-    test_hash_deterministic()
-    test_hash_differs()
-    test_hash_equals()
-    test_sign_verify_ed25519()
-    test_verify_bad_ed25519()
-    test_verify_wrong_key()
-    test_verify_tampered_amount()
-    test_valid_check()
-    test_encode_decode_roundtrip()
-    test_encode_decode_verify()
-    test_encode_size()
-    test_data_roundtrip()
-    test_tx_print()
-
-    # Phase 6.6 hardening tests
-    test_p10_negative_amount()
-    test_p10_negative_fee()
-    test_p11_cbor_overflow()
-    test_a03_chain_id()
-    test_c05_fee()
-    test_c06_valid_until()
-
-    if not quick:
-        print("\n" + "="*40)
-        print("  SPHINCS+ tests (slow) ...")
-        print("="*40)
-        test_sign_verify_sphincs()
-        test_p09_hybrid_and()
-    else:
-        print("\n  [SKIP] SPHINCS+ tests (--quick)")
-
-    print(f"\n{'='*40}")
-    print(f"  {_pass_count} passed, {_fail_count} failed")
-    if _fail_count:
-        sys.exit(1)
-    print("  All tests passed!")
+    run_file_tests(__file__)

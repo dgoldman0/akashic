@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-web-response Forth library (web/response.f).
 
 Tests:
@@ -35,18 +18,11 @@ ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
-STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-URL_F      = os.path.join(ROOT_DIR, "akashic", "net", "url.f")
-HDR_F      = os.path.join(ROOT_DIR, "akashic", "net", "headers.f")
-DT_F       = os.path.join(ROOT_DIR, "akashic", "utils", "datetime.f")
-RESP_F     = os.path.join(ROOT_DIR, "akashic", "web", "response.f")
-EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
-SEM_F      = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
-GUARD_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -105,14 +81,16 @@ def build_snapshot():
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    event_lines = _load_forth_lines(EVENT_F)
-    sem_lines   = _load_forth_lines(SEM_F)
-    guard_lines = _load_forth_lines(GUARD_F)
-    str_lines  = _load_forth_lines(STR_F)
-    url_lines  = _load_forth_lines(URL_F)
-    hdr_lines  = _load_forth_lines(HDR_F)
-    dt_lines   = _load_forth_lines(DT_F)
-    resp_lines = _load_forth_lines(RESP_F)
+    module_lines = module_source_lines((
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "utils/string.f",
+        "net/url.f",
+        "net/headers.f",
+        "utils/datetime.f",
+        "web/response.f",
+    ))
     helpers = [
         'CREATE _TB 2048 ALLOT  VARIABLE _TL',
         ': TR  0 _TL ! ;',
@@ -126,7 +104,7 @@ def build_snapshot():
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
-    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + event_lines + sem_lines + guard_lines + str_lines + url_lines + hdr_lines + dt_lines + resp_lines + helpers) + "\n"
+    payload = "\n".join(kdos_lines + ["ENTER-USERLAND"] + module_lines + helpers) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 600_000_000
     while steps < mx:
         if sys_obj.cpu.halted: break
@@ -149,6 +127,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=50_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -191,19 +171,9 @@ def tstr(s):
     if full: lines.append(full)
     return lines
 
-
-_pass = 0; _fail = 0
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass, _fail
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    ok = check_fn(clean) if check_fn else (expected in clean if expected else True)
-    if ok:
-        _pass += 1; print(f"  PASS  {name}")
-    else:
-        _fail += 1; print(f"  FAIL  {name}")
-        if expected: print(f"        expected: {expected!r}")
-        print(f"        got (last lines): {clean.split(chr(10))[-3:]}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # =====================================================================
@@ -464,19 +434,6 @@ def test_compile():
 #  Main
 # =====================================================================
 
+
 if __name__ == "__main__":
-    build_snapshot()
-    test_error_handling()
-    test_status()
-    test_headers()
-    test_body()
-    test_send()
-    test_hex()
-    test_error_responses()
-    test_json()
-    test_clear()
-    test_compile()
-    print(f"\n{'='*40}")
-    print(f"  {_pass} passed, {_fail} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if _fail else 0)
+    run_file_tests(__file__)

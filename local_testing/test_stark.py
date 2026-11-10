@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for Akashic STARK prover/verifier v2.5 (akashic/math/stark.f).
 
 Tests STARK-INIT, STARK-SET-COLS, STARK-SET-AIR, STARK-TRACE!/TRACE@,
@@ -44,6 +27,7 @@ EVENT_F    = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 sys.path.insert(0, EMU_DIR)
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks
 
 BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
@@ -153,6 +137,8 @@ def build_snapshot():
     return _snapshot
 
 def run_forth(lines, max_steps=800_000_000):
+    if _snapshot is None:
+        build_snapshot()
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=2*1024*1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
@@ -182,35 +168,10 @@ def run_forth(lines, max_steps=800_000_000):
 
 # ── Test framework ───────────────────────────────────────────────────
 
-_pass_count = 0
-_fail_count = 0
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check, check_fn, _ = transcript_checks(run_forth)
 
-def check(name, forth_lines, expected):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if expected in clean:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        print(f"        expected: '{expected}'")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
-
-def check_fn(name, forth_lines, predicate, desc=""):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-    if predicate(clean):
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}  ({desc})")
-        for l in clean.split('\n')[-6:]:
-            print(f"        got:      '{l}'")
 
 # =====================================================================
 #  Fibonacci setup helper
@@ -807,67 +768,6 @@ def test_2col_deterministic():
 #  Main
 # =====================================================================
 
+
 if __name__ == "__main__":
-    build_snapshot()
-
-    tests = [
-        test_stark_init,
-        test_set_air,
-        test_trace_write_read,
-        test_trace_zero,
-        test_fib_trace_fill,
-        test_prove_runs,
-        test_verify_honest,
-        test_fri_final_nonzero,
-        test_tamper_trace_reject,
-        test_tamper_coeff_reject,
-        test_prove_twice_deterministic,
-        test_empty_trace_reject,
-        test_wrong_boundary_reject,
-        test_fri_fold_consistency,
-        # Tamper rejection suite
-        test_tamper_fri_reject,
-        test_tamper_qcoeff_reject,
-        test_tamper_troot_reject,
-        test_tamper_qroot_reject,
-        test_tamper_fri_final_reject,
-        # Different seed / domain tests
-        test_different_fib_seeds,
-        test_large_fib_seeds,
-        test_large_seeds_tamper_reject,
-        # Domain parameter validation
-        test_omega_is_primitive,
-        test_k256_not_one,
-        test_zinv_correct,
-        # Internal machinery
-        test_coset_eval_roundtrip,
-        test_merkle_trace_root_stable,
-        test_transition_constraint_row0,
-        test_transition_constraint_row100,
-        test_boundary_check_honest,
-        test_fiat_shamir_deterministic,
-        test_verify_idempotent,
-        # Multi-column (Phase 4.5)
-        test_set_cols,
-        test_set_cols_clamp_low,
-        test_set_cols_clamp_high,
-        test_multicol_trace_rw,
-        test_multicol_trace_zero,
-        test_2col_prove_verify,
-        test_2col_tamper_col0_reject,
-        test_2col_tamper_col1_reject,
-        test_2col_wrong_col1_boundary,
-        test_2col_deterministic,
-    ]
-
-    print(f"\nRunning {len(tests)} tests...\n")
-    for t in tests:
-        t()
-
-    total = _pass_count + _fail_count
-    print(f"\n{_pass_count}/{total} passed", end="")
-    if _fail_count:
-        print(f", {_fail_count} FAILED")
-    else:
-        print(", All tests passed!")
-    sys.exit(1 if _fail_count else 0)
+    run_file_tests(__file__)

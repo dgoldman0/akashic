@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-state-tree (LIRAQ State Tree Layer 1).
 
 Uses the Megapad-64 emulator to boot KDOS, load string + state-tree, and
@@ -30,16 +13,12 @@ ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
-STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-FP32_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp32.f")
-UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
-MSPAN_F    = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
-STREE_F    = os.path.join(ROOT_DIR, "akashic", "liraq", "state-tree.f")
 
 sys.path.insert(0, EMU_DIR)
 
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH  = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH  = os.path.join(EMU_DIR, "kdos.f")
@@ -122,11 +101,13 @@ def build_snapshot():
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines = _load_forth_lines(KDOS_PATH)
-    str_lines  = _load_forth_lines(STR_F)
-    fp32_lines = _load_forth_lines(FP32_F)
-    uint_range_lines = _load_forth_lines(UINT_RANGE_F)
-    mspan_lines = _load_forth_lines(MSPAN_F)
-    stree_lines = _load_forth_lines(STREE_F)
+    module_lines = module_source_lines((
+        "utils/string.f",
+        "math/fp32.f",
+        "utils/uint-range.f",
+        "utils/memory-span.f",
+        "liraq/state-tree.f",
+    ))
 
     test_helpers = [
         'CREATE _TB 4096 ALLOT  VARIABLE _TL',
@@ -144,8 +125,7 @@ def build_snapshot():
     sys_obj.boot()
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + str_lines + fp32_lines + uint_range_lines + mspan_lines
-                 + stree_lines + test_helpers)
+                 + module_lines + test_helpers)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode()
     pos = 0
@@ -173,7 +153,7 @@ def build_snapshot():
         for ln in err_lines[-15:]:
             print(f"    {ln}")
 
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     elapsed = time.time() - t0
     print(f"[*] Snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
@@ -181,12 +161,21 @@ def build_snapshot():
 
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
 
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode()
@@ -232,31 +221,9 @@ def tstr(s):
 #  Test framework
 # ---------------------------------------------------------------------------
 
-_pass_count = 0
-_fail_count = 0
-
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-
-    if check_fn:
-        ok = check_fn(clean)
-    elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        last = clean.split('\n')[-5:]
-        print(f"        got (last lines): {last}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 # ---------------------------------------------------------------------------
 #  Tests — Stage 1: initialization & basic structure
@@ -477,7 +444,7 @@ def test_set_get_path():
     # Set string
     check("set-path-str", [
         'T-INIT',
-        'S" warp" S" ship.drive" ST-SET-PATH-STR',
+        ': _RUN-LINE S" warp" S" ship.drive" ST-SET-PATH-STR ; _RUN-LINE',
         'S" ship.drive" ST-GET-PATH DUP ST-GET-TYPE 1 = IF',
         '  ST-GET-STR TYPE CR',
         'ELSE DROP THEN',
@@ -588,8 +555,8 @@ def test_arrays():
 
     check("array-append-str", [
         'T-INIT',
-        'S" alice" S" names" ST-ARRAY-APPEND-STR',
-        'S" bob"   S" names" ST-ARRAY-APPEND-STR',
+        ': _RUN-LINE S" alice" S" names" ST-ARRAY-APPEND-STR ; _RUN-LINE',
+        ': _RUN-LINE S" bob"   S" names" ST-ARRAY-APPEND-STR ; _RUN-LINE',
         'S" names" 0 ST-ARRAY-NTH ST-GET-STR TYPE CR',
     ], 'alice')
 
@@ -680,13 +647,13 @@ def test_type_overwrite():
     check("int-to-str", [
         'T-INIT',
         '42 S" x" ST-SET-PATH-INT',
-        'S" hello" S" x" ST-SET-PATH-STR',
+        ': _RUN-LINE S" hello" S" x" ST-SET-PATH-STR ; _RUN-LINE',
         'S" x" ST-GET-PATH DUP 0<> IF ST-GET-TYPE . CR ELSE DROP THEN',
     ], '1')   # ST-T-STRING
 
     check("str-to-null", [
         'T-INIT',
-        'S" hi" S" x" ST-SET-PATH-STR',
+        ': _RUN-LINE S" hi" S" x" ST-SET-PATH-STR ; _RUN-LINE',
         'S" x" ST-SET-PATH-NULL',
         'S" x" ST-GET-PATH ST-NULL? IF 1 ELSE 0 THEN . CR',
     ], '1')
@@ -807,7 +774,7 @@ def test_merge():
         '1 S" src.x" ST-SET-PATH-INT',
         '2 S" src.y" ST-SET-PATH-INT',
         '3 S" dst.z" ST-SET-PATH-INT',
-        'S" src" S" dst" ST-MERGE',
+        ': _RUN-LINE S" src" S" dst" ST-MERGE ; _RUN-LINE',
         'ST-OK? IF 1 ELSE 0 THEN . CR',
         'S" dst.x" ST-GET-PATH ST-GET-INT . CR',
         'S" dst.y" ST-GET-PATH ST-GET-INT . CR',
@@ -818,7 +785,7 @@ def test_merge():
         'T-INIT',
         '10 S" src.a" ST-SET-PATH-INT',
         '99 S" dst.a" ST-SET-PATH-INT',
-        'S" src" S" dst" ST-MERGE',
+        ': _RUN-LINE S" src" S" dst" ST-MERGE ; _RUN-LINE',
         'S" dst.a" ST-GET-PATH ST-GET-INT . CR',
     ], '10')
 
@@ -829,7 +796,7 @@ def test_merge():
         'S" dst" ST-NAVIGATE 0= IF',
         '  ST-ROOT S" dst" ST-T-OBJECT _ST-ENSURE-CHILD DROP',
         'THEN',
-        'S" src" S" dst" ST-MERGE',
+        ': _RUN-LINE S" src" S" dst" ST-MERGE ; _RUN-LINE',
         'S" dst.val" ST-GET-PATH ST-GET-INT . CR',
     ], '42')
 
@@ -839,7 +806,7 @@ def test_merge():
         'S" dst" ST-NAVIGATE 0= IF',
         '  ST-ROOT S" dst" ST-T-OBJECT _ST-ENSURE-CHILD DROP',
         'THEN',
-        'S" src" S" dst" ST-MERGE',
+        ': _RUN-LINE S" src" S" dst" ST-MERGE ; _RUN-LINE',
         'ST-OK? IF 1 ELSE 0 THEN . CR',
     ], '0')
 
@@ -848,7 +815,7 @@ def test_merge():
         'S" dst" ST-NAVIGATE 0= IF',
         '  ST-ROOT S" dst" ST-T-OBJECT _ST-ENSURE-CHILD DROP',
         'THEN',
-        'S" nope" S" dst" ST-MERGE',
+        ': _RUN-LINE S" nope" S" dst" ST-MERGE ; _RUN-LINE',
         'ST-OK? IF 1 ELSE 0 THEN . CR',
     ], '0')
 
@@ -892,8 +859,8 @@ def test_array_insert():
 
     check("insert-str-middle", [
         'T-INIT',
-        'S" alice" S" n" ST-ARRAY-APPEND-STR',
-        'S" charlie" S" n" ST-ARRAY-APPEND-STR',
+        ': _RUN-LINE S" alice" S" n" ST-ARRAY-APPEND-STR ; _RUN-LINE',
+        ': _RUN-LINE S" charlie" S" n" ST-ARRAY-APPEND-STR ; _RUN-LINE',
         'S" bob" 1 S" n" ST-ARRAY-INSERT-STR',
         'S" n" 1 ST-ARRAY-NTH ST-GET-STR TYPE CR',
     ], 'bob')
@@ -938,21 +905,21 @@ def test_schema():
     check("schema-type-ok", [
         'T-INIT',
         '42 S" user.age" ST-SET-PATH-INT',
-        'S" integer" S" _schema.user.age.type" ST-SET-PATH-STR',
+        ': _RUN-LINE S" integer" S" _schema.user.age.type" ST-SET-PATH-STR ; _RUN-LINE',
         'S" user.age" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '1')
 
     check("schema-type-reject", [
         'T-INIT',
-        'S" hello" S" user.age" ST-SET-PATH-STR',
-        'S" integer" S" _schema.user.age.type" ST-SET-PATH-STR',
+        ': _RUN-LINE S" hello" S" user.age" ST-SET-PATH-STR ; _RUN-LINE',
+        ': _RUN-LINE S" integer" S" _schema.user.age.type" ST-SET-PATH-STR ; _RUN-LINE',
         'S" user.age" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '0')
 
     check("schema-min-ok", [
         'T-INIT',
         '10 S" x" ST-SET-PATH-INT',
-        'S" integer" S" _schema.x.type" ST-SET-PATH-STR',
+        ': _RUN-LINE S" integer" S" _schema.x.type" ST-SET-PATH-STR ; _RUN-LINE',
         '0 S" _schema.x.min" ST-SET-PATH-INT',
         'S" x" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '1')
@@ -960,7 +927,7 @@ def test_schema():
     check("schema-min-reject", [
         'T-INIT',
         '-5 S" x" ST-SET-PATH-INT',
-        'S" integer" S" _schema.x.type" ST-SET-PATH-STR',
+        ': _RUN-LINE S" integer" S" _schema.x.type" ST-SET-PATH-STR ; _RUN-LINE',
         '0 S" _schema.x.min" ST-SET-PATH-INT',
         'S" x" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '0')
@@ -981,28 +948,28 @@ def test_schema():
 
     check("schema-minlen-ok", [
         'T-INIT',
-        'S" hello" S" name" ST-SET-PATH-STR',
+        ': _RUN-LINE S" hello" S" name" ST-SET-PATH-STR ; _RUN-LINE',
         '2 S" _schema.name.min-length" ST-SET-PATH-INT',
         'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '1')
 
     check("schema-minlen-reject", [
         'T-INIT',
-        'S" a" S" name" ST-SET-PATH-STR',
+        ': _RUN-LINE S" a" S" name" ST-SET-PATH-STR ; _RUN-LINE',
         '3 S" _schema.name.min-length" ST-SET-PATH-INT',
         'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '0')
 
     check("schema-maxlen-ok", [
         'T-INIT',
-        'S" hi" S" name" ST-SET-PATH-STR',
+        ': _RUN-LINE S" hi" S" name" ST-SET-PATH-STR ; _RUN-LINE',
         '10 S" _schema.name.max-length" ST-SET-PATH-INT',
         'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '1')
 
     check("schema-maxlen-reject", [
         'T-INIT',
-        'S" toolongstring" S" name" ST-SET-PATH-STR',
+        ': _RUN-LINE S" toolongstring" S" name" ST-SET-PATH-STR ; _RUN-LINE',
         '5 S" _schema.name.max-length" ST-SET-PATH-INT',
         'S" name" ST-VALIDATE IF 1 ELSE 0 THEN . CR',
     ], '0')
@@ -1074,7 +1041,7 @@ def test_computed_stubs():
 
     check("computed-set-flag", [
         'T-INIT',
-        'S" add(a,b)" S" result" ST-COMPUTED!',
+        ': _RUN-LINE S" add(a,b)" S" result" ST-COMPUTED! ; _RUN-LINE',
         'S" result" ST-GET-PATH ST-COMPUTED? IF 1 ELSE 0 THEN . CR',
     ], '1')
 
@@ -1135,42 +1102,6 @@ def test_subscriptions():
 #  Main
 # ---------------------------------------------------------------------------
 
-def main():
-    build_snapshot()
-    print()
-
-    groups = [
-        ("Initialization", test_init),
-        ("Alloc/Free", test_alloc_free),
-        ("String Pool", test_string_pool),
-        ("Tree Structure", test_tree_structure),
-        ("Destroy", test_destroy),
-        ("Index Child", test_index_child),
-        ("Set/Get Path", test_set_get_path),
-        ("Delete Path", test_delete_path),
-        ("Node Count Ops", test_node_count_ops),
-        ("Arrays", test_arrays),
-        ("Protected Paths", test_protected),
-        ("Journal", test_journal),
-        ("Type Overwrite", test_type_overwrite),
-        ("Float (FP32)", test_float),
-        ("Merge (1.1)", test_merge),
-        ("Array Insert (1.2)", test_array_insert),
-        ("Journal Resize (1.3)", test_journal_resize),
-        ("Schema (1.4)", test_schema),
-        ("Snapshot (1.5)", test_snapshot),
-        ("Computed Stubs (1.6)", test_computed_stubs),
-        ("Subscriptions (1.7)", test_subscriptions),
-    ]
-
-    for label, fn in groups:
-        print(f"[{label}]")
-        fn()
-        print()
-
-    total = _pass_count + _fail_count
-    print(f"Result: {_pass_count}/{total} passed, {_fail_count} failed")
-    return 0 if _fail_count == 0 else 1
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_file_tests(__file__)

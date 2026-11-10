@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for akashic-lel (LIRAQ LEL Expression Language).
 
 Uses the Megapad-64 emulator to boot KDOS, load dependencies, and
@@ -30,18 +13,12 @@ ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.environ.get(
     "MEGAPAD_ROOT", os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
 )
-STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
-FP32_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp32.f")
-FIXED_F    = os.path.join(ROOT_DIR, "akashic", "math", "fixed.f")
-UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
-MSPAN_F    = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
-STREE_F    = os.path.join(ROOT_DIR, "akashic", "liraq", "state-tree.f")
-LEL_F      = os.path.join(ROOT_DIR, "akashic", "liraq", "lel.f")
 
 sys.path.insert(0, EMU_DIR)
 
 from asm import assemble
 from system import MegapadSystem
+from forth_snapshot import run_file_tests, transcript_checks, module_source_lines
 
 BIOS_PATH  = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH  = os.path.join(EMU_DIR, "kdos.f")
@@ -125,13 +102,15 @@ def build_snapshot():
     t0 = time.time()
     bios_code = _load_bios()
     kdos_lines  = _load_forth_lines(KDOS_PATH)
-    str_lines   = _load_forth_lines(STR_F)
-    fp32_lines  = _load_forth_lines(FP32_F)
-    fixed_lines = _load_forth_lines(FIXED_F)
-    uint_range_lines = _load_forth_lines(UINT_RANGE_F)
-    mspan_lines = _load_forth_lines(MSPAN_F)
-    stree_lines = _load_forth_lines(STREE_F)
-    lel_lines   = _load_forth_lines(LEL_F)
+    module_lines = module_source_lines((
+        "utils/string.f",
+        "math/fp32.f",
+        "math/fixed.f",
+        "utils/uint-range.f",
+        "utils/memory-span.f",
+        "liraq/state-tree.f",
+        "liraq/lel.f",
+    ))
 
     test_helpers = [
         # Shared text buffer for building strings
@@ -159,9 +138,7 @@ def build_snapshot():
     sys_obj.boot()
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
-                 + str_lines + fp32_lines + fixed_lines
-                 + uint_range_lines + mspan_lines
-                 + stree_lines + lel_lines + test_helpers)
+                 + module_lines + test_helpers)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode()
     pos = 0
@@ -189,7 +166,7 @@ def build_snapshot():
         for ln in err_lines[-20:]:
             print(f"    {ln}")
 
-    _snapshot = (bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
+    _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
     elapsed = time.time() - t0
     print(f"[*] Snapshot ready.  {steps:,} steps in {elapsed:.1f}s")
@@ -197,12 +174,21 @@ def build_snapshot():
 
 
 def run_forth(lines, max_steps=50_000_000):
-    mem_bytes, cpu_state, ext_mem_bytes = _snapshot
+    if _snapshot is None:
+        build_snapshot()
+    bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
     sys_obj = MegapadSystem(ram_size=1024 * 1024, ext_mem_size=16 * (1 << 20))
     buf = capture_uart(sys_obj)
+    sys_obj.load_binary(0, bios_code)
+    sys_obj.boot()
+    for _ in range(5_000_000):
+        if sys_obj.cpu.idle and not sys_obj.uart.has_rx_data:
+            break
+        sys_obj.run_batch(10_000)
     sys_obj.cpu.mem[:len(mem_bytes)] = mem_bytes
     sys_obj._ext_mem[:len(ext_mem_bytes)] = ext_mem_bytes
     restore_cpu_state(sys_obj.cpu, cpu_state)
+    buf.clear()
 
     payload = "\n".join(lines) + "\nBYE\n"
     data = payload.encode()
@@ -230,31 +216,9 @@ def run_forth(lines, max_steps=50_000_000):
 #  Test framework
 # ---------------------------------------------------------------------------
 
-_pass_count = 0
-_fail_count = 0
-
-def check(name, forth_lines, expected=None, check_fn=None):
-    global _pass_count, _fail_count
-    output = run_forth(forth_lines)
-    clean = output.strip()
-
-    if check_fn:
-        ok = check_fn(clean)
-    elif expected is not None:
-        ok = expected in clean
-    else:
-        ok = True
-
-    if ok:
-        _pass_count += 1
-        print(f"  PASS  {name}")
-    else:
-        _fail_count += 1
-        print(f"  FAIL  {name}")
-        if expected is not None:
-            print(f"        expected: {expected!r}")
-        last = clean.split('\n')[-5:]
-        print(f"        got (last lines): {last}")
+# The checks read only what the program printed, and fail their test when a
+# check fails or KDOS reports a failed line (forth_snapshot.transcript_checks).
+check = transcript_checks(run_forth)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +313,7 @@ def test_state_refs():
 
     check("state-str", [
         'T-INIT',
-        'S" warp" S" drive" ST-SET-PATH-STR',
+        ': _RUN-LINE S" warp" S" drive" ST-SET-PATH-STR ; _RUN-LINE',
         'S" drive" T-STR',
     ], 'warp')
 
@@ -367,7 +331,7 @@ def test_state_refs():
 
     check("state-deep", [
         'T-INIT',
-        'S" Enterprise" S" ship.info.name" ST-SET-PATH-STR',
+        ': _RUN-LINE S" Enterprise" S" ship.info.name" ST-SET-PATH-STR ; _RUN-LINE',
         'S" ship.info.name" T-STR',
     ], 'Enterprise')
 
@@ -1049,7 +1013,7 @@ def test_infix_mixed():
 
     check("infix-func-mix", [
         'T-INIT',
-        'S" hello" S" name" ST-SET-PATH-STR',
+        ': _RUN-LINE S" hello" S" name" ST-SET-PATH-STR ; _RUN-LINE',
         "S\" length(name) > 0\" T-INT",
     ], '1')
 
@@ -1230,40 +1194,6 @@ def test_computed_linkage():
 #  Main
 # ---------------------------------------------------------------------------
 
-if __name__ == '__main__':
-    build_snapshot()
 
-    groups = [
-        ("Literals",       test_literals),
-        ("State Refs",     test_state_refs),
-        ("Context Vars",   test_context_vars),
-        ("Funcall Skel",   test_funcall_skeleton),
-        ("Edge Cases",     test_edge_cases),
-        ("Arithmetic",     test_arithmetic),
-        ("Comparison",     test_comparison),
-        ("Logic",          test_logic),
-        ("String",         test_string_builtins),
-        ("Type",           test_type_builtins),
-        ("Infix Arith",    test_infix_arithmetic),
-        ("Infix Compare",  test_infix_comparison),
-        ("Infix Logic",    test_infix_logic),
-        ("Infix Ternary",  test_infix_ternary),
-        ("Infix Mixed",    test_infix_mixed),
-        ("Literal Fn",     test_literal),
-        ("String Funcs",   test_string_funcs),
-        ("Array Funcs",    test_array_funcs),
-        ("Computed Link",  test_computed_linkage),
-    ]
-
-    for label, fn in groups:
-        print(f"\n=== {label} ===")
-        fn()
-
-    total = _pass_count + _fail_count
-    print(f"\n{'='*60}")
-    print(f"  {_pass_count}/{total} passed")
-    if _fail_count:
-        print(f"  {_fail_count} FAILED")
-        sys.exit(1)
-    else:
-        print("  All tests passed!")
+if __name__ == "__main__":
+    run_file_tests(__file__)
