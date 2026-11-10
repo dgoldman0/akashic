@@ -115,11 +115,15 @@ def _write_sparse_bytes(
     """Serialize exact bytes without allocating runs that are entirely zero."""
     view = memoryview(data)
     chunk_size = 64 * 1024
+    # One comparison with a block of zeros decides a chunk.  Testing its
+    # bytes one at a time was most of a write journey's wall time, since
+    # every guest flush serializes the whole image.
+    zero_chunk = bytes(chunk_size)
     with path.open("wb") as destination:
         destination.truncate(len(view))
         for offset in range(0, len(view), chunk_size):
             chunk = view[offset : offset + chunk_size]
-            if not any(chunk):
+            if bytes(chunk) == zero_chunk[: len(chunk)]:
                 continue
             destination.seek(offset)
             written = destination.write(chunk)
