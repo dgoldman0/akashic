@@ -84463,6 +84463,7 @@ def test_staged_vfs_rename_over_remaining_link_keeps_the_victim(
                 new_name="hardlink.txt",
                 meta_capacity=3,
             ),
+            "_RN-V V.ICOUNT @ CONSTANT _RN-RENAMED-ICOUNT",
             (
                 'S" /fixture/payload.txt" _RN-V VFS-RESOLVE? '
                 "CONSTANT _RN-OTHER-IOR CONSTANT _RN-OTHER"
@@ -84491,7 +84492,12 @@ def test_staged_vfs_rename_over_remaining_link_keeps_the_victim(
                     f"_RN-SVN VN.CTIME-NS @ {nanoseconds} =",
                     "_RN-BFREE-AFTER _RN-BFREE-BEFORE =",
                     "_RN-FFREE-AFTER _RN-FFREE-BEFORE =",
-                    "_RN-V V.ICOUNT @ _RN-OLD-ICOUNT 1- =",
+                    # The rename took the victim's entry out of the cache.
+                    # ext4 looks names up one at a time (def0488c), so the
+                    # victim's other name entered the cache only when the
+                    # line after the rename resolved it.
+                    "_RN-RENAMED-ICOUNT _RN-OLD-ICOUNT 1- =",
+                    "_RN-V V.ICOUNT @ _RN-OLD-ICOUNT =",
                     "_RN-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_RN-CTX _EXT4-C.O.ACTIVE + @ 0=",
                     "_RN-V V.FLAGS @ VFS-F-RO AND 0=",
@@ -84559,6 +84565,7 @@ def test_staged_vfs_rename_over_refuses_unsupported_victims_without_writes(
                 parent_path="/fixture",
                 new_name="fast-link",
             ),
+            "_RR-V V.ICOUNT @ CONSTANT _RR-REFUSED-ICOUNT",
             (
                 'S" sparse.bin" _RR-S _RR-P VFS-RN-NOREPLACE _RR-V '
                 "VFS-RENAME-AT CONSTANT _RR-NOREPLACE-IOR"
@@ -84585,7 +84592,12 @@ def test_staged_vfs_rename_over_refuses_unsupported_victims_without_writes(
                     "_RR-HOMES 0=",
                     "_RR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                     "_RR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
-                    "_RR-V V.ICOUNT @ _RR-OLD-ICOUNT =",
+                    # The refused rename left the cache as it was.  The
+                    # no-replace request then looked its new name up, and
+                    # since ext4 looks names up one at a time (def0488c)
+                    # that brought the one existing entry into the cache.
+                    "_RR-REFUSED-ICOUNT _RR-OLD-ICOUNT =",
+                    "_RR-V V.ICOUNT @ _RR-OLD-ICOUNT 1+ =",
                     *_XC_RENAME_SCRUBBED_FORTH,
                     *_EXT4_OWNERSHIP_SCOPE_CLEAN_FORTH,
                 ],
