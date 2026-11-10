@@ -60,10 +60,10 @@
 \  Not reentrant.
 \ =================================================================
 
-REQUIRE sha3.f
+REQUIRE ../math/sha3.f
 REQUIRE smt.f
 REQUIRE tx.f
-REQUIRE fmt.f
+REQUIRE ../utils/fmt.f
 
 PROVIDED akashic-state
 

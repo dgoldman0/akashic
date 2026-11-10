@@ -41,11 +41,11 @@
 \  Not reentrant.
 \ =================================================================
 
-REQUIRE ed25519.f
-REQUIRE sphincs-plus.f
-REQUIRE sha3.f
-REQUIRE cbor.f
-REQUIRE fmt.f
+REQUIRE ../math/ed25519.f
+REQUIRE ../math/sphincs-plus.f
+REQUIRE ../math/sha3.f
+REQUIRE ../cbor/cbor.f
+REQUIRE ../utils/fmt.f
 
 PROVIDED akashic-tx
 

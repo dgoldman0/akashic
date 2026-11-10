@@ -25,7 +25,7 @@
 \ =================================================================
 
 REQUIRE tx.f
-REQUIRE sha3.f
+REQUIRE ../math/sha3.f
 
 PROVIDED akashic-mempool
 

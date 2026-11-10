@@ -45,7 +45,7 @@
 \  Not reentrant.
 \ =================================================================
 
-REQUIRE sha3.f
+REQUIRE ../math/sha3.f
 REQUIRE tx.f
 REQUIRE state.f
 

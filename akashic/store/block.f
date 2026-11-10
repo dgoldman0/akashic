@@ -62,12 +62,12 @@
 \  Not reentrant.
 \ =================================================================
 
-REQUIRE sha3.f
-REQUIRE merkle.f
-REQUIRE cbor.f
+REQUIRE ../math/sha3.f
+REQUIRE ../math/merkle.f
+REQUIRE ../cbor/cbor.f
 REQUIRE tx.f
 REQUIRE state.f
-REQUIRE fmt.f
+REQUIRE ../utils/fmt.f
 
 PROVIDED akashic-block
 
