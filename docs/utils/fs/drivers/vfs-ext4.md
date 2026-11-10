@@ -3297,12 +3297,16 @@ ordered list of prerequisites for retaining the qualified write surface:
   exact one-home already-truncated sealing with zero target entries, the
   original one-range fixture's cleanup sealed as one four-home transaction
   within the release pass's capacity, post-seal mutation refusal, and abort
-  scrubbing. Its controlled crash matrix covers 14 write
+  scrubbing. Its controlled crash matrix covers 17 write
   prefixes spanning activation, transaction description and commit, every
-  legacy metadata home, reset, final-super publication, witness clearing, and
-  guard retirement. It also covers all nine durability fences; both the writes
-  surviving each failed flush and the preceding durable snapshot independently
-  repair and then remount without another write. Unified discovery still needs
+  legacy metadata home, the checkpoint's reset, witness clearing and guard
+  retirement, and the landing's reset, final-super publication, witness
+  clearing and guard retirement. It also covers 13 of the mount's 24
+  durability fences, the flush that opens the landing among them; both the
+  writes surviving each failed flush and the preceding durable snapshot
+  independently repair and then remount without another write. The modern
+  matrix covers the same fences and 18 write prefixes, the orphan file's home
+  among them. Unified discovery still needs
   qualification for unions larger than two records, including longer legacy
   chains and three-or-more modern/mixed sets; later modern blocks and files
   beyond the former 4096-block limit; additional unlinked ownership shapes and

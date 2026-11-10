@@ -29207,6 +29207,7 @@ def _assert_singleton_cleanup_media_converges(
 ) -> tuple[tuple[tuple[str, int, int], ...], str]:
     assert protocol in {"modern", "legacy"}
     repaired_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-REPAIRED"
+    owners_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-OWNERS-PROVED"
     stable_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-STABLE"
     protocol_checks = []
     if protocol == "legacy":
@@ -29238,8 +29239,8 @@ def _assert_singleton_cleanup_media_converges(
                     "_MR-CTX _EXT4-C.RECOVERY + @ 0=",
                     "_MR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                     (
-                        "_MR-CTX _EXT4-C.J.PROTOCOL-OWNERS + "
-                        "@ -1 ="
+                        "_MR-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ "
+                        "DUP 0= SWAP -1 = OR"
                     ),
                     "_MR-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
                     "_MR-CTX _EXT4-C.J.WRITER + @ 0=",
@@ -29305,11 +29306,22 @@ def _assert_singleton_cleanup_media_converges(
                 f'{repaired_marker}-CHECK " '
                 '_MR-ALL-SAFE-FIRST-FAILURE @ . THEN'
             ),
+            (
+                "_MR-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ -1 = "
+                f'IF ." {owners_marker}" THEN'
+            ),
         ],
         capture_media=repaired,
         max_steps=recovery_max_steps,
     )
     _assert_emitted(remount_output, repaired_marker)
+    # A fresh mount proves who owns the protocol's homes exactly when the
+    # interrupted cleanup left it something to write.  Once the landing has
+    # cleared its witness the volume is clean, and the last write, which
+    # retires the guard, can tear or be lost without leaving a repair.
+    assert (f"\r\n{owners_marker} ok\r\n" in remount_output) == bool(
+        remount_trace
+    )
     assert repaired.is_file()
     assert _sha256(repaired) == repaired_sha256
 
@@ -29338,112 +29350,64 @@ def _assert_singleton_cleanup_media_converges(
     return remount_trace, repaired_sha256
 
 
+# The mount's cleanup writes, by ordinal.  It activates the journal (1-6),
+# writes the cleanup transaction (7 to its commit), checkpoints it (the homes,
+# then the journal reset, witness clear and guard retire), and lands the
+# empty journal (preseed and anchor, journal reset, final superblock, witness
+# clear, guard retire).  The homes go out as group descriptors, block bitmap,
+# superblock, inode table, and for the modern protocol the orphan file's
+# block.
 _SINGLETON_MODERN_WRITE_PREFIX_CASES = (
-        pytest.param(
-            "activation-primary",
-            3,
-            0,
-            50,
-            id="W3-activation-primary-prefix",
-        ),
-        pytest.param(
-            "activation-super",
-            4,
-            1,
-            0,
-            id="W4-activation-super-prefix",
-        ),
-        pytest.param(
-            "descriptor",
-            7,
-            0,
-            200,
-            id="W7-transaction-descriptor-prefix",
-        ),
-        pytest.param(
-            "active-primary",
-            17,
-            0,
-            50,
-            id="W17-active-primary-prefix",
-        ),
-        pytest.param(
-            "commit-empty-prefix",
-            18,
-            0,
-            0,
-            id="W18-empty-commit-prefix",
-        ),
-        pytest.param(
-            "commit-first-byte",
-            18,
-            0,
-            1,
-            id="W18-first-byte-commit-prefix",
-        ),
-        pytest.param(
-            "first-home",
-            19,
-            0,
-            200,
-            id="W19-first-home-prefix",
-        ),
-        pytest.param(
-            "gdt-home",
-            20,
-            0,
-            13,
-            id="W20-gdt-home-prefix",
-        ),
-        pytest.param(
-            "bitmap-home",
-            21,
-            0,
-            200,
-            id="W21-bitmap-home-prefix",
-        ),
-        pytest.param(
-            "super-home",
-            22,
-            1,
-            0,
-            id="W22-super-home-prefix",
-        ),
-        pytest.param(
-            "final-home",
-            23,
-            0,
-            200,
-            id="W23-final-home-prefix",
-        ),
-        pytest.param(
-            "reset-primary",
-            26,
-            0,
-            50,
-            id="W26-reset-primary-prefix",
-        ),
-        pytest.param(
-            "final-super",
-            27,
-            1,
-            0,
-            id="W27-final-super-prefix",
-        ),
-        pytest.param(
-            "witness-clear",
-            28,
-            0,
-            200,
-            id="W28-witness-clear-primary-prefix",
-        ),
-        pytest.param(
-            "guard-retire",
-            29,
-            0,
-            200,
-            id="W29-guard-retire-prefix",
-        ),
+    pytest.param(
+        "activation-primary", 3, 0, 50, id="W3-activation-primary-prefix"
+    ),
+    pytest.param(
+        "activation-super", 4, 1, 0, id="W4-activation-super-prefix"
+    ),
+    pytest.param(
+        "descriptor", 7, 0, 200, id="W7-transaction-descriptor-prefix"
+    ),
+    pytest.param(
+        "active-primary", 17, 0, 50, id="W17-active-primary-prefix"
+    ),
+    pytest.param(
+        "commit-empty-prefix", 18, 0, 0, id="W18-empty-commit-prefix"
+    ),
+    pytest.param(
+        "commit-first-byte", 18, 0, 1, id="W18-first-byte-commit-prefix"
+    ),
+    pytest.param("gdt-home", 19, 0, 13, id="W19-gdt-home-prefix"),
+    pytest.param("bitmap-home", 20, 0, 200, id="W20-bitmap-home-prefix"),
+    pytest.param("super-home", 21, 1, 0, id="W21-super-home-prefix"),
+    pytest.param("inode-home", 22, 0, 200, id="W22-inode-home-prefix"),
+    pytest.param("final-home", 23, 0, 200, id="W23-final-home-prefix"),
+    pytest.param("reset-primary", 26, 0, 50, id="W26-reset-primary-prefix"),
+    pytest.param(
+        "witness-clear", 27, 0, 200, id="W27-witness-clear-primary-prefix"
+    ),
+    pytest.param("guard-retire", 28, 0, 200, id="W28-guard-retire-prefix"),
+    pytest.param(
+        "landing-reset-primary",
+        31,
+        0,
+        50,
+        id="W31-landing-reset-primary-prefix",
+    ),
+    pytest.param("final-super", 32, 1, 0, id="W32-final-super-prefix"),
+    pytest.param(
+        "landing-witness-clear",
+        33,
+        0,
+        200,
+        id="W33-landing-witness-clear-primary-prefix",
+    ),
+    pytest.param(
+        "landing-guard-retire",
+        34,
+        0,
+        200,
+        id="W34-landing-guard-retire-prefix",
+    ),
 )
 
 
@@ -29467,10 +29431,10 @@ def _exercise_singleton_cleanup_write_prefix(
     caught_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-CAUGHT"
     replay_failure_checks = []
     if case in {
-        "first-home",
         "gdt-home",
         "bitmap-home",
         "super-home",
+        "inode-home",
         "final-home",
     }:
         replay_failure_checks.append(
@@ -29576,6 +29540,8 @@ def _exercise_singleton_cleanup_write_prefix(
     )
 
 
+# The legacy protocol's transaction is one block shorter and has no orphan
+# file block among its homes.
 _SINGLETON_LEGACY_WRITE_PREFIX_CASES = (
     pytest.param(
         "activation-primary", 3, 0, 50, id="W3-activation-primary-prefix"
@@ -29595,16 +29561,37 @@ _SINGLETON_LEGACY_WRITE_PREFIX_CASES = (
     pytest.param(
         "commit-first-byte", 17, 0, 1, id="W17-first-byte-commit-prefix"
     ),
-    pytest.param("first-home", 18, 0, 200, id="W18-first-home-prefix"),
-    pytest.param("gdt-home", 19, 0, 13, id="W19-gdt-home-prefix"),
-    pytest.param("bitmap-home", 20, 0, 200, id="W20-bitmap-home-prefix"),
-    pytest.param("super-home", 21, 1, 0, id="W21-super-home-prefix"),
+    pytest.param("gdt-home", 18, 0, 13, id="W18-gdt-home-prefix"),
+    pytest.param("bitmap-home", 19, 0, 200, id="W19-bitmap-home-prefix"),
+    pytest.param("super-home", 20, 1, 0, id="W20-super-home-prefix"),
+    pytest.param("inode-home", 21, 0, 200, id="W21-inode-home-prefix"),
     pytest.param("reset-primary", 24, 0, 50, id="W24-reset-primary-prefix"),
-    pytest.param("final-super", 25, 1, 0, id="W25-final-super-prefix"),
     pytest.param(
-        "witness-clear", 26, 0, 200, id="W26-witness-clear-primary-prefix"
+        "witness-clear", 25, 0, 200, id="W25-witness-clear-primary-prefix"
     ),
-    pytest.param("guard-retire", 27, 0, 200, id="W27-guard-retire-prefix"),
+    pytest.param("guard-retire", 26, 0, 200, id="W26-guard-retire-prefix"),
+    pytest.param(
+        "landing-reset-primary",
+        29,
+        0,
+        50,
+        id="W29-landing-reset-primary-prefix",
+    ),
+    pytest.param("final-super", 30, 1, 0, id="W30-final-super-prefix"),
+    pytest.param(
+        "landing-witness-clear",
+        31,
+        0,
+        200,
+        id="W31-landing-witness-clear-primary-prefix",
+    ),
+    pytest.param(
+        "landing-guard-retire",
+        32,
+        0,
+        200,
+        id="W32-landing-guard-retire-prefix",
+    ),
 )
 
 
@@ -29654,6 +29641,8 @@ def test_singleton_legacy_cleanup_write_prefixes_converge_on_fresh_mount(
     )
 
 
+# The cleanup's flushes, by ordinal, the same for both protocols.  The
+# landing opens with a flush of its own (18), before it writes anything.
 _SINGLETON_CLEANUP_FLUSH_CASES = (
     pytest.param("activation-super", 4, id="F4-activation-super"),
     pytest.param("transaction-body", 7, id="F7-transaction-body"),
@@ -29661,9 +29650,17 @@ _SINGLETON_CLEANUP_FLUSH_CASES = (
     pytest.param("commit", 11, id="F11-commit"),
     pytest.param("replay-homes", 12, id="F12-replay-homes"),
     pytest.param("reset-primary", 15, id="F15-reset-primary"),
-    pytest.param("final-super", 16, id="F16-final-super"),
-    pytest.param("witness-clear", 17, id="F17-witness-clear"),
-    pytest.param("guard-retire", 18, id="F18-guard-retire"),
+    pytest.param("witness-clear", 16, id="F16-witness-clear"),
+    pytest.param("guard-retire", 17, id="F17-guard-retire"),
+    pytest.param("landing-barrier", 18, id="F18-landing-barrier"),
+    pytest.param(
+        "landing-reset-primary", 21, id="F21-landing-reset-primary"
+    ),
+    pytest.param("final-super", 22, id="F22-final-super"),
+    pytest.param(
+        "landing-witness-clear", 23, id="F23-landing-witness-clear"
+    ),
+    pytest.param("landing-guard-retire", 24, id="F24-landing-guard-retire"),
 )
 
 
@@ -29749,7 +29746,11 @@ def _exercise_singleton_cleanup_flush_fence(
     assert working.is_file()
     assert _sha256(survived) == survived_sha256
     assert _sha256(working) == _sha256(prior_fence)
-    assert _sha256(survived) != _sha256(prior_fence)
+    if case == "landing-barrier":
+        # Nothing was written since the checkpoint's last flush.
+        assert _sha256(survived) == _sha256(prior_fence)
+    else:
+        assert _sha256(survived) != _sha256(prior_fence)
 
     seen_flushes = 0
     trace_cut = 0
